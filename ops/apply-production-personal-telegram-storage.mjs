@@ -1,13 +1,21 @@
-import { readFileSync } from 'node:fs';
+import {
+  lstatSync,
+  readFileSync,
+  realpathSync,
+} from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import {
-  ProductionDatabaseResolutionError,
-  resolveProductionPostgresConnection,
-} from './production-postgres-connection-resolver.mjs';
 
+const PRODUCTION_PROJECT_REF = 'bawcbkoyovbeajkrnduq';
+const PRODUCTION_ENV_ALLOWLIST = Object.freeze([
+  '/opt/stock-app/.env',
+  '/opt/stock-app/.env.production',
+  '/opt/stock-app/api-server/.env',
+  '/opt/stock-app/api-server/.env.production',
+]);
+const POSTGRES_URI_PATTERN = /^postgres(?:ql)?:\/\//i;
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const expectedActiveSha = String(process.env.EXPECTED_ACTIVE_SHA ?? '').trim().toLowerCase();
 const approvedTargetSha = String(process.env.APPROVED_TARGET_SHA ?? '').trim().toLowerCase();
@@ -15,6 +23,118 @@ const approvedTargetSha = String(process.env.APPROVED_TARGET_SHA ?? '').trim().t
 function fail(classification) {
   console.error(`[production-personal-telegram-storage] ${classification}`);
   process.exit(1);
+}
+
+function parseDotenvValue(raw) {
+  let value = String(raw ?? '').trim();
+  if (!value) return '';
+  const quote = value[0];
+  if (quote === "'" || quote === '"') {
+    if (value.length < 2 || value.at(-1) !== quote) return '';
+    value = value.slice(1, -1);
+    if (quote === '"') value = value.replace(/\\([\\"$`])/g, '$1');
+    return value;
+  }
+  const inlineComment = value.search(/\s+#/);
+  if (inlineComment >= 0) value = value.slice(0, inlineComment).trimEnd();
+  return value;
+}
+
+function readAllowedEnvValues(filePath) {
+  let stat;
+  try {
+    stat = lstatSync(filePath);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return [];
+    fail('production_database_env_file_unreadable');
+  }
+  if (stat.isSymbolicLink() || !stat.isFile() || (stat.mode & 0o022) !== 0) {
+    fail('production_database_env_file_unsafe');
+  }
+  let real;
+  try {
+    real = realpathSync(filePath);
+  } catch {
+    fail('production_database_env_file_unreadable');
+  }
+  if (real !== path.resolve(filePath)) fail('production_database_env_file_unsafe');
+
+  let source;
+  try {
+    source = readFileSync(filePath, 'utf8').replace(/^\uFEFF/, '');
+  } catch {
+    fail('production_database_env_file_unreadable');
+  }
+
+  const values = [];
+  for (const sourceLine of source.split(/\r?\n/)) {
+    const line = sourceLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    const match = /^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*(.*)$/.exec(line);
+    if (!match) continue;
+    const value = parseDotenvValue(match[1]);
+    if (POSTGRES_URI_PATTERN.test(value)) values.push(value);
+  }
+  return values;
+}
+
+function productionProjectRef(raw) {
+  const parsed = new URL(raw);
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.port) {
+    throw new Error('production_supabase_url_invalid');
+  }
+  if (!['', '/'].includes(parsed.pathname) || parsed.search || parsed.hash) {
+    throw new Error('production_supabase_url_invalid');
+  }
+  const match = /^([a-z0-9]+)\.supabase\.co$/i.exec(parsed.hostname);
+  if (!match || match[1].toLowerCase() !== PRODUCTION_PROJECT_REF) {
+    throw new Error('production_project_mismatch');
+  }
+  return match[1].toLowerCase();
+}
+
+function productionDatabaseTarget(raw, projectRef) {
+  const parsed = new URL(raw);
+  if (!['postgres:', 'postgresql:'].includes(parsed.protocol)) throw new Error('database_url_invalid');
+  const hostname = parsed.hostname.toLowerCase();
+  const username = decodeURIComponent(parsed.username);
+  const usernameLower = username.toLowerCase();
+  const direct = hostname === `db.${projectRef}.supabase.co` && usernameLower === 'postgres';
+  const pooler = /(^|\.)pooler\.supabase\.com$/i.test(hostname)
+    && usernameLower === `postgres.${projectRef}`;
+  if (!direct && !pooler) throw new Error('database_project_mismatch');
+  if (!parsed.password) throw new Error('database_password_missing');
+  const database = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
+  const port = parsed.port || '5432';
+  if (database !== 'postgres') throw new Error('database_name_invalid');
+  if (port !== '5432') throw new Error('database_port_invalid');
+  return {
+    hostname,
+    port,
+    username,
+    password: decodeURIComponent(parsed.password),
+    database,
+    endpointType: direct ? 'direct' : 'pooler',
+  };
+}
+
+function resolveProductionPostgresConnection(runtime, projectRef) {
+  const values = Object.values(runtime)
+    .filter((value) => typeof value === 'string')
+    .map((value) => value.trim())
+    .filter((value) => POSTGRES_URI_PATTERN.test(value));
+  for (const filePath of PRODUCTION_ENV_ALLOWLIST) {
+    values.push(...readAllowedEnvValues(filePath));
+  }
+  const postgresUris = [...new Set(values)];
+  if (postgresUris.length !== 1) fail(postgresUris.length === 0
+    ? 'production_database_connection_missing'
+    : 'production_database_connection_ambiguous');
+  try {
+    return productionDatabaseTarget(postgresUris[0], projectRef);
+  } catch {
+    fail('production_database_project_mismatch');
+  }
 }
 
 function stripOuterTransaction(source, relativePath) {
@@ -57,14 +177,13 @@ if (String(runtime.DEPLOY_SHA ?? '').trim().toLowerCase() !== expectedActiveSha)
   fail('production_process_sha_mismatch');
 }
 
-let database;
+let projectRef;
 try {
-  database = resolveProductionPostgresConnection(runtime).database;
-} catch (error) {
-  fail(error instanceof ProductionDatabaseResolutionError
-    ? error.classification
-    : 'production_database_resolution_failed');
+  projectRef = productionProjectRef(String(runtime.SUPABASE_URL ?? '').trim());
+} catch {
+  fail('production_project_mismatch');
 }
+const database = resolveProductionPostgresConnection(runtime, projectRef);
 
 const migrationPaths = [
   'api-server/supabase/migrations/2026081501_personal_telegram_storage.sql',
