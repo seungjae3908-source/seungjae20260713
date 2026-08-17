@@ -32,8 +32,11 @@ export interface YahooIndexQuote {
   updatedAt: string;
 }
 
-const YAHOO_CHART_BUDGET_MS = 3_500;
-const YAHOO_HEDGE_DELAY_MS = 450;
+// The stock Scanner has a four-second per-symbol budget. Keep each Yahoo
+// public chart attempt comfortably below that budget so a bounded retry can
+// still finish instead of being reported as an item timeout.
+const YAHOO_CHART_BUDGET_MS = 1_650;
+const YAHOO_HEDGE_DELAY_MS = 180;
 
 function cleanTicker(value: unknown) {
   return String(value ?? '').trim().toUpperCase();
@@ -71,9 +74,6 @@ function yahooSymbol(ticker: string) {
   const clean = cleanTicker(ticker);
 
   if (isKrTicker(clean)) return `${clean}.KS`;
-  // Yahoo Finance canonicalizes US class shares such as BRK.B / BF.B to
-  // BRK-B / BF-B. Normalizing before the first request prevents the scanner's
-  // bounded item budget from being spent on a known alias miss.
   if (/^[A-Z0-9]+\.[A-Z0-9]+$/u.test(clean)) return clean.replace(/\./gu, '-');
 
   return clean;
@@ -142,13 +142,16 @@ async function fetchYahooChart(
 ): Promise<YahooChartResult> {
   const encoded = encodeURIComponent(symbol);
 
+  // A single 1mo/1d request is sufficient for quote/previous-close fields and
+  // avoids spending a second full network budget on a 5d fallback. Explicit
+  // candle requests still use their requested timeframe/range.
   const query = params
     ? [
         params.range
           ? `range=${params.range}&interval=${params.interval}`
           : `period1=0&period2=9999999999&interval=${params.interval}`,
       ]
-    : ['range=5d&interval=1d', 'range=1mo&interval=1d'];
+    : ['range=1mo&interval=1d'];
 
   const errors: string[] = [];
   for (const q of query) {
@@ -250,10 +253,7 @@ export async function getQuote(
 
 export const quote = getQuote;
 
-// 시간프레임별 야후 차트 range/interval 매핑 (차트용 장기 데이터).
 export function yahooChartParams(tf?: string): { range: string; interval: string } {
-  // 주의: range=max는 야후가 굵은 버킷(약 168개)으로 뭉개서 반환한다.
-  // period1/period2 명시가 전체 이력을 올바른 간격으로 준다.
   switch (String(tf ?? '1D')) {
     case '1m':
       return { range: '7d', interval: '1m' };
@@ -374,9 +374,6 @@ export async function getCompanyProfile(
 
 export const companyProfile = getCompanyProfile;
 
-// Fetch the Yahoo `assetProfile.sector` for a US ticker (best-effort, single
-// call). Returns the raw English sector string (e.g. "Technology") or null when
-// unavailable. Never throws.
 export async function getYahooSector(ticker: string): Promise<string | null> {
   const clean = cleanTicker(ticker);
   if (!clean || isKrTicker(clean)) return null;
