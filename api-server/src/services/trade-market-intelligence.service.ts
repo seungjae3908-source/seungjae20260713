@@ -3,6 +3,7 @@ import {
   marketIntelligenceTradeDecision,
   tradingMarket,
   type MarketIntelligenceFetchOptions,
+  type MarketIntelligenceSummary,
 } from './market-intelligence-client.service';
 import type { TradingPlanInput } from './trade-automation.types';
 
@@ -19,10 +20,23 @@ export function marketIntelligenceSymbolForTradingPlan(
   return `${quote}-${symbol}`;
 }
 
+export type TradingPlanMarketIntelligenceRunner = (
+  input: Pick<TradingPlanInput, 'exchange' | 'market' | 'symbol'>,
+) => Promise<MarketIntelligenceSummary>;
+
+let runnerForTests: TradingPlanMarketIntelligenceRunner | null = null;
+
+export function setTradingPlanMarketIntelligenceRunnerForTests(
+  runner: TradingPlanMarketIntelligenceRunner | null,
+) {
+  runnerForTests = runner;
+}
+
 export async function fetchTradingPlanMarketIntelligence(
   input: Pick<TradingPlanInput, 'exchange' | 'market' | 'symbol'>,
   options: MarketIntelligenceFetchOptions = {},
 ) {
+  if (runnerForTests) return runnerForTests(input);
   return fetchMarketIntelligence(
     tradingMarket(input),
     marketIntelligenceSymbolForTradingPlan(input),
