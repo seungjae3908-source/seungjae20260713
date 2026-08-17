@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - research/rule-model-1h-sidecar-artifact-chain-v1
+      - research/rule0-1h-research-tree-chain-guard-v1
     paths:
       - .github/workflows/prediction-lab-rule0-1h-shadow-sidecar.yml
       - market-prediction-lab/scripts/run-rule-model-1h-shadow-sidecar.js
@@ -36,6 +37,8 @@ env:
   WORKFLOW_FILE: prediction-lab-rule0-1h-shadow-sidecar.yml
   CHAIN_CONTRACT: rule0-1h-artifact-chain-v1
   CANONICAL_OI_PARITY_BLOB: 201e70e53af2e150eda600377e8ef7d287c4ea23
+  LEGACY_BOOTSTRAP_RESEARCH_SHA: ee8a676724fbd59d3fe141520936f18f9596cdf3
+  LEGACY_BOOTSTRAP_RESEARCH_TREE_SHA: dbcc831b9731c3a8ecccee50907408f7cb43953c
 
 jobs:
   forward-shadow-sidecar:
@@ -69,13 +72,20 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Assert exact checkout and OI parity contract
+      - name: Assert exact checkout, research tree, and OI parity contract
+        id: research_tree
         shell: bash
         env:
           EXPECTED_SHA: ${{ steps.resolve.outputs.ref }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          research_tree_sha="$(git rev-parse "HEAD:$LAB_DIR")"
+          if ! [[ "$research_tree_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "market-prediction-lab tree must resolve to an immutable git tree SHA" >&2
+            exit 1
+          fi
+          echo "sha=$research_tree_sha" >> "$GITHUB_OUTPUT"
           test "$(git hash-object "$LAB_DIR/src/derivatives-history.js")" = "$CANONICAL_OI_PARITY_BLOB"
 
       - name: Run focused Rule0 and OI parity regressions
@@ -111,6 +121,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PREDECESSOR_RUN_ID: ${{ steps.predecessor.outputs.run_id }}
           PREDECESSOR_ARTIFACT_ID: ${{ steps.predecessor.outputs.artifact_id }}
+          CURRENT_RESEARCH_TREE_SHA: ${{ steps.research_tree.outputs.sha }}
         run: |
           set -euo pipefail
           zip="$RUNNER_TEMP/predecessor.zip"
@@ -140,6 +151,17 @@ jobs:
           if (manifest.frozenModelFileSha256 !== process.env.CURRENT_MODEL_SHA) throw new Error('frozen model changed; chain mixing forbidden');
           if (manifest.contractSha256 !== process.env.CURRENT_CONTRACT_SHA) throw new Error('forward gate contract changed; chain mixing forbidden');
           if (manifest.oiParityBlob !== process.env.CANONICAL_OI_PARITY_BLOB) throw new Error('OI parity provenance mismatch');
+          const predecessorResearchTreeSha = manifest.researchTreeGitSha ?? null;
+          if (predecessorResearchTreeSha) {
+            if (predecessorResearchTreeSha !== process.env.CURRENT_RESEARCH_TREE_SHA) {
+              throw new Error('market-prediction-lab research tree changed; chain mixing forbidden');
+            }
+          } else {
+            if (manifest.researchCodeSha !== process.env.LEGACY_BOOTSTRAP_RESEARCH_SHA
+                || process.env.CURRENT_RESEARCH_TREE_SHA !== process.env.LEGACY_BOOTSTRAP_RESEARCH_TREE_SHA) {
+              throw new Error('legacy predecessor lacks research tree identity; bootstrap refused');
+            }
+          }
           if (manifest.liveOrderAllowed !== false || manifest.privateAccountRequestAllowed !== false || manifest.branchWrite !== false) {
             throw new Error('predecessor safety contract violated');
           }
@@ -194,6 +216,7 @@ jobs:
         shell: bash
         env:
           RESEARCH_SHA: ${{ steps.resolve.outputs.ref }}
+          RESEARCH_TREE_SHA: ${{ steps.research_tree.outputs.sha }}
           PREDECESSOR_FOUND: ${{ steps.predecessor.outputs.found }}
           PREDECESSOR_RUN_ID: ${{ steps.predecessor.outputs.run_id }}
           PREDECESSOR_ARTIFACT_ID: ${{ steps.predecessor.outputs.artifact_id }}
@@ -215,6 +238,7 @@ jobs:
             schemaVersion: 1,
             chainContract: process.env.CHAIN_CONTRACT,
             researchCodeSha: process.env.RESEARCH_SHA,
+            researchTreeGitSha: process.env.RESEARCH_TREE_SHA,
             runId: process.env.GITHUB_RUN_ID,
             eventName: process.env.GITHUB_EVENT_NAME,
             refName: process.env.GITHUB_REF_NAME,
