@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   appendResearchTrial,
+  buildSelectedStrategyFingerprint,
   buildStrategyIdentity,
   createResearchTrialRegistry,
   selectionTrials,
@@ -16,7 +17,6 @@ import {
 const identityInput = Object.freeze({
   strategyId: "fixture-strategy",
   strategyVersion: "v1",
-  parameterHash: "params-001",
   researchCodeSha: "0123456789abcdef0123456789abcdef01234567",
   datasetSnapshotHash: "dataset-001",
   market: "CRYPTO_FUTURES",
@@ -42,18 +42,32 @@ const consistent = Object.freeze([
   trial("c", "candidate-c", [-0.004, 0.001, -0.002, 0.000, -0.003, 0.002, -0.001, -0.004, 0.001, -0.002, 0.000, -0.003, 0.002, -0.001, -0.004, 0.001]),
 ]);
 
-test("strategy identity and registry are deterministic and immutable", () => {
+test("strategy family identity and registry are deterministic and immutable", () => {
   const first = buildStrategyIdentity(identityInput);
   const second = buildStrategyIdentity({ ...identityInput });
   assert.deepEqual(first, second);
+  assert.equal(typeof first.familyFingerprint, "string");
+  assert.equal(first.familyFingerprint.length, 64);
 
   let registry = createResearchTrialRegistry({ experimentId: "exp-1", identity: identityInput });
   registry = appendResearchTrial(registry, consistent[0]);
   registry = appendResearchTrial(registry, consistent[1]);
   registry = appendResearchTrial(registry, consistent[2]);
   assert.equal(selectionTrials(registry).length, 3);
-  assert.equal(summarizeTrialRegistry(registry).selectionContamination, false);
+  const summary = summarizeTrialRegistry(registry);
+  assert.equal(summary.selectionContamination, false);
+  assert.equal(summary.strategyFamilyFingerprint, registry.strategyIdentity.familyFingerprint);
   assert.throws(() => appendResearchTrial(registry, consistent[0]), /duplicate trialId/);
+});
+
+test("different parameter trials share one family but produce different selected strategy fingerprints", () => {
+  let registry = createResearchTrialRegistry({ experimentId: "exp-identities", identity: identityInput });
+  registry = appendResearchTrial(registry, consistent[0]);
+  registry = appendResearchTrial(registry, consistent[1]);
+  assert.equal(registry.strategyIdentity.familyFingerprint.length, 64);
+  const first = buildSelectedStrategyFingerprint(registry, registry.trials[0]);
+  const second = buildSelectedStrategyFingerprint(registry, registry.trials[1]);
+  assert.notEqual(first, second);
 });
 
 test("forward evidence cannot silently enter candidate selection", () => {
@@ -99,12 +113,14 @@ test("Deflated Sharpe accounts for multiple tested trials and non-normal moments
   assert.ok(Number.isFinite(result.kurtosis));
 });
 
-test("selection bias bundle is tied to registry digest and selected trial", () => {
+test("selection bias bundle is tied to registry digest and selected parameter trial", () => {
   let registry = createResearchTrialRegistry({ experimentId: "exp-bundle", identity: identityInput });
   for (const row of consistent) registry = appendResearchTrial(registry, row);
   const evidence = buildSelectionBiasEvidence(registry, "a", { blockCount: 4 });
-  assert.equal(evidence.strategyFingerprint, registry.strategyIdentity.fingerprint);
+  assert.equal(evidence.strategyFamilyFingerprint, registry.strategyIdentity.familyFingerprint);
+  assert.equal(evidence.strategyFingerprint, buildSelectedStrategyFingerprint(registry, registry.trials[0]));
   assert.equal(evidence.registryDigest, registry.registryDigest);
   assert.equal(evidence.selectedTrialId, "a");
+  assert.equal(evidence.selectedParameterHash, "hash-a");
   assert.equal(evidence.policyPass, null);
 });
