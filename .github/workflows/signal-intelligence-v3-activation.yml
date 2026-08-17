@@ -1,0 +1,202 @@
+name: Signal Intelligence V3 Activation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/signal-intelligence-v3-activation.yml'
+      - 'signal-intelligence-release/**'
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: signal-intelligence-v3-activation
+  cancel-in-progress: false
+
+jobs:
+  validate-workflow:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Verify bridge safety contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          bash -n signal-intelligence-release/deploy/activate-server.sh
+          grep -q '/activate-signal-intelligence-v3' .github/workflows/signal-intelligence-v3-activation.yml
+          grep -q 'SIGNAL_INTELLIGENCE_EXECUTION_AUTHORITY=NONE' signal-intelligence-release/deploy/activate-server.sh
+          grep -q 'LIVE_TRADING=false' signal-intelligence-release/deploy/activate-server.sh
+          grep -q 'PRIVATE_API_ENABLED=false' signal-intelligence-release/deploy/activate-server.sh
+          grep -q 'ORDER_AUTHORITY=false' signal-intelligence-release/deploy/activate-server.sh
+
+  authorize:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.number == 62 &&
+      github.event.comment.user.login == github.repository_owner &&
+      github.event.comment.author_association == 'OWNER'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    outputs:
+      target_sha: ${{ steps.gate.outputs.target_sha }}
+      validation_run_id: ${{ steps.gate.outputs.validation_run_id }}
+      artifact_id: ${{ steps.gate.outputs.artifact_id }}
+    steps:
+      - name: Authorize immutable service SHA and exact-head V3 validation
+        id: gate
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = String(context.payload.comment?.body ?? '').trim();
+            const match = body.match(/^\/activate-signal-intelligence-v3 ([0-9a-f]{40})$/i);
+            if (!match) {
+              core.setFailed('Expected /activate-signal-intelligence-v3 <40-char-service-sha>');
+              return;
+            }
+            const targetSha = match[1].toLowerCase();
+
+            await github.rest.repos.getCommit({ owner: context.repo.owner, repo: context.repo.repo, ref: targetSha });
+            for (const path of [
+              'signal-intelligence-v3/src/engine.mjs',
+              'signal-intelligence-v3/src/server.mjs',
+              'signal-intelligence-v3/scripts/verify-contract.mjs',
+              'signal-intelligence-v3/SAFETY.md',
+            ]) {
+              try {
+                await github.rest.repos.getContent({ owner: context.repo.owner, repo: context.repo.repo, path, ref: targetSha });
+              } catch {
+                core.setFailed(`Required service path missing at target SHA: ${path}`);
+                return;
+              }
+            }
+
+            const workflows = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head_sha: targetSha,
+              per_page: 100,
+            });
+            const validationRuns = workflows
+              .filter((run) => run.name === 'Signal Intelligence V3 Validation')
+              .sort((a, b) => Number(b.id) - Number(a.id));
+            if (!validationRuns.length) {
+              core.setFailed('No exact-head Signal Intelligence V3 Validation run exists.');
+              return;
+            }
+            const newest = validationRuns[0];
+            if (newest.status !== 'completed' || newest.conclusion !== 'success') {
+              core.setFailed(`Newest exact-head V3 validation is not successful: ${newest.id} ${newest.status}/${newest.conclusion}`);
+              return;
+            }
+
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: newest.id,
+              per_page: 100,
+            });
+            const expectedName = `signal-intelligence-v3-${targetSha}`;
+            const artifact = artifacts.find((item) => item.name === expectedName && !item.expired);
+            if (!artifact) {
+              core.setFailed(`Exact-head release artifact missing: ${expectedName}`);
+              return;
+            }
+
+            core.setOutput('target_sha', targetSha);
+            core.setOutput('validation_run_id', String(newest.id));
+            core.setOutput('artifact_id', String(artifact.id));
+            core.info(`Authorized service SHA ${targetSha}; validation run ${newest.id}; artifact ${artifact.id}.`);
+
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Verify activation script on trusted bridge main
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash -n signal-intelligence-release/deploy/activate-server.sh
+          grep -q 'SIGNAL_INTELLIGENCE_EXECUTION_AUTHORITY=NONE' signal-intelligence-release/deploy/activate-server.sh
+
+  activate:
+    needs: authorize
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
+      VALIDATION_RUN_ID: ${{ needs.authorize.outputs.validation_run_id }}
+      ARTIFACT_ID: ${{ needs.authorize.outputs.artifact_id }}
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      REPOSITORY_URL: https://github.com/${{ github.repository }}.git
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Configure SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Read-only server preflight
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          remote_env="$(printf 'TARGET_SHA=%q REPOSITORY_URL=%q' "$TARGET_SHA" "$REPOSITORY_URL")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env bash -s -- preflight" \
+            < signal-intelligence-release/deploy/activate-server.sh
+
+      - name: Activate isolated Signal Intelligence V3 service
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          remote_env="$(printf 'TARGET_SHA=%q REPOSITORY_URL=%q' "$TARGET_SHA" "$REPOSITORY_URL")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env bash -s -- activate" \
+            < signal-intelligence-release/deploy/activate-server.sh | tee activation.txt
+          grep -q "service_sha=$TARGET_SHA" activation.txt
+          grep -q 'executionAuthority=NONE' activation.txt
+
+      - name: Report sanitized activation evidence
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const sha = process.env.TARGET_SHA;
+            const run = process.env.VALIDATION_RUN_ID;
+            const artifact = process.env.ARTIFACT_ID;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 62,
+              body: `[SIGNAL_INTELLIGENCE_V3_ACTIVATED]\n- service_sha: \`${sha}\`\n- exact-head validation run: \`${run}\`\n- release artifact: \`${artifact}\`\n- service: active\n- executionAuthority: \`NONE\`\n- privateTradingApiAllowed: \`false\`\n- realOrderAllowed: \`false\`\n- app Production deploy: \`false\``,
+            });
