@@ -7,6 +7,7 @@ on:
       - 'stock-analyzer/src/lib/evidence-display.js'
       - 'stock-analyzer/src/lib/evidence-display.d.ts'
       - 'stock-analyzer/src/components/accumulation-card.tsx'
+      - 'stock-analyzer/src/components/futures-public-context-panel.tsx'
       - '.github/workflows/missing-evidence-ui-contract-validation.yml'
   workflow_dispatch:
 
@@ -44,11 +45,23 @@ jobs:
           node <<'NODE'
           const { readFileSync } = require('node:fs');
           const contract = readFileSync('stock-analyzer/src/lib/evidence-display.js', 'utf8');
-          const surface = readFileSync('stock-analyzer/src/components/accumulation-card.tsx', 'utf8');
+          const accumulationSurface = readFileSync('stock-analyzer/src/components/accumulation-card.tsx', 'utf8');
+          const aiChartSurface = readFileSync('stock-analyzer/src/components/futures-public-context-panel.tsx', 'utf8');
           for (const required of ['NOT_COLLECTED', 'STALE', 'UNAVAILABLE', 'PERMISSION_REQUIRED', 'N_A']) {
             if (!contract.includes(required)) throw new Error(`missing evidence state ${required}`);
           }
           if (!contract.includes('Object.is(value, 0)')) throw new Error('actual-zero preservation contract missing');
-          if (!surface.includes("@/lib/evidence-display")) throw new Error('user-facing surface is not wired to the shared evidence contract');
-          if (!surface.includes('resolveEvidenceDisplay')) throw new Error('user-facing evidence resolver wiring missing');
+          for (const [name, surface] of [
+            ['accumulation', accumulationSurface],
+            ['ai-chart-futures-context', aiChartSurface],
+          ]) {
+            if (!surface.includes("@/lib/evidence-display")) throw new Error(`${name} surface is not wired to the shared evidence contract`);
+            if (!surface.includes('resolveEvidenceDisplay')) throw new Error(`${name} evidence resolver wiring missing`);
+          }
+          if (!aiChartSurface.includes('const missingEvidence = resolveEvidenceDisplay')) {
+            throw new Error('AI Chart futures context must keep uncollected evidence explicit');
+          }
+          if (aiChartSurface.includes("value={data ? `${formatNumber(data.markPrice, 8)} USDT` : 'LOADING'}")) {
+            throw new Error('AI Chart futures context still uses legacy LOADING numeric fallback');
+          }
           NODE
