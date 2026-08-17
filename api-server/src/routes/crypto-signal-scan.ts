@@ -36,6 +36,10 @@ import {
   type CryptoWilliamsOverlayRunner,
 } from '../services/crypto-williams-atr-scanner-overlay.service';
 import { withScannerOutcome } from '../services/scanner-signal.types';
+import {
+  enrichScannerCardsWithMarketIntelligence,
+  type ScannerMarketIntelligenceRunner,
+} from '../services/scanner-market-intelligence.service';
 
 export type CryptoScannerRunner = {
   scan(request: CryptoSignalScanRequest): ReturnType<typeof CryptoSignalScannerService.scan>;
@@ -48,6 +52,7 @@ export interface CryptoSignalScanRouteDependencies {
   guard?: ScannerRequestGuard;
   precision?: CryptoPricePrecisionServiceContract;
   williamsOverlay?: CryptoWilliamsOverlayRunner;
+  marketIntelligence?: ScannerMarketIntelligenceRunner;
 }
 
 function requireScannerSession(req: AuthenticatedRequest, res: Response, next: NextFunction) {
@@ -180,19 +185,28 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
         ? await williamsOverlay.apply({ market, cards: baseRankedCards, signal: controller.signal })
         : { cards: baseRankedCards, matchedCount: 0, unavailableCount: 0 };
       if (controller.signal.aborted || res.writableEnded) return;
-      const rankedCards = overlay.cards.filter((card) => (
+      const directionFilteredCards = overlay.cards.filter((card) => (
         market === 'spot'
           ? card.direction === 'LONG'
           : card.direction === 'LONG' || card.direction === 'SHORT'
       ));
+      const rankedCards = await enrichScannerCardsWithMarketIntelligence(
+        directionFilteredCards,
+        dependencies.marketIntelligence,
+      );
+      if (controller.signal.aborted || res.writableEnded) return;
+
       const actionableIds = new Set(rankedCards
-        .filter((card) => card.signalGrade === 'S' || card.signalGrade === 'A')
+        .filter((card) => (card.signalGrade === 'S' || card.signalGrade === 'A') && card.strongSignalEligible !== false)
         .map((card) => card.signalId));
       const cardBySignalId = new Map(rankedCards.map((card) => [card.signalId, card]));
       const sGradeCount = rankedCards.filter((card) => card.signalGrade === 'S').length;
       const aGradeCount = rankedCards.filter((card) => card.signalGrade === 'A').length;
       const bGradeCount = rankedCards.filter((card) => card.signalGrade === 'B').length;
-      const actionableCount = sGradeCount + aGradeCount;
+      const actionableCount = rankedCards.filter((card) => actionableIds.has(card.signalId)).length;
+      const intelligenceReadyCount = rankedCards.filter((card) => card.marketIntelligence.status === 'READY').length;
+      const intelligenceUnavailableCount = rankedCards.length - intelligenceReadyCount;
+      const intelligenceBlockedCount = rankedCards.filter((card) => card.marketIntelligence.autoTrading.mode === 'BLOCKED_RISK').length;
       const insufficientDataCount = result.failures.filter((failure) => failure.reason === 'invalid_data').length;
       const providerAcceptedCount = result.execution.completedCount;
       const dataSuccessCount = Math.max(0, providerAcceptedCount - insufficientDataCount);
@@ -250,7 +264,20 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
       void deliverScannerTelegramAlerts(visibleResult.alerts);
       res.setHeader('Cache-Control', 'no-store, max-age=0');
       res.setHeader('X-Scanner-Request-Id', result.requestId);
-      return res.json({ ...visibleResult, strategy: strategyMode, condition: selectedCondition });
+      return res.json({
+        ...visibleResult,
+        strategy: strategyMode,
+        condition: selectedCondition,
+        marketIntelligence: {
+          status: 'ACTIVE',
+          mode: 'SOFT_INTELLIGENCE_LAYER',
+          readyCount: intelligenceReadyCount,
+          unavailableCount: intelligenceUnavailableCount,
+          blockedRiskCount: intelligenceBlockedCount,
+          candidateDeletionAllowed: false,
+          orderSubmissionAllowed: false,
+        },
+      });
     } catch (error) {
       if (controller.signal.aborted || res.writableEnded) return;
       return routeError(res, error);
