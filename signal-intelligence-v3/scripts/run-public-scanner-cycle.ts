@@ -122,25 +122,84 @@ async function usPublicUniverse() {
   return usPublicUniversePromise;
 }
 
+function yahooProviderCandidates(lane, ticker, entry) {
+  const clean = String(ticker ?? '').trim().toUpperCase();
+  if (!clean) return [];
+  if (lane.market === 'KR_STOCK' && /^\d{6}$/u.test(clean)) {
+    const exchange = String(entry?.exchange ?? '').toUpperCase();
+    const kosdaq = /KOSDAQ|코스닥/u.test(exchange);
+    const primary = `${clean}.${kosdaq ? 'KQ' : 'KS'}`;
+    const alternate = `${clean}.${kosdaq ? 'KS' : 'KQ'}`;
+    return [primary, alternate];
+  }
+  if (lane.market === 'US_STOCK') {
+    const candidates = [clean];
+    if (clean.includes('.')) candidates.push(clean.replace(/\./gu, '-'));
+    if (clean.includes('-')) candidates.push(clean.replace(/-/gu, '.'));
+    return [...new Set(candidates)];
+  }
+  return [clean];
+}
+
+async function withProviderFallback(candidates, operation) {
+  let lastError;
+  for (const candidate of candidates) {
+    try {
+      return await operation(candidate);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError ?? new Error('PUBLIC_STOCK_PROVIDER_CANDIDATES_EMPTY');
+}
+
 async function withStockPublicOnly(lane, operation) {
   const marketData = MarketDataService;
   const universe = ScannerUniverseService;
   const originalCandles = marketData.getCandles;
   const originalQuote = marketData.getQuote;
   const originalUniverseGet = universe.get;
-  marketData.getCandles = async (ticker, timeframe = '1D') => yahoo.getCandles(ticker, timeframe);
-  marketData.getQuote = async (ticker) => yahoo.getQuote(ticker);
+
+  let targetUniverse;
   if (lane.market === 'US_STOCK') {
-    universe.get = async (market, signal, deadlineMs) => {
-      if (market !== 'US') return originalUniverseGet.call(universe, market, signal, deadlineMs);
-      try {
-        return await usPublicUniverse();
-      } catch {
-        const fallback = await originalUniverseGet.call(universe, market, signal, deadlineMs);
-        return { ...fallback, partial: true, stale: true, providerErrorCount: Math.max(1, fallback.providerErrorCount ?? 0) };
-      }
-    };
+    try {
+      targetUniverse = await usPublicUniverse();
+    } catch {
+      const fallback = await originalUniverseGet.call(universe, 'US');
+      targetUniverse = {
+        ...fallback,
+        partial: true,
+        stale: true,
+        providerErrorCount: Math.max(1, Number(fallback.providerErrorCount ?? 0)),
+      };
+    }
+  } else {
+    targetUniverse = await originalUniverseGet.call(universe, 'KR');
   }
+
+  const entryByTicker = new Map((targetUniverse?.entries ?? []).map((entry) => [String(entry.ticker).toUpperCase(), entry]));
+  marketData.getCandles = async (ticker, timeframe = '1D') => {
+    const entry = entryByTicker.get(String(ticker).toUpperCase());
+    const candidates = yahooProviderCandidates(lane, ticker, entry);
+    return withProviderFallback(candidates, (providerSymbol) => yahoo.getCandles(providerSymbol, timeframe));
+  };
+  marketData.getQuote = async (ticker) => {
+    const originalTicker = String(ticker).toUpperCase();
+    const entry = entryByTicker.get(originalTicker);
+    const candidates = yahooProviderCandidates(lane, ticker, entry);
+    const quote = await withProviderFallback(candidates, (providerSymbol) => yahoo.getQuote(providerSymbol));
+    return {
+      ...quote,
+      ticker: originalTicker,
+      symbol: originalTicker,
+      name: entry?.name ?? quote?.name ?? originalTicker,
+    };
+  };
+  universe.get = async (market, signal, deadlineMs) => {
+    if (market === lane.scannerMarket) return targetUniverse;
+    return originalUniverseGet.call(universe, market, signal, deadlineMs);
+  };
+
   try { return await operation(); } finally {
     marketData.getCandles = originalCandles;
     marketData.getQuote = originalQuote;
