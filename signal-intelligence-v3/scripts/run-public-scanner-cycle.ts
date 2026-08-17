@@ -71,6 +71,26 @@ function clearScannedWindow(state, laneId, cursor) {
   }
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function createStartScheduler(minIntervalMs) {
+  let tail = Promise.resolve();
+  let nextStartAt = 0;
+  return async (operation) => {
+    let release;
+    const previous = tail;
+    tail = new Promise((resolve) => { release = resolve; });
+    await previous;
+    const delayMs = Math.max(0, nextStartAt - Date.now());
+    if (delayMs > 0) await sleep(delayMs);
+    nextStartAt = Date.now() + minIntervalMs;
+    release();
+    return operation();
+  };
+}
+
 async function fetchText(url) {
   let lastError;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -85,7 +105,7 @@ async function fetchText(url) {
       return await response.text();
     } catch (error) {
       lastError = error;
-      if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+      if (attempt < 3) await sleep(250 * attempt);
     } finally {
       clearTimeout(timeout);
     }
@@ -144,13 +164,49 @@ function yahooProviderCandidates(lane, ticker, entry) {
 async function withProviderFallback(candidates, operation) {
   let lastError;
   for (const candidate of candidates) {
-    try {
-      return await operation(candidate);
-    } catch (error) {
-      lastError = error;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        return await operation(candidate);
+      } catch (error) {
+        lastError = error;
+        if (attempt < 3) await sleep(150 * attempt);
+      }
     }
   }
   throw lastError ?? new Error('PUBLIC_STOCK_PROVIDER_CANDIDATES_EMPTY');
+}
+
+async function withUpbitPacing(operation) {
+  const originalFetch = globalThis.fetch;
+  const schedule = createStartScheduler(130);
+  globalThis.fetch = async (input, init = {}) => {
+    const rawUrl = typeof input === 'string' || input instanceof URL ? String(input) : String(input?.url ?? '');
+    let parsed;
+    try { parsed = new URL(rawUrl); } catch { return originalFetch(input, init); }
+    if (parsed.hostname !== 'api.upbit.com') return originalFetch(input, init);
+
+    let lastError;
+    let lastResponse;
+    for (let attempt = 1; attempt <= 4; attempt += 1) {
+      try {
+        const response = await schedule(() => originalFetch(input, init));
+        lastResponse = response;
+        if (response.status !== 429) return response;
+        if (attempt < 4) {
+          const retryAfter = Number(response.headers.get('retry-after'));
+          const backoff = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1_000 : 250 * attempt;
+          await sleep(backoff);
+        }
+      } catch (error) {
+        lastError = error;
+        if (init?.signal?.aborted) throw error;
+        if (attempt < 4) await sleep(250 * attempt);
+      }
+    }
+    if (lastResponse) return lastResponse;
+    throw lastError ?? new Error('UPBIT_PUBLIC_FETCH_FAILED');
+  };
+  try { return await operation(); } finally { globalThis.fetch = originalFetch; }
 }
 
 async function withStockPublicOnly(lane, operation) {
@@ -225,7 +281,7 @@ async function scanStock(lane, cursor) {
   });
 }
 
-async function scanCrypto(lane, cursor) {
+async function scanCryptoRaw(lane, cursor) {
   const scanned = await CryptoSignalScannerService.scan({
     memberId: MEMBER_ID,
     market: lane.scannerMarket,
@@ -257,6 +313,11 @@ async function scanCrypto(lane, cursor) {
       backtestMissingCount: ranking.diagnostics.backtestMissingCount,
     },
   });
+}
+
+async function scanCrypto(lane, cursor) {
+  if (lane.scannerMarket === 'spot') return withUpbitPacing(() => scanCryptoRaw(lane, cursor));
+  return scanCryptoRaw(lane, cursor);
 }
 
 function laneStatus(response) {
