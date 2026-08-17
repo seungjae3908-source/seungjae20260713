@@ -1,4 +1,4 @@
-import { selectionTrials } from "./research-trial-registry.js";
+import { buildSelectedStrategyFingerprint, selectionTrials } from "./research-trial-registry.js";
 
 const EULER_MASCHERONI = 0.5772156649015329;
 
@@ -211,11 +211,14 @@ export function buildSelectionBiasEvidence(registry, selectedTrialId, { blockCou
   const pbo = computeCscvPbo(trials, { blockCount, maxCombinations });
   const dsr = computeDeflatedSharpeRatio(selected.returnSeries, trials.map((trial) => trial.returnSeries));
   return Object.freeze({
-    schemaVersion: 1,
+    schemaVersion: 2,
     experimentId: registry.experimentId,
-    strategyFingerprint: registry.strategyIdentity.fingerprint,
+    strategyFamilyFingerprint: registry.strategyIdentity.familyFingerprint,
+    strategyFingerprint: buildSelectedStrategyFingerprint(registry, selected),
     registryDigest: registry.registryDigest,
     selectedTrialId,
+    selectedCandidateId: selected.candidateId,
+    selectedParameterHash: selected.parameterHash,
     trialCount: trials.length,
     pbo,
     dsr,
