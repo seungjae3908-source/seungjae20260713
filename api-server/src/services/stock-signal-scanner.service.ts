@@ -42,6 +42,10 @@ const US_TRADING_SESSIONS: readonly UsTradingSession[] = [
   { name: 'after-hours', startMinute: 16 * 60, endMinute: 20 * 60 },
 ];
 
+function isSignalIntelligencePublicCore(memberId: string): boolean {
+  return memberId.startsWith('signal-intelligence-v3-');
+}
+
 function applyUniverseStaleness(card: ScannerSignalCard, stale: boolean): ScannerSignalCard {
   if (!stale) return card;
   return {
@@ -177,6 +181,7 @@ export const StockSignalScannerService = {
     const candlesByTicker = new Map<string, Candle[]>();
     const contextByTicker = new Map<string, Candle[]>();
     const entryByTicker = new Map(universe.entries.map((entry) => [entry.ticker, entry]));
+    const publicCoreOnly = isSignalIntelligencePublicCore(request.memberId);
     const scanner = createBoundedScannerService({
       catalog: universe.entries,
       getCandles: async (ticker) => {
@@ -194,7 +199,9 @@ export const StockSignalScannerService = {
         return candles;
       },
       getQuote: (ticker) => MarketDataService.getQuote(ticker),
-      getContext: (entry) => buildContext(entry),
+      getContext: publicCoreOnly
+        ? async (entry) => ({ currency: entry.currency })
+        : (entry) => buildContext(entry),
       now: Date.now,
     });
     const execution: ScanExecutionOptions = {
@@ -312,7 +319,7 @@ export const StockSignalScannerService = {
         listingStatusCoverage: 'listed-or-unknown',
       },
       dataState,
-      message,
+      message: publicCoreOnly ? `${message} · 재무/뉴스/공시 optional context는 AI 재평가 계층에서 후속 처리합니다.` : message,
       generatedAt: new Date().toISOString(),
       orderSubmitted: false,
       exchangeRequestSent: false,
