@@ -3,8 +3,11 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import {
+  ProductionDatabaseResolutionError,
+  resolveProductionPostgresConnection,
+} from './production-postgres-connection-resolver.mjs';
 
-const PRODUCTION_PROJECT_REF = 'bawcbkoyovbeajkrnduq';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const expectedActiveSha = String(process.env.EXPECTED_ACTIVE_SHA ?? '').trim().toLowerCase();
 const approvedTargetSha = String(process.env.APPROVED_TARGET_SHA ?? '').trim().toLowerCase();
@@ -34,45 +37,6 @@ function stripOuterTransaction(source, relativePath) {
   return body;
 }
 
-function productionProjectRef(raw) {
-  const parsed = new URL(raw);
-  if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.port) {
-    throw new Error('production_supabase_url_invalid');
-  }
-  if (!['', '/'].includes(parsed.pathname) || parsed.search || parsed.hash) {
-    throw new Error('production_supabase_url_invalid');
-  }
-  const match = /^([a-z0-9]+)\.supabase\.co$/i.exec(parsed.hostname);
-  if (!match || match[1].toLowerCase() !== PRODUCTION_PROJECT_REF) {
-    throw new Error('production_project_mismatch');
-  }
-  return match[1].toLowerCase();
-}
-
-function productionDatabaseTarget(raw, projectRef) {
-  const parsed = new URL(raw);
-  if (!['postgres:', 'postgresql:'].includes(parsed.protocol)) throw new Error('database_url_invalid');
-  const hostname = parsed.hostname.toLowerCase();
-  const username = decodeURIComponent(parsed.username);
-  const usernameLower = username.toLowerCase();
-  const direct = hostname === `db.${projectRef}.supabase.co` && usernameLower === 'postgres';
-  const pooler = /(^|\.)pooler\.supabase\.com$/i.test(hostname)
-    && usernameLower === `postgres.${projectRef}`;
-  if (!direct && !pooler) throw new Error('database_project_mismatch');
-  if (!parsed.password) throw new Error('database_password_missing');
-  const database = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
-  const port = parsed.port || '5432';
-  if (database !== 'postgres') throw new Error('database_name_invalid');
-  if (port !== '5432') throw new Error('database_port_invalid');
-  return {
-    hostname,
-    port,
-    username,
-    password: decodeURIComponent(parsed.password),
-    database,
-  };
-}
-
 if (!/^[0-9a-f]{40}$/.test(expectedActiveSha)) fail('expected_active_sha_invalid');
 if (!/^[0-9a-f]{40}$/.test(approvedTargetSha)) fail('approved_target_sha_invalid');
 
@@ -93,28 +57,13 @@ if (String(runtime.DEPLOY_SHA ?? '').trim().toLowerCase() !== expectedActiveSha)
   fail('production_process_sha_mismatch');
 }
 
-let projectRef;
-try {
-  projectRef = productionProjectRef(String(runtime.SUPABASE_URL ?? '').trim());
-} catch {
-  fail('production_project_mismatch');
-}
-
-const postgresUris = [...new Set(
-  Object.values(runtime)
-    .filter((value) => typeof value === 'string')
-    .map((value) => value.trim())
-    .filter((value) => /^postgres(?:ql)?:\/\//i.test(value)),
-)];
-if (postgresUris.length !== 1) fail(postgresUris.length === 0
-  ? 'production_database_connection_missing'
-  : 'production_database_connection_ambiguous');
-
 let database;
 try {
-  database = productionDatabaseTarget(postgresUris[0], projectRef);
-} catch {
-  fail('production_database_project_mismatch');
+  database = resolveProductionPostgresConnection(runtime).database;
+} catch (error) {
+  fail(error instanceof ProductionDatabaseResolutionError
+    ? error.classification
+    : 'production_database_resolution_failed');
 }
 
 const migrationPaths = [
