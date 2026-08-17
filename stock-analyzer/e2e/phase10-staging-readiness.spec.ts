@@ -168,7 +168,9 @@ function isExpectedRouteTransitionAbort(
 ) {
   try {
     const parsed = new URL(request.url());
-    const routeRead = parsed.pathname.startsWith('/api/') || request.resourceType() === 'script';
+    const routeRead = parsed.pathname.startsWith('/api/')
+      || request.resourceType() === 'script'
+      || isProfileRequest(request);
     return observation.fromRoute !== observation.toRoute
       && observation.pendingGetRequests.has(request)
       && request.method() === 'GET'
@@ -230,7 +232,8 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
       logoutObservation.personalIntegrationReads.add(request);
     }
     if (isMutatingBrowserRequest(request)) mutations.add(request);
-    if (isSameOriginApiGet(request)) {
+    const routeRead = isSameOriginApiGet(request) || isProfileRequest(request);
+    if (routeRead) {
       apiGets.add(request);
       const routeObservation = activeRouteTransitionObservations.get(page);
       if (routeObservation && routeIdentity(page.url()) === routeObservation.fromRoute) {
