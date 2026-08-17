@@ -24,6 +24,7 @@ export LIVE_TRADING=false
 export PRIVATE_API_ENABLED=false
 export ORDER_AUTHORITY=false
 export SIGNAL_INTELLIGENCE_EXECUTION_AUTHORITY=NONE
+export SIGNAL_INTELLIGENCE_PUBLIC_ONLY_UNIVERSE=true
 
 if [[ "$(id -u)" -eq 0 ]]; then
   SUDO=()
@@ -46,6 +47,7 @@ preflight() {
     "target_sha=$TARGET_SHA" \
     "service_user=$RUN_USER" \
     "executionAuthority=NONE" \
+    "publicOnlyUniverse=true" \
     "liveTrading=false" \
     "privateApi=false" \
     "orderAuthority=false"
@@ -70,8 +72,11 @@ checkout_release() {
   test -f "$RELEASE_DIR/signal-intelligence-v3/src/server.mjs" || fail "V3_SERVER_MISSING"
   test -f "$RELEASE_DIR/signal-intelligence-v3/scripts/run-public-scanner-cycle.ts" || fail "V3_PUBLIC_CYCLE_MISSING"
   test -f "$RELEASE_DIR/signal-intelligence-v3/scripts/verify-contract.mjs" || fail "V3_CONTRACT_MISSING"
-  node --test "$RELEASE_DIR"/signal-intelligence-v3/tests/*.test.mjs
-  node "$RELEASE_DIR/signal-intelligence-v3/scripts/verify-contract.mjs"
+  (
+    cd "$RELEASE_DIR"
+    node --test signal-intelligence-v3/tests/*.test.mjs
+    node signal-intelligence-v3/scripts/verify-contract.mjs
+  )
 }
 
 build_public_cycle() {
@@ -96,6 +101,7 @@ run_initial_cycle() {
     SIGNAL_INTELLIGENCE_SERVICE_SHA="$TARGET_SHA" \
     SIGNAL_INTELLIGENCE_STATE_DIR="$STATE_DIR" \
     SIGNAL_INTELLIGENCE_STATE_FILE="$STATE_FILE" \
+    SIGNAL_INTELLIGENCE_PUBLIC_ONLY_UNIVERSE=true \
     LIVE_TRADING=false \
     PRIVATE_API_ENABLED=false \
     ORDER_AUTHORITY=false \
@@ -135,6 +141,7 @@ Environment=SIGNAL_INTELLIGENCE_HOST=127.0.0.1
 Environment=SIGNAL_INTELLIGENCE_PORT=8790
 Environment=SIGNAL_INTELLIGENCE_STATE_FILE=$STATE_FILE
 Environment=SIGNAL_INTELLIGENCE_PRODUCER_PATH=$CURRENT_LINK/api-server/.signal-intelligence/public-cycle.mjs
+Environment=SIGNAL_INTELLIGENCE_PUBLIC_ONLY_UNIVERSE=true
 Environment=LIVE_TRADING=false
 Environment=PRIVATE_API_ENABLED=false
 Environment=ORDER_AUTHORITY=false
@@ -167,6 +174,7 @@ Environment=NODE_ENV=production
 Environment=SIGNAL_INTELLIGENCE_SERVICE_SHA=$TARGET_SHA
 Environment=SIGNAL_INTELLIGENCE_STATE_DIR=$STATE_DIR
 Environment=SIGNAL_INTELLIGENCE_STATE_FILE=$STATE_FILE
+Environment=SIGNAL_INTELLIGENCE_PUBLIC_ONLY_UNIVERSE=true
 Environment=LIVE_TRADING=false
 Environment=PRIVATE_API_ENABLED=false
 Environment=ORDER_AUTHORITY=false
