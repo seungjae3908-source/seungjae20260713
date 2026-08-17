@@ -1,0 +1,212 @@
+name: Signal Intelligence V3 Bridge Activation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/signal-intelligence-v3-bridge-activation.yml'
+      - 'signal-intelligence-release/deploy/activate-bridge-server.sh'
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: signal-intelligence-v3-bridge-activation
+  cancel-in-progress: false
+
+jobs:
+  validate-workflow:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Verify bridge-only safety contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          bash -n signal-intelligence-release/deploy/activate-bridge-server.sh
+          grep -q '/activate-signal-intelligence-v3-bridge' .github/workflows/signal-intelligence-v3-bridge-activation.yml
+          grep -q 'Signal Intelligence V3 Representative Validation' .github/workflows/signal-intelligence-v3-bridge-activation.yml
+          grep -q 'SIGNAL_INTELLIGENCE_EXECUTION_AUTHORITY=NONE' signal-intelligence-release/deploy/activate-bridge-server.sh
+          grep -q 'LIVE_TRADING=false' signal-intelligence-release/deploy/activate-bridge-server.sh
+          grep -q 'PRIVATE_API_ENABLED=false' signal-intelligence-release/deploy/activate-bridge-server.sh
+          grep -q 'ORDER_AUTHORITY=false' signal-intelligence-release/deploy/activate-bridge-server.sh
+          ! grep -Eiq '(broker.*api|exchange.*secret|private.*key|placeOrder|submitOrder|cancelOrder|withdraw|transfer)' signal-intelligence-release/deploy/activate-bridge-server.sh
+
+  authorize:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.number == 62 &&
+      github.event.comment.user.login == github.repository_owner &&
+      github.event.comment.author_association == 'OWNER'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    outputs:
+      target_sha: ${{ steps.gate.outputs.target_sha }}
+      validation_run_id: ${{ steps.gate.outputs.validation_run_id }}
+      representative_run_id: ${{ steps.gate.outputs.representative_run_id }}
+    steps:
+      - name: Authorize immutable bridge service SHA
+        id: gate
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = String(context.payload.comment?.body ?? '').trim();
+            const match = body.match(/^\/activate-signal-intelligence-v3-bridge ([0-9a-f]{40})$/i);
+            if (!match) {
+              core.setFailed('Expected /activate-signal-intelligence-v3-bridge <40-char-service-sha>');
+              return;
+            }
+            const targetSha = match[1].toLowerCase();
+            await github.rest.repos.getCommit({ owner: context.repo.owner, repo: context.repo.repo, ref: targetSha });
+            for (const path of [
+              'signal-intelligence-v3/src/engine.mjs',
+              'signal-intelligence-v3/src/server.mjs',
+              'signal-intelligence-v3/scripts/run-standalone-telegram-ai-bridge.ts',
+              'signal-intelligence-v3/scripts/verify-contract.mjs',
+              'signal-intelligence-v3/SAFETY.md',
+            ]) {
+              try {
+                await github.rest.repos.getContent({ owner: context.repo.owner, repo: context.repo.repo, path, ref: targetSha });
+              } catch {
+                core.setFailed(`Required bridge path missing at target SHA: ${path}`);
+                return;
+              }
+            }
+
+            const workflows = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo, head_sha: targetSha, per_page: 100,
+            });
+            const newestSuccessfulRun = (name) => {
+              const runs = workflows.filter((run) => run.name === name).sort((a, b) => Number(b.id) - Number(a.id));
+              if (!runs.length) { core.setFailed(`No exact-head ${name} run exists.`); return null; }
+              const newest = runs[0];
+              if (newest.status !== 'completed' || newest.conclusion !== 'success') {
+                core.setFailed(`Newest exact-head ${name} is not successful: ${newest.id} ${newest.status}/${newest.conclusion}`);
+                return null;
+              }
+              return newest;
+            };
+            const validation = newestSuccessfulRun('Signal Intelligence V3 Validation');
+            if (!validation) return;
+            const representative = newestSuccessfulRun('Signal Intelligence V3 Representative Validation');
+            if (!representative) return;
+
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner: context.repo.owner, repo: context.repo.repo, run_id: validation.id, per_page: 100,
+            });
+            if (!artifacts.some((item) => item.name === `signal-intelligence-v3-${targetSha}` && !item.expired)) {
+              core.setFailed(`Exact-head release artifact missing for ${targetSha}`);
+              return;
+            }
+            const representativeArtifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner: context.repo.owner, repo: context.repo.repo, run_id: representative.id, per_page: 100,
+            });
+            if (!representativeArtifacts.some((item) => item.name === `signal-v3-representative-search-${targetSha}` && !item.expired)) {
+              core.setFailed(`Exact-head representative search artifact missing for ${targetSha}`);
+              return;
+            }
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: 62, per_page: 100,
+            });
+            const activationMarker = `[SIGNAL_INTELLIGENCE_V3_ACTIVATED]`;
+            const activated = comments.some((comment) => String(comment.body ?? '').includes(activationMarker)
+              && String(comment.body ?? '').includes(`service_sha: \`${targetSha}\``));
+            if (!activated) {
+              core.setFailed(`Base V3 service SHA ${targetSha} has no activation evidence in Issue #62.`);
+              return;
+            }
+
+            core.setOutput('target_sha', targetSha);
+            core.setOutput('validation_run_id', String(validation.id));
+            core.setOutput('representative_run_id', String(representative.id));
+            core.info(`Authorized standalone bridge for ${targetSha}.`);
+
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Verify trusted bridge-only activation script
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash -n signal-intelligence-release/deploy/activate-bridge-server.sh
+          grep -q 'SIGNAL_INTELLIGENCE_EXECUTION_AUTHORITY=NONE' signal-intelligence-release/deploy/activate-bridge-server.sh
+
+  activate:
+    needs: authorize
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
+      VALIDATION_RUN_ID: ${{ needs.authorize.outputs.validation_run_id }}
+      REPRESENTATIVE_RUN_ID: ${{ needs.authorize.outputs.representative_run_id }}
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Configure SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+      - name: Read-only bridge preflight
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          remote_env="$(printf 'TARGET_SHA=%q' "$TARGET_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env bash -s -- preflight" \
+            < signal-intelligence-release/deploy/activate-bridge-server.sh
+      - name: Activate standalone Telegram and AI bridge
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          remote_env="$(printf 'TARGET_SHA=%q' "$TARGET_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env bash -s -- activate" \
+            < signal-intelligence-release/deploy/activate-bridge-server.sh | tee bridge-activation.txt
+          grep -q "service_sha=$TARGET_SHA" bridge-activation.txt
+          grep -q 'telegram_verified=true' bridge-activation.txt
+          grep -q 'ai_verified=true' bridge-activation.txt
+          grep -q 'executionAuthority=NONE' bridge-activation.txt
+      - name: Report sanitized bridge activation evidence
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const sha = process.env.TARGET_SHA;
+            const run = process.env.VALIDATION_RUN_ID;
+            const representative = process.env.REPRESENTATIVE_RUN_ID;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 62,
+              body: `[SIGNAL_INTELLIGENCE_V3_BRIDGE_ACTIVATED]\n- service_sha: \`${sha}\`\n- exact-head validation run: \`${run}\`\n- exact-head representative run: \`${representative}\`\n- Telegram startup verification: \`SUCCESS\`\n- AI public classification verification: \`SUCCESS\`\n- bridge service: \`active\`\n- executionAuthority: \`NONE\`\n- privateTradingApiAllowed: \`false\`\n- realOrderAllowed: \`false\`\n- app Production deploy: \`false\``,
+            });
