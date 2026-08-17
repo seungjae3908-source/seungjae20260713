@@ -1,8 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import process from 'node:process';
-
-const PRODUCTION_PROJECT_REF = 'bawcbkoyovbeajkrnduq';
+import {
+  ProductionDatabaseResolutionError,
+  resolveProductionPostgresConnection,
+} from './production-postgres-connection-resolver.mjs';
 
 const TOP_LEVEL_KEYS = new Set([
   'status',
@@ -225,75 +227,21 @@ if (String(runtime.DEPLOY_SHA ?? '').trim().toLowerCase() !== expectedProduction
   blocked('production_process_sha_mismatch', { pm2_online: true });
 }
 
-let projectRef = '';
+let resolution;
 try {
-  const parsed = new URL(String(runtime.SUPABASE_URL ?? '').trim());
-  const match = /^([a-z0-9]+)\.supabase\.co$/i.exec(parsed.hostname);
-  const valid = parsed.protocol === 'https:'
-    && !parsed.username
-    && !parsed.password
-    && !parsed.port
-    && ['', '/'].includes(parsed.pathname)
-    && !parsed.search
-    && !parsed.hash
-    && match?.[1]?.toLowerCase() === PRODUCTION_PROJECT_REF;
-  if (!valid) throw new Error('project mismatch');
-  projectRef = match[1].toLowerCase();
-} catch {
-  blocked('production_project_mismatch', { pm2_online: true });
-}
-
-const postgresUris = [...new Set(
-  Object.values(runtime)
-    .filter((value) => typeof value === 'string')
-    .map((value) => value.trim())
-    .filter((value) => /^postgres(?:ql)?:\/\//i.test(value)),
-)];
-
-if (postgresUris.length === 0) {
-  blocked('production_database_connection_missing', {
+  resolution = resolveProductionPostgresConnection(runtime);
+} catch (error) {
+  const resolverError = error instanceof ProductionDatabaseResolutionError ? error : null;
+  const classification = resolverError?.classification ?? 'production_database_resolution_failed';
+  const connectionCount = resolverError?.connectionCount ?? 0;
+  blocked(classification, {
     pm2_online: true,
-    production_project_match: true,
-    postgres_connection_count: 0,
-  });
-}
-if (postgresUris.length !== 1) {
-  blocked('production_database_connection_ambiguous', {
-    pm2_online: true,
-    production_project_match: true,
-    postgres_connection_count: 2,
+    production_project_match: classification !== 'production_project_mismatch',
+    postgres_connection_count: connectionCount > 1 ? 2 : connectionCount,
   });
 }
 
-let database;
-try {
-  const parsed = new URL(postgresUris[0]);
-  const hostname = parsed.hostname.toLowerCase();
-  const username = decodeURIComponent(parsed.username);
-  const usernameLower = username.toLowerCase();
-  const direct = hostname === `db.${projectRef}.supabase.co` && usernameLower === 'postgres';
-  const pooler = /(^|\.)pooler\.supabase\.com$/i.test(hostname)
-    && usernameLower === `postgres.${projectRef}`;
-  const databaseName = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
-  const port = parsed.port || '5432';
-  if ((!direct && !pooler) || !parsed.password || databaseName !== 'postgres' || port !== '5432') {
-    throw new Error('invalid database target');
-  }
-  database = {
-    hostname,
-    port,
-    username,
-    password: decodeURIComponent(parsed.password),
-    database: databaseName,
-    endpointType: direct ? 'direct' : 'pooler',
-  };
-} catch {
-  blocked('production_database_project_mismatch', {
-    pm2_online: true,
-    production_project_match: true,
-    postgres_connection_count: 1,
-  });
-}
+const database = resolution.database;
 
 const SQL = String.raw`
 \set ON_ERROR_STOP on
@@ -448,7 +396,7 @@ const probe = spawnSync('psql', [
 const connectionEvidence = {
   pm2_online: true,
   production_project_match: true,
-  postgres_connection_count: 1,
+  postgres_connection_count: resolution.connectionCount,
   postgres_endpoint_type: database.endpointType,
   postgres_port: database.port,
   existing_safe_db_connection_available: true,
