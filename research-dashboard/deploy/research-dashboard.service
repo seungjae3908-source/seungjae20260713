@@ -22,13 +22,15 @@ ProtectSystem=strict
 ProtectHome=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
-ProtectKernelLogs=true
 ProtectControlGroups=true
+CapabilityBoundingSet=
+AmbientCapabilities=
 RestrictSUIDSGID=true
 LockPersonality=true
-# Node/V8 JIT requires executable memory. Research Production intentionally
-# leaves MemoryDenyWriteExecute disabled for the same runtime reason.
-ReadOnlyPaths=/opt/investment-research-dashboard/current /var/lib/investment-research-production
+UMask=0077
+# Keep the long-running Node service aligned with the already-proven Research
+# Production sandbox. ProtectSystem=strict keeps the release and research state
+# read-only; only the private /tmp namespace is explicitly writable.
 ReadWritePaths=/tmp
 
 [Install]
