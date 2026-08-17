@@ -10,6 +10,7 @@ import {
   YAxis,
 } from 'recharts';
 import { CenteredPageHeader } from '@/components/centered-page-header';
+import { resolveEvidenceDisplay } from '@/lib/evidence-display';
 import {
   runBacktest,
   type BacktestFormValues,
@@ -57,8 +58,14 @@ type FieldProps = {
 const inputClass = 'h-11 min-w-0 rounded-xl border border-border bg-background px-3 text-sm font-bold text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring';
 const numberFormatter = new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 2 });
 const money = (value: number) => `${numberFormatter.format(value)} USDT`;
-const percent = (value: number | null) => value == null ? '-' : `${numberFormatter.format(value)}%`;
-const ratio = (value: number | null) => value == null ? '-' : numberFormatter.format(value);
+const percent = (value: number | null) => resolveEvidenceDisplay({
+  value,
+  formatter: (observed) => `${numberFormatter.format(Number(observed))}%`,
+}).display;
+const ratio = (value: number | null) => resolveEvidenceDisplay({
+  value,
+  formatter: (observed) => numberFormatter.format(Number(observed)),
+}).display;
 const dateTime = (value: number) => new Date(value).toLocaleString('ko-KR', { timeZone: 'UTC' });
 
 function initialValuesFromUrl() {
