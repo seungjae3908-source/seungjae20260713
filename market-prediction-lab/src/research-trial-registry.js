@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const TRIAL_REGISTRY_SCHEMA_VERSION = 1;
+export const TRIAL_REGISTRY_SCHEMA_VERSION = 2;
 export const FORWARD_ONLY_STAGES = Object.freeze(new Set(["final_holdout", "shadow", "paper"]));
 const ALLOWED_STAGES = Object.freeze(new Set([
   "development",
@@ -20,7 +20,7 @@ function stableJson(value) {
   return JSON.stringify(value);
 }
 
-function sha256(value) {
+export function researchDigest(value) {
   return createHash("sha256").update(stableJson(value)).digest("hex");
 }
 
@@ -40,14 +40,23 @@ export function buildStrategyIdentity(identity) {
   const normalized = Object.freeze({
     strategyId: immutableString(identity?.strategyId, "strategyId"),
     strategyVersion: immutableString(identity?.strategyVersion, "strategyVersion"),
-    parameterHash: immutableString(identity?.parameterHash, "parameterHash"),
     researchCodeSha: immutableString(identity?.researchCodeSha, "researchCodeSha"),
     datasetSnapshotHash: immutableString(identity?.datasetSnapshotHash, "datasetSnapshotHash"),
     market: immutableString(identity?.market, "market"),
     timeframe: immutableString(identity?.timeframe, "timeframe"),
     direction: immutableString(identity?.direction, "direction"),
   });
-  return Object.freeze({ ...normalized, fingerprint: sha256(normalized) });
+  return Object.freeze({ ...normalized, familyFingerprint: researchDigest(normalized) });
+}
+
+export function buildSelectedStrategyFingerprint(registry, trial) {
+  if (!registry || registry.schemaVersion !== TRIAL_REGISTRY_SCHEMA_VERSION) throw new TypeError("valid trial registry is required");
+  if (!trial || typeof trial !== "object") throw new TypeError("selected trial is required");
+  return researchDigest({
+    familyFingerprint: registry.strategyIdentity.familyFingerprint,
+    candidateId: immutableString(trial.candidateId, "candidateId"),
+    parameterHash: immutableString(trial.parameterHash, "parameterHash"),
+  });
 }
 
 export function createResearchTrialRegistry({ experimentId, identity }) {
@@ -57,7 +66,7 @@ export function createResearchTrialRegistry({ experimentId, identity }) {
     experimentId: immutableString(experimentId, "experimentId"),
     strategyIdentity,
     trials: Object.freeze([]),
-    registryDigest: sha256({ experimentId, strategyIdentity, trials: [] }),
+    registryDigest: researchDigest({ experimentId, strategyIdentity, trials: [] }),
     safety: Object.freeze({
       forwardEvidenceCanSelectCandidate: false,
       historicalBackfillAllowed: false,
@@ -78,23 +87,24 @@ export function appendResearchTrial(registry, trial) {
     throw new Error(`${stage} evidence cannot be used for candidate selection`);
   }
   const candidateId = immutableString(trial?.candidateId, "candidateId");
+  const parameterHash = immutableString(trial?.parameterHash, "trial.parameterHash");
   const returnSeries = finiteSeries(trial.returnSeries, "returnSeries");
   const recorded = Object.freeze({
     trialId,
     candidateId,
     stage,
     selectionEligible,
-    parameterHash: immutableString(trial?.parameterHash, "trial.parameterHash"),
+    parameterHash,
     startedAt: Number.isInteger(trial?.startedAt) ? trial.startedAt : null,
     completedAt: Number.isInteger(trial?.completedAt) ? trial.completedAt : null,
     returnSeries,
     metrics: Object.freeze({ ...(trial.metrics ?? {}) }),
-    trialDigest: sha256({
+    trialDigest: researchDigest({
       trialId,
       candidateId,
       stage,
       selectionEligible,
-      parameterHash: trial.parameterHash,
+      parameterHash,
       returnSeries,
       metrics: trial.metrics ?? {},
     }),
@@ -103,7 +113,7 @@ export function appendResearchTrial(registry, trial) {
   return Object.freeze({
     ...registry,
     trials,
-    registryDigest: sha256({ experimentId: registry.experimentId, strategyIdentity: registry.strategyIdentity, trials }),
+    registryDigest: researchDigest({ experimentId: registry.experimentId, strategyIdentity: registry.strategyIdentity, trials }),
   });
 }
 
@@ -118,7 +128,7 @@ export function summarizeTrialRegistry(registry) {
   const selectable = selectionTrials(registry);
   return Object.freeze({
     experimentId: registry.experimentId,
-    strategyFingerprint: registry.strategyIdentity.fingerprint,
+    strategyFamilyFingerprint: registry.strategyIdentity.familyFingerprint,
     totalTrials: registry.trials.length,
     selectionTrials: selectable.length,
     stages: Object.freeze(Object.fromEntries([...ALLOWED_STAGES].map((stage) => [
