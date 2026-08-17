@@ -58,6 +58,10 @@ function isKrTicker(ticker: string) {
   return /^\d{6}$/.test(ticker);
 }
 
+function isQualifiedKrTicker(ticker: string) {
+  return /^\d{6}\.(?:KS|KQ)$/u.test(ticker);
+}
+
 function getTickerFromEntry(entryOrTicker: CatalogEntry | string) {
   if (typeof entryOrTicker === 'string') return cleanTicker(entryOrTicker);
 
@@ -73,6 +77,10 @@ function getNameFromEntry(entryOrTicker: CatalogEntry | string, fallback: string
 function yahooSymbol(ticker: string) {
   const clean = cleanTicker(ticker);
 
+  // Preserve an already-qualified Korean Yahoo symbol. Without this guard,
+  // 005930.KS / 247540.KQ can be mistaken for a US class-share ticker and
+  // rewritten to 005930-KS / 247540-KQ, which Yahoo correctly returns as 404.
+  if (isQualifiedKrTicker(clean)) return clean;
   if (isKrTicker(clean)) return `${clean}.KS`;
   if (/^[A-Z0-9]+\.[A-Z0-9]+$/u.test(clean)) return clean.replace(/\./gu, '-');
 
@@ -359,12 +367,13 @@ export async function getCompanyProfile(
   entryOrTicker: CatalogEntry | string,
 ): Promise<any> {
   const ticker = getTickerFromEntry(entryOrTicker);
+  const kr = isKrTicker(ticker) || isQualifiedKrTicker(ticker);
 
   return {
     ticker,
     name: getNameFromEntry(entryOrTicker, ticker),
-    market: isKrTicker(ticker) ? 'KR' : 'US',
-    currency: isKrTicker(ticker) ? 'KRW' : 'USD',
+    market: kr ? 'KR' : 'US',
+    currency: kr ? 'KRW' : 'USD',
     description: `${getNameFromEntry(entryOrTicker, ticker)} 기업 정보입니다.`,
     sector: '',
     industry: '',
@@ -376,7 +385,7 @@ export const companyProfile = getCompanyProfile;
 
 export async function getYahooSector(ticker: string): Promise<string | null> {
   const clean = cleanTicker(ticker);
-  if (!clean || isKrTicker(clean)) return null;
+  if (!clean || isKrTicker(clean) || isQualifiedKrTicker(clean)) return null;
 
   const encoded = encodeURIComponent(yahooSymbol(clean));
   const urls = [
