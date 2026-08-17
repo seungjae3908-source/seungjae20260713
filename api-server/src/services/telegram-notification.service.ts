@@ -11,11 +11,13 @@ const DEFAULT_COOLDOWN_MS = 60 * 1000;
 export const TELEGRAM_ALERT_TYPES = [
   'strong_buy',
   'strong_sell',
+  'crypto_spot_buy',
   'crypto_futures_long',
   'crypto_futures_short',
   'price_alert',
   'provider_outage',
   'system_critical',
+  'intelligence_report',
 ] as const;
 
 export type TelegramAlertType = (typeof TELEGRAM_ALERT_TYPES)[number];
@@ -32,6 +34,7 @@ export interface TelegramAlertInput {
   dedupeKey?: string;
   cooldownMs?: number;
   duplicateWindowMs?: number;
+  destinationChatId?: string;
 }
 
 export type TelegramAlertResult =
@@ -58,12 +61,16 @@ function token(): string | null {
   return process.env.TELEGRAM_BOT_TOKEN?.trim() || null;
 }
 
-function chatId(): string | null {
+function defaultChatId(): string | null {
   return process.env.TELEGRAM_CHAT_ID?.trim() || null;
 }
 
+function destinationFor(input: TelegramAlertInput): string | null {
+  return input.destinationChatId?.trim() || defaultChatId();
+}
+
 export function isTelegramConfigured(): boolean {
-  return Boolean(token() && chatId());
+  return Boolean(token() && defaultChatId());
 }
 
 export function escapeTelegramHtml(value: unknown): string {
@@ -86,6 +93,8 @@ function titleForType(type: TelegramAlertType): string {
       return '🟢 강한매수 신호';
     case 'strong_sell':
       return '🔴 강한매도 신호';
+    case 'crypto_spot_buy':
+      return '🟢 코인현물 매수 신호';
     case 'crypto_futures_long':
       return '🟦 코인선물 LONG 신호';
     case 'crypto_futures_short':
@@ -96,6 +105,8 @@ function titleForType(type: TelegramAlertType): string {
       return '⚠️ 데이터 Provider 장애';
     case 'system_critical':
       return '🚨 시스템 중요 경고';
+    case 'intelligence_report':
+      return '📊 투자 인텔리전스 리포트';
   }
 }
 
@@ -121,16 +132,16 @@ function normalizeWindow(value: number | undefined, fallback: number): number {
   return Math.max(0, Math.min(24 * 60 * 60 * 1000, Math.trunc(value)));
 }
 
-function hashFor(input: TelegramAlertInput, rendered: string): string {
-  const source = input.dedupeKey?.trim() || rendered;
+function hashFor(input: TelegramAlertInput, rendered: string, destination: string): string {
+  const source = `${destination}:${input.dedupeKey?.trim() || rendered}`;
   return createHash('sha256').update(source).digest('hex');
 }
 
-function cooldownKeyFor(input: TelegramAlertInput): string {
+function cooldownKeyFor(input: TelegramAlertInput, destination: string): string {
   const subject = input.symbol?.trim().toUpperCase()
     || input.provider?.trim().toLowerCase()
     || 'global';
-  return `${input.type}:${subject}`;
+  return `${destination}:${input.type}:${subject}`;
 }
 
 function prune(now: number): void {
@@ -201,7 +212,7 @@ async function sendOnce(
       return { delivered: false, attempts: attempt + 1 };
     }
     return { delivered: result.ok === true, attempts: attempt + 1 };
-  } catch (error) {
+  } catch {
     if (attempt < MAX_RETRIES) {
       clearTimeout(timeout);
       await sleep(300 * (attempt + 1));
@@ -217,14 +228,14 @@ export async function sendTelegramAlert(
   input: TelegramAlertInput,
 ): Promise<TelegramAlertResult> {
   const botToken = token();
-  const destination = chatId();
+  const destination = destinationFor(input);
   if (!botToken || !destination) {
     return { ok: false, attempts: 0, skipped: 'NOT_CONFIGURED' };
   }
 
   const rendered = renderTelegramAlert(input);
-  const hash = hashFor(input, rendered);
-  const cooldownKey = cooldownKeyFor(input);
+  const hash = hashFor(input, rendered, destination);
+  const cooldownKey = cooldownKeyFor(input, destination);
   const now = Date.now();
   prune(now);
 

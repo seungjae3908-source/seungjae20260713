@@ -238,3 +238,192 @@ input[type='search']::-webkit-search-results-decoration {
     min-height: 44px;
   }
 }
+
+/*
+ * Mobile and desktop navigation intentionally use different geometry.
+ * Mobile keeps the edge-to-edge safe-area bar. Desktop becomes a bounded
+ * floating dock so wide screens no longer look like a stretched phone UI.
+ * Existing page bottom padding remains valid, so the dock does not cover content.
+ */
+@media (min-width: 1024px) {
+  nav[aria-label='주요 메뉴'] {
+    inset-inline: auto;
+    left: 50%;
+    right: auto;
+    bottom: 1rem;
+    width: min(52rem, calc(100vw - 2rem));
+    transform: translateX(-50%);
+    border-right-width: 1px;
+    border-bottom-width: 1px;
+    border-left-width: 1px;
+    border-radius: 1.5rem;
+    padding: 0.5rem 0.75rem;
+    box-shadow: 0 18px 50px rgb(0 0 0 / 0.18);
+  }
+
+  nav[aria-label='주요 메뉴'] > div {
+    max-width: 48rem;
+  }
+
+  nav[aria-label='주요 메뉴'] button {
+    min-height: 48px;
+  }
+
+  [data-testid='scanner-workspace-basic'] section[aria-label='검색 시장'] {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/*
+ * Basic scanner access is the associate tier: public stocks + crypto spot.
+ * Futures remains server-side fail-closed and is also removed from this UI surface
+ * so users do not see a control they cannot use.
+ */
+[data-testid='scanner-workspace-basic'] section[aria-label='검색 시장'] > button:nth-child(4) {
+  display: none;
+}
+
+/*
+ * Scanner mobile collision guard.
+ * The prior responsive contract only proved that the document did not overflow
+ * horizontally. Elements could still become visually crushed or collide inside
+ * a fixed-width row. Small screens now stack the price/score rail, keep signal
+ * badges wrap-safe, and make the detail tabs a true five-column control instead
+ * of a horizontally hidden strip.
+ */
+@media (max-width: 479px) {
+  [data-testid='scanner-master-list'] > article > .flex.items-start.justify-between.gap-3 {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  [data-testid='scanner-master-list']
+    > article
+    > .flex.items-start.justify-between.gap-3
+    > .shrink-0.text-right {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.5rem;
+    text-align: left;
+  }
+
+  [data-testid='scanner-master-list']
+    > article
+    > .flex.items-start.justify-between.gap-3
+    > .shrink-0.text-right
+    > p {
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  [data-testid='scanner-card-direction'],
+  [data-testid='scanner-direction-badge'],
+  [data-testid='scanner-evidence-grade'],
+  [data-testid='scanner-ttl-badge'] {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1rem;
+  }
+
+  [data-testid='scanner-master-list'] article .grid.grid-cols-2.gap-2 > button,
+  [data-testid='scanner-mobile-sheet'] .grid.grid-cols-2.gap-2 > button,
+  section[aria-label='승인 대기 알림'] button {
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  [data-testid='scanner-mobile-sheet'] {
+    overflow-x: hidden;
+  }
+
+  [data-testid='scanner-mobile-sheet'] [data-testid='signal-detail'] {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  [data-testid='scanner-mobile-risk'],
+  [data-testid='scanner-mobile-risk'] > *,
+  [data-testid='scanner-mobile-risk'] section,
+  [data-testid='scanner-mobile-risk'] .grid,
+  [data-testid='scanner-mobile-risk'] .grid > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  [data-testid='scanner-mobile-risk'] p,
+  [data-testid='scanner-mobile-risk'] li,
+  [data-testid='scanner-mobile-risk'] span,
+  [data-testid='scanner-mobile-risk'] button {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  [data-testid='scanner-mobile-detail-tabs'] {
+    display: grid !important;
+    width: 100%;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    overflow-x: visible !important;
+    overscroll-behavior-x: auto;
+  }
+
+  [data-testid='scanner-mobile-detail-tabs'] > button {
+    width: 100%;
+    min-width: 0 !important;
+    padding-inline: 0.35rem;
+  }
+
+  .mx-auto.w-full.max-w-6xl.space-y-4
+    > section.flex.items-center.justify-between.gap-2
+    > span {
+    min-width: 0;
+    flex: 1 1 auto;
+    text-align: center;
+    overflow-wrap: anywhere;
+  }
+
+  .mx-auto.w-full.max-w-6xl.space-y-4
+    > section.flex.items-center.justify-between.gap-2
+    > button {
+    flex: 0 0 auto;
+    padding-inline: 0.75rem;
+  }
+}
+
+@media (max-width: 359px) {
+  section[aria-label='검색 전략'] > button {
+    padding-inline: 0.5rem;
+  }
+
+  [data-testid='scanner-mobile-detail-tabs'] > button {
+    padding-inline: 0.2rem;
+    font-size: 0.65rem;
+  }
+
+  /*
+   * 320px is too narrow for intentionally long deterministic risk/provenance
+   * tokens to share two columns without obscuring adjacent evidence. Keep every
+   * value visible: stack only the risk-panel two-column groups and allow hard
+   * token wrapping. 360px+ retains the denser two-column layout.
+   */
+  [data-testid='scanner-mobile-risk'] .grid.grid-cols-2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  [data-testid='scanner-mobile-risk'] p,
+  [data-testid='scanner-mobile-risk'] li,
+  [data-testid='scanner-mobile-risk'] span,
+  [data-testid='scanner-mobile-risk'] button {
+    min-width: 0;
+    overflow-wrap: anywhere !important;
+    word-break: break-all !important;
+  }
+}

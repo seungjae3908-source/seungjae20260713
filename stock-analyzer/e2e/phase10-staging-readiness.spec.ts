@@ -35,7 +35,11 @@ let accounts = emptyAccounts;
 let accountLifecycle: StagingAccountLifecycle | null = null;
 
 type Diagnostic = { test: string; url: string; detail: string; status?: number };
-type LogoutObservation = { candidates: Diagnostic[] };
+type LogoutObservation = {
+  candidates: Diagnostic[];
+  origin: string;
+  personalIntegrationReads: Set<Request>;
+};
 type RouteTransitionObservation = {
   fromRoute: string;
   toRoute: string;
@@ -50,6 +54,7 @@ type AuthFaultObservation = {
   failedAt: number | null;
 };
 const activeLogoutObservations = new WeakMap<Page, LogoutObservation>();
+const confirmedLogoutAbortRequests = new WeakMap<Request, string>();
 const activeRouteTransitionObservations = new WeakMap<Page, RouteTransitionObservation>();
 const activeAuthFaultObservations = new WeakMap<Page, AuthFaultObservation>();
 const pendingMutatingRequests = new WeakMap<Page, Set<Request>>();
@@ -105,7 +110,20 @@ function diagnosticText(raw: string) {
     .replace(/((?:authorization|apikey|api[_-]?key|token|password|secret|key)\s*[:=]\s*)([^\s,;]+)/gi, '$1[redacted]');
 }
 
-function isExpectedLogoutAbort(request: Request) {
+function isPersonalIntegrationLogoutRead(request: Request, expectedOrigin: string) {
+  let parsed: URL;
+  try {
+    parsed = new URL(request.url());
+  } catch {
+    return false;
+  }
+  return request.method() === 'GET'
+    && parsed.pathname === '/api/user-integrations'
+    && parsed.searchParams.size === 0
+    && parsed.origin === expectedOrigin;
+}
+
+function isExpectedLogoutAbort(request: Request, observation: LogoutObservation) {
   let parsed: URL;
   try {
     parsed = new URL(request.url());
@@ -113,12 +131,22 @@ function isExpectedLogoutAbort(request: Request) {
     return false;
   }
   const query = [...parsed.searchParams.entries()];
-  return request.method() === 'POST'
+  const aborted = request.failure()?.errorText === 'net::ERR_ABORTED';
+  const abortedLogoutRequest = request.method() === 'POST'
     && parsed.pathname === '/auth/v1/logout'
     && query.length === 1
     && query[0]?.[0] === 'scope'
-    && query[0]?.[1] === 'global'
-    && request.failure()?.errorText === 'net::ERR_ABORTED';
+    && query[0]?.[1] === 'global';
+  const abortedPersonalIntegrationRead = observation.personalIntegrationReads.has(request)
+    && isPersonalIntegrationLogoutRead(request, observation.origin);
+  return aborted && (abortedLogoutRequest || abortedPersonalIntegrationRead);
+}
+
+function isConfirmedLogoutAbort(request: Request) {
+  const expectedOrigin = confirmedLogoutAbortRequests.get(request);
+  return expectedOrigin !== undefined
+    && request.failure()?.errorText === 'net::ERR_ABORTED'
+    && isPersonalIntegrationLogoutRead(request, expectedOrigin);
 }
 
 function isProfileRequest(request: Request) {
@@ -140,10 +168,12 @@ function isExpectedRouteTransitionAbort(
 ) {
   try {
     const parsed = new URL(request.url());
+    const routeRead = parsed.pathname.startsWith('/api/') || request.resourceType() === 'script';
     return observation.fromRoute !== observation.toRoute
       && observation.pendingGetRequests.has(request)
       && request.method() === 'GET'
-      && parsed.pathname.startsWith('/api/')
+      && routeRead
+      && parsed.pathname !== '/api/market/scan'
       && request.failure()?.errorText === 'net::ERR_ABORTED';
   } catch {
     return false;
@@ -153,9 +183,11 @@ function isExpectedRouteTransitionAbort(
 function isSameOriginApiGet(request: Request) {
   try {
     const parsed = new URL(request.url());
+    const routeRead = parsed.pathname.startsWith('/api/') || request.resourceType() === 'script';
     return request.method() === 'GET'
       && parsed.origin === new URL(request.frame().url()).origin
-      && parsed.pathname.startsWith('/api/');
+      && routeRead
+      && parsed.pathname !== '/api/market/scan';
   } catch {
     return false;
   }
@@ -190,8 +222,21 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
   pendingMutatingRequests.set(page, mutations);
   pendingApiGetRequests.set(page, apiGets);
   page.on('request', (request) => {
+    const logoutObservation = activeLogoutObservations.get(page);
+    if (
+      logoutObservation
+      && isPersonalIntegrationLogoutRead(request, logoutObservation.origin)
+    ) {
+      logoutObservation.personalIntegrationReads.add(request);
+    }
     if (isMutatingBrowserRequest(request)) mutations.add(request);
-    if (isSameOriginApiGet(request)) apiGets.add(request);
+    if (isSameOriginApiGet(request)) {
+      apiGets.add(request);
+      const routeObservation = activeRouteTransitionObservations.get(page);
+      if (routeObservation && routeIdentity(page.url()) === routeObservation.fromRoute) {
+        routeObservation.pendingGetRequests.add(request);
+      }
+    }
   });
   page.on('requestfinished', (request) => completeBrowserRequest(page, request));
   page.on('console', (message) => {
@@ -236,8 +281,12 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
       detail,
     };
     const logoutObservation = activeLogoutObservations.get(page);
-    if (logoutObservation && isExpectedLogoutAbort(request)) {
+    if (logoutObservation && isExpectedLogoutAbort(request, logoutObservation)) {
       logoutObservation.candidates.push(diagnostic);
+      return;
+    }
+    if (isConfirmedLogoutAbort(request)) {
+      diagnostics.expected_logout_aborts.push(diagnostic);
       return;
     }
     const authFault = activeAuthFaultObservations.get(page);
@@ -272,6 +321,24 @@ async function waitForPendingMutations(page: Page) {
   ).toBe(0);
 }
 
+async function waitForPendingPersonalIntegrationReads(page: Page) {
+  const expectedOrigin = new URL(page.url()).origin;
+  await expect.poll(
+    () => {
+      const pending = pendingApiGetRequests.get(page);
+      if (!pending) return 0;
+      return [...pending]
+        .filter((request) => isPersonalIntegrationLogoutRead(request, expectedOrigin))
+        .length;
+    },
+    {
+      message: 'personal integration GET must settle before verifier-owned authenticated navigation',
+      timeout: 15_000,
+      intervals: [100, 200, 300, 500],
+    },
+  ).toBe(0);
+}
+
 async function settle(page: Page) {
   await page.waitForLoadState('load');
   for (let pass = 0; pass < 2; pass += 1) {
@@ -297,12 +364,18 @@ async function login(page: Page, loginName: string, password: string) {
   await passwordInput.fill(password);
   await loginSubmitButton(page).click();
   await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toBeVisible({ timeout: 30_000 });
+  await settle(page);
+  await waitForPendingPersonalIntegrationReads(page);
 }
 
 async function logout(page: Page) {
   const logoutButton = page.getByRole('button', { name: /로그아웃|sign out/i });
   await expect(logoutButton).toBeVisible();
-  const observation: LogoutObservation = { candidates: [] };
+  const observation: LogoutObservation = {
+    candidates: [],
+    origin: new URL(page.url()).origin,
+    personalIntegrationReads: new Set<Request>(),
+  };
   activeLogoutObservations.set(page, observation);
   let confirmed = false;
   try {
@@ -321,6 +394,9 @@ async function logout(page: Page) {
       `protected API remained accessible after logout: ${protectedResponse.status()}`,
     ).toContain(protectedResponse.status());
 
+    for (const request of observation.personalIntegrationReads) {
+      confirmedLogoutAbortRequests.set(request, observation.origin);
+    }
     confirmed = true;
     diagnostics.expected_logout_aborts.push(...observation.candidates);
   } finally {
@@ -615,8 +691,11 @@ test.describe('real staging release readiness', () => {
       await page.setViewportSize({ width, height });
       await login(page, accounts.regular.loginName, accounts.regular.password);
       await expectMembership(page, /정회원/);
+      await settle(page);
+      await waitForPendingPersonalIntegrationReads(page);
       await page.reload();
       await settle(page);
+      await waitForPendingPersonalIntegrationReads(page);
       await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
       await logout(page);

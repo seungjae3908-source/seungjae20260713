@@ -1,9 +1,27 @@
 import { clamp, round, validatePredictionInput } from "./contracts.js";
 import { calculateFeatures } from "./indicators.js";
 import { buildForecast } from "./forecast.js";
-import { evaluateRules } from "./rules.js";
-import { BASELINE_MODEL } from "./tiny-model.js";
-import { predictDeployedTinyModel } from "./deployment-inference.js";
+import { evaluateRules, scoreToProbabilities } from "./rules.js";
+import { BASELINE_MODEL, predictTinyModel } from "./tiny-model.js";
+
+function normalizeProbabilities(probabilities) {
+  const values = [probabilities.bullish, probabilities.neutral, probabilities.bearish]
+    .map((value) => Math.max(0, Number.isFinite(value) ? value : 0));
+  const total = values.reduce((sum, value) => sum + value, 0) || 1;
+  return Object.freeze({
+    bullish: values[0] / total,
+    neutral: values[1] / total,
+    bearish: values[2] / total,
+  });
+}
+
+function blendProbabilities(ruleProbabilities, modelProbabilities) {
+  return normalizeProbabilities({
+    bullish: (ruleProbabilities.bullish * 0.65) + (modelProbabilities.bullish * 0.35),
+    neutral: (ruleProbabilities.neutral * 0.65) + (modelProbabilities.neutral * 0.35),
+    bearish: (ruleProbabilities.bearish * 0.65) + (modelProbabilities.bearish * 0.35),
+  });
+}
 
 function stanceFromProbabilities(probabilities) {
   const entries = Object.entries(probabilities).sort((a, b) => b[1] - a[1]);
@@ -59,11 +77,9 @@ export function analyzeMarket(rawInput, options = {}) {
   const model = options.model ?? BASELINE_MODEL;
   const featureBundle = calculateFeatures(input);
   const ruleResult = evaluateRules(input, featureBundle);
-  const modelResult = predictDeployedTinyModel({
-    features: featureBundle.features,
-    ruleScore: ruleResult.score,
-  }, model);
-  const probabilities = modelResult.probabilities;
+  const ruleProbabilities = scoreToProbabilities(ruleResult.score);
+  const modelResult = predictTinyModel(featureBundle.features, model);
+  const probabilities = blendProbabilities(ruleProbabilities, modelResult.probabilities);
   const forecast = buildForecast(input, featureBundle.indicators, probabilities);
   const health = dataHealth(input);
   const warnings = [...ruleResult.warnings];

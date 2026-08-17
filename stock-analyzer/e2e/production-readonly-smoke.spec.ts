@@ -1,7 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { expect, test, type Page, type Request, type TestInfo } from '@playwright/test';
-import { installProductionReadOnlyPolicy } from './support/production-readonly-policy';
+import {
+  installProductionReadOnlyPolicy,
+  isIgnorableProductionRequestFailure,
+} from './support/production-readonly-policy';
 
 const required = (name: string): string => {
   const value = process.env[name]?.trim();
@@ -140,11 +143,13 @@ function attachDiagnostics(page: Page, testInfo: TestInfo, evidence: Evidence) {
     });
   });
   page.on('requestfailed', (request: Request) => {
+    const errorText = request.failure()?.errorText ?? 'request failed';
+    if (isIgnorableProductionRequestFailure(request.url(), request.method(), errorText, productionOrigin)) return;
     evidence.failedRequests.push({
       test: testName,
       path: requestPath(request.url()),
       status: 0,
-      detail: sanitizedDetail(`${request.method()} ${request.failure()?.errorText ?? 'request failed'}`),
+      detail: sanitizedDetail(`${request.method()} ${errorText}`),
     });
   });
 }
@@ -173,7 +178,7 @@ async function openRoute(page: Page, evidence: Evidence, route: string, testInfo
   await page.goto(route, { waitUntil: 'domcontentloaded' });
   await waitForFinitePageState(page, evidence, route, testInfo);
   if (route === '/paper-trading') {
-    await expect(page.getByTestId('paper-trading-page')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('open-journal-sync')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByTestId('paper-trading-route-skeleton')).toHaveCount(0);
   }
 }

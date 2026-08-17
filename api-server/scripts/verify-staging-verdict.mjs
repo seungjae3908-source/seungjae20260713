@@ -3,7 +3,7 @@ import path from 'node:path';
 import process from 'node:process';
 
 const verdictPath = path.resolve(process.argv[2] ?? 'staging-artifacts/staging-verdict.json');
-const targetSha = String(process.env.TARGET_SHA ?? process.argv[3] ?? '').trim().toLowerCase();
+const targetSha = String(process.env.TARGET_SHA ?? process.argv[3] ?? process.env.GITHUB_SHA ?? '').trim().toLowerCase();
 
 const fail = (message) => {
   console.error(`[staging-verdict] ${message}`);

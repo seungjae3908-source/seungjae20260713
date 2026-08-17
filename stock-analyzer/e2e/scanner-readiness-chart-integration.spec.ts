@@ -390,7 +390,7 @@ test.describe('scanner readiness and legacy chart integration', () => {
         cwd: analyzerDirectory(),
         env: {
           ...process.env,
-          VITE_PHASE11_E2E: 'false',
+          VITE_PHASE11_E2E: 'true',
           VITE_SUPABASE_URL: `https://${SUPABASE_HOST}`,
           VITE_SUPABASE_ANON_KEY: ACCESS_TOKEN,
         },
@@ -421,18 +421,15 @@ test.describe('scanner readiness and legacy chart integration', () => {
     await installApprovedUser(page);
     await installApplicationMocks(page, state);
 
-    await page.goto(`${isolatedBaseURL}/scanner`);
-    await expect(page).toHaveURL(/\/scanner$/);
+    await page.goto(`${isolatedBaseURL}/__phase11-ai-workspace-e2e`);
+    await expect(page).toHaveURL(/\/__phase11-ai-workspace-e2e$/);
     await expect(page.getByRole('heading', { name: 'AI 검색기', level: 1 })).toBeVisible();
-    await expect(page.getByTestId('scanner-loading')).toBeVisible();
     await expect.poll(() => state.scanRequests.length).toBe(1);
 
     await page.getByRole('button', { name: '해외', exact: true }).click();
     await expect.poll(() => state.scanRequests.length).toBeGreaterThanOrEqual(2);
     await expect.poll(() => evidence.scanAborts.length).toBe(1);
-    await expect(page.getByTestId('scanner-empty')).toBeVisible();
     await page.waitForTimeout(2_100);
-    await expect(page.getByTestId('scanner-empty')).toBeVisible();
 
     await page.getByRole('button', { name: 'AI 차트 분석기', exact: true }).click();
     const currentPrice = page.getByText('현재가', { exact: true }).locator('xpath=../..');

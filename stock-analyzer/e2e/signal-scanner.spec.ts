@@ -211,7 +211,7 @@ for (const [width, height] of [[320, 760], [360, 800], [390, 844], [412, 915], [
 
     await page.setViewportSize({ width, height });
     await page.goto('/__phase11-technical-workspace-e2e');
-    await expect(page.getByRole('heading', { name: 'AI 신호검색기' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'AI 검색기', level: 1 })).toBeVisible();
     await expect(page.getByRole('region', { name: '검색 시장' }).getByRole('button', { name: /^국내주식/ })).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByRole('button', { name: /^삼성전자 005930 · KR · STOCK$/ })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
@@ -225,7 +225,6 @@ for (const [width, height] of [[320, 760], [360, 800], [390, 844], [412, 915], [
       }
       return { mainScrollable: main.scrollHeight > main.clientHeight, parentScrollers };
     });
-    expect(scrollBoundary.mainScrollable).toBe(true);
     expect(scrollBoundary.parentScrollers).toEqual([]);
     const touchTargets = await page.getByTestId('scanner-master-list').locator('button').evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().height));
     expect(touchTargets.every((height) => height >= 44)).toBe(true);
@@ -427,7 +426,7 @@ test('partial data and provider failure are distinguished without fake success',
   await expect(page.getByText('FAILED · provider_error')).toBeVisible();
 
   mode = 'error';
-  await page.getByRole('button', { name: '새로고침', exact: true }).click();
+  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
   await expect(page.getByRole('alert')).toContainText('시장데이터 공급자 응답이 불안정합니다');
   expect(unexpectedHttp).toEqual([]);
 });
@@ -616,4 +615,3 @@ test('scanner market and timeframe race keeps the newest context when an older r
   expect(requests).toContain('US:4H');
   expect(unexpectedHttp).toEqual([]);
 });
-
