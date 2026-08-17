@@ -1,0 +1,139 @@
+name: Signal Intelligence V3 Prebuilt Activation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/signal-intelligence-v3-prebuilt-activation.yml'
+      - 'signal-intelligence-release/deploy/activate-server.sh'
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+concurrency:
+  group: signal-intelligence-v3-prebuilt-activation
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - run: |
+          bash -n signal-intelligence-release/deploy/activate-server.sh
+          grep -q 'PREBUILT_PRODUCER_SHA256' signal-intelligence-release/deploy/activate-server.sh
+          ! grep -q 'pnpm install' signal-intelligence-release/deploy/activate-server.sh
+
+  authorize:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.number == 62 &&
+      github.event.comment.user.login == github.repository_owner &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/activate-signal-intelligence-v3-prebuilt ')
+    runs-on: ubuntu-latest
+    outputs:
+      target_sha: ${{ steps.gate.outputs.target_sha }}
+      validation_run_id: ${{ steps.gate.outputs.validation_run_id }}
+    steps:
+      - id: gate
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = String(context.payload.comment.body).trim();
+            const match = body.match(/^\/activate-signal-intelligence-v3-prebuilt ([0-9a-f]{40})$/i);
+            if (!match) return core.setFailed('invalid activation command');
+            const sha = match[1].toLowerCase();
+            await github.rest.repos.getCommit({ owner: context.repo.owner, repo: context.repo.repo, ref: sha });
+            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo, head_sha: sha, per_page: 100,
+            });
+            const run = runs.filter(r => r.name === 'Signal Intelligence V3 Validation')
+              .sort((a,b) => Number(b.id)-Number(a.id))[0];
+            if (!run || run.status !== 'completed' || run.conclusion !== 'success') return core.setFailed('exact-head V3 validation is not successful');
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner: context.repo.owner, repo: context.repo.repo, run_id: run.id, per_page: 100,
+            });
+            for (const name of [`signal-intelligence-v3-${sha}`, `signal-intelligence-v3-deploy-${sha}`]) {
+              if (!artifacts.some(a => a.name === name && !a.expired)) return core.setFailed(`required artifact missing: ${name}`);
+            }
+            core.setOutput('target_sha', sha);
+            core.setOutput('validation_run_id', String(run.id));
+
+  activate:
+    needs: authorize
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
+      VALIDATION_RUN_ID: ${{ needs.authorize.outputs.validation_run_id }}
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      REPOSITORY_URL: https://github.com/${{ github.repository }}.git
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Download exact validated producer
+        uses: actions/download-artifact@v4
+        with:
+          name: signal-intelligence-v3-deploy-${{ env.TARGET_SHA }}
+          path: deploy-artifact
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ env.VALIDATION_RUN_ID }}
+      - name: Verify deploy artifact
+        id: artifact
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(cat deploy-artifact/SERVICE_SHA)" = "$TARGET_SHA"
+          test -s deploy-artifact/public-cycle.mjs
+          node --check deploy-artifact/public-cycle.mjs
+          digest="$(sha256sum deploy-artifact/public-cycle.mjs | awk '{print $1}')"
+          expected="$(awk '{print $1}' deploy-artifact/public-cycle.sha256)"
+          test "$digest" = "$expected"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - name: Configure SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts; else ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts; fi
+      - name: Upload validated producer
+        shell: bash
+        run: |
+          scp -i ~/.ssh/id_ed25519 -P "$SSH_PORT" -o BatchMode=yes deploy-artifact/public-cycle.mjs "$SSH_USER@$SSH_HOST:/tmp/signal-intelligence-v3-$TARGET_SHA.mjs"
+      - name: Read-only server preflight
+        shell: bash
+        run: |
+          remote_env="$(printf 'TARGET_SHA=%q REPOSITORY_URL=%q' "$TARGET_SHA" "$REPOSITORY_URL")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST" "$remote_env bash -s -- preflight" < signal-intelligence-release/deploy/activate-server.sh
+      - name: Activate exact validated service
+        env:
+          PRODUCER_DIGEST: ${{ steps.artifact.outputs.digest }}
+        shell: bash
+        run: |
+          remote_path="/tmp/signal-intelligence-v3-$TARGET_SHA.mjs"
+          remote_env="$(printf 'TARGET_SHA=%q REPOSITORY_URL=%q PREBUILT_PRODUCER_PATH=%q PREBUILT_PRODUCER_SHA256=%q' "$TARGET_SHA" "$REPOSITORY_URL" "$remote_path" "$PRODUCER_DIGEST")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST" "$remote_env bash -s -- activate" < signal-intelligence-release/deploy/activate-server.sh | tee activation.txt
+          grep -q "service_sha=$TARGET_SHA" activation.txt
+          grep -q 'executionAuthority=NONE' activation.txt
+      - name: Report sanitized activation
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: 62,
+              body: `[SIGNAL_INTELLIGENCE_V3_ACTIVATED]\n- service_sha: \`${process.env.TARGET_SHA}\`\n- validation_run: \`${process.env.VALIDATION_RUN_ID}\`\n- prebuilt producer: verified\n- executionAuthority: \`NONE\`\n- app Production deploy: \`false\`` });
