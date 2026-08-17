@@ -28,8 +28,15 @@ export interface YahooIndexQuote {
   changeAmount: number;
   changePercent: number;
   spark: number[];
+  unit?: 'index' | 'krw' | 'usd';
   updatedAt: string;
 }
+
+// The stock Scanner has a four-second per-symbol budget. Keep each Yahoo
+// public chart attempt comfortably below that budget so a bounded retry can
+// still finish instead of being reported as an item timeout.
+const YAHOO_CHART_BUDGET_MS = 1_650;
+const YAHOO_HEDGE_DELAY_MS = 180;
 
 function cleanTicker(value: unknown) {
   return String(value ?? '').trim().toUpperCase();
@@ -51,6 +58,10 @@ function isKrTicker(ticker: string) {
   return /^\d{6}$/.test(ticker);
 }
 
+function isQualifiedKrTicker(ticker: string) {
+  return /^\d{6}\.(?:KS|KQ)$/u.test(ticker);
+}
+
 function getTickerFromEntry(entryOrTicker: CatalogEntry | string) {
   if (typeof entryOrTicker === 'string') return cleanTicker(entryOrTicker);
 
@@ -66,14 +77,24 @@ function getNameFromEntry(entryOrTicker: CatalogEntry | string, fallback: string
 function yahooSymbol(ticker: string) {
   const clean = cleanTicker(ticker);
 
+  // Preserve an already-qualified Korean Yahoo symbol. Without this guard,
+  // 005930.KS / 247540.KQ can be mistaken for a US class-share ticker and
+  // rewritten to 005930-KS / 247540-KQ, which Yahoo correctly returns as 404.
+  if (isQualifiedKrTicker(clean)) return clean;
   if (isKrTicker(clean)) return `${clean}.KS`;
+  if (/^[A-Z0-9]+\.[A-Z0-9]+$/u.test(clean)) return clean.replace(/\./gu, '-');
 
   return clean;
 }
 
-async function fetchJson<T>(url: string): Promise<T> {
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   const res = await fetch(url, {
     redirect: 'follow',
+    signal,
     headers: {
       accept: 'application/json,text/plain,*/*',
       'accept-language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
@@ -89,37 +110,64 @@ async function fetchJson<T>(url: string): Promise<T> {
   return (await res.json()) as T;
 }
 
+async function validChart(url: string, signal: AbortSignal): Promise<YahooChartResult> {
+  const data = await fetchJson<any>(url, signal);
+  const result = data?.chart?.result?.[0];
+  if (!result?.indicators?.quote?.[0]) throw new Error(`YAHOO_CHART_EMPTY_RESULT:${url}`);
+  return result as YahooChartResult;
+}
+
+async function hedgedYahooChart(urls: [string, string]): Promise<YahooChartResult> {
+  const controllers = [new AbortController(), new AbortController()];
+  const timer = setTimeout(() => {
+    controllers[0].abort(new Error('YAHOO_CHART_BUDGET_EXCEEDED'));
+    controllers[1].abort(new Error('YAHOO_CHART_BUDGET_EXCEEDED'));
+  }, YAHOO_CHART_BUDGET_MS);
+  const first = validChart(urls[0], controllers[0].signal);
+  const second = (async () => {
+    await sleep(YAHOO_HEDGE_DELAY_MS);
+    return validChart(urls[1], controllers[1].signal);
+  })();
+
+  try {
+    return await Promise.any([first, second]);
+  } catch (error) {
+    if (error instanceof AggregateError) {
+      const details = error.errors.map((item) => item instanceof Error ? item.message : String(item)).join('|');
+      throw new Error(`YAHOO_HEDGED_PAIR_FAILED:${details}`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    controllers[0].abort();
+    controllers[1].abort();
+  }
+}
+
 async function fetchYahooChart(
   symbol: string,
   params?: { range: string; interval: string },
 ): Promise<YahooChartResult> {
   const encoded = encodeURIComponent(symbol);
 
+  // A single 1mo/1d request is sufficient for quote/previous-close fields and
+  // avoids spending a second full network budget on a 5d fallback. Explicit
+  // candle requests still use their requested timeframe/range.
   const query = params
     ? [
         params.range
           ? `range=${params.range}&interval=${params.interval}`
           : `period1=0&period2=9999999999&interval=${params.interval}`,
       ]
-    : ['range=5d&interval=1d', 'range=1mo&interval=1d'];
-
-  const urls = query.flatMap((q) => [
-    `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?${q}`,
-    `https://query2.finance.yahoo.com/v8/finance/chart/${encoded}?${q}`,
-  ]);
+    : ['range=1mo&interval=1d'];
 
   const errors: string[] = [];
-
-  for (const url of urls) {
+  for (const q of query) {
     try {
-      const data = await fetchJson<any>(url);
-      const result = data?.chart?.result?.[0];
-
-      if (result?.indicators?.quote?.[0]) {
-        return result as YahooChartResult;
-      }
-
-      errors.push(`EMPTY_RESULT:${url}`);
+      return await hedgedYahooChart([
+        `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?${q}`,
+        `https://query2.finance.yahoo.com/v8/finance/chart/${encoded}?${q}`,
+      ]);
     } catch (error) {
       errors.push(error instanceof Error ? error.message : String(error));
     }
@@ -213,10 +261,7 @@ export async function getQuote(
 
 export const quote = getQuote;
 
-// 시간프레임별 야후 차트 range/interval 매핑 (차트용 장기 데이터).
 export function yahooChartParams(tf?: string): { range: string; interval: string } {
-  // 주의: range=max는 야후가 굵은 버킷(약 168개)으로 뭉개서 반환한다.
-  // period1/period2 명시가 전체 이력을 올바른 간격으로 준다.
   switch (String(tf ?? '1D')) {
     case '1m':
       return { range: '7d', interval: '1m' };
@@ -239,7 +284,7 @@ export function yahooChartParams(tf?: string): { range: string; interval: string
     case '1D':
       return { range: '10y', interval: '1d' };
     default:
-		throw new Error(`YAHOO_UNSUPPORTED_TIMEFRAME:${String(tf)}`);
+      throw new Error(`YAHOO_UNSUPPORTED_TIMEFRAME:${String(tf)}`);
   }
 }
 
@@ -322,12 +367,13 @@ export async function getCompanyProfile(
   entryOrTicker: CatalogEntry | string,
 ): Promise<any> {
   const ticker = getTickerFromEntry(entryOrTicker);
+  const kr = isKrTicker(ticker) || isQualifiedKrTicker(ticker);
 
   return {
     ticker,
     name: getNameFromEntry(entryOrTicker, ticker),
-    market: isKrTicker(ticker) ? 'KR' : 'US',
-    currency: isKrTicker(ticker) ? 'KRW' : 'USD',
+    market: kr ? 'KR' : 'US',
+    currency: kr ? 'KRW' : 'USD',
     description: `${getNameFromEntry(entryOrTicker, ticker)} 기업 정보입니다.`,
     sector: '',
     industry: '',
@@ -337,14 +383,11 @@ export async function getCompanyProfile(
 
 export const companyProfile = getCompanyProfile;
 
-// Fetch the Yahoo `assetProfile.sector` for a US ticker (best-effort, single
-// call). Returns the raw English sector string (e.g. "Technology") or null when
-// unavailable. Never throws.
 export async function getYahooSector(ticker: string): Promise<string | null> {
   const clean = cleanTicker(ticker);
-  if (!clean || isKrTicker(clean)) return null;
+  if (!clean || isKrTicker(clean) || isQualifiedKrTicker(clean)) return null;
 
-  const encoded = encodeURIComponent(clean);
+  const encoded = encodeURIComponent(yahooSymbol(clean));
   const urls = [
     `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encoded}?modules=assetProfile`,
     `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encoded}?modules=assetProfile`,
