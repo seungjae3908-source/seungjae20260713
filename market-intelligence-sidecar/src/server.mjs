@@ -5,6 +5,7 @@ import { evaluateMarketIntelligence, DEFAULT_POLICY } from './engine.mjs';
 import { DEFAULT_ADVANCED_GATE_POLICY } from './advanced-gates.mjs';
 import { DEFAULT_EXECUTION_QUALITY_POLICY } from './execution-quality.mjs';
 import { DEFAULT_PORTFOLIO_SAFETY_POLICY } from './portfolio-safety.mjs';
+import { normalizeMissingEvidence } from './evidence-normalize.mjs';
 import { fetchBitgetFuturesEvidence, fetchUpbitSpotEvidence } from './public-data.mjs';
 import { buildSignalIntelligenceOverlay } from './signal-overlay.mjs';
 
@@ -71,9 +72,10 @@ function remember(input) {
 }
 
 async function evaluateAndRemember(input) {
-  const enriched = withPrevious(input);
+  const normalized = normalizeMissingEvidence(input);
+  const enriched = withPrevious(normalized);
   const result = evaluateMarketIntelligence(enriched);
-  remember(input);
+  remember(normalized);
   return result;
 }
 
