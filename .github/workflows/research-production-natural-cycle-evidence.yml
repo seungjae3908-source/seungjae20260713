@@ -61,7 +61,7 @@ jobs:
       SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
       SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
       SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
-      EVIDENCE_FILE: ${{ runner.temp }}/research-production-natural-cycle-evidence.txt
+      EVIDENCE_FILE: /tmp/research-production-natural-cycle-evidence.txt
     steps:
       - uses: actions/checkout@v4
         with:
