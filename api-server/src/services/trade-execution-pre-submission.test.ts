@@ -5,6 +5,15 @@ import { TradeAutomationService } from './trade-automation.service';
 import { TradeExecutionService } from './trade-execution.service';
 import { encryptTradingCredentials } from './trade-credential-vault.service';
 import {
+  marketIntelligenceNotAvailable,
+  tradingMarket,
+  type MarketIntelligenceSummary,
+} from './market-intelligence-client.service';
+import {
+  marketIntelligenceSymbolForTradingPlan,
+  setTradingPlanMarketIntelligenceRunnerForTests,
+} from './trade-market-intelligence.service';
+import {
   DEFAULT_TRADING_POLICY,
   type TradingMarketSnapshot,
   type TradingPlanInput,
@@ -79,11 +88,34 @@ function planInput(now: Date): TradingPlanInput {
   };
 }
 
+async function eligibleMarketIntelligence(
+  input: Pick<TradingPlanInput, 'exchange' | 'market' | 'symbol'>,
+): Promise<MarketIntelligenceSummary> {
+  const unavailable = marketIntelligenceNotAvailable(
+    tradingMarket(input),
+    marketIntelligenceSymbolForTradingPlan(input),
+    'TEST_MARKET_INTELLIGENCE_FIXTURE',
+  );
+  return {
+    ...unavailable,
+    status: 'READY',
+    reason: null,
+    warnings: [],
+    autoTrading: {
+      ...unavailable.autoTrading,
+      mode: 'ELIGIBLE_FOR_PARENT_GATE',
+      evidenceReady: true,
+      parentEligibilityReady: true,
+    },
+  };
+}
+
 async function setup() {
   process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
   process.env.ORDER_EXECUTION_ENABLED = 'true';
   process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
   process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
+  setTradingPlanMarketIntelligenceRunnerForTests(eligibleMarketIntelligence);
   const repository = new InMemoryTradingRepository();
   await repository.savePolicy(USER_ID, {
     ...DEFAULT_TRADING_POLICY,
@@ -174,6 +206,7 @@ function installUpbitMock(currentPrice: number) {
 
 function resetEnvironment() {
   globalThis.fetch = nativeFetch;
+  setTradingPlanMarketIntelligenceRunnerForTests(null);
   delete process.env.TRADING_CREDENTIAL_MASTER_KEY;
   delete process.env.ORDER_EXECUTION_ENABLED;
   delete process.env.LIVE_TRADING_ACTIVATION_APPROVED;
