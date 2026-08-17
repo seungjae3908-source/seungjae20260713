@@ -153,17 +153,18 @@ for (const width of [360, 390, 430, 1023, 1024, 1440]) {
   });
 }
 
-test('admin account panel shows all four market account surfaces and remains read-only', async ({ page }) => {
+test('admin account panel shows Toss Upbit Bitget only and remains read-only', async ({ page }) => {
   const assertClean = await installAdminRuntime(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/account');
   const panel = page.getByTestId('brokerage-account-connections');
   await expect(panel).toBeVisible();
-  await expect(page.getByTestId('connection-kiwoom')).toContainText('Kiwoom');
+  await expect(page.getByTestId('connection-toss')).toContainText('Toss');
   await expect(page.getByTestId('connection-upbit')).toContainText('Upbit');
   await expect(page.getByTestId('connection-bitget')).toContainText('Bitget');
+  await expect(page.getByTestId('connection-kiwoom')).toHaveCount(0);
   await expect(panel).toContainText('READ-ONLY');
-  await expect(panel).toContainText('주문/취소/이체 mutation 0건');
+  await expect(panel).toContainText('실주문/취소/이체/출금 0건');
   await assertNoHorizontalOverflow(page, 'account panel mobile');
   await page.setViewportSize({ width: 1440, height: 900 });
   await assertNoHorizontalOverflow(page, 'account panel desktop');
