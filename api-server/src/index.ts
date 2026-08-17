@@ -9,6 +9,8 @@ import { startUserTelegramDeliveryWorker } from './features/user-broker-telegram
 import { startPriceAlertMonitor } from './services/notification.service';
 import { startTradeRecoveryWorker } from './services/trade-recovery-worker.service';
 import { startTelegramIntelligenceWorker } from './services/telegram-intelligence-worker.service';
+import { startSignalIntelligenceTelegramSubscriber } from './services/signal-intelligence-telegram-subscriber.service';
+import { startSignalIntelligenceAiWatch } from './services/signal-intelligence-ai-watch.service';
 import { isStagingReadonlyCredentialRuntime, resolveApiBindHost } from './lib/api-bind-host';
 import { readRuntimeDeploymentIdentity } from './lib/deployment-identity';
 
@@ -229,6 +231,8 @@ app.listen(
       startTradeRecoveryWorker();
       startUserTelegramDeliveryWorker();
       startTelegramIntelligenceWorker();
+      startSignalIntelligenceTelegramSubscriber();
+      startSignalIntelligenceAiWatch();
     }
 
     if (frontendDist) {
