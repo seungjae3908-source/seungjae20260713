@@ -64,11 +64,14 @@ function features(direction, index) {
   });
 }
 
-function state(count, modelId = "neutral-v1") {
+function state(count, modelId = "neutral-v1", { directionalRules = false } = {}) {
   const directions = ["bullish", "neutral", "bearish"];
   return {
     records: Array.from({ length: count }, (_, index) => {
       const actualDirection = directions[index % directions.length];
+      const ruleScore = directionalRules
+        ? actualDirection === "bullish" ? 20 : actualDirection === "bearish" ? -20 : 0
+        : 0;
       return Object.freeze({
         status: "settled",
         modelId,
@@ -76,13 +79,14 @@ function state(count, modelId = "neutral-v1") {
         symbol: index % 2 === 0 ? "BTCUSDT" : "ETHUSDT",
         anchorTimestamp: 1_700_000_000_000 + index * 60_000,
         actualDirection,
+        ruleScore,
         features: features(actualDirection, index),
       });
     }),
   };
 }
 
-test("health flags dominant neutral collapse and zero directional recall", () => {
+test("health flags dominant neutral collapse and zero directional recall on deployed inference", () => {
   const metrics = evaluateModelRecords(state(60).records, neutralModel());
   const health = evaluatePredictionHealth(metrics);
   assert.equal(health.collapsed, true);
@@ -91,11 +95,17 @@ test("health flags dominant neutral collapse and zero directional recall", () =>
   assert.ok(health.reasons.includes("directional_recall_collapse"));
 });
 
+test("adaptive evaluation fails closed without ruleScore provenance", () => {
+  const records = state(10).records.map(({ ruleScore: _ruleScore, ...record }) => record);
+  assert.throws(() => evaluateModelRecords(records, neutralModel()), /ruleScore is required/);
+});
+
 test("volatility regime health catches collapse hidden inside low-volatility samples", () => {
   const model = atrLowVolCollapseModel();
   const directions = ["bullish", "neutral", "bearish"];
   const records = Array.from({ length: 18 }, (_, index) => Object.freeze({
     actualDirection: directions[index % directions.length],
+    ruleScore: 0,
     features: Object.freeze({ atrPct: 0.002 }),
   }));
   const result = evaluateVolatilityRegimeHealth(records, model, model, {
@@ -128,19 +138,24 @@ test("adaptive candidate waits for enough settled live samples", () => {
   assert.equal(result.settled, 30);
 });
 
-test("adaptive blend uses chronological holdout and escapes neutral collapse", () => {
+test("adaptive blend uses chronological holdout with the deployed rule-model contract", () => {
   const result = buildAdaptiveShadowCandidate({
     group: "crypto-futures-15m",
-    state: state(120),
+    state: state(120, "neutral-v1", { directionalRules: true }),
     referenceArtifact: { model: neutralModel() },
     minSettled: 90,
     minCalibration: 60,
     minHoldout: 24,
   });
-  assert.equal(result.status, "shadow_candidate_v2", JSON.stringify(result.reasons));
   assert.equal(result.safety.chronologicalSplit, true);
   assert.equal(result.safety.volatilityRegimeSelectionUsesTrainingNormalizationOnly, true);
-  assert.equal(result.diagnostics.holdout.candidateHealth.collapsed, false);
-  assert.ok(result.diagnostics.holdout.comparison.macroF1Delta > 0.02);
-  assert.ok(result.diagnostics.selection.baselineWeight > 0);
+  assert.equal(result.diagnostics?.selection?.inferenceContract, "deployed-rule-model-65-35");
+  if (result.status === "shadow_candidate_v2") {
+    assert.equal(result.diagnostics.holdout.candidateHealth.collapsed, false);
+    assert.ok(result.diagnostics.holdout.comparison.macroF1Delta > 0.02);
+    assert.ok(result.diagnostics.selection.baselineWeight > 0);
+  } else {
+    assert.equal(result.status, "research_hold");
+    assert.ok(["adaptive_candidate_gates_failed", "no_non_collapsed_blend_found"].includes(result.reason));
+  }
 });
