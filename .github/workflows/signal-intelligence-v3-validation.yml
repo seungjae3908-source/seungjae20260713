@@ -90,7 +90,7 @@ jobs:
 
   producer-bundle:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Checkout exact revision
         uses: actions/checkout@v4
@@ -124,3 +124,35 @@ jobs:
         run: |
           ! grep -Eiq '(private[-_ ]?api|placeOrder|submitOrder|cancelOrder|withdraw|transfer)' signal-intelligence-v3/scripts/run-public-scanner-cycle.ts
           grep -q 'public-only' signal-intelligence-v3/scripts/run-public-scanner-cycle.ts
+      - name: Run one fresh public Scanner cycle
+        working-directory: api-server
+        env:
+          SIGNAL_INTELLIGENCE_SERVICE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          SIGNAL_INTELLIGENCE_STATE_DIR: ${{ runner.temp }}/signal-intelligence-live
+          SIGNAL_INTELLIGENCE_STATE_FILE: ${{ runner.temp }}/signal-intelligence-live/latest-snapshot.json
+          LIVE_TRADING: 'false'
+          PRIVATE_API_ENABLED: 'false'
+          ORDER_AUTHORITY: 'false'
+          SIGNAL_INTELLIGENCE_EXECUTION_AUTHORITY: NONE
+        run: |
+          node "$RUNNER_TEMP/signal-intelligence-build/public-cycle.mjs" | tee "$RUNNER_TEMP/signal-intelligence-live-cycle.log"
+          node - <<'NODE' "$SIGNAL_INTELLIGENCE_STATE_FILE"
+          const fs = require('node:fs');
+          const p = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (p.serviceSha !== process.env.SIGNAL_INTELLIGENCE_SERVICE_SHA) process.exit(1);
+          if (p.publicDataOnly !== true || p.safety?.executionAuthority !== 'NONE') process.exit(1);
+          if (!Array.isArray(p.coverage) || p.coverage.length !== 4) process.exit(1);
+          for (const row of p.coverage) {
+            if (!['CANDIDATES_AVAILABLE','VALID_NO_TRADE','SEARCH_FAILURE'].includes(row.status)) process.exit(1);
+          }
+          NODE
+      - name: Upload fresh-public runtime evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-intelligence-v3-public-cycle-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            ${{ runner.temp }}/signal-intelligence-live/latest-snapshot.json
+            ${{ runner.temp }}/signal-intelligence-live/cycle-state.json
+            ${{ runner.temp }}/signal-intelligence-live-cycle.log
+          retention-days: 30
+          if-no-files-found: error
