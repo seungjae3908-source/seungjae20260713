@@ -36,6 +36,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
           bash -n signal-intelligence-release/deploy/activate-server.sh
           grep -q '/activate-signal-intelligence-v3' .github/workflows/signal-intelligence-v3-activation.yml
+          grep -q 'Signal Intelligence V3 Representative Validation' .github/workflows/signal-intelligence-v3-activation.yml
           grep -q 'SIGNAL_INTELLIGENCE_EXECUTION_AUTHORITY=NONE' signal-intelligence-release/deploy/activate-server.sh
           grep -q 'LIVE_TRADING=false' signal-intelligence-release/deploy/activate-server.sh
           grep -q 'PRIVATE_API_ENABLED=false' signal-intelligence-release/deploy/activate-server.sh
@@ -52,9 +53,10 @@ jobs:
     outputs:
       target_sha: ${{ steps.gate.outputs.target_sha }}
       validation_run_id: ${{ steps.gate.outputs.validation_run_id }}
+      representative_run_id: ${{ steps.gate.outputs.representative_run_id }}
       artifact_id: ${{ steps.gate.outputs.artifact_id }}
     steps:
-      - name: Authorize immutable service SHA and exact-head V3 validation
+      - name: Authorize immutable service SHA and exact-head validations
         id: gate
         uses: actions/github-script@v7
         with:
@@ -88,23 +90,32 @@ jobs:
               head_sha: targetSha,
               per_page: 100,
             });
-            const validationRuns = workflows
-              .filter((run) => run.name === 'Signal Intelligence V3 Validation')
-              .sort((a, b) => Number(b.id) - Number(a.id));
-            if (!validationRuns.length) {
-              core.setFailed('No exact-head Signal Intelligence V3 Validation run exists.');
-              return;
-            }
-            const newest = validationRuns[0];
-            if (newest.status !== 'completed' || newest.conclusion !== 'success') {
-              core.setFailed(`Newest exact-head V3 validation is not successful: ${newest.id} ${newest.status}/${newest.conclusion}`);
-              return;
-            }
+
+            const newestSuccessfulRun = (name) => {
+              const runs = workflows
+                .filter((run) => run.name === name)
+                .sort((a, b) => Number(b.id) - Number(a.id));
+              if (!runs.length) {
+                core.setFailed(`No exact-head ${name} run exists.`);
+                return null;
+              }
+              const newest = runs[0];
+              if (newest.status !== 'completed' || newest.conclusion !== 'success') {
+                core.setFailed(`Newest exact-head ${name} is not successful: ${newest.id} ${newest.status}/${newest.conclusion}`);
+                return null;
+              }
+              return newest;
+            };
+
+            const validation = newestSuccessfulRun('Signal Intelligence V3 Validation');
+            if (!validation) return;
+            const representative = newestSuccessfulRun('Signal Intelligence V3 Representative Validation');
+            if (!representative) return;
 
             const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
               owner: context.repo.owner,
               repo: context.repo.repo,
-              run_id: newest.id,
+              run_id: validation.id,
               per_page: 100,
             });
             const expectedName = `signal-intelligence-v3-${targetSha}`;
@@ -114,10 +125,25 @@ jobs:
               return;
             }
 
+            const representativeArtifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: representative.id,
+              per_page: 100,
+            });
+            const representativeEvidence = representativeArtifacts.find((item) =>
+              item.name === `signal-v3-representative-search-${targetSha}` && !item.expired
+            );
+            if (!representativeEvidence) {
+              core.setFailed(`Exact-head representative search artifact missing for ${targetSha}.`);
+              return;
+            }
+
             core.setOutput('target_sha', targetSha);
-            core.setOutput('validation_run_id', String(newest.id));
+            core.setOutput('validation_run_id', String(validation.id));
+            core.setOutput('representative_run_id', String(representative.id));
             core.setOutput('artifact_id', String(artifact.id));
-            core.info(`Authorized service SHA ${targetSha}; validation run ${newest.id}; artifact ${artifact.id}.`);
+            core.info(`Authorized service SHA ${targetSha}; V3 run ${validation.id}; representative run ${representative.id}; artifact ${artifact.id}.`);
 
       - uses: actions/checkout@v4
         with:
@@ -138,6 +164,7 @@ jobs:
     env:
       TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
       VALIDATION_RUN_ID: ${{ needs.authorize.outputs.validation_run_id }}
+      REPRESENTATIVE_RUN_ID: ${{ needs.authorize.outputs.representative_run_id }}
       ARTIFACT_ID: ${{ needs.authorize.outputs.artifact_id }}
       SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
       SSH_USER: ${{ secrets.PROD_SSH_USER }}
@@ -193,10 +220,11 @@ jobs:
           script: |
             const sha = process.env.TARGET_SHA;
             const run = process.env.VALIDATION_RUN_ID;
+            const representative = process.env.REPRESENTATIVE_RUN_ID;
             const artifact = process.env.ARTIFACT_ID;
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: 62,
-              body: `[SIGNAL_INTELLIGENCE_V3_ACTIVATED]\n- service_sha: \`${sha}\`\n- exact-head validation run: \`${run}\`\n- release artifact: \`${artifact}\`\n- service: active\n- executionAuthority: \`NONE\`\n- privateTradingApiAllowed: \`false\`\n- realOrderAllowed: \`false\`\n- app Production deploy: \`false\``,
+              body: `[SIGNAL_INTELLIGENCE_V3_ACTIVATED]\n- service_sha: \`${sha}\`\n- exact-head validation run: \`${run}\`\n- exact-head representative run: \`${representative}\`\n- release artifact: \`${artifact}\`\n- service: active\n- executionAuthority: \`NONE\`\n- privateTradingApiAllowed: \`false\`\n- realOrderAllowed: \`false\`\n- app Production deploy: \`false\``,
             });
