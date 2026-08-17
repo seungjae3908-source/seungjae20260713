@@ -1,4 +1,6 @@
 import http from 'node:http';
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { evaluateMarketIntelligence, DEFAULT_POLICY } from './engine.mjs';
 import { fetchBitgetFuturesEvidence, fetchUpbitSpotEvidence } from './public-data.mjs';
 
@@ -131,7 +133,16 @@ async function handler(req, res) {
 
 export const server = http.createServer(handler);
 
-if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
+function isDirectEntrypoint() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectEntrypoint()) {
   if (HOST !== '127.0.0.1') {
     console.error('MARKET_INTELLIGENCE_BIND_MUST_BE_LOOPBACK');
     process.exit(1);
