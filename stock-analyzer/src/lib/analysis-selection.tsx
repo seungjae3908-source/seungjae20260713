@@ -9,7 +9,7 @@ import {
 
 export type AnalysisAssetType = 'stock' | 'coin_spot' | 'coin_futures';
 export type AnalysisMarket = 'KR' | 'US' | 'UPBIT' | 'BITGET';
-export type AnalysisTradeAction = 'BUY' | 'SELL' | 'LONG' | 'SHORT' | 'NONE';
+export type AnalysisTradeAction = 'BUY' | 'SELL' | 'LONG' | 'SHORT' | 'NO_TRADE' | 'UNKNOWN' | 'NONE';
 
 export type AnalysisPricePlan = {
   entryZone: { from: number; to: number } | null;
@@ -93,7 +93,7 @@ export function normalizeAnalysisSelection(value: unknown): AnalysisSelection | 
   const textList = (item: unknown) => Array.isArray(item)
     ? item.map((part) => cleanString(part, 160)).filter(Boolean).slice(0, 20)
     : undefined;
-  const action = ['BUY', 'SELL', 'LONG', 'SHORT', 'NONE'].includes(String(row.action))
+  const action = ['BUY', 'SELL', 'LONG', 'SHORT', 'NO_TRADE', 'UNKNOWN', 'NONE'].includes(String(row.action))
     ? row.action as AnalysisTradeAction
     : undefined;
   return {

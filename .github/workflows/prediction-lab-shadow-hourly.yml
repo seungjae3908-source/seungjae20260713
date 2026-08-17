@@ -22,6 +22,9 @@ env:
   SHADOW_BRANCH: feature/prediction-lab-standalone
   LAB_DIR: market-prediction-lab
   SHADOW_ARTIFACT: prediction-lab-shadow-state
+  SHADOW_CUTOVER_FROM_SHA: 87cfafc3d502901d8f678e0153e2e974a4b69004
+  SHADOW_CUTOVER_TO_SHA: 84bb50cf6d0b90c29f47f043de36b9a239547c9b
+  SHADOW_CUTOVER_REASON: shadow-collapse-drift-guard
 
 jobs:
   shadow-validation:
@@ -91,7 +94,6 @@ jobs:
               return;
             }
             core.setOutput('sha', sha);
-            core.setOutput('seed_mode', process.env.PREVIOUS_FOUND === 'true' ? 'artifact' : 'branch-cutover');
 
       - name: Checkout immutable Prediction Lab code
         uses: actions/checkout@v4
@@ -144,6 +146,51 @@ jobs:
           const lab = process.env.LAB_DIR;
           const statePath = path.join(lab, 'docs/shadow-state.json');
           const summaryPath = path.join(lab, 'docs/shadow-summary.json');
+          const currentResearchCodeSha = process.env.RESEARCH_CODE_SHA;
+          const cutoverFromSha = process.env.SHADOW_CUTOVER_FROM_SHA;
+          const cutoverToSha = process.env.SHADOW_CUTOVER_TO_SHA;
+          const cutoverReason = process.env.SHADOW_CUTOVER_REASON;
+
+          if (![currentResearchCodeSha, cutoverFromSha, cutoverToSha].every((value) => /^[0-9a-f]{40}$/.test(String(value ?? '')))) {
+            throw new Error('Hourly Shadow cutover SHA contract is invalid.');
+          }
+
+          const writeCleanCutover = ({ previousValue = {}, previousSummaryValue = {}, predecessorSha = '', previousDigest = '', seedMode }) => {
+            const now = Date.now();
+            const freshState = {
+              schemaVersion: 3,
+              createdAt: now,
+              updatedAt: now,
+              groups: {},
+              forwardStrategies: previousValue.forwardStrategies ?? {},
+            };
+            const freshSummary = {
+              schemaVersion: 3,
+              status: 'pass',
+              generatedAt: now,
+              groups: {},
+              forwardStrategies: previousSummaryValue.forwardStrategies ?? {},
+              safety: {
+                usesPublicMarketDataOnly: true,
+                usesAccountOrOrderApi: false,
+                modifiesExistingAppApi: false,
+                backfillsHistoricalOpenInterest: false,
+                mixesModelPairsInPromotionMetrics: false,
+                deploysModel: false,
+                frozenEthV6LiveOrderAllowed: false,
+                cleanCutoverReason: cutoverReason,
+                cleanCutoverFromResearchCodeSha: cutoverFromSha,
+                cleanCutoverToResearchCodeSha: cutoverToSha,
+              },
+            };
+            fs.writeFileSync(statePath, `${JSON.stringify(freshState, null, 2)}\n`);
+            fs.writeFileSync(summaryPath, `${JSON.stringify(freshSummary, null, 2)}\n`);
+            output('previous_state_digest', previousDigest || digest(statePath));
+            output('source_generated_head', currentResearchCodeSha);
+            output('predecessor_research_code_sha', predecessorSha);
+            output('seed_mode', seedMode);
+          };
+
           if (process.env.PREVIOUS_FOUND === 'true') {
             const manifestPath = path.join(process.env.PREVIOUS_DIR, 'manifest.json');
             const previousState = path.join(process.env.PREVIOUS_DIR, 'shadow-state.json');
@@ -167,24 +214,57 @@ jobs:
             if (manifest.branchWrite !== false || manifest.liveOrderAllowed !== false || manifest.privateAccountRequestAllowed !== false) {
               throw new Error('Predecessor safety flags are not fail-closed.');
             }
-            if (!nonEmptyLedger(JSON.parse(fs.readFileSync(previousState, 'utf8')))) {
-              throw new Error('Refusing to restart from an empty predecessor shadow state.');
+            const previousValue = JSON.parse(fs.readFileSync(previousState, 'utf8'));
+            const previousSummaryValue = JSON.parse(fs.readFileSync(previousSummary, 'utf8'));
+            if (manifest.researchCodeSha !== currentResearchCodeSha) {
+              const approvedResearchCutover = manifest.researchCodeSha === cutoverFromSha && currentResearchCodeSha === cutoverToSha;
+              if (!approvedResearchCutover) {
+                throw new Error('Shadow research code changed outside approved research cutover; chain mixing forbidden.');
+              }
+              writeCleanCutover({
+                previousValue,
+                previousSummaryValue,
+                predecessorSha: manifest.researchCodeSha,
+                previousDigest: manifest.stateSha256,
+                seedMode: 'research-code-clean-cutover',
+              });
+            } else {
+              if (!nonEmptyLedger(previousValue)) {
+                throw new Error('Refusing to restart from an empty predecessor shadow state.');
+              }
+              fs.copyFileSync(previousState, statePath);
+              fs.copyFileSync(previousSummary, summaryPath);
+              output('previous_state_digest', manifest.stateSha256);
+              output('source_generated_head', manifest.sourceGeneratedHead || manifest.researchCodeSha);
+              output('predecessor_research_code_sha', manifest.researchCodeSha);
+              output('seed_mode', 'artifact');
             }
-            fs.copyFileSync(previousState, statePath);
-            fs.copyFileSync(previousSummary, summaryPath);
-            output('previous_state_digest', manifest.stateSha256);
-            output('source_generated_head', manifest.sourceGeneratedHead || manifest.researchCodeSha);
-            output('predecessor_research_code_sha', manifest.researchCodeSha);
           } else {
             for (const file of [statePath, summaryPath]) {
               if (!fs.existsSync(file)) throw new Error(`Cutover seed is missing required file: ${file}`);
             }
-            if (!nonEmptyLedger(JSON.parse(fs.readFileSync(statePath, 'utf8')))) {
-              throw new Error('Refusing artifact cutover from an empty branch shadow state.');
+            const branchState = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+            const branchSummary = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
+            if (currentResearchCodeSha === cutoverToSha) {
+              writeCleanCutover({
+                previousValue: branchState,
+                previousSummaryValue: branchSummary,
+                predecessorSha: '',
+                previousDigest: digest(statePath),
+                seedMode: 'research-code-clean-cutover-no-predecessor',
+              });
+            } else {
+              if (currentResearchCodeSha !== cutoverFromSha) {
+                throw new Error('No predecessor artifact exists for an unapproved Hourly Shadow research SHA.');
+              }
+              if (!nonEmptyLedger(branchState)) {
+                throw new Error('Refusing artifact cutover from an empty branch shadow state.');
+              }
+              output('previous_state_digest', digest(statePath));
+              output('source_generated_head', currentResearchCodeSha);
+              output('predecessor_research_code_sha', '');
+              output('seed_mode', 'branch-cutover');
             }
-            output('previous_state_digest', digest(statePath));
-            output('source_generated_head', process.env.RESEARCH_CODE_SHA);
-            output('predecessor_research_code_sha', '');
           }
           NODE
 
@@ -243,7 +323,7 @@ jobs:
           PREVIOUS_STATE_DIGEST: ${{ steps.restore.outputs.previous_state_digest }}
           PREDECESSOR_RESEARCH_CODE_SHA: ${{ steps.restore.outputs.predecessor_research_code_sha }}
           SOURCE_GENERATED_HEAD: ${{ steps.restore.outputs.source_generated_head }}
-          SEED_MODE: ${{ steps.code.outputs.seed_mode }}
+          SEED_MODE: ${{ steps.restore.outputs.seed_mode }}
         run: |
           rm -rf shadow-artifact
           mkdir -p shadow-artifact
@@ -262,6 +342,7 @@ jobs:
           const unique = (values) => [...new Set(values.filter(Boolean))];
           const candidateModelIds = unique(groups.map((group) => group?.filter?.modelId ?? group?.modelSelection?.candidateModelId ?? null));
           const referenceModelIds = unique(groups.map((group) => group?.filter?.referenceModelId ?? group?.modelSelection?.referenceModelId ?? null));
+          const cutoverSeed = String(process.env.SEED_MODE ?? '').startsWith('research-code-clean-cutover');
           const manifest = {
             schemaVersion: 1,
             kind: 'prediction-lab-shadow-state',
@@ -276,6 +357,9 @@ jobs:
             candidateModelId: candidateModelIds[0] ?? null,
             referenceModelId: referenceModelIds[0] ?? null,
             seedMode: process.env.SEED_MODE,
+            cutoverReason: cutoverSeed ? process.env.SHADOW_CUTOVER_REASON : null,
+            cutoverFromResearchCodeSha: cutoverSeed ? process.env.SHADOW_CUTOVER_FROM_SHA : null,
+            cutoverToResearchCodeSha: cutoverSeed ? process.env.SHADOW_CUTOVER_TO_SHA : null,
             createdAt: new Date().toISOString(),
             stateSha256: digest('shadow-artifact/shadow-state.json'),
             summarySha256: digest('shadow-artifact/shadow-summary.json'),

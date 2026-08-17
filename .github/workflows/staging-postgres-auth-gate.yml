@@ -11,7 +11,7 @@ permissions:
   statuses: read
 
 concurrency:
-  group: staging-postgres-auth-gate
+  group: staging-postgres-auth-gate-${{ github.event.issue.number == 23 && startsWith(github.event.comment.body, '/run-staging-auth ') && 'command' || github.event.comment.id }}
   cancel-in-progress: false
 
 jobs:

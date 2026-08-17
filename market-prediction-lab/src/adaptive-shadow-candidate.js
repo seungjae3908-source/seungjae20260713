@@ -1,7 +1,7 @@
-import { BASELINE_MODEL } from "./tiny-model.js";
-import { predictDeployedTinyModel } from "./deployment-inference.js";
+import { BASELINE_MODEL, predictTinyModel } from "./tiny-model.js";
 
 const CLASS_NAMES = Object.freeze(["bullish", "neutral", "bearish"]);
+const VOLATILITY_REGIMES = Object.freeze(["low", "normal", "high"]);
 
 function round(value, digits = 6) {
   const factor = 10 ** digits;
@@ -31,7 +31,7 @@ export function evaluateModelRecords(records, model) {
   for (const record of records) {
     if (!record?.features || typeof record.features !== "object") throw new TypeError("record features are required");
     const actual = actualDirection(record);
-    const probabilities = predictDeployedTinyModel(record, model).probabilities;
+    const probabilities = predictTinyModel(record.features, model).probabilities;
     const predicted = predictedClass(probabilities);
     predictedCounts[predicted] += 1;
     confusion[actual][predicted] += 1;
@@ -91,6 +91,97 @@ export function evaluatePredictionHealth(metrics, {
     directionalRecallAverage,
     directionalRecall: Object.freeze({ bullish: bullish.recall, bearish: bearish.recall }),
     reasons: Object.freeze(reasons),
+  });
+}
+
+function atrReference(model) {
+  const index = Array.isArray(model?.featureOrder) ? model.featureOrder.indexOf("atrPct") : -1;
+  const mean = index >= 0 ? model?.normalization?.mean?.[index] : null;
+  const scale = index >= 0 ? model?.normalization?.scale?.[index] : null;
+  if (!Number.isFinite(mean) || !Number.isFinite(scale) || scale <= 0) return null;
+  return Object.freeze({ mean, scale, feature: "atrPct" });
+}
+
+function volatilityRegime(record, reference, sigmaBand) {
+  const atrPct = record?.features?.atrPct;
+  if (!Number.isFinite(atrPct)) return null;
+  const z = (atrPct - reference.mean) / reference.scale;
+  if (z <= -sigmaBand) return "low";
+  if (z >= sigmaBand) return "high";
+  return "normal";
+}
+
+export function evaluateVolatilityRegimeHealth(records, candidateModel, referenceModel, {
+  sigmaBand = 1,
+  minRegimeSamples = 12,
+  minDirectionalSupport = 3,
+} = {}) {
+  if (!Array.isArray(records) || records.length === 0) throw new TypeError("records are required");
+  if (!(sigmaBand > 0)) throw new RangeError("sigmaBand must be positive");
+  if (!Number.isInteger(minRegimeSamples) || minRegimeSamples < 1) throw new RangeError("minRegimeSamples must be positive");
+  const reference = atrReference(referenceModel);
+  if (!reference) {
+    return Object.freeze({
+      available: false,
+      healthy: true,
+      reason: "atr_training_normalization_unavailable",
+      reference: null,
+      byRegime: Object.freeze({}),
+      collapsedRegimes: Object.freeze([]),
+    });
+  }
+
+  const buckets = Object.fromEntries(VOLATILITY_REGIMES.map((name) => [name, []]));
+  let missingAtr = 0;
+  for (const record of records) {
+    const regime = volatilityRegime(record, reference, sigmaBand);
+    if (!regime) {
+      missingAtr += 1;
+      continue;
+    }
+    buckets[regime].push(record);
+  }
+
+  const byRegime = {};
+  const collapsedRegimes = [];
+  for (const regime of VOLATILITY_REGIMES) {
+    const rows = buckets[regime];
+    if (rows.length < minRegimeSamples) {
+      byRegime[regime] = Object.freeze({
+        qualified: false,
+        sampleCount: rows.length,
+        required: minRegimeSamples,
+        metrics: null,
+        health: null,
+      });
+      continue;
+    }
+    const metrics = evaluateModelRecords(rows, candidateModel);
+    const health = evaluatePredictionHealth(metrics, { minDirectionalSupport });
+    if (health.collapsed) collapsedRegimes.push(regime);
+    byRegime[regime] = Object.freeze({
+      qualified: true,
+      sampleCount: rows.length,
+      required: minRegimeSamples,
+      metrics: compactMetrics(metrics),
+      health,
+    });
+  }
+
+  return Object.freeze({
+    available: true,
+    healthy: collapsedRegimes.length === 0,
+    reason: collapsedRegimes.length === 0 ? null : "volatility_regime_prediction_collapse",
+    reference: Object.freeze({
+      atrPctMean: reference.mean,
+      atrPctScale: reference.scale,
+      sigmaBand,
+      lowUpper: reference.mean - (sigmaBand * reference.scale),
+      highLower: reference.mean + (sigmaBand * reference.scale),
+    }),
+    missingAtr,
+    byRegime: Object.freeze(byRegime),
+    collapsedRegimes: Object.freeze(collapsedRegimes),
   });
 }
 
@@ -176,6 +267,8 @@ export function buildAdaptiveShadowCandidate({
   holdoutRatio = 0.25,
   minHoldout = 24,
   minCalibration = 60,
+  volatilitySigmaBand = 1,
+  minVolatilityRegimeSamples = 12,
 } = {}) {
   if (typeof group !== "string" || group.length === 0) throw new TypeError("group is required");
   const referenceModel = referenceArtifact?.model;
@@ -222,10 +315,15 @@ export function buildAdaptiveShadowCandidate({
       const metrics = evaluateModelRecords(calibration, model);
       const health = evaluatePredictionHealth(metrics);
       if (health.collapsed) continue;
+      const volatilityHealth = evaluateVolatilityRegimeHealth(calibration, model, referenceModel, {
+        sigmaBand: volatilitySigmaBand,
+        minRegimeSamples: minVolatilityRegimeSamples,
+      });
+      if (volatilityHealth.available && !volatilityHealth.healthy) continue;
       const objective = metrics.logLoss - (0.2 * metrics.macroF1) - (0.1 * metrics.balancedAccuracy);
       if (!best || objective < best.objective - 1e-12
           || (Math.abs(objective - best.objective) <= 1e-12 && normalizedWeight < best.baselineWeight)) {
-        best = { objective, model, metrics, health, baselineWeight: normalizedWeight, temperature: model.temperature };
+        best = { objective, model, metrics, health, volatilityHealth, baselineWeight: normalizedWeight, temperature: model.temperature };
       }
     }
   }
@@ -245,10 +343,20 @@ export function buildAdaptiveShadowCandidate({
   const baselineMetrics = evaluateModelRecords(holdout, BASELINE_MODEL);
   const candidateHealth = evaluatePredictionHealth(candidateMetrics);
   const referenceHealth = evaluatePredictionHealth(referenceMetrics);
+  const holdoutVolatilityHealth = evaluateVolatilityRegimeHealth(holdout, best.model, referenceModel, {
+    sigmaBand: volatilitySigmaBand,
+    minRegimeSamples: minVolatilityRegimeSamples,
+  });
   const delta = comparison(candidateMetrics, referenceMetrics);
   const reasons = [];
 
   if (candidateHealth.collapsed) reasons.push(...candidateHealth.reasons.map((reason) => `holdout:${reason}`));
+  if (holdoutVolatilityHealth.available && !holdoutVolatilityHealth.healthy) {
+    for (const regime of holdoutVolatilityHealth.collapsedRegimes) {
+      const health = holdoutVolatilityHealth.byRegime[regime]?.health;
+      for (const reason of health?.reasons ?? []) reasons.push(`holdout_volatility_${regime}:${reason}`);
+    }
+  }
   if (delta.logLossImprovement < -0.01) reasons.push("holdout_log_loss_regressed");
   if (delta.macroF1Delta < 0.02) reasons.push("holdout_macro_f1_gain_insufficient");
   if (delta.accuracyDelta < -0.02) reasons.push("holdout_accuracy_regressed");
@@ -274,9 +382,9 @@ export function buildAdaptiveShadowCandidate({
       referenceWeight: 1 - best.baselineWeight,
       temperature: best.temperature,
       objective: best.objective,
-      inferenceContract: "deployed-rule-model-65-35",
       calibrationMetrics: compactMetrics(best.metrics),
       calibrationHealth: best.health,
+      volatilityRegimes: best.volatilityHealth,
     }),
     holdout: Object.freeze({
       candidate: compactMetrics(candidateMetrics),
@@ -285,6 +393,7 @@ export function buildAdaptiveShadowCandidate({
       comparison: delta,
       candidateHealth,
       referenceHealth,
+      volatilityRegimes: holdoutVolatilityHealth,
       bySymbol: symbolMetrics,
     }),
   });
@@ -302,6 +411,7 @@ export function buildAdaptiveShadowCandidate({
     diagnostics,
     safety: Object.freeze({
       chronologicalSplit: true,
+      volatilityRegimeSelectionUsesTrainingNormalizationOnly: true,
       overwritesExistingShadowHistory: false,
       usesPublicMarketDataOnly: true,
       usesAccountOrOrderApi: false,
@@ -312,3 +422,4 @@ export function buildAdaptiveShadowCandidate({
 }
 
 export const ADAPTIVE_SHADOW_CLASSES = CLASS_NAMES;
+export const ADAPTIVE_SHADOW_VOLATILITY_REGIMES = VOLATILITY_REGIMES;
