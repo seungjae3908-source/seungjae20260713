@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - 'evidence-ui-contract/**'
+      - 'stock-analyzer/src/lib/evidence-display.js'
+      - 'stock-analyzer/src/lib/evidence-display.d.ts'
+      - 'stock-analyzer/src/components/accumulation-card.tsx'
       - '.github/workflows/missing-evidence-ui-contract-validation.yml'
   workflow_dispatch:
 
@@ -34,15 +37,18 @@ jobs:
       - name: Validate evidence display contract
         run: node --test evidence-ui-contract/evidence-display-contract.test.mjs
 
-      - name: Verify forbidden zero coercion contract
+      - name: Verify browser wiring and forbidden zero coercion contract
         shell: bash
         run: |
           set -euo pipefail
           node <<'NODE'
           const { readFileSync } = require('node:fs');
-          const source = readFileSync('evidence-ui-contract/evidence-display-contract.mjs', 'utf8');
+          const contract = readFileSync('stock-analyzer/src/lib/evidence-display.js', 'utf8');
+          const surface = readFileSync('stock-analyzer/src/components/accumulation-card.tsx', 'utf8');
           for (const required of ['NOT_COLLECTED', 'STALE', 'UNAVAILABLE', 'PERMISSION_REQUIRED', 'N_A']) {
-            if (!source.includes(required)) throw new Error(`missing evidence state ${required}`);
+            if (!contract.includes(required)) throw new Error(`missing evidence state ${required}`);
           }
-          if (!source.includes('Object.is(value, 0)')) throw new Error('actual-zero preservation contract missing');
+          if (!contract.includes('Object.is(value, 0)')) throw new Error('actual-zero preservation contract missing');
+          if (!surface.includes("@/lib/evidence-display")) throw new Error('user-facing surface is not wired to the shared evidence contract');
+          if (!surface.includes('resolveEvidenceDisplay')) throw new Error('user-facing evidence resolver wiring missing');
           NODE
