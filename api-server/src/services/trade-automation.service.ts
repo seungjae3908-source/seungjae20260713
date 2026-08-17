@@ -12,7 +12,7 @@ import {
 import {
   fetchTradingPlanMarketIntelligence,
   marketIntelligenceTradeDecision,
-} from './market-intelligence-client.service';
+} from './trade-market-intelligence.service';
 import type {
   TradingMarketSnapshot,
   TradingOrder, TradingOrderEvent, TradingOrderState, TradingPlan, TradingPlanInput, TradingPolicy,
