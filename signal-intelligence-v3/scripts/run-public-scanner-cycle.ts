@@ -11,6 +11,7 @@ import { withScannerCanonicalActions } from '../../api-server/src/services/scann
 import * as yahoo from '../../api-server/src/providers/yahoo';
 import { parseNasdaqTraderDirectories } from '../../market-prediction-lab/src/public-coverage-audit-v1.js';
 import { adaptCanonicalScannerCards } from '../src/canonical-adapter.mjs';
+import { enrichFuturesLeverageInputs } from '../src/futures-leverage-enrichment.mjs';
 import { assertSignalIntelligenceV3Snapshot, runSignalIntelligenceV3 } from '../src/engine.mjs';
 
 const SERVICE_SHA = String(process.env.SIGNAL_INTELLIGENCE_SERVICE_SHA ?? '').trim().toLowerCase();
@@ -169,9 +170,9 @@ function yahooProviderCandidates(lane, ticker, entry) {
     return [primary, alternate];
   }
   if (lane.market === 'US_STOCK') {
-    const candidates = [clean];
-    if (clean.includes('.')) candidates.push(clean.replace(/\./gu, '-'));
-    if (clean.includes('-')) candidates.push(clean.replace(/-/gu, '.'));
+    const canonical = /^[A-Z0-9]+\.[A-Z0-9]+$/u.test(clean) ? clean.replace(/\./gu, '-') : clean;
+    const candidates = [canonical];
+    if (canonical.includes('-')) candidates.push(canonical.replace(/-/gu, '.'));
     return [...new Set(candidates)];
   }
   return [clean];
@@ -341,6 +342,7 @@ function laneStatus(response) {
   if (response.outcome === 'PROVIDER_FAILURE' || response.outcome === 'REQUEST_TIMEOUT' || response.dataState === 'unavailable') return 'SEARCH_FAILURE';
   if (response.universe?.partial === true || response.universe?.stale === true || Number(response.universe?.providerErrorCount ?? 0) > 0) return 'SEARCH_FAILURE';
   if (Number(response.execution?.providerErrorCount ?? 0) > 0 || Number(response.execution?.timeoutCount ?? 0) > 0) return 'SEARCH_FAILURE';
+  if (response.dataState === 'untrusted' || response.dataState === 'stale') return 'BLOCKED_DATA';
   return response.cards.length ? 'CANDIDATES_AVAILABLE' : 'VALID_NO_TRADE';
 }
 
@@ -363,9 +365,20 @@ async function main() {
         : await scanCrypto(lane, cursor);
       const status = laneStatus(response);
       let adapted = [];
-      if (status !== 'SEARCH_FAILURE') {
+      let leverageDiagnostics = { evaluated: 0, available: 0, blocked: 0, unavailable: 0 };
+      if (status !== 'SEARCH_FAILURE' && status !== 'BLOCKED_DATA') {
         clearScannedWindow(state, lane.id, cursor);
         adapted = adaptCanonicalScannerCards(response.cards.map((card) => ({ card, timeframe: lane.timeframe })), { nowMs });
+        if (lane.market === 'CRYPTO_FUTURES' && adapted.length > 0) {
+          const enriched = await enrichFuturesLeverageInputs(adapted, response.cards, {
+            maxCandidates: 2,
+            strategy: lane.label,
+            nowMs,
+            minimumStartIntervalMs: 100,
+          });
+          adapted = [...enriched.inputs];
+          leverageDiagnostics = enriched.diagnostics;
+        }
         for (const input of adapted) {
           const card = response.cards.find((candidate) => candidate.symbol === input.symbol && String(candidate.action ?? candidate.direction) === input.direction)
             ?? response.cards.find((candidate) => candidate.symbol === input.symbol);
@@ -397,7 +410,8 @@ async function main() {
         outcome: response.outcome ?? null,
         providerErrors: response.execution.providerErrorCount,
         timeouts: response.execution.timeoutCount,
-        lastGoodPreserved: status === 'SEARCH_FAILURE',
+        leverage: leverageDiagnostics,
+        lastGoodPreserved: status === 'SEARCH_FAILURE' || status === 'BLOCKED_DATA',
       });
     } catch (error) {
       coverage.push({
@@ -411,6 +425,7 @@ async function main() {
         scannedCards: 0,
         retainedFromBatch: 0,
         status: 'SEARCH_FAILURE',
+        leverage: { evaluated: 0, available: 0, blocked: 0, unavailable: 0 },
         lastGoodPreserved: true,
         error: error instanceof Error ? error.message.split(':')[0] : 'UNKNOWN',
       });
