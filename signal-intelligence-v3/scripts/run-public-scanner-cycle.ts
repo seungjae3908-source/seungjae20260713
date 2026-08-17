@@ -2,12 +2,14 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { MarketDataService } from '../../api-server/src/services/market-data.service';
+import { ScannerUniverseService } from '../../api-server/src/services/scanner-universe.service';
 import { StockSignalScannerService } from '../../api-server/src/services/stock-signal-scanner.service';
 import { CryptoSignalScannerService } from '../../api-server/src/services/crypto-signal-scanner.service';
 import { CryptoPricePrecisionService } from '../../api-server/src/services/scanner-crypto-price-precision.service';
 import { rankScannerCandidates } from '../../api-server/src/services/scanner-candidate-ranking.service';
 import { withScannerCanonicalActions } from '../../api-server/src/services/scanner-market-action.service';
 import * as yahoo from '../../api-server/src/providers/yahoo';
+import { parseNasdaqTraderDirectories } from '../../market-prediction-lab/src/public-coverage-audit-v1.js';
 import { adaptCanonicalScannerCards } from '../src/canonical-adapter.mjs';
 import { assertSignalIntelligenceV3Snapshot, runSignalIntelligenceV3 } from '../src/engine.mjs';
 
@@ -16,6 +18,8 @@ const STATE_DIR = path.resolve(process.env.SIGNAL_INTELLIGENCE_STATE_DIR ?? './s
 const CYCLE_STATE_FILE = path.join(STATE_DIR, 'cycle-state.json');
 const SNAPSHOT_FILE = path.resolve(process.env.SIGNAL_INTELLIGENCE_STATE_FILE ?? path.join(STATE_DIR, 'latest-snapshot.json'));
 const MEMBER_ID = 'signal-intelligence-v3-public-only';
+const NASDAQ_LISTED_URL = 'https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt';
+const OTHER_LISTED_URL = 'https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt';
 
 if (!/^[0-9a-f]{40}$/u.test(SERVICE_SHA)) throw new Error('SIGNAL_INTELLIGENCE_SERVICE_SHA_REQUIRED');
 
@@ -67,20 +71,85 @@ function clearScannedWindow(state, laneId, cursor) {
   }
 }
 
-async function withYahooPublicOnly(operation) {
-  const mutable = MarketDataService;
-  const originalCandles = mutable.getCandles;
-  const originalQuote = mutable.getQuote;
-  mutable.getCandles = async (ticker, timeframe = '1D') => yahoo.getCandles(ticker, timeframe);
-  mutable.getQuote = async (ticker) => yahoo.getQuote(ticker);
+async function fetchText(url) {
+  let lastError;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(new Error('PUBLIC_DIRECTORY_TIMEOUT')), 8_000);
+    try {
+      const response = await fetch(url, {
+        headers: { accept: 'text/plain', 'user-agent': 'signal-intelligence-v3/1.0' },
+        signal: controller.signal,
+      });
+      if (!response.ok) throw Object.assign(new Error(`PUBLIC_DIRECTORY_HTTP_${response.status}`), { status: response.status });
+      return await response.text();
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  throw lastError;
+}
+
+let usPublicUniversePromise;
+async function usPublicUniverse() {
+  if (!usPublicUniversePromise) {
+    usPublicUniversePromise = Promise.all([fetchText(NASDAQ_LISTED_URL), fetchText(OTHER_LISTED_URL)])
+      .then(([nasdaqText, otherText]) => {
+        const parsed = parseNasdaqTraderDirectories({ nasdaqText, otherText });
+        if (!parsed || parsed.partial === true || !Array.isArray(parsed.entries) || parsed.entries.length < 1_000) {
+          throw new Error('NASDAQ_TRADER_UNIVERSE_INCOMPLETE');
+        }
+        return {
+          entries: parsed.entries,
+          totalCount: parsed.entries.length,
+          source: parsed.source,
+          partial: false,
+          stale: false,
+          providerErrorCount: 0,
+          loadedAt: new Date().toISOString(),
+          rawTotal: parsed.rawTotal,
+          exclusionReasons: parsed.exclusionReasons,
+        };
+      })
+      .catch((error) => {
+        usPublicUniversePromise = undefined;
+        throw error;
+      });
+  }
+  return usPublicUniversePromise;
+}
+
+async function withStockPublicOnly(lane, operation) {
+  const marketData = MarketDataService;
+  const universe = ScannerUniverseService;
+  const originalCandles = marketData.getCandles;
+  const originalQuote = marketData.getQuote;
+  const originalUniverseGet = universe.get;
+  marketData.getCandles = async (ticker, timeframe = '1D') => yahoo.getCandles(ticker, timeframe);
+  marketData.getQuote = async (ticker) => yahoo.getQuote(ticker);
+  if (lane.market === 'US_STOCK') {
+    universe.get = async (market, signal, deadlineMs) => {
+      if (market !== 'US') return originalUniverseGet.call(universe, market, signal, deadlineMs);
+      try {
+        return await usPublicUniverse();
+      } catch {
+        const fallback = await originalUniverseGet.call(universe, market, signal, deadlineMs);
+        return { ...fallback, partial: true, stale: true, providerErrorCount: Math.max(1, fallback.providerErrorCount ?? 0) };
+      }
+    };
+  }
   try { return await operation(); } finally {
-    mutable.getCandles = originalCandles;
-    mutable.getQuote = originalQuote;
+    marketData.getCandles = originalCandles;
+    marketData.getQuote = originalQuote;
+    universe.get = originalUniverseGet;
   }
 }
 
 async function scanStock(lane, cursor) {
-  return withYahooPublicOnly(async () => {
+  return withStockPublicOnly(lane, async () => {
     const scanned = await StockSignalScannerService.scan({
       memberId: MEMBER_ID,
       market: lane.scannerMarket,
@@ -134,6 +203,8 @@ async function scanCrypto(lane, cursor) {
 function laneStatus(response) {
   if (!response) return 'SEARCH_FAILURE';
   if (response.outcome === 'PROVIDER_FAILURE' || response.outcome === 'REQUEST_TIMEOUT' || response.dataState === 'unavailable') return 'SEARCH_FAILURE';
+  if (response.universe?.partial === true || response.universe?.stale === true || Number(response.universe?.providerErrorCount ?? 0) > 0) return 'SEARCH_FAILURE';
+  if (Number(response.execution?.providerErrorCount ?? 0) > 0 || Number(response.execution?.timeoutCount ?? 0) > 0) return 'SEARCH_FAILURE';
   return response.cards.length ? 'CANDIDATES_AVAILABLE' : 'VALID_NO_TRADE';
 }
 
@@ -153,31 +224,39 @@ async function main() {
         ? await scanStock(lane, cursor)
         : await scanCrypto(lane, cursor);
       const status = laneStatus(response);
-      clearScannedWindow(state, lane.id, cursor);
-      const adapted = adaptCanonicalScannerCards(response.cards.map((card) => ({ card, timeframe: '60m' })), { nowMs });
-      for (const input of adapted) {
-        const card = response.cards.find((candidate) => candidate.symbol === input.symbol && String(candidate.action ?? candidate.direction) === input.direction)
-          ?? response.cards.find((candidate) => candidate.symbol === input.symbol);
-        state.retained[retainedKey(input)] = {
-          input: { ...input, provenance: { ...input.provenance, laneId: lane.id, cursor } },
-          expiresAt: card?.expiresAt ?? new Date(nowMs + 90 * 60_000).toISOString(),
-          laneId: lane.id,
-          cursor,
-        };
+      let adapted = [];
+      if (status !== 'SEARCH_FAILURE') {
+        clearScannedWindow(state, lane.id, cursor);
+        adapted = adaptCanonicalScannerCards(response.cards.map((card) => ({ card, timeframe: '60m' })), { nowMs });
+        for (const input of adapted) {
+          const card = response.cards.find((candidate) => candidate.symbol === input.symbol && String(candidate.action ?? candidate.direction) === input.direction)
+            ?? response.cards.find((candidate) => candidate.symbol === input.symbol);
+          state.retained[retainedKey(input)] = {
+            input: { ...input, provenance: { ...input.provenance, laneId: lane.id, cursor } },
+            expiresAt: card?.expiresAt ?? new Date(nowMs + 90 * 60_000).toISOString(),
+            laneId: lane.id,
+            cursor,
+          };
+        }
+        state.cursors[lane.id] = response.universe.nextCursor == null ? 0 : response.universe.nextCursor;
       }
-      state.cursors[lane.id] = response.universe.nextCursor == null ? 0 : response.universe.nextCursor;
       coverage.push({
         laneId: lane.id,
         market: lane.market,
         cursorBefore: cursor,
         cursorAfter: state.cursors[lane.id],
         totalUniverse: response.universe.totalCount,
+        universeSource: response.universe.source ?? null,
+        universePartial: response.universe.partial === true,
+        universeStale: response.universe.stale === true,
+        universeProviderErrors: Number(response.universe.providerErrorCount ?? 0),
         scannedCards: response.cards.length,
         retainedFromBatch: adapted.length,
         status,
         outcome: response.outcome ?? null,
         providerErrors: response.execution.providerErrorCount,
         timeouts: response.execution.timeoutCount,
+        lastGoodPreserved: status === 'SEARCH_FAILURE',
       });
     } catch (error) {
       coverage.push({
@@ -189,6 +268,7 @@ async function main() {
         scannedCards: 0,
         retainedFromBatch: 0,
         status: 'SEARCH_FAILURE',
+        lastGoodPreserved: true,
         error: error instanceof Error ? error.message.split(':')[0] : 'UNKNOWN',
       });
     }
