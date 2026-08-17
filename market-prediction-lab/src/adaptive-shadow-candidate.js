@@ -1,4 +1,5 @@
-import { BASELINE_MODEL, predictTinyModel } from "./tiny-model.js";
+import { BASELINE_MODEL } from "./tiny-model.js";
+import { predictDeployedTinyModel, DEPLOYED_INFERENCE_CONTRACT } from "./deployment-inference.js";
 
 const CLASS_NAMES = Object.freeze(["bullish", "neutral", "bearish"]);
 const VOLATILITY_REGIMES = Object.freeze(["low", "normal", "high"]);
@@ -31,7 +32,7 @@ export function evaluateModelRecords(records, model) {
   for (const record of records) {
     if (!record?.features || typeof record.features !== "object") throw new TypeError("record features are required");
     const actual = actualDirection(record);
-    const probabilities = predictTinyModel(record.features, model).probabilities;
+    const probabilities = predictDeployedTinyModel(record, model).probabilities;
     const predicted = predictedClass(probabilities);
     predictedCounts[predicted] += 1;
     confusion[actual][predicted] += 1;
@@ -382,6 +383,7 @@ export function buildAdaptiveShadowCandidate({
       referenceWeight: 1 - best.baselineWeight,
       temperature: best.temperature,
       objective: best.objective,
+      inferenceContract: DEPLOYED_INFERENCE_CONTRACT,
       calibrationMetrics: compactMetrics(best.metrics),
       calibrationHealth: best.health,
       volatilityRegimes: best.volatilityHealth,
