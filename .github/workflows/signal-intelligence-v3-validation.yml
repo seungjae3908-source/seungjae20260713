@@ -1,0 +1,50 @@
+name: Signal Intelligence V3 Validation
+
+on:
+  pull_request:
+    paths:
+      - 'signal-intelligence-v3/**'
+      - '.github/workflows/signal-intelligence-v3-validation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: signal-intelligence-v3-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'none'
+
+      - name: Run Signal Intelligence V3 tests
+        run: node --test signal-intelligence-v3/tests/*.test.mjs
+
+      - name: Verify release contract
+        run: node signal-intelligence-v3/scripts/verify-contract.mjs
+
+      - name: Assert exact revision
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+
+      - name: Safety summary
+        run: |
+          echo 'executionAuthority=NONE'
+          echo 'privateTradingApiAllowed=false'
+          echo 'realOrderAllowed=false'
+          echo 'AI promotion authority=false'
+          echo 'AI leverage authority=false'
