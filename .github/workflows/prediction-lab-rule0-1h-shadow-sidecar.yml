@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - main
-      - research/rule0-1h-sidecar-chain-v2
+      - research/rule0-1h-sidecar-chain-v3
     paths:
       - .github/workflows/prediction-lab-rule0-1h-shadow-sidecar.yml
       - market-prediction-lab/package.json
@@ -32,9 +32,9 @@ concurrency:
 
 env:
   LAB_DIR: market-prediction-lab
-  ARTIFACT_NAME: prediction-lab-rule0-1h-shadow-state-v2
+  ARTIFACT_NAME: prediction-lab-rule0-1h-shadow-state-v3
   WORKFLOW_FILE: prediction-lab-rule0-1h-shadow-sidecar.yml
-  CHAIN_CONTRACT: rule0-1h-artifact-chain-v2
+  CHAIN_CONTRACT: rule0-1h-artifact-chain-v3
   CANONICAL_OI_PARITY_BLOB: 201e70e53af2e150eda600377e8ef7d287c4ea23
   EXECUTION_FINGERPRINT_SCRIPT: market-prediction-lab/scripts/compute-rule0-1h-execution-fingerprint.js
 
@@ -94,7 +94,7 @@ jobs:
         working-directory: ${{ env.LAB_DIR }}
         run: node --test tests/derivatives-history.test.js tests/rule-model-shadow-challenger.test.js tests/rule0-execution-fingerprint.test.js
 
-      - name: Resolve latest compatible predecessor artifact on this branch
+      - name: Resolve latest v3 predecessor artifact on this branch
         id: predecessor
         shell: bash
         env:
@@ -123,7 +123,7 @@ jobs:
             echo "artifact_id=$artifact_id" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Restore and verify predecessor state
+      - name: Restore and verify v3 predecessor state
         if: steps.predecessor.outputs.found == 'true'
         shell: bash
         env:
@@ -166,9 +166,7 @@ jobs:
           if (manifest.frozenModelFileSha256 !== process.env.CURRENT_MODEL_SHA) throw new Error('frozen model changed; chain mixing forbidden');
           if (manifest.contractSha256 !== process.env.CURRENT_CONTRACT_SHA) throw new Error('forward gate contract changed; chain mixing forbidden');
           if (manifest.oiParityBlob !== process.env.CANONICAL_OI_PARITY_BLOB) throw new Error('OI parity provenance mismatch');
-          if (manifest.liveOrderAllowed !== false || manifest.privateAccountRequestAllowed !== false || manifest.branchWrite !== false) {
-            throw new Error('predecessor safety contract violated');
-          }
+          if (manifest.liveOrderAllowed !== false || manifest.privateAccountRequestAllowed !== false || manifest.branchWrite !== false) throw new Error('predecessor safety contract violated');
           NODE
           cp "$state" "$RUNNER_TEMP/sidecar-state.json"
 
@@ -177,11 +175,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          state="$RUNNER_TEMP/sidecar-state.json"
-          summary="$RUNNER_TEMP/sidecar-summary.json"
           node scripts/run-rule-model-1h-shadow-sidecar.js \
-            "$state" \
-            "$summary" \
+            "$RUNNER_TEMP/sidecar-state.json" \
+            "$RUNNER_TEMP/sidecar-summary.json" \
             docs/rule-model-1h-shadow-model.json
 
       - name: Verify forward state, OI parity, and zero authority
@@ -207,16 +203,12 @@ jobs:
           }
           if (!Array.isArray(state.openInterestSnapshots) || state.openInterestSnapshots.length < 2) throw new Error('raw OI provenance missing');
           const safety = summary.safety ?? {};
-          if (summary.status !== 'pass' || safety.forwardOnly !== true || safety.historicalBackfill !== false || safety.currentGeneralShadowReplaced !== false) {
-            throw new Error('forward-only sidecar safety failed');
-          }
-          if (safety.publicMarketDataOnly !== true || safety.actualOrders !== 0 || safety.privateAccountRequests !== 0 || safety.liveAuthority !== false || safety.promotionAuthority !== false) {
-            throw new Error('authority safety failed');
-          }
+          if (summary.status !== 'pass' || safety.forwardOnly !== true || safety.historicalBackfill !== false || safety.currentGeneralShadowReplaced !== false) throw new Error('forward-only sidecar safety failed');
+          if (safety.publicMarketDataOnly !== true || safety.actualOrders !== 0 || safety.privateAccountRequests !== 0 || safety.liveAuthority !== false || safety.promotionAuthority !== false) throw new Error('authority safety failed');
           console.log(JSON.stringify({ total: summary.metrics?.total, settled: summary.metrics?.settled, pending: summary.metrics?.pending, gate: summary.gate?.status }, null, 2));
           NODE
 
-      - name: Build immutable artifact-chain manifest
+      - name: Build immutable v3 artifact-chain manifest
         shell: bash
         env:
           RESEARCH_SHA: ${{ steps.resolve.outputs.ref }}
@@ -240,7 +232,7 @@ jobs:
           const previousStateSha256 = process.env.PREDECESSOR_FOUND === 'true' && fs.existsSync(predecessorState) ? digest(predecessorState) : null;
           const executionDependencies = JSON.parse(fs.readFileSync('sidecar-artifact/execution-dependencies.json', 'utf8'));
           const manifest = {
-            schemaVersion: 2,
+            schemaVersion: 3,
             chainContract: process.env.CHAIN_CONTRACT,
             researchCodeSha: process.env.RESEARCH_SHA,
             runId: process.env.GITHUB_RUN_ID,
@@ -273,7 +265,7 @@ jobs:
           fs.writeFileSync('sidecar-artifact/manifest.json', `${JSON.stringify(manifest, null, 2)}\n`);
           NODE
 
-      - name: Upload immutable sidecar state artifact
+      - name: Upload immutable v3 sidecar state artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}
