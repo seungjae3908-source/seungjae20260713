@@ -64,6 +64,23 @@ resource_check() {
   printf 'FREE_BYTES=%s\n' "$free_bytes"
 }
 
+service_runner() {
+  if command -v runuser >/dev/null 2>&1; then
+    "${SUDO[@]}" runuser -u investment-research -- "$@"
+  else
+    "${SUDO[@]}" sudo -n -u investment-research "$@"
+  fi
+}
+
+validate_service_node() {
+  service_runner env -i \
+    PATH=/usr/local/bin:/usr/bin:/bin \
+    HOME=/nonexistent \
+    LANG=C.UTF-8 \
+    TZ=UTC \
+    /usr/bin/env node -e 'if (Number(process.versions.node.split(".")[0]) < 20) process.exit(1)'
+}
+
 validate_state_access() {
   id investment-research >/dev/null 2>&1 || {
     echo 'investment-research user is missing; activate Research Production first' >&2
@@ -73,11 +90,28 @@ validate_state_access() {
     echo "research state root missing: $STATE" >&2
     exit 70
   }
-  if command -v runuser >/dev/null 2>&1; then
-    "${SUDO[@]}" runuser -u investment-research -- test -r "$STATE"
-  else
-    "${SUDO[@]}" sudo -n -u investment-research test -r "$STATE"
+  service_runner test -r "$STATE"
+  validate_service_node
+}
+
+redact_dashboard_log() {
+  sed -E \
+    -e 's#https?://[^[:space:]"<>]+#<URL_REDACTED>#g' \
+    -e 's#(authorization|apikey|api_key|token|secret|password)[=:][[:space:]]*(Bearer[[:space:]]+)?[^[:space:]]+#\1=<REDACTED>#Ig' \
+    -e 's#([?&](token|apikey|api_key|key|secret|password)=)[^&[:space:]]+#\1<REDACTED>#Ig' \
+    -e 's#eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}#<JWT_REDACTED>#g'
+}
+
+service_diagnostics() {
+  printf '%s\n' 'RESEARCH_DASHBOARD_SERVICE_DIAGNOSTICS_BEGIN' >&2
+  "${SUDO[@]}" systemctl show "$SERVICE" --no-pager \
+    --property=ActiveState,SubState,Result,ExecMainCode,ExecMainStatus,NRestarts,FragmentPath 2>&1 \
+    | redact_dashboard_log >&2 || true
+  if command -v journalctl >/dev/null 2>&1; then
+    "${SUDO[@]}" journalctl -u "$SERVICE" -n 60 --no-pager -o cat 2>&1 \
+      | redact_dashboard_log >&2 || true
   fi
+  printf '%s\n' 'RESEARCH_DASHBOARD_SERVICE_DIAGNOSTICS_END' >&2
 }
 
 preflight() {
@@ -89,6 +123,7 @@ preflight() {
     "TARGET_SHA=$TARGET_SHA" \
     "APP_SHA=$(read_app_sha)" \
     "RESEARCH_CURRENT=$(read_research_current)" \
+    'SERVICE_NODE_RUNTIME=PASS' \
     'BIND_HOST=127.0.0.1' \
     "BIND_PORT=$PORT" \
     'LIVE_TRADING=false' \
@@ -115,21 +150,36 @@ probe_dashboard() {
   health="$(mktemp)"
   overview="$(mktemp)"
   trap 'rm -f "$health" "$overview"' RETURN
-  local attempt
+  local attempt ready=false
   for attempt in $(seq 1 20); do
     if curl --fail --silent --show-error --max-time 3 "http://127.0.0.1:$PORT/api/health" -o "$health"; then
+      ready=true
       break
     fi
     sleep 1
   done
-  node - "$health" <<'NODE'
+  if [[ "$ready" != true || ! -s "$health" ]]; then
+    echo 'Research Dashboard health endpoint did not become ready.' >&2
+    service_diagnostics
+    return 1
+  fi
+  if ! node - "$health" <<'NODE'
 const fs = require('node:fs');
 const v = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 if (v?.ok !== true || v?.service !== 'investment-research-dashboard') process.exit(1);
 if (v?.readOnly !== true || v?.liveTrading !== false || v?.privateApi !== false || v?.orderAuthority !== false) process.exit(1);
 NODE
-  curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:$PORT/api/research/overview" -o "$overview"
-  node - "$overview" <<'NODE'
+  then
+    echo 'Research Dashboard health contract validation failed.' >&2
+    service_diagnostics
+    return 1
+  fi
+  if ! curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:$PORT/api/research/overview" -o "$overview"; then
+    echo 'Research Dashboard overview endpoint request failed.' >&2
+    service_diagnostics
+    return 1
+  fi
+  if ! node - "$overview" <<'NODE'
 const fs = require('node:fs');
 const v = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 if (v?.schemaVersion !== 'research-dashboard-overview-v1') process.exit(1);
@@ -137,6 +187,11 @@ if (v?.safety?.readOnlyDashboard !== true) process.exit(1);
 if (v?.safety?.liveTrading !== false || v?.safety?.privateApi !== false || v?.safety?.orderAuthority !== false) process.exit(1);
 if (v?.profitability?.proven !== false) process.exit(1);
 NODE
+  then
+    echo 'Research Dashboard overview contract validation failed.' >&2
+    service_diagnostics
+    return 1
+  fi
   rm -f "$health" "$overview"
   trap - RETURN
 }
@@ -221,7 +276,11 @@ activate() {
     "/etc/systemd/system/$SERVICE"
   "${SUDO[@]}" systemctl daemon-reload
   "${SUDO[@]}" systemctl enable --now "$SERVICE"
-  "${SUDO[@]}" systemctl is-active --quiet "$SERVICE"
+  if ! "${SUDO[@]}" systemctl is-active --quiet "$SERVICE"; then
+    echo 'Research Dashboard service did not enter active state.' >&2
+    service_diagnostics
+    return 1
+  fi
   "${SUDO[@]}" systemctl is-enabled --quiet "$SERVICE"
   probe_dashboard
 

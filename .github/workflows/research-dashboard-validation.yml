@@ -25,12 +25,33 @@ jobs:
         run: |
           npm run check
           npm test
-      - name: Validate systemd sandbox contract
+      - name: Validate systemd sandbox and fail-closed diagnostics contract
         run: |
-          grep -q 'User=investment-research' research-dashboard/deploy/research-dashboard.service
-          grep -q 'RESEARCH_DASHBOARD_HOST=127.0.0.1' research-dashboard/deploy/research-dashboard.service
-          grep -q 'ProtectSystem=strict' research-dashboard/deploy/research-dashboard.service
-          grep -q 'ReadOnlyPaths=/opt/investment-research-dashboard/current /var/lib/investment-research-production' research-dashboard/deploy/research-dashboard.service
-          grep -q 'WorkingDirectory=/opt/investment-research-dashboard/current/research-dashboard' research-dashboard/deploy/research-dashboard.service
-          ! grep -q '^MemoryDenyWriteExecute=true$' research-dashboard/deploy/research-dashboard.service
+          set -Eeuo pipefail
+          unit='research-dashboard/deploy/research-dashboard.service'
+          activate='research-dashboard/deploy/activate-server.sh'
+
+          grep -q 'User=investment-research' "$unit"
+          grep -q 'RESEARCH_DASHBOARD_HOST=127.0.0.1' "$unit"
+          grep -q 'WorkingDirectory=/opt/investment-research-dashboard/current/research-dashboard' "$unit"
+          grep -q 'ProtectSystem=strict' "$unit"
+          grep -q '^CapabilityBoundingSet=$' "$unit"
+          grep -q '^AmbientCapabilities=$' "$unit"
+          grep -q '^UMask=0077$' "$unit"
+          grep -q '^ReadWritePaths=/tmp$' "$unit"
+          ! grep -q '^MemoryDenyWriteExecute=true$' "$unit"
+          ! grep -Eq '^ReadWritePaths=.*(/var/lib/investment-research-production|/opt/stock-app|/opt/investment-research/)' "$unit"
+
+          bash -n "$activate"
+          grep -q 'SERVICE_NODE_RUNTIME=PASS' "$activate"
+          grep -q 'RESEARCH_DASHBOARD_SERVICE_DIAGNOSTICS_BEGIN' "$activate"
+          grep -q 'ExecMainStatus' "$activate"
+          grep -q 'journalctl -u' "$activate"
+          grep -q "'CADDY_MUTATION=0'" "$activate"
+          grep -q "'DATABASE_MUTATION=0'" "$activate"
+          grep -q "'PRODUCTION_PM2_MUTATION=0'" "$activate"
+          grep -q "'LIVE_TRADING=false'" "$activate"
+          grep -q "'PRIVATE_API=false'" "$activate"
+          grep -q "'ORDER_AUTHORITY=false'" "$activate"
+
           ! grep -R -E 'ORDER_SUBMISSION_ENABLED=true|PRIVATE_API_ENABLED=true|LIVE_TRADING=true|REAL_ORDER_ENABLED=true' research-dashboard
