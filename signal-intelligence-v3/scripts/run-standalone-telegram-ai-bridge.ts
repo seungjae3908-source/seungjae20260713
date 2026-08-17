@@ -208,7 +208,7 @@ function rowFingerprint(row) {
 }
 function watchPrompt(row) {
   return [
-    '공개 데이터 감시 전용입니다. 주문·자동매매·레버리지 변경·매매 지시는 하지 마세요.',
+    '공개 데이터 분석·분류 전용입니다. 실제 행동을 지시하거나 실행하지 마세요.',
     '최근 공개 뉴스/공시/이벤트와 현재 가격·기술 변화에서 이 종목을 즉시 deterministic Scanner로 다시 계산해야 할 새 변화가 있는지만 분류하세요.',
     '호재/악재가 없거나 확인되지 않으면 NONE으로 두고 추측하지 마세요.',
     '반드시 설명 없이 아래 JSON 객체 하나만 반환하세요.',
@@ -223,7 +223,7 @@ async function requestRescan() {
   } catch { return false; }
 }
 async function reviewWithAi(snapshot, state, now) {
-  const result = { reviewed: 0, material: 0, rescans: 0, notified: 0, unavailable: 0 };
+  const result = { reviewed: 0, material: 0, rescans: 0, notified: 0, unavailable: 0, invalid: 0 };
   if (!aiConfigured()) return result;
   const eventIds = new Set(snapshot.events.filter((event) => ['NEW_CANDIDATE','RESCAN_REQUESTED'].includes(event.type)).map((event) => event.id));
   const changed = [];
@@ -248,7 +248,8 @@ async function reviewWithAi(snapshot, state, now) {
       const answer = await answerAiChat({ message: watchPrompt(row), context }, fetch, undefined, 12_000);
       parsed = parseAiJson(answer.answer);
     } catch { result.unavailable += 1; continue; }
-    if (!parsed || !materialChange(parsed)) continue;
+    if (!parsed) { result.invalid += 1; continue; }
+    if (!materialChange(parsed)) continue;
     result.material += 1;
     if (await requestRescan()) result.rescans += 1;
     const destinationChatId = chatIdForMarket(row.market);
