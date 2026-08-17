@@ -1,4 +1,6 @@
 import { evaluateAdvancedGates } from './advanced-gates.mjs';
+import { evaluateExecutionQuality } from './execution-quality.mjs';
+import { evaluatePortfolioSafety } from './portfolio-safety.mjs';
 
 const DEFAULT_POLICY = Object.freeze({
   version: 'MIS_V1',
@@ -172,9 +174,7 @@ function derivativesFeatures(input) {
   const shortLiquidation = Math.max(0, finite(d.shortLiquidationNotional, 0));
   const liquidationBias = safeRatio(shortLiquidation - longLiquidation, shortLiquidation + longLiquidation, 0);
   const fundingBias = clamp(-fundingRate * 20_000, -1, 1);
-  const crowdingBias = longShortRatio > 0
-    ? clamp(-Math.log(longShortRatio) / Math.log(2), -1, 1)
-    : 0;
+  const crowdingBias = longShortRatio > 0 ? clamp(-Math.log(longShortRatio) / Math.log(2), -1, 1) : 0;
   const oiConviction = oiDeltaPct == null ? 0 : clamp(Math.abs(oiDeltaPct) / 5, 0, 1);
   return { oi, prevOi, oiDeltaPct, fundingRate, longShortRatio, longLiquidation, shortLiquidation, liquidationBias, fundingBias, crowdingBias, oiConviction };
 }
@@ -189,9 +189,7 @@ function microcapFeatures(input) {
   const shelfToMarketCap = marketCap > 0 ? shelfCapacity / marketCap : 0;
   const sharesOutstanding = Math.max(0, finite(m.sharesOutstanding, 0));
   const previousSharesOutstanding = Math.max(0, finite(m.previousSharesOutstanding, 0));
-  const shareGrowthPct = previousSharesOutstanding > 0
-    ? ((sharesOutstanding - previousSharesOutstanding) / previousSharesOutstanding) * 100
-    : 0;
+  const shareGrowthPct = previousSharesOutstanding > 0 ? ((sharesOutstanding - previousSharesOutstanding) / previousSharesOutstanding) * 100 : 0;
   const warrantShares = Math.max(0, finite(m.warrantShares, 0));
   const warrantOverhang = sharesOutstanding > 0 ? warrantShares / sharesOutstanding : 0;
   const reverseSplitCount12m = Math.max(0, finite(m.reverseSplitCount12m, 0));
@@ -216,17 +214,8 @@ function microcapFeatures(input) {
 
   const shortPressureScore = clamp(shortInterestPctFloat * 1.5 + daysToCover * 4, 0, 70);
   return {
-    runwayQuarters,
-    shelfToMarketCap,
-    shareGrowthPct,
-    warrantOverhang,
-    reverseSplitCount12m,
-    shortInterestPctFloat,
-    daysToCover,
-    atmActive,
-    convertibleRisk,
-    dilutionRisk,
-    shortPressureScore,
+    runwayQuarters, shelfToMarketCap, shareGrowthPct, warrantOverhang, reverseSplitCount12m, shortInterestPctFloat,
+    daysToCover, atmActive, convertibleRisk, dilutionRisk, shortPressureScore,
   };
 }
 
@@ -247,6 +236,14 @@ function grade(score) {
   if (score >= 70) return 'B';
   if (score >= 60) return 'WATCH';
   return 'NO_EDGE';
+}
+
+function requiredGateState(result) {
+  return {
+    required: result?.policy?.enforcement === 'REQUIRED_FOR_PARENT_GATE',
+    state: result?.autoTrading?.state ?? 'INSUFFICIENT_EVIDENCE',
+    reasons: Array.isArray(result?.autoTrading?.reasons) ? result.autoTrading.reasons : [],
+  };
 }
 
 export function evaluateMarketIntelligence(input = {}) {
@@ -273,6 +270,8 @@ export function evaluateMarketIntelligence(input = {}) {
     metaLabel: input.advancedGates?.metaLabel,
     events: input.advancedGates?.events,
   }, input.advancedGatePolicy);
+  const executionQuality = evaluateExecutionQuality({ now, ...(input.executionQuality ?? {}) }, input.executionQualityPolicy);
+  const portfolioSafety = evaluatePortfolioSafety({ now, ...(input.portfolioSafety ?? {}) }, input.portfolioSafetyPolicy);
 
   let directional = 0;
   directional += book.bookImbalance * 24;
@@ -320,13 +319,15 @@ export function evaluateMarketIntelligence(input = {}) {
     && maxDrawdownPct <= policy.autoMaxDrawdownPct
     && regimeCount >= policy.autoMinRegimeCount;
 
-  const advancedRequired = advancedGates.policy.enforcement === 'REQUIRED_FOR_PARENT_GATE';
-  const advancedGateReady = advancedGates.autoTrading.state === 'PASS';
-  const advancedVetoReason = advancedRequired && advancedGates.autoTrading.state === 'VETO'
-    ? advancedGates.autoTrading.reasons[0] ?? 'ADVANCED_GATE_VETO'
-    : null;
-  const autoHardBlockReason = scannerHardBlockReason ?? advancedVetoReason;
-  const parentEligibilityReady = evidenceReady && (!advancedRequired || advancedGateReady);
+  const advanced = requiredGateState(advancedGates);
+  const execution = requiredGateState(executionQuality);
+  const portfolio = requiredGateState(portfolioSafety);
+  const requiredGates = [advanced, execution, portfolio];
+  const requiredVeto = requiredGates.find((gate) => gate.required && gate.state === 'VETO');
+  const requiredIncomplete = requiredGates.some((gate) => gate.required && gate.state !== 'PASS');
+  const requiredVetoReason = requiredVeto?.reasons?.[0] ?? (requiredVeto ? 'REQUIRED_SAFETY_GATE_VETO' : null);
+  const autoHardBlockReason = scannerHardBlockReason ?? requiredVetoReason;
+  const parentEligibilityReady = evidenceReady && !requiredIncomplete;
 
   const autoMode = autoHardBlockReason
     ? 'BLOCKED_RISK'
@@ -342,6 +343,8 @@ export function evaluateMarketIntelligence(input = {}) {
   if (market === 'US_STOCK' && input.microcap == null) warnings.push('MICROCAP_STRUCTURAL_DATA_NOT_AVAILABLE');
   if (!evidenceReady) warnings.push('AUTO_TRADING_FORWARD_EVIDENCE_INSUFFICIENT');
   warnings.push(...advancedGates.scanner.warnings);
+  if (input.executionQuality != null && executionQuality.autoTrading.state !== 'PASS') warnings.push(`EXECUTION_QUALITY_${executionQuality.autoTrading.state}`);
+  if (input.portfolioSafety != null && portfolioSafety.autoTrading.state !== 'PASS') warnings.push(`PORTFOLIO_SAFETY_${portfolioSafety.autoTrading.state}`);
 
   return {
     contract: 'market-intelligence-sidecar/v1',
@@ -370,6 +373,8 @@ export function evaluateMarketIntelligence(input = {}) {
     derivatives,
     structural: microcap ? { ...microcap, shortSqueezeScore: squeezeScore } : null,
     advancedGates,
+    executionQuality,
+    portfolioSafety,
     scanner: {
       mode: 'SOFT_INTELLIGENCE_LAYER',
       adjustment: scannerAdjustment,
@@ -379,6 +384,8 @@ export function evaluateMarketIntelligence(input = {}) {
       grade: grade(Math.max(bullishScore, bearishScore)),
       hardBlockReason: scannerHardBlockReason,
       advancedGateState: advancedGates.autoTrading.state,
+      executionQualityState: executionQuality.autoTrading.state,
+      portfolioSafetyState: portfolioSafety.autoTrading.state,
       candidateDeletionAllowed: false,
     },
     autoTrading: {
@@ -387,8 +394,12 @@ export function evaluateMarketIntelligence(input = {}) {
       orderAllowed: false,
       evidenceReady,
       parentEligibilityReady,
-      advancedGateReady,
+      advancedGateReady: advanced.state === 'PASS',
+      executionQualityReady: execution.state === 'PASS',
+      portfolioSafetyReady: portfolio.state === 'PASS',
       advancedEnforcement: advancedGates.policy.enforcement,
+      executionQualityEnforcement: executionQuality.policy.enforcement,
+      portfolioSafetyEnforcement: portfolioSafety.policy.enforcement,
       hardBlockReason: autoHardBlockReason,
       evidence: { forwardSamples, profitFactor, expectedNetEdgeBps, maxDrawdownPct, regimeCount },
     },
