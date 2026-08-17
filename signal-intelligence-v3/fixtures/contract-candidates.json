@@ -1,0 +1,97 @@
+{
+  "maxCandidatesPerList": 10,
+  "futuresDirectionSeparationMinR": 0.2,
+  "candidates": [
+    {
+      "market": "KR_STOCK",
+      "symbol": "005930",
+      "strategy": "SWING",
+      "timeframe": "1D",
+      "direction": "BUY",
+      "dataStatus": "READY",
+      "quantEligible": true,
+      "profitEligible": true,
+      "riskReady": true,
+      "evidence": { "expectedNetEdgeR": 1.3, "tailLossPenaltyR": 0.2, "uncertaintyPenaltyR": 0.1, "executionPenaltyR": 0.1 }
+    },
+    {
+      "market": "US_STOCK",
+      "symbol": "AAPL",
+      "strategy": "SWING",
+      "timeframe": "1D",
+      "direction": "BUY",
+      "dataStatus": "READY",
+      "quantEligible": true,
+      "profitEligible": true,
+      "riskReady": true,
+      "evidence": { "expectedNetEdgeR": 1.2, "tailLossPenaltyR": 0.2, "uncertaintyPenaltyR": 0.1, "executionPenaltyR": 0.1 }
+    },
+    {
+      "market": "CRYPTO_SPOT",
+      "symbol": "KRW-BTC",
+      "strategy": "SWING",
+      "timeframe": "4h",
+      "direction": "BUY",
+      "dataStatus": "READY",
+      "quantEligible": true,
+      "profitEligible": true,
+      "riskReady": true,
+      "evidence": { "expectedNetEdgeR": 1.1, "tailLossPenaltyR": 0.2, "uncertaintyPenaltyR": 0.1, "executionPenaltyR": 0.1 }
+    },
+    {
+      "market": "CRYPTO_FUTURES",
+      "symbol": "BTCUSDT",
+      "strategy": "SWING",
+      "timeframe": "1h",
+      "direction": "LONG",
+      "dataStatus": "READY",
+      "quantEligible": true,
+      "profitEligible": true,
+      "riskReady": true,
+      "evidence": { "expectedNetEdgeR": 1.5, "tailLossPenaltyR": 0.2, "uncertaintyPenaltyR": 0.1, "executionPenaltyR": 0.1 },
+      "leverageEvidence": {
+        "stopDistancePct": 2,
+        "maeQ95Pct": 2.2,
+        "downsideIntervalPct": 2.5,
+        "spreadPct": 0.05,
+        "slippagePct": 0.1,
+        "uncertainty": "LOW",
+        "volatility": "NORMAL",
+        "liquidity": "HIGH",
+        "tiers": [
+          { "leverage": 1, "liquidationDistancePct": 60, "maintenanceMarginRatePct": 0.4, "verified": true },
+          { "leverage": 2, "liquidationDistancePct": 32, "maintenanceMarginRatePct": 0.5, "verified": true },
+          { "leverage": 3, "liquidationDistancePct": 20, "maintenanceMarginRatePct": 0.6, "verified": true }
+        ]
+      }
+    },
+    {
+      "market": "CRYPTO_FUTURES",
+      "symbol": "ETHUSDT",
+      "strategy": "SWING",
+      "timeframe": "1h",
+      "direction": "SHORT",
+      "dataStatus": "READY",
+      "quantEligible": true,
+      "profitEligible": true,
+      "riskReady": true,
+      "evidence": { "expectedNetEdgeR": 1.4, "tailLossPenaltyR": 0.2, "uncertaintyPenaltyR": 0.1, "executionPenaltyR": 0.1 },
+      "ai": { "catalyst": { "signal": "NEGATIVE", "impact": "HIGH" } },
+      "leverageEvidence": {
+        "stopDistancePct": 2.2,
+        "maeQ95Pct": 2.4,
+        "downsideIntervalPct": 2.8,
+        "spreadPct": 0.05,
+        "slippagePct": 0.1,
+        "uncertainty": "MEDIUM",
+        "volatility": "NORMAL",
+        "liquidity": "HIGH",
+        "tiers": [
+          { "leverage": 1, "liquidationDistancePct": 60, "maintenanceMarginRatePct": 0.4, "verified": true },
+          { "leverage": 2, "liquidationDistancePct": 30, "maintenanceMarginRatePct": 0.5, "verified": true },
+          { "leverage": 3, "liquidationDistancePct": 18, "maintenanceMarginRatePct": 0.6, "verified": true }
+        ]
+      }
+    }
+  ]
+}
