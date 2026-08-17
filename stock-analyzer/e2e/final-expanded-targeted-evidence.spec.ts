@@ -458,9 +458,9 @@ test('stock summary opens the canonical rich analysis view without a legacy redi
   await expect(page.getByRole('heading', { name: '애플', level: 1 })).toBeVisible();
   await expect(page.getByTestId('canonical-stock-analysis')).toContainText('$231.45');
 
-  await page.getByRole('button', { name: '뒤로가기' }).click();
-  await expect(page).toHaveURL(/\/stock-info\?asset=stock&market=US&ticker=AAPL$/);
-  await expect(page.getByRole('heading', { name: '종목 상세', level: 1 })).toBeVisible();
+  await page.getByRole('button', { name: '종목 목록으로 돌아가기' }).click();
+  await expect(page).toHaveURL(/\/stocks$/);
+  await expect(page.getByRole('heading', { name: '종목', level: 1 })).toBeVisible();
 });
 
 test('portfolio exposes the existing unified journal as a primary tab', async ({ page }) => {

@@ -1,0 +1,67 @@
+name: Four-Market Paper Sampler Validation
+
+on:
+  push:
+    branches:
+      - research/four-market-paper-sampler-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: four-market-paper-sampler-validation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact HEAD
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Assert exact HEAD
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Verify execution kernel and Paper sampler
+        working-directory: market-prediction-lab
+        run: node --test tests/four-market-execution-v2.test.js tests/four-market-paper-sampler-v1.test.js
+
+      - name: Verify no live or private authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const source = fs.readFileSync('market-prediction-lab/src/four-market-paper-sampler-v1.js', 'utf8');
+          for (const expected of [
+            'simulatedOnly: true',
+            'liveOrderAllowed: false',
+            'privateTradingApiAllowed: false',
+            'orderSubmitted: false',
+            'exchangeRequestSent: false',
+            'profitabilityClaimAllowed: false',
+          ]) {
+            if (!source.includes(expected)) throw new Error(`missing safety contract: ${expected}`);
+          }
+          NODE
+
+      - name: Final clean exact HEAD assertion
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"

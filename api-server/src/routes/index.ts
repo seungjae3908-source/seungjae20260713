@@ -27,6 +27,9 @@ import strategyPromotionRouter from './strategy-promotion';
 import portfolioIntelligenceRouter from './portfolio-intelligence';
 import unifiedSearchRouter from './unified-search';
 import accountConnectionsRouter from './account-connections';
+import { createAccountReadonlyRouter, accountReadFlags } from '../features/account-readonly/account-readonly.route';
+import { AccountReadonlyService } from '../features/account-readonly/account-readonly.service';
+import { createVaultBackedAccountReaders } from '../features/account-readonly/account-readonly.runtime';
 import {
   manualPortfolioNotificationBridge,
   telegramWebhookRouter,
@@ -62,6 +65,16 @@ router.use(requireAuthenticated);
 // authenticated user's vault connection metadata and never falls back to a
 // server credential or sends a private provider request.
 router.use('/account-connections', accountConnectionsRouter);
+// Private account reads are a separate, authenticated, read-only surface. All
+// providers fail closed unless their explicit feature flag is exactly `true`.
+// Upbit and Bitget readers load only the authenticated user's encrypted vault
+// credentials and use a GET-only, host/path allowlisted transport. Toss stays
+// fail-closed until its separate credential contract is wired and verified.
+router.use(
+  '/accounts/read-only',
+  requireCapability('canAccessBasicInfo'),
+  createAccountReadonlyRouter(new AccountReadonlyService(createVaultBackedAccountReaders(), accountReadFlags())),
+);
 
 // Canonical AI Scanner routes must be registered before the legacy market
 // router. This makes /api/market/scan authenticated, capability protected,
@@ -131,7 +144,7 @@ router.use('/paper-journal/sync', manualPortfolioNotificationBridge);
 router.use('/', paperJournalRouter);
 router.use('/trade-automation', requireCapability('canPlaceOrders'));
 router.use('/trade-automation', tradeAutomationRouter);
-router.use('/user-integrations', requireCapability('canPlaceOrders'));
+router.use('/user-integrations', requireCapability('canConnectPersonalTelegram'));
 router.use('/user-integrations', userBrokerTelegramRouter);
 
 router.use(requireCapability('canAccessBasicInfo'));

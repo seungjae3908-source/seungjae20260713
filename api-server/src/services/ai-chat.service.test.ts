@@ -215,6 +215,56 @@ test('Gemini success makes zero Groq calls', async () => {
   } finally { restoreAiEnvironment(previous); }
 });
 
+test('portfolio assistant context is explained without recalculating or fabricating missing cash', async () => {
+  const previous = snapshotAiEnvironment(); clearAiEnvironment();
+  process.env.GEMINI_API_KEY = 'fake-gemini'; process.env.GROQ_API_KEY = 'fake-groq';
+  let providerPayload: any = null; let groqCalls = 0;
+  try {
+    const result = await answerAiChat({
+      message: '내 포트폴리오를 요약해줘',
+      portfolioAssistantContext: {
+        dataQuality: 'PARTIAL',
+        asOf: '2026-08-15T10:00:00.000Z',
+        evidence: [{ source: 'canonical-portfolio-v2', field: 'holdings' }],
+        warnings: ['CASH_NOT_AVAILABLE'],
+        facts: { knownAssetsKRW: 12_000_000, cashKRW: null },
+        readOnly: true,
+        orderAuthority: 'none',
+        exchangeRequestSent: false,
+      },
+    }, async (input, init) => {
+      if (String(input).includes('api.groq.com')) groqCalls += 1;
+      providerPayload = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: '현금은 NOT_AVAILABLE이며 전체 상태는 PARTIAL입니다.' }] } }] }), { status: 200 });
+    });
+    const prompt = JSON.parse(providerPayload.contents[0].parts[0].text);
+    assert.equal(prompt.task, 'explain_canonical_portfolio_tool_result');
+    assert.equal(prompt.portfolioAssistantContext.facts.cashKRW, null);
+    assert.equal(prompt.portfolioAssistantContext.dataQuality, 'PARTIAL');
+    assert.equal(prompt.portfolioAssistantContext.orderAuthority, 'none');
+    assert.match(providerPayload.systemInstruction.parts[0].text, /Never calculate/);
+    assert.match(providerPayload.systemInstruction.parts[0].text, /never turn missing cash.*into zero/i);
+    assert.equal(result.answer, '현금은 NOT_AVAILABLE이며 전체 상태는 PARTIAL입니다.');
+    assert.equal(groqCalls, 0);
+  } finally { restoreAiEnvironment(previous); }
+});
+
+test('portfolio assistant context fails closed before providers when read-only safety flags are invalid', async () => {
+  const previous = snapshotAiEnvironment(); clearAiEnvironment(); process.env.GEMINI_API_KEY = 'fake-gemini';
+  let calls = 0;
+  try {
+    await assert.rejects(answerAiChat({
+      message: '내 포트폴리오를 요약해줘',
+      portfolioAssistantContext: {
+        dataQuality: 'AVAILABLE', asOf: null, evidence: [], warnings: [], facts: {},
+        readOnly: false, orderAuthority: 'trade', exchangeRequestSent: true,
+      },
+    }, async () => { calls += 1; throw new Error('must not call'); }),
+    (cause: unknown) => cause instanceof AiChatError && cause.code === 'AI_CHAT_INVALID_CONTEXT');
+    assert.equal(calls, 0);
+  } finally { restoreAiEnvironment(previous); }
+});
+
 test('Gemini 429 and retryable 5xx fall back to Groq exactly once', async () => {
   for (const status of [429, 503]) {
     const previous = snapshotAiEnvironment(); clearAiEnvironment();

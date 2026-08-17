@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import './scanner-adaptive-threshold-arena.smoke.test';
+import './forward-recommendation-observer.service.test';
 import {
   calculateScalpingBacktestMetrics,
   calculateSwingBacktestMetrics,

@@ -1,0 +1,107 @@
+name: Signal Direction Paper Bridge Validation
+
+on:
+  pull_request:
+    paths:
+      - 'market-prediction-lab/src/signal-direction-contract-v1.js'
+      - 'market-prediction-lab/src/meaningful-search-paper-bridge-v1.js'
+      - 'market-prediction-lab/tests/signal-direction-contract-v1.test.js'
+      - 'market-prediction-lab/tests/meaningful-search-direction-bridge-v1.test.js'
+      - 'market-prediction-lab/tests/meaningful-search-paper-bridge-v1.test.js'
+      - 'stock-analyzer/src/lib/signal-scanner.ts'
+      - 'stock-analyzer/src/lib/analysis-selection.tsx'
+      - 'stock-analyzer/src/lib/ai-chart-v2-intelligence.ts'
+      - 'stock-analyzer/src/pages/signal-scanner.tsx'
+      - 'stock-analyzer/e2e/scanner-direction-badges.spec.ts'
+      - '.github/workflows/signal-direction-paper-bridge-validation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: signal-direction-paper-bridge-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  direction-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact HEAD
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Assert exact PR HEAD
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Run direction and Paper bridge matrix
+        working-directory: market-prediction-lab
+        run: >-
+          node --test
+          tests/signal-direction-contract-v1.test.js
+          tests/meaningful-search-direction-bridge-v1.test.js
+          tests/meaningful-search-paper-bridge-v1.test.js
+          tests/four-market-paper-sampler-v1.test.js
+
+      - name: Assert UI and AI Chart preserve canonical direction values
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq "'NO_TRADE' | 'UNKNOWN' | 'NONE'" stock-analyzer/src/lib/signal-scanner.ts
+          grep -Fq "'NO_TRADE' | 'UNKNOWN' | 'NONE'" stock-analyzer/src/lib/analysis-selection.tsx
+          grep -Fq "'NO_TRADE' | 'UNKNOWN' | 'WAIT'" stock-analyzer/src/lib/ai-chart-v2-intelligence.ts
+          grep -Fq "거래 안 함 · NO_TRADE" stock-analyzer/src/pages/signal-scanner.tsx
+          grep -Fq "방향 확인 필요 · UNKNOWN" stock-analyzer/src/pages/signal-scanner.tsx
+          grep -Fq "scanner-direction-badge" stock-analyzer/src/pages/signal-scanner.tsx
+          grep -Fq "scanner-card-direction" stock-analyzer/src/pages/signal-scanner.tsx
+
+      - name: Assert financial mutation remains disabled
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          for (const file of [
+            'market-prediction-lab/src/signal-direction-contract-v1.js',
+            'market-prediction-lab/src/meaningful-search-paper-bridge-v1.js',
+          ]) {
+            const source = fs.readFileSync(file, 'utf8');
+            for (const expected of ['liveTrading: false', 'realOrder: false', 'privateApi: false']) {
+              if (!source.includes(expected)) throw new Error(`${file}: missing ${expected}`);
+            }
+          }
+          const bridge = fs.readFileSync('market-prediction-lab/src/meaningful-search-paper-bridge-v1.js', 'utf8');
+          for (const expected of [
+            'executionAuthority: "NONE"',
+            'liveOrderAllowed: false',
+            'privateTradingApiAllowed: false',
+            'orderSubmitted: false',
+            'exchangeRequestSent: false',
+          ]) {
+            if (!bridge.includes(expected)) throw new Error(`bridge missing safety contract: ${expected}`);
+          }
+          NODE
+
+      - name: Final clean exact HEAD assertion
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          else
+            test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          fi
+          test -z "$(git status --porcelain)"

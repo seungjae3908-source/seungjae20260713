@@ -4,7 +4,6 @@ import { predictTinyModel, BASELINE_MODEL } from "../src/tiny-model.js";
 import {
   calibrateTemperature,
   compareCandidateToBaseline,
-  evaluateRawTinyModel,
   evaluateStoredBaseline,
   evaluateTinyModel,
   fitFeatureNormalization,
@@ -22,10 +21,8 @@ function syntheticRecords(count = 360) {
       : classIndex === 2 ? -2 - ((index % 7) / 10)
         : ((index % 5) - 2) / 20;
     const y = classIndex === 1 ? 1.5 + ((index % 3) / 10) : ((index % 5) - 2) / 10;
-    const ruleScore = direction === "bullish" ? 60 : direction === "bearish" ? -60 : 0;
     return Object.freeze({
       features: Object.freeze({ x, y, noise: Math.sin(index) * 0.03 }),
-      ruleScore,
       label: Object.freeze({ direction }),
       probabilities: Object.freeze({ bullish: 1 / 3, neutral: 1 / 3, bearish: 1 / 3 }),
     });
@@ -47,7 +44,7 @@ test("feature normalization uses training records and remains finite", () => {
   assert.ok(normalization.scale.every((value) => Number.isFinite(value) && value > 0));
 });
 
-test("softmax trainer, deployed-path calibration and test evaluation are deterministic", () => {
+test("softmax trainer, validation calibration and test evaluation are deterministic", () => {
   const records = syntheticRecords();
   const train = records.slice(0, 216);
   const validation = records.slice(216, 288);
@@ -60,20 +57,10 @@ test("softmax trainer, deployed-path calibration and test evaluation are determi
   const calibrated = calibrateTemperature(validation, first);
   const baseline = evaluateStoredBaseline(heldOutTest);
   const candidate = evaluateTinyModel(heldOutTest, calibrated);
-  const rawCandidate = evaluateRawTinyModel(heldOutTest, calibrated);
   assert.ok(candidate.accuracy > 0.95);
-  assert.ok(rawCandidate.accuracy > 0.95);
   assert.ok(candidate.logLoss < baseline.logLoss);
   assert.equal(compareCandidateToBaseline(baseline, candidate).promoted, true);
-  assert.equal(calibrated.calibration.inferenceContract, "deployed-rule-model-65-35");
   assert.ok(calibrated.temperature >= 0.5 && calibrated.temperature <= 3);
-});
-
-test("candidate evaluation fails closed rather than silently dropping the deployed rule layer", () => {
-  const records = syntheticRecords(90).map(({ ruleScore: _ruleScore, ...record }) => record);
-  const model = trainTinySoftmaxModel(syntheticRecords(90), { featureOrder: FEATURE_ORDER, epochs: 120 });
-  assert.throws(() => evaluateTinyModel(records, model), /ruleScore is required/);
-  assert.doesNotThrow(() => evaluateRawTinyModel(records, model));
 });
 
 test("trainer rejects datasets missing one of the three classes", () => {

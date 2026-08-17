@@ -1,0 +1,163 @@
+name: Paper Forward Schedule Activation Validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
+      - market-prediction-lab/scripts/run-paper-forward-schedule.js
+      - market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
+      - ops/install-paper-forward-schedule.sh
+      - ops/disable-paper-forward-schedule.sh
+      - .github/workflows/paper-forward-schedule-activation.yml
+      - .github/workflows/paper-forward-schedule-disable.yml
+      - .github/workflows/paper-forward-schedule-validation.yml
+  push:
+    branches:
+      - agent/paper-forward-schedule-activation-v1
+      - agent/paper-forward-stale-disable-race-guard-v1
+      - fix/paper-forward-activation-post-approval-main-guard-v1
+      - fix/paper-forward-disable-moving-main-liveness-v1
+    paths:
+      - market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
+      - market-prediction-lab/scripts/run-paper-forward-schedule.js
+      - market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
+      - ops/install-paper-forward-schedule.sh
+      - ops/disable-paper-forward-schedule.sh
+      - .github/workflows/paper-forward-schedule-activation.yml
+      - .github/workflows/paper-forward-schedule-disable.yml
+      - .github/workflows/paper-forward-schedule-validation.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: paper-forward-schedule-validation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Require bounded non-UI diff
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main
+          base="$(git merge-base HEAD origin/main)"
+          mapfile -t changed < <(git diff --name-only "$base"...HEAD)
+          allowed=(
+            market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
+            market-prediction-lab/scripts/run-paper-forward-schedule.js
+            market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
+            ops/install-paper-forward-schedule.sh
+            ops/disable-paper-forward-schedule.sh
+            .github/workflows/paper-forward-schedule-activation.yml
+            .github/workflows/paper-forward-schedule-disable.yml
+            .github/workflows/paper-forward-schedule-validation.yml
+          )
+          test "${#changed[@]}" -ge 1
+          test "${#changed[@]}" -le "${#allowed[@]}"
+          for path in "${changed[@]}"; do
+            printf '%s\n' "${allowed[@]}" | grep -Fx "$path" >/dev/null || {
+              echo "unexpected path: $path" >&2
+              exit 1
+            }
+            [[ "$path" != stock-analyzer/* ]]
+          done
+
+      - name: Validate JavaScript and shell syntax
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
+          node --check market-prediction-lab/scripts/run-paper-forward-schedule.js
+          node --check market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
+          bash -n ops/install-paper-forward-schedule.sh
+          bash -n ops/disable-paper-forward-schedule.sh
+
+      - name: Run focused scheduler, restart, replay, and safety regression
+        working-directory: market-prediction-lab
+        run: |
+          node --test \
+            tests/paper-scheduler-driver-v1.test.js \
+            tests/paper-forward-evidence-runtime-v1.test.js \
+            tests/paper-forward-schedule-runtime-v1.test.js
+
+      - name: Verify activation remains Paper-only and fail-closed
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          grep -F "PAPER_FORWARD_SCHEDULE_ACTIVE='true'" ops/install-paper-forward-schedule.sh >/dev/null
+          grep -F "PRIVATE_TRADING_API_ALLOWED='false'" ops/install-paper-forward-schedule.sh >/dev/null
+          grep -F "REAL_ORDER_ENABLED='false'" ops/install-paper-forward-schedule.sh >/dev/null
+          grep -F '*/15 * * * *' ops/install-paper-forward-schedule.sh >/dev/null
+          grep -F 'paper-forward-identity-clean-cutover-v1' ops/install-paper-forward-schedule.sh >/dev/null
+          grep -F 'predecessorStatePreserved: true' ops/install-paper-forward-schedule.sh >/dev/null
+          grep -F 'predecessorPerformanceMixed: false' ops/install-paper-forward-schedule.sh >/dev/null
+          grep -F 'canonicalCycleIntervalMs: FOUR_HOURS_MS' market-prediction-lab/src/paper-forward-schedule-runtime-v1.js >/dev/null
+          grep -F 'financialMutationAdaptersEnabled: false' market-prediction-lab/src/paper-forward-schedule-runtime-v1.js >/dev/null
+          ! grep -R --line-number -E 'stock-analyzer/|LIVE_TRADING=.?(true|1)|PRIVATE_TRADING_API_ALLOWED=.?(true|1)|REAL_ORDER_ENABLED=.?(true|1)' \
+            market-prediction-lab/src/paper-forward-schedule-runtime-v1.js \
+            market-prediction-lab/scripts/run-paper-forward-schedule.js \
+            ops/install-paper-forward-schedule.sh \
+            ops/disable-paper-forward-schedule.sh
+
+      - name: Verify Production approval race guards
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          workflow=.github/workflows/paper-forward-schedule-activation.yml
+          grep -F 'Revalidate current main after Production environment approval' "$workflow" >/dev/null
+          grep -F 'Activation target became stale while awaiting Production approval' "$workflow" >/dev/null
+          grep -F 'Revalidate current main before schedule installation' "$workflow" >/dev/null
+          grep -F 'Activation target became stale during Production deployment; refusing schedule install' "$workflow" >/dev/null
+          test "$(grep -Fc 'main.data.commit.sha !== target' "$workflow")" -ge 3
+          post_approval_line="$(grep -nF 'Revalidate current main after Production environment approval' "$workflow" | head -1 | cut -d: -f1)"
+          deploy_line="$(grep -nF 'Deploy exact approved revision with canonical canary and rollback safeguards' "$workflow" | head -1 | cut -d: -f1)"
+          pre_install_line="$(grep -nF 'Revalidate current main before schedule installation' "$workflow" | head -1 | cut -d: -f1)"
+          install_line="$(grep -nF 'Install fail-closed Paper Forward schedule without immediate manual cycle' "$workflow" | head -1 | cut -d: -f1)"
+          test "$post_approval_line" -lt "$deploy_line"
+          test "$deploy_line" -lt "$pre_install_line"
+          test "$pre_install_line" -lt "$install_line"
+          grep -F 'Collect sanitized cron failure diagnostics before disable' "$workflow" >/dev/null
+          grep -F 'paper-forward-sanitized-cron-failure-v1' "$workflow" >/dev/null
+          diagnostics_line="$(grep -nF 'Collect sanitized cron failure diagnostics before disable' "$workflow" | head -1 | cut -d: -f1)"
+          disable_line="$(grep -nF 'Disable schedule automatically if activation validation fails' "$workflow" | head -1 | cut -d: -f1)"
+          test "$diagnostics_line" -lt "$disable_line"
+
+      - name: Verify stale schedule emergency disable contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          workflow=.github/workflows/paper-forward-schedule-disable.yml
+          test -f "$workflow"
+          grep -F "startsWith(github.event.comment.body, '/disable-paper-forward-schedule ')" "$workflow" >/dev/null
+          grep -F "environment: production" "$workflow" >/dev/null
+          grep -F "target === currentMain" "$workflow" >/dev/null
+          test "$(grep -Fc 'compareCommitsWithBasehead' "$workflow")" -ge 2
+          grep -F "comparison.data.behind_by !== 0" "$workflow" >/dev/null
+          grep -F "Revalidate stale target ancestry after Production environment approval" "$workflow" >/dev/null
+          grep -F "Refusing emergency disable because stale target is not an ancestor of current main after Production approval" "$workflow" >/dev/null
+          grep -F "Post-approval stale ancestry guard accepted" "$workflow" >/dev/null
+          ! grep -F "Current main moved again before emergency disable" "$workflow" >/dev/null
+          ! grep -F "EXPECTED_MAIN_SHA" "$workflow" >/dev/null
+          grep -F '[[ "$DEPLOYED_SHA" == "$TARGET_SHA" ]]' "$workflow" >/dev/null
+          grep -F '< ops/disable-paper-forward-schedule.sh' "$workflow" >/dev/null
+          grep -F "cronEntryCountAfter: Number(cronCountRaw)" "$workflow" >/dev/null
+          grep -F "orderAuthorityOff: disabled.orderAuthority === false" "$workflow" >/dev/null
+
+      - name: Final exact HEAD and clean workspace
+        run: |
+          set -Eeuo pipefail
+          test -z "$(git status --porcelain)"
