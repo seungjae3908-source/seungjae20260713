@@ -1,0 +1,69 @@
+name: Signal Intelligence V3 KR First Batch Diagnostic
+
+on:
+  pull_request:
+    paths:
+      - 'signal-intelligence-v3/scripts/diagnose-kr-first-batch.ts'
+      - 'api-server/src/providers/yahoo.ts'
+      - 'api-server/src/services/scanner-universe.service.ts'
+      - '.github/workflows/signal-intelligence-v3-kr-first-batch-diagnostic.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: signal-intelligence-v3-kr-first-batch-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Bundle diagnostic
+        run: |
+          mkdir -p api-server/.signal-intelligence "$RUNNER_TEMP/kr-first-batch"
+          BANNER='import { createRequire as __createRequire } from "node:module"; const require = __createRequire(import.meta.url);'
+          pnpm --dir api-server exec esbuild ../signal-intelligence-v3/scripts/diagnose-kr-first-batch.ts \
+            --bundle --platform=node --format=esm --target=node20 \
+            --banner:js="$BANNER" \
+            --outfile=./.signal-intelligence/diagnose-kr-first-batch.mjs
+          node --check api-server/.signal-intelligence/diagnose-kr-first-batch.mjs
+      - name: Probe actual KRX rolling first batch
+        working-directory: api-server
+        run: node .signal-intelligence/diagnose-kr-first-batch.mjs "$RUNNER_TEMP/kr-first-batch/diagnostic.json"
+      - name: Verify safety and shape
+        run: |
+          node - <<'NODE' "$RUNNER_TEMP/kr-first-batch/diagnostic.json"
+          const fs = require('node:fs');
+          const p = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (p.publicOnly !== true || p.executionAuthority !== 'NONE' || p.privateApiAllowed !== false || p.realOrderAllowed !== false) process.exit(1);
+          if (!Array.isArray(p.rows) || p.rows.length !== 20) process.exit(1);
+          NODE
+      - name: Upload KR first-batch evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-v3-kr-first-batch-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/kr-first-batch/diagnostic.json
+          retention-days: 30
+          if-no-files-found: warn
