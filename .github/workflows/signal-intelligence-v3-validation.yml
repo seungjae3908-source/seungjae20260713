@@ -118,7 +118,7 @@ jobs:
             --format=esm \
             --target=node20 \
             --packages=external \
-            --outfile=./api-server/.signal-intelligence/public-cycle.mjs
+            --outfile=./.signal-intelligence/public-cycle.mjs
           node --check api-server/.signal-intelligence/public-cycle.mjs
       - name: Assert producer has no private/order imports
         run: |
