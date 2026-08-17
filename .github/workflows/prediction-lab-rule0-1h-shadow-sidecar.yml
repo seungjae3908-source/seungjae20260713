@@ -37,8 +37,6 @@ env:
   WORKFLOW_FILE: prediction-lab-rule0-1h-shadow-sidecar.yml
   CHAIN_CONTRACT: rule0-1h-artifact-chain-v1
   CANONICAL_OI_PARITY_BLOB: 201e70e53af2e150eda600377e8ef7d287c4ea23
-  LEGACY_BOOTSTRAP_RESEARCH_SHA: ee8a676724fbd59d3fe141520936f18f9596cdf3
-  LEGACY_BOOTSTRAP_RESEARCH_TREE_SHA: dbcc831b9731c3a8ecccee50907408f7cb43953c
 
 jobs:
   forward-shadow-sidecar:
@@ -135,9 +133,27 @@ jobs:
           summary="$(find "$RUNNER_TEMP/predecessor" -name summary.json -type f | head -n 1)"
           manifest="$(find "$RUNNER_TEMP/predecessor" -name manifest.json -type f | head -n 1)"
           test -n "$state" && test -n "$summary" && test -n "$manifest"
+
+          legacy_predecessor_research_tree_sha=""
+          predecessor_research_tree_sha="$(node -e "const fs=require('fs'); const m=JSON.parse(fs.readFileSync(process.argv[1],'utf8')); process.stdout.write(m.researchTreeGitSha || '')" "$manifest")"
+          if [ -z "$predecessor_research_tree_sha" ]; then
+            predecessor_research_sha="$(node -e "const fs=require('fs'); const m=JSON.parse(fs.readFileSync(process.argv[1],'utf8')); process.stdout.write(m.researchCodeSha || '')" "$manifest")"
+            if ! [[ "$predecessor_research_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              echo "legacy predecessor researchCodeSha is missing or invalid" >&2
+              exit 1
+            fi
+            root_tree_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/commits/$predecessor_research_sha" --jq '.tree.sha')"
+            legacy_predecessor_research_tree_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/trees/$root_tree_sha" --jq '.tree[] | select(.path == "market-prediction-lab" and .type == "tree") | .sha' | head -n 1)"
+            if ! [[ "$legacy_predecessor_research_tree_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "legacy predecessor market-prediction-lab tree could not be resolved" >&2
+              exit 1
+            fi
+          fi
+
           CURRENT_SIDECAR_SHA="$(sha256sum "$LAB_DIR/scripts/run-rule-model-1h-shadow-sidecar.js" | awk '{print $1}')" \
           CURRENT_MODEL_SHA="$(sha256sum "$LAB_DIR/docs/rule-model-1h-shadow-model.json" | awk '{print $1}')" \
           CURRENT_CONTRACT_SHA="$(sha256sum "$LAB_DIR/docs/rule-model-1h-shadow-contract.json" | awk '{print $1}')" \
+          LEGACY_PREDECESSOR_RESEARCH_TREE_SHA="$legacy_predecessor_research_tree_sha" \
           PREDECESSOR_STATE="$state" PREDECESSOR_SUMMARY="$summary" PREDECESSOR_MANIFEST="$manifest" \
           node <<'NODE'
           const fs = require('fs');
@@ -151,16 +167,9 @@ jobs:
           if (manifest.frozenModelFileSha256 !== process.env.CURRENT_MODEL_SHA) throw new Error('frozen model changed; chain mixing forbidden');
           if (manifest.contractSha256 !== process.env.CURRENT_CONTRACT_SHA) throw new Error('forward gate contract changed; chain mixing forbidden');
           if (manifest.oiParityBlob !== process.env.CANONICAL_OI_PARITY_BLOB) throw new Error('OI parity provenance mismatch');
-          const predecessorResearchTreeSha = manifest.researchTreeGitSha ?? null;
-          if (predecessorResearchTreeSha) {
-            if (predecessorResearchTreeSha !== process.env.CURRENT_RESEARCH_TREE_SHA) {
-              throw new Error('market-prediction-lab research tree changed; chain mixing forbidden');
-            }
-          } else {
-            if (manifest.researchCodeSha !== process.env.LEGACY_BOOTSTRAP_RESEARCH_SHA
-                || process.env.CURRENT_RESEARCH_TREE_SHA !== process.env.LEGACY_BOOTSTRAP_RESEARCH_TREE_SHA) {
-              throw new Error('legacy predecessor lacks research tree identity; bootstrap refused');
-            }
+          const predecessorResearchTreeSha = manifest.researchTreeGitSha || process.env.LEGACY_PREDECESSOR_RESEARCH_TREE_SHA || null;
+          if (!predecessorResearchTreeSha || predecessorResearchTreeSha !== process.env.CURRENT_RESEARCH_TREE_SHA) {
+            throw new Error('market-prediction-lab research tree changed; chain mixing forbidden');
           }
           if (manifest.liveOrderAllowed !== false || manifest.privateAccountRequestAllowed !== false || manifest.branchWrite !== false) {
             throw new Error('predecessor safety contract violated');
