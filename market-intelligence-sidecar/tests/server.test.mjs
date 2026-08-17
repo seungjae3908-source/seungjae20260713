@@ -91,6 +91,61 @@ test('server exposes safe loopback health, contracts and evaluate endpoint', asy
   assert.equal(evaluated.result.portfolioSafety.policy.enforcement, 'OBSERVE_ONLY');
 });
 
+test('server keeps explicit null evidence missing instead of coercing it to zero', async (t) => {
+  const port = 18893;
+  const child = spawn(process.execPath, ['src/server.mjs'], {
+    cwd: new URL('..', import.meta.url),
+    env: {
+      ...process.env,
+      MARKET_INTELLIGENCE_HOST: '127.0.0.1',
+      MARKET_INTELLIGENCE_PORT: String(port),
+      MARKET_INTELLIGENCE_SERVICE_SHA: 'null-evidence-sha',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  t.after(() => child.kill('SIGTERM'));
+  await waitForLine(child, 'market_intelligence_started');
+
+  const response = await fetch(`http://127.0.0.1:${port}/v1/evaluate`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      market: 'CRYPTO_SPOT',
+      symbol: 'KRW-BTC',
+      now: Date.now(),
+      asOf: Date.now(),
+      orderBook: { bids: [[100, 5]], asks: [[100.1, 5]], ts: Date.now() },
+      trades: [{ side: 'buy', price: 100.05, size: 1, ts: Date.now() }],
+      validation: {
+        forwardSamples: 500,
+        profitFactor: 1.5,
+        expectedNetEdgeBps: 5,
+        maxDrawdownPct: null,
+        regimeCount: 3,
+      },
+      advancedGates: {
+        metaLabel: {
+          modelId: 'meta-v1',
+          takeProbability: null,
+          evaluationSamples: 500,
+          brierScore: 0.15,
+          calibrationError: 0.05,
+          evaluatedAt: Date.now(),
+        },
+      },
+      portfolioSafety: {
+        signal: { generatedAt: null, revalidatedAt: null },
+      },
+    }),
+  });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.result.autoTrading.evidenceReady, false);
+  assert.equal(body.result.advancedGates.metaLabel.status, 'NOT_AVAILABLE');
+  assert.equal(body.result.portfolioSafety.signalFreshness.status, 'NOT_AVAILABLE');
+  assert.equal(body.result.autoTrading.orderAllowed, false);
+});
+
 test('server starts when invoked through the production-style current symlink', async (t) => {
   const port = 18892;
   const sidecarRoot = fileURLToPath(new URL('..', import.meta.url));
