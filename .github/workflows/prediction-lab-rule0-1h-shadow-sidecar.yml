@@ -108,7 +108,7 @@ jobs:
           while IFS= read -r candidate_run_id; do
             [ -n "$candidate_run_id" ] || continue
             candidate_artifact_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$candidate_run_id/artifacts?per_page=100" \
-              --jq ".artifacts[] | select(.name == \"$ARTIFACT_NAME\" and .expired == false) | .id" | head -n 1)"
+              --jq "[.artifacts[] | select(.name == \"$ARTIFACT_NAME\" and .expired == false) | .id][0] // empty")"
             if [ -n "$candidate_artifact_id" ]; then
               found=true
               run_id="$candidate_run_id"
@@ -139,10 +139,10 @@ jobs:
             "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$PREDECESSOR_ARTIFACT_ID/zip" \
             -o "$zip"
           unzip -q "$zip" -d "$RUNNER_TEMP/predecessor"
-          state="$(find "$RUNNER_TEMP/predecessor" -name state.json -type f | head -n 1)"
-          summary="$(find "$RUNNER_TEMP/predecessor" -name summary.json -type f | head -n 1)"
-          manifest="$(find "$RUNNER_TEMP/predecessor" -name manifest.json -type f | head -n 1)"
-          dependencies="$(find "$RUNNER_TEMP/predecessor" -name execution-dependencies.json -type f | head -n 1)"
+          state="$(find "$RUNNER_TEMP/predecessor" -name state.json -type f -print -quit)"
+          summary="$(find "$RUNNER_TEMP/predecessor" -name summary.json -type f -print -quit)"
+          manifest="$(find "$RUNNER_TEMP/predecessor" -name manifest.json -type f -print -quit)"
+          dependencies="$(find "$RUNNER_TEMP/predecessor" -name execution-dependencies.json -type f -print -quit)"
           test -n "$state" && test -n "$summary" && test -n "$manifest" && test -n "$dependencies"
           CURRENT_SIDECAR_SHA="$(sha256sum "$LAB_DIR/scripts/run-rule-model-1h-shadow-sidecar.js" | awk '{print $1}')" \
           CURRENT_MODEL_SHA="$(sha256sum "$LAB_DIR/docs/rule-model-1h-shadow-model.json" | awk '{print $1}')" \
