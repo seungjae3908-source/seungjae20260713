@@ -5,10 +5,26 @@ import type { AddressInfo } from 'node:net';
 import router, { setTradeAutomationRepositoryFactoryForTests } from './trade-automation';
 import type { AuthenticatedRequest } from '../middleware/auth';
 import { InMemoryTradingRepository } from '../services/trade-automation.repository';
+import { marketIntelligenceNotAvailable, tradingMarket } from '../services/market-intelligence-client.service';
+import {
+  marketIntelligenceSymbolForTradingPlan,
+  setTradingPlanMarketIntelligenceRunnerForTests,
+} from '../services/trade-market-intelligence.service';
+import type { TradingPlanInput } from '../services/trade-automation.types';
 
 const USER = '11111111-1111-1111-1111-111111111111';
 const repository = new InMemoryTradingRepository();
 const MASTER_KEY = Buffer.alloc(32, 9).toString('base64');
+
+async function unavailableMarketIntelligence(
+  input: Pick<TradingPlanInput, 'exchange' | 'market' | 'symbol'>,
+) {
+  return marketIntelligenceNotAvailable(
+    tradingMarket(input),
+    marketIntelligenceSymbolForTradingPlan(input),
+    'TEST_MARKET_INTELLIGENCE_UNAVAILABLE',
+  );
+}
 
 async function startServer(authenticated = true, role: 'regular' | 'admin' = 'regular') {
   const app = express();
@@ -34,11 +50,13 @@ async function close(server: import('node:http').Server) {
 
 test.beforeEach(async () => {
   setTradeAutomationRepositoryFactoryForTests(() => repository);
+  setTradingPlanMarketIntelligenceRunnerForTests(unavailableMarketIntelligence);
   process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
   await repository.setGlobalEmergencyStop(false, USER);
 });
 test.after(() => {
   setTradeAutomationRepositoryFactoryForTests(null);
+  setTradingPlanMarketIntelligenceRunnerForTests(null);
   delete process.env.TRADING_CREDENTIAL_MASTER_KEY;
 });
 
