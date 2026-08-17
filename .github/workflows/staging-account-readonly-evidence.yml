@@ -32,7 +32,6 @@ jobs:
       STAGING_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
       STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
       STAGING_SUPABASE_SECRET_KEY: ${{ secrets.STAGING_SUPABASE_SECRET_KEY }}
-      STAGING_TRADING_CREDENTIAL_MASTER_KEY: ${{ secrets.STAGING_TRADING_CREDENTIAL_MASTER_KEY }}
       STAGING_UPBIT_ACCESS_KEY: ${{ secrets.STAGING_UPBIT_ACCESS_KEY }}
       STAGING_UPBIT_SECRET_KEY: ${{ secrets.STAGING_UPBIT_SECRET_KEY }}
       STAGING_BITGET_API_KEY: ${{ secrets.STAGING_BITGET_API_KEY }}
@@ -72,7 +71,9 @@ jobs:
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha=${match[1]}\n`);
           NODE
 
-      - name: Require exact current main and required secret names
+      - name: Require exact current main and provider read-only secrets
+        id: prerequisites
+        continue-on-error: true
         env:
           TARGET_SHA: ${{ steps.target.outputs.sha }}
         run: |
@@ -92,7 +93,6 @@ jobs:
             'STAGING_SUPABASE_URL',
             'STAGING_SUPABASE_ANON_KEY',
             'STAGING_SUPABASE_SECRET_KEY',
-            'STAGING_TRADING_CREDENTIAL_MASTER_KEY',
             'STAGING_UPBIT_ACCESS_KEY',
             'STAGING_UPBIT_SECRET_KEY',
             'STAGING_BITGET_API_KEY',
@@ -104,17 +104,30 @@ jobs:
             console.error(`Missing staging Environment secret(s): ${missing.join(', ')}`);
             process.exit(1);
           }
-          const key = Buffer.from(String(process.env.STAGING_TRADING_CREDENTIAL_MASTER_KEY).trim(), 'base64');
-          if (key.length !== 32) {
-            console.error('STAGING_TRADING_CREDENTIAL_MASTER_KEY must decode to exactly 32 bytes.');
-            process.exit(1);
-          }
           NODE
 
+      - name: Generate ephemeral canary vault key
+        id: vault_key
+        if: steps.prerequisites.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          key="$(openssl rand -base64 32 | tr -d '\n')"
+          [[ "$(printf '%s' "$key" | base64 -d | wc -c | tr -d ' ')" == '32' ]]
+          printf '::add-mask::%s\n' "$key"
+          printf 'STAGING_TRADING_CREDENTIAL_MASTER_KEY=%s\n' "$key" >> "$GITHUB_ENV"
+
       - name: Install repository dependencies
+        id: dependencies
+        if: steps.prerequisites.outcome == 'success' && steps.vault_key.outcome == 'success'
+        continue-on-error: true
         run: pnpm install --frozen-lockfile
 
       - name: Configure isolated staging SSH
+        id: ssh_setup
+        if: steps.dependencies.outcome == 'success'
+        continue-on-error: true
         run: |
           set -Eeuo pipefail
           umask 077
@@ -127,6 +140,9 @@ jobs:
           fi
 
       - name: Require currently deployed standard Staging exact SHA
+        id: staging_identity
+        if: steps.ssh_setup.outcome == 'success'
+        continue-on-error: true
         env:
           TARGET_SHA: ${{ steps.target.outputs.sha }}
         run: |
@@ -146,6 +162,9 @@ jobs:
               });'
 
       - name: Start bounded localhost-only account canary
+        id: canary
+        if: steps.staging_identity.outcome == 'success'
+        continue-on-error: true
         env:
           TARGET_SHA: ${{ steps.target.outputs.sha }}
           REMOTE_SECRET_FILE: /tmp/seungjae-account-readonly-${{ github.run_id }}-${{ github.run_attempt }}.env
@@ -220,6 +239,9 @@ jobs:
           REMOTE
 
       - name: Open localhost SSH tunnel to isolated account canary
+        id: tunnel
+        if: steps.canary.outcome == 'success'
+        continue-on-error: true
         env:
           TARGET_SHA: ${{ steps.target.outputs.sha }}
         run: |
@@ -240,6 +262,7 @@ jobs:
 
       - name: Run real Upbit and Bitget read-only account evidence
         id: account_evidence
+        if: steps.tunnel.outcome == 'success'
         continue-on-error: true
         env:
           CI: 'true'
@@ -261,7 +284,9 @@ jobs:
             e2e/staging-account-readonly-runtime.spec.ts
 
       - name: Sanitize and prove no account secret entered artifacts
-        if: always()
+        id: sanitize
+        if: always() && steps.account_evidence.outcome != 'skipped'
+        continue-on-error: true
         run: |
           set -Eeuo pipefail
           if [[ -d "$STAGING_ARTIFACT_DIR" ]]; then
@@ -300,7 +325,9 @@ jobs:
           fi
 
       - name: Upload secret-free immutable account evidence
-        if: always()
+        id: upload
+        if: always() && steps.account_evidence.outcome != 'skipped' && steps.sanitize.outcome == 'success'
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: staging-account-readonly-${{ steps.target.outputs.sha }}
@@ -309,7 +336,13 @@ jobs:
           retention-days: 30
 
       - name: Stop tunnel and bounded canary, then prove standard Staging unchanged
-        if: always()
+        id: cleanup
+        if: >-
+          always() &&
+          steps.ssh_setup.outcome == 'success' &&
+          steps.staging_identity.outcome == 'success' &&
+          steps.canary.outcome != 'skipped'
+        continue-on-error: true
         env:
           TARGET_SHA: ${{ steps.target.outputs.sha }}
           REMOTE_SECRET_FILE: /tmp/seungjae-account-readonly-${{ github.run_id }}-${{ github.run_attempt }}.env
@@ -343,13 +376,38 @@ jobs:
       - name: Enforce account evidence verdict
         if: always()
         env:
-          EVIDENCE_OUTCOME: ${{ steps.account_evidence.outcome }}
+          PREREQUISITES: ${{ steps.prerequisites.outcome }}
+          VAULT_KEY: ${{ steps.vault_key.outcome }}
+          DEPENDENCIES: ${{ steps.dependencies.outcome }}
+          SSH_SETUP: ${{ steps.ssh_setup.outcome }}
+          STAGING_IDENTITY: ${{ steps.staging_identity.outcome }}
+          CANARY: ${{ steps.canary.outcome }}
+          TUNNEL: ${{ steps.tunnel.outcome }}
+          EVIDENCE: ${{ steps.account_evidence.outcome }}
+          SANITIZE: ${{ steps.sanitize.outcome }}
+          UPLOAD: ${{ steps.upload.outcome }}
+          CLEANUP: ${{ steps.cleanup.outcome }}
         run: |
           set -Eeuo pipefail
-          [[ "$EVIDENCE_OUTCOME" == success ]] || {
-            echo "Account read-only runtime evidence failed: $EVIDENCE_OUTCOME" >&2
-            exit 1
+          require_success() {
+            local name="$1"
+            local value="$2"
+            if [[ "$value" != success ]]; then
+              echo "Account read-only evidence stopped at ${name}: ${value:-unknown}" >&2
+              exit 1
+            fi
           }
+          require_success prerequisites "$PREREQUISITES"
+          require_success ephemeral-vault-key "$VAULT_KEY"
+          require_success dependencies "$DEPENDENCIES"
+          require_success ssh-setup "$SSH_SETUP"
+          require_success staging-identity "$STAGING_IDENTITY"
+          require_success canary "$CANARY"
+          require_success tunnel "$TUNNEL"
+          require_success account-evidence "$EVIDENCE"
+          require_success artifact-sanitization "$SANITIZE"
+          require_success artifact-upload "$UPLOAD"
+          require_success cleanup "$CLEANUP"
 
       - name: Write account evidence summary
         if: success()
@@ -368,4 +426,5 @@ jobs:
             echo '- Order/cancel/amend/transfer/withdrawal requests: `0`'
             echo '- Credentials returned or recorded in artifacts: `false`'
             echo '- Ephemeral credential rows remaining: `0`'
+            echo '- Vault encryption key source: `ephemeral per-run`'
           } >> "$GITHUB_STEP_SUMMARY"
