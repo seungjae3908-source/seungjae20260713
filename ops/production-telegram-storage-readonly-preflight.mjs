@@ -1,10 +1,20 @@
-import { readFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
-import process from 'node:process';
 import {
-  ProductionDatabaseResolutionError,
-  resolveProductionPostgresConnection,
-} from './production-postgres-connection-resolver.mjs';
+  lstatSync,
+  readFileSync,
+  realpathSync,
+} from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import path from 'node:path';
+import process from 'node:process';
+
+const PRODUCTION_PROJECT_REF = 'bawcbkoyovbeajkrnduq';
+const PRODUCTION_ENV_ALLOWLIST = Object.freeze([
+  '/opt/stock-app/.env',
+  '/opt/stock-app/.env.production',
+  '/opt/stock-app/api-server/.env',
+  '/opt/stock-app/api-server/.env.production',
+]);
+const POSTGRES_URI_PATTERN = /^postgres(?:ql)?:\/\//i;
 
 const TOP_LEVEL_KEYS = new Set([
   'status',
@@ -206,6 +216,75 @@ function blocked(classification, overrides = {}) {
   process.exit(0);
 }
 
+function parseDotenvValue(raw) {
+  let value = String(raw ?? '').trim();
+  if (!value) return '';
+  const quote = value[0];
+  if (quote === "'" || quote === '"') {
+    if (value.length < 2 || value.at(-1) !== quote) return '';
+    value = value.slice(1, -1);
+    if (quote === '"') value = value.replace(/\\([\\"$`])/g, '$1');
+    return value;
+  }
+  const inlineComment = value.search(/\s+#/);
+  if (inlineComment >= 0) value = value.slice(0, inlineComment).trimEnd();
+  return value;
+}
+
+function readAllowedEnvValues(filePath) {
+  let stat;
+  try {
+    stat = lstatSync(filePath);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return [];
+    blocked('production_database_env_file_unreadable', {
+      pm2_online: true,
+      production_project_match: true,
+    });
+  }
+  if (stat.isSymbolicLink() || !stat.isFile() || (stat.mode & 0o022) !== 0) {
+    blocked('production_database_env_file_unsafe', {
+      pm2_online: true,
+      production_project_match: true,
+    });
+  }
+  let real;
+  try {
+    real = realpathSync(filePath);
+  } catch {
+    blocked('production_database_env_file_unreadable', {
+      pm2_online: true,
+      production_project_match: true,
+    });
+  }
+  if (real !== path.resolve(filePath)) {
+    blocked('production_database_env_file_unsafe', {
+      pm2_online: true,
+      production_project_match: true,
+    });
+  }
+
+  let source;
+  try {
+    source = readFileSync(filePath, 'utf8').replace(/^\uFEFF/, '');
+  } catch {
+    blocked('production_database_env_file_unreadable', {
+      pm2_online: true,
+      production_project_match: true,
+    });
+  }
+  const values = [];
+  for (const sourceLine of source.split(/\r?\n/)) {
+    const line = sourceLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    const match = /^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*(.*)$/.exec(line);
+    if (!match) continue;
+    const value = parseDotenvValue(match[1]);
+    if (POSTGRES_URI_PATTERN.test(value)) values.push(value);
+  }
+  return values;
+}
+
 if (!/^[0-9a-f]{40}$/.test(expectedProductionSha)) {
   blocked('invalid_production_sha');
 }
@@ -227,21 +306,77 @@ if (String(runtime.DEPLOY_SHA ?? '').trim().toLowerCase() !== expectedProduction
   blocked('production_process_sha_mismatch', { pm2_online: true });
 }
 
-let resolution;
+let projectRef = '';
 try {
-  resolution = resolveProductionPostgresConnection(runtime);
-} catch (error) {
-  const resolverError = error instanceof ProductionDatabaseResolutionError ? error : null;
-  const classification = resolverError?.classification ?? 'production_database_resolution_failed';
-  const connectionCount = resolverError?.connectionCount ?? 0;
-  blocked(classification, {
+  const parsed = new URL(String(runtime.SUPABASE_URL ?? '').trim());
+  const match = /^([a-z0-9]+)\.supabase\.co$/i.exec(parsed.hostname);
+  const valid = parsed.protocol === 'https:'
+    && !parsed.username
+    && !parsed.password
+    && !parsed.port
+    && ['', '/'].includes(parsed.pathname)
+    && !parsed.search
+    && !parsed.hash
+    && match?.[1]?.toLowerCase() === PRODUCTION_PROJECT_REF;
+  if (!valid) throw new Error('project mismatch');
+  projectRef = match[1].toLowerCase();
+} catch {
+  blocked('production_project_mismatch', { pm2_online: true });
+}
+
+const postgresValues = Object.values(runtime)
+  .filter((value) => typeof value === 'string')
+  .map((value) => value.trim())
+  .filter((value) => POSTGRES_URI_PATTERN.test(value));
+for (const filePath of PRODUCTION_ENV_ALLOWLIST) {
+  postgresValues.push(...readAllowedEnvValues(filePath));
+}
+const postgresUris = [...new Set(postgresValues)];
+
+if (postgresUris.length === 0) {
+  blocked('production_database_connection_missing', {
     pm2_online: true,
-    production_project_match: classification !== 'production_project_mismatch',
-    postgres_connection_count: connectionCount > 1 ? 2 : connectionCount,
+    production_project_match: true,
+    postgres_connection_count: 0,
+  });
+}
+if (postgresUris.length !== 1) {
+  blocked('production_database_connection_ambiguous', {
+    pm2_online: true,
+    production_project_match: true,
+    postgres_connection_count: 2,
   });
 }
 
-const database = resolution.database;
+let database;
+try {
+  const parsed = new URL(postgresUris[0]);
+  const hostname = parsed.hostname.toLowerCase();
+  const username = decodeURIComponent(parsed.username);
+  const usernameLower = username.toLowerCase();
+  const direct = hostname === `db.${projectRef}.supabase.co` && usernameLower === 'postgres';
+  const pooler = /(^|\.)pooler\.supabase\.com$/i.test(hostname)
+    && usernameLower === `postgres.${projectRef}`;
+  const databaseName = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
+  const port = parsed.port || '5432';
+  if ((!direct && !pooler) || !parsed.password || databaseName !== 'postgres' || port !== '5432') {
+    throw new Error('invalid database target');
+  }
+  database = {
+    hostname,
+    port,
+    username,
+    password: decodeURIComponent(parsed.password),
+    database: databaseName,
+    endpointType: direct ? 'direct' : 'pooler',
+  };
+} catch {
+  blocked('production_database_project_mismatch', {
+    pm2_online: true,
+    production_project_match: true,
+    postgres_connection_count: 1,
+  });
+}
 
 const SQL = String.raw`
 \set ON_ERROR_STOP on
@@ -396,7 +531,7 @@ const probe = spawnSync('psql', [
 const connectionEvidence = {
   pm2_online: true,
   production_project_match: true,
-  postgres_connection_count: resolution.connectionCount,
+  postgres_connection_count: 1,
   postgres_endpoint_type: database.endpointType,
   postgres_port: database.port,
   existing_safe_db_connection_available: true,
