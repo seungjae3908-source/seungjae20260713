@@ -37,6 +37,7 @@ jobs:
           awk '/^  activate:/{emit=1} emit{print}' "$workflow" > "$active_contract"
           test -s "$active_contract"
           grep -F "startsWith(github.event.comment.body, '/activate-paper-forward-no-deploy ')" "$workflow" >/dev/null
+          grep -F "PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED=true" "$active_contract" >/dev/null
           grep -F 'productionAppDeployPerformed = false' "$active_contract" >/dev/null
           grep -F 'productionAppMutationAllowed = false' "$active_contract" >/dev/null
           grep -F 'productionAppShaBefore' "$active_contract" >/dev/null
@@ -45,6 +46,7 @@ jobs:
           grep -F "REAL_ORDER_ENABLED='false'" "$install" >/dev/null
           grep -F "PRIVATE_TRADING_API_ALLOWED='false'" "$install" >/dev/null
           grep -F "PRIVATE_ACCOUNT_ACCESS='false'" "$install" >/dev/null
+          grep -F "PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED='\$OUTCOME_ACCUMULATION_ENABLED'" "$install" >/dev/null
           ! grep -F 'deploy-production.sh' "$active_contract" >/dev/null
           ! grep -E 'pm2 (start|restart|reload|delete|stop)|systemctl .*caddy|caddy reload|supabase db|psql .*-(c|f)' "$active_contract" >/dev/null
 
@@ -268,7 +270,7 @@ jobs:
           git -C "$SOURCE_DIR" checkout --quiet --detach "$TARGET_SHA"
           mkdir -p "$SOURCE_DIR/.deploy"
           printf '%s\n' "$TARGET_SHA" > "$SOURCE_DIR/.deploy/current-sha"
-          LIVE_DIR="$SOURCE_DIR" PAPER_FORWARD_STATE_ROOT="$STATE_ROOT" \
+          LIVE_DIR="$SOURCE_DIR" PAPER_FORWARD_STATE_ROOT="$STATE_ROOT" PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED=true \
             "$SOURCE_DIR/ops/install-paper-forward-schedule.sh" "$TARGET_SHA" >/dev/null
           PRODUCTION_APP_SHA="$PRODUCTION_APP_SHA" TARGET_SHA="$TARGET_SHA" node - "$STATE_ROOT/activation.json" <<'NODE'
           const fs = require('node:fs');
@@ -276,13 +278,16 @@ jobs:
           const value = JSON.parse(fs.readFileSync(path, 'utf8'));
           const paperRuntimeSourceSha = value.deployedSha;
           delete value.deployedSha;
-          value.schemaVersion = 'paper-forward-schedule-no-deploy-activation-v1';
+          value.schemaVersion = 'paper-forward-schedule-no-deploy-activation-v2';
           value.sourceMode = 'ISOLATED_GIT_EXACT_SHA';
           value.paperRuntimeSourceSha = paperRuntimeSourceSha;
           value.productionAppShaBefore = process.env.PRODUCTION_APP_SHA;
           value.productionAppDeployPerformed = false;
           value.productionAppMutationAllowed = false;
-          if (paperRuntimeSourceSha !== process.env.TARGET_SHA) process.exit(1);
+          if (paperRuntimeSourceSha !== process.env.TARGET_SHA
+            || value.paperTradeOutcomeAccumulationEnabled !== true
+            || value.simulatedFinancialAdaptersEnabled !== true
+            || value.externalFinancialMutationAllowed !== false) process.exit(1);
           const temp = `${path}.tmp-${process.pid}`;
           fs.writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
           fs.renameSync(temp, path);
@@ -298,6 +303,9 @@ jobs:
             || value.paperRuntimeSourceSha !== process.env.TARGET_SHA
             || value.productionAppDeployPerformed !== false
             || value.productionAppMutationAllowed !== false
+            || value.paperTradeOutcomeAccumulationEnabled !== true
+            || value.simulatedFinancialAdaptersEnabled !== true
+            || value.externalFinancialMutationAllowed !== false
             || value.scheduleActive !== true
             || value.liveTrading !== false
             || value.privateAccountAccess !== false
@@ -355,12 +363,13 @@ jobs:
             completed: invocation.status === 'COMPLETED',
             oneMutation: invocation.mutationCount === 1,
             accumulating: invocation.publicForwardEvidenceAccumulating === true,
-            tradeOutcomeNotClaimed: invocation.paperTradeOutcomeAccumulating === false,
+            outcomeModeEnabled: invocation.paperTradeOutcomeAccumulationEnabled === true,
+            simulatedAdaptersEnabled: status.simulatedFinancialAdaptersEnabled === true,
+            externalFinancialMutationOff: status.externalFinancialMutationAllowed === false,
             fourReadyProviders: Array.isArray(invocation.providerLanes) && invocation.providerLanes.length === 4 && invocation.providerLanes.every((lane) => lane.status === 'READY'),
             scheduleActive: status.scheduleActive === true,
             stateCyclePersisted: Array.isArray(state.cycles) && state.cycles.length >= 1,
-            noPositions: Array.isArray(state.positions) && state.positions.length === 0,
-            noSettlements: Array.isArray(state.settlements) && state.settlements.length === 0,
+            stateArraysValid: Array.isArray(state.positions) && Array.isArray(state.settlements),
             noPrivate: invocation.privateRequestCount === 0,
             noFinancialMutation: invocation.financialMutationCount === 0,
             noOrders: invocation.orderCount === 0,
@@ -374,9 +383,18 @@ jobs:
             process.exit(77);
           }
           process.stdout.write(`${JSON.stringify({
-            schemaVersion: 'paper-forward-natural-cycle-no-deploy-evidence-v1',
+            schemaVersion: 'paper-forward-natural-cycle-no-deploy-evidence-v2',
             status: 'passed', targetSha, productionAppSha, checks,
-            invocation: { cycleId: invocation.cycleId, invokedAtMs: invocation.invokedAtMs, completedAtMs: invocation.completedAtMs, status: invocation.status, mutationCount: invocation.mutationCount, providerLanes: invocation.providerLanes },
+            invocation: {
+              cycleId: invocation.cycleId,
+              invokedAtMs: invocation.invokedAtMs,
+              completedAtMs: invocation.completedAtMs,
+              status: invocation.status,
+              mutationCount: invocation.mutationCount,
+              providerLanes: invocation.providerLanes,
+              paperTradeOutcomeAccumulationEnabled: invocation.paperTradeOutcomeAccumulationEnabled === true,
+              paperTradeOutcomeAccumulating: invocation.paperTradeOutcomeAccumulating === true,
+            },
             state: { cycleCount: state.cycles.length, positionCount: state.positions.length, settlementCount: state.settlements.length },
             privateRequestCount: 0, financialMutationCount: 0, orderCount: 0, liveTrading: false,
           }, null, 2)}\n`);
@@ -427,11 +445,28 @@ jobs:
         env:
           TARGET_SHA: ${{ env.TARGET_SHA }}
           PRODUCTION_APP_SHA: ${{ steps.app_before.outputs.sha }}
+          EVIDENCE_FILE: ${{ env.EVIDENCE_DIR }}/natural-cycle.json
         with:
           script: |
+            const fs = require('node:fs');
+            const evidence = JSON.parse(fs.readFileSync(process.env.EVIDENCE_FILE, 'utf8'));
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: 23,
-              body: `[PAPER_FORWARD_NO_DEPLOY_ACTIVATED]\nTARGET_SHA=${process.env.TARGET_SHA}\nPRODUCTION_APP_SHA_UNCHANGED=${process.env.PRODUCTION_APP_SHA}\nPRODUCTION_APP_DEPLOY_PERFORMED=false\nFIRST_NATURAL_CRON_VERIFIED=true\nLIVE_TRADING=false\nPRIVATE_TRADING_API_ALLOWED=false\nREAL_ORDER_COUNT=0\nFINANCIAL_MUTATION_COUNT=0`,
+              body: [
+                '[PAPER_FORWARD_NO_DEPLOY_ACTIVATED]',
+                `TARGET_SHA=${process.env.TARGET_SHA}`,
+                `PRODUCTION_APP_SHA_UNCHANGED=${process.env.PRODUCTION_APP_SHA}`,
+                'PRODUCTION_APP_DEPLOY_PERFORMED=false',
+                'FIRST_NATURAL_CRON_VERIFIED=true',
+                'PAPER_TRADE_OUTCOME_ACCUMULATION_ENABLED=true',
+                `PAPER_TRADE_OUTCOME_ACCUMULATING=${evidence.invocation?.paperTradeOutcomeAccumulating === true}`,
+                `PAPER_POSITION_COUNT=${Number(evidence.state?.positionCount ?? 0)}`,
+                `PAPER_SETTLEMENT_COUNT=${Number(evidence.state?.settlementCount ?? 0)}`,
+                'LIVE_TRADING=false',
+                'PRIVATE_TRADING_API_ALLOWED=false',
+                'REAL_ORDER_COUNT=0',
+                'FINANCIAL_MUTATION_COUNT=0',
+              ].join('\n'),
             });

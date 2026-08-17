@@ -22,6 +22,7 @@ CRON_LOCK="$STATE_ROOT/cron.lock"
 TAG="# stock-app-paper-forward-v1"
 CRON_EXPRESSION="*/15 * * * *"
 CANONICAL_CYCLE_MS="14400000"
+OUTCOME_ACCUMULATION_ENABLED="${PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED:-false}"
 PREVIOUS_CRONTAB=""
 CRONTAB_MUTATED=0
 BACKUP_PATH=""
@@ -50,6 +51,7 @@ restore_on_error() {
 trap restore_on_error EXIT
 
 [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "exact lowercase 40-character SHA required" 2
+[[ "$OUTCOME_ACCUMULATION_ENABLED" == "true" || "$OUTCOME_ACCUMULATION_ENABLED" == "false" ]] || fail "PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED must be true or false" 2
 [[ -r "$DEPLOY_MARKER" ]] || fail "production deploy marker missing" 3
 DEPLOYED_SHA="$(tr -d '[:space:]' < "$DEPLOY_MARKER")"
 [[ "$DEPLOYED_SHA" == "$TARGET_SHA" ]] || fail "production SHA mismatch: $DEPLOYED_SHA" 4
@@ -170,6 +172,7 @@ exec /usr/bin/env -i \
   PAPER_FORWARD_ROOT='$RUNTIME_STATE_ROOT' \
   PAPER_FORWARD_RESEARCH_SHA='$TARGET_SHA' \
   PAPER_FORWARD_ACTIVATION_AT_MS='$ACTIVATION_AT_MS' \
+  PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED='$OUTCOME_ACCUMULATION_ENABLED' \
   LIVE_TRADING='false' \
   LIVE_TRADING_ENABLED='false' \
   REAL_ORDER_ENABLED='false' \
@@ -201,11 +204,12 @@ MATCH_COUNT="$(crontab -l | grep -Fxc "$CRON_LINE" || true)"
 
 RUNTIME_DIGEST="$(find "$RUNTIME_RELEASE" -type f -print0 | sort -z | xargs -0 -r sha256sum | sha256sum | awk '{print $1}')"
 CRON_HASH="$(printf '%s' "$CRON_LINE" | sha256sum | awk '{print $1}')"
-"$NODE_BIN" - "$STATE_ROOT/activation.json" "$TARGET_SHA" "$DEPLOYED_SHA" "$ACTIVATION_AT_MS" "$RUNTIME_DIGEST" "$CRON_HASH" "$BACKUP_PATH" "$IDENTITY_CUTOVER" "$ARCHIVED_RESEARCH_SHA" <<'NODE'
+"$NODE_BIN" - "$STATE_ROOT/activation.json" "$TARGET_SHA" "$DEPLOYED_SHA" "$ACTIVATION_AT_MS" "$RUNTIME_DIGEST" "$CRON_HASH" "$BACKUP_PATH" "$IDENTITY_CUTOVER" "$ARCHIVED_RESEARCH_SHA" "$OUTCOME_ACCUMULATION_ENABLED" <<'NODE'
 const fs = require('node:fs');
-const [path, targetSha, deployedSha, activationAtMs, runtimeDigest, cronHash, backupPath, identityCutoverRaw, archivedResearchShaRaw] = process.argv.slice(2);
+const [path, targetSha, deployedSha, activationAtMs, runtimeDigest, cronHash, backupPath, identityCutoverRaw, archivedResearchShaRaw, outcomeAccumulationRaw] = process.argv.slice(2);
+const outcomeAccumulationEnabled = outcomeAccumulationRaw === 'true';
 const value = {
-  schemaVersion: 'paper-forward-schedule-activation-v1',
+  schemaVersion: 'paper-forward-schedule-activation-v2',
   status: 'ACTIVE_WAITING_FOR_NATURAL_CYCLE',
   targetSha,
   deployedSha,
@@ -222,6 +226,9 @@ const value = {
   predecessorPerformanceMixed: false,
   scheduleActive: true,
   publicDataOnly: true,
+  paperTradeOutcomeAccumulationEnabled: outcomeAccumulationEnabled,
+  simulatedFinancialAdaptersEnabled: outcomeAccumulationEnabled,
+  externalFinancialMutationAllowed: false,
   liveTrading: false,
   privateAccountAccess: false,
   orderAuthority: false,
@@ -233,5 +240,5 @@ NODE
 
 CRONTAB_MUTATED=0
 trap - EXIT
-printf '{"status":"ACTIVE_WAITING_FOR_NATURAL_CYCLE","targetSha":"%s","activationAtMs":%s,"scheduleActive":true,"identityCutover":%s,"archivedResearchSha":"%s","predecessorStatePreserved":true,"predecessorPerformanceMixed":false,"pollCadence":"EVERY_15_MINUTES","canonicalCycleIntervalMs":%s,"privateRequestCount":0,"financialMutationCount":0,"liveTrading":false}\n' \
-  "$TARGET_SHA" "$ACTIVATION_AT_MS" "$IDENTITY_CUTOVER" "$ARCHIVED_RESEARCH_SHA" "$CANONICAL_CYCLE_MS"
+printf '{"status":"ACTIVE_WAITING_FOR_NATURAL_CYCLE","targetSha":"%s","activationAtMs":%s,"scheduleActive":true,"paperTradeOutcomeAccumulationEnabled":%s,"simulatedFinancialAdaptersEnabled":%s,"externalFinancialMutationAllowed":false,"identityCutover":%s,"archivedResearchSha":"%s","predecessorStatePreserved":true,"predecessorPerformanceMixed":false,"pollCadence":"EVERY_15_MINUTES","canonicalCycleIntervalMs":%s,"privateRequestCount":0,"financialMutationCount":0,"liveTrading":false}\n' \
+  "$TARGET_SHA" "$ACTIVATION_AT_MS" "$OUTCOME_ACCUMULATION_ENABLED" "$OUTCOME_ACCUMULATION_ENABLED" "$IDENTITY_CUTOVER" "$ARCHIVED_RESEARCH_SHA" "$CANONICAL_CYCLE_MS"
