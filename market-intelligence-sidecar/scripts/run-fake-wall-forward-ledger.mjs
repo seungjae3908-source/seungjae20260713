@@ -5,6 +5,7 @@ import {
   buildArtifactBundle,
   verifyPredecessorBundle,
 } from '../src/fake-wall-forward-ledger.mjs';
+import { buildFakeWallNaturalLedgerBatch } from '../src/fake-wall-forward-natural-input.mjs';
 
 function argsOf(argv) {
   const out = {};
@@ -29,8 +30,19 @@ const args = argsOf(process.argv.slice(2));
 const researchCodeSha = String(args['research-sha'] ?? '').toLowerCase();
 const outputDir = args['output-dir'];
 if (!outputDir) throw new Error('--output-dir required');
-const observations = readJson(args['observations-input'], []);
-const marks = readJson(args['marks-input'], []);
+if (args['observations-input'] && args['candidate-events-input']) {
+  throw new Error('AMBIGUOUS_FAKE_WALL_OBSERVATION_INPUT');
+}
+
+let observations = readJson(args['observations-input'], []);
+let marks = readJson(args['marks-input'], []);
+if (args['candidate-events-input']) {
+  const naturalEvents = readJson(args['candidate-events-input'], []);
+  const natural = buildFakeWallNaturalLedgerBatch(naturalEvents, { researchCodeSha });
+  observations = natural.observations;
+  marks = [...natural.marks, ...marks];
+}
+
 const previousState = readJson(args['state-input'], null);
 const previousManifest = readJson(args['manifest-input'], null);
 const previousSummary = readJson(args['summary-input'], null);
