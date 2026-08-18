@@ -32,7 +32,7 @@ function trackingRecord(overrides = {}) {
       action: "LONG",
       entryTime: ENTRY,
       entryPrice: 4000,
-      quantity: 1.2345,
+      quantity: 99,
       leverage: 1,
       source: "bitget-public-forward-paper",
     },
@@ -73,7 +73,27 @@ function shadowRoot(record = trackingRecord(), overrides = {}) {
 
 function readyContext() {
   return {
-    quantity: 1.23,
+    quantity: 0.07,
+    sizing: {
+      quantity: 0.07,
+      initialCapitalKrw: 1_000_000,
+      riskFraction: 0.01,
+      riskBudgetKrw: 10_000,
+      stopDistanceUsdt: 100,
+      entryNotionalUsdt: 280,
+      entryNotionalKrw: 378_000,
+      stopRiskKrw: 9_450,
+      krwPerUsdt: 1350,
+      leverage: 1,
+    },
+    fx: {
+      status: "READY",
+      krwPerUsdt: 1350,
+      asOfMs: NOW - 1000,
+      maxAgeMs: 900000,
+      source: "upbit-public-cross-krw-btc-usdt-btc",
+      markets: ["KRW-BTC", "USDT-BTC"],
+    },
     dataEvidence: {
       provider: "bitget",
       publicOnly: true,
@@ -131,10 +151,14 @@ test("fresh natural frozen ETH V6 tracking signal becomes one low-sample Paper c
     assert.equal(candidate.profitEvidence.profitabilityClaimAllowed, false);
     assert.ok(candidate.profitEvidence.expectedNetEdge > 0);
     assert.ok(candidate.profitEvidence.expectedNetReturn > 0);
-    assert.equal(candidate.order.quantity, 1.23);
+    assert.equal(candidate.order.quantity, 0.07);
     assert.equal(candidate.order.direction, "LONG");
     assert.equal(candidate.execution.executionPolicy.fillModel, "BAR_PROXY");
     assert.equal(candidate.bar.nextOpen, 4000);
+    assert.equal(candidate.riskEvidence.riskBudgetKrw, 10_000);
+    assert.equal(candidate.riskEvidence.estimatedStopRiskKrw, 9_450);
+    assert.equal(candidate.riskEvidence.estimatedEntryNotionalKrw, 378_000);
+    assert.equal(candidate.retainedForwardEvidence.krwPerUsdt, 1350);
     assert.equal(candidate.retainedForwardEvidence.observedAtMs, SHADOW_OBSERVED_AT);
     assert.equal(candidate.retainedForwardEvidence.orderSubmitted, false);
     assert.equal(candidate.retainedForwardEvidence.privateAccountRequested, false);
@@ -199,7 +223,7 @@ test("frozen candidate manifest mismatch fails closed", async () => {
   });
 });
 
-test("Bitget public contract metadata normalizes executable quantity and supplies futures risk evidence", async () => {
+test("Bitget public metadata plus public KRW/USDT FX size against the Paper one-percent risk budget instead of Shadow abstract quantity", async () => {
   const calls = [];
   const fakeClient = {
     async get(path) {
@@ -221,8 +245,19 @@ test("Bitget public contract metadata normalizes executable quantity and supplie
     record: trackingRecord(),
     nowMs: NOW,
     sourceObservedAtMs: SHADOW_OBSERVED_AT,
+    loadFx: async () => ({
+      status: "READY",
+      krwPerUsdt: 1350,
+      asOfMs: NOW - 1000,
+      maxAgeMs: 900000,
+      source: "upbit-public-cross-krw-btc-usdt-btc",
+      markets: ["KRW-BTC", "USDT-BTC"],
+    }),
   });
-  assert.equal(context.quantity, 1.23);
+  assert.equal(context.quantity, 0.07);
+  assert.equal(context.sizing.riskBudgetKrw, 10_000);
+  assert.equal(context.sizing.stopRiskKrw, 9_450);
+  assert.equal(context.sizing.entryNotionalKrw, 378_000);
   assert.equal(context.dataEvidence.tickSize, 0.01);
   assert.equal(context.dataEvidence.qtyStep, 0.01);
   assert.equal(context.dataEvidence.minQty, 0.01);
@@ -231,6 +266,7 @@ test("Bitget public contract metadata normalizes executable quantity and supplie
   assert.equal(context.dataEvidence.marginMode, "ISOLATED");
   assert.ok(context.dataEvidence.liquidationDistancePct > 99);
   assert.equal(context.dataEvidence.provider, "bitget");
+  assert.equal(context.dataEvidence.fxEvidence.krwPerUsdt, 1350);
   assert.equal(context.dataEvidence.retainedForwardObservedAtMs, SHADOW_OBSERVED_AT);
   assert.equal(new Set(calls).size, 5);
 });
