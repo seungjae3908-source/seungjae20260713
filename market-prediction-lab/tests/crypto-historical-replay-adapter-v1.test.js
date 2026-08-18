@@ -65,6 +65,10 @@ test("spot SWING connects point-in-time snapshot to #479 settlement with precisi
   assert.equal(result.settlementResult.settledSignalCount, 3);
   assert.equal(result.searchQualityMetrics.overall.precision, 1);
   assert.equal(result.searchQualityMetrics.overall.recall, 1);
+  assert.equal(result.sameVenuePublicMarketHistory, true);
+  assert.equal(result.publicMarketHistoryOnly, true);
+  assert.equal(result.executionEvidenceAvailable, false);
+  assert.equal(result.exactTargetVenueExecutionHistory, false);
   assert.equal(result.executionAuthority, "NONE");
   assert.equal(result.profitabilityClaimAllowed, false);
 });
@@ -89,7 +93,9 @@ test("futures cross-venue Binance Vision proxy can settle SHORT but is never exa
   });
   assert.equal(result.status, "READY");
   assert.equal(result.crossVenueProxyForExecution, true);
+  assert.equal(result.sameVenuePublicMarketHistory, false);
   assert.equal(result.exactTargetVenueExecutionHistory, false);
+  assert.equal(result.executionEvidenceAvailable, false);
   assert.equal(result.datasetEvidence.checksumVerified, true);
   assert.equal(result.searchQualityMetrics.overall.precision, 1);
   assert.equal(result.searchQualityMetrics.overall.recall, 1);
@@ -188,6 +194,9 @@ test("snapshot loader never exposes candles after historical asOf", async () => 
   assert.ok(snapshot.observations.every((row) => row.timestampMs <= asOfMs));
   assert.ok(snapshot.dataCutoffMs <= asOfMs);
   assert.equal(snapshot.syntheticHistoricalData, false);
+  assert.equal(adapter.datasetEvidence.sameVenuePublicMarketHistory, true);
+  assert.equal(adapter.datasetEvidence.executionEvidenceAvailable, false);
+  assert.equal(adapter.datasetEvidence.exactTargetVenueExecutionHistory, false);
 });
 
 test("existing Upbit public history result maps to canonical replay dataset without private authority", () => {
@@ -207,6 +216,12 @@ test("existing Upbit public history result maps to canonical replay dataset with
   assert.equal(mapped.sourceVenue, "UPBIT");
   assert.equal(mapped.targetVenue, "UPBIT");
   assert.equal(mapped.crossVenueProxyForExecution, false);
+
+  const adapter = createCryptoHistoricalReplayAdapter({ market: "CRYPTO_SPOT", datasets: [mapped] });
+  assert.equal(adapter.datasetEvidence.sameVenuePublicMarketHistory, true);
+  assert.equal(adapter.datasetEvidence.publicMarketHistoryOnly, true);
+  assert.equal(adapter.datasetEvidence.executionEvidenceAvailable, false);
+  assert.equal(adapter.datasetEvidence.exactTargetVenueExecutionHistory, false);
 });
 
 test("Binance Vision checksum must be proven before futures replay", async () => {
