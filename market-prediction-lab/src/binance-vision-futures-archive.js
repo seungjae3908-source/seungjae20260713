@@ -80,7 +80,7 @@ export function parseVisionKlines(text, symbol) {
   const parsed = rows(text);
   const data = headerLike(parsed[0]) ? parsed.slice(1) : parsed;
   return Object.freeze(data.map((row, index) => {
-    if (row.length < 6) throw new Error(`kline row ${index} has too few columns`);
+    if (row.length < 8) throw new Error(`kline row ${index} has too few columns`);
     const candle = {
       symbol,
       timestamp: normalizeTimestamp(row[0], `kline[${index}].open_time`),
@@ -89,9 +89,11 @@ export function parseVisionKlines(text, symbol) {
       low: finite(row[3], `kline[${index}].low`),
       close: finite(row[4], `kline[${index}].close`),
       volume: finite(row[5], `kline[${index}].volume`),
+      quoteVolume: finite(row[7], `kline[${index}].quote_asset_volume`),
     };
     if ([candle.open, candle.high, candle.low, candle.close].some((value) => value <= 0)
       || candle.volume < 0
+      || candle.quoteVolume < 0
       || candle.high < Math.max(candle.open, candle.close)
       || candle.low > Math.min(candle.open, candle.close)
       || candle.high < candle.low) throw new Error(`kline row ${index} has invalid OHLCV`);
@@ -214,7 +216,7 @@ async function collectMonths({ symbol, startTime, endTime, kind, fetchImpl, conc
     startTime,
     endTime,
     checksumVerified: true,
-    rows: Object.freeze(uniqueRows(flat, kind === "klines" ? ["open", "high", "low", "close", "volume"] : ["rate"])),
+    rows: Object.freeze(uniqueRows(flat, kind === "klines" ? ["open", "high", "low", "close", "volume", "quoteVolume"] : ["rate"])),
     manifests: Object.freeze(output.map(({ rows: ignored, ...manifest }) => Object.freeze(manifest))),
   });
 }
@@ -247,14 +249,14 @@ async function collectDailyKlineArchives({ symbol, startTime, endTime, fetchImpl
     startTime,
     endTime,
     checksumVerified: true,
-    rows: Object.freeze(uniqueRows(flat, ["open", "high", "low", "close", "volume"])),
+    rows: Object.freeze(uniqueRows(flat, ["open", "high", "low", "close", "volume", "quoteVolume"])),
     manifests: Object.freeze(output.map(({ rows: ignored, ...manifest }) => Object.freeze(manifest))),
   });
 }
 
 export async function collectVisionFuturesDailyKlines({ fetchImpl = globalThis.fetch, concurrency = 6, ...input }) {
   const result = await collectMonths({ ...input, kind: "klines", fetchImpl, concurrency });
-  return Object.freeze({ ...result, timeframe: "1d", candles: result.rows });
+  return Object.freeze({ ...result, timeframe: "1d", candles: result.rows, quoteTurnoverSource: "BINANCE_QUOTE_ASSET_VOLUME" });
 }
 
 export async function collectVisionFuturesFunding({ fetchImpl = globalThis.fetch, concurrency = 6, ...input }) {
@@ -264,5 +266,5 @@ export async function collectVisionFuturesFunding({ fetchImpl = globalThis.fetch
 
 export async function collectVisionFuturesDailyArchiveKlines({ fetchImpl = globalThis.fetch, concurrency = 6, ...input }) {
   const result = await collectDailyKlineArchives({ ...input, fetchImpl, concurrency });
-  return Object.freeze({ ...result, timeframe: "1d", candles: result.rows });
+  return Object.freeze({ ...result, timeframe: "1d", candles: result.rows, quoteTurnoverSource: "BINANCE_QUOTE_ASSET_VOLUME" });
 }
