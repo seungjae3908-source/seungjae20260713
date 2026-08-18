@@ -14,9 +14,11 @@ Environment=RESEARCH_DASHBOARD_HOST=127.0.0.1
 Environment=RESEARCH_DASHBOARD_PORT=18090
 Environment=RESEARCH_STATE_ROOT=/var/lib/investment-research-production
 # This long-running HTTP process reaches V8 baseline JIT under normal Node startup.
-# The shared server policy denies executable-memory remapping, so run this
-# read-only dashboard without JIT rather than weakening the systemd sandbox.
-ExecStart=/usr/bin/env node --jitless /opt/investment-research-dashboard/current/research-dashboard/server.mjs
+# The shared server policy denies executable-memory remapping, so keep JIT disabled.
+# Node 22's global Fetch/WebSocket surface lazily loads Undici, whose llhttp path
+# requires WebAssembly; --jitless disables WebAssembly. The dashboard uses neither
+# Fetch nor WebSocket, so disable those unused globals instead of weakening sandboxing.
+ExecStart=/usr/bin/env node --jitless --no-experimental-fetch --no-experimental-websocket /opt/investment-research-dashboard/current/research-dashboard/server.mjs
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
