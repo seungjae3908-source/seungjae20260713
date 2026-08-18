@@ -85,6 +85,28 @@ test("matching Research Production Paper identity is preserved without cutover",
   await access(statePath);
 });
 
+test("disabled Research Production Paper root cannot be cut over or re-enabled", async () => {
+  const temp = await mkdtemp(join(tmpdir(), "research-paper-disabled-"));
+  const root = join(temp, "forward", "paper");
+  const statePath = await writeState(root);
+  await writeFile(join(root, "DISABLED"), "disabled\n");
+
+  await assert.rejects(
+    prepareResearchProductionIdentityCutover({
+      rootDirectory: root,
+      researchCodeSha: NEW_SHA,
+      outcomeAccumulationEnabled: true,
+      nowMs: NOW,
+    }),
+    (error) => error?.code === "PAPER_FORWARD_SCHEDULE_DISABLED",
+  );
+
+  await access(join(root, "DISABLED"));
+  await access(statePath);
+  assert.equal(await readFile(join(root, "status", "marker.txt"), "utf8"), "preserve-me\n");
+  await assert.rejects(access(join(temp, "forward", "paper-identity-archives")));
+});
+
 test("invalid predecessor identity fails closed without moving Paper state", async () => {
   const temp = await mkdtemp(join(tmpdir(), "research-paper-invalid-"));
   const root = join(temp, "forward", "paper");
