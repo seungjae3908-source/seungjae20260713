@@ -25,6 +25,7 @@ jobs:
         run: |
           npm run check
           npm test
+          node --jitless --check server.mjs
       - name: Validate systemd sandbox and fail-closed diagnostics contract
         run: |
           set -Eeuo pipefail
@@ -34,6 +35,7 @@ jobs:
           grep -q 'User=investment-research' "$unit"
           grep -q 'RESEARCH_DASHBOARD_HOST=127.0.0.1' "$unit"
           grep -q 'WorkingDirectory=/opt/investment-research-dashboard/current/research-dashboard' "$unit"
+          grep -Fq 'ExecStart=/usr/bin/env node --jitless /opt/investment-research-dashboard/current/research-dashboard/server.mjs' "$unit"
           grep -q 'ProtectSystem=strict' "$unit"
           grep -q '^CapabilityBoundingSet=$' "$unit"
           grep -q '^AmbientCapabilities=$' "$unit"
