@@ -13,6 +13,28 @@ export interface KiwoomChartCandle {
   volume: number;
 }
 
+export type KiwoomChartStopReason =
+  | "TARGET_REACHED"
+  | "SOURCE_EXHAUSTED"
+  | "PAGE_BUDGET_REACHED"
+  | "DEADLINE_REACHED"
+  | "ABORTED"
+  | "UPSTREAM_TIMEOUT";
+
+export interface KiwoomChartFetchOptions {
+  signal?: AbortSignal;
+  deadlineAt?: number;
+  maxPages?: number;
+}
+
+export interface KiwoomChartFetchResult {
+  candles: KiwoomChartCandle[];
+  completeness: "complete" | "partial";
+  stopReason: KiwoomChartStopReason;
+  pagesFetched: number;
+  targetCandles: number | null;
+}
+
 type RawObject = Record<string, unknown>;
 
 interface RequestSpec {
@@ -23,12 +45,60 @@ interface RequestSpec {
   aggregateSize?: number;
 }
 
+interface RawFetchResult {
+  rows: KiwoomChartCandle[];
+  pagesFetched: number;
+  stopReason: KiwoomChartStopReason;
+}
+
 const CHART_PATH = "/api/dostk/chart";
 const CONTINUATION_DELAY_MS = 80;
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
+function abortError(message: string): Error {
+  const error = new Error(message);
+  error.name = "AbortError";
+  return error;
+}
+
+function deadlineReached(deadlineAt?: number): boolean {
+  return deadlineAt != null && Number.isFinite(deadlineAt) && Date.now() >= deadlineAt;
+}
+
+function throwIfStopped(options: KiwoomChartFetchOptions): void {
+  if (deadlineReached(options.deadlineAt)) {
+    throw abortError("키움 차트 interactive deadline에 도달했습니다.");
+  }
+
+  if (options.signal?.aborted) {
+    throw abortError("키움 차트 요청이 호출자에 의해 취소되었습니다.");
+  }
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) {
+    return Promise.reject(abortError("키움 차트 요청이 호출자에 의해 취소되었습니다."));
+  }
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+
+    const cleanup = () => signal?.removeEventListener("abort", onAbort);
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    };
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      cleanup();
+      reject(abortError("키움 차트 요청이 호출자에 의해 취소되었습니다."));
+    };
+
+    const timer = setTimeout(finish, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 
@@ -274,17 +344,10 @@ function combineDateAndTime(
     .replace(/\D/g, "")
     .trim();
 
-  /*
-   * 분봉의 cntr_tm이 YYYYMMDDHHMMSS 형태로
-   * 반환되는 경우입니다.
-   */
   if (time.length >= 12) {
     return time.slice(0, 14);
   }
 
-  /*
-   * 날짜와 시간이 따로 반환되는 경우입니다.
-   */
   if (
     date.length === 8 &&
     time.length >= 4 &&
@@ -293,9 +356,6 @@ function combineDateAndTime(
     return `${date}${time.padEnd(6, "0")}`;
   }
 
-  /*
-   * 일봉·월봉·연봉은 날짜만 사용합니다.
-   */
   if (date.length === 8) {
     return date;
   }
@@ -505,12 +565,6 @@ function requestSpec(
 
   const baseBody = {
     stk_cd: ticker,
-
-    /*
-     * 수정주가 적용 여부입니다.
-     * 1을 사용해 액면분할·병합 등이 반영된
-     * 과거 가격을 받습니다.
-     */
     upd_stkpc_tp: "1",
   };
 
@@ -531,49 +585,24 @@ function requestSpec(
   if (minuteScope[tf]) {
     return {
       apiId: "ka10080",
-
       path: CHART_PATH,
-
       body: {
         ...baseBody,
-
-        tic_scope:
-          minuteScope[tf],
+        tic_scope: minuteScope[tf],
       },
-
-      /*
-       * 키움 연속조회가 허용하는 범위까지 동일하게 따라갑니다.
-       * 중복 next-key 감지와 API의 cont-yn 종료 신호가 무한 호출을 막습니다.
-       */
       maxPages: 300,
-
-      /*
-       * 키움에서 4시간봉을 직접 제공하지 않으면
-       * 60분봉 4개를 합쳐 4시간봉으로 만듭니다.
-       */
-      aggregateSize:
-        tf === "4H"
-          ? 4
-          : 1,
+      aggregateSize: tf === "4H" ? 4 : 1,
     };
   }
 
   if (tf === "1W") {
-    /*
-     * 주봉은 키움 주봉 차트 API(ka10082)를 사용합니다.
-     * 일봉(ka10081)과 별도의 데이터입니다.
-     */
     return {
       apiId: "ka10082",
-
       path: CHART_PATH,
-
       body: {
         ...baseBody,
-
         base_dt: koreaToday(),
       },
-
       maxPages: 150,
     };
   }
@@ -581,15 +610,11 @@ function requestSpec(
   if (tf === "1M") {
     return {
       apiId: "ka10083",
-
       path: CHART_PATH,
-
       body: {
         ...baseBody,
-
         base_dt: koreaToday(),
       },
-
       maxPages: 100,
     };
   }
@@ -597,15 +622,11 @@ function requestSpec(
   if (tf === "1Y") {
     return {
       apiId: "ka10094",
-
       path: CHART_PATH,
-
       body: {
         ...baseBody,
-
         base_dt: koreaToday(),
       },
-
       maxPages: 60,
     };
   }
@@ -619,28 +640,14 @@ function requestSpec(
           ? 10
           : 1;
 
-  /*
-   * 1D와 ALL은 모두 일봉 전체를 조회합니다.
-   * 3D·5D·10D는 전체 일봉을 받은 뒤 묶습니다.
-   */
   return {
     apiId: "ka10081",
-
     path: CHART_PATH,
-
     body: {
       ...baseBody,
-
       base_dt: koreaToday(),
     },
-
-    /*
-     * 상장일부터 현재까지 조회하기 위해
-     * cont-yn과 next-key로 최대 300페이지를
-     * 연속 조회합니다.
-     */
     maxPages: 300,
-
     aggregateSize,
   };
 }
@@ -666,36 +673,68 @@ export function resolveKiwoomRawTargetCandles(
 async function fetchAllPages(
   spec: RequestSpec,
   targetRawCandles?: number,
-): Promise<KiwoomChartCandle[]> {
-  const collected:
-    KiwoomChartCandle[] = [];
+  options: KiwoomChartFetchOptions = {},
+): Promise<RawFetchResult> {
+  const collected: KiwoomChartCandle[] = [];
+  const seenNextKeys = new Set<string>();
+  const requestedMaxPages = Number.isFinite(options.maxPages)
+    ? Math.max(1, Math.floor(Number(options.maxPages)))
+    : spec.maxPages;
+  const effectiveMaxPages = Math.min(spec.maxPages, requestedMaxPages);
 
-  const seenNextKeys =
-    new Set<string>();
-
-  let contYn:
-    string | undefined;
-
-  let nextKey:
-    string | undefined;
+  let contYn: string | undefined;
+  let nextKey: string | undefined;
+  let pagesFetched = 0;
+  let stopReason: KiwoomChartStopReason | null = null;
 
   for (
     let page = 0;
-    page < spec.maxPages;
+    page < effectiveMaxPages;
     page += 1
   ) {
-    const response =
-      await kiwoomRequest<KiwoomApiResponse>({
+    try {
+      throwIfStopped(options);
+    } catch {
+      stopReason = deadlineReached(options.deadlineAt)
+        ? "DEADLINE_REACHED"
+        : "ABORTED";
+      break;
+    }
+
+    let response: {
+      data: KiwoomApiResponse;
+      contYn: string | null;
+      nextKey: string | null;
+    };
+
+    try {
+      response = await kiwoomRequest<KiwoomApiResponse>({
         apiId: spec.apiId,
-
         path: spec.path,
-
         body: spec.body,
-
         contYn,
-
         nextKey,
+        signal: options.signal,
       });
+    } catch (error) {
+      if (deadlineReached(options.deadlineAt)) {
+        stopReason = "DEADLINE_REACHED";
+      } else if (options.signal?.aborted || (error instanceof Error && error.name === "AbortError")) {
+        stopReason = "ABORTED";
+      } else if (error instanceof Error && /시간이 초과되었습니다/.test(error.message)) {
+        stopReason = "UPSTREAM_TIMEOUT";
+      } else {
+        throw error;
+      }
+
+      if (collected.length < 2) {
+        throw error;
+      }
+
+      break;
+    }
+
+    pagesFetched += 1;
 
     const rows = bestChartRows(
       response.data as RawObject,
@@ -718,6 +757,7 @@ async function fetchAllPages(
       targetRawCandles != null &&
       collected.length >= targetRawCandles
     ) {
+      stopReason = "TARGET_REACHED";
       break;
     }
 
@@ -735,17 +775,16 @@ async function fetchAllPages(
       !hasNext ||
       !returnedNextKey
     ) {
+      stopReason = "SOURCE_EXHAUSTED";
       break;
     }
 
-    /*
-     * 같은 next-key가 반복되면 무한 반복을 막습니다.
-     */
     if (
       seenNextKeys.has(
         returnedNextKey,
       )
     ) {
+      stopReason = "SOURCE_EXHAUSTED";
       break;
     }
 
@@ -759,28 +798,47 @@ async function fetchAllPages(
     nextKey =
       returnedNextKey;
 
-    /*
-     * 연속 호출 사이에 짧은 간격을 둡니다.
-     */
-    await sleep(
-      CONTINUATION_DELAY_MS,
-    );
+    try {
+      if (deadlineReached(options.deadlineAt)) {
+        stopReason = "DEADLINE_REACHED";
+        break;
+      }
+
+      await sleep(
+        CONTINUATION_DELAY_MS,
+        options.signal,
+      );
+    } catch {
+      stopReason = deadlineReached(options.deadlineAt)
+        ? "DEADLINE_REACHED"
+        : "ABORTED";
+      break;
+    }
+  }
+
+  if (!stopReason) {
+    stopReason = "PAGE_BUDGET_REACHED";
   }
 
   const sorted = dedupeAndSort(
     collected,
   );
 
-  return targetRawCandles == null
-    ? sorted
-    : sorted.slice(-targetRawCandles);
+  return {
+    rows: targetRawCandles == null
+      ? sorted
+      : sorted.slice(-targetRawCandles),
+    pagesFetched,
+    stopReason,
+  };
 }
 
-export async function getKiwoomChartCandles(
+export async function getKiwoomChartCandlesMeta(
   tickerValue: string,
   timeframeValue = "1D",
   targetCandles?: number,
-): Promise<KiwoomChartCandle[]> {
+  options: KiwoomChartFetchOptions = {},
+): Promise<KiwoomChartFetchResult> {
   if (!isKiwoomConfigured()) {
     throw new Error(
       "키움 API 키가 등록되지 않았습니다.",
@@ -815,12 +873,12 @@ export async function getKiwoomChartCandles(
     spec.aggregateSize ?? 1,
   );
 
-  const rows =
-    await fetchAllPages(spec, rawTarget);
+  const rawResult =
+    await fetchAllPages(spec, rawTarget, options);
 
   const aggregated =
     aggregateCandles(
-      rows,
+      rawResult.rows,
       spec.aggregateSize ?? 1,
     );
 
@@ -828,21 +886,50 @@ export async function getKiwoomChartCandles(
     aggregated.length < 2
   ) {
     throw new Error(
-      `키움 차트 데이터가 부족합니다. ticker=${ticker}, timeframe=${timeframe}, count=${aggregated.length}`,
+      `키움 차트 데이터가 부족합니다. ticker=${ticker}, timeframe=${timeframe}, count=${aggregated.length}, stopReason=${rawResult.stopReason}`,
     );
   }
 
-  if (
+  const normalizedTarget =
     targetCandles != null &&
     Number.isFinite(targetCandles) &&
     targetCandles > 0
-  ) {
-    return aggregated.slice(
-      -Math.max(2, Math.floor(targetCandles)),
-    );
-  }
+      ? Math.max(2, Math.floor(targetCandles))
+      : null;
 
-  return aggregated;
+  const candles = normalizedTarget == null
+    ? aggregated
+    : aggregated.slice(-normalizedTarget);
+
+  const targetSatisfied = normalizedTarget == null
+    ? rawResult.stopReason === "SOURCE_EXHAUSTED"
+    : candles.length >= normalizedTarget;
+
+  return {
+    candles,
+    completeness: targetSatisfied ? "complete" : "partial",
+    stopReason: targetSatisfied && normalizedTarget != null
+      ? "TARGET_REACHED"
+      : rawResult.stopReason,
+    pagesFetched: rawResult.pagesFetched,
+    targetCandles: normalizedTarget,
+  };
+}
+
+export async function getKiwoomChartCandles(
+  tickerValue: string,
+  timeframeValue = "1D",
+  targetCandles?: number,
+  options: KiwoomChartFetchOptions = {},
+): Promise<KiwoomChartCandle[]> {
+  const result = await getKiwoomChartCandlesMeta(
+    tickerValue,
+    timeframeValue,
+    targetCandles,
+    options,
+  );
+
+  return result.candles;
 }
 
 export default getKiwoomChartCandles;
