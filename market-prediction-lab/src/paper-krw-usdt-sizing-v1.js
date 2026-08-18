@@ -1,5 +1,6 @@
 const UPBIT_BASE_URL = "https://api.upbit.com";
 const FX_MAX_AGE_MS = 15 * 60 * 1000;
+const KRW_EVIDENCE_DECIMALS = 6;
 
 export const PAPER_KRW_USDT_SIZING_CONTRACT = Object.freeze({
   version: "paper-krw-usdt-sizing-v1",
@@ -8,6 +9,7 @@ export const PAPER_KRW_USDT_SIZING_CONTRACT = Object.freeze({
   fxSource: "upbit-public-cross-krw-btc-usdt-btc",
   fxMaxAgeMs: FX_MAX_AGE_MS,
   leverage: 1,
+  krwEvidenceDecimals: KRW_EVIDENCE_DECIMALS,
   privateApi: false,
   liveTrading: false,
   profitabilityClaimAllowed: false,
@@ -25,6 +27,13 @@ function number(value, code) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) throw new Error(code);
   return parsed;
+}
+
+function canonicalKrwEvidence(value) {
+  if (!finite(value)) throw new Error("PAPER_SIZING_KRW_EVIDENCE_INVALID");
+  const normalized = Number(value.toFixed(KRW_EVIDENCE_DECIMALS));
+  if (!finite(normalized)) throw new Error("PAPER_SIZING_KRW_EVIDENCE_INVALID");
+  return Object.is(normalized, -0) ? 0 : normalized;
 }
 
 function rowFor(rows, market) {
@@ -110,20 +119,20 @@ export function sizeOnePercentRiskKrwFuturesPosition({
   if (!positive(quantity) || quantity + Number.EPSILON < minQty) throw new Error("PAPER_SIZING_BELOW_MIN_QTY");
   const entryNotionalUsdt = quantity * entryPrice;
   if (entryNotionalUsdt + Number.EPSILON < minNotionalUsdt) throw new Error("PAPER_SIZING_BELOW_MIN_NOTIONAL");
-  const entryNotionalKrw = entryNotionalUsdt * krwPerUsdt;
-  const stopRiskKrw = quantity * stopDistanceUsdt * krwPerUsdt;
+  const entryNotionalKrwRaw = entryNotionalUsdt * krwPerUsdt;
+  const stopRiskKrwRaw = quantity * stopDistanceUsdt * krwPerUsdt;
   const tolerance = Math.max(1e-6, initialCapitalKrw * 1e-12);
-  if (entryNotionalKrw > initialCapitalKrw + tolerance) throw new Error("PAPER_SIZING_CAPITAL_LIMIT_EXCEEDED");
-  if (stopRiskKrw > riskBudgetKrw + tolerance) throw new Error("PAPER_SIZING_RISK_LIMIT_EXCEEDED");
+  if (entryNotionalKrwRaw > initialCapitalKrw + tolerance) throw new Error("PAPER_SIZING_CAPITAL_LIMIT_EXCEEDED");
+  if (stopRiskKrwRaw > riskBudgetKrw + tolerance) throw new Error("PAPER_SIZING_RISK_LIMIT_EXCEEDED");
   return Object.freeze({
     quantity,
-    initialCapitalKrw,
+    initialCapitalKrw: canonicalKrwEvidence(initialCapitalKrw),
     riskFraction,
-    riskBudgetKrw,
+    riskBudgetKrw: canonicalKrwEvidence(riskBudgetKrw),
     stopDistanceUsdt,
     entryNotionalUsdt,
-    entryNotionalKrw,
-    stopRiskKrw,
+    entryNotionalKrw: canonicalKrwEvidence(entryNotionalKrwRaw),
+    stopRiskKrw: canonicalKrwEvidence(stopRiskKrwRaw),
     krwPerUsdt,
     leverage: 1,
   });
