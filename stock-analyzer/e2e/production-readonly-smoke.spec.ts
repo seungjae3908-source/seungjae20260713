@@ -28,10 +28,19 @@ type RouteTransition = {
   phase: 'enter' | 'complete' | 'fallback-timeout';
   durationMs?: number;
 };
+type TerminalState =
+  | 'paper-ready'
+  | 'error-state'
+  | 'capability-denied'
+  | 'account-page'
+  | 'missing-user'
+  | 'paper-skeleton'
+  | 'unknown';
 type Evidence = {
   project: string;
   routeTransitions: RouteTransition[];
   loadingDurationsMs: Array<{ path: string; durationMs: number }>;
+  terminalStates: Array<{ path: string; state: TerminalState }>;
   failedRequests: Diagnostic[];
   consoleErrors: Diagnostic[];
   pageErrors: Diagnostic[];
@@ -76,6 +85,7 @@ function makeEvidence(testInfo: TestInfo): Evidence {
     project: testInfo.project.name,
     routeTransitions: [],
     loadingDurationsMs: [],
+    terminalStates: [],
     failedRequests: [],
     consoleErrors: [],
     pageErrors: [],
@@ -116,6 +126,29 @@ function recordRouteTransition(
   testInfo.annotations.push({ type: 'production-route', description: `${phase}:${safePath}` });
   console.info(`[production-route] ${phase} ${safePath}${durationMs === undefined ? '' : ` ${durationMs}ms`}`);
   writeEvidence(testInfo, evidence);
+}
+
+function recordTerminalState(
+  testInfo: TestInfo,
+  evidence: Evidence,
+  route: string,
+  state: TerminalState,
+) {
+  const safePath = routeEvidencePath(route);
+  evidence.terminalStates.push({ path: safePath, state });
+  testInfo.annotations.push({ type: 'production-terminal-state', description: `${safePath}:${state}` });
+  console.info(`[production-terminal-state] ${safePath} ${state}`);
+  writeEvidence(testInfo, evidence);
+}
+
+async function detectPaperTradingTerminalState(page: Page): Promise<TerminalState> {
+  if (await page.getByTestId('open-journal-sync').count()) return 'paper-ready';
+  if (await page.getByTestId('error-state').count()) return 'error-state';
+  if (await page.getByTestId('capability-denied').count()) return 'capability-denied';
+  if (await page.getByRole('heading', { name: '계정', exact: true }).count()) return 'account-page';
+  if (await page.getByText('로그인 사용자 정보를 확인하지 못했습니다.', { exact: true }).count()) return 'missing-user';
+  if (await page.getByTestId('paper-trading-route-skeleton').count()) return 'paper-skeleton';
+  return 'unknown';
 }
 
 function attachDiagnostics(page: Page, testInfo: TestInfo, evidence: Evidence) {
@@ -178,8 +211,14 @@ async function openRoute(page: Page, evidence: Evidence, route: string, testInfo
   await page.goto(route, { waitUntil: 'domcontentloaded' });
   await waitForFinitePageState(page, evidence, route, testInfo);
   if (route === '/paper-trading') {
-    await expect(page.getByTestId('open-journal-sync')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByTestId('paper-trading-route-skeleton')).toHaveCount(0);
+    try {
+      await expect(page.getByTestId('paper-trading-route-skeleton')).toHaveCount(0, { timeout: 15_000 });
+      await expect(page.getByTestId('open-journal-sync')).toBeVisible({ timeout: 15_000 });
+      recordTerminalState(testInfo, evidence, route, 'paper-ready');
+    } catch (error) {
+      recordTerminalState(testInfo, evidence, route, await detectPaperTradingTerminalState(page));
+      throw error;
+    }
   }
 }
 
@@ -190,6 +229,7 @@ async function login(page: Page, evidence: Evidence, testInfo: TestInfo) {
   await page.getByRole('button', { name: '로그인', exact: true }).click();
   await expect(page.getByTestId('membership-label')).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText('관리자 승인 대기 중입니다.')).toHaveCount(0);
+  await expect(page.getByText('현재 등급에 허용된 기능을 사용할 수 있습니다.', { exact: true })).toBeVisible({ timeout: 15_000 });
 }
 
 async function verifyHealth(page: Page) {
