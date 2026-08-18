@@ -41,3 +41,30 @@ test("Research Production read-only evidence exposes actionable Paper blocker an
     assert.ok(source.includes(safety), `read-only safety contract regressed: ${safety}`);
   }
 });
+
+test("Research Production read-only evidence follows canonical nested Shadow candidate metrics", async () => {
+  const source = await readFile(SCRIPT, "utf8");
+  for (const token of [
+    "value.candidate",
+    "candidate.predictionHealth",
+    "candidate.macroF1",
+    "candidate.balancedAccuracy",
+    "candidate.perClass",
+    "candidate.confusion",
+    "candidate.confusionMatrix",
+    "per_class=",
+    "confusion=",
+    "prediction_health=",
+  ]) {
+    assert.ok(source.includes(token), `missing nested Shadow candidate evidence field: ${token}`);
+  }
+
+  assert.ok(
+    source.indexOf("candidate.macroF1") < source.indexOf("value.macroF1"),
+    "canonical nested candidate metric must take precedence over legacy top-level fallback",
+  );
+  assert.ok(
+    source.indexOf("candidate.predictionHealth") < source.indexOf("value.predictionHealth"),
+    "canonical nested candidate health must take precedence over legacy top-level fallback",
+  );
+});
