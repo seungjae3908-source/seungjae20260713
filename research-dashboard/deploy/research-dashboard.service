@@ -8,17 +8,16 @@ Type=simple
 User=investment-research
 Group=investment-research
 WorkingDirectory=/opt/investment-research-dashboard/current/research-dashboard
-Environment=NODE_ENV=production
+Environment=PYTHONUNBUFFERED=1
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=RESEARCH_DASHBOARD_HOST=127.0.0.1
 Environment=RESEARCH_DASHBOARD_PORT=18090
 Environment=RESEARCH_STATE_ROOT=/var/lib/investment-research-production
-# The host policy denies executable-memory remapping, so keep V8 JIT disabled.
-# Node 22 exposes Fetch, WebSocket and EventSource globals through undici. Under
-# --jitless, undici's llhttp WebAssembly path is unavailable. This read-only
-# server uses none of those APIs, so disable the unused globals rather than
-# weakening the systemd sandbox or enabling executable memory.
-ExecStart=/usr/bin/env node --jitless --no-experimental-fetch --no-experimental-websocket --no-experimental-eventsource /opt/investment-research-dashboard/current/research-dashboard/server.mjs
+# Use the Python standard-library runtime for the long-running read-only HTTP
+# service. Recent Node 22 + --jitless combinations initialize undici/WASM even
+# though this Dashboard makes no outbound requests. Python avoids executable
+# JIT memory entirely, so the strict systemd sandbox can stay unchanged.
+ExecStart=/usr/bin/env python3 /opt/investment-research-dashboard/current/research-dashboard/server.py
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
@@ -33,7 +32,7 @@ AmbientCapabilities=
 RestrictSUIDSGID=true
 LockPersonality=true
 UMask=0077
-# Keep the long-running Node service aligned with the already-proven Research
+# Keep the long-running service aligned with the already-proven Research
 # Production sandbox. ProtectSystem=strict keeps the release and research state
 # read-only; only the private /tmp namespace is explicitly writable.
 ReadWritePaths=/tmp
