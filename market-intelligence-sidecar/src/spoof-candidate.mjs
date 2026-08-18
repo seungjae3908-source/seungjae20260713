@@ -1,6 +1,7 @@
 const CONTRACT = 'market-intelligence-spoof-candidate/v1';
 
 function finite(value, fallback = null) {
+  if (value == null || value === '') return fallback;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
