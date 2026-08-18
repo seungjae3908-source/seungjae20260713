@@ -6,6 +6,7 @@ import { ResponsiveTabs } from '@/components/responsive-tabs';
 import { ScannerApprovalComposer } from '@/components/scanner-approval-composer';
 import { UiBuilderSignalScannerLayout } from '@/components/ui-builder-signal-scanner-layout';
 import { useAnalysisSelection } from '@/lib/analysis-selection';
+import { useAuth } from '@/lib/auth';
 import { getPortfolioChartOverlay } from '@/lib/portfolio-overlay';
 import {
   loadUiBuilderSignalScannerLayout,
@@ -194,8 +195,32 @@ function DesktopWorkspace({ workspace, builderLayout }: { workspace: Workspace; 
 
 export default function TechnicalWorkspacePage() {
   const desktop = useDesktopWorkspace();
+  const auth = useAuth();
   const [location] = useLocation();
   const [workspace, setWorkspace] = useState<Workspace>('signal');
+
+  const workspaceAllowed = (value: Workspace) => {
+    if (value === 'signal') return true;
+    if (value === 'chart') return auth.can('canAccessRiskPreview');
+    if (value === 'backtest') return auth.can('canAccessBacktests');
+    return auth.can('canPlaceOrders');
+  };
+
+  const workspaceTabs = WORKSPACE_TABS.map((tab) => {
+    const disabled = !workspaceAllowed(tab.value);
+    const disabledReason = tab.value === 'chart'
+      ? 'AI 차트 권한이 필요합니다.'
+      : tab.value === 'backtest'
+        ? '백테스트 권한이 필요합니다.'
+        : tab.value === 'trade'
+          ? '주문 승인 권한이 필요합니다.'
+          : undefined;
+    return { ...tab, disabled, disabledReason };
+  });
+
+  useEffect(() => {
+    if (!workspaceAllowed(workspace)) setWorkspace('signal');
+  }, [auth.membershipLevel, workspace]);
 
   const desktopLayout = useMemo(() => {
     const raw = readStoredUiBuilderSignalScannerLayout('desktop');
@@ -211,6 +236,7 @@ export default function TechnicalWorkspacePage() {
         infoTitle="기술 기능 안내"
         infoItems={[
           '모바일은 AI 검색기·AI 차트·백테스트·자동매매를 각각 독립 화면으로 열어 긴 스크롤을 줄입니다.',
+          '권한이 없는 고급 기능은 화면 구조에서 사라지지 않고 잠금 상태로 표시되며 실행되지 않습니다.',
           'PC는 넓은 화면에서 검색기와 AI 차트를 함께 보며 기존 안전한 Builder 배치를 유지할 수 있습니다.',
           '실전 주문은 활성화하지 않으며 사용자 승인과 최종 위험 검증을 유지합니다.',
         ]}
@@ -218,8 +244,10 @@ export default function TechnicalWorkspacePage() {
       <div className="shrink-0 border-b border-card-border bg-background px-2 py-2 sm:px-3">
         <ResponsiveTabs
           value={workspace}
-          options={WORKSPACE_TABS}
-          onChange={setWorkspace}
+          options={workspaceTabs}
+          onChange={(nextWorkspace) => {
+            if (workspaceAllowed(nextWorkspace)) setWorkspace(nextWorkspace);
+          }}
           ariaLabel="기술 기능 탭"
           testId={desktop ? 'technical-desktop-tabs' : 'technical-mobile-tabs'}
           compact
