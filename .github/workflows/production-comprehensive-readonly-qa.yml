@@ -7,6 +7,7 @@ on:
       - stock-analyzer/playwright.production-comprehensive.config.ts
       - stock-analyzer/e2e/production-comprehensive-readonly-qa.spec.ts
       - stock-analyzer/e2e/production-mobile-scroll-readonly-qa.spec.ts
+      - stock-analyzer/e2e/production-critical-http-readonly-qa.spec.ts
       - stock-analyzer/e2e/support/production-readonly-policy.ts
   workflow_dispatch:
 
@@ -78,7 +79,8 @@ jobs:
             echo '- mobile search sample: 5 symbols per market (20 total)'
             echo '- chart matrix: 4 markets x 8 timeframes (32 actual UI transitions)'
             echo '- route/layout sweep: desktop 1440/1024, mobile 320/360/390/412/430'
-            echo '- checks: finite loading, root/internal scroll, overlap warnings, horizontal overflow, safe tabs, console/page/request failures'
+            echo '- checks: finite loading, root/internal scroll, overlap, fixed-nav occlusion, horizontal overflow, safe tabs, console/page/request failures'
+            echo '- authenticated same-origin GET 401/403/5xx: blocking failure on critical routes'
             echo '- latest-head only: superseded pending QA runs are cancelled by concurrency'
             echo '- Production DB/app mutations: blocked'
             echo '- private provider/account live requests: blocked or mocked disconnected'
