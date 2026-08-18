@@ -24,6 +24,9 @@ const PROFILE_FIELDS = [
   'updated_at', 'permissions_updated_at',
 ].join(',');
 
+const RESEARCH_OVERVIEW_URL = 'http://127.0.0.1:18090/api/research/overview';
+const RESEARCH_OVERVIEW_TIMEOUT_MS = 4_000;
+
 type AdminProfileRow = MemberAdministrationProfile & {
   login_name?: string | null;
   display_name?: string | null;
@@ -49,6 +52,19 @@ function sendAdminError(res: any, cause: unknown, fallback: string) {
     return res.status(cause.statusCode).json({ error: cause.code, message: cause.message });
   }
   return res.status(500).json({ error: fallback, message: '관리자 요청을 처리하지 못했습니다.' });
+}
+
+function isReadOnlyResearchOverview(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const payload = value as Record<string, unknown>;
+  if (payload.schemaVersion !== 'research-dashboard-overview-v1') return false;
+  const safety = payload.safety;
+  if (!safety || typeof safety !== 'object' || Array.isArray(safety)) return false;
+  const contract = safety as Record<string, unknown>;
+  return contract.readOnlyDashboard === true
+    && contract.liveTrading === false
+    && contract.privateApi === false
+    && contract.orderAuthority === false;
 }
 
 async function activeAdminCount(req: AuthenticatedRequest) {
@@ -185,6 +201,40 @@ router.get('/audit-logs', async (req: AuthenticatedRequest, res) => {
     return res.json({ ok: true, logs: data ?? [] });
   } catch (cause) {
     return sendAdminError(res, cause, 'AUDIT_LIST_FAILED');
+  }
+});
+
+router.get('/research/overview', async (_req: AuthenticatedRequest, res) => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), RESEARCH_OVERVIEW_TIMEOUT_MS);
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  try {
+    const upstream = await fetch(RESEARCH_OVERVIEW_URL, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+    });
+    if (!upstream.ok) {
+      return res.status(503).json({
+        error: 'RESEARCH_DASHBOARD_UNAVAILABLE',
+        message: 'Research Production 상태를 불러오지 못했습니다.',
+      });
+    }
+    const payload = await upstream.json() as unknown;
+    if (!isReadOnlyResearchOverview(payload)) {
+      return res.status(503).json({
+        error: 'RESEARCH_DASHBOARD_SAFETY_CONTRACT_INVALID',
+        message: 'Research Dashboard 안전 계약을 확인할 수 없습니다.',
+      });
+    }
+    return res.json(payload);
+  } catch {
+    return res.status(503).json({
+      error: 'RESEARCH_DASHBOARD_UNAVAILABLE',
+      message: 'Research Production 상태를 불러오지 못했습니다.',
+    });
+  } finally {
+    clearTimeout(timeout);
   }
 });
 
