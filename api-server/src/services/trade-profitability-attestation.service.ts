@@ -4,10 +4,11 @@ import {
   type StrategyPromotionRecord,
   type StrategyPromotionService,
 } from './strategy-promotion.service';
-import type {
-  TradingEconomics,
-  TradingMarketRegime,
-  TradingPlanInput,
+import {
+  DEFAULT_TRADING_POLICY,
+  type TradingEconomics,
+  type TradingMarketRegime,
+  type TradingPlanInput,
 } from './trade-automation.types';
 
 const SHA40 = /^[0-9a-f]{40}$/i;
@@ -15,6 +16,11 @@ const HASH64 = /^[0-9a-f]{64}$/i;
 const REGIMES = new Set<TradingMarketRegime>(['bull', 'bear', 'sideways', 'stress', 'unknown']);
 
 type PromotionReader = Pick<StrategyPromotionService, 'get'>;
+
+type ProfitabilityEvidenceFreshness = {
+  now: number;
+  maxEvidenceAgeHours: number;
+};
 
 export type TradeProfitabilityAttestation = {
   required: boolean;
@@ -65,7 +71,10 @@ function textMetric(stages: Array<PromotionStageEvidence | null>, key: string) {
   return null;
 }
 
-function projectedEconomics(record: StrategyPromotionRecord) {
+function projectedEconomics(
+  record: StrategyPromotionRecord,
+  freshness: ProfitabilityEvidenceFreshness,
+) {
   const outcomes = stage(record, 'RECOMMENDATION_OUTCOMES');
   const paper = stage(record, 'PAPER');
   const regime = stage(record, 'REGIME');
@@ -81,6 +90,7 @@ function projectedEconomics(record: StrategyPromotionRecord) {
   const rawRegime = textMetric(sources, 'marketRegime') as TradingMarketRegime | null;
   const marketRegime = rawRegime && REGIMES.has(rawRegime) ? rawRegime : null;
   const calibratedAt = outcomes?.validatedAt ?? outcomes?.completedAt ?? paper?.validatedAt ?? paper?.completedAt ?? null;
+  const calibratedAtMs = calibratedAt ? Date.parse(calibratedAt) : Number.NaN;
 
   const missing: string[] = [];
   if (!Number.isInteger(sampleSize) || Number(sampleSize) <= 0) missing.push('SERVER_SAMPLE_SIZE_REQUIRED');
@@ -91,7 +101,14 @@ function projectedEconomics(record: StrategyPromotionRecord) {
   if (profitFactor == null || profitFactor <= 0) missing.push('SERVER_PROFIT_FACTOR_REQUIRED');
   if (maxDrawdownPercent == null || maxDrawdownPercent < 0) missing.push('SERVER_MAX_DRAWDOWN_REQUIRED');
   if (!marketRegime) missing.push('SERVER_MARKET_REGIME_REQUIRED');
-  if (!calibratedAt || !Number.isFinite(Date.parse(calibratedAt))) missing.push('SERVER_CALIBRATED_AT_REQUIRED');
+  if (!calibratedAt || !Number.isFinite(calibratedAtMs)) {
+    missing.push('SERVER_CALIBRATED_AT_REQUIRED');
+  } else if (
+    freshness.now - calibratedAtMs
+      > freshness.maxEvidenceAgeHours * 60 * 60_000
+  ) {
+    missing.push('PROFITABILITY_EVIDENCE_STALE');
+  }
   if (missing.length) return { economics: null, missing };
 
   const economics: TradingEconomics = {
@@ -111,6 +128,7 @@ function projectedEconomics(record: StrategyPromotionRecord) {
 export function attestLiveTradingProfitability(
   input: TradingPlanInput,
   promotion: PromotionReader = createDefaultStrategyPromotionService(),
+  freshness: Partial<ProfitabilityEvidenceFreshness> = {},
 ): TradeProfitabilityAttestation {
   const base: TradeProfitabilityAttestation = {
     required: input.accountMode === 'live',
@@ -146,7 +164,10 @@ export function attestLiveTradingProfitability(
     blockCodes.push('SERVER_PROMOTION_AUTHORITY_CONTRACT_INVALID');
   }
 
-  const projection = projectedEconomics(record);
+  const projection = projectedEconomics(record, {
+    now: freshness.now ?? Date.now(),
+    maxEvidenceAgeHours: freshness.maxEvidenceAgeHours ?? DEFAULT_TRADING_POLICY.maxEconomicsAgeHours,
+  });
   blockCodes.push(...projection.missing);
   const unique = [...new Set(blockCodes)];
   return {
