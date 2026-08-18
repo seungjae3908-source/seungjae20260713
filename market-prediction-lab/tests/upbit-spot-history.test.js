@@ -11,6 +11,7 @@ function row(timestamp, price = 100) {
     low_price: price - 1,
     trade_price: price + 0.2,
     candle_acc_trade_volume: 10,
+    candle_acc_trade_price: price * 10,
   };
 }
 
@@ -45,6 +46,8 @@ test("collector paginates backwards with exclusive to cursor and returns increas
   assert.ok(result.candleCount >= 240);
   assert.ok(calls.length >= 2);
   assert.ok(result.candles.every((item, index) => index === 0 || item.timestamp > result.candles[index - 1].timestamp));
+  assert.ok(result.candles.every((item) => Number.isFinite(item.quoteVolume) && item.quoteVolume > 0));
+  assert.equal(result.quoteTurnoverSource, "UPBIT_CANDLE_ACC_TRADE_PRICE");
   assert.equal(result.liveOrderAllowed, false);
   assert.equal(result.privateAccountRequestAllowed, false);
 });
@@ -76,4 +79,23 @@ test("collector uses the candle boundary rather than an intra-candle trade times
     fetchImpl: async () => response(all),
   });
   assert.ok(result.candles.every((item) => item.timestamp % (4 * 60 * 60 * 1000) === 0));
+});
+
+test("collector does not fabricate quote turnover when provider omits candle_acc_trade_price", async () => {
+  const endTime = Date.UTC(2026, 7, 12, 0, 0);
+  const rows = Array.from({ length: 130 }, (_, index) => {
+    const item = row(endTime - (index + 1) * 4 * 60 * 60 * 1000, 100 + index);
+    delete item.candle_acc_trade_price;
+    return item;
+  });
+  await assert.rejects(
+    collectUpbitSpotHistory({
+      symbol: "BTC",
+      startTime: endTime - 130 * 4 * 60 * 60 * 1000,
+      endTime,
+      minIntervalMs: 0,
+      fetchImpl: async () => response(rows),
+    }),
+    /UPBIT_HISTORY_INSUFFICIENT_0/,
+  );
 });
