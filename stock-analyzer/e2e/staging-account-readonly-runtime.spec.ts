@@ -12,10 +12,16 @@ const enabled = process.env.STAGING_ACCOUNT_READONLY_E2E === 'true';
 test.skip(!enabled, 'isolated Staging account runtime evidence is opt-in only');
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
 
+type Provider = 'toss' | 'upbit' | 'bitget';
+
 function required(name: string) {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`${name} is required for isolated account-runtime evidence`);
   return value;
+}
+
+function optional(name: string) {
+  return process.env[name]?.trim() || undefined;
 }
 
 function internalEmail(loginName: string) {
@@ -48,14 +54,12 @@ async function requestJson(
     const parsed = await response.json();
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) payload = parsed as Record<string, unknown>;
   } catch {
-    // Status is sufficient evidence when a provider did not return JSON.
+    // Status remains evidence if an upstream response is not JSON.
   }
   return { status: response.status, payload };
 }
 
-function safeProviderEvidence(provider: 'upbit' | 'bitget', status: number, payload: Record<string, unknown>) {
-  const balances = Array.isArray(payload.balances) ? payload.balances.length : null;
-  const positions = Array.isArray(payload.positions) ? payload.positions.length : null;
+function safeProviderEvidence(provider: Provider, status: number, payload: Record<string, unknown>) {
   return {
     provider,
     http_status: status,
@@ -63,8 +67,9 @@ function safeProviderEvidence(provider: 'upbit' | 'bitget', status: number, payl
     runtime_status: typeof payload.status === 'string' ? payload.status : null,
     stale: payload.stale === true,
     checked_at_present: typeof payload.checkedAt === 'string' && payload.checkedAt.length > 0,
-    balances_count: balances,
-    positions_count: positions,
+    accounts_count: Array.isArray(payload.accounts) ? payload.accounts.length : null,
+    balances_count: Array.isArray(payload.balances) ? payload.balances.length : null,
+    positions_count: Array.isArray(payload.positions) ? payload.positions.length : null,
     error_code: typeof payload.errorCode === 'string' ? payload.errorCode : null,
     credentials_returned: payload.credentialsReturned === true,
     order_requests: Number(payload.orderRequests ?? 0),
@@ -77,15 +82,12 @@ function safeProviderEvidence(provider: 'upbit' | 'bitget', status: number, payl
   };
 }
 
-async function remainingConnectionRows(supabaseUrl: string, serviceKey: string, userId: string) {
-  const url = new URL('/rest/v1/trading_connections', supabaseUrl);
-  url.searchParams.set('select', 'id');
+async function remainingCredentialRows(supabaseUrl: string, serviceKey: string, userId: string) {
+  const url = new URL('/rest/v1/account_readonly_credentials', supabaseUrl);
+  url.searchParams.set('select', 'provider');
   url.searchParams.set('user_id', `eq.${userId}`);
   const response = await fetch(url, {
-    headers: {
-      apikey: serviceKey,
-      Authorization: `Bearer ${serviceKey}`,
-    },
+    headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` },
     signal: AbortSignal.timeout(20_000),
   });
   if (!response.ok) throw new Error(`credential cleanup query failed with HTTP ${response.status}`);
@@ -102,12 +104,29 @@ async function writeEvidence(artifactDir: string, evidence: Record<string, unkno
   );
 }
 
-test('ephemeral user proves real Upbit and Bitget GET-only account runtime without mutation authority', async () => {
+function assertReadOnlyResult(read: { status: number; payload: Record<string, unknown> }) {
+  expect(read.status).toBe(200);
+  expect(read.payload.status).toBe('CONNECTED');
+  expect(read.payload.connected).toBe(true);
+  expect(read.payload.credentialsReturned).toBe(false);
+  expect(read.payload.orderRequests).toBe(0);
+  expect(read.payload.cancelRequests).toBe(0);
+  expect(read.payload.amendRequests).toBe(0);
+  expect(read.payload.transferRequests).toBe(0);
+  expect(read.payload.withdrawalRequests).toBe(0);
+  expect(read.payload.liveTradingEnabled).toBe(false);
+  expect(read.payload.autoTradingEnabled).toBe(false);
+}
+
+test('ephemeral user proves real Toss Upbit Bitget GET-only account runtime without mutation authority', async () => {
   const baseUrl = required('STAGING_BASE_URL');
   const supabaseUrl = required('STAGING_SUPABASE_URL');
   const supabaseAnonKey = required('STAGING_SUPABASE_ANON_KEY');
   const supabaseServiceKey = required('STAGING_SUPABASE_SECRET_KEY');
   const artifactDir = required('STAGING_ARTIFACT_DIR');
+  const tossClientId = required('STAGING_TOSS_CLIENT_ID');
+  const tossClientSecret = required('STAGING_TOSS_CLIENT_SECRET');
+  const tossAccountSeq = optional('STAGING_TOSS_ACCOUNT_SEQ');
   const upbitAccessKey = required('STAGING_UPBIT_ACCESS_KEY');
   const upbitSecretKey = required('STAGING_UPBIT_SECRET_KEY');
   const bitgetApiKey = required('STAGING_BITGET_API_KEY');
@@ -118,106 +137,61 @@ test('ephemeral user proves real Upbit and Bitget GET-only account runtime witho
   let regularUserId = '';
   let loopbackBindVerified = false;
   let backgroundWorkersDisabled = false;
+  let tossEvidence: Record<string, unknown> | null = null;
   let upbitEvidence: Record<string, unknown> | null = null;
   let bitgetEvidence: Record<string, unknown> | null = null;
   let cleanupRowsRemaining: number | null = null;
 
   try {
-    lifecycle = await provisionEphemeralStagingAccounts({
-      supabaseUrl,
-      supabaseSecretKey: supabaseServiceKey,
-      artifactDir,
-    });
+    lifecycle = await provisionEphemeralStagingAccounts({ supabaseUrl, supabaseSecretKey: supabaseServiceKey, artifactDir });
     const regular = lifecycle.accounts.regular;
-    const auth = createClient(supabaseUrl, supabaseAnonKey, {
-      auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
-    });
-    const { data, error } = await auth.auth.signInWithPassword({
-      email: internalEmail(regular.loginName),
-      password: regular.password,
-    });
-    if (error || !data.session?.access_token || !data.user?.id) {
-      throw new Error(`ephemeral regular account login failed: ${error?.message ?? 'missing session'}`);
-    }
+    const auth = createClient(supabaseUrl, supabaseAnonKey, { auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false } });
+    const { data, error } = await auth.auth.signInWithPassword({ email: internalEmail(regular.loginName), password: regular.password });
+    if (error || !data.session?.access_token || !data.user?.id) throw new Error(`ephemeral regular account login failed: ${error?.message ?? 'missing session'}`);
     regularUserId = data.user.id;
     const token = data.session.access_token;
 
     const health = await requestJson(baseUrl, token, 'GET', '/api/health');
-    expect(health.status).toBe(200);
-    expect(health.payload.ok).toBe(true);
-    expect(health.payload.bindHost).toBe('127.0.0.1');
-    expect(health.payload.backgroundWorkersEnabled).toBe(false);
-    loopbackBindVerified = true;
-    backgroundWorkersDisabled = true;
+    expect(health.status).toBe(200); expect(health.payload.ok).toBe(true); expect(health.payload.bindHost).toBe('127.0.0.1'); expect(health.payload.backgroundWorkersEnabled).toBe(false);
+    loopbackBindVerified = true; backgroundWorkersDisabled = true;
 
     const vaultStatus = await requestJson(baseUrl, token, 'GET', '/api/accounts/read-only/credentials/status');
-    expect(vaultStatus.status).toBe(200);
-    expect(vaultStatus.payload.encryptionConfigured).toBe(true);
-    expect(vaultStatus.payload.credentialsReturned).toBe(false);
+    expect(vaultStatus.status).toBe(200); expect(vaultStatus.payload.encryptionConfigured).toBe(true); expect(vaultStatus.payload.credentialsReturned).toBe(false);
+    expect(vaultStatus.payload.supportedProviders).toEqual(['toss', 'upbit', 'bitget']);
+    expect(vaultStatus.payload.hiddenProviders).toEqual(['kiwoom']);
+
+    const tossSave = await requestJson(baseUrl, token, 'PUT', '/api/accounts/read-only/credentials/toss', {
+      purpose: 'read_only', permissions: ['read'], credentials: { clientId: tossClientId, clientSecret: tossClientSecret, ...(tossAccountSeq ? { accountSeq: tossAccountSeq } : {}) },
+    });
+    expect(tossSave.status).toBe(200); expect(tossSave.payload.credentialsReturned).toBe(false); expect(tossSave.payload.privateProviderRequests).toBe(0); expect(tossSave.payload.orderRequests).toBe(0);
 
     const upbitSave = await requestJson(baseUrl, token, 'PUT', '/api/accounts/read-only/credentials/upbit', {
-      purpose: 'read_only',
-      permissions: ['read'],
-      credentials: { accessKey: upbitAccessKey, secretKey: upbitSecretKey },
+      purpose: 'read_only', permissions: ['read'], credentials: { accessKey: upbitAccessKey, secretKey: upbitSecretKey },
     });
-    expect(upbitSave.status).toBe(200);
-    expect(upbitSave.payload.credentialsReturned).toBe(false);
-    expect(upbitSave.payload.privateProviderRequests).toBe(0);
-    expect(upbitSave.payload.orderRequests).toBe(0);
+    expect(upbitSave.status).toBe(200); expect(upbitSave.payload.credentialsReturned).toBe(false); expect(upbitSave.payload.privateProviderRequests).toBe(0); expect(upbitSave.payload.orderRequests).toBe(0);
 
     const bitgetSave = await requestJson(baseUrl, token, 'PUT', '/api/accounts/read-only/credentials/bitget', {
-      purpose: 'read_only',
-      permissions: ['read'],
-      credentials: { apiKey: bitgetApiKey, secretKey: bitgetSecretKey, passphrase: bitgetPassphrase },
+      purpose: 'read_only', permissions: ['read'], credentials: { apiKey: bitgetApiKey, secretKey: bitgetSecretKey, passphrase: bitgetPassphrase },
     });
-    expect(bitgetSave.status).toBe(200);
-    expect(bitgetSave.payload.credentialsReturned).toBe(false);
-    expect(bitgetSave.payload.privateProviderRequests).toBe(0);
-    expect(bitgetSave.payload.orderRequests).toBe(0);
+    expect(bitgetSave.status).toBe(200); expect(bitgetSave.payload.credentialsReturned).toBe(false); expect(bitgetSave.payload.privateProviderRequests).toBe(0); expect(bitgetSave.payload.orderRequests).toBe(0);
 
+    const tossRead = await requestJson(baseUrl, token, 'GET', '/api/accounts/read-only/toss');
+    tossEvidence = safeProviderEvidence('toss', tossRead.status, tossRead.payload); assertReadOnlyResult(tossRead);
     const upbitRead = await requestJson(baseUrl, token, 'GET', '/api/accounts/read-only/upbit');
-    upbitEvidence = safeProviderEvidence('upbit', upbitRead.status, upbitRead.payload);
-    expect(upbitRead.status).toBe(200);
-    expect(upbitRead.payload.status).toBe('CONNECTED');
-    expect(upbitRead.payload.connected).toBe(true);
-    expect(upbitRead.payload.credentialsReturned).toBe(false);
-    expect(upbitRead.payload.orderRequests).toBe(0);
-    expect(upbitRead.payload.cancelRequests).toBe(0);
-    expect(upbitRead.payload.amendRequests).toBe(0);
-    expect(upbitRead.payload.transferRequests).toBe(0);
-    expect(upbitRead.payload.withdrawalRequests).toBe(0);
-    expect(upbitRead.payload.liveTradingEnabled).toBe(false);
-    expect(upbitRead.payload.autoTradingEnabled).toBe(false);
-
+    upbitEvidence = safeProviderEvidence('upbit', upbitRead.status, upbitRead.payload); assertReadOnlyResult(upbitRead);
     const bitgetRead = await requestJson(baseUrl, token, 'GET', '/api/accounts/read-only/bitget');
-    bitgetEvidence = safeProviderEvidence('bitget', bitgetRead.status, bitgetRead.payload);
-    expect(bitgetRead.status).toBe(200);
-    expect(bitgetRead.payload.status).toBe('CONNECTED');
-    expect(bitgetRead.payload.connected).toBe(true);
-    expect(bitgetRead.payload.credentialsReturned).toBe(false);
-    expect(bitgetRead.payload.orderRequests).toBe(0);
-    expect(bitgetRead.payload.cancelRequests).toBe(0);
-    expect(bitgetRead.payload.amendRequests).toBe(0);
-    expect(bitgetRead.payload.transferRequests).toBe(0);
-    expect(bitgetRead.payload.withdrawalRequests).toBe(0);
-    expect(bitgetRead.payload.liveTradingEnabled).toBe(false);
-    expect(bitgetRead.payload.autoTradingEnabled).toBe(false);
+    bitgetEvidence = safeProviderEvidence('bitget', bitgetRead.status, bitgetRead.payload); assertReadOnlyResult(bitgetRead);
   } finally {
     if (lifecycle) await lifecycle.cleanup();
     if (regularUserId) {
-      cleanupRowsRemaining = await remainingConnectionRows(supabaseUrl, supabaseServiceKey, regularUserId);
+      cleanupRowsRemaining = await remainingCredentialRows(supabaseUrl, supabaseServiceKey, regularUserId);
       expect(cleanupRowsRemaining).toBe(0);
     }
     await writeEvidence(artifactDir, {
-      status: loopbackBindVerified
-        && backgroundWorkersDisabled
-        && upbitEvidence?.connected === true
-        && bitgetEvidence?.connected === true
-        && cleanupRowsRemaining === 0
-        ? 'passed'
-        : 'failed',
+      status: loopbackBindVerified && backgroundWorkersDisabled && tossEvidence?.connected === true && upbitEvidence?.connected === true && bitgetEvidence?.connected === true && cleanupRowsRemaining === 0 ? 'passed' : 'failed',
       loopback_bind_verified: loopbackBindVerified,
       background_workers_disabled: backgroundWorkersDisabled,
+      toss: tossEvidence,
       upbit: upbitEvidence,
       bitget: bitgetEvidence,
       credential_rows_remaining_after_ephemeral_user_cleanup: cleanupRowsRemaining,
