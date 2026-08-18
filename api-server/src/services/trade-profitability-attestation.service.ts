@@ -37,6 +37,18 @@ export type TradeProfitabilityAttestation = {
   orderAuthorityGranted: false;
 };
 
+export type TradeProfitabilityAttestationRunner = (
+  input: TradingPlanInput,
+) => TradeProfitabilityAttestation;
+
+let profitabilityAttestationRunnerForTests: TradeProfitabilityAttestationRunner | null = null;
+
+export function setTradeProfitabilityAttestationRunnerForTests(
+  runner: TradeProfitabilityAttestationRunner | null,
+) {
+  profitabilityAttestationRunnerForTests = runner;
+}
+
 function expectedMarket(input: TradingPlanInput) {
   if (input.exchange === 'bitget') return 'CRYPTO_FUTURES';
   if (input.exchange === 'upbit') return 'CRYPTO_SPOT';
@@ -130,6 +142,10 @@ export function attestLiveTradingProfitability(
   promotion: PromotionReader = createDefaultStrategyPromotionService(),
   freshness: Partial<ProfitabilityEvidenceFreshness> = {},
 ): TradeProfitabilityAttestation {
+  if (profitabilityAttestationRunnerForTests) {
+    return profitabilityAttestationRunnerForTests(input);
+  }
+
   const base: TradeProfitabilityAttestation = {
     required: input.accountMode === 'live',
     allowed: input.accountMode !== 'live',
