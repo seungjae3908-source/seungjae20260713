@@ -4,7 +4,7 @@ import {
   advanceLedger,
   buildArtifactBundle,
   verifyPredecessorBundle,
-} from './fake-wall-forward-ledger.mjs';
+} from '../src/fake-wall-forward-ledger.mjs';
 
 function argsOf(argv) {
   const out = {};
