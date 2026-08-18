@@ -6,14 +6,22 @@ import {
   getQuote as getTossQuote,
   isTossConfigured,
 } from '../providers/toss';
+import { getKiwoomChartCandles } from '../kiwoom-chart';
 import type { Candle, CompanyProfile, Quote, Timeframe } from '../sample/types';
 
 export type { SearchResult, QuoteRow };
 
 const FALLBACK_PROFILE_DESCRIPTION = '기업 정보를 확인 중입니다.';
+const APP_KR_INTRADAY_CANDLE_LIMIT = 300;
+const KR_INTRADAY_TIMEFRAMES = new Set(['1m', '3m', '5m', '15m', '30m', '60m', '1H', '4H']);
 
 function minimumUsefulCandles(timeframe: Timeframe): number {
   return timeframe === '1D' ? 30 : 2;
+}
+
+function isBoundedKrIntradayRequest(ticker: string, timeframe: Timeframe): boolean {
+  return /^\d{6}$/.test(String(ticker ?? '').trim())
+    && KR_INTRADAY_TIMEFRAMES.has(String(timeframe));
 }
 
 export class MarketDataService extends BaseMarketDataService {
@@ -40,6 +48,26 @@ export class MarketDataService extends BaseMarketDataService {
     ticker: string,
     timeframe: Timeframe = '1D',
   ): Promise<{ candles: Candle[]; provider: string; fetchedAt: string }> {
+    /*
+     * App-facing KR intraday charts must terminate inside the browser's finite request budget.
+     * The lower-level Kiwoom history reader intentionally keeps its deep 300-page contract for
+     * research/long-history callers; this facade asks only for the latest visible chart window.
+     */
+    if (isBoundedKrIntradayRequest(ticker, timeframe)) {
+      try {
+        const candles = await getKiwoomChartCandles(
+          String(ticker).trim(),
+          String(timeframe),
+          APP_KR_INTRADAY_CANDLE_LIMIT,
+        );
+        if (candles.length >= minimumUsefulCandles(timeframe)) {
+          return { candles, provider: 'kiwoom', fetchedAt: new Date().toISOString() };
+        }
+      } catch {
+        // Preserve the existing provider fallback contract below.
+      }
+    }
+
     let primaryResult: { candles: Candle[]; provider: string; fetchedAt: string } | null = null;
     let primaryError: unknown = null;
     try {
