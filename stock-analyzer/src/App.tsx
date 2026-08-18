@@ -3,7 +3,6 @@ import { Route, Switch, Router as WouterRouter, useLocation, useRoute } from 'wo
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { BottomNav } from '@/components/bottom-nav';
 import { SettingsProvider } from '@/lib/settings';
 import { ensureWatchlistSync } from '@/lib/watchlist-sync';
 import { AuthProvider, useAuth } from '@/lib/auth';
@@ -40,6 +39,7 @@ const MorePage = lazy(() => import('@/pages/more'));
 const PortfolioPage = lazy(() => import('@/pages/portfolio'));
 const PortfolioV2Page = lazy(() => import('@/pages/portfolio-v2'));
 const StrategyPromotionPage = lazy(() => import('@/pages/strategy-promotion'));
+const ResearchCenterPage = lazy(() => import('@/pages/research-center'));
 const AccountPage = lazy(() => import('@/pages/account'));
 const AdminPage = lazy(() => import('@/pages/admin'));
 const InstallPage = lazy(() => import('@/pages/install'));
@@ -163,20 +163,8 @@ function builder(pageId: UiBuilderPageId, child: React.ReactNode) {
 }
 
 function HomeAccess() { return builder('HOME', <HomePage />); }
-function BasicScannerWorkspace() {
-  return (
-    <div data-testid="scanner-workspace-basic" className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
-      <div className="min-h-0 flex-1 overflow-hidden"><SignalScannerPage /></div>
-      <BottomNav />
-    </div>
-  );
-}
 function ScannerAccess() {
-  const auth = useAuth();
-  return gated(
-    'canAccessBasicInfo',
-    auth.can('canAccessRiskPreview') ? <TechnicalWorkspacePage /> : <BasicScannerWorkspace />,
-  );
+  return gated('canAccessBasicInfo', <TechnicalWorkspacePage />);
 }
 function AiChartAccess() { return gated('canAccessRiskPreview', builder('AI_CHART', <AiChartPage />)); }
 function AiChatAccess() { return gated('canAccessBasicInfo', builder('AI_CHAT', <AiChatPage />)); }
@@ -184,6 +172,7 @@ function RecommendationsAccess() { return gated('canAccessRiskPreview', <Recomme
 function PortfolioAccess() { return gated('canAccessPaperTrading', builder('PORTFOLIO', <PortfolioV2Page />)); }
 function PositionAccess() { return gated('canAccessPaperTrading', builder('POSITION', <PortfolioPage />)); }
 function StrategyPromotionAccess() { return gated('canAccessBacktests', <StrategyPromotionPage />); }
+function ResearchCenterAccess() { return gated('canManageMembers', <ResearchCenterPage />); }
 function BacktestsAccess() { return gated('canAccessBacktests', <BacktestsPage />); }
 function PaperTradingRouteFallback() {
   return (
@@ -273,6 +262,7 @@ function ApprovedRouter() {
     <Route path="/scanner" component={ScannerAccess} />
     <Route path="/ai-chart" component={AiChartAccess} />
     <Route path="/ai-chat" component={AiChatAccess} />
+    <Route path="/research-center" component={ResearchCenterAccess} />
     <Route path="/themes" component={NewsInformationAccess} />
     <Route path="/news-information" component={NewsInformationAccess} />
     <Route path="/learn" component={LearnPage} />
