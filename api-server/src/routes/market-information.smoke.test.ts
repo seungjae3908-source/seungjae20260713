@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
 import test from 'node:test';
 import express from 'express';
+import './market-summary-availability.smoke.test';
 import { createMarketInformationRouter } from './market-information';
 import {
   MarketInformationError,
