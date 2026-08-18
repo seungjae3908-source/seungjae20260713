@@ -77,7 +77,7 @@ function percentile(values: number[], value: number | null | undefined): number 
   return round(belowOrEqual / ordered.length * 100);
 }
 
-function hardFilterReasons(card: ScannerSignalCard): string[] {
+export function scannerCandidateHardFilterReasons(card: ScannerSignalCard): string[] {
   const reasons: string[] = [];
   if (!Number.isFinite(card.price) || card.price <= 0) reasons.push('비정상 가격');
   if (card.listingStatus !== 'LISTED') reasons.push('거래가능 상장 상태 미확인');
@@ -159,7 +159,7 @@ export function rankScannerCandidates(input: ScannerCandidateRankingInput): Scan
   let hardFilterRejectedCount = 0;
   let backtestMissingCount = 0;
   const ranked = input.cards.flatMap((card) => {
-    const hardReasons = hardFilterReasons(card);
+    const hardReasons = scannerCandidateHardFilterReasons(card);
     if (hardReasons.length) {
       hardFilterRejectedCount += 1;
       return [];

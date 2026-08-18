@@ -14,6 +14,7 @@ import {
   type CryptoPricePrecisionService as CryptoPricePrecisionServiceContract,
 } from '../services/scanner-crypto-price-precision.service';
 import { rankScannerCandidates } from '../services/scanner-candidate-ranking.service';
+import { buildScannerDiscoveryView } from '../services/scanner-discovery-view.service';
 import {
   scannerStrategyForTimeframe,
   scannerStrategyTimeframeAllowed,
@@ -195,6 +196,10 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
         dependencies.marketIntelligence,
       );
       if (controller.signal.aborted || res.writableEnded) return;
+      const discovery = buildScannerDiscoveryView(result.cards, {
+        tradeReviewCount: rankedCards.length,
+        limit: 100,
+      });
 
       const actionableIds = new Set(rankedCards
         .filter((card) => (card.signalGrade === 'S' || card.signalGrade === 'A') && card.strongSignalEligible !== false)
@@ -212,9 +217,23 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
       const dataSuccessCount = Math.max(0, providerAcceptedCount - insufficientDataCount);
       const preRankingFilteredCount = Math.max(0, dataSuccessCount - result.cards.length);
       const filteredByStrategyCount = preRankingFilteredCount + ranking.diagnostics.hardFilterRejectedCount;
+      const baseMessage = selectedCondition === 'williams'
+        ? overlay.unavailableCount > 0 && overlay.matchedCount === 0
+          ? `Williams+ATR 일봉 확인 실패/부족 ${overlay.unavailableCount}개 · 강한 신호 승격 없음`
+          : actionableCount === 0
+            ? `Williams+ATR 확인 신호 없음 · 일치 ${overlay.matchedCount}개 · B 관찰 ${bGradeCount}개`
+            : `Williams+ATR + Quant S/A 일치 ${actionableCount}개 · B 관찰 ${bGradeCount}개`
+        : dataSuccessCount === 0 && insufficientDataCount > 0
+          ? `현재 묶음에서 공급자 응답은 받았지만 ${insufficientDataCount}종목의 분석 데이터가 부족합니다.`
+          : rankedCards.length === 0
+            ? '현재 묶음에서 추천 정책을 통과한 후보가 없습니다.'
+            : actionableCount === 0
+              ? `현재 진입 가능한 강한 신호 없음 · 관찰 후보 ${bGradeCount}개`
+              : `S/A 진입 검토 ${actionableCount}개 · B 관찰 ${bGradeCount}개`;
       const rankedResult = {
         ...result,
         cards: rankedCards,
+        discovery,
         alerts: result.alerts
           .filter((alert) => actionableIds.has(alert.signalId))
           .map((alert) => {
@@ -245,19 +264,7 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
           bGradeCount,
           backtestMissingCount: ranking.diagnostics.backtestMissingCount,
         },
-        message: selectedCondition === 'williams'
-          ? overlay.unavailableCount > 0 && overlay.matchedCount === 0
-            ? `Williams+ATR 일봉 확인 실패/부족 ${overlay.unavailableCount}개 · 강한 신호 승격 없음`
-            : actionableCount === 0
-              ? `Williams+ATR 확인 신호 없음 · 일치 ${overlay.matchedCount}개 · B 관찰 ${bGradeCount}개`
-              : `Williams+ATR + Quant S/A 일치 ${actionableCount}개 · B 관찰 ${bGradeCount}개`
-          : dataSuccessCount === 0 && insufficientDataCount > 0
-            ? `현재 묶음에서 공급자 응답은 받았지만 ${insufficientDataCount}종목의 분석 데이터가 부족합니다.`
-            : rankedCards.length === 0
-              ? '현재 묶음에서 추천 정책을 통과한 후보가 없습니다.'
-              : actionableCount === 0
-                ? `현재 진입 가능한 강한 신호 없음 · 관찰 후보 ${bGradeCount}개`
-                : `S/A 진입 검토 ${actionableCount}개 · B 관찰 ${bGradeCount}개`,
+        message: `${baseMessage} · 검색 후보 ${discovery.candidateCount}개 · 매매 검토 ${rankedCards.length}개`,
       };
       const canonicalResult = withScannerCanonicalActions(rankedResult);
       const visibleResult = withScannerOutcome(filterScannerResponseForTier(canonicalResult, membershipLevel, requestedGrade ?? undefined));
