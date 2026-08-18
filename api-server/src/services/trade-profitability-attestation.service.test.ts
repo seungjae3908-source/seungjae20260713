@@ -98,7 +98,7 @@ test('live plan ignores client economics unless same-identity server promotion e
 });
 
 test('promotion candidate projects trusted live economics from server evidence instead of request values', () => {
-  const result = attestLiveTradingProfitability(plan(), promotedService());
+  const result = attestLiveTradingProfitability(plan(), promotedService(), { now: NOW.getTime() });
   assert.equal(result.allowed, true);
   assert.equal(result.clientEconomicsTrusted, false);
   assert.equal(result.promotionState, 'PROMOTION_CANDIDATE');
@@ -112,18 +112,38 @@ test('promotion candidate projects trusted live economics from server evidence i
   assert.equal(result.orderAuthorityGranted, false);
 });
 
+test('stale server promotion economics expire locally and block live attestation', () => {
+  const result = attestLiveTradingProfitability(plan(), promotedService(), {
+    now: NOW.getTime() + 25 * 60 * 60_000,
+    maxEvidenceAgeHours: 24,
+  });
+  assert.equal(result.required, true);
+  assert.equal(result.allowed, false);
+  assert.ok(result.blockCodes.includes('PROFITABILITY_EVIDENCE_STALE'));
+  assert.equal(result.serverEconomics, null);
+  assert.equal(result.orderAuthorityGranted, false);
+});
+
 test('server promotion identity mismatch blocks live attestation', () => {
-  const direction = attestLiveTradingProfitability(plan({ side: 'short' }), promotedService());
+  const direction = attestLiveTradingProfitability(plan({ side: 'short' }), promotedService(), { now: NOW.getTime() });
   assert.equal(direction.allowed, false);
   assert.ok(direction.blockCodes.includes('SERVER_STRATEGY_DIRECTION_MISMATCH'));
 
-  const market = attestLiveTradingProfitability(plan({ exchange: 'upbit', market: 'KRW', symbol: 'BTC', side: 'buy' }), promotedService());
+  const market = attestLiveTradingProfitability(
+    plan({ exchange: 'upbit', market: 'KRW', symbol: 'BTC', side: 'buy' }),
+    promotedService(),
+    { now: NOW.getTime() },
+  );
   assert.equal(market.allowed, false);
   assert.ok(market.blockCodes.includes('SERVER_STRATEGY_MARKET_MISMATCH'));
 });
 
 test('paper plans do not require live profitability attestation', () => {
-  const result = attestLiveTradingProfitability(plan({ accountMode: 'paper' }), new StrategyPromotionService({ sourceSha: SHA, now: () => NOW }));
+  const result = attestLiveTradingProfitability(
+    plan({ accountMode: 'paper' }),
+    new StrategyPromotionService({ sourceSha: SHA, now: () => NOW }),
+    { now: NOW.getTime() + 25 * 60 * 60_000, maxEvidenceAgeHours: 24 },
+  );
   assert.equal(result.required, false);
   assert.equal(result.allowed, true);
   assert.equal(result.serverEconomics, null);
