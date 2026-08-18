@@ -41,6 +41,8 @@ jobs:
           node --check market-intelligence-sidecar/src/engine.mjs
           node --check market-intelligence-sidecar/src/public-data.mjs
           node --check market-intelligence-sidecar/src/server.mjs
+          node --check market-intelligence-sidecar/src/fake-wall-forward-ledger.mjs
+          node --check market-intelligence-sidecar/scripts/run-fake-wall-forward-ledger.mjs
           node --check market-intelligence-sidecar/scripts/verify-contract.mjs
 
       - name: Unit and service tests
