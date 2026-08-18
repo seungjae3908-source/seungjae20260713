@@ -39,6 +39,7 @@ const MorePage = lazy(() => import('@/pages/more'));
 const PortfolioPage = lazy(() => import('@/pages/portfolio'));
 const PortfolioV2Page = lazy(() => import('@/pages/portfolio-v2'));
 const StrategyPromotionPage = lazy(() => import('@/pages/strategy-promotion'));
+const ResearchCenterPage = lazy(() => import('@/pages/research-center'));
 const AccountPage = lazy(() => import('@/pages/account'));
 const AdminPage = lazy(() => import('@/pages/admin'));
 const InstallPage = lazy(() => import('@/pages/install'));
@@ -171,6 +172,7 @@ function RecommendationsAccess() { return gated('canAccessRiskPreview', <Recomme
 function PortfolioAccess() { return gated('canAccessPaperTrading', builder('PORTFOLIO', <PortfolioV2Page />)); }
 function PositionAccess() { return gated('canAccessPaperTrading', builder('POSITION', <PortfolioPage />)); }
 function StrategyPromotionAccess() { return gated('canAccessBacktests', <StrategyPromotionPage />); }
+function ResearchCenterAccess() { return gated('canManageMembers', <ResearchCenterPage />); }
 function BacktestsAccess() { return gated('canAccessBacktests', <BacktestsPage />); }
 function PaperTradingRouteFallback() {
   return (
@@ -260,6 +262,7 @@ function ApprovedRouter() {
     <Route path="/scanner" component={ScannerAccess} />
     <Route path="/ai-chart" component={AiChartAccess} />
     <Route path="/ai-chat" component={AiChatAccess} />
+    <Route path="/research-center" component={ResearchCenterAccess} />
     <Route path="/themes" component={NewsInformationAccess} />
     <Route path="/news-information" component={NewsInformationAccess} />
     <Route path="/learn" component={LearnPage} />
