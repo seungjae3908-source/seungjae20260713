@@ -3,7 +3,6 @@ import { Route, Switch, Router as WouterRouter, useLocation, useRoute } from 'wo
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { BottomNav } from '@/components/bottom-nav';
 import { SettingsProvider } from '@/lib/settings';
 import { ensureWatchlistSync } from '@/lib/watchlist-sync';
 import { AuthProvider, useAuth } from '@/lib/auth';
@@ -163,20 +162,8 @@ function builder(pageId: UiBuilderPageId, child: React.ReactNode) {
 }
 
 function HomeAccess() { return builder('HOME', <HomePage />); }
-function BasicScannerWorkspace() {
-  return (
-    <div data-testid="scanner-workspace-basic" className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
-      <div className="min-h-0 flex-1 overflow-hidden"><SignalScannerPage /></div>
-      <BottomNav />
-    </div>
-  );
-}
 function ScannerAccess() {
-  const auth = useAuth();
-  return gated(
-    'canAccessBasicInfo',
-    auth.can('canAccessRiskPreview') ? <TechnicalWorkspacePage /> : <BasicScannerWorkspace />,
-  );
+  return gated('canAccessBasicInfo', <TechnicalWorkspacePage />);
 }
 function AiChartAccess() { return gated('canAccessRiskPreview', builder('AI_CHART', <AiChartPage />)); }
 function AiChatAccess() { return gated('canAccessBasicInfo', builder('AI_CHAT', <AiChatPage />)); }
