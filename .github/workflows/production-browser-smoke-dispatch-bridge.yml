@@ -1,0 +1,162 @@
+name: Production Browser Smoke Dispatch Bridge
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    name: Dispatch owner-approved read-only Production browser smoke
+    if: >-
+      github.event.action == 'created' &&
+      github.event.issue.number == 23 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control' &&
+      github.event.comment.user.login == 'seungjae3908-source' &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/run-production-browser-smoke ')
+    concurrency:
+      group: production-browser-smoke-dispatch-bridge
+      cancel-in-progress: false
+    permissions:
+      actions: write
+      contents: read
+      issues: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Parse exact owner command
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const body = String(process.env.COMMENT_BODY ?? '').trim();
+          const match = /^\/run-production-browser-smoke ([0-9a-fA-F]{40})$/.exec(body);
+          if (!match) {
+            console.error('Exact command required: /run-production-browser-smoke <40-character-deployed-production-sha>');
+            process.exit(1);
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha=${match[1].toLowerCase()}\n`);
+          NODE
+
+      - name: Require latest successful Production Deploy to match target
+        id: production
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'production-deploy.yml',
+              event: 'workflow_dispatch',
+              per_page: 100,
+            });
+            const latest = runs
+              .filter((run) => run.status === 'completed' && run.conclusion === 'success')
+              .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+            if (!latest) {
+              core.setFailed('No successful Production Deploy run exists.');
+              return;
+            }
+            if (String(latest.head_sha).toLowerCase() !== target) {
+              core.setFailed(`Target is not the latest successful Production Deploy SHA: latest=${latest.head_sha}`);
+              return;
+            }
+            core.setOutput('deploy_run_id', String(latest.id));
+
+      - name: Dispatch and confirm Production Browser Smoke
+        id: smoke
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const workflowId = 'production-browser-smoke.yml';
+            const active = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflowId,
+              event: 'workflow_dispatch',
+              per_page: 100,
+            });
+            const existing = active
+              .filter((run) => run.status !== 'completed')
+              .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+            if (existing) {
+              core.setOutput('run_id', String(existing.id));
+              core.setOutput('run_url', existing.html_url);
+              core.info(`Reusing active Production Browser Smoke Run ${existing.id}.`);
+              return;
+            }
+            const response = await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflowId,
+              ref: 'main',
+              inputs: { sha: target },
+              return_run_details: true,
+              headers: {
+                accept: 'application/vnd.github+json',
+                'X-GitHub-Api-Version': '2026-03-10',
+              },
+            });
+            const runId = Number(response.data?.workflow_run_id);
+            if (response.status !== 200 || !Number.isSafeInteger(runId) || runId <= 0) {
+              core.setFailed(`Production Browser Smoke dispatch returned invalid Run ID with HTTP ${response.status}.`);
+              return;
+            }
+            const run = (await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId,
+            })).data;
+            if (run.event !== 'workflow_dispatch' || run.path !== '.github/workflows/production-browser-smoke.yml') {
+              core.setFailed('Returned run does not match the official Production Browser Smoke workflow.');
+              return;
+            }
+            core.setOutput('run_id', String(runId));
+            core.setOutput('run_url', run.html_url);
+
+      - name: Record read-only smoke dispatch
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ steps.production.outputs.deploy_run_id }}
+          SMOKE_RUN_ID: ${{ steps.smoke.outputs.run_id }}
+          SMOKE_RUN_URL: ${{ steps.smoke.outputs.run_url }}
+          SOURCE_COMMENT_ID: ${{ github.event.comment.id }}
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+              body: [
+                'Production Browser Smoke dispatched through the owner-gated read-only bridge.',
+                '',
+                `- Deployed Production SHA: \`${process.env.TARGET_SHA}\``,
+                `- Latest successful Production Deploy Run ID: \`${process.env.PRODUCTION_DEPLOY_RUN_ID}\``,
+                `- Production Browser Smoke Run ID: \`${process.env.SMOKE_RUN_ID}\``,
+                `- Run: [Open GitHub Actions run](${process.env.SMOKE_RUN_URL})`,
+                '- Production environment protection bypassed: `false`',
+                '- Production DB/app mutations by this bridge: `0`',
+                '- Trading/private/order authority granted: `false`',
+                `- Source command comment ID: \`${process.env.SOURCE_COMMENT_ID}\``,
+              ].join('\n'),
+            });
