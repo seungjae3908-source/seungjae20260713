@@ -81,6 +81,7 @@ function normalizeDataset(raw, market) {
   const delistedAtMs = positive(Number(raw.delistedAtMs)) ? Number(raw.delistedAtMs) : null;
   if (delistedAtMs != null && delistedAtMs < listedAtMs) throw new TypeError(`invalid listing range for ${symbol}`);
 
+  const sameVenuePublicMarketHistory = sourceVenue === targetVenue && crossVenueProxyForExecution !== true;
   return freeze({
     schemaVersion: "crypto-historical-dataset-v1",
     market,
@@ -96,7 +97,10 @@ function normalizeDataset(raw, market) {
     checksumRequired,
     checksumVerified: raw.checksumVerified === true,
     crossVenueProxyForExecution,
-    exactTargetVenueExecutionHistory: sourceVenue === targetVenue && crossVenueProxyForExecution !== true,
+    sameVenuePublicMarketHistory,
+    publicMarketHistoryOnly: true,
+    executionEvidenceAvailable: false,
+    exactTargetVenueExecutionHistory: false,
     syntheticHistoricalData: false,
     fakeHistoricalData: false,
   });
@@ -141,7 +145,10 @@ function buildDatasetEvidence(datasets) {
     checksumRequired: datasets.some((row) => row.checksumRequired),
     checksumVerified: datasets.every((row) => !row.checksumRequired || row.checksumVerified),
     crossVenueProxyForExecution: datasets.some((row) => row.crossVenueProxyForExecution),
-    exactTargetVenueExecutionHistory: datasets.every((row) => row.exactTargetVenueExecutionHistory),
+    sameVenuePublicMarketHistory: datasets.every((row) => row.sameVenuePublicMarketHistory),
+    publicMarketHistoryOnly: true,
+    executionEvidenceAvailable: false,
+    exactTargetVenueExecutionHistory: false,
     selectionUsesFutureData: false,
     syntheticHistoricalData: false,
     profitabilityClaimAllowed: false,
@@ -329,7 +336,10 @@ export async function runCryptoHistoricalDiscoveryReplay({
     futureDataUsedForScoringOnly: true,
     syntheticHistoricalDataAllowed: false,
     crossVenueProxyForExecution: adapter.datasetEvidence.crossVenueProxyForExecution,
-    exactTargetVenueExecutionHistory: adapter.datasetEvidence.exactTargetVenueExecutionHistory,
+    sameVenuePublicMarketHistory: adapter.datasetEvidence.sameVenuePublicMarketHistory,
+    publicMarketHistoryOnly: true,
+    executionEvidenceAvailable: false,
+    exactTargetVenueExecutionHistory: false,
     searchQualityIsNotProfitabilityProof: true,
     profitabilityClaimAllowed: false,
     executionAuthority: "NONE",
