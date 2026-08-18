@@ -61,22 +61,40 @@ function snapshotOf(input) {
   };
 }
 
+function snapshotTimestamp(snapshot) {
+  const value = Number(snapshot?.asOf ?? snapshot?.orderBook?.ts ?? snapshot?.orderBook?.timestamp);
+  return Number.isFinite(value) ? value : null;
+}
+
+function comparablePrevious(current, previous) {
+  if (!previous) return false;
+  const currentTs = snapshotTimestamp(current);
+  const previousTs = snapshotTimestamp(previous);
+  if (currentTs == null || previousTs == null || currentTs <= previousTs) return false;
+  const configured = Number(current?.policy?.maxDataAgeMs ?? DEFAULT_POLICY.maxDataAgeMs);
+  const maxGapMs = Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_POLICY.maxDataAgeMs;
+  return currentTs - previousTs <= maxGapMs;
+}
+
 function withPrevious(input) {
   const key = keyOf(input);
   const rememberedHistory = historyByKey.get(key) ?? [];
   const explicitHistory = Array.isArray(input.history) ? input.history : null;
   const history = explicitHistory ?? rememberedHistory;
-  const previous = input.previous ?? history.at(-1);
+  const candidatePrevious = input.previous ?? history.at(-1);
+  const previous = comparablePrevious(input, candidatePrevious) ? candidatePrevious : null;
+  const { previous: _discardedPrevious, ...rest } = input;
   return {
-    ...input,
+    ...rest,
     ...(previous ? { previous } : {}),
     history,
+    previousSnapshotRejected: Boolean(candidatePrevious && !previous),
   };
 }
 
 function remember(input) {
   const key = keyOf(input);
-  if (!key.includes(':') || key.endsWith(':')) return;
+  if (!key.includes(':') || key.startsWith(':') || key.endsWith(':')) return;
   const snapshot = snapshotOf(input);
   const timestamp = Number(snapshot.asOf);
   const history = historyByKey.get(key) ?? [];
@@ -111,6 +129,9 @@ async function evaluateAndRemember(input) {
     micropriceBiasBps: result.microstructure.micropriceBiasBps,
   });
   result.microstructure.spoofCandidate = spoofCandidate;
+  if (enriched.previousSnapshotRejected) {
+    result.warnings = [...new Set([...result.warnings, 'PREVIOUS_MICROSTRUCTURE_SNAPSHOT_REJECTED'])];
+  }
   if (spoofCandidate.state === 'INSUFFICIENT_EVIDENCE') {
     result.warnings = [...new Set([...result.warnings, 'SPOOF_CANDIDATE_INSUFFICIENT_EVIDENCE'])];
   }
