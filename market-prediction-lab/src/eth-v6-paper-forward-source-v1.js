@@ -7,11 +7,16 @@ import {
 import { FROZEN_CANDIDATE_MANIFEST_SHA256 } from "./final-holdout-evaluator.js";
 import { BITGET_STANDARD_TAKER_RESEARCH_COSTS } from "./historical-backtest-data.js";
 import { BITGET_ENDPOINTS, BitgetPublicClient } from "./bitget-public-client.js";
+import {
+  PAPER_KRW_USDT_SIZING_CONTRACT,
+  loadUpbitPublicKrwPerUsdt,
+  sizeOnePercentRiskKrwFuturesPosition,
+} from "./paper-krw-usdt-sizing-v1.js";
 
 const MARKET_CONTEXT_MAX_AGE_MS = 5 * 60 * 1000;
 const SHADOW_TO_PAPER_MAX_DELAY_MS = 45 * 60 * 1000;
 const COST_POLICY_VERSION = "bitget-standard-taker-research-v1";
-const EXECUTION_POLICY_VERSION = "eth-v6-retained-forward-next-open-v1";
+const EXECUTION_POLICY_VERSION = "eth-v6-natural-forward-next-open-v1";
 const STRATEGY_VERSION = "V6_FROZEN_FINAL_HOLDOUT";
 const SHADOW_KEY = "eth-futures-long-v6";
 const CONTRACTS_ENDPOINT = "/api/v2/mix/market/contracts";
@@ -25,6 +30,7 @@ export const ETH_V6_PAPER_FORWARD_SOURCE_CONTRACT = Object.freeze({
   retainedNaturalForwardOnly: true,
   maximumEntryLagMs: ETH_V6_FORWARD_MAX_ENTRY_LAG_MS,
   maximumSourceAgeMs: SHADOW_TO_PAPER_MAX_DELAY_MS,
+  sizing: PAPER_KRW_USDT_SIZING_CONTRACT,
   settlementBridgeReady: false,
   liveTrading: false,
   privateApi: false,
@@ -64,14 +70,6 @@ function parameterHash() {
     filter: ETH_V6_FORWARD_CANDIDATE.filter,
     manifest: FROZEN_CANDIDATE_MANIFEST_SHA256,
   })).digest("hex");
-}
-
-function normalizeQuantity(quantity, step) {
-  if (!positive(quantity) || !positive(step)) throw new Error("ETH_V6_PAPER_QUANTITY_INVALID");
-  const units = Math.floor((quantity + Number.EPSILON) / step);
-  const normalized = units * step;
-  if (!positive(normalized)) throw new Error("ETH_V6_PAPER_QUANTITY_BELOW_STEP");
-  return normalized;
 }
 
 function contractTickSize(contract) {
@@ -179,18 +177,25 @@ function holdoutEvidence(document) {
   });
 }
 
-export async function loadBitgetEthV6PaperContext({ client = new BitgetPublicClient(), record, nowMs, sourceObservedAtMs } = {}) {
+export async function loadBitgetEthV6PaperContext({
+  client = new BitgetPublicClient(),
+  record,
+  nowMs,
+  sourceObservedAtMs,
+  loadFx = loadUpbitPublicKrwPerUsdt,
+} = {}) {
   if (!client || typeof client.get !== "function") throw new TypeError("Bitget public client is required");
-  if (!record || !Number.isInteger(nowMs) || !Number.isInteger(sourceObservedAtMs)) {
-    throw new TypeError("ETH V6 tracking record, nowMs, and sourceObservedAtMs are required");
+  if (!record || !Number.isInteger(nowMs) || !Number.isInteger(sourceObservedAtMs) || typeof loadFx !== "function") {
+    throw new TypeError("ETH V6 tracking record, timestamps, and loadFx are required");
   }
   const common = { productType: "usdt-futures", symbol: "ETHUSDT" };
-  const [contracts, tiers, openInterest, funding, price] = await Promise.all([
+  const [contracts, tiers, openInterest, funding, price, fx] = await Promise.all([
     client.get(CONTRACTS_ENDPOINT, common),
     client.get(POSITION_TIER_ENDPOINT, common),
     client.get(BITGET_ENDPOINTS.openInterest, common),
     client.get(BITGET_ENDPOINTS.currentFunding, common),
     client.get(BITGET_ENDPOINTS.symbolPrice, common),
+    loadFx({ nowMs }),
   ]);
   const contract = firstArray(contracts.data, "CONTRACT");
   const fundingRow = firstArray(funding.data, "FUNDING");
@@ -201,32 +206,42 @@ export async function loadBitgetEthV6PaperContext({ client = new BitgetPublicCli
   }
   const asOfMs = asNumber(priceRow.ts, "MARKET_TIMESTAMP");
   if (asOfMs > nowMs || nowMs - asOfMs > MARKET_CONTEXT_MAX_AGE_MS) throw new Error("ETH_V6_PAPER_MARKET_CONTEXT_STALE");
+  if (fx?.status !== "READY" || !positive(fx.krwPerUsdt) || !finite(fx.asOfMs) || !positive(fx.maxAgeMs)) {
+    throw new Error("ETH_V6_PAPER_KRW_USDT_FX_NOT_READY");
+  }
 
+  const entryPrice = asNumber(record.entryPlan?.entryPrice, "ENTRY_PRICE");
+  const stopPrice = asNumber(record.stop, "STOP_PRICE");
   const minQty = asNumber(contract.minTradeNum, "MIN_QTY");
   const qtyStep = asNumber(contract.sizeMultiplier, "QTY_STEP");
-  const quantity = normalizeQuantity(record.entryPlan.quantity, qtyStep);
-  if (quantity + Number.EPSILON < minQty) throw new Error("ETH_V6_PAPER_QUANTITY_BELOW_MINIMUM");
-  const entryPrice = asNumber(record.entryPlan.entryPrice, "ENTRY_PRICE");
-  const notional = quantity * entryPrice;
   const minTradeUsdt = asNumber(contract.minTradeUSDT ?? 0, "MIN_TRADE_USDT");
-  if (notional + Number.EPSILON < minTradeUsdt) throw new Error("ETH_V6_PAPER_NOTIONAL_BELOW_MINIMUM");
-  const maxMarketQty = asNumber(contract.maxMarketOrderQty ?? quantity, "MAX_MARKET_QTY");
-  if (quantity - Number.EPSILON > maxMarketQty) throw new Error("ETH_V6_PAPER_QUANTITY_ABOVE_MARKET_MAXIMUM");
-
+  const maxMarketQty = asNumber(contract.maxMarketOrderQty, "MAX_MARKET_QTY");
+  const sizing = sizeOnePercentRiskKrwFuturesPosition({
+    entryPrice,
+    stopPrice,
+    krwPerUsdt: fx.krwPerUsdt,
+    qtyStep,
+    minQty,
+    minNotionalUsdt: minTradeUsdt,
+    maxMarketQty,
+  });
+  const notional = sizing.entryNotionalUsdt;
   const takerFeeRate = asNumber(contract.takerFeeRate, "TAKER_FEE");
   const mmr = maintenanceMarginRate(tiers.data, notional);
   const liquidationDistancePct = (1 - mmr - takerFeeRate) * 100;
   if (!positive(liquidationDistancePct)) throw new Error("ETH_V6_PAPER_LIQUIDATION_DISTANCE_INVALID");
 
   return Object.freeze({
-    quantity,
+    quantity: sizing.quantity,
+    sizing,
+    fx,
     dataEvidence: Object.freeze({
       provider: "bitget",
       publicOnly: true,
       dataQuality: "READY",
-      provenance: "bitget-public-v2:contracts+position-tier+symbol-price+funding+open-interest+natural-eth-v6-forward",
-      asOfMs,
-      maxAgeMs: MARKET_CONTEXT_MAX_AGE_MS,
+      provenance: "bitget-public-v2:contracts+position-tier+symbol-price+funding+open-interest+natural-eth-v6-forward+upbit-public-cross-fx",
+      asOfMs: Math.min(asOfMs, fx.asOfMs),
+      maxAgeMs: Math.min(MARKET_CONTEXT_MAX_AGE_MS, fx.maxAgeMs),
       contractStatus: "TRADABLE",
       tickSize: contractTickSize(contract),
       minQty,
@@ -244,6 +259,14 @@ export async function loadBitgetEthV6PaperContext({ client = new BitgetPublicCli
       retainedForwardMaximumEntryLagMs: ETH_V6_PAPER_FORWARD_SOURCE_CONTRACT.maximumEntryLagMs,
       retainedForwardMaximumSourceAgeMs: ETH_V6_PAPER_FORWARD_SOURCE_CONTRACT.maximumSourceAgeMs,
       liquidationDistanceModel: "conservative-1x-minus-public-mmr-and-taker-v1",
+      fxEvidence: Object.freeze({
+        source: fx.source,
+        markets: fx.markets,
+        krwPerUsdt: fx.krwPerUsdt,
+        asOfMs: fx.asOfMs,
+        maxAgeMs: fx.maxAgeMs,
+        publicOnly: true,
+      }),
     }),
   });
 }
@@ -271,9 +294,12 @@ function buildCandidate({ record, researchCodeSha, nowMs, sourceObservedAtMs, co
       status: "APPROVED",
       evaluatedAtMs: nowMs,
       simulatedOnly: true,
-      riskPerTrade: 0.01,
+      riskPerTrade: context.sizing.riskFraction,
+      riskBudgetKrw: context.sizing.riskBudgetKrw,
+      estimatedStopRiskKrw: context.sizing.stopRiskKrw,
+      estimatedEntryNotionalKrw: context.sizing.entryNotionalKrw,
       leverage: 1,
-      source: "frozen-eth-v6-forward-safeguards",
+      source: "frozen-eth-v6-forward+paper-krw-usdt-sizing-v1",
     }),
     profitGate: Object.freeze({
       decision: "ELIGIBLE",
@@ -330,6 +356,12 @@ function buildCandidate({ record, researchCodeSha, nowMs, sourceObservedAtMs, co
       stop: record.stop,
       target: record.targets?.[0] ?? null,
       source: record.entryPlan.source,
+      sizingVersion: PAPER_KRW_USDT_SIZING_CONTRACT.version,
+      riskBudgetKrw: context.sizing.riskBudgetKrw,
+      estimatedStopRiskKrw: context.sizing.stopRiskKrw,
+      estimatedEntryNotionalKrw: context.sizing.entryNotionalKrw,
+      krwPerUsdt: context.fx.krwPerUsdt,
+      fxSource: context.fx.source,
       orderSubmitted: false,
       privateAccountRequested: false,
       liveOrderAllowed: false,
