@@ -165,10 +165,21 @@ function MobileWorkspace({ workspace }: { workspace: Workspace }) {
   );
 }
 
-function DesktopWorkspace({ workspace, builderLayout }: { workspace: Workspace; builderLayout: LoadedScannerLayout }) {
+function DesktopWorkspace({
+  workspace,
+  builderLayout,
+  canAccessRiskPreview,
+}: {
+  workspace: Workspace;
+  builderLayout: LoadedScannerLayout;
+  canAccessRiskPreview: boolean;
+}) {
   if (workspace === 'chart') return <Suspense fallback={<WorkspaceFallback />}><AiChartPage embedded /></Suspense>;
   if (workspace === 'backtest') return <Suspense fallback={<WorkspaceFallback />}><BacktestResearchPanel compact /></Suspense>;
   if (workspace === 'trade') return <Suspense fallback={<WorkspaceFallback />}><AutoTradingPage embedded /></Suspense>;
+  if (!canAccessRiskPreview) {
+    return <Suspense fallback={<WorkspaceFallback />}><ScannerSurface desktop showSectionHeader /></Suspense>;
+  }
 
   const fallback = (
     <div className="grid h-full min-h-0 min-w-0 grid-cols-[minmax(360px,0.88fr)_minmax(0,2fr)] overflow-hidden bg-background xl:grid-cols-[minmax(420px,0.82fr)_minmax(0,2fr)]">
@@ -198,12 +209,15 @@ export default function TechnicalWorkspacePage() {
   const auth = useAuth();
   const [location] = useLocation();
   const [workspace, setWorkspace] = useState<Workspace>('signal');
+  const canAccessRiskPreview = auth.can('canAccessRiskPreview');
+  const canAccessBacktests = auth.can('canAccessBacktests');
+  const canPlaceOrders = auth.can('canPlaceOrders');
 
   const workspaceAllowed = (value: Workspace) => {
     if (value === 'signal') return true;
-    if (value === 'chart') return auth.can('canAccessRiskPreview');
-    if (value === 'backtest') return auth.can('canAccessBacktests');
-    return auth.can('canPlaceOrders');
+    if (value === 'chart') return canAccessRiskPreview;
+    if (value === 'backtest') return canAccessBacktests;
+    return canPlaceOrders;
   };
 
   const workspaceTabs = WORKSPACE_TABS.map((tab) => {
@@ -220,7 +234,7 @@ export default function TechnicalWorkspacePage() {
 
   useEffect(() => {
     if (!workspaceAllowed(workspace)) setWorkspace('signal');
-  }, [auth.membershipLevel, workspace]);
+  }, [canAccessBacktests, canAccessRiskPreview, canPlaceOrders, workspace]);
 
   const desktopLayout = useMemo(() => {
     const raw = readStoredUiBuilderSignalScannerLayout('desktop');
@@ -237,7 +251,7 @@ export default function TechnicalWorkspacePage() {
         infoItems={[
           '모바일은 AI 검색기·AI 차트·백테스트·자동매매를 각각 독립 화면으로 열어 긴 스크롤을 줄입니다.',
           '권한이 없는 고급 기능은 화면 구조에서 사라지지 않고 잠금 상태로 표시되며 실행되지 않습니다.',
-          'PC는 넓은 화면에서 검색기와 AI 차트를 함께 보며 기존 안전한 Builder 배치를 유지할 수 있습니다.',
+          'PC는 권한이 있는 경우에만 검색기와 AI 차트를 함께 표시하고, 기본 권한에서는 검색기만 표시합니다.',
           '실전 주문은 활성화하지 않으며 사용자 승인과 최종 위험 검증을 유지합니다.',
         ]}
       />
@@ -254,7 +268,13 @@ export default function TechnicalWorkspacePage() {
         />
       </div>
       <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
-        {desktop ? <DesktopWorkspace workspace={workspace} builderLayout={desktopLayout} /> : <MobileWorkspace workspace={workspace} />}
+        {desktop ? (
+          <DesktopWorkspace
+            workspace={workspace}
+            builderLayout={desktopLayout}
+            canAccessRiskPreview={canAccessRiskPreview}
+          />
+        ) : <MobileWorkspace workspace={workspace} />}
       </div>
       <BottomNav />
     </div>
