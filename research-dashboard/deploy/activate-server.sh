@@ -23,7 +23,7 @@ else
 fi
 
 require_tools() {
-  for command_name in git node systemctl curl df awk readlink; do
+  for command_name in git node python3 systemctl curl df awk readlink; do
     command -v "$command_name" >/dev/null 2>&1 || {
       echo "missing required command: $command_name" >&2
       exit 65
@@ -33,7 +33,11 @@ require_tools() {
   local node_major
   node_major="$(node -p 'Number(process.versions.node.split(".")[0])')"
   (( node_major >= 20 )) || {
-    echo "Node >=20 required; found $(node --version)" >&2
+    echo "Node >=20 required for activation probes; found $(node --version)" >&2
+    exit 66
+  }
+  python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' || {
+    echo "Python >=3.10 required for Research Dashboard runtime; found $(python3 --version 2>&1)" >&2
     exit 66
   }
 }
@@ -72,13 +76,13 @@ service_runner() {
   fi
 }
 
-validate_service_node() {
+validate_service_runtime() {
   service_runner env -i \
     PATH=/usr/local/bin:/usr/bin:/bin \
     HOME=/nonexistent \
     LANG=C.UTF-8 \
     TZ=UTC \
-    /usr/bin/env node -e 'if (Number(process.versions.node.split(".")[0]) < 20) process.exit(1)'
+    /usr/bin/env python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'
 }
 
 validate_state_access() {
@@ -91,7 +95,7 @@ validate_state_access() {
     exit 70
   }
   service_runner test -r "$STATE"
-  validate_service_node
+  validate_service_runtime
 }
 
 redact_dashboard_log() {
@@ -123,7 +127,7 @@ preflight() {
     "TARGET_SHA=$TARGET_SHA" \
     "APP_SHA=$(read_app_sha)" \
     "RESEARCH_CURRENT=$(read_research_current)" \
-    'SERVICE_NODE_RUNTIME=PASS' \
+    'SERVICE_PYTHON_RUNTIME=PASS' \
     'BIND_HOST=127.0.0.1' \
     "BIND_PORT=$PORT" \
     'LIVE_TRADING=false' \
@@ -137,7 +141,7 @@ preflight() {
 verify_release() {
   local release="$1"
   [[ -d "$release" ]] || return 1
-  "${SUDO[@]}" test -f "$release/research-dashboard/server.mjs" || return 1
+  "${SUDO[@]}" test -f "$release/research-dashboard/server.py" || return 1
   "${SUDO[@]}" test -f "$release/research-dashboard/deploy/research-dashboard.service" || return 1
   "${SUDO[@]}" test -f "$release/research-dashboard/public/index.html" || return 1
   local actual
