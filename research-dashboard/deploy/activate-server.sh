@@ -23,17 +23,15 @@ else
 fi
 
 require_tools() {
-  for command_name in git node systemctl curl df awk readlink; do
+  for command_name in git python3 systemctl curl df awk readlink sed; do
     command -v "$command_name" >/dev/null 2>&1 || {
       echo "missing required command: $command_name" >&2
       exit 65
     }
   done
   if [[ "$(id -u)" -ne 0 ]]; then sudo -n true; fi
-  local node_major
-  node_major="$(node -p 'Number(process.versions.node.split(".")[0])')"
-  (( node_major >= 20 )) || {
-    echo "Node >=20 required; found $(node --version)" >&2
+  python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' || {
+    echo "Python >=3.10 required; found $(python3 --version 2>&1)" >&2
     exit 66
   }
 }
@@ -72,13 +70,14 @@ service_runner() {
   fi
 }
 
-validate_service_node() {
+validate_service_python() {
   service_runner env -i \
     PATH=/usr/local/bin:/usr/bin:/bin \
     HOME=/nonexistent \
     LANG=C.UTF-8 \
     TZ=UTC \
-    /usr/bin/env node -e 'if (Number(process.versions.node.split(".")[0]) < 20) process.exit(1)'
+    PYTHONDONTWRITEBYTECODE=1 \
+    /usr/bin/env python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'
 }
 
 validate_state_access() {
@@ -91,7 +90,7 @@ validate_state_access() {
     exit 70
   }
   service_runner test -r "$STATE"
-  validate_service_node
+  validate_service_python
 }
 
 redact_dashboard_log() {
@@ -123,7 +122,7 @@ preflight() {
     "TARGET_SHA=$TARGET_SHA" \
     "APP_SHA=$(read_app_sha)" \
     "RESEARCH_CURRENT=$(read_research_current)" \
-    'SERVICE_NODE_RUNTIME=PASS' \
+    'SERVICE_PYTHON_RUNTIME=PASS' \
     'BIND_HOST=127.0.0.1' \
     "BIND_PORT=$PORT" \
     'LIVE_TRADING=false' \
@@ -137,7 +136,7 @@ preflight() {
 verify_release() {
   local release="$1"
   [[ -d "$release" ]] || return 1
-  "${SUDO[@]}" test -f "$release/research-dashboard/server.mjs" || return 1
+  "${SUDO[@]}" test -f "$release/research-dashboard/server.py" || return 1
   "${SUDO[@]}" test -f "$release/research-dashboard/deploy/research-dashboard.service" || return 1
   "${SUDO[@]}" test -f "$release/research-dashboard/public/index.html" || return 1
   local actual
@@ -163,12 +162,15 @@ probe_dashboard() {
     service_diagnostics
     return 1
   fi
-  if ! node - "$health" <<'NODE'
-const fs = require('node:fs');
-const v = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-if (v?.ok !== true || v?.service !== 'investment-research-dashboard') process.exit(1);
-if (v?.readOnly !== true || v?.liveTrading !== false || v?.privateApi !== false || v?.orderAuthority !== false) process.exit(1);
-NODE
+  if ! python3 - "$health" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding='utf-8') as handle:
+    value = json.load(handle)
+if value.get('ok') is not True or value.get('service') != 'investment-research-dashboard':
+    raise SystemExit(1)
+if value.get('readOnly') is not True or value.get('liveTrading') is not False or value.get('privateApi') is not False or value.get('orderAuthority') is not False:
+    raise SystemExit(1)
+PY
   then
     echo 'Research Dashboard health contract validation failed.' >&2
     service_diagnostics
@@ -179,14 +181,18 @@ NODE
     service_diagnostics
     return 1
   fi
-  if ! node - "$overview" <<'NODE'
-const fs = require('node:fs');
-const v = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-if (v?.schemaVersion !== 'research-dashboard-overview-v1') process.exit(1);
-if (v?.safety?.readOnlyDashboard !== true) process.exit(1);
-if (v?.safety?.liveTrading !== false || v?.safety?.privateApi !== false || v?.safety?.orderAuthority !== false) process.exit(1);
-if (v?.profitability?.proven !== false) process.exit(1);
-NODE
+  if ! python3 - "$overview" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding='utf-8') as handle:
+    value = json.load(handle)
+if value.get('schemaVersion') != 'research-dashboard-overview-v1':
+    raise SystemExit(1)
+safety = value.get('safety') or {}
+if safety.get('readOnlyDashboard') is not True or safety.get('liveTrading') is not False or safety.get('privateApi') is not False or safety.get('orderAuthority') is not False:
+    raise SystemExit(1)
+if (value.get('profitability') or {}).get('proven') is not False:
+    raise SystemExit(1)
+PY
   then
     echo 'Research Dashboard overview contract validation failed.' >&2
     service_diagnostics
