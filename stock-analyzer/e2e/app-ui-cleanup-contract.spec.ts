@@ -33,6 +33,21 @@ test('기술 워크스페이스는 네 기능을 지연 로딩하고 모바일 �
   expect(workspace).toContain('<BottomNav />');
 });
 
+test('기술 라우트는 공통 개선 UI를 유지하면서 권한 없는 고급 기능을 잠근다', () => {
+  const app = source('src/App.tsx');
+  const workspace = source('src/pages/technical-workspace.tsx');
+  const tabs = source('src/components/responsive-tabs.tsx');
+
+  expect(app).toContain("return gated('canAccessBasicInfo', <TechnicalWorkspacePage />);");
+  expect(app).not.toContain('scanner-workspace-basic');
+  expect(workspace).toContain("const canAccessRiskPreview = auth.can('canAccessRiskPreview')");
+  expect(workspace).toContain("const canAccessBacktests = auth.can('canAccessBacktests')");
+  expect(workspace).toContain("const canPlaceOrders = auth.can('canPlaceOrders')");
+  expect(workspace).toContain('if (!canAccessRiskPreview)');
+  expect(tabs).toContain('aria-disabled={option.disabled || undefined}');
+  expect(tabs).toContain("{option.label}{option.disabled ? ' · 잠김' : ''}");
+});
+
 test('코인 현물은 canonical Upbit spot 요청과 현물 상태 전환을 유지한다', () => {
   const scanner = source('src/pages/signal-scanner.tsx');
   const scannerUrl = source('src/lib/signal-scanner-url.ts');
