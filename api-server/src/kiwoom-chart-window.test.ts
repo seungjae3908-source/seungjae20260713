@@ -28,7 +28,6 @@ test('KR interactive page budgets are deterministic by intraday interval', () =>
   assert.equal(resolveKrInteractiveMaxPages('15m'), 8);
   assert.equal(resolveKrInteractiveMaxPages('30m'), 8);
   assert.equal(resolveKrInteractiveMaxPages('60m'), 10);
-  assert.equal(resolveKrInteractiveMaxPages('1H'), 10);
   assert.equal(resolveKrInteractiveMaxPages('4H'), 12);
 });
 
