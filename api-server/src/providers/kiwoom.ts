@@ -99,6 +99,7 @@ interface RequestOptions {
   nextKey?: string;
   retryAuth?: boolean;
   retryRateLimit?: number;
+  signal?: AbortSignal;
 }
 
 interface PickedEntry {
@@ -129,11 +130,53 @@ let tokenCache: {
 let requestQueue: Promise<void> = Promise.resolve();
 let nextRequestAt = 0;
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function abortError(message: string): Error {
+  const error = new Error(message);
+  error.name = "AbortError";
+  return error;
 }
 
-async function waitForRequestSlot(): Promise<void> {
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw abortError("키움 요청이 호출자에 의해 취소되었습니다.");
+  }
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  throwIfAborted(signal);
+
+  if (ms <= 0) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+
+    const cleanup = () => {
+      signal?.removeEventListener("abort", onAbort);
+    };
+
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    };
+
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      cleanup();
+      reject(abortError("키움 요청이 호출자에 의해 취소되었습니다."));
+    };
+
+    const timer = setTimeout(finish, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+async function waitForRequestSlot(signal?: AbortSignal): Promise<void> {
   const previous = requestQueue;
   let release: () => void = () => undefined;
   requestQueue = new Promise<void>((resolve) => {
@@ -141,11 +184,17 @@ async function waitForRequestSlot(): Promise<void> {
   });
 
   await previous;
-  const minimumInterval = isMockMode() ? 260 : 240;
-  const wait = Math.max(0, nextRequestAt - Date.now());
-  if (wait > 0) await sleep(wait);
-  nextRequestAt = Date.now() + minimumInterval;
-  release();
+
+  try {
+    throwIfAborted(signal);
+    const minimumInterval = isMockMode() ? 260 : 240;
+    const wait = Math.max(0, nextRequestAt - Date.now());
+    if (wait > 0) await sleep(wait, signal);
+    throwIfAborted(signal);
+    nextRequestAt = Date.now() + minimumInterval;
+  } finally {
+    release();
+  }
 }
 
 function isMockMode(): boolean {
@@ -365,7 +414,9 @@ export function getKiwoomStatus() {
   };
 }
 
-export async function getKiwoomToken(): Promise<string> {
+export async function getKiwoomToken(signal?: AbortSignal): Promise<string> {
+  throwIfAborted(signal);
+
   if (
     tokenCache &&
     Date.now() <
@@ -378,8 +429,20 @@ export async function getKiwoomToken(): Promise<string> {
   const controller =
     new AbortController();
 
+  let timedOut = false;
+  const abortFromCaller = () => controller.abort();
+
+  if (signal?.aborted) {
+    abortFromCaller();
+  } else {
+    signal?.addEventListener("abort", abortFromCaller, { once: true });
+  }
+
   const timeout = setTimeout(
-    () => controller.abort(),
+    () => {
+      timedOut = true;
+      controller.abort();
+    },
     REQUEST_TIMEOUT_MS,
   );
 
@@ -439,6 +502,10 @@ export async function getKiwoomToken(): Promise<string> {
       error instanceof Error &&
       error.name === "AbortError"
     ) {
+      if (signal?.aborted && !timedOut) {
+        throw abortError("키움 토큰 요청이 호출자에 의해 취소되었습니다.");
+      }
+
       throw new Error(
         "키움 토큰 요청 시간이 초과되었습니다.",
       );
@@ -447,6 +514,7 @@ export async function getKiwoomToken(): Promise<string> {
     throw error;
   } finally {
     clearTimeout(timeout);
+    signal?.removeEventListener("abort", abortFromCaller);
   }
 }
 
@@ -461,21 +529,37 @@ export async function kiwoomRequest<
   nextKey,
   retryAuth = true,
   retryRateLimit = 0,
+  signal,
 }: RequestOptions): Promise<{
   data: T;
   contYn: string | null;
   nextKey: string | null;
 }> {
-  const token =
-    await getKiwoomToken();
+  throwIfAborted(signal);
 
-  await waitForRequestSlot();
+  const token =
+    await getKiwoomToken(signal);
+
+  await waitForRequestSlot(signal);
+  throwIfAborted(signal);
 
   const controller =
     new AbortController();
 
+  let timedOut = false;
+  const abortFromCaller = () => controller.abort();
+
+  if (signal?.aborted) {
+    abortFromCaller();
+  } else {
+    signal?.addEventListener("abort", abortFromCaller, { once: true });
+  }
+
   const timeout = setTimeout(
-    () => controller.abort(),
+    () => {
+      timedOut = true;
+      controller.abort();
+    },
     REQUEST_TIMEOUT_MS,
   );
 
@@ -528,7 +612,8 @@ export async function kiwoomRequest<
 
       if (rateLimited && retryRateLimit < 4) {
         clearTimeout(timeout);
-        await sleep(700 * Math.pow(2, retryRateLimit));
+        signal?.removeEventListener("abort", abortFromCaller);
+        await sleep(700 * Math.pow(2, retryRateLimit), signal);
         return kiwoomRequest<T>({
           apiId,
           path,
@@ -537,6 +622,7 @@ export async function kiwoomRequest<
           nextKey,
           retryAuth,
           retryRateLimit: retryRateLimit + 1,
+          signal,
         });
       }
 
@@ -549,7 +635,7 @@ export async function kiwoomRequest<
       if (authExpired) {
         clearKiwoomTokenCache();
         if (retryAuth) {
-          return kiwoomRequest<T>({ apiId, path, body, contYn, nextKey, retryAuth: false, retryRateLimit });
+          return kiwoomRequest<T>({ apiId, path, body, contYn, nextKey, retryAuth: false, retryRateLimit, signal });
         }
       }
 
@@ -574,6 +660,10 @@ export async function kiwoomRequest<
       error instanceof Error &&
       error.name === "AbortError"
     ) {
+      if (signal?.aborted && !timedOut) {
+        throw abortError(`키움 ${apiId} 요청이 호출자에 의해 취소되었습니다.`);
+      }
+
       throw new Error(
         `키움 ${apiId} 요청 시간이 초과되었습니다.`,
       );
@@ -582,6 +672,7 @@ export async function kiwoomRequest<
     throw error;
   } finally {
     clearTimeout(timeout);
+    signal?.removeEventListener("abort", abortFromCaller);
   }
 }
 
@@ -1520,13 +1611,13 @@ function sortRankingRows(
         return (
           (
             a.changePercent ??
-            Number
-              .POSITIVE_INFINITY
+              Number
+                .POSITIVE_INFINITY
           ) -
           (
             b.changePercent ??
-            Number
-              .POSITIVE_INFINITY
+              Number
+                .POSITIVE_INFINITY
           )
         );
       }
