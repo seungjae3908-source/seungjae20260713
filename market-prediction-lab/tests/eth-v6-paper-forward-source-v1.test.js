@@ -13,7 +13,8 @@ import { FROZEN_CANDIDATE_MANIFEST_SHA256 } from "../src/final-holdout-evaluator
 
 const SHA = "a".repeat(40);
 const ENTRY = Date.UTC(2026, 7, 19, 0, 0, 0);
-const NOW = ENTRY + 8 * 60 * 60 * 1000;
+const NOW = ENTRY + 5 * 60 * 60 * 1000;
+const SHADOW_OBSERVED_AT = NOW - 10 * 60 * 1000;
 
 function trackingRecord(overrides = {}) {
   return {
@@ -54,7 +55,7 @@ function shadowRoot(record = trackingRecord(), overrides = {}) {
         candidateId: "eth-futures-long-v6",
         candidateManifestSha256: FROZEN_CANDIDATE_MANIFEST_SHA256,
         startedAt: ENTRY - 24 * 60 * 60 * 1000,
-        updatedAt: NOW - 4 * 60 * 60 * 1000,
+        updatedAt: SHADOW_OBSERVED_AT,
         ledger: { version: 1, records: [record] },
         safeguards: {
           frozenCandidateOnly: true,
@@ -108,7 +109,7 @@ async function withShadowFile(value, run) {
   }
 }
 
-test("fresh retained frozen ETH V6 tracking signal becomes one low-sample Paper candidate without promotion claims", async () => {
+test("fresh natural frozen ETH V6 tracking signal becomes one low-sample Paper candidate without promotion claims", async () => {
   await withShadowFile(shadowRoot(), async (shadowStatePath) => {
     const source = createEthV6PaperForwardSource({
       shadowStatePath,
@@ -134,25 +135,41 @@ test("fresh retained frozen ETH V6 tracking signal becomes one low-sample Paper 
     assert.equal(candidate.order.direction, "LONG");
     assert.equal(candidate.execution.executionPolicy.fillModel, "BAR_PROXY");
     assert.equal(candidate.bar.nextOpen, 4000);
+    assert.equal(candidate.retainedForwardEvidence.observedAtMs, SHADOW_OBSERVED_AT);
     assert.equal(candidate.retainedForwardEvidence.orderSubmitted, false);
     assert.equal(candidate.retainedForwardEvidence.privateAccountRequested, false);
+    assert.equal(result.safety.maximumEntryLagMs, 6 * 60 * 60 * 1000);
+    assert.equal(result.safety.maximumSourceAgeMs, 45 * 60 * 1000);
     assert.equal(result.safety.settlementBridgeReady, false);
     assert.equal(result.safety.liveTrading, false);
   });
 });
 
-test("tracking signals older than the bounded retained-forward window are never backfilled into Paper", async () => {
+test("Shadow evidence not consumed promptly is never backfilled into Paper", async () => {
   await withShadowFile(shadowRoot(), async (shadowStatePath) => {
-    const lateNow = ENTRY + ETH_V6_PAPER_FORWARD_SOURCE_CONTRACT.maximumRetentionMs + 1;
+    const lateNow = SHADOW_OBSERVED_AT + ETH_V6_PAPER_FORWARD_SOURCE_CONTRACT.maximumSourceAgeMs + 1;
     const source = createEthV6PaperForwardSource({
       shadowStatePath,
       researchCodeSha: SHA,
       clock: () => lateNow,
-      loadContext: async () => { throw new Error("context must not be loaded for stale signal"); },
+      loadContext: async () => { throw new Error("context must not be loaded for stale source"); },
     });
     const result = await source.collect();
     assert.equal(result.status, "NO_FRESH_TRACKING_SIGNAL");
     assert.equal(result.candidates.length, 0);
+  });
+});
+
+test("Shadow record that violated the original six-hour natural entry window fails closed", async () => {
+  const tooLateObservation = ENTRY + ETH_V6_PAPER_FORWARD_SOURCE_CONTRACT.maximumEntryLagMs + 1;
+  await withShadowFile(shadowRoot(trackingRecord(), { updatedAt: tooLateObservation }), async (shadowStatePath) => {
+    const source = createEthV6PaperForwardSource({
+      shadowStatePath,
+      researchCodeSha: SHA,
+      clock: () => tooLateObservation,
+      loadContext: async () => readyContext(),
+    });
+    await assert.rejects(source.collect(), /ORIGINAL_ENTRY_LAG_EXCEEDED/);
   });
 });
 
@@ -199,7 +216,12 @@ test("Bitget public contract metadata normalizes executable quantity and supplie
       throw new Error(`unexpected path ${path}`);
     },
   };
-  const context = await loadBitgetEthV6PaperContext({ client: fakeClient, record: trackingRecord(), nowMs: NOW });
+  const context = await loadBitgetEthV6PaperContext({
+    client: fakeClient,
+    record: trackingRecord(),
+    nowMs: NOW,
+    sourceObservedAtMs: SHADOW_OBSERVED_AT,
+  });
   assert.equal(context.quantity, 1.23);
   assert.equal(context.dataEvidence.tickSize, 0.01);
   assert.equal(context.dataEvidence.qtyStep, 0.01);
@@ -209,6 +231,7 @@ test("Bitget public contract metadata normalizes executable quantity and supplie
   assert.equal(context.dataEvidence.marginMode, "ISOLATED");
   assert.ok(context.dataEvidence.liquidationDistancePct > 99);
   assert.equal(context.dataEvidence.provider, "bitget");
+  assert.equal(context.dataEvidence.retainedForwardObservedAtMs, SHADOW_OBSERVED_AT);
   assert.equal(new Set(calls).size, 5);
 });
 
