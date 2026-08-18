@@ -4,11 +4,6 @@ import { pathToFileURL } from "node:url";
 import {
   runPaperForwardScheduledInvocation,
 } from "../src/paper-forward-schedule-runtime-v1.js";
-import { createCanonicalPaperForwardEvidenceProvider } from "../src/paper-forward-evidence-runtime-v1.js";
-import {
-  createEthV6PaperForwardSource,
-  wrapPaperForwardProviderWithEthV6Source,
-} from "../src/eth-v6-paper-forward-source-v1.js";
 
 const TRUTHY = new Set(["1", "true", "yes", "on", "enabled"]);
 const forbiddenActivationKeys = [
@@ -151,13 +146,6 @@ function fail(message, code = 1) {
   process.exitCode = code;
 }
 
-function createResearchProductionProvider({ rootDirectory, researchCodeSha }) {
-  const shadowStatePath = resolve(dirname(resolve(rootDirectory)), "shadow-state.json");
-  const provider = createCanonicalPaperForwardEvidenceProvider();
-  const source = createEthV6PaperForwardSource({ shadowStatePath, researchCodeSha });
-  return wrapPaperForwardProviderWithEthV6Source({ provider, source });
-}
-
 export async function runPaperForwardScheduleCli(env = process.env) {
   if (!truthy(env.PAPER_FORWARD_SCHEDULE_ACTIVE)) {
     fail("PAPER_FORWARD_SCHEDULE_ACTIVE must be explicitly true", 64);
@@ -183,16 +171,12 @@ export async function runPaperForwardScheduleCli(env = process.env) {
         outcomeAccumulationEnabled,
       })
       : Object.freeze({ identityCutover: false, archivedResearchSha: null, archivedStrategyId: null });
-    const publicEvidenceProvider = researchProduction
-      ? createResearchProductionProvider({ rootDirectory, researchCodeSha })
-      : undefined;
     const result = await runPaperForwardScheduledInvocation({
       rootDirectory,
       researchCodeSha,
       activationAtMs,
       triggerSource,
       outcomeAccumulationEnabled,
-      ...(publicEvidenceProvider ? { publicEvidenceProvider } : {}),
     });
     const output = {
       schemaVersion: "paper-forward-schedule-cli-v3",
