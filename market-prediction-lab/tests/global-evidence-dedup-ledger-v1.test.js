@@ -94,6 +94,7 @@ test("same evidenceId with conflicting payload fails closed without incrementing
   assert.equal(summary.canonicalUniqueEvidenceCount, 1);
   assert.equal(summary.conflictCount, 1);
   assert.equal(summary.failClosed, true);
+  assert.throws(() => canonicalUniqueEvidence(conflict.ledger), new RegExp(EVIDENCE_ID_CONFLICT));
 });
 
 test("legitimate different cohort or horizon observation remains separate evidence", () => {
