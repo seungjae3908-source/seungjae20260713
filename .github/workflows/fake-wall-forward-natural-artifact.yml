@@ -1,0 +1,336 @@
+name: Fake-Wall Forward Natural Artifact Follower
+
+on:
+  workflow_run:
+    workflows:
+      - Prediction Lab Hourly Shadow Validation
+    types: [completed]
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/fake-wall-forward-natural-artifact.yml'
+      - 'market-intelligence-sidecar/src/server.mjs'
+      - 'market-intelligence-sidecar/src/fake-wall-forward-ledger.mjs'
+      - 'market-intelligence-sidecar/src/fake-wall-forward-natural-input.mjs'
+      - 'market-intelligence-sidecar/scripts/run-fake-wall-forward-ledger.mjs'
+      - 'market-intelligence-sidecar/tests/fake-wall-forward-ledger*.test.mjs'
+      - 'market-intelligence-sidecar/tests/fake-wall-forward-natural-input.test.mjs'
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: fake-wall-forward-natural-artifact
+  cancel-in-progress: false
+
+env:
+  ARTIFACT_PREFIX: fake-wall-forward-evidence
+  EVENT_CONTRACT: market-intelligence-fake-wall-natural-event/v1
+  SERVICE_NAME: investment-market-intelligence.service
+  SIDECAR_PORT: '8791'
+
+jobs:
+  validate-contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Validate no-new-scheduler follower contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const file = '.github/workflows/fake-wall-forward-natural-artifact.yml';
+          const text = fs.readFileSync(file, 'utf8');
+          if (/^\s*schedule\s*:/m.test(text)) throw new Error('NEW_SCHEDULER_FORBIDDEN');
+          if (/^\s*workflow_dispatch\s*:/m.test(text)) throw new Error('MANUAL_NATURAL_PROOF_FORBIDDEN');
+          if (!text.includes("github.event.workflow_run.event == 'schedule'")) throw new Error('NATURAL_UPSTREAM_GATE_REQUIRED');
+          if (!text.includes('Prediction Lab Hourly Shadow Validation')) throw new Error('EXISTING_NATURAL_CADENCE_REQUIRED');
+          NODE
+          node --check market-intelligence-sidecar/src/server.mjs
+          node --check market-intelligence-sidecar/src/fake-wall-forward-natural-input.mjs
+          node --check market-intelligence-sidecar/scripts/run-fake-wall-forward-ledger.mjs
+          node --test \
+            market-intelligence-sidecar/tests/fake-wall-forward-ledger.test.mjs \
+            market-intelligence-sidecar/tests/fake-wall-forward-ledger-cli.test.mjs \
+            market-intelligence-sidecar/tests/fake-wall-forward-natural-input.test.mjs
+
+  collect-natural-artifact:
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+
+    steps:
+      - name: Configure read-only SSH transport
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Resolve exact active Market Intelligence service contract
+        id: service
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          health_file="$RUNNER_TEMP/market-intelligence-health.json"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" \
+            "curl --fail --silent --max-time 5 http://127.0.0.1:${SIDECAR_PORT}/health" > "$health_file"
+          HEALTH_FILE="$health_file" node <<'NODE'
+          const fs = require('fs');
+          const health = JSON.parse(fs.readFileSync(process.env.HEALTH_FILE, 'utf8'));
+          const out = process.env.GITHUB_OUTPUT;
+          if (health?.ok !== true || health?.service !== 'market-intelligence-sidecar') {
+            throw new Error('MARKET_INTELLIGENCE_HEALTH_INVALID');
+          }
+          const sha = String(health?.serviceSha ?? '').toLowerCase();
+          const contract = String(health?.fakeWallNaturalEvidence?.eventContract ?? '');
+          const source = String(health?.fakeWallNaturalEvidence?.source ?? '');
+          const journalStructured = health?.fakeWallNaturalEvidence?.journalStructured === true;
+          const supported = /^[0-9a-f]{40}$/.test(sha)
+            && contract === process.env.EVENT_CONTRACT
+            && source === 'PUBLIC_GET_ONLY'
+            && journalStructured;
+          fs.appendFileSync(out, `ready=${supported}\n`);
+          fs.appendFileSync(out, `sha=${/^[0-9a-f]{40}$/.test(sha) ? sha : ''}\n`);
+          fs.appendFileSync(out, `artifact_name=${supported ? `${process.env.ARTIFACT_PREFIX}-${sha}` : ''}\n`);
+          NODE
+
+      - name: Stop cleanly until exact natural-event service is activated
+        if: steps.service.outputs.ready != 'true'
+        shell: bash
+        run: |
+          echo 'Fake-Wall natural journal contract is not active on the sidecar yet; no artifact is fabricated.'
+
+      - name: Locate predecessor immutable artifact
+        if: steps.service.outputs.ready == 'true'
+        id: previous
+        uses: actions/github-script@v7
+        env:
+          ARTIFACT_NAME: ${{ steps.service.outputs.artifact_name }}
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const currentRunId = Number(context.runId);
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner,
+              repo,
+              workflow_id: 'fake-wall-forward-natural-artifact.yml',
+              status: 'completed',
+              per_page: 100,
+            });
+            for (const run of runs) {
+              if (run.id === currentRunId || run.conclusion !== 'success') continue;
+              const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+                owner,
+                repo,
+                run_id: run.id,
+                per_page: 100,
+              });
+              const artifact = artifacts.find((item) => item.name === process.env.ARTIFACT_NAME && !item.expired);
+              if (!artifact) continue;
+              core.setOutput('found', 'true');
+              core.setOutput('run_id', String(run.id));
+              core.setOutput('artifact_id', String(artifact.id));
+              core.setOutput('created_at', String(artifact.created_at || run.created_at || ''));
+              return;
+            }
+            core.setOutput('found', 'false');
+            core.setOutput('run_id', '');
+            core.setOutput('artifact_id', '');
+            core.setOutput('created_at', '');
+
+      - name: Download predecessor immutable artifact
+        if: steps.service.outputs.ready == 'true' && steps.previous.outputs.found == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.service.outputs.artifact_name }}
+          path: ${{ runner.temp }}/previous-fake-wall
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.previous.outputs.run_id }}
+
+      - name: Checkout exact active service SHA
+        if: steps.service.outputs.ready == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.service.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact service SHA is repository-owned and ledger-capable
+        if: steps.service.outputs.ready == 'true'
+        shell: bash
+        env:
+          SERVICE_SHA: ${{ steps.service.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$SERVICE_SHA"
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$SERVICE_SHA" origin/main
+          test -f market-intelligence-sidecar/src/fake-wall-forward-ledger.mjs
+          test -f market-intelligence-sidecar/src/fake-wall-forward-natural-input.mjs
+          test -f market-intelligence-sidecar/scripts/run-fake-wall-forward-ledger.mjs
+
+      - name: Collect only naturally emitted public Market Intelligence journal events
+        if: steps.service.outputs.ready == 'true'
+        id: natural
+        shell: bash
+        env:
+          SERVICE_SHA: ${{ steps.service.outputs.sha }}
+          PREVIOUS_CREATED_AT: ${{ steps.previous.outputs.created_at }}
+        run: |
+          set -Eeuo pipefail
+          events_file="$RUNNER_TEMP/fake-wall-natural-events.json"
+          journal_file="$RUNNER_TEMP/market-intelligence-journal.txt"
+          since_epoch="$(PREVIOUS_CREATED_AT="$PREVIOUS_CREATED_AT" node -e "const v=Date.parse(process.env.PREVIOUS_CREATED_AT||''); const base=Number.isFinite(v)?v:Date.now()-70*60*1000; process.stdout.write(String(Math.floor((base-2*60*1000)/1000)));" )"
+          remote_since="$(date -u -d "@$since_epoch" '+%Y-%m-%d %H:%M:%S UTC')"
+          quoted_since="$(printf '%q' "$remote_since")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" \
+            "(sudo -n journalctl --no-pager -o cat -u ${SERVICE_NAME} --since $quoted_since 2>/dev/null || journalctl --no-pager -o cat -u ${SERVICE_NAME} --since $quoted_since)" \
+            > "$journal_file"
+          JOURNAL_FILE="$journal_file" EVENTS_FILE="$events_file" SERVICE_SHA="$SERVICE_SHA" node <<'NODE'
+          const fs = require('fs');
+          const lines = fs.readFileSync(process.env.JOURNAL_FILE, 'utf8').split(/\r?\n/).filter(Boolean);
+          const events = [];
+          const seen = new Set();
+          for (const line of lines) {
+            let value;
+            try { value = JSON.parse(line); } catch { continue; }
+            if (value?.event !== 'fake_wall_natural_observation') continue;
+            if (value?.contract !== process.env.EVENT_CONTRACT) continue;
+            if (value?.natural !== true || value?.source !== 'MARKET_INTELLIGENCE_PUBLIC_GET') continue;
+            if (String(value?.serviceSha ?? '').toLowerCase() !== process.env.SERVICE_SHA) continue;
+            const eventId = String(value?.eventId ?? '');
+            if (!/^fwn-[0-9a-f]{64}$/.test(eventId)) throw new Error('FAKE_WALL_NATURAL_EVENT_ID_INVALID');
+            if (seen.has(eventId)) continue;
+            seen.add(eventId);
+            events.push(value);
+          }
+          fs.writeFileSync(process.env.EVENTS_FILE, `${JSON.stringify(events, null, 2)}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `event_count=${events.length}\n`);
+          NODE
+          echo "events_file=$events_file" >> "$GITHUB_OUTPUT"
+
+      - name: Advance immutable ledger from predecessor and natural journal events
+        if: steps.service.outputs.ready == 'true'
+        id: ledger
+        shell: bash
+        env:
+          SERVICE_SHA: ${{ steps.service.outputs.sha }}
+          PREVIOUS_FOUND: ${{ steps.previous.outputs.found }}
+          PREVIOUS_RUN_ID: ${{ steps.previous.outputs.run_id }}
+          PREVIOUS_ARTIFACT_ID: ${{ steps.previous.outputs.artifact_id }}
+          EVENTS_FILE: ${{ steps.natural.outputs.events_file }}
+        run: |
+          set -Eeuo pipefail
+          output_dir="$RUNNER_TEMP/fake-wall-forward-artifact"
+          args=(
+            --research-sha "$SERVICE_SHA"
+            --output-dir "$output_dir"
+            --candidate-events-input "$EVENTS_FILE"
+            --harness-sha "$GITHUB_SHA"
+          )
+          if [[ "$PREVIOUS_FOUND" == 'true' ]]; then
+            previous_dir="$RUNNER_TEMP/previous-fake-wall"
+            for name in state.json summary.json manifest.json; do
+              test -f "$previous_dir/$name"
+            done
+            predecessor_digest="$(PREVIOUS_MANIFEST="$previous_dir/manifest.json" node -e "const fs=require('fs'); const v=JSON.parse(fs.readFileSync(process.env.PREVIOUS_MANIFEST,'utf8')); if(!/^[0-9a-f]{64}$/.test(String(v.artifactContentDigest||''))) process.exit(1); process.stdout.write(v.artifactContentDigest);")"
+            args+=(
+              --state-input "$previous_dir/state.json"
+              --summary-input "$previous_dir/summary.json"
+              --manifest-input "$previous_dir/manifest.json"
+              --predecessor-run-id "$PREVIOUS_RUN_ID"
+              --predecessor-artifact-id "$PREVIOUS_ARTIFACT_ID"
+              --predecessor-artifact-digest "$predecessor_digest"
+            )
+          fi
+          node market-intelligence-sidecar/scripts/run-fake-wall-forward-ledger.mjs "${args[@]}" \
+            | tee "$RUNNER_TEMP/fake-wall-ledger-result.json"
+          manifest="$output_dir/manifest.json"
+          state="$output_dir/state.json"
+          summary="$output_dir/summary.json"
+          for file in "$state" "$summary" "$manifest"; do test -s "$file"; done
+          MANIFEST="$manifest" STATE="$state" SUMMARY="$summary" SERVICE_SHA="$SERVICE_SHA" PREVIOUS_FOUND="$PREVIOUS_FOUND" node <<'NODE'
+          const fs = require('fs');
+          const crypto = require('crypto');
+          const digest = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+          const manifest = JSON.parse(fs.readFileSync(process.env.MANIFEST, 'utf8'));
+          const state = JSON.parse(fs.readFileSync(process.env.STATE, 'utf8'));
+          const summary = JSON.parse(fs.readFileSync(process.env.SUMMARY, 'utf8'));
+          if (manifest.researchCodeSha !== process.env.SERVICE_SHA || state.researchCodeSha !== process.env.SERVICE_SHA) throw new Error('FAKE_WALL_ARTIFACT_IDENTITY_MISMATCH');
+          if (manifest.stateSha256 !== digest(process.env.STATE)) throw new Error('FAKE_WALL_STATE_SHA256_MISMATCH');
+          if (manifest.summarySha256 !== digest(process.env.SUMMARY)) throw new Error('FAKE_WALL_SUMMARY_SHA256_MISMATCH');
+          if (process.env.PREVIOUS_FOUND === 'true' && (!manifest.predecessorArtifactId || !manifest.predecessorArtifactDigest)) throw new Error('FAKE_WALL_SUCCESSOR_PREDECESSOR_MISSING');
+          if (summary.profitabilityMetrics !== 'N/A' || summary.scannerRankingImpact !== 'NONE' || summary.tradingEligibilityImpact !== 'NONE') throw new Error('FAKE_WALL_RESEARCH_BOUNDARY_INVALID');
+          const pending = state.observations.filter((row) => row.status === 'PENDING' || row.status === 'PARTIALLY_SETTLED').length;
+          const settled = state.observations.filter((row) => row.status === 'SETTLED').length;
+          const invalidated = state.observations.filter((row) => row.status === 'INVALIDATED').length;
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `artifact_digest=${manifest.artifactContentDigest}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `observations=${state.observations.length}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `pending=${pending}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `settled=${settled}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `invalidated=${invalidated}\n`);
+          NODE
+          echo "output_dir=$output_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Upload immutable natural successor artifact
+        if: steps.service.outputs.ready == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.service.outputs.artifact_name }}
+          path: ${{ steps.ledger.outputs.output_dir }}/
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Record read-only natural evidence summary
+        if: steps.service.outputs.ready == 'true'
+        shell: bash
+        run: |
+          {
+            echo '### Fake-Wall Forward Natural Artifact'
+            echo "- service SHA: ${{ steps.service.outputs.sha }}"
+            echo "- upstream natural schedule run: ${{ github.event.workflow_run.id }}"
+            echo "- public natural events collected: ${{ steps.natural.outputs.event_count }}"
+            echo "- predecessor found: ${{ steps.previous.outputs.found }}"
+            echo "- observations: ${{ steps.ledger.outputs.observations }}"
+            echo "- pending: ${{ steps.ledger.outputs.pending }}"
+            echo "- settled: ${{ steps.ledger.outputs.settled }}"
+            echo "- invalidated: ${{ steps.ledger.outputs.invalidated }}"
+            echo "- artifact content digest: ${{ steps.ledger.outputs.artifact_digest }}"
+            echo '- scanner/trading impact: NONE'
+            echo '- real/private/financial mutation: 0'
+          } >> "$GITHUB_STEP_SUMMARY"
