@@ -13,10 +13,12 @@ Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=RESEARCH_DASHBOARD_HOST=127.0.0.1
 Environment=RESEARCH_DASHBOARD_PORT=18090
 Environment=RESEARCH_STATE_ROOT=/var/lib/investment-research-production
-# This long-running HTTP process reaches V8 baseline JIT under normal Node startup.
-# The shared server policy denies executable-memory remapping, so run this
-# read-only dashboard without JIT rather than weakening the systemd sandbox.
-ExecStart=/usr/bin/env node --jitless /opt/investment-research-dashboard/current/research-dashboard/server.mjs
+# The host policy denies executable-memory remapping, so keep V8 JIT disabled.
+# Node 22 initializes the global fetch/undici stack by default; under --jitless
+# that path requires WebAssembly and exits before this dashboard binds. This
+# server never uses fetch, so disable the unused global fetch bootstrap rather
+# than weakening the systemd sandbox or enabling executable memory.
+ExecStart=/usr/bin/env node --jitless --no-experimental-fetch /opt/investment-research-dashboard/current/research-dashboard/server.mjs
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
