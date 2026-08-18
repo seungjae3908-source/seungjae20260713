@@ -258,10 +258,12 @@ test('app-facing KR 1m/3m routes use the bounded Kiwoom evidence contract', asyn
 });
 
 test('interactive fallback classification keeps deadline/abort/upstream timeout distinct', async () => {
-  const source = await import('node:fs/promises').then(({ readFile }) => readFile(
-    new URL('./services/market-data.service.ts', import.meta.url),
-    'utf8',
-  ));
+  const { readFile } = await import('node:fs/promises');
+  const cwd = process.cwd();
+  const sourcePath = cwd.endsWith('/api-server') || cwd.endsWith('\\api-server')
+    ? `${cwd}/src/services/market-data.service.ts`
+    : `${cwd}/api-server/src/services/market-data.service.ts`;
+  const source = await readFile(sourcePath, 'utf8');
 
   assert.match(source, /if \(deadlineReached\) return 'DEADLINE_REACHED'/);
   assert.match(source, /error\.name === 'AbortError'\) return 'ABORTED'/);
