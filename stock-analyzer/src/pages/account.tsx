@@ -63,7 +63,7 @@ export default function AccountPage() {
           <button disabled={busy} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-primary px-4 py-3.5 text-sm font-extrabold text-primary-foreground disabled:opacity-50">{register ? <UserPlus className="h-4 w-4" /> : <LogIn className="h-4 w-4" />}{busy ? '처리 중...' : register ? '가입 신청' : '로그인'}</button>
         </form>
       </Card>}
-      {!auth.loading && auth.user && auth.isAdmin ? <BrokerageAccountConnections /> : null}
+      {!auth.loading && auth.user && auth.can('canAccessBasicInfo') ? <BrokerageAccountConnections canAccessSpot={auth.can('canAccessSpot')} canAccessFutures={auth.can('canAccessFutures')} /> : null}
       {!auth.loading && auth.user && auth.can('canConnectPersonalTelegram') ? <div className="mt-4"><UserBrokerTelegramPanel /></div> : null}
       {(notice || error) && <p className={`mt-3 break-words rounded-2xl p-4 text-sm font-bold ${error ? 'bg-destructive/10 text-destructive' : 'bg-positive/10 text-positive'}`}>{error || notice}</p>}
     </main>{auth.isApproved && <BottomNav />}
