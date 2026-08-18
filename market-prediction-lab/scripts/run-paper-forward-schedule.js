@@ -62,6 +62,14 @@ export async function prepareResearchProductionIdentityCutover({
   if (!Number.isFinite(nowMs) || nowMs <= 0) throw new Error("Research Production Paper cutover requires a finite timestamp");
 
   const root = resolve(rootDirectory);
+  const disabledSentinel = join(root, "DISABLED");
+  if (await exists(disabledSentinel)) {
+    throw Object.assign(
+      new Error("Paper Forward schedule is disabled; refusing Research Production identity cutover"),
+      { code: "PAPER_FORWARD_SCHEDULE_DISABLED" },
+    );
+  }
+
   const stateFile = join(root, "state", "recurring-paper-loop.json");
   const desiredStrategyId = expectedStrategyId(outcomeAccumulationEnabled);
   if (!(await exists(stateFile))) {
