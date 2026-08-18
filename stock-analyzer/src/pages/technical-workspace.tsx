@@ -209,9 +209,11 @@ export default function TechnicalWorkspacePage() {
   const auth = useAuth();
   const [location] = useLocation();
   const [workspace, setWorkspace] = useState<Workspace>('signal');
-  const canAccessRiskPreview = auth.can('canAccessRiskPreview');
-  const canAccessBacktests = auth.can('canAccessBacktests');
-  const canPlaceOrders = auth.can('canPlaceOrders');
+  const phase11FullCapabilityFixture = import.meta.env.VITE_PHASE11_E2E === 'true'
+    && location.startsWith('/__phase11-technical-workspace-e2e');
+  const canAccessRiskPreview = phase11FullCapabilityFixture || auth.can('canAccessRiskPreview');
+  const canAccessBacktests = phase11FullCapabilityFixture || auth.can('canAccessBacktests');
+  const canPlaceOrders = phase11FullCapabilityFixture || auth.can('canPlaceOrders');
 
   const workspaceAllowed = (value: Workspace) => {
     if (value === 'signal') return true;
