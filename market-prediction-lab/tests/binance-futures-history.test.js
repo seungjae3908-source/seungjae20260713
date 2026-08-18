@@ -32,6 +32,18 @@ test("daily kline collector paginates forward without duplicate timestamps", asy
   assert.equal(calls.length, 2);
   assert.equal(new Set(result.candles.map((row) => row.timestamp)).size, 1005);
   assert.ok(result.candles.every((row) => row.isClosed === true));
+  assert.ok(result.candles.every((row) => row.quoteVolume === 1000));
+  assert.equal(result.quoteTurnoverSource, "BINANCE_QUOTE_ASSET_VOLUME");
+});
+
+test("daily kline collector fails closed when quote-asset turnover is missing", async () => {
+  const start = Date.UTC(2020, 0, 1);
+  const rowWithoutQuoteVolume = [start, "99", "102", "98", "100", "10"];
+  const client = { async get() { return [rowWithoutQuoteVolume]; } };
+  await assert.rejects(
+    collectBinanceFuturesDailyKlines({ client, symbol: "BTCUSDT", startTime: start, endTime: start + DAY_MS }),
+    /kline\[0\] is invalid/,
+  );
 });
 
 test("funding collector advances by one millisecond and preserves positive and negative rates", async () => {
