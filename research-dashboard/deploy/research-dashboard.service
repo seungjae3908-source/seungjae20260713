@@ -8,17 +8,15 @@ Type=simple
 User=investment-research
 Group=investment-research
 WorkingDirectory=/opt/investment-research-dashboard/current/research-dashboard
-Environment=NODE_ENV=production
+Environment=PYTHONUNBUFFERED=1
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=RESEARCH_DASHBOARD_HOST=127.0.0.1
 Environment=RESEARCH_DASHBOARD_PORT=18090
 Environment=RESEARCH_STATE_ROOT=/var/lib/investment-research-production
-# This long-running HTTP process reaches V8 baseline JIT under normal Node startup.
-# The shared server policy denies executable-memory remapping, so keep JIT disabled.
-# Node 22's global Fetch/WebSocket surface lazily loads Undici, whose llhttp path
-# requires WebAssembly; --jitless disables WebAssembly. The dashboard uses neither
-# Fetch nor WebSocket, so disable those unused globals instead of weakening sandboxing.
-ExecStart=/usr/bin/env node --jitless --no-experimental-fetch --no-experimental-websocket /opt/investment-research-dashboard/current/research-dashboard/server.mjs
+# Use the Python standard-library HTTP runtime so this long-running read-only
+# dashboard does not require V8 JIT, executable-memory remapping, WebAssembly,
+# Undici, or third-party packages on the production host.
+ExecStart=/usr/bin/env python3 /opt/investment-research-dashboard/current/research-dashboard/server.py
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
@@ -33,9 +31,8 @@ AmbientCapabilities=
 RestrictSUIDSGID=true
 LockPersonality=true
 UMask=0077
-# Keep the long-running Node service aligned with the already-proven Research
-# Production sandbox. ProtectSystem=strict keeps the release and research state
-# read-only; only the private /tmp namespace is explicitly writable.
+# Research state and release remain read-only under ProtectSystem=strict.
+# Only the private /tmp namespace is explicitly writable.
 ReadWritePaths=/tmp
 
 [Install]
