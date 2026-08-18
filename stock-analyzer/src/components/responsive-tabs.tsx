@@ -4,6 +4,8 @@ export type ResponsiveTabOption<T extends string> = {
   value: T;
   label: string;
   ariaLabel?: string;
+  disabled?: boolean;
+  disabledReason?: string;
 };
 
 export function ResponsiveTabs<T extends string>({
@@ -49,16 +51,22 @@ export function ResponsiveTabs<T extends string>({
             role="tab"
             aria-label={accessibleLabel}
             aria-selected={selected}
-            onClick={() => onChange(option.value)}
+            aria-disabled={option.disabled || undefined}
+            disabled={option.disabled}
+            title={option.disabled ? option.disabledReason ?? '이 기능을 사용할 권한이 필요합니다.' : undefined}
+            onClick={() => {
+              if (!option.disabled) onChange(option.value);
+            }}
             className={cn(
               'min-h-11 shrink-0 rounded-xl text-xs font-black transition-colors lg:min-w-0',
               compact ? 'min-w-[88px] px-3' : 'min-w-[76px] px-3',
+              option.disabled && 'cursor-not-allowed opacity-45',
               selected
                 ? 'bg-primary text-primary-foreground shadow-sm'
                 : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
             )}
           >
-            {option.label}
+            {option.label}{option.disabled ? ' · 잠김' : ''}
           </button>
         );
       })}
