@@ -9,6 +9,10 @@ import { normalizeMissingEvidence } from './evidence-normalize.mjs';
 import { fetchBitgetFuturesEvidence, fetchUpbitSpotEvidence } from './public-data.mjs';
 import { buildSignalIntelligenceOverlay } from './signal-overlay.mjs';
 import { evaluateSpoofCandidate, SPOOF_CANDIDATE_CONTRACT } from './spoof-candidate.mjs';
+import {
+  buildFakeWallNaturalCadenceEvent,
+  FAKE_WALL_NATURAL_EVENT_CONTRACT,
+} from './fake-wall-forward-natural-input.mjs';
 
 const HOST = process.env.MARKET_INTELLIGENCE_HOST || '127.0.0.1';
 const PORT = Number(process.env.MARKET_INTELLIGENCE_PORT || 8791);
@@ -35,6 +39,10 @@ function safety() {
     realOrderAllowed: false,
     orderSubmissionAllowed: false,
   };
+}
+
+function exactServiceShaAvailable() {
+  return /^[0-9a-f]{40}$/u.test(String(SERVICE_SHA).toLowerCase());
 }
 
 async function readJson(req) {
@@ -107,7 +115,22 @@ function remember(input) {
   }
 }
 
-async function evaluateAndRemember(input) {
+function emitNaturalCadenceEvent(input, result) {
+  if (!exactServiceShaAvailable()) return;
+  try {
+    const event = buildFakeWallNaturalCadenceEvent(input, result, { serviceSha: SERVICE_SHA });
+    process.stdout.write(`${JSON.stringify(event)}\n`);
+  } catch (error) {
+    process.stderr.write(`${JSON.stringify({
+      event: 'fake_wall_natural_observation_rejected',
+      contract: FAKE_WALL_NATURAL_EVENT_CONTRACT,
+      serviceSha: SERVICE_SHA,
+      reason: error instanceof Error ? error.message : String(error),
+    })}\n`);
+  }
+}
+
+async function evaluateAndRemember(input, { naturalPublicGet = false } = {}) {
   const normalized = normalizeMissingEvidence(input);
   const enriched = withPrevious(normalized);
   const result = evaluateMarketIntelligence(enriched);
@@ -136,6 +159,7 @@ async function evaluateAndRemember(input) {
     result.warnings = [...new Set([...result.warnings, 'SPOOF_CANDIDATE_INSUFFICIENT_EVIDENCE'])];
   }
   remember(normalized);
+  if (naturalPublicGet) emitNaturalCadenceEvent(normalized, result);
   return result;
 }
 
@@ -155,6 +179,13 @@ async function handler(req, res) {
         privateApi: false,
         orderAuthority: false,
         cachedSymbols: historyByKey.size,
+        fakeWallNaturalEvidence: {
+          eventContract: FAKE_WALL_NATURAL_EVENT_CONTRACT,
+          source: 'PUBLIC_GET_ONLY',
+          journalStructured: true,
+          exactServiceShaRequired: true,
+          artifactWriterAuthority: 'EXTERNAL_READ_ONLY_FOLLOWER',
+        },
       });
     }
 
@@ -169,6 +200,15 @@ async function handler(req, res) {
           mode: 'OBSERVE_ONLY',
           scannerHardBlockAllowed: false,
           parentGateImpact: 'NONE',
+          orderAllowed: false,
+        },
+        fakeWallNaturalEvidence: {
+          eventContract: FAKE_WALL_NATURAL_EVENT_CONTRACT,
+          source: 'PUBLIC_GET_ONLY',
+          journalStructured: true,
+          artifactOnly: true,
+          scannerRankingImpact: 'NONE',
+          tradingEligibilityImpact: 'NONE',
           orderAllowed: false,
         },
         safetySuite: {
@@ -213,14 +253,14 @@ async function handler(req, res) {
     const futuresMatch = req.method === 'GET' && url.pathname.match(/^\/v1\/public\/crypto\/futures\/([A-Za-z0-9]+)$/u);
     if (futuresMatch) {
       const input = await fetchBitgetFuturesEvidence(futuresMatch[1]);
-      const result = await evaluateAndRemember(input);
+      const result = await evaluateAndRemember(input, { naturalPublicGet: true });
       return json(res, 200, { ok: true, serviceSha: SERVICE_SHA, provenance: input.provenance, result });
     }
 
     const spotMatch = req.method === 'GET' && url.pathname.match(/^\/v1\/public\/crypto\/spot\/([A-Za-z0-9-]+)$/u);
     if (spotMatch) {
       const input = await fetchUpbitSpotEvidence(spotMatch[1]);
-      const result = await evaluateAndRemember(input);
+      const result = await evaluateAndRemember(input, { naturalPublicGet: true });
       return json(res, 200, { ok: true, serviceSha: SERVICE_SHA, provenance: input.provenance, result });
     }
 

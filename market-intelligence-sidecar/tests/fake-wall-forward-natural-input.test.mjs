@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  buildFakeWallNaturalCadenceEvent,
   buildFakeWallNaturalLedgerBatch,
   buildFakeWallNaturalLedgerInput,
+  FAKE_WALL_NATURAL_EVENT_CONTRACT,
   FAKE_WALL_NATURAL_INPUT_CONTRACT,
 } from '../src/fake-wall-forward-natural-input.mjs';
 
@@ -41,6 +43,67 @@ function event(overrides = {}) {
     ...overrides,
   };
 }
+
+function publicInput(overrides = {}) {
+  return {
+    market: 'CRYPTO_FUTURES',
+    symbol: 'BTCUSDT',
+    asOf: detectedAt,
+    orderBook: {
+      ts: detectedAt,
+      bids: [[99, 2]],
+      asks: [[101, 3]],
+    },
+    provenance: {
+      provider: 'BITGET_PUBLIC_UTA_V3',
+      privateApiUsed: false,
+      endpoints: ['/api/v3/market/orderbook'],
+    },
+    ...overrides,
+  };
+}
+
+function evaluatedResult(overrides = {}) {
+  return {
+    market: 'CRYPTO_FUTURES',
+    symbol: 'BTCUSDT',
+    asOf: detectedAt,
+    ageMs: 500,
+    policy: { maxDataAgeMs: 15_000 },
+    microstructure: { spoofCandidate: candidate() },
+    warnings: [],
+    ...overrides,
+  };
+}
+
+test('public GET cadence emits deterministic sanitized natural event that feeds ledger input', () => {
+  const naturalEvent = buildFakeWallNaturalCadenceEvent(publicInput(), evaluatedResult(), { serviceSha: researchSha });
+  assert.equal(naturalEvent.contract, FAKE_WALL_NATURAL_EVENT_CONTRACT);
+  assert.equal(naturalEvent.natural, true);
+  assert.equal(naturalEvent.source, 'MARKET_INTELLIGENCE_PUBLIC_GET');
+  assert.equal(naturalEvent.serviceSha, researchSha);
+  assert.equal(naturalEvent.venue, 'BITGET_PUBLIC_UTA_V3');
+  assert.equal(naturalEvent.referencePrice, 100);
+  assert.match(naturalEvent.eventId, /^fwn-[0-9a-f]{64}$/u);
+  assert.equal(naturalEvent.provenance.privateApiUsed, false);
+  assert.deepEqual(naturalEvent.provenance.endpoints, ['/api/v3/market/orderbook']);
+  assert.equal(naturalEvent.freshness.state, 'fresh');
+
+  const built = buildFakeWallNaturalLedgerInput(naturalEvent, { researchCodeSha: researchSha });
+  assert.match(built.candidateEventId, /^fw-[0-9a-f]{64}$/u);
+  assert.equal(built.observation.status, 'PENDING');
+  assert.equal(built.mark.observedAt, detectedAt);
+  assert.equal(built.mark.referencePrice, 100);
+});
+
+test('natural cadence event rejects provenance that is not explicitly public-only', () => {
+  assert.throws(
+    () => buildFakeWallNaturalCadenceEvent(publicInput({
+      provenance: { provider: 'BITGET', privateApiUsed: true },
+    }), evaluatedResult(), { serviceSha: researchSha }),
+    /FAKE_WALL_NATURAL_PRIVATE_PROVENANCE_REJECTED/u,
+  );
+});
 
 test('natural candidate becomes deterministic append-only observation plus public mark', () => {
   const built = buildFakeWallNaturalLedgerInput(event(), { researchCodeSha: researchSha });
