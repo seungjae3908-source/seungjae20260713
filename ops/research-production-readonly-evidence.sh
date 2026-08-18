@@ -145,6 +145,7 @@ if file_exists "$paper_status"; then
       const v = JSON.parse(raw);
       const clean = x => String(x ?? "null").replace(/[\t\r\n ]/g, "_").slice(0, 300);
       const lanes = Array.isArray(v.lanes) ? v.lanes : [];
+      const laneKey = x => x?.market ?? x?.lane ?? x?.provider ?? "lane";
       console.log([
         "PAPER_RUNTIME",
         "present=true",
@@ -155,7 +156,15 @@ if file_exists "$paper_status"; then
         `public_forward_evidence_accumulating=${clean(v.publicForwardEvidenceAccumulating)}`,
         `paper_trade_outcome_accumulating=${clean(v.paperTradeOutcomeAccumulating)}`,
         `lane_count=${lanes.length}`,
-        `lane_states=${clean(lanes.map(x => `${x.market ?? x.lane ?? x.provider ?? "lane"}:${x.status ?? "unknown"}`).join(","))}`,
+        `lane_states=${clean(lanes.map(x => `${laneKey(x)}:${x.status ?? "unknown"}`).join(","))}`,
+        `lane_blockers=${clean(lanes.map(x => `${laneKey(x)}:${x.blocker ?? "none"}`).join(","))}`,
+        `lane_data_as_of=${clean(lanes.map(x => `${laneKey(x)}:${x.dataAsOfMs ?? "null"}`).join(","))}`,
+        `lane_last_success=${clean(lanes.map(x => `${laneKey(x)}:${x.lastSuccessAtMs ?? "null"}`).join(","))}`,
+        `lane_last_failure=${clean(lanes.map(x => `${laneKey(x)}:${x.lastFailureAtMs ?? "null"}`).join(","))}`,
+        `replay_count=${clean(v.replayCount)}`,
+        `duplicate_replay_count=${clean(v.duplicateReplayCount)}`,
+        `runtime_settlement_count=${clean(v.settlementCount)}`,
+        `runtime_outcome_count=${clean(v.outcomeCount)}`,
         `private_request_count=${clean(v.privateRequestCount)}`,
         `financial_mutation_count=${clean(v.financialMutationCount)}`,
         `order_count=${clean(v.orderCount)}`,
@@ -176,12 +185,21 @@ if file_exists "$paper_state"; then
     process.stdin.on("data", c => raw += c);
     process.stdin.on("end", () => {
       const v = JSON.parse(raw);
+      const positions = Array.isArray(v.positions) ? v.positions : [];
+      const entryTimes = positions
+        .map(row => Number(row?.entryTimestampMs))
+        .filter(Number.isFinite)
+        .sort((a, b) => a - b);
+      const oldestPendingAtMs = entryTimes[0] ?? null;
+      const oldestPendingAgeMs = oldestPendingAtMs == null ? null : Math.max(0, Date.now() - oldestPendingAtMs);
       console.log([
         "PAPER_LEDGER",
         "present=true",
         `cycle_count=${Array.isArray(v.cycles) ? v.cycles.length : 0}`,
-        `position_count=${Array.isArray(v.positions) ? v.positions.length : 0}`,
+        `sample_count=${Array.isArray(v.samples) ? v.samples.length : 0}`,
+        `position_count=${positions.length}`,
         `settlement_count=${Array.isArray(v.settlements) ? v.settlements.length : 0}`,
+        `oldest_pending_age_ms=${oldestPendingAgeMs ?? "null"}`,
       ].join(" "));
     });
   '
