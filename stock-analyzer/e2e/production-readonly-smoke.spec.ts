@@ -30,6 +30,9 @@ type RouteTransition = {
 };
 type TerminalState =
   | 'paper-ready'
+  | 'research-ready'
+  | 'research-loading'
+  | 'research-error'
   | 'error-state'
   | 'capability-denied'
   | 'account-page'
@@ -151,6 +154,16 @@ async function detectPaperTradingTerminalState(page: Page): Promise<TerminalStat
   return 'unknown';
 }
 
+async function detectResearchCenterTerminalState(page: Page): Promise<TerminalState> {
+  if (await page.getByText('Research 안전 계약 정상', { exact: true }).count()) return 'research-ready';
+  if (await page.getByText('Research Production 상태를 불러오지 못했습니다.', { exact: true }).count()) return 'research-error';
+  if (await page.getByText('연구 상태를 불러오는 중입니다.', { exact: true }).count()) return 'research-loading';
+  if (await page.getByTestId('capability-denied').count()) return 'capability-denied';
+  if (await page.getByRole('heading', { name: '계정', exact: true }).count()) return 'account-page';
+  if (await page.getByText('로그인 사용자 정보를 확인하지 못했습니다.', { exact: true }).count()) return 'missing-user';
+  return 'unknown';
+}
+
 function attachDiagnostics(page: Page, testInfo: TestInfo, evidence: Evidence) {
   const testName = testInfo.titlePath.join(' > ');
   page.on('console', (message) => {
@@ -244,6 +257,25 @@ async function verifyHealth(page: Page) {
   expect(health.identityStatus).toBe('match');
 }
 
+async function verifyResearchCenter(page: Page, evidence: Evidence, testInfo: TestInfo) {
+  const route = '/research-center';
+  await openRoute(page, evidence, route, testInfo);
+  try {
+    await expect(page.getByTestId('research-center-page')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('관리자 전용', { exact: true })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('조회 전용', { exact: true })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Research Production 상태를 불러오지 못했습니다.', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('Research 안전 계약 정상', { exact: true })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('research-cycle-forward')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('research-cycle-fast-historical')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('research-cycle-long-history')).toBeVisible({ timeout: 15_000 });
+    recordTerminalState(testInfo, evidence, route, 'research-ready');
+  } catch (error) {
+    recordTerminalState(testInfo, evidence, route, await detectResearchCenterTerminalState(page));
+    throw error;
+  }
+}
+
 const majorRoutes = [
   '/',
   '/stocks',
@@ -254,6 +286,31 @@ const majorRoutes = [
   '/recommendations',
   '/paper-trading',
 ] as const;
+
+test('Production admin Research Center loads read-only evidence without browser errors', async ({ page }, testInfo) => {
+  const evidence = makeEvidence(testInfo);
+  attachDiagnostics(page, testInfo, evidence);
+  await installProductionReadOnlyPolicy(page, productionOrigin, (request, reason) => {
+    evidence.blockedMutations.push({
+      test: testInfo.title,
+      path: requestPath(request.url()),
+      detail: `${reason}: ${request.method()}`,
+    });
+  });
+
+  await verifyHealth(page);
+  await login(page, evidence, testInfo);
+  await verifyResearchCenter(page, evidence, testInfo);
+
+  expect(evidence.blockedMutations, `blocked mutation requests: ${JSON.stringify(evidence.blockedMutations)}`).toEqual([]);
+  expect(evidence.consoleErrors, `console errors: ${JSON.stringify(evidence.consoleErrors)}`).toEqual([]);
+  expect(evidence.pageErrors, `page errors: ${JSON.stringify(evidence.pageErrors)}`).toEqual([]);
+  expect(evidence.unhandledRejections, `unhandled rejections: ${JSON.stringify(evidence.unhandledRejections)}`).toEqual([]);
+  expect(evidence.unexpectedHttpErrors, `unexpected HTTP errors: ${JSON.stringify(evidence.unexpectedHttpErrors)}`).toEqual([]);
+  expect(evidence.failedRequests, `failed requests: ${JSON.stringify(evidence.failedRequests)}`).toEqual([]);
+
+  writeEvidence(testInfo, evidence);
+});
 
 test('Production read-only major paths terminate loading without browser errors', async ({ page }, testInfo) => {
   const evidence = makeEvidence(testInfo);
