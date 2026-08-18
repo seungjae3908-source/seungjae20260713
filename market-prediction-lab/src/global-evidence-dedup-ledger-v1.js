@@ -27,7 +27,11 @@ function requiredDigest(value, name) {
 }
 
 function requiredTimestamp(value) {
-  if (Number.isInteger(value) && value > 0) return new Date(value).toISOString();
+  if (Number.isInteger(value) && value > 0) {
+    const date = new Date(value);
+    if (Number.isFinite(date.getTime())) return date.toISOString();
+    throw new TypeError("observationTimestamp must be a valid timestamp");
+  }
   const text = requiredString(value, "observationTimestamp");
   const timestamp = Date.parse(text);
   if (!Number.isFinite(timestamp)) throw new TypeError("observationTimestamp must be a valid timestamp");
@@ -195,6 +199,7 @@ export function recordGlobalEvidence(ledger, raw) {
 export function canonicalUniqueEvidence(ledger, filters = {}) {
   const verification = verifyGlobalEvidenceLedger(ledger);
   if (!verification.valid) throw new Error(ARTIFACT_CHAIN_BROKEN);
+  if (ledger.conflicts.length > 0) throw new Error(EVIDENCE_ID_CONFLICT);
   const rows = ledger.records.filter((record) => Object.entries(filters).every(([key, value]) => {
     if (value == null) return true;
     return record.identity?.[key] === value;
