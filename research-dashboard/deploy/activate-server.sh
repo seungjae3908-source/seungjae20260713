@@ -300,6 +300,15 @@ activate() {
     exit 72
   }
 
+  # The rollback handler closes over local activation state. Disarm it while
+  # those locals are still in scope once every success condition is proven;
+  # otherwise Bash runs the EXIT trap after this function returns and nounset
+  # turns a successful activation into a false failure.
+  trap - EXIT
+  rm -f "$unit_backup"
+  "${SUDO[@]}" rm -rf -- "$staged" >/dev/null 2>&1 || true
+  "${SUDO[@]}" rm -f -- "$next_current" >/dev/null 2>&1 || true
+
   printf '%s\n' \
     'RESEARCH_DASHBOARD_ACTIVATED=true' \
     "TARGET_SHA=$TARGET_SHA" \
