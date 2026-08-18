@@ -645,8 +645,27 @@ function requestSpec(
   };
 }
 
+export function resolveKiwoomRawTargetCandles(
+  targetCandles: number | undefined,
+  aggregateSize = 1,
+): number | undefined {
+  if (
+    targetCandles == null ||
+    !Number.isFinite(targetCandles) ||
+    targetCandles <= 0
+  ) {
+    return undefined;
+  }
+
+  const normalizedTarget = Math.max(2, Math.floor(targetCandles));
+  const normalizedAggregate = Math.max(1, Math.floor(aggregateSize));
+
+  return normalizedTarget * normalizedAggregate;
+}
+
 async function fetchAllPages(
   spec: RequestSpec,
+  targetRawCandles?: number,
 ): Promise<KiwoomChartCandle[]> {
   const collected:
     KiwoomChartCandle[] = [];
@@ -695,6 +714,13 @@ async function fetchAllPages(
       ...normalizedRows,
     );
 
+    if (
+      targetRawCandles != null &&
+      collected.length >= targetRawCandles
+    ) {
+      break;
+    }
+
     const hasNext =
       String(
         response.contYn ?? "",
@@ -741,14 +767,19 @@ async function fetchAllPages(
     );
   }
 
-  return dedupeAndSort(
+  const sorted = dedupeAndSort(
     collected,
   );
+
+  return targetRawCandles == null
+    ? sorted
+    : sorted.slice(-targetRawCandles);
 }
 
 export async function getKiwoomChartCandles(
   tickerValue: string,
   timeframeValue = "1D",
+  targetCandles?: number,
 ): Promise<KiwoomChartCandle[]> {
   if (!isKiwoomConfigured()) {
     throw new Error(
@@ -779,8 +810,13 @@ export async function getKiwoomChartCandles(
     timeframe,
   );
 
+  const rawTarget = resolveKiwoomRawTargetCandles(
+    targetCandles,
+    spec.aggregateSize ?? 1,
+  );
+
   const rows =
-    await fetchAllPages(spec);
+    await fetchAllPages(spec, rawTarget);
 
   const aggregated =
     aggregateCandles(
@@ -793,6 +829,16 @@ export async function getKiwoomChartCandles(
   ) {
     throw new Error(
       `키움 차트 데이터가 부족합니다. ticker=${ticker}, timeframe=${timeframe}, count=${aggregated.length}`,
+    );
+  }
+
+  if (
+    targetCandles != null &&
+    Number.isFinite(targetCandles) &&
+    targetCandles > 0
+  ) {
+    return aggregated.slice(
+      -Math.max(2, Math.floor(targetCandles)),
     );
   }
 
