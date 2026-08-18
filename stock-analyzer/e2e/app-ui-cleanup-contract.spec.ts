@@ -40,12 +40,20 @@ test('기술 라우트는 공통 개선 UI를 유지하면서 권한 없는 고�
 
   expect(app).toContain("return gated('canAccessBasicInfo', <TechnicalWorkspacePage />);");
   expect(app).not.toContain('scanner-workspace-basic');
-  expect(workspace).toContain("const canAccessRiskPreview = auth.can('canAccessRiskPreview')");
-  expect(workspace).toContain("const canAccessBacktests = auth.can('canAccessBacktests')");
-  expect(workspace).toContain("const canPlaceOrders = auth.can('canPlaceOrders')");
+  expect(workspace).toContain("const canAccessRiskPreview = phase11FullCapabilityFixture || auth.can('canAccessRiskPreview')");
+  expect(workspace).toContain("const canAccessBacktests = phase11FullCapabilityFixture || auth.can('canAccessBacktests')");
+  expect(workspace).toContain("const canPlaceOrders = phase11FullCapabilityFixture || auth.can('canPlaceOrders')");
   expect(workspace).toContain('if (!canAccessRiskPreview)');
   expect(tabs).toContain('aria-disabled={option.disabled || undefined}');
+  expect(tabs).toContain('disabled={option.disabled}');
   expect(tabs).toContain("{option.label}{option.disabled ? ' · 잠김' : ''}");
+});
+
+test('전체 기능 browser fixture는 phase11 전용 빌드와 전용 경로에서만 활성화된다', () => {
+  const workspace = source('src/pages/technical-workspace.tsx');
+  expect(workspace).toContain("const phase11FullCapabilityFixture = import.meta.env.VITE_PHASE11_E2E === 'true'");
+  expect(workspace).toContain("&& location.startsWith('/__phase11-technical-workspace-e2e')");
+  expect(workspace).not.toContain("location.startsWith('/scanner')");
 });
 
 test('코인 현물은 canonical Upbit spot 요청과 현물 상태 전환을 유지한다', () => {
