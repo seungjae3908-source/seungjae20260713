@@ -51,11 +51,12 @@ test('child environment strips secrets and private credentials', () => {
   assert.equal(env.TOSS_ACCESS_TOKEN, undefined);
 });
 
-test('forward plan isolates Paper and Shadow state', () => {
+test('forward plan isolates state and orders natural Shadow before Paper', () => {
   const stateRoot = '/var/lib/investment-research-production';
   const plan = buildTaskPlan({ profile: 'forward', stateRoot, researchSha: SHA, activationAtMs: 12345 });
   const paper = plan.find((task) => task.id === 'paper-forward');
   const shadow = plan.find((task) => task.id === 'shadow-forward');
+  assert.deepEqual(plan.map((task) => task.id), ['shadow-forward', 'paper-forward']);
   assert.equal(paper.env.PAPER_FORWARD_ROOT, `${stateRoot}/forward/paper`);
   assert.equal(paper.env.PAPER_FORWARD_RESEARCH_SHA, SHA);
   assert.equal(paper.env.PAPER_FORWARD_ACTIVATION_AT_MS, '12345');
@@ -107,7 +108,7 @@ test('parallel cycle uses isolated per-task workspaces', async () => {
   }
 });
 
-test('Paper activation timestamp is persisted and immutable across forward cycles', async () => {
+test('Paper activation timestamp is persisted and forward execution is serialized Shadow then Paper', async () => {
   const repoRoot = await fakeRepo();
   const stateRoot = join(repoRoot, 'research-state');
   const first = await runResearchCycle({
@@ -121,6 +122,8 @@ test('Paper activation timestamp is persisted and immutable across forward cycle
     verifyGitHead: false,
   });
   assert.equal(first.status, 'complete');
+  assert.equal(first.concurrency, 1);
+  assert.deepEqual(first.results.map((row) => row.id), ['shadow-forward', 'paper-forward']);
   const activation = JSON.parse(await readFile(join(stateRoot, 'forward', 'activation.json'), 'utf8'));
   assert.equal(activation.activationAtMs, 123456789);
   await new Promise((resolve) => setTimeout(resolve, 3));
@@ -135,6 +138,7 @@ test('Paper activation timestamp is persisted and immutable across forward cycle
     verifyGitHead: false,
   });
   assert.equal(second.status, 'complete');
+  assert.equal(second.concurrency, 1);
   await assert.rejects(() => runResearchCycle({
     repoRoot,
     stateRoot,
