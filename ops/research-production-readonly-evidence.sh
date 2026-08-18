@@ -217,17 +217,24 @@ if file_exists "$shadow_summary"; then
     process.stdin.on("end", () => {
       const root = JSON.parse(raw);
       const clean = x => String(x ?? "null").replace(/[\t\r\n ]/g, "_").slice(0, 300);
+      const compact = x => x == null ? "null" : JSON.stringify(x);
       console.log("SHADOW_SUMMARY present=true");
       const candidates = root.groups && typeof root.groups === "object" ? root.groups : root;
       for (const [name, value] of Object.entries(candidates)) {
         if (!value || typeof value !== "object" || Array.isArray(value)) continue;
-        const total = value.total ?? value.totalCount ?? value.records ?? value.sampleSize;
-        const settled = value.settled ?? value.settledCount;
-        const pending = value.pending ?? value.pendingCount;
-        const collapsed = value.predictionHealth?.collapsed ?? value.collapsed;
-        const macroF1 = value.macroF1 ?? value.metrics?.macroF1;
-        const balanced = value.balancedAccuracy ?? value.metrics?.balancedAccuracy;
-        if ([total, settled, pending, collapsed, macroF1, balanced].every(x => x === undefined)) continue;
+        const candidate = value.candidate && typeof value.candidate === "object" && !Array.isArray(value.candidate)
+          ? value.candidate
+          : value;
+        const total = value.total ?? value.totalCount ?? value.records ?? value.sampleSize ?? candidate.total ?? candidate.totalCount ?? candidate.sampleSize;
+        const settled = value.settled ?? value.settledCount ?? candidate.settled ?? candidate.settledCount;
+        const pending = value.pending ?? value.pendingCount ?? candidate.pending ?? candidate.pendingCount;
+        const predictionHealth = candidate.predictionHealth ?? value.predictionHealth;
+        const collapsed = predictionHealth?.collapsed ?? candidate.collapsed ?? value.collapsed;
+        const macroF1 = candidate.macroF1 ?? candidate.metrics?.macroF1 ?? value.macroF1 ?? value.metrics?.macroF1;
+        const balanced = candidate.balancedAccuracy ?? candidate.metrics?.balancedAccuracy ?? value.balancedAccuracy ?? value.metrics?.balancedAccuracy;
+        const perClass = candidate.perClass ?? candidate.metrics?.perClass ?? value.perClass ?? value.metrics?.perClass;
+        const confusion = candidate.confusion ?? candidate.confusionMatrix ?? candidate.metrics?.confusion ?? candidate.metrics?.confusionMatrix ?? value.confusion ?? value.confusionMatrix ?? value.metrics?.confusion ?? value.metrics?.confusionMatrix;
+        if ([total, settled, pending, collapsed, macroF1, balanced, perClass, confusion, predictionHealth].every(x => x === undefined)) continue;
         console.log([
           "SHADOW_GROUP",
           `name=${clean(name)}`,
@@ -237,6 +244,9 @@ if file_exists "$shadow_summary"; then
           `collapsed=${clean(collapsed)}`,
           `macro_f1=${clean(macroF1)}`,
           `balanced_accuracy=${clean(balanced)}`,
+          `per_class=${clean(compact(perClass))}`,
+          `confusion=${clean(compact(confusion))}`,
+          `prediction_health=${clean(compact(predictionHealth))}`,
         ].join(" "));
       }
     });
