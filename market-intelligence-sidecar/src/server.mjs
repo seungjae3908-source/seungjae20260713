@@ -8,13 +8,15 @@ import { DEFAULT_PORTFOLIO_SAFETY_POLICY } from './portfolio-safety.mjs';
 import { normalizeMissingEvidence } from './evidence-normalize.mjs';
 import { fetchBitgetFuturesEvidence, fetchUpbitSpotEvidence } from './public-data.mjs';
 import { buildSignalIntelligenceOverlay } from './signal-overlay.mjs';
+import { evaluateSpoofCandidate, SPOOF_CANDIDATE_CONTRACT } from './spoof-candidate.mjs';
 
 const HOST = process.env.MARKET_INTELLIGENCE_HOST || '127.0.0.1';
 const PORT = Number(process.env.MARKET_INTELLIGENCE_PORT || 8791);
 const SERVICE_SHA = process.env.MARKET_INTELLIGENCE_SERVICE_SHA || 'development';
 const SIGNAL_INTELLIGENCE_BASE_URL = process.env.SIGNAL_INTELLIGENCE_BASE_URL || 'http://127.0.0.1:8790';
 const MAX_BODY_BYTES = 1_000_000;
-const previousByKey = new Map();
+const MAX_HISTORY_PER_SYMBOL = 8;
+const historyByKey = new Map();
 
 function json(res, status, payload) {
   const body = JSON.stringify(payload);
@@ -51,23 +53,39 @@ function keyOf(input) {
   return `${String(input.market ?? '').toUpperCase()}:${String(input.symbol ?? '').toUpperCase()}`;
 }
 
+function snapshotOf(input) {
+  return {
+    orderBook: input.orderBook,
+    derivatives: input.derivatives ? { openInterest: input.derivatives.openInterest } : undefined,
+    asOf: input.asOf ?? input.orderBook?.ts ?? input.orderBook?.timestamp,
+  };
+}
+
 function withPrevious(input) {
   const key = keyOf(input);
-  if (input.previous || !previousByKey.has(key)) return input;
-  return { ...input, previous: previousByKey.get(key) };
+  const rememberedHistory = historyByKey.get(key) ?? [];
+  const explicitHistory = Array.isArray(input.history) ? input.history : null;
+  const history = explicitHistory ?? rememberedHistory;
+  const previous = input.previous ?? history.at(-1);
+  return {
+    ...input,
+    ...(previous ? { previous } : {}),
+    history,
+  };
 }
 
 function remember(input) {
   const key = keyOf(input);
   if (!key.includes(':') || key.endsWith(':')) return;
-  previousByKey.set(key, {
-    orderBook: input.orderBook,
-    derivatives: input.derivatives ? { openInterest: input.derivatives.openInterest } : undefined,
-    asOf: input.asOf,
-  });
-  if (previousByKey.size > 2_000) {
-    const oldest = previousByKey.keys().next().value;
-    previousByKey.delete(oldest);
+  const snapshot = snapshotOf(input);
+  const timestamp = Number(snapshot.asOf);
+  const history = historyByKey.get(key) ?? [];
+  const lastTimestamp = Number(history.at(-1)?.asOf);
+  if (Number.isFinite(timestamp) && Number.isFinite(lastTimestamp) && timestamp <= lastTimestamp) return;
+  historyByKey.set(key, [...history, snapshot].slice(-MAX_HISTORY_PER_SYMBOL));
+  if (historyByKey.size > 2_000) {
+    const oldest = historyByKey.keys().next().value;
+    historyByKey.delete(oldest);
   }
 }
 
@@ -75,6 +93,27 @@ async function evaluateAndRemember(input) {
   const normalized = normalizeMissingEvidence(input);
   const enriched = withPrevious(normalized);
   const result = evaluateMarketIntelligence(enriched);
+  const hasTradeExecutionEvidence = Array.isArray(enriched.trades) && enriched.trades.length > 0;
+  const withdrawal = {
+    ...result.microstructure.liquidityWithdrawal,
+    executedRatio: hasTradeExecutionEvidence
+      ? result.microstructure.liquidityWithdrawal?.executedRatio
+      : null,
+  };
+  const spoofCandidate = evaluateSpoofCandidate({
+    currentBook: enriched.orderBook,
+    previousBook: enriched.previous?.orderBook,
+    history: enriched.history,
+    withdrawal,
+    maxDataAgeMs: result.policy.maxDataAgeMs,
+    ofi: result.microstructure.ofi,
+    cvdNormalized: result.microstructure.cvdNormalized,
+    micropriceBiasBps: result.microstructure.micropriceBiasBps,
+  });
+  result.microstructure.spoofCandidate = spoofCandidate;
+  if (spoofCandidate.state === 'INSUFFICIENT_EVIDENCE') {
+    result.warnings = [...new Set([...result.warnings, 'SPOOF_CANDIDATE_INSUFFICIENT_EVIDENCE'])];
+  }
   remember(normalized);
   return result;
 }
@@ -94,7 +133,7 @@ async function handler(req, res) {
         liveTrading: false,
         privateApi: false,
         orderAuthority: false,
-        cachedSymbols: previousByKey.size,
+        cachedSymbols: historyByKey.size,
       });
     }
 
@@ -104,6 +143,13 @@ async function handler(req, res) {
         policy: DEFAULT_POLICY,
         scannerMode: 'SOFT_INTELLIGENCE_LAYER',
         autoTradingModes: ['PAPER_ONLY', 'BLOCKED_RISK', 'ELIGIBLE_FOR_PARENT_GATE'],
+        spoofCandidate: {
+          contract: SPOOF_CANDIDATE_CONTRACT,
+          mode: 'OBSERVE_ONLY',
+          scannerHardBlockAllowed: false,
+          parentGateImpact: 'NONE',
+          orderAllowed: false,
+        },
         safetySuite: {
           defaultEnforcement: 'OBSERVE_ONLY',
           advancedGates: {
