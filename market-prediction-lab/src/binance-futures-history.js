@@ -20,7 +20,7 @@ function assertSymbol(symbol) {
 }
 
 function normalizeKline(row, symbol, index) {
-  if (!Array.isArray(row) || row.length < 6) throw new TypeError(`kline[${index}] is invalid`);
+  if (!Array.isArray(row) || row.length < 8) throw new TypeError(`kline[${index}] is invalid`);
   const candle = {
     symbol,
     timestamp: timestamp(row[0], `kline[${index}].openTime`),
@@ -29,9 +29,11 @@ function normalizeKline(row, symbol, index) {
     low: finite(row[3], `kline[${index}].low`),
     close: finite(row[4], `kline[${index}].close`),
     volume: finite(row[5], `kline[${index}].volume`),
+    quoteVolume: finite(row[7], `kline[${index}].quoteAssetVolume`),
   };
   if ([candle.open, candle.high, candle.low, candle.close].some((value) => value <= 0)
       || candle.volume < 0
+      || candle.quoteVolume < 0
       || candle.high < Math.max(candle.open, candle.close)
       || candle.low > Math.min(candle.open, candle.close)
       || candle.high < candle.low) {
@@ -146,9 +148,9 @@ export async function collectBinanceFuturesDailyKlines({ client, symbol, startTi
     cursor = next;
     if (payload.length < 1000) break;
   }
-  const candles = uniqueSorted(rows, ["open", "high", "low", "close", "volume"]);
+  const candles = uniqueSorted(rows, ["open", "high", "low", "close", "volume", "quoteVolume"]);
   if (candles.length < 60) throw new Error(`not enough Binance futures daily candles: ${candles.length}`);
-  return Object.freeze({ schemaVersion: 1, provider: "binance-usdm-public-rest", symbol, timeframe: "1d", startTime, endTime, candles: Object.freeze(candles) });
+  return Object.freeze({ schemaVersion: 1, provider: "binance-usdm-public-rest", symbol, timeframe: "1d", startTime, endTime, candles: Object.freeze(candles), quoteTurnoverSource: "BINANCE_QUOTE_ASSET_VOLUME" });
 }
 
 export async function collectBinanceFuturesFundingRates({ client, symbol, startTime, endTime, onPage }) {
