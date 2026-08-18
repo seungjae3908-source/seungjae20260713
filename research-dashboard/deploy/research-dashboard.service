@@ -13,7 +13,10 @@ Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=RESEARCH_DASHBOARD_HOST=127.0.0.1
 Environment=RESEARCH_DASHBOARD_PORT=18090
 Environment=RESEARCH_STATE_ROOT=/var/lib/investment-research-production
-ExecStart=/usr/bin/env node /opt/investment-research-dashboard/current/research-dashboard/server.mjs
+# This long-running HTTP process reaches V8 baseline JIT under normal Node startup.
+# The shared server policy denies executable-memory remapping, so run this
+# read-only dashboard without JIT rather than weakening the systemd sandbox.
+ExecStart=/usr/bin/env node --jitless /opt/investment-research-dashboard/current/research-dashboard/server.mjs
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
