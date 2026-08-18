@@ -16,11 +16,11 @@ function parseUtcBoundary(value) { const text = String(value ?? "").trim(); if (
 function parseRow(row) {
   const candleBoundary = parseUtcBoundary(row?.candle_date_time_utc);
   const timestamp = Number.isFinite(candleBoundary) ? candleBoundary : finite(row?.timestamp);
-  const open = finite(row?.opening_price); const high = finite(row?.high_price); const low = finite(row?.low_price); const close = finite(row?.trade_price); const volume = finite(row?.candle_acc_trade_volume);
-  if (!Number.isFinite(timestamp) || timestamp <= 0 || open == null || high == null || low == null || close == null || volume == null) return null;
-  if (open <= 0 || high <= 0 || low <= 0 || close <= 0 || volume < 0) return null;
+  const open = finite(row?.opening_price); const high = finite(row?.high_price); const low = finite(row?.low_price); const close = finite(row?.trade_price); const volume = finite(row?.candle_acc_trade_volume); const quoteVolume = finite(row?.candle_acc_trade_price);
+  if (!Number.isFinite(timestamp) || timestamp <= 0 || open == null || high == null || low == null || close == null || volume == null || quoteVolume == null) return null;
+  if (open <= 0 || high <= 0 || low <= 0 || close <= 0 || volume < 0 || quoteVolume < 0) return null;
   if (high < Math.max(open, close) || low > Math.min(open, close) || high < low) return null;
-  return Object.freeze({ timestamp: Math.floor(timestamp), open, high, low, close, volume });
+  return Object.freeze({ timestamp: Math.floor(timestamp), open, high, low, close, volume, quoteVolume });
 }
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
@@ -48,7 +48,7 @@ export async function collectUpbitSpotHistory(raw = {}) {
   }
   const candles = [...byTimestamp.values()].sort((left, right) => left.timestamp - right.timestamp);
   if (candles.length < 120) throw new Error(`UPBIT_HISTORY_INSUFFICIENT_${candles.length}`);
-  return Object.freeze({ schemaVersion: 1, market: "CRYPTO_SPOT", exchange: "UPBIT", providerMarket: market, symbol: market.replace(/^KRW-/, ""), timeframe: "4h", intervalMs: FOUR_HOURS_MS, source: "upbit-public-candles", requestedStartTime: startTime, requestedEndTime: endTime, pageCount: pages, candleCount: candles.length, firstTimestamp: candles[0].timestamp, lastTimestamp: candles.at(-1).timestamp, candles: Object.freeze(candles), liveOrderAllowed: false, privateAccountRequestAllowed: false });
+  return Object.freeze({ schemaVersion: 1, market: "CRYPTO_SPOT", exchange: "UPBIT", providerMarket: market, symbol: market.replace(/^KRW-/, ""), timeframe: "4h", intervalMs: FOUR_HOURS_MS, source: "upbit-public-candles", requestedStartTime: startTime, requestedEndTime: endTime, pageCount: pages, candleCount: candles.length, firstTimestamp: candles[0].timestamp, lastTimestamp: candles.at(-1).timestamp, candles: Object.freeze(candles), quoteTurnoverSource: "UPBIT_CANDLE_ACC_TRADE_PRICE", liveOrderAllowed: false, privateAccountRequestAllowed: false });
 }
 
 export { marketCode as upbitKrwMarketCode };
