@@ -14,10 +14,11 @@ Environment=RESEARCH_DASHBOARD_HOST=127.0.0.1
 Environment=RESEARCH_DASHBOARD_PORT=18090
 Environment=RESEARCH_STATE_ROOT=/var/lib/investment-research-production
 # The host policy denies executable-memory remapping, so keep V8 JIT disabled.
-# Node 22 exposes Fetch and WebSocket globals through undici. Under --jitless,
-# undici's llhttp WebAssembly path is unavailable. This read-only server uses
-# neither API, so disable both unused globals rather than weakening the sandbox.
-ExecStart=/usr/bin/env node --jitless --no-experimental-fetch --no-experimental-websocket /opt/investment-research-dashboard/current/research-dashboard/server.mjs
+# Node 22 exposes Fetch, WebSocket and EventSource globals through undici. Under
+# --jitless, undici's llhttp WebAssembly path is unavailable. This read-only
+# server uses none of those APIs, so disable the unused globals rather than
+# weakening the systemd sandbox or enabling executable memory.
+ExecStart=/usr/bin/env node --jitless --no-experimental-fetch --no-experimental-websocket --no-experimental-eventsource /opt/investment-research-dashboard/current/research-dashboard/server.mjs
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
