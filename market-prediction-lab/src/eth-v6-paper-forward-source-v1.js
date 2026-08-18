@@ -8,8 +8,8 @@ import { FROZEN_CANDIDATE_MANIFEST_SHA256 } from "./final-holdout-evaluator.js";
 import { BITGET_STANDARD_TAKER_RESEARCH_COSTS } from "./historical-backtest-data.js";
 import { BITGET_ENDPOINTS, BitgetPublicClient } from "./bitget-public-client.js";
 
-const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
 const MARKET_CONTEXT_MAX_AGE_MS = 5 * 60 * 1000;
+const SHADOW_TO_PAPER_MAX_DELAY_MS = 45 * 60 * 1000;
 const COST_POLICY_VERSION = "bitget-standard-taker-research-v1";
 const EXECUTION_POLICY_VERSION = "eth-v6-retained-forward-next-open-v1";
 const STRATEGY_VERSION = "V6_FROZEN_FINAL_HOLDOUT";
@@ -23,7 +23,8 @@ export const ETH_V6_PAPER_FORWARD_SOURCE_CONTRACT = Object.freeze({
   publicDataOnly: true,
   frozenCandidateOnly: true,
   retainedNaturalForwardOnly: true,
-  maximumRetentionMs: ETH_V6_FORWARD_MAX_ENTRY_LAG_MS + FOUR_HOURS_MS,
+  maximumEntryLagMs: ETH_V6_FORWARD_MAX_ENTRY_LAG_MS,
+  maximumSourceAgeMs: SHADOW_TO_PAPER_MAX_DELAY_MS,
   settlementBridgeReady: false,
   liveTrading: false,
   privateApi: false,
@@ -125,7 +126,7 @@ function validateShadowState(root) {
   return state;
 }
 
-function validateTrackingRecord(record, nowMs) {
+function validateTrackingRecord(record, forwardState, nowMs) {
   if (record?.status !== "tracking") return false;
   if (record.signalId == null || record.strategy !== ETH_V6_FORWARD_CANDIDATE.strategy
     || record.asset !== "ETHUSDT" || record.market !== "CRYPTO_FUTURES"
@@ -134,9 +135,15 @@ function validateTrackingRecord(record, nowMs) {
     throw new Error("ETH_V6_PAPER_TRACKING_RECORD_INVALID");
   }
   const entryTime = Number(record.entryPlan?.entryTime);
+  const observedAtMs = Number(forwardState?.updatedAt);
   if (!Number.isInteger(entryTime) || entryTime <= 0 || entryTime > nowMs) throw new Error("ETH_V6_PAPER_ENTRY_TIME_INVALID");
-  const retentionMs = nowMs - entryTime;
-  return retentionMs <= ETH_V6_PAPER_FORWARD_SOURCE_CONTRACT.maximumRetentionMs;
+  if (!Number.isInteger(observedAtMs) || observedAtMs < entryTime || observedAtMs > nowMs) {
+    throw new Error("ETH_V6_PAPER_SHADOW_OBSERVATION_TIME_INVALID");
+  }
+  if (observedAtMs - entryTime > ETH_V6_PAPER_FORWARD_SOURCE_CONTRACT.maximumEntryLagMs) {
+    throw new Error("ETH_V6_PAPER_ORIGINAL_ENTRY_LAG_EXCEEDED");
+  }
+  return nowMs - observedAtMs <= ETH_V6_PAPER_FORWARD_SOURCE_CONTRACT.maximumSourceAgeMs;
 }
 
 function holdoutEvidence(document) {
@@ -172,9 +179,11 @@ function holdoutEvidence(document) {
   });
 }
 
-export async function loadBitgetEthV6PaperContext({ client = new BitgetPublicClient(), record, nowMs } = {}) {
+export async function loadBitgetEthV6PaperContext({ client = new BitgetPublicClient(), record, nowMs, sourceObservedAtMs } = {}) {
   if (!client || typeof client.get !== "function") throw new TypeError("Bitget public client is required");
-  if (!record || !Number.isInteger(nowMs)) throw new TypeError("ETH V6 tracking record and nowMs are required");
+  if (!record || !Number.isInteger(nowMs) || !Number.isInteger(sourceObservedAtMs)) {
+    throw new TypeError("ETH V6 tracking record, nowMs, and sourceObservedAtMs are required");
+  }
   const common = { productType: "usdt-futures", symbol: "ETHUSDT" };
   const [contracts, tiers, openInterest, funding, price] = await Promise.all([
     client.get(CONTRACTS_ENDPOINT, common),
@@ -215,7 +224,7 @@ export async function loadBitgetEthV6PaperContext({ client = new BitgetPublicCli
       provider: "bitget",
       publicOnly: true,
       dataQuality: "READY",
-      provenance: "bitget-public-v2:contracts+position-tier+symbol-price+funding+open-interest+retained-eth-v6-forward",
+      provenance: "bitget-public-v2:contracts+position-tier+symbol-price+funding+open-interest+natural-eth-v6-forward",
       asOfMs,
       maxAgeMs: MARKET_CONTEXT_MAX_AGE_MS,
       contractStatus: "TRADABLE",
@@ -231,14 +240,15 @@ export async function loadBitgetEthV6PaperContext({ client = new BitgetPublicCli
       marginMode: "ISOLATED",
       liquidationDistancePct,
       barProxyRealtimeAllowed: true,
-      retainedForwardObservedAtMs: record.entryPlan.entryTime,
-      retainedForwardMaximumLagMs: ETH_V6_PAPER_FORWARD_SOURCE_CONTRACT.maximumRetentionMs,
+      retainedForwardObservedAtMs: sourceObservedAtMs,
+      retainedForwardMaximumEntryLagMs: ETH_V6_PAPER_FORWARD_SOURCE_CONTRACT.maximumEntryLagMs,
+      retainedForwardMaximumSourceAgeMs: ETH_V6_PAPER_FORWARD_SOURCE_CONTRACT.maximumSourceAgeMs,
       liquidationDistanceModel: "conservative-1x-minus-public-mmr-and-taker-v1",
     }),
   });
 }
 
-function buildCandidate({ record, researchCodeSha, nowMs, context, holdout }) {
+function buildCandidate({ record, researchCodeSha, nowMs, sourceObservedAtMs, context, holdout }) {
   const costs = BITGET_STANDARD_TAKER_RESEARCH_COSTS.CRYPTO_FUTURES;
   return Object.freeze({
     signal: Object.freeze({
@@ -316,6 +326,7 @@ function buildCandidate({ record, researchCodeSha, nowMs, context, holdout }) {
       candidateManifestSha256: FROZEN_CANDIDATE_MANIFEST_SHA256,
       shadowRecordId: record.id,
       entryTime: record.entryPlan.entryTime,
+      observedAtMs: sourceObservedAtMs,
       stop: record.stop,
       target: record.targets?.[0] ?? null,
       source: record.entryPlan.source,
@@ -344,14 +355,15 @@ export function createEthV6PaperForwardSource({
       const shadowRoot = await readJsonOptional(shadowStatePath);
       const forwardState = validateShadowState(shadowRoot);
       if (!forwardState) return Object.freeze({ status: "NO_SOURCE_STATE", candidates: Object.freeze([]), exits: Object.freeze([]), blocker: null });
-      const records = (forwardState.ledger?.records ?? []).filter((record) => validateTrackingRecord(record, nowMs));
+      const sourceObservedAtMs = Number(forwardState.updatedAt);
+      const records = (forwardState.ledger?.records ?? []).filter((record) => validateTrackingRecord(record, forwardState, nowMs));
       if (records.length === 0) return Object.freeze({ status: "NO_FRESH_TRACKING_SIGNAL", candidates: Object.freeze([]), exits: Object.freeze([]), blocker: null });
       if (records.length > 1) throw new Error("ETH_V6_PAPER_MULTIPLE_TRACKING_RECORDS_FORBIDDEN");
       const holdout = holdoutEvidence(await readJsonOptional(holdoutDocumentUrl));
-      const context = await loadContext({ client, record: records[0], nowMs });
+      const context = await loadContext({ client, record: records[0], nowMs, sourceObservedAtMs });
       return Object.freeze({
         status: "READY",
-        candidates: Object.freeze([buildCandidate({ record: records[0], researchCodeSha, nowMs, context, holdout })]),
+        candidates: Object.freeze([buildCandidate({ record: records[0], researchCodeSha, nowMs, sourceObservedAtMs, context, holdout })]),
         exits: Object.freeze([]),
         blocker: null,
         safety: ETH_V6_PAPER_FORWARD_SOURCE_CONTRACT,
