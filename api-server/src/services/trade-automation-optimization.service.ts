@@ -64,7 +64,10 @@ export function evaluateTradingOptimization(
   const blockCodes: string[] = [];
   const warnings: string[] = [];
   const liveOrAutomatic = plan.accountMode === 'live' || policy.mode === 'automatic';
-  const profitabilityAttestation = attestLiveTradingProfitability(plan);
+  const profitabilityAttestation = attestLiveTradingProfitability(plan, undefined, {
+    now,
+    maxEvidenceAgeHours: policy.maxEconomicsAgeHours,
+  });
   const economics = plan.accountMode === 'live'
     ? profitabilityAttestation.serverEconomics
     : plan.economics;
