@@ -2,11 +2,10 @@
   "name": "investment-research-dashboard",
   "version": "1.0.0",
   "private": true,
-  "type": "module",
   "engines": { "node": ">=20" },
   "scripts": {
-    "start": "node server.mjs",
-    "test": "node --test test/*.test.mjs",
-    "check": "node --check server.mjs && node --check public/app.js && node --check public/sw.js"
+    "start": "python3 server.py",
+    "test": "python3 -m unittest discover -s test -p 'test_*.py' -v",
+    "check": "python3 -m py_compile server.py && node --check public/app.js && node --check public/sw.js"
   }
 }
