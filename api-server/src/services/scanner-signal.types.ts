@@ -188,6 +188,57 @@ export interface ScannerSignalCard {
   candidateRanking?: ScannerCandidateRankingSummary;
 }
 
+export interface ScannerDiscoveryCard {
+  signalId: string;
+  assetClass: ScannerAssetClass;
+  market: string;
+  exchange: string | null;
+  symbol: string;
+  name: string;
+  currency: string;
+  assetType: string;
+  price: number;
+  changePercent: number | null;
+  direction: Exclude<ScannerSignalDirection, 'NEUTRAL'>;
+  score: number;
+  confidence: number;
+  dataCompleteness: number;
+  riskScore: number | null;
+  riskLevel: 'LOW' | 'MEDIUM' | 'HIGH' | 'UNAVAILABLE';
+  liquidity: number | null;
+  volume: number | null;
+  tradingValue: number | null;
+  spreadPercent: number | null;
+  volatilityPercent: number | null;
+  matched: string[];
+  unverified: string[];
+  dataState: ScannerDataState;
+  dataSources: string[];
+  observedAt: string;
+  expiresAt: string;
+  strategyMode?: ScannerStrategyMode;
+  warnings: string[];
+  discoveryOnly: true;
+  paperEligible: false;
+  autoTradeEligible: false;
+  executionAuthority: 'NONE';
+  tradingBlockers: string[];
+}
+
+export interface ScannerDiscoverySummary {
+  status: 'DISCOVERY_CANDIDATES' | 'VALID_ZERO_DISCOVERY';
+  candidateCount: number;
+  returnedCount: number;
+  limit: number;
+  truncated: boolean;
+  cards: readonly ScannerDiscoveryCard[];
+  tradeReviewCount: number;
+  executionAuthority: 'NONE';
+  orderSubmissionAllowed: false;
+  paperOrderAllowed: false;
+  autoTradeAllowed: false;
+}
+
 export interface ScannerAlertCandidate {
   idempotencyKey: string;
   signalId: string;
@@ -250,6 +301,7 @@ export interface ScannerResponse {
   market: string;
   timeframe: string;
   cards: ScannerSignalCard[];
+  discovery?: ScannerDiscoverySummary;
   alerts: ScannerAlertCandidate[];
   failures: ScannerFailure[];
   execution: ScannerExecutionSummary;
@@ -308,4 +360,3 @@ export function deriveScannerOutcome(input: ScannerOutcomeInput): ScannerOutcome
 export function withScannerOutcome<T extends ScannerOutcomeInput>(response: T): T & { outcome: ScannerOutcomeCode } {
   return { ...response, outcome: deriveScannerOutcome(response) };
 }
-
