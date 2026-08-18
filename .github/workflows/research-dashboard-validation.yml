@@ -25,7 +25,7 @@ jobs:
         run: |
           npm run check
           npm test
-          node --jitless --no-experimental-fetch --check server.mjs
+          node --jitless --no-experimental-fetch --no-experimental-websocket --check server.mjs
       - name: Validate exact server startup under server Node contract
         shell: bash
         run: |
@@ -41,7 +41,7 @@ jobs:
           RESEARCH_DASHBOARD_HOST=127.0.0.1 \
           RESEARCH_DASHBOARD_PORT=18091 \
           RESEARCH_STATE_ROOT="$tmp/state" \
-            node --jitless --no-experimental-fetch research-dashboard/server.mjs >"$tmp/server.log" 2>&1 &
+            node --jitless --no-experimental-fetch --no-experimental-websocket research-dashboard/server.mjs >"$tmp/server.log" 2>&1 &
           pid=$!
           ready=false
           for _ in $(seq 1 20); do
@@ -79,7 +79,7 @@ jobs:
           grep -q 'User=investment-research' "$unit"
           grep -q 'RESEARCH_DASHBOARD_HOST=127.0.0.1' "$unit"
           grep -q 'WorkingDirectory=/opt/investment-research-dashboard/current/research-dashboard' "$unit"
-          grep -Fq 'ExecStart=/usr/bin/env node --jitless --no-experimental-fetch /opt/investment-research-dashboard/current/research-dashboard/server.mjs' "$unit"
+          grep -Fq 'ExecStart=/usr/bin/env node --jitless --no-experimental-fetch --no-experimental-websocket /opt/investment-research-dashboard/current/research-dashboard/server.mjs' "$unit"
           grep -q 'ProtectSystem=strict' "$unit"
           grep -q '^CapabilityBoundingSet=$' "$unit"
           grep -q '^AmbientCapabilities=$' "$unit"
