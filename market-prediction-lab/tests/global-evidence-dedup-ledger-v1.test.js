@@ -108,24 +108,24 @@ test("legitimate different cohort or horizon observation remains separate eviden
 });
 
 test("Paper, Shadow, Backtest and Fake-Wall aggregates consume canonical unique records only", () => {
-  let ledger = createGlobalEvidenceLedger();
-  for (const [producerFamily, outcomeKind, minute] of [
-    ["PAPER", "SETTLEMENT", "00"],
-    ["SHADOW", "MATURED_LABEL", "15"],
-    ["BACKTEST", "OOS_TRIAL", "30"],
-    ["FAKE_WALL", "FORWARD_OUTCOME", "45"],
+  let ledger = recordGlobalEvidence(createGlobalEvidenceLedger(), evidence()).ledger;
+  for (const [producerFamily, outcomeKind, minute, lineage] of [
+    ["SHADOW", "MATURED_LABEL", "15", "c".repeat(64)],
+    ["BACKTEST", "OOS_TRIAL", "30", "d".repeat(64)],
+    ["FAKE_WALL", "FORWARD_OUTCOME", "45", "e".repeat(64)],
   ]) {
     const recorded = recordGlobalEvidence(ledger, evidence({
       producerFamily,
       workflowFamily: `${producerFamily.toLowerCase()}-evidence-v1`,
       outcomeKind,
       observationTimestamp: `2026-08-18T10:${minute}:00.000Z`,
-      artifactLineageDigest: producerFamily === "PAPER" ? LINEAGE : producerFamily === "SHADOW" ? "c".repeat(64) : producerFamily === "BACKTEST" ? "d".repeat(64) : "e".repeat(64),
-      payload: { status: producerFamily === "PAPER" ? "SETTLED" : "OBSERVED" },
+      artifactLineageDigest: lineage,
+      payload: { status: "OBSERVED" },
     }));
     ledger = recorded.ledger;
   }
   const retry = recordGlobalEvidence(ledger, evidence());
+  assert.equal(retry.status, DUPLICATE_ACCEPTED_ONCE);
   ledger = retry.ledger;
 
   assert.equal(canonicalUniqueEvidence(ledger).length, 4);
