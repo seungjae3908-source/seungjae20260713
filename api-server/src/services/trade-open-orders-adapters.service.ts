@@ -10,10 +10,12 @@ export function prepareUpbitOpenOrders(
   credentials: UpbitCredentials,
   symbol: string,
   state: UpbitOpenOrderState,
+  page: number,
   nonce?: string,
 ): PreparedExchangeRequest {
+  if (!Number.isInteger(page) || page < 1) throw new Error('UPBIT_OPEN_ORDER_PAGE_INVALID');
   const market = `KRW-${symbol.toUpperCase().replace(/^KRW-/, '')}`;
-  const query = `market=${market}&state=${state}&limit=100`;
+  const query = `market=${market}&state=${state}&page=${page}&limit=100&order_by=asc`;
   return {
     method: 'GET',
     path: '/v1/orders/open',
