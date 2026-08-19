@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { liveExecutionEnabled } from './trade-automation.service';
 import {
   DEFAULT_TRADING_POLICY,
   type TradingPlan,
@@ -57,4 +58,30 @@ test('approval policy always disables automatic execution and every exchange swi
   assert.deepEqual(policy.exchangeEnabled, { bitget: false, upbit: false, kiwoom: false });
   assert.deepEqual(policy.enabledAssets, { bitget: [], upbit: [], kiwoom: [] });
   assert.deepEqual(policy.enabledStrategies, []);
+});
+
+test('legacy Kiwoom live execution stays fail-closed even when every live flag is enabled', () => {
+  const previous = {
+    ORDER_EXECUTION_ENABLED: process.env.ORDER_EXECUTION_ENABLED,
+    LIVE_TRADING_ACTIVATION_APPROVED: process.env.LIVE_TRADING_ACTIVATION_APPROVED,
+    BITGET_LIVE_ORDER_ENABLED: process.env.BITGET_LIVE_ORDER_ENABLED,
+    UPBIT_LIVE_ORDER_ENABLED: process.env.UPBIT_LIVE_ORDER_ENABLED,
+    KIWOOM_LIVE_ORDER_ENABLED: process.env.KIWOOM_LIVE_ORDER_ENABLED,
+  };
+  try {
+    process.env.ORDER_EXECUTION_ENABLED = 'true';
+    process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
+    process.env.BITGET_LIVE_ORDER_ENABLED = 'true';
+    process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
+    process.env.KIWOOM_LIVE_ORDER_ENABLED = 'true';
+
+    assert.equal(liveExecutionEnabled('bitget'), true);
+    assert.equal(liveExecutionEnabled('upbit'), true);
+    assert.equal(liveExecutionEnabled('kiwoom'), false);
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });

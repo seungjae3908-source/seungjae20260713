@@ -15,9 +15,10 @@ const FRESH_MS = 30_000;
 export type InstrumentOrderbookAssetClass = 'stock' | 'crypto_spot' | 'crypto_futures';
 export type InstrumentOrderbookMarket = 'KR' | 'US' | 'UPBIT' | 'BITGET';
 export type InstrumentOrderbookStatus = 'ready' | 'partial' | 'unavailable' | 'invalid' | 'provider_error';
-export type InstrumentOrderbookProvider = 'kiwoom' | 'upbit' | 'bitget' | null;
+export type InstrumentOrderbookProvider = 'kiwoom' | 'toss' | 'upbit' | 'bitget' | null;
 export type InstrumentOrderbookSource =
   | 'ka10004'
+  | 'toss_v1_orderbook'
   | 'upbit_v1_orderbook'
   | 'bitget_v2_mix_market_merge_depth'
   | null;
@@ -439,6 +440,28 @@ export function normalizeBitgetFuturesOrderbook(
     bids: pairRows(raw.bids),
     freshness: parseMillisecondTimestamp(raw.ts, receivedAt),
   });
+}
+
+function parseIsoTimestamp(value: unknown, receivedAt: Date): Freshness {
+  const raw = textValue(value);
+  const parsed = raw ? new Date(raw) : null;
+  return freshnessFromDate(raw, parsed && Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null, receivedAt);
+}
+
+export function normalizeTossOrderbook(
+  market: 'KR' | 'US',
+  symbolInput: string,
+  response: unknown,
+  receivedAt = new Date(),
+): InstrumentOrderbookPayload {
+  const symbol = cleanStockSymbol(symbolInput);
+  const descriptor: Descriptor = { assetClass: 'stock', market, exchange: market === 'KR' ? 'KRX' : 'US', symbol, currency: market === 'KR' ? 'KRW' : 'USD', provider: 'toss', source: 'toss_v1_orderbook' };
+  if (!response || typeof response !== 'object' || Array.isArray(response)) return emptyPayload(descriptor, receivedAt, 'provider_error', 'TOSS_ORDERBOOK_RESPONSE_INVALID');
+  const wrapper = response as RawOrderbook;
+  if (!wrapper.result || typeof wrapper.result !== 'object' || Array.isArray(wrapper.result)) return emptyPayload(descriptor, receivedAt, 'provider_error', 'TOSS_ORDERBOOK_RESPONSE_INVALID');
+  const raw = wrapper.result as RawOrderbook;
+  const currency = raw.currency === 'KRW' || raw.currency === 'USD' ? raw.currency : descriptor.currency;
+  return finalizePayload({ descriptor: { ...descriptor, currency }, receivedAt, asks: Array.isArray(raw.asks) ? raw.asks.map((row: any, index) => ({ rank: index + 1, price: row?.price, quantity: row?.volume })) : [], bids: Array.isArray(raw.bids) ? raw.bids.map((row: any, index) => ({ rank: index + 1, price: row?.price, quantity: row?.volume })) : [], freshness: parseIsoTimestamp(raw.timestamp, receivedAt) });
 }
 
 async function fetchPublicJson(url: string, externalSignal?: AbortSignal): Promise<unknown> {

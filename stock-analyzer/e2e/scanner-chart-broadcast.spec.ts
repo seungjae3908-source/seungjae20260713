@@ -381,8 +381,8 @@ async function openScanner(page: Page, state: MockState) {
   await page.setViewportSize({ width: 390, height: 844 });
   await installApprovedUser(page);
   await installApplicationMocks(page, state);
-  await page.goto(`${isolatedBaseURL}/scanner`);
-  await expect(page).toHaveURL(/\/scanner$/);
+  await page.goto(`${isolatedBaseURL}/__phase11-ai-workspace-e2e`);
+  await expect(page).toHaveURL(/\/__phase11-ai-workspace-e2e$/);
   await expect(page.getByRole('heading', { name: 'AI 검색기', level: 1 })).toBeVisible();
   await expect(page.getByTestId('capability-denied')).toHaveCount(0);
 }
@@ -439,7 +439,7 @@ test.describe('mobile scanner legacy ChartBroadcastPanel contract', () => {
     await page.getByRole('button', { name: 'AI 차트 분석기', exact: true }).click();
     await expect(page.getByText('차트 불러오는 중...', { exact: true })).toBeVisible();
     await expect(page.getByRole('heading', { name: '차트 불러오기', level: 2 })).toBeVisible();
-    await expect(page).toHaveURL(/\/scanner$/);
+    await expect(page).toHaveURL(/\/__phase11-ai-workspace-e2e$/);
     await expect(page.getByRole('heading', { name: 'AI 차트 생중계', level: 1 })).toHaveCount(0);
 
     const currentPrice = page.getByText('현재가', { exact: true }).locator('xpath=../..');
@@ -504,7 +504,7 @@ test.describe('mobile scanner legacy ChartBroadcastPanel contract', () => {
     await page.getByRole('button', { name: '자동매매', exact: true }).click();
     await expect(page.getByRole('heading', { name: '차트 불러오기', level: 2 })).toBeVisible();
     await expect(page.getByRole('heading', { name: '자동매매 후보 종목', level: 2 })).toBeVisible();
-    await expect(page).toHaveURL(/\/scanner$/);
+    await expect(page).toHaveURL(/\/__phase11-ai-workspace-e2e$/);
     await page.waitForTimeout(750);
 
     expect(evidence.orderRequests).toEqual([]);

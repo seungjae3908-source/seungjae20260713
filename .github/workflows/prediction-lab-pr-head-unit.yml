@@ -1,0 +1,42 @@
+name: Prediction Lab PR Head Unit
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - market-prediction-lab/**
+      - .github/workflows/prediction-lab-pr-head-unit.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prediction-lab-pr-head-unit-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  prediction-lab-pr-head-unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact pull request head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run Prediction Lab unit suite on exact PR head
+        working-directory: market-prediction-lab
+        run: npm test
+
+      - name: Verify test run did not mutate repository
+        shell: bash
+        run: |
+          git diff --exit-code
+          test -z "$(git status --porcelain=v1)"

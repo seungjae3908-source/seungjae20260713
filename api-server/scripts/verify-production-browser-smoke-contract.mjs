@@ -26,6 +26,16 @@ assert(workflow.includes("if: github.event_name == 'pull_request'"), 'PR job mus
 assert(workflow.includes('BLOCKED_BY_PRODUCTION_QA_CREDENTIAL'), 'missing QA credentials must fail explicitly');
 assert(workflow.includes('PRODUCTION_READONLY_E2E: "true"'), 'live browser must require read-only mode');
 assert(workflow.includes('playwright.production.config.ts'), 'workflow must use isolated Production config');
+assert(workflow.includes('ref: ${{ inputs.sha }}'), 'live smoke must start from the exact deployed source SHA');
+assert(workflow.includes('git fetch --no-tags --depth=1 origin main'), 'smoke harness must resolve current main fail-closed');
+for (const harnessFile of [
+  'stock-analyzer/e2e/production-readonly-smoke.spec.ts',
+  'stock-analyzer/e2e/support/production-readonly-policy.ts',
+]) {
+  assert(workflow.includes(`'${harnessFile}'`), `current-main smoke harness whitelist missing ${harnessFile}`);
+}
+assert(workflow.includes('git show "$HARNESS_SHA:$file" > "$file"'), 'only whitelisted harness files may overlay deployed source');
+assert(workflow.includes('"$HARNESS_SHA" == "${GITHUB_SHA,,}"'), 'stale harness dispatch must fail closed');
 assert(!workflow.includes('ssh '), 'Production browser workflow must not use SSH');
 assert(!workflow.includes('pm2 '), 'Production browser workflow must not mutate PM2');
 assert(!workflow.includes('supabase db'), 'Production browser workflow must not mutate Supabase');
@@ -45,9 +55,13 @@ for (const marker of [
   assert(spec.includes(marker), `browser evidence marker missing: ${marker}`);
 }
 assert(spec.includes("getByTestId('page-fallback')"), 'browser smoke must prove global loading terminates');
-assert(spec.includes("getByTestId('paper-trading-page')"), 'browser smoke must prove the paper workspace becomes ready');
+assert(spec.includes("getByTestId('open-journal-sync')"), 'browser smoke must prove the real paper workspace becomes ready');
 assert(spec.includes("getByTestId('paper-trading-route-skeleton')"), 'browser smoke must prove the paper skeleton terminates');
 assert(spec.includes('installProductionReadOnlyPolicy'), 'browser smoke must install fail-closed request policy');
+assert(spec.includes('isIgnorableProductionRequestFailure'), 'browser smoke must use the narrowly tested request-failure classifier');
+assert(policy.includes('isIgnorableProductionRequestFailure'), 'read-only policy must classify benign same-origin read aborts');
+assert(policy.includes("errorText.trim() === 'net::ERR_ABORTED'"), 'only exact net::ERR_ABORTED failures may be ignored');
+assert(policyTest.includes('same-origin read requests cancelled by navigation are the only ignored browser failures'), 'abort classifier must have explicit boundary tests');
 assert(app.includes('loadPaperTradingPage'), 'approved sessions must preload the paper trading route');
 assert(app.includes('PaperTradingRouteFallback'), 'paper trading must use a route-specific progressive fallback');
 assert(app.includes('paper-trading-route-skeleton'), 'paper trading fallback must have a deterministic readiness marker');

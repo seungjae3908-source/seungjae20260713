@@ -1,3 +1,5 @@
+import './bitget-futures-public-evidence.service.test';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
