@@ -7,6 +7,7 @@ import {
 } from './bounded-scanner.service';
 import { buildContext, type ScanFilters } from './signal.service';
 import { rankScannerCandidates } from './scanner-candidate-ranking.service';
+import { buildScannerDiscoveryView } from './scanner-discovery-view.service';
 import { applyStockSignalPolicy } from './scanner-signal-policy.service';
 import { applyScannerSignalLifecycle } from './scanner-signal-lifecycle.service';
 import { applyScannerQuantHardening } from './scanner-quant-hardening.service';
@@ -173,6 +174,7 @@ export const StockSignalScannerService = {
     const primaryTimeframe = String(request.filters.timeframe ?? '1D') === '1H' ? '60m' : String(request.filters.timeframe ?? '1D');
     const strategyMode = request.strategyMode ?? scannerStrategyForTimeframe(primaryTimeframe);
     const contextTimeframe = scannerContextTimeframe(strategyMode);
+    const publicCoreOnly = String(request.memberId ?? '').toLowerCase().includes('signal-intelligence');
     const universe = await ScannerUniverseService.batch(request.market, request.cursor, request.batchSize, request.signal);
     const candlesByTicker = new Map<string, Candle[]>();
     const contextByTicker = new Map<string, Candle[]>();
@@ -194,7 +196,7 @@ export const StockSignalScannerService = {
         return candles;
       },
       getQuote: (ticker) => MarketDataService.getQuote(ticker),
-      getContext: (entry) => buildContext(entry),
+      getContext: (entry) => publicCoreOnly ? Promise.resolve({}) : buildContext(entry),
       now: Date.now,
     });
     const execution: ScanExecutionOptions = {
@@ -246,13 +248,18 @@ export const StockSignalScannerService = {
       ? { ...card, strongSignalEligible: false, signalState: 'CANDIDATE' as const }
       : card);
     const lifecycle = applyScannerSignalLifecycle(request.memberId, rankedCards);
+    const visibleTradeReviewCount = lifecycle.cards.filter((card) => card.direction === 'LONG').length;
+    const discovery = buildScannerDiscoveryView(broadCandidates, {
+      tradeReviewCount: visibleTradeReviewCount,
+      limit: 100,
+    });
     const partial = raw.partial || universe.partial;
     const timedOut = raw.timedOut;
     const hasUntrusted = broadCandidates.some((card) => card.dataQuality?.state === 'DATA_UNTRUSTED');
     const dataState = universe.stale ? 'stale' as const : hasUntrusted ? 'untrusted' as const : partial ? 'partial' as const : 'complete' as const;
     const completedCount = raw.completedCount;
     const actionableCount = ranking.diagnostics.sGradeCount + ranking.diagnostics.aGradeCount;
-    const message = universe.stale
+    const baseMessage = universe.stale
       ? `종목 마스터 제공기관이 지연되어 ${universe.source} 목록으로 ${completedCount}/${universe.entries.length}종목을 분석했습니다.`
       : partial
         ? `일부 공급자 지연으로 ${completedCount}/${universe.entries.length}종목 중 확인 가능한 후보만 표시합니다.`
@@ -263,6 +270,7 @@ export const StockSignalScannerService = {
             : actionableCount === 0
               ? `현재 진입 가능한 강한 신호 없음 · 관찰 후보 ${ranking.diagnostics.bGradeCount}개`
               : `S/A 진입 검토 ${actionableCount}개 · B 관찰 ${ranking.diagnostics.bGradeCount}개`;
+    const message = `${baseMessage} · 검색 후보 ${discovery.candidateCount}개 · 매매 검토 ${visibleTradeReviewCount}개`;
 
     return {
       ok: true,
@@ -271,6 +279,7 @@ export const StockSignalScannerService = {
       market: request.market,
       timeframe: primaryTimeframe,
       cards: lifecycle.cards,
+      discovery,
       alerts: lifecycle.alerts,
       failures: [],
       execution: {

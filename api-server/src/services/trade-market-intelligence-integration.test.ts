@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import './trade-profitability-attestation.service.test';
 import { InMemoryTradingRepository } from './trade-automation.repository';
 import { TradeAutomationService } from './trade-automation.service';
 import { DEFAULT_TRADING_POLICY, type TradingPlanInput } from './trade-automation.types';
