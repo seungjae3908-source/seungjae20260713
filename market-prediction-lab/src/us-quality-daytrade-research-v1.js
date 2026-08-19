@@ -12,6 +12,7 @@ export const DEFAULT_QUALITY_UNIVERSE = Object.freeze({
 
 export const DEFAULT_QUALITY_DATA_POLICY = Object.freeze({
   maxQuoteAgeMs: 15_000,
+  maxCandleLagIntervals: 1.5,
 });
 
 const EXCLUDED_SECURITY_TYPES = new Set([
@@ -103,8 +104,26 @@ function normalizeCandles(raw) {
 
 function normalizeDataPolicy(raw = {}) {
   const maxQuoteAgeMs = finiteNumber(raw.maxQuoteAgeMs ?? DEFAULT_QUALITY_DATA_POLICY.maxQuoteAgeMs, "dataPolicy.maxQuoteAgeMs");
+  const maxCandleLagIntervals = finiteNumber(
+    raw.maxCandleLagIntervals ?? DEFAULT_QUALITY_DATA_POLICY.maxCandleLagIntervals,
+    "dataPolicy.maxCandleLagIntervals",
+  );
   if (!(maxQuoteAgeMs > 0) || maxQuoteAgeMs > 300_000) throw new PredictionInputError("invalid dataPolicy.maxQuoteAgeMs");
-  return Object.freeze({ maxQuoteAgeMs });
+  if (!(maxCandleLagIntervals > 0) || maxCandleLagIntervals > 5) throw new PredictionInputError("invalid dataPolicy.maxCandleLagIntervals");
+  return Object.freeze({ maxQuoteAgeMs, maxCandleLagIntervals });
+}
+
+function normalizeCandleEvidence(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const timeframeMs = positiveNumber(raw.timeframeMs, "candleEvidence.timeframeMs");
+  if (timeframeMs > 86_400_000) throw new PredictionInputError("invalid candleEvidence.timeframeMs");
+  return Object.freeze({
+    timeframeMs,
+    sessionStartTimestampMs: finiteNumber(raw.sessionStartTimestampMs, "candleEvidence.sessionStartTimestampMs"),
+    coverageStartTimestampMs: finiteNumber(raw.coverageStartTimestampMs, "candleEvidence.coverageStartTimestampMs"),
+    lastCompleteCandleTimestampMs: finiteNumber(raw.lastCompleteCandleTimestampMs, "candleEvidence.lastCompleteCandleTimestampMs"),
+    sessionCoverageComplete: raw.sessionCoverageComplete === true,
+  });
 }
 
 function sessionVwap(candles) {
@@ -183,20 +202,71 @@ export function evaluateUsQualityDaytradeSetup(raw) {
     });
   }
 
+  const last = candles.at(-1);
+  const candleEvidence = normalizeCandleEvidence(raw.candleEvidence);
+  if (candleEvidence == null) {
+    return Object.freeze({ status: "BLOCKED_DATA", reason: "CANDLE_FRESHNESS_EVIDENCE_REQUIRED", universe, session, quoteAgeMs });
+  }
+  if (!candleEvidence.sessionCoverageComplete) {
+    return Object.freeze({ status: "BLOCKED_DATA", reason: "SESSION_VWAP_COVERAGE_UNPROVEN", universe, session, quoteAgeMs });
+  }
+  if (candleEvidence.coverageStartTimestampMs > candleEvidence.lastCompleteCandleTimestampMs) {
+    return Object.freeze({ status: "BLOCKED_DATA", reason: "INVALID_CANDLE_COVERAGE_RANGE", universe, session, quoteAgeMs });
+  }
+  if (Math.abs(candleEvidence.coverageStartTimestampMs - candleEvidence.sessionStartTimestampMs) > candleEvidence.timeframeMs) {
+    return Object.freeze({
+      status: "BLOCKED_DATA",
+      reason: "SESSION_START_VWAP_COVERAGE_INCOMPLETE",
+      universe,
+      session,
+      quoteAgeMs,
+      sessionStartTimestampMs: candleEvidence.sessionStartTimestampMs,
+      coverageStartTimestampMs: candleEvidence.coverageStartTimestampMs,
+      timeframeMs: candleEvidence.timeframeMs,
+    });
+  }
+  if (candleEvidence.lastCompleteCandleTimestampMs !== last.timestamp) {
+    return Object.freeze({
+      status: "BLOCKED_DATA",
+      reason: "LAST_COMPLETE_CANDLE_MISMATCH",
+      universe,
+      session,
+      quoteAgeMs,
+      lastCandleTimestampMs: last.timestamp,
+      lastCompleteCandleTimestampMs: candleEvidence.lastCompleteCandleTimestampMs,
+    });
+  }
+  if (candleEvidence.lastCompleteCandleTimestampMs > asOfMs) {
+    return Object.freeze({ status: "BLOCKED_DATA", reason: "CANDLE_TIMESTAMP_IN_FUTURE", universe, session, quoteAgeMs });
+  }
+  const candleAgeMs = asOfMs - candleEvidence.lastCompleteCandleTimestampMs;
+  const maxCandleAgeMs = candleEvidence.timeframeMs * dataPolicy.maxCandleLagIntervals;
+  if (candleAgeMs > maxCandleAgeMs) {
+    return Object.freeze({
+      status: "BLOCKED_DATA",
+      reason: "STALE_CANDLES",
+      universe,
+      session,
+      quoteAgeMs,
+      candleAgeMs,
+      maxCandleAgeMs,
+      timeframeMs: candleEvidence.timeframeMs,
+    });
+  }
+
   const mid = (bid + ask) / 2;
   const spreadBps = mid > 0 ? ((ask - bid) / mid) * 10_000 : Number.POSITIVE_INFINITY;
   const maxSpreadBps = session === "REGULAR"
     ? Number(raw.universePolicy?.maxRegularSpreadBps ?? DEFAULT_QUALITY_UNIVERSE.maxRegularSpreadBps)
     : Number(raw.universePolicy?.maxExtendedSpreadBps ?? DEFAULT_QUALITY_UNIVERSE.maxExtendedSpreadBps);
-  if (spreadBps > maxSpreadBps) return Object.freeze({ status: "ABSTAIN", reason: "SPREAD_TOO_WIDE", universe, session, spreadBps, maxSpreadBps, quoteAgeMs });
+  if (spreadBps > maxSpreadBps) return Object.freeze({ status: "ABSTAIN", reason: "SPREAD_TOO_WIDE", universe, session, spreadBps, maxSpreadBps, quoteAgeMs, candleAgeMs });
 
   const relativeVolume = finiteNumber(raw.relativeVolume, "relativeVolume");
-  if (relativeVolume < params.minRelativeVolume) return Object.freeze({ status: "ABSTAIN", reason: "RVOL_TOO_LOW", universe, session, relativeVolume, quoteAgeMs });
+  if (relativeVolume < params.minRelativeVolume) return Object.freeze({ status: "ABSTAIN", reason: "RVOL_TOO_LOW", universe, session, relativeVolume, quoteAgeMs, candleAgeMs });
 
   const vwap = sessionVwap(candles);
   if (!(vwap > 0)) return Object.freeze({ status: "BLOCKED_DATA", reason: "VWAP_UNAVAILABLE", universe, session });
 
-  const last = candles.at(-1);
   const previous = candles.at(-2);
   const first = candles[0];
   const impulseCandidates = candles.slice(0, -2);
@@ -217,6 +287,7 @@ export function evaluateUsQualityDaytradeSetup(raw) {
       vwap,
       spreadBps,
       quoteAgeMs,
+      candleAgeMs,
       relativeVolume,
       executionAuthority: "NONE",
       liveTradingAllowed: false,
@@ -257,6 +328,8 @@ export function evaluateUsQualityDaytradeSetup(raw) {
     vwap,
     spreadBps,
     quoteAgeMs,
+    candleAgeMs,
+    maxCandleAgeMs,
     relativeVolume,
     impulsePct,
     pullbackPct,
