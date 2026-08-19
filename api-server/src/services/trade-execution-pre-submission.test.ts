@@ -13,6 +13,8 @@ import {
   marketIntelligenceSymbolForTradingPlan,
   setTradingPlanMarketIntelligenceRunnerForTests,
 } from './trade-market-intelligence.service';
+import { allowServerProfitabilityAttestationForTests } from './trade-profitability-attestation.test-fixture';
+import { setTradeProfitabilityAttestationRunnerForTests } from './trade-profitability-attestation.service';
 import {
   DEFAULT_TRADING_POLICY,
   type TradingMarketSnapshot,
@@ -116,6 +118,7 @@ async function setup() {
   process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
   process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
   setTradingPlanMarketIntelligenceRunnerForTests(eligibleMarketIntelligence);
+  setTradeProfitabilityAttestationRunnerForTests(allowServerProfitabilityAttestationForTests);
   const repository = new InMemoryTradingRepository();
   await repository.savePolicy(USER_ID, {
     ...DEFAULT_TRADING_POLICY,
@@ -141,10 +144,11 @@ async function setup() {
   return { repository, approved, order: orderResult.order };
 }
 
-function installUpbitMock(currentPrice: number) {
+function installUpbitMock(currentPrice: number, openOrders: Record<string, unknown>[] = []) {
   let actualOrderPosts = 0;
   let orderTestPosts = 0;
   let totalProviderRequests = 0;
+  let openOrderReads = 0;
   globalThis.fetch = (async (input, init) => {
     totalProviderRequests += 1;
     const url = new URL(String(input));
@@ -167,6 +171,11 @@ function installUpbitMock(currentPrice: number) {
         bid_fee: '0.0005',
         ask_fee: '0.0005',
       });
+    }
+    if (url.pathname === '/v1/orders/open') {
+      openOrderReads += 1;
+      const requestedState = url.searchParams.get('state');
+      return json(openOrders.filter((item) => String(item.state ?? 'wait') === requestedState));
     }
     if (url.pathname === '/v1/ticker') {
       return json({ data: [{ market: 'KRW-BTC', trade_price: currentPrice, timestamp: now }] });
@@ -200,13 +209,14 @@ function installUpbitMock(currentPrice: number) {
     return json({ error: { name: 'unexpected_path', message: url.pathname } }, 500);
   }) as typeof fetch;
   return {
-    counts: () => ({ actualOrderPosts, orderTestPosts, totalProviderRequests }),
+    counts: () => ({ actualOrderPosts, orderTestPosts, totalProviderRequests, openOrderReads }),
   };
 }
 
 function resetEnvironment() {
   globalThis.fetch = nativeFetch;
   setTradingPlanMarketIntelligenceRunnerForTests(null);
+  setTradeProfitabilityAttestationRunnerForTests(null);
   delete process.env.TRADING_CREDENTIAL_MASTER_KEY;
   delete process.env.ORDER_EXECUTION_ENABLED;
   delete process.env.LIVE_TRADING_ACTIVATION_APPROVED;
@@ -233,10 +243,29 @@ test('two concurrent executions produce one provider order POST behind one atomi
   assert.equal(finalOrder.preSubmissionDecision?.allowed, true);
   assert.equal(provider.counts().actualOrderPosts, 1);
   assert.equal(provider.counts().orderTestPosts, 1);
+  assert.equal(provider.counts().openOrderReads, 2);
 
   const replay = await execution.execute(USER_ID, approved, order);
   assert.equal(replay.state, 'ACCEPTED');
   assert.equal(provider.counts().actualOrderPosts, 1);
+});
+
+test('orphan Upbit open order blocks before order test, submission intent, and actual POST', async () => {
+  const { repository, approved, order } = await setup();
+  const provider = installUpbitMock(100_000, [{
+    uuid: 'external-exchange-order',
+    identifier: 'external-client-order',
+    state: 'wait',
+  }]);
+  const execution = new TradeExecutionService(repository);
+
+  const result = await execution.execute(USER_ID, approved, order);
+  assert.equal(result.state, 'REJECTED');
+  assert.equal(result.lastErrorCode, 'ORPHAN_EXCHANGE_ORDER_DETECTED');
+  assert.equal(result.submissionStartedAt ?? null, null);
+  assert.equal(provider.counts().openOrderReads, 2);
+  assert.equal(provider.counts().orderTestPosts, 0);
+  assert.equal(provider.counts().actualOrderPosts, 0);
 });
 
 test('approval price drift blocks before order test, intent, and actual order POST', async () => {
