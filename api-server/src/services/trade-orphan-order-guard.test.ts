@@ -78,3 +78,29 @@ test('orders from another exchange cannot legitimize a pending order', () => {
     exchangeOrderId: 'shared-exchange',
   })]), /ORPHAN_EXCHANGE_ORDER_DETECTED/);
 });
+
+test('Upbit one-page completeness is fail-closed at the API page limit', () => {
+  const refs = Array.from({ length: 100 }, (_, index) => ({
+    clientOrderId: `client-${index}`,
+    exchangeOrderId: `exchange-${index}`,
+  }));
+  const locals = refs.map((ref, index) => order('ACCEPTED', {
+    id: `local-${index}`,
+    clientOrderId: ref.clientOrderId,
+    exchangeOrderId: ref.exchangeOrderId,
+  }));
+  assert.throws(() => assertNoOrphanExchangeOrders('upbit', refs, locals), /UPBIT_OPEN_ORDER_SCAN_INCOMPLETE/);
+});
+
+test('Upbit scan below the page limit can be fully reconciled', () => {
+  const refs = Array.from({ length: 99 }, (_, index) => ({
+    clientOrderId: `client-${index}`,
+    exchangeOrderId: `exchange-${index}`,
+  }));
+  const locals = refs.map((ref, index) => order('ACCEPTED', {
+    id: `local-${index}`,
+    clientOrderId: ref.clientOrderId,
+    exchangeOrderId: ref.exchangeOrderId,
+  }));
+  assert.doesNotThrow(() => assertNoOrphanExchangeOrders('upbit', refs, locals));
+});
