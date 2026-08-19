@@ -311,7 +311,7 @@ jobs:
           NODE
       - name: Install Chromium for real staging validation
         if: steps.deploy.outcome == 'success'
-        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+        run: pnpm --dir stock-analyzer exec playwright install chromium
       - name: Run complete anonymous and four-account browser validation
         if: steps.deploy.outcome == 'success'
         continue-on-error: true
