@@ -218,7 +218,7 @@ async function auditLayout(page: Page) {
       if (element.scrollTop <= before) dead += 1;
       element.scrollTop = before;
     }
-    const rootOverflow = Math.max(document.documentElement.scrollWidth, document.body.scrollWidth) - window.innerWidth;
+    const rootOverflow = Math.max(document.documentElement.scrollWidth, document.body?.scrollWidth ?? 0) - window.innerWidth;
     const buttons = interactive.filter((el) => el.tagName === 'BUTTON');
     return {
       horizontalOverflowPx: Math.max(0, Math.round(rootOverflow)),
