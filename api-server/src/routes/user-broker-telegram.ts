@@ -153,21 +153,40 @@ userBrokerTelegramRouter.get('/', async (req, res) => {
       if (errorCode(error) !== 'USER_BROKER_TELEGRAM_STORAGE_UNAVAILABLE') throw error;
       return unavailableTelegramState();
     });
-    const [state, brokerConnections] = await Promise.all([
+    const brokerConnectionsPromise = canReadBrokerConnections
+      ? createSupabaseTradingRepository(accessToken, userId).getConnections(userId).then((connections) => ({
+        brokerConnections: safeConnections(connections),
+        brokerConnectionsAvailable: true as boolean | null,
+        brokerConnectionsErrorCode: null as string | null,
+      })).catch((error) => {
+        const code = errorCode(error);
+        if (code !== 'TRADE_AUTOMATION_STORAGE_UNAVAILABLE') throw error;
+        return {
+          brokerConnections: [],
+          brokerConnectionsAvailable: false as boolean | null,
+          brokerConnectionsErrorCode: code as string | null,
+        };
+      })
+      : Promise.resolve({
+        brokerConnections: [],
+        brokerConnectionsAvailable: null as boolean | null,
+        brokerConnectionsErrorCode: null as string | null,
+      });
+    const [state, brokerState] = await Promise.all([
       statePromise,
-      canReadBrokerConnections
-        ? createSupabaseTradingRepository(accessToken, userId).getConnections(userId)
-        : Promise.resolve([]),
+      brokerConnectionsPromise,
     ]);
     res.json({
       ok: true,
-      brokerConnections: safeConnections(brokerConnections),
+      brokerConnections: brokerState.brokerConnections,
       ...state,
-      partial: state.telegramStorageAvailable === false,
+      partial: state.telegramStorageAvailable === false || brokerState.brokerConnectionsAvailable === false,
       privateApiRequests: 0,
       ordersSubmitted: 0,
       ordersCancelled: 0,
-      brokerMetadataRead: canReadBrokerConnections,
+      brokerMetadataRead: canReadBrokerConnections && brokerState.brokerConnectionsAvailable === true,
+      brokerConnectionsAvailable: brokerState.brokerConnectionsAvailable,
+      brokerConnectionsErrorCode: brokerState.brokerConnectionsErrorCode,
     });
   } catch (error) {
     res.status(503).json({ ok: false, error: errorCode(error) });
