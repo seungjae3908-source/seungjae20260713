@@ -1,3 +1,4 @@
+import './forward-recommendation-observer.service.test';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { ScannerResponse, ScannerSignalCard } from './scanner-signal.types';
