@@ -150,6 +150,43 @@ jobs:
           if (!assessment.currentIdentity) process.exit(1);
           NODE
 
+      - name: Build immutable final holdout artifact manifest
+        working-directory: market-prediction-lab
+        env:
+          RESEARCH_SHA: ${{ steps.sha.outputs.value }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { readFileSync, writeFileSync } from "node:fs";
+          const provenanceBytes = readFileSync("docs/final-holdout-2026-provenance.json");
+          const provenance = JSON.parse(provenanceBytes.toString("utf8"));
+          if (provenance.researchCodeSha !== process.env.RESEARCH_SHA) {
+            throw new Error("Final holdout artifact research SHA mismatch.");
+          }
+          if (!/^[0-9a-f]{64}$/.test(String(provenance.resultJsonSha256 ?? ""))
+            || !/^[0-9a-f]{64}$/.test(String(provenance.resultMarkdownSha256 ?? ""))) {
+            throw new Error("Final holdout result digest provenance is invalid.");
+          }
+          if (provenance.liveOrderAllowed !== false || provenance.privateAccountRequestAllowed !== false) {
+            throw new Error("Final holdout provenance is not fail-closed.");
+          }
+          const manifest = {
+            schemaVersion: 1,
+            kind: "prediction-lab-final-holdout-artifact",
+            researchCodeSha: process.env.RESEARCH_SHA,
+            resultJsonSha256: provenance.resultJsonSha256,
+            resultMarkdownSha256: provenance.resultMarkdownSha256,
+            provenanceSha256: createHash("sha256").update(provenanceBytes).digest("hex"),
+            branchWrite: false,
+            liveOrderAllowed: false,
+            privateAccountRequestAllowed: false,
+            finalHoldoutRetuningAllowed: false,
+            selectionAllowed: false,
+          };
+          writeFileSync("docs/final-holdout-2026-artifact-manifest.json", `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+          NODE
+
       - name: Display final holdout table
         working-directory: market-prediction-lab
         run: cat docs/final-holdout-2026-result.md
@@ -162,6 +199,7 @@ jobs:
             market-prediction-lab/docs/final-holdout-2026-result.json
             market-prediction-lab/docs/final-holdout-2026-result.md
             market-prediction-lab/docs/final-holdout-2026-provenance.json
+            market-prediction-lab/docs/final-holdout-2026-artifact-manifest.json
           if-no-files-found: error
           retention-days: 90
 
