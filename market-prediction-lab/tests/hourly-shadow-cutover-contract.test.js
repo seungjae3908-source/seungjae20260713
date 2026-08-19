@@ -5,13 +5,13 @@ import test from "node:test";
 const WORKFLOW_URL = new URL("../../.github/workflows/prediction-lab-shadow-hourly.yml", import.meta.url);
 const workflow = readFileSync(WORKFLOW_URL, "utf8");
 
-const PREVIOUS_RESEARCH_SHA = "87cfafc3d502901d8f678e0153e2e974a4b69004";
 const COLLAPSE_GUARD_SHA = "84bb50cf6d0b90c29f47f043de36b9a239547c9b";
+const DEPLOYED_INFERENCE_PARITY_SHA = "ea1d873c93d603e61960c5bfbff1f6d6d9933fec";
 
-test("hourly shadow clean cutover is pinned to the exact collapse-diagnostics research transition", () => {
-  assert.match(workflow, new RegExp(`SHADOW_CUTOVER_FROM_SHA: ${PREVIOUS_RESEARCH_SHA}`));
-  assert.match(workflow, new RegExp(`SHADOW_CUTOVER_TO_SHA: ${COLLAPSE_GUARD_SHA}`));
-  assert.match(workflow, /SHADOW_CUTOVER_REASON: shadow-collapse-drift-guard/);
+test("hourly shadow clean cutover is pinned to the exact deployed-inference parity research transition", () => {
+  assert.match(workflow, new RegExp(`SHADOW_CUTOVER_FROM_SHA: ${COLLAPSE_GUARD_SHA}`));
+  assert.match(workflow, new RegExp(`SHADOW_CUTOVER_TO_SHA: ${DEPLOYED_INFERENCE_PARITY_SHA}`));
+  assert.match(workflow, /SHADOW_CUTOVER_REASON: deployed-inference-parity/);
   assert.match(workflow, /manifest\.researchCodeSha === cutoverFromSha && currentResearchCodeSha === cutoverToSha/);
 });
 
