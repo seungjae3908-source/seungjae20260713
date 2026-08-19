@@ -70,17 +70,19 @@ function validateStrategyIdentity(candidate, blockers) {
 
   if (learning) {
     if (learning.signalId !== signal?.signalId) blockers.push("LEARNING_SIGNAL_ID_MISMATCH");
-    if (learning.market !== signal?.market) blockers.push("LEARNING_MARKET_MISMATCH");
-    if (learning.symbol !== signal?.symbol) blockers.push("LEARNING_SYMBOL_MISMATCH");
+    if (nonEmpty(learning.market) && learning.market !== signal?.market) blockers.push("LEARNING_MARKET_MISMATCH");
+    if (nonEmpty(learning.symbol) && learning.symbol !== signal?.symbol) blockers.push("LEARNING_SYMBOL_MISMATCH");
     if (nonEmpty(learning.strategyProfileVersion) && nonEmpty(identity?.strategyVersion)
       && learning.strategyProfileVersion !== identity.strategyVersion) blockers.push("LEARNING_STRATEGY_VERSION_MISMATCH");
     if (Array.isArray(learning.timeframes) && nonEmpty(signal?.timeframe)
       && !learning.timeframes.includes(signal.timeframe)) blockers.push("LEARNING_TIMEFRAME_MISMATCH");
     if (nonEmpty(learning.strategyHorizon) && nonEmpty(signal?.style)
       && learning.strategyHorizon.toUpperCase() !== signal.style.toUpperCase()) blockers.push("LEARNING_HORIZON_STYLE_MISMATCH");
-    const learningDirection = normalizeSignalDirection(learning.direction);
-    const signalDirection = normalizeSignalDirection(signal?.signalDirection ?? signal?.direction);
-    if (learningDirection !== signalDirection) blockers.push("LEARNING_DIRECTION_MISMATCH");
+    if (nonEmpty(learning.direction)) {
+      const learningDirection = normalizeSignalDirection(learning.direction);
+      const signalDirection = normalizeSignalDirection(signal?.signalDirection ?? signal?.direction);
+      if (learningDirection !== signalDirection) blockers.push("LEARNING_DIRECTION_MISMATCH");
+    }
     if (nonEmpty(signal?.regime) && nonEmpty(learning.marketRegime) && signal.regime !== learning.marketRegime) {
       blockers.push("LEARNING_REGIME_MISMATCH");
     }
