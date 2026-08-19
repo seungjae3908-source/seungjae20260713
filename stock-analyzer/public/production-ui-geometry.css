@@ -1,0 +1,29 @@
+:root {
+  --app-bottom-nav-reserve: calc(4rem + env(safe-area-inset-bottom));
+}
+
+/*
+ * BottomNav is fixed to the viewport, while route pages live inside the
+ * AppShell's second child. When a BottomNav is actually rendered, reserve its
+ * viewport band at the AppShell level so page controls cannot sit underneath
+ * the fixed navigation. Login/admin/install screens do not render BottomNav,
+ * so they keep the full viewport height automatically.
+ */
+#root:has(nav[aria-label="주요 메뉴"]) > div > div:nth-child(2)[class*="max-w-screen"] {
+  height: calc(100dvh - var(--app-bottom-nav-reserve));
+}
+
+/* Production QA found exactly two undersized AI Chart controls. */
+button[aria-label="심볼 지우기"] {
+  display: inline-flex;
+  min-width: 2rem;
+  min-height: 2rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+}
+
+button[data-testid="load-multi-timeframe"] {
+  min-height: 2rem;
+}
