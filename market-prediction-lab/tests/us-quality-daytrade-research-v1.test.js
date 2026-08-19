@@ -38,6 +38,13 @@ function setup(overrides = {}) {
   return {
     instrument: qualityInstrument(),
     candles: regularCandles(),
+    candleEvidence: {
+      timeframeMs: 10_000,
+      sessionStartTimestampMs: 1,
+      coverageStartTimestampMs: 1,
+      lastCompleteCandleTimestampMs: 8,
+      sessionCoverageComplete: true,
+    },
     quote: { bid: 104.45, ask: 104.55, timestampMs: 8_000 },
     asOfMs: 8_500,
     relativeVolume: 2.2,
@@ -98,6 +105,54 @@ test("setup fails closed when quote timestamp is in the future", () => {
   assert.equal(result.reason, "QUOTE_TIMESTAMP_IN_FUTURE");
 });
 
+test("setup requires candle freshness and session coverage evidence", () => {
+  const result = evaluateUsQualityDaytradeSetup(setup({ candleEvidence: null }));
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.equal(result.reason, "CANDLE_FRESHNESS_EVIDENCE_REQUIRED");
+});
+
+test("setup fails closed when full-session VWAP coverage is unproven", () => {
+  const result = evaluateUsQualityDaytradeSetup(setup({
+    candleEvidence: {
+      timeframeMs: 10_000,
+      sessionStartTimestampMs: 1,
+      coverageStartTimestampMs: 1,
+      lastCompleteCandleTimestampMs: 8,
+      sessionCoverageComplete: false,
+    },
+  }));
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.equal(result.reason, "SESSION_VWAP_COVERAGE_UNPROVEN");
+});
+
+test("setup fails closed when VWAP coverage starts materially after session open", () => {
+  const result = evaluateUsQualityDaytradeSetup(setup({
+    candleEvidence: {
+      timeframeMs: 10_000,
+      sessionStartTimestampMs: 1,
+      coverageStartTimestampMs: 15_002,
+      lastCompleteCandleTimestampMs: 20_000,
+      sessionCoverageComplete: true,
+    },
+    candles: regularCandles().map((row, index) => ({ ...row, timestamp: 19_993 + index })),
+    quote: { bid: 104.45, ask: 104.55, timestampMs: 20_000 },
+    asOfMs: 20_001,
+  }));
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.equal(result.reason, "SESSION_START_VWAP_COVERAGE_INCOMPLETE");
+});
+
+test("setup fails closed when the last complete candle is stale for its timeframe", () => {
+  const result = evaluateUsQualityDaytradeSetup(setup({
+    quote: { bid: 104.45, ask: 104.55, timestampMs: 20_000 },
+    asOfMs: 20_001,
+  }));
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.equal(result.reason, "STALE_CANDLES");
+  assert.equal(result.candleAgeMs, 19_993);
+  assert.equal(result.maxCandleAgeMs, 15_000);
+});
+
 test("setup rejects non-monotonic candle timestamps", () => {
   const candles = regularCandles();
   candles[5] = { ...candles[5], timestamp: 4 };
@@ -120,6 +175,7 @@ test("setup recognizes first-pullback VWAP rebreak with volume reacceleration", 
   assert.equal(result.session, "REGULAR");
   assert.equal(result.catalystClass, "VERIFIED_CATALYST");
   assert.equal(result.quoteAgeMs, 500);
+  assert.equal(result.candleAgeMs, 8_492);
   assert.ok(result.vwap > 0);
   assert.ok(result.pullbackPct > 0);
   assert.ok(result.volumeReacceleration > 1.25);
