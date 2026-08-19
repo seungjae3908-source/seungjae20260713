@@ -12,6 +12,7 @@ import {
   loadUpbitPublicKrwPerUsdt,
   sizeOnePercentRiskKrwFuturesPosition,
 } from "./paper-krw-usdt-sizing-v1.js";
+import { loadBitgetEthV6PaperSettlement } from "./eth-v6-paper-settlement-source-v1.js";
 
 const MARKET_CONTEXT_MAX_AGE_MS = 5 * 60 * 1000;
 const SHADOW_TO_PAPER_MAX_DELAY_MS = 45 * 60 * 1000;
@@ -31,7 +32,7 @@ export const ETH_V6_PAPER_FORWARD_SOURCE_CONTRACT = Object.freeze({
   maximumEntryLagMs: ETH_V6_FORWARD_MAX_ENTRY_LAG_MS,
   maximumSourceAgeMs: SHADOW_TO_PAPER_MAX_DELAY_MS,
   sizing: PAPER_KRW_USDT_SIZING_CONTRACT,
-  settlementBridgeReady: false,
+  settlementBridgeReady: true,
   liveTrading: false,
   privateApi: false,
   orderAuthority: false,
@@ -85,7 +86,6 @@ function maintenanceMarginRate(tiers, notional) {
   const usable = tiers
     .map((tier) => ({
       start: asNumber(tier?.startUnit ?? 0, "TIER_START"),
-      end: asNumber(tier?.endUnit, "TIER_END"),
       rate: asNumber(tier?.keepMarginRate, "TIER_MMR"),
     }))
     .filter((tier) => tier.start <= notional)
@@ -369,6 +369,34 @@ function buildCandidate({ record, researchCodeSha, nowMs, sourceObservedAtMs, co
   });
 }
 
+function ethOpenPositions(openPositions, researchCodeSha) {
+  if (!Array.isArray(openPositions)) throw new TypeError("openPositions must be an array");
+  const matches = openPositions.filter((position) => position?.lifecycleState === "OPEN"
+    && position.market === "CRYPTO_FUTURES"
+    && position.direction === "LONG"
+    && position.strategyId === ETH_V6_FORWARD_CANDIDATE.strategy
+    && position.researchCodeSha === researchCodeSha);
+  if (matches.length > 1) throw new Error("ETH_V6_PAPER_MULTIPLE_OPEN_POSITIONS_FORBIDDEN");
+  return matches;
+}
+
+async function buildNaturalSettlementExits({ forwardState, openPositions, researchCodeSha, nowMs, client, loadSettlement }) {
+  const positions = ethOpenPositions(openPositions, researchCodeSha);
+  if (positions.length === 0) return Object.freeze([]);
+  const position = positions[0];
+  const settled = (forwardState.ledger?.records ?? []).filter((record) => record?.status === "settled" && record.signalId === position.signalId);
+  if (settled.length > 1) throw new Error("ETH_V6_PAPER_MULTIPLE_SETTLED_MATCHES_FORBIDDEN");
+  if (settled.length === 0) return Object.freeze([]);
+  const result = await loadSettlement({ client, record: settled[0], position, researchCodeSha, nowMs });
+  if (result?.status === "WAITING_CLOSED_EXIT_BAR") return Object.freeze([]);
+  if (result?.status !== "READY" || !result.settlementInput) throw new Error("ETH_V6_PAPER_SETTLEMENT_EVIDENCE_NOT_READY");
+  return Object.freeze([Object.freeze({
+    positionId: position.positionId,
+    settlementInput: result.settlementInput,
+    naturalSettlementEvidence: result.evidence ?? null,
+  })]);
+}
+
 export function createEthV6PaperForwardSource({
   shadowStatePath,
   researchCodeSha,
@@ -376,27 +404,43 @@ export function createEthV6PaperForwardSource({
   clock = Date.now,
   holdoutDocumentUrl = new URL("../docs/final-holdout-2026-result.json", import.meta.url),
   loadContext = loadBitgetEthV6PaperContext,
+  loadSettlement = loadBitgetEthV6PaperSettlement,
 } = {}) {
   if (!shadowStatePath) throw new TypeError("shadowStatePath is required");
   if (!exactSha(researchCodeSha)) throw new TypeError("exact researchCodeSha is required");
-  if (typeof clock !== "function" || typeof loadContext !== "function") throw new TypeError("clock and loadContext are required");
+  if (typeof clock !== "function" || typeof loadContext !== "function" || typeof loadSettlement !== "function") {
+    throw new TypeError("clock, loadContext, and loadSettlement are required");
+  }
   return Object.freeze({
-    async collect() {
+    async collect({ openPositions = [] } = {}) {
       const nowMs = clock();
       if (!Number.isInteger(nowMs) || nowMs <= 0) throw new TypeError("clock must return a positive integer");
       const shadowRoot = await readJsonOptional(shadowStatePath);
       const forwardState = validateShadowState(shadowRoot);
       if (!forwardState) return Object.freeze({ status: "NO_SOURCE_STATE", candidates: Object.freeze([]), exits: Object.freeze([]), blocker: null });
       const sourceObservedAtMs = Number(forwardState.updatedAt);
-      const records = (forwardState.ledger?.records ?? []).filter((record) => validateTrackingRecord(record, forwardState, nowMs));
-      if (records.length === 0) return Object.freeze({ status: "NO_FRESH_TRACKING_SIGNAL", candidates: Object.freeze([]), exits: Object.freeze([]), blocker: null });
-      if (records.length > 1) throw new Error("ETH_V6_PAPER_MULTIPLE_TRACKING_RECORDS_FORBIDDEN");
-      const holdout = holdoutEvidence(await readJsonOptional(holdoutDocumentUrl));
-      const context = await loadContext({ client, record: records[0], nowMs, sourceObservedAtMs });
+      const tracking = (forwardState.ledger?.records ?? []).filter((record) => validateTrackingRecord(record, forwardState, nowMs));
+      if (tracking.length > 1) throw new Error("ETH_V6_PAPER_MULTIPLE_TRACKING_RECORDS_FORBIDDEN");
+
+      const exits = await buildNaturalSettlementExits({
+        forwardState,
+        openPositions,
+        researchCodeSha,
+        nowMs,
+        client,
+        loadSettlement,
+      });
+      const candidates = [];
+      if (tracking.length === 1) {
+        const holdout = holdoutEvidence(await readJsonOptional(holdoutDocumentUrl));
+        const context = await loadContext({ client, record: tracking[0], nowMs, sourceObservedAtMs });
+        candidates.push(buildCandidate({ record: tracking[0], researchCodeSha, nowMs, sourceObservedAtMs, context, holdout }));
+      }
+
       return Object.freeze({
-        status: "READY",
-        candidates: Object.freeze([buildCandidate({ record: records[0], researchCodeSha, nowMs, sourceObservedAtMs, context, holdout })]),
-        exits: Object.freeze([]),
+        status: candidates.length || exits.length ? "READY" : "NO_FRESH_TRACKING_OR_SETTLEMENT",
+        candidates: Object.freeze(candidates),
+        exits,
         blocker: null,
         safety: ETH_V6_PAPER_FORWARD_SOURCE_CONTRACT,
       });
@@ -412,7 +456,7 @@ export function wrapPaperForwardProviderWithEthV6Source({ provider, source } = {
       const base = await provider.collectPublicEvidence(input);
       if (input?.market !== "CRYPTO_FUTURES" || base?.status !== "READY") return base;
       try {
-        const natural = await source.collect();
+        const natural = await source.collect({ openPositions: input?.openPositions ?? [] });
         return Object.freeze({
           ...base,
           candidates: Object.freeze([...(base.candidates ?? []), ...(natural.candidates ?? [])]),
@@ -422,7 +466,8 @@ export function wrapPaperForwardProviderWithEthV6Source({ provider, source } = {
             status: natural.status,
             blocker: natural.blocker ?? null,
             candidateCount: natural.candidates?.length ?? 0,
-            settlementBridgeReady: false,
+            exitCount: natural.exits?.length ?? 0,
+            settlementBridgeReady: ETH_V6_PAPER_FORWARD_SOURCE_CONTRACT.settlementBridgeReady,
           }),
         });
       } catch (error) {
@@ -435,7 +480,8 @@ export function wrapPaperForwardProviderWithEthV6Source({ provider, source } = {
             status: "BLOCKED",
             blocker: String(error?.code ?? error?.message ?? "ETH_V6_PAPER_SOURCE_FAILED").slice(0, 200),
             candidateCount: 0,
-            settlementBridgeReady: false,
+            exitCount: 0,
+            settlementBridgeReady: ETH_V6_PAPER_FORWARD_SOURCE_CONTRACT.settlementBridgeReady,
           }),
         });
       }
