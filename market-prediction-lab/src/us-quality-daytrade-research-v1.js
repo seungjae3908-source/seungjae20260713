@@ -160,9 +160,29 @@ export function evaluateUsQualityDaytradeSetup(raw) {
   const last = candles.at(-1);
   const previous = candles.at(-2);
   const first = candles[0];
-  const impulseHigh = highestHigh(candles.slice(0, -2));
+  const impulseCandidates = candles.slice(0, -2);
+  let impulseHighIndex = 0;
+  for (let index = 1; index < impulseCandidates.length; index += 1) {
+    if (impulseCandidates[index].high >= impulseCandidates[impulseHighIndex].high) impulseHighIndex = index;
+  }
+  const impulseHigh = impulseCandidates[impulseHighIndex].high;
   const impulsePct = ((impulseHigh / first.open) - 1) * 100;
-  const pullbackWindow = candles.slice(1, -1);
+  const pullbackWindow = candles.slice(impulseHighIndex + 1, -1);
+  if (!pullbackWindow.length) {
+    return Object.freeze({
+      status: "ABSTAIN",
+      reason: "FIRST_PULLBACK_NOT_OBSERVED",
+      contractVersion: QUALITY_DAYTRADE_CONTRACT_VERSION,
+      universe,
+      session,
+      vwap,
+      spreadBps,
+      relativeVolume,
+      executionAuthority: "NONE",
+      liveTradingAllowed: false,
+      privateApiAllowed: false,
+    });
+  }
   const pullbackLow = Math.min(...pullbackWindow.map((candle) => candle.low));
   const pullbackPct = ((impulseHigh - pullbackLow) / impulseHigh) * 100;
   const lookback = candles.slice(Math.max(0, candles.length - 1 - params.breakoutLookback), -1);
