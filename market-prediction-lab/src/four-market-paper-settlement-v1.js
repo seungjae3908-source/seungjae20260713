@@ -162,6 +162,7 @@ export function settleFourMarketPaperSample({
     ...exitExecution,
     market: sample.identity.market,
     stage: "PAPER",
+    executionPurpose: "SETTLEMENT",
     style: sample.identity.style,
     timeframe: sample.identity.timeframe,
     horizon: sample.identity.horizon,
