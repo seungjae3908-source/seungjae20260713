@@ -12,6 +12,8 @@ const PENDING_OWNER_STATES = new Set([
   'RECOVERY_REQUIRED',
 ]);
 
+const UPBIT_SINGLE_PAGE_LIMIT = 100;
+
 function text(value: string | null | undefined) {
   const normalized = String(value ?? '').trim();
   return normalized || null;
@@ -27,6 +29,10 @@ export function assertNoOrphanExchangeOrders(
   pendingOrders: PendingExchangeOrderRef[],
   localOrders: TradingOrder[],
 ): void {
+  if (exchange === 'upbit' && pendingOrders.length >= UPBIT_SINGLE_PAGE_LIMIT) {
+    throw new Error('UPBIT_OPEN_ORDER_SCAN_INCOMPLETE');
+  }
+
   const activeLocalOrders = localOrders.filter((order) => order.exchange === exchange && canOwnPendingExchangeOrder(order));
   const knownClientOrderIds = new Set(activeLocalOrders.map((order) => text(order.clientOrderId)).filter(Boolean));
   const knownExchangeOrderIds = new Set(activeLocalOrders.map((order) => text(order.exchangeOrderId)).filter(Boolean));
