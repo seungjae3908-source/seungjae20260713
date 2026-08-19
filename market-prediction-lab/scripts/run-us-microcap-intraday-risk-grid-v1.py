@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import sys
 from collections import defaultdict
 from pathlib import Path
 
@@ -12,6 +13,7 @@ BASE_PATH = HERE / "run-us-microcap-intraday-ladder-v1.py"
 spec = importlib.util.spec_from_file_location("microcap_intraday_ladder_v1", BASE_PATH)
 base = importlib.util.module_from_spec(spec)
 assert spec and spec.loader
+sys.modules[spec.name] = base
 spec.loader.exec_module(base)
 
 RISK_CAPS = (0.04, 0.06, 0.08, 0.12)
