@@ -46,29 +46,11 @@ jobs:
             d_us_txt/data/daily/us/nysemkt stocks
           sparse-checkout-cone-mode: false
 
-      - name: Run ten-year daily OHLCV proxy event study
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          mkdir -p market-prediction-lab/docs/research-us-microcap-explosion-proxy
-          python3 market-prediction-lab/scripts/run-us-microcap-explosion-proxy-backtest.py \
-            "external-stooq/d_us_txt/data/daily/us/nasdaq stocks" \
-            "external-stooq/d_us_txt/data/daily/us/nyse stocks" \
-            "external-stooq/d_us_txt/data/daily/us/nysemkt stocks" \
-            --years 10 \
-            --min-price 0.5 \
-            --max-price 10 \
-            --min-gap 0.10 \
-            --max-gap 0.40 \
-            --min-prev-dollar-volume 1000000 \
-            --min-rvol 5 \
-            --output-json market-prediction-lab/docs/research-us-microcap-explosion-proxy/result.json \
-            --output-md market-prediction-lab/docs/research-us-microcap-explosion-proxy/result.md
-
       - name: Run +10 percent take-profit stop matrix
         shell: bash
         run: |
           set -Eeuo pipefail
+          mkdir -p market-prediction-lab/docs/research-us-microcap-explosion-proxy
           python3 market-prediction-lab/scripts/run-us-microcap-tp10-stop-matrix.py \
             "external-stooq/d_us_txt/data/daily/us/nasdaq stocks" \
             "external-stooq/d_us_txt/data/daily/us/nyse stocks" \
@@ -87,16 +69,12 @@ jobs:
         shell: bash
         run: |
           cat > market-prediction-lab/docs/research-us-microcap-explosion-proxy/provenance.json <<JSON
-          {"schemaVersion":1,"researchCodeSha":"${GITHUB_SHA}","stooqMirrorSha":"6ae7c9b04dc8b98612d1ee9594baa64362b4ade1","runId":"${GITHUB_RUN_ID}","liveOrderAllowed":false,"privateApiAllowed":false,"branchWrite":false}
+          {"schemaVersion":1,"researchCodeSha":"${GITHUB_SHA}","stooqMirrorSha":"6ae7c9b04dc8b98612d1ee9594baa64362b4ade1","runId":"${GITHUB_RUN_ID}","liveOrderAllowed":false,"privateApiAllowed":false,"branchWrite":false,"targetTakeProfitPct":10}
           JSON
 
-      - name: Print result tables
+      - name: Print +10 percent result table
         if: always()
-        shell: bash
-        run: |
-          cat market-prediction-lab/docs/research-us-microcap-explosion-proxy/result.md || true
-          echo
-          cat market-prediction-lab/docs/research-us-microcap-explosion-proxy/tp10-stop-matrix.md || true
+        run: cat market-prediction-lab/docs/research-us-microcap-explosion-proxy/tp10-stop-matrix.md || true
 
       - name: Upload immutable research artifacts
         if: always()
