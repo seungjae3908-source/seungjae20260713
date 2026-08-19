@@ -6,6 +6,7 @@ import { ResponsiveTabs } from '@/components/responsive-tabs';
 import { ScannerApprovalComposer } from '@/components/scanner-approval-composer';
 import { UiBuilderSignalScannerLayout } from '@/components/ui-builder-signal-scanner-layout';
 import { useAnalysisSelection } from '@/lib/analysis-selection';
+import { useAuth } from '@/lib/auth';
 import { getPortfolioChartOverlay } from '@/lib/portfolio-overlay';
 import {
   loadUiBuilderSignalScannerLayout,
@@ -164,10 +165,21 @@ function MobileWorkspace({ workspace }: { workspace: Workspace }) {
   );
 }
 
-function DesktopWorkspace({ workspace, builderLayout }: { workspace: Workspace; builderLayout: LoadedScannerLayout }) {
+function DesktopWorkspace({
+  workspace,
+  builderLayout,
+  canAccessRiskPreview,
+}: {
+  workspace: Workspace;
+  builderLayout: LoadedScannerLayout;
+  canAccessRiskPreview: boolean;
+}) {
   if (workspace === 'chart') return <Suspense fallback={<WorkspaceFallback />}><AiChartPage embedded /></Suspense>;
   if (workspace === 'backtest') return <Suspense fallback={<WorkspaceFallback />}><BacktestResearchPanel compact /></Suspense>;
   if (workspace === 'trade') return <Suspense fallback={<WorkspaceFallback />}><AutoTradingPage embedded /></Suspense>;
+  if (!canAccessRiskPreview) {
+    return <Suspense fallback={<WorkspaceFallback />}><ScannerSurface desktop showSectionHeader /></Suspense>;
+  }
 
   const fallback = (
     <div className="grid h-full min-h-0 min-w-0 grid-cols-[minmax(360px,0.88fr)_minmax(0,2fr)] overflow-hidden bg-background xl:grid-cols-[minmax(420px,0.82fr)_minmax(0,2fr)]">
@@ -194,8 +206,37 @@ function DesktopWorkspace({ workspace, builderLayout }: { workspace: Workspace; 
 
 export default function TechnicalWorkspacePage() {
   const desktop = useDesktopWorkspace();
+  const auth = useAuth();
   const [location] = useLocation();
   const [workspace, setWorkspace] = useState<Workspace>('signal');
+  const phase11FullCapabilityFixture = import.meta.env.VITE_PHASE11_E2E === 'true'
+    && location.startsWith('/__phase11-technical-workspace-e2e');
+  const canAccessRiskPreview = phase11FullCapabilityFixture || auth.can('canAccessRiskPreview');
+  const canAccessBacktests = phase11FullCapabilityFixture || auth.can('canAccessBacktests');
+  const canPlaceOrders = phase11FullCapabilityFixture || auth.can('canPlaceOrders');
+
+  const workspaceAllowed = (value: Workspace) => {
+    if (value === 'signal') return true;
+    if (value === 'chart') return canAccessRiskPreview;
+    if (value === 'backtest') return canAccessBacktests;
+    return canPlaceOrders;
+  };
+
+  const workspaceTabs = WORKSPACE_TABS.map((tab) => {
+    const disabled = !workspaceAllowed(tab.value);
+    const disabledReason = tab.value === 'chart'
+      ? 'AI 차트 권한이 필요합니다.'
+      : tab.value === 'backtest'
+        ? '백테스트 권한이 필요합니다.'
+        : tab.value === 'trade'
+          ? '주문 승인 권한이 필요합니다.'
+          : undefined;
+    return { ...tab, disabled, disabledReason };
+  });
+
+  useEffect(() => {
+    if (!workspaceAllowed(workspace)) setWorkspace('signal');
+  }, [canAccessBacktests, canAccessRiskPreview, canPlaceOrders, workspace]);
 
   const desktopLayout = useMemo(() => {
     const raw = readStoredUiBuilderSignalScannerLayout('desktop');
@@ -205,28 +246,37 @@ export default function TechnicalWorkspacePage() {
   if (location.startsWith('/auto-trading')) return <Suspense fallback={<WorkspaceFallback />}><AutoTradingPage /></Suspense>;
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background" data-testid="technical-workspace">
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background pb-[calc(5rem+env(safe-area-inset-bottom))]" data-testid="technical-workspace">
       <CenteredPageHeader
         title={WORKSPACE_TITLES[workspace]}
         infoTitle="기술 기능 안내"
         infoItems={[
           '모바일은 AI 검색기·AI 차트·백테스트·자동매매를 각각 독립 화면으로 열어 긴 스크롤을 줄입니다.',
-          'PC는 넓은 화면에서 검색기와 AI 차트를 함께 보며 기존 안전한 Builder 배치를 유지할 수 있습니다.',
+          '권한이 없는 고급 기능은 화면 구조에서 사라지지 않고 잠금 상태로 표시되며 실행되지 않습니다.',
+          'PC는 권한이 있는 경우에만 검색기와 AI 차트를 함께 표시하고, 기본 권한에서는 검색기만 표시합니다.',
           '실전 주문은 활성화하지 않으며 사용자 승인과 최종 위험 검증을 유지합니다.',
         ]}
       />
       <div className="shrink-0 border-b border-card-border bg-background px-2 py-2 sm:px-3">
         <ResponsiveTabs
           value={workspace}
-          options={WORKSPACE_TABS}
-          onChange={setWorkspace}
+          options={workspaceTabs}
+          onChange={(nextWorkspace) => {
+            if (workspaceAllowed(nextWorkspace)) setWorkspace(nextWorkspace);
+          }}
           ariaLabel="기술 기능 탭"
           testId={desktop ? 'technical-desktop-tabs' : 'technical-mobile-tabs'}
           compact
         />
       </div>
       <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
-        {desktop ? <DesktopWorkspace workspace={workspace} builderLayout={desktopLayout} /> : <MobileWorkspace workspace={workspace} />}
+        {desktop ? (
+          <DesktopWorkspace
+            workspace={workspace}
+            builderLayout={desktopLayout}
+            canAccessRiskPreview={canAccessRiskPreview}
+          />
+        ) : <MobileWorkspace workspace={workspace} />}
       </div>
       <BottomNav />
     </div>

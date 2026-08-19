@@ -1,6 +1,7 @@
 import { Router, type IRouter } from 'express';
 import healthRouter from './health';
 import marketRouter from './market';
+import marketSummaryAvailabilityRouter from './market-summary-availability';
 import marketInformationRouter from './market-information';
 import newsRouter from './news.route';
 import providerDebugRouter from './provider-debug';
@@ -151,6 +152,11 @@ router.use(requireCapability('canAccessBasicInfo'));
 router.use('/', portfolioIntelligenceRouter);
 router.use('/', unifiedSearchRouter);
 router.use('/', aiChatRouter);
+// Normalize only the market-summary provider availability envelope before the
+// legacy market router writes its response. Unexpected backend 5xx responses
+// remain non-2xx; only the known public-provider-unavailable state is carried
+// as an explicit fail-closed dataState without browser-visible fake prices.
+router.use('/market/summary', marketSummaryAvailabilityRouter);
 router.use('/', marketRouter);
 router.use('/', newsRouter);
 // The safe rankings route must run before the legacy Kiwoom router. It keeps

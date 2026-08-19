@@ -146,6 +146,16 @@ for (const viewport of [
     await expect(page.getByText('삼성전자 공개 시장 뉴스', { exact: true })).toBeVisible();
     await expect.poll(() => requests.filter((path) => path === '/api/stocks/005930/news').length).toBe(1);
 
+    const analysisTab = tabs.getByRole('tab', { name: '상세분석', exact: true });
+    await analysisTab.click();
+    await expect(tabs.getByRole('tab')).toHaveCount(4);
+    await expect(analysisTab).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByTestId('rich-detail-shell')).toBeVisible();
+
+    await tabs.getByRole('tab', { name: '요약', exact: true }).click();
+    await expect(page.getByTestId('stock-detail-summary')).toBeVisible();
+    await expect(tabs.getByRole('tab', { name: '요약', exact: true })).toHaveAttribute('aria-selected', 'true');
+
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
   });
 }
