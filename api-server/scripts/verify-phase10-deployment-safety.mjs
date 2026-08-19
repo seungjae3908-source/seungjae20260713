@@ -40,7 +40,7 @@ assert(approval.includes('evaluateProductionCiProvenance'), 'one-time approval m
 
 assert(/workflow_dispatch:/.test(production), 'production workflow must support explicit workflow dispatch');
 assert(!/\n\s*push:\s*\n\s*branches:/.test(production), 'production workflow must not deploy on main push');
-assert(/^\[0-9a-fA-F\]\{40\}$/.test('') === false || /\^\[0-9a-fA-F\]\{40\}\$/.test(production), 'production workflow must require an exact SHA');
+assert(/\^\[0-9a-fA-F\]\{40\}\$/.test(production), 'production workflow must require an exact SHA');
 assert(production.includes('actions.listWorkflowRunsForRepo'), 'production gate must verify Application CI run provenance');
 assert(production.includes('actions.listArtifactsForRepo'), 'production gate must locate staging verdict artifacts');
 assert(production.includes('actions.getWorkflowRun'), 'production gate must directly verify the artifact source run');
