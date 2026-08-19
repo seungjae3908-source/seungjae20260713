@@ -38,7 +38,8 @@ function setup(overrides = {}) {
   return {
     instrument: qualityInstrument(),
     candles: regularCandles(),
-    quote: { bid: 104.45, ask: 104.55 },
+    quote: { bid: 104.45, ask: 104.55, timestampMs: 8_000 },
+    asOfMs: 8_500,
     relativeVolume: 2.2,
     catalyst: { verified: true, type: "EARNINGS" },
     ...overrides,
@@ -71,8 +72,43 @@ test("setup requires real bid/ask evidence", () => {
   assert.equal(result.reason, "VALID_BID_ASK_REQUIRED");
 });
 
+test("setup requires quote timestamp and evaluation as-of evidence", () => {
+  const result = evaluateUsQualityDaytradeSetup(setup({ quote: { bid: 104.45, ask: 104.55 }, asOfMs: null }));
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.equal(result.reason, "QUOTE_FRESHNESS_EVIDENCE_REQUIRED");
+});
+
+test("setup fails closed on stale quote evidence", () => {
+  const result = evaluateUsQualityDaytradeSetup(setup({
+    quote: { bid: 104.45, ask: 104.55, timestampMs: 8_000 },
+    asOfMs: 30_001,
+  }));
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.equal(result.reason, "STALE_QUOTE");
+  assert.equal(result.quoteAgeMs, 22_001);
+  assert.equal(result.maxQuoteAgeMs, 15_000);
+});
+
+test("setup fails closed when quote timestamp is in the future", () => {
+  const result = evaluateUsQualityDaytradeSetup(setup({
+    quote: { bid: 104.45, ask: 104.55, timestampMs: 9_000 },
+    asOfMs: 8_500,
+  }));
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.equal(result.reason, "QUOTE_TIMESTAMP_IN_FUTURE");
+});
+
+test("setup rejects non-monotonic candle timestamps", () => {
+  const candles = regularCandles();
+  candles[5] = { ...candles[5], timestamp: 4 };
+  assert.throws(
+    () => evaluateUsQualityDaytradeSetup(setup({ candles })),
+    /candle timestamps must be strictly increasing/,
+  );
+});
+
 test("setup abstains when spread is too wide", () => {
-  const result = evaluateUsQualityDaytradeSetup(setup({ quote: { bid: 103, ask: 105 } }));
+  const result = evaluateUsQualityDaytradeSetup(setup({ quote: { bid: 103, ask: 105, timestampMs: 8_000 } }));
   assert.equal(result.status, "ABSTAIN");
   assert.equal(result.reason, "SPREAD_TOO_WIDE");
 });
@@ -83,6 +119,7 @@ test("setup recognizes first-pullback VWAP rebreak with volume reacceleration", 
   assert.equal(result.reason, "VWAP_FIRST_PULLBACK_REBREAK");
   assert.equal(result.session, "REGULAR");
   assert.equal(result.catalystClass, "VERIFIED_CATALYST");
+  assert.equal(result.quoteAgeMs, 500);
   assert.ok(result.vwap > 0);
   assert.ok(result.pullbackPct > 0);
   assert.ok(result.volumeReacceleration > 1.25);
