@@ -99,6 +99,7 @@ test("settlement ignores Shadow exitPrice and rebuilds target exit from closed B
   assert.equal(result.settlementInput.fundingEvidence.payments[1].amount, -0.014);
   assert.equal(result.settlementInput.exitExecution.dataEvidence.historicalSettlementEvidence, true);
   assert.equal(result.settlementInput.exitExecution.dataEvidence.historicalSettlementEffectiveAtMs, EXIT);
+  assert.equal(result.settlementInput.exitExecution.dataEvidence.barProxyRealtimeAllowed, false);
   assert.equal(result.settlementInput.exitExecution.dataEvidence.publicOnly, true);
   assert.equal(result.safety.privateApi, false);
   assert.equal(result.safety.liveTrading, false);
