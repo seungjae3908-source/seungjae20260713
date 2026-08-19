@@ -230,7 +230,7 @@ export async function loadBitgetEthV6PaperSettlement({
       maxLeverage: asNumber(contract.maxLever, "ETH_V6_PAPER_SETTLEMENT_MAX_LEVERAGE_INVALID"),
       marginMode: "ISOLATED",
       liquidationDistancePct,
-      barProxyRealtimeAllowed: true,
+      barProxyRealtimeAllowed: false,
       closedDataOnly: true,
       historicalSettlementEvidence: true,
       historicalSettlementEffectiveAtMs: lifecycle.exitTimestamp,
