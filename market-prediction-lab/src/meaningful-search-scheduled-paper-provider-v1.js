@@ -21,7 +21,10 @@ function safeEnvelope(value) {
     && value?.exchangeRequestSent === false;
 }
 
-function candidateIdentityBlockers(candidate, market) {
+function candidateIdentityBlockers(candidate, market, {
+  requireProfitEvidence = true,
+  requireExitIntent = false,
+} = {}) {
   const signal = candidate?.signal;
   const strategy = signal?.strategyIdentity;
   const identity = candidate?.paperIdentity;
@@ -39,12 +42,25 @@ function candidateIdentityBlockers(candidate, market) {
     || String(identity?.researchCodeSha ?? "").toLowerCase() !== strategy.researchCodeSha.toLowerCase()) {
     blockers.push("PAPER_CANDIDATE_RESEARCH_SHA_MISMATCH");
   }
-  if (!nonEmpty(identity?.costPolicyVersion)
-    || identity.costPolicyVersion !== candidate?.profitEvidence?.costPolicyId
-    || identity.costPolicyVersion !== candidate?.execution?.costPolicy?.version) {
+
+  const identityCostPolicyVersion = identity?.costPolicyVersion;
+  const executionCostPolicyVersion = candidate?.execution?.costPolicy?.version;
+  const profitCostPolicyId = candidate?.profitEvidence?.costPolicyId;
+  if (!nonEmpty(identityCostPolicyVersion)
+    || identityCostPolicyVersion !== executionCostPolicyVersion) {
     blockers.push("PAPER_CANDIDATE_COST_POLICY_MISMATCH");
   }
+  if (requireProfitEvidence) {
+    if (!nonEmpty(profitCostPolicyId) || identityCostPolicyVersion !== profitCostPolicyId) {
+      blockers.push("PAPER_CANDIDATE_COST_POLICY_MISMATCH");
+    }
+  } else if (profitCostPolicyId != null
+    && (!nonEmpty(profitCostPolicyId) || identityCostPolicyVersion !== profitCostPolicyId)) {
+    blockers.push("PAPER_CANDIDATE_COST_POLICY_MISMATCH");
+  }
+
   if (!nonEmpty(identity?.direction) || identity.direction !== signal?.signalDirection) blockers.push("PAPER_CANDIDATE_DIRECTION_MISMATCH");
+  if (requireExitIntent && !["EXIT", "REDUCE"].includes(candidate?.executionIntent)) blockers.push("PAPER_EXIT_INTENT_INVALID");
   if (!safeEnvelope(candidate)) blockers.push("PAPER_CANDIDATE_SAFETY_VIOLATION");
   if (identity?.executionAuthority !== "NONE") blockers.push("PAPER_IDENTITY_EXECUTION_AUTHORITY_FORBIDDEN");
 
@@ -133,7 +149,10 @@ export function wrapPaperForwardProviderWithMeaningfulSearch({
       }
 
       const candidateBlockers = candidates.flatMap((candidate) => candidateIdentityBlockers(candidate, input.market));
-      const exitBlockers = exits.flatMap((candidate) => candidateIdentityBlockers(candidate, input.market));
+      const exitBlockers = exits.flatMap((candidate) => candidateIdentityBlockers(candidate, input.market, {
+        requireProfitEvidence: false,
+        requireExitIntent: true,
+      }));
       const blockers = [...new Set([...candidateBlockers, ...exitBlockers])];
       if (blockers.length > 0) return blockedEvidence(base, runtime, blockers.join("|"));
 
