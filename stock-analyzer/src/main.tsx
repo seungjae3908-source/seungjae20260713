@@ -5,6 +5,7 @@ import { configureUnifiedChartFetch } from '@/lib/unified-chart-data';
 import App from './App';
 import './index.css';
 import './unified-analysis-chart-touch.css';
+import './production-ui-geometry.css';
 
 const ACCENTS: Record<string, string> = {
 	blue: '221 83% 53%',
