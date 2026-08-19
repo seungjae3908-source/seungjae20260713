@@ -141,3 +141,26 @@ test('account connection route is GET-only metadata-only and has no provider net
     assert.equal(indexSource.includes(privatePath), true, `missing private-path fail-closed guard: ${privatePath}`);
   }
 });
+
+test('user integrations GET degrades only broker metadata storage outage and preserves trading fail-closed safety', () => {
+  const routeSource = source('api-server/src/routes/user-broker-telegram.ts');
+
+  assert.match(routeSource, /code !== 'TRADE_AUTOMATION_STORAGE_UNAVAILABLE'/);
+  assert.match(routeSource, /brokerConnectionsAvailable:\s*false/);
+  assert.match(routeSource, /brokerConnectionsErrorCode:\s*code/);
+  assert.match(
+    routeSource,
+    /partial:\s*state\.telegramStorageAvailable === false \|\| brokerState\.brokerConnectionsAvailable === false/,
+  );
+  assert.match(
+    routeSource,
+    /brokerMetadataRead:\s*canReadBrokerConnections && brokerState\.brokerConnectionsAvailable === true/,
+  );
+  assert.match(routeSource, /privateApiRequests:\s*0/);
+  assert.match(routeSource, /ordersSubmitted:\s*0/);
+  assert.match(routeSource, /ordersCancelled:\s*0/);
+  assert.match(routeSource, /userBrokerTelegramRouter\.post\('\/execution\/sync'/);
+  assert.match(routeSource, /userBrokerTelegramRouter\.post\('\/telegram\/link'/);
+  assert.match(routeSource, /userBrokerTelegramRouter\.patch\('\/notifications'/);
+  assert.match(routeSource, /res\.status\(503\)\.json\(\{ ok: false, error: errorCode\(error\)/);
+});
