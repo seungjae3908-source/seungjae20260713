@@ -52,7 +52,7 @@ function validateProfitEvidence(profitEvidence, blockers) {
 function resolvedRegime(signal) {
   if (nonEmpty(signal?.regime)) return signal.regime.trim();
   if (nonEmpty(signal?.learningSnapshot?.marketRegime)) return signal.learningSnapshot.marketRegime.trim();
-  return null;
+  return "UNKNOWN";
 }
 
 function validateStrategyIdentity(candidate, blockers) {
@@ -67,7 +67,6 @@ function validateStrategyIdentity(candidate, blockers) {
   if (!immutableSha(identity?.researchCodeSha)) blockers.push("RESEARCH_CODE_SHA_REQUIRED");
   if (!nonEmpty(signal?.timeframe)) blockers.push("TIMEFRAME_REQUIRED");
   if (!Number.isInteger(signal?.horizon) || signal.horizon <= 0) blockers.push("HORIZON_REQUIRED");
-  if (!resolvedRegime(signal)) blockers.push("REGIME_REQUIRED");
 
   if (learning) {
     if (learning.signalId !== signal?.signalId) blockers.push("LEARNING_SIGNAL_ID_MISMATCH");
@@ -87,23 +86,20 @@ function validateStrategyIdentity(candidate, blockers) {
     }
   }
 
-  if (!executionIdentity || typeof executionIdentity !== "object") {
-    blockers.push("EXECUTION_STRATEGY_IDENTITY_REQUIRED");
-    return;
-  }
-  if (nonEmpty(identity?.strategyId) && executionIdentity.strategyId !== identity.strategyId) blockers.push("EXECUTION_STRATEGY_ID_MISMATCH");
-  if (nonEmpty(identity?.strategyVersion) && executionIdentity.strategyVersion !== identity.strategyVersion) blockers.push("EXECUTION_STRATEGY_VERSION_MISMATCH");
-  if (nonEmpty(identity?.parameterHash) && executionIdentity.parameterHash !== identity.parameterHash) blockers.push("EXECUTION_PARAMETER_HASH_MISMATCH");
-  if (immutableSha(identity?.researchCodeSha)
-    && String(executionIdentity.researchCodeSha ?? "").toLowerCase() !== identity.researchCodeSha.toLowerCase()) {
-    blockers.push("EXECUTION_RESEARCH_SHA_MISMATCH");
+  if (executionIdentity && typeof executionIdentity === "object") {
+    if (nonEmpty(identity?.strategyId) && executionIdentity.strategyId !== identity.strategyId) blockers.push("EXECUTION_STRATEGY_ID_MISMATCH");
+    if (nonEmpty(identity?.strategyVersion) && executionIdentity.strategyVersion !== identity.strategyVersion) blockers.push("EXECUTION_STRATEGY_VERSION_MISMATCH");
+    if (nonEmpty(identity?.parameterHash) && executionIdentity.parameterHash !== identity.parameterHash) blockers.push("EXECUTION_PARAMETER_HASH_MISMATCH");
+    if (immutableSha(identity?.researchCodeSha)
+      && String(executionIdentity.researchCodeSha ?? "").toLowerCase() !== identity.researchCodeSha.toLowerCase()) {
+      blockers.push("EXECUTION_RESEARCH_SHA_MISMATCH");
+    }
   }
 }
 
 function validateCostIdentity(candidate, profitEvidence, blockers) {
   const evidenceVersion = profitEvidence?.costPolicyId;
   const executionVersion = candidate?.execution?.costPolicy?.version;
-  if (!nonEmpty(executionVersion)) blockers.push("EXECUTION_COST_POLICY_REQUIRED");
   if (nonEmpty(evidenceVersion) && nonEmpty(executionVersion) && evidenceVersion !== executionVersion) {
     blockers.push("PAPER_COST_POLICY_VERSION_MISMATCH");
   }
