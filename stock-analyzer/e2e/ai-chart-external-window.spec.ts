@@ -138,11 +138,17 @@ async function assertCleanRuntime(runtime: RuntimeObservation) {
 }
 
 async function postChannelMessage(page: Page, payload: MessagePayload) {
-  await page.evaluate(async ({ channelName: name, message }) => {
-    const channel = new BroadcastChannel(name);
-    channel.postMessage(message);
-    await new Promise((resolve) => globalThis.setTimeout(resolve, 0));
-    channel.close();
+  await page.evaluate(({ channelName: name, message }) => {
+    const state = globalThis as typeof globalThis & {
+      __chartE2eSenderChannel?: BroadcastChannel;
+      __chartE2eSenderChannelName?: string;
+    };
+    if (!state.__chartE2eSenderChannel || state.__chartE2eSenderChannelName !== name) {
+      state.__chartE2eSenderChannel?.close();
+      state.__chartE2eSenderChannel = new BroadcastChannel(name);
+      state.__chartE2eSenderChannelName = name;
+    }
+    state.__chartE2eSenderChannel.postMessage(message);
   }, { channelName, message: payload });
 }
 
