@@ -21,6 +21,7 @@ function clamp(value, min, max) {
 }
 
 function finite(value, fallback = null) {
+  if (value == null || value === '') return fallback;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
@@ -147,20 +148,46 @@ function wallWithdrawalFeatures(currentBook, previousBook, trades) {
     .map((row) => ({ ...row, notional: row.price * row.size }))
     .filter((row) => med > 0 && row.notional >= med * 3)
     .sort((a, b) => b.notional - a.notional)[0];
-  if (!wall) return { score: 0, side: null, cancellationRatio: 0, executedRatio: 0 };
+  if (!wall) return {
+    score: 0,
+    side: null,
+    cancellationRatio: 0,
+    executedRatio: 0,
+    migratedNotionalRatio: 0,
+    quoteMigrationDetected: false,
+  };
   const currentSide = wall.side === 'bid' ? currentBook.bids : currentBook.asks;
-  const same = currentSide.find((row) => Math.abs(row.price - wall.price) <= Math.max(1e-12, wall.price * 1e-10));
+  const exactTolerance = Math.max(1e-12, wall.price * 1e-10);
+  const same = currentSide.find((row) => Math.abs(row.price - wall.price) <= exactTolerance);
   const remaining = same?.size ?? 0;
   const cancellationRatio = clamp(1 - safeRatio(remaining, wall.size, 0), 0, 1);
+  const migratedNotional = currentSide
+    .filter((row) => Math.abs(row.price - wall.price) > exactTolerance)
+    .filter((row) => {
+      const distanceBps = Math.abs(row.price - wall.price) / wall.price * 10_000;
+      return distanceBps > 1 && distanceBps <= 10;
+    })
+    .reduce((max, row) => Math.max(max, row.price * row.size), 0);
+  const migratedNotionalRatio = clamp(safeRatio(migratedNotional, wall.notional, 0), 0, 2);
+  const quoteMigrationDetected = migratedNotionalRatio >= 0.5;
   const tolerance = wall.price * 0.00005;
   const executed = trades
     .filter((trade) => Math.abs(trade.price - wall.price) <= tolerance)
     .reduce((sum, trade) => sum + trade.price * trade.size, 0);
   const executedRatio = clamp(safeRatio(executed, wall.notional, 0), 0, 1);
-  const score = cancellationRatio >= 0.60 && executedRatio < 0.25
+  const score = !quoteMigrationDetected && cancellationRatio >= 0.60 && executedRatio < 0.25
     ? clamp(cancellationRatio * (1 - executedRatio) * 100, 0, 100)
     : 0;
-  return { score, side: wall.side, cancellationRatio, executedRatio, wallPrice: wall.price, wallNotional: wall.notional };
+  return {
+    score,
+    side: wall.side,
+    cancellationRatio,
+    executedRatio,
+    wallPrice: wall.price,
+    wallNotional: wall.notional,
+    migratedNotionalRatio,
+    quoteMigrationDetected,
+  };
 }
 
 function derivativesFeatures(input) {
@@ -339,6 +366,7 @@ export function evaluateMarketIntelligence(input = {}) {
   if (stale) warnings.push('STALE_DATA');
   if (!book.current.bids.length || !book.current.asks.length) warnings.push('ORDER_BOOK_NOT_AVAILABLE');
   if (!trades.rows.length) warnings.push('TRADE_FLOW_NOT_AVAILABLE');
+  if (wall.quoteMigrationDetected) warnings.push('LIQUIDITY_WALL_QUOTE_MIGRATION');
   if (market === 'CRYPTO_FUTURES' && derivatives?.oiDeltaPct == null) warnings.push('OI_DELTA_NOT_AVAILABLE');
   if (market === 'US_STOCK' && input.microcap == null) warnings.push('MICROCAP_STRUCTURAL_DATA_NOT_AVAILABLE');
   if (!evidenceReady) warnings.push('AUTO_TRADING_FORWARD_EVIDENCE_INSUFFICIENT');

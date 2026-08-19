@@ -1,12 +1,18 @@
+import { dirname, resolve } from "node:path";
 import { collectYahooStockHistory } from "./yahoo-stock-history.js";
 import { collectUpbitSpotHistory } from "./upbit-spot-history.js";
 import { BitgetPublicClient } from "./bitget-public-client.js";
-import { BITGET_TIMEFRAME_MS, collectBitgetCandles } from "./bitget-candle-collector.js";
+import { collectBitgetCandles } from "./bitget-candle-collector.js";
 import { RECURRING_PAPER_MARKETS } from "./recurring-paper-loop-v1.js";
 import { runScheduledPaperCycle } from "./paper-scheduler-driver-v1.js";
+import {
+  createEthV6PaperForwardSource,
+  wrapPaperForwardProviderWithEthV6Source,
+} from "./eth-v6-paper-forward-source-v1.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
+const TRUTHY = new Set(["1", "true", "yes", "on", "enabled"]);
 
 export const PAPER_FORWARD_PROVIDER_AUTHORITY = Object.freeze({
   KR_STOCK: Object.freeze({ provider: "yahoo-public-chart", symbol: "005930", timeframe: "1d", intervalMs: DAY_MS, closeOffsetMs: 6.5 * 60 * 60 * 1000, maxAgeMs: 4 * DAY_MS }),
@@ -27,6 +33,14 @@ export const PAPER_FORWARD_RUNTIME_CONTRACT = Object.freeze({
 
 function finite(value) {
   return typeof value === "number" && Number.isFinite(value);
+}
+
+function truthy(value) {
+  return TRUTHY.has(String(value ?? "").trim().toLowerCase());
+}
+
+function immutableSha(value) {
+  return typeof value === "string" && /^[0-9a-f]{40}$/u.test(value);
 }
 
 function safeReason(error) {
@@ -112,6 +126,17 @@ function readyEvidence({ market, authority, snapshot, nowMs }) {
   });
 }
 
+function maybeAttachResearchNaturalSource({ provider, env, clock, bitgetClient, naturalSourceFactory }) {
+  if (!truthy(env?.RESEARCH_PRODUCTION)) return provider;
+  const researchCodeSha = String(env?.PAPER_FORWARD_RESEARCH_SHA ?? "").trim().toLowerCase();
+  const paperRoot = String(env?.PAPER_FORWARD_ROOT ?? "").trim();
+  if (!immutableSha(researchCodeSha)) throw new TypeError("Research Production Paper provider requires exact PAPER_FORWARD_RESEARCH_SHA");
+  if (!paperRoot) throw new TypeError("Research Production Paper provider requires PAPER_FORWARD_ROOT");
+  const shadowStatePath = resolve(dirname(resolve(paperRoot)), "shadow-state.json");
+  const source = naturalSourceFactory({ shadowStatePath, researchCodeSha, client: bitgetClient, clock });
+  return wrapPaperForwardProviderWithEthV6Source({ provider, source });
+}
+
 export function createCanonicalPaperForwardEvidenceProvider({
   collectYahoo = collectYahooStockHistory,
   collectUpbit = collectUpbitSpotHistory,
@@ -121,12 +146,15 @@ export function createCanonicalPaperForwardEvidenceProvider({
   authority = PAPER_FORWARD_PROVIDER_AUTHORITY,
   providerRetry = Object.freeze({ maxAttempts: 3, baseBackoffMs: 250 }),
   sleep = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
+  env = process.env,
+  naturalSourceFactory = createEthV6PaperForwardSource,
 } = {}) {
   if (!Number.isInteger(providerRetry?.maxAttempts) || providerRetry.maxAttempts < 1 || providerRetry.maxAttempts > 5
     || !Number.isInteger(providerRetry?.baseBackoffMs) || providerRetry.baseBackoffMs < 1 || providerRetry.baseBackoffMs > 30_000) {
     throw new TypeError("bounded providerRetry configuration is required");
   }
-  return Object.freeze({
+  if (typeof naturalSourceFactory !== "function") throw new TypeError("naturalSourceFactory must be a function");
+  const provider = Object.freeze({
     async collectPublicEvidence({ market, signal }) {
       const lane = authority[market];
       if (!lane) return blocked(market, { provider: "NONE", symbol: "NONE", timeframe: "NONE", maxAgeMs: 1 }, "NO_CANONICAL_PROVIDER");
@@ -160,6 +188,7 @@ export function createCanonicalPaperForwardEvidenceProvider({
       }
     },
   });
+  return maybeAttachResearchNaturalSource({ provider, env, clock, bitgetClient, naturalSourceFactory });
 }
 
 function sanitizeLane(market, evidence) {
@@ -204,6 +233,13 @@ export async function validateCanonicalPaperForwardEvidence({ provider, nowMs = 
   });
 }
 
+function openPositionsForMarket(state, market) {
+  if (!Array.isArray(state?.positions)) return Object.freeze([]);
+  return Object.freeze(state.positions
+    .filter((position) => position?.lifecycleState === "OPEN" && position.market === market)
+    .map((position) => Object.freeze(structuredClone(position))));
+}
+
 export async function runPaperForwardEvidenceRuntime({
   publicEvidenceProvider,
   runtimeStatusStore,
@@ -217,7 +253,10 @@ export async function runPaperForwardEvidenceRuntime({
   const trackingProvider = Object.freeze({
     async collectPublicEvidence(input) {
       try {
-        const evidence = await publicEvidenceProvider.collectPublicEvidence(input);
+        const evidence = await publicEvidenceProvider.collectPublicEvidence({
+          ...input,
+          openPositions: openPositionsForMarket(scheduledInput.state, input.market),
+        });
         observed.set(input.market, sanitizeLane(input.market, evidence));
         return evidence;
       } catch (error) {

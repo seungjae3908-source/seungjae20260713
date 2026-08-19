@@ -69,8 +69,8 @@ export const PROFILES = Object.freeze({
     Object.freeze({ id: 'long-v6', args: ['scripts/run-v6-history.js'], timeoutMs: 90 * 60_000 }),
   ]),
   forward: Object.freeze([
-    Object.freeze({ id: 'paper-forward', kind: 'paper', args: ['scripts/run-paper-forward-schedule.js'], timeoutMs: 20 * 60_000, acceptedExitCodes: [0, 2] }),
     Object.freeze({ id: 'shadow-forward', kind: 'shadow', args: ['scripts/run-shadow-cycle.js'], timeoutMs: 30 * 60_000 }),
+    Object.freeze({ id: 'paper-forward', kind: 'paper', args: ['scripts/run-paper-forward-schedule.js'], timeoutMs: 20 * 60_000, acceptedExitCodes: [0, 2] }),
   ]),
 });
 
@@ -343,7 +343,8 @@ export async function runResearchCycle({ repoRoot, stateRoot, researchSha, profi
     ? await resolveForwardActivationAtMs(preflight.stateRoot, activationAtMs)
     : (Number.isFinite(activationAtMs) ? Number(activationAtMs) : Date.now());
   const plan = buildTaskPlan({ profile, stateRoot: preflight.stateRoot, researchSha: preflight.researchSha, activationAtMs: stableActivationAtMs });
-  const safeConcurrency = Math.max(1, Math.min(Number(concurrency) || 1, 16, plan.length));
+  const requestedConcurrency = Math.max(1, Math.min(Number(concurrency) || 1, 16, plan.length));
+  const safeConcurrency = profile === 'forward' ? 1 : requestedConcurrency;
   const cycleId = `${new Date().toISOString().replace(/[:.]/g, '-')}-${profile}-${preflight.researchSha.slice(0, 12)}`;
   const lockPath = join(preflight.stateRoot, 'locks', `${profile}.lock`);
   const locked = await acquireLock(lockPath, { cycleId, pid: process.pid, startedAt: Date.now(), researchSha: preflight.researchSha });
