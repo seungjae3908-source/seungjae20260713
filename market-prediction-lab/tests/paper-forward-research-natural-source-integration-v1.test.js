@@ -28,6 +28,7 @@ function collectors() {
 test("Research Production canonical provider attaches the sibling Shadow state source only to futures", async () => {
   let factoryArgs = null;
   let sourceCalls = 0;
+  let sourceInput = null;
   const provider = createCanonicalPaperForwardEvidenceProvider({
     ...collectors(),
     bitgetClient: {},
@@ -40,8 +41,9 @@ test("Research Production canonical provider attaches the sibling Shadow state s
     naturalSourceFactory: (args) => {
       factoryArgs = args;
       return {
-        async collect() {
+        async collect(input) {
           sourceCalls += 1;
+          sourceInput = input;
           return {
             status: "READY",
             candidates: [{ signal: { signalId: "ETH-V6-natural" } }],
@@ -54,7 +56,8 @@ test("Research Production canonical provider attaches the sibling Shadow state s
   });
 
   const spot = await provider.collectPublicEvidence({ market: "CRYPTO_SPOT" });
-  const futures = await provider.collectPublicEvidence({ market: "CRYPTO_FUTURES" });
+  const futuresPosition = { positionId: "paper-open-1" };
+  const futures = await provider.collectPublicEvidence({ market: "CRYPTO_FUTURES", openPositions: [futuresPosition] });
   assert.equal(factoryArgs.shadowStatePath, "/var/lib/investment-research-production/forward/shadow-state.json");
   assert.equal(factoryArgs.researchCodeSha, SHA);
   assert.equal(factoryArgs.client != null, true);
@@ -62,8 +65,9 @@ test("Research Production canonical provider attaches the sibling Shadow state s
   assert.equal(spot.candidates.length, 0);
   assert.equal(futures.candidates.length, 1);
   assert.equal(futures.candidates[0].signal.signalId, "ETH-V6-natural");
+  assert.deepEqual(sourceInput.openPositions, [futuresPosition]);
   assert.equal(futures.naturalCandidateSource.candidateCount, 1);
-  assert.equal(futures.naturalCandidateSource.settlementBridgeReady, false);
+  assert.equal(futures.naturalCandidateSource.settlementBridgeReady, true);
   assert.equal(sourceCalls, 1);
 });
 
