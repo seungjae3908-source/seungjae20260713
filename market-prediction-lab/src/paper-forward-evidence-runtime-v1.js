@@ -2,7 +2,7 @@ import { dirname, resolve } from "node:path";
 import { collectYahooStockHistory } from "./yahoo-stock-history.js";
 import { collectUpbitSpotHistory } from "./upbit-spot-history.js";
 import { BitgetPublicClient } from "./bitget-public-client.js";
-import { BITGET_TIMEFRAME_MS, collectBitgetCandles } from "./bitget-candle-collector.js";
+import { collectBitgetCandles } from "./bitget-candle-collector.js";
 import { RECURRING_PAPER_MARKETS } from "./recurring-paper-loop-v1.js";
 import { runScheduledPaperCycle } from "./paper-scheduler-driver-v1.js";
 import {
@@ -233,6 +233,13 @@ export async function validateCanonicalPaperForwardEvidence({ provider, nowMs = 
   });
 }
 
+function openPositionsForMarket(state, market) {
+  if (!Array.isArray(state?.positions)) return Object.freeze([]);
+  return Object.freeze(state.positions
+    .filter((position) => position?.lifecycleState === "OPEN" && position.market === market)
+    .map((position) => Object.freeze(structuredClone(position))));
+}
+
 export async function runPaperForwardEvidenceRuntime({
   publicEvidenceProvider,
   runtimeStatusStore,
@@ -246,7 +253,10 @@ export async function runPaperForwardEvidenceRuntime({
   const trackingProvider = Object.freeze({
     async collectPublicEvidence(input) {
       try {
-        const evidence = await publicEvidenceProvider.collectPublicEvidence(input);
+        const evidence = await publicEvidenceProvider.collectPublicEvidence({
+          ...input,
+          openPositions: openPositionsForMarket(scheduledInput.state, input.market),
+        });
         observed.set(input.market, sanitizeLane(input.market, evidence));
         return evidence;
       } catch (error) {
