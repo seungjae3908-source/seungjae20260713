@@ -1,5 +1,5 @@
 import { logger } from '../lib/logger';
-import type { ScannerAlertCandidate } from './scanner-signal.types';
+import type { ScannerAlertCandidate, ScannerAssetClass } from './scanner-signal.types';
 import {
   sendTelegramAlert,
   type TelegramAlertInput,
@@ -10,6 +10,9 @@ export type ScannerTelegramSender = (
   input: TelegramAlertInput,
 ) => Promise<TelegramAlertResult>;
 
+export type ScannerTelegramRoom = 'STOCK_ROOM' | 'CRYPTO_ROOM';
+export type ScannerTelegramRoomResolver = (room: ScannerTelegramRoom) => string | null;
+
 function pricePlanDetails(alert: ScannerAlertCandidate): string {
   const entry = alert.entryZone
     ? `${alert.entryZone.from}~${alert.entryZone.to}`
@@ -19,10 +22,27 @@ function pricePlanDetails(alert: ScannerAlertCandidate): string {
   return `승인 대기 신호 · 진입구간 ${entry} · 손절 ${stop} · 목표 ${targets}`;
 }
 
+export function scannerTelegramRoomFor(assetClass: ScannerAssetClass): ScannerTelegramRoom {
+  return assetClass === 'stock' ? 'STOCK_ROOM' : 'CRYPTO_ROOM';
+}
+
+export function scannerTelegramRoomChatId(room: ScannerTelegramRoom): string | null {
+  switch (room) {
+    case 'STOCK_ROOM':
+      return process.env.TELEGRAM_STOCK_CHAT_ID?.trim() || null;
+    case 'CRYPTO_ROOM':
+      return process.env.TELEGRAM_CRYPTO_CHAT_ID?.trim() || null;
+  }
+}
+
 export function scannerTelegramInput(
   alert: ScannerAlertCandidate,
+  resolveRoomChatId: ScannerTelegramRoomResolver = scannerTelegramRoomChatId,
 ): TelegramAlertInput | null {
   if (alert.state !== 'APPROVAL_PENDING' && alert.state !== 'READY_FOR_APPROVAL') return null;
+
+  const destinationChatId = resolveRoomChatId(scannerTelegramRoomFor(alert.assetClass));
+  if (!destinationChatId) return null;
 
   if (alert.assetClass === 'stock') {
     if (alert.direction !== 'LONG') return null;
@@ -32,6 +52,19 @@ export function scannerTelegramInput(
       market: alert.market,
       details: pricePlanDetails(alert),
       dedupeKey: alert.idempotencyKey,
+      destinationChatId,
+    };
+  }
+
+  if (alert.assetClass === 'coin_spot') {
+    if (alert.direction !== 'LONG') return null;
+    return {
+      type: 'crypto_spot_buy',
+      symbol: alert.symbol,
+      market: alert.market,
+      details: pricePlanDetails(alert),
+      dedupeKey: alert.idempotencyKey,
+      destinationChatId,
     };
   }
 
@@ -43,6 +76,7 @@ export function scannerTelegramInput(
       market: alert.market,
       details: pricePlanDetails(alert),
       dedupeKey: alert.idempotencyKey,
+      destinationChatId,
     };
   }
 
@@ -52,9 +86,10 @@ export function scannerTelegramInput(
 export async function deliverScannerTelegramAlerts(
   alerts: ScannerAlertCandidate[],
   sender: ScannerTelegramSender = sendTelegramAlert,
+  resolveRoomChatId: ScannerTelegramRoomResolver = scannerTelegramRoomChatId,
 ): Promise<void> {
   await Promise.all(alerts.map(async (alert) => {
-    const input = scannerTelegramInput(alert);
+    const input = scannerTelegramInput(alert, resolveRoomChatId);
     if (!input) return;
     try {
       await sender(input);

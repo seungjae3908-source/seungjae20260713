@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, Database } from 'lucide-react';
 import type { AnalysisSelection } from '@/lib/analysis-selection';
+import { authorizedFetch } from '@/lib/auth-fetch';
 import { normalizeUnifiedSymbol } from '@/lib/unified-chart-data';
 
 type FuturesPublicStatus = 'live' | 'delayed' | 'cached' | 'disconnected' | 'error' | 'insufficient';
@@ -49,7 +50,7 @@ function normalizeWarnings(value: unknown): string[] {
 async function fetchFuturesPublicContext(symbol: string, signal: AbortSignal): Promise<FuturesPublicContext> {
   const normalizedSymbol = normalizeUnifiedSymbol('BITGET', symbol);
   if (!normalizedSymbol) throw new Error('INVALID_FUTURES_SYMBOL');
-  const response = await fetch(`/api/crypto/futures/${encodeURIComponent(normalizedSymbol)}/snapshot`, {
+  const response = await authorizedFetch(`/api/crypto/futures/${encodeURIComponent(normalizedSymbol)}/snapshot`, {
     method: 'GET',
     cache: 'no-store',
     headers: { Accept: 'application/json' },

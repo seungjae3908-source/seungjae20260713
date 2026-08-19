@@ -1,0 +1,251 @@
+name: Research Production Natural Cycle Evidence
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/research-production-natural-cycle-evidence.yml'
+      - 'ops/research-production-readonly-evidence.sh'
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+concurrency:
+  group: research-production-natural-cycle-evidence
+  cancel-in-progress: false
+
+jobs:
+  validate-contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Validate read-only evidence contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          bash -n ops/research-production-readonly-evidence.sh
+          grep -q 'server_files_written=0' ops/research-production-readonly-evidence.sh
+          grep -q 'server_processes_restarted=0' ops/research-production-readonly-evidence.sh
+          grep -q 'deployment_executed=0' ops/research-production-readonly-evidence.sh
+          grep -q 'database_changes=0' ops/research-production-readonly-evidence.sh
+          grep -q 'live_trading=false' ops/research-production-readonly-evidence.sh
+          grep -q 'private_api=false' ops/research-production-readonly-evidence.sh
+          grep -q 'order_authority=false' ops/research-production-readonly-evidence.sh
+          if grep -Eq '(^|[[:space:];])(rm|mv|cp|install|mkdir|touch|tee|truncate)([[:space:]]|$)|systemctl[[:space:]]+(enable|disable|start|stop|restart|reload|daemon-reload)|git[[:space:]]+config|crontab|chmod|chown' ops/research-production-readonly-evidence.sh; then
+            echo 'Read-only probe contains a prohibited mutation command.' >&2
+            exit 1
+          fi
+
+  observe:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.number == 62 &&
+      github.event.comment.user.login == github.repository_owner &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/verify-research-production ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      EVIDENCE_FILE: /tmp/research-production-natural-cycle-evidence.txt
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Parse immutable Research release command
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const body = String(process.env.COMMENT_BODY ?? '').trim();
+          const match = /^\/verify-research-production ([0-9a-f]{40})$/i.exec(body);
+          if (!match) throw new Error('Expected /verify-research-production <40-character-research-sha>');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `research_sha=${match[1].toLowerCase()}\n`);
+          NODE
+
+      - name: Verify requested Research release is in repository history
+        env:
+          RESEARCH_SHA: ${{ steps.command.outputs.research_sha }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main "$RESEARCH_SHA"
+          git cat-file -e "$RESEARCH_SHA^{commit}"
+          git merge-base --is-ancestor "$RESEARCH_SHA" origin/main
+          git cat-file -e "$RESEARCH_SHA:research-production/bin/research-cycle.mjs"
+          git cat-file -e "$RESEARCH_SHA:research-production/deploy/research-production@.service"
+
+      - name: Configure SSH without exposing credentials
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Collect Research Production evidence read-only
+        id: evidence
+        env:
+          RESEARCH_SHA: ${{ steps.command.outputs.research_sha }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          remote_env="$(printf 'TARGET_RESEARCH_SHA=%q' "$RESEARCH_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env bash -s" \
+            < ops/research-production-readonly-evidence.sh | tee "$EVIDENCE_FILE"
+          grep -Fx 'RESEARCH_PRODUCTION_READONLY_EVIDENCE_BEGIN' "$EVIDENCE_FILE" >/dev/null
+          grep -Fx 'RESEARCH_PRODUCTION_READONLY_EVIDENCE_END' "$EVIDENCE_FILE" >/dev/null
+          grep -Fx "target_research_sha=$RESEARCH_SHA" "$EVIDENCE_FILE" >/dev/null
+          grep -Fx 'current_release_match=true' "$EVIDENCE_FILE" >/dev/null
+          grep -Fx 'server_files_written=0' "$EVIDENCE_FILE" >/dev/null
+          grep -Fx 'server_files_deleted=0' "$EVIDENCE_FILE" >/dev/null
+          grep -Fx 'server_processes_restarted=0' "$EVIDENCE_FILE" >/dev/null
+          grep -Fx 'deployment_executed=0' "$EVIDENCE_FILE" >/dev/null
+          grep -Fx 'database_changes=0' "$EVIDENCE_FILE" >/dev/null
+          grep -Fx 'live_trading=false' "$EVIDENCE_FILE" >/dev/null
+          grep -Fx 'private_api=false' "$EVIDENCE_FILE" >/dev/null
+          grep -Fx 'order_authority=false' "$EVIDENCE_FILE" >/dev/null
+
+      - name: Classify natural cycle evidence
+        id: verdict
+        if: steps.evidence.outcome == 'success'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const lines = fs.readFileSync(process.env.EVIDENCE_FILE, 'utf8').split(/\r?\n/).filter(Boolean);
+          const find = (prefix) => lines.find((line) => line.startsWith(prefix));
+          const all = (prefix) => lines.filter((line) => line.startsWith(prefix));
+          const fields = (line) => Object.fromEntries(String(line ?? '').split(/\s+/).slice(1).map((pair) => {
+            const i = pair.indexOf('=');
+            return i > 0 ? [pair.slice(0, i), pair.slice(i + 1)] : [pair, ''];
+          }));
+          const timer = Object.fromEntries(all('TIMER ').map((line) => { const v=fields(line); return [v.profile, v]; }));
+          const service = Object.fromEntries(all('SERVICE ').map((line) => { const v=fields(line); return [v.profile, v]; }));
+          const cycle = Object.fromEntries(all('CYCLE ').map((line) => { const v=fields(line); return [v.profile, v]; }));
+          const tasks = all('TASK ').map((line) => fields(line));
+          const paper = fields(find('PAPER_RUNTIME '));
+          const ledger = fields(find('PAPER_LEDGER '));
+          const timersHealthy = ['forward','fast-historical','long-history'].every((p) => timer[p]?.enabled === 'enabled' && timer[p]?.active === 'active');
+          const forwardTasks = tasks.filter((row) => row.profile === 'forward');
+          const forwardProven = timer.forward?.last_trigger && !/^n\/a|^null|^$/.test(timer.forward.last_trigger)
+            && cycle.forward?.present === 'true'
+            && cycle.forward?.research_sha === process.env.RESEARCH_SHA
+            && cycle.forward?.failed_count === '0'
+            && forwardTasks.length === 2
+            && forwardTasks.every((row) => ['success','blocked_data'].includes(row.status));
+          const paperSafe = paper.present === 'true'
+            && paper.live_trading === 'false'
+            && paper.order_authority === 'false'
+            && paper.private_request_count === '0'
+            && paper.financial_mutation_count === '0'
+            && paper.order_count === '0';
+          const historicalComplete = cycle['fast-historical']?.present === 'true'
+            && cycle['fast-historical']?.research_sha === process.env.RESEARCH_SHA
+            && cycle['fast-historical']?.failed_count === '0';
+          const historicalRunning = service['fast-historical']?.active === 'active' || service['fast-historical']?.sub === 'running';
+          let status = 'failed';
+          if (timersHealthy && forwardProven && paperSafe && historicalComplete) status = 'passed';
+          else if (timersHealthy && forwardProven && paperSafe && historicalRunning) status = 'forward_pass_historical_running';
+          else if (timersHealthy && forwardProven && paperSafe) status = 'forward_pass_historical_unproven';
+          const out = process.env.GITHUB_OUTPUT;
+          fs.appendFileSync(out, `status=${status}\n`);
+          fs.appendFileSync(out, `timers_healthy=${timersHealthy}\n`);
+          fs.appendFileSync(out, `forward_proven=${forwardProven}\n`);
+          fs.appendFileSync(out, `paper_safe=${paperSafe}\n`);
+          fs.appendFileSync(out, `historical_complete=${historicalComplete}\n`);
+          fs.appendFileSync(out, `historical_running=${historicalRunning}\n`);
+          fs.appendFileSync(out, `paper_positions=${ledger.position_count ?? 'unknown'}\n`);
+          fs.appendFileSync(out, `paper_settlements=${ledger.settlement_count ?? 'unknown'}\n`);
+          if (status === 'failed') process.exitCode = 1;
+          NODE
+        env:
+          RESEARCH_SHA: ${{ steps.command.outputs.research_sha }}
+
+      - name: Upload non-sensitive read-only evidence
+        if: always() && steps.command.outcome == 'success' && steps.evidence.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-production-natural-cycle-${{ steps.command.outputs.research_sha }}
+          path: ${{ env.EVIDENCE_FILE }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Report evidence to Central Hub
+        if: always() && steps.command.outcome == 'success'
+        uses: actions/github-script@v7
+        env:
+          RESEARCH_SHA: ${{ steps.command.outputs.research_sha }}
+          EVIDENCE_OUTCOME: ${{ steps.evidence.outcome }}
+          VERDICT_OUTCOME: ${{ steps.verdict.outcome }}
+          VERDICT_STATUS: ${{ steps.verdict.outputs.status }}
+          TIMERS_HEALTHY: ${{ steps.verdict.outputs.timers_healthy }}
+          FORWARD_PROVEN: ${{ steps.verdict.outputs.forward_proven }}
+          PAPER_SAFE: ${{ steps.verdict.outputs.paper_safe }}
+          HISTORICAL_COMPLETE: ${{ steps.verdict.outputs.historical_complete }}
+          HISTORICAL_RUNNING: ${{ steps.verdict.outputs.historical_running }}
+          PAPER_POSITIONS: ${{ steps.verdict.outputs.paper_positions }}
+          PAPER_SETTLEMENTS: ${{ steps.verdict.outputs.paper_settlements }}
+        with:
+          script: |
+            const body = [
+              '[RESEARCH_PRODUCTION_NATURAL_CYCLE_EVIDENCE]',
+              `status: ${process.env.VERDICT_STATUS || 'failed'}`,
+              `research_sha: ${process.env.RESEARCH_SHA}`,
+              `workflow_run: ${context.runId}`,
+              `evidence_outcome: ${process.env.EVIDENCE_OUTCOME}`,
+              `verdict_outcome: ${process.env.VERDICT_OUTCOME}`,
+              `timers_healthy: ${process.env.TIMERS_HEALTHY || 'false'}`,
+              `first_natural_forward_proven: ${process.env.FORWARD_PROVEN || 'false'}`,
+              `paper_safety_proven: ${process.env.PAPER_SAFE || 'false'}`,
+              `fast_historical_complete: ${process.env.HISTORICAL_COMPLETE || 'false'}`,
+              `fast_historical_running: ${process.env.HISTORICAL_RUNNING || 'false'}`,
+              `paper_positions: ${process.env.PAPER_POSITIONS || 'unknown'}`,
+              `paper_settlements: ${process.env.PAPER_SETTLEMENTS || 'unknown'}`,
+              'server_files_written: 0',
+              'server_files_deleted: 0',
+              'server_processes_restarted: 0',
+              'deployment_executed: 0',
+              'database_changes: 0',
+              'live_trading: false',
+              'private_api: false',
+              'order_authority: false',
+              'real_order_count: 0',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 62,
+              body,
+            });

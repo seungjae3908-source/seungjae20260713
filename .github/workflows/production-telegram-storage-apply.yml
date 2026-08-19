@@ -1,0 +1,342 @@
+name: Production Telegram Storage Apply
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/production-telegram-storage-apply.yml'
+      - 'ops/apply-production-personal-telegram-storage.mjs'
+      - 'ops/verify-production-personal-telegram-storage.mjs'
+      - 'api-server/supabase/migrations/2026081501_personal_telegram_storage.sql'
+      - 'api-server/supabase/migrations/2026081502_personal_telegram_policy_cleanup.sql'
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  statuses: read
+
+concurrency:
+  group: production-telegram-storage-apply-${{ github.event_name == 'issue_comment' && github.event.issue.number == 23 && startsWith(github.event.comment.body, '/apply-telegram-storage ') && 'command' || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate isolated Production Telegram storage apply contract
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate exact-head storage tooling
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          node --check ops/apply-production-personal-telegram-storage.mjs
+          node --check ops/verify-production-personal-telegram-storage.mjs
+          node ops/verify-production-personal-telegram-storage.mjs --static
+
+  apply:
+    name: Owner-approved atomic Production Telegram storage apply
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 23 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control' &&
+      github.event.comment.user.login == github.repository_owner &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/apply-telegram-storage ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Parse exact owner command
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const body = String(process.env.COMMENT_BODY ?? '').trim();
+          const match = /^\/apply-telegram-storage ([0-9a-fA-F]{40}) ([0-9a-fA-F]{40})$/.exec(body);
+          if (!match) {
+            console.error('Expected /apply-telegram-storage <deployed-production-sha> <exact-current-main-sha>');
+            process.exit(1);
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, [
+            `active_sha=${match[1].toLowerCase()}`,
+            `target_sha=${match[2].toLowerCase()}`,
+            '',
+          ].join('\n'));
+          NODE
+
+      - name: Require exact current main SHA
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main "$TARGET_SHA"
+          MAIN_SHA="$(git rev-parse origin/main^{commit})"
+          [[ "$TARGET_SHA" == "$MAIN_SHA" ]] || {
+            echo "Telegram storage apply requires exact current main: target=$TARGET_SHA main=$MAIN_SHA" >&2
+            exit 1
+          }
+
+      - name: Require exact-main Required CI 6/6
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        with:
+          script: |
+            const required = [
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: process.env.TARGET_SHA,
+              per_page: 100,
+            });
+            for (const name of required) {
+              const latest = statuses.find((status) => status.context === name);
+              if (!latest || latest.state !== 'success') {
+                core.setFailed(`Required CI is not green: ${name}`);
+                return;
+              }
+            }
+            core.info('Exact-main Required CI 6/6 is green.');
+
+      - name: Require successful exact-SHA PostgreSQL Auth artifact
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        with:
+          script: |
+            const targetSha = process.env.TARGET_SHA;
+            const artifactName = `staging-postgres-auth-${targetSha}`;
+            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head_sha: targetSha,
+              branch: 'main',
+              event: 'issue_comment',
+              status: 'completed',
+              per_page: 100,
+            });
+            const candidates = runs
+              .filter((run) => run.name === 'Staging PostgreSQL Auth Gate'
+                && run.path === '.github/workflows/staging-postgres-auth-gate.yml'
+                && run.head_sha === targetSha
+                && run.head_branch === 'main'
+                && run.conclusion === 'success')
+              .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+            for (const run of candidates) {
+              const response = await github.rest.actions.listWorkflowRunArtifacts({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: run.id,
+                per_page: 100,
+              });
+              const artifact = (response.data.artifacts ?? []).find((item) =>
+                item.name === artifactName && item.expired !== true && item.workflow_run?.head_sha === targetSha);
+              if (artifact) {
+                core.info(`Exact PostgreSQL Auth evidence accepted from Run ${run.id}.`);
+                return;
+              }
+            }
+            core.setFailed(`No successful exact-SHA PostgreSQL Auth artifact exists for ${targetSha}.`);
+
+      - name: Require successful exact-SHA release-ready Staging verdict
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        with:
+          script: |
+            const targetSha = process.env.TARGET_SHA;
+            const artifactName = `staging-verdict-${targetSha}`;
+            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: artifactName,
+              per_page: 100,
+            });
+            const candidates = artifacts
+              .filter((artifact) => !artifact.expired && artifact.workflow_run?.head_sha === targetSha)
+              .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+            for (const artifact of candidates) {
+              const response = await github.rest.actions.getWorkflowRun({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: artifact.workflow_run.id,
+              });
+              const run = response.data;
+              if (run.event === 'workflow_dispatch'
+                && run.head_branch === 'main'
+                && run.head_sha === targetSha
+                && run.path === '.github/workflows/staging-readiness.yml'
+                && run.status === 'completed'
+                && run.conclusion === 'success') {
+                core.info(`Exact release-ready Staging evidence accepted from Run ${run.id}.`);
+                return;
+              }
+            }
+            core.setFailed(`No successful exact-SHA release-ready Staging verdict exists for ${targetSha}.`);
+
+      - name: Require deployed Production SHA provenance
+        uses: actions/github-script@v7
+        env:
+          ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
+        with:
+          script: |
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'production-deploy.yml',
+              event: 'workflow_dispatch',
+              per_page: 100,
+            });
+            const latestSuccessful = runs
+              .filter((run) => run.status === 'completed' && run.conclusion === 'success')
+              .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+            if (!latestSuccessful || String(latestSuccessful.head_sha).toLowerCase() !== process.env.ACTIVE_SHA) {
+              core.setFailed('Active Production SHA does not match the latest successful Production Deploy.');
+              return;
+            }
+            core.info(`Active Production provenance accepted from Run ${latestSuccessful.id}.`);
+
+      - name: Configure canonical Production SSH
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Require exact active Production runtime identity
+        env:
+          ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
+        run: |
+          set -Eeuo pipefail
+          quoted_sha="$(printf '%q' "$ACTIVE_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "ACTIVE_SHA=$quoted_sha node -" <<'NODE'
+          const fs = require('node:fs');
+          const { execFileSync } = require('node:child_process');
+          const processes = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8' }));
+          const selected = processes.find((item) => item.name === 'stock-app');
+          if (selected?.pm2_env?.status !== 'online') process.exit(2);
+          if (String(selected.pm2_env.DEPLOY_SHA ?? '').toLowerCase() !== process.env.ACTIVE_SHA) process.exit(3);
+          const marker = '/opt/stock-app/.deploy/current-sha';
+          if (!fs.existsSync(marker) || fs.readFileSync(marker, 'utf8').trim().toLowerCase() !== process.env.ACTIVE_SHA) process.exit(4);
+          NODE
+
+      - name: Apply and verify Production personal Telegram storage atomically
+        id: storage
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+          ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
+        run: |
+          set -Eeuo pipefail
+          artifact="$RUNNER_TEMP/production-personal-telegram-storage.json"
+          archive="$RUNNER_TEMP/production-personal-telegram-storage-tooling.tar.gz"
+          stderr_file="$RUNNER_TEMP/production-personal-telegram-storage.stderr"
+          remote_dir="$(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" 'mktemp -d /tmp/telegram-storage.XXXXXX')"
+          [[ "$remote_dir" =~ ^/tmp/telegram-storage\.[A-Za-z0-9]+$ ]] || exit 1
+          quoted_remote_dir="$(printf '%q' "$remote_dir")"
+          cleanup_remote() {
+            ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+              "$SSH_USER@$SSH_HOST" \
+              "case $quoted_remote_dir in /tmp/telegram-storage.*) find $quoted_remote_dir -depth -mindepth 1 -delete && rmdir $quoted_remote_dir ;; *) exit 2 ;; esac" \
+              >/dev/null 2>&1 || true
+          }
+          trap cleanup_remote EXIT
+
+          tar -czf "$archive" \
+            ops/apply-production-personal-telegram-storage.mjs \
+            api-server/supabase/migrations/2026081501_personal_telegram_storage.sql \
+            api-server/supabase/migrations/2026081502_personal_telegram_policy_cleanup.sql
+          scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$archive" "$SSH_USER@$SSH_HOST:$remote_dir/tooling.tar.gz"
+          remote_command="$(printf 'cd %q && tar -xzf tooling.tar.gz && EXPECTED_ACTIVE_SHA=%q APPROVED_TARGET_SHA=%q node ops/apply-production-personal-telegram-storage.mjs' \
+            "$remote_dir" "$ACTIVE_SHA" "$TARGET_SHA")"
+          if ! ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_command" > "$artifact" 2> "$stderr_file"; then
+            echo 'Production Telegram storage apply failed safely; remote diagnostics are intentionally not printed.' >&2
+            exit 1
+          fi
+          node ops/verify-production-personal-telegram-storage.mjs --artifact "$artifact" "$TARGET_SHA" "$ACTIVE_SHA"
+          printf 'artifact=%s\n' "$artifact" >> "$GITHUB_OUTPUT"
+
+      - name: Upload sanitized atomic storage evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-personal-telegram-storage-${{ steps.command.outputs.target_sha }}
+          path: ${{ steps.storage.outputs.artifact }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Report sanitized storage apply evidence
+        uses: actions/github-script@v7
+        env:
+          ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+          SOURCE_COMMENT_ID: ${{ github.event.comment.id }}
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+              body: [
+                'Production Telegram storage applied and verified atomically.',
+                '',
+                `- Active Production SHA before apply: \`${process.env.ACTIVE_SHA}\``,
+                `- Approved exact current main SHA: \`${process.env.TARGET_SHA}\``,
+                '- Atomic transaction: `true`',
+                '- Personal Telegram tables verified: `4/4`',
+                '- Policies fail closed: `true`',
+                '- Secret values recorded: `false`',
+                '- Order submitted: `false`',
+                '- Private trading API count: `0`',
+                '- Live trading authority: `false`',
+                `- Storage Apply Run ID: \`${context.runId}\``,
+                `- Source command comment ID: \`${process.env.SOURCE_COMMENT_ID}\``,
+              ].join('\n'),
+            });

@@ -1,0 +1,113 @@
+name: Meaningful Search Public Universe Audit
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/meaningful-search-public-audit.yml
+      - market-prediction-lab/scripts/meaningful-search-public-universe-entry.js
+      - market-prediction-lab/src/canonical-scanner-meaningful-search-runtime-v1.js
+      - market-prediction-lab/src/meaningful-search-profit-gate-v1.js
+      - market-prediction-lab/src/public-coverage-audit-v1.js
+      - market-prediction-lab/src/upbit-spot-history.js
+      - market-prediction-lab/src/yahoo-stock-history.js
+      - market-prediction-lab/tests/meaningful-search-*.test.js
+      - market-prediction-lab/tests/canonical-scanner-meaningful-search-runtime-v1.test.js
+
+permissions:
+  contents: read
+
+concurrency:
+  group: meaningful-search-public-audit-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+  cancel-in-progress: false
+
+jobs:
+  public-universe-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout exact PR HEAD
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Bundle exact-head audit runner
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir api-server exec esbuild \
+            ../market-prediction-lab/scripts/meaningful-search-public-universe-entry.js \
+            --bundle \
+            --platform=node \
+            --format=cjs \
+            --target=node22 \
+            --outfile=../meaningful-search-public-audit-runner.cjs
+
+      - name: Run exact-head four-market public audit
+        env:
+          NODE_NO_WARNINGS: '1'
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          node meaningful-search-public-audit-runner.cjs > meaningful-search-public-audit.json
+
+      - name: Verify audit safety and shape
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const report = JSON.parse(fs.readFileSync('meaningful-search-public-audit.json', 'utf8'));
+          const expected = ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES'];
+          const markets = new Map((report.markets ?? []).map((row) => [row.market, row]));
+          for (const market of expected) {
+            if (!markets.has(market)) throw new Error(`MISSING_MARKET:${market}`);
+          }
+          if (report.safety?.liveTrading !== false || report.safety?.realOrder !== false || report.safety?.privateApi !== false) {
+            throw new Error('AUDIT_SAFETY_CONTRACT_FAILED');
+          }
+          if (report.safetyAudit?.liveTrading !== false || report.safetyAudit?.realOrder !== false || report.safetyAudit?.privateApi !== false) {
+            throw new Error('AUDIT_RUNTIME_SAFETY_FAILED');
+          }
+          const summary = expected.map((market) => {
+            const row = markets.get(market);
+            return {
+              market,
+              eligible: row.universe?.eligible ?? null,
+              attempted: row.universe?.attempted ?? null,
+              success: row.providerSuccess ?? null,
+              rawProviderFailed: row.providerFailed ?? null,
+              explainedProviderExclusions: row.explainedProviderExclusions ?? null,
+              unresolvedRequiredFailures: row.unresolvedRequiredFailures ?? null,
+              softCandidates: row.softCandidates ?? null,
+              profitEvaluated: row.profitEvaluated ?? null,
+              finalCandidates: row.finalCandidates ?? null,
+              outcome: row.outcome ?? null,
+              fullSweepReady: row.fullSweepReady ?? null,
+            };
+          });
+          fs.writeFileSync('meaningful-search-public-audit-summary.json', JSON.stringify(summary, null, 2));
+          console.log(JSON.stringify(summary));
+          NODE
+
+      - name: Upload exact-head public audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: meaningful-search-public-audit-${{ github.event.pull_request.head.sha }}
+          path: |
+            meaningful-search-public-audit.json
+            meaningful-search-public-audit-summary.json
+          if-no-files-found: warn
+          retention-days: 14

@@ -3,10 +3,16 @@ import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, ArrowRight, BarChart3, BriefcaseBusiness, Radar, Star } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
+import { CenteredPageHeader } from '@/components/centered-page-header';
 import { UnifiedAssetSearch } from '@/components/unified-asset-search';
 import { useAnalysisSelection } from '@/lib/analysis-selection';
-import { api, apiGet, type SummaryItem } from '@/lib/api';
-import { unifiedAssetDetailPath } from '@/lib/unified-asset-search';
+import { apiGet, type SummaryItem } from '@/lib/api';
+import { useAssetMode } from '@/lib/asset-mode';
+import {
+  getMarketSummary,
+  validMarketSummaryItems,
+} from '@/lib/market-summary';
+import { unifiedAssetDetailPath, type UnifiedAssetSuggestion } from '@/lib/unified-asset-search';
 import {
   formatAppPercent,
   formatAppPrice,
@@ -34,7 +40,9 @@ function finite(value: unknown): number | null {
 
 function marketSummaryRows(items: SummaryItem[]): SummaryItem[] {
   const preferred = ['kospi', 'kosdaq', 'nasdaq', 'sp500', 'dow'];
-  const map = new Map(items.map((item) => [String(item.key ?? '').trim().toLowerCase(), item]));
+  const map = new Map(
+    validMarketSummaryItems(items).map((item) => [String(item.key ?? '').trim().toLowerCase(), item]),
+  );
   return preferred.map((key) => map.get(key)).filter((item): item is SummaryItem => Boolean(item)).slice(0, 4);
 }
 
@@ -56,6 +64,7 @@ function isTodaySeoul(value: string | undefined): boolean {
 
 export default function HomePage() {
   const [, navigate] = useLocation();
+  const assetMode = useAssetMode();
   const { selection } = useAnalysisSelection();
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>(() => readWatchlistItems().slice(0, 8));
 
@@ -71,7 +80,7 @@ export default function HomePage() {
 
   const market = useQuery({
     queryKey: ['home-dashboard-market'],
-    queryFn: () => api.summary(),
+    queryFn: getMarketSummary,
     staleTime: 30_000,
     refetchInterval: 60_000,
     refetchOnWindowFocus: false,
@@ -89,64 +98,97 @@ export default function HomePage() {
   const indices = useMemo(() => marketSummaryRows(market.data?.items ?? []), [market.data?.items]);
   const btc = useMemo(() => (bitcoin.data?.tickers ?? []).find((row) => baseCoinSymbol(row.symbol) === 'BTC') ?? null, [bitcoin.data?.tickers]);
   const signalIsCurrent = isTodaySeoul(selection?.selectedAt);
+  const marketWarning = market.isError
+    ? '주식 시장 요약 요청에 실패했습니다.'
+    : market.data?.dataState === 'provider_error'
+      ? '주식 시장 요약 공개 공급자의 응답을 확인하지 못했습니다. 실제 지수 가격을 표시하지 않습니다.'
+      : market.data?.dataState === 'partial'
+        ? '주식 시장 요약의 일부 공개 공급자 응답이 지연되어 확인된 실제 값만 표시합니다.'
+        : '';
   const warnings = [
-    market.isError ? '주식 시장 요약 공급자 응답을 확인하지 못했습니다.' : '',
+    marketWarning,
     bitcoin.isError ? '코인 공개 시세 공급자 응답을 확인하지 못했습니다.' : '',
   ].filter(Boolean);
+  const marketPlaceholder = market.isLoading
+    ? '시장 핵심 데이터를 불러오는 중입니다.'
+    : market.isError
+      ? '시장 요약 요청에 실패했습니다.'
+      : market.data?.dataState === 'provider_error'
+        ? '시장 지수 공개 공급자 응답을 확인하지 못했습니다.'
+        : '현재 확인된 실제 시장 지수 데이터가 없습니다.';
+
+  const openAsset = (item: UnifiedAssetSuggestion) => {
+    if (item.assetType === 'stock') {
+      assetMode.setAsset('stock');
+      assetMode.setStockMarket(item.market === 'US' ? 'US' : 'KR');
+    } else {
+      assetMode.setAsset('coin');
+      assetMode.setCoinMarket(item.market === 'futures' ? 'futures' : 'spot');
+    }
+    navigate(unifiedAssetDetailPath(item, '/home'));
+  };
 
   return (
-    <div className="h-full overflow-y-auto overscroll-contain bg-background pb-[calc(5.5rem+env(safe-area-inset-bottom))]">
-      <main className="mx-auto w-full max-w-6xl space-y-4 px-3 py-4 sm:px-5 lg:py-6">
-        <header className="space-y-3">
-          <div>
-            <p className="text-[11px] font-extrabold text-primary">투자 의사결정 대시보드</p>
-            <h1 className="mt-1 break-keep text-2xl font-black">오늘 시장과 관심사항</h1>
-            <p className="mt-1 break-keep text-xs font-semibold text-muted-foreground">상세 탐색보다 현재 시장·신호·관심종목을 먼저 확인합니다.</p>
-          </div>
-          <UnifiedAssetSearch placeholder="삼성전자 · AAPL · KRW-BTC · BTCUSDT 검색" onSelect={(item) => navigate(unifiedAssetDetailPath(item, '/home'))} />
-        </header>
-
-        {warnings.length > 0 && (
-          <section role="alert" className="rounded-3xl border border-amber-500/40 bg-amber-500/10 p-4">
-            <div className="flex items-center gap-2"><AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" /><h2 className="text-sm font-black">System Warning</h2></div>
-            <ul className="mt-2 space-y-1 break-keep text-xs font-bold text-muted-foreground">{warnings.map((warning) => <li key={warning}>• {warning}</li>)}</ul>
-          </section>
-        )}
-
-        <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="home-market-summary">
-          <div className="flex items-center justify-between gap-3"><div><p className="text-[11px] font-extrabold text-primary">오늘의 시장</p><h2 className="mt-1 text-base font-black">핵심 시장 요약</h2></div><button type="button" onClick={() => navigate('/market-overview')} className="shrink-0 text-xs font-black text-primary">시황 보기</button></div>
-          <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-5">
-            {market.isLoading && indices.length === 0 ? <DashboardPlaceholder label="시장 핵심 데이터를 불러오는 중입니다." /> : indices.map((item) => <MetricCard key={item.key} label={item.label} value={item.ok ? item.price.toLocaleString('ko-KR', { maximumFractionDigits: 2 }) : '데이터 부족'} sub={item.ok ? formatAppPercent(item.changePercent) : '공급자 확인 필요'} />)}
-            <MetricCard label="BTC · Upbit" value={btc ? formatAppPrice(finite(btc.price ?? btc.tradePrice), 'KRW') : bitcoin.isLoading ? '불러오는 중' : '데이터 부족'} sub={btc ? formatAppPercent(finite(btc.changePercent ?? btc.changePercent24h)) : bitcoin.isError ? '공급자 확인 필요' : '공개 현물 시세'} />
-          </div>
-        </section>
-
-        <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="home-signal-summary">
-          <div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2"><Radar className="h-4 w-4 text-primary" /><div><p className="text-[11px] font-extrabold text-primary">오늘의 신호</p><h2 className="text-base font-black">최근 검증 선택</h2></div></div><button type="button" onClick={() => navigate('/scanner')} className="shrink-0 text-xs font-black text-primary">Scanner 열기</button></div>
-          {selection && signalIsCurrent && selection.signalScore != null ? (
-            <button type="button" onClick={() => navigate('/scanner')} className="mt-3 flex min-h-16 w-full min-w-0 items-center justify-between gap-3 rounded-2xl border border-card-border bg-background p-3 text-left"><div className="min-w-0"><p className="truncate text-sm font-black">{selection.displayName}</p><p className="mt-1 truncate text-[11px] font-bold text-muted-foreground">{selection.ticker} · {selection.market} · {selection.timeframe}</p></div><div className="shrink-0 text-right"><p className="text-sm font-black">{selection.action && selection.action !== 'NONE' ? selection.action : '관찰'}</p><p className="text-[10px] font-bold text-muted-foreground">Score {selection.signalScore}</p></div></button>
-          ) : <p className="mt-3 rounded-2xl bg-background p-4 break-keep text-xs font-bold text-muted-foreground">오늘 선택한 Scanner 신호가 없습니다. Home이 별도 Scanner 요청을 만들지 않으므로 중복 분석이 발생하지 않습니다.</p>}
-        </section>
-
-        <div className="grid gap-4 lg:grid-cols-2">
-          <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="home-watchlist-summary">
-            <div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2"><Star className="h-4 w-4 text-primary" /><h2 className="text-sm font-black">관심종목</h2></div><button type="button" onClick={() => navigate('/watchlist')} className="text-xs font-black text-primary">전체보기</button></div>
-            <div className="mt-3 space-y-2">{watchlist.length ? watchlist.slice(0, 5).map((item) => <div key={item.ticker} className="flex min-h-14 items-center justify-between gap-3 rounded-2xl bg-background px-3 py-2"><div className="min-w-0"><p className="truncate text-sm font-black">{item.name || item.ticker}</p><p className="truncate text-[10px] font-bold text-muted-foreground">{item.ticker} · {item.market ?? '시장 미확인'}</p></div><div className="shrink-0 text-right text-xs font-black"><p>{item.price == null ? '가격 미확인' : formatAppPrice(item.price, item.currency ?? 'KRW')}</p><p className="text-[10px] text-muted-foreground">{item.changePercent == null ? '등락 미확인' : formatAppPercent(item.changePercent)}</p></div></div>) : <p className="rounded-2xl bg-background p-4 text-xs font-bold text-muted-foreground">관심종목이 없습니다. 검색 결과에서 관심종목에 추가하면 여기에 표시됩니다.</p>}</div>
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
+      <CenteredPageHeader
+        title="오늘 시장과 관심사항"
+        eyebrow="홈"
+        infoTitle="홈 화면 안내"
+        infoItems={[
+          '시장·최근 신호·관심종목을 먼저 보여주며 Scanner를 중복 실행하지 않습니다.',
+          '국내주식·미국주식·코인 현물·코인 선물을 아래 한 검색창에서 찾을 수 있습니다.',
+        ]}
+      />
+      <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-[calc(5.5rem+env(safe-area-inset-bottom))]">
+        <div className="mx-auto w-full max-w-6xl space-y-4 px-3 py-4 sm:px-5 lg:py-6">
+          <section className="rounded-2xl border border-card-border bg-card p-3 sm:p-4" data-testid="home-single-search">
+            <UnifiedAssetSearch placeholder="삼성전자 · AAPL · KRW-BTC · BTCUSDT 검색" onSelect={openAsset} />
           </section>
 
-          <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="home-portfolio-summary">
-            <div className="flex items-center gap-2"><BriefcaseBusiness className="h-4 w-4 text-primary" /><h2 className="text-sm font-black">Portfolio</h2></div>
-            <p className="mt-3 break-keep text-xs font-bold leading-5 text-muted-foreground">Home에서는 private 계좌·잔고·포지션 API를 새로 호출하지 않습니다. 포트폴리오 권한이 있는 경우 기존 전용 화면에서 자산·손익·Risk를 확인하세요.</p>
-            <button type="button" onClick={() => navigate('/portfolio')} className="mt-4 flex min-h-11 w-full items-center justify-center gap-2 rounded-2xl border border-card-border bg-background text-sm font-black">포트폴리오 열기 <ArrowRight className="h-4 w-4" /></button>
+          {warnings.length > 0 && (
+            <details role="alert" className="rounded-2xl border border-amber-500/40 bg-amber-500/10 px-3 py-2">
+              <summary className="flex min-h-9 cursor-pointer list-none items-center gap-2 text-xs font-black text-amber-500 [&::-webkit-details-marker]:hidden">
+                <AlertTriangle className="h-4 w-4 shrink-0" />일부 시장 데이터 확인 필요
+              </summary>
+              <ul className="border-t border-amber-500/20 pt-2 text-xs font-bold leading-5 text-muted-foreground">{warnings.map((warning) => <li key={warning}>• {warning}</li>)}</ul>
+            </details>
+          )}
+
+          <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="home-market-summary">
+            <div className="flex items-center justify-between gap-3"><div><p className="text-[11px] font-extrabold text-primary">오늘의 시장</p><h2 className="mt-1 text-base font-black">핵심 시장 요약</h2></div><button type="button" onClick={() => navigate('/market-overview')} className="inline-flex min-h-11 shrink-0 items-center px-2 text-xs font-black text-primary">시황 보기</button></div>
+            <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-5">
+              {indices.length === 0 ? <DashboardPlaceholder label={marketPlaceholder} /> : indices.map((item) => <MetricCard key={item.key} label={item.label} value={item.price.toLocaleString('ko-KR', { maximumFractionDigits: 2 })} sub={formatAppPercent(item.changePercent)} />)}
+              <MetricCard label="BTC · Upbit" value={btc ? formatAppPrice(finite(btc.price ?? btc.tradePrice), 'KRW') : bitcoin.isLoading ? '불러오는 중' : '데이터 부족'} sub={btc ? formatAppPercent(finite(btc.changePercent ?? btc.changePercent24h)) : bitcoin.isError ? '공급자 확인 필요' : '공개 현물 시세'} />
+            </div>
+          </section>
+
+          <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="home-signal-summary">
+            <div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2"><Radar className="h-4 w-4 text-primary" /><div><p className="text-[11px] font-extrabold text-primary">오늘의 신호</p><h2 className="text-base font-black">최근 검증 선택</h2></div></div><button type="button" onClick={() => navigate('/scanner')} className="inline-flex min-h-11 shrink-0 items-center px-2 text-xs font-black text-primary">Scanner 열기</button></div>
+            {selection && signalIsCurrent && selection.signalScore != null ? (
+              <button type="button" onClick={() => navigate('/scanner')} className="mt-3 flex min-h-16 w-full min-w-0 items-center justify-between gap-3 rounded-2xl border border-card-border bg-background p-3 text-left"><div className="min-w-0"><p className="truncate text-sm font-black">{selection.displayName}</p><p className="mt-1 truncate text-[11px] font-bold text-muted-foreground">{selection.ticker} · {selection.market} · {selection.timeframe}</p></div><div className="shrink-0 text-right"><p className="text-sm font-black">{selection.action && selection.action !== 'NONE' ? selection.action : '관찰'}</p><p className="text-[10px] font-bold text-muted-foreground">Score {selection.signalScore}</p></div></button>
+            ) : <p className="mt-3 rounded-2xl bg-background p-4 break-keep text-xs font-bold text-muted-foreground">오늘 선택한 Scanner 신호가 없습니다. Home이 별도 Scanner 요청을 만들지 않으므로 중복 분석이 발생하지 않습니다.</p>}
+          </section>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="home-watchlist-summary">
+              <div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2"><Star className="h-4 w-4 text-primary" /><h2 className="text-sm font-black">관심종목</h2></div><button type="button" onClick={() => navigate('/watchlist')} className="inline-flex min-h-11 shrink-0 items-center px-2 text-xs font-black text-primary">전체보기</button></div>
+              <div className="mt-3 space-y-2">{watchlist.length ? watchlist.slice(0, 5).map((item) => <div key={item.ticker} className="flex min-h-14 items-center justify-between gap-3 rounded-2xl bg-background px-3 py-2"><div className="min-w-0"><p className="truncate text-sm font-black">{item.name || item.ticker}</p><p className="truncate text-[10px] font-bold text-muted-foreground">{item.ticker} · {item.market ?? '시장 미확인'}</p></div><div className="shrink-0 text-right text-xs font-black"><p>{item.price == null ? '가격 미확인' : formatAppPrice(item.price, item.currency ?? 'KRW')}</p><p className="text-[10px] text-muted-foreground">{item.changePercent == null ? '등락 미확인' : formatAppPercent(item.changePercent)}</p></div></div>) : <p className="rounded-2xl bg-background p-4 text-xs font-bold text-muted-foreground">관심종목이 없습니다. 검색 결과에서 관심종목에 추가하면 여기에 표시됩니다.</p>}</div>
+            </section>
+
+            <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="home-portfolio-summary">
+              <div className="flex items-center gap-2"><BriefcaseBusiness className="h-4 w-4 text-primary" /><h2 className="text-sm font-black">Portfolio</h2></div>
+              <p className="mt-3 break-keep text-xs font-bold leading-5 text-muted-foreground">Home에서는 private 계좌·잔고·포지션 API를 새로 호출하지 않습니다. 포트폴리오 권한이 있는 경우 기존 전용 화면에서 자산·손익·Risk를 확인하세요.</p>
+              <button type="button" onClick={() => navigate('/portfolio')} className="mt-4 flex min-h-11 w-full items-center justify-center gap-2 rounded-2xl border border-card-border bg-background text-sm font-black">포트폴리오 열기 <ArrowRight className="h-4 w-4" /></button>
+            </section>
+          </div>
+
+          <section className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="빠른 이동">
+            <QuickLink label="국내" onClick={() => navigate('/stocks/kr')} />
+            <QuickLink label="미국" onClick={() => navigate('/stocks/us')} />
+            <QuickLink label="코인 현물" onClick={() => navigate('/coins/spot')} />
+            <QuickLink label="코인 선물" onClick={() => navigate('/coins/futures')} />
           </section>
         </div>
-
-        <section className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="빠른 이동">
-          <QuickLink label="국내" onClick={() => navigate('/stocks/kr')} />
-          <QuickLink label="미국" onClick={() => navigate('/stocks/us')} />
-          <QuickLink label="코인 현물" onClick={() => navigate('/coins/spot')} />
-          <QuickLink label="코인 선물" onClick={() => navigate('/coins/futures')} />
-        </section>
       </main>
       <BottomNav />
     </div>
