@@ -193,7 +193,7 @@ async function loadUsDocuments(): Promise<UnifiedAssetDocument[]> {
     baseSymbol: row.ticker,
     quoteCurrency: row.currency || 'USD',
     active: true,
-    provider: 'FINNHUB',
+    provider: row.source === 'static-catalog' ? 'CATALOG' : 'FINNHUB',
     dataAsOf,
     liquidityRank: index + 1,
   }));
@@ -289,7 +289,7 @@ const PROVIDER_LOADERS: Record<ProviderKey, () => Promise<UnifiedAssetDocument[]
 function providerForDocument(document: UnifiedAssetDocument): ProviderKey | null {
   const value = document.provider.toUpperCase();
   if (value === 'KRX') return 'krx';
-  if (value === 'FINNHUB') return 'finnhub';
+  if (value === 'FINNHUB' || value === 'CATALOG') return 'finnhub';
   if (value === 'UPBIT') return 'upbit';
   if (value === 'BITGET') return 'bitget';
   return null;
@@ -346,8 +346,18 @@ export async function refreshUnifiedAssetSearchIndex(): Promise<UnifiedAssetSear
     settled.forEach((result, index) => {
       const provider = providerKeys[index];
       if (result.status === 'fulfilled' && result.value.rows.length > 0) {
+        const staticUsFallback = provider === 'finnhub'
+          && result.value.rows.every((row) => row.provider.toUpperCase() === 'CATALOG');
         documents.push(...result.value.rows);
-        providers.push({ provider, status: 'ok', count: result.value.rows.length, dataAsOf: result.value.rows[0]?.dataAsOf ?? nowIso() });
+        providers.push({
+          provider,
+          status: staticUsFallback ? 'stale' : 'ok',
+          count: result.value.rows.length,
+          dataAsOf: result.value.rows[0]?.dataAsOf ?? nowIso(),
+          message: staticUsFallback
+            ? 'Finnhub 심볼 마스터를 사용할 수 없어 저장소 정적 US 카탈로그로 제한된 검색을 제공합니다.'
+            : undefined,
+        });
         return;
       }
       const fallback = documentsForProvider(previous, provider);

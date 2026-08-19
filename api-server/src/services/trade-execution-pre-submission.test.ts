@@ -13,6 +13,8 @@ import {
   marketIntelligenceSymbolForTradingPlan,
   setTradingPlanMarketIntelligenceRunnerForTests,
 } from './trade-market-intelligence.service';
+import { allowServerProfitabilityAttestationForTests } from './trade-profitability-attestation.test-fixture';
+import { setTradeProfitabilityAttestationRunnerForTests } from './trade-profitability-attestation.service';
 import {
   DEFAULT_TRADING_POLICY,
   type TradingMarketSnapshot,
@@ -116,6 +118,7 @@ async function setup() {
   process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
   process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
   setTradingPlanMarketIntelligenceRunnerForTests(eligibleMarketIntelligence);
+  setTradeProfitabilityAttestationRunnerForTests(allowServerProfitabilityAttestationForTests);
   const repository = new InMemoryTradingRepository();
   await repository.savePolicy(USER_ID, {
     ...DEFAULT_TRADING_POLICY,
@@ -207,6 +210,7 @@ function installUpbitMock(currentPrice: number) {
 function resetEnvironment() {
   globalThis.fetch = nativeFetch;
   setTradingPlanMarketIntelligenceRunnerForTests(null);
+  setTradeProfitabilityAttestationRunnerForTests(null);
   delete process.env.TRADING_CREDENTIAL_MASTER_KEY;
   delete process.env.ORDER_EXECUTION_ENABLED;
   delete process.env.LIVE_TRADING_ACTIVATION_APPROVED;
