@@ -7,6 +7,11 @@ on:
     paths:
       - market-prediction-lab/scripts/run-us-microcap-explosion-proxy-backtest.py
       - .github/workflows/research-us-microcap-explosion-proxy.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - market-prediction-lab/scripts/run-us-microcap-explosion-proxy-backtest.py
+      - .github/workflows/research-us-microcap-explosion-proxy.yml
   workflow_dispatch:
 
 permissions:
