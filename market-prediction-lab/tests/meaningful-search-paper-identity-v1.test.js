@@ -111,11 +111,11 @@ test("cost policy mismatch is blocked before Paper", () => {
   assert.ok(row.blockers.includes("PAPER_COST_POLICY_VERSION_MISMATCH"));
 });
 
-test("missing regime evidence is blocked instead of invented", () => {
+test("missing regime evidence is preserved explicitly as UNKNOWN", () => {
   const input = decision();
   delete input.candidate.signal.regime;
   delete input.candidate.signal.learningSnapshot.marketRegime;
   const row = prepareMeaningfulSearchPaperCandidate(input);
-  assert.equal(row.status, "BLOCKED");
-  assert.ok(row.blockers.includes("REGIME_REQUIRED"));
+  assert.equal(row.status, "PAPER_ELIGIBLE");
+  assert.equal(row.candidate.paperIdentity.regime, "UNKNOWN");
 });
