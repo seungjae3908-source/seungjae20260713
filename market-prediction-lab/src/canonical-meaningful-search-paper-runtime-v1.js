@@ -1,6 +1,11 @@
 import { evaluateProfitGate } from "./meaningful-search-profit-gate-v1.js";
 import { meaningfulSearchPaperCandidates } from "./meaningful-search-paper-bridge-v1.js";
 import { runCanonicalMeaningfulSearchMarket } from "./canonical-scanner-meaningful-search-runtime-v1.js";
+import {
+  deriveExecutionDecision,
+  normalizeSignalDirection,
+  resolveSignalLifecycle,
+} from "./signal-direction-contract-v1.js";
 
 function freeze(value) { return Object.freeze(value); }
 function finite(value) { return typeof value === "number" && Number.isFinite(value); }
@@ -54,6 +59,41 @@ function candidateForPaper(card) {
   return card?.paperCandidate && typeof card.paperCandidate === "object" ? card.paperCandidate : card;
 }
 
+function needsPaperExitEvaluation(candidate) {
+  const signal = candidate?.signal;
+  if (!signal || !finite(signal.timestampMs)) return false;
+  const evaluatedAtMs = finite(candidate?.riskEvidence?.evaluatedAtMs)
+    ? candidate.riskEvidence.evaluatedAtMs
+    : finite(candidate?.execution?.dataEvidence?.asOfMs)
+      ? candidate.execution.dataEvidence.asOfMs
+      : signal.timestampMs;
+  try {
+    const lifecycle = resolveSignalLifecycle({
+      lifecycle: signal.lifecycle ?? candidate?.signalLifecycle ?? "ACTIVE",
+      generatedAtMs: signal.timestampMs,
+      ttlMs: signal.ttlMs,
+      expiresAtMs: signal.expiresAtMs,
+      evaluatedAtMs,
+      invalidated: signal.invalidated === true || candidate?.invalidated === true,
+      enteredPaper: signal.lifecycle === "ENTERED_PAPER",
+      settled: signal.lifecycle === "SETTLED",
+    });
+    const direction = normalizeSignalDirection(
+      signal.signalDirection ?? signal.direction ?? candidate?.signalDirection ?? candidate?.direction,
+    );
+    const execution = deriveExecutionDecision({
+      market: signal.market,
+      direction,
+      positionSide: signal.positionSide ?? candidate?.positionSide ?? "FLAT",
+      lifecycle,
+      reduceOnly: signal.reduceOnly === true || candidate?.reduceOnly === true,
+    });
+    return execution.executionIntent === "EXIT" || execution.executionIntent === "REDUCE";
+  } catch {
+    return false;
+  }
+}
+
 function runtimeStatus(search, evaluatedCount, bridge) {
   if (search.outcome === "SEARCH_FAILURE") return "SEARCH_FAILURE_BLOCKED";
   if (bridge.blocked > 0) return "PAPER_CANDIDATE_CONTRACT_BLOCKED";
@@ -86,8 +126,8 @@ export async function runCanonicalMeaningfulSearchPaperMarket({
         profitGate,
       }),
     });
-    evaluated.push(row);
     if (profitGate.eligible === true) captured.push(row);
+    if (profitGate.eligible === true || needsPaperExitEvaluation(row.candidate)) evaluated.push(row);
     return rawInput;
   };
 
@@ -103,8 +143,9 @@ export async function runCanonicalMeaningfulSearchPaperMarket({
     throw new Error("PAPER_CAPTURE_PROFIT_GATE_COUNT_MISMATCH");
   }
 
+  const bridgeSearchOutcome = search.outcome === "SEARCH_FAILURE" ? "SEARCH_FAILURE" : "TRADE_CANDIDATES";
   const bridge = meaningfulSearchPaperCandidates(evaluated.map((row) => ({
-    searchOutcome: search.outcome,
+    searchOutcome: bridgeSearchOutcome,
     candidate: row.candidate,
     profitGate: row.profitGate,
     profitEvidence: row.profitEvidence,
