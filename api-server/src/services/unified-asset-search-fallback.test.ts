@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createUnifiedAssetId, type UnifiedAssetDocument } from '../lib/search-normalization';
+import { clearUsUniverseCacheForTests, getUsUniverse } from '../providers/us-universe';
 import {
   replaceUnifiedAssetSearchSnapshotForTests,
   resetUnifiedAssetSearchStateForTests,
@@ -71,5 +72,29 @@ test('keeps a provider error explicit when no last-good rows exist', async () =>
     assert.equal(response.providers.find((item) => item.provider === 'finnhub')?.message, 'FINNHUB_UNAVAILABLE');
   } finally {
     resetUnifiedAssetSearchStateForTests();
+  }
+});
+
+test('uses the repository US catalog when Finnhub credentials are absent', async () => {
+  const keys = ['FINNHUB_API_KEY', 'VITE_FINNHUB_API_KEY', 'FINNHUB_KEY'] as const;
+  const previous = new Map(keys.map((key) => [key, process.env[key]]));
+  for (const key of keys) delete process.env[key];
+  clearUsUniverseCacheForTests();
+  try {
+    const rows = await getUsUniverse();
+    const aapl = rows.find((row) => row.ticker === 'AAPL');
+    const nvda = rows.find((row) => row.ticker === 'NVDA');
+    assert.ok(rows.length > 0);
+    assert.equal(aapl?.name, 'Apple');
+    assert.equal(nvda?.name, 'NVIDIA');
+    assert.equal(aapl?.source, 'static-catalog');
+    assert.equal(nvda?.source, 'static-catalog');
+  } finally {
+    clearUsUniverseCacheForTests();
+    for (const key of keys) {
+      const value = previous.get(key);
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
   }
 });
