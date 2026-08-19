@@ -10,6 +10,10 @@ export const DEFAULT_QUALITY_UNIVERSE = Object.freeze({
   maxExtendedSpreadBps: 35,
 });
 
+export const DEFAULT_QUALITY_DATA_POLICY = Object.freeze({
+  maxQuoteAgeMs: 15_000,
+});
+
 const EXCLUDED_SECURITY_TYPES = new Set([
   "OTC",
   "PENNY_STOCK",
@@ -75,19 +79,32 @@ export function classifyUsQualityUniverse(raw, policy = DEFAULT_QUALITY_UNIVERSE
 
 function normalizeCandles(raw) {
   if (!Array.isArray(raw) || raw.length < 8) throw new PredictionInputError("at least 8 intraday candles are required");
-  return Object.freeze(raw.map((candle, index) => {
+  const candles = raw.map((candle, index) => {
     if (!candle || typeof candle !== "object" || Array.isArray(candle)) throw new PredictionInputError(`invalid candle at ${index}`);
     const open = positiveNumber(candle.open, `candles[${index}].open`);
     const high = positiveNumber(candle.high, `candles[${index}].high`);
     const low = positiveNumber(candle.low, `candles[${index}].low`);
     const close = positiveNumber(candle.close, `candles[${index}].close`);
     const volume = finiteNumber(candle.volume, `candles[${index}].volume`);
+    const timestamp = finiteNumber(candle.timestamp, `candles[${index}].timestamp`);
     if (volume < 0) throw new PredictionInputError(`candles[${index}].volume must be non-negative`);
     if (low > Math.min(open, close) || high < Math.max(open, close) || high < low) throw new PredictionInputError(`invalid OHLC at ${index}`);
     const session = String(candle.session ?? "").toUpperCase();
     if (!VALID_SESSIONS.has(session)) throw new PredictionInputError(`invalid session at ${index}`);
-    return Object.freeze({ open, high, low, close, volume, session, timestamp: candle.timestamp ?? index });
-  }));
+    return Object.freeze({ open, high, low, close, volume, session, timestamp });
+  });
+  for (let index = 1; index < candles.length; index += 1) {
+    if (!(candles[index].timestamp > candles[index - 1].timestamp)) {
+      throw new PredictionInputError("candle timestamps must be strictly increasing");
+    }
+  }
+  return Object.freeze(candles);
+}
+
+function normalizeDataPolicy(raw = {}) {
+  const maxQuoteAgeMs = finiteNumber(raw.maxQuoteAgeMs ?? DEFAULT_QUALITY_DATA_POLICY.maxQuoteAgeMs, "dataPolicy.maxQuoteAgeMs");
+  if (!(maxQuoteAgeMs > 0) || maxQuoteAgeMs > 300_000) throw new PredictionInputError("invalid dataPolicy.maxQuoteAgeMs");
+  return Object.freeze({ maxQuoteAgeMs });
 }
 
 function sessionVwap(candles) {
@@ -136,6 +153,7 @@ export function evaluateUsQualityDaytradeSetup(raw) {
 
   const candles = normalizeCandles(raw.candles);
   const params = normalizeSetupParams(raw.params);
+  const dataPolicy = normalizeDataPolicy(raw.dataPolicy);
   const session = candles.at(-1).session;
   if (!candles.every((candle) => candle.session === session)) {
     return Object.freeze({ status: "BLOCKED_DATA", reason: "MIXED_SESSION_CANDLES", universe, session });
@@ -144,15 +162,36 @@ export function evaluateUsQualityDaytradeSetup(raw) {
   const bid = raw.quote?.bid == null ? null : positiveNumber(raw.quote.bid, "quote.bid");
   const ask = raw.quote?.ask == null ? null : positiveNumber(raw.quote.ask, "quote.ask");
   if (bid == null || ask == null || ask < bid) return Object.freeze({ status: "BLOCKED_DATA", reason: "VALID_BID_ASK_REQUIRED", universe, session });
+
+  const asOfMs = raw.asOfMs == null ? null : finiteNumber(raw.asOfMs, "asOfMs");
+  const quoteTimestampMs = raw.quote?.timestampMs == null ? null : finiteNumber(raw.quote.timestampMs, "quote.timestampMs");
+  if (asOfMs == null || quoteTimestampMs == null) {
+    return Object.freeze({ status: "BLOCKED_DATA", reason: "QUOTE_FRESHNESS_EVIDENCE_REQUIRED", universe, session });
+  }
+  if (quoteTimestampMs > asOfMs) {
+    return Object.freeze({ status: "BLOCKED_DATA", reason: "QUOTE_TIMESTAMP_IN_FUTURE", universe, session, asOfMs, quoteTimestampMs });
+  }
+  const quoteAgeMs = asOfMs - quoteTimestampMs;
+  if (quoteAgeMs > dataPolicy.maxQuoteAgeMs) {
+    return Object.freeze({
+      status: "BLOCKED_DATA",
+      reason: "STALE_QUOTE",
+      universe,
+      session,
+      quoteAgeMs,
+      maxQuoteAgeMs: dataPolicy.maxQuoteAgeMs,
+    });
+  }
+
   const mid = (bid + ask) / 2;
   const spreadBps = mid > 0 ? ((ask - bid) / mid) * 10_000 : Number.POSITIVE_INFINITY;
   const maxSpreadBps = session === "REGULAR"
     ? Number(raw.universePolicy?.maxRegularSpreadBps ?? DEFAULT_QUALITY_UNIVERSE.maxRegularSpreadBps)
     : Number(raw.universePolicy?.maxExtendedSpreadBps ?? DEFAULT_QUALITY_UNIVERSE.maxExtendedSpreadBps);
-  if (spreadBps > maxSpreadBps) return Object.freeze({ status: "ABSTAIN", reason: "SPREAD_TOO_WIDE", universe, session, spreadBps, maxSpreadBps });
+  if (spreadBps > maxSpreadBps) return Object.freeze({ status: "ABSTAIN", reason: "SPREAD_TOO_WIDE", universe, session, spreadBps, maxSpreadBps, quoteAgeMs });
 
   const relativeVolume = finiteNumber(raw.relativeVolume, "relativeVolume");
-  if (relativeVolume < params.minRelativeVolume) return Object.freeze({ status: "ABSTAIN", reason: "RVOL_TOO_LOW", universe, session, relativeVolume });
+  if (relativeVolume < params.minRelativeVolume) return Object.freeze({ status: "ABSTAIN", reason: "RVOL_TOO_LOW", universe, session, relativeVolume, quoteAgeMs });
 
   const vwap = sessionVwap(candles);
   if (!(vwap > 0)) return Object.freeze({ status: "BLOCKED_DATA", reason: "VWAP_UNAVAILABLE", universe, session });
@@ -177,6 +216,7 @@ export function evaluateUsQualityDaytradeSetup(raw) {
       session,
       vwap,
       spreadBps,
+      quoteAgeMs,
       relativeVolume,
       executionAuthority: "NONE",
       liveTradingAllowed: false,
@@ -216,6 +256,7 @@ export function evaluateUsQualityDaytradeSetup(raw) {
     catalystClass,
     vwap,
     spreadBps,
+    quoteAgeMs,
     relativeVolume,
     impulsePct,
     pullbackPct,
