@@ -1,9 +1,12 @@
+import type { TradeProfitabilityAttestation } from './trade-profitability-attestation.service';
+
 export type FourMarketAutoMarket = 'KR_STOCK' | 'US_STOCK' | 'CRYPTO_SPOT' | 'CRYPTO_FUTURES';
 export type FourMarketAutoProvider = 'TOSS' | 'UPBIT' | 'BITGET';
 export type FourMarketAutoDirection = 'BUY' | 'SELL_EXIT' | 'LONG' | 'SHORT';
 export type FourMarketAutoMarginMode = 'isolated' | 'crossed';
 
 export interface FourMarketStrategyIdentity {
+  strategyId?: string;
   provider: FourMarketAutoProvider;
   market: FourMarketAutoMarket;
   symbolOrUniverse: string;
@@ -87,6 +90,7 @@ export interface FourMarketAutoReadinessInput {
   providerEvidence: FourMarketAutoProviderEvidence;
   paperGateReady: boolean;
   shadowGateReady: boolean;
+  serverProfitabilityAttestation?: TradeProfitabilityAttestation | null;
 }
 
 export type FourMarketAutoReadinessReason =
@@ -103,6 +107,10 @@ export type FourMarketAutoReadinessReason =
   | 'DUPLICATE_OR_RECOVERY_CONTRACT_INCOMPLETE'
   | 'PAPER_GATE_NOT_READY'
   | 'SHADOW_GATE_NOT_READY'
+  | 'SERVER_PROFITABILITY_ATTESTATION_REQUIRED'
+  | 'SERVER_PROFITABILITY_ATTESTATION_BLOCKED'
+  | 'SERVER_PROFITABILITY_IDENTITY_MISMATCH'
+  | 'SERVER_PROFITABILITY_CONTRACT_INVALID'
   | 'CASH_DIRECTION_NOT_ALLOWED'
   | 'CASH_SELL_MUST_REDUCE'
   | 'TOSS_EVIDENCE_MISMATCH'
@@ -126,8 +134,17 @@ export interface FourMarketAutoFrozenPlan {
   readonly direction: FourMarketAutoDirection;
   readonly reduceOnly: boolean;
   readonly quantity: number;
+  readonly strategyId: string;
+  readonly strategyVersion: string;
+  readonly parameterHash: string;
+  readonly timeframe: string;
+  readonly horizon: string;
+  readonly regime: string;
   readonly costPolicyVersion: string;
   readonly researchCodeSha: string;
+  readonly profitabilitySource: 'SERVER_STRATEGY_PROMOTION';
+  readonly clientEconomicsTrusted: false;
+  readonly orderAuthorityGranted: false;
 }
 
 export interface FourMarketAutoReadinessResult {
@@ -155,6 +172,7 @@ const finitePositive = (value: number): boolean => Number.isFinite(value) && val
 
 function identityComplete(identity: FourMarketStrategyIdentity): boolean {
   return [
+    identity.strategyId ?? '',
     identity.symbolOrUniverse,
     identity.strategyFamily,
     identity.strategyVersion,
@@ -174,6 +192,40 @@ function identityMatches(input: FourMarketAutoReadinessInput): boolean {
     && identity.symbolOrUniverse === input.symbol
     && identity.direction === input.direction
     && identity.costPolicyVersion === input.costPolicy.version;
+}
+
+function validateServerProfitability(
+  input: FourMarketAutoReadinessInput,
+  reasons: FourMarketAutoReadinessReason[],
+): void {
+  const attestation = input.serverProfitabilityAttestation;
+  if (!attestation) {
+    reasons.push('SERVER_PROFITABILITY_ATTESTATION_REQUIRED');
+    return;
+  }
+
+  if (attestation.required !== true
+    || attestation.source !== 'SERVER_STRATEGY_PROMOTION'
+    || attestation.clientEconomicsTrusted !== false
+    || attestation.orderAuthorityGranted !== false
+    || (attestation.allowed && attestation.blockCodes.length > 0)) {
+    reasons.push('SERVER_PROFITABILITY_CONTRACT_INVALID');
+  }
+
+  if (!attestation.allowed
+    || attestation.promotionState !== 'PROMOTION_CANDIDATE'
+    || !attestation.serverEconomics) {
+    reasons.push('SERVER_PROFITABILITY_ATTESTATION_BLOCKED');
+  }
+
+  const identity = input.strategyIdentity;
+  if (!identity.strategyId
+    || attestation.strategyId !== identity.strategyId
+    || attestation.researchCodeSha !== identity.researchCodeSha
+    || attestation.parameterHash !== identity.parameterHash
+    || attestation.costPolicyVersion !== identity.costPolicyVersion) {
+    reasons.push('SERVER_PROFITABILITY_IDENTITY_MISMATCH');
+  }
 }
 
 function validateCommon(input: FourMarketAutoReadinessInput, nowMs: number, reasons: FourMarketAutoReadinessReason[]): void {
@@ -224,6 +276,7 @@ function validateCommon(input: FourMarketAutoReadinessInput, nowMs: number, reas
   }
   if (!input.paperGateReady) reasons.push('PAPER_GATE_NOT_READY');
   if (!input.shadowGateReady) reasons.push('SHADOW_GATE_NOT_READY');
+  validateServerProfitability(input, reasons);
 }
 
 function validateCashDirection(input: FourMarketAutoReadinessInput, reasons: FourMarketAutoReadinessReason[]): void {
@@ -305,8 +358,17 @@ export function evaluateFourMarketAutoPredeployReadiness(
         direction: input.direction,
         reduceOnly: input.reduceOnly,
         quantity: input.risk.quantity,
+        strategyId: String(input.strategyIdentity.strategyId),
+        strategyVersion: input.strategyIdentity.strategyVersion,
+        parameterHash: input.strategyIdentity.parameterHash,
+        timeframe: input.strategyIdentity.timeframe,
+        horizon: input.strategyIdentity.horizon,
+        regime: input.strategyIdentity.regime,
         costPolicyVersion: input.costPolicy.version,
         researchCodeSha: input.strategyIdentity.researchCodeSha,
+        profitabilitySource: 'SERVER_STRATEGY_PROMOTION',
+        clientEconomicsTrusted: false,
+        orderAuthorityGranted: false,
       })
     : null;
 
