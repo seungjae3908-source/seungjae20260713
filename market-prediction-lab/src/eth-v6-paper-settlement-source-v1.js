@@ -6,6 +6,7 @@ import { BITGET_STANDARD_TAKER_RESEARCH_COSTS } from "./historical-backtest-data
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const LOOKBACK_MS = 90 * DAY_MS;
+const FUNDING_CONTEXT_LOOKBACK_MS = DAY_MS;
 const COST_POLICY_VERSION = "bitget-standard-taker-research-v1";
 const EXECUTION_POLICY_VERSION = "eth-v6-natural-forward-next-open-v1";
 const CONTRACTS_ENDPOINT = "/api/v2/mix/market/contracts";
@@ -138,20 +139,19 @@ export async function loadBitgetEthV6PaperSettlement({
   const lifecycle = validateSettledRecord(record, nowMs);
   validatePosition(position, record, researchCodeSha);
 
-  // Shadow can detect a gap from the current open-only daily candle. Paper waits
-  // until that same daily candle is closed, then independently verifies its open.
   if (nowMs < lifecycle.exitTimestamp + DAY_MS) {
     return Object.freeze({ status: "WAITING_CLOSED_EXIT_BAR", settlementInput: null });
   }
 
   const startTime = Math.max(1, lifecycle.exitTimestamp - LOOKBACK_MS);
   const endTime = lifecycle.exitTimestamp + DAY_MS;
+  const fundingContextStart = Math.max(1, position.sample.identity.evaluatedAtMs - FUNDING_CONTEXT_LOOKBACK_MS);
   const common = { symbol: "ETHUSDT", productType: "usdt-futures" };
   const [market, mark, index, funding, contracts, tiers, openInterest] = await Promise.all([
     collectCandles({ client, market: "CRYPTO_FUTURES", symbol: "ETHUSDT", timeframe: "1d", startTime, endTime, maxCandles: 120 }),
     collectDerived({ client, kind: "mark", symbol: "ETHUSDT", timeframe: "1d", startTime, endTime, maxCandles: 120 }),
     collectDerived({ client, kind: "index", symbol: "ETHUSDT", timeframe: "1d", startTime, endTime, maxCandles: 120 }),
-    collectFunding({ client, symbol: "ETHUSDT", startTime: position.sample.identity.evaluatedAtMs, endTime: lifecycle.exitTimestamp }),
+    collectFunding({ client, symbol: "ETHUSDT", startTime: fundingContextStart, endTime: lifecycle.exitTimestamp }),
     client.get(CONTRACTS_ENDPOINT, common),
     client.get(POSITION_TIER_ENDPOINT, common),
     client.get(BITGET_ENDPOINTS.openInterest, common),
