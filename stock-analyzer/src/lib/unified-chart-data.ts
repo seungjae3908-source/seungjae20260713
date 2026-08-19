@@ -132,7 +132,14 @@ export function buildUnifiedChartUrls(input: {
   const encodedSymbol = encodeURIComponent(symbol);
   const encodedFrame = encodeURIComponent(input.timeframe);
 
-  if (input.market === 'KR' || input.market === 'US') {
+  if (input.market === 'US') {
+    return [
+      `/api/stocks/${encodedSymbol}/candles?tf=${encodedFrame}`,
+      `/api/stocks/${encodedSymbol}/chart?tf=${encodedFrame}`,
+    ];
+  }
+
+  if (input.market === 'KR') {
     return [
       `/api/stocks/${encodedSymbol}/chart?tf=${encodedFrame}`,
       `/api/stocks/${encodedSymbol}/candles?tf=${encodedFrame}`,
