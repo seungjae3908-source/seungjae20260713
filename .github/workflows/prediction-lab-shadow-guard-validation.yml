@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - research/shadow-collapse-drift-guard-v1
+      - research/shadow-active-deployed-inference-parity-v1
   pull_request:
     branches:
       - feature/prediction-lab-standalone
