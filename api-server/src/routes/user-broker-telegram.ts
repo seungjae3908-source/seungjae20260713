@@ -8,7 +8,10 @@ import {
   CanonicalPortfolioSyncSink,
   queueManualPortfolioNotifications,
 } from '../features/user-broker-telegram/user-broker-telegram.runtime';
-import { UserBrokerTelegramService } from '../features/user-broker-telegram/user-broker-telegram.service';
+import {
+  UserBrokerTelegramService,
+  defaultNotificationPreferences,
+} from '../features/user-broker-telegram/user-broker-telegram.service';
 import type {
   NotificationPreferences,
   PortfolioSyncSink,
@@ -45,6 +48,16 @@ function member(req: AuthenticatedRequest) {
 function errorCode(error: unknown): string {
   if (!(error instanceof Error) || !error.message) return 'USER_INTEGRATION_FAILED';
   return error.message.replace(/[^A-Z0-9_:-]/gi, '_').slice(0, 120);
+}
+
+function unavailableTelegramState() {
+  return {
+    telegram: { connected: false, status: 'UNAVAILABLE', connectedAt: null },
+    preferences: defaultNotificationPreferences(),
+    deliveries: [],
+    telegramStorageAvailable: false,
+    telegramStorageErrorCode: 'USER_BROKER_TELEGRAM_STORAGE_UNAVAILABLE',
+  };
 }
 
 function webhookSecretMatches(provided: string | undefined): boolean {
@@ -132,8 +145,16 @@ userBrokerTelegramRouter.get('/', async (req, res) => {
     const authenticated = req as AuthenticatedRequest;
     const { userId, accessToken } = member(authenticated);
     const canReadBrokerConnections = hasCapability(authenticated.member, 'canPlaceOrders');
+    const statePromise = service().getState(userId).then((state) => ({
+      ...state,
+      telegramStorageAvailable: true,
+      telegramStorageErrorCode: null,
+    })).catch((error) => {
+      if (errorCode(error) !== 'USER_BROKER_TELEGRAM_STORAGE_UNAVAILABLE') throw error;
+      return unavailableTelegramState();
+    });
     const [state, brokerConnections] = await Promise.all([
-      service().getState(userId),
+      statePromise,
       canReadBrokerConnections
         ? createSupabaseTradingRepository(accessToken, userId).getConnections(userId)
         : Promise.resolve([]),
@@ -142,6 +163,7 @@ userBrokerTelegramRouter.get('/', async (req, res) => {
       ok: true,
       brokerConnections: safeConnections(brokerConnections),
       ...state,
+      partial: state.telegramStorageAvailable === false,
       privateApiRequests: 0,
       ordersSubmitted: 0,
       ordersCancelled: 0,
