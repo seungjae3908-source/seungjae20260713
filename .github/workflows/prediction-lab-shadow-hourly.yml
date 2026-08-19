@@ -22,9 +22,9 @@ env:
   SHADOW_BRANCH: feature/prediction-lab-standalone
   LAB_DIR: market-prediction-lab
   SHADOW_ARTIFACT: prediction-lab-shadow-state
-  SHADOW_CUTOVER_FROM_SHA: 87cfafc3d502901d8f678e0153e2e974a4b69004
-  SHADOW_CUTOVER_TO_SHA: 84bb50cf6d0b90c29f47f043de36b9a239547c9b
-  SHADOW_CUTOVER_REASON: shadow-collapse-drift-guard
+  SHADOW_CUTOVER_FROM_SHA: 84bb50cf6d0b90c29f47f043de36b9a239547c9b
+  SHADOW_CUTOVER_TO_SHA: ea1d873c93d603e61960c5bfbff1f6d6d9933fec
+  SHADOW_CUTOVER_REASON: deployed-inference-parity
 
 jobs:
   shadow-validation:
