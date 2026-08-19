@@ -10,12 +10,17 @@ const required = [
   'src/portfolio-safety.mjs',
   'src/public-data.mjs',
   'src/server.mjs',
+  'src/spoof-candidate.mjs',
+  'src/fake-wall-forward-ledger.mjs',
+  'scripts/run-fake-wall-forward-ledger.mjs',
   'tests/engine.test.mjs',
   'tests/advanced-gates.test.mjs',
   'tests/execution-quality.test.mjs',
   'tests/portfolio-safety.test.mjs',
   'tests/safety-suite.test.mjs',
   'tests/server.test.mjs',
+  'tests/fake-wall-forward-ledger.test.mjs',
+  'FAKE_WALL_RESEARCH.md',
   'SAFETY.md',
 ];
 for (const relative of required) {
@@ -28,6 +33,7 @@ const advancedGates = fs.readFileSync(path.join(root, 'src/advanced-gates.mjs'),
 const executionQuality = fs.readFileSync(path.join(root, 'src/execution-quality.mjs'), 'utf8');
 const portfolioSafety = fs.readFileSync(path.join(root, 'src/portfolio-safety.mjs'), 'utf8');
 const publicData = fs.readFileSync(path.join(root, 'src/public-data.mjs'), 'utf8');
+const forwardLedger = fs.readFileSync(path.join(root, 'src/fake-wall-forward-ledger.mjs'), 'utf8');
 
 for (const text of [server, engine, advancedGates, executionQuality, portfolioSafety]) {
   if (!text.includes("executionAuthority: 'NONE'")) throw new Error('EXECUTION_AUTHORITY_NOT_PINNED');
@@ -50,17 +56,36 @@ if (!server.includes("'127.0.0.1'")) throw new Error('LOOPBACK_BIND_NOT_PRESENT'
 if (/api\/v3\/(trade\/place|trade\/cancel|account\/|withdraw|transfer)/u.test(publicData)) throw new Error('PRIVATE_OR_MUTATING_BITGET_PATH_DETECTED');
 if (/\/v1\/orders|\/v1\/withdraws|Authorization|ACCESS-KEY/u.test(publicData)) throw new Error('PRIVATE_OR_MUTATING_PROVIDER_CONTRACT_DETECTED');
 
+const ledgerPins = [
+  "market-intelligence-fake-wall-forward-ledger/v1",
+  "executionAuthority: 'NONE'",
+  "scannerRankingImpact: 'NONE'",
+  "tradingEligibilityImpact: 'NONE'",
+  'profitabilityClaimAllowed: false',
+  "'PENDING'",
+  "'SETTLED'",
+  "'INVALIDATED'",
+  'ARTIFACT_CHAIN_BROKEN',
+];
+for (const pin of ledgerPins) {
+  if (!forwardLedger.includes(pin)) throw new Error(`FAKE_WALL_FORWARD_LEDGER_PIN_MISSING:${pin}`);
+}
+
 console.log(JSON.stringify({
   ok: true,
   contract: 'market-intelligence-sidecar/v1',
   advancedGateContract: 'market-intelligence-advanced-gates/v1',
   executionQualityContract: 'market-intelligence-execution-quality/v1',
   portfolioSafetyContract: 'market-intelligence-portfolio-safety/v1',
+  fakeWallForwardLedgerContract: 'market-intelligence-fake-wall-forward-ledger/v1',
   defaultEnforcement: 'OBSERVE_ONLY',
   executionAuthority: 'NONE',
   privateTradingApiAllowed: false,
   realOrderAllowed: false,
   forcedLiquidationAllowed: false,
   scannerCandidateDeletionAllowed: false,
+  fakeWallScannerRankingImpact: 'NONE',
+  fakeWallTradingEligibilityImpact: 'NONE',
+  fakeWallProfitabilityClaimAllowed: false,
   loopbackOnly: true,
 }));

@@ -131,7 +131,7 @@ jobs:
       - name: Install workspace dependencies with frozen lockfile
         run: pnpm install --frozen-lockfile
       - name: Install Playwright Chromium
-        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+        run: pnpm --dir stock-analyzer exec playwright install chromium
       - name: Run Playwright desktop and mobile tests
         id: browser
         run: pnpm --dir stock-analyzer run test:e2e

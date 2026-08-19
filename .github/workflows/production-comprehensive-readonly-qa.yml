@@ -1,0 +1,99 @@
+name: Production Comprehensive Read-Only QA
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/production-comprehensive-readonly-qa.yml
+      - stock-analyzer/playwright.production-comprehensive.config.ts
+      - stock-analyzer/e2e/production-comprehensive-readonly-qa.spec.ts
+      - stock-analyzer/e2e/production-mobile-scroll-readonly-qa.spec.ts
+      - stock-analyzer/e2e/production-critical-http-readonly-qa.spec.ts
+      - stock-analyzer/e2e/support/production-readonly-policy.ts
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-comprehensive-readonly-qa-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  production-comprehensive-readonly:
+    name: Real Production PC/mobile comprehensive read-only QA
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    environment: production
+    env:
+      PRODUCTION_BASE_URL: https://lsj119.duckdns.org
+      PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+      PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
+      PRODUCTION_READONLY_E2E: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+
+      - name: Require QA credential and record current Production identity
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$PRODUCTION_QA_LOGIN" && -n "$PRODUCTION_QA_PASSWORD" ]] || {
+            echo 'BLOCKED_BY_PRODUCTION_QA_CREDENTIAL' >&2
+            exit 1
+          }
+          curl --fail --silent --show-error --max-time 15 "$PRODUCTION_BASE_URL/api/health" -o /tmp/production-health.json
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const health = JSON.parse(fs.readFileSync('/tmp/production-health.json', 'utf8'));
+          if (health?.ok !== true) throw new Error('Production health is not OK');
+          console.log(`PRODUCTION_DEPLOY_SHA=${String(health.deploySha ?? 'unknown')}`);
+          console.log(`PRODUCTION_IDENTITY_MATCH=${String(health.identityMatch ?? false)}`);
+          NODE
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium
+        working-directory: stock-analyzer
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run real Production comprehensive read-only QA
+        working-directory: stock-analyzer
+        run: pnpm exec playwright test --config=playwright.production-comprehensive.config.ts
+
+      - name: Safety summary
+        if: always()
+        run: |
+          {
+            echo '## Production Comprehensive Read-Only QA'
+            echo
+            echo '- target: current deployed Production'
+            echo '- markets: KR / US / Upbit spot / Bitget futures'
+            echo '- desktop search matrix: 20 symbols per market (80 total)'
+            echo '- mobile search sample: 5 symbols per market (20 total)'
+            echo '- chart matrix: 4 markets x 8 timeframes (32 actual UI transitions)'
+            echo '- route/layout sweep: desktop 1440/1024, mobile 320/360/390/412/430'
+            echo '- checks: finite loading, root/internal scroll, overlap, fixed-nav occlusion, horizontal overflow, safe tabs, console/page/request failures'
+            echo '- authenticated same-origin GET 401/403/5xx: blocking failure on critical routes'
+            echo '- latest-head only: superseded pending QA runs are cancelled by concurrency'
+            echo '- Production DB/app mutations: blocked'
+            echo '- private provider/account live requests: blocked or mocked disconnected'
+            echo '- actual order/cancel/amend/transfer/withdrawal authority: 0'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload comprehensive QA evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-comprehensive-readonly-${{ github.run_id }}
+          path: |
+            stock-analyzer/production-comprehensive-artifacts
+            stock-analyzer/test-results
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,0 +1,41 @@
+[Unit]
+Description=Investment Research Lab read-only dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=investment-research
+Group=investment-research
+WorkingDirectory=/opt/investment-research-dashboard/current/research-dashboard
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=RESEARCH_DASHBOARD_HOST=127.0.0.1
+Environment=RESEARCH_DASHBOARD_PORT=18090
+Environment=RESEARCH_STATE_ROOT=/var/lib/investment-research-production
+# Use the Python standard-library runtime for the long-running read-only HTTP
+# service. Recent Node 22 + --jitless combinations initialize undici/WASM even
+# though this Dashboard makes no outbound requests. Python avoids executable
+# JIT memory entirely, so the strict systemd sandbox can stay unchanged.
+ExecStart=/usr/bin/env python3 /opt/investment-research-dashboard/current/research-dashboard/server.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=true
+LockPersonality=true
+UMask=0077
+# Keep the long-running service aligned with the already-proven Research
+# Production sandbox. ProtectSystem=strict keeps the release and research state
+# read-only; only the private /tmp namespace is explicitly writable.
+ReadWritePaths=/tmp
+
+[Install]
+WantedBy=multi-user.target

@@ -118,6 +118,7 @@ const groups = {
     path.join(root, 'src/services/market-information.service.test.ts'),
     path.join(root, 'src/services/public-market-http.test.ts'),
     path.join(root, 'src/lib/deployment-identity.test.ts'),
+    path.join(root, 'src/kiwoom-chart-window.test.ts'),
     path.join(root, 'src/features/user-broker-telegram/user-broker-telegram.service.test.ts'),
     path.join(root, 'src/features/user-broker-telegram/trade-execution-event-bridge.service.test.ts'),
     path.join(root, 'src/features/user-broker-telegram/user-broker-telegram.runtime.test.ts'),
@@ -149,6 +150,7 @@ const groups = {
     path.join(root, 'src/routes/market-information.smoke.test.ts'),
     path.join(root, 'src/routes/unified-search.smoke.test.ts'),
     path.join(root, 'src/routes/stock-orderbook.smoke.test.ts'),
+    path.join(root, 'src/routes/market-summary-availability.smoke.test.ts'),
   ],
 };
 

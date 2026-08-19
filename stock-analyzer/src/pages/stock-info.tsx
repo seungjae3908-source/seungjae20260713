@@ -202,10 +202,10 @@ export default function StockInfoPage() {
 
 	const specialFeed = useQuery({
 		queryKey: ['stock-info-special-feed', market],
-		queryFn: async () => {
+		queryFn: async ({ signal }) => {
 			const response = await authorizedFetch(
 				`/api/stocks/special-feed?asset=stock&market=${market}&limit=2000&_ts=${Date.now()}`,
-				{ cache: 'no-store' },
+				{ cache: 'no-store', signal },
 			);
 			const payload = (await response.json().catch(() => ({}))) as SpecialFeedResponse & {
 				error?: string;
@@ -218,7 +218,7 @@ export default function StockInfoPage() {
 		},
 		enabled: asset === 'stock' && !ticker,
 		refetchInterval: 30_000,
-		refetchIntervalInBackground: true,
+		refetchIntervalInBackground: false,
 		refetchOnWindowFocus: true,
 		retry: 1,
 	});
@@ -927,10 +927,10 @@ export function CoinInfo({ nowMs, basePath = '/stock-info' }: { nowMs: number; b
 
 	const coinSpecialFeed = useQuery({
 		queryKey: ['coin-info-special-feed', coinMarket],
-		queryFn: async () => {
+		queryFn: async ({ signal }) => {
 			const response = await authorizedFetch(
 				`/api/stocks/special-feed?asset=coin&market=${coinMarket}&limit=2000&_ts=${Date.now()}`,
-				{ cache: 'no-store' },
+				{ cache: 'no-store', signal },
 			);
 			const payload = (await response.json().catch(() => ({}))) as SpecialFeedResponse & {
 				error?: string;
@@ -942,7 +942,7 @@ export function CoinInfo({ nowMs, basePath = '/stock-info' }: { nowMs: number; b
 			return payload;
 		},
 		refetchInterval: 30_000,
-		refetchIntervalInBackground: true,
+		refetchIntervalInBackground: false,
 		refetchOnWindowFocus: true,
 		retry: 1,
 	});
