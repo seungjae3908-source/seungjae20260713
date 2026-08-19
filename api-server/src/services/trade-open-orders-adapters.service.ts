@@ -10,7 +10,7 @@ export function prepareUpbitOpenOrders(
   credentials: UpbitCredentials,
   symbol: string,
   state: UpbitOpenOrderState,
-  page: number,
+  page = 1,
   nonce?: string,
 ): PreparedExchangeRequest {
   if (!Number.isInteger(page) || page < 1) throw new Error('UPBIT_OPEN_ORDER_PAGE_INVALID');
