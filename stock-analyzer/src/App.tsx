@@ -37,6 +37,9 @@ const ThemesPage = lazy(() => import('@/pages/themes'));
 const LearnPage = lazy(() => import('@/pages/learn'));
 const MorePage = lazy(() => import('@/pages/more'));
 const PortfolioPage = lazy(() => import('@/pages/portfolio'));
+const PortfolioV2Page = lazy(() => import('@/pages/portfolio-v2'));
+const StrategyPromotionPage = lazy(() => import('@/pages/strategy-promotion'));
+const ResearchCenterPage = lazy(() => import('@/pages/research-center'));
 const AccountPage = lazy(() => import('@/pages/account'));
 const AdminPage = lazy(() => import('@/pages/admin'));
 const InstallPage = lazy(() => import('@/pages/install'));
@@ -145,7 +148,8 @@ function LegacyStockDetailRedirect() {
 
 function AppShell({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
-  const scannerRoute = location.startsWith('/scanner');
+  const legacyScannerE2E = phase11E2EEnabled && location.startsWith('/__phase11-ai-workspace-e2e');
+  const scannerRoute = location.startsWith('/scanner') || legacyScannerE2E;
   const wide = scannerRoute || location.startsWith('/ai-chart') || location.startsWith('/__phase11-technical-workspace-e2e');
   return <div className="relative h-[100dvh] w-full overflow-hidden text-foreground"><AppBackground /><div data-testid={scannerRoute ? 'scanner-root' : undefined} className={`relative z-10 mx-auto flex h-[100dvh] min-h-0 w-full flex-col overflow-hidden bg-background ${wide ? 'max-w-screen-2xl' : 'max-w-screen-xl'}`}><OfflineBanner />{scannerRoute ? <ScannerReadinessStatus /> : null}<div className="min-h-0 flex-1 overflow-hidden">{children}</div></div><OrderbookRouteDock /></div>;
 }
@@ -160,17 +164,15 @@ function builder(pageId: UiBuilderPageId, child: React.ReactNode) {
 
 function HomeAccess() { return builder('HOME', <HomePage />); }
 function ScannerAccess() {
-  const auth = useAuth();
-  return gated(
-    'canAccessBasicInfo',
-    auth.can('canAccessRiskPreview') ? <TechnicalWorkspacePage /> : <SignalScannerPage />,
-  );
+  return gated('canAccessBasicInfo', <TechnicalWorkspacePage />);
 }
 function AiChartAccess() { return gated('canAccessRiskPreview', builder('AI_CHART', <AiChartPage />)); }
 function AiChatAccess() { return gated('canAccessBasicInfo', builder('AI_CHAT', <AiChatPage />)); }
 function RecommendationsAccess() { return gated('canAccessRiskPreview', <RecommendationsPage />); }
-function PortfolioAccess() { return gated('canAccessPaperTrading', builder('PORTFOLIO', <PortfolioPage />)); }
+function PortfolioAccess() { return gated('canAccessPaperTrading', builder('PORTFOLIO', <PortfolioV2Page />)); }
 function PositionAccess() { return gated('canAccessPaperTrading', builder('POSITION', <PortfolioPage />)); }
+function StrategyPromotionAccess() { return gated('canAccessBacktests', <StrategyPromotionPage />); }
+function ResearchCenterAccess() { return gated('canManageMembers', <ResearchCenterPage />); }
 function BacktestsAccess() { return gated('canAccessBacktests', <BacktestsPage />); }
 function PaperTradingRouteFallback() {
   return (
@@ -260,6 +262,7 @@ function ApprovedRouter() {
     <Route path="/scanner" component={ScannerAccess} />
     <Route path="/ai-chart" component={AiChartAccess} />
     <Route path="/ai-chat" component={AiChatAccess} />
+    <Route path="/research-center" component={ResearchCenterAccess} />
     <Route path="/themes" component={NewsInformationAccess} />
     <Route path="/news-information" component={NewsInformationAccess} />
     <Route path="/learn" component={LearnPage} />
@@ -267,6 +270,7 @@ function ApprovedRouter() {
     <Route path="/alerts" component={AlertsPage} />
     <Route path="/portfolio" component={PortfolioAccess} />
     <Route path="/position" component={PositionAccess} />
+    <Route path="/strategy-promotion" component={StrategyPromotionAccess} />
     <Route path="/account" component={AccountConnectionAccess} />
     <Route path="/admin/ui-layouts" component={UiBuilderAdminAccess} />
     <Route path="/admin" component={AdminAccess} />

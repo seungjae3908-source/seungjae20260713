@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "contractVersion": "forward-only-1h-rule0-v1",
+  "market": "CRYPTO_FUTURES",
+  "symbols": ["BTCUSDT", "ETHUSDT"],
+  "timeframe": "1h",
+  "horizon": 12,
+  "challengerRuleWeight": 0.0,
+  "referenceRuleWeight": 0.65,
+  "forwardOnly": true,
+  "historicalBackfillAllowed": false,
+  "gates": {
+    "minimumSettled": 300,
+    "minimumElapsedDays": 28,
+    "minimumPerSymbol": 100,
+    "minimumRegimeSamples": 30,
+    "minimumQualifiedRegimes": 2,
+    "minimumMacroF1Delta": 0.05,
+    "minimumBalancedAccuracyDelta": 0.03,
+    "minimumDirectionalRecallAverageDelta": 0.03,
+    "minimumAccuracyDelta": -0.02,
+    "minimumLogLossImprovement": 0.0,
+    "perSymbolNoRegression": ["macroF1", "balancedAccuracy", "logLoss"],
+    "qualifiedRegimeFailClosed": ["macroF1", "logLoss"]
+  },
+  "authority": {
+    "shadowReviewOnly": true,
+    "promotion": false,
+    "live": false,
+    "order": false,
+    "privateAccount": false
+  }
+}

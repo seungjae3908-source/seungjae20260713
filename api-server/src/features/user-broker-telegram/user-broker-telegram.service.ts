@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { hasCapability, type MemberTier } from '../../../../packages/member-access/src/index.js';
 import type { TradingOrder, TradingOrderEvent, TradingPlan } from '../../services/trade-automation.types';
 import type { UserBrokerTelegramRepository } from './user-broker-telegram.repository';
 import {
@@ -157,12 +158,15 @@ export class UserBrokerTelegramService {
     }
     await this.repository.savePreferences(userId, next, now.toISOString()); return next;
   }
-  async recordEvent(event: UserExecutionEvent, now = new Date()) {
+  async recordEvent(event: UserExecutionEvent, now = new Date(), membership: MemberTier = 'admin') {
     const inserted = await this.repository.insertExecutionEvent(event);
     if (!inserted) return { inserted: false, deliveryQueued: false };
     if (event.type !== 'MANUAL_PORTFOLIO_ENTRY') await this.portfolioSink.accept(event);
     const preferences = await this.repository.getPreferences(event.userId);
     if (!preferences[event.type]) return { inserted: true, deliveryQueued: false };
+    if (!personalTelegramEventAllowed(membership, event)) {
+      return { inserted: true, deliveryQueued: false, skipped: 'MEMBERSHIP_SCOPE' as const };
+    }
     const connection = await this.repository.getTelegramConnection(event.userId);
     if (!connection || connection.status !== 'ACTIVE') return { inserted: true, deliveryQueued: false };
     const timestamp = now.toISOString();
@@ -195,5 +199,13 @@ export class UserBrokerTelegramService {
       transportResult.errorCode?.slice(0, 120) || 'TELEGRAM_DELIVERY_FAILED', timestamp);
     return { processed: true, state };
   }
+}
+export function personalTelegramEventAllowed(membership: MemberTier, event: Pick<UserExecutionEvent, 'market'>): boolean {
+  const market = event.market.trim().toLowerCase();
+  const futures = market.includes('future') || market.includes('perp') || market.includes('swap');
+  if (futures) return hasCapability(membership, 'canAccessFutures');
+  const spot = market.includes('spot') || market.includes('upbit') || market.includes('coin') || market.includes('crypto');
+  if (spot) return hasCapability(membership, 'canAccessSpot');
+  return hasCapability(membership, 'canAccessBasicInfo');
 }
 export function defaultNotificationPreferences(): NotificationPreferences { return { ...DEFAULT_NOTIFICATION_PREFERENCES }; }

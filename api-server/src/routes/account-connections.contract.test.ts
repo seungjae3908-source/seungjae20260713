@@ -9,6 +9,7 @@ import {
   encryptTradingCredentials,
 } from '../services/trade-credential-vault.service';
 import type { ExchangeConnection } from '../services/trade-automation.types';
+import '../features/account-readonly/tests/account-readonly.runtime.test';
 
 const repositoryRoot = process.cwd();
 

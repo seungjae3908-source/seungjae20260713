@@ -39,8 +39,24 @@ export function CardListSkeleton({ count = 5 }: { count?: number }) {
 // Full-page fallback for lazily-loaded routes (Suspense boundary).
 export function PageFallback() {
   return (
-    <div data-testid="page-fallback" className="flex flex-1 items-center justify-center py-24 text-muted-foreground">
-      <Loader2 className="h-6 w-6 animate-spin" />
+    <div
+      data-testid="page-fallback"
+      role="status"
+      aria-busy="true"
+      aria-label="화면을 불러오는 중"
+      className="flex-1 p-4 sm:p-6"
+    >
+      <span className="sr-only">화면을 불러오는 중입니다.</span>
+      <div aria-hidden="true" className="mx-auto w-full max-w-7xl space-y-4">
+        <Skeleton className="h-8 w-48" />
+        <Skeleton className="h-4 w-2/3" />
+        <div className="grid gap-4 sm:grid-cols-3">
+          {Array.from({ length: 3 }).map((_, index) => (
+            <Skeleton key={index} className="h-24 rounded-2xl" />
+          ))}
+        </div>
+        <Skeleton className="h-72 rounded-2xl sm:h-96" />
+      </div>
     </div>
   );
 }
