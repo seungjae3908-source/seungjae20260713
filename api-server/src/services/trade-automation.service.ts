@@ -74,7 +74,9 @@ export function liveExecutionEnabled(exchange: TradingPlanInput['exchange']) {
   const perExchange = {
     bitget: process.env.BITGET_LIVE_ORDER_ENABLED === 'true',
     upbit: process.env.UPBIT_LIVE_ORDER_ENABLED === 'true',
-    kiwoom: process.env.KIWOOM_LIVE_ORDER_ENABLED === 'true',
+    // Canonical stock execution authority is Toss. The legacy Kiwoom adapter remains available
+    // only for non-live compatibility paths until a separately verified Toss execution adapter exists.
+    kiwoom: false,
   };
   return global && perExchange[exchange];
 }
