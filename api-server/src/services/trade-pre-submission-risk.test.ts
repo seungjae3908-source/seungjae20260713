@@ -6,6 +6,8 @@ import {
   TradePreSubmissionRiskService,
 } from './trade-pre-submission-risk.service';
 import { buildRiskEnvelope } from './trade-risk-envelope.service';
+import { allowServerProfitabilityAttestationForTests } from './trade-profitability-attestation.test-fixture';
+import { setTradeProfitabilityAttestationRunnerForTests } from './trade-profitability-attestation.service';
 import {
   DEFAULT_TRADING_POLICY,
   type TradingMarketSnapshot,
@@ -14,6 +16,8 @@ import {
 } from './trade-automation.types';
 
 const USER_ID = '11111111-1111-1111-1111-111111111111';
+
+test.afterEach(() => setTradeProfitabilityAttestationRunnerForTests(null));
 
 function snapshot(now: Date): TradingMarketSnapshot {
   return {
@@ -113,6 +117,7 @@ function order(now: Date): TradingOrder {
 }
 
 async function setup(now: Date, planVersion = 1) {
+  setTradeProfitabilityAttestationRunnerForTests(allowServerProfitabilityAttestationForTests);
   const repository = new InMemoryTradingRepository();
   const currentPlan = plan(now, planVersion);
   const currentOrder = order(now);
