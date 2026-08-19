@@ -1,5 +1,5 @@
 import { classifyAssetType, type AssetType } from '../data/asset-type';
-import type { CatalogEntry } from '../data/catalog';
+import { CATALOG, type CatalogEntry } from '../data/catalog';
 
 interface FinnhubSymbolRow {
   currency?: string;
@@ -14,7 +14,7 @@ export interface UsUniverseEntry extends CatalogEntry {
   assetType: AssetType;
   exchange: 'NASDAQ' | 'NYSE' | 'AMEX' | 'US';
   listingStatus: 'LISTED';
-  source: 'finnhub-symbol-master';
+  source: 'finnhub-symbol-master' | 'static-catalog';
   rawType: string;
 }
 
@@ -90,6 +90,36 @@ function supportedAsset(value: AssetType): boolean {
   ].includes(value);
 }
 
+function staticCatalogUniverse(): UsUniverseEntry[] {
+  const rows: UsUniverseEntry[] = [];
+  const seen = new Set<string>();
+  for (const row of CATALOG) {
+    if (row.market !== 'US') continue;
+    const ticker = cleanTicker(row.ticker);
+    const name = String(row.name ?? '').normalize('NFKC').trim();
+    if (!tradableTicker(ticker) || !name || seen.has(ticker)) continue;
+    const detectedAssetType = classifyAssetType(name, 'US');
+    if (!supportedAsset(detectedAssetType)) continue;
+    seen.add(ticker);
+    rows.push({
+      ticker,
+      name,
+      market: 'US',
+      currency: 'USD',
+      assetType: detectedAssetType,
+      exchange: 'US',
+      listingStatus: 'LISTED',
+      source: 'static-catalog',
+      rawType: 'STATIC_CATALOG',
+    });
+  }
+  return rows;
+}
+
+function fallbackUniverse(lastGood: UsUniverseEntry[]): UsUniverseEntry[] {
+  return lastGood.length > 0 ? lastGood : staticCatalogUniverse();
+}
+
 function linkedAbortSignal(parent?: AbortSignal): { signal: AbortSignal; clear(): void } {
   const controller = new AbortController();
   const timeout = setTimeout(
@@ -115,7 +145,7 @@ export async function getUsUniverse(signal?: AbortSignal): Promise<UsUniverseEnt
   if (cache && Date.now() - cache.at < CACHE_MS) return cache.rows;
   const lastGood = cache?.rows ?? [];
   const token = finnhubKey();
-  if (!token) return lastGood;
+  if (!token) return fallbackUniverse(lastGood);
 
   const linked = linkedAbortSignal(signal);
   try {
@@ -123,9 +153,9 @@ export async function getUsUniverse(signal?: AbortSignal): Promise<UsUniverseEnt
       `${BASE}/stock/symbol?exchange=US&token=${encodeURIComponent(token)}`,
       { signal: linked.signal, headers: { Accept: 'application/json' } },
     );
-    if (!response.ok) return lastGood;
+    if (!response.ok) return fallbackUniverse(lastGood);
     const payload = await response.json() as unknown;
-    if (!Array.isArray(payload)) return lastGood;
+    if (!Array.isArray(payload)) return fallbackUniverse(lastGood);
 
     const rows: UsUniverseEntry[] = [];
     const seen = new Set<string>();
@@ -152,12 +182,12 @@ export async function getUsUniverse(signal?: AbortSignal): Promise<UsUniverseEnt
       });
     }
     rows.sort((left, right) => left.ticker.localeCompare(right.ticker));
-    if (!rows.length) return lastGood;
+    if (!rows.length) return fallbackUniverse(lastGood);
     cache = { at: Date.now(), rows };
     return rows;
   } catch (error) {
     if (signal?.aborted) throw error;
-    return lastGood;
+    return fallbackUniverse(lastGood);
   } finally {
     linked.clear();
   }
