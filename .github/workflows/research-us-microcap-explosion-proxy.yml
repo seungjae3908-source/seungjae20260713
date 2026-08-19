@@ -1,16 +1,16 @@
-name: Research US Microcap Explosion Proxy
+name: Research US Microcap Intraday Ladder V1
 
 on:
   push:
     branches:
       - agent/research-microcap-explosion-proxy-v1
     paths:
-      - market-prediction-lab/scripts/run-us-microcap-nostop-tp-grid.py
+      - market-prediction-lab/scripts/run-us-microcap-intraday-ladder-v1.py
       - .github/workflows/research-us-microcap-explosion-proxy.yml
   pull_request:
     branches: [main]
     paths:
-      - market-prediction-lab/scripts/run-us-microcap-nostop-tp-grid.py
+      - market-prediction-lab/scripts/run-us-microcap-intraday-ladder-v1.py
       - .github/workflows/research-us-microcap-explosion-proxy.yml
   workflow_dispatch:
 
@@ -18,67 +18,48 @@ permissions:
   contents: read
 
 concurrency:
-  group: research-us-microcap-explosion-proxy-${{ github.ref }}
+  group: research-us-microcap-intraday-ladder-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   backtest:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 20
     steps:
-      - name: Checkout investment platform research branch
+      - name: Checkout isolated research branch
         uses: actions/checkout@v4
         with:
           persist-credentials: false
 
-      - name: Checkout immutable public Stooq US daily mirror
-        uses: actions/checkout@v4
-        with:
-          repository: ARKMD/stooq
-          ref: 6ae7c9b04dc8b98612d1ee9594baa64362b4ade1
-          path: external-stooq
-          persist-credentials: false
-          sparse-checkout: |
-            d_us_txt/data/daily/us/nasdaq stocks
-            d_us_txt/data/daily/us/nyse stocks
-            d_us_txt/data/daily/us/nysemkt stocks
-          sparse-checkout-cone-mode: false
+      - name: Self-test intraday ladder accounting
+        run: python3 market-prediction-lab/scripts/run-us-microcap-intraday-ladder-v1.py --self-test
 
-      - name: Run no-stop take-profit grid
+      - name: Run real recent Yahoo extended-hours 1m diagnostic
         shell: bash
         run: |
           set -Eeuo pipefail
-          mkdir -p market-prediction-lab/docs/research-us-microcap-explosion-proxy
-          python3 market-prediction-lab/scripts/run-us-microcap-nostop-tp-grid.py \
-            "external-stooq/d_us_txt/data/daily/us/nasdaq stocks" \
-            "external-stooq/d_us_txt/data/daily/us/nyse stocks" \
-            "external-stooq/d_us_txt/data/daily/us/nysemkt stocks" \
-            --years 10 \
-            --min-price 0.5 \
-            --max-price 10 \
-            --min-gap 0.10 \
-            --max-gap 0.40 \
-            --min-prev-dollar-volume 1000000 \
-            --min-rvol 5 \
-            --output-json market-prediction-lab/docs/research-us-microcap-explosion-proxy/nostop-tp-grid.json \
-            --output-md market-prediction-lab/docs/research-us-microcap-explosion-proxy/nostop-tp-grid.md
+          mkdir -p market-prediction-lab/docs/research-us-microcap-intraday-ladder-v1
+          python3 market-prediction-lab/scripts/run-us-microcap-intraday-ladder-v1.py \
+            --symbols FEMY,EHGO,BIVI,RCON,VRAX,MSS \
+            --output-json market-prediction-lab/docs/research-us-microcap-intraday-ladder-v1/result.json \
+            --output-md market-prediction-lab/docs/research-us-microcap-intraday-ladder-v1/result.md
 
-      - name: Record immutable provenance
+      - name: Record immutable provenance and data boundary
         shell: bash
         run: |
-          cat > market-prediction-lab/docs/research-us-microcap-explosion-proxy/provenance.json <<JSON
-          {"schemaVersion":1,"researchCodeSha":"${GITHUB_SHA}","stooqMirrorSha":"6ae7c9b04dc8b98612d1ee9594baa64362b4ade1","runId":"${GITHUB_RUN_ID}","liveOrderAllowed":false,"privateApiAllowed":false,"branchWrite":false,"stop":"none","takeProfitGridPct":[3,5,7,10,15]}
+          cat > market-prediction-lab/docs/research-us-microcap-intraday-ladder-v1/provenance.json <<JSON
+          {"schemaVersion":1,"researchCodeSha":"${GITHUB_SHA}","runId":"${GITHUB_RUN_ID}","source":"Yahoo public chart 1m range=7d includePrePost=true","tenYearMinuteHistory":false,"pointInTimeFloat":false,"archivedFreshCatalyst":false,"pointInTimeDilutionFilter":false,"liveOrderAllowed":false,"privateApiAllowed":false,"branchWrite":false}
           JSON
 
-      - name: Print no-stop result table
+      - name: Print result
         if: always()
-        run: cat market-prediction-lab/docs/research-us-microcap-explosion-proxy/nostop-tp-grid.md || true
+        run: cat market-prediction-lab/docs/research-us-microcap-intraday-ladder-v1/result.md || true
 
       - name: Upload immutable research artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: research-us-microcap-explosion-proxy-${{ github.run_id }}
-          path: market-prediction-lab/docs/research-us-microcap-explosion-proxy
+          name: research-us-microcap-intraday-ladder-${{ github.run_id }}
+          path: market-prediction-lab/docs/research-us-microcap-intraday-ladder-v1
           if-no-files-found: warn
           retention-days: 90
