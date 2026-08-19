@@ -1,3 +1,4 @@
+import { attestLiveTradingProfitability } from './trade-profitability-attestation.service';
 import type {
   TradingOptimizationAssessment,
   TradingPlanInput,
@@ -63,6 +64,14 @@ export function evaluateTradingOptimization(
   const blockCodes: string[] = [];
   const warnings: string[] = [];
   const liveOrAutomatic = plan.accountMode === 'live' || policy.mode === 'automatic';
+  const profitabilityAttestation = attestLiveTradingProfitability(plan, undefined, {
+    now,
+    maxEvidenceAgeHours: policy.maxEconomicsAgeHours,
+  });
+  const economics = plan.accountMode === 'live'
+    ? profitabilityAttestation.serverEconomics
+    : plan.economics;
+  const economicsPlan = economics === plan.economics ? plan : { ...plan, economics };
 
   if (positive(plan.entryZoneLow) && positive(plan.entryZoneHigh) && plan.entryZoneLow > plan.entryZoneHigh) {
     add(blockCodes, 'ENTRY_ZONE_INVALID');
@@ -72,8 +81,12 @@ export function evaluateTradingOptimization(
     add(blockCodes, 'ENTRY_PRICE_OUTSIDE_ZONE');
   }
 
-  const economics = plan.economics;
-  const computedExpectedValueR = expectedValueR(plan);
+  if (plan.accountMode === 'live' && !profitabilityAttestation.allowed) {
+    add(blockCodes, 'SERVER_PROFITABILITY_ATTESTATION_REQUIRED');
+    for (const code of profitabilityAttestation.blockCodes) add(blockCodes, code);
+  }
+
+  const computedExpectedValueR = expectedValueR(economicsPlan);
   if (liveOrAutomatic) {
     if (!economics) {
       add(blockCodes, 'ECONOMICS_REQUIRED');
@@ -85,8 +98,11 @@ export function evaluateTradingOptimization(
       if (economics.sampleSize < policy.minStrategySampleSize) add(blockCodes, 'STRATEGY_SAMPLE_TOO_SMALL');
       if (computedExpectedValueR == null) add(blockCodes, 'EXPECTED_VALUE_UNAVAILABLE');
       else if (computedExpectedValueR < policy.minExpectedValueR) add(blockCodes, 'EXPECTED_VALUE_TOO_LOW');
-      if (positive(economics.profitFactor) && economics.profitFactor < policy.minProfitFactor) add(blockCodes, 'PROFIT_FACTOR_TOO_LOW');
-      if (positive(economics.maxDrawdownPercent) && economics.maxDrawdownPercent > policy.maxStrategyDrawdownPercent) {
+      if (!positive(economics.profitFactor)) add(blockCodes, 'PROFIT_FACTOR_REQUIRED');
+      else if (economics.profitFactor < policy.minProfitFactor) add(blockCodes, 'PROFIT_FACTOR_TOO_LOW');
+      if (!finite(economics.maxDrawdownPercent) || economics.maxDrawdownPercent < 0) {
+        add(blockCodes, 'STRATEGY_DRAWDOWN_REQUIRED');
+      } else if (economics.maxDrawdownPercent > policy.maxStrategyDrawdownPercent) {
         add(blockCodes, 'STRATEGY_DRAWDOWN_TOO_HIGH');
       }
       if (economics.marketRegime === 'stress') add(blockCodes, 'MARKET_REGIME_STRESS');
