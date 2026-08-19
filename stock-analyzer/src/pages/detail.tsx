@@ -110,14 +110,6 @@ export default function DetailPage() {
     setTab('chart');
   }
 
-  if (tab === 'analysis') {
-    return (
-      <div className="h-full min-h-0" onClickCapture={openCanonicalChart} data-testid="rich-detail-shell" data-ticker={ticker}>
-        <Suspense fallback={<LoadingSurface />}><LegacyDetailPage /></Suspense>
-      </div>
-    );
-  }
-
   const quoteData = quote.data ?? {};
   const profileData = profile.data ?? {};
   const name = displayStockName(ticker, text(quoteData.name, profileData.name, profileData.companyName, ticker) ?? ticker, market);
@@ -216,6 +208,12 @@ export default function DetailPage() {
               );
               return url ? <a key={`${url}:${index}`} href={url} target="_blank" rel="noreferrer" className="block rounded-2xl border border-card-border bg-card p-4 transition hover:border-primary/40">{content}</a> : <article key={`${title}:${index}`} className="rounded-2xl border border-card-border bg-card p-4">{content}</article>;
             })}
+          </div>
+        ) : null}
+
+        {tab === 'analysis' ? (
+          <div className="mx-auto min-h-full w-full max-w-7xl" onClickCapture={openCanonicalChart} data-testid="rich-detail-shell" data-ticker={ticker}>
+            <Suspense fallback={<LoadingSurface />}><LegacyDetailPage /></Suspense>
           </div>
         ) : null}
       </main>

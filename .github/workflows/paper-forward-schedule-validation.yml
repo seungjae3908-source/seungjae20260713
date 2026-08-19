@@ -7,6 +7,7 @@ on:
       - market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
       - market-prediction-lab/scripts/run-paper-forward-schedule.js
       - market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
+      - market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
       - ops/install-paper-forward-schedule.sh
       - ops/disable-paper-forward-schedule.sh
       - .github/workflows/paper-forward-schedule-activation.yml
@@ -20,10 +21,12 @@ on:
       - fix/paper-forward-activation-post-approval-main-guard-v1
       - fix/paper-forward-disable-moving-main-liveness-v1
       - agent/paper-forward-outcome-natural-settlement-v1
+      - agent/research-paper-forward-identity-cutover-v1
     paths:
       - market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
       - market-prediction-lab/scripts/run-paper-forward-schedule.js
       - market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
+      - market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
       - ops/install-paper-forward-schedule.sh
       - ops/disable-paper-forward-schedule.sh
       - .github/workflows/paper-forward-schedule-activation.yml
@@ -63,6 +66,7 @@ jobs:
             market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
             market-prediction-lab/scripts/run-paper-forward-schedule.js
             market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
+            market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
             ops/install-paper-forward-schedule.sh
             ops/disable-paper-forward-schedule.sh
             .github/workflows/paper-forward-schedule-activation.yml
@@ -87,6 +91,7 @@ jobs:
           node --check market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
           node --check market-prediction-lab/scripts/run-paper-forward-schedule.js
           node --check market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
+          node --check market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
           bash -n ops/install-paper-forward-schedule.sh
           bash -n ops/disable-paper-forward-schedule.sh
 
@@ -96,7 +101,8 @@ jobs:
           node --test \
             tests/paper-scheduler-driver-v1.test.js \
             tests/paper-forward-evidence-runtime-v1.test.js \
-            tests/paper-forward-schedule-runtime-v1.test.js
+            tests/paper-forward-schedule-runtime-v1.test.js \
+            tests/research-production-paper-forward-cutover.test.js
 
       - name: Verify activation remains Paper-only and fail-closed
         shell: bash
@@ -114,6 +120,8 @@ jobs:
           grep -F 'canonicalCycleIntervalMs: FOUR_HOURS_MS' market-prediction-lab/src/paper-forward-schedule-runtime-v1.js >/dev/null
           grep -F 'financialMutationAdaptersEnabled: false' market-prediction-lab/src/paper-forward-schedule-runtime-v1.js >/dev/null
           grep -F 'externalFinancialMutationAllowed: false' market-prediction-lab/src/paper-forward-schedule-runtime-v1.js >/dev/null
+          grep -F 'RESEARCH_PRODUCTION' market-prediction-lab/scripts/run-paper-forward-schedule.js >/dev/null
+          grep -F 'research-production-paper-identity-cutover-v1' market-prediction-lab/scripts/run-paper-forward-schedule.js >/dev/null
           ! grep -R --line-number -E 'stock-analyzer/|LIVE_TRADING=.?(true|1)|PRIVATE_TRADING_API_ALLOWED=.?(true|1)|REAL_ORDER_ENABLED=.?(true|1)' \
             market-prediction-lab/src/paper-forward-schedule-runtime-v1.js \
             market-prediction-lab/scripts/run-paper-forward-schedule.js \

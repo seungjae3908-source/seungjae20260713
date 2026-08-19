@@ -55,7 +55,37 @@ test('large bid wall withdrawal without matching fills is identified as bearish 
   });
   assert.equal(result.microstructure.liquidityWithdrawal.side, 'bid');
   assert.ok(result.microstructure.liquidityWithdrawal.score > 70);
+  assert.equal(result.microstructure.liquidityWithdrawal.quoteMigrationDetected, false);
   assert.ok(result.scanner.adjustment < 0);
+});
+
+test('nearby same-side wall migration is not scored as a fake liquidity withdrawal', () => {
+  const previous = {
+    ts: now - 1_000,
+    bids: [[99.9, 5], [99.8, 5], [99.7, 5], [99.6, 5]],
+    asks: [[100, 100], [100.1, 5], [100.2, 5], [100.3, 5]],
+  };
+  const current = {
+    ts: now,
+    bids: [[99.9, 5], [99.8, 5], [99.7, 5], [99.6, 5]],
+    asks: [[100.05, 90], [100.1, 5], [100.2, 5], [100.3, 5]],
+  };
+  const result = evaluateMarketIntelligence({
+    now,
+    market: 'CRYPTO_SPOT',
+    symbol: 'KRW-MIGRATION',
+    orderBook: current,
+    previous: { orderBook: previous },
+    trades: [{ side: 'buy', price: 99.95, size: 1, ts: now - 200 }],
+  });
+
+  assert.equal(result.microstructure.liquidityWithdrawal.side, 'ask');
+  assert.ok(result.microstructure.liquidityWithdrawal.cancellationRatio > 0.9);
+  assert.ok(result.microstructure.liquidityWithdrawal.migratedNotionalRatio >= 0.5);
+  assert.equal(result.microstructure.liquidityWithdrawal.quoteMigrationDetected, true);
+  assert.equal(result.microstructure.liquidityWithdrawal.score, 0);
+  assert.ok(result.warnings.includes('LIQUIDITY_WALL_QUOTE_MIGRATION'));
+  assert.equal(result.autoTrading.orderAllowed, false);
 });
 
 test('extreme microcap dilution risk hard-blocks auto trading while preserving scanner evidence', () => {
@@ -119,4 +149,26 @@ test('auto-trading remains paper-only until forward evidence meets explicit poli
   assert.equal(sufficient.autoTrading.mode, 'ELIGIBLE_FOR_PARENT_GATE');
   assert.equal(sufficient.autoTrading.orderAllowed, false);
   assert.equal(sufficient.autoTrading.parentGateRequired, true);
+});
+
+test('explicit null drawdown evidence never becomes a fabricated zero-drawdown pass', () => {
+  const result = evaluateMarketIntelligence({
+    now,
+    market: 'CRYPTO_FUTURES',
+    symbol: 'ETHUSDT',
+    orderBook: baseBook(),
+    validation: {
+      forwardSamples: 400,
+      profitFactor: 1.5,
+      expectedNetEdgeBps: 8,
+      maxDrawdownPct: null,
+      regimeCount: 3,
+    },
+  });
+
+  assert.equal(result.autoTrading.evidenceReady, false);
+  assert.equal(result.autoTrading.mode, 'PAPER_ONLY');
+  assert.equal(result.autoTrading.evidence.maxDrawdownPct, Number.POSITIVE_INFINITY);
+  assert.ok(result.warnings.includes('AUTO_TRADING_FORWARD_EVIDENCE_INSUFFICIENT'));
+  assert.equal(result.autoTrading.orderAllowed, false);
 });

@@ -1,16 +1,56 @@
-import { expect, type Page } from '@playwright/test';
+import { expect, type Page, type Request } from '@playwright/test';
 
 const forbiddenBuilderRequest = /\/(?:stocks\/auto-trade|trade-automation|paper-trading|crypto\/(?:spot\/accounts|futures\/(?:auto|account|positions))|orders?|cancel|transfers?|withdrawals?)(?:[/?]|$)/i;
+
+function isSameOriginApiRead(page: Page, request: Request) {
+  try {
+    const pageUrl = new URL(page.url());
+    const requestUrl = new URL(request.url());
+    return request.method() === 'GET'
+      && requestUrl.origin === pageUrl.origin
+      && requestUrl.pathname.startsWith('/api/');
+  } catch {
+    return false;
+  }
+}
 
 export async function expectUiBuilderStagingReadiness(
   page: Page,
   navigate: (route: string) => Promise<void>,
 ) {
   const forbiddenRequests: string[] = [];
-  page.on('request', (request) => {
+  const pendingApiReads = new Set<Request>();
+  let apiReadActivity = 0;
+  const onRequest = (request: Request) => {
     const path = new URL(request.url()).pathname;
     if (forbiddenBuilderRequest.test(path)) forbiddenRequests.push(`${request.method()} ${path}`);
-  });
+    if (isSameOriginApiRead(page, request)) {
+      pendingApiReads.add(request);
+      apiReadActivity += 1;
+    }
+  };
+  const onRequestSettled = (request: Request) => {
+    pendingApiReads.delete(request);
+  };
+  page.on('request', onRequest);
+  page.on('requestfinished', onRequestSettled);
+  page.on('requestfailed', onRequestSettled);
+
+  const waitForVerifierOwnedReads = async () => {
+    await expect.poll(
+      async () => {
+        if (pendingApiReads.size !== 0) return false;
+        const activityBeforeQuietWindow = apiReadActivity;
+        await page.waitForTimeout(300);
+        return pendingApiReads.size === 0 && apiReadActivity === activityBeforeQuietWindow;
+      },
+      {
+        message: 'UI Builder verifier-owned reload requires same-origin API GETs to settle first',
+        timeout: 15_000,
+        intervals: [100, 200, 300, 500],
+      },
+    ).toBe(true);
+  };
 
   await page.setViewportSize({ width: 390, height: 844 });
   await navigate('/admin/ui-layouts');
@@ -49,6 +89,7 @@ export async function expectUiBuilderStagingReadiness(
   await expect(page.getByText('Active Layout 적용 및 version 저장 완료')).toBeVisible();
   await expect(history).toContainText('v1');
 
+  await waitForVerifierOwnedReads();
   await page.reload();
   await expect(control).toBeVisible();
   await expect(history).toContainText('v1');
@@ -130,4 +171,7 @@ export async function expectUiBuilderStagingReadiness(
   }
 
   expect(forbiddenRequests, 'UI Builder staging QA must not issue private/order/cancel/transfer/withdrawal requests').toEqual([]);
+  page.off('request', onRequest);
+  page.off('requestfinished', onRequestSettled);
+  page.off('requestfailed', onRequestSettled);
 }

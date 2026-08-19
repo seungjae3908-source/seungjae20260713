@@ -145,6 +145,7 @@ if file_exists "$paper_status"; then
       const v = JSON.parse(raw);
       const clean = x => String(x ?? "null").replace(/[\t\r\n ]/g, "_").slice(0, 300);
       const lanes = Array.isArray(v.lanes) ? v.lanes : [];
+      const laneKey = x => x?.market ?? x?.lane ?? x?.provider ?? "lane";
       console.log([
         "PAPER_RUNTIME",
         "present=true",
@@ -155,7 +156,15 @@ if file_exists "$paper_status"; then
         `public_forward_evidence_accumulating=${clean(v.publicForwardEvidenceAccumulating)}`,
         `paper_trade_outcome_accumulating=${clean(v.paperTradeOutcomeAccumulating)}`,
         `lane_count=${lanes.length}`,
-        `lane_states=${clean(lanes.map(x => `${x.market ?? x.lane ?? x.provider ?? "lane"}:${x.status ?? "unknown"}`).join(","))}`,
+        `lane_states=${clean(lanes.map(x => `${laneKey(x)}:${x.status ?? "unknown"}`).join(","))}`,
+        `lane_blockers=${clean(lanes.map(x => `${laneKey(x)}:${x.blocker ?? "none"}`).join(","))}`,
+        `lane_data_as_of=${clean(lanes.map(x => `${laneKey(x)}:${x.dataAsOfMs ?? "null"}`).join(","))}`,
+        `lane_last_success=${clean(lanes.map(x => `${laneKey(x)}:${x.lastSuccessAtMs ?? "null"}`).join(","))}`,
+        `lane_last_failure=${clean(lanes.map(x => `${laneKey(x)}:${x.lastFailureAtMs ?? "null"}`).join(","))}`,
+        `replay_count=${clean(v.replayCount)}`,
+        `duplicate_replay_count=${clean(v.duplicateReplayCount)}`,
+        `runtime_settlement_count=${clean(v.settlementCount)}`,
+        `runtime_outcome_count=${clean(v.outcomeCount)}`,
         `private_request_count=${clean(v.privateRequestCount)}`,
         `financial_mutation_count=${clean(v.financialMutationCount)}`,
         `order_count=${clean(v.orderCount)}`,
@@ -176,12 +185,21 @@ if file_exists "$paper_state"; then
     process.stdin.on("data", c => raw += c);
     process.stdin.on("end", () => {
       const v = JSON.parse(raw);
+      const positions = Array.isArray(v.positions) ? v.positions : [];
+      const entryTimes = positions
+        .map(row => Number(row?.entryTimestampMs))
+        .filter(Number.isFinite)
+        .sort((a, b) => a - b);
+      const oldestPendingAtMs = entryTimes[0] ?? null;
+      const oldestPendingAgeMs = oldestPendingAtMs == null ? null : Math.max(0, Date.now() - oldestPendingAtMs);
       console.log([
         "PAPER_LEDGER",
         "present=true",
         `cycle_count=${Array.isArray(v.cycles) ? v.cycles.length : 0}`,
-        `position_count=${Array.isArray(v.positions) ? v.positions.length : 0}`,
+        `sample_count=${Array.isArray(v.samples) ? v.samples.length : 0}`,
+        `position_count=${positions.length}`,
         `settlement_count=${Array.isArray(v.settlements) ? v.settlements.length : 0}`,
+        `oldest_pending_age_ms=${oldestPendingAgeMs ?? "null"}`,
       ].join(" "));
     });
   '
@@ -199,17 +217,24 @@ if file_exists "$shadow_summary"; then
     process.stdin.on("end", () => {
       const root = JSON.parse(raw);
       const clean = x => String(x ?? "null").replace(/[\t\r\n ]/g, "_").slice(0, 300);
+      const compact = x => x == null ? "null" : JSON.stringify(x);
       console.log("SHADOW_SUMMARY present=true");
       const candidates = root.groups && typeof root.groups === "object" ? root.groups : root;
       for (const [name, value] of Object.entries(candidates)) {
         if (!value || typeof value !== "object" || Array.isArray(value)) continue;
-        const total = value.total ?? value.totalCount ?? value.records ?? value.sampleSize;
-        const settled = value.settled ?? value.settledCount;
-        const pending = value.pending ?? value.pendingCount;
-        const collapsed = value.predictionHealth?.collapsed ?? value.collapsed;
-        const macroF1 = value.macroF1 ?? value.metrics?.macroF1;
-        const balanced = value.balancedAccuracy ?? value.metrics?.balancedAccuracy;
-        if ([total, settled, pending, collapsed, macroF1, balanced].every(x => x === undefined)) continue;
+        const candidate = value.candidate && typeof value.candidate === "object" && !Array.isArray(value.candidate)
+          ? value.candidate
+          : value;
+        const total = value.total ?? value.totalCount ?? value.records ?? value.sampleSize ?? candidate.total ?? candidate.totalCount ?? candidate.sampleSize;
+        const settled = value.settled ?? value.settledCount ?? candidate.settled ?? candidate.settledCount;
+        const pending = value.pending ?? value.pendingCount ?? candidate.pending ?? candidate.pendingCount;
+        const predictionHealth = candidate.predictionHealth ?? value.predictionHealth;
+        const collapsed = predictionHealth?.collapsed ?? candidate.collapsed ?? value.collapsed;
+        const macroF1 = candidate.macroF1 ?? candidate.metrics?.macroF1 ?? value.macroF1 ?? value.metrics?.macroF1;
+        const balanced = candidate.balancedAccuracy ?? candidate.metrics?.balancedAccuracy ?? value.balancedAccuracy ?? value.metrics?.balancedAccuracy;
+        const perClass = candidate.perClass ?? candidate.metrics?.perClass ?? value.perClass ?? value.metrics?.perClass;
+        const confusion = candidate.confusion ?? candidate.confusionMatrix ?? candidate.metrics?.confusion ?? candidate.metrics?.confusionMatrix ?? value.confusion ?? value.confusionMatrix ?? value.metrics?.confusion ?? value.metrics?.confusionMatrix;
+        if ([total, settled, pending, collapsed, macroF1, balanced, perClass, confusion, predictionHealth].every(x => x === undefined)) continue;
         console.log([
           "SHADOW_GROUP",
           `name=${clean(name)}`,
@@ -219,6 +244,9 @@ if file_exists "$shadow_summary"; then
           `collapsed=${clean(collapsed)}`,
           `macro_f1=${clean(macroF1)}`,
           `balanced_accuracy=${clean(balanced)}`,
+          `per_class=${clean(compact(perClass))}`,
+          `confusion=${clean(compact(confusion))}`,
+          `prediction_health=${clean(compact(predictionHealth))}`,
         ].join(" "));
       }
     });

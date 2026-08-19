@@ -2,7 +2,6 @@ import { useLocation, useSearch } from 'wouter';
 import {
   ArrowLeft,
   BarChart3,
-  Bot,
   BrainCircuit,
   ChevronRight,
   Database,
@@ -12,11 +11,11 @@ import {
   Search,
   Settings2,
   ShieldCheck,
-  SlidersHorizontal,
   UserRound,
   type LucideIcon,
 } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
+import { CenteredPageHeader } from '@/components/centered-page-header';
 import { useSettings, type AiVerbosity, type ScannerMode, type ThemeMode } from '@/lib/settings';
 import { cn } from '@/lib/utils';
 
@@ -189,7 +188,7 @@ function DetailPanel({ section, navigate }: { section: SettingsSection; navigate
       {section.id === 'telegram' ? (
         <div role="status" className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm leading-6 text-amber-100">
           <p className="font-black">Telegram 알림 연동은 현재 저장소에 구성된 연결 계약이 없습니다.</p>
-          <p className="mt-2 break-keep text-amber-100/80">브라우저 Push·Notification·Sound를 대체 기능처럼 노출하지 않습니다. LIVE/DELAYED/STALE/DISCONNECTED/Risk Reject/Provider Failure 같은 안전 상태는 앱 내부 inline 표시로 계속 제공합니다.</p>
+          <p className="mt-2 break-keep text-amber-100/80">브라우저 Push·Notification·Sound를 대체 기능처럼 노출하지 않습니다. 안전 상태는 앱 내부 inline 표시로 계속 제공합니다.</p>
         </div>
       ) : null}
 
@@ -272,31 +271,27 @@ export default function MorePage() {
 
   return (
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-background">
-      <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-28 pt-5 sm:px-6 lg:px-8">
+      <CenteredPageHeader
+        title="설정"
+        eyebrow={selected?.title}
+        leading={selected ? (
+          <button
+            type="button"
+            aria-label="설정 홈으로 돌아가기"
+            onClick={() => navigate('/more')}
+            className="flex h-11 w-11 items-center justify-center rounded-xl border border-card-border bg-card text-foreground hover:bg-muted"
+          >
+            <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+          </button>
+        ) : undefined}
+        infoTitle="설정 안내"
+        infoItems={[
+          '필요한 항목만 선택해 관리하며 Secret 전체값과 private 계좌정보를 화면에 표시하지 않습니다.',
+          '고급 진단과 초기화는 서버·주문·계정 데이터를 변경하지 않습니다.',
+        ]}
+      />
+      <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-28 pt-4 sm:px-6 lg:px-8">
         <div className="mx-auto w-full max-w-4xl">
-          <header className="mb-5 flex min-w-0 items-center gap-3">
-            {selected ? (
-              <button
-                type="button"
-                aria-label="설정 홈으로 돌아가기"
-                onClick={() => navigate('/more')}
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-card-border bg-card text-foreground hover:bg-muted"
-              >
-                <ArrowLeft className="h-4 w-4" aria-hidden="true" />
-              </button>
-            ) : (
-              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                <SlidersHorizontal className="h-5 w-5" aria-hidden="true" />
-              </span>
-            )}
-            <div className="min-w-0">
-              <h1 className="break-keep text-2xl font-black tracking-tight">설정</h1>
-              <p className="mt-0.5 break-keep text-xs text-muted-foreground">
-                {selected ? selected.title : '필요한 항목만 선택해 관리합니다.'}
-              </p>
-            </div>
-          </header>
-
           {selected ? (
             <DetailPanel section={selected} navigate={navigate} />
           ) : (
