@@ -1,0 +1,79 @@
+name: Research US Microcap Explosion Proxy
+
+on:
+  push:
+    branches:
+      - agent/research-microcap-explosion-proxy-v1
+    paths:
+      - market-prediction-lab/scripts/run-us-microcap-explosion-proxy-backtest.py
+      - .github/workflows/research-us-microcap-explosion-proxy.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-us-microcap-explosion-proxy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout investment platform research branch
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout immutable public Stooq US daily mirror
+        uses: actions/checkout@v4
+        with:
+          repository: ARKMD/stooq
+          ref: 6ae7c9b04dc8b98612d1ee9594baa64362b4ade1
+          path: external-stooq
+          persist-credentials: false
+          sparse-checkout: |
+            d_us_txt/data/daily/us/nasdaq stocks
+            d_us_txt/data/daily/us/nyse stocks
+            d_us_txt/data/daily/us/nysemkt stocks
+          sparse-checkout-cone-mode: false
+
+      - name: Run ten-year daily OHLCV proxy event study
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p market-prediction-lab/docs/research-us-microcap-explosion-proxy
+          python3 market-prediction-lab/scripts/run-us-microcap-explosion-proxy-backtest.py \
+            "external-stooq/d_us_txt/data/daily/us/nasdaq stocks" \
+            "external-stooq/d_us_txt/data/daily/us/nyse stocks" \
+            "external-stooq/d_us_txt/data/daily/us/nysemkt stocks" \
+            --years 10 \
+            --min-price 0.5 \
+            --max-price 10 \
+            --min-gap 0.10 \
+            --max-gap 0.40 \
+            --min-prev-dollar-volume 1000000 \
+            --min-rvol 5 \
+            --output-json market-prediction-lab/docs/research-us-microcap-explosion-proxy/result.json \
+            --output-md market-prediction-lab/docs/research-us-microcap-explosion-proxy/result.md
+
+      - name: Record immutable provenance
+        shell: bash
+        run: |
+          cat > market-prediction-lab/docs/research-us-microcap-explosion-proxy/provenance.json <<JSON
+          {"schemaVersion":1,"researchCodeSha":"${GITHUB_SHA}","stooqMirrorSha":"6ae7c9b04dc8b98612d1ee9594baa64362b4ade1","runId":"${GITHUB_RUN_ID}","liveOrderAllowed":false,"privateApiAllowed":false,"branchWrite":false}
+          JSON
+
+      - name: Print result table
+        if: always()
+        run: cat market-prediction-lab/docs/research-us-microcap-explosion-proxy/result.md || true
+
+      - name: Upload immutable research artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-us-microcap-explosion-proxy-${{ github.run_id }}
+          path: market-prediction-lab/docs/research-us-microcap-explosion-proxy
+          if-no-files-found: warn
+          retention-days: 90
