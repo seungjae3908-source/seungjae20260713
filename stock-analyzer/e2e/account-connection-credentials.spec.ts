@@ -122,3 +122,51 @@ test('Toss credential form is read-only, Account Seq is optional, and mobile dia
   await page.getByRole('button', { name: 'Bitget 조회 연결 설정' }).click(); const bitgetBox = await page.getByRole('dialog').boundingBox(); expect(bitgetBox).not.toBeNull(); expect(bitgetBox!.x + bitgetBox!.width).toBeLessThanOrEqual(361);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(361); await expect(page.locator('body')).not.toContainText('Kiwoom'); assertClean();
 });
+
+test('account metrics distinguish real zero from missing, stale, and unavailable evidence', async ({ page }) => {
+  const { assertClean } = await installRegular(page);
+  await page.route('**/api/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === '/api/accounts/read-only/toss') return fulfill(route, emptySnapshot('toss', {
+      connected: true,
+      status: 'CONNECTED',
+      errorCode: null,
+      accounts: [],
+      positions: [{ market: 'KR', symbol: '005930', quantity: 1, availableQuantity: 1, averageEntryPrice: null, currentPrice: null, marketValue: null, unrealizedPnl: 0, unrealizedPnlPercent: 0, leverage: null, liquidationPrice: null, marginMode: null, side: null }],
+    }));
+    if (path === '/api/accounts/read-only/upbit') return fulfill(route, emptySnapshot('upbit', {
+      connected: true,
+      status: 'STALE',
+      stale: true,
+      lastGoodAt: NOW,
+      errorCode: 'ACCOUNT_LAST_GOOD_STALE',
+      balances: [{ currency: 'KRW', available: 0, locked: 0, total: 0, estimatedKrwValue: 0 }],
+    }));
+    if (path === '/api/accounts/read-only/bitget') return fulfill(route, emptySnapshot('bitget', {
+      status: 'UNAVAILABLE',
+      errorCode: 'ACCOUNT_PROVIDER_UNAVAILABLE',
+    }));
+    if (path === '/api/user-integrations') return fulfill(route, { brokerConnections: [], telegram: { connected: false, status: 'DISCONNECTED', connectedAt: null }, preferences: {} });
+    return fulfill(route, { ok: true, items: [], rows: [], results: [] });
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/account');
+
+  const toss = page.getByTestId('connection-toss');
+  await expect(toss).toContainText('0개 시장');
+  await expect(toss).toContainText('1종목');
+  await expect(toss).toContainText('평가 미수집 · 손익 0');
+  await expect(toss).not.toContainText('평가 -');
+
+  const upbit = page.getByTestId('connection-upbit');
+  await expect(upbit).toContainText('이전 정상값');
+  await expect(upbit).toContainText('보유 자산 오래된 데이터');
+
+  const bitget = page.getByTestId('connection-bitget');
+  await expect(bitget).toContainText('조회 불가');
+  await expect(bitget).toContainText('사용 불가');
+
+  await expect(page.locator('body')).not.toContainText('Kiwoom');
+  assertClean();
+});
