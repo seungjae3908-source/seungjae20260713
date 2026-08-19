@@ -17,6 +17,14 @@ export interface ScannerUniverseEntry extends CatalogEntry {
   source: ScannerUniverseSource;
 }
 
+export interface ScannerUniverseExplainedExclusion {
+  ticker: string;
+  name: string;
+  exchange: string | null;
+  assetType: AssetType;
+  reason: 'PUBLIC_PROVIDER_UNSUPPORTED_ALPHANUMERIC_KRX_SYMBOL';
+}
+
 export interface ScannerUniverseResult {
   entries: ScannerUniverseEntry[];
   totalCount: number;
@@ -25,6 +33,9 @@ export interface ScannerUniverseResult {
   stale: boolean;
   providerErrorCount: number;
   loadedAt: string;
+  rawTotalCount?: number;
+  explainedExcludedCount?: number;
+  explainedExclusions?: ScannerUniverseExplainedExclusion[];
 }
 
 export interface ScannerUniverseBatch extends ScannerUniverseResult {
@@ -35,7 +46,13 @@ export interface ScannerUniverseBatch extends ScannerUniverseResult {
 }
 
 type MarketScope = 'KR' | 'US';
-type CacheRow = { at: number; entries: ScannerUniverseEntry[]; source: ScannerUniverseSource };
+type CacheRow = {
+  at: number;
+  entries: ScannerUniverseEntry[];
+  source: ScannerUniverseSource;
+  rawTotalCount: number;
+  explainedExclusions: ScannerUniverseExplainedExclusion[];
+};
 const lastGood = new Map<MarketScope, CacheRow>();
 const CACHE_MS = 12 * 60 * 60_000;
 
@@ -60,6 +77,44 @@ function dedupe(entries: ScannerUniverseEntry[]): ScannerUniverseEntry[] {
     if (!rows.has(key)) rows.set(key, { ...entry, ticker });
   }
   return [...rows.values()].sort((left, right) => left.ticker.localeCompare(right.ticker));
+}
+
+function publicOnlyCapability(
+  market: MarketScope,
+  entries: ScannerUniverseEntry[],
+): { entries: ScannerUniverseEntry[]; rawTotalCount: number; exclusions: ScannerUniverseExplainedExclusion[] } {
+  const rawTotalCount = entries.length;
+  const publicOnly = String(process.env.SIGNAL_INTELLIGENCE_PUBLIC_ONLY_UNIVERSE ?? '').trim().toLowerCase() === 'true';
+  if (!publicOnly || market !== 'KR') return { entries, rawTotalCount, exclusions: [] };
+
+  const exclusions: ScannerUniverseExplainedExclusion[] = [];
+  const supported = entries.filter((entry) => {
+    const ticker = String(entry.ticker ?? '').trim().toUpperCase();
+    // The standalone public-only V3 uses Yahoo for KR candles/quotes. Yahoo
+    // supports the traditional numeric KRX short-code form via .KS/.KQ, but
+    // not the newer alphanumeric KRX short codes. Keep those symbols visible
+    // as explained capability exclusions instead of counting them as provider
+    // outages. The normal app universe is unchanged because this branch is
+    // enabled only by SIGNAL_INTELLIGENCE_PUBLIC_ONLY_UNIVERSE=true.
+    const unsupported = !/^\d{6}$/u.test(ticker);
+    if (!unsupported) return true;
+    exclusions.push({
+      ticker,
+      name: String(entry.name ?? ticker),
+      exchange: entry.exchange,
+      assetType: entry.assetType,
+      reason: 'PUBLIC_PROVIDER_UNSUPPORTED_ALPHANUMERIC_KRX_SYMBOL',
+    });
+    return false;
+  });
+
+  if (exclusions.length > 0) {
+    const tickers = exclusions.slice(0, 20).map((row) => row.ticker).join(',');
+    console.warn(
+      `[SIGNAL_INTELLIGENCE_EXPLAINED_EXCLUSION] reason=PUBLIC_PROVIDER_UNSUPPORTED_ALPHANUMERIC_KRX_SYMBOL count=${exclusions.length} tickers=${tickers}`,
+    );
+  }
+  return { entries: supported, rawTotalCount, exclusions };
 }
 
 function linkedUniverseSignal(
@@ -155,6 +210,9 @@ export const ScannerUniverseService = {
       return {
         entries: cached.entries,
         totalCount: cached.entries.length,
+        rawTotalCount: cached.rawTotalCount,
+        explainedExcludedCount: cached.explainedExclusions.length,
+        explainedExclusions: cached.explainedExclusions,
         source: cached.source,
         partial: false,
         stale: false,
@@ -165,15 +223,26 @@ export const ScannerUniverseService = {
 
     const linked = linkedUniverseSignal(signal, deadlineMs);
     try {
-      const live = dedupe(await awaitWithAbort(liveUniverse(market, linked.signal), linked.signal));
+      const rawLive = dedupe(await awaitWithAbort(liveUniverse(market, linked.signal), linked.signal));
+      const capability = publicOnlyCapability(market, rawLive);
+      const live = capability.entries;
       if (live.length > 0) {
         const source: ScannerUniverseSource = market === 'KR'
           ? 'krx-symbol-master'
           : 'finnhub-symbol-master';
-        lastGood.set(market, { at: now, entries: live, source });
+        lastGood.set(market, {
+          at: now,
+          entries: live,
+          source,
+          rawTotalCount: capability.rawTotalCount,
+          explainedExclusions: capability.exclusions,
+        });
         return {
           entries: live,
           totalCount: live.length,
+          rawTotalCount: capability.rawTotalCount,
+          explainedExcludedCount: capability.exclusions.length,
+          explainedExclusions: capability.exclusions,
           source,
           partial: false,
           stale: false,
@@ -191,6 +260,9 @@ export const ScannerUniverseService = {
       return {
         entries: cached.entries.map((entry) => ({ ...entry, source: 'last-good-cache' })),
         totalCount: cached.entries.length,
+        rawTotalCount: cached.rawTotalCount,
+        explainedExcludedCount: cached.explainedExclusions.length,
+        explainedExclusions: cached.explainedExclusions,
         source: 'last-good-cache',
         partial: true,
         stale: true,
@@ -203,6 +275,9 @@ export const ScannerUniverseService = {
     return {
       entries: fallback,
       totalCount: fallback.length,
+      rawTotalCount: fallback.length,
+      explainedExcludedCount: 0,
+      explainedExclusions: [],
       source: 'curated-fallback',
       partial: true,
       stale: true,
