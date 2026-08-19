@@ -72,7 +72,7 @@ function inputFor(
   const symbol = market === 'KR_STOCK' ? '005930'
     : market === 'US_STOCK' ? 'AAPL'
       : market === 'CRYPTO_SPOT' ? 'KRW-BTC' : 'BTCUSDT';
-  const input: FourMarketAutoReadinessInput = {
+  return {
     market,
     provider,
     symbol,
@@ -122,8 +122,13 @@ function inputFor(
     paperGateReady: true,
     shadowGateReady: true,
   };
-  input.serverProfitabilityAttestation = profitabilityAttestation(input);
-  return input;
+}
+
+function evaluate(
+  input: FourMarketAutoReadinessInput,
+  attestation: TradeProfitabilityAttestation = profitabilityAttestation(input),
+) {
+  return evaluateFourMarketAutoPredeployReadiness(input, NOW, () => attestation);
 }
 
 test('four fixed markets require canonical provider, server profitability, and keep the frozen plan non-executable', () => {
@@ -134,7 +139,7 @@ test('four fixed markets require canonical provider, server profitability, and k
     inputFor('CRYPTO_FUTURES', 'BITGET', 'LONG'),
   ];
   for (const item of valid) {
-    const result = evaluateFourMarketAutoPredeployReadiness(item, NOW);
+    const result = evaluate(item);
     assert.equal(result.status, 'AUTO_PREDEPLOY_READY', `${item.market}: ${result.reasons.join(',')}`);
     assert.ok(result.frozenOrderPlan);
     assert.equal(Object.isFrozen(result.frozenOrderPlan), true);
@@ -151,23 +156,31 @@ test('four fixed markets require canonical provider, server profitability, and k
   }
 });
 
-test('missing or blocked server profitability attestation prevents frozen plan materialization', () => {
+test('client-shaped attestation data cannot replace the server-only profitability provider', () => {
+  const spoofed = inputFor('CRYPTO_FUTURES', 'BITGET', 'LONG');
+  (spoofed as unknown as Record<string, unknown>).serverProfitabilityAttestation = profitabilityAttestation(spoofed);
+  const result = evaluateFourMarketAutoPredeployReadiness(spoofed, NOW);
+  assert.equal(result.status, 'BLOCKED');
+  assert.ok(result.reasons.includes('SERVER_PROFITABILITY_ATTESTATION_REQUIRED'));
+  assert.equal(result.frozenOrderPlan, null);
+});
+
+test('missing or blocked server profitability provider prevents frozen plan materialization', () => {
   const missing = inputFor('CRYPTO_FUTURES', 'BITGET', 'LONG');
-  missing.serverProfitabilityAttestation = null;
   const missingResult = evaluateFourMarketAutoPredeployReadiness(missing, NOW);
   assert.equal(missingResult.status, 'BLOCKED');
   assert.ok(missingResult.reasons.includes('SERVER_PROFITABILITY_ATTESTATION_REQUIRED'));
   assert.equal(missingResult.frozenOrderPlan, null);
 
   const blocked = inputFor('CRYPTO_FUTURES', 'BITGET', 'LONG');
-  blocked.serverProfitabilityAttestation = {
+  const blockedAttestation: TradeProfitabilityAttestation = {
     ...profitabilityAttestation(blocked),
     allowed: false,
     blockCodes: ['SERVER_STRATEGY_NOT_PROMOTION_READY'],
     promotionState: 'SHADOW_VALIDATED',
     serverEconomics: null,
   };
-  const blockedResult = evaluateFourMarketAutoPredeployReadiness(blocked, NOW);
+  const blockedResult = evaluate(blocked, blockedAttestation);
   assert.equal(blockedResult.status, 'BLOCKED');
   assert.ok(blockedResult.reasons.includes('SERVER_PROFITABILITY_ATTESTATION_BLOCKED'));
   assert.equal(blockedResult.frozenOrderPlan, null);
@@ -175,44 +188,54 @@ test('missing or blocked server profitability attestation prevents frozen plan m
 
 test('server profitability identity must match the exact strategy identity', () => {
   const input = inputFor('CRYPTO_SPOT', 'UPBIT', 'BUY');
-  input.serverProfitabilityAttestation = {
+  const mismatched: TradeProfitabilityAttestation = {
     ...profitabilityAttestation(input),
     parameterHash: 'b'.repeat(64),
   };
-  const result = evaluateFourMarketAutoPredeployReadiness(input, NOW);
+  const result = evaluate(input, mismatched);
   assert.equal(result.status, 'BLOCKED');
   assert.ok(result.reasons.includes('SERVER_PROFITABILITY_IDENTITY_MISMATCH'));
   assert.equal(result.frozenOrderPlan, null);
 });
 
-test('readiness rejects malformed server attestation that tries to trust client economics or grant order authority', () => {
+test('readiness rejects malformed server provider output that tries to trust client economics or grant order authority', () => {
   const input = inputFor('US_STOCK', 'TOSS', 'BUY');
-  input.serverProfitabilityAttestation = {
+  const malformed = {
     ...profitabilityAttestation(input),
     clientEconomicsTrusted: true,
     orderAuthorityGranted: true,
   } as unknown as TradeProfitabilityAttestation;
-  const result = evaluateFourMarketAutoPredeployReadiness(input, NOW);
+  const result = evaluate(input, malformed);
   assert.equal(result.status, 'BLOCKED');
   assert.ok(result.reasons.includes('SERVER_PROFITABILITY_CONTRACT_INVALID'));
   assert.equal(result.frozenOrderPlan, null);
 });
 
+test('server profitability provider failure fails closed without materializing an order plan', () => {
+  const input = inputFor('KR_STOCK', 'TOSS', 'BUY');
+  const result = evaluateFourMarketAutoPredeployReadiness(input, NOW, () => {
+    throw new Error('promotion-store-unavailable');
+  });
+  assert.equal(result.status, 'BLOCKED');
+  assert.ok(result.reasons.includes('SERVER_PROFITABILITY_ATTESTATION_BLOCKED'));
+  assert.equal(result.frozenOrderPlan, null);
+});
+
 test('cash markets reject new short semantics and require reducing SELL_EXIT', () => {
   const shortLike = inputFor('CRYPTO_SPOT', 'UPBIT', 'SHORT');
-  const shortResult = evaluateFourMarketAutoPredeployReadiness(shortLike, NOW);
+  const shortResult = evaluate(shortLike);
   assert.equal(shortResult.status, 'BLOCKED');
   assert.ok(shortResult.reasons.includes('CASH_DIRECTION_NOT_ALLOWED'));
 
   const nonReducingExit = inputFor('US_STOCK', 'TOSS', 'SELL_EXIT', false);
-  const exitResult = evaluateFourMarketAutoPredeployReadiness(nonReducingExit, NOW);
+  const exitResult = evaluate(nonReducingExit);
   assert.ok(exitResult.reasons.includes('CASH_SELL_MUST_REDUCE'));
 });
 
 test('provider mismatch and identity mismatch fail closed instead of falling back', () => {
   const mismatch = inputFor('KR_STOCK', 'UPBIT', 'BUY');
   mismatch.providerEvidence = { kind: 'UPBIT', tickSize: 1, minOrderKrw: 5_000 };
-  const result = evaluateFourMarketAutoPredeployReadiness(mismatch, NOW);
+  const result = evaluate(mismatch);
   assert.ok(result.reasons.includes('PROVIDER_AUTHORITY_MISMATCH'));
   assert.ok(result.reasons.includes('TOSS_EVIDENCE_MISMATCH'));
   assert.equal(result.frozenOrderPlan, null);
@@ -226,7 +249,8 @@ test('unknown cost, stale data, incomplete stage gates, and missing recovery evi
   input.paperGateReady = false;
   input.shadowGateReady = false;
   input.risk.restartReconciliationReady = false;
-  const result = evaluateFourMarketAutoPredeployReadiness(input, NOW);
+  const attestation = profitabilityAttestation(input);
+  const result = evaluate(input, attestation);
   for (const reason of [
     'DATA_TIMESTAMP_STALE',
     'UNKNOWN_COST_POLICY',
@@ -240,7 +264,7 @@ test('unknown cost, stale data, incomplete stage gates, and missing recovery evi
 
 test('Bitget futures requires mark/funding/OI/precision/leverage/margin/liquidation evidence while accepting explicit zero funding', () => {
   const zeroFunding = inputFor('CRYPTO_FUTURES', 'BITGET', 'LONG');
-  assert.equal(evaluateFourMarketAutoPredeployReadiness(zeroFunding, NOW).status, 'AUTO_PREDEPLOY_READY');
+  assert.equal(evaluate(zeroFunding).status, 'AUTO_PREDEPLOY_READY');
 
   const missing = inputFor('CRYPTO_FUTURES', 'BITGET', 'SHORT');
   missing.providerEvidence = {
@@ -255,7 +279,7 @@ test('Bitget futures requires mark/funding/OI/precision/leverage/margin/liquidat
     marginMode: 'isolated',
     liquidationDistancePercent: 0,
   };
-  const result = evaluateFourMarketAutoPredeployReadiness(missing, NOW);
+  const result = evaluate(missing);
   assert.ok(result.reasons.includes('BITGET_CONTRACT_EVIDENCE_INVALID'));
   assert.ok(result.reasons.includes('BITGET_LEVERAGE_OR_MARGIN_INVALID'));
   assert.ok(result.reasons.includes('BITGET_LIQUIDATION_DISTANCE_INVALID'));
