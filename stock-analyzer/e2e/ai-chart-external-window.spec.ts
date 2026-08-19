@@ -314,23 +314,10 @@ test('hidden state accepts only ordered snapshots and sends a fresh ready signal
   }));
   await page.goto(externalUrl);
   const origin = new URL(page.url()).origin;
-  const base = Date.now();
-  await postChannelMessage(page, mainMessage({ type: 'ready', sourceId: 'main-hidden', sequence: 1, sentAt: base + 10, origin }));
 
-  await setDocumentVisibility(page, 'hidden');
-  await postChannelMessage(page, mainMessage({
-    type: 'selection', sourceId: 'main-hidden', sequence: 2, sentAt: base + 100, origin,
-    selectionOverride: { timeframe: '5m' },
-  }));
-  await postChannelMessage(page, mainMessage({
-    type: 'selection', sourceId: 'main-hidden', sequence: 3, sentAt: base + 200, origin,
-    selectionOverride: { timeframe: '15m' },
-  }));
-  await postChannelMessage(page, mainMessage({
-    type: 'selection', sourceId: 'main-hidden', sequence: 2, sentAt: base + 150, origin,
-    selectionOverride: { timeframe: '30m' },
-  }));
-
+  // Use a separate visible document as the synthetic main window. Posting from
+  // the page whose visibility is forced to hidden also throttles the test-only
+  // sender in Chromium and does not model the real two-window topology.
   const controller = await context.newPage();
   await controller.goto(`${origin}/sync-controller`);
   await controller.evaluate((name) => {
@@ -347,6 +334,23 @@ test('hidden state accepts only ordered snapshots and sends a fresh ready signal
       if (message.type === 'ready' && message.sourceRole === 'external') state.__chartReadySeen = true;
     };
   }, channelName);
+
+  const base = Date.now();
+  await postChannelMessage(controller, mainMessage({ type: 'ready', sourceId: 'main-hidden', sequence: 1, sentAt: base + 10, origin }));
+
+  await setDocumentVisibility(page, 'hidden');
+  await postChannelMessage(controller, mainMessage({
+    type: 'selection', sourceId: 'main-hidden', sequence: 2, sentAt: base + 100, origin,
+    selectionOverride: { timeframe: '5m' },
+  }));
+  await postChannelMessage(controller, mainMessage({
+    type: 'selection', sourceId: 'main-hidden', sequence: 3, sentAt: base + 200, origin,
+    selectionOverride: { timeframe: '15m' },
+  }));
+  await postChannelMessage(controller, mainMessage({
+    type: 'selection', sourceId: 'main-hidden', sequence: 2, sentAt: base + 150, origin,
+    selectionOverride: { timeframe: '30m' },
+  }));
 
   await setDocumentVisibility(page, 'visible');
   await expect(page).toHaveURL(/timeframe=15m/);
