@@ -5,6 +5,7 @@ import { summarizeShadowSourceHealth } from "../src/shadow-source-health.js";
 
 const GROUPS = Object.freeze(["crypto-futures-15m", "crypto-futures-1h"]);
 const MIN_ADAPTIVE_SETTLED = 120;
+const DEPLOYED_INFERENCE_CONTRACT = "deployed-rule-model-65-35";
 
 async function readJson(filePath) {
   return JSON.parse(await readFile(filePath, "utf8"));
@@ -48,6 +49,17 @@ function collapseResearchHold({ group, referenceModel, sourceHealth }) {
   });
 }
 
+function assertDeployedInferenceContract(result) {
+  const selection = result?.diagnostics?.selection;
+  if (result?.status === "shadow_candidate_v2" && !selection) {
+    throw new Error("ADAPTIVE_DEPLOYED_INFERENCE_EVIDENCE_MISSING");
+  }
+  if (selection && selection.inferenceContract !== DEPLOYED_INFERENCE_CONTRACT) {
+    throw new Error("ADAPTIVE_DEPLOYED_INFERENCE_CONTRACT_MISMATCH");
+  }
+  return result;
+}
+
 function attachSourceHealth(result, sourceHealth) {
   return Object.freeze({
     ...result,
@@ -78,12 +90,12 @@ for (const group of GROUPS) {
     const sourceHealth = summarizeShadowSourceHealth({ state: groupState, model: referenceModel });
     const result = sourceHealth.collapsed
       ? collapseResearchHold({ group, referenceModel, sourceHealth })
-      : attachSourceHealth(buildAdaptiveShadowCandidate({
+      : attachSourceHealth(assertDeployedInferenceContract(buildAdaptiveShadowCandidate({
           group,
           state: groupState,
           referenceArtifact,
           minSettled: MIN_ADAPTIVE_SETTLED,
-        }), sourceHealth);
+        })), sourceHealth);
 
     await writeJsonAtomically(resolve(diagnosticsRoot, `${group}-adaptive-v2.json`), result);
     if (result.status === "shadow_candidate_v2") {
