@@ -246,7 +246,7 @@ export default function TechnicalWorkspacePage() {
   if (location.startsWith('/auto-trading')) return <Suspense fallback={<WorkspaceFallback />}><AutoTradingPage /></Suspense>;
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background" data-testid="technical-workspace">
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background pb-[calc(5rem+env(safe-area-inset-bottom))]" data-testid="technical-workspace">
       <CenteredPageHeader
         title={WORKSPACE_TITLES[workspace]}
         infoTitle="기술 기능 안내"

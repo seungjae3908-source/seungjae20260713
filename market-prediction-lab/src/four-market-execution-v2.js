@@ -11,6 +11,7 @@ export const EXECUTION_STAGES = Object.freeze(["BACKTEST", "SHADOW", "PAPER"]);
 export const EXECUTION_STYLES = Object.freeze(["SCALPING", "SWING", "MID_LONG"]);
 export const EXECUTION_FILL_MODELS = Object.freeze(["BAR_PROXY", "TOP_OF_BOOK", "DEPTH_PARTICIPATION"]);
 export const EXECUTION_ORDER_TYPES = Object.freeze(["MARKET", "LIMIT", "STOP_MARKET"]);
+export const EXECUTION_PURPOSES = Object.freeze(["ENTRY", "SETTLEMENT"]);
 
 export const FOUR_MARKET_EXECUTION_PROFILES = Object.freeze({
   KR_STOCK: Object.freeze({
@@ -60,6 +61,7 @@ const STAGE_SET = new Set(EXECUTION_STAGES);
 const STYLE_SET = new Set(EXECUTION_STYLES);
 const FILL_MODEL_SET = new Set(EXECUTION_FILL_MODELS);
 const ORDER_TYPE_SET = new Set(EXECUTION_ORDER_TYPES);
+const PURPOSE_SET = new Set(EXECUTION_PURPOSES);
 const NON_NEGATIVE_COST_FIELDS = Object.freeze([
   "commissionRate",
   "taxRate",
@@ -173,9 +175,27 @@ function validateFuturesEvidence({ dataEvidence }, blockers) {
   addBlocker(blockers, positive(dataEvidence?.liquidationDistancePct), "BITGET_LIQUIDATION_DISTANCE_REQUIRED");
 }
 
-function validateFidelityEvidence({ stage, executionPolicy, dataEvidence, evaluatedAtMs }, blockers) {
+function validateFidelityEvidence({ stage, executionPurpose, executionPolicy, dataEvidence, evaluatedAtMs }, blockers) {
   if (executionPolicy?.fillModel === "BAR_PROXY") {
-    if (stage !== "BACKTEST") addBlocker(blockers, dataEvidence?.barProxyRealtimeAllowed === true, "REALTIME_BAR_PROXY_NOT_EVIDENCED");
+    if (dataEvidence?.historicalSettlementEvidence === true) {
+      addBlocker(blockers, stage === "PAPER" && executionPurpose === "SETTLEMENT", "HISTORICAL_SETTLEMENT_PURPOSE_REQUIRED");
+      addBlocker(blockers, dataEvidence?.closedDataOnly === true, "HISTORICAL_SETTLEMENT_CLOSED_DATA_REQUIRED");
+      addBlocker(blockers, isFiniteNumber(dataEvidence?.historicalSettlementEffectiveAtMs), "HISTORICAL_SETTLEMENT_TIMESTAMP_REQUIRED");
+      if (isFiniteNumber(dataEvidence?.historicalSettlementEffectiveAtMs)) {
+        addBlocker(blockers, dataEvidence.historicalSettlementEffectiveAtMs <= evaluatedAtMs, "FUTURE_HISTORICAL_SETTLEMENT_FORBIDDEN");
+      }
+    }
+    if (stage !== "BACKTEST") {
+      const historicalSettlementReady = stage === "PAPER"
+        && executionPurpose === "SETTLEMENT"
+        && dataEvidence?.historicalSettlementEvidence === true
+        && dataEvidence?.closedDataOnly === true
+        && isFiniteNumber(dataEvidence?.historicalSettlementEffectiveAtMs)
+        && dataEvidence.historicalSettlementEffectiveAtMs <= evaluatedAtMs;
+      const realtimeReady = dataEvidence?.historicalSettlementEvidence !== true
+        && dataEvidence?.barProxyRealtimeAllowed === true;
+      addBlocker(blockers, realtimeReady || historicalSettlementReady, "BAR_PROXY_EVIDENCE_NOT_READY");
+    }
     return;
   }
 
@@ -207,6 +227,7 @@ export function buildFourMarketExecutionContext({
   timeframe,
   horizon,
   direction,
+  executionPurpose = "ENTRY",
   marketAdapterIdentity,
   strategyIdentity,
   costPolicy,
@@ -217,6 +238,7 @@ export function buildFourMarketExecutionContext({
   if (!MARKET_SET.has(market)) throw new TypeError(`unsupported execution market: ${market}`);
   if (!STAGE_SET.has(stage)) throw new TypeError(`unsupported execution stage: ${stage}`);
   if (!STYLE_SET.has(style)) throw new TypeError(`unsupported execution style: ${style}`);
+  if (!PURPOSE_SET.has(executionPurpose)) throw new TypeError(`unsupported execution purpose: ${executionPurpose}`);
   if (!isFiniteNumber(evaluatedAtMs)) throw new TypeError("evaluatedAtMs is required");
 
   const profile = FOUR_MARKET_EXECUTION_PROFILES[market];
@@ -238,7 +260,7 @@ export function buildFourMarketExecutionContext({
   if (market === "KR_STOCK" || market === "US_STOCK") validateStockEvidence({ market, stage, style, dataEvidence }, blockers);
   if (market === "CRYPTO_SPOT") validateSpotEvidence({ dataEvidence }, blockers);
   if (market === "CRYPTO_FUTURES") validateFuturesEvidence({ dataEvidence }, blockers);
-  validateFidelityEvidence({ stage, executionPolicy, dataEvidence, evaluatedAtMs }, blockers);
+  validateFidelityEvidence({ stage, executionPurpose, executionPolicy, dataEvidence, evaluatedAtMs }, blockers);
 
   const parityPayload = Object.freeze({
     schemaVersion: 2,
@@ -275,6 +297,7 @@ export function buildFourMarketExecutionContext({
     timeframe: timeframe ?? null,
     horizon: horizon ?? null,
     direction,
+    executionPurpose,
     provider: profile.provider,
     settlementCurrency: profile.settlementCurrency,
     marketAdapterIdentity: Object.freeze({

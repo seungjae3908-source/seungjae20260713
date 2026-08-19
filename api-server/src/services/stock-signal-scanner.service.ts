@@ -174,6 +174,7 @@ export const StockSignalScannerService = {
     const primaryTimeframe = String(request.filters.timeframe ?? '1D') === '1H' ? '60m' : String(request.filters.timeframe ?? '1D');
     const strategyMode = request.strategyMode ?? scannerStrategyForTimeframe(primaryTimeframe);
     const contextTimeframe = scannerContextTimeframe(strategyMode);
+    const publicCoreOnly = String(request.memberId ?? '').toLowerCase().includes('signal-intelligence');
     const universe = await ScannerUniverseService.batch(request.market, request.cursor, request.batchSize, request.signal);
     const candlesByTicker = new Map<string, Candle[]>();
     const contextByTicker = new Map<string, Candle[]>();
@@ -195,7 +196,7 @@ export const StockSignalScannerService = {
         return candles;
       },
       getQuote: (ticker) => MarketDataService.getQuote(ticker),
-      getContext: (entry) => buildContext(entry),
+      getContext: (entry) => publicCoreOnly ? Promise.resolve({}) : buildContext(entry),
       now: Date.now,
     });
     const execution: ScanExecutionOptions = {

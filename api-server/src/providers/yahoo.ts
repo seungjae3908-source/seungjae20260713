@@ -188,6 +188,81 @@ function lastValidIndex(values: Array<number | null | undefined>) {
   return -1;
 }
 
+function normalizeYahooCandles(result: YahooChartResult): Candle[] {
+  const quote = result.indicators?.quote?.[0];
+  if (!result.timestamp?.length || !quote) return [];
+
+  return result.timestamp
+    .map((timestamp, index) => {
+      const close = safeNumber(quote.close?.[index]);
+
+      return {
+        time: new Date(timestamp * 1000).toISOString(),
+        open: safeNumber(quote.open?.[index]),
+        high: safeNumber(quote.high?.[index]),
+        low: safeNumber(quote.low?.[index]),
+        close,
+        volume: safeNumber(quote.volume?.[index]),
+      } as Candle;
+    })
+    .filter((candle) => candle.close > 0);
+}
+
+function aggregateContinuousCandles(
+  rows: Candle[],
+  size: number,
+  maximumGapMs: number,
+): Candle[] {
+  if (size <= 1) return rows;
+
+  const output: Candle[] = [];
+  let chunk: Candle[] = [];
+
+  const flush = () => {
+    if (chunk.length === size) {
+      output.push({
+        time: chunk[0].time,
+        open: chunk[0].open,
+        high: Math.max(...chunk.map((item) => item.high)),
+        low: Math.min(...chunk.map((item) => item.low)),
+        close: chunk[chunk.length - 1].close,
+        volume: chunk.reduce((sum, item) => sum + item.volume, 0),
+      });
+    }
+    chunk = [];
+  };
+
+  for (const row of rows) {
+    if (chunk.length > 0) {
+      const previousMs = Date.parse(String(chunk[chunk.length - 1].time));
+      const currentMs = Date.parse(String(row.time));
+      const contiguous = Number.isFinite(previousMs)
+        && Number.isFinite(currentMs)
+        && currentMs > previousMs
+        && currentMs - previousMs <= maximumGapMs;
+
+      if (!contiguous) flush();
+    }
+
+    chunk.push(row);
+    if (chunk.length === size) flush();
+  }
+
+  flush();
+  return output;
+}
+
+export function aggregateYahooDerivedTimeframe(timeframe: string, rows: Candle[]): Candle[] {
+  switch (String(timeframe)) {
+    case '3m':
+      return aggregateContinuousCandles(rows, 3, 90_000);
+    case '4H':
+      return aggregateContinuousCandles(rows, 4, 90 * 60_000);
+    default:
+      return rows;
+  }
+}
+
 export async function getQuote(
   entryOrTicker: CatalogEntry | string,
 ): Promise<Partial<Quote>> {
@@ -294,25 +369,16 @@ export async function getCandles(
 ): Promise<Candle[]> {
   const ticker = getTickerFromEntry(entryOrTicker);
   const symbol = yahooSymbol(ticker);
-  const result = await fetchYahooChart(symbol, yahooChartParams(timeframe));
-  const quote = result.indicators?.quote?.[0];
+  const requestedTimeframe = String(timeframe ?? '1D');
+  const sourceTimeframe = requestedTimeframe === '3m'
+    ? '1m'
+    : requestedTimeframe === '4H'
+      ? '60m'
+      : requestedTimeframe;
+  const result = await fetchYahooChart(symbol, yahooChartParams(sourceTimeframe));
+  const rows = normalizeYahooCandles(result);
 
-  if (!result.timestamp?.length || !quote) return [];
-
-  return result.timestamp
-    .map((timestamp, index) => {
-      const close = safeNumber(quote.close?.[index]);
-
-      return {
-        time: new Date(timestamp * 1000).toISOString(),
-        open: safeNumber(quote.open?.[index]),
-        high: safeNumber(quote.high?.[index]),
-        low: safeNumber(quote.low?.[index]),
-        close,
-        volume: safeNumber(quote.volume?.[index]),
-      } as Candle;
-    })
-    .filter((candle) => candle.close > 0);
+  return aggregateYahooDerivedTimeframe(requestedTimeframe, rows);
 }
 
 export const candles = getCandles;
