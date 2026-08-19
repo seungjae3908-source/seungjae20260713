@@ -164,7 +164,7 @@ test("fresh natural frozen ETH V6 tracking signal becomes one low-sample Paper c
     assert.equal(candidate.retainedForwardEvidence.privateAccountRequested, false);
     assert.equal(result.safety.maximumEntryLagMs, 6 * 60 * 60 * 1000);
     assert.equal(result.safety.maximumSourceAgeMs, 45 * 60 * 1000);
-    assert.equal(result.safety.settlementBridgeReady, false);
+    assert.equal(result.safety.settlementBridgeReady, true);
     assert.equal(result.safety.liveTrading, false);
   });
 });
@@ -179,7 +179,7 @@ test("Shadow evidence not consumed promptly is never backfilled into Paper", asy
       loadContext: async () => { throw new Error("context must not be loaded for stale source"); },
     });
     const result = await source.collect();
-    assert.equal(result.status, "NO_FRESH_TRACKING_SIGNAL");
+    assert.equal(result.status, "NO_FRESH_TRACKING_OR_SETTLEMENT");
     assert.equal(result.candidates.length, 0);
   });
 });
@@ -206,8 +206,66 @@ test("settled shadow records are not retrospectively opened as Paper positions",
       loadContext: async () => { throw new Error("context must not be loaded for settled record"); },
     });
     const result = await source.collect();
-    assert.equal(result.status, "NO_FRESH_TRACKING_SIGNAL");
+    assert.equal(result.status, "NO_FRESH_TRACKING_OR_SETTLEMENT");
     assert.equal(result.candidates.length, 0);
+    assert.equal(result.exits.length, 0);
+  });
+});
+
+test("settled Shadow record closes only its exact matching canonical Paper position", async () => {
+  const settled = trackingRecord({
+    status: "settled",
+    subsequentMarketResult: { exitReason: "take_profit", exitPrice: 4200, exitTimestamp: ENTRY + 24 * 60 * 60 * 1000 },
+  });
+  await withShadowFile(shadowRoot(settled), async (shadowStatePath) => {
+    let settlementArgs = null;
+    const source = createEthV6PaperForwardSource({
+      shadowStatePath,
+      researchCodeSha: SHA,
+      clock: () => NOW + 2 * 24 * 60 * 60 * 1000,
+      loadContext: async () => { throw new Error("entry context must not be loaded for settled record"); },
+      loadSettlement: async (args) => {
+        settlementArgs = args;
+        return {
+          status: "READY",
+          settlementInput: { exitExecution: { test: true }, exitOrderType: "LIMIT", exitLimitPrice: 4200, fundingEvidence: { complete: true, payments: [] } },
+          evidence: { shadowExitPriceIgnored: true },
+        };
+      },
+    });
+    const position = {
+      positionId: "paper-position-1",
+      signalId: settled.signalId,
+      market: "CRYPTO_FUTURES",
+      direction: "LONG",
+      strategyId: "v6_independent_breakout_retest",
+      researchCodeSha: SHA,
+      lifecycleState: "OPEN",
+    };
+    const result = await source.collect({ openPositions: [position] });
+    assert.equal(result.status, "READY");
+    assert.equal(result.candidates.length, 0);
+    assert.equal(result.exits.length, 1);
+    assert.equal(result.exits[0].positionId, "paper-position-1");
+    assert.equal(result.exits[0].naturalSettlementEvidence.shadowExitPriceIgnored, true);
+    assert.equal(settlementArgs.position, position);
+    assert.equal(settlementArgs.record.signalId, settled.signalId);
+    assert.equal(settlementArgs.researchCodeSha, SHA);
+  });
+});
+
+test("multiple matching ETH V6 Paper positions fail closed instead of double-settling", async () => {
+  await withShadowFile(shadowRoot(trackingRecord({ status: "settled" })), async (shadowStatePath) => {
+    const source = createEthV6PaperForwardSource({ shadowStatePath, researchCodeSha: SHA, clock: () => NOW });
+    const base = {
+      signalId: "ETH-V6-1787097600000",
+      market: "CRYPTO_FUTURES",
+      direction: "LONG",
+      strategyId: "v6_independent_breakout_retest",
+      researchCodeSha: SHA,
+      lifecycleState: "OPEN",
+    };
+    await assert.rejects(source.collect({ openPositions: [{ ...base, positionId: "1" }, { ...base, positionId: "2" }] }), /MULTIPLE_OPEN_POSITIONS_FORBIDDEN/);
   });
 });
 
@@ -271,7 +329,7 @@ test("Bitget public metadata plus public KRW/USDT FX size against the Paper one-
   assert.equal(new Set(calls).size, 5);
 });
 
-test("provider wrapper injects the natural candidate only into a READY futures lane and never changes order authority", async () => {
+test("provider wrapper injects natural candidates and exact Paper open positions only into a READY futures lane", async () => {
   const baseProvider = {
     async collectPublicEvidence({ market }) {
       return {
@@ -287,12 +345,16 @@ test("provider wrapper injects the natural candidate only into a READY futures l
       };
     },
   };
-  const source = { async collect() { return { status: "READY", candidates: [{ signal: { signalId: "eth-v6" } }], exits: [], blocker: null }; } };
+  let received = null;
+  const source = { async collect(input) { received = input; return { status: "READY", candidates: [{ signal: { signalId: "eth-v6" } }], exits: [], blocker: null }; } };
   const wrapped = wrapPaperForwardProviderWithEthV6Source({ provider: baseProvider, source });
-  const spot = await wrapped.collectPublicEvidence({ market: "CRYPTO_SPOT" });
-  const futures = await wrapped.collectPublicEvidence({ market: "CRYPTO_FUTURES" });
+  const spot = await wrapped.collectPublicEvidence({ market: "CRYPTO_SPOT", openPositions: [{ positionId: "spot" }] });
+  const paperPosition = { positionId: "futures" };
+  const futures = await wrapped.collectPublicEvidence({ market: "CRYPTO_FUTURES", openPositions: [paperPosition] });
   assert.equal(spot.candidates.length, 0);
   assert.equal(futures.candidates.length, 1);
+  assert.deepEqual(received.openPositions, [paperPosition]);
   assert.equal(futures.naturalCandidateSource.candidateCount, 1);
-  assert.equal(futures.naturalCandidateSource.settlementBridgeReady, false);
+  assert.equal(futures.naturalCandidateSource.exitCount, 0);
+  assert.equal(futures.naturalCandidateSource.settlementBridgeReady, true);
 });
