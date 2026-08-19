@@ -133,10 +133,19 @@ function blocked(sample, status, blockers, extra = {}) {
   });
 }
 
+function exitOrder({ type, quantity, direction, limitPrice, stopPrice }) {
+  const order = { type, quantity, direction };
+  if (type === "LIMIT") order.limitPrice = limitPrice;
+  if (type === "STOP_MARKET") order.stopPrice = stopPrice;
+  return Object.freeze(order);
+}
+
 export function settleFourMarketPaperSample({
   sample,
   exitExecution,
   exitOrderType = "MARKET",
+  exitLimitPrice = null,
+  exitStopPrice = null,
   exitBar = null,
   exitQuote = null,
   exitDepth = null,
@@ -153,6 +162,7 @@ export function settleFourMarketPaperSample({
     ...exitExecution,
     market: sample.identity.market,
     stage: "PAPER",
+    executionPurpose: "SETTLEMENT",
     style: sample.identity.style,
     timeframe: sample.identity.timeframe,
     horizon: sample.identity.horizon,
@@ -169,7 +179,13 @@ export function settleFourMarketPaperSample({
   const quantity = sample.fill.filledQuantity;
   const exitFill = simulateFourMarketFill({
     context,
-    order: Object.freeze({ type: exitOrderType, quantity, direction: closeDirection }),
+    order: exitOrder({
+      type: exitOrderType,
+      quantity,
+      direction: closeDirection,
+      limitPrice: exitLimitPrice,
+      stopPrice: exitStopPrice,
+    }),
     bar: exitBar,
     quote: exitQuote,
     depth: exitDepth,

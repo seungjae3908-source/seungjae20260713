@@ -6,8 +6,12 @@ import { BottomNav } from '@/components/bottom-nav';
 import { CenteredPageHeader } from '@/components/centered-page-header';
 import { UnifiedAssetSearch } from '@/components/unified-asset-search';
 import { useAnalysisSelection } from '@/lib/analysis-selection';
-import { api, apiGet, type SummaryItem } from '@/lib/api';
+import { apiGet, type SummaryItem } from '@/lib/api';
 import { useAssetMode } from '@/lib/asset-mode';
+import {
+  getMarketSummary,
+  validMarketSummaryItems,
+} from '@/lib/market-summary';
 import { unifiedAssetDetailPath, type UnifiedAssetSuggestion } from '@/lib/unified-asset-search';
 import {
   formatAppPercent,
@@ -36,7 +40,9 @@ function finite(value: unknown): number | null {
 
 function marketSummaryRows(items: SummaryItem[]): SummaryItem[] {
   const preferred = ['kospi', 'kosdaq', 'nasdaq', 'sp500', 'dow'];
-  const map = new Map(items.map((item) => [String(item.key ?? '').trim().toLowerCase(), item]));
+  const map = new Map(
+    validMarketSummaryItems(items).map((item) => [String(item.key ?? '').trim().toLowerCase(), item]),
+  );
   return preferred.map((key) => map.get(key)).filter((item): item is SummaryItem => Boolean(item)).slice(0, 4);
 }
 
@@ -74,7 +80,7 @@ export default function HomePage() {
 
   const market = useQuery({
     queryKey: ['home-dashboard-market'],
-    queryFn: () => api.summary(),
+    queryFn: getMarketSummary,
     staleTime: 30_000,
     refetchInterval: 60_000,
     refetchOnWindowFocus: false,
@@ -92,10 +98,24 @@ export default function HomePage() {
   const indices = useMemo(() => marketSummaryRows(market.data?.items ?? []), [market.data?.items]);
   const btc = useMemo(() => (bitcoin.data?.tickers ?? []).find((row) => baseCoinSymbol(row.symbol) === 'BTC') ?? null, [bitcoin.data?.tickers]);
   const signalIsCurrent = isTodaySeoul(selection?.selectedAt);
+  const marketWarning = market.isError
+    ? '주식 시장 요약 요청에 실패했습니다.'
+    : market.data?.dataState === 'provider_error'
+      ? '주식 시장 요약 공개 공급자의 응답을 확인하지 못했습니다. 실제 지수 가격을 표시하지 않습니다.'
+      : market.data?.dataState === 'partial'
+        ? '주식 시장 요약의 일부 공개 공급자 응답이 지연되어 확인된 실제 값만 표시합니다.'
+        : '';
   const warnings = [
-    market.isError ? '주식 시장 요약 공급자 응답을 확인하지 못했습니다.' : '',
+    marketWarning,
     bitcoin.isError ? '코인 공개 시세 공급자 응답을 확인하지 못했습니다.' : '',
   ].filter(Boolean);
+  const marketPlaceholder = market.isLoading
+    ? '시장 핵심 데이터를 불러오는 중입니다.'
+    : market.isError
+      ? '시장 요약 요청에 실패했습니다.'
+      : market.data?.dataState === 'provider_error'
+        ? '시장 지수 공개 공급자 응답을 확인하지 못했습니다.'
+        : '현재 확인된 실제 시장 지수 데이터가 없습니다.';
 
   const openAsset = (item: UnifiedAssetSuggestion) => {
     if (item.assetType === 'stock') {
@@ -135,15 +155,15 @@ export default function HomePage() {
           )}
 
           <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="home-market-summary">
-            <div className="flex items-center justify-between gap-3"><div><p className="text-[11px] font-extrabold text-primary">오늘의 시장</p><h2 className="mt-1 text-base font-black">핵심 시장 요약</h2></div><button type="button" onClick={() => navigate('/market-overview')} className="shrink-0 text-xs font-black text-primary">시황 보기</button></div>
+            <div className="flex items-center justify-between gap-3"><div><p className="text-[11px] font-extrabold text-primary">오늘의 시장</p><h2 className="mt-1 text-base font-black">핵심 시장 요약</h2></div><button type="button" onClick={() => navigate('/market-overview')} className="inline-flex min-h-11 shrink-0 items-center px-2 text-xs font-black text-primary">시황 보기</button></div>
             <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-5">
-              {market.isLoading && indices.length === 0 ? <DashboardPlaceholder label="시장 핵심 데이터를 불러오는 중입니다." /> : indices.map((item) => <MetricCard key={item.key} label={item.label} value={item.ok ? item.price.toLocaleString('ko-KR', { maximumFractionDigits: 2 }) : '데이터 부족'} sub={item.ok ? formatAppPercent(item.changePercent) : '공급자 확인 필요'} />)}
+              {indices.length === 0 ? <DashboardPlaceholder label={marketPlaceholder} /> : indices.map((item) => <MetricCard key={item.key} label={item.label} value={item.price.toLocaleString('ko-KR', { maximumFractionDigits: 2 })} sub={formatAppPercent(item.changePercent)} />)}
               <MetricCard label="BTC · Upbit" value={btc ? formatAppPrice(finite(btc.price ?? btc.tradePrice), 'KRW') : bitcoin.isLoading ? '불러오는 중' : '데이터 부족'} sub={btc ? formatAppPercent(finite(btc.changePercent ?? btc.changePercent24h)) : bitcoin.isError ? '공급자 확인 필요' : '공개 현물 시세'} />
             </div>
           </section>
 
           <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="home-signal-summary">
-            <div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2"><Radar className="h-4 w-4 text-primary" /><div><p className="text-[11px] font-extrabold text-primary">오늘의 신호</p><h2 className="text-base font-black">최근 검증 선택</h2></div></div><button type="button" onClick={() => navigate('/scanner')} className="shrink-0 text-xs font-black text-primary">Scanner 열기</button></div>
+            <div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2"><Radar className="h-4 w-4 text-primary" /><div><p className="text-[11px] font-extrabold text-primary">오늘의 신호</p><h2 className="text-base font-black">최근 검증 선택</h2></div></div><button type="button" onClick={() => navigate('/scanner')} className="inline-flex min-h-11 shrink-0 items-center px-2 text-xs font-black text-primary">Scanner 열기</button></div>
             {selection && signalIsCurrent && selection.signalScore != null ? (
               <button type="button" onClick={() => navigate('/scanner')} className="mt-3 flex min-h-16 w-full min-w-0 items-center justify-between gap-3 rounded-2xl border border-card-border bg-background p-3 text-left"><div className="min-w-0"><p className="truncate text-sm font-black">{selection.displayName}</p><p className="mt-1 truncate text-[11px] font-bold text-muted-foreground">{selection.ticker} · {selection.market} · {selection.timeframe}</p></div><div className="shrink-0 text-right"><p className="text-sm font-black">{selection.action && selection.action !== 'NONE' ? selection.action : '관찰'}</p><p className="text-[10px] font-bold text-muted-foreground">Score {selection.signalScore}</p></div></button>
             ) : <p className="mt-3 rounded-2xl bg-background p-4 break-keep text-xs font-bold text-muted-foreground">오늘 선택한 Scanner 신호가 없습니다. Home이 별도 Scanner 요청을 만들지 않으므로 중복 분석이 발생하지 않습니다.</p>}
@@ -151,7 +171,7 @@ export default function HomePage() {
 
           <div className="grid gap-4 lg:grid-cols-2">
             <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="home-watchlist-summary">
-              <div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2"><Star className="h-4 w-4 text-primary" /><h2 className="text-sm font-black">관심종목</h2></div><button type="button" onClick={() => navigate('/watchlist')} className="text-xs font-black text-primary">전체보기</button></div>
+              <div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2"><Star className="h-4 w-4 text-primary" /><h2 className="text-sm font-black">관심종목</h2></div><button type="button" onClick={() => navigate('/watchlist')} className="inline-flex min-h-11 shrink-0 items-center px-2 text-xs font-black text-primary">전체보기</button></div>
               <div className="mt-3 space-y-2">{watchlist.length ? watchlist.slice(0, 5).map((item) => <div key={item.ticker} className="flex min-h-14 items-center justify-between gap-3 rounded-2xl bg-background px-3 py-2"><div className="min-w-0"><p className="truncate text-sm font-black">{item.name || item.ticker}</p><p className="truncate text-[10px] font-bold text-muted-foreground">{item.ticker} · {item.market ?? '시장 미확인'}</p></div><div className="shrink-0 text-right text-xs font-black"><p>{item.price == null ? '가격 미확인' : formatAppPrice(item.price, item.currency ?? 'KRW')}</p><p className="text-[10px] text-muted-foreground">{item.changePercent == null ? '등락 미확인' : formatAppPercent(item.changePercent)}</p></div></div>) : <p className="rounded-2xl bg-background p-4 text-xs font-bold text-muted-foreground">관심종목이 없습니다. 검색 결과에서 관심종목에 추가하면 여기에 표시됩니다.</p>}</div>
             </section>
 
