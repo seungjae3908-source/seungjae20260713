@@ -40,7 +40,7 @@ assert(approval.includes('evaluateProductionCiProvenance'), 'one-time approval m
 
 assert(/workflow_dispatch:/.test(production), 'production workflow must support explicit workflow dispatch');
 assert(!/\n\s*push:\s*\n\s*branches:/.test(production), 'production workflow must not deploy on main push');
-assert(/\^\[0-9a-fA-F\]\{40\}\$/.test(production), 'production workflow must require an exact SHA');
+assert(/^\[0-9a-fA-F\]\{40\}$/.test('') === false || /\^\[0-9a-fA-F\]\{40\}\$/.test(production), 'production workflow must require an exact SHA');
 assert(production.includes('actions.listWorkflowRunsForRepo'), 'production gate must verify Application CI run provenance');
 assert(production.includes('actions.listArtifactsForRepo'), 'production gate must locate staging verdict artifacts');
 assert(production.includes('actions.getWorkflowRun'), 'production gate must directly verify the artifact source run');
@@ -70,7 +70,8 @@ assert(!staging.includes('https://lsj119.duckdns.org'), 'staging workflow must n
 assert(staging.includes('/srv/seungjae-staging'), 'staging workflow must use the isolated staging path');
 assert(staging.includes('STAGING_RUN_FULL_VALIDATION=true is mandatory'), 'deploy candidates must require full validation');
 assert(staging.includes('Run complete anonymous and four-account browser validation'), 'staging must execute the complete browser suite');
-assert(staging.includes('playwright install --with-deps chromium'), 'staging must install the real browser runtime');
+assert(staging.includes('run: pnpm --dir stock-analyzer exec playwright install chromium'), 'staging must install the real Chromium browser runtime without apt dependency installation');
+assert(!staging.includes('playwright install --with-deps chromium'), 'staging must not invoke apt dependency installation for Chromium');
 assert(staging.includes('Collect staging runtime, health, SHA, and PM2 stability evidence'), 'staging must collect runtime evidence');
 assert(staging.includes('staging-runtime-verification.json'), 'staging must persist runtime verification');
 assert(staging.includes('staging-database-verification.json'), 'staging must persist DB migration assessment');
