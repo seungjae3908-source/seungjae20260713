@@ -98,7 +98,7 @@ function observeRuntime(context: BrowserContext, page: Page): RuntimeObservation
     opened.on('console', (message) => {
       if (message.type() === 'error') runtime.consoleErrors.push(message.text());
     });
-    opened.on('pageerror', (error) => runtime.pageErrors.push(error.message);
+    opened.on('pageerror', (error) => runtime.pageErrors.push(error.message));
   };
   attach(page);
   context.on('page', attach);
