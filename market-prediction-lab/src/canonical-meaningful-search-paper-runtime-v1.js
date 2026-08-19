@@ -54,11 +54,12 @@ function candidateForPaper(card) {
   return card?.paperCandidate && typeof card.paperCandidate === "object" ? card.paperCandidate : card;
 }
 
-function runtimeStatus(search, capturedCount, bridge) {
+function runtimeStatus(search, evaluatedCount, bridge) {
   if (search.outcome === "SEARCH_FAILURE") return "SEARCH_FAILURE_BLOCKED";
-  if (search.outcome === "VALID_NO_TRADE") return "VALID_NO_TRADE";
-  if (capturedCount === 0) return "PROFIT_GATE_EVIDENCE_MISSING";
-  if (bridge.eligible === capturedCount) return "PAPER_CANDIDATES_READY";
+  if (bridge.blocked > 0) return "PAPER_CANDIDATE_CONTRACT_BLOCKED";
+  if (bridge.eligible > 0 || bridge.exits > 0) return "PAPER_CANDIDATES_READY";
+  if (search.outcome === "VALID_NO_TRADE" || bridge.noTrade === evaluatedCount) return "VALID_NO_TRADE";
+  if (evaluatedCount === 0) return "PROFIT_GATE_EVIDENCE_MISSING";
   return "PAPER_CANDIDATE_CONTRACT_BLOCKED";
 }
 
@@ -70,22 +71,23 @@ export async function runCanonicalMeaningfulSearchPaperMarket({
   onProgress,
 } = {}) {
   if (typeof profitInputForCard !== "function") throw new TypeError("profitInputForCard must be a function");
+  const evaluated = [];
   const captured = [];
   const captureProfitInput = async (card, selectedMarket) => {
     const rawInput = await profitInputForCard(card, selectedMarket);
     const normalized = { ...defaultProfitInput(selectedMarket), ...rawInput, market: selectedMarket };
     const profitGate = evaluateProfitGate(normalized);
-    if (profitGate.eligible === true) {
-      captured.push(freeze({
-        candidate: candidateForPaper(card),
+    const row = freeze({
+      candidate: candidateForPaper(card),
+      profitGate,
+      profitEvidence: profitEvidenceFromMeaningfulSearchGate({
+        market: selectedMarket,
+        profitInput: normalized,
         profitGate,
-        profitEvidence: profitEvidenceFromMeaningfulSearchGate({
-          market: selectedMarket,
-          profitInput: normalized,
-          profitGate,
-        }),
-      }));
-    }
+      }),
+    });
+    evaluated.push(row);
+    if (profitGate.eligible === true) captured.push(row);
     return rawInput;
   };
 
@@ -101,7 +103,7 @@ export async function runCanonicalMeaningfulSearchPaperMarket({
     throw new Error("PAPER_CAPTURE_PROFIT_GATE_COUNT_MISMATCH");
   }
 
-  const bridge = meaningfulSearchPaperCandidates(captured.map((row) => ({
+  const bridge = meaningfulSearchPaperCandidates(evaluated.map((row) => ({
     searchOutcome: search.outcome,
     candidate: row.candidate,
     profitGate: row.profitGate,
@@ -111,10 +113,12 @@ export async function runCanonicalMeaningfulSearchPaperMarket({
   return freeze({
     schemaVersion: "canonical-meaningful-search-paper-runtime-v1",
     market,
-    status: runtimeStatus(search, captured.length, bridge),
+    status: runtimeStatus(search, evaluated.length, bridge),
     search,
+    evaluatedPaperCandidates: evaluated.length,
     capturedProfitGateCandidates: captured.length,
     bridgeEligibleCandidates: bridge.eligible,
+    bridgeExitSignals: bridge.exits,
     bridgeBlockedCandidates: bridge.blocked,
     paperBridge: bridge,
     executionAuthority: "NONE",
