@@ -9,6 +9,8 @@ on:
       - 'stock-analyzer/src/components/accumulation-card.tsx'
       - 'stock-analyzer/src/components/futures-public-context-panel.tsx'
       - 'stock-analyzer/src/components/backtest-research-panel.tsx'
+      - 'stock-analyzer/src/components/brokerage-account-connections.tsx'
+      - 'stock-analyzer/e2e/account-connection-credentials.spec.ts'
       - '.github/workflows/missing-evidence-ui-contract-validation.yml'
   workflow_dispatch:
 
@@ -49,6 +51,8 @@ jobs:
           const accumulationSurface = readFileSync('stock-analyzer/src/components/accumulation-card.tsx', 'utf8');
           const aiChartSurface = readFileSync('stock-analyzer/src/components/futures-public-context-panel.tsx', 'utf8');
           const backtestSurface = readFileSync('stock-analyzer/src/components/backtest-research-panel.tsx', 'utf8');
+          const accountSurface = readFileSync('stock-analyzer/src/components/brokerage-account-connections.tsx', 'utf8');
+          const accountBrowser = readFileSync('stock-analyzer/e2e/account-connection-credentials.spec.ts', 'utf8');
           for (const required of ['NOT_COLLECTED', 'STALE', 'UNAVAILABLE', 'PERMISSION_REQUIRED', 'N_A']) {
             if (!contract.includes(required)) throw new Error(`missing evidence state ${required}`);
           }
@@ -57,6 +61,7 @@ jobs:
             ['accumulation', accumulationSurface],
             ['ai-chart-futures-context', aiChartSurface],
             ['backtest-research', backtestSurface],
+            ['account-readonly', accountSurface],
           ]) {
             if (!surface.includes("@/lib/evidence-display")) throw new Error(`${name} surface is not wired to the shared evidence contract`);
             if (!surface.includes('resolveEvidenceDisplay')) throw new Error(`${name} evidence resolver wiring missing`);
@@ -69,5 +74,14 @@ jobs:
           }
           if (backtestSurface.includes("value == null ? '-'")) {
             throw new Error('Backtest metrics still use an ambiguous dash for missing numeric evidence');
+          }
+          if (accountSurface.includes("if (value == null || !Number.isFinite(value)) return '-'")) {
+            throw new Error('Account read-only metrics still use an ambiguous dash for missing evidence');
+          }
+          if (accountSurface.includes('(toss?.accounts ?? []).length') || accountSurface.includes('(row.quantity ?? 0) !== 0')) {
+            throw new Error('Account read-only metrics still coerce missing provider evidence to zero');
+          }
+          for (const required of ['평가 미수집 · 손익 0', '보유 자산 오래된 데이터', '사용 불가']) {
+            if (!accountBrowser.includes(required)) throw new Error(`missing Account browser evidence assertion: ${required}`);
           }
           NODE
