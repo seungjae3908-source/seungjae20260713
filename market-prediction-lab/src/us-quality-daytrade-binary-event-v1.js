@@ -1,6 +1,6 @@
 import { PredictionInputError } from "./contracts.js";
 
-export const QUALITY_DAYTRADE_BINARY_EVENT_CONTRACT_VERSION = "us-quality-daytrade-binary-event-v1";
+export const QUALITY_DAYTRADE_BINARY_EVENT_CONTRACT_VERSION = "us-quality-daytrade-binary-event-v2";
 
 const VALID_BINARY_EVENT_TYPES = new Set([
   "EARNINGS",
@@ -30,7 +30,7 @@ function normalizePolicy(raw) {
   return Object.freeze({ preEventBlackoutMinutes, postEventCooldownMinutes });
 }
 
-function normalizeEvidence(raw, asOfMs) {
+function normalizeEvidence(raw, asOfMs, policy) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw) || raw.calendarChecked !== true) {
     return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_EVIDENCE_REQUIRED" });
   }
@@ -39,26 +39,77 @@ function normalizeEvidence(raw, asOfMs) {
   if (checkedAtMs > asOfMs) {
     return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_EVIDENCE_IN_FUTURE", checkedAtMs });
   }
+
+  const source = String(raw.source ?? "").trim();
+  if (!source) {
+    return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_SOURCE_REQUIRED", checkedAtMs });
+  }
+
+  const validUntilMs = finiteNumber(raw.validUntilMs, "binaryEventEvidence.validUntilMs");
+  if (validUntilMs < checkedAtMs) {
+    return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_VALIDITY_RANGE_INVALID", checkedAtMs, validUntilMs, source });
+  }
+  if (validUntilMs < asOfMs) {
+    return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_EVIDENCE_STALE", checkedAtMs, validUntilMs, source });
+  }
+
+  const coverageStartMs = finiteNumber(raw.coverageStartMs, "binaryEventEvidence.coverageStartMs");
+  const coverageEndMs = finiteNumber(raw.coverageEndMs, "binaryEventEvidence.coverageEndMs");
+  if (coverageEndMs < coverageStartMs) {
+    return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_COVERAGE_RANGE_INVALID", checkedAtMs, source, coverageStartMs, coverageEndMs });
+  }
+  if (coverageStartMs > asOfMs) {
+    return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_COVERAGE_STARTS_AFTER_ASOF", checkedAtMs, source, coverageStartMs, coverageEndMs });
+  }
+  const requiredCoverageEndMs = asOfMs + policy.preEventBlackoutMinutes * 60_000;
+  if (coverageEndMs < requiredCoverageEndMs) {
+    return Object.freeze({
+      status: "BLOCKED_DATA",
+      reason: "BINARY_EVENT_COVERAGE_INSUFFICIENT",
+      checkedAtMs,
+      source,
+      coverageStartMs,
+      coverageEndMs,
+      requiredCoverageEndMs,
+    });
+  }
+
   if (typeof raw.scheduled !== "boolean") {
-    return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_SCHEDULE_STATE_REQUIRED", checkedAtMs });
+    return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_SCHEDULE_STATE_REQUIRED", checkedAtMs, source });
   }
   if (raw.scheduled === false) {
-    return Object.freeze({ status: "READY", scheduled: false, checkedAtMs });
+    return Object.freeze({
+      status: "READY",
+      scheduled: false,
+      checkedAtMs,
+      source,
+      validUntilMs,
+      coverageStartMs,
+      coverageEndMs,
+      requiredCoverageEndMs,
+    });
   }
 
   if (raw.verified !== true) {
-    return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_VERIFICATION_REQUIRED", checkedAtMs });
+    return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_VERIFICATION_REQUIRED", checkedAtMs, source });
   }
   const eventType = String(raw.eventType ?? "").toUpperCase();
   if (!VALID_BINARY_EVENT_TYPES.has(eventType)) {
-    return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_TYPE_UNSUPPORTED", checkedAtMs, eventType });
+    return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_TYPE_UNSUPPORTED", checkedAtMs, source, eventType });
   }
   const eventTimestampMs = finiteNumber(raw.eventTimestampMs, "binaryEventEvidence.eventTimestampMs");
-  const source = String(raw.source ?? "").trim();
-  if (!source) {
-    return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_SOURCE_REQUIRED", checkedAtMs, eventType, eventTimestampMs });
-  }
-  return Object.freeze({ status: "READY", scheduled: true, checkedAtMs, eventType, eventTimestampMs, source });
+  return Object.freeze({
+    status: "READY",
+    scheduled: true,
+    checkedAtMs,
+    eventType,
+    eventTimestampMs,
+    source,
+    validUntilMs,
+    coverageStartMs,
+    coverageEndMs,
+    requiredCoverageEndMs,
+  });
 }
 
 function safeResult(fields) {
@@ -76,20 +127,21 @@ export function evaluateQualityDaytradeBinaryEventRisk(raw) {
     throw new PredictionInputError("binary event risk input must be an object");
   }
   const asOfMs = finiteNumber(raw.asOfMs, "asOfMs");
-  const evidence = normalizeEvidence(raw.binaryEventEvidence, asOfMs);
-  if (evidence.status !== "READY") return safeResult(evidence);
-  if (!evidence.scheduled) {
-    return safeResult({ status: "PASS", reason: "NO_SCHEDULED_BINARY_EVENT", evidence });
-  }
 
   let policy;
   try {
     policy = normalizePolicy(raw.binaryEventPolicy);
   } catch (error) {
     if (error instanceof PredictionInputError && raw.binaryEventPolicy == null) {
-      return safeResult({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_POLICY_REQUIRED", evidence });
+      return safeResult({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_POLICY_REQUIRED" });
     }
     throw error;
+  }
+
+  const evidence = normalizeEvidence(raw.binaryEventEvidence, asOfMs, policy);
+  if (evidence.status !== "READY") return safeResult({ ...evidence, policy });
+  if (!evidence.scheduled) {
+    return safeResult({ status: "PASS", reason: "NO_SCHEDULED_BINARY_EVENT", evidence, policy });
   }
 
   const minutesUntilEvent = (evidence.eventTimestampMs - asOfMs) / 60_000;
@@ -140,6 +192,6 @@ export function buildQualityDaytradeBinaryEventWindowGrid() {
     combinations: Object.freeze(combinations),
     optimizationRule: "RESEARCH_ONLY_COARSE_TO_FINE_OOS_WALK_FORWARD_FINAL_HOLDOUT",
     selectionMetric: "NET_EXPECTANCY_WITH_PF_MDD_GAP_SLIPPAGE_STRESS",
-    note: "Window values are research candidates, not validated defaults. Missing calendar evidence fails closed.",
+    note: "Window values are research candidates, not validated defaults. Fresh source-backed calendar coverage must span the full pre-event risk window.",
   });
 }
