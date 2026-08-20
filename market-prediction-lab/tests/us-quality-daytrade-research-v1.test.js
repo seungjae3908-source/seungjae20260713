@@ -26,13 +26,25 @@ function qualityInstrument(overrides = {}) {
 }
 
 function qualitySmallCapInstrument(overrides = {}) {
+  const hasFloatOverride = Object.prototype.hasOwnProperty.call(overrides, "floatShares");
+  const floatShares = hasFloatOverride ? overrides.floatShares : 35_000_000;
+  const defaultFloatEvidence = floatShares == null ? null : {
+    sourceId: "issuer-sec-point-in-time",
+    pointInTime: true,
+    observedAtMs: 8_000,
+    validFromMs: 1,
+    validToMs: 20_000,
+    shares: floatShares,
+  };
   return qualityInstrument({
     symbol: "QLTY",
     exchange: "NASDAQ",
     priceUsd: 12,
     marketCapUsd: 2_000_000_000,
     averageDollarVolumeUsd: 30_000_000,
-    floatShares: 35_000_000,
+    floatShares,
+    floatEvidence: defaultFloatEvidence,
+    asOfMs: 8_500,
     ...overrides,
   });
 }
@@ -95,6 +107,7 @@ test("quality universe accepts only liquid well-floated small cap as Tier B", ()
   assert.equal(result.eligible, true);
   assert.equal(result.tier, "B");
   assert.equal(result.riskBudgetMultiplier, 0.5);
+  assert.equal(result.instrument.floatEvidence.sourceId, "issuer-sec-point-in-time");
   assert.deepEqual(result.reasons, []);
 });
 
@@ -106,6 +119,51 @@ test("Tier B requires point-in-time float evidence and rejects ultra-low float",
   const lowFloat = classifyUsQualityUniverse(qualitySmallCapInstrument({ floatShares: 8_000_000 }));
   assert.equal(lowFloat.eligible, false);
   assert.ok(lowFloat.reasons.includes("FLOAT_BELOW_TIER_B_MINIMUM"));
+});
+
+test("Tier B rejects numeric float without source-backed point-in-time provenance", () => {
+  const result = classifyUsQualityUniverse(qualitySmallCapInstrument({ floatEvidence: null }));
+  assert.equal(result.eligible, false);
+  assert.ok(result.reasons.includes("FLOAT_PROVENANCE_REQUIRED_FOR_TIER_B"));
+});
+
+test("Tier B rejects future float evidence to prevent historical look-ahead", () => {
+  const instrument = qualitySmallCapInstrument();
+  const result = classifyUsQualityUniverse({
+    ...instrument,
+    floatEvidence: {
+      ...instrument.floatEvidence,
+      observedAtMs: 9_000,
+    },
+  }, undefined, 8_500);
+  assert.equal(result.eligible, false);
+  assert.ok(result.reasons.includes("FLOAT_EVIDENCE_FROM_FUTURE"));
+});
+
+test("Tier B rejects float evidence whose validity interval does not cover evaluation as-of", () => {
+  const instrument = qualitySmallCapInstrument();
+  const result = classifyUsQualityUniverse({
+    ...instrument,
+    floatEvidence: {
+      ...instrument.floatEvidence,
+      validToMs: 8_000,
+    },
+  }, undefined, 8_500);
+  assert.equal(result.eligible, false);
+  assert.ok(result.reasons.includes("FLOAT_EVIDENCE_COVERAGE_MISMATCH"));
+});
+
+test("Tier B rejects float provenance whose shares disagree with instrument float", () => {
+  const instrument = qualitySmallCapInstrument();
+  const result = classifyUsQualityUniverse({
+    ...instrument,
+    floatEvidence: {
+      ...instrument.floatEvidence,
+      shares: instrument.floatShares + 1,
+    },
+  });
+  assert.equal(result.eligible, false);
+  assert.ok(result.reasons.includes("FLOAT_EVIDENCE_SHARES_MISMATCH"));
 });
 
 test("Tier B rejects dilution, recent offering and going-concern risk", () => {
