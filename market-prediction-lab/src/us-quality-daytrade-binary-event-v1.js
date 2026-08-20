@@ -1,6 +1,6 @@
 import { PredictionInputError } from "./contracts.js";
 
-export const QUALITY_DAYTRADE_BINARY_EVENT_CONTRACT_VERSION = "us-quality-daytrade-binary-event-v2";
+export const QUALITY_DAYTRADE_BINARY_EVENT_CONTRACT_VERSION = "us-quality-daytrade-binary-event-v3";
 
 const VALID_BINARY_EVENT_TYPES = new Set([
   "EARNINGS",
@@ -67,10 +67,24 @@ function normalizeEvidence(raw, asOfMs, policy) {
   if (coverageEndMs < coverageStartMs) {
     return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_COVERAGE_RANGE_INVALID", checkedAtMs, source, coverageStartMs, coverageEndMs });
   }
-  if (coverageStartMs > asOfMs) {
-    return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_COVERAGE_STARTS_AFTER_ASOF", checkedAtMs, source, coverageStartMs, coverageEndMs });
+  if (raw.coverageComplete !== true) {
+    return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_COVERAGE_COMPLETE_REQUIRED", checkedAtMs, source, coverageStartMs, coverageEndMs });
   }
+
+  const requiredCoverageStartMs = asOfMs - policy.postEventCooldownMinutes * 60_000;
   const requiredCoverageEndMs = asOfMs + policy.preEventBlackoutMinutes * 60_000;
+  if (coverageStartMs > requiredCoverageStartMs) {
+    return Object.freeze({
+      status: "BLOCKED_DATA",
+      reason: "BINARY_EVENT_LOOKBACK_INSUFFICIENT",
+      checkedAtMs,
+      source,
+      coverageStartMs,
+      coverageEndMs,
+      requiredCoverageStartMs,
+      requiredCoverageEndMs,
+    });
+  }
   if (coverageEndMs < requiredCoverageEndMs) {
     return Object.freeze({
       status: "BLOCKED_DATA",
@@ -79,6 +93,7 @@ function normalizeEvidence(raw, asOfMs, policy) {
       source,
       coverageStartMs,
       coverageEndMs,
+      requiredCoverageStartMs,
       requiredCoverageEndMs,
     });
   }
@@ -93,8 +108,10 @@ function normalizeEvidence(raw, asOfMs, policy) {
       checkedAtMs,
       source,
       validUntilMs,
+      coverageComplete: true,
       coverageStartMs,
       coverageEndMs,
+      requiredCoverageStartMs,
       requiredCoverageEndMs,
     });
   }
@@ -110,6 +127,18 @@ function normalizeEvidence(raw, asOfMs, policy) {
     return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_TIMESTAMP_REQUIRED", checkedAtMs, source, eventType });
   }
   const eventTimestampMs = finiteNumber(raw.eventTimestampMs, "binaryEventEvidence.eventTimestampMs");
+  if (eventTimestampMs < coverageStartMs || eventTimestampMs > coverageEndMs) {
+    return Object.freeze({
+      status: "BLOCKED_DATA",
+      reason: "BINARY_EVENT_TIMESTAMP_OUTSIDE_COVERAGE",
+      checkedAtMs,
+      source,
+      eventType,
+      eventTimestampMs,
+      coverageStartMs,
+      coverageEndMs,
+    });
+  }
   return Object.freeze({
     status: "READY",
     scheduled: true,
@@ -118,8 +147,10 @@ function normalizeEvidence(raw, asOfMs, policy) {
     eventTimestampMs,
     source,
     validUntilMs,
+    coverageComplete: true,
     coverageStartMs,
     coverageEndMs,
+    requiredCoverageStartMs,
     requiredCoverageEndMs,
   });
 }
@@ -204,6 +235,6 @@ export function buildQualityDaytradeBinaryEventWindowGrid() {
     combinations: Object.freeze(combinations),
     optimizationRule: "RESEARCH_ONLY_COARSE_TO_FINE_OOS_WALK_FORWARD_FINAL_HOLDOUT",
     selectionMetric: "NET_EXPECTANCY_WITH_PF_MDD_GAP_SLIPPAGE_STRESS",
-    note: "Window values are research candidates, not validated defaults. Fresh source-backed calendar coverage must span the full pre-event risk window.",
+    note: "Window values are research candidates, not validated defaults. Complete source-backed calendar coverage must span the full post-event cooldown lookback and pre-event blackout horizon.",
   });
 }
