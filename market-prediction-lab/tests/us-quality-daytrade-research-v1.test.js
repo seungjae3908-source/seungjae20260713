@@ -14,11 +14,27 @@ function qualityInstrument(overrides = {}) {
     priceUsd: 150,
     marketCapUsd: 350_000_000_000,
     averageDollarVolumeUsd: 900_000_000,
+    floatShares: 2_000_000_000,
     recentReverseSplit: false,
     listingRisk: false,
     manipulationRisk: false,
+    dilutionRisk: false,
+    recentOffering: false,
+    goingConcernRisk: false,
     ...overrides,
   };
+}
+
+function qualitySmallCapInstrument(overrides = {}) {
+  return qualityInstrument({
+    symbol: "QLTY",
+    exchange: "NASDAQ",
+    priceUsd: 12,
+    marketCapUsd: 2_000_000_000,
+    averageDollarVolumeUsd: 30_000_000,
+    floatShares: 35_000_000,
+    ...overrides,
+  });
 }
 
 function regularCandles() {
@@ -58,19 +74,60 @@ test("quality universe rejects penny/microcap style instruments", () => {
     priceUsd: 4,
     marketCapUsd: 800_000_000,
     averageDollarVolumeUsd: 10_000_000,
+    floatShares: 8_000_000,
     securityType: "MICROCAP",
   }));
   assert.equal(result.eligible, false);
-  assert.ok(result.reasons.includes("PRICE_BELOW_MINIMUM"));
-  assert.ok(result.reasons.includes("MARKET_CAP_BELOW_MINIMUM"));
-  assert.ok(result.reasons.includes("DOLLAR_VOLUME_BELOW_MINIMUM"));
+  assert.equal(result.tier, null);
   assert.ok(result.reasons.includes("SECURITY_TYPE_EXCLUDED:MICROCAP"));
 });
 
-test("quality universe accepts liquid NYSE/Nasdaq common stock", () => {
+test("quality universe accepts liquid large/mid cap as Tier A", () => {
   const result = classifyUsQualityUniverse(qualityInstrument());
   assert.equal(result.eligible, true);
+  assert.equal(result.tier, "A");
+  assert.equal(result.riskBudgetMultiplier, 1);
   assert.deepEqual(result.reasons, []);
+});
+
+test("quality universe accepts only liquid well-floated small cap as Tier B", () => {
+  const result = classifyUsQualityUniverse(qualitySmallCapInstrument());
+  assert.equal(result.eligible, true);
+  assert.equal(result.tier, "B");
+  assert.equal(result.riskBudgetMultiplier, 0.5);
+  assert.deepEqual(result.reasons, []);
+});
+
+test("Tier B requires point-in-time float evidence and rejects ultra-low float", () => {
+  const missing = classifyUsQualityUniverse(qualitySmallCapInstrument({ floatShares: null }));
+  assert.equal(missing.eligible, false);
+  assert.ok(missing.reasons.includes("FLOAT_EVIDENCE_REQUIRED_FOR_TIER_B"));
+
+  const lowFloat = classifyUsQualityUniverse(qualitySmallCapInstrument({ floatShares: 8_000_000 }));
+  assert.equal(lowFloat.eligible, false);
+  assert.ok(lowFloat.reasons.includes("FLOAT_BELOW_TIER_B_MINIMUM"));
+});
+
+test("Tier B rejects dilution, recent offering and going-concern risk", () => {
+  for (const [field, reason] of [
+    ["dilutionRisk", "DILUTION_RISK"],
+    ["recentOffering", "RECENT_OFFERING"],
+    ["goingConcernRisk", "GOING_CONCERN_RISK"],
+  ]) {
+    const result = classifyUsQualityUniverse(qualitySmallCapInstrument({ [field]: true }));
+    assert.equal(result.eligible, false);
+    assert.ok(result.reasons.includes(reason));
+  }
+});
+
+test("Tier B rejects sub-billion and illiquid small caps", () => {
+  const tooSmall = classifyUsQualityUniverse(qualitySmallCapInstrument({ marketCapUsd: 900_000_000 }));
+  assert.equal(tooSmall.eligible, false);
+  assert.ok(tooSmall.reasons.includes("MARKET_CAP_BELOW_TIER_B_MINIMUM"));
+
+  const illiquid = classifyUsQualityUniverse(qualitySmallCapInstrument({ averageDollarVolumeUsd: 8_000_000 }));
+  assert.equal(illiquid.eligible, false);
+  assert.ok(illiquid.reasons.includes("DOLLAR_VOLUME_BELOW_TIER_B_MINIMUM"));
 });
 
 test("setup requires real bid/ask evidence", () => {
@@ -162,10 +219,34 @@ test("setup rejects non-monotonic candle timestamps", () => {
   );
 });
 
-test("setup abstains when spread is too wide", () => {
-  const result = evaluateUsQualityDaytradeSetup(setup({ quote: { bid: 103, ask: 105, timestampMs: 8_000 } }));
+test("Tier A setup abstains when spread is above Tier A ceiling", () => {
+  const result = evaluateUsQualityDaytradeSetup(setup({ quote: { bid: 104.4, ask: 104.65, timestampMs: 8_000 } }));
   assert.equal(result.status, "ABSTAIN");
   assert.equal(result.reason, "SPREAD_TOO_WIDE");
+  assert.equal(result.universe.tier, "A");
+  assert.equal(result.maxSpreadBps, 20);
+});
+
+test("Tier B permits only the bounded wider spread ceiling and stronger RVOL", () => {
+  const result = evaluateUsQualityDaytradeSetup(setup({
+    instrument: qualitySmallCapInstrument(),
+    quote: { bid: 104.4, ask: 104.65, timestampMs: 8_000 },
+    relativeVolume: 2.2,
+  }));
+  assert.equal(result.status, "CANDIDATE");
+  assert.equal(result.qualityTier, "B");
+  assert.equal(result.riskBudgetMultiplier, 0.5);
+  assert.equal(result.hardRiskCeilingPct, 4);
+  assert.ok(result.spreadBps > 20 && result.spreadBps < 30);
+});
+
+test("Tier B fails closed to abstain when RVOL does not meet its stricter gate", () => {
+  const result = evaluateUsQualityDaytradeSetup(setup({
+    instrument: qualitySmallCapInstrument(),
+    relativeVolume: 1.7,
+  }));
+  assert.equal(result.status, "ABSTAIN");
+  assert.equal(result.reason, "RVOL_TOO_LOW");
 });
 
 test("setup recognizes first-pullback VWAP rebreak with volume reacceleration", () => {
@@ -174,6 +255,8 @@ test("setup recognizes first-pullback VWAP rebreak with volume reacceleration", 
   assert.equal(result.reason, "VWAP_FIRST_PULLBACK_REBREAK");
   assert.equal(result.session, "REGULAR");
   assert.equal(result.catalystClass, "VERIFIED_CATALYST");
+  assert.equal(result.qualityTier, "A");
+  assert.equal(result.riskBudgetMultiplier, 1);
   assert.equal(result.quoteAgeMs, 500);
   assert.equal(result.candleAgeMs, 8_492);
   assert.ok(result.vwap > 0);
@@ -222,15 +305,24 @@ test("mixed session candles fail closed instead of relabeling VWAP", () => {
   assert.equal(result.reason, "MIXED_SESSION_CANDLES");
 });
 
-test("research grid explores exits but treats 4% stop as a stress ceiling", () => {
-  const normal = buildQualityDaytradeParameterGrid();
-  const catalyst = buildQualityDaytradeParameterGrid({ catalystDay: true });
-  assert.equal(normal.combinations.length, 432);
-  assert.equal(catalyst.combinations.length, 432);
-  assert.equal(Math.max(...normal.combinations.map((row) => row.takeProfitPct)), 5);
-  assert.equal(Math.max(...catalyst.combinations.map((row) => row.takeProfitPct)), 10);
-  assert.ok(normal.combinations.some((row) => row.fixedStopPct === 4));
-  assert.match(normal.note, /stress ceiling/i);
-  assert.equal(normal.optimizationRule, "COARSE_TO_FINE_OOS_WALK_FORWARD_FINAL_HOLDOUT");
-  assert.equal(normal.selectionMetric, "NET_EXPECTANCY_WITH_PF_MDD_COST_STRESS");
+test("research grid separates Tier A and quality-small-cap Tier B risk profiles", () => {
+  const normalA = buildQualityDaytradeParameterGrid();
+  const catalystA = buildQualityDaytradeParameterGrid({ catalystDay: true });
+  const normalB = buildQualityDaytradeParameterGrid({ qualityTier: "B" });
+  const catalystB = buildQualityDaytradeParameterGrid({ qualityTier: "B", catalystDay: true });
+
+  assert.equal(normalA.combinations.length, 432);
+  assert.equal(catalystA.combinations.length, 432);
+  assert.equal(normalB.combinations.length, 432);
+  assert.equal(catalystB.combinations.length, 432);
+  assert.equal(Math.max(...normalA.combinations.map((row) => row.takeProfitPct)), 5);
+  assert.equal(Math.max(...catalystA.combinations.map((row) => row.takeProfitPct)), 10);
+  assert.equal(Math.max(...normalB.combinations.map((row) => row.takeProfitPct)), 7.5);
+  assert.equal(Math.max(...catalystB.combinations.map((row) => row.takeProfitPct)), 10);
+  assert.equal(normalA.riskBudgetMultiplier, 1);
+  assert.equal(normalB.riskBudgetMultiplier, 0.5);
+  assert.ok(normalB.combinations.some((row) => row.fixedStopPct === 4));
+  assert.match(normalB.note, /half risk budget/i);
+  assert.equal(normalA.optimizationRule, "COARSE_TO_FINE_OOS_WALK_FORWARD_FINAL_HOLDOUT");
+  assert.equal(normalA.selectionMetric, "NET_EXPECTANCY_WITH_PF_MDD_COST_STRESS");
 });
