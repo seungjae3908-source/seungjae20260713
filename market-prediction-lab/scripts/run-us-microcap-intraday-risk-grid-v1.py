@@ -105,6 +105,53 @@ def simulate_cap(entry, bars, minutes: int, mode: str, risk_cap: float):
     }
 
 
+def sequential_equity_metrics(trades: list[dict], round_trip_cost: float) -> dict:
+    """Diagnostic-only equal-weight sequential trade curve.
+
+    This does not claim portfolio MDD because concurrent positions and capital
+    sizing are not modeled. It gives a deterministic chronological drawdown
+    diagnostic instead of leaving all drawdown evidence absent.
+    """
+    ordered = sorted(
+        trades,
+        key=lambda row: (
+            int(row.get("entryTimestamp") or 0),
+            str(row.get("symbol") or ""),
+            str(row.get("date") or ""),
+        ),
+    )
+    equity = 1.0
+    peak = 1.0
+    max_drawdown = 0.0
+    for trade in ordered:
+        net_return = float(trade["grossReturn"]) - float(round_trip_cost)
+        equity *= max(0.0, 1.0 + net_return)
+        peak = max(peak, equity)
+        drawdown = 0.0 if peak <= 0 else 1.0 - equity / peak
+        max_drawdown = max(max_drawdown, drawdown)
+    return {
+        "assumption": "EQUAL_WEIGHT_SEQUENTIAL_TRADES_NO_CONCURRENCY",
+        "tradeCount": len(ordered),
+        "compoundedReturnPct": round((equity - 1.0) * 100, 3),
+        "maxDrawdownPct": round(max_drawdown * 100, 3),
+        "portfolioMddClaimAllowed": False,
+    }
+
+
+def drawdown_self_test() -> None:
+    fixture = [
+        {"grossReturn": 0.10, "entryTimestamp": 1, "symbol": "A", "date": "2026-01-01"},
+        {"grossReturn": -0.05, "entryTimestamp": 2, "symbol": "B", "date": "2026-01-02"},
+        {"grossReturn": -0.10, "entryTimestamp": 3, "symbol": "C", "date": "2026-01-03"},
+        {"grossReturn": 0.20, "entryTimestamp": 4, "symbol": "D", "date": "2026-01-04"},
+    ]
+    metrics = sequential_equity_metrics(fixture, 0.0)
+    if metrics["maxDrawdownPct"] != 14.5:
+        raise AssertionError(f"unexpected diagnostic MDD: {metrics}")
+    if metrics["portfolioMddClaimAllowed"] is not False:
+        raise AssertionError("diagnostic curve must not claim portfolio MDD")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--symbols", default=",".join(base.DEFAULT_SYMBOLS))
@@ -112,6 +159,7 @@ def main():
     ap.add_argument("--output-md", default="intraday-risk-grid-v1.md")
     args = ap.parse_args()
     base.fixture_self_test()
+    drawdown_self_test()
 
     symbols = [x.strip().upper() for x in args.symbols.split(",") if x.strip()]
     trades = defaultdict(list)
@@ -130,17 +178,38 @@ def main():
                 entry = base.find_entry(symbol, dates[pos], days[dates[pos]], prev)
                 if not entry:
                     continue
-                entries.append({"symbol": symbol, "date": dates[pos], "session": entry.session, "entry": entry.price})
+                entry_timestamp = days[dates[pos]][entry.index].ts
+                entries.append({
+                    "symbol": symbol,
+                    "date": dates[pos],
+                    "session": entry.session,
+                    "entry": entry.price,
+                    "entryTimestamp": entry_timestamp,
+                })
                 for cap in RISK_CAPS:
                     for minutes in base.TIME_STOPS:
                         for mode in MODES:
                             key = f"{mode}_STOP{int(cap*100)}_{minutes}m"
                             sim = simulate_cap(entry, days[dates[pos]], minutes, mode, cap)
-                            trades[key].append({**sim, "symbol": symbol, "date": dates[pos], "session": entry.session})
+                            trades[key].append({
+                                **sim,
+                                "symbol": symbol,
+                                "date": dates[pos],
+                                "session": entry.session,
+                                "entryTimestamp": entry_timestamp,
+                            })
         except Exception as exc:
             failures[symbol] = f"{type(exc).__name__}:{exc}"
 
     summaries = {k: base.summarize(v) for k, v in sorted(trades.items())}
+    for key, summary in summaries.items():
+        if not summary.get("trades"):
+            continue
+        summary["sequentialEquityDiagnostic"] = sequential_equity_metrics(trades[key], 0.0)
+        for cost in base.COST_STRESS:
+            cost_key = f"{int(cost * 10000)}bps"
+            summary["costStress"][cost_key]["sequentialEquityDiagnostic"] = sequential_equity_metrics(trades[key], cost)
+
     ranking = []
     for key, s in summaries.items():
         if not s.get("trades"):
@@ -152,7 +221,7 @@ def main():
     best = ranking[0][2] if ranking else None
 
     result = {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "status": "RECENT_RISK_GRID_DIAGNOSTIC_ONLY",
         "source": "Yahoo public 1m range=7d includePrePost=true",
         "entries": entries,
@@ -166,6 +235,7 @@ def main():
             "Recent 7d selected-symbol diagnostic only; not 10-year profitability evidence.",
             "Same-minute target/stop ambiguity is conservatively stop-first.",
             "Historical point-in-time float/catalyst/dilution filters are unavailable in this diagnostic.",
+            "Sequential drawdown assumes equal-weight non-concurrent trades and is not a canonical portfolio MDD claim.",
             "Choosing the best row on this tiny recent sample is exploratory and must not be promoted or live-traded.",
         ],
     }
@@ -182,9 +252,10 @@ def main():
         "",
         f"- Entries: {len(entries)}",
         f"- Best after 1% cost stress: **{best or 'N/A'}**",
+        "- Drawdown shown below is an equal-weight sequential-trade diagnostic, not canonical portfolio MDD.",
         "",
-        "| Config | Trades | Gross EV | Win | TP1 | 1% net EV | 1% PF |",
-        "|---|---:|---:|---:|---:|---:|---:|",
+        "| Config | Trades | Gross EV | Win | TP1 | 1% net EV | 1% PF | 1% seq MDD |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     rows = []
     for key, s in summaries.items():
@@ -193,7 +264,8 @@ def main():
         c = s["costStress"]["100bps"]
         rows.append((c["meanNetReturnPct"], key, s, c))
     for _, key, s, c in sorted(rows, reverse=True):
-        lines.append(f"| {key} | {s['trades']} | {s['grossMeanReturnPct']}% | {s['grossWinRatePct']}% | {s['tp1RatePct']}% | {c['meanNetReturnPct']}% | {c['profitFactor']} |")
+        mdd = c["sequentialEquityDiagnostic"]["maxDrawdownPct"]
+        lines.append(f"| {key} | {s['trades']} | {s['grossMeanReturnPct']}% | {s['grossWinRatePct']}% | {s['tp1RatePct']}% | {c['meanNetReturnPct']}% | {c['profitFactor']} | {mdd}% |")
     lines += ["", "## Limitations", ""] + [f"- {x}" for x in result["limitations"]]
     out_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(json.dumps({"status": result["status"], "entries": len(entries), "best": best}, ensure_ascii=False))
