@@ -36,6 +36,21 @@ const snapshot: UnifiedAssetSearchSnapshot = {
   ],
 };
 
+function listen(app: express.Express) {
+  const server = app.listen(0, '127.0.0.1');
+  return new Promise<{ server: ReturnType<typeof app.listen>; base: string }>((resolve, reject) => {
+    server.once('listening', () => {
+      const address = server.address() as AddressInfo;
+      resolve({ server, base: `http://127.0.0.1:${address.port}` });
+    });
+    server.once('error', reject);
+  });
+}
+
+async function close(server: ReturnType<express.Express['listen']>) {
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+}
+
 test('unified search state separates full, partial, degraded and empty success states', () => {
   assert.equal(deriveUnifiedSearchState({ resultCount: 3, partial: false, stale: false }), 'FULL');
   assert.equal(deriveUnifiedSearchState({ resultCount: 3, partial: true, stale: false }), 'PARTIAL');
@@ -49,15 +64,8 @@ test('unified search suggest route supports Korean, English, codes and market se
   replaceUnifiedAssetSearchSnapshotForTests(snapshot);
   const app = express();
   app.use('/api', unifiedSearchRouter);
-  const server = app.listen(0, '127.0.0.1');
+  const { server, base } = await listen(app);
   try {
-    await new Promise<void>((resolve, reject) => {
-      server.once('listening', resolve);
-      server.once('error', reject);
-    });
-    const address = server.address() as AddressInfo;
-    const base = `http://127.0.0.1:${address.port}`;
-
     for (const [query, expected] of [['삼', '005930'], ['samsung', '005930'], ['테슬라', 'TSLA'], ['TSLA', 'TSLA'], ['BTC/KRW', 'KRW-BTC'], ['BTCUSDT', 'BTCUSDT']] as const) {
       const response = await fetch(`${base}/api/search/suggest?q=${encodeURIComponent(query)}`);
       assert.equal(response.status, 200);
@@ -89,7 +97,43 @@ test('unified search suggest route supports Korean, English, codes and market se
     assert.equal(blankBody.state, 'ERROR');
     assert.equal(blankBody.error, 'SEARCH_QUERY_REQUIRED');
   } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await close(server);
+    resetUnifiedAssetSearchStateForTests();
+  }
+});
+
+test('unified search falls back to curated KR metadata when the live KRX index is unavailable', async () => {
+  const degraded: UnifiedAssetSearchSnapshot = {
+    ...snapshot,
+    providers: snapshot.providers.map((provider) => provider.provider === 'krx'
+      ? { provider: 'krx' as const, status: 'error' as const, count: 0, dataAsOf: null, message: 'fixture KRX unavailable' }
+      : provider),
+    documents: snapshot.documents.filter((document) => document.market !== 'KR'),
+  };
+  replaceUnifiedAssetSearchSnapshotForTests(degraded);
+  const app = express();
+  app.use('/api', unifiedSearchRouter);
+  const { server, base } = await listen(app);
+  try {
+    for (const ticker of ['005930', '000660', '035420', '051910', '068270']) {
+      const response = await fetch(`${base}/api/search/suggest?q=${ticker}&asset=stock&market=KR`);
+      assert.equal(response.status, 200);
+      const body = await response.json() as Record<string, any>;
+      assert.equal(body.ok, true);
+      assert.equal(body.state, 'PARTIAL');
+      assert.equal(body.results[0]?.productCode, ticker);
+      assert.equal(body.results[0]?.market, 'KR');
+      assert.equal(body.results[0]?.provider, 'STATIC_KR_CATALOG');
+      assert.equal(body.results[0]?.active, false);
+      assert.equal(body.dataAsOf, null);
+      assert.equal(body.partial, true);
+      assert.equal(body.stale, true);
+      assert.equal(body.providers[0]?.provider, 'krx');
+      assert.equal(body.providers[0]?.status, 'stale');
+      assert.match(String(body.providers[0]?.message ?? ''), /정적 KR 종목 메타데이터/);
+    }
+  } finally {
+    await close(server);
     resetUnifiedAssetSearchStateForTests();
   }
 });
