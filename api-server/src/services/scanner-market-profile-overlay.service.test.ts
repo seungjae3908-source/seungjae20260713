@@ -8,6 +8,14 @@ import {
   attachScannerCanonicalPaperIdentity,
   resolveScannerCanonicalPaperIdentity,
 } from './scanner-canonical-paper-identity.service';
+import { createImmutableSignalSnapshot } from './signal-performance-learning.service';
+import { calculateTradingRisk, type RiskEngineInput } from './trading-risk-engine.service';
+import type { PaperReadinessEvidence } from './trade-paper-market-contract.service';
+import type {
+  PercentCostEvidence,
+  SupplementalExecutionCostEvidence,
+} from './scanner-profit-cost-evidence-adapter.service';
+import { buildScannerCanonicalPaperAdmissionEvidence } from './scanner-paper-admission-evidence-bundle.service';
 
 function candlesEndingAt(end: number, gapPercent = 0): Candle[] {
   const rows: Candle[] = Array.from({ length: 40 }, (_, index) => {
@@ -378,4 +386,226 @@ test('canonical Paper identity response attachment preserves existing scanner fi
   assert.ok(output.paperCandidate);
   assert.equal(output.signalId, response.cards[0]!.signalId);
   assert.equal(output.score, response.cards[0]!.score);
+});
+
+const ADMISSION_NOW = Date.parse('2026-08-20T00:00:20.000Z');
+
+function percentComponent(valuePercent: number, quality: PercentCostEvidence['quality'] = 'OBSERVED'): PercentCostEvidence {
+  return Object.freeze({
+    valuePercent,
+    quality,
+    source: `admission-test:${quality}`,
+    observedAtMs: ADMISSION_NOW - 1_000,
+  });
+}
+
+function admissionCandidate() {
+  const resolution = resolveScannerCanonicalPaperIdentity({
+    card: canonicalCard(),
+    market: 'KR_STOCK',
+    researchCodeSha: CANONICAL_SHA,
+  });
+  assert.ok(resolution.paperCandidate);
+  return resolution.paperCandidate;
+}
+
+function admissionLearning(candidate = admissionCandidate()) {
+  return createImmutableSignalSnapshot({
+    signalId: candidate.signal.signalId,
+    timestamp: new Date(candidate.signal.timestampMs).toISOString(),
+    market: candidate.signal.market,
+    symbol: candidate.signal.symbol,
+    symbolName: 'TEST',
+    strategyHorizon: 'SWING',
+    direction: candidate.signal.direction,
+    signalScore: 88,
+    displayConfidence: 85,
+    referencePrice: 108,
+    entryPrice: 108,
+    stopLoss: 104,
+    target1: 114,
+    target2: 118,
+    riskReward: 1.5,
+    timeframes: [candidate.signal.timeframe],
+    strategyProfileVersion: candidate.signal.strategyIdentity.strategyVersion,
+    indicatorSnapshot: {},
+    indicatorScores: {},
+    patternSnapshot: {},
+    volumeContext: {},
+    volatilityContext: {},
+    trendContext: {},
+    marketRegime: 'UPTREND',
+    liquidityContext: {},
+    aiValidatorResult: null,
+    riskEngineResult: null,
+    dataProvenance: ['test:public-market'],
+    dataTimestamp: '2026-08-19T23:59:59.000Z',
+  });
+}
+
+function admissionRiskInput(candidate = admissionCandidate()): RiskEngineInput {
+  return {
+    market: 'stock',
+    symbol: candidate.signal.symbol,
+    side: 'long',
+    accountBalance: 1_000_000,
+    entryPrice: 108,
+    stopLossPrice: 104,
+    targetPrice1: 114,
+    targetPrice2: 118,
+    leverage: 1,
+    riskPercent: 0.5,
+    entryFeeRate: 0.0001,
+    exitFeeRate: 0.0001,
+    slippageRate: 0.0003,
+    estimatedFundingRate: 0,
+    quantityStep: 1,
+    minimumQuantity: 1,
+    minimumNotional: 1_000,
+    dailyRealizedPnl: 0,
+    weeklyRealizedPnl: 0,
+    consecutiveLosses: 0,
+    openExposure: 0,
+    sameDirectionExposure: 0,
+    dataStatus: 'live',
+  };
+}
+
+function admissionRiskResult(input = admissionRiskInput()) {
+  return {
+    ...calculateTradingRisk(input),
+    calculatedAt: new Date(ADMISSION_NOW - 1_000).toISOString(),
+  };
+}
+
+function admissionPaper(candidate = admissionCandidate(), overrides: Partial<PaperReadinessEvidence> = {}): PaperReadinessEvidence {
+  return {
+    market: 'KR_STOCK',
+    provider: 'toss',
+    providerProvenance: 'toss-public-paper-admission-test',
+    direction: 'BUY',
+    observedAtMs: ADMISSION_NOW - 1_000,
+    costPolicyVersion: candidate.signal.strategyIdentity.costPolicyVersion,
+    feePercent: 0.01,
+    spreadPercent: 0.02,
+    slippagePercent: 0.03,
+    tickSize: 1,
+    liquidity: 10_000_000,
+    partialFillModel: 'PRO_RATA',
+    sessionCalendarVersion: 'kr-session-v1',
+    marketStatus: 'OPEN',
+    taxPolicyVersion: 'kr-tax-v1',
+    taxPercent: 0.15,
+    ...overrides,
+  } as PaperReadinessEvidence;
+}
+
+function admissionSupplemental(candidate = admissionCandidate(), overrides: Partial<SupplementalExecutionCostEvidence> = {}): SupplementalExecutionCostEvidence {
+  return Object.freeze({
+    costPolicyId: candidate.signal.strategyIdentity.costPolicyVersion,
+    observedAtMs: ADMISSION_NOW - 1_000,
+    latency: percentComponent(0.01, 'ESTIMATED'),
+    liquidityImpact: percentComponent(0.02, 'ESTIMATED'),
+    partialFillImpact: percentComponent(0.03, 'ESTIMATED'),
+    ...overrides,
+  });
+}
+
+function admissionExecutionData(paper = admissionPaper()) {
+  const stock = paper as Extract<PaperReadinessEvidence, { market: 'KR_STOCK' | 'US_STOCK' }>;
+  return {
+    provider: 'toss',
+    provenance: stock.providerProvenance,
+    publicOnly: true,
+    dataQuality: 'READY',
+    asOfMs: stock.observedAtMs,
+    maxAgeMs: 30_000,
+    tickSize: stock.tickSize,
+    barProxyRealtimeAllowed: true,
+    taxPolicyKnown: true,
+    taxPolicyVersion: stock.taxPolicyVersion,
+    session: { version: stock.sessionCalendarVersion, status: stock.marketStatus, kind: 'REGULAR' },
+    volatilityInterruptionKnown: false,
+    volatilityInterruptionActive: false,
+  };
+}
+
+function buildAdmission(overrides: Partial<Parameters<typeof buildScannerCanonicalPaperAdmissionEvidence>[0]> = {}) {
+  const candidate = overrides.paperCandidate ?? admissionCandidate();
+  const paper = overrides.paperEvidence ?? admissionPaper(candidate);
+  const riskInput = overrides.riskInput ?? admissionRiskInput(candidate);
+  return buildScannerCanonicalPaperAdmissionEvidence({
+    paperCandidate: candidate,
+    learningSnapshot: overrides.learningSnapshot ?? admissionLearning(candidate),
+    riskInput,
+    riskResult: overrides.riskResult ?? admissionRiskResult(riskInput),
+    paperEvidence: paper,
+    supplementalCostEvidence: overrides.supplementalCostEvidence ?? admissionSupplemental(candidate),
+    executionDataEvidence: overrides.executionDataEvidence ?? admissionExecutionData(paper),
+    nowMs: overrides.nowMs ?? ADMISSION_NOW,
+    maxEvidenceAgeMs: overrides.maxEvidenceAgeMs ?? 30_000,
+  });
+}
+
+test('canonical Paper admission bundle accepts exact immutable learning, approved risk, public execution, and explicit cost evidence', () => {
+  const result = buildAdmission();
+  assert.equal(result.status, 'READY');
+  assert.deepEqual(result.blockers, []);
+  assert.ok(result.bundle);
+  assert.equal(result.bundle.riskEvidence.status, 'APPROVED');
+  assert.equal(result.bundle.executionEvidence.costPolicy.unitConversion, 'PERCENT_DIV_100');
+  assert.equal(result.bundle.executionEvidence.costPolicy.commissionRate, 0.0001);
+  assert.equal(result.bundle.executionEvidence.costPolicy.taxRate, 0.0015);
+  assert.equal(result.bundle.executionEvidence.costPolicy.spreadRate, 0.0002);
+  assert.equal(result.bundle.executionEvidence.costPolicy.slippageRate, 0.0003);
+  assert.match(result.bundle.evidenceDigest, /^[0-9a-f]{64}$/u);
+  assert.equal(JSON.stringify(result.bundle).includes('accountBalance'), false);
+  assert.equal(result.bundle.executionAuthority, 'NONE');
+  assert.equal(result.bundle.liveOrderAllowed, false);
+  assert.equal(result.bundle.privateTradingApiAllowed, false);
+});
+
+test('canonical Paper admission bundle fails closed on learning identity mismatch', () => {
+  const candidate = admissionCandidate();
+  const learning = createImmutableSignalSnapshot({
+    ...admissionLearning(candidate),
+    signalId: 'wrong-signal',
+    immutable: undefined as never,
+    executionAuthority: undefined as never,
+  });
+  const result = buildAdmission({ paperCandidate: candidate, learningSnapshot: learning });
+  assert.equal(result.status, 'BLOCKED');
+  assert.ok(result.blockers.includes('LEARNING_SIGNAL_ID_MISMATCH'));
+  assert.equal(result.bundle, null);
+});
+
+test('canonical Paper admission bundle fails closed on stale Risk Engine approval', () => {
+  const input = admissionRiskInput();
+  const stale = {
+    ...admissionRiskResult(input),
+    calculatedAt: new Date(ADMISSION_NOW - 120_000).toISOString(),
+  };
+  const result = buildAdmission({ riskInput: input, riskResult: stale });
+  assert.equal(result.status, 'BLOCKED');
+  assert.ok(result.blockers.includes('RISK_EVIDENCE_STALE'));
+});
+
+test('canonical Paper admission bundle requires one canonical cost-policy identity across strategy, readiness, and supplemental evidence', () => {
+  const candidate = admissionCandidate();
+  const paper = admissionPaper(candidate, { costPolicyVersion: 'wrong-policy' } as Partial<PaperReadinessEvidence>);
+  const result = buildAdmission({ paperCandidate: candidate, paperEvidence: paper, executionDataEvidence: admissionExecutionData(paper) });
+  assert.equal(result.status, 'BLOCKED');
+  assert.ok(result.blockers.includes('PAPER_COST_POLICY_VERSION_MISMATCH'));
+  assert.ok(result.blockers.includes('COST_PROVENANCE_POLICY_VERSION_MISMATCH'));
+});
+
+test('canonical Paper admission bundle rejects private or contradictory execution evidence', () => {
+  const paper = admissionPaper();
+  const result = buildAdmission({
+    paperEvidence: paper,
+    executionDataEvidence: { ...admissionExecutionData(paper), privateApiUsed: true, tickSize: 5 },
+  });
+  assert.equal(result.status, 'BLOCKED');
+  assert.ok(result.blockers.includes('EXECUTION_SAFETY_VIOLATION'));
+  assert.ok(result.blockers.includes('EXECUTION_TICK_SIZE_MISMATCH'));
 });
