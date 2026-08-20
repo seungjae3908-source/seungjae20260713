@@ -8,6 +8,10 @@ import {
   startUnifiedAssetSearchRefreshTimer,
 } from '../services/unified-asset-search.service';
 import {
+  buildKrSearchFallback,
+  KR_SEARCH_SOFT_DEADLINE_MS,
+} from '../services/unified-kr-search-fallback';
+import {
   buildSpotSearchFallback,
   SPOT_SEARCH_SOFT_DEADLINE_MS,
 } from '../services/unified-spot-search-fallback';
@@ -35,27 +39,52 @@ function canUseSpotMetadataFallback(asset: 'all' | UnifiedAssetType, market: Uni
   return (asset === 'all' || asset === 'coin') && market === 'spot';
 }
 
-async function searchWithSpotSoftDeadline(input: {
+function canUseKrMetadataFallback(asset: 'all' | UnifiedAssetType, market: UnifiedSearchMarket | null) {
+  return (asset === 'all' || asset === 'stock') && market === 'KR';
+}
+
+function buildMetadataFallback(
+  q: string,
+  asset: 'all' | UnifiedAssetType,
+  market: UnifiedSearchMarket | null,
+  limit: number,
+) {
+  if (canUseKrMetadataFallback(asset, market)) return buildKrSearchFallback(q, limit);
+  if (canUseSpotMetadataFallback(asset, market)) return buildSpotSearchFallback(q, limit);
+  return null;
+}
+
+function metadataFallbackSoftDeadlineMs(
+  asset: 'all' | UnifiedAssetType,
+  market: UnifiedSearchMarket | null,
+) {
+  if (canUseKrMetadataFallback(asset, market)) return KR_SEARCH_SOFT_DEADLINE_MS;
+  if (canUseSpotMetadataFallback(asset, market)) return SPOT_SEARCH_SOFT_DEADLINE_MS;
+  return null;
+}
+
+async function searchWithMetadataSoftDeadline(input: {
   q: string;
   asset: 'all' | UnifiedAssetType;
   market: UnifiedSearchMarket | null;
   limit: number;
 }) {
   const searchPromise = searchUnifiedAssets(input);
-  if (!canUseSpotMetadataFallback(input.asset, input.market)) return searchPromise;
+  const softDeadlineMs = metadataFallbackSoftDeadlineMs(input.asset, input.market);
+  if (softDeadlineMs == null) return searchPromise;
 
   let timer: NodeJS.Timeout | null = null;
   try {
     const softDeadline = new Promise<null>((resolve) => {
-      timer = setTimeout(() => resolve(null), SPOT_SEARCH_SOFT_DEADLINE_MS);
+      timer = setTimeout(() => resolve(null), softDeadlineMs);
       timer.unref?.();
     });
     const response = await Promise.race([searchPromise, softDeadline]);
     if (response) {
       if (response.count > 0) return response;
-      return buildSpotSearchFallback(input.q, input.limit) ?? response;
+      return buildMetadataFallback(input.q, input.asset, input.market, input.limit) ?? response;
     }
-    return buildSpotSearchFallback(input.q, input.limit) ?? await searchPromise;
+    return buildMetadataFallback(input.q, input.asset, input.market, input.limit) ?? await searchPromise;
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -79,7 +108,7 @@ router.get('/search/suggest', async (req, res) => {
   }
   const limit = Math.max(1, Math.min(50, Math.trunc(Number(req.query.limit ?? 25)) || 25));
   try {
-    const response = await searchWithSpotSoftDeadline({ q, asset, market, limit });
+    const response = await searchWithMetadataSoftDeadline({ q, asset, market, limit });
     const state = deriveUnifiedSearchState({
       resultCount: response.count,
       partial: response.partial,
@@ -89,9 +118,7 @@ router.get('/search/suggest', async (req, res) => {
     res.json({ ok: true, state, q, asset, market, ...response });
   } catch (error) {
     console.error('[unified-search] suggest failed:', error instanceof Error ? error.message : 'unknown');
-    const fallback = canUseSpotMetadataFallback(asset, market)
-      ? buildSpotSearchFallback(q, limit)
-      : null;
+    const fallback = buildMetadataFallback(q, asset, market, limit);
     if (fallback) {
       const state = deriveUnifiedSearchState({ resultCount: fallback.count, partial: true, stale: true });
       res.setHeader('Cache-Control', 'private, max-age=15, stale-while-revalidate=60');
