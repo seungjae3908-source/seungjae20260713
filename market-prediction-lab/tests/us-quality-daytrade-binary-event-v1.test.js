@@ -23,13 +23,15 @@ function noEventEvidence(overrides = {}) {
 }
 
 function scheduledEventEvidence(minutesFromNow, overrides = {}) {
+  const timestamp = AS_OF + minutesFromNow * 60_000;
   return {
     calendarChecked: true,
     checkedAtMs: AS_OF - 60_000,
     scheduled: true,
     verified: true,
     eventType: "EARNINGS",
-    eventTimestampMs: AS_OF + minutesFromNow * 60_000,
+    eventTimestampMs: timestamp,
+    marketMovingTimestampMs: timestamp,
     source: "issuer-calendar",
     validUntilMs: AS_OF + 15 * 60_000,
     coverageComplete: true,
@@ -40,10 +42,7 @@ function scheduledEventEvidence(minutesFromNow, overrides = {}) {
 }
 
 test("binary-event gate requires a caller-versioned policy before trusting calendar coverage", () => {
-  const result = evaluateQualityDaytradeBinaryEventRisk({
-    asOfMs: AS_OF,
-    binaryEventEvidence: noEventEvidence(),
-  });
+  const result = evaluateQualityDaytradeBinaryEventRisk({ asOfMs: AS_OF, binaryEventEvidence: noEventEvidence() });
   assert.equal(result.status, "BLOCKED_DATA");
   assert.equal(result.reason, "BINARY_EVENT_POLICY_REQUIRED");
   assert.equal(result.executionAuthority, "NONE");
@@ -52,54 +51,31 @@ test("binary-event gate requires a caller-versioned policy before trusting calen
 });
 
 test("binary-event gate fails closed when calendar evidence is missing", () => {
-  const result = evaluateQualityDaytradeBinaryEventRisk({
-    asOfMs: AS_OF,
-    binaryEventPolicy: policy,
-  });
+  const result = evaluateQualityDaytradeBinaryEventRisk({ asOfMs: AS_OF, binaryEventPolicy: policy });
   assert.equal(result.status, "BLOCKED_DATA");
   assert.equal(result.reason, "BINARY_EVENT_EVIDENCE_REQUIRED");
 });
 
 test("missing event provenance fields return BLOCKED_DATA instead of throwing or passing", () => {
-  const missingCheckedAt = evaluateQualityDaytradeBinaryEventRisk({
-    asOfMs: AS_OF,
-    binaryEventEvidence: noEventEvidence({ checkedAtMs: null }),
-    binaryEventPolicy: policy,
-  });
-  assert.equal(missingCheckedAt.status, "BLOCKED_DATA");
+  const missingCheckedAt = evaluateQualityDaytradeBinaryEventRisk({ asOfMs: AS_OF, binaryEventEvidence: noEventEvidence({ checkedAtMs: null }), binaryEventPolicy: policy });
   assert.equal(missingCheckedAt.reason, "BINARY_EVENT_CHECKED_AT_REQUIRED");
 
-  const missingValidity = evaluateQualityDaytradeBinaryEventRisk({
-    asOfMs: AS_OF,
-    binaryEventEvidence: noEventEvidence({ validUntilMs: null }),
-    binaryEventPolicy: policy,
-  });
-  assert.equal(missingValidity.status, "BLOCKED_DATA");
+  const missingValidity = evaluateQualityDaytradeBinaryEventRisk({ asOfMs: AS_OF, binaryEventEvidence: noEventEvidence({ validUntilMs: null }), binaryEventPolicy: policy });
   assert.equal(missingValidity.reason, "BINARY_EVENT_VALID_UNTIL_REQUIRED");
 
-  const missingCoverage = evaluateQualityDaytradeBinaryEventRisk({
-    asOfMs: AS_OF,
-    binaryEventEvidence: noEventEvidence({ coverageEndMs: null }),
-    binaryEventPolicy: policy,
-  });
-  assert.equal(missingCoverage.status, "BLOCKED_DATA");
+  const missingCoverage = evaluateQualityDaytradeBinaryEventRisk({ asOfMs: AS_OF, binaryEventEvidence: noEventEvidence({ coverageEndMs: null }), binaryEventPolicy: policy });
   assert.equal(missingCoverage.reason, "BINARY_EVENT_COVERAGE_REQUIRED");
 
-  const missingEventTimestamp = evaluateQualityDaytradeBinaryEventRisk({
-    asOfMs: AS_OF,
-    binaryEventEvidence: scheduledEventEvidence(90, { eventTimestampMs: null }),
-    binaryEventPolicy: policy,
-  });
-  assert.equal(missingEventTimestamp.status, "BLOCKED_DATA");
+  const missingEventTimestamp = evaluateQualityDaytradeBinaryEventRisk({ asOfMs: AS_OF, binaryEventEvidence: scheduledEventEvidence(90, { eventTimestampMs: null }), binaryEventPolicy: policy });
   assert.equal(missingEventTimestamp.reason, "BINARY_EVENT_TIMESTAMP_REQUIRED");
+
+  const missingMarketMovingTimestamp = evaluateQualityDaytradeBinaryEventRisk({ asOfMs: AS_OF, binaryEventEvidence: scheduledEventEvidence(90, { marketMovingTimestampMs: null }), binaryEventPolicy: policy });
+  assert.equal(missingMarketMovingTimestamp.status, "BLOCKED_DATA");
+  assert.equal(missingMarketMovingTimestamp.reason, "BINARY_EVENT_MARKET_MOVING_TIMESTAMP_REQUIRED");
 });
 
 test("fresh source-backed no-event calendar evidence passes only with complete two-sided coverage", () => {
-  const result = evaluateQualityDaytradeBinaryEventRisk({
-    asOfMs: AS_OF,
-    binaryEventEvidence: noEventEvidence(),
-    binaryEventPolicy: policy,
-  });
+  const result = evaluateQualityDaytradeBinaryEventRisk({ asOfMs: AS_OF, binaryEventEvidence: noEventEvidence(), binaryEventPolicy: policy });
   assert.equal(result.status, "PASS");
   assert.equal(result.reason, "NO_SCHEDULED_BINARY_EVENT");
   assert.equal(result.evidence.source, "issuer-calendar");
@@ -109,145 +85,94 @@ test("fresh source-backed no-event calendar evidence passes only with complete t
 });
 
 test("incomplete calendar coverage cannot prove a safe no-event state", () => {
-  const result = evaluateQualityDaytradeBinaryEventRisk({
-    asOfMs: AS_OF,
-    binaryEventEvidence: noEventEvidence({ coverageComplete: false }),
-    binaryEventPolicy: policy,
-  });
+  const result = evaluateQualityDaytradeBinaryEventRisk({ asOfMs: AS_OF, binaryEventEvidence: noEventEvidence({ coverageComplete: false }), binaryEventPolicy: policy });
   assert.equal(result.status, "BLOCKED_DATA");
   assert.equal(result.reason, "BINARY_EVENT_COVERAGE_COMPLETE_REQUIRED");
 });
 
 test("no-event evidence without a source fails closed", () => {
-  const result = evaluateQualityDaytradeBinaryEventRisk({
-    asOfMs: AS_OF,
-    binaryEventEvidence: noEventEvidence({ source: "" }),
-    binaryEventPolicy: policy,
-  });
+  const result = evaluateQualityDaytradeBinaryEventRisk({ asOfMs: AS_OF, binaryEventEvidence: noEventEvidence({ source: "" }), binaryEventPolicy: policy });
   assert.equal(result.status, "BLOCKED_DATA");
   assert.equal(result.reason, "BINARY_EVENT_SOURCE_REQUIRED");
 });
 
 test("expired calendar evidence fails closed instead of silently passing no-event state", () => {
-  const result = evaluateQualityDaytradeBinaryEventRisk({
-    asOfMs: AS_OF,
-    binaryEventEvidence: noEventEvidence({ validUntilMs: AS_OF - 1 }),
-    binaryEventPolicy: policy,
-  });
+  const result = evaluateQualityDaytradeBinaryEventRisk({ asOfMs: AS_OF, binaryEventEvidence: noEventEvidence({ validUntilMs: AS_OF - 1 }), binaryEventPolicy: policy });
   assert.equal(result.status, "BLOCKED_DATA");
   assert.equal(result.reason, "BINARY_EVENT_EVIDENCE_STALE");
 });
 
 test("calendar coverage must span the full caller-versioned pre-event blackout horizon", () => {
-  const result = evaluateQualityDaytradeBinaryEventRisk({
-    asOfMs: AS_OF,
-    binaryEventEvidence: noEventEvidence({ coverageEndMs: AS_OF + 119 * 60_000 }),
-    binaryEventPolicy: policy,
-  });
-  assert.equal(result.status, "BLOCKED_DATA");
+  const result = evaluateQualityDaytradeBinaryEventRisk({ asOfMs: AS_OF, binaryEventEvidence: noEventEvidence({ coverageEndMs: AS_OF + 119 * 60_000 }), binaryEventPolicy: policy });
   assert.equal(result.reason, "BINARY_EVENT_COVERAGE_INSUFFICIENT");
   assert.equal(result.requiredCoverageEndMs, AS_OF + 120 * 60_000);
 });
 
 test("calendar coverage must also span the full post-event cooldown lookback", () => {
-  const result = evaluateQualityDaytradeBinaryEventRisk({
-    asOfMs: AS_OF,
-    binaryEventEvidence: noEventEvidence({ coverageStartMs: AS_OF - 59 * 60_000 }),
-    binaryEventPolicy: policy,
-  });
-  assert.equal(result.status, "BLOCKED_DATA");
+  const result = evaluateQualityDaytradeBinaryEventRisk({ asOfMs: AS_OF, binaryEventEvidence: noEventEvidence({ coverageStartMs: AS_OF - 59 * 60_000 }), binaryEventPolicy: policy });
   assert.equal(result.reason, "BINARY_EVENT_LOOKBACK_INSUFFICIENT");
   assert.equal(result.requiredCoverageStartMs, AS_OF - 60 * 60_000);
 });
 
 test("invalid validity and coverage ranges fail closed", () => {
-  const invalidValidity = evaluateQualityDaytradeBinaryEventRisk({
-    asOfMs: AS_OF,
-    binaryEventEvidence: noEventEvidence({
-      checkedAtMs: AS_OF - 60_000,
-      validUntilMs: AS_OF - 120_000,
-    }),
-    binaryEventPolicy: policy,
-  });
-  assert.equal(invalidValidity.status, "BLOCKED_DATA");
+  const invalidValidity = evaluateQualityDaytradeBinaryEventRisk({ asOfMs: AS_OF, binaryEventEvidence: noEventEvidence({ checkedAtMs: AS_OF - 60_000, validUntilMs: AS_OF - 120_000 }), binaryEventPolicy: policy });
   assert.equal(invalidValidity.reason, "BINARY_EVENT_VALIDITY_RANGE_INVALID");
 
-  const invalidCoverage = evaluateQualityDaytradeBinaryEventRisk({
-    asOfMs: AS_OF,
-    binaryEventEvidence: noEventEvidence({
-      coverageStartMs: AS_OF + 60_000,
-      coverageEndMs: AS_OF - 60_000,
-    }),
-    binaryEventPolicy: policy,
-  });
-  assert.equal(invalidCoverage.status, "BLOCKED_DATA");
+  const invalidCoverage = evaluateQualityDaytradeBinaryEventRisk({ asOfMs: AS_OF, binaryEventEvidence: noEventEvidence({ coverageStartMs: AS_OF + 60_000, coverageEndMs: AS_OF - 60_000 }), binaryEventPolicy: policy });
   assert.equal(invalidCoverage.reason, "BINARY_EVENT_COVERAGE_RANGE_INVALID");
 });
 
 test("scheduled binary event still requires verified source-backed evidence", () => {
-  const unverified = evaluateQualityDaytradeBinaryEventRisk({
-    asOfMs: AS_OF,
-    binaryEventEvidence: scheduledEventEvidence(90, { verified: false }),
-    binaryEventPolicy: policy,
-  });
-  assert.equal(unverified.status, "BLOCKED_DATA");
+  const unverified = evaluateQualityDaytradeBinaryEventRisk({ asOfMs: AS_OF, binaryEventEvidence: scheduledEventEvidence(90, { verified: false }), binaryEventPolicy: policy });
   assert.equal(unverified.reason, "BINARY_EVENT_VERIFICATION_REQUIRED");
 
-  const unsupported = evaluateQualityDaytradeBinaryEventRisk({
-    asOfMs: AS_OF,
-    binaryEventEvidence: scheduledEventEvidence(90, { eventType: "RUMOR" }),
-    binaryEventPolicy: policy,
-  });
-  assert.equal(unsupported.status, "BLOCKED_DATA");
+  const unsupported = evaluateQualityDaytradeBinaryEventRisk({ asOfMs: AS_OF, binaryEventEvidence: scheduledEventEvidence(90, { eventType: "RUMOR" }), binaryEventPolicy: policy });
   assert.equal(unsupported.reason, "BINARY_EVENT_TYPE_UNSUPPORTED");
 });
 
-test("scheduled event timestamp must be inside the claimed complete calendar coverage", () => {
-  const result = evaluateQualityDaytradeBinaryEventRisk({
-    asOfMs: AS_OF,
-    binaryEventEvidence: scheduledEventEvidence(180, { coverageEndMs: AS_OF + 150 * 60_000 }),
-    binaryEventPolicy: policy,
-  });
-  assert.equal(result.status, "BLOCKED_DATA");
-  assert.equal(result.reason, "BINARY_EVENT_TIMESTAMP_OUTSIDE_COVERAGE");
+test("scheduled event and market-moving timestamps must be inside complete calendar coverage", () => {
+  const eventOutside = evaluateQualityDaytradeBinaryEventRisk({ asOfMs: AS_OF, binaryEventEvidence: scheduledEventEvidence(180, { coverageEndMs: AS_OF + 150 * 60_000 }), binaryEventPolicy: policy });
+  assert.equal(eventOutside.reason, "BINARY_EVENT_TIMESTAMP_OUTSIDE_COVERAGE");
+
+  const marketMovingOutside = evaluateQualityDaytradeBinaryEventRisk({ asOfMs: AS_OF, binaryEventEvidence: scheduledEventEvidence(90, { marketMovingTimestampMs: AS_OF + 25 * 60 * 60_000 }), binaryEventPolicy: policy });
+  assert.equal(marketMovingOutside.reason, "BINARY_EVENT_MARKET_MOVING_TIMESTAMP_OUTSIDE_COVERAGE");
 });
 
 test("entry inside pre-event blackout abstains", () => {
-  const result = evaluateQualityDaytradeBinaryEventRisk({
-    asOfMs: AS_OF,
-    binaryEventEvidence: scheduledEventEvidence(90),
-    binaryEventPolicy: policy,
-  });
+  const result = evaluateQualityDaytradeBinaryEventRisk({ asOfMs: AS_OF, binaryEventEvidence: scheduledEventEvidence(90), binaryEventPolicy: policy });
   assert.equal(result.status, "ABSTAIN");
   assert.equal(result.reason, "BINARY_EVENT_BLACKOUT");
   assert.equal(result.minutesUntilEvent, 90);
 });
 
 test("entry inside post-event cooldown abstains", () => {
-  const result = evaluateQualityDaytradeBinaryEventRisk({
-    asOfMs: AS_OF,
-    binaryEventEvidence: scheduledEventEvidence(-30),
-    binaryEventPolicy: policy,
-  });
+  const result = evaluateQualityDaytradeBinaryEventRisk({ asOfMs: AS_OF, binaryEventEvidence: scheduledEventEvidence(-30), binaryEventPolicy: policy });
   assert.equal(result.status, "ABSTAIN");
   assert.equal(result.reason, "BINARY_EVENT_COOLDOWN");
   assert.equal(result.minutesSinceEvent, 30);
 });
 
-test("outside blackout and cooldown window passes", () => {
-  const before = evaluateQualityDaytradeBinaryEventRisk({
+test("earnings blackout anchors to market-moving release, not a later conference call", () => {
+  const result = evaluateQualityDaytradeBinaryEventRisk({
     asOfMs: AS_OF,
-    binaryEventEvidence: scheduledEventEvidence(180),
-    binaryEventPolicy: policy,
+    binaryEventPolicy: { preEventBlackoutMinutes: 30, postEventCooldownMinutes: 60 },
+    binaryEventEvidence: scheduledEventEvidence(120, {
+      eventTimestampMs: AS_OF + 120 * 60_000,
+      marketMovingTimestampMs: AS_OF + 20 * 60_000,
+    }),
   });
+  assert.equal(result.status, "ABSTAIN");
+  assert.equal(result.reason, "BINARY_EVENT_BLACKOUT");
+  assert.equal(result.minutesUntilEvent, 20);
+  assert.equal(result.evidence.timingBasis, "MARKET_MOVING_INFORMATION_RELEASE");
+});
+
+test("outside blackout and cooldown window passes", () => {
+  const before = evaluateQualityDaytradeBinaryEventRisk({ asOfMs: AS_OF, binaryEventEvidence: scheduledEventEvidence(180), binaryEventPolicy: policy });
   assert.equal(before.status, "PASS");
   assert.equal(before.reason, "OUTSIDE_BINARY_EVENT_WINDOW");
 
-  const after = evaluateQualityDaytradeBinaryEventRisk({
-    asOfMs: AS_OF,
-    binaryEventEvidence: scheduledEventEvidence(-90),
-    binaryEventPolicy: policy,
-  });
+  const after = evaluateQualityDaytradeBinaryEventRisk({ asOfMs: AS_OF, binaryEventEvidence: scheduledEventEvidence(-90), binaryEventPolicy: policy });
   assert.equal(after.status, "PASS");
   assert.equal(after.reason, "OUTSIDE_BINARY_EVENT_WINDOW");
 });
@@ -259,6 +184,6 @@ test("binary-event search grid exposes research candidates, not a hidden default
   assert.ok(grid.combinations.some((row) => row.preEventBlackoutMinutes === 240 && row.postEventCooldownMinutes === 120));
   assert.match(grid.note, /research candidates/i);
   assert.match(grid.note, /coverage/i);
-  assert.match(grid.note, /lookback/i);
+  assert.match(grid.note, /market-moving/i);
   assert.equal(grid.optimizationRule, "RESEARCH_ONLY_COARSE_TO_FINE_OOS_WALK_FORWARD_FINAL_HOLDOUT");
 });
