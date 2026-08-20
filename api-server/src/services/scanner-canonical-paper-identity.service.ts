@@ -59,8 +59,8 @@ type ScannerCardWithCanonicalPaperCandidate = ScannerSignalCard & Readonly<{
 const MARKET_ALIASES: Readonly<Record<ScannerProfileMarket, readonly string[]>> = Object.freeze({
   KR_STOCK: Object.freeze(['KR', 'KR_STOCK']),
   US_STOCK: Object.freeze(['US', 'US_STOCK']),
-  CRYPTO_SPOT: Object.freeze(['SPOT', 'CRYPTO_SPOT']),
-  CRYPTO_FUTURES: Object.freeze(['FUTURES', 'CRYPTO_FUTURES']),
+  CRYPTO_SPOT: Object.freeze(['SPOT', 'CRYPTO_SPOT', 'UPBIT_KRW']),
+  CRYPTO_FUTURES: Object.freeze(['FUTURES', 'CRYPTO_FUTURES', 'BITGET_USDT_FUTURES']),
 });
 
 const ASSET_CLASSES: Readonly<Record<ScannerProfileMarket, ScannerSignalCard['assetClass']>> = Object.freeze({
