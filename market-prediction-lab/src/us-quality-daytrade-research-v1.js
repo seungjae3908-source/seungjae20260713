@@ -1,13 +1,26 @@
 import { PredictionInputError } from "./contracts.js";
 
-export const QUALITY_DAYTRADE_CONTRACT_VERSION = "us-quality-daytrade-v1";
+export const QUALITY_DAYTRADE_CONTRACT_VERSION = "us-quality-daytrade-v2";
 
 export const DEFAULT_QUALITY_UNIVERSE = Object.freeze({
-  minPriceUsd: 10,
-  minMarketCapUsd: 5_000_000_000,
-  minAverageDollarVolumeUsd: 50_000_000,
-  maxRegularSpreadBps: 20,
-  maxExtendedSpreadBps: 35,
+  tierA: Object.freeze({
+    minPriceUsd: 10,
+    minMarketCapUsd: 5_000_000_000,
+    minAverageDollarVolumeUsd: 50_000_000,
+    maxRegularSpreadBps: 20,
+    maxExtendedSpreadBps: 35,
+    riskBudgetMultiplier: 1,
+  }),
+  tierB: Object.freeze({
+    minPriceUsd: 8,
+    minMarketCapUsd: 1_000_000_000,
+    maxMarketCapUsd: 5_000_000_000,
+    minAverageDollarVolumeUsd: 20_000_000,
+    minFloatShares: 20_000_000,
+    maxRegularSpreadBps: 30,
+    maxExtendedSpreadBps: 50,
+    riskBudgetMultiplier: 0.5,
+  }),
 });
 
 export const DEFAULT_QUALITY_DATA_POLICY = Object.freeze({
@@ -27,6 +40,7 @@ const EXCLUDED_SECURITY_TYPES = new Set([
 ]);
 
 const VALID_SESSIONS = new Set(["PREMARKET", "REGULAR", "AFTER_HOURS"]);
+const VALID_QUALITY_TIERS = new Set(["A", "B"]);
 
 function finiteNumber(value, name) {
   const number = Number(value);
@@ -40,6 +54,11 @@ function positiveNumber(value, name) {
   return number;
 }
 
+function optionalPositiveNumber(value, name) {
+  if (value == null) return null;
+  return positiveNumber(value, name);
+}
+
 function normalizeInstrument(raw) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new PredictionInputError("instrument must be an object");
   const exchange = String(raw.exchange ?? "").toUpperCase();
@@ -51,30 +70,86 @@ function normalizeInstrument(raw) {
     priceUsd: positiveNumber(raw.priceUsd, "instrument.priceUsd"),
     marketCapUsd: positiveNumber(raw.marketCapUsd, "instrument.marketCapUsd"),
     averageDollarVolumeUsd: positiveNumber(raw.averageDollarVolumeUsd, "instrument.averageDollarVolumeUsd"),
+    floatShares: optionalPositiveNumber(raw.floatShares, "instrument.floatShares"),
     recentReverseSplit: raw.recentReverseSplit === true,
     listingRisk: raw.listingRisk === true,
     manipulationRisk: raw.manipulationRisk === true,
+    dilutionRisk: raw.dilutionRisk === true,
+    recentOffering: raw.recentOffering === true,
+    goingConcernRisk: raw.goingConcernRisk === true,
   });
+}
+
+function normalizeUniversePolicy(raw = DEFAULT_QUALITY_UNIVERSE) {
+  const tierA = { ...DEFAULT_QUALITY_UNIVERSE.tierA, ...(raw?.tierA ?? {}) };
+  const tierB = { ...DEFAULT_QUALITY_UNIVERSE.tierB, ...(raw?.tierB ?? {}) };
+
+  for (const [tierName, tier] of [["tierA", tierA], ["tierB", tierB]]) {
+    for (const field of ["minPriceUsd", "minMarketCapUsd", "minAverageDollarVolumeUsd", "maxRegularSpreadBps", "maxExtendedSpreadBps", "riskBudgetMultiplier"]) {
+      if (!Number.isFinite(Number(tier[field])) || Number(tier[field]) <= 0) throw new PredictionInputError(`invalid universePolicy.${tierName}.${field}`);
+    }
+  }
+  if (!Number.isFinite(Number(tierB.maxMarketCapUsd)) || Number(tierB.maxMarketCapUsd) <= Number(tierB.minMarketCapUsd)) {
+    throw new PredictionInputError("invalid universePolicy.tierB.maxMarketCapUsd");
+  }
+  if (!Number.isFinite(Number(tierB.minFloatShares)) || Number(tierB.minFloatShares) <= 0) {
+    throw new PredictionInputError("invalid universePolicy.tierB.minFloatShares");
+  }
+  if (Number(tierB.maxMarketCapUsd) > Number(tierA.minMarketCapUsd)) {
+    throw new PredictionInputError("tierB max market cap cannot exceed tierA minimum market cap");
+  }
+  return Object.freeze({ tierA: Object.freeze(tierA), tierB: Object.freeze(tierB) });
 }
 
 export function classifyUsQualityUniverse(raw, policy = DEFAULT_QUALITY_UNIVERSE) {
   const instrument = normalizeInstrument(raw);
+  const normalizedPolicy = normalizeUniversePolicy(policy);
   const reasons = [];
+
   if (!instrument.symbol) reasons.push("SYMBOL_MISSING");
   if (!new Set(["NYSE", "NASDAQ"]).has(instrument.exchange)) reasons.push("EXCHANGE_NOT_ALLOWED");
   if (EXCLUDED_SECURITY_TYPES.has(instrument.securityType)) reasons.push(`SECURITY_TYPE_EXCLUDED:${instrument.securityType}`);
   if (instrument.securityType !== "COMMON_STOCK") reasons.push("COMMON_STOCK_REQUIRED");
-  if (instrument.priceUsd < Number(policy.minPriceUsd)) reasons.push("PRICE_BELOW_MINIMUM");
-  if (instrument.marketCapUsd < Number(policy.minMarketCapUsd)) reasons.push("MARKET_CAP_BELOW_MINIMUM");
-  if (instrument.averageDollarVolumeUsd < Number(policy.minAverageDollarVolumeUsd)) reasons.push("DOLLAR_VOLUME_BELOW_MINIMUM");
   if (instrument.recentReverseSplit) reasons.push("RECENT_REVERSE_SPLIT");
   if (instrument.listingRisk) reasons.push("LISTING_RISK");
   if (instrument.manipulationRisk) reasons.push("MANIPULATION_RISK");
+
+  let tier = null;
+  if (reasons.length === 0) {
+    const a = normalizedPolicy.tierA;
+    const meetsTierA = instrument.priceUsd >= Number(a.minPriceUsd)
+      && instrument.marketCapUsd >= Number(a.minMarketCapUsd)
+      && instrument.averageDollarVolumeUsd >= Number(a.minAverageDollarVolumeUsd);
+
+    if (meetsTierA) {
+      tier = "A";
+    } else if (instrument.marketCapUsd < Number(a.minMarketCapUsd)) {
+      const b = normalizedPolicy.tierB;
+      if (instrument.priceUsd < Number(b.minPriceUsd)) reasons.push("PRICE_BELOW_TIER_B_MINIMUM");
+      if (instrument.marketCapUsd < Number(b.minMarketCapUsd)) reasons.push("MARKET_CAP_BELOW_TIER_B_MINIMUM");
+      if (instrument.marketCapUsd >= Number(b.maxMarketCapUsd)) reasons.push("MARKET_CAP_ABOVE_TIER_B_MAXIMUM");
+      if (instrument.averageDollarVolumeUsd < Number(b.minAverageDollarVolumeUsd)) reasons.push("DOLLAR_VOLUME_BELOW_TIER_B_MINIMUM");
+      if (instrument.floatShares == null) reasons.push("FLOAT_EVIDENCE_REQUIRED_FOR_TIER_B");
+      else if (instrument.floatShares < Number(b.minFloatShares)) reasons.push("FLOAT_BELOW_TIER_B_MINIMUM");
+      if (instrument.dilutionRisk) reasons.push("DILUTION_RISK");
+      if (instrument.recentOffering) reasons.push("RECENT_OFFERING");
+      if (instrument.goingConcernRisk) reasons.push("GOING_CONCERN_RISK");
+      if (reasons.length === 0) tier = "B";
+    } else {
+      if (instrument.priceUsd < Number(a.minPriceUsd)) reasons.push("PRICE_BELOW_TIER_A_MINIMUM");
+      if (instrument.averageDollarVolumeUsd < Number(a.minAverageDollarVolumeUsd)) reasons.push("DOLLAR_VOLUME_BELOW_TIER_A_MINIMUM");
+    }
+  }
+
+  const tierPolicy = tier == null ? null : normalizedPolicy[tier === "A" ? "tierA" : "tierB"];
   return Object.freeze({
     contractVersion: QUALITY_DAYTRADE_CONTRACT_VERSION,
-    eligible: reasons.length === 0,
+    eligible: reasons.length === 0 && tier != null,
+    tier,
+    riskBudgetMultiplier: tierPolicy == null ? 0 : Number(tierPolicy.riskBudgetMultiplier),
     reasons: Object.freeze(reasons),
     instrument,
+    policy: normalizedPolicy,
   });
 }
 
@@ -146,14 +221,16 @@ function highestHigh(candles) {
   return candles.reduce((highest, candle) => Math.max(highest, candle.high), -Infinity);
 }
 
-function normalizeSetupParams(raw = {}) {
+function normalizeSetupParams(raw = {}, qualityTier = "A") {
+  if (!VALID_QUALITY_TIERS.has(qualityTier)) throw new PredictionInputError("invalid quality tier");
+  const tierB = qualityTier === "B";
   const params = {
-    minRelativeVolume: Number(raw.minRelativeVolume ?? 1.5),
-    minVolumeReacceleration: Number(raw.minVolumeReacceleration ?? 1.25),
-    minInitialImpulsePct: Number(raw.minInitialImpulsePct ?? 1.0),
-    minPullbackPct: Number(raw.minPullbackPct ?? 0.25),
-    maxPullbackPct: Number(raw.maxPullbackPct ?? 3.0),
-    maxVwapUndercutBps: Number(raw.maxVwapUndercutBps ?? 20),
+    minRelativeVolume: Number(raw.minRelativeVolume ?? (tierB ? 2.0 : 1.5)),
+    minVolumeReacceleration: Number(raw.minVolumeReacceleration ?? (tierB ? 1.5 : 1.25)),
+    minInitialImpulsePct: Number(raw.minInitialImpulsePct ?? (tierB ? 1.5 : 1.0)),
+    minPullbackPct: Number(raw.minPullbackPct ?? (tierB ? 0.4 : 0.25)),
+    maxPullbackPct: Number(raw.maxPullbackPct ?? (tierB ? 4.0 : 3.0)),
+    maxVwapUndercutBps: Number(raw.maxVwapUndercutBps ?? (tierB ? 15 : 20)),
     breakoutLookback: Number(raw.breakoutLookback ?? 3),
   };
   for (const name of ["minRelativeVolume", "minVolumeReacceleration", "minInitialImpulsePct", "minPullbackPct", "maxPullbackPct"]) {
@@ -171,7 +248,7 @@ export function evaluateUsQualityDaytradeSetup(raw) {
   if (!universe.eligible) return Object.freeze({ status: "ABSTAIN", reason: "UNIVERSE_REJECTED", universe });
 
   const candles = normalizeCandles(raw.candles);
-  const params = normalizeSetupParams(raw.params);
+  const params = normalizeSetupParams(raw.params, universe.tier);
   const dataPolicy = normalizeDataPolicy(raw.dataPolicy);
   const session = candles.at(-1).session;
   if (!candles.every((candle) => candle.session === session)) {
@@ -256,9 +333,10 @@ export function evaluateUsQualityDaytradeSetup(raw) {
 
   const mid = (bid + ask) / 2;
   const spreadBps = mid > 0 ? ((ask - bid) / mid) * 10_000 : Number.POSITIVE_INFINITY;
+  const tierPolicy = universe.policy[universe.tier === "A" ? "tierA" : "tierB"];
   const maxSpreadBps = session === "REGULAR"
-    ? Number(raw.universePolicy?.maxRegularSpreadBps ?? DEFAULT_QUALITY_UNIVERSE.maxRegularSpreadBps)
-    : Number(raw.universePolicy?.maxExtendedSpreadBps ?? DEFAULT_QUALITY_UNIVERSE.maxExtendedSpreadBps);
+    ? Number(tierPolicy.maxRegularSpreadBps)
+    : Number(tierPolicy.maxExtendedSpreadBps);
   if (spreadBps > maxSpreadBps) return Object.freeze({ status: "ABSTAIN", reason: "SPREAD_TOO_WIDE", universe, session, spreadBps, maxSpreadBps, quoteAgeMs, candleAgeMs });
 
   const relativeVolume = finiteNumber(raw.relativeVolume, "relativeVolume");
@@ -323,6 +401,9 @@ export function evaluateUsQualityDaytradeSetup(raw) {
     reason: qualifies ? "VWAP_FIRST_PULLBACK_REBREAK" : "SETUP_NOT_COMPLETE",
     contractVersion: QUALITY_DAYTRADE_CONTRACT_VERSION,
     universe,
+    qualityTier: universe.tier,
+    riskBudgetMultiplier: universe.riskBudgetMultiplier,
+    hardRiskCeilingPct: 4,
     session,
     catalystClass,
     vwap,
@@ -342,9 +423,13 @@ export function evaluateUsQualityDaytradeSetup(raw) {
   });
 }
 
-export function buildQualityDaytradeParameterGrid({ catalystDay = false } = {}) {
-  const takeProfitsPct = catalystDay ? [2, 3, 4, 5, 7.5, 10] : [1, 1.5, 2, 3, 4, 5];
-  const fixedStopsPct = [0.8, 1.2, 1.6, 2, 2.5, 4];
+export function buildQualityDaytradeParameterGrid({ catalystDay = false, qualityTier = "A" } = {}) {
+  const tier = String(qualityTier).toUpperCase();
+  if (!VALID_QUALITY_TIERS.has(tier)) throw new PredictionInputError("qualityTier must be A or B");
+  const takeProfitsPct = tier === "B"
+    ? (catalystDay ? [2, 3, 4, 5, 7.5, 10] : [1.5, 2, 3, 4, 5, 7.5])
+    : (catalystDay ? [2, 3, 4, 5, 7.5, 10] : [1, 1.5, 2, 3, 4, 5]);
+  const fixedStopsPct = tier === "B" ? [1, 1.5, 2, 2.5, 3, 4] : [0.8, 1.2, 1.6, 2, 2.5, 4];
   const timeStopsMinutes = [15, 30, 60, 90];
   const exitModes = ["FIXED", "VWAP_OR_FIXED", "BREAKEVEN_TRAIL"];
   const combinations = [];
@@ -355,10 +440,14 @@ export function buildQualityDaytradeParameterGrid({ catalystDay = false } = {}) 
           combinations.push(Object.freeze({ takeProfitPct, fixedStopPct, timeStopMinutes, exitMode }));
   return Object.freeze({
     contractVersion: QUALITY_DAYTRADE_CONTRACT_VERSION,
+    qualityTier: tier,
+    riskBudgetMultiplier: tier === "B" ? DEFAULT_QUALITY_UNIVERSE.tierB.riskBudgetMultiplier : DEFAULT_QUALITY_UNIVERSE.tierA.riskBudgetMultiplier,
     catalystDay,
     combinations: Object.freeze(combinations),
     optimizationRule: "COARSE_TO_FINE_OOS_WALK_FORWARD_FINAL_HOLDOUT",
     selectionMetric: "NET_EXPECTANCY_WITH_PF_MDD_COST_STRESS",
-    note: "4% fixed stop is a stress ceiling candidate, not the default stop.",
+    note: tier === "B"
+      ? "Quality small-cap Tier B uses half risk budget; 4% is a hard research ceiling, not a default stop."
+      : "4% fixed stop is a stress ceiling candidate, not the default stop.",
   });
 }
