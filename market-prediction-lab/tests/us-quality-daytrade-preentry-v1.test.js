@@ -51,6 +51,7 @@ function noEventEvidence() {
     scheduled: false,
     source: "issuer-calendar",
     validUntilMs: 68_500,
+    coverageComplete: true,
     coverageStartMs: -86_391_500,
     coverageEndMs: 86_408_500,
   };
@@ -63,7 +64,7 @@ test("technical candidate is blocked when binary-event evidence is missing", () 
   assert.equal(result.reason, "BINARY_EVENT_EVIDENCE_REQUIRED");
 });
 
-test("source-backed no-event evidence preserves candidate status", () => {
+test("source-backed complete no-event evidence preserves candidate status", () => {
   const input = baseInput();
   input.binaryEventEvidence = noEventEvidence();
   const result = evaluateUsQualityDaytradePreEntry(input);
@@ -72,7 +73,7 @@ test("source-backed no-event evidence preserves candidate status", () => {
   assert.equal(result.binaryEventRisk.status, "PASS");
 });
 
-test("verified near earnings event blocks the otherwise-valid setup", () => {
+test("verified near earnings event inside complete calendar coverage blocks the otherwise-valid setup", () => {
   const input = baseInput();
   input.binaryEventEvidence = {
     ...noEventEvidence(),
