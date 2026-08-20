@@ -88,6 +88,10 @@ test("Research Production and GitHub observations are admitted once globally", (
   });
   assert.equal(primary.status, "EVIDENCE_ACCEPTED");
   assert.equal(primary.sampleCountDelta, 1);
+  assert.equal(primary.sampleCountKind, "PRE_ENTRY_OBSERVATION");
+  assert.equal(primary.profitabilitySampleCountDelta, 0);
+  assert.equal(primary.profitabilityEligible, false);
+  assert.equal(primary.settlementRequiredForProfitability, true);
   assert.equal(primary.canonicalSampleAccepted, true);
   assert.equal(primary.ledger.records.length, 1);
 
@@ -98,6 +102,8 @@ test("Research Production and GitHub observations are admitted once globally", (
   });
   assert.equal(audit.status, "DUPLICATE_ACCEPTED_ONCE");
   assert.equal(audit.sampleCountDelta, 0);
+  assert.equal(audit.profitabilitySampleCountDelta, 0);
+  assert.equal(audit.profitabilityEligible, false);
   assert.equal(audit.canonicalSampleAccepted, false);
   assert.equal(audit.evidenceId, primary.evidenceId);
   assert.equal(audit.ledger.records.length, 1);
@@ -120,6 +126,8 @@ test("GitHub Actions cannot seed a canonical sample before Research Production",
   assert.equal(auditFirst.status, "BLOCKED_DATA");
   assert.equal(auditFirst.reason, "RESEARCH_PRODUCTION_PRIMARY_EVIDENCE_REQUIRED");
   assert.equal(auditFirst.sampleCountDelta, 0);
+  assert.equal(auditFirst.profitabilitySampleCountDelta, 0);
+  assert.equal(auditFirst.profitabilityEligible, false);
   assert.equal(auditFirst.canonicalSampleAccepted, false);
   assert.equal(auditFirst.auditOnly, true);
   assert.equal(auditFirst.primaryRuntime, "RESEARCH_PRODUCTION");
@@ -134,10 +142,11 @@ test("GitHub Actions cannot seed a canonical sample before Research Production",
   });
   assert.equal(primary.status, "EVIDENCE_ACCEPTED");
   assert.equal(primary.sampleCountDelta, 1);
+  assert.equal(primary.profitabilitySampleCountDelta, 0);
   assert.equal(primary.ledger.records.length, 1);
 });
 
-test("same numeric observation on another symbol is a distinct canonical sample", () => {
+test("same numeric observation on another symbol is a distinct canonical observation but not a profitability sample", () => {
   const empty = createUsQualityDaytradeEvidenceLedger();
   const coin = admit({
     ledger: empty,
@@ -153,11 +162,13 @@ test("same numeric observation on another symbol is a distinct canonical sample"
   });
   assert.equal(mstr.status, "EVIDENCE_ACCEPTED");
   assert.equal(mstr.sampleCountDelta, 1);
+  assert.equal(mstr.profitabilitySampleCountDelta, 0);
+  assert.equal(mstr.profitabilityEligible, false);
   assert.notEqual(mstr.evidenceId, coin.evidenceId);
   assert.equal(mstr.ledger.records.length, 2);
 });
 
-test("genuinely changed executable quote is a new observation", () => {
+test("genuinely changed executable quote creates a new observation without inflating profitability N", () => {
   const empty = createUsQualityDaytradeEvidenceLedger();
   const first = admit({
     ledger: empty,
@@ -184,11 +195,13 @@ test("genuinely changed executable quote is a new observation", () => {
   });
   assert.equal(second.status, "EVIDENCE_ACCEPTED");
   assert.equal(second.sampleCountDelta, 1);
+  assert.equal(second.profitabilitySampleCountDelta, 0);
+  assert.equal(second.profitabilityEligible, false);
   assert.notEqual(second.evidenceId, first.evidenceId);
   assert.equal(second.ledger.records.length, 2);
 });
 
-test("non-READY evidence fails closed without touching the ledger", () => {
+test("non-READY evidence fails closed without touching the ledger or profitability N", () => {
   const ledger = createUsQualityDaytradeEvidenceLedger();
   const result = admitUsQualityDaytradeEvidence({
     ledger,
@@ -201,6 +214,9 @@ test("non-READY evidence fails closed without touching the ledger", () => {
   assert.equal(result.status, "BLOCKED_DATA");
   assert.equal(result.reason, "READY_SOURCE_BACKED_LIVE_EVIDENCE_REQUIRED");
   assert.equal(result.sampleCountDelta, 0);
+  assert.equal(result.profitabilitySampleCountDelta, 0);
+  assert.equal(result.profitabilityEligible, false);
+  assert.equal(result.settlementRequiredForProfitability, true);
   assert.equal(result.duplicateCountingAllowed, false);
   assert.equal(ledger.records.length, 0);
 });
