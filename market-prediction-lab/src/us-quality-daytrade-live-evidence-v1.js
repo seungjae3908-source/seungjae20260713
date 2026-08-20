@@ -224,6 +224,12 @@ function requiredIdentityString(value, name) {
   return normalized;
 }
 
+function requiredSymbol(value) {
+  const symbol = requiredIdentityString(value, "symbol").toUpperCase();
+  if (!/^[A-Z0-9.-]{1,32}$/u.test(symbol)) throw new PredictionInputError("symbol is invalid");
+  return symbol;
+}
+
 export function buildUsQualityDaytradeLiveEvidenceBundle(raw) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new PredictionInputError("quality day-trade live evidence input must be an object");
@@ -305,13 +311,14 @@ export function buildUsQualityDaytradeLiveEvidenceBundle(raw) {
   });
 }
 
-export function buildUsQualityDaytradeObservationIdentity({ strategyIdentity, bundle } = {}) {
+export function buildUsQualityDaytradeObservationIdentity({ strategyIdentity, bundle, symbol } = {}) {
   if (!bundle || bundle.status !== "READY" || !bundle.provenance?.observationDigest) {
     throw new PredictionInputError("READY live evidence bundle with observationDigest is required");
   }
   if (!strategyIdentity || typeof strategyIdentity !== "object" || Array.isArray(strategyIdentity)) {
     throw new PredictionInputError("strategyIdentity is required");
   }
+  const normalizedSymbol = requiredSymbol(symbol);
   const normalizedIdentity = freeze({
     strategyId: requiredIdentityString(strategyIdentity.strategyId, "strategyIdentity.strategyId"),
     strategyVersion: requiredIdentityString(strategyIdentity.strategyVersion, "strategyIdentity.strategyVersion"),
@@ -322,11 +329,13 @@ export function buildUsQualityDaytradeObservationIdentity({ strategyIdentity, bu
   });
   const evidenceId = researchDigest({
     producer: "US_QUALITY_DAYTRADE",
+    symbol: normalizedSymbol,
     strategyIdentity: normalizedIdentity,
     observationDigest: bundle.provenance.observationDigest,
   });
   return freeze({
     contractVersion: QUALITY_DAYTRADE_OBSERVATION_IDENTITY_VERSION,
+    symbol: normalizedSymbol,
     strategyIdentity: normalizedIdentity,
     observationDigest: bundle.provenance.observationDigest,
     evidenceId,
