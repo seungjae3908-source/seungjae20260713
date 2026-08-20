@@ -119,21 +119,24 @@ function provider(overrides = {}) {
   });
 }
 
-test("Research Production blocks legacy direct ENTRY but preserves existing natural settlement EXIT", async () => {
+test("Research Production blocks the lane when canonical admission runtime is unavailable", async () => {
   const evidence = await provider().collectPublicEvidence({
     market: "CRYPTO_FUTURES",
     cycle: { cycleId: "natural-cutover:1" },
   });
 
-  assert.equal(evidence.status, "READY");
+  assert.equal(evidence.status, "BLOCKED_DATA");
   assert.deepEqual(evidence.candidates, []);
-  assert.equal(evidence.exits.length, 1);
-  assert.equal(evidence.exits[0].positionId, "legacy-open-position");
+  assert.deepEqual(evidence.exits, []);
+  assert.equal(evidence.blocker, "AUTHORITATIVE_ADMISSION_RUNTIME_UNAVAILABLE");
   assert.equal(evidence.canonicalAdmissionCutover.status, "LEGACY_ENTRY_BLOCKED");
   assert.equal(evidence.canonicalAdmissionCutover.blockedLegacyEntryCount, 1);
   assert.equal(evidence.canonicalAdmissionCutover.preservedExitCount, 1);
   assert.equal(evidence.canonicalAdmissionCutover.blocker, "AUTHORITATIVE_ADMISSION_BUNDLE_REQUIRED");
-  assert.equal(evidence.paperCandidateSource.status, "VALID_NO_TRADE");
+  assert.equal(evidence.legacyNaturalSettlementExits.length, 1);
+  assert.equal(evidence.legacyNaturalSettlementExits[0].positionId, "legacy-open-position");
+  assert.equal(evidence.paperCandidateSource.status, "AUTHORITATIVE_ADMISSION_RUNTIME_UNAVAILABLE");
+  assert.equal(evidence.paperCandidateSource.blocker, "AUTHORITATIVE_ADMISSION_RUNTIME_UNAVAILABLE");
   assert.equal(evidence.paperCandidateSource.eligibleCandidates, 0);
 });
 
