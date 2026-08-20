@@ -18,13 +18,14 @@ const adapterByMarket = Object.freeze({
   CRYPTO_FUTURES: { id: "crypto-futures-bitget-execution", version: "v2" },
 });
 const providerByMarket = Object.freeze({ KR_STOCK: "toss", US_STOCK: "toss", CRYPTO_SPOT: "upbit", CRYPTO_FUTURES: "bitget" });
+const symbolByMarket = Object.freeze({ KR_STOCK: "005930", US_STOCK: "AAPL", CRYPTO_SPOT: "KRW-BTC", CRYPTO_FUTURES: "BTCUSDT" });
 
 function strategyIdentity() {
   return { strategyId: "profit-first-v2", strategyVersion: "v2", parameterHash: "params-v2", researchCodeSha: RESEARCH_SHA };
 }
 
 function signal(market, direction, id = "001") {
-  return { signalId: `${market}-${direction}-${id}`, market, style: "SWING", timeframe: "1h", horizon: 12, direction, strategyIdentity: strategyIdentity() };
+  return { signalId: `${market}-${direction}-${id}`, market, symbol: symbolByMarket[market], style: "SWING", timeframe: "1h", horizon: 12, direction, strategyIdentity: strategyIdentity() };
 }
 
 function evidence(market) {
@@ -100,9 +101,18 @@ for (const [market, direction, exitOpen, expectedCloseDirection] of [
       evaluatedAtMs: settledAt,
     });
     assert.equal(settled.status, "SETTLED");
+    assert.equal(settled.symbol, symbolByMarket[market]);
+    assert.equal(settled.style, "SWING");
+    assert.equal(settled.timeframe, "1h");
+    assert.equal(settled.horizon, 12);
     assert.equal(settled.closeDirection, expectedCloseDirection);
     assert.equal(settled.quantity, sample.fill.filledQuantity);
     assert.equal(settled.netPnl, settled.grossPnl - settled.entryCost - settled.exitCost - settled.fundingCost);
+    assert.equal(settled.entryEvidenceProvenance.provenanceDigest, sample.entryEvidenceProvenance.provenanceDigest);
+    assert.equal(settled.entryEvidenceProvenance.evidenceSnapshotDigest, sample.entryEvidenceProvenance.evidenceSnapshotDigest);
+    assert.equal(settled.exitEvidenceProvenance.provider, providerByMarket[market]);
+    assert.match(settled.exitEvidenceProvenance.provenanceDigest, /^[0-9a-f]{64}$/);
+    assert.match(settled.exitEvidenceProvenance.evidenceSnapshotDigest, /^[0-9a-f]{64}$/);
     assert.ok(settled.totalExplicitCost >= 0);
     assert.ok(Number.isFinite(settled.netReturnPercent));
     assert.ok(Number.isFinite(settled.mfePercent));
@@ -113,6 +123,18 @@ for (const [market, direction, exitOpen, expectedCloseDirection] of [
     assert.equal(settled.profitabilityClaimAllowed, false);
   });
 }
+
+test("tampered entry provenance digest fails closed before settlement", () => {
+  const sample = structuredClone(openSample("US_STOCK", "BUY"));
+  sample.entryEvidenceProvenance.provenanceDigest = "0".repeat(64);
+  assert.throws(() => settleFourMarketPaperSample({
+    sample,
+    exitExecution: execution("US_STOCK", NOW + 60_000),
+    exitBar: { nextOpen: 110, high: 111, low: 109 },
+    fundingEvidence: fundingNone(),
+    evaluatedAtMs: NOW + 60_000,
+  }), /PAPER_ENTRY_PROVENANCE_DIGEST_MISMATCH/);
+});
 
 test("futures settlement requires complete timestamped funding evidence", () => {
   const sample = openSample("CRYPTO_FUTURES", "LONG");
@@ -143,6 +165,7 @@ test("cost policy mismatch blocks settlement instead of mixing incomparable cost
     evaluatedAtMs: NOW + 60_000,
   });
   assert.equal(result.status, "BLOCKED");
+  assert.equal(result.symbol, "005930");
   assert.deepEqual(result.blockers, ["PAPER_COST_POLICY_VERSION_MISMATCH"]);
   assert.equal(result.orderSubmitted, false);
 });
