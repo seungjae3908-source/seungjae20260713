@@ -2,13 +2,31 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createMeaningfulSearchPaperForwardSource } from "../src/meaningful-search-paper-forward-source-v1.js";
 
-function runtime({ status = "PAPER_CANDIDATES_READY", candidates = [], exits = [], blockers = [] } = {}) {
+function runtime({
+  status = "PAPER_CANDIDATES_READY",
+  candidates = [],
+  exits = [],
+  blockers = [],
+  market = "CRYPTO_FUTURES",
+  overrides = {},
+} = {}) {
   return {
+    schemaVersion: "canonical-meaningful-search-paper-runtime-v1",
+    market,
     status,
     bridgeEligibleCandidates: candidates.length,
     admissionBlockers: blockers,
     simulationBlockers: [],
     paperBridge: { candidates, exitSignals: exits, results: blockers.length ? [{ blockers }] : [] },
+    executionAuthority: "NONE",
+    simulatedOnly: true,
+    liveOrderAllowed: false,
+    privateTradingApiAllowed: false,
+    orderSubmitted: false,
+    exchangeRequestSent: false,
+    productionMutationAllowed: false,
+    profitabilityClaimAllowed: false,
+    ...overrides,
   };
 }
 function candidate(signalId = "futures-1", market = "CRYPTO_FUTURES") {
@@ -76,4 +94,37 @@ test("P0-C8 enforces its exact owned market", async () => {
   assert.equal(calls, 0);
   assert.equal(result.status, "BLOCKED");
   assert.equal(result.blocker, "MEANINGFUL_SEARCH_SOURCE_MARKET_NOT_OWNED");
+});
+
+test("P0-C8 rejects non-canonical or unsafe runtime envelopes instead of translating them", async () => {
+  for (const value of [
+    runtime({ overrides: { schemaVersion: "not-canonical" } }),
+    runtime({ market: "CRYPTO_SPOT" }),
+    runtime({ overrides: { executionAuthority: "LIVE" } }),
+    runtime({ overrides: { simulatedOnly: false } }),
+    runtime({ overrides: { privateTradingApiAllowed: true } }),
+    runtime({ overrides: { orderSubmitted: true } }),
+  ]) {
+    const source = createMeaningfulSearchPaperForwardSource({ runMarket: async () => value });
+    const result = await source.collect({ market: "CRYPTO_FUTURES" });
+    assert.equal(result.status, "BLOCKED");
+    assert.equal(result.blocker, "MEANINGFUL_SEARCH_RUNTIME_CONTRACT_INVALID");
+    assert.deepEqual(result.candidates, []);
+  }
+});
+
+test("P0-C8 keeps malformed blocker collections fail-closed without throwing", async () => {
+  const source = createMeaningfulSearchPaperForwardSource({
+    runMarket: async () => runtime({
+      status: "PAPER_CANDIDATE_CONTRACT_BLOCKED",
+      overrides: {
+        admissionBlockers: { unexpected: true },
+        simulationBlockers: "unexpected",
+        paperBridge: { candidates: [], exitSignals: [], results: { unexpected: true } },
+      },
+    }),
+  });
+  const result = await source.collect({ market: "CRYPTO_FUTURES" });
+  assert.equal(result.status, "BLOCKED");
+  assert.equal(result.blocker, "MEANINGFUL_SEARCH_NOT_READY:PAPER_CANDIDATE_CONTRACT_BLOCKED");
 });
