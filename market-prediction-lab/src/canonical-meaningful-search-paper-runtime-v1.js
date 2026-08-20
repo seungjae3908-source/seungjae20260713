@@ -7,6 +7,8 @@ import {
   resolveSignalLifecycle,
 } from "./signal-direction-contract-v1.js";
 
+const PAPER_ADMISSION_BUNDLE_SCHEMA = "scanner-paper-admission-evidence-bundle-v1";
+
 function freeze(value) { return Object.freeze(value); }
 function finite(value) { return typeof value === "number" && Number.isFinite(value); }
 function nonEmpty(value) { return typeof value === "string" && value.trim().length > 0; }
@@ -55,7 +57,58 @@ export function profitEvidenceFromMeaningfulSearchGate({ market, profitInput, pr
   });
 }
 
+function admissionBundleForCard(card) {
+  if (card?.paperAdmissionEvidenceBundle?.schemaVersion === PAPER_ADMISSION_BUNDLE_SCHEMA) {
+    return card.paperAdmissionEvidenceBundle;
+  }
+  if (card?.schemaVersion === PAPER_ADMISSION_BUNDLE_SCHEMA) return card;
+  return null;
+}
+
+export function projectCanonicalPaperAdmissionBundle(bundle) {
+  if (!bundle || bundle.schemaVersion !== PAPER_ADMISSION_BUNDLE_SCHEMA) return null;
+  const paperCandidate = bundle.paperCandidate;
+  if (!paperCandidate || typeof paperCandidate !== "object" || !paperCandidate.signal || typeof paperCandidate.signal !== "object") {
+    return null;
+  }
+  const executionEvidence = bundle.executionEvidence && typeof bundle.executionEvidence === "object"
+    ? bundle.executionEvidence
+    : {};
+  const inheritedExecution = paperCandidate.execution && typeof paperCandidate.execution === "object"
+    ? paperCandidate.execution
+    : {};
+  return freeze({
+    ...paperCandidate,
+    signal: freeze({
+      ...paperCandidate.signal,
+      learningSnapshot: bundle.learningSnapshot,
+    }),
+    riskEvidence: bundle.riskEvidence,
+    execution: freeze({
+      ...inheritedExecution,
+      dataEvidence: executionEvidence.dataEvidence,
+      costPolicy: executionEvidence.costPolicy,
+      costProvenance: executionEvidence.costProvenance,
+    }),
+    admissionEvidence: freeze({
+      schemaVersion: bundle.schemaVersion,
+      evidenceDigest: bundle.evidenceDigest ?? null,
+    }),
+    executionAuthority: bundle.executionAuthority,
+    simulatedOnly: bundle.simulatedOnly,
+    liveOrderAllowed: bundle.liveOrderAllowed,
+    privateTradingApiAllowed: bundle.privateTradingApiAllowed,
+    orderSubmitted: bundle.orderSubmitted,
+    exchangeRequestSent: bundle.exchangeRequestSent,
+  });
+}
+
 function candidateForPaper(card) {
+  const bundle = admissionBundleForCard(card);
+  if (bundle) {
+    const projected = projectCanonicalPaperAdmissionBundle(bundle);
+    if (projected) return projected;
+  }
   return card?.paperCandidate && typeof card.paperCandidate === "object" ? card.paperCandidate : card;
 }
 
