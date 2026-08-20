@@ -1,0 +1,33 @@
+name: Canonical Scanner Paper Forward Provider
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/canonical-scanner-paper-forward-provider.yml
+      - market-prediction-lab/src/canonical-scanner-paper-forward-provider-v1.js
+      - market-prediction-lab/tests/canonical-scanner-paper-forward-provider-v1.test.js
+      - market-prediction-lab/src/paper-forward-evidence-runtime-v1.js
+      - market-prediction-lab/src/paper-scheduler-driver-v1.js
+      - market-prediction-lab/src/recurring-paper-loop-v1.js
+
+permissions:
+  contents: read
+
+jobs:
+  canonical-scanner-paper-forward-provider:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact PR HEAD
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Set up Node 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - name: Verify exact HEAD
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+      - name: Run canonical Scanner Paper provider tests
+        run: node --test market-prediction-lab/tests/canonical-scanner-paper-forward-provider-v1.test.js
