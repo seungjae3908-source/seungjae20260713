@@ -8,6 +8,10 @@ on:
       - research-production/src/microcap-task.mjs
       - research-production/test/microcap-task.test.mjs
       - research-production/bin/microcap-research.mjs
+      - research-production/src/engine.mjs
+      - research-production/package.json
+      - market-prediction-lab/scripts/run-us-microcap-intraday-ladder-v1.py
+      - market-prediction-lab/scripts/build-us-microcap-sec-dilution-evidence-v1.py
       - .github/workflows/research-production-microcap-task.yml
   workflow_dispatch:
 
@@ -56,7 +60,7 @@ jobs:
             if(x.steps?.length!==2) process.exit(5);
           ' "$OUT"
 
-      - name: Verify CI workflow is unscheduled and read-only
+      - name: Verify CI workflow is unscheduled, read-only, and dependency-aware
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -67,3 +71,10 @@ jobs:
           if grep -Eq '^[[:space:]]*(id-token|actions|issues|pull-requests|deployments|packages|statuses):[[:space:]]*write' "$FILE"; then
             echo 'write permission forbidden'; exit 11
           fi
+          for DEP in \
+            'research-production/src/engine.mjs' \
+            'research-production/package.json' \
+            'market-prediction-lab/scripts/run-us-microcap-intraday-ladder-v1.py' \
+            'market-prediction-lab/scripts/build-us-microcap-sec-dilution-evidence-v1.py'; do
+            grep -Fq -- "- $DEP" "$FILE" || { echo "missing dependency trigger: $DEP"; exit 12; }
+          done
