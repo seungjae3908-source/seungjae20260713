@@ -5,6 +5,7 @@ import {
   createCanonicalPaperAdmissionBridgeForCard,
   resolveCanonicalPaperAdmissionBridgeCandidate,
 } from "../src/canonical-paper-admission-bridge-v1.js";
+import { resolveCanonicalPaperSimulationAuthority } from "../src/canonical-paper-simulation-authority-v1.js";
 import { prepareMeaningfulSearchPaperCandidate } from "../src/meaningful-search-paper-bridge-v1.js";
 
 const NOW = 1_800_000_000_000;
@@ -112,6 +113,13 @@ function validBundle(overrides = {}) {
         maxAgeMs: 30_000,
         tickSize: 1,
         barProxyRealtimeAllowed: true,
+        quoteEvidence: {
+          available: true,
+          bid: 107,
+          ask: 108,
+          asOfMs: NOW - 1_000,
+          maxAgeMs: 30_000,
+        },
         taxPolicyKnown: true,
         taxPolicyVersion: "tax-v1",
         session: { version: "session-v1", status: "OPEN", kind: "REGULAR" },
@@ -177,6 +185,22 @@ function eligibleProfitEvidence() {
   });
 }
 
+function withCanonicalSimulationAuthority(candidate) {
+  const simulation = resolveCanonicalPaperSimulationAuthority({ candidate, nowMs: NOW });
+  assert.equal(simulation.status, "READY", simulation.blockers?.join(",") ?? "simulation authority blocked");
+  assert.ok(simulation.execution);
+  assert.ok(simulation.order);
+  assert.ok(simulation.quote);
+  return Object.freeze({
+    ...candidate,
+    execution: simulation.execution,
+    order: simulation.order,
+    quote: simulation.quote,
+    sampleExecutionReady: true,
+    sampleExecutionBlockers: Object.freeze([]),
+  });
+}
+
 test("valid #529 bundle becomes a bridge-ready Paper candidate with exact evidence", () => {
   const bundle = validBundle();
   const resolved = resolveCanonicalPaperAdmissionBridgeCandidate({ bundle, nowMs: NOW });
@@ -192,19 +216,19 @@ test("valid #529 bundle becomes a bridge-ready Paper candidate with exact eviden
   assert.equal(resolved.candidate.admissionEvidence.crossRuntimeVerified, true);
 });
 
-test("bridge-ready admission remains blocked before the separately validated simulation authority", () => {
+test("bridge-ready candidate satisfies existing #512 Paper admission contract once canonical simulation authority is READY", () => {
   const resolved = resolveCanonicalPaperAdmissionBridgeCandidate({ bundle: validBundle(), nowMs: NOW });
+  assert.equal(resolved.status, "BRIDGE_READY");
+  const candidate = withCanonicalSimulationAuthority(resolved.candidate);
   const bridge = prepareMeaningfulSearchPaperCandidate({
     searchOutcome: "TRADE_CANDIDATES",
-    candidate: resolved.candidate,
+    candidate,
     profitGate: Object.freeze({ decision: "ELIGIBLE", eligible: true, reasons: Object.freeze([]), executionAuthority: "NONE" }),
     profitEvidence: eligibleProfitEvidence(),
   });
-  assert.equal(bridge.status, "BLOCKED");
-  assert.equal(bridge.submitToPaper, false);
-  assert.ok(bridge.blockers.includes("PAPER_MARKET_ADAPTER_IDENTITY_REQUIRED"));
-  assert.ok(bridge.blockers.includes("PAPER_EXECUTION_POLICY_REQUIRED"));
-  assert.ok(bridge.blockers.includes("PAPER_SIMULATED_ORDER_REQUIRED"));
+  assert.equal(bridge.status, "PAPER_ELIGIBLE");
+  assert.equal(bridge.submitToPaper, true);
+  assert.deepEqual(bridge.blockers, []);
   assert.equal(bridge.candidate.paperIdentity.costPolicyVersion, COST_POLICY);
   assert.equal(bridge.candidate.executionAuthority, "NONE");
 });
