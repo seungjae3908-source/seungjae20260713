@@ -28,17 +28,19 @@ export type ForwardObservationDecisionStatus = 'OBSERVATION_READY' | 'NO_TRADE' 
 export type ForwardCalibrationStatus = 'NOT_EVIDENCED' | 'INSUFFICIENT_SAMPLE' | 'INCOMPLETE_OUTCOME_CLASSES' | 'READY';
 
 export type ForwardObservationIdentity = Readonly<{
-  market: SignalPerformanceMarket;
-  horizon: SignalPerformanceHorizon;
-  direction: SignalPerformanceDirection;
-  timeframe: string;
-  strategyProfileVersion: string;
+  strategyId: string;
+  strategyVersion: string;
   parameterHash: string;
   researchCodeSha: string;
+  market: SignalPerformanceMarket;
+  symbol: string;
+  timeframe: string;
+  horizon: number;
+  direction: SignalPerformanceDirection;
 }>;
 
 export type ForwardRecommendationObservation = Readonly<{
-  schemaVersion: 'forward-recommendation-observation-v1';
+  schemaVersion: 'forward-recommendation-observation-v2';
   observationId: string;
   source: typeof FORWARD_OBSERVATION_SOURCE;
   status: ForwardObservationStatus;
@@ -62,7 +64,7 @@ export type ForwardRecommendationObservation = Readonly<{
 }>;
 
 export type ForwardObservationDecision = Readonly<{
-  schemaVersion: 'forward-recommendation-observer-decision-v1';
+  schemaVersion: 'forward-recommendation-observer-decision-v2';
   status: ForwardObservationDecisionStatus;
   blockers: readonly string[];
   observation: ForwardRecommendationObservation | null;
@@ -76,7 +78,7 @@ export type ForwardObservationDecision = Readonly<{
 }>;
 
 export type ForwardObservationAdvance = Readonly<{
-  schemaVersion: 'forward-recommendation-observer-advance-v1';
+  schemaVersion: 'forward-recommendation-observer-advance-v2';
   status: 'PENDING' | 'SETTLED' | 'REPLAYED';
   blockers: readonly string[];
   observation: ForwardRecommendationObservation;
@@ -89,7 +91,7 @@ export type ForwardObservationAdvance = Readonly<{
 }>;
 
 export type ForwardObservationProfitCalibration = Readonly<{
-  schemaVersion: 'forward-recommendation-profit-calibration-v1';
+  schemaVersion: 'forward-recommendation-profit-calibration-v2';
   source: typeof FORWARD_OBSERVATION_SOURCE;
   status: ForwardCalibrationStatus;
   identity: ForwardObservationIdentity | null;
@@ -189,7 +191,7 @@ function priceStructureValid(entry: number, stop: number, target1: number, targe
 
 function decision(status: ForwardObservationDecisionStatus, blockers: string[], observation: ForwardRecommendationObservation | null = null): ForwardObservationDecision {
   return Object.freeze({
-    schemaVersion: 'forward-recommendation-observer-decision-v1',
+    schemaVersion: 'forward-recommendation-observer-decision-v2',
     status,
     blockers: Object.freeze([...new Set(blockers)]),
     observation,
@@ -203,29 +205,34 @@ function decision(status: ForwardObservationDecisionStatus, blockers: string[], 
   });
 }
 
+export function forwardObservationIdentityKey(identity: ForwardObservationIdentity): string {
+  return [
+    identity.strategyId,
+    identity.strategyVersion,
+    identity.parameterHash,
+    identity.researchCodeSha.toLowerCase(),
+    identity.market,
+    identity.symbol,
+    identity.timeframe,
+    String(identity.horizon),
+    identity.direction,
+  ].join('|');
+}
+
 function observationId(snapshot: SignalSnapshot, identity: ForwardObservationIdentity): string {
   return createHash('sha256')
     .update([
       FORWARD_OBSERVATION_SOURCE,
       snapshot.signalId,
       snapshot.timestamp,
-      identity.market,
-      identity.horizon,
-      identity.direction,
-      identity.timeframe,
-      identity.strategyProfileVersion,
-      identity.parameterHash,
-      identity.researchCodeSha,
+      forwardObservationIdentityKey(identity),
     ].join('|'))
     .digest('hex');
 }
 
 export function prepareForwardRecommendationObservation(input: {
   card: ScannerSignalCard;
-  timeframe: string;
-  strategyProfileVersion: string;
-  parameterHash: string;
-  researchCodeSha: string;
+  strategyIdentity: ForwardObservationIdentity;
   dataTimestamp: string;
   dataMaxAgeMs: number;
   publicDataOnly: boolean;
@@ -243,12 +250,22 @@ export function prepareForwardRecommendationObservation(input: {
   if (!market) blockers.push('MARKET_UNSUPPORTED');
   const direction = market ? directionFromCard(card, market) : null;
   if (!direction) blockers.push('EXPLICIT_ACTION_REQUIRED');
-  const horizon = horizonFromMode(card.strategyMode);
-  if (!horizon) blockers.push('STRATEGY_HORIZON_REQUIRED');
-  if (!nonEmpty(input.timeframe)) blockers.push('TIMEFRAME_REQUIRED');
-  if (!nonEmpty(input.strategyProfileVersion)) blockers.push('STRATEGY_PROFILE_VERSION_REQUIRED');
-  if (!nonEmpty(input.parameterHash)) blockers.push('PARAMETER_HASH_REQUIRED');
-  if (!immutableSha(input.researchCodeSha)) blockers.push('IMMUTABLE_RESEARCH_SHA_REQUIRED');
+  const performanceHorizon = horizonFromMode(card.strategyMode);
+  if (!performanceHorizon) blockers.push('STRATEGY_HORIZON_REQUIRED');
+
+  const identity = input.strategyIdentity;
+  if (!identity || typeof identity !== 'object') blockers.push('CANONICAL_STRATEGY_IDENTITY_REQUIRED');
+  if (!nonEmpty(identity?.strategyId)) blockers.push('STRATEGY_ID_REQUIRED');
+  if (!nonEmpty(identity?.strategyVersion)) blockers.push('STRATEGY_VERSION_REQUIRED');
+  if (!nonEmpty(identity?.parameterHash)) blockers.push('PARAMETER_HASH_REQUIRED');
+  if (!immutableSha(identity?.researchCodeSha)) blockers.push('IMMUTABLE_RESEARCH_SHA_REQUIRED');
+  if (!nonEmpty(identity?.symbol)) blockers.push('IDENTITY_SYMBOL_REQUIRED');
+  if (!nonEmpty(identity?.timeframe)) blockers.push('TIMEFRAME_REQUIRED');
+  if (!positiveInteger(identity?.horizon)) blockers.push('CANONICAL_HORIZON_REQUIRED');
+  if (market && identity?.market !== market) blockers.push('MARKET_MISMATCH');
+  if (nonEmpty(card.symbol) && identity?.symbol !== card.symbol) blockers.push('SYMBOL_MISMATCH');
+  if (direction && identity?.direction !== direction) blockers.push('DIRECTION_MISMATCH');
+
   if (!positiveInteger(input.dataMaxAgeMs)) blockers.push('DATA_MAX_AGE_REQUIRED');
   if (input.publicDataOnly !== true) blockers.push('PUBLIC_DATA_AUTHORITY_REQUIRED');
   if (!nonEmpty(card.signalId) || !nonEmpty(card.symbol)) blockers.push('SIGNAL_IDENTITY_REQUIRED');
@@ -280,9 +297,21 @@ export function prepareForwardRecommendationObservation(input: {
     && !priceStructureValid(entry, stop, target1, positive(target2) ? target2 : null, direction)) {
     blockers.push('PRICE_PLAN_DIRECTION_MISMATCH');
   }
-  if (blockers.length > 0 || !market || !direction || !horizon || !positive(entry) || !positive(stop) || !positive(target1)) {
+  if (blockers.length > 0 || !market || !direction || !performanceHorizon || !positive(entry) || !positive(stop) || !positive(target1)) {
     return decision('BLOCKED', blockers);
   }
+
+  const canonicalIdentity: ForwardObservationIdentity = Object.freeze({
+    strategyId: identity.strategyId,
+    strategyVersion: identity.strategyVersion,
+    parameterHash: identity.parameterHash,
+    researchCodeSha: identity.researchCodeSha.toLowerCase(),
+    market: identity.market,
+    symbol: identity.symbol,
+    timeframe: identity.timeframe,
+    horizon: identity.horizon,
+    direction: identity.direction,
+  });
 
   const snapshot = createImmutableSignalSnapshot({
     signalId: card.signalId,
@@ -290,7 +319,7 @@ export function prepareForwardRecommendationObservation(input: {
     market,
     symbol: card.symbol,
     symbolName: nonEmpty(card.name) ? card.name : null,
-    strategyHorizon: horizon,
+    strategyHorizon: performanceHorizon,
     direction,
     signalScore: card.score,
     displayConfidence: finiteOrNull(card.confidence),
@@ -300,8 +329,8 @@ export function prepareForwardRecommendationObservation(input: {
     target1,
     target2: positive(target2) ? target2 : null,
     riskReward: finiteOrNull(card.pricePlan.riskReward),
-    timeframes: [input.timeframe],
-    strategyProfileVersion: input.strategyProfileVersion,
+    timeframes: [canonicalIdentity.timeframe],
+    strategyProfileVersion: canonicalIdentity.strategyVersion,
     indicatorSnapshot: {
       matched: [...card.matched],
       notMatched: [...card.notMatched],
@@ -320,21 +349,12 @@ export function prepareForwardRecommendationObservation(input: {
     dataTimestamp: input.dataTimestamp,
   });
 
-  const identity: ForwardObservationIdentity = Object.freeze({
-    market,
-    horizon,
-    direction,
-    timeframe: input.timeframe,
-    strategyProfileVersion: input.strategyProfileVersion,
-    parameterHash: input.parameterHash,
-    researchCodeSha: input.researchCodeSha.toLowerCase(),
-  });
   const observation: ForwardRecommendationObservation = Object.freeze({
-    schemaVersion: 'forward-recommendation-observation-v1',
-    observationId: observationId(snapshot, identity),
+    schemaVersion: 'forward-recommendation-observation-v2',
+    observationId: observationId(snapshot, canonicalIdentity),
     source: FORWARD_OBSERVATION_SOURCE,
     status: 'PENDING',
-    identity,
+    identity: canonicalIdentity,
     signalGrade: card.signalGrade,
     expiresAt: card.expiresAt,
     dataTimestamp: input.dataTimestamp,
@@ -357,7 +377,7 @@ export function prepareForwardRecommendationObservation(input: {
 
 function advanceResult(status: ForwardObservationAdvance['status'], observation: ForwardRecommendationObservation, blockers: string[] = []): ForwardObservationAdvance {
   return Object.freeze({
-    schemaVersion: 'forward-recommendation-observer-advance-v1',
+    schemaVersion: 'forward-recommendation-observer-advance-v2',
     status,
     blockers: Object.freeze([...new Set(blockers)]),
     observation,
@@ -371,9 +391,16 @@ function advanceResult(status: ForwardObservationAdvance['status'], observation:
 }
 
 function assertObservationEnvelope(observation: ForwardRecommendationObservation): void {
+  if (observation.schemaVersion !== 'forward-recommendation-observation-v2') throw new Error('FORWARD_OBSERVATION_SCHEMA_UNSUPPORTED');
   if (observation.source !== FORWARD_OBSERVATION_SOURCE) throw new Error('FORWARD_OBSERVATION_SOURCE_MISMATCH');
   if (observation.publicDataOnly !== true) throw new Error('FORWARD_OBSERVATION_PUBLIC_DATA_REQUIRED');
-  if (!immutableSha(observation.identity.researchCodeSha) || !nonEmpty(observation.identity.parameterHash)) {
+  if (!nonEmpty(observation.identity.strategyId)
+    || !nonEmpty(observation.identity.strategyVersion)
+    || !nonEmpty(observation.identity.parameterHash)
+    || !immutableSha(observation.identity.researchCodeSha)
+    || !nonEmpty(observation.identity.symbol)
+    || !nonEmpty(observation.identity.timeframe)
+    || !positiveInteger(observation.identity.horizon)) {
     throw new Error('FORWARD_OBSERVATION_LINEAGE_INVALID');
   }
   if (observation.executionAuthority !== 'NONE'
@@ -386,10 +413,11 @@ function assertObservationEnvelope(observation: ForwardRecommendationObservation
   }
   const snapshot = observation.snapshot;
   if (snapshot.market !== observation.identity.market
-    || snapshot.strategyHorizon !== observation.identity.horizon
+    || snapshot.symbol !== observation.identity.symbol
     || snapshot.direction !== observation.identity.direction
-    || snapshot.strategyProfileVersion !== observation.identity.strategyProfileVersion
-    || snapshot.timeframes[0] !== observation.identity.timeframe) {
+    || snapshot.strategyProfileVersion !== observation.identity.strategyVersion
+    || snapshot.timeframes[0] !== observation.identity.timeframe
+    || observation.observationId !== observationId(snapshot, observation.identity)) {
     throw new Error('FORWARD_OBSERVATION_SNAPSHOT_IDENTITY_MISMATCH');
   }
 }
@@ -413,7 +441,7 @@ export function advanceForwardRecommendationObservation(input: {
   const outcome = evaluateSignalOutcome({
     snapshot: input.observation.snapshot,
     bars: input.bars,
-    evaluationHorizon: `${input.observation.identity.horizon}:${input.observation.identity.timeframe}`,
+    evaluationHorizon: `${input.observation.snapshot.strategyHorizon}:${input.observation.identity.timeframe}:H${input.observation.identity.horizon}`,
     evaluatedAt: cutoffIso,
     expiredWhenNoDecisiveHit: expired,
   });
@@ -436,18 +464,6 @@ export function advanceForwardRecommendationObservation(input: {
   return advanceResult('SETTLED', settled);
 }
 
-function identityKey(identity: ForwardObservationIdentity): string {
-  return [
-    identity.market,
-    identity.horizon,
-    identity.direction,
-    identity.timeframe,
-    identity.strategyProfileVersion,
-    identity.parameterHash,
-    identity.researchCodeSha,
-  ].join('|');
-}
-
 function mean(values: number[]): number | null {
   return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
 }
@@ -465,8 +481,10 @@ export function buildForwardObservationProfitCalibration(
   settled.forEach(assertObservationEnvelope);
   const identity = settled[0]?.identity ?? null;
   if (identity) {
-    const expected = identityKey(identity);
-    if (settled.some((row) => identityKey(row.identity) !== expected)) throw new Error('FORWARD_OBSERVATION_IDENTITY_MIXING_FORBIDDEN');
+    const expected = forwardObservationIdentityKey(identity);
+    if (settled.some((row) => forwardObservationIdentityKey(row.identity) !== expected)) {
+      throw new Error('FORWARD_OBSERVATION_IDENTITY_MIXING_FORBIDDEN');
+    }
   }
 
   const tp: ForwardRecommendationObservation[] = [];
@@ -511,7 +529,7 @@ export function buildForwardObservationProfitCalibration(
   }
 
   return Object.freeze({
-    schemaVersion: 'forward-recommendation-profit-calibration-v1',
+    schemaVersion: 'forward-recommendation-profit-calibration-v2',
     source: FORWARD_OBSERVATION_SOURCE,
     status,
     identity,
