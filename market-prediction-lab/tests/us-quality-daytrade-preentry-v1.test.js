@@ -94,6 +94,7 @@ test("pre-entry blocks before technical evaluation when point-in-time universe e
   assert.equal(result.status, "BLOCKED_DATA");
   assert.equal(result.reason, "UNIVERSE_EVIDENCE_REQUIRED");
   assert.equal(result.technicalSetup, null);
+  assert.equal(result.volatility, null);
   assert.equal(result.binaryEventRisk, null);
 });
 
@@ -110,17 +111,23 @@ test("technical candidate is blocked when binary-event evidence is missing", () 
   const result = evaluateUsQualityDaytradePreEntry(baseInput());
   assert.equal(result.technicalSetup.status, "CANDIDATE");
   assert.equal(result.universeProvenance.status, "PASS");
+  assert.equal(result.volatility.status, "PASS");
   assert.equal(result.status, "BLOCKED_DATA");
   assert.equal(result.reason, "BINARY_EVENT_EVIDENCE_REQUIRED");
 });
 
-test("source-backed complete no-event evidence preserves candidate status", () => {
+test("source-backed complete no-event evidence preserves candidate status with point-in-time volatility metrics", () => {
   const input = baseInput();
   input.binaryEventEvidence = noEventEvidence();
   const result = evaluateUsQualityDaytradePreEntry(input);
   assert.equal(result.status, "CANDIDATE");
   assert.equal(result.reason, "VWAP_FIRST_PULLBACK_REBREAK_EVENT_SAFE");
   assert.equal(result.universeProvenance.status, "PASS");
+  assert.equal(result.volatility.status, "PASS");
+  assert.equal(result.volatility.atrLookbackUsed, 8);
+  assert.ok(result.volatility.atrPct > 0);
+  assert.ok(result.volatility.realizedVolatilityPct > 0);
+  assert.equal(result.volatility.lookaheadFree, true);
   assert.equal(result.binaryEventRisk.status, "PASS");
 });
 
