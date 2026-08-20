@@ -49,11 +49,22 @@ function noEventEvidence() {
     calendarChecked: true,
     checkedAtMs: 7_500,
     scheduled: false,
+    scheduledEventCount: 0,
+    events: [],
     source: "issuer-calendar",
     validUntilMs: 68_500,
     coverageComplete: true,
     coverageStartMs: -86_391_500,
     coverageEndMs: 86_408_500,
+  };
+}
+
+function scheduledEvidence(event) {
+  return {
+    ...noEventEvidence(),
+    scheduled: true,
+    scheduledEventCount: 1,
+    events: [event],
   };
 }
 
@@ -76,14 +87,13 @@ test("source-backed complete no-event evidence preserves candidate status", () =
 test("verified near earnings event inside complete calendar coverage blocks the otherwise-valid setup", () => {
   const input = baseInput();
   const releaseTimestampMs = 8_500 + 60 * 60_000;
-  input.binaryEventEvidence = {
-    ...noEventEvidence(),
-    scheduled: true,
+  input.binaryEventEvidence = scheduledEvidence({
+    eventId: "earnings-release",
     verified: true,
     eventType: "EARNINGS",
     eventTimestampMs: releaseTimestampMs,
     marketMovingTimestampMs: releaseTimestampMs,
-  };
+  });
   const result = evaluateUsQualityDaytradePreEntry(input);
   assert.equal(result.status, "ABSTAIN");
   assert.equal(result.reason, "BINARY_EVENT_BLACKOUT");
@@ -92,16 +102,44 @@ test("verified near earnings event inside complete calendar coverage blocks the 
 test("later earnings call cannot hide an earlier market-moving release", () => {
   const input = baseInput();
   input.binaryEventPolicy = { preEventBlackoutMinutes: 30, postEventCooldownMinutes: 60 };
-  input.binaryEventEvidence = {
-    ...noEventEvidence(),
-    scheduled: true,
+  input.binaryEventEvidence = scheduledEvidence({
+    eventId: "earnings-release-and-call",
     verified: true,
     eventType: "EARNINGS",
     eventTimestampMs: 8_500 + 120 * 60_000,
     marketMovingTimestampMs: 8_500 + 20 * 60_000,
-  };
+  });
   const result = evaluateUsQualityDaytradePreEntry(input);
   assert.equal(result.status, "ABSTAIN");
   assert.equal(result.reason, "BINARY_EVENT_BLACKOUT");
   assert.equal(result.binaryEventRisk.minutesUntilEvent, 20);
+});
+
+test("another near binary event cannot be hidden by supplying only a later safe event", () => {
+  const input = baseInput();
+  input.binaryEventEvidence = {
+    ...noEventEvidence(),
+    scheduled: true,
+    scheduledEventCount: 2,
+    events: [
+      {
+        eventId: "earnings-later",
+        verified: true,
+        eventType: "EARNINGS",
+        eventTimestampMs: 8_500 + 240 * 60_000,
+        marketMovingTimestampMs: 8_500 + 240 * 60_000,
+      },
+      {
+        eventId: "fda-near",
+        verified: true,
+        eventType: "FDA_DECISION",
+        eventTimestampMs: 8_500 + 30 * 60_000,
+        marketMovingTimestampMs: 8_500 + 30 * 60_000,
+      },
+    ],
+  };
+  const result = evaluateUsQualityDaytradePreEntry(input);
+  assert.equal(result.status, "ABSTAIN");
+  assert.equal(result.reason, "BINARY_EVENT_BLACKOUT");
+  assert.equal(result.binaryEventRisk.blockingEvent.eventId, "fda-near");
 });
