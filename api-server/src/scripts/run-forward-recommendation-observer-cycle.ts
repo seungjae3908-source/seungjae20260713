@@ -8,6 +8,7 @@ import { rankScannerCandidates } from '../services/scanner-candidate-ranking.ser
 import { withScannerCanonicalActions } from '../services/scanner-market-action.service';
 import type { ScannerResponse, ScannerSignalCard } from '../services/scanner-signal.types';
 import type { ForwardRecommendationObservation } from '../services/forward-recommendation-observer.service';
+import { attachForwardObserverCanonicalMetadata } from '../services/forward-observer-canonical-metadata.service';
 import type { SignalOutcomeBar } from '../services/signal-performance-learning.service';
 import {
   createForwardObserverRuntimeState,
@@ -214,9 +215,12 @@ async function main(): Promise<void> {
     state,
     researchCodeSha,
     dependencies: {
-      scanLane: async (lane, cursor) => lane.market === 'KR_STOCK' || lane.market === 'US_STOCK'
-        ? scanStockLane(lane, cursor)
-        : scanCryptoLane(lane, cursor),
+      scanLane: async (lane, cursor) => {
+        const response = lane.market === 'KR_STOCK' || lane.market === 'US_STOCK'
+          ? await scanStockLane(lane, cursor)
+          : await scanCryptoLane(lane, cursor);
+        return attachForwardObserverCanonicalMetadata({ response, lane, researchCodeSha });
+      },
       loadFutureBars: async (observation) => observation.identity.market === 'KR_STOCK' || observation.identity.market === 'US_STOCK'
         ? stockFutureBars(observation)
         : cryptoFutureBars(observation),
