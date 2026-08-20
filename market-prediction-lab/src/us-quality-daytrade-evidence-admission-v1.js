@@ -18,7 +18,7 @@ function requiredString(value, name) {
   return normalized;
 }
 
-function blocked(reason) {
+function blocked(reason, details = {}) {
   return freeze({
     contractVersion: QUALITY_DAYTRADE_EVIDENCE_ADMISSION_VERSION,
     status: "BLOCKED_DATA",
@@ -31,6 +31,7 @@ function blocked(reason) {
     liveTradingAllowed: false,
     privateApiAllowed: false,
     orderAuthority: false,
+    ...details,
   });
 }
 
@@ -76,6 +77,7 @@ export function admitUsQualityDaytradeEvidence({
     relativeVolumeObservedAtMs: bundle.relativeVolumeObservedAtMs,
   });
 
+  const normalizedWorkflowFamily = requiredString(workflowFamily, "workflowFamily").toUpperCase();
   const admission = recordGlobalEvidence(ledger, {
     producerFamily: "US_QUALITY_DAYTRADE",
     strategyIdentityDigest,
@@ -89,10 +91,24 @@ export function admitUsQualityDaytradeEvidence({
     sourceDatasetId,
     provenanceDigest: bundle.provenance.observationDigest,
     outcomeKind: requiredString(outcomeKind, "outcomeKind"),
-    workflowFamily: requiredString(workflowFamily, "workflowFamily"),
+    workflowFamily: normalizedWorkflowFamily,
     artifactLineageDigest: requiredString(artifactLineageDigest, "artifactLineageDigest"),
     payload,
   });
+
+  // Research Production is the PRIMARY runtime for this strategy. GitHub Actions
+  // may reproduce/audit an already-canonical observation, but it must never seed
+  // the first canonical sample. recordGlobalEvidence is immutable, so discarding
+  // its proposed successor preserves the original ledger with zero sample delta.
+  if (normalizedWorkflowFamily === "GITHUB_ACTIONS" && admission.sampleCountDelta === 1) {
+    return blocked("RESEARCH_PRODUCTION_PRIMARY_EVIDENCE_REQUIRED", {
+      evidenceId: admission.evidenceId,
+      localEvidenceId: observationIdentity.evidenceId,
+      ledger,
+      auditOnly: true,
+      primaryRuntime: "RESEARCH_PRODUCTION",
+    });
+  }
 
   return freeze({
     contractVersion: QUALITY_DAYTRADE_EVIDENCE_ADMISSION_VERSION,
