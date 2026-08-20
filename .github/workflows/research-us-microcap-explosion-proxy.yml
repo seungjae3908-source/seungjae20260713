@@ -48,6 +48,9 @@ jobs:
       - name: Self-test point-in-time SEC dilution evidence
         run: python3 market-prediction-lab/scripts/build-us-microcap-sec-dilution-evidence-v1.py --self-test
 
+      - name: Self-test structural stops and risk-normalized sizing
+        run: python3 market-prediction-lab/scripts/run-us-microcap-intraday-risk-grid-v1.py --self-test
+
       - name: Locate previous successful rolling-window artifact
         id: previous
         shell: bash
