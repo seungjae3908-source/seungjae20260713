@@ -170,7 +170,7 @@ export function BottomNav() {
       aria-label="주요 메뉴"
       data-route-title={presentation?.title ?? undefined}
       data-breadcrumb={presentation?.breadcrumb.join(' / ') ?? undefined}
-      className="fixed inset-x-0 bottom-0 z-40 border-t border-card-border bg-background/90 px-1 pb-[env(safe-area-inset-bottom)] pt-1 backdrop-blur-xl"
+      className="relative z-40 w-full shrink-0 border-t border-card-border bg-background/90 px-1 pb-[env(safe-area-inset-bottom)] pt-1 backdrop-blur-xl"
     >
       {presentation?.breadcrumb.length ? (
         <ol aria-label="현재 위치" className="sr-only">
