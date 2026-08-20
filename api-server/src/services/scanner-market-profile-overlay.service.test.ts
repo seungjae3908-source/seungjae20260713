@@ -567,12 +567,10 @@ test('canonical Paper admission bundle accepts exact immutable learning, approve
 
 test('canonical Paper admission bundle fails closed on learning identity mismatch', () => {
   const candidate = admissionCandidate();
-  const learning = createImmutableSignalSnapshot({
+  const learning = {
     ...admissionLearning(candidate),
     signalId: 'wrong-signal',
-    immutable: undefined as never,
-    executionAuthority: undefined as never,
-  });
+  } as ReturnType<typeof admissionLearning>;
   const result = buildAdmission({ paperCandidate: candidate, learningSnapshot: learning });
   assert.equal(result.status, 'BLOCKED');
   assert.ok(result.blockers.includes('LEARNING_SIGNAL_ID_MISMATCH'));
