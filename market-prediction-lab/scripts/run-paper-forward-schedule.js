@@ -1,6 +1,8 @@
 import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { createCanonicalPaperForwardEvidenceProvider } from "../src/paper-forward-evidence-runtime-v1.js";
+import { wrapPaperForwardProviderWithMeaningfulSearch } from "../src/meaningful-search-scheduled-paper-provider-v1.js";
 import {
   runPaperForwardScheduledInvocation,
 } from "../src/paper-forward-schedule-runtime-v1.js";
@@ -146,13 +148,25 @@ function fail(message, code = 1) {
   process.exitCode = code;
 }
 
-export async function runPaperForwardScheduleCli(env = process.env) {
+export async function runPaperForwardScheduleCli(env = process.env, {
+  runScheduledInvocation = runPaperForwardScheduledInvocation,
+  publicEvidenceProvider = null,
+  meaningfulSearchPaperRuntimeForMarket = null,
+} = {}) {
   if (!truthy(env.PAPER_FORWARD_SCHEDULE_ACTIVE)) {
     fail("PAPER_FORWARD_SCHEDULE_ACTIVE must be explicitly true", 64);
     return;
   }
   if (forbiddenActivationKeys.some((key) => truthy(env[key]))) {
     fail("Paper Forward schedule refuses live trading or private API activation", 65);
+    return;
+  }
+  if (typeof runScheduledInvocation !== "function") {
+    fail("Paper Forward scheduled invocation dependency is invalid", 66);
+    return;
+  }
+  if (meaningfulSearchPaperRuntimeForMarket != null && typeof meaningfulSearchPaperRuntimeForMarket !== "function") {
+    fail("Meaningful Search Paper runtime dependency is invalid", 67);
     return;
   }
 
@@ -171,13 +185,23 @@ export async function runPaperForwardScheduleCli(env = process.env) {
         outcomeAccumulationEnabled,
       })
       : Object.freeze({ identityCutover: false, archivedResearchSha: null, archivedStrategyId: null });
-    const result = await runPaperForwardScheduledInvocation({
+    const invocation = {
       rootDirectory,
       researchCodeSha,
       activationAtMs,
       triggerSource,
       outcomeAccumulationEnabled,
-    });
+    };
+    if (publicEvidenceProvider != null || meaningfulSearchPaperRuntimeForMarket != null) {
+      const baseProvider = publicEvidenceProvider ?? createCanonicalPaperForwardEvidenceProvider();
+      invocation.publicEvidenceProvider = meaningfulSearchPaperRuntimeForMarket == null
+        ? baseProvider
+        : wrapPaperForwardProviderWithMeaningfulSearch({
+          provider: baseProvider,
+          paperRuntimeForMarket: meaningfulSearchPaperRuntimeForMarket,
+        });
+    }
+    const result = await runScheduledInvocation(invocation);
     const output = {
       schemaVersion: "paper-forward-schedule-cli-v3",
       status: result.status,
