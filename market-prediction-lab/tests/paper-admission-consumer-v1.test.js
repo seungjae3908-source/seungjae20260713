@@ -1,39 +1,77 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  projectCanonicalPaperAdmissionBundle,
-  runCanonicalMeaningfulSearchPaperMarket,
-} from "../src/canonical-meaningful-search-paper-runtime-v1.js";
-import { prepareMeaningfulSearchPaperCandidate } from "../src/meaningful-search-paper-bridge-v1.js";
+import { createHash } from "node:crypto";
+
+import { runCanonicalMeaningfulSearchPaperMarket } from "../src/canonical-meaningful-search-paper-runtime-v1.js";
 import { resolveLearningStrategyHorizon } from "../src/strategy-horizon-contract-v1.js";
 
-const NOW = Date.UTC(2026, 7, 20, 11, 30, 0);
-const RESEARCH_SHA = "0123456789abcdef0123456789abcdef01234567";
+const NOW = 1_800_000_000_000;
+const RESEARCH_SHA = "b".repeat(40);
+const COST_POLICY = "cost-v1";
 
-function admissionBundle({ style = "SCALPING", learningHorizon = resolveLearningStrategyHorizon(style), signalId = `bundle-${style}` } = {}) {
-  return {
+function stableSerialize(value) {
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableSerialize(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+function digest(value) {
+  return createHash("sha256").update(stableSerialize(value)).digest("hex");
+}
+
+function withDigest(payload) {
+  const clone = structuredClone(payload);
+  delete clone.evidenceDigest;
+  return Object.freeze({ ...clone, evidenceDigest: digest(clone) });
+}
+
+function costComponent(valuePercent, source, quality = "OBSERVED") {
+  return Object.freeze({ valuePercent, quality, source, observedAtMs: NOW - 1_000 });
+}
+
+function admissionBundle({
+  signalId = "spot-runtime-1",
+  style = "SWING",
+  learningHorizon = resolveLearningStrategyHorizon(style),
+  quoteOverrides = {},
+} = {}) {
+  const signal = Object.freeze({
+    signalId,
+    market: "CRYPTO_SPOT",
+    symbol: "BTC",
+    timestampMs: NOW - 10_000,
+    ttlMs: 4 * 60 * 60_000,
+    expiresAtMs: NOW - 10_000 + 4 * 60 * 60_000,
+    style,
+    timeframe: "1h",
+    horizon: 4,
+    direction: "BUY",
+    signalDirection: "BUY",
+    strategyIdentity: Object.freeze({
+      strategyId: "CRYPTO_SPOT_SWING_BUY",
+      strategyVersion: "signal-profile-v1",
+      parameterHash: "params-v1",
+      researchCodeSha: RESEARCH_SHA,
+      costPolicyVersion: COST_POLICY,
+    }),
+  });
+  const components = Object.freeze({
+    commission: costComponent(0.10, "upbit:commission"),
+    tax: costComponent(0, "cash:tax-na", "NOT_APPLICABLE"),
+    spread: costComponent(0.10, "upbit:spread"),
+    slippage: costComponent(0.15, "paper:slippage", "ESTIMATED"),
+    funding: costComponent(0, "cash:funding-na", "NOT_APPLICABLE"),
+    latency: costComponent(0.01, "runtime:latency", "ESTIMATED"),
+    liquidityImpact: costComponent(0.02, "runtime:liquidity", "ESTIMATED"),
+    partialFillImpact: costComponent(0.03, "runtime:partial-fill", "ESTIMATED"),
+  });
+
+  return withDigest({
     schemaVersion: "scanner-paper-admission-evidence-bundle-v1",
     paperCandidate: {
-      signal: {
-        signalId,
-        market: "CRYPTO_SPOT",
-        symbol: "BTC",
-        timestampMs: NOW - 2_000,
-        ttlMs: 60_000,
-        expiresAtMs: NOW + 58_000,
-        style,
-        timeframe: "1h",
-        horizon: 1,
-        direction: "BUY",
-        signalDirection: "BUY",
-        strategyIdentity: {
-          strategyId: "canonical-profit-first",
-          strategyVersion: "v1",
-          parameterHash: "params-v1",
-          researchCodeSha: RESEARCH_SHA,
-          costPolicyVersion: "cost-v1",
-        },
-      },
+      signal,
       executionAuthority: "NONE",
       liveOrderAllowed: false,
       privateTradingApiAllowed: false,
@@ -41,16 +79,19 @@ function admissionBundle({ style = "SCALPING", learningHorizon = resolveLearning
       exchangeRequestSent: false,
     },
     learningSnapshot: {
+      immutable: true,
+      executionAuthority: "NONE",
       signalId,
       market: "CRYPTO_SPOT",
       symbol: "BTC",
-      strategyHorizon: learningHorizon,
+      strategyProfileVersion: "signal-profile-v1",
       direction: "BUY",
+      strategyHorizon: learningHorizon,
       timeframes: ["1h"],
-      strategyProfileVersion: "v1",
-      marketRegime: "UNKNOWN",
-      immutable: true,
-      executionAuthority: "NONE",
+      timestamp: new Date(signal.timestampMs).toISOString(),
+      dataTimestamp: new Date(signal.timestampMs - 1_000).toISOString(),
+      dataProvenance: ["upbit:public-scanner"],
+      marketRegime: "TREND",
     },
     riskEvidence: {
       status: "APPROVED",
@@ -59,7 +100,7 @@ function admissionBundle({ style = "SCALPING", learningHorizon = resolveLearning
       simulatedOnly: true,
       allowed: true,
       blockCodes: [],
-      recommendedQuantity: 1,
+      recommendedQuantity: 0.25,
       actualRiskPercent: 0.5,
       riskReward1: 2,
       riskReward2: 3,
@@ -68,38 +109,45 @@ function admissionBundle({ style = "SCALPING", learningHorizon = resolveLearning
     executionEvidence: {
       dataEvidence: {
         provider: "upbit",
-        provenance: "public-live-test",
+        provenance: "upbit:public-paper-readiness",
         publicOnly: true,
         dataQuality: "READY",
         asOfMs: NOW - 1_000,
-        maxAgeMs: 60_000,
+        maxAgeMs: 30_000,
         tickSize: 1,
+        barProxyRealtimeAllowed: true,
         marketStatus: "TRADABLE",
-        minOrderNotional: 5_000,
+        minOrderNotional: 5,
         quoteEvidence: {
           available: true,
           bid: 99,
           ask: 100,
-          asOfMs: NOW - 1_000,
-          maxAgeMs: 60_000,
+          asOfMs: NOW - 500,
+          maxAgeMs: 5_000,
+          ...quoteOverrides,
         },
       },
       costPolicy: {
-        version: "cost-v1",
+        version: COST_POLICY,
         commissionRate: 0.001,
         taxRate: 0,
         spreadRate: 0.001,
-        slippageRate: 0.001,
+        slippageRate: 0.0015,
         fundingRate: 0,
-        latencyRate: 0,
-        liquidityImpactRate: 0,
-        partialFillImpactRate: 0,
+        latencyRate: 0.0001,
+        liquidityImpactRate: 0.0002,
+        partialFillImpactRate: 0.0003,
         source: "SCANNER_COST_EVIDENCE_PERCENT_DIV_100",
         unitConversion: "PERCENT_DIV_100",
       },
-      costProvenance: { provider: "public-live-test" },
+      costProvenance: {
+        market: "CRYPTO_SPOT",
+        policyId: COST_POLICY,
+        paperCostPolicyVersion: COST_POLICY,
+        providerProvenance: "upbit:public-paper-readiness",
+        components,
+      },
     },
-    evidenceDigest: "a".repeat(64),
     executionAuthority: "NONE",
     simulatedOnly: true,
     liveOrderAllowed: false,
@@ -107,30 +155,18 @@ function admissionBundle({ style = "SCALPING", learningHorizon = resolveLearning
     orderSubmitted: false,
     exchangeRequestSent: false,
     productionMutationAllowed: false,
-  };
-}
-
-function profitGate() {
-  return { decision: "ELIGIBLE", eligible: true, reasons: [], executionAuthority: "NONE" };
-}
-
-function profitEvidence() {
-  return {
-    status: "READY",
-    expectedNetEdge: 0.01,
-    expectedNetReturn: 0.02,
-    riskRewardRatio: 2,
-    sampleSize: 30,
-    costPolicyId: "cost-v1",
-    executionAuthority: "NONE",
-  };
+  });
 }
 
 function profitableInput() {
   return {
     probabilities: { tp: 0.7, sl: 0.2, expire: 0.1 },
     returns: { target: 0.05, stop: 0.02, expire: 0 },
-    costs: { status: "READY", policyId: "cost-v1", components: { commission: 0.001, spread: 0.001, slippage: 0.001 } },
+    costs: {
+      status: "READY",
+      policyId: COST_POLICY,
+      components: { commission: 0.001, spread: 0.001, slippage: 0.0015 },
+    },
     calibration: { status: "READY", sampleSize: 30, tpFirstCount: 21 },
   };
 }
@@ -162,6 +198,15 @@ function scannerResponse(bundle) {
   };
 }
 
+async function run(bundle) {
+  return runCanonicalMeaningfulSearchPaperMarket({
+    market: "CRYPTO_SPOT",
+    scanBatch: async () => scannerResponse(bundle),
+    profitInputForCard: async () => profitableInput(),
+    now: () => NOW,
+  });
+}
+
 test("canonical learning horizon labels preserve SCALPING/SWING/MID_LONG semantics", () => {
   assert.equal(resolveLearningStrategyHorizon("SCALPING"), "SCALP");
   assert.equal(resolveLearningStrategyHorizon("SWING"), "SWING");
@@ -169,72 +214,73 @@ test("canonical learning horizon labels preserve SCALPING/SWING/MID_LONG semanti
   assert.equal(resolveLearningStrategyHorizon("POSITION"), "POSITION");
 });
 
-test("canonical admission projection preserves evidence but never invents Paper simulation authority", () => {
-  const bundle = admissionBundle({ style: "SCALPING" });
-  const candidate = projectCanonicalPaperAdmissionBundle(bundle);
-  assert.ok(candidate);
-  assert.equal(candidate.signal.learningSnapshot.strategyHorizon, "SCALP");
-  assert.equal(candidate.riskEvidence.status, "APPROVED");
-  assert.equal(candidate.execution.dataEvidence.dataQuality, "READY");
-  assert.equal(candidate.execution.costPolicy.version, "cost-v1");
-  assert.equal(candidate.admissionEvidence.evidenceDigest, bundle.evidenceDigest);
-  assert.equal(candidate.execution.marketAdapterIdentity, undefined);
-  assert.equal(candidate.execution.executionPolicy, undefined);
-  assert.equal(candidate.order, undefined);
-
-  const result = prepareMeaningfulSearchPaperCandidate({
-    searchOutcome: "TRADE_CANDIDATES",
-    candidate,
-    profitGate: profitGate(),
-    profitEvidence: profitEvidence(),
-  });
-  assert.equal(result.status, "BLOCKED");
-  assert.equal(result.blockers.includes("LEARNING_HORIZON_STYLE_MISMATCH"), false);
-  assert.ok(result.blockers.includes("PAPER_MARKET_ADAPTER_IDENTITY_REQUIRED"));
-  assert.ok(result.blockers.includes("PAPER_EXECUTION_POLICY_REQUIRED"));
-  assert.ok(result.blockers.includes("PAPER_SIMULATED_ORDER_REQUIRED"));
-});
-
-test("MID_LONG/POSITION bundle passes horizon parity while a real mismatch stays blocked", () => {
-  const aligned = projectCanonicalPaperAdmissionBundle(admissionBundle({ style: "MID_LONG", learningHorizon: "POSITION" }));
-  const alignedResult = prepareMeaningfulSearchPaperCandidate({
-    searchOutcome: "TRADE_CANDIDATES",
-    candidate: aligned,
-    profitGate: profitGate(),
-    profitEvidence: profitEvidence(),
-  });
-  assert.equal(alignedResult.blockers.includes("LEARNING_HORIZON_STYLE_MISMATCH"), false);
-
-  const mismatched = projectCanonicalPaperAdmissionBundle(admissionBundle({ style: "MID_LONG", learningHorizon: "SCALP", signalId: "bundle-mismatch" }));
-  const mismatchedResult = prepareMeaningfulSearchPaperCandidate({
-    searchOutcome: "TRADE_CANDIDATES",
-    candidate: mismatched,
-    profitGate: profitGate(),
-    profitEvidence: profitEvidence(),
-  });
-  assert.ok(mismatchedResult.blockers.includes("LEARNING_HORIZON_STYLE_MISMATCH"));
-});
-
-test("canonical Meaningful Search runtime consumes nested #529 bundle and fails closed before Natural Paper entry", async () => {
-  const bundle = admissionBundle({ style: "SCALPING", signalId: "runtime-bundle" });
-  const result = await runCanonicalMeaningfulSearchPaperMarket({
-    market: "CRYPTO_SPOT",
-    scanBatch: async () => scannerResponse(bundle),
-    profitInputForCard: async () => profitableInput(),
-  });
+test("merged admission bridge plus simulation authority produces a bridge-ready simulation-only Paper candidate", async () => {
+  const result = await run(admissionBundle());
 
   assert.equal(result.search.outcome, "TRADE_CANDIDATES");
+  assert.equal(result.admissionBridgeReadyCandidates, 1);
+  assert.equal(result.admissionBlockedCandidates, 0);
+  assert.equal(result.simulationReadyCandidates, 1);
+  assert.equal(result.simulationBlockedCandidates, 0);
+  assert.deepEqual(result.admissionBlockers, []);
+  assert.deepEqual(result.simulationBlockers, []);
+  assert.equal(result.bridgeEligibleCandidates, 1);
+  assert.equal(result.bridgeBlockedCandidates, 0);
+  assert.equal(result.status, "PAPER_CANDIDATES_READY");
+
+  const candidate = result.paperBridge.candidates[0];
+  assert.equal(candidate.sampleExecutionReady, true);
+  assert.equal(candidate.execution.marketAdapterIdentity.id, "crypto-spot-upbit-execution");
+  assert.equal(candidate.execution.executionPolicy.version, "public-evidence-simulated-paper-v1");
+  assert.equal(candidate.order.type, "MARKET");
+  assert.equal(candidate.order.direction, "BUY");
+  assert.equal(candidate.order.quantity, 0.25);
+  assert.equal(candidate.quote.ask, 100);
+  assert.equal(candidate.executionAuthority, "NONE");
+  assert.equal(candidate.orderSubmitted, false);
+  assert.equal(candidate.exchangeRequestSent, false);
+  assert.equal(candidate.privateTradingApiAllowed, false);
+  assert.equal(candidate.liveOrderAllowed, false);
+});
+
+test("tampered admission digest is reported and cannot reach simulation authority or Paper eligibility", async () => {
+  const bundle = structuredClone(admissionBundle({ signalId: "tampered-digest" }));
+  bundle.riskEvidence.recommendedQuantity = 0.5;
+
+  const result = await run(bundle);
+  assert.equal(result.admissionBlockedCandidates, 1);
+  assert.ok(result.admissionBlockers.includes("ADMISSION_EVIDENCE_DIGEST_MISMATCH"));
+  assert.equal(result.simulationReadyCandidates, 0);
   assert.equal(result.bridgeEligibleCandidates, 0);
-  assert.equal(result.bridgeBlockedCandidates, 1);
   assert.equal(result.status, "PAPER_CANDIDATE_CONTRACT_BLOCKED");
-  const bridgeResult = result.paperBridge.results[0];
-  assert.equal(bridgeResult.candidate.admissionEvidence.evidenceDigest, bundle.evidenceDigest);
-  assert.equal(bridgeResult.blockers.includes("LEARNING_HORIZON_STYLE_MISMATCH"), false);
-  assert.ok(bridgeResult.blockers.includes("PAPER_MARKET_ADAPTER_IDENTITY_REQUIRED"));
-  assert.ok(bridgeResult.blockers.includes("PAPER_EXECUTION_POLICY_REQUIRED"));
-  assert.ok(bridgeResult.blockers.includes("PAPER_SIMULATED_ORDER_REQUIRED"));
+});
+
+test("crossed top-of-book survives admission integrity checks but is blocked by preregistered simulation authority", async () => {
+  const result = await run(admissionBundle({
+    signalId: "crossed-quote",
+    quoteOverrides: { bid: 102, ask: 101 },
+  }));
+
+  assert.equal(result.admissionBridgeReadyCandidates, 1);
+  assert.equal(result.simulationBlockedCandidates, 1);
+  assert.ok(result.simulationBlockers.includes("CANONICAL_TOP_OF_BOOK_CROSSED"));
+  assert.equal(result.bridgeEligibleCandidates, 0);
+  assert.equal(result.status, "PAPER_CANDIDATE_CONTRACT_BLOCKED");
   assert.equal(result.orderSubmitted, false);
   assert.equal(result.exchangeRequestSent, false);
-  assert.equal(result.privateTradingApiAllowed, false);
-  assert.equal(result.liveOrderAllowed, false);
+});
+
+test("real learning-horizon mismatch remains fail-closed at the canonical Paper bridge", async () => {
+  const result = await run(admissionBundle({
+    signalId: "bad-learning-horizon",
+    style: "MID_LONG",
+    learningHorizon: "SCALP",
+  }));
+
+  assert.equal(result.admissionBridgeReadyCandidates, 1);
+  assert.equal(result.simulationReadyCandidates, 1);
+  assert.equal(result.bridgeEligibleCandidates, 0);
+  assert.equal(result.bridgeBlockedCandidates, 1);
+  assert.ok(result.paperBridge.results[0].blockers.includes("LEARNING_HORIZON_STYLE_MISMATCH"));
+  assert.equal(result.status, "PAPER_CANDIDATE_CONTRACT_BLOCKED");
 });
