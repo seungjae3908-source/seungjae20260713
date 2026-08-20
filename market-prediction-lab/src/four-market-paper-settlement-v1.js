@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
 import {
   buildFourMarketExecutionContext,
   simulateFourMarketFill,
 } from "./four-market-execution-v2.js";
+import { buildPaperEvidenceProvenance } from "./four-market-paper-sampler-v1.js";
 
 const SETTLED_MINIMUM_SAMPLE_SIZE = 30;
 
@@ -19,6 +21,18 @@ function nonNegative(value) {
 
 function nonEmpty(value) {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function stableSerialize(value) {
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableSerialize(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function hash(value) {
+  return createHash("sha256").update(stableSerialize(value)).digest("hex");
 }
 
 function entryDirection(sample) {
@@ -58,9 +72,29 @@ function safetyEnvelope() {
   });
 }
 
+function validateEntryEvidenceProvenance(sample) {
+  const evidence = sample?.entryEvidenceProvenance;
+  if (!evidence || evidence.schemaVersion !== "paper-evidence-provenance-v1") {
+    throw new Error("PAPER_ENTRY_PROVENANCE_REQUIRED");
+  }
+  const expected = buildPaperEvidenceProvenance({
+    dataEvidence: evidence,
+    signal: sample.identity,
+  });
+  if (evidence.provenanceDigest !== expected.provenanceDigest
+    || evidence.evidenceSnapshotDigest !== expected.evidenceSnapshotDigest) {
+    throw new Error("PAPER_ENTRY_PROVENANCE_DIGEST_MISMATCH");
+  }
+}
+
 function validateOpenSample(sample) {
   if (!sample || sample.schemaVersion !== 1 || sample.status !== "OPEN") throw new Error("PAPER_OPEN_SAMPLE_REQUIRED");
   if (!nonEmpty(sample.paperSampleId)) throw new Error("PAPER_SAMPLE_ID_REQUIRED");
+  if (!nonEmpty(sample.identity?.symbol)) throw new Error("PAPER_SAMPLE_SYMBOL_REQUIRED");
+  if (!nonEmpty(sample.identity?.style)) throw new Error("PAPER_SAMPLE_STYLE_REQUIRED");
+  if (!nonEmpty(sample.identity?.timeframe)) throw new Error("PAPER_SAMPLE_TIMEFRAME_REQUIRED");
+  if (!Number.isInteger(sample.identity?.horizon) || sample.identity.horizon <= 0) throw new Error("PAPER_SAMPLE_HORIZON_REQUIRED");
+  validateEntryEvidenceProvenance(sample);
   if (!sample.fill || !["FILLED", "PARTIALLY_FILLED"].includes(sample.fill.status)) throw new Error("PAPER_ENTRY_FILL_REQUIRED");
   if (!positive(sample.fill.fillPrice) || !positive(sample.fill.filledQuantity) || !positive(sample.fill.notional)) throw new Error("PAPER_ENTRY_FILL_INVALID");
   if (!nonNegative(sample.fill.costs?.immediateCost)) throw new Error("PAPER_ENTRY_COST_INVALID");
@@ -76,18 +110,61 @@ function validateFunding(sample, funding) {
     throw new Error("PAPER_FUNDING_EVIDENCE_INCOMPLETE");
   }
   if (!futures && funding.payments.length > 0) throw new Error("PAPER_NON_FUTURES_FUNDING_FORBIDDEN");
+  if (!Number.isSafeInteger(funding.evaluatedAtMs) || funding.evaluatedAtMs <= sample.identity.evaluatedAtMs) {
+    throw new Error("PAPER_FUNDING_EVALUATED_AT_INVALID");
+  }
 
   let totalCost = 0;
+  let previousAsOfMs = null;
+  const fingerprints = new Set();
+  const payments = [];
   for (const payment of funding.payments) {
-    if (!finite(payment?.asOfMs) || payment.asOfMs < sample.identity.evaluatedAtMs || payment.asOfMs > funding.evaluatedAtMs) {
+    if (!Number.isSafeInteger(payment?.asOfMs)
+      || payment.asOfMs < sample.identity.evaluatedAtMs
+      || payment.asOfMs > funding.evaluatedAtMs) {
       throw new Error("PAPER_FUNDING_TIMESTAMP_INVALID");
     }
     if (!finite(payment?.amount) || !nonEmpty(payment?.source) || !nonEmpty(payment?.provenance) || !nonEmpty(payment?.version)) {
       throw new Error("PAPER_FUNDING_PAYMENT_INVALID");
     }
+
+    const normalizedPayment = Object.freeze({
+      asOfMs: payment.asOfMs,
+      amount: payment.amount,
+      source: payment.source,
+      provenance: payment.provenance,
+      version: payment.version,
+    });
+    const fingerprint = hash(normalizedPayment);
+    if (fingerprints.has(fingerprint)) throw new Error("PAPER_FUNDING_DUPLICATE_PAYMENT");
+    if (previousAsOfMs != null && payment.asOfMs <= previousAsOfMs) {
+      throw new Error("PAPER_FUNDING_PAYMENT_ORDER_INVALID");
+    }
+    fingerprints.add(fingerprint);
+    previousAsOfMs = payment.asOfMs;
+    payments.push(normalizedPayment);
     totalCost += payment.amount;
   }
-  return totalCost;
+
+  const fundingSnapshot = Object.freeze({
+    schemaVersion: "paper-funding-evidence-v1",
+    paperSampleId: sample.paperSampleId,
+    market: sample.identity.market,
+    symbol: sample.identity.symbol,
+    style: sample.identity.style,
+    timeframe: sample.identity.timeframe,
+    horizon: sample.identity.horizon,
+    entryEvaluatedAtMs: sample.identity.evaluatedAtMs,
+    evaluatedAtMs: funding.evaluatedAtMs,
+    applicable: futures,
+    payments: Object.freeze(payments),
+    fundingCost: totalCost,
+  });
+
+  return Object.freeze({
+    ...fundingSnapshot,
+    fundingEvidenceDigest: hash(fundingSnapshot),
+  });
 }
 
 function calculateExcursions(sample, bars, evaluatedAtMs) {
@@ -123,9 +200,15 @@ function blocked(sample, status, blockers, extra = {}) {
     schemaVersion: 1,
     paperSampleId: sample.paperSampleId,
     market: sample.identity.market,
+    symbol: sample.identity.symbol,
+    style: sample.identity.style,
+    timeframe: sample.identity.timeframe,
+    horizon: sample.identity.horizon,
     strategyId: sample.identity.strategyId,
     strategyVersion: sample.identity.strategyVersion,
     researchCodeSha: sample.identity.researchCodeSha,
+    parameterHash: sample.identity.parameterHash,
+    entryEvidenceProvenance: sample.entryEvidenceProvenance,
     status,
     blockers: Object.freeze([...blockers]),
     ...extra,
@@ -176,6 +259,10 @@ export function settleFourMarketPaperSample({
     return blocked(sample, "BLOCKED", ["PAPER_COST_POLICY_VERSION_MISMATCH"], { exitContextStatus: context.status });
   }
 
+  const exitEvidenceProvenance = buildPaperEvidenceProvenance({
+    dataEvidence: exitExecution.dataEvidence,
+    signal: sample.identity,
+  });
   const quantity = sample.fill.filledQuantity;
   const exitFill = simulateFourMarketFill({
     context,
@@ -190,15 +277,16 @@ export function settleFourMarketPaperSample({
     quote: exitQuote,
     depth: exitDepth,
   });
-  if (exitFill.status === "PENDING") return blocked(sample, "PENDING_EXIT", [exitFill.reason ?? "EXIT_PENDING"], { exitFill });
+  if (exitFill.status === "PENDING") return blocked(sample, "PENDING_EXIT", [exitFill.reason ?? "EXIT_PENDING"], { exitFill, exitEvidenceProvenance });
   if (exitFill.status !== "FILLED") {
-    return blocked(sample, "BLOCKED", [exitFill.reason ?? "FULL_EXIT_FILL_REQUIRED"], { exitFill });
+    return blocked(sample, "BLOCKED", [exitFill.reason ?? "FULL_EXIT_FILL_REQUIRED"], { exitFill, exitEvidenceProvenance });
   }
   if (Math.abs(exitFill.filledQuantity - quantity) > Number.EPSILON) {
-    return blocked(sample, "BLOCKED", ["FULL_EXIT_FILL_REQUIRED"], { exitFill });
+    return blocked(sample, "BLOCKED", ["FULL_EXIT_FILL_REQUIRED"], { exitFill, exitEvidenceProvenance });
   }
 
-  const fundingCost = validateFunding(sample, { ...fundingEvidence, evaluatedAtMs });
+  const validatedFundingEvidence = validateFunding(sample, { ...fundingEvidence, evaluatedAtMs });
+  const fundingCost = validatedFundingEvidence.fundingCost;
   const sign = directionSign(entryDirection(sample));
   const grossPnl = (exitFill.fillPrice - sample.fill.fillPrice) * quantity * sign;
   const entryCost = sample.fill.costs.immediateCost;
@@ -214,6 +302,10 @@ export function settleFourMarketPaperSample({
     schemaVersion: 1,
     paperSampleId: sample.paperSampleId,
     market: sample.identity.market,
+    symbol: sample.identity.symbol,
+    style: sample.identity.style,
+    timeframe: sample.identity.timeframe,
+    horizon: sample.identity.horizon,
     strategyId: sample.identity.strategyId,
     strategyVersion: sample.identity.strategyVersion,
     researchCodeSha: sample.identity.researchCodeSha,
@@ -234,6 +326,7 @@ export function settleFourMarketPaperSample({
     entryCost,
     exitCost,
     fundingCost,
+    fundingEvidence: validatedFundingEvidence,
     totalExplicitCost: entryCost + exitCost + fundingCost,
     netPnl,
     grossReturnPercent,
@@ -242,6 +335,8 @@ export function settleFourMarketPaperSample({
     maePercent: excursions.maePercent,
     usablePathBars: excursions.usableBars,
     rejectedFuturePathBars: excursions.rejectedFutureBars,
+    entryEvidenceProvenance: sample.entryEvidenceProvenance,
+    exitEvidenceProvenance,
     entryParityFingerprint: sample.parityFingerprint,
     exitParityFingerprint: context.parityFingerprint,
     costPolicyVersion: context.costPolicy.version,
