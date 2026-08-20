@@ -2,8 +2,9 @@ import { PredictionInputError } from "./contracts.js";
 import { evaluateUsQualityDaytradeSetup } from "./us-quality-daytrade-research-v1.js";
 import { evaluateQualityDaytradeBinaryEventRisk } from "./us-quality-daytrade-binary-event-v1.js";
 import { evaluateQualityDaytradeUniverseProvenance } from "./us-quality-daytrade-universe-provenance-v1.js";
+import { evaluateUsQualityDaytradeVolatility } from "./us-quality-daytrade-volatility-v1.js";
 
-export const QUALITY_DAYTRADE_PREENTRY_CONTRACT_VERSION = "us-quality-daytrade-preentry-v2";
+export const QUALITY_DAYTRADE_PREENTRY_CONTRACT_VERSION = "us-quality-daytrade-preentry-v3";
 
 function safeResult(fields) {
   return Object.freeze({
@@ -33,6 +34,7 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
       reason: universeProvenance.reason,
       universeProvenance,
       technicalSetup: null,
+      volatility: null,
       binaryEventRisk: null,
       qualityTier: null,
       riskBudgetMultiplier: 0,
@@ -46,9 +48,29 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
       reason: technicalSetup.reason,
       universeProvenance,
       technicalSetup,
+      volatility: null,
       binaryEventRisk: null,
       qualityTier: technicalSetup.qualityTier ?? technicalSetup.universe?.tier ?? null,
       riskBudgetMultiplier: technicalSetup.riskBudgetMultiplier ?? technicalSetup.universe?.riskBudgetMultiplier ?? 0,
+    });
+  }
+
+  const volatility = evaluateUsQualityDaytradeVolatility({
+    asOfMs: raw.asOfMs,
+    candles: raw.candles,
+    candleEvidence: raw.candleEvidence,
+    volatilityPolicy: raw.volatilityPolicy,
+  });
+  if (volatility.status !== "PASS") {
+    return safeResult({
+      status: "BLOCKED_DATA",
+      reason: volatility.reason,
+      universeProvenance,
+      technicalSetup,
+      volatility,
+      binaryEventRisk: null,
+      qualityTier: technicalSetup.qualityTier,
+      riskBudgetMultiplier: technicalSetup.riskBudgetMultiplier,
     });
   }
 
@@ -64,6 +86,7 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
       reason: binaryEventRisk.reason,
       universeProvenance,
       technicalSetup,
+      volatility,
       binaryEventRisk,
       qualityTier: technicalSetup.qualityTier,
       riskBudgetMultiplier: technicalSetup.riskBudgetMultiplier,
@@ -75,6 +98,7 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
     reason: "VWAP_FIRST_PULLBACK_REBREAK_EVENT_SAFE",
     universeProvenance,
     technicalSetup,
+    volatility,
     binaryEventRisk,
     qualityTier: technicalSetup.qualityTier,
     riskBudgetMultiplier: technicalSetup.riskBudgetMultiplier,
