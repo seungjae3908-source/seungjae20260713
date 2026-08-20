@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   buildFourMarketExecutionContext,
   simulateFourMarketFill,
@@ -20,6 +21,18 @@ function nonNegative(value) {
 
 function nonEmpty(value) {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function stableSerialize(value) {
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableSerialize(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function hash(value) {
+  return createHash("sha256").update(stableSerialize(value)).digest("hex");
 }
 
 function entryDirection(sample) {
@@ -97,18 +110,61 @@ function validateFunding(sample, funding) {
     throw new Error("PAPER_FUNDING_EVIDENCE_INCOMPLETE");
   }
   if (!futures && funding.payments.length > 0) throw new Error("PAPER_NON_FUTURES_FUNDING_FORBIDDEN");
+  if (!Number.isSafeInteger(funding.evaluatedAtMs) || funding.evaluatedAtMs <= sample.identity.evaluatedAtMs) {
+    throw new Error("PAPER_FUNDING_EVALUATED_AT_INVALID");
+  }
 
   let totalCost = 0;
+  let previousAsOfMs = null;
+  const fingerprints = new Set();
+  const payments = [];
   for (const payment of funding.payments) {
-    if (!finite(payment?.asOfMs) || payment.asOfMs < sample.identity.evaluatedAtMs || payment.asOfMs > funding.evaluatedAtMs) {
+    if (!Number.isSafeInteger(payment?.asOfMs)
+      || payment.asOfMs < sample.identity.evaluatedAtMs
+      || payment.asOfMs > funding.evaluatedAtMs) {
       throw new Error("PAPER_FUNDING_TIMESTAMP_INVALID");
     }
     if (!finite(payment?.amount) || !nonEmpty(payment?.source) || !nonEmpty(payment?.provenance) || !nonEmpty(payment?.version)) {
       throw new Error("PAPER_FUNDING_PAYMENT_INVALID");
     }
+
+    const normalizedPayment = Object.freeze({
+      asOfMs: payment.asOfMs,
+      amount: payment.amount,
+      source: payment.source,
+      provenance: payment.provenance,
+      version: payment.version,
+    });
+    const fingerprint = hash(normalizedPayment);
+    if (fingerprints.has(fingerprint)) throw new Error("PAPER_FUNDING_DUPLICATE_PAYMENT");
+    if (previousAsOfMs != null && payment.asOfMs <= previousAsOfMs) {
+      throw new Error("PAPER_FUNDING_PAYMENT_ORDER_INVALID");
+    }
+    fingerprints.add(fingerprint);
+    previousAsOfMs = payment.asOfMs;
+    payments.push(normalizedPayment);
     totalCost += payment.amount;
   }
-  return totalCost;
+
+  const fundingSnapshot = Object.freeze({
+    schemaVersion: "paper-funding-evidence-v1",
+    paperSampleId: sample.paperSampleId,
+    market: sample.identity.market,
+    symbol: sample.identity.symbol,
+    style: sample.identity.style,
+    timeframe: sample.identity.timeframe,
+    horizon: sample.identity.horizon,
+    entryEvaluatedAtMs: sample.identity.evaluatedAtMs,
+    evaluatedAtMs: funding.evaluatedAtMs,
+    applicable: futures,
+    payments: Object.freeze(payments),
+    fundingCost: totalCost,
+  });
+
+  return Object.freeze({
+    ...fundingSnapshot,
+    fundingEvidenceDigest: hash(fundingSnapshot),
+  });
 }
 
 function calculateExcursions(sample, bars, evaluatedAtMs) {
@@ -229,7 +285,8 @@ export function settleFourMarketPaperSample({
     return blocked(sample, "BLOCKED", ["FULL_EXIT_FILL_REQUIRED"], { exitFill, exitEvidenceProvenance });
   }
 
-  const fundingCost = validateFunding(sample, { ...fundingEvidence, evaluatedAtMs });
+  const validatedFundingEvidence = validateFunding(sample, { ...fundingEvidence, evaluatedAtMs });
+  const fundingCost = validatedFundingEvidence.fundingCost;
   const sign = directionSign(entryDirection(sample));
   const grossPnl = (exitFill.fillPrice - sample.fill.fillPrice) * quantity * sign;
   const entryCost = sample.fill.costs.immediateCost;
@@ -269,6 +326,7 @@ export function settleFourMarketPaperSample({
     entryCost,
     exitCost,
     fundingCost,
+    fundingEvidence: validatedFundingEvidence,
     totalExplicitCost: entryCost + exitCost + fundingCost,
     netPnl,
     grossReturnPercent,
