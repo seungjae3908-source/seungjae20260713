@@ -1,0 +1,33 @@
+name: Paper Admission Bundle Injection Runtime
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/paper-admission-bundle-injection-runtime.yml
+      - market-prediction-lab/src/canonical-paper-admission-bundle-injection-runtime-v1.js
+      - market-prediction-lab/tests/canonical-paper-admission-bundle-injection-runtime-v1.test.js
+      - market-prediction-lab/src/canonical-meaningful-search-paper-runtime-v1.js
+      - market-prediction-lab/src/canonical-paper-admission-bridge-v1.js
+      - market-prediction-lab/src/canonical-paper-simulation-authority-v1.js
+
+permissions:
+  contents: read
+
+jobs:
+  paper-admission-bundle-injection-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact PR HEAD
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Set up Node 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - name: Verify exact HEAD
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+      - name: Run admission bundle injection tests
+        run: node --test market-prediction-lab/tests/canonical-paper-admission-bundle-injection-runtime-v1.test.js
