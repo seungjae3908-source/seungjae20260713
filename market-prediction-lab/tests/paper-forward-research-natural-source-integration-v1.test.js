@@ -25,7 +25,7 @@ function collectors() {
   };
 }
 
-test("Research Production canonical provider attaches the sibling Shadow state source only to futures", async () => {
+test("Research Production observes the sibling Shadow source but routes ENTRY only through canonical admission", async () => {
   let factoryArgs = null;
   let sourceCalls = 0;
   let sourceInput = null;
@@ -63,11 +63,15 @@ test("Research Production canonical provider attaches the sibling Shadow state s
   assert.equal(factoryArgs.client != null, true);
   assert.equal(factoryArgs.clock(), NOW);
   assert.equal(spot.candidates.length, 0);
-  assert.equal(futures.candidates.length, 1);
-  assert.equal(futures.candidates[0].signal.signalId, "ETH-V6-natural");
+  assert.equal(futures.candidates.length, 0);
   assert.deepEqual(sourceInput.openPositions, [futuresPosition]);
   assert.equal(futures.naturalCandidateSource.candidateCount, 1);
   assert.equal(futures.naturalCandidateSource.settlementBridgeReady, true);
+  assert.equal(futures.canonicalAdmissionCutover.status, "LEGACY_ENTRY_BLOCKED");
+  assert.equal(futures.canonicalAdmissionCutover.blockedLegacyEntryCount, 1);
+  assert.equal(futures.canonicalAdmissionCutover.blocker, "AUTHORITATIVE_ADMISSION_BUNDLE_REQUIRED");
+  assert.equal(futures.paperCandidateSource.status, "VALID_NO_TRADE");
+  assert.equal(futures.paperCandidateSource.eligibleCandidates, 0);
   assert.equal(sourceCalls, 1);
 });
 
