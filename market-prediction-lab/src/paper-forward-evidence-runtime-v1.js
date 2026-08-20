@@ -152,7 +152,8 @@ function stripLegacyDirectEntryCandidates(provider) {
       return Object.freeze({
         ...evidence,
         candidates: Object.freeze([]),
-        exits: Object.freeze([...exits]),
+        exits: Object.freeze([]),
+        legacyNaturalSettlementExits: Object.freeze(exits.map((row) => Object.freeze(structuredClone(row)))),
         canonicalAdmissionCutover: Object.freeze({
           version: "recurring-canonical-admission-cutover-v1",
           status: legacyCandidates.length > 0 ? "LEGACY_ENTRY_BLOCKED" : "READY",
@@ -171,6 +172,26 @@ function stripLegacyDirectEntryCandidates(provider) {
   });
 }
 
+function restoreLegacyNaturalSettlementExits(provider) {
+  if (!provider || typeof provider.collectPublicEvidence !== "function") throw new TypeError("canonical Paper provider is required");
+  return Object.freeze({
+    async collectPublicEvidence(input) {
+      const evidence = await provider.collectPublicEvidence(input);
+      if (evidence?.status !== "READY") return evidence;
+      const legacy = Array.isArray(evidence.legacyNaturalSettlementExits) ? evidence.legacyNaturalSettlementExits : [];
+      const canonical = Array.isArray(evidence.exits) ? evidence.exits : [];
+      const { legacyNaturalSettlementExits: _removed, ...rest } = evidence;
+      return Object.freeze({
+        ...rest,
+        exits: Object.freeze([
+          ...legacy.map((row) => Object.freeze(structuredClone(row))),
+          ...canonical.map((row) => Object.freeze(structuredClone(row))),
+        ]),
+      });
+    },
+  });
+}
+
 function maybeAttachCanonicalAdmissionCutover({ provider, env, paperRuntimeForMarket }) {
   if (!truthy(env?.RESEARCH_PRODUCTION)) return provider;
   if (paperRuntimeForMarket != null && typeof paperRuntimeForMarket !== "function") {
@@ -179,10 +200,11 @@ function maybeAttachCanonicalAdmissionCutover({ provider, env, paperRuntimeForMa
   const runtime = paperRuntimeForMarket ?? createFailClosedCanonicalPaperRuntimeForMarket({
     reason: "AUTHORITATIVE_ADMISSION_PRODUCER_UNAVAILABLE",
   });
-  return wrapPaperForwardProviderWithMeaningfulSearch({
+  const canonicalProvider = wrapPaperForwardProviderWithMeaningfulSearch({
     provider: stripLegacyDirectEntryCandidates(provider),
     paperRuntimeForMarket: runtime,
   });
+  return restoreLegacyNaturalSettlementExits(canonicalProvider);
 }
 
 export function createCanonicalPaperForwardEvidenceProvider({
