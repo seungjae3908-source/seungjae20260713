@@ -10,7 +10,6 @@ import {
   wrapPaperForwardProviderWithEthV6Source,
 } from "./eth-v6-paper-forward-source-v1.js";
 import { wrapPaperForwardProviderWithMeaningfulSearch } from "./meaningful-search-scheduled-paper-provider-v1.js";
-import { createFailClosedCanonicalPaperRuntimeForMarket } from "./authoritative-natural-paper-admission-producer-v1.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
@@ -192,14 +191,45 @@ function restoreLegacyNaturalSettlementExits(provider) {
   });
 }
 
+function createFailClosedPaperRuntimeForMarket(reason = "AUTHORITATIVE_ADMISSION_RUNTIME_UNAVAILABLE") {
+  return async function failClosedPaperRuntimeForMarket({ market } = {}) {
+    return Object.freeze({
+      schemaVersion: "recurring-canonical-admission-cutover-fail-closed-v1",
+      market,
+      status: "VALID_NO_TRADE",
+      search: Object.freeze({ outcome: "VALID_NO_TRADE", validNoTrade: true, searchFailure: false }),
+      admissionBlockers: Object.freeze([reason]),
+      simulationBlockers: Object.freeze([]),
+      paperBridge: Object.freeze({
+        candidates: Object.freeze([]),
+        exitSignals: Object.freeze([]),
+        blocked: 0,
+        noTrade: 1,
+        eligible: 0,
+        exits: 0,
+        executionAuthority: "NONE",
+        liveTrading: false,
+        realOrder: false,
+        privateApi: false,
+      }),
+      executionAuthority: "NONE",
+      simulatedOnly: true,
+      liveOrderAllowed: false,
+      privateTradingApiAllowed: false,
+      orderSubmitted: false,
+      exchangeRequestSent: false,
+      productionMutationAllowed: false,
+      profitabilityClaimAllowed: false,
+    });
+  };
+}
+
 function maybeAttachCanonicalAdmissionCutover({ provider, env, paperRuntimeForMarket }) {
   if (!truthy(env?.RESEARCH_PRODUCTION)) return provider;
   if (paperRuntimeForMarket != null && typeof paperRuntimeForMarket !== "function") {
     throw new TypeError("paperRuntimeForMarket must be a function");
   }
-  const runtime = paperRuntimeForMarket ?? createFailClosedCanonicalPaperRuntimeForMarket({
-    reason: "AUTHORITATIVE_ADMISSION_PRODUCER_UNAVAILABLE",
-  });
+  const runtime = paperRuntimeForMarket ?? createFailClosedPaperRuntimeForMarket();
   const canonicalProvider = wrapPaperForwardProviderWithMeaningfulSearch({
     provider: stripLegacyDirectEntryCandidates(provider),
     paperRuntimeForMarket: runtime,
