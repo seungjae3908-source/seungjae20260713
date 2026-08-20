@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   buildFourMarketPaperSample,
+  buildPaperEvidenceProvenance,
   dedupeFourMarketPaperSamples,
   normalizePaperExecutionDirection,
 } from "../src/four-market-paper-sampler-v1.js";
@@ -24,10 +25,18 @@ const providerByMarket = Object.freeze({
   CRYPTO_FUTURES: "bitget",
 });
 
+const symbolByMarket = Object.freeze({
+  KR_STOCK: "005930",
+  US_STOCK: "AAPL",
+  CRYPTO_SPOT: "KRW-BTC",
+  CRYPTO_FUTURES: "BTCUSDT",
+});
+
 function signal(market, direction, overrides = {}) {
   return {
     signalId: `${market}-${direction}-001`,
     market,
+    symbol: symbolByMarket[market],
     style: "SWING",
     timeframe: "1h",
     horizon: 12,
@@ -164,6 +173,14 @@ for (const [market, direction] of [
     });
     assert.equal(sample.status, "OPEN");
     assert.equal(sample.executionContextStatus, "READY");
+    assert.equal(sample.identity.symbol, symbolByMarket[market]);
+    assert.equal(sample.identity.style, "SWING");
+    assert.equal(sample.identity.timeframe, "1h");
+    assert.equal(sample.identity.horizon, 12);
+    assert.equal(sample.entryEvidenceProvenance.provider, providerByMarket[market]);
+    assert.equal(sample.entryEvidenceProvenance.provenance, `${market}-public-evidence-v1`);
+    assert.match(sample.entryEvidenceProvenance.provenanceDigest, /^[0-9a-f]{64}$/);
+    assert.match(sample.entryEvidenceProvenance.evidenceSnapshotDigest, /^[0-9a-f]{64}$/);
     assert.equal(sample.fill.status, "FILLED");
     assert.equal(sample.fill.market, market);
     assert.equal(sample.fill.stage, "PAPER");
@@ -176,6 +193,28 @@ for (const [market, direction] of [
   });
 }
 
+test("paper sample requires exact symbol instead of allowing later identity inference", () => {
+  assert.throws(() => buildFourMarketPaperSample({
+    signal: signal("US_STOCK", "BUY", { symbol: "" }),
+    profitGate: gate("NO_TRADE"),
+    profitEvidence: evidence("US_STOCK", { status: "INSUFFICIENT_SAMPLE" }),
+    evaluatedAtMs: NOW,
+  }), /symbol is required/);
+});
+
+test("paper evidence provenance is deterministic and source-sensitive", () => {
+  const baseSignal = signal("CRYPTO_SPOT", "BUY");
+  const first = buildPaperEvidenceProvenance({ dataEvidence: marketEvidence("CRYPTO_SPOT"), signal: baseSignal });
+  const second = buildPaperEvidenceProvenance({ dataEvidence: marketEvidence("CRYPTO_SPOT"), signal: baseSignal });
+  const changed = buildPaperEvidenceProvenance({
+    dataEvidence: marketEvidence("CRYPTO_SPOT", { provenance: "CRYPTO_SPOT-public-evidence-v2" }),
+    signal: baseSignal,
+  });
+  assert.deepEqual(first, second);
+  assert.notEqual(first.provenanceDigest, changed.provenanceDigest);
+  assert.notEqual(first.evidenceSnapshotDigest, changed.evidenceSnapshotDigest);
+});
+
 test("Profit-First SELL maps to SELL_EXIT but cannot create a fake standalone OPEN trade", () => {
   assert.equal(normalizePaperExecutionDirection("KR_STOCK", "SELL"), "SELL_EXIT");
   const sample = buildFourMarketPaperSample({
@@ -187,6 +226,7 @@ test("Profit-First SELL maps to SELL_EXIT but cannot create a fake standalone OP
   assert.equal(sample.status, "BLOCKED");
   assert.equal(sample.identity.signalDirection, "SELL");
   assert.equal(sample.identity.executionDirection, "SELL_EXIT");
+  assert.equal(sample.identity.symbol, "005930");
   assert.equal(sample.executionContextStatus, "NOT_REQUESTED");
   assert.equal(sample.fill, null);
   assert.deepEqual(sample.blockers, ["CASH_EXIT_REQUIRES_OPEN_POSITION"]);
@@ -208,6 +248,7 @@ test("NO_TRADE is preserved without requesting an execution context", () => {
     evaluatedAtMs: NOW,
   });
   assert.equal(sample.status, "NO_TRADE");
+  assert.equal(sample.identity.symbol, "AAPL");
   assert.equal(sample.executionContextStatus, "NOT_REQUESTED");
   assert.equal(sample.fill, null);
   assert.deepEqual(sample.blockers, ["INSUFFICIENT_SAMPLE"]);
