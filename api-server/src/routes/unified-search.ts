@@ -7,6 +7,7 @@ import {
   searchUnifiedAssets,
   startUnifiedAssetSearchRefreshTimer,
 } from '../services/unified-asset-search.service';
+import { buildKrSearchFallback } from '../services/unified-kr-search-fallback';
 import {
   buildSpotSearchFallback,
   SPOT_SEARCH_SOFT_DEADLINE_MS,
@@ -33,6 +34,14 @@ function parseMarket(value: unknown): UnifiedSearchMarket | null | 'invalid' {
 
 function canUseSpotMetadataFallback(asset: 'all' | UnifiedAssetType, market: UnifiedSearchMarket | null) {
   return (asset === 'all' || asset === 'coin') && market === 'spot';
+}
+
+function canUseKrMetadataFallback(asset: 'all' | UnifiedAssetType, market: UnifiedSearchMarket | null) {
+  return (asset === 'all' || asset === 'stock') && (market === null || market === 'KR');
+}
+
+function krProviderUnavailable(response: Awaited<ReturnType<typeof searchUnifiedAssets>>) {
+  return response.providers.some((provider) => provider.provider === 'krx' && provider.status !== 'ok');
 }
 
 async function searchWithSpotSoftDeadline(input: {
@@ -80,18 +89,26 @@ router.get('/search/suggest', async (req, res) => {
   const limit = Math.max(1, Math.min(50, Math.trunc(Number(req.query.limit ?? 25)) || 25));
   try {
     const response = await searchWithSpotSoftDeadline({ q, asset, market, limit });
+    const krFallback = response.count === 0
+      && canUseKrMetadataFallback(asset, market)
+      && krProviderUnavailable(response)
+      ? buildKrSearchFallback(q, limit)
+      : null;
+    const effectiveResponse = krFallback ?? response;
     const state = deriveUnifiedSearchState({
-      resultCount: response.count,
-      partial: response.partial,
-      stale: response.stale,
+      resultCount: effectiveResponse.count,
+      partial: effectiveResponse.partial,
+      stale: effectiveResponse.stale,
     });
     res.setHeader('Cache-Control', 'private, max-age=15, stale-while-revalidate=60');
-    res.json({ ok: true, state, q, asset, market, ...response });
+    res.json({ ok: true, state, q, asset, market, ...effectiveResponse });
   } catch (error) {
     console.error('[unified-search] suggest failed:', error instanceof Error ? error.message : 'unknown');
     const fallback = canUseSpotMetadataFallback(asset, market)
       ? buildSpotSearchFallback(q, limit)
-      : null;
+      : canUseKrMetadataFallback(asset, market)
+        ? buildKrSearchFallback(q, limit)
+        : null;
     if (fallback) {
       const state = deriveUnifiedSearchState({ resultCount: fallback.count, partial: true, stale: true });
       res.setHeader('Cache-Control', 'private, max-age=15, stale-while-revalidate=60');
