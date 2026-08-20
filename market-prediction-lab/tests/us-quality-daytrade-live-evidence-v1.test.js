@@ -60,6 +60,15 @@ function liveEvidence(overrides = {}) {
   };
 }
 
+function strategyIdentity() {
+  return {
+    strategyId: "US_QUALITY_DAYTRADE_A",
+    strategyVersion: "us-quality-daytrade-trial-registry-v1",
+    parameterHash: "parameter-hash-demo",
+    researchCodeSha: "8f50b40ac3c9020d87220ac4bd9353908b316885",
+  };
+}
+
 test("source-backed public intraday evidence composes a READY bundle", () => {
   const result = buildUsQualityDaytradeLiveEvidenceBundle(liveEvidence());
   assert.equal(result.status, "READY");
@@ -171,22 +180,24 @@ test("candle session mismatch fails closed instead of relabeling VWAP coverage",
   assert.equal(result.reason, "CANDLE_SESSION_MISMATCH");
 });
 
-test("same strategy plus same market observation gets one deterministic evidence id", () => {
+test("same strategy, symbol, and market observation gets one deterministic evidence id", () => {
   const first = buildUsQualityDaytradeLiveEvidenceBundle(liveEvidence());
   const second = buildUsQualityDaytradeLiveEvidenceBundle(liveEvidence());
-  const strategyIdentity = {
-    strategyId: "US_QUALITY_DAYTRADE_A",
-    strategyVersion: "us-quality-daytrade-trial-registry-v1",
-    parameterHash: "parameter-hash-demo",
-    researchCodeSha: "8f50b40ac3c9020d87220ac4bd9353908b316885",
-  };
-  const firstIdentity = buildUsQualityDaytradeObservationIdentity({ strategyIdentity, bundle: first });
-  const secondIdentity = buildUsQualityDaytradeObservationIdentity({ strategyIdentity, bundle: second });
+  const firstIdentity = buildUsQualityDaytradeObservationIdentity({ strategyIdentity: strategyIdentity(), bundle: first, symbol: "COIN" });
+  const secondIdentity = buildUsQualityDaytradeObservationIdentity({ strategyIdentity: strategyIdentity(), bundle: second, symbol: "coin" });
   assert.equal(first.provenance.observationDigest, second.provenance.observationDigest);
   assert.equal(firstIdentity.evidenceId, secondIdentity.evidenceId);
+  assert.equal(firstIdentity.symbol, "COIN");
   assert.equal(firstIdentity.duplicateCountingAllowed, false);
   assert.equal(firstIdentity.selectionEligible, false);
   assert.equal(firstIdentity.executionAuthority, "NONE");
+});
+
+test("same numeric observation on a different symbol cannot collide", () => {
+  const bundle = buildUsQualityDaytradeLiveEvidenceBundle(liveEvidence());
+  const coin = buildUsQualityDaytradeObservationIdentity({ strategyIdentity: strategyIdentity(), bundle, symbol: "COIN" });
+  const mstr = buildUsQualityDaytradeObservationIdentity({ strategyIdentity: strategyIdentity(), bundle, symbol: "MSTR" });
+  assert.notEqual(coin.evidenceId, mstr.evidenceId);
 });
 
 test("a genuinely different executable quote produces a different observation identity", () => {
@@ -195,16 +206,18 @@ test("a genuinely different executable quote produces a different observation id
   changedInput.quoteEvidence.bid = 101.70;
   changedInput.quoteEvidence.ask = 101.74;
   const second = buildUsQualityDaytradeLiveEvidenceBundle(changedInput);
-  const strategyIdentity = {
-    strategyId: "US_QUALITY_DAYTRADE_A",
-    strategyVersion: "us-quality-daytrade-trial-registry-v1",
-    parameterHash: "parameter-hash-demo",
-    researchCodeSha: "8f50b40ac3c9020d87220ac4bd9353908b316885",
-  };
-  const firstIdentity = buildUsQualityDaytradeObservationIdentity({ strategyIdentity, bundle: first });
-  const secondIdentity = buildUsQualityDaytradeObservationIdentity({ strategyIdentity, bundle: second });
+  const firstIdentity = buildUsQualityDaytradeObservationIdentity({ strategyIdentity: strategyIdentity(), bundle: first, symbol: "COIN" });
+  const secondIdentity = buildUsQualityDaytradeObservationIdentity({ strategyIdentity: strategyIdentity(), bundle: second, symbol: "COIN" });
   assert.notEqual(first.provenance.observationDigest, second.provenance.observationDigest);
   assert.notEqual(firstIdentity.evidenceId, secondIdentity.evidenceId);
+});
+
+test("observation identity requires an explicit symbol", () => {
+  const bundle = buildUsQualityDaytradeLiveEvidenceBundle(liveEvidence());
+  assert.throws(
+    () => buildUsQualityDaytradeObservationIdentity({ strategyIdentity: strategyIdentity(), bundle }),
+    /symbol is required/,
+  );
 });
 
 test("READY bundle can be attached to the existing pre-entry input without mutation", () => {
