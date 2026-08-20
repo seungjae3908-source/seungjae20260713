@@ -1,6 +1,6 @@
 import { PredictionInputError } from "./contracts.js";
 
-export const QUALITY_DAYTRADE_BINARY_EVENT_CONTRACT_VERSION = "us-quality-daytrade-binary-event-v4";
+export const QUALITY_DAYTRADE_BINARY_EVENT_CONTRACT_VERSION = "us-quality-daytrade-binary-event-v5";
 
 const VALID_BINARY_EVENT_TYPES = new Set([
   "EARNINGS",
@@ -30,53 +30,104 @@ function normalizePolicy(raw) {
   return Object.freeze({ preEventBlackoutMinutes, postEventCooldownMinutes });
 }
 
+function blocked(reason, fields = {}) {
+  return Object.freeze({ status: "BLOCKED_DATA", reason, ...fields });
+}
+
+function normalizeEvent(raw, index, coverage) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return blocked("BINARY_EVENT_ITEM_INVALID", { eventIndex: index });
+  }
+  const eventId = String(raw.eventId ?? "").trim();
+  if (!eventId) return blocked("BINARY_EVENT_ID_REQUIRED", { eventIndex: index });
+  if (raw.verified !== true) return blocked("BINARY_EVENT_VERIFICATION_REQUIRED", { eventIndex: index, eventId });
+
+  const eventType = String(raw.eventType ?? "").toUpperCase();
+  if (!VALID_BINARY_EVENT_TYPES.has(eventType)) {
+    return blocked("BINARY_EVENT_TYPE_UNSUPPORTED", { eventIndex: index, eventId, eventType });
+  }
+  if (raw.eventTimestampMs == null) {
+    return blocked("BINARY_EVENT_TIMESTAMP_REQUIRED", { eventIndex: index, eventId, eventType });
+  }
+  const eventTimestampMs = finiteNumber(raw.eventTimestampMs, `binaryEventEvidence.events[${index}].eventTimestampMs`);
+  if (eventTimestampMs < coverage.coverageStartMs || eventTimestampMs > coverage.coverageEndMs) {
+    return blocked("BINARY_EVENT_TIMESTAMP_OUTSIDE_COVERAGE", {
+      eventIndex: index,
+      eventId,
+      eventType,
+      eventTimestampMs,
+      coverageStartMs: coverage.coverageStartMs,
+      coverageEndMs: coverage.coverageEndMs,
+    });
+  }
+
+  if (raw.marketMovingTimestampMs == null) {
+    return blocked("BINARY_EVENT_MARKET_MOVING_TIMESTAMP_REQUIRED", {
+      eventIndex: index,
+      eventId,
+      eventType,
+      eventTimestampMs,
+    });
+  }
+  const marketMovingTimestampMs = finiteNumber(
+    raw.marketMovingTimestampMs,
+    `binaryEventEvidence.events[${index}].marketMovingTimestampMs`,
+  );
+  if (marketMovingTimestampMs < coverage.coverageStartMs || marketMovingTimestampMs > coverage.coverageEndMs) {
+    return blocked("BINARY_EVENT_MARKET_MOVING_TIMESTAMP_OUTSIDE_COVERAGE", {
+      eventIndex: index,
+      eventId,
+      eventType,
+      eventTimestampMs,
+      marketMovingTimestampMs,
+      coverageStartMs: coverage.coverageStartMs,
+      coverageEndMs: coverage.coverageEndMs,
+    });
+  }
+
+  return Object.freeze({
+    status: "READY",
+    eventId,
+    eventType,
+    eventTimestampMs,
+    marketMovingTimestampMs,
+    timingBasis: "MARKET_MOVING_INFORMATION_RELEASE",
+  });
+}
+
 function normalizeEvidence(raw, asOfMs, policy) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw) || raw.calendarChecked !== true) {
-    return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_EVIDENCE_REQUIRED" });
+    return blocked("BINARY_EVENT_EVIDENCE_REQUIRED");
   }
 
-  if (raw.checkedAtMs == null) {
-    return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_CHECKED_AT_REQUIRED" });
-  }
+  if (raw.checkedAtMs == null) return blocked("BINARY_EVENT_CHECKED_AT_REQUIRED");
   const checkedAtMs = finiteNumber(raw.checkedAtMs, "binaryEventEvidence.checkedAtMs");
-  if (checkedAtMs > asOfMs) {
-    return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_EVIDENCE_IN_FUTURE", checkedAtMs });
-  }
+  if (checkedAtMs > asOfMs) return blocked("BINARY_EVENT_EVIDENCE_IN_FUTURE", { checkedAtMs });
 
   const source = String(raw.source ?? "").trim();
-  if (!source) {
-    return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_SOURCE_REQUIRED", checkedAtMs });
-  }
+  if (!source) return blocked("BINARY_EVENT_SOURCE_REQUIRED", { checkedAtMs });
 
-  if (raw.validUntilMs == null) {
-    return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_VALID_UNTIL_REQUIRED", checkedAtMs, source });
-  }
+  if (raw.validUntilMs == null) return blocked("BINARY_EVENT_VALID_UNTIL_REQUIRED", { checkedAtMs, source });
   const validUntilMs = finiteNumber(raw.validUntilMs, "binaryEventEvidence.validUntilMs");
-  if (validUntilMs < checkedAtMs) {
-    return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_VALIDITY_RANGE_INVALID", checkedAtMs, validUntilMs, source });
-  }
-  if (validUntilMs < asOfMs) {
-    return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_EVIDENCE_STALE", checkedAtMs, validUntilMs, source });
-  }
+  if (validUntilMs < checkedAtMs) return blocked("BINARY_EVENT_VALIDITY_RANGE_INVALID", { checkedAtMs, validUntilMs, source });
+  if (validUntilMs < asOfMs) return blocked("BINARY_EVENT_EVIDENCE_STALE", { checkedAtMs, validUntilMs, source });
 
   if (raw.coverageStartMs == null || raw.coverageEndMs == null) {
-    return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_COVERAGE_REQUIRED", checkedAtMs, validUntilMs, source });
+    return blocked("BINARY_EVENT_COVERAGE_REQUIRED", { checkedAtMs, validUntilMs, source });
   }
   const coverageStartMs = finiteNumber(raw.coverageStartMs, "binaryEventEvidence.coverageStartMs");
   const coverageEndMs = finiteNumber(raw.coverageEndMs, "binaryEventEvidence.coverageEndMs");
   if (coverageEndMs < coverageStartMs) {
-    return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_COVERAGE_RANGE_INVALID", checkedAtMs, source, coverageStartMs, coverageEndMs });
+    return blocked("BINARY_EVENT_COVERAGE_RANGE_INVALID", { checkedAtMs, source, coverageStartMs, coverageEndMs });
   }
   if (raw.coverageComplete !== true) {
-    return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_COVERAGE_COMPLETE_REQUIRED", checkedAtMs, source, coverageStartMs, coverageEndMs });
+    return blocked("BINARY_EVENT_COVERAGE_COMPLETE_REQUIRED", { checkedAtMs, source, coverageStartMs, coverageEndMs });
   }
 
   const requiredCoverageStartMs = asOfMs - policy.postEventCooldownMinutes * 60_000;
   const requiredCoverageEndMs = asOfMs + policy.preEventBlackoutMinutes * 60_000;
   if (coverageStartMs > requiredCoverageStartMs) {
-    return Object.freeze({
-      status: "BLOCKED_DATA",
-      reason: "BINARY_EVENT_LOOKBACK_INSUFFICIENT",
+    return blocked("BINARY_EVENT_LOOKBACK_INSUFFICIENT", {
       checkedAtMs,
       source,
       coverageStartMs,
@@ -86,9 +137,7 @@ function normalizeEvidence(raw, asOfMs, policy) {
     });
   }
   if (coverageEndMs < requiredCoverageEndMs) {
-    return Object.freeze({
-      status: "BLOCKED_DATA",
-      reason: "BINARY_EVENT_COVERAGE_INSUFFICIENT",
+    return blocked("BINARY_EVENT_COVERAGE_INSUFFICIENT", {
       checkedAtMs,
       source,
       coverageStartMs,
@@ -99,80 +148,35 @@ function normalizeEvidence(raw, asOfMs, policy) {
   }
 
   if (typeof raw.scheduled !== "boolean") {
-    return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_SCHEDULE_STATE_REQUIRED", checkedAtMs, source });
+    return blocked("BINARY_EVENT_SCHEDULE_STATE_REQUIRED", { checkedAtMs, source });
   }
-  if (raw.scheduled === false) {
-    return Object.freeze({
-      status: "READY",
-      scheduled: false,
+  if (raw.scheduledEventCount == null) {
+    return blocked("BINARY_EVENT_COUNT_REQUIRED", { checkedAtMs, source });
+  }
+  const scheduledEventCount = finiteNumber(raw.scheduledEventCount, "binaryEventEvidence.scheduledEventCount");
+  if (!Number.isInteger(scheduledEventCount) || scheduledEventCount < 0 || scheduledEventCount > 100) {
+    return blocked("BINARY_EVENT_COUNT_INVALID", { checkedAtMs, source, scheduledEventCount });
+  }
+  if (!Array.isArray(raw.events)) {
+    return blocked("BINARY_EVENT_LIST_REQUIRED", { checkedAtMs, source, scheduledEventCount });
+  }
+  if (raw.events.length !== scheduledEventCount) {
+    return blocked("BINARY_EVENT_COUNT_MISMATCH", {
       checkedAtMs,
       source,
-      validUntilMs,
-      coverageComplete: true,
-      coverageStartMs,
-      coverageEndMs,
-      requiredCoverageStartMs,
-      requiredCoverageEndMs,
+      scheduledEventCount,
+      observedEventCount: raw.events.length,
     });
+  }
+  if (raw.scheduled === false && scheduledEventCount !== 0) {
+    return blocked("BINARY_EVENT_SCHEDULE_COUNT_MISMATCH", { checkedAtMs, source, scheduledEventCount });
+  }
+  if (raw.scheduled === true && scheduledEventCount === 0) {
+    return blocked("BINARY_EVENT_SCHEDULE_COUNT_MISMATCH", { checkedAtMs, source, scheduledEventCount });
   }
 
-  if (raw.verified !== true) {
-    return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_VERIFICATION_REQUIRED", checkedAtMs, source });
-  }
-  const eventType = String(raw.eventType ?? "").toUpperCase();
-  if (!VALID_BINARY_EVENT_TYPES.has(eventType)) {
-    return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_TYPE_UNSUPPORTED", checkedAtMs, source, eventType });
-  }
-  if (raw.eventTimestampMs == null) {
-    return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_TIMESTAMP_REQUIRED", checkedAtMs, source, eventType });
-  }
-  const eventTimestampMs = finiteNumber(raw.eventTimestampMs, "binaryEventEvidence.eventTimestampMs");
-  if (eventTimestampMs < coverageStartMs || eventTimestampMs > coverageEndMs) {
-    return Object.freeze({
-      status: "BLOCKED_DATA",
-      reason: "BINARY_EVENT_TIMESTAMP_OUTSIDE_COVERAGE",
-      checkedAtMs,
-      source,
-      eventType,
-      eventTimestampMs,
-      coverageStartMs,
-      coverageEndMs,
-    });
-  }
-
-  if (raw.marketMovingTimestampMs == null) {
-    return Object.freeze({
-      status: "BLOCKED_DATA",
-      reason: "BINARY_EVENT_MARKET_MOVING_TIMESTAMP_REQUIRED",
-      checkedAtMs,
-      source,
-      eventType,
-      eventTimestampMs,
-    });
-  }
-  const marketMovingTimestampMs = finiteNumber(raw.marketMovingTimestampMs, "binaryEventEvidence.marketMovingTimestampMs");
-  if (marketMovingTimestampMs < coverageStartMs || marketMovingTimestampMs > coverageEndMs) {
-    return Object.freeze({
-      status: "BLOCKED_DATA",
-      reason: "BINARY_EVENT_MARKET_MOVING_TIMESTAMP_OUTSIDE_COVERAGE",
-      checkedAtMs,
-      source,
-      eventType,
-      eventTimestampMs,
-      marketMovingTimestampMs,
-      coverageStartMs,
-      coverageEndMs,
-    });
-  }
-
-  return Object.freeze({
-    status: "READY",
-    scheduled: true,
+  const common = {
     checkedAtMs,
-    eventType,
-    eventTimestampMs,
-    marketMovingTimestampMs,
-    timingBasis: "MARKET_MOVING_INFORMATION_RELEASE",
     source,
     validUntilMs,
     coverageComplete: true,
@@ -180,6 +184,30 @@ function normalizeEvidence(raw, asOfMs, policy) {
     coverageEndMs,
     requiredCoverageStartMs,
     requiredCoverageEndMs,
+    scheduledEventCount,
+  };
+
+  if (raw.scheduled === false) {
+    return Object.freeze({ status: "READY", scheduled: false, events: Object.freeze([]), ...common });
+  }
+
+  const normalizedEvents = [];
+  const seenIds = new Set();
+  for (let index = 0; index < raw.events.length; index += 1) {
+    const event = normalizeEvent(raw.events[index], index, { coverageStartMs, coverageEndMs });
+    if (event.status !== "READY") return event;
+    if (seenIds.has(event.eventId)) {
+      return blocked("BINARY_EVENT_DUPLICATE_ID", { checkedAtMs, source, eventId: event.eventId, eventIndex: index });
+    }
+    seenIds.add(event.eventId);
+    normalizedEvents.push(event);
+  }
+
+  return Object.freeze({
+    status: "READY",
+    scheduled: true,
+    events: Object.freeze(normalizedEvents),
+    ...common,
   });
 }
 
@@ -215,34 +243,52 @@ export function evaluateQualityDaytradeBinaryEventRisk(raw) {
     return safeResult({ status: "PASS", reason: "NO_SCHEDULED_BINARY_EVENT", evidence, policy });
   }
 
-  const minutesUntilEvent = (evidence.marketMovingTimestampMs - asOfMs) / 60_000;
-  if (minutesUntilEvent >= 0 && minutesUntilEvent <= policy.preEventBlackoutMinutes) {
+  const evaluated = evidence.events.map((event) => {
+    const minutesUntilEvent = (event.marketMovingTimestampMs - asOfMs) / 60_000;
+    return Object.freeze({
+      event,
+      minutesUntilEvent,
+      minutesSinceEvent: -minutesUntilEvent,
+      distanceMinutes: Math.abs(minutesUntilEvent),
+    });
+  });
+
+  const blackout = evaluated
+    .filter((row) => row.minutesUntilEvent >= 0 && row.minutesUntilEvent <= policy.preEventBlackoutMinutes)
+    .sort((a, b) => a.minutesUntilEvent - b.minutesUntilEvent)[0];
+  if (blackout) {
     return safeResult({
       status: "ABSTAIN",
       reason: "BINARY_EVENT_BLACKOUT",
       evidence,
       policy,
-      minutesUntilEvent,
+      blockingEvent: blackout.event,
+      minutesUntilEvent: blackout.minutesUntilEvent,
     });
   }
 
-  const minutesSinceEvent = -minutesUntilEvent;
-  if (minutesUntilEvent < 0 && minutesSinceEvent < policy.postEventCooldownMinutes) {
+  const cooldown = evaluated
+    .filter((row) => row.minutesUntilEvent < 0 && row.minutesSinceEvent < policy.postEventCooldownMinutes)
+    .sort((a, b) => a.minutesSinceEvent - b.minutesSinceEvent)[0];
+  if (cooldown) {
     return safeResult({
       status: "ABSTAIN",
       reason: "BINARY_EVENT_COOLDOWN",
       evidence,
       policy,
-      minutesSinceEvent,
+      blockingEvent: cooldown.event,
+      minutesSinceEvent: cooldown.minutesSinceEvent,
     });
   }
 
+  const nearestEvent = [...evaluated].sort((a, b) => a.distanceMinutes - b.distanceMinutes)[0] ?? null;
   return safeResult({
     status: "PASS",
     reason: "OUTSIDE_BINARY_EVENT_WINDOW",
     evidence,
     policy,
-    minutesUntilEvent,
+    nearestEvent: nearestEvent?.event ?? null,
+    minutesUntilEvent: nearestEvent?.minutesUntilEvent ?? null,
   });
 }
 
@@ -263,6 +309,6 @@ export function buildQualityDaytradeBinaryEventWindowGrid() {
     combinations: Object.freeze(combinations),
     optimizationRule: "RESEARCH_ONLY_COARSE_TO_FINE_OOS_WALK_FORWARD_FINAL_HOLDOUT",
     selectionMetric: "NET_EXPECTANCY_WITH_PF_MDD_GAP_SLIPPAGE_STRESS",
-    note: "Window values are research candidates, not validated defaults. Complete source-backed calendar coverage must span the full post-event cooldown lookback and pre-event blackout horizon, and risk timing must use the earliest market-moving information-release timestamp rather than a later conference-call time.",
+    note: "Window values are research candidates, not validated defaults. Complete source-backed calendar coverage must enumerate every scheduled event in the covered interval with an exact attested count and unique event IDs; risk timing uses each event's earliest market-moving information-release timestamp rather than a later descriptive conference-call time.",
   });
 }
