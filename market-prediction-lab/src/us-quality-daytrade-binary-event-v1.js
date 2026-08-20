@@ -1,6 +1,6 @@
 import { PredictionInputError } from "./contracts.js";
 
-export const QUALITY_DAYTRADE_BINARY_EVENT_CONTRACT_VERSION = "us-quality-daytrade-binary-event-v3";
+export const QUALITY_DAYTRADE_BINARY_EVENT_CONTRACT_VERSION = "us-quality-daytrade-binary-event-v4";
 
 const VALID_BINARY_EVENT_TYPES = new Set([
   "EARNINGS",
@@ -139,12 +139,40 @@ function normalizeEvidence(raw, asOfMs, policy) {
       coverageEndMs,
     });
   }
+
+  if (raw.marketMovingTimestampMs == null) {
+    return Object.freeze({
+      status: "BLOCKED_DATA",
+      reason: "BINARY_EVENT_MARKET_MOVING_TIMESTAMP_REQUIRED",
+      checkedAtMs,
+      source,
+      eventType,
+      eventTimestampMs,
+    });
+  }
+  const marketMovingTimestampMs = finiteNumber(raw.marketMovingTimestampMs, "binaryEventEvidence.marketMovingTimestampMs");
+  if (marketMovingTimestampMs < coverageStartMs || marketMovingTimestampMs > coverageEndMs) {
+    return Object.freeze({
+      status: "BLOCKED_DATA",
+      reason: "BINARY_EVENT_MARKET_MOVING_TIMESTAMP_OUTSIDE_COVERAGE",
+      checkedAtMs,
+      source,
+      eventType,
+      eventTimestampMs,
+      marketMovingTimestampMs,
+      coverageStartMs,
+      coverageEndMs,
+    });
+  }
+
   return Object.freeze({
     status: "READY",
     scheduled: true,
     checkedAtMs,
     eventType,
     eventTimestampMs,
+    marketMovingTimestampMs,
+    timingBasis: "MARKET_MOVING_INFORMATION_RELEASE",
     source,
     validUntilMs,
     coverageComplete: true,
@@ -187,7 +215,7 @@ export function evaluateQualityDaytradeBinaryEventRisk(raw) {
     return safeResult({ status: "PASS", reason: "NO_SCHEDULED_BINARY_EVENT", evidence, policy });
   }
 
-  const minutesUntilEvent = (evidence.eventTimestampMs - asOfMs) / 60_000;
+  const minutesUntilEvent = (evidence.marketMovingTimestampMs - asOfMs) / 60_000;
   if (minutesUntilEvent >= 0 && minutesUntilEvent <= policy.preEventBlackoutMinutes) {
     return safeResult({
       status: "ABSTAIN",
@@ -235,6 +263,6 @@ export function buildQualityDaytradeBinaryEventWindowGrid() {
     combinations: Object.freeze(combinations),
     optimizationRule: "RESEARCH_ONLY_COARSE_TO_FINE_OOS_WALK_FORWARD_FINAL_HOLDOUT",
     selectionMetric: "NET_EXPECTANCY_WITH_PF_MDD_GAP_SLIPPAGE_STRESS",
-    note: "Window values are research candidates, not validated defaults. Complete source-backed calendar coverage must span the full post-event cooldown lookback and pre-event blackout horizon.",
+    note: "Window values are research candidates, not validated defaults. Complete source-backed calendar coverage must span the full post-event cooldown lookback and pre-event blackout horizon, and risk timing must use the earliest market-moving information-release timestamp rather than a later conference-call time.",
   });
 }
