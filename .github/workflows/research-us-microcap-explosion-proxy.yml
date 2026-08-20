@@ -1,14 +1,6 @@
 name: Research US Microcap Intraday Ladder V1
 
 on:
-  push:
-    branches:
-      - agent/research-microcap-explosion-proxy-v1
-    paths:
-      - market-prediction-lab/scripts/run-us-microcap-intraday-ladder-v1.py
-      - market-prediction-lab/scripts/run-us-microcap-intraday-risk-grid-v1.py
-      - market-prediction-lab/scripts/build-us-microcap-sec-dilution-evidence-v1.py
-      - .github/workflows/research-us-microcap-explosion-proxy.yml
   pull_request:
     branches: [main]
     paths:
@@ -22,18 +14,28 @@ permissions:
   contents: read
 
 concurrency:
-  group: research-us-microcap-intraday-ladder-${{ github.ref }}
+  group: research-us-microcap-intraday-ladder-${{ github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
   backtest:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      RESEARCH_CODE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
-      - name: Checkout isolated research branch
+      - name: Checkout exact research head
         uses: actions/checkout@v4
         with:
+          ref: ${{ env.RESEARCH_CODE_SHA }}
           persist-credentials: false
+
+      - name: Assert exact research identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$RESEARCH_CODE_SHA"
+          printf '%s' "$RESEARCH_CODE_SHA" | grep -Eq '^[0-9a-f]{40}$'
 
       - name: Self-test intraday ladder accounting
         run: python3 market-prediction-lab/scripts/run-us-microcap-intraday-ladder-v1.py --self-test
@@ -64,8 +66,18 @@ jobs:
         shell: bash
         run: |
           cat > market-prediction-lab/docs/research-us-microcap-intraday-ladder-v1/provenance.json <<JSON
-          {"schemaVersion":1,"researchCodeSha":"${GITHUB_SHA}","runId":"${GITHUB_RUN_ID}","source":"Yahoo public chart 1m range=7d includePrePost=true","tenYearMinuteHistory":false,"pointInTimeFloat":false,"archivedFreshCatalyst":false,"pointInTimeDilutionFilter":false,"secFormLevelDilutionEvidenceContract":true,"liveOrderAllowed":false,"privateApiAllowed":false,"branchWrite":false}
+          {"schemaVersion":2,"researchCodeSha":"${RESEARCH_CODE_SHA}","triggerSha":"${GITHUB_SHA}","runId":"${GITHUB_RUN_ID}","source":"Yahoo public chart 1m range=7d includePrePost=true","tenYearMinuteHistory":false,"pointInTimeFloat":false,"archivedFreshCatalyst":false,"pointInTimeDilutionFilter":false,"secFormLevelDilutionEvidenceContract":true,"canonicalEvidenceEligible":false,"canonicalSampleDelta":0,"liveOrderAllowed":false,"privateApiAllowed":false,"branchWrite":false}
           JSON
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path('market-prediction-lab/docs/research-us-microcap-intraday-ladder-v1/provenance.json')
+          row = json.loads(p.read_text())
+          if row['researchCodeSha'] != '${{ env.RESEARCH_CODE_SHA }}':
+              raise SystemExit('researchCodeSha mismatch')
+          if row['canonicalEvidenceEligible'] is not False or row['canonicalSampleDelta'] != 0:
+              raise SystemExit('recent diagnostic must not receive canonical sample credit')
+          PY
 
       - name: Print result
         if: always()
