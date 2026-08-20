@@ -8,15 +8,24 @@ import { assertResearchSafety, preflightResearchProduction, sanitizeChildEnv } f
 const execFileAsync = promisify(execFile);
 const PYTHON = 'python3';
 const STEP_TIMEOUT_MS = 20 * 60_000;
+const SEC_DILUTION_SCRIPT = 'scripts/build-us-microcap-sec-dilution-evidence-v1.py';
+const INTRADAY_LADDER_SCRIPT = 'scripts/run-us-microcap-intraday-ladder-v1.py';
+const PIT_RISK_GATE_SCRIPT = 'scripts/apply-us-microcap-pit-risk-gate-v1.py';
 const REQUIRED_SCRIPTS = Object.freeze([
-  'scripts/run-us-microcap-intraday-ladder-v1.py',
-  'scripts/build-us-microcap-sec-dilution-evidence-v1.py',
+  SEC_DILUTION_SCRIPT,
+  INTRADAY_LADDER_SCRIPT,
+  PIT_RISK_GATE_SCRIPT,
 ]);
 const PROMOTION_BLOCKERS = Object.freeze([
   ['tenYearMinuteHistory', 'TEN_YEAR_ALL_SESSION_MINUTE_HISTORY_MISSING'],
   ['pointInTimeFloat', 'POINT_IN_TIME_FLOAT_MISSING'],
   ['archivedFreshCatalyst', 'ARCHIVED_FRESH_CATALYST_MISSING'],
   ['pointInTimeDilutionOfferingFilter', 'POINT_IN_TIME_DILUTION_FILTER_MISSING'],
+]);
+const ALLOWED_PIT_STATUSES = new Set([
+  'NO_INTRADAY_ENTRIES',
+  'DATA_BLOCKED_PIT_RISK_EVIDENCE',
+  'PIT_RISK_GATE_EVALUATED',
 ]);
 
 async function exists(path) {
@@ -69,18 +78,27 @@ async function acquireLock(path, payload) {
 export function buildMicrocapResearchTaskPlan({ researchSha }) {
   const sha = pinnedSha(researchSha);
   return Object.freeze({
-    schemaVersion: 'research-production-microcap-task-plan-v1',
+    schemaVersion: 'research-production-microcap-task-plan-v2',
     id: 'us-microcap-recent-intraday-diagnostic',
     researchSha: sha,
     runtime: PYTHON,
     steps: Object.freeze([
-      Object.freeze({ id: 'sec-dilution-contract-self-test', args: Object.freeze(['scripts/build-us-microcap-sec-dilution-evidence-v1.py', '--self-test']) }),
+      Object.freeze({ id: 'sec-dilution-contract-self-test', args: Object.freeze([SEC_DILUTION_SCRIPT, '--self-test']) }),
       Object.freeze({
         id: 'recent-intraday-ladder',
         args: Object.freeze([
-          'scripts/run-us-microcap-intraday-ladder-v1.py',
+          INTRADAY_LADDER_SCRIPT,
           '--output-json', 'docs/us-microcap-intraday-ladder-v1.json',
           '--output-md', 'docs/us-microcap-intraday-ladder-v1.md',
+        ]),
+      }),
+      Object.freeze({
+        id: 'point-in-time-risk-gate',
+        args: Object.freeze([
+          PIT_RISK_GATE_SCRIPT,
+          '--ladder-json', 'docs/us-microcap-intraday-ladder-v1.json',
+          '--output-json', 'docs/us-microcap-pit-risk-gate-v1.json',
+          '--output-md', 'docs/us-microcap-pit-risk-gate-v1.md',
         ]),
       }),
     ]),
@@ -112,6 +130,31 @@ export function assessMicrocapDiagnostic(result) {
   });
 }
 
+export function assessMicrocapPitRiskGate(result) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error('microcap PIT risk-gate result must be an object');
+  if (!ALLOWED_PIT_STATUSES.has(String(result.status ?? ''))) throw new Error(`unexpected PIT risk-gate status: ${String(result.status)}`);
+  if (result.pointInTimeRiskGate !== true) throw new Error('point-in-time risk gate evidence missing');
+  if (result.canonicalEvidenceEligible !== false || Number(result.canonicalSampleDelta) !== 0) {
+    throw new Error('PIT risk gate must never grant canonical sample credit');
+  }
+  const counts = result.counts && typeof result.counts === 'object' ? result.counts : {};
+  const blocked = Number(counts.blocked ?? 0);
+  const rejected = Number(counts.rejected ?? 0);
+  const eligible = Number(counts.eligible ?? 0);
+  if (![blocked, rejected, eligible].every(Number.isFinite) || blocked < 0 || rejected < 0 || eligible < 0) {
+    throw new Error('invalid PIT risk-gate counts');
+  }
+  return Object.freeze({
+    status: String(result.status),
+    blocked,
+    rejected,
+    eligible,
+    dataBlocked: blocked > 0 || result.status === 'DATA_BLOCKED_PIT_RISK_EVIDENCE',
+    canonicalEvidenceEligible: false,
+    canonicalSampleDelta: 0,
+  });
+}
+
 export async function preflightMicrocapResearchTask({ repoRoot, stateRoot, researchSha, env = process.env, verifyGitHead = true, basePreflight = null }) {
   assertResearchSafety({ env, stateRoot, repoRoot });
   const sha = pinnedSha(researchSha);
@@ -133,6 +176,7 @@ export async function preflightMicrocapResearchTask({ repoRoot, stateRoot, resea
       taskId: 'us-microcap-recent-intraday-diagnostic',
       runtime: PYTHON,
       requiredScripts: REQUIRED_SCRIPTS,
+      pitRiskGateRequired: true,
       canonicalEvidenceEligible: false,
       canonicalSampleDelta: 0,
     }),
@@ -176,20 +220,39 @@ export async function runMicrocapResearchTask({ repoRoot, stateRoot, researchSha
     await cp(preflight.labRoot, workspace, { recursive: true, force: false, errorOnExist: true, dereference: false });
     const childEnv = { ...env, RESEARCH_CODE_SHA: sha };
 
-    const secSelfTest = await runPython({ labRoot: workspace, args: ['scripts/build-us-microcap-sec-dilution-evidence-v1.py', '--self-test'], env: childEnv });
+    const secSelfTest = await runPython({ labRoot: workspace, args: [SEC_DILUTION_SCRIPT, '--self-test'], env: childEnv });
+    const pitSelfTest = await runPython({ labRoot: workspace, args: [PIT_RISK_GATE_SCRIPT, '--self-test'], env: childEnv });
     const diagnosticJson = join(workspace, 'docs', 'us-microcap-intraday-ladder-v1.json');
     const diagnosticMd = join(workspace, 'docs', 'us-microcap-intraday-ladder-v1.md');
+    const pitJson = join(workspace, 'docs', 'us-microcap-pit-risk-gate-v1.json');
+    const pitMd = join(workspace, 'docs', 'us-microcap-pit-risk-gate-v1.md');
     const ladder = await runPython({
       labRoot: workspace,
       args: [
-        'scripts/run-us-microcap-intraday-ladder-v1.py',
+        INTRADAY_LADDER_SCRIPT,
         '--output-json', diagnosticJson,
         '--output-md', diagnosticMd,
       ],
       env: childEnv,
     });
+    const pitRun = await runPython({
+      labRoot: workspace,
+      args: [
+        PIT_RISK_GATE_SCRIPT,
+        '--ladder-json', diagnosticJson,
+        '--output-json', pitJson,
+        '--output-md', pitMd,
+      ],
+      env: childEnv,
+    });
     const diagnostic = JSON.parse(await readFile(diagnosticJson, 'utf8'));
+    const pitRiskGate = JSON.parse(await readFile(pitJson, 'utf8'));
     const assessment = assessMicrocapDiagnostic(diagnostic);
+    const pitAssessment = assessMicrocapPitRiskGate(pitRiskGate);
+    const dataBlocked = [...new Set([
+      ...assessment.dataBlocked,
+      ...(pitAssessment.dataBlocked ? ['POINT_IN_TIME_RISK_GATE_BLOCKED'] : []),
+    ])];
     const sourceWindow = Object.fromEntries(Object.entries(diagnostic.diagnostics ?? {}).map(([symbol, row]) => [symbol, {
       firstBar: row?.firstBar ?? null,
       lastBar: row?.lastBar ?? null,
@@ -203,30 +266,44 @@ export async function runMicrocapResearchTask({ repoRoot, stateRoot, researchSha
       entryModel: diagnostic.entryModel,
       bestRecentBy1PctCost: diagnostic.bestRecentBy1PctCost,
       summaries: diagnostic.summaries,
+      pitRiskGate: {
+        status: pitAssessment.status,
+        blocked: pitAssessment.blocked,
+        rejected: pitAssessment.rejected,
+        eligible: pitAssessment.eligible,
+      },
     });
     let prior = null;
     try { prior = JSON.parse(await readFile(join(resolve(stateRoot), 'latest', 'microcap.json'), 'utf8')); } catch (error) { if (error?.code !== 'ENOENT') throw error; }
     const duplicateObservation = prior?.observationFingerprint === observationFingerprint;
     const summary = {
-      schemaVersion: 'research-production-microcap-cycle-v1',
+      schemaVersion: 'research-production-microcap-cycle-v2',
       cycleId,
       researchSha: sha,
       generatedAt: Date.now(),
-      status: duplicateObservation ? 'DUPLICATE_OBSERVATION' : assessment.status,
+      status: duplicateObservation ? 'DUPLICATE_OBSERVATION' : (dataBlocked.length ? 'DATA_BLOCKED' : assessment.status),
       observationFingerprint,
       duplicateObservation,
       canonicalSampleDelta: 0,
       promotionEvidenceEligible: false,
       canonicalEvidenceEligible: false,
-      dataBlocked: assessment.dataBlocked,
+      dataBlocked,
+      pointInTimeRiskGate: {
+        status: pitAssessment.status,
+        blocked: pitAssessment.blocked,
+        rejected: pitAssessment.rejected,
+        eligible: pitAssessment.eligible,
+      },
       source: diagnostic.source,
       sourceWindow,
       entryCount: Array.isArray(diagnostic.entries) ? diagnostic.entries.length : 0,
       bestRecentBy1PctCost: diagnostic.bestRecentBy1PctCost ?? null,
       summaries: diagnostic.summaries ?? {},
       child: {
-        secSelfTest: { status: secSelfTest.stdout.includes('PASS') ? 'success' : 'unknown', stderr: secSelfTest.stderr },
+        secSelfTest: { status: secSelfTest.stdout.includes('PASS') || secSelfTest.stdout.includes('OK') ? 'success' : 'unknown', stderr: secSelfTest.stderr },
+        pitRiskGateSelfTest: { status: pitSelfTest.stdout.includes('PIT_RISK_GATE_SELF_TEST_OK') ? 'success' : 'unknown', stderr: pitSelfTest.stderr },
         ladder: { status: 'success', stderr: ladder.stderr },
+        pitRiskGate: { status: 'success', stderr: pitRun.stderr },
       },
       safety: preflight.safety,
       liveTrading: false,
