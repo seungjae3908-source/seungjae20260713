@@ -607,3 +607,36 @@ test('canonical Paper admission bundle rejects private or contradictory executio
   assert.ok(result.blockers.includes('EXECUTION_SAFETY_VIOLATION'));
   assert.ok(result.blockers.includes('EXECUTION_TICK_SIZE_MISMATCH'));
 });
+
+test('canonical Paper admission bundle rejects an expired scanner candidate even when downstream evidence is fresh', () => {
+  const candidate = admissionCandidate();
+  const expiredCandidate = {
+    ...candidate,
+    signal: {
+      ...candidate.signal,
+      ttlMs: ADMISSION_NOW - candidate.signal.timestampMs,
+      expiresAtMs: ADMISSION_NOW,
+    },
+  } as typeof candidate;
+  const result = buildAdmission({ paperCandidate: expiredCandidate });
+  assert.equal(result.status, 'BLOCKED');
+  assert.ok(result.blockers.includes('PAPER_CANDIDATE_EXPIRED'));
+  assert.equal(result.bundle, null);
+});
+
+test('canonical Paper admission bundle rejects a scanner candidate timestamped in the future', () => {
+  const candidate = admissionCandidate();
+  const timestampMs = ADMISSION_NOW + 1_000;
+  const futureCandidate = {
+    ...candidate,
+    signal: {
+      ...candidate.signal,
+      timestampMs,
+      expiresAtMs: timestampMs + candidate.signal.ttlMs,
+    },
+  } as typeof candidate;
+  const result = buildAdmission({ paperCandidate: futureCandidate });
+  assert.equal(result.status, 'BLOCKED');
+  assert.ok(result.blockers.includes('PAPER_CANDIDATE_FROM_FUTURE'));
+  assert.equal(result.bundle, null);
+});

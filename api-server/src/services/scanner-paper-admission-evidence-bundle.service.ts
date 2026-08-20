@@ -251,7 +251,17 @@ function normalizeExecutionEvidence(
   blockers: string[],
 ): Readonly<Record<string, unknown>> | null {
   if (!isRecord(raw)) { add(blockers, 'EXECUTION_DATA_EVIDENCE_REQUIRED'); return null; }
-  const market = candidate.signal.market;
+  const signal = candidate.signal;
+  const lifetimeValid = positive(signal.timestampMs)
+    && positive(signal.ttlMs)
+    && positive(signal.expiresAtMs)
+    && signal.expiresAtMs === signal.timestampMs + signal.ttlMs;
+  if (!lifetimeValid) add(blockers, 'PAPER_CANDIDATE_LIFETIME_INVALID');
+  else {
+    if (signal.timestampMs > nowMs) add(blockers, 'PAPER_CANDIDATE_FROM_FUTURE');
+    if (nowMs >= signal.expiresAtMs) add(blockers, 'PAPER_CANDIDATE_EXPIRED');
+  }
+  const market = signal.market;
   const expectedProvider = MARKET_PROVIDER[market];
   if (raw.provider !== expectedProvider || paper.provider !== expectedProvider) add(blockers, 'EXECUTION_PROVIDER_MISMATCH');
   if (raw.publicOnly !== true || raw.dataQuality !== 'READY') add(blockers, 'EXECUTION_PUBLIC_READY_EVIDENCE_REQUIRED');
