@@ -1,6 +1,8 @@
 import { evaluateProfitGate } from "./meaningful-search-profit-gate-v1.js";
 import { meaningfulSearchPaperCandidates } from "./meaningful-search-paper-bridge-v1.js";
 import { runCanonicalMeaningfulSearchMarket } from "./canonical-scanner-meaningful-search-runtime-v1.js";
+import { resolveCanonicalPaperAdmissionBridgeCandidate } from "./canonical-paper-admission-bridge-v1.js";
+import { resolveCanonicalPaperSimulationAuthority } from "./canonical-paper-simulation-authority-v1.js";
 import {
   deriveExecutionDecision,
   normalizeSignalDirection,
@@ -65,51 +67,82 @@ function admissionBundleForCard(card) {
   return null;
 }
 
-export function projectCanonicalPaperAdmissionBundle(bundle) {
-  if (!bundle || bundle.schemaVersion !== PAPER_ADMISSION_BUNDLE_SCHEMA) return null;
-  const paperCandidate = bundle.paperCandidate;
-  if (!paperCandidate || typeof paperCandidate !== "object" || !paperCandidate.signal || typeof paperCandidate.signal !== "object") {
-    return null;
-  }
-  const executionEvidence = bundle.executionEvidence && typeof bundle.executionEvidence === "object"
-    ? bundle.executionEvidence
-    : {};
-  const inheritedExecution = paperCandidate.execution && typeof paperCandidate.execution === "object"
-    ? paperCandidate.execution
-    : {};
-  return freeze({
-    ...paperCandidate,
-    signal: freeze({
-      ...paperCandidate.signal,
-      learningSnapshot: bundle.learningSnapshot,
-    }),
-    riskEvidence: bundle.riskEvidence,
-    execution: freeze({
-      ...inheritedExecution,
-      dataEvidence: executionEvidence.dataEvidence,
-      costPolicy: executionEvidence.costPolicy,
-      costProvenance: executionEvidence.costProvenance,
-    }),
-    admissionEvidence: freeze({
-      schemaVersion: bundle.schemaVersion,
-      evidenceDigest: bundle.evidenceDigest ?? null,
-    }),
-    executionAuthority: bundle.executionAuthority,
-    simulatedOnly: bundle.simulatedOnly,
-    liveOrderAllowed: bundle.liveOrderAllowed,
-    privateTradingApiAllowed: bundle.privateTradingApiAllowed,
-    orderSubmitted: bundle.orderSubmitted,
-    exchangeRequestSent: bundle.exchangeRequestSent,
-  });
+function fallbackCandidateForCard(card) {
+  return card?.paperCandidate && typeof card.paperCandidate === "object" ? card.paperCandidate : card;
 }
 
-function candidateForPaper(card) {
+function preparedCandidateForCard(card, nowMs) {
+  const fallback = fallbackCandidateForCard(card);
   const bundle = admissionBundleForCard(card);
-  if (bundle) {
-    const projected = projectCanonicalPaperAdmissionBundle(bundle);
-    if (projected) return projected;
+  if (!bundle) {
+    return freeze({
+      candidate: fallback,
+      admissionStatus: "NOT_REQUESTED",
+      admissionBlockers: freeze([]),
+      simulationStatus: "NOT_REQUESTED",
+      simulationBlockers: freeze([]),
+    });
   }
-  return card?.paperCandidate && typeof card.paperCandidate === "object" ? card.paperCandidate : card;
+
+  const admission = resolveCanonicalPaperAdmissionBridgeCandidate({ bundle, nowMs });
+  if (admission.status !== "BRIDGE_READY" || !admission.candidate) {
+    return freeze({
+      candidate: fallback,
+      admissionStatus: admission.status ?? "BLOCKED",
+      admissionBlockers: freeze([...(admission.blockers ?? [])]),
+      simulationStatus: "NOT_REQUESTED",
+      simulationBlockers: freeze([]),
+    });
+  }
+
+  const simulation = resolveCanonicalPaperSimulationAuthority({
+    candidate: admission.candidate,
+    nowMs,
+  });
+  if (simulation.status !== "READY" || !simulation.execution || !simulation.order || !simulation.quote) {
+    return freeze({
+      candidate: admission.candidate,
+      admissionStatus: "BRIDGE_READY",
+      admissionBlockers: freeze([]),
+      simulationStatus: simulation.status ?? "BLOCKED",
+      simulationBlockers: freeze([...(simulation.blockers ?? [])]),
+    });
+  }
+
+  return freeze({
+    candidate: freeze({
+      ...admission.candidate,
+      execution: simulation.execution,
+      order: simulation.order,
+      quote: simulation.quote,
+      sampleExecutionReady: true,
+      sampleExecutionBlockers: freeze([]),
+      simulationAuthority: freeze({
+        schemaVersion: simulation.schemaVersion,
+        marketAdapterIdentity: simulation.marketAdapterIdentity,
+        executionPolicyVersion: simulation.executionPolicy?.version ?? null,
+        orderPolicyVersion: simulation.orderPolicy?.version ?? null,
+        sampleExecutionReady: true,
+        executionAuthority: "NONE",
+        simulatedOnly: true,
+        liveOrderAllowed: false,
+        privateTradingApiAllowed: false,
+        orderSubmitted: false,
+        exchangeRequestSent: false,
+      }),
+      executionAuthority: "NONE",
+      simulatedOnly: true,
+      liveOrderAllowed: false,
+      privateTradingApiAllowed: false,
+      orderSubmitted: false,
+      exchangeRequestSent: false,
+      productionMutationAllowed: false,
+    }),
+    admissionStatus: "BRIDGE_READY",
+    admissionBlockers: freeze([]),
+    simulationStatus: "READY",
+    simulationBlockers: freeze([]),
+  });
 }
 
 function needsPaperExitEvaluation(candidate) {
@@ -156,28 +189,41 @@ function runtimeStatus(search, evaluatedCount, bridge) {
   return "PAPER_CANDIDATE_CONTRACT_BLOCKED";
 }
 
+function uniqueBlockers(rows, field) {
+  return freeze([...new Set(rows.flatMap((row) => Array.isArray(row?.[field]) ? row[field] : []))]);
+}
+
 export async function runCanonicalMeaningfulSearchPaperMarket({
   market,
   scanBatch,
   profitInputForCard = (_card, selectedMarket) => defaultProfitInput(selectedMarket),
   maximumBatches = 1_000,
   onProgress,
+  now = () => Date.now(),
 } = {}) {
   if (typeof profitInputForCard !== "function") throw new TypeError("profitInputForCard must be a function");
+  if (typeof now !== "function") throw new TypeError("now must be a function");
   const evaluated = [];
   const captured = [];
   const captureProfitInput = async (card, selectedMarket) => {
+    const evaluatedAtMs = now();
+    if (!finite(evaluatedAtMs) || evaluatedAtMs <= 0) throw new TypeError("now must return a positive finite timestamp");
     const rawInput = await profitInputForCard(card, selectedMarket);
     const normalized = { ...defaultProfitInput(selectedMarket), ...rawInput, market: selectedMarket };
     const profitGate = evaluateProfitGate(normalized);
+    const prepared = preparedCandidateForCard(card, evaluatedAtMs);
     const row = freeze({
-      candidate: candidateForPaper(card),
+      candidate: prepared.candidate,
       profitGate,
       profitEvidence: profitEvidenceFromMeaningfulSearchGate({
         market: selectedMarket,
         profitInput: normalized,
         profitGate,
       }),
+      admissionStatus: prepared.admissionStatus,
+      admissionBlockers: prepared.admissionBlockers,
+      simulationStatus: prepared.simulationStatus,
+      simulationBlockers: prepared.simulationBlockers,
     });
     if (profitGate.eligible === true) captured.push(row);
     if (profitGate.eligible === true || needsPaperExitEvaluation(row.candidate)) evaluated.push(row);
@@ -203,6 +249,8 @@ export async function runCanonicalMeaningfulSearchPaperMarket({
     profitGate: row.profitGate,
     profitEvidence: row.profitEvidence,
   })));
+  const admissionBlockers = uniqueBlockers(evaluated, "admissionBlockers");
+  const simulationBlockers = uniqueBlockers(evaluated, "simulationBlockers");
 
   return freeze({
     schemaVersion: "canonical-meaningful-search-paper-runtime-v1",
@@ -211,6 +259,12 @@ export async function runCanonicalMeaningfulSearchPaperMarket({
     search,
     evaluatedPaperCandidates: evaluated.length,
     capturedProfitGateCandidates: captured.length,
+    admissionBridgeReadyCandidates: evaluated.filter((row) => row.admissionStatus === "BRIDGE_READY").length,
+    admissionBlockedCandidates: evaluated.filter((row) => row.admissionStatus === "BLOCKED").length,
+    simulationReadyCandidates: evaluated.filter((row) => row.simulationStatus === "READY").length,
+    simulationBlockedCandidates: evaluated.filter((row) => row.simulationStatus === "BLOCKED").length,
+    admissionBlockers,
+    simulationBlockers,
     bridgeEligibleCandidates: bridge.eligible,
     bridgeExitSignals: bridge.exits,
     bridgeBlockedCandidates: bridge.blocked,
