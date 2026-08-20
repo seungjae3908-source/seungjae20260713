@@ -13,7 +13,23 @@ const identity = Object.freeze({
   parameterHash: "params-v1",
   researchCodeSha: SHA,
   costPolicyVersion: "cost-v1",
-  executionPolicyVersion: "execution-v1",
+  executionPolicyVersion: "public-evidence-simulated-paper-v1",
+});
+
+const adapterByMarket = Object.freeze({
+  KR_STOCK: Object.freeze({ id: "kr-stock-toss-execution", version: "v2" }),
+  US_STOCK: Object.freeze({ id: "us-stock-toss-execution", version: "v2" }),
+  CRYPTO_SPOT: Object.freeze({ id: "crypto-spot-upbit-execution", version: "v2" }),
+  CRYPTO_FUTURES: Object.freeze({ id: "crypto-futures-bitget-execution", version: "v2" }),
+});
+
+const paperExecutionPolicy = Object.freeze({
+  version: "public-evidence-simulated-paper-v1",
+  fillModel: "TOP_OF_BOOK",
+  sameBarPolicy: "STOP_FIRST",
+  allowPartialFill: false,
+  maxParticipationRate: 0.1,
+  nextBarOnly: false,
 });
 
 function candidate(market, direction, { positionSide = "FLAT", lifecycle = "ACTIVE", expiresAtMs, reduceOnly = false } = {}) {
@@ -47,7 +63,11 @@ function candidate(market, direction, { positionSide = "FLAT", lifecycle = "ACTI
     signal,
     positionSide,
     riskEvidence: { status: "APPROVED", evaluatedAtMs: T0, simulatedOnly: true },
-    execution: { dataEvidence: { dataQuality: "READY", asOfMs: T0 - 1 } },
+    execution: {
+      marketAdapterIdentity: adapterByMarket[market],
+      executionPolicy: paperExecutionPolicy,
+      dataEvidence: { dataQuality: "READY", asOfMs: T0 - 1 },
+    },
     order: { type: "MARKET", quantity: 1, direction },
     executionAuthority: "NONE",
     simulatedOnly: true,
@@ -102,13 +122,16 @@ test("cash reduce-only SELL with LONG position remains REDUCE and never opens sh
   assert.equal(row.submitToPaper, false);
 });
 
-test("futures SHORT from FLAT remains a profit-gated Paper entry", () => {
+test("futures SHORT from FLAT remains a profit-gated Paper entry under preregistered simulation authority", () => {
   const row = prepareMeaningfulSearchPaperCandidate(eligible("CRYPTO_FUTURES", "SHORT", { positionSide: "FLAT" }));
   assert.equal(row.status, "PAPER_ELIGIBLE");
   assert.equal(row.submitToPaper, true);
   assert.equal(row.candidate.signalDirection, "SHORT");
   assert.equal(row.candidate.executionIntent, "ENTER");
   assert.equal(row.candidate.nextPositionSide, "SHORT");
+  assert.equal(row.candidate.execution.executionPolicy.version, "public-evidence-simulated-paper-v1");
+  assert.equal(row.candidate.execution.marketAdapterIdentity.id, "crypto-futures-bitget-execution");
+  assert.equal(row.candidate.order.type, "MARKET");
 });
 
 test("NO_TRADE bypasses entry even if an upstream gate incorrectly says ELIGIBLE", () => {
