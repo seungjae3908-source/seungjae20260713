@@ -255,15 +255,7 @@ function createLinkedSignal(external: AbortSignal | undefined, timeoutMs: number
 }
 
 function canTryAlternateEndpoint(error: UnifiedChartDataError): boolean {
-  return (
-    error.kind === 'timeout' ||
-    error.kind === 'rate-limited' ||
-    error.kind === 'not-found' ||
-    error.kind === 'server' ||
-    error.kind === 'network' ||
-    error.kind === 'malformed-response' ||
-    error.status === 405
-  );
+  return error.kind === 'timeout' || error.status === 404 || error.status === 405;
 }
 
 export async function fetchUnifiedChartData(input: {
@@ -377,7 +369,7 @@ export async function fetchUnifiedChartData(input: {
           true,
         );
         lastError = networkError;
-        if (alternateAvailable) continue;
+        if (alternateAvailable && canTryAlternateEndpoint(networkError)) continue;
         throw networkError;
       } finally {
         attempt?.cleanup();
