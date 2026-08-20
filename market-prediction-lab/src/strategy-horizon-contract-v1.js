@@ -21,12 +21,22 @@ const HORIZONS = Object.freeze({
   ]),
 });
 
+const LEARNING_HORIZONS = Object.freeze({
+  SCALPING: "SCALP",
+  SWING: "SWING",
+  MID_LONG: "POSITION",
+});
+
 function normalizeMode(value) {
   const mode = String(value ?? "").trim().toUpperCase().replaceAll("-", "_");
   if (mode === "POSITION" || mode === "MIDLONG") return "MID_LONG";
   if (mode === "SHORT_TERM" || mode === "DAY" || mode === "INTRADAY") return "SCALPING";
   if (mode === "SCALPING" || mode === "SWING" || mode === "MID_LONG") return mode;
   throw new TypeError("strategy mode must be SCALPING, SWING or MID_LONG/POSITION");
+}
+
+export function resolveLearningStrategyHorizon(mode) {
+  return LEARNING_HORIZONS[normalizeMode(mode)];
 }
 
 export function resolveStrategyHorizon(mode) {
