@@ -1,9 +1,10 @@
-import { createHash } from 'node:crypto';
 import {
   FORWARD_OBSERVATION_SOURCE,
   advanceForwardRecommendationObservation,
   buildForwardObservationProfitCalibration,
+  forwardObservationIdentityKey,
   prepareForwardRecommendationObservation,
+  type ForwardObservationIdentity,
   type ForwardObservationProfitCalibration,
   type ForwardRecommendationObservation,
 } from './forward-recommendation-observer.service';
@@ -11,7 +12,6 @@ import type { ScannerResponse, ScannerSignalCard } from './scanner-signal.types'
 import type { SignalOutcomeBar } from './signal-performance-learning.service';
 
 export const FORWARD_OBSERVER_RUNTIME_SCHEMA_VERSION = 1 as const;
-export const FORWARD_OBSERVER_PROFILE_VERSION = 'forward-observer-swing-60m-v1' as const;
 export const FORWARD_OBSERVER_TIMEFRAME = '60m' as const;
 export const FORWARD_OBSERVER_DATA_MAX_AGE_MS = 90 * 60 * 1000;
 
@@ -93,6 +93,52 @@ export type ForwardObserverRuntimeDependencies = {
   now(): Date;
 };
 
+type CanonicalPaperCandidate = Readonly<{
+  signal?: Readonly<{
+    signalId?: unknown;
+    market?: unknown;
+    symbol?: unknown;
+    timeframe?: unknown;
+    horizon?: unknown;
+    direction?: unknown;
+    signalDirection?: unknown;
+    style?: unknown;
+    strategyIdentity?: Readonly<{
+      strategyId?: unknown;
+      strategyVersion?: unknown;
+      parameterHash?: unknown;
+      researchCodeSha?: unknown;
+    }>;
+  }>;
+  paperIdentity?: Readonly<{
+    signalId?: unknown;
+    strategyId?: unknown;
+    strategyVersion?: unknown;
+    parameterHash?: unknown;
+    researchCodeSha?: unknown;
+    market?: unknown;
+    symbol?: unknown;
+    timeframe?: unknown;
+    horizon?: unknown;
+    direction?: unknown;
+    executionAuthority?: unknown;
+  }>;
+  executionAuthority?: unknown;
+  liveOrderAllowed?: unknown;
+  privateTradingApiAllowed?: unknown;
+  orderSubmitted?: unknown;
+  exchangeRequestSent?: unknown;
+}>;
+
+type ForwardObservableScannerCard = ScannerSignalCard & Readonly<{
+  paperCandidate?: CanonicalPaperCandidate;
+}>;
+
+export type ForwardCanonicalIdentityResolution = Readonly<{
+  identity: ForwardObservationIdentity | null;
+  blockers: readonly string[];
+}>;
+
 const SAFETY = Object.freeze({
   publicDataOnly: true as const,
   artifactOnly: true as const,
@@ -107,14 +153,123 @@ function exactSha(value: string): boolean {
   return /^[0-9a-f]{40}$/u.test(value);
 }
 
+function nonEmpty(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function positiveInteger(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) > 0;
+}
+
 function iso(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const at = Date.parse(value);
   return Number.isFinite(at) ? new Date(at).toISOString() : null;
 }
 
+function paperIdentityMismatch(blockers: string[], field: string, actual: unknown, expected: unknown): void {
+  if (actual !== expected) blockers.push(`PAPER_IDENTITY_${field}_MISMATCH`);
+}
+
+export function canonicalForwardStrategyIdentityFromCard(
+  card: ScannerSignalCard,
+  lane: ForwardObserverLane,
+  researchCodeSha: string,
+): ForwardCanonicalIdentityResolution {
+  const blockers: string[] = [];
+  const candidate = (card as ForwardObservableScannerCard).paperCandidate;
+  if (!candidate || typeof candidate !== 'object') {
+    return Object.freeze({ identity: null, blockers: Object.freeze(['CANONICAL_PAPER_CANDIDATE_REQUIRED']) });
+  }
+
+  if (candidate.executionAuthority != null && candidate.executionAuthority !== 'NONE') blockers.push('PAPER_CANDIDATE_EXECUTION_AUTHORITY_FORBIDDEN');
+  if (candidate.liveOrderAllowed === true) blockers.push('PAPER_CANDIDATE_LIVE_ORDER_FORBIDDEN');
+  if (candidate.privateTradingApiAllowed === true) blockers.push('PAPER_CANDIDATE_PRIVATE_API_FORBIDDEN');
+  if (candidate.orderSubmitted === true) blockers.push('PAPER_CANDIDATE_REAL_ORDER_FORBIDDEN');
+  if (candidate.exchangeRequestSent === true) blockers.push('PAPER_CANDIDATE_EXCHANGE_REQUEST_FORBIDDEN');
+
+  const signal = candidate.signal;
+  const strategy = signal?.strategyIdentity;
+  if (!signal || typeof signal !== 'object') blockers.push('CANONICAL_PAPER_SIGNAL_REQUIRED');
+  if (!strategy || typeof strategy !== 'object') blockers.push('CANONICAL_STRATEGY_IDENTITY_REQUIRED');
+
+  const signalId = signal?.signalId;
+  const market = signal?.market;
+  const symbol = signal?.symbol;
+  const timeframe = signal?.timeframe;
+  const horizon = signal?.horizon;
+  const direction = signal?.signalDirection ?? signal?.direction;
+  const style = signal?.style;
+  const strategyId = strategy?.strategyId;
+  const strategyVersion = strategy?.strategyVersion;
+  const parameterHash = strategy?.parameterHash;
+  const strategyResearchSha = strategy?.researchCodeSha;
+
+  if (!nonEmpty(signalId)) blockers.push('PAPER_SIGNAL_ID_REQUIRED');
+  else if (signalId !== card.signalId) blockers.push('PAPER_SIGNAL_ID_MISMATCH');
+  if (market !== lane.market) blockers.push('PAPER_MARKET_MISMATCH');
+  if (!nonEmpty(symbol)) blockers.push('PAPER_SYMBOL_REQUIRED');
+  else if (symbol !== card.symbol) blockers.push('PAPER_SYMBOL_MISMATCH');
+  if (!nonEmpty(timeframe)) blockers.push('PAPER_TIMEFRAME_REQUIRED');
+  else if (timeframe !== lane.timeframe) blockers.push('PAPER_TIMEFRAME_MISMATCH');
+  if (!positiveInteger(horizon)) blockers.push('PAPER_HORIZON_REQUIRED');
+  if (style != null && String(style).toUpperCase() !== 'SWING') blockers.push('PAPER_STRATEGY_STYLE_MISMATCH');
+  if (!['BUY', 'SELL', 'LONG', 'SHORT'].includes(String(direction ?? ''))) blockers.push('PAPER_DIRECTION_REQUIRED');
+  if (!nonEmpty(strategyId)) blockers.push('STRATEGY_ID_REQUIRED');
+  if (!nonEmpty(strategyVersion)) blockers.push('STRATEGY_VERSION_REQUIRED');
+  if (!nonEmpty(parameterHash)) blockers.push('PARAMETER_HASH_REQUIRED');
+  if (!nonEmpty(strategyResearchSha) || !/^[0-9a-f]{40}$/iu.test(strategyResearchSha)) blockers.push('RESEARCH_CODE_SHA_REQUIRED');
+  else if (strategyResearchSha.toLowerCase() !== researchCodeSha.toLowerCase()) blockers.push('RESEARCH_CODE_SHA_MISMATCH');
+
+  if (blockers.length > 0
+    || !nonEmpty(strategyId)
+    || !nonEmpty(strategyVersion)
+    || !nonEmpty(parameterHash)
+    || !nonEmpty(strategyResearchSha)
+    || !nonEmpty(symbol)
+    || !nonEmpty(timeframe)
+    || !positiveInteger(horizon)
+    || !['BUY', 'SELL', 'LONG', 'SHORT'].includes(String(direction ?? ''))
+    || market !== lane.market) {
+    return Object.freeze({ identity: null, blockers: Object.freeze([...new Set(blockers)]) });
+  }
+
+  const identity: ForwardObservationIdentity = Object.freeze({
+    strategyId,
+    strategyVersion,
+    parameterHash,
+    researchCodeSha: strategyResearchSha.toLowerCase(),
+    market: lane.market,
+    symbol,
+    timeframe,
+    horizon,
+    direction: direction as ForwardObservationIdentity['direction'],
+  });
+
+  const paper = candidate.paperIdentity;
+  if (paper && typeof paper === 'object') {
+    paperIdentityMismatch(blockers, 'SIGNAL_ID', paper.signalId, card.signalId);
+    paperIdentityMismatch(blockers, 'STRATEGY_ID', paper.strategyId, identity.strategyId);
+    paperIdentityMismatch(blockers, 'STRATEGY_VERSION', paper.strategyVersion, identity.strategyVersion);
+    paperIdentityMismatch(blockers, 'PARAMETER_HASH', paper.parameterHash, identity.parameterHash);
+    paperIdentityMismatch(blockers, 'MARKET', paper.market, identity.market);
+    paperIdentityMismatch(blockers, 'SYMBOL', paper.symbol, identity.symbol);
+    paperIdentityMismatch(blockers, 'TIMEFRAME', paper.timeframe, identity.timeframe);
+    paperIdentityMismatch(blockers, 'HORIZON', paper.horizon, identity.horizon);
+    paperIdentityMismatch(blockers, 'DIRECTION', paper.direction, identity.direction);
+    const paperResearchSha = nonEmpty(paper.researchCodeSha) ? paper.researchCodeSha.toLowerCase() : paper.researchCodeSha;
+    paperIdentityMismatch(blockers, 'RESEARCH_CODE_SHA', paperResearchSha, identity.researchCodeSha);
+    if (paper.executionAuthority != null && paper.executionAuthority !== 'NONE') blockers.push('PAPER_IDENTITY_EXECUTION_AUTHORITY_FORBIDDEN');
+  }
+
+  return Object.freeze({
+    identity: blockers.length === 0 ? identity : null,
+    blockers: Object.freeze([...new Set(blockers)]),
+  });
+}
+
 function assertObservationStateEnvelope(observation: ForwardRecommendationObservation, researchCodeSha: string): void {
-  if (observation.schemaVersion !== 'forward-recommendation-observation-v1'
+  if (observation.schemaVersion !== 'forward-recommendation-observation-v2'
     || observation.source !== FORWARD_OBSERVATION_SOURCE
     || observation.identity.researchCodeSha !== researchCodeSha
     || observation.publicDataOnly !== true
@@ -130,9 +285,9 @@ function assertObservationStateEnvelope(observation: ForwardRecommendationObserv
     throw new Error('FORWARD_OBSERVER_OBSERVATION_SAFETY_ENVELOPE_INVALID');
   }
   if (observation.snapshot.market !== observation.identity.market
-    || observation.snapshot.strategyHorizon !== observation.identity.horizon
+    || observation.snapshot.symbol !== observation.identity.symbol
     || observation.snapshot.direction !== observation.identity.direction
-    || observation.snapshot.strategyProfileVersion !== observation.identity.strategyProfileVersion
+    || observation.snapshot.strategyProfileVersion !== observation.identity.strategyVersion
     || observation.snapshot.timeframes[0] !== observation.identity.timeframe) {
     throw new Error('FORWARD_OBSERVER_OBSERVATION_IDENTITY_MISMATCH');
   }
@@ -195,18 +350,6 @@ export function latestCardEvidenceTimestamp(card: ScannerSignalCard): string | n
   return timestamps[0] ?? null;
 }
 
-export function laneParameterHash(lane: ForwardObserverLane): string {
-  return createHash('sha256').update(JSON.stringify({
-    schemaVersion: FORWARD_OBSERVER_RUNTIME_SCHEMA_VERSION,
-    laneId: lane.id,
-    market: lane.market,
-    timeframe: lane.timeframe,
-    strategy: 'SWING',
-    batchSize: lane.batchSize,
-    profile: FORWARD_OBSERVER_PROFILE_VERSION,
-  })).digest('hex');
-}
-
 function countBlocker(target: Record<string, number>, blocker: string): void {
   target[blocker] = (target[blocker] ?? 0) + 1;
 }
@@ -241,7 +384,7 @@ function calibrationGroups(observations: ForwardRecommendationObservation[]): Fo
   const groups = new Map<string, ForwardRecommendationObservation[]>();
   for (const observation of observations) {
     if (observation.status !== 'SETTLED') continue;
-    const key = JSON.stringify(observation.identity);
+    const key = forwardObservationIdentityKey(observation.identity);
     const rows = groups.get(key) ?? [];
     rows.push(observation);
     groups.set(key, rows);
@@ -339,12 +482,21 @@ export async function runForwardRecommendationObserverCycle(input: {
       continue;
     }
 
-    cursors[lane.id] = nextCursor(response);
+    const candidateCursor = nextCursor(response);
+    let holdCursorForIdentity = false;
     let readyObservations = 0;
     let noTrade = 0;
     let blocked = 0;
     const blockers: Record<string, number> = {};
     for (const card of response.cards) {
+      const identityResolution = canonicalForwardStrategyIdentityFromCard(card, lane, researchCodeSha);
+      if (!identityResolution.identity) {
+        blocked += 1;
+        holdCursorForIdentity = true;
+        for (const blocker of identityResolution.blockers) countBlocker(blockers, blocker);
+        continue;
+      }
+
       const dataTimestamp = latestCardEvidenceTimestamp(card);
       if (!dataTimestamp) {
         blocked += 1;
@@ -353,10 +505,7 @@ export async function runForwardRecommendationObserverCycle(input: {
       }
       const decision = prepareForwardRecommendationObservation({
         card,
-        timeframe: lane.timeframe,
-        strategyProfileVersion: FORWARD_OBSERVER_PROFILE_VERSION,
-        parameterHash: laneParameterHash(lane),
-        researchCodeSha,
+        strategyIdentity: identityResolution.identity,
         dataTimestamp,
         dataMaxAgeMs: FORWARD_OBSERVER_DATA_MAX_AGE_MS,
         publicDataOnly: true,
@@ -380,6 +529,7 @@ export async function runForwardRecommendationObserverCycle(input: {
         replayedThisCycle += 1;
       }
     }
+    cursors[lane.id] = holdCursorForIdentity ? cursorBefore : candidateCursor;
     lanes.push({
       laneId: lane.id,
       cursorBefore,
