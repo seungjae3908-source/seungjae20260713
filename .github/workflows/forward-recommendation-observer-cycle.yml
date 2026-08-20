@@ -13,6 +13,8 @@ on:
       - api-server/src/services/forward-recommendation-observer.service.ts
       - api-server/src/services/forward-recommendation-observer-runtime.service.ts
       - api-server/src/services/forward-recommendation-observer-runtime.service.test.ts
+      - api-server/src/services/forward-observer-canonical-metadata.service.ts
+      - api-server/src/services/forward-observer-canonical-metadata.service.test.ts
       - api-server/src/scripts/run-forward-recommendation-observer-cycle.ts
       - api-server/scripts/verify-forward-recommendation-observer-runtime-contract.mjs
 
@@ -65,6 +67,23 @@ jobs:
           });
           NODE
           node --test /tmp/forward-observer-runtime.test.cjs
+      - name: Run canonical metadata wiring unit tests
+        working-directory: api-server
+        run: |
+          set -Eeuo pipefail
+          node --input-type=module <<'NODE'
+          import { build } from 'esbuild';
+          await build({
+            entryPoints: ['src/services/forward-observer-canonical-metadata.service.test.ts'],
+            outfile: '/tmp/forward-observer-canonical-metadata.test.cjs',
+            bundle: true,
+            platform: 'node',
+            format: 'cjs',
+            target: 'node20',
+            logLevel: 'warning',
+          });
+          NODE
+          node --test /tmp/forward-observer-canonical-metadata.test.cjs
 
   observer-cycle:
     name: Public-data forward recommendation observation
