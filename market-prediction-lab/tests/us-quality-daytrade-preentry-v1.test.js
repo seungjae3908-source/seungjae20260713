@@ -75,14 +75,33 @@ test("source-backed complete no-event evidence preserves candidate status", () =
 
 test("verified near earnings event inside complete calendar coverage blocks the otherwise-valid setup", () => {
   const input = baseInput();
+  const releaseTimestampMs = 8_500 + 60 * 60_000;
   input.binaryEventEvidence = {
     ...noEventEvidence(),
     scheduled: true,
     verified: true,
     eventType: "EARNINGS",
-    eventTimestampMs: 8_500 + 60 * 60_000,
+    eventTimestampMs: releaseTimestampMs,
+    marketMovingTimestampMs: releaseTimestampMs,
   };
   const result = evaluateUsQualityDaytradePreEntry(input);
   assert.equal(result.status, "ABSTAIN");
   assert.equal(result.reason, "BINARY_EVENT_BLACKOUT");
+});
+
+test("later earnings call cannot hide an earlier market-moving release", () => {
+  const input = baseInput();
+  input.binaryEventPolicy = { preEventBlackoutMinutes: 30, postEventCooldownMinutes: 60 };
+  input.binaryEventEvidence = {
+    ...noEventEvidence(),
+    scheduled: true,
+    verified: true,
+    eventType: "EARNINGS",
+    eventTimestampMs: 8_500 + 120 * 60_000,
+    marketMovingTimestampMs: 8_500 + 20 * 60_000,
+  };
+  const result = evaluateUsQualityDaytradePreEntry(input);
+  assert.equal(result.status, "ABSTAIN");
+  assert.equal(result.reason, "BINARY_EVENT_BLACKOUT");
+  assert.equal(result.binaryEventRisk.minutesUntilEvent, 20);
 });
