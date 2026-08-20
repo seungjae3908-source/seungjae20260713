@@ -1,9 +1,16 @@
 import { PredictionInputError } from "./contracts.js";
+import { researchDigest } from "./research-trial-registry.js";
 
 export const QUALITY_DAYTRADE_LIVE_EVIDENCE_VERSION = "us-quality-daytrade-live-evidence-v1";
+export const QUALITY_DAYTRADE_OBSERVATION_IDENTITY_VERSION = "us-quality-daytrade-observation-identity-v1";
 
 const VALID_SESSIONS = new Set(["PREMARKET", "REGULAR", "AFTER_HOURS"]);
 const EXECUTABLE_QUOTE_KIND = "EXECUTABLE_BID_ASK";
+const DEFAULT_LIVE_DATA_POLICY = Object.freeze({
+  maxQuoteAgeMs: 15_000,
+  maxCandleLagIntervals: 1.5,
+  maxCrossSourceSkewMs: 15_000,
+});
 
 function freeze(value) {
   return Object.freeze(value);
@@ -48,6 +55,16 @@ function sourceSafetyBlock(raw, prefix) {
 function normalizeSession(value) {
   const session = String(value ?? "").toUpperCase();
   return VALID_SESSIONS.has(session) ? session : null;
+}
+
+function normalizeDataPolicy(raw = {}) {
+  const maxQuoteAgeMs = positiveNumber(raw.maxQuoteAgeMs ?? DEFAULT_LIVE_DATA_POLICY.maxQuoteAgeMs);
+  const maxCandleLagIntervals = positiveNumber(raw.maxCandleLagIntervals ?? DEFAULT_LIVE_DATA_POLICY.maxCandleLagIntervals);
+  const maxCrossSourceSkewMs = positiveNumber(raw.maxCrossSourceSkewMs ?? DEFAULT_LIVE_DATA_POLICY.maxCrossSourceSkewMs);
+  if (maxQuoteAgeMs == null || maxQuoteAgeMs > 300_000) throw new PredictionInputError("invalid live dataPolicy.maxQuoteAgeMs");
+  if (maxCandleLagIntervals == null || maxCandleLagIntervals > 5) throw new PredictionInputError("invalid live dataPolicy.maxCandleLagIntervals");
+  if (maxCrossSourceSkewMs == null || maxCrossSourceSkewMs > 300_000) throw new PredictionInputError("invalid live dataPolicy.maxCrossSourceSkewMs");
+  return freeze({ maxQuoteAgeMs, maxCandleLagIntervals, maxCrossSourceSkewMs });
 }
 
 function validateQuote(raw, asOfMs) {
@@ -174,12 +191,46 @@ function validateRelativeVolume(raw, asOfMs, session, lastCompleteCandleTimestam
   };
 }
 
+function validateEvidenceClock({ asOfMs, quote, candles, rvol, dataPolicy }) {
+  const quoteAgeMs = asOfMs - quote.timestampMs;
+  if (quoteAgeMs > dataPolicy.maxQuoteAgeMs) {
+    return { blocker: "LIVE_QUOTE_STALE", quoteAgeMs };
+  }
+  const rvolAgeMs = asOfMs - rvol.observedAtMs;
+  if (rvolAgeMs > dataPolicy.maxQuoteAgeMs) {
+    return { blocker: "LIVE_RVOL_STALE", rvolAgeMs };
+  }
+  const maxCandleAgeMs = candles.candleEvidence.timeframeMs * dataPolicy.maxCandleLagIntervals;
+  const candleAgeMs = asOfMs - candles.candleEvidence.lastCompleteCandleTimestampMs;
+  if (candleAgeMs > maxCandleAgeMs) {
+    return { blocker: "LIVE_CANDLES_STALE", candleAgeMs, maxCandleAgeMs };
+  }
+  const quoteRvolSkewMs = Math.abs(quote.timestampMs - rvol.observedAtMs);
+  if (quoteRvolSkewMs > dataPolicy.maxCrossSourceSkewMs) {
+    return { blocker: "LIVE_EVIDENCE_CLOCK_SKEW_TOO_WIDE", quoteRvolSkewMs };
+  }
+  return { quoteAgeMs, rvolAgeMs, candleAgeMs, maxCandleAgeMs, quoteRvolSkewMs };
+}
+
+function immutableSha(value, name) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!/^[0-9a-f]{40}$/u.test(normalized)) throw new PredictionInputError(`${name} must be an immutable 40-char SHA`);
+  return normalized;
+}
+
+function requiredIdentityString(value, name) {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) throw new PredictionInputError(`${name} is required`);
+  return normalized;
+}
+
 export function buildUsQualityDaytradeLiveEvidenceBundle(raw) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new PredictionInputError("quality day-trade live evidence input must be an object");
   }
   const asOfMs = positiveNumber(raw.asOfMs);
   if (asOfMs == null) return safeResult({ status: "BLOCKED_DATA", reason: "LIVE_EVIDENCE_ASOF_REQUIRED" });
+  const dataPolicy = normalizeDataPolicy(raw.dataPolicy);
 
   const quote = validateQuote(raw.quoteEvidence, asOfMs);
   if (quote.blocker) return safeResult({ status: "BLOCKED_DATA", reason: quote.blocker });
@@ -195,6 +246,40 @@ export function buildUsQualityDaytradeLiveEvidenceBundle(raw) {
   );
   if (rvol.blocker) return safeResult({ status: "BLOCKED_DATA", reason: rvol.blocker });
 
+  const clock = validateEvidenceClock({
+    asOfMs,
+    quote: quote.value,
+    candles: candles.value,
+    rvol: rvol.value,
+    dataPolicy,
+  });
+  if (clock.blocker) return safeResult({ status: "BLOCKED_DATA", reason: clock.blocker, ...clock });
+
+  const candleDigest = researchDigest(candles.value.candles);
+  const observationDigest = researchDigest({
+    market: "US_STOCK",
+    session: candles.value.session,
+    quote: {
+      sourceId: quote.value.sourceId,
+      timestampMs: quote.value.timestampMs,
+      bid: quote.value.bid,
+      ask: quote.value.ask,
+    },
+    candles: {
+      sourceId: candles.value.sourceId,
+      timeframeMs: candles.value.candleEvidence.timeframeMs,
+      lastCompleteCandleTimestampMs: candles.value.candleEvidence.lastCompleteCandleTimestampMs,
+      candleDigest,
+    },
+    relativeVolume: {
+      sourceId: rvol.value.sourceId,
+      observedAtMs: rvol.value.observedAtMs,
+      currentCumulativeVolume: rvol.value.currentCumulativeVolume,
+      baselineAverageCumulativeVolume: rvol.value.baselineAverageCumulativeVolume,
+      baselineSampleCount: rvol.value.baselineSampleCount,
+    },
+  });
+
   return safeResult({
     status: "READY",
     reason: "SOURCE_BACKED_INTRADAY_EVIDENCE_READY",
@@ -203,15 +288,53 @@ export function buildUsQualityDaytradeLiveEvidenceBundle(raw) {
     candles: candles.value.candles,
     candleEvidence: candles.value.candleEvidence,
     relativeVolume: rvol.value.relativeVolume,
+    relativeVolumeObservedAtMs: rvol.value.observedAtMs,
     session: candles.value.session,
+    dataPolicy,
+    evidenceClock: freeze(clock),
     provenance: freeze({
       quoteSourceId: quote.value.sourceId,
       candleSourceId: candles.value.sourceId,
       relativeVolumeSourceId: rvol.value.sourceId,
       rvolBaselineSampleCount: rvol.value.baselineSampleCount,
+      candleDigest,
+      observationDigest,
       publicReadOnly: true,
       privateApiUsed: false,
     }),
+  });
+}
+
+export function buildUsQualityDaytradeObservationIdentity({ strategyIdentity, bundle } = {}) {
+  if (!bundle || bundle.status !== "READY" || !bundle.provenance?.observationDigest) {
+    throw new PredictionInputError("READY live evidence bundle with observationDigest is required");
+  }
+  if (!strategyIdentity || typeof strategyIdentity !== "object" || Array.isArray(strategyIdentity)) {
+    throw new PredictionInputError("strategyIdentity is required");
+  }
+  const normalizedIdentity = freeze({
+    strategyId: requiredIdentityString(strategyIdentity.strategyId, "strategyIdentity.strategyId"),
+    strategyVersion: requiredIdentityString(strategyIdentity.strategyVersion, "strategyIdentity.strategyVersion"),
+    parameterHash: requiredIdentityString(strategyIdentity.parameterHash, "strategyIdentity.parameterHash"),
+    researchCodeSha: immutableSha(strategyIdentity.researchCodeSha, "strategyIdentity.researchCodeSha"),
+    market: "US_STOCK",
+    direction: "LONG",
+  });
+  const evidenceId = researchDigest({
+    producer: "US_QUALITY_DAYTRADE",
+    strategyIdentity: normalizedIdentity,
+    observationDigest: bundle.provenance.observationDigest,
+  });
+  return freeze({
+    contractVersion: QUALITY_DAYTRADE_OBSERVATION_IDENTITY_VERSION,
+    strategyIdentity: normalizedIdentity,
+    observationDigest: bundle.provenance.observationDigest,
+    evidenceId,
+    duplicateCountingAllowed: false,
+    selectionEligible: false,
+    executionAuthority: "NONE",
+    liveTradingAllowed: false,
+    privateApiAllowed: false,
   });
 }
 
@@ -229,6 +352,7 @@ export function applyUsQualityDaytradeLiveEvidence(baseInput, bundle) {
     candles: bundle.candles,
     candleEvidence: bundle.candleEvidence,
     relativeVolume: bundle.relativeVolume,
+    relativeVolumeObservedAtMs: bundle.relativeVolumeObservedAtMs,
     liveEvidenceProvenance: bundle.provenance,
   });
 }
