@@ -10,6 +10,15 @@ const STRATEGY = Object.freeze({
   parameterHash: "params-sha256-v1",
   researchCodeSha: SHA,
 });
+const PAPER_EXECUTION_POLICY = Object.freeze({
+  version: "public-evidence-simulated-paper-v1",
+  fillModel: "TOP_OF_BOOK",
+  sameBarPolicy: "STOP_FIRST",
+  allowPartialFill: false,
+  maxParticipationRate: 0.1,
+  nextBarOnly: false,
+});
+const FUTURES_ADAPTER = Object.freeze({ id: "crypto-futures-bitget-execution", version: "v2" });
 
 function decision() {
   const market = "CRYPTO_FUTURES";
@@ -49,8 +58,15 @@ function decision() {
       execution: {
         strategyIdentity: { ...STRATEGY },
         costPolicy: { version: "cost-v1" },
+        marketAdapterIdentity: FUTURES_ADAPTER,
+        executionPolicy: PAPER_EXECUTION_POLICY,
         dataEvidence: { dataQuality: "READY", asOfMs: T0 - 1, maxAgeMs: 60_000 },
       },
+      order: { type: "MARKET", quantity: 1, direction },
+      executionAuthority: "NONE",
+      simulatedOnly: true,
+      liveOrderAllowed: false,
+      privateTradingApiAllowed: false,
       orderSubmitted: false,
       exchangeRequestSent: false,
     },
@@ -67,7 +83,7 @@ function decision() {
   };
 }
 
-test("eligible Scanner candidate carries exact immutable Paper identity", () => {
+test("eligible Scanner candidate carries exact immutable Paper identity under simulation-only authority", () => {
   const row = prepareMeaningfulSearchPaperCandidate(decision());
   assert.equal(row.status, "PAPER_ELIGIBLE");
   assert.deepEqual(row.candidate.paperIdentity, {
@@ -85,6 +101,9 @@ test("eligible Scanner candidate carries exact immutable Paper identity", () => 
     researchCodeSha: SHA,
     executionAuthority: "NONE",
   });
+  assert.equal(row.candidate.execution.marketAdapterIdentity.id, "crypto-futures-bitget-execution");
+  assert.equal(row.candidate.execution.executionPolicy.version, "public-evidence-simulated-paper-v1");
+  assert.equal(row.candidate.order.type, "MARKET");
 });
 
 test("execution strategy identity mismatch is blocked before Paper", () => {

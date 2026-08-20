@@ -192,7 +192,7 @@ test("valid #529 bundle becomes a bridge-ready Paper candidate with exact eviden
   assert.equal(resolved.candidate.admissionEvidence.crossRuntimeVerified, true);
 });
 
-test("bridge-ready candidate satisfies existing #512 Paper admission contract once Profit Gate evidence is eligible", () => {
+test("bridge-ready admission remains blocked before the separately validated simulation authority", () => {
   const resolved = resolveCanonicalPaperAdmissionBridgeCandidate({ bundle: validBundle(), nowMs: NOW });
   const bridge = prepareMeaningfulSearchPaperCandidate({
     searchOutcome: "TRADE_CANDIDATES",
@@ -200,9 +200,11 @@ test("bridge-ready candidate satisfies existing #512 Paper admission contract on
     profitGate: Object.freeze({ decision: "ELIGIBLE", eligible: true, reasons: Object.freeze([]), executionAuthority: "NONE" }),
     profitEvidence: eligibleProfitEvidence(),
   });
-  assert.equal(bridge.status, "PAPER_ELIGIBLE");
-  assert.equal(bridge.submitToPaper, true);
-  assert.deepEqual(bridge.blockers, []);
+  assert.equal(bridge.status, "BLOCKED");
+  assert.equal(bridge.submitToPaper, false);
+  assert.ok(bridge.blockers.includes("PAPER_MARKET_ADAPTER_IDENTITY_REQUIRED"));
+  assert.ok(bridge.blockers.includes("PAPER_EXECUTION_POLICY_REQUIRED"));
+  assert.ok(bridge.blockers.includes("PAPER_SIMULATED_ORDER_REQUIRED"));
   assert.equal(bridge.candidate.paperIdentity.costPolicyVersion, COST_POLICY);
   assert.equal(bridge.candidate.executionAuthority, "NONE");
 });
