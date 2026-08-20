@@ -3,6 +3,7 @@ import {
   normalizeSignalDirection,
   resolveSignalLifecycle,
 } from "./signal-direction-contract-v1.js";
+import { resolveLearningStrategyHorizon } from "./strategy-horizon-contract-v1.js";
 
 const SEARCH_OUTCOMES = new Set(["SEARCH_FAILURE", "VALID_NO_TRADE", "TRADE_CANDIDATES"]);
 const MARKETS = new Set(["KR_STOCK", "US_STOCK", "CRYPTO_SPOT", "CRYPTO_FUTURES"]);
@@ -76,8 +77,15 @@ function validateStrategyIdentity(candidate, blockers) {
       && learning.strategyProfileVersion !== identity.strategyVersion) blockers.push("LEARNING_STRATEGY_VERSION_MISMATCH");
     if (Array.isArray(learning.timeframes) && nonEmpty(signal?.timeframe)
       && !learning.timeframes.includes(signal.timeframe)) blockers.push("LEARNING_TIMEFRAME_MISMATCH");
-    if (nonEmpty(learning.strategyHorizon) && nonEmpty(signal?.style)
-      && learning.strategyHorizon.toUpperCase() !== signal.style.toUpperCase()) blockers.push("LEARNING_HORIZON_STYLE_MISMATCH");
+    if (nonEmpty(learning.strategyHorizon) && nonEmpty(signal?.style)) {
+      try {
+        if (learning.strategyHorizon.trim().toUpperCase() !== resolveLearningStrategyHorizon(signal.style)) {
+          blockers.push("LEARNING_HORIZON_STYLE_MISMATCH");
+        }
+      } catch {
+        blockers.push("LEARNING_HORIZON_STYLE_MISMATCH");
+      }
+    }
     if (nonEmpty(learning.direction)) {
       const learningDirection = normalizeSignalDirection(learning.direction);
       const signalDirection = normalizeSignalDirection(signal?.signalDirection ?? signal?.direction);
@@ -118,6 +126,16 @@ function validateCandidate(candidate, blockers) {
   if (candidate?.execution?.dataEvidence?.dataQuality !== "READY") blockers.push("BLOCKED_DATA");
   validateStrategyIdentity(candidate, blockers);
   validateSafetyEnvelope(candidate, blockers, "CANDIDATE");
+}
+
+function validatePaperEntrySimulation(candidate, blockers) {
+  if (!candidate?.execution?.marketAdapterIdentity || typeof candidate.execution.marketAdapterIdentity !== "object") {
+    blockers.push("PAPER_MARKET_ADAPTER_IDENTITY_REQUIRED");
+  }
+  if (!candidate?.execution?.executionPolicy || typeof candidate.execution.executionPolicy !== "object") {
+    blockers.push("PAPER_EXECUTION_POLICY_REQUIRED");
+  }
+  if (!candidate?.order || typeof candidate.order !== "object") blockers.push("PAPER_SIMULATED_ORDER_REQUIRED");
 }
 
 function directionPolicy(candidate) {
@@ -228,6 +246,7 @@ export function prepareMeaningfulSearchPaperCandidate({ searchOutcome, candidate
   const blockers = [];
   validateProfitEvidence(profitEvidence, blockers);
   validateCostIdentity(candidate, profitEvidence, blockers);
+  validatePaperEntrySimulation(candidate, blockers);
   if (blockers.length) return result("BLOCKED", blockers, enrichCandidate(candidate, policy, profitGate, profitEvidence));
 
   return result("PAPER_ELIGIBLE", [], enrichCandidate(candidate, policy, profitGate, profitEvidence));
