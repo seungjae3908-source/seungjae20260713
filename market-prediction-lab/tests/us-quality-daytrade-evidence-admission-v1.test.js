@@ -110,6 +110,33 @@ test("Research Production and GitHub observations are admitted once globally", (
   assert.equal(audit.orderAuthority, false);
 });
 
+test("GitHub Actions cannot seed a canonical sample before Research Production", () => {
+  const empty = createUsQualityDaytradeEvidenceLedger();
+  const auditFirst = admit({
+    ledger: empty,
+    workflowFamily: "GITHUB_ACTIONS",
+    artifactLineageDigest: "b".repeat(64),
+  });
+  assert.equal(auditFirst.status, "BLOCKED_DATA");
+  assert.equal(auditFirst.reason, "RESEARCH_PRODUCTION_PRIMARY_EVIDENCE_REQUIRED");
+  assert.equal(auditFirst.sampleCountDelta, 0);
+  assert.equal(auditFirst.canonicalSampleAccepted, false);
+  assert.equal(auditFirst.auditOnly, true);
+  assert.equal(auditFirst.primaryRuntime, "RESEARCH_PRODUCTION");
+  assert.equal(auditFirst.ledger, empty);
+  assert.equal(auditFirst.ledger.records.length, 0);
+  assert.equal(auditFirst.ledger.duplicateAttempts.length, 0);
+
+  const primary = admit({
+    ledger: auditFirst.ledger,
+    workflowFamily: "RESEARCH_PRODUCTION",
+    artifactLineageDigest: "a".repeat(64),
+  });
+  assert.equal(primary.status, "EVIDENCE_ACCEPTED");
+  assert.equal(primary.sampleCountDelta, 1);
+  assert.equal(primary.ledger.records.length, 1);
+});
+
 test("same numeric observation on another symbol is a distinct canonical sample", () => {
   const empty = createUsQualityDaytradeEvidenceLedger();
   const coin = admit({
