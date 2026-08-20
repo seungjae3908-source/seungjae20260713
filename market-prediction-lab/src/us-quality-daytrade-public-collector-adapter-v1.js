@@ -39,7 +39,7 @@ function normalizeWorkflowFamily(value) {
   return normalized;
 }
 
-function validateCollectorProof(raw) {
+function validateCollectorProof(raw, quoteEvidence) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return "PUBLIC_COLLECTOR_PROOF_REQUIRED";
   if (raw.publicReadOnly !== true) return "PUBLIC_COLLECTOR_READ_ONLY_REQUIRED";
   if (raw.privateApiUsed !== false) return "PUBLIC_COLLECTOR_PRIVATE_API_STATE_INVALID";
@@ -53,6 +53,19 @@ function validateCollectorProof(raw) {
   }
   const sourceId = String(raw.sourceId ?? "").trim();
   if (!sourceId) return "PUBLIC_COLLECTOR_SOURCE_REQUIRED";
+
+  // The collector proof must identify the concrete quote producer separately
+  // from the collector/adapter itself. This prevents a trusted collector label
+  // from being paired with executable-looking fields from another source.
+  const executableQuoteSourceId = String(raw.executableQuoteSourceId ?? "").trim();
+  if (!executableQuoteSourceId) return "PUBLIC_COLLECTOR_EXECUTABLE_QUOTE_SOURCE_REQUIRED";
+  const quoteSourceId = String(quoteEvidence?.sourceId ?? quoteEvidence?.source ?? "").trim();
+  if (!quoteSourceId || quoteSourceId !== executableQuoteSourceId) {
+    return "PUBLIC_COLLECTOR_EXECUTABLE_QUOTE_SOURCE_MISMATCH";
+  }
+  if (quoteEvidence?.syntheticBidAsk === true || quoteEvidence?.referencePriceUsedAsBidAsk === true) {
+    return "PUBLIC_COLLECTOR_QUOTE_PROVENANCE_FORBIDDEN";
+  }
   return null;
 }
 
@@ -71,7 +84,7 @@ export function admitUsQualityDaytradePublicCollectorObservation(raw = {}) {
   }
 
   const workflowFamily = normalizeWorkflowFamily(raw.workflowFamily);
-  const collectorBlocker = validateCollectorProof(raw.collectorProof);
+  const collectorBlocker = validateCollectorProof(raw.collectorProof, raw.quoteEvidence);
   if (collectorBlocker) {
     return safeBlocked(collectorBlocker, raw.ledger, { workflowFamily });
   }
@@ -107,6 +120,7 @@ export function admitUsQualityDaytradePublicCollectorObservation(raw = {}) {
     workflowFamily,
     collector: freeze({
       sourceId: String(raw.collectorProof.sourceId).trim(),
+      executableQuoteSourceId: String(raw.collectorProof.executableQuoteSourceId).trim(),
       quoteSemantics: EXECUTABLE_QUOTE_SEMANTICS,
       publicReadOnly: true,
       privateApiUsed: false,
