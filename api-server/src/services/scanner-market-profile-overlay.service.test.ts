@@ -264,10 +264,10 @@ test('canonical Paper identity forwards exact KR SWING Promotion identity and co
   assert.equal(result.paperCandidate.exchangeRequestSent, false);
 });
 
-test('canonical Paper identity preserves CRYPTO_SPOT SWING 4H instead of rewriting to 60m', () => {
+test('canonical Paper identity accepts the actual CRYPTO_SPOT card market and preserves SWING 4H', () => {
   const result = resolveScannerCanonicalPaperIdentity({
     card: canonicalCard({
-      assetClass: 'coin_spot', market: 'spot', exchange: 'UPBIT', symbol: 'KRW-BTC', currency: 'KRW', assetType: 'CRYPTO_SPOT',
+      assetClass: 'coin_spot', market: 'UPBIT_KRW', exchange: 'UPBIT', symbol: 'BTC', currency: 'KRW', assetType: 'CRYPTO_SPOT',
     }),
     market: 'CRYPTO_SPOT',
     researchCodeSha: CANONICAL_SHA,
@@ -279,10 +279,10 @@ test('canonical Paper identity preserves CRYPTO_SPOT SWING 4H instead of rewriti
   assert.equal(result.paperCandidate.signal.style, 'SWING');
 });
 
-test('canonical Paper identity supports CRYPTO_FUTURES SCALP 5m with exact bar-count horizon', () => {
+test('canonical Paper identity accepts the actual CRYPTO_FUTURES card market and supports SCALP 5m', () => {
   const result = resolveScannerCanonicalPaperIdentity({
     card: canonicalCard({
-      assetClass: 'coin_futures', market: 'futures', exchange: 'BITGET', symbol: 'BTCUSDT', currency: 'USDT', assetType: 'CRYPTO_FUTURES',
+      assetClass: 'coin_futures', market: 'BITGET_USDT_FUTURES', exchange: 'BITGET', symbol: 'BTCUSDT', currency: 'USDT', assetType: 'CRYPTO_FUTURES',
       action: 'LONG', strategyMode: 'scalping', expiresAt: '2026-08-20T00:15:00.000Z',
     }),
     market: 'CRYPTO_FUTURES',
@@ -312,7 +312,7 @@ test('canonical Paper identity maps POSITION to MID_LONG with canonical 1D stock
 test('canonical Paper identity fails closed for non-divisible profile horizon', () => {
   const result = resolveScannerCanonicalPaperIdentity({
     card: canonicalCard({
-      assetClass: 'coin_spot', market: 'spot', exchange: 'UPBIT', symbol: 'KRW-BTC', currency: 'KRW', assetType: 'CRYPTO_SPOT',
+      assetClass: 'coin_spot', market: 'UPBIT_KRW', exchange: 'UPBIT', symbol: 'BTC', currency: 'KRW', assetType: 'CRYPTO_SPOT',
       expiresAt: '2026-08-20T05:00:00.000Z',
     }),
     market: 'CRYPTO_SPOT',
