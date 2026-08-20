@@ -1,6 +1,6 @@
 import { PredictionInputError } from "./contracts.js";
 
-export const QUALITY_DAYTRADE_CONTRACT_VERSION = "us-quality-daytrade-v2";
+export const QUALITY_DAYTRADE_CONTRACT_VERSION = "us-quality-daytrade-v3";
 
 export const DEFAULT_QUALITY_UNIVERSE = Object.freeze({
   tierA: Object.freeze({
@@ -59,6 +59,27 @@ function optionalPositiveNumber(value, name) {
   return positiveNumber(value, name);
 }
 
+function optionalPositiveEvidenceNumber(value) {
+  if (value == null) return null;
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+function normalizeFloatEvidence(raw) {
+  if (raw == null) return null;
+  if (typeof raw !== "object" || Array.isArray(raw)) return Object.freeze({ invalidShape: true });
+  const sourceId = String(raw.sourceId ?? raw.source ?? "").trim();
+  return Object.freeze({
+    invalidShape: false,
+    sourceId: sourceId || null,
+    pointInTime: raw.pointInTime === true,
+    observedAtMs: optionalPositiveEvidenceNumber(raw.observedAtMs),
+    validFromMs: optionalPositiveEvidenceNumber(raw.validFromMs),
+    validToMs: optionalPositiveEvidenceNumber(raw.validToMs),
+    shares: optionalPositiveEvidenceNumber(raw.shares),
+  });
+}
+
 function normalizeInstrument(raw) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new PredictionInputError("instrument must be an object");
   const exchange = String(raw.exchange ?? "").toUpperCase();
@@ -71,6 +92,7 @@ function normalizeInstrument(raw) {
     marketCapUsd: positiveNumber(raw.marketCapUsd, "instrument.marketCapUsd"),
     averageDollarVolumeUsd: positiveNumber(raw.averageDollarVolumeUsd, "instrument.averageDollarVolumeUsd"),
     floatShares: optionalPositiveNumber(raw.floatShares, "instrument.floatShares"),
+    floatEvidence: normalizeFloatEvidence(raw.floatEvidence),
     recentReverseSplit: raw.recentReverseSplit === true,
     listingRisk: raw.listingRisk === true,
     manipulationRisk: raw.manipulationRisk === true,
@@ -101,7 +123,38 @@ function normalizeUniversePolicy(raw = DEFAULT_QUALITY_UNIVERSE) {
   return Object.freeze({ tierA: Object.freeze(tierA), tierB: Object.freeze(tierB) });
 }
 
-export function classifyUsQualityUniverse(raw, policy = DEFAULT_QUALITY_UNIVERSE) {
+function validateTierBFloatEvidence(instrument, evaluationAsOfMs, reasons) {
+  if (instrument.floatShares == null) {
+    reasons.push("FLOAT_EVIDENCE_REQUIRED_FOR_TIER_B");
+    return;
+  }
+
+  const evidence = instrument.floatEvidence;
+  if (evidence == null || evidence.invalidShape) {
+    reasons.push("FLOAT_PROVENANCE_REQUIRED_FOR_TIER_B");
+    return;
+  }
+  if (!evidence.sourceId) reasons.push("FLOAT_SOURCE_REQUIRED_FOR_TIER_B");
+  if (!evidence.pointInTime) reasons.push("FLOAT_POINT_IN_TIME_UNPROVEN");
+  if (evidence.shares == null) reasons.push("FLOAT_EVIDENCE_SHARES_REQUIRED");
+  else if (evidence.shares !== instrument.floatShares) reasons.push("FLOAT_EVIDENCE_SHARES_MISMATCH");
+
+  const asOfMs = optionalPositiveEvidenceNumber(evaluationAsOfMs);
+  if (asOfMs == null) {
+    reasons.push("FLOAT_ASOF_REQUIRED_FOR_TIER_B");
+    return;
+  }
+  if (evidence.observedAtMs == null) reasons.push("FLOAT_OBSERVED_AT_REQUIRED");
+  else if (evidence.observedAtMs > asOfMs) reasons.push("FLOAT_EVIDENCE_FROM_FUTURE");
+
+  if (evidence.validFromMs == null || evidence.validToMs == null) {
+    reasons.push("FLOAT_COVERAGE_REQUIRED_FOR_TIER_B");
+  } else if (evidence.validToMs < evidence.validFromMs || evidence.validFromMs > asOfMs || evidence.validToMs < asOfMs) {
+    reasons.push("FLOAT_EVIDENCE_COVERAGE_MISMATCH");
+  }
+}
+
+export function classifyUsQualityUniverse(raw, policy = DEFAULT_QUALITY_UNIVERSE, asOfMs = raw?.asOfMs) {
   const instrument = normalizeInstrument(raw);
   const normalizedPolicy = normalizeUniversePolicy(policy);
   const reasons = [];
@@ -129,8 +182,8 @@ export function classifyUsQualityUniverse(raw, policy = DEFAULT_QUALITY_UNIVERSE
       if (instrument.marketCapUsd < Number(b.minMarketCapUsd)) reasons.push("MARKET_CAP_BELOW_TIER_B_MINIMUM");
       if (instrument.marketCapUsd >= Number(b.maxMarketCapUsd)) reasons.push("MARKET_CAP_ABOVE_TIER_B_MAXIMUM");
       if (instrument.averageDollarVolumeUsd < Number(b.minAverageDollarVolumeUsd)) reasons.push("DOLLAR_VOLUME_BELOW_TIER_B_MINIMUM");
-      if (instrument.floatShares == null) reasons.push("FLOAT_EVIDENCE_REQUIRED_FOR_TIER_B");
-      else if (instrument.floatShares < Number(b.minFloatShares)) reasons.push("FLOAT_BELOW_TIER_B_MINIMUM");
+      validateTierBFloatEvidence(instrument, asOfMs, reasons);
+      if (instrument.floatShares != null && instrument.floatShares < Number(b.minFloatShares)) reasons.push("FLOAT_BELOW_TIER_B_MINIMUM");
       if (instrument.dilutionRisk) reasons.push("DILUTION_RISK");
       if (instrument.recentOffering) reasons.push("RECENT_OFFERING");
       if (instrument.goingConcernRisk) reasons.push("GOING_CONCERN_RISK");
@@ -244,7 +297,7 @@ function normalizeSetupParams(raw = {}, qualityTier = "A") {
 
 export function evaluateUsQualityDaytradeSetup(raw) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new PredictionInputError("quality day-trade input must be an object");
-  const universe = classifyUsQualityUniverse(raw.instrument, raw.universePolicy ?? DEFAULT_QUALITY_UNIVERSE);
+  const universe = classifyUsQualityUniverse(raw.instrument, raw.universePolicy ?? DEFAULT_QUALITY_UNIVERSE, raw.asOfMs);
   if (!universe.eligible) return Object.freeze({ status: "ABSTAIN", reason: "UNIVERSE_REJECTED", universe });
 
   const candles = normalizeCandles(raw.candles);
