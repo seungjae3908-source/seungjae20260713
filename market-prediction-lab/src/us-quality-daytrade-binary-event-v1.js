@@ -35,6 +35,9 @@ function normalizeEvidence(raw, asOfMs, policy) {
     return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_EVIDENCE_REQUIRED" });
   }
 
+  if (raw.checkedAtMs == null) {
+    return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_CHECKED_AT_REQUIRED" });
+  }
   const checkedAtMs = finiteNumber(raw.checkedAtMs, "binaryEventEvidence.checkedAtMs");
   if (checkedAtMs > asOfMs) {
     return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_EVIDENCE_IN_FUTURE", checkedAtMs });
@@ -45,6 +48,9 @@ function normalizeEvidence(raw, asOfMs, policy) {
     return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_SOURCE_REQUIRED", checkedAtMs });
   }
 
+  if (raw.validUntilMs == null) {
+    return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_VALID_UNTIL_REQUIRED", checkedAtMs, source });
+  }
   const validUntilMs = finiteNumber(raw.validUntilMs, "binaryEventEvidence.validUntilMs");
   if (validUntilMs < checkedAtMs) {
     return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_VALIDITY_RANGE_INVALID", checkedAtMs, validUntilMs, source });
@@ -53,6 +59,9 @@ function normalizeEvidence(raw, asOfMs, policy) {
     return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_EVIDENCE_STALE", checkedAtMs, validUntilMs, source });
   }
 
+  if (raw.coverageStartMs == null || raw.coverageEndMs == null) {
+    return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_COVERAGE_REQUIRED", checkedAtMs, validUntilMs, source });
+  }
   const coverageStartMs = finiteNumber(raw.coverageStartMs, "binaryEventEvidence.coverageStartMs");
   const coverageEndMs = finiteNumber(raw.coverageEndMs, "binaryEventEvidence.coverageEndMs");
   if (coverageEndMs < coverageStartMs) {
@@ -96,6 +105,9 @@ function normalizeEvidence(raw, asOfMs, policy) {
   const eventType = String(raw.eventType ?? "").toUpperCase();
   if (!VALID_BINARY_EVENT_TYPES.has(eventType)) {
     return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_TYPE_UNSUPPORTED", checkedAtMs, source, eventType });
+  }
+  if (raw.eventTimestampMs == null) {
+    return Object.freeze({ status: "BLOCKED_DATA", reason: "BINARY_EVENT_TIMESTAMP_REQUIRED", checkedAtMs, source, eventType });
   }
   const eventTimestampMs = finiteNumber(raw.eventTimestampMs, "binaryEventEvidence.eventTimestampMs");
   return Object.freeze({
