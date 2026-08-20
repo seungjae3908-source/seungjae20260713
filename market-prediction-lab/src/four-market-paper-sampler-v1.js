@@ -48,6 +48,7 @@ export function normalizePaperExecutionDirection(market, signalDirection) {
 function validateSignalIdentity(signal) {
   if (!nonEmpty(signal?.signalId)) throw new TypeError("signalId is required");
   if (!SUPPORTED_MARKETS.has(signal?.market)) throw new TypeError("supported market is required");
+  if (!nonEmpty(signal?.symbol)) throw new TypeError("symbol is required");
   if (!nonEmpty(signal?.style)) throw new TypeError("style is required");
   if (!nonEmpty(signal?.timeframe)) throw new TypeError("timeframe is required");
   if (!Number.isInteger(signal?.horizon) || signal.horizon <= 0) throw new TypeError("positive horizon is required");
@@ -82,6 +83,39 @@ function validateEvidence(evidence, signal, gate) {
   if (nonEmpty(evidence.market) && evidence.market !== signal.market) throw new Error("PAPER_EVIDENCE_MARKET_MISMATCH");
 }
 
+export function buildPaperEvidenceProvenance({ dataEvidence, signal } = {}) {
+  if (!dataEvidence || typeof dataEvidence !== "object") throw new TypeError("paper data evidence is required");
+  if (!signal || typeof signal !== "object") throw new TypeError("paper signal identity is required");
+  if (!nonEmpty(dataEvidence.provider)) throw new Error("PAPER_DATA_PROVIDER_REQUIRED");
+  if (!nonEmpty(dataEvidence.provenance)) throw new Error("PAPER_DATA_PROVENANCE_REQUIRED");
+  if (dataEvidence.publicOnly !== true) throw new Error("PAPER_PUBLIC_DATA_EVIDENCE_REQUIRED");
+  if (dataEvidence.dataQuality !== "READY") throw new Error("PAPER_DATA_QUALITY_NOT_READY");
+  if (!finite(dataEvidence.asOfMs)) throw new Error("PAPER_DATA_TIMESTAMP_REQUIRED");
+  if (!SUPPORTED_MARKETS.has(signal.market)) throw new Error("PAPER_DATA_MARKET_REQUIRED");
+  if (!nonEmpty(signal.symbol)) throw new Error("PAPER_DATA_SYMBOL_REQUIRED");
+  if (!nonEmpty(signal.timeframe)) throw new Error("PAPER_DATA_TIMEFRAME_REQUIRED");
+
+  const provenanceIdentity = Object.freeze({
+    provider: dataEvidence.provider,
+    provenance: dataEvidence.provenance,
+    market: signal.market,
+    symbol: signal.symbol,
+    timeframe: signal.timeframe,
+    asOfMs: dataEvidence.asOfMs,
+  });
+  const evidenceSnapshot = Object.freeze({
+    ...provenanceIdentity,
+    publicOnly: true,
+    dataQuality: "READY",
+  });
+  return Object.freeze({
+    schemaVersion: "paper-evidence-provenance-v1",
+    ...evidenceSnapshot,
+    provenanceDigest: hash(provenanceIdentity),
+    evidenceSnapshotDigest: hash(evidenceSnapshot),
+  });
+}
+
 function safetyEnvelope() {
   return Object.freeze({
     simulatedOnly: true,
@@ -98,6 +132,7 @@ function buildBaseSnapshot(signal, gate, evidence, evaluatedAtMs, executionDirec
   const identity = Object.freeze({
     signalId: signal.signalId,
     market: signal.market,
+    symbol: signal.symbol,
     style: signal.style,
     timeframe: signal.timeframe,
     horizon: signal.horizon,
@@ -218,6 +253,7 @@ export function buildFourMarketPaperSample({
     });
   }
 
+  const entryEvidenceProvenance = buildPaperEvidenceProvenance({ dataEvidence: execution.dataEvidence, signal });
   const fill = simulateFourMarketFill({ context, order, bar, quote, depth });
   if (fill.status !== "FILLED" && fill.status !== "PARTIALLY_FILLED") {
     return Object.freeze({
@@ -226,6 +262,7 @@ export function buildFourMarketPaperSample({
       status: fill.status === "PENDING" ? "PENDING" : "BLOCKED",
       executionContextStatus: context.status,
       parityFingerprint: context.parityFingerprint,
+      entryEvidenceProvenance,
       fill: Object.freeze({ ...fill }),
       blockers: Object.freeze(fill.reason ? [fill.reason] : []),
       ...safetyEnvelope(),
@@ -238,6 +275,7 @@ export function buildFourMarketPaperSample({
     status: "OPEN",
     executionContextStatus: context.status,
     parityFingerprint: context.parityFingerprint,
+    entryEvidenceProvenance,
     fill: Object.freeze({ ...fill }),
     blockers: Object.freeze([]),
     ...safetyEnvelope(),
