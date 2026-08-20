@@ -56,12 +56,14 @@ jobs:
             if(x.steps?.length!==2) process.exit(5);
           ' "$OUT"
 
-      - name: Verify workflow has no automatic schedule or deployment authority
+      - name: Verify CI workflow is unscheduled and read-only
         shell: bash
         run: |
           set -Eeuo pipefail
           FILE=.github/workflows/research-production-microcap-task.yml
           if grep -Eq '^[[:space:]]*schedule:' "$FILE"; then echo 'schedule forbidden'; exit 10; fi
-          if grep -Eq 'deploy|production|staging|ssh|order|private[_-]?api' "$FILE"; then
-            echo 'forbidden authority token found in CI workflow'; exit 11
+          grep -Fq 'permissions:' "$FILE"
+          grep -Fq 'contents: read' "$FILE"
+          if grep -Eq '^[[:space:]]*(id-token|actions|issues|pull-requests|deployments|packages|statuses):[[:space:]]*write' "$FILE"; then
+            echo 'write permission forbidden'; exit 11
           fi
