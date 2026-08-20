@@ -1,3 +1,5 @@
+const CANONICAL_MEANINGFUL_SEARCH_PAPER_RUNTIME_SCHEMA = "canonical-meaningful-search-paper-runtime-v1";
+
 export const MEANINGFUL_SEARCH_PAPER_FORWARD_SOURCE_CONTRACT = Object.freeze({
   version: "meaningful-search-paper-forward-source-v1",
   publicDataOnly: true,
@@ -14,6 +16,18 @@ export const MEANINGFUL_SEARCH_PAPER_FORWARD_SOURCE_CONTRACT = Object.freeze({
 
 function freeze(value) { return Object.freeze(value); }
 function nonEmpty(value) { return typeof value === "string" && value.trim().length > 0; }
+function runtimeSafetyEnvelope(value, market) {
+  return value?.schemaVersion === CANONICAL_MEANINGFUL_SEARCH_PAPER_RUNTIME_SCHEMA
+    && value?.market === market
+    && value?.executionAuthority === "NONE"
+    && value?.simulatedOnly === true
+    && value?.liveOrderAllowed === false
+    && value?.privateTradingApiAllowed === false
+    && value?.orderSubmitted === false
+    && value?.exchangeRequestSent === false
+    && value?.productionMutationAllowed === false
+    && value?.profitabilityClaimAllowed === false;
+}
 function result(status, { candidates = [], blocker = null, runtimeStatus = null } = {}) {
   return freeze({
     status,
@@ -49,6 +63,9 @@ export function createMeaningfulSearchPaperForwardSource({
         return result("BLOCKED", { blocker: "MEANINGFUL_SEARCH_RUNTIME_INVALID" });
       }
       const runtimeStatus = String(runtime.status ?? "UNKNOWN");
+      if (!runtimeSafetyEnvelope(runtime, ownedMarket)) {
+        return result("BLOCKED", { blocker: "MEANINGFUL_SEARCH_RUNTIME_CONTRACT_INVALID", runtimeStatus });
+      }
       const bridgeCandidates = runtime?.paperBridge?.candidates;
       const bridgeExits = runtime?.paperBridge?.exitSignals;
       if (!Array.isArray(bridgeCandidates) || !Array.isArray(bridgeExits)) {
@@ -64,10 +81,13 @@ export function createMeaningfulSearchPaperForwardSource({
       }
 
       if (runtimeStatus !== "PAPER_CANDIDATES_READY") {
+        const admissionBlockers = Array.isArray(runtime.admissionBlockers) ? runtime.admissionBlockers : [];
+        const simulationBlockers = Array.isArray(runtime.simulationBlockers) ? runtime.simulationBlockers : [];
+        const bridgeResults = Array.isArray(runtime?.paperBridge?.results) ? runtime.paperBridge.results : [];
         const blockers = [
-          ...(runtime.admissionBlockers ?? []),
-          ...(runtime.simulationBlockers ?? []),
-          ...(runtime?.paperBridge?.results ?? []).flatMap((row) => row?.blockers ?? []),
+          ...admissionBlockers,
+          ...simulationBlockers,
+          ...bridgeResults.flatMap((row) => Array.isArray(row?.blockers) ? row.blockers : []),
         ].filter(nonEmpty);
         const detail = blockers[0] ?? runtimeStatus;
         return result("BLOCKED", { blocker: `MEANINGFUL_SEARCH_NOT_READY:${detail}`, runtimeStatus });
