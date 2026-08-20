@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assessMicrocapDiagnostic, buildMicrocapResearchTaskPlan } from '../src/microcap-task.mjs';
+import {
+  assessMicrocapDiagnostic,
+  assessMicrocapPitRiskGate,
+  buildMicrocapResearchTaskPlan,
+} from '../src/microcap-task.mjs';
 
 const SHA = 'a'.repeat(40);
 
@@ -26,11 +30,27 @@ function diagnostic(overrides = {}) {
   };
 }
 
-test('microcap task plan is research-only and never grants canonical sample credit', () => {
+function pitGate(overrides = {}) {
+  return {
+    status: 'DATA_BLOCKED_PIT_RISK_EVIDENCE',
+    counts: { eligible: 0, rejected: 0, blocked: 8 },
+    pointInTimeRiskGate: true,
+    canonicalEvidenceEligible: false,
+    canonicalSampleDelta: 0,
+    ...overrides,
+  };
+}
+
+test('microcap task plan is research-only, requires PIT gate, and never grants canonical sample credit', () => {
   const plan = buildMicrocapResearchTaskPlan({ researchSha: SHA });
   assert.equal(plan.id, 'us-microcap-recent-intraday-diagnostic');
   assert.equal(plan.runtime, 'python3');
-  assert.equal(plan.steps.length, 2);
+  assert.equal(plan.steps.length, 3);
+  assert.deepEqual(plan.steps.map((step) => step.id), [
+    'sec-dilution-contract-self-test',
+    'recent-intraday-ladder',
+    'point-in-time-risk-gate',
+  ]);
   assert.equal(plan.canonicalEvidenceEligible, false);
   assert.equal(plan.canonicalSampleDelta, 0);
   assert.equal(plan.liveTrading, false);
@@ -67,6 +87,40 @@ test('even complete prerequisite flags cannot relabel recent diagnostic as canon
   assert.equal(result.promotionEvidenceEligible, false);
   assert.equal(result.canonicalEvidenceEligible, false);
   assert.equal(result.canonicalSampleDelta, 0);
+});
+
+test('PIT risk gate blocks missing point-in-time manifests without sample credit', () => {
+  const result = assessMicrocapPitRiskGate(pitGate());
+  assert.equal(result.status, 'DATA_BLOCKED_PIT_RISK_EVIDENCE');
+  assert.equal(result.blocked, 8);
+  assert.equal(result.rejected, 0);
+  assert.equal(result.eligible, 0);
+  assert.equal(result.dataBlocked, true);
+  assert.equal(result.canonicalEvidenceEligible, false);
+  assert.equal(result.canonicalSampleDelta, 0);
+});
+
+test('evaluated PIT risk gate remains research-only even when entries become eligible', () => {
+  const result = assessMicrocapPitRiskGate(pitGate({
+    status: 'PIT_RISK_GATE_EVALUATED',
+    counts: { eligible: 3, rejected: 2, blocked: 0 },
+  }));
+  assert.equal(result.dataBlocked, false);
+  assert.equal(result.eligible, 3);
+  assert.equal(result.rejected, 2);
+  assert.equal(result.canonicalEvidenceEligible, false);
+  assert.equal(result.canonicalSampleDelta, 0);
+});
+
+test('PIT gate cannot grant canonical sample credit or use unknown status', () => {
+  assert.throws(
+    () => assessMicrocapPitRiskGate(pitGate({ canonicalEvidenceEligible: true })),
+    /never grant canonical sample credit/,
+  );
+  assert.throws(
+    () => assessMicrocapPitRiskGate(pitGate({ status: 'PROFITABILITY_PROVEN' })),
+    /unexpected PIT risk-gate status/,
+  );
 });
 
 test('unexpected result status fails closed', () => {
