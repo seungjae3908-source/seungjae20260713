@@ -7,11 +7,13 @@ on:
       - market-prediction-lab/scripts/run-us-microcap-intraday-ladder-v1.py
       - market-prediction-lab/scripts/run-us-microcap-intraday-risk-grid-v1.py
       - market-prediction-lab/scripts/build-us-microcap-sec-dilution-evidence-v1.py
+      - market-prediction-lab/scripts/compare-us-microcap-rolling-window-v1.py
       - .github/workflows/research-us-microcap-explosion-proxy.yml
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: research-us-microcap-intraday-ladder-${{ github.event.pull_request.head.ref || github.ref_name }}
@@ -40,8 +42,48 @@ jobs:
       - name: Self-test intraday ladder accounting
         run: python3 market-prediction-lab/scripts/run-us-microcap-intraday-ladder-v1.py --self-test
 
+      - name: Self-test rolling-window comparison guard
+        run: python3 market-prediction-lab/scripts/compare-us-microcap-rolling-window-v1.py --self-test
+
       - name: Self-test point-in-time SEC dilution evidence
         run: python3 market-prediction-lab/scripts/build-us-microcap-sec-dilution-evidence-v1.py --self-test
+
+      - name: Locate previous successful rolling-window artifact
+        id: previous
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
+        run: |
+          set -Eeuo pipefail
+          previous_run_id="$(
+            gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/runs" \
+              -f branch="$HEAD_BRANCH" \
+              -f event="pull_request" \
+              -f status="success" \
+              -f per_page=100 \
+              --jq '.workflow_runs[] | select(.name == "Research US Microcap Intraday Ladder V1") | .id' \
+              | head -n 1 || true
+          )"
+          if [[ -z "$previous_run_id" ]]; then
+            echo "previous_result=" >> "$GITHUB_OUTPUT"
+            echo "No previous successful rolling-window artifact found."
+            exit 0
+          fi
+          mkdir -p previous-artifact
+          if gh run download "$previous_run_id" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "research-us-microcap-intraday-ladder-${previous_run_id}" \
+            --dir previous-artifact; then
+            previous_result="$(find previous-artifact -type f -name result.json -print -quit)"
+            if [[ -n "$previous_result" ]]; then
+              echo "previous_result=$previous_result" >> "$GITHUB_OUTPUT"
+              echo "previous_run_id=$previous_run_id" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          echo "previous_result=" >> "$GITHUB_OUTPUT"
+          echo "Previous run exists but its result artifact was unavailable; comparison will fail closed as unavailable."
 
       - name: Run real recent Yahoo extended-hours 1m diagnostic
         shell: bash
@@ -52,6 +94,44 @@ jobs:
             --symbols FEMY,EHGO,BIVI,RCON,VRAX,MSS \
             --output-json market-prediction-lab/docs/research-us-microcap-intraday-ladder-v1/result.json \
             --output-md market-prediction-lab/docs/research-us-microcap-intraday-ladder-v1/result.md
+
+      - name: Compare bounded rolling window without false improvement claims
+        shell: bash
+        env:
+          PREVIOUS_RESULT: ${{ steps.previous.outputs.previous_result }}
+          PREVIOUS_RUN_ID: ${{ steps.previous.outputs.previous_run_id }}
+        run: |
+          set -Eeuo pipefail
+          out_dir="market-prediction-lab/docs/research-us-microcap-intraday-ladder-v1"
+          if [[ -n "${PREVIOUS_RESULT:-}" && -f "$PREVIOUS_RESULT" ]]; then
+            python3 market-prediction-lab/scripts/compare-us-microcap-rolling-window-v1.py \
+              --previous-json "$PREVIOUS_RESULT" \
+              --current-json "$out_dir/result.json" \
+              --output-json "$out_dir/rolling-window-comparison.json" \
+              --output-md "$out_dir/rolling-window-comparison.md"
+          else
+            python3 - <<'PY'
+          import json
+          from pathlib import Path
+          out_dir = Path('market-prediction-lab/docs/research-us-microcap-intraday-ladder-v1')
+          result = {
+              'schemaVersion': 1,
+              'status': 'PREVIOUS_ROLLING_WINDOW_ARTIFACT_UNAVAILABLE',
+              'comparable': False,
+              'interpretation': 'NO_PREVIOUS_ARTIFACT',
+              'windowAttritionRisk': None,
+              'crossRunImprovementClaimAllowed': False,
+              'canonicalEvidenceEligible': False,
+              'canonicalSampleDelta': 0,
+          }
+          (out_dir / 'rolling-window-comparison.json').write_text(json.dumps(result, indent=2), encoding='utf-8')
+          (out_dir / 'rolling-window-comparison.md').write_text(
+              '# US Microcap Rolling-Window Comparison V1\n\n'
+              '**Previous artifact unavailable — cross-run improvement claims fail closed.**\n',
+              encoding='utf-8',
+          )
+          PY
+          fi
 
       - name: Grid exact-minute risk caps and exit modes
         shell: bash
@@ -66,7 +146,7 @@ jobs:
         shell: bash
         run: |
           cat > market-prediction-lab/docs/research-us-microcap-intraday-ladder-v1/provenance.json <<JSON
-          {"schemaVersion":2,"researchCodeSha":"${RESEARCH_CODE_SHA}","triggerSha":"${GITHUB_SHA}","runId":"${GITHUB_RUN_ID}","source":"Yahoo public chart 1m range=7d includePrePost=true","tenYearMinuteHistory":false,"pointInTimeFloat":false,"archivedFreshCatalyst":false,"pointInTimeDilutionFilter":false,"secFormLevelDilutionEvidenceContract":true,"canonicalEvidenceEligible":false,"canonicalSampleDelta":0,"liveOrderAllowed":false,"privateApiAllowed":false,"branchWrite":false}
+          {"schemaVersion":2,"researchCodeSha":"${RESEARCH_CODE_SHA}","triggerSha":"${GITHUB_SHA}","runId":"${GITHUB_RUN_ID}","source":"Yahoo public chart 1m range=7d includePrePost=true","tenYearMinuteHistory":false,"pointInTimeFloat":false,"archivedFreshCatalyst":false,"pointInTimeDilutionFilter":false,"secFormLevelDilutionEvidenceContract":true,"rollingWindowAttritionGuard":true,"canonicalEvidenceEligible":false,"canonicalSampleDelta":0,"liveOrderAllowed":false,"privateApiAllowed":false,"branchWrite":false}
           JSON
           python3 - <<'PY'
           import json
@@ -77,6 +157,8 @@ jobs:
               raise SystemExit('researchCodeSha mismatch')
           if row['canonicalEvidenceEligible'] is not False or row['canonicalSampleDelta'] != 0:
               raise SystemExit('recent diagnostic must not receive canonical sample credit')
+          if row['rollingWindowAttritionGuard'] is not True:
+              raise SystemExit('rolling-window attrition guard must remain enabled')
           PY
 
       - name: Print result
@@ -84,6 +166,8 @@ jobs:
         shell: bash
         run: |
           cat market-prediction-lab/docs/research-us-microcap-intraday-ladder-v1/result.md || true
+          echo
+          cat market-prediction-lab/docs/research-us-microcap-intraday-ladder-v1/rolling-window-comparison.md || true
           echo
           cat market-prediction-lab/docs/research-us-microcap-intraday-ladder-v1/risk-grid.md || true
 
