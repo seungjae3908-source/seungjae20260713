@@ -1,8 +1,9 @@
 import { PredictionInputError } from "./contracts.js";
 import { evaluateUsQualityDaytradeSetup } from "./us-quality-daytrade-research-v1.js";
 import { evaluateQualityDaytradeBinaryEventRisk } from "./us-quality-daytrade-binary-event-v1.js";
+import { evaluateQualityDaytradeUniverseProvenance } from "./us-quality-daytrade-universe-provenance-v1.js";
 
-export const QUALITY_DAYTRADE_PREENTRY_CONTRACT_VERSION = "us-quality-daytrade-preentry-v1";
+export const QUALITY_DAYTRADE_PREENTRY_CONTRACT_VERSION = "us-quality-daytrade-preentry-v2";
 
 function safeResult(fields) {
   return Object.freeze({
@@ -21,11 +22,29 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
     throw new PredictionInputError("quality day-trade pre-entry input must be an object");
   }
 
+  const universeProvenance = evaluateQualityDaytradeUniverseProvenance({
+    asOfMs: raw.asOfMs,
+    instrument: raw.instrument,
+    universeEvidence: raw.universeEvidence,
+  });
+  if (universeProvenance.status !== "PASS") {
+    return safeResult({
+      status: "BLOCKED_DATA",
+      reason: universeProvenance.reason,
+      universeProvenance,
+      technicalSetup: null,
+      binaryEventRisk: null,
+      qualityTier: null,
+      riskBudgetMultiplier: 0,
+    });
+  }
+
   const technicalSetup = evaluateUsQualityDaytradeSetup(raw);
   if (technicalSetup.status !== "CANDIDATE") {
     return safeResult({
       status: technicalSetup.status,
       reason: technicalSetup.reason,
+      universeProvenance,
       technicalSetup,
       binaryEventRisk: null,
       qualityTier: technicalSetup.qualityTier ?? technicalSetup.universe?.tier ?? null,
@@ -43,6 +62,7 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
     return safeResult({
       status: binaryEventRisk.status === "BLOCKED_DATA" ? "BLOCKED_DATA" : "ABSTAIN",
       reason: binaryEventRisk.reason,
+      universeProvenance,
       technicalSetup,
       binaryEventRisk,
       qualityTier: technicalSetup.qualityTier,
@@ -53,6 +73,7 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
   return safeResult({
     status: "CANDIDATE",
     reason: "VWAP_FIRST_PULLBACK_REBREAK_EVENT_SAFE",
+    universeProvenance,
     technicalSetup,
     binaryEventRisk,
     qualityTier: technicalSetup.qualityTier,

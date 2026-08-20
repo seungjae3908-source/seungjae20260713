@@ -19,6 +19,25 @@ function baseInput() {
       recentOffering: false,
       goingConcernRisk: false,
     },
+    universeEvidence: {
+      marketCap: {
+        sourceId: "issuer-sec-market-cap-pit",
+        pointInTime: true,
+        observedAtMs: 8_000,
+        validFromMs: 1,
+        validToMs: 20_000,
+        marketCapUsd: 350_000_000_000,
+      },
+      averageDollarVolume: {
+        sourceId: "historical-dollar-volume-pit",
+        pointInTime: true,
+        observedAtMs: 8_000,
+        windowStartMs: 1,
+        windowEndMs: 8_000,
+        validUntilMs: 20_000,
+        averageDollarVolumeUsd: 900_000_000,
+      },
+    },
     candles: [
       { open: 100.0, high: 100.8, low: 99.9, close: 100.6, volume: 100, session: "REGULAR", timestamp: 1 },
       { open: 100.6, high: 102.0, low: 100.5, close: 101.8, volume: 130, session: "REGULAR", timestamp: 2 },
@@ -68,9 +87,29 @@ function scheduledEvidence(event) {
   };
 }
 
+test("pre-entry blocks before technical evaluation when point-in-time universe evidence is missing", () => {
+  const input = baseInput();
+  delete input.universeEvidence;
+  const result = evaluateUsQualityDaytradePreEntry(input);
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.equal(result.reason, "UNIVERSE_EVIDENCE_REQUIRED");
+  assert.equal(result.technicalSetup, null);
+  assert.equal(result.binaryEventRisk, null);
+});
+
+test("pre-entry rejects future market-cap provenance before technical evaluation", () => {
+  const input = baseInput();
+  input.universeEvidence.marketCap.observedAtMs = 9_000;
+  const result = evaluateUsQualityDaytradePreEntry(input);
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.equal(result.reason, "MARKET_CAP_EVIDENCE_FROM_FUTURE");
+  assert.equal(result.technicalSetup, null);
+});
+
 test("technical candidate is blocked when binary-event evidence is missing", () => {
   const result = evaluateUsQualityDaytradePreEntry(baseInput());
   assert.equal(result.technicalSetup.status, "CANDIDATE");
+  assert.equal(result.universeProvenance.status, "PASS");
   assert.equal(result.status, "BLOCKED_DATA");
   assert.equal(result.reason, "BINARY_EVENT_EVIDENCE_REQUIRED");
 });
@@ -81,6 +120,7 @@ test("source-backed complete no-event evidence preserves candidate status", () =
   const result = evaluateUsQualityDaytradePreEntry(input);
   assert.equal(result.status, "CANDIDATE");
   assert.equal(result.reason, "VWAP_FIRST_PULLBACK_REBREAK_EVENT_SAFE");
+  assert.equal(result.universeProvenance.status, "PASS");
   assert.equal(result.binaryEventRisk.status, "PASS");
 });
 
