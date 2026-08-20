@@ -1,3 +1,4 @@
+// Contract-only fixtures below are never market, Shadow, Paper, or profitability evidence.
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
