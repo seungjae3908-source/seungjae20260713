@@ -24,6 +24,10 @@ function blocked(reason, details = {}) {
     status: "BLOCKED_DATA",
     reason,
     sampleCountDelta: 0,
+    sampleCountKind: "PRE_ENTRY_OBSERVATION",
+    profitabilitySampleCountDelta: 0,
+    profitabilityEligible: false,
+    settlementRequiredForProfitability: true,
     canonicalSampleAccepted: false,
     duplicateCountingAllowed: false,
     selectionEligible: false,
@@ -78,6 +82,7 @@ export function admitUsQualityDaytradeEvidence({
   });
 
   const normalizedWorkflowFamily = requiredString(workflowFamily, "workflowFamily").toUpperCase();
+  const normalizedOutcomeKind = requiredString(outcomeKind, "outcomeKind");
   const admission = recordGlobalEvidence(ledger, {
     producerFamily: "US_QUALITY_DAYTRADE",
     strategyIdentityDigest,
@@ -90,7 +95,7 @@ export function admitUsQualityDaytradeEvidence({
     horizon: requiredString(horizon, "horizon"),
     sourceDatasetId,
     provenanceDigest: bundle.provenance.observationDigest,
-    outcomeKind: requiredString(outcomeKind, "outcomeKind"),
+    outcomeKind: normalizedOutcomeKind,
     workflowFamily: normalizedWorkflowFamily,
     artifactLineageDigest: requiredString(artifactLineageDigest, "artifactLineageDigest"),
     payload,
@@ -117,6 +122,10 @@ export function admitUsQualityDaytradeEvidence({
     evidenceId: admission.evidenceId,
     localEvidenceId: observationIdentity.evidenceId,
     sampleCountDelta: admission.sampleCountDelta,
+    sampleCountKind: normalizedOutcomeKind,
+    profitabilitySampleCountDelta: 0,
+    profitabilityEligible: false,
+    settlementRequiredForProfitability: true,
     canonicalSampleAccepted: admission.sampleCountDelta === 1,
     duplicateCountingAllowed: false,
     selectionEligible: false,
