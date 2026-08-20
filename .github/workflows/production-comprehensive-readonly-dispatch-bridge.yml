@@ -1,0 +1,183 @@
+name: Production Comprehensive Read-Only QA Dispatch Bridge
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    name: Dispatch owner-approved exact-SHA Production comprehensive read-only QA
+    if: >-
+      github.event.action == 'created' &&
+      github.event.issue.number == 23 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control' &&
+      github.event.comment.user.login == 'seungjae3908-source' &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/run-production-comprehensive-readonly-qa ')
+    concurrency:
+      group: production-comprehensive-readonly-dispatch-bridge
+      cancel-in-progress: false
+    permissions:
+      actions: write
+      contents: read
+      issues: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Parse exact owner command
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const body = String(process.env.COMMENT_BODY ?? '').trim();
+          const match = /^\/run-production-comprehensive-readonly-qa ([0-9a-fA-F]{40})$/.exec(body);
+          if (!match) {
+            console.error('Exact command required: /run-production-comprehensive-readonly-qa <40-character-current-production-sha>');
+            process.exit(1);
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha=${match[1].toLowerCase()}\n`);
+          NODE
+
+      - name: Require exact current main SHA
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main "$TARGET_SHA"
+          MAIN_SHA="$(git rev-parse origin/main^{commit})"
+          [[ "$TARGET_SHA" == "$MAIN_SHA" ]] || {
+            echo "Production comprehensive QA requires exact current main: target=$TARGET_SHA main=$MAIN_SHA" >&2
+            exit 1
+          }
+
+      - name: Require latest successful Production Deploy to match target
+        id: production
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'production-deploy.yml',
+              event: 'workflow_dispatch',
+              per_page: 100,
+            });
+            const latest = runs
+              .filter((run) => run.status === 'completed' && run.conclusion === 'success')
+              .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+            if (!latest) {
+              core.setFailed('No successful Production Deploy run exists.');
+              return;
+            }
+            if (String(latest.head_sha).toLowerCase() !== target) {
+              core.setFailed(`Target is not the latest successful Production Deploy SHA: latest=${latest.head_sha}`);
+              return;
+            }
+            core.setOutput('deploy_run_id', String(latest.id));
+
+      - name: Dispatch and confirm exact-SHA comprehensive QA
+        id: qa
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const workflowId = 'production-comprehensive-readonly-qa.yml';
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflowId,
+              event: 'workflow_dispatch',
+              per_page: 100,
+            });
+            const active = runs
+              .filter((run) => run.status !== 'completed')
+              .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+            const sameTarget = active.find((run) => String(run.head_sha).toLowerCase() === target);
+            if (sameTarget) {
+              core.setOutput('run_id', String(sameTarget.id));
+              core.setOutput('run_url', sameTarget.html_url);
+              core.info(`Reusing active exact-SHA Production Comprehensive QA Run ${sameTarget.id}.`);
+              return;
+            }
+            if (active.length > 0) {
+              core.setFailed(`Another Production Comprehensive QA run is active on ${active[0].head_sha}; refusing to dispatch and cancel healthy work.`);
+              return;
+            }
+
+            const response = await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflowId,
+              ref: 'main',
+              inputs: { sha: target },
+              return_run_details: true,
+              headers: {
+                accept: 'application/vnd.github+json',
+                'X-GitHub-Api-Version': '2026-03-10',
+              },
+            });
+            const runId = Number(response.data?.workflow_run_id);
+            if (response.status !== 200 || !Number.isSafeInteger(runId) || runId <= 0) {
+              core.setFailed(`Production Comprehensive QA dispatch returned invalid Run ID with HTTP ${response.status}.`);
+              return;
+            }
+            const run = (await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId,
+            })).data;
+            if (run.event !== 'workflow_dispatch'
+              || run.path !== '.github/workflows/production-comprehensive-readonly-qa.yml'
+              || String(run.head_sha).toLowerCase() !== target) {
+              core.setFailed(`Returned QA run does not match the requested exact main SHA: run=${run.id} head=${run.head_sha}`);
+              return;
+            }
+            core.setOutput('run_id', String(runId));
+            core.setOutput('run_url', run.html_url);
+
+      - name: Record protected read-only QA dispatch
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+          PRODUCTION_DEPLOY_RUN_ID: ${{ steps.production.outputs.deploy_run_id }}
+          QA_RUN_ID: ${{ steps.qa.outputs.run_id }}
+          QA_RUN_URL: ${{ steps.qa.outputs.run_url }}
+          SOURCE_COMMENT_ID: ${{ github.event.comment.id }}
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+              body: [
+                'Production Comprehensive Read-Only QA dispatched behind the protected `production` environment.',
+                '',
+                `- Exact deployed/current-main SHA: \`${process.env.TARGET_SHA}\``,
+                `- Latest successful Production Deploy Run ID: \`${process.env.PRODUCTION_DEPLOY_RUN_ID}\``,
+                `- Production Comprehensive QA Run ID: \`${process.env.QA_RUN_ID}\``,
+                `- Run: [Open GitHub Actions run](${process.env.QA_RUN_URL})`,
+                '- Exact Production deploy SHA + identityMatch are enforced by the QA workflow before browser tests.',
+                '- Production environment protection bypassed: `false`',
+                '- Production DB/app mutations by this bridge: `0`',
+                '- Trading/private/order authority granted: `false`',
+                `- Source command comment ID: \`${process.env.SOURCE_COMMENT_ID}\``,
+              ].join('\n'),
+            });
