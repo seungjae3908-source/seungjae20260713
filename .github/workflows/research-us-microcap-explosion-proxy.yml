@@ -1,14 +1,6 @@
 name: Research US Microcap Intraday Ladder V1
 
 on:
-  push:
-    branches:
-      - agent/research-microcap-explosion-proxy-v1
-    paths:
-      - market-prediction-lab/scripts/run-us-microcap-intraday-ladder-v1.py
-      - market-prediction-lab/scripts/run-us-microcap-intraday-risk-grid-v1.py
-      - market-prediction-lab/scripts/build-us-microcap-sec-dilution-evidence-v1.py
-      - .github/workflows/research-us-microcap-explosion-proxy.yml
   pull_request:
     branches: [main]
     paths:
@@ -22,7 +14,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: research-us-microcap-intraday-ladder-${{ github.ref }}
+  group: research-us-microcap-intraday-ladder-${{ github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
