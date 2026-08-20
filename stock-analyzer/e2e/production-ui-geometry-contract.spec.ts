@@ -28,3 +28,16 @@ test('AI Chart production controls keep at least 32px touch targets', () => {
   expect(css.match(/min-height: 2rem;/g) ?? []).toHaveLength(2);
   expect(css).toContain('button[data-testid="load-multi-timeframe"]');
 });
+
+test('mobile technical workspace and orderbook controls reserve navigation geometry', () => {
+  const css = source('public/production-ui-geometry.css');
+  const workspace = source('src/pages/technical-workspace.tsx');
+  const orderbook = source('src/components/instrument-orderbook-dock.tsx');
+
+  expect(workspace).toContain('data-testid="technical-workspace"');
+  expect(css).toContain('[data-testid="technical-workspace"] > div:has(> [role="tabpanel"])');
+  expect(css).toContain('flex-direction: column;');
+  expect(orderbook).toContain('aria-label="읽기 전용 호가창 열기"');
+  expect(css).toContain('button[aria-label="읽기 전용 호가창 열기"]');
+  expect(css).toContain('+ 4.5rem');
+});
