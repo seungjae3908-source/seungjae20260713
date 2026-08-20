@@ -36,6 +36,7 @@ function validInput(overrides = {}) {
     asOfMs: 10_000,
     collectorProof: {
       sourceId: "public-us-stock-intraday-collector",
+      executableQuoteSourceId: "public-executable-quote-feed",
       publicReadOnly: true,
       privateApiUsed: false,
       liveTradingAllowed: false,
@@ -89,6 +90,7 @@ test("reference-only public collector cannot be promoted into executable quote e
   const input = validInput({
     collectorProof: {
       sourceId: "yahoo-public-chart",
+      executableQuoteSourceId: "yahoo-public-chart",
       publicReadOnly: true,
       privateApiUsed: false,
       liveTradingAllowed: false,
@@ -112,6 +114,7 @@ test("synthetic bid ask remains blocked even when the caller labels it executabl
   const input = validInput({
     collectorProof: {
       sourceId: "unsafe-reference-price-adapter",
+      executableQuoteSourceId: "unsafe-reference-price-adapter",
       publicReadOnly: true,
       privateApiUsed: false,
       liveTradingAllowed: false,
@@ -128,6 +131,48 @@ test("synthetic bid ask remains blocked even when the caller labels it executabl
   assert.equal(result.ledger.records.length, 0);
 });
 
+test("collector proof cannot be paired with executable-looking quote fields from another source", () => {
+  const input = validInput({
+    quoteEvidence: {
+      sourceId: "different-reference-feed",
+      pointInTime: true,
+      publicReadOnly: true,
+      privateApiUsed: false,
+      kind: "EXECUTABLE_BID_ASK",
+      observedAtMs: 9_500,
+      bid: 101.68,
+      ask: 101.72,
+    },
+  });
+  const result = admitUsQualityDaytradePublicCollectorObservation(input);
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.equal(result.reason, "PUBLIC_COLLECTOR_EXECUTABLE_QUOTE_SOURCE_MISMATCH");
+  assert.equal(result.sampleCountDelta, 0);
+  assert.equal(result.ledger.records.length, 0);
+});
+
+test("quote-level synthetic/reference provenance cannot be hidden by a clean collector proof", () => {
+  const input = validInput({
+    quoteEvidence: {
+      sourceId: "public-executable-quote-feed",
+      pointInTime: true,
+      publicReadOnly: true,
+      privateApiUsed: false,
+      kind: "EXECUTABLE_BID_ASK",
+      observedAtMs: 9_500,
+      bid: 101.68,
+      ask: 101.72,
+      syntheticBidAsk: true,
+      referencePriceUsedAsBidAsk: true,
+    },
+  });
+  const result = admitUsQualityDaytradePublicCollectorObservation(input);
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.equal(result.reason, "PUBLIC_COLLECTOR_QUOTE_PROVENANCE_FORBIDDEN");
+  assert.equal(result.sampleCountDelta, 0);
+  assert.equal(result.ledger.records.length, 0);
+});
+
 test("source-backed public executable evidence is admitted once", () => {
   const first = admitUsQualityDaytradePublicCollectorObservation(validInput());
   assert.equal(first.status, "EVIDENCE_ACCEPTED");
@@ -135,6 +180,7 @@ test("source-backed public executable evidence is admitted once", () => {
   assert.equal(first.canonicalSampleAccepted, true);
   assert.equal(first.ledger.records.length, 1);
   assert.equal(first.collector.quoteSemantics, "EXECUTABLE_BID_ASK");
+  assert.equal(first.collector.executableQuoteSourceId, "public-executable-quote-feed");
   assert.equal(first.executionAuthority, "NONE");
   assert.equal(first.liveTradingAllowed, false);
 
@@ -154,7 +200,7 @@ test("source-backed public executable evidence is admitted once", () => {
 test("live evidence blockers propagate without touching the global ledger", () => {
   const input = validInput({
     quoteEvidence: {
-      sourceId: "public-reference-price-feed",
+      sourceId: "public-executable-quote-feed",
       pointInTime: true,
       publicReadOnly: true,
       privateApiUsed: false,
