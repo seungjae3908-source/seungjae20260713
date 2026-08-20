@@ -9,6 +9,8 @@ import {
   createEthV6PaperForwardSource,
   wrapPaperForwardProviderWithEthV6Source,
 } from "./eth-v6-paper-forward-source-v1.js";
+import { wrapPaperForwardProviderWithMeaningfulSearch } from "./meaningful-search-scheduled-paper-provider-v1.js";
+import { createFailClosedCanonicalPaperRuntimeForMarket } from "./authoritative-natural-paper-admission-producer-v1.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
@@ -25,6 +27,8 @@ export const PAPER_FORWARD_RUNTIME_CONTRACT = Object.freeze({
   version: "paper-forward-evidence-runtime-v1",
   publicDataOnly: true,
   canonicalPaperLoopOnly: true,
+  canonicalAdmissionCutover: true,
+  legacyDirectEntryAllowed: false,
   scheduleActive: false,
   privateAccountAccess: false,
   liveTrading: false,
@@ -137,6 +141,50 @@ function maybeAttachResearchNaturalSource({ provider, env, clock, bitgetClient, 
   return wrapPaperForwardProviderWithEthV6Source({ provider, source });
 }
 
+function stripLegacyDirectEntryCandidates(provider) {
+  if (!provider || typeof provider.collectPublicEvidence !== "function") throw new TypeError("base Paper provider is required");
+  return Object.freeze({
+    async collectPublicEvidence(input) {
+      const evidence = await provider.collectPublicEvidence(input);
+      if (evidence?.status !== "READY") return evidence;
+      const legacyCandidates = Array.isArray(evidence.candidates) ? evidence.candidates : [];
+      const exits = Array.isArray(evidence.exits) ? evidence.exits : [];
+      return Object.freeze({
+        ...evidence,
+        candidates: Object.freeze([]),
+        exits: Object.freeze([...exits]),
+        canonicalAdmissionCutover: Object.freeze({
+          version: "recurring-canonical-admission-cutover-v1",
+          status: legacyCandidates.length > 0 ? "LEGACY_ENTRY_BLOCKED" : "READY",
+          blockedLegacyEntryCount: legacyCandidates.length,
+          preservedExitCount: exits.length,
+          blocker: legacyCandidates.length > 0 ? "AUTHORITATIVE_ADMISSION_BUNDLE_REQUIRED" : null,
+          executionAuthority: "NONE",
+          simulatedOnly: true,
+          liveOrderAllowed: false,
+          privateTradingApiAllowed: false,
+          orderSubmitted: false,
+          exchangeRequestSent: false,
+        }),
+      });
+    },
+  });
+}
+
+function maybeAttachCanonicalAdmissionCutover({ provider, env, paperRuntimeForMarket }) {
+  if (!truthy(env?.RESEARCH_PRODUCTION)) return provider;
+  if (paperRuntimeForMarket != null && typeof paperRuntimeForMarket !== "function") {
+    throw new TypeError("paperRuntimeForMarket must be a function");
+  }
+  const runtime = paperRuntimeForMarket ?? createFailClosedCanonicalPaperRuntimeForMarket({
+    reason: "AUTHORITATIVE_ADMISSION_PRODUCER_UNAVAILABLE",
+  });
+  return wrapPaperForwardProviderWithMeaningfulSearch({
+    provider: stripLegacyDirectEntryCandidates(provider),
+    paperRuntimeForMarket: runtime,
+  });
+}
+
 export function createCanonicalPaperForwardEvidenceProvider({
   collectYahoo = collectYahooStockHistory,
   collectUpbit = collectUpbitSpotHistory,
@@ -148,6 +196,7 @@ export function createCanonicalPaperForwardEvidenceProvider({
   sleep = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
   env = process.env,
   naturalSourceFactory = createEthV6PaperForwardSource,
+  paperRuntimeForMarket,
 } = {}) {
   if (!Number.isInteger(providerRetry?.maxAttempts) || providerRetry.maxAttempts < 1 || providerRetry.maxAttempts > 5
     || !Number.isInteger(providerRetry?.baseBackoffMs) || providerRetry.baseBackoffMs < 1 || providerRetry.baseBackoffMs > 30_000) {
@@ -188,7 +237,8 @@ export function createCanonicalPaperForwardEvidenceProvider({
       }
     },
   });
-  return maybeAttachResearchNaturalSource({ provider, env, clock, bitgetClient, naturalSourceFactory });
+  const naturalProvider = maybeAttachResearchNaturalSource({ provider, env, clock, bitgetClient, naturalSourceFactory });
+  return maybeAttachCanonicalAdmissionCutover({ provider: naturalProvider, env, paperRuntimeForMarket });
 }
 
 function sanitizeLane(market, evidence) {
