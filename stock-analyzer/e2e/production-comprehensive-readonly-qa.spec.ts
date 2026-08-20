@@ -398,7 +398,7 @@ async function chartMatrix(page: Page, onProgress: (audits: ChartAudit[]) => voi
     waitUntil: 'domcontentloaded',
     timeout: 15_000,
   });
-  await expect(page.getByTestId('unified-chart-wrapper')).toBeVisible({ timeout: 12_000 });
+  await expect(page.getByTestId('unified-analysis-chart')).toBeVisible({ timeout: 12_000 });
   const audits: ChartAudit[] = [];
   for (const market of CHART_MARKETS) {
     await page.getByTestId(`market-${market}`).click({ timeout: 2_500 }).catch(() => undefined);
