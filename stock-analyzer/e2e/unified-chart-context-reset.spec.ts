@@ -1,4 +1,4 @@
-import { test, expect, type Page, type Request } from '@playwright/test';
+import { test, expect, type Page, type Request, type Route } from '@playwright/test';
 
 const BASE_TIME = 1_775_600_000;
 const STEP_SECONDS = 300;
@@ -77,6 +77,49 @@ function timeframeFrom(url: string): string {
   return parsed.searchParams.get('tf') ?? parsed.searchParams.get('granularity') ?? '5m';
 }
 
+async function fulfillStockChart(route: Route, onOneMinuteCall: () => void) {
+  const url = route.request().url();
+  const parsed = new URL(url);
+  const ticker = decodeURIComponent(parsed.pathname.split('/').at(-2) ?? '');
+  const timeframe = timeframeFrom(url);
+
+  let provider = 'context-reset-unknown';
+  let candles = trend(900);
+  let delay = 0;
+
+  if (ticker === '005930' && timeframe === '5m') {
+    provider = 'context-reset-kr-5m';
+    candles = rows(DOUBLE_TOP);
+  } else if (ticker === '005930' && timeframe === '1m') {
+    onOneMinuteCall();
+    provider = 'context-reset-kr-1m-late';
+    candles = trend(10_000);
+    delay = 900;
+  } else if (ticker === '005930' && timeframe === '15m') {
+    provider = 'context-reset-kr-15m';
+    candles = trend(20_000);
+  } else if (ticker === '000660' && timeframe === '15m') {
+    provider = 'context-reset-kr-000660';
+    candles = rows(DOUBLE_TOP.map((value) => value + 300));
+    delay = 250;
+  } else if (ticker === 'AAPL' && timeframe === '15m') {
+    provider = 'context-reset-us-aapl';
+    candles = trend(500);
+  }
+
+  if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+  await route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      provider,
+      fetchedAt: '2026-08-04T11:40:00.000Z',
+      updatedAt: '2026-08-04T11:40:00.000Z',
+      candles,
+    }),
+  }).catch(() => undefined);
+}
+
 async function installMocks(page: Page) {
   let oneMinuteCalls = 0;
 
@@ -86,48 +129,9 @@ async function installMocks(page: Page) {
     body: '{}',
   }));
 
-  await page.route('**/api/stocks/*/chart**', async (route) => {
-    const url = route.request().url();
-    const parsed = new URL(url);
-    const ticker = decodeURIComponent(parsed.pathname.split('/').at(-2) ?? '');
-    const timeframe = timeframeFrom(url);
-
-    let provider = 'context-reset-unknown';
-    let candles = trend(900);
-    let delay = 0;
-
-    if (ticker === '005930' && timeframe === '5m') {
-      provider = 'context-reset-kr-5m';
-      candles = rows(DOUBLE_TOP);
-    } else if (ticker === '005930' && timeframe === '1m') {
-      oneMinuteCalls += 1;
-      provider = 'context-reset-kr-1m-late';
-      candles = trend(10_000);
-      delay = 900;
-    } else if (ticker === '005930' && timeframe === '15m') {
-      provider = 'context-reset-kr-15m';
-      candles = trend(20_000);
-    } else if (ticker === '000660' && timeframe === '15m') {
-      provider = 'context-reset-kr-000660';
-      candles = rows(DOUBLE_TOP.map((value) => value + 300));
-      delay = 250;
-    } else if (ticker === 'AAPL' && timeframe === '15m') {
-      provider = 'context-reset-us-aapl';
-      candles = trend(500);
-    }
-
-    if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        provider,
-        fetchedAt: '2026-08-04T11:40:00.000Z',
-        updatedAt: '2026-08-04T11:40:00.000Z',
-        candles,
-      }),
-    }).catch(() => undefined);
-  });
+  const fulfillStockRoute = (route: Route) => fulfillStockChart(route, () => { oneMinuteCalls += 1; });
+  await page.route('**/api/stocks/*/chart**', fulfillStockRoute);
+  await page.route('**/api/stocks/*/candles**', fulfillStockRoute);
 
   return {
     oneMinuteCalls: () => oneMinuteCalls,
