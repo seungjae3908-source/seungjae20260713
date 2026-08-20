@@ -15,6 +15,7 @@ function noEventEvidence(overrides = {}) {
     scheduled: false,
     source: "issuer-calendar",
     validUntilMs: AS_OF + 15 * 60_000,
+    coverageComplete: true,
     coverageStartMs: AS_OF - 24 * 60 * 60_000,
     coverageEndMs: AS_OF + 24 * 60 * 60_000,
     ...overrides,
@@ -31,6 +32,7 @@ function scheduledEventEvidence(minutesFromNow, overrides = {}) {
     eventTimestampMs: AS_OF + minutesFromNow * 60_000,
     source: "issuer-calendar",
     validUntilMs: AS_OF + 15 * 60_000,
+    coverageComplete: true,
     coverageStartMs: AS_OF - 24 * 60 * 60_000,
     coverageEndMs: AS_OF + 24 * 60 * 60_000,
     ...overrides,
@@ -92,7 +94,7 @@ test("missing event provenance fields return BLOCKED_DATA instead of throwing or
   assert.equal(missingEventTimestamp.reason, "BINARY_EVENT_TIMESTAMP_REQUIRED");
 });
 
-test("fresh source-backed no-event calendar evidence passes only with sufficient forward coverage", () => {
+test("fresh source-backed no-event calendar evidence passes only with complete two-sided coverage", () => {
   const result = evaluateQualityDaytradeBinaryEventRisk({
     asOfMs: AS_OF,
     binaryEventEvidence: noEventEvidence(),
@@ -101,7 +103,19 @@ test("fresh source-backed no-event calendar evidence passes only with sufficient
   assert.equal(result.status, "PASS");
   assert.equal(result.reason, "NO_SCHEDULED_BINARY_EVENT");
   assert.equal(result.evidence.source, "issuer-calendar");
+  assert.equal(result.evidence.coverageComplete, true);
+  assert.ok(result.evidence.coverageStartMs <= result.evidence.requiredCoverageStartMs);
   assert.ok(result.evidence.coverageEndMs >= result.evidence.requiredCoverageEndMs);
+});
+
+test("incomplete calendar coverage cannot prove a safe no-event state", () => {
+  const result = evaluateQualityDaytradeBinaryEventRisk({
+    asOfMs: AS_OF,
+    binaryEventEvidence: noEventEvidence({ coverageComplete: false }),
+    binaryEventPolicy: policy,
+  });
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.equal(result.reason, "BINARY_EVENT_COVERAGE_COMPLETE_REQUIRED");
 });
 
 test("no-event evidence without a source fails closed", () => {
@@ -133,6 +147,17 @@ test("calendar coverage must span the full caller-versioned pre-event blackout h
   assert.equal(result.status, "BLOCKED_DATA");
   assert.equal(result.reason, "BINARY_EVENT_COVERAGE_INSUFFICIENT");
   assert.equal(result.requiredCoverageEndMs, AS_OF + 120 * 60_000);
+});
+
+test("calendar coverage must also span the full post-event cooldown lookback", () => {
+  const result = evaluateQualityDaytradeBinaryEventRisk({
+    asOfMs: AS_OF,
+    binaryEventEvidence: noEventEvidence({ coverageStartMs: AS_OF - 59 * 60_000 }),
+    binaryEventPolicy: policy,
+  });
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.equal(result.reason, "BINARY_EVENT_LOOKBACK_INSUFFICIENT");
+  assert.equal(result.requiredCoverageStartMs, AS_OF - 60 * 60_000);
 });
 
 test("invalid validity and coverage ranges fail closed", () => {
@@ -175,6 +200,16 @@ test("scheduled binary event still requires verified source-backed evidence", ()
   });
   assert.equal(unsupported.status, "BLOCKED_DATA");
   assert.equal(unsupported.reason, "BINARY_EVENT_TYPE_UNSUPPORTED");
+});
+
+test("scheduled event timestamp must be inside the claimed complete calendar coverage", () => {
+  const result = evaluateQualityDaytradeBinaryEventRisk({
+    asOfMs: AS_OF,
+    binaryEventEvidence: scheduledEventEvidence(180, { coverageEndMs: AS_OF + 150 * 60_000 }),
+    binaryEventPolicy: policy,
+  });
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.equal(result.reason, "BINARY_EVENT_TIMESTAMP_OUTSIDE_COVERAGE");
 });
 
 test("entry inside pre-event blackout abstains", () => {
@@ -224,5 +259,6 @@ test("binary-event search grid exposes research candidates, not a hidden default
   assert.ok(grid.combinations.some((row) => row.preEventBlackoutMinutes === 240 && row.postEventCooldownMinutes === 120));
   assert.match(grid.note, /research candidates/i);
   assert.match(grid.note, /coverage/i);
+  assert.match(grid.note, /lookback/i);
   assert.equal(grid.optimizationRule, "RESEARCH_ONLY_COARSE_TO_FINE_OOS_WALK_FORWARD_FINAL_HOLDOUT");
 });
