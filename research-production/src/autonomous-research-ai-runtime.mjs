@@ -148,15 +148,16 @@ export async function preflightAutonomousResearchAi({
 export async function probeAutonomousResearchAi(input = {}) {
   const preflight = await preflightAutonomousResearchAi(input);
   const readiness = await preflight.bridge.probeFreeAiProviders();
+  const presence = preflight.result.providerPresence;
   const result = Object.freeze({
     schemaVersion: 1,
     mode: 'PROBE',
     status: readiness.AI_DUAL_REVIEW_READY === 'READY' ? 'READY' : 'AI_RESEARCH_UNAVAILABLE',
     observedAt: readiness.checkedAt,
     researchSha: preflight.base.researchSha,
-    providerPresence: preflight.result.providerPresence,
+    providerPresence: presence,
     providerReadiness: readiness,
-    providerNetworkCalls: preflight.result.providerPresence.geminiConfigured || preflight.result.providerPresence.groqConfigured ? 2 : 0,
+    providerNetworkCalls: Number(presence.geminiConfigured) + Number(presence.groqConfigured),
     FREE_PROVIDER_ONLY: true,
     PAID_FALLBACK: false,
     secretValuesExposed: false,
