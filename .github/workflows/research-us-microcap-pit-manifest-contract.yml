@@ -1,0 +1,57 @@
+name: Research US Microcap PIT Manifest Contract
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - market-prediction-lab/scripts/build-us-microcap-pit-risk-manifest-v1.py
+      - market-prediction-lab/scripts/apply-us-microcap-pit-risk-gate-v1.py
+      - market-prediction-lab/scripts/build-us-microcap-sec-dilution-evidence-v1.py
+      - .github/workflows/research-us-microcap-pit-manifest-contract.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-us-microcap-pit-manifest-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RESEARCH_CODE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact research head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RESEARCH_CODE_SHA }}
+          persist-credentials: false
+
+      - name: Assert exact research identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$RESEARCH_CODE_SHA"
+          printf '%s' "$RESEARCH_CODE_SHA" | grep -Eq '^[0-9a-f]{40}$'
+
+      - name: Self-test PIT manifest builder
+        run: python3 market-prediction-lab/scripts/build-us-microcap-pit-risk-manifest-v1.py --self-test
+
+      - name: Self-test downstream PIT risk gate
+        run: python3 market-prediction-lab/scripts/apply-us-microcap-pit-risk-gate-v1.py --self-test
+
+      - name: Self-test SEC form-level dilution contract
+        run: python3 market-prediction-lab/scripts/build-us-microcap-sec-dilution-evidence-v1.py --self-test
+
+      - name: Assert research-only safety contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ github.event_name }}" = "pull_request" -o "${{ github.event_name }}" = "workflow_dispatch"
+          ! grep -qE '^\s*schedule:' .github/workflows/research-us-microcap-pit-manifest-contract.yml
+          ! grep -qE 'contents:\s*write' .github/workflows/research-us-microcap-pit-manifest-contract.yml
+          grep -q 'canonicalSampleDelta' market-prediction-lab/scripts/build-us-microcap-pit-risk-manifest-v1.py
+          grep -q 'FLOAT_MEASURE_NOT_SHARE_COUNT' market-prediction-lab/scripts/build-us-microcap-pit-risk-manifest-v1.py
