@@ -2,10 +2,11 @@ import { PredictionInputError } from "./contracts.js";
 import { evaluateUsQualityDaytradeSetup } from "./us-quality-daytrade-research-v1.js";
 import { evaluateQualityDaytradeBinaryEventRisk } from "./us-quality-daytrade-binary-event-v1.js";
 import { evaluateQualityDaytradeUniverseProvenance } from "./us-quality-daytrade-universe-provenance-v1.js";
+import { evaluateUsQualityDaytradeLiquidityEvidence } from "./us-quality-daytrade-liquidity-evidence-v1.js";
 import { evaluateUsQualityDaytradeVolatility } from "./us-quality-daytrade-volatility-v1.js";
 import { evaluateUsQualityDaytradeMarketContext } from "./us-quality-daytrade-market-context-v1.js";
 
-export const QUALITY_DAYTRADE_PREENTRY_CONTRACT_VERSION = "us-quality-daytrade-preentry-v4";
+export const QUALITY_DAYTRADE_PREENTRY_CONTRACT_VERSION = "us-quality-daytrade-preentry-v5";
 
 function safeResult(fields) {
   return Object.freeze({
@@ -17,6 +18,10 @@ function safeResult(fields) {
     exchangeRequestSent: false,
     ...fields,
   });
+}
+
+function normalizedSymbol(value) {
+  return String(value ?? "").trim().toUpperCase();
 }
 
 export function evaluateUsQualityDaytradePreEntry(raw) {
@@ -35,6 +40,7 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
       reason: universeProvenance.reason,
       universeProvenance,
       technicalSetup: null,
+      liquidity: null,
       volatility: null,
       marketContext: null,
       binaryEventRisk: null,
@@ -50,11 +56,78 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
       reason: technicalSetup.reason,
       universeProvenance,
       technicalSetup,
+      liquidity: null,
       volatility: null,
       marketContext: null,
       binaryEventRisk: null,
       qualityTier: technicalSetup.qualityTier ?? technicalSetup.universe?.tier ?? null,
       riskBudgetMultiplier: technicalSetup.riskBudgetMultiplier ?? technicalSetup.universe?.riskBudgetMultiplier ?? 0,
+    });
+  }
+
+  const instrumentSymbol = normalizedSymbol(raw.instrument?.symbol);
+  const liquiditySymbol = normalizedSymbol(raw.liquidityEvidence?.symbol);
+  if (!liquiditySymbol) {
+    return safeResult({
+      status: "BLOCKED_DATA",
+      reason: "LIQUIDITY_SYMBOL_REQUIRED",
+      universeProvenance,
+      technicalSetup,
+      liquidity: null,
+      volatility: null,
+      marketContext: null,
+      binaryEventRisk: null,
+      qualityTier: technicalSetup.qualityTier,
+      riskBudgetMultiplier: technicalSetup.riskBudgetMultiplier,
+    });
+  }
+  if (liquiditySymbol !== instrumentSymbol) {
+    return safeResult({
+      status: "BLOCKED_DATA",
+      reason: "LIQUIDITY_SYMBOL_MISMATCH",
+      universeProvenance,
+      technicalSetup,
+      liquidity: null,
+      volatility: null,
+      marketContext: null,
+      binaryEventRisk: null,
+      qualityTier: technicalSetup.qualityTier,
+      riskBudgetMultiplier: technicalSetup.riskBudgetMultiplier,
+    });
+  }
+
+  const liquidity = evaluateUsQualityDaytradeLiquidityEvidence({
+    asOfMs: raw.asOfMs,
+    candleEvidence: raw.liquidityEvidence?.candleEvidence,
+    relativeVolumeEvidence: raw.liquidityEvidence?.relativeVolumeEvidence,
+    liquidityPolicy: raw.liquidityEvidence?.liquidityPolicy,
+  });
+  if (liquidity.status !== "PASS") {
+    return safeResult({
+      status: "BLOCKED_DATA",
+      reason: liquidity.reason,
+      universeProvenance,
+      technicalSetup,
+      liquidity,
+      volatility: null,
+      marketContext: null,
+      binaryEventRisk: null,
+      qualityTier: technicalSetup.qualityTier,
+      riskBudgetMultiplier: technicalSetup.riskBudgetMultiplier,
+    });
+  }
+  if (liquidity.session !== technicalSetup.session) {
+    return safeResult({
+      status: "BLOCKED_DATA",
+      reason: "LIQUIDITY_TECHNICAL_SESSION_MISMATCH",
+      universeProvenance,
+      technicalSetup,
+      liquidity,
+      volatility: null,
+      marketContext: null,
+      binaryEventRisk: null,
+      qualityTier: technicalSetup.qualityTier,
+      riskBudgetMultiplier: technicalSetup.riskBudgetMultiplier,
     });
   }
 
@@ -70,6 +143,7 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
       reason: volatility.reason,
       universeProvenance,
       technicalSetup,
+      liquidity,
       volatility,
       marketContext: null,
       binaryEventRisk: null,
@@ -89,6 +163,7 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
       reason: marketContext.reason,
       universeProvenance,
       technicalSetup,
+      liquidity,
       volatility,
       marketContext,
       binaryEventRisk: null,
@@ -109,6 +184,7 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
       reason: binaryEventRisk.reason,
       universeProvenance,
       technicalSetup,
+      liquidity,
       volatility,
       marketContext,
       binaryEventRisk,
@@ -119,9 +195,10 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
 
   return safeResult({
     status: "CANDIDATE",
-    reason: "VWAP_FIRST_PULLBACK_REBREAK_EVENT_SAFE",
+    reason: "VWAP_FIRST_PULLBACK_REBREAK_LIQUID_EVENT_SAFE",
     universeProvenance,
     technicalSetup,
+    liquidity,
     volatility,
     marketContext,
     binaryEventRisk,
