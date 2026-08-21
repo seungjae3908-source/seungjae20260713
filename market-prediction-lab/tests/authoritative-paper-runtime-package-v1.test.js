@@ -176,7 +176,7 @@ test("lossless Paper state snapshot preserves the complete state and never suppl
   }
 });
 
-test("evidence ownership map wires existing owners and keeps three missing owners explicit", () => {
+test("evidence ownership map wires existing owners and keeps four missing owners explicit", () => {
   const contract = AUTHORITATIVE_PAPER_EVIDENCE_SOURCE_OWNERSHIP;
   assert.deepEqual(contract.callbacks.map((row) => row.callback), [
     "scanBatchForMarket",
@@ -191,12 +191,14 @@ test("evidence ownership map wires existing owners and keeps three missing owner
   const evidenceRows = contract.callbacks.slice(1);
   assert.equal(contract.callbacks.every((row) => typeof row.dataProvenance === "string" && row.dataProvenance.length > 0), true);
   assert.equal(evidenceRows.filter((row) => row.ownerStatus === "OWNER_EXISTS").length, 3);
-  assert.equal(evidenceRows.filter((row) => row.ownerStatus === "OWNER_EXISTS_RUNTIME_UNAVAILABLE").length, 1);
-  assert.equal(evidenceRows.filter((row) => row.ownerStatus === "OWNER_MISSING").length, 3);
+  assert.equal(evidenceRows.filter((row) => row.ownerStatus === "OWNER_MISSING").length, 4);
   assert.equal(contract.sevenEvidenceOwnerSummary.callbacksWired, 3);
   assert.equal(contract.sevenEvidenceOwnerSummary.scannerCallbackWired, true);
   assert.equal(contract.sevenEvidenceOwnerSummary.scheduledCanonicalWriter, "OWNER_MISSING");
   assert.equal(contract.sevenEvidenceOwnerSummary.allOwnersReady, false);
+  assert.equal(contract.sevenEvidenceOwnerSummary.firstZeroStage, "UNKNOWN");
+  assert.equal(contract.sevenEvidenceOwnerSummary.firstBlocker, "AUTHORITATIVE_CALLBACK_SOURCE_UNAVAILABLE");
+  assert.equal(contract.sevenEvidenceOwnerSummary.unknownIsZero, false);
   assert.equal(contract.executionAuthority, "NONE");
   assert.equal(contract.privateApiAllowed, false);
   assert.equal(contract.liveTrading, false);
