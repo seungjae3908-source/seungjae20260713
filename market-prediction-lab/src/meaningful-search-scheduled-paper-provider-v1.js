@@ -78,8 +78,17 @@ function blockedEvidence(base, runtime, blocker) {
       schemaVersion: "meaningful-search-scheduled-paper-provider-v1",
       status: runtime?.status ?? "UNKNOWN",
       searchOutcome: runtime?.search?.outcome ?? null,
-      eligibleCandidates: Number(runtime?.bridgeEligibleCandidates ?? 0),
-      exitSignals: Number(runtime?.paperBridge?.exits ?? 0),
+      eligibleCandidates: Number.isInteger(runtime?.bridgeEligibleCandidates)
+        ? runtime.bridgeEligibleCandidates
+        : null,
+      exitSignals: Number.isInteger(runtime?.paperBridge?.exits)
+        ? runtime.paperBridge.exits
+        : null,
+      stageMeasurements: Array.isArray(runtime?.stageMeasurements)
+        ? freeze(runtime.stageMeasurements.map((row) => freeze(structuredClone(row))))
+        : freeze([]),
+      firstZeroStage: runtime?.firstZeroStage ?? "UNKNOWN",
+      firstZeroReason: runtime?.firstZeroReason ?? blocker,
       blocker,
     }),
   });
@@ -97,6 +106,11 @@ function readyEvidence(base, runtime, candidates, exits) {
       searchOutcome: runtime?.search?.outcome ?? null,
       eligibleCandidates: candidates.length,
       exitSignals: exits.length,
+      stageMeasurements: Array.isArray(runtime.stageMeasurements)
+        ? freeze(runtime.stageMeasurements.map((row) => freeze(structuredClone(row))))
+        : freeze([]),
+      firstZeroStage: runtime.firstZeroStage ?? "UNKNOWN",
+      firstZeroReason: runtime.firstZeroReason ?? null,
       blocker: null,
     }),
   });
@@ -133,9 +147,14 @@ export function wrapPaperForwardProviderWithMeaningfulSearch({
         return blockedEvidence(base, runtime, "PAPER_RUNTIME_CONTRACT_INVALID");
       }
       if (!READY_RUNTIME_STATUSES.has(runtime.status)) {
-        const blocker = runtime.status === "SEARCH_FAILURE_BLOCKED"
-          ? "SEARCH_FAILURE"
-          : runtime.status ?? "PAPER_RUNTIME_NOT_READY";
+        const admissionBlockers = Array.isArray(runtime.admissionBlockers)
+          ? runtime.admissionBlockers.filter(nonEmpty)
+          : [];
+        const blocker = admissionBlockers.length > 0
+          ? [...new Set(admissionBlockers)].join("|")
+          : runtime.status === "SEARCH_FAILURE_BLOCKED"
+            ? "SEARCH_FAILURE"
+            : runtime.status ?? "PAPER_RUNTIME_NOT_READY";
         return blockedEvidence(base, runtime, blocker);
       }
 
