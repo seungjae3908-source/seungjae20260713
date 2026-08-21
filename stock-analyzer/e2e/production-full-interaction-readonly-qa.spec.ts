@@ -231,7 +231,7 @@ function isSafeControl(control: ControlInventory) {
   if (control.tag === 'SUMMARY' || control.expanded != null) return !UNSAFE_PATTERN.test(control.label);
   if (EXPLICIT_SAFE_PATTERN.test(control.label)) return true;
   if (UNSAFE_PATTERN.test(control.label)) return false;
-  return control.tag === 'BUTTON' || control.role === 'button';
+  return false;
 }
 
 function isUnsafeControl(control: ControlInventory) {
@@ -383,6 +383,23 @@ async function auditRoute(page: Page, route: string, diagnostics: Diagnostic[]):
 function fullProject(testInfo: TestInfo) {
   return testInfo.project.name === 'prod-desktop-1440' || testInfo.project.name === 'prod-mobile-390';
 }
+
+const SAFE_CONTROL_FIXTURE: ControlInventory = {
+  tag: 'BUTTON',
+  role: 'button',
+  label: '',
+  disabled: false,
+  expanded: null,
+  type: 'button',
+  href: null,
+};
+
+test('Production read-only safe-control classifier fails closed for unknown buttons', () => {
+  expect(isSafeControl({ ...SAFE_CONTROL_FIXTURE, label: '새로고침' })).toBe(true);
+  expect(isSafeControl({ ...SAFE_CONTROL_FIXTURE, label: '상세 보기' })).toBe(true);
+  expect(isSafeControl({ ...SAFE_CONTROL_FIXTURE, label: '알 수 없는 동작' })).toBe(false);
+  expect(isSafeControl({ ...SAFE_CONTROL_FIXTURE, label: '모의 평가' })).toBe(false);
+});
 
 test.describe('Production full interaction read-only QA', () => {
   test.skip(!productionQaEnabled, 'Dedicated Production QA credentials and read-only flag are required');
