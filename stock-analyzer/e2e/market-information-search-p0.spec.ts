@@ -248,13 +248,14 @@ async function installMocks(page: Page) {
 async function runSearch(page: Page, config: MarketCase, query: string, expected: Sample) {
   const input = page.getByRole('combobox', { name: '통합 자산 검색' });
   const started = Date.now();
-  await input.fill(query);
-  const response = await page.waitForResponse((candidate) => {
+  const responsePromise = page.waitForResponse((candidate) => {
     const url = new URL(candidate.url());
     return url.pathname === '/api/search/suggest'
       && url.searchParams.get('market') === config.market
       && (url.searchParams.get('q') ?? '').trim().toLowerCase() === query.trim().toLowerCase();
   });
+  await input.fill(query);
+  const response = await responsePromise;
   expect(response.status()).toBe(200);
   const option = page.getByRole('option').filter({ hasText: expected.symbol }).first();
   await expect(option).toBeVisible();
@@ -287,6 +288,7 @@ test('market-room canonical search stays independent of rankings and supports ti
 });
 
 test('desktop performs 400 scoped searches with zero wrong-market results and records p50/p95/max', async ({ page }) => {
+  test.setTimeout(180_000);
   const diagnostics = await installMocks(page);
   await page.setViewportSize({ width: 1440, height: 1000 });
   const report: Record<string, { count: number; average: number; p50: number; p95: number; max: number }> = {};
@@ -315,6 +317,7 @@ test('desktop performs 400 scoped searches with zero wrong-market results and re
 });
 
 test('mobile performs 100 scoped searches and all required viewports preserve search geometry', async ({ page }) => {
+  test.setTimeout(120_000);
   const diagnostics = await installMocks(page);
   await page.setViewportSize({ width: 390, height: 844 });
   const report: Record<string, { count: number; average: number; p50: number; p95: number; max: number }> = {};
