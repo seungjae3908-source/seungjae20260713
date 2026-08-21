@@ -6,6 +6,15 @@ const NOW = Date.parse('2026-08-21T00:00:00.000Z');
 const SAFE_BUNDLE = Object.freeze({
   schemaVersion: 'scanner-paper-admission-evidence-bundle-v1',
   evidenceDigest: 'a'.repeat(64),
+  executionEvidence: Object.freeze({
+    costPolicy: Object.freeze({
+      spreadRate: 0.001,
+      slippageRate: 0.0005,
+      latencyRate: 0.0002,
+      liquidityImpactRate: 0.0001,
+      partialFillImpactRate: 0.0001,
+    }),
+  }),
   executionAuthority: 'NONE',
   simulatedOnly: true,
   liveOrderAllowed: false,
@@ -36,9 +45,22 @@ function readyComposition(bundle: unknown = SAFE_BUNDLE) {
       blockers: [],
       ...safety(),
     },
+    riskInput: { slippageRate: 0.0005 },
+    riskResult: { recommendedQuantity: 10 },
     blockers: [],
     ...safety(),
   } as never;
+}
+
+function parityPass(capture?: { slippageRate: number | null }) {
+  return ((input: Record<string, unknown>) => {
+    if (capture) capture.slippageRate = Number(input.slippageRate);
+    return {
+      allowed: true,
+      recommendedQuantity: 10,
+      blockCodes: [],
+    };
+  }) as never;
 }
 
 function authoritativeSources(counter?: { calls: number }) {
@@ -63,9 +85,10 @@ function authoritativeSources(counter?: { calls: number }) {
   };
 }
 
-test('P0-C9 delegates exact authoritative evidence to the existing P0-C5 composer and returns only its canonical READY bundle', async () => {
+test('P0-C9 delegates exact authoritative evidence and rechecks the final execution-cost envelope before READY', async () => {
   const { values, sources } = authoritativeSources();
   const capture: { input: Record<string, unknown> | null } = { input: null };
+  const parityCapture = { slippageRate: null as number | null };
   const producer = createScannerCryptoFuturesPaperAdmissionEvidenceProducer({
     sources,
     now: () => NOW,
@@ -74,6 +97,7 @@ test('P0-C9 delegates exact authoritative evidence to the existing P0-C5 compose
       capture.input = input;
       return readyComposition();
     }) as never,
+    recalculateRisk: parityPass(parityCapture),
   });
 
   const result = await producer({
@@ -101,6 +125,27 @@ test('P0-C9 delegates exact authoritative evidence to the existing P0-C5 compose
   assert.equal(captured.supplementalCostEvidence, values.supplementalCostEvidence);
   assert.equal(captured.nowMs, NOW);
   assert.equal(captured.maxEvidenceAgeMs, 45_000);
+  assert.ok(parityCapture.slippageRate != null);
+  assert.ok(Math.abs(parityCapture.slippageRate - 0.0019) <= 1e-12);
+});
+
+test('P0-C9 blocks a canonical READY bundle when the full execution-cost envelope requires a smaller quantity', async () => {
+  const { sources } = authoritativeSources();
+  const producer = createScannerCryptoFuturesPaperAdmissionEvidenceProducer({
+    sources,
+    now: () => NOW,
+    compose: (() => readyComposition()) as never,
+    recalculateRisk: (() => ({
+      allowed: true,
+      recommendedQuantity: 9,
+      blockCodes: [],
+    })) as never,
+  });
+
+  const result = await producer({ card: {}, market: 'CRYPTO_FUTURES' });
+  assert.equal(result.status, 'BLOCKED');
+  assert.equal(result.bundle, null);
+  assert.deepEqual(result.blockers, ['P0_C9_RISK_COST_PARITY_MISMATCH']);
 });
 
 test('P0-C9 preserves composer blockers and never upgrades missing authoritative evidence to a zero/no-trade result', async () => {
