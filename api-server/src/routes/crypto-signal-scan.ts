@@ -268,7 +268,12 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
       };
       const canonicalResult = withScannerCanonicalActions(rankedResult);
       const visibleResult = withScannerOutcome(filterScannerResponseForTier(canonicalResult, membershipLevel, requestedGrade ?? undefined));
-      void deliverScannerTelegramAlerts(visibleResult.alerts);
+      void deliverScannerTelegramAlerts(
+        visibleResult.alerts,
+        undefined,
+        undefined,
+        { timeframe: selectedTimeframe, generatedAt: visibleResult.generatedAt },
+      );
       res.setHeader('Cache-Control', 'no-store, max-age=0');
       res.setHeader('X-Scanner-Request-Id', result.requestId);
       return res.json({
