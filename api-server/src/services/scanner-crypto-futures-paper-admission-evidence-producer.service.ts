@@ -6,6 +6,7 @@ import {
   SCANNER_PAPER_ADMISSION_BUNDLE_VERSION,
   type CanonicalPaperAdmissionEvidenceBundle,
 } from './scanner-paper-admission-evidence-bundle.service';
+import { calculateTradingRisk } from './trading-risk-engine.service';
 
 export const SCANNER_CRYPTO_FUTURES_PAPER_ADMISSION_EVIDENCE_PRODUCER_VERSION =
   'scanner-crypto-futures-paper-admission-evidence-producer-v1' as const;
@@ -22,6 +23,7 @@ const SOURCE_KEYS = Object.freeze([
 
 type ComposerInput = Parameters<typeof composeScannerCryptoFuturesPaperAdmission>[0];
 type SourceKey = typeof SOURCE_KEYS[number];
+type RiskRecalculator = typeof calculateTradingRisk;
 
 export type ScannerCryptoFuturesPaperAdmissionEvidenceContext = Readonly<{
   card: unknown;
@@ -56,12 +58,21 @@ export type ScannerCryptoFuturesPaperAdmissionEvidenceProducerResult = Readonly<
 type ProducerOptions = Readonly<{
   sources: ScannerCryptoFuturesPaperAdmissionEvidenceSources;
   compose?: typeof composeScannerCryptoFuturesPaperAdmission;
+  recalculateRisk?: RiskRecalculator;
   now?: () => number;
   maxEvidenceAgeMs?: number;
 }>;
 
 function finite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
+}
+
+function positive(value: unknown): value is number {
+  return finite(value) && value > 0;
+}
+
+function nonNegative(value: unknown): value is number {
+  return finite(value) && value >= 0;
 }
 
 function safetyEnvelope() {
@@ -101,6 +112,51 @@ function validBundleSafety(bundle: CanonicalPaperAdmissionEvidenceBundle): boole
     && bundle.productionMutationAllowed === false;
 }
 
+function riskCostParityBlockers(
+  composition: ScannerCryptoFuturesPaperAdmissionComposition,
+  nowMs: number,
+  recalculateRisk: RiskRecalculator,
+): string[] {
+  const bundle = composition.admissionResult?.bundle;
+  const riskInput = composition.riskInput;
+  const originalQuantity = composition.riskResult?.recommendedQuantity;
+  const costPolicy = bundle?.executionEvidence?.costPolicy;
+  if (!riskInput || !positive(originalQuantity) || !costPolicy) {
+    return ['P0_C9_RISK_COST_PARITY_EVIDENCE_REQUIRED'];
+  }
+
+  const executionRates = [
+    costPolicy.spreadRate,
+    costPolicy.slippageRate,
+    costPolicy.latencyRate,
+    costPolicy.liquidityImpactRate,
+    costPolicy.partialFillImpactRate,
+  ];
+  if (!executionRates.every(nonNegative)) {
+    return ['P0_C9_RISK_COST_PARITY_EVIDENCE_INVALID'];
+  }
+
+  // Fees and funding are already separate Risk Engine inputs. Conservatively
+  // fold every remaining adverse execution-cost component into the Risk Engine
+  // slippage slot so the final eight-component policy can never carry a larger
+  // quantity than the maximum-loss sizing envelope used for admission.
+  const conservativeExecutionRate = executionRates.reduce((sum, value) => sum + value, 0);
+  const parityInput = Object.freeze({ ...riskInput, slippageRate: conservativeExecutionRate });
+  const parityResult = recalculateRisk(parityInput, new Date(nowMs));
+  if (!parityResult.allowed || !positive(parityResult.recommendedQuantity)) {
+    return [
+      'P0_C9_RISK_COST_PARITY_BLOCKED',
+      ...(Array.isArray(parityResult.blockCodes) ? parityResult.blockCodes : []),
+    ];
+  }
+
+  const tolerance = Math.max(1e-12, originalQuantity * 1e-12);
+  if (parityResult.recommendedQuantity + tolerance < originalQuantity) {
+    return ['P0_C9_RISK_COST_PARITY_MISMATCH'];
+  }
+  return [];
+}
+
 function assertSources(sources: ScannerCryptoFuturesPaperAdmissionEvidenceSources): void {
   if (!sources || typeof sources !== 'object') {
     throw new TypeError('authoritative Crypto Futures Paper evidence sources are required');
@@ -115,11 +171,13 @@ function assertSources(sources: ScannerCryptoFuturesPaperAdmissionEvidenceSource
 export function createScannerCryptoFuturesPaperAdmissionEvidenceProducer({
   sources,
   compose = composeScannerCryptoFuturesPaperAdmission,
+  recalculateRisk = calculateTradingRisk,
   now = Date.now,
   maxEvidenceAgeMs,
 }: ProducerOptions) {
   assertSources(sources);
   if (typeof compose !== 'function') throw new TypeError('Paper admission composer is required');
+  if (typeof recalculateRisk !== 'function') throw new TypeError('Trading Risk Engine parity recalculator is required');
   if (typeof now !== 'function') throw new TypeError('Paper admission evidence clock is required');
   if (maxEvidenceAgeMs != null && (!finite(maxEvidenceAgeMs) || maxEvidenceAgeMs <= 0)) {
     throw new TypeError('positive maxEvidenceAgeMs is required when provided');
@@ -203,6 +261,9 @@ export function createScannerCryptoFuturesPaperAdmissionEvidenceProducer({
     if (!validBundleSafety(bundle)) {
       return blocked(['P0_C9_CANONICAL_ADMISSION_BUNDLE_INVALID'], composition.status);
     }
+
+    const parityBlockers = riskCostParityBlockers(composition, nowMs, recalculateRisk);
+    if (parityBlockers.length > 0) return blocked(parityBlockers, composition.status);
 
     return Object.freeze({
       status: 'READY',
