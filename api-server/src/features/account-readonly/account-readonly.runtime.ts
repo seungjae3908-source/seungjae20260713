@@ -73,7 +73,6 @@ async function withProviderDeadline<T>(
     deadlineExpired = true;
     controller.abort(new Error('PROVIDER_TIMEOUT'));
   }, timeoutMs);
-  timer.unref?.();
 
   try {
     return await operation(controller.signal);
