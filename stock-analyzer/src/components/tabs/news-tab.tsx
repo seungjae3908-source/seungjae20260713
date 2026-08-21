@@ -131,10 +131,11 @@ export function NewsTab({
   }
 
   const tone = sentimentTone(data.sentimentScore);
+  const neutral = (data.news ?? []).filter((item) => item.tone === "neutral");
 
   return (
     <div className="space-y-3">
-      <Panel title="뉴스 감성 점수">
+      <Panel title="뉴스 키워드 감성 점수">
         <div className="flex items-center gap-4">
           <span className={cn("font-mono text-3xl font-bold", toneText(tone))}>
             {data.sentimentScore > 0 ? "+" : ""}
@@ -174,15 +175,24 @@ export function NewsTab({
             </div>
           </div>
         </div>
+        <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+          제목·제공 요약의 제한된 키워드 분류이며, 근거가 없거나 긍정·부정 근거가 같은 뉴스는 중립으로 유지합니다.
+        </p>
       </Panel>
 
-      <Panel title={`호재 뉴스 (${data.positive.length})`}>
+      <Panel title={`긍정 키워드 뉴스 (${data.positive.length})`}>
         <NewsList items={data.positive as ExtendedNewsItem[]} />
       </Panel>
 
-      <Panel title={`악재 뉴스 (${data.negative.length})`}>
+      <Panel title={`부정 키워드 뉴스 (${data.negative.length})`}>
         <NewsList items={data.negative as ExtendedNewsItem[]} />
       </Panel>
+
+      {neutral.length > 0 ? (
+        <Panel title={`중립·분류 근거 부족 뉴스 (${neutral.length})`}>
+          <NewsList items={neutral as ExtendedNewsItem[]} />
+        </Panel>
+      ) : null}
     </div>
   );
 }
