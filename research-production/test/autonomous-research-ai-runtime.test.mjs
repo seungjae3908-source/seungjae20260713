@@ -120,10 +120,32 @@ test('provider probe uses exactly Gemini and Groq and never serializes credentia
     assert.equal(probed.result.providerReadiness.AI_PROVIDER_A_READY, 'READY');
     assert.equal(probed.result.providerReadiness.AI_PROVIDER_B_READY, 'READY');
     assert.equal(probed.result.providerReadiness.AI_DUAL_REVIEW_READY, 'READY');
+    assert.equal(probed.result.providerNetworkCalls, 2);
     assert.equal(calls.length, 2);
     const serialized = JSON.stringify(probed.result);
     assert.equal(serialized.includes(env.GEMINI_API_KEY), false);
     assert.equal(serialized.includes(env.GROQ_API_KEY), false);
+  });
+});
+
+test('provider probe counts only configured provider calls', async () => {
+  await withStateRoot(async (stateRoot) => {
+    const calls = [];
+    const env = safeEnv({ GEMINI_API_KEY: 'gemini-only-secret-for-test' });
+    const probed = await probeAutonomousResearchAi({
+      repoRoot: REPO_ROOT,
+      stateRoot,
+      researchSha: SHA,
+      env,
+      verifyGitHead: false,
+      fetchImpl: createMockFetch(calls),
+      now: () => NOW,
+    });
+    assert.equal(probed.result.status, 'AI_RESEARCH_UNAVAILABLE');
+    assert.equal(probed.result.providerReadiness.AI_PROVIDER_A_READY, 'READY');
+    assert.equal(probed.result.providerReadiness.AI_PROVIDER_B_READY, 'UNAVAILABLE');
+    assert.equal(probed.result.providerNetworkCalls, 1);
+    assert.equal(calls.length, 1);
   });
 });
 
@@ -178,6 +200,18 @@ test('pilot with missing provider credentials records unavailable state without 
     assert.equal(networkCalls, 0);
     assert.equal(result.profitabilityClaimed, false);
   });
+});
+
+test('isolated autonomous AI systemd unit has no install or recurring activation authority', async () => {
+  const unit = await readFile(join(REPO_ROOT, 'research-production/deploy/research-autonomous-ai@.service'), 'utf8');
+  assert.match(unit, /EnvironmentFile=-\/etc\/investment-research\/research-ai\.env/);
+  assert.match(unit, /NoNewPrivileges=true/);
+  assert.match(unit, /ProtectSystem=strict/);
+  assert.match(unit, /^CapabilityBoundingSet=$/m);
+  assert.match(unit, /RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6/);
+  assert.match(unit, /autonomous-research-ai\.mjs %i/);
+  assert.doesNotMatch(unit, /^\[Install\]$/m);
+  assert.doesNotMatch(unit, /^WantedBy=/m);
 });
 
 test('Research Production safety gate still rejects any live-trading activation flag', async () => {
