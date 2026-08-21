@@ -11,10 +11,20 @@ test("Research Production recurring CLI injects the audited authoritative source
   const publicEvidenceProvider = Object.freeze({
     collectPublicEvidence: async () => Object.freeze({ status: "BLOCKED_DATA" }),
   });
+  const sourceWiringAudit = Object.freeze({
+    status: "BLOCKED_DATA",
+    firstZeroStage: "UNKNOWN",
+    firstZeroReason: "AUTHORITATIVE_CALLBACK_SOURCE_UNAVAILABLE",
+    blockers: Object.freeze(["AUTHORITATIVE_PAPER_STATE_SOURCE_UNAVAILABLE"]),
+    scannerCandidateCount: null,
+    canonicalPaperCandidateCount: null,
+    entryCount: null,
+    settlementCount: null,
+  });
   let dependenciesInput = null;
   let invocation = null;
 
-  await runPaperForwardScheduleCli(Object.freeze({
+  const output = await runPaperForwardScheduleCli(Object.freeze({
     PAPER_FORWARD_SCHEDULE_ACTIVE: "true",
     RESEARCH_PRODUCTION: "true",
     PAPER_FORWARD_RESEARCH_SHA: SHA,
@@ -24,7 +34,7 @@ test("Research Production recurring CLI injects the audited authoritative source
     authoritativePaperSourceWiring: sourceWiring,
     authoritativePaperDependenciesFactory: (input) => {
       dependenciesInput = input;
-      return Object.freeze({ publicEvidenceProvider });
+      return Object.freeze({ publicEvidenceProvider, sourceWiringAudit });
     },
     runScheduledInvocation: async (input) => {
       invocation = input;
@@ -47,13 +57,19 @@ test("Research Production recurring CLI injects the audited authoritative source
   assert.equal(dependenciesInput.providerOptions.env.RESEARCH_PRODUCTION, "true");
   assert.equal(invocation.publicEvidenceProvider, publicEvidenceProvider);
   assert.equal(invocation.outcomeAccumulationEnabled, true);
+  assert.equal(output.authoritativeSourceWiringStatus, "BLOCKED_DATA");
+  assert.equal(output.firstZeroStage, "UNKNOWN");
+  assert.equal(output.firstZeroReason, "AUTHORITATIVE_CALLBACK_SOURCE_UNAVAILABLE");
+  assert.deepEqual(output.authoritativeSourceBlockers, sourceWiringAudit.blockers);
+  assert.equal(output.scannerCandidateCount, null);
+  assert.equal(output.entryCount, null);
 });
 
 test("Research Production recurring CLI does not double-wrap an explicitly injected canonical runtime", async () => {
   const paperRuntimeForMarket = async () => Object.freeze({ status: "VALID_NO_TRADE" });
   let invocation = null;
 
-  await runPaperForwardScheduleCli(Object.freeze({
+  const output = await runPaperForwardScheduleCli(Object.freeze({
     PAPER_FORWARD_SCHEDULE_ACTIVE: "true",
     RESEARCH_PRODUCTION: "true",
     PAPER_FORWARD_RESEARCH_SHA: SHA,
@@ -68,11 +84,12 @@ test("Research Production recurring CLI does not double-wrap an explicitly injec
   });
 
   assert.equal(typeof invocation.publicEvidenceProvider?.collectPublicEvidence, "function");
+  assert.equal(output.authoritativeSourceWiringStatus, null);
 });
 
 test("Research Production recurring CLI constructs a fail-closed authoritative provider when no callback owner is installed", async () => {
   let invocation = null;
-  await runPaperForwardScheduleCli(Object.freeze({
+  const output = await runPaperForwardScheduleCli(Object.freeze({
     PAPER_FORWARD_SCHEDULE_ACTIVE: "true",
     RESEARCH_PRODUCTION: "true",
     PAPER_FORWARD_RESEARCH_SHA: SHA,
@@ -87,4 +104,11 @@ test("Research Production recurring CLI constructs a fail-closed authoritative p
 
   assert.equal(typeof invocation.publicEvidenceProvider?.collectPublicEvidence, "function");
   assert.equal(invocation.outcomeAccumulationEnabled, true);
+  assert.equal(output.authoritativeSourceWiringStatus, "BLOCKED_DATA");
+  assert.equal(output.firstZeroStage, "UNKNOWN");
+  assert.equal(output.firstZeroReason, "AUTHORITATIVE_CALLBACK_SOURCE_UNAVAILABLE");
+  assert.equal(output.scannerCandidateCount, null);
+  assert.equal(output.canonicalPaperCandidateCount, null);
+  assert.equal(output.entryCount, null);
+  assert.equal(output.settlementCount, null);
 });

@@ -190,6 +190,7 @@ export async function runPaperForwardScheduleCli(env = process.env, {
   const outcomeAccumulationEnabled = resolveOutcomeAccumulationEnabled(env);
 
   try {
+    let authoritativeSourceWiringAudit = null;
     const cutover = researchProduction
       ? await prepareResearchProductionIdentityCutover({
         rootDirectory,
@@ -227,6 +228,7 @@ export async function runPaperForwardScheduleCli(env = process.env, {
         providerOptions: { env },
       });
       invocation.publicEvidenceProvider = dependencies.publicEvidenceProvider;
+      authoritativeSourceWiringAudit = dependencies.sourceWiringAudit ?? null;
     }
     const result = await runScheduledInvocation(invocation);
     const output = {
@@ -246,6 +248,14 @@ export async function runPaperForwardScheduleCli(env = process.env, {
       simulatedFinancialAdaptersEnabled: result.persistedStatus?.simulatedFinancialAdaptersEnabled === true,
       externalFinancialMutationAllowed: false,
       lanes: result.invocation?.providerLanes ?? [],
+      authoritativeSourceWiringStatus: authoritativeSourceWiringAudit?.status ?? null,
+      firstZeroStage: authoritativeSourceWiringAudit?.firstZeroStage ?? null,
+      firstZeroReason: authoritativeSourceWiringAudit?.firstZeroReason ?? null,
+      authoritativeSourceBlockers: authoritativeSourceWiringAudit?.blockers ?? [],
+      scannerCandidateCount: authoritativeSourceWiringAudit?.scannerCandidateCount ?? null,
+      canonicalPaperCandidateCount: authoritativeSourceWiringAudit?.canonicalPaperCandidateCount ?? null,
+      entryCount: authoritativeSourceWiringAudit?.entryCount ?? null,
+      settlementCount: authoritativeSourceWiringAudit?.settlementCount ?? null,
       privateRequestCount: 0,
       financialMutationCount: 0,
       orderCount: 0,
@@ -254,6 +264,7 @@ export async function runPaperForwardScheduleCli(env = process.env, {
     };
     process.stdout.write(`${JSON.stringify(output)}\n`);
     if (result.status === "BLOCKED_DATA") process.exitCode = 2;
+    return Object.freeze(output);
   } catch (error) {
     fail(`Paper Forward scheduled invocation failed closed: ${error?.code ?? error?.message ?? "UNKNOWN"}`, 1);
   }
