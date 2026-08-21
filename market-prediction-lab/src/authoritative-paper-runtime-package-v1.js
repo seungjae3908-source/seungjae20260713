@@ -25,13 +25,35 @@ const DEFAULT_PACKAGE_ROOT = join(
 );
 const MANIFEST_FILE = "authoritative-paper-runtime-v1.manifest.json";
 const EXPECTED_SOURCE_FILES = Object.freeze([
+  "api-server/src/data/asset-type.ts",
+  "api-server/src/lib/bounded-work-pool.ts",
+  "api-server/src/services/authoritative-paper-evidence-sources.service.ts",
   "api-server/src/services/authoritative-paper-runtime-package.entry.ts",
+  "api-server/src/services/bitget-futures-public-evidence.service.ts",
+  "api-server/src/services/crypto-signal-scanner.service.ts",
+  "api-server/src/services/forward-recommendation-observer-runtime.service.ts",
+  "api-server/src/services/forward-recommendation-observer.service.ts",
+  "api-server/src/services/market-price-precision.service.ts",
   "api-server/src/services/paper-trading-core.service.ts",
   "api-server/src/services/paper-trading-state-snapshot.service.ts",
+  "api-server/src/services/public-market-http.ts",
+  "api-server/src/services/scanner-candidate-ranking.service.ts",
+  "api-server/src/services/scanner-canonical-paper-identity.service.ts",
   "api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.ts",
   "api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.ts",
+  "api-server/src/services/scanner-crypto-price-precision.service.ts",
+  "api-server/src/services/scanner-data-quality.service.ts",
+  "api-server/src/services/scanner-indicator-library.service.ts",
+  "api-server/src/services/scanner-market-action.service.ts",
+  "api-server/src/services/scanner-market-profile-overlay.service.ts",
   "api-server/src/services/scanner-paper-admission-evidence-bundle.service.ts",
   "api-server/src/services/scanner-profit-cost-evidence-adapter.service.ts",
+  "api-server/src/services/scanner-quant-hardening.service.ts",
+  "api-server/src/services/scanner-quant-strategy.service.ts",
+  "api-server/src/services/scanner-signal-lifecycle.service.ts",
+  "api-server/src/services/scanner-strategy-profile.service.ts",
+  "api-server/src/services/signal-performance-learning.service.ts",
+  "api-server/src/services/strategy-promotion.service.ts",
   "api-server/src/services/trade-paper-market-contract.service.ts",
   "api-server/src/services/trading-risk-engine.service.ts",
 ]);
@@ -97,13 +119,20 @@ function assertManifest(manifest, bundleDigest) {
 
 function assertExports(runtime) {
   const safety = runtime?.AUTHORITATIVE_PAPER_RUNTIME_PACKAGE_SAFETY;
+  const evidenceSafety = runtime?.AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_SAFETY;
   if (runtime?.SCANNER_CRYPTO_FUTURES_PAPER_ADMISSION_EVIDENCE_PRODUCER_VERSION
       !== AUTHORITATIVE_PAPER_RUNTIME_PACKAGE_CONTRACT.canonicalProducerVersion
     || runtime?.PAPER_TRADING_STATE_SNAPSHOT_VERSION
       !== AUTHORITATIVE_PAPER_RUNTIME_PACKAGE_CONTRACT.paperStateSnapshotSchemaVersion
     || typeof runtime?.createScannerCryptoFuturesPaperAdmissionEvidenceProducer !== "function"
+    || typeof runtime?.createAuthoritativePaperEvidenceSourceWiring !== "function"
     || typeof runtime?.createImmutablePaperTradingStateSnapshot !== "function"
     || typeof runtime?.validateImmutablePaperTradingStateSnapshot !== "function"
+    || evidenceSafety?.executionAuthority !== "NONE"
+    || evidenceSafety?.privateApiAllowed !== false
+    || evidenceSafety?.liveTrading !== false
+    || evidenceSafety?.scheduleActivationAuthority !== false
+    || evidenceSafety?.financialMutationAllowed !== false
     || safety?.executionAuthority !== "NONE"
     || safety?.privateApiAllowed !== false
     || safety?.liveTrading !== false
@@ -147,6 +176,7 @@ export async function loadValidatedAuthoritativePaperRuntimePackage({
     costPolicyVersion: null,
     costPolicyVersionBinding: freeze(manifest.costPolicyVersionBinding),
     createPaperAdmissionEvidenceProducer: producerFactory(runtime),
+    createAuthoritativePaperEvidenceSourceWiring: runtime.createAuthoritativePaperEvidenceSourceWiring,
     createImmutablePaperTradingStateSnapshot: runtime.createImmutablePaperTradingStateSnapshot,
     validateImmutablePaperTradingStateSnapshot: runtime.validateImmutablePaperTradingStateSnapshot,
     executionAuthority: "NONE",

@@ -69,9 +69,11 @@ test("Research Production recurring CLI injects the audited authoritative source
   assert.equal(output.authoritativeRuntimePackage.executionAuthority, "NONE");
   assert.equal(output.authoritativeRuntimePackage.privateApiAllowed, false);
   assert.deepEqual(output.authoritativeEvidenceOwners, {
-    ownerExists: 3,
-    ownerMissing: 4,
-    callbacksWired: 0,
+    ownerExists: 4,
+    ownerMissing: 3,
+    callbacksWired: 3,
+    scannerCallbackWired: true,
+    scheduledCanonicalWriter: "OWNER_MISSING",
     allOwnersReady: false,
   });
 });
@@ -118,6 +120,12 @@ test("Research Production recurring CLI constructs a fail-closed authoritative p
   assert.equal(output.authoritativeSourceWiringStatus, "BLOCKED_DATA");
   assert.equal(output.firstZeroStage, "UNKNOWN");
   assert.equal(output.firstZeroReason, "AUTHORITATIVE_CALLBACK_SOURCE_UNAVAILABLE");
+  assert.deepEqual(output.authoritativeSourceBlockers, [
+    "AUTHORITATIVE_PAPER_STATE_SOURCE_UNAVAILABLE",
+    "AUTHORITATIVE_CONTRACT_RULES_SOURCE_UNAVAILABLE",
+    "AUTHORITATIVE_EXECUTION_OBSERVATION_SOURCE_UNAVAILABLE",
+    "AUTHORITATIVE_SUPPLEMENTAL_COST_SOURCE_UNAVAILABLE",
+  ]);
   assert.equal(output.scannerCandidateCount, null);
   assert.equal(output.canonicalPaperCandidateCount, null);
   assert.equal(output.entryCount, null);

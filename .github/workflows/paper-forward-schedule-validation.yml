@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - api-server/scripts/build-authoritative-paper-runtime-package.mjs
+      - api-server/src/services/authoritative-paper-evidence-sources.service.ts
       - api-server/src/services/authoritative-paper-runtime-package.entry.ts
       - api-server/src/services/paper-trading-state-snapshot.service.ts
       - market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json
@@ -79,6 +80,7 @@ jobs:
             .github/workflows/authoritative-paper-runtime-factory-v1.yml
             .github/workflows/paper-forward-schedule-validation.yml
             api-server/scripts/build-authoritative-paper-runtime-package.mjs
+            api-server/src/services/authoritative-paper-evidence-sources.service.ts
             api-server/src/services/authoritative-paper-runtime-package.entry.ts
             api-server/src/services/paper-trading-state-snapshot.service.ts
             market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json
