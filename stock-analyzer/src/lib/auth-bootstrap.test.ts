@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   FiniteDeadlineError,
+  reconcileInitialSessionProfile,
   runFiniteAuthBootstrap,
+  shouldReconcileInitialSession,
   withFiniteDeadline,
 } from './auth-bootstrap';
 
@@ -69,4 +71,62 @@ test('successful bootstrap applies session before profile and completes', async 
     profileTimeoutMs: 50,
   });
   assert.deepEqual(order, ['session-read', 'session-apply:session-2', 'profile:session-2']);
+});
+
+test('INITIAL_SESSION only reconciles a restored authenticated identity that is not fully hydrated', () => {
+  assert.equal(shouldReconcileInitialSession({
+    event: 'INITIAL_SESSION',
+    incomingUserId: 'user-1',
+    currentUserId: null,
+    hasProfile: false,
+  }), true);
+  assert.equal(shouldReconcileInitialSession({
+    event: 'INITIAL_SESSION',
+    incomingUserId: 'user-1',
+    currentUserId: 'user-1',
+    hasProfile: false,
+  }), true);
+  assert.equal(shouldReconcileInitialSession({
+    event: 'INITIAL_SESSION',
+    incomingUserId: 'user-1',
+    currentUserId: 'user-1',
+    hasProfile: true,
+  }), false);
+  assert.equal(shouldReconcileInitialSession({
+    event: 'INITIAL_SESSION',
+    incomingUserId: null,
+    currentUserId: null,
+    hasProfile: false,
+  }), false);
+  assert.equal(shouldReconcileInitialSession({
+    event: 'TOKEN_REFRESHED',
+    incomingUserId: 'user-1',
+    currentUserId: null,
+    hasProfile: false,
+  }), false);
+});
+
+test('initial session profile recovery retries once when the first hydration read is still empty', async () => {
+  let attempts = 0;
+  let hydrated = false;
+  await reconcileInitialSessionProfile({
+    loadProfile: async () => {
+      attempts += 1;
+      if (attempts === 2) hydrated = true;
+    },
+    hasProfile: () => hydrated,
+    isSessionCurrent: () => true,
+  });
+  assert.equal(attempts, 2);
+  assert.equal(hydrated, true);
+});
+
+test('initial session profile recovery does not retry after identity changes', async () => {
+  let attempts = 0;
+  await reconcileInitialSessionProfile({
+    loadProfile: async () => { attempts += 1; },
+    hasProfile: () => false,
+    isSessionCurrent: () => false,
+  });
+  assert.equal(attempts, 1);
 });
