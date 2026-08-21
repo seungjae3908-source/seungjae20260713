@@ -65,13 +65,13 @@ function authoritativeSources(counter?: { calls: number }) {
 
 test('P0-C9 delegates exact authoritative evidence to the existing P0-C5 composer and returns only its canonical READY bundle', async () => {
   const { values, sources } = authoritativeSources();
-  let captured: Record<string, unknown> | null = null;
+  const capture: { input: Record<string, unknown> | null } = { input: null };
   const producer = createScannerCryptoFuturesPaperAdmissionEvidenceProducer({
     sources,
     now: () => NOW,
     maxEvidenceAgeMs: 45_000,
     compose: ((input: Record<string, unknown>) => {
-      captured = input;
+      capture.input = input;
       return readyComposition();
     }) as never,
   });
@@ -90,15 +90,17 @@ test('P0-C9 delegates exact authoritative evidence to the existing P0-C5 compose
   assert.equal(result.privateTradingApiAllowed, false);
   assert.equal(result.orderSubmitted, false);
   assert.equal(result.exchangeRequestSent, false);
-  assert.equal(captured?.paperCandidate, values.paperCandidate);
-  assert.equal(captured?.learningSnapshot, values.learningSnapshot);
-  assert.equal(captured?.paperState, values.paperState);
-  assert.equal(captured?.contractRules, values.contractRules);
-  assert.equal(captured?.publicEvidence, values.publicEvidence);
-  assert.equal(captured?.executionObservation, values.executionObservation);
-  assert.equal(captured?.supplementalCostEvidence, values.supplementalCostEvidence);
-  assert.equal(captured?.nowMs, NOW);
-  assert.equal(captured?.maxEvidenceAgeMs, 45_000);
+  assert.ok(capture.input);
+  const captured = capture.input as Record<string, unknown>;
+  assert.equal(captured.paperCandidate, values.paperCandidate);
+  assert.equal(captured.learningSnapshot, values.learningSnapshot);
+  assert.equal(captured.paperState, values.paperState);
+  assert.equal(captured.contractRules, values.contractRules);
+  assert.equal(captured.publicEvidence, values.publicEvidence);
+  assert.equal(captured.executionObservation, values.executionObservation);
+  assert.equal(captured.supplementalCostEvidence, values.supplementalCostEvidence);
+  assert.equal(captured.nowMs, NOW);
+  assert.equal(captured.maxEvidenceAgeMs, 45_000);
 });
 
 test('P0-C9 preserves composer blockers and never upgrades missing authoritative evidence to a zero/no-trade result', async () => {
