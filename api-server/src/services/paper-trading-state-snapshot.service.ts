@@ -1,0 +1,240 @@
+import { createHash } from 'node:crypto';
+import { mkdir, open, readFile, rename, rm } from 'node:fs/promises';
+import { dirname, isAbsolute } from 'node:path';
+import { validateState } from './paper-trading-core.service';
+import type { PaperTradingState } from './paper-trading.types';
+
+export const PAPER_TRADING_STATE_SNAPSHOT_VERSION =
+  'paper-trading-state-snapshot-v2' as const;
+
+export type PaperTradingStateSnapshot = Readonly<{
+  schemaVersion: typeof PAPER_TRADING_STATE_SNAPSHOT_VERSION;
+  paperStateSchemaVersion: 1;
+  sourceOwner: string;
+  sourceSha: string;
+  market: string;
+  currency: string;
+  provenance: readonly string[];
+  publisherAccountIdSha256: string;
+  observedAtMs: number;
+  stateUpdatedAtMs: number;
+  maximumAgeMs: number;
+  accountId: string;
+  equity: number;
+  openPositionCount: number;
+  stateDigestSha256: string;
+  state: Readonly<PaperTradingState>;
+  immutable: true;
+  executionAuthority: 'NONE';
+  privateApiAllowed: false;
+  liveTrading: false;
+  financialMutationAllowed: false;
+}>;
+
+type SnapshotInput = Readonly<{
+  state: PaperTradingState;
+  sourceOwner: string;
+  sourceSha: string;
+  market: string;
+  currency: string;
+  provenance: readonly string[];
+  publisherAccountIdSha256: string;
+  observedAtMs?: number;
+  maximumAgeMs?: number;
+}>;
+
+function finite(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function nonEmpty(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function immutableSha(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{40}$/u.test(value);
+}
+
+function sha256Digest(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{64}$/u.test(value);
+}
+
+function canonicalMarket(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Z][A-Z0-9_]{1,39}$/u.test(value);
+}
+
+function canonicalCurrency(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Z][A-Z0-9]{1,11}$/u.test(value);
+}
+
+function cloneJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const nested of Object.values(value as Record<string, unknown>)) deepFreeze(nested);
+  }
+  return value;
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const object = value as Record<string, unknown>;
+    return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function stateDigest(state: PaperTradingState): string {
+  return createHash('sha256').update(canonicalJson(state)).digest('hex');
+}
+
+function assertSnapshotState(state: PaperTradingState, nowMs: number, maximumAgeMs: number): number {
+  validateState(state);
+  if (!nonEmpty(state.account.id)) throw new Error('PAPER_STATE_ACCOUNT_ID_REQUIRED');
+  if (!finite(state.account.equity) || state.account.equity <= 0) {
+    throw new Error('PAPER_STATE_EQUITY_REQUIRED');
+  }
+  if (!state.riskState || [
+    state.riskState.dailyRealizedPnl,
+    state.riskState.weeklyRealizedPnl,
+    state.riskState.consecutiveLosses,
+  ].some((value) => !finite(value))) {
+    throw new Error('PAPER_STATE_RISK_STATE_REQUIRED');
+  }
+  if (!Array.isArray(state.processedEventIds)) throw new Error('PAPER_STATE_EVENT_IDS_REQUIRED');
+  for (const position of state.positions) {
+    if (!finite(position.notionalValue) || position.notionalValue < 0) {
+      throw new Error('PAPER_STATE_POSITION_EXPOSURE_REQUIRED');
+    }
+  }
+  const stateUpdatedAtMs = Date.parse(state.updatedAt);
+  if (!finite(stateUpdatedAtMs) || stateUpdatedAtMs <= 0 || stateUpdatedAtMs > nowMs) {
+    throw new Error('PAPER_STATE_TIMESTAMP_INVALID');
+  }
+  if (nowMs - stateUpdatedAtMs > maximumAgeMs) throw new Error('PAPER_STATE_STALE');
+  return stateUpdatedAtMs;
+}
+
+export function createImmutablePaperTradingStateSnapshot({
+  state,
+  sourceOwner,
+  sourceSha,
+  market,
+  currency,
+  provenance,
+  publisherAccountIdSha256,
+  observedAtMs = Date.now(),
+  maximumAgeMs = 30_000,
+}: SnapshotInput): PaperTradingStateSnapshot {
+  if (!finite(observedAtMs) || observedAtMs <= 0) throw new Error('PAPER_STATE_OBSERVED_AT_INVALID');
+  if (!finite(maximumAgeMs) || maximumAgeMs <= 0) throw new Error('PAPER_STATE_MAXIMUM_AGE_INVALID');
+  if (!nonEmpty(sourceOwner)) throw new Error('PAPER_STATE_SOURCE_OWNER_REQUIRED');
+  if (!immutableSha(sourceSha)) throw new Error('PAPER_STATE_SOURCE_SHA_REQUIRED');
+  if (!canonicalMarket(market)) throw new Error('PAPER_STATE_MARKET_REQUIRED');
+  if (!canonicalCurrency(currency)) throw new Error('PAPER_STATE_CURRENCY_REQUIRED');
+  if (!sha256Digest(publisherAccountIdSha256)) {
+    throw new Error('PAPER_STATE_PUBLISHER_ACCOUNT_BINDING_REQUIRED');
+  }
+  if (!Array.isArray(provenance) || provenance.length === 0 || provenance.some((value) => !nonEmpty(value))) {
+    throw new Error('PAPER_STATE_PROVENANCE_REQUIRED');
+  }
+  const clonedState = cloneJson(state);
+  const stateUpdatedAtMs = assertSnapshotState(clonedState, observedAtMs, maximumAgeMs);
+  const openPositionCount = clonedState.positions.filter((position) => position.status !== 'closed').length;
+  return deepFreeze({
+    schemaVersion: PAPER_TRADING_STATE_SNAPSHOT_VERSION,
+    paperStateSchemaVersion: clonedState.schemaVersion,
+    sourceOwner: sourceOwner.trim(),
+    sourceSha,
+    market,
+    currency,
+    provenance: [...provenance],
+    publisherAccountIdSha256,
+    observedAtMs,
+    stateUpdatedAtMs,
+    maximumAgeMs,
+    accountId: clonedState.account.id,
+    equity: clonedState.account.equity,
+    openPositionCount,
+    stateDigestSha256: stateDigest(clonedState),
+    state: clonedState,
+    immutable: true,
+    executionAuthority: 'NONE',
+    privateApiAllowed: false,
+    liveTrading: false,
+    financialMutationAllowed: false,
+  });
+}
+
+export function validateImmutablePaperTradingStateSnapshot(
+  value: unknown,
+  nowMs = Date.now(),
+): PaperTradingStateSnapshot {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('PAPER_STATE_SNAPSHOT_REQUIRED');
+  }
+  const snapshot = cloneJson(value) as PaperTradingStateSnapshot;
+  if (snapshot.schemaVersion !== PAPER_TRADING_STATE_SNAPSHOT_VERSION
+    || snapshot.paperStateSchemaVersion !== 1
+    || snapshot.immutable !== true
+    || snapshot.executionAuthority !== 'NONE'
+    || snapshot.privateApiAllowed !== false
+    || snapshot.liveTrading !== false
+    || snapshot.financialMutationAllowed !== false) {
+    throw new Error('PAPER_STATE_SNAPSHOT_CONTRACT_INVALID');
+  }
+  const rebuilt = createImmutablePaperTradingStateSnapshot({
+    state: snapshot.state as PaperTradingState,
+    sourceOwner: snapshot.sourceOwner,
+    sourceSha: snapshot.sourceSha,
+    market: snapshot.market,
+    currency: snapshot.currency,
+    provenance: snapshot.provenance,
+    publisherAccountIdSha256: snapshot.publisherAccountIdSha256,
+    observedAtMs: snapshot.observedAtMs,
+    maximumAgeMs: snapshot.maximumAgeMs,
+  });
+  if (!finite(nowMs) || nowMs < rebuilt.observedAtMs || nowMs - rebuilt.stateUpdatedAtMs > rebuilt.maximumAgeMs) {
+    throw new Error('PAPER_STATE_SNAPSHOT_STALE_OR_FUTURE');
+  }
+  if (snapshot.stateUpdatedAtMs !== rebuilt.stateUpdatedAtMs
+    || snapshot.accountId !== rebuilt.accountId
+    || snapshot.equity !== rebuilt.equity
+    || snapshot.openPositionCount !== rebuilt.openPositionCount
+    || snapshot.stateDigestSha256 !== rebuilt.stateDigestSha256) {
+    throw new Error('PAPER_STATE_SNAPSHOT_DIGEST_MISMATCH');
+  }
+  return rebuilt;
+}
+
+export async function writeImmutablePaperTradingStateSnapshotFile(
+  snapshotPath: string,
+  snapshot: PaperTradingStateSnapshot,
+  nowMs = Date.now(),
+): Promise<PaperTradingStateSnapshot> {
+  if (!nonEmpty(snapshotPath) || !isAbsolute(snapshotPath)) {
+    throw new Error('PAPER_STATE_SNAPSHOT_ABSOLUTE_PATH_REQUIRED');
+  }
+  const validated = validateImmutablePaperTradingStateSnapshot(snapshot, nowMs);
+  await mkdir(dirname(snapshotPath), { recursive: true, mode: 0o700 });
+  const temporaryPath = `${snapshotPath}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    const handle = await open(temporaryPath, 'wx', 0o600);
+    try {
+      await handle.writeFile(`${JSON.stringify(validated, null, 2)}\n`, 'utf8');
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await rename(temporaryPath, snapshotPath);
+  } catch (error) {
+    await rm(temporaryPath, { force: true });
+    throw error;
+  }
+  const persisted = JSON.parse(await readFile(snapshotPath, 'utf8')) as unknown;
+  return validateImmutablePaperTradingStateSnapshot(persisted, nowMs);
+}
