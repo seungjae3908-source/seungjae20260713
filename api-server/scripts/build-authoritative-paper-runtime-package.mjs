@@ -14,7 +14,7 @@ const manifestPath = join(outputRoot, 'authoritative-paper-runtime-v1.manifest.j
 
 const CANONICAL_PRODUCER_SOURCE_COMMIT_SHA = '3f85003368830fb570c05b3b2060da39f515696d';
 const CANONICAL_PRODUCER_SOURCE_GIT_BLOB_SHA = 'e4fe2e7c8cd0ec279cda8d696b4ae935bef86a4b';
-const CANONICAL_PRODUCER_SOURCE_SHA256 = '778c8c32d3ade35d13407f5e159a1c50fae836ab1045b942c73e2334cd349bfb';
+const CANONICAL_PRODUCER_SOURCE_SHA256 = 'e699e00ba64040aefec24b5b4992b4975531fdf88c1e4b2b164038ebed57dad7';
 const PRODUCER_SOURCE = 'src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.ts';
 const ALLOWED_INPUTS = Object.freeze([
   'src/services/authoritative-paper-runtime-package.entry.ts',
@@ -30,6 +30,10 @@ const ALLOWED_INPUTS = Object.freeze([
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
+}
+
+function sourceSha256(value) {
+  return sha256(value.toString('utf8').replace(/\r\n/gu, '\n'));
 }
 
 function portable(value) {
@@ -64,7 +68,7 @@ if (actualInputs.some((path) => /(private|credential|secret|order-execution|acco
 
 const sourceDigests = {};
 for (const source of actualInputs) {
-  sourceDigests[source] = sha256(await readFile(join(apiRoot, source)));
+  sourceDigests[source] = sourceSha256(await readFile(join(apiRoot, source)));
 }
 if (sourceDigests[PRODUCER_SOURCE] !== CANONICAL_PRODUCER_SOURCE_SHA256) {
   throw new Error('CANONICAL_PAPER_PRODUCER_SOURCE_SHA_MISMATCH');

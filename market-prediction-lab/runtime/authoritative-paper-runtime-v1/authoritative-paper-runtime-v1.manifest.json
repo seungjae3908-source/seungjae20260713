@@ -6,9 +6,9 @@
     "sourceFile": "api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.ts",
     "sourceCommitSha": "3f85003368830fb570c05b3b2060da39f515696d",
     "sourceGitBlobSha": "e4fe2e7c8cd0ec279cda8d696b4ae935bef86a4b",
-    "sourceSha256": "778c8c32d3ade35d13407f5e159a1c50fae836ab1045b942c73e2334cd349bfb"
+    "sourceSha256": "e699e00ba64040aefec24b5b4992b4975531fdf88c1e4b2b164038ebed57dad7"
   },
-  "sourceGraphSha256": "327d5a65fd2062809cc9021782d664daf585e558b2169f7d269b9dc857091e59",
+  "sourceGraphSha256": "ba34e223e27cb937f7e013edb5361234271f6c08f311a3f41ac8251b953f8c15",
   "sourceFiles": [
     "api-server/src/services/authoritative-paper-runtime-package.entry.ts",
     "api-server/src/services/paper-trading-core.service.ts",
@@ -22,14 +22,14 @@
   ],
   "sourceFileSha256": {
     "api-server/src/services/authoritative-paper-runtime-package.entry.ts": "edb5b42be311a4437763179cc7dd0aa4a732a4a36f09ad9ae5f849c90272afea",
-    "api-server/src/services/paper-trading-core.service.ts": "3e259a2597482540f6a2ddb3e46a050ce91fc5545c10f55c611f8d0ed9c5209d",
+    "api-server/src/services/paper-trading-core.service.ts": "8e6a8965e32f75ec8bef6485ef3af8a4dd3d0480341b6506b9b8bdddfa07fb75",
     "api-server/src/services/paper-trading-state-snapshot.service.ts": "052efbaba15652f2cf91bb9253e9b62a71044617d9888b0b6521271f67e46d70",
-    "api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.ts": "02664fb7d228bf01ff8c22345837e24adcaf50e8a3cca4c715db005cd88b2782",
-    "api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.ts": "778c8c32d3ade35d13407f5e159a1c50fae836ab1045b942c73e2334cd349bfb",
-    "api-server/src/services/scanner-paper-admission-evidence-bundle.service.ts": "46851f184f1b39f9a4b3733675df3ccb160f54719ef7bd4dbbfe4ec6ece1d07d",
-    "api-server/src/services/scanner-profit-cost-evidence-adapter.service.ts": "885ce692573a247a5ad3766f8904426243c074a0909e2596f90d58e31719c1ef",
-    "api-server/src/services/trade-paper-market-contract.service.ts": "7e7ae751f14f8e2082d9d96e6eae6a46b631aa99ef2b8049bf97c57c17104348",
-    "api-server/src/services/trading-risk-engine.service.ts": "be6e7c685e9e990ffd09878a59e8ac57e57500d9633d4cb9c83f2fda4152106a"
+    "api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.ts": "16ce3a22fc3dccbc37507cdfe85291b84d90dc9a0777bf6dab25b30b08a1a98b",
+    "api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.ts": "e699e00ba64040aefec24b5b4992b4975531fdf88c1e4b2b164038ebed57dad7",
+    "api-server/src/services/scanner-paper-admission-evidence-bundle.service.ts": "80dcccd39396a01f7a2d5f7a00ee3921629fab66a59d48cec9aae16a9268cb2b",
+    "api-server/src/services/scanner-profit-cost-evidence-adapter.service.ts": "df190fd98173c7f272cb309933d877a8f73a099d900c19159e083b36097d29e0",
+    "api-server/src/services/trade-paper-market-contract.service.ts": "376ed9ba0bb91253fadb9da62f031a45ef3af1bc055622b4a1d8b46c9706f570",
+    "api-server/src/services/trading-risk-engine.service.ts": "6005a12a69e8375913d7699ef864d0efa01ff3d80357c85cd355bb16cbdd96f2"
   },
   "bundleSha256": "f7a7cba4edd2d1e0da88b225bdeca466601f446078490a87a9338b7799ae2cfd",
   "admissionBundleSchemaVersion": "scanner-paper-admission-evidence-bundle-v1",
