@@ -268,10 +268,10 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
     return message;
   }, []);
 
-  const publishSelection = useCallback((next: AnalysisSelection) => {
+  const publishSelection = useCallback((next: AnalysisSelection, trackOrder = true) => {
     const message = postWindowMessage('selection', next);
     if (!message) return;
-    selectionOrderRef.current = selectionOrderFromMessage(message);
+    if (trackOrder) selectionOrderRef.current = selectionOrderFromMessage(message);
   }, [postWindowMessage]);
 
   const applySelection = useCallback((next: AnalysisSelection, publish: boolean) => {
@@ -322,7 +322,10 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
       };
 
       if (message.type === 'ready') {
-        publishSelection(selectionRef.current);
+        // Replaying the current selection to a newly ready peer is synchronization,
+        // not a new explicit selection decision. Advancing the local order here can
+        // incorrectly eclipse that peer's first explicit selection.
+        publishSelection(selectionRef.current, false);
         if (externalMode) setExternalWindowStatus('본창과 안전하게 동기화되었습니다.');
         return;
       }
