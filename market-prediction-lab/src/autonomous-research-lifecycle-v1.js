@@ -10,7 +10,12 @@ const FOUR_MARKET_SLOTS = Object.freeze([
   "CRYPTO_FUTURES_LONG",
   "CRYPTO_FUTURES_SHORT",
 ]);
-const DUAL_AI_STATUSES = new Set(["AI_REVIEW_AGREE", "CONFLICT", "BOTH_REJECT", "INCOMPLETE"]);
+const DUAL_AI_STATUSES = new Set([
+  "AI_REVIEW_AGREE",
+  "AI_REVIEW_CONFLICT",
+  "AI_REVIEW_BOTH_REJECT",
+  "AI_REVIEW_INCOMPLETE",
+]);
 
 function requiredText(value, name) {
   if (typeof value !== "string" || !value.trim()) throw new TypeError(`${name} is required`);
@@ -333,7 +338,7 @@ export function buildAutonomousResearchFactoryStatus(input = {}) {
   const champion = input.championPortfolio ?? buildFourMarketChampionPortfolio([]);
   const scanner = input.scannerLifecycle ?? buildCanonicalScannerLifecycleIntents({ championPortfolio: champion });
   const review = input.dualAiReview ?? {};
-  const dualAiReviewStatus = DUAL_AI_STATUSES.has(review.status) ? review.status : "INCOMPLETE";
+  const dualAiReviewStatus = DUAL_AI_STATUSES.has(review.status) ? review.status : "AI_REVIEW_INCOMPLETE";
   const accountingRaw = input.evidenceAccounting ?? {};
   const evidenceAccounting = Object.freeze(Object.fromEntries([
     "externalStudyCount",

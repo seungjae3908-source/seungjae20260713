@@ -201,7 +201,7 @@ test("Research Center status uses explicit evidence accounting and missing-evide
   });
   assert.equal(status.KR_bestValidatedStrategy, "NONE/INSUFFICIENT_EVIDENCE");
   assert.equal(status.FUTURES_SHORT_bestValidatedStrategy, "NONE/INSUFFICIENT_EVIDENCE");
-  assert.equal(status.dualAiReviewStatus, "INCOMPLETE");
+  assert.equal(status.dualAiReviewStatus, "AI_REVIEW_INCOMPLETE");
   assert.equal(status.ai1Review, "NONE/INSUFFICIENT_EVIDENCE");
   assert.equal(status.evidenceAccounting.externalObservationN, 245);
   assert.equal(status.evidenceAccounting.externalStudyCount, 0);

@@ -13,15 +13,12 @@ import {
   createBoundedStrategyCandidate,
   createBoundedStrategySpecification,
   createDualFreeAiReviewPlan,
-  recordDualFreeAiReview,
-  synthesizeDualFreeAiReview,
 } from "./autonomous-strategy-formula-generator-v1.js";
 import {
   buildAutonomousResearchJob,
   claimNextAutonomousResearchJob,
   createAutonomousResearchQueue,
   enqueueAutonomousResearchJob,
-  executeAutonomousResearchJob,
   finalizeAutonomousResearchJob,
   recordAutonomousResearchResultEvidence,
   verifyAutonomousResearchQueue,
@@ -30,6 +27,15 @@ import {
   buildAutonomousResearchFactoryStatus,
   freezeAutonomousResearchCandidate,
 } from "./autonomous-research-lifecycle-v1.js";
+import {
+  assertSafeFreeAiProviderMetadata,
+  buildAutonomousResearchRuntimeReadiness,
+  buildAutonomousResearchRuntimeStatus,
+  createAutonomousResearchRuntimeState,
+  executeAutonomousResearchWorkerRuntime,
+  executeDualFreeAiRuntime,
+  verifyAutonomousResearchRuntimeState,
+} from "./autonomous-research-runtime-v1.js";
 import {
   createGlobalEvidenceLedger,
   verifyGlobalEvidenceLedger,
@@ -67,7 +73,7 @@ function safetyEnvelope() {
   });
 }
 
-function factoryCore({ factoryId, collector, registry, queue, evidenceLedger, cycleNumber, lastCycleAt, knownCandidates, trialFingerprints, rejectedFingerprints, activeCandidateFingerprints }) {
+function factoryCore({ factoryId, collector, registry, queue, evidenceLedger, runtime, cycleNumber, lastCycleAt, knownCandidates, trialFingerprints, rejectedFingerprints, activeCandidateFingerprints }) {
   return Object.freeze({
     schemaVersion: 1,
     factoryId,
@@ -75,6 +81,7 @@ function factoryCore({ factoryId, collector, registry, queue, evidenceLedger, cy
     registry,
     queue,
     evidenceLedger,
+    runtime,
     cycleNumber,
     lastCycleAt,
     knownCandidates,
@@ -96,6 +103,7 @@ export function createAutonomousGlobalResearchFactoryState({
   registry = createGlobalStrategyResearchRegistry(),
   queue = createAutonomousResearchQueue(),
   evidenceLedger = createGlobalEvidenceLedger(),
+  runtime = createAutonomousResearchRuntimeState(),
 } = {}) {
   return withFactoryDigest(factoryCore({
     factoryId: requiredText(factoryId, "factoryId"),
@@ -103,6 +111,7 @@ export function createAutonomousGlobalResearchFactoryState({
     registry,
     queue,
     evidenceLedger,
+    runtime,
     cycleNumber: 0,
     lastCycleAt: null,
     knownCandidates: Object.freeze([]),
@@ -114,7 +123,7 @@ export function createAutonomousGlobalResearchFactoryState({
 
 export function verifyAutonomousGlobalResearchFactoryState(state) {
   if (!state || state.schemaVersion !== 1 || !verifyGlobalResearchCollector(state.collector) || !verifyGlobalStrategyResearchRegistry(state.registry)) return false;
-  if (!verifyAutonomousResearchQueue(state.queue) || !verifyGlobalEvidenceLedger(state.evidenceLedger).valid) return false;
+  if (!verifyAutonomousResearchQueue(state.queue) || !verifyGlobalEvidenceLedger(state.evidenceLedger).valid || !verifyAutonomousResearchRuntimeState(state.runtime)) return false;
   if (!Number.isInteger(state.cycleNumber) || state.cycleNumber < 0) return false;
   const core = factoryCore({
     factoryId: state.factoryId,
@@ -122,6 +131,7 @@ export function verifyAutonomousGlobalResearchFactoryState(state) {
     registry: state.registry,
     queue: state.queue,
     evidenceLedger: state.evidenceLedger,
+    runtime: state.runtime,
     cycleNumber: state.cycleNumber,
     lastCycleAt: state.lastCycleAt,
     knownCandidates: Object.freeze([...(state.knownCandidates ?? [])]),
@@ -139,13 +149,19 @@ function requireCallback(dependencies, name) {
   return dependencies[name];
 }
 
+function planRuntimeConnected(providers, callback) {
+  if (!Array.isArray(providers) || typeof callback !== "function") return false;
+  const available = providers.filter((provider) => provider?.billingTier?.toUpperCase() === "FREE" && provider?.state?.toUpperCase() === "AVAILABLE");
+  return new Set(available.map((provider) => provider.providerId)).size >= 2;
+}
+
 function normalizeDualAiStatus(status) {
   return Object.freeze({
     AI_REVIEW_AGREE: "AI_REVIEW_AGREE",
-    AI_REVIEW_CONFLICT: "CONFLICT",
-    AI_REVIEW_BOTH_REJECT: "BOTH_REJECT",
-    AI_REVIEW_INCOMPLETE: "INCOMPLETE",
-  })[status] ?? "INCOMPLETE";
+    AI_REVIEW_CONFLICT: "AI_REVIEW_CONFLICT",
+    AI_REVIEW_BOTH_REJECT: "AI_REVIEW_BOTH_REJECT",
+    AI_REVIEW_INCOMPLETE: "AI_REVIEW_INCOMPLETE",
+  })[status] ?? "AI_REVIEW_INCOMPLETE";
 }
 
 function nextFactoryState(state, updates, cycleAt) {
@@ -155,6 +171,7 @@ function nextFactoryState(state, updates, cycleAt) {
     registry: updates.registry ?? state.registry,
     queue: updates.queue ?? state.queue,
     evidenceLedger: updates.evidenceLedger ?? state.evidenceLedger,
+    runtime: updates.runtime ?? state.runtime,
     cycleNumber: state.cycleNumber + 1,
     lastCycleAt: cycleAt,
     knownCandidates: Object.freeze(updates.knownCandidates ?? [...state.knownCandidates]),
@@ -196,6 +213,7 @@ export async function runAutonomousGlobalResearchFactoryCycle(state, input = {},
   let registry = state.registry;
   let queue = state.queue;
   let evidenceLedger = state.evidenceLedger;
+  let runtime = state.runtime;
   const discoveries = [];
   const analyses = [];
   const candidates = [];
@@ -216,18 +234,17 @@ export async function runAutonomousGlobalResearchFactoryCycle(state, input = {},
     const analysis = await requireCallback(dependencies, "analyzeResearchRecord")(entry.record);
     if (!analysis?.paperGenome || !analysis?.strategySpecification || !analysis?.jobInput) throw new Error("RESEARCH_ANALYSIS_ADAPTER_INVALID");
     registry = admitCollectorRecordToRegistry(registry, entry, { paperGenome: analysis.paperGenome });
+    assertSafeFreeAiProviderMetadata(input.freeAiProviders ?? []);
     const plan = createDualFreeAiReviewPlan({ evidenceFingerprint: entry.record.sourceFingerprint, providers: input.freeAiProviders ?? [] });
-    if (plan.status !== "DUAL_FREE_AI_READY") {
-      reviews.push(Object.freeze({ researchSourceId: entry.record.researchSourceId, status: "INCOMPLETE", ai1Review: null, ai2Review: null, reviewConflictReason: "TWO_DISTINCT_FREE_PROVIDERS_UNAVAILABLE" }));
-      analyses.push(Object.freeze({ researchSourceId: entry.record.researchSourceId, status: "AI_REVIEW_INCOMPLETE" }));
-      continue;
-    }
-    const recordedReviews = [];
-    for (const slot of plan.slots) {
-      const raw = await requireCallback(dependencies, "callFreeAiReviewProvider")({ slot, plan, researchRecord: entry.record, analysis });
-      recordedReviews.push(recordDualFreeAiReview(plan, raw));
-    }
-    const synthesis = synthesizeDualFreeAiReview({ plan, reviews: recordedReviews });
+    const aiRuntime = await executeDualFreeAiRuntime(runtime, {
+      plan,
+      researchSourceId: entry.record.researchSourceId,
+      researchRecord: entry.record,
+      analysis,
+      calledAt: cycleAt,
+    }, dependencies.callFreeAiReviewProvider);
+    runtime = aiRuntime.state;
+    const synthesis = aiRuntime.synthesis;
     const dualAiStatus = normalizeDualAiStatus(synthesis.status);
     reviews.push(Object.freeze({
       researchSourceId: entry.record.researchSourceId,
@@ -238,7 +255,7 @@ export async function runAutonomousGlobalResearchFactoryCycle(state, input = {},
       preservedReviewOutputs: synthesis.preservedReviewOutputs,
     }));
     analyses.push(Object.freeze({ researchSourceId: entry.record.researchSourceId, status: synthesis.status }));
-    if (dualAiStatus === "BOTH_REJECT" || dualAiStatus === "INCOMPLETE") continue;
+    if (dualAiStatus === "AI_REVIEW_BOTH_REJECT" || dualAiStatus === "AI_REVIEW_INCOMPLETE") continue;
 
     const specification = createBoundedStrategySpecification(analysis.strategySpecification);
     const candidate = createBoundedStrategyCandidate({
@@ -283,24 +300,67 @@ export async function runAutonomousGlobalResearchFactoryCycle(state, input = {},
       if (claim.status === "QUEUE_WAIT") results.push(Object.freeze({ status: "QUEUE_WAIT", reason: claim.reason }));
       break;
     }
-    const result = await executeAutonomousResearchJob(claim.job, dependencies.backtestDependencies);
+    let workerFreeze = null;
+    const requestedFeatures = claim.job.candidate.specification?.availableFeatures ?? ["RETURNS"];
+    const worker = await executeAutonomousResearchWorkerRuntime(runtime, {
+      job: claim.job,
+      dataAdapter: input.dataAdapters?.[claim.job.market] ?? null,
+      featureVersion: input.featureVersion ?? "AUTONOMOUS_FEATURES_V1",
+      requestedFeatures,
+      startedAt: cycleAt,
+      completedAt: input.workerCompletedAt ?? cycleAt,
+      maxRuntimeMs: queue.limits.maxJobRuntimeMs,
+    }, {
+      inspectDataset: dependencies.inspectResearchDataset,
+      computeFeatureBundle: dependencies.computeFeatureBundle,
+      compileStrategySpecification: dependencies.compileStrategySpecification,
+      backtestDependencies: dependencies.backtestDependencies,
+      persistEvidenceArtifact: async ({ job, result }) => {
+        const evidence = recordAutonomousResearchResultEvidence(evidenceLedger, job, result, {
+          symbol: job.universeId,
+          observationTimestamp: input.evidenceObservationTimestamp ?? cycleAt,
+          horizon: job.strategyType,
+        });
+        evidenceLedger = evidence.ledger;
+        return Object.freeze({ status: evidence.status, artifactDigest: result.resultDigest });
+      },
+      resolveNextStage: async ({ job, result }) => {
+        workerFreeze = freezeAutonomousResearchCandidate(job, result, { freezeTimestamp: cycleAt });
+        return Object.freeze({ status: result.status, frozenCandidate: workerFreeze.FROZEN_RESEARCH_CANDIDATE, freezeDigest: workerFreeze.freezeDigest ?? null });
+      },
+    });
+    runtime = worker.state;
+    if (worker.status === "FAILED") {
+      const failureCore = Object.freeze({
+        schemaVersion: 1,
+        jobId: claim.job.jobId,
+        status: "REJECTED",
+        rejectionCode: "RUNTIME_CONTRACT_FAILED",
+        stage: "DATA_VALIDATION",
+        detail: worker.reason,
+        auditTrail: Object.freeze([]),
+        finalHoldoutOpened: false,
+        frozenCandidate: false,
+      });
+      const failureResult = Object.freeze({ ...failureCore, resultDigest: researchDigest(failureCore) });
+      const finalizedFailure = finalizeAutonomousResearchJob(queue, claim.job, failureResult, { completedAt: cycleAt });
+      queue = finalizedFailure.queue;
+      results.push(Object.freeze({ status: "FAILED", reason: worker.reason, jobId: claim.job.jobId, failureDigest: worker.failure.failureDigest }));
+      freezes.push(Object.freeze({ FROZEN_RESEARCH_CANDIDATE: false, blocker: worker.reason }));
+      jobsExecuted += 1;
+      continue;
+    }
+    const result = worker.result;
     const finalized = finalizeAutonomousResearchJob(queue, claim.job, result, { completedAt: cycleAt });
     queue = finalized.queue;
-    const evidence = recordAutonomousResearchResultEvidence(evidenceLedger, claim.job, result, {
-      symbol: claim.job.universeId,
-      observationTimestamp: input.evidenceObservationTimestamp ?? cycleAt,
-      horizon: claim.job.strategyType,
-    });
-    evidenceLedger = evidence.ledger;
-    const freeze = freezeAutonomousResearchCandidate(claim.job, result, { freezeTimestamp: cycleAt });
     results.push(result);
-    freezes.push(freeze);
+    freezes.push(workerFreeze);
     jobsExecuted += 1;
   }
 
-  const nextState = nextFactoryState(state, { collector, registry, queue, evidenceLedger, knownCandidates, trialFingerprints }, cycleAt);
-  const latestReview = reviews.at(-1) ?? { status: "INCOMPLETE" };
-  const status = buildAutonomousResearchFactoryStatus({
+  const nextState = nextFactoryState(state, { collector, registry, queue, evidenceLedger, runtime, knownCandidates, trialFingerprints }, cycleAt);
+  const latestReview = reviews.at(-1) ?? { status: "AI_REVIEW_INCOMPLETE" };
+  const legacyStatus = buildAutonomousResearchFactoryStatus({
     generatedAt: cycleAt,
     codeComplete: true,
     dualAiReview: latestReview,
@@ -319,6 +379,25 @@ export async function runAutonomousGlobalResearchFactoryCycle(state, input = {},
     },
     activationReadiness: input.activationReadiness ?? { ready: false, blockers: ["SERVER_ACTIVATION_NOT_APPROVED"] },
   });
+  const runtimeStatus = buildAutonomousResearchRuntimeStatus(runtime, {
+    generatedAt: cycleAt,
+    collectorStatus: verifyGlobalResearchCollector(collector) ? "READY" : "FAILED",
+    queueDepth: queue.jobs.length,
+    candidateCount: knownCandidates.length,
+  });
+  const fourMarketAdaptersReady = ["KR_STOCK", "US_STOCK", "CRYPTO_SPOT", "CRYPTO_FUTURES"]
+    .every((market) => input.dataAdapters?.[market]?.market === market && input.dataAdapters?.[market]?.state === "AVAILABLE");
+  const readiness = buildAutonomousResearchRuntimeReadiness({
+    AI_RUNTIME_CONNECTED: planRuntimeConnected(input.freeAiProviders, dependencies.callFreeAiReviewProvider),
+    DATA_ADAPTER_CONNECTED: fourMarketAdaptersReady && typeof dependencies.inspectResearchDataset === "function" && typeof dependencies.computeFeatureBundle === "function",
+    QUEUE_RUNTIME_CONNECTED: verifyAutonomousResearchQueue(queue),
+    BACKTEST_WORKER_CONNECTED: typeof dependencies.compileStrategySpecification === "function" && dependencies.backtestDependencies != null,
+    EVIDENCE_PIPELINE_CONNECTED: verifyGlobalEvidenceLedger(evidenceLedger).valid,
+    STATUS_MODEL_CONNECTED: runtimeStatus.readOnly === true,
+    RESTART_SAFETY_VERIFIED: verifyAutonomousResearchRuntimeState(runtime) && loopContract.restartSafeStateDigestRequired === true,
+    END_TO_END_RUNTIME_TEST_PASS: Object.keys(runtime.completedJobs).length > 0,
+  });
+  const status = Object.freeze({ ...legacyStatus, ...runtimeStatus, runtimeReadiness: readiness });
   return Object.freeze({
     schemaVersion: 1,
     cycleAt,
@@ -331,6 +410,7 @@ export async function runAutonomousGlobalResearchFactoryCycle(state, input = {},
     results: Object.freeze(results),
     freezes: Object.freeze(freezes),
     status,
+    runtimeReadiness: readiness,
     finalHoldoutRequests: Object.freeze([]),
     safety: safetyEnvelope(),
   });
