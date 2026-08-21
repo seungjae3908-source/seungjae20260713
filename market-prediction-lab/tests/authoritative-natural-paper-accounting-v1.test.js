@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp } from "node:fs/promises";
@@ -22,8 +23,24 @@ import {
 const NOW = Date.UTC(2026, 7, 22, 0, 0, 0);
 const SOURCE_SHA = "a".repeat(40);
 const PUBLISHER_DIGEST = "b".repeat(64);
-const STATE_DIGEST = "c".repeat(64);
 const PARITY = "d".repeat(64);
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
+  }
+  if (value !== null && typeof value === "object") {
+    const entries = Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`);
+    return `{${entries.join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function stateDigestSha256(state) {
+  return createHash("sha256").update(canonicalJson(state)).digest("hex");
+}
 
 function paperState(balance = 10_000) {
   const at = new Date(NOW).toISOString();
@@ -62,6 +79,7 @@ function snapshot(balance = 10_000) {
   const state = paperState(balance);
   return {
     schemaVersion: "paper-trading-state-snapshot-v2",
+    paperStateSchemaVersion: state.schemaVersion,
     state,
     sourceOwner: "authenticated-paper-trading-evaluate-v2",
     sourceSha: SOURCE_SHA,
@@ -75,7 +93,7 @@ function snapshot(balance = 10_000) {
     accountId: state.account.id,
     equity: state.account.equity,
     openPositionCount: 0,
-    stateDigestSha256: STATE_DIGEST,
+    stateDigestSha256: stateDigestSha256(state),
     immutable: true,
     executionAuthority: "NONE",
     privateApiAllowed: false,
@@ -83,6 +101,15 @@ function snapshot(balance = 10_000) {
     financialMutationAllowed: false,
     unknownIsZero: false,
   };
+}
+
+function refreshSnapshotIntegrity(value) {
+  value.paperStateSchemaVersion = value.state.schemaVersion;
+  value.accountId = value.state.account.id;
+  value.equity = value.state.account.equity;
+  value.openPositionCount = value.state.positions.filter((position) => position?.status !== "closed").length;
+  value.stateDigestSha256 = stateDigestSha256(value.state);
+  return value;
 }
 
 function openPosition({ notional = 2_000, quantity = 1, leverage = 2, immediateCost = 2 } = {}) {
@@ -189,9 +216,48 @@ test("snapshot binding, source SHA, and flat-account requirements fail closed", 
   const nonFlat = snapshot();
   nonFlat.state.account.usedMargin = 100;
   nonFlat.state.positions.push({ status: "open", notionalValue: 200 });
+  refreshSnapshotIntegrity(nonFlat);
   assert.throws(() => createAuthoritativeNaturalPaperLedgerFromSnapshot({
     snapshot: nonFlat, expectedPublisherAccountIdSha256: PUBLISHER_DIGEST, expectedSourceSha: SOURCE_SHA, nowMs: NOW,
   }), /AUTHORITATIVE_NATURAL_PAPER_SEED_NOT_FLAT/);
+});
+
+test("snapshot state and redundant metadata must remain internally consistent", () => {
+  const stateTamper = snapshot();
+  stateTamper.state.account.cashBalance -= 1;
+  assert.throws(() => createAuthoritativeNaturalPaperLedgerFromSnapshot({
+    snapshot: stateTamper, expectedPublisherAccountIdSha256: PUBLISHER_DIGEST, expectedSourceSha: SOURCE_SHA, nowMs: NOW,
+  }), /AUTHORITATIVE_NATURAL_PAPER_SNAPSHOT_INTEGRITY_MISMATCH/);
+
+  const accountTamper = snapshot();
+  accountTamper.accountId = "other-account";
+  assert.throws(() => createAuthoritativeNaturalPaperLedgerFromSnapshot({
+    snapshot: accountTamper, expectedPublisherAccountIdSha256: PUBLISHER_DIGEST, expectedSourceSha: SOURCE_SHA, nowMs: NOW,
+  }), /AUTHORITATIVE_NATURAL_PAPER_SNAPSHOT_INTEGRITY_MISMATCH/);
+
+  const equityTamper = snapshot();
+  equityTamper.equity += 1;
+  assert.throws(() => createAuthoritativeNaturalPaperLedgerFromSnapshot({
+    snapshot: equityTamper, expectedPublisherAccountIdSha256: PUBLISHER_DIGEST, expectedSourceSha: SOURCE_SHA, nowMs: NOW,
+  }), /AUTHORITATIVE_NATURAL_PAPER_SNAPSHOT_INTEGRITY_MISMATCH/);
+
+  const countTamper = snapshot();
+  countTamper.openPositionCount = 1;
+  assert.throws(() => createAuthoritativeNaturalPaperLedgerFromSnapshot({
+    snapshot: countTamper, expectedPublisherAccountIdSha256: PUBLISHER_DIGEST, expectedSourceSha: SOURCE_SHA, nowMs: NOW,
+  }), /AUTHORITATIVE_NATURAL_PAPER_SNAPSHOT_INTEGRITY_MISMATCH/);
+
+  const schemaTamper = snapshot();
+  schemaTamper.paperStateSchemaVersion = 2;
+  assert.throws(() => createAuthoritativeNaturalPaperLedgerFromSnapshot({
+    snapshot: schemaTamper, expectedPublisherAccountIdSha256: PUBLISHER_DIGEST, expectedSourceSha: SOURCE_SHA, nowMs: NOW,
+  }), /AUTHORITATIVE_NATURAL_PAPER_SNAPSHOT_INTEGRITY_MISMATCH/);
+
+  const invalidTime = snapshot();
+  invalidTime.stateUpdatedAtMs = Number.NaN;
+  assert.throws(() => createAuthoritativeNaturalPaperLedgerFromSnapshot({
+    snapshot: invalidTime, expectedPublisherAccountIdSha256: PUBLISHER_DIGEST, expectedSourceSha: SOURCE_SHA, nowMs: NOW,
+  }), /AUTHORITATIVE_NATURAL_PAPER_SNAPSHOT_STALE_OR_INVALID/);
 });
 
 test("entry reserves margin and costs once, settlement releases exposure and applies costs/funding once", async () => {
