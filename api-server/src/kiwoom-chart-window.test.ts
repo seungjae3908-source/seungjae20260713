@@ -329,6 +329,14 @@ test('KR interactive public Yahoo hedge can satisfy the chart without a second K
     throw new Error(`unexpected chart fallback URL: ${url}`);
   }) as typeof fetch;
 
+  // Kiwoom mock requests are paced by a module-global 260ms minimum interval.
+  // A preceding test can legitimately leave that throttle active, allowing the
+  // 100ms Yahoo hedge to win before the first Kiwoom fetch starts. Wait past the
+  // pacing window so this regression deterministically exercises exactly one
+  // insufficient Kiwoom pass followed by the public Yahoo hedge, while still
+  // proving that no second/deep Kiwoom pass occurs.
+  await new Promise((resolve) => setTimeout(resolve, 320));
+
   await withMockKiwoom(mockFetch, async () => {
     const result = await MarketDataService.getCandlesMeta('005930', '1m');
     assert.equal(result.provider, 'yahoo');
