@@ -4,11 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       research_ref:
-        description: Exact research commit/ref to validate
+        description: Exact 40-character research commit SHA to validate
         required: false
         type: string
   pull_request:
-    branches: [main]
+    types:
+      - opened
+      - synchronize
+      - reopened
     paths:
       - .github/workflows/prediction-lab-52d-validation.yml
       - market-prediction-lab/package.json
@@ -26,6 +29,7 @@ concurrency:
 
 jobs:
   validate-and-train:
+    name: ${{ github.event_name == 'pull_request' && 'PR Exact Multi-Market' || 'Validate and train Multi-Market' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -39,7 +43,11 @@ jobs:
           ref="$PR_SHA"
           if [ -z "$ref" ]; then ref="$INPUT_REF"; fi
           if [ -z "$ref" ]; then ref="$GITHUB_SHA"; fi
-          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          if [[ ! "$ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error title=PR exact-head verification failed::[INVALID_SHA] Multi-Market requires one exact 40-character commit SHA"
+            exit 1
+          fi
+          echo "ref=${ref,,}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout isolated research revision
         uses: actions/checkout@v4
@@ -47,10 +55,27 @@ jobs:
           ref: ${{ steps.research.outputs.ref }}
           persist-credentials: false
 
-      - name: Record immutable research SHA
+      - name: Verify expected SHA and detached HEAD
         id: sha
         shell: bash
-        run: echo "value=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        env:
+          EXPECTED_SHA: ${{ steps.research.outputs.ref }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          actual_branch="$(git symbolic-ref --quiet --short HEAD || true)"
+          if [ -n "$actual_branch" ]; then
+            echo "::error title=PR exact-head verification failed::[UNEXPECTED_BRANCH] checkout must be detached, found $actual_branch"
+            exit 1
+          fi
+          if [ "${actual_sha,,}" != "${EXPECTED_SHA,,}" ]; then
+            echo "::error title=PR exact-head verification failed::[HEAD_SHA_MISMATCH] tested ${EXPECTED_SHA,,}, checked out ${actual_sha,,}"
+            exit 1
+          fi
+          echo "tested_sha=${EXPECTED_SHA,,}"
+          echo "head_sha=${actual_sha,,}"
+          echo "checkout_mode=DETACHED"
+          echo "value=${actual_sha,,}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Node 20
         uses: actions/setup-node@v4
