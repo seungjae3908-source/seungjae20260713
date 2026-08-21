@@ -205,3 +205,39 @@ test("evidence ownership map wires existing owners and keeps four missing owners
   assert.equal(contract.scheduleActivationAuthority, false);
   assert.equal(contract.financialMutationAllowed, false);
 });
+
+test("missing-owner contracts preserve UNKNOWN and separate public observations from execution estimates", () => {
+  const contracts = AUTHORITATIVE_PAPER_EVIDENCE_SOURCE_OWNERSHIP.blockedOwnerEvidenceContracts;
+
+  assert.equal(contracts.paperStateForCard.status, "OWNER_MISSING");
+  assert.equal(contracts.paperStateForCard.requiredAvailableFields.includes("state.riskState"), true);
+  assert.equal(contracts.paperStateForCard.requiredAvailableFields.includes("state.processedEventIds"), true);
+  assert.equal(contracts.paperStateForCard.inadmissibleDerivations.includes("paper-forward-observation-ledger-v1"), true);
+  assert.equal(contracts.paperStateForCard.unknownIsZero, false);
+
+  assert.equal(contracts.contractRulesForCard.status, "OWNER_MISSING");
+  assert.equal(contracts.contractRulesForCard.requiredFields.includes("maintenanceMarginTier"), true);
+  assert.equal(contracts.contractRulesForCard.missingCanonicalInputs.includes("sizedNotional"), true);
+  assert.equal(contracts.contractRulesForCard.scalarMaintenanceMarginDefaultAllowed, false);
+
+  assert.deepEqual(contracts.executionObservationForCard.observablePublicFields, [
+    "timestamp", "market", "symbol", "bid", "ask", "spread", "depth", "liquidity",
+  ]);
+  assert.deepEqual(contracts.executionObservationForCard.estimatedModelFields, [
+    "estimatedSlippage", "latencyEvidence", "partialFillEvidence", "confidence",
+  ]);
+  assert.equal(contracts.executionObservationForCard.publicDepthIsFillProof, false);
+  assert.equal(contracts.executionObservationForCard.currentPriceIsFillPrice, false);
+  assert.equal(contracts.executionObservationForCard.fixedSlippageAllowed, false);
+  assert.equal(contracts.executionObservationForCard.fixedLatencyAllowed, false);
+
+  assert.deepEqual(contracts.supplementalCostEvidenceForCard.partiallyOwnedComponents, [
+    "fees", "funding", "spread",
+  ]);
+  assert.deepEqual(contracts.supplementalCostEvidenceForCard.missingOwnedComponents, [
+    "slippage", "liquidityImpact", "latencyImpact", "partialFillImpact",
+  ]);
+  assert.equal(contracts.supplementalCostEvidenceForCard.profitFactorAllowed, false);
+  assert.equal(contracts.supplementalCostEvidenceForCard.expectedValueAllowed, false);
+  assert.equal(contracts.supplementalCostEvidenceForCard.unknownIsZero, false);
+});
