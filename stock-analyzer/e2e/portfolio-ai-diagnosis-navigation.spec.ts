@@ -99,26 +99,31 @@ test('Information Hub 포트폴리오는 본진 AI 진단으로 연결되고 진
     }
   });
 
-  await page.route('**/api/portfolio/intelligence?*', (route) => fulfill(route, portfolioFixture));
-  await page.route('**/api/paper-journal/portfolio-advisor/query', async (route) => {
-    expect(route.request().method()).toBe('POST');
-    const body = route.request().postDataJSON() as { message?: string };
-    expect(body.message).toBeTruthy();
-    return fulfill(route, {
-      result: {
-        ai: { answer: '서버 canonical facts 기준으로 집중 위험과 누락 데이터를 설명했습니다.' },
-        assistantContext: {
-          dataQuality: 'PARTIAL',
-          asOf: NOW,
-          evidence: [{ source: 'portfolio-intelligence-v2' }],
-          warnings: ['crypto futures equity unavailable'],
-          facts: { totalAssetsKRW: 4_820_000, top5ConcentrationPercent: 45.6 },
+  await page.route('**/api/**', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === '/api/portfolio/intelligence') {
+      return fulfill(route, portfolioFixture);
+    }
+    if (url.pathname === '/api/paper-journal/portfolio-advisor/query') {
+      expect(route.request().method()).toBe('POST');
+      const body = route.request().postDataJSON() as { message?: string };
+      expect(body.message).toBeTruthy();
+      return fulfill(route, {
+        result: {
+          ai: { answer: '서버 canonical facts 기준으로 집중 위험과 누락 데이터를 설명했습니다.' },
+          assistantContext: {
+            dataQuality: 'PARTIAL',
+            asOf: NOW,
+            evidence: [{ source: 'portfolio-intelligence-v2' }],
+            warnings: ['crypto futures equity unavailable'],
+            facts: { totalAssetsKRW: 4_820_000, top5ConcentrationPercent: 45.6 },
+          },
+          safety: { readOnly: true, orderAuthority: 'none', exchangeRequestSent: false },
         },
-        safety: { readOnly: true, orderAuthority: 'none', exchangeRequestSent: false },
-      },
-    });
+      });
+    }
+    return fulfill(route, { ok: true, items: [], rows: [], results: [] });
   });
-  await page.route('**/api/**', (route) => fulfill(route, { ok: true, items: [], rows: [], results: [] }));
 
   await page.goto('/ai-chat');
   await expect(page.getByRole('heading', { name: 'Information Hub' })).toBeVisible();
