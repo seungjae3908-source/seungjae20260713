@@ -207,3 +207,53 @@ test('daily brief keeps missing market data explicit and exposes only source lin
   assert.equal(input.buttons?.length, 0);
   assert.equal(JSON.stringify(input).includes('주문'), false);
 });
+
+test('daily market briefs strictly separate stock room from crypto room', () => {
+  const snapshot = {
+    generatedAt: '2026-08-21T00:00:00.000Z',
+    rooms: [
+      { room: 'stocks-kr' as const, response: null, error: 'KR_PROVIDER_FAILURE' },
+      { room: 'stocks-us' as const, response: null, error: 'US_PROVIDER_FAILURE' },
+      { room: 'coins-spot' as const, response: null, error: 'SPOT_PROVIDER_FAILURE' },
+      { room: 'coins-futures' as const, response: null, error: 'FUTURES_PROVIDER_FAILURE' },
+    ],
+    krThemes: null,
+    usThemes: null,
+    warnings: [
+      'stocks-kr:KR_PROVIDER_FAILURE',
+      'stocks-us:US_PROVIDER_FAILURE',
+      'coins-spot:SPOT_PROVIDER_FAILURE',
+      'coins-futures:FUTURES_PROVIDER_FAILURE',
+      'KR_THEME_UNAVAILABLE',
+      'US_THEME_UNAVAILABLE',
+    ],
+  };
+
+  const stock = buildTelegramMarketBriefInput({
+    kind: 'MORNING',
+    localDate: '2026-08-21',
+    destination: 'STOCK_ROOM',
+    destinationChatId: 'stock-room',
+    dedupeKey: 'brief:stock',
+    now: new Date('2026-08-21T00:00:00.000Z'),
+    snapshot,
+  });
+  assert.match(stock.details ?? '', /국내주식/);
+  assert.match(stock.details ?? '', /미국주식/);
+  assert.doesNotMatch(stock.details ?? '', /코인현물|코인선물|SPOT_PROVIDER_FAILURE|FUTURES_PROVIDER_FAILURE/);
+  assert.match(stock.details ?? '', /오늘의 테마\/주도주/);
+
+  const crypto = buildTelegramMarketBriefInput({
+    kind: 'MORNING',
+    localDate: '2026-08-21',
+    destination: 'CRYPTO_ROOM',
+    destinationChatId: 'crypto-room',
+    dedupeKey: 'brief:crypto',
+    now: new Date('2026-08-21T00:00:00.000Z'),
+    snapshot,
+  });
+  assert.match(crypto.details ?? '', /코인현물/);
+  assert.match(crypto.details ?? '', /코인선물/);
+  assert.doesNotMatch(crypto.details ?? '', /국내주식|미국주식|KR_PROVIDER_FAILURE|US_PROVIDER_FAILURE/);
+  assert.doesNotMatch(crypto.details ?? '', /오늘의 테마\/주도주|KR 테마|US 테마/);
+});
