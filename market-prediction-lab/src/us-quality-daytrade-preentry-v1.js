@@ -2,11 +2,12 @@ import { PredictionInputError } from "./contracts.js";
 import { evaluateUsQualityDaytradeSetup } from "./us-quality-daytrade-research-v1.js";
 import { evaluateQualityDaytradeBinaryEventRisk } from "./us-quality-daytrade-binary-event-v1.js";
 import { evaluateQualityDaytradeUniverseProvenance } from "./us-quality-daytrade-universe-provenance-v1.js";
+import { evaluateUsQualityDaytradeTierBRiskProvenance } from "./us-quality-daytrade-tier-b-risk-provenance-v1.js";
 import { evaluateUsQualityDaytradeLiquidityEvidence } from "./us-quality-daytrade-liquidity-evidence-v1.js";
 import { evaluateUsQualityDaytradeVolatility } from "./us-quality-daytrade-volatility-v1.js";
 import { evaluateUsQualityDaytradeMarketContext } from "./us-quality-daytrade-market-context-v1.js";
 
-export const QUALITY_DAYTRADE_PREENTRY_CONTRACT_VERSION = "us-quality-daytrade-preentry-v5";
+export const QUALITY_DAYTRADE_PREENTRY_CONTRACT_VERSION = "us-quality-daytrade-preentry-v6";
 
 function safeResult(fields) {
   return Object.freeze({
@@ -40,6 +41,7 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
       reason: universeProvenance.reason,
       universeProvenance,
       technicalSetup: null,
+      tierBRiskProvenance: null,
       liquidity: null,
       volatility: null,
       marketContext: null,
@@ -56,6 +58,7 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
       reason: technicalSetup.reason,
       universeProvenance,
       technicalSetup,
+      tierBRiskProvenance: null,
       liquidity: null,
       volatility: null,
       marketContext: null,
@@ -63,6 +66,30 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
       qualityTier: technicalSetup.qualityTier ?? technicalSetup.universe?.tier ?? null,
       riskBudgetMultiplier: technicalSetup.riskBudgetMultiplier ?? technicalSetup.universe?.riskBudgetMultiplier ?? 0,
     });
+  }
+
+  let tierBRiskProvenance = null;
+  if (technicalSetup.qualityTier === "B") {
+    tierBRiskProvenance = evaluateUsQualityDaytradeTierBRiskProvenance({
+      asOfMs: raw.asOfMs,
+      instrument: raw.instrument,
+      riskEvidence: raw.tierBRiskEvidence,
+    });
+    if (tierBRiskProvenance.status !== "PASS") {
+      return safeResult({
+        status: tierBRiskProvenance.status === "ABSTAIN" ? "ABSTAIN" : "BLOCKED_DATA",
+        reason: tierBRiskProvenance.reason,
+        universeProvenance,
+        technicalSetup,
+        tierBRiskProvenance,
+        liquidity: null,
+        volatility: null,
+        marketContext: null,
+        binaryEventRisk: null,
+        qualityTier: technicalSetup.qualityTier,
+        riskBudgetMultiplier: technicalSetup.riskBudgetMultiplier,
+      });
+    }
   }
 
   const instrumentSymbol = normalizedSymbol(raw.instrument?.symbol);
@@ -73,6 +100,7 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
       reason: "LIQUIDITY_SYMBOL_REQUIRED",
       universeProvenance,
       technicalSetup,
+      tierBRiskProvenance,
       liquidity: null,
       volatility: null,
       marketContext: null,
@@ -87,6 +115,7 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
       reason: "LIQUIDITY_SYMBOL_MISMATCH",
       universeProvenance,
       technicalSetup,
+      tierBRiskProvenance,
       liquidity: null,
       volatility: null,
       marketContext: null,
@@ -108,6 +137,7 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
       reason: liquidity.reason,
       universeProvenance,
       technicalSetup,
+      tierBRiskProvenance,
       liquidity,
       volatility: null,
       marketContext: null,
@@ -122,6 +152,7 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
       reason: "LIQUIDITY_TECHNICAL_SESSION_MISMATCH",
       universeProvenance,
       technicalSetup,
+      tierBRiskProvenance,
       liquidity,
       volatility: null,
       marketContext: null,
@@ -143,6 +174,7 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
       reason: volatility.reason,
       universeProvenance,
       technicalSetup,
+      tierBRiskProvenance,
       liquidity,
       volatility,
       marketContext: null,
@@ -163,6 +195,7 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
       reason: marketContext.reason,
       universeProvenance,
       technicalSetup,
+      tierBRiskProvenance,
       liquidity,
       volatility,
       marketContext,
@@ -184,6 +217,7 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
       reason: binaryEventRisk.reason,
       universeProvenance,
       technicalSetup,
+      tierBRiskProvenance,
       liquidity,
       volatility,
       marketContext,
@@ -198,6 +232,7 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
     reason: "VWAP_FIRST_PULLBACK_REBREAK_LIQUID_EVENT_SAFE",
     universeProvenance,
     technicalSetup,
+    tierBRiskProvenance,
     liquidity,
     volatility,
     marketContext,
