@@ -45,13 +45,13 @@ jobs:
             echo 'Read-only probe contains a prohibited mutation command.' >&2
             exit 1
           fi
-          if grep -Fq 'git fetch --no-tags origin main "$RESEARCH_SHA"' .github/workflows/research-production-natural-cycle-evidence.yml; then
+          if grep -Eq '^[[:space:]]{10}git fetch --no-tags origin main "\$RESEARCH_SHA"$' .github/workflows/research-production-natural-cycle-evidence.yml; then
             echo 'Natural evidence verifier must not require an unauthenticated post-checkout fetch.' >&2
             exit 1
           fi
           grep -q 'SOURCE_OUTCOME:' .github/workflows/research-production-natural-cycle-evidence.yml
           grep -q "preflight_failed" .github/workflows/research-production-natural-cycle-evidence.yml
-          grep -q "timers_healthy:.*unknown" .github/workflows/research-production-natural-cycle-evidence.yml
+          grep -Fq "const observed = (value) => measured && value ? value : 'unknown';" .github/workflows/research-production-natural-cycle-evidence.yml
 
   observe:
     if: >-
