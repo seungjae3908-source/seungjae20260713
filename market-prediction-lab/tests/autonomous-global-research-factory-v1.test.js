@@ -14,28 +14,28 @@ const DATA_DIGEST = "a".repeat(64);
 
 function metadata() {
   return {
-    title: "Deterministic public momentum metadata fixture",
-    authors: ["Research Author"],
-    venue: "Open Research Venue",
-    publicationDate: "2020-01-01",
-    doi: "10.1234/factory.fixture",
-    canonicalUrl: "https://doi.org/10.1234/factory.fixture",
-    sourceClass: "OPEN_RESEARCH_REPOSITORY",
+    title: "Size, value, and momentum in international stock returns",
+    authors: ["Eugene F. Fama", "Kenneth R. French"],
+    venue: "Journal of Financial Economics",
+    publicationDate: "2012-09-01",
+    doi: "10.1016/j.jfineco.2012.05.011",
+    canonicalUrl: "https://doi.org/10.1016/j.jfineco.2012.05.011",
+    sourceClass: "PEER_REVIEWED_JOURNAL",
     sourceQuality: "HIGH",
     licenseStatus: "METADATA_PUBLIC",
     provenanceStatus: "DOCUMENTED",
     assetClass: "EQUITY",
     market: "US_STOCK",
     timeframe: "1d",
-    samplePeriod: { startDate: "2010-01-01", endDate: "2020-01-01" },
+    samplePeriod: { startDate: "1990-11-01", endDate: "2011-03-01" },
     reportedN: 245,
-    datasetReference: { datasetId: "PUBLIC_POINT_IN_TIME_FIXTURE", status: "PUBLIC_AUTHOR_DATA" },
+    datasetReference: { datasetId: "KEN_FRENCH_DEVELOPED_MOMENTUM", status: "PUBLIC_AUTHOR_DATA" },
     reportedMetrics: { sharpe: null },
     costAssumptions: null,
-    strategyFamily: "MOMENTUM",
-    strategySummary: "Lagged momentum",
-    formulaSummary: "momentum(t-1) > 0",
-    sourceProvenance: { provider: "OPEN_METADATA_FIXTURE", locator: "doi:10.1234/factory.fixture" },
+    strategyFamily: "CROSS_SECTIONAL_MOMENTUM",
+    strategySummary: "Long prior winners and short prior losers",
+    formulaSummary: "0.5 * Small WML + 0.5 * Big WML",
+    sourceProvenance: { provider: "DOI_METADATA", locator: "doi:10.1016/j.jfineco.2012.05.011" },
     ingestedAt: "2026-08-21T06:00:00Z",
     parserVersion: "factory-fixture-v1",
   };
@@ -139,6 +139,15 @@ function freeProviders() {
   ];
 }
 
+function dataAdapters() {
+  return Object.freeze(Object.fromEntries(["KR_STOCK", "US_STOCK", "CRYPTO_SPOT", "CRYPTO_FUTURES"].map((market) => [market, Object.freeze({
+    adapterId: `${market.toLowerCase()}-canonical-data-v1`,
+    market,
+    provider: "PUBLIC_FIXTURE",
+    state: "AVAILABLE",
+  })])));
+}
+
 function dependencies() {
   return {
     discoverResearchMetadata: async () => ({ records: [metadata()], nextCursor: "fixture-page-2" }),
@@ -153,6 +162,25 @@ function dependencies() {
       proposedBoundedVariants: [{ lookback: 20 }],
       deterministicResolution: "RUN_CANONICAL_COST_OOS_WF_PIPELINE",
     }),
+    inspectResearchDataset: async ({ job, adapter }) => ({
+      status: "READY",
+      datasetId: job.datasetId,
+      provider: adapter.provider,
+      coverage: { start: "2020-01-01T00:00:00Z", end: "2020-12-31T00:00:00Z", observationCount: 366 },
+      range: { requestedStart: "2020-01-01T00:00:00Z", requestedEnd: "2020-12-31T00:00:00Z" },
+      universe: { universeId: job.universeId, pointInTime: true },
+      timeframes: [job.timeframe],
+      dataFingerprint: job.datasetDigest,
+      quality: { status: "PASS", pointInTimeSafe: true, missingRate: 0, duplicateCount: 0 },
+      asOf: "2020-12-31T00:00:00Z",
+      maxSourceTimestamp: "2020-12-30T00:00:00Z",
+    }),
+    computeFeatureBundle: async ({ requestedFeatures, datasetInspection }) => ({
+      datasetFingerprint: datasetInspection.dataFingerprint,
+      sourceMaxTimestamp: datasetInspection.maxSourceTimestamp,
+      features: Object.fromEntries(requestedFeatures.map((feature) => [feature, { status: "COMPUTED", lag: 1 }])),
+    }),
+    compileStrategySpecification: async ({ job }) => ({ status: "COMPILED", candidateIdentity: job.identity.candidateIdentityDigest }),
     backtestDependencies: backtestDependencies(),
   };
 }
@@ -163,6 +191,8 @@ function input(overrides = {}) {
     evidenceObservationTimestamp: "2020-12-31T00:00:00Z",
     researchCodeSha: SHA,
     freeAiProviders: freeProviders(),
+    dataAdapters: dataAdapters(),
+    featureVersion: "factory-features-v1",
     resources: { activeWorkers: 0, cpuPercent: 10, memoryUsedMb: 100, freeDiskMb: 10_000 },
     loopContract: { maxDiscoveriesPerCycle: 4, maxJobsPerCycle: 1 },
     activationReadiness: { ready: false, blockers: ["CONTRACT_FIXTURE_ONLY"] },
@@ -187,6 +217,12 @@ test("one bounded factory cycle connects discovery through freeze without openin
   assert.equal(result.status.evidenceAccounting.externalObservationN, 245);
   assert.equal(result.status.evidenceAccounting.ourHoldoutN, 0);
   assert.equal(result.status.AUTONOMOUS_RESEARCH_FACTORY_ACTIVE, false);
+  assert.equal(result.status.AI1Status, "AVAILABLE");
+  assert.equal(result.status.AI2Status, "AVAILABLE");
+  assert.equal(result.status.completedJobs, 1);
+  assert.equal(result.status.failedJobs, 0);
+  assert.equal(result.runtimeReadiness.AUTONOMOUS_RESEARCH_FACTORY_RUNTIME_READY, true);
+  assert.equal(result.runtimeReadiness.AUTONOMOUS_RESEARCH_FACTORY_ACTIVE, false);
   assert.equal(result.safety.LIVE_TRADING, false);
 });
 
@@ -202,11 +238,14 @@ test("a replayed discovery cannot create a second trial or evidence sample", asy
 
 test("one missing free provider stops before formula generation and queueing", async () => {
   const result = await runAutonomousGlobalResearchFactoryCycle(createAutonomousGlobalResearchFactoryState(), input({ freeAiProviders: freeProviders().slice(0, 1) }), dependencies());
-  assert.equal(result.reviews[0].status, "INCOMPLETE");
+  assert.equal(result.reviews[0].status, "AI_REVIEW_INCOMPLETE");
   assert.equal(result.candidates.length, 0);
   assert.equal(result.jobs.length, 0);
   assert.equal(result.results.length, 0);
-  assert.equal(result.status.dualAiReviewStatus, "INCOMPLETE");
+  assert.equal(result.status.dualAiReviewStatus, "AI_REVIEW_INCOMPLETE");
+  assert.equal(result.state.runtime.waitingForAi[Object.keys(result.state.runtime.waitingForAi)[0]].state, "WAITING_FOR_AI");
+  assert.equal(result.state.runtime.waitingForAi[Object.keys(result.state.runtime.waitingForAi)[0]].retryDisposition, "RETRY_LATER");
+  assert.equal(result.runtimeReadiness.AUTONOMOUS_RESEARCH_FACTORY_RUNTIME_READY, false);
 });
 
 test("24x7 loop contract is bounded and never activates timer or server", () => {

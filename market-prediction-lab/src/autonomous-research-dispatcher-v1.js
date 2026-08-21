@@ -121,7 +121,12 @@ function jobPriority(input) {
   }
   const evidence = Object.freeze({ E2_REPLICATION: 40, E1_LITERATURE: 30, AI_HYPOTHESIS: 10, NONE: 0 });
   const novelty = Object.freeze({ NOVEL_FAMILY: 20, NOVEL_VARIANT: 12, KNOWN_VARIANT: 4, DUPLICATE_FAILED_TRIAL: 0 });
-  const review = Object.freeze({ AI_REVIEW_AGREE: 15, CONFLICT: 8, BOTH_REJECT: 0, INCOMPLETE: 0 });
+  const review = Object.freeze({
+    AI_REVIEW_AGREE: 15,
+    AI_REVIEW_CONFLICT: 8,
+    AI_REVIEW_BOTH_REJECT: 0,
+    AI_REVIEW_INCOMPLETE: 0,
+  });
   const data = input.dataReady === true ? 20 : 0;
   return (evidence[input.evidenceClass] ?? 0) + (novelty[input.noveltyClassification] ?? 0) + (review[input.dualAiReviewStatus] ?? 0) + data;
 }
@@ -200,7 +205,7 @@ export function buildAutonomousResearchJob(input = {}) {
     historicalCacheProvenance: immutableJson(input.historicalCacheProvenance, "historicalCacheProvenance"),
     evidenceClass: requiredText(input.evidenceClass ?? "NONE", "evidenceClass"),
     noveltyClassification: requiredText(input.noveltyClassification ?? "NOVEL_VARIANT", "noveltyClassification"),
-    dualAiReviewStatus: requiredText(input.dualAiReviewStatus ?? "INCOMPLETE", "dualAiReviewStatus"),
+    dualAiReviewStatus: requiredText(input.dualAiReviewStatus ?? "AI_REVIEW_INCOMPLETE", "dualAiReviewStatus"),
     dataReady: input.dataReady === true,
     resourceClass: requiredText(input.resourceClass ?? "STANDARD", "resourceClass"),
     priority: jobPriority(input),
