@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ExternalLink, X } from 'lucide-react';
 import { Panel, Bar } from '@/components/ui-bits';
 import { ScoreRing } from '@/components/score-ring';
@@ -35,6 +35,15 @@ const STATUS_ORDER: Exclude<RiskEventStatus, 'IGNORED'>[] = [
 	'HISTORICAL',
 ];
 
+const FOCUSABLE_SELECTOR = [
+	'a[href]',
+	'button:not([disabled])',
+	'input:not([disabled])',
+	'select:not([disabled])',
+	'textarea:not([disabled])',
+	'[tabindex]:not([tabindex="-1"])',
+].join(',');
+
 function statusBadge(status: RiskEventStatus): string {
 	if (status === 'IGNORED') return toneBadge('neutral');
 	return toneBadge(STATUS_META[status].tone);
@@ -47,23 +56,73 @@ function formatDate(date: string | null): string {
 
 function EventDetailModal({
 	event,
+	opener,
 	onClose,
 }: {
 	event: RiskEvent;
+	opener: HTMLButtonElement | null;
 	onClose: () => void;
 }) {
+	const dialogRef = useRef<HTMLDivElement>(null);
+	const closeButtonRef = useRef<HTMLButtonElement>(null);
 	const meta =
 		event.status === 'IGNORED'
 			? { label: '해소/무시', tone: 'neutral' as Tone, desc: '해소되었거나 상위 공시로 대체된 항목입니다.' }
 			: STATUS_META[event.status];
 
+	useEffect(() => {
+		const dialog = dialogRef.current;
+		const previousOverflow = document.body.style.overflow;
+		document.body.style.overflow = 'hidden';
+		closeButtonRef.current?.focus();
+
+		const handleKeyDown = (keyboardEvent: KeyboardEvent) => {
+			if (keyboardEvent.key === 'Escape') {
+				keyboardEvent.preventDefault();
+				onClose();
+				return;
+			}
+
+			if (keyboardEvent.key !== 'Tab' || !dialog) return;
+			const focusable = [...dialog.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)]
+				.filter((element) => !element.hasAttribute('disabled') && element.tabIndex !== -1);
+			if (focusable.length === 0) {
+				keyboardEvent.preventDefault();
+				dialog.focus();
+				return;
+			}
+
+			const first = focusable[0];
+			const last = focusable[focusable.length - 1];
+			const active = document.activeElement;
+			if (keyboardEvent.shiftKey && (active === first || !dialog.contains(active))) {
+				keyboardEvent.preventDefault();
+				last.focus();
+			} else if (!keyboardEvent.shiftKey && active === last) {
+				keyboardEvent.preventDefault();
+				first.focus();
+			}
+		};
+
+		document.addEventListener('keydown', handleKeyDown);
+		return () => {
+			document.removeEventListener('keydown', handleKeyDown);
+			document.body.style.overflow = previousOverflow;
+			if (opener?.isConnected) opener.focus();
+		};
+	}, [opener, onClose]);
+
 	return (
 		<div
+			ref={dialogRef}
 			className="fixed inset-0 z-50 flex items-end justify-center sm:items-center"
 			role="dialog"
 			aria-modal="true"
+			aria-labelledby="risk-event-dialog-title"
+			tabIndex={-1}
+			data-testid="risk-event-detail-dialog"
 		>
-			<div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+			<div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} aria-hidden="true" />
 			<div className="relative z-10 max-h-[85vh] w-full max-w-md overflow-y-auto rounded-t-2xl border border-card-border bg-card p-4 sm:rounded-2xl">
 				<div className="mb-3 flex items-start justify-between gap-2">
 					<div className="min-w-0">
@@ -78,9 +137,9 @@ function EventDetailModal({
 								{event.label}
 							</span>
 						</div>
-						<h3 className="break-keep text-base font-bold leading-relaxed">{event.title}</h3>
+						<h3 id="risk-event-dialog-title" className="break-keep text-base font-bold leading-relaxed">{event.title}</h3>
 					</div>
-					<button onClick={onClose} aria-label="닫기" className="rounded-lg p-1 hover:bg-secondary">
+					<button ref={closeButtonRef} type="button" onClick={onClose} aria-label="닫기" className="min-h-11 min-w-11 rounded-lg p-2 hover:bg-secondary">
 						<X className="h-5 w-5" />
 					</button>
 				</div>
@@ -114,7 +173,7 @@ function EventDetailModal({
 							href={event.url}
 							target="_blank"
 							rel="noopener noreferrer"
-							className="inline-flex items-center gap-1 text-sm text-blue-400"
+							className="inline-flex min-h-11 items-center gap-1 text-sm text-blue-400"
 						>
 							<ExternalLink className="h-4 w-4" />
 							원문 보기
@@ -133,12 +192,12 @@ function EventRow({
 	onOpen,
 }: {
 	event: RiskEvent;
-	onOpen: (event: RiskEvent) => void;
+	onOpen: (event: RiskEvent, opener: HTMLButtonElement) => void;
 }) {
 	return (
 		<button
 			type="button"
-			onClick={() => onOpen(event)}
+			onClick={(clickEvent) => onOpen(event, clickEvent.currentTarget)}
 			className="w-full rounded-xl bg-secondary/40 p-3 text-left transition-colors hover:bg-secondary/70"
 		>
 			<div className="flex items-start justify-between gap-3">
@@ -162,9 +221,14 @@ function EventRow({
 	);
 }
 
+type SelectedRiskEvent = {
+	event: RiskEvent;
+	opener: HTMLButtonElement | null;
+};
+
 export function RiskTab({ ticker, active }: { ticker: string; active: boolean }) {
 	const { data, isLoading, isError, error, refetch } = useRisk(ticker, active);
-	const [selected, setSelected] = useState<RiskEvent | null>(null);
+	const [selected, setSelected] = useState<SelectedRiskEvent | null>(null);
 
 	if (isLoading) return <LoadingState />;
 	if (isError || !data)
@@ -208,7 +272,7 @@ export function RiskTab({ ticker, active }: { ticker: string; active: boolean })
 						<ul className="space-y-2">
 							{group.items.map((event) => (
 								<li key={event.id}>
-									<EventRow event={event} onOpen={setSelected} />
+									<EventRow event={event} onOpen={(nextEvent, opener) => setSelected({ event: nextEvent, opener })} />
 								</li>
 							))}
 						</ul>
@@ -239,7 +303,13 @@ export function RiskTab({ ticker, active }: { ticker: string; active: boolean })
 				</ul>
 			</Panel>
 
-			{selected && <EventDetailModal event={selected} onClose={() => setSelected(null)} />}
+			{selected && (
+				<EventDetailModal
+					event={selected.event}
+					opener={selected.opener}
+					onClose={() => setSelected(null)}
+				/>
+			)}
 		</div>
 	);
 }
