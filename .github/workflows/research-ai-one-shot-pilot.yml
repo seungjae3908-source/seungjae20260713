@@ -216,7 +216,8 @@ jobs:
               'ai-privacy/verified',
               'futures-public-network-smoke/verified',
             ];
-            const findCoherentRequiredRun = async (sha, expectedEvent) => {
+            const findCoherentRequiredRun = async (sha, expectedEvents) => {
+              const acceptedEvents = new Set(Array.isArray(expectedEvents) ? expectedEvents : [expectedEvents]);
               const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -245,7 +246,7 @@ jobs:
                 })).data;
                 if (
                   String(run.head_sha).toLowerCase() === sha &&
-                  run.event === expectedEvent &&
+                  acceptedEvents.has(run.event) &&
                   run.status === 'completed' &&
                   run.conclusion === 'success'
                 ) return run;
@@ -264,8 +265,8 @@ jobs:
               return;
             }
 
-            let mainApplicationRun = await findCoherentRequiredRun(mainSha, 'push');
-            let mainValidationMode = 'EXACT_MAIN_PUSH';
+            let mainApplicationRun = await findCoherentRequiredRun(mainSha, ['push', 'workflow_dispatch']);
+            let mainValidationMode = 'EXACT_MAIN_REQUIRED_CI';
             if (!mainApplicationRun) {
               const gatePr = (await github.rest.pulls.get({
                 owner: context.repo.owner,
@@ -278,7 +279,7 @@ jobs:
               }
 
               const gateHeadSha = String(gatePr.head.sha).toLowerCase();
-              const gateApplicationRun = await findCoherentRequiredRun(gateHeadSha, 'pull_request');
+              const gateApplicationRun = await findCoherentRequiredRun(gateHeadSha, ['pull_request']);
               if (!gateApplicationRun) {
                 core.setFailed('Merged PR #585 head has no coherent exact-head 6/6.');
                 return;
@@ -336,7 +337,7 @@ jobs:
                 return;
               }
               const parentSha = String(mergeCommit.parents[0].sha).toLowerCase();
-              const parentApplicationRun = await findCoherentRequiredRun(parentSha, 'push');
+              const parentApplicationRun = await findCoherentRequiredRun(parentSha, ['push', 'workflow_dispatch']);
               if (!parentApplicationRun) {
                 core.setFailed(`Pre-#585 main parent has no coherent 6/6: ${parentSha}`);
                 return;
