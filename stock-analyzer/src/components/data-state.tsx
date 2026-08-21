@@ -1,5 +1,7 @@
-import { Loader2, AlertCircle, SearchX } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Loader2, AlertCircle, SearchX, Copy } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { formatSafeErrorDiagnostics, readPublicDeploySha } from '@/lib/safe-error-diagnostics';
 
 export function LoadingState({ label = '불러오는 중...' }: { label?: string }) {
   return (
@@ -69,11 +71,45 @@ const ERROR_MESSAGES: Record<string, string> = {
   UPSTREAM_ERROR: '데이터 제공처 응답 오류로 불러오지 못했습니다',
 };
 
-export function ErrorState({ code, message, onRetry }: { code?: string; message?: string; onRetry?: () => void }) {
+type ErrorStateProps = {
+  code?: string;
+  message?: string;
+  provider?: string;
+  occurredAt?: string;
+  onRetry?: () => void;
+};
+
+export function ErrorState({ code, message, provider, occurredAt: providedOccurredAt, onRetry }: ErrorStateProps) {
   const notFound = code === 'UNKNOWN_TICKER';
   const resolvedMessage = message
     ?? (code && ERROR_MESSAGES[code])
     ?? '데이터를 불러오지 못했습니다';
+  const [occurredAt, setOccurredAt] = useState(() => providedOccurredAt ?? new Date().toISOString());
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+
+  useEffect(() => {
+    setOccurredAt(providedOccurredAt ?? new Date().toISOString());
+    setCopyState('idle');
+  }, [code, message, provider, providedOccurredAt]);
+
+  const copyDiagnostics = async () => {
+    const appSha = await readPublicDeploySha();
+    const diagnostics = formatSafeErrorDiagnostics({
+      pathname: window.location.pathname,
+      appSha,
+      provider,
+      errorCode: code,
+      occurredAt,
+    });
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
+      await navigator.clipboard.writeText(diagnostics);
+      setCopyState('copied');
+    } catch {
+      setCopyState('failed');
+    }
+  };
+
   return (
     <div data-testid="error-state" className="flex flex-col items-center justify-center gap-3 py-16 text-center">
       {notFound ? (
@@ -82,13 +118,29 @@ export function ErrorState({ code, message, onRetry }: { code?: string; message?
         <AlertCircle className="h-7 w-7 text-warning" />
       )}
       <div className="text-sm font-medium">{resolvedMessage}</div>
-      {onRetry && (
-        <button
-          onClick={onRetry}
-          className="rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
-        >
-          다시 시도
-        </button>
+      {(onRetry || !notFound) && (
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          {onRetry && (
+            <button
+              onClick={onRetry}
+              className="rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+            >
+              다시 시도
+            </button>
+          )}
+          {!notFound && (
+            <button
+              aria-label="안전한 오류 진단 정보 복사"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+              data-testid="copy-error-diagnostics"
+              onClick={() => void copyDiagnostics()}
+              type="button"
+            >
+              <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+              {copyState === 'copied' ? '복사됨' : copyState === 'failed' ? '복사 실패' : '오류 정보 복사'}
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
