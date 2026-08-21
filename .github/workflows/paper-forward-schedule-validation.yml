@@ -84,8 +84,12 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          git fetch --no-tags origin main
-          base="$(git merge-base HEAD origin/main)"
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="$(git merge-base HEAD origin/main)"
+          fi
+          git cat-file -e "$base^{commit}"
           mapfile -t changed < <(git diff --name-only "$base"...HEAD)
           allowed=(
             .github/workflows/authoritative-paper-runtime-factory-v1.yml
