@@ -61,6 +61,7 @@ test("validated package loads exact #546 producer bundle and executes fail-close
   assert.match(runtimePackage.sourceGraphSha256, /^[0-9a-f]{64}$/u);
   assert.match(runtimePackage.bundleSha256, /^[0-9a-f]{64}$/u);
   assert.equal(runtimePackage.admissionBundleSchemaVersion, "scanner-paper-admission-evidence-bundle-v1");
+  assert.equal(runtimePackage.blockedDataSourceContractSchemaVersion, "authoritative-paper-blocked-data-source-contract-v1");
   assert.equal(runtimePackage.simulatedExecutionEvidenceSchemaVersion, "paper-simulated-execution-evidence-v1");
   assert.match(runtimePackage.manifest.sourceFileSha256["api-server/src/services/paper-simulated-execution-evidence.service.ts"], /^[0-9a-f]{64}$/u);
   assert.match(runtimePackage.manifest.sourceFileSha256["market-intelligence-sidecar/src/execution-quality.mjs"], /^[0-9a-f]{64}$/u);
@@ -207,6 +208,19 @@ test("validated package connects existing Scanner and public Bitget owners witho
   assert.equal(evidence.symbol, "ETHUSDT");
   assert.equal(evidence.observedAtMs, 2_000);
   assert.equal(wiring.paperCandidateForCard({ card: {}, market: "CRYPTO_FUTURES" }), null);
+  for (const [callback, blocker] of [
+    ["paperStateForCard", "AUTHORITATIVE_PAPER_STATE_SOURCE_UNAVAILABLE"],
+    ["contractRulesForCard", "AUTHORITATIVE_CONTRACT_RULES_SOURCE_UNAVAILABLE"],
+    ["executionObservationForCard", "AUTHORITATIVE_EXECUTION_OBSERVATION_SOURCE_UNAVAILABLE"],
+    ["supplementalCostEvidenceForCard", "AUTHORITATIVE_SUPPLEMENTAL_COST_SOURCE_UNAVAILABLE"],
+  ]) {
+    assert.equal(typeof wiring[callback], "function");
+    assert.equal(await wiring[callback]({ card, market: "CRYPTO_FUTURES" }), null);
+    assert.equal(wiring[callback].authoritativeBlockedData.callback, callback);
+    assert.equal(wiring[callback].authoritativeBlockedData.blocker, blocker);
+    assert.equal(wiring[callback].authoritativeBlockedData.ownerStatus, "OWNER_MISSING");
+    assert.equal(wiring[callback].authoritativeBlockedData.unknownIsZero, false);
+  }
 });
 
 test("lossless Paper state snapshot preserves the complete state and never supplies a default balance", async () => {
@@ -263,12 +277,14 @@ test("evidence ownership map wires existing owners and keeps four missing owners
   assert.equal(contract.callbacks.every((row) => typeof row.dataProvenance === "string" && row.dataProvenance.length > 0), true);
   assert.equal(evidenceRows.filter((row) => row.ownerStatus === "OWNER_EXISTS").length, 3);
   assert.equal(evidenceRows.filter((row) => row.ownerStatus === "OWNER_MISSING").length, 4);
-  assert.equal(contract.sevenEvidenceOwnerSummary.callbacksWired, 3);
+  assert.equal(contract.sevenEvidenceOwnerSummary.callbacksWired, 7);
+  assert.equal(contract.sevenEvidenceOwnerSummary.authoritativeOwnersConnected, 3);
+  assert.equal(contract.sevenEvidenceOwnerSummary.blockedDataContractsConnected, 4);
   assert.equal(contract.sevenEvidenceOwnerSummary.scannerCallbackWired, true);
   assert.equal(contract.sevenEvidenceOwnerSummary.scheduledCanonicalWriter, "OWNER_MISSING");
   assert.equal(contract.sevenEvidenceOwnerSummary.allOwnersReady, false);
   assert.equal(contract.sevenEvidenceOwnerSummary.firstZeroStage, "UNKNOWN");
-  assert.equal(contract.sevenEvidenceOwnerSummary.firstBlocker, "AUTHORITATIVE_CALLBACK_SOURCE_UNAVAILABLE");
+  assert.equal(contract.sevenEvidenceOwnerSummary.firstBlocker, "AUTHORITATIVE_EVIDENCE_DATA_UNAVAILABLE");
   assert.equal(contract.sevenEvidenceOwnerSummary.unknownIsZero, false);
   assert.equal(contract.executionAuthority, "NONE");
   assert.equal(contract.privateApiAllowed, false);

@@ -10,6 +10,7 @@ export {
 } from './paper-trading-state-snapshot.service';
 
 export {
+  AUTHORITATIVE_PAPER_BLOCKED_DATA_SOURCE_CONTRACT_VERSION,
   AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_SAFETY,
   AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_VERSION,
   createAuthoritativePaperEvidenceSourceWiring,
