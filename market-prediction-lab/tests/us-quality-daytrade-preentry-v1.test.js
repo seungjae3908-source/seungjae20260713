@@ -3,6 +3,17 @@ import assert from "node:assert/strict";
 import { evaluateUsQualityDaytradePreEntry } from "../src/us-quality-daytrade-preentry-v1.js";
 
 function baseInput() {
+  const candles = [
+    { open: 100.0, high: 100.8, low: 99.9, close: 100.6, volume: 100, session: "REGULAR", timestamp: 1 },
+    { open: 100.6, high: 102.0, low: 100.5, close: 101.8, volume: 130, session: "REGULAR", timestamp: 2 },
+    { open: 101.8, high: 104.0, low: 101.7, close: 103.8, volume: 160, session: "REGULAR", timestamp: 3 },
+    { open: 103.8, high: 103.9, low: 103.1, close: 103.3, volume: 90, session: "REGULAR", timestamp: 4 },
+    { open: 103.3, high: 103.5, low: 102.9, close: 103.0, volume: 85, session: "REGULAR", timestamp: 5 },
+    { open: 103.0, high: 103.6, low: 103.0, close: 103.5, volume: 100, session: "REGULAR", timestamp: 6 },
+    { open: 103.5, high: 103.9, low: 103.3, close: 103.8, volume: 110, session: "REGULAR", timestamp: 7 },
+    { open: 103.8, high: 104.6, low: 103.5, close: 104.5, volume: 250, session: "REGULAR", timestamp: 8 },
+  ];
+
   return {
     instrument: {
       symbol: "MRK",
@@ -38,22 +49,40 @@ function baseInput() {
         averageDollarVolumeUsd: 900_000_000,
       },
     },
-    candles: [
-      { open: 100.0, high: 100.8, low: 99.9, close: 100.6, volume: 100, session: "REGULAR", timestamp: 1 },
-      { open: 100.6, high: 102.0, low: 100.5, close: 101.8, volume: 130, session: "REGULAR", timestamp: 2 },
-      { open: 101.8, high: 104.0, low: 101.7, close: 103.8, volume: 160, session: "REGULAR", timestamp: 3 },
-      { open: 103.8, high: 103.9, low: 103.1, close: 103.3, volume: 90, session: "REGULAR", timestamp: 4 },
-      { open: 103.3, high: 103.5, low: 102.9, close: 103.0, volume: 85, session: "REGULAR", timestamp: 5 },
-      { open: 103.0, high: 103.6, low: 103.0, close: 103.5, volume: 100, session: "REGULAR", timestamp: 6 },
-      { open: 103.5, high: 103.9, low: 103.3, close: 103.8, volume: 110, session: "REGULAR", timestamp: 7 },
-      { open: 103.8, high: 104.6, low: 103.5, close: 104.5, volume: 250, session: "REGULAR", timestamp: 8 },
-    ],
+    candles,
     candleEvidence: {
       timeframeMs: 10_000,
       sessionStartTimestampMs: 1,
       coverageStartTimestampMs: 1,
       lastCompleteCandleTimestampMs: 8,
       sessionCoverageComplete: true,
+    },
+    liquidityEvidence: {
+      symbol: "MRK",
+      candleEvidence: {
+        sourceId: "public-session-candles",
+        pointInTime: true,
+        publicReadOnly: true,
+        privateApiUsed: false,
+        session: "REGULAR",
+        timeframeMs: 10_000,
+        sessionStartTimestampMs: 1,
+        coverageStartTimestampMs: 1,
+        lastCompleteCandleTimestampMs: 8,
+        sessionCoverageComplete: true,
+        candles,
+      },
+      relativeVolumeEvidence: {
+        sourceId: "public-rvol-same-phase",
+        pointInTime: true,
+        publicReadOnly: true,
+        privateApiUsed: false,
+        session: "REGULAR",
+        sameSessionPhase: true,
+        lookaheadFree: true,
+        observedAtMs: 8_000,
+        currentCumulativeVolume: 1_100,
+      },
     },
     quote: { bid: 104.45, ask: 104.55, timestampMs: 8_000 },
     asOfMs: 8_500,
@@ -120,6 +149,7 @@ test("pre-entry blocks before technical evaluation when point-in-time universe e
   assert.equal(result.status, "BLOCKED_DATA");
   assert.equal(result.reason, "UNIVERSE_EVIDENCE_REQUIRED");
   assert.equal(result.technicalSetup, null);
+  assert.equal(result.liquidity, null);
   assert.equal(result.volatility, null);
   assert.equal(result.marketContext, null);
   assert.equal(result.binaryEventRisk, null);
@@ -134,12 +164,50 @@ test("pre-entry rejects future market-cap provenance before technical evaluation
   assert.equal(result.technicalSetup, null);
 });
 
+test("technical candidate is blocked when symbol-scoped liquidity evidence is missing", () => {
+  const input = baseInput();
+  delete input.liquidityEvidence;
+  const result = evaluateUsQualityDaytradePreEntry(input);
+  assert.equal(result.technicalSetup.status, "CANDIDATE");
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.equal(result.reason, "LIQUIDITY_SYMBOL_REQUIRED");
+  assert.equal(result.liquidity, null);
+  assert.equal(result.volatility, null);
+});
+
+test("liquidity evidence from another symbol cannot promote the technical candidate", () => {
+  const input = baseInput();
+  input.liquidityEvidence.symbol = "TGT";
+  const result = evaluateUsQualityDaytradePreEntry(input);
+  assert.equal(result.technicalSetup.status, "CANDIDATE");
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.equal(result.reason, "LIQUIDITY_SYMBOL_MISMATCH");
+  assert.equal(result.liquidity, null);
+});
+
+test("liquidity evidence from another market session cannot promote the technical candidate", () => {
+  const input = baseInput();
+  input.liquidityEvidence.candleEvidence.session = "PREMARKET";
+  input.liquidityEvidence.candleEvidence.candles = input.liquidityEvidence.candleEvidence.candles.map((candle) => ({
+    ...candle,
+    session: "PREMARKET",
+  }));
+  input.liquidityEvidence.relativeVolumeEvidence.session = "PREMARKET";
+  const result = evaluateUsQualityDaytradePreEntry(input);
+  assert.equal(result.technicalSetup.status, "CANDIDATE");
+  assert.equal(result.liquidity.status, "PASS");
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.equal(result.reason, "LIQUIDITY_TECHNICAL_SESSION_MISMATCH");
+  assert.equal(result.volatility, null);
+});
+
 test("technical candidate is blocked when point-in-time market context evidence is missing", () => {
   const input = baseInput();
   input.binaryEventEvidence = noEventEvidence();
   delete input.marketContextEvidence;
   const result = evaluateUsQualityDaytradePreEntry(input);
   assert.equal(result.technicalSetup.status, "CANDIDATE");
+  assert.equal(result.liquidity.status, "PASS");
   assert.equal(result.volatility.status, "PASS");
   assert.equal(result.status, "BLOCKED_DATA");
   assert.equal(result.reason, "MARKET_CONTEXT_EVIDENCE_REQUIRED");
@@ -159,19 +227,25 @@ test("technical candidate is blocked when binary-event evidence is missing", () 
   const result = evaluateUsQualityDaytradePreEntry(baseInput());
   assert.equal(result.technicalSetup.status, "CANDIDATE");
   assert.equal(result.universeProvenance.status, "PASS");
+  assert.equal(result.liquidity.status, "PASS");
   assert.equal(result.volatility.status, "PASS");
   assert.equal(result.marketContext.status, "PASS");
   assert.equal(result.status, "BLOCKED_DATA");
   assert.equal(result.reason, "BINARY_EVENT_EVIDENCE_REQUIRED");
 });
 
-test("source-backed complete no-event evidence preserves candidate status with point-in-time volatility and market context", () => {
+test("source-backed complete no-event evidence preserves candidate status with point-in-time liquidity, volatility and market context", () => {
   const input = baseInput();
   input.binaryEventEvidence = noEventEvidence();
   const result = evaluateUsQualityDaytradePreEntry(input);
   assert.equal(result.status, "CANDIDATE");
-  assert.equal(result.reason, "VWAP_FIRST_PULLBACK_REBREAK_EVENT_SAFE");
+  assert.equal(result.reason, "VWAP_FIRST_PULLBACK_REBREAK_LIQUID_EVENT_SAFE");
   assert.equal(result.universeProvenance.status, "PASS");
+  assert.equal(result.liquidity.status, "PASS");
+  assert.equal(result.liquidity.session, "REGULAR");
+  assert.equal(result.liquidity.sessionCumulativeShareVolume, 1_025);
+  assert.ok(result.liquidity.candleDerivedSessionDollarVolumeUsd > 0);
+  assert.equal(result.liquidity.dollarVolumeBasis, "TYPICAL_PRICE_X_COMPLETED_CANDLE_VOLUME");
   assert.equal(result.volatility.status, "PASS");
   assert.equal(result.volatility.atrLookbackUsed, 8);
   assert.ok(result.volatility.atrPct > 0);
