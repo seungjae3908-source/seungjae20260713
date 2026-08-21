@@ -317,7 +317,12 @@ export function createBoundedMarketScanRouter(
       if (controller.signal.aborted || res.writableEnded) return;
       const canonicalResult = withScannerCanonicalActions(result);
       const visibleResult = withScannerOutcome(filterScannerResponseForTier(canonicalResult, membershipLevel, requestedGrade ?? undefined));
-      void deliverScannerTelegramAlerts(visibleResult.alerts);
+      void deliverScannerTelegramAlerts(
+        visibleResult.alerts,
+        undefined,
+        undefined,
+        { timeframe, generatedAt: visibleResult.generatedAt },
+      );
       res.setHeader('X-Scanner-Request-Id', result.requestId);
       return res.json({
         ...visibleResult,
