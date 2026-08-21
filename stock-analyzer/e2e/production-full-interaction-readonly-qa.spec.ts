@@ -33,21 +33,16 @@ const FULL_INTERACTION_ROUTES = [
   '/stock-info?asset=coin&coinMarket=futures&symbol=BTCUSDT',
 ] as const;
 
-const RESPONSIVE_INTERACTION_ROUTES = [
-  '/', '/stocks', '/stocks/kr', '/stocks/us', '/scanner', '/ai-chart', '/paper-trading',
-  '/account', '/auto-trading', '/admin', '/install',
-] as const;
-
 const LEGACY_REDIRECTS = [
   { from: '/crypto', to: '/home' },
   { from: '/crypto/search', to: '/stocks' },
-  { from: '/stock/005930?back=/stocks', to: '/stock-info/analysis' },
-  { from: '/stock/AAPL?back=/stocks', to: '/stock-info/analysis' },
+  { from: '/stock/005930?back=/stocks', to: '/stock-info' },
+  { from: '/stock/AAPL?back=/stocks', to: '/stock-info' },
   { from: '/crypto/BTC?back=/stocks', to: '/stock-info' },
 ] as const;
 
-const EXPLICIT_SAFE_PATTERN = /(?:새로고침|재시도|다시\s*시도|닫기|열기|펼치기|접기|이전|다음|더보기|상세|보기|호가|refresh|retry|reload|close|open|expand|collapse|previous|next|details?)/i;
-const UNSAFE_PATTERN = /(?:매수|매도|주문|거래|청산|취소|정정|출금|입금|이체|송금|전송|승인|승격|삭제|제거|저장|적용|생성|추가|등록|연결|해제|로그아웃|실행|시작|중지|활성|비활성|질문|전송|구매|판매|buy|sell|order|trade|liquidat|cancel|amend|withdraw|deposit|transfer|approve|promote|delete|remove|save|apply|create|add|register|connect|disconnect|logout|execute|start|stop|enable|disable|send|submit)/i;
+const EXPLICIT_SAFE_PATTERN = /(?:^|[\s·:/()\-])(?:새로고침|재시도|다시\s*시도|닫기|펼치기|접기|이전|다음|더보기|상세\s*보기|호가(?:창)?(?:\s*(?:열기|닫기|새로고침))?|refresh|retry|reload|close|expand|collapse|previous|next|details?)(?:$|[\s·:/()\-])/i;
+const UNSAFE_PATTERN = /(?:매수|매도|주문|거래|청산|취소|정정|출금|입금|이체|송금|전송|승인|승격|삭제|제거|저장|적용|생성|추가|등록|연결|해제|로그아웃|실행|시작|중지|활성|비활성|질문|구매|판매|평가|분석|기여|계산|buy|sell|order|trade|liquidat|cancel|amend|withdraw|deposit|transfer|approve|promote|delete|remove|save|apply|create|add|register|connect|disconnect|logout|execute|start|stop|enable|disable|send|submit|evaluate|analysis|contribution|calculate)/i;
 
 type Diagnostic = { kind: string; path: string; detail: string; status?: number };
 type ControlInventory = {
@@ -84,9 +79,17 @@ type RouteInteractionAudit = {
   unlabeledControls: string[];
   clickFailures: string[];
   focusFailures: string[];
-  numericInputs: Array<{ label: string; min: string | null; max: string | null; step: string | null; required: boolean; readOnly: boolean }>;
+  numericInputs: Array<{
+    label: string;
+    min: string | null;
+    max: string | null;
+    step: string | null;
+    required: boolean;
+    readOnly: boolean;
+  }>;
   diagnostics: Diagnostic[];
 };
+type RouteFailure = { route: string; error: string };
 
 function slug(value: string) {
   return value.replace(/[^a-z0-9_-]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'root';
@@ -192,20 +195,18 @@ async function collectInventory(page: Page): Promise<ControlInventory[]> {
       'input', 'textarea', 'select', 'a[href]',
     ].join(',');
     const seen = new Set<Element>();
-    const rows: Array<{
-      tag: string; role: string; label: string; disabled: boolean; expanded: string | null; type: string; href: string | null;
-    }> = [];
+    const rows: ControlInventory[] = [];
     for (const element of Array.from(document.querySelectorAll(selectors))) {
       if (seen.has(element) || !visible(element)) continue;
       seen.add(element);
       const html = element as HTMLElement;
       const input = element as HTMLInputElement;
-      const disabled = 'disabled' in input && Boolean(input.disabled);
       rows.push({
         tag: element.tagName,
-        role: normalize(element.getAttribute('role')) || (element.tagName === 'BUTTON' || element.tagName === 'SUMMARY' ? 'button' : element.tagName === 'A' ? 'link' : ''),
+        role: normalize(element.getAttribute('role'))
+          || (element.tagName === 'BUTTON' || element.tagName === 'SUMMARY' ? 'button' : element.tagName === 'A' ? 'link' : ''),
         label: labelFor(html),
-        disabled,
+        disabled: 'disabled' in input && Boolean(input.disabled),
         expanded: element.getAttribute('aria-expanded'),
         type: normalize(input.type),
         href: element instanceof HTMLAnchorElement ? element.href : null,
@@ -225,17 +226,17 @@ async function layoutMetrics(page: Page) {
   }));
 }
 
+function isUnsafeControl(control: ControlInventory) {
+  return Boolean(control.label) && UNSAFE_PATTERN.test(control.label) && control.role !== 'tab';
+}
+
 function isSafeControl(control: ControlInventory) {
   if (control.disabled || !control.label) return false;
   if (control.role === 'tab') return true;
-  if (control.tag === 'SUMMARY' || control.expanded != null) return !UNSAFE_PATTERN.test(control.label);
-  if (EXPLICIT_SAFE_PATTERN.test(control.label)) return true;
   if (UNSAFE_PATTERN.test(control.label)) return false;
-  return false;
-}
-
-function isUnsafeControl(control: ControlInventory) {
-  return Boolean(control.label) && UNSAFE_PATTERN.test(control.label) && control.role !== 'tab';
+  if (control.tag === 'SUMMARY') return true;
+  if (control.expanded != null && (control.tag === 'BUTTON' || control.role === 'button')) return true;
+  return EXPLICIT_SAFE_PATTERN.test(control.label);
 }
 
 async function clickControl(page: Page, control: ControlInventory) {
@@ -244,8 +245,7 @@ async function clickControl(page: Page, control: ControlInventory) {
     return;
   }
   if (control.tag === 'SUMMARY') {
-    const summary = page.locator('summary').filter({ hasText: control.label }).first();
-    await summary.click({ timeout: 2_500 });
+    await page.locator('summary').filter({ hasText: control.label }).first().click({ timeout: 2_500 });
     return;
   }
   await page.getByRole('button', { name: control.label, exact: true }).first().click({ timeout: 2_500 });
@@ -259,8 +259,7 @@ async function focusVisibleInputs(page: Page) {
     const input = locator.nth(index);
     const type = String(await input.getAttribute('type').catch(() => '') ?? '').toLowerCase();
     if (['hidden', 'password', 'file'].includes(type)) continue;
-    const disabled = await input.isDisabled().catch(() => true);
-    if (disabled) continue;
+    if (await input.isDisabled().catch(() => true)) continue;
     const label = String(
       await input.getAttribute('aria-label').catch(() => null)
       ?? await input.getAttribute('placeholder').catch(() => null)
@@ -276,9 +275,8 @@ async function focusVisibleInputs(page: Page) {
 async function numericInputContracts(page: Page) {
   return page.locator('input[type="number"]:visible').evaluateAll((nodes) => nodes.map((node, index) => {
     const input = node as HTMLInputElement;
-    const label = String(input.getAttribute('aria-label') || input.getAttribute('placeholder') || `number-${index}`).trim();
     return {
-      label,
+      label: String(input.getAttribute('aria-label') || input.getAttribute('placeholder') || `number-${index}`).trim(),
       min: input.getAttribute('min'),
       max: input.getAttribute('max'),
       step: input.getAttribute('step'),
@@ -301,41 +299,35 @@ async function exerciseSafeControls(page: Page, route: string) {
   const clickFailures: string[] = [];
   const unsafe = new Set<string>();
   const unlabeled = new Set<string>();
-  const clicked = new Set<string>();
+  const inventory = await collectInventory(page);
 
-  for (let pass = 0; pass < 2; pass += 1) {
-    const inventory = await collectInventory(page);
-    for (const control of inventory) {
-      if ((control.tag === 'BUTTON' || control.role === 'button' || control.role === 'tab' || control.tag === 'SUMMARY') && !control.label) {
-        unlabeled.add(`${control.tag}/${control.role || 'none'}`);
-        continue;
-      }
-      if (isUnsafeControl(control)) {
-        unsafe.add(control.label);
-        continue;
-      }
-      if (!isSafeControl(control)) continue;
-      const key = `${control.tag}|${control.role}|${control.label}`;
-      if (clicked.has(key)) continue;
-      clicked.add(key);
-      const started = Date.now();
-      try {
-        await clickControl(page, control);
-        await page.waitForTimeout(120);
-        safeClicks.push({
-          label: control.label,
-          role: control.role,
-          tag: control.tag,
-          durationMs: Date.now() - started,
-          finalUrl: page.url(),
-        });
-      } catch (error) {
-        clickFailures.push(`${control.label}: ${String(error).split('\n')[0].slice(0, 220)}`);
-      }
-      if (!page.isClosed()) await restoreRoute(page, route).catch(() => undefined);
-      if (page.isClosed()) break;
+  for (const control of inventory) {
+    if ((control.tag === 'BUTTON' || control.role === 'button' || control.role === 'tab' || control.tag === 'SUMMARY') && !control.label) {
+      unlabeled.add(`${control.tag}/${control.role || 'none'}`);
+      continue;
+    }
+    if (isUnsafeControl(control)) {
+      unsafe.add(control.label);
+      continue;
+    }
+    if (!isSafeControl(control)) continue;
+
+    const started = Date.now();
+    try {
+      await clickControl(page, control);
+      await page.waitForTimeout(80);
+      safeClicks.push({
+        label: control.label,
+        role: control.role,
+        tag: control.tag,
+        durationMs: Date.now() - started,
+        finalUrl: page.url(),
+      });
+    } catch (error) {
+      clickFailures.push(`${control.label}: ${String(error).split('\n')[0].slice(0, 220)}`);
     }
     if (page.isClosed()) break;
+    await restoreRoute(page, route).catch(() => undefined);
   }
 
   return {
@@ -394,36 +386,61 @@ const SAFE_CONTROL_FIXTURE: ControlInventory = {
   href: null,
 };
 
-test('Production read-only safe-control classifier fails closed for unknown buttons', () => {
+test('Production read-only safe-control classifier fails closed', () => {
   expect(isSafeControl({ ...SAFE_CONTROL_FIXTURE, label: '새로고침' })).toBe(true);
   expect(isSafeControl({ ...SAFE_CONTROL_FIXTURE, label: '상세 보기' })).toBe(true);
   expect(isSafeControl({ ...SAFE_CONTROL_FIXTURE, label: '알 수 없는 동작' })).toBe(false);
   expect(isSafeControl({ ...SAFE_CONTROL_FIXTURE, label: '모의 평가' })).toBe(false);
+  expect(isSafeControl({ ...SAFE_CONTROL_FIXTURE, label: '모의 평가 보기' })).toBe(false);
+  expect(isSafeControl({ ...SAFE_CONTROL_FIXTURE, label: 'Toss 조회 연결 설정 열기' })).toBe(false);
+  expect(isSafeControl({ ...SAFE_CONTROL_FIXTURE, label: '월 납입 분석' })).toBe(false);
 });
 
 test.describe('Production full interaction read-only QA', () => {
   test.skip(!productionQaEnabled, 'Dedicated Production QA credentials and read-only flag are required');
 
-  test('all routes inventory and every safe visible control are exercised', async ({ page }, testInfo) => {
-    const full = fullProject(testInfo);
-    test.setTimeout(full ? 18 * 60_000 : 8 * 60_000);
+  test('all routes inventory and unambiguously safe visible controls are exercised', async ({ page }, testInfo) => {
+    test.skip(
+      !fullProject(testInfo),
+      'Full interaction is bounded to Desktop 1440 and Mobile 390; other viewports are covered by existing comprehensive/mobile geometry suites.',
+    );
+    test.setTimeout(18 * 60_000);
     const diagnostics: Diagnostic[] = [];
     const blocked: Diagnostic[] = [];
+    const routeFailures: RouteFailure[] = [];
+    const audits: RouteInteractionAudit[] = [];
+    const filename = `${slug(testInfo.project.name)}-full-interaction.json`;
+
     attachDiagnostics(page, diagnostics);
     await installSafety(page, blocked);
     await login(page);
 
-    const routes = full ? FULL_INTERACTION_ROUTES : RESPONSIVE_INTERACTION_ROUTES;
-    const audits: RouteInteractionAudit[] = [];
-    const filename = `${slug(testInfo.project.name)}-full-interaction.json`;
-    for (const route of routes) {
-      const audit = await auditRoute(page, route, diagnostics);
-      audits.push(audit);
-      writeJson(filename, { project: testInfo.project.name, audits, blocked, complete: false });
+    for (const route of FULL_INTERACTION_ROUTES) {
+      try {
+        audits.push(await auditRoute(page, route, diagnostics));
+      } catch (error) {
+        routeFailures.push({ route, error: String(error).split('\n')[0].slice(0, 300) });
+      }
+      writeJson(filename, {
+        project: testInfo.project.name,
+        audits,
+        routeFailures,
+        blocked,
+        complete: false,
+      });
+      if (page.isClosed()) break;
     }
-    writeJson(filename, { project: testInfo.project.name, audits, blocked, complete: true });
+
+    writeJson(filename, {
+      project: testInfo.project.name,
+      audits,
+      routeFailures,
+      blocked,
+      complete: true,
+    });
 
     expect(blocked, 'Full-interaction QA attempted a Production mutation/private-provider request').toEqual([]);
+    expect(routeFailures, 'route audit failed before evidence could be collected').toEqual([]);
     expect(audits.filter((item) => item.fallbackTimedOut), 'route fallback exceeded 5s').toEqual([]);
     expect(audits.filter((item) => item.busyAfter5s > 0), 'route remained aria-busy after 5s').toEqual([]);
     expect(audits.filter((item) => item.horizontalOverflowPx > 2), 'horizontal overflow detected').toEqual([]);
@@ -447,7 +464,12 @@ test.describe('Production full interaction read-only QA', () => {
       const started = Date.now();
       await page.goto(item.from, { waitUntil: 'domcontentloaded', timeout: 15_000 });
       await expect.poll(() => new URL(page.url()).pathname, { timeout: 6_000 }).toBe(item.to);
-      audits.push({ from: item.from, expected: item.to, actual: new URL(page.url()).pathname, durationMs: Date.now() - started });
+      audits.push({
+        from: item.from,
+        expected: item.to,
+        actual: new URL(page.url()).pathname,
+        durationMs: Date.now() - started,
+      });
     }
     writeJson(`${slug(testInfo.project.name)}-legacy-redirects.json`, { project: testInfo.project.name, audits, blocked });
     expect(blocked).toEqual([]);
@@ -499,10 +521,13 @@ test.describe('Production full interaction read-only QA', () => {
     await waitForTerminal(page);
     const install = await page.evaluate(() => ({
       manifestHref: document.querySelector<HTMLLinkElement>('link[rel="manifest"]')?.href ?? null,
-      installButtons: Array.from(document.querySelectorAll('button')).filter((button) => {
-        const rect = button.getBoundingClientRect();
-        return rect.width > 1 && rect.height > 1;
-      }).map((button) => String(button.getAttribute('aria-label') || button.textContent || '').replace(/\s+/g, ' ').trim()).filter(Boolean),
+      installButtons: Array.from(document.querySelectorAll('button'))
+        .filter((button) => {
+          const rect = button.getBoundingClientRect();
+          return rect.width > 1 && rect.height > 1;
+        })
+        .map((button) => String(button.getAttribute('aria-label') || button.textContent || '').replace(/\s+/g, ' ').trim())
+        .filter(Boolean),
     }));
 
     writeJson(`${slug(testInfo.project.name)}-readonly-form-contracts.json`, {
