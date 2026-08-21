@@ -2,8 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   AUTHORITATIVE_PAPER_RUNTIME_FACTORY_CONTRACT,
+  AUTHORITATIVE_PAPER_SOURCE_WIRING_CONTRACT,
+  auditAuthoritativePaperSourceWiring,
   createAuthoritativePaperForwardDependencies,
+  createAuthoritativePaperForwardDependenciesFromSourceWiring,
   createAuthoritativePaperForwardEvidenceProvider,
+  createAuthoritativePaperRuntimeFromSourceWiring,
   createAuthoritativePaperRuntimeForMarket,
 } from "../src/authoritative-paper-runtime-factory-v1.js";
 
@@ -245,5 +249,105 @@ test("P0-C9 dependency composer returns the exact runtime/provider pair for the 
   assert.equal(providerOptionsSeen.paperRuntimeForMarket, paperRuntimeForMarket);
   assert.equal(dependencies.paperRuntimeForMarket, paperRuntimeForMarket);
   assert.equal(dependencies.publicEvidenceProvider, publicEvidenceProvider);
+  assert.equal(dependencies.contract.scheduleActivationAuthority, false);
+});
+
+test("P0-C10 source-wiring audit reports UNKNOWN rather than a fabricated Scanner zero when concrete callbacks are absent", async () => {
+  const audit = auditAuthoritativePaperSourceWiring({});
+  assert.equal(audit.status, "BLOCKED_DATA");
+  assert.equal(audit.firstZeroStage, "UNKNOWN");
+  assert.equal(audit.scannerCandidateCount, null);
+  assert.equal(audit.canonicalPaperCandidateCount, null);
+  assert.equal(audit.unknownIsZero, false);
+  assert.deepEqual(audit.missingCallbacks, AUTHORITATIVE_PAPER_SOURCE_WIRING_CONTRACT.requiredCallbacks);
+  assert.deepEqual(audit.blockers, [
+    "AUTHORITATIVE_ADMISSION_PRODUCER_FACTORY_SOURCE_UNAVAILABLE",
+    "AUTHORITATIVE_SCANNER_BATCH_SOURCE_UNAVAILABLE",
+    "AUTHORITATIVE_PAPER_CANDIDATE_SOURCE_UNAVAILABLE",
+    "AUTHORITATIVE_LEARNING_SNAPSHOT_SOURCE_UNAVAILABLE",
+    "AUTHORITATIVE_PAPER_STATE_SOURCE_UNAVAILABLE",
+    "AUTHORITATIVE_CONTRACT_RULES_SOURCE_UNAVAILABLE",
+    "AUTHORITATIVE_PUBLIC_EVIDENCE_SOURCE_UNAVAILABLE",
+    "AUTHORITATIVE_EXECUTION_OBSERVATION_SOURCE_UNAVAILABLE",
+    "AUTHORITATIVE_SUPPLEMENTAL_COST_SOURCE_UNAVAILABLE",
+  ]);
+
+  const paperRuntimeForMarket = createAuthoritativePaperRuntimeFromSourceWiring({ sourceWiring: {} });
+  const blocked = await paperRuntimeForMarket({ market: "CRYPTO_FUTURES" });
+  assert.equal(blocked.status, "AUTHORITATIVE_RECURRING_SOURCE_WIRING_BLOCKED");
+  assert.equal(blocked.firstZeroStage, "UNKNOWN");
+  assert.equal(blocked.scannerCandidateCount, null);
+  assert.deepEqual(blocked.admissionBlockers, audit.blockers);
+  assert.equal(blocked.executionAuthority, "NONE");
+  assert.equal(blocked.productionMutationAllowed, false);
+  const nonOwned = await paperRuntimeForMarket({ market: "CRYPTO_SPOT" });
+  assert.equal(nonOwned.status, "AUTHORITATIVE_ADMISSION_MARKET_NOT_OWNED");
+  assert.equal(nonOwned.sourceWiringAudit, undefined);
+});
+
+test("P0-C10 source wiring passes all seven authoritative evidence callbacks through the #546 producer before Paper admission", async () => {
+  const callbacks = Object.freeze({
+    paperCandidateForCard: async () => Object.freeze({ source: "paper-candidate" }),
+    learningSnapshotForCard: async () => Object.freeze({ source: "learning-snapshot" }),
+    paperStateForCard: async () => Object.freeze({ source: "paper-state" }),
+    contractRulesForCard: async () => Object.freeze({ source: "contract-rules" }),
+    publicEvidenceForCard: async () => Object.freeze({ source: "public-evidence" }),
+    executionObservationForCard: async () => Object.freeze({ source: "execution-observation" }),
+    supplementalCostEvidenceForCard: async () => Object.freeze({ source: "supplemental-cost" }),
+  });
+  let producerSources = null;
+  const sourceWiring = Object.freeze({
+    createPaperAdmissionEvidenceProducer: (sources) => {
+      producerSources = sources;
+      return async () => producerReady();
+    },
+    scanBatchForMarket: async () => async () => Object.freeze({ cards: Object.freeze([]) }),
+    ...callbacks,
+  });
+  const paperRuntimeForMarket = createAuthoritativePaperRuntimeFromSourceWiring({
+    sourceWiring,
+    runRuntimeWithAdmissionBundles: async () => runtime("VALID_NO_TRADE", {
+      candidates: [],
+      exits: [],
+      searchOutcome: "VALID_NO_TRADE",
+    }),
+  });
+
+  const result = await paperRuntimeForMarket({ market: "CRYPTO_FUTURES" });
+  assert.equal(result.status, "VALID_NO_TRADE");
+  assert.equal(result.sourceWiringAudit.status, "CALLABLES_READY");
+  assert.equal(producerSources.paperCandidateSource, callbacks.paperCandidateForCard);
+  assert.equal(producerSources.learningSnapshotSource, callbacks.learningSnapshotForCard);
+  assert.equal(producerSources.paperStateSource, callbacks.paperStateForCard);
+  assert.equal(producerSources.contractRulesSource, callbacks.contractRulesForCard);
+  assert.equal(producerSources.publicEvidenceSource, callbacks.publicEvidenceForCard);
+  assert.equal(producerSources.executionObservationSource, callbacks.executionObservationForCard);
+  assert.equal(producerSources.supplementalCostEvidenceSource, callbacks.supplementalCostEvidenceForCard);
+});
+
+test("P0-C10 scheduled dependency composer keeps missing sources fail-closed while constructing the exact provider seam", () => {
+  const publicEvidenceProvider = Object.freeze({ collectPublicEvidence: async () => ({ status: "READY" }) });
+  let runtimeOptionsSeen = null;
+  let providerOptionsSeen = null;
+  const dependencies = createAuthoritativePaperForwardDependenciesFromSourceWiring({
+    sourceWiring: {},
+    runtimeOptions: Object.freeze({ marker: "runtime-options" }),
+    providerOptions: Object.freeze({ marker: "provider-options" }),
+    runtimeFactory: (options) => {
+      runtimeOptionsSeen = options;
+      return async () => runtime("VALID_NO_TRADE");
+    },
+    evidenceProviderFactory: (options) => {
+      providerOptionsSeen = options;
+      return publicEvidenceProvider;
+    },
+  });
+
+  assert.equal(runtimeOptionsSeen.marker, "runtime-options");
+  assert.deepEqual(runtimeOptionsSeen.sourceWiring, {});
+  assert.equal(providerOptionsSeen.marker, "provider-options");
+  assert.equal(typeof providerOptionsSeen.paperRuntimeForMarket, "function");
+  assert.equal(dependencies.publicEvidenceProvider, publicEvidenceProvider);
+  assert.equal(dependencies.sourceWiringAudit.status, "BLOCKED_DATA");
   assert.equal(dependencies.contract.scheduleActivationAuthority, false);
 });

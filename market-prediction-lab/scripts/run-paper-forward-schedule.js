@@ -1,6 +1,7 @@
 import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { createAuthoritativePaperForwardDependenciesFromSourceWiring } from "../src/authoritative-paper-runtime-factory-v1.js";
 import { createCanonicalPaperForwardEvidenceProvider } from "../src/paper-forward-evidence-runtime-v1.js";
 import { wrapPaperForwardProviderWithMeaningfulSearch } from "../src/meaningful-search-scheduled-paper-provider-v1.js";
 import {
@@ -152,6 +153,8 @@ export async function runPaperForwardScheduleCli(env = process.env, {
   runScheduledInvocation = runPaperForwardScheduledInvocation,
   publicEvidenceProvider = null,
   meaningfulSearchPaperRuntimeForMarket = null,
+  authoritativePaperSourceWiring = null,
+  authoritativePaperDependenciesFactory = createAuthoritativePaperForwardDependenciesFromSourceWiring,
 } = {}) {
   if (!truthy(env.PAPER_FORWARD_SCHEDULE_ACTIVE)) {
     fail("PAPER_FORWARD_SCHEDULE_ACTIVE must be explicitly true", 64);
@@ -167,6 +170,15 @@ export async function runPaperForwardScheduleCli(env = process.env, {
   }
   if (meaningfulSearchPaperRuntimeForMarket != null && typeof meaningfulSearchPaperRuntimeForMarket !== "function") {
     fail("Meaningful Search Paper runtime dependency is invalid", 67);
+    return;
+  }
+  if (authoritativePaperSourceWiring != null
+    && (typeof authoritativePaperSourceWiring !== "object" || Array.isArray(authoritativePaperSourceWiring))) {
+    fail("Authoritative Paper source wiring dependency is invalid", 68);
+    return;
+  }
+  if (typeof authoritativePaperDependenciesFactory !== "function") {
+    fail("Authoritative Paper dependency factory is invalid", 69);
     return;
   }
 
@@ -192,14 +204,29 @@ export async function runPaperForwardScheduleCli(env = process.env, {
       triggerSource,
       outcomeAccumulationEnabled,
     };
-    if (publicEvidenceProvider != null || meaningfulSearchPaperRuntimeForMarket != null) {
-      const baseProvider = publicEvidenceProvider ?? createCanonicalPaperForwardEvidenceProvider();
+    if (publicEvidenceProvider != null) {
       invocation.publicEvidenceProvider = meaningfulSearchPaperRuntimeForMarket == null
-        ? baseProvider
+        ? publicEvidenceProvider
         : wrapPaperForwardProviderWithMeaningfulSearch({
-          provider: baseProvider,
+          provider: publicEvidenceProvider,
           paperRuntimeForMarket: meaningfulSearchPaperRuntimeForMarket,
         });
+    } else if (meaningfulSearchPaperRuntimeForMarket != null) {
+      invocation.publicEvidenceProvider = researchProduction
+        ? createCanonicalPaperForwardEvidenceProvider({
+          env,
+          paperRuntimeForMarket: meaningfulSearchPaperRuntimeForMarket,
+        })
+        : wrapPaperForwardProviderWithMeaningfulSearch({
+          provider: createCanonicalPaperForwardEvidenceProvider({ env }),
+          paperRuntimeForMarket: meaningfulSearchPaperRuntimeForMarket,
+        });
+    } else if (researchProduction) {
+      const dependencies = authoritativePaperDependenciesFactory({
+        sourceWiring: authoritativePaperSourceWiring ?? {},
+        providerOptions: { env },
+      });
+      invocation.publicEvidenceProvider = dependencies.publicEvidenceProvider;
     }
     const result = await runScheduledInvocation(invocation);
     const output = {
