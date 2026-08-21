@@ -89,23 +89,30 @@ test("explicit no-deploy outcome mode fails closed before state cutover when aut
   const predecessor = { identity: { researchCodeSha: "a".repeat(40), strategyId: "paper-forward-simulated-outcome-v1" } };
   await writeFile(stateFile, `${JSON.stringify(predecessor)}\n`);
 
-  const output = await runPaperForwardScheduleCli({
-    PAPER_FORWARD_SCHEDULE_ACTIVE: "true",
-    RESEARCH_PRODUCTION: "true",
-    PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED: "true",
-    PAPER_FORWARD_RESEARCH_SHA: SHA,
-    PAPER_FORWARD_ACTIVATION_AT_MS: String(NOW),
-    PAPER_FORWARD_ROOT: root,
-  }, {
-    authoritativePaperPackageLoader: async () => runtimePackage(snapshot()),
-    runScheduledInvocation: async () => {
-      throw new Error("must not run without authenticated seed");
-    },
-  });
+  const previousExitCode = process.exitCode;
+  process.exitCode = undefined;
+  try {
+    const output = await runPaperForwardScheduleCli({
+      PAPER_FORWARD_SCHEDULE_ACTIVE: "true",
+      RESEARCH_PRODUCTION: "true",
+      PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED: "true",
+      PAPER_FORWARD_RESEARCH_SHA: SHA,
+      PAPER_FORWARD_ACTIVATION_AT_MS: String(NOW),
+      PAPER_FORWARD_ROOT: root,
+    }, {
+      authoritativePaperPackageLoader: async () => runtimePackage(snapshot()),
+      runScheduledInvocation: async () => {
+        throw new Error("must not run without authenticated seed");
+      },
+    });
 
-  assert.equal(output, undefined);
-  const stillThere = JSON.parse(await readFile(stateFile, "utf8"));
-  assert.equal(stillThere.identity.researchCodeSha, "a".repeat(40));
+    assert.equal(output, undefined);
+    assert.equal(process.exitCode, 1);
+    const stillThere = JSON.parse(await readFile(stateFile, "utf8"));
+    assert.equal(stillThere.identity.researchCodeSha, "a".repeat(40));
+  } finally {
+    process.exitCode = previousExitCode;
+  }
 });
 
 test("authoritative identity cutover uses a distinct strategy id", async () => {
