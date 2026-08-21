@@ -28,6 +28,19 @@ test("Research Production enables simulated Paper outcome accumulation without e
   assert.equal(resolveOutcomeAccumulationEnabled({}), false);
 });
 
+test("Paper installer binds outcome accumulation mode to Research Production inside the isolated cron environment", async () => {
+  const installer = await readFile(new URL("../../ops/install-paper-forward-schedule.sh", import.meta.url), "utf8");
+  assert.match(
+    installer,
+    /OUTCOME_ACCUMULATION_ENABLED="\$\{PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED:-false\}"/,
+  );
+  assert.match(
+    installer,
+    /PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED='\$OUTCOME_ACCUMULATION_ENABLED' \\\n  RESEARCH_PRODUCTION='\$OUTCOME_ACCUMULATION_ENABLED' \\/,
+  );
+  assert.doesNotMatch(installer, /RESEARCH_PRODUCTION='true'/);
+});
+
 test("Research Production archives predecessor Paper identity and starts the target identity from zero", async () => {
   const temp = await mkdtemp(join(tmpdir(), "research-paper-cutover-"));
   const root = join(temp, "forward", "paper");
