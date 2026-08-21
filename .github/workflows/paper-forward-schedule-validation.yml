@@ -8,6 +8,8 @@ on:
       - api-server/src/services/authoritative-paper-evidence-sources.service.ts
       - api-server/src/services/authoritative-paper-runtime-package.entry.ts
       - api-server/src/services/paper-trading-state-snapshot.service.ts
+      - api-server/src/services/paper-simulated-execution-evidence.service.ts
+      - market-intelligence-sidecar/src/execution-quality.mjs
       - market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json
       - market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs
       - market-prediction-lab/src/authoritative-paper-evidence-source-ownership-v1.js
@@ -83,6 +85,8 @@ jobs:
             api-server/src/services/authoritative-paper-evidence-sources.service.ts
             api-server/src/services/authoritative-paper-runtime-package.entry.ts
             api-server/src/services/paper-trading-state-snapshot.service.ts
+            api-server/src/services/paper-simulated-execution-evidence.service.ts
+            market-intelligence-sidecar/src/execution-quality.mjs
             market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json
             market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs
             market-prediction-lab/src/authoritative-paper-evidence-source-ownership-v1.js
@@ -122,6 +126,7 @@ jobs:
           node --check market-prediction-lab/src/authoritative-paper-runtime-factory-v1.js
           node --check market-prediction-lab/src/authoritative-paper-runtime-package-v1.js
           node --check market-prediction-lab/src/meaningful-search-scheduled-paper-provider-v1.js
+          node --check market-intelligence-sidecar/src/execution-quality.mjs
           node --check market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs
           node --check market-prediction-lab/scripts/run-paper-forward-schedule.js
           node --check market-prediction-lab/tests/authoritative-paper-runtime-factory-v1.test.js

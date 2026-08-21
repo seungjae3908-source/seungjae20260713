@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { AUTHORITATIVE_PAPER_EVIDENCE_SOURCE_OWNERSHIP } from "../src/authoritative-paper-evidence-source-ownership-v1.js";
@@ -61,6 +61,9 @@ test("validated package loads exact #546 producer bundle and executes fail-close
   assert.match(runtimePackage.sourceGraphSha256, /^[0-9a-f]{64}$/u);
   assert.match(runtimePackage.bundleSha256, /^[0-9a-f]{64}$/u);
   assert.equal(runtimePackage.admissionBundleSchemaVersion, "scanner-paper-admission-evidence-bundle-v1");
+  assert.equal(runtimePackage.simulatedExecutionEvidenceSchemaVersion, "paper-simulated-execution-evidence-v1");
+  assert.match(runtimePackage.manifest.sourceFileSha256["api-server/src/services/paper-simulated-execution-evidence.service.ts"], /^[0-9a-f]{64}$/u);
+  assert.match(runtimePackage.manifest.sourceFileSha256["market-intelligence-sidecar/src/execution-quality.mjs"], /^[0-9a-f]{64}$/u);
   assert.equal(runtimePackage.costPolicyVersion, null);
   assert.equal(runtimePackage.costPolicyVersionBinding.status, "RUNTIME_EXACT_REQUIRED");
   assert.equal(runtimePackage.executionAuthority, "NONE");
@@ -69,6 +72,7 @@ test("validated package loads exact #546 producer bundle and executes fail-close
   assert.equal(runtimePackage.scheduleActivationAuthority, false);
   assert.equal(runtimePackage.financialMutationAllowed, false);
   assert.equal(typeof runtimePackage.createAuthoritativePaperEvidenceSourceWiring, "function");
+  assert.equal(typeof runtimePackage.buildPaperSimulatedExecutionEvidence, "function");
 
   const producer = runtimePackage.createPaperAdmissionEvidenceProducer(missingEvidenceSources());
   const result = await producer({ card: {}, market: "CRYPTO_FUTURES" });
@@ -77,6 +81,73 @@ test("validated package loads exact #546 producer bundle and executes fail-close
   assert.equal(result.executionAuthority, "NONE");
   assert.equal(result.privateTradingApiAllowed, false);
   assert.equal(result.productionMutationAllowed, false);
+});
+
+test("validated package reuses the sidecar book walk only as labeled simulated execution", async () => {
+  const runtimePackage = await loadValidatedAuthoritativePaperRuntimePackage();
+  const evidence = runtimePackage.buildPaperSimulatedExecutionEvidence({
+    source: "BITGET_PUBLIC_DEPTH_CONTRACT_FIXTURE",
+    market: "CRYPTO_FUTURES",
+    symbol: "ETHUSDT",
+    direction: "LONG",
+    targetQuantity: 2,
+    bids: [[99, 3]],
+    asks: [[100, 1], [101, 1]],
+    observedAtMs: 2_000,
+    requestStartedAtMs: 1_990,
+    requestCompletedAtMs: 2_000,
+    maximumAgeMs: 1_000,
+    provenance: ["contract-fixture-public-depth"],
+    nowMs: 2_001,
+  });
+
+  assert.equal(evidence.modelStatus, "SIMULATION_AVAILABLE");
+  assert.equal(evidence.status, "BLOCKED_DATA");
+  assert.equal(evidence.executionMode, "SIMULATED_EXECUTION_ONLY");
+  assert.equal(evidence.safety.executionAuthority, "NONE");
+  assert.equal(evidence.safety.privateApiAllowed, false);
+  assert.equal(evidence.realFillClaim, false);
+  assert.equal(evidence.publicDepthIsFillProof, false);
+  assert.equal(evidence.currentPriceIsFillPrice, false);
+  assert.equal(evidence.estimated.slippageEstimate.model, "VISIBLE_L2_BOOK_WALK_ONLY");
+  assert.equal(evidence.estimated.slippageEstimate.quality, "ESTIMATED");
+  assert.equal(evidence.observed.latencyEvidence.quality, "OBSERVED_DURATION_ONLY");
+  assert.equal(evidence.observed.latencyEvidence.costPercent, null);
+  assert.equal(evidence.estimated.partialFillEstimate.quality, "UNCALIBRATED_MODEL_ONLY");
+  assert.equal(evidence.confidence.numericConfidence, null);
+  assert.equal(evidence.costEvidenceReady, false);
+  assert.equal(evidence.blockers.includes("CALIBRATED_FILL_MODEL_EVIDENCE_MISSING"), true);
+  assert.equal(evidence.blockers.includes("LATENCY_COST_MODEL_OWNER_MISSING"), true);
+  assert.equal(Object.isFrozen(evidence), true);
+  assert.equal(Object.isFrozen(evidence.estimated), true);
+});
+
+test("validated package rejects source-graph or bundle digest tampering", async () => {
+  const root = await mkdtemp(join(tmpdir(), "authoritative-paper-package-tamper-"));
+  const packageRoot = join(root, "package");
+  const manifestPath = join(packageRoot, "authoritative-paper-runtime-v1.manifest.json");
+  const bundlePath = join(packageRoot, "authoritative-paper-runtime-v1.mjs");
+  try {
+    await cp(new URL("../runtime/authoritative-paper-runtime-v1/", import.meta.url), packageRoot, { recursive: true });
+    const originalManifestText = await readFile(manifestPath, "utf8");
+    const manifest = JSON.parse(originalManifestText);
+    manifest.sourceFileSha256["market-intelligence-sidecar/src/execution-quality.mjs"] = "0".repeat(64);
+    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    await assert.rejects(
+      loadValidatedAuthoritativePaperRuntimePackage({ packageRoot }),
+      /AUTHORITATIVE_PAPER_RUNTIME_PACKAGE_MANIFEST_INVALID/u,
+    );
+
+    await writeFile(manifestPath, originalManifestText);
+    const bundle = await readFile(bundlePath);
+    await writeFile(bundlePath, Buffer.concat([bundle, Buffer.from("\n// tampered\n")]));
+    await assert.rejects(
+      loadValidatedAuthoritativePaperRuntimePackage({ packageRoot }),
+      /AUTHORITATIVE_PAPER_RUNTIME_PACKAGE_MANIFEST_INVALID/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("validated package connects existing Scanner and public Bitget owners without adding execution authority", async () => {
@@ -230,6 +301,10 @@ test("missing-owner contracts preserve UNKNOWN and separate public observations 
   assert.equal(contracts.executionObservationForCard.currentPriceIsFillPrice, false);
   assert.equal(contracts.executionObservationForCard.fixedSlippageAllowed, false);
   assert.equal(contracts.executionObservationForCard.fixedLatencyAllowed, false);
+  assert.equal(contracts.executionObservationForCard.simulatedModelStatus, "EXECUTABLE_BLOCKED_DATA");
+  assert.equal(contracts.executionObservationForCard.executionMode, "SIMULATED_EXECUTION_ONLY");
+  assert.equal(contracts.executionObservationForCard.realFillClaimAllowed, false);
+  assert.equal(contracts.executionObservationForCard.costEvidenceReady, false);
 
   assert.deepEqual(contracts.supplementalCostEvidenceForCard.partiallyOwnedComponents, [
     "fees", "funding", "spread",
