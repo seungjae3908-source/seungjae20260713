@@ -65,7 +65,8 @@ jobs:
               'allowedResearchPrefixes',
               'researchIdentityDigest',
               'researchScopeDigest',
-              'TREE_EQUIVALENT_PR_HEAD',
+              'ISOLATED_GATE_MERGE_PROOF',
+              'Research AI One-Shot Pilot',
               'research-ai-one-shot-pilot.yml',
               'main_application_run_id',
               'main_validation_mode',
@@ -269,16 +270,46 @@ jobs:
                 repo: context.repo.repo,
                 pull_number: 585,
               })).data;
-              if (!gatePr.merged) {
-                core.setFailed('Current main has no coherent 6/6 and PR #585 is not merged for immutable tree-equivalence proof.');
+              if (!gatePr.merged || String(gatePr.merge_commit_sha ?? '').toLowerCase() !== mainSha) {
+                core.setFailed('Current main has no coherent 6/6 and is not the isolated #585 merge commit.');
                 return;
               }
+
               const gateHeadSha = String(gatePr.head.sha).toLowerCase();
               const gateApplicationRun = await findCoherentRequiredRun(gateHeadSha, 'pull_request');
               if (!gateApplicationRun) {
-                core.setFailed('Merged PR #585 head has no coherent exact-head 6/6 for tree-equivalence proof.');
+                core.setFailed('Merged PR #585 head has no coherent exact-head 6/6.');
                 return;
               }
+              const gateRuns = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                head_sha: gateHeadSha,
+                per_page: 100,
+              });
+              const gateDryRun = gateRuns
+                .filter((run) => run.name === 'Research AI One-Shot Pilot')
+                .sort((a, b) => Number(b.id) - Number(a.id))[0];
+              if (!gateDryRun || gateDryRun.status !== 'completed' || gateDryRun.conclusion !== 'success') {
+                core.setFailed('Merged PR #585 head has no successful V2 dry-run workflow.');
+                return;
+              }
+              const gateJobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: gateDryRun.id,
+                per_page: 100,
+              });
+              const gateJobMap = new Map(gateJobs.map((job) => [job.name, job.conclusion]));
+              if (
+                gateJobMap.get('validate-contract') !== 'success' ||
+                gateJobMap.get('authorize') !== 'success' ||
+                gateJobMap.get('run-one-shot') !== 'skipped'
+              ) {
+                core.setFailed('V2 dry-run did not preserve provider/server execution as skipped.');
+                return;
+              }
+
               const gateFiles = await github.paginate(github.rest.pulls.listFiles, {
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -289,21 +320,63 @@ jobs:
                 gateFiles.length !== 1 ||
                 gateFiles[0].filename !== '.github/workflows/research-ai-one-shot-pilot.yml'
               ) {
-                core.setFailed('PR #585 tree-equivalence proof requires exactly the one-shot gate workflow file.');
+                core.setFailed('PR #585 isolated-merge proof requires exactly the one-shot gate workflow file.');
                 return;
               }
-              const [mainCommit, gateHeadCommit] = await Promise.all([
-                github.rest.repos.getCommit({ owner: context.repo.owner, repo: context.repo.repo, ref: mainSha }),
-                github.rest.repos.getCommit({ owner: context.repo.owner, repo: context.repo.repo, ref: gateHeadSha }),
+
+              const mergeCommit = (await github.rest.repos.getCommit({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: mainSha,
+              })).data;
+              if (!Array.isArray(mergeCommit.parents) || mergeCommit.parents.length !== 1) {
+                core.setFailed('Isolated #585 squash merge must have exactly one main parent.');
+                return;
+              }
+              const parentSha = String(mergeCommit.parents[0].sha).toLowerCase();
+              const parentApplicationRun = await findCoherentRequiredRun(parentSha, 'push');
+              if (!parentApplicationRun) {
+                core.setFailed(`Pre-#585 main parent has no coherent 6/6: ${parentSha}`);
+                return;
+              }
+              const comparison = (await github.rest.repos.compareCommits({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                base: parentSha,
+                head: mainSha,
+              })).data;
+              if (
+                !Array.isArray(comparison.files) ||
+                comparison.files.length !== 1 ||
+                comparison.files[0].filename !== '.github/workflows/research-ai-one-shot-pilot.yml'
+              ) {
+                core.setFailed('Merged main differs from its green parent by more than the isolated one-shot gate file.');
+                return;
+              }
+              const [gateHeadFile, mergedMainFile] = await Promise.all([
+                github.rest.repos.getContent({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  path: '.github/workflows/research-ai-one-shot-pilot.yml',
+                  ref: gateHeadSha,
+                }),
+                github.rest.repos.getContent({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  path: '.github/workflows/research-ai-one-shot-pilot.yml',
+                  ref: mainSha,
+                }),
               ]);
-              const mainTree = String(mainCommit.data.commit?.tree?.sha ?? '');
-              const gateTree = String(gateHeadCommit.data.commit?.tree?.sha ?? '');
-              if (!mainTree || mainTree !== gateTree) {
-                core.setFailed('Current main tree differs from the exact #585 head that passed 6/6; fresh exact-main validation is required.');
+              if (
+                Array.isArray(gateHeadFile.data) || Array.isArray(mergedMainFile.data) ||
+                !gateHeadFile.data.sha || gateHeadFile.data.sha !== mergedMainFile.data.sha
+              ) {
+                core.setFailed('Merged one-shot gate blob does not equal the exact tested #585 head blob.');
                 return;
               }
-              mainApplicationRun = gateApplicationRun;
-              mainValidationMode = 'TREE_EQUIVALENT_PR_HEAD';
+
+              mainApplicationRun = parentApplicationRun;
+              mainValidationMode = 'ISOLATED_GATE_MERGE_PROOF';
             }
             const mainApplicationRunId = Number(mainApplicationRun.id);
 
