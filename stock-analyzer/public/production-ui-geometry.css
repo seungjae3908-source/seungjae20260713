@@ -27,3 +27,29 @@ button[aria-label="심볼 지우기"] {
 button[data-testid="load-multi-timeframe"] {
   min-height: 2rem;
 }
+
+/*
+ * The read-only orderbook opener is viewport-fixed, while mobile BottomNav is
+ * laid out inside the shortened AppShell. Reserve both bands so the opener
+ * cannot be covered by navigation on 320-1023px viewports.
+ */
+@media (max-width: 1023px) {
+  /* AppShell already reserves the mobile navigation band for this workspace. */
+  [data-testid="technical-workspace"] {
+    padding-bottom: 0;
+  }
+
+  /* Give the mobile tabpanel a definite flex height so its scanner can scroll. */
+  [data-testid="technical-workspace"] > div:has(> [role="tabpanel"]) {
+    display: flex;
+    flex-direction: column;
+  }
+
+  button[aria-label="읽기 전용 호가창 열기"] {
+    bottom: calc(
+      var(--app-bottom-nav-reserve)
+      + 4.5rem
+      + env(safe-area-inset-bottom)
+    );
+  }
+}
