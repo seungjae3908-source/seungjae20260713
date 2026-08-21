@@ -207,6 +207,7 @@ export async function runPaperForwardScheduleCli(env = process.env, {
     if (researchProduction) {
       const runtimePackage = await authoritativePaperPackageLoader();
       resolvedAuthoritativeSourceWiring = {
+        ...runtimePackage.createAuthoritativePaperEvidenceSourceWiring({ researchCodeSha }),
         ...resolvedAuthoritativeSourceWiring,
         createPaperAdmissionEvidenceProducer: runtimePackage.createPaperAdmissionEvidenceProducer,
       };

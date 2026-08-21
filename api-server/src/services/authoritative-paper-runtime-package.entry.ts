@@ -9,6 +9,12 @@ export {
   PAPER_TRADING_STATE_SNAPSHOT_VERSION,
 } from './paper-trading-state-snapshot.service';
 
+export {
+  AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_SAFETY,
+  AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_VERSION,
+  createAuthoritativePaperEvidenceSourceWiring,
+} from './authoritative-paper-evidence-sources.service';
+
 export const AUTHORITATIVE_PAPER_RUNTIME_PACKAGE_SAFETY = Object.freeze({
   schemaVersion: 'authoritative-paper-runtime-package-safety-v1',
   executionAuthority: 'NONE',
