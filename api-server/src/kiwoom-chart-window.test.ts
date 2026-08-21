@@ -353,8 +353,8 @@ test('interactive fallback classification keeps deadline/abort/upstream timeout 
   assert.match(source, /시간이 초과되었습니다.*UPSTREAM_TIMEOUT/s);
   assert.match(source, /fallbackFrom:[\s\S]*provider: 'kiwoom'/);
   assert.doesNotMatch(source, /fallbackFrom:[\s\S]*reason:\s*'0'/);
-  assert.doesNotMatch(
+  assert.match(
     source,
-    /isBoundedKrIntradayRequest[\s\S]*?super\.getCandlesMeta\(ticker, timeframe\)/,
+    /if \(isBoundedKrIntradayRequest\(ticker, timeframe\)\) \{\s*return getBoundedKrIntradayCandlesMeta\(ticker, timeframe\);\s*\}/,
   );
 });
