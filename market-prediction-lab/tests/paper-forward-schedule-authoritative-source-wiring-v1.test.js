@@ -69,12 +69,15 @@ test("Research Production recurring CLI injects the audited authoritative source
   assert.equal(output.authoritativeRuntimePackage.executionAuthority, "NONE");
   assert.equal(output.authoritativeRuntimePackage.privateApiAllowed, false);
   assert.deepEqual(output.authoritativeEvidenceOwners, {
-    ownerExists: 4,
-    ownerMissing: 3,
+    ownerExists: 3,
+    ownerMissing: 4,
     callbacksWired: 3,
     scannerCallbackWired: true,
     scheduledCanonicalWriter: "OWNER_MISSING",
     allOwnersReady: false,
+    firstZeroStage: "UNKNOWN",
+    firstBlocker: "AUTHORITATIVE_CALLBACK_SOURCE_UNAVAILABLE",
+    unknownIsZero: false,
   });
 });
 
