@@ -5,7 +5,6 @@ export const FREE_AI_PROVIDER_HEALTH_STATES = Object.freeze([
   "UNAVAILABLE",
   "RATE_LIMITED",
   "MISCONFIGURED",
-  "UNKNOWN",
 ]);
 
 const HEALTH_SET = new Set(FREE_AI_PROVIDER_HEALTH_STATES);
@@ -62,8 +61,8 @@ function normalizeProvider(slot, raw, checkedAt) {
   const modelName = text(raw.modelName);
   const roles = roleSupport(raw.roleSupport);
   const billingTier = text(raw.billingTier)?.toUpperCase() ?? "UNKNOWN";
-  const availability = text(raw.availability)?.toUpperCase() ?? "UNKNOWN";
-  let healthState = HEALTH_SET.has(availability) ? availability : availability === "AVAILABLE" ? "READY" : "UNKNOWN";
+  const availability = text(raw.availability)?.toUpperCase() ?? "UNAVAILABLE";
+  let healthState = HEALTH_SET.has(availability) ? availability : availability === "AVAILABLE" ? "READY" : "UNAVAILABLE";
   let reason = raw.failureReason == null ? null : failureReason(raw.failureReason, "PROVIDER_FAILURE_UNCLASSIFIED");
   if (billingTier !== "FREE") {
     healthState = "MISCONFIGURED";
@@ -74,6 +73,8 @@ function normalizeProvider(slot, raw, checkedAt) {
   } else if (!REQUIRED_ROLES.every((role) => roles.includes(role))) {
     healthState = "MISCONFIGURED";
     reason = "ROLE_SUPPORT_INCOMPLETE";
+  } else if (!HEALTH_SET.has(availability) && availability !== "AVAILABLE") {
+    reason = "PROVIDER_AVAILABILITY_UNRECOGNIZED";
   } else if (healthState !== "READY" && !reason) {
     reason = `PROVIDER_${healthState}`;
   }
@@ -95,7 +96,7 @@ function dualHealth(providerA, providerB) {
   if (providerA.healthState === "MISCONFIGURED" || providerB.healthState === "MISCONFIGURED") return "MISCONFIGURED";
   if (providerA.healthState === "RATE_LIMITED" || providerB.healthState === "RATE_LIMITED") return "RATE_LIMITED";
   if (providerA.healthState === "UNAVAILABLE" || providerB.healthState === "UNAVAILABLE") return "UNAVAILABLE";
-  if (providerA.healthState !== "READY" || providerB.healthState !== "READY") return "UNKNOWN";
+  if (providerA.healthState !== "READY" || providerB.healthState !== "READY") return "UNAVAILABLE";
   if (providerA.providerName === providerB.providerName) return "MISCONFIGURED";
   return "READY";
 }
