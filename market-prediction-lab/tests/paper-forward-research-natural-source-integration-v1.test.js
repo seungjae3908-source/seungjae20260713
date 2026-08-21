@@ -25,7 +25,7 @@ function collectors() {
   };
 }
 
-test("Research Production canonical provider attaches the sibling Shadow state source only to futures", async () => {
+test("Research Production scopes missing canonical runtime blocking to CRYPTO_FUTURES", async () => {
   let factoryArgs = null;
   let sourceCalls = 0;
   let sourceInput = null;
@@ -55,19 +55,38 @@ test("Research Production canonical provider attaches the sibling Shadow state s
     },
   });
 
+  const kr = await provider.collectPublicEvidence({ market: "KR_STOCK" });
+  const us = await provider.collectPublicEvidence({ market: "US_STOCK" });
   const spot = await provider.collectPublicEvidence({ market: "CRYPTO_SPOT" });
   const futuresPosition = { positionId: "paper-open-1" };
   const futures = await provider.collectPublicEvidence({ market: "CRYPTO_FUTURES", openPositions: [futuresPosition] });
+
   assert.equal(factoryArgs.shadowStatePath, "/var/lib/investment-research-production/forward/shadow-state.json");
   assert.equal(factoryArgs.researchCodeSha, SHA);
   assert.equal(factoryArgs.client != null, true);
   assert.equal(factoryArgs.clock(), NOW);
-  assert.equal(spot.candidates.length, 0);
-  assert.equal(futures.candidates.length, 1);
-  assert.equal(futures.candidates[0].signal.signalId, "ETH-V6-natural");
+
+  for (const evidence of [kr, us, spot]) {
+    assert.equal(evidence.status, "READY");
+    assert.equal(evidence.candidates.length, 0);
+    assert.equal(evidence.exits.length, 0);
+    assert.equal(evidence.paperCandidateSource, undefined);
+    assert.equal(evidence.canonicalAdmissionCutover, undefined);
+  }
+
+  assert.equal(futures.status, "BLOCKED_DATA");
+  assert.equal(futures.blocker, "AUTHORITATIVE_ADMISSION_RUNTIME_UNAVAILABLE");
+  assert.equal(futures.candidates.length, 0);
+  assert.equal(futures.exits.length, 0);
   assert.deepEqual(sourceInput.openPositions, [futuresPosition]);
   assert.equal(futures.naturalCandidateSource.candidateCount, 1);
   assert.equal(futures.naturalCandidateSource.settlementBridgeReady, true);
+  assert.equal(futures.canonicalAdmissionCutover.status, "LEGACY_ENTRY_BLOCKED");
+  assert.equal(futures.canonicalAdmissionCutover.blockedLegacyEntryCount, 1);
+  assert.equal(futures.canonicalAdmissionCutover.blocker, "AUTHORITATIVE_ADMISSION_BUNDLE_REQUIRED");
+  assert.equal(futures.paperCandidateSource.status, "AUTHORITATIVE_ADMISSION_RUNTIME_UNAVAILABLE");
+  assert.equal(futures.paperCandidateSource.blocker, "AUTHORITATIVE_ADMISSION_RUNTIME_UNAVAILABLE");
+  assert.equal(futures.paperCandidateSource.eligibleCandidates, 0);
   assert.equal(sourceCalls, 1);
 });
 
