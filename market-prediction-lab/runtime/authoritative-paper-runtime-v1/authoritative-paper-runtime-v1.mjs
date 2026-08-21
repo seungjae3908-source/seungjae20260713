@@ -320,10 +320,10 @@ function calculateTradingRisk(input, now = /* @__PURE__ */ new Date()) {
     );
   }
   if (input.estimatedFundingRate !== 0) {
-    const positive6 = input.estimatedFundingRate > 0;
-    const likelyPays = positive6 && input.side === "long" || !positive6 && input.side === "short";
+    const positive7 = input.estimatedFundingRate > 0;
+    const likelyPays = positive7 && input.side === "long" || !positive7 && input.side === "short";
     warnings.push(
-      `${positive6 ? "양(+)" : "음(-)"} 펀딩 기준으로 ${input.side === "long" ? "롱" : "숏"} 포지션은 ${likelyPays ? "지급 가능성" : "수취 가능성"}이 있으나, 최대 손실 계산에서는 보수적으로 비용으로 반영했습니다.`
+      `${positive7 ? "양(+)" : "음(-)"} 펀딩 기준으로 ${input.side === "long" ? "롱" : "숏"} 포지션은 ${likelyPays ? "지급 가능성" : "수취 가능성"}이 있으나, 최대 손실 계산에서는 보수적으로 비용으로 반영했습니다.`
     );
   }
   const profit1 = calculateTargetProfit(
@@ -5397,9 +5397,469 @@ async function fetchPublicMarketJson(value, options) {
   );
 }
 
+// ../market-prediction-lab/src/bitget-position-tier-v1.js
+var BITGET_POSITION_TIER_CONTRACT = Object.freeze({
+  schemaVersion: "bitget-position-tier-v1",
+  source: "bitget-public-v2-query-position-lever",
+  sizedNotionalRequired: true,
+  scalarDefaultAllowed: false,
+  unknownIsZero: false
+});
+function finite11(value, code) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) throw new Error(code);
+  return parsed;
+}
+function selectBitgetPositionTier(tiers, sizedNotional) {
+  if (!Number.isFinite(sizedNotional) || sizedNotional <= 0) {
+    throw new Error("BITGET_POSITION_TIER_SIZED_NOTIONAL_REQUIRED");
+  }
+  if (!Array.isArray(tiers) || tiers.length === 0) {
+    throw new Error("BITGET_POSITION_TIER_SCHEDULE_REQUIRED");
+  }
+  const normalized = tiers.map((tier, index) => {
+    const startUnit = finite11(tier?.startUnit ?? 0, "BITGET_POSITION_TIER_START_INVALID");
+    const maintenanceMarginRate = finite11(tier?.keepMarginRate, "BITGET_POSITION_TIER_MMR_INVALID");
+    if (startUnit < 0 || maintenanceMarginRate < 0 || maintenanceMarginRate >= 1) {
+      throw new Error("BITGET_POSITION_TIER_INVALID");
+    }
+    return Object.freeze({ index, startUnit, maintenanceMarginRate });
+  }).sort((left, right) => left.startUnit - right.startUnit);
+  for (let index = 1; index < normalized.length; index += 1) {
+    if (normalized[index - 1].startUnit === normalized[index].startUnit) {
+      throw new Error("BITGET_POSITION_TIER_DUPLICATE_START");
+    }
+  }
+  const selected = normalized.filter((tier) => tier.startUnit <= sizedNotional).at(-1);
+  if (!selected) throw new Error("BITGET_POSITION_TIER_NOT_FOUND_FOR_NOTIONAL");
+  return Object.freeze({
+    ...selected,
+    sizedNotional,
+    source: BITGET_POSITION_TIER_CONTRACT.source,
+    schemaVersion: BITGET_POSITION_TIER_CONTRACT.schemaVersion
+  });
+}
+
+// ../market-intelligence-sidecar/src/execution-quality.mjs
+var ENFORCEMENT_MODES = /* @__PURE__ */ new Set(["OBSERVE_ONLY", "REQUIRED_FOR_PARENT_GATE"]);
+var BUY_DIRECTIONS = /* @__PURE__ */ new Set(["BUY", "LONG"]);
+var SELL_DIRECTIONS = /* @__PURE__ */ new Set(["SELL", "SHORT"]);
+var DEFAULT_EXECUTION_QUALITY_POLICY = Object.freeze({
+  version: "MIS_EXECUTION_QUALITY_V1",
+  enforcement: "OBSERVE_ONLY",
+  minBookCoverageRatio: 1,
+  maxBookWalkSlippageBps: 30,
+  minFillModelSamples: 500,
+  minFillProbability: 0.65,
+  maxFillModelBrierScore: 0.25,
+  maxFillModelCalibrationError: 0.1,
+  maxFillModelAgeMs: 7 * 24 * 60 * 60 * 1e3,
+  maxObservedImplementationShortfallBps: 50
+});
+function finite12(value, fallback = null) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+function clamp6(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+function resolvePolicy(policy = {}) {
+  const merged = { ...DEFAULT_EXECUTION_QUALITY_POLICY, ...policy ?? {} };
+  if (typeof merged.version !== "string" || !merged.version.trim()) throw new Error("EXECUTION_POLICY_VERSION_REQUIRED");
+  merged.enforcement = String(merged.enforcement ?? "").toUpperCase();
+  if (!ENFORCEMENT_MODES.has(merged.enforcement)) throw new Error("EXECUTION_POLICY_ENFORCEMENT_INVALID");
+  for (const key of Object.keys(DEFAULT_EXECUTION_QUALITY_POLICY).filter((key2) => key2 !== "version" && key2 !== "enforcement")) {
+    const value = Number(merged[key]);
+    if (!Number.isFinite(value)) throw new Error(`EXECUTION_POLICY_FIELD_INVALID:${key}`);
+    merged[key] = value;
+  }
+  if (!(merged.minBookCoverageRatio > 0 && merged.minBookCoverageRatio <= 1)) throw new Error("BOOK_COVERAGE_POLICY_INVALID");
+  if (!(merged.minFillProbability >= 0 && merged.minFillProbability <= 1)) throw new Error("FILL_PROBABILITY_POLICY_INVALID");
+  return merged;
+}
+function normalizeDirection(direction) {
+  const normalized = String(direction ?? "").toUpperCase();
+  if (BUY_DIRECTIONS.has(normalized)) return "BUY";
+  if (SELL_DIRECTIONS.has(normalized)) return "SELL";
+  throw new Error("EXECUTION_DIRECTION_INVALID");
+}
+function normalizeLevels(levels, ascending) {
+  return (Array.isArray(levels) ? levels : []).map((level) => Array.isArray(level) ? { price: finite12(level[0]), size: finite12(level[1]) } : { price: finite12(level?.price), size: finite12(level?.size ?? level?.qty ?? level?.quantity) }).filter((level) => level.price > 0 && level.size > 0).sort((a, b) => ascending ? a.price - b.price : b.price - a.price);
+}
+function walkOrderBook(raw = {}, policyInput = {}) {
+  const policy = resolvePolicy(policyInput);
+  const direction = String(raw.direction ?? "").trim();
+  if (!direction) return { status: "NOT_AVAILABLE", reason: "EXECUTION_DIRECTION_REQUIRED" };
+  const side = normalizeDirection(direction);
+  const targetQty = finite12(raw.targetQty);
+  if (!(targetQty > 0)) return { status: "NOT_AVAILABLE", reason: "TARGET_QTY_REQUIRED" };
+  const levels = side === "BUY" ? normalizeLevels(raw.asks, true) : normalizeLevels(raw.bids, false);
+  if (!levels.length) return { status: "NOT_AVAILABLE", reason: "EXECUTABLE_BOOK_NOT_AVAILABLE" };
+  const arrivalPrice = finite12(raw.arrivalPrice, levels[0].price);
+  if (!(arrivalPrice > 0)) return { status: "NOT_AVAILABLE", reason: "ARRIVAL_PRICE_INVALID" };
+  let remaining = targetQty;
+  let filledQty = 0;
+  let notional = 0;
+  let levelsConsumed = 0;
+  for (const level of levels) {
+    if (remaining <= 0) break;
+    const take = Math.min(remaining, level.size);
+    if (take <= 0) continue;
+    remaining -= take;
+    filledQty += take;
+    notional += take * level.price;
+    levelsConsumed += 1;
+  }
+  const coverageRatio = clamp6(filledQty / targetQty, 0, 1);
+  const vwap = filledQty > 0 ? notional / filledQty : null;
+  const rawSlippageBps = vwap == null ? null : side === "BUY" ? (vwap - arrivalPrice) / arrivalPrice * 1e4 : (arrivalPrice - vwap) / arrivalPrice * 1e4;
+  const slippageBps = rawSlippageBps == null ? null : Math.max(0, rawSlippageBps);
+  const reasons = [];
+  if (coverageRatio < policy.minBookCoverageRatio) reasons.push("INSUFFICIENT_VISIBLE_DEPTH");
+  if (slippageBps != null && slippageBps > policy.maxBookWalkSlippageBps) reasons.push("BOOK_WALK_SLIPPAGE_TOO_HIGH");
+  return {
+    status: reasons.length ? "VETO" : "PASS",
+    reasons,
+    side,
+    targetQty,
+    filledQty,
+    unfilledQty: Math.max(0, remaining),
+    coverageRatio,
+    vwap,
+    arrivalPrice,
+    slippageBps,
+    levelsConsumed,
+    model: "VISIBLE_L2_BOOK_WALK_ONLY",
+    permanentMarketImpactEstimated: false
+  };
+}
+function evaluateCalibratedFillModel(raw = {}, policyInput = {}, nowInput = Date.now()) {
+  const policy = resolvePolicy(policyInput);
+  const modelId = String(raw.modelId ?? "").trim();
+  const fillProbability = finite12(raw.fillProbability);
+  const evaluationSamples = Math.max(0, finite12(raw.evaluationSamples, 0));
+  const brierScore = finite12(raw.brierScore);
+  const calibrationError = finite12(raw.calibrationError);
+  const evaluatedAt = finite12(raw.evaluatedAt);
+  const now = finite12(nowInput, Date.now());
+  const ageMs = evaluatedAt == null ? null : Math.max(0, now - evaluatedAt);
+  if (!modelId || fillProbability == null || brierScore == null || calibrationError == null || evaluatedAt == null) return { status: "NOT_AVAILABLE", reason: "CALIBRATED_FILL_MODEL_EVIDENCE_MISSING" };
+  if (!(fillProbability >= 0 && fillProbability <= 1)) return { status: "NOT_AVAILABLE", reason: "FILL_PROBABILITY_INVALID" };
+  if (evaluationSamples < policy.minFillModelSamples) return { status: "NOT_AVAILABLE", reason: "FILL_MODEL_SAMPLE_INSUFFICIENT", evaluationSamples, minimumSamples: policy.minFillModelSamples };
+  if (ageMs > policy.maxFillModelAgeMs) return { status: "NOT_AVAILABLE", reason: "FILL_MODEL_EVIDENCE_STALE", ageMs };
+  if (brierScore > policy.maxFillModelBrierScore || calibrationError > policy.maxFillModelCalibrationError) return { status: "NOT_AVAILABLE", reason: "FILL_MODEL_CALIBRATION_QUALITY_INSUFFICIENT", brierScore, calibrationError };
+  return {
+    status: fillProbability >= policy.minFillProbability ? "PASS" : "VETO",
+    reason: fillProbability >= policy.minFillProbability ? null : "FILL_PROBABILITY_TOO_LOW",
+    modelId,
+    fillProbability,
+    threshold: policy.minFillProbability,
+    evaluationSamples,
+    brierScore,
+    calibrationError,
+    evaluatedAt,
+    ageMs
+  };
+}
+
+// src/services/paper-simulated-execution-evidence.service.ts
+var PAPER_SIMULATED_EXECUTION_EVIDENCE_VERSION = "paper-simulated-execution-evidence-v1";
+var PAPER_SIMULATED_EXECUTION_EVIDENCE_SAFETY = Object.freeze({
+  schemaVersion: "paper-simulated-execution-evidence-safety-v1",
+  executionMode: "SIMULATED_EXECUTION_ONLY",
+  executionAuthority: "NONE",
+  privateApiAllowed: false,
+  liveTrading: false,
+  realFillClaimAllowed: false,
+  currentPriceFillAssumptionAllowed: false,
+  financialMutationAllowed: false
+});
+function finite13(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+function nonEmpty6(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+function levelPrice(level) {
+  if (Array.isArray(level)) return finite13(level[0]);
+  return finite13(level.price);
+}
+function bestPrice(levels, side) {
+  const prices = levels.map(levelPrice).filter((value) => value != null && value > 0);
+  if (prices.length === 0) return null;
+  return side === "BID" ? Math.max(...prices) : Math.min(...prices);
+}
+function cloneLevel(level) {
+  if (Array.isArray(level)) return [level[0], level[1]];
+  return { ...level };
+}
+function unique2(values) {
+  return Object.freeze([...new Set(values)]);
+}
+function freeze(value) {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  for (const child of Object.values(value)) freeze(child);
+  return Object.freeze(value);
+}
+function buildPaperSimulatedExecutionEvidence(input) {
+  const nowMs = finite13(input?.nowMs) ?? Date.now();
+  const observedAtMs = finite13(input?.observedAtMs);
+  const maximumAgeMs = finite13(input?.maximumAgeMs);
+  const targetQuantity = finite13(input?.targetQuantity);
+  const blockers = [];
+  if (!nonEmpty6(input?.source)) blockers.push("PUBLIC_DEPTH_SOURCE_REQUIRED");
+  if (!nonEmpty6(input?.market)) blockers.push("MARKET_REQUIRED");
+  if (!nonEmpty6(input?.symbol)) blockers.push("SYMBOL_REQUIRED");
+  if (!nonEmpty6(input?.direction)) blockers.push("EXECUTION_DIRECTION_REQUIRED");
+  if (!(targetQuantity != null && targetQuantity > 0)) blockers.push("TARGET_QUANTITY_REQUIRED");
+  if (!(observedAtMs != null && observedAtMs > 0)) blockers.push("PUBLIC_DEPTH_TIMESTAMP_REQUIRED");
+  if (!(maximumAgeMs != null && maximumAgeMs > 0)) blockers.push("PUBLIC_DEPTH_FRESHNESS_CONTRACT_REQUIRED");
+  if (observedAtMs != null && maximumAgeMs != null && nowMs - observedAtMs > maximumAgeMs) {
+    blockers.push("PUBLIC_DEPTH_STALE");
+  }
+  if (!Array.isArray(input?.provenance) || input.provenance.length === 0 || !input.provenance.every(nonEmpty6)) {
+    blockers.push("PUBLIC_DEPTH_PROVENANCE_REQUIRED");
+  }
+  const bids = Array.isArray(input?.bids) ? input.bids.map(cloneLevel) : [];
+  const asks = Array.isArray(input?.asks) ? input.asks.map(cloneLevel) : [];
+  const bid = bestPrice(bids, "BID");
+  const ask = bestPrice(asks, "ASK");
+  if (bid == null || ask == null || ask < bid) blockers.push("PUBLIC_DEPTH_BOOK_INVALID");
+  const bookWalk = walkOrderBook({
+    direction: input?.direction,
+    targetQty: input?.targetQuantity,
+    bids,
+    asks
+  }, input?.policy ?? {});
+  if (bookWalk?.status === "NOT_AVAILABLE") blockers.push(String(bookWalk.reason ?? "BOOK_WALK_NOT_AVAILABLE"));
+  const fillModel = evaluateCalibratedFillModel(
+    input?.calibratedFillModel ?? {},
+    input?.policy ?? {},
+    nowMs
+  );
+  if (fillModel?.status === "NOT_AVAILABLE") blockers.push(String(fillModel.reason ?? "CALIBRATED_FILL_MODEL_EVIDENCE_MISSING"));
+  const requestStartedAtMs = finite13(input?.requestStartedAtMs);
+  const requestCompletedAtMs = finite13(input?.requestCompletedAtMs);
+  const observedRoundTripMs = requestStartedAtMs != null && requestCompletedAtMs != null && requestCompletedAtMs >= requestStartedAtMs ? requestCompletedAtMs - requestStartedAtMs : null;
+  if (observedRoundTripMs == null) blockers.push("OBSERVED_LATENCY_DURATION_MISSING");
+  blockers.push(
+    "LATENCY_COST_EVIDENCE_UNAVAILABLE",
+    "LIQUIDITY_IMPACT_COST_EVIDENCE_UNAVAILABLE",
+    "PARTIAL_FILL_COST_EVIDENCE_UNAVAILABLE"
+  );
+  const spreadAbsolute = bid != null && ask != null && ask >= bid ? ask - bid : null;
+  const spreadPercent2 = spreadAbsolute != null && bid != null && ask != null ? spreadAbsolute / ((bid + ask) / 2) * 100 : null;
+  return freeze({
+    schemaVersion: PAPER_SIMULATED_EXECUTION_EVIDENCE_VERSION,
+    status: "BLOCKED_DATA",
+    modelStatus: bookWalk?.status === "NOT_AVAILABLE" ? "BLOCKED_DATA" : "SIMULATION_AVAILABLE",
+    blockers: unique2(blockers),
+    source: nonEmpty6(input?.source) ? input.source.trim() : null,
+    timestamp: observedAtMs,
+    market: nonEmpty6(input?.market) ? input.market.trim() : null,
+    symbol: nonEmpty6(input?.symbol) ? input.symbol.trim() : null,
+    observed: {
+      bid,
+      ask,
+      spread: { absolute: spreadAbsolute, percent: spreadPercent2, quality: "OBSERVED_PUBLIC_DEPTH" },
+      depth: { bids, asks, quality: "OBSERVED_PUBLIC_DEPTH" },
+      latencyEvidence: {
+        observedRoundTripMs,
+        costPercent: null,
+        quality: observedRoundTripMs == null ? "NOT_AVAILABLE" : "OBSERVED_DURATION_ONLY"
+      }
+    },
+    estimated: {
+      slippageEstimate: {
+        percent: finite13(bookWalk?.slippageBps) == null ? null : Number(bookWalk.slippageBps) / 100,
+        quality: bookWalk?.status === "NOT_AVAILABLE" ? "NOT_AVAILABLE" : "ESTIMATED",
+        model: bookWalk?.model ?? null
+      },
+      liquidityEvidence: {
+        targetQuantity: targetQuantity != null && targetQuantity > 0 ? targetQuantity : null,
+        visibleExecutableQuantity: finite13(bookWalk?.filledQty),
+        visibleCoverageRatio: finite13(bookWalk?.coverageRatio),
+        permanentMarketImpactEstimated: false
+      },
+      partialFillEstimate: {
+        visibleDepthFillFraction: finite13(bookWalk?.coverageRatio),
+        calibratedFillProbability: finite13(fillModel?.fillProbability),
+        quality: fillModel?.status === "NOT_AVAILABLE" ? "UNCALIBRATED_MODEL_ONLY" : "CALIBRATED_ESTIMATE"
+      }
+    },
+    confidence: {
+      classification: fillModel?.status === "NOT_AVAILABLE" ? "UNCALIBRATED" : "CALIBRATED",
+      numericConfidence: null,
+      fillModel
+    },
+    provenance: Array.isArray(input?.provenance) ? [...input.provenance] : [],
+    executionMode: "SIMULATED_EXECUTION_ONLY",
+    publicDepthIsFillProof: false,
+    realFillClaim: false,
+    currentPriceIsFillPrice: false,
+    costEvidenceReady: false,
+    safety: PAPER_SIMULATED_EXECUTION_EVIDENCE_SAFETY
+  });
+}
+
+// src/services/authoritative-paper-callback-owners.service.ts
+var AUTHORITATIVE_PAPER_CALLBACK_OWNERS_VERSION = "authoritative-paper-callback-owners-v1";
+var QUALITIES2 = /* @__PURE__ */ new Set(["OBSERVED", "DOCUMENTED", "ESTIMATED", "NOT_APPLICABLE"]);
+function finite14(value) {
+  return typeof value === "number" && Number.isFinite(value);
+}
+function positive6(value) {
+  return finite14(value) && value > 0;
+}
+function nonNegative5(value) {
+  return finite14(value) && value >= 0;
+}
+function nonEmpty7(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+function fresh2(observedAtMs, maximumAgeMs, nowMs) {
+  return positive6(observedAtMs) && positive6(maximumAgeMs) && observedAtMs <= nowMs && nowMs - observedAtMs <= maximumAgeMs;
+}
+function freeze2(value) {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  for (const child of Object.values(value)) freeze2(child);
+  return Object.freeze(value);
+}
+function riskPolicy(value, nowMs) {
+  if (value?.schemaVersion !== "authoritative-paper-risk-policy-evidence-v1" || !positive6(value.leverage) || !positive6(value.riskPercent) || value.riskPercent > 1 || value.marginMode !== "isolated" && value.marginMode !== "cross" || !nonEmpty7(value.source) || !fresh2(value.observedAtMs, value.maximumAgeMs, nowMs)) {
+    throw new Error("AUTHORITATIVE_PAPER_RISK_POLICY_EVIDENCE_INVALID");
+  }
+  return freeze2({ ...value, source: value.source.trim() });
+}
+function paperStateFromAuthoritativeSnapshot(snapshot, nowMs = Date.now()) {
+  return validateImmutablePaperTradingStateSnapshot(snapshot, nowMs).state;
+}
+function buildAuthoritativeSizedContractRules(input) {
+  const nowMs = input.nowMs ?? Date.now();
+  const maximumAgeMs = input.maximumAgeMs ?? 3e4;
+  const evidence = input.publicEvidence;
+  if (evidence?.provider !== "bitget" || evidence.dataQuality !== "ready" || !positive6(input.sizedNotional) || !fresh2(input.observedAtMs, maximumAgeMs, nowMs) || !positive6(evidence.sizeMultiplier) || !Number.isInteger(input.quantityPrecision) || input.quantityPrecision < 0 || !positive6(evidence.minTradeNum) || !positive6(evidence.minTradeUsdt) || !positive6(evidence.maxLeverage)) {
+    throw new Error("AUTHORITATIVE_SIZED_CONTRACT_INPUT_INVALID");
+  }
+  const policy = riskPolicy(input.riskPolicy, nowMs);
+  if (policy.leverage > evidence.maxLeverage) throw new Error("AUTHORITATIVE_RISK_POLICY_LEVERAGE_EXCEEDS_CONTRACT");
+  const selectedTier = selectBitgetPositionTier(input.positionTiers, input.sizedNotional);
+  const contractRules = freeze2({
+    symbol: evidence.symbol,
+    quantityStep: evidence.sizeMultiplier,
+    quantityPrecision: input.quantityPrecision,
+    minimumQuantity: evidence.minTradeNum,
+    minimumNotional: evidence.minTradeUsdt,
+    maximumLeverage: evidence.maxLeverage,
+    maintenanceMarginRate: selectedTier.maintenanceMarginRate,
+    status: "live",
+    updatedAt: new Date(input.observedAtMs).toISOString(),
+    warnings: []
+  });
+  return freeze2({
+    schemaVersion: "sized-bitget-paper-contract-rules-v1",
+    contractRules,
+    riskPolicy: policy,
+    sizedNotional: input.sizedNotional,
+    selectedTier,
+    provenance: [
+      "bitget-public-v2-contracts",
+      "bitget-public-v2-query-position-lever",
+      policy.source
+    ],
+    executionAuthority: "NONE",
+    privateApiAllowed: false,
+    liveTrading: false,
+    financialMutationAllowed: false
+  });
+}
+function buildAuthoritativePaperExecutionObservation(input) {
+  const nowMs = input.nowMs ?? Date.now();
+  const policy = riskPolicy(input.riskPolicy, nowMs);
+  const evidence = buildPaperSimulatedExecutionEvidence({
+    ...input.executionEvidenceInput,
+    nowMs
+  });
+  const estimated = evidence.estimated;
+  const slippage = estimated?.slippageEstimate;
+  const liquidity = estimated?.liquidityEvidence;
+  const partialFill = estimated?.partialFillEstimate;
+  const confidence = evidence.confidence;
+  const fillModel = confidence?.fillModel;
+  if (evidence.modelStatus !== "SIMULATION_AVAILABLE" || slippage?.quality !== "ESTIMATED" || !nonNegative5(slippage.percent) || !positive6(liquidity?.visibleExecutableQuantity) || !positive6(liquidity?.visibleCoverageRatio) || Number(liquidity.visibleCoverageRatio) < 1 || partialFill?.quality !== "CALIBRATED_ESTIMATE" || fillModel?.status !== "PASS") {
+    throw new Error("AUTHORITATIVE_EXECUTION_OBSERVATION_DATA_UNAVAILABLE");
+  }
+  const observedAtMs = input.executionEvidenceInput.observedAtMs;
+  return freeze2({
+    providerProvenance: input.executionEvidenceInput.provenance.join("+"),
+    slippage: {
+      valuePercent: Number(slippage.percent),
+      quality: "ESTIMATED",
+      source: String(slippage.model ?? "VISIBLE_L2_BOOK_WALK_ONLY"),
+      observedAtMs
+    },
+    liquidity: {
+      value: Number(liquidity.visibleExecutableQuantity),
+      source: "BITGET_PUBLIC_VISIBLE_L2_EXECUTABLE_QUANTITY",
+      observedAtMs
+    },
+    partialFill: {
+      model: "ORDER_BOOK",
+      source: String(fillModel.modelId ?? "CALIBRATED_FILL_MODEL"),
+      observedAtMs
+    },
+    leverage: policy.leverage,
+    riskPercent: policy.riskPercent,
+    marginMode: policy.marginMode
+  });
+}
+function validatedComponent(value, nowMs, maximumAgeMs, code) {
+  if (!value || !nonNegative5(value.valuePercent) || !QUALITIES2.has(value.quality) || !nonEmpty7(value.source) || !fresh2(value.observedAtMs, maximumAgeMs, nowMs) || value.quality === "NOT_APPLICABLE" && value.valuePercent !== 0) {
+    throw new Error(code);
+  }
+  return freeze2({ ...value, source: value.source.trim() });
+}
+function buildAuthoritativeSupplementalCostEvidence(input) {
+  const nowMs = input.nowMs ?? Date.now();
+  const maximumAgeMs = input.maximumAgeMs ?? 3e4;
+  if (!nonEmpty7(input.costPolicyId) || !fresh2(input.observedAtMs, maximumAgeMs, nowMs)) {
+    throw new Error("AUTHORITATIVE_COST_POLICY_EVIDENCE_INVALID");
+  }
+  return freeze2({
+    costPolicyId: input.costPolicyId.trim(),
+    observedAtMs: input.observedAtMs,
+    latency: validatedComponent(input.latency, nowMs, maximumAgeMs, "AUTHORITATIVE_LATENCY_COST_EVIDENCE_REQUIRED"),
+    liquidityImpact: validatedComponent(input.liquidityImpact, nowMs, maximumAgeMs, "AUTHORITATIVE_LIQUIDITY_COST_EVIDENCE_REQUIRED"),
+    partialFillImpact: validatedComponent(input.partialFillImpact, nowMs, maximumAgeMs, "AUTHORITATIVE_PARTIAL_FILL_COST_EVIDENCE_REQUIRED"),
+    funding: validatedComponent(input.funding, nowMs, maximumAgeMs, "AUTHORITATIVE_FUNDING_COST_EVIDENCE_REQUIRED")
+  });
+}
+var AUTHORITATIVE_PAPER_CALLBACK_OWNERS_SAFETY = Object.freeze({
+  schemaVersion: AUTHORITATIVE_PAPER_CALLBACK_OWNERS_VERSION,
+  owners: Object.freeze([
+    "paperStateForCard",
+    "contractRulesForCard",
+    "executionObservationForCard",
+    "supplementalCostEvidenceForCard"
+  ]),
+  ownerMissingCount: 0,
+  dataReadiness: "RUNTIME_VALIDATED_BLOCKED_DATA",
+  recurringLedgerDerivationAllowed: false,
+  scalarMaintenanceMarginDefaultAllowed: false,
+  uncalibratedFillClaimAllowed: false,
+  unknownCostIsZero: false,
+  executionAuthority: "NONE",
+  privateApiAllowed: false,
+  liveTrading: false,
+  scheduleActivationAuthority: false,
+  financialMutationAllowed: false
+});
+
 // src/services/authoritative-paper-evidence-sources.service.ts
 var AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_VERSION = "authoritative-paper-evidence-sources-v1";
 var AUTHORITATIVE_PAPER_BLOCKED_DATA_SOURCE_CONTRACT_VERSION = "authoritative-paper-blocked-data-source-contract-v1";
+var AUTHORITATIVE_PAPER_CALLBACK_OWNER_CONTRACT_VERSION = "authoritative-paper-callback-owner-contract-v1";
 var BITGET_BASE_URL = "https://api.bitget.com";
 var FUTURES_LANE = FORWARD_OBSERVER_LANES.find((lane) => lane.market === "CRYPTO_FUTURES");
 function exactSha2(value) {
@@ -5419,20 +5879,21 @@ function publicUrl(request) {
   url.search = request.query;
   return url;
 }
-function blockedOwnerSource({
+function ownedSource({
   callback,
-  blocker,
-  provenance
+  implementation,
+  requiredData,
+  source
 }) {
-  const source = async (_context) => null;
   return Object.freeze(Object.assign(source, {
-    authoritativeBlockedData: Object.freeze({
-      schemaVersion: AUTHORITATIVE_PAPER_BLOCKED_DATA_SOURCE_CONTRACT_VERSION,
+    authoritativeOwner: Object.freeze({
+      schemaVersion: AUTHORITATIVE_PAPER_CALLBACK_OWNER_CONTRACT_VERSION,
       callback,
-      status: "BLOCKED_DATA",
-      ownerStatus: "OWNER_MISSING",
-      blocker,
-      provenance,
+      ownerStatus: "OWNER_EXISTS",
+      dataReadiness: "RUNTIME_VALIDATED_BLOCKED_DATA",
+      implementation,
+      requiredData: Object.freeze([...requiredData]),
+      missingDataBehavior: "BLOCKED_DATA",
       unknownIsZero: false
     })
   }));
@@ -5450,6 +5911,10 @@ function defaultDependencies() {
     buildPublicRequests: buildBitgetFuturesPublicRequests,
     buildPublicEvidence: buildBitgetFuturesPublicEvidence,
     fetchPublicJson: (url, input) => fetchPublicMarketJson(url, input),
+    paperStateSnapshotForCard: async () => null,
+    sizedContractInputForCard: async () => null,
+    executionObservationInputForCard: async () => null,
+    supplementalCostInputForCard: async () => null,
     now: Date.now
   });
 }
@@ -5490,26 +5955,42 @@ function createAuthoritativePaperEvidenceSourceWiring({
   if (!exactSha2(normalizedSha)) throw new TypeError("authoritative Paper evidence sources require an exact research SHA");
   if (!FUTURES_LANE) throw new Error("FORWARD_OBSERVER_FUTURES_LANE_REQUIRED");
   const dependencies = Object.freeze({ ...defaultDependencies(), ...overrides });
-  const blockedOwnerSources = Object.freeze({
-    paperStateForCard: blockedOwnerSource({
+  const callbackOwnerSources = Object.freeze({
+    paperStateForCard: ownedSource({
       callback: "paperStateForCard",
-      blocker: "AUTHORITATIVE_PAPER_STATE_SOURCE_UNAVAILABLE",
-      provenance: "scheduled lossless PaperTradingState writer is not installed; recurring ledger derivation is forbidden"
+      implementation: "paperStateFromAuthoritativeSnapshot/validateImmutablePaperTradingStateSnapshot",
+      requiredData: ["lossless immutable PaperTradingState snapshot from the canonical Paper state writer"],
+      source: async (context) => {
+        const snapshot = await dependencies.paperStateSnapshotForCard(context);
+        return snapshot == null ? null : paperStateFromAuthoritativeSnapshot(snapshot, dependencies.now());
+      }
     }),
-    contractRulesForCard: blockedOwnerSource({
+    contractRulesForCard: ownedSource({
       callback: "contractRulesForCard",
-      blocker: "AUTHORITATIVE_CONTRACT_RULES_SOURCE_UNAVAILABLE",
-      provenance: "public contract metadata is partial and exact maintenance tier selection requires authoritative sized notional and risk policy"
+      implementation: "buildAuthoritativeSizedContractRules/selectBitgetPositionTier",
+      requiredData: ["public contracts", "public position tier schedule", "sized notional", "immutable risk policy evidence"],
+      source: async (context) => {
+        const input = await dependencies.sizedContractInputForCard(context);
+        return input == null ? null : buildAuthoritativeSizedContractRules(input).contractRules;
+      }
     }),
-    executionObservationForCard: blockedOwnerSource({
+    executionObservationForCard: ownedSource({
       callback: "executionObservationForCard",
-      blocker: "AUTHORITATIVE_EXECUTION_OBSERVATION_SOURCE_UNAVAILABLE",
-      provenance: "public book simulation is advisory; production target quantity, fill calibration, and latency/liquidity/partial-fill cost owners are absent"
+      implementation: "buildAuthoritativePaperExecutionObservation/buildPaperSimulatedExecutionEvidence",
+      requiredData: ["public L2 depth", "target quantity", "request timing", "calibrated fill model", "immutable risk policy evidence"],
+      source: async (context) => {
+        const input = await dependencies.executionObservationInputForCard(context);
+        return input == null ? null : buildAuthoritativePaperExecutionObservation(input);
+      }
     }),
-    supplementalCostEvidenceForCard: blockedOwnerSource({
+    supplementalCostEvidenceForCard: ownedSource({
       callback: "supplementalCostEvidenceForCard",
-      blocker: "AUTHORITATIVE_SUPPLEMENTAL_COST_SOURCE_UNAVAILABLE",
-      provenance: "fees/funding/spread are partial; slippage, liquidity, latency, and partial-fill impacts remain unknown and are never zero-filled"
+      implementation: "buildAuthoritativeSupplementalCostEvidence",
+      requiredData: ["latency cost evidence", "liquidity impact cost evidence", "partial-fill cost evidence", "funding evidence"],
+      source: async (context) => {
+        const input = await dependencies.supplementalCostInputForCard(context);
+        return input == null ? null : buildAuthoritativeSupplementalCostEvidence(input);
+      }
     })
   });
   return Object.freeze({
@@ -5570,7 +6051,7 @@ function createAuthoritativePaperEvidenceSourceWiring({
       });
       return decision2.status === "OBSERVATION_READY" ? decision2.observation?.snapshot ?? null : null;
     },
-    ...blockedOwnerSources,
+    ...callbackOwnerSources,
     async publicEvidenceForCard({ card, market, signal }) {
       const value = scannerCard(card);
       if (!value || market !== "CRYPTO_FUTURES") return null;
@@ -5604,7 +6085,11 @@ var AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_SAFETY = Object.freeze({
     "scanBatchForMarket",
     "paperCandidateForCard",
     "learningSnapshotForCard",
-    "publicEvidenceForCard"
+    "paperStateForCard",
+    "contractRulesForCard",
+    "publicEvidenceForCard",
+    "executionObservationForCard",
+    "supplementalCostEvidenceForCard"
   ]),
   callbackContractsConnected: Object.freeze([
     "scanBatchForMarket",
@@ -5616,281 +6101,15 @@ var AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_SAFETY = Object.freeze({
     "executionObservationForCard",
     "supplementalCostEvidenceForCard"
   ]),
-  ownerMissingCallbacks: Object.freeze([
-    "paperStateForCard",
-    "contractRulesForCard",
-    "executionObservationForCard",
-    "supplementalCostEvidenceForCard"
-  ]),
+  ownerMissingCallbacks: Object.freeze([]),
+  ownerMissingCount: 0,
+  ownerDataReadiness: AUTHORITATIVE_PAPER_CALLBACK_OWNERS_SAFETY.dataReadiness,
   executionAuthority: "NONE",
   privateApiAllowed: false,
   liveTrading: false,
   scheduleActivationAuthority: false,
   financialMutationAllowed: false
 });
-
-// ../market-intelligence-sidecar/src/execution-quality.mjs
-var ENFORCEMENT_MODES = /* @__PURE__ */ new Set(["OBSERVE_ONLY", "REQUIRED_FOR_PARENT_GATE"]);
-var BUY_DIRECTIONS = /* @__PURE__ */ new Set(["BUY", "LONG"]);
-var SELL_DIRECTIONS = /* @__PURE__ */ new Set(["SELL", "SHORT"]);
-var DEFAULT_EXECUTION_QUALITY_POLICY = Object.freeze({
-  version: "MIS_EXECUTION_QUALITY_V1",
-  enforcement: "OBSERVE_ONLY",
-  minBookCoverageRatio: 1,
-  maxBookWalkSlippageBps: 30,
-  minFillModelSamples: 500,
-  minFillProbability: 0.65,
-  maxFillModelBrierScore: 0.25,
-  maxFillModelCalibrationError: 0.1,
-  maxFillModelAgeMs: 7 * 24 * 60 * 60 * 1e3,
-  maxObservedImplementationShortfallBps: 50
-});
-function finite11(value, fallback = null) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-function clamp6(value, min, max) {
-  return Math.min(max, Math.max(min, value));
-}
-function resolvePolicy(policy = {}) {
-  const merged = { ...DEFAULT_EXECUTION_QUALITY_POLICY, ...policy ?? {} };
-  if (typeof merged.version !== "string" || !merged.version.trim()) throw new Error("EXECUTION_POLICY_VERSION_REQUIRED");
-  merged.enforcement = String(merged.enforcement ?? "").toUpperCase();
-  if (!ENFORCEMENT_MODES.has(merged.enforcement)) throw new Error("EXECUTION_POLICY_ENFORCEMENT_INVALID");
-  for (const key of Object.keys(DEFAULT_EXECUTION_QUALITY_POLICY).filter((key2) => key2 !== "version" && key2 !== "enforcement")) {
-    const value = Number(merged[key]);
-    if (!Number.isFinite(value)) throw new Error(`EXECUTION_POLICY_FIELD_INVALID:${key}`);
-    merged[key] = value;
-  }
-  if (!(merged.minBookCoverageRatio > 0 && merged.minBookCoverageRatio <= 1)) throw new Error("BOOK_COVERAGE_POLICY_INVALID");
-  if (!(merged.minFillProbability >= 0 && merged.minFillProbability <= 1)) throw new Error("FILL_PROBABILITY_POLICY_INVALID");
-  return merged;
-}
-function normalizeDirection(direction) {
-  const normalized = String(direction ?? "").toUpperCase();
-  if (BUY_DIRECTIONS.has(normalized)) return "BUY";
-  if (SELL_DIRECTIONS.has(normalized)) return "SELL";
-  throw new Error("EXECUTION_DIRECTION_INVALID");
-}
-function normalizeLevels(levels, ascending) {
-  return (Array.isArray(levels) ? levels : []).map((level) => Array.isArray(level) ? { price: finite11(level[0]), size: finite11(level[1]) } : { price: finite11(level?.price), size: finite11(level?.size ?? level?.qty ?? level?.quantity) }).filter((level) => level.price > 0 && level.size > 0).sort((a, b) => ascending ? a.price - b.price : b.price - a.price);
-}
-function walkOrderBook(raw = {}, policyInput = {}) {
-  const policy = resolvePolicy(policyInput);
-  const direction = String(raw.direction ?? "").trim();
-  if (!direction) return { status: "NOT_AVAILABLE", reason: "EXECUTION_DIRECTION_REQUIRED" };
-  const side = normalizeDirection(direction);
-  const targetQty = finite11(raw.targetQty);
-  if (!(targetQty > 0)) return { status: "NOT_AVAILABLE", reason: "TARGET_QTY_REQUIRED" };
-  const levels = side === "BUY" ? normalizeLevels(raw.asks, true) : normalizeLevels(raw.bids, false);
-  if (!levels.length) return { status: "NOT_AVAILABLE", reason: "EXECUTABLE_BOOK_NOT_AVAILABLE" };
-  const arrivalPrice = finite11(raw.arrivalPrice, levels[0].price);
-  if (!(arrivalPrice > 0)) return { status: "NOT_AVAILABLE", reason: "ARRIVAL_PRICE_INVALID" };
-  let remaining = targetQty;
-  let filledQty = 0;
-  let notional = 0;
-  let levelsConsumed = 0;
-  for (const level of levels) {
-    if (remaining <= 0) break;
-    const take = Math.min(remaining, level.size);
-    if (take <= 0) continue;
-    remaining -= take;
-    filledQty += take;
-    notional += take * level.price;
-    levelsConsumed += 1;
-  }
-  const coverageRatio = clamp6(filledQty / targetQty, 0, 1);
-  const vwap = filledQty > 0 ? notional / filledQty : null;
-  const rawSlippageBps = vwap == null ? null : side === "BUY" ? (vwap - arrivalPrice) / arrivalPrice * 1e4 : (arrivalPrice - vwap) / arrivalPrice * 1e4;
-  const slippageBps = rawSlippageBps == null ? null : Math.max(0, rawSlippageBps);
-  const reasons = [];
-  if (coverageRatio < policy.minBookCoverageRatio) reasons.push("INSUFFICIENT_VISIBLE_DEPTH");
-  if (slippageBps != null && slippageBps > policy.maxBookWalkSlippageBps) reasons.push("BOOK_WALK_SLIPPAGE_TOO_HIGH");
-  return {
-    status: reasons.length ? "VETO" : "PASS",
-    reasons,
-    side,
-    targetQty,
-    filledQty,
-    unfilledQty: Math.max(0, remaining),
-    coverageRatio,
-    vwap,
-    arrivalPrice,
-    slippageBps,
-    levelsConsumed,
-    model: "VISIBLE_L2_BOOK_WALK_ONLY",
-    permanentMarketImpactEstimated: false
-  };
-}
-function evaluateCalibratedFillModel(raw = {}, policyInput = {}, nowInput = Date.now()) {
-  const policy = resolvePolicy(policyInput);
-  const modelId = String(raw.modelId ?? "").trim();
-  const fillProbability = finite11(raw.fillProbability);
-  const evaluationSamples = Math.max(0, finite11(raw.evaluationSamples, 0));
-  const brierScore = finite11(raw.brierScore);
-  const calibrationError = finite11(raw.calibrationError);
-  const evaluatedAt = finite11(raw.evaluatedAt);
-  const now = finite11(nowInput, Date.now());
-  const ageMs = evaluatedAt == null ? null : Math.max(0, now - evaluatedAt);
-  if (!modelId || fillProbability == null || brierScore == null || calibrationError == null || evaluatedAt == null) return { status: "NOT_AVAILABLE", reason: "CALIBRATED_FILL_MODEL_EVIDENCE_MISSING" };
-  if (!(fillProbability >= 0 && fillProbability <= 1)) return { status: "NOT_AVAILABLE", reason: "FILL_PROBABILITY_INVALID" };
-  if (evaluationSamples < policy.minFillModelSamples) return { status: "NOT_AVAILABLE", reason: "FILL_MODEL_SAMPLE_INSUFFICIENT", evaluationSamples, minimumSamples: policy.minFillModelSamples };
-  if (ageMs > policy.maxFillModelAgeMs) return { status: "NOT_AVAILABLE", reason: "FILL_MODEL_EVIDENCE_STALE", ageMs };
-  if (brierScore > policy.maxFillModelBrierScore || calibrationError > policy.maxFillModelCalibrationError) return { status: "NOT_AVAILABLE", reason: "FILL_MODEL_CALIBRATION_QUALITY_INSUFFICIENT", brierScore, calibrationError };
-  return {
-    status: fillProbability >= policy.minFillProbability ? "PASS" : "VETO",
-    reason: fillProbability >= policy.minFillProbability ? null : "FILL_PROBABILITY_TOO_LOW",
-    modelId,
-    fillProbability,
-    threshold: policy.minFillProbability,
-    evaluationSamples,
-    brierScore,
-    calibrationError,
-    evaluatedAt,
-    ageMs
-  };
-}
-
-// src/services/paper-simulated-execution-evidence.service.ts
-var PAPER_SIMULATED_EXECUTION_EVIDENCE_VERSION = "paper-simulated-execution-evidence-v1";
-var PAPER_SIMULATED_EXECUTION_EVIDENCE_SAFETY = Object.freeze({
-  schemaVersion: "paper-simulated-execution-evidence-safety-v1",
-  executionMode: "SIMULATED_EXECUTION_ONLY",
-  executionAuthority: "NONE",
-  privateApiAllowed: false,
-  liveTrading: false,
-  realFillClaimAllowed: false,
-  currentPriceFillAssumptionAllowed: false,
-  financialMutationAllowed: false
-});
-function finite12(value) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-function nonEmpty6(value) {
-  return typeof value === "string" && value.trim().length > 0;
-}
-function levelPrice(level) {
-  if (Array.isArray(level)) return finite12(level[0]);
-  return finite12(level.price);
-}
-function bestPrice(levels, side) {
-  const prices = levels.map(levelPrice).filter((value) => value != null && value > 0);
-  if (prices.length === 0) return null;
-  return side === "BID" ? Math.max(...prices) : Math.min(...prices);
-}
-function cloneLevel(level) {
-  if (Array.isArray(level)) return [level[0], level[1]];
-  return { ...level };
-}
-function unique2(values) {
-  return Object.freeze([...new Set(values)]);
-}
-function freeze(value) {
-  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
-  for (const child of Object.values(value)) freeze(child);
-  return Object.freeze(value);
-}
-function buildPaperSimulatedExecutionEvidence(input) {
-  const nowMs = finite12(input?.nowMs) ?? Date.now();
-  const observedAtMs = finite12(input?.observedAtMs);
-  const maximumAgeMs = finite12(input?.maximumAgeMs);
-  const targetQuantity = finite12(input?.targetQuantity);
-  const blockers = [];
-  if (!nonEmpty6(input?.source)) blockers.push("PUBLIC_DEPTH_SOURCE_REQUIRED");
-  if (!nonEmpty6(input?.market)) blockers.push("MARKET_REQUIRED");
-  if (!nonEmpty6(input?.symbol)) blockers.push("SYMBOL_REQUIRED");
-  if (!nonEmpty6(input?.direction)) blockers.push("EXECUTION_DIRECTION_REQUIRED");
-  if (!(targetQuantity != null && targetQuantity > 0)) blockers.push("TARGET_QUANTITY_REQUIRED");
-  if (!(observedAtMs != null && observedAtMs > 0)) blockers.push("PUBLIC_DEPTH_TIMESTAMP_REQUIRED");
-  if (!(maximumAgeMs != null && maximumAgeMs > 0)) blockers.push("PUBLIC_DEPTH_FRESHNESS_CONTRACT_REQUIRED");
-  if (observedAtMs != null && maximumAgeMs != null && nowMs - observedAtMs > maximumAgeMs) {
-    blockers.push("PUBLIC_DEPTH_STALE");
-  }
-  if (!Array.isArray(input?.provenance) || input.provenance.length === 0 || !input.provenance.every(nonEmpty6)) {
-    blockers.push("PUBLIC_DEPTH_PROVENANCE_REQUIRED");
-  }
-  const bids = Array.isArray(input?.bids) ? input.bids.map(cloneLevel) : [];
-  const asks = Array.isArray(input?.asks) ? input.asks.map(cloneLevel) : [];
-  const bid = bestPrice(bids, "BID");
-  const ask = bestPrice(asks, "ASK");
-  if (bid == null || ask == null || ask < bid) blockers.push("PUBLIC_DEPTH_BOOK_INVALID");
-  const bookWalk = walkOrderBook({
-    direction: input?.direction,
-    targetQty: input?.targetQuantity,
-    bids,
-    asks
-  }, input?.policy ?? {});
-  if (bookWalk?.status === "NOT_AVAILABLE") blockers.push(String(bookWalk.reason ?? "BOOK_WALK_NOT_AVAILABLE"));
-  const fillModel = evaluateCalibratedFillModel(
-    input?.calibratedFillModel ?? {},
-    input?.policy ?? {},
-    nowMs
-  );
-  if (fillModel?.status === "NOT_AVAILABLE") blockers.push(String(fillModel.reason ?? "CALIBRATED_FILL_MODEL_EVIDENCE_MISSING"));
-  const requestStartedAtMs = finite12(input?.requestStartedAtMs);
-  const requestCompletedAtMs = finite12(input?.requestCompletedAtMs);
-  const observedRoundTripMs = requestStartedAtMs != null && requestCompletedAtMs != null && requestCompletedAtMs >= requestStartedAtMs ? requestCompletedAtMs - requestStartedAtMs : null;
-  if (observedRoundTripMs == null) blockers.push("OBSERVED_LATENCY_DURATION_MISSING");
-  blockers.push(
-    "LATENCY_COST_MODEL_OWNER_MISSING",
-    "LIQUIDITY_IMPACT_COST_MODEL_OWNER_MISSING",
-    "PARTIAL_FILL_COST_MODEL_OWNER_MISSING"
-  );
-  const spreadAbsolute = bid != null && ask != null && ask >= bid ? ask - bid : null;
-  const spreadPercent2 = spreadAbsolute != null && bid != null && ask != null ? spreadAbsolute / ((bid + ask) / 2) * 100 : null;
-  return freeze({
-    schemaVersion: PAPER_SIMULATED_EXECUTION_EVIDENCE_VERSION,
-    status: "BLOCKED_DATA",
-    modelStatus: bookWalk?.status === "NOT_AVAILABLE" ? "BLOCKED_DATA" : "SIMULATION_AVAILABLE",
-    blockers: unique2(blockers),
-    source: nonEmpty6(input?.source) ? input.source.trim() : null,
-    timestamp: observedAtMs,
-    market: nonEmpty6(input?.market) ? input.market.trim() : null,
-    symbol: nonEmpty6(input?.symbol) ? input.symbol.trim() : null,
-    observed: {
-      bid,
-      ask,
-      spread: { absolute: spreadAbsolute, percent: spreadPercent2, quality: "OBSERVED_PUBLIC_DEPTH" },
-      depth: { bids, asks, quality: "OBSERVED_PUBLIC_DEPTH" },
-      latencyEvidence: {
-        observedRoundTripMs,
-        costPercent: null,
-        quality: observedRoundTripMs == null ? "NOT_AVAILABLE" : "OBSERVED_DURATION_ONLY"
-      }
-    },
-    estimated: {
-      slippageEstimate: {
-        percent: finite12(bookWalk?.slippageBps) == null ? null : Number(bookWalk.slippageBps) / 100,
-        quality: bookWalk?.status === "NOT_AVAILABLE" ? "NOT_AVAILABLE" : "ESTIMATED",
-        model: bookWalk?.model ?? null
-      },
-      liquidityEvidence: {
-        targetQuantity: targetQuantity != null && targetQuantity > 0 ? targetQuantity : null,
-        visibleExecutableQuantity: finite12(bookWalk?.filledQty),
-        visibleCoverageRatio: finite12(bookWalk?.coverageRatio),
-        permanentMarketImpactEstimated: false
-      },
-      partialFillEstimate: {
-        visibleDepthFillFraction: finite12(bookWalk?.coverageRatio),
-        calibratedFillProbability: finite12(fillModel?.fillProbability),
-        quality: fillModel?.status === "NOT_AVAILABLE" ? "UNCALIBRATED_MODEL_ONLY" : "CALIBRATED_ESTIMATE"
-      }
-    },
-    confidence: {
-      classification: fillModel?.status === "NOT_AVAILABLE" ? "UNCALIBRATED" : "CALIBRATED",
-      numericConfidence: null,
-      fillModel
-    },
-    provenance: Array.isArray(input?.provenance) ? [...input.provenance] : [],
-    executionMode: "SIMULATED_EXECUTION_ONLY",
-    publicDepthIsFillProof: false,
-    realFillClaim: false,
-    currentPriceIsFillPrice: false,
-    costEvidenceReady: false,
-    safety: PAPER_SIMULATED_EXECUTION_EVIDENCE_SAFETY
-  });
-}
 
 // src/services/authoritative-paper-runtime-package.entry.ts
 var AUTHORITATIVE_PAPER_RUNTIME_PACKAGE_SAFETY = Object.freeze({
@@ -5903,6 +6122,9 @@ var AUTHORITATIVE_PAPER_RUNTIME_PACKAGE_SAFETY = Object.freeze({
 });
 export {
   AUTHORITATIVE_PAPER_BLOCKED_DATA_SOURCE_CONTRACT_VERSION,
+  AUTHORITATIVE_PAPER_CALLBACK_OWNERS_SAFETY,
+  AUTHORITATIVE_PAPER_CALLBACK_OWNERS_VERSION,
+  AUTHORITATIVE_PAPER_CALLBACK_OWNER_CONTRACT_VERSION,
   AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_SAFETY,
   AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_VERSION,
   AUTHORITATIVE_PAPER_RUNTIME_PACKAGE_SAFETY,
@@ -5910,9 +6132,13 @@ export {
   PAPER_SIMULATED_EXECUTION_EVIDENCE_VERSION,
   PAPER_TRADING_STATE_SNAPSHOT_VERSION,
   SCANNER_CRYPTO_FUTURES_PAPER_ADMISSION_EVIDENCE_PRODUCER_VERSION,
+  buildAuthoritativePaperExecutionObservation,
+  buildAuthoritativeSizedContractRules,
+  buildAuthoritativeSupplementalCostEvidence,
   buildPaperSimulatedExecutionEvidence,
   createAuthoritativePaperEvidenceSourceWiring,
   createImmutablePaperTradingStateSnapshot,
   createScannerCryptoFuturesPaperAdmissionEvidenceProducer,
+  paperStateFromAuthoritativeSnapshot,
   validateImmutablePaperTradingStateSnapshot
 };

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { AUTHORITATIVE_PAPER_EVIDENCE_SOURCE_OWNERSHIP } from "../src/authoritative-paper-evidence-source-ownership-v1.js";
 import {
+  createLosslessPaperStateSnapshotFileOwner,
   createPaperStateSourceFromLosslessSnapshotFile,
   loadValidatedAuthoritativePaperRuntimePackage,
 } from "../src/authoritative-paper-runtime-package-v1.js";
@@ -61,10 +62,12 @@ test("validated package loads exact #546 producer bundle and executes fail-close
   assert.match(runtimePackage.sourceGraphSha256, /^[0-9a-f]{64}$/u);
   assert.match(runtimePackage.bundleSha256, /^[0-9a-f]{64}$/u);
   assert.equal(runtimePackage.admissionBundleSchemaVersion, "scanner-paper-admission-evidence-bundle-v1");
+  assert.equal(runtimePackage.callbackOwnerContractSchemaVersion, "authoritative-paper-callback-owner-contract-v1");
   assert.equal(runtimePackage.blockedDataSourceContractSchemaVersion, "authoritative-paper-blocked-data-source-contract-v1");
   assert.equal(runtimePackage.simulatedExecutionEvidenceSchemaVersion, "paper-simulated-execution-evidence-v1");
   assert.match(runtimePackage.manifest.sourceFileSha256["api-server/src/services/paper-simulated-execution-evidence.service.ts"], /^[0-9a-f]{64}$/u);
   assert.match(runtimePackage.manifest.sourceFileSha256["market-intelligence-sidecar/src/execution-quality.mjs"], /^[0-9a-f]{64}$/u);
+  assert.match(runtimePackage.manifest.sourceFileSha256["market-prediction-lab/src/bitget-position-tier-v1.js"], /^[0-9a-f]{64}$/u);
   assert.equal(runtimePackage.costPolicyVersion, null);
   assert.equal(runtimePackage.costPolicyVersionBinding.status, "RUNTIME_EXACT_REQUIRED");
   assert.equal(runtimePackage.executionAuthority, "NONE");
@@ -74,6 +77,9 @@ test("validated package loads exact #546 producer bundle and executes fail-close
   assert.equal(runtimePackage.financialMutationAllowed, false);
   assert.equal(typeof runtimePackage.createAuthoritativePaperEvidenceSourceWiring, "function");
   assert.equal(typeof runtimePackage.buildPaperSimulatedExecutionEvidence, "function");
+  assert.equal(typeof runtimePackage.buildAuthoritativeSizedContractRules, "function");
+  assert.equal(typeof runtimePackage.buildAuthoritativePaperExecutionObservation, "function");
+  assert.equal(typeof runtimePackage.buildAuthoritativeSupplementalCostEvidence, "function");
 
   const producer = runtimePackage.createPaperAdmissionEvidenceProducer(missingEvidenceSources());
   const result = await producer({ card: {}, market: "CRYPTO_FUTURES" });
@@ -118,9 +124,124 @@ test("validated package reuses the sidecar book walk only as labeled simulated e
   assert.equal(evidence.confidence.numericConfidence, null);
   assert.equal(evidence.costEvidenceReady, false);
   assert.equal(evidence.blockers.includes("CALIBRATED_FILL_MODEL_EVIDENCE_MISSING"), true);
-  assert.equal(evidence.blockers.includes("LATENCY_COST_MODEL_OWNER_MISSING"), true);
+  assert.equal(evidence.blockers.includes("LATENCY_COST_EVIDENCE_UNAVAILABLE"), true);
   assert.equal(Object.isFrozen(evidence), true);
   assert.equal(Object.isFrozen(evidence.estimated), true);
+});
+
+test("callback owners require sized tiers, calibrated execution, and complete non-zero-filled costs", async () => {
+  const runtimePackage = await loadValidatedAuthoritativePaperRuntimePackage();
+  const nowMs = 2_000_000;
+  const publicEvidence = {
+    provider: "bitget",
+    dataQuality: "ready",
+    symbol: "ETHUSDT",
+    sizeMultiplier: 0.01,
+    minTradeNum: 0.01,
+    minTradeUsdt: 5,
+    maxLeverage: 125,
+  };
+  const riskPolicy = {
+    schemaVersion: "authoritative-paper-risk-policy-evidence-v1",
+    leverage: 1,
+    riskPercent: 1,
+    marginMode: "isolated",
+    source: "IMMUTABLE_RESEARCH_PAPER_POLICY",
+    observedAtMs: nowMs - 100,
+    maximumAgeMs: 30_000,
+  };
+  const contract = runtimePackage.buildAuthoritativeSizedContractRules({
+    publicEvidence,
+    positionTiers: [
+      { startUnit: "0", endUnit: "999", keepMarginRate: "0.004" },
+      { startUnit: "1000", endUnit: "100000", keepMarginRate: "0.01" },
+    ],
+    sizedNotional: 1_500,
+    quantityPrecision: 2,
+    riskPolicy,
+    observedAtMs: nowMs - 100,
+    nowMs,
+  });
+  assert.equal(contract.contractRules.maintenanceMarginRate, 0.01);
+  assert.equal(contract.selectedTier.sizedNotional, 1_500);
+  assert.equal(runtimePackage.buildAuthoritativeSizedContractRules({
+    publicEvidence,
+    positionTiers: [
+      { startUnit: "0", endUnit: "999", keepMarginRate: "0.004" },
+      { startUnit: "1000", endUnit: "1001", keepMarginRate: "0.01" },
+    ],
+    sizedNotional: 1_500,
+    quantityPrecision: 3,
+    riskPolicy,
+    observedAtMs: nowMs,
+    nowMs,
+  }).contractRules.maintenanceMarginRate, 0.01);
+  assert.equal(contract.executionAuthority, "NONE");
+
+  const execution = runtimePackage.buildAuthoritativePaperExecutionObservation({
+    executionEvidenceInput: {
+      source: "BITGET_PUBLIC_DEPTH",
+      market: "CRYPTO_FUTURES",
+      symbol: "ETHUSDT",
+      direction: "LONG",
+      targetQuantity: 2,
+      bids: [[99, 5]],
+      asks: [[100, 1], [101, 2]],
+      observedAtMs: nowMs - 100,
+      requestStartedAtMs: nowMs - 120,
+      requestCompletedAtMs: nowMs - 100,
+      maximumAgeMs: 30_000,
+      provenance: ["bitget-public-v2-merge-depth"],
+      calibratedFillModel: {
+        modelId: "PAPER_FILL_CALIBRATION_V1",
+        fillProbability: 0.9,
+        evaluationSamples: 500,
+        brierScore: 0.1,
+        calibrationError: 0.05,
+        evaluatedAt: nowMs - 1_000,
+      },
+    },
+    riskPolicy,
+    nowMs,
+  });
+  assert.equal(execution.partialFill.model, "ORDER_BOOK");
+  assert.equal(execution.slippage.quality, "ESTIMATED");
+  assert.equal(execution.leverage, 1);
+
+  const component = (valuePercent, quality, source) => ({
+    valuePercent,
+    quality,
+    source,
+    observedAtMs: nowMs - 100,
+  });
+  const costs = runtimePackage.buildAuthoritativeSupplementalCostEvidence({
+    costPolicyId: "SCANNER_COST_POLICY_V1",
+    observedAtMs: nowMs - 100,
+    latency: component(0.01, "ESTIMATED", "CALIBRATED_LATENCY_COST_MODEL"),
+    liquidityImpact: component(0.02, "ESTIMATED", "CALIBRATED_LIQUIDITY_IMPACT_MODEL"),
+    partialFillImpact: component(0.03, "ESTIMATED", "CALIBRATED_PARTIAL_FILL_COST_MODEL"),
+    funding: component(0.01, "OBSERVED", "BITGET_PUBLIC_FUNDING"),
+    nowMs,
+  });
+  assert.equal(costs.latency.valuePercent, 0.01);
+  assert.equal(costs.partialFillImpact.quality, "ESTIMATED");
+  assert.throws(() => runtimePackage.buildAuthoritativeSupplementalCostEvidence({
+    costPolicyId: "SCANNER_COST_POLICY_V1",
+    observedAtMs: nowMs - 100,
+    liquidityImpact: costs.liquidityImpact,
+    partialFillImpact: costs.partialFillImpact,
+    funding: costs.funding,
+    nowMs,
+  }), /AUTHORITATIVE_LATENCY_COST_EVIDENCE_REQUIRED/u);
+  assert.throws(() => runtimePackage.buildAuthoritativeSupplementalCostEvidence({
+    costPolicyId: "SCANNER_COST_POLICY_V1",
+    observedAtMs: nowMs - 100,
+    latency: component(0.01, "NOT_APPLICABLE", "INVALID_ZERO_FILL"),
+    liquidityImpact: costs.liquidityImpact,
+    partialFillImpact: costs.partialFillImpact,
+    funding: costs.funding,
+    nowMs,
+  }), /AUTHORITATIVE_LATENCY_COST_EVIDENCE_REQUIRED/u);
 });
 
 test("validated package rejects source-graph or bundle digest tampering", async () => {
@@ -208,18 +329,19 @@ test("validated package connects existing Scanner and public Bitget owners witho
   assert.equal(evidence.symbol, "ETHUSDT");
   assert.equal(evidence.observedAtMs, 2_000);
   assert.equal(wiring.paperCandidateForCard({ card: {}, market: "CRYPTO_FUTURES" }), null);
-  for (const [callback, blocker] of [
-    ["paperStateForCard", "AUTHORITATIVE_PAPER_STATE_SOURCE_UNAVAILABLE"],
-    ["contractRulesForCard", "AUTHORITATIVE_CONTRACT_RULES_SOURCE_UNAVAILABLE"],
-    ["executionObservationForCard", "AUTHORITATIVE_EXECUTION_OBSERVATION_SOURCE_UNAVAILABLE"],
-    ["supplementalCostEvidenceForCard", "AUTHORITATIVE_SUPPLEMENTAL_COST_SOURCE_UNAVAILABLE"],
+  for (const callback of [
+    "paperStateForCard",
+    "contractRulesForCard",
+    "executionObservationForCard",
+    "supplementalCostEvidenceForCard",
   ]) {
     assert.equal(typeof wiring[callback], "function");
     assert.equal(await wiring[callback]({ card, market: "CRYPTO_FUTURES" }), null);
-    assert.equal(wiring[callback].authoritativeBlockedData.callback, callback);
-    assert.equal(wiring[callback].authoritativeBlockedData.blocker, blocker);
-    assert.equal(wiring[callback].authoritativeBlockedData.ownerStatus, "OWNER_MISSING");
-    assert.equal(wiring[callback].authoritativeBlockedData.unknownIsZero, false);
+    assert.equal(wiring[callback].authoritativeOwner.callback, callback);
+    assert.equal(wiring[callback].authoritativeOwner.ownerStatus, "OWNER_EXISTS");
+    assert.equal(wiring[callback].authoritativeOwner.dataReadiness, "RUNTIME_VALIDATED_BLOCKED_DATA");
+    assert.equal(wiring[callback].authoritativeOwner.missingDataBehavior, "BLOCKED_DATA");
+    assert.equal(wiring[callback].authoritativeOwner.unknownIsZero, false);
   }
 });
 
@@ -249,7 +371,23 @@ test("lossless Paper state snapshot preserves the complete state and never suppl
   const root = await mkdtemp(join(tmpdir(), "paper-state-snapshot-contract-"));
   try {
     const path = join(root, "snapshot.json");
-    await writeFile(path, `${JSON.stringify(snapshot)}\n`, { mode: 0o600 });
+    const owner = createLosslessPaperStateSnapshotFileOwner({
+      snapshotPath: path,
+      runtimePackage,
+      now: () => nowMs + 1,
+    });
+    const written = await owner.writePaperStateSnapshot({
+      state,
+      sourceOwner: "CONTRACT_FIXTURE_ONLY",
+      provenance: ["paper-trading-state-snapshot-contract-test"],
+      observedAtMs: nowMs,
+      maximumAgeMs: 30_000,
+    });
+    assert.equal(written.stateDigestSha256, snapshot.stateDigestSha256);
+    assert.deepEqual(await owner.paperStateForCard(), state);
+    assert.equal(owner.initializesPaperState, false);
+    assert.equal(owner.recurringLedgerDerivationAllowed, false);
+    assert.equal(owner.unknownIsZero, false);
     const source = createPaperStateSourceFromLosslessSnapshotFile({
       snapshotPath: path,
       runtimePackage,
@@ -261,7 +399,7 @@ test("lossless Paper state snapshot preserves the complete state and never suppl
   }
 });
 
-test("evidence ownership map wires existing owners and keeps four missing owners explicit", () => {
+test("evidence ownership map connects seven owners while preserving four runtime data blockers", () => {
   const contract = AUTHORITATIVE_PAPER_EVIDENCE_SOURCE_OWNERSHIP;
   assert.deepEqual(contract.callbacks.map((row) => row.callback), [
     "scanBatchForMarket",
@@ -275,13 +413,13 @@ test("evidence ownership map wires existing owners and keeps four missing owners
   ]);
   const evidenceRows = contract.callbacks.slice(1);
   assert.equal(contract.callbacks.every((row) => typeof row.dataProvenance === "string" && row.dataProvenance.length > 0), true);
-  assert.equal(evidenceRows.filter((row) => row.ownerStatus === "OWNER_EXISTS").length, 3);
-  assert.equal(evidenceRows.filter((row) => row.ownerStatus === "OWNER_MISSING").length, 4);
+  assert.equal(evidenceRows.filter((row) => row.ownerStatus === "OWNER_EXISTS").length, 7);
+  assert.equal(evidenceRows.filter((row) => row.ownerStatus === "OWNER_MISSING").length, 0);
   assert.equal(contract.sevenEvidenceOwnerSummary.callbacksWired, 7);
-  assert.equal(contract.sevenEvidenceOwnerSummary.authoritativeOwnersConnected, 3);
-  assert.equal(contract.sevenEvidenceOwnerSummary.blockedDataContractsConnected, 4);
+  assert.equal(contract.sevenEvidenceOwnerSummary.authoritativeOwnersConnected, 7);
+  assert.equal(contract.sevenEvidenceOwnerSummary.runtimeBlockedDataOwners, 4);
   assert.equal(contract.sevenEvidenceOwnerSummary.scannerCallbackWired, true);
-  assert.equal(contract.sevenEvidenceOwnerSummary.scheduledCanonicalWriter, "OWNER_MISSING");
+  assert.equal(contract.sevenEvidenceOwnerSummary.scheduledCanonicalWriter, "CONNECTED_NO_UPSTREAM_STATE_SYNTHESIS");
   assert.equal(contract.sevenEvidenceOwnerSummary.allOwnersReady, false);
   assert.equal(contract.sevenEvidenceOwnerSummary.firstZeroStage, "UNKNOWN");
   assert.equal(contract.sevenEvidenceOwnerSummary.firstBlocker, "AUTHORITATIVE_EVIDENCE_DATA_UNAVAILABLE");
@@ -293,16 +431,16 @@ test("evidence ownership map wires existing owners and keeps four missing owners
   assert.equal(contract.financialMutationAllowed, false);
 });
 
-test("missing-owner contracts preserve UNKNOWN and separate public observations from execution estimates", () => {
+test("owner data contracts preserve UNKNOWN and separate public observations from execution estimates", () => {
   const contracts = AUTHORITATIVE_PAPER_EVIDENCE_SOURCE_OWNERSHIP.blockedOwnerEvidenceContracts;
 
-  assert.equal(contracts.paperStateForCard.status, "OWNER_MISSING");
+  assert.equal(contracts.paperStateForCard.status, "OWNER_EXISTS_BLOCKED_DATA");
   assert.equal(contracts.paperStateForCard.requiredAvailableFields.includes("state.riskState"), true);
   assert.equal(contracts.paperStateForCard.requiredAvailableFields.includes("state.processedEventIds"), true);
   assert.equal(contracts.paperStateForCard.inadmissibleDerivations.includes("paper-forward-observation-ledger-v1"), true);
   assert.equal(contracts.paperStateForCard.unknownIsZero, false);
 
-  assert.equal(contracts.contractRulesForCard.status, "OWNER_MISSING");
+  assert.equal(contracts.contractRulesForCard.status, "OWNER_EXISTS_BLOCKED_DATA");
   assert.equal(contracts.contractRulesForCard.requiredFields.includes("maintenanceMarginTier"), true);
   assert.equal(contracts.contractRulesForCard.missingCanonicalInputs.includes("sizedNotional"), true);
   assert.equal(contracts.contractRulesForCard.scalarMaintenanceMarginDefaultAllowed, false);
