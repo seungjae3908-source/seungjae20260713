@@ -1,0 +1,3 @@
+owner: production-full-interaction-readonly-qa
+base: 7b4edeb9d16c57cb9b2c47dbbe8902e0611f1908
+scope: read-only Production interaction QA only
