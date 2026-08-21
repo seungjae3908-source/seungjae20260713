@@ -2,6 +2,8 @@ import { createRoot } from 'react-dom/client';
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { ACCENT_COLOR_KEY } from '@/lib/stock-display';
 import { configureUnifiedChartFetch } from '@/lib/unified-chart-data';
+import { announceAppUpdateAvailable } from '@/lib/app-update';
+import { AppUpdateBanner } from '@/components/app-update-banner';
 import App from './App';
 import './index.css';
 import './unified-analysis-chart-touch.css';
@@ -34,7 +36,23 @@ function registerServiceWorker() {
 
 	window.addEventListener('load', () => {
 		navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).then((registration) => {
+			const announceWhenInstalled = (worker: ServiceWorker | null) => {
+				if (!worker) return;
+				const announceIfUpdate = () => {
+					if (worker.state === 'installed' && navigator.serviceWorker.controller) {
+						announceAppUpdateAvailable();
+					}
+				};
+				worker.addEventListener('statechange', announceIfUpdate);
+				announceIfUpdate();
+			};
 			const checkForUpdate = () => registration.update().catch(() => undefined);
+
+			if (registration.waiting && navigator.serviceWorker.controller) {
+				announceAppUpdateAvailable();
+			}
+			announceWhenInstalled(registration.installing);
+			registration.addEventListener('updatefound', () => announceWhenInstalled(registration.installing));
 
 			void checkForUpdate();
 			document.addEventListener('visibilitychange', checkForUpdate);
@@ -48,4 +66,9 @@ configureUnifiedChartFetch(authorizedFetch);
 applyInitialAccent();
 registerServiceWorker();
 
-createRoot(document.getElementById('root')!).render(<App />);
+createRoot(document.getElementById('root')!).render(
+	<>
+		<App />
+		<AppUpdateBanner />
+	</>,
+);
