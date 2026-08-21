@@ -1,0 +1,101 @@
+name: Research Production Microcap Task
+
+on:
+  push:
+    branches:
+      - research/microcap-research-production-task-v1
+    paths:
+      - research-production/src/microcap-task.mjs
+      - research-production/test/microcap-task.test.mjs
+      - research-production/bin/microcap-research.mjs
+      - research-production/src/engine.mjs
+      - research-production/package.json
+      - market-prediction-lab/scripts/run-us-microcap-intraday-ladder-v1.py
+      - market-prediction-lab/scripts/run-us-microcap-intraday-risk-grid-v1.py
+      - market-prediction-lab/scripts/build-us-microcap-sec-dilution-evidence-v1.py
+      - market-prediction-lab/scripts/build-us-microcap-pit-risk-manifest-v1.py
+      - market-prediction-lab/scripts/apply-us-microcap-pit-risk-gate-v1.py
+      - market-prediction-lab/scripts/compare-us-microcap-rolling-window-v1.py
+      - .github/workflows/research-production-microcap-task.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-production-microcap-task-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact task head
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run Research Production regression suite
+        run: npm --prefix research-production test
+
+      - name: Run microcap SEC dilution self-test
+        run: python3 market-prediction-lab/scripts/build-us-microcap-sec-dilution-evidence-v1.py --self-test
+
+      - name: Run microcap PIT manifest builder self-test
+        run: python3 market-prediction-lab/scripts/build-us-microcap-pit-risk-manifest-v1.py --self-test
+
+      - name: Run microcap PIT risk-gate self-test
+        run: python3 market-prediction-lab/scripts/apply-us-microcap-pit-risk-gate-v1.py --self-test
+
+      - name: Run microcap risk-grid self-test
+        run: python3 market-prediction-lab/scripts/run-us-microcap-intraday-risk-grid-v1.py --self-test
+
+      - name: Run rolling-window attrition guard self-test
+        run: python3 market-prediction-lab/scripts/compare-us-microcap-rolling-window-v1.py --self-test
+
+      - name: Verify microcap task plan is research-only and PIT-gated
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          OUT="$(node research-production/bin/microcap-research.mjs plan \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --state-root "$RUNNER_TEMP/microcap-state" \
+            --research-sha "$GITHUB_SHA")"
+          printf '%s\n' "$OUT"
+          node -e '
+            const x=JSON.parse(process.argv[1]);
+            if(x.canonicalEvidenceEligible!==false) process.exit(2);
+            if(x.canonicalSampleDelta!==0) process.exit(3);
+            if(x.liveTrading!==false||x.privateApi!==false||x.orderAuthority!==false) process.exit(4);
+            if(x.steps?.length!==3) process.exit(5);
+            if(!x.steps.some((s)=>s.id==="point-in-time-risk-gate")) process.exit(6);
+          ' "$OUT"
+
+      - name: Verify CI workflow is unscheduled, read-only, and dependency-aware
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          FILE=.github/workflows/research-production-microcap-task.yml
+          if grep -Eq '^[[:space:]]*schedule:' "$FILE"; then echo 'schedule forbidden'; exit 10; fi
+          grep -Fq 'permissions:' "$FILE"
+          grep -Fq 'contents: read' "$FILE"
+          if grep -Eq '^[[:space:]]*(id-token|actions|issues|pull-requests|deployments|packages|statuses):[[:space:]]*write' "$FILE"; then
+            echo 'write permission forbidden'; exit 11
+          fi
+          for DEP in \
+            'research-production/src/engine.mjs' \
+            'research-production/package.json' \
+            'market-prediction-lab/scripts/run-us-microcap-intraday-ladder-v1.py' \
+            'market-prediction-lab/scripts/run-us-microcap-intraday-risk-grid-v1.py' \
+            'market-prediction-lab/scripts/build-us-microcap-sec-dilution-evidence-v1.py' \
+            'market-prediction-lab/scripts/build-us-microcap-pit-risk-manifest-v1.py' \
+            'market-prediction-lab/scripts/apply-us-microcap-pit-risk-gate-v1.py' \
+            'market-prediction-lab/scripts/compare-us-microcap-rolling-window-v1.py'; do
+            grep -Fq -- "- $DEP" "$FILE" || { echo "missing dependency trigger: $DEP"; exit 12; }
+          done
