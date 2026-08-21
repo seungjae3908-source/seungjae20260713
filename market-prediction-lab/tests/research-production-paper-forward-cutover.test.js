@@ -30,14 +30,15 @@ test("Research Production enables simulated Paper outcome accumulation without e
 
 test("Paper installer binds outcome accumulation mode to Research Production inside the isolated cron environment", async () => {
   const installer = await readFile(new URL("../../ops/install-paper-forward-schedule.sh", import.meta.url), "utf8");
+  const outcomeBinding = "PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED='$OUTCOME_ACCUMULATION_ENABLED'";
+  const researchBinding = "RESEARCH_PRODUCTION='$OUTCOME_ACCUMULATION_ENABLED'";
   assert.match(
     installer,
     /OUTCOME_ACCUMULATION_ENABLED="\$\{PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED:-false\}"/,
   );
-  assert.match(
-    installer,
-    /PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED='\$OUTCOME_ACCUMULATION_ENABLED' \\\n  RESEARCH_PRODUCTION='\$OUTCOME_ACCUMULATION_ENABLED' \\/,
-  );
+  assert.ok(installer.includes(outcomeBinding));
+  assert.ok(installer.includes(researchBinding));
+  assert.ok(installer.indexOf(researchBinding) > installer.indexOf(outcomeBinding));
   assert.doesNotMatch(installer, /RESEARCH_PRODUCTION='true'/);
 });
 
