@@ -73,14 +73,18 @@ test("Research Production recurring CLI injects the audited authoritative source
     output.authoritativeRuntimePackage.blockedDataSourceContractSchemaVersion,
     "authoritative-paper-blocked-data-source-contract-v1",
   );
+  assert.equal(
+    output.authoritativeRuntimePackage.callbackOwnerContractSchemaVersion,
+    "authoritative-paper-callback-owner-contract-v1",
+  );
   assert.deepEqual(output.authoritativeEvidenceOwners, {
-    ownerExists: 3,
-    ownerMissing: 4,
+    ownerExists: 7,
+    ownerMissing: 0,
     callbacksWired: 7,
-    authoritativeOwnersConnected: 3,
-    blockedDataContractsConnected: 4,
+    authoritativeOwnersConnected: 7,
+    runtimeBlockedDataOwners: 4,
     scannerCallbackWired: true,
-    scheduledCanonicalWriter: "OWNER_MISSING",
+    scheduledCanonicalWriter: "CONNECTED_NO_UPSTREAM_STATE_SYNTHESIS",
     allOwnersReady: false,
     firstZeroStage: "UNKNOWN",
     firstBlocker: "AUTHORITATIVE_EVIDENCE_DATA_UNAVAILABLE",
@@ -88,7 +92,7 @@ test("Research Production recurring CLI injects the audited authoritative source
   });
 });
 
-test("configured lossless Paper snapshot reader replaces only the scheduled OWNER_MISSING callback contract", async () => {
+test("configured lossless Paper snapshot reader replaces only the scheduled state owner callback", async () => {
   const snapshotReader = async () => Object.freeze({ schemaVersion: 1, account: Object.freeze({ id: "paper" }) });
   let sourceWiringSeen = null;
   let snapshotFactoryInput = null;
@@ -128,7 +132,8 @@ test("configured lossless Paper snapshot reader replaces only the scheduled OWNE
   assert.equal(typeof snapshotFactoryInput.runtimePackage.validateImmutablePaperTradingStateSnapshot, "function");
   assert.equal(sourceWiringSeen.paperStateForCard, snapshotReader);
   assert.equal(sourceWiringSeen.paperStateForCard.authoritativeBlockedData, undefined);
-  assert.equal(sourceWiringSeen.contractRulesForCard.authoritativeBlockedData.ownerStatus, "OWNER_MISSING");
+  assert.equal(sourceWiringSeen.contractRulesForCard.authoritativeOwner.ownerStatus, "OWNER_EXISTS");
+  assert.equal(sourceWiringSeen.contractRulesForCard.authoritativeOwner.missingDataBehavior, "BLOCKED_DATA");
 });
 
 test("scheduled CLI reports a FIRST_ZERO only from the actually executed measured stage prefix", async () => {
@@ -207,7 +212,7 @@ test("Research Production recurring CLI does not double-wrap an explicitly injec
   assert.equal(output.authoritativeSourceWiringStatus, null);
 });
 
-test("Research Production recurring CLI constructs a fail-closed authoritative provider when no callback owner is installed", async () => {
+test("Research Production recurring CLI installs callback owners and defers missing data to per-card validation", async () => {
   let invocation = null;
   const output = await runPaperForwardScheduleCli(Object.freeze({
     PAPER_FORWARD_SCHEDULE_ACTIVE: "true",
@@ -224,15 +229,10 @@ test("Research Production recurring CLI constructs a fail-closed authoritative p
 
   assert.equal(typeof invocation.publicEvidenceProvider?.collectPublicEvidence, "function");
   assert.equal(invocation.outcomeAccumulationEnabled, true);
-  assert.equal(output.authoritativeSourceWiringStatus, "CALLBACKS_CONNECTED_BLOCKED_DATA");
+  assert.equal(output.authoritativeSourceWiringStatus, "CALLABLES_READY");
   assert.equal(output.firstZeroStage, "UNKNOWN");
-  assert.equal(output.firstZeroReason, "AUTHORITATIVE_EVIDENCE_DATA_UNAVAILABLE");
-  assert.deepEqual(output.authoritativeSourceBlockers, [
-    "AUTHORITATIVE_PAPER_STATE_SOURCE_UNAVAILABLE",
-    "AUTHORITATIVE_CONTRACT_RULES_SOURCE_UNAVAILABLE",
-    "AUTHORITATIVE_EXECUTION_OBSERVATION_SOURCE_UNAVAILABLE",
-    "AUTHORITATIVE_SUPPLEMENTAL_COST_SOURCE_UNAVAILABLE",
-  ]);
+  assert.equal(output.firstZeroReason, null);
+  assert.deepEqual(output.authoritativeSourceBlockers, []);
   assert.equal(output.scannerCandidateCount, null);
   assert.equal(output.canonicalPaperCandidateCount, null);
   assert.equal(output.entryCount, null);

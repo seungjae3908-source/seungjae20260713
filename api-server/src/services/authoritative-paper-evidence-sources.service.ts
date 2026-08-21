@@ -19,12 +19,25 @@ import {
   type BitgetPublicRequest,
 } from './bitget-futures-public-evidence.service';
 import { fetchPublicMarketJson } from './public-market-http';
+import {
+  AUTHORITATIVE_PAPER_CALLBACK_OWNERS_SAFETY,
+  buildAuthoritativePaperExecutionObservation,
+  buildAuthoritativeSizedContractRules,
+  buildAuthoritativeSupplementalCostEvidence,
+  paperStateFromAuthoritativeSnapshot,
+} from './authoritative-paper-callback-owners.service';
+import type { PaperTradingState } from './paper-trading.types';
+import type { ScannerCryptoFuturesPaperExecutionObservation } from './scanner-crypto-futures-paper-admission-composer.service';
+import type { SupplementalExecutionCostEvidence } from './scanner-profit-cost-evidence-adapter.service';
 
 export const AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_VERSION =
   'authoritative-paper-evidence-sources-v1' as const;
 
 export const AUTHORITATIVE_PAPER_BLOCKED_DATA_SOURCE_CONTRACT_VERSION =
   'authoritative-paper-blocked-data-source-contract-v1' as const;
+
+export const AUTHORITATIVE_PAPER_CALLBACK_OWNER_CONTRACT_VERSION =
+  'authoritative-paper-callback-owner-contract-v1' as const;
 
 const BITGET_BASE_URL = 'https://api.bitget.com';
 const FUTURES_LANE = FORWARD_OBSERVER_LANES.find((lane) => lane.market === 'CRYPTO_FUTURES');
@@ -51,9 +64,24 @@ export type AuthoritativePaperBlockedDataSourceContract = Readonly<{
   unknownIsZero: false;
 }>;
 
-type AuthoritativePaperBlockedDataSource =
-  ((context: EvidenceContext) => Promise<null>)
-  & Readonly<{ authoritativeBlockedData: AuthoritativePaperBlockedDataSourceContract }>;
+export type AuthoritativePaperCallbackOwnerContract = Readonly<{
+  schemaVersion: typeof AUTHORITATIVE_PAPER_CALLBACK_OWNER_CONTRACT_VERSION;
+  callback: 'paperStateForCard' | 'contractRulesForCard' | 'executionObservationForCard' | 'supplementalCostEvidenceForCard';
+  ownerStatus: 'OWNER_EXISTS';
+  dataReadiness: 'RUNTIME_VALIDATED_BLOCKED_DATA';
+  implementation: string;
+  requiredData: readonly string[];
+  missingDataBehavior: 'BLOCKED_DATA';
+  unknownIsZero: false;
+}>;
+
+type AuthoritativePaperOwnedSource<T> =
+  ((context: EvidenceContext) => Promise<T | null>)
+  & Readonly<{ authoritativeOwner: AuthoritativePaperCallbackOwnerContract }>;
+
+type SizedContractInput = Parameters<typeof buildAuthoritativeSizedContractRules>[0];
+type ExecutionObservationInput = Parameters<typeof buildAuthoritativePaperExecutionObservation>[0];
+type SupplementalCostInput = Parameters<typeof buildAuthoritativeSupplementalCostEvidence>[0];
 
 type Dependencies = Readonly<{
   scan: typeof CryptoSignalScannerService.scan;
@@ -67,6 +95,10 @@ type Dependencies = Readonly<{
   buildPublicRequests: typeof buildBitgetFuturesPublicRequests;
   buildPublicEvidence: typeof buildBitgetFuturesPublicEvidence;
   fetchPublicJson: FetchPublicJson;
+  paperStateSnapshotForCard(context: EvidenceContext): Promise<unknown | null>;
+  sizedContractInputForCard(context: EvidenceContext): Promise<SizedContractInput | null>;
+  executionObservationInputForCard(context: EvidenceContext): Promise<ExecutionObservationInput | null>;
+  supplementalCostInputForCard(context: EvidenceContext): Promise<SupplementalCostInput | null>;
   now: () => number;
 }>;
 
@@ -80,11 +112,11 @@ export type AuthoritativePaperEvidenceSourceWiring = Readonly<{
   learningSnapshotForCard(context: EvidenceContext): ReturnType<typeof prepareForwardRecommendationObservation>['observation'] extends infer Observation
     ? Observation extends { snapshot: infer Snapshot } ? Snapshot | null : null
     : null;
-  paperStateForCard: AuthoritativePaperBlockedDataSource;
-  contractRulesForCard: AuthoritativePaperBlockedDataSource;
+  paperStateForCard: AuthoritativePaperOwnedSource<Readonly<PaperTradingState>>;
+  contractRulesForCard: AuthoritativePaperOwnedSource<ReturnType<typeof buildAuthoritativeSizedContractRules>['contractRules']>;
   publicEvidenceForCard(context: EvidenceContext): Promise<ReturnType<typeof buildBitgetFuturesPublicEvidence> | null>;
-  executionObservationForCard: AuthoritativePaperBlockedDataSource;
-  supplementalCostEvidenceForCard: AuthoritativePaperBlockedDataSource;
+  executionObservationForCard: AuthoritativePaperOwnedSource<ScannerCryptoFuturesPaperExecutionObservation>;
+  supplementalCostEvidenceForCard: AuthoritativePaperOwnedSource<SupplementalExecutionCostEvidence>;
 }>;
 
 function exactSha(value: unknown): value is string {
@@ -110,27 +142,29 @@ function publicUrl(request: BitgetPublicRequest): URL {
   return url;
 }
 
-function blockedOwnerSource({
+function ownedSource<T>({
   callback,
-  blocker,
-  provenance,
+  implementation,
+  requiredData,
+  source,
 }: Readonly<{
-  callback: AuthoritativePaperBlockedDataSourceContract['callback'];
-  blocker: string;
-  provenance: string;
-}>): AuthoritativePaperBlockedDataSource {
-  const source = async (_context: EvidenceContext): Promise<null> => null;
+  callback: AuthoritativePaperCallbackOwnerContract['callback'];
+  implementation: string;
+  requiredData: readonly string[];
+  source: (context: EvidenceContext) => Promise<T | null>;
+}>): AuthoritativePaperOwnedSource<T> {
   return Object.freeze(Object.assign(source, {
-    authoritativeBlockedData: Object.freeze({
-      schemaVersion: AUTHORITATIVE_PAPER_BLOCKED_DATA_SOURCE_CONTRACT_VERSION,
+    authoritativeOwner: Object.freeze({
+      schemaVersion: AUTHORITATIVE_PAPER_CALLBACK_OWNER_CONTRACT_VERSION,
       callback,
-      status: 'BLOCKED_DATA' as const,
-      ownerStatus: 'OWNER_MISSING' as const,
-      blocker,
-      provenance,
+      ownerStatus: 'OWNER_EXISTS' as const,
+      dataReadiness: 'RUNTIME_VALIDATED_BLOCKED_DATA' as const,
+      implementation,
+      requiredData: Object.freeze([...requiredData]),
+      missingDataBehavior: 'BLOCKED_DATA' as const,
       unknownIsZero: false as const,
     }),
-  }));
+  })) as AuthoritativePaperOwnedSource<T>;
 }
 
 function defaultDependencies(): Dependencies {
@@ -146,6 +180,10 @@ function defaultDependencies(): Dependencies {
     buildPublicRequests: buildBitgetFuturesPublicRequests,
     buildPublicEvidence: buildBitgetFuturesPublicEvidence,
     fetchPublicJson: (url, input) => fetchPublicMarketJson(url, input),
+    paperStateSnapshotForCard: async () => null,
+    sizedContractInputForCard: async () => null,
+    executionObservationInputForCard: async () => null,
+    supplementalCostInputForCard: async () => null,
     now: Date.now,
   });
 }
@@ -195,26 +233,42 @@ export function createAuthoritativePaperEvidenceSourceWiring({
   if (!exactSha(normalizedSha)) throw new TypeError('authoritative Paper evidence sources require an exact research SHA');
   if (!FUTURES_LANE) throw new Error('FORWARD_OBSERVER_FUTURES_LANE_REQUIRED');
   const dependencies = Object.freeze({ ...defaultDependencies(), ...overrides }) as Dependencies;
-  const blockedOwnerSources = Object.freeze({
-    paperStateForCard: blockedOwnerSource({
+  const callbackOwnerSources = Object.freeze({
+    paperStateForCard: ownedSource({
       callback: 'paperStateForCard',
-      blocker: 'AUTHORITATIVE_PAPER_STATE_SOURCE_UNAVAILABLE',
-      provenance: 'scheduled lossless PaperTradingState writer is not installed; recurring ledger derivation is forbidden',
+      implementation: 'paperStateFromAuthoritativeSnapshot/validateImmutablePaperTradingStateSnapshot',
+      requiredData: ['lossless immutable PaperTradingState snapshot from the canonical Paper state writer'],
+      source: async (context) => {
+        const snapshot = await dependencies.paperStateSnapshotForCard(context);
+        return snapshot == null ? null : paperStateFromAuthoritativeSnapshot(snapshot, dependencies.now());
+      },
     }),
-    contractRulesForCard: blockedOwnerSource({
+    contractRulesForCard: ownedSource({
       callback: 'contractRulesForCard',
-      blocker: 'AUTHORITATIVE_CONTRACT_RULES_SOURCE_UNAVAILABLE',
-      provenance: 'public contract metadata is partial and exact maintenance tier selection requires authoritative sized notional and risk policy',
+      implementation: 'buildAuthoritativeSizedContractRules/selectBitgetPositionTier',
+      requiredData: ['public contracts', 'public position tier schedule', 'sized notional', 'immutable risk policy evidence'],
+      source: async (context) => {
+        const input = await dependencies.sizedContractInputForCard(context);
+        return input == null ? null : buildAuthoritativeSizedContractRules(input).contractRules;
+      },
     }),
-    executionObservationForCard: blockedOwnerSource({
+    executionObservationForCard: ownedSource({
       callback: 'executionObservationForCard',
-      blocker: 'AUTHORITATIVE_EXECUTION_OBSERVATION_SOURCE_UNAVAILABLE',
-      provenance: 'public book simulation is advisory; production target quantity, fill calibration, and latency/liquidity/partial-fill cost owners are absent',
+      implementation: 'buildAuthoritativePaperExecutionObservation/buildPaperSimulatedExecutionEvidence',
+      requiredData: ['public L2 depth', 'target quantity', 'request timing', 'calibrated fill model', 'immutable risk policy evidence'],
+      source: async (context) => {
+        const input = await dependencies.executionObservationInputForCard(context);
+        return input == null ? null : buildAuthoritativePaperExecutionObservation(input);
+      },
     }),
-    supplementalCostEvidenceForCard: blockedOwnerSource({
+    supplementalCostEvidenceForCard: ownedSource({
       callback: 'supplementalCostEvidenceForCard',
-      blocker: 'AUTHORITATIVE_SUPPLEMENTAL_COST_SOURCE_UNAVAILABLE',
-      provenance: 'fees/funding/spread are partial; slippage, liquidity, latency, and partial-fill impacts remain unknown and are never zero-filled',
+      implementation: 'buildAuthoritativeSupplementalCostEvidence',
+      requiredData: ['latency cost evidence', 'liquidity impact cost evidence', 'partial-fill cost evidence', 'funding evidence'],
+      source: async (context) => {
+        const input = await dependencies.supplementalCostInputForCard(context);
+        return input == null ? null : buildAuthoritativeSupplementalCostEvidence(input);
+      },
     }),
   });
 
@@ -279,7 +333,7 @@ export function createAuthoritativePaperEvidenceSourceWiring({
       return decision.status === 'OBSERVATION_READY' ? decision.observation?.snapshot ?? null : null;
     },
 
-    ...blockedOwnerSources,
+    ...callbackOwnerSources,
 
     async publicEvidenceForCard({ card, market, signal }) {
       const value = scannerCard(card);
@@ -315,7 +369,11 @@ export const AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_SAFETY = Object.freeze({
     'scanBatchForMarket',
     'paperCandidateForCard',
     'learningSnapshotForCard',
+    'paperStateForCard',
+    'contractRulesForCard',
     'publicEvidenceForCard',
+    'executionObservationForCard',
+    'supplementalCostEvidenceForCard',
   ]),
   callbackContractsConnected: Object.freeze([
     'scanBatchForMarket',
@@ -327,12 +385,9 @@ export const AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_SAFETY = Object.freeze({
     'executionObservationForCard',
     'supplementalCostEvidenceForCard',
   ]),
-  ownerMissingCallbacks: Object.freeze([
-    'paperStateForCard',
-    'contractRulesForCard',
-    'executionObservationForCard',
-    'supplementalCostEvidenceForCard',
-  ]),
+  ownerMissingCallbacks: Object.freeze([]),
+  ownerMissingCount: 0,
+  ownerDataReadiness: AUTHORITATIVE_PAPER_CALLBACK_OWNERS_SAFETY.dataReadiness,
   executionAuthority: 'NONE',
   privateApiAllowed: false,
   liveTrading: false,

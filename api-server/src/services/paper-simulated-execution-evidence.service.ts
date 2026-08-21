@@ -1,5 +1,4 @@
 // The canonical implementation is JavaScript owned by market-intelligence-sidecar.
-// @ts-expect-error The sidecar is bundled as validated ESM and has no TypeScript declaration.
 import { evaluateCalibratedFillModel, walkOrderBook } from '../../../market-intelligence-sidecar/src/execution-quality.mjs';
 
 export const PAPER_SIMULATED_EXECUTION_EVIDENCE_VERSION = 'paper-simulated-execution-evidence-v1';
@@ -129,9 +128,9 @@ export function buildPaperSimulatedExecutionEvidence(
   if (observedRoundTripMs == null) blockers.push('OBSERVED_LATENCY_DURATION_MISSING');
 
   blockers.push(
-    'LATENCY_COST_MODEL_OWNER_MISSING',
-    'LIQUIDITY_IMPACT_COST_MODEL_OWNER_MISSING',
-    'PARTIAL_FILL_COST_MODEL_OWNER_MISSING',
+    'LATENCY_COST_EVIDENCE_UNAVAILABLE',
+    'LIQUIDITY_IMPACT_COST_EVIDENCE_UNAVAILABLE',
+    'PARTIAL_FILL_COST_EVIDENCE_UNAVAILABLE',
   );
 
   const spreadAbsolute = bid != null && ask != null && ask >= bid ? ask - bid : null;

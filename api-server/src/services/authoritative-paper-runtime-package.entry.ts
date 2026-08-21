@@ -10,11 +10,21 @@ export {
 } from './paper-trading-state-snapshot.service';
 
 export {
+  AUTHORITATIVE_PAPER_CALLBACK_OWNER_CONTRACT_VERSION,
   AUTHORITATIVE_PAPER_BLOCKED_DATA_SOURCE_CONTRACT_VERSION,
   AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_SAFETY,
   AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_VERSION,
   createAuthoritativePaperEvidenceSourceWiring,
 } from './authoritative-paper-evidence-sources.service';
+
+export {
+  AUTHORITATIVE_PAPER_CALLBACK_OWNERS_SAFETY,
+  AUTHORITATIVE_PAPER_CALLBACK_OWNERS_VERSION,
+  buildAuthoritativePaperExecutionObservation,
+  buildAuthoritativeSizedContractRules,
+  buildAuthoritativeSupplementalCostEvidence,
+  paperStateFromAuthoritativeSnapshot,
+} from './authoritative-paper-callback-owners.service';
 
 export {
   buildPaperSimulatedExecutionEvidence,
