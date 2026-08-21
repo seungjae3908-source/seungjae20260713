@@ -10,6 +10,9 @@ on:
       - api-server/src/services/authoritative-paper-evidence-sources.service.ts
       - api-server/src/services/authoritative-paper-runtime-package.entry.ts
       - api-server/src/services/paper-trading-state-snapshot.service.ts
+      - api-server/src/services/paper-trading-state-publisher.service.ts
+      - api-server/src/routes/paper-trading.ts
+      - api-server/src/routes/paper-trading.smoke.test.ts
       - api-server/src/services/paper-simulated-execution-evidence.service.ts
       - api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.ts
       - api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.test.ts
@@ -74,6 +77,16 @@ jobs:
 
       - name: Run exact-head P0-C9 producer tests
         run: node --test /tmp/scanner-crypto-futures-paper-admission-evidence-producer.test.mjs
+
+      - name: Bundle authenticated Paper snapshot-v2 transport tests
+        run: >-
+          pnpm --dir api-server exec esbuild
+          src/routes/paper-trading.smoke.test.ts
+          --bundle --platform=node --format=cjs --target=node22
+          --outfile=/tmp/paper-trading-snapshot-transport.test.cjs
+
+      - name: Run authenticated Paper snapshot-v2 transport tests
+        run: node --test /tmp/paper-trading-snapshot-transport.test.cjs
 
       - name: Rebuild and verify exact authoritative runtime package
         run: |

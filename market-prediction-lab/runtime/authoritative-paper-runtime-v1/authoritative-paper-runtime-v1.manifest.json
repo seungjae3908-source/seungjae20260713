@@ -8,7 +8,7 @@
     "sourceGitBlobSha": "e4fe2e7c8cd0ec279cda8d696b4ae935bef86a4b",
     "sourceSha256": "e699e00ba64040aefec24b5b4992b4975531fdf88c1e4b2b164038ebed57dad7"
   },
-  "sourceGraphSha256": "5dd01f12c9e82d7deacc5846a349e6afd968b257cba9a2ab2c7f919892af0c81",
+  "sourceGraphSha256": "209230cd71d45361f316146dd8716e9e6a1063e825c2038e5ef74a0dee72c918",
   "sourceFiles": [
     "api-server/src/data/asset-type.ts",
     "api-server/src/lib/bounded-work-pool.ts",
@@ -59,7 +59,7 @@
     "api-server/src/services/market-price-precision.service.ts": "29030f177420c0227857ded9efdc5fe522e029a0f40540d1e42b4d1e7bc88a6b",
     "api-server/src/services/paper-simulated-execution-evidence.service.ts": "6472ebbb1855cd1f54be19dde0d859fc4eeb978573be66d85db9230a3c87f976",
     "api-server/src/services/paper-trading-core.service.ts": "8e6a8965e32f75ec8bef6485ef3af8a4dd3d0480341b6506b9b8bdddfa07fb75",
-    "api-server/src/services/paper-trading-state-snapshot.service.ts": "052efbaba15652f2cf91bb9253e9b62a71044617d9888b0b6521271f67e46d70",
+    "api-server/src/services/paper-trading-state-snapshot.service.ts": "20afcc5ce5e415f038dbe48a3effd9d0edda792eac854931170e59d8ed26ab55",
     "api-server/src/services/public-market-http.ts": "f1ec00932db5a2e21c0e32d9c73026a4246cf162608eec153f05745079ddd9ce",
     "api-server/src/services/scanner-candidate-ranking.service.ts": "84c24ec9729e4a5e36f7360ad1a6f4de2b8a8ed40c5a6ae9071fa810cb2ae82d",
     "api-server/src/services/scanner-canonical-paper-identity.service.ts": "160c0310312045f06c772604f5abe440f6e89485ae9d737592899d48bf034bb4",
@@ -83,9 +83,9 @@
     "market-intelligence-sidecar/src/execution-quality.mjs": "d646fe71f323df5781625b8f97108101ec5fc64d5202c116a733211ebccd2cea",
     "market-prediction-lab/src/bitget-position-tier-v1.js": "ddfa77300339b0968e719bd547a84389c890cc1d03982ec3d2d7d30859f6ed01"
   },
-  "bundleSha256": "aca5cc027c33216ff2ee387841bc49b4c42b4ad908f0abe5eb0d2f7ddd835208",
+  "bundleSha256": "3113f56a18b37cb8988aeb768415a283c80151f23aaee0290edec269e37bcb11",
   "admissionBundleSchemaVersion": "scanner-paper-admission-evidence-bundle-v1",
-  "paperStateSnapshotSchemaVersion": "paper-trading-state-snapshot-v1",
+  "paperStateSnapshotSchemaVersion": "paper-trading-state-snapshot-v2",
   "callbackOwnerContractSchemaVersion": "authoritative-paper-callback-owner-contract-v1",
   "blockedDataSourceContractSchemaVersion": "authoritative-paper-blocked-data-source-contract-v1",
   "simulatedExecutionEvidenceSchemaVersion": "paper-simulated-execution-evidence-v1",

@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -9,6 +10,10 @@ import {
   createPaperStateSourceFromLosslessSnapshotFile,
   loadValidatedAuthoritativePaperRuntimePackage,
 } from "../src/authoritative-paper-runtime-package-v1.js";
+
+const SOURCE_SHA = "0123456789abcdef0123456789abcdef01234567";
+const PUBLISHER_ACCOUNT_ID = "paper-publisher-account-fixture";
+const PUBLISHER_ACCOUNT_ID_SHA256 = createHash("sha256").update(PUBLISHER_ACCOUNT_ID).digest("hex");
 
 function paperState(nowMs) {
   const at = new Date(nowMs - 1_000).toISOString();
@@ -62,6 +67,7 @@ test("validated package loads exact #546 producer bundle and executes fail-close
   assert.match(runtimePackage.sourceGraphSha256, /^[0-9a-f]{64}$/u);
   assert.match(runtimePackage.bundleSha256, /^[0-9a-f]{64}$/u);
   assert.equal(runtimePackage.admissionBundleSchemaVersion, "scanner-paper-admission-evidence-bundle-v1");
+  assert.equal(runtimePackage.manifest.paperStateSnapshotSchemaVersion, "paper-trading-state-snapshot-v2");
   assert.equal(runtimePackage.callbackOwnerContractSchemaVersion, "authoritative-paper-callback-owner-contract-v1");
   assert.equal(runtimePackage.blockedDataSourceContractSchemaVersion, "authoritative-paper-blocked-data-source-contract-v1");
   assert.equal(runtimePackage.simulatedExecutionEvidenceSchemaVersion, "paper-simulated-execution-evidence-v1");
@@ -352,21 +358,44 @@ test("lossless Paper state snapshot preserves the complete state and never suppl
   const snapshot = runtimePackage.createImmutablePaperTradingStateSnapshot({
     state,
     sourceOwner: "CONTRACT_FIXTURE_ONLY",
+    sourceSha: SOURCE_SHA,
+    market: "CRYPTO_FUTURES",
+    currency: "USDT",
     provenance: ["paper-trading-state-snapshot-contract-test"],
+    publisherAccountIdSha256: PUBLISHER_ACCOUNT_ID_SHA256,
     observedAtMs: nowMs,
     maximumAgeMs: 30_000,
   });
   assert.deepEqual(snapshot.state, state);
   assert.equal(snapshot.equity, state.account.equity);
+  assert.equal(snapshot.schemaVersion, "paper-trading-state-snapshot-v2");
+  assert.equal(snapshot.market, "CRYPTO_FUTURES");
+  assert.equal(snapshot.currency, "USDT");
+  assert.equal(snapshot.sourceSha, SOURCE_SHA);
+  assert.equal(snapshot.publisherAccountIdSha256, PUBLISHER_ACCOUNT_ID_SHA256);
   assert.equal(snapshot.stateDigestSha256.length, 64);
   assert.equal(Object.isFrozen(snapshot), true);
   assert.equal(Object.isFrozen(snapshot.state.account), true);
   assert.throws(() => runtimePackage.createImmutablePaperTradingStateSnapshot({
     state: { ...state, account: { ...state.account, equity: null } },
     sourceOwner: "CONTRACT_FIXTURE_ONLY",
+    sourceSha: SOURCE_SHA,
+    market: "CRYPTO_FUTURES",
+    currency: "USDT",
     provenance: ["paper-trading-state-snapshot-contract-test"],
+    publisherAccountIdSha256: PUBLISHER_ACCOUNT_ID_SHA256,
     observedAtMs: nowMs,
   }), /PAPER_STATE|모의계좌/u);
+  assert.throws(() => runtimePackage.createImmutablePaperTradingStateSnapshot({
+    state,
+    sourceOwner: "CONTRACT_FIXTURE_ONLY",
+    sourceSha: SOURCE_SHA,
+    market: "",
+    currency: "USDT",
+    provenance: ["paper-trading-state-snapshot-contract-test"],
+    publisherAccountIdSha256: PUBLISHER_ACCOUNT_ID_SHA256,
+    observedAtMs: nowMs,
+  }), /PAPER_STATE_MARKET_REQUIRED/u);
 
   const root = await mkdtemp(join(tmpdir(), "paper-state-snapshot-contract-"));
   try {
@@ -374,12 +403,17 @@ test("lossless Paper state snapshot preserves the complete state and never suppl
     const owner = createLosslessPaperStateSnapshotFileOwner({
       snapshotPath: path,
       runtimePackage,
+      expectedPublisherAccountIdSha256: PUBLISHER_ACCOUNT_ID_SHA256,
       now: () => nowMs + 1,
     });
     const written = await owner.writePaperStateSnapshot({
       state,
       sourceOwner: "CONTRACT_FIXTURE_ONLY",
+      sourceSha: SOURCE_SHA,
+      market: "CRYPTO_FUTURES",
+      currency: "USDT",
       provenance: ["paper-trading-state-snapshot-contract-test"],
+      publisherAccountIdSha256: PUBLISHER_ACCOUNT_ID_SHA256,
       observedAtMs: nowMs,
       maximumAgeMs: 30_000,
     });
@@ -387,13 +421,25 @@ test("lossless Paper state snapshot preserves the complete state and never suppl
     assert.deepEqual(await owner.paperStateForCard(), state);
     assert.equal(owner.initializesPaperState, false);
     assert.equal(owner.recurringLedgerDerivationAllowed, false);
+    assert.equal(owner.authenticatedPublisherRequired, true);
+    assert.equal(owner.exactAccountBindingRequired, true);
     assert.equal(owner.unknownIsZero, false);
     const source = createPaperStateSourceFromLosslessSnapshotFile({
       snapshotPath: path,
       runtimePackage,
+      expectedPublisherAccountIdSha256: PUBLISHER_ACCOUNT_ID_SHA256,
       now: () => nowMs + 1,
     });
     assert.deepEqual(await source(), state);
+    const wrongAccountSource = createPaperStateSourceFromLosslessSnapshotFile({
+      snapshotPath: path,
+      runtimePackage,
+      expectedPublisherAccountIdSha256: createHash("sha256")
+        .update("different-publisher-account")
+        .digest("hex"),
+      now: () => nowMs + 1,
+    });
+    await assert.rejects(wrongAccountSource(), /PAPER_STATE_PUBLISHER_ACCOUNT_BINDING_MISMATCH/u);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -419,7 +465,7 @@ test("evidence ownership map connects seven owners while preserving four runtime
   assert.equal(contract.sevenEvidenceOwnerSummary.authoritativeOwnersConnected, 7);
   assert.equal(contract.sevenEvidenceOwnerSummary.runtimeBlockedDataOwners, 4);
   assert.equal(contract.sevenEvidenceOwnerSummary.scannerCallbackWired, true);
-  assert.equal(contract.sevenEvidenceOwnerSummary.scheduledCanonicalWriter, "CONNECTED_NO_UPSTREAM_STATE_SYNTHESIS");
+  assert.equal(contract.sevenEvidenceOwnerSummary.scheduledCanonicalWriter, "AUTHENTICATED_EXACT_ACCOUNT_PUBLISHER_CONNECTED");
   assert.equal(contract.sevenEvidenceOwnerSummary.allOwnersReady, false);
   assert.equal(contract.sevenEvidenceOwnerSummary.firstZeroStage, "UNKNOWN");
   assert.equal(contract.sevenEvidenceOwnerSummary.firstBlocker, "AUTHORITATIVE_EVIDENCE_DATA_UNAVAILABLE");

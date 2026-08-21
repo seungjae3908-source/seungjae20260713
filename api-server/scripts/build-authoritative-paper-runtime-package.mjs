@@ -128,7 +128,7 @@ const manifest = {
   sourceFileSha256: Object.fromEntries(sourceRecords.map((source) => [source.repositoryPath, source.sha256])),
   bundleSha256,
   admissionBundleSchemaVersion: 'scanner-paper-admission-evidence-bundle-v1',
-  paperStateSnapshotSchemaVersion: 'paper-trading-state-snapshot-v1',
+  paperStateSnapshotSchemaVersion: 'paper-trading-state-snapshot-v2',
   callbackOwnerContractSchemaVersion: 'authoritative-paper-callback-owner-contract-v1',
   blockedDataSourceContractSchemaVersion: 'authoritative-paper-blocked-data-source-contract-v1',
   simulatedExecutionEvidenceSchemaVersion: 'paper-simulated-execution-evidence-v1',

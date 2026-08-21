@@ -1,15 +1,21 @@
 import { createHash } from 'node:crypto';
+import { mkdir, open, readFile, rename, rm } from 'node:fs/promises';
+import { dirname, isAbsolute } from 'node:path';
 import { validateState } from './paper-trading-core.service';
 import type { PaperTradingState } from './paper-trading.types';
 
 export const PAPER_TRADING_STATE_SNAPSHOT_VERSION =
-  'paper-trading-state-snapshot-v1' as const;
+  'paper-trading-state-snapshot-v2' as const;
 
 export type PaperTradingStateSnapshot = Readonly<{
   schemaVersion: typeof PAPER_TRADING_STATE_SNAPSHOT_VERSION;
   paperStateSchemaVersion: 1;
   sourceOwner: string;
+  sourceSha: string;
+  market: string;
+  currency: string;
   provenance: readonly string[];
+  publisherAccountIdSha256: string;
   observedAtMs: number;
   stateUpdatedAtMs: number;
   maximumAgeMs: number;
@@ -28,7 +34,11 @@ export type PaperTradingStateSnapshot = Readonly<{
 type SnapshotInput = Readonly<{
   state: PaperTradingState;
   sourceOwner: string;
+  sourceSha: string;
+  market: string;
+  currency: string;
   provenance: readonly string[];
+  publisherAccountIdSha256: string;
   observedAtMs?: number;
   maximumAgeMs?: number;
 }>;
@@ -39,6 +49,22 @@ function finite(value: unknown): value is number {
 
 function nonEmpty(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+function immutableSha(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{40}$/u.test(value);
+}
+
+function sha256Digest(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{64}$/u.test(value);
+}
+
+function canonicalMarket(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Z][A-Z0-9_]{1,39}$/u.test(value);
+}
+
+function canonicalCurrency(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Z][A-Z0-9]{1,11}$/u.test(value);
 }
 
 function cloneJson<T>(value: T): T {
@@ -96,13 +122,23 @@ function assertSnapshotState(state: PaperTradingState, nowMs: number, maximumAge
 export function createImmutablePaperTradingStateSnapshot({
   state,
   sourceOwner,
+  sourceSha,
+  market,
+  currency,
   provenance,
+  publisherAccountIdSha256,
   observedAtMs = Date.now(),
   maximumAgeMs = 30_000,
 }: SnapshotInput): PaperTradingStateSnapshot {
   if (!finite(observedAtMs) || observedAtMs <= 0) throw new Error('PAPER_STATE_OBSERVED_AT_INVALID');
   if (!finite(maximumAgeMs) || maximumAgeMs <= 0) throw new Error('PAPER_STATE_MAXIMUM_AGE_INVALID');
   if (!nonEmpty(sourceOwner)) throw new Error('PAPER_STATE_SOURCE_OWNER_REQUIRED');
+  if (!immutableSha(sourceSha)) throw new Error('PAPER_STATE_SOURCE_SHA_REQUIRED');
+  if (!canonicalMarket(market)) throw new Error('PAPER_STATE_MARKET_REQUIRED');
+  if (!canonicalCurrency(currency)) throw new Error('PAPER_STATE_CURRENCY_REQUIRED');
+  if (!sha256Digest(publisherAccountIdSha256)) {
+    throw new Error('PAPER_STATE_PUBLISHER_ACCOUNT_BINDING_REQUIRED');
+  }
   if (!Array.isArray(provenance) || provenance.length === 0 || provenance.some((value) => !nonEmpty(value))) {
     throw new Error('PAPER_STATE_PROVENANCE_REQUIRED');
   }
@@ -113,7 +149,11 @@ export function createImmutablePaperTradingStateSnapshot({
     schemaVersion: PAPER_TRADING_STATE_SNAPSHOT_VERSION,
     paperStateSchemaVersion: clonedState.schemaVersion,
     sourceOwner: sourceOwner.trim(),
+    sourceSha,
+    market,
+    currency,
     provenance: [...provenance],
+    publisherAccountIdSha256,
     observedAtMs,
     stateUpdatedAtMs,
     maximumAgeMs,
@@ -150,7 +190,11 @@ export function validateImmutablePaperTradingStateSnapshot(
   const rebuilt = createImmutablePaperTradingStateSnapshot({
     state: snapshot.state as PaperTradingState,
     sourceOwner: snapshot.sourceOwner,
+    sourceSha: snapshot.sourceSha,
+    market: snapshot.market,
+    currency: snapshot.currency,
     provenance: snapshot.provenance,
+    publisherAccountIdSha256: snapshot.publisherAccountIdSha256,
     observedAtMs: snapshot.observedAtMs,
     maximumAgeMs: snapshot.maximumAgeMs,
   });
@@ -165,4 +209,32 @@ export function validateImmutablePaperTradingStateSnapshot(
     throw new Error('PAPER_STATE_SNAPSHOT_DIGEST_MISMATCH');
   }
   return rebuilt;
+}
+
+export async function writeImmutablePaperTradingStateSnapshotFile(
+  snapshotPath: string,
+  snapshot: PaperTradingStateSnapshot,
+  nowMs = Date.now(),
+): Promise<PaperTradingStateSnapshot> {
+  if (!nonEmpty(snapshotPath) || !isAbsolute(snapshotPath)) {
+    throw new Error('PAPER_STATE_SNAPSHOT_ABSOLUTE_PATH_REQUIRED');
+  }
+  const validated = validateImmutablePaperTradingStateSnapshot(snapshot, nowMs);
+  await mkdir(dirname(snapshotPath), { recursive: true, mode: 0o700 });
+  const temporaryPath = `${snapshotPath}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    const handle = await open(temporaryPath, 'wx', 0o600);
+    try {
+      await handle.writeFile(`${JSON.stringify(validated, null, 2)}\n`, 'utf8');
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await rename(temporaryPath, snapshotPath);
+  } catch (error) {
+    await rm(temporaryPath, { force: true });
+    throw error;
+  }
+  const persisted = JSON.parse(await readFile(snapshotPath, 'utf8')) as unknown;
+  return validateImmutablePaperTradingStateSnapshot(persisted, nowMs);
 }

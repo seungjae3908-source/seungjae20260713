@@ -9,7 +9,7 @@ export const AUTHORITATIVE_PAPER_RUNTIME_PACKAGE_CONTRACT = Object.freeze({
   canonicalProducerVersion: "scanner-crypto-futures-paper-admission-evidence-producer-v1",
   canonicalProducerSourceCommitSha: "3f85003368830fb570c05b3b2060da39f515696d",
   admissionBundleSchemaVersion: "scanner-paper-admission-evidence-bundle-v1",
-  paperStateSnapshotSchemaVersion: "paper-trading-state-snapshot-v1",
+  paperStateSnapshotSchemaVersion: "paper-trading-state-snapshot-v2",
   callbackOwnerContractSchemaVersion: "authoritative-paper-callback-owner-contract-v1",
   blockedDataSourceContractSchemaVersion: "authoritative-paper-blocked-data-source-contract-v1",
   simulatedExecutionEvidenceSchemaVersion: "paper-simulated-execution-evidence-v1",
@@ -243,11 +243,13 @@ export async function loadValidatedAuthoritativePaperRuntimePackage({
 export function createPaperStateSourceFromLosslessSnapshotFile({
   snapshotPath,
   runtimePackage,
+  expectedPublisherAccountIdSha256,
   now = () => Date.now(),
 } = {}) {
   return createLosslessPaperStateSnapshotFileOwner({
     snapshotPath,
     runtimePackage,
+    expectedPublisherAccountIdSha256,
     now,
   }).paperStateForCard;
 }
@@ -255,6 +257,7 @@ export function createPaperStateSourceFromLosslessSnapshotFile({
 export function createLosslessPaperStateSnapshotFileOwner({
   snapshotPath,
   runtimePackage,
+  expectedPublisherAccountIdSha256,
   now = () => Date.now(),
 } = {}) {
   if (typeof snapshotPath !== "string" || snapshotPath.trim().length === 0) {
@@ -264,22 +267,38 @@ export function createLosslessPaperStateSnapshotFileOwner({
     || typeof runtimePackage?.validateImmutablePaperTradingStateSnapshot !== "function") {
     throw new TypeError("validated authoritative Paper runtime package is required");
   }
+  if (typeof expectedPublisherAccountIdSha256 !== "string"
+    || !/^[0-9a-f]{64}$/u.test(expectedPublisherAccountIdSha256)) {
+    throw new TypeError("exact authenticated Paper publisher account digest binding is required");
+  }
   if (typeof now !== "function") throw new TypeError("Paper state snapshot clock is required");
   const resolvedPath = snapshotPath.trim();
   return freeze({
-    schemaVersion: "lossless-paper-state-snapshot-file-owner-v1",
+    schemaVersion: "lossless-paper-state-snapshot-file-owner-v2",
     snapshotPath: resolvedPath,
+    expectedPublisherAccountIdSha256,
     async writePaperStateSnapshot({
       state,
       sourceOwner,
+      sourceSha,
+      market,
+      currency,
       provenance,
+      publisherAccountIdSha256,
       observedAtMs = now(),
       maximumAgeMs,
     } = {}) {
+      if (publisherAccountIdSha256 !== expectedPublisherAccountIdSha256) {
+        throw new Error("PAPER_STATE_PUBLISHER_ACCOUNT_BINDING_MISMATCH");
+      }
       const snapshot = runtimePackage.createImmutablePaperTradingStateSnapshot({
         state,
         sourceOwner,
+        sourceSha,
+        market,
+        currency,
         provenance,
+        publisherAccountIdSha256,
         observedAtMs,
         ...(maximumAgeMs == null ? {} : { maximumAgeMs }),
       });
@@ -289,7 +308,11 @@ export function createLosslessPaperStateSnapshotFileOwner({
     },
     async paperStateForCard() {
       const value = JSON.parse(await readFile(resolvedPath, "utf8"));
-      return runtimePackage.validateImmutablePaperTradingStateSnapshot(value, now()).state;
+      const snapshot = runtimePackage.validateImmutablePaperTradingStateSnapshot(value, now());
+      if (snapshot.publisherAccountIdSha256 !== expectedPublisherAccountIdSha256) {
+        throw new Error("PAPER_STATE_PUBLISHER_ACCOUNT_BINDING_MISMATCH");
+      }
+      return snapshot.state;
     },
     executionAuthority: "NONE",
     privateApiAllowed: false,
@@ -297,6 +320,8 @@ export function createLosslessPaperStateSnapshotFileOwner({
     financialMutationAllowed: false,
     initializesPaperState: false,
     recurringLedgerDerivationAllowed: false,
+    authenticatedPublisherRequired: true,
+    exactAccountBindingRequired: true,
     unknownIsZero: false,
   });
 }
