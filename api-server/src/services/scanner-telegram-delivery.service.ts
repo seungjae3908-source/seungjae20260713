@@ -1,4 +1,9 @@
 import { logger } from '../lib/logger';
+import {
+  buildTelegramSignalIntelligenceInput,
+  collectTelegramSignalIntelligence,
+  type TelegramSignalDeliveryContext,
+} from './telegram-investment-intelligence.service';
 import type { ScannerAlertCandidate, ScannerAssetClass } from './scanner-signal.types';
 import {
   sendTelegramAlert,
@@ -13,13 +18,16 @@ export type ScannerTelegramSender = (
 export type ScannerTelegramRoom = 'STOCK_ROOM' | 'CRYPTO_ROOM';
 export type ScannerTelegramRoomResolver = (room: ScannerTelegramRoom) => string | null;
 
+const MAX_RICH_ALERTS_PER_BATCH = 3;
+
 function pricePlanDetails(alert: ScannerAlertCandidate): string {
   const entry = alert.entryZone
     ? `${alert.entryZone.from}~${alert.entryZone.to}`
     : '미확정';
   const stop = alert.stopLoss == null ? '미확정' : String(alert.stopLoss);
   const targets = alert.targets.length > 0 ? alert.targets.join(', ') : '미확정';
-  return `승인 대기 신호 · 진입구간 ${entry} · 손절 ${stop} · 목표 ${targets}`;
+  const evidence = alert.evidence.length ? ` · 근거 ${alert.evidence.slice(0, 5).join(' / ')}` : '';
+  return `승인 대기 신호 · 진입구간 ${entry} · 손절 ${stop} · 목표 ${targets}${evidence}`;
 }
 
 export function scannerTelegramRoomFor(assetClass: ScannerAssetClass): ScannerTelegramRoom {
@@ -83,14 +91,34 @@ export function scannerTelegramInput(
   return null;
 }
 
+async function richInput(
+  base: TelegramAlertInput,
+  alert: ScannerAlertCandidate,
+  context: TelegramSignalDeliveryContext,
+): Promise<TelegramAlertInput> {
+  if (process.env.TELEGRAM_SIGNAL_RICH_MEDIA_ENABLED !== 'true') return base;
+  try {
+    const evidence = await collectTelegramSignalIntelligence(alert, context);
+    return buildTelegramSignalIntelligenceInput(base, alert, evidence, context);
+  } catch (error) {
+    logger.warn(
+      { signalId: alert.signalId, errorName: error instanceof Error ? error.name : 'UnknownError' },
+      'scanner Telegram rich evidence unavailable; falling back to base alert',
+    );
+    return base;
+  }
+}
+
 export async function deliverScannerTelegramAlerts(
   alerts: ScannerAlertCandidate[],
   sender: ScannerTelegramSender = sendTelegramAlert,
   resolveRoomChatId: ScannerTelegramRoomResolver = scannerTelegramRoomChatId,
+  context: TelegramSignalDeliveryContext = {},
 ): Promise<void> {
-  await Promise.all(alerts.map(async (alert) => {
-    const input = scannerTelegramInput(alert, resolveRoomChatId);
-    if (!input) return;
+  await Promise.all(alerts.map(async (alert, index) => {
+    const base = scannerTelegramInput(alert, resolveRoomChatId);
+    if (!base) return;
+    const input = index < MAX_RICH_ALERTS_PER_BATCH ? await richInput(base, alert, context) : base;
     try {
       await sender(input);
     } catch (error) {
