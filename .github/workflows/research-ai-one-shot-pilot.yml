@@ -222,11 +222,14 @@ jobs:
                 repo: context.repo.repo,
                 ref: sha,
                 per_page: 100,
+                sort: 'created',
+                direction: 'desc',
               });
               const latest = new Map();
               for (const status of statuses) {
-                const previous = latest.get(status.context);
-                if (!previous || Number(status.id) > Number(previous.id)) latest.set(status.context, status);
+                const contextName = String(status.context ?? '');
+                if (!contextName || latest.has(contextName)) continue;
+                latest.set(contextName, status);
               }
               for (const name of requiredMainStatuses) {
                 if (latest.get(name)?.state !== 'success') return null;
