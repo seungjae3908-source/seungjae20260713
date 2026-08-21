@@ -1,9 +1,9 @@
 import { RefreshCw } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { APP_UPDATE_AVAILABLE_EVENT } from '@/lib/app-update';
+import { APP_UPDATE_AVAILABLE_EVENT, isAppUpdateAvailable } from '@/lib/app-update';
 
 export function AppUpdateBanner() {
-  const [available, setAvailable] = useState(false);
+  const [available, setAvailable] = useState(() => isAppUpdateAvailable());
 
   useEffect(() => {
     const onUpdateAvailable = () => setAvailable(true);
