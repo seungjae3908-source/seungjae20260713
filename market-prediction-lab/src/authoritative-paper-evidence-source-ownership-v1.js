@@ -47,7 +47,7 @@ export const AUTHORITATIVE_PAPER_EVIDENCE_SOURCE_OWNERSHIP = Object.freeze({
       missingDataBehavior: "BLOCKED_DATA; UNKNOWN_NEVER_ZERO",
       crossRuntimePackagingMethod: "LOSSLESS_SNAPSHOT_READER_CONNECTED; AUTHORITATIVE_SCHEDULED_WRITER_REQUIRED",
       ownerStatus: "OWNER_MISSING",
-      callbackStatus: "ENV_SNAPSHOT_READER_ONLY",
+      callbackStatus: "ENV_SNAPSHOT_READER_OR_BLOCKED_DATA_CONTRACT_WIRED",
     }),
     Object.freeze({
       callback: "contractRulesForCard",
@@ -59,7 +59,7 @@ export const AUTHORITATIVE_PAPER_EVIDENCE_SOURCE_OWNERSHIP = Object.freeze({
       missingDataBehavior: "BLOCKED_DATA",
       crossRuntimePackagingMethod: "GENERIC_NOTIONAL_AWARE_OWNER_REQUIRED",
       ownerStatus: "OWNER_MISSING",
-      callbackStatus: "NOT_WIRED",
+      callbackStatus: "BLOCKED_DATA_CONTRACT_WIRED",
     }),
     Object.freeze({
       callback: "publicEvidenceForCard",
@@ -83,7 +83,7 @@ export const AUTHORITATIVE_PAPER_EVIDENCE_SOURCE_OWNERSHIP = Object.freeze({
       missingDataBehavior: "BLOCKED_DATA",
       crossRuntimePackagingMethod: "VALIDATED_ESM_EXACT_SIDECAR_REUSE; PRODUCTION_CALLBACK_OWNER_REQUIRED",
       ownerStatus: "OWNER_MISSING",
-      callbackStatus: "NOT_WIRED",
+      callbackStatus: "BLOCKED_DATA_CONTRACT_WIRED",
     }),
     Object.freeze({
       callback: "supplementalCostEvidenceForCard",
@@ -95,7 +95,7 @@ export const AUTHORITATIVE_PAPER_EVIDENCE_SOURCE_OWNERSHIP = Object.freeze({
       missingDataBehavior: "BLOCKED_DATA; UNKNOWN_NEVER_ZERO",
       crossRuntimePackagingMethod: "OWNER_REQUIRED",
       ownerStatus: "OWNER_MISSING",
-      callbackStatus: "NOT_WIRED",
+      callbackStatus: "BLOCKED_DATA_CONTRACT_WIRED",
     }),
   ]),
   blockedOwnerEvidenceContracts: Object.freeze({
@@ -243,12 +243,14 @@ export const AUTHORITATIVE_PAPER_EVIDENCE_SOURCE_OWNERSHIP = Object.freeze({
   sevenEvidenceOwnerSummary: Object.freeze({
     ownerExists: 3,
     ownerMissing: 4,
-    callbacksWired: 3,
+    callbacksWired: 7,
+    authoritativeOwnersConnected: 3,
+    blockedDataContractsConnected: 4,
     scannerCallbackWired: true,
     scheduledCanonicalWriter: "OWNER_MISSING",
     allOwnersReady: false,
     firstZeroStage: "UNKNOWN",
-    firstBlocker: "AUTHORITATIVE_CALLBACK_SOURCE_UNAVAILABLE",
+    firstBlocker: "AUTHORITATIVE_EVIDENCE_DATA_UNAVAILABLE",
     unknownIsZero: false,
   }),
   executionAuthority: "NONE",

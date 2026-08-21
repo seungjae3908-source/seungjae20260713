@@ -5399,6 +5399,7 @@ async function fetchPublicMarketJson(value, options) {
 
 // src/services/authoritative-paper-evidence-sources.service.ts
 var AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_VERSION = "authoritative-paper-evidence-sources-v1";
+var AUTHORITATIVE_PAPER_BLOCKED_DATA_SOURCE_CONTRACT_VERSION = "authoritative-paper-blocked-data-source-contract-v1";
 var BITGET_BASE_URL = "https://api.bitget.com";
 var FUTURES_LANE = FORWARD_OBSERVER_LANES.find((lane) => lane.market === "CRYPTO_FUTURES");
 function exactSha2(value) {
@@ -5417,6 +5418,24 @@ function publicUrl(request) {
   const url = new URL(request.path, BITGET_BASE_URL);
   url.search = request.query;
   return url;
+}
+function blockedOwnerSource({
+  callback,
+  blocker,
+  provenance
+}) {
+  const source = async (_context) => null;
+  return Object.freeze(Object.assign(source, {
+    authoritativeBlockedData: Object.freeze({
+      schemaVersion: AUTHORITATIVE_PAPER_BLOCKED_DATA_SOURCE_CONTRACT_VERSION,
+      callback,
+      status: "BLOCKED_DATA",
+      ownerStatus: "OWNER_MISSING",
+      blocker,
+      provenance,
+      unknownIsZero: false
+    })
+  }));
 }
 function defaultDependencies() {
   return Object.freeze({
@@ -5471,6 +5490,28 @@ function createAuthoritativePaperEvidenceSourceWiring({
   if (!exactSha2(normalizedSha)) throw new TypeError("authoritative Paper evidence sources require an exact research SHA");
   if (!FUTURES_LANE) throw new Error("FORWARD_OBSERVER_FUTURES_LANE_REQUIRED");
   const dependencies = Object.freeze({ ...defaultDependencies(), ...overrides });
+  const blockedOwnerSources = Object.freeze({
+    paperStateForCard: blockedOwnerSource({
+      callback: "paperStateForCard",
+      blocker: "AUTHORITATIVE_PAPER_STATE_SOURCE_UNAVAILABLE",
+      provenance: "scheduled lossless PaperTradingState writer is not installed; recurring ledger derivation is forbidden"
+    }),
+    contractRulesForCard: blockedOwnerSource({
+      callback: "contractRulesForCard",
+      blocker: "AUTHORITATIVE_CONTRACT_RULES_SOURCE_UNAVAILABLE",
+      provenance: "public contract metadata is partial and exact maintenance tier selection requires authoritative sized notional and risk policy"
+    }),
+    executionObservationForCard: blockedOwnerSource({
+      callback: "executionObservationForCard",
+      blocker: "AUTHORITATIVE_EXECUTION_OBSERVATION_SOURCE_UNAVAILABLE",
+      provenance: "public book simulation is advisory; production target quantity, fill calibration, and latency/liquidity/partial-fill cost owners are absent"
+    }),
+    supplementalCostEvidenceForCard: blockedOwnerSource({
+      callback: "supplementalCostEvidenceForCard",
+      blocker: "AUTHORITATIVE_SUPPLEMENTAL_COST_SOURCE_UNAVAILABLE",
+      provenance: "fees/funding/spread are partial; slippage, liquidity, latency, and partial-fill impacts remain unknown and are never zero-filled"
+    })
+  });
   return Object.freeze({
     async scanBatchForMarket({ market, signal }) {
       if (market !== "CRYPTO_FUTURES") throw new Error("AUTHORITATIVE_SCANNER_MARKET_NOT_OWNED");
@@ -5529,6 +5570,7 @@ function createAuthoritativePaperEvidenceSourceWiring({
       });
       return decision2.status === "OBSERVATION_READY" ? decision2.observation?.snapshot ?? null : null;
     },
+    ...blockedOwnerSources,
     async publicEvidenceForCard({ card, market, signal }) {
       const value = scannerCard(card);
       if (!value || market !== "CRYPTO_FUTURES") return null;
@@ -5563,6 +5605,22 @@ var AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_SAFETY = Object.freeze({
     "paperCandidateForCard",
     "learningSnapshotForCard",
     "publicEvidenceForCard"
+  ]),
+  callbackContractsConnected: Object.freeze([
+    "scanBatchForMarket",
+    "paperCandidateForCard",
+    "learningSnapshotForCard",
+    "paperStateForCard",
+    "contractRulesForCard",
+    "publicEvidenceForCard",
+    "executionObservationForCard",
+    "supplementalCostEvidenceForCard"
+  ]),
+  ownerMissingCallbacks: Object.freeze([
+    "paperStateForCard",
+    "contractRulesForCard",
+    "executionObservationForCard",
+    "supplementalCostEvidenceForCard"
   ]),
   executionAuthority: "NONE",
   privateApiAllowed: false,
@@ -5844,6 +5902,7 @@ var AUTHORITATIVE_PAPER_RUNTIME_PACKAGE_SAFETY = Object.freeze({
   financialMutationAllowed: false
 });
 export {
+  AUTHORITATIVE_PAPER_BLOCKED_DATA_SOURCE_CONTRACT_VERSION,
   AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_SAFETY,
   AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_VERSION,
   AUTHORITATIVE_PAPER_RUNTIME_PACKAGE_SAFETY,
