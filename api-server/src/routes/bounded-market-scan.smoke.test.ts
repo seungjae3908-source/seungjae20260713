@@ -234,7 +234,7 @@ test('US swing 4H canonical mobile request reaches scanner instead of returning 
   await withServer(
     {
       scan: async (request) => {
-        capturedMarket = request.filters.market ?? '';
+        capturedMarket = request.market;
         capturedStrategy = request.strategyMode ?? '';
         capturedTimeframe = String(request.filters.timeframe ?? '');
         return completeResult({ market: 'US', timeframe: '4H' });
