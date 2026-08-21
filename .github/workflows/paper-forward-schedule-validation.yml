@@ -98,6 +98,8 @@ jobs:
             market-prediction-lab/tests/authoritative-paper-runtime-factory-v1.test.js
             market-prediction-lab/tests/authoritative-paper-runtime-package-v1.test.js
             market-prediction-lab/tests/meaningful-search-scheduled-paper-provider-v1.test.js
+            market-prediction-lab/tests/paper-forward-canonical-admission-cutover-v1.test.js
+            market-prediction-lab/tests/paper-forward-research-natural-source-integration-v1.test.js
             market-prediction-lab/tests/paper-forward-schedule-authoritative-source-wiring-v1.test.js
             market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
             market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
