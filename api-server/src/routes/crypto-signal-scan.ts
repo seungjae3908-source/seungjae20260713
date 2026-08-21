@@ -27,6 +27,7 @@ import {
 } from '../services/scanner-access-control.service';
 import { withScannerCanonicalActions } from '../services/scanner-market-action.service';
 import { deliverScannerTelegramAlerts } from '../services/scanner-telegram-delivery.service';
+import { deliverScannerTelegramFollowups } from '../services/telegram-signal-followup.service';
 import {
   ScannerRequestGuardError,
   scannerRequestGuard,
@@ -274,6 +275,7 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
         undefined,
         { timeframe: selectedTimeframe, generatedAt: visibleResult.generatedAt },
       );
+      void deliverScannerTelegramFollowups(visibleResult.cards);
       res.setHeader('Cache-Control', 'no-store, max-age=0');
       res.setHeader('X-Scanner-Request-Id', result.requestId);
       return res.json({
