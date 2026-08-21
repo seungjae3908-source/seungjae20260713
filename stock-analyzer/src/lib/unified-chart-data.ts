@@ -355,24 +355,59 @@ export async function fetchUnifiedChartData(input: {
           );
         }
 
-        throw new UnifiedChartDataError(
-          error instanceof Error ? error.message : '차트 데이터를 불러오지 못했습니다.',
+        const networkError = new UnifiedChartDataError(
+          error instanceof Error ? error.message : '차트 네트워크 요청에 실패했습니다.',
           'network',
           null,
           true,
         );
+        lastError = networkError;
+        if (alternateAvailable && canTryAlternateEndpoint(networkError)) continue;
+        throw networkError;
       } finally {
         attempt?.cleanup();
       }
     }
+    throw lastError ?? new UnifiedChartDataError(
+      '차트 데이터를 불러오지 못했습니다.',
+      'network',
+      null,
+      true,
+    );
   } finally {
     linked.cleanup();
   }
+}
 
-  throw lastError ?? new UnifiedChartDataError(
-    '차트 데이터를 불러오지 못했습니다.',
-    'unavailable' as UnifiedChartErrorKind,
-    null,
-    true,
-  );
+export function unifiedChartDataStatus(
+  data: UnifiedChartData | undefined,
+  failed: boolean,
+  now = Date.now(),
+): UnifiedChartDataStatus {
+  if (failed) return 'unavailable';
+  if (!data || data.normalization.candles.length < 2) return 'insufficient';
+  const timestamp = Date.parse(data.updatedAt ?? data.fetchedAt ?? '');
+  if (!Number.isFinite(timestamp)) return 'delayed';
+
+  const seconds: Record<UnifiedChartTimeframe, number> = {
+    '1m': 60,
+    '3m': 180,
+    '5m': 300,
+    '15m': 900,
+    '30m': 1_800,
+    '1H': 3_600,
+    '4H': 14_400,
+    '1D': 86_400,
+  };
+  const interval = seconds[data.timeframe] * 1_000;
+  const delayedAfter = data.timeframe === '1D'
+    ? interval * 2
+    : Math.max(interval * 2, 10 * 60_000);
+  const staleAfter = data.timeframe === '1D'
+    ? interval * 5
+    : Math.max(interval * 3, 30 * 60_000);
+  const age = now - timestamp;
+  if (age > staleAfter) return 'stale';
+  if (age > delayedAfter) return 'delayed';
+  return 'ok';
 }
