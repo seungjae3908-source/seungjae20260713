@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 const SCHEMA_VERSION = "authoritative-natural-paper-account-ledger-v1";
 const ENTRY_EVIDENCE_VERSION = "authoritative-natural-paper-entry-accounting-v1";
 const MARKET = "CRYPTO_FUTURES";
@@ -44,6 +46,23 @@ function digest(value) {
 
 function immutableSha(value) {
   return typeof value === "string" && /^[0-9a-f]{40}$/u.test(value);
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
+  }
+  if (value !== null && typeof value === "object") {
+    const entries = Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`);
+    return `{${entries.join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function stateDigestSha256(state) {
+  return createHash("sha256").update(canonicalJson(state)).digest("hex");
 }
 
 function clone(value) {
@@ -134,14 +153,31 @@ function validateCleanAuthenticatedSeed(snapshot, expectedPublisherAccountIdSha2
     throw accountError("AUTHORITATIVE_NATURAL_PAPER_SOURCE_SHA_MISMATCH");
   }
   if (!digest(snapshot.stateDigestSha256)
+    || !finite(nowMs)
+    || nowMs <= 0
     || !finite(snapshot.observedAtMs)
+    || snapshot.observedAtMs <= 0
+    || !finite(snapshot.stateUpdatedAtMs)
+    || snapshot.stateUpdatedAtMs <= 0
     || !positive(snapshot.maximumAgeMs)
     || snapshot.observedAtMs > nowMs
+    || snapshot.stateUpdatedAtMs > snapshot.observedAtMs
     || nowMs - snapshot.stateUpdatedAtMs > snapshot.maximumAgeMs) {
     throw accountError("AUTHORITATIVE_NATURAL_PAPER_SNAPSHOT_STALE_OR_INVALID");
   }
   validatePaperState(snapshot.state);
-  if (openPositions(snapshot.state).length !== 0
+  const currentOpenPositionCount = openPositions(snapshot.state).length;
+  if (snapshot.paperStateSchemaVersion !== snapshot.state.schemaVersion
+    || snapshot.accountId !== snapshot.state.account.id
+    || !finite(snapshot.equity)
+    || snapshot.equity !== snapshot.state.account.equity
+    || !Number.isInteger(snapshot.openPositionCount)
+    || snapshot.openPositionCount < 0
+    || snapshot.openPositionCount !== currentOpenPositionCount
+    || snapshot.stateDigestSha256 !== stateDigestSha256(snapshot.state)) {
+    throw accountError("AUTHORITATIVE_NATURAL_PAPER_SNAPSHOT_INTEGRITY_MISMATCH");
+  }
+  if (currentOpenPositionCount !== 0
     || pendingOrders(snapshot.state).length !== 0
     || Math.abs(snapshot.state.account.usedMargin) > EPSILON
     || Math.abs(snapshot.state.account.unrealizedPnl) > EPSILON) {
