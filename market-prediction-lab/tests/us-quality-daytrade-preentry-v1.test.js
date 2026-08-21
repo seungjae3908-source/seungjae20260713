@@ -110,6 +110,19 @@ function baseInput() {
     asOfMs: 8_500,
     relativeVolume: 2.2,
     catalyst: { verified: true, type: "EARNINGS" },
+    catalystEvidence: {
+      publicReadOnly: true,
+      privateApiUsed: false,
+      symbol: "MRK",
+      sourceId: "public-news-catalyst-pit",
+      coverageComplete: true,
+      checkedAtMs: 8_000,
+      validUntilMs: 20_000,
+      coverageStartMs: -86_391_500,
+      coverageEndMs: 8_500,
+      catalystCount: 0,
+      catalysts: [],
+    },
     marketContextEvidence: {
       pointInTime: true,
       sourceId: "public-market-context-pit",
@@ -279,7 +292,7 @@ test("source-backed complete no-event evidence preserves candidate status with p
   input.binaryEventEvidence = noEventEvidence();
   const result = evaluateUsQualityDaytradePreEntry(input);
   assert.equal(result.status, "CANDIDATE");
-  assert.equal(result.reason, "VWAP_FIRST_PULLBACK_REBREAK_LIQUID_EVENT_SAFE");
+  assert.equal(result.reason, "VWAP_FIRST_PULLBACK_REBREAK_LIQUID_CATALYST_EVENT_SAFE");
   assert.equal(result.universeProvenance.status, "PASS");
   assert.equal(result.liquidity.status, "PASS");
   assert.equal(result.liquidity.session, "REGULAR");
@@ -295,6 +308,8 @@ test("source-backed complete no-event evidence preserves candidate status with p
   assert.equal(result.marketContext.marketRegime, "RISK_OFF");
   assert.equal(result.marketContext.sectorRegime, "OUTPERFORMING");
   assert.equal(result.marketContext.timeOfDayBucket, "REGULAR_OPENING_30");
+  assert.equal(result.catalystEvidence.status, "PASS");
+  assert.equal(result.catalystClass, "NO_VERIFIED_CATALYST");
   assert.equal(result.binaryEventRisk.status, "PASS");
 });
 
