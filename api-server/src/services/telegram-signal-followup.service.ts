@@ -182,6 +182,7 @@ export async function deliverScannerTelegramFollowups(
   sender: (input: TelegramAlertInput) => Promise<TelegramAlertResult> = sendTelegramAlert,
   now = Date.now(),
 ): Promise<void> {
+  if (process.env.TELEGRAM_SIGNAL_FOLLOWUP_ENABLED !== 'true') return;
   const cardBySignalId = new Map(cards.map((card) => [card.signalId, card]));
   for (const update of buildTelegramSignalFollowups(cards, now)) {
     const card = cardBySignalId.get(update.signalId);
