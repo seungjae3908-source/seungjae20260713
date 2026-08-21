@@ -5,6 +5,7 @@ import {
   type TelegramSignalDeliveryContext,
 } from './telegram-investment-intelligence.service';
 import type { ScannerAlertCandidate, ScannerAssetClass } from './scanner-signal.types';
+import { markTelegramSignalAnnounced } from './telegram-signal-followup.service';
 import {
   sendTelegramAlert,
   type TelegramAlertInput,
@@ -120,7 +121,10 @@ export async function deliverScannerTelegramAlerts(
     if (!base) return;
     const input = index < MAX_RICH_ALERTS_PER_BATCH ? await richInput(base, alert, context) : base;
     try {
-      await sender(input);
+      const result = await sender(input);
+      if (result.ok || result.skipped === 'DUPLICATE') {
+        markTelegramSignalAnnounced(alert);
+      }
     } catch (error) {
       logger.warn(
         {
