@@ -10,7 +10,10 @@ import {
   getKiwoomToken,
   kiwoomRequest,
 } from './providers/kiwoom';
-import MarketDataService, { resolveKrInteractiveMaxPages } from './services/market-data.service';
+import MarketDataService, {
+  APP_KR_INTRADAY_DEADLINE_MS,
+  resolveKrInteractiveMaxPages,
+} from './services/market-data.service';
 
 const KIWOOM_TEST_ENV_KEYS = [
   'KIWOOM_MODE',
@@ -42,6 +45,28 @@ function chartRows(count: number, offset = 0): Array<Record<string, string>> {
     low_pric: '990',
     trde_qty: '100',
   }));
+}
+
+function yahooChartPayload(count = 6): Record<string, unknown> {
+  const base = Date.parse('2026-08-18T00:00:00.000Z') / 1000;
+  const timestamp = Array.from({ length: count }, (_, index) => base + index * 60);
+  const values = Array.from({ length: count }, (_, index) => 100 + index);
+  return {
+    chart: {
+      result: [{
+        timestamp,
+        indicators: {
+          quote: [{
+            open: values,
+            high: values.map((value) => value + 1),
+            low: values.map((value) => value - 1),
+            close: values,
+            volume: values.map(() => 1000),
+          }],
+        },
+      }],
+    },
+  };
 }
 
 async function withMockKiwoom<T>(
@@ -122,6 +147,11 @@ test('KR interactive page budgets are deterministic by intraday interval', () =>
   assert.equal(resolveKrInteractiveMaxPages('30m'), 8);
   assert.equal(resolveKrInteractiveMaxPages('60m'), 10);
   assert.equal(resolveKrInteractiveMaxPages('4H'), 12);
+});
+
+test('KR interactive provider deadline remains below the browser primary endpoint budget', () => {
+  assert.ok(APP_KR_INTRADAY_DEADLINE_MS > 0);
+  assert.ok(APP_KR_INTRADAY_DEADLINE_MS < 2_500);
 });
 
 test('caller abort reaches Kiwoom token acquisition before credentials or network work', async () => {
@@ -257,6 +287,59 @@ test('app-facing KR 1m/3m routes use the bounded Kiwoom evidence contract', asyn
   assert.equal(chartCalls, 2);
 });
 
+test('KR interactive insufficient Kiwoom evidence never re-enters deep Kiwoom history', async () => {
+  let chartCalls = 0;
+  const mockFetch = mockTokenOrChartFetch(() => {
+    chartCalls += 1;
+    return jsonResponse({ return_code: 0, rows: chartRows(1) });
+  });
+
+  await withMockKiwoom(mockFetch, async () => {
+    const result = await MarketDataService.getCandlesMeta('005930', '1m');
+    assert.equal(result.provider, 'none');
+    assert.equal(result.candles.length, 0);
+    assert.equal(result.fallbackFrom?.provider, 'kiwoom');
+    assert.match(String(result.fallbackFrom?.reason), /INSUFFICIENT_CANDLES/);
+  });
+
+  assert.equal(chartCalls, 1);
+});
+
+test('KR interactive public Yahoo hedge can satisfy the chart without a second Kiwoom pass', async () => {
+  let chartCalls = 0;
+  let yahooCalls = 0;
+  const mockFetch = (async (input: string | URL | Request) => {
+    const url = typeof input === 'string'
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+
+    if (url.endsWith('/oauth2/token')) {
+      return jsonResponse({ return_code: 0, return_msg: 'OK', token: 'test-token' });
+    }
+    if (url.endsWith('/api/dostk/chart')) {
+      chartCalls += 1;
+      return jsonResponse({ return_code: 0, rows: chartRows(1) });
+    }
+    if (/query[12]\.finance\.yahoo\.com\/v8\/finance\/chart\/005930\.KS/.test(url)) {
+      yahooCalls += 1;
+      return jsonResponse(yahooChartPayload());
+    }
+    throw new Error(`unexpected chart fallback URL: ${url}`);
+  }) as typeof fetch;
+
+  await withMockKiwoom(mockFetch, async () => {
+    const result = await MarketDataService.getCandlesMeta('005930', '1m');
+    assert.equal(result.provider, 'yahoo');
+    assert.ok(result.candles.length >= 2);
+    assert.equal(result.fallbackFrom?.provider, 'kiwoom');
+  });
+
+  assert.equal(chartCalls, 1);
+  assert.ok(yahooCalls >= 1);
+});
+
 test('interactive fallback classification keeps deadline/abort/upstream timeout distinct', async () => {
   const { readFile } = await import('node:fs/promises');
   const cwd = process.cwd();
@@ -270,4 +353,8 @@ test('interactive fallback classification keeps deadline/abort/upstream timeout 
   assert.match(source, /시간이 초과되었습니다.*UPSTREAM_TIMEOUT/s);
   assert.match(source, /fallbackFrom:[\s\S]*provider: 'kiwoom'/);
   assert.doesNotMatch(source, /fallbackFrom:[\s\S]*reason:\s*'0'/);
+  assert.doesNotMatch(
+    source,
+    /isBoundedKrIntradayRequest[\s\S]*?super\.getCandlesMeta\(ticker, timeframe\)/,
+  );
 });
