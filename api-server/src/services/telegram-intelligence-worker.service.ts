@@ -7,6 +7,11 @@ import {
   type TelegramReportDestination,
 } from './telegram-intelligence-report.service';
 import {
+  buildTelegramMarketBriefInput,
+  collectTelegramMarketBrief,
+  type TelegramMarketBriefSnapshot,
+} from './telegram-market-brief.service';
+import {
   sendTelegramAlert,
   type TelegramAlertInput,
   type TelegramAlertResult,
@@ -115,6 +120,8 @@ export type TelegramIntelligenceDelivery = (
   input: TelegramAlertInput,
 ) => Promise<TelegramAlertResult>;
 
+export type TelegramBriefCollector = () => Promise<TelegramMarketBriefSnapshot>;
+
 export type TelegramIntelligenceRunResult = {
   duePlans: number;
   attempted: number;
@@ -134,6 +141,7 @@ export class TelegramIntelligenceWorker {
     private readonly store: TelegramIntelligenceStateStore,
     private readonly deliver: TelegramIntelligenceDelivery = sendTelegramAlert,
     private readonly resolveChatId: (destination: TelegramReportDestination) => string | null = telegramDestinationChatId,
+    private readonly collectBrief: TelegramBriefCollector = collectTelegramMarketBrief,
   ) {}
 
   async runOnce(now = new Date()): Promise<TelegramIntelligenceRunResult> {
@@ -160,6 +168,18 @@ export class TelegramIntelligenceWorker {
       });
       result.duePlans = plans.length;
 
+      let briefSnapshot: TelegramMarketBriefSnapshot | null = null;
+      if (plans.length > 0 && process.env.TELEGRAM_DAILY_BRIEF_RICH_ENABLED === 'true') {
+        try {
+          briefSnapshot = await this.collectBrief();
+        } catch (error) {
+          logger.warn(
+            { error: error instanceof Error ? error.message : 'unknown' },
+            'telegram rich market brief unavailable; using safety fallback',
+          );
+        }
+      }
+
       for (const plan of plans) {
         const uniqueChats = new Map<string, TelegramReportDestination>();
         for (const destination of plan.destinations) {
@@ -178,16 +198,27 @@ export class TelegramIntelligenceWorker {
             continue;
           }
           result.attempted += 1;
-          const delivered = await this.deliver({
-            type: 'intelligence_report',
-            market: destination,
-            details: reportDetails(plan.kind, plan.localDate),
-            timestamp: now.toISOString(),
-            destinationChatId: chatId,
-            dedupeKey: deliveryKey,
-            duplicateWindowMs: 24 * 60 * 60 * 1000,
-            cooldownMs: 0,
-          });
+          const alert = briefSnapshot
+            ? buildTelegramMarketBriefInput({
+                kind: plan.kind,
+                localDate: plan.localDate,
+                destination,
+                destinationChatId: chatId,
+                dedupeKey: deliveryKey,
+                now,
+                snapshot: briefSnapshot,
+              })
+            : {
+                type: 'intelligence_report' as const,
+                market: destination,
+                details: reportDetails(plan.kind, plan.localDate),
+                timestamp: now.toISOString(),
+                destinationChatId: chatId,
+                dedupeKey: deliveryKey,
+                duplicateWindowMs: 24 * 60 * 60 * 1000,
+                cooldownMs: 0,
+              };
+          const delivered = await this.deliver(alert);
           if (delivered.ok) {
             await this.store.markDelivered(deliveryKey, now);
             result.delivered += 1;
