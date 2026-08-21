@@ -38,6 +38,7 @@ async function usItems(entry: CatalogEntry): Promise<NewsItem[]> {
       date: dateFromUnix(n.datetime),
       url: n.url,
       tone: toneFromNewsText(`${n.headline} ${n.summary}`, false),
+      summary: typeof n.summary === 'string' && n.summary.trim() ? n.summary.trim() : undefined,
     } as NewsItem));
 }
 
