@@ -29,6 +29,28 @@ function tierBInput() {
       goingConcernRisk: false,
     },
     universeEvidence: {
+      listing: {
+        sourceId: "exchange-listing-pit",
+        pointInTime: true,
+        publicReadOnly: true,
+        privateApiUsed: false,
+        symbol: "QLTY",
+        exchange: "NASDAQ",
+        securityType: "COMMON_STOCK",
+        observedAtMs: 8_000,
+        validFromMs: 1,
+        validToMs: 20_000,
+      },
+      price: {
+        sourceId: "public-price-pit",
+        pointInTime: true,
+        publicReadOnly: true,
+        privateApiUsed: false,
+        symbol: "QLTY",
+        priceUsd: 12,
+        observedAtMs: 8_000,
+        validUntilMs: 20_000,
+      },
       marketCap: {
         sourceId: "issuer-sec-market-cap-pit",
         pointInTime: true,
