@@ -109,12 +109,13 @@ test('server environment credentials can no longer become a user credential fall
   }
 });
 
-test('account connection route is GET-only metadata-only and has no provider network or credential decryption path', () => {
+test('account connection route requires approved-member capability and stays GET-only metadata-only', () => {
   const routeSource = source('api-server/src/routes/account-connections.ts');
   const indexSource = source('api-server/src/routes/index.ts');
 
   assert.match(indexSource, /router\.use\('\/account-connections',\s*accountConnectionsRouter\)/);
   assert.doesNotMatch(indexSource, /router\.use\('\/account-connections',\s*requireAdmin/);
+  assert.match(routeSource, /router\.use\(requireCapability\('canAccessBasicInfo'\)\)/);
   assert.match(routeSource, /router\.get\('\/contract'/);
   assert.match(routeSource, /router\.get\('\/status'/);
   assert.match(routeSource, /router\.get\('\/snapshot'/);
