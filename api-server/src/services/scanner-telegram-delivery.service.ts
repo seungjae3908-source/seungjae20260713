@@ -21,14 +21,25 @@ export type ScannerTelegramRoomResolver = (room: ScannerTelegramRoom) => string 
 
 const MAX_RICH_ALERTS_PER_BATCH = 3;
 
+function formatTargetPlan(targets: readonly number[]): string {
+  if (!targets.length) return 'N/A';
+  return targets.slice(0, 3).map((target, index) => `TP${index + 1} ${target}`).join(' · ');
+}
+
 function pricePlanDetails(alert: ScannerAlertCandidate): string {
   const entry = alert.entryZone
     ? `${alert.entryZone.from}~${alert.entryZone.to}`
-    : '미확정';
-  const stop = alert.stopLoss == null ? '미확정' : String(alert.stopLoss);
-  const targets = alert.targets.length > 0 ? alert.targets.join(', ') : '미확정';
+    : 'N/A';
+  const stop = alert.stopLoss == null ? 'N/A' : String(alert.stopLoss);
+  const sellTargets = formatTargetPlan(alert.targets);
   const evidence = alert.evidence.length ? ` · 근거 ${alert.evidence.slice(0, 5).join(' / ')}` : '';
-  return `승인 대기 신호 · 진입구간 ${entry} · 손절 ${stop} · 목표 ${targets}${evidence}`;
+  return [
+    '승인 대기 신호',
+    `진입가/진입구간 ${entry}`,
+    `분할 매도가 ${sellTargets}`,
+    `손절가 ${stop}`,
+    `실제 주문/체결 아님${evidence}`,
+  ].join(' · ');
 }
 
 export function scannerTelegramRoomFor(assetClass: ScannerAssetClass): ScannerTelegramRoom {
