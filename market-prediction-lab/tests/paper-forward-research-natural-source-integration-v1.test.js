@@ -25,7 +25,7 @@ function collectors() {
   };
 }
 
-test("Research Production keeps missing canonical runtime blocked after observing the sibling Shadow source", async () => {
+test("Research Production scopes missing canonical runtime blocking to CRYPTO_FUTURES", async () => {
   let factoryArgs = null;
   let sourceCalls = 0;
   let sourceInput = null;
@@ -55,14 +55,25 @@ test("Research Production keeps missing canonical runtime blocked after observin
     },
   });
 
+  const kr = await provider.collectPublicEvidence({ market: "KR_STOCK" });
+  const us = await provider.collectPublicEvidence({ market: "US_STOCK" });
   const spot = await provider.collectPublicEvidence({ market: "CRYPTO_SPOT" });
   const futuresPosition = { positionId: "paper-open-1" };
   const futures = await provider.collectPublicEvidence({ market: "CRYPTO_FUTURES", openPositions: [futuresPosition] });
+
   assert.equal(factoryArgs.shadowStatePath, "/var/lib/investment-research-production/forward/shadow-state.json");
   assert.equal(factoryArgs.researchCodeSha, SHA);
   assert.equal(factoryArgs.client != null, true);
   assert.equal(factoryArgs.clock(), NOW);
-  assert.equal(spot.status, "BLOCKED_DATA");
+
+  for (const evidence of [kr, us, spot]) {
+    assert.equal(evidence.status, "READY");
+    assert.equal(evidence.candidates.length, 0);
+    assert.equal(evidence.exits.length, 0);
+    assert.equal(evidence.paperCandidateSource, undefined);
+    assert.equal(evidence.canonicalAdmissionCutover, undefined);
+  }
+
   assert.equal(futures.status, "BLOCKED_DATA");
   assert.equal(futures.blocker, "AUTHORITATIVE_ADMISSION_RUNTIME_UNAVAILABLE");
   assert.equal(futures.candidates.length, 0);
