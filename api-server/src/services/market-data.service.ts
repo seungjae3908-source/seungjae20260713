@@ -63,6 +63,7 @@ function normalizeKiwoomInteractiveFailure(error: unknown, deadlineReached: bool
 
   if (error instanceof Error) {
     if (error.name === 'AbortError') return 'ABORTED';
+    if (/INSUFFICIENT_CANDLES|차트 데이터가 부족/.test(error.message)) return 'INSUFFICIENT_CANDLES';
     if (/시간이 초과되었습니다/.test(error.message)) return 'UPSTREAM_TIMEOUT';
     return `UPSTREAM_ERROR:${error.message}`;
   }
@@ -138,14 +139,10 @@ async function getBoundedKrIntradayCandlesMeta(
       candles,
       provider: 'yahoo',
       fetchedAt: new Date().toISOString(),
-      ...(kiwoomFailure
-        ? {
-            fallbackFrom: {
-              provider: 'kiwoom' as const,
-              reason: kiwoomFailure,
-            },
-          }
-        : {}),
+      fallbackFrom: {
+        provider: 'kiwoom',
+        reason: kiwoomFailure ?? 'HEDGE_WON_BEFORE_KIWOOM_TERMINAL',
+      },
     };
   })();
 
