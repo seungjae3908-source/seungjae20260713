@@ -1,0 +1,541 @@
+name: Research AI One-Shot Pilot
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/research-ai-one-shot-pilot.yml'
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: read
+  statuses: read
+
+concurrency:
+  group: research-ai-one-shot-pilot
+  cancel-in-progress: false
+
+jobs:
+  validate-contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Validate one-shot safety contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          python3 - <<'PY'
+          from pathlib import Path
+          text = Path('.github/workflows/research-ai-one-shot-pilot.yml').read_text()
+          required = [
+              '/run-research-ai-one-shot ',
+              'secrets.GEMINI_API_KEY',
+              'secrets.GROQ_API_KEY',
+              'research-production/bin/autonomous-research-ai.mjs',
+              'AI_PROVIDER_A_READY',
+              'AI_PROVIDER_B_READY',
+              'reviewCalls',
+              'queueJobsCreated',
+              'backtestsExecuted',
+              'LIVE_TRADING=false',
+              'PRIVATE_TRADING_API_ALLOWED=false',
+          ]
+          for token in required:
+              if token not in text:
+                  raise SystemExit(f'missing contract token: {token}')
+          forbidden = [
+              '\nschedule:',
+              '\n  workflow_dispatch:',
+              'systemctl enable',
+              'systemctl start',
+              'systemctl restart',
+              'activate-server.sh --activate',
+              'LIVE_TRADING=true',
+              'REAL_ORDER_ENABLED=true',
+              'PRIVATE_TRADING_API_ALLOWED=true',
+          ]
+          for token in forbidden:
+              if token in text:
+                  raise SystemExit(f'forbidden activation token: {token}')
+          PY
+
+  authorize:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.number == 62 &&
+      github.event.comment.user.login == github.repository_owner &&
+      github.event.comment.author_association == 'OWNER'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    outputs:
+      should_run: ${{ steps.gate.outputs.should_run }}
+      target_sha: ${{ steps.gate.outputs.target_sha }}
+      application_run_id: ${{ steps.gate.outputs.application_run_id }}
+      research_validation_run_id: ${{ steps.gate.outputs.research_validation_run_id }}
+    steps:
+      - name: Authorize exact #555 head and fresh exact-head validation
+        id: gate
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = String(context.payload.comment?.body ?? '').trim();
+            const match = body.match(/^\/run-research-ai-one-shot ([0-9a-f]{40})$/i);
+            if (!match) {
+              core.setOutput('should_run', 'false');
+              core.notice('Not a Research AI one-shot command; ignored.');
+              return;
+            }
+            const targetSha = match[1].toLowerCase();
+            const pr = (await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: 555,
+            })).data;
+            if (pr.state !== 'open' || pr.draft !== true) {
+              core.setFailed('PR #555 must remain open and Draft for this research-only pilot.');
+              return;
+            }
+            if (String(pr.head.sha).toLowerCase() !== targetSha) {
+              core.setFailed(`Target SHA must equal current #555 head: expected=${pr.head.sha} actual=${targetSha}`);
+              return;
+            }
+            for (const path of [
+              'research-production/bin/autonomous-research-ai.mjs',
+              'research-production/src/autonomous-research-ai-runtime.mjs',
+              'market-prediction-lab/src/autonomous-research-free-ai-provider-bridge-v1.js',
+              'market-prediction-lab/src/autonomous-research-pilot-v1.js',
+            ]) {
+              try {
+                await github.rest.repos.getContent({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  path,
+                  ref: targetSha,
+                });
+              } catch {
+                core.setFailed(`Required research runtime path missing at target SHA: ${path}`);
+                return;
+              }
+            }
+
+            const required = [
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: targetSha,
+              per_page: 100,
+            });
+            const latest = new Map();
+            for (const status of statuses) {
+              const previous = latest.get(status.context);
+              if (!previous || Number(status.id) > Number(previous.id)) latest.set(status.context, status);
+            }
+            for (const name of required) {
+              if (latest.get(name)?.state !== 'success') {
+                core.setFailed(`Fresh exact-head required status is not SUCCESS: ${name}`);
+                return;
+              }
+            }
+            const runIds = new Set(required.map((name) => {
+              const matchRun = String(latest.get(name)?.target_url ?? '').match(/\/actions\/runs\/(\d+)/);
+              return matchRun?.[1] ?? null;
+            }));
+            if (runIds.has(null) || runIds.size !== 1) {
+              core.setFailed('Required statuses are not from one coherent exact-head Application CI run.');
+              return;
+            }
+            const applicationRunId = Number([...runIds][0]);
+            const applicationRun = (await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: applicationRunId,
+            })).data;
+            if (
+              String(applicationRun.head_sha).toLowerCase() !== targetSha ||
+              applicationRun.event !== 'pull_request' ||
+              applicationRun.status !== 'completed' ||
+              applicationRun.conclusion !== 'success'
+            ) {
+              core.setFailed('Coherent exact-head Application CI provenance is invalid.');
+              return;
+            }
+
+            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head_sha: targetSha,
+              per_page: 100,
+            });
+            const researchRuns = runs
+              .filter((run) => run.name === 'Research Production Branch Validation')
+              .sort((a, b) => Number(b.id) - Number(a.id));
+            if (!researchRuns.length) {
+              core.setFailed('No exact-head Research Production Branch Validation run exists.');
+              return;
+            }
+            const researchRun = researchRuns[0];
+            if (researchRun.status !== 'completed' || researchRun.conclusion !== 'success') {
+              core.setFailed(`Newest Research Production validation is not successful: ${researchRun.id} ${researchRun.status}/${researchRun.conclusion}`);
+              return;
+            }
+
+            core.setOutput('should_run', 'true');
+            core.setOutput('target_sha', targetSha);
+            core.setOutput('application_run_id', String(applicationRunId));
+            core.setOutput('research_validation_run_id', String(researchRun.id));
+            core.info(`Authorized #555 exact head ${targetSha}; Application CI ${applicationRunId}; Research Production ${researchRun.id}.`);
+
+  run-one-shot:
+    needs: authorize
+    if: needs.authorize.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
+      APPLICATION_RUN_ID: ${{ needs.authorize.outputs.application_run_id }}
+      RESEARCH_VALIDATION_RUN_ID: ${{ needs.authorize.outputs.research_validation_run_id }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      REPOSITORY_URL: https://github.com/${{ github.repository }}.git
+    steps:
+      - name: Require existing FREE AI and SSH secrets without printing values
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$GEMINI_API_KEY" || { echo 'GEMINI_API_KEY_NOT_CONFIGURED' >&2; exit 1; }
+          test -n "$GROQ_API_KEY" || { echo 'GROQ_API_KEY_NOT_CONFIGURED' >&2; exit 1; }
+          test -n "$SSH_HOST" || { echo 'PROD_SSH_HOST_NOT_CONFIGURED' >&2; exit 1; }
+          test -n "$SSH_USER" || { echo 'PROD_SSH_USER_NOT_CONFIGURED' >&2; exit 1; }
+          test -n "$SSH_PRIVATE_KEY" || { echo 'PROD_SSH_PRIVATE_KEY_NOT_CONFIGURED' >&2; exit 1; }
+
+      - name: Configure SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Build opaque one-shot secret packet
+        id: packet
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          packet="$RUNNER_TEMP/research-ai-secret.b64"
+          {
+            printf 'GEMINI_B64='; printf '%s' "$GEMINI_API_KEY" | base64 -w0; printf '\n'
+            printf 'GROQ_B64='; printf '%s' "$GROQ_API_KEY" | base64 -w0; printf '\n'
+          } > "$packet"
+          echo "path=$packet" >> "$GITHUB_OUTPUT"
+
+      - name: Transfer ephemeral secret packet
+        shell: bash
+        env:
+          PACKET: ${{ steps.packet.outputs.path }}
+        run: |
+          set -Eeuo pipefail
+          scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$PACKET" "$SSH_USER@$SSH_HOST:/tmp/research-ai-secret-$GITHUB_RUN_ID.b64"
+
+      - name: Run exact-SHA FREE AI health probe and one four-slot pilot
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          remote_env="$(printf 'TARGET_SHA=%q RUN_ID=%q REPOSITORY_URL=%q' "$TARGET_SHA" "$GITHUB_RUN_ID" "$REPOSITORY_URL")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          SECRET_UPLOAD="/tmp/research-ai-secret-$RUN_ID.b64"
+          ENV_FILE="/tmp/research-ai-one-shot-$RUN_ID.env"
+          WORK_ROOT="/tmp/research-ai-one-shot-$RUN_ID"
+          REPO_ROOT="$WORK_ROOT/repo"
+          STATE_ROOT="/var/lib/investment-research-production"
+          PREFLIGHT_OUT="/tmp/research-ai-preflight-$RUN_ID.json"
+          PILOT_OUT="/tmp/research-ai-result-$RUN_ID.json"
+          APP_SHA_FILE="/opt/stock-app/.deploy/current-sha"
+          RESEARCH_CURRENT="/opt/investment-research/current"
+
+          if [[ "$(id -u)" -eq 0 ]]; then
+            SUDO=()
+          else
+            command -v sudo >/dev/null
+            sudo -n true
+            SUDO=(sudo -n)
+          fi
+          if command -v runuser >/dev/null 2>&1; then
+            RUN_AS=(runuser -u investment-research --)
+          else
+            RUN_AS=("${SUDO[@]}" -u investment-research)
+          fi
+
+          cleanup() {
+            local status=$?
+            if command -v shred >/dev/null 2>&1; then
+              "${SUDO[@]}" shred -u "$ENV_FILE" >/dev/null 2>&1 || true
+              shred -u "$SECRET_UPLOAD" >/dev/null 2>&1 || true
+            else
+              "${SUDO[@]}" rm -f "$ENV_FILE" >/dev/null 2>&1 || true
+              rm -f "$SECRET_UPLOAD" >/dev/null 2>&1 || true
+            fi
+            rm -rf "$WORK_ROOT" "$PREFLIGHT_OUT" >/dev/null 2>&1 || true
+            return "$status"
+          }
+          trap cleanup EXIT
+
+          command -v git >/dev/null
+          command -v node >/dev/null
+          command -v base64 >/dev/null
+          command -v systemctl >/dev/null
+          id investment-research >/dev/null
+          test -d "$STATE_ROOT"
+          node -e 'if(Number(process.versions.node.split(".")[0])<20)process.exit(1)'
+
+          app_sha_before="$(tr -d '[:space:]' < "$APP_SHA_FILE" 2>/dev/null || printf absent)"
+          research_current_before="$(readlink -f "$RESEARCH_CURRENT" 2>/dev/null || true)"
+          timer_state() { systemctl is-active "$1" 2>/dev/null || true; }
+          fast_before="$(timer_state research-production-fast-historical.timer)"
+          long_before="$(timer_state research-production-long-history.timer)"
+          forward_before="$(timer_state research-production-forward.timer)"
+
+          mkdir -p "$WORK_ROOT"
+          git clone --quiet --filter=blob:none --no-checkout "$REPOSITORY_URL" "$REPO_ROOT"
+          git -C "$REPO_ROOT" fetch --quiet --depth 1 origin "$TARGET_SHA"
+          resolved="$(git -C "$REPO_ROOT" rev-parse FETCH_HEAD^{commit})"
+          test "$resolved" = "$TARGET_SHA"
+          git -C "$REPO_ROOT" checkout --quiet --detach "$TARGET_SHA"
+          test "$(git -C "$REPO_ROOT" rev-parse HEAD)" = "$TARGET_SHA"
+          test -f "$REPO_ROOT/research-production/bin/autonomous-research-ai.mjs"
+          chmod -R a+rX "$REPO_ROOT"
+
+          gemini_b64=''
+          groq_b64=''
+          while IFS='=' read -r key value; do
+            case "$key" in
+              GEMINI_B64) gemini_b64="$value" ;;
+              GROQ_B64) groq_b64="$value" ;;
+            esac
+          done < "$SECRET_UPLOAD"
+          test -n "$gemini_b64"
+          test -n "$groq_b64"
+          gemini_raw="$(printf '%s' "$gemini_b64" | base64 -d)"
+          groq_raw="$(printf '%s' "$groq_b64" | base64 -d)"
+          test -n "$gemini_raw"
+          test -n "$groq_raw"
+
+          env_tmp="$WORK_ROOT/ai.env"
+          umask 077
+          {
+            printf 'GEMINI_API_KEY=%q\n' "$gemini_raw"
+            printf 'GROQ_API_KEY=%q\n' "$groq_raw"
+            printf '%s\n' \
+              'LIVE_TRADING=false' \
+              'LIVE_TRADING_ENABLED=false' \
+              'AUTO_TRADING=false' \
+              'REAL_ORDER_ENABLED=false' \
+              'REAL_TRADING_ENABLED=false' \
+              'PRIVATE_API_ENABLED=false' \
+              'PRIVATE_ACCOUNT_ACCESS=false' \
+              'PRIVATE_TRADING_API_ALLOWED=false' \
+              'ORDER_AUTHORITY=false' \
+              'ORDER_SUBMISSION_ENABLED=false'
+          } > "$env_tmp"
+          "${SUDO[@]}" install -o root -g investment-research -m 0640 "$env_tmp" "$ENV_FILE"
+          rm -f "$env_tmp" "$SECRET_UPLOAD"
+          unset gemini_raw groq_raw gemini_b64 groq_b64
+
+          run_ai() {
+            local mode="$1"
+            local output="$2"
+            "${RUN_AS[@]}" env -i \
+              PATH=/usr/local/bin:/usr/bin:/bin \
+              HOME=/nonexistent \
+              LANG=C.UTF-8 \
+              TZ=UTC \
+              bash -c 'set -Eeuo pipefail; set -a; source "$1"; set +a; exec node "$2/research-production/bin/autonomous-research-ai.mjs" "$3" --repo-root "$2" --state-root "$4" --research-sha "$5"' \
+              _ "$ENV_FILE" "$REPO_ROOT" "$mode" "$STATE_ROOT" "$TARGET_SHA" > "$output"
+          }
+
+          run_ai preflight "$PREFLIGHT_OUT"
+          node - "$PREFLIGHT_OUT" <<'NODE'
+          const fs = require('fs');
+          const row = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (row.mode !== 'PREFLIGHT' || row.status !== 'PROVIDER_CONFIGURED_UNPROBED') process.exit(1);
+          if (row.providerNetworkCalls !== 0 || row.FREE_PROVIDER_ONLY !== true || row.PAID_FALLBACK !== false) process.exit(1);
+          if (row.safety?.LIVE_TRADING !== false || row.safety?.REAL_ORDER_ENABLED !== false || row.safety?.PRIVATE_TRADING_API_ALLOWED !== false) process.exit(1);
+          NODE
+
+          run_ai pilot "$PILOT_OUT"
+          node - "$PILOT_OUT" <<'NODE'
+          const fs = require('fs');
+          const row = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const terminal = new Set(['AI_REVIEW_AGREE', 'AI_REVIEW_CONFLICT', 'AI_REVIEW_BOTH_REJECT']);
+          if (!terminal.has(row.status)) process.exit(1);
+          if (row.providerReadiness?.AI_PROVIDER_A_READY !== 'READY') process.exit(1);
+          if (row.providerReadiness?.AI_PROVIDER_B_READY !== 'READY') process.exit(1);
+          if (row.providerReadiness?.AI_DUAL_REVIEW_READY !== 'READY') process.exit(1);
+          if (row.reviewCalls !== 4 || row.reviews !== 4) process.exit(1);
+          if (row.queueJobsCreated !== 0 || row.backtestsExecuted !== 0) process.exit(1);
+          if (row.profitabilityClaimed !== false || row.championCreated !== false || row.finalHoldoutOpened !== false) process.exit(1);
+          if (row.secretValuesExposed !== false || row.FREE_PROVIDER_ONLY !== true || row.PAID_FALLBACK !== false) process.exit(1);
+          if (!/^[0-9a-f]{64}$/.test(String(row.artifactDigest ?? ''))) process.exit(1);
+          if (row.safety?.LIVE_TRADING !== false || row.safety?.REAL_ORDER_ENABLED !== false || row.safety?.PRIVATE_TRADING_API_ALLOWED !== false) process.exit(1);
+          NODE
+
+          app_sha_after="$(tr -d '[:space:]' < "$APP_SHA_FILE" 2>/dev/null || printf absent)"
+          research_current_after="$(readlink -f "$RESEARCH_CURRENT" 2>/dev/null || true)"
+          fast_after="$(timer_state research-production-fast-historical.timer)"
+          long_after="$(timer_state research-production-long-history.timer)"
+          forward_after="$(timer_state research-production-forward.timer)"
+          test "$app_sha_after" = "$app_sha_before"
+          test "$research_current_after" = "$research_current_before"
+          test "$fast_after" = "$fast_before"
+          test "$long_after" = "$long_before"
+          test "$forward_after" = "$forward_before"
+
+          chmod 0600 "$PILOT_OUT"
+          printf '%s\n' \
+            'RESEARCH_AI_ONE_SHOT=PASS' \
+            "TARGET_SHA=$TARGET_SHA" \
+            'FREE_PROVIDER_ONLY=true' \
+            'PAID_FALLBACK=false' \
+            'REVIEW_CALLS=4' \
+            'QUEUE_JOBS_CREATED=0' \
+            'BACKTESTS_EXECUTED=0' \
+            'TIMERS_CHANGED=false' \
+            'APP_DEPLOY_CHANGED=false' \
+            'RESEARCH_CURRENT_CHANGED=false' \
+            'LIVE_TRADING=false' \
+            'PRIVATE_TRADING_API_ALLOWED=false'
+          REMOTE
+
+      - name: Retrieve sanitized pilot result
+        id: result
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out="$RUNNER_TEMP/research-ai-result.json"
+          scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST:/tmp/research-ai-result-$GITHUB_RUN_ID.json" "$out"
+          node - "$out" <<'NODE'
+          const fs = require('fs');
+          const row = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const terminal = new Set(['AI_REVIEW_AGREE', 'AI_REVIEW_CONFLICT', 'AI_REVIEW_BOTH_REJECT']);
+          if (!terminal.has(row.status) || row.reviewCalls !== 4 || row.reviews !== 4) process.exit(1);
+          if (row.queueJobsCreated !== 0 || row.backtestsExecuted !== 0 || row.secretValuesExposed !== false) process.exit(1);
+          console.log(`status=${row.status}`);
+          console.log(`artifact_digest=${row.artifactDigest}`);
+          console.log(`pilot_id=${row.pilotId}`);
+          NODE
+          python3 - "$out" <<'PY'
+          import os, pathlib, sys
+          text = pathlib.Path(sys.argv[1]).read_text()
+          for name in ('GEMINI_API_KEY', 'GROQ_API_KEY'):
+              secret = os.environ.get(name, '')
+              if secret and secret in text:
+                  raise SystemExit('SECRET_VALUE_LEAK_DETECTED')
+          PY
+          echo "path=$out" >> "$GITHUB_OUTPUT"
+
+      - name: Upload immutable sanitized pilot evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-ai-one-shot-${{ env.TARGET_SHA }}
+          path: ${{ steps.result.outputs.path }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Report success to Central Hub
+        uses: actions/github-script@v7
+        env:
+          RESULT_PATH: ${{ steps.result.outputs.path }}
+        with:
+          script: |
+            const fs = require('fs');
+            const row = JSON.parse(fs.readFileSync(process.env.RESULT_PATH, 'utf8'));
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 62,
+              body: [
+                '[RESEARCH_AI_ONE_SHOT]',
+                'status: success',
+                `target_sha: ${process.env.TARGET_SHA}`,
+                `application_ci_run: ${process.env.APPLICATION_RUN_ID}`,
+                `research_validation_run: ${process.env.RESEARCH_VALIDATION_RUN_ID}`,
+                `provider_a: ${row.providerReadiness?.AI_PROVIDER_A_READY}`,
+                `provider_b: ${row.providerReadiness?.AI_PROVIDER_B_READY}`,
+                `dual_review: ${row.providerReadiness?.AI_DUAL_REVIEW_READY}`,
+                `review_status: ${row.status}`,
+                `review_calls: ${row.reviewCalls}`,
+                `reviews: ${row.reviews}`,
+                `pilot_id: ${row.pilotId}`,
+                `artifact_digest: ${row.artifactDigest}`,
+                'queue_jobs_created: 0',
+                'backtests_executed: 0',
+                'secret_values_recorded: false',
+                'timers_changed: false',
+                'app_deploy_changed: false',
+                'research_current_changed: false',
+                'live_trading: false',
+                'private_trading_api_allowed: false',
+                'next: decide whether to add a separately approved recurring Research AI cadence',
+              ].join('\n'),
+            });
+
+      - name: Remove remote result file
+        if: always()
+        shell: bash
+        run: |
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "rm -f /tmp/research-ai-result-$GITHUB_RUN_ID.json /tmp/research-ai-secret-$GITHUB_RUN_ID.b64" || true
+
+      - name: Report fail-closed
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 62,
+              body: [
+                '[RESEARCH_AI_ONE_SHOT]',
+                'status: failed_closed',
+                `target_sha: ${process.env.TARGET_SHA || 'unknown'}`,
+                `workflow_run: ${context.runId}`,
+                'secret_values_recorded: false',
+                'recurring_timer_enabled: false',
+                'live_trading: false',
+                'private_trading_api_allowed: false',
+                'next: inspect this exact run; do not retry until the blocker is understood',
+              ].join('\n'),
+            });
