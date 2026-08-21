@@ -75,11 +75,28 @@ read_optional_metadata_path() {
   local file="$1"
   local root_real="$2"
   local label="$3"
-  local raw resolved
+  local raw parent leaf parent_real candidate resolved
   [[ -e "$file" ]] || return 0
   raw="$(tr -d '\r\n' < "$file")"
   [[ -n "$raw" ]] || return 0
-  resolved="$(canonical_child "$root_real" "$raw")" || fail "$label metadata is outside its allowed root or missing" 16
+  [[ "$raw" == /* ]] || fail "$label metadata path must be absolute" 16
+
+  parent="${raw%/*}"
+  leaf="${raw##*/}"
+  [[ -n "$parent" && -n "$leaf" && "$parent" != "$raw" ]] || fail "$label metadata path is invalid" 16
+  parent_real="$(realpath -e -- "$parent" 2>/dev/null)" || fail "$label metadata parent is missing or unsafe" 16
+  case "$parent_real" in
+    "$root_real"|"$root_real"/*) ;;
+    *) fail "$label metadata is outside its allowed root" 16 ;;
+  esac
+
+  candidate="$parent_real/$leaf"
+  if [[ ! -e "$candidate" && ! -L "$candidate" ]]; then
+    echo "[server-disk-cleanup] $label metadata target is stale; ignoring missing optional path" >&2
+    return 0
+  fi
+
+  resolved="$(canonical_child "$root_real" "$candidate")" || fail "$label metadata escaped its allowed root" 16
   [[ -d "$resolved" ]] || fail "$label metadata does not point to a directory" 17
   printf '%s\n' "$resolved"
 }

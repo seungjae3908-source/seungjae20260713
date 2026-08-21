@@ -1,6 +1,6 @@
 import { Router, type IRouter } from 'express';
 
-import type { AuthenticatedRequest } from '../middleware/auth';
+import { requireCapability, type AuthenticatedRequest } from '../middleware/auth';
 import {
   createSupabaseTradingRepository,
   type TradingRepository,
@@ -254,6 +254,11 @@ function baseResponse(state: BrokerCommonState) {
 }
 
 const router: IRouter = Router();
+
+// Account connection metadata is personal vault state. Authentication alone is
+// insufficient: pending/inactive profiles must not learn whether credentials are
+// configured. Approved associate/regular/admin members share canAccessBasicInfo.
+router.use(requireCapability('canAccessBasicInfo'));
 
 router.get('/contract', async (req: AuthenticatedRequest, res) => {
   res.setHeader('Cache-Control', 'no-store, max-age=0');
