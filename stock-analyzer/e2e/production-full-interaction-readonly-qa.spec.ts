@@ -38,7 +38,7 @@ const LEGACY_REDIRECTS = [
   { from: '/crypto/search', to: '/stocks' },
   { from: '/stock/005930?back=/stocks', to: '/stock-info' },
   { from: '/stock/AAPL?back=/stocks', to: '/stock-info' },
-  { from: '/crypto/BTC?back=/stocks', to: '/stock-info' },
+  { from: '/crypto/KRW-BTC?back=/stocks', to: '/stock-info' },
 ] as const;
 
 const EXPLICIT_SAFE_PATTERN = /(?:^|[\s·:/()\-])(?:새로고침|재시도|다시\s*시도|닫기|펼치기|접기|이전|다음|더보기|상세\s*보기|호가(?:창)?(?:\s*(?:열기|닫기|새로고침))?|refresh|retry|reload|close|expand|collapse|previous|next|details?)(?:$|[\s·:/()\-])/i;
