@@ -5,6 +5,7 @@ import express from 'express';
 import type { AddressInfo } from 'node:net';
 import { requireCapability } from '../middleware/auth';
 import { MEMBER_CAPABILITIES, MEMBER_PERMISSION_MATRIX } from '../../../packages/member-access/src/index.js';
+import { classifyAdminReadFailure } from './admin';
 
 async function startServer() {
   const app = express();
@@ -72,4 +73,20 @@ test('capability route blocks unauthenticated request', async () => {
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+});
+
+test('admin member read storage failure is unavailable, never an empty result or generic 500', () => {
+  assert.deepEqual(classifyAdminReadFailure('MEMBER_LIST_FAILED'), {
+    statusCode: 503,
+    error: 'ADMIN_MEMBER_STORAGE_UNAVAILABLE',
+    message: '회원 목록 저장소를 확인할 수 없습니다.',
+  });
+});
+
+test('admin audit read storage failure is unavailable, never an empty result or generic 500', () => {
+  assert.deepEqual(classifyAdminReadFailure('AUDIT_LIST_FAILED'), {
+    statusCode: 503,
+    error: 'ADMIN_AUDIT_STORAGE_UNAVAILABLE',
+    message: '권한 변경 감사 저장소를 확인할 수 없습니다.',
+  });
 });
