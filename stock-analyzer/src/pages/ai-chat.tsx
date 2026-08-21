@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { Bot, Loader2, Send, Square, UserRound } from 'lucide-react';
+import { useLocation } from 'wouter';
+import { ArrowRight, Bot, Loader2, Send, Square, UserRound, WalletCards } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { useAnalysisSelection } from '@/lib/analysis-selection';
@@ -33,39 +34,40 @@ type AiChatPayload = {
 type HubTab = 'Overview' | 'AI' | 'Portfolio' | 'Events' | 'Performance' | 'Journal';
 const hubTabs: HubTab[] = ['Overview', 'AI', 'Portfolio', 'Events', 'Performance', 'Journal'];
 
-type PortfolioReply = {
-  result?: { ai?: { answer?: string }; assistantContext?: { dataQuality?: string; asOf?: string | null; evidence?: unknown[]; warnings?: string[]; facts?: unknown }; safety?: Record<string, unknown> };
-  code?: string;
-  message?: string;
-};
+function PortfolioShortcutPanel() {
+  const [, navigate] = useLocation();
 
-function PortfolioHubPanel() {
-  const [question, setQuestion] = useState('내 포트폴리오를 요약해줘');
-  const [reply, setReply] = useState<PortfolioReply | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [failure, setFailure] = useState('');
-
-  async function askPortfolio() {
-    if (!question.trim() || loading) return;
-    setLoading(true); setFailure('');
-    try {
-      const response = await authorizedFetch('/api/paper-journal/portfolio-advisor/query', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ message: question.trim() }) });
-      const payload = await response.json().catch(() => null) as PortfolioReply | null;
-      if (!response.ok || !payload?.result) throw new Error(payload?.message || payload?.code || '포트폴리오 답변을 받지 못했습니다.');
-      setReply(payload);
-    } catch (cause) { setFailure(cause instanceof Error ? cause.message : '포트폴리오 요청에 실패했습니다.'); }
-    finally { setLoading(false); }
-  }
-
-  const context = reply?.result?.assistantContext;
   return <main className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-    <section className="rounded-2xl border border-card-border bg-card p-4">
-      <p className="text-xs font-extrabold text-primary">요약 먼저</p><h2 className="mt-1 text-lg font-black">포트폴리오 Copilot</h2>
-      <div className="mt-3 flex gap-2"><input aria-label="포트폴리오 질문" value={question} onChange={(event) => setQuestion(event.target.value)} className="min-w-0 flex-1 rounded-xl border border-card-border bg-background px-3 py-2 text-sm" /><button type="button" onClick={() => void askPortfolio()} disabled={loading || !question.trim()} className="rounded-xl bg-primary px-4 py-2 text-sm font-bold text-primary-foreground disabled:opacity-40">{loading ? '확인 중' : '질문'}</button></div>
-      <div className="mt-2 flex flex-wrap gap-2">{['내 포트폴리오를 요약해줘', '가장 위험한 종목은?', 'BTC가 10% 하락하면?'].map((sample) => <button type="button" key={sample} onClick={() => setQuestion(sample)} className="rounded-full border border-card-border px-3 py-1 text-[11px] font-bold">{sample}</button>)}</div>
+    <section className="rounded-2xl border border-card-border bg-card p-5" data-testid="information-portfolio-ai-shortcut">
+      <div className="flex items-start gap-3">
+        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+          <WalletCards className="h-5 w-5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-extrabold text-primary">내 자산 AI</p>
+          <h2 className="mt-1 text-lg font-black">포트폴리오 AI 진단</h2>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            총자산·손익·비중·집중도·상관관계·위험 데이터를 포트폴리오 탭에서 한 번에 보고, 서버가 계산한 사실만 AI가 설명합니다.
+          </p>
+        </div>
+      </div>
+      <div className="mt-4 grid gap-2 text-xs font-bold text-muted-foreground sm:grid-cols-3">
+        <span className="rounded-xl bg-muted/50 px-3 py-2">Gemini Free → Groq Free</span>
+        <span className="rounded-xl bg-muted/50 px-3 py-2">읽기 전용 · 주문 권한 없음</span>
+        <span className="rounded-xl bg-muted/50 px-3 py-2">PARTIAL / 누락 데이터 보존</span>
+      </div>
+      <button
+        type="button"
+        onClick={() => navigate('/portfolio?focus=ai')}
+        className="mt-4 flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-black text-primary-foreground"
+      >
+        내 포트폴리오 분석 열기
+        <ArrowRight className="h-4 w-4" />
+      </button>
+      <p className="mt-3 text-[11px] font-bold leading-5 text-muted-foreground">
+        AI가 자산금액·수익률·위험 수치를 새로 만들지 않고, 기존 Portfolio Intelligence의 canonical typed facts만 설명합니다.
+      </p>
     </section>
-    {failure ? <p role="alert" className="mt-3 rounded-xl bg-destructive/10 p-3 text-sm text-destructive">{failure}</p> : null}
-    {reply?.result ? <section className="mt-3 space-y-3 rounded-2xl border border-card-border bg-card p-4"><p className="whitespace-pre-wrap text-sm leading-6">{reply.result.ai?.answer || '설명 응답이 없습니다.'}</p><div className="flex flex-wrap gap-2 text-[11px]"><span className="rounded-full bg-primary/10 px-2 py-1 font-bold">{context?.dataQuality || 'NOT_AVAILABLE'}</span><span className="rounded-full bg-muted px-2 py-1">기준 {context?.asOf ? formatBasisTime(context.asOf) : '미제공'}</span><span className="rounded-full bg-muted px-2 py-1">읽기 전용 · 주문 권한 없음</span></div><details className="rounded-xl border border-card-border p-3 text-xs"><summary className="cursor-pointer font-extrabold">근거 보기</summary><pre className="mt-3 max-w-full overflow-x-auto whitespace-pre-wrap break-words text-[11px]">{JSON.stringify({ provenance: context?.evidence ?? [], warnings: context?.warnings ?? [], facts: context?.facts ?? null, safety: reply.result.safety ?? {} }, null, 2)}</pre></details></section> : null}
   </main>;
 }
 
@@ -171,7 +173,7 @@ export default function AiChatPage() {
         {selection && <p className="mt-2 text-[10px] font-bold text-muted-foreground">선택 종목: {selection.displayName || selection.symbol} · {selection.market} · {selection.symbol}</p>}
       </header>
       <nav aria-label="Information Hub 탭" className="sticky top-0 z-20 grid shrink-0 grid-cols-3 gap-1 border-b border-card-border bg-background/95 p-2 backdrop-blur sm:grid-cols-6">{hubTabs.map((tab) => <button type="button" key={tab} aria-current={activeTab === tab ? 'page' : undefined} onClick={() => setActiveTab(tab)} className={cn('min-w-0 rounded-lg px-2 py-2 text-[11px] font-extrabold', activeTab === tab ? 'bg-primary text-primary-foreground' : 'bg-card text-muted-foreground')}>{tab}</button>)}</nav>
-      {activeTab === 'Portfolio' ? <PortfolioHubPanel /> : activeTab !== 'AI' ? <PlaceholderPanel tab={activeTab} /> : <>
+      {activeTab === 'Portfolio' ? <PortfolioShortcutPanel /> : activeTab !== 'AI' ? <PlaceholderPanel tab={activeTab} /> : <>
       <main className="min-h-0 flex-1 overflow-y-auto px-4 py-4" aria-live="polite">
         <div className="space-y-3">
           {messages.map((message) => <article key={message.id} className={cn('flex gap-2', message.role === 'user' && 'flex-row-reverse')}>
