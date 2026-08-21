@@ -78,7 +78,7 @@ jobs:
           echo "checkout_mode=DETACHED"
 
   validate:
-    name: Typecheck, unit, smoke, and build
+    name: ${{ github.event_name == 'pull_request' && 'PR Exact Application CI' || 'Typecheck, unit, smoke, and build' }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -142,6 +142,25 @@ jobs:
         run: pnpm --dir stock-analyzer run build
       - name: Build backend production bundle
         run: pnpm --dir api-server run build:server
+      - name: Publish verified Application CI result
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const result = '${{ job.status }}' || 'failure';
+            const sha = process.env.APPLICATION_STATUS_SHA;
+            const statusContext = 'application-ci/verified';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, { owner: context.repo.owner, repo: context.repo.repo, ref: sha, per_page: 100 });
+            const latestStatus = statuses
+              .filter((status) => status.context === statusContext)
+              .sort((left, right) => right.id - left.id)[0];
+            if (latestStatus?.target_url !== runUrl) {
+              core.notice(`A newer run owns ${statusContext} for ${sha}; skipping stale application status update.`);
+              return;
+            }
+            const state = result === 'success' ? 'success' : result === 'cancelled' ? 'error' : 'failure';
+            await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state, target_url: runUrl, description: `Application CI run ${context.runId}: ${result}`, context: statusContext });
 
   browser-ui:
     name: Playwright desktop and mobile application UI
@@ -388,38 +407,6 @@ jobs:
             }
             const state = result === 'success' ? 'success' : result === 'cancelled' ? 'error' : 'failure';
             await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state, target_url: runUrl, description: `AI privacy run ${context.runId}: ${result}`, context: statusContext });
-
-  publish-validation:
-    name: ${{ github.event_name == 'pull_request' && 'PR Exact Application CI' || 'Publish Application CI conclusion' }}
-    needs:
-      - exact-head
-      - validate
-      - browser-ui
-      - database-rls
-      - security-integration
-      - ai-privacy
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Publish verified Application CI result
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const results = ['${{ needs.exact-head.result }}', '${{ needs.validate.result }}', '${{ needs.browser-ui.result }}', '${{ needs.database-rls.result }}', '${{ needs.security-integration.result }}', '${{ needs.ai-privacy.result }}'];
-            const result = results.every((item) => item === 'success') ? 'success' : results.some((item) => item === 'cancelled') ? 'cancelled' : 'failure';
-            const sha = process.env.APPLICATION_STATUS_SHA;
-            const statusContext = 'application-ci/verified';
-            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, { owner: context.repo.owner, repo: context.repo.repo, ref: sha, per_page: 100 });
-            const latestStatus = statuses
-              .filter((status) => status.context === statusContext)
-              .sort((left, right) => right.id - left.id)[0];
-            if (latestStatus?.target_url !== runUrl) {
-              core.notice(`A newer run owns ${statusContext} for ${sha}; skipping stale application status update.`);
-              return;
-            }
-            const state = result === 'success' ? 'success' : result === 'cancelled' ? 'error' : 'failure';
-            await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state, target_url: runUrl, description: `Application CI run ${context.runId}: ${result}`, context: statusContext });
 
   network-smoke:
     name: Bitget public API smoke (non-blocking)
