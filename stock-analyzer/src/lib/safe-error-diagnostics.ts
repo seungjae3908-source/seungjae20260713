@@ -21,6 +21,11 @@ function safeToken(value: string | null | undefined, fallback = 'NOT_AVAILABLE')
     .replace(/[^A-Za-z0-9가-힣._:+/ -]/g, '?');
 }
 
+function safeSha(value: string | null | undefined) {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  return /^[0-9a-f]{40}$/.test(normalized) ? normalized : 'NOT_AVAILABLE';
+}
+
 export function safeErrorPath(pathname: string) {
   const pathOnly = String(pathname || '/')
     .split('?')[0]
@@ -39,8 +44,7 @@ export async function readPublicDeploySha() {
     });
     if (!response.ok) return 'NOT_AVAILABLE';
     const payload = await response.json() as DeploymentHealth;
-    const sha = String(payload.deploySha ?? '').trim().toLowerCase();
-    return /^[0-9a-f]{40}$/.test(sha) ? sha : 'NOT_AVAILABLE';
+    return safeSha(String(payload.deploySha ?? ''));
   } catch {
     return 'NOT_AVAILABLE';
   }
@@ -53,7 +57,7 @@ export function formatSafeErrorDiagnostics(input: SafeErrorDiagnosticsInput) {
   return [
     '[APP_ERROR_DIAGNOSTICS]',
     `path: ${safeErrorPath(input.pathname)}`,
-    `app_sha: ${safeToken(input.appSha)}`,
+    `app_sha: ${safeSha(input.appSha)}`,
     `provider: ${safeToken(input.provider)}`,
     `error_code: ${safeToken(input.errorCode, 'UNKNOWN')}`,
     `occurred_at: ${occurredAt}`,
