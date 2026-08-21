@@ -1,0 +1,135 @@
+{
+  "schemaVersion": 1,
+  "pilotId": "AUTONOMOUS_RESEARCH_FACTORY_REAL_SOURCE_PILOT_V1",
+  "generatedAt": "2026-08-21T05:35:00.311Z",
+  "researchCodeSha": "e9c53002df71177a3f1934281dd8158170d8d411",
+  "sourceFingerprints": [
+    "22811ad23c87807eb3dbffce54a4a999137b6c7b227be3b27569d5e495b9c05b",
+    "78b28715152b360dddb37d94218d04ebc04ced6d8167bc1524959dc8680af67d",
+    "9c207412fc91cfe629f0325c57765deeddffda1f5d85960b062fc752aabe8281",
+    "a6fec2044fe82e0f5ed115fb1cb71c6951c0e1c7948408bea11b08ef09c7837c",
+    "bc9b4ca9bb5d148ec32ccdc71d0215d25ef3b7478467309cc381433eddc2455d"
+  ],
+  "aiReadinessDigest": "932b3eb0023178020411ad4371545e79caefb87ba7231795ec8be5c68111b868",
+  "strategyIdentities": [
+    {
+      "pilotId": "FAMA_FRENCH_2012_MOMENTUM",
+      "strategyId": "strategy:46b239fcfa47a28e9e2f89c21f3dd192671f318d243baee273cda6e33976a794",
+      "strategyFamilyId": "strategy-family:5520ad40a7bf915f6e3ecdf19b2d48c1c3867c90215678dd37ad7518b611429c",
+      "variantId": "variant:a4387b0d2d4f90155c663f8070b4a0b3e3cf37fbe6d3ec3d746c249c1dd25e40",
+      "parameterHash": "2f0268dec99c3c768de678ecd50fd8102fbb939a3da4c502593eb94efc228e33",
+      "formulaFingerprint": "940b2394843663e6c64de35b0792f24d9a9fbb403239e0e8b6d2f0d4e27572b9",
+      "researchCodeSha": "e9c53002df71177a3f1934281dd8158170d8d411",
+      "costPolicyVersion": "PILOT_COST_POLICY_CALIBRATION_REQUIRED_V1",
+      "decisionPolicyVersion": "PILOT_PREQUEUE_DECISION_V1"
+    },
+    {
+      "pilotId": "BROCK_LAKONISHOK_LEBARON_1992",
+      "strategyId": "strategy:267f92ff232ad804c3317671efdea109563c287857174b291fc589a627ce6e3b",
+      "strategyFamilyId": "strategy-family:ca76ece36c95708e89e0d5ba6cf4bd8e36ec48ba3e99b50bd4e15af862884fca",
+      "variantId": "variant:a58987b4fdbe7d6048f6d642fdae602487e798ed8cc3c1524c34176f9de79b73",
+      "parameterHash": "6fc2ab6409dc62caee7562a130761a2e31c5c1f53e672a8f9e73d632153f4ea6",
+      "formulaFingerprint": "74e63201270950f2ae43cbe3d2fa316dd8719db85e5ce67db335dd9140d5ba74",
+      "researchCodeSha": "e9c53002df71177a3f1934281dd8158170d8d411",
+      "costPolicyVersion": "PILOT_COST_POLICY_CALIBRATION_REQUIRED_V1",
+      "decisionPolicyVersion": "PILOT_PREQUEUE_DECISION_V1"
+    },
+    {
+      "pilotId": "CHOI_2014_PHYSICAL_MOMENTUM",
+      "strategyId": "strategy:971ae524eefa364131fa7a59d36cf99c519747bbad40a1f34bb078f9a528058c",
+      "strategyFamilyId": "strategy-family:ebcf769faff749d66bbf2bdaf49929029a7f67237a768d676ffc78dc190522dd",
+      "variantId": "variant:388d9c85f1cd1970a3958718342cc032c5be8c186277f1ebdce36962f976fb05",
+      "parameterHash": "36cb597af1bdb24210806edfba961e7cf597bd0bc0b53d5bb63e0141ae87478f",
+      "formulaFingerprint": "fcfee32672a273b5af89dcfda81b8ee9db7c4e73c2c164959aa7dc3d71183ace",
+      "researchCodeSha": "e9c53002df71177a3f1934281dd8158170d8d411",
+      "costPolicyVersion": "PILOT_COST_POLICY_CALIBRATION_REQUIRED_V1",
+      "decisionPolicyVersion": "PILOT_PREQUEUE_DECISION_V1"
+    }
+  ],
+  "prequeueDecisions": [
+    {
+      "pilotId": "FAMA_FRENCH_2012_MOMENTUM",
+      "status": "NEEDS_REVIEW",
+      "decisionDigest": "30363cc694327d0fa90f09a1334ed59b982d3643c01cfb54c23b38edb34d4f10"
+    },
+    {
+      "pilotId": "BROCK_LAKONISHOK_LEBARON_1992",
+      "status": "BLOCKED_DATA",
+      "decisionDigest": "8120bfa118e7eb1ba35f53b2396b494ffc3ae9d9ee582553cbaee52ff3d4e9f7"
+    },
+    {
+      "pilotId": "GATEV_GOETZMANN_ROUWENHORST_2006",
+      "status": "INVALID_STRATEGY",
+      "decisionDigest": "f7d49c61acbabd363f13b75053072317b2727d194ee89415c75bb2a02fe20744"
+    },
+    {
+      "pilotId": "CHOI_2014_PHYSICAL_MOMENTUM",
+      "status": "BLOCKED_DATA",
+      "decisionDigest": "f740a869035de68d9705d4ffec5431675caabd73328dcbd34ce6d7d7da0b93d1"
+    },
+    {
+      "pilotId": "LIU_TSYVINSKI_WU_2022",
+      "status": "INVALID_STRATEGY",
+      "decisionDigest": "066d8304262271462d11ca2d9c6a9a42f341399f8189eb4f15da630810b74ebc"
+    }
+  ],
+  "aiReviewEvidence": {
+    "status": "AI_RESEARCH_UNAVAILABLE",
+    "providerA": {
+      "slot": "AI_PROVIDER_A",
+      "providerName": "NOT_CONFIGURED",
+      "modelName": "NOT_CONFIGURED",
+      "availability": "UNAVAILABLE",
+      "roleSupport": [],
+      "billingTier": "FREE",
+      "lastCheck": "2026-08-21T05:35:00.311Z",
+      "failureReason": "PROVIDER_NOT_CONFIGURED",
+      "healthState": "UNAVAILABLE",
+      "readinessFingerprint": "950a8f0a671d72b53b87b39765e9e54f332f3d903d10984a81ae97484294c5cf"
+    },
+    "providerB": {
+      "slot": "AI_PROVIDER_B",
+      "providerName": "NOT_CONFIGURED",
+      "modelName": "NOT_CONFIGURED",
+      "availability": "UNAVAILABLE",
+      "roleSupport": [],
+      "billingTier": "FREE",
+      "lastCheck": "2026-08-21T05:35:00.311Z",
+      "failureReason": "PROVIDER_NOT_CONFIGURED",
+      "healthState": "UNAVAILABLE",
+      "readinessFingerprint": "c819b0fb820d76f9a8c715c040808fd3d31068f658b6afa04d8f929bab59bed9"
+    },
+    "roleReversalRequired": true,
+    "reviewCalls": [],
+    "disagreementReason": "AI_RESEARCH_UNAVAILABLE",
+    "providerCallAttempted": false,
+    "paidFallbackUsed": false
+  },
+  "queueEvidence": {
+    "canonicalOwner": "#226",
+    "experimentDedupOwner": "#482",
+    "state": "PREQUEUE_GATED",
+    "createdJobCount": 0,
+    "createdJobs": [],
+    "competingQueueCreated": false
+  },
+  "runtimeEvidence": {
+    "state": "WAITING_FOR_RUNTIME",
+    "canonicalOwner": "#226",
+    "queueValidatedByDeterministicTests": true,
+    "workerHandoffValidatedByDeterministicTests": true,
+    "evidencePersistenceValidatedByDeterministicTests": true,
+    "serverActivated": false,
+    "timerActivated": false
+  },
+  "backtestEvidence": {
+    "status": "NOT_STARTED_PREQUEUE_GATE",
+    "executedCount": 0,
+    "metrics": "NOT_AVAILABLE",
+    "profitabilityClaimed": false,
+    "championSelected": false
+  },
+  "finalHoldoutEvidence": "NOT_OPENED",
+  "evidenceDigest": "e066c9bb08fc5f1c5257b140fed7380e0e2737f0c69e172d48f42e9ed032fcf7",
+  "immutable": true
+}
