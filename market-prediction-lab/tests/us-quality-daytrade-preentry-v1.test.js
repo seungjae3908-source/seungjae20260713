@@ -31,6 +31,28 @@ function baseInput() {
       goingConcernRisk: false,
     },
     universeEvidence: {
+      listing: {
+        sourceId: "exchange-listing-pit",
+        pointInTime: true,
+        publicReadOnly: true,
+        privateApiUsed: false,
+        symbol: "MRK",
+        exchange: "NYSE",
+        securityType: "COMMON_STOCK",
+        observedAtMs: 8_000,
+        validFromMs: 1,
+        validToMs: 20_000,
+      },
+      price: {
+        sourceId: "public-price-pit",
+        pointInTime: true,
+        publicReadOnly: true,
+        privateApiUsed: false,
+        symbol: "MRK",
+        priceUsd: 150,
+        observedAtMs: 8_000,
+        validUntilMs: 20_000,
+      },
       marketCap: {
         sourceId: "issuer-sec-market-cap-pit",
         pointInTime: true,
@@ -153,6 +175,24 @@ test("pre-entry blocks before technical evaluation when point-in-time universe e
   assert.equal(result.volatility, null);
   assert.equal(result.marketContext, null);
   assert.equal(result.binaryEventRisk, null);
+});
+
+test("pre-entry requires source-backed listing identity before technical evaluation", () => {
+  const input = baseInput();
+  delete input.universeEvidence.listing;
+  const result = evaluateUsQualityDaytradePreEntry(input);
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.equal(result.reason, "LISTING_PROVENANCE_REQUIRED");
+  assert.equal(result.technicalSetup, null);
+});
+
+test("pre-entry requires fresh point-in-time price provenance before technical evaluation", () => {
+  const input = baseInput();
+  input.universeEvidence.price.validUntilMs = 8_000;
+  const result = evaluateUsQualityDaytradePreEntry(input);
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.equal(result.reason, "PRICE_EVIDENCE_STALE");
+  assert.equal(result.technicalSetup, null);
 });
 
 test("pre-entry rejects future market-cap provenance before technical evaluation", () => {
