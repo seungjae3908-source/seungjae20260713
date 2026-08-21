@@ -13,6 +13,7 @@ on:
       - market-prediction-lab/scripts/run-us-microcap-intraday-ladder-v1.py
       - market-prediction-lab/scripts/run-us-microcap-intraday-risk-grid-v1.py
       - market-prediction-lab/scripts/build-us-microcap-sec-dilution-evidence-v1.py
+      - market-prediction-lab/scripts/build-us-microcap-pit-risk-manifest-v1.py
       - market-prediction-lab/scripts/apply-us-microcap-pit-risk-gate-v1.py
       - market-prediction-lab/scripts/compare-us-microcap-rolling-window-v1.py
       - .github/workflows/research-production-microcap-task.yml
@@ -45,6 +46,9 @@ jobs:
 
       - name: Run microcap SEC dilution self-test
         run: python3 market-prediction-lab/scripts/build-us-microcap-sec-dilution-evidence-v1.py --self-test
+
+      - name: Run microcap PIT manifest builder self-test
+        run: python3 market-prediction-lab/scripts/build-us-microcap-pit-risk-manifest-v1.py --self-test
 
       - name: Run microcap PIT risk-gate self-test
         run: python3 market-prediction-lab/scripts/apply-us-microcap-pit-risk-gate-v1.py --self-test
@@ -90,6 +94,7 @@ jobs:
             'market-prediction-lab/scripts/run-us-microcap-intraday-ladder-v1.py' \
             'market-prediction-lab/scripts/run-us-microcap-intraday-risk-grid-v1.py' \
             'market-prediction-lab/scripts/build-us-microcap-sec-dilution-evidence-v1.py' \
+            'market-prediction-lab/scripts/build-us-microcap-pit-risk-manifest-v1.py' \
             'market-prediction-lab/scripts/apply-us-microcap-pit-risk-gate-v1.py' \
             'market-prediction-lab/scripts/compare-us-microcap-rolling-window-v1.py'; do
             grep -Fq -- "- $DEP" "$FILE" || { echo "missing dependency trigger: $DEP"; exit 12; }
