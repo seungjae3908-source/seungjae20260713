@@ -59,6 +59,32 @@ function baseInput() {
     asOfMs: 8_500,
     relativeVolume: 2.2,
     catalyst: { verified: true, type: "EARNINGS" },
+    marketContextEvidence: {
+      pointInTime: true,
+      sourceId: "public-market-context-pit",
+      marketTimezone: "America/New_York",
+      session: "REGULAR",
+      checkedAtMs: 8_000,
+      validUntilMs: 20_000,
+      sessionStartMs: 1,
+      sessionEndMs: 23_400_001,
+      maxBenchmarkAgeMs: 5_000,
+      maxBenchmarkSkewMs: 2_000,
+      indexEvidence: {
+        sourceId: "spy-pit",
+        symbol: "SPY",
+        pointInTime: true,
+        observedAtMs: 8_000,
+        returnPct: -0.4,
+      },
+      sectorEvidence: {
+        sourceId: "xlv-pit",
+        symbol: "XLV",
+        pointInTime: true,
+        observedAtMs: 8_000,
+        returnPct: 0.2,
+      },
+    },
     binaryEventPolicy: { preEventBlackoutMinutes: 120, postEventCooldownMinutes: 60 },
   };
 }
@@ -95,6 +121,7 @@ test("pre-entry blocks before technical evaluation when point-in-time universe e
   assert.equal(result.reason, "UNIVERSE_EVIDENCE_REQUIRED");
   assert.equal(result.technicalSetup, null);
   assert.equal(result.volatility, null);
+  assert.equal(result.marketContext, null);
   assert.equal(result.binaryEventRisk, null);
 });
 
@@ -107,16 +134,38 @@ test("pre-entry rejects future market-cap provenance before technical evaluation
   assert.equal(result.technicalSetup, null);
 });
 
+test("technical candidate is blocked when point-in-time market context evidence is missing", () => {
+  const input = baseInput();
+  input.binaryEventEvidence = noEventEvidence();
+  delete input.marketContextEvidence;
+  const result = evaluateUsQualityDaytradePreEntry(input);
+  assert.equal(result.technicalSetup.status, "CANDIDATE");
+  assert.equal(result.volatility.status, "PASS");
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.equal(result.reason, "MARKET_CONTEXT_EVIDENCE_REQUIRED");
+  assert.equal(result.binaryEventRisk, null);
+});
+
+test("stale sector/index regime evidence blocks candidate promotion", () => {
+  const input = baseInput();
+  input.binaryEventEvidence = noEventEvidence();
+  input.marketContextEvidence.indexEvidence.observedAtMs = 1_000;
+  const result = evaluateUsQualityDaytradePreEntry(input);
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.equal(result.reason, "INDEX_EVIDENCE_STALE");
+});
+
 test("technical candidate is blocked when binary-event evidence is missing", () => {
   const result = evaluateUsQualityDaytradePreEntry(baseInput());
   assert.equal(result.technicalSetup.status, "CANDIDATE");
   assert.equal(result.universeProvenance.status, "PASS");
   assert.equal(result.volatility.status, "PASS");
+  assert.equal(result.marketContext.status, "PASS");
   assert.equal(result.status, "BLOCKED_DATA");
   assert.equal(result.reason, "BINARY_EVENT_EVIDENCE_REQUIRED");
 });
 
-test("source-backed complete no-event evidence preserves candidate status with point-in-time volatility metrics", () => {
+test("source-backed complete no-event evidence preserves candidate status with point-in-time volatility and market context", () => {
   const input = baseInput();
   input.binaryEventEvidence = noEventEvidence();
   const result = evaluateUsQualityDaytradePreEntry(input);
@@ -128,6 +177,10 @@ test("source-backed complete no-event evidence preserves candidate status with p
   assert.ok(result.volatility.atrPct > 0);
   assert.ok(result.volatility.realizedVolatilityPct > 0);
   assert.equal(result.volatility.lookaheadFree, true);
+  assert.equal(result.marketContext.status, "PASS");
+  assert.equal(result.marketContext.marketRegime, "RISK_OFF");
+  assert.equal(result.marketContext.sectorRegime, "OUTPERFORMING");
+  assert.equal(result.marketContext.timeOfDayBucket, "REGULAR_OPENING_30");
   assert.equal(result.binaryEventRisk.status, "PASS");
 });
 
