@@ -6,8 +6,23 @@ import {
   withFiniteDeadline,
 } from '@/lib/auth-bootstrap';
 
+const MARKET_INFORMATION_REQUEST_TIMEOUT_MS = 2_500;
+
 function abortReason(signal: AbortSignal): unknown {
   return signal.reason ?? new DOMException('The operation was aborted.', 'AbortError');
+}
+
+function requestPath(input: RequestInfo | URL): string {
+  const raw = typeof input === 'string'
+    ? input
+    : input instanceof URL
+      ? input.toString()
+      : input.url;
+  try {
+    return new URL(raw, window.location.origin).pathname;
+  } catch {
+    return '';
+  }
 }
 
 export type AuthorizedFetchOptions = {
@@ -32,20 +47,27 @@ export async function authorizedFetch(
   const signal = init.signal ?? getActiveQuerySignal();
   if (signal?.aborted) throw abortReason(signal);
 
+  const marketInformationRequest = requestPath(input).startsWith('/api/market-information/');
   const timeoutMs = options.timeoutMs === undefined
-    ? APP_API_REQUEST_TIMEOUT_MS
+    ? marketInformationRequest
+      ? MARKET_INFORMATION_REQUEST_TIMEOUT_MS
+      : APP_API_REQUEST_TIMEOUT_MS
     : options.timeoutMs;
   if (timeoutMs !== null && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) {
     throw new Error(`invalid app API request timeout: ${timeoutMs}`);
   }
 
   const controller = new AbortController();
+  let timedOut = false;
   const handleParentAbort = () => controller.abort(signal ? abortReason(signal) : undefined);
   signal?.addEventListener('abort', handleParentAbort, { once: true });
   const timeout = timeoutMs === null
     ? null
     : window.setTimeout(
-      () => controller.abort(new DOMException('App API request timed out.', 'TimeoutError')),
+      () => {
+        timedOut = true;
+        controller.abort(new DOMException('App API request timed out.', 'TimeoutError'));
+      },
       timeoutMs,
     );
 
@@ -62,7 +84,21 @@ export async function authorizedFetch(
     }
 
     if (controller.signal.aborted) throw abortReason(controller.signal);
-    return await fetch(input, { ...init, headers, signal: controller.signal });
+    try {
+      return await fetch(input, { ...init, headers, signal: controller.signal });
+    } catch (error) {
+      if (marketInformationRequest && timedOut && !signal?.aborted) {
+        return new Response(JSON.stringify({
+          errorCode: 'MARKET_INFORMATION_TIMEOUT',
+          retryable: false,
+          message: '시장정보 제공기관 응답이 2.5초 내 완료되지 않았습니다.',
+        }), {
+          status: 408,
+          headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        });
+      }
+      throw error;
+    }
   } finally {
     if (timeout !== null) window.clearTimeout(timeout);
     signal?.removeEventListener('abort', handleParentAbort);
