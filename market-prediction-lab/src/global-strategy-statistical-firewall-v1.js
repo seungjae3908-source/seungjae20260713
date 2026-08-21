@@ -10,6 +10,7 @@ export const GLOBAL_STRATEGY_STATISTICAL_FIREWALL_SCHEMA_VERSION = 1;
 
 const REPLICATION_STATUSES = new Set([
   "REPLICATED",
+  "PARTIALLY_REPLICATED",
   "NOT_REPLICATED",
   "INCONCLUSIVE",
   "BLOCKED_DATA",
@@ -18,6 +19,7 @@ const REPLICATION_STATUSES = new Set([
 const MARKET_COST_REQUIREMENTS = Object.freeze({
   KR_STOCK: Object.freeze(["commission", "spread", "slippage", "tax", "liquidityImpact"]),
   US_STOCK: Object.freeze(["commission", "spread", "slippage", "tax", "fx", "liquidityImpact"]),
+  DEVELOPED_STOCK: Object.freeze(["commission", "spread", "slippage", "tax", "fx", "liquidityImpact"]),
   CRYPTO_SPOT: Object.freeze(["commission", "spread", "slippage", "liquidityImpact"]),
   CRYPTO_FUTURES: Object.freeze(["commission", "spread", "slippage", "funding", "liquidityImpact"]),
 });
@@ -85,7 +87,9 @@ export function createPaperReplicationAssessment({ researchRecord, replication }
   if (status !== "REPLICATED" && failureReason === null) throw new Error("non-replicated outcomes require failureReason");
   if (status === "REPLICATED" && failureReason !== null) throw new Error("REPLICATED cannot carry failureReason");
   const metrics = normalizeReplicationMetrics(raw.metrics, status);
-  if (status === "REPLICATED" && metrics === null) throw new Error("REPLICATED requires deterministic metrics");
+  if (new Set(["REPLICATED", "PARTIALLY_REPLICATED"]).has(status) && metrics === null) {
+    throw new Error(`${status} requires deterministic metrics`);
+  }
   const core = Object.freeze({
     researchSourceId: researchRecord.researchSourceId,
     strategyFamilyId: researchRecord.strategyDna.strategyFamilyId,
@@ -244,7 +248,8 @@ export function evaluateStrategyEconomicReality({ market, direction, costPolicyV
   const requirements = MARKET_COST_REQUIREMENTS[normalizedMarket];
   if (!requirements) throw new RangeError("market is unsupported");
   const normalizedDirection = requiredString(direction, "direction").toUpperCase();
-  const dimensions = new Set(["KR_STOCK", "US_STOCK"]).has(normalizedMarket) && normalizedDirection === "SHORT"
+  const dimensions = new Set(["KR_STOCK", "US_STOCK", "DEVELOPED_STOCK"]).has(normalizedMarket)
+    && new Set(["SHORT", "LONG_SHORT"]).has(normalizedDirection)
     ? Object.freeze([...requirements, "borrow"])
     : requirements;
   if (!costs || typeof costs !== "object" || Array.isArray(costs)) throw new TypeError("costs must be an object");
