@@ -106,6 +106,45 @@ test('INITIAL_SESSION only reconciles a restored authenticated identity that is 
   }), false);
 });
 
+test('transient null bootstrap is recoverable by one persisted INITIAL_SESSION hydration', async () => {
+  const bootstrapOrder: string[] = [];
+  await runFiniteAuthBootstrap<null>({
+    getSession: async () => null,
+    applySession: () => bootstrapOrder.push('bootstrap:null'),
+    loadProfile: async () => { bootstrapOrder.push('profile:null'); },
+    sessionTimeoutMs: 50,
+    profileTimeoutMs: 50,
+  });
+
+  assert.deepEqual(bootstrapOrder, ['bootstrap:null', 'profile:null']);
+  assert.equal(shouldReconcileInitialSession({
+    event: 'INITIAL_SESSION',
+    incomingUserId: 'restored-user',
+    currentUserId: null,
+    hasProfile: false,
+  }), true);
+
+  let profileReads = 0;
+  let hydrated = false;
+  await reconcileInitialSessionProfile({
+    loadProfile: async () => {
+      profileReads += 1;
+      hydrated = true;
+    },
+    hasProfile: () => hydrated,
+    isSessionCurrent: () => true,
+  });
+
+  assert.equal(profileReads, 1);
+  assert.equal(hydrated, true);
+  assert.equal(shouldReconcileInitialSession({
+    event: 'INITIAL_SESSION',
+    incomingUserId: 'restored-user',
+    currentUserId: 'restored-user',
+    hasProfile: true,
+  }), false);
+});
+
 test('initial session profile recovery retries once when the first hydration read is still empty', async () => {
   let attempts = 0;
   let hydrated = false;
