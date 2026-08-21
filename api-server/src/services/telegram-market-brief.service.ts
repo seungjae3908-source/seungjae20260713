@@ -12,7 +12,9 @@ import {
 } from './telegram-notification.service';
 
 const BRIEF_TIMEOUT_MS = 8_000;
-const ROOMS: MarketInformationRoomId[] = ['stocks-kr', 'stocks-us', 'coins-spot', 'coins-futures'];
+const STOCK_ROOMS: readonly MarketInformationRoomId[] = ['stocks-kr', 'stocks-us'];
+const CRYPTO_ROOMS: readonly MarketInformationRoomId[] = ['coins-spot', 'coins-futures'];
+const ROOMS: readonly MarketInformationRoomId[] = [...STOCK_ROOMS, ...CRYPTO_ROOMS];
 
 type BriefRoom = {
   room: MarketInformationRoomId;
@@ -44,6 +46,18 @@ function roomLabel(room: MarketInformationRoomId): string {
     case 'coins-spot': return '코인현물';
     case 'coins-futures': return '코인선물';
   }
+}
+
+function destinationLabel(destination: TelegramReportDestination): string {
+  if (destination === 'STOCK_ROOM') return '주식방 · 국내주식 / 미국주식';
+  if (destination === 'CRYPTO_ROOM') return '코인방 · 코인현물 / 코인선물';
+  return '개인 브리핑 · 전체 공개시장';
+}
+
+function destinationRooms(destination: TelegramReportDestination): ReadonlySet<MarketInformationRoomId> {
+  if (destination === 'STOCK_ROOM') return new Set(STOCK_ROOMS);
+  if (destination === 'CRYPTO_ROOM') return new Set(CRYPTO_ROOMS);
+  return new Set(ROOMS);
 }
 
 function number(value: number | null, digits = 2): string {
@@ -136,9 +150,9 @@ function themeLines(label: string, data: SectorPopularResult | null): string[] {
   });
 }
 
-function newsRows(snapshot: TelegramMarketBriefSnapshot) {
+function newsRows(rooms: readonly BriefRoom[]) {
   const seen = new Set<string>();
-  return snapshot.rooms
+  return rooms
     .flatMap((room) => room.response?.sections.news.data ?? [])
     .filter((item) => {
       const url = normalizeTelegramHttpUrl(item.url);
@@ -150,6 +164,17 @@ function newsRows(snapshot: TelegramMarketBriefSnapshot) {
     .slice(0, 6);
 }
 
+function scopedWarnings(snapshot: TelegramMarketBriefSnapshot, destination: TelegramReportDestination): string[] {
+  if (destination === 'PERSONAL') return snapshot.warnings;
+  const allowed = destinationRooms(destination);
+  return snapshot.warnings.filter((warning) => {
+    const room = ROOMS.find((candidate) => warning.startsWith(`${candidate}:`));
+    if (room) return allowed.has(room);
+    if (destination === 'STOCK_ROOM') return warning === 'KR_THEME_UNAVAILABLE' || warning === 'US_THEME_UNAVAILABLE';
+    return false;
+  });
+}
+
 export function buildTelegramMarketBriefInput(input: {
   kind: TelegramIntelligenceReportKind;
   localDate: string;
@@ -159,22 +184,32 @@ export function buildTelegramMarketBriefInput(input: {
   now: Date;
   snapshot: TelegramMarketBriefSnapshot;
 }): TelegramAlertInput {
-  const news = newsRows(input.snapshot);
+  const allowed = destinationRooms(input.destination);
+  const rooms = input.snapshot.rooms.filter((room) => allowed.has(room.room));
+  const news = newsRows(rooms);
+  const warnings = scopedWarnings(input.snapshot, input.destination);
   const lines = [
     `${reportLabel(input.kind)} · ${input.localDate}`,
-    ...input.snapshot.rooms.flatMap(roomLines),
-    '',
-    '[오늘의 테마/주도주]',
-    ...themeLines('KR', input.snapshot.krThemes),
-    ...themeLines('US', input.snapshot.usThemes),
+    destinationLabel(input.destination),
+    ...rooms.flatMap(roomLines),
   ];
+
+  if (input.destination !== 'CRYPTO_ROOM') {
+    lines.push(
+      '',
+      '[오늘의 테마/주도주]',
+      ...themeLines('KR', input.snapshot.krThemes),
+      ...themeLines('US', input.snapshot.usThemes),
+    );
+  }
+
   if (news.length) {
-    lines.push('', '[뉴스 브리핑]');
+    lines.push('', `[뉴스 브리핑 · ${input.destination === 'CRYPTO_ROOM' ? '코인' : '주식'}]`);
     news.forEach((item, index) => lines.push(`${index + 1}. ${item.provider} · ${item.symbol} · ${item.title}`));
   } else {
-    lines.push('', '[뉴스 브리핑] 검증된 최신 뉴스 N/A');
+    lines.push('', `[뉴스 브리핑 · ${input.destination === 'CRYPTO_ROOM' ? '코인' : '주식'}] 검증된 최신 뉴스 N/A`);
   }
-  if (input.snapshot.warnings.length) lines.push('', `데이터 경고: ${input.snapshot.warnings.slice(0, 6).join(' · ')}`);
+  if (warnings.length) lines.push('', `데이터 경고: ${warnings.slice(0, 6).join(' · ')}`);
   lines.push('', '실제 데이터가 없는 값은 N/A로 유지하며 신호·수익률·목표가를 새로 만들지 않습니다.');
 
   const buttons: TelegramUrlButton[][] = [];
