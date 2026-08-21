@@ -133,9 +133,14 @@ export function wrapPaperForwardProviderWithMeaningfulSearch({
         return blockedEvidence(base, runtime, "PAPER_RUNTIME_CONTRACT_INVALID");
       }
       if (!READY_RUNTIME_STATUSES.has(runtime.status)) {
-        const blocker = runtime.status === "SEARCH_FAILURE_BLOCKED"
-          ? "SEARCH_FAILURE"
-          : runtime.status ?? "PAPER_RUNTIME_NOT_READY";
+        const admissionBlockers = Array.isArray(runtime.admissionBlockers)
+          ? runtime.admissionBlockers.filter(nonEmpty)
+          : [];
+        const blocker = admissionBlockers.length > 0
+          ? [...new Set(admissionBlockers)].join("|")
+          : runtime.status === "SEARCH_FAILURE_BLOCKED"
+            ? "SEARCH_FAILURE"
+            : runtime.status ?? "PAPER_RUNTIME_NOT_READY";
         return blockedEvidence(base, runtime, blocker);
       }
 
