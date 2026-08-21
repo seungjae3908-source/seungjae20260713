@@ -247,6 +247,9 @@ async function installMocks(page: Page) {
 
 async function runSearch(page: Page, config: MarketCase, query: string, expected: Sample) {
   const input = page.getByRole('combobox', { name: '통합 자산 검색' });
+  if ((await input.inputValue()) === query) {
+    await input.fill('');
+  }
   const started = Date.now();
   const responsePromise = page.waitForResponse((candidate) => {
     const url = new URL(candidate.url());
