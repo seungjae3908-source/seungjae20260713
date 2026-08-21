@@ -232,17 +232,20 @@ export async function executeDualFreeAiRuntime(state, input = {}, callProvider) 
       const callCore = {
         providerId: slot.providerId,
         modelId: slot.modelId,
+        provider: slot.providerId,
+        model: slot.modelId,
         timestamp: calledAt,
         slot: slot.slot,
         role: slot.role,
         mode: slot.mode,
         inputEvidenceFingerprint: input.plan.evidenceFingerprint,
+        sourceFingerprint: input.plan.evidenceFingerprint,
       };
       try {
         const raw = await callProvider({ slot, plan: input.plan, researchRecord: input.researchRecord, analysis: input.analysis });
         const review = recordDualFreeAiReview(input.plan, raw);
         const outputFingerprint = researchDigest(review);
-        const auditCore = Object.freeze({ ...callCore, outputFingerprint, status: "COMPLETED", failureReason: null });
+        const auditCore = Object.freeze({ ...callCore, reviewId: review.reviewId, outputFingerprint, status: "COMPLETED", failureReason: null, disagreementReason: null });
         const call = Object.freeze({ ...auditCore, callId: `ai-call:${researchDigest(auditCore)}` });
         calls.push(call);
         recordedReviews.push(review);
@@ -250,9 +253,11 @@ export async function executeDualFreeAiRuntime(state, input = {}, callProvider) 
       } catch (error) {
         const auditCore = Object.freeze({
           ...callCore,
+          reviewId: null,
           outputFingerprint: null,
           status: "FAILED",
           failureReason: safeFailureCode(error, "AI_PROVIDER_CALL_FAILED"),
+          disagreementReason: null,
         });
         calls.push(Object.freeze({ ...auditCore, callId: `ai-call:${researchDigest(auditCore)}` }));
       }
@@ -260,6 +265,12 @@ export async function executeDualFreeAiRuntime(state, input = {}, callProvider) 
   }
 
   const synthesis = synthesizeDualFreeAiReview({ plan: input.plan, reviews: recordedReviews });
+  const disagreementReason = synthesis.reviewConflictReason?.join(" | ") ?? null;
+  const finalizedCalls = calls.map((call) => {
+    const { callId: _previousCallId, ...previousCore } = call;
+    const auditCore = Object.freeze({ ...previousCore, disagreementReason });
+    return Object.freeze({ ...auditCore, callId: `ai-call:${researchDigest(auditCore)}` });
+  });
   const waiting = { ...state.waitingForAi };
   const waitKey = `waiting-ai:${researchDigest({ researchSourceId, evidenceFingerprint: input.plan.evidenceFingerprint })}`;
   if (synthesis.status === "AI_REVIEW_INCOMPLETE") {
@@ -274,8 +285,8 @@ export async function executeDualFreeAiRuntime(state, input = {}, callProvider) 
     delete waiting[waitKey];
   }
   const uniqueCalls = [...state.aiCalls];
-  for (const call of calls) if (!uniqueCalls.some((known) => known.callId === call.callId)) uniqueCalls.push(call);
-  const events = calls.map((call) => Object.freeze({ type: "AI_PROVIDER_CALL", callId: call.callId, status: call.status, observedAt: calledAt }));
+  for (const call of finalizedCalls) if (!uniqueCalls.some((known) => known.callId === call.callId)) uniqueCalls.push(call);
+  const events = finalizedCalls.map((call) => Object.freeze({ type: "AI_PROVIDER_CALL", callId: call.callId, status: call.status, observedAt: calledAt }));
   const next = nextRuntime(state, {
     aiCalls: uniqueCalls,
     aiOutputs: outputs,
@@ -286,10 +297,10 @@ export async function executeDualFreeAiRuntime(state, input = {}, callProvider) 
     state: next,
     synthesis,
     reviews: Object.freeze(recordedReviews),
-    calls: Object.freeze(calls),
+    calls: Object.freeze(finalizedCalls),
     status: input.plan.status === "DUAL_FREE_AI_READY" ? synthesis.status : "AI_RESEARCH_UNAVAILABLE",
-    AI1Status: providerStatus(calls, "AI1_"),
-    AI2Status: providerStatus(calls, "AI2_"),
+    AI1Status: providerStatus(finalizedCalls, "AI1_"),
+    AI2Status: providerStatus(finalizedCalls, "AI2_"),
     paidFallbackUsed: false,
   });
 }

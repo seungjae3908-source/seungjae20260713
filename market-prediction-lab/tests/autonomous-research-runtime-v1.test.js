@@ -189,6 +189,7 @@ test("dual FREE AI runtime preserves role-swapped calls and persists provider fa
   assert.equal(result.calls.filter((call) => call.status === "FAILED").length, 2);
   assert.equal(result.calls.every((call) => call.inputEvidenceFingerprint === "e".repeat(64)), true);
   assert.equal(result.calls.every((call) => Object.hasOwn(call, "outputFingerprint") && Object.hasOwn(call, "failureReason")), true);
+  assert.equal(result.calls.every((call) => Object.hasOwn(call, "reviewId") && Object.hasOwn(call, "provider") && Object.hasOwn(call, "model") && Object.hasOwn(call, "sourceFingerprint") && Object.hasOwn(call, "disagreementReason")), true);
   assert.equal(result.synthesis.status, "AI_REVIEW_INCOMPLETE");
   assert.equal(result.AI1Status, "AVAILABLE");
   assert.equal(result.AI2Status, "FAILED");
