@@ -9,6 +9,9 @@ on:
       - api-server/src/services/authoritative-paper-evidence-sources.service.ts
       - api-server/src/services/authoritative-paper-runtime-package.entry.ts
       - api-server/src/services/paper-trading-state-snapshot.service.ts
+      - api-server/src/services/paper-trading-state-publisher.service.ts
+      - api-server/src/routes/paper-trading.ts
+      - api-server/src/routes/paper-trading.smoke.test.ts
       - api-server/src/services/paper-simulated-execution-evidence.service.ts
       - market-intelligence-sidecar/src/execution-quality.mjs
       - market-intelligence-sidecar/src/execution-quality.d.mts
@@ -92,6 +95,9 @@ jobs:
             api-server/src/services/authoritative-paper-evidence-sources.service.ts
             api-server/src/services/authoritative-paper-runtime-package.entry.ts
             api-server/src/services/paper-trading-state-snapshot.service.ts
+            api-server/src/services/paper-trading-state-publisher.service.ts
+            api-server/src/routes/paper-trading.ts
+            api-server/src/routes/paper-trading.smoke.test.ts
             api-server/src/services/paper-simulated-execution-evidence.service.ts
             market-intelligence-sidecar/src/execution-quality.mjs
             market-intelligence-sidecar/src/execution-quality.d.mts

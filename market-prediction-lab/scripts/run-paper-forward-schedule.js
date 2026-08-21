@@ -216,6 +216,8 @@ export async function runPaperForwardScheduleCli(env = process.env, {
     let authoritativeRuntimePackageAudit = null;
     let paperStateOwnerAudit = null;
     let authoritativeRuntimeMeasurement = null;
+    let paperStateCallbackInvocationCount = 0;
+    let paperStateTransportStatus = "BLOCKED_DATA_CONFIG_ABSENT";
     let resolvedAuthoritativeSourceWiring = authoritativePaperSourceWiring ?? {};
     if (researchProduction) {
       const runtimePackage = await authoritativePaperPackageLoader();
@@ -225,30 +227,52 @@ export async function runPaperForwardScheduleCli(env = process.env, {
         createPaperAdmissionEvidenceProducer: runtimePackage.createPaperAdmissionEvidenceProducer,
       };
       const stateSnapshotPath = String(env.PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH ?? "").trim();
-      if (stateSnapshotPath) {
+      const publisherAccountIdSha256 = String(
+        env.PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256 ?? "",
+      ).trim();
+      if (stateSnapshotPath && /^[0-9a-f]{64}$/u.test(publisherAccountIdSha256)) {
         const paperStateOwner = paperStateSourceFactory == null
-          ? paperStateOwnerFactory({ snapshotPath: stateSnapshotPath, runtimePackage })
-          : Object.freeze({
-            schemaVersion: "paper-state-source-compatibility-override-v1",
+          ? paperStateOwnerFactory({
             snapshotPath: stateSnapshotPath,
-            paperStateForCard: paperStateSourceFactory({ snapshotPath: stateSnapshotPath, runtimePackage }),
+            runtimePackage,
+            expectedPublisherAccountIdSha256: publisherAccountIdSha256,
+          })
+          : Object.freeze({
+            schemaVersion: "paper-state-source-compatibility-override-v2",
+            snapshotPath: stateSnapshotPath,
+            paperStateForCard: paperStateSourceFactory({
+              snapshotPath: stateSnapshotPath,
+              runtimePackage,
+              expectedPublisherAccountIdSha256: publisherAccountIdSha256,
+            }),
             writePaperStateSnapshot: null,
             initializesPaperState: false,
             recurringLedgerDerivationAllowed: false,
+            authenticatedPublisherRequired: true,
+            exactAccountBindingRequired: true,
             unknownIsZero: false,
           });
+        const paperStateForCard = async (...args) => {
+          paperStateCallbackInvocationCount += 1;
+          return paperStateOwner.paperStateForCard(...args);
+        };
         resolvedAuthoritativeSourceWiring = {
           ...resolvedAuthoritativeSourceWiring,
-          paperStateForCard: paperStateOwner.paperStateForCard,
+          paperStateForCard,
         };
+        paperStateTransportStatus = "CONFIGURED_EXACT_ACCOUNT_BOUND";
         paperStateOwnerAudit = Object.freeze({
           schemaVersion: paperStateOwner.schemaVersion,
           snapshotPath: paperStateOwner.snapshotPath,
           writerConnected: typeof paperStateOwner.writePaperStateSnapshot === "function",
           initializesPaperState: paperStateOwner.initializesPaperState === true,
           recurringLedgerDerivationAllowed: paperStateOwner.recurringLedgerDerivationAllowed === true,
+          authenticatedPublisherRequired: paperStateOwner.authenticatedPublisherRequired === true,
+          exactAccountBindingRequired: paperStateOwner.exactAccountBindingRequired === true,
           unknownIsZero: paperStateOwner.unknownIsZero === true,
         });
+      } else if (stateSnapshotPath || publisherAccountIdSha256) {
+        paperStateTransportStatus = "BLOCKED_DATA_CONFIG_INCOMPLETE";
       }
       authoritativeRuntimePackageAudit = Object.freeze({
         schemaVersion: runtimePackage.schemaVersion,
@@ -351,6 +375,15 @@ export async function runPaperForwardScheduleCli(env = process.env, {
       authoritativeSourceBlockers: authoritativeSourceWiringAudit?.blockers ?? [],
       authoritativeStageMeasurements: stageMeasurements,
       authoritativeRuntimePackage: authoritativeRuntimePackageAudit,
+      paperStateTransport: Object.freeze({
+        status: paperStateTransportStatus,
+        callbackInvocationCount: paperStateCallbackInvocationCount,
+        callbackInvoked: paperStateCallbackInvocationCount > 0,
+        authenticatedPublisherRequired: true,
+        exactAccountBindingRequired: true,
+        snapshotSchemaVersion: "paper-trading-state-snapshot-v2",
+        unknownIsZero: false,
+      }),
       authoritativeEvidenceOwners: AUTHORITATIVE_PAPER_EVIDENCE_SOURCE_OWNERSHIP.sevenEvidenceOwnerSummary,
       scannerCandidateCount: stageMeasurementCount(stageMeasurements, "Scanner Candidate"),
       canonicalPaperCandidateCount: stageMeasurementCount(stageMeasurements, "Identity"),

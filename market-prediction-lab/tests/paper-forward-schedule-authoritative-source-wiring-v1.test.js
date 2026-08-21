@@ -1,10 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runPaperForwardScheduleCli } from "../scripts/run-paper-forward-schedule.js";
 
 const SHA = "0123456789abcdef0123456789abcdef01234567";
+const PUBLISHER_ACCOUNT_ID_SHA256 = createHash("sha256")
+  .update("publisher-account-fixture")
+  .digest("hex");
 
 test("Research Production recurring CLI injects the audited authoritative source-wiring provider by default", async () => {
   const sourceWiring = Object.freeze({ marker: "concrete-source-owner-input" });
@@ -84,24 +88,31 @@ test("Research Production recurring CLI injects the audited authoritative source
     authoritativeOwnersConnected: 7,
     runtimeBlockedDataOwners: 4,
     scannerCallbackWired: true,
-    scheduledCanonicalWriter: "CONNECTED_NO_UPSTREAM_STATE_SYNTHESIS",
+    scheduledCanonicalWriter: "AUTHENTICATED_EXACT_ACCOUNT_PUBLISHER_CONNECTED",
     allOwnersReady: false,
     firstZeroStage: "UNKNOWN",
     firstBlocker: "AUTHORITATIVE_EVIDENCE_DATA_UNAVAILABLE",
     unknownIsZero: false,
   });
+  assert.equal(output.paperStateTransport.status, "BLOCKED_DATA_CONFIG_ABSENT");
+  assert.equal(output.paperStateTransport.callbackInvoked, false);
 });
 
 test("configured lossless Paper snapshot reader replaces only the scheduled state owner callback", async () => {
-  const snapshotReader = async () => Object.freeze({ schemaVersion: 1, account: Object.freeze({ id: "paper" }) });
+  let snapshotCallbackCalls = 0;
+  const snapshotReader = async () => {
+    snapshotCallbackCalls += 1;
+    return Object.freeze({ schemaVersion: 1, account: Object.freeze({ id: "paper" }) });
+  };
   let sourceWiringSeen = null;
   let snapshotFactoryInput = null;
-  await runPaperForwardScheduleCli(Object.freeze({
+  const output = await runPaperForwardScheduleCli(Object.freeze({
     PAPER_FORWARD_SCHEDULE_ACTIVE: "true",
     RESEARCH_PRODUCTION: "true",
     PAPER_FORWARD_RESEARCH_SHA: SHA,
     PAPER_FORWARD_ACTIVATION_AT_MS: "1",
     PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH: "C:/lossless/paper-state.json",
+    PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256: PUBLISHER_ACCOUNT_ID_SHA256,
     PAPER_FORWARD_ROOT: join(tmpdir(), `paper-forward-lossless-state-${process.pid}-${Date.now()}`),
   }), {
     paperStateSourceFactory: (input) => {
@@ -111,7 +122,12 @@ test("configured lossless Paper snapshot reader replaces only the scheduled stat
     authoritativePaperDependenciesFactory: ({ sourceWiring }) => {
       sourceWiringSeen = sourceWiring;
       return Object.freeze({
-        publicEvidenceProvider: Object.freeze({ collectPublicEvidence: async () => Object.freeze({ status: "BLOCKED_DATA" }) }),
+        publicEvidenceProvider: Object.freeze({
+          collectPublicEvidence: async () => {
+            await sourceWiring.paperStateForCard();
+            return Object.freeze({ status: "BLOCKED_DATA" });
+          },
+        }),
         sourceWiringAudit: Object.freeze({
           status: "CALLBACKS_CONNECTED_BLOCKED_DATA",
           firstZeroStage: "UNKNOWN",
@@ -125,15 +141,24 @@ test("configured lossless Paper snapshot reader replaces only the scheduled stat
         }),
       });
     },
-    runScheduledInvocation: async () => Object.freeze({ status: "READY", mutationCount: 0 }),
+    runScheduledInvocation: async (input) => {
+      await input.publicEvidenceProvider.collectPublicEvidence({ market: "CRYPTO_FUTURES" });
+      return Object.freeze({ status: "READY", mutationCount: 0 });
+    },
   });
 
   assert.equal(snapshotFactoryInput.snapshotPath, "C:/lossless/paper-state.json");
+  assert.equal(snapshotFactoryInput.expectedPublisherAccountIdSha256, PUBLISHER_ACCOUNT_ID_SHA256);
   assert.equal(typeof snapshotFactoryInput.runtimePackage.validateImmutablePaperTradingStateSnapshot, "function");
-  assert.equal(sourceWiringSeen.paperStateForCard, snapshotReader);
+  assert.equal(typeof sourceWiringSeen.paperStateForCard, "function");
   assert.equal(sourceWiringSeen.paperStateForCard.authoritativeBlockedData, undefined);
   assert.equal(sourceWiringSeen.contractRulesForCard.authoritativeOwner.ownerStatus, "OWNER_EXISTS");
   assert.equal(sourceWiringSeen.contractRulesForCard.authoritativeOwner.missingDataBehavior, "BLOCKED_DATA");
+  assert.equal(snapshotCallbackCalls, 1);
+  assert.equal(output.paperStateTransport.status, "CONFIGURED_EXACT_ACCOUNT_BOUND");
+  assert.equal(output.paperStateTransport.callbackInvocationCount, 1);
+  assert.equal(output.paperStateTransport.callbackInvoked, true);
+  assert.equal(output.paperStateTransport.unknownIsZero, false);
 });
 
 test("scheduled CLI reports a FIRST_ZERO only from the actually executed measured stage prefix", async () => {

@@ -549,13 +549,13 @@ function validatePaperReadiness(evidence, nowMs = Date.now(), maxEvidenceAgeMs =
     add(blockers, "MARKET_UNSUPPORTED");
     return result(blockers);
   }
-  const canonicalMarket = market;
-  if (evidence.provider !== EXPECTED_PROVIDER[canonicalMarket]) add(blockers, "PROVIDER_MISMATCH");
+  const canonicalMarket2 = market;
+  if (evidence.provider !== EXPECTED_PROVIDER[canonicalMarket2]) add(blockers, "PROVIDER_MISMATCH");
   if (!nonEmptyString(evidence.providerProvenance)) add(blockers, "PROVIDER_PROVENANCE_REQUIRED");
   const direction = evidence.direction;
   if (typeof direction !== "string" || !DIRECTIONS.has(direction)) {
     add(blockers, "DIRECTION_UNSUPPORTED");
-  } else if (canonicalMarket === "CRYPTO_FUTURES") {
+  } else if (canonicalMarket2 === "CRYPTO_FUTURES") {
     if (direction !== "LONG" && direction !== "SHORT") add(blockers, "DIRECTION_UNSUPPORTED");
   } else if (direction === "LONG" || direction === "SHORT") {
     add(blockers, "DIRECTION_UNSUPPORTED");
@@ -579,12 +579,12 @@ function validatePaperReadiness(evidence, nowMs = Date.now(), maxEvidenceAgeMs =
   if (typeof evidence.partialFillModel !== "string" || !PARTIAL_FILL_MODELS.has(evidence.partialFillModel)) {
     add(blockers, "PARTIAL_FILL_MODEL_REQUIRED");
   }
-  if (canonicalMarket === "KR_STOCK" || canonicalMarket === "US_STOCK") {
+  if (canonicalMarket2 === "KR_STOCK" || canonicalMarket2 === "US_STOCK") {
     if (!nonEmptyString(evidence.sessionCalendarVersion)) add(blockers, "SESSION_CALENDAR_VERSION_REQUIRED");
     if (evidence.marketStatus !== "OPEN") add(blockers, "MARKET_NOT_OPEN");
     if (!nonEmptyString(evidence.taxPolicyVersion)) add(blockers, "TAX_POLICY_VERSION_REQUIRED");
     if (!finiteNonNegative(evidence.taxPercent)) add(blockers, "TAX_PERCENT_INVALID");
-  } else if (canonicalMarket === "CRYPTO_SPOT") {
+  } else if (canonicalMarket2 === "CRYPTO_SPOT") {
     if (!finitePositive(evidence.minimumOrderNotional)) add(blockers, "MINIMUM_ORDER_NOTIONAL_INVALID");
   } else {
     if (!finitePositive(evidence.minimumOrderQuantity)) add(blockers, "MINIMUM_ORDER_QUANTITY_INVALID");
@@ -1526,12 +1526,24 @@ function createScannerCryptoFuturesPaperAdmissionEvidenceProducer({
 
 // src/services/paper-trading-state-snapshot.service.ts
 import { createHash as createHash2 } from "node:crypto";
-var PAPER_TRADING_STATE_SNAPSHOT_VERSION = "paper-trading-state-snapshot-v1";
+var PAPER_TRADING_STATE_SNAPSHOT_VERSION = "paper-trading-state-snapshot-v2";
 function finite6(value) {
   return typeof value === "number" && Number.isFinite(value);
 }
 function nonEmpty3(value) {
   return typeof value === "string" && value.trim().length > 0;
+}
+function immutableSha(value) {
+  return typeof value === "string" && /^[0-9a-f]{40}$/u.test(value);
+}
+function sha256Digest(value) {
+  return typeof value === "string" && /^[0-9a-f]{64}$/u.test(value);
+}
+function canonicalMarket(value) {
+  return typeof value === "string" && /^[A-Z][A-Z0-9_]{1,39}$/u.test(value);
+}
+function canonicalCurrency(value) {
+  return typeof value === "string" && /^[A-Z][A-Z0-9]{1,11}$/u.test(value);
 }
 function cloneJson(value) {
   return JSON.parse(JSON.stringify(value));
@@ -1583,13 +1595,23 @@ function assertSnapshotState(state, nowMs, maximumAgeMs) {
 function createImmutablePaperTradingStateSnapshot({
   state,
   sourceOwner,
+  sourceSha,
+  market,
+  currency,
   provenance,
+  publisherAccountIdSha256,
   observedAtMs = Date.now(),
   maximumAgeMs = 3e4
 }) {
   if (!finite6(observedAtMs) || observedAtMs <= 0) throw new Error("PAPER_STATE_OBSERVED_AT_INVALID");
   if (!finite6(maximumAgeMs) || maximumAgeMs <= 0) throw new Error("PAPER_STATE_MAXIMUM_AGE_INVALID");
   if (!nonEmpty3(sourceOwner)) throw new Error("PAPER_STATE_SOURCE_OWNER_REQUIRED");
+  if (!immutableSha(sourceSha)) throw new Error("PAPER_STATE_SOURCE_SHA_REQUIRED");
+  if (!canonicalMarket(market)) throw new Error("PAPER_STATE_MARKET_REQUIRED");
+  if (!canonicalCurrency(currency)) throw new Error("PAPER_STATE_CURRENCY_REQUIRED");
+  if (!sha256Digest(publisherAccountIdSha256)) {
+    throw new Error("PAPER_STATE_PUBLISHER_ACCOUNT_BINDING_REQUIRED");
+  }
   if (!Array.isArray(provenance) || provenance.length === 0 || provenance.some((value) => !nonEmpty3(value))) {
     throw new Error("PAPER_STATE_PROVENANCE_REQUIRED");
   }
@@ -1600,7 +1622,11 @@ function createImmutablePaperTradingStateSnapshot({
     schemaVersion: PAPER_TRADING_STATE_SNAPSHOT_VERSION,
     paperStateSchemaVersion: clonedState.schemaVersion,
     sourceOwner: sourceOwner.trim(),
+    sourceSha,
+    market,
+    currency,
     provenance: [...provenance],
+    publisherAccountIdSha256,
     observedAtMs,
     stateUpdatedAtMs,
     maximumAgeMs,
@@ -1627,7 +1653,11 @@ function validateImmutablePaperTradingStateSnapshot(value, nowMs = Date.now()) {
   const rebuilt = createImmutablePaperTradingStateSnapshot({
     state: snapshot.state,
     sourceOwner: snapshot.sourceOwner,
+    sourceSha: snapshot.sourceSha,
+    market: snapshot.market,
+    currency: snapshot.currency,
     provenance: snapshot.provenance,
+    publisherAccountIdSha256: snapshot.publisherAccountIdSha256,
     observedAtMs: snapshot.observedAtMs,
     maximumAgeMs: snapshot.maximumAgeMs
   });
@@ -4848,7 +4878,7 @@ function positive5(value) {
 function positiveInteger2(value) {
   return Number.isInteger(value) && Number(value) > 0;
 }
-function immutableSha(value) {
+function immutableSha2(value) {
   return typeof value === "string" && /^[0-9a-f]{40}$/iu.test(value);
 }
 function finiteOrNull(value) {
@@ -4961,7 +4991,7 @@ function prepareForwardRecommendationObservation(input) {
   if (!nonEmpty5(identity2?.strategyId)) blockers.push("STRATEGY_ID_REQUIRED");
   if (!nonEmpty5(identity2?.strategyVersion)) blockers.push("STRATEGY_VERSION_REQUIRED");
   if (!nonEmpty5(identity2?.parameterHash)) blockers.push("PARAMETER_HASH_REQUIRED");
-  if (!immutableSha(identity2?.researchCodeSha)) blockers.push("IMMUTABLE_RESEARCH_SHA_REQUIRED");
+  if (!immutableSha2(identity2?.researchCodeSha)) blockers.push("IMMUTABLE_RESEARCH_SHA_REQUIRED");
   if (!nonEmpty5(identity2?.symbol)) blockers.push("IDENTITY_SYMBOL_REQUIRED");
   if (!nonEmpty5(identity2?.timeframe)) blockers.push("TIMEFRAME_REQUIRED");
   if (!positiveInteger2(identity2?.horizon)) blockers.push("CANONICAL_HORIZON_REQUIRED");
