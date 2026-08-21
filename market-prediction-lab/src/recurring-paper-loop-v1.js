@@ -4,6 +4,13 @@ import {
   settleFourMarketPaperSample,
   summarizeSettledPaperSamples,
 } from "./four-market-paper-settlement-v1.js";
+import {
+  AUTHORITATIVE_NATURAL_PAPER_ENTRY_ACCOUNTING_EVIDENCE_VERSION,
+  authoritativeNaturalPaperAccountingSummary,
+  isAuthoritativeNaturalPaperAccountError,
+  isAuthoritativeNaturalPaperLedger,
+  validateAuthoritativeNaturalPaperLedger,
+} from "./authoritative-natural-paper-accounting-v1.js";
 
 const MARKETS = Object.freeze(["KR_STOCK", "US_STOCK", "CRYPTO_SPOT", "CRYPTO_FUTURES"]);
 const MARKET_SET = new Set(MARKETS);
@@ -79,11 +86,20 @@ function assertSafety(value, code) {
     || value?.exchangeRequestSent !== false) throw new Error(code);
 }
 
-function validateLedgerSnapshot(ledger) {
+function validateLegacyLedgerSnapshot(ledger) {
   if (!ledger || !["READY", "PARTIAL"].includes(ledger.status)) throw new Error("PAPER_LOOP_LEDGER_NOT_USABLE");
   if (ledger.initialCapitalKrw !== 1_000_000 || ledger.baseCurrency !== "KRW") throw new Error("PAPER_LOOP_CAPITAL_CONTRACT_MISMATCH");
   if (ledger.status !== "READY" && ledger.totalEquityKrw != null) throw new Error("PAPER_LOOP_PARTIAL_EQUITY_FABRICATED");
   assertSafety(ledger, "PAPER_LOOP_LEDGER_SAFETY_VIOLATION");
+}
+
+function validateLedgerSnapshot(ledger) {
+  if (isAuthoritativeNaturalPaperLedger(ledger)) {
+    validateAuthoritativeNaturalPaperLedger(ledger);
+    assertSafety(ledger, "PAPER_LOOP_LEDGER_SAFETY_VIOLATION");
+    return;
+  }
+  validateLegacyLedgerSnapshot(ledger);
 }
 
 function validateState(state) {
@@ -173,7 +189,30 @@ function blockedSample(candidate, cycle, blockers) {
   });
 }
 
-function positionFromSample(sample) {
+function accountBlockedSample(sample, blocker) {
+  return Object.freeze({
+    ...sample,
+    status: "BLOCKED",
+    blockers: Object.freeze([...new Set([...(sample.blockers ?? []), blocker])]),
+    ...safetyEnvelope(),
+  });
+}
+
+function positionFromSample(sample, candidate) {
+  const dataEvidence = candidate?.execution?.dataEvidence;
+  const accountingEvidence = sample.identity.market === "CRYPTO_FUTURES"
+    ? Object.freeze({
+      schemaVersion: AUTHORITATIVE_NATURAL_PAPER_ENTRY_ACCOUNTING_EVIDENCE_VERSION,
+      settlementCurrency: "USDT",
+      leverage: dataEvidence?.leverage ?? null,
+      marginMode: dataEvidence?.marginMode ?? null,
+      entryNotional: sample.fill.notional,
+      immediateCost: sample.fill.costs?.immediateCost ?? null,
+      quantity: sample.fill.filledQuantity,
+      fillPrice: sample.fill.fillPrice,
+      parityFingerprint: sample.parityFingerprint,
+    })
+    : null;
   return Object.freeze({
     positionId: hash({ paperSampleId: sample.paperSampleId, entry: sample.identity.evaluatedAtMs }),
     paperSampleId: sample.paperSampleId,
@@ -190,12 +229,47 @@ function positionFromSample(sample) {
     quantity: sample.fill.filledQuantity,
     entryFillPrice: sample.fill.fillPrice,
     lifecycleState: "OPEN",
+    accountingEvidence,
     sample,
   });
 }
 
 function cycleSummary({ cycleId, state, entries, blocked, noTrade, settled, replayed = false }) {
   const performance = summarizeSettledPaperSamples(state.settlements);
+  if (isAuthoritativeNaturalPaperLedger(state.ledger)) {
+    const accounting = authoritativeNaturalPaperAccountingSummary(state.ledger);
+    return Object.freeze({
+      cycleId,
+      replayed,
+      accountCurrency: accounting.currency,
+      initialEquity: accounting.initialEquity,
+      knownCurrentEquity: accounting.currentEquity,
+      availableMargin: accounting.availableMargin,
+      usedMargin: accounting.usedMargin,
+      currentEquityKrw: accounting.currentEquityKrw,
+      reportingKrwStatus: accounting.reportingKrwStatus,
+      initialEquityKrw: null,
+      knownCurrentEquityKrw: accounting.currentEquityKrw,
+      totalEquityKrw: accounting.currentEquityKrw,
+      equityStatus: "READY_NATIVE",
+      openPositions: state.positions.length,
+      closedPositions: state.settlements.length,
+      entries,
+      blocked,
+      noTrade,
+      tradesSettled: settled,
+      totalCosts: performance.sampleSize ? state.settlements.reduce((sum, row) => sum + row.totalExplicitCost, 0) : null,
+      realizedGrossPnl: performance.sampleSize ? state.settlements.reduce((sum, row) => sum + row.grossPnl, 0) : null,
+      realizedNetPnl: performance.totalNetPnl,
+      hitRate: performance.hitRate,
+      expectancy: performance.expectancyNetPnl,
+      profitFactor: performance.profitFactor,
+      drawdownPercent: performance.maxDrawdownPercent,
+      sampleStatus: performance.sampleSize ? performance.sampleStatus : "N/A_INSUFFICIENT_SETTLED_SAMPLE",
+      authoritativeAccountBindingVerified: true,
+      ...safetyEnvelope(),
+    });
+  }
   return Object.freeze({
     cycleId,
     replayed,
@@ -259,14 +333,14 @@ export async function runRecurringPaperCycle({
     if (settlement.status !== "SETTLED") continue;
     const settlementId = hash({ positionId: position.positionId, paperSampleId: settlement.paperSampleId, settledAtMs: settlement.settledAtMs });
     if (settlements.some((row) => row.settlementId === settlementId || row.paperSampleId === settlement.paperSampleId)) continue;
+    const nextLedger = await ledgerAdapter.applySettlement({ ledger, position, settlement, settlementId, cycle });
+    validateLedgerSnapshot(nextLedger);
     await learningAdapter.persistOutcome({
       cycle,
       identity: predecessor.identity,
       position,
       settlement: Object.freeze({ ...settlement, settlementId }),
     });
-    const nextLedger = await ledgerAdapter.applySettlement({ ledger, settlement, settlementId, cycle });
-    validateLedgerSnapshot(nextLedger);
     ledger = structuredClone(nextLedger);
     settlements.push(Object.freeze({ ...settlement, settlementId }));
     positions = positions.filter((row) => row.positionId !== position.positionId);
@@ -291,11 +365,19 @@ export async function runRecurringPaperCycle({
       blockedCount += 1;
       continue;
     }
-    const position = positionFromSample(sample);
+    const position = positionFromSample(sample, candidate);
     if (positions.some((row) => row.positionId === position.positionId)) continue;
+    let nextLedger;
+    try {
+      nextLedger = await ledgerAdapter.applyEntry({ ledger, position, cycle });
+      validateLedgerSnapshot(nextLedger);
+    } catch (error) {
+      if (!isAuthoritativeNaturalPaperAccountError(error)) throw error;
+      samples[samples.length - 1] = accountBlockedSample(sample, error.code);
+      blockedCount += 1;
+      continue;
+    }
     await learningAdapter.persistSignal({ cycle, identity: predecessor.identity, candidate, sample });
-    const nextLedger = await ledgerAdapter.applyEntry({ ledger, position, cycle });
-    validateLedgerSnapshot(nextLedger);
     ledger = structuredClone(nextLedger);
     positions.push(position);
     entryCount += 1;
