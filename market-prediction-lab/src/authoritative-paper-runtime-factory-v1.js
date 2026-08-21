@@ -16,9 +16,39 @@ export const AUTHORITATIVE_PAPER_RUNTIME_FACTORY_CONTRACT = Object.freeze({
   profitabilityClaimAllowed: false,
 });
 
+export const AUTHORITATIVE_PAPER_SOURCE_WIRING_CONTRACT = Object.freeze({
+  version: "authoritative-paper-source-wiring-v1",
+  requiredCallbacks: Object.freeze([
+    "createPaperAdmissionEvidenceProducer",
+    "scanBatchForMarket",
+    "paperCandidateForCard",
+    "learningSnapshotForCard",
+    "paperStateForCard",
+    "contractRulesForCard",
+    "publicEvidenceForCard",
+    "executionObservationForCard",
+    "supplementalCostEvidenceForCard",
+  ]),
+  firstZeroStageWhenBlocked: "UNKNOWN",
+  unknownIsZero: false,
+  executionAuthority: "NONE",
+  scheduleActivationAuthority: false,
+});
+
 const OWNED_MARKET = "CRYPTO_FUTURES";
 const BUNDLE_SCHEMA = "scanner-paper-admission-evidence-bundle-v1";
 const TRUTHY = new Set(["1", "true", "yes", "on", "enabled"]);
+const SOURCE_BLOCKERS = Object.freeze({
+  createPaperAdmissionEvidenceProducer: "AUTHORITATIVE_ADMISSION_PRODUCER_FACTORY_SOURCE_UNAVAILABLE",
+  scanBatchForMarket: "AUTHORITATIVE_SCANNER_BATCH_SOURCE_UNAVAILABLE",
+  paperCandidateForCard: "AUTHORITATIVE_PAPER_CANDIDATE_SOURCE_UNAVAILABLE",
+  learningSnapshotForCard: "AUTHORITATIVE_LEARNING_SNAPSHOT_SOURCE_UNAVAILABLE",
+  paperStateForCard: "AUTHORITATIVE_PAPER_STATE_SOURCE_UNAVAILABLE",
+  contractRulesForCard: "AUTHORITATIVE_CONTRACT_RULES_SOURCE_UNAVAILABLE",
+  publicEvidenceForCard: "AUTHORITATIVE_PUBLIC_EVIDENCE_SOURCE_UNAVAILABLE",
+  executionObservationForCard: "AUTHORITATIVE_EXECUTION_OBSERVATION_SOURCE_UNAVAILABLE",
+  supplementalCostEvidenceForCard: "AUTHORITATIVE_SUPPLEMENTAL_COST_SOURCE_UNAVAILABLE",
+});
 
 function freeze(value) {
   return Object.freeze(value);
@@ -61,7 +91,7 @@ function emptyPaperBridge() {
   });
 }
 
-function blockedRuntime(market, status, blockers = [status]) {
+function blockedRuntime(market, status, blockers = [status], sourceWiringAudit = null) {
   const unique = [...new Set((Array.isArray(blockers) ? blockers : [status]).filter(nonEmpty))];
   return freeze({
     schemaVersion: "authoritative-paper-runtime-fail-closed-v1",
@@ -89,7 +119,106 @@ function blockedRuntime(market, status, blockers = [status]) {
     exchangeRequestSent: false,
     productionMutationAllowed: false,
     profitabilityClaimAllowed: false,
+    ...(sourceWiringAudit == null ? {} : {
+      sourceWiringAudit,
+      firstZeroStage: "UNKNOWN",
+      firstZeroReason: status === "AUTHORITATIVE_RECURRING_SOURCE_WIRING_BLOCKED"
+        ? "AUTHORITATIVE_CALLBACK_SOURCE_UNAVAILABLE"
+        : status,
+      scannerCandidateCount: null,
+      canonicalPaperCandidateCount: null,
+      entryCount: null,
+      settlementCount: null,
+    }),
   });
+}
+
+export function auditAuthoritativePaperSourceWiring(sourceWiring = {}) {
+  if (!isRecord(sourceWiring)) throw new TypeError("authoritative Paper sourceWiring must be an object");
+  const requiredCallbacks = AUTHORITATIVE_PAPER_SOURCE_WIRING_CONTRACT.requiredCallbacks;
+  const readyCallbacks = requiredCallbacks.filter((name) => typeof sourceWiring[name] === "function");
+  const missingCallbacks = requiredCallbacks.filter((name) => typeof sourceWiring[name] !== "function");
+  const blockers = missingCallbacks.map((name) => SOURCE_BLOCKERS[name]);
+  return freeze({
+    schemaVersion: "authoritative-paper-source-wiring-audit-v1",
+    status: blockers.length === 0 ? "CALLABLES_READY" : "BLOCKED_DATA",
+    requiredCallbacks,
+    readyCallbacks: freeze(readyCallbacks),
+    missingCallbacks: freeze(missingCallbacks),
+    blockers: freeze(blockers),
+    firstZeroStage: "UNKNOWN",
+    firstZeroReason: blockers.length === 0 ? null : "AUTHORITATIVE_CALLBACK_SOURCE_UNAVAILABLE",
+    scannerCandidateCount: null,
+    canonicalPaperCandidateCount: null,
+    entryCount: null,
+    settlementCount: null,
+    unknownIsZero: false,
+    executionAuthority: "NONE",
+    scheduleActivationAuthority: false,
+  });
+}
+
+function failClosedSourceWiringRuntime(status, blockers, sourceWiringAudit) {
+  return async function failClosedAuthoritativePaperRuntime({ market } = {}) {
+    if (market !== OWNED_MARKET) {
+      return blockedRuntime(market, "AUTHORITATIVE_ADMISSION_MARKET_NOT_OWNED");
+    }
+    return blockedRuntime(market, status, blockers, sourceWiringAudit);
+  };
+}
+
+function paperAdmissionEvidenceProducer(sourceWiring) {
+  return sourceWiring.createPaperAdmissionEvidenceProducer({
+    paperCandidateSource: sourceWiring.paperCandidateForCard,
+    learningSnapshotSource: sourceWiring.learningSnapshotForCard,
+    paperStateSource: sourceWiring.paperStateForCard,
+    contractRulesSource: sourceWiring.contractRulesForCard,
+    publicEvidenceSource: sourceWiring.publicEvidenceForCard,
+    executionObservationSource: sourceWiring.executionObservationForCard,
+    supplementalCostEvidenceSource: sourceWiring.supplementalCostEvidenceForCard,
+  });
+}
+
+export function createAuthoritativePaperRuntimeFromSourceWiring({
+  sourceWiring = {},
+  ...runtimeOptions
+} = {}) {
+  const sourceWiringAudit = auditAuthoritativePaperSourceWiring(sourceWiring);
+  if (sourceWiringAudit.status !== "CALLABLES_READY") {
+    return failClosedSourceWiringRuntime(
+      "AUTHORITATIVE_RECURRING_SOURCE_WIRING_BLOCKED",
+      sourceWiringAudit.blockers,
+      sourceWiringAudit,
+    );
+  }
+
+  let producer;
+  try {
+    producer = paperAdmissionEvidenceProducer(sourceWiring);
+  } catch {
+    return failClosedSourceWiringRuntime(
+      "AUTHORITATIVE_ADMISSION_PRODUCER_CONSTRUCTION_FAILED",
+      ["AUTHORITATIVE_ADMISSION_PRODUCER_CONSTRUCTION_FAILED"],
+      sourceWiringAudit,
+    );
+  }
+  if (typeof producer !== "function") {
+    return failClosedSourceWiringRuntime(
+      "AUTHORITATIVE_ADMISSION_PRODUCER_INVALID",
+      ["AUTHORITATIVE_ADMISSION_PRODUCER_INVALID"],
+      sourceWiringAudit,
+    );
+  }
+
+  const runtime = createAuthoritativePaperRuntimeForMarket({
+    ...runtimeOptions,
+    scanBatchForMarket: sourceWiring.scanBatchForMarket,
+    paperAdmissionEvidenceForCard: producer,
+  });
+  return async function auditedAuthoritativePaperRuntime(input = {}) {
+    const result = await runtime(input);
+    return freeze({ ...result, sourceWiringAudit });
+  };
 }
 
 function producerBlockError(blockers) {
@@ -249,6 +378,33 @@ export function createAuthoritativePaperForwardDependencies({
   return freeze({
     paperRuntimeForMarket,
     publicEvidenceProvider,
+    contract: AUTHORITATIVE_PAPER_RUNTIME_FACTORY_CONTRACT,
+  });
+}
+
+export function createAuthoritativePaperForwardDependenciesFromSourceWiring({
+  sourceWiring = {},
+  runtimeOptions = {},
+  providerOptions = {},
+  runtimeFactory = createAuthoritativePaperRuntimeFromSourceWiring,
+  evidenceProviderFactory = createAuthoritativePaperForwardEvidenceProvider,
+} = {}) {
+  if (!isRecord(sourceWiring)) throw new TypeError("authoritative Paper sourceWiring must be an object");
+  if (!isRecord(runtimeOptions)) throw new TypeError("authoritative Paper runtimeOptions must be an object");
+  if (!isRecord(providerOptions)) throw new TypeError("authoritative Paper providerOptions must be an object");
+  if (typeof runtimeFactory !== "function" || typeof evidenceProviderFactory !== "function") {
+    throw new TypeError("authoritative Paper source-wiring factories are required");
+  }
+  const sourceWiringAudit = auditAuthoritativePaperSourceWiring(sourceWiring);
+  const paperRuntimeForMarket = runtimeFactory({ sourceWiring, ...runtimeOptions });
+  const publicEvidenceProvider = evidenceProviderFactory({
+    ...providerOptions,
+    paperRuntimeForMarket,
+  });
+  return freeze({
+    paperRuntimeForMarket,
+    publicEvidenceProvider,
+    sourceWiringAudit,
     contract: AUTHORITATIVE_PAPER_RUNTIME_FACTORY_CONTRACT,
   });
 }
