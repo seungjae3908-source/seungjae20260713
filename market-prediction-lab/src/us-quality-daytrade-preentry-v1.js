@@ -3,8 +3,9 @@ import { evaluateUsQualityDaytradeSetup } from "./us-quality-daytrade-research-v
 import { evaluateQualityDaytradeBinaryEventRisk } from "./us-quality-daytrade-binary-event-v1.js";
 import { evaluateQualityDaytradeUniverseProvenance } from "./us-quality-daytrade-universe-provenance-v1.js";
 import { evaluateUsQualityDaytradeVolatility } from "./us-quality-daytrade-volatility-v1.js";
+import { evaluateUsQualityDaytradeMarketContext } from "./us-quality-daytrade-market-context-v1.js";
 
-export const QUALITY_DAYTRADE_PREENTRY_CONTRACT_VERSION = "us-quality-daytrade-preentry-v3";
+export const QUALITY_DAYTRADE_PREENTRY_CONTRACT_VERSION = "us-quality-daytrade-preentry-v4";
 
 function safeResult(fields) {
   return Object.freeze({
@@ -35,6 +36,7 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
       universeProvenance,
       technicalSetup: null,
       volatility: null,
+      marketContext: null,
       binaryEventRisk: null,
       qualityTier: null,
       riskBudgetMultiplier: 0,
@@ -49,6 +51,7 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
       universeProvenance,
       technicalSetup,
       volatility: null,
+      marketContext: null,
       binaryEventRisk: null,
       qualityTier: technicalSetup.qualityTier ?? technicalSetup.universe?.tier ?? null,
       riskBudgetMultiplier: technicalSetup.riskBudgetMultiplier ?? technicalSetup.universe?.riskBudgetMultiplier ?? 0,
@@ -68,6 +71,26 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
       universeProvenance,
       technicalSetup,
       volatility,
+      marketContext: null,
+      binaryEventRisk: null,
+      qualityTier: technicalSetup.qualityTier,
+      riskBudgetMultiplier: technicalSetup.riskBudgetMultiplier,
+    });
+  }
+
+  const marketContext = evaluateUsQualityDaytradeMarketContext({
+    asOfMs: raw.asOfMs,
+    session: technicalSetup.session,
+    marketContextEvidence: raw.marketContextEvidence,
+  });
+  if (marketContext.status !== "PASS") {
+    return safeResult({
+      status: "BLOCKED_DATA",
+      reason: marketContext.reason,
+      universeProvenance,
+      technicalSetup,
+      volatility,
+      marketContext,
       binaryEventRisk: null,
       qualityTier: technicalSetup.qualityTier,
       riskBudgetMultiplier: technicalSetup.riskBudgetMultiplier,
@@ -87,6 +110,7 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
       universeProvenance,
       technicalSetup,
       volatility,
+      marketContext,
       binaryEventRisk,
       qualityTier: technicalSetup.qualityTier,
       riskBudgetMultiplier: technicalSetup.riskBudgetMultiplier,
@@ -99,6 +123,7 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
     universeProvenance,
     technicalSetup,
     volatility,
+    marketContext,
     binaryEventRisk,
     qualityTier: technicalSetup.qualityTier,
     riskBudgetMultiplier: technicalSetup.riskBudgetMultiplier,
