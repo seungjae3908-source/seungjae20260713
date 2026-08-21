@@ -45,6 +45,13 @@ jobs:
             echo 'Read-only probe contains a prohibited mutation command.' >&2
             exit 1
           fi
+          if grep -Fq 'git fetch --no-tags origin main "$RESEARCH_SHA"' .github/workflows/research-production-natural-cycle-evidence.yml; then
+            echo 'Natural evidence verifier must not require an unauthenticated post-checkout fetch.' >&2
+            exit 1
+          fi
+          grep -q 'SOURCE_OUTCOME:' .github/workflows/research-production-natural-cycle-evidence.yml
+          grep -q "preflight_failed" .github/workflows/research-production-natural-cycle-evidence.yml
+          grep -q "timers_healthy:.*unknown" .github/workflows/research-production-natural-cycle-evidence.yml
 
   observe:
     if: >-
@@ -85,12 +92,15 @@ jobs:
           NODE
 
       - name: Verify requested Research release is in repository history
+        id: source
         env:
           RESEARCH_SHA: ${{ steps.command.outputs.research_sha }}
         shell: bash
         run: |
           set -Eeuo pipefail
-          git fetch --no-tags origin main "$RESEARCH_SHA"
+          # checkout uses fetch-depth: 0, so a requested release that is an ancestor
+          # of main must already be present locally. Keep credentials non-persistent and
+          # fail closed instead of performing an unauthenticated second fetch.
           git cat-file -e "$RESEARCH_SHA^{commit}"
           git merge-base --is-ancestor "$RESEARCH_SHA" origin/main
           git cat-file -e "$RESEARCH_SHA:research-production/bin/research-cycle.mjs"
@@ -207,6 +217,7 @@ jobs:
         uses: actions/github-script@v7
         env:
           RESEARCH_SHA: ${{ steps.command.outputs.research_sha }}
+          SOURCE_OUTCOME: ${{ steps.source.outcome }}
           EVIDENCE_OUTCOME: ${{ steps.evidence.outcome }}
           VERDICT_OUTCOME: ${{ steps.verdict.outcome }}
           VERDICT_STATUS: ${{ steps.verdict.outputs.status }}
@@ -219,20 +230,25 @@ jobs:
           PAPER_SETTLEMENTS: ${{ steps.verdict.outputs.paper_settlements }}
         with:
           script: |
+            const measured = process.env.EVIDENCE_OUTCOME === 'success';
+            const status = process.env.VERDICT_STATUS
+              || (process.env.SOURCE_OUTCOME === 'success' ? 'evidence_unavailable' : 'preflight_failed');
+            const observed = (value) => measured && value ? value : 'unknown';
             const body = [
               '[RESEARCH_PRODUCTION_NATURAL_CYCLE_EVIDENCE]',
-              `status: ${process.env.VERDICT_STATUS || 'failed'}`,
+              `status: ${status}`,
               `research_sha: ${process.env.RESEARCH_SHA}`,
               `workflow_run: ${context.runId}`,
+              `source_outcome: ${process.env.SOURCE_OUTCOME}`,
               `evidence_outcome: ${process.env.EVIDENCE_OUTCOME}`,
               `verdict_outcome: ${process.env.VERDICT_OUTCOME}`,
-              `timers_healthy: ${process.env.TIMERS_HEALTHY || 'false'}`,
-              `first_natural_forward_proven: ${process.env.FORWARD_PROVEN || 'false'}`,
-              `paper_safety_proven: ${process.env.PAPER_SAFE || 'false'}`,
-              `fast_historical_complete: ${process.env.HISTORICAL_COMPLETE || 'false'}`,
-              `fast_historical_running: ${process.env.HISTORICAL_RUNNING || 'false'}`,
-              `paper_positions: ${process.env.PAPER_POSITIONS || 'unknown'}`,
-              `paper_settlements: ${process.env.PAPER_SETTLEMENTS || 'unknown'}`,
+              `timers_healthy: ${observed(process.env.TIMERS_HEALTHY)}`,
+              `first_natural_forward_proven: ${observed(process.env.FORWARD_PROVEN)}`,
+              `paper_safety_proven: ${observed(process.env.PAPER_SAFE)}`,
+              `fast_historical_complete: ${observed(process.env.HISTORICAL_COMPLETE)}`,
+              `fast_historical_running: ${observed(process.env.HISTORICAL_RUNNING)}`,
+              `paper_positions: ${observed(process.env.PAPER_POSITIONS)}`,
+              `paper_settlements: ${observed(process.env.PAPER_SETTLEMENTS)}`,
               'server_files_written: 0',
               'server_files_deleted: 0',
               'server_processes_restarted: 0',
