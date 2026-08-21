@@ -46,9 +46,15 @@ function fixture() {
     foldOptions: { trainSize: 18, validationSize: 6, testSize: 6, stepSize: 6, embargoMs: 5 },
     regimeLabels: ["TREND", "CHOP"],
     costStressMultipliers: [1, 1.25, 1.5, 2],
+    sensitivitySpecs: [
+      { label: "TP_MINUS_10PCT", parameterOverrides: { takeProfitPct: 2.7 } },
+      { label: "TP_PLUS_10PCT", parameterOverrides: { takeProfitPct: 3.3 } },
+      { label: "STOP_MINUS_10PCT", parameterOverrides: { fixedStopPct: 1.08 } },
+      { label: "STOP_PLUS_10PCT", parameterOverrides: { fixedStopPct: 1.32 } },
+    ],
     finalHoldoutSliceId: "quality-daytrade:final-holdout:2026-v1",
   });
-  return { registry, candidate, finePlan, plan };
+  return { registry, candidate, finePlan, plan, records };
 }
 
 function appendEvidence(state, kind, evaluationSliceId, passed = true) {
@@ -83,10 +89,19 @@ test("validation lifecycle freezes one Fine candidate before purged OOS and forb
   assert.equal(plan.oosCanRetuneParameters, false);
   assert.equal(plan.walkForwardCanRetuneParameters, false);
   assert.equal(plan.regimeCostStressCanRetuneParameters, false);
+  assert.equal(plan.sensitivityCanRetuneParameters, false);
+  assert.equal(plan.sensitivityCanSelectParameters, false);
   assert.equal(plan.finalHoldoutCanRetuneParameters, false);
   assert.equal(plan.finalHoldoutOneShot, true);
   assert.equal(plan.regimeCostStress.length, 8);
+  assert.equal(plan.sensitivityAnalysis.length, 4);
   assert.deepEqual([...new Set(plan.regimeCostStress.map((row) => row.costMultiplier))], [1, 1.25, 1.5, 2]);
+  assert.deepEqual(plan.sensitivityAnalysis.map((row) => row.label), [
+    "TP_MINUS_10PCT",
+    "TP_PLUS_10PCT",
+    "STOP_MINUS_10PCT",
+    "STOP_PLUS_10PCT",
+  ]);
   assert.equal(plan.executionAuthority, "NONE");
   assert.equal(plan.liveTradingAllowed, false);
 });
@@ -104,7 +119,7 @@ test("walk-forward cannot run before every preregistered OOS slice passes", () =
   );
 });
 
-test("Final Holdout opens only after OOS, walk-forward and regime/cost stress all pass", () => {
+test("Final Holdout opens only after OOS, walk-forward, regime/cost stress and sensitivity all pass", () => {
   const state = fixture();
   let registry = passAll(state, "oos", state.plan.oos);
   registry = passAll({ ...state, registry }, "walk_forward", state.plan.walkForward);
@@ -115,7 +130,14 @@ test("Final Holdout opens only after OOS, walk-forward and regime/cost stress al
   );
 
   registry = passAll({ ...state, registry }, "regime_cost_stress", state.plan.regimeCostStress);
+  assert.throws(
+    () => appendEvidence({ ...state, registry }, "final_holdout", state.plan.finalHoldout.evaluationSliceId, true),
+    /sensitivity analysis slices must pass/,
+  );
+
+  registry = passAll({ ...state, registry }, "sensitivity_analysis", state.plan.sensitivityAnalysis);
   const before = summarizeQualityDaytradeValidationLifecycle(state.plan, registry);
+  assert.equal(before.sensitivityAnalysis.passed, state.plan.sensitivityAnalysis.length);
   assert.equal(before.readyForFinalHoldout, true);
   assert.equal(before.finalHoldoutConsumed, false);
 
@@ -150,4 +172,63 @@ test("regime/cost stress requires every walk-forward slice and cannot tune Fine 
   assert.equal(stress.trial.metrics.validationKind, "regime_cost_stress");
   assert.equal(stress.trial.metrics.costMultiplier, 1);
   assert.equal(stress.lifecycle.retuningAllowed, false);
+});
+
+test("sensitivity analysis is preregistered, one-factor-at-a-time, and cannot tune/select parameters", () => {
+  const state = fixture();
+  let registry = passAll(state, "oos", state.plan.oos);
+  assert.throws(
+    () => appendEvidence({ ...state, registry }, "sensitivity_analysis", state.plan.sensitivityAnalysis[0].evaluationSliceId, true),
+    /walk-forward slices must pass/,
+  );
+  registry = passAll({ ...state, registry }, "walk_forward", state.plan.walkForward);
+  const sensitivity = appendEvidence({ ...state, registry }, "sensitivity_analysis", state.plan.sensitivityAnalysis[0].evaluationSliceId, true);
+  assert.equal(sensitivity.trial.stage, "walk_forward");
+  assert.equal(sensitivity.trial.selectionEligible, false);
+  assert.equal(sensitivity.trial.metrics.validationKind, "sensitivity_analysis");
+  assert.equal(sensitivity.trial.metrics.sensitivityLabel, "TP_MINUS_10PCT");
+  assert.deepEqual(sensitivity.trial.metrics.sensitivityParameterOverrides, { takeProfitPct: 2.7 });
+  assert.equal(sensitivity.lifecycle.retuningAllowed, false);
+});
+
+test("sensitivity plan rejects post-hoc or invalid perturbation definitions", () => {
+  const state = fixture();
+  const base = {
+    finePlan: state.finePlan,
+    candidate: state.candidate,
+    records: state.records,
+    foldOptions: { trainSize: 18, validationSize: 6, testSize: 6, stepSize: 6, embargoMs: 5 },
+    regimeLabels: ["TREND", "CHOP"],
+    finalHoldoutSliceId: "quality-daytrade:final-holdout:2026-v1",
+  };
+  assert.throws(
+    () => buildQualityDaytradeValidationLifecyclePlan({
+      ...base,
+      sensitivitySpecs: [
+        { label: "NO_CHANGE", parameterOverrides: { takeProfitPct: 3 } },
+        { label: "TP_PLUS", parameterOverrides: { takeProfitPct: 3.3 } },
+      ],
+    }),
+    /must differ from the frozen baseline/,
+  );
+  assert.throws(
+    () => buildQualityDaytradeValidationLifecyclePlan({
+      ...base,
+      sensitivitySpecs: [
+        { label: "UNKNOWN", parameterOverrides: { unknownParam: 1 } },
+        { label: "TP_PLUS", parameterOverrides: { takeProfitPct: 3.3 } },
+      ],
+    }),
+    /outside the frozen candidate/,
+  );
+  assert.throws(
+    () => buildQualityDaytradeValidationLifecyclePlan({
+      ...base,
+      sensitivitySpecs: [
+        { label: "MULTI", parameterOverrides: { takeProfitPct: 2.7, fixedStopPct: 1.08 } },
+        { label: "TP_PLUS", parameterOverrides: { takeProfitPct: 3.3 } },
+      ],
+    }),
+    /exactly one frozen numeric parameter/,
+  );
 });
