@@ -191,9 +191,9 @@ test("US stock short borrow and futures funding remain market-specific blockers"
   assert.equal(futures.safety.actualOrders, 0);
 });
 
-test("economic requirements expose four isolated market contracts", () => {
+test("economic requirements expose five isolated market contracts", () => {
   const requirements = globalStrategyEconomicRealityRequirements();
-  assert.deepEqual(Object.keys(requirements).sort(), ["CRYPTO_FUTURES", "CRYPTO_SPOT", "KR_STOCK", "US_STOCK"]);
+  assert.deepEqual(Object.keys(requirements).sort(), ["CRYPTO_FUTURES", "CRYPTO_SPOT", "DEVELOPED_STOCK", "KR_STOCK", "US_STOCK"]);
   assert.equal(requirements.KR_STOCK.includes("tax"), true);
   assert.equal(requirements.CRYPTO_FUTURES.includes("funding"), true);
 });
