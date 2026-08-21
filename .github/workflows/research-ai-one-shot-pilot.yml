@@ -225,33 +225,32 @@ jobs:
                 sort: 'created',
                 direction: 'desc',
               });
-              const latest = new Map();
+              const statusesByRun = new Map();
               for (const status of statuses) {
                 const contextName = String(status.context ?? '');
-                if (!contextName || latest.has(contextName)) continue;
-                latest.set(contextName, status);
+                const found = String(status.target_url ?? '').match(/\/actions\/runs\/(\d+)/);
+                const runId = found?.[1] ?? null;
+                if (!contextName || !runId) continue;
+                if (!statusesByRun.has(runId)) statusesByRun.set(runId, new Map());
+                const byContext = statusesByRun.get(runId);
+                if (!byContext.has(contextName)) byContext.set(contextName, status);
               }
-              for (const name of requiredMainStatuses) {
-                if (latest.get(name)?.state !== 'success') return null;
+              for (const [runIdText, byContext] of statusesByRun) {
+                if (requiredMainStatuses.some((name) => byContext.get(name)?.state !== 'success')) continue;
+                const runId = Number(runIdText);
+                const run = (await github.rest.actions.getWorkflowRun({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  run_id: runId,
+                })).data;
+                if (
+                  String(run.head_sha).toLowerCase() === sha &&
+                  run.event === expectedEvent &&
+                  run.status === 'completed' &&
+                  run.conclusion === 'success'
+                ) return run;
               }
-              const runIds = new Set(requiredMainStatuses.map((name) => {
-                const found = String(latest.get(name)?.target_url ?? '').match(/\/actions\/runs\/(\d+)/);
-                return found?.[1] ?? null;
-              }));
-              if (runIds.has(null) || runIds.size !== 1) return null;
-              const runId = Number([...runIds][0]);
-              const run = (await github.rest.actions.getWorkflowRun({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                run_id: runId,
-              })).data;
-              if (
-                String(run.head_sha).toLowerCase() !== sha ||
-                run.event !== expectedEvent ||
-                run.status !== 'completed' ||
-                run.conclusion !== 'success'
-              ) return null;
-              return run;
+              return null;
             };
 
             const main = (await github.rest.repos.getBranch({
