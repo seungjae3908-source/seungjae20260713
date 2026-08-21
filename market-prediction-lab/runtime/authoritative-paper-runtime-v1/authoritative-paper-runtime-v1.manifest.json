@@ -8,7 +8,7 @@
     "sourceGitBlobSha": "e4fe2e7c8cd0ec279cda8d696b4ae935bef86a4b",
     "sourceSha256": "e699e00ba64040aefec24b5b4992b4975531fdf88c1e4b2b164038ebed57dad7"
   },
-  "sourceGraphSha256": "2c62f110c7bd53664089287ef9a8b013e9127debc2c554acd3c1ba74a03f4865",
+  "sourceGraphSha256": "4eecf523d0d7d4ec80430b5c88232762ab48afc652f289be75f1d58879e946cc",
   "sourceFiles": [
     "api-server/src/data/asset-type.ts",
     "api-server/src/lib/bounded-work-pool.ts",
@@ -19,6 +19,7 @@
     "api-server/src/services/forward-recommendation-observer-runtime.service.ts",
     "api-server/src/services/forward-recommendation-observer.service.ts",
     "api-server/src/services/market-price-precision.service.ts",
+    "api-server/src/services/paper-simulated-execution-evidence.service.ts",
     "api-server/src/services/paper-trading-core.service.ts",
     "api-server/src/services/paper-trading-state-snapshot.service.ts",
     "api-server/src/services/public-market-http.ts",
@@ -40,18 +41,20 @@
     "api-server/src/services/signal-performance-learning.service.ts",
     "api-server/src/services/strategy-promotion.service.ts",
     "api-server/src/services/trade-paper-market-contract.service.ts",
-    "api-server/src/services/trading-risk-engine.service.ts"
+    "api-server/src/services/trading-risk-engine.service.ts",
+    "market-intelligence-sidecar/src/execution-quality.mjs"
   ],
   "sourceFileSha256": {
     "api-server/src/data/asset-type.ts": "ad88c2ca7032503eca9b364625b95913519c7452649a0975d838bddede27c0bf",
     "api-server/src/lib/bounded-work-pool.ts": "8dc3eff3b957b8f98507102ff47ff4df125979684ea9eabc54722f21c591729d",
     "api-server/src/services/authoritative-paper-evidence-sources.service.ts": "ee3bf9b16f64d0f4766c53d42745cbe3a4bbc2d4e52624645666f7b7748a78d9",
-    "api-server/src/services/authoritative-paper-runtime-package.entry.ts": "d238b9caa41a98009b79efbe9fef1b127e0cff7e1fc3b3c5d7334a2e1cc8c98b",
+    "api-server/src/services/authoritative-paper-runtime-package.entry.ts": "ef8677997d5d633544490cc21ad212941c397cf6ffc609b9dc8a4519b3b5f1da",
     "api-server/src/services/bitget-futures-public-evidence.service.ts": "e6ebd43826d43fc93a16ca8516c8ca9c214f73677c706fdbdfff697ed0918a55",
     "api-server/src/services/crypto-signal-scanner.service.ts": "2d8a7591842367069e8ca5d4007c44cda9526a223c8d612665ab9b59a242dc3c",
     "api-server/src/services/forward-recommendation-observer-runtime.service.ts": "fec804b47a0ed864a99cc3bb16d4f4f320847c3360c3f4588ac56644737b2b1c",
     "api-server/src/services/forward-recommendation-observer.service.ts": "ac512d6f6988b404143e22577fab04a610836e3d06cc9c965c178491aedd5957",
     "api-server/src/services/market-price-precision.service.ts": "29030f177420c0227857ded9efdc5fe522e029a0f40540d1e42b4d1e7bc88a6b",
+    "api-server/src/services/paper-simulated-execution-evidence.service.ts": "4e4dfa9a4befdc88b7368b04dadfee1b36c482ff38d6d9a7b6c2d390a22d478f",
     "api-server/src/services/paper-trading-core.service.ts": "8e6a8965e32f75ec8bef6485ef3af8a4dd3d0480341b6506b9b8bdddfa07fb75",
     "api-server/src/services/paper-trading-state-snapshot.service.ts": "052efbaba15652f2cf91bb9253e9b62a71044617d9888b0b6521271f67e46d70",
     "api-server/src/services/public-market-http.ts": "f1ec00932db5a2e21c0e32d9c73026a4246cf162608eec153f05745079ddd9ce",
@@ -73,11 +76,13 @@
     "api-server/src/services/signal-performance-learning.service.ts": "f4180691041a9f7f57cbfd7513ff6666260275efa6c49652c313ae6bc9195392",
     "api-server/src/services/strategy-promotion.service.ts": "16965b6c622d517cabd8bd85c91e2f2c410fcfb58ae95cac8c4b8bcea163a070",
     "api-server/src/services/trade-paper-market-contract.service.ts": "376ed9ba0bb91253fadb9da62f031a45ef3af1bc055622b4a1d8b46c9706f570",
-    "api-server/src/services/trading-risk-engine.service.ts": "6005a12a69e8375913d7699ef864d0efa01ff3d80357c85cd355bb16cbdd96f2"
+    "api-server/src/services/trading-risk-engine.service.ts": "6005a12a69e8375913d7699ef864d0efa01ff3d80357c85cd355bb16cbdd96f2",
+    "market-intelligence-sidecar/src/execution-quality.mjs": "d646fe71f323df5781625b8f97108101ec5fc64d5202c116a733211ebccd2cea"
   },
-  "bundleSha256": "31ca107fc863c8ab37c30174d3c43f71743fd0d476e2b0b10f355a77ac116fe1",
+  "bundleSha256": "03de3d8d9cbf94f7de0f90d51cc88b940b95dd4bf439d3ba1cc420df27d207c8",
   "admissionBundleSchemaVersion": "scanner-paper-admission-evidence-bundle-v1",
   "paperStateSnapshotSchemaVersion": "paper-trading-state-snapshot-v1",
+  "simulatedExecutionEvidenceSchemaVersion": "paper-simulated-execution-evidence-v1",
   "costPolicyVersion": null,
   "costPolicyVersionBinding": {
     "status": "RUNTIME_EXACT_REQUIRED",
@@ -90,9 +95,12 @@
     "AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_VERSION",
     "AUTHORITATIVE_PAPER_RUNTIME_PACKAGE_SAFETY",
     "PAPER_TRADING_STATE_SNAPSHOT_VERSION",
+    "PAPER_SIMULATED_EXECUTION_EVIDENCE_SAFETY",
+    "PAPER_SIMULATED_EXECUTION_EVIDENCE_VERSION",
     "SCANNER_CRYPTO_FUTURES_PAPER_ADMISSION_EVIDENCE_PRODUCER_VERSION",
     "createAuthoritativePaperEvidenceSourceWiring",
     "createImmutablePaperTradingStateSnapshot",
+    "buildPaperSimulatedExecutionEvidence",
     "createScannerCryptoFuturesPaperAdmissionEvidenceProducer",
     "validateImmutablePaperTradingStateSnapshot"
   ],

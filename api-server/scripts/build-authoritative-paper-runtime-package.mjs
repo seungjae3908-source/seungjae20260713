@@ -17,6 +17,7 @@ const CANONICAL_PRODUCER_SOURCE_GIT_BLOB_SHA = 'e4fe2e7c8cd0ec279cda8d696b4ae935
 const CANONICAL_PRODUCER_SOURCE_SHA256 = 'e699e00ba64040aefec24b5b4992b4975531fdf88c1e4b2b164038ebed57dad7';
 const PRODUCER_SOURCE = 'src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.ts';
 const ALLOWED_INPUTS = Object.freeze([
+  '../market-intelligence-sidecar/src/execution-quality.mjs',
   'src/data/asset-type.ts',
   'src/lib/bounded-work-pool.ts',
   'src/services/authoritative-paper-evidence-sources.service.ts',
@@ -27,6 +28,7 @@ const ALLOWED_INPUTS = Object.freeze([
   'src/services/forward-recommendation-observer.service.ts',
   'src/services/market-price-precision.service.ts',
   'src/services/paper-trading-core.service.ts',
+  'src/services/paper-simulated-execution-evidence.service.ts',
   'src/services/paper-trading-state-snapshot.service.ts',
   'src/services/public-market-http.ts',
   'src/services/scanner-candidate-ranking.service.ts',
@@ -62,6 +64,12 @@ function portable(value) {
   return value.split(sep).join('/');
 }
 
+function repositoryPath(inputPath) {
+  const value = portable(relative(repositoryRoot, resolve(apiRoot, inputPath)));
+  if (value === '..' || value.startsWith('../')) throw new Error('AUTHORITATIVE_PAPER_RUNTIME_INPUT_OUTSIDE_REPOSITORY');
+  return value;
+}
+
 await mkdir(outputRoot, { recursive: true });
 const result = await build({
   absWorkingDir: apiRoot,
@@ -95,7 +103,12 @@ for (const source of actualInputs) {
 if (sourceDigests[PRODUCER_SOURCE] !== CANONICAL_PRODUCER_SOURCE_SHA256) {
   throw new Error('CANONICAL_PAPER_PRODUCER_SOURCE_SHA_MISMATCH');
 }
-const sourceGraphSha256 = sha256(actualInputs.map((path) => `${path}\0${sourceDigests[path]}\n`).join(''));
+const sourceRecords = actualInputs.map((inputPath) => ({
+  inputPath,
+  repositoryPath: repositoryPath(inputPath),
+  sha256: sourceDigests[inputPath],
+})).sort((left, right) => left.repositoryPath.localeCompare(right.repositoryPath));
+const sourceGraphSha256 = sha256(sourceRecords.map((source) => `${source.repositoryPath}\0${source.sha256}\n`).join(''));
 const bundle = await readFile(bundlePath);
 const bundleSha256 = sha256(bundle);
 const manifest = {
@@ -109,11 +122,12 @@ const manifest = {
     sourceSha256: CANONICAL_PRODUCER_SOURCE_SHA256,
   },
   sourceGraphSha256,
-  sourceFiles: actualInputs.map((path) => `api-server/${path}`),
-  sourceFileSha256: Object.fromEntries(actualInputs.map((path) => [`api-server/${path}`, sourceDigests[path]])),
+  sourceFiles: sourceRecords.map((source) => source.repositoryPath),
+  sourceFileSha256: Object.fromEntries(sourceRecords.map((source) => [source.repositoryPath, source.sha256])),
   bundleSha256,
   admissionBundleSchemaVersion: 'scanner-paper-admission-evidence-bundle-v1',
   paperStateSnapshotSchemaVersion: 'paper-trading-state-snapshot-v1',
+  simulatedExecutionEvidenceSchemaVersion: 'paper-simulated-execution-evidence-v1',
   costPolicyVersion: null,
   costPolicyVersionBinding: {
     status: 'RUNTIME_EXACT_REQUIRED',
@@ -126,9 +140,12 @@ const manifest = {
     'AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_VERSION',
     'AUTHORITATIVE_PAPER_RUNTIME_PACKAGE_SAFETY',
     'PAPER_TRADING_STATE_SNAPSHOT_VERSION',
+    'PAPER_SIMULATED_EXECUTION_EVIDENCE_SAFETY',
+    'PAPER_SIMULATED_EXECUTION_EVIDENCE_VERSION',
     'SCANNER_CRYPTO_FUTURES_PAPER_ADMISSION_EVIDENCE_PRODUCER_VERSION',
     'createAuthoritativePaperEvidenceSourceWiring',
     'createImmutablePaperTradingStateSnapshot',
+    'buildPaperSimulatedExecutionEvidence',
     'createScannerCryptoFuturesPaperAdmissionEvidenceProducer',
     'validateImmutablePaperTradingStateSnapshot',
   ],

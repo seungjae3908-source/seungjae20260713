@@ -10,6 +10,7 @@ export const AUTHORITATIVE_PAPER_RUNTIME_PACKAGE_CONTRACT = Object.freeze({
   canonicalProducerSourceCommitSha: "3f85003368830fb570c05b3b2060da39f515696d",
   admissionBundleSchemaVersion: "scanner-paper-admission-evidence-bundle-v1",
   paperStateSnapshotSchemaVersion: "paper-trading-state-snapshot-v1",
+  simulatedExecutionEvidenceSchemaVersion: "paper-simulated-execution-evidence-v1",
   executionAuthority: "NONE",
   privateApiAllowed: false,
   liveTrading: false,
@@ -34,6 +35,7 @@ const EXPECTED_SOURCE_FILES = Object.freeze([
   "api-server/src/services/forward-recommendation-observer-runtime.service.ts",
   "api-server/src/services/forward-recommendation-observer.service.ts",
   "api-server/src/services/market-price-precision.service.ts",
+  "api-server/src/services/paper-simulated-execution-evidence.service.ts",
   "api-server/src/services/paper-trading-core.service.ts",
   "api-server/src/services/paper-trading-state-snapshot.service.ts",
   "api-server/src/services/public-market-http.ts",
@@ -56,6 +58,7 @@ const EXPECTED_SOURCE_FILES = Object.freeze([
   "api-server/src/services/strategy-promotion.service.ts",
   "api-server/src/services/trade-paper-market-contract.service.ts",
   "api-server/src/services/trading-risk-engine.service.ts",
+  "market-intelligence-sidecar/src/execution-quality.mjs",
 ]);
 const SOURCE_KEYS = Object.freeze([
   ["paperCandidateSource", "paperCandidate"],
@@ -89,6 +92,15 @@ function isRecord(value) {
 
 function assertManifest(manifest, bundleDigest) {
   const contract = AUTHORITATIVE_PAPER_RUNTIME_PACKAGE_CONTRACT;
+  const sourceFilesValid = Array.isArray(manifest?.sourceFiles)
+    && JSON.stringify(manifest.sourceFiles) === JSON.stringify(EXPECTED_SOURCE_FILES);
+  const sourceDigestsValid = sourceFilesValid
+    && isRecord(manifest?.sourceFileSha256)
+    && JSON.stringify(Object.keys(manifest.sourceFileSha256)) === JSON.stringify(EXPECTED_SOURCE_FILES)
+    && EXPECTED_SOURCE_FILES.every((path) => digest(manifest.sourceFileSha256[path]));
+  const sourceGraphDigest = sourceDigestsValid
+    ? sha256(EXPECTED_SOURCE_FILES.map((path) => `${path}\0${manifest.sourceFileSha256[path]}\n`).join(""))
+    : null;
   if (!isRecord(manifest)
     || manifest.schemaVersion !== contract.manifestSchemaVersion
     || manifest.artifactFile !== "authoritative-paper-runtime-v1.mjs"
@@ -101,10 +113,12 @@ function assertManifest(manifest, bundleDigest) {
     || manifest.bundleSha256 !== bundleDigest
     || manifest.admissionBundleSchemaVersion !== contract.admissionBundleSchemaVersion
     || manifest.paperStateSnapshotSchemaVersion !== contract.paperStateSnapshotSchemaVersion
+    || manifest.simulatedExecutionEvidenceSchemaVersion !== contract.simulatedExecutionEvidenceSchemaVersion
     || manifest.costPolicyVersion !== null
     || manifest.costPolicyVersionBinding?.status !== "RUNTIME_EXACT_REQUIRED"
     || manifest.costPolicyVersionBinding?.unknownIsZero !== false
-    || JSON.stringify(manifest.sourceFiles) !== JSON.stringify(EXPECTED_SOURCE_FILES)
+    || !sourceDigestsValid
+    || manifest.sourceGraphSha256 !== sourceGraphDigest
     || manifest.safety?.executionAuthority !== "NONE"
     || manifest.safety?.privateApiAllowed !== false
     || manifest.safety?.liveTrading !== false
@@ -127,7 +141,11 @@ function assertExports(runtime) {
     || typeof runtime?.createScannerCryptoFuturesPaperAdmissionEvidenceProducer !== "function"
     || typeof runtime?.createAuthoritativePaperEvidenceSourceWiring !== "function"
     || typeof runtime?.createImmutablePaperTradingStateSnapshot !== "function"
+    || typeof runtime?.buildPaperSimulatedExecutionEvidence !== "function"
     || typeof runtime?.validateImmutablePaperTradingStateSnapshot !== "function"
+    || runtime?.PAPER_SIMULATED_EXECUTION_EVIDENCE_VERSION !== "paper-simulated-execution-evidence-v1"
+    || runtime?.PAPER_SIMULATED_EXECUTION_EVIDENCE_SAFETY?.executionMode !== "SIMULATED_EXECUTION_ONLY"
+    || runtime?.PAPER_SIMULATED_EXECUTION_EVIDENCE_SAFETY?.executionAuthority !== "NONE"
     || evidenceSafety?.executionAuthority !== "NONE"
     || evidenceSafety?.privateApiAllowed !== false
     || evidenceSafety?.liveTrading !== false
@@ -173,11 +191,13 @@ export async function loadValidatedAuthoritativePaperRuntimePackage({
     sourceGraphSha256: manifest.sourceGraphSha256,
     bundleSha256: bundleDigest,
     admissionBundleSchemaVersion: manifest.admissionBundleSchemaVersion,
+    simulatedExecutionEvidenceSchemaVersion: manifest.simulatedExecutionEvidenceSchemaVersion,
     costPolicyVersion: null,
     costPolicyVersionBinding: freeze(manifest.costPolicyVersionBinding),
     createPaperAdmissionEvidenceProducer: producerFactory(runtime),
     createAuthoritativePaperEvidenceSourceWiring: runtime.createAuthoritativePaperEvidenceSourceWiring,
     createImmutablePaperTradingStateSnapshot: runtime.createImmutablePaperTradingStateSnapshot,
+    buildPaperSimulatedExecutionEvidence: runtime.buildPaperSimulatedExecutionEvidence,
     validateImmutablePaperTradingStateSnapshot: runtime.validateImmutablePaperTradingStateSnapshot,
     executionAuthority: "NONE",
     privateApiAllowed: false,
