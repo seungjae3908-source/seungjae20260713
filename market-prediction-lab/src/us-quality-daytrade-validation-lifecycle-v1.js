@@ -8,7 +8,7 @@ import {
 
 export const QUALITY_DAYTRADE_VALIDATION_LIFECYCLE_VERSION = "us-quality-daytrade-validation-lifecycle-v1";
 
-const VALID_KINDS = new Set(["oos", "walk_forward", "regime_cost_stress", "final_holdout"]);
+const VALID_KINDS = new Set(["oos", "walk_forward", "regime_cost_stress", "sensitivity_analysis", "final_holdout"]);
 
 function requiredString(value, name) {
   if (typeof value !== "string" || value.trim().length === 0) throw new TypeError(`${name} is required`);
@@ -45,6 +45,38 @@ function normalizeCostStress(values) {
   return Object.freeze(rows.sort((left, right) => left - right));
 }
 
+function normalizeSensitivitySpecs(values, frozenParams) {
+  if (!Array.isArray(values) || values.length < 2) {
+    throw new TypeError("at least two preregistered sensitivity specs are required");
+  }
+  const baseline = frozenParams && typeof frozenParams === "object" ? frozenParams : {};
+  const rows = values.map((value, index) => {
+    const label = requiredString(value?.label, `sensitivitySpecs[${index}].label`).toUpperCase();
+    if (!/^[A-Z0-9_-]+$/.test(label)) throw new Error("sensitivity labels may contain only A-Z, 0-9, underscore, or hyphen");
+    const overrides = value?.parameterOverrides;
+    if (!overrides || typeof overrides !== "object" || Array.isArray(overrides)) {
+      throw new TypeError(`sensitivitySpecs[${index}].parameterOverrides must be an object`);
+    }
+    const keys = Object.keys(overrides);
+    if (keys.length !== 1) throw new Error("each sensitivity spec must perturb exactly one frozen numeric parameter");
+    const key = keys[0];
+    if (!Object.prototype.hasOwnProperty.call(baseline, key)) throw new Error(`sensitivity parameter ${key} is outside the frozen candidate`);
+    const baseValue = Number(baseline[key]);
+    const overrideValue = Number(overrides[key]);
+    if (!Number.isFinite(baseValue) || !Number.isFinite(overrideValue)) throw new TypeError(`sensitivity parameter ${key} must be numeric`);
+    if (overrideValue <= 0) throw new RangeError(`sensitivity parameter ${key} must remain positive`);
+    if (Object.is(baseValue, overrideValue)) throw new Error(`sensitivity parameter ${key} must differ from the frozen baseline`);
+    return Object.freeze({
+      label,
+      parameterOverrides: Object.freeze({ [key]: overrideValue }),
+    });
+  });
+  if (new Set(rows.map((row) => row.label)).size !== rows.length) throw new Error("sensitivity labels must be unique");
+  const signatures = rows.map((row) => researchDigest(row.parameterOverrides));
+  if (new Set(signatures).size !== signatures.length) throw new Error("sensitivity perturbations must be unique");
+  return Object.freeze(rows);
+}
+
 function stageForKind(kind) {
   if (kind === "oos") return "oos";
   if (kind === "final_holdout") return "final_holdout";
@@ -56,6 +88,7 @@ function allSpecs(plan) {
     ...plan.oos,
     ...plan.walkForward,
     ...plan.regimeCostStress,
+    ...plan.sensitivityAnalysis,
     plan.finalHoldout,
   ]);
 }
@@ -84,11 +117,13 @@ export function buildQualityDaytradeValidationLifecyclePlan({
   foldOptions = {},
   regimeLabels,
   costStressMultipliers = [1, 1.25, 1.5, 2],
+  sensitivitySpecs,
   finalHoldoutSliceId,
 } = {}) {
   const frozen = frozenCandidate(finePlan, candidate);
   const regimes = normalizeRegimes(regimeLabels);
   const costs = normalizeCostStress(costStressMultipliers);
+  const sensitivity = normalizeSensitivitySpecs(sensitivitySpecs, frozen.params);
   const holdoutSlice = requiredString(finalHoldoutSliceId, "finalHoldoutSliceId");
   const folds = buildValidationFolds(records, foldOptions);
   if (!folds.length || folds.some((fold) => fold.leakFree !== true)) throw new Error("purged walk-forward folds must be leak-free");
@@ -118,6 +153,13 @@ export function buildQualityDaytradeValidationLifecyclePlan({
     costMultiplier,
     evaluationSliceId: `quality-daytrade:regime-cost:${regime}:${costMultiplier}x`,
   }))));
+  const sensitivityAnalysis = Object.freeze(sensitivity.map((spec) => Object.freeze({
+    kind: "sensitivity_analysis",
+    stage: "walk_forward",
+    label: spec.label,
+    parameterOverrides: spec.parameterOverrides,
+    evaluationSliceId: `quality-daytrade:sensitivity:${spec.label}`,
+  })));
   const finalHoldout = Object.freeze({
     kind: "final_holdout",
     stage: "final_holdout",
@@ -132,6 +174,7 @@ export function buildQualityDaytradeValidationLifecyclePlan({
     oos: oos.map(({ evaluationSliceId, splitDigest }) => ({ evaluationSliceId, splitDigest })),
     walkForward: walkForward.map(({ evaluationSliceId, splitDigest }) => ({ evaluationSliceId, splitDigest })),
     regimeCostStress: regimeCostStress.map(({ evaluationSliceId, regime, costMultiplier }) => ({ evaluationSliceId, regime, costMultiplier })),
+    sensitivityAnalysis: sensitivityAnalysis.map(({ evaluationSliceId, label, parameterOverrides }) => ({ evaluationSliceId, label, parameterOverrides })),
     finalHoldout,
   };
 
@@ -144,12 +187,15 @@ export function buildQualityDaytradeValidationLifecyclePlan({
     oos,
     walkForward,
     regimeCostStress,
+    sensitivityAnalysis,
     finalHoldout,
     planDigest: researchDigest(planCore),
     candidateSelectionLockedBeforeOos: true,
     oosCanRetuneParameters: false,
     walkForwardCanRetuneParameters: false,
     regimeCostStressCanRetuneParameters: false,
+    sensitivityCanRetuneParameters: false,
+    sensitivityCanSelectParameters: false,
     finalHoldoutCanRetuneParameters: false,
     finalHoldoutOneShot: true,
     paperCanRetuneParameters: false,
@@ -178,7 +224,9 @@ function findSpec(plan, kind, evaluationSliceId) {
       ? plan.walkForward
       : kind === "regime_cost_stress"
         ? plan.regimeCostStress
-        : [plan.finalHoldout];
+        : kind === "sensitivity_analysis"
+          ? plan.sensitivityAnalysis
+          : [plan.finalHoldout];
   const spec = pool.find((row) => row.evaluationSliceId === sliceId);
   if (!spec) throw new Error(`${kind} slice is outside the preregistered validation plan`);
   return spec;
@@ -189,11 +237,14 @@ function assertPrerequisites(plan, registry, kind) {
   if (kind !== "oos" && !allPassed(registry, candidate, plan.oos)) {
     throw new Error("all preregistered OOS slices must pass before later validation stages");
   }
-  if ((kind === "regime_cost_stress" || kind === "final_holdout") && !allPassed(registry, candidate, plan.walkForward)) {
-    throw new Error("all preregistered walk-forward slices must pass before regime/cost stress or Final Holdout");
+  if ((kind === "regime_cost_stress" || kind === "sensitivity_analysis" || kind === "final_holdout") && !allPassed(registry, candidate, plan.walkForward)) {
+    throw new Error("all preregistered walk-forward slices must pass before regime/cost stress, sensitivity analysis, or Final Holdout");
   }
   if (kind === "final_holdout" && !allPassed(registry, candidate, plan.regimeCostStress)) {
     throw new Error("all preregistered regime/cost stress slices must pass before Final Holdout");
+  }
+  if (kind === "final_holdout" && !allPassed(registry, candidate, plan.sensitivityAnalysis)) {
+    throw new Error("all preregistered sensitivity analysis slices must pass before Final Holdout");
   }
   if (kind === "final_holdout" && registry.trials.some((trial) => (
     trial.candidateId === candidate.candidateId
@@ -241,6 +292,8 @@ export function appendQualityDaytradeValidationEvidence({
       validationPlanDigest: plan.planDigest,
       regime: spec.regime ?? null,
       costMultiplier: spec.costMultiplier ?? null,
+      sensitivityLabel: spec.label ?? null,
+      sensitivityParameterOverrides: spec.parameterOverrides ?? null,
       splitDigest: spec.splitDigest ?? null,
     },
   });
@@ -263,10 +316,12 @@ export function summarizeQualityDaytradeValidationLifecycle(plan, registry) {
   const oos = summarize(plan.oos);
   const walkForward = summarize(plan.walkForward);
   const regimeCostStress = summarize(plan.regimeCostStress);
+  const sensitivityAnalysis = summarize(plan.sensitivityAnalysis);
   const finalTrial = trialForSpec(registry, candidate, plan.finalHoldout);
   const readyForFinalHoldout = oos.passed === oos.required
     && walkForward.passed === walkForward.required
     && regimeCostStress.passed === regimeCostStress.required
+    && sensitivityAnalysis.passed === sensitivityAnalysis.required
     && finalTrial == null;
   return Object.freeze({
     planDigest: plan.planDigest,
@@ -275,6 +330,7 @@ export function summarizeQualityDaytradeValidationLifecycle(plan, registry) {
     oos,
     walkForward,
     regimeCostStress,
+    sensitivityAnalysis,
     readyForFinalHoldout,
     finalHoldoutConsumed: finalTrial != null,
     finalHoldoutPassed: finalTrial?.metrics?.passed === true,
