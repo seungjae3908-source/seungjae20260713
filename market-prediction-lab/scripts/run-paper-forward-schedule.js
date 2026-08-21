@@ -54,6 +54,14 @@ function expectedStrategyId(outcomeAccumulationEnabled) {
     : "paper-forward-public-evidence-v1";
 }
 
+function stageMeasurementCount(stageMeasurements, stage) {
+  if (!Array.isArray(stageMeasurements)) return null;
+  const measurement = stageMeasurements.find((row) => row?.stage === stage);
+  return measurement?.status === "MEASURED" && Number.isInteger(measurement.count)
+    ? measurement.count
+    : null;
+}
+
 export function resolveOutcomeAccumulationEnabled(env = process.env) {
   if (truthy(env.RESEARCH_PRODUCTION)) return true;
   return truthy(env.PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED);
@@ -203,6 +211,7 @@ export async function runPaperForwardScheduleCli(env = process.env, {
   try {
     let authoritativeSourceWiringAudit = null;
     let authoritativeRuntimePackageAudit = null;
+    let authoritativeRuntimeMeasurement = null;
     let resolvedAuthoritativeSourceWiring = authoritativePaperSourceWiring ?? {};
     if (researchProduction) {
       const runtimePackage = await authoritativePaperPackageLoader();
@@ -212,11 +221,14 @@ export async function runPaperForwardScheduleCli(env = process.env, {
         createPaperAdmissionEvidenceProducer: runtimePackage.createPaperAdmissionEvidenceProducer,
       };
       const stateSnapshotPath = String(env.PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH ?? "").trim();
-      if (stateSnapshotPath && typeof resolvedAuthoritativeSourceWiring.paperStateForCard !== "function") {
-        resolvedAuthoritativeSourceWiring.paperStateForCard = paperStateSourceFactory({
-          snapshotPath: stateSnapshotPath,
-          runtimePackage,
-        });
+      if (stateSnapshotPath) {
+        resolvedAuthoritativeSourceWiring = {
+          ...resolvedAuthoritativeSourceWiring,
+          paperStateForCard: paperStateSourceFactory({
+            snapshotPath: stateSnapshotPath,
+            runtimePackage,
+          }),
+        };
       }
       authoritativeRuntimePackageAudit = Object.freeze({
         schemaVersion: runtimePackage.schemaVersion,
@@ -224,6 +236,7 @@ export async function runPaperForwardScheduleCli(env = process.env, {
         sourceGraphSha256: runtimePackage.sourceGraphSha256,
         bundleSha256: runtimePackage.bundleSha256,
         admissionBundleSchemaVersion: runtimePackage.admissionBundleSchemaVersion,
+        blockedDataSourceContractSchemaVersion: runtimePackage.blockedDataSourceContractSchemaVersion,
         costPolicyVersion: runtimePackage.costPolicyVersion,
         costPolicyVersionBinding: runtimePackage.costPolicyVersionBinding,
         executionAuthority: runtimePackage.executionAuthority,
@@ -269,10 +282,26 @@ export async function runPaperForwardScheduleCli(env = process.env, {
         sourceWiring: resolvedAuthoritativeSourceWiring,
         providerOptions: { env },
       });
-      invocation.publicEvidenceProvider = dependencies.publicEvidenceProvider;
+      invocation.publicEvidenceProvider = Object.freeze({
+        async collectPublicEvidence(input) {
+          const evidence = await dependencies.publicEvidenceProvider.collectPublicEvidence(input);
+          if (input?.market === "CRYPTO_FUTURES"
+            && Array.isArray(evidence?.paperCandidateSource?.stageMeasurements)) {
+            authoritativeRuntimeMeasurement = Object.freeze({
+              stageMeasurements: evidence.paperCandidateSource.stageMeasurements,
+              firstZeroStage: evidence.paperCandidateSource.firstZeroStage ?? "UNKNOWN",
+              firstZeroReason: evidence.paperCandidateSource.firstZeroReason ?? evidence.blocker ?? null,
+            });
+          }
+          return evidence;
+        },
+      });
       authoritativeSourceWiringAudit = dependencies.sourceWiringAudit ?? null;
     }
     const result = await runScheduledInvocation(invocation);
+    const stageMeasurements = authoritativeRuntimeMeasurement?.stageMeasurements
+      ?? authoritativeSourceWiringAudit?.stageMeasurements
+      ?? [];
     const output = {
       schemaVersion: "paper-forward-schedule-cli-v3",
       status: result.status,
@@ -291,15 +320,20 @@ export async function runPaperForwardScheduleCli(env = process.env, {
       externalFinancialMutationAllowed: false,
       lanes: result.invocation?.providerLanes ?? [],
       authoritativeSourceWiringStatus: authoritativeSourceWiringAudit?.status ?? null,
-      firstZeroStage: authoritativeSourceWiringAudit?.firstZeroStage ?? null,
-      firstZeroReason: authoritativeSourceWiringAudit?.firstZeroReason ?? null,
+      firstZeroStage: authoritativeRuntimeMeasurement?.firstZeroStage
+        ?? authoritativeSourceWiringAudit?.firstZeroStage
+        ?? null,
+      firstZeroReason: authoritativeRuntimeMeasurement?.firstZeroReason
+        ?? authoritativeSourceWiringAudit?.firstZeroReason
+        ?? null,
       authoritativeSourceBlockers: authoritativeSourceWiringAudit?.blockers ?? [],
+      authoritativeStageMeasurements: stageMeasurements,
       authoritativeRuntimePackage: authoritativeRuntimePackageAudit,
       authoritativeEvidenceOwners: AUTHORITATIVE_PAPER_EVIDENCE_SOURCE_OWNERSHIP.sevenEvidenceOwnerSummary,
-      scannerCandidateCount: authoritativeSourceWiringAudit?.scannerCandidateCount ?? null,
-      canonicalPaperCandidateCount: authoritativeSourceWiringAudit?.canonicalPaperCandidateCount ?? null,
-      entryCount: authoritativeSourceWiringAudit?.entryCount ?? null,
-      settlementCount: authoritativeSourceWiringAudit?.settlementCount ?? null,
+      scannerCandidateCount: stageMeasurementCount(stageMeasurements, "Scanner Candidate"),
+      canonicalPaperCandidateCount: stageMeasurementCount(stageMeasurements, "Identity"),
+      entryCount: stageMeasurementCount(stageMeasurements, "Entry"),
+      settlementCount: stageMeasurementCount(stageMeasurements, "Settlement"),
       privateRequestCount: 0,
       financialMutationCount: 0,
       orderCount: 0,

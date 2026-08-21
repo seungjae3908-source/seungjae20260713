@@ -10,6 +10,7 @@ export const AUTHORITATIVE_PAPER_RUNTIME_PACKAGE_CONTRACT = Object.freeze({
   canonicalProducerSourceCommitSha: "3f85003368830fb570c05b3b2060da39f515696d",
   admissionBundleSchemaVersion: "scanner-paper-admission-evidence-bundle-v1",
   paperStateSnapshotSchemaVersion: "paper-trading-state-snapshot-v1",
+  blockedDataSourceContractSchemaVersion: "authoritative-paper-blocked-data-source-contract-v1",
   simulatedExecutionEvidenceSchemaVersion: "paper-simulated-execution-evidence-v1",
   executionAuthority: "NONE",
   privateApiAllowed: false,
@@ -113,6 +114,7 @@ function assertManifest(manifest, bundleDigest) {
     || manifest.bundleSha256 !== bundleDigest
     || manifest.admissionBundleSchemaVersion !== contract.admissionBundleSchemaVersion
     || manifest.paperStateSnapshotSchemaVersion !== contract.paperStateSnapshotSchemaVersion
+    || manifest.blockedDataSourceContractSchemaVersion !== contract.blockedDataSourceContractSchemaVersion
     || manifest.simulatedExecutionEvidenceSchemaVersion !== contract.simulatedExecutionEvidenceSchemaVersion
     || manifest.costPolicyVersion !== null
     || manifest.costPolicyVersionBinding?.status !== "RUNTIME_EXACT_REQUIRED"
@@ -138,6 +140,8 @@ function assertExports(runtime) {
       !== AUTHORITATIVE_PAPER_RUNTIME_PACKAGE_CONTRACT.canonicalProducerVersion
     || runtime?.PAPER_TRADING_STATE_SNAPSHOT_VERSION
       !== AUTHORITATIVE_PAPER_RUNTIME_PACKAGE_CONTRACT.paperStateSnapshotSchemaVersion
+    || runtime?.AUTHORITATIVE_PAPER_BLOCKED_DATA_SOURCE_CONTRACT_VERSION
+      !== AUTHORITATIVE_PAPER_RUNTIME_PACKAGE_CONTRACT.blockedDataSourceContractSchemaVersion
     || typeof runtime?.createScannerCryptoFuturesPaperAdmissionEvidenceProducer !== "function"
     || typeof runtime?.createAuthoritativePaperEvidenceSourceWiring !== "function"
     || typeof runtime?.createImmutablePaperTradingStateSnapshot !== "function"
@@ -191,6 +195,7 @@ export async function loadValidatedAuthoritativePaperRuntimePackage({
     sourceGraphSha256: manifest.sourceGraphSha256,
     bundleSha256: bundleDigest,
     admissionBundleSchemaVersion: manifest.admissionBundleSchemaVersion,
+    blockedDataSourceContractSchemaVersion: manifest.blockedDataSourceContractSchemaVersion,
     simulatedExecutionEvidenceSchemaVersion: manifest.simulatedExecutionEvidenceSchemaVersion,
     costPolicyVersion: null,
     costPolicyVersionBinding: freeze(manifest.costPolicyVersionBinding),

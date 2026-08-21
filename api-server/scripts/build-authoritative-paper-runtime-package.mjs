@@ -127,6 +127,7 @@ const manifest = {
   bundleSha256,
   admissionBundleSchemaVersion: 'scanner-paper-admission-evidence-bundle-v1',
   paperStateSnapshotSchemaVersion: 'paper-trading-state-snapshot-v1',
+  blockedDataSourceContractSchemaVersion: 'authoritative-paper-blocked-data-source-contract-v1',
   simulatedExecutionEvidenceSchemaVersion: 'paper-simulated-execution-evidence-v1',
   costPolicyVersion: null,
   costPolicyVersionBinding: {
@@ -136,6 +137,7 @@ const manifest = {
     unknownIsZero: false,
   },
   exports: [
+    'AUTHORITATIVE_PAPER_BLOCKED_DATA_SOURCE_CONTRACT_VERSION',
     'AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_SAFETY',
     'AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_VERSION',
     'AUTHORITATIVE_PAPER_RUNTIME_PACKAGE_SAFETY',

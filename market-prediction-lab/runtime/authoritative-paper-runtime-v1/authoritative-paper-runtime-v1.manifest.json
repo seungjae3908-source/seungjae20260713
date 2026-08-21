@@ -8,7 +8,7 @@
     "sourceGitBlobSha": "e4fe2e7c8cd0ec279cda8d696b4ae935bef86a4b",
     "sourceSha256": "e699e00ba64040aefec24b5b4992b4975531fdf88c1e4b2b164038ebed57dad7"
   },
-  "sourceGraphSha256": "4eecf523d0d7d4ec80430b5c88232762ab48afc652f289be75f1d58879e946cc",
+  "sourceGraphSha256": "dd83e5bebc16d17ced2cfc5df8b2ae4bee03a555f8c69d158e2be651d60404fa",
   "sourceFiles": [
     "api-server/src/data/asset-type.ts",
     "api-server/src/lib/bounded-work-pool.ts",
@@ -47,8 +47,8 @@
   "sourceFileSha256": {
     "api-server/src/data/asset-type.ts": "ad88c2ca7032503eca9b364625b95913519c7452649a0975d838bddede27c0bf",
     "api-server/src/lib/bounded-work-pool.ts": "8dc3eff3b957b8f98507102ff47ff4df125979684ea9eabc54722f21c591729d",
-    "api-server/src/services/authoritative-paper-evidence-sources.service.ts": "ee3bf9b16f64d0f4766c53d42745cbe3a4bbc2d4e52624645666f7b7748a78d9",
-    "api-server/src/services/authoritative-paper-runtime-package.entry.ts": "ef8677997d5d633544490cc21ad212941c397cf6ffc609b9dc8a4519b3b5f1da",
+    "api-server/src/services/authoritative-paper-evidence-sources.service.ts": "29d12d33d4b7ee002e8e870cdee48a42b4aab74524df14c6977e94ff257b4e0b",
+    "api-server/src/services/authoritative-paper-runtime-package.entry.ts": "1c03a1a4c9acefdfa480b825aa4b5e59efd7cf802adbbf92020ec5db2ecf80e5",
     "api-server/src/services/bitget-futures-public-evidence.service.ts": "e6ebd43826d43fc93a16ca8516c8ca9c214f73677c706fdbdfff697ed0918a55",
     "api-server/src/services/crypto-signal-scanner.service.ts": "2d8a7591842367069e8ca5d4007c44cda9526a223c8d612665ab9b59a242dc3c",
     "api-server/src/services/forward-recommendation-observer-runtime.service.ts": "fec804b47a0ed864a99cc3bb16d4f4f320847c3360c3f4588ac56644737b2b1c",
@@ -79,9 +79,10 @@
     "api-server/src/services/trading-risk-engine.service.ts": "6005a12a69e8375913d7699ef864d0efa01ff3d80357c85cd355bb16cbdd96f2",
     "market-intelligence-sidecar/src/execution-quality.mjs": "d646fe71f323df5781625b8f97108101ec5fc64d5202c116a733211ebccd2cea"
   },
-  "bundleSha256": "03de3d8d9cbf94f7de0f90d51cc88b940b95dd4bf439d3ba1cc420df27d207c8",
+  "bundleSha256": "85c5d37d70ad7f9a5a30cbb26a6ce8a0c839d716f4c52a109188e46eb1a17198",
   "admissionBundleSchemaVersion": "scanner-paper-admission-evidence-bundle-v1",
   "paperStateSnapshotSchemaVersion": "paper-trading-state-snapshot-v1",
+  "blockedDataSourceContractSchemaVersion": "authoritative-paper-blocked-data-source-contract-v1",
   "simulatedExecutionEvidenceSchemaVersion": "paper-simulated-execution-evidence-v1",
   "costPolicyVersion": null,
   "costPolicyVersionBinding": {
@@ -91,6 +92,7 @@
     "unknownIsZero": false
   },
   "exports": [
+    "AUTHORITATIVE_PAPER_BLOCKED_DATA_SOURCE_CONTRACT_VERSION",
     "AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_SAFETY",
     "AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_VERSION",
     "AUTHORITATIVE_PAPER_RUNTIME_PACKAGE_SAFETY",
