@@ -5167,7 +5167,7 @@ function buildBitgetFuturesPublicRequests(symbol) {
 function normalizeBitgetCandles(envelope, granularity, nowMs) {
   const data = successData(envelope, "BITGET_CANDLES");
   if (!Array.isArray(data)) throw new Error("BITGET_CANDLES_DATA");
-  const unique2 = /* @__PURE__ */ new Map();
+  const unique3 = /* @__PURE__ */ new Map();
   for (const row of data) {
     if (!Array.isArray(row) || row.length < 7) throw new Error("BITGET_CANDLE_ROW");
     const candle = {
@@ -5183,11 +5183,11 @@ function normalizeBitgetCandles(envelope, granularity, nowMs) {
     if (candle.low > Math.min(candle.open, candle.close) || candle.high < Math.max(candle.open, candle.close) || candle.high < candle.low) {
       throw new Error("BITGET_CANDLE_OHLC_INVALID");
     }
-    if (unique2.has(candle.timestampMs)) throw new Error("BITGET_CANDLE_DUPLICATE_TIMESTAMP");
-    unique2.set(candle.timestampMs, candle);
+    if (unique3.has(candle.timestampMs)) throw new Error("BITGET_CANDLE_DUPLICATE_TIMESTAMP");
+    unique3.set(candle.timestampMs, candle);
   }
   const durationMs = GRANULARITY_MS[granularity];
-  return [...unique2.values()].filter((candle) => candle.timestampMs + durationMs <= nowMs).sort((a, b) => a.timestampMs - b.timestampMs);
+  return [...unique3.values()].filter((candle) => candle.timestampMs + durationMs <= nowMs).sort((a, b) => a.timestampMs - b.timestampMs);
 }
 function buildBitgetFuturesPublicEvidence(input) {
   const symbol = normalizeBitgetFuturesSymbol(input.symbol);
@@ -5571,6 +5571,269 @@ var AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_SAFETY = Object.freeze({
   financialMutationAllowed: false
 });
 
+// ../market-intelligence-sidecar/src/execution-quality.mjs
+var ENFORCEMENT_MODES = /* @__PURE__ */ new Set(["OBSERVE_ONLY", "REQUIRED_FOR_PARENT_GATE"]);
+var BUY_DIRECTIONS = /* @__PURE__ */ new Set(["BUY", "LONG"]);
+var SELL_DIRECTIONS = /* @__PURE__ */ new Set(["SELL", "SHORT"]);
+var DEFAULT_EXECUTION_QUALITY_POLICY = Object.freeze({
+  version: "MIS_EXECUTION_QUALITY_V1",
+  enforcement: "OBSERVE_ONLY",
+  minBookCoverageRatio: 1,
+  maxBookWalkSlippageBps: 30,
+  minFillModelSamples: 500,
+  minFillProbability: 0.65,
+  maxFillModelBrierScore: 0.25,
+  maxFillModelCalibrationError: 0.1,
+  maxFillModelAgeMs: 7 * 24 * 60 * 60 * 1e3,
+  maxObservedImplementationShortfallBps: 50
+});
+function finite11(value, fallback = null) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+function clamp6(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+function resolvePolicy(policy = {}) {
+  const merged = { ...DEFAULT_EXECUTION_QUALITY_POLICY, ...policy ?? {} };
+  if (typeof merged.version !== "string" || !merged.version.trim()) throw new Error("EXECUTION_POLICY_VERSION_REQUIRED");
+  merged.enforcement = String(merged.enforcement ?? "").toUpperCase();
+  if (!ENFORCEMENT_MODES.has(merged.enforcement)) throw new Error("EXECUTION_POLICY_ENFORCEMENT_INVALID");
+  for (const key of Object.keys(DEFAULT_EXECUTION_QUALITY_POLICY).filter((key2) => key2 !== "version" && key2 !== "enforcement")) {
+    const value = Number(merged[key]);
+    if (!Number.isFinite(value)) throw new Error(`EXECUTION_POLICY_FIELD_INVALID:${key}`);
+    merged[key] = value;
+  }
+  if (!(merged.minBookCoverageRatio > 0 && merged.minBookCoverageRatio <= 1)) throw new Error("BOOK_COVERAGE_POLICY_INVALID");
+  if (!(merged.minFillProbability >= 0 && merged.minFillProbability <= 1)) throw new Error("FILL_PROBABILITY_POLICY_INVALID");
+  return merged;
+}
+function normalizeDirection(direction) {
+  const normalized = String(direction ?? "").toUpperCase();
+  if (BUY_DIRECTIONS.has(normalized)) return "BUY";
+  if (SELL_DIRECTIONS.has(normalized)) return "SELL";
+  throw new Error("EXECUTION_DIRECTION_INVALID");
+}
+function normalizeLevels(levels, ascending) {
+  return (Array.isArray(levels) ? levels : []).map((level) => Array.isArray(level) ? { price: finite11(level[0]), size: finite11(level[1]) } : { price: finite11(level?.price), size: finite11(level?.size ?? level?.qty ?? level?.quantity) }).filter((level) => level.price > 0 && level.size > 0).sort((a, b) => ascending ? a.price - b.price : b.price - a.price);
+}
+function walkOrderBook(raw = {}, policyInput = {}) {
+  const policy = resolvePolicy(policyInput);
+  const direction = String(raw.direction ?? "").trim();
+  if (!direction) return { status: "NOT_AVAILABLE", reason: "EXECUTION_DIRECTION_REQUIRED" };
+  const side = normalizeDirection(direction);
+  const targetQty = finite11(raw.targetQty);
+  if (!(targetQty > 0)) return { status: "NOT_AVAILABLE", reason: "TARGET_QTY_REQUIRED" };
+  const levels = side === "BUY" ? normalizeLevels(raw.asks, true) : normalizeLevels(raw.bids, false);
+  if (!levels.length) return { status: "NOT_AVAILABLE", reason: "EXECUTABLE_BOOK_NOT_AVAILABLE" };
+  const arrivalPrice = finite11(raw.arrivalPrice, levels[0].price);
+  if (!(arrivalPrice > 0)) return { status: "NOT_AVAILABLE", reason: "ARRIVAL_PRICE_INVALID" };
+  let remaining = targetQty;
+  let filledQty = 0;
+  let notional = 0;
+  let levelsConsumed = 0;
+  for (const level of levels) {
+    if (remaining <= 0) break;
+    const take = Math.min(remaining, level.size);
+    if (take <= 0) continue;
+    remaining -= take;
+    filledQty += take;
+    notional += take * level.price;
+    levelsConsumed += 1;
+  }
+  const coverageRatio = clamp6(filledQty / targetQty, 0, 1);
+  const vwap = filledQty > 0 ? notional / filledQty : null;
+  const rawSlippageBps = vwap == null ? null : side === "BUY" ? (vwap - arrivalPrice) / arrivalPrice * 1e4 : (arrivalPrice - vwap) / arrivalPrice * 1e4;
+  const slippageBps = rawSlippageBps == null ? null : Math.max(0, rawSlippageBps);
+  const reasons = [];
+  if (coverageRatio < policy.minBookCoverageRatio) reasons.push("INSUFFICIENT_VISIBLE_DEPTH");
+  if (slippageBps != null && slippageBps > policy.maxBookWalkSlippageBps) reasons.push("BOOK_WALK_SLIPPAGE_TOO_HIGH");
+  return {
+    status: reasons.length ? "VETO" : "PASS",
+    reasons,
+    side,
+    targetQty,
+    filledQty,
+    unfilledQty: Math.max(0, remaining),
+    coverageRatio,
+    vwap,
+    arrivalPrice,
+    slippageBps,
+    levelsConsumed,
+    model: "VISIBLE_L2_BOOK_WALK_ONLY",
+    permanentMarketImpactEstimated: false
+  };
+}
+function evaluateCalibratedFillModel(raw = {}, policyInput = {}, nowInput = Date.now()) {
+  const policy = resolvePolicy(policyInput);
+  const modelId = String(raw.modelId ?? "").trim();
+  const fillProbability = finite11(raw.fillProbability);
+  const evaluationSamples = Math.max(0, finite11(raw.evaluationSamples, 0));
+  const brierScore = finite11(raw.brierScore);
+  const calibrationError = finite11(raw.calibrationError);
+  const evaluatedAt = finite11(raw.evaluatedAt);
+  const now = finite11(nowInput, Date.now());
+  const ageMs = evaluatedAt == null ? null : Math.max(0, now - evaluatedAt);
+  if (!modelId || fillProbability == null || brierScore == null || calibrationError == null || evaluatedAt == null) return { status: "NOT_AVAILABLE", reason: "CALIBRATED_FILL_MODEL_EVIDENCE_MISSING" };
+  if (!(fillProbability >= 0 && fillProbability <= 1)) return { status: "NOT_AVAILABLE", reason: "FILL_PROBABILITY_INVALID" };
+  if (evaluationSamples < policy.minFillModelSamples) return { status: "NOT_AVAILABLE", reason: "FILL_MODEL_SAMPLE_INSUFFICIENT", evaluationSamples, minimumSamples: policy.minFillModelSamples };
+  if (ageMs > policy.maxFillModelAgeMs) return { status: "NOT_AVAILABLE", reason: "FILL_MODEL_EVIDENCE_STALE", ageMs };
+  if (brierScore > policy.maxFillModelBrierScore || calibrationError > policy.maxFillModelCalibrationError) return { status: "NOT_AVAILABLE", reason: "FILL_MODEL_CALIBRATION_QUALITY_INSUFFICIENT", brierScore, calibrationError };
+  return {
+    status: fillProbability >= policy.minFillProbability ? "PASS" : "VETO",
+    reason: fillProbability >= policy.minFillProbability ? null : "FILL_PROBABILITY_TOO_LOW",
+    modelId,
+    fillProbability,
+    threshold: policy.minFillProbability,
+    evaluationSamples,
+    brierScore,
+    calibrationError,
+    evaluatedAt,
+    ageMs
+  };
+}
+
+// src/services/paper-simulated-execution-evidence.service.ts
+var PAPER_SIMULATED_EXECUTION_EVIDENCE_VERSION = "paper-simulated-execution-evidence-v1";
+var PAPER_SIMULATED_EXECUTION_EVIDENCE_SAFETY = Object.freeze({
+  schemaVersion: "paper-simulated-execution-evidence-safety-v1",
+  executionMode: "SIMULATED_EXECUTION_ONLY",
+  executionAuthority: "NONE",
+  privateApiAllowed: false,
+  liveTrading: false,
+  realFillClaimAllowed: false,
+  currentPriceFillAssumptionAllowed: false,
+  financialMutationAllowed: false
+});
+function finite12(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+function nonEmpty6(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+function levelPrice(level) {
+  if (Array.isArray(level)) return finite12(level[0]);
+  return finite12(level.price);
+}
+function bestPrice(levels, side) {
+  const prices = levels.map(levelPrice).filter((value) => value != null && value > 0);
+  if (prices.length === 0) return null;
+  return side === "BID" ? Math.max(...prices) : Math.min(...prices);
+}
+function cloneLevel(level) {
+  if (Array.isArray(level)) return [level[0], level[1]];
+  return { ...level };
+}
+function unique2(values) {
+  return Object.freeze([...new Set(values)]);
+}
+function freeze(value) {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  for (const child of Object.values(value)) freeze(child);
+  return Object.freeze(value);
+}
+function buildPaperSimulatedExecutionEvidence(input) {
+  const nowMs = finite12(input?.nowMs) ?? Date.now();
+  const observedAtMs = finite12(input?.observedAtMs);
+  const maximumAgeMs = finite12(input?.maximumAgeMs);
+  const targetQuantity = finite12(input?.targetQuantity);
+  const blockers = [];
+  if (!nonEmpty6(input?.source)) blockers.push("PUBLIC_DEPTH_SOURCE_REQUIRED");
+  if (!nonEmpty6(input?.market)) blockers.push("MARKET_REQUIRED");
+  if (!nonEmpty6(input?.symbol)) blockers.push("SYMBOL_REQUIRED");
+  if (!nonEmpty6(input?.direction)) blockers.push("EXECUTION_DIRECTION_REQUIRED");
+  if (!(targetQuantity != null && targetQuantity > 0)) blockers.push("TARGET_QUANTITY_REQUIRED");
+  if (!(observedAtMs != null && observedAtMs > 0)) blockers.push("PUBLIC_DEPTH_TIMESTAMP_REQUIRED");
+  if (!(maximumAgeMs != null && maximumAgeMs > 0)) blockers.push("PUBLIC_DEPTH_FRESHNESS_CONTRACT_REQUIRED");
+  if (observedAtMs != null && maximumAgeMs != null && nowMs - observedAtMs > maximumAgeMs) {
+    blockers.push("PUBLIC_DEPTH_STALE");
+  }
+  if (!Array.isArray(input?.provenance) || input.provenance.length === 0 || !input.provenance.every(nonEmpty6)) {
+    blockers.push("PUBLIC_DEPTH_PROVENANCE_REQUIRED");
+  }
+  const bids = Array.isArray(input?.bids) ? input.bids.map(cloneLevel) : [];
+  const asks = Array.isArray(input?.asks) ? input.asks.map(cloneLevel) : [];
+  const bid = bestPrice(bids, "BID");
+  const ask = bestPrice(asks, "ASK");
+  if (bid == null || ask == null || ask < bid) blockers.push("PUBLIC_DEPTH_BOOK_INVALID");
+  const bookWalk = walkOrderBook({
+    direction: input?.direction,
+    targetQty: input?.targetQuantity,
+    bids,
+    asks
+  }, input?.policy ?? {});
+  if (bookWalk?.status === "NOT_AVAILABLE") blockers.push(String(bookWalk.reason ?? "BOOK_WALK_NOT_AVAILABLE"));
+  const fillModel = evaluateCalibratedFillModel(
+    input?.calibratedFillModel ?? {},
+    input?.policy ?? {},
+    nowMs
+  );
+  if (fillModel?.status === "NOT_AVAILABLE") blockers.push(String(fillModel.reason ?? "CALIBRATED_FILL_MODEL_EVIDENCE_MISSING"));
+  const requestStartedAtMs = finite12(input?.requestStartedAtMs);
+  const requestCompletedAtMs = finite12(input?.requestCompletedAtMs);
+  const observedRoundTripMs = requestStartedAtMs != null && requestCompletedAtMs != null && requestCompletedAtMs >= requestStartedAtMs ? requestCompletedAtMs - requestStartedAtMs : null;
+  if (observedRoundTripMs == null) blockers.push("OBSERVED_LATENCY_DURATION_MISSING");
+  blockers.push(
+    "LATENCY_COST_MODEL_OWNER_MISSING",
+    "LIQUIDITY_IMPACT_COST_MODEL_OWNER_MISSING",
+    "PARTIAL_FILL_COST_MODEL_OWNER_MISSING"
+  );
+  const spreadAbsolute = bid != null && ask != null && ask >= bid ? ask - bid : null;
+  const spreadPercent2 = spreadAbsolute != null && bid != null && ask != null ? spreadAbsolute / ((bid + ask) / 2) * 100 : null;
+  return freeze({
+    schemaVersion: PAPER_SIMULATED_EXECUTION_EVIDENCE_VERSION,
+    status: "BLOCKED_DATA",
+    modelStatus: bookWalk?.status === "NOT_AVAILABLE" ? "BLOCKED_DATA" : "SIMULATION_AVAILABLE",
+    blockers: unique2(blockers),
+    source: nonEmpty6(input?.source) ? input.source.trim() : null,
+    timestamp: observedAtMs,
+    market: nonEmpty6(input?.market) ? input.market.trim() : null,
+    symbol: nonEmpty6(input?.symbol) ? input.symbol.trim() : null,
+    observed: {
+      bid,
+      ask,
+      spread: { absolute: spreadAbsolute, percent: spreadPercent2, quality: "OBSERVED_PUBLIC_DEPTH" },
+      depth: { bids, asks, quality: "OBSERVED_PUBLIC_DEPTH" },
+      latencyEvidence: {
+        observedRoundTripMs,
+        costPercent: null,
+        quality: observedRoundTripMs == null ? "NOT_AVAILABLE" : "OBSERVED_DURATION_ONLY"
+      }
+    },
+    estimated: {
+      slippageEstimate: {
+        percent: finite12(bookWalk?.slippageBps) == null ? null : Number(bookWalk.slippageBps) / 100,
+        quality: bookWalk?.status === "NOT_AVAILABLE" ? "NOT_AVAILABLE" : "ESTIMATED",
+        model: bookWalk?.model ?? null
+      },
+      liquidityEvidence: {
+        targetQuantity: targetQuantity != null && targetQuantity > 0 ? targetQuantity : null,
+        visibleExecutableQuantity: finite12(bookWalk?.filledQty),
+        visibleCoverageRatio: finite12(bookWalk?.coverageRatio),
+        permanentMarketImpactEstimated: false
+      },
+      partialFillEstimate: {
+        visibleDepthFillFraction: finite12(bookWalk?.coverageRatio),
+        calibratedFillProbability: finite12(fillModel?.fillProbability),
+        quality: fillModel?.status === "NOT_AVAILABLE" ? "UNCALIBRATED_MODEL_ONLY" : "CALIBRATED_ESTIMATE"
+      }
+    },
+    confidence: {
+      classification: fillModel?.status === "NOT_AVAILABLE" ? "UNCALIBRATED" : "CALIBRATED",
+      numericConfidence: null,
+      fillModel
+    },
+    provenance: Array.isArray(input?.provenance) ? [...input.provenance] : [],
+    executionMode: "SIMULATED_EXECUTION_ONLY",
+    publicDepthIsFillProof: false,
+    realFillClaim: false,
+    currentPriceIsFillPrice: false,
+    costEvidenceReady: false,
+    safety: PAPER_SIMULATED_EXECUTION_EVIDENCE_SAFETY
+  });
+}
+
 // src/services/authoritative-paper-runtime-package.entry.ts
 var AUTHORITATIVE_PAPER_RUNTIME_PACKAGE_SAFETY = Object.freeze({
   schemaVersion: "authoritative-paper-runtime-package-safety-v1",
@@ -5584,8 +5847,11 @@ export {
   AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_SAFETY,
   AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_VERSION,
   AUTHORITATIVE_PAPER_RUNTIME_PACKAGE_SAFETY,
+  PAPER_SIMULATED_EXECUTION_EVIDENCE_SAFETY,
+  PAPER_SIMULATED_EXECUTION_EVIDENCE_VERSION,
   PAPER_TRADING_STATE_SNAPSHOT_VERSION,
   SCANNER_CRYPTO_FUTURES_PAPER_ADMISSION_EVIDENCE_PRODUCER_VERSION,
+  buildPaperSimulatedExecutionEvidence,
   createAuthoritativePaperEvidenceSourceWiring,
   createImmutablePaperTradingStateSnapshot,
   createScannerCryptoFuturesPaperAdmissionEvidenceProducer,

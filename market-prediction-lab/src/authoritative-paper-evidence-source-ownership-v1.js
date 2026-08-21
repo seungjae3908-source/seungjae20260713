@@ -76,12 +76,12 @@ export const AUTHORITATIVE_PAPER_EVIDENCE_SOURCE_OWNERSHIP = Object.freeze({
     Object.freeze({
       callback: "executionObservationForCard",
       canonicalOwner: "OWNER_MISSING",
-      source: "market-intelligence-sidecar execution-quality.mjs is calculation-only; trade-execution-snapshot.service.ts mixes private account authority",
-      runtime: "pure calculator only / private mixed service inadmissible to scheduled Research Production",
-      dataProvenance: "OWNER_MISSING; public depth alone does not observe realized latency, slippage, queue position, or partial fill and fixtures/private fills are inadmissible",
+      source: "market-intelligence-sidecar execution-quality.mjs is packaged through paper-simulated-execution-evidence.service.ts; trade-execution-snapshot.service.ts mixes private account authority",
+      runtime: "validated ESM pure simulated calculator / private mixed service inadmissible to scheduled Research Production",
+      dataProvenance: "public depth can drive a labeled visible-book simulation, but the production callback remains OWNER_MISSING because target quantity, calibrated fill, latency-cost, liquidity-impact, and partial-fill-cost owners are absent",
       freshnessSource: "required observedAtMs per component",
       missingDataBehavior: "BLOCKED_DATA",
-      crossRuntimePackagingMethod: "OWNER_REQUIRED",
+      crossRuntimePackagingMethod: "VALIDATED_ESM_EXACT_SIDECAR_REUSE; PRODUCTION_CALLBACK_OWNER_REQUIRED",
       ownerStatus: "OWNER_MISSING",
       callbackStatus: "NOT_WIRED",
     }),
@@ -162,6 +162,10 @@ export const AUTHORITATIVE_PAPER_EVIDENCE_SOURCE_OWNERSHIP = Object.freeze({
     executionObservationForCard: Object.freeze({
       status: "OWNER_MISSING",
       exactBlocker: "AUTHORITATIVE_EXECUTION_OBSERVATION_SOURCE_UNAVAILABLE",
+      simulatedModelOwner: "market-intelligence-sidecar/src/execution-quality.mjs",
+      simulatedModelAdapter: "api-server/src/services/paper-simulated-execution-evidence.service.ts",
+      simulatedModelStatus: "EXECUTABLE_BLOCKED_DATA",
+      executionMode: "SIMULATED_EXECUTION_ONLY",
       schema: Object.freeze([
         "source",
         "timestamp",
@@ -204,6 +208,8 @@ export const AUTHORITATIVE_PAPER_EVIDENCE_SOURCE_OWNERSHIP = Object.freeze({
       currentPriceIsFillPrice: false,
       fixedSlippageAllowed: false,
       fixedLatencyAllowed: false,
+      realFillClaimAllowed: false,
+      costEvidenceReady: false,
     }),
     supplementalCostEvidenceForCard: Object.freeze({
       status: "OWNER_MISSING",
