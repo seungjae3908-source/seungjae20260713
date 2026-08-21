@@ -22,10 +22,14 @@ import {
 type RepositoryFactory = (userId: string) => AccountReadonlyCredentialRepository;
 type CredentialDecryptor = (payload: string) => Record<string, string>;
 
+export const DEFAULT_ACCOUNT_READONLY_PROVIDER_TIMEOUT_MS = 8_000;
+const MAX_ACCOUNT_READONLY_PROVIDER_TIMEOUT_MS = 30_000;
+
 export type AccountReadonlyRuntimeOptions = {
   repositoryFactory?: RepositoryFactory;
   decryptCredentials?: CredentialDecryptor;
   fetchImpl?: typeof fetch;
+  providerTimeoutMs?: number;
 };
 
 const READONLY_TARGETS = {
@@ -41,6 +45,45 @@ const READONLY_TARGETS = {
     ]),
   },
 } as const;
+
+function normalizedProviderTimeoutMs(value: number | undefined) {
+  if (value == null) return DEFAULT_ACCOUNT_READONLY_PROVIDER_TIMEOUT_MS;
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new AccountReadonlyError('ACCOUNT_READONLY_PROVIDER_TIMEOUT_INVALID');
+  }
+  return Math.min(MAX_ACCOUNT_READONLY_PROVIDER_TIMEOUT_MS, Math.max(1, Math.floor(value)));
+}
+
+async function withProviderDeadline<T>(
+  callerSignal: AbortSignal | undefined,
+  timeoutMs: number,
+  operation: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  let deadlineExpired = false;
+  const abortFromCaller = () => controller.abort(callerSignal?.reason);
+
+  if (callerSignal?.aborted) {
+    controller.abort(callerSignal.reason);
+  } else {
+    callerSignal?.addEventListener('abort', abortFromCaller, { once: true });
+  }
+
+  const timer = setTimeout(() => {
+    deadlineExpired = true;
+    controller.abort(new Error('PROVIDER_TIMEOUT'));
+  }, timeoutMs);
+
+  try {
+    return await operation(controller.signal);
+  } catch (error) {
+    if (deadlineExpired) throw new AccountReadonlyError('PROVIDER_TIMEOUT', true);
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    callerSignal?.removeEventListener('abort', abortFromCaller);
+  }
+}
 
 function createReadonlyTransport(
   origin: string,
@@ -117,6 +160,7 @@ export function createVaultBackedAccountReaders(
   const repositoryFactory = options.repositoryFactory ?? createAccountReadonlyCredentialRepository;
   const decryptCredentials = options.decryptCredentials ?? decryptTradingCredentials;
   const fetchImpl = options.fetchImpl ?? fetch;
+  const providerTimeoutMs = normalizedProviderTimeoutMs(options.providerTimeoutMs);
 
   const upbitTransport = createReadonlyTransport(
     READONLY_TARGETS.upbit.origin,
@@ -140,7 +184,7 @@ export function createVaultBackedAccountReaders(
         clientSecret: requireCredential(raw, 'clientSecret'),
         accountSeq: String(raw.accountSeq ?? '').trim() || undefined,
       };
-      return tossProvider.snapshot(credentials, signal);
+      return withProviderDeadline(signal, providerTimeoutMs, (boundedSignal) => tossProvider.snapshot(credentials, boundedSignal));
     },
     upbit: async (scope, signal) => {
       const raw = await loadCredentials(scope, 'upbit', repositoryFactory, decryptCredentials);
@@ -148,7 +192,7 @@ export function createVaultBackedAccountReaders(
         accessKey: requireCredential(raw, 'accessKey'),
         secretKey: requireCredential(raw, 'secretKey'),
       };
-      return readUpbitSnapshot(credentials, upbitTransport, signal);
+      return withProviderDeadline(signal, providerTimeoutMs, (boundedSignal) => readUpbitSnapshot(credentials, upbitTransport, boundedSignal));
     },
     bitget: async (scope, signal) => {
       const raw = await loadCredentials(scope, 'bitget', repositoryFactory, decryptCredentials);
@@ -157,7 +201,7 @@ export function createVaultBackedAccountReaders(
         secretKey: requireCredential(raw, 'secretKey'),
         passphrase: requireCredential(raw, 'passphrase'),
       };
-      return readBitgetSnapshot(credentials, bitgetTransport, signal);
+      return withProviderDeadline(signal, providerTimeoutMs, (boundedSignal) => readBitgetSnapshot(credentials, bitgetTransport, boundedSignal));
     },
   };
 }
