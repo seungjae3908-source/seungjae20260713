@@ -333,14 +333,14 @@ export async function runRecurringPaperCycle({
     if (settlement.status !== "SETTLED") continue;
     const settlementId = hash({ positionId: position.positionId, paperSampleId: settlement.paperSampleId, settledAtMs: settlement.settledAtMs });
     if (settlements.some((row) => row.settlementId === settlementId || row.paperSampleId === settlement.paperSampleId)) continue;
-    const nextLedger = await ledgerAdapter.applySettlement({ ledger, position, settlement, settlementId, cycle });
-    validateLedgerSnapshot(nextLedger);
     await learningAdapter.persistOutcome({
       cycle,
       identity: predecessor.identity,
       position,
       settlement: Object.freeze({ ...settlement, settlementId }),
     });
+    const nextLedger = await ledgerAdapter.applySettlement({ ledger, position, settlement, settlementId, cycle });
+    validateLedgerSnapshot(nextLedger);
     ledger = structuredClone(nextLedger);
     settlements.push(Object.freeze({ ...settlement, settlementId }));
     positions = positions.filter((row) => row.positionId !== position.positionId);
