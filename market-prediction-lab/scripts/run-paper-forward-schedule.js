@@ -1,7 +1,12 @@
 import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { AUTHORITATIVE_PAPER_EVIDENCE_SOURCE_OWNERSHIP } from "../src/authoritative-paper-evidence-source-ownership-v1.js";
 import { createAuthoritativePaperForwardDependenciesFromSourceWiring } from "../src/authoritative-paper-runtime-factory-v1.js";
+import {
+  createPaperStateSourceFromLosslessSnapshotFile,
+  loadValidatedAuthoritativePaperRuntimePackage,
+} from "../src/authoritative-paper-runtime-package-v1.js";
 import { createCanonicalPaperForwardEvidenceProvider } from "../src/paper-forward-evidence-runtime-v1.js";
 import { wrapPaperForwardProviderWithMeaningfulSearch } from "../src/meaningful-search-scheduled-paper-provider-v1.js";
 import {
@@ -155,6 +160,8 @@ export async function runPaperForwardScheduleCli(env = process.env, {
   meaningfulSearchPaperRuntimeForMarket = null,
   authoritativePaperSourceWiring = null,
   authoritativePaperDependenciesFactory = createAuthoritativePaperForwardDependenciesFromSourceWiring,
+  authoritativePaperPackageLoader = loadValidatedAuthoritativePaperRuntimePackage,
+  paperStateSourceFactory = createPaperStateSourceFromLosslessSnapshotFile,
 } = {}) {
   if (!truthy(env.PAPER_FORWARD_SCHEDULE_ACTIVE)) {
     fail("PAPER_FORWARD_SCHEDULE_ACTIVE must be explicitly true", 64);
@@ -181,6 +188,10 @@ export async function runPaperForwardScheduleCli(env = process.env, {
     fail("Authoritative Paper dependency factory is invalid", 69);
     return;
   }
+  if (typeof authoritativePaperPackageLoader !== "function" || typeof paperStateSourceFactory !== "function") {
+    fail("Authoritative Paper package dependency is invalid", 70);
+    return;
+  }
 
   const rootDirectory = env.PAPER_FORWARD_ROOT ?? "/opt/stock-app-data/paper-forward-v1/runtime-state";
   const researchCodeSha = String(env.PAPER_FORWARD_RESEARCH_SHA ?? "").trim().toLowerCase();
@@ -191,6 +202,36 @@ export async function runPaperForwardScheduleCli(env = process.env, {
 
   try {
     let authoritativeSourceWiringAudit = null;
+    let authoritativeRuntimePackageAudit = null;
+    let resolvedAuthoritativeSourceWiring = authoritativePaperSourceWiring ?? {};
+    if (researchProduction) {
+      const runtimePackage = await authoritativePaperPackageLoader();
+      resolvedAuthoritativeSourceWiring = {
+        ...resolvedAuthoritativeSourceWiring,
+        createPaperAdmissionEvidenceProducer: runtimePackage.createPaperAdmissionEvidenceProducer,
+      };
+      const stateSnapshotPath = String(env.PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH ?? "").trim();
+      if (stateSnapshotPath && typeof resolvedAuthoritativeSourceWiring.paperStateForCard !== "function") {
+        resolvedAuthoritativeSourceWiring.paperStateForCard = paperStateSourceFactory({
+          snapshotPath: stateSnapshotPath,
+          runtimePackage,
+        });
+      }
+      authoritativeRuntimePackageAudit = Object.freeze({
+        schemaVersion: runtimePackage.schemaVersion,
+        sourceSha: runtimePackage.sourceSha,
+        sourceGraphSha256: runtimePackage.sourceGraphSha256,
+        bundleSha256: runtimePackage.bundleSha256,
+        admissionBundleSchemaVersion: runtimePackage.admissionBundleSchemaVersion,
+        costPolicyVersion: runtimePackage.costPolicyVersion,
+        costPolicyVersionBinding: runtimePackage.costPolicyVersionBinding,
+        executionAuthority: runtimePackage.executionAuthority,
+        privateApiAllowed: runtimePackage.privateApiAllowed,
+        liveTrading: runtimePackage.liveTrading,
+        scheduleActivationAuthority: runtimePackage.scheduleActivationAuthority,
+        financialMutationAllowed: runtimePackage.financialMutationAllowed,
+      });
+    }
     const cutover = researchProduction
       ? await prepareResearchProductionIdentityCutover({
         rootDirectory,
@@ -224,7 +265,7 @@ export async function runPaperForwardScheduleCli(env = process.env, {
         });
     } else if (researchProduction) {
       const dependencies = authoritativePaperDependenciesFactory({
-        sourceWiring: authoritativePaperSourceWiring ?? {},
+        sourceWiring: resolvedAuthoritativeSourceWiring,
         providerOptions: { env },
       });
       invocation.publicEvidenceProvider = dependencies.publicEvidenceProvider;
@@ -252,6 +293,8 @@ export async function runPaperForwardScheduleCli(env = process.env, {
       firstZeroStage: authoritativeSourceWiringAudit?.firstZeroStage ?? null,
       firstZeroReason: authoritativeSourceWiringAudit?.firstZeroReason ?? null,
       authoritativeSourceBlockers: authoritativeSourceWiringAudit?.blockers ?? [],
+      authoritativeRuntimePackage: authoritativeRuntimePackageAudit,
+      authoritativeEvidenceOwners: AUTHORITATIVE_PAPER_EVIDENCE_SOURCE_OWNERSHIP.sevenEvidenceOwnerSummary,
       scannerCandidateCount: authoritativeSourceWiringAudit?.scannerCandidateCount ?? null,
       canonicalPaperCandidateCount: authoritativeSourceWiringAudit?.canonicalPaperCandidateCount ?? null,
       entryCount: authoritativeSourceWiringAudit?.entryCount ?? null,

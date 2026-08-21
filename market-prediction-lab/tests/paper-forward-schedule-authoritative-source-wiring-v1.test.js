@@ -53,7 +53,8 @@ test("Research Production recurring CLI injects the audited authoritative source
     },
   });
 
-  assert.equal(dependenciesInput.sourceWiring, sourceWiring);
+  assert.equal(dependenciesInput.sourceWiring.marker, sourceWiring.marker);
+  assert.equal(typeof dependenciesInput.sourceWiring.createPaperAdmissionEvidenceProducer, "function");
   assert.equal(dependenciesInput.providerOptions.env.RESEARCH_PRODUCTION, "true");
   assert.equal(invocation.publicEvidenceProvider, publicEvidenceProvider);
   assert.equal(invocation.outcomeAccumulationEnabled, true);
@@ -63,6 +64,16 @@ test("Research Production recurring CLI injects the audited authoritative source
   assert.deepEqual(output.authoritativeSourceBlockers, sourceWiringAudit.blockers);
   assert.equal(output.scannerCandidateCount, null);
   assert.equal(output.entryCount, null);
+  assert.match(output.authoritativeRuntimePackage.bundleSha256, /^[0-9a-f]{64}$/u);
+  assert.equal(output.authoritativeRuntimePackage.sourceSha, "3f85003368830fb570c05b3b2060da39f515696d");
+  assert.equal(output.authoritativeRuntimePackage.executionAuthority, "NONE");
+  assert.equal(output.authoritativeRuntimePackage.privateApiAllowed, false);
+  assert.deepEqual(output.authoritativeEvidenceOwners, {
+    ownerExists: 3,
+    ownerMissing: 4,
+    callbacksWired: 0,
+    allOwnersReady: false,
+  });
 });
 
 test("Research Production recurring CLI does not double-wrap an explicitly injected canonical runtime", async () => {
