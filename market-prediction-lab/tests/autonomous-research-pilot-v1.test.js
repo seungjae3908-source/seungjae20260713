@@ -74,8 +74,15 @@ test("real pilot generates bounded DSL identities but fail-closes before queue a
   assert.equal(result.finalHoldoutRequests.length, 0);
   assert.equal(result.evidence.immutable, true);
   assert.match(result.evidence.evidenceDigest, /^[0-9a-f]{64}$/);
-  assert.equal(result.evidence.aiReviewEvidence, "NOT_AVAILABLE");
-  assert.equal(result.evidence.backtestEvidence, "NOT_AVAILABLE");
+  assert.equal(result.evidence.aiReviewEvidence.status, "AI_RESEARCH_UNAVAILABLE");
+  assert.equal(result.evidence.aiReviewEvidence.reviewCalls.length, 0);
+  assert.equal(result.evidence.aiReviewEvidence.roleReversalRequired, true);
+  assert.equal(result.evidence.aiReviewEvidence.disagreementReason, "AI_RESEARCH_UNAVAILABLE");
+  assert.equal(result.evidence.queueEvidence.canonicalOwner, "#226");
+  assert.equal(result.evidence.queueEvidence.createdJobCount, 0);
+  assert.equal(result.evidence.runtimeEvidence.state, "WAITING_FOR_RUNTIME");
+  assert.equal(result.evidence.backtestEvidence.status, "NOT_STARTED_PREQUEUE_GATE");
+  assert.equal(result.evidence.backtestEvidence.executedCount, 0);
 });
 
 test("prequeue duplicate and invalid DSL decisions are deterministic and persistent", () => {
@@ -83,7 +90,7 @@ test("prequeue duplicate and invalid DSL decisions are deterministic and persist
   const fama = first.rows.find((row) => row.pilotId === "FAMA_FRENCH_2012_MOMENTUM");
   const duplicate = run({ noveltyRegistry: { trialFingerprints: [fama.strategy.novelty.exactFingerprint] } });
   const duplicateFama = duplicate.rows.find((row) => row.pilotId === "FAMA_FRENCH_2012_MOMENTUM");
-  assert.equal(duplicateFama.prequeue.status, "REJECTED_DUPLICATE");
+  assert.equal(duplicateFama.prequeue.status, "DUPLICATE");
   assert.equal(duplicateFama.prequeue.persistentFailureRequired, true);
 
   const invalid = evaluateAutonomousResearchPilotPrequeue({
@@ -105,7 +112,7 @@ test("prequeue duplicate and invalid DSL decisions are deterministic and persist
 });
 
 test("prequeue QUEUED outcome targets the existing #226 owner only after every gate passes", () => {
-  assert.deepEqual(AUTONOMOUS_RESEARCH_PILOT_PREQUEUE_STATES, ["QUEUED", "REJECTED_DUPLICATE", "BLOCKED_DATA", "INVALID_STRATEGY", "NEEDS_REVIEW"]);
+  assert.deepEqual(AUTONOMOUS_RESEARCH_PILOT_PREQUEUE_STATES, ["QUEUED", "DUPLICATE", "BLOCKED_DATA", "INVALID_STRATEGY", "NEEDS_REVIEW"]);
   const decision = evaluateAutonomousResearchPilotPrequeue({
     noveltyStatus: "NEW_RESEARCH_HYPOTHESIS",
     dslValid: true,
@@ -134,6 +141,11 @@ test("extended status and activation plan distinguish tested runtime capability 
   assert.equal(result.status.OOSCandidates, "NOT_AVAILABLE");
   assert.equal(result.status.FREE_AI_RUNTIME_READY, true);
   assert.equal(result.status.AI_DUAL_REVIEW_RUNTIME_READY, true);
+  assert.equal(result.status.AI_RESEARCH_STATUS, "AI_RESEARCH_UNAVAILABLE");
+  assert.equal(result.status.DUAL_REVIEW_STATUS, "AI_RESEARCH_UNAVAILABLE");
+  assert.equal(result.status.CANONICAL_RUNTIME_STATE, "WAITING_FOR_RUNTIME");
+  assert.equal(result.status.QUEUE_STATE, "PREQUEUE_GATED");
+  assert.equal(result.status.BACKTEST_STATE, "NOT_STARTED_PREQUEUE_GATE");
   assert.equal(result.status.REAL_RESEARCH_PILOT_RUN, true);
   assert.equal(result.status.REAL_STRATEGY_GENERATION_READY, true);
   assert.equal(result.status.QUEUE_PIPELINE_TESTED, true);

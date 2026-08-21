@@ -14,7 +14,7 @@ import { researchDigest } from "./research-trial-registry.js";
 
 export const AUTONOMOUS_RESEARCH_PILOT_PREQUEUE_STATES = Object.freeze([
   "QUEUED",
-  "REJECTED_DUPLICATE",
+  "DUPLICATE",
   "BLOCKED_DATA",
   "INVALID_STRATEGY",
   "NEEDS_REVIEW",
@@ -284,7 +284,7 @@ export function evaluateAutonomousResearchPilotPrequeue(input = {}) {
   let status = "QUEUED";
   const reasons = [];
   if (checks.duplicate || checks.priorTrial) {
-    status = "REJECTED_DUPLICATE";
+    status = "DUPLICATE";
     reasons.push(checks.duplicate ? "EXISTING_ACTIVE_CANDIDATE" : input.noveltyStatus);
   } else if (!checks.dslValid || !checks.featureSetValid || checks.leakageDetected || !checks.leverageSupported) {
     status = "INVALID_STRATEGY";
@@ -309,7 +309,7 @@ export function evaluateAutonomousResearchPilotPrequeue(input = {}) {
     canonicalQueueOwner: "#226",
     experimentDedupOwner: "#482",
     enqueuePerformed: false,
-    persistentFailureRequired: new Set(["REJECTED_DUPLICATE", "BLOCKED_DATA", "INVALID_STRATEGY"]).has(status),
+    persistentFailureRequired: new Set(["DUPLICATE", "BLOCKED_DATA", "INVALID_STRATEGY"]).has(status),
     finalHoldoutOpened: false,
   });
   return Object.freeze({ ...core, decisionDigest: researchDigest(core) });
@@ -349,23 +349,26 @@ function generateCandidate(item, record, input) {
   }
 }
 
-function buildPilotStatus({ generatedAt, rows, aiReadiness, validationEvidence }) {
+function buildPilotStatus({ generatedAt, rows, aiReadiness, validationEvidence, canonicalRuntimeAvailable }) {
   const decisions = rows.map((row) => row.prequeue.status);
   const generated = rows.filter((row) => row.strategy?.candidate).length;
+  const queued = decisions.filter((status) => status === "QUEUED").length;
+  const aiReviewed = rows.filter((row) => new Set(["AI_REVIEW_AGREE", "AI_REVIEW_CONFLICT"]).has(row.aiReviewStatus)).length;
+  const aiConflicts = rows.filter((row) => row.aiReviewStatus === "AI_REVIEW_CONFLICT").length;
   return Object.freeze({
     schemaVersion: 1,
     generatedAt,
     todayDiscovered: rows.length,
     admissibleResearchSources: rows.filter((row) => new Set(["DISCOVERED", "UPDATED_SOURCE"]).has(row.admissionStatus)).length,
-    aiReviewed: 0,
-    aiConflicts: 0,
+    aiReviewed,
+    aiConflicts,
     generatedStrategies: generated,
-    queuedJobs: decisions.filter((status) => status === "QUEUED").length,
+    queuedJobs: queued,
     runningJobs: 0,
     completedJobs: 0,
     failedJobs: 0,
     rejectedJobs: 0,
-    prequeueRejected: decisions.filter((status) => new Set(["REJECTED_DUPLICATE", "BLOCKED_DATA", "INVALID_STRATEGY"]).has(status)).length,
+    prequeueRejected: decisions.filter((status) => new Set(["DUPLICATE", "BLOCKED_DATA", "INVALID_STRATEGY"]).has(status)).length,
     needsReview: decisions.filter((status) => status === "NEEDS_REVIEW").length,
     OOSCandidates: "NOT_AVAILABLE",
     FrozenCandidates: "NOT_AVAILABLE",
@@ -375,6 +378,13 @@ function buildPilotStatus({ generatedAt, rows, aiReadiness, validationEvidence }
     AI_PROVIDER_A_READY: aiReadiness.AI_PROVIDER_A_READY,
     AI_PROVIDER_B_READY: aiReadiness.AI_PROVIDER_B_READY,
     AI_DUAL_REVIEW_READY: aiReadiness.AI_DUAL_REVIEW_READY,
+    AI_RESEARCH_STATUS: aiReadiness.AI_RESEARCH_STATUS,
+    DUAL_REVIEW_STATUS: aiReadiness.AI_RESEARCH_STATUS === "READY"
+      ? (aiReviewed === rows.length ? (aiConflicts > 0 ? "AI_REVIEW_CONFLICT" : "AI_REVIEW_AGREE") : "AI_REVIEW_INCOMPLETE")
+      : "AI_RESEARCH_UNAVAILABLE",
+    CANONICAL_RUNTIME_STATE: canonicalRuntimeAvailable ? "READY" : "WAITING_FOR_RUNTIME",
+    QUEUE_STATE: queued > 0 ? (canonicalRuntimeAvailable ? "READY_FOR_HANDOFF" : "WAITING_FOR_RUNTIME") : "PREQUEUE_GATED",
+    BACKTEST_STATE: "NOT_STARTED_PREQUEUE_GATE",
     FREE_AI_RUNTIME_READY: true,
     AI_DUAL_REVIEW_RUNTIME_READY: true,
     REAL_RESEARCH_PILOT_RUN: rows.length >= 3,
@@ -406,7 +416,7 @@ export function buildAutonomousResearchActivationPreflightPlan({ aiReadiness, st
     experimentDedup: Object.freeze({ owner: "#482", exactIdentityRequired: true, rejectedTrialPersistenceRequired: true }),
     checkpoint: Object.freeze({ restartSafe: true, atomicStagePersistenceRequired: true, terminalIdempotencyRequired: true }),
     rollback: Object.freeze({ action: "STOP_UNAPPROVED_WORKER_AND_PRESERVE_QUEUE_STATE", destructiveCleanupAllowed: false, evidenceDeletionAllowed: false }),
-    health: Object.freeze({ readOnly: true, providerStates: Object.freeze(["READY", "UNAVAILABLE", "RATE_LIMITED", "MISCONFIGURED", "UNKNOWN"]), missingValue: "NOT_AVAILABLE" }),
+    health: Object.freeze({ readOnly: true, providerStates: Object.freeze(["READY", "UNAVAILABLE", "RATE_LIMITED", "MISCONFIGURED"]), missingValue: "NOT_AVAILABLE" }),
     externalCalls: Object.freeze({ publicResearchMetadataAllowed: true, publicMarketDataAllowed: true, freeAiOnly: true, privateTradingApiAllowed: false, orderCallsAllowed: false }),
     deploymentRequested: false,
     serverRestartRequested: false,
@@ -463,7 +473,42 @@ export function runAutonomousResearchFactoryPilot(input = {}) {
     }));
   }
   if (!verifyGlobalResearchCollector(collector)) throw new Error("REAL_RESEARCH_PILOT_COLLECTOR_INVALID");
-  const status = buildPilotStatus({ generatedAt, rows, aiReadiness, validationEvidence: input.validationEvidence ?? {} });
+  const canonicalRuntimeAvailable = input.canonicalRuntimeAvailable === true;
+  const status = buildPilotStatus({ generatedAt, rows, aiReadiness, validationEvidence: input.validationEvidence ?? {}, canonicalRuntimeAvailable });
+  const aiReviewEvidence = Object.freeze({
+    status: aiReadiness.AI_RESEARCH_STATUS,
+    providerA: aiReadiness.providerChecks.AI_PROVIDER_A,
+    providerB: aiReadiness.providerChecks.AI_PROVIDER_B,
+    roleReversalRequired: true,
+    reviewCalls: Object.freeze([]),
+    disagreementReason: aiReadiness.AI_RESEARCH_STATUS === "READY" ? "DUAL_REVIEW_NOT_EXECUTED_BY_PILOT" : "AI_RESEARCH_UNAVAILABLE",
+    providerCallAttempted: aiReadiness.providerCallAttempted,
+    paidFallbackUsed: false,
+  });
+  const queueEvidence = Object.freeze({
+    canonicalOwner: "#226",
+    experimentDedupOwner: "#482",
+    state: status.QUEUE_STATE,
+    createdJobCount: 0,
+    createdJobs: Object.freeze([]),
+    competingQueueCreated: false,
+  });
+  const runtimeEvidence = Object.freeze({
+    state: status.CANONICAL_RUNTIME_STATE,
+    canonicalOwner: "#226",
+    queueValidatedByDeterministicTests: input.validationEvidence?.QUEUE_PIPELINE_TESTED === true,
+    workerHandoffValidatedByDeterministicTests: input.validationEvidence?.BACKTEST_HANDOFF_TESTED === true,
+    evidencePersistenceValidatedByDeterministicTests: input.validationEvidence?.EVIDENCE_PIPELINE_TESTED === true,
+    serverActivated: false,
+    timerActivated: false,
+  });
+  const backtestEvidence = Object.freeze({
+    status: status.BACKTEST_STATE,
+    executedCount: 0,
+    metrics: "NOT_AVAILABLE",
+    profitabilityClaimed: false,
+    championSelected: false,
+  });
   const evidenceCore = Object.freeze({
     schemaVersion: 1,
     pilotId: "AUTONOMOUS_RESEARCH_FACTORY_REAL_SOURCE_PILOT_V1",
@@ -483,8 +528,10 @@ export function runAutonomousResearchFactoryPilot(input = {}) {
       decisionPolicyVersion: row.decisionPolicyVersion,
     }))),
     prequeueDecisions: Object.freeze(rows.map((row) => Object.freeze({ pilotId: row.pilotId, status: row.prequeue.status, decisionDigest: row.prequeue.decisionDigest }))),
-    aiReviewEvidence: "NOT_AVAILABLE",
-    backtestEvidence: "NOT_AVAILABLE",
+    aiReviewEvidence,
+    queueEvidence,
+    runtimeEvidence,
+    backtestEvidence,
     finalHoldoutEvidence: "NOT_OPENED",
   });
   const evidence = Object.freeze({ ...evidenceCore, evidenceDigest: researchDigest(evidenceCore), immutable: true });

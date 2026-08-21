@@ -41,13 +41,19 @@ test("FREE AI provider unavailable health is explicit and never attempts paid fa
 });
 
 test("FREE AI readiness classifies rate limits, provider aliasing, and secret-bearing metadata", () => {
-  assert.deepEqual(FREE_AI_PROVIDER_HEALTH_STATES, ["READY", "UNAVAILABLE", "RATE_LIMITED", "MISCONFIGURED", "UNKNOWN"]);
+  assert.deepEqual(FREE_AI_PROVIDER_HEALTH_STATES, ["READY", "UNAVAILABLE", "RATE_LIMITED", "MISCONFIGURED"]);
   const rateLimited = buildFreeAiProviderReadiness({
     checkedAt: CHECKED_AT,
     providers: readinessProviders().map((row, index) => index === 1 ? { ...row, availability: "RATE_LIMITED", failureReason: "HTTP_429" } : row),
   });
   assert.equal(rateLimited.AI_PROVIDER_B_READY, "RATE_LIMITED");
   assert.equal(rateLimited.AI_DUAL_REVIEW_READY, "RATE_LIMITED");
+  const unrecognized = buildFreeAiProviderReadiness({
+    checkedAt: CHECKED_AT,
+    providers: readinessProviders().map((row, index) => index === 1 ? { ...row, availability: "UNVERIFIED" } : row),
+  });
+  assert.equal(unrecognized.AI_PROVIDER_B_READY, "UNAVAILABLE");
+  assert.equal(unrecognized.providerChecks.AI_PROVIDER_B.failureReason, "PROVIDER_AVAILABILITY_UNRECOGNIZED");
   const aliased = buildFreeAiProviderReadiness({
     checkedAt: CHECKED_AT,
     providers: readinessProviders().map((row) => ({ ...row, providerName: "same-provider" })),
