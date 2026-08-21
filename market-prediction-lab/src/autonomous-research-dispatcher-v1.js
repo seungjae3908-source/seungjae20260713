@@ -148,9 +148,17 @@ export function buildAutonomousResearchJob(input = {}) {
   if (!SHA40.test(researchCodeSha)) throw new TypeError("researchCodeSha must be an exact 40-character SHA");
   const datasetDigest = requiredText(input.datasetDigest, "datasetDigest").toLowerCase();
   if (!DIGEST64.test(datasetDigest)) throw new TypeError("datasetDigest must be a SHA-256 digest");
-  const candidate = immutableJson(input.candidate, "candidate");
-  const candidateIdentityDigest = requiredText(candidate.candidateIdentity ?? candidate.strategyIdentityDigest, "candidateIdentity");
+  const rawCandidate = immutableJson(input.candidate, "candidate");
+  const candidateIdentityDigest = requiredText(rawCandidate.candidateIdentity
+    ?? rawCandidate.strategyIdentityDigest
+    ?? (rawCandidate.strategyId && rawCandidate.variantId ? researchDigest({ strategyId: rawCandidate.strategyId, variantId: rawCandidate.variantId }) : null), "candidateIdentity");
   if (!DIGEST64.test(candidateIdentityDigest)) throw new TypeError("candidate identity must be a SHA-256 digest");
+  const candidate = Object.freeze({
+    ...rawCandidate,
+    candidateIdentity: candidateIdentityDigest,
+    formulaHash: rawCandidate.formulaHash ?? rawCandidate.formulaFingerprint,
+    parameters: rawCandidate.parameters ?? rawCandidate.specification?.parameters,
+  });
   const strategyType = requiredText(input.strategyType, "strategyType").toUpperCase();
   const splitPolicy = immutableJson(input.splitPolicy, "splitPolicy");
   if (splitPolicy.finalHoldoutExcluded !== true || splitPolicy.selectionUsesFinalHoldout !== false) {
