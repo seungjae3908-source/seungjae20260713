@@ -230,11 +230,16 @@ function maybeAttachCanonicalAdmissionCutover({ provider, env, paperRuntimeForMa
     throw new TypeError("paperRuntimeForMarket must be a function");
   }
   const runtime = paperRuntimeForMarket ?? createFailClosedPaperRuntimeForMarket();
-  const canonicalProvider = wrapPaperForwardProviderWithMeaningfulSearch({
+  const canonicalProvider = restoreLegacyNaturalSettlementExits(wrapPaperForwardProviderWithMeaningfulSearch({
     provider: stripLegacyDirectEntryCandidates(provider),
     paperRuntimeForMarket: runtime,
+  }));
+  return Object.freeze({
+    async collectPublicEvidence(input) {
+      if (input?.market !== "CRYPTO_FUTURES") return provider.collectPublicEvidence(input);
+      return canonicalProvider.collectPublicEvidence(input);
+    },
   });
-  return restoreLegacyNaturalSettlementExits(canonicalProvider);
 }
 
 export function createCanonicalPaperForwardEvidenceProvider({
