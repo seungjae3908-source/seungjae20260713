@@ -1,6 +1,14 @@
 import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { AUTHORITATIVE_PAPER_EVIDENCE_SOURCE_OWNERSHIP } from "../src/authoritative-paper-evidence-source-ownership-v1.js";
+import { createAuthoritativePaperForwardDependenciesFromSourceWiring } from "../src/authoritative-paper-runtime-factory-v1.js";
+import {
+  createLosslessPaperStateSnapshotFileOwner,
+  loadValidatedAuthoritativePaperRuntimePackage,
+} from "../src/authoritative-paper-runtime-package-v1.js";
+import { createCanonicalPaperForwardEvidenceProvider } from "../src/paper-forward-evidence-runtime-v1.js";
+import { wrapPaperForwardProviderWithMeaningfulSearch } from "../src/meaningful-search-scheduled-paper-provider-v1.js";
 import {
   runPaperForwardScheduledInvocation,
 } from "../src/paper-forward-schedule-runtime-v1.js";
@@ -44,6 +52,14 @@ function expectedStrategyId(outcomeAccumulationEnabled) {
   return outcomeAccumulationEnabled
     ? "paper-forward-simulated-outcome-v1"
     : "paper-forward-public-evidence-v1";
+}
+
+function stageMeasurementCount(stageMeasurements, stage) {
+  if (!Array.isArray(stageMeasurements)) return null;
+  const measurement = stageMeasurements.find((row) => row?.stage === stage);
+  return measurement?.status === "MEASURED" && Number.isInteger(measurement.count)
+    ? measurement.count
+    : null;
 }
 
 export function resolveOutcomeAccumulationEnabled(env = process.env) {
@@ -146,13 +162,45 @@ function fail(message, code = 1) {
   process.exitCode = code;
 }
 
-export async function runPaperForwardScheduleCli(env = process.env) {
+export async function runPaperForwardScheduleCli(env = process.env, {
+  runScheduledInvocation = runPaperForwardScheduledInvocation,
+  publicEvidenceProvider = null,
+  meaningfulSearchPaperRuntimeForMarket = null,
+  authoritativePaperSourceWiring = null,
+  authoritativePaperDependenciesFactory = createAuthoritativePaperForwardDependenciesFromSourceWiring,
+  authoritativePaperPackageLoader = loadValidatedAuthoritativePaperRuntimePackage,
+  paperStateOwnerFactory = createLosslessPaperStateSnapshotFileOwner,
+  paperStateSourceFactory = null,
+} = {}) {
   if (!truthy(env.PAPER_FORWARD_SCHEDULE_ACTIVE)) {
     fail("PAPER_FORWARD_SCHEDULE_ACTIVE must be explicitly true", 64);
     return;
   }
   if (forbiddenActivationKeys.some((key) => truthy(env[key]))) {
     fail("Paper Forward schedule refuses live trading or private API activation", 65);
+    return;
+  }
+  if (typeof runScheduledInvocation !== "function") {
+    fail("Paper Forward scheduled invocation dependency is invalid", 66);
+    return;
+  }
+  if (meaningfulSearchPaperRuntimeForMarket != null && typeof meaningfulSearchPaperRuntimeForMarket !== "function") {
+    fail("Meaningful Search Paper runtime dependency is invalid", 67);
+    return;
+  }
+  if (authoritativePaperSourceWiring != null
+    && (typeof authoritativePaperSourceWiring !== "object" || Array.isArray(authoritativePaperSourceWiring))) {
+    fail("Authoritative Paper source wiring dependency is invalid", 68);
+    return;
+  }
+  if (typeof authoritativePaperDependenciesFactory !== "function") {
+    fail("Authoritative Paper dependency factory is invalid", 69);
+    return;
+  }
+  if (typeof authoritativePaperPackageLoader !== "function"
+    || typeof paperStateOwnerFactory !== "function"
+    || (paperStateSourceFactory != null && typeof paperStateSourceFactory !== "function")) {
+    fail("Authoritative Paper package dependency is invalid", 70);
     return;
   }
 
@@ -164,6 +212,86 @@ export async function runPaperForwardScheduleCli(env = process.env) {
   const outcomeAccumulationEnabled = resolveOutcomeAccumulationEnabled(env);
 
   try {
+    let authoritativeSourceWiringAudit = null;
+    let authoritativeRuntimePackageAudit = null;
+    let paperStateOwnerAudit = null;
+    let authoritativeRuntimeMeasurement = null;
+    let paperStateCallbackInvocationCount = 0;
+    let paperStateTransportStatus = "BLOCKED_DATA_CONFIG_ABSENT";
+    let resolvedAuthoritativeSourceWiring = authoritativePaperSourceWiring ?? {};
+    if (researchProduction) {
+      const runtimePackage = await authoritativePaperPackageLoader();
+      resolvedAuthoritativeSourceWiring = {
+        ...runtimePackage.createAuthoritativePaperEvidenceSourceWiring({ researchCodeSha }),
+        ...resolvedAuthoritativeSourceWiring,
+        createPaperAdmissionEvidenceProducer: runtimePackage.createPaperAdmissionEvidenceProducer,
+      };
+      const stateSnapshotPath = String(env.PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH ?? "").trim();
+      const publisherAccountIdSha256 = String(
+        env.PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256 ?? "",
+      ).trim();
+      if (stateSnapshotPath && /^[0-9a-f]{64}$/u.test(publisherAccountIdSha256)) {
+        const paperStateOwner = paperStateSourceFactory == null
+          ? paperStateOwnerFactory({
+            snapshotPath: stateSnapshotPath,
+            runtimePackage,
+            expectedPublisherAccountIdSha256: publisherAccountIdSha256,
+          })
+          : Object.freeze({
+            schemaVersion: "paper-state-source-compatibility-override-v2",
+            snapshotPath: stateSnapshotPath,
+            paperStateForCard: paperStateSourceFactory({
+              snapshotPath: stateSnapshotPath,
+              runtimePackage,
+              expectedPublisherAccountIdSha256: publisherAccountIdSha256,
+            }),
+            writePaperStateSnapshot: null,
+            initializesPaperState: false,
+            recurringLedgerDerivationAllowed: false,
+            authenticatedPublisherRequired: true,
+            exactAccountBindingRequired: true,
+            unknownIsZero: false,
+          });
+        const paperStateForCard = async (...args) => {
+          paperStateCallbackInvocationCount += 1;
+          return paperStateOwner.paperStateForCard(...args);
+        };
+        resolvedAuthoritativeSourceWiring = {
+          ...resolvedAuthoritativeSourceWiring,
+          paperStateForCard,
+        };
+        paperStateTransportStatus = "CONFIGURED_EXACT_ACCOUNT_BOUND";
+        paperStateOwnerAudit = Object.freeze({
+          schemaVersion: paperStateOwner.schemaVersion,
+          snapshotPath: paperStateOwner.snapshotPath,
+          writerConnected: typeof paperStateOwner.writePaperStateSnapshot === "function",
+          initializesPaperState: paperStateOwner.initializesPaperState === true,
+          recurringLedgerDerivationAllowed: paperStateOwner.recurringLedgerDerivationAllowed === true,
+          authenticatedPublisherRequired: paperStateOwner.authenticatedPublisherRequired === true,
+          exactAccountBindingRequired: paperStateOwner.exactAccountBindingRequired === true,
+          unknownIsZero: paperStateOwner.unknownIsZero === true,
+        });
+      } else if (stateSnapshotPath || publisherAccountIdSha256) {
+        paperStateTransportStatus = "BLOCKED_DATA_CONFIG_INCOMPLETE";
+      }
+      authoritativeRuntimePackageAudit = Object.freeze({
+        schemaVersion: runtimePackage.schemaVersion,
+        sourceSha: runtimePackage.sourceSha,
+        sourceGraphSha256: runtimePackage.sourceGraphSha256,
+        bundleSha256: runtimePackage.bundleSha256,
+        admissionBundleSchemaVersion: runtimePackage.admissionBundleSchemaVersion,
+        callbackOwnerContractSchemaVersion: runtimePackage.callbackOwnerContractSchemaVersion,
+        blockedDataSourceContractSchemaVersion: runtimePackage.blockedDataSourceContractSchemaVersion,
+        costPolicyVersion: runtimePackage.costPolicyVersion,
+        costPolicyVersionBinding: runtimePackage.costPolicyVersionBinding,
+        executionAuthority: runtimePackage.executionAuthority,
+        privateApiAllowed: runtimePackage.privateApiAllowed,
+        liveTrading: runtimePackage.liveTrading,
+        scheduleActivationAuthority: runtimePackage.scheduleActivationAuthority,
+        financialMutationAllowed: runtimePackage.financialMutationAllowed,
+        paperStateOwner: paperStateOwnerAudit,
+      });
+    }
     const cutover = researchProduction
       ? await prepareResearchProductionIdentityCutover({
         rootDirectory,
@@ -171,13 +299,55 @@ export async function runPaperForwardScheduleCli(env = process.env) {
         outcomeAccumulationEnabled,
       })
       : Object.freeze({ identityCutover: false, archivedResearchSha: null, archivedStrategyId: null });
-    const result = await runPaperForwardScheduledInvocation({
+    const invocation = {
       rootDirectory,
       researchCodeSha,
       activationAtMs,
       triggerSource,
       outcomeAccumulationEnabled,
-    });
+    };
+    if (publicEvidenceProvider != null) {
+      invocation.publicEvidenceProvider = meaningfulSearchPaperRuntimeForMarket == null
+        ? publicEvidenceProvider
+        : wrapPaperForwardProviderWithMeaningfulSearch({
+          provider: publicEvidenceProvider,
+          paperRuntimeForMarket: meaningfulSearchPaperRuntimeForMarket,
+        });
+    } else if (meaningfulSearchPaperRuntimeForMarket != null) {
+      invocation.publicEvidenceProvider = researchProduction
+        ? createCanonicalPaperForwardEvidenceProvider({
+          env,
+          paperRuntimeForMarket: meaningfulSearchPaperRuntimeForMarket,
+        })
+        : wrapPaperForwardProviderWithMeaningfulSearch({
+          provider: createCanonicalPaperForwardEvidenceProvider({ env }),
+          paperRuntimeForMarket: meaningfulSearchPaperRuntimeForMarket,
+        });
+    } else if (researchProduction) {
+      const dependencies = authoritativePaperDependenciesFactory({
+        sourceWiring: resolvedAuthoritativeSourceWiring,
+        providerOptions: { env },
+      });
+      invocation.publicEvidenceProvider = Object.freeze({
+        async collectPublicEvidence(input) {
+          const evidence = await dependencies.publicEvidenceProvider.collectPublicEvidence(input);
+          if (input?.market === "CRYPTO_FUTURES"
+            && Array.isArray(evidence?.paperCandidateSource?.stageMeasurements)) {
+            authoritativeRuntimeMeasurement = Object.freeze({
+              stageMeasurements: evidence.paperCandidateSource.stageMeasurements,
+              firstZeroStage: evidence.paperCandidateSource.firstZeroStage ?? "UNKNOWN",
+              firstZeroReason: evidence.paperCandidateSource.firstZeroReason ?? evidence.blocker ?? null,
+            });
+          }
+          return evidence;
+        },
+      });
+      authoritativeSourceWiringAudit = dependencies.sourceWiringAudit ?? null;
+    }
+    const result = await runScheduledInvocation(invocation);
+    const stageMeasurements = authoritativeRuntimeMeasurement?.stageMeasurements
+      ?? authoritativeSourceWiringAudit?.stageMeasurements
+      ?? [];
     const output = {
       schemaVersion: "paper-forward-schedule-cli-v3",
       status: result.status,
@@ -195,6 +365,30 @@ export async function runPaperForwardScheduleCli(env = process.env) {
       simulatedFinancialAdaptersEnabled: result.persistedStatus?.simulatedFinancialAdaptersEnabled === true,
       externalFinancialMutationAllowed: false,
       lanes: result.invocation?.providerLanes ?? [],
+      authoritativeSourceWiringStatus: authoritativeSourceWiringAudit?.status ?? null,
+      firstZeroStage: authoritativeRuntimeMeasurement?.firstZeroStage
+        ?? authoritativeSourceWiringAudit?.firstZeroStage
+        ?? null,
+      firstZeroReason: authoritativeRuntimeMeasurement?.firstZeroReason
+        ?? authoritativeSourceWiringAudit?.firstZeroReason
+        ?? null,
+      authoritativeSourceBlockers: authoritativeSourceWiringAudit?.blockers ?? [],
+      authoritativeStageMeasurements: stageMeasurements,
+      authoritativeRuntimePackage: authoritativeRuntimePackageAudit,
+      paperStateTransport: Object.freeze({
+        status: paperStateTransportStatus,
+        callbackInvocationCount: paperStateCallbackInvocationCount,
+        callbackInvoked: paperStateCallbackInvocationCount > 0,
+        authenticatedPublisherRequired: true,
+        exactAccountBindingRequired: true,
+        snapshotSchemaVersion: "paper-trading-state-snapshot-v2",
+        unknownIsZero: false,
+      }),
+      authoritativeEvidenceOwners: AUTHORITATIVE_PAPER_EVIDENCE_SOURCE_OWNERSHIP.sevenEvidenceOwnerSummary,
+      scannerCandidateCount: stageMeasurementCount(stageMeasurements, "Scanner Candidate"),
+      canonicalPaperCandidateCount: stageMeasurementCount(stageMeasurements, "Identity"),
+      entryCount: stageMeasurementCount(stageMeasurements, "Entry"),
+      settlementCount: stageMeasurementCount(stageMeasurements, "Settlement"),
       privateRequestCount: 0,
       financialMutationCount: 0,
       orderCount: 0,
@@ -203,6 +397,7 @@ export async function runPaperForwardScheduleCli(env = process.env) {
     };
     process.stdout.write(`${JSON.stringify(output)}\n`);
     if (result.status === "BLOCKED_DATA") process.exitCode = 2;
+    return Object.freeze(output);
   } catch (error) {
     fail(`Paper Forward scheduled invocation failed closed: ${error?.code ?? error?.message ?? "UNKNOWN"}`, 1);
   }
