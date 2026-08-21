@@ -4,6 +4,7 @@ import type { Candle } from '../sample/types';
 import type { ScanCard } from './signal.service';
 import type { ScannerUniverseEntry } from './scanner-universe.service';
 import { applyStockSignalPolicy } from './scanner-signal-policy.service';
+import './telegram-investment-intelligence.service.test';
 
 const candles = (): Candle[] => Array.from({ length: 40 }, (_, index) => ({
   time: Date.now() - (40 - index) * 86_400_000,
