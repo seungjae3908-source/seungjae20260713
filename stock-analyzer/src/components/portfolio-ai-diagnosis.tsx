@@ -54,7 +54,7 @@ function evidenceLabel(value: unknown): string {
     }
   }
   try {
-    const encoded = JSON.stringify(value);
+    const encoded = JSON.stringify(value) ?? String(value);
     return encoded.length > 160 ? `${encoded.slice(0, 157)}...` : encoded;
   } catch {
     return '근거 항목';
