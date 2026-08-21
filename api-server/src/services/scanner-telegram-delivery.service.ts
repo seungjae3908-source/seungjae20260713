@@ -26,20 +26,22 @@ function formatTargetPlan(targets: readonly number[]): string {
   return targets.slice(0, 3).map((target, index) => `TP${index + 1} ${target}`).join(' · ');
 }
 
-function pricePlanDetails(alert: ScannerAlertCandidate): string {
+function tradePlanLines(alert: ScannerAlertCandidate): string[] {
   const entry = alert.entryZone
     ? `${alert.entryZone.from}~${alert.entryZone.to}`
     : 'N/A';
   const stop = alert.stopLoss == null ? 'N/A' : String(alert.stopLoss);
-  const sellTargets = formatTargetPlan(alert.targets);
-  const evidence = alert.evidence.length ? ` · 근거 ${alert.evidence.slice(0, 5).join(' / ')}` : '';
   return [
-    '승인 대기 신호',
     `진입가/진입구간 ${entry}`,
-    `분할 매도가 ${sellTargets}`,
+    `분할 매도가 ${formatTargetPlan(alert.targets)}`,
     `손절가 ${stop}`,
-    `실제 주문/체결 아님${evidence}`,
-  ].join(' · ');
+    '실제 주문/체결 아님',
+  ];
+}
+
+function pricePlanDetails(alert: ScannerAlertCandidate): string {
+  const evidence = alert.evidence.length ? ` · 근거 ${alert.evidence.slice(0, 5).join(' / ')}` : '';
+  return `승인 대기 신호 · ${tradePlanLines(alert).join(' · ')}${evidence}`;
 }
 
 export function scannerTelegramRoomFor(assetClass: ScannerAssetClass): ScannerTelegramRoom {
@@ -103,6 +105,19 @@ export function scannerTelegramInput(
   return null;
 }
 
+function normalizeRichTradePlan(
+  input: TelegramAlertInput,
+  alert: ScannerAlertCandidate,
+): TelegramAlertInput {
+  if (!input.details) return input;
+  const lines = input.details.split('\n');
+  // buildTelegramSignalIntelligenceInput puts its legacy compact price-plan on
+  // line 2. Replace only that canonical line so evidence/news/AI stay intact.
+  if (lines.length >= 2) lines.splice(1, 1, ...tradePlanLines(alert));
+  else lines.push(...tradePlanLines(alert));
+  return { ...input, details: lines.join('\n') };
+}
+
 async function richInput(
   base: TelegramAlertInput,
   alert: ScannerAlertCandidate,
@@ -111,7 +126,10 @@ async function richInput(
   if (process.env.TELEGRAM_SIGNAL_RICH_MEDIA_ENABLED !== 'true') return base;
   try {
     const evidence = await collectTelegramSignalIntelligence(alert, context);
-    return buildTelegramSignalIntelligenceInput(base, alert, evidence, context);
+    return normalizeRichTradePlan(
+      buildTelegramSignalIntelligenceInput(base, alert, evidence, context),
+      alert,
+    );
   } catch (error) {
     logger.warn(
       { signalId: alert.signalId, errorName: error instanceof Error ? error.name : 'UnknownError' },
