@@ -38,6 +38,15 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           text = Path('.github/workflows/research-ai-one-shot-pilot.yml').read_text()
+          header, jobs = text.split('\njobs:\n', 1)
+          if 'pull_request:' not in header or 'issue_comment:' not in header:
+              raise SystemExit('required triggers missing')
+          if 'schedule:' in header or 'workflow_dispatch:' in header:
+              raise SystemExit('recurring/manual bypass trigger forbidden')
+          marker = '\n  authorize:\n'
+          if marker not in '\njobs:\n' + jobs:
+              raise SystemExit('authorize job missing')
+          runtime = ('\njobs:\n' + jobs).split(marker, 1)[1]
           required = [
               '/run-research-ai-one-shot ',
               'secrets.GEMINI_API_KEY',
@@ -52,11 +61,9 @@ jobs:
               'PRIVATE_TRADING_API_ALLOWED=false',
           ]
           for token in required:
-              if token not in text:
-                  raise SystemExit(f'missing contract token: {token}')
+              if token not in runtime:
+                  raise SystemExit(f'missing runtime contract token: {token}')
           forbidden = [
-              '\nschedule:',
-              '\n  workflow_dispatch:',
               'systemctl enable',
               'systemctl start',
               'systemctl restart',
@@ -66,8 +73,8 @@ jobs:
               'PRIVATE_TRADING_API_ALLOWED=true',
           ]
           for token in forbidden:
-              if token in text:
-                  raise SystemExit(f'forbidden activation token: {token}')
+              if token in runtime:
+                  raise SystemExit(f'forbidden runtime activation token: {token}')
           PY
 
   authorize:
@@ -75,7 +82,8 @@ jobs:
       github.event_name == 'issue_comment' &&
       github.event.issue.number == 62 &&
       github.event.comment.user.login == github.repository_owner &&
-      github.event.comment.author_association == 'OWNER'
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/run-research-ai-one-shot ')
     runs-on: ubuntu-latest
     timeout-minutes: 12
     outputs:
@@ -92,8 +100,7 @@ jobs:
             const body = String(context.payload.comment?.body ?? '').trim();
             const match = body.match(/^\/run-research-ai-one-shot ([0-9a-f]{40})$/i);
             if (!match) {
-              core.setOutput('should_run', 'false');
-              core.notice('Not a Research AI one-shot command; ignored.');
+              core.setFailed('Expected /run-research-ai-one-shot <40-char-#555-head-sha>');
               return;
             }
             const targetSha = match[1].toLowerCase();
@@ -155,8 +162,8 @@ jobs:
               }
             }
             const runIds = new Set(required.map((name) => {
-              const matchRun = String(latest.get(name)?.target_url ?? '').match(/\/actions\/runs\/(\d+)/);
-              return matchRun?.[1] ?? null;
+              const found = String(latest.get(name)?.target_url ?? '').match(/\/actions\/runs\/(\d+)/);
+              return found?.[1] ?? null;
             }));
             if (runIds.has(null) || runIds.size !== 1) {
               core.setFailed('Required statuses are not from one coherent exact-head Application CI run.');
@@ -283,6 +290,7 @@ jobs:
           PILOT_OUT="/tmp/research-ai-result-$RUN_ID.json"
           APP_SHA_FILE="/opt/stock-app/.deploy/current-sha"
           RESEARCH_CURRENT="/opt/investment-research/current"
+          KEEP_RESULT=0
 
           if [[ "$(id -u)" -eq 0 ]]; then
             SUDO=()
@@ -291,11 +299,8 @@ jobs:
             sudo -n true
             SUDO=(sudo -n)
           fi
-          if command -v runuser >/dev/null 2>&1; then
-            RUN_AS=(runuser -u investment-research --)
-          else
-            RUN_AS=("${SUDO[@]}" -u investment-research)
-          fi
+          command -v runuser >/dev/null
+          RUN_AS=(runuser -u investment-research --)
 
           cleanup() {
             local status=$?
@@ -307,6 +312,7 @@ jobs:
               rm -f "$SECRET_UPLOAD" >/dev/null 2>&1 || true
             fi
             rm -rf "$WORK_ROOT" "$PREFLIGHT_OUT" >/dev/null 2>&1 || true
+            if (( status != 0 || KEEP_RESULT == 0 )); then rm -f "$PILOT_OUT" >/dev/null 2>&1 || true; fi
             return "$status"
           }
           trap cleanup EXIT
@@ -336,14 +342,8 @@ jobs:
           test -f "$REPO_ROOT/research-production/bin/autonomous-research-ai.mjs"
           chmod -R a+rX "$REPO_ROOT"
 
-          gemini_b64=''
-          groq_b64=''
-          while IFS='=' read -r key value; do
-            case "$key" in
-              GEMINI_B64) gemini_b64="$value" ;;
-              GROQ_B64) groq_b64="$value" ;;
-            esac
-          done < "$SECRET_UPLOAD"
+          gemini_b64="$(grep '^GEMINI_B64=' "$SECRET_UPLOAD" | cut -d= -f2-)"
+          groq_b64="$(grep '^GROQ_B64=' "$SECRET_UPLOAD" | cut -d= -f2-)"
           test -n "$gemini_b64"
           test -n "$groq_b64"
           gemini_raw="$(printf '%s' "$gemini_b64" | base64 -d)"
@@ -422,6 +422,7 @@ jobs:
           test "$forward_after" = "$forward_before"
 
           chmod 0600 "$PILOT_OUT"
+          KEEP_RESULT=1
           printf '%s\n' \
             'RESEARCH_AI_ONE_SHOT=PASS' \
             "TARGET_SHA=$TARGET_SHA" \
@@ -507,7 +508,6 @@ jobs:
                 'research_current_changed: false',
                 'live_trading: false',
                 'private_trading_api_allowed: false',
-                'next: decide whether to add a separately approved recurring Research AI cadence',
               ].join('\n'),
             });
 
@@ -516,7 +516,7 @@ jobs:
         shell: bash
         run: |
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
-            "$SSH_USER@$SSH_HOST" "rm -f /tmp/research-ai-result-$GITHUB_RUN_ID.json /tmp/research-ai-secret-$GITHUB_RUN_ID.b64" || true
+            "$SSH_USER@$SSH_HOST" "rm -f /tmp/research-ai-result-$GITHUB_RUN_ID.json /tmp/research-ai-secret-$GITHUB_RUN_ID.b64 /tmp/research-ai-one-shot-$GITHUB_RUN_ID.env" || true
 
       - name: Report fail-closed
         if: failure()
@@ -536,6 +536,5 @@ jobs:
                 'recurring_timer_enabled: false',
                 'live_trading: false',
                 'private_trading_api_allowed: false',
-                'next: inspect this exact run; do not retry until the blocker is understood',
               ].join('\n'),
             });
