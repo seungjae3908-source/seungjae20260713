@@ -6,6 +6,7 @@ on:
       - .github/workflows/production-comprehensive-readonly-qa.yml
       - stock-analyzer/playwright.production-comprehensive.config.ts
       - stock-analyzer/e2e/production-comprehensive-readonly-qa.spec.ts
+      - stock-analyzer/e2e/production-market-room-search-readonly-qa.spec.ts
       - stock-analyzer/e2e/production-mobile-scroll-readonly-qa.spec.ts
       - stock-analyzer/e2e/production-critical-http-readonly-qa.spec.ts
       - stock-analyzer/e2e/support/production-readonly-policy.ts
@@ -99,8 +100,9 @@ jobs:
             echo '- target: current deployed Production'
             echo "- expected deploy SHA: ${EXPECTED_DEPLOY_SHA:-not-required-for-pr-event}"
             echo '- markets: KR / US / Upbit spot / Bitget futures'
-            echo '- desktop search matrix: 20 symbols per market (80 total)'
-            echo '- mobile search sample: 5 symbols per market (20 total)'
+            echo '- canonical /stocks search matrix: 20 symbols per market (80 desktop total) + 5 symbols per market (20 mobile total)'
+            echo '- actual market-room search matrix: 100 searches per market desktop (400 total) + 25 per market mobile (100 total)'
+            echo '- actual market-room routes: /stocks/kr /stocks/us /coins/spot /coins/futures'
             echo '- chart matrix: 4 markets x 8 timeframes (32 actual UI transitions)'
             echo '- route/layout sweep: desktop 1440/1024, mobile 320/360/390/412/430'
             echo '- checks: finite loading, root/internal scroll, overlap, fixed-nav occlusion, horizontal overflow, safe tabs, console/page/request failures'
