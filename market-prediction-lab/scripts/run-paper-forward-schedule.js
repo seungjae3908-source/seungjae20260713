@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 import { AUTHORITATIVE_PAPER_EVIDENCE_SOURCE_OWNERSHIP } from "../src/authoritative-paper-evidence-source-ownership-v1.js";
 import { createAuthoritativePaperForwardDependenciesFromSourceWiring } from "../src/authoritative-paper-runtime-factory-v1.js";
 import {
-  createPaperStateSourceFromLosslessSnapshotFile,
+  createLosslessPaperStateSnapshotFileOwner,
   loadValidatedAuthoritativePaperRuntimePackage,
 } from "../src/authoritative-paper-runtime-package-v1.js";
 import { createCanonicalPaperForwardEvidenceProvider } from "../src/paper-forward-evidence-runtime-v1.js";
@@ -169,7 +169,8 @@ export async function runPaperForwardScheduleCli(env = process.env, {
   authoritativePaperSourceWiring = null,
   authoritativePaperDependenciesFactory = createAuthoritativePaperForwardDependenciesFromSourceWiring,
   authoritativePaperPackageLoader = loadValidatedAuthoritativePaperRuntimePackage,
-  paperStateSourceFactory = createPaperStateSourceFromLosslessSnapshotFile,
+  paperStateOwnerFactory = createLosslessPaperStateSnapshotFileOwner,
+  paperStateSourceFactory = null,
 } = {}) {
   if (!truthy(env.PAPER_FORWARD_SCHEDULE_ACTIVE)) {
     fail("PAPER_FORWARD_SCHEDULE_ACTIVE must be explicitly true", 64);
@@ -196,7 +197,9 @@ export async function runPaperForwardScheduleCli(env = process.env, {
     fail("Authoritative Paper dependency factory is invalid", 69);
     return;
   }
-  if (typeof authoritativePaperPackageLoader !== "function" || typeof paperStateSourceFactory !== "function") {
+  if (typeof authoritativePaperPackageLoader !== "function"
+    || typeof paperStateOwnerFactory !== "function"
+    || (paperStateSourceFactory != null && typeof paperStateSourceFactory !== "function")) {
     fail("Authoritative Paper package dependency is invalid", 70);
     return;
   }
@@ -211,6 +214,7 @@ export async function runPaperForwardScheduleCli(env = process.env, {
   try {
     let authoritativeSourceWiringAudit = null;
     let authoritativeRuntimePackageAudit = null;
+    let paperStateOwnerAudit = null;
     let authoritativeRuntimeMeasurement = null;
     let resolvedAuthoritativeSourceWiring = authoritativePaperSourceWiring ?? {};
     if (researchProduction) {
@@ -222,13 +226,29 @@ export async function runPaperForwardScheduleCli(env = process.env, {
       };
       const stateSnapshotPath = String(env.PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH ?? "").trim();
       if (stateSnapshotPath) {
+        const paperStateOwner = paperStateSourceFactory == null
+          ? paperStateOwnerFactory({ snapshotPath: stateSnapshotPath, runtimePackage })
+          : Object.freeze({
+            schemaVersion: "paper-state-source-compatibility-override-v1",
+            snapshotPath: stateSnapshotPath,
+            paperStateForCard: paperStateSourceFactory({ snapshotPath: stateSnapshotPath, runtimePackage }),
+            writePaperStateSnapshot: null,
+            initializesPaperState: false,
+            recurringLedgerDerivationAllowed: false,
+            unknownIsZero: false,
+          });
         resolvedAuthoritativeSourceWiring = {
           ...resolvedAuthoritativeSourceWiring,
-          paperStateForCard: paperStateSourceFactory({
-            snapshotPath: stateSnapshotPath,
-            runtimePackage,
-          }),
+          paperStateForCard: paperStateOwner.paperStateForCard,
         };
+        paperStateOwnerAudit = Object.freeze({
+          schemaVersion: paperStateOwner.schemaVersion,
+          snapshotPath: paperStateOwner.snapshotPath,
+          writerConnected: typeof paperStateOwner.writePaperStateSnapshot === "function",
+          initializesPaperState: paperStateOwner.initializesPaperState === true,
+          recurringLedgerDerivationAllowed: paperStateOwner.recurringLedgerDerivationAllowed === true,
+          unknownIsZero: paperStateOwner.unknownIsZero === true,
+        });
       }
       authoritativeRuntimePackageAudit = Object.freeze({
         schemaVersion: runtimePackage.schemaVersion,
@@ -236,6 +256,7 @@ export async function runPaperForwardScheduleCli(env = process.env, {
         sourceGraphSha256: runtimePackage.sourceGraphSha256,
         bundleSha256: runtimePackage.bundleSha256,
         admissionBundleSchemaVersion: runtimePackage.admissionBundleSchemaVersion,
+        callbackOwnerContractSchemaVersion: runtimePackage.callbackOwnerContractSchemaVersion,
         blockedDataSourceContractSchemaVersion: runtimePackage.blockedDataSourceContractSchemaVersion,
         costPolicyVersion: runtimePackage.costPolicyVersion,
         costPolicyVersionBinding: runtimePackage.costPolicyVersionBinding,
@@ -244,6 +265,7 @@ export async function runPaperForwardScheduleCli(env = process.env, {
         liveTrading: runtimePackage.liveTrading,
         scheduleActivationAuthority: runtimePackage.scheduleActivationAuthority,
         financialMutationAllowed: runtimePackage.financialMutationAllowed,
+        paperStateOwner: paperStateOwnerAudit,
       });
     }
     const cutover = researchProduction

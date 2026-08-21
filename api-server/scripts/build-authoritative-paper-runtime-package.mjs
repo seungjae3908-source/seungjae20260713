@@ -18,8 +18,10 @@ const CANONICAL_PRODUCER_SOURCE_SHA256 = 'e699e00ba64040aefec24b5b4992b4975531fd
 const PRODUCER_SOURCE = 'src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.ts';
 const ALLOWED_INPUTS = Object.freeze([
   '../market-intelligence-sidecar/src/execution-quality.mjs',
+  '../market-prediction-lab/src/bitget-position-tier-v1.js',
   'src/data/asset-type.ts',
   'src/lib/bounded-work-pool.ts',
+  'src/services/authoritative-paper-callback-owners.service.ts',
   'src/services/authoritative-paper-evidence-sources.service.ts',
   'src/services/authoritative-paper-runtime-package.entry.ts',
   'src/services/bitget-futures-public-evidence.service.ts',
@@ -73,7 +75,7 @@ function repositoryPath(inputPath) {
 await mkdir(outputRoot, { recursive: true });
 const result = await build({
   absWorkingDir: apiRoot,
-  entryPoints: ['src/services/authoritative-paper-runtime-package.entry.ts'],
+  entryPoints: [join(apiRoot, 'src', 'services', 'authoritative-paper-runtime-package.entry.ts')],
   outfile: bundlePath,
   bundle: true,
   platform: 'node',
@@ -127,6 +129,7 @@ const manifest = {
   bundleSha256,
   admissionBundleSchemaVersion: 'scanner-paper-admission-evidence-bundle-v1',
   paperStateSnapshotSchemaVersion: 'paper-trading-state-snapshot-v1',
+  callbackOwnerContractSchemaVersion: 'authoritative-paper-callback-owner-contract-v1',
   blockedDataSourceContractSchemaVersion: 'authoritative-paper-blocked-data-source-contract-v1',
   simulatedExecutionEvidenceSchemaVersion: 'paper-simulated-execution-evidence-v1',
   costPolicyVersion: null,
@@ -137,6 +140,9 @@ const manifest = {
     unknownIsZero: false,
   },
   exports: [
+    'AUTHORITATIVE_PAPER_CALLBACK_OWNER_CONTRACT_VERSION',
+    'AUTHORITATIVE_PAPER_CALLBACK_OWNERS_SAFETY',
+    'AUTHORITATIVE_PAPER_CALLBACK_OWNERS_VERSION',
     'AUTHORITATIVE_PAPER_BLOCKED_DATA_SOURCE_CONTRACT_VERSION',
     'AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_SAFETY',
     'AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_VERSION',
@@ -148,8 +154,12 @@ const manifest = {
     'createAuthoritativePaperEvidenceSourceWiring',
     'createImmutablePaperTradingStateSnapshot',
     'buildPaperSimulatedExecutionEvidence',
+    'buildAuthoritativePaperExecutionObservation',
+    'buildAuthoritativeSizedContractRules',
+    'buildAuthoritativeSupplementalCostEvidence',
     'createScannerCryptoFuturesPaperAdmissionEvidenceProducer',
     'validateImmutablePaperTradingStateSnapshot',
+    'paperStateFromAuthoritativeSnapshot',
   ],
   safety: {
     executionAuthority: 'NONE',

@@ -5,16 +5,22 @@ on:
     branches: [main]
     paths:
       - api-server/scripts/build-authoritative-paper-runtime-package.mjs
+      - api-server/src/services/authoritative-paper-callback-owners.service.ts
       - api-server/src/services/authoritative-paper-evidence-sources.service.ts
       - api-server/src/services/authoritative-paper-runtime-package.entry.ts
       - api-server/src/services/paper-trading-state-snapshot.service.ts
       - api-server/src/services/paper-simulated-execution-evidence.service.ts
       - market-intelligence-sidecar/src/execution-quality.mjs
+      - market-intelligence-sidecar/src/execution-quality.d.mts
       - market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json
       - market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs
       - market-prediction-lab/src/authoritative-paper-evidence-source-ownership-v1.js
       - market-prediction-lab/src/authoritative-paper-runtime-factory-v1.js
       - market-prediction-lab/src/authoritative-paper-runtime-package-v1.js
+      - market-prediction-lab/src/bitget-position-tier-v1.js
+      - market-prediction-lab/src/bitget-position-tier-v1.d.ts
+      - market-prediction-lab/src/eth-v6-paper-forward-source-v1.js
+      - market-prediction-lab/src/eth-v6-paper-settlement-source-v1.js
       - market-prediction-lab/src/meaningful-search-scheduled-paper-provider-v1.js
       - market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
       - market-prediction-lab/scripts/run-paper-forward-schedule.js
@@ -82,16 +88,22 @@ jobs:
             .github/workflows/authoritative-paper-runtime-factory-v1.yml
             .github/workflows/paper-forward-schedule-validation.yml
             api-server/scripts/build-authoritative-paper-runtime-package.mjs
+            api-server/src/services/authoritative-paper-callback-owners.service.ts
             api-server/src/services/authoritative-paper-evidence-sources.service.ts
             api-server/src/services/authoritative-paper-runtime-package.entry.ts
             api-server/src/services/paper-trading-state-snapshot.service.ts
             api-server/src/services/paper-simulated-execution-evidence.service.ts
             market-intelligence-sidecar/src/execution-quality.mjs
+            market-intelligence-sidecar/src/execution-quality.d.mts
             market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json
             market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs
             market-prediction-lab/src/authoritative-paper-evidence-source-ownership-v1.js
             market-prediction-lab/src/authoritative-paper-runtime-factory-v1.js
             market-prediction-lab/src/authoritative-paper-runtime-package-v1.js
+            market-prediction-lab/src/bitget-position-tier-v1.js
+            market-prediction-lab/src/bitget-position-tier-v1.d.ts
+            market-prediction-lab/src/eth-v6-paper-forward-source-v1.js
+            market-prediction-lab/src/eth-v6-paper-settlement-source-v1.js
             market-prediction-lab/src/meaningful-search-scheduled-paper-provider-v1.js
             market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
             market-prediction-lab/scripts/run-paper-forward-schedule.js
@@ -127,6 +139,9 @@ jobs:
           node --check market-prediction-lab/src/authoritative-paper-evidence-source-ownership-v1.js
           node --check market-prediction-lab/src/authoritative-paper-runtime-factory-v1.js
           node --check market-prediction-lab/src/authoritative-paper-runtime-package-v1.js
+          node --check market-prediction-lab/src/bitget-position-tier-v1.js
+          node --check market-prediction-lab/src/eth-v6-paper-forward-source-v1.js
+          node --check market-prediction-lab/src/eth-v6-paper-settlement-source-v1.js
           node --check market-prediction-lab/src/meaningful-search-scheduled-paper-provider-v1.js
           node --check market-intelligence-sidecar/src/execution-quality.mjs
           node --check market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs
@@ -146,6 +161,8 @@ jobs:
           node --test \
             tests/authoritative-paper-runtime-factory-v1.test.js \
             tests/authoritative-paper-runtime-package-v1.test.js \
+            tests/eth-v6-paper-forward-source-v1.test.js \
+            tests/eth-v6-paper-settlement-source-v1.test.js \
             tests/meaningful-search-scheduled-paper-provider-v1.test.js \
             tests/paper-forward-schedule-authoritative-source-wiring-v1.test.js \
             tests/paper-scheduler-driver-v1.test.js \

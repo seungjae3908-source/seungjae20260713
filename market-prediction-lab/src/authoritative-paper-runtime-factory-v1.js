@@ -97,6 +97,23 @@ function blockedDataSourceContract(value, callback) {
     : null;
 }
 
+function callbackOwnerContract(value, callback) {
+  const contract = value?.authoritativeOwner;
+  return isRecord(contract)
+    && contract.schemaVersion === "authoritative-paper-callback-owner-contract-v1"
+    && contract.callback === callback
+    && contract.ownerStatus === "OWNER_EXISTS"
+    && contract.dataReadiness === "RUNTIME_VALIDATED_BLOCKED_DATA"
+    && nonEmpty(contract.implementation)
+    && Array.isArray(contract.requiredData)
+    && contract.requiredData.length > 0
+    && contract.requiredData.every(nonEmpty)
+    && contract.missingDataBehavior === "BLOCKED_DATA"
+    && contract.unknownIsZero === false
+    ? contract
+    : null;
+}
+
 function stageMeasurement(stage, {
   status = "UNKNOWN",
   count = null,
@@ -223,6 +240,10 @@ export function auditAuthoritativePaperSourceWiring(sourceWiring = {}) {
     .map((name) => blockedDataSourceContract(sourceWiring[name], name))
     .filter(Boolean);
   const ownerMissingCallbacks = blockedDataContracts.map((contract) => contract.callback);
+  const callbackOwnerContracts = readyCallbacks
+    .map((name) => callbackOwnerContract(sourceWiring[name], name))
+    .filter(Boolean);
+  const ownerExistsCallbacks = callbackOwnerContracts.map((contract) => contract.callback);
   const dataBlockers = [...new Set(blockedDataContracts.map((contract) => contract.blocker))];
   const blockers = [...missingCallbackBlockers, ...dataBlockers];
   const status = missingCallbacks.length > 0
@@ -242,6 +263,8 @@ export function auditAuthoritativePaperSourceWiring(sourceWiring = {}) {
     readyCallbacks: freeze(readyCallbacks),
     missingCallbacks: freeze(missingCallbacks),
     ownerMissingCallbacks: freeze(ownerMissingCallbacks),
+    ownerExistsCallbacks: freeze(ownerExistsCallbacks),
+    callbackOwnerContracts: freeze(callbackOwnerContracts),
     blockedDataContracts: freeze(blockedDataContracts),
     dataBlockers: freeze(dataBlockers),
     blockers: freeze(blockers),
