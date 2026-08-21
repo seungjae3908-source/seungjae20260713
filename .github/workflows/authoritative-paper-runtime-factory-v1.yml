@@ -1,0 +1,63 @@
+name: Authoritative Paper Runtime Factory
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/authoritative-paper-runtime-factory-v1.yml
+      - api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.ts
+      - api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.test.ts
+      - api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.ts
+      - api-server/src/services/scanner-paper-admission-evidence-bundle.service.ts
+      - market-prediction-lab/src/authoritative-paper-runtime-factory-v1.js
+      - market-prediction-lab/src/canonical-paper-admission-bundle-injection-runtime-v1.js
+      - market-prediction-lab/src/canonical-meaningful-search-paper-runtime-v1.js
+      - market-prediction-lab/src/meaningful-search-scheduled-paper-provider-v1.js
+      - market-prediction-lab/src/paper-forward-evidence-runtime-v1.js
+      - market-prediction-lab/tests/authoritative-paper-runtime-factory-v1.test.js
+
+permissions:
+  contents: read
+
+jobs:
+  authoritative-paper-runtime-factory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact PR HEAD
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Verify exact HEAD
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck API server
+        run: pnpm --dir api-server run typecheck
+
+      - name: Bundle exact-head P0-C9 producer tests
+        run: >-
+          pnpm --dir api-server exec esbuild
+          src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.test.ts
+          --bundle --platform=node --format=esm
+          --outfile=/tmp/scanner-crypto-futures-paper-admission-evidence-producer.test.mjs
+
+      - name: Run exact-head P0-C9 producer tests
+        run: node --test /tmp/scanner-crypto-futures-paper-admission-evidence-producer.test.mjs
+
+      - name: Run exact-head P0-C9 runtime factory tests
+        run: node --test market-prediction-lab/tests/authoritative-paper-runtime-factory-v1.test.js
