@@ -277,9 +277,11 @@ test('strict session, origin, order, close, replacement, and ordered updates pre
   }));
   await expect(page).toHaveURL(acceptedUrl);
 
-  await postChannelMessage(page, mainMessage({ type: 'ready', sourceId: 'main-b', sequence: 1, sentAt: base + 300, origin }));
+  const replacementReadySentAt = Date.now();
+  await postChannelMessage(page, mainMessage({ type: 'ready', sourceId: 'main-b', sequence: 1, sentAt: replacementReadySentAt, origin }));
+  const replacementSelectionSentAt = Math.max(Date.now() + 1_000, replacementReadySentAt + 1_000);
   await postChannelMessage(page, mainMessage({
-    type: 'selection', sourceId: 'main-b', sequence: 2, sentAt: base + 400, origin,
+    type: 'selection', sourceId: 'main-b', sequence: 2, sentAt: replacementSelectionSentAt, origin,
     selectionOverride: { timeframe: '30m' },
   }));
   await expect(page).toHaveURL(/timeframe=30m/);
