@@ -6,8 +6,9 @@ import { evaluateUsQualityDaytradeTierBRiskProvenance } from "./us-quality-daytr
 import { evaluateUsQualityDaytradeLiquidityEvidence } from "./us-quality-daytrade-liquidity-evidence-v1.js";
 import { evaluateUsQualityDaytradeVolatility } from "./us-quality-daytrade-volatility-v1.js";
 import { evaluateUsQualityDaytradeMarketContext } from "./us-quality-daytrade-market-context-v1.js";
+import { evaluateUsQualityDaytradeCatalystEvidence } from "./us-quality-daytrade-catalyst-evidence-v1.js";
 
-export const QUALITY_DAYTRADE_PREENTRY_CONTRACT_VERSION = "us-quality-daytrade-preentry-v6";
+export const QUALITY_DAYTRADE_PREENTRY_CONTRACT_VERSION = "us-quality-daytrade-preentry-v7";
 
 function safeResult(fields) {
   return Object.freeze({
@@ -45,6 +46,7 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
       liquidity: null,
       volatility: null,
       marketContext: null,
+      catalystEvidence: null,
       binaryEventRisk: null,
       qualityTier: null,
       riskBudgetMultiplier: 0,
@@ -62,6 +64,7 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
       liquidity: null,
       volatility: null,
       marketContext: null,
+      catalystEvidence: null,
       binaryEventRisk: null,
       qualityTier: technicalSetup.qualityTier ?? technicalSetup.universe?.tier ?? null,
       riskBudgetMultiplier: technicalSetup.riskBudgetMultiplier ?? technicalSetup.universe?.riskBudgetMultiplier ?? 0,
@@ -85,6 +88,7 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
         liquidity: null,
         volatility: null,
         marketContext: null,
+        catalystEvidence: null,
         binaryEventRisk: null,
         qualityTier: technicalSetup.qualityTier,
         riskBudgetMultiplier: technicalSetup.riskBudgetMultiplier,
@@ -104,6 +108,7 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
       liquidity: null,
       volatility: null,
       marketContext: null,
+      catalystEvidence: null,
       binaryEventRisk: null,
       qualityTier: technicalSetup.qualityTier,
       riskBudgetMultiplier: technicalSetup.riskBudgetMultiplier,
@@ -119,6 +124,7 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
       liquidity: null,
       volatility: null,
       marketContext: null,
+      catalystEvidence: null,
       binaryEventRisk: null,
       qualityTier: technicalSetup.qualityTier,
       riskBudgetMultiplier: technicalSetup.riskBudgetMultiplier,
@@ -141,6 +147,7 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
       liquidity,
       volatility: null,
       marketContext: null,
+      catalystEvidence: null,
       binaryEventRisk: null,
       qualityTier: technicalSetup.qualityTier,
       riskBudgetMultiplier: technicalSetup.riskBudgetMultiplier,
@@ -156,6 +163,7 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
       liquidity,
       volatility: null,
       marketContext: null,
+      catalystEvidence: null,
       binaryEventRisk: null,
       qualityTier: technicalSetup.qualityTier,
       riskBudgetMultiplier: technicalSetup.riskBudgetMultiplier,
@@ -178,6 +186,7 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
       liquidity,
       volatility,
       marketContext: null,
+      catalystEvidence: null,
       binaryEventRisk: null,
       qualityTier: technicalSetup.qualityTier,
       riskBudgetMultiplier: technicalSetup.riskBudgetMultiplier,
@@ -199,6 +208,30 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
       liquidity,
       volatility,
       marketContext,
+      catalystEvidence: null,
+      binaryEventRisk: null,
+      qualityTier: technicalSetup.qualityTier,
+      riskBudgetMultiplier: technicalSetup.riskBudgetMultiplier,
+    });
+  }
+
+  const catalystEvidence = evaluateUsQualityDaytradeCatalystEvidence({
+    asOfMs: raw.asOfMs,
+    symbol: instrumentSymbol,
+    catalystPolicy: raw.catalystPolicy,
+    catalystEvidence: raw.catalystEvidence,
+  });
+  if (catalystEvidence.status !== "PASS") {
+    return safeResult({
+      status: "BLOCKED_DATA",
+      reason: catalystEvidence.reason,
+      universeProvenance,
+      technicalSetup,
+      tierBRiskProvenance,
+      liquidity,
+      volatility,
+      marketContext,
+      catalystEvidence,
       binaryEventRisk: null,
       qualityTier: technicalSetup.qualityTier,
       riskBudgetMultiplier: technicalSetup.riskBudgetMultiplier,
@@ -221,6 +254,7 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
       liquidity,
       volatility,
       marketContext,
+      catalystEvidence,
       binaryEventRisk,
       qualityTier: technicalSetup.qualityTier,
       riskBudgetMultiplier: technicalSetup.riskBudgetMultiplier,
@@ -229,13 +263,16 @@ export function evaluateUsQualityDaytradePreEntry(raw) {
 
   return safeResult({
     status: "CANDIDATE",
-    reason: "VWAP_FIRST_PULLBACK_REBREAK_LIQUID_EVENT_SAFE",
+    reason: "VWAP_FIRST_PULLBACK_REBREAK_LIQUID_CATALYST_EVENT_SAFE",
     universeProvenance,
     technicalSetup,
     tierBRiskProvenance,
     liquidity,
     volatility,
     marketContext,
+    catalystEvidence,
+    catalystClass: catalystEvidence.catalystClass,
+    primaryCatalyst: catalystEvidence.primaryCatalyst,
     binaryEventRisk,
     qualityTier: technicalSetup.qualityTier,
     riskBudgetMultiplier: technicalSetup.riskBudgetMultiplier,
