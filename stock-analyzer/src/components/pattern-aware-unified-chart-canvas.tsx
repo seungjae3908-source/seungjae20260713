@@ -551,6 +551,7 @@ export function PatternAwareUnifiedChartCanvas({
             market={market}
             symbol={chartSymbol}
             chartPrice={latestChartPrice}
+            pricePlan={pricePlan}
             onOverlayChange={setPositionOverlay}
           />
         </div>
