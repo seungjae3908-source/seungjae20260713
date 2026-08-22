@@ -1,0 +1,45 @@
+name: Backup DR Security Contract
+
+on:
+  pull_request:
+    paths:
+      - 'ops/backup-dr/**'
+      - '.github/workflows/backup-dr-contract.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backup-dr-contract-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: Validate encrypted backup and disaster-recovery safety contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact PR HEAD
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Validate policy JSON
+        run: node -e "JSON.parse(require('node:fs').readFileSync('ops/backup-dr/policy.json','utf8')); console.log('BACKUP_DR_POLICY_JSON_PASS')"
+
+      - name: Validate executable syntax
+        run: |
+          set -Eeuo pipefail
+          node --check ops/backup-dr/create-encrypted-postgres-backup.mjs
+          node --check ops/backup-dr/copy-encrypted-backup-offsite.mjs
+          node --check ops/backup-dr/restore-encrypted-postgres-backup-drill.mjs
+          node --check ops/backup-dr/contract.test.mjs
+
+      - name: Validate fail-closed backup DR contract
+        run: node ops/backup-dr/contract.test.mjs
