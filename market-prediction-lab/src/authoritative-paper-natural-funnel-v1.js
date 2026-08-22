@@ -160,12 +160,7 @@ function wrapSourceWiring(sourceWiring, counters) {
       if (typeof producer !== "function") return producer;
       return async (context) => {
         counters.producerAttemptCount += 1;
-        let produced;
-        try {
-          produced = await producer(context);
-        } catch (error) {
-          throw error;
-        }
+        const produced = await producer(context);
         const completeness = evidenceCompleteness(produced);
         if (completeness !== "UNKNOWN") counters.evidenceClassifiedCount += 1;
         if (completeness === "PASS") counters.evidenceCompleteCount += 1;
@@ -261,14 +256,17 @@ function naturalFunnelMeasurements({ result, counters, measuredAtMs }) {
   ]);
 }
 
-function naturalEvidenceIdentity({ input, result, measurements, measuredAtMs }) {
+function naturalEvidenceIdentity({ input, result, measurements }) {
   const cycleId = input?.cycle?.cycleId ?? result?.cycleId ?? null;
   if (!nonEmpty(cycleId)) return null;
+  const runtimeSha = immutableSha(input?.cycle?.identity?.researchCodeSha)
+    ?? immutableSha(input?.signal?.strategyIdentity?.researchCodeSha)
+    ?? null;
   return sha256({
     schemaVersion: AUTHORITATIVE_PAPER_NATURAL_FUNNEL_CONTRACT.version,
     cycleId,
     market: input?.market ?? result?.market ?? null,
-    measuredAtMs,
+    runtimeSha,
     measurements: measurements.map(({ stage, status, count, blocker, provenance }) => ({
       stage, status, count, blocker, provenance,
     })),
@@ -297,7 +295,7 @@ export function createNaturalFunnelObservedPaperRuntimeFromSourceWiring({
     const measuredAtMs = now();
     const measurements = naturalFunnelMeasurements({ result, counters, measuredAtMs });
     const firstZero = firstMeasuredZero(measurements);
-    const evidenceIdentity = naturalEvidenceIdentity({ input, result, measurements, measuredAtMs });
+    const evidenceIdentity = naturalEvidenceIdentity({ input, result, measurements });
     const runtimeSha = immutableSha(input?.cycle?.identity?.researchCodeSha)
       ?? immutableSha(input?.signal?.strategyIdentity?.researchCodeSha)
       ?? null;
