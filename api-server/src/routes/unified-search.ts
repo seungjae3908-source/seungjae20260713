@@ -8,6 +8,10 @@ import {
   startUnifiedAssetSearchRefreshTimer,
 } from '../services/unified-asset-search.service';
 import {
+  buildFuturesSearchFallback,
+  FUTURES_SEARCH_SOFT_DEADLINE_MS,
+} from '../services/unified-futures-search-fallback';
+import {
   buildKrSearchFallback,
   KR_SEARCH_SOFT_DEADLINE_MS,
 } from '../services/unified-kr-search-fallback';
@@ -39,6 +43,10 @@ function canUseSpotMetadataFallback(asset: 'all' | UnifiedAssetType, market: Uni
   return (asset === 'all' || asset === 'coin') && market === 'spot';
 }
 
+function canUseFuturesMetadataFallback(asset: 'all' | UnifiedAssetType, market: UnifiedSearchMarket | null) {
+  return (asset === 'all' || asset === 'coin') && market === 'futures';
+}
+
 function canUseKrMetadataFallback(asset: 'all' | UnifiedAssetType, market: UnifiedSearchMarket | null) {
   return (asset === 'all' || asset === 'stock') && market === 'KR';
 }
@@ -51,6 +59,7 @@ function buildMetadataFallback(
 ) {
   if (canUseKrMetadataFallback(asset, market)) return buildKrSearchFallback(q, limit);
   if (canUseSpotMetadataFallback(asset, market)) return buildSpotSearchFallback(q, limit);
+  if (canUseFuturesMetadataFallback(asset, market)) return buildFuturesSearchFallback(q, limit);
   return null;
 }
 
@@ -60,6 +69,7 @@ function metadataFallbackSoftDeadlineMs(
 ) {
   if (canUseKrMetadataFallback(asset, market)) return KR_SEARCH_SOFT_DEADLINE_MS;
   if (canUseSpotMetadataFallback(asset, market)) return SPOT_SEARCH_SOFT_DEADLINE_MS;
+  if (canUseFuturesMetadataFallback(asset, market)) return FUTURES_SEARCH_SOFT_DEADLINE_MS;
   return null;
 }
 
