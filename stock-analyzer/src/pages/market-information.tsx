@@ -110,6 +110,11 @@ function formatPercent(value: number | null): string {
   return `${sign}${value.toFixed(2)}%`;
 }
 
+function displayMessage(value: string | null | undefined): string | null {
+  if (!value) return null;
+  return value.replace(/\bprovider\b/gi, '제공처');
+}
+
 function statusText(error: unknown): { title: string; description: string; icon: ReactNode } {
   if (typeof navigator !== 'undefined' && !navigator.onLine) {
     return {
@@ -131,11 +136,11 @@ function statusText(error: unknown): { title: string; description: string; icon:
     if (error.code.includes('TIMEOUT')) {
       return { title: '응답 지연', description: '잠시 후 다시 시도해 주세요.', icon: <AlertTriangle className="h-5 w-5" /> };
     }
-    return { title: '시장정보 확인 실패', description: error.message, icon: <AlertTriangle className="h-5 w-5" /> };
+    return { title: '시장정보 확인 실패', description: displayMessage(error.message) ?? '다시 시도해 주세요.', icon: <AlertTriangle className="h-5 w-5" /> };
   }
   return {
     title: '시장정보 확인 실패',
-    description: error instanceof Error ? error.message : '알 수 없는 오류입니다.',
+    description: error instanceof Error ? displayMessage(error.message) ?? '알 수 없는 오류입니다.' : '알 수 없는 오류입니다.',
     icon: <AlertTriangle className="h-5 w-5" />,
   };
 }
@@ -155,7 +160,7 @@ function SourceMeta({ meta }: { meta: MarketInformationMeta }) {
   return (
     <section
       className="mt-3 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-muted-foreground"
-      aria-label="데이터 출처와 상태"
+      aria-label="데이터 출처와 신선도"
     >
       <span className="max-w-full truncate">출처 {meta.source ?? meta.provider ?? '미연결'}</span>
       <span>기준 {formatDate(meta.providerUpdatedAt ?? meta.observedAt)}</span>
@@ -189,6 +194,7 @@ function SectionFrame<T>({
     || section.status === 'error'
     || section.status === 'empty';
   const headingId = `section-${title}`;
+  const message = displayMessage(section.message);
 
   return (
     <section className="min-w-0 rounded-2xl border bg-card p-3 shadow-sm sm:p-4" aria-labelledby={headingId}>
@@ -207,13 +213,13 @@ function SectionFrame<T>({
       {unavailable ? (
         <div className="mt-3 flex min-h-16 items-center gap-2 rounded-xl border border-dashed px-3 py-3 text-xs text-muted-foreground">
           <AlertTriangle className="h-4 w-4 shrink-0" />
-          <span className="line-clamp-2">{section.message ?? '표시할 데이터가 없습니다.'}</span>
+          <span className="line-clamp-2">{message ?? '표시할 데이터가 없습니다.'}</span>
         </div>
       ) : (
         <>
-          {section.message && (
+          {message && (
             <p className="mt-2 line-clamp-2 rounded-xl bg-muted/60 px-3 py-2 text-xs leading-5 text-muted-foreground">
-              {section.message}
+              {message}
             </p>
           )}
           {children}
@@ -438,7 +444,7 @@ export default function MarketInformationPage() {
               type="button"
               onClick={() => void query.refetch()}
               disabled={query.isFetching}
-              className="flex min-h-10 shrink-0 items-center gap-1.5 rounded-xl border bg-background px-3 text-xs font-black disabled:opacity-50"
+              className="flex min-h-11 shrink-0 items-center gap-1.5 rounded-xl border bg-background px-3 text-xs font-black disabled:opacity-50"
               aria-label="시장정보 새로고침"
             >
               <RefreshCw className={cn('h-4 w-4', query.isFetching && 'animate-spin')} />
@@ -471,7 +477,7 @@ export default function MarketInformationPage() {
                 type="button"
                 onClick={() => setMobileTab(item.key)}
                 className={cn(
-                  'min-h-10 rounded-xl border px-2 text-xs font-black',
+                  'min-h-11 rounded-xl border px-2 text-xs font-black',
                   mobileTab === item.key
                     ? 'border-primary bg-primary text-primary-foreground'
                     : 'border-card-border bg-card text-muted-foreground',
