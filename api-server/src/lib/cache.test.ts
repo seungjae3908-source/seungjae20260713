@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { cached } from './cache';
+import { cached, withCacheReadBudget } from './cache';
 
 function uniqueKey(label: string): string {
   return `cache-test:${label}:${Date.now()}:${Math.random()}`;
@@ -62,4 +62,20 @@ test('cached does not retain failed loaders and allows a later retry', async () 
 
   assert.equal(result, 'recovered');
   assert.equal(calls, 2);
+});
+
+test('persistent cache read budget fails closed instead of holding the request open', async () => {
+  const started = Date.now();
+  const never = new Promise<string>(() => undefined);
+
+  await assert.rejects(
+    withCacheReadBudget(never, 20),
+    /CACHE_PERSIST_READ_TIMEOUT/,
+  );
+
+  assert.ok(Date.now() - started < 250);
+});
+
+test('persistent cache read budget clears its timer after a fast result', async () => {
+  assert.equal(await withCacheReadBudget(Promise.resolve('ready'), 100), 'ready');
 });
