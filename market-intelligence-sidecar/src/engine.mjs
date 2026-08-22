@@ -1,6 +1,9 @@
 import { evaluateAdvancedGates } from './advanced-gates.mjs';
 import { evaluateExecutionQuality } from './execution-quality.mjs';
 import { evaluatePortfolioSafety } from './portfolio-safety.mjs';
+import { evaluateRegimeBrain } from './regime-brain.mjs';
+import { evaluateNetAlpha } from './net-alpha-engine.mjs';
+import { evaluateDynamicBetSizing } from './dynamic-bet-sizing.mjs';
 
 const DEFAULT_POLICY = Object.freeze({
   version: 'MIS_V1',
@@ -290,6 +293,7 @@ export function evaluateMarketIntelligence(input = {}) {
     previousOpenInterest: input.derivatives?.previousOpenInterest ?? input.previous?.derivatives?.openInterest,
   }) : null;
   const microcap = market === 'US_STOCK' ? microcapFeatures(input.microcap) : null;
+  const validation = input.validation ?? {};
   const advancedGates = evaluateAdvancedGates({
     now,
     market,
@@ -299,6 +303,33 @@ export function evaluateMarketIntelligence(input = {}) {
   }, input.advancedGatePolicy);
   const executionQuality = evaluateExecutionQuality({ now, ...(input.executionQuality ?? {}) }, input.executionQualityPolicy);
   const portfolioSafety = evaluatePortfolioSafety({ now, ...(input.portfolioSafety ?? {}) }, input.portfolioSafetyPolicy);
+  const currentTopDepthNotional = book.mid == null ? null : (book.bidQty + book.askQty) * book.mid;
+  const regimeBrain = evaluateRegimeBrain({
+    now,
+    market,
+    asOf: input.regimeBrain?.asOf ?? asOf,
+    spreadBps: input.regimeBrain?.spreadBps ?? book.spreadBps,
+    topDepthNotional: input.regimeBrain?.topDepthNotional ?? currentTopDepthNotional,
+    ...(input.regimeBrain ?? {}),
+  }, input.regimeBrainPolicy);
+  const netAlpha = evaluateNetAlpha({
+    now,
+    market,
+    attestedNetEdgeBps: input.netAlpha?.attestedNetEdgeBps ?? finite(validation.expectedNetEdgeBps),
+    conformalLowerEdgeBps: input.netAlpha?.conformalLowerEdgeBps ?? advancedGates?.uncertainty?.lowerBps,
+    ...(input.netAlpha ?? {}),
+  }, input.netAlphaPolicy);
+  const dynamicSizing = evaluateDynamicBetSizing({
+    now,
+    market,
+    direction: input.direction,
+    regimeBrain,
+    netAlpha,
+    advancedGates,
+    executionQuality,
+    portfolioSafety,
+    ...(input.dynamicSizing ?? {}),
+  }, input.dynamicSizingPolicy);
 
   let directional = 0;
   directional += book.bookImbalance * 24;
@@ -334,7 +365,6 @@ export function evaluateMarketIntelligence(input = {}) {
         ? 'SPREAD_LIMIT_EXCEEDED'
         : null;
 
-  const validation = input.validation ?? {};
   const forwardSamples = Math.max(0, finite(validation.forwardSamples, 0));
   const profitFactor = finite(validation.profitFactor);
   const expectedNetEdgeBps = finite(validation.expectedNetEdgeBps);
@@ -349,7 +379,10 @@ export function evaluateMarketIntelligence(input = {}) {
   const advanced = requiredGateState(advancedGates);
   const execution = requiredGateState(executionQuality);
   const portfolio = requiredGateState(portfolioSafety);
-  const requiredGates = [advanced, execution, portfolio];
+  const regime = requiredGateState(regimeBrain);
+  const alpha = requiredGateState(netAlpha);
+  const sizing = requiredGateState(dynamicSizing);
+  const requiredGates = [advanced, execution, portfolio, regime, alpha, sizing];
   const requiredVeto = requiredGates.find((gate) => gate.required && gate.state === 'VETO');
   const requiredIncomplete = requiredGates.some((gate) => gate.required && gate.state !== 'PASS');
   const requiredVetoReason = requiredVeto?.reasons?.[0] ?? (requiredVeto ? 'REQUIRED_SAFETY_GATE_VETO' : null);
@@ -371,8 +404,12 @@ export function evaluateMarketIntelligence(input = {}) {
   if (market === 'US_STOCK' && input.microcap == null) warnings.push('MICROCAP_STRUCTURAL_DATA_NOT_AVAILABLE');
   if (!evidenceReady) warnings.push('AUTO_TRADING_FORWARD_EVIDENCE_INSUFFICIENT');
   warnings.push(...advancedGates.scanner.warnings);
+  warnings.push(...(regimeBrain.scanner?.warnings ?? []));
   if (input.executionQuality != null && executionQuality.autoTrading.state !== 'PASS') warnings.push(`EXECUTION_QUALITY_${executionQuality.autoTrading.state}`);
   if (input.portfolioSafety != null && portfolioSafety.autoTrading.state !== 'PASS') warnings.push(`PORTFOLIO_SAFETY_${portfolioSafety.autoTrading.state}`);
+  if (input.regimeBrain != null && regimeBrain.autoTrading.state !== 'PASS') warnings.push(`REGIME_BRAIN_${regimeBrain.autoTrading.state}`);
+  if (input.netAlpha != null && netAlpha.autoTrading.state !== 'PASS') warnings.push(`NET_ALPHA_${netAlpha.autoTrading.state}`);
+  if (input.dynamicSizing != null && dynamicSizing.autoTrading.state !== 'PASS') warnings.push(`DYNAMIC_SIZING_${dynamicSizing.autoTrading.state}`);
 
   return {
     contract: 'market-intelligence-sidecar/v1',
@@ -403,6 +440,9 @@ export function evaluateMarketIntelligence(input = {}) {
     advancedGates,
     executionQuality,
     portfolioSafety,
+    regimeBrain,
+    netAlpha,
+    dynamicSizing,
     scanner: {
       mode: 'SOFT_INTELLIGENCE_LAYER',
       adjustment: scannerAdjustment,
@@ -414,6 +454,9 @@ export function evaluateMarketIntelligence(input = {}) {
       advancedGateState: advancedGates.autoTrading.state,
       executionQualityState: executionQuality.autoTrading.state,
       portfolioSafetyState: portfolioSafety.autoTrading.state,
+      regimeBrainState: regimeBrain.autoTrading.state,
+      netAlphaState: netAlpha.autoTrading.state,
+      dynamicSizingState: dynamicSizing.autoTrading.state,
       candidateDeletionAllowed: false,
     },
     autoTrading: {
@@ -425,9 +468,20 @@ export function evaluateMarketIntelligence(input = {}) {
       advancedGateReady: advanced.state === 'PASS',
       executionQualityReady: execution.state === 'PASS',
       portfolioSafetyReady: portfolio.state === 'PASS',
+      regimeBrainReady: regime.state === 'PASS',
+      netAlphaReady: alpha.state === 'PASS',
+      dynamicSizingReady: sizing.state === 'PASS',
       advancedEnforcement: advancedGates.policy.enforcement,
       executionQualityEnforcement: executionQuality.policy.enforcement,
       portfolioSafetyEnforcement: portfolioSafety.policy.enforcement,
+      regimeBrainEnforcement: regimeBrain.policy.enforcement,
+      netAlphaEnforcement: netAlpha.policy.enforcement,
+      dynamicSizingEnforcement: dynamicSizing.policy.enforcement,
+      advisorySizingMultiplier: dynamicSizing.advisoryMultiplier,
+      requiredSizingMultiplier: dynamicSizing.policy.enforcement === 'REQUIRED_FOR_PARENT_GATE'
+        ? dynamicSizing.recommendedMultiplier
+        : null,
+      sizingCanIncreaseParentExposure: false,
       hardBlockReason: autoHardBlockReason,
       evidence: { forwardSamples, profitFactor, expectedNetEdgeBps, maxDrawdownPct, regimeCount },
     },
