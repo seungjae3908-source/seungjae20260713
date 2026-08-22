@@ -19,6 +19,7 @@ function overview(aiDebate?: Record<string, unknown>) {
       liveTrading: false,
       privateApi: false,
       orderAuthority: false,
+      authorityEvidenceComplete: true,
       forbiddenAuthorityObserved: false,
     },
     research: {
@@ -52,7 +53,7 @@ function overview(aiDebate?: Record<string, unknown>) {
         present: true, status: 'replayed', scheduleActive: false, allProvidersReady: true,
         publicForwardEvidenceAccumulating: true, paperTradeOutcomeAccumulating: false,
         privateRequestCount: 0, financialMutationCount: 0, orderCount: 0,
-        liveTrading: false, orderAuthority: false,
+        liveTrading: false, orderAuthority: false, safetyEvidenceComplete: true,
         lanes: [{ market: 'KR_STOCK', status: 'ready' }, { market: 'US_STOCK', status: 'ready' }],
       },
       ledger: { present: true, cycleCount: 8, positionCount: 0, settlementCount: 0 },
