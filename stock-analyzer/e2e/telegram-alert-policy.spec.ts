@@ -1,6 +1,8 @@
 import { expect, test } from '@playwright/test';
 
 import {
+  applyTelegramAlertPolicyPatch,
+  defaultTelegramAlertPolicy,
   deliverTelegramAlertWithPolicy,
   evaluateTelegramAlertPolicy,
   type TelegramAlertPolicy,
@@ -62,6 +64,27 @@ function history(overrides: Partial<TelegramPolicyDeliveryHistory> = {}): Telegr
 }
 
 const NOW = new Date('2026-08-22T08:10:00.000Z');
+
+test('new per-user Telegram policy is user-bound and fail-closed OFF until explicitly enabled', () => {
+  const defaults = defaultTelegramAlertPolicy('user-a');
+  expect(defaults.userId).toBe('user-a');
+  expect(defaults.enabled).toBe(false);
+  expect(evaluateTelegramAlertPolicy(defaults, event(), [], NOW).reason).toBe('DISABLED');
+
+  const enabled = applyTelegramAlertPolicyPatch(defaults, {
+    enabled: true,
+    priorities: ['CRITICAL', 'IMPORTANT'],
+    quietHours: { enabled: true, criticalBypass: true },
+  });
+  expect(enabled.enabled).toBe(true);
+  expect(enabled.priorities).toEqual(['CRITICAL', 'IMPORTANT']);
+  expect(enabled.quietHours.timeZone).toBe('Asia/Seoul');
+  expect(enabled.quietHours.criticalBypass).toBe(true);
+
+  expect(() => applyTelegramAlertPolicyPatch(defaults, { userId: 'other-user' })).toThrow('TELEGRAM_ALERT_POLICY_INVALID');
+  expect(() => applyTelegramAlertPolicyPatch(defaults, { unknown: true })).toThrow('TELEGRAM_ALERT_POLICY_INVALID');
+  expect(() => applyTelegramAlertPolicyPatch(defaults, { quietHours: { timeZone: 'Not/AZone' } })).toThrow('TELEGRAM_ALERT_POLICY_INVALID');
+});
 
 test('per-user Telegram policy filters owner, master switch, market, signal and priority independently', () => {
   expect(evaluateTelegramAlertPolicy(policy({ enabled: false }), event(), [], NOW).reason).toBe('DISABLED');
@@ -131,6 +154,14 @@ test('same-event dedupe, subject cooldown and same-symbol repeat limit are separ
     now,
   );
   expect(repeated.reason).toBe('SAME_SYMBOL_REPEAT_LIMIT');
+
+  const repeatGateDisabled = evaluateTelegramAlertPolicy(
+    policy({ sameEventDedupeMs: 0, cooldownMs: 0, sameSymbolRepeatLimit: 0 }),
+    event(),
+    [history({ eventId: 'old-3', deliveredAt: '2026-08-22T08:09:00.000Z' })],
+    now,
+  );
+  expect(repeatGateDisabled.action).toBe('IMMEDIATE');
 });
 
 test('batched mode returns a digest intent without contacting Telegram', async () => {
