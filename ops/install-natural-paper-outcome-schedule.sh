@@ -11,12 +11,14 @@ MODE_ARCHIVE_ROOT="$STATE_ROOT/mode-archives"
 MODE_CUTOVER_ROOT="$STATE_ROOT/mode-cutovers"
 DEPLOY_MARKER="$LIVE_DIR/.deploy/current-sha"
 INSTALLER="$LIVE_DIR/ops/install-paper-forward-schedule.sh"
+DISABLER="$LIVE_DIR/ops/disable-paper-forward-schedule.sh"
 TAG="# stock-app-paper-forward-v1"
 EXPECTED_STRATEGY_ID="paper-forward-authoritative-account-v1"
 MODE_CUTOVER="false"
 ARCHIVED_STRATEGY_ID=""
 ARCHIVE_PATH=""
 RESTORE_ARCHIVE_ON_ERROR=0
+INSTALL_SUCCEEDED=0
 
 fail() {
   echo "[natural-paper-outcome-activate] $1" >&2
@@ -26,6 +28,9 @@ fail() {
 restore_on_error() {
   local status=$?
   trap - EXIT
+  if (( status != 0 )) && [[ "$INSTALL_SUCCEEDED" == 1 ]] && [[ -r "$DISABLER" ]]; then
+    bash "$DISABLER" >/dev/null 2>&1 || true
+  fi
   if (( status != 0 )) && [[ "$RESTORE_ARCHIVE_ON_ERROR" == 1 ]] && [[ -n "$ARCHIVE_PATH" ]] && [[ -d "$ARCHIVE_PATH" ]]; then
     rm -rf -- "$RUNTIME_STATE_ROOT"
     mv "$ARCHIVE_PATH" "$RUNTIME_STATE_ROOT" || true
@@ -40,6 +45,9 @@ trap restore_on_error EXIT
 DEPLOYED_SHA="$(tr -d '[:space:]' < "$DEPLOY_MARKER")"
 [[ "$DEPLOYED_SHA" == "$TARGET_SHA" ]] || fail "production SHA mismatch: $DEPLOYED_SHA" 5
 [[ -r "$INSTALLER" ]] || fail "canonical Paper Forward installer missing" 6
+[[ -r "$DISABLER" ]] || fail "canonical Paper Forward disabler missing" 6
+command -v node >/dev/null 2>&1 || fail "node is required" 6
+command -v crontab >/dev/null 2>&1 || fail "crontab is required" 6
 
 for flag_name in LIVE_TRADING AUTO_TRADING REAL_ORDER_ENABLED PRIVATE_TRADING_API_ALLOWED; do
   flag_value="${!flag_name:-false}"
@@ -93,6 +101,7 @@ ACTIVATION_OUTPUT="$(PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED=true bash "$INST
 INSTALL_STATUS=$?
 set -e
 [[ "$INSTALL_STATUS" == 0 ]] || exit "$INSTALL_STATUS"
+INSTALL_SUCCEEDED=1
 
 if [[ "$MODE_CUTOVER" == "true" ]]; then
   node - "$MODE_CUTOVER_ROOT/$TARGET_SHA.json" "$TARGET_SHA" "$ARCHIVED_STRATEGY_ID" "$EXPECTED_STRATEGY_ID" "$ARCHIVE_PATH" <<'NODE'
@@ -120,9 +129,6 @@ NODE
   chmod 600 "$MODE_CUTOVER_ROOT/$TARGET_SHA.json"
 fi
 
-RESTORE_ARCHIVE_ON_ERROR=0
-trap - EXIT
-
 printf '%s' "$ACTIVATION_OUTPUT" | node - "$MODE_CUTOVER" "$ARCHIVED_STRATEGY_ID" <<'NODE'
 const fs = require('node:fs');
 const [modeCutoverRaw, archivedStrategyIdRaw] = process.argv.slice(2);
@@ -145,3 +151,7 @@ const enriched = {
 };
 process.stdout.write(`${JSON.stringify(enriched)}\n`);
 NODE
+
+INSTALL_SUCCEEDED=0
+RESTORE_ARCHIVE_ON_ERROR=0
+trap - EXIT
