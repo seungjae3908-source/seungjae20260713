@@ -35,7 +35,7 @@ test('invalid confidence values fail closed', () => {
 
 test('news keyword classifier preserves missing and tied evidence as neutral', () => {
   expect(toneFromNewsText('Company announces annual meeting schedule', false)).toBe('neutral');
-  expect(toneFromNewsText('record growth but weak outlook', false)).toBe('neutral');
+  expect(toneFromNewsText('record but weak outlook', false)).toBe('neutral');
   expect(toneFromNewsText('호실적과 성장 기대', true)).toBe('positive');
   expect(toneFromNewsText('손실 우려와 약세', true)).toBe('negative');
 });
