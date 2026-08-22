@@ -108,7 +108,7 @@ test('required regime evidence stays paper-only when drift evidence is not avail
   assert.equal(result.autoTrading.hardBlockReason, null);
 });
 
-test('complete regime and alpha evidence produce only a reduction advisory until the rest of the sizing chain is evidenced', () => {
+test('complete P0 evidence composes into a reduction-only sizing recommendation when the existing safety chain also passes', () => {
   const result = evaluateMarketIntelligence({
     ...baseInput(),
     regimeBrain: stableRegime(),
@@ -130,9 +130,11 @@ test('complete regime and alpha evidence produce only a reduction advisory until
   assert.equal(result.regimeBrain.autoTrading.state, 'PASS');
   assert.equal(result.netAlpha.autoTrading.state, 'PASS');
   assert.equal(result.netAlpha.conservativeNetAlphaBps, 6.5);
-  assert.ok(result.dynamicSizing.advisoryMultiplier <= 1);
-  assert.equal(result.dynamicSizing.recommendedMultiplier, null);
-  assert.equal(result.dynamicSizing.suggestedNotional, null);
+  assert.equal(result.dynamicSizing.state, 'PASS');
+  assert.equal(result.dynamicSizing.advisoryMultiplier, 0.65);
+  assert.equal(result.dynamicSizing.recommendedMultiplier, 0.65);
+  assert.equal(result.dynamicSizing.suggestedNotional, 650_000);
   assert.equal(result.dynamicSizing.safety.canIncreaseParentExposure, false);
+  assert.equal(result.dynamicSizing.safety.reductionOnly, true);
   assert.equal(result.autoTrading.orderAllowed, false);
 });
