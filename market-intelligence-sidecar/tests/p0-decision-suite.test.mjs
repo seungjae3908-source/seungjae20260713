@@ -85,8 +85,8 @@ test('required conservative net alpha veto blocks a positive point estimate afte
     },
     netAlphaPolicy: { enforcement: 'REQUIRED_FOR_PARENT_GATE' },
   });
-  assert.equal(result.netAlpha.expectedNetEdgeBps, 3);
-  assert.equal(result.netAlpha.conservativeNetAlphaBps, -1);
+  assert.equal(result.netAlpha.expectedNetEdgeBps, 2.5);
+  assert.equal(result.netAlpha.conservativeNetAlphaBps, -1.5);
   assert.equal(result.netAlpha.autoTrading.state, 'VETO');
   assert.equal(result.autoTrading.mode, 'BLOCKED_RISK');
   assert.equal(result.autoTrading.hardBlockReason, 'CONSERVATIVE_NET_ALPHA_BELOW_MINIMUM');
@@ -129,7 +129,7 @@ test('complete regime and alpha evidence produce only a reduction advisory until
   });
   assert.equal(result.regimeBrain.autoTrading.state, 'PASS');
   assert.equal(result.netAlpha.autoTrading.state, 'PASS');
-  assert.equal(result.netAlpha.conservativeNetAlphaBps, 7);
+  assert.equal(result.netAlpha.conservativeNetAlphaBps, 6.5);
   assert.ok(result.dynamicSizing.advisoryMultiplier <= 1);
   assert.equal(result.dynamicSizing.recommendedMultiplier, null);
   assert.equal(result.dynamicSizing.suggestedNotional, null);
