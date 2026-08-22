@@ -204,8 +204,8 @@ userBrokerTelegramRouter.get('/', async (req, res) => {
       ...alertPolicyState,
       prioritySemantics: 'DELIVERY_URGENCY_ONLY',
       partial: state.telegramStorageAvailable === false
-        || alertPolicyState.alertPolicyStorageAvailable === false
-        || brokerState.brokerConnectionsAvailable === false,
+        || brokerState.brokerConnectionsAvailable === false
+        || alertPolicyState.alertPolicyStorageAvailable === false,
       privateApiRequests: 0,
       ordersSubmitted: 0,
       ordersCancelled: 0,
