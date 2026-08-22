@@ -9,11 +9,21 @@ import {
   maskBrokerAccountReference,
   normalizeTossOrderContract,
   tossJournalIntegrationStatus,
+  type JournalCostEvidence,
   type TossOrderContract,
   type UnifiedTradeOrder,
 } from './unified-trade-journal.service';
 
 const NOW = new Date('2026-08-12T03:00:00.000Z');
+
+function readyCostEvidence(): JournalCostEvidence {
+  return {
+    status: 'READY',
+    reasons: [],
+    fees: { status: 'READY', source: 'CANONICAL_ORDER_RECORD', reason: null },
+    tax: { status: 'READY', source: 'CANONICAL_ORDER_RECORD', reason: null },
+  };
+}
 
 function order(overrides: Partial<UnifiedTradeOrder> = {}): UnifiedTradeOrder {
   const brokerOrderId = overrides.brokerOrderId ?? 'order-1';
@@ -45,6 +55,7 @@ function order(overrides: Partial<UnifiedTradeOrder> = {}): UnifiedTradeOrder {
     averageFillPrice: filledQuantity > 0 ? 100 : null,
     fees: 1,
     tax: 0,
+    costEvidence: readyCostEvidence(),
     currency: 'KRW',
     status: filledQuantity === quantity ? 'FILLED' : 'PARTIALLY_FILLED',
     strategy: 'breakout',
@@ -117,7 +128,22 @@ test('Toss official aggregate order contract normalizes without retaining the ac
   assert.match(normalized.accountIdMasked, /^TOSS-\*\*\*\*-/);
   assert.doesNotMatch(JSON.stringify(normalized), new RegExp(rawAccount));
   assert.equal(normalized.fillId, null);
+  assert.equal(normalized.costEvidence.status, 'READY');
+  assert.equal(normalized.fees, 1400);
+  assert.equal(normalized.tax, 0);
   assert.ok(normalized.warnings.includes('TOSS_ORDER_EXECUTION_IS_CUMULATIVE_AGGREGATE_WITHOUT_FILL_ID'));
+});
+
+test('Toss missing commission or tax remains NOT_AVAILABLE instead of becoming zero', () => {
+  const missing = normalizeTossOrderContract(tossOrder({
+    execution: { ...tossOrder().execution, commission: null, tax: null },
+  }), 'account');
+  assert.equal(missing.fees, null);
+  assert.equal(missing.tax, null);
+  assert.equal(missing.costEvidence.status, 'NOT_AVAILABLE');
+  assert.ok(missing.costEvidence.reasons.includes('JOURNAL_FEES_EVIDENCE_MISSING'));
+  assert.ok(missing.costEvidence.reasons.includes('JOURNAL_TAX_EVIDENCE_MISSING'));
+  assert.ok(missing.warnings.includes('JOURNAL_TRANSACTION_COST_EVIDENCE_NOT_AVAILABLE'));
 });
 
 test('Toss partial fill remains an aggregate snapshot and validates price/time requirements', () => {
@@ -160,9 +186,47 @@ test('multiple entries and partial exits form one cycle, while a flat re-entry s
   assert.equal(first.remainingQuantity, 0);
   assert.equal(first.grossPnl, -60);
   assert.equal(first.netPnl, -64);
+  assert.equal(first.costEvidence.status, 'READY');
   assert.equal(first.status, 'CLOSED');
   assert.notEqual(first.id, second.id);
   assert.equal(second.grossPnl, 100);
+});
+
+test('missing canonical order costs fail closed for cycle net metrics while explicit zero stays known', () => {
+  const missing = buildUnifiedTradeJournal([
+    order({ brokerOrderId: 'missing-buy', fees: null, tax: null }),
+    order({ brokerOrderId: 'missing-sell', side: 'SELL', positionEffect: 'CLOSE', averageFillPrice: 110, fees: null, tax: null }),
+  ], { range: 'ALL' }, NOW);
+  assert.equal(missing.trades[0].grossPnl, 100);
+  assert.equal(missing.trades[0].fees, null);
+  assert.equal(missing.trades[0].tax, null);
+  assert.equal(missing.trades[0].netPnl, null);
+  assert.equal(missing.trades[0].netReturnPercent, null);
+  assert.equal(missing.trades[0].costEvidence.status, 'NOT_AVAILABLE');
+  assert.ok(missing.trades[0].review.mistakes.includes('MISSING_TRANSACTION_COST_EVIDENCE'));
+  assert.equal(missing.analytics.winRate, null);
+  assert.deepEqual(missing.analytics.netPnlByCurrency, []);
+  assert.ok(missing.analytics.warnings.some((warning) => warning.includes('수수료·세금 근거')));
+
+  const explicitZero = buildUnifiedTradeJournal([
+    order({ brokerOrderId: 'zero-buy', fees: 0, tax: 0 }),
+    order({ brokerOrderId: 'zero-sell', side: 'SELL', positionEffect: 'CLOSE', averageFillPrice: 110, fees: 0, tax: 0 }),
+  ], { range: 'ALL' }, NOW);
+  assert.equal(explicitZero.trades[0].fees, 0);
+  assert.equal(explicitZero.trades[0].tax, 0);
+  assert.equal(explicitZero.trades[0].netPnl, 100);
+  assert.equal(explicitZero.trades[0].costEvidence.status, 'READY');
+});
+
+test('direct cycles ignore asserted net PnL when required cost evidence is missing', () => {
+  const result = buildUnifiedTradeJournal([{
+    id: 'missing-direct', status: 'closed', source: 'APP_PAPER', market: 'CRYPTO_FUTURES', symbol: 'BTCUSDT', side: 'long',
+    currency: 'USDT', filledAt: '2026-08-10T01:00:00.000Z', closedAt: '2026-08-10T02:00:00.000Z',
+    entryPrice: 100, exitPrice: 110, initialQuantity: 1, closedQuantity: 1, remainingQuantity: 0,
+    grossPnl: 10, netPnl: 10,
+  }], { range: 'ALL' }, NOW);
+  assert.equal(result.trades[0].netPnl, null);
+  assert.equal(result.trades[0].costEvidence.status, 'NOT_AVAILABLE');
 });
 
 test('cumulative order reconciliation rejects fill regression and terminal status regression', () => {
@@ -204,7 +268,7 @@ test('missing pre-trade context remains explicit and is never reconstructed from
     id: 'paper-1', tradeId: 'paper-1', status: 'closed', source: 'APP_PAPER', symbol: 'BTCUSDT', side: 'long',
     currency: 'USDT', filledAt: '2026-08-10T01:00:00.000Z', closedAt: '2026-08-10T02:00:00.000Z',
     entryPrice: 100, exitPrice: 110, initialQuantity: 2, closedQuantity: 2, remainingQuantity: 0,
-    grossPnl: 20, netPnl: 18, entryFee: 1, exitFee: 1, marketRegimeAtEntry: 'trend',
+    grossPnl: 20, netPnl: 18, entryFee: 1, exitFee: 1, tax: 0, marketRegimeAtEntry: 'trend',
   }], { range: 'ALL' }, NOW);
   const snapshot = result.trades[0].technicalSnapshot;
   assert.equal(snapshot.contextSource, 'NO_PRE_TRADE_CONTEXT');
@@ -220,7 +284,7 @@ test('performance and deterministic quality scores stay separate', () => {
     id: 'manual-win', status: 'closed', source: 'TOSS_MANUAL', market: 'US_STOCK', symbol: 'AAPL', side: 'long',
     currency: 'USD', filledAt: '2026-08-10T01:00:00.000Z', closedAt: '2026-08-10T02:00:00.000Z',
     entryPrice: 100, exitPrice: 120, initialQuantity: 1, closedQuantity: 1, remainingQuantity: 0,
-    grossPnl: 20, netPnl: 19, fees: 1, ruleViolation: true,
+    grossPnl: 20, netPnl: 19, fees: 1, tax: 0, ruleViolation: true,
   };
   const result = buildUnifiedTradeJournal([profitableRuleBreak], { range: 'ALL' }, NOW);
   const review = result.trades[0].review;
@@ -236,7 +300,7 @@ test('filters cover range, market, source, strategy, timeframe, and grade', () =
     market: index % 2 ? 'US_STOCK' : 'CRYPTO_FUTURES', symbol: index % 2 ? 'AAPL' : 'BTCUSDT', side: 'long',
     currency: index % 2 ? 'USD' : 'USDT', filledAt: `2026-08-${String(index + 5).padStart(2, '0')}T01:00:00.000Z`,
     closedAt: `2026-08-${String(index + 5).padStart(2, '0')}T02:00:00.000Z`, entryPrice: 100, exitPrice: 110,
-    initialQuantity: 1, closedQuantity: 1, remainingQuantity: 0, grossPnl: 10, netPnl: 9,
+    initialQuantity: 1, closedQuantity: 1, remainingQuantity: 0, grossPnl: 10, netPnl: 9, fees: 1, tax: 0,
     strategyName: index % 2 ? 'swing' : 'breakout', timeframe: index % 2 ? '1d' : '15m', stopLossPrice: 90,
   }));
   const result = buildUnifiedTradeJournal(rows, { range: '30D', market: 'US_STOCK', source: 'APP_SHADOW', strategy: 'swing', timeframe: '1d' }, NOW);
@@ -251,7 +315,7 @@ test('small samples return N/A analytics while five trades produce confirmed agg
     id: `sample-${index}`, status: 'closed', source: 'APP_AUTO', market: 'CRYPTO_SPOT', symbol: 'KRW-BTC', side: 'long', currency: 'KRW',
     filledAt: `2026-08-${String(index + 1).padStart(2, '0')}T01:00:00.000Z`, closedAt: `2026-08-${String(index + 1).padStart(2, '0')}T02:00:00.000Z`,
     entryPrice: 100, exitPrice: index % 2 ? 90 : 120, initialQuantity: 1, closedQuantity: 1, remainingQuantity: 0,
-    grossPnl: index % 2 ? -10 : 20, netPnl: index % 2 ? -11 : 19, fees: 1, strategy: 'spot', timeframe: '1h', stopLossPrice: 90,
+    grossPnl: index % 2 ? -10 : 20, netPnl: index % 2 ? -11 : 19, fees: 1, tax: 0, strategy: 'spot', timeframe: '1h', stopLossPrice: 90,
   });
   const small = buildUnifiedTradeJournal([row(0), row(1), row(2)], { range: 'ALL' }, NOW);
   assert.equal(small.analytics.winRate, null);
