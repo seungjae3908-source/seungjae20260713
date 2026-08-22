@@ -265,10 +265,8 @@ export function buildResearchSimpleItems(overview: ResearchCenterOverview): Rese
     {
       key: 'champion',
       label: '12. Champion',
-      value: overview.profitability.proven ? 'Champion 근거 미수집' : 'CURRENT_VALIDATED_CHAMPION = NONE',
-      note: overview.profitability.proven
-        ? 'Profitability는 통과했지만 current Research overview에 Champion identity/provenance가 없어 확정하지 않습니다.'
-        : 'Profitability Evidence가 미증명 상태이므로 검증된 Champion으로 승격하지 않습니다.',
+      value: 'CURRENT_VALIDATED_CHAMPION = NONE',
+      note: 'Missing Evidence · current Research overview에 검증된 Champion identity/provenance가 없습니다. Profitability 상태만으로 Champion을 생성하지 않습니다.',
       tone: 'waiting',
     },
   ];

@@ -38,6 +38,7 @@ test('Research Center exposes the full evidence maturity ladder without fabricat
 
   expect(source).toContain('실전 수익성 검증 안 됨');
   expect(source).toContain('CURRENT_VALIDATED_CHAMPION = NONE');
+  expect(source).toContain("value: 'CURRENT_VALIDATED_CHAMPION = NONE'");
   expect(source).toContain('Missing Evidence');
   expect(source).toContain('표본 N 미수집');
   expect(source).toContain('PF 미수집');
@@ -49,6 +50,7 @@ test('Research Center exposes the full evidence maturity ladder without fabricat
   expect(source).toContain('코드 SHA는 상세 증거에서 확인');
   expect(source).toContain('N/A and INSUFFICIENT_DATA are never rewritten to zero or PASS');
 
+  expect(source).not.toContain("overview.profitability.proven ? 'Champion 근거 미수집'");
   expect(source).not.toContain("value: '0'");
-  expect(source).not.toContain("tone: 'good', note: 'Missing Evidence");
+  expect(source).not.toContain("tone: 'good', note: 'Missing Evidence'");
 });
