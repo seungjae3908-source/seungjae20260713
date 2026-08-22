@@ -38,6 +38,10 @@ jobs:
           test -s "$active_contract"
           grep -F "startsWith(github.event.comment.body, '/activate-paper-forward-no-deploy ')" "$workflow" >/dev/null
           grep -F "PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED=true" "$active_contract" >/dev/null
+          grep -F 'PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH: ${{ secrets.PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH }}' "$active_contract" >/dev/null
+          grep -F 'PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256: ${{ secrets.PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256 }}' "$active_contract" >/dev/null
+          grep -F 'PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH="$PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH"' "$active_contract" >/dev/null
+          grep -F 'PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256="$PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256"' "$active_contract" >/dev/null
           grep -F 'productionAppDeployPerformed = false' "$active_contract" >/dev/null
           grep -F 'productionAppMutationAllowed = false' "$active_contract" >/dev/null
           grep -F 'productionAppShaBefore' "$active_contract" >/dev/null
@@ -47,6 +51,9 @@ jobs:
           grep -F "PRIVATE_TRADING_API_ALLOWED='false'" "$install" >/dev/null
           grep -F "PRIVATE_ACCOUNT_ACCESS='false'" "$install" >/dev/null
           grep -F "PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED='\$OUTCOME_ACCUMULATION_ENABLED'" "$install" >/dev/null
+          grep -F "PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH='\$PAPER_STATE_SNAPSHOT_PATH'" "$install" >/dev/null
+          grep -F "PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256='\$PUBLISHER_ACCOUNT_ID_SHA256'" "$install" >/dev/null
+          ! grep -F 'PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID=' "$active_contract" >/dev/null
           ! grep -F 'deploy-production.sh' "$active_contract" >/dev/null
           ! grep -E 'pm2 (start|restart|reload|delete|stop)|systemctl .*caddy|caddy reload|supabase db|psql .*-(c|f)' "$active_contract" >/dev/null
 
@@ -203,6 +210,8 @@ jobs:
       SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
       SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
       SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH: ${{ secrets.PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH }}
+      PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256: ${{ secrets.PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256 }}
       TARGET_SHA: ${{ needs.gate.outputs.target_sha }}
       REPOSITORY_URL: https://github.com/seungjae3908-source/seungjae20260713.git
       EVIDENCE_DIR: ${{ github.workspace }}/paper-forward-no-deploy-evidence
@@ -229,6 +238,10 @@ jobs:
           test -n "$SSH_HOST"
           test -n "$SSH_USER"
           test -n "$SSH_PRIVATE_KEY"
+          test -n "$PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH"
+          [[ "$PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH" == /* ]]
+          [[ "$PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH" =~ ^/[A-Za-z0-9._/-]+$ ]]
+          [[ "$PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256" =~ ^[0-9a-f]{64}$ ]]
           umask 077
           mkdir -p ~/.ssh "$EVIDENCE_DIR"
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
@@ -255,9 +268,10 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          remote_command="$(printf 'TARGET_SHA=%q REPOSITORY_URL=%q PRODUCTION_APP_SHA=%q PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH=%q PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256=%q bash -s' \
+            "$TARGET_SHA" "$REPOSITORY_URL" "$PRODUCTION_APP_SHA" "$PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH" "$PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256")"
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
-            "$SSH_USER@$SSH_HOST" \
-            "TARGET_SHA='$TARGET_SHA' REPOSITORY_URL='$REPOSITORY_URL' PRODUCTION_APP_SHA='$PRODUCTION_APP_SHA' bash -s" <<'REMOTE' > "$EVIDENCE_DIR/activation.json"
+            "$SSH_USER@$SSH_HOST" "$remote_command" <<'REMOTE' > "$EVIDENCE_DIR/activation.json"
           set -Eeuo pipefail
           STATE_ROOT=/opt/stock-app-data/paper-forward-v1
           SOURCE_DIR="$(mktemp -d /tmp/paper-forward-source.XXXXXX)"
@@ -270,7 +284,11 @@ jobs:
           git -C "$SOURCE_DIR" checkout --quiet --detach "$TARGET_SHA"
           mkdir -p "$SOURCE_DIR/.deploy"
           printf '%s\n' "$TARGET_SHA" > "$SOURCE_DIR/.deploy/current-sha"
-          LIVE_DIR="$SOURCE_DIR" PAPER_FORWARD_STATE_ROOT="$STATE_ROOT" PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED=true \
+          LIVE_DIR="$SOURCE_DIR" \
+            PAPER_FORWARD_STATE_ROOT="$STATE_ROOT" \
+            PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED=true \
+            PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH="$PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH" \
+            PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256="$PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256" \
             "$SOURCE_DIR/ops/install-paper-forward-schedule.sh" "$TARGET_SHA" >/dev/null
           PRODUCTION_APP_SHA="$PRODUCTION_APP_SHA" TARGET_SHA="$TARGET_SHA" node - "$STATE_ROOT/activation.json" <<'NODE'
           const fs = require('node:fs');
