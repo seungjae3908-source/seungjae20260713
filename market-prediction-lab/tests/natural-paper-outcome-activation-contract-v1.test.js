@@ -49,6 +49,14 @@ test("Natural Paper installer explicitly enables outcomes while hard-disabling l
   assert.match(installer, /orderCount: 0/u);
 });
 
+test("installer disables a newly installed schedule and restores predecessor state if wrapper post-processing fails", () => {
+  assert.match(installer, /INSTALL_SUCCEEDED=0/u);
+  assert.match(installer, /if \(\( status != 0 \)\) && \[\[ "\$INSTALL_SUCCEEDED" == 1 \]\]/u);
+  assert.match(installer, /bash "\$DISABLER"/u);
+  assert.match(installer, /RESTORE_ARCHIVE_ON_ERROR/u);
+  assert.match(installer, /mv "\$ARCHIVE_PATH" "\$RUNTIME_STATE_ROOT"/u);
+});
+
 test("first natural cycle proves outcome capability without fabricating a mandatory trade", () => {
   execFileSync("bash", ["-n", verifierPath]);
   assert.match(verifier, /outcomeCapabilityEnabled: invocation\.paperTradeOutcomeAccumulationEnabled === true/u);
