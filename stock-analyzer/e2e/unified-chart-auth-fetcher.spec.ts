@@ -78,7 +78,7 @@ test('browser runtime wires the authenticated fetcher into unified chart request
 
   expect(result.provider).toBe('authenticated-chart-fixture');
   expect(observed).toEqual([{
-    url: '/api/stocks/005930/chart?tf=5m',
+    url: '/api/stocks/005930/candles?tf=5m',
     authorization: 'Bearer regression-session-token',
     cacheControl: 'no-cache, no-store, max-age=0',
   }]);
