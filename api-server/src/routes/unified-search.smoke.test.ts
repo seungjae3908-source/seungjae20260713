@@ -93,3 +93,54 @@ test('unified search suggest route supports Korean, English, codes and market se
     resetUnifiedAssetSearchStateForTests();
   }
 });
+
+test('KR search degrades to static identity metadata without asserting live eligibility', async () => {
+  const degradedKrSnapshot: UnifiedAssetSearchSnapshot = {
+    version: 1,
+    builtAt,
+    providers: [
+      { provider: 'krx', status: 'error', count: 0, dataAsOf: null, message: 'fixture unavailable' },
+      { provider: 'finnhub', status: 'ok', count: 1, dataAsOf: builtAt },
+      { provider: 'upbit', status: 'ok', count: 0, dataAsOf: builtAt },
+      { provider: 'bitget', status: 'ok', count: 0, dataAsOf: builtAt },
+    ],
+    documents: [
+      doc({ assetType: 'stock', market: 'US', instrumentType: 'stock', exchange: 'NASDAQ', ticker: 'AAPL', productCode: 'AAPL', koreanName: '', englishName: 'Apple', displayName: 'Apple', aliases: ['apple'], baseSymbol: 'AAPL', quoteCurrency: 'USD' }),
+    ],
+  };
+
+  replaceUnifiedAssetSearchSnapshotForTests(degradedKrSnapshot);
+  const app = express();
+  app.use('/api', unifiedSearchRouter);
+  const server = app.listen(0, '127.0.0.1');
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once('listening', resolve);
+      server.once('error', reject);
+    });
+    const address = server.address() as AddressInfo;
+    const base = `http://127.0.0.1:${address.port}`;
+
+    const known = await fetch(`${base}/api/search/suggest?q=005930&asset=stock&market=KR`);
+    assert.equal(known.status, 200);
+    const knownBody = await known.json() as Record<string, any>;
+    assert.equal(knownBody.ok, true);
+    assert.equal(knownBody.state, 'PARTIAL');
+    assert.equal(knownBody.partial, true);
+    assert.equal(knownBody.stale, true);
+    assert.equal(knownBody.results[0]?.ticker, '005930');
+    assert.equal(knownBody.results[0]?.provider, 'STATIC_KR_CATALOG');
+    assert.equal(knownBody.results[0]?.active, false);
+    assert.equal(knownBody.providers[0]?.provider, 'krx');
+    assert.equal(knownBody.providers[0]?.status, 'stale');
+
+    const unknown = await fetch(`${base}/api/search/suggest?q=999999&asset=stock&market=KR`);
+    assert.equal(unknown.status, 200);
+    const unknownBody = await unknown.json() as Record<string, any>;
+    assert.equal(unknownBody.results.length, 0);
+    assert.equal(unknownBody.state, 'DEGRADED');
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    resetUnifiedAssetSearchStateForTests();
+  }
+});

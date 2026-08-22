@@ -37,7 +37,7 @@ test.afterEach(() => {
   setOrderbookKiwoomLoaderForTests(null);
 });
 
-test('US stock is unavailable with zero outbound requests and zero fake levels', async () => {
+test('US auto policy selects disabled Toss and makes zero outbound requests or fake levels', async () => {
   let outbound = 0;
   setOrderbookPublicTransportForTests({ fetch: async () => {
     outbound += 1;
@@ -49,12 +49,19 @@ test('US stock is unavailable with zero outbound requests and zero fake levels',
     assert.equal(response.status, 200);
     const body = record(await response.json());
     assert.equal(body.status, 'unavailable');
-    assert.equal(body.reason, 'US_ORDERBOOK_PROVIDER_NOT_CONNECTED');
+    assert.equal(body.reason, 'TOSS_ORDERBOOK_READ_DISABLED');
     assert.deepEqual(body.asks, []);
     assert.deepEqual(body.bids, []);
     assert.equal(body.provider, null);
     assert.equal(body.orderSubmitted, false);
     assert.equal(body.exchangeRequestSent, false);
+    assert.equal(outbound, 0);
+
+    const unsupported = await fetch(`${baseUrl}/api/orderbook?assetClass=stock&market=US&symbol=AAPL&venue=kiwoom`);
+    assert.equal(unsupported.status, 200);
+    const unsupportedBody = record(await unsupported.json());
+    assert.equal(unsupportedBody.status, 'unavailable');
+    assert.equal(unsupportedBody.reason, 'STOCK_ORDERBOOK_VENUE_UNSUPPORTED');
     assert.equal(outbound, 0);
   } finally {
     await close(server);

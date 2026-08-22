@@ -60,6 +60,167 @@ export class ScannerAiProviderError extends Error {
   }
 }
 
+export interface ScannerAiFailoverStats {
+  primarySuccess: number;
+  primaryFailureNoFallback: number;
+  fallbackAttempted: number;
+  fallbackSuccess: number;
+  fallbackFailure: number;
+}
+
+function isAbortLike(error: unknown): boolean {
+  return error instanceof Error && (error.name === 'AbortError' || error.message === 'SCANNER_AI_ABORTED');
+}
+
+function providerError(error: unknown): ScannerAiProviderError {
+  return error instanceof ScannerAiProviderError
+    ? error
+    : new ScannerAiProviderError(
+      error instanceof Error ? error.message : 'SCANNER_AI_PROVIDER_FAILED',
+      false,
+    );
+}
+
+export class ScannerAiFailoverAdapter implements ScannerAiProviderAdapter {
+  readonly name: string;
+  private readonly counters: ScannerAiFailoverStats = {
+    primarySuccess: 0,
+    primaryFailureNoFallback: 0,
+    fallbackAttempted: 0,
+    fallbackSuccess: 0,
+    fallbackFailure: 0,
+  };
+
+  constructor(
+    private readonly primary: ScannerAiProviderAdapter,
+    private readonly secondary: ScannerAiProviderAdapter,
+  ) {
+    if (primary.name === secondary.name) {
+      throw new Error('SCANNER_AI_FAILOVER_PROVIDERS_MUST_DIFFER');
+    }
+    this.name = `${primary.name}->${secondary.name}`;
+  }
+
+  get stats(): Readonly<ScannerAiFailoverStats> {
+    return Object.freeze({ ...this.counters });
+  }
+
+  async validate(input: ScannerAiValidationInput, signal: AbortSignal): Promise<ScannerAiValidation> {
+    try {
+      const result = await this.primary.validate(input, signal);
+      this.counters.primarySuccess += 1;
+      return result;
+    } catch (error) {
+      if (signal.aborted || isAbortLike(error)) throw error;
+      const failure = providerError(error);
+      if (!failure.retryable) {
+        this.counters.primaryFailureNoFallback += 1;
+        throw failure;
+      }
+
+      this.counters.fallbackAttempted += 1;
+      try {
+        const result = await this.secondary.validate(input, signal);
+        this.counters.fallbackSuccess += 1;
+        return result;
+      } catch (fallbackError) {
+        this.counters.fallbackFailure += 1;
+        throw fallbackError;
+      }
+    }
+  }
+}
+
+interface SharedAiRequest {
+  promise: Promise<ScannerAiValidation>;
+  createdAt: number;
+}
+
+export interface ScannerAiSingleFlightStats {
+  created: number;
+  sharedHits: number;
+  inFlight: number;
+}
+
+function stableSignalKey(input: ScannerAiValidationInput): string {
+  return JSON.stringify([
+    input.signalId,
+    input.symbol,
+    input.market,
+    input.strategy,
+    input.direction,
+    input.score,
+    input.riskScore,
+    input.dataQualityScore,
+    input.evidence,
+    input.warnings,
+  ]);
+}
+
+async function waitForSharedResult(
+  promise: Promise<ScannerAiValidation>,
+  signal: AbortSignal,
+): Promise<ScannerAiValidation> {
+  if (signal.aborted) throw abortError(signal.reason);
+  return await new Promise<ScannerAiValidation>((resolve, reject) => {
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', onAbort);
+      callback();
+    };
+    const onAbort = () => finish(() => reject(abortError(signal.reason)));
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => finish(() => resolve(value)),
+      (error) => finish(() => reject(error)),
+    );
+  });
+}
+
+export class ScannerAiSingleFlightAdapter implements ScannerAiProviderAdapter {
+  readonly name: string;
+  private readonly inFlight = new Map<string, SharedAiRequest>();
+  private createdCount = 0;
+  private sharedHitCount = 0;
+
+  constructor(
+    private readonly delegate: ScannerAiProviderAdapter,
+    private readonly keyOf: (input: ScannerAiValidationInput) => string = stableSignalKey,
+  ) {
+    this.name = `${delegate.name}:single-flight`;
+  }
+
+  get stats(): Readonly<ScannerAiSingleFlightStats> {
+    return Object.freeze({
+      created: this.createdCount,
+      sharedHits: this.sharedHitCount,
+      inFlight: this.inFlight.size,
+    });
+  }
+
+  async validate(input: ScannerAiValidationInput, signal: AbortSignal): Promise<ScannerAiValidation> {
+    if (signal.aborted) throw abortError(signal.reason);
+    const key = this.keyOf(input);
+    const existing = this.inFlight.get(key);
+    if (existing) {
+      this.sharedHitCount += 1;
+      return await waitForSharedResult(existing.promise, signal);
+    }
+
+    this.createdCount += 1;
+    const detachedController = new AbortController();
+    const promise = this.delegate.validate(input, detachedController.signal);
+    const shared: SharedAiRequest = { promise, createdAt: Date.now() };
+    this.inFlight.set(key, shared);
+    void promise.finally(() => {
+      if (this.inFlight.get(key) === shared) this.inFlight.delete(key);
+    }).catch(() => undefined);
+    return await waitForSharedResult(promise, signal);
+  }
+}
+
 interface QueueItem {
   input: ScannerAiValidationInput;
   signal?: AbortSignal;
@@ -205,16 +366,11 @@ export class ScannerAiProviderScheduler {
         if (this.consecutiveFailures >= this.circuitFailureThreshold) {
           this.circuitOpenedAt = this.now();
         }
-        const providerError = error instanceof ScannerAiProviderError
-          ? error
-          : new ScannerAiProviderError(
-            error instanceof Error ? error.message : 'SCANNER_AI_PROVIDER_FAILED',
-            false,
-          );
-        if (!providerError.retryable || attempt >= this.maxRetries || this.circuitOpen()) throw providerError;
+        const normalized = providerError(error);
+        if (!normalized.retryable || attempt >= this.maxRetries || this.circuitOpen()) throw normalized;
         const exponential = Math.min(this.maxBackoffMs, this.baseBackoffMs * 2 ** attempt);
         const jitter = Math.floor(exponential * 0.35 * clampRandom(this.random()));
-        const retryAfter = providerError.retryAfterMs ?? 0;
+        const retryAfter = normalized.retryAfterMs ?? 0;
         await delay(Math.max(retryAfter, exponential + jitter), item.signal);
         attempt += 1;
       } finally {

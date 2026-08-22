@@ -31,9 +31,24 @@ import {
 } from '../services/scanner-access-control.service';
 import { withScannerCanonicalActions } from '../services/scanner-market-action.service';
 import { deliverScannerTelegramAlerts } from '../services/scanner-telegram-delivery.service';
+import { deliverScannerTelegramFollowups } from '../services/telegram-signal-followup.service';
+import {
+  createScannerProviderHealth,
+  type ScannerProviderHealth,
+  type ScannerProviderHealthState,
+} from '../services/scanner-provider-health.contract';
 import { withScannerOutcome } from '../services/scanner-signal.types';
 
 export const STOCK_SCANNER_ROUTE_DEADLINE_MS = 10_000;
+
+const PROVIDER_HEALTH_STATES = new Set<ScannerProviderHealthState>([
+  'READY',
+  'SEARCH_EMPTY',
+  'PROVIDER_FAILURE',
+  'DATA_STALE',
+  'RATE_LIMIT',
+  'TIMEOUT',
+]);
 
 export type StockScannerRunner = {
   scan(request: StockSignalScanRequest): ReturnType<typeof StockSignalScannerService.scan>;
@@ -88,6 +103,38 @@ function requestKey(req: AuthenticatedRequest): string {
   return entries.map(([key, value]) => `${key}=${value}`).join('&');
 }
 
+function providerHealthFrom(value: unknown): ScannerProviderHealth[] {
+  const rows = (value as { providerHealth?: unknown } | null)?.providerHealth;
+  if (!Array.isArray(rows)) return [];
+  return rows.flatMap((row) => {
+    if (!row || typeof row !== 'object') return [];
+    const candidate = row as Partial<ScannerProviderHealth>;
+    const provider = String(candidate.provider ?? '').trim().slice(0, 80);
+    const state = String(candidate.state ?? '') as ScannerProviderHealthState;
+    if (!provider || !PROVIDER_HEALTH_STATES.has(state)) return [];
+    return [createScannerProviderHealth({
+      provider,
+      state,
+      latencyMs: typeof candidate.latencyMs === 'number' && Number.isFinite(candidate.latencyMs)
+        ? Math.max(0, Math.round(candidate.latencyMs))
+        : null,
+      retryCount: typeof candidate.retryCount === 'number' && Number.isFinite(candidate.retryCount)
+        ? Math.max(0, Math.round(candidate.retryCount))
+        : 0,
+      timeout: candidate.timeout === true,
+      lastSuccessfulFetch: typeof candidate.lastSuccessfulFetch === 'string'
+        ? candidate.lastSuccessfulFetch.slice(0, 80)
+        : null,
+      freshness: candidate.freshness === 'FRESH' || candidate.freshness === 'STALE'
+        ? candidate.freshness
+        : 'UNKNOWN',
+      failureReason: typeof candidate.failureReason === 'string'
+        ? candidate.failureReason.slice(0, 240)
+        : null,
+    })];
+  });
+}
+
 function responseError(res: Response, error: unknown) {
   if (error instanceof ScannerRequestGuardError) {
     res.setHeader('Retry-After', String(error.retryAfterSeconds));
@@ -108,6 +155,7 @@ function responseError(res: Response, error: unknown) {
       dataState: 'unavailable',
       cards: [],
       alerts: [],
+      providerHealth: providerHealthFrom(error),
       message: '조건검색 데이터 공급자 오류이며 정상적인 결과 0건이 아닙니다.',
       outcome: 'PROVIDER_FAILURE',
       orderSubmitted: false,
@@ -145,6 +193,14 @@ function routeDeadlineResponse(input: {
       reason: 'timeout' as const,
       message: 'Scanner response deadline reached before a verified result was available.',
     }],
+    providerHealth: [createScannerProviderHealth({
+      provider: 'scanner-route',
+      state: 'TIMEOUT',
+      latencyMs: input.deadlineMs,
+      timeout: true,
+      freshness: 'UNKNOWN',
+      failureReason: 'SCAN_ROUTE_DEADLINE',
+    })],
     execution: {
       requestedCount: 0,
       startedCount: 0,
@@ -262,10 +318,17 @@ export function createBoundedMarketScanRouter(
       if (controller.signal.aborted || res.writableEnded) return;
       const canonicalResult = withScannerCanonicalActions(result);
       const visibleResult = withScannerOutcome(filterScannerResponseForTier(canonicalResult, membershipLevel, requestedGrade ?? undefined));
-      void deliverScannerTelegramAlerts(visibleResult.alerts);
+      void deliverScannerTelegramAlerts(
+        visibleResult.alerts,
+        undefined,
+        undefined,
+        { timeframe, generatedAt: visibleResult.generatedAt },
+      );
+      void deliverScannerTelegramFollowups(visibleResult.cards);
       res.setHeader('X-Scanner-Request-Id', result.requestId);
       return res.json({
         ...visibleResult,
+        providerHealth: providerHealthFrom(result),
         strategy: strategyMode,
         partial: result.execution.partial,
         elapsedMs: result.execution.elapsedMs,
@@ -290,4 +353,3 @@ export function createBoundedMarketScanRouter(
 }
 
 export default createBoundedMarketScanRouter();
-

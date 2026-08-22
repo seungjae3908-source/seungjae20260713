@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { Bot, Loader2, Send, Square, UserRound } from 'lucide-react';
+import { useLocation } from 'wouter';
+import { ArrowRight, Bot, Loader2, Send, Square, UserRound, WalletCards } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { useAnalysisSelection } from '@/lib/analysis-selection';
@@ -29,6 +30,51 @@ type AiChatPayload = {
   error?: string;
   data?: AiChatDataDisclosure;
 };
+
+type HubTab = 'Overview' | 'AI' | 'Portfolio' | 'Events' | 'Performance' | 'Journal';
+const hubTabs: HubTab[] = ['Overview', 'AI', 'Portfolio', 'Events', 'Performance', 'Journal'];
+
+function PortfolioShortcutPanel() {
+  const [, navigate] = useLocation();
+
+  return <main className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+    <section className="rounded-2xl border border-card-border bg-card p-5" data-testid="information-portfolio-ai-shortcut">
+      <div className="flex items-start gap-3">
+        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+          <WalletCards className="h-5 w-5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-extrabold text-primary">내 자산 AI</p>
+          <h2 className="mt-1 text-lg font-black">포트폴리오 AI 진단</h2>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            총자산·손익·비중·집중도·상관관계·위험 데이터를 포트폴리오 탭에서 한 번에 보고, 서버가 계산한 사실만 AI가 설명합니다.
+          </p>
+        </div>
+      </div>
+      <div className="mt-4 grid gap-2 text-xs font-bold text-muted-foreground sm:grid-cols-3">
+        <span className="rounded-xl bg-muted/50 px-3 py-2">Gemini Free → Groq Free</span>
+        <span className="rounded-xl bg-muted/50 px-3 py-2">읽기 전용 · 주문 권한 없음</span>
+        <span className="rounded-xl bg-muted/50 px-3 py-2">PARTIAL / 누락 데이터 보존</span>
+      </div>
+      <button
+        type="button"
+        onClick={() => navigate('/portfolio?focus=ai')}
+        className="mt-4 flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-black text-primary-foreground"
+      >
+        내 포트폴리오 분석 열기
+        <ArrowRight className="h-4 w-4" />
+      </button>
+      <p className="mt-3 text-[11px] font-bold leading-5 text-muted-foreground">
+        AI가 자산금액·수익률·위험 수치를 새로 만들지 않고, 기존 Portfolio Intelligence의 canonical typed facts만 설명합니다.
+      </p>
+    </section>
+  </main>;
+}
+
+function PlaceholderPanel({ tab }: { tab: Exclude<HubTab, 'AI' | 'Portfolio'> }) {
+  const labels = { Overview: '핵심 요약', Events: '시장 이벤트', Performance: '성과 근거', Journal: '거래 저널' } as const;
+  return <main className="min-h-0 flex-1 overflow-y-auto px-4 py-4"><section className="rounded-2xl border border-card-border bg-card p-5"><p className="text-xs font-extrabold text-primary">{tab}</p><h2 className="mt-1 text-lg font-black">{labels[tab]}</h2><p className="mt-2 text-sm text-muted-foreground">이 탭은 요약부터 보여 주고, 상세 데이터는 사용자가 열 때만 불러오는 확장 seam입니다.</p></section></main>;
+}
 
 function dataStatusLabel(status: AiChatDataDisclosure['status']): string {
   if (status === 'complete') return '데이터 연결 완료';
@@ -68,6 +114,7 @@ export default function AiChatPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [composing, setComposing] = useState(false);
+  const [activeTab, setActiveTab] = useState<HubTab>('AI');
   const controllerRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
 
@@ -121,10 +168,12 @@ export default function AiChatPage() {
     <div className="flex h-full min-h-0 flex-col bg-background pb-[calc(5rem+env(safe-area-inset-bottom))]">
       <header className="shrink-0 border-b border-card-border px-4 py-4">
         <p className="text-[11px] font-extrabold text-primary">정보탭</p>
-        <h1 className="mt-1 text-xl font-black">AI 채팅</h1>
-        <p className="mt-1 text-xs text-muted-foreground">공개 금융정보와 학습·앱 안내 전용</p>
+        <h1 className="mt-1 text-xl font-black">Information Hub</h1>
+        <p className="mt-1 text-xs text-muted-foreground">요약에서 근거까지, 읽기 전용으로 확인합니다.</p>
         {selection && <p className="mt-2 text-[10px] font-bold text-muted-foreground">선택 종목: {selection.displayName || selection.symbol} · {selection.market} · {selection.symbol}</p>}
       </header>
+      <nav aria-label="Information Hub 탭" className="sticky top-0 z-20 grid shrink-0 grid-cols-3 gap-1 border-b border-card-border bg-background/95 p-2 backdrop-blur sm:grid-cols-6">{hubTabs.map((tab) => <button type="button" key={tab} aria-current={activeTab === tab ? 'page' : undefined} onClick={() => setActiveTab(tab)} className={cn('min-w-0 rounded-lg px-2 py-2 text-[11px] font-extrabold', activeTab === tab ? 'bg-primary text-primary-foreground' : 'bg-card text-muted-foreground')}>{tab}</button>)}</nav>
+      {activeTab === 'Portfolio' ? <PortfolioShortcutPanel /> : activeTab !== 'AI' ? <PlaceholderPanel tab={activeTab} /> : <>
       <main className="min-h-0 flex-1 overflow-y-auto px-4 py-4" aria-live="polite">
         <div className="space-y-3">
           {messages.map((message) => <article key={message.id} className={cn('flex gap-2', message.role === 'user' && 'flex-row-reverse')}>
@@ -151,6 +200,7 @@ export default function AiChatPage() {
         </div>
         <p className="mt-2 text-[9px] leading-4 text-muted-foreground">API 키·토큰·계좌번호 등 민감정보를 입력하지 마세요. 답변은 투자 조언이 아니며, 기준시각은 거래소 체결시각이 아니라 서버가 공개 데이터를 수집한 시각입니다.</p>
       </footer>
+      </>}
       <BottomNav />
     </div>
   );
