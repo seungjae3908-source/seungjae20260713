@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import {
   AlertTriangle,
   BarChart3,
+  CheckCircle2,
   ChevronRight,
   RefreshCw,
   WifiOff,
@@ -26,13 +27,6 @@ import { unifiedAssetDetailPath } from '@/lib/unified-asset-search';
 import { cn } from '@/lib/utils';
 
 type RankingKey = 'tradingValue' | 'volume' | 'gainers' | 'losers' | 'marketCap';
-type MobileRoomTab = 'summary' | 'ranking' | 'news';
-
-const MOBILE_ROOM_TABS: Array<{ key: MobileRoomTab; label: string }> = [
-  { key: 'summary', label: '요약' },
-  { key: 'ranking', label: '종목' },
-  { key: 'news', label: '소식' },
-];
 
 class MarketInformationRequestError extends Error {
   constructor(
@@ -80,9 +74,9 @@ async function requestRoom(route: MarketInformationRoute, signal: AbortSignal) {
 }
 
 function formatDate(value: string | null): string {
-  if (!value) return '미확인';
+  if (!value) return '기준시각 미제공';
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '미확인';
+  if (Number.isNaN(date.getTime())) return '잘못된 기준시각';
   return new Intl.DateTimeFormat('ko-KR', {
     month: '2-digit',
     day: '2-digit',
@@ -110,71 +104,75 @@ function formatPercent(value: number | null): string {
   return `${sign}${value.toFixed(2)}%`;
 }
 
-function displayMessage(value: string | null | undefined): string | null {
-  if (!value) return null;
-  return value.replace(/\bprovider\b/gi, '제공처');
-}
-
 function statusText(error: unknown): { title: string; description: string; icon: ReactNode } {
   if (typeof navigator !== 'undefined' && !navigator.onLine) {
     return {
-      title: '오프라인',
-      description: '인터넷 연결 후 다시 시도해 주세요.',
+      title: '오프라인 상태입니다',
+      description: '인터넷 연결 후 새로고침해 주세요.',
       icon: <WifiOff className="h-5 w-5" />,
     };
   }
   if (error instanceof MarketInformationRequestError) {
     if (error.status === 401) {
-      return { title: '로그인 필요', description: '다시 로그인해 주세요.', icon: <AlertTriangle className="h-5 w-5" /> };
+      return {
+        title: '인증이 만료되었습니다',
+        description: '다시 로그인한 뒤 이용해 주세요.',
+        icon: <AlertTriangle className="h-5 w-5" />,
+      };
     }
     if (error.status === 403) {
-      return { title: '권한 없음', description: '현재 등급에서 사용할 수 없습니다.', icon: <AlertTriangle className="h-5 w-5" /> };
+      return {
+        title: '권한이 부족합니다',
+        description: '현재 회원 등급에서 이 정보방을 사용할 수 없습니다.',
+        icon: <AlertTriangle className="h-5 w-5" />,
+      };
     }
     if (error.status === 429) {
-      return { title: '요청 한도 도달', description: '잠시 후 다시 시도해 주세요.', icon: <AlertTriangle className="h-5 w-5" /> };
+      return {
+        title: '제공기관 호출 한도에 도달했습니다',
+        description: 'Retry-After 이후 다시 시도해 주세요.',
+        icon: <AlertTriangle className="h-5 w-5" />,
+      };
     }
     if (error.code.includes('TIMEOUT')) {
-      return { title: '응답 지연', description: '잠시 후 다시 시도해 주세요.', icon: <AlertTriangle className="h-5 w-5" /> };
+      return {
+        title: '제공기관 응답이 지연되고 있습니다',
+        description: '잠시 후 다시 시도해 주세요.',
+        icon: <AlertTriangle className="h-5 w-5" />,
+      };
     }
-    return { title: '시장정보 확인 실패', description: displayMessage(error.message) ?? '다시 시도해 주세요.', icon: <AlertTriangle className="h-5 w-5" /> };
+    return {
+      title: '시장정보를 불러오지 못했습니다',
+      description: error.message,
+      icon: <AlertTriangle className="h-5 w-5" />,
+    };
   }
   return {
-    title: '시장정보 확인 실패',
-    description: error instanceof Error ? displayMessage(error.message) ?? '알 수 없는 오류입니다.' : '알 수 없는 오류입니다.',
+    title: '시장정보 응답을 확인하지 못했습니다',
+    description: error instanceof Error ? error.message : '알 수 없는 오류입니다.',
     icon: <AlertTriangle className="h-5 w-5" />,
   };
-}
-
-function sectionStatusLabel(status: string): string {
-  if (status === 'ready') return '정상';
-  if (status === 'partial') return '일부';
-  if (status === 'stale') return '오래됨';
-  if (status === 'unsupported') return '미지원';
-  if (status === 'unavailable') return '사용 불가';
-  if (status === 'error') return '오류';
-  if (status === 'empty') return '데이터 없음';
-  return '미확인';
 }
 
 function SourceMeta({ meta }: { meta: MarketInformationMeta }) {
   return (
     <section
-      className="mt-3 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-muted-foreground"
+      className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground"
       aria-label="데이터 출처와 신선도"
     >
-      <span className="max-w-full truncate">출처 {meta.source ?? meta.provider ?? '미연결'}</span>
+      <span>출처 {meta.source ?? meta.provider ?? '미연결'}</span>
       <span>기준 {formatDate(meta.providerUpdatedAt ?? meta.observedAt)}</span>
       <span>
         {meta.marketStatus === '24H'
-          ? '24시간'
+          ? '24시간 시장'
           : meta.marketStatus === 'OPEN'
             ? '장중'
             : meta.marketStatus === 'CLOSED'
               ? '장 마감'
-              : '상태 미확인'}
+              : '시장상태 미확인'}
       </span>
       {meta.isDelayed && <span className="font-semibold text-amber-600">지연</span>}
-      {meta.isStale && <span className="font-semibold text-red-600">오래된 데이터</span>}
+      {meta.isStale && <span className="font-semibold text-red-600">stale</span>}
       {meta.partial && <span className="font-semibold text-amber-600">일부 데이터</span>}
     </section>
   );
@@ -194,32 +192,31 @@ function SectionFrame<T>({
     || section.status === 'error'
     || section.status === 'empty';
   const headingId = `section-${title}`;
-  const message = displayMessage(section.message);
 
   return (
-    <section className="min-w-0 rounded-2xl border bg-card p-3 shadow-sm sm:p-4" aria-labelledby={headingId}>
+    <section className="min-w-0 rounded-2xl border bg-card p-4 shadow-sm" aria-labelledby={headingId}>
       <div className="flex items-start justify-between gap-3">
-        <h2 id={headingId} className="text-sm font-black">{title}</h2>
+        <h2 id={headingId} className="text-sm font-bold">{title}</h2>
         <span className={cn(
-          'shrink-0 rounded-full px-2 py-1 text-[10px] font-bold',
+          'rounded-full px-2 py-1 text-[10px] font-semibold',
           section.status === 'ready' && 'bg-emerald-500/10 text-emerald-700',
           (section.status === 'partial' || section.status === 'stale') && 'bg-amber-500/10 text-amber-700',
           unavailable && 'bg-muted text-muted-foreground',
         )}>
-          {sectionStatusLabel(section.status)}
+          {section.status}
         </span>
       </div>
 
       {unavailable ? (
-        <div className="mt-3 flex min-h-16 items-center gap-2 rounded-xl border border-dashed px-3 py-3 text-xs text-muted-foreground">
+        <div className="mt-4 flex min-h-20 items-center gap-2 rounded-xl border border-dashed px-3 py-4 text-xs text-muted-foreground">
           <AlertTriangle className="h-4 w-4 shrink-0" />
-          <span className="line-clamp-2">{message ?? '표시할 데이터가 없습니다.'}</span>
+          <span>{section.message ?? '표시할 데이터가 없습니다.'}</span>
         </div>
       ) : (
         <>
-          {message && (
-            <p className="mt-2 line-clamp-2 rounded-xl bg-muted/60 px-3 py-2 text-xs leading-5 text-muted-foreground">
-              {message}
+          {section.message && (
+            <p className="mt-3 rounded-xl bg-muted/60 px-3 py-2 text-xs leading-5 text-muted-foreground">
+              {section.message}
             </p>
           )}
           {children}
@@ -291,7 +288,11 @@ function AssetList({
   onSelect: (row: MarketInformationAssetRow) => void;
 }) {
   if (!rows.length) {
-    return <p className="mt-4 rounded-xl border border-dashed p-4 text-xs text-muted-foreground">조건에 맞는 종목이 없습니다.</p>;
+    return (
+      <p className="mt-4 rounded-xl border border-dashed p-4 text-xs text-muted-foreground">
+        현재 조건에 맞는 종목이 없습니다.
+      </p>
+    );
   }
 
   return (
@@ -302,24 +303,26 @@ function AssetList({
           type="button"
           onClick={() => onSelect(row)}
           aria-label={`${row.name} 상세 화면 이동`}
-          className="flex min-h-16 w-full min-w-0 items-center gap-2 rounded-xl border bg-background px-3 py-3 text-left transition hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="flex min-h-16 w-full min-w-0 items-center gap-3 rounded-xl border bg-background px-3 py-3 text-left transition hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <span className="w-5 shrink-0 text-center text-xs font-bold text-muted-foreground">{index + 1}</span>
+          <span className="w-6 shrink-0 text-center text-xs font-bold text-muted-foreground">{index + 1}</span>
           <span className="min-w-0 flex-1">
             <span className="flex min-w-0 items-center gap-2">
               <span className="truncate text-sm font-bold">{row.name}</span>
               <span className="shrink-0 text-[10px] text-muted-foreground">{row.symbol}</span>
-              {row.warning && <span className="shrink-0 rounded bg-red-500/10 px-1.5 py-0.5 text-[9px] font-bold text-red-600">주의</span>}
+              {row.warning && (
+                <span className="shrink-0 rounded bg-red-500/10 px-1.5 py-0.5 text-[9px] font-bold text-red-600">주의</span>
+              )}
             </span>
-            <span className="mt-1 flex min-w-0 flex-wrap gap-x-2 gap-y-1 text-[10px] text-muted-foreground">
+            <span className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
               <span>거래량 {formatCompact(row.volume24h)}</span>
               <span>거래대금 {formatCompact(row.tradingValue24h)}</span>
               {route.id === 'coins-futures' && <span>펀딩 {formatPercent(row.fundingRatePercent)}</span>}
-              {route.id === 'coins-futures' && <span>미결제 {formatCompact(row.openInterest)}</span>}
+              {route.id === 'coins-futures' && <span>OI {formatCompact(row.openInterest)}</span>}
             </span>
           </span>
-          <span className="max-w-[42%] shrink-0 text-right">
-            <span className="block truncate text-sm font-bold">{formatNumber(row.price, row.currency)} {row.currency}</span>
+          <span className="shrink-0 text-right">
+            <span className="block text-sm font-bold">{formatNumber(row.price, row.currency)} {row.currency}</span>
             <span className={cn(
               'text-xs font-semibold',
               (row.changePercent ?? 0) > 0
@@ -347,11 +350,11 @@ function FeedList({ rows }: { rows: MarketInformationNewsRow[] }) {
           href={item.url}
           target="_blank"
           rel="noreferrer"
-          className="block min-h-14 min-w-0 rounded-xl border bg-background px-3 py-3 hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="block min-h-14 rounded-xl border bg-background px-3 py-3 hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           aria-label={`${item.title} 원문 열기`}
         >
-          <span className="line-clamp-2 block text-sm font-semibold leading-5">{item.title}</span>
-          <span className="mt-1 block truncate text-[10px] text-muted-foreground">
+          <span className="block text-sm font-semibold leading-5">{item.title}</span>
+          <span className="mt-1 block text-[11px] text-muted-foreground">
             {item.symbol} · {item.source} · {formatDate(item.publishedAt)}
           </span>
         </a>
@@ -362,12 +365,13 @@ function FeedList({ rows }: { rows: MarketInformationNewsRow[] }) {
 
 function MarketDataLoading({ route }: { route: MarketInformationRoute }) {
   return (
-    <section
-      className="mt-4 rounded-2xl border bg-card px-4 py-5 text-center text-sm font-bold text-muted-foreground"
-      aria-busy="true"
-      aria-label={`${route.label} 시장정보 확인 중`}
-    >
-      시장정보 확인 중
+    <section className="mt-4" aria-busy="true" aria-label={`${route.label} 시장정보 로딩`}>
+      <p className="text-sm text-muted-foreground">{route.label} 공개 시장데이터를 불러오는 중입니다. 검색은 바로 사용할 수 있습니다.</p>
+      <div className="mt-4 grid gap-4 md:grid-cols-2">
+        {Array.from({ length: 6 }, (_, index) => (
+          <div key={index} className="h-40 animate-pulse rounded-2xl bg-muted" />
+        ))}
+      </div>
     </section>
   );
 }
@@ -375,16 +379,17 @@ function MarketDataLoading({ route }: { route: MarketInformationRoute }) {
 function MarketDataError({ error, onRetry }: { error: unknown; onRetry: () => void }) {
   const state = statusText(error);
   return (
-    <section className="mt-4 rounded-2xl border bg-card p-5 text-center shadow-sm" aria-label="시장정보 오류">
-      <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-muted">{state.icon}</div>
-      <h2 className="mt-3 text-base font-black">{state.title}</h2>
-      <p className="mt-1 line-clamp-2 text-xs font-bold text-muted-foreground">{state.description}</p>
+    <section className="mt-4 rounded-2xl border bg-card p-6 text-center shadow-sm" aria-label="시장정보 오류">
+      <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-muted">{state.icon}</div>
+      <h2 className="mt-4 text-lg font-bold">{state.title}</h2>
+      <p className="mt-2 text-sm text-muted-foreground">{state.description}</p>
+      <p className="mt-2 text-xs font-semibold text-muted-foreground">시장정보 카드 오류와 종목 검색은 서로 독립적으로 동작합니다.</p>
       <button
         type="button"
         onClick={onRetry}
-        className="mt-4 min-h-11 rounded-xl bg-primary px-5 text-sm font-black text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="mt-5 min-h-11 rounded-xl bg-primary px-5 text-sm font-bold text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        재시도
+        시장정보 다시 시도
       </button>
     </section>
   );
@@ -395,7 +400,6 @@ export default function MarketInformationPage() {
   const route = marketInformationRoute(location);
   const mode = useAssetMode();
   const [ranking, setRanking] = useState<RankingKey>('tradingValue');
-  const [mobileTab, setMobileTab] = useState<MobileRoomTab>('summary');
 
   useEffect(() => {
     if (!route) return;
@@ -403,7 +407,6 @@ export default function MarketInformationPage() {
     if (route.asset === 'stock') mode.setStockMarket(route.market === 'US' ? 'US' : 'KR');
     else mode.setCoinMarket(route.market === 'futures' ? 'futures' : 'spot');
     setRanking('tradingValue');
-    setMobileTab('summary');
   }, [route?.id]);
 
   const query = useQuery({
@@ -425,69 +428,60 @@ export default function MarketInformationPage() {
     [query.data, ranking],
   );
 
-  if (!route) return <main className="p-6">지원하지 않는 정보방입니다.</main>;
+  if (!route) {
+    return <main className="p-6">지원하지 않는 정보방 경로입니다.</main>;
+  }
 
   const data = query.data;
   return (
     <>
-      <main className="mx-auto min-h-screen w-full max-w-6xl overflow-x-hidden px-3 pb-28 pt-3 sm:px-5 sm:pt-4">
-        <header className="rounded-2xl border bg-card p-3 shadow-sm sm:p-4">
-          <div className="flex min-w-0 items-center justify-between gap-3">
+      <main className="mx-auto min-h-screen w-full max-w-6xl overflow-x-hidden px-3 pb-28 pt-4 sm:px-5">
+        <header className="rounded-2xl border bg-card p-4 shadow-sm sm:p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
-              <div className="flex min-w-0 items-center gap-2 text-[10px] font-bold text-muted-foreground">
-                <BarChart3 className="h-4 w-4 shrink-0" />
-                <span className="truncate">{route.exchange} · {route.currency}</span>
+              <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground">
+                <BarChart3 className="h-4 w-4" />
+                <span>{route.exchange} · {route.currency}</span>
               </div>
-              <h1 className="mt-1 truncate text-xl font-black tracking-tight sm:text-2xl">{route.label}</h1>
+              <h1 className="mt-2 text-xl font-black tracking-tight sm:text-2xl">{route.label}</h1>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                검색은 canonical Unified Search를 사용하며 시장정보 provider 상태와 독립적으로 동작합니다.
+              </p>
             </div>
             <button
               type="button"
               onClick={() => void query.refetch()}
               disabled={query.isFetching}
-              className="flex min-h-11 shrink-0 items-center gap-1.5 rounded-xl border bg-background px-3 text-xs font-black disabled:opacity-50"
+              className="flex min-h-11 items-center gap-2 rounded-xl border bg-background px-3 text-xs font-bold hover:bg-muted disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               aria-label="시장정보 새로고침"
             >
               <RefreshCw className={cn('h-4 w-4', query.isFetching && 'animate-spin')} />
               새로고침
             </button>
           </div>
-          <div className="mt-2 flex min-w-0 flex-wrap gap-1.5 text-[10px] font-bold text-muted-foreground">
-            <span className="rounded-full bg-muted px-2 py-1">읽기 전용</span>
-            {data?.partial && <span className="rounded-full bg-amber-500/10 px-2 py-1 text-amber-700">일부 데이터</span>}
-            {data && <span className="rounded-full bg-muted px-2 py-1">수집 {formatDate(data.fetchedAt)}</span>}
+          <div className="mt-4 flex flex-wrap gap-2 text-[11px]">
+            <span className="rounded-full bg-emerald-500/10 px-2.5 py-1 font-semibold text-emerald-700">
+              <CheckCircle2 className="mr-1 inline h-3 w-3" />공개 API 전용
+            </span>
+            <span className="rounded-full bg-muted px-2.5 py-1">private 요청 0</span>
+            <span className="rounded-full bg-muted px-2.5 py-1">주문·취소 0</span>
+            {data?.partial && (
+              <span className="rounded-full bg-amber-500/10 px-2.5 py-1 font-semibold text-amber-700">부분 데이터</span>
+            )}
+            {data && <span className="rounded-full bg-muted px-2.5 py-1">수집 {formatDate(data.fetchedAt)}</span>}
           </div>
         </header>
 
-        <section className="relative z-20 mt-3" aria-label="현재 정보방 검색">
+        <section className="relative z-20 mt-4" aria-label="현재 정보방 검색">
           <UnifiedAssetSearch
             key={route.id}
             asset={route.asset}
             market={route.market}
             allowedMarkets={[route.market]}
-            placeholder={route.asset === 'stock' ? '종목명·티커 검색' : '코인명·심볼 검색'}
+            placeholder={route.asset === 'stock' ? '현재 정보방 종목명·티커 검색' : '현재 정보방 코인명·심볼 검색'}
             onSelect={(item) => navigate(unifiedAssetDetailPath(item, route.href))}
           />
         </section>
-
-        {!query.isPending && !query.isError && data && (
-          <div className="mt-3 grid grid-cols-3 gap-1 lg:hidden" data-testid="market-info-mobile-tabs">
-            {MOBILE_ROOM_TABS.map((item) => (
-              <button
-                key={item.key}
-                type="button"
-                onClick={() => setMobileTab(item.key)}
-                className={cn(
-                  'min-h-11 rounded-xl border px-2 text-xs font-black',
-                  mobileTab === item.key
-                    ? 'border-primary bg-primary text-primary-foreground'
-                    : 'border-card-border bg-card text-muted-foreground',
-                )}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
-        )}
 
         {query.isPending ? (
           <MarketDataLoading route={route} />
@@ -495,98 +489,53 @@ export default function MarketInformationPage() {
           <MarketDataError error={query.error} onRetry={() => void query.refetch()} />
         ) : (
           <div aria-label="시장정보 카드">
-            <div
-              data-testid="market-info-summary"
-              className={cn(mobileTab !== 'summary' && 'hidden lg:block')}
-            >
-              <div className="mt-3 grid min-w-0 gap-3 lg:grid-cols-2">
-                <SectionFrame title="주요 지수" section={data.sections.indices}>
-                  <div className="mt-3 grid grid-cols-2 gap-2">
-                    {data.sections.indices.data.map((row) => (
-                      <div key={row.key} className="rounded-xl border bg-background p-3">
-                        <p className="truncate text-xs text-muted-foreground">{row.label}</p>
-                        <p className="mt-1 text-base font-bold">{formatNumber(row.value)}</p>
-                        <p className={cn(
-                          'mt-1 text-xs font-semibold',
-                          (row.changePercent ?? 0) > 0
-                            ? 'text-red-600'
-                            : (row.changePercent ?? 0) < 0
-                              ? 'text-blue-600'
-                              : 'text-muted-foreground',
-                        )}>
-                          {formatPercent(row.changePercent)}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </SectionFrame>
-
-                <SectionFrame title="업종·섹터" section={data.sections.sectors}>
-                  <div className="mt-3 grid grid-cols-2 gap-2">
-                    {data.sections.sectors.data.slice(0, 8).map((row) => (
-                      <div key={row.key} className="min-w-0 rounded-xl border bg-background p-3">
-                        <p className="truncate text-sm font-bold">{row.label}</p>
-                        <p className="mt-1 truncate text-[10px] text-muted-foreground">
-                          구성 {row.constituentCount} · 거래대금 {formatCompact(row.tradingValue)}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </SectionFrame>
-              </div>
-
-              {route.id === 'coins-futures' && (
-                <div className="mt-3">
-                  <SectionFrame title="선물 파생지표" section={data.sections.derivatives}>
-                    <div className="mt-3 grid grid-cols-3 gap-2">
-                      <div className="rounded-xl border bg-background p-2.5">
-                        <p className="text-[10px] text-muted-foreground">롱 비율</p>
-                        <p className="mt-1 text-sm font-bold">
-                          {formatPercent(data.sections.derivatives.data.longRatio == null ? null : data.sections.derivatives.data.longRatio * 100)}
-                        </p>
-                      </div>
-                      <div className="rounded-xl border bg-background p-2.5">
-                        <p className="text-[10px] text-muted-foreground">숏 비율</p>
-                        <p className="mt-1 text-sm font-bold">
-                          {formatPercent(data.sections.derivatives.data.shortRatio == null ? null : data.sections.derivatives.data.shortRatio * 100)}
-                        </p>
-                      </div>
-                      <div className="rounded-xl border bg-background p-2.5">
-                        <p className="text-[10px] text-muted-foreground">롱/숏 비</p>
-                        <p className="mt-1 text-sm font-bold">{formatNumber(data.sections.derivatives.data.longShortRatio)}</p>
-                      </div>
+            <div className="mt-4 grid min-w-0 gap-4 lg:grid-cols-2">
+              <SectionFrame title="주요 지수" section={data.sections.indices}>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  {data.sections.indices.data.map((row) => (
+                    <div key={row.key} className="rounded-xl border bg-background p-3">
+                      <p className="text-xs text-muted-foreground">{row.label}</p>
+                      <p className="mt-1 text-base font-bold">{formatNumber(row.value)}</p>
+                      <p className={cn(
+                        'mt-1 text-xs font-semibold',
+                        (row.changePercent ?? 0) > 0
+                          ? 'text-red-600'
+                          : (row.changePercent ?? 0) < 0
+                            ? 'text-blue-600'
+                            : 'text-muted-foreground',
+                      )}>
+                        {formatPercent(row.changePercent)}
+                      </p>
                     </div>
-                    <div className="mt-2 space-y-1.5">
-                      {data.sections.derivatives.data.liquidations.slice(0, 5).map((item, index) => (
-                        <div
-                          key={`${item.symbol}:${item.occurredAt}:${index}`}
-                          className="flex min-w-0 items-center justify-between gap-2 rounded-xl border bg-background p-2.5 text-[10px]"
-                        >
-                          <span className="min-w-0 truncate font-bold">
-                            {item.symbol} · {item.side === 'long' ? '롱 청산' : item.side === 'short' ? '숏 청산' : '방향 미상'}
-                          </span>
-                          <span className="shrink-0 text-right text-muted-foreground">
-                            {formatNumber(item.price, 'USDT')} · {formatCompact(item.amount)}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </SectionFrame>
+                  ))}
                 </div>
-              )}
+              </SectionFrame>
+
+              <SectionFrame title="업종·섹터" section={data.sections.sectors}>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  {data.sections.sectors.data.slice(0, 12).map((row) => (
+                    <div key={row.key} className="rounded-xl border bg-background p-3">
+                      <p className="truncate text-sm font-bold">{row.label}</p>
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        구성 {row.constituentCount} · 거래대금 {formatCompact(row.tradingValue)}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </SectionFrame>
             </div>
 
-            <div
-              data-testid="market-info-ranking"
-              className={cn('mt-3', mobileTab !== 'ranking' && 'hidden lg:block')}
-            >
+            <div className="mt-4">
               <SectionFrame title="시장 종목 순위" section={data.sections.rankings}>
-                <div className="mt-2 flex items-center justify-end">
+                <div className="mt-3 flex flex-wrap items-start justify-between gap-2">
+                  <p className="text-[11px] text-muted-foreground">null은 미제공이며 실제 0과 구분합니다.</p>
                   <span className="rounded-full bg-muted px-2 py-1 text-[10px]">{visibleRows.length}개</span>
                 </div>
                 <RankingTabs value={ranking} onChange={setRanking} />
                 {ranking === 'marketCap' && data.sections.rankings.data.every((row) => row.marketCap == null) ? (
-                  <p className="mt-4 rounded-xl border border-dashed p-4 text-xs text-muted-foreground">시가총액 미제공</p>
+                  <p className="mt-4 rounded-xl border border-dashed p-4 text-xs text-muted-foreground">
+                    현재 연결된 provider가 시가총액을 제공하지 않아 임의 계산하지 않습니다.
+                  </p>
                 ) : (
                   <AssetList
                     route={route}
@@ -597,10 +546,51 @@ export default function MarketInformationPage() {
               </SectionFrame>
             </div>
 
-            <div
-              data-testid="market-info-news"
-              className={cn('mt-3 grid min-w-0 gap-3 lg:grid-cols-2', mobileTab !== 'news' && 'hidden lg:grid')}
-            >
+            {route.id === 'coins-futures' && (
+              <div className="mt-4">
+                <SectionFrame title="선물 공개 파생지표" section={data.sections.derivatives}>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                    <div className="rounded-xl border bg-background p-3">
+                      <p className="text-xs text-muted-foreground">롱 비율</p>
+                      <p className="mt-1 text-lg font-bold">
+                        {formatPercent(data.sections.derivatives.data.longRatio == null
+                          ? null
+                          : data.sections.derivatives.data.longRatio * 100)}
+                      </p>
+                    </div>
+                    <div className="rounded-xl border bg-background p-3">
+                      <p className="text-xs text-muted-foreground">숏 비율</p>
+                      <p className="mt-1 text-lg font-bold">
+                        {formatPercent(data.sections.derivatives.data.shortRatio == null
+                          ? null
+                          : data.sections.derivatives.data.shortRatio * 100)}
+                      </p>
+                    </div>
+                    <div className="rounded-xl border bg-background p-3">
+                      <p className="text-xs text-muted-foreground">롱/숏 비</p>
+                      <p className="mt-1 text-lg font-bold">{formatNumber(data.sections.derivatives.data.longShortRatio)}</p>
+                    </div>
+                  </div>
+                  <div className="mt-3 space-y-2">
+                    {data.sections.derivatives.data.liquidations.slice(0, 8).map((item, index) => (
+                      <div
+                        key={`${item.symbol}:${item.occurredAt}:${index}`}
+                        className="flex items-center justify-between gap-3 rounded-xl border bg-background p-3 text-xs"
+                      >
+                        <span className="font-bold">
+                          {item.symbol} · {item.side === 'long' ? '롱 청산' : item.side === 'short' ? '숏 청산' : '방향 미상'}
+                        </span>
+                        <span className="text-right text-muted-foreground">
+                          {formatNumber(item.price, 'USDT')} · {formatCompact(item.amount)} · {formatDate(item.occurredAt)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </SectionFrame>
+              </div>
+            )}
+
+            <div className="mt-4 grid min-w-0 gap-4 lg:grid-cols-2">
               <SectionFrame title="뉴스" section={data.sections.news}>
                 <FeedList rows={data.sections.news.data} />
               </SectionFrame>
