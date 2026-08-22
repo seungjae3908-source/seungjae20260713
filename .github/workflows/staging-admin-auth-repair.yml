@@ -16,6 +16,7 @@ on:
       - "api-server/scripts/verify-staging-admin-auth-repair-contract.mjs"
 
 permissions:
+  actions: read
   contents: read
   statuses: read
   issues: read
@@ -37,7 +38,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - run: node api-server/scripts/verify-staging-admin-auth-repair-contract.mjs
+      - name: Parse repair implementation and verify safety contract
+        run: |
+          node --check api-server/scripts/repair-staging-admin-auth.mjs
+          node --check api-server/scripts/verify-staging-admin-auth-repair-contract.mjs
+          node api-server/scripts/verify-staging-admin-auth-repair-contract.mjs
 
   authorize:
     name: Authorize isolated Staging admin auth repair
@@ -46,7 +51,11 @@ jobs:
         github.event_name == 'workflow_dispatch' && github.actor == github.repository_owner ||
         github.event_name == 'issue_comment' &&
         github.event.issue.number == 23 &&
+        !github.event.issue.pull_request &&
+        github.event.issue.state == 'open' &&
+        github.event.issue.title == 'Staging Readiness Control' &&
         github.event.comment.user.login == github.repository_owner &&
+        github.event.comment.author_association == 'OWNER' &&
         startsWith(github.event.comment.body, '/repair-staging-admin-auth ')
       }}
     runs-on: ubuntu-latest
@@ -95,7 +104,7 @@ jobs:
             exit 1
           }
 
-      - name: Require exact-main Required CI 6/6
+      - name: Require coherent exact-main Required CI 6/6
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ steps.target.outputs.sha }}
@@ -111,14 +120,13 @@ jobs:
             'ai-privacy/verified',
             'futures-public-network-smoke/verified',
           ];
-          const url = `${process.env.API_URL}/repos/${process.env.REPOSITORY}/commits/${process.env.TARGET_SHA}/status?per_page=100`;
-          const response = await fetch(url, {
-            headers: {
-              Accept: 'application/vnd.github+json',
-              Authorization: `Bearer ${process.env.GH_TOKEN}`,
-              'X-GitHub-Api-Version': '2022-11-28',
-            },
-          });
+          const headers = {
+            Accept: 'application/vnd.github+json',
+            Authorization: `Bearer ${process.env.GH_TOKEN}`,
+            'X-GitHub-Api-Version': '2022-11-28',
+          };
+          const statusUrl = `${process.env.API_URL}/repos/${process.env.REPOSITORY}/commits/${process.env.TARGET_SHA}/status?per_page=100`;
+          const response = await fetch(statusUrl, { headers });
           if (!response.ok) {
             console.error(`Unable to read Required CI status: HTTP ${response.status}`);
             process.exit(1);
@@ -126,16 +134,37 @@ jobs:
           const payload = await response.json();
           const latest = new Map();
           for (const item of payload.statuses ?? []) {
-            if (!latest.has(item.context)) latest.set(item.context, item.state);
+            if (!latest.has(item.context)) latest.set(item.context, item);
           }
-          const failed = required.filter((context) => latest.get(context) !== 'success');
+          const failed = required.filter((context) => latest.get(context)?.state !== 'success');
           for (const context of required) {
-            console.log(`${context}: ${latest.get(context) ?? 'missing'}`);
+            console.log(`${context}: ${latest.get(context)?.state ?? 'missing'}`);
           }
           if (failed.length) {
             console.error(`Required CI is not 6/6 SUCCESS: ${failed.join(', ')}`);
             process.exit(1);
           }
+          const runIds = new Set(required.map((context) => {
+            const targetUrl = String(latest.get(context)?.target_url ?? '');
+            return /\/actions\/runs\/(\d+)/u.exec(targetUrl)?.[1] ?? null;
+          }));
+          if (runIds.size !== 1 || runIds.has(null)) {
+            console.error('Required statuses do not share one exact Application CI provenance run.');
+            process.exit(1);
+          }
+          const runId = [...runIds][0];
+          const runUrl = `${process.env.API_URL}/repos/${process.env.REPOSITORY}/actions/runs/${runId}`;
+          const runResponse = await fetch(runUrl, { headers });
+          if (!runResponse.ok) {
+            console.error(`Unable to read Required CI provenance run: HTTP ${runResponse.status}`);
+            process.exit(1);
+          }
+          const run = await runResponse.json();
+          if (String(run.head_sha ?? '').toLowerCase() !== process.env.TARGET_SHA || run.status !== 'completed' || run.conclusion !== 'success') {
+            console.error('Required CI provenance is not an exact successful current-main run.');
+            process.exit(1);
+          }
+          console.log(`Required CI provenance Run ${runId}: exact current main, 6/6 SUCCESS`);
           NODE
 
   repair:
@@ -173,6 +202,9 @@ jobs:
 
       - name: Install server dependencies
         run: pnpm install --frozen-lockfile --filter @workspace/api-server...
+
+      - name: Parse repair implementation before execution
+        run: node --check api-server/scripts/repair-staging-admin-auth.mjs
 
       - name: Repair and verify Staging admin password authentication
         run: node api-server/scripts/repair-staging-admin-auth.mjs
