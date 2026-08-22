@@ -96,6 +96,30 @@ test('policy persistence never stores user identity inside the encoded policy pa
   expect(decoded).not.toContain('userId');
 });
 
+test('shared notification preference writers use optimistic concurrency instead of read-then-upsert', () => {
+  const root = repositoryRoot();
+  const preferencesRepository = fs.readFileSync(
+    path.join(root, 'api-server/src/features/user-broker-telegram/user-broker-telegram.repository.ts'),
+    'utf8',
+  );
+  const policyRepository = fs.readFileSync(
+    path.join(root, 'api-server/src/features/user-broker-telegram/telegram-alert-policy.repository.ts'),
+    'utf8',
+  );
+
+  expect(preferencesRepository).toContain('const NOTIFICATION_PREFERENCES_WRITE_RETRY_LIMIT = 4');
+  expect(preferencesRepository).toContain('export async function mutateNotificationEnabledTypes');
+  expect(preferencesRepository).toContain(".select('enabled_types, updated_at')");
+  expect(preferencesRepository).toContain(".eq('updated_at', observedUpdatedAt)");
+  expect(preferencesRepository).toContain("String(insertError.code ?? '') === '23505'");
+  expect(preferencesRepository).toContain("throw new Error('USER_BROKER_TELEGRAM_STORAGE_CONFLICT')");
+  expect(preferencesRepository).toContain('await mutateNotificationEnabledTypes(');
+  expect(policyRepository).toContain("import { mutateNotificationEnabledTypes } from './user-broker-telegram.repository'");
+  expect(policyRepository).toContain('await mutateNotificationEnabledTypes(userId, updatedAt, (enabledTypes) => {');
+  expect(policyRepository).toContain('telegramAlertPolicyFromEnabledTypes(userId, enabledTypes).policy');
+  expect(policyRepository).not.toContain("const table = secureClient().from('notification_preferences');");
+});
+
 test('user integrations route exposes read/write policy APIs with zero trading authority', () => {
   const source = fs.readFileSync(
     path.join(repositoryRoot(), 'api-server/src/routes/user-broker-telegram.ts'),
