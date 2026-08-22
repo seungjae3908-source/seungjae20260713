@@ -5,6 +5,7 @@ import {
   isValidTelegramAlertPolicy,
   type TelegramAlertPolicy,
 } from '../../services/telegram-alert-policy.service';
+import { mutateNotificationEnabledTypes } from './user-broker-telegram.repository';
 
 export const TELEGRAM_ALERT_POLICY_MARKER = 'telegram_alert_policy_v1:';
 
@@ -132,20 +133,15 @@ export function createSupabaseTelegramAlertPolicyRepository(): TelegramAlertPoli
     },
 
     async savePolicy(userId, patch, updatedAt) {
-      const table = secureClient().from('notification_preferences');
-      const { data, error: readError } = await table
-        .select('enabled_types').eq('member_id', userId).maybeSingle();
-      if (readError) throw databaseError();
-
-      const current = telegramAlertPolicyFromEnabledTypes(userId, data?.enabled_types).policy;
-      const next = applyTelegramAlertPolicyPatch(current, patch);
-      const { error } = await table.upsert({
-        member_id: userId,
-        enabled_types: enabledTypesWithTelegramAlertPolicy(data?.enabled_types, next),
-        updated_at: updatedAt,
-      }, { onConflict: 'member_id' });
-      if (error) throw databaseError();
-      return { policy: next, source: 'STORED' };
+      let savedPolicy: TelegramAlertPolicy | null = null;
+      await mutateNotificationEnabledTypes(userId, updatedAt, (enabledTypes) => {
+        const current = telegramAlertPolicyFromEnabledTypes(userId, enabledTypes).policy;
+        const next = applyTelegramAlertPolicyPatch(current, patch);
+        savedPolicy = next;
+        return enabledTypesWithTelegramAlertPolicy(enabledTypes, next);
+      });
+      if (!savedPolicy) throw databaseError();
+      return { policy: savedPolicy, source: 'STORED' };
     },
   };
 }
