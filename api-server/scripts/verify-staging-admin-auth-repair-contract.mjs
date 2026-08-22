@@ -24,8 +24,13 @@ function forbidText(source, text, label) {
 
 const workflowRequirements = [
   ['issue_comment:', 'issue-comment command trigger'],
+  ['actions: read', 'workflow-run provenance permission'],
   ["github.event.issue.number == 23", 'Release Control issue gate'],
+  ["!github.event.issue.pull_request", 'issue-only command gate'],
+  ["github.event.issue.state == 'open'", 'open Release Control gate'],
+  ["github.event.issue.title == 'Staging Readiness Control'", 'exact Release Control title gate'],
   ["github.event.comment.user.login == github.repository_owner", 'repository-owner gate'],
+  ["github.event.comment.author_association == 'OWNER'", 'owner association gate'],
   ['/repair-staging-admin-auth ', 'explicit repair command'],
   ['environment: staging', 'isolated staging Environment'],
   ['EXPECTED_STAGING_PROJECT_REF: petlfbztqguuzkasfpug', 'exact isolated Staging project ref'],
@@ -37,6 +42,9 @@ const workflowRequirements = [
   ['security-integration/verified', 'Security CI gate'],
   ['ai-privacy/verified', 'AI privacy CI gate'],
   ['futures-public-network-smoke/verified', 'public network CI gate'],
+  ['Required statuses do not share one exact Application CI provenance run.', 'single-run Required CI provenance gate'],
+  ['Required CI provenance is not an exact successful current-main run.', 'exact-SHA completed-success provenance gate'],
+  ['node --check api-server/scripts/repair-staging-admin-auth.mjs', 'repair implementation syntax check'],
   ['persist-credentials: false', 'credential persistence disabled'],
 ];
 
@@ -61,6 +69,9 @@ for (const [text, label] of scriptRequirements) requireText(repair, text, label)
 for (const forbidden of [
   'STAGING_DATABASE_URL',
   'DATABASE_URL',
+  'environment: production',
+  'secrets.PROD_',
+  'secrets.PRODUCTION_',
   'ssh ',
   'pm2 ',
   '/srv/',
