@@ -162,6 +162,55 @@ jobs:
       - name: Prepare staging artifact directory
         run: mkdir -p "$STAGING_ARTIFACT_DIR"
       - run: pnpm install --frozen-lockfile
+      - name: Resolve snapshot-v2 publisher binding without disclosing identity
+        id: paper_publisher
+        env:
+          SUPABASE_URL: ${{ env.STAGING_SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ env.STAGING_SUPABASE_ANON_KEY }}
+          ADMIN_EMAIL: ${{ env.STAGING_ADMIN_EMAIL }}
+          ADMIN_PASSWORD: ${{ env.STAGING_ADMIN_PASSWORD }}
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const { createHash } = require('node:crypto');
+          const fs = require('node:fs');
+          const required = (name) => {
+            const value = String(process.env[name] ?? '').trim();
+            if (!value) throw new Error(`${name} is required for snapshot-v2 staging publisher binding`);
+            return value;
+          };
+          (async () => {
+            const supabaseUrl = required('SUPABASE_URL').replace(/\/+$/u, '');
+            const anonKey = required('SUPABASE_ANON_KEY');
+            const email = required('ADMIN_EMAIL');
+            const password = required('ADMIN_PASSWORD');
+            const response = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=password`, {
+              method: 'POST',
+              headers: {
+                apikey: anonKey,
+                'content-type': 'application/json',
+              },
+              body: JSON.stringify({ email, password }),
+              signal: AbortSignal.timeout(15_000),
+            });
+            if (!response.ok) {
+              throw new Error(`Staging admin authentication failed with HTTP ${response.status}; snapshot binding not configured`);
+            }
+            const body = await response.json();
+            const userId = String(body?.user?.id ?? '').trim();
+            const accessToken = String(body?.access_token ?? '').trim();
+            if (!userId) throw new Error('Staging admin identity unavailable; snapshot binding not configured');
+            const digest = createHash('sha256').update(userId, 'utf8').digest('hex');
+            process.stdout.write(`::add-mask::${userId}\n`);
+            if (accessToken) process.stdout.write(`::add-mask::${accessToken}\n`);
+            process.stdout.write(`::add-mask::${digest}\n`);
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `publisher_sha256=${digest}\n`);
+            process.stdout.write('snapshot-v2 staging publisher binding resolved without recording account identity\n');
+          })().catch((error) => {
+            console.error(error instanceof Error ? error.message : 'snapshot-v2 publisher binding failed');
+            process.exit(1);
+          });
+          NODE
       - name: Configure staging SSH
         run: |
           set -Eeuo pipefail
@@ -177,6 +226,7 @@ jobs:
         id: deploy
         env:
           REMOTE_SECRET_FILE: /tmp/seungjae-staging-${{ github.run_id }}-${{ github.run_attempt }}.env
+          STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256: ${{ steps.paper_publisher.outputs.publisher_sha256 }}
         run: |
           set -Eeuo pipefail
           umask 077
@@ -192,6 +242,7 @@ jobs:
             printf 'STAGING_SUPABASE_URL=%q\n' "$STAGING_SUPABASE_URL"
             printf 'STAGING_SUPABASE_ANON_KEY=%q\n' "$STAGING_SUPABASE_ANON_KEY"
             printf 'STAGING_SUPABASE_SECRET_KEY=%q\n' "$STAGING_SUPABASE_SECRET_KEY"
+            printf 'STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256=%q\n' "$STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256"
           } > "$local_secret_file"
           chmod 600 "$local_secret_file"
           scp -q -i ~/.ssh/id_ed25519 -P "$STAGING_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
@@ -225,6 +276,7 @@ jobs:
           STAGING_SUPABASE_URL="$STAGING_SUPABASE_URL" \
           STAGING_SUPABASE_ANON_KEY="$STAGING_SUPABASE_ANON_KEY" \
           STAGING_SUPABASE_SECRET_KEY="$STAGING_SUPABASE_SECRET_KEY" \
+          STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256="$STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256" \
           "$SOURCE_DIR/ops/deploy-staging.sh" "$TARGET_SHA"
           REMOTE
       - name: Collect staging runtime, health, SHA, and PM2 stability evidence
@@ -250,6 +302,7 @@ jobs:
           const processes = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8' }));
           const processInfo = processes.find((item) => item.name === 'seungjae-staging');
           const health = JSON.parse(execFileSync('curl', ['--fail', '--silent', '--show-error', '--max-time', '15', 'http://127.0.0.1:18083/api/health'], { encoding: 'utf8' }));
+          const runtimeEnv = fs.readFileSync('/srv/seungjae-staging/api-server/.env.staging', 'utf8');
           console.log(JSON.stringify({
             target_sha: process.env.TARGET_SHA,
             deployed_sha: current,
@@ -257,6 +310,13 @@ jobs:
             pm2_status: processInfo?.pm2_env?.status ?? 'missing',
             restart_count: Number(processInfo?.pm2_env?.restart_time ?? -1),
             internal_health: health,
+            snapshot_v2_config: {
+              path_configured: runtimeEnv.includes('PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH=/srv/seungjae-staging/.deploy/paper-forward/paper-state-v2.json'),
+              publisher_binding_configured: /(?:^|\n)PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256=[0-9a-f]{64}(?:\n|$)/u.test(runtimeEnv),
+              maximum_age_configured: runtimeEnv.includes('PAPER_FORWARD_PAPER_STATE_MAXIMUM_AGE_MS=3900000'),
+              schedule_activation_present: /(?:^|\n)PAPER_FORWARD_SCHEDULE_ACTIVE=/u.test(runtimeEnv),
+              account_identity_recorded: false,
+            },
           }));
           NODE
           REMOTE
@@ -297,6 +357,10 @@ jobs:
             { name: 'external health SHA matches target', status: externalSha === target ? 'passed' : 'failed', detail: externalSha },
             { name: 'PM2 process online', status: final.pm2_status === 'online' ? 'passed' : 'failed', detail: final.pm2_status },
             { name: 'PM2 restart count stable', status: delta === 0 ? 'passed' : 'failed', detail: `${initial.restart_count} -> ${final.restart_count}` },
+            { name: 'snapshot-v2 shared path configured', status: initial.snapshot_v2_config?.path_configured === true ? 'passed' : 'failed', detail: String(initial.snapshot_v2_config?.path_configured) },
+            { name: 'snapshot-v2 exact publisher binding configured', status: initial.snapshot_v2_config?.publisher_binding_configured === true ? 'passed' : 'failed', detail: String(initial.snapshot_v2_config?.publisher_binding_configured) },
+            { name: 'snapshot-v2 freshness configured', status: initial.snapshot_v2_config?.maximum_age_configured === true ? 'passed' : 'failed', detail: String(initial.snapshot_v2_config?.maximum_age_configured) },
+            { name: 'Paper schedule remains inactive', status: initial.snapshot_v2_config?.schedule_activation_present === false ? 'passed' : 'failed', detail: String(initial.snapshot_v2_config?.schedule_activation_present) },
           ];
           const result = {
             target_sha: target,
@@ -305,6 +369,7 @@ jobs:
             pm2_status: final.pm2_status,
             restart_count: Number(final.restart_count),
             restart_count_delta: delta,
+            snapshot_v2_config: initial.snapshot_v2_config,
             checks,
           };
           fs.writeFileSync(path.join(dir, 'staging-runtime-verification.json'), `${JSON.stringify(result, null, 2)}\n`);
@@ -423,6 +488,7 @@ jobs:
           console.log(`- Restart count: \`${value.restart_count}\``);
           console.log(`- RELEASE_READY: \`${value.release_ready}\``);
           console.log(`- Verdict: \`${value.verdict}\``);
+          console.log('- Snapshot-v2 config evidence contains no raw account identity or secret values.');
           console.log('- Production deployment executed: `false`');
           console.log('- Production database changed: `false`');
           NODE
