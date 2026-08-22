@@ -167,7 +167,11 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, onOverlayChan
     onOverlayChange(null);
   }, [market, onOverlayChange, symbol]);
 
-  useEffect(() => () => abortRef.current?.abort(), []);
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
 
   const loadPosition = useCallback(async () => {
     const provider = providerForMarket(market);
@@ -189,11 +193,12 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, onOverlayChan
         setState({ kind: 'unavailable', code: payload && 'errorCode' in payload && payload.errorCode ? payload.errorCode : `HTTP_${response.status}` });
         return;
       }
-      if (!payload || !('readOnly' in payload) || payload.readOnly !== true || !Array.isArray(payload.positions)) {
+      const candidate = payload as Partial<Snapshot> | null;
+      if (!candidate || candidate.readOnly !== true || !Array.isArray(candidate.positions)) {
         setState({ kind: 'unavailable', code: 'ACCOUNT_SNAPSHOT_INVALID' });
         return;
       }
-      const snapshot = payload as Snapshot;
+      const snapshot = candidate as Snapshot;
       if (
         snapshot.orderRequests !== 0
         || snapshot.cancelRequests !== 0
@@ -225,13 +230,15 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, onOverlayChan
 
   const toggleLines = useCallback(() => {
     if (state.kind !== 'ready' || !state.position) return;
+    const position = state.position;
+    const snapshot = state.snapshot;
     setLinesVisible((current) => {
       const next = !current;
       onOverlayChange(next ? {
-        provider: state.snapshot.provider,
-        position: state.position,
-        stale: state.snapshot.stale,
-        checkedAt: state.snapshot.checkedAt ?? null,
+        provider: snapshot.provider,
+        position,
+        stale: snapshot.stale,
+        checkedAt: snapshot.checkedAt ?? null,
       } : null);
       return next;
     });
