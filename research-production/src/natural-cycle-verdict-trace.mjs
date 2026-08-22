@@ -28,6 +28,8 @@ export const NATURAL_PAPER_STAGE_FIELDS = Object.freeze({
   OUTCOME: 'outcomeCount',
 });
 
+// These codes describe the zero stage only. They are diagnostic classes, not
+// authoritative root-cause evidence. FIRST_ZERO_REASON is accepted separately.
 export const NATURAL_PAPER_FIRST_ZERO_CODES = Object.freeze({
   UNIVERSE: 'UNIVERSE_EMPTY',
   SCANNER_EVALUATED: 'SCANNER_NOT_EVALUATED',
@@ -62,6 +64,21 @@ const NON_NATURAL_EVIDENCE_FLAGS = Object.freeze([
   'futureTimeCompression',
   'clockAdvanced',
 ]);
+
+const RUNTIME_STAGE_NAMES = Object.freeze({
+  UNIVERSE: Object.freeze(['UNIVERSE', 'Universe']),
+  SCANNER_EVALUATED: Object.freeze(['SCANNER_EVALUATED', 'Scanner Evaluated']),
+  CANDIDATE: Object.freeze(['CANDIDATE', 'Scanner Candidate']),
+  EVIDENCE_COMPLETE: Object.freeze(['EVIDENCE_COMPLETE', 'Evidence Complete']),
+  ADMISSION_PASS: Object.freeze(['ADMISSION_PASS', 'Admission Pass']),
+  RISK_PASS: Object.freeze(['RISK_PASS', 'Risk Pass']),
+  COST_PASS: Object.freeze(['COST_PASS', 'Cost Pass']),
+  ACCOUNT_READY: Object.freeze(['ACCOUNT_READY', 'Account Ready']),
+  PAPER_ENTRY: Object.freeze(['PAPER_ENTRY', 'Paper Entry']),
+  POSITION: Object.freeze(['POSITION', 'Paper Position']),
+  SETTLEMENT: Object.freeze(['SETTLEMENT', 'Settlement']),
+  OUTCOME: Object.freeze(['OUTCOME', 'Outcome']),
+});
 
 function nonEmpty(value) {
   return typeof value === 'string' && value.trim().length > 0;
@@ -116,12 +133,6 @@ function hasDuplicateObservationIds(evidence) {
   return new Set(ids).size !== ids.length;
 }
 
-function blockerFor(stage, input) {
-  const explicit = input?.blockerReasons?.[stage];
-  if (nonEmpty(explicit)) return explicit.trim();
-  return NATURAL_PAPER_FIRST_ZERO_CODES[stage];
-}
-
 function stageCount(input, stage, identity) {
   const field = NATURAL_PAPER_STAGE_FIELDS[stage];
   const evidence = input?.stageEvidence?.[stage];
@@ -129,6 +140,9 @@ function stageCount(input, stage, identity) {
     ? evidence.count
     : input[field];
 
+  if (evidence?.sourceConflict === true) {
+    return Object.freeze({ field, count: null, evidenceStatus: 'DUPLICATE_STAGE_MEASUREMENT_REJECTED' });
+  }
   if (evidence && !evidenceIdentityMatches(evidence, identity)) {
     return Object.freeze({ field, count: null, evidenceStatus: 'IDENTITY_MISMATCH' });
   }
@@ -139,6 +153,30 @@ function stageCount(input, stage, identity) {
     return Object.freeze({ field, count: null, evidenceStatus: 'DUPLICATE_OBSERVATION_REJECTED' });
   }
   return Object.freeze({ field, count: countOrUnknown(rawCount), evidenceStatus: 'ACCEPTED' });
+}
+
+function authoritativeReasonFor(stage, input, identity) {
+  const evidence = input?.reasonEvidenceByStage?.[stage];
+  if (!evidence || typeof evidence !== 'object') {
+    return Object.freeze({ reason: 'UNKNOWN', status: 'MISSING' });
+  }
+  if (evidence.authoritative !== true) {
+    return Object.freeze({ reason: 'UNKNOWN', status: 'NOT_AUTHORITATIVE' });
+  }
+  if (String(evidence.freshness ?? '').trim().toUpperCase() !== 'FRESH') {
+    return Object.freeze({ reason: 'UNKNOWN', status: 'STALE_OR_UNKNOWN_FRESHNESS' });
+  }
+  if (!evidenceIdentityMatches(evidence, identity)) {
+    return Object.freeze({ reason: 'UNKNOWN', status: 'IDENTITY_MISMATCH' });
+  }
+  if (hasNonNaturalEvidence(evidence) || hasDuplicateObservationIds(evidence)) {
+    return Object.freeze({ reason: 'UNKNOWN', status: 'REJECTED_EVIDENCE' });
+  }
+  const reasonCode = String(evidence.reasonCode ?? '').trim().toUpperCase();
+  if (!/^[A-Z][A-Z0-9_]*$/.test(reasonCode)) {
+    return Object.freeze({ reason: 'UNKNOWN', status: 'INVALID_REASON_CODE' });
+  }
+  return Object.freeze({ reason: reasonCode, status: 'ACCEPTED' });
 }
 
 export function buildNaturalPaperFirstZeroTrace(input = {}) {
@@ -158,7 +196,7 @@ export function buildNaturalPaperFirstZeroTrace(input = {}) {
     counts[field] = count;
     let status = 'PASS';
     let firstZeroCode = null;
-    let blockerReason = null;
+    let diagnosticClass = null;
 
     if (!identity.complete) {
       status = 'UNKNOWN_IDENTITY';
@@ -179,13 +217,13 @@ export function buildNaturalPaperFirstZeroTrace(input = {}) {
     } else if (count === 0) {
       status = 'ZERO';
       firstZeroCode = NATURAL_PAPER_FIRST_ZERO_CODES[stage];
-      blockerReason = blockerFor(stage, input);
+      diagnosticClass = firstZeroCode;
       if (firstZeroStage === null && firstUnknownStage === null && earlierEvidenceKnown) {
-        firstZeroStage = Object.freeze({ stage, field, code: firstZeroCode, blockerReason });
+        firstZeroStage = Object.freeze({ stage, field, code: firstZeroCode, diagnosticClass });
       }
     }
 
-    stages.push(Object.freeze({ stage, field, count, status, evidenceStatus, firstZeroCode, blockerReason }));
+    stages.push(Object.freeze({ stage, field, count, status, evidenceStatus, firstZeroCode, diagnosticClass }));
   }
 
   const allObservedPositive = stages.every((stage) => stage.status === 'PASS' && stage.count > 0);
@@ -200,9 +238,12 @@ export function buildNaturalPaperFirstZeroTrace(input = {}) {
           : allObservedPositive
             ? 'COMPLETE'
             : 'WAITING_EVIDENCE';
+  const authoritativeReason = firstZeroStage
+    ? authoritativeReasonFor(firstZeroStage.stage, input, identity)
+    : Object.freeze({ reason: 'UNKNOWN', status: 'NOT_APPLICABLE' });
 
   return Object.freeze({
-    schemaVersion: 'natural-paper-first-zero-trace-v2',
+    schemaVersion: 'natural-paper-first-zero-trace-v3',
     cycleId,
     triggerSource,
     naturalCycle,
@@ -212,6 +253,8 @@ export function buildNaturalPaperFirstZeroTrace(input = {}) {
     stages: Object.freeze(stages),
     firstZeroStage,
     firstZeroStageName: firstZeroStage?.stage ?? (allObservedPositive ? 'NONE' : 'UNKNOWN'),
+    firstZeroReason: authoritativeReason.reason,
+    firstZeroReasonEvidenceStatus: authoritativeReason.status,
     firstUnknownStage,
     safety: Object.freeze({
       readOnly: true,
@@ -219,6 +262,7 @@ export function buildNaturalPaperFirstZeroTrace(input = {}) {
       syntheticEvidenceAllowed: false,
       historicalEvidenceAsNaturalAllowed: false,
       replayEvidenceAsNaturalAllowed: false,
+      runtimeVerdictTrusted: false,
       liveTrading: false,
       autoTrading: false,
       realOrderEnabled: false,
@@ -230,6 +274,98 @@ export function buildNaturalPaperFirstZeroTrace(input = {}) {
       amendCount: 0,
       transferCount: 0,
       withdrawalCount: 0,
+    }),
+  });
+}
+
+function runtimeIdentity(runtimeResult = {}) {
+  const bundle = runtimeResult.identity && typeof runtimeResult.identity === 'object'
+    ? runtimeResult.identity
+    : runtimeResult;
+  return normalizeIdentity({
+    strategySha: bundle.strategySha ?? bundle.researchCodeSha,
+    runtimeSha: bundle.runtimeSha,
+    datasetIdentity: bundle.datasetIdentity,
+  });
+}
+
+function runtimeMeasurementMatches(measurement, stage) {
+  if (!measurement || typeof measurement !== 'object') return false;
+  const field = NATURAL_PAPER_STAGE_FIELDS[stage];
+  const exactNames = RUNTIME_STAGE_NAMES[stage];
+  return measurement.instrumentationKey === field
+    || measurement.field === field
+    || exactNames.includes(measurement.stage)
+    || exactNames.includes(measurement.name);
+}
+
+function extractRuntimeStageEvidence(runtimeResult, identity) {
+  const source = runtimeResult?.authoritativeStageMeasurements;
+  const stageEvidence = {};
+
+  for (const stage of NATURAL_PAPER_STAGE_ORDER) {
+    const field = NATURAL_PAPER_STAGE_FIELDS[stage];
+    if (Array.isArray(source)) {
+      const matches = source.filter((measurement) => runtimeMeasurementMatches(measurement, stage));
+      if (matches.length > 1) {
+        stageEvidence[stage] = { count: null, sourceConflict: true };
+      } else if (matches.length === 1) {
+        const measurement = matches[0];
+        stageEvidence[stage] = {
+          count: measurement.count,
+          strategySha: measurement.strategySha ?? identity.strategySha,
+          runtimeSha: measurement.runtimeSha ?? identity.runtimeSha,
+          datasetIdentity: measurement.datasetIdentity ?? identity.datasetIdentity,
+          observationIds: measurement.observationIds,
+          synthetic: measurement.synthetic,
+          testFixture: measurement.testFixture,
+          historical: measurement.historical,
+          replay: measurement.replay,
+          duplicateReplay: measurement.duplicateReplay,
+          manualExpiry: measurement.manualExpiry,
+          futureTimeCompression: measurement.futureTimeCompression,
+          clockAdvanced: measurement.clockAdvanced,
+        };
+      }
+    } else if (source && typeof source === 'object' && Object.prototype.hasOwnProperty.call(source, field)) {
+      const measurement = source[field];
+      stageEvidence[stage] = measurement && typeof measurement === 'object'
+        ? {
+            ...measurement,
+            count: measurement.count,
+            strategySha: measurement.strategySha ?? identity.strategySha,
+            runtimeSha: measurement.runtimeSha ?? identity.runtimeSha,
+            datasetIdentity: measurement.datasetIdentity ?? identity.datasetIdentity,
+          }
+        : { count: measurement, strategySha: identity.strategySha, runtimeSha: identity.runtimeSha, datasetIdentity: identity.datasetIdentity };
+    }
+  }
+  return stageEvidence;
+}
+
+export function buildNaturalPaperFirstZeroTraceFromRuntime(runtimeResult = {}) {
+  const identity = runtimeIdentity(runtimeResult);
+  const stageEvidence = extractRuntimeStageEvidence(runtimeResult, identity);
+  const trace = buildNaturalPaperFirstZeroTrace({
+    cycleId: runtimeResult.cycleId,
+    triggerSource: runtimeResult.triggerSource,
+    strategySha: identity.strategySha,
+    runtimeSha: identity.runtimeSha,
+    datasetIdentity: identity.datasetIdentity,
+    stageEvidence,
+    reasonEvidenceByStage: runtimeResult.authoritativeFirstZeroReasonEvidenceByStage,
+  });
+
+  return Object.freeze({
+    ...trace,
+    runtimeAdapter: Object.freeze({
+      authoritativeMeasurementsPresent: Array.isArray(runtimeResult.authoritativeStageMeasurements)
+        ? runtimeResult.authoritativeStageMeasurements.length > 0
+        : Boolean(runtimeResult.authoritativeStageMeasurements && typeof runtimeResult.authoritativeStageMeasurements === 'object'),
+      completeIdentityPresent: identity.complete,
+      suppliedFirstZeroStageIgnored: runtimeResult.firstZeroStage !== undefined,
+      suppliedFirstZeroReasonIgnored: runtimeResult.firstZeroReason !== undefined,
+      verdictRecomputedFromCounts: true,
     }),
   });
 }
