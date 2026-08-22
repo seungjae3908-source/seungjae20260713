@@ -100,10 +100,15 @@ async function installApprovedRuntime(page: Page) {
   };
 }
 
-async function expectTouchTarget(page: Page, label: string, width: number) {
-  const button = page.getByRole('button', { name: label, exact: true });
-  await expect(button).toBeVisible();
-  const box = await button.boundingBox();
+async function expectTouchTarget(
+  page: Page,
+  label: string,
+  width: number,
+  role: 'button' | 'tab' = 'button',
+) {
+  const control = page.getByRole(role, { name: label, exact: true });
+  await expect(control).toBeVisible();
+  const box = await control.boundingBox();
   expect(box?.height ?? 0, `${width}px ${label}`).toBeGreaterThanOrEqual(44);
   expect(box?.width ?? 0, `${width}px ${label}`).toBeGreaterThanOrEqual(28);
 }
@@ -118,7 +123,7 @@ for (const width of [390, 1440]) {
       const tabs = page.getByTestId('home-mobile-tabs');
       await expect(tabs).toBeVisible();
       for (const label of ['시장', '신호', '관심', '자산']) {
-        await expectTouchTarget(page, label, width);
+        await expectTouchTarget(page, label, width, 'tab');
       }
 
       await expect(page.getByTestId('home-market-summary')).toBeVisible();
