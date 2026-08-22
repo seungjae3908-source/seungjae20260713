@@ -58,6 +58,9 @@ const SENTINELS = new Set([
   'AI_RESEARCH_UNAVAILABLE',
 ]);
 
+const MISSING_METRICS = '표본 N 미수집 · 거래 수 미수집 · PF 미수집 · EV 미수집 · MDD 미수집 · 승률 미수집 · 비용조정 미수집';
+const OVERVIEW_PROVENANCE = '근거: Research Production overview';
+
 function normalized(value: unknown): string {
   return typeof value === 'string' ? value.trim().toLowerCase() : '';
 }
@@ -77,6 +80,11 @@ function text(value: unknown): string | null {
 
 function unique(values: Array<string | null | undefined>): string[] {
   return [...new Set(values.filter((value): value is string => Boolean(value && value.trim())).map((value) => value.trim()))];
+}
+
+function observedAt(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return 'freshness 미수집';
+  return `관측 ${new Date(value).toISOString()}`;
 }
 
 export function researchCycleLabel(profile: ResearchCycleProfile): string {
@@ -122,54 +130,146 @@ function cycleNote(cycle: ResearchCycleSummary | undefined): string {
   return `성공 ${cycle.successCount}/${cycle.taskCount} · 실패 ${cycle.failedCount} · 데이터 부족 ${cycle.blockedDataCount}`;
 }
 
+function taskEvidence(
+  cycles: ResearchCycleSummary[],
+  patterns: RegExp[],
+): { value: string; tone: ResearchSimpleTone; note: string } {
+  for (const cycle of cycles) {
+    const task = cycle.tasks.find((candidate) => patterns.some((pattern) => pattern.test(candidate.id)));
+    if (!task) continue;
+    const state = normalized(task.status);
+    const tone: ResearchSimpleTone = task.timedOut || FAILURE_STATES.has(state)
+      ? 'blocked'
+      : SUCCESS_STATES.has(state)
+        ? 'good'
+        : state === 'blocked_data' || state === 'blocked'
+          ? 'warning'
+          : 'waiting';
+    return {
+      value: taskStatusKorean(task.status, task.timedOut),
+      tone,
+      note: `${MISSING_METRICS} · 데이터셋/구간 미수집 · ${observedAt(cycle.generatedAt)} · ${OVERVIEW_PROVENANCE}`,
+    };
+  }
+  return {
+    value: '미수집',
+    tone: 'waiting',
+    note: `Missing Evidence · 해당 단계의 canonical task가 current overview에 없습니다. ${MISSING_METRICS}`,
+  };
+}
+
+/**
+ * 12-stage evidence maturity ladder.
+ *
+ * This is deliberately fail-closed: unavailable metrics stay `미수집`; UNKNOWN,
+ * N/A and INSUFFICIENT_DATA are never rewritten to zero or PASS. The dashboard
+ * only summarizes evidence already exposed by canonical read-only owners.
+ */
 export function buildResearchSimpleItems(overview: ResearchCenterOverview): ResearchSimpleItem[] {
   const byProfile = new Map(overview.research.cycles.map((cycle) => [cycle.profile, cycle] as const));
-  const forward = byProfile.get('forward');
   const fast = byProfile.get('fast-historical');
   const long = byProfile.get('long-history');
-  const forwardStatus = cyclePlainStatus(forward);
-  const fastStatus = cyclePlainStatus(fast);
-  const longStatus = cyclePlainStatus(long);
   const ledger = overview.paper.ledger;
+  const shadow = overview.shadow.records;
+  const backtestAvailable = Boolean(fast?.present || long?.present);
+  const backtestTone: ResearchSimpleTone = [fast, long].some((cycle) => cyclePlainStatus(cycle).tone === 'blocked')
+    ? 'blocked'
+    : [fast, long].some((cycle) => cyclePlainStatus(cycle).tone === 'warning')
+      ? 'warning'
+      : backtestAvailable
+        ? 'good'
+        : 'waiting';
+  const backtestValue = backtestAvailable
+    ? `빠른 ${cyclePlainStatus(fast).value} · 장기 ${cyclePlainStatus(long).value}`
+    : '미수집';
+  const oos = taskEvidence(overview.research.cycles, [/\boos\b/i, /out[-_ ]?of[-_ ]?sample/i]);
+  const walkForward = taskEvidence(overview.research.cycles, [/purged.*walk/i, /walk[-_ ]?forward/i]);
+  const holdout = taskEvidence(overview.research.cycles, [/final[-_ ]?holdout/i, /holdout/i]);
+  const shadowValue = shadow.present
+    ? `${shadow.totalRecords}건 중 ${shadow.settledRecords}건 검증완료`
+    : '미수집';
   const paperValue = ledger.present
     ? `${ledger.cycleCount}회 확인 · 정산 ${ledger.settlementCount}건`
     : '미수집';
   const paperTone: ResearchSimpleTone = !ledger.present
     ? 'waiting'
     : ledger.settlementCount > 0 ? 'good' : 'warning';
-  const shadow = overview.shadow.records;
-  const shadowValue = shadow.present
-    ? `${shadow.totalRecords}건 중 ${shadow.settledRecords}건 검증완료`
-    : '미수집';
+  const profitabilityInsufficient = !ledger.present || ledger.settlementCount === 0 || !overview.profitability.proven;
 
   return [
-    { key: 'forward', label: '미래 검증', value: forwardStatus.value, note: cycleNote(forward), tone: forwardStatus.tone },
-    { key: 'fast', label: '빠른 과거검증', value: fastStatus.value, note: cycleNote(fast), tone: fastStatus.tone },
-    { key: 'long', label: '장기 과거검증', value: longStatus.value, note: cycleNote(long), tone: longStatus.tone },
+    {
+      key: 'external-research',
+      label: '1. 외부 연구 (EXTERNAL RESEARCH)',
+      value: '아직 대기',
+      note: 'Missing Evidence · current Research overview에는 외부 논문/연구 provenance가 연결되지 않았습니다. N/A를 PASS 또는 0으로 바꾸지 않습니다.',
+      tone: 'waiting',
+    },
+    {
+      key: 'backtest',
+      label: '2. 백테스트 (BACKTEST)',
+      value: backtestValue,
+      note: `${cycleNote(fast)} · ${cycleNote(long)} · ${MISSING_METRICS} · 데이터셋/구간 미수집 · 코드 SHA는 상세 증거에서 확인 · ${OVERVIEW_PROVENANCE}`,
+      tone: backtestTone,
+    },
+    { key: 'oos', label: '3. OOS', value: oos.value, note: oos.note, tone: oos.tone },
+    { key: 'purged-walk-forward', label: '4. Purged Walk-Forward', value: walkForward.value, note: walkForward.note, tone: walkForward.tone },
+    { key: 'final-holdout', label: '5. Final Holdout', value: holdout.value, note: holdout.note, tone: holdout.tone },
     {
       key: 'shadow',
-      label: '미래 예측 검증',
+      label: '6. Shadow',
       value: shadowValue,
-      note: shadow.present ? `정산 대기 ${shadow.pendingRecords}건 · 표본 수와 예측 품질은 별도 판단` : 'Shadow 증거가 아직 없습니다.',
+      note: shadow.present
+        ? `표본 N ${shadow.totalRecords} · 정산 ${shadow.settledRecords} · 대기 ${shadow.pendingRecords} · PF/EV/MDD/비용조정 미수집 · ${OVERVIEW_PROVENANCE}`
+        : `Missing Evidence · Shadow 증거가 없습니다. ${MISSING_METRICS}`,
       tone: shadow.present && shadow.settledRecords > 0 ? 'good' : 'waiting',
     },
     {
-      key: 'paper',
-      label: '자동 모의매매',
+      key: 'natural-paper',
+      label: '7. Natural Paper',
       value: paperValue,
-      note: ledger.present && ledger.settlementCount === 0
-        ? '시스템은 확인 중이지만 아직 정산된 모의거래가 없습니다.'
-        : '정산된 거래가 실제 수익성 계산의 근거가 됩니다.',
+      note: ledger.present
+        ? `cycle ${ledger.cycleCount} · 모의 포지션 ${ledger.positionCount} · 정산 ${ledger.settlementCount} · ${ledger.settlementCount === 0 ? '실전 수익성 검증 안 됨 · ' : ''}${MISSING_METRICS} · ${OVERVIEW_PROVENANCE}`
+        : `Missing Evidence · Natural Paper ledger가 없습니다. 실전 수익성 검증 안 됨 · ${MISSING_METRICS}`,
       tone: paperTone,
     },
     {
-      key: 'profitability',
-      label: '수익성',
+      key: 'settlement',
+      label: '8. Settlement',
+      value: ledger.present ? `정산 ${ledger.settlementCount}건` : '미수집',
+      note: ledger.present && ledger.settlementCount > 0
+        ? `거래 수 ${ledger.settlementCount} · PF/EV/MDD/승률/비용조정은 profitability evidence가 제공할 때만 표시합니다. ${OVERVIEW_PROVENANCE}`
+        : 'Missing Evidence · 정산 표본이 충분하지 않습니다. 실전 수익성 검증 안 됨',
+      tone: ledger.present && ledger.settlementCount > 0 ? 'good' : 'warning',
+    },
+    {
+      key: 'profitability-evidence',
+      label: '9. Profitability Evidence',
       value: overview.profitability.proven ? '증명됨' : '아직 미증명',
-      note: overview.profitability.proven
-        ? '현재 수집된 정산 증거 기준입니다. 미래 수익을 보장하지 않습니다.'
-        : 'Paper 정산과 미래 표본이 충분히 쌓이기 전에는 수익성을 증명했다고 표시하지 않습니다.',
+      note: `${profitabilityInsufficient ? '실전 수익성 검증 안 됨 · ' : ''}${overview.profitability.note} · PF 미수집 · EV 미수집 · MDD 미수집 · 승률 미수집 · 비용조정 미수집`,
       tone: overview.profitability.proven ? 'good' : 'warning',
+    },
+    {
+      key: 'strategy-health',
+      label: '10. Strategy Health',
+      value: '미수집',
+      note: 'Missing Evidence · Strategy Health canonical evidence가 current Research overview에 연결되지 않았습니다. 없는 값을 HEALTHY/PASS로 만들지 않습니다.',
+      tone: 'waiting',
+    },
+    {
+      key: 'promotion',
+      label: '11. Promotion',
+      value: '별도 조회',
+      note: '전략 승격 API는 이 화면의 별도 승격 요약에서 조회합니다. Promotion 후보는 Champion 또는 실거래 승인이 아닙니다.',
+      tone: 'waiting',
+    },
+    {
+      key: 'champion',
+      label: '12. Champion',
+      value: overview.profitability.proven ? 'Champion 근거 미수집' : 'CURRENT_VALIDATED_CHAMPION = NONE',
+      note: overview.profitability.proven
+        ? 'Profitability는 통과했지만 current Research overview에 Champion identity/provenance가 없어 확정하지 않습니다.'
+        : 'Profitability Evidence가 미증명 상태이므로 검증된 Champion으로 승격하지 않습니다.',
+      tone: 'waiting',
     },
   ];
 }
@@ -191,8 +291,8 @@ export function buildResearchConclusion(overview: ResearchCenterOverview): Resea
       tone: 'warning',
       title: '수익성 판단 보류',
       description: ledger.present
-        ? `자동 모의매매는 ${ledger.cycleCount}회 확인됐지만 정산된 거래가 0건이라 아직 돈을 버는 전략인지 판단할 수 없습니다.`
-        : '자동 모의매매 정산 증거가 아직 수집되지 않았습니다.',
+        ? `실전 수익성 검증 안 됨. 자동 모의매매는 ${ledger.cycleCount}회 확인됐지만 정산된 거래가 0건이라 아직 돈을 버는 전략인지 판단할 수 없습니다.`
+        : '실전 수익성 검증 안 됨. 자동 모의매매 정산 증거가 아직 수집되지 않았습니다.',
       nextStep: `${longHistory?.present ? '' : '장기 과거검증을 수집하고, '}조건 통과 → 모의 진입 → 모의 종료 → 정산 → PF·EV·MDD 계산 순서로 진행합니다.`,
     };
   }
@@ -201,7 +301,7 @@ export function buildResearchConclusion(overview: ResearchCenterOverview): Resea
     return {
       tone: 'waiting',
       title: '수익성 증거 수집 중',
-      description: `정산 ${ledger.settlementCount}건이 있지만 아직 수익성 승격 기준을 통과하지 못했습니다.`,
+      description: `실전 수익성 검증 안 됨. 정산 ${ledger.settlementCount}건이 있지만 아직 수익성 승격 기준을 통과하지 못했습니다.`,
       nextStep: '표본을 더 쌓고 비용·손실폭·PF·EV·MDD와 Shadow 방향성 품질을 함께 확인합니다.',
     };
   }
