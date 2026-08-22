@@ -1,10 +1,18 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import {
+  classifyStagingAdminAuthFailure,
+  resolveStagingAdminPublisherBinding,
+} from './verify-staging-admin-auth-preflight.mjs';
 
 const cwd = process.cwd();
 const root = path.basename(cwd) === 'api-server' ? path.resolve(cwd, '..') : path.resolve(cwd);
 const deployScript = await readFile(path.join(root, 'ops/deploy-staging.sh'), 'utf8');
 const stagingWorkflow = await readFile(path.join(root, '.github/workflows/staging-readiness.yml'), 'utf8');
+const adminAuthPreflight = await readFile(
+  path.join(root, 'api-server/scripts/verify-staging-admin-auth-preflight.mjs'),
+  'utf8',
+);
 
 const assert = (condition, message) => {
   if (!condition) throw new Error(`[staging-deploy-contract] ${message}`);
@@ -87,12 +95,10 @@ assert(
 );
 
 for (const marker of [
+  'Verify staging admin password authentication before deployment path',
   'Resolve snapshot-v2 publisher binding without disclosing identity',
-  "createHash('sha256').update(userId, 'utf8').digest('hex')",
-  '::add-mask::${userId}',
-  '::add-mask::${accessToken}',
-  '::add-mask::${digest}',
-  'publisher_sha256=${digest}',
+  'node api-server/scripts/verify-staging-admin-auth-preflight.mjs',
+  'node api-server/scripts/verify-staging-admin-auth-preflight.mjs --write-publisher-digest',
   'STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256: ${{ steps.paper_publisher.outputs.publisher_sha256 }}',
   'snapshot-v2 shared path configured',
   'snapshot-v2 exact publisher binding configured',
@@ -101,17 +107,119 @@ for (const marker of [
   assert(stagingWorkflow.includes(marker), `staging workflow snapshot-v2 contract is missing marker: ${marker}`);
 }
 assert(
-  stagingWorkflow.includes('Staging admin authentication failed with HTTP ${response.status}; snapshot binding not configured'),
-  'publisher identity resolution must fail closed without returning an authentication payload',
+  stagingWorkflow.indexOf('Verify staging admin password authentication before deployment path')
+    < stagingWorkflow.indexOf('  deploy-and-verify:'),
+  'staging admin password authentication must fail closed before the deploy job starts',
 );
 for (const forbidden of [
   'console.log(userId)',
   'console.log(accessToken)',
   'JSON.stringify(body, null, 2)',
+  'const response = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=password`',
   'PAPER_FORWARD_SCHEDULE_ACTIVE=true',
 ]) {
   assert(!stagingWorkflow.includes(forbidden), `staging workflow must not contain unsafe snapshot-v2 marker: ${forbidden}`);
 }
+
+for (const marker of [
+  '/auth/v1/token?grant_type=password',
+  'apikey: anonKey',
+  "'content-type': 'application/json'",
+  'JSON.stringify({ email, password })',
+  'AbortSignal.timeout(15_000)',
+  '::add-mask::${result.userId}',
+  '::add-mask::${result.accessToken}',
+  '::add-mask::${result.publisherDigest}',
+  'publisher_sha256=${result.publisherDigest}',
+]) {
+  assert(adminAuthPreflight.includes(marker), `staging admin auth preflight is missing marker: ${marker}`);
+}
+for (const forbidden of [
+  'console.log(email)',
+  'console.log(password)',
+  'console.log(body)',
+  'JSON.stringify(body, null, 2)',
+  'process.stdout.write(email)',
+  'process.stdout.write(password)',
+]) {
+  assert(!adminAuthPreflight.includes(forbidden), `staging admin auth preflight contains unsafe marker: ${forbidden}`);
+}
+
+assert(
+  classifyStagingAdminAuthFailure(400, { code: 'invalid_credentials' }) === 'invalid_credentials',
+  'invalid email/password pairs and identities without password credentials must retain the non-enumerating Supabase classification',
+);
+assert(
+  classifyStagingAdminAuthFailure(400, { error_code: 'email_not_confirmed' }) === 'email_confirmation_required',
+  'unconfirmed staging admin email state must be classified separately',
+);
+assert(
+  classifyStagingAdminAuthFailure(401, { code: 'bad_jwt' }) === 'anon_key_or_auth_policy_rejected',
+  'anon-key or Auth policy rejection must remain distinct from account credentials',
+);
+
+const authRequest = {};
+const resolvedBinding = await resolveStagingAdminPublisherBinding({
+  supabaseUrl: 'https://stagingproject.supabase.co/',
+  anonKey: 'safe-anon-placeholder',
+  email: 'safe-admin-placeholder@example.invalid',
+  password: 'safe-password-placeholder',
+  fetchImpl: async (url, options) => {
+    authRequest.url = url;
+    authRequest.options = options;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        access_token: 'safe-access-token-placeholder',
+        user: { id: '00000000-0000-4000-8000-000000000001' },
+      }),
+    };
+  },
+});
+assert(
+  authRequest.url === 'https://stagingproject.supabase.co/auth/v1/token?grant_type=password',
+  'staging admin preflight must use the Supabase password-grant endpoint',
+);
+assert(authRequest.options?.method === 'POST', 'staging admin preflight must use POST');
+assert(
+  authRequest.options?.headers?.apikey === 'safe-anon-placeholder',
+  'staging admin preflight must use the staging anon key only as the API gateway key',
+);
+assert(
+  authRequest.options?.headers?.['content-type'] === 'application/json',
+  'staging admin preflight must submit JSON credentials',
+);
+assert(
+  authRequest.options?.body === JSON.stringify({
+    email: 'safe-admin-placeholder@example.invalid',
+    password: 'safe-password-placeholder',
+  }),
+  'staging admin preflight must submit the configured email/password pair without reshaping it',
+);
+assert(
+  /^[0-9a-f]{64}$/u.test(resolvedBinding.publisherDigest),
+  'successful staging admin authentication must resolve one lowercase SHA-256 publisher binding',
+);
+
+let rejectedMessage = '';
+try {
+  await resolveStagingAdminPublisherBinding({
+    supabaseUrl: 'https://stagingproject.supabase.co',
+    anonKey: 'safe-anon-placeholder',
+    email: 'must-not-appear@example.invalid',
+    password: 'must-not-appear-password',
+    fetchImpl: async () => ({
+      ok: false,
+      status: 400,
+      json: async () => ({ code: 'invalid_credentials', message: 'Invalid login credentials' }),
+    }),
+  });
+} catch (error) {
+  rejectedMessage = String(error?.message ?? error);
+}
+assert(rejectedMessage.includes('invalid_credentials (HTTP 400)'), 'HTTP 400 invalid credentials must produce a safe actionable classification');
+assert(!rejectedMessage.includes('must-not-appear'), 'authentication failure diagnostics must not contain email or password values');
 
 const liveProbe = deployScript.indexOf(
   'if ! probe_health_url "http://127.0.0.1:$STAGING_PORT/api/health"',
