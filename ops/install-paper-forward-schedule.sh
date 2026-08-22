@@ -23,6 +23,8 @@ TAG="# stock-app-paper-forward-v1"
 CRON_EXPRESSION="*/15 * * * *"
 CANONICAL_CYCLE_MS="14400000"
 OUTCOME_ACCUMULATION_ENABLED="${PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED:-false}"
+PAPER_STATE_SNAPSHOT_PATH="${PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH:-}"
+PUBLISHER_ACCOUNT_ID_SHA256="${PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256:-}"
 PREVIOUS_CRONTAB=""
 CRONTAB_MUTATED=0
 BACKUP_PATH=""
@@ -52,6 +54,14 @@ trap restore_on_error EXIT
 
 [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "exact lowercase 40-character SHA required" 2
 [[ "$OUTCOME_ACCUMULATION_ENABLED" == "true" || "$OUTCOME_ACCUMULATION_ENABLED" == "false" ]] || fail "PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED must be true or false" 2
+if [[ "$OUTCOME_ACCUMULATION_ENABLED" == "true" ]]; then
+  [[ "$PUBLISHER_ACCOUNT_ID_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "outcome accumulation requires an exact lowercase SHA-256 Paper state publisher binding" 2
+  if [[ -n "$PAPER_STATE_SNAPSHOT_PATH" ]]; then
+    [[ "$PAPER_STATE_SNAPSHOT_PATH" == /* ]] || fail "Paper state snapshot path must be absolute" 2
+    [[ "$PAPER_STATE_SNAPSHOT_PATH" =~ ^/[A-Za-z0-9._/-]+$ ]] || fail "Paper state snapshot path contains unsupported characters" 2
+    [[ -r "$PAPER_STATE_SNAPSHOT_PATH" ]] || fail "Paper state snapshot is not readable" 2
+  fi
+fi
 [[ -r "$DEPLOY_MARKER" ]] || fail "production deploy marker missing" 3
 DEPLOYED_SHA="$(tr -d '[:space:]' < "$DEPLOY_MARKER")"
 [[ "$DEPLOYED_SHA" == "$TARGET_SHA" ]] || fail "production SHA mismatch: $DEPLOYED_SHA" 4
@@ -173,6 +183,8 @@ exec /usr/bin/env -i \
   PAPER_FORWARD_RESEARCH_SHA='$TARGET_SHA' \
   PAPER_FORWARD_ACTIVATION_AT_MS='$ACTIVATION_AT_MS' \
   PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED='$OUTCOME_ACCUMULATION_ENABLED' \
+  PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH='$PAPER_STATE_SNAPSHOT_PATH' \
+  PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256='$PUBLISHER_ACCOUNT_ID_SHA256' \
   RESEARCH_PRODUCTION='$OUTCOME_ACCUMULATION_ENABLED' \
   LIVE_TRADING='false' \
   LIVE_TRADING_ENABLED='false' \
