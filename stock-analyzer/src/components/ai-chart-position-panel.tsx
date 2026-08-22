@@ -81,6 +81,10 @@ function symbolMatches(market: AnalysisMarket, chartSymbol: string, positionSymb
   return normalizedSymbol(chartSymbol) === normalizedSymbol(positionSymbol);
 }
 
+function positionMarketMatches(market: AnalysisMarket, positionMarket: string): boolean {
+  return positionMarket.trim().toUpperCase() === market;
+}
+
 function activePosition(position: AiChartAccountPosition): boolean {
   return position.quantity != null && Number.isFinite(position.quantity) && Math.abs(position.quantity) > 0;
 }
@@ -90,7 +94,11 @@ function selectPosition(
   symbol: string,
   positions: AiChartAccountPosition[],
 ): { position: AiChartAccountPosition | null; ambiguous: boolean } {
-  const matches = positions.filter((position) => activePosition(position) && symbolMatches(market, symbol, position.symbol));
+  const matches = positions.filter((position) => (
+    activePosition(position)
+    && positionMarketMatches(market, position.market)
+    && symbolMatches(market, symbol, position.symbol)
+  ));
   if (matches.length > 1) return { position: null, ambiguous: true };
   return { position: matches[0] ?? null, ambiguous: false };
 }
@@ -196,6 +204,14 @@ export function AiChartPositionPanel({ market, symbol, chartPrice, onOverlayChan
       const candidate = payload as Partial<Snapshot> | null;
       if (!candidate || candidate.readOnly !== true || !Array.isArray(candidate.positions)) {
         setState({ kind: 'unavailable', code: 'ACCOUNT_SNAPSHOT_INVALID' });
+        return;
+      }
+      if (candidate.provider !== provider) {
+        setState({ kind: 'unavailable', code: 'ACCOUNT_SNAPSHOT_PROVIDER_MISMATCH' });
+        return;
+      }
+      if (candidate.connected !== true) {
+        setState({ kind: 'unavailable', code: candidate.errorCode || candidate.status || 'ACCOUNT_NOT_CONNECTED' });
         return;
       }
       const snapshot = candidate as Snapshot;
