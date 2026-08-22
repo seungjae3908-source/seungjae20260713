@@ -243,6 +243,26 @@ test("SEARCH_FAILURE fails closed before scheduled Paper mutation", async () => 
   assert.equal(result.paperCandidateSource.searchOutcome, "SEARCH_FAILURE");
 });
 
+test("authoritative source blockers stay observable instead of collapsing to a measured Scanner zero", async () => {
+  const admissionBlockers = Object.freeze([
+    "AUTHORITATIVE_SCANNER_BATCH_SOURCE_UNAVAILABLE",
+    "AUTHORITATIVE_PAPER_STATE_SOURCE_UNAVAILABLE",
+  ]);
+  const provider = wrapPaperForwardProviderWithMeaningfulSearch({
+    provider: { collectPublicEvidence: async ({ market }) => baseEvidence(market) },
+    paperRuntimeForMarket: async () => Object.freeze({
+      ...runtime({ status: "AUTHORITATIVE_RECURRING_SOURCE_WIRING_BLOCKED", candidates: [], outcome: "SEARCH_FAILURE" }),
+      admissionBlockers,
+    }),
+  });
+
+  const result = await provider.collectPublicEvidence({ market: "CRYPTO_SPOT" });
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.equal(result.blocker, admissionBlockers.join("|"));
+  assert.deepEqual(result.candidates, []);
+  assert.equal(result.paperCandidateSource.status, "AUTHORITATIVE_RECURRING_SOURCE_WIRING_BLOCKED");
+});
+
 test("identity mismatch is blocked instead of being silently admitted", async () => {
   const bad = candidate({ paperIdentity: { ...candidate().paperIdentity, parameterHash: "wrong" } });
   const provider = wrapPaperForwardProviderWithMeaningfulSearch({

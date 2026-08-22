@@ -282,9 +282,14 @@ async function installChartMocks(page: Page) {
     }),
   }));
   await page.route('**/api/stocks/*/candles**', (route) => route.fulfill({
-    status: 404,
+    status: 200,
     contentType: 'application/json',
-    body: JSON.stringify({ message: 'NOT_FOUND' }),
+    body: JSON.stringify({
+      provider: 'auth-stock-fixture',
+      fetchedAt: '2026-08-05T00:00:00.000Z',
+      updatedAt: '2026-08-05T00:00:00.000Z',
+      candles: candles(80_000),
+    }),
   }));
   await page.route('**/api/crypto/spot/candles**', (route) => route.fulfill({
     status: 200,
