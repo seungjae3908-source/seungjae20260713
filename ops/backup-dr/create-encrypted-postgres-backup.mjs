@@ -106,7 +106,7 @@ const sslmode = parsed.searchParams.get('sslmode');
 if (sslmode) pgEnv.PGSSLMODE = sslmode;
 
 await mkdir(outputDir, { recursive: true, mode: 0o700 });
-const stamp = new Date().toISOString().replace(/[-:.]/g, '').replace('Z', 'Z');
+const stamp = new Date().toISOString().replace(/[-:.]/g, '');
 const nonce = randomUUID().slice(0, 8);
 const stem = `postgres-${sourceLabel}-${stamp}-${nonce}`;
 const finalPath = path.join(outputDir, `${stem}.dump.age`);
@@ -115,6 +115,7 @@ const checksumPath = `${finalPath}.sha256`;
 const manifestPath = `${finalPath}.json`;
 
 let completed = false;
+let failure = null;
 try {
   const age = spawn('age', ['--encrypt', '--recipient', recipient, '--output', partialPath], {
     env: baseEnv,
@@ -178,9 +179,10 @@ try {
   process.stdout.write(`sha256=${checksum}\nbytes=${encryptedStat.size}\n`);
   process.stdout.write(`offsite_verified=false\nrestore_verified=false\npitr_verified=UNVERIFIED\n`);
 } catch (error) {
-  fail(error instanceof Error ? error.message : 'backup creation failed', 20);
+  failure = error instanceof Error ? error.message : 'backup creation failed';
 } finally {
   if (!completed) {
     await unlink(partialPath).catch(() => {});
   }
 }
+if (failure) fail(failure, 20);
