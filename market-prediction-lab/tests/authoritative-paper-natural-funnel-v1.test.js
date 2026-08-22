@@ -104,6 +104,24 @@ test("Candidate is the first zero only after Universe and Scanner Evaluated are 
   assert.equal(result.naturalRuntimeSha, SHA);
 });
 
+test("natural dataset identity is stable across read-only re-observation time", async () => {
+  const wiring = sourceWiring({ cards: [], totalCount: 100, completedCount: 20, producer: readyProducer });
+  const firstRuntime = createNaturalFunnelObservedPaperRuntimeFromSourceWiring({
+    sourceWiring: wiring,
+    now: () => NOW,
+    baseRuntimeFactory: (options) => baseRuntimeFactory(options, { invokeProducer: false }),
+  });
+  const secondRuntime = createNaturalFunnelObservedPaperRuntimeFromSourceWiring({
+    sourceWiring: wiring,
+    now: () => NOW + 60_000,
+    baseRuntimeFactory: (options) => baseRuntimeFactory(options, { invokeProducer: false }),
+  });
+  const first = await firstRuntime({ market: "CRYPTO_FUTURES", cycle: cycle() });
+  const second = await secondRuntime({ market: "CRYPTO_FUTURES", cycle: cycle() });
+  assert.notEqual(first.naturalFunnelMeasurements[0].measuredAtMs, second.naturalFunnelMeasurements[0].measuredAtMs);
+  assert.equal(first.naturalEvidenceIdentity, second.naturalEvidenceIdentity);
+});
+
 test("Evidence Complete is measured zero when every evaluated candidate has authoritative source-missing evidence", async () => {
   const cards = [Object.freeze({ id: "c1" }), Object.freeze({ id: "c2" })];
   const wiring = sourceWiring({
