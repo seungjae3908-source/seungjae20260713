@@ -249,6 +249,7 @@ test('mobile AI Chart 2.0 keeps chart usable and on-demand MTF inside viewport',
 
   await page.getByRole('tab', { name: '차트', exact: true }).click();
   await expect(page.getByTestId('unified-analysis-chart')).toBeVisible();
+  await expect(page.getByTestId('ai-chart-v2-signal-overlay')).toBeVisible();
   await expect.poll(() => totalChartCalls(mock.calls)).toBe(1);
   await page.getByRole('button', { name: /지표 설정/ }).click();
   await expect(page.getByTestId('overlay-markers')).toBeVisible();
@@ -256,7 +257,6 @@ test('mobile AI Chart 2.0 keeps chart usable and on-demand MTF inside viewport',
 
   await page.getByRole('tab', { name: '상세', exact: true }).click();
   await expect(page.getByTestId('ai-chart-v2-intelligence')).toBeVisible();
-  await expect(page.getByTestId('ai-chart-v2-signal-overlay')).toBeVisible();
   await expect(page.getByTestId('multi-timeframe-ai')).toBeVisible();
   await expect(page.getByTestId('mtf-not-loaded')).toBeVisible();
   await page.getByTestId('load-multi-timeframe').click();
