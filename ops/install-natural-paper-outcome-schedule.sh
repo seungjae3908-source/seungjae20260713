@@ -65,9 +65,12 @@ const researchCodeSha = String(state?.identity?.researchCodeSha ?? '').trim().to
 if (!strategyId || !/^[0-9a-f]{40}$/.test(researchCodeSha)) process.exit(1);
 process.stdout.write(`${strategyId}\n${researchCodeSha}\n`);
 NODE
-  ) || fail "existing Paper runtime identity is invalid" 8
+  )
+  [[ "${#STATE_IDENTITY[@]}" == 2 ]] || fail "existing Paper runtime identity is invalid" 8
   EXISTING_STRATEGY_ID="${STATE_IDENTITY[0]:-}"
   EXISTING_RESEARCH_SHA="${STATE_IDENTITY[1]:-}"
+  [[ -n "$EXISTING_STRATEGY_ID" && "$EXISTING_RESEARCH_SHA" =~ ^[0-9a-f]{40}$ ]] \
+    || fail "existing Paper runtime identity is invalid" 8
 
   if [[ "$EXISTING_RESEARCH_SHA" == "$TARGET_SHA" && "$EXISTING_STRATEGY_ID" != "$EXPECTED_STRATEGY_ID" ]]; then
     EXISTING_MANAGED_CRON_COUNT="$(crontab -l 2>/dev/null | grep -Fc "$TAG" || true)"
