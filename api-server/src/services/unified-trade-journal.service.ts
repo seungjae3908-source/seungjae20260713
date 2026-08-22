@@ -322,14 +322,14 @@ function costComponent(
     : { status: 'READY' as const, source, reason: null });
 }
 
-function costEvidenceFromValues(
+export function costEvidenceFromValues(
   fees: number | null,
   tax: number | null,
   source: JournalCostEvidenceSource,
 ): JournalCostEvidence {
   const feesEvidence = costComponent(fees, source, 'JOURNAL_FEES_EVIDENCE_MISSING');
   const taxEvidence = costComponent(tax, source, 'JOURNAL_TAX_EVIDENCE_MISSING');
-  const reasons = [feesEvidence.reason, taxEvidence.reason].filter((item): item is string => item != null);
+  const reasons = [feesEvidence.reason, taxEvidence.reason].flatMap((item) => item == null ? [] : [item]);
   return Object.freeze({
     status: reasons.length === 0 ? 'READY' as const : 'NOT_AVAILABLE' as const,
     reasons: Object.freeze(reasons),
@@ -347,7 +347,7 @@ function mergeCostEvidence(left: JournalCostEvidence, right: JournalCostEvidence
   const tax = Object.freeze(taxReady
     ? { status: 'READY' as const, source: 'ORDER_LEGS' as const, reason: null }
     : { status: 'NOT_AVAILABLE' as const, source: null, reason: 'JOURNAL_TAX_EVIDENCE_MISSING' });
-  const reasons = [fees.reason, tax.reason].filter((item): item is string => item != null);
+  const reasons = [fees.reason, tax.reason].flatMap((item) => item == null ? [] : [item]);
   return Object.freeze({
     status: reasons.length === 0 ? 'READY' as const : 'NOT_AVAILABLE' as const,
     reasons: Object.freeze(reasons),
@@ -902,8 +902,10 @@ function filterCycles(cycles: UnifiedTradeCycle[], filters: UnifiedJournalFilter
   });
 }
 
+type CompleteNetCycle = UnifiedTradeCycle & { fees: number; tax: number; netPnl: number };
+
 function completeNetCycles(cycles: UnifiedTradeCycle[]) {
-  return cycles.filter((cycle): cycle is UnifiedTradeCycle & { fees: number; tax: number; netPnl: number } => (
+  return cycles.filter((cycle): cycle is CompleteNetCycle => (
     cycle.costEvidence.status === 'READY' && cycle.fees != null && cycle.tax != null && cycle.netPnl != null
   ));
 }
@@ -927,13 +929,13 @@ function groupMetric(cycles: UnifiedTradeCycle[], selector: (cycle: UnifiedTrade
   }).sort((left, right) => left.key.localeCompare(right.key));
 }
 
-function currencyMetrics(cycles: Array<UnifiedTradeCycle & { netPnl: number }>, selector: (cycle: UnifiedTradeCycle & { netPnl: number }) => number): CurrencyMetric[] {
+function currencyMetrics(cycles: CompleteNetCycle[], selector: (cycle: CompleteNetCycle) => number): CurrencyMetric[] {
   const totals = new Map<TradeCurrency, number>();
   for (const cycle of cycles) totals.set(cycle.currency, (totals.get(cycle.currency) ?? 0) + selector(cycle));
   return [...totals.entries()].map(([currency, value]) => ({ currency, value })).sort((a, b) => a.currency.localeCompare(b.currency));
 }
 
-function maximumConsecutiveLosses(cycles: Array<UnifiedTradeCycle & { netPnl: number }>) {
+function maximumConsecutiveLosses(cycles: CompleteNetCycle[]) {
   let current = 0;
   let maximum = 0;
   for (const cycle of [...cycles].sort((a, b) => Date.parse(a.closedAt!) - Date.parse(b.closedAt!))) {
