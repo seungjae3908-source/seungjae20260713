@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Candle, Timeframe } from '../sample/types';
-import { MarketDataService } from './market-data.service';
 import {
+  ScanProviderUnavailableError,
   createBoundedScannerService,
   type ScanExecutionOptions,
 } from './bounded-scanner.service';
@@ -12,6 +12,7 @@ import { applyStockSignalPolicy } from './scanner-signal-policy.service';
 import { applyScannerSignalLifecycle } from './scanner-signal-lifecycle.service';
 import { applyScannerQuantHardening } from './scanner-quant-hardening.service';
 import { applyScannerMarketProfile } from './scanner-market-profile-overlay.service';
+import { ScannerProviderHealthTracker } from './scanner-provider-health.service';
 import {
   scannerContextTimeframe,
   scannerStrategyForTimeframe,
@@ -147,19 +148,25 @@ function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw abortError();
 }
 
-async function loadStockCandles(market: 'KR' | 'US', ticker: string, timeframe: string, signal?: AbortSignal): Promise<Candle[]> {
+async function loadStockCandles(
+  market: 'KR' | 'US',
+  ticker: string,
+  timeframe: string,
+  providerHealth: ScannerProviderHealthTracker,
+  signal?: AbortSignal,
+): Promise<Candle[]> {
   throwIfAborted(signal);
   if (market === 'US' && timeframe === '3m') {
-    const oneMinute = await MarketDataService.getCandles(ticker, '1m');
+    const oneMinute = await providerHealth.getCandles(market, ticker, '1m');
     throwIfAborted(signal);
     return aggregateUsSessionCandles(oneMinute, 1, 3);
   }
   if (market === 'US' && timeframe === '4H') {
-    const hourly = await MarketDataService.getCandles(ticker, '60m');
+    const hourly = await providerHealth.getCandles(market, ticker, '60m');
     throwIfAborted(signal);
     return aggregateUsSessionCandles(hourly, 60, 240);
   }
-  const candles = await MarketDataService.getCandles(ticker, timeframe as Timeframe);
+  const candles = await providerHealth.getCandles(market, ticker, timeframe as Timeframe);
   throwIfAborted(signal);
   return candles;
 }
@@ -171,6 +178,7 @@ function boundedCompatibilityTimeframe(timeframe: string): Timeframe {
 export const StockSignalScannerService = {
   async scan(request: StockSignalScanRequest): Promise<ScannerResponse> {
     const startedAt = Date.now();
+    const providerHealth = new ScannerProviderHealthTracker();
     const primaryTimeframe = String(request.filters.timeframe ?? '1D') === '1H' ? '60m' : String(request.filters.timeframe ?? '1D');
     const strategyMode = request.strategyMode ?? scannerStrategyForTimeframe(primaryTimeframe);
     const contextTimeframe = scannerContextTimeframe(strategyMode);
@@ -184,8 +192,8 @@ export const StockSignalScannerService = {
       getCandles: async (ticker) => {
         throwIfAborted(request.signal);
         const [candles, context] = await Promise.all([
-          loadStockCandles(request.market, ticker, primaryTimeframe, request.signal),
-          primaryTimeframe === contextTimeframe ? Promise.resolve<Candle[] | null>(null) : loadStockCandles(request.market, ticker, contextTimeframe, request.signal).catch((error: unknown) => {
+          loadStockCandles(request.market, ticker, primaryTimeframe, providerHealth, request.signal),
+          primaryTimeframe === contextTimeframe ? Promise.resolve<Candle[] | null>(null) : loadStockCandles(request.market, ticker, contextTimeframe, providerHealth, request.signal).catch((error: unknown) => {
             if (error instanceof Error && error.name === 'AbortError') throw error;
             return [];
           }),
@@ -195,7 +203,7 @@ export const StockSignalScannerService = {
         contextByTicker.set(ticker, context ?? candles);
         return candles;
       },
-      getQuote: (ticker) => MarketDataService.getQuote(ticker),
+      getQuote: (ticker) => providerHealth.getQuote(request.market, ticker),
       getContext: (entry) => publicCoreOnly ? Promise.resolve({}) : buildContext(entry),
       now: Date.now,
     });
@@ -206,12 +214,20 @@ export const StockSignalScannerService = {
       concurrency: 6,
       limit: universe.entries.length || 1,
     };
-    const raw = await scanner.scan(request.market, request.indicators, {
-      ...request.filters,
-      timeframe: boundedCompatibilityTimeframe(primaryTimeframe),
-      minimumScore: undefined,
-      maximumRiskScore: undefined,
-    }, execution);
+    let raw: Awaited<ReturnType<ReturnType<typeof createBoundedScannerService>['scan']>>;
+    try {
+      raw = await scanner.scan(request.market, request.indicators, {
+        ...request.filters,
+        timeframe: boundedCompatibilityTimeframe(primaryTimeframe),
+        minimumScore: undefined,
+        maximumRiskScore: undefined,
+      }, execution);
+    } catch (error) {
+      if (error instanceof ScanProviderUnavailableError) {
+        Object.assign(error, { providerHealth: providerHealth.snapshot() });
+      }
+      throw error;
+    }
     const selected = selectedConditions(request.indicators);
     const broadCandidates = raw.cards.map((card) => {
       const entry = entryByTicker.get(card.ticker);
@@ -272,7 +288,7 @@ export const StockSignalScannerService = {
               : `S/A 진입 검토 ${actionableCount}개 · B 관찰 ${ranking.diagnostics.bGradeCount}개`;
     const message = `${baseMessage} · 검색 후보 ${discovery.candidateCount}개 · 매매 검토 ${visibleTradeReviewCount}개`;
 
-    return {
+    const response: ScannerResponse = {
       ok: true,
       requestId: randomUUID(),
       assetClass: 'stock',
@@ -326,5 +342,6 @@ export const StockSignalScannerService = {
       orderSubmitted: false,
       exchangeRequestSent: false,
     };
+    return Object.assign(response, { providerHealth: providerHealth.snapshot() });
   },
 };
