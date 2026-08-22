@@ -27,7 +27,8 @@ export type TelegramPolicySignalType = (typeof TELEGRAM_POLICY_SIGNAL_TYPES)[num
 
 export const TELEGRAM_POLICY_PRIORITIES = ['CRITICAL', 'IMPORTANT', 'INFO'] as const;
 export type TelegramPolicyPriority = (typeof TELEGRAM_POLICY_PRIORITIES)[number];
-export type TelegramPolicyDeliveryMode = 'IMMEDIATE' | 'BATCHED';
+export const TELEGRAM_POLICY_DELIVERY_MODES = ['IMMEDIATE', 'BATCHED'] as const;
+export type TelegramPolicyDeliveryMode = (typeof TELEGRAM_POLICY_DELIVERY_MODES)[number];
 
 export type TelegramQuietHours = {
   enabled: boolean;
@@ -126,6 +127,27 @@ const GLOBAL_SIGNAL_TYPES = new Set<TelegramPolicySignalType>([
   'PROVIDER_SERVER_ERROR',
 ]);
 const MAX_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const POLICY_PATCH_KEYS = new Set([
+  'enabled',
+  'markets',
+  'signalTypes',
+  'priorities',
+  'quietHours',
+  'cooldownMs',
+  'sameEventDedupeMs',
+  'sameSymbolWindowMs',
+  'sameSymbolRepeatLimit',
+  'deliveryMode',
+  'digest',
+]);
+const QUIET_HOURS_PATCH_KEYS = new Set([
+  'enabled',
+  'start',
+  'end',
+  'timeZone',
+  'criticalBypass',
+]);
+const DIGEST_PATCH_KEYS = new Set(['enabled', 'windowMs']);
 
 function finiteWindow(value: number): boolean {
   return Number.isFinite(value) && value >= 0 && value <= MAX_WINDOW_MS;
@@ -137,6 +159,42 @@ function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value
 
 function uniqueKnown<T extends string>(values: readonly T[], allowed: readonly T[]): boolean {
   return values.every((value) => isOneOf(value, allowed)) && new Set(values).size === values.length;
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function assertKnownKeys(value: Record<string, unknown>, allowed: Set<string>): void {
+  if (Object.keys(value).some((key) => !allowed.has(key))) {
+    throw new Error('TELEGRAM_ALERT_POLICY_INVALID');
+  }
+}
+
+function knownArray<T extends string>(value: unknown, allowed: readonly T[]): T[] {
+  if (!Array.isArray(value) || !uniqueKnown(value as T[], allowed)) {
+    throw new Error('TELEGRAM_ALERT_POLICY_INVALID');
+  }
+  return [...value] as T[];
+}
+
+function finiteNumber(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new Error('TELEGRAM_ALERT_POLICY_INVALID');
+  }
+  return value;
+}
+
+function booleanValue(value: unknown): boolean {
+  if (typeof value !== 'boolean') throw new Error('TELEGRAM_ALERT_POLICY_INVALID');
+  return value;
+}
+
+function stringValue(value: unknown): string {
+  if (typeof value !== 'string') throw new Error('TELEGRAM_ALERT_POLICY_INVALID');
+  return value;
 }
 
 function minuteOfDay(value: string): number | null {
@@ -157,7 +215,33 @@ function validTimeZone(timeZone: string): boolean {
   }
 }
 
-function validPolicy(policy: TelegramAlertPolicy): boolean {
+export function defaultTelegramAlertPolicy(userId: string): TelegramAlertPolicy {
+  return {
+    userId: userId.trim(),
+    enabled: false,
+    markets: [...TELEGRAM_POLICY_MARKETS],
+    signalTypes: [...TELEGRAM_POLICY_SIGNAL_TYPES],
+    priorities: [...TELEGRAM_POLICY_PRIORITIES],
+    quietHours: {
+      enabled: false,
+      start: '22:00',
+      end: '07:00',
+      timeZone: 'Asia/Seoul',
+      criticalBypass: false,
+    },
+    cooldownMs: 5 * 60 * 1000,
+    sameEventDedupeMs: 24 * 60 * 60 * 1000,
+    sameSymbolWindowMs: 60 * 60 * 1000,
+    sameSymbolRepeatLimit: 3,
+    deliveryMode: 'IMMEDIATE',
+    digest: {
+      enabled: false,
+      windowMs: 30 * 60 * 1000,
+    },
+  };
+}
+
+export function isValidTelegramAlertPolicy(policy: TelegramAlertPolicy): boolean {
   const start = minuteOfDay(policy.quietHours.start);
   const end = minuteOfDay(policy.quietHours.end);
   return Boolean(
@@ -176,11 +260,67 @@ function validPolicy(policy: TelegramAlertPolicy): boolean {
     && Number.isInteger(policy.sameSymbolRepeatLimit)
     && policy.sameSymbolRepeatLimit >= 0
     && policy.sameSymbolRepeatLimit <= 100
-    && ['IMMEDIATE', 'BATCHED'].includes(policy.deliveryMode)
+    && isOneOf(policy.deliveryMode, TELEGRAM_POLICY_DELIVERY_MODES)
     && typeof policy.digest.enabled === 'boolean'
     && finiteWindow(policy.digest.windowMs)
     && (policy.deliveryMode !== 'BATCHED' || (policy.digest.enabled && policy.digest.windowMs > 0))
   );
+}
+
+export function applyTelegramAlertPolicyPatch(
+  current: TelegramAlertPolicy,
+  value: unknown,
+): TelegramAlertPolicy {
+  if (!isValidTelegramAlertPolicy(current)) throw new Error('TELEGRAM_ALERT_POLICY_INVALID');
+  const patch = record(value);
+  if (!patch) throw new Error('TELEGRAM_ALERT_POLICY_INVALID');
+  assertKnownKeys(patch, POLICY_PATCH_KEYS);
+
+  const next: TelegramAlertPolicy = {
+    ...current,
+    markets: [...current.markets],
+    signalTypes: [...current.signalTypes],
+    priorities: [...current.priorities],
+    quietHours: { ...current.quietHours },
+    digest: { ...current.digest },
+  };
+
+  if ('enabled' in patch) next.enabled = booleanValue(patch.enabled);
+  if ('markets' in patch) next.markets = knownArray(patch.markets, TELEGRAM_POLICY_MARKETS);
+  if ('signalTypes' in patch) next.signalTypes = knownArray(patch.signalTypes, TELEGRAM_POLICY_SIGNAL_TYPES);
+  if ('priorities' in patch) next.priorities = knownArray(patch.priorities, TELEGRAM_POLICY_PRIORITIES);
+  if ('cooldownMs' in patch) next.cooldownMs = finiteNumber(patch.cooldownMs);
+  if ('sameEventDedupeMs' in patch) next.sameEventDedupeMs = finiteNumber(patch.sameEventDedupeMs);
+  if ('sameSymbolWindowMs' in patch) next.sameSymbolWindowMs = finiteNumber(patch.sameSymbolWindowMs);
+  if ('sameSymbolRepeatLimit' in patch) next.sameSymbolRepeatLimit = finiteNumber(patch.sameSymbolRepeatLimit);
+  if ('deliveryMode' in patch) {
+    if (!isOneOf(patch.deliveryMode, TELEGRAM_POLICY_DELIVERY_MODES)) {
+      throw new Error('TELEGRAM_ALERT_POLICY_INVALID');
+    }
+    next.deliveryMode = patch.deliveryMode;
+  }
+
+  if ('quietHours' in patch) {
+    const quietPatch = record(patch.quietHours);
+    if (!quietPatch) throw new Error('TELEGRAM_ALERT_POLICY_INVALID');
+    assertKnownKeys(quietPatch, QUIET_HOURS_PATCH_KEYS);
+    if ('enabled' in quietPatch) next.quietHours.enabled = booleanValue(quietPatch.enabled);
+    if ('start' in quietPatch) next.quietHours.start = stringValue(quietPatch.start);
+    if ('end' in quietPatch) next.quietHours.end = stringValue(quietPatch.end);
+    if ('timeZone' in quietPatch) next.quietHours.timeZone = stringValue(quietPatch.timeZone);
+    if ('criticalBypass' in quietPatch) next.quietHours.criticalBypass = booleanValue(quietPatch.criticalBypass);
+  }
+
+  if ('digest' in patch) {
+    const digestPatch = record(patch.digest);
+    if (!digestPatch) throw new Error('TELEGRAM_ALERT_POLICY_INVALID');
+    assertKnownKeys(digestPatch, DIGEST_PATCH_KEYS);
+    if ('enabled' in digestPatch) next.digest.enabled = booleanValue(digestPatch.enabled);
+    if ('windowMs' in digestPatch) next.digest.windowMs = finiteNumber(digestPatch.windowMs);
+  }
+
+  if (!isValidTelegramAlertPolicy(next)) throw new Error('TELEGRAM_ALERT_POLICY_INVALID');
+  return next;
 }
 
 function validEvent(event: TelegramPolicyEvent): boolean {
@@ -259,7 +399,7 @@ export function evaluateTelegramAlertPolicy(
   now = new Date(),
 ): TelegramPolicyDecision {
   const userId = policy.userId || event.userId || 'UNKNOWN';
-  if (!validPolicy(policy)) return suppressed(userId, 'INVALID_POLICY');
+  if (!isValidTelegramAlertPolicy(policy)) return suppressed(userId, 'INVALID_POLICY');
   if (!validEvent(event) || !Number.isFinite(now.getTime())) return suppressed(userId, 'INVALID_EVENT');
   if (policy.userId !== event.userId) return suppressed(policy.userId, 'OWNER_MISMATCH');
   if (!policy.enabled) return suppressed(policy.userId, 'DISABLED');
@@ -290,7 +430,7 @@ export function evaluateTelegramAlertPolicy(
   if (cooldownHit) return suppressed(policy.userId, 'COOLDOWN');
 
   const symbol = normalizedSymbol(event.symbol);
-  if (symbol && policy.sameSymbolRepeatLimit >= 0) {
+  if (symbol && policy.sameSymbolRepeatLimit > 0 && policy.sameSymbolWindowMs > 0) {
     const repeats = userHistory.filter((item) => {
       const at = deliveredAt(item);
       return normalizedSymbol(item.symbol) === symbol
