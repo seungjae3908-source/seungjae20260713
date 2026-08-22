@@ -97,6 +97,13 @@ jobs:
           }
       - name: Report every missing or invalid staging setting
         run: node api-server/scripts/verify-phase10-staging-readiness.mjs --preflight
+      - name: Verify staging admin password authentication before deployment path
+        env:
+          SUPABASE_URL: ${{ env.STAGING_SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ env.STAGING_SUPABASE_ANON_KEY }}
+          ADMIN_EMAIL: ${{ env.STAGING_ADMIN_EMAIL }}
+          ADMIN_PASSWORD: ${{ env.STAGING_ADMIN_PASSWORD }}
+        run: node api-server/scripts/verify-staging-admin-auth-preflight.mjs
       - name: Record non-mutating preflight result
         if: success() && inputs.action == 'preflight'
         run: |
@@ -108,6 +115,7 @@ jobs:
             echo '- PM2 changed: `false`'
             echo '- Database changed: `false`'
             echo '- Production changed: `false`'
+            echo '- Staging admin password authentication: `verified` (identity not recorded)'
             echo '- A deploy candidate must be re-run with `run_full_validation=true`.'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -169,48 +177,7 @@ jobs:
           SUPABASE_ANON_KEY: ${{ env.STAGING_SUPABASE_ANON_KEY }}
           ADMIN_EMAIL: ${{ env.STAGING_ADMIN_EMAIL }}
           ADMIN_PASSWORD: ${{ env.STAGING_ADMIN_PASSWORD }}
-        run: |
-          set -Eeuo pipefail
-          node <<'NODE'
-          const { createHash } = require('node:crypto');
-          const fs = require('node:fs');
-          const required = (name) => {
-            const value = String(process.env[name] ?? '').trim();
-            if (!value) throw new Error(`${name} is required for snapshot-v2 staging publisher binding`);
-            return value;
-          };
-          (async () => {
-            const supabaseUrl = required('SUPABASE_URL').replace(/\/+$/u, '');
-            const anonKey = required('SUPABASE_ANON_KEY');
-            const email = required('ADMIN_EMAIL');
-            const password = required('ADMIN_PASSWORD');
-            const response = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=password`, {
-              method: 'POST',
-              headers: {
-                apikey: anonKey,
-                'content-type': 'application/json',
-              },
-              body: JSON.stringify({ email, password }),
-              signal: AbortSignal.timeout(15_000),
-            });
-            if (!response.ok) {
-              throw new Error(`Staging admin authentication failed with HTTP ${response.status}; snapshot binding not configured`);
-            }
-            const body = await response.json();
-            const userId = String(body?.user?.id ?? '').trim();
-            const accessToken = String(body?.access_token ?? '').trim();
-            if (!userId) throw new Error('Staging admin identity unavailable; snapshot binding not configured');
-            const digest = createHash('sha256').update(userId, 'utf8').digest('hex');
-            process.stdout.write(`::add-mask::${userId}\n`);
-            if (accessToken) process.stdout.write(`::add-mask::${accessToken}\n`);
-            process.stdout.write(`::add-mask::${digest}\n`);
-            fs.appendFileSync(process.env.GITHUB_OUTPUT, `publisher_sha256=${digest}\n`);
-            process.stdout.write('snapshot-v2 staging publisher binding resolved without recording account identity\n');
-          })().catch((error) => {
-            console.error(error instanceof Error ? error.message : 'snapshot-v2 publisher binding failed');
-            process.exit(1);
-          });
-          NODE
+        run: node api-server/scripts/verify-staging-admin-auth-preflight.mjs --write-publisher-digest
       - name: Configure staging SSH
         run: |
           set -Eeuo pipefail
