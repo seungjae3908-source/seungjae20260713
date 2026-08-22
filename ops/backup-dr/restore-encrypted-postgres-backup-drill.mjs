@@ -119,6 +119,7 @@ if (!Number.isInteger(beforeCount) || beforeCount !== 0) {
 
 const tempDir = await mkdtemp(path.join(os.tmpdir(), 'backup-restore-identity-'));
 const identityPath = path.join(tempDir, 'age-identity.txt');
+let failure = null;
 try {
   await writeFile(identityPath, `${ageIdentity}\n`, { mode: 0o600, flag: 'wx' });
 
@@ -148,7 +149,7 @@ FROM information_schema.tables
 WHERE table_schema NOT IN ('pg_catalog', 'information_schema');
 `));
   if (!Number.isInteger(afterCount) || afterCount <= 0) {
-    fail('restore completed without observable restored tables', 16);
+    throw new Error('restore completed without observable restored tables');
   }
 
   process.stdout.write(`${JSON.stringify({
@@ -165,7 +166,8 @@ WHERE table_schema NOT IN ('pg_catalog', 'information_schema');
     storageObjectRestoreVerified: false,
   }, null, 2)}\n`);
 } catch (error) {
-  fail(error instanceof Error ? error.message : 'restore drill failed', 20);
+  failure = error instanceof Error ? error.message : 'restore drill failed';
 } finally {
   await rm(tempDir, { recursive: true, force: true }).catch(() => {});
 }
+if (failure) fail(failure, 20);
