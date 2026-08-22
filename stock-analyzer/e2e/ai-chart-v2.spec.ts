@@ -243,21 +243,26 @@ test('mobile AI Chart 2.0 keeps chart usable and on-demand MTF inside viewport',
   const mock = await installMocks(context);
   await page.goto(chartUrl);
 
+  await expect(page.getByTestId('ai-chart-mobile-summary')).toBeVisible();
+  expect(totalChartCalls(mock.calls)).toBe(0);
+  await expectNoHorizontalOverflow(page);
+
+  await page.getByRole('tab', { name: '차트', exact: true }).click();
   await expect(page.getByTestId('unified-analysis-chart')).toBeVisible();
+  await expect.poll(() => totalChartCalls(mock.calls)).toBe(1);
+  await page.getByRole('button', { name: /지표 설정/ }).click();
+  await expect(page.getByTestId('overlay-markers')).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+
+  await page.getByRole('tab', { name: '상세', exact: true }).click();
   await expect(page.getByTestId('ai-chart-v2-intelligence')).toBeVisible();
   await expect(page.getByTestId('ai-chart-v2-signal-overlay')).toBeVisible();
-  await expect.poll(() => totalChartCalls(mock.calls)).toBe(1);
-  await page.getByTestId('strategy-mode-SWING').click();
   await expect(page.getByTestId('multi-timeframe-ai')).toBeVisible();
   await expect(page.getByTestId('mtf-not-loaded')).toBeVisible();
   await page.getByTestId('load-multi-timeframe').click();
-  for (const timeframe of ['15m', '1H', '4H', '1D']) {
+  for (const timeframe of ['1m', '3m', '5m', '15m']) {
     await expect(page.getByTestId(`mtf-${timeframe}`)).toBeVisible();
   }
-  await expectNoHorizontalOverflow(page);
-
-  await page.getByRole('button', { name: /지표 설정/ }).click();
-  await expect(page.getByTestId('overlay-markers')).toBeVisible();
   await expectNoHorizontalOverflow(page);
   expect(mock.privateTradingRequests).toEqual([]);
 });
