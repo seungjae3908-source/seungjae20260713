@@ -17,6 +17,7 @@ export const TELEGRAM_POLICY_SIGNAL_TYPES = [
   'LONG',
   'SHORT',
   'NO_TRADE',
+  'PRICE_TARGET',
   'STRATEGY_HEALTH',
   'CHAMPION',
   'RESEARCH',
@@ -127,6 +128,8 @@ const GLOBAL_SIGNAL_TYPES = new Set<TelegramPolicySignalType>([
   'PROVIDER_SERVER_ERROR',
 ]);
 const MAX_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const MAX_RUNTIME_HISTORY_PER_USER = 256;
+const runtimeHistoryByUser = new Map<string, TelegramPolicyDeliveryHistory[]>();
 const POLICY_PATCH_KEYS = new Set([
   'enabled',
   'markets',
@@ -202,7 +205,8 @@ function minuteOfDay(value: string): number | null {
   if (!match) return null;
   const hour = Number(match[1]);
   const minute = Number(match[2]);
-  if (!Number.isInteger(hour) || hour < 0 || hour > 23 || !Number.isInteger(minute) || minute < 0 || minute > 59) return null;
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) return null;
+  if (!Number.isInteger(minute) || minute < 0 || minute > 59) return null;
   return hour * 60 + minute;
 }
 
@@ -326,7 +330,8 @@ export function applyTelegramAlertPolicyPatch(
 function validEvent(event: TelegramPolicyEvent): boolean {
   const occurredAt = Date.parse(event.occurredAt);
   if (!event.userId.trim() || !event.eventId.trim() || !Number.isFinite(occurredAt)) return false;
-  if (!isOneOf(event.signalType, TELEGRAM_POLICY_SIGNAL_TYPES) || !isOneOf(event.priority, TELEGRAM_POLICY_PRIORITIES)) return false;
+  if (!isOneOf(event.signalType, TELEGRAM_POLICY_SIGNAL_TYPES)) return false;
+  if (!isOneOf(event.priority, TELEGRAM_POLICY_PRIORITIES)) return false;
   if (event.market != null && !isOneOf(event.market, TELEGRAM_POLICY_MARKETS)) return false;
   if (event.market == null && !GLOBAL_SIGNAL_TYPES.has(event.signalType)) return false;
   return true;
@@ -380,6 +385,39 @@ function historyForUser(
   return history.filter((item) => item.userId === userId && deliveredAt(item) != null);
 }
 
+function runtimeHistory(userId: string, now: Date): TelegramPolicyDeliveryHistory[] {
+  const nowMs = now.getTime();
+  const current = runtimeHistoryByUser.get(userId) ?? [];
+  const pruned = current.filter((item) => {
+    const at = deliveredAt(item);
+    return at != null && nowMs >= at && nowMs - at <= MAX_WINDOW_MS;
+  });
+  if (pruned.length) runtimeHistoryByUser.set(userId, pruned);
+  else runtimeHistoryByUser.delete(userId);
+  return pruned;
+}
+
+function recordRuntimeDelivery(event: TelegramPolicyEvent, now: Date): void {
+  const current = runtimeHistory(event.userId, now);
+  const next: TelegramPolicyDeliveryHistory[] = [
+    ...current,
+    {
+      userId: event.userId,
+      eventId: event.eventId,
+      market: event.market,
+      signalType: event.signalType,
+      priority: event.priority,
+      symbol: event.symbol,
+      deliveredAt: now.toISOString(),
+    },
+  ];
+  runtimeHistoryByUser.set(event.userId, next.slice(-MAX_RUNTIME_HISTORY_PER_USER));
+}
+
+export function clearTelegramAlertPolicyRuntimeHistory(): void {
+  runtimeHistoryByUser.clear();
+}
+
 function suppressed(userId: string, reason: TelegramPolicyReason): TelegramPolicyDecision {
   return {
     action: 'SUPPRESSED',
@@ -417,14 +455,21 @@ export function evaluateTelegramAlertPolicy(
   const userHistory = historyForUser(policy.userId, history);
   const duplicate = userHistory.some((item) => {
     const at = deliveredAt(item);
-    return item.eventId === event.eventId && at != null && nowMs >= at && nowMs - at < policy.sameEventDedupeMs;
+    return item.eventId === event.eventId
+      && at != null
+      && nowMs >= at
+      && nowMs - at < policy.sameEventDedupeMs;
   });
   if (duplicate) return suppressed(policy.userId, 'SAME_EVENT_DUPLICATE');
 
   const subject = eventSubject(event);
   const cooldownHit = userHistory.some((item) => {
     const at = deliveredAt(item);
-    const sameSubject = [item.market ?? 'GLOBAL', item.signalType, normalizedSymbol(item.symbol) ?? 'GLOBAL'].join(':') === subject;
+    const sameSubject = [
+      item.market ?? 'GLOBAL',
+      item.signalType,
+      normalizedSymbol(item.symbol) ?? 'GLOBAL',
+    ].join(':') === subject;
     return sameSubject && at != null && nowMs >= at && nowMs - at < policy.cooldownMs;
   });
   if (cooldownHit) return suppressed(policy.userId, 'COOLDOWN');
@@ -438,7 +483,9 @@ export function evaluateTelegramAlertPolicy(
         && nowMs >= at
         && nowMs - at < policy.sameSymbolWindowMs;
     }).length;
-    if (repeats >= policy.sameSymbolRepeatLimit) return suppressed(policy.userId, 'SAME_SYMBOL_REPEAT_LIMIT');
+    if (repeats >= policy.sameSymbolRepeatLimit) {
+      return suppressed(policy.userId, 'SAME_SYMBOL_REPEAT_LIMIT');
+    }
   }
 
   if (policy.deliveryMode === 'BATCHED') {
@@ -472,12 +519,9 @@ export async function deliverTelegramAlertWithPolicy(input: {
   now?: Date;
   sender?: TelegramAlertSender;
 }): Promise<TelegramPolicyDeliveryResult> {
-  const decision = evaluateTelegramAlertPolicy(
-    input.policy,
-    input.event,
-    input.history ?? [],
-    input.now ?? new Date(),
-  );
+  const now = input.now ?? new Date();
+  const history = input.history ?? runtimeHistory(input.policy.userId, now);
+  const decision = evaluateTelegramAlertPolicy(input.policy, input.event, history, now);
   if (decision.action !== 'IMMEDIATE') {
     return { decision, transport: null, safety: TELEGRAM_POLICY_SAFETY };
   }
@@ -489,5 +533,6 @@ export async function deliverTelegramAlertWithPolicy(input: {
   } catch {
     transport = { ok: false, attempts: 0, skipped: 'DELIVERY_FAILED' };
   }
+  if (transport.ok && input.history == null) recordRuntimeDelivery(input.event, now);
   return { decision, transport, safety: TELEGRAM_POLICY_SAFETY };
 }
