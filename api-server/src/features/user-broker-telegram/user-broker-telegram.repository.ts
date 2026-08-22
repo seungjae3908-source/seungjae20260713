@@ -1,6 +1,7 @@
 import { getSupabase, hasSupabaseServerKey } from '../../lib/supabase';
 import {
   DEFAULT_NOTIFICATION_PREFERENCES,
+  NOTIFICATION_PREFERENCE_KEYS,
   type NotificationDelivery,
   type NotificationDeliveryState,
   type NotificationPreferences,
@@ -40,6 +41,37 @@ function copy<T>(value: T): T {
 
 function normalizedPreferences(value?: Partial<NotificationPreferences> | null): NotificationPreferences {
   return { ...DEFAULT_NOTIFICATION_PREFERENCES, ...(value ?? {}) };
+}
+
+export const TELEGRAM_NOTIFICATION_PREFERENCES_MARKER = 'telegram_preferences_v1';
+const telegramPreferenceKeys = new Set<string>(NOTIFICATION_PREFERENCE_KEYS);
+
+export function notificationPreferencesFromEnabledTypes(value: unknown): NotificationPreferences {
+  if (!Array.isArray(value) || !value.includes(TELEGRAM_NOTIFICATION_PREFERENCES_MARKER)) {
+    return normalizedPreferences();
+  }
+  const enabled = new Set(value.filter((item): item is string => typeof item === 'string'));
+  return Object.fromEntries(
+    NOTIFICATION_PREFERENCE_KEYS.map((key) => [key, enabled.has(key)]),
+  ) as NotificationPreferences;
+}
+
+export function enabledTypesWithTelegramPreferences(
+  value: unknown,
+  preferences: NotificationPreferences,
+): string[] {
+  const preserved = Array.isArray(value)
+    ? value.filter((item): item is string => (
+      typeof item === 'string'
+      && item !== TELEGRAM_NOTIFICATION_PREFERENCES_MARKER
+      && !telegramPreferenceKeys.has(item)
+    ))
+    : [];
+  return [
+    ...new Set(preserved),
+    TELEGRAM_NOTIFICATION_PREFERENCES_MARKER,
+    ...NOTIFICATION_PREFERENCE_KEYS.filter((key) => preferences[key]),
+  ];
 }
 
 export class InMemoryUserBrokerTelegramRepository implements UserBrokerTelegramRepository {
@@ -159,6 +191,64 @@ function secureClient() {
   return getSupabase();
 }
 
+const NOTIFICATION_PREFERENCES_WRITE_RETRY_LIMIT = 4;
+
+function nextNotificationPreferencesUpdatedAt(
+  requestedUpdatedAt: string,
+  observedUpdatedAt: string | null,
+): string {
+  const requestedMs = Date.parse(requestedUpdatedAt);
+  if (!Number.isFinite(requestedMs)) throw databaseError();
+  if (!observedUpdatedAt) return new Date(requestedMs).toISOString();
+  const observedMs = Date.parse(observedUpdatedAt);
+  if (!Number.isFinite(observedMs)) throw databaseError();
+  return new Date(Math.max(requestedMs, observedMs + 1)).toISOString();
+}
+
+export async function mutateNotificationEnabledTypes(
+  userId: string,
+  requestedUpdatedAt: string,
+  mutate: (value: unknown) => string[],
+): Promise<string[]> {
+  const table = secureClient().from('notification_preferences');
+  for (let attempt = 0; attempt < NOTIFICATION_PREFERENCES_WRITE_RETRY_LIMIT; attempt += 1) {
+    const { data, error: readError } = await table
+      .select('enabled_types, updated_at')
+      .eq('member_id', userId)
+      .maybeSingle();
+    if (readError) throw databaseError();
+
+    const row = data as { enabled_types?: unknown; updated_at?: unknown } | null;
+    const observedUpdatedAt = row && typeof row.updated_at === 'string' && row.updated_at.trim()
+      ? row.updated_at
+      : null;
+    if (row && !observedUpdatedAt) throw databaseError();
+    const enabledTypes = mutate(row?.enabled_types);
+    const nextUpdatedAt = nextNotificationPreferencesUpdatedAt(requestedUpdatedAt, observedUpdatedAt);
+
+    if (!row) {
+      const { error: insertError } = await table.insert({
+        member_id: userId,
+        enabled_types: enabledTypes,
+        updated_at: nextUpdatedAt,
+      });
+      if (!insertError) return enabledTypes;
+      if (String(insertError.code ?? '') === '23505') continue;
+      throw databaseError();
+    }
+
+    const { data: updated, error: updateError } = await table
+      .update({ enabled_types: enabledTypes, updated_at: nextUpdatedAt })
+      .eq('member_id', userId)
+      .eq('updated_at', observedUpdatedAt)
+      .select('member_id')
+      .maybeSingle();
+    if (updateError) throw databaseError();
+    if (updated?.member_id) return enabledTypes;
+  }
+  throw new Error('USER_BROKER_TELEGRAM_STORAGE_CONFLICT');
+}
+
 function toConnection(row: Record<string, unknown>): UserTelegramConnection {
   return {
     userId: String(row.user_id),
@@ -243,16 +333,17 @@ export function createSupabaseUserBrokerTelegramRepository(): UserBrokerTelegram
 
     async getPreferences(userId) {
       const { data, error } = await secureClient().from('notification_preferences')
-        .select('payload').eq('user_id', userId).maybeSingle();
+        .select('enabled_types').eq('member_id', userId).maybeSingle();
       if (error) throw databaseError();
-      return normalizedPreferences((data?.payload ?? null) as Partial<NotificationPreferences> | null);
+      return notificationPreferencesFromEnabledTypes(data?.enabled_types);
     },
 
     async savePreferences(userId, preferences, updatedAt) {
-      const { error } = await secureClient().from('notification_preferences').upsert({
-        user_id: userId, payload: preferences, updated_at: updatedAt,
-      }, { onConflict: 'user_id' });
-      if (error) throw databaseError();
+      await mutateNotificationEnabledTypes(
+        userId,
+        updatedAt,
+        (enabledTypes) => enabledTypesWithTelegramPreferences(enabledTypes, preferences),
+      );
     },
 
     async insertExecutionEvent(event) {

@@ -130,7 +130,7 @@ async function seedLayout(page: Page, device: 'mobile' | 'desktop') {
 }
 
 for (const [width, height] of [[320, 760], [360, 800], [390, 844], [430, 932]] as const) {
-  test(`UI Builder mobile Signal Scanner layout is safe at ${width}x${height}`, async ({ page }) => {
+  test(`mobile ignores the legacy long Builder layout and keeps four dedicated workspaces at ${width}x${height}`, async ({ page }) => {
     const forbidden: string[] = [];
     const unexpectedHttp: string[] = [];
     const consoleErrors: string[] = [];
@@ -145,11 +145,10 @@ for (const [width, height] of [[320, 760], [360, 800], [390, 844], [430, 932]] a
     await page.setViewportSize({ width, height });
     await page.goto('/__phase11-technical-workspace-e2e');
 
-    await expect(page.getByTestId('ui-builder-signal-scanner-mobile')).toBeVisible();
-    await expect(page.getByTestId('ui-builder-surface-scanner')).toBeVisible();
-    await expect(page.getByTestId('ui-builder-surface-position')).toBeVisible();
-    await expect(page.getByTestId('ui-builder-surface-trade-review')).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'AI 신호검색기' })).toBeVisible();
+    await expect(page.getByTestId('ui-builder-signal-scanner-mobile')).toHaveCount(0);
+    const tabs = page.getByTestId('technical-mobile-tabs');
+    await expect(tabs.getByRole('tab')).toHaveCount(4);
+    await expect(page.getByRole('button', { name: '코인 현물', exact: true })).toBeVisible();
 
     const metrics = await page.evaluate(() => {
       const root = document.documentElement;
@@ -157,16 +156,13 @@ for (const [width, height] of [[320, 760], [360, 800], [390, 844], [430, 932]] a
         const style = getComputedStyle(element);
         return ['auto', 'scroll'].includes(style.overflowY) && element.scrollHeight > element.clientHeight + 1;
       });
-      const builder = document.querySelector<HTMLElement>('[data-testid="ui-builder-signal-scanner-mobile"]');
       return {
         overflow: root.scrollWidth > root.clientWidth,
         nestedVerticalScrollCount: scrollable.length,
-        bottomPadding: builder ? Number.parseFloat(getComputedStyle(builder).paddingBottom) : 0,
       };
     });
     expect(metrics.overflow).toBe(false);
     expect(metrics.nestedVerticalScrollCount).toBeLessThanOrEqual(1);
-    expect(metrics.bottomPadding).toBeGreaterThanOrEqual(80);
     expect(forbidden).toEqual([]);
     expect(unexpectedHttp).toEqual([]);
     expect(consoleErrors).toEqual([]);
@@ -204,7 +200,7 @@ for (const [width, height] of [[1024, 800], [1280, 900], [1440, 1000], [1920, 10
   });
 }
 
-test('invalid Builder layout falls back to the current Stock App workspace', async ({ page }) => {
+test('invalid mobile Builder layout cannot inject a private endpoint and still opens the canonical scanner', async ({ page }) => {
   const forbidden: string[] = [];
   const unexpectedHttp: string[] = [];
   await installMocks(page, forbidden, unexpectedHttp);
@@ -221,19 +217,20 @@ test('invalid Builder layout falls back to the current Stock App workspace', asy
   await page.goto('/__phase11-technical-workspace-e2e');
 
   await expect(page.getByTestId('ui-builder-signal-scanner-mobile')).toHaveCount(0);
-  await expect(page.getByRole('heading', { name: 'AI 신호검색기' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '코인 현물', exact: true })).toBeVisible();
   expect(forbidden).toEqual([]);
   expect(unexpectedHttp).toEqual([]);
 });
 
-test('Mobile and Desktop published layouts remain isolated across viewport changes', async ({ page }) => {
+test('mobile and desktop remain isolated across viewport changes', async ({ page }) => {
   await installMocks(page, [], []);
   await seedLayout(page, 'mobile');
   await seedLayout(page, 'desktop');
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/__phase11-technical-workspace-e2e');
-  await expect(page.getByTestId('ui-builder-signal-scanner-mobile')).toHaveAttribute('data-layout-id', 'signal-scanner-integration-mobile');
+  await expect(page.getByTestId('ui-builder-signal-scanner-mobile')).toHaveCount(0);
+  await expect(page.getByTestId('technical-mobile-tabs').getByRole('tab')).toHaveCount(4);
 
   await page.setViewportSize({ width: 1280, height: 900 });
   await expect(page.getByTestId('ui-builder-signal-scanner-desktop')).toHaveAttribute('data-layout-id', 'signal-scanner-integration-desktop');

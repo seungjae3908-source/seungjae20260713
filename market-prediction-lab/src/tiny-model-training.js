@@ -1,4 +1,5 @@
 import { BASELINE_MODEL, predictTinyModel } from "./tiny-model.js";
+import { predictDeployedTinyModel, DEPLOYED_INFERENCE_CONTRACT } from "./deployment-inference.js";
 
 const CLASS_NAMES = Object.freeze(["bullish", "neutral", "bearish"]);
 
@@ -28,6 +29,16 @@ function assertRecords(records, name, { min = 1 } = {}) {
     }
     if (!CLASS_NAMES.includes(record.label.direction)) {
       throw new TypeError(`${name}[${index}].label.direction is invalid`);
+    }
+  }
+  return records;
+}
+
+function assertDeploymentRecords(records, name, options) {
+  assertRecords(records, name, options);
+  for (let index = 0; index < records.length; index += 1) {
+    if (!Number.isFinite(records[index].ruleScore)) {
+      throw new TypeError(`${name}[${index}].ruleScore is required for deployment-parity inference`);
     }
   }
   return records;
@@ -245,11 +256,19 @@ function metricsFromRows(rows) {
   });
 }
 
-export function evaluateTinyModel(records, model) {
+export function evaluateRawTinyModel(records, model) {
   assertRecords(records, "records");
   return metricsFromRows(records.map((record) => ({
     actual: record.label.direction,
     probabilities: predictTinyModel(record.features, model).probabilities,
+  })));
+}
+
+export function evaluateTinyModel(records, model) {
+  assertDeploymentRecords(records, "records");
+  return metricsFromRows(records.map((record) => ({
+    actual: record.label.direction,
+    probabilities: predictDeployedTinyModel(record, model).probabilities,
   })));
 }
 
@@ -266,7 +285,7 @@ export function calibrateTemperature(records, model, {
   maxTemperature = 3,
   step = 0.05,
 } = {}) {
-  assertRecords(records, "records", { min: 30 });
+  assertDeploymentRecords(records, "records", { min: 30 });
   if (!(minTemperature >= 0.2 && maxTemperature <= 5 && minTemperature <= maxTemperature)) {
     throw new RangeError("temperature range is invalid");
   }
@@ -278,7 +297,7 @@ export function calibrateTemperature(records, model, {
     const candidate = { ...model, temperature };
     let loss = 0;
     for (const record of records) {
-      const probabilities = predictTinyModel(record.features, candidate).probabilities;
+      const probabilities = predictDeployedTinyModel(record, candidate).probabilities;
       loss -= Math.log(Math.max(probabilities[record.label.direction], 1e-12));
     }
     loss /= records.length;
@@ -292,7 +311,11 @@ export function calibrateTemperature(records, model, {
     ...model,
     id: `${model.id}-calibrated`,
     temperature: Math.round(bestTemperature * 1000) / 1000,
-    calibration: Object.freeze({ sampleCount: records.length, validationLogLoss: bestLogLoss }),
+    calibration: Object.freeze({
+      sampleCount: records.length,
+      validationLogLoss: bestLogLoss,
+      inferenceContract: DEPLOYED_INFERENCE_CONTRACT,
+    }),
   });
 }
 

@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from 'node:util';
 import type { PaperJournalRepository, StoredPaperJournalRecord } from '../../services/paper-journal.types';
 import type { TradingExchange } from '../../services/trade-automation.types';
 import type { UnifiedTradeOrder } from '../../services/unified-trade-journal.service';
+import type { MemberTier } from '../../../../packages/member-access/src/index.js';
 import { manualPortfolioEvent, UserBrokerTelegramService } from './user-broker-telegram.service';
 import type { PortfolioSyncSink, UserExecutionEvent } from './user-broker-telegram.types';
 
@@ -142,6 +143,7 @@ export async function queueManualPortfolioNotifications(
   userId: string,
   uploaded: StoredPaperJournalRecord[],
   service: UserBrokerTelegramService,
+  membership: MemberTier = 'admin',
 ) {
   let queued = 0;
   for (const record of uploaded) {
@@ -163,7 +165,7 @@ export async function queueManualPortfolioNotifications(
       price,
       occurredAt: record.updatedAt,
     });
-    const result = await service.recordEvent(event);
+    const result = await service.recordEvent(event, new Date(), membership);
     if (result.deliveryQueued) queued += 1;
   }
   return { queued, brokerSubmitCount: 0 as const, privateApiRequests: 0 as const };

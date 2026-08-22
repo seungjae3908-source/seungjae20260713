@@ -1,6 +1,16 @@
+import { evaluateUnifiedProfitabilityPromotion } from "./unified-profitability-promotion-gate-v1.js";
+
 const DEFAULT_POLICY = Object.freeze({
   maximumSymbolDependencyPenaltyPoints: 10,
   minimumPositiveSymbolRatio: 1,
+});
+
+const PROMOTION_HOLD_SAFETY = Object.freeze({
+  liveTradingAllowed: false,
+  privateTradingApiAllowed: false,
+  orderAuthority: false,
+  actualOrders: 0,
+  promotionReviewOnly: false,
 });
 
 function clamp(value, min, max) {
@@ -35,9 +45,44 @@ function aggregateStatus(candidates) {
   return "research_hold";
 }
 
+function holdPromotionAssessment(reason) {
+  return Object.freeze({
+    schemaVersion: 1,
+    strategyFingerprint: null,
+    promotionEligible: false,
+    status: "RESEARCH_HOLD",
+    reasons: Object.freeze([reason]),
+    stages: Object.freeze({ policy: false, backtest: false, selectionBias: false, shadow: false, paper: false }),
+    safety: PROMOTION_HOLD_SAFETY,
+  });
+}
+
+function promotionEvidenceForCandidate(evidenceByCandidate, rankingGroup, candidateId) {
+  if (!evidenceByCandidate || typeof evidenceByCandidate !== "object") return null;
+  return evidenceByCandidate[`${rankingGroup}:${candidateId}`] ?? evidenceByCandidate[candidateId] ?? null;
+}
+
+function buildPromotionAssessment({ evidenceByCandidate, promotionPolicy, rankingGroup, candidateId }) {
+  const evidence = promotionEvidenceForCandidate(evidenceByCandidate, rankingGroup, candidateId);
+  if (!evidence || typeof evidence !== "object") return holdPromotionAssessment("promotion:unified_evidence_not_supplied");
+  if (typeof evidence.strategyFingerprint !== "string" || evidence.strategyFingerprint.length === 0) {
+    return holdPromotionAssessment("promotion:strategy_fingerprint_missing");
+  }
+  return evaluateUnifiedProfitabilityPromotion({
+    strategyFingerprint: evidence.strategyFingerprint,
+    backtest: evidence.backtest,
+    selectionBias: evidence.selectionBias,
+    shadow: evidence.shadow,
+    paper: evidence.paper,
+    policy: promotionPolicy,
+  });
+}
+
 export function aggregateMarketGroupCandidates(results, {
   policy = DEFAULT_POLICY,
   requiredSymbolsByGroup = {},
+  promotionEvidenceByCandidate = {},
+  promotionPolicy = null,
 } = {}) {
   if (!Array.isArray(results)) throw new TypeError("results must be an array");
   if (!(policy.maximumSymbolDependencyPenaltyPoints >= 0)) throw new RangeError("maximumSymbolDependencyPenaltyPoints must be non-negative");
@@ -92,6 +137,12 @@ export function aggregateMarketGroupCandidates(results, {
       if (positiveSymbolRatio < policy.minimumPositiveSymbolRatio) flags.push("single_or_partial_symbol_dependency");
       if (symbolCandidates.some(({ candidate }) => candidate.overfitDiagnostics?.flags?.includes("low_oos_trade_sample"))) flags.push("low_oos_trade_sample");
       if (symbolCandidates.some(({ candidate }) => candidate.overfitDiagnostics?.flags?.includes("top_two_winner_dependency"))) flags.push("top_two_winner_dependency");
+      const promotionAssessment = buildPromotionAssessment({
+        evidenceByCandidate: promotionEvidenceByCandidate,
+        promotionPolicy,
+        rankingGroup,
+        candidateId: id,
+      });
       return Object.freeze({
         id,
         parameters: symbolCandidates[0].candidate.parameters,
@@ -99,6 +150,7 @@ export function aggregateMarketGroupCandidates(results, {
         qualityScoreBeforeSymbolPenalty: Number(baseQuality.toFixed(6)),
         symbolDependencyPenaltyPoints: Number(symbolDependencyPenaltyPoints.toFixed(6)),
         qualityScore: Number(qualityScore.toFixed(6)),
+        promotionAssessment,
         diagnostics: Object.freeze({
           symbolCount: symbolCandidates.length,
           requiredSymbolCount: requiredSymbols.length,

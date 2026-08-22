@@ -61,3 +61,19 @@ test("collector rejects a public provider HTTP failure", async () => {
     /UPBIT_HISTORY_HTTP_429/,
   );
 });
+
+test("collector uses the candle boundary rather than an intra-candle trade timestamp", async () => {
+  const endTime = Date.UTC(2026, 7, 12, 0, 0);
+  const all = Array.from({ length: 130 }, (_, index) => {
+    const boundary = endTime - (index + 1) * 4 * 60 * 60 * 1000;
+    return { ...row(boundary, 100 + index), timestamp: boundary + 73_456 };
+  });
+  const result = await collectUpbitSpotHistory({
+    symbol: "BTC",
+    startTime: endTime - 130 * 4 * 60 * 60 * 1000,
+    endTime,
+    minIntervalMs: 0,
+    fetchImpl: async () => response(all),
+  });
+  assert.ok(result.candles.every((item) => item.timestamp % (4 * 60 * 60 * 1000) === 0));
+});

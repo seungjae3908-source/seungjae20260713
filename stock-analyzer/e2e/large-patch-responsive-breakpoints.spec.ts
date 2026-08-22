@@ -12,7 +12,8 @@ for (const width of VIEWPORTS) {
     await page.setViewportSize({ width, height: width >= 1024 ? 900 : 844 });
     await page.goto('/__phase11-unified-search-e2e');
 
-    await expect(page.getByRole('heading', { name: '통합 자산 검색' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '종목', level: 1 })).toBeVisible();
+    await expect(page.getByRole('combobox', { name: '통합 자산 검색' })).toHaveCount(1);
     const navigation = page.getByRole('navigation', { name: '주요 메뉴' });
     await expect(navigation).toBeVisible();
 

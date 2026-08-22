@@ -13,7 +13,13 @@ import { createSupabaseSplitOrderRepository } from '../services/trade-split-orde
 import { credentialConfigurationStatus, encryptTradingCredentials } from '../services/trade-credential-vault.service';
 import { normalizeTradingPolicy } from '../services/trade-automation-risk.service';
 import { requireAdmin, type AuthenticatedRequest } from '../middleware/auth';
-import type { TradingExchange, TradingPlan, TradingPlanInput } from '../services/trade-automation.types';
+import type {
+  TradingExchange,
+  TradingOrder,
+  TradingPlan,
+  TradingPlanInput,
+  TradingSignalState,
+} from '../services/trade-automation.types';
 
 const router: IRouter = Router();
 const EXCHANGES = new Set<TradingExchange>(['bitget', 'upbit', 'kiwoom']);
@@ -145,6 +151,95 @@ function errorResponse(res: Response, error: unknown) {
   return res.status(status).json({ ok: false, error: code, secretExposed: false, orderSubmitted: false });
 }
 
+type ApprovalSignalState = 'WATCHING' | 'READY_FOR_APPROVAL' | 'WEAKENED' | 'INVALIDATED' | 'EXPIRED';
+
+function approvalSignalState(value: TradingSignalState | null | undefined): ApprovalSignalState {
+  const normalized = String(value ?? '').trim().toUpperCase();
+  if (normalized === 'ENTRY_READY' || normalized === 'READY_FOR_APPROVAL') return 'READY_FOR_APPROVAL';
+  if (normalized === 'WEAKENED') return 'WEAKENED';
+  if (normalized === 'INVALIDATED' || normalized === 'CONDITION_BROKEN') return 'INVALIDATED';
+  if (normalized === 'EXPIRED') return 'EXPIRED';
+  return 'WATCHING';
+}
+
+function approvalExpired(plan: TradingPlan, now = Date.now()) {
+  return Boolean(plan.approvalExpiresAt
+    && Number.isFinite(Date.parse(plan.approvalExpiresAt))
+    && Date.parse(plan.approvalExpiresAt) <= now);
+}
+
+function approvalReadStatus(plan: TradingPlan, now = Date.now()) {
+  const signalState = approvalSignalState(plan.marketSnapshot?.signalState);
+  const expired = approvalExpired(plan, now);
+  const approvalEnabled = plan.state === 'APPROVAL_PENDING'
+    && plan.accountMode !== 'live'
+    && signalState === 'READY_FOR_APPROVAL'
+    && !expired
+    && plan.riskAssessment?.allowed !== false;
+
+  let reasonCode: string | null = null;
+  if (plan.accountMode === 'live') reasonCode = 'LIVE_APPROVAL_LOCKED';
+  else if (expired) reasonCode = 'APPROVAL_EXPIRED';
+  else if (plan.state !== 'APPROVAL_PENDING') reasonCode = 'PLAN_NOT_APPROVAL_PENDING';
+  else if (signalState !== 'READY_FOR_APPROVAL') reasonCode = 'SIGNAL_REVALIDATION_REQUIRED';
+  else if (plan.riskAssessment?.allowed === false) reasonCode = 'RISK_CHECK_BLOCKED';
+
+  return {
+    approvalEnabled,
+    signalState,
+    planState: plan.state,
+    reasonCode,
+    expiresAt: plan.approvalExpiresAt,
+    lastValidatedAt: plan.updatedAt,
+  };
+}
+
+function approvalQueueOrder(order: TradingOrder | null) {
+  if (!order) return null;
+  return {
+    state: order.state,
+    filledQuantity: order.filledQuantity,
+    updatedAt: order.updatedAt,
+    lastErrorCode: order.lastErrorCode,
+  };
+}
+
+function approvalQueueItem(plan: TradingPlan, order: TradingOrder | null, now = Date.now()) {
+  const approval = approvalReadStatus(plan, now);
+  return {
+    id: plan.id,
+    exchange: plan.exchange,
+    accountMode: plan.accountMode,
+    strategyId: plan.strategyId,
+    signalId: plan.signalId,
+    symbol: plan.symbol,
+    market: plan.market,
+    side: plan.side,
+    orderType: plan.orderType,
+    estimatedKrw: plan.estimatedKrw,
+    quantity: plan.quantity ?? null,
+    limitPrice: plan.limitPrice ?? null,
+    stopPrice: plan.stopPrice,
+    targetPrices: plan.targetPrices,
+    splitRatios: plan.splitRatios,
+    leverage: plan.leverage ?? null,
+    signalReasons: plan.signalReasons,
+    signalWarnings: plan.riskAssessment?.warnings ?? [],
+    signalScore: null,
+    signalConfidence: null,
+    signalRiskReward: null,
+    signalState: approval.signalState,
+    signalInvalidationReason: approval.signalState === 'INVALIDATED' || approval.signalState === 'EXPIRED'
+      ? approval.reasonCode
+      : null,
+    state: plan.state,
+    approvalExpiresAt: plan.approvalExpiresAt,
+    updatedAt: plan.updatedAt,
+    approval,
+    order: approvalQueueOrder(order),
+  };
+}
+
 router.get('/status', async (req: AuthenticatedRequest, res) => {
   try {
     const { userId, repository } = context(req);
@@ -171,6 +266,49 @@ router.get('/status', async (req: AuthenticatedRequest, res) => {
       credentialVault: credentialConfigurationStatus(),
       lastOrder: orders[0] ?? null,
       actualOrderSubmittedByStatusRequest: false,
+    });
+  } catch (error) { return errorResponse(res, error); }
+});
+
+router.get('/approval-queue', async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId, repository } = context(req);
+    const plans = await repository.listPlans(userId);
+    const relevant = plans.filter((plan) => plan.state === 'APPROVAL_PENDING' || plan.state === 'EXPIRED');
+    const items = await Promise.all(relevant.map(async (plan) => approvalQueueItem(
+      plan,
+      await repository.findOrderByPlan(userId, plan.id),
+    )));
+    return res.json({
+      ok: true,
+      items,
+      count: items.length,
+      updatedAt: new Date().toISOString(),
+      orderSubmitted: false,
+      orderCanceled: false,
+      privateTradingRequestSent: false,
+    });
+  } catch (error) { return errorResponse(res, error); }
+});
+
+router.get('/plans/:id/approval-status', async (req: AuthenticatedRequest, res) => {
+  try {
+    const { userId, repository } = context(req);
+    const plan = await repository.getPlan(userId, String(req.params.id));
+    if (!plan) throw new Error('TRADE_PLAN_NOT_FOUND');
+    return res.json({
+      ok: true,
+      plan: {
+        state: plan.state,
+        signalState: approvalSignalState(plan.marketSnapshot?.signalState),
+        signalInvalidationReason: null,
+        approvalExpiresAt: plan.approvalExpiresAt,
+        updatedAt: plan.updatedAt,
+      },
+      approval: approvalReadStatus(plan),
+      orderSubmitted: false,
+      orderCanceled: false,
+      privateTradingRequestSent: false,
     });
   } catch (error) { return errorResponse(res, error); }
 });
