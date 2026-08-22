@@ -9,8 +9,13 @@ function analyzerDirectory() {
 }
 
 test('Research Center exposes the full evidence maturity ladder without fabricating missing metrics', () => {
+  const analyzer = analyzerDirectory();
   const source = fs.readFileSync(
-    path.join(analyzerDirectory(), 'src/lib/research-center-view.ts'),
+    path.join(analyzer, 'src/lib/research-center-view.ts'),
+    'utf8',
+  );
+  const dashboardSource = fs.readFileSync(
+    path.resolve(analyzer, '../research-dashboard/server.mjs'),
     'utf8',
   );
 
@@ -49,6 +54,14 @@ test('Research Center exposes the full evidence maturity ladder without fabricat
   expect(source).toContain('데이터셋/구간 미수집');
   expect(source).toContain('코드 SHA는 상세 증거에서 확인');
   expect(source).toContain('N/A and INSUFFICIENT_DATA are never rewritten to zero or PASS');
+  expect(source).toContain('authorityEvidenceComplete');
+  expect(source).toContain('안전 증거 미수집');
+  expect(source).toContain("return value == null ? '미수집'");
+
+  expect(dashboardSource).toContain('function optionalIntegerCount');
+  expect(dashboardSource).toContain('safetyEvidenceComplete');
+  expect(dashboardSource).toContain("'safety_evidence_incomplete'");
+  expect(dashboardSource).not.toContain('function integerCount');
 
   expect(source).not.toContain("overview.profitability.proven ? 'Champion 근거 미수집'");
   expect(source).not.toContain("value: '0'");
