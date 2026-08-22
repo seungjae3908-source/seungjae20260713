@@ -383,8 +383,9 @@ test('all four information rooms support direct routes, reload, history, source 
     await page.goto(path);
     await expect(page.getByRole('heading', { name: title })).toBeVisible();
     await expect(page.getByText(exchange, { exact: true })).toBeVisible();
-    await expect(page.getByText('공개 API 전용', { exact: true })).toBeVisible();
-    await expect(page.getByText('private 요청 0', { exact: true })).toBeVisible();
+    await expect(page.getByText('읽기 전용', { exact: true })).toBeVisible();
+    await expect(page.getByText('공개 API 전용', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('private 요청 0', { exact: true })).toHaveCount(0);
     await expect(page.getByLabel('데이터 출처와 신선도').first()).toContainText('출처');
     await page.reload();
     await expect(page.getByRole('heading', { name: title })).toBeVisible();
@@ -400,10 +401,10 @@ test('all four information rooms support direct routes, reload, history, source 
   await expect(page.getByRole('heading', { name: '미국주식 정보' })).toBeVisible();
 
   await page.goto('/coins/spot');
-  await expect(page.getByText('검증된 코인 뉴스 provider가 아직 연결되지 않았습니다.').first()).toBeVisible();
-  await expect(page.getByText('선물 공개 파생지표')).toHaveCount(0);
+  await expect(page.getByText('검증된 코인 뉴스 제공처가 아직 연결되지 않았습니다.').first()).toBeVisible();
+  await expect(page.getByText('선물 파생지표')).toHaveCount(0);
   await page.goto('/coins/futures');
-  await expect(page.getByText('선물 공개 파생지표')).toBeVisible();
+  await expect(page.getByText('선물 파생지표')).toBeVisible();
   await expect(page.getByText('롱 비율')).toBeVisible();
   diagnostics.assertClean();
 });
@@ -422,8 +423,8 @@ test('rapid KR to US transition aborts stale room data and keeps market isolatio
 test('partial, stale, unsupported, 429, and provider error states remain card-scoped', async ({ page }) => {
   const partialDiagnostics = await mockInformationApi(page, { partialRoom: 'stocks-kr', staleRoom: 'stocks-kr' });
   await page.goto('/stocks/kr');
-  await expect(page.getByText('부분 데이터', { exact: true }).first()).toBeVisible();
-  await expect(page.getByText('stale', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('일부 데이터', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('오래됨', { exact: true }).first()).toBeVisible();
   await expect(page.getByText('삼성전자', { exact: true })).toBeVisible();
   partialDiagnostics.assertClean();
 
@@ -432,7 +433,7 @@ test('partial, stale, unsupported, 429, and provider error states remain card-sc
   await limitedPage.goto('/coins/spot');
   await expect(limitedPage.getByRole('heading', { name: '코인 현물 정보' })).toBeVisible();
   await expect(limitedPage.getByText('제공기관 호출 한도에 도달했습니다.').first()).toBeVisible();
-  await expect(limitedPage.getByText('검증된 코인 뉴스 provider가 아직 연결되지 않았습니다.').first()).toBeVisible();
+  await expect(limitedPage.getByText('검증된 코인 뉴스 제공처가 아직 연결되지 않았습니다.').first()).toBeVisible();
   limitedDiagnostics.assertClean();
   await limitedPage.close();
 
@@ -441,7 +442,7 @@ test('partial, stale, unsupported, 429, and provider error states remain card-sc
   await outagePage.goto('/coins/futures');
   await expect(outagePage.getByRole('heading', { name: '코인 선물 정보' })).toBeVisible();
   await expect(outagePage.getByText('제공기관 장애입니다.').first()).toBeVisible();
-  await expect(outagePage.getByText('선물 공개 파생지표')).toBeVisible();
+  await expect(outagePage.getByText('선물 파생지표')).toBeVisible();
   outageDiagnostics.assertClean();
   await outagePage.close();
 });
