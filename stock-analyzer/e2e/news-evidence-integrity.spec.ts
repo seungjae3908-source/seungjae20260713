@@ -133,6 +133,7 @@ test('news tab exposes provenance and contains no fallback AI or unverified inve
   const cwd = process.cwd();
   const root = path.basename(cwd) === 'stock-analyzer' ? cwd : path.join(cwd, 'stock-analyzer');
   const source = await readFile(path.join(root, 'src/components/tabs/news-tab.tsx'), 'utf8');
+  const evidenceSource = await readFile(path.join(root, 'src/lib/news-evidence-display.ts'), 'utf8');
 
   expect(source).not.toContain('AI 요약:');
   expect(source).not.toContain('AI 분석');
@@ -151,5 +152,6 @@ test('news tab exposes provenance and contains no fallback AI or unverified inve
   expect(source).toContain('신뢰도: 공급자 미제공');
   expect(source).toContain('원문 링크 미제공');
   expect(source).toContain('주가 영향: 공급자 근거 미제공');
-  expect(source).toContain('회사명 검색 결과 · 미검증');
+  expect(source).toContain('{evidence.relevanceLabel}');
+  expect(evidenceSource).toContain('회사명 검색 결과 · 미검증');
 });
