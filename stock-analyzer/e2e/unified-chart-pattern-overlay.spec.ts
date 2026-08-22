@@ -65,7 +65,7 @@ async function installMocks(page: Page) {
     contentType: 'application/json',
     body: '{}',
   }));
-  await page.route('**/api/stocks/*/chart**', (route) => {
+  await page.route('**/api/stocks/*/candles**', (route) => {
     chartCalls += 1;
     return route.fulfill({
       status: 200,

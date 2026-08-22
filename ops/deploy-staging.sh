@@ -13,11 +13,15 @@ STAGING_BASE_URL="${STAGING_BASE_URL:-}"
 STAGING_SUPABASE_URL="${STAGING_SUPABASE_URL:-}"
 STAGING_SUPABASE_ANON_KEY="${STAGING_SUPABASE_ANON_KEY:-}"
 STAGING_SUPABASE_SECRET_KEY="${STAGING_SUPABASE_SECRET_KEY:-}"
+STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256="${STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256:-}"
 STAGING_FAILPOINT="${STAGING_FAILPOINT:-}"
 RELEASE_ROOT="${RELEASE_ROOT:-/srv/seungjae-staging-releases}"
 BACKUP_ROOT="${BACKUP_ROOT:-/srv/seungjae-staging-backups}"
 LOCK_FILE="${LOCK_FILE:-/var/lock/seungjae-staging-deploy.lock}"
 STATE_DIR="$STAGING_DIR/.deploy"
+PAPER_STATE_DIR="$STATE_DIR/paper-forward"
+PAPER_STATE_SNAPSHOT_PATH="$PAPER_STATE_DIR/paper-state-v2.json"
+PAPER_STATE_MAXIMUM_AGE_MS=3900000
 MIN_FREE_KB="${MIN_FREE_KB:-800000}"
 PM2_CONFIG="$STAGING_DIR/api-server/ecosystem.staging.json"
 PM2_LAUNCHER="$STAGING_DIR/api-server/run-staging.sh"
@@ -32,6 +36,8 @@ fail() { echo "[staging] $1" >&2; exit "${2:-1}"; }
 [[ -n "$STAGING_BASE_URL" ]] || fail 'STAGING_BASE_URL is required' 7
 [[ "$STAGING_BASE_URL" != *'lsj119.duckdns.org'* ]] || fail 'production URL is forbidden' 8
 [[ -z "$STAGING_FAILPOINT" || "$STAGING_FAILPOINT" == after-promotion ]] || fail 'unknown staging failpoint' 9
+[[ "$STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail 'staging Paper snapshot publisher binding SHA-256 is required' 22
+[[ "$PAPER_STATE_SNAPSHOT_PATH" == "$STATE_DIR/paper-forward/paper-state-v2.json" ]] || fail 'staging Paper snapshot path escaped protected state' 23
 
 SUPABASE_VALUE_COUNT=0
 [[ -n "$STAGING_SUPABASE_URL" ]] && ((SUPABASE_VALUE_COUNT += 1))
@@ -47,6 +53,7 @@ for command_name in git node pnpm pm2 curl flock df awk rsync tar sha256sum sort
 done
 
 mkdir -p "$STAGING_DIR" "$RELEASE_ROOT" "$BACKUP_ROOT" "$STATE_DIR" "$(dirname "$LOCK_FILE")"
+install -d -m 700 "$PAPER_STATE_DIR"
 if [[ "${STAGING_LOCK_HELD:-}" != 1 ]]; then
   set +e
   flock --close --nonblock --conflict-exit-code 200 "$LOCK_FILE" env STAGING_LOCK_HELD=1 "$0" "$@"
@@ -136,6 +143,9 @@ write_runtime_env() {
     printf 'API_PORT=%s\n' "$STAGING_PORT"
     printf 'APP_ENV=staging\n'
     printf 'DEPLOY_SHA=%s\n' "$deploy_sha"
+    printf 'PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH=%s\n' "$PAPER_STATE_SNAPSHOT_PATH"
+    printf 'PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256=%s\n' "$STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256"
+    printf 'PAPER_FORWARD_PAPER_STATE_MAXIMUM_AGE_MS=%s\n' "$PAPER_STATE_MAXIMUM_AGE_MS"
     [[ -n "$STAGING_SUPABASE_URL" ]] && printf 'SUPABASE_URL=%s\n' "$STAGING_SUPABASE_URL"
     [[ -n "$STAGING_SUPABASE_ANON_KEY" ]] && printf 'SUPABASE_ANON_KEY=%s\n' "$STAGING_SUPABASE_ANON_KEY"
     [[ -n "$STAGING_SUPABASE_SECRET_KEY" ]] && printf 'SUPABASE_SECRET_KEY=%s\n' "$STAGING_SUPABASE_SECRET_KEY"
@@ -263,6 +273,9 @@ git -C "$SOURCE_DIR" archive "$TARGET_SHA" | tar -x -C "$RELEASE_DIR"
     NODE_ENV=production \
     APP_ENV=staging \
     DEPLOY_SHA="$TARGET_SHA" \
+    PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH="$PAPER_STATE_SNAPSHOT_PATH" \
+    PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256="$STAGING_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256" \
+    PAPER_FORWARD_PAPER_STATE_MAXIMUM_AGE_MS="$PAPER_STATE_MAXIMUM_AGE_MS" \
     SUPABASE_URL="$STAGING_SUPABASE_URL" \
     SUPABASE_ANON_KEY="$STAGING_SUPABASE_ANON_KEY" \
     SUPABASE_SECRET_KEY="$STAGING_SUPABASE_SECRET_KEY" \
