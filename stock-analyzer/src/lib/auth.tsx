@@ -6,7 +6,9 @@ import { userIntegrationsRequestLifecycle } from '@/lib/user-integrations-reques
 import {
   AUTH_PROFILE_BOOTSTRAP_TIMEOUT_MS,
   authBootstrapErrorMessage,
+  reconcileInitialSessionProfile,
   runFiniteAuthBootstrap,
+  shouldReconcileInitialSession,
   withFiniteDeadline,
 } from '@/lib/auth-bootstrap';
 import {
@@ -222,7 +224,43 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!isSupabaseConfigured) { setLoading(false); return; }
     runInitialBootstrap();
     const { data: sub } = getSupabase().auth.onAuthStateChange((event, next) => {
-      if (event === 'INITIAL_SESSION') return;
+      const incomingUserId = next?.user.id ?? null;
+      const currentUserId = sessionRef.current?.user.id ?? null;
+
+      if (event === 'INITIAL_SESSION') {
+        if (!shouldReconcileInitialSession({
+          event,
+          incomingUserId,
+          currentUserId,
+          hasProfile: profileRef.current !== null,
+        })) return;
+        if (!next) return;
+
+        const attempt = ++bootstrapAttemptRef.current;
+        const restoredSession = next;
+        const prepare = currentUserId && currentUserId !== incomingUserId
+          ? prepareBackupForSessionEnd()
+          : Promise.resolve();
+        setBootstrapError(null);
+        setLoading(true);
+        void prepare.finally(() => {
+          if (!mountedRef.current || bootstrapAttemptRef.current !== attempt) return;
+          applySession(restoredSession);
+          void reconcileInitialSessionProfile({
+            loadProfile: () => loadProfileWithDeadline(restoredSession.user, { force: true }),
+            hasProfile: () => profileRef.current !== null,
+            isSessionCurrent: () => sessionRef.current?.user.id === restoredSession.user.id,
+          }).catch((cause) => {
+            if (mountedRef.current && bootstrapAttemptRef.current === attempt) {
+              setBootstrapError(authBootstrapErrorMessage(cause));
+            }
+          }).finally(() => {
+            if (mountedRef.current && bootstrapAttemptRef.current === attempt) setLoading(false);
+          });
+        });
+        return;
+      }
+
       if (signingInRef.current && next) return;
       if (signingOutRef.current && next) return;
       bootstrapAttemptRef.current += 1;
