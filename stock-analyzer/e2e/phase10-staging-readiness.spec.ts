@@ -34,11 +34,18 @@ const emptyAccounts: StagingAccountCredentials = {
 let accounts = emptyAccounts;
 let accountLifecycle: StagingAccountLifecycle | null = null;
 
+const logoutScopedReadPaths = new Set([
+  '/api/user-integrations',
+  '/api/accounts/read-only/toss',
+  '/api/accounts/read-only/upbit',
+  '/api/accounts/read-only/bitget',
+]);
+
 type Diagnostic = { test: string; url: string; detail: string; status?: number };
 type LogoutObservation = {
   candidates: Diagnostic[];
   origin: string;
-  personalIntegrationReads: Set<Request>;
+  logoutScopedReads: Set<Request>;
 };
 type RouteTransitionObservation = {
   fromRoute: string;
@@ -110,6 +117,27 @@ function diagnosticText(raw: string) {
     .replace(/((?:authorization|apikey|api[_-]?key|token|password|secret|key)\s*[:=]\s*)([^\s,;]+)/gi, '$1[redacted]');
 }
 
+function isLogoutScopedReadIdentity(
+  method: string,
+  rawUrl: string,
+  expectedOrigin: string,
+) {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+  return method === 'GET'
+    && logoutScopedReadPaths.has(parsed.pathname)
+    && parsed.searchParams.size === 0
+    && parsed.origin === expectedOrigin;
+}
+
+function isLogoutScopedRead(request: Request, expectedOrigin: string) {
+  return isLogoutScopedReadIdentity(request.method(), request.url(), expectedOrigin);
+}
+
 function isPersonalIntegrationLogoutRead(request: Request, expectedOrigin: string) {
   let parsed: URL;
   try {
@@ -117,10 +145,8 @@ function isPersonalIntegrationLogoutRead(request: Request, expectedOrigin: strin
   } catch {
     return false;
   }
-  return request.method() === 'GET'
-    && parsed.pathname === '/api/user-integrations'
-    && parsed.searchParams.size === 0
-    && parsed.origin === expectedOrigin;
+  return parsed.pathname === '/api/user-integrations'
+    && isLogoutScopedRead(request, expectedOrigin);
 }
 
 function isExpectedLogoutAbort(request: Request, observation: LogoutObservation) {
@@ -137,16 +163,16 @@ function isExpectedLogoutAbort(request: Request, observation: LogoutObservation)
     && query.length === 1
     && query[0]?.[0] === 'scope'
     && query[0]?.[1] === 'global';
-  const abortedPersonalIntegrationRead = observation.personalIntegrationReads.has(request)
-    && isPersonalIntegrationLogoutRead(request, observation.origin);
-  return aborted && (abortedLogoutRequest || abortedPersonalIntegrationRead);
+  const abortedScopedRead = observation.logoutScopedReads.has(request)
+    && isLogoutScopedRead(request, observation.origin);
+  return aborted && (abortedLogoutRequest || abortedScopedRead);
 }
 
 function isConfirmedLogoutAbort(request: Request) {
   const expectedOrigin = confirmedLogoutAbortRequests.get(request);
   return expectedOrigin !== undefined
     && request.failure()?.errorText === 'net::ERR_ABORTED'
-    && isPersonalIntegrationLogoutRead(request, expectedOrigin);
+    && isLogoutScopedRead(request, expectedOrigin);
 }
 
 function isProfileRequest(request: Request) {
@@ -229,9 +255,9 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
     const logoutObservation = activeLogoutObservations.get(page);
     if (
       logoutObservation
-      && isPersonalIntegrationLogoutRead(request, logoutObservation.origin)
+      && isLogoutScopedRead(request, logoutObservation.origin)
     ) {
-      logoutObservation.personalIntegrationReads.add(request);
+      logoutObservation.logoutScopedReads.add(request);
     }
     if (isMutatingBrowserRequest(request)) mutations.add(request);
     if (isSameOriginApiGet(request)) {
@@ -378,7 +404,7 @@ async function logout(page: Page) {
   const observation: LogoutObservation = {
     candidates: [],
     origin: new URL(page.url()).origin,
-    personalIntegrationReads: new Set<Request>(),
+    logoutScopedReads: new Set<Request>(),
   };
   activeLogoutObservations.set(page, observation);
   let confirmed = false;
@@ -398,7 +424,7 @@ async function logout(page: Page) {
       `protected API remained accessible after logout: ${protectedResponse.status()}`,
     ).toContain(protectedResponse.status());
 
-    for (const request of observation.personalIntegrationReads) {
+    for (const request of observation.logoutScopedReads) {
       confirmedLogoutAbortRequests.set(request, observation.origin);
     }
     confirmed = true;
@@ -632,6 +658,23 @@ function errorsFor(testInfo: TestInfo) {
     http: diagnostics.unexpected_http_errors.filter((item) => item.test === testName),
   };
 }
+
+test('logout abort proof keeps session-scoped account reads exact and query-free', () => {
+  const origin = 'https://staging.example.test';
+  for (const route of [
+    '/api/user-integrations',
+    '/api/accounts/read-only/toss',
+    '/api/accounts/read-only/upbit',
+    '/api/accounts/read-only/bitget',
+  ]) {
+    expect(isLogoutScopedReadIdentity('GET', `${origin}${route}`, origin)).toBe(true);
+  }
+  expect(isLogoutScopedReadIdentity('GET', `${origin}/api/accounts/read-only/kiwoom`, origin)).toBe(false);
+  expect(isLogoutScopedReadIdentity('GET', `${origin}/api/accounts/read-only/toss?refresh=1`, origin)).toBe(false);
+  expect(isLogoutScopedReadIdentity('GET', `${origin}/api/accounts/read-only/toss/history`, origin)).toBe(false);
+  expect(isLogoutScopedReadIdentity('POST', `${origin}/api/accounts/read-only/toss`, origin)).toBe(false);
+  expect(isLogoutScopedReadIdentity('GET', 'https://other.example.test/api/accounts/read-only/toss', origin)).toBe(false);
+});
 
 test.describe('real staging release readiness', () => {
   test.describe.configure({ mode: 'serial' });
