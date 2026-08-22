@@ -530,16 +530,6 @@ export function PatternAwareUnifiedChartCanvas({
 
   return (
     <div className="space-y-3" data-testid="pattern-aware-chart-region">
-      {chartSymbol ? (
-        <div className="px-3 pt-3 sm:px-4">
-          <AiChartPositionPanel
-            market={market}
-            symbol={chartSymbol}
-            chartPrice={latestChartPrice}
-            onOverlayChange={setPositionOverlay}
-          />
-        </div>
-      ) : null}
       <div
         ref={wrapperRef}
         data-testid="unified-chart-wrapper"
@@ -555,6 +545,16 @@ export function PatternAwareUnifiedChartCanvas({
         </div>
         <div ref={containerRef} data-testid="unified-chart-canvas" className={cn('h-[390px] w-full touch-pan-y', fullscreen && 'h-[100dvh]')} />
       </div>
+      {chartSymbol ? (
+        <div className="px-3 sm:px-4">
+          <AiChartPositionPanel
+            market={market}
+            symbol={chartSymbol}
+            chartPrice={latestChartPrice}
+            onOverlayChange={setPositionOverlay}
+          />
+        </div>
+      ) : null}
       <div className="px-4 pb-4">
         <ChartPatternOverlayPanel overlay={patternOverlay} market={market} visible={overlays.markers} />
       </div>
