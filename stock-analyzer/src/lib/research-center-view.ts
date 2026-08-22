@@ -303,7 +303,7 @@ export function buildResearchConclusion(overview: ResearchCenterOverview): Resea
   if (!overview.safety.authorityEvidenceComplete) {
     return {
       tone: 'blocked',
-      title: '안전 증거 미수집',
+      title: '수익성 판단 보류 · 안전 증거 미수집',
       description: 'Paper runtime의 Private 요청·금융 변경·주문·실거래·주문권한 증거 중 일부가 없습니다. 없는 값을 0 또는 false로 간주하지 않습니다.',
       nextStep: '안전 핵심 필드를 모두 실제 값으로 수집한 뒤 수익성 판단을 이어갑니다.',
     };
