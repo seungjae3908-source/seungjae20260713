@@ -66,9 +66,6 @@ DEPLOYED_SHA="$(tr -d '[:space:]' < "$DEPLOY_MARKER")"
 [[ "$STATE_ROOT" != "$LIVE_DIR" && "$STATE_ROOT" != "$LIVE_DIR/"* ]] || fail "state root must remain outside deploy tree" 8
 [[ "$PUBLISHER_BINDING_PATH" == "$STATE_ROOT/publisher-binding.json" ]] || fail "publisher binding path escaped persistent state root" 8
 [[ "$PAPER_STATE_SNAPSHOT_PATH" == "$STATE_ROOT/publisher/paper-state-v2.json" ]] || fail "Paper snapshot path escaped persistent state root" 8
-if [[ "$OUTCOME_ACCUMULATION_ENABLED" == "true" ]]; then
-  [[ "$PUBLISHER_ACCOUNT_ID_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "authenticated Paper publisher SHA-256 binding required" 14
-fi
 
 for command_name in node flock crontab mkdir rm mv ln date sha256sum awk grep sed wc pgrep find sort xargs chmod tr rsync; do
   command -v "$command_name" >/dev/null 2>&1 || fail "missing command: $command_name" 9
@@ -85,25 +82,10 @@ FLOCK_BIN="$(command -v flock)"
 mkdir -p "$RELEASE_ROOT" "$BIN_DIR" "$LOG_DIR" "$BACKUP_DIR" "$IDENTITY_ARCHIVE_ROOT" "$IDENTITY_CUTOVER_ROOT" "$RUNTIME_STATE_ROOT" "$PUBLISHER_DIR"
 chmod 700 "$STATE_ROOT" "$RELEASE_ROOT" "$BIN_DIR" "$LOG_DIR" "$BACKUP_DIR" "$IDENTITY_ARCHIVE_ROOT" "$IDENTITY_CUTOVER_ROOT" "$RUNTIME_STATE_ROOT" "$PUBLISHER_DIR"
 
-STATE_FILE="$RUNTIME_STATE_ROOT/state/recurring-paper-loop.json"
-EXISTING_RESEARCH_SHA=""
-if [[ -r "$STATE_FILE" ]]; then
-  EXISTING_RESEARCH_SHA="$("$NODE_BIN" - "$STATE_FILE" <<'NODE'
-const fs = require('node:fs');
-const state = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-const sha = String(state?.identity?.researchCodeSha ?? '').trim().toLowerCase();
-if (!/^[0-9a-f]{40}$/.test(sha)) process.exit(1);
-process.stdout.write(sha);
-NODE
-)" || fail "existing Paper Forward state identity is invalid; refusing cutover" 11
-fi
-if [[ -n "$EXISTING_RESEARCH_SHA" && "$EXISTING_RESEARCH_SHA" != "$TARGET_SHA" ]]; then
-  EXISTING_MANAGED_CRON_COUNT="$(crontab -l 2>/dev/null | grep -Fc "$TAG" || true)"
-  [[ "$EXISTING_MANAGED_CRON_COUNT" == 0 ]] || fail "identity cutover requires the prior schedule to be disabled" 12
-fi
-
 if [[ "$OUTCOME_ACCUMULATION_ENABLED" == "true" ]]; then
-  "$NODE_BIN" - "$PUBLISHER_BINDING_PATH" "$TARGET_SHA" "$PAPER_STATE_SNAPSHOT_PATH" "$PUBLISHER_ACCOUNT_ID_SHA256" <<'NODE'
+  if [[ -n "$PUBLISHER_ACCOUNT_ID_SHA256" ]]; then
+    [[ "$PUBLISHER_ACCOUNT_ID_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "authenticated Paper publisher SHA-256 binding invalid" 14
+    "$NODE_BIN" - "$PUBLISHER_BINDING_PATH" "$TARGET_SHA" "$PAPER_STATE_SNAPSHOT_PATH" "$PUBLISHER_ACCOUNT_ID_SHA256" <<'NODE'
 const fs = require('node:fs');
 const [path, paperRuntimeSourceSha, snapshotPath, publisherAccountIdSha256] = process.argv.slice(2);
 if (!/^[0-9a-f]{40}$/.test(paperRuntimeSourceSha)) process.exit(1);
@@ -123,8 +105,49 @@ const temporary = `${path}.tmp-${process.pid}`;
 fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
 fs.renameSync(temporary, path);
 NODE
-  chmod 600 "$PUBLISHER_BINDING_PATH"
+    chmod 600 "$PUBLISHER_BINDING_PATH"
+  elif [[ -r "$PUBLISHER_BINDING_PATH" ]]; then
+    PUBLISHER_ACCOUNT_ID_SHA256="$("$NODE_BIN" - "$PUBLISHER_BINDING_PATH" "$TARGET_SHA" "$PAPER_STATE_SNAPSHOT_PATH" <<'NODE'
+const fs = require('node:fs');
+const [path, expectedSourceSha, expectedSnapshotPath] = process.argv.slice(2);
+const value = JSON.parse(fs.readFileSync(path, 'utf8'));
+const valid = value?.schemaVersion === 'paper-state-publisher-runtime-binding-v1'
+  && value?.paperRuntimeSourceSha === expectedSourceSha
+  && value?.snapshotPath === expectedSnapshotPath
+  && /^[0-9a-f]{64}$/.test(String(value?.publisherAccountIdSha256 ?? ''))
+  && value?.immutable === true
+  && value?.executionAuthority === 'NONE'
+  && value?.privateApiAllowed === false
+  && value?.liveTrading === false
+  && value?.financialMutationAllowed === false;
+if (!valid) process.exit(1);
+process.stdout.write(value.publisherAccountIdSha256);
+NODE
+)" || fail "protected Paper publisher binding is invalid or stale for target SHA" 14
+  else
+    fail "authenticated Paper publisher SHA-256 binding required" 14
+  fi
+  [[ "$PUBLISHER_ACCOUNT_ID_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "authenticated Paper publisher SHA-256 binding required" 14
+fi
 
+STATE_FILE="$RUNTIME_STATE_ROOT/state/recurring-paper-loop.json"
+EXISTING_RESEARCH_SHA=""
+if [[ -r "$STATE_FILE" ]]; then
+  EXISTING_RESEARCH_SHA="$("$NODE_BIN" - "$STATE_FILE" <<'NODE'
+const fs = require('node:fs');
+const state = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const sha = String(state?.identity?.researchCodeSha ?? '').trim().toLowerCase();
+if (!/^[0-9a-f]{40}$/.test(sha)) process.exit(1);
+process.stdout.write(sha);
+NODE
+)" || fail "existing Paper Forward state identity is invalid; refusing cutover" 11
+fi
+if [[ -n "$EXISTING_RESEARCH_SHA" && "$EXISTING_RESEARCH_SHA" != "$TARGET_SHA" ]]; then
+  EXISTING_MANAGED_CRON_COUNT="$(crontab -l 2>/dev/null | grep -Fc "$TAG" || true)"
+  [[ "$EXISTING_MANAGED_CRON_COUNT" == 0 ]] || fail "identity cutover requires the prior schedule to be disabled" 12
+fi
+
+if [[ "$OUTCOME_ACCUMULATION_ENABLED" == "true" ]]; then
   PAPER_FORWARD_ROOT="$RUNTIME_STATE_ROOT" \
   PAPER_FORWARD_RESEARCH_SHA="$TARGET_SHA" \
   PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH="$PAPER_STATE_SNAPSHOT_PATH" \
