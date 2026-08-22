@@ -5,134 +5,169 @@ import {
   NATURAL_PAPER_STAGE_ORDER,
 } from '../src/natural-cycle-verdict-trace.mjs';
 
-const SHA = '8b337eb22cf943a71e56158de4ae5fa5893aaa09';
+const STRATEGY_SHA = '8b337eb22cf943a71e56158de4ae5fa5893aaa09';
+const RUNTIME_SHA = '28ecd6caf448d53a6bcdc02ce32c23a4745327c7';
+const DATASET = 'natural-paper:cycle:2026-08-23T00:00:00+09:00';
 
-function counts(overrides = {}) {
+function identity(overrides = {}) {
   return {
-    scannerCandidateCount: 3,
-    profitGatePassCount: 2,
-    exactIdentityPassCount: 2,
-    paperAdmissionCount: 2,
-    entryCreatedCount: 1,
-    positionOpenedCount: 1,
-    exitConditionReachedCount: 1,
-    settlementCompletedCount: 1,
+    strategySha: STRATEGY_SHA,
+    runtimeSha: RUNTIME_SHA,
+    datasetIdentity: DATASET,
+    triggerSource: 'systemd-timer',
     ...overrides,
   };
 }
 
-test('records the exact eight-stage natural Paper ladder', () => {
-  const trace = buildNaturalPaperFirstZeroTrace({
-    cycleId: 'paper-cycle:1',
-    researchCodeSha: SHA,
-    triggerSource: 'cron',
-    ...counts(),
-  });
+function counts(overrides = {}) {
+  return {
+    universeCount: 4500,
+    scannerEvaluatedCount: 2800,
+    scannerCandidateCount: 26,
+    evidenceCompleteCount: 14,
+    admissionPassCount: 9,
+    riskPassCount: 6,
+    costPassCount: 4,
+    accountReadyCount: 4,
+    paperEntryCount: 3,
+    paperPositionCount: 3,
+    settlementCount: 2,
+    outcomeCount: 2,
+    ...overrides,
+  };
+}
+
+test('records the exact twelve-stage Natural Paper funnel', () => {
+  const trace = buildNaturalPaperFirstZeroTrace({ cycleId: 'cycle:complete', ...identity(), ...counts() });
   assert.deepEqual(trace.stages.map((stage) => stage.stage), [...NATURAL_PAPER_STAGE_ORDER]);
   assert.equal(trace.status, 'COMPLETE');
   assert.equal(trace.firstZeroStage, null);
-  assert.equal(trace.firstUnknownStage, null);
+  assert.equal(trace.firstZeroStageName, 'NONE');
 });
 
-test('current public-evidence-only runtime is classified at scanner candidate zero when bridge is absent', () => {
+test('classifies PAPER_ENTRY only after every prior stage is positively observed', () => {
   const trace = buildNaturalPaperFirstZeroTrace({
-    cycleId: 'paper-cycle:current-main',
-    researchCodeSha: SHA,
-    triggerSource: 'cron',
-    scannerCandidateCount: 0,
-    profitGatePassCount: null,
-    exactIdentityPassCount: null,
-    paperAdmissionCount: null,
-    entryCreatedCount: null,
-    positionOpenedCount: null,
-    exitConditionReachedCount: null,
-    settlementCompletedCount: null,
-    scannerToPaperBridgeConnected: false,
-    outcomeAccumulationEnabled: false,
+    cycleId: 'cycle:paper-entry-zero',
+    ...identity(),
+    ...counts({ paperEntryCount: 0, paperPositionCount: 0, settlementCount: 0, outcomeCount: 0 }),
   });
   assert.equal(trace.status, 'BLOCKED');
-  assert.equal(trace.firstZeroStage.code, 'SCANNER_CANDIDATE_ZERO');
-  assert.equal(trace.firstZeroStage.blockerReason, 'SCANNER_TO_PAPER_BRIDGE_MISSING');
+  assert.equal(trace.firstZeroStage.stage, 'PAPER_ENTRY');
+  assert.equal(trace.firstZeroStage.code, 'PAPER_ENTRY_NOT_CREATED');
+  assert.equal(trace.firstZeroStageName, 'PAPER_ENTRY');
 });
 
 test('unknown earlier evidence never lets a later zero masquerade as FIRST_ZERO_STAGE', () => {
   const trace = buildNaturalPaperFirstZeroTrace({
-    cycleId: 'paper-cycle:unknown',
-    researchCodeSha: SHA,
-    triggerSource: 'cron',
-    scannerCandidateCount: null,
-    profitGatePassCount: 0,
-    exactIdentityPassCount: 0,
-    paperAdmissionCount: 0,
-    entryCreatedCount: 0,
-    positionOpenedCount: 0,
-    exitConditionReachedCount: 0,
-    settlementCompletedCount: 0,
+    cycleId: 'cycle:unknown-upstream',
+    ...identity(),
+    ...counts({ evidenceCompleteCount: null, admissionPassCount: 0, paperEntryCount: 0 }),
   });
   assert.equal(trace.status, 'WAITING_EVIDENCE');
-  assert.equal(trace.firstUnknownStage, 'SCANNER_CANDIDATE');
+  assert.equal(trace.firstUnknownStage, 'EVIDENCE_COMPLETE');
+  assert.equal(trace.firstZeroStage, null);
+  assert.equal(trace.firstZeroStageName, 'UNKNOWN');
+});
+
+test('missing Strategy/Runtime/Dataset identity blocks a zero classification', () => {
+  const trace = buildNaturalPaperFirstZeroTrace({
+    cycleId: 'cycle:missing-identity',
+    triggerSource: 'cron',
+    ...counts({ scannerCandidateCount: 0 }),
+  });
+  assert.equal(trace.status, 'WAITING_IDENTITY');
+  assert.equal(trace.identity.complete, false);
+  assert.equal(trace.firstZeroStage, null);
+  assert.equal(trace.firstZeroStageName, 'UNKNOWN');
+});
+
+test('stage evidence from a different SHA fails closed instead of mixing identities', () => {
+  const trace = buildNaturalPaperFirstZeroTrace({
+    cycleId: 'cycle:mixed-sha',
+    ...identity(),
+    ...counts(),
+    stageEvidence: {
+      CANDIDATE: {
+        count: 0,
+        strategySha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        runtimeSha: RUNTIME_SHA,
+        datasetIdentity: DATASET,
+      },
+    },
+  });
+  assert.equal(trace.status, 'WAITING_EVIDENCE');
+  assert.equal(trace.firstUnknownStage, 'CANDIDATE');
+  assert.equal(trace.stages.find((stage) => stage.stage === 'CANDIDATE').status, 'IDENTITY_MISMATCH');
   assert.equal(trace.firstZeroStage, null);
 });
 
-test('outcome accumulation disabled is an entry-stage blocker only after earlier stages pass', () => {
-  const trace = buildNaturalPaperFirstZeroTrace({
-    cycleId: 'paper-cycle:admitted',
-    researchCodeSha: SHA,
-    triggerSource: 'cron',
-    ...counts({
-      scannerCandidateCount: 2,
-      profitGatePassCount: 1,
-      exactIdentityPassCount: 1,
-      paperAdmissionCount: 1,
-      entryCreatedCount: 0,
-      positionOpenedCount: 0,
-      exitConditionReachedCount: 0,
-      settlementCompletedCount: 0,
-    }),
-    outcomeAccumulationEnabled: false,
-  });
-  assert.equal(trace.firstZeroStage.code, 'ENTRY_NOT_CREATED');
-  assert.equal(trace.firstZeroStage.blockerReason, 'OUTCOME_ACCUMULATION_DISABLED');
+test('synthetic, historical, replay and duplicate evidence are rejected as Natural Paper evidence', () => {
+  for (const flag of ['synthetic', 'historical', 'replay', 'duplicateReplay', 'testFixture', 'manualExpiry', 'futureTimeCompression', 'clockAdvanced']) {
+    const trace = buildNaturalPaperFirstZeroTrace({
+      cycleId: `cycle:reject:${flag}`,
+      ...identity(),
+      ...counts(),
+      stageEvidence: { PAPER_ENTRY: { count: 1, [flag]: true } },
+    });
+    assert.equal(trace.status, 'WAITING_EVIDENCE');
+    assert.equal(trace.firstUnknownStage, 'PAPER_ENTRY');
+    assert.equal(trace.firstZeroStage, null);
+  }
 });
 
-test('profit gate missing evidence is preserved as the first explicit blocker', () => {
+test('duplicate observation ids are rejected instead of being double counted', () => {
   const trace = buildNaturalPaperFirstZeroTrace({
-    cycleId: 'paper-cycle:profit',
-    researchCodeSha: SHA,
-    triggerSource: 'cron',
-    ...counts({ profitGatePassCount: 0, exactIdentityPassCount: 0, paperAdmissionCount: 0, entryCreatedCount: 0, positionOpenedCount: 0, exitConditionReachedCount: 0, settlementCompletedCount: 0 }),
-    profitGateEvidenceConnected: false,
+    cycleId: 'cycle:duplicate-observation',
+    ...identity(),
+    ...counts(),
+    stageEvidence: { CANDIDATE: { count: 2, observationIds: ['obs-1', 'obs-1'] } },
   });
-  assert.equal(trace.firstZeroStage.code, 'PROFIT_GATE_ZERO');
-  assert.equal(trace.firstZeroStage.blockerReason, 'PROFIT_GATE_EVIDENCE_MISSING');
+  const candidate = trace.stages.find((stage) => stage.stage === 'CANDIDATE');
+  assert.equal(candidate.status, 'DUPLICATE_OBSERVATION_REJECTED');
+  assert.equal(candidate.count, null);
+  assert.equal(trace.firstZeroStage, null);
 });
 
-test('manual evidence is never accepted as a natural cycle and safety stays hard-off', () => {
+test('manual invocation cannot become Natural Paper evidence', () => {
   const trace = buildNaturalPaperFirstZeroTrace({
-    cycleId: 'paper-cycle:manual',
-    researchCodeSha: SHA,
-    triggerSource: 'manual-readonly-test',
+    cycleId: 'cycle:manual',
+    ...identity({ triggerSource: 'manual-readonly-test' }),
     ...counts(),
   });
   assert.equal(trace.status, 'NOT_NATURAL_CYCLE');
   assert.equal(trace.naturalCycle, false);
-  assert.equal(trace.safety.executionAuthority, 'NONE');
-  assert.equal(trace.safety.liveTrading, false);
-  assert.equal(trace.safety.autoTrading, false);
-  assert.equal(trace.safety.realOrderEnabled, false);
-  assert.equal(trace.safety.privateTradingApiAllowed, false);
-  assert.equal(trace.safety.orderCount, 0);
+  assert.equal(trace.firstZeroStage, null);
 });
 
-test('zero is never fabricated from missing evidence', () => {
-  const trace = buildNaturalPaperFirstZeroTrace({
-    cycleId: 'paper-cycle:missing',
-    researchCodeSha: SHA,
-    triggerSource: 'cron',
-  });
+test('missing counts remain unknown and never become zero', () => {
+  const trace = buildNaturalPaperFirstZeroTrace({ cycleId: 'cycle:missing', ...identity() });
   assert.equal(trace.status, 'WAITING_EVIDENCE');
-  assert.equal(trace.firstUnknownStage, 'SCANNER_CANDIDATE');
+  assert.equal(trace.firstUnknownStage, 'UNIVERSE');
   assert.equal(trace.firstZeroStage, null);
-  assert.equal(trace.counts.scannerCandidateCount, null);
-  assert.equal(trace.counts.settlementCompletedCount, null);
+  assert.equal(trace.counts.universeCount, null);
+  assert.equal(trace.counts.outcomeCount, null);
+});
+
+test('safety contract is hard-off for execution and mutation authority', () => {
+  const trace = buildNaturalPaperFirstZeroTrace({ cycleId: 'cycle:safety', ...identity(), ...counts() });
+  assert.deepEqual(
+    {
+      executionAuthority: trace.safety.executionAuthority,
+      liveTrading: trace.safety.liveTrading,
+      autoTrading: trace.safety.autoTrading,
+      realOrderEnabled: trace.safety.realOrderEnabled,
+      privateTradingApiAllowed: trace.safety.privateTradingApiAllowed,
+      transferEnabled: trace.safety.transferEnabled,
+      withdrawalEnabled: trace.safety.withdrawalEnabled,
+    },
+    {
+      executionAuthority: 'NONE',
+      liveTrading: false,
+      autoTrading: false,
+      realOrderEnabled: false,
+      privateTradingApiAllowed: false,
+      transferEnabled: false,
+      withdrawalEnabled: false,
+    },
+  );
 });
