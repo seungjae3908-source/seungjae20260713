@@ -113,9 +113,19 @@ function maximumAgeMs(value: string | undefined): number | null {
     : null;
 }
 
-function normalizedStateRoot(env: PublisherEnvironment): string {
+function explicitStateRoot(env: PublisherEnvironment): string | null {
   const configured = String(env.PAPER_FORWARD_STATE_ROOT ?? '').trim();
-  return resolve(configured || DEFAULT_STATE_ROOT);
+  return configured ? resolve(configured) : null;
+}
+
+function runtimeBindingDiscoveryAllowed(env: PublisherEnvironment): boolean {
+  if (explicitStateRoot(env)) return true;
+  const appEnv = String(env.APP_ENV ?? '').trim().toLowerCase();
+  return !['staging', 'test', 'development'].includes(appEnv);
+}
+
+function normalizedStateRoot(env: PublisherEnvironment): string {
+  return explicitStateRoot(env) ?? DEFAULT_STATE_ROOT;
 }
 
 function exactRuntimePaths(env: PublisherEnvironment) {
@@ -128,6 +138,7 @@ function exactRuntimePaths(env: PublisherEnvironment) {
 }
 
 async function loadRuntimeBinding(env: PublisherEnvironment): Promise<PaperStateRuntimeBinding | null> {
+  if (!runtimeBindingDiscoveryAllowed(env)) return null;
   const paths = exactRuntimePaths(env);
   let raw: string;
   try {
