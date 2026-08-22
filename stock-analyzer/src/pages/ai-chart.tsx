@@ -516,7 +516,6 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
     setSelection(normalized);
     selectSelection(normalized);
     setAnalysis(null);
-    setMobileTab('summary');
     if (publish) publishSelection(normalized);
 
     if (!embedded && typeof window !== 'undefined') {
@@ -699,14 +698,18 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
     />
   );
 
+  const intelligencePanel = (
+    <AiChartV2IntelligencePanel
+      selection={selection}
+      analysis={analysis}
+      mode={strategyMode}
+      onModeChange={updateStrategyModeAndTimeframe}
+    />
+  );
+
   const details = (
     <div className="space-y-4">
-      <AiChartV2IntelligencePanel
-        selection={selection}
-        analysis={analysis}
-        mode={strategyMode}
-        onModeChange={updateStrategyModeAndTimeframe}
-      />
+      {intelligencePanel}
       <FuturesPublicContextPanel selection={selection} />
       <ContextCard selection={selection} analysis={analysis} />
       <DecisionCard analysis={analysis} />
@@ -787,6 +790,9 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
             {mobileTab === 'chart' ? (
               <section data-testid="ai-chart-mobile-chart" className="min-w-0 [&_[data-testid=ai-chart-position-panel]]:hidden">
                 {chart}
+                <div className="hidden" aria-hidden="true" data-testid="ai-chart-mobile-overlay-controller">
+                  {intelligencePanel}
+                </div>
               </section>
             ) : null}
             {mobileTab === 'position' ? (
