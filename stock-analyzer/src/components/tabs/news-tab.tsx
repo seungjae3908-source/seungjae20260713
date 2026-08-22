@@ -4,7 +4,11 @@ import { SourceLogo } from "@/components/source-logo";
 import { LoadingState, ErrorState } from "@/components/data-state";
 import { useNews } from "@/hooks/use-stock-data";
 import { toneText, type Tone } from "@/lib/labels";
-import { newsEvidenceDisplay } from "@/lib/news-evidence-display";
+import {
+  newsEvidenceDisplay,
+  type NewsEvidenceProvenance,
+  type NewsRelevanceProvenance,
+} from "@/lib/news-evidence-display";
 import { cn } from "@/lib/utils";
 import { ApiError, type NewsItem } from "@/lib/api";
 
@@ -12,12 +16,25 @@ type ExtendedNewsItem = NewsItem & {
   reliability?: number;
   summary?: string;
   impact?: string;
+  provider?: string;
+  publishedAt?: string;
+  collectedAt?: string;
+  relevanceProvenance?: NewsRelevanceProvenance;
+  confidenceProvenance?: NewsEvidenceProvenance;
+  summaryProvenance?: NewsEvidenceProvenance;
+  impactProvenance?: NewsEvidenceProvenance;
 };
 
 function sentimentTone(score: number): Tone {
   if (score > 15) return "positive";
   if (score < -15) return "destructive";
   return "warning";
+}
+
+function keywordToneLabel(tone: ExtendedNewsItem["tone"]): string {
+  if (tone === "positive") return "긍정";
+  if (tone === "negative") return "부정";
+  return "중립";
 }
 
 function usableNewsUrl(url?: string): string | null {
@@ -46,7 +63,7 @@ function NewsList({ items }: { items: ExtendedNewsItem[] }) {
         const newsUrl = usableNewsUrl(n.url);
 
         return (
-          <li key={i}>
+          <li key={`${n.sourceDomain}:${n.title}:${i}`}>
             <button
               type="button"
               onClick={() => newsUrl && openNews(newsUrl)}
@@ -61,20 +78,30 @@ function NewsList({ items }: { items: ExtendedNewsItem[] }) {
                     {n.title}
                   </div>
 
-                  <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
-                    <span>출처: {n.source}</span>
-                    <span>·</span>
-                    <span className="font-mono">{n.date}</span>
+                  <div className="mt-2 grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
+                    <span>언론사: {n.source || "미제공"}</span>
+                    <span>공급자: {evidence.provider ?? "미제공"}</span>
+                    <span className="font-mono">기사 발행: {evidence.publishedAt ?? (n.date || "미제공")}</span>
+                    <span className="font-mono">앱 수집: {evidence.collectedAt ?? "미제공"}</span>
+                  </div>
+
+                  <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                    <span className="rounded-full bg-muted px-2 py-1 text-muted-foreground">
+                      키워드 분류: {keywordToneLabel(n.tone)}
+                    </span>
+                    <span className="rounded-full bg-muted px-2 py-1 text-muted-foreground">
+                      {evidence.relevanceLabel}
+                    </span>
                   </div>
 
                   <div className="mt-2 break-keep text-xs leading-relaxed text-muted-foreground">
-                    {evidence.summary ? `제공 요약: ${evidence.summary}` : "요약: 제공처 근거 없음"}
+                    {evidence.summary ? `제공 요약: ${evidence.summary}` : "요약: 공급자 근거 미제공"}
                   </div>
 
                   <div className="mt-2 flex flex-wrap gap-2 text-xs">
                     {evidence.reliabilityScore == null ? (
                       <span className="rounded-full bg-muted px-2 py-1 text-muted-foreground">
-                        신뢰도 미제공
+                        신뢰도: 공급자 미제공
                       </span>
                     ) : (
                       <>
@@ -82,7 +109,7 @@ function NewsList({ items }: { items: ExtendedNewsItem[] }) {
                           제공 신뢰도 {evidence.reliabilityScore}%
                         </span>
                         <span className="rounded-full bg-muted px-2 py-1 text-muted-foreground">
-                          신뢰도 {evidence.reliabilityLabel}
+                          신뢰도 {evidence.reliabilityLabel} · 공급자 제공
                         </span>
                       </>
                     )}
@@ -94,7 +121,7 @@ function NewsList({ items }: { items: ExtendedNewsItem[] }) {
                   </div>
 
                   <div className="mt-2 text-xs font-medium text-muted-foreground">
-                    {evidence.impact ? `제공 영향: ${evidence.impact}` : "주가 영향 근거 미제공"}
+                    {evidence.impact ? `제공 영향: ${evidence.impact}` : "주가 영향: 공급자 근거 미제공"}
                   </div>
                 </div>
 
@@ -176,7 +203,7 @@ export function NewsTab({
           </div>
         </div>
         <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-          제목·제공 요약의 제한된 키워드 분류이며, 근거가 없거나 긍정·부정 근거가 같은 뉴스는 중립으로 유지합니다.
+          제목·공급자 제공 요약의 제한된 키워드 분류입니다. 검색 결과의 관련성, 신뢰도, 실제 주가 영향은 별도 근거 없이는 검증된 것으로 표시하지 않습니다.
         </p>
       </Panel>
 
