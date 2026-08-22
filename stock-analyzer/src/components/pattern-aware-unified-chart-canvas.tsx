@@ -17,6 +17,10 @@ import {
   type UTCTimestamp,
 } from 'lightweight-charts';
 import { Expand, LocateFixed, Maximize2, Minimize2 } from 'lucide-react';
+import {
+  AiChartPositionPanel,
+  type AiChartPositionOverlay,
+} from '@/components/ai-chart-position-panel';
 import { ChartPatternOverlayPanel } from '@/components/chart-pattern-overlay-panel';
 import type { AnalysisMarket, AnalysisPricePlan } from '@/lib/analysis-selection';
 import type { ChartAnalysis } from '@/lib/chart-analysis';
@@ -77,6 +81,7 @@ type ChartInstance = {
   referencePriceLines: IPriceLine[];
   analysisPriceLines: IPriceLine[];
   pricePlanLines: IPriceLine[];
+  positionPriceLines: IPriceLine[];
 };
 
 type LogicalViewport = {
@@ -149,6 +154,17 @@ function validPlanPrice(value: number | null | undefined): value is number {
   return value != null && Number.isFinite(value) && value > 0;
 }
 
+function chartSymbolFromResetKey(
+  resetKey: string,
+  market: AnalysisMarket,
+  timeframe: UnifiedChartTimeframe,
+): string {
+  const prefix = `${market}:`;
+  const suffix = `:${timeframe}`;
+  if (!resetKey.startsWith(prefix) || !resetKey.endsWith(suffix)) return '';
+  return resetKey.slice(prefix.length, resetKey.length - suffix.length).trim();
+}
+
 export function PatternAwareUnifiedChartCanvas({
   candles,
   indicators,
@@ -166,7 +182,13 @@ export function PatternAwareUnifiedChartCanvas({
   const instanceRef = useRef<ChartInstance | null>(null);
   const storedViewportRef = useRef<StoredViewport | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
+  const [positionOverlay, setPositionOverlay] = useState<AiChartPositionOverlay | null>(null);
   const hasChartData = candles.length >= 2;
+  const chartSymbol = useMemo(
+    () => chartSymbolFromResetKey(resetKey, market, timeframe),
+    [market, resetKey, timeframe],
+  );
+  const latestChartPrice = candles.at(-1)?.close ?? null;
 
   const activePattern = useMemo(() => {
     return analyzeChartStructure(candles).patterns
@@ -264,6 +286,7 @@ export function PatternAwareUnifiedChartCanvas({
       referencePriceLines: [],
       analysisPriceLines: [],
       pricePlanLines: [],
+      positionPriceLines: [],
     };
 
     const handleClick: Parameters<IChartApi['subscribeClick']>[0] = (param) => {
@@ -453,6 +476,43 @@ export function PatternAwareUnifiedChartCanvas({
   }, [analysis, candles, indicators, levels, overlays.levels, overlays.markers, patternOverlay, pricePlan, resetKey]);
 
   useEffect(() => {
+    const instance = instanceRef.current;
+    if (!instance) return;
+    const beforeUpdate = logicalViewport(instance.chart)
+      ?? (storedViewportRef.current?.resetKey === resetKey ? storedViewportRef.current.logicalRange : null);
+    removePriceLines(instance.candle, instance.positionPriceLines);
+
+    if (positionOverlay) {
+      const average = positionOverlay.position.averageEntryPrice;
+      if (validPlanPrice(average)) {
+        instance.positionPriceLines.push(instance.candle.createPriceLine({
+          price: average,
+          color: '#14b8a6',
+          lineWidth: 2,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: positionOverlay.stale ? '내 평단 · 오래된 값' : '내 평단',
+        }));
+      }
+      const liquidation = positionOverlay.position.liquidationPrice;
+      if (market === 'BITGET' && validPlanPrice(liquidation)) {
+        instance.positionPriceLines.push(instance.candle.createPriceLine({
+          price: liquidation,
+          color: '#e11d48',
+          lineWidth: 2,
+          lineStyle: LineStyle.Solid,
+          axisLabelVisible: true,
+          title: positionOverlay.stale ? '청산가 · 오래된 값' : '청산가',
+        }));
+      }
+    }
+
+    restoreLogicalViewport(instance.chart, beforeUpdate);
+    const afterUpdate = exposeLogicalViewport(wrapperRef.current, instance.chart);
+    if (afterUpdate) storedViewportRef.current = { resetKey, logicalRange: afterUpdate };
+  }, [market, positionOverlay, resetKey]);
+
+  useEffect(() => {
     storedViewportRef.current = null;
     instanceRef.current?.chart.timeScale().fitContent();
   }, [resetKey]);
@@ -470,10 +530,22 @@ export function PatternAwareUnifiedChartCanvas({
 
   return (
     <div className="space-y-3" data-testid="pattern-aware-chart-region">
+      {chartSymbol ? (
+        <div className="px-3 pt-3 sm:px-4">
+          <AiChartPositionPanel
+            market={market}
+            symbol={chartSymbol}
+            chartPrice={latestChartPrice}
+            onOverlayChange={setPositionOverlay}
+          />
+        </div>
+      ) : null}
       <div
         ref={wrapperRef}
         data-testid="unified-chart-wrapper"
         data-pattern-overlay-id={overlays.markers ? patternOverlay?.analysisId ?? '' : ''}
+        data-position-average={positionOverlay?.position.averageEntryPrice ?? ''}
+        data-position-liquidation={positionOverlay?.position.liquidationPrice ?? ''}
         className={cn('relative overflow-hidden bg-background', fullscreen && 'h-[100dvh] w-screen')}
       >
         <div className="absolute right-2 top-2 z-10 flex gap-1 rounded-xl border border-card-border bg-background/90 p-1 shadow-sm backdrop-blur">
