@@ -89,15 +89,15 @@ for (const [market, direction, exitOpen, expectedCloseDirection] of [
     const sample = openSample(market, direction);
     assert.equal(sample.status, "OPEN");
     const settledAt = NOW + 60_000;
-    const fundingEvidence = market === "CRYPTO_FUTURES"
-      ? { complete: true, payments: [{ asOfMs: NOW + 30_000, amount: 0.25, source: "bitget-public", provenance: "funding-v1", version: "v1" }] }
-      : fundingNone();
+    const fundingPayments = market === "CRYPTO_FUTURES"
+      ? [{ asOfMs: NOW + 30_000, amount: 0.25, source: "bitget-public", provenance: "funding-v1", version: "v1" }]
+      : [];
     const settled = settleFourMarketPaperSample({
       sample,
       exitExecution: execution(market, settledAt),
       exitBar: { nextOpen: exitOpen, high: exitOpen + 1, low: exitOpen - 1 },
       pathBars: [{ timestampMs: NOW + 30_000, high: 112, low: 98 }],
-      fundingEvidence,
+      fundingEvidence: { complete: true, payments: fundingPayments },
       evaluatedAtMs: settledAt,
     });
     assert.equal(settled.status, "SETTLED");
@@ -113,6 +113,17 @@ for (const [market, direction, exitOpen, expectedCloseDirection] of [
     assert.equal(settled.exitEvidenceProvenance.provider, providerByMarket[market]);
     assert.match(settled.exitEvidenceProvenance.provenanceDigest, /^[0-9a-f]{64}$/);
     assert.match(settled.exitEvidenceProvenance.evidenceSnapshotDigest, /^[0-9a-f]{64}$/);
+    assert.equal(settled.fundingEvidence.schemaVersion, "paper-funding-evidence-v1");
+    assert.equal(settled.fundingEvidence.paperSampleId, sample.paperSampleId);
+    assert.equal(settled.fundingEvidence.market, market);
+    assert.equal(settled.fundingEvidence.symbol, symbolByMarket[market]);
+    assert.equal(settled.fundingEvidence.applicable, market === "CRYPTO_FUTURES");
+    assert.deepEqual(settled.fundingEvidence.payments, fundingPayments);
+    assert.equal(settled.fundingEvidence.fundingCost, settled.fundingCost);
+    assert.match(settled.fundingEvidence.fundingEvidenceDigest, /^[0-9a-f]{64}$/);
+    assert.ok(Object.isFrozen(settled.fundingEvidence));
+    assert.ok(Object.isFrozen(settled.fundingEvidence.payments));
+    assert.ok(settled.fundingEvidence.payments.every((payment) => Object.isFrozen(payment)));
     assert.ok(settled.totalExplicitCost >= 0);
     assert.ok(Number.isFinite(settled.netReturnPercent));
     assert.ok(Number.isFinite(settled.mfePercent));
@@ -123,6 +134,107 @@ for (const [market, direction, exitOpen, expectedCloseDirection] of [
     assert.equal(settled.profitabilityClaimAllowed, false);
   });
 }
+
+test("futures funding provenance is immutable and deterministically digested from the same payment used for cost", () => {
+  const sample = openSample("CRYPTO_FUTURES", "LONG");
+  const settledAt = NOW + 60_000;
+  const payment = { asOfMs: NOW + 30_000, amount: 0.25, source: "bitget-public", provenance: "funding-history-v2", version: "v2" };
+  const fundingEvidence = { complete: true, payments: [payment] };
+
+  const first = settleFourMarketPaperSample({
+    sample,
+    exitExecution: execution("CRYPTO_FUTURES", settledAt),
+    exitBar: { nextOpen: 110, high: 111, low: 109 },
+    fundingEvidence,
+    evaluatedAtMs: settledAt,
+  });
+  const second = settleFourMarketPaperSample({
+    sample,
+    exitExecution: execution("CRYPTO_FUTURES", settledAt),
+    exitBar: { nextOpen: 110, high: 111, low: 109 },
+    fundingEvidence: { complete: true, payments: [{ ...payment }] },
+    evaluatedAtMs: settledAt,
+  });
+
+  assert.equal(first.fundingCost, 0.25);
+  assert.equal(first.fundingEvidence.fundingCost, 0.25);
+  assert.deepEqual(first.fundingEvidence.payments, [{
+    asOfMs: NOW + 30_000,
+    amount: 0.25,
+    source: "bitget-public",
+    provenance: "funding-history-v2",
+    version: "v2",
+  }]);
+  assert.equal(first.fundingEvidence.fundingEvidenceDigest, second.fundingEvidence.fundingEvidenceDigest);
+
+  payment.amount = 999;
+  payment.source = "tampered";
+  assert.equal(first.fundingEvidence.payments[0].amount, 0.25);
+  assert.equal(first.fundingEvidence.payments[0].source, "bitget-public");
+  assert.equal(first.fundingCost, first.fundingEvidence.payments.reduce((sum, item) => sum + item.amount, 0));
+});
+
+test("funding payment payload changes alter both cost and evidence digest", () => {
+  const sample = openSample("CRYPTO_FUTURES", "LONG");
+  const settledAt = NOW + 60_000;
+  const settleWithAmount = (amount) => settleFourMarketPaperSample({
+    sample,
+    exitExecution: execution("CRYPTO_FUTURES", settledAt),
+    exitBar: { nextOpen: 110, high: 111, low: 109 },
+    fundingEvidence: { complete: true, payments: [{ asOfMs: NOW + 30_000, amount, source: "bitget-public", provenance: "funding-v1", version: "v1" }] },
+    evaluatedAtMs: settledAt,
+  });
+
+  const first = settleWithAmount(0.25);
+  const changed = settleWithAmount(0.5);
+  assert.equal(first.fundingCost, 0.25);
+  assert.equal(changed.fundingCost, 0.5);
+  assert.notEqual(first.fundingEvidence.fundingEvidenceDigest, changed.fundingEvidence.fundingEvidenceDigest);
+});
+
+test("funding duplicate and unordered payments fail closed without canonical reordering", () => {
+  const sample = openSample("CRYPTO_FUTURES", "LONG");
+  const settledAt = NOW + 90_000;
+  const payment = { asOfMs: NOW + 30_000, amount: 0.25, source: "bitget-public", provenance: "funding-v1", version: "v1" };
+
+  assert.throws(() => settleFourMarketPaperSample({
+    sample,
+    exitExecution: execution("CRYPTO_FUTURES", settledAt),
+    exitBar: { nextOpen: 110, high: 111, low: 109 },
+    fundingEvidence: { complete: true, payments: [payment, { ...payment }] },
+    evaluatedAtMs: settledAt,
+  }), /PAPER_FUNDING_DUPLICATE_PAYMENT/);
+
+  assert.throws(() => settleFourMarketPaperSample({
+    sample,
+    exitExecution: execution("CRYPTO_FUTURES", settledAt),
+    exitBar: { nextOpen: 110, high: 111, low: 109 },
+    fundingEvidence: {
+      complete: true,
+      payments: [
+        { asOfMs: NOW + 60_000, amount: 0.25, source: "bitget-public", provenance: "funding-v1", version: "v1" },
+        { asOfMs: NOW + 30_000, amount: 0.1, source: "bitget-public", provenance: "funding-v1", version: "v1" },
+      ],
+    },
+    evaluatedAtMs: settledAt,
+  }), /PAPER_FUNDING_PAYMENT_ORDER_INVALID/);
+});
+
+test("non-futures settlement preserves explicit empty funding evidence instead of inventing payments", () => {
+  const sample = openSample("US_STOCK", "BUY");
+  const settledAt = NOW + 60_000;
+  const settled = settleFourMarketPaperSample({
+    sample,
+    exitExecution: execution("US_STOCK", settledAt),
+    exitBar: { nextOpen: 110, high: 111, low: 109 },
+    fundingEvidence: fundingNone(),
+    evaluatedAtMs: settledAt,
+  });
+  assert.equal(settled.fundingCost, 0);
+  assert.equal(settled.fundingEvidence.applicable, false);
+  assert.deepEqual(settled.fundingEvidence.payments, []);
+  assert.match(settled.fundingEvidence.fundingEvidenceDigest, /^[0-9a-f]{64}$/);
+});
 
 test("tampered entry provenance digest fails closed before settlement", () => {
   const sample = structuredClone(openSample("US_STOCK", "BUY"));
