@@ -9,6 +9,7 @@ import {
   encryptTradingCredentials,
 } from '../services/trade-credential-vault.service';
 import type { ExchangeConnection } from '../services/trade-automation.types';
+import '../features/account-readonly/tests/account-readonly.runtime.test';
 
 const repositoryRoot = process.cwd();
 
@@ -108,12 +109,13 @@ test('server environment credentials can no longer become a user credential fall
   }
 });
 
-test('account connection route is GET-only metadata-only and has no provider network or credential decryption path', () => {
+test('account connection route requires approved-member capability and stays GET-only metadata-only', () => {
   const routeSource = source('api-server/src/routes/account-connections.ts');
   const indexSource = source('api-server/src/routes/index.ts');
 
   assert.match(indexSource, /router\.use\('\/account-connections',\s*accountConnectionsRouter\)/);
   assert.doesNotMatch(indexSource, /router\.use\('\/account-connections',\s*requireAdmin/);
+  assert.match(routeSource, /router\.use\(requireCapability\('canAccessBasicInfo'\)\)/);
   assert.match(routeSource, /router\.get\('\/contract'/);
   assert.match(routeSource, /router\.get\('\/status'/);
   assert.match(routeSource, /router\.get\('\/snapshot'/);
@@ -139,4 +141,27 @@ test('account connection route is GET-only metadata-only and has no provider net
   ]) {
     assert.equal(indexSource.includes(privatePath), true, `missing private-path fail-closed guard: ${privatePath}`);
   }
+});
+
+test('user integrations GET degrades only broker metadata storage outage and preserves trading fail-closed safety', () => {
+  const routeSource = source('api-server/src/routes/user-broker-telegram.ts');
+
+  assert.match(routeSource, /code !== 'TRADE_AUTOMATION_STORAGE_UNAVAILABLE'/);
+  assert.match(routeSource, /brokerConnectionsAvailable:\s*false/);
+  assert.match(routeSource, /brokerConnectionsErrorCode:\s*code/);
+  assert.match(
+    routeSource,
+    /partial:\s*state\.telegramStorageAvailable === false \|\| brokerState\.brokerConnectionsAvailable === false/,
+  );
+  assert.match(
+    routeSource,
+    /brokerMetadataRead:\s*canReadBrokerConnections && brokerState\.brokerConnectionsAvailable === true/,
+  );
+  assert.match(routeSource, /privateApiRequests:\s*0/);
+  assert.match(routeSource, /ordersSubmitted:\s*0/);
+  assert.match(routeSource, /ordersCancelled:\s*0/);
+  assert.match(routeSource, /userBrokerTelegramRouter\.post\('\/execution\/sync'/);
+  assert.match(routeSource, /userBrokerTelegramRouter\.post\('\/telegram\/link'/);
+  assert.match(routeSource, /userBrokerTelegramRouter\.patch\('\/notifications'/);
+  assert.match(routeSource, /res\.status\(503\)\.json\(\{ ok: false, error: errorCode\(error\)/);
 });

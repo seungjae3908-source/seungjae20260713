@@ -1,12 +1,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { InMemoryUserBrokerTelegramRepository } from './user-broker-telegram.repository';
+import {
+  InMemoryUserBrokerTelegramRepository,
+  TELEGRAM_NOTIFICATION_PREFERENCES_MARKER,
+  enabledTypesWithTelegramPreferences,
+  notificationPreferencesFromEnabledTypes,
+} from './user-broker-telegram.repository';
 import {
   UserBrokerTelegramService,
   executionEventFromTradingOrder,
   hashTelegramLinkToken,
   manualPortfolioEvent,
   maskBrokerAccount,
+  personalTelegramEventAllowed,
 } from './user-broker-telegram.service';
 import type {
   PortfolioSyncSink,
@@ -92,6 +98,25 @@ test('a Telegram chat cannot be rebound to another app user', async () => {
   }), /TELEGRAM_CHAT_ALREADY_LINKED/);
 });
 
+test('personal Telegram delivery is bounded by the server-resolved membership market scope', async () => {
+  assert.equal(personalTelegramEventAllowed('associate', { market: 'KR' }), true);
+  assert.equal(personalTelegramEventAllowed('associate', { market: 'crypto_spot' }), true);
+  assert.equal(personalTelegramEventAllowed('associate', { market: 'crypto_futures' }), false);
+  assert.equal(personalTelegramEventAllowed('regular', { market: 'crypto_futures' }), true);
+  assert.equal(personalTelegramEventAllowed('pending', { market: 'KR' }), false);
+
+  const { service, repository } = fixture();
+  await link(service, 'associate-user', 'associate-chat');
+  const futures = manualPortfolioEvent({
+    id: 'associate-futures', userId: 'associate-user', symbol: 'BTCUSDT', market: 'crypto_futures', quantity: 1, price: 100,
+  });
+  assert.deepEqual(
+    await service.recordEvent(futures, new Date('2026-08-12T00:02:00.000Z'), 'associate'),
+    { inserted: true, deliveryQueued: false, skipped: 'MEMBERSHIP_SCOPE' },
+  );
+  assert.equal((await repository.listDeliveries('associate-user')).length, 0);
+});
+
 test('user A manual event queues only Telegram A and does not re-sync canonical portfolio', async () => {
   const { service, repository, transport, portfolio } = fixture();
   await link(service, 'user-a', 'chat-a');
@@ -166,6 +191,26 @@ test('notification preferences can disable a type without affecting event/portfo
   assert.deepEqual(result, { inserted: true, deliveryQueued: false });
   assert.equal((await repository.listDeliveries('user-a')).length, 0);
   assert.equal(portfolio.events.length, 1);
+});
+
+test('Telegram preference projection preserves unified app notification types', () => {
+  const legacy = notificationPreferencesFromEnabledTypes(['news_positive', 'system']);
+  assert.equal(legacy.ORDER_FILLED, true);
+  assert.equal(legacy.POSITION_CLOSED, true);
+
+  const enabledTypes = enabledTypesWithTelegramPreferences(
+    ['news_positive', 'system', 'ORDER_REJECTED', TELEGRAM_NOTIFICATION_PREFERENCES_MARKER],
+    { ...legacy, ORDER_FILLED: false, POSITION_CLOSED: false },
+  );
+  assert.deepEqual(enabledTypes.slice(0, 3), [
+    'news_positive',
+    'system',
+    TELEGRAM_NOTIFICATION_PREFERENCES_MARKER,
+  ]);
+  const stored = notificationPreferencesFromEnabledTypes(enabledTypes);
+  assert.equal(stored.ORDER_FILLED, false);
+  assert.equal(stored.POSITION_CLOSED, false);
+  assert.equal(stored.ORDER_REJECTED, true);
 });
 
 test('canonical trading order event maps to user execution event with owner checks and masked account', () => {

@@ -1,6 +1,7 @@
 import { Router, type IRouter } from 'express';
 import healthRouter from './health';
 import marketRouter from './market';
+import marketSummaryAvailabilityRouter from './market-summary-availability';
 import marketInformationRouter from './market-information';
 import newsRouter from './news.route';
 import providerDebugRouter from './provider-debug';
@@ -23,8 +24,13 @@ import aiChatRouter from './ai-chat';
 import tradeAutomationRouter from './trade-automation';
 import boundedMarketScanRouter from './bounded-market-scan';
 import cryptoSignalScanRouter from './crypto-signal-scan';
+import strategyPromotionRouter from './strategy-promotion';
+import portfolioIntelligenceRouter from './portfolio-intelligence';
 import unifiedSearchRouter from './unified-search';
 import accountConnectionsRouter from './account-connections';
+import { createAccountReadonlyRouter, accountReadFlags } from '../features/account-readonly/account-readonly.route';
+import { AccountReadonlyService } from '../features/account-readonly/account-readonly.service';
+import { createVaultBackedAccountReaders } from '../features/account-readonly/account-readonly.runtime';
 import {
   manualPortfolioNotificationBridge,
   telegramWebhookRouter,
@@ -60,12 +66,24 @@ router.use(requireAuthenticated);
 // authenticated user's vault connection metadata and never falls back to a
 // server credential or sends a private provider request.
 router.use('/account-connections', accountConnectionsRouter);
+// Private account reads are a separate, authenticated, read-only surface. All
+// providers fail closed unless their explicit feature flag is exactly `true`.
+// Upbit and Bitget readers load only the authenticated user's encrypted vault
+// credentials and use a GET-only, host/path allowlisted transport. Toss stays
+// fail-closed until its separate credential contract is wired and verified.
+router.use(
+  '/accounts/read-only',
+  requireCapability('canAccessBasicInfo'),
+  createAccountReadonlyRouter(new AccountReadonlyService(createVaultBackedAccountReaders(), accountReadFlags())),
+);
 
 // Canonical AI Scanner routes must be registered before the legacy market
 // router. This makes /api/market/scan authenticated, capability protected,
 // bounded and cancellation aware. The legacy handler is no longer reachable.
 router.use('/market/scan', boundedMarketScanRouter);
 router.use('/scanner/crypto', cryptoSignalScanRouter);
+router.use('/strategy-promotion', requireCapability('canAccessBacktests'));
+router.use('/', strategyPromotionRouter);
 
 const privateExchangeDisabled = (_req: unknown, res: any) => res.status(403).json({
   ok: false,
@@ -127,12 +145,18 @@ router.use('/paper-journal/sync', manualPortfolioNotificationBridge);
 router.use('/', paperJournalRouter);
 router.use('/trade-automation', requireCapability('canPlaceOrders'));
 router.use('/trade-automation', tradeAutomationRouter);
-router.use('/user-integrations', requireCapability('canPlaceOrders'));
+router.use('/user-integrations', requireCapability('canConnectPersonalTelegram'));
 router.use('/user-integrations', userBrokerTelegramRouter);
 
 router.use(requireCapability('canAccessBasicInfo'));
+router.use('/', portfolioIntelligenceRouter);
 router.use('/', unifiedSearchRouter);
 router.use('/', aiChatRouter);
+// Normalize only the market-summary provider availability envelope before the
+// legacy market router writes its response. Unexpected backend 5xx responses
+// remain non-2xx; only the known public-provider-unavailable state is carried
+// as an explicit fail-closed dataState without browser-visible fake prices.
+router.use('/market/summary', marketSummaryAvailabilityRouter);
 router.use('/', marketRouter);
 router.use('/', newsRouter);
 // The safe rankings route must run before the legacy Kiwoom router. It keeps

@@ -5,10 +5,26 @@ import type { AddressInfo } from 'node:net';
 import router, { setTradeAutomationRepositoryFactoryForTests } from './trade-automation';
 import type { AuthenticatedRequest } from '../middleware/auth';
 import { InMemoryTradingRepository } from '../services/trade-automation.repository';
+import { marketIntelligenceNotAvailable, tradingMarket } from '../services/market-intelligence-client.service';
+import {
+  marketIntelligenceSymbolForTradingPlan,
+  setTradingPlanMarketIntelligenceRunnerForTests,
+} from '../services/trade-market-intelligence.service';
+import type { TradingPlanInput } from '../services/trade-automation.types';
 
 const USER = '11111111-1111-1111-1111-111111111111';
 const repository = new InMemoryTradingRepository();
 const MASTER_KEY = Buffer.alloc(32, 9).toString('base64');
+
+async function unavailableMarketIntelligence(
+  input: Pick<TradingPlanInput, 'exchange' | 'market' | 'symbol'>,
+) {
+  return marketIntelligenceNotAvailable(
+    tradingMarket(input),
+    marketIntelligenceSymbolForTradingPlan(input),
+    'TEST_MARKET_INTELLIGENCE_UNAVAILABLE',
+  );
+}
 
 async function startServer(authenticated = true, role: 'regular' | 'admin' = 'regular') {
   const app = express();
@@ -34,11 +50,13 @@ async function close(server: import('node:http').Server) {
 
 test.beforeEach(async () => {
   setTradeAutomationRepositoryFactoryForTests(() => repository);
+  setTradingPlanMarketIntelligenceRunnerForTests(unavailableMarketIntelligence);
   process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
   await repository.setGlobalEmergencyStop(false, USER);
 });
 test.after(() => {
   setTradeAutomationRepositoryFactoryForTests(null);
+  setTradingPlanMarketIntelligenceRunnerForTests(null);
   delete process.env.TRADING_CREDENTIAL_MASTER_KEY;
 });
 
@@ -183,6 +201,37 @@ test('approval route blocks unapproved calls and paper execution makes no extern
     const planId = plannedBody.plan.id;
     assert.equal(plannedBody.plan.state, 'APPROVAL_PENDING');
     assert.equal(plannedBody.plan.riskEnvelope, undefined);
+
+    const queueResponse = await nativeFetch(`${baseUrl}/api/trade-automation/approval-queue`);
+    assert.equal(queueResponse.status, 200);
+    const queueBody = await queueResponse.json() as {
+      items: Array<{ id: string; approval: { approvalEnabled: boolean }; order: unknown }>;
+      orderSubmitted: boolean;
+      orderCanceled: boolean;
+      privateTradingRequestSent: boolean;
+    };
+    const queuedPlan = queueBody.items.find((item) => item.id === planId);
+    assert.equal(queuedPlan?.approval.approvalEnabled, true);
+    assert.equal(queuedPlan?.order, null);
+    assert.equal(queueBody.orderSubmitted, false);
+    assert.equal(queueBody.orderCanceled, false);
+    assert.equal(queueBody.privateTradingRequestSent, false);
+
+    const approvalStatusResponse = await nativeFetch(`${baseUrl}/api/trade-automation/plans/${planId}/approval-status`);
+    assert.equal(approvalStatusResponse.status, 200);
+    const approvalStatusBody = await approvalStatusResponse.json() as {
+      approval: { approvalEnabled: boolean; signalState: string; planState: string };
+      orderSubmitted: boolean;
+      orderCanceled: boolean;
+      privateTradingRequestSent: boolean;
+    };
+    assert.equal(approvalStatusBody.approval.approvalEnabled, true);
+    assert.equal(approvalStatusBody.approval.signalState, 'READY_FOR_APPROVAL');
+    assert.equal(approvalStatusBody.approval.planState, 'APPROVAL_PENDING');
+    assert.equal(approvalStatusBody.orderSubmitted, false);
+    assert.equal(approvalStatusBody.orderCanceled, false);
+    assert.equal(approvalStatusBody.privateTradingRequestSent, false);
+
     const denied = await nativeFetch(`${baseUrl}/api/trade-automation/plans/${planId}/approve`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
     });

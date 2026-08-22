@@ -4,6 +4,10 @@ import { useQuery } from '@tanstack/react-query';
 import { ChevronRight, RefreshCw } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import { api, type SectorPopularGroup, type SummaryItem } from '@/lib/api';
+import {
+  getMarketSummary,
+  validMarketSummaryItems,
+} from '@/lib/market-summary';
 import { useAssetMode } from '@/lib/asset-mode';
 import { cn } from '@/lib/utils';
 
@@ -78,8 +82,10 @@ export default function MarketOverviewPage() {
 
   const summary = useQuery({
     queryKey: ['market-overview-summary'],
-    queryFn: () => api.summary(),
+    queryFn: getMarketSummary,
     refetchInterval: 30_000,
+    refetchOnWindowFocus: false,
+    retry: 1,
   });
 
   const sectors = useQuery({
@@ -96,7 +102,7 @@ export default function MarketOverviewPage() {
 
   const indices = useMemo(() => {
     const wanted = market === 'KR' ? ['kospi', 'kosdaq'] : ['nasdaq'];
-    return (summary.data?.items ?? []).filter((item) =>
+    return validMarketSummaryItems(summary.data?.items ?? []).filter((item) =>
       wanted.includes(String(item.key).toLowerCase()),
     );
   }, [market, summary.data]);
@@ -108,6 +114,8 @@ export default function MarketOverviewPage() {
       .slice(0, 6);
   }, [sectors.data]);
 
+  const summaryProviderError = summary.data?.dataState === 'provider_error';
+  const summaryPartial = summary.data?.dataState === 'partial';
   const refreshing = summary.isFetching || sectors.isFetching || briefing.isFetching;
 
   function refresh() {
@@ -173,14 +181,35 @@ export default function MarketOverviewPage() {
           </div>
 
           {summary.isLoading && <div className="mt-3"><StateMessage>지수 데이터를 불러오는 중입니다.</StateMessage></div>}
-          {summary.isError && <div className="mt-3"><StateMessage error>지수 데이터를 불러오지 못했습니다.</StateMessage></div>}
+          {summary.isError && <div className="mt-3"><StateMessage error>지수 데이터 요청에 실패했습니다. 잠시 후 다시 시도해 주세요.</StateMessage></div>}
+          {!summary.isLoading && !summary.isError && summaryProviderError && (
+            <div className="mt-3">
+              <StateMessage error>
+                <div className="space-y-3">
+                  <p>시장 지수 공개 공급자의 응답을 확인하지 못했습니다. 실제 가격을 표시하지 않습니다.</p>
+                  <button
+                    type="button"
+                    onClick={() => void summary.refetch()}
+                    className="rounded-xl border border-destructive/30 px-3 py-2 text-xs font-black"
+                  >
+                    다시 시도
+                  </button>
+                </div>
+              </StateMessage>
+            </div>
+          )}
+          {!summary.isLoading && !summary.isError && summaryPartial && (
+            <div className="mt-3">
+              <StateMessage>일부 지수의 공개 공급자 응답이 지연되어 확인된 실제 값만 표시합니다.</StateMessage>
+            </div>
+          )}
 
-          {!summary.isLoading && !summary.isError && (
+          {!summary.isLoading && !summary.isError && !summaryProviderError && (
             <div className="mt-3 grid grid-cols-2 gap-2">
               {indices.map((item) => <IndexCard key={item.key} item={item} />)}
               {indices.length === 0 && (
                 <div className="col-span-2">
-                  <StateMessage>현재 표시할 지수 데이터가 없습니다.</StateMessage>
+                  <StateMessage>선택한 시장에서 현재 확인된 실제 지수 데이터가 없습니다.</StateMessage>
                 </div>
               )}
             </div>
