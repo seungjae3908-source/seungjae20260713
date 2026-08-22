@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
 function source(relativePath: string) {
   return fs.readFileSync(path.resolve(process.cwd(), relativePath), 'utf8');
@@ -32,7 +32,7 @@ function selectionFixture() {
   };
 }
 
-async function primeSelection(page: Parameters<typeof test>[0]['page']) {
+async function primeSelection(page: Page) {
   await page.addInitScript((selection) => {
     window.localStorage.setItem('sa-analysis-selection-v1', JSON.stringify(selection));
   }, selectionFixture());
