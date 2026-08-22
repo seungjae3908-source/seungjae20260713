@@ -25,6 +25,7 @@ import { cn } from '@/lib/utils';
 
 type SignalState = 'WATCHING' | 'READY_FOR_APPROVAL' | 'WEAKENED' | 'INVALIDATED' | 'EXPIRED';
 type PlanState = 'PLANNED' | 'APPROVAL_PENDING' | 'SUBMITTED' | 'EXPIRED' | string;
+type QueueDataState = 'loading' | 'ready' | 'unavailable';
 
 type ApprovalStatus = {
   approvalEnabled: boolean;
@@ -144,6 +145,7 @@ function mergeApprovalStatus(item: TradeApprovalQueueItem, payload: ApprovalStat
 export function TradeApprovalQueue({ fixture }: { fixture?: TradeApprovalQueueItem[] }) {
   const [items, setItems] = useState<TradeApprovalQueueItem[]>(fixture ?? []);
   const [loading, setLoading] = useState(!fixture);
+  const [dataState, setDataState] = useState<QueueDataState>(fixture ? 'ready' : 'loading');
   const [message, setMessage] = useState('');
   const [actionId, setActionId] = useState<string | null>(null);
   const [validatingId, setValidatingId] = useState<string | null>(null);
@@ -162,7 +164,10 @@ export function TradeApprovalQueue({ fixture }: { fixture?: TradeApprovalQueueIt
   const load = useCallback(async (silent = false) => {
     if (fixture) return;
     const requestSequence = ++requestSequenceRef.current;
-    if (!silent) setLoading(true);
+    if (!silent) {
+      setLoading(true);
+      setDataState('loading');
+    }
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 8_000);
     try {
@@ -175,6 +180,7 @@ export function TradeApprovalQueue({ fixture }: { fixture?: TradeApprovalQueueIt
       if (requestSequence !== requestSequenceRef.current) return;
       setItems(Array.isArray(payload.items) ? payload.items : []);
       setLastUpdatedAt(payload.updatedAt ?? new Date().toISOString());
+      setDataState('ready');
       setStale(false);
       setOffline(false);
       if (!silent) setMessage('');
@@ -185,6 +191,7 @@ export function TradeApprovalQueue({ fixture }: { fixture?: TradeApprovalQueueIt
       setOffline(isOffline);
       setStale(true);
       if (!silent) {
+        setDataState('unavailable');
         setMessage(isOffline
           ? '오프라인 상태입니다. 마지막 확인 데이터를 표시하며 주문 승인은 잠금 상태입니다.'
           : timedOut
@@ -441,11 +448,22 @@ export function TradeApprovalQueue({ fixture }: { fixture?: TradeApprovalQueueIt
 
         <div className="mt-4 space-y-3">
           {loading ? <CardListSkeleton count={2} /> : null}
-          {!loading && sorted.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-card-border bg-background p-5 text-center">
+          {!loading && dataState === 'unavailable' ? (
+            <div className="rounded-2xl border border-warning/40 bg-warning/10 p-5 text-center" data-testid="approval-queue-unavailable">
+              <AlertTriangle className="mx-auto h-6 w-6 text-warning" />
+              <p className="mt-2 text-sm font-extrabold">승인 대기 신호를 확인할 수 없습니다.</p>
+              <p className="mt-1 text-xs text-muted-foreground">현재 서버 또는 Provider 응답을 확인할 수 있어야 0건 여부를 판단할 수 있습니다. 실패를 빈 목록으로 처리하지 않습니다.</p>
+            </div>
+          ) : null}
+          {!loading && dataState === 'ready' && sorted.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-card-border bg-background p-5 text-center" data-testid="approval-queue-empty">
               <Clock3 className="mx-auto h-6 w-6 text-muted-foreground" />
-              <p className="mt-2 text-sm font-extrabold">현재 승인 대기 신호가 없습니다.</p>
-              <p className="mt-1 text-xs text-muted-foreground">검색기 신호가 진입 조건을 유지하면 이곳에 표시됩니다.</p>
+              <p className="mt-2 text-sm font-extrabold">
+                {stale ? '마지막 정상 조회에서 승인 대기 신호가 없었습니다.' : '현재 승인 대기 신호가 없습니다.'}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {stale ? '현재 갱신에 실패해 상태가 오래됐습니다. 새로고침 후 다시 확인해 주세요.' : '검색기 신호가 진입 조건을 유지하면 이곳에 표시됩니다.'}
+              </p>
             </div>
           ) : null}
 
