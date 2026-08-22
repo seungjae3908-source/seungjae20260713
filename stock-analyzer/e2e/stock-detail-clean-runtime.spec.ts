@@ -99,13 +99,13 @@ async function mockDetail(page: Page, requests: string[]) {
       });
       return;
     }
-    if (url.pathname === '/api/stocks/005930/chart') {
+    if (url.pathname === '/api/stocks/005930/candles') {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
           ticker: '005930',
-          timeframe: url.searchParams.get('timeframe') ?? '1D',
+          timeframe: url.searchParams.get('tf') ?? '1D',
           provider: 'fixture',
           fetchedAt: NOW,
           candles,
@@ -136,11 +136,13 @@ for (const viewport of [
     expect(requests).toContain('/api/stocks/005930/quote');
     expect(requests).toContain('/api/stocks/005930/profile');
     expect(requests).not.toContain('/api/stocks/005930/news');
+    expect(requests).not.toContain('/api/stocks/005930/candles');
     expect(requests).not.toContain('/api/stocks/005930/chart');
 
     await tabs.getByRole('tab', { name: 'AI 차트 분석기', exact: true }).click();
     await expect(page.getByRole('heading', { name: /AI 차트 생중계/ })).toBeVisible();
-    await expect.poll(() => requests.filter((path) => path === '/api/stocks/005930/chart').length).toBeGreaterThan(0);
+    await expect.poll(() => requests.filter((path) => path === '/api/stocks/005930/candles').length).toBeGreaterThan(0);
+    expect(requests).not.toContain('/api/stocks/005930/chart');
 
     await tabs.getByRole('tab', { name: '뉴스', exact: true }).click();
     await expect(page.getByText('삼성전자 공개 시장 뉴스', { exact: true })).toBeVisible();
