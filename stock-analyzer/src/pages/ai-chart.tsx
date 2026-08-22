@@ -714,7 +714,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
     </div>
   );
 
-  const mobile = !desktop && !externalMode;
+  const mobile = !desktop && !externalMode && !embedded;
 
   return (
     <div className={`h-full min-w-0 overflow-y-auto overscroll-contain bg-background ${embedded || externalMode ? 'pb-4' : 'pb-24'}`}>
@@ -731,7 +731,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
             </button>
           )}
           <div className="min-w-0 flex-1">
-            <p className="truncate text-[10px] font-extrabold text-primary">{externalMode ? '외부 차트' : selection.displayName}</p>
+            <p className="truncate text-[10px] font-extrabold text-primary">{externalMode ? '외부 AI 차트' : selection.displayName}</p>
             <h1 aria-label="AI 차트 생중계 · AI 차트 2.0" className="truncate text-base font-black sm:text-lg">AI 차트</h1>
           </div>
           {!embedded && !externalMode && externalControlAvailable && (
