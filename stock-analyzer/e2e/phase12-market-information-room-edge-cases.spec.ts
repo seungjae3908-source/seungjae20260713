@@ -277,7 +277,7 @@ test('authentication expiry, permission denial, and timeout render distinct retr
     const diagnostics = await mockEnvironment(page, { error: item });
     await page.goto('/stocks/kr');
     await expect(page.getByRole('heading', { name: item.title })).toBeVisible();
-    await expect(page.getByRole('button', { name: '다시 시도' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '재시도' })).toBeVisible();
     await diagnostics.assertClean();
     await context.close();
   }
