@@ -85,6 +85,14 @@ export function shouldReconcileInitialSession(state: InitialSessionReconcileStat
   return state.currentUserId !== state.incomingUserId || !state.hasProfile;
 }
 
+export function shouldRecoverDeferredInitialSession(input: {
+  incomingUserId: string | null;
+  initialBootstrapUserId: string | null | undefined;
+}): boolean {
+  if (!input.incomingUserId) return false;
+  return input.initialBootstrapUserId !== input.incomingUserId;
+}
+
 /**
  * Re-read once when the first forced profile load still produces no profile.
  * The second read only runs while the same restored identity is still current,
