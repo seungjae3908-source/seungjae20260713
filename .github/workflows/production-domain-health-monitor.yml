@@ -1,0 +1,52 @@
+name: Production Domain Health Monitor
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/production-domain-health-monitor.yml
+      - ops/production-endpoints.json
+      - ops/monitor-production-endpoints.mjs
+      - ops/monitor-production-endpoints.test.mjs
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-domain-health-monitor
+  cancel-in-progress: true
+
+jobs:
+  monitor:
+    name: DNS HTTPS health and deploy SHA parity
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Verify monitor contract
+        run: node --test ops/monitor-production-endpoints.test.mjs
+
+      - name: Check primary and fallback Production endpoints
+        run: node ops/monitor-production-endpoints.mjs
+
+      - name: Safety boundary
+        if: always()
+        run: |
+          {
+            echo '## Safety boundary'
+            echo
+            echo '- DNS checks: read-only'
+            echo '- HTTPS/TLS checks: read-only GET only'
+            echo '- /api/health checks: read-only GET only'
+            echo '- Production DB mutations: 0'
+            echo '- server/Caddy mutations: 0'
+            echo '- private provider/account requests: 0'
+            echo '- order/cancel/amend/transfer/withdrawal authority: 0'
+          } >> "$GITHUB_STEP_SUMMARY"
