@@ -21,6 +21,32 @@ function safeEnvelope(value) {
     && value?.exchangeRequestSent === false;
 }
 
+function cloneMeasurements(value) {
+  return Array.isArray(value)
+    ? freeze(value.map((row) => freeze(structuredClone(row))))
+    : freeze([]);
+}
+
+function cloneReasonEvidenceByStage(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return freeze({});
+  return freeze(Object.fromEntries(
+    Object.entries(value).map(([stage, evidence]) => [stage, freeze(structuredClone(evidence))]),
+  ));
+}
+
+function naturalRuntimeMetadata(runtime) {
+  return {
+    naturalFunnelMeasurements: cloneMeasurements(runtime?.naturalFunnelMeasurements),
+    naturalFirstZeroStage: runtime?.naturalFirstZeroStage ?? "UNKNOWN",
+    naturalFirstZeroReason: runtime?.naturalFirstZeroReason ?? null,
+    naturalEvidenceIdentity: runtime?.naturalEvidenceIdentity ?? null,
+    naturalRuntimeSha: runtime?.naturalRuntimeSha ?? null,
+    authoritativeFirstZeroReasonEvidenceByStage: cloneReasonEvidenceByStage(
+      runtime?.authoritativeFirstZeroReasonEvidenceByStage,
+    ),
+  };
+}
+
 function candidateIdentityBlockers(candidate, market, {
   requireProfitEvidence = true,
   requireExitIntent = false,
@@ -84,11 +110,10 @@ function blockedEvidence(base, runtime, blocker) {
       exitSignals: Number.isInteger(runtime?.paperBridge?.exits)
         ? runtime.paperBridge.exits
         : null,
-      stageMeasurements: Array.isArray(runtime?.stageMeasurements)
-        ? freeze(runtime.stageMeasurements.map((row) => freeze(structuredClone(row))))
-        : freeze([]),
+      stageMeasurements: cloneMeasurements(runtime?.stageMeasurements),
       firstZeroStage: runtime?.firstZeroStage ?? "UNKNOWN",
       firstZeroReason: runtime?.firstZeroReason ?? blocker,
+      ...naturalRuntimeMetadata(runtime),
       blocker,
     }),
   });
@@ -106,11 +131,10 @@ function readyEvidence(base, runtime, candidates, exits) {
       searchOutcome: runtime?.search?.outcome ?? null,
       eligibleCandidates: candidates.length,
       exitSignals: exits.length,
-      stageMeasurements: Array.isArray(runtime.stageMeasurements)
-        ? freeze(runtime.stageMeasurements.map((row) => freeze(structuredClone(row))))
-        : freeze([]),
+      stageMeasurements: cloneMeasurements(runtime.stageMeasurements),
       firstZeroStage: runtime.firstZeroStage ?? "UNKNOWN",
       firstZeroReason: runtime.firstZeroReason ?? null,
+      ...naturalRuntimeMetadata(runtime),
       blocker: null,
     }),
   });
