@@ -2,7 +2,7 @@ import { runBoundedWorkPool } from '../lib/bounded-work-pool';
 
 export const MARKET_LISTING_CONCURRENCY = 6;
 export const MARKET_LISTING_DEADLINE_MS = 6_000;
-export const MARKET_LISTING_ITEM_TIMEOUT_MS = 2_200;
+export const MARKET_LISTING_ITEM_TIMEOUT_MS = MARKET_LISTING_DEADLINE_MS;
 
 export interface MarketListingWorkOptions {
   concurrency?: number;
