@@ -79,31 +79,53 @@ test('INITIAL_SESSION only reconciles a restored authenticated identity that is 
     incomingUserId: 'user-1',
     currentUserId: null,
     hasProfile: false,
+    profileHydrationUserId: null,
   }), true);
   assert.equal(shouldReconcileInitialSession({
     event: 'INITIAL_SESSION',
     incomingUserId: 'user-1',
     currentUserId: 'user-1',
     hasProfile: false,
+    profileHydrationUserId: null,
   }), true);
   assert.equal(shouldReconcileInitialSession({
     event: 'INITIAL_SESSION',
     incomingUserId: 'user-1',
     currentUserId: 'user-1',
     hasProfile: true,
+    profileHydrationUserId: null,
   }), false);
   assert.equal(shouldReconcileInitialSession({
     event: 'INITIAL_SESSION',
     incomingUserId: null,
     currentUserId: null,
     hasProfile: false,
+    profileHydrationUserId: null,
   }), false);
   assert.equal(shouldReconcileInitialSession({
     event: 'TOKEN_REFRESHED',
     incomingUserId: 'user-1',
     currentUserId: null,
     hasProfile: false,
+    profileHydrationUserId: null,
   }), false);
+});
+
+test('INITIAL_SESSION does not duplicate an in-flight profile hydration for the same identity', () => {
+  assert.equal(shouldReconcileInitialSession({
+    event: 'INITIAL_SESSION',
+    incomingUserId: 'user-1',
+    currentUserId: 'user-1',
+    hasProfile: false,
+    profileHydrationUserId: 'user-1',
+  }), false);
+  assert.equal(shouldReconcileInitialSession({
+    event: 'INITIAL_SESSION',
+    incomingUserId: 'user-2',
+    currentUserId: 'user-1',
+    hasProfile: false,
+    profileHydrationUserId: 'user-1',
+  }), true);
 });
 
 test('transient null bootstrap is recoverable by one persisted INITIAL_SESSION hydration', async () => {
@@ -122,6 +144,7 @@ test('transient null bootstrap is recoverable by one persisted INITIAL_SESSION h
     incomingUserId: 'restored-user',
     currentUserId: null,
     hasProfile: false,
+    profileHydrationUserId: null,
   }), true);
 
   let profileReads = 0;
@@ -142,6 +165,7 @@ test('transient null bootstrap is recoverable by one persisted INITIAL_SESSION h
     incomingUserId: 'restored-user',
     currentUserId: 'restored-user',
     hasProfile: true,
+    profileHydrationUserId: null,
   }), false);
 });
 

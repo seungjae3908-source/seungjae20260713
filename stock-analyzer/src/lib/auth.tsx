@@ -118,6 +118,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const profileLoadQueueRef = useRef<Promise<void>>(Promise.resolve());
   const profileRequestsRef = useRef(new ProfileRequestCoordinator<MemberProfile | null>());
   const bootstrapAttemptRef = useRef(0);
+  const initialProfileHydrationRef = useRef<{ attempt: number; userId: string } | null>(null);
 
   function applyProfile(next: MemberProfile | null) {
     profileRef.current = next;
@@ -195,6 +196,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     const attempt = ++bootstrapAttemptRef.current;
+    initialProfileHydrationRef.current = null;
     setBootstrapError(null);
     setLoading(true);
 
@@ -205,7 +207,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return data.session;
       },
       applySession: (next) => {
-        if (mountedRef.current && bootstrapAttemptRef.current === attempt) applySession(next);
+        if (!mountedRef.current || bootstrapAttemptRef.current !== attempt) return;
+        initialProfileHydrationRef.current = next
+          ? { attempt, userId: next.user.id }
+          : null;
+        applySession(next);
       },
       loadProfile: async (next, signal) => {
         if (!mountedRef.current || bootstrapAttemptRef.current !== attempt) return;
@@ -215,6 +221,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!mountedRef.current || bootstrapAttemptRef.current !== attempt) return;
       setBootstrapError(authBootstrapErrorMessage(cause));
     }).finally(() => {
+      if (initialProfileHydrationRef.current?.attempt === attempt) {
+        initialProfileHydrationRef.current = null;
+      }
       if (mountedRef.current && bootstrapAttemptRef.current === attempt) setLoading(false);
     });
   }
@@ -233,10 +242,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           incomingUserId,
           currentUserId,
           hasProfile: profileRef.current !== null,
+          profileHydrationUserId: initialProfileHydrationRef.current?.userId ?? null,
         })) return;
         if (!next) return;
 
         const attempt = ++bootstrapAttemptRef.current;
+        initialProfileHydrationRef.current = null;
         const restoredSession = next;
         const prepare = currentUserId && currentUserId !== incomingUserId
           ? prepareBackupForSessionEnd()
@@ -264,6 +275,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (signingInRef.current && next) return;
       if (signingOutRef.current && next) return;
       bootstrapAttemptRef.current += 1;
+      initialProfileHydrationRef.current = null;
       const previousUserId = sessionRef.current?.user.id ?? null;
       const nextUserId = next?.user.id ?? null;
       const prepare = previousUserId && previousUserId !== nextUserId
@@ -283,6 +295,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       mountedRef.current = false;
       bootstrapAttemptRef.current += 1;
+      initialProfileHydrationRef.current = null;
       sub.subscription.unsubscribe();
     };
   }, []);
