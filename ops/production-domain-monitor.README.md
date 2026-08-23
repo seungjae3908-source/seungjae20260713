@@ -20,3 +20,7 @@ The two free DDNS hostnames do **not** provide automatic DNS failover between ea
 8. Primary/fallback `deploySha` equality.
 
 Any missing or inconsistent evidence fails closed. The monitor performs GET/read-only operations only and has no Production, database, server, Caddy, private-provider, or trading mutation authority.
+
+## Rollout boundary
+
+The live Caddy endpoint already accepts both hostnames. This repository contract designates Dynu as the primary address for new monitoring and user-facing navigation. Existing protected Production QA/release workflows are intentionally not bulk-rewritten in this change: active incident owners must migrate their own hard-coded Production base URL without overlapping this isolated monitor owner. Until those owner-controlled workflows are updated, their DuckDNS checks remain valid fallback-path evidence rather than proof that DuckDNS is still the preferred user-facing endpoint.
