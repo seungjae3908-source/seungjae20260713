@@ -27,6 +27,12 @@ create table if not exists public.member_trusted_devices (
 create unique index if not exists member_trusted_devices_live_fingerprint_uq
   on public.member_trusted_devices(user_id, key_fingerprint)
   where status <> 'revoked';
+-- Serialize enrollment per member. This database invariant prevents two
+-- simultaneous first-device or paired-device requests from both reserving a
+-- pending device and bypassing the configured active-device limit.
+create unique index if not exists member_trusted_devices_one_pending_uq
+  on public.member_trusted_devices(user_id)
+  where status = 'pending';
 create index if not exists member_trusted_devices_user_status_idx
   on public.member_trusted_devices(user_id, status, created_at desc);
 
@@ -58,6 +64,36 @@ create table if not exists public.member_device_pairing_tokens (
 );
 create index if not exists member_device_pairing_tokens_user_expiry_idx
   on public.member_device_pairing_tokens(user_id, expires_at) where used_at is null;
+
+-- A pairing token must not remain usable after the trusted device that issued
+-- it has been revoked. The API already checks device-session validity when the
+-- token is created; this trigger also protects the later consume operation.
+create or replace function public.require_active_member_device_pairing_creator()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if new.used_at is not null and old.used_at is null then
+    if not exists (
+      select 1
+      from public.member_trusted_devices d
+      where d.id = new.created_by_device_id
+        and d.user_id = new.user_id
+        and d.status = 'active'
+    ) then
+      raise exception 'PAIRING_CREATOR_NOT_ACTIVE' using errcode = '23514';
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists member_device_pairing_creator_active on public.member_device_pairing_tokens;
+create trigger member_device_pairing_creator_active
+before update of used_at on public.member_device_pairing_tokens
+for each row execute function public.require_active_member_device_pairing_creator();
 
 create table if not exists public.member_device_sessions (
   id uuid primary key,
