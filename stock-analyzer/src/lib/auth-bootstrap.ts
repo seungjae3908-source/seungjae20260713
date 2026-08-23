@@ -72,16 +72,19 @@ export type InitialSessionReconcileState = {
   incomingUserId: string | null;
   currentUserId: string | null;
   hasProfile: boolean;
+  profileHydrationUserId: string | null;
 };
 
 /**
  * Supabase emits INITIAL_SESSION from its persisted browser session. A normal
  * bootstrap may finish with a transient null/partial state before that event
- * arrives, especially across rapid full-page navigations. Only a non-null
- * restored identity is allowed to supersede the in-flight bootstrap.
+ * arrives, especially across rapid full-page navigations. A same-identity
+ * profile hydration already owned by the finite bootstrap is never duplicated.
+ * Otherwise, only a non-null restored identity may supersede the bootstrap.
  */
 export function shouldReconcileInitialSession(state: InitialSessionReconcileState): boolean {
   if (state.event !== 'INITIAL_SESSION' || !state.incomingUserId) return false;
+  if (state.profileHydrationUserId === state.incomingUserId) return false;
   return state.currentUserId !== state.incomingUserId || !state.hasProfile;
 }
 
