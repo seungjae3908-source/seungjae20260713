@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import {
   BoundedWorkTimeoutError,
   runBoundedWorkPool,
@@ -184,4 +186,22 @@ test('default market listing budgets are finite and keep item work below the rou
   assert.ok(MARKET_LISTING_ITEM_TIMEOUT_MS > 0);
   assert.ok(MARKET_LISTING_ITEM_TIMEOUT_MS < MARKET_LISTING_DEADLINE_MS);
   assert.ok(MARKET_LISTING_DEADLINE_MS <= 6_000);
+});
+
+test('market movers surfaces bounded listing completeness instead of hiding partial evidence', () => {
+  const routeSource = readFileSync(
+    path.resolve(process.cwd(), 'api-server/src/routes/market.ts'),
+    'utf8',
+  );
+  const listingSource = readFileSync(
+    path.resolve(process.cwd(), 'api-server/src/services/market-listing.service.ts'),
+    'utf8',
+  );
+
+  assert.match(routeSource, /liveListingsWithDiagnostics/);
+  assert.match(routeSource, /dataStatus:\s*live\.diagnostics\.status/);
+  assert.match(routeSource, /listingDiagnostics/);
+  assert.match(routeSource, /failedMarkets/);
+  assert.match(listingSource, /collectMarketListingWork\(\s*candidates/);
+  assert.doesNotMatch(listingSource, /Promise\.all\(candidates\.map\(toRow\)\)/);
 });
