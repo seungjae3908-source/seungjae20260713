@@ -7,6 +7,10 @@ import {
   type CryptoTicker,
   type CryptoUniverse,
 } from './crypto-signal-scanner.service';
+import {
+  evaluateCryptoWilliamsDailyCandles,
+  type CryptoWilliamsDailyCandle,
+} from './crypto-williams-atr-scanner-overlay.service';
 
 const now = () => Date.now();
 
@@ -39,6 +43,52 @@ function candles(count = 40): CryptoCandle[] {
       close,
       volume: index === count - 1 ? 300_000 : 100_000,
       quoteVolume: 10_000_000,
+    };
+  });
+}
+
+function williamsLongDailyCandles(): CryptoWilliamsDailyCandle[] {
+  const start = Date.UTC(2026, 6, 1);
+  return Array.from({ length: 17 }, (_, index) => {
+    if (index === 16) {
+      return {
+        time: start + index * 24 * 60 * 60_000,
+        open: 120,
+        high: 126,
+        low: 119,
+        close: 125,
+      };
+    }
+    const close = 100 + index;
+    return {
+      time: start + index * 24 * 60 * 60_000,
+      open: close - 1,
+      high: close + 2,
+      low: close - 2,
+      close,
+    };
+  });
+}
+
+function williamsShortDailyCandles(): CryptoWilliamsDailyCandle[] {
+  const start = Date.UTC(2026, 6, 1);
+  return Array.from({ length: 17 }, (_, index) => {
+    if (index === 16) {
+      return {
+        time: start + index * 24 * 60 * 60_000,
+        open: 110,
+        high: 111,
+        low: 106,
+        close: 107,
+      };
+    }
+    const close = 130 - index;
+    return {
+      time: start + index * 24 * 60 * 60_000,
+      open: close + 1,
+      high: close + 2,
+      low: close - 2,
+      close,
     };
   });
 }
@@ -134,4 +184,46 @@ test('caller abort stops the crypto scanner instead of returning a late success'
   const pending = service.scan({ ...request('futures'), signal: controller.signal });
   setTimeout(() => controller.abort(new Error('test abort')), 20);
   await assert.rejects(pending, /test abort/);
+});
+
+test('Williams spot overlay uses completed KST09 sessions and produces LONG with ATR stop', () => {
+  const evaluation = evaluateCryptoWilliamsDailyCandles({
+    market: 'spot',
+    candles: williamsLongDailyCandles(),
+    currentPrice: 125,
+  });
+  assert.equal(evaluation.status, 'ENTRY');
+  assert.equal(evaluation.direction, 'LONG');
+  assert.equal(evaluation.previousHigh, 117);
+  assert.equal(evaluation.previousLow, 113);
+  assert.equal(evaluation.sessionOpen, 120);
+  assert.equal(evaluation.longTarget, 122);
+  assert.ok((evaluation.stopPrice ?? 0) < 125);
+});
+
+test('Williams current-session high/low cannot leak into MA5, ATR14 or prior range', () => {
+  const baseline = williamsLongDailyCandles();
+  const first = evaluateCryptoWilliamsDailyCandles({ market: 'spot', candles: baseline, currentPrice: 125 });
+  const mutated = baseline.map((row, index) => index === baseline.length - 1
+    ? { ...row, high: 1_000_000, low: 0.01, close: 125 }
+    : row);
+  const second = evaluateCryptoWilliamsDailyCandles({ market: 'spot', candles: mutated, currentPrice: 125 });
+  assert.equal(second.previousHigh, first.previousHigh);
+  assert.equal(second.previousLow, first.previousLow);
+  assert.equal(second.movingAverage, first.movingAverage);
+  assert.equal(second.atr, first.atr);
+  assert.equal(second.longTarget, first.longTarget);
+});
+
+test('Williams futures permits SHORT while spot keeps SHORT disabled', () => {
+  const rows = williamsShortDailyCandles();
+  const futures = evaluateCryptoWilliamsDailyCandles({ market: 'futures', candles: rows, currentPrice: 107 });
+  assert.equal(futures.status, 'ENTRY');
+  assert.equal(futures.direction, 'SHORT');
+  assert.ok((futures.stopPrice ?? 0) > 107);
+
+  const spot = evaluateCryptoWilliamsDailyCandles({ market: 'spot', candles: rows, currentPrice: 107 });
+  assert.equal(spot.status, 'NO_ENTRY');
+  assert.equal(spot.direction, null);
+  assert.ok(spot.reasons.includes('spot_short_disabled'));
 });

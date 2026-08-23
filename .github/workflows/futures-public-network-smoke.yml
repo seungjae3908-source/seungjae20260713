@@ -12,8 +12,6 @@ on:
         required: false
         type: string
   pull_request:
-    branches:
-      - main
     types:
       - opened
       - synchronize
@@ -38,15 +36,49 @@ permissions:
 
 env:
   APPLICATION_STATUS_SHA: ${{ github.event.inputs.target_sha || github.event.pull_request.head.sha || github.sha }}
-  APPLICATION_CHECKOUT_REF: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.target_sha || github.sha) || github.ref }}
+  APPLICATION_CHECKOUT_REF: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.target_sha || github.sha) || github.event.pull_request.head.sha || github.sha }}
 
 concurrency:
   group: application-ci-${{ github.event.pull_request.number || github.event.inputs.target_sha || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  exact-head:
+    name: Verify immutable checkout identity
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout tested commit without credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.APPLICATION_CHECKOUT_REF }}
+          persist-credentials: false
+      - name: Verify expected SHA and detached HEAD
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ env.APPLICATION_STATUS_SHA }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          actual_branch="$(git symbolic-ref --quiet --short HEAD || true)"
+          if [[ ! "$EXPECTED_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error title=PR exact-head verification failed::[INVALID_SHA] expected an exact 40-character commit SHA"
+            exit 1
+          fi
+          if [ -n "$actual_branch" ]; then
+            echo "::error title=PR exact-head verification failed::[UNEXPECTED_BRANCH] checkout must be detached, found $actual_branch"
+            exit 1
+          fi
+          if [ "${actual_sha,,}" != "${EXPECTED_SHA,,}" ]; then
+            echo "::error title=PR exact-head verification failed::[HEAD_SHA_MISMATCH] tested ${EXPECTED_SHA,,}, checked out ${actual_sha,,}"
+            exit 1
+          fi
+          echo "tested_sha=${EXPECTED_SHA,,}"
+          echo "head_sha=${actual_sha,,}"
+          echo "checkout_mode=DETACHED"
+
   validate:
-    name: Typecheck, unit, smoke, and build
+    name: ${{ github.event_name == 'pull_request' && 'PR Exact Application CI' || 'Typecheck, unit, smoke, and build' }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -60,6 +92,15 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ env.APPLICATION_CHECKOUT_REF }}
+          persist-credentials: false
+      - name: Run PR exact-head contract tests when present
+        shell: bash
+        run: |
+          if [ -f .github/tests/pr-exact-head-contract.test.mjs ] && [ -f .github/tests/pr-exact-head-workflows.test.mjs ]; then
+            node --test .github/tests/pr-exact-head-*.test.mjs
+          else
+            echo "::notice title=PR exact-head contract tests unavailable::The tested head predates the CI contract test files; immutable checkout verification still ran."
+          fi
       - name: Set up pnpm 9
         uses: pnpm/action-setup@v4
         with:
@@ -101,6 +142,25 @@ jobs:
         run: pnpm --dir stock-analyzer run build
       - name: Build backend production bundle
         run: pnpm --dir api-server run build:server
+      - name: Publish verified Application CI result
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const result = '${{ job.status }}' || 'failure';
+            const sha = process.env.APPLICATION_STATUS_SHA;
+            const statusContext = 'application-ci/verified';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, { owner: context.repo.owner, repo: context.repo.repo, ref: sha, per_page: 100 });
+            const latestStatus = statuses
+              .filter((status) => status.context === statusContext)
+              .sort((left, right) => right.id - left.id)[0];
+            if (latestStatus?.target_url !== runUrl) {
+              core.notice(`A newer run owns ${statusContext} for ${sha}; skipping stale application status update.`);
+              return;
+            }
+            const state = result === 'success' ? 'success' : result === 'cancelled' ? 'error' : 'failure';
+            await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state, target_url: runUrl, description: `Application CI run ${context.runId}: ${result}`, context: statusContext });
 
   browser-ui:
     name: Playwright desktop and mobile application UI
@@ -117,6 +177,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ env.APPLICATION_CHECKOUT_REF }}
+          persist-credentials: false
       - name: Set up pnpm 9
         uses: pnpm/action-setup@v4
         with:
@@ -131,12 +192,13 @@ jobs:
       - name: Install workspace dependencies with frozen lockfile
         run: pnpm install --frozen-lockfile
       - name: Install Playwright Chromium
-        run: pnpm --dir stock-analyzer exec playwright install --with-deps chromium
+        run: pnpm --dir stock-analyzer exec playwright install chromium
       - name: Run Playwright desktop and mobile tests
         id: browser
         run: pnpm --dir stock-analyzer run test:e2e
       - name: Upload Playwright report and failure evidence
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: phase9-playwright-${{ github.run_id }}
@@ -200,8 +262,24 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ env.APPLICATION_CHECKOUT_REF }}
+          persist-credentials: false
       - name: Install PostgreSQL client
-        run: sudo apt-get update -qq && sudo apt-get install -y postgresql-client
+        run: |
+          if command -v psql >/dev/null 2>&1; then
+            psql --version
+            exit 0
+          fi
+
+          # ubuntu-latest also contains optional third-party apt sources. A
+          # transient outage there must not block the disposable RLS check.
+          if [[ -f /etc/apt/sources.list.d/ubuntu.sources ]]; then
+            sudo apt-get update -qq \
+              -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/ubuntu.sources \
+              -o Dir::Etc::sourceparts=-
+          else
+            sudo apt-get update -qq -o Dir::Etc::sourceparts=-
+          fi
+          sudo apt-get install -y postgresql-client
       - name: Apply, test, rollback, and reapply migrations
         id: database
         run: bash api-server/scripts/verify-phase8-db.sh
@@ -240,6 +318,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ env.APPLICATION_CHECKOUT_REF }}
+          persist-credentials: false
       - name: Set up pnpm 9
         uses: pnpm/action-setup@v4
         with:
@@ -295,6 +374,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.APPLICATION_CHECKOUT_REF }}
+          persist-credentials: false
       - uses: pnpm/action-setup@v4
         with: { version: 9, run_install: false }
       - uses: actions/setup-node@v4
@@ -328,37 +408,6 @@ jobs:
             const state = result === 'success' ? 'success' : result === 'cancelled' ? 'error' : 'failure';
             await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state, target_url: runUrl, description: `AI privacy run ${context.runId}: ${result}`, context: statusContext });
 
-  publish-validation:
-    name: Publish Application CI conclusion
-    needs:
-      - validate
-      - browser-ui
-      - database-rls
-      - security-integration
-      - ai-privacy
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Publish verified Application CI result
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const results = ['${{ needs.validate.result }}', '${{ needs.browser-ui.result }}', '${{ needs.database-rls.result }}', '${{ needs.security-integration.result }}', '${{ needs.ai-privacy.result }}'];
-            const result = results.every((item) => item === 'success') ? 'success' : results.some((item) => item === 'cancelled') ? 'cancelled' : 'failure';
-            const sha = process.env.APPLICATION_STATUS_SHA;
-            const statusContext = 'application-ci/verified';
-            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, { owner: context.repo.owner, repo: context.repo.repo, ref: sha, per_page: 100 });
-            const latestStatus = statuses
-              .filter((status) => status.context === statusContext)
-              .sort((left, right) => right.id - left.id)[0];
-            if (latestStatus?.target_url !== runUrl) {
-              core.notice(`A newer run owns ${statusContext} for ${sha}; skipping stale application status update.`);
-              return;
-            }
-            const state = result === 'success' ? 'success' : result === 'cancelled' ? 'error' : 'failure';
-            await github.rest.repos.createCommitStatus({ owner: context.repo.owner, repo: context.repo.repo, sha, state, target_url: runUrl, description: `Application CI run ${context.runId}: ${result}`, context: statusContext });
-
   network-smoke:
     name: Bitget public API smoke (non-blocking)
     runs-on: ubuntu-latest
@@ -374,6 +423,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ env.APPLICATION_CHECKOUT_REF }}
+          persist-credentials: false
       - name: Set up pnpm 9
         uses: pnpm/action-setup@v4
         with:

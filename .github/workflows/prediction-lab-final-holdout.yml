@@ -7,9 +7,11 @@ on:
     paths:
       - .github/workflows/prediction-lab-final-holdout.yml
       - market-prediction-lab/src/final-holdout-evaluator.js
+      - market-prediction-lab/src/final-holdout-evidence-provenance.js
       - market-prediction-lab/src/independent-strategy-backtest.js
       - market-prediction-lab/scripts/run-final-holdout.js
       - market-prediction-lab/tests/final-holdout-evaluator.test.js
+      - market-prediction-lab/tests/final-holdout-evidence-provenance.test.js
   workflow_dispatch:
     inputs:
       research_ref:
@@ -67,37 +69,127 @@ jobs:
 
       - name: Verify final holdout guards
         working-directory: market-prediction-lab
-        run: node --test tests/final-holdout-evaluator.test.js
+        run: node --test tests/final-holdout-evaluator.test.js tests/final-holdout-evidence-provenance.test.js
 
-      - name: Preserve existing immutable result or run holdout once
+      - name: Preserve only same-identity immutable result or run holdout once
+        id: holdout
         working-directory: market-prediction-lab
+        env:
+          RESEARCH_SHA: ${{ steps.sha.outputs.value }}
         run: |
-          if [ -s docs/final-holdout-2026-result.json ] && [ -s docs/final-holdout-2026-result.md ]; then
-            node -e '
-              const fs=require("fs"); const result=JSON.parse(fs.readFileSync("docs/final-holdout-2026-result.json","utf8"));
-              if(!result || typeof result!=="object") process.exit(1);
-            '
-            echo "existing immutable final holdout result retained"
+          set -euo pipefail
+          result_json='docs/final-holdout-2026-result.json'
+          result_md='docs/final-holdout-2026-result.md'
+          provenance='docs/final-holdout-2026-provenance.json'
+
+          if [ -e "$result_json" ] || [ -e "$result_md" ]; then
+            if [ ! -s "$result_json" ] || [ ! -s "$result_md" ]; then
+              echo 'partial immutable final holdout result is not valid evidence' >&2
+              exit 1
+            fi
+            if [ ! -s "$provenance" ]; then
+              echo 'STALE_OR_UNPROVEN_FINAL_HOLDOUT_EVIDENCE: existing immutable result has no research-SHA provenance; refusing to relabel it as the current research identity' >&2
+              exit 1
+            fi
+            node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          import { assessFinalHoldoutEvidenceProvenance } from "./src/final-holdout-evidence-provenance.js";
+          const assessment = assessFinalHoldoutEvidenceProvenance({
+            expectedResearchCodeSha: process.env.RESEARCH_SHA,
+            resultJson: readFileSync("docs/final-holdout-2026-result.json", "utf8"),
+            resultMarkdown: readFileSync("docs/final-holdout-2026-result.md", "utf8"),
+            provenanceJson: readFileSync("docs/final-holdout-2026-provenance.json", "utf8"),
+          });
+          console.log(JSON.stringify(assessment));
+          if (!assessment.currentIdentity) {
+            console.error(`STALE_OR_UNPROVEN_FINAL_HOLDOUT_EVIDENCE: ${assessment.status}`);
+            process.exit(1);
+          }
+          NODE
+            echo 'existing immutable final holdout result retained with exact research identity'
+            echo 'generated=false' >> "$GITHUB_OUTPUT"
           else
-            node scripts/run-final-holdout.js docs/final-holdout-2026-result.json docs/final-holdout-2026-result.md
+            node scripts/run-final-holdout.js "$result_json" "$result_md"
+            echo 'generated=true' >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Build provenance only for newly generated holdout evidence
+        if: steps.holdout.outputs.generated == 'true'
+        working-directory: market-prediction-lab
+        env:
+          RESEARCH_SHA: ${{ steps.sha.outputs.value }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+          import { buildFinalHoldoutEvidenceProvenance } from "./src/final-holdout-evidence-provenance.js";
+          const provenance = buildFinalHoldoutEvidenceProvenance({
+            researchCodeSha: process.env.RESEARCH_SHA,
+            resultJson: readFileSync("docs/final-holdout-2026-result.json", "utf8"),
+            resultMarkdown: readFileSync("docs/final-holdout-2026-result.md", "utf8"),
+          });
+          writeFileSync("docs/final-holdout-2026-provenance.json", `${JSON.stringify(provenance, null, 2)}\n`, "utf8");
+          NODE
+
+      - name: Verify immutable holdout provenance before publication
+        working-directory: market-prediction-lab
+        env:
+          RESEARCH_SHA: ${{ steps.sha.outputs.value }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          import { assessFinalHoldoutEvidenceProvenance } from "./src/final-holdout-evidence-provenance.js";
+          const assessment = assessFinalHoldoutEvidenceProvenance({
+            expectedResearchCodeSha: process.env.RESEARCH_SHA,
+            resultJson: readFileSync("docs/final-holdout-2026-result.json", "utf8"),
+            resultMarkdown: readFileSync("docs/final-holdout-2026-result.md", "utf8"),
+            provenanceJson: readFileSync("docs/final-holdout-2026-provenance.json", "utf8"),
+          });
+          console.log(JSON.stringify(assessment));
+          if (!assessment.currentIdentity) process.exit(1);
+          NODE
+
+      - name: Build immutable final holdout artifact manifest
+        working-directory: market-prediction-lab
+        env:
+          RESEARCH_SHA: ${{ steps.sha.outputs.value }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { readFileSync, writeFileSync } from "node:fs";
+          const provenanceBytes = readFileSync("docs/final-holdout-2026-provenance.json");
+          const provenance = JSON.parse(provenanceBytes.toString("utf8"));
+          if (provenance.researchCodeSha !== process.env.RESEARCH_SHA) {
+            throw new Error("Final holdout artifact research SHA mismatch.");
+          }
+          if (!/^[0-9a-f]{64}$/.test(String(provenance.resultJsonSha256 ?? ""))
+            || !/^[0-9a-f]{64}$/.test(String(provenance.resultMarkdownSha256 ?? ""))) {
+            throw new Error("Final holdout result digest provenance is invalid.");
+          }
+          if (provenance.liveOrderAllowed !== false || provenance.privateAccountRequestAllowed !== false) {
+            throw new Error("Final holdout provenance is not fail-closed.");
+          }
+          const manifest = {
+            schemaVersion: 1,
+            kind: "prediction-lab-final-holdout-artifact",
+            researchCodeSha: process.env.RESEARCH_SHA,
+            resultJsonSha256: provenance.resultJsonSha256,
+            resultMarkdownSha256: provenance.resultMarkdownSha256,
+            provenanceSha256: createHash("sha256").update(provenanceBytes).digest("hex"),
+            branchWrite: false,
+            liveOrderAllowed: false,
+            privateAccountRequestAllowed: false,
+            finalHoldoutRetuningAllowed: false,
+            selectionAllowed: false,
+          };
+          writeFileSync("docs/final-holdout-2026-artifact-manifest.json", `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+          NODE
 
       - name: Display final holdout table
         working-directory: market-prediction-lab
         run: cat docs/final-holdout-2026-result.md
-
-      - name: Build immutable holdout provenance
-        shell: bash
-        env:
-          RESEARCH_SHA: ${{ steps.sha.outputs.value }}
-        run: |
-          node <<'NODE'
-          const fs=require('fs'); const crypto=require('crypto');
-          const root='market-prediction-lab/docs';
-          const digest=(p)=>crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
-          const manifest={schemaVersion:1,researchCodeSha:process.env.RESEARCH_SHA,resultJsonSha256:digest(root+'/final-holdout-2026-result.json'),resultMarkdownSha256:digest(root+'/final-holdout-2026-result.md'),branchWrite:false,liveOrderAllowed:false,privateAccountRequestAllowed:false,createdAt:new Date().toISOString()};
-          fs.writeFileSync(root+'/final-holdout-2026-provenance.json',JSON.stringify(manifest,null,2)+'\n');
-          NODE
 
       - name: Upload immutable final holdout evidence
         uses: actions/upload-artifact@v4
@@ -107,6 +199,7 @@ jobs:
             market-prediction-lab/docs/final-holdout-2026-result.json
             market-prediction-lab/docs/final-holdout-2026-result.md
             market-prediction-lab/docs/final-holdout-2026-provenance.json
+            market-prediction-lab/docs/final-holdout-2026-artifact-manifest.json
           if-no-files-found: error
           retention-days: 90
 

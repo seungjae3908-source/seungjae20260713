@@ -32,6 +32,7 @@ export default defineConfig({
   use: {
     baseURL,
     browserName: 'chromium',
+    launchOptions: stagingMode ? undefined : { args: ['--disable-remote-fonts'] },
     hasTouch: true,
     actionTimeout: 20_000,
     navigationTimeout: 30_000,

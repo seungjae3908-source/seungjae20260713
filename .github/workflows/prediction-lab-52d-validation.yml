@@ -4,12 +4,16 @@ on:
   workflow_dispatch:
     inputs:
       research_ref:
-        description: Exact research commit/ref to validate
+        description: Exact 40-character research commit SHA to validate
         required: false
         type: string
   pull_request:
-    branches: [main]
+    types:
+      - opened
+      - synchronize
+      - reopened
     paths:
+      - .github/workflows/prediction-lab-52d-validation.yml
       - market-prediction-lab/package.json
       - market-prediction-lab/src/**
       - market-prediction-lab/scripts/**
@@ -25,6 +29,7 @@ concurrency:
 
 jobs:
   validate-and-train:
+    name: ${{ github.event_name == 'pull_request' && 'PR Exact Multi-Market' || 'Validate and train Multi-Market' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -38,7 +43,11 @@ jobs:
           ref="$PR_SHA"
           if [ -z "$ref" ]; then ref="$INPUT_REF"; fi
           if [ -z "$ref" ]; then ref="$GITHUB_SHA"; fi
-          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          if [[ ! "$ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error title=PR exact-head verification failed::[INVALID_SHA] Multi-Market requires one exact 40-character commit SHA"
+            exit 1
+          fi
+          echo "ref=${ref,,}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout isolated research revision
         uses: actions/checkout@v4
@@ -46,10 +55,27 @@ jobs:
           ref: ${{ steps.research.outputs.ref }}
           persist-credentials: false
 
-      - name: Record immutable research SHA
+      - name: Verify expected SHA and detached HEAD
         id: sha
         shell: bash
-        run: echo "value=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        env:
+          EXPECTED_SHA: ${{ steps.research.outputs.ref }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          actual_branch="$(git symbolic-ref --quiet --short HEAD || true)"
+          if [ -n "$actual_branch" ]; then
+            echo "::error title=PR exact-head verification failed::[UNEXPECTED_BRANCH] checkout must be detached, found $actual_branch"
+            exit 1
+          fi
+          if [ "${actual_sha,,}" != "${EXPECTED_SHA,,}" ]; then
+            echo "::error title=PR exact-head verification failed::[HEAD_SHA_MISMATCH] tested ${EXPECTED_SHA,,}, checked out ${actual_sha,,}"
+            exit 1
+          fi
+          echo "tested_sha=${EXPECTED_SHA,,}"
+          echo "head_sha=${actual_sha,,}"
+          echo "checkout_mode=DETACHED"
+          echo "value=${actual_sha,,}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Node 20
         uses: actions/setup-node@v4
@@ -83,6 +109,83 @@ jobs:
         working-directory: market-prediction-lab
         run: node scripts/run-market-suite.js live-market-suite docs/market-suite-result.json docs/candidate-models
 
+      - name: Audit frozen BTC and ETH futures models on unseen SOL
+        id: futures_generalization_suite
+        if: steps.validate.outcome == 'success' && steps.market_suite.outcome == 'success'
+        continue-on-error: true
+        working-directory: market-prediction-lab
+        run: node scripts/run-futures-generalization-suite.js docs/futures-generalization-suite-result.json
+
+      - name: Run cost funding spread and slippage aware futures PnL research
+        id: futures_pnl_suite
+        if: steps.validate.outcome == 'success' && steps.market_suite.outcome == 'success' && steps.futures_generalization_suite.outcome == 'success'
+        continue-on-error: true
+        working-directory: market-prediction-lab
+        run: node scripts/run-futures-pnl-suite.js docs/futures-pnl-suite-result.json
+
+      - name: Research fresh-asset futures trend volatility and funding regime gate
+        id: futures_regime_suite
+        if: steps.validate.outcome == 'success' && steps.market_suite.outcome == 'success' && steps.futures_pnl_suite.outcome == 'success'
+        continue-on-error: true
+        working-directory: market-prediction-lab
+        run: node scripts/run-futures-regime-execution-suite.js docs/futures-regime-execution-suite-result.json
+
+      - name: Collect Upbit BTC and ETH spot cross-symbol candidates
+        id: upbit_spot_suite
+        if: steps.validate.outcome == 'success'
+        continue-on-error: true
+        working-directory: market-prediction-lab
+        run: node scripts/run-upbit-spot-suite.js docs/upbit-spot-suite-result.json
+
+      - name: Run cost-aware Upbit BTC and ETH spot PnL OOS research
+        id: upbit_spot_pnl_suite
+        if: steps.validate.outcome == 'success' && steps.upbit_spot_suite.outcome == 'success'
+        continue-on-error: true
+        working-directory: market-prediction-lab
+        run: node scripts/run-upbit-spot-pnl-suite.js docs/upbit-spot-pnl-suite-result.json
+
+      - name: Research independent Upbit trend and mean-reversion alternatives
+        id: upbit_spot_alternative_suite
+        if: steps.validate.outcome == 'success' && steps.upbit_spot_suite.outcome == 'success'
+        continue-on-error: true
+        working-directory: market-prediction-lab
+        run: node scripts/run-upbit-spot-alternative-suite.js docs/upbit-spot-alternative-suite-result.json
+
+      - name: Collect KR and US stock history and compare candidates
+        id: stock_suite
+        if: steps.validate.outcome == 'success'
+        continue-on-error: true
+        working-directory: market-prediction-lab
+        run: node scripts/run-stock-market-suite.js live-stock-market-suite docs/stock-market-suite-result.json docs/stock-candidate-models
+
+      - name: Run cost-aware KR and US stock OOS strategy research
+        id: stock_pnl_suite
+        if: steps.validate.outcome == 'success' && steps.stock_suite.outcome == 'success'
+        continue-on-error: true
+        working-directory: market-prediction-lab
+        run: node scripts/run-stock-pnl-suite.js docs/stock-pnl-suite-result.json
+
+      - name: Audit frozen KR and US strategies on unseen symbols and rolling windows
+        id: stock_generalization_suite
+        if: steps.validate.outcome == 'success' && steps.stock_pnl_suite.outcome == 'success'
+        continue-on-error: true
+        working-directory: market-prediction-lab
+        run: node scripts/run-stock-generalization-suite.js docs/stock-generalization-suite-result.json
+
+      - name: Research US trend pullback with unseen-symbol holdouts
+        id: us_pullback_suite
+        if: steps.validate.outcome == 'success' && steps.stock_suite.outcome == 'success'
+        continue-on-error: true
+        working-directory: market-prediction-lab
+        run: node scripts/run-us-pullback-suite.js docs/us-pullback-suite-result.json
+
+      - name: Research KR and US regime-routed trend and range strategies
+        id: stock_regime_suite
+        if: steps.validate.outcome == 'success' && steps.stock_suite.outcome == 'success'
+        continue-on-error: true
+        working-directory: market-prediction-lab
+        run: node scripts/run-stock-regime-suite.js docs/stock-regime-suite-result.json
+
       - name: Collect historical funding and compare temporal candidates
         id: derivatives_suite
         if: steps.validate.outcome == 'success' && steps.market_suite.outcome == 'success'
@@ -115,9 +218,22 @@ jobs:
           name: prediction-lab-suites-${{ github.run_id }}
           path: |
             market-prediction-lab/live-market-suite
+            market-prediction-lab/live-stock-market-suite
             market-prediction-lab/live-derivatives-suite
             market-prediction-lab/live-market-structure-suite
             market-prediction-lab/docs/market-suite-result.json
+            market-prediction-lab/docs/futures-generalization-suite-result.json
+            market-prediction-lab/docs/futures-pnl-suite-result.json
+            market-prediction-lab/docs/futures-regime-execution-suite-result.json
+            market-prediction-lab/docs/upbit-spot-suite-result.json
+            market-prediction-lab/docs/upbit-spot-pnl-suite-result.json
+            market-prediction-lab/docs/upbit-spot-alternative-suite-result.json
+            market-prediction-lab/docs/stock-market-suite-result.json
+            market-prediction-lab/docs/stock-pnl-suite-result.json
+            market-prediction-lab/docs/stock-generalization-suite-result.json
+            market-prediction-lab/docs/us-pullback-suite-result.json
+            market-prediction-lab/docs/stock-regime-suite-result.json
+            market-prediction-lab/docs/stock-candidate-models
             market-prediction-lab/docs/derivatives-suite-result.json
             market-prediction-lab/docs/market-structure-suite-result.json
             market-prediction-lab/docs/market-suite-provenance.json
@@ -133,5 +249,5 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$RESEARCH_SHA"
 
       - name: Fail workflow when technical validation failed
-        if: always() && (steps.validate.outcome != 'success' || steps.market_suite.outcome != 'success' || steps.derivatives_suite.outcome != 'success' || steps.structure_suite.outcome != 'success')
+        if: always() && (steps.validate.outcome != 'success' || steps.market_suite.outcome != 'success' || steps.futures_generalization_suite.outcome != 'success' || steps.futures_pnl_suite.outcome != 'success' || steps.futures_regime_suite.outcome != 'success' || steps.upbit_spot_suite.outcome != 'success' || steps.upbit_spot_pnl_suite.outcome != 'success' || steps.upbit_spot_alternative_suite.outcome != 'success' || steps.stock_suite.outcome != 'success' || steps.stock_pnl_suite.outcome != 'success' || steps.stock_generalization_suite.outcome != 'success' || steps.us_pullback_suite.outcome != 'success' || steps.stock_regime_suite.outcome != 'success' || steps.derivatives_suite.outcome != 'success' || steps.structure_suite.outcome != 'success')
         run: exit 1

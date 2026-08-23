@@ -66,6 +66,25 @@ export function classifyProductionRequest(
   return { action: 'allow' };
 }
 
+export function isIgnorableProductionRequestFailure(
+  rawUrl: string,
+  method: string,
+  errorText: string,
+  productionOrigin: string,
+): boolean {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+
+  const normalizedMethod = method.toUpperCase();
+  return url.origin === productionOrigin
+    && (normalizedMethod === 'GET' || normalizedMethod === 'HEAD')
+    && errorText.trim() === 'net::ERR_ABORTED';
+}
+
 export function privateAccountDisconnectedFixture() {
   const provider = (name: string, code: string) => ({
     provider: name,

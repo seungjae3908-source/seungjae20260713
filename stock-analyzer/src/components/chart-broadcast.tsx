@@ -1098,7 +1098,7 @@ export function ChartBroadcastPanel({ market, onSignalChange, onAnalysisChange, 
 		queryFn: ({ signal }) => fetchChart(selectedStock.ticker, timeframe, signal),
 		enabled: Boolean(selectedStock.ticker),
 		refetchInterval: live ? (/m|H/.test(timeframe) ? 5_000 : 15_000) : false,
-		refetchIntervalInBackground: true,
+		refetchIntervalInBackground: false,
 		refetchOnWindowFocus: true,
 		refetchOnReconnect: true,
 	});
@@ -1107,7 +1107,7 @@ export function ChartBroadcastPanel({ market, onSignalChange, onAnalysisChange, 
 		queryKey: ["chart-broadcast-market-context", market],
 		queryFn: ({ signal }) => fetchMarketContext(market, signal),
 		refetchInterval: live ? 15_000 : false,
-		refetchIntervalInBackground: true,
+		refetchIntervalInBackground: false,
 		retry: 1,
 	});
 	const marketContext: MarketContext = marketContextQuery.data ?? {

@@ -17,6 +17,28 @@ import {
 import { hasCapability } from '../../../packages/member-access/src/index.js';
 import { buildAiReviewDataset, generateTradingAiReview, previewAiReview } from '../services/trading-ai-review.service';
 import { configuredTradingReviewProvider, type TradingReviewProvider } from '../services/trading-review-provider';
+import { registerCanonicalPortfolioAdvisorRoute } from './paper-journal-portfolio-advisor';
+import {
+  JOURNAL_COST_SAFETY,
+  TOSS_LIVE_READ_INTEGRATION,
+  TRADE_MARKETS,
+  TRADE_RANGES,
+  TRADE_SOURCES,
+  buildUnifiedTradeJournal,
+  normalizeTossOrderContract,
+  tossJournalIntegrationStatus,
+  type TossOrderContract,
+  type TradeMarket,
+  type TradeRange,
+  type TradeSource,
+  type UnifiedJournalFilters,
+} from '../services/unified-trade-journal.service';
+import {
+  PaperJournalSignalPerformanceRepository,
+  buildSignalPerformanceReadModel,
+  type PerformanceQuery,
+  type PersistentPerformanceSource,
+} from '../services/signal-performance-persistence.service';
 
 const MAX_REQUEST_BYTES = 512 * 1024;
 
@@ -24,6 +46,7 @@ type PaperJournalDependencies = {
   repositoryFactory: (request: AuthenticatedRequest) => PaperJournalRepository;
   now: () => Date;
   reviewProvider: TradingReviewProvider | null;
+  allowTossContractPreview: boolean;
 };
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -73,6 +96,38 @@ function filterPeriod(payloads: Record<string, unknown>[], start: unknown, end: 
   });
 }
 
+function queryText(value: unknown, maximum = 80) {
+  return typeof value === 'string' && value.trim() ? value.trim().slice(0, maximum) : null;
+}
+
+function unifiedFilters(query: Request['query']): UnifiedJournalFilters {
+  const range = queryText(query.range, 10) ?? '30D';
+  const market = queryText(query.market, 30) ?? 'ALL';
+  const source = queryText(query.source, 30) ?? 'ALL';
+  const grade = queryText(query.grade, 5) ?? 'ALL';
+  if (!TRADE_RANGES.includes(range as TradeRange)) throw new PaperJournalError('INVALID_JOURNAL_RANGE', '매매일지 조회 기간을 확인하세요.');
+  if (market !== 'ALL' && !TRADE_MARKETS.includes(market as TradeMarket)) throw new PaperJournalError('INVALID_JOURNAL_MARKET', '매매일지 시장 필터를 확인하세요.');
+  if (source !== 'ALL' && !TRADE_SOURCES.includes(source as TradeSource)) throw new PaperJournalError('INVALID_JOURNAL_SOURCE', '매매일지 출처 필터를 확인하세요.');
+  if (!['ALL', 'A', 'B', 'C', 'D'].includes(grade)) throw new PaperJournalError('INVALID_JOURNAL_GRADE', '매매 품질 등급 필터를 확인하세요.');
+  return {
+    range: range as TradeRange,
+    market: market as TradeMarket | 'ALL',
+    source: source as TradeSource | 'ALL',
+    strategy: queryText(query.strategy),
+    timeframe: queryText(query.timeframe, 20),
+    grade: grade as UnifiedJournalFilters['grade'],
+  };
+}
+
+function containsForbiddenContractField(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(containsForbiddenContractField);
+  if (!isObject(value)) return false;
+  return Object.entries(value).some(([key, nested]) => (
+    /(?:user_?id|account_?number|access_?token|refresh_?token|client_?secret|api_?key|secret_?key|authorization|cookie)/i.test(key)
+      || containsForbiddenContractField(nested)
+  ));
+}
+
 export function createPaperJournalRouter(
   dependencies: Partial<PaperJournalDependencies> = {},
 ): IRouter {
@@ -80,11 +135,18 @@ export function createPaperJournalRouter(
   const repositoryFactory = dependencies.repositoryFactory ?? defaultRepositoryFactory;
   const now = dependencies.now ?? (() => new Date());
   const reviewProvider = dependencies.reviewProvider === undefined ? configuredTradingReviewProvider() : dependencies.reviewProvider;
+  const allowTossContractPreview = dependencies.allowTossContractPreview === true;
 
   const requireAiReview = (request: AuthenticatedRequest) => {
     if (!request.member || !hasCapability(request.member, 'canAccessAiTradingReview')) throw new PaperJournalError('CAPABILITY_REQUIRED', 'AI 거래 복기는 정회원과 관리자만 사용할 수 있습니다.', request.member ? 403 : 401);
     return request.member.id;
   };
+
+  registerCanonicalPortfolioAdvisorRoute(router, {
+    repositoryFactory,
+    now,
+    requirePortfolioAdvisor: requireAiReview,
+  });
 
   router.post('/paper-journal/sync', async (request: AuthenticatedRequest, response) => {
     if (requestSize(request) > MAX_REQUEST_BYTES) {
@@ -110,6 +172,54 @@ export function createPaperJournalRouter(
       return response.json(result);
     } catch (cause) {
       return handleError(response, cause, 'JOURNAL_SNAPSHOT_FAILED', '거래일지 snapshot을 불러오지 못했습니다.', syncEnvelope);
+    }
+  });
+
+  router.get('/signal-performance', async (request: AuthenticatedRequest, response) => {
+    try {
+      const ownerId = request.member?.id ?? '';
+      if (!ownerId) throw new PaperJournalError('LOGIN_REQUIRED', '로그인이 필요합니다.', 401);
+      const source = queryText(request.query.source, 30);
+      const allowedSources: PersistentPerformanceSource[] = ['BACKTEST', 'OOS', 'WALK_FORWARD', 'FINAL_HOLDOUT', 'PAPER', 'SHADOW', 'LIVE_RECOMMENDATION'];
+      if (!source || !allowedSources.includes(source as PersistentPerformanceSource)) throw new PaperJournalError('INVALID_PERFORMANCE_SOURCE', '성과 출처를 확인하세요.');
+      const minimumText = queryText(request.query.minimumSampleSize, 8);
+      const minimumSampleSize = minimumText == null ? undefined : Number(minimumText);
+      if (minimumSampleSize != null && (!Number.isInteger(minimumSampleSize) || minimumSampleSize <= 0)) throw new PaperJournalError('INVALID_MINIMUM_SAMPLE_SIZE', '최소 표본 수를 확인하세요.');
+      const query: PerformanceQuery = {
+        source: source as PersistentPerformanceSource | undefined,
+        market: queryText(request.query.market, 30) as PerformanceQuery['market'],
+        symbol: queryText(request.query.symbol) ?? undefined,
+        strategyMode: queryText(request.query.strategyMode, 20) as PerformanceQuery['strategyMode'],
+        strategyFamily: queryText(request.query.strategyFamily) ?? undefined,
+        strategyVersion: queryText(request.query.strategyVersion) ?? undefined,
+        parameterHash: queryText(request.query.parameterHash) ?? undefined,
+        direction: queryText(request.query.direction, 10) as PerformanceQuery['direction'],
+        timeframe: queryText(request.query.timeframe, 20) ?? undefined,
+        regime: queryText(request.query.regime, 30) ?? undefined,
+        researchCodeSha: queryText(request.query.researchCodeSha, 40) ?? undefined,
+        minimumSampleSize,
+      };
+      const repository = new PaperJournalSignalPerformanceRepository(repositoryFactory(request), ownerId);
+      const result = await buildSignalPerformanceReadModel(repository, ownerId, query);
+      return response.json(analysisEnvelope({ ok: true, result, profitabilityClaimAllowed: false }));
+    } catch (cause) {
+      return handleError(response, cause, 'SIGNAL_PERFORMANCE_READ_FAILED', '신호 성과를 불러오지 못했습니다.', analysisEnvelope);
+    }
+  });
+
+  router.get('/signal-performance/:signalId', async (request: AuthenticatedRequest, response) => {
+    try {
+      const ownerId = request.member?.id ?? '';
+      if (!ownerId) throw new PaperJournalError('LOGIN_REQUIRED', '로그인이 필요합니다.', 401);
+      const signalId = queryText(request.params.signalId, 160);
+      if (!signalId) throw new PaperJournalError('SIGNAL_ID_REQUIRED', '신호 ID를 확인하세요.');
+      const repository = new PaperJournalSignalPerformanceRepository(repositoryFactory(request), ownerId);
+      const event = await repository.getSignal(ownerId, signalId);
+      if (!event) throw new PaperJournalError('SIGNAL_PERFORMANCE_NOT_FOUND', '저장된 신호 성과가 없습니다.', 404);
+      const outcomes = (await repository.listOutcomes(ownerId)).filter((row) => row.signalId === signalId);
+      return response.json(analysisEnvelope({ ok: true, result: { event, outcomes }, profitabilityClaimAllowed: false }));
+    } catch (cause) {
+      return handleError(response, cause, 'SIGNAL_PERFORMANCE_DETAIL_FAILED', '신호 성과 상세를 불러오지 못했습니다.', analysisEnvelope);
     }
   });
 
@@ -155,6 +265,49 @@ export function createPaperJournalRouter(
       return response.json(analysisEnvelope({ ok: true, result: calculatePaperJournalAnalytics(payloads) }));
     } catch (cause) {
       return handleError(response, cause, 'JOURNAL_ANALYTICS_FAILED', '거래 분석을 처리하지 못했습니다.', analysisEnvelope);
+    }
+  });
+
+  router.get('/paper-journal/unified-ledger/status', (_request: AuthenticatedRequest, response) => response.json(analysisEnvelope({
+    ok: true,
+    result: {
+      toss: tossJournalIntegrationStatus(),
+      safety: JOURNAL_COST_SAFETY,
+    },
+  })));
+
+  router.get('/paper-journal/unified-ledger', async (request: AuthenticatedRequest, response) => {
+    try {
+      const payloads = await repositoryFactory(request).listJournalPayloads(request.member?.id ?? '');
+      return response.json(analysisEnvelope({
+        ok: true,
+        result: buildUnifiedTradeJournal(payloads, unifiedFilters(request.query), now()),
+      }));
+    } catch (cause) {
+      return handleError(response, cause, 'UNIFIED_JOURNAL_FAILED', '통합 매매일지를 처리하지 못했습니다.', analysisEnvelope);
+    }
+  });
+
+  router.post('/paper-journal/unified-ledger/toss-contract-preview', (request: AuthenticatedRequest, response) => {
+    const envelope = (payload: Record<string, unknown> = {}) => analysisEnvelope({
+      tossLiveReadIntegration: TOSS_LIVE_READ_INTEGRATION,
+      safety: JOURNAL_COST_SAFETY,
+      ...payload,
+    });
+    if (!allowTossContractPreview) {
+      return response.status(503).json(envelope({ ok: false, code: TOSS_LIVE_READ_INTEGRATION, message: 'Toss API 유료 여부 확인 전에는 실계좌 주문 조회를 실행하지 않습니다.' }));
+    }
+    if (requestSize(request) > MAX_REQUEST_BYTES) return response.status(413).json(envelope({ ok: false, code: 'REQUEST_TOO_LARGE', message: 'Toss 계약 검증 요청이 너무 큽니다.' }));
+    try {
+      const body = isObject(request.body) ? request.body : {};
+      if (containsForbiddenContractField(body)) throw new PaperJournalError('SENSITIVE_TOSS_INPUT_FORBIDDEN', 'Secret, 전체 계좌번호 또는 사용자 식별자는 계약 검증에 포함할 수 없습니다.');
+      if (!Array.isArray(body.orders) || body.orders.length > 100) throw new PaperJournalError('INVALID_TOSS_CONTRACT_FIXTURES', 'Toss 계약 fixture는 최대 100건까지 허용됩니다.');
+      const alias = queryText(body.accountAlias, 80);
+      if (!alias) throw new PaperJournalError('TOSS_ACCOUNT_ALIAS_REQUIRED', '실계좌번호가 아닌 테스트용 계좌 별칭이 필요합니다.');
+      const records = body.orders.map((order) => normalizeTossOrderContract(order as TossOrderContract, alias, now().toISOString()));
+      return response.json(envelope({ ok: true, records, privateBrokerRequests: 0, stored: false }));
+    } catch (cause) {
+      return handleError(response, cause, 'TOSS_CONTRACT_PREVIEW_FAILED', 'Toss 주문 계약 fixture를 검증하지 못했습니다.', envelope);
     }
   });
 
