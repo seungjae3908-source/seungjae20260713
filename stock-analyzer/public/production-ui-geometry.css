@@ -14,9 +14,11 @@
 /*
  * Desktop keeps the rounded floating-dock appearance without relatively moving
  * the navigation over route controls. A real margin owns the 1rem gap instead.
+ * #root raises specificity above the source stylesheet even if Vite emits it
+ * after this public geometry sheet.
  */
 @media (min-width: 1024px) {
-  nav[aria-label="주요 메뉴"] {
+  #root nav[aria-label="주요 메뉴"] {
     bottom: 0;
     margin-bottom: 1rem;
   }
