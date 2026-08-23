@@ -130,8 +130,8 @@ async function generateStoredNonExtractableP256Key(): Promise<PendingDeviceKey> 
     throw new DeviceTrustClientError('DEVICE_PRIVATE_KEY_MUST_BE_NON_EXTRACTABLE', 0);
   }
 
-  // WebCrypto keeps the generated ECDSA private key non-extractable while the
-  // public half remains exportable for server-side possession verification.
+  // WebCrypto generates the private key as non-extractable from the start. The
+  // public half remains exportable so the server can verify proof-of-possession.
   const publicKeyJwk = await subtle.exportKey('jwk', generated.publicKey);
   return { privateKey: generated.privateKey, publicKeyJwk };
 }
