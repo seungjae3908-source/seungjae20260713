@@ -1,0 +1,180 @@
+name: Paper Forward Production Read-only Diagnostic
+
+on:
+  push:
+    branches:
+      - agent/paper-forward-readonly-diagnostic-v1
+    paths:
+      - .github/workflows/paper-forward-production-readonly-diagnostic.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: paper-forward-production-readonly-diagnostic-v1
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    name: Production Paper Forward read-only runtime diagnostic
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: production
+    env:
+      PROD_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      PROD_SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      PROD_SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      PROD_SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      PROD_SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      EVIDENCE_DIR: ${{ github.workspace }}/paper-forward-production-readonly-evidence
+      EXPECTED_PARENT_SHA: 2478f43eb1523f6b61b15818a0625a22ba7ae471
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Require exact one-time diagnostic execution commit
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "${{ github.repository }}" == "seungjae3908-source/seungjae20260713" ]]
+          [[ "${{ github.ref_name }}" == "agent/paper-forward-readonly-diagnostic-v1" ]]
+          [[ "${{ github.actor }}" == "seungjae3908-source" ]]
+          [[ "$(git rev-parse HEAD^)" == "$EXPECTED_PARENT_SHA" ]]
+          mapfile -t changed < <(git diff-tree --no-commit-id --name-only -r HEAD)
+          [[ "${#changed[@]}" -eq 1 ]]
+          [[ "${changed[0]}" == ".github/workflows/paper-forward-production-readonly-diagnostic.yml" ]]
+
+      - name: Revalidate diagnostic source remains read-only
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          source=market-prediction-lab/src/paper-forward-readonly-diagnostic-v1.js
+          node --check "$source"
+          grep -F 'readOnly: true' "$source" >/dev/null
+          grep -F 'networkAccessUsed: false' "$source" >/dev/null
+          grep -F 'financialMutationPerformed: false' "$source" >/dev/null
+          grep -F 'sensitiveValuesEmitted: false' "$source" >/dev/null
+          ! grep -Eq '\b(writeFileSync|appendFileSync|renameSync|rmSync|unlinkSync|mkdirSync|chmodSync|chownSync|spawnSync|execSync)\b' "$source"
+          ! grep -Eq '\b(fetch|https?\.request|net\.connect|tls\.connect)\b' "$source"
+
+      - name: Configure protected Production SSH without exposing credentials
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$PROD_SSH_HOST"
+          test -n "$PROD_SSH_USER"
+          test -n "$PROD_SSH_PRIVATE_KEY"
+          umask 077
+          mkdir -p ~/.ssh "$EVIDENCE_DIR"
+          printf '%s\n' "$PROD_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$PROD_SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$PROD_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$PROD_SSH_PORT" -H "$PROD_SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Build read-only in-memory diagnostic payload on runner
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          payload="$RUNNER_TEMP/paper-forward-production-readonly-diagnostic.mjs"
+          cat market-prediction-lab/src/paper-forward-readonly-diagnostic-v1.js > "$payload"
+          cat >> "$payload" <<'NODE'
+          const { execFileSync } = await import('node:child_process');
+          let crontabText = '';
+          let crontabReadable = true;
+          try {
+            crontabText = execFileSync('crontab', ['-l'], {
+              encoding: 'utf8',
+              stdio: ['ignore', 'pipe', 'pipe'],
+              timeout: 5000,
+            });
+          } catch (error) {
+            const stderr = String(error?.stderr ?? '');
+            if (!(error?.status === 1 && /no crontab/iu.test(stderr))) {
+              crontabReadable = false;
+            }
+          }
+          const result = inspectPaperForwardReadonlyRuntime({
+            stateRoot: PAPER_FORWARD_CANONICAL_STATE_ROOT,
+            crontabText,
+            crontabReadable,
+          });
+          process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+          NODE
+          node --check "$payload"
+
+      - name: Execute Production diagnostic via SSH stdin only
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          payload="$RUNNER_TEMP/paper-forward-production-readonly-diagnostic.mjs"
+          artifact="$EVIDENCE_DIR/paper-forward-production-readonly-diagnostic.json"
+          ssh -i ~/.ssh/id_ed25519 -p "$PROD_SSH_PORT" \
+            -o BatchMode=yes -o ConnectTimeout=15 \
+            "$PROD_SSH_USER@$PROD_SSH_HOST" \
+            'node --input-type=module -' < "$payload" > "$artifact"
+          test -s "$artifact"
+
+      - name: Enforce sanitized read-only evidence contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          artifact="$EVIDENCE_DIR/paper-forward-production-readonly-diagnostic.json"
+          if grep -Eq '[0-9a-f]{64}' "$artifact"; then
+            echo 'Prohibited raw 64-hex digest detected in diagnostic output.' >&2
+            exit 1
+          fi
+          if grep -Eiq '"(publisherAccountIdSha256|accountId|stateDigestSha256)"[[:space:]]*:' "$artifact"; then
+            echo 'Prohibited account or digest field detected in diagnostic output.' >&2
+            exit 1
+          fi
+          if grep -Eiq -- '-----BEGIN (OPENSSH|RSA|EC) PRIVATE KEY-----|("|^)(password|token|secret|authorization|api[_-]?key)("|[=:])' "$artifact"; then
+            echo 'Prohibited credential pattern detected in diagnostic output.' >&2
+            exit 1
+          fi
+          node - "$artifact" <<'NODE'
+          const fs = require('node:fs');
+          const value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (value?.schemaVersion !== 'paper-forward-readonly-diagnostic-v1'
+            || value?.readOnly !== true
+            || value?.stateRootCanonical !== true
+            || value?.sensitiveValuesEmitted !== false
+            || value?.networkAccessUsed !== false
+            || value?.privateApiUsed !== false
+            || value?.financialMutationPerformed !== false) process.exit(1);
+          const summary = {
+            scheduleVerdict: value.schedule?.verdict ?? 'UNKNOWN',
+            managedCronCount: value.schedule?.managedCronCount ?? null,
+            activationStatus: value.activation?.status ?? null,
+            activationTargetSha: value.activation?.targetSha ?? null,
+            seedEligibility: value.publisher?.seedEligibility ?? 'UNKNOWN',
+            seedBlockers: value.publisher?.seedBlockers ?? [],
+            snapshotFlatSeed: value.publisher?.snapshot?.flatSeed ?? null,
+            snapshotOpenPositionCount: value.publisher?.snapshot?.openPositionCount ?? null,
+            snapshotPendingOrderCount: value.publisher?.snapshot?.pendingOrderCount ?? null,
+            naturalCycleVerdict: value.naturalCycle?.verdict ?? 'UNKNOWN',
+            cycleCount: value.stateCounts?.cycleCount ?? null,
+            positionCount: value.stateCounts?.positionCount ?? null,
+            settlementCount: value.stateCounts?.settlementCount ?? null,
+            firstZeroStage: value.firstZero?.stage ?? 'UNKNOWN',
+            firstZeroReason: value.firstZero?.reason ?? 'UNKNOWN',
+            privateRequestCount: value.safety?.privateRequestCount ?? null,
+            financialMutationCount: value.safety?.financialMutationCount ?? null,
+            orderCount: value.safety?.orderCount ?? null,
+            liveTrading: value.safety?.liveTrading ?? null,
+            orderAuthority: value.safety?.orderAuthority ?? null,
+            warnings: value.warnings ?? [],
+          };
+          process.stdout.write(`[PAPER_FORWARD_PRODUCTION_READONLY_DIAGNOSTIC]\n${JSON.stringify(summary, null, 2)}\n`);
+          NODE
+
+      - name: Upload sanitized read-only evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-forward-production-readonly-${{ github.sha }}
+          path: paper-forward-production-readonly-evidence
+          if-no-files-found: error
+          retention-days: 30
