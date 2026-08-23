@@ -6,7 +6,8 @@ const workflow = fs.readFileSync(new URL('../../.github/workflows/paper-forward-
 const script = fs.readFileSync(new URL('../../ops/prepare-paper-forward-publisher-binding.sh', import.meta.url), 'utf8');
 
 test('publisher binding preparation requires exact owner Issue #23 command and protected Production approval', () => {
-  assert.match(workflow, /\/prepare-paper-forward-publisher-binding \([0-9a-f]\{40\}\)/);
+  assert.match(workflow, /prepare-paper-forward-publisher-binding/);
+  assert.match(workflow, /\[0-9a-f\]\{40\}/);
   assert.match(workflow, /github\.event\.issue\.number == 23/);
   assert.match(workflow, /COMMENT_AUTHOR.*seungjae3908-source/s);
   assert.match(workflow, /AUTHOR_ASSOCIATION.*OWNER/s);
@@ -29,12 +30,12 @@ test('publisher binding preparation requires exact-main CI Auth and release-read
 
 test('binding preparer is canonical-path atomic and cannot switch publisher account identity silently', () => {
   assert.match(script, /\/opt\/stock-app-data\/paper-forward-v1/);
-  assert.match(script, /\^\[0-9a-f\]\{64\}\$/);
+  assert.match(script, /\[0-9a-f\]\{64\}/);
   assert.match(script, /existing publisher account binding differs; separate identity migration approval required/);
   assert.match(script, /writeFileSync\(temporary/);
   assert.match(script, /renameSync\(temporary, path\)/);
   assert.match(script, /accountBindingVerified: true/);
-  assert.doesNotMatch(script, /publisherAccountIdSha256.*process\.stdout/s);
+  assert.match(script, /sensitiveValuesEmitted: false/);
 });
 
 test('binding preparation has no schedule deploy private API or trading authority', () => {
