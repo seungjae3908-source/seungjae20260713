@@ -158,8 +158,34 @@ test('market listing work collector preserves full results under bounded concurr
   assert.equal(result.diagnostics.status, 'complete');
   assert.equal(result.diagnostics.candidateCount, 12);
   assert.equal(result.diagnostics.unstartedCount, 0);
+  assert.equal(result.diagnostics.unusableCount, 0);
   assert.equal(result.diagnostics.maxConcurrency, 3);
   assert.equal(observedMaximum, 3);
+});
+
+test('market listing work collector marks fulfilled unusable provider outcomes as partial without fabricating rows', async () => {
+  const result = await collectMarketListingWork(
+    ['ok', 'missing', 'provider-error'],
+    async (item) => {
+      try {
+        if (item === 'provider-error') throw new Error('provider unavailable');
+        if (item === 'missing') return null;
+        return item;
+      } catch {
+        return null;
+      }
+    },
+    { concurrency: 3, deadlineMs: 200, itemTimeoutMs: 100 },
+  );
+
+  const usable = result.values.filter((value): value is string => value !== null);
+  assert.deepEqual(usable, ['ok']);
+  assert.equal(result.diagnostics.status, 'partial');
+  assert.equal(result.diagnostics.fulfilledCount, 3);
+  assert.equal(result.diagnostics.rejectedCount, 0);
+  assert.equal(result.diagnostics.timedOutCount, 0);
+  assert.equal(result.diagnostics.unusableCount, 2);
+  assert.equal(result.values.length, 3);
 });
 
 test('market listing work collector reports deadline-limited data as partial without fabricated values', async () => {
@@ -176,6 +202,7 @@ test('market listing work collector reports deadline-limited data as partial wit
   assert.equal(result.diagnostics.deadlineReached, true);
   assert.ok(result.diagnostics.timedOutCount > 0);
   assert.ok(result.diagnostics.unstartedCount > 0);
+  assert.equal(result.diagnostics.unusableCount, 0);
   assert.equal(result.values.length, 0);
   assert.ok(result.diagnostics.maxConcurrency <= 2);
 });
