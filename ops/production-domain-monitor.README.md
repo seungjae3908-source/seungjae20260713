@@ -8,7 +8,7 @@ Canonical endpoint roles:
 
 The two free DDNS hostnames do **not** provide automatic DNS failover between each other. If the primary hostname itself cannot resolve, clients cannot be redirected by the application because no request reaches Caddy. The fallback is therefore an independently reachable emergency address.
 
-`.github/workflows/production-domain-health-monitor.yml` runs read-only checks every hour and on manual dispatch. It validates:
+`.github/workflows/production-domain-health-monitor.yml` runs read-only checks every hour at minute 17 and on manual dispatch. It validates:
 
 1. System DNS resolution.
 2. Cloudflare `1.1.1.1` A-record resolution.
@@ -21,6 +21,10 @@ The two free DDNS hostnames do **not** provide automatic DNS failover between ea
 
 Any missing or inconsistent evidence fails closed. The monitor performs GET/read-only operations only and has no Production, database, server, Caddy, private-provider, or trading mutation authority.
 
-## Rollout boundary
+Validation on PR #648:
 
-The live Caddy endpoint already accepts both hostnames. This repository contract designates Dynu as the primary address for new monitoring and user-facing navigation. Existing protected Production QA/release workflows are intentionally not bulk-rewritten in this change: active incident owners must migrate their own hard-coded Production base URL without overlapping this isolated monitor owner. Until those owner-controlled workflows are updated, their DuckDNS checks remain valid fallback-path evidence rather than proof that DuckDNS is still the preferred user-facing endpoint.
+- Production Domain Health Monitor Run `32624609425`: SUCCESS.
+- Production Browser Smoke static safety Run `32624609483`: SUCCESS.
+- Application CI Run `32624609381`: SUCCESS, Required CI 6/6.
+
+The scheduled hourly monitor becomes active from the default branch only after this Draft PR is separately approved and merged. Until then the live Dynu endpoint itself is already available through the server-side Caddy configuration, while the GitHub schedule remains unactivated.
