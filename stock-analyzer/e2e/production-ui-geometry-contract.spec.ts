@@ -6,14 +6,18 @@ function source(relativePath: string) {
   return fs.readFileSync(path.resolve(process.cwd(), relativePath), 'utf8');
 }
 
-test('Production UI loads the fixed-navigation geometry guard', () => {
+test('Production UI reserves flow navigation exactly once', () => {
   const html = source('index.html');
   const css = source('public/production-ui-geometry.css');
 
   expect(html).toContain('<link rel="stylesheet" href="/production-ui-geometry.css" />');
   expect(css).toContain('--app-bottom-nav-reserve: calc(4rem + env(safe-area-inset-bottom));');
   expect(css).toContain('#root:has(nav[aria-label="주요 메뉴"]) > div > div:nth-child(2)[class*="max-w-screen"]');
-  expect(css).toContain('height: calc(100dvh - var(--app-bottom-nav-reserve));');
+  expect(css).toContain('height: 100dvh;');
+  expect(css).toContain('nav[aria-label="주요 메뉴"]');
+  expect(css).toContain('bottom: 0;');
+  expect(css).toContain('margin-bottom: 1rem;');
+  expect(css).not.toContain('height: calc(100dvh - var(--app-bottom-nav-reserve));');
 });
 
 test('AI Chart production controls keep at least 32px touch targets', () => {
