@@ -116,6 +116,7 @@ function newCounters() {
     evidenceClassifiedCount: 0,
     evidenceCompleteCount: 0,
     producerReadyCount: 0,
+    directEvidenceBlockerSets: [],
   };
 }
 
@@ -165,6 +166,12 @@ function wrapSourceWiring(sourceWiring, counters) {
         if (completeness !== "UNKNOWN") counters.evidenceClassifiedCount += 1;
         if (completeness === "PASS") counters.evidenceCompleteCount += 1;
         if (produced?.status === "READY") counters.producerReadyCount += 1;
+        if (completeness === "BLOCKED") {
+          const blockers = Array.isArray(produced?.blockers)
+            ? [...new Set(produced.blockers.filter(nonEmpty))]
+            : [];
+          counters.directEvidenceBlockerSets.push(freeze(blockers));
+        }
         return produced;
       };
     };
@@ -273,6 +280,44 @@ function naturalEvidenceIdentity({ input, result, measurements }) {
   });
 }
 
+function authoritativeFirstZeroReasonEvidenceByStage({
+  firstZero,
+  counters,
+  runtimeSha,
+  datasetIdentity,
+}) {
+  if (firstZero?.stage !== "EVIDENCE_COMPLETE") return freeze({});
+  if (!runtimeSha || !nonEmpty(datasetIdentity) || counters.producerAttemptCount <= 0) return freeze({});
+  if (counters.directEvidenceBlockerSets.length !== counters.producerAttemptCount) return freeze({});
+
+  const reasons = [];
+  for (const blockers of counters.directEvidenceBlockerSets) {
+    if (blockers.length !== 1 || !SOURCE_INCOMPLETE_BLOCKERS.has(blockers[0])) return freeze({});
+    reasons.push(blockers[0]);
+  }
+  if (new Set(reasons).size !== 1) return freeze({});
+
+  const reasonCode = reasons[0];
+  return freeze({
+    EVIDENCE_COMPLETE: freeze({
+      authoritative: true,
+      freshness: "FRESH",
+      reasonCode,
+      strategySha: runtimeSha,
+      runtimeSha,
+      datasetIdentity,
+      synthetic: false,
+      testFixture: false,
+      historical: false,
+      replay: false,
+      duplicateReplay: false,
+      manualExpiry: false,
+      futureTimeCompression: false,
+      clockAdvanced: false,
+    }),
+  });
+}
+
 export function createNaturalFunnelObservedPaperRuntimeFromSourceWiring({
   sourceWiring = {},
   baseRuntimeFactory = createAuthoritativePaperRuntimeFromSourceWiring,
@@ -299,6 +344,12 @@ export function createNaturalFunnelObservedPaperRuntimeFromSourceWiring({
     const runtimeSha = immutableSha(input?.cycle?.identity?.researchCodeSha)
       ?? immutableSha(input?.signal?.strategyIdentity?.researchCodeSha)
       ?? null;
+    const reasonEvidenceByStage = authoritativeFirstZeroReasonEvidenceByStage({
+      firstZero,
+      counters,
+      runtimeSha,
+      datasetIdentity: evidenceIdentity,
+    });
     return freeze({
       ...result,
       naturalFunnelContract: AUTHORITATIVE_PAPER_NATURAL_FUNNEL_CONTRACT,
@@ -307,6 +358,7 @@ export function createNaturalFunnelObservedPaperRuntimeFromSourceWiring({
       naturalFirstZeroReason: firstZero.reason,
       naturalEvidenceIdentity: evidenceIdentity,
       naturalRuntimeSha: runtimeSha,
+      authoritativeFirstZeroReasonEvidenceByStage: reasonEvidenceByStage,
       universeCount: measurements[0].count,
       scannerEvaluatedCount: measurements[1].count,
       evidenceCompleteCount: measurements[3].count,
