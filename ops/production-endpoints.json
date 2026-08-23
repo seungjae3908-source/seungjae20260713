@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "mode": "PRIMARY_WITH_MANUAL_FALLBACK",
+  "expectedIpv4": "158.247.235.32",
+  "primary": {
+    "name": "dynu",
+    "hostname": "lsj119.ddnsfree.com",
+    "baseUrl": "https://lsj119.ddnsfree.com"
+  },
+  "fallback": {
+    "name": "duckdns",
+    "hostname": "lsj119.duckdns.org",
+    "baseUrl": "https://lsj119.duckdns.org"
+  }
+}
