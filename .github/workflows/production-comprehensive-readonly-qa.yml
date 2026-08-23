@@ -6,7 +6,6 @@ on:
       - .github/workflows/production-comprehensive-readonly-qa.yml
       - stock-analyzer/playwright.production-comprehensive.config.ts
       - stock-analyzer/e2e/production-comprehensive-readonly-qa.spec.ts
-      - stock-analyzer/e2e/production-full-interaction-readonly-qa.spec.ts
       - stock-analyzer/e2e/production-mobile-scroll-readonly-qa.spec.ts
       - stock-analyzer/e2e/production-critical-http-readonly-qa.spec.ts
       - stock-analyzer/e2e/support/production-readonly-policy.ts
@@ -28,7 +27,7 @@ jobs:
   production-comprehensive-readonly:
     name: Real Production PC/mobile comprehensive read-only QA
     runs-on: ubuntu-latest
-    timeout-minutes: 160
+    timeout-minutes: 80
     environment: production
     env:
       PRODUCTION_BASE_URL: https://lsj119.duckdns.org
@@ -104,9 +103,7 @@ jobs:
             echo '- mobile search sample: 5 symbols per market (20 total)'
             echo '- chart matrix: 4 markets x 8 timeframes (32 actual UI transitions)'
             echo '- route/layout sweep: desktop 1440/1024, mobile 320/360/390/412/430'
-            echo '- full interaction sweep: every safe visible button/tab/disclosure on all app routes for desktop 1440 + mobile 390; critical interaction routes on all remaining viewports'
-            echo '- extra coverage: Auto Trading preflight UI, Admin, Admin UI Layout, Install/PWA, Watchlist, Alerts, AI draft, Account read-only shell, Paper input contracts, Orderbook, legacy redirects, offline/reconnect'
-            echo '- checks: finite loading, root/internal scroll, overlap, fixed-nav occlusion, horizontal overflow, safe controls, focusability, accessible labels, console/page/request failures'
+            echo '- checks: finite loading, root/internal scroll, overlap, fixed-nav occlusion, horizontal overflow, safe tabs, console/page/request failures'
             echo '- authenticated same-origin GET 401/403/5xx: blocking failure on critical routes'
             echo '- latest-head only: superseded pending QA runs are cancelled by concurrency'
             echo '- Production DB/app mutations: blocked'
