@@ -34,7 +34,7 @@ function tradePlanLines(alert: ScannerAlertCandidate): string[] {
   return [
     `진입가/진입구간 ${entry}`,
     '분할 매수 N/A (검증된 1·2·3차 분할 진입가 미제공)',
-    `분할 매도/목표 ${formatTargetPlan(alert.targets)}`,
+    `분할 매도가 ${formatTargetPlan(alert.targets)}`,
     `손절가 ${stop}`,
     '실제 주문/체결 아님',
   ];
