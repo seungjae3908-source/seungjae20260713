@@ -227,6 +227,23 @@ assert(
   'scanner single-entry fixture must preserve the zero-abort contract',
 );
 
+const rejectedProfileBootstrapTestStart = spec.indexOf("test('bootstrap finite-state:");
+const rejectedProfileBootstrapTestEnd = spec.indexOf("\n  test('profile timeout abort:", rejectedProfileBootstrapTestStart);
+assert(
+  rejectedProfileBootstrapTestStart >= 0 && rejectedProfileBootstrapTestEnd > rejectedProfileBootstrapTestStart,
+  'rejected profile bootstrap fixture boundaries are missing',
+);
+const rejectedProfileBootstrapTestBlock = spec.slice(
+  rejectedProfileBootstrapTestStart,
+  rejectedProfileBootstrapTestEnd,
+);
+assert(
+  rejectedProfileBootstrapTestBlock.includes(
+    "expect(requestCount, 'initial bootstrap must issue one profile request').toBe(1);",
+  ),
+  'rejected profile bootstrap must prove exactly one initial profile request',
+);
+
 const retryRecoveryTestStart = spec.indexOf("test('retry recovery:");
 const retryRecoveryTestEnd = spec.indexOf("\n  test('scanner readiness:", retryRecoveryTestStart);
 assert(
