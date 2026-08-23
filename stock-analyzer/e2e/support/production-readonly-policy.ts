@@ -80,9 +80,18 @@ export function isIgnorableProductionRequestFailure(
   }
 
   const normalizedMethod = method.toUpperCase();
-  return url.origin === productionOrigin
-    && (normalizedMethod === 'GET' || normalizedMethod === 'HEAD')
+  const readOnlyAbort = (normalizedMethod === 'GET' || normalizedMethod === 'HEAD')
     && errorText.trim() === 'net::ERR_ABORTED';
+  if (!readOnlyAbort) return false;
+
+  if (url.origin === productionOrigin) return true;
+
+  // A route transition intentionally cancels in-flight Supabase REST reads from
+  // the previous screen. Treat only exact read-only browser aborts as expected;
+  // timeouts, connection failures, writes, auth, storage, and other hosts remain
+  // blocking diagnostics.
+  return url.hostname.endsWith('.supabase.co')
+    && url.pathname.startsWith('/rest/v1/');
 }
 
 export function privateAccountDisconnectedFixture() {
