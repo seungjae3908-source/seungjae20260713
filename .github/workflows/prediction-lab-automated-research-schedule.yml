@@ -1,0 +1,140 @@
+name: Prediction Lab Automated Research Schedule
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Automated research lane to dispatch
+        required: true
+        default: daily
+        type: choice
+        options:
+          - daily
+          - weekly
+  schedule:
+    - cron: '17 2 * * *'
+    - cron: '43 3 * * 0'
+  push:
+    branches:
+      - research/automated-backtester-schedule-v1
+    paths:
+      - .github/workflows/prediction-lab-automated-research-schedule.yml
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: prediction-lab-automated-research-schedule-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DAILY_CRON: '17 2 * * *'
+  WEEKLY_CRON: '43 3 * * 0'
+
+jobs:
+  contract-validation:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact validation HEAD
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Assert exact HEAD and safety contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -f .github/workflows/prediction-lab-52d-validation.yml
+          test -f .github/workflows/prediction-lab-long-history-v1.yml
+          test "${#GITHUB_SHA}" -eq 40
+          printf '%s\n' \
+            'branchWrite=false' \
+            'liveOrderAllowed=false' \
+            'privateAccountRequestAllowed=false' \
+            'orderSubmitted=false' \
+            'productionDeploy=false'
+
+  dispatch:
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Resolve immutable main research SHA
+        id: research
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="$GITHUB_SHA"
+          if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo 'invalid immutable research SHA' >&2
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve scheduled lane
+        id: lane
+        shell: bash
+        env:
+          INPUT_MODE: ${{ inputs.mode }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          set -euo pipefail
+          mode="$INPUT_MODE"
+          if [ "$GITHUB_EVENT_NAME" = 'schedule' ]; then
+            case "$EVENT_SCHEDULE" in
+              "$DAILY_CRON") mode='daily' ;;
+              "$WEEKLY_CRON") mode='weekly' ;;
+              *) echo "unsupported schedule: $EVENT_SCHEDULE" >&2; exit 1 ;;
+            esac
+          fi
+          case "$mode" in
+            daily|weekly) ;;
+            *) echo "unsupported automated research mode: $mode" >&2; exit 1 ;;
+          esac
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch daily immutable Multi-Market suite
+        if: steps.lane.outputs.mode == 'daily'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_SHA: ${{ steps.research.outputs.sha }}
+        run: |
+          set -euo pipefail
+          body=$(printf '{"ref":"main","inputs":{"research_ref":"%s"}}' "$RESEARCH_SHA")
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/workflows/prediction-lab-52d-validation.yml/dispatches" \
+            --data "$body" >/dev/null
+          echo "dispatched=Prediction Lab Multi-Market Suite"
+          echo "researchSha=$RESEARCH_SHA"
+          echo 'branchWrite=false liveOrderAllowed=false privateAccountRequestAllowed=false orderSubmitted=false'
+
+      - name: Dispatch weekly immutable Long-History suite
+        if: steps.lane.outputs.mode == 'weekly'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESEARCH_SHA: ${{ steps.research.outputs.sha }}
+        run: |
+          set -euo pipefail
+          body=$(printf '{"ref":"main","inputs":{"research_ref":"%s"}}' "$RESEARCH_SHA")
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/workflows/prediction-lab-long-history-v1.yml/dispatches" \
+            --data "$body" >/dev/null
+          echo "dispatched=Prediction Lab Long History V1"
+          echo "researchSha=$RESEARCH_SHA"
+          echo 'branchWrite=false liveOrderAllowed=false privateAccountRequestAllowed=false orderSubmitted=false'

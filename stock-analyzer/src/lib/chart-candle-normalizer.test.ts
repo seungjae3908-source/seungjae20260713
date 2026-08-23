@@ -107,11 +107,11 @@ test('all supported timeframes normalize without changing their source timestamp
 test('multi-market request builder maps every required market and timeframe', () => {
   assert.deepEqual(
     buildUnifiedChartUrls({ market: 'KR', symbol: '005930', timeframe: '1m' }),
-    ['/api/stocks/005930/chart?tf=1m', '/api/stocks/005930/candles?tf=1m'],
+    ['/api/stocks/005930/candles?tf=1m', '/api/stocks/005930/chart?tf=1m'],
   );
   assert.deepEqual(
     buildUnifiedChartUrls({ market: 'US', symbol: 'aapl', timeframe: '4H' }),
-    ['/api/stocks/AAPL/chart?tf=4H', '/api/stocks/AAPL/candles?tf=4H'],
+    ['/api/stocks/AAPL/candles?tf=4H', '/api/stocks/AAPL/chart?tf=4H'],
   );
   assert.deepEqual(
     buildUnifiedChartUrls({ market: 'UPBIT', symbol: 'KRW-BTC', timeframe: '1H' }),

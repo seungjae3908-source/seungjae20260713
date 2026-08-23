@@ -115,8 +115,9 @@ function upbitResponse(
 ) {
   const remaining = Math.max(0, 1 - filled);
   return {
-    uuid: 'upbit-order-race',
+    uuid: identifier.replace(/^cancel-client-/, 'upbit-order-'),
     identifier,
+    market: 'KRW-BTC',
     state,
     volume: '1',
     remaining_volume: String(remaining),

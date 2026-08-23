@@ -31,6 +31,7 @@ export const APP_ROUTES = {
   alerts: '/alerts',
   stockDetailPrefix: '/stock/',
   stockInfo: '/stock-info',
+  stockAnalysis: '/stock-info/analysis',
   scanner: '/scanner',
   aiChart: '/ai-chart',
   autoTrading: '/auto-trading',
@@ -39,6 +40,7 @@ export const APP_ROUTES = {
   learn: '/learn',
   marketOverview: '/market-overview',
   aiChat: '/ai-chat',
+  researchCenter: '/research-center',
   portfolio: '/portfolio',
   assetsPortfolio: '/assets',
   settings: '/more',
@@ -96,6 +98,22 @@ export interface NavigationGroup {
   exactPaths?: readonly string[];
   pathPrefixes?: readonly string[];
   menu?: readonly NavigationMenuItem[];
+}
+
+export type NavigationFeatureDecision = 'KEEP_VISIBLE' | 'MERGE' | 'DEPRECATE' | 'INTERNAL_ONLY';
+
+export const NAVIGATION_FEATURE_DECISIONS = {
+  'market-overview': 'KEEP_VISIBLE',
+  'market-browser': 'INTERNAL_ONLY',
+  alerts: 'KEEP_VISIBLE',
+  recommendations: 'KEEP_VISIBLE',
+} as const satisfies Record<string, NavigationFeatureDecision>;
+
+export function navigationMenuItemIsUserVisible(item: Pick<NavigationMenuItem, 'id'>): boolean {
+  const decision: NavigationFeatureDecision | undefined = (
+    NAVIGATION_FEATURE_DECISIONS as Partial<Record<string, NavigationFeatureDecision>>
+  )[item.id];
+  return decision !== 'INTERNAL_ONLY' && decision !== 'DEPRECATE' && decision !== 'MERGE';
 }
 
 export interface AppRoutePresentation {
@@ -168,6 +186,7 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
       APP_ROUTES.watchlist,
       APP_ROUTES.alerts,
       APP_ROUTES.stockInfo,
+      APP_ROUTES.stockAnalysis,
     ],
     pathPrefixes: [APP_ROUTES.stockDetailPrefix],
     menu: [
@@ -176,6 +195,7 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
       { id: 'market-overview', href: APP_ROUTES.marketOverview, label: '지수·시황', icon: 'market' },
       { id: 'market-rankings', href: APP_ROUTES.marketRankings, label: '시장 순위', icon: 'ranking' },
       { id: 'market-browser', href: APP_ROUTES.marketBrowser, label: '시장 탐색', icon: 'ranking' },
+      { id: 'recommendations', href: APP_ROUTES.recommendations, label: 'AI 추천', icon: 'ranking', capability: 'canAccessRiskPreview' },
       { id: 'themes', href: APP_ROUTES.themes, label: '테마', icon: 'themes' },
       { id: 'watchlist', href: APP_ROUTES.watchlist, label: '관심종목', icon: 'watchlist' },
       { id: 'alerts', href: APP_ROUTES.alerts, label: '가격 알림', icon: 'alerts' },
@@ -239,12 +259,14 @@ export const APP_NAVIGATION: readonly NavigationGroup[] = [
     exactPaths: [
       APP_ROUTES.learn,
       APP_ROUTES.aiChat,
+      APP_ROUTES.researchCenter,
       APP_ROUTES.portfolio,
       APP_ROUTES.assetsPortfolio,
     ],
     menu: [
       { id: 'learn', href: APP_ROUTES.learn, label: '투자 공부', icon: 'learn' },
       { id: 'ai-chat', href: APP_ROUTES.aiChat, label: 'AI 정보', icon: 'chat', capability: 'canAccessBasicInfo' },
+      { id: 'research-center', href: APP_ROUTES.researchCenter, label: '연구센터', icon: 'chart', capability: 'canManageMembers' },
       {
         id: 'portfolio',
         href: APP_ROUTES.portfolio,
@@ -290,6 +312,7 @@ export const APP_ROUTE_PRESENTATIONS: readonly AppRoutePresentation[] = [
   { id: 'alerts', title: '가격 알림', breadcrumb: ['종목', '가격 알림'], groupId: 'assets', exactPaths: [APP_ROUTES.alerts] },
   { id: 'stock-detail', title: '종목 상세', breadcrumb: ['종목', '종목 상세'], groupId: 'assets', pathPrefixes: [APP_ROUTES.stockDetailPrefix] },
   { id: 'stock-info', title: '종목 정보', breadcrumb: ['종목', '종목 정보'], groupId: 'assets', exactPaths: [APP_ROUTES.stockInfo] },
+  { id: 'stock-analysis', title: '종목 상세 분석', breadcrumb: ['종목', '종목 상세 분석'], groupId: 'assets', exactPaths: [APP_ROUTES.stockAnalysis] },
   { id: 'scanner', title: 'AI 신호검색기', breadcrumb: ['기술', 'AI 신호검색기'], groupId: 'technical', exactPaths: [APP_ROUTES.scanner] },
   { id: 'ai-chart', title: 'AI 차트', breadcrumb: ['기술', 'AI 차트'], groupId: 'technical', exactPaths: [APP_ROUTES.aiChart] },
   { id: 'auto-trading', title: '승인형 주문', breadcrumb: ['기술', '승인형 주문'], groupId: 'technical', exactPaths: [APP_ROUTES.autoTrading] },
@@ -297,6 +320,7 @@ export const APP_ROUTE_PRESENTATIONS: readonly AppRoutePresentation[] = [
   { id: 'paper-trading', title: '모의매매', breadcrumb: ['기술', '모의매매'], groupId: 'technical', exactPaths: [APP_ROUTES.paperTrading] },
   { id: 'learn', title: '투자 공부', breadcrumb: ['정보', '투자 공부'], groupId: 'information', exactPaths: [APP_ROUTES.learn] },
   { id: 'ai-chat', title: 'AI 정보', breadcrumb: ['정보', 'AI 정보'], groupId: 'information', exactPaths: [APP_ROUTES.aiChat] },
+  { id: 'research-center', title: '연구센터', breadcrumb: ['정보', '연구센터'], groupId: 'information', exactPaths: [APP_ROUTES.researchCenter] },
   { id: 'portfolio', title: '포트폴리오', breadcrumb: ['정보', '포트폴리오'], groupId: 'information', exactPaths: [APP_ROUTES.portfolio, APP_ROUTES.assetsPortfolio] },
   { id: 'settings', title: '앱 설정', breadcrumb: ['설정', '앱 설정'], groupId: 'settings', exactPaths: [APP_ROUTES.settings, APP_ROUTES.settingsAlias] },
   { id: 'account', title: '계정', breadcrumb: ['설정', '계정'], groupId: 'settings', exactPaths: [APP_ROUTES.account, APP_ROUTES.login] },

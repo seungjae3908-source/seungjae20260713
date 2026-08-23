@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import type { CatalogEntry } from '../data/catalog';
+import type { AssetType } from '../data/asset-type';
 import type { Candle } from '../sample/types';
+import { krxPriceTick, roundPriceToTick, usNmsPriceTick } from './market-price-precision.service';
 import type { ScanCard } from './signal.service';
 import type { ScannerUniverseEntry } from './scanner-universe.service';
 import type {
@@ -37,6 +39,10 @@ function clamp(value: number, min = 0, max = 100): number {
 function round(value: number, digits = 2): number {
   const factor = 10 ** digits;
   return Math.round(value * factor) / factor;
+}
+
+function emptyPricePlan(): ScannerPricePlan {
+  return { entryZone: null, invalidation: null, stopLoss: null, targets: [], riskReward: null };
 }
 
 function sourceForCondition(label: string): string {
@@ -83,16 +89,25 @@ function atr(candles: Candle[], period = 14): number | null {
     : null;
 }
 
+function stockPriceTick(price: number, market: 'KR' | 'US', assetType: AssetType, observedAt: string): number | null {
+  if (market === 'KR') return krxPriceTick(price, assetType);
+  const at = Date.parse(observedAt);
+  return usNmsPriceTick(price, Number.isFinite(at) ? at : Date.now());
+}
+
 function pricePlan(
   price: number,
   candles: Candle[],
   direction: ScannerSignalDirection,
-  currency: string,
+  market: 'KR' | 'US',
+  assetType: AssetType,
+  observedAt: string,
 ): { plan: ScannerPricePlan; volatilityPercent: number | null } {
   const currentAtr = atr(candles);
-  if (!(price > 0) || currentAtr == null || !(currentAtr > 0) || candles.length < 20 || direction === 'NEUTRAL') {
+  const tick = stockPriceTick(price, market, assetType, observedAt);
+  if (!(price > 0) || currentAtr == null || !(currentAtr > 0) || candles.length < 20 || direction === 'NEUTRAL' || tick == null) {
     return {
-      plan: { entryZone: null, invalidation: null, stopLoss: null, targets: [], riskReward: null },
+      plan: emptyPricePlan(),
       volatilityPercent: currentAtr != null && price > 0 ? round(currentAtr / price * 100) : null,
     };
   }
@@ -100,25 +115,29 @@ function pricePlan(
   const recent = candles.slice(-20);
   const support = Math.min(...recent.map((row) => row.low));
   const resistance = Math.max(...recent.map((row) => row.high));
-  const digits = currency === 'KRW' ? 0 : price >= 1 ? 4 : 8;
-  const format = (value: number) => round(Math.max(0, value), digits);
+  const format = (value: number): number | null => roundPriceToTick(Math.max(0, value), tick);
   if (direction === 'LONG') {
     const stop = Math.min(support - currentAtr * 0.1, price - Math.max(currentAtr * 1.25, price * 0.01));
     const risk = price - stop;
     if (!(risk > 0)) {
-      return {
-        plan: { entryZone: null, invalidation: null, stopLoss: null, targets: [], riskReward: null },
-        volatilityPercent: round(currentAtr / price * 100),
-      };
+      return { plan: emptyPricePlan(), volatilityPercent: round(currentAtr / price * 100) };
     }
     const target1 = Math.max(resistance, price + risk * 1.5);
     const target2 = price + risk * 2.2;
+    const entryFrom = format(Math.max(support, price - currentAtr * 0.35));
+    const entryTo = format(price);
+    const stopPrice = format(stop);
+    const targetPrice1 = format(target1);
+    const targetPrice2 = format(target2);
+    if ([entryFrom, entryTo, stopPrice, targetPrice1, targetPrice2].some((value) => value == null)) {
+      return { plan: emptyPricePlan(), volatilityPercent: round(currentAtr / price * 100) };
+    }
     return {
       plan: {
-        entryZone: { from: format(Math.max(support, price - currentAtr * 0.35)), to: format(price) },
-        invalidation: format(stop),
-        stopLoss: format(stop),
-        targets: [format(target1), format(target2)],
+        entryZone: { from: entryFrom!, to: entryTo! },
+        invalidation: stopPrice!,
+        stopLoss: stopPrice!,
+        targets: [targetPrice1!, targetPrice2!],
         riskReward: round((target1 - price) / risk),
       },
       volatilityPercent: round(currentAtr / price * 100),
@@ -128,19 +147,24 @@ function pricePlan(
   const stop = Math.max(resistance + currentAtr * 0.1, price + Math.max(currentAtr * 1.25, price * 0.01));
   const risk = stop - price;
   if (!(risk > 0)) {
-    return {
-      plan: { entryZone: null, invalidation: null, stopLoss: null, targets: [], riskReward: null },
-      volatilityPercent: round(currentAtr / price * 100),
-    };
+    return { plan: emptyPricePlan(), volatilityPercent: round(currentAtr / price * 100) };
   }
   const target1 = Math.min(support, price - risk * 1.5);
   const target2 = Math.max(0, price - risk * 2.2);
+  const entryFrom = format(price);
+  const entryTo = format(Math.min(resistance, price + currentAtr * 0.35));
+  const stopPrice = format(stop);
+  const targetPrice1 = format(target1);
+  const targetPrice2 = format(target2);
+  if ([entryFrom, entryTo, stopPrice, targetPrice1, targetPrice2].some((value) => value == null)) {
+    return { plan: emptyPricePlan(), volatilityPercent: round(currentAtr / price * 100) };
+  }
   return {
     plan: {
-      entryZone: { from: format(price), to: format(Math.min(resistance, price + currentAtr * 0.35)) },
-      invalidation: format(stop),
-      stopLoss: format(stop),
-      targets: [format(target1), format(target2)],
+      entryZone: { from: entryFrom!, to: entryTo! },
+      invalidation: stopPrice!,
+      stopLoss: stopPrice!,
+      targets: [targetPrice1!, targetPrice2!],
       riskReward: round((price - target1) / risk),
     },
     volatilityPercent: round(currentAtr / price * 100),
@@ -241,7 +265,7 @@ export function applyStockSignalPolicy(input: StockSignalPolicyInput): ScannerSi
   const allSelectedMatched = selected.length > 0 && evidence.every((item) => item.status === 'matched');
   const direction: ScannerSignalDirection = 'LONG';
   const observedAt = card.analyzedAt || new Date().toISOString();
-  const technicalPlan = pricePlan(card.price, candles, direction, card.currency);
+  const technicalPlan = pricePlan(card.price, candles, direction, card.market, universeEntry.assetType, observedAt);
   const strongSignalEligible = allSelectedMatched
     && score >= 75
     && confidence >= 70
@@ -259,6 +283,7 @@ export function applyStockSignalPolicy(input: StockSignalPolicyInput): ScannerSi
   if (card.riskScore == null) warnings.push('위험 데이터 없음');
   if (dataState !== 'complete') warnings.push(`데이터 상태 ${dataState}`);
   if (universeEntry.listingStatus !== 'LISTED') warnings.push('상장 상태 미확인');
+  if (technicalPlan.plan.riskReward == null) warnings.push('시장 가격 단위 또는 변동성 데이터 부족');
 
   const volume = candles.at(-1)?.volume ?? null;
   const tradingValue = volume != null && Number.isFinite(volume) ? volume * card.price : card.liquidity;

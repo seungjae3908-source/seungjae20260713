@@ -29,6 +29,8 @@ import {
   type PreparedExchangeRequest,
   type UpbitCredentials,
 } from './trade-exchange-adapters.service';
+import { prepareUpbitOpenOrders } from './trade-open-orders-adapters.service';
+import { assertNoOrphanExchangeOrders, type PendingExchangeOrderRef } from './trade-orphan-order-guard.service';
 import {
   buildBitgetExecutionSnapshot,
   buildKiwoomExecutionSnapshot,
@@ -93,11 +95,11 @@ function invalidResponseCode(baseUrl: string) {
   return 'EXCHANGE_INVALID_RESPONSE';
 }
 
-async function sendExchangeRequest(
+async function fetchExchangeJson(
   baseUrl: string,
   request: PreparedExchangeRequest,
   timeoutMs = ORDER_TIMEOUT_MS,
-) {
+): Promise<unknown> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -111,14 +113,11 @@ async function sendExchangeRequest(
     if (!response.ok) throw new Error(`EXCHANGE_HTTP_${response.status}`);
     const raw = await response.text();
     if (!raw.trim()) throw new Error(invalidResponseCode(baseUrl));
-    let payload: unknown;
     try {
-      payload = JSON.parse(raw);
+      return JSON.parse(raw) as unknown;
     } catch {
       throw new Error(invalidResponseCode(baseUrl));
     }
-    if (!isRecord(payload)) throw new Error(invalidResponseCode(baseUrl));
-    return payload;
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') throw new Error('EXCHANGE_TIMEOUT');
     if (error instanceof TypeError) throw new Error('EXCHANGE_NETWORK_ERROR');
@@ -126,6 +125,26 @@ async function sendExchangeRequest(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function sendExchangeRequest(
+  baseUrl: string,
+  request: PreparedExchangeRequest,
+  timeoutMs = ORDER_TIMEOUT_MS,
+) {
+  const payload = await fetchExchangeJson(baseUrl, request, timeoutMs);
+  if (!isRecord(payload)) throw new Error(invalidResponseCode(baseUrl));
+  return payload;
+}
+
+async function sendExchangeListRequest(
+  baseUrl: string,
+  request: PreparedExchangeRequest,
+  timeoutMs = ORDER_TIMEOUT_MS,
+) {
+  const payload = await fetchExchangeJson(baseUrl, request, timeoutMs);
+  if (!Array.isArray(payload) || !payload.every(isRecord)) throw new Error(invalidResponseCode(baseUrl));
+  return payload;
 }
 
 function assertBitgetSuccess(payload: ExchangePayload) {
@@ -208,12 +227,32 @@ function kiwoomLookupContainsOrder(payload: ExchangePayload, orderId: string) {
   return false;
 }
 
+function bitgetPendingRows(data: unknown) {
+  if (!isRecord(data) || !Array.isArray(data.entrustedList) || !data.entrustedList.every(isRecord)) {
+    throw new Error('BITGET_INVALID_RESPONSE');
+  }
+  return data.entrustedList;
+}
+
+function bitgetPendingRefs(data: unknown): PendingExchangeOrderRef[] {
+  return bitgetPendingRows(data).map((row) => ({
+    clientOrderId: text(row.clientOid),
+    exchangeOrderId: text(row.orderId ?? row.order_id),
+  }));
+}
+
+function upbitPendingRefs(rows: ExchangePayload[]): PendingExchangeOrderRef[] {
+  return rows.map((row) => ({
+    clientOrderId: text(row.identifier),
+    exchangeOrderId: text(row.uuid),
+  }));
+}
+
 function bitgetPreflight(data: unknown[], plan: TradingPlan, clientOrderId: string) {
   const [accountsRaw, positionsRaw, pendingRaw, tickerRaw] = data;
   const accounts = Array.isArray(accountsRaw) ? accountsRaw.filter(isRecord) : [];
   const positions = Array.isArray(positionsRaw) ? positionsRaw.filter(isRecord) : [];
-  const pending = isRecord(pendingRaw) && Array.isArray(pendingRaw.entrustedList)
-    ? pendingRaw.entrustedList.filter(isRecord) : [];
+  const pending = bitgetPendingRows(pendingRaw);
   const account = accounts.find((row) => String(row.marginCoin ?? '').toUpperCase() === 'USDT');
   if (!account || Number(account.available ?? 0) <= 0) throw new Error('BITGET_INSUFFICIENT_MARGIN');
   if (String(account.posMode ?? '').toLowerCase() === 'hedge_mode') throw new Error('BITGET_ONE_WAY_MODE_REQUIRED');
@@ -471,6 +510,7 @@ export class TradeExecutionService {
       ?? tickerRows[0];
     validateBitgetContractRules(plan, contract, Number(tickerRow?.markPrice ?? tickerRow?.lastPr ?? 0));
     const canChangeMarginMode = bitgetPreflight([accounts, positions, pending, ticker], plan, order.clientOrderId);
+    assertNoOrphanExchangeOrders('bitget', bitgetPendingRefs(pending), await this.repository.listOrders(userId));
     const risk = await this.riskService.evaluate({
       userId,
       expectedPlan: plan,
@@ -496,7 +536,7 @@ export class TradeExecutionService {
     let reconciliationRequired = false;
     try {
       assertBitgetOrderLookup(await sendExchangeRequest(BASE_URLS.bitget,
-        prepareBitgetOrderQuery(credentials, order.clientOrderId), PREFLIGHT_TIMEOUT_MS), order.clientOrderId);
+        prepareBitgetOrderQuery(credentials, plan.symbol, order.clientOrderId), PREFLIGHT_TIMEOUT_MS), order.clientOrderId);
     } catch { reconciliationRequired = true; }
     return { orderId: order.clientOrderId, reconciliationRequired, risk };
   }
@@ -507,12 +547,16 @@ export class TradeExecutionService {
     order: TradingOrder,
     credentials: UpbitCredentials,
   ) {
-    const [accounts, chance, ticker, orderbook] = await Promise.all([
+    const [accounts, chance, ticker, orderbook, waitOrders, watchOrders] = await Promise.all([
       sendExchangeRequest(BASE_URLS.upbit, prepareUpbitAccounts(credentials), PREFLIGHT_TIMEOUT_MS).then(assertUpbitSuccess),
       sendExchangeRequest(BASE_URLS.upbit, prepareUpbitOrderChance(credentials, plan.symbol), PREFLIGHT_TIMEOUT_MS).then(assertUpbitSuccess),
       sendExchangeRequest(BASE_URLS.upbit, prepareUpbitExecutionTicker(plan.symbol), PREFLIGHT_TIMEOUT_MS).then(assertUpbitSuccess),
       sendExchangeRequest(BASE_URLS.upbit, prepareUpbitExecutionOrderbook(plan.symbol), PREFLIGHT_TIMEOUT_MS).then(assertUpbitSuccess),
+      sendExchangeListRequest(BASE_URLS.upbit, prepareUpbitOpenOrders(credentials, plan.symbol, 'wait'), PREFLIGHT_TIMEOUT_MS),
+      sendExchangeListRequest(BASE_URLS.upbit, prepareUpbitOpenOrders(credentials, plan.symbol, 'watch'), PREFLIGHT_TIMEOUT_MS),
     ]);
+    assertNoOrphanExchangeOrders('upbit', upbitPendingRefs([...waitOrders, ...watchOrders]),
+      await this.repository.listOrders(userId));
     const rows = Array.isArray(accounts.data) ? accounts.data.filter(isRecord) : [];
     const krw = rows.find((row) => String(row.currency ?? '') === 'KRW');
     if (plan.side === 'buy' && Number(krw?.balance ?? 0) < Number(plan.quoteAmount ?? plan.estimatedKrw)) {

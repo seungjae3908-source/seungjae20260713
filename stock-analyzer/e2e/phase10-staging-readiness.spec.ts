@@ -12,6 +12,7 @@ import {
   collectSafeApiDiagnostic,
   type SafeApiDiagnostic,
 } from './support/safe-api-diagnostic';
+import { expectUiBuilderStagingReadiness } from './support/ui-builder-staging-readiness';
 import { APP_NAVIGATION } from '../src/lib/app-navigation';
 
 const stagingMode = process.env.PHASE10_STAGING_E2E === 'true';
@@ -33,16 +34,36 @@ const emptyAccounts: StagingAccountCredentials = {
 let accounts = emptyAccounts;
 let accountLifecycle: StagingAccountLifecycle | null = null;
 
+const logoutScopedReadPaths = new Set([
+  '/api/user-integrations',
+  '/api/accounts/read-only/toss',
+  '/api/accounts/read-only/upbit',
+  '/api/accounts/read-only/bitget',
+]);
+
 type Diagnostic = { test: string; url: string; detail: string; status?: number };
-type LogoutObservation = { candidates: Diagnostic[] };
+type LogoutObservation = {
+  candidates: Diagnostic[];
+  origin: string;
+  logoutScopedReads: Set<Request>;
+};
 type RouteTransitionObservation = {
   fromRoute: string;
   toRoute: string;
   candidates: Diagnostic[];
   pendingGetRequests: Set<Request>;
 };
+type AuthFaultObservation = {
+  kind: 'reject' | 'timeout' | 'retry';
+  candidates: Diagnostic[];
+  requests: Set<Request>;
+  startedAt: number | null;
+  failedAt: number | null;
+};
 const activeLogoutObservations = new WeakMap<Page, LogoutObservation>();
+const confirmedLogoutAbortRequests = new WeakMap<Request, string>();
 const activeRouteTransitionObservations = new WeakMap<Page, RouteTransitionObservation>();
+const activeAuthFaultObservations = new WeakMap<Page, AuthFaultObservation>();
 const pendingMutatingRequests = new WeakMap<Page, Set<Request>>();
 const pendingApiGetRequests = new WeakMap<Page, Set<Request>>();
 const diagnostics: {
@@ -51,6 +72,7 @@ const diagnostics: {
   unhandled_rejections: Diagnostic[];
   unexpected_http_errors: Diagnostic[];
   expected_logout_aborts: Diagnostic[];
+  expected_auth_faults: Diagnostic[];
   expected_scanner_aborts: Diagnostic[];
   expected_route_transition_aborts: Diagnostic[];
   api_diagnostics: SafeApiDiagnostic[];
@@ -60,6 +82,7 @@ const diagnostics: {
   unhandled_rejections: [],
   unexpected_http_errors: [],
   expected_logout_aborts: [],
+  expected_auth_faults: [],
   expected_scanner_aborts: [],
   expected_route_transition_aborts: [],
   api_diagnostics: [],
@@ -94,7 +117,39 @@ function diagnosticText(raw: string) {
     .replace(/((?:authorization|apikey|api[_-]?key|token|password|secret|key)\s*[:=]\s*)([^\s,;]+)/gi, '$1[redacted]');
 }
 
-function isExpectedLogoutAbort(request: Request) {
+function isLogoutScopedReadIdentity(
+  method: string,
+  rawUrl: string,
+  expectedOrigin: string,
+) {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+  return method === 'GET'
+    && logoutScopedReadPaths.has(parsed.pathname)
+    && parsed.searchParams.size === 0
+    && parsed.origin === expectedOrigin;
+}
+
+function isLogoutScopedRead(request: Request, expectedOrigin: string) {
+  return isLogoutScopedReadIdentity(request.method(), request.url(), expectedOrigin);
+}
+
+function isPersonalIntegrationLogoutRead(request: Request, expectedOrigin: string) {
+  let parsed: URL;
+  try {
+    parsed = new URL(request.url());
+  } catch {
+    return false;
+  }
+  return parsed.pathname === '/api/user-integrations'
+    && isLogoutScopedRead(request, expectedOrigin);
+}
+
+function isExpectedLogoutAbort(request: Request, observation: LogoutObservation) {
   let parsed: URL;
   try {
     parsed = new URL(request.url());
@@ -102,23 +157,35 @@ function isExpectedLogoutAbort(request: Request) {
     return false;
   }
   const query = [...parsed.searchParams.entries()];
-  return request.method() === 'POST'
+  const aborted = request.failure()?.errorText === 'net::ERR_ABORTED';
+  const abortedLogoutRequest = request.method() === 'POST'
     && parsed.pathname === '/auth/v1/logout'
     && query.length === 1
     && query[0]?.[0] === 'scope'
-    && query[0]?.[1] === 'global'
-    && request.failure()?.errorText === 'net::ERR_ABORTED';
+    && query[0]?.[1] === 'global';
+  const abortedScopedRead = observation.logoutScopedReads.has(request)
+    && isLogoutScopedRead(request, observation.origin);
+  return aborted && (abortedLogoutRequest || abortedScopedRead);
 }
 
-function isExpectedScannerAbort(request: Request) {
+function isConfirmedLogoutAbort(request: Request) {
+  const expectedOrigin = confirmedLogoutAbortRequests.get(request);
+  return expectedOrigin !== undefined
+    && request.failure()?.errorText === 'net::ERR_ABORTED'
+    && isLogoutScopedRead(request, expectedOrigin);
+}
+
+function isProfileRequest(request: Request) {
   try {
     const parsed = new URL(request.url());
-    return request.method() === 'GET'
-      && parsed.pathname === '/api/market/scan'
-      && request.failure()?.errorText === 'net::ERR_ABORTED';
+    return request.method() === 'GET' && parsed.pathname === '/rest/v1/profiles';
   } catch {
     return false;
   }
+}
+
+function isExpectedAuthFault(request: Request, observation: AuthFaultObservation) {
+  return observation.requests.has(request) && isProfileRequest(request);
 }
 
 function isExpectedRouteTransitionAbort(
@@ -127,10 +194,14 @@ function isExpectedRouteTransitionAbort(
 ) {
   try {
     const parsed = new URL(request.url());
+    const routeRead = parsed.pathname.startsWith('/api/')
+      || isProfileRequest(request)
+      || request.resourceType() === 'script';
     return observation.fromRoute !== observation.toRoute
       && observation.pendingGetRequests.has(request)
       && request.method() === 'GET'
-      && parsed.pathname.startsWith('/api/')
+      && routeRead
+      && parsed.pathname !== '/api/market/scan'
       && request.failure()?.errorText === 'net::ERR_ABORTED';
   } catch {
     return false;
@@ -140,9 +211,13 @@ function isExpectedRouteTransitionAbort(
 function isSameOriginApiGet(request: Request) {
   try {
     const parsed = new URL(request.url());
+    const routeRead = parsed.pathname.startsWith('/api/')
+      || isProfileRequest(request)
+      || request.resourceType() === 'script';
     return request.method() === 'GET'
       && parsed.origin === new URL(request.frame().url()).origin
-      && parsed.pathname.startsWith('/api/');
+      && routeRead
+      && parsed.pathname !== '/api/market/scan';
   } catch {
     return false;
   }
@@ -177,8 +252,21 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
   pendingMutatingRequests.set(page, mutations);
   pendingApiGetRequests.set(page, apiGets);
   page.on('request', (request) => {
+    const logoutObservation = activeLogoutObservations.get(page);
+    if (
+      logoutObservation
+      && isLogoutScopedRead(request, logoutObservation.origin)
+    ) {
+      logoutObservation.logoutScopedReads.add(request);
+    }
     if (isMutatingBrowserRequest(request)) mutations.add(request);
-    if (isSameOriginApiGet(request)) apiGets.add(request);
+    if (isSameOriginApiGet(request)) {
+      apiGets.add(request);
+      const routeObservation = activeRouteTransitionObservations.get(page);
+      if (routeObservation && routeIdentity(page.url()) === routeObservation.fromRoute) {
+        routeObservation.pendingGetRequests.add(request);
+      }
+    }
   });
   page.on('requestfinished', (request) => completeBrowserRequest(page, request));
   page.on('console', (message) => {
@@ -196,6 +284,16 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
   });
   page.on('response', (response) => {
     if (response.status() < 400) return;
+    const authFault = activeAuthFaultObservations.get(page);
+    if (authFault && authFault.kind !== 'timeout' && isExpectedAuthFault(response.request(), authFault)) {
+      authFault.candidates.push({
+        test: testName,
+        url: diagnosticUrl(response.url()),
+        status: response.status(),
+        detail: diagnosticText(`${response.request().method()} ${response.status()} ${response.statusText()}`),
+      });
+      return;
+    }
     diagnostics.unexpected_http_errors.push({
       test: testName,
       url: diagnosticUrl(response.url()),
@@ -213,17 +311,23 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
       detail,
     };
     const logoutObservation = activeLogoutObservations.get(page);
-    if (logoutObservation && isExpectedLogoutAbort(request)) {
+    if (logoutObservation && isExpectedLogoutAbort(request, logoutObservation)) {
       logoutObservation.candidates.push(diagnostic);
+      return;
+    }
+    if (isConfirmedLogoutAbort(request)) {
+      diagnostics.expected_logout_aborts.push(diagnostic);
+      return;
+    }
+    const authFault = activeAuthFaultObservations.get(page);
+    if (authFault && authFault.kind === 'timeout' && isExpectedAuthFault(request, authFault)) {
+      authFault.failedAt = Date.now();
+      authFault.candidates.push(diagnostic);
       return;
     }
     const routeObservation = activeRouteTransitionObservations.get(page);
     if (routeObservation && isExpectedRouteTransitionAbort(request, routeObservation)) {
       routeObservation.candidates.push(diagnostic);
-      return;
-    }
-    if (isExpectedScannerAbort(request)) {
-      diagnostics.expected_scanner_aborts.push(diagnostic);
       return;
     }
     diagnostics.unexpected_http_errors.push(diagnostic);
@@ -241,6 +345,24 @@ async function waitForPendingMutations(page: Page) {
     () => pendingMutatingRequests.get(page)?.size ?? 0,
     {
       message: 'mutating browser requests must finish before route navigation',
+      timeout: 15_000,
+      intervals: [100, 200, 300, 500],
+    },
+  ).toBe(0);
+}
+
+async function waitForPendingPersonalIntegrationReads(page: Page) {
+  const expectedOrigin = new URL(page.url()).origin;
+  await expect.poll(
+    () => {
+      const pending = pendingApiGetRequests.get(page);
+      if (!pending) return 0;
+      return [...pending]
+        .filter((request) => isPersonalIntegrationLogoutRead(request, expectedOrigin))
+        .length;
+    },
+    {
+      message: 'personal integration GET must settle before verifier-owned authenticated navigation',
       timeout: 15_000,
       intervals: [100, 200, 300, 500],
     },
@@ -272,12 +394,18 @@ async function login(page: Page, loginName: string, password: string) {
   await passwordInput.fill(password);
   await loginSubmitButton(page).click();
   await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toBeVisible({ timeout: 30_000 });
+  await settle(page);
+  await waitForPendingPersonalIntegrationReads(page);
 }
 
 async function logout(page: Page) {
   const logoutButton = page.getByRole('button', { name: /로그아웃|sign out/i });
   await expect(logoutButton).toBeVisible();
-  const observation: LogoutObservation = { candidates: [] };
+  const observation: LogoutObservation = {
+    candidates: [],
+    origin: new URL(page.url()).origin,
+    logoutScopedReads: new Set<Request>(),
+  };
   activeLogoutObservations.set(page, observation);
   let confirmed = false;
   try {
@@ -296,6 +424,9 @@ async function logout(page: Page) {
       `protected API remained accessible after logout: ${protectedResponse.status()}`,
     ).toContain(protectedResponse.status());
 
+    for (const request of observation.logoutScopedReads) {
+      confirmedLogoutAbortRequests.set(request, observation.origin);
+    }
     confirmed = true;
     diagnostics.expected_logout_aborts.push(...observation.candidates);
   } finally {
@@ -344,11 +475,37 @@ async function finishRouteTransition(
   })));
 }
 
+async function expectNavigationTransition(
+  page: Page,
+  route: string,
+  open: () => Promise<void>,
+) {
+  await settle(page);
+  const observation: RouteTransitionObservation = {
+    fromRoute: routeIdentity(page.url()),
+    toRoute: routeIdentity(route, page.url()),
+    candidates: [],
+    pendingGetRequests: new Set(pendingApiGetRequests.get(page) ?? []),
+  };
+  activeRouteTransitionObservations.set(page, observation);
+  let confirmed = false;
+  try {
+    await open();
+    await settle(page);
+    expect(routeIdentity(page.url())).toBe(observation.toRoute);
+    await expect(page.locator('body')).not.toContainText(/페이지를 찾을 수 없습니다|page not found/i);
+    await expect(page.locator('body')).not.toBeEmpty();
+    confirmed = true;
+  } finally {
+    await finishRouteTransition(page, observation, confirmed);
+  }
+}
+
 async function expectHealthyRoute(page: Page, route: string) {
   await settle(page);
   const requestedRoute = routeIdentity(route, page.url());
   const expectedRoute = requestedRoute === '/stock/005930'
-    ? '/stock/005930?tab=overview'
+    ? '/stock-info?back=%2Fstocks&asset=stock&market=KR&ticker=005930'
     : requestedRoute;
   const observation: RouteTransitionObservation = {
     fromRoute: routeIdentity(page.url()),
@@ -365,7 +522,7 @@ async function expectHealthyRoute(page: Page, route: string) {
       await expect.poll(
         () => routeIdentity(page.url()),
         {
-          message: 'stock detail fixture must reach its exact canonical overview route',
+          message: 'stock detail fixture must reach its exact canonical stock-info route',
           timeout: 15_000,
           intervals: [100, 200, 300, 500],
         },
@@ -420,6 +577,78 @@ async function expectScannerAfterFutures(page: Page) {
   }
 }
 
+function scannerFixture(state: 'complete' | 'partial' | 'unavailable') {
+  const unavailable = state === 'unavailable';
+  const partial = state !== 'complete';
+  const elapsedMs = unavailable ? 9_500 : 25;
+  return {
+    ok: true,
+    partial,
+    requestId: `phase10-${state}`,
+    assetClass: 'stock',
+    market: 'KR',
+    timeframe: '1D',
+    cards: [],
+    alerts: [],
+    failures: unavailable
+      ? [{ symbol: 'KRX', reason: 'timeout', message: 'bounded verifier fixture timeout' }]
+      : [],
+    execution: {
+      requestedCount: 1,
+      startedCount: 1,
+      completedCount: unavailable ? 0 : 1,
+      excludedCount: 0,
+      providerErrorCount: 0,
+      timeoutCount: unavailable ? 1 : 0,
+      partial,
+      timedOut: unavailable,
+      cancelled: false,
+      duplicate: false,
+      elapsedMs,
+      deadlineMs: 10_000,
+      itemTimeoutMs: 3_000,
+      maxConcurrency: 1,
+    },
+    universe: {
+      totalCount: 1,
+      cursor: 0,
+      nextCursor: null,
+      source: 'phase10-safe-browser-fixture',
+      partial,
+      stale: false,
+      listingStatusCoverage: 'listed-or-unknown',
+    },
+    dataState: state,
+    message: `phase10 scanner ${state} contract`,
+    elapsedMs,
+    generatedAt: new Date().toISOString(),
+    orderSubmitted: false,
+    exchangeRequestSent: false,
+  };
+}
+
+async function finishAuthFault(
+  page: Page,
+  observation: AuthFaultObservation,
+  confirmed: boolean,
+) {
+  activeAuthFaultObservations.delete(page);
+  if (confirmed) {
+    diagnostics.expected_auth_faults.push(...observation.candidates);
+    return;
+  }
+  diagnostics.unexpected_http_errors.push(...observation.candidates.map((item) => ({
+    ...item,
+    detail: `unconfirmed auth fault: ${item.detail}`,
+  })));
+}
+
+async function expectBootstrapTerminalError(page: Page) {
+  await expect(page.getByTestId('error-state')).toBeVisible({ timeout: 10_500 });
+  await expect(page.getByTestId('page-fallback')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '다시 시도', exact: true })).toBeVisible();
+}
+
 function errorsFor(testInfo: TestInfo) {
   const testName = testInfo.titlePath.join(' > ');
   return {
@@ -429,6 +658,23 @@ function errorsFor(testInfo: TestInfo) {
     http: diagnostics.unexpected_http_errors.filter((item) => item.test === testName),
   };
 }
+
+test('logout abort proof keeps session-scoped account reads exact and query-free', () => {
+  const origin = 'https://staging.example.test';
+  for (const route of [
+    '/api/user-integrations',
+    '/api/accounts/read-only/toss',
+    '/api/accounts/read-only/upbit',
+    '/api/accounts/read-only/bitget',
+  ]) {
+    expect(isLogoutScopedReadIdentity('GET', `${origin}${route}`, origin)).toBe(true);
+  }
+  expect(isLogoutScopedReadIdentity('GET', `${origin}/api/accounts/read-only/kiwoom`, origin)).toBe(false);
+  expect(isLogoutScopedReadIdentity('GET', `${origin}/api/accounts/read-only/toss?refresh=1`, origin)).toBe(false);
+  expect(isLogoutScopedReadIdentity('GET', `${origin}/api/accounts/read-only/toss/history`, origin)).toBe(false);
+  expect(isLogoutScopedReadIdentity('POST', `${origin}/api/accounts/read-only/toss`, origin)).toBe(false);
+  expect(isLogoutScopedReadIdentity('GET', 'https://other.example.test/api/accounts/read-only/toss', origin)).toBe(false);
+});
 
 test.describe('real staging release readiness', () => {
   test.describe.configure({ mode: 'serial' });
@@ -492,14 +738,209 @@ test.describe('real staging release readiness', () => {
       await page.setViewportSize({ width, height });
       await login(page, accounts.regular.loginName, accounts.regular.password);
       await expectMembership(page, /정회원/);
+      await settle(page);
+      await waitForPendingPersonalIntegrationReads(page);
       await page.reload();
       await settle(page);
+      await waitForPendingPersonalIntegrationReads(page);
       await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
       await logout(page);
     });
   }
 
+  test('bootstrap finite-state: rejected profile bootstrap exits loading with terminal retry UI', async ({ page }) => {
+    await login(page, accounts.regular.loginName, accounts.regular.password);
+    const observation: AuthFaultObservation = {
+      kind: 'reject',
+      candidates: [],
+      requests: new Set<Request>(),
+      startedAt: null,
+      failedAt: null,
+    };
+    activeAuthFaultObservations.set(page, observation);
+    let requestCount = 0;
+    let confirmed = false;
+    await page.route('**/rest/v1/profiles*', async (route) => {
+      const request = route.request();
+      if (!isProfileRequest(request)) {
+        await route.continue();
+        return;
+      }
+      requestCount += 1;
+      observation.requests.add(request);
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([
+          { id: 'phase10-profile-a' },
+          { id: 'phase10-profile-b' },
+        ]),
+      });
+    });
+    try {
+      await expectHealthyRoute(page, '/');
+      await expectBootstrapTerminalError(page);
+      expect(requestCount, 'initial bootstrap must issue one profile request').toBe(1);
+      expect(observation.candidates, 'semantic bootstrap rejection must not create a network-error exemption').toHaveLength(0);
+      confirmed = true;
+    } finally {
+      await page.unroute('**/rest/v1/profiles*');
+      await finishAuthFault(page, observation, confirmed);
+    }
+  });
+
+  test('profile timeout abort: frontend deadline cancels the stalled profile request and exits loading', async ({ page }) => {
+    await login(page, accounts.regular.loginName, accounts.regular.password);
+    const observation: AuthFaultObservation = {
+      kind: 'timeout',
+      candidates: [],
+      requests: new Set<Request>(),
+      startedAt: null,
+      failedAt: null,
+    };
+    activeAuthFaultObservations.set(page, observation);
+    let requestCount = 0;
+    let confirmed = false;
+    let timeoutRouteSettled = Promise.resolve();
+    await page.route('**/rest/v1/profiles*', async (route) => {
+      const request = route.request();
+      if (!isProfileRequest(request)) {
+        await route.continue();
+        return;
+      }
+      requestCount += 1;
+      observation.requests.add(request);
+      observation.startedAt = Date.now();
+      timeoutRouteSettled = (async () => {
+        await page.waitForTimeout(9_000);
+        if (request.failure() === null) await route.abort('timedout');
+      })();
+      await timeoutRouteSettled;
+    });
+    try {
+      await expectHealthyRoute(page, '/');
+      await expectBootstrapTerminalError(page);
+      await expect.poll(
+        () => observation.failedAt,
+        {
+          message: 'the frontend profile deadline must cancel the intercepted request',
+          timeout: 9_500,
+          intervals: [100, 200, 300],
+        },
+      ).not.toBeNull();
+      expect(requestCount, 'timeout bootstrap must issue one profile request').toBe(1);
+      expect(observation.candidates, 'the cancelled profile request must be observed once').toHaveLength(1);
+      expect(observation.candidates[0]?.detail).toContain('net::ERR_ABORTED');
+      expect(Number(observation.failedAt) - Number(observation.startedAt)).toBeLessThan(9_000);
+      confirmed = true;
+    } finally {
+      await timeoutRouteSettled;
+      await page.unroute('**/rest/v1/profiles*');
+      await finishAuthFault(page, observation, confirmed);
+    }
+  });
+
+  test('retry recovery: first profile bootstrap fails, retry performs one fresh request and restores authenticated UI', async ({ page }) => {
+    await login(page, accounts.regular.loginName, accounts.regular.password);
+    const observation: AuthFaultObservation = {
+      kind: 'retry',
+      candidates: [],
+      requests: new Set<Request>(),
+      startedAt: null,
+      failedAt: null,
+    };
+    activeAuthFaultObservations.set(page, observation);
+    let requestCount = 0;
+    let confirmed = false;
+    await page.route('**/rest/v1/profiles*', async (route) => {
+      const request = route.request();
+      if (!isProfileRequest(request)) {
+        await route.continue();
+        return;
+      }
+      requestCount += 1;
+      observation.requests.add(request);
+      if (requestCount === 1) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify([
+            { id: 'phase10-profile-a' },
+            { id: 'phase10-profile-b' },
+          ]),
+        });
+        return;
+      }
+      await route.continue();
+    });
+    try {
+      await expectHealthyRoute(page, '/account');
+      await expectBootstrapTerminalError(page);
+      await page.getByRole('button', { name: '다시 시도', exact: true }).click();
+      await expect(page.locator('nav')).toBeVisible({ timeout: 15_000 });
+      await expect(page.getByTestId('error-state')).toHaveCount(0);
+      await expect(page.getByTestId('page-fallback')).toHaveCount(0);
+      expect(requestCount, 'retry must create exactly one fresh profile request after the first failure').toBe(2);
+      expect(observation.candidates, 'semantic first-attempt rejection must not create a network-error exemption').toHaveLength(0);
+      await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toBeVisible();
+      confirmed = true;
+    } finally {
+      await page.unroute('**/rest/v1/profiles*');
+      await finishAuthFault(page, observation, confirmed);
+    }
+  });
+
+  test('scanner readiness: complete, partial, and strict unavailable states satisfy the frontend contract', async ({ page }) => {
+    await login(page, accounts.regular.loginName, accounts.regular.password);
+    let fixtureState: 'complete' | 'partial' | 'unavailable' = 'complete';
+    await page.route('**/api/market/scan**', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(scannerFixture(fixtureState)),
+      });
+    });
+    const refreshScanner = async () => {
+      const heading = page.getByRole('heading', { name: 'AI 신호검색기', exact: true });
+      const header = heading.locator('..').locator('..');
+      await header.getByRole('button', { name: '새로고침', exact: true }).click();
+    };
+    try {
+      const complete = await expectHealthyScannerRoute(page);
+      expect(complete.httpStatus).toBe(200);
+      expect(complete.dataState).toBe('complete');
+      expect(complete.elapsedMs).toBeLessThanOrEqual(12_000);
+      expect(complete.requestElapsedMs).toBeLessThanOrEqual(12_000);
+      expect(complete.orderCapableRequests).toEqual([]);
+
+      fixtureState = 'partial';
+      const partial = await expectHealthyScannerRoute(page, { open: refreshScanner });
+      expect(partial.httpStatus).toBe(200);
+      expect(partial.dataState).toBe('partial');
+      expect(partial.elapsedMs).toBeLessThanOrEqual(12_000);
+      expect(partial.requestElapsedMs).toBeLessThanOrEqual(12_000);
+      expect(partial.orderCapableRequests).toEqual([]);
+
+      fixtureState = 'unavailable';
+      const unavailable = await expectHealthyScannerRoute(page, { open: refreshScanner });
+      expect(unavailable.httpStatus).toBe(200);
+      expect(unavailable.dataState).toBe('unavailable');
+      expect(unavailable.elapsedMs).toBeLessThanOrEqual(12_000);
+      expect(unavailable.requestElapsedMs).toBeLessThanOrEqual(12_000);
+      expect(unavailable.orderCapableRequests).toEqual([]);
+      expect(unavailable.partial).toBe(true);
+      expect(unavailable.executionPartial).toBe(true);
+      expect(unavailable.executionTimedOut).toBe(true);
+      expect(unavailable.timeoutCount).toBeGreaterThanOrEqual(1);
+      expect(unavailable.deadlineMs).toBeGreaterThan(0);
+      expect(unavailable.deadlineMs).toBeLessThan(12_000);
+      expect(unavailable.cards).toEqual([]);
+    } finally {
+      await page.unroute('**/api/market/scan**');
+    }
+    expect(diagnostics.expected_scanner_aborts, 'scanner net::ERR_ABORTED must remain zero').toEqual([]);
+  });
   test('pending: approval-waiting account cannot enter approved UI, URL, or API', async ({ page }) => {
     await login(page, accounts.pending.loginName, accounts.pending.password);
     await expectMembership(page, /승인대기/);
@@ -538,6 +979,7 @@ test.describe('real staging release readiness', () => {
     await expectScannerAfterFutures(page);
     await expectHealthyRoute(page, '/paper-trading');
     await expect(page.locator('body')).toContainText(/모의|paper/i);
+    await expectDeniedRoute(page, '/admin/ui-layouts');
 
     const preview = await requestWithBrowserSession(
       page,
@@ -568,6 +1010,12 @@ test.describe('real staging release readiness', () => {
       '/api/paper-journal/snapshot?userId=11111111-1111-1111-1111-111111111111',
     );
     expect([400, 403]).toContain(foreignJournal.status());
+  });
+
+  test('admin UI Builder actual staging release acceptance', async ({ page }) => {
+    await login(page, accounts.admin.loginName, accounts.admin.password);
+    await expectMembership(page, /관리자/);
+    await expectUiBuilderStagingReadiness(page, (route) => expectHealthyRoute(page, route));
   });
 
   for (const [name, width, height] of [
@@ -608,24 +1056,41 @@ test.describe('real staging release readiness', () => {
       await settle(page);
     }
 
+    const technicalMenu = APP_NAVIGATION.find((group) => group.id === 'technical')?.menu ?? [];
     await settle(page);
     await nav.getByRole('button', { name: '기술', exact: true }).click();
     await expect(page.getByRole('menuitem', { name: '승인형 주문', exact: true })).toHaveCount(0);
     for (const label of ['AI 신호검색기', 'AI 차트', '백테스트', '모의매매']) {
-      await settle(page);
-      await page.getByRole('menuitem', { name: label, exact: true }).click();
-      await settle(page);
+      const target = technicalMenu.find((menuItem) => menuItem.label === label);
+      if (!target) throw new Error(`missing technical navigation item: ${label}`);
+      const item = page.getByRole('menuitem', { name: label, exact: true });
+      await expectNavigationTransition(page, target.href, async () => {
+        if (label === 'AI 신호검색기') {
+          await expectHealthyScannerRoute(page, {
+            open: async () => {
+              await item.click();
+            },
+          });
+          return;
+        }
+        await item.click();
+      });
       await nav.getByRole('button', { name: '기술', exact: true }).click();
     }
     await page.keyboard.press('Escape');
 
+    const informationMenu = APP_NAVIGATION.find((group) => group.id === 'information')?.menu ?? [];
     await settle(page);
     await nav.getByRole('button', { name: '정보', exact: true }).click();
     for (const label of ['투자 공부', 'AI 정보', '포트폴리오']) {
-      await settle(page);
-      await page.getByRole('menuitem', { name: label, exact: true }).click();
-      await settle(page);
+      const target = informationMenu.find((menuItem) => menuItem.label === label);
+      if (!target) throw new Error(`missing information navigation item: ${label}`);
+      const item = page.getByRole('menuitem', { name: label, exact: true });
+      await expectNavigationTransition(page, target.href, async () => {
+        await item.click();
+      });
       await nav.getByRole('button', { name: '정보', exact: true }).click();
     }
+    expect(diagnostics.expected_scanner_aborts, 'scanner net::ERR_ABORTED must remain zero').toEqual([]);
   });
 });

@@ -12,6 +12,7 @@ const CAPABILITY_LABELS: Record<MemberCapability, string> = {
   canAccessBacktests: '백테스트',
   canAccessPaperTrading: '모의매매',
   canPlaceOrders: '관리자 승인형 주문',
+  canConnectPersonalTelegram: '개인 텔레그램 연결',
   canAccessJournalSync: '거래일지 동기화',
   canAccessTradingAnalytics: '거래 분석',
   canAccessAiTradingReview: 'AI 거래 복기',
