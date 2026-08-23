@@ -3,6 +3,7 @@ import { Router, type IRouter, type RequestHandler } from 'express';
 import { hasCapability } from '../../../packages/member-access/src/index.js';
 import { requireCapability, type AuthenticatedRequest } from '../middleware/auth';
 import { TradeExecutionEventBridgeService } from '../features/user-broker-telegram/trade-execution-event-bridge.service';
+import { createSupabaseTelegramAlertPolicyRepository } from '../features/user-broker-telegram/telegram-alert-policy.repository';
 import { createSupabaseUserBrokerTelegramRepository } from '../features/user-broker-telegram/user-broker-telegram.repository';
 import {
   CanonicalPortfolioSyncSink,
@@ -17,6 +18,7 @@ import type {
   PortfolioSyncSink,
   TelegramTransport,
 } from '../features/user-broker-telegram/user-broker-telegram.types';
+import { defaultTelegramAlertPolicy } from '../services/telegram-alert-policy.service';
 import { createSupabasePaperJournalRepository } from '../services/paper-journal-supabase.repository';
 import type { StoredPaperJournalRecord } from '../services/paper-journal.types';
 import {
@@ -57,6 +59,15 @@ function unavailableTelegramState() {
     deliveries: [],
     telegramStorageAvailable: false,
     telegramStorageErrorCode: 'USER_BROKER_TELEGRAM_STORAGE_UNAVAILABLE',
+  };
+}
+
+function unavailableAlertPolicyState(userId: string) {
+  return {
+    alertPolicy: defaultTelegramAlertPolicy(userId),
+    alertPolicySource: 'DEFAULT_MISSING' as const,
+    alertPolicyStorageAvailable: false,
+    alertPolicyStorageErrorCode: 'USER_BROKER_TELEGRAM_STORAGE_UNAVAILABLE',
   };
 }
 
@@ -153,6 +164,15 @@ userBrokerTelegramRouter.get('/', async (req, res) => {
       if (errorCode(error) !== 'USER_BROKER_TELEGRAM_STORAGE_UNAVAILABLE') throw error;
       return unavailableTelegramState();
     });
+    const alertPolicyPromise = createSupabaseTelegramAlertPolicyRepository().getPolicy(userId).then((state) => ({
+      alertPolicy: state.policy,
+      alertPolicySource: state.source,
+      alertPolicyStorageAvailable: true,
+      alertPolicyStorageErrorCode: null as string | null,
+    })).catch((error) => {
+      if (errorCode(error) !== 'USER_BROKER_TELEGRAM_STORAGE_UNAVAILABLE') throw error;
+      return unavailableAlertPolicyState(userId);
+    });
     const brokerConnectionsPromise = canReadBrokerConnections
       ? createSupabaseTradingRepository(accessToken, userId).getConnections(userId).then((connections) => ({
         brokerConnections: safeConnections(connections),
@@ -172,15 +192,19 @@ userBrokerTelegramRouter.get('/', async (req, res) => {
         brokerConnectionsAvailable: null as boolean | null,
         brokerConnectionsErrorCode: null as string | null,
       });
-    const [state, brokerState] = await Promise.all([
+    const [state, alertPolicyState, brokerState] = await Promise.all([
       statePromise,
+      alertPolicyPromise,
       brokerConnectionsPromise,
     ]);
     res.json({
       ok: true,
       brokerConnections: brokerState.brokerConnections,
       ...state,
-      partial: state.telegramStorageAvailable === false || brokerState.brokerConnectionsAvailable === false,
+      ...alertPolicyState,
+      prioritySemantics: 'DELIVERY_URGENCY_ONLY',
+      partial: state.telegramStorageAvailable === false || brokerState.brokerConnectionsAvailable === false
+        || alertPolicyState.alertPolicyStorageAvailable === false,
       privateApiRequests: 0,
       ordersSubmitted: 0,
       ordersCancelled: 0,
@@ -190,6 +214,56 @@ userBrokerTelegramRouter.get('/', async (req, res) => {
     });
   } catch (error) {
     res.status(503).json({ ok: false, error: errorCode(error) });
+  }
+});
+
+userBrokerTelegramRouter.get('/telegram-policy', async (req, res) => {
+  try {
+    const { userId } = member(req as AuthenticatedRequest);
+    const state = await createSupabaseTelegramAlertPolicyRepository().getPolicy(userId);
+    res.json({
+      ok: true,
+      alertPolicy: state.policy,
+      alertPolicySource: state.source,
+      prioritySemantics: 'DELIVERY_URGENCY_ONLY',
+      privateApiRequests: 0,
+      ordersSubmitted: 0,
+      ordersCancelled: 0,
+    });
+  } catch (error) {
+    res.status(503).json({
+      ok: false,
+      error: errorCode(error),
+      privateApiRequests: 0,
+      ordersSubmitted: 0,
+      ordersCancelled: 0,
+    });
+  }
+});
+
+userBrokerTelegramRouter.patch('/telegram-policy', async (req, res) => {
+  try {
+    const { userId } = member(req as AuthenticatedRequest);
+    const state = await createSupabaseTelegramAlertPolicyRepository()
+      .savePolicy(userId, req.body, new Date().toISOString());
+    res.json({
+      ok: true,
+      alertPolicy: state.policy,
+      alertPolicySource: state.source,
+      prioritySemantics: 'DELIVERY_URGENCY_ONLY',
+      privateApiRequests: 0,
+      ordersSubmitted: 0,
+      ordersCancelled: 0,
+    });
+  } catch (error) {
+    const code = errorCode(error);
+    res.status(code === 'TELEGRAM_ALERT_POLICY_INVALID' ? 400 : 503).json({
+      ok: false,
+      error: code,
+      privateApiRequests: 0,
+      ordersSubmitted: 0,
+      ordersCancelled: 0,
+    });
   }
 });
 
