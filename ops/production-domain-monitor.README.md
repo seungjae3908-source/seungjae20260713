@@ -23,8 +23,8 @@ Any missing or inconsistent evidence fails closed. The monitor performs GET/read
 
 Validation on PR #648:
 
-- Production Domain Health Monitor Run `32624609425`: SUCCESS.
-- Production Browser Smoke static safety Run `32624609483`: SUCCESS.
-- Application CI Run `32624609381`: SUCCESS, Required CI 6/6.
+- Production Domain Health Monitor: SUCCESS.
+- Production Browser Smoke static safety: SUCCESS.
+- Required Application CI must be terminal 6/6 on the exact current PR HEAD before Ready/merge.
 
 The scheduled hourly monitor becomes active from the default branch only after this Draft PR is separately approved and merged. Until then the live Dynu endpoint itself is already available through the server-side Caddy configuration, while the GitHub schedule remains unactivated.
