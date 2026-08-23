@@ -102,6 +102,7 @@ test("Candidate is the first zero only after Universe and Scanner Evaluated are 
   assert.equal(result.naturalFirstZeroReason, "MEASURED_ZERO");
   assert.match(result.naturalEvidenceIdentity, /^[0-9a-f]{64}$/u);
   assert.equal(result.naturalRuntimeSha, SHA);
+  assert.deepEqual(result.authoritativeFirstZeroReasonEvidenceByStage, {});
 });
 
 test("natural dataset identity is stable across read-only re-observation time", async () => {
@@ -144,6 +145,60 @@ test("Evidence Complete is measured zero when every evaluated candidate has auth
   ]);
   assert.equal(result.naturalFirstZeroStage, "EVIDENCE_COMPLETE");
   assert.equal(result.naturalFunnelMeasurements[4].status, "UNKNOWN");
+  const reason = result.authoritativeFirstZeroReasonEvidenceByStage.EVIDENCE_COMPLETE;
+  assert.equal(reason.authoritative, true);
+  assert.equal(reason.freshness, "FRESH");
+  assert.equal(reason.reasonCode, "P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING");
+  assert.equal(reason.strategySha, SHA);
+  assert.equal(reason.runtimeSha, SHA);
+  assert.equal(reason.datasetIdentity, result.naturalEvidenceIdentity);
+  assert.equal(reason.synthetic, false);
+  assert.equal(reason.historical, false);
+  assert.equal(reason.replay, false);
+  assert.equal(reason.duplicateReplay, false);
+  assert.equal(reason.futureTimeCompression, false);
+});
+
+test("mixed direct source blockers remain UNKNOWN instead of fabricating one FIRST_ZERO reason", async () => {
+  const cards = [Object.freeze({ id: "c1" }), Object.freeze({ id: "c2" })];
+  const wiring = sourceWiring({
+    cards,
+    totalCount: 50,
+    completedCount: 10,
+    producer: ({ card }) => blockedProducer(
+      card.id === "c1"
+        ? "P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING"
+        : "P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_FAILED",
+    ),
+  });
+  const runtime = createNaturalFunnelObservedPaperRuntimeFromSourceWiring({
+    sourceWiring: wiring,
+    now: () => NOW,
+    baseRuntimeFactory,
+  });
+  const result = await runtime({ market: "CRYPTO_FUTURES", cycle: cycle() });
+  assert.equal(result.naturalFirstZeroStage, "EVIDENCE_COMPLETE");
+  assert.deepEqual(result.authoritativeFirstZeroReasonEvidenceByStage, {});
+});
+
+test("multiple blocker codes on one producer attempt are not promoted to an authoritative FIRST_ZERO reason", async () => {
+  const wiring = sourceWiring({
+    cards: [Object.freeze({ id: "c1" })],
+    totalCount: 10,
+    completedCount: 4,
+    producer: () => blockedProducer(
+      "P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING",
+      "P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_FAILED",
+    ),
+  });
+  const runtime = createNaturalFunnelObservedPaperRuntimeFromSourceWiring({
+    sourceWiring: wiring,
+    now: () => NOW,
+    baseRuntimeFactory,
+  });
+  const result = await runtime({ market: "CRYPTO_FUTURES", cycle: cycle() });
+  assert.equal(result.naturalFirstZeroStage, "EVIDENCE_COMPLETE");
+  assert.deepEqual(result.authoritativeFirstZeroReasonEvidenceByStage, {});
 });
 
 test("READY authoritative producers prove evidence/admission/risk/cost/account passes without inventing Entry", async () => {
@@ -158,8 +213,11 @@ test("READY authoritative producers prove evidence/admission/risk/cost/account p
   assert.deepEqual(result.naturalFunnelMeasurements.slice(3, 8).map((row) => row.count), [2, 2, 2, 2, 2]);
   assert.equal(result.naturalFunnelMeasurements[8].status, "UNKNOWN");
   assert.equal(result.naturalFirstZeroStage, "UNKNOWN");
+  assert.deepEqual(result.authoritativeFirstZeroReasonEvidenceByStage, {});
   assert.equal(result.executionAuthority, "NONE");
   assert.equal(result.liveOrderAllowed, false);
+  assert.equal(result.orderSubmitted, false);
+  assert.equal(result.privateTradingApiAllowed, false);
 });
 
 test("missing Scanner metadata remains UNKNOWN and never becomes zero", async () => {
@@ -176,6 +234,7 @@ test("missing Scanner metadata remains UNKNOWN and never becomes zero", async ()
   assert.equal(result.naturalFunnelMeasurements[0].status, "PARTIAL");
   assert.equal(result.naturalFunnelMeasurements[0].count, null);
   assert.equal(result.naturalFirstZeroStage, "UNKNOWN");
+  assert.deepEqual(result.authoritativeFirstZeroReasonEvidenceByStage, {});
 });
 
 test("pre-evidence clock blockers do not masquerade as Evidence Complete zero", async () => {
@@ -194,4 +253,5 @@ test("pre-evidence clock blockers do not masquerade as Evidence Complete zero", 
   assert.equal(result.naturalFunnelMeasurements[3].status, "PARTIAL");
   assert.equal(result.naturalFunnelMeasurements[3].count, null);
   assert.equal(result.naturalFirstZeroStage, "UNKNOWN");
+  assert.deepEqual(result.authoritativeFirstZeroReasonEvidenceByStage, {});
 });
