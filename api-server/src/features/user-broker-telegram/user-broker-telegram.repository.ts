@@ -191,6 +191,64 @@ function secureClient() {
   return getSupabase();
 }
 
+const NOTIFICATION_PREFERENCES_WRITE_RETRY_LIMIT = 4;
+
+function nextNotificationPreferencesUpdatedAt(
+  requestedUpdatedAt: string,
+  observedUpdatedAt: string | null,
+): string {
+  const requestedMs = Date.parse(requestedUpdatedAt);
+  if (!Number.isFinite(requestedMs)) throw databaseError();
+  if (!observedUpdatedAt) return new Date(requestedMs).toISOString();
+  const observedMs = Date.parse(observedUpdatedAt);
+  if (!Number.isFinite(observedMs)) throw databaseError();
+  return new Date(Math.max(requestedMs, observedMs + 1)).toISOString();
+}
+
+export async function mutateNotificationEnabledTypes(
+  userId: string,
+  requestedUpdatedAt: string,
+  mutate: (value: unknown) => string[],
+): Promise<string[]> {
+  const table = secureClient().from('notification_preferences');
+  for (let attempt = 0; attempt < NOTIFICATION_PREFERENCES_WRITE_RETRY_LIMIT; attempt += 1) {
+    const { data, error: readError } = await table
+      .select('enabled_types, updated_at')
+      .eq('member_id', userId)
+      .maybeSingle();
+    if (readError) throw databaseError();
+
+    const row = data as { enabled_types?: unknown; updated_at?: unknown } | null;
+    const observedUpdatedAt = row && typeof row.updated_at === 'string' && row.updated_at.trim()
+      ? row.updated_at
+      : null;
+    if (row && !observedUpdatedAt) throw databaseError();
+    const enabledTypes = mutate(row?.enabled_types);
+    const nextUpdatedAt = nextNotificationPreferencesUpdatedAt(requestedUpdatedAt, observedUpdatedAt);
+
+    if (!row) {
+      const { error: insertError } = await table.insert({
+        member_id: userId,
+        enabled_types: enabledTypes,
+        updated_at: nextUpdatedAt,
+      });
+      if (!insertError) return enabledTypes;
+      if (String(insertError.code ?? '') === '23505') continue;
+      throw databaseError();
+    }
+
+    const { data: updated, error: updateError } = await table
+      .update({ enabled_types: enabledTypes, updated_at: nextUpdatedAt })
+      .eq('member_id', userId)
+      .eq('updated_at', observedUpdatedAt)
+      .select('member_id')
+      .maybeSingle();
+    if (updateError) throw databaseError();
+    if (updated?.member_id) return enabledTypes;
+  }
+  throw new Error('USER_BROKER_TELEGRAM_STORAGE_CONFLICT');
+}
+
 function toConnection(row: Record<string, unknown>): UserTelegramConnection {
   return {
     userId: String(row.user_id),
@@ -281,16 +339,11 @@ export function createSupabaseUserBrokerTelegramRepository(): UserBrokerTelegram
     },
 
     async savePreferences(userId, preferences, updatedAt) {
-      const table = secureClient().from('notification_preferences');
-      const { data, error: readError } = await table
-        .select('enabled_types').eq('member_id', userId).maybeSingle();
-      if (readError) throw databaseError();
-      const { error } = await table.upsert({
-        member_id: userId,
-        enabled_types: enabledTypesWithTelegramPreferences(data?.enabled_types, preferences),
-        updated_at: updatedAt,
-      }, { onConflict: 'member_id' });
-      if (error) throw databaseError();
+      await mutateNotificationEnabledTypes(
+        userId,
+        updatedAt,
+        (enabledTypes) => enabledTypesWithTelegramPreferences(enabledTypes, preferences),
+      );
     },
 
     async insertExecutionEvent(event) {
