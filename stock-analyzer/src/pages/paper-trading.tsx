@@ -20,32 +20,30 @@ export default function PaperTradingPage() {
     return <div className="grid h-full place-items-center px-6 text-center text-sm text-muted-foreground">로그인 사용자 정보를 확인하지 못했습니다.</div>;
   }
 
-  return <div className="flex h-full min-h-0 flex-col overflow-hidden" data-testid="paper-trading-shell">
-    <div className="relative min-h-0 flex-1 overflow-hidden" data-testid="paper-trading-content">
-      <PaperTradingPanel key={`${userId}:${paperRevision}`} storage={paperStorage} />
-      <button
-        type="button"
-        className="absolute right-4 top-4 z-30 inline-flex min-h-10 items-center gap-2 rounded-xl border border-border bg-background/95 px-3 text-sm font-bold shadow-lg backdrop-blur"
-        onClick={() => setShowJournalTools(true)}
-        data-testid="open-journal-sync"
-      >
-        <Cloud className="h-4 w-4" />동기화·분석
-      </button>
+  return <div className="relative h-full min-h-0 overflow-hidden pb-[calc(5rem+env(safe-area-inset-bottom))]" data-testid="paper-trading-shell">
+    <PaperTradingPanel key={`${userId}:${paperRevision}`} storage={paperStorage} />
+    <button
+      type="button"
+      className="absolute right-4 top-4 z-30 inline-flex min-h-10 items-center gap-2 rounded-xl border border-border bg-background/95 px-3 text-sm font-bold shadow-lg backdrop-blur"
+      onClick={() => setShowJournalTools(true)}
+      data-testid="open-journal-sync"
+    >
+      <Cloud className="h-4 w-4" />동기화·분석
+    </button>
 
-      {showJournalTools ? <div className="absolute inset-0 z-40 overflow-y-auto overscroll-contain bg-background pb-6" data-testid="journal-sync-overlay">
-        <div className="mx-auto w-full max-w-6xl space-y-4 px-4 py-5 sm:px-5">
-          <button type="button" className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-border px-3 text-sm font-semibold" onClick={() => setShowJournalTools(false)}>
-            <ArrowLeft className="h-4 w-4" />모의매매로 돌아가기
-          </button>
-          <PaperJournalSyncAnalyticsPanel
-            userId={userId}
-            rootStorage={window.localStorage}
-            paperStorage={paperStorage}
-            onLocalStateChanged={() => setPaperRevision((value) => value + 1)}
-          />
-        </div>
-      </div> : null}
-    </div>
+    {showJournalTools ? <div className="absolute inset-x-0 top-0 bottom-[calc(5rem+env(safe-area-inset-bottom))] z-40 overflow-y-auto overscroll-contain bg-background pb-6" data-testid="journal-sync-overlay">
+      <div className="mx-auto w-full max-w-6xl space-y-4 px-4 py-5 sm:px-5">
+        <button type="button" className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-border px-3 text-sm font-semibold" onClick={() => setShowJournalTools(false)}>
+          <ArrowLeft className="h-4 w-4" />모의매매로 돌아가기
+        </button>
+        <PaperJournalSyncAnalyticsPanel
+          userId={userId}
+          rootStorage={window.localStorage}
+          paperStorage={paperStorage}
+          onLocalStateChanged={() => setPaperRevision((value) => value + 1)}
+        />
+      </div>
+    </div> : null}
     <BottomNav />
   </div>;
 }
