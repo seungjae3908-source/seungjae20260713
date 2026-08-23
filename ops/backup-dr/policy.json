@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "state": "PREPARED_NOT_ACTIVE",
+  "publicRepositorySafety": {
+    "backupPayloadMayBeCommittedToGit": false,
+    "backupPayloadMayBeUploadedAsPullRequestArtifact": false,
+    "plaintextBackupAtRestAllowed": false,
+    "secretValuesInLogsAllowed": false
+  },
+  "databaseLogicalBackup": {
+    "required": true,
+    "format": "postgres-custom",
+    "encryptionRequired": true,
+    "encryptionScheme": "age-x25519",
+    "backupWriterHasDecryptionPrivateKey": false,
+    "targetCadence": "DAILY",
+    "staleAfterHours": 30,
+    "retention": {
+      "daily": 7,
+      "weekly": 4,
+      "monthly": 3
+    }
+  },
+  "pointInTimeRecovery": {
+    "repositoryDefaultState": "UNVERIFIED",
+    "providerEvidenceRequired": true,
+    "maximumDrGradeRequiresVerified": true,
+    "activationRequiresSeparateApproval": true
+  },
+  "offsite": {
+    "required": true,
+    "repositoryDefaultState": "UNVERIFIED",
+    "copyOnly": true,
+    "deleteAuthorityAllowedForBackupWriter": false,
+    "providerObjectLockOrEquivalentRequiredForVerified": true,
+    "encryptedPayloadOnly": true
+  },
+  "restoreDrill": {
+    "required": true,
+    "repositoryDefaultState": "MISSING",
+    "targetCadence": "WEEKLY",
+    "remoteDatabaseTargetsAllowed": false,
+    "localhostEphemeralTargetOnly": true,
+    "productionCredentialsAllowed": false
+  },
+  "uploadsAndStorageObjects": {
+    "required": true,
+    "repositoryDefaultState": "UNVERIFIED",
+    "independentOfDatabaseBackup": true,
+    "encryptedOffsiteCopyRequired": true
+  },
+  "evidenceVault": {
+    "required": true,
+    "appendOnlyRequired": true,
+    "immutableCopyRequired": true,
+    "automatedDeletionAllowed": false,
+    "minimumRetentionDays": 365,
+    "classes": [
+      "PAPER",
+      "SHADOW",
+      "SETTLEMENT",
+      "PROFITABILITY_EVIDENCE",
+      "STRATEGY_HEALTH",
+      "PROMOTION",
+      "CHAMPION"
+    ]
+  },
+  "integrity": {
+    "algorithm": "sha256",
+    "checksumRequiredBeforeOffsiteCopy": true,
+    "checksumRequiredBeforeRestore": true,
+    "unknownMayBeTreatedAsPass": false
+  },
+  "activation": {
+    "automaticScheduleActive": false,
+    "actualBackupExecutionAuthorized": false,
+    "actualOffsiteUploadAuthorized": false,
+    "actualRestoreAuthorized": false,
+    "secretOrPermissionMutationAuthorized": false
+  }
+}
