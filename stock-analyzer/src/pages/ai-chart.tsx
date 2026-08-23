@@ -12,9 +12,11 @@ import {
   X,
 } from 'lucide-react';
 import { useLocation } from 'wouter';
+import { AiChartPositionPanel } from '@/components/ai-chart-position-panel';
 import { AiChartV2IntelligencePanel } from '@/components/ai-chart-v2-intelligence-panel';
 import { BottomNav } from '@/components/bottom-nav';
 import { FuturesPublicContextPanel } from '@/components/futures-public-context-panel';
+import { ResponsiveTabs } from '@/components/responsive-tabs';
 import { UnifiedAnalysisChart } from '@/components/unified-analysis-chart';
 import {
   defaultStrategyMode,
@@ -68,6 +70,15 @@ import { cn } from '@/lib/utils';
 const CURRENT_TIMEFRAMES = new Set(UNIFIED_CHART_TIMEFRAMES.map((item) => item.key));
 const AI_CHART_MODE_STORAGE_KEY = 'ai-chart-v2-strategy-mode.v1';
 
+type MobileChartTab = 'summary' | 'chart' | 'position' | 'details';
+
+const MOBILE_CHART_TABS = [
+  { value: 'summary', label: '요약' },
+  { value: 'chart', label: '차트' },
+  { value: 'position', label: '내 포지션' },
+  { value: 'details', label: '상세' },
+] as const;
+
 function fallbackSelection(): AnalysisSelection {
   return {
     assetType: 'stock',
@@ -115,6 +126,28 @@ function formatAnalysisTime(value: string | undefined): string {
   });
 }
 
+function formatPlanPrice(value: number | null | undefined, market: AnalysisSelection['market']): string {
+  if (value == null || !Number.isFinite(value) || value <= 0) return '미확인';
+  if (market === 'US') return `$${value.toLocaleString('ko-KR', { maximumFractionDigits: 4 })}`;
+  if (market === 'BITGET') return `${value.toLocaleString('ko-KR', { maximumFractionDigits: value >= 1000 ? 2 : 8 })} USDT`;
+  return `${value.toLocaleString('ko-KR', { maximumFractionDigits: value >= 1000 ? 0 : 8 })}원`;
+}
+
+function actionLabel(action: AnalysisSelection['action']): string {
+  if (action === 'BUY') return '매수';
+  if (action === 'SELL') return '매도';
+  if (action === 'LONG') return '상승';
+  if (action === 'SHORT') return '하락';
+  if (action === 'NO_TRADE' || action === 'NONE') return '거래 안 함';
+  return '판단 대기';
+}
+
+function strategyModeLabel(mode: AiChartStrategyMode): string {
+  if (mode === 'SCALPING') return '단타';
+  if (mode === 'SWING') return '스윙';
+  return '중장기';
+}
+
 function sameSelection(left: AnalysisSelection, right: AnalysisSelection): boolean {
   return chartSelectionKey(left) === chartSelectionKey(right)
     && left.displayName === right.displayName;
@@ -153,10 +186,208 @@ function initialStrategyMode(selection: AnalysisSelection): AiChartStrategyMode 
   return normalizeStrategyMode(window.localStorage.getItem(AI_CHART_MODE_STORAGE_KEY), fallback);
 }
 
+function useDesktopChartLayout(): boolean {
+  const query = '(min-width: 1024px)';
+  const [desktop, setDesktop] = useState(() => typeof window !== 'undefined' && window.matchMedia(query).matches);
+
+  useEffect(() => {
+    const media = window.matchMedia(query);
+    const update = () => setDesktop(media.matches);
+    update();
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
+
+  return desktop;
+}
+
+function MobileSummary({ selection, analysis }: { selection: AnalysisSelection; analysis: ChartAnalysis | null }) {
+  const plan = selection.pricePlan;
+  const confidence = analysis?.confidence ?? selection.confidence;
+  const reason = analysis?.summary ?? selection.reasons?.[0] ?? '확인된 추가 설명 없음';
+
+  return (
+    <section data-testid="ai-chart-mobile-summary" className="space-y-3 rounded-3xl border border-card-border bg-card p-4 shadow-sm">
+      <div className="flex min-w-0 items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-lg font-black">{selection.displayName}</p>
+          <p className="mt-0.5 truncate text-[11px] font-bold text-muted-foreground">
+            {unifiedMarketLabel(selection.market)} · {selection.timeframe}
+          </p>
+        </div>
+        <span className="shrink-0 rounded-full border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-black text-primary">
+          {actionLabel(selection.action)}
+        </span>
+      </div>
+
+      <div className="grid grid-cols-3 gap-2 text-center">
+        <div className="rounded-2xl bg-background p-2.5">
+          <p className="text-[10px] text-muted-foreground">신호점수</p>
+          <strong className="mt-0.5 block text-sm tabular-nums">{selection.signalScore ?? '-'}</strong>
+        </div>
+        <div className="rounded-2xl bg-background p-2.5">
+          <p className="text-[10px] text-muted-foreground">신뢰도</p>
+          <strong className="mt-0.5 block text-sm tabular-nums">{confidence ?? '-'}</strong>
+        </div>
+        <div className="rounded-2xl bg-background p-2.5">
+          <p className="text-[10px] text-muted-foreground">위험</p>
+          <strong className="mt-0.5 block truncate text-sm">{selection.riskLevel || '미확인'}</strong>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 text-xs">
+        <div className="rounded-2xl border border-card-border p-3">
+          <p className="text-[10px] font-bold text-muted-foreground">진입</p>
+          <strong className="mt-1 block tabular-nums">
+            {plan?.entryZone
+              ? `${formatPlanPrice(plan.entryZone.from, selection.market)} ~ ${formatPlanPrice(plan.entryZone.to, selection.market)}`
+              : '미확인'}
+          </strong>
+        </div>
+        <div className="rounded-2xl border border-card-border p-3">
+          <p className="text-[10px] font-bold text-muted-foreground">손절</p>
+          <strong className="mt-1 block tabular-nums">{formatPlanPrice(plan?.stopLoss ?? plan?.invalidation, selection.market)}</strong>
+        </div>
+        <div className="rounded-2xl border border-card-border p-3">
+          <p className="text-[10px] font-bold text-muted-foreground">목표 1</p>
+          <strong className="mt-1 block tabular-nums">{formatPlanPrice(plan?.targets?.[0], selection.market)}</strong>
+        </div>
+        <div className="rounded-2xl border border-card-border p-3">
+          <p className="text-[10px] font-bold text-muted-foreground">손익비</p>
+          <strong className="mt-1 block tabular-nums">{plan?.riskReward == null ? '미확인' : plan.riskReward.toFixed(2)}</strong>
+        </div>
+      </div>
+
+      <div className="rounded-2xl bg-secondary/60 px-3 py-3">
+        <p className="text-[10px] font-black text-muted-foreground">핵심 판단</p>
+        <p className="mt-1 line-clamp-2 break-keep text-xs font-bold leading-5">{reason}</p>
+      </div>
+
+      <p className="text-center text-[10px] font-bold text-muted-foreground">읽기 전용 · 주문 실행 없음</p>
+    </section>
+  );
+}
+
+function ContextCard({ selection, analysis }: { selection: AnalysisSelection; analysis: ChartAnalysis | null }) {
+  return (
+    <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
+      <div className="flex items-center gap-2">
+        <Activity className="h-4 w-4 text-primary" />
+        <h2 className="text-sm font-black">현재 상태</h2>
+      </div>
+      <h3 className="mt-3 truncate text-lg font-black">{selection.displayName}</h3>
+      <p className="mt-1 truncate text-xs font-bold text-muted-foreground">
+        {selection.ticker} · {unifiedMarketLabel(selection.market)} · {selection.timeframe}
+      </p>
+      <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
+        <div className="rounded-2xl bg-background p-2">
+          <p className="text-[10px] text-muted-foreground">분석</p>
+          <strong>{analysis ? statusLabel(analysis.status) : '대기'}</strong>
+        </div>
+        <div className="rounded-2xl bg-background p-2">
+          <p className="text-[10px] text-muted-foreground">방향</p>
+          <strong>{analysis ? biasLabel(analysis.bias) : '-'}</strong>
+        </div>
+        <div data-testid="analysis-signal-score" className="rounded-2xl bg-background p-2">
+          <p className="text-[10px] text-muted-foreground">신뢰도</p>
+          <strong>{analysis?.confidence ?? selection.confidence ?? '-'}</strong>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function DecisionCard({ analysis }: { analysis: ChartAnalysis | null }) {
+  return (
+    <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
+      <div className="flex items-center gap-2">
+        <Database className="h-4 w-4 text-primary" />
+        <h2 className="text-sm font-black">현재 판단</h2>
+      </div>
+      {analysis ? (
+        <div className="mt-3 space-y-3 text-xs">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5">
+                <BiasIcon bias={analysis.bias} />
+                <strong className="line-clamp-2 break-keep text-sm">{analysis.title}</strong>
+              </div>
+            </div>
+            <span
+              className={cn(
+                'shrink-0 rounded-full border px-2 py-1 text-[10px] font-black',
+                analysis.status === 'confirmed'
+                  ? 'border-primary/30 bg-primary/10 text-primary'
+                  : analysis.status === 'invalidated' || analysis.status === 'expired'
+                    ? 'border-muted bg-muted text-muted-foreground'
+                    : 'border-warning/30 bg-warning/10 text-warning',
+              )}
+            >
+              {statusLabel(analysis.status)}
+            </span>
+          </div>
+
+          <p className="line-clamp-3 break-keep rounded-2xl bg-secondary/70 px-3 py-3 leading-5 text-foreground">
+            {analysis.summary}
+          </p>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div className="rounded-2xl border border-card-border bg-background p-3">
+              <div className="flex items-center gap-1.5 text-muted-foreground">
+                <Clock3 className="h-3.5 w-3.5" />
+                <span className="text-[10px] font-bold">감지</span>
+              </div>
+              <strong className="mt-1 block text-[11px]">{formatAnalysisTime(analysis.detectedAt)}</strong>
+            </div>
+            <div className="rounded-2xl border border-card-border bg-background p-3">
+              <p className="text-[10px] font-bold text-muted-foreground">최근 변화</p>
+              <strong className="mt-1 block line-clamp-2 break-keep text-[11px]">
+                {analysis.transitionReason ?? '최초 분석'}
+              </strong>
+            </div>
+          </div>
+
+          <div className="grid gap-2 sm:grid-cols-3">
+            <CompactList title="판단 근거" items={analysis.reasons} />
+            <CompactList title="확인 조건" items={analysis.confirmationConditions} />
+            <CompactList title="무효 조건" items={analysis.invalidationConditions} danger />
+          </div>
+        </div>
+      ) : (
+        <p className="mt-3 text-xs font-bold text-muted-foreground">차트 데이터 확인 후 표시됩니다.</p>
+      )}
+    </section>
+  );
+}
+
+function CompactList({ title, items, danger = false }: { title: string; items: string[]; danger?: boolean }) {
+  const visible = items.filter(Boolean).slice(0, 3);
+  return (
+    <div className="rounded-2xl border border-card-border bg-background p-3">
+      <p className={cn('text-[10px] font-black', danger && 'text-destructive')}>{title}</p>
+      {visible.length ? (
+        <ul className="mt-1 space-y-1 text-[10px] leading-4 text-muted-foreground">
+          {visible.map((item) => <li key={item} className="line-clamp-2">• {item}</li>)}
+        </ul>
+      ) : <p className="mt-1 text-[10px] text-muted-foreground">미확인</p>}
+    </div>
+  );
+}
+
+function SafetyNote() {
+  return (
+    <p className="flex items-center gap-2 rounded-2xl border border-warning/30 bg-warning/5 px-3 py-2.5 text-[10px] font-bold text-muted-foreground">
+      <ShieldAlert className="h-4 w-4 shrink-0 text-warning" />
+      읽기 전용 · 확정된 근거만 표시 · 주문 실행 없음
+    </p>
+  );
+}
+
 export default function AiChartPage({ embedded = false }: { embedded?: boolean }) {
   const [, navigate] = useLocation();
   const state = useAnalysisSelection();
   const selectSelection = state.select;
+  const desktop = useDesktopChartLayout();
   const initialSearchRef = useRef(currentBrowserSearch());
   const routeModeRef = useRef(chartWindowRouteModeFromSearch(initialSearchRef.current));
   const routeSelectionRef = useRef(supportedSelection(chartSelectionFromSearch(initialSearchRef.current)));
@@ -177,6 +408,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   const [selection, setSelection] = useState<AnalysisSelection>(initialSelection);
   const [analysis, setAnalysis] = useState<ChartAnalysis | null>(null);
   const [strategyMode, setStrategyMode] = useState<AiChartStrategyMode>(() => initialStrategyMode(initialSelection));
+  const [mobileTab, setMobileTab] = useState<MobileChartTab>('summary');
   const [externalControlAvailable, setExternalControlAvailable] = useState(false);
   const [externalWindowStatus, setExternalWindowStatus] = useState<string | null>(() => {
     if (routeModeRef.current === 'invalid') return '외부 차트 경로가 올바르지 않아 동기화를 시작하지 않았습니다.';
@@ -208,6 +440,8 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
 
+  const ignorePositionOverlay = useCallback(() => {}, []);
+
   const stopPopupTracking = useCallback(() => {
     popupPollCleanupRef.current?.();
     popupPollCleanupRef.current = null;
@@ -234,6 +468,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
     selectionRef.current = normalized;
     setSelection(normalized);
     setAnalysis(null);
+    setMobileTab('summary');
   }, [embedded, state.selection]);
 
   useEffect(() => {
@@ -322,16 +557,13 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
       };
 
       if (message.type === 'ready') {
-        // Replaying the current selection to a newly ready peer is synchronization,
-        // not a new explicit selection decision. Advancing the local order here can
-        // incorrectly eclipse that peer's first explicit selection.
         publishSelection(selectionRef.current, false);
         if (externalMode) setExternalWindowStatus('본창과 안전하게 동기화되었습니다.');
         return;
       }
       if (message.type === 'closed') {
         if (externalMode) {
-          setExternalWindowStatus('본창 연결이 종료되었습니다. 이 창에서는 새 선택을 동기화하지 않습니다.');
+          setExternalWindowStatus('본창 연결이 종료되었습니다.');
         } else {
           stopPopupTracking();
           popupRef.current = null;
@@ -418,7 +650,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
       externalChartWindowFeatures(window.screen),
     );
     if (!popup) {
-      setExternalWindowStatus('팝업이 차단되었습니다. 이 사이트의 팝업을 허용한 뒤 다시 시도하세요.');
+      setExternalWindowStatus('팝업이 차단되었습니다. 팝업 허용 후 다시 시도하세요.');
       return;
     }
 
@@ -429,7 +661,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
     }
     popupRef.current = popup;
     safeFocus(popup);
-    setExternalWindowStatus('외부 차트 창을 열었습니다. 시장·종목·시간봉만 동기화합니다.');
+    setExternalWindowStatus('외부 차트 창을 열었습니다.');
     stopPopupTracking();
     popupPublishTimeoutRef.current = window.setTimeout(() => {
       popupPublishTimeoutRef.current = null;
@@ -458,9 +690,38 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
     setAnalysis(null);
   }, [selection.market, selection.ticker, selection.timeframe]);
 
+  const chart = (
+    <UnifiedAnalysisChart
+      selection={selection}
+      onSelectionChange={updateSelection}
+      onAnalysisChange={setAnalysis}
+    />
+  );
+
+  const intelligencePanel = (
+    <AiChartV2IntelligencePanel
+      selection={selection}
+      analysis={analysis}
+      mode={strategyMode}
+      onModeChange={updateStrategyModeAndTimeframe}
+    />
+  );
+
+  const details = (
+    <div className="space-y-4">
+      {intelligencePanel}
+      <FuturesPublicContextPanel selection={selection} />
+      <ContextCard selection={selection} analysis={analysis} />
+      <DecisionCard analysis={analysis} />
+      <SafetyNote />
+    </div>
+  );
+
+  const mobile = !desktop && !externalMode && !embedded;
+
   return (
-    <div className={`h-full overflow-y-auto overscroll-contain bg-background ${embedded || externalMode ? 'pb-4' : 'pb-24'}`}>
-      <header className="sticky top-0 z-20 border-b border-card-border bg-background/95 px-4 py-3 backdrop-blur-xl">
+    <div className={`h-full min-w-0 overflow-y-auto overscroll-contain bg-background ${embedded || externalMode ? 'pb-4' : 'pb-24'}`}>
+      <header className="sticky top-0 z-30 border-b border-card-border bg-background/95 px-3 py-2.5 backdrop-blur-xl sm:px-4 sm:py-3">
         <div className="mx-auto flex max-w-7xl items-center gap-3">
           {!embedded && !externalMode && (
             <button
@@ -473,8 +734,8 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
             </button>
           )}
           <div className="min-w-0 flex-1">
-            <p className="text-[11px] font-extrabold text-primary">{externalMode ? '외부 AI 차트' : '실시간 기술 분석'}</p>
-            <h1 aria-label="AI 차트 생중계 · AI 차트 2.0" className="truncate text-lg font-black">AI 차트 2.0</h1>
+            <p className="truncate text-[10px] font-extrabold text-primary">{externalMode ? '외부 AI 차트' : selection.displayName}</p>
+            <h1 aria-label="AI 차트 생중계 · AI 차트 2.0" className="truncate text-base font-black sm:text-lg">AI 차트</h1>
           </div>
           {!embedded && !externalMode && externalControlAvailable && (
             <button
@@ -498,153 +759,63 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
               <X className="h-4 w-4" />
             </button>
           )}
-          <div className="text-right text-[10px] font-bold text-muted-foreground">
+          <div className="shrink-0 text-right text-[10px] font-bold text-muted-foreground">
             <p>{unifiedMarketLabel(selection.market)} · {selection.timeframe}</p>
-            <p>{strategyMode} · 공개 시세 읽기 전용</p>
+            <p>{strategyModeLabel(strategyMode)} · 읽기 전용</p>
           </div>
         </div>
         {externalWindowStatus && (
-          <p data-testid="external-chart-status" className="mx-auto mt-2 max-w-7xl text-[10px] font-bold text-muted-foreground">
+          <p data-testid="external-chart-status" className="mx-auto mt-2 max-w-7xl truncate text-[10px] font-bold text-muted-foreground">
             {externalWindowStatus}
           </p>
         )}
       </header>
 
-      <main className="mx-auto grid max-w-7xl gap-4 p-4 lg:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
-        <section className="min-w-0">
-          <UnifiedAnalysisChart
-            selection={selection}
-            onSelectionChange={updateSelection}
-            onAnalysisChange={setAnalysis}
-          />
-        </section>
-
-        <aside className="space-y-4 lg:sticky lg:top-20 lg:self-start">
-          <AiChartV2IntelligencePanel
-            selection={selection}
-            analysis={analysis}
-            mode={strategyMode}
-            onModeChange={updateStrategyModeAndTimeframe}
-          />
-          <FuturesPublicContextPanel selection={selection} />
-
-          <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-            <div className="flex items-center gap-2">
-              <Activity className="h-4 w-4 text-primary" />
-              <h2 className="text-sm font-black">현재 차트 컨텍스트</h2>
+      {mobile ? (
+        <>
+          <div className="sticky top-[57px] z-20 border-b border-card-border bg-background/95 px-2 py-2 backdrop-blur-xl sm:top-[61px]">
+            <div className="mx-auto max-w-7xl">
+              <ResponsiveTabs
+                value={mobileTab}
+                options={MOBILE_CHART_TABS}
+                onChange={setMobileTab}
+                ariaLabel="AI 차트 모바일 보기"
+                testId="ai-chart-mobile-tabs"
+                compact
+              />
             </div>
-            <h3 className="mt-3 text-lg font-black">{selection.displayName}</h3>
-            <p className="mt-1 text-xs font-bold text-muted-foreground">
-              {selection.ticker} · {selection.market} · {selection.timeframe}
-            </p>
-            <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
-              <div className="rounded-2xl bg-background p-2">
-                <p className="text-[10px] text-muted-foreground">분석 상태</p>
-                <strong>{analysis ? statusLabel(analysis.status) : '대기'}</strong>
-              </div>
-              <div className="rounded-2xl bg-background p-2">
-                <p className="text-[10px] text-muted-foreground">방향</p>
-                <strong>{analysis ? biasLabel(analysis.bias) : '-'}</strong>
-              </div>
-              <div data-testid="analysis-signal-score" className="rounded-2xl bg-background p-2">
-                <p className="text-[10px] text-muted-foreground">신뢰도</p>
-                <strong>{analysis?.confidence ?? selection.confidence ?? '-'}</strong>
-              </div>
-            </div>
-            <p className="mt-3 text-[10px] font-semibold leading-4 text-muted-foreground">
-              시장·종목·시간봉 같은 명시적 선택만 본창과 외부창에 동기화합니다. 일반 시세 갱신은 상대 창의 차트 위치를 변경하지 않습니다.
-            </p>
-          </section>
-
-          <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-            <div className="flex items-center gap-2">
-              <Database className="h-4 w-4 text-primary" />
-              <h2 className="text-sm font-black">현재 생중계 판단</h2>
-            </div>
-            {analysis ? (
-              <div className="mt-3 space-y-4 text-xs">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <BiasIcon bias={analysis.bias} />
-                      <strong className="break-keep text-sm">{analysis.title}</strong>
-                    </div>
-                    <p className="mt-1 text-[10px] font-bold text-muted-foreground">
-                      {analysis.subtype ?? analysis.type} · {analysis.engineVersion}
-                    </p>
-                  </div>
-                  <span
-                    className={cn(
-                      'shrink-0 rounded-full border px-2 py-1 text-[10px] font-black',
-                      analysis.status === 'confirmed'
-                        ? 'border-primary/30 bg-primary/10 text-primary'
-                        : analysis.status === 'invalidated' || analysis.status === 'expired'
-                          ? 'border-muted bg-muted text-muted-foreground'
-                          : 'border-warning/30 bg-warning/10 text-warning',
-                    )}
-                  >
-                    {statusLabel(analysis.status)}
-                  </span>
+          </div>
+          <main className="mx-auto w-full max-w-7xl p-3 sm:p-4">
+            {mobileTab === 'summary' ? <MobileSummary selection={selection} analysis={analysis} /> : null}
+            {mobileTab === 'chart' ? (
+              <section data-testid="ai-chart-mobile-chart" className="min-w-0 [&_[data-testid=ai-chart-position-panel]]:hidden">
+                {chart}
+                <div className="hidden" aria-hidden="true" data-testid="ai-chart-mobile-overlay-controller">
+                  {intelligencePanel}
                 </div>
+              </section>
+            ) : null}
+            {mobileTab === 'position' ? (
+              <section data-testid="ai-chart-mobile-position" className="min-w-0">
+                <AiChartPositionPanel
+                  market={selection.market}
+                  symbol={selection.symbol || selection.ticker}
+                  chartPrice={null}
+                  pricePlan={selection.pricePlan}
+                  onOverlayChange={ignorePositionOverlay}
+                />
+              </section>
+            ) : null}
+            {mobileTab === 'details' ? <section data-testid="ai-chart-mobile-details">{details}</section> : null}
+          </main>
+        </>
+      ) : (
+        <main className="mx-auto grid max-w-7xl gap-4 p-4 lg:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
+          <section className="min-w-0">{chart}</section>
+          <aside className="min-w-0 lg:sticky lg:top-20 lg:self-start">{details}</aside>
+        </main>
+      )}
 
-                <p className="break-keep rounded-2xl bg-secondary/70 px-3 py-3 leading-5 text-foreground">
-                  {analysis.summary}
-                </p>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="rounded-2xl border border-card-border bg-background p-3">
-                    <div className="flex items-center gap-1.5 text-muted-foreground">
-                      <Clock3 className="h-3.5 w-3.5" />
-                      <span className="text-[10px] font-bold">감지 시각</span>
-                    </div>
-                    <strong className="mt-1 block text-[11px]">{formatAnalysisTime(analysis.detectedAt)}</strong>
-                  </div>
-                  <div className="rounded-2xl border border-card-border bg-background p-3">
-                    <p className="text-[10px] font-bold text-muted-foreground">최근 변화</p>
-                    <strong className="mt-1 block break-keep text-[11px]">
-                      {analysis.transitionReason ?? '최초 분석'}
-                    </strong>
-                  </div>
-                </div>
-
-                <div>
-                  <p className="font-black">판단 근거</p>
-                  <ul className="mt-1 space-y-1 text-muted-foreground">
-                    {analysis.reasons.map((item) => (
-                      <li key={item}>• {item}</li>
-                    ))}
-                  </ul>
-                </div>
-                <div>
-                  <p className="font-black">확인 조건</p>
-                  <ul className="mt-1 space-y-1 text-muted-foreground">
-                    {analysis.confirmationConditions.map((item) => (
-                      <li key={item}>• {item}</li>
-                    ))}
-                  </ul>
-                </div>
-                <div>
-                  <p className="font-black text-destructive">무효 조건</p>
-                  <ul className="mt-1 space-y-1 text-muted-foreground">
-                    {analysis.invalidationConditions.map((item) => (
-                      <li key={item}>• {item}</li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
-            ) : (
-              <p className="mt-3 text-xs leading-5 text-muted-foreground">
-                실제 캔들이 준비되면 현재 구조와 변화 이유를 표시합니다. 데이터가 없거나 종목이 바뀐 직후에는 임시 분석을 만들지 않습니다.
-              </p>
-            )}
-          </section>
-
-          <p className="flex gap-2 rounded-2xl border border-warning/30 bg-warning/5 p-3 text-[10px] font-semibold leading-4 text-muted-foreground">
-            <ShieldAlert className="h-4 w-4 shrink-0 text-warning" />
-            진행 중 캔들은 형성 중으로 표시하고, 패턴 확정은 완료된 봉의 확인 조건을 통과한 경우에만 수행합니다. 국내주식·미국주식·코인 현물·코인 선물을 읽기 전용으로 분석하며 주문을 실행하지 않습니다.
-          </p>
-        </aside>
-      </main>
       {!embedded && !externalMode && <BottomNav />}
     </div>
   );
