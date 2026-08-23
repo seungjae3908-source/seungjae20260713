@@ -781,7 +781,7 @@ test.describe('real staging release readiness', () => {
     try {
       await expectHealthyRoute(page, '/');
       await expectBootstrapTerminalError(page);
-      expect(requestCount, 'restored-session rejection must stay bounded to the initial profile read plus one reconciliation read').toBe(2);
+      expect(requestCount, 'initial bootstrap must issue one profile request').toBe(1);
       expect(observation.candidates, 'semantic bootstrap rejection must not create a network-error exemption').toHaveLength(0);
       confirmed = true;
     } finally {
