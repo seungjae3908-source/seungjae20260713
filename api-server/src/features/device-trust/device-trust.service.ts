@@ -126,6 +126,10 @@ function isBase64UrlCoordinate(value: unknown): value is string {
   return typeof value === 'string' && value.length >= 40 && value.length <= 48 && /^[A-Za-z0-9_-]+$/.test(value);
 }
 
+function hasTrustedHistory(devices: TrustedDeviceRecord[]): boolean {
+  return devices.some((device) => device.status === 'active' || device.status === 'revoked');
+}
+
 export function normalizeDevicePublicKeyJwk(value: unknown): DevicePublicKeyJwk {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new DeviceTrustError('INVALID_DEVICE_PUBLIC_KEY', 400);
@@ -247,6 +251,7 @@ export class DeviceTrustService {
 
   async status(userId: string, rawSessionToken?: string | null) {
     const activeDeviceCount = await this.repository.countActiveDevices(userId);
+    const trustedHistory = hasTrustedHistory(await this.repository.listDevices(userId));
     let trusted = false;
     if (rawSessionToken) {
       try {
@@ -260,7 +265,8 @@ export class DeviceTrustService {
       enforcement: deviceTrustEnforcement(),
       activeDeviceCount,
       maxActiveDevices: maxActiveDevices(),
-      bootstrapEnrollmentAllowed: activeDeviceCount === 0,
+      bootstrapEnrollmentAllowed: activeDeviceCount === 0 && !trustedHistory,
+      recoveryRequired: activeDeviceCount === 0 && trustedHistory,
       trustedDeviceSession: trusted,
     };
   }
@@ -282,6 +288,13 @@ export class DeviceTrustService {
     const activeDeviceCount = await this.repository.countActiveDevices(input.userId);
     if (activeDeviceCount >= maxActiveDevices()) {
       throw new DeviceTrustError('DEVICE_LIMIT_REACHED', 409);
+    }
+
+    if (!existing && activeDeviceCount === 0) {
+      const trustedHistory = hasTrustedHistory(await this.repository.listDevices(input.userId));
+      if (trustedHistory) {
+        throw new DeviceTrustError('DEVICE_RECOVERY_REQUIRED', 403);
+      }
     }
 
     if (activeDeviceCount > 0 && !existing) {
@@ -320,7 +333,7 @@ export class DeviceTrustService {
   }
 
   async issueVerificationChallenge(userId: string, deviceId: string) {
-    if (!/^[0-9a-f-]{36}$/i.test(deviceId)) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(deviceId)) {
       throw new DeviceTrustError('INVALID_DEVICE_ID', 400);
     }
     const device = await this.repository.getDevice(userId, deviceId);

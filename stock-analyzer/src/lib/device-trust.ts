@@ -20,6 +20,7 @@ export type DeviceTrustStatus = {
   activeDeviceCount: number;
   maxActiveDevices: number;
   bootstrapEnrollmentAllowed: boolean;
+  recoveryRequired: boolean;
   trustedDeviceSession: boolean;
 };
 
@@ -121,29 +122,18 @@ async function generateStoredNonExtractableP256Key(): Promise<PendingDeviceKey> 
   const subtle = requireBrowserCrypto();
   const generated = await subtle.generateKey(
     { name: 'ECDSA', namedCurve: 'P-256' },
-    true,
+    false,
     ['sign', 'verify'],
   ) as CryptoKeyPair;
 
-  const publicKeyJwk = await subtle.exportKey('jwk', generated.publicKey);
-  const temporaryPrivatePkcs8 = await subtle.exportKey('pkcs8', generated.privateKey);
-  try {
-    const privateKey = await subtle.importKey(
-      'pkcs8',
-      temporaryPrivatePkcs8,
-      { name: 'ECDSA', namedCurve: 'P-256' },
-      false,
-      ['sign'],
-    );
-    if (privateKey.extractable) {
-      throw new DeviceTrustClientError('DEVICE_PRIVATE_KEY_MUST_BE_NON_EXTRACTABLE', 0);
-    }
-    return { privateKey, publicKeyJwk };
-  } finally {
-    // The transient export exists only to re-import the persistent key as
-    // non-extractable. It is never serialized, logged, sent, or stored.
-    new Uint8Array(temporaryPrivatePkcs8).fill(0);
+  if (generated.privateKey.extractable) {
+    throw new DeviceTrustClientError('DEVICE_PRIVATE_KEY_MUST_BE_NON_EXTRACTABLE', 0);
   }
+
+  // WebCrypto keeps the generated ECDSA private key non-extractable while the
+  // public half remains exportable for server-side possession verification.
+  const publicKeyJwk = await subtle.exportKey('jwk', generated.publicKey);
+  return { privateKey: generated.privateKey, publicKeyJwk };
 }
 
 function currentDeviceSession(): string | null {
@@ -249,6 +239,7 @@ export async function getDeviceTrustStatus(accessToken: string): Promise<DeviceT
     activeDeviceCount: result.activeDeviceCount,
     maxActiveDevices: result.maxActiveDevices,
     bootstrapEnrollmentAllowed: result.bootstrapEnrollmentAllowed,
+    recoveryRequired: result.recoveryRequired,
     trustedDeviceSession: result.trustedDeviceSession,
   };
 }
