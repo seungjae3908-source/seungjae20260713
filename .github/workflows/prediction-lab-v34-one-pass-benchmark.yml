@@ -123,7 +123,11 @@ jobs:
             onePassCandleTraversals: 0,
           };
           process.on("exit", () => {
-            writeFileSync(output, `${JSON.stringify(globalThis.__V34_BENCHMARK_STATS__, null, 2)}\n`, "utf8");
+            writeFileSync(
+              `${output}.${process.pid}.json`,
+              `${JSON.stringify(globalThis.__V34_BENCHMARK_STATS__, null, 2)}\n`,
+              "utf8",
+            );
           });
           NODE
 
@@ -284,10 +288,33 @@ jobs:
             if (!match) throw new Error(`peak RSS missing: ${path}`);
             return Number(match[1]);
           };
+          const aggregateStats = (version) => {
+            const prefix = `${version}.stats.json.`;
+            const names = fs.readdirSync(root)
+              .filter((name) => name.startsWith(prefix) && name.endsWith(".json"))
+              .sort();
+            if (names.length === 0) throw new Error(`${version} benchmark stats shards missing`);
+            return names.reduce((total, name) => {
+              const row = JSON.parse(fs.readFileSync(`${root}/${name}`, "utf8"));
+              for (const key of Object.keys(total)) {
+                if (!Number.isFinite(row[key]) || row[key] < 0) {
+                  throw new Error(`${version} invalid benchmark counter ${key} in ${name}`);
+                }
+                total[key] += row[key];
+              }
+              return total;
+            }, {
+              suffixV1Verifications: 0,
+              baselineV1Executions: 0,
+              onePassExecutions: 0,
+              onePassCandleTraversals: 0,
+              statsShardCount: names.length,
+            });
+          };
           const rows = [];
           for (const version of ["V3", "V4"]) {
             const raw = JSON.parse(fs.readFileSync(`${root}/${version}.raw.json`, "utf8"));
-            const stats = JSON.parse(fs.readFileSync(`${root}/${version}.stats.json`, "utf8"));
+            const stats = aggregateStats(version);
             const wall = JSON.parse(fs.readFileSync(`${root}/${version}.wall.json`, "utf8"));
             const actualDigest = digest(raw);
             const expectedDigest = process.env[`EXPECTED_${version}_RESULT_DIGEST`];
@@ -311,6 +338,7 @@ jobs:
               currentResultDigest: actualDigest,
               resultDifferenceCount: 0,
               stageCount: stats.onePassExecutions,
+              statsShardCount: stats.statsShardCount,
               suffixV1ExecutionsBefore: baselineCalls,
               suffixV1ExecutionsAfter: stats.suffixV1Verifications,
               baselineV1ExecutionsAfter: stats.baselineV1Executions,
@@ -348,6 +376,7 @@ jobs:
           NODE
 
       - name: Upload immutable benchmark evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: prediction-lab-v34-one-pass-benchmark-${{ steps.resolve.outputs.sha }}
