@@ -241,6 +241,31 @@ test('revoking a device invalidates every device session for it', async () => {
   );
 });
 
+test('revoked trust history cannot be silently re-bootstrapped with only the account session', async () => {
+  const repository = new MemoryDeviceTrustRepository();
+  const service = new DeviceTrustService(repository);
+  const userId = '00000000-0000-4000-8000-000000000005';
+  const first = await enrollFirstDevice(service, userId);
+
+  await service.revokeDevice(userId, first.challenge.deviceId, first.completed.deviceSession);
+  const replacement = newP256Key();
+
+  await assert.rejects(
+    service.issueEnrollmentChallenge({
+      userId,
+      publicKeyJwk: replacement.publicKeyJwk,
+      label: 'replacement phone',
+      platform: 'android',
+    }),
+    expectCode('DEVICE_RECOVERY_REQUIRED'),
+  );
+
+  const status = await service.status(userId);
+  assert.equal(status.activeDeviceCount, 0);
+  assert.equal(status.bootstrapEnrollmentAllowed, false);
+  assert.equal(status.recoveryRequired, true);
+});
+
 test('server rejects any JWK that contains private-key material', () => {
   assert.throws(
     () => normalizeDevicePublicKeyJwk({
