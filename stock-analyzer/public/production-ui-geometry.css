@@ -3,25 +3,14 @@
 }
 
 /*
- * BottomNav participates in each route page's flex layout. Keep the AppShell at
- * the full viewport height so the navigation row is reserved exactly once.
- * Login/admin/install screens still keep the same full viewport geometry.
+ * BottomNav is fixed to the viewport, while route pages live inside the
+ * AppShell's second child. When a BottomNav is actually rendered, reserve its
+ * viewport band at the AppShell level so page controls cannot sit underneath
+ * the fixed navigation. Login/admin/install screens do not render BottomNav,
+ * so they keep the full viewport height automatically.
  */
 #root:has(nav[aria-label="주요 메뉴"]) > div > div:nth-child(2)[class*="max-w-screen"] {
-  height: 100dvh;
-}
-
-/*
- * Desktop keeps the rounded floating-dock appearance without relatively moving
- * the navigation over route controls. A real margin owns the 1rem gap instead.
- * #root raises specificity above the source stylesheet even if Vite emits it
- * after this public geometry sheet.
- */
-@media (min-width: 1024px) {
-  #root nav[aria-label="주요 메뉴"] {
-    bottom: 0;
-    margin-bottom: 1rem;
-  }
+  height: calc(100dvh - var(--app-bottom-nav-reserve));
 }
 
 /* Production QA found exactly two undersized AI Chart controls. */
@@ -41,11 +30,11 @@ button[data-testid="load-multi-timeframe"] {
 
 /*
  * The read-only orderbook opener is viewport-fixed, while mobile BottomNav is
- * laid out inside the AppShell. Reserve the navigation band only for the fixed
- * opener so it cannot be covered on 320-1023px viewports.
+ * laid out inside the shortened AppShell. Reserve both bands so the opener
+ * cannot be covered by navigation on 320-1023px viewports.
  */
 @media (max-width: 1023px) {
-  /* AppShell keeps its full viewport; workspace content owns its route inset. */
+  /* AppShell already reserves the mobile navigation band for this workspace. */
   [data-testid="technical-workspace"] {
     padding-bottom: 0;
   }

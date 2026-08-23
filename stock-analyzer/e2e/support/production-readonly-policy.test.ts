@@ -69,7 +69,7 @@ test('direct private broker provider traffic is blocked before transmission', ()
   }
 });
 
-test('same-origin read requests cancelled by navigation are the only ignored browser failures', () => {
+test('read requests cancelled by route navigation are narrowly classified as expected', () => {
   assert.equal(
     isIgnorableProductionRequestFailure(`${ORIGIN}/api/market/summary?market=KR`, 'GET', 'net::ERR_ABORTED', ORIGIN),
     true,
@@ -79,15 +79,43 @@ test('same-origin read requests cancelled by navigation are the only ignored bro
     true,
   );
   assert.equal(
-    isIgnorableProductionRequestFailure(`${ORIGIN}/api/market/summary?market=KR`, 'GET', 'net::ERR_FAILED', ORIGIN),
+    isIgnorableProductionRequestFailure(
+      'https://example.supabase.co/rest/v1/portfolio_holdings?select=*',
+      'GET',
+      'net::ERR_ABORTED',
+      ORIGIN,
+    ),
+    true,
+  );
+  assert.equal(
+    isIgnorableProductionRequestFailure(
+      'https://example.supabase.co/rest/v1/portfolio_holdings?select=*',
+      'GET',
+      'net::ERR_FAILED',
+      ORIGIN,
+    ),
+    false,
+  );
+  assert.equal(
+    isIgnorableProductionRequestFailure(
+      'https://example.supabase.co/rest/v1/portfolio_holdings?select=*',
+      'POST',
+      'net::ERR_ABORTED',
+      ORIGIN,
+    ),
+    false,
+  );
+  assert.equal(
+    isIgnorableProductionRequestFailure(
+      'https://example.supabase.co/auth/v1/token?grant_type=password',
+      'GET',
+      'net::ERR_ABORTED',
+      ORIGIN,
+    ),
     false,
   );
   assert.equal(
     isIgnorableProductionRequestFailure('https://cdn.example/asset.js', 'GET', 'net::ERR_ABORTED', ORIGIN),
-    false,
-  );
-  assert.equal(
-    isIgnorableProductionRequestFailure(`${ORIGIN}/api/watchlist`, 'POST', 'net::ERR_ABORTED', ORIGIN),
     false,
   );
   assert.equal(
