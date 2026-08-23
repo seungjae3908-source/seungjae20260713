@@ -1,0 +1,363 @@
+name: Prediction Lab V3 V4 One-Pass Benchmark
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/prediction-lab-v34-one-pass-benchmark.yml
+      - market-prediction-lab/src/v3-market-filter-optimizer.js
+      - market-prediction-lab/src/v4-momentum-regime-optimizer.js
+      - market-prediction-lab/tests/v1-independent-engine-equivalence.test.js
+      - market-prediction-lab/tests/v34-one-pass-runtime-equivalence.test.js
+  workflow_dispatch:
+    inputs:
+      research_ref:
+        description: Exact immutable PR-head commit SHA
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prediction-lab-v34-one-pass-benchmark-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  futures-btc-long-v34:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      HISTORICAL_HARNESS_SHA: ba181123e6b03c880d9c70174b16ae6eb528700b
+      EXPECTED_CANDLE_COUNT: "210431"
+      EXPECTED_SOURCE_DIGEST: 475c63b21e726a6d156eb977ac3c5b035c04609d755475f734f5e85d14c965a6
+      EXPECTED_FUNDING_DIGEST: 2e538fba4f16d14499204f7d8b5ef7c156047491b3d604faff57d057c973e432
+      EXPECTED_V3_RESULT_DIGEST: 908ea8034d6bdb8062916a0001521c22f132c47dd1e3bcc6189197303b72a4a3
+      EXPECTED_V4_RESULT_DIGEST: b6f2376553e7445dbc4054b7aa29d333b0f48b3843505c1f339eae811023a994
+      BASELINE_V3_SECONDS: "17969.385"
+      BASELINE_V4_SECONDS: "16693.711"
+      BASELINE_V3_SUFFIX_V1_CALLS: "28914"
+      BASELINE_V4_SUFFIX_V1_CALLS: "26075"
+      BASELINE_V3_CANDLE_VISITS: "5380339461"
+      BASELINE_V4_CANDLE_VISITS: "4844386607"
+      EXPECTED_STAGE_COUNT: "54"
+    steps:
+      - name: Resolve immutable PR head
+        id: resolve
+        shell: bash
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          INPUT_SHA: ${{ inputs.research_ref }}
+        run: |
+          set -euo pipefail
+          sha="$PR_HEAD_SHA"
+          if [ -z "$sha" ]; then sha="$INPUT_SHA"; fi
+          if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "research_ref must be an exact lowercase 40-character SHA" >&2
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact PR head with history
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.resolve.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Verify immutable checkout and unchanged execution dependencies
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.resolve.outputs.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          for path in \
+            market-prediction-lab/src/independent-strategy-backtest.js \
+            market-prediction-lab/src/multi-market-backtest-engine.js \
+            market-prediction-lab/src/research-validation-layer.js \
+            market-prediction-lab/src/research-governance.js; do
+            current_blob="$(git rev-parse "$TARGET_SHA:$path")"
+            historical_blob="$(git rev-parse "$HISTORICAL_HARNESS_SHA:$path")"
+            test "$current_blob" = "$historical_blob" || {
+              echo "execution dependency drift: $path" >&2
+              exit 1
+            }
+          done
+
+      - name: Build isolated immutable historical harness with exact PR-head V3/V4
+        id: harness
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.resolve.outputs.sha }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/v34-one-pass-benchmark"
+          rm -rf "$root"
+          mkdir -p "$root"
+          git archive "$HISTORICAL_HARNESS_SHA" market-prediction-lab | tar -x -C "$root"
+          cp market-prediction-lab/src/v3-market-filter-optimizer.js "$root/market-prediction-lab/src/"
+          cp market-prediction-lab/src/v4-momentum-regime-optimizer.js "$root/market-prediction-lab/src/"
+          printf '%s\n' "$TARGET_SHA" > "$root/target-sha"
+          echo "root=$root" >> "$GITHUB_OUTPUT"
+
+      - name: Add benchmark-only counters to the ephemeral harness
+        shell: bash
+        env:
+          HARNESS_ROOT: ${{ steps.harness.outputs.root }}
+        run: |
+          set -euo pipefail
+          cat > "$HARNESS_ROOT/market-prediction-lab/scripts/v34-benchmark-preload.js" <<'NODE'
+          import { writeFileSync } from "node:fs";
+          const output = process.env.BENCHMARK_STATS_PATH;
+          if (!output) throw new Error("BENCHMARK_STATS_PATH is required");
+          globalThis.__V34_BENCHMARK_STATS__ = {
+            suffixV1Verifications: 0,
+            baselineV1Executions: 0,
+            onePassExecutions: 0,
+            onePassCandleTraversals: 0,
+          };
+          process.on("exit", () => {
+            writeFileSync(output, `${JSON.stringify(globalThis.__V34_BENCHMARK_STATS__, null, 2)}\n`, "utf8");
+          });
+          NODE
+
+          cat > "$HARNESS_ROOT/market-prediction-lab/scripts/instrument-v34-benchmark.js" <<'NODE'
+          import { readFile, writeFile } from "node:fs/promises";
+          const files = [
+            "src/v3-market-filter-optimizer.js",
+            "src/v4-momentum-regime-optimizer.js",
+          ];
+          function replaceOnce(source, needle, replacement, label) {
+            const first = source.indexOf(needle);
+            if (first < 0 || source.indexOf(needle, first + needle.length) >= 0) {
+              throw new Error(`instrumentation target mismatch: ${label}`);
+            }
+            return source.slice(0, first) + replacement + source.slice(first + needle.length);
+          }
+          for (const file of files) {
+            let source = await readFile(file, "utf8");
+            source = replaceOnce(
+              source,
+              "  const onePass = runIndependentSignalBacktest({",
+              "  globalThis.__V34_BENCHMARK_STATS__.onePassExecutions += 1;\n  globalThis.__V34_BENCHMARK_STATS__.onePassCandleTraversals += candles.length;\n  const onePass = runIndependentSignalBacktest({",
+              `${file}:one-pass`,
+            );
+            source = replaceOnce(
+              source,
+              "        const continuation = runV1Backtest({",
+              "        globalThis.__V34_BENCHMARK_STATS__.suffixV1Verifications += 1;\n        const continuation = runV1Backtest({",
+              `${file}:suffix-v1`,
+            );
+            source = replaceOnce(
+              source,
+              "  const baselineDevelopment = compact(runV1Backtest({",
+              "  globalThis.__V34_BENCHMARK_STATS__.baselineV1Executions += 1;\n  const baselineDevelopment = compact(runV1Backtest({",
+              `${file}:baseline-development`,
+            );
+            source = replaceOnce(
+              source,
+              "  const baselineValidation = compact(runV1Backtest({",
+              "  globalThis.__V34_BENCHMARK_STATS__.baselineV1Executions += 1;\n  const baselineValidation = compact(runV1Backtest({",
+              `${file}:baseline-validation`,
+            );
+            await writeFile(file, source, "utf8");
+          }
+          NODE
+
+          cd "$HARNESS_ROOT/market-prediction-lab"
+          node scripts/instrument-v34-benchmark.js
+
+      - name: Collect immutable public Binance USD-M 15m selection history
+        working-directory: ${{ steps.harness.outputs.root }}/market-prediction-lab
+        env:
+          RESEARCH_CODE_SHA: ${{ steps.resolve.outputs.sha }}
+        run: node scripts/collect-binance-scalping-history.js binance-scalping-cache
+
+      - name: Verify exact BTCUSDT dataset identity and Final Holdout isolation
+        working-directory: ${{ steps.harness.outputs.root }}/market-prediction-lab
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require("node:fs");
+          const bundle = JSON.parse(fs.readFileSync("binance-scalping-cache/BTCUSDT.json", "utf8"));
+          const expectedCount = Number(process.env.EXPECTED_CANDLE_COUNT);
+          if (bundle.candles?.length !== expectedCount) throw new Error(`candle count mismatch: ${bundle.candles?.length}`);
+          if (bundle.audit?.normalizedCandleDigest !== process.env.EXPECTED_SOURCE_DIGEST) throw new Error("source digest mismatch");
+          if (bundle.audit?.normalizedFundingDigest !== process.env.EXPECTED_FUNDING_DIGEST) throw new Error("funding digest mismatch");
+          if (bundle.audit?.selectionDataStatus !== "DATA_READY") throw new Error("selection data not ready");
+          if (bundle.audit?.finalHoldoutRead !== false) throw new Error("Final Holdout was read");
+          if (bundle.audit?.crossVenueMix !== false) throw new Error("cross-venue mix detected");
+          NODE
+
+      - name: Run exact V3 same-dataset one-pass benchmark
+        working-directory: ${{ steps.harness.outputs.root }}/market-prediction-lab
+        shell: bash
+        env:
+          RESEARCH_CODE_SHA: ${{ steps.resolve.outputs.sha }}
+          SCALPING_DATASET_KEY: futures-btc-long
+          SCALPING_FAMILY_VERSION: V3
+          BENCHMARK_STATS_PATH: ${{ steps.harness.outputs.root }}/market-prediction-lab/artifacts/v34-benchmark/V3.stats.json
+          NODE_OPTIONS: --import=./scripts/v34-benchmark-preload.js
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/v34-benchmark
+          start_ns="$(date +%s%N)"
+          /usr/bin/time -v -o artifacts/v34-benchmark/V3.time.txt \
+            node scripts/run-scalping-family-research.js \
+              scalping-history-cache \
+              binance-scalping-cache \
+              artifacts/v34-benchmark/V3.raw.json \
+              artifacts/v34-benchmark/V3.ranking.json
+          end_ns="$(date +%s%N)"
+          node -e 'const fs=require("fs"); const seconds=(Number(process.argv[1])-Number(process.argv[2]))/1e9; fs.writeFileSync(process.argv[3], JSON.stringify({wallClockSeconds:seconds},null,2)+"\n")' \
+            "$end_ns" "$start_ns" artifacts/v34-benchmark/V3.wall.json
+
+      - name: Run exact V4 same-dataset one-pass benchmark
+        working-directory: ${{ steps.harness.outputs.root }}/market-prediction-lab
+        shell: bash
+        env:
+          RESEARCH_CODE_SHA: ${{ steps.resolve.outputs.sha }}
+          SCALPING_DATASET_KEY: futures-btc-long
+          SCALPING_FAMILY_VERSION: V4
+          BENCHMARK_STATS_PATH: ${{ steps.harness.outputs.root }}/market-prediction-lab/artifacts/v34-benchmark/V4.stats.json
+          NODE_OPTIONS: --import=./scripts/v34-benchmark-preload.js
+        run: |
+          set -euo pipefail
+          start_ns="$(date +%s%N)"
+          /usr/bin/time -v -o artifacts/v34-benchmark/V4.time.txt \
+            node scripts/run-scalping-family-research.js \
+              scalping-history-cache \
+              binance-scalping-cache \
+              artifacts/v34-benchmark/V4.raw.json \
+              artifacts/v34-benchmark/V4.ranking.json
+          end_ns="$(date +%s%N)"
+          node -e 'const fs=require("fs"); const seconds=(Number(process.argv[1])-Number(process.argv[2]))/1e9; fs.writeFileSync(process.argv[3], JSON.stringify({wallClockSeconds:seconds},null,2)+"\n")' \
+            "$end_ns" "$start_ns" artifacts/v34-benchmark/V4.wall.json
+
+      - name: Require legacy-result identity and publish measured performance summary
+        working-directory: ${{ steps.harness.outputs.root }}/market-prediction-lab
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.resolve.outputs.sha }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require("node:fs");
+          const crypto = require("node:crypto");
+          const root = "artifacts/v34-benchmark";
+          const stable = (value) => {
+            if (Array.isArray(value)) return value.map(stable);
+            if (value && typeof value === "object") {
+              return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stable(value[key])]));
+            }
+            return value;
+          };
+          const normalizeIdentity = (value) => {
+            if (Array.isArray(value)) return value.map(normalizeIdentity);
+            if (value && typeof value === "object") {
+              const result = {};
+              for (const [key, child] of Object.entries(value)) {
+                if (["researchCodeSha", "researchSHA", "collectionCodeSHA"].includes(key)
+                    && typeof child === "string" && /^[0-9a-f]{40}$/u.test(child)) {
+                  result[key] = "<CURRENT_SHA>";
+                } else {
+                  result[key] = normalizeIdentity(child);
+                }
+              }
+              return result;
+            }
+            return value;
+          };
+          const digest = (value) => crypto.createHash("sha256")
+            .update(JSON.stringify(stable(normalizeIdentity(value))))
+            .digest("hex");
+          const parseMaxRss = (path) => {
+            const text = fs.readFileSync(path, "utf8");
+            const match = text.match(/Maximum resident set size \(kbytes\):\s*(\d+)/u);
+            if (!match) throw new Error(`peak RSS missing: ${path}`);
+            return Number(match[1]);
+          };
+          const rows = [];
+          for (const version of ["V3", "V4"]) {
+            const raw = JSON.parse(fs.readFileSync(`${root}/${version}.raw.json`, "utf8"));
+            const stats = JSON.parse(fs.readFileSync(`${root}/${version}.stats.json`, "utf8"));
+            const wall = JSON.parse(fs.readFileSync(`${root}/${version}.wall.json`, "utf8"));
+            const actualDigest = digest(raw);
+            const expectedDigest = process.env[`EXPECTED_${version}_RESULT_DIGEST`];
+            if (actualDigest !== expectedDigest) throw new Error(`${version} legacy-result digest mismatch: ${actualDigest}`);
+            if (raw.finalHoldoutUsed !== false || raw.finalHoldoutRead !== false) throw new Error(`${version} Final Holdout isolation failed`);
+            if (raw.privateApiUsed !== false || raw.orderSubmitted !== false) throw new Error(`${version} safety flags failed`);
+            if (stats.onePassExecutions !== Number(process.env.EXPECTED_STAGE_COUNT)) {
+              throw new Error(`${version} stage count mismatch: ${stats.onePassExecutions}`);
+            }
+            if (stats.suffixV1Verifications > stats.onePassExecutions) throw new Error(`${version} more than one suffix V1 verification per stage`);
+            const baselineSeconds = Number(process.env[`BASELINE_${version}_SECONDS`]);
+            const baselineCalls = Number(process.env[`BASELINE_${version}_SUFFIX_V1_CALLS`]);
+            const baselineVisits = Number(process.env[`BASELINE_${version}_CANDLE_VISITS`]);
+            rows.push({
+              version,
+              targetSha: process.env.TARGET_SHA,
+              candleCount: Number(process.env.EXPECTED_CANDLE_COUNT),
+              sourceDigest: process.env.EXPECTED_SOURCE_DIGEST,
+              fundingDigest: process.env.EXPECTED_FUNDING_DIGEST,
+              legacyResultDigest: expectedDigest,
+              currentResultDigest: actualDigest,
+              resultDifferenceCount: 0,
+              stageCount: stats.onePassExecutions,
+              suffixV1ExecutionsBefore: baselineCalls,
+              suffixV1ExecutionsAfter: stats.suffixV1Verifications,
+              baselineV1ExecutionsAfter: stats.baselineV1Executions,
+              onePassCandleTraversals: stats.onePassCandleTraversals,
+              legacyWeightedCandleVisits: baselineVisits,
+              wallClockSecondsBefore: baselineSeconds,
+              wallClockSecondsAfter: wall.wallClockSeconds,
+              speedup: baselineSeconds / wall.wallClockSeconds,
+              runtimeReductionPercent: (1 - wall.wallClockSeconds / baselineSeconds) * 100,
+              suffixV1ReductionPercent: (1 - stats.suffixV1Verifications / baselineCalls) * 100,
+              traversalReductionPercent: (1 - stats.onePassCandleTraversals / baselineVisits) * 100,
+              peakRssKiB: parseMaxRss(`${root}/${version}.time.txt`),
+              finalHoldoutUsed: false,
+              privateApiUsed: false,
+              orderSubmitted: false,
+            });
+          }
+          const summary = {
+            schemaVersion: 1,
+            contract: "v34-one-pass-same-dataset-benchmark-v1",
+            exactHead: process.env.TARGET_SHA,
+            historicalHarnessSha: process.env.HISTORICAL_HARNESS_SHA,
+            fullTradeRegression: "tests/v34-one-pass-runtime-equivalence.test.js deepEqual legacy vs one-pass",
+            rows,
+            strategySemanticChange: "NONE",
+            costAssumptionChange: "NONE",
+            riskAssumptionChange: "NONE",
+            finalHoldoutUsed: false,
+            productionMutation: false,
+            privateApiUsed: false,
+            orderSubmitted: false,
+          };
+          fs.writeFileSync(`${root}/summary.json`, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
+          console.log(JSON.stringify(summary, null, 2));
+          NODE
+
+      - name: Upload immutable benchmark evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: prediction-lab-v34-one-pass-benchmark-${{ steps.resolve.outputs.sha }}
+          path: ${{ steps.harness.outputs.root }}/market-prediction-lab/artifacts/v34-benchmark
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Assert immutable checkout HEAD
+        if: always()
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.resolve.outputs.sha }}
+        run: test "$(git rev-parse HEAD)" = "$TARGET_SHA"
