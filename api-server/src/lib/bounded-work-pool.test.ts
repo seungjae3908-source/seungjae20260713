@@ -180,11 +180,11 @@ test('market listing work collector reports deadline-limited data as partial wit
   assert.ok(result.diagnostics.maxConcurrency <= 2);
 });
 
-test('default market listing budgets are finite and keep item work below the route budget', () => {
+test('default market listing budgets keep stalled work at the pool concurrency ceiling', () => {
   assert.ok(MARKET_LISTING_CONCURRENCY > 0);
   assert.ok(MARKET_LISTING_CONCURRENCY <= 8);
   assert.ok(MARKET_LISTING_ITEM_TIMEOUT_MS > 0);
-  assert.ok(MARKET_LISTING_ITEM_TIMEOUT_MS < MARKET_LISTING_DEADLINE_MS);
+  assert.equal(MARKET_LISTING_ITEM_TIMEOUT_MS, MARKET_LISTING_DEADLINE_MS);
   assert.ok(MARKET_LISTING_DEADLINE_MS <= 6_000);
 });
 
