@@ -1,0 +1,170 @@
+name: Prediction Lab Shadow Drift Diagnostic
+
+on:
+  pull_request:
+    paths:
+      - "market-prediction-lab/src/shadow-feature-drift-diagnostics.js"
+      - "market-prediction-lab/tests/shadow-feature-drift-diagnostics.test.js"
+      - "market-prediction-lab/scripts/run-shadow-feature-drift-diagnostics.js"
+      - ".github/workflows/prediction-lab-shadow-drift-diagnostic.yml"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: prediction-lab-shadow-drift-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+env:
+  SHADOW_BRANCH: feature/prediction-lab-standalone
+  SHADOW_ARTIFACT: prediction-lab-shadow-state
+
+jobs:
+  shadow-drift-diagnostic:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Resolve immutable diagnostic revision
+        id: revision
+        shell: bash
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          TRIGGER_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          sha="$PR_HEAD_SHA"
+          if [ -z "$sha" ]; then sha="$TRIGGER_SHA"; fi
+          if ! [[ "$sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "diagnostic revision must be an immutable SHA" >&2
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact diagnostic revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.revision.outputs.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Verify exact diagnostic checkout
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ steps.revision.outputs.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Run Shadow drift regression tests
+        working-directory: market-prediction-lab
+        run: node --test tests/shadow-feature-drift-diagnostics.test.js
+
+      - name: Locate latest successful Shadow state artifact
+        id: previous
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'prediction-lab-shadow-hourly.yml',
+              status: 'completed',
+              per_page: 100,
+            });
+            for (const run of runs) {
+              if (run.conclusion !== 'success') continue;
+              const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: run.id,
+                per_page: 100,
+              });
+              const artifact = artifacts.find((item) => item.name === process.env.SHADOW_ARTIFACT && !item.expired);
+              if (!artifact) continue;
+              core.setOutput('run_id', String(run.id));
+              core.setOutput('artifact_id', String(artifact.id));
+              return;
+            }
+            core.setFailed('No successful immutable Shadow artifact is available.');
+
+      - name: Download latest immutable Shadow state
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.SHADOW_ARTIFACT }}
+          path: shadow-artifact
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.previous.outputs.run_id }}
+
+      - name: Resolve immutable active Shadow source SHA
+        id: shadow
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const ref = await github.rest.git.getRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: `heads/${process.env.SHADOW_BRANCH}`,
+            });
+            const sha = ref.data.object.sha;
+            if (!/^[0-9a-f]{40}$/.test(sha)) {
+              core.setFailed('Active Shadow branch did not resolve to an immutable SHA.');
+              return;
+            }
+            core.setOutput('sha', sha);
+
+      - name: Checkout immutable active Shadow source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.shadow.outputs.sha }}
+          path: active-shadow
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Build fail-closed Shadow drift artifact
+        shell: bash
+        env:
+          RESEARCH_CODE_SHA: ${{ steps.revision.outputs.sha }}
+          SHADOW_RESEARCH_CODE_SHA: ${{ steps.shadow.outputs.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p drift-artifact
+          node market-prediction-lab/scripts/run-shadow-feature-drift-diagnostics.js \
+            shadow-artifact/shadow-state.json \
+            active-shadow/market-prediction-lab/docs/candidate-models \
+            drift-artifact/shadow-feature-drift-summary.json \
+            drift-artifact/shadow-feature-drift-summary.md
+          node <<'NODE'
+          const fs = require('fs');
+          const artifact = JSON.parse(fs.readFileSync('drift-artifact/shadow-feature-drift-summary.json', 'utf8'));
+          if (artifact.rootCauseVerdict !== 'INSUFFICIENT_EVIDENCE') throw new Error('diagnostic must remain fail-closed');
+          if (artifact.safety.syntheticDataAllowed !== false) throw new Error('synthetic data must remain forbidden');
+          if (artifact.safety.modelModified !== false || artifact.safety.thresholdModified !== false || artifact.safety.labelModified !== false) {
+            throw new Error('diagnostic workflow cannot mutate model semantics');
+          }
+          for (const group of Object.values(artifact.groups ?? {})) {
+            if (!group.limitations?.includes('raw_train_validation_feature_samples_not_persisted')) {
+              throw new Error('missing raw-reference limitation');
+            }
+          }
+          NODE
+
+      - name: Upload immutable diagnostic artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: prediction-lab-shadow-feature-drift-${{ steps.revision.outputs.sha }}
+          path: drift-artifact
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Assert diagnostic source HEAD stayed immutable
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ steps.revision.outputs.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
