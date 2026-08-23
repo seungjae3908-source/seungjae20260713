@@ -60,6 +60,17 @@ async function login(page: Page) {
   await expect(page.getByTestId('membership-label')).toBeVisible({ timeout: 15_000 });
 }
 
+async function waitForNavigationSettle(page: Page) {
+  let lastUrl = page.url();
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    await page.waitForLoadState('domcontentloaded', { timeout: 1_500 }).catch(() => undefined);
+    await page.waitForTimeout(250);
+    const nextUrl = page.url();
+    if (nextUrl === lastUrl) return;
+    lastUrl = nextUrl;
+  }
+}
+
 async function auditDocumentScroll(page: Page) {
   return page.evaluate(() => {
     const visible = (element: Element) => {
@@ -95,6 +106,19 @@ async function auditDocumentScroll(page: Page) {
   });
 }
 
+async function auditDocumentScrollStable(page: Page) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await auditDocumentScroll(page);
+    } catch (error) {
+      const message = String(error);
+      if (attempt > 0 || !message.includes('Execution context was destroyed')) throw error;
+      await waitForNavigationSettle(page);
+    }
+  }
+  throw new Error('unreachable navigation-stability audit state');
+}
+
 test.describe('Production root scroll and mobile geometry read-only QA', () => {
   test.skip(!productionQaEnabled, 'Dedicated Production QA credentials and read-only flag are required');
 
@@ -122,7 +146,8 @@ test.describe('Production root scroll and mobile geometry read-only QA', () => {
         navigationError = String(error).split('\n')[0].slice(0, 220);
       });
       await expect(page.getByTestId('page-fallback')).toHaveCount(0, { timeout: 5_000 }).catch(() => undefined);
-      const audit = await auditDocumentScroll(page);
+      await waitForNavigationSettle(page);
+      const audit = await auditDocumentScrollStable(page);
       findings.push({ route, finalUrl: page.url(), navigationError, ...audit });
     }
 
