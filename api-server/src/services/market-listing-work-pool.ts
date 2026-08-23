@@ -20,6 +20,7 @@ export interface MarketListingWorkDiagnostics {
   rejectedCount: number;
   timedOutCount: number;
   unstartedCount: number;
+  unusableCount: number;
   deadlineReached: boolean;
   aborted: boolean;
   elapsedMs: number;
@@ -48,11 +49,16 @@ export async function collectMarketListingWork<Item, Result>(
     .filter((outcome) => outcome.status === 'fulfilled')
     .map((outcome) => outcome.value as Result);
   const unstartedCount = Math.max(0, items.length - pool.startedCount);
+  const unusableCount = values.reduce(
+    (count, value) => count + (value == null ? 1 : 0),
+    0,
+  );
   const partial = pool.aborted
     || pool.deadlineReached
     || pool.rejectedCount > 0
     || pool.timedOutCount > 0
-    || unstartedCount > 0;
+    || unstartedCount > 0
+    || unusableCount > 0;
 
   return {
     values,
@@ -64,6 +70,7 @@ export async function collectMarketListingWork<Item, Result>(
       rejectedCount: pool.rejectedCount,
       timedOutCount: pool.timedOutCount,
       unstartedCount,
+      unusableCount,
       deadlineReached: pool.deadlineReached,
       aborted: pool.aborted,
       elapsedMs: pool.elapsedMs,
