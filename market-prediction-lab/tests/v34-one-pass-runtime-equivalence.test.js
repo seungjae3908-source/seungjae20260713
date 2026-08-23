@@ -91,19 +91,19 @@ function macdHistogramSeries(values) {
   for (let index = MACD_SLOW - 1; index < values.length; index += 1) {
     if (Number.isFinite(fast[index]) && Number.isFinite(slow[index])) macd[index] = fast[index] - slow[index];
   }
-  const available = [];
+  const valuesForSignal = [];
   const indexes = [];
   for (let index = 0; index < macd.length; index += 1) {
     if (Number.isFinite(macd[index])) {
-      available.push(macd[index]);
+      valuesForSignal.push(macd[index]);
       indexes.push(index);
     }
   }
-  const signalCompact = emaSeries(available, MACD_SIGNAL);
+  const compactSignal = emaSeries(valuesForSignal, MACD_SIGNAL);
   const histogram = new Array(values.length).fill(null);
   for (let compactIndex = 0; compactIndex < indexes.length; compactIndex += 1) {
     const fullIndex = indexes[compactIndex];
-    if (Number.isFinite(signalCompact[compactIndex])) histogram[fullIndex] = macd[fullIndex] - signalCompact[compactIndex];
+    if (Number.isFinite(compactSignal[compactIndex])) histogram[fullIndex] = macd[fullIndex] - compactSignal[compactIndex];
   }
   return histogram;
 }
@@ -320,11 +320,11 @@ function periodFor(candles) {
   });
 }
 
-function commonInput({ market, side, candles, leverage, quantityStep, fundingRates = [] }) {
+function commonInput({ market, side, symbol, candles, leverage, quantityStep, fundingRates = [] }) {
   return Object.freeze({
     market,
     side,
-    symbol: "BTCUSDT",
+    symbol,
     timeframe: "15m",
     candles,
     initialCapital: 1_000_000,
@@ -353,6 +353,7 @@ test("V3 one-pass runtime is fully identical to the legacy suffix-V1 execution s
   const backtestInput = commonInput({
     market: "CRYPTO_SPOT",
     side: "long",
+    symbol: "KRW-BTC",
     candles,
     leverage: 1,
     quantityStep: 0.0001,
@@ -389,6 +390,7 @@ test("V4 one-pass runtime is fully identical to legacy futures-short execution i
   const backtestInput = commonInput({
     market: "CRYPTO_FUTURES",
     side: "short",
+    symbol: "BTCUSDT",
     candles,
     leverage: 3,
     quantityStep: 0.001,
