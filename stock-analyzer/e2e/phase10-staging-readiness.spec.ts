@@ -60,12 +60,14 @@ type AuthFaultObservation = {
   startedAt: number | null;
   failedAt: number | null;
 };
+type StockChartEndpoint = 'candles' | 'chart';
 const activeLogoutObservations = new WeakMap<Page, LogoutObservation>();
 const confirmedLogoutAbortRequests = new WeakMap<Request, string>();
 const activeRouteTransitionObservations = new WeakMap<Page, RouteTransitionObservation>();
 const activeAuthFaultObservations = new WeakMap<Page, AuthFaultObservation>();
 const pendingMutatingRequests = new WeakMap<Page, Set<Request>>();
 const pendingApiGetRequests = new WeakMap<Page, Set<Request>>();
+const pendingChartFallbackAborts = new WeakMap<Page, Map<string, Diagnostic>>();
 const diagnostics: {
   console_errors: Diagnostic[];
   page_errors: Diagnostic[];
@@ -75,6 +77,7 @@ const diagnostics: {
   expected_auth_faults: Diagnostic[];
   expected_scanner_aborts: Diagnostic[];
   expected_route_transition_aborts: Diagnostic[];
+  expected_chart_fallback_aborts: Diagnostic[];
   api_diagnostics: SafeApiDiagnostic[];
 } = {
   console_errors: [],
@@ -85,6 +88,7 @@ const diagnostics: {
   expected_auth_faults: [],
   expected_scanner_aborts: [],
   expected_route_transition_aborts: [],
+  expected_chart_fallback_aborts: [],
   api_diagnostics: [],
 };
 
@@ -175,6 +179,40 @@ function isConfirmedLogoutAbort(request: Request) {
     && isLogoutScopedRead(request, expectedOrigin);
 }
 
+function stockChartFallbackKeyIdentity(
+  method: string,
+  rawUrl: string,
+  expectedOrigin: string,
+  endpoint: StockChartEndpoint,
+): string | null {
+  if (method !== 'GET') return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+  if (parsed.origin !== expectedOrigin || parsed.searchParams.size !== 1) return null;
+  const timeframe = parsed.searchParams.get('tf');
+  if (!timeframe) return null;
+  const match = parsed.pathname.match(/^\/api\/stocks\/([^/]+)\/(candles|chart)$/u);
+  if (!match || match[2] !== endpoint) return null;
+  return `${decodeURIComponent(match[1] ?? '')}:${timeframe}`;
+}
+
+function stockChartFallbackKey(request: Request, endpoint: StockChartEndpoint): string | null {
+  try {
+    return stockChartFallbackKeyIdentity(
+      request.method(),
+      request.url(),
+      new URL(request.frame().url()).origin,
+      endpoint,
+    );
+  } catch {
+    return null;
+  }
+}
+
 function isProfileRequest(request: Request) {
   try {
     const parsed = new URL(request.url());
@@ -249,8 +287,10 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
   const testName = testInfo.titlePath.join(' > ');
   const mutations = new Set<Request>();
   const apiGets = new Set<Request>();
+  const chartFallbacks = new Map<string, Diagnostic>();
   pendingMutatingRequests.set(page, mutations);
   pendingApiGetRequests.set(page, apiGets);
+  pendingChartFallbackAborts.set(page, chartFallbacks);
   page.on('request', (request) => {
     const logoutObservation = activeLogoutObservations.get(page);
     if (
@@ -283,7 +323,17 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
     recordUnhandled(testName, url, detail);
   });
   page.on('response', (response) => {
-    if (response.status() < 400) return;
+    if (response.ok()) {
+      const fallbackKey = stockChartFallbackKey(response.request(), 'chart');
+      const candidate = fallbackKey ? chartFallbacks.get(fallbackKey) : undefined;
+      if (fallbackKey && candidate) {
+        const index = diagnostics.unexpected_http_errors.indexOf(candidate);
+        if (index >= 0) diagnostics.unexpected_http_errors.splice(index, 1);
+        diagnostics.expected_chart_fallback_aborts.push(candidate);
+        chartFallbacks.delete(fallbackKey);
+      }
+      return;
+    }
     const authFault = activeAuthFaultObservations.get(page);
     if (authFault && authFault.kind !== 'timeout' && isExpectedAuthFault(response.request(), authFault)) {
       authFault.candidates.push({
@@ -328,6 +378,14 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
     const routeObservation = activeRouteTransitionObservations.get(page);
     if (routeObservation && isExpectedRouteTransitionAbort(request, routeObservation)) {
       routeObservation.candidates.push(diagnostic);
+      return;
+    }
+    const fallbackKey = request.failure()?.errorText === 'net::ERR_ABORTED'
+      ? stockChartFallbackKey(request, 'candles')
+      : null;
+    if (fallbackKey && !chartFallbacks.has(fallbackKey)) {
+      chartFallbacks.set(fallbackKey, diagnostic);
+      diagnostics.unexpected_http_errors.push(diagnostic);
       return;
     }
     diagnostics.unexpected_http_errors.push(diagnostic);
@@ -674,6 +732,17 @@ test('logout abort proof keeps session-scoped account reads exact and query-free
   expect(isLogoutScopedReadIdentity('GET', `${origin}/api/accounts/read-only/toss/history`, origin)).toBe(false);
   expect(isLogoutScopedReadIdentity('POST', `${origin}/api/accounts/read-only/toss`, origin)).toBe(false);
   expect(isLogoutScopedReadIdentity('GET', 'https://other.example.test/api/accounts/read-only/toss', origin)).toBe(false);
+});
+
+test('stock chart fallback identity is exact and read-only', () => {
+  const origin = 'https://staging.example.test';
+  expect(stockChartFallbackKeyIdentity('GET', `${origin}/api/stocks/005930/candles?tf=5m`, origin, 'candles')).toBe('005930:5m');
+  expect(stockChartFallbackKeyIdentity('GET', `${origin}/api/stocks/005930/chart?tf=5m`, origin, 'chart')).toBe('005930:5m');
+  expect(stockChartFallbackKeyIdentity('POST', `${origin}/api/stocks/005930/candles?tf=5m`, origin, 'candles')).toBeNull();
+  expect(stockChartFallbackKeyIdentity('GET', `${origin}/api/stocks/005930/candles?tf=5m&refresh=1`, origin, 'candles')).toBeNull();
+  expect(stockChartFallbackKeyIdentity('GET', `${origin}/api/stocks/005930/candles`, origin, 'candles')).toBeNull();
+  expect(stockChartFallbackKeyIdentity('GET', 'https://other.example.test/api/stocks/005930/candles?tf=5m', origin, 'candles')).toBeNull();
+  expect(stockChartFallbackKeyIdentity('GET', `${origin}/api/stocks/005930/quote?tf=5m`, origin, 'candles')).toBeNull();
 });
 
 test.describe('real staging release readiness', () => {
