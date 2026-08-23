@@ -7,6 +7,7 @@ import {
   deliverMemberHoldingTelegramAlert,
 } from './member-holdings-telegram-alert.service';
 import { defaultTelegramAlertPolicy } from './telegram-alert-policy.service';
+import { telegramDestinationChatId } from './telegram-intelligence-worker.service';
 import {
   clearTelegramAlertState,
   sendTelegramAlert,
@@ -75,6 +76,38 @@ test('public and member Telegram transports always request protected content', a
     else process.env.TELEGRAM_BOT_TOKEN = originalToken;
     if (originalChat == null) delete process.env.TELEGRAM_CHAT_ID;
     else process.env.TELEGRAM_CHAT_ID = originalChat;
+  }
+});
+
+test('new stock and crypto routing never falls back to the legacy default room', () => {
+  const originalDefault = process.env.TELEGRAM_CHAT_ID;
+  const originalStock = process.env.TELEGRAM_STOCK_CHAT_ID;
+  const originalCrypto = process.env.TELEGRAM_CRYPTO_CHAT_ID;
+  const originalPersonal = process.env.TELEGRAM_PERSONAL_CHAT_ID;
+  try {
+    process.env.TELEGRAM_CHAT_ID = 'legacy-stock-ai-signal-room';
+    delete process.env.TELEGRAM_STOCK_CHAT_ID;
+    delete process.env.TELEGRAM_CRYPTO_CHAT_ID;
+    delete process.env.TELEGRAM_PERSONAL_CHAT_ID;
+    assert.equal(telegramDestinationChatId('STOCK_ROOM'), null);
+    assert.equal(telegramDestinationChatId('CRYPTO_ROOM'), null);
+    assert.equal(telegramDestinationChatId('PERSONAL'), null);
+
+    process.env.TELEGRAM_STOCK_CHAT_ID = 'seungjae-stock-room';
+    process.env.TELEGRAM_CRYPTO_CHAT_ID = 'seungjae-crypto-room';
+    process.env.TELEGRAM_PERSONAL_CHAT_ID = 'admin-personal-room';
+    assert.equal(telegramDestinationChatId('STOCK_ROOM'), 'seungjae-stock-room');
+    assert.equal(telegramDestinationChatId('CRYPTO_ROOM'), 'seungjae-crypto-room');
+    assert.equal(telegramDestinationChatId('PERSONAL'), 'admin-personal-room');
+  } finally {
+    if (originalDefault == null) delete process.env.TELEGRAM_CHAT_ID;
+    else process.env.TELEGRAM_CHAT_ID = originalDefault;
+    if (originalStock == null) delete process.env.TELEGRAM_STOCK_CHAT_ID;
+    else process.env.TELEGRAM_STOCK_CHAT_ID = originalStock;
+    if (originalCrypto == null) delete process.env.TELEGRAM_CRYPTO_CHAT_ID;
+    else process.env.TELEGRAM_CRYPTO_CHAT_ID = originalCrypto;
+    if (originalPersonal == null) delete process.env.TELEGRAM_PERSONAL_CHAT_ID;
+    else process.env.TELEGRAM_PERSONAL_CHAT_ID = originalPersonal;
   }
 });
 
