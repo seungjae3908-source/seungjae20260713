@@ -24,6 +24,70 @@ function row(symbol, candidates) {
   });
 }
 
+const promotionPolicy = Object.freeze({
+  status: "empirically_calibrated",
+  minTrials: 3,
+  maxPbo: 0.25,
+  minDsrProbability: 0.95,
+  minOosTrades: 40,
+  minWalkForwardWindows: 4,
+  minShadowSettled: 300,
+  minShadowElapsedMs: 28 * 24 * 60 * 60 * 1000,
+  minPaperSettled: 200,
+  minPaperProfitFactor: 1.2,
+  minPaperExpectancyCiLower: 0,
+  maxPaperMdd: 0.15,
+});
+
+function promotionEvidence(strategyFingerprint) {
+  return Object.freeze({
+    strategyFingerprint,
+    backtest: Object.freeze({
+      strategyFingerprint,
+      lineageValid: true,
+      finalHoldoutRetuned: false,
+      finalHoldoutStatus: "PASS",
+      oos: Object.freeze({ tradeCount: 80, expectancy: 0.01 }),
+      walkForward: Object.freeze({ windows: 8, stabilityPass: true }),
+      costStress: Object.freeze({ passed: true }),
+      regime: Object.freeze({ passed: true }),
+      crossSymbol: Object.freeze({ passed: true }),
+    }),
+    selectionBias: Object.freeze({
+      strategyFingerprint,
+      registryComplete: true,
+      trialCount: 30,
+      pbo: 0.1,
+      dsrProbability: 0.98,
+      forwardEvidenceUsedForSelection: false,
+    }),
+    shadow: Object.freeze({
+      strategyFingerprint,
+      lineageValid: true,
+      frozenIdentity: true,
+      naturalScheduleObserved: true,
+      forwardRetuned: false,
+      settled: 400,
+      elapsedMs: 35 * 24 * 60 * 60 * 1000,
+      neutralCollapse: false,
+      directionalQualityPass: true,
+    }),
+    paper: Object.freeze({
+      strategyFingerprint,
+      lineageValid: true,
+      scheduleActive: true,
+      naturalCronObserved: true,
+      settlementLinked: true,
+      settledTrades: 250,
+      profitFactor: 1.3,
+      expectancyCiLower: 0.001,
+      maximumDrawdown: 0.09,
+      actualOrders: 0,
+      privateAccountRequests: 0,
+    }),
+  });
+}
+
 test("cross-symbol aggregation requires common parameter candidates and penalizes one-symbol dependence", () => {
   const grouped = aggregateMarketGroupCandidates([
     row("BTCUSDT", [candidate("same", { symbolReturn: 0.08, quality: 90 }), candidate("btc-only", { symbolReturn: 0.2 })]),
@@ -40,6 +104,8 @@ test("cross-symbol aggregation requires common parameter candidates and penalize
   assert.equal(item.qualityScoreBeforeSymbolPenalty, 85);
   assert.equal(item.symbolDependencyPenaltyPoints, 5);
   assert.equal(item.qualityScore, 80);
+  assert.equal(item.promotionAssessment.status, "RESEARCH_HOLD");
+  assert.deepEqual(item.promotionAssessment.reasons, ["promotion:unified_evidence_not_supplied"]);
 });
 
 test("group stays research_hold when a required symbol dataset is missing", () => {
@@ -74,4 +140,24 @@ test("any per-symbol research_hold prevents group eligibility for final holdout"
     requiredSymbolsByGroup: { CRYPTO_FUTURES_SWING_LONG: ["BTCUSDT", "ETHUSDT"] },
   });
   assert.equal(grouped.CRYPTO_FUTURES_SWING_LONG.candidates[0].researchStatus, "research_hold");
+});
+
+test("canonical ranking invokes the unified Backtest+PBO/DSR+Shadow+Paper promotion gate", () => {
+  const strategyFingerprint = "immutable-strategy-fingerprint";
+  const grouped = aggregateMarketGroupCandidates([
+    row("BTCUSDT", [candidate("same", { symbolReturn: 0.1, quality: 90, trades: 60 })]),
+    row("ETHUSDT", [candidate("same", { symbolReturn: 0.08, quality: 88, trades: 60 })]),
+  ], {
+    requiredSymbolsByGroup: { CRYPTO_FUTURES_SWING_LONG: ["BTCUSDT", "ETHUSDT"] },
+    promotionPolicy,
+    promotionEvidenceByCandidate: {
+      "CRYPTO_FUTURES_SWING_LONG:same": promotionEvidence(strategyFingerprint),
+    },
+  });
+  const assessment = grouped.CRYPTO_FUTURES_SWING_LONG.candidates[0].promotionAssessment;
+  assert.equal(assessment.strategyFingerprint, strategyFingerprint);
+  assert.equal(assessment.status, "PROMOTION_REVIEW_READY");
+  assert.equal(assessment.promotionEligible, true);
+  assert.equal(assessment.safety.liveTradingAllowed, false);
+  assert.equal(assessment.safety.orderAuthority, false);
 });

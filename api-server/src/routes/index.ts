@@ -1,6 +1,7 @@
 import { Router, type IRouter } from 'express';
 import healthRouter from './health';
 import marketRouter from './market';
+import marketSummaryAvailabilityRouter from './market-summary-availability';
 import marketInformationRouter from './market-information';
 import newsRouter from './news.route';
 import providerDebugRouter from './provider-debug';
@@ -13,6 +14,7 @@ import adminRouter from './admin';
 import secRouter from './sec.routes';
 import cryptoRouter from './crypto';
 import futuresMarketDataRouter from './futures-market-data';
+import stockOrderbookRouter from './stock-orderbook';
 import tradingRiskRouter from './trading-risk';
 import backtestsRouter from './backtests';
 import paperTradingRouter from './paper-trading';
@@ -22,8 +24,18 @@ import aiChatRouter from './ai-chat';
 import tradeAutomationRouter from './trade-automation';
 import boundedMarketScanRouter from './bounded-market-scan';
 import cryptoSignalScanRouter from './crypto-signal-scan';
+import strategyPromotionRouter from './strategy-promotion';
+import portfolioIntelligenceRouter from './portfolio-intelligence';
 import unifiedSearchRouter from './unified-search';
 import accountConnectionsRouter from './account-connections';
+import { createAccountReadonlyRouter, accountReadFlags } from '../features/account-readonly/account-readonly.route';
+import { AccountReadonlyService } from '../features/account-readonly/account-readonly.service';
+import { createVaultBackedAccountReaders } from '../features/account-readonly/account-readonly.runtime';
+import {
+  manualPortfolioNotificationBridge,
+  telegramWebhookRouter,
+  userBrokerTelegramRouter,
+} from './user-broker-telegram';
 import {
   requireAdmin,
   requireAuthenticated,
@@ -40,22 +52,38 @@ router.get('/', (_req, res) => {
 // point resolves the current database profile before checking capabilities.
 router.use('/', healthRouter);
 
+// Telegram webhook is the only unauthenticated integration endpoint. It accepts
+// only Telegram-secret-authenticated /start updates containing a short-lived,
+// one-time, user-bound token; it never trusts a browser-supplied chat id.
+router.use('/telegram/webhook', telegramWebhookRouter);
+
 // Admin routes perform their own authenticated + admin capability checks.
 router.use('/admin', adminRouter);
 
 router.use(requireAuthenticated);
 
-// Brokerage/exchange account connectivity is intentionally read-only and
-// admin-only because credentials are server-scoped. Existing order/cancel/
-// transfer endpoints remain blocked below and are not reachable through this
-// router.
-router.use('/account-connections', requireAdmin, accountConnectionsRouter);
+// Broker connectivity is metadata-only in Release V4.2. It reads only the
+// authenticated user's vault connection metadata and never falls back to a
+// server credential or sends a private provider request.
+router.use('/account-connections', accountConnectionsRouter);
+// Private account reads are a separate, authenticated, read-only surface. All
+// providers fail closed unless their explicit feature flag is exactly `true`.
+// Upbit and Bitget readers load only the authenticated user's encrypted vault
+// credentials and use a GET-only, host/path allowlisted transport. Toss stays
+// fail-closed until its separate credential contract is wired and verified.
+router.use(
+  '/accounts/read-only',
+  requireCapability('canAccessBasicInfo'),
+  createAccountReadonlyRouter(new AccountReadonlyService(createVaultBackedAccountReaders(), accountReadFlags())),
+);
 
 // Canonical AI Scanner routes must be registered before the legacy market
 // router. This makes /api/market/scan authenticated, capability protected,
 // bounded and cancellation aware. The legacy handler is no longer reachable.
 router.use('/market/scan', boundedMarketScanRouter);
 router.use('/scanner/crypto', cryptoSignalScanRouter);
+router.use('/strategy-promotion', requireCapability('canAccessBacktests'));
+router.use('/', strategyPromotionRouter);
 
 const privateExchangeDisabled = (_req: unknown, res: any) => res.status(403).json({
   ok: false,
@@ -83,6 +111,20 @@ router.use('/market-information/coins-spot', requireCapability('canAccessSpot'))
 router.use('/market-information/coins-futures', requireCapability('canAccessFutures'));
 router.use('/market-information', requireCapability('canAccessBasicInfo'), marketInformationRouter);
 
+// Canonical orderbook is public-provider/read-only, but still respects the
+// same member capability boundary as the underlying market surface.
+router.use('/orderbook', (req, res, next) => {
+  const assetClass = String(req.query.assetClass ?? '').trim().toLowerCase();
+  const capability = assetClass === 'crypto_futures'
+    ? 'canAccessFutures'
+    : assetClass === 'crypto_spot'
+      ? 'canAccessSpot'
+      : 'canAccessBasicInfo';
+  requireCapability(capability)(req, res, next);
+});
+router.use('/stocks/:ticker/orderbook', requireCapability('canAccessBasicInfo'));
+router.use('/', stockOrderbookRouter);
+
 router.use('/crypto/spot', requireCapability('canAccessSpot'));
 router.use('/crypto/futures', requireCapability('canAccessFutures'));
 router.use('/crypto', requireCapability('canAccessBasicInfo'));
@@ -99,13 +141,22 @@ router.use('/', backtestsRouter);
 router.use('/paper-trading', requireCapability('canAccessPaperTrading'));
 router.use('/', paperTradingRouter);
 router.use('/paper-journal', requireCapability('canAccessJournalSync'));
+router.use('/paper-journal/sync', manualPortfolioNotificationBridge);
 router.use('/', paperJournalRouter);
 router.use('/trade-automation', requireCapability('canPlaceOrders'));
 router.use('/trade-automation', tradeAutomationRouter);
+router.use('/user-integrations', requireCapability('canConnectPersonalTelegram'));
+router.use('/user-integrations', userBrokerTelegramRouter);
 
 router.use(requireCapability('canAccessBasicInfo'));
+router.use('/', portfolioIntelligenceRouter);
 router.use('/', unifiedSearchRouter);
 router.use('/', aiChatRouter);
+// Normalize only the market-summary provider availability envelope before the
+// legacy market router writes its response. Unexpected backend 5xx responses
+// remain non-2xx; only the known public-provider-unavailable state is carried
+// as an explicit fail-closed dataState without browser-visible fake prices.
+router.use('/market/summary', marketSummaryAvailabilityRouter);
 router.use('/', marketRouter);
 router.use('/', newsRouter);
 // The safe rankings route must run before the legacy Kiwoom router. It keeps

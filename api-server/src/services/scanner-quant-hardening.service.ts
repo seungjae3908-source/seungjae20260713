@@ -1,5 +1,6 @@
 import type { Candle } from '../sample/types';
 import { evaluateScannerDataQuality } from './scanner-data-quality.service';
+import { applyScannerMarketProfile, type ScannerMarketProfile } from './scanner-market-profile-overlay.service';
 import {
   runScannerQuantStrategy,
   scannerStrategyForTimeframe,
@@ -28,6 +29,22 @@ const EMPTY_PRICE_PLAN: ScannerPricePlan = {
   riskReward: null,
 };
 
+// Live signal quality should validate the bars that can actually affect the
+// current decision. Long-history integrity is validated separately by the
+// Research Lab over the complete dataset. Keeping a bounded live window avoids
+// allowing one ancient corporate-action/malformed bar outside every strategy
+// lookback to invalidate today's otherwise healthy market data.
+const LIVE_QUALITY_WINDOW: Record<ScannerStrategyMode, number> = {
+  scalping: 240,
+  swing: 320,
+  position: 400,
+};
+
+function recentQualityCandles(candles: Candle[], mode: ScannerStrategyMode): Candle[] {
+  const limit = LIVE_QUALITY_WINDOW[mode];
+  return candles.length > limit ? candles.slice(-limit) : candles;
+}
+
 function completenessFromMarketData(
   card: ScannerSignalCard,
   candleCount: number,
@@ -45,12 +62,38 @@ function evidenceLabels(evidence: ScannerEvidence[], status: ScannerEvidence['st
   return [...new Set(evidence.filter((item) => item.status === status).map((item) => item.label))];
 }
 
+function marketProfileFor(card: ScannerSignalCard): ScannerMarketProfile {
+  if (card.assetClass === 'coin_spot') return 'CRYPTO_SPOT';
+  if (card.assetClass === 'coin_futures') return 'CRYPTO_FUTURES';
+  return card.market === 'US' ? 'US_STOCK' : 'KR_STOCK';
+}
+
+function numberFromReason(reason: string | undefined): number | null {
+  if (!reason) return null;
+  const match = reason.match(/-?\d+(?:\.\d+)?/);
+  if (!match) return null;
+  const value = Number(match[0]);
+  return Number.isFinite(value) ? value : null;
+}
+
+function futuresPublicContext(card: ScannerSignalCard): { fundingRate: number | null; openInterest: number | null } {
+  if (card.assetClass !== 'coin_futures') return { fundingRate: null, openInterest: null };
+  const evidence = card.evidence.find((item) => item.key === 'funding-open-interest');
+  const fundingPercent = numberFromReason(evidence?.reasons.find((reason) => reason.startsWith('펀딩비 ')));
+  const openInterest = numberFromReason(evidence?.reasons.find((reason) => reason.startsWith('미결제약정 ')));
+  return {
+    fundingRate: fundingPercent == null ? null : fundingPercent / 100,
+    openInterest,
+  };
+}
+
 export function applyScannerQuantHardening(input: ScannerQuantHardeningInput): ScannerSignalCard {
   const strategyMode = input.strategyMode ?? scannerStrategyForTimeframe(input.timeframe);
+  const qualityCandles = recentQualityCandles(input.candles, strategyMode);
   const quality = evaluateScannerDataQuality({
     symbol: input.card.symbol,
     timeframe: input.timeframe,
-    candles: input.candles,
+    candles: qualityCandles,
     now: input.now,
     marketClosed: input.marketClosed,
     tradingHalt: input.tradingHalt,
@@ -69,7 +112,7 @@ export function applyScannerQuantHardening(input: ScannerQuantHardeningInput): S
     dataQuality: quality,
     allowShort: input.allowShort ?? input.card.assetClass === 'coin_futures',
   });
-  const dataCompleteness = completenessFromMarketData(input.card, input.candles.length, quality.score);
+  const dataCompleteness = completenessFromMarketData(input.card, qualityCandles.length, quality.score);
   const directionChanged = quant.direction !== input.card.direction;
   const dataTrustedForPlan = quality.state !== 'DATA_UNTRUSTED' && quality.strongSignalAllowed;
   const pricePlan = directionChanged || !dataTrustedForPlan ? EMPTY_PRICE_PLAN : input.card.pricePlan;
@@ -107,7 +150,7 @@ export function applyScannerQuantHardening(input: ScannerQuantHardeningInput): S
     ...input.card.evidence,
     {
       key: `quant-${strategyMode}`,
-      label: strategyMode === 'scalping' ? '단타 Quant 종합' : '스윙 Quant 종합',
+      label: strategyMode === 'scalping' ? '단타 Quant 종합' : strategyMode === 'position' ? '중장기 Quant 종합' : '스윙 Quant 종합',
       status: strongSignalEligible ? 'matched' : quality.state === 'DATA_UNTRUSTED' ? 'unverified' : 'not_matched',
       source: `scanner-${strategyMode}-engine`,
       observedAt: input.card.observedAt,
@@ -121,11 +164,11 @@ export function applyScannerQuantHardening(input: ScannerQuantHardeningInput): S
       observedAt: quality.lastTimestamp,
       reasons: quality.issues.length
         ? quality.issues.map((issue) => `${issue.code}: ${issue.message}`)
-        : ['timestamp·OHLC·volume·gap·duplicate 검증을 통과했습니다.'],
+        : [`최근 ${qualityCandles.length}개 전략 관련 캔들의 timestamp·OHLC·volume·gap·duplicate 검증을 통과했습니다.`],
     },
   ];
 
-  return {
+  const hardened: ScannerSignalCard = {
     ...input.card,
     direction: quant.direction,
     pricePlan,
@@ -150,4 +193,13 @@ export function applyScannerQuantHardening(input: ScannerQuantHardeningInput): S
     notMatched: evidenceLabels(evidence, 'not_matched'),
     unverified: evidenceLabels(evidence, 'unverified'),
   };
+  const futuresContext = futuresPublicContext(hardened);
+  return applyScannerMarketProfile({
+    card: hardened,
+    profile: marketProfileFor(hardened),
+    candles: input.candles,
+    strategyMode,
+    fundingRate: futuresContext.fundingRate,
+    openInterest: futuresContext.openInterest,
+  });
 }

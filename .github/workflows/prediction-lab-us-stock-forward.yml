@@ -1,0 +1,176 @@
+name: Prediction Lab US Stock Forward Validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/prediction-lab-us-stock-forward.yml
+      - market-prediction-lab/package.json
+      - market-prediction-lab/src/us-stock-forward-candidate.js
+      - market-prediction-lab/src/us-stock-forward-validation.js
+      - market-prediction-lab/src/us-stock-forward-pnl-shadow.js
+      - market-prediction-lab/src/us-stock-research-promotion-gate.js
+      - market-prediction-lab/src/stock-universe-bias-audit.js
+      - market-prediction-lab/src/yahoo-stock-history.js
+      - market-prediction-lab/src/stock-regime-router-optimizer.js
+      - market-prediction-lab/scripts/run-us-stock-forward-cycle.js
+      - market-prediction-lab/tests/us-stock-forward-validation.test.js
+      - market-prediction-lab/tests/us-stock-forward-pnl-shadow.test.js
+      - market-prediction-lab/tests/us-stock-research-promotion-gate.test.js
+      - market-prediction-lab/tests/stock-universe-bias-audit.test.js
+  schedule:
+    - cron: "30 2 * * 2-6"
+  workflow_dispatch:
+    inputs:
+      research_ref:
+        description: Exact research commit/ref to validate
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: prediction-lab-us-stock-forward
+  cancel-in-progress: false
+
+env:
+  RESEARCH_BRANCH: agent/crypto-williams-atr-v1
+  ARTIFACT_NAME: prediction-lab-us-stock-forward-state
+
+jobs:
+  forward-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Resolve immutable research ref
+        id: research
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+          INPUT_REF: ${{ inputs.research_ref }}
+        run: |
+          ref="$PR_SHA"
+          if [ -z "$ref" ]; then ref="$INPUT_REF"; fi
+          if [ -z "$ref" ] && [ "$EVENT_NAME" = "schedule" ]; then ref="$RESEARCH_BRANCH"; fi
+          if [ -z "$ref" ]; then ref="$GITHUB_SHA"; fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout isolated research revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.research.outputs.ref }}
+          persist-credentials: false
+
+      - name: Record immutable research SHA
+        id: sha
+        shell: bash
+        run: echo "value=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Locate previous successful forward artifact
+        id: predecessor
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          run_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/prediction-lab-us-stock-forward.yml/runs?status=success&per_page=50" --jq "[.workflow_runs[] | select(.id != ($CURRENT_RUN_ID|tonumber)) | .id][0] // empty")"
+          if [ -z "$run_id" ]; then
+            echo "run_id=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          artifact_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts" --jq "[.artifacts[] | select(.name == \"$ARTIFACT_NAME\" and .expired == false) | .id][0] // empty")"
+          if [ -z "$artifact_id" ]; then
+            echo "run_id=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "artifact_id=$artifact_id" >> "$GITHUB_OUTPUT"
+
+      - name: Download previous forward artifact
+        if: steps.predecessor.outputs.run_id != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: prediction-lab-us-stock-forward-state
+          path: ${{ runner.temp }}/us-stock-forward-previous
+          run-id: ${{ steps.predecessor.outputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Restore verified predecessor state
+        if: steps.predecessor.outputs.run_id != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs=require('fs'); const crypto=require('crypto');
+          const root=process.env.RUNNER_TEMP+'/us-stock-forward-previous';
+          const manifest=JSON.parse(fs.readFileSync(root+'/us-stock-forward-provenance.json','utf8'));
+          const digest=(p)=>crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+          if(manifest.branchWrite!==false || manifest.liveOrderAllowed!==false || manifest.privateAccountRequestAllowed!==false) throw new Error('Unsafe US stock forward predecessor provenance.');
+          if(digest(root+'/us-stock-forward-state.json')!==manifest.stateSha256) throw new Error('US stock forward predecessor state SHA-256 mismatch.');
+          if(digest(root+'/us-stock-forward-summary.json')!==manifest.summarySha256) throw new Error('US stock forward predecessor summary SHA-256 mismatch.');
+          if(manifest.pnlStateSha256){
+            if(!fs.existsSync(root+'/us-stock-forward-pnl-state.json') || digest(root+'/us-stock-forward-pnl-state.json')!==manifest.pnlStateSha256) throw new Error('US stock forward predecessor PnL state SHA-256 mismatch.');
+            if(!fs.existsSync(root+'/us-stock-forward-pnl-summary.json') || digest(root+'/us-stock-forward-pnl-summary.json')!==manifest.pnlSummarySha256) throw new Error('US stock forward predecessor PnL summary SHA-256 mismatch.');
+          }
+          NODE
+          mkdir -p market-prediction-lab/docs
+          cp "$RUNNER_TEMP/us-stock-forward-previous/us-stock-forward-state.json" market-prediction-lab/docs/
+          cp "$RUNNER_TEMP/us-stock-forward-previous/us-stock-forward-summary.json" market-prediction-lab/docs/
+          if [ -f "$RUNNER_TEMP/us-stock-forward-previous/us-stock-forward-pnl-state.json" ]; then cp "$RUNNER_TEMP/us-stock-forward-previous/us-stock-forward-pnl-state.json" market-prediction-lab/docs/; fi
+          if [ -f "$RUNNER_TEMP/us-stock-forward-previous/us-stock-forward-pnl-summary.json" ]; then cp "$RUNNER_TEMP/us-stock-forward-previous/us-stock-forward-pnl-summary.json" market-prediction-lab/docs/; fi
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Validate isolated prediction lab
+        working-directory: market-prediction-lab
+        run: npm run validate
+
+      - name: Verify US stock forward bias PnL and promotion guards
+        working-directory: market-prediction-lab
+        run: node --test tests/us-stock-forward-validation.test.js tests/us-stock-forward-pnl-shadow.test.js tests/us-stock-research-promotion-gate.test.js tests/stock-universe-bias-audit.test.js
+
+      - name: Advance forward-only public-data state
+        working-directory: market-prediction-lab
+        run: node scripts/run-us-stock-forward-cycle.js
+
+      - name: Build immutable forward provenance
+        shell: bash
+        env:
+          RESEARCH_SHA: ${{ steps.sha.outputs.value }}
+          PREDECESSOR_RUN_ID: ${{ steps.predecessor.outputs.run_id }}
+          PREDECESSOR_ARTIFACT_ID: ${{ steps.predecessor.outputs.artifact_id }}
+        run: |
+          node <<'NODE'
+          const fs=require('fs'); const crypto=require('crypto');
+          const root='market-prediction-lab/docs';
+          const digest=(p)=>crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+          const manifest={schemaVersion:3,researchCodeSha:process.env.RESEARCH_SHA,predecessorRunId:process.env.PREDECESSOR_RUN_ID||null,predecessorArtifactId:process.env.PREDECESSOR_ARTIFACT_ID||null,stateSha256:digest(root+'/us-stock-forward-state.json'),summarySha256:digest(root+'/us-stock-forward-summary.json'),pnlStateSha256:digest(root+'/us-stock-forward-pnl-state.json'),pnlSummarySha256:digest(root+'/us-stock-forward-pnl-summary.json'),promotionSha256:digest(root+'/us-stock-research-promotion.json'),branchWrite:false,liveOrderAllowed:false,privateAccountRequestAllowed:false,createdAt:new Date().toISOString()};
+          fs.writeFileSync(root+'/us-stock-forward-provenance.json',JSON.stringify(manifest,null,2)+'\n');
+          NODE
+
+      - name: Upload immutable forward evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: prediction-lab-us-stock-forward-state
+          path: |
+            market-prediction-lab/docs/us-stock-forward-state.json
+            market-prediction-lab/docs/us-stock-forward-summary.json
+            market-prediction-lab/docs/us-stock-forward-pnl-state.json
+            market-prediction-lab/docs/us-stock-forward-pnl-summary.json
+            market-prediction-lab/docs/us-stock-research-promotion.json
+            market-prediction-lab/docs/us-stock-forward-provenance.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Assert immutable checkout HEAD
+        shell: bash
+        env:
+          RESEARCH_SHA: ${{ steps.sha.outputs.value }}
+        run: test "$(git rev-parse HEAD)" = "$RESEARCH_SHA"

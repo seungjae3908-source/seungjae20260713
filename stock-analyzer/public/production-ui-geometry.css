@@ -1,0 +1,55 @@
+:root {
+  --app-bottom-nav-reserve: calc(4rem + env(safe-area-inset-bottom));
+}
+
+/*
+ * BottomNav is fixed to the viewport, while route pages live inside the
+ * AppShell's second child. When a BottomNav is actually rendered, reserve its
+ * viewport band at the AppShell level so page controls cannot sit underneath
+ * the fixed navigation. Login/admin/install screens do not render BottomNav,
+ * so they keep the full viewport height automatically.
+ */
+#root:has(nav[aria-label="주요 메뉴"]) > div > div:nth-child(2)[class*="max-w-screen"] {
+  height: calc(100dvh - var(--app-bottom-nav-reserve));
+}
+
+/* Production QA found exactly two undersized AI Chart controls. */
+button[aria-label="심볼 지우기"] {
+  display: inline-flex;
+  min-width: 2rem;
+  min-height: 2rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+}
+
+button[data-testid="load-multi-timeframe"] {
+  min-height: 2rem;
+}
+
+/*
+ * The read-only orderbook opener is viewport-fixed, while mobile BottomNav is
+ * laid out inside the shortened AppShell. Reserve both bands so the opener
+ * cannot be covered by navigation on 320-1023px viewports.
+ */
+@media (max-width: 1023px) {
+  /* AppShell already reserves the mobile navigation band for this workspace. */
+  [data-testid="technical-workspace"] {
+    padding-bottom: 0;
+  }
+
+  /* Give the mobile tabpanel a definite flex height so its scanner can scroll. */
+  [data-testid="technical-workspace"] > div:has(> [role="tabpanel"]) {
+    display: flex;
+    flex-direction: column;
+  }
+
+  button[aria-label="읽기 전용 호가창 열기"] {
+    bottom: calc(
+      var(--app-bottom-nav-reserve)
+      + 4.5rem
+      + env(safe-area-inset-bottom)
+    );
+  }
+}

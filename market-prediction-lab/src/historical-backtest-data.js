@@ -19,10 +19,8 @@ export const BITGET_STANDARD_TAKER_RESEARCH_COSTS = Object.freeze({
     taxRate: 0,
     slippageRate: 0.0002,
     spreadRate: 0.0002,
-    // One closed bar plus a small adverse drift is an explicit execution-latency
-    // approximation. It is research provenance, not a historical venue claim.
-    latencyBars: 1,
-    latencyDriftRate: 0.0001,
+    latencyBars: 0,
+    latencyDriftRate: 0,
   }),
   CRYPTO_FUTURES: Object.freeze({
     entryFeeRate: 0.0006,
@@ -30,10 +28,8 @@ export const BITGET_STANDARD_TAKER_RESEARCH_COSTS = Object.freeze({
     taxRate: 0,
     slippageRate: 0.0002,
     spreadRate: 0.0002,
-    // One closed bar plus a small adverse drift is an explicit execution-latency
-    // approximation. It is research provenance, not a historical venue claim.
-    latencyBars: 1,
-    latencyDriftRate: 0.0001,
+    latencyBars: 0,
+    latencyDriftRate: 0,
   }),
 });
 

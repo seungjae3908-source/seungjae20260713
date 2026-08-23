@@ -1,0 +1,18 @@
+{
+  "name": "Investment Research Lab",
+  "short_name": "Research Lab",
+  "description": "Paper, Shadow, Backtest 연구 진행상태를 확인하는 읽기 전용 투자 연구 대시보드",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#070b14",
+  "theme_color": "#0b1020",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -3,11 +3,8 @@ import { TradeAutomationService } from './trade-automation.service';
 import { decryptTradingCredentials } from './trade-credential-vault.service';
 import {
   prepareBitgetOrderQuery,
-  prepareKiwoomToken,
-  prepareKiwoomUnfilled,
   prepareUpbitOrderQuery,
   type BitgetCredentials,
-  type KiwoomCredentials,
   type PreparedExchangeRequest,
   type UpbitCredentials,
 } from './trade-exchange-adapters.service';
@@ -23,9 +20,9 @@ type ExchangePayload = Record<string, unknown>;
 const BASE_URLS = {
   bitget: 'https://api.bitget.com',
   upbit: 'https://api.upbit.com',
-  kiwoom: 'https://api.kiwoom.com',
-  kiwoomMock: 'https://mockapi.kiwoom.com',
 };
+
+const QUANTITY_EPSILON = 1e-12;
 
 function isRecord(value: unknown): value is ExchangePayload {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -105,16 +102,6 @@ function upbitData(payload: ExchangePayload, expectedIdentifier: string) {
   return payload;
 }
 
-function kiwoomData(payload: ExchangePayload) {
-  const rawCode = payload.return_code ?? payload.returnCode ?? payload.code;
-  if (rawCode === null || rawCode === undefined || String(rawCode).trim() === '') {
-    throw new Error('KIWOOM_INVALID_RESPONSE');
-  }
-  const code = String(rawCode);
-  if (!['0', '00000'].includes(code)) throw new Error(`KIWOOM_${code}`);
-  return payload;
-}
-
 function stateFromBitget(status: string, filledQuantity: number): TradingExchangeOrderSnapshot['state'] | null {
   if (['live', 'new', 'init', 'pending', 'accepted'].includes(status)) {
     return filledQuantity > 0 ? 'PARTIALLY_FILLED' : 'ACCEPTED';
@@ -147,8 +134,11 @@ function fillFromRow(row: ExchangePayload, fallbackId: string, fallbackTime: str
   };
 }
 
-function bitgetSnapshot(payload: ExchangePayload, order: TradingOrder): TradingExchangeOrderSnapshot {
+function bitgetSnapshot(payload: ExchangePayload, plan: TradingPlan, order: TradingOrder): TradingExchangeOrderSnapshot {
   const row = bitgetData(payload, order.clientOrderId);
+  if (text(row.symbol)?.toUpperCase() !== plan.symbol.toUpperCase()) {
+    throw new Error('BITGET_ORDER_IDENTITY_MISMATCH');
+  }
   const providerStatusCode = String(row.status ?? row.state ?? '').toLowerCase();
   const requestedQuantity = finiteNumber(row.size ?? row.quantity ?? row.qty) ?? order.requestedQuantity;
   const filledQuantity = finiteNumber(row.baseVolume ?? row.filledQty ?? row.filledQuantity ?? row.accBaseVolume) ?? 0;
@@ -175,8 +165,10 @@ function bitgetSnapshot(payload: ExchangePayload, order: TradingOrder): TradingE
   };
 }
 
-function upbitSnapshot(payload: ExchangePayload, order: TradingOrder): TradingExchangeOrderSnapshot {
+function upbitSnapshot(payload: ExchangePayload, plan: TradingPlan, order: TradingOrder): TradingExchangeOrderSnapshot {
   const row = upbitData(payload, order.clientOrderId);
+  const expectedMarket = `KRW-${plan.symbol.toUpperCase().replace(/^KRW-/, '')}`;
+  if (text(row.market)?.toUpperCase() !== expectedMarket) throw new Error('UPBIT_ORDER_IDENTITY_MISMATCH');
   const providerStatusCode = String(row.state ?? '').toLowerCase();
   const requestedQuantity = finiteNumber(row.volume) ?? order.requestedQuantity;
   const filledQuantity = finiteNumber(row.executed_volume) ?? 0;
@@ -206,46 +198,75 @@ function upbitSnapshot(payload: ExchangePayload, order: TradingOrder): TradingEx
   };
 }
 
-function rowsFromKiwoom(payload: ExchangePayload) {
-  const candidates = [payload.data, payload.output, payload.orders, payload.ord_list, payload.unfilled];
-  for (const candidate of candidates) {
-    if (Array.isArray(candidate)) return candidate.filter(isRecord);
-    if (isRecord(candidate)) {
-      for (const nested of Object.values(candidate)) {
-        if (Array.isArray(nested)) return nested.filter(isRecord);
-      }
-    }
-  }
-  return [];
+function quantitiesMatch(left: number, right: number) {
+  return Math.abs(left - right) <= QUANTITY_EPSILON * Math.max(1, Math.abs(left), Math.abs(right));
 }
 
-function kiwoomSnapshot(payload: ExchangePayload, order: TradingOrder): TradingExchangeOrderSnapshot {
-  if (!order.exchangeOrderId) throw new Error('KIWOOM_EXCHANGE_ORDER_ID_UNKNOWN');
-  const rows = rowsFromKiwoom(kiwoomData(payload));
-  const row = rows.find((candidate) => text(candidate.ord_no ?? candidate.order_no ?? candidate.orig_ord_no) === order.exchangeOrderId);
-  if (!row) throw new Error('KIWOOM_ORDER_LOOKUP_INCONCLUSIVE');
-  const requestedQuantity = finiteNumber(row.ord_qty ?? row.order_qty) ?? order.requestedQuantity;
-  const remainingQuantity = finiteNumber(row.unfilled_qty ?? row.remain_qty ?? row.mis_qty);
-  const filledQuantity = finiteNumber(row.filled_qty ?? row.exec_qty)
-    ?? (requestedQuantity !== null && remainingQuantity !== null ? Math.max(0, requestedQuantity - remainingQuantity) : order.filledQuantity);
-  const state: TradingExchangeOrderSnapshot['state'] = remainingQuantity === 0 && filledQuantity > 0
-    ? 'FILLED'
-    : filledQuantity > 0 ? 'PARTIALLY_FILLED' : 'ACCEPTED';
-  const providerStatusCode = text(row.status ?? row.ord_status ?? row.order_status) ?? 'unfilled';
+function mergeFills(order: TradingOrder, snapshot: TradingExchangeOrderSnapshot) {
+  const merged = new Map((order.fills ?? []).map((fill) => [fill.id, fill]));
+  for (const fill of snapshot.fills) {
+    const existing = merged.get(fill.id);
+    if (existing && (existing.price !== fill.price || existing.quantity !== fill.quantity
+      || existing.filledAt !== fill.filledAt)) {
+      throw new Error('RECONCILIATION_FILL_ID_MISMATCH');
+    }
+    merged.set(fill.id, fill);
+  }
+  return [...merged.values()].sort((left, right) => (
+    left.filledAt.localeCompare(right.filledAt) || left.id.localeCompare(right.id)
+  ));
+}
+
+function validateSnapshot(order: TradingOrder, snapshot: TradingExchangeOrderSnapshot): TradingExchangeOrderSnapshot {
+  if (order.exchangeOrderId && snapshot.exchangeOrderId && order.exchangeOrderId !== snapshot.exchangeOrderId) {
+    throw new Error('RECONCILIATION_ORDER_ID_MISMATCH');
+  }
+  if (order.requestedQuantity !== null && snapshot.requestedQuantity !== null
+    && !quantitiesMatch(order.requestedQuantity, snapshot.requestedQuantity)) {
+    throw new Error('RECONCILIATION_REQUESTED_QUANTITY_MISMATCH');
+  }
+  if (snapshot.filledQuantity + QUANTITY_EPSILON < order.filledQuantity) {
+    throw new Error('RECONCILIATION_FILLED_QUANTITY_REGRESSION');
+  }
+  const requestedQuantity = snapshot.requestedQuantity ?? order.requestedQuantity;
+  if (requestedQuantity !== null && snapshot.filledQuantity > requestedQuantity + QUANTITY_EPSILON) {
+    throw new Error('RECONCILIATION_FILLED_QUANTITY_EXCEEDED');
+  }
+  const expectedRemaining = requestedQuantity === null ? snapshot.remainingQuantity
+    : Math.max(0, requestedQuantity - snapshot.filledQuantity);
+  if (snapshot.remainingQuantity !== null && expectedRemaining !== null
+    && !quantitiesMatch(snapshot.remainingQuantity, expectedRemaining)) {
+    throw new Error('RECONCILIATION_REMAINING_QUANTITY_MISMATCH');
+  }
+  if (snapshot.state === 'FILLED' && requestedQuantity !== null
+    && snapshot.filledQuantity + QUANTITY_EPSILON < requestedQuantity) {
+    throw new Error('RECONCILIATION_TERMINAL_STATE_MISMATCH');
+  }
+  if (snapshot.state === 'PARTIALLY_FILLED' && requestedQuantity !== null
+    && snapshot.filledQuantity + QUANTITY_EPSILON >= requestedQuantity) {
+    throw new Error('RECONCILIATION_TERMINAL_STATE_REGRESSION');
+  }
+  const previousProviderState = String(order.providerStatusCode ?? '').toLowerCase();
+  if (['filled', 'done', 'completed'].includes(previousProviderState) && snapshot.state !== 'FILLED') {
+    throw new Error('RECONCILIATION_TERMINAL_STATE_REGRESSION');
+  }
+  const previousUpdatedAt = Date.parse(order.exchangeUpdatedAt ?? '');
+  const snapshotUpdatedAt = Date.parse(snapshot.exchangeUpdatedAt ?? '');
+  if (Number.isFinite(previousUpdatedAt) && Number.isFinite(snapshotUpdatedAt)
+    && snapshotUpdatedAt < previousUpdatedAt) {
+    throw new Error('RECONCILIATION_STALE_RESPONSE');
+  }
   return {
-    exchangeOrderId: order.exchangeOrderId,
-    state,
+    ...snapshot,
+    exchangeOrderId: snapshot.exchangeOrderId ?? order.exchangeOrderId,
     requestedQuantity,
-    filledQuantity,
-    remainingQuantity: remainingQuantity ?? (requestedQuantity === null ? null : Math.max(0, requestedQuantity - filledQuantity)),
-    averageFillPrice: finiteNumber(row.avg_price ?? row.exec_avg_price),
-    fills: [],
-    feeAmount: null,
-    feeCurrency: 'KRW',
-    exchangeCreatedAt: timestamp(row.ord_time ?? row.created_at),
-    exchangeUpdatedAt: timestamp(row.updated_at ?? row.ord_time),
-    cancelable: state === 'ACCEPTED' || state === 'PARTIALLY_FILLED',
-    providerStatusCode,
+    remainingQuantity: snapshot.remainingQuantity ?? expectedRemaining,
+    averageFillPrice: snapshot.averageFillPrice ?? order.averageFillPrice,
+    fills: mergeFills(order, snapshot),
+    feeAmount: snapshot.feeAmount ?? order.feeAmount ?? null,
+    feeCurrency: snapshot.feeCurrency ?? order.feeCurrency ?? null,
+    exchangeCreatedAt: order.exchangeCreatedAt ?? snapshot.exchangeCreatedAt,
+    exchangeUpdatedAt: snapshot.exchangeUpdatedAt ?? order.exchangeUpdatedAt ?? null,
   };
 }
 
@@ -267,6 +288,13 @@ export class TradeOrderRecoveryService {
     if (order.state !== 'RECOVERY_REQUIRED') return order;
     if (order.manualReviewRequired) return order;
     if (order.nextRetryAt && Date.parse(order.nextRetryAt) > Date.now()) return order;
+    if (plan.exchange === 'kiwoom') {
+      return this.pending(
+        order,
+        'KIWOOM_RECONCILIATION_STATUS_BLOCKED_BY_UNVERIFIED_OFFICIAL_CONTRACT',
+        true,
+      );
+    }
 
     const connection = await this.repository.getConnection(userId, plan.exchange);
     if (!connection?.configured || !connection.encryptedCredentials) {
@@ -275,32 +303,20 @@ export class TradeOrderRecoveryService {
     if (connection.accountMode !== plan.accountMode) {
       return this.pending(order, 'RECOVERY_ACCOUNT_MODE_MISMATCH', true);
     }
-    if (plan.accountMode === 'paper' || (plan.accountMode === 'mock' && plan.exchange !== 'kiwoom')) {
+    if (plan.accountMode === 'paper' || plan.accountMode === 'mock') {
       return this.pending(order, 'PAPER_ORDER_RECOVERY_REQUIRES_REVIEW', true);
     }
-    if (plan.exchange === 'kiwoom' && !order.exchangeOrderId) {
-      return this.pending(order, 'KIWOOM_EXCHANGE_ORDER_ID_UNKNOWN', true);
-    }
-
     try {
       const credentials = decryptTradingCredentials(connection.encryptedCredentials);
       let snapshot: TradingExchangeOrderSnapshot;
       if (plan.exchange === 'bitget') {
         snapshot = bitgetSnapshot(await sendRecoveryRequest(BASE_URLS.bitget,
-          prepareBitgetOrderQuery(credentials as BitgetCredentials, order.clientOrderId)), order);
-      } else if (plan.exchange === 'upbit') {
-        snapshot = upbitSnapshot(await sendRecoveryRequest(BASE_URLS.upbit,
-          prepareUpbitOrderQuery(credentials as UpbitCredentials, order.clientOrderId)), order);
+          prepareBitgetOrderQuery(credentials as BitgetCredentials, plan.symbol, order.clientOrderId)), plan, order);
       } else {
-        const baseUrl = plan.accountMode === 'mock' ? BASE_URLS.kiwoomMock : BASE_URLS.kiwoom;
-        const kiwoomCredentials = credentials as KiwoomCredentials;
-        const tokenPayload = kiwoomData(await sendRecoveryRequest(baseUrl, prepareKiwoomToken(kiwoomCredentials)));
-        const accessToken = text(tokenPayload.token ?? (isRecord(tokenPayload.data) ? tokenPayload.data.token : null));
-        if (!accessToken) throw new Error('KIWOOM_TOKEN_MISSING');
-        snapshot = kiwoomSnapshot(await sendRecoveryRequest(baseUrl,
-          prepareKiwoomUnfilled({ ...kiwoomCredentials, accessToken })), order);
+        snapshot = upbitSnapshot(await sendRecoveryRequest(BASE_URLS.upbit,
+          prepareUpbitOrderQuery(credentials as UpbitCredentials, order.clientOrderId)), plan, order);
       }
-      return this.applySnapshot(order, snapshot);
+      return await this.applySnapshot(order, snapshot);
     } catch (error) {
       const code = error instanceof Error ? error.message.split(':')[0] : 'EXCHANGE_RECONCILIATION_FAILED';
       return this.pending(order, code, !transientRecoveryError(code));
@@ -308,32 +324,33 @@ export class TradeOrderRecoveryService {
   }
 
   private async applySnapshot(order: TradingOrder, snapshot: TradingExchangeOrderSnapshot) {
-    order.exchangeOrderId = snapshot.exchangeOrderId ?? order.exchangeOrderId;
-    order.requestedQuantity = snapshot.requestedQuantity;
-    order.remainingQuantity = snapshot.remainingQuantity;
-    order.filledQuantity = snapshot.filledQuantity;
-    order.averageFillPrice = snapshot.averageFillPrice;
-    order.fills = snapshot.fills;
-    order.feeAmount = snapshot.feeAmount;
-    order.feeCurrency = snapshot.feeCurrency;
-    order.exchangeCreatedAt = snapshot.exchangeCreatedAt;
-    order.exchangeUpdatedAt = snapshot.exchangeUpdatedAt;
-    order.cancelable = snapshot.cancelable;
-    order.providerStatusCode = snapshot.providerStatusCode;
+    const validated = validateSnapshot(order, snapshot);
+    order.exchangeOrderId = validated.exchangeOrderId ?? order.exchangeOrderId;
+    order.requestedQuantity = validated.requestedQuantity;
+    order.remainingQuantity = validated.remainingQuantity;
+    order.filledQuantity = validated.filledQuantity;
+    order.averageFillPrice = validated.averageFillPrice;
+    order.fills = validated.fills;
+    order.feeAmount = validated.feeAmount;
+    order.feeCurrency = validated.feeCurrency;
+    order.exchangeCreatedAt = validated.exchangeCreatedAt;
+    order.exchangeUpdatedAt = validated.exchangeUpdatedAt;
+    order.cancelable = validated.cancelable;
+    order.providerStatusCode = validated.providerStatusCode;
     order.retryCount = 0;
     order.nextRetryAt = null;
     order.lastReconciledAt = new Date().toISOString();
     order.lastErrorCode = null;
     order.manualReviewRequired = false;
     const cancellationIntent = Boolean(order.cancelRequestClaimId || order.cancelRequestedAt);
-    return this.automation.transition(order, snapshot.state, 'EXCHANGE_ORDER_RECONCILED', {
+    return this.automation.transition(order, validated.state, 'EXCHANGE_ORDER_RECONCILED', {
       exchangeOrderId: order.exchangeOrderId,
       filledQuantity: order.filledQuantity,
       averageFillPrice: order.averageFillPrice,
       providerStatusCode: order.providerStatusCode,
       cancellationIntent,
-      partialFillPreserved: snapshot.state === 'CANCELED' && snapshot.filledQuantity > 0,
-      filledAfterCancelRequest: cancellationIntent && snapshot.state === 'FILLED',
+      partialFillPreserved: validated.state === 'CANCELED' && validated.filledQuantity > 0,
+      filledAfterCancelRequest: cancellationIntent && validated.state === 'FILLED',
       orderResubmitted: false,
       recoveryRequired: false,
     });
