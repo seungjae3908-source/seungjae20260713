@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: read
+  statuses: write
 
 concurrency:
   group: external-mtf-combo-btc-${{ github.ref }}
@@ -21,6 +22,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      - name: Publish research run identity
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          body=$(printf '{"state":"pending","target_url":"https://github.com/%s/actions/runs/%s","description":"BTC MTF research running","context":"external-mtf-combo/research"}' "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            --data "$body" >/dev/null
+
       - name: Checkout exact research revision
         uses: actions/checkout@v4
         with:
@@ -68,3 +84,25 @@ jobs:
             'privateApiUsed=false' \
             'orderSubmitted=false' \
             'finalHoldoutRead=false'
+
+      - name: Publish final research status
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          case "$JOB_STATUS" in
+            success) state=success; description='BTC MTF research succeeded' ;;
+            cancelled) state=error; description='BTC MTF research cancelled' ;;
+            *) state=failure; description='BTC MTF research failed' ;;
+          esac
+          body=$(printf '{"state":"%s","target_url":"https://github.com/%s/actions/runs/%s","description":"%s","context":"external-mtf-combo/research"}' "$state" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$description")
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            --data "$body" >/dev/null
