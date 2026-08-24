@@ -22,6 +22,10 @@ import { FinancialService } from './financial.service';
 import { NewsService } from './news.service';
 import { RiskAnalysisService } from './risk-analysis.service';
 import { SECTOR_MAP } from '../data/sectors';
+import {
+  collectMarketListingWork,
+  type MarketListingWorkDiagnostics,
+} from './market-listing-work-pool';
 
 // ---- Market summary ---------------------------------------------------------
 
@@ -97,12 +101,21 @@ export type MarketKey =
   | 'US_ETF'
   | 'US_ETN';
 
+export interface MarketListingDiagnostics {
+  status: 'complete' | 'partial';
+  quoteWork: MarketListingWorkDiagnostics;
+  recommendationWork: MarketListingWorkDiagnostics;
+  usableQuoteCount: number;
+  usableRecommendationCount: number;
+}
+
 export interface MarketListings {
   market: MarketKey;
   popular: QuoteRow[];
   gainers: QuoteRow[];
   losers: QuoteRow[];
   recommended: QuoteRow[];
+  diagnostics: MarketListingDiagnostics;
 }
 
 const MAX = 30;
@@ -236,168 +249,173 @@ async function krExchangeMap(): Promise<Map<string, string>> {
 }
 
 async function buildCandidates(market: MarketKey): Promise<CatalogEntry[]> {
-	const at = (e: CatalogEntry) => assetTypeOf(e);
+  const at = (e: CatalogEntry) => assetTypeOf(e);
 
-	const uniqueAndRegister = (entries: CatalogEntry[]): CatalogEntry[] => {
-		const seen = new Set<string>();
-		const out: CatalogEntry[] = [];
+  const uniqueAndRegister = (entries: CatalogEntry[]): CatalogEntry[] => {
+    const seen = new Set<string>();
+    const out: CatalogEntry[] = [];
 
-		for (const entry of entries) {
-			const key = `${entry.market}:${entry.ticker.toUpperCase()}`;
+    for (const entry of entries) {
+      const key = `${entry.market}:${entry.ticker.toUpperCase()}`;
 
-			if (seen.has(key)) continue;
-			seen.add(key);
+      if (seen.has(key)) continue;
+      seen.add(key);
 
-			registerDynamicEntry(entry);
-			out.push(entry);
-		}
+      registerDynamicEntry(entry);
+      out.push(entry);
+    }
 
-		return out;
-	};
+    return out;
+  };
 
-	const catalogKr = CATALOG.filter((e) => e.market === 'KR');
-	const catalogUs = CATALOG.filter((e) => e.market === 'US');
+  const catalogKr = CATALOG.filter((e) => e.market === 'KR');
+  const catalogUs = CATALOG.filter((e) => e.market === 'US');
 
-	if (
-		market === 'KRX' ||
-		market === 'KOSPI' ||
-		market === 'KOSDAQ' ||
-		market === 'KR_ETF' ||
-		market === 'KR_ETN'
-	) {
-		let krEntries: CatalogEntry[] = [];
+  if (
+    market === 'KRX' ||
+    market === 'KOSPI' ||
+    market === 'KOSDAQ' ||
+    market === 'KR_ETF' ||
+    market === 'KR_ETN'
+  ) {
+    let krEntries: CatalogEntry[] = [];
 
-		try {
-			const universe = await getKrUniverse();
+    try {
+      const universe = await getKrUniverse();
 
-			krEntries = universe
-				.filter((e) => {
-					if (market === 'KRX') {
-						return isStock(e.assetType);
-					}
+      krEntries = universe
+        .filter((e) => {
+          if (market === 'KRX') {
+            return isStock(e.assetType);
+          }
 
-					if (market === 'KOSPI') {
-						return (
-							isStock(e.assetType) &&
-							(e.marketName.includes('유가증권') ||
-								e.marketName.includes('코스피') ||
-								e.marketName.toUpperCase().includes('KOSPI'))
-						);
-					}
+          if (market === 'KOSPI') {
+            return (
+              isStock(e.assetType) &&
+              (e.marketName.includes('유가증권') ||
+                e.marketName.includes('코스피') ||
+                e.marketName.toUpperCase().includes('KOSPI'))
+            );
+          }
 
-					if (market === 'KOSDAQ') {
-						return (
-							isStock(e.assetType) &&
-							(e.marketName.includes('코스닥') ||
-								e.marketName.toUpperCase().includes('KOSDAQ'))
-						);
-					}
+          if (market === 'KOSDAQ') {
+            return (
+              isStock(e.assetType) &&
+              (e.marketName.includes('코스닥') ||
+                e.marketName.toUpperCase().includes('KOSDAQ'))
+            );
+          }
 
-					if (market === 'KR_ETF') {
-						return isEtf(e.assetType);
-					}
+          if (market === 'KR_ETF') {
+            return isEtf(e.assetType);
+          }
 
-					if (market === 'KR_ETN') {
-						return isEtnAsset(e.assetType);
-					}
+          if (market === 'KR_ETN') {
+            return isEtnAsset(e.assetType);
+          }
 
-					return false;
-				})
-				.map((e) => ({
-					ticker: e.ticker,
-					name: e.name,
-					market: 'KR' as const,
-					currency: 'KRW' as const,
-				}));
-		} catch (error) {
-			console.error('[market-listing] KRX universe failed:', error);
-		}
+          return false;
+        })
+        .map((e) => ({
+          ticker: e.ticker,
+          name: e.name,
+          market: 'KR' as const,
+          currency: 'KRW' as const,
+        }));
+    } catch (error) {
+      console.error('[market-listing] KRX universe failed:', error);
+    }
 
-		const catalogFallback = catalogKr.filter((e) => {
-			const assetType = at(e);
+    const catalogFallback = catalogKr.filter((e) => {
+      const assetType = at(e);
 
-			if (market === 'KRX') return isStock(assetType);
-			if (market === 'KOSPI') return isStock(assetType);
-			if (market === 'KOSDAQ') return isStock(assetType);
-			if (market === 'KR_ETF') return isEtf(assetType);
-			if (market === 'KR_ETN') return isEtnAsset(assetType);
+      if (market === 'KRX') return isStock(assetType);
+      if (market === 'KOSPI') return isStock(assetType);
+      if (market === 'KOSDAQ') return isStock(assetType);
+      if (market === 'KR_ETF') return isEtf(assetType);
+      if (market === 'KR_ETN') return isEtnAsset(assetType);
 
-			return false;
-		});
+      return false;
+    });
 
-		return uniqueAndRegister([...krEntries, ...catalogFallback]).slice(
-			0,
-			CANDIDATE_CAP,
-		);
-	}
+    return uniqueAndRegister([...krEntries, ...catalogFallback]).slice(
+      0,
+      CANDIDATE_CAP,
+    );
+  }
 
-	if (
-		market === 'NASDAQ' ||
-		market === 'NYSE' ||
-		market === 'AMEX' ||
-		market === 'US_ETF' ||
-		market === 'US_ETN'
-	) {
-		let usEntries: CatalogEntry[] = [];
+  if (
+    market === 'NASDAQ' ||
+    market === 'NYSE' ||
+    market === 'AMEX' ||
+    market === 'US_ETF' ||
+    market === 'US_ETN'
+  ) {
+    let usEntries: CatalogEntry[] = [];
 
-		try {
-			const universe = await getUsUniverse();
+    try {
+      const universe = await getUsUniverse();
 
-			usEntries = universe
-				.filter((e) => {
-					if (market === 'NASDAQ' || market === 'NYSE' || market === 'AMEX') {
-						return e.exchange === market && isStock(e.assetType);
-					}
+      usEntries = universe
+        .filter((e) => {
+          if (market === 'NASDAQ' || market === 'NYSE' || market === 'AMEX') {
+            return e.exchange === market && isStock(e.assetType);
+          }
 
-					if (market === 'US_ETF') {
-						return isEtf(e.assetType);
-					}
+          if (market === 'US_ETF') {
+            return isEtf(e.assetType);
+          }
 
-					if (market === 'US_ETN') {
-						return isEtnAsset(e.assetType);
-					}
+          if (market === 'US_ETN') {
+            return isEtnAsset(e.assetType);
+          }
 
-					return false;
-				})
-				.map((e) => ({
-					ticker: e.ticker,
-					name: e.name,
-					market: 'US' as const,
-					currency: 'USD' as const,
-				}));
-		} catch (error) {
-			console.error('[market-listing] US universe failed:', error);
-		}
+          return false;
+        })
+        .map((e) => ({
+          ticker: e.ticker,
+          name: e.name,
+          market: 'US' as const,
+          currency: 'USD' as const,
+        }));
+    } catch (error) {
+      console.error('[market-listing] US universe failed:', error);
+    }
 
-		const catalogFallback = catalogUs.filter((e) => {
-			const assetType = at(e);
+    const catalogFallback = catalogUs.filter((e) => {
+      const assetType = at(e);
 
-			if (market === 'NASDAQ' || market === 'NYSE' || market === 'AMEX') {
-				return isStock(assetType);
-			}
+      if (market === 'NASDAQ' || market === 'NYSE' || market === 'AMEX') {
+        return isStock(assetType);
+      }
 
-			if (market === 'US_ETF') return isEtf(assetType);
-			if (market === 'US_ETN') return isEtnAsset(assetType);
+      if (market === 'US_ETF') return isEtf(assetType);
+      if (market === 'US_ETN') return isEtnAsset(assetType);
 
-			return false;
-		});
+      return false;
+    });
 
-		return uniqueAndRegister([...usEntries, ...catalogFallback]).slice(
-			0,
-			CANDIDATE_CAP,
-		);
-	}
+    return uniqueAndRegister([...usEntries, ...catalogFallback]).slice(
+      0,
+      CANDIDATE_CAP,
+    );
+  }
 
-	return uniqueAndRegister(CATALOG).slice(0, CANDIDATE_CAP);
+  return uniqueAndRegister(CATALOG).slice(0, CANDIDATE_CAP);
 }
 
-async function toRow(entry: CatalogEntry): Promise<QuoteRow | null> {
+async function toRow(
+  entry: CatalogEntry,
+  signal?: AbortSignal,
+): Promise<QuoteRow | null> {
+  if (signal?.aborted) return null;
+
   try {
     const quote = entry.market === 'US'
       ? await yahoo.getQuote(entry)
       : await MarketDataService.getQuote(entry.ticker);
 
-    if (!quote) return null;
+    if (signal?.aborted || !quote) return null;
 
     const price = Number(quote.price ?? 0);
     if (!Number.isFinite(price) || price <= 0) return null;
@@ -651,10 +669,14 @@ async function enrichRecommended(row: QuoteRow): Promise<QuoteRow> {
 }
 
 async function getMarketListings(market: MarketKey): Promise<MarketListings> {
-  return cached(`listing:v5:${market}`, TTL.quote, async () => {
+  return cached(`listing:v6:${market}`, TTL.quote, async () => {
     const candidates = await buildCandidates(market);
+    const quoteWork = await collectMarketListingWork(
+      candidates,
+      (entry, _index, signal) => toRow(entry, signal),
+    );
 
-    let rows = (await Promise.all(candidates.map(toRow))).filter(
+    let rows = quoteWork.values.filter(
       (r): r is QuoteRow => r !== null,
     );
 
@@ -685,9 +707,42 @@ async function getMarketListings(market: MarketKey): Promise<MarketListings> {
       .sort((a, b) => b.rating.score - a.rating.score)
       .slice(0, 12);
 
-    const recommended = await Promise.all(topByScore.map(enrichRecommended));
+    const recommendationWork = await collectMarketListingWork(
+      topByScore,
+      async (row, _index, signal) => {
+        if (signal.aborted) return null;
+        const enriched = await enrichRecommended(row);
+        return signal.aborted ? null : enriched;
+      },
+      {
+        concurrency: 3,
+        deadlineMs: 5_000,
+        itemTimeoutMs: 4_500,
+      },
+    );
+    const recommended = recommendationWork.values.filter(
+      (row): row is QuoteRow => row !== null,
+    );
+    const status: MarketListingDiagnostics['status'] =
+      quoteWork.diagnostics.status === 'partial'
+      || recommendationWork.diagnostics.status === 'partial'
+        ? 'partial'
+        : 'complete';
 
-    return { market, popular, gainers, losers, recommended };
+    return {
+      market,
+      popular,
+      gainers,
+      losers,
+      recommended,
+      diagnostics: {
+        status,
+        quoteWork: quoteWork.diagnostics,
+        recommendationWork: recommendationWork.diagnostics,
+        usableQuoteCount: rows.length,
+        usableRecommendationCount: recommended.length,
+      },
+    };
   });
 }
 
