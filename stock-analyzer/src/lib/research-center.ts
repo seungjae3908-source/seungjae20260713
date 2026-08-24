@@ -18,11 +18,11 @@ export interface ResearchCycleSummary {
   cycleId?: string | null;
   researchSha?: string | null;
   generatedAt?: number | null;
-  concurrency?: number;
-  taskCount: number;
-  successCount: number;
-  blockedDataCount: number;
-  failedCount: number;
+  concurrency?: number | null;
+  taskCount: number | null;
+  successCount: number | null;
+  blockedDataCount: number | null;
+  failedCount: number | null;
   tasks: ResearchCycleTask[];
 }
 
@@ -30,23 +30,24 @@ export interface ResearchPaperRuntime {
   present: boolean;
   status: string;
   cycleId?: string | null;
-  scheduleActive?: boolean;
-  allProvidersReady?: boolean;
-  publicForwardEvidenceAccumulating?: boolean;
-  paperTradeOutcomeAccumulating?: boolean;
-  privateRequestCount: number;
-  financialMutationCount: number;
-  orderCount: number;
-  liveTrading: boolean;
-  orderAuthority: boolean;
+  scheduleActive?: boolean | null;
+  allProvidersReady?: boolean | null;
+  publicForwardEvidenceAccumulating?: boolean | null;
+  paperTradeOutcomeAccumulating?: boolean | null;
+  privateRequestCount: number | null;
+  financialMutationCount: number | null;
+  orderCount: number | null;
+  liveTrading: boolean | null;
+  orderAuthority: boolean | null;
+  safetyEvidenceComplete: boolean;
   lanes: Array<{ market: string; status: string }>;
 }
 
 export interface ResearchPaperLedger {
   present: boolean;
-  cycleCount: number;
-  positionCount: number;
-  settlementCount: number;
+  cycleCount: number | null;
+  positionCount: number | null;
+  settlementCount: number | null;
 }
 
 export interface ResearchShadowGroup {
@@ -71,12 +72,13 @@ export interface ResearchCenterOverview {
     liveTrading: false;
     privateApi: false;
     orderAuthority: false;
+    authorityEvidenceComplete: boolean;
     forbiddenAuthorityObserved: boolean;
   };
   research: {
     status: string;
-    failedTasks: number;
-    blockedDataTasks: number;
+    failedTasks: number | null;
+    blockedDataTasks: number | null;
     cycles: ResearchCycleSummary[];
   };
   paper: {
@@ -87,9 +89,9 @@ export interface ResearchCenterOverview {
     groups: ResearchShadowGroup[];
     records: {
       present: boolean;
-      totalRecords: number;
-      settledRecords: number;
-      pendingRecords: number;
+      totalRecords: number | null;
+      settledRecords: number | null;
+      pendingRecords: number | null;
     };
   };
   profitability: {

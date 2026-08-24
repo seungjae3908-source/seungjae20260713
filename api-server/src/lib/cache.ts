@@ -11,8 +11,9 @@
 // existing TTL and error semantics: loader failures are never cached.
 //
 // The persistent tier is best-effort: if Supabase is unconfigured, the table
-// is missing, or a call fails, we log once and behave exactly like the old
-// memory-only cache. Loader errors are never cached in either tier.
+// is missing, a call fails, or a persistent read exceeds its small latency
+// budget, the request falls through to the live loader. A cache tier must never
+// hold a user-visible market-data request open indefinitely.
 import { getSupabase, hasSupabaseServerKey } from './supabase';
 
 interface Entry<T> {
@@ -25,6 +26,7 @@ const inFlight = new Map<string, Promise<unknown>>();
 
 const PERSIST_TABLE = 'market_cache';
 const PERSIST_MIN_TTL_MS = 5 * 60 * 1000;
+export const PERSIST_READ_BUDGET_MS = 750;
 
 let persistWarned = false;
 
@@ -41,13 +43,38 @@ function persistable(ttlMs: number): boolean {
   return ttlMs >= PERSIST_MIN_TTL_MS && hasSupabaseServerKey();
 }
 
+export async function withCacheReadBudget<T>(
+  operation: PromiseLike<T>,
+  budgetMs = PERSIST_READ_BUDGET_MS,
+): Promise<T> {
+  if (!Number.isFinite(budgetMs) || budgetMs <= 0) {
+    throw new Error('CACHE_PERSIST_READ_BUDGET_INVALID');
+  }
+
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(
+      () => reject(new Error('CACHE_PERSIST_READ_TIMEOUT')),
+      budgetMs,
+    );
+  });
+
+  try {
+    return await Promise.race([Promise.resolve(operation), deadline]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 async function readPersistent<T>(key: string): Promise<Entry<T> | null> {
   try {
-    const { data, error } = await getSupabase()
-      .from(PERSIST_TABLE)
-      .select('payload,expires_at')
-      .eq('cache_key', key)
-      .maybeSingle();
+    const { data, error } = await withCacheReadBudget(
+      getSupabase()
+        .from(PERSIST_TABLE)
+        .select('payload,expires_at')
+        .eq('cache_key', key)
+        .maybeSingle(),
+    );
     if (error) throw new Error(error.message);
     if (!data) return null;
     const expires = Date.parse(data.expires_at as string);

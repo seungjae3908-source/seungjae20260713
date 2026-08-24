@@ -139,7 +139,13 @@ function canonicalExitCandidate() {
   return decision.candidate;
 }
 
-function runtime({ status = "PAPER_CANDIDATES_READY", candidates = [candidate()], exits = [], outcome = "TRADE_CANDIDATES" } = {}) {
+function runtime({
+  status = "PAPER_CANDIDATES_READY",
+  candidates = [candidate()],
+  exits = [],
+  outcome = "TRADE_CANDIDATES",
+  naturalMetadata = {},
+} = {}) {
   return Object.freeze({
     market: "CRYPTO_SPOT",
     status,
@@ -152,7 +158,47 @@ function runtime({ status = "PAPER_CANDIDATES_READY", candidates = [candidate()]
     privateTradingApiAllowed: false,
     orderSubmitted: false,
     exchangeRequestSent: false,
+    ...naturalMetadata,
   });
+}
+
+function naturalMetadata() {
+  const datasetIdentity = "natural-dataset-identity-1";
+  return Object.freeze({
+    naturalFunnelMeasurements: Object.freeze([
+      Object.freeze({ stage: "CANDIDATE", status: "MEASURED", count: 2, blocker: null }),
+      Object.freeze({ stage: "EVIDENCE_COMPLETE", status: "MEASURED", count: 0, blocker: null }),
+    ]),
+    naturalFirstZeroStage: "EVIDENCE_COMPLETE",
+    naturalFirstZeroReason: "MEASURED_ZERO",
+    naturalEvidenceIdentity: datasetIdentity,
+    naturalRuntimeSha: SHA,
+    authoritativeFirstZeroReasonEvidenceByStage: Object.freeze({
+      EVIDENCE_COMPLETE: Object.freeze({
+        authoritative: true,
+        freshness: "FRESH",
+        reasonCode: "P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING",
+        strategySha: SHA,
+        runtimeSha: SHA,
+        datasetIdentity,
+        synthetic: false,
+        historical: false,
+        replay: false,
+      }),
+    }),
+  });
+}
+
+function assertNaturalMetadataPreserved(source, expected) {
+  assert.deepEqual(source.naturalFunnelMeasurements, expected.naturalFunnelMeasurements);
+  assert.equal(source.naturalFirstZeroStage, expected.naturalFirstZeroStage);
+  assert.equal(source.naturalFirstZeroReason, expected.naturalFirstZeroReason);
+  assert.equal(source.naturalEvidenceIdentity, expected.naturalEvidenceIdentity);
+  assert.equal(source.naturalRuntimeSha, expected.naturalRuntimeSha);
+  assert.deepEqual(
+    source.authoritativeFirstZeroReasonEvidenceByStage,
+    expected.authoritativeFirstZeroReasonEvidenceByStage,
+  );
 }
 
 test("scheduled provider attaches canonical eligible Paper candidates without execution authority", async () => {
@@ -169,6 +215,37 @@ test("scheduled provider attaches canonical eligible Paper candidates without ex
   assert.equal(result.paperCandidateSource.status, "PAPER_CANDIDATES_READY");
   assert.equal(result.paperCandidateSource.eligibleCandidates, 1);
   assert.equal(result.blocker, null);
+});
+
+test("scheduled provider preserves authoritative Natural FIRST_ZERO metadata on READY runtime", async () => {
+  const expected = naturalMetadata();
+  const provider = wrapPaperForwardProviderWithMeaningfulSearch({
+    provider: { collectPublicEvidence: async ({ market }) => baseEvidence(market) },
+    paperRuntimeForMarket: async () => runtime({ naturalMetadata: expected }),
+  });
+
+  const result = await provider.collectPublicEvidence({ market: "CRYPTO_SPOT", cycle: { cycleId: "cycle-natural-ready" } });
+  assert.equal(result.status, "READY");
+  assertNaturalMetadataPreserved(result.paperCandidateSource, expected);
+  assert.equal(result.paperCandidateSource.authoritativeFirstZeroReasonEvidenceByStage.EVIDENCE_COMPLETE.authoritative, true);
+});
+
+test("scheduled provider preserves authoritative Natural FIRST_ZERO metadata on BLOCKED runtime", async () => {
+  const expected = naturalMetadata();
+  const provider = wrapPaperForwardProviderWithMeaningfulSearch({
+    provider: { collectPublicEvidence: async ({ market }) => baseEvidence(market) },
+    paperRuntimeForMarket: async () => runtime({
+      status: "SEARCH_FAILURE_BLOCKED",
+      candidates: [],
+      outcome: "SEARCH_FAILURE",
+      naturalMetadata: expected,
+    }),
+  });
+
+  const result = await provider.collectPublicEvidence({ market: "CRYPTO_SPOT", cycle: { cycleId: "cycle-natural-blocked" } });
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.equal(result.blocker, "SEARCH_FAILURE");
+  assertNaturalMetadataPreserved(result.paperCandidateSource, expected);
 });
 
 test("ENTRY still requires Profit-First cost evidence", async () => {

@@ -1,3 +1,4 @@
+import './decision-gate-attribution.service.test';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { enrichScannerCardsWithMarketIntelligence } from './scanner-market-intelligence.service';
