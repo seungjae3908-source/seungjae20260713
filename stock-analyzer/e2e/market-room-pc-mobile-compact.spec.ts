@@ -58,13 +58,32 @@ function meta(market: 'KR' | 'futures') {
     unavailableFields: [],
     errorCode: null,
     retryable: false,
-  };
+  } as const;
 }
 
 function roomResponse(room: 'stocks-kr' | 'coins-futures') {
   const futures = room === 'coins-futures';
   const roomMeta = meta(futures ? 'futures' : 'KR');
-  const ready = <T,>(data: T) => ({ status: 'ready', data, meta: roomMeta, message: null });
+  const ready = <T,>(data: T) => ({ status: 'ready' as const, data, meta: roomMeta, message: null });
+  const unsupportedArray = (message: string) => ({
+    status: 'unsupported' as const,
+    data: [],
+    meta: { ...roomMeta, provider: null, source: null, unavailableFields: ['all'], errorCode: 'PROVIDER_UNSUPPORTED' },
+    message,
+  });
+  const ranking = futures ? [{
+    symbol: 'BTCUSDT', name: '비트코인', exchange: 'BITGET', currency: 'USDT', price: 65000,
+    changePercent: 1.2, high24h: 66000, low24h: 63000, volume24h: 1000,
+    tradingValue24h: 2000, marketCap: null, warning: false, tradingStatus: 'normal',
+    fundingRatePercent: 0.01, nextFundingAt: '2026-08-22T08:00:00.000Z', openInterest: 4000,
+    rangeVolatility24hPercent: 4.6, providerUpdatedAt: NOW,
+  }] : [{
+    symbol: '005930', name: '삼성전자', exchange: 'KRX', currency: 'KRW', price: 70000,
+    changePercent: 1.2, high24h: 71000, low24h: 69000, volume24h: 1000,
+    tradingValue24h: 2000, marketCap: null, warning: false, tradingStatus: null,
+    fundingRatePercent: null, nextFundingAt: null, openInterest: null,
+    rangeVolatility24hPercent: null, providerUpdatedAt: NOW,
+  }];
   return {
     ok: true,
     room,
@@ -72,16 +91,34 @@ function roomResponse(room: 'stocks-kr' | 'coins-futures') {
     assetType: futures ? 'coin-futures' : 'stock',
     currency: futures ? 'USDT' : 'KRW',
     fetchedAt: NOW,
-    partial: false,
+    partial: futures,
     sections: {
-      indices: ready([{ key: 'main', label: futures ? '비트코인' : '코스피', value: futures ? 65000 : 3200, changePercent: 0.5 }]),
-      sectors: ready([{ key: 'sector', label: futures ? '대형 코인' : '반도체', constituentCount: 3, tradingValue: 1000000 }]),
-      rankings: ready([{ exchange: futures ? 'BITGET' : 'KRX', symbol: futures ? 'BTCUSDT' : '005930', name: futures ? '비트코인' : '삼성전자', price: futures ? 65000 : 70000, currency: futures ? 'USDT' : 'KRW', changePercent: 1.2, volume24h: 1000, tradingValue24h: 2000, marketCap: 3000, fundingRatePercent: futures ? 0.01 : null, openInterest: futures ? 4000 : null, warning: false }]),
-      news: ready([{ id: 'n1', title: '시장 뉴스', symbol: futures ? 'BTC' : '005930', source: '공개뉴스', publishedAt: NOW, url: 'https://example.com/news' }]),
-      disclosures: ready([{ id: 'd1', title: '시장 공시', symbol: futures ? 'BTC' : '005930', source: '공개공시', publishedAt: NOW, url: 'https://example.com/disclosure' }]),
+      indices: futures
+        ? unsupportedArray('코인에는 주식 시장 지수를 표시하지 않습니다.')
+        : ready([{ key: 'main', label: '코스피', value: 3200, changePercent: 0.5 }]),
+      sectors: futures
+        ? unsupportedArray('공개 응답은 업종·섹터를 제공하지 않습니다.')
+        : ready([{ key: 'sector', label: '반도체', constituentCount: 3, tradingValue: 1000000, changePercent: null }]),
+      rankings: ready(ranking),
+      news: futures
+        ? { status: 'unavailable' as const, data: [], meta: { ...roomMeta, provider: null, source: null, unavailableFields: ['all'], errorCode: 'COIN_NEWS_PROVIDER_NOT_CONNECTED' }, message: '검증된 코인 뉴스 provider가 아직 연결되지 않았습니다.' }
+        : ready([{ id: 'n1', kind: 'news' as const, title: '시장 뉴스', symbol: '005930', summary: '공개 정보', provider: '공개뉴스', source: '공개뉴스', publishedAt: NOW, url: 'https://example.com/news' }]),
+      disclosures: futures
+        ? unsupportedArray('코인에는 기업 공시를 표시하지 않습니다.')
+        : ready([{ id: 'd1', kind: 'disclosure' as const, title: '시장 공시', symbol: '005930', summary: '공개 공시', provider: 'OpenDART', source: '공개공시', publishedAt: NOW, url: 'https://example.com/disclosure' }]),
       derivatives: futures
         ? ready({ referenceSymbol: 'BTCUSDT', longRatio: 0.52, shortRatio: 0.48, longShortRatio: 1.08, ratioObservedAt: NOW, liquidations: [] })
-        : { status: 'unsupported', data: { referenceSymbol: null, longRatio: null, shortRatio: null, longShortRatio: null, ratioObservedAt: null, liquidations: [] }, meta: roomMeta, message: '미지원' },
+        : { status: 'unsupported' as const, data: { referenceSymbol: 'BTCUSDT', longRatio: null, shortRatio: null, longShortRatio: null, ratioObservedAt: null, liquidations: [] }, meta: { ...roomMeta, provider: null, source: null, unavailableFields: ['derivatives'], errorCode: 'PROVIDER_UNSUPPORTED' }, message: '이 정보방에는 선물 파생지표를 표시하지 않습니다.' },
+    },
+    requestPolicy: {
+      publicMarketDataOnly: true as const,
+      privateExchangeRequests: 0 as const,
+      accountRequests: 0 as const,
+      balanceRequests: 0 as const,
+      positionRequests: 0 as const,
+      orderRequests: 0 as const,
+      cancelRequests: 0 as const,
+      aiRequests: 0 as const,
     },
   };
 }
