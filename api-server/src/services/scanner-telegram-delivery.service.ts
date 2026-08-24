@@ -4,6 +4,10 @@ import {
   collectTelegramSignalIntelligence,
   type TelegramSignalDeliveryContext,
 } from './telegram-investment-intelligence.service';
+import {
+  fanoutMemberHoldingScannerAlert,
+  type MemberHoldingProducerSummary,
+} from './member-holdings-telegram-producer.service';
 import type { ScannerAlertCandidate, ScannerAssetClass } from './scanner-signal.types';
 import { markTelegramSignalAnnounced } from './telegram-signal-followup.service';
 import {
@@ -18,6 +22,9 @@ export type ScannerTelegramSender = (
 
 export type ScannerTelegramRoom = 'STOCK_ROOM' | 'CRYPTO_ROOM';
 export type ScannerTelegramRoomResolver = (room: ScannerTelegramRoom) => string | null;
+export type ScannerMemberHoldingProducer = (
+  alert: ScannerAlertCandidate,
+) => Promise<MemberHoldingProducerSummary>;
 
 const MAX_RICH_ALERTS_PER_BATCH = 3;
 
@@ -140,13 +147,48 @@ async function richInput(
   }
 }
 
+async function runMemberHoldingProducer(
+  alert: ScannerAlertCandidate,
+  producer: ScannerMemberHoldingProducer,
+): Promise<void> {
+  try {
+    const result = await producer(alert);
+    if (result.status === 'DISABLED' || result.status === 'UNSUPPORTED_ASSET') return;
+    logger.info(
+      {
+        symbol: alert.symbol,
+        memberHoldingsStatus: result.status,
+        matchedCount: result.matchedCount,
+        policyCount: result.policyCount,
+        skippedCount: result.skippedCount,
+        errorCount: result.errorCount,
+      },
+      'member holdings Telegram producer evaluated scanner alert',
+    );
+  } catch (error) {
+    logger.warn(
+      {
+        symbol: alert.symbol,
+        errorName: error instanceof Error ? error.name : 'UnknownError',
+      },
+      'member holdings Telegram producer failed closed',
+    );
+  }
+}
+
 export async function deliverScannerTelegramAlerts(
   alerts: ScannerAlertCandidate[],
   sender: ScannerTelegramSender = sendTelegramAlert,
   resolveRoomChatId: ScannerTelegramRoomResolver = scannerTelegramRoomChatId,
   context: TelegramSignalDeliveryContext = {},
+  memberHoldingProducer: ScannerMemberHoldingProducer = fanoutMemberHoldingScannerAlert,
 ): Promise<void> {
   await Promise.all(alerts.map(async (alert, index) => {
+    // The member producer is independently default-off and fail-closed. It does
+    // not depend on the shared room being configured and never changes whether
+    // the public Scanner notification is marked announced.
+    await runMemberHoldingProducer(alert, memberHoldingProducer);
+
     const base = scannerTelegramInput(alert, resolveRoomChatId);
     if (!base) return;
     const input = index < MAX_RICH_ALERTS_PER_BATCH ? await richInput(base, alert, context) : base;
