@@ -191,7 +191,7 @@ test('close response must be PUBLISHED and digest-identical to the returned flat
       exchangeRequestSent: false,
       state,
       position: state.positions[0],
-      fills: [{ fillReason: 'manual_close' }],
+      fills: [{ fillReason: 'manual_close', positionId: 'paper_position_fixture' }],
       warnings: [],
       duplicateEvent: false,
     },
@@ -207,12 +207,12 @@ test('close response must be PUBLISHED and digest-identical to the returned flat
       financialMutationAllowed: false,
     },
   };
-  const accepted = validateCloseResponse(response, { targetSha: TARGET, publisherDigest: PUBLISHER_DIGEST });
+  const accepted = validateCloseResponse(response, { targetSha: TARGET, publisherDigest: PUBLISHER_DIGEST, expectedPositionId: 'paper_position_fixture' });
   assert.equal(accepted.transportDigest, stateDigestSha256);
   assert.throws(() => validateCloseResponse({
     ...response,
     paperStateTransport: { ...response.paperStateTransport, status: 'BLOCKED_DATA', reason: 'blocked' },
-  }, { targetSha: TARGET, publisherDigest: PUBLISHER_DIGEST }), /CLOSE_PUBLISHER_NOT_PUBLISHED/);
+  }, { targetSha: TARGET, publisherDigest: PUBLISHER_DIGEST, expectedPositionId: 'paper_position_fixture' }), /CLOSE_PUBLISHER_NOT_PUBLISHED/);
 });
 
 test('persisted final snapshot must be exact-runtime, published digest, flat and manual-close journaled', () => {
@@ -221,6 +221,7 @@ test('persisted final snapshot must be exact-runtime, published digest, flat and
     targetSha: TARGET,
     publisherDigest: PUBLISHER_DIGEST,
     expectedDigest: snapshot.stateDigestSha256,
+    expectedPositionId: 'paper_position_fixture',
   }), true);
   const notFlat = structuredClone(snapshot);
   notFlat.openPositionCount = 1;
@@ -228,6 +229,7 @@ test('persisted final snapshot must be exact-runtime, published digest, flat and
     targetSha: TARGET,
     publisherDigest: PUBLISHER_DIGEST,
     expectedDigest: notFlat.stateDigestSha256,
+    expectedPositionId: 'paper_position_fixture',
   }), /FINAL_SNAPSHOT_NOT_FLAT/);
 });
 
