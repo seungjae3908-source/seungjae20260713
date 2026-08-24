@@ -162,6 +162,127 @@ test('member holdings messages separate stock and crypto without exposing user i
   assert.equal((crypto.alert.details ?? '').includes('user-b-secret-id'), false);
 });
 
+test('member AI advisor renders only supplied provenance-backed analysis and factual position P/L', () => {
+  const dispatch = buildMemberHoldingTelegramDispatch({
+    userId: 'member-private-id',
+    eventId: 'advisor-evidence-1',
+    assetClass: 'stock',
+    market: 'KR',
+    symbol: '005930',
+    name: '삼성전자',
+    occurredAt: '2026-08-24T11:00:00.000Z',
+    currentPrice: 82000,
+    averageEntryPrice: 78000,
+    changePercent: 1.4,
+    analysisProfileLabel: '스윙 · 균형형',
+    triggerReasons: ['거래량 급증', '검증된 공시 발생'],
+    ai: {
+      verdict: 'HOLD',
+      summary: '상승 추세는 유지되지만 목표 구간 접근 여부를 함께 확인합니다.',
+      reasons: ['거래량 증가가 확인됨', '단기 저항 구간에 접근 중'],
+      confidencePercent: 82.4,
+      confidenceSource: 'validated-ai-evidence-v1',
+      generatedAt: '2026-08-24T10:59:00.000Z',
+    },
+    risk: {
+      level: 'CRITICAL',
+      reasons: ['공시 이후 변동성 확대 증거가 입력됨'],
+    },
+    performance: {
+      state: 'READY',
+      sampleSize: 42,
+      winRatePercent: 64.29,
+      averageReturnPercent: 3.7,
+      maxDrawdownPercent: 6.2,
+      source: 'forward-observer:strategy-v7',
+      observedAt: '2026-08-24T10:58:00.000Z',
+    },
+    tradePlan: {
+      entryPrices: [81000, 80000],
+      targetPrices: [84000, 86000],
+      stopLoss: 77000,
+      entryRationale: '검증된 지지 구간 evidence',
+      targetRationale: '검증된 저항 구간 evidence',
+      stopRationale: '검증된 무효화 가격 evidence',
+    },
+    news: [{
+      kind: 'DISCLOSURE',
+      title: '테스트 공시',
+      source: 'DART',
+      url: 'https://example.com/disclosure',
+      publishedAt: '2026-08-24T10:50:00.000Z',
+      impact: 'MIXED',
+      impactReason: '단기 변동성 확대 가능성과 중기 실적 개선 근거가 함께 존재',
+    }],
+    detailUrl: 'https://user:pass@example.com/app/analysis?symbol=005930',
+  });
+
+  const details = dispatch.alert.details ?? '';
+  assert.equal(dispatch.event.priority, 'CRITICAL');
+  assert.match(details, /평단 기준 손익률: \+5\.13%/u);
+  assert.match(details, /개인 분석 기준: 스윙 · 균형형/u);
+  assert.match(details, /AI 판단: 보유 유지/u);
+  assert.match(details, /AI 신뢰도: 82\.4% · validated-ai-evidence-v1/u);
+  assert.match(details, /\[알림 발생 이유\]/u);
+  assert.match(details, /거래량 급증/u);
+  assert.match(details, /\[AI 판단 근거\]/u);
+  assert.match(details, /목표가 근거: 검증된 저항 구간 evidence/u);
+  assert.match(details, /손절가 근거: 검증된 무효화 가격 evidence/u);
+  assert.match(details, /\[위험 판단\] CRITICAL/u);
+  assert.match(details, /\[과거 유사조건 성과\] 검증됨/u);
+  assert.match(details, /표본: N=42/u);
+  assert.match(details, /승률: 64\.29%/u);
+  assert.match(details, /평균 수익률: \+3\.70%/u);
+  assert.match(details, /최대 낙폭: 6\.20%/u);
+  assert.match(details, /영향 혼재/u);
+  assert.equal(details.includes('member-private-id'), false);
+
+  const appButton = dispatch.alert.buttons?.[0]?.[0];
+  assert.equal(appButton?.text, '📲 앱에서 상세 분석');
+  assert.equal(appButton?.url, 'https://example.com/app/analysis?symbol=005930');
+});
+
+test('member AI advisor fails closed when confidence, performance, prices, or links are not evidenced', () => {
+  const dispatch = buildMemberHoldingTelegramDispatch({
+    userId: 'member-private-id',
+    eventId: 'advisor-missing-evidence-1',
+    assetClass: 'coin_spot',
+    market: 'UPBIT',
+    symbol: 'BTC',
+    occurredAt: '2026-08-24T11:05:00.000Z',
+    currentPrice: 100,
+    averageEntryPrice: 0,
+    ai: {
+      verdict: 'HOLD',
+      summary: '요약은 공급됐지만 confidence provenance는 없음',
+      confidencePercent: 99,
+    },
+    performance: {
+      state: 'READY',
+      sampleSize: 0,
+      winRatePercent: 99,
+      averageReturnPercent: 50,
+      maxDrawdownPercent: 1,
+      source: 'invalid-empty-sample',
+    },
+    tradePlan: {},
+    detailUrl: 'javascript:alert(1)',
+  });
+
+  const details = dispatch.alert.details ?? '';
+  assert.match(details, /평단 기준 손익률: N\/A/u);
+  assert.match(details, /AI 신뢰도: N\/A/u);
+  assert.match(details, /분할 매수\/진입: N\/A/u);
+  assert.match(details, /분할 매도\/목표: N\/A/u);
+  assert.match(details, /손절가: N\/A/u);
+  assert.match(details, /진입 근거: N\/A/u);
+  assert.match(details, /목표가 근거: N\/A/u);
+  assert.match(details, /손절가 근거: N\/A/u);
+  assert.match(details, /\[과거 유사조건 성과\] 근거 없음/u);
+  assert.match(details, /승률\/평균수익\/낙폭: N\/A/u);
+  assert.equal(dispatch.alert.buttons?.some((row) => row.some((button) => button.url.startsWith('javascript:'))), false);
+});
+
 test('member holdings delivery resolves only the linked member chat server-side', async () => {
   const delivered: TelegramAlertInput[] = [];
   const policy = {
