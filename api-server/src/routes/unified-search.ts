@@ -111,10 +111,20 @@ async function searchWithMetadataSoftDeadline(input: {
   market: UnifiedSearchMarket | null;
   limit: number;
 }) {
-  const searchPromise = searchUnifiedAssets(input);
   const metadataFallback = buildMetadataFallback(input.q, input.asset, input.market, input.limit);
   const configuredSoftDeadlineMs = metadataFallbackSoftDeadlineMs(input.asset, input.market);
   const exactCodeFallback = metadataFallback?.results.some((result) => result.matchType === 'code_exact') === true;
+
+  // An explicit US ticker identity is already available from the repository's factual
+  // metadata catalog. Starting the full provider index refresh before returning that
+  // identity can synchronously monopolize the Node event loop during a cold Finnhub
+  // universe build, delaying even the fallback timer. Return the truthful metadata
+  // evidence immediately and leave broad/name/fuzzy discovery on the provider path.
+  if (input.market === 'US' && exactCodeFallback && metadataFallback) {
+    return metadataFallback;
+  }
+
+  const searchPromise = searchUnifiedAssets(input);
   const firstDeadlineMs = exactCodeFallback
     ? EXACT_CODE_METADATA_DEADLINE_MS
     : configuredSoftDeadlineMs;
