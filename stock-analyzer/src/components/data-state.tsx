@@ -122,8 +122,9 @@ export function ErrorState({ code, message, provider, occurredAt: providedOccurr
         <div className="flex flex-wrap items-center justify-center gap-2">
           {onRetry && (
             <button
+              type="button"
               onClick={onRetry}
-              className="rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+              className="min-h-11 rounded-lg border border-border px-3 py-2 text-xs font-bold text-muted-foreground hover:text-foreground"
             >
               다시 시도
             </button>
@@ -131,7 +132,7 @@ export function ErrorState({ code, message, provider, occurredAt: providedOccurr
           {!notFound && (
             <button
               aria-label="안전한 오류 진단 정보 복사"
-              className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+              className="inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-bold text-muted-foreground hover:text-foreground"
               data-testid="copy-error-diagnostics"
               onClick={() => void copyDiagnostics()}
               type="button"
