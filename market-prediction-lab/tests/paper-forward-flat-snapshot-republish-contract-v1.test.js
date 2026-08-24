@@ -16,6 +16,8 @@ const OLD_SHA = '30c750562fdde49428e4ddd17b889c1bd63ccee8';
 const TARGET_SHA = 'a6b0ad25637d61752e44c9e298849029c4c62f2d';
 const PUBLISHER = 'a'.repeat(64);
 const SNAPSHOT_PATH = '/opt/stock-app-data/paper-forward-v1/publisher/paper-state-v2.json';
+const WORKFLOW_FILE = new URL('../../.github/workflows/paper-forward-flat-snapshot-republish.yml', import.meta.url);
+const RUNTIME_FILE = new URL('../../ops/run-paper-forward-flat-snapshot-republish.mjs', import.meta.url);
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -311,7 +313,7 @@ test('requires the final immutable snapshot to be target-bound, fresh, flat and 
 });
 
 test('workflow is approval-gated, current-main exact, and has no schedule activation trigger', () => {
-  const workflow = fs.readFileSync('.github/workflows/paper-forward-flat-snapshot-republish.yml', 'utf8');
+  const workflow = fs.readFileSync(WORKFLOW_FILE, 'utf8');
   assert.match(workflow, /environment:\s*production/);
   assert.match(workflow, /\/run-paper-forward-flat-snapshot-republish /);
   assert.match(workflow, /Required CI 6\/6/);
@@ -325,7 +327,7 @@ test('workflow is approval-gated, current-main exact, and has no schedule activa
 });
 
 test('runtime source contains rollback and zero-authority safety contracts', () => {
-  const source = fs.readFileSync('ops/run-paper-forward-flat-snapshot-republish.mjs', 'utf8');
+  const source = fs.readFileSync(RUNTIME_FILE, 'utf8');
   assert.match(source, /restoreOriginals/);
   assert.match(source, /REPUBLISH_ROLLBACK/);
   assert.match(source, /paperFinancialMutation:\s*0/);
