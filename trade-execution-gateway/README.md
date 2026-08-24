@@ -1,6 +1,6 @@
-# Standalone Trade Execution Gateway v0.5
+# Standalone Trade Execution Gateway v0.6
 
-Production 앱과 분리된 **PAPER 전용 OMS / Execution Safety 준비 서비스**입니다.
+Production 앱과 분리된 **PAPER 전용 OMS / Execution Safety / Execution Quality 준비 서비스**입니다.
 
 ## 절대 안전 경계
 
@@ -13,64 +13,84 @@ Production 앱과 분리된 **PAPER 전용 OMS / Execution Safety 준비 서비�
 - 실제 주문/취소/정정/이체/출금 없음
 - Production/Staging route 미연결
 - 기본 bind `127.0.0.1:8792`
-- 기존 앱/Production workflow/DB/Supabase/Secret 수정 없음
 
-공개 시세 네트워크는 별도입니다. 기본 OFF이며 명시적으로 활성화한 경우에만 hard-coded Upbit/Bitget **public WebSocket**으로 outbound가 가능합니다. 이 public transport는 주문 권한을 만들지 않습니다.
+공개 시세 네트워크는 별도이며 기본 OFF입니다. 명시적으로 활성화한 경우에만 hard-coded Upbit/Bitget public WebSocket을 사용할 수 있고 주문 권한은 만들지 않습니다.
 
-## Durable Paper OMS
+## v0.5 기반 유지
 
-- 기본 파일: `trade-execution-gateway/.state/paper-state.json`
-- Production DB 사용 `false`, secret 저장 `false`
-- SHA-256 integrity checksum
-- file `fsync` → atomic rename → directory `fsync`
-- 이전 snapshot `.bak` 유지
-- state file `0600`, state directory `0700`
-- 최대 5 MiB / 10,000 Paper orders fail-closed cap
-- 주문과 idempotency key 함께 복구
+- Durable Paper OMS + idempotency 재시작 복구
+- `fsync` → atomic rename → directory `fsync`
+- 손상 state fail-closed
+- 중단 주문 `recoveryHold`, 자동 재제출 0
+- Upbit/Bitget public-only WebSocket runtime
+- sequence/clock/stale/circuit breaker
+- server-attested public evidence와 caller evidence 분리
+- spread/deviation/depth/slippage guard
 
-**재시작 후 자동 재제출은 금지**합니다. `CREATED/RISK_ACCEPTED/SUBMITTED` 중단 상태는 `recoveryHold=true`로 복구되며 같은 idempotency key가 재입력돼도 adapter submission을 실행하지 않습니다.
+## v0.6 Execution Cost Evidence
 
-Paper adapter 호출 **전** durable state를 먼저 저장하고, adapter accepted 후 다시 저장합니다. accepted 저장 직전에 프로세스가 중단돼도 재시작 시 자동 재주문 대신 recovery hold로 멈춥니다.
+수수료/세금/환전비용/펀딩을 **코드에 현재 값으로 하드코딩하지 않습니다.**
 
-## Public-only WebSocket runtime
+`POST /v1/execution/costs/preview`
 
-기본값은 네트워크 OFF입니다.
+비용 schedule은 반드시 다음을 명시합니다.
 
-```text
-TEG_PUBLIC_MARKET_DATA_ENABLED=true
-TEG_UPBIT_PUBLIC_SYMBOL=KRW-BTC
-TEG_BITGET_PUBLIC_SYMBOL=BTCUSDT
-```
+- market/provider/symbol identity
+- source + scheduleVersion
+- currency
+- effectiveFrom/effectiveTo
+- maker/taker fee bps
+- buy/sell tax bps
+- FX conversion bps
 
-명시적으로 활성화했을 때만:
+선물 funding은 각 event마다 `rateBps`와 `payerSide=LONG|SHORT`를 명시하므로 provider 방향 규칙을 코드가 추측하지 않습니다.
 
-- Upbit Spot: `wss://api.upbit.com/websocket/v1`
-- Bitget Futures: `wss://ws.bitget.com/v2/ws/public`
+결과는 항상 `READ_ONLY_PAPER_COST_ESTIMATE`이며 actual broker charge evidence가 아닙니다.
 
-URL override 및 credentials/header/token/API key/passphrase 입력은 지원하지 않습니다. Private WebSocket은 구현하지 않습니다.
+## v0.6 Execution Quality / TCA
 
-Public runtime이 직접 수신한 메시지만 `serverAttested=true`, `transportObservedByGateway=true`, `callerSuppliedEvidence=false`로 승격됩니다. 그러나 항상 `liveExecutionEligible=false`, `orderSubmissionAllowed=false`입니다.
+- `POST /v1/execution/tca/preview`
+- `POST /v1/paper/orders/:orderId/tca/preview`
 
-## Stream 복구 / Clock / Health
+측정값:
 
-- Upbit reconnect 후 orderbook `SNAPSHOT` 필수, timestamp regression 차단, `PING` keepalive
-- Bitget `books` snapshot + incremental
-- Bitget 첫 update: snapshot seq가 `[pseq, seq]` 범위에 포함되어야 함
-- 이후 `previous seq == next pseq` 필수
-- `pseq=0` reset은 fresh snapshot 재동기화 요구
-- Bitget `ping/pong` keepalive
-- provider clock skew fail-closed
-- stale provider health
-- reconnect rate-limit + exponential backoff
-- consecutive failure circuit breaker
-- disconnect가 clock/sequence 등 actionable root failure를 덮어쓰지 않음
+- fill VWAP
+- fill ratio / COMPLETE vs PARTIAL
+- arrival-price implementation shortfall bps
+- decision-price shortfall bps
+- pre-trade expected-fill prediction error bps
+- explicit cost evidence 포함 all-in shortfall bps
 
-## Execution guards
+실제 거래소 fill이라고 주장하는 evidence는 v0.6에서 검증된 것으로 받아들이지 않습니다. Paper fill 또는 caller-supplied read-only evidence만 분석하며 `executionAuthority=NONE`입니다.
 
-- caller evidence → `CALLER_SUPPLIED_UNATTESTED`
-- gateway public transport evidence → `GATEWAY_TRANSPORT_OBSERVED_PUBLIC`
+## v0.6 Paper↔Live Parity Foundation
 
-stale / price-deviation / spread / depth / slippage guard를 적용하지만 실주문 권한은 0입니다.
+`POST /v1/parity/preview`
+
+현재 canonical provider 계약:
+
+- KR/US stock → Toss
+- crypto spot → Upbit
+- crypto futures → Bitget
+
+Live candidate는 반드시 `runtimeStatus=DISABLED`이고 private/order/cancel/amend runtime 권한이 모두 꺼져 있어야 합니다.
+
+비교 항목:
+
+- order intent fields
+- LIMIT/MARKET
+- cash BUY/SELL 또는 futures LONG/SHORT
+- OMS state model
+- idempotency
+- strict precision
+- partial fill
+- cancel/replace semantics
+- risk revalidation
+- cost evidence
+- reconciliation
+- futures reduceOnly
+
+계약이 전부 맞아도 결과는 `CONTRACT_MATCH_DISABLED`일 뿐이며 `activationAllowed=false`, 실제 Paper↔Live runtime parity proven=false입니다.
 
 ## 검증
 
@@ -79,19 +99,15 @@ cd trade-execution-gateway
 npm test
 ```
 
-- 기존 Application CI exact-head 단계의 `.github/tests/pr-exact-head-trade-execution-gateway.test.mjs`가 package `npm test`를 직접 실행
-- `.github/workflows/trade-execution-gateway-validation.yml`은 Node 22 독립 exact-head validation
-- deploy/secret/private network 없음
-- deterministic public-WebSocket tests는 mock transport 사용
+전용 exact-head workflow와 기존 Application CI exact-head bridge가 package test를 직접 실행합니다. Public WebSocket 단위 테스트는 deterministic mock transport를 사용하며 검증 중 public network는 활성화하지 않습니다.
 
-## 현재 미연결
+## 의도적 미연결
 
-- authenticated account read/reconciliation adapter
+- authenticated read-only account/order reconciliation adapter
+- 실제 broker/exchange fee statement ingestion
 - actual private order/cancel/amend adapter
-- Production route
 - server-authoritative live portfolio policy
-- Execution Quality / TCA
-- Paper↔Live parity harness
-- 실제 실주문
+- real Paper↔Live runtime replay/parity harness
+- Production route / 실주문
 
 별도 승인 전까지 연결하지 않습니다.

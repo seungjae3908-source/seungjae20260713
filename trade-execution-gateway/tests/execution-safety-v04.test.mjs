@@ -33,8 +33,8 @@ function krPaperOrder(overrides = {}) {
   return { mode: "PAPER", market: "KR_STOCK", symbol: "005930", side: "BUY", orderType: "LIMIT", quantity: 2, limitPrice: 70_000, idempotencyKey: "v04-default-paper-0001", ...overrides };
 }
 
-test("v0.5 preserves v0.4 paper-only and zero-private-authority safety", () => {
-  assert.equal(SAFETY_CONTRACT.version, "0.5.0");
+test("v0.6 preserves v0.5 paper-only and zero-private-authority safety", () => {
+  assert.equal(SAFETY_CONTRACT.version, "0.6.0");
   assert.equal(SAFETY_CONTRACT.executionMode, "PAPER_ONLY");
   assert.equal(SAFETY_CONTRACT.liveTrading, false);
   assert.equal(SAFETY_CONTRACT.privateTradingApiAllowed, false);
