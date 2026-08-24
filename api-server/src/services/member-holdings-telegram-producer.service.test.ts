@@ -56,7 +56,7 @@ function repository(rows: MemberHoldingStockHolder[]): MemberHoldingProducerRepo
   };
 }
 
-test('member holdings producer is exact-true opt-in and otherwise stays disabled', async () => {
+test('member holdings producer is true-token opt-in and otherwise stays disabled', async () => {
   assert.equal(memberHoldingsTelegramProducerEnabled(undefined), false);
   assert.equal(memberHoldingsTelegramProducerEnabled('false'), false);
   assert.equal(memberHoldingsTelegramProducerEnabled('1'), false);
@@ -120,6 +120,33 @@ test('canonical stock holder fanout uses one public quote and never fabricates A
     assert.equal('quantity' in evidence, false);
     assert.match(evidence.eventId, /^scanner-holding:/u);
   }
+});
+
+test('member delivery fanout is bounded to eight concurrent deliveries', async () => {
+  const rows = Array.from({ length: 9 }, (_, index): MemberHoldingStockHolder => ({
+    userId: `${index + 1}`.padStart(36, '0'),
+    ticker: '005930',
+    name: '삼성전자',
+    market: 'KR',
+    averageEntryPrice: 78_000 + index,
+  }));
+  let active = 0;
+  let maxActive = 0;
+  const result = await fanoutMemberHoldingScannerAlert(stockAlert(), {
+    enabled: true,
+    repository: repository(rows),
+    quoteReader: async () => ({ price: 82_000, changePercent: 1 }),
+    deliver: async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      active -= 1;
+      return { status: 'SKIPPED', reason: 'TELEGRAM_DISCONNECTED', policy: null };
+    },
+  });
+  assert.equal(result.status, 'PROCESSED');
+  assert.equal(result.matchedCount, 9);
+  assert.equal(maxActive, 8);
 });
 
 test('coin alerts stay unwired until a canonical coin holdings source exists', async () => {
@@ -197,4 +224,25 @@ test('scanner runtime invokes member producer independently of public room confi
   );
   assert.equal(producerCalls, 1);
   assert.equal(publicSends, 0);
+});
+
+test('public room delivery is not serialized behind a slow member producer', async () => {
+  let publicSends = 0;
+  await deliverScannerTelegramAlerts(
+    [stockAlert()],
+    async () => {
+      publicSends += 1;
+      return { ok: true, attempts: 1 };
+    },
+    () => 'stock-room',
+    {},
+    async () => {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(publicSends, 1);
+      return {
+        status: 'PROCESSED', matchedCount: 1, policyCount: 0, skippedCount: 1, errorCount: 0,
+      };
+    },
+  );
+  assert.equal(publicSends, 1);
 });
