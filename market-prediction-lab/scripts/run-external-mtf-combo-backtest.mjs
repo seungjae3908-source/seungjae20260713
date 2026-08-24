@@ -25,14 +25,14 @@ const OOS_PERIOD = Object.freeze({
   endTime: RESEARCH_BACKTEST_PERIOD.validationEndTime,
 });
 const CANDIDATES = Object.freeze([
-  Object.freeze({ id: "BASE_BREAKOUT_96", type: "breakout", breakoutBars: 96, trends: Object.freeze([]), volumeGate: false, exit: Object.freeze({ atrPeriod: 14, stopAtrMultiple: 4, targetRiskMultiple: 2 }) }),
-  Object.freeze({ id: "H4_BREAKOUT_96", type: "breakout", breakoutBars: 96, trends: Object.freeze(["h4"]), volumeGate: false, exit: Object.freeze({ atrPeriod: 14, stopAtrMultiple: 4, targetRiskMultiple: 2 }) }),
-  Object.freeze({ id: "H4_H1_BREAKOUT_96", type: "breakout", breakoutBars: 96, trends: Object.freeze(["h4", "h1"]), volumeGate: false, exit: Object.freeze({ atrPeriod: 14, stopAtrMultiple: 4, targetRiskMultiple: 2 }) }),
-  Object.freeze({ id: "D1_H4_H1_BREAKOUT_96", type: "breakout", breakoutBars: 96, trends: Object.freeze(["d1", "h4", "h1"]), volumeGate: false, exit: Object.freeze({ atrPeriod: 14, stopAtrMultiple: 4, targetRiskMultiple: 2 }) }),
-  Object.freeze({ id: "D1_H4_H1_BREAKOUT_96_VOLUME", type: "breakout", breakoutBars: 96, trends: Object.freeze(["d1", "h4", "h1"]), volumeGate: true, exit: Object.freeze({ atrPeriod: 14, stopAtrMultiple: 4, targetRiskMultiple: 2 }) }),
-  Object.freeze({ id: "D1_H4_H1_PULLBACK_RECLAIM_VOLUME", type: "pullback", breakoutBars: null, trends: Object.freeze(["d1", "h4", "h1"]), volumeGate: true, exit: Object.freeze({ atrPeriod: 14, stopAtrMultiple: 3, targetRiskMultiple: 2 }) }),
+  Object.freeze({ id: "H4_BREAKOUT_20", type: "breakout", window: 20, requireD1: false, requireH4Trend: true, volumeGate: false, exit: Object.freeze({ atrPeriod: 14, stopAtrMultiple: 8, targetRiskMultiple: 2 }) }),
+  Object.freeze({ id: "D1_H4_BREAKOUT_20", type: "breakout", window: 20, requireD1: true, requireH4Trend: true, volumeGate: false, exit: Object.freeze({ atrPeriod: 14, stopAtrMultiple: 8, targetRiskMultiple: 2 }) }),
+  Object.freeze({ id: "D1_H4_BREAKOUT_50", type: "breakout", window: 50, requireD1: true, requireH4Trend: true, volumeGate: false, exit: Object.freeze({ atrPeriod: 14, stopAtrMultiple: 10, targetRiskMultiple: 2 }) }),
+  Object.freeze({ id: "D1_H4_BREAKOUT_100", type: "breakout", window: 100, requireD1: true, requireH4Trend: true, volumeGate: false, exit: Object.freeze({ atrPeriod: 14, stopAtrMultiple: 12, targetRiskMultiple: 2 }) }),
+  Object.freeze({ id: "D1_H4_BREAKOUT_50_VOLUME", type: "breakout", window: 50, requireD1: true, requireH4Trend: true, volumeGate: true, exit: Object.freeze({ atrPeriod: 14, stopAtrMultiple: 10, targetRiskMultiple: 2 }) }),
+  Object.freeze({ id: "D1_H4_EMA20_50_CROSS", type: "ema_cross", window: null, requireD1: true, requireH4Trend: false, volumeGate: false, exit: Object.freeze({ atrPeriod: 14, stopAtrMultiple: 10, targetRiskMultiple: 2 }) }),
 ]);
-const LITERATURE_FULL = "D1_H4_H1_BREAKOUT_96_VOLUME";
+const LITERATURE_FULL = "D1_H4_BREAKOUT_50_VOLUME";
 
 function assertResearchSha(value) {
   if (!/^[0-9a-f]{40}$/u.test(value ?? "")) throw new Error("RESEARCH_CODE_SHA must be an exact 40-character SHA");
@@ -134,61 +134,95 @@ function mapLatestClosedState(candles, states) {
   return Object.freeze(mapped);
 }
 
+function mapClosedBarIndex(candles, bars) {
+  const indexes = new Array(candles.length).fill(-1);
+  const justClosed = new Array(candles.length).fill(false);
+  let pointer = -1;
+  for (let i = 0; i < candles.length; i += 1) {
+    const decisionTime = candles[i].timestamp + FIFTEEN_MINUTES;
+    while (pointer + 1 < bars.length && bars[pointer + 1].endTime <= decisionTime) pointer += 1;
+    indexes[i] = pointer;
+    justClosed[i] = pointer >= 0 && bars[pointer].endTime === decisionTime;
+  }
+  return Object.freeze({ indexes: Object.freeze(indexes), justClosed: Object.freeze(justClosed) });
+}
+
+function emaPairStates(bars) {
+  const closes = bars.map((row) => row.close);
+  const fast = ema(closes, 20);
+  const slow = ema(closes, 50);
+  return Object.freeze({ fast: Object.freeze(fast), slow: Object.freeze(slow) });
+}
+
 function buildFeatureSet(candles) {
-  const closes = candles.map((row) => row.close);
-  const volumes = candles.map((row) => row.volume);
-  const ema20 = ema(closes, 20);
-  const volumeMean20 = rollingMeanPrior(volumes, 20);
-  const priorHigh96 = rollingPriorExtrema(candles, 96, "high", "max");
-  const priorLow96 = rollingPriorExtrema(candles, 96, "low", "min");
-  const h1 = trendStates(aggregateClosedBars(candles, 60 * 60 * 1000));
-  const h4 = trendStates(aggregateClosedBars(candles, 4 * 60 * 60 * 1000));
-  const d1 = trendStates(aggregateClosedBars(candles, 24 * 60 * 60 * 1000));
+  const h4Bars = aggregateClosedBars(candles, 4 * 60 * 60 * 1000);
+  const d1Bars = aggregateClosedBars(candles, 24 * 60 * 60 * 1000);
+  const h4Trend = trendStates(h4Bars);
+  const d1Trend = trendStates(d1Bars);
+  const h4Map = mapClosedBarIndex(candles, h4Bars);
+  const h4Ema = emaPairStates(h4Bars);
+  const h4Volumes = h4Bars.map((row) => row.volume);
+  const h4VolumeMean20 = rollingMeanPrior(h4Volumes, 20);
+  const extrema = {};
+  for (const window of [20, 50, 100]) {
+    extrema[window] = Object.freeze({
+      high: Object.freeze(rollingPriorExtrema(h4Bars, window, "high", "max")),
+      low: Object.freeze(rollingPriorExtrema(h4Bars, window, "low", "min")),
+    });
+  }
   return Object.freeze({
-    ema20: Object.freeze(ema20),
-    volumeMean20: Object.freeze(volumeMean20),
-    priorHigh96: Object.freeze(priorHigh96),
-    priorLow96: Object.freeze(priorLow96),
-    h1: mapLatestClosedState(candles, h1),
-    h4: mapLatestClosedState(candles, h4),
-    d1: mapLatestClosedState(candles, d1),
-    aggregateCounts: Object.freeze({ h1: h1.length, h4: h4.length, d1: d1.length }),
+    h4Bars,
+    h4Trend: Object.freeze(h4Trend.map((row) => row.direction)),
+    h4Fast: h4Ema.fast,
+    h4Slow: h4Ema.slow,
+    h4Indexes: h4Map.indexes,
+    h4JustClosed: h4Map.justClosed,
+    h4VolumeMean20: Object.freeze(h4VolumeMean20),
+    d1: mapLatestClosedState(candles, d1Trend),
+    extrema: Object.freeze(extrema),
+    aggregateCounts: Object.freeze({ h4: h4Bars.length, d1: d1Bars.length }),
   });
 }
 
-function signalEvaluatorFor({ candidate, side, features, candles }) {
+function signalEvaluatorFor({ candidate, side, features }) {
   const direction = side === "long" ? 1 : -1;
   return ({ index }) => {
-    if (index < 100) return null;
-    for (const trend of candidate.trends) if (features[trend][index] !== direction) return null;
-    const meanVolume = features.volumeMean20[index];
-    if (candidate.volumeGate && (!Number.isFinite(meanVolume) || candles[index].volume < meanVolume)) return null;
+    if (!features.h4JustClosed[index]) return null;
+    const h4Index = features.h4Indexes[index];
+    if (h4Index < 101) return null;
+    if (candidate.requireD1 && features.d1[index] !== direction) return null;
+    if (candidate.requireH4Trend && features.h4Trend[h4Index] !== direction) return null;
+    const bar = features.h4Bars[h4Index];
+    const priorBar = features.h4Bars[h4Index - 1];
+    const meanVolume = features.h4VolumeMean20[h4Index];
+    if (candidate.volumeGate && (!Number.isFinite(meanVolume) || bar.volume < meanVolume)) return null;
 
     let triggered = false;
     if (candidate.type === "breakout") {
-      const currentBoundary = direction === 1 ? features.priorHigh96[index] : features.priorLow96[index];
-      const priorBoundary = direction === 1 ? features.priorHigh96[index - 1] : features.priorLow96[index - 1];
+      const ext = features.extrema[candidate.window];
+      const currentBoundary = direction === 1 ? ext.high[h4Index] : ext.low[h4Index];
+      const priorBoundary = direction === 1 ? ext.high[h4Index - 1] : ext.low[h4Index - 1];
       if (!Number.isFinite(currentBoundary) || !Number.isFinite(priorBoundary)) return null;
       triggered = direction === 1
-        ? candles[index].close > currentBoundary && candles[index - 1].close <= priorBoundary
-        : candles[index].close < currentBoundary && candles[index - 1].close >= priorBoundary;
-    } else if (candidate.type === "pullback") {
-      const currentEma = features.ema20[index];
-      const priorEma = features.ema20[index - 1];
-      if (!Number.isFinite(currentEma) || !Number.isFinite(priorEma)) return null;
-      triggered = direction === 1
-        ? candles[index].close > currentEma && candles[index - 1].close <= priorEma
-        : candles[index].close < currentEma && candles[index - 1].close >= priorEma;
+        ? bar.close > currentBoundary && priorBar.close <= priorBoundary
+        : bar.close < currentBoundary && priorBar.close >= priorBoundary;
+    } else if (candidate.type === "ema_cross") {
+      const fast = features.h4Fast[h4Index];
+      const slow = features.h4Slow[h4Index];
+      const prevFast = features.h4Fast[h4Index - 1];
+      const prevSlow = features.h4Slow[h4Index - 1];
+      if (![fast, slow, prevFast, prevSlow].every(Number.isFinite)) return null;
+      triggered = direction === 1 ? fast > slow && prevFast <= prevSlow : fast < slow && prevFast >= prevSlow;
     }
     if (!triggered) return null;
     return Object.freeze({
       candidate: candidate.id,
       type: candidate.type,
-      h1Direction: features.h1[index],
-      h4Direction: features.h4[index],
+      signalTimeframe: "4h",
       d1Direction: features.d1[index],
-      volumeRatio: Number.isFinite(meanVolume) && meanVolume > 0 ? candles[index].volume / meanVolume : null,
-      trigger: candidate.type === "breakout" ? "CLOSED_15M_24H_DONCHIAN_BREAKOUT" : "CLOSED_15M_EMA20_PULLBACK_RECLAIM",
+      h4Direction: features.h4Trend[h4Index],
+      h4VolumeRatio: Number.isFinite(meanVolume) && meanVolume > 0 ? bar.volume / meanVolume : null,
+      trigger: candidate.type === "breakout" ? `CLOSED_4H_DONCHIAN_${candidate.window}_BREAKOUT` : "CLOSED_4H_EMA20_50_CROSS",
     });
   };
 }
@@ -224,9 +258,9 @@ function runOne({ candidate, side, period, dataset, features, label }) {
       riskModel: RISK_MODEL,
     }),
     strategy: `external_mtf_${candidate.id.toLowerCase()}`,
-    strategyVersion: `EXTERNAL_MTF_V2_${label}`,
+    strategyVersion: `EXTERNAL_MTF_V3_${label}`,
     parameters: candidate.exit,
-    signalEvaluator: signalEvaluatorFor({ candidate, side, features, candles: dataset.candles }),
+    signalEvaluator: signalEvaluatorFor({ candidate, side, features }),
     period,
   });
   return compact(result);
@@ -234,7 +268,7 @@ function runOne({ candidate, side, period, dataset, features, label }) {
 
 function rankDevelopment(rows) {
   return [...rows].sort((left, right) => {
-    const gate = (row) => row.totalTrades >= 50 && Number.isFinite(row.profitFactor) && row.profitFactor > 1
+    const gate = (row) => row.totalTrades >= 30 && Number.isFinite(row.profitFactor) && row.profitFactor > 1
       && Number.isFinite(row.expectancy) && row.expectancy > 0 && row.totalReturnPercent > 0 ? 1 : 0;
     return gate(right) - gate(left)
       || (Number.isFinite(right.profitFactor) ? right.profitFactor : -Infinity) - (Number.isFinite(left.profitFactor) ? left.profitFactor : -Infinity)
@@ -247,13 +281,13 @@ function rankDevelopment(rows) {
 function markdown(summary) {
   const f = (value, digits = 3) => Number.isFinite(value) ? value.toFixed(digits) : "N/A";
   const lines = [
-    "# External Literature MTF Trend/Breakout — BTCUSDT Futures V2",
+    "# External Literature 4H/D1 Trend — BTCUSDT Futures V3",
     "",
     `- research SHA: \`${summary.researchCodeSha}\``,
     `- selection data: ${summary.dataset.selectionDataStatus}, candles=${summary.dataset.candleCount}`,
     `- Final Holdout read: **${summary.finalHoldoutRead}**`,
     `- cost: entry 0.06% + exit 0.06% + spread 0.02% + slippage 0.02%, funding included`,
-    `- risk: 1% per trade, 1x leverage; predeclared ATR14 stops 3x/4x and target 2R`,
+    `- risk: 1% per trade, 1x leverage; predeclared ATR14(15m) stops 8x/10x/12x and target 2R`,
     "",
     "## Development 2020-2024",
     "",
@@ -301,7 +335,7 @@ for (const side of ["long", "short"]) {
   const ranked = rankDevelopment(rows);
   selected[side] = Object.freeze({
     candidate: ranked[0].candidate,
-    developmentGatePassed: ranked[0].totalTrades >= 50 && ranked[0].profitFactor > 1 && ranked[0].expectancy > 0 && ranked[0].totalReturnPercent > 0,
+    developmentGatePassed: ranked[0].totalTrades >= 30 && ranked[0].profitFactor > 1 && ranked[0].expectancy > 0 && ranked[0].totalReturnPercent > 0,
     metrics: ranked[0],
   });
 }
@@ -309,7 +343,7 @@ for (const side of ["long", "short"]) {
 const oos = { long: [], short: [] };
 for (const side of ["long", "short"]) {
   const roles = [
-    Object.freeze({ role: "BASELINE", candidate: "BASE_BREAKOUT_96" }),
+    Object.freeze({ role: "BASELINE", candidate: "H4_BREAKOUT_20" }),
     Object.freeze({ role: "LITERATURE_FULL_PREDECLARED", candidate: LITERATURE_FULL }),
     Object.freeze({ role: "DEVELOPMENT_SELECTED", candidate: selected[side].candidate }),
   ];
@@ -328,7 +362,7 @@ for (const side of ["long", "short"]) {
 
 const summary = Object.freeze({
   schemaVersion: 1,
-  mode: "external-literature-mtf-trend-breakout-btcusdt-futures-v2",
+  mode: "external-literature-h4-d1-trend-btcusdt-futures-v3",
   researchCodeSha,
   dataset: Object.freeze({
     venue: "BINANCE_USDM",
@@ -344,9 +378,9 @@ const summary = Object.freeze({
   }),
   researchDesign: Object.freeze({
     candidates: CANDIDATES,
-    trigger: "closed 15m 24h Donchian breakout or EMA20 pullback reclaim",
-    higherTimeframeTrend: "closed-bar EMA20/50 alignment plus close vs EMA20",
-    volumeGate: "where enabled, current closed 15m volume >= prior 20-bar mean",
+    trigger: "closed 4h Donchian 20/50/100 breakout or 4h EMA20/50 cross; 15m only supplies next-open execution",
+    higherTimeframeTrend: "closed 4h EMA20/50 alignment and optional closed daily EMA20/50 alignment",
+    volumeGate: "where enabled, current closed 4h volume >= prior 20 closed 4h mean",
     costModel: COST_MODEL,
     riskModel: RISK_MODEL,
     developmentPeriod: DEVELOPMENT_PERIOD,
