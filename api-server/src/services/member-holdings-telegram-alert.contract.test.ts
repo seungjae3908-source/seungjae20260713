@@ -254,8 +254,9 @@ test('member AI advisor fails closed when confidence, performance, prices, or li
     averageEntryPrice: 0,
     ai: {
       verdict: 'HOLD',
-      summary: '요약은 공급됐지만 confidence provenance는 없음',
+      summary: '요약은 공급됐지만 actionable AI reasons는 없음',
       confidencePercent: 99,
+      confidenceSource: 'confidence-source-without-reasons',
     },
     performance: {
       state: 'READY',
@@ -271,7 +272,9 @@ test('member AI advisor fails closed when confidence, performance, prices, or li
 
   const details = dispatch.alert.details ?? '';
   assert.match(details, /평단 기준 손익률: N\/A/u);
+  assert.match(details, /AI 판단: N\/A/u);
   assert.match(details, /AI 신뢰도: N\/A/u);
+  assert.match(details, /\[AI 판단 근거\] 검증된 근거 N\/A/u);
   assert.match(details, /분할 매수\/진입: N\/A/u);
   assert.match(details, /분할 매도\/목표: N\/A/u);
   assert.match(details, /손절가: N\/A/u);
