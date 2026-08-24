@@ -90,7 +90,7 @@ export class ProviderHealthCircuit {
 
   recordDisconnected(code = "PUBLIC_PROVIDER_DISCONNECTED") {
     this.#connected = false;
-    this.#lastFailureCode = code;
+    if (this.#lastFailureCode == null) this.#lastFailureCode = code;
   }
 
   requireResync(code = "PUBLIC_BOOK_RESYNC_REQUIRED") {
