@@ -3,6 +3,7 @@ import { fail, optionalString, requireString } from './errors.js';
 const DOI_PATTERN = /^10\.\d{4,9}\/[^\s]+$/u;
 const MODERN_ARXIV_PATTERN = /^\d{4}\.\d{4,5}$/u;
 const LEGACY_ARXIV_PATTERN = /^[a-z][a-z0-9.-]*\/\d{7}$/u;
+const OFFSET_TIMESTAMP_PATTERN = /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?([Zz]|[+-](\d{2}):(\d{2}))$/u;
 
 function decodeIdentifier(value, code) {
   try {
@@ -105,7 +106,32 @@ export function normalizeTemporal(value, code = 'TEMPORAL_VALUE_INVALID') {
     if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) fail(code);
     return text;
   }
-  if (!/(?:z|[+-]\d{2}:\d{2})$/iu.test(text)) fail(code);
+
+  const match = text.match(OFFSET_TIMESTAMP_PATTERN);
+  if (!match) fail(code);
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText = '0', , , offsetHourText, offsetMinuteText] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText);
+  const offsetHour = offsetHourText == null ? 0 : Number(offsetHourText);
+  const offsetMinute = offsetMinuteText == null ? 0 : Number(offsetMinuteText);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    year < 1000
+    || year > 9999
+    || date.getUTCFullYear() !== year
+    || date.getUTCMonth() !== month - 1
+    || date.getUTCDate() !== day
+    || hour > 23
+    || minute > 59
+    || second > 59
+    || offsetHour > 23
+    || offsetMinute > 59
+  ) fail(code);
+
   const timestamp = Date.parse(text);
   if (!Number.isFinite(timestamp)) fail(code);
   return new Date(timestamp).toISOString();
