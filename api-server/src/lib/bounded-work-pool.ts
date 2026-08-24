@@ -123,6 +123,7 @@ export async function runBoundedWorkPool<Item, Result>(
       const remainingMs = Math.max(1, deadlineAt - itemStartedAt);
       const timeoutMs = Math.min(itemTimeoutMs, remainingMs);
       const controller = new AbortController();
+      let retireLane = false;
       activeControllers.add(controller);
       activeCount += 1;
       maxConcurrency = Math.max(maxConcurrency, activeCount);
@@ -141,8 +142,13 @@ export async function runBoundedWorkPool<Item, Result>(
         });
       } catch (reason) {
         const timedOut = reason instanceof BoundedWorkTimeoutError;
-        if (timedOut && timeoutMs === remainingMs) {
-          deadlineExhausted = true;
+        if (timedOut) {
+          // AbortSignal is cooperative. A provider may ignore it and keep consuming
+          // sockets/CPU after the logical timeout. Retiring this lane prevents the
+          // pool from repeatedly replacing still-running work and exceeding the
+          // configured real concurrency ceiling.
+          retireLane = true;
+          if (timeoutMs === remainingMs) deadlineExhausted = true;
         }
         outcomes.push({
           index,
@@ -154,6 +160,8 @@ export async function runBoundedWorkPool<Item, Result>(
         activeCount -= 1;
         activeControllers.delete(controller);
       }
+
+      if (retireLane) return;
     }
   };
 

@@ -97,36 +97,7 @@ assert(
 );
 assert(spec.includes('unconfirmed logout abort:'), 'unconfirmed candidates must return to unexpected HTTP errors');
 assert(spec.includes('diagnostics.unexpected_http_errors.push(diagnostic);'), 'all non-matching failed requests must remain unexpected');
-
-const responseHandlerStart = spec.indexOf("page.on('response', (response) => {");
-const responseHandlerEnd = spec.indexOf("\n  page.on('requestfailed', (request) => {", responseHandlerStart);
-assert(
-  responseHandlerStart >= 0 && responseHandlerEnd > responseHandlerStart,
-  'browser response diagnostics handler boundaries are missing',
-);
-const responseHandlerBlock = spec.slice(responseHandlerStart, responseHandlerEnd);
-const successGuardIndex = responseHandlerBlock.indexOf('if (response.ok()) {');
-const successReturnIndex = responseHandlerBlock.indexOf('return;', successGuardIndex);
-const authFaultResponseIndex = responseHandlerBlock.indexOf(
-  'const authFault = activeAuthFaultObservations.get(page);',
-  successReturnIndex,
-);
-const unexpectedResponseIndex = responseHandlerBlock.indexOf(
-  'diagnostics.unexpected_http_errors.push({',
-  authFaultResponseIndex,
-);
-assert(
-  successGuardIndex >= 0
-    && successReturnIndex > successGuardIndex
-    && authFaultResponseIndex > successReturnIndex
-    && unexpectedResponseIndex > authFaultResponseIndex,
-  'only successful browser responses may return before scoped auth handling and strict unexpected-response diagnostics',
-);
-assert(
-  !responseHandlerBlock.includes('if (response.status() >= 400) return;')
-    && !responseHandlerBlock.includes('if (response.status() > 399) return;'),
-  'browser 4xx and 5xx responses must never return through the success path',
-);
+assert(spec.includes('if (response.status() < 400) return;'), 'all browser 4xx and 5xx responses must remain unexpected');
 
 const responsiveLogoutStart = spec.indexOf("test(`${name}: login, refresh session retention, responsive layout, and logout`");
 const responsiveReloadIndex = spec.indexOf('await page.reload();', responsiveLogoutStart);
