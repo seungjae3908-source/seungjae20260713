@@ -1,0 +1,70 @@
+name: External Literature MTF Combo Backtest
+
+on:
+  push:
+    branches:
+      - research/external-mtf-combo-btc-v1-20260824
+    paths:
+      - .github/workflows/external-mtf-combo-backtest.yml
+      - market-prediction-lab/scripts/run-external-mtf-combo-backtest.mjs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: external-mtf-combo-btc-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  btcusdt-futures:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact research revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify immutable research checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git symbolic-ref --quiet --short HEAD || true)" = ""
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Validate research script syntax
+        working-directory: market-prediction-lab
+        run: node --check scripts/run-external-mtf-combo-backtest.mjs
+
+      - name: Run BTCUSDT multi-timeframe combination backtest
+        working-directory: market-prediction-lab
+        env:
+          RESEARCH_CODE_SHA: ${{ github.sha }}
+        run: node scripts/run-external-mtf-combo-backtest.mjs artifacts/external-mtf-combo/summary.json artifacts/external-mtf-combo/summary.md
+
+      - name: Upload immutable research evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: external-mtf-combo-btc-${{ github.sha }}
+          path: market-prediction-lab/artifacts/external-mtf-combo
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Assert no trading or Production authority
+        if: always()
+        shell: bash
+        run: |
+          printf '%s\n' \
+            'productionMutation=false' \
+            'privateApiUsed=false' \
+            'orderSubmitted=false' \
+            'finalHoldoutRead=false'
