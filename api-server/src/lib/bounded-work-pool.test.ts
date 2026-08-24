@@ -71,6 +71,49 @@ test('per-item timeout is explicit and aborts the timed-out worker signal', asyn
   assert.ok(result.outcomes.filter((item) => item.status === 'timed_out').every((item) => item.reason instanceof BoundedWorkTimeoutError));
 });
 
+test('timed-out lanes are not reused while non-cooperative work is still running', async () => {
+  const started: number[] = [];
+  const releases: Array<() => void> = [];
+  let active = 0;
+  let observedMaximum = 0;
+
+  const result = await runBoundedWorkPool(
+    [0, 1, 2, 3, 4],
+    async (item) => {
+      started.push(item);
+      active += 1;
+      observedMaximum = Math.max(observedMaximum, active);
+      try {
+        await new Promise<void>((resolve) => {
+          releases.push(resolve);
+        });
+        return item;
+      } finally {
+        active -= 1;
+      }
+    },
+    { concurrency: 2, deadlineMs: 200, itemTimeoutMs: 25 },
+  );
+
+  try {
+    assert.deepEqual(started, [0, 1]);
+    assert.equal(result.startedCount, 2);
+    assert.equal(result.timedOutCount, 2);
+    assert.equal(result.fulfilledCount, 0);
+    assert.equal(result.rejectedCount, 0);
+    assert.equal(result.deadlineReached, true);
+    assert.equal(result.maxConcurrency, 2);
+    assert.equal(observedMaximum, 2);
+    assert.equal(active, 2);
+    assert.deepEqual(result.outcomes.map((item) => item.index), [0, 1]);
+  } finally {
+    for (const release of releases) release();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+
+  assert.equal(active, 0);
+});
+
 test('global deadline prevents new work from starting after the budget is exhausted', async () => {
   const repetitions = 25;
 
