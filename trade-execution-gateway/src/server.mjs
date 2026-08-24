@@ -10,6 +10,9 @@ import { assessAttestedExecutionGuards, assessExecutionGuards } from "./executio
 import { buildBracketPlan, buildCancelReplacePlan, buildTrailingPlan } from "./order-plans.mjs";
 import { FilePaperStateStore } from "./paper-state-store.mjs";
 import { PublicMarketDataRuntimeRegistry } from "./public-websocket-runtime.mjs";
+import { estimateExecutionCosts } from "./execution-costs.mjs";
+import { analyzeExecutionQuality } from "./execution-quality.mjs";
+import { comparePaperLiveParity } from "./parity-contract.mjs";
 
 const HOST = "127.0.0.1";
 const DEFAULT_PORT = 8792;
@@ -148,6 +151,18 @@ const server = http.createServer(async (request, response) => {
       sendJson(response, 200, assessAttestedExecutionGuards({ intent: body.intent, evidence, policy: body.policy }));
       return;
     }
+    if (request.method === "POST" && url.pathname === "/v1/execution/costs/preview") {
+      sendJson(response, 200, estimateExecutionCosts(await readJson(request)));
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/v1/execution/tca/preview") {
+      sendJson(response, 200, analyzeExecutionQuality(await readJson(request)));
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/v1/parity/preview") {
+      sendJson(response, 200, comparePaperLiveParity(await readJson(request)));
+      return;
+    }
     if (request.method === "POST" && url.pathname === "/v1/reconciliation/order/preview") {
       sendJson(response, 200, reconcileOrderEvidence(await readJson(request)));
       return;
@@ -184,6 +199,13 @@ const server = http.createServer(async (request, response) => {
       }
     }
     if (request.method === "POST") {
+      const tcaOrderId = routeOrderId(url.pathname, "/tca/preview");
+      if (tcaOrderId) {
+        const body = await readJson(request);
+        const order = await gateway.getOrder(tcaOrderId);
+        sendJson(response, 200, analyzeExecutionQuality({ ...body, order }));
+        return;
+      }
       const fillOrderId = routeOrderId(url.pathname, "/fill");
       if (fillOrderId) {
         sendJson(response, 200, await gateway.applyPaperFill(fillOrderId, await readJson(request)));

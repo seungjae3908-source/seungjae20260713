@@ -1,6 +1,6 @@
 {
   "name": "trade-execution-gateway",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node src/server.mjs",
-    "check": "node --check src/server.mjs && node --check src/public-websocket-runtime.mjs && node --check src/paper-state-store.mjs",
+    "check": "node --check src/server.mjs && node --check src/public-websocket-runtime.mjs && node --check src/paper-state-store.mjs && node --check src/execution-costs.mjs && node --check src/execution-quality.mjs && node --check src/parity-contract.mjs",
     "test": "npm run check && node --test tests/*.test.mjs"
   }
 }
