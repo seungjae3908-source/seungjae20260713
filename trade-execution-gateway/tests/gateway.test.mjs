@@ -38,7 +38,7 @@ function krLimit(overrides = {}) {
   };
 }
 
-test("safety contract permanently denies live/private execution in v0.1", () => {
+test("safety contract permanently denies live/private execution in v0.2", () => {
   assert.equal(SAFETY_CONTRACT.executionMode, "PAPER_ONLY");
   assert.equal(SAFETY_CONTRACT.liveTrading, false);
   assert.equal(SAFETY_CONTRACT.realOrderEnabled, false);

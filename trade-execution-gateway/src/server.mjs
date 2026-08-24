@@ -5,6 +5,10 @@ import {
   PaperMockBrokerAdapter,
   TradeExecutionGateway,
 } from "./gateway.mjs";
+import {
+  placeWorkspacePaperOrder,
+  previewWorkspaceOrder,
+} from "./workspace-bridge.mjs";
 
 const HOST = "127.0.0.1";
 const DEFAULT_PORT = 8792;
@@ -98,9 +102,21 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/v1/workspace/orders/preview") {
+      const body = await readJson(request);
+      sendJson(response, 200, await previewWorkspaceOrder(gateway, body));
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/v1/paper/orders") {
       const body = await readJson(request);
       sendJson(response, 201, await gateway.placeOrder(body));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/v1/workspace/paper/orders") {
+      const body = await readJson(request);
+      sendJson(response, 201, await placeWorkspacePaperOrder(gateway, body));
       return;
     }
 

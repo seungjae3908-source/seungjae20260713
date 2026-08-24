@@ -22,7 +22,7 @@ export const ORDER_STATES = Object.freeze({
 
 export const SAFETY_CONTRACT = Object.freeze({
   service: "trade-execution-gateway",
-  version: "0.1.0",
+  version: "0.2.0",
   executionMode: "PAPER_ONLY",
   liveTrading: false,
   realOrderEnabled: false,
@@ -60,6 +60,16 @@ export function publicContract() {
       ],
       liveAdapterAccepted: false,
       brokerCredentialsAccepted: false,
+    },
+    workspaceBridge: {
+      source: "AI_TRADING_WORKSPACE_V1",
+      sourcePr: 88,
+      supportedMarkets: ["KR", "US"],
+      previewEndpoint: "/v1/workspace/orders/preview",
+      paperEndpoint: "/v1/workspace/paper/orders",
+      explicitPaperConfirmationRequired: true,
+      marketReferencePriceRequired: true,
+      productionRouteMounted: false,
     },
   };
 }
