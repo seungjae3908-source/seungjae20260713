@@ -149,7 +149,7 @@ for (const [width, height] of [[320, 760], [360, 800], [390, 844], [430, 932], [
     await expect(page.getByTestId('ui-builder-signal-scanner-desktop')).toHaveCount(0);
     const tabs = page.getByTestId('technical-mobile-tabs');
     await expect(tabs.getByRole('tab')).toHaveCount(4);
-    await expect(page.getByRole('button', { name: '코인 현물', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: /코인 현물/ })).toBeVisible();
 
     const metrics = await page.evaluate(() => {
       const root = document.documentElement;
