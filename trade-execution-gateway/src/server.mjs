@@ -9,6 +9,11 @@ import {
   placeWorkspacePaperOrder,
   previewWorkspaceOrder,
 } from "./workspace-bridge.mjs";
+import {
+  placeCoinPaperOrder,
+  previewCoinPaperOrder,
+} from "./coin-bridge.mjs";
+import { reconcileOrderEvidence } from "./reconciliation.mjs";
 
 const HOST = "127.0.0.1";
 const DEFAULT_PORT = 8792;
@@ -108,6 +113,18 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/v1/coin/orders/preview") {
+      const body = await readJson(request);
+      sendJson(response, 200, await previewCoinPaperOrder(gateway, body));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/v1/reconciliation/order/preview") {
+      const body = await readJson(request);
+      sendJson(response, 200, reconcileOrderEvidence(body));
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/v1/paper/orders") {
       const body = await readJson(request);
       sendJson(response, 201, await gateway.placeOrder(body));
@@ -117,6 +134,12 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "POST" && url.pathname === "/v1/workspace/paper/orders") {
       const body = await readJson(request);
       sendJson(response, 201, await placeWorkspacePaperOrder(gateway, body));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/v1/coin/paper/orders") {
+      const body = await readJson(request);
+      sendJson(response, 201, await placeCoinPaperOrder(gateway, body));
       return;
     }
 

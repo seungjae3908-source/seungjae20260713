@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  FUTURES_MARGIN_MODES,
   MARKETS,
   ORDER_STATES,
   ORDER_TYPES,
@@ -30,6 +31,50 @@ function requireString(value, name, min = 1, max = 128) {
     throw new GatewayError("INVALID_ORDER_INTENT", `${name} length is invalid`);
   }
   return normalized;
+}
+
+function optionalProvider(value) {
+  if (value == null) return null;
+  return requireString(value, "provider", 1, 64).toLowerCase();
+}
+
+function normalizeExecutionContext(input, market) {
+  const provider = optionalProvider(input.provider);
+  if (market !== "CRYPTO_FUTURES") {
+    if (input.leverage != null && Number(input.leverage) !== 1) {
+      throw new GatewayError("LEVERAGE_NOT_ALLOWED", `${market} does not accept leveraged order intent`);
+    }
+    if (input.marginMode != null) {
+      throw new GatewayError("MARGIN_MODE_NOT_ALLOWED", `${market} does not accept margin mode`);
+    }
+    if (input.reduceOnly === true) {
+      throw new GatewayError("REDUCE_ONLY_NOT_ALLOWED", `${market} does not accept reduceOnly`);
+    }
+    return Object.freeze({
+      provider,
+      leverage: 1,
+      marginMode: null,
+      reduceOnly: false,
+    });
+  }
+
+  const leverage = finitePositive(input.leverage);
+  if (leverage === null) {
+    throw new GatewayError("FUTURES_LEVERAGE_REQUIRED", "CRYPTO_FUTURES requires positive leverage");
+  }
+  const marginMode = requireString(input.marginMode, "marginMode", 4, 16).toUpperCase();
+  if (!FUTURES_MARGIN_MODES.includes(marginMode)) {
+    throw new GatewayError("UNSUPPORTED_MARGIN_MODE", `unsupported margin mode: ${marginMode}`);
+  }
+  if (input.reduceOnly != null && typeof input.reduceOnly !== "boolean") {
+    throw new GatewayError("INVALID_REDUCE_ONLY", "reduceOnly must be boolean when provided");
+  }
+  return Object.freeze({
+    provider,
+    leverage,
+    marginMode,
+    reduceOnly: input.reduceOnly === true,
+  });
 }
 
 function normalizeOrderIntent(input) {
@@ -90,6 +135,8 @@ function normalizeOrderIntent(input) {
     );
   }
 
+  const executionContext = normalizeExecutionContext(input, market);
+
   return Object.freeze({
     mode,
     market,
@@ -100,6 +147,7 @@ function normalizeOrderIntent(input) {
     quantity,
     limitPrice,
     referencePrice,
+    executionContext,
   });
 }
 

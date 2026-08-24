@@ -8,6 +8,7 @@ export const MARKETS = Object.freeze([
 export const ORDER_TYPES = Object.freeze(["LIMIT", "MARKET"]);
 export const CASH_SIDES = Object.freeze(["BUY", "SELL"]);
 export const FUTURES_SIDES = Object.freeze(["LONG", "SHORT"]);
+export const FUTURES_MARGIN_MODES = Object.freeze(["ISOLATED", "CROSS"]);
 
 export const ORDER_STATES = Object.freeze({
   CREATED: "CREATED",
@@ -22,7 +23,7 @@ export const ORDER_STATES = Object.freeze({
 
 export const SAFETY_CONTRACT = Object.freeze({
   service: "trade-execution-gateway",
-  version: "0.2.0",
+  version: "0.3.0",
   executionMode: "PAPER_ONLY",
   liveTrading: false,
   realOrderEnabled: false,
@@ -49,6 +50,7 @@ export function publicContract() {
       cash: CASH_SIDES,
       futures: FUTURES_SIDES,
     },
+    futuresMarginModes: FUTURES_MARGIN_MODES,
     states: ORDER_STATES,
     adapterContract: {
       requiredMethods: [
@@ -70,6 +72,27 @@ export function publicContract() {
       explicitPaperConfirmationRequired: true,
       marketReferencePriceRequired: true,
       productionRouteMounted: false,
+    },
+    coinBridge: {
+      source: "COIN_TRADING_WORKSPACE_V1",
+      canonicalProviders: {
+        CRYPTO_SPOT: "upbit",
+        CRYPTO_FUTURES: "bitget",
+      },
+      previewEndpoint: "/v1/coin/orders/preview",
+      paperEndpoint: "/v1/coin/paper/orders",
+      explicitPaperConfirmationRequired: true,
+      marketRuleEvidenceRequired: true,
+      portfolioRiskEvidenceRequired: true,
+      killSwitchStateRequired: true,
+      privateProviderCalls: false,
+      productionRouteMounted: false,
+    },
+    reconciliation: {
+      endpoint: "/v1/reconciliation/order/preview",
+      authority: "READ_ONLY_EVIDENCE",
+      mutatesOms: false,
+      brokerNetworkRead: false,
     },
   };
 }
