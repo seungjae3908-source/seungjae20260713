@@ -24,13 +24,39 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  static-contract:
+    name: Validate Production comprehensive QA target and approval gate
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify official target and dispatch-only Production browsing
+        run: |
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const workflow = fs.readFileSync('.github/workflows/production-comprehensive-readonly-qa.yml', 'utf8');
+          const liveJob = workflow.split('  production-comprehensive-readonly:')[1] ?? '';
+
+          if (!liveJob.includes("if: github.event_name == 'workflow_dispatch'")) {
+            throw new Error('Live comprehensive QA must remain explicit-dispatch only');
+          }
+          if (!liveJob.includes('environment: production')) {
+            throw new Error('Live comprehensive QA must remain protected by the production environment');
+          }
+          if (!liveJob.includes('PRODUCTION_BASE_URL: https://lsj119.com')) {
+            throw new Error('Live comprehensive QA must target the official Production hostname');
+          }
+          NODE
+
   production-comprehensive-readonly:
     name: Real Production PC/mobile comprehensive read-only QA
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 80
     environment: production
     env:
-      PRODUCTION_BASE_URL: https://lsj119.duckdns.org
+      PRODUCTION_BASE_URL: https://lsj119.com
       PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
       PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
       PRODUCTION_READONLY_E2E: "true"
