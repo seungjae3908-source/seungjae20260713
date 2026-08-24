@@ -129,7 +129,7 @@ export function PortfolioAiDiagnosis() {
         onKeyDown={(event) => {
           if (event.key === 'Enter') void askPortfolio();
         }}
-        className="min-w-0 flex-1 rounded-xl border border-border bg-background px-3 py-2.5 text-sm"
+        className="min-h-11 min-w-0 flex-1 rounded-xl border border-border bg-background px-3 py-2.5 text-sm"
         placeholder="예: AAPL이 10% 하락하면? (보유자산 코드 입력)"
       />
       <button
@@ -147,7 +147,7 @@ export function PortfolioAiDiagnosis() {
         type="button"
         key={sample}
         onClick={() => setQuestion(sample)}
-        className="min-h-9 rounded-full border border-border px-3 py-1.5 text-[11px] font-bold"
+        className="min-h-11 rounded-full border border-border px-3 py-1.5 text-[11px] font-bold"
       >{sample}</button>)}
     </div>
 
