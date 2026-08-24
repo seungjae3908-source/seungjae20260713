@@ -1,4 +1,5 @@
 import {
+  ProviderAdmissionError,
   processWideProviderAdmission,
   type ProviderAdmissionControl,
   type ProviderAdmissionExecution,
@@ -23,7 +24,7 @@ export interface BoundedWorkPoolOptions {
   now?: () => number;
   admission?: false | {
     control?: ProviderAdmissionControl;
-    identity?: ProviderAdmissionIdentity;
+    identity: ProviderAdmissionIdentity;
   };
 }
 
@@ -39,11 +40,47 @@ export interface BoundedWorkPoolResult<Result> {
   maxConcurrency: number;
 }
 
+export type BoundedWorkAvailabilityCode =
+  | 'CAPACITY_EXHAUSTED'
+  | 'CIRCUIT_OPEN'
+  | 'PROVIDER_TIMEOUT'
+  | 'PROVIDER_FAILURE'
+  | 'MISSING_EVIDENCE';
+
+export interface BoundedWorkAvailability {
+  partial: boolean;
+  failureCode: BoundedWorkAvailabilityCode | null;
+}
+
 export class BoundedWorkTimeoutError extends Error {
   constructor(readonly timeoutMs: number) {
     super(`Bounded work item exceeded ${timeoutMs}ms`);
     this.name = 'BoundedWorkTimeoutError';
   }
+}
+
+export function summarizeBoundedWorkAvailability<Result>(
+  result: BoundedWorkPoolResult<Result>,
+  requestedCount: number,
+): BoundedWorkAvailability {
+  const admissionCodes = result.outcomes.flatMap((outcome) => (
+    outcome.reason instanceof ProviderAdmissionError ? [outcome.reason.code] : []
+  ));
+  const failureCode: BoundedWorkAvailabilityCode | null = admissionCodes.includes('CIRCUIT_OPEN')
+    ? 'CIRCUIT_OPEN'
+    : admissionCodes.includes('CAPACITY_EXHAUSTED')
+      ? 'CAPACITY_EXHAUSTED'
+      : result.timedOutCount > 0
+        ? 'PROVIDER_TIMEOUT'
+        : result.rejectedCount > 0
+          ? 'PROVIDER_FAILURE'
+          : result.deadlineReached || result.startedCount < requestedCount
+            ? 'MISSING_EVIDENCE'
+            : null;
+  return {
+    partial: failureCode != null || result.aborted,
+    failureCode,
+  };
 }
 
 function positiveInteger(value: number, label: string): number {
@@ -100,16 +137,14 @@ export async function runBoundedWorkPool<Item, Result>(
   const deadlineMs = positiveInteger(options.deadlineMs, 'deadlineMs');
   const itemTimeoutMs = positiveInteger(options.itemTimeoutMs, 'itemTimeoutMs');
   const now = options.now ?? Date.now;
-  const admissionControl = options.admission === false
+  const admission = options.admission === false || options.admission == null
     ? null
-    : options.admission?.control ?? processWideProviderAdmission;
-  const admissionIdentity = options.admission && options.admission.identity
-    ? options.admission.identity
-    : {
-      provider: 'bounded-work',
-      domain: 'default',
-      operationClass: 'generic',
-    };
+    : options.admission;
+  if (admission && !admission.identity) {
+    throw new Error('admission.identity is required for process-wide provider isolation');
+  }
+  const admissionControl = admission?.control ?? (admission ? processWideProviderAdmission : null);
+  const admissionIdentity = admission?.identity;
   const startedAt = now();
   const deadlineAt = startedAt + deadlineMs;
   const outcomes: BoundedWorkOutcome<Result>[] = [];
@@ -148,7 +183,7 @@ export async function runBoundedWorkPool<Item, Result>(
       let admitted: ProviderAdmissionExecution<Result> | null = null;
 
       try {
-        if (admissionControl) {
+        if (admissionControl && admissionIdentity) {
           admitted = admissionControl.start(
             admissionIdentity,
             () => worker(items[index], index, controller.signal),

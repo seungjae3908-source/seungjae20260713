@@ -110,6 +110,18 @@ type ProviderState = {
   operations: Map<string, OperationState>;
 };
 
+export const PROVIDER_ADMISSION_CONFIG_LIMITS = Object.freeze({
+  globalCapacity: Object.freeze({ min: 2, max: 64 }),
+  providerCapacity: Object.freeze({ min: 1, max: 32 }),
+  timeoutThreshold: Object.freeze({ min: 1, max: 32 }),
+  cooldownMs: Object.freeze({ min: 10, max: 300_000 }),
+});
+
+export const PROVIDER_ADMISSION_TELEMETRY_LIMITS = Object.freeze({
+  inactiveProviders: 128,
+  inactiveOperationsPerProvider: 32,
+});
+
 type OutstandingRecord = {
   id: number;
   admittedAt: number;
@@ -134,14 +146,21 @@ export class ProviderAdmissionError extends Error {
   }
 }
 
-function positiveInteger(value: number, label: string): number {
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new Error(`${label} must be a positive integer`);
+function boundedInteger(
+  value: number,
+  label: string,
+  limits: Readonly<{ min: number; max: number }>,
+): number {
+  if (!Number.isSafeInteger(value) || value < limits.min || value > limits.max) {
+    throw new Error(`${label} must be a safe integer between ${limits.min} and ${limits.max}`);
   }
   return value;
 }
 
 function normalizedPart(value: string, label: string): string {
+  if (typeof value !== 'string') {
+    throw new Error(`${label} must be a stable provider admission identifier`);
+  }
   const normalized = value.trim().toLowerCase();
   if (!normalized || normalized.length > 80 || !/^[a-z0-9._:-]+$/.test(normalized)) {
     throw new Error(`${label} must be a stable provider admission identifier`);
@@ -149,38 +168,100 @@ function normalizedPart(value: string, label: string): string {
   return normalized;
 }
 
+function normalizedDomain(value: string): string {
+  if (typeof value !== 'string') {
+    throw new Error('domain must be a stable provider admission domain');
+  }
+  const rawParts = value.trim().toLowerCase().split(':');
+  if (rawParts.some((part) => !part)) {
+    throw new Error('domain must be a stable provider admission domain');
+  }
+  if (rawParts[0]?.endsWith('.')) rawParts[0] = rawParts[0].slice(0, -1);
+  const normalized = rawParts.join(':');
+  const hostname = rawParts[0] ?? '';
+  const hostnameLabels = hostname.split('.');
+  const validHostname = hostname.length > 0
+    && hostname.length <= 253
+    && hostnameLabels.every((label) => (
+      label.length > 0
+      && label.length <= 63
+      && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label)
+    ));
+  const validNamespaces = rawParts.slice(1).every((part) => (
+    part.length <= 63 && /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/.test(part)
+  ));
+  if (!validHostname || !validNamespaces || normalized.length > 253) {
+    throw new Error('domain must be a stable provider admission domain');
+  }
+  return normalized;
+}
+
 function normalizedIdentity(identity: ProviderAdmissionIdentity): ProviderAdmissionIdentity {
   return {
     provider: normalizedPart(identity.provider, 'provider'),
-    domain: normalizedPart(identity.domain, 'domain'),
+    domain: normalizedDomain(identity.domain),
     operationClass: normalizedPart(identity.operationClass, 'operationClass'),
   };
 }
 
-function configuredInteger(name: string, fallback: number): number {
-  const value = Number(process.env[name]);
-  return Number.isInteger(value) && value > 0 ? value : fallback;
+function configuredInteger(
+  env: NodeJS.ProcessEnv,
+  name: string,
+  fallback: number,
+  limits: Readonly<{ min: number; max: number }>,
+): number {
+  const value = Number(env[name]);
+  return Number.isSafeInteger(value) && value >= limits.min && value <= limits.max
+    ? value
+    : fallback;
 }
 
 // Six is the largest current bounded provider pool. Twelve preserves a second
 // provider partition even when one partition is physically stuck. The two
 // second cooldown matches the existing Scanner concurrency retry contract.
-const DEFAULT_PROVIDER_CAPACITY = configuredInteger('PROVIDER_ADMISSION_PROVIDER_CAPACITY', 6);
-const DEFAULT_GLOBAL_CAPACITY = Math.max(
-  DEFAULT_PROVIDER_CAPACITY + 1,
-  configuredInteger('PROVIDER_ADMISSION_GLOBAL_CAPACITY', 12),
-);
-const DEFAULT_TIMEOUT_THRESHOLD = Math.min(
-  DEFAULT_PROVIDER_CAPACITY,
-  configuredInteger('PROVIDER_ADMISSION_TIMEOUT_THRESHOLD', DEFAULT_PROVIDER_CAPACITY),
-);
+export function resolveProviderAdmissionDefaults(
+  env: NodeJS.ProcessEnv = process.env,
+): ProviderAdmissionControlOptions {
+  const providerCapacity = configuredInteger(
+    env,
+    'PROVIDER_ADMISSION_PROVIDER_CAPACITY',
+    6,
+    PROVIDER_ADMISSION_CONFIG_LIMITS.providerCapacity,
+  );
+  const globalCapacity = Math.max(
+    providerCapacity + 1,
+    configuredInteger(
+      env,
+      'PROVIDER_ADMISSION_GLOBAL_CAPACITY',
+      12,
+      PROVIDER_ADMISSION_CONFIG_LIMITS.globalCapacity,
+    ),
+  );
+  const timeoutThreshold = Math.min(
+    providerCapacity,
+    configuredInteger(
+      env,
+      'PROVIDER_ADMISSION_TIMEOUT_THRESHOLD',
+      providerCapacity,
+      PROVIDER_ADMISSION_CONFIG_LIMITS.timeoutThreshold,
+    ),
+  );
+  return {
+    globalCapacity,
+    providerCapacity,
+    timeoutThreshold,
+    cooldownMs: configuredInteger(
+      env,
+      'PROVIDER_ADMISSION_COOLDOWN_MS',
+      2_000,
+      PROVIDER_ADMISSION_CONFIG_LIMITS.cooldownMs,
+    ),
+  };
+}
 
-export const PROCESS_WIDE_PROVIDER_ADMISSION_DEFAULTS = Object.freeze({
-  globalCapacity: DEFAULT_GLOBAL_CAPACITY,
-  providerCapacity: DEFAULT_PROVIDER_CAPACITY,
-  timeoutThreshold: DEFAULT_TIMEOUT_THRESHOLD,
-  cooldownMs: configuredInteger('PROVIDER_ADMISSION_COOLDOWN_MS', 2_000),
-});
+export const PROCESS_WIDE_PROVIDER_ADMISSION_DEFAULTS = Object.freeze(
+  resolveProviderAdmissionDefaults(),
+);
 
 export class ProviderAdmissionControl {
   private readonly globalCapacity: number;
@@ -201,13 +282,26 @@ export class ProviderAdmissionControl {
   private circuitTripTotal = 0;
 
   constructor(options: ProviderAdmissionControlOptions) {
-    this.globalCapacity = positiveInteger(options.globalCapacity, 'globalCapacity');
-    this.providerCapacity = positiveInteger(options.providerCapacity, 'providerCapacity');
-    this.timeoutThreshold = positiveInteger(
+    this.globalCapacity = boundedInteger(
+      options.globalCapacity,
+      'globalCapacity',
+      PROVIDER_ADMISSION_CONFIG_LIMITS.globalCapacity,
+    );
+    this.providerCapacity = boundedInteger(
+      options.providerCapacity,
+      'providerCapacity',
+      PROVIDER_ADMISSION_CONFIG_LIMITS.providerCapacity,
+    );
+    this.timeoutThreshold = boundedInteger(
       options.timeoutThreshold ?? this.providerCapacity,
       'timeoutThreshold',
+      PROVIDER_ADMISSION_CONFIG_LIMITS.timeoutThreshold,
     );
-    this.cooldownMs = positiveInteger(options.cooldownMs, 'cooldownMs');
+    this.cooldownMs = boundedInteger(
+      options.cooldownMs,
+      'cooldownMs',
+      PROVIDER_ADMISSION_CONFIG_LIMITS.cooldownMs,
+    );
     this.now = options.now ?? Date.now;
     if (this.providerCapacity >= this.globalCapacity) {
       throw new Error('providerCapacity must be lower than globalCapacity to preserve provider isolation');
@@ -234,14 +328,18 @@ export class ProviderAdmissionControl {
 
     if (state.circuitState === 'open') {
       if (now < state.openUntil) {
-        throw this.circuitOpen(state, operation, state.openUntil - now);
+        const error = this.circuitOpen(state, operation, state.openUntil - now);
+        this.cleanupTelemetry(state);
+        throw error;
       }
       if (
         state.physicalOutstanding >= this.providerCapacity
         || this.physicalOutstanding >= this.globalCapacity
       ) {
         state.openUntil = now + this.cooldownMs;
-        throw this.circuitOpen(state, operation, this.cooldownMs);
+        const error = this.circuitOpen(state, operation, this.cooldownMs);
+        this.cleanupTelemetry(state);
+        throw error;
       }
       state.circuitState = 'half_open';
       state.halfOpenProbeActive = false;
@@ -249,7 +347,9 @@ export class ProviderAdmissionControl {
 
     if (state.circuitState === 'half_open') {
       if (state.halfOpenProbeActive) {
-        throw this.circuitOpen(state, operation, this.cooldownMs);
+        const error = this.circuitOpen(state, operation, this.cooldownMs);
+        this.cleanupTelemetry(state);
+        throw error;
       }
       halfOpenProbe = true;
     }
@@ -261,7 +361,9 @@ export class ProviderAdmissionControl {
       this.rejectedCapacityTotal += 1;
       state.rejectedCapacityTotal += 1;
       operation.rejectedCapacityTotal += 1;
-      throw new ProviderAdmissionError('CAPACITY_EXHAUSTED', this.cooldownMs);
+      const error = new ProviderAdmissionError('CAPACITY_EXHAUSTED', this.cooldownMs);
+      this.cleanupTelemetry(state);
+      throw error;
     }
 
     if (halfOpenProbe) state.halfOpenProbeActive = true;
@@ -283,6 +385,8 @@ export class ProviderAdmissionControl {
     state.physicalOutstanding += 1;
     operation.admittedActive += 1;
     operation.physicalOutstanding += 1;
+    this.touchProvider(state);
+    this.touchOperation(state, operation);
     this.physicalOutstandingHighWater = Math.max(
       this.physicalOutstandingHighWater,
       this.physicalOutstanding,
@@ -387,9 +491,12 @@ export class ProviderAdmissionControl {
   }
 
   private providerState(identity: ProviderAdmissionIdentity): ProviderState {
-    const key = `${identity.provider}:${identity.domain}`;
+    const key = JSON.stringify([identity.provider, identity.domain]);
     const existing = this.providers.get(key);
-    if (existing) return existing;
+    if (existing) {
+      this.touchProvider(existing);
+      return existing;
+    }
     const state: ProviderState = {
       key,
       provider: identity.provider,
@@ -414,7 +521,10 @@ export class ProviderAdmissionControl {
 
   private operationState(state: ProviderState, operationClass: string): OperationState {
     const existing = state.operations.get(operationClass);
-    if (existing) return existing;
+    if (existing) {
+      this.touchOperation(state, existing);
+      return existing;
+    }
     const operation: OperationState = {
       operationClass,
       admittedActive: 0,
@@ -460,22 +570,34 @@ export class ProviderAdmissionControl {
       ) {
         this.tripCircuit(record.state);
       }
+      this.touchProvider(record.state);
+      this.touchOperation(record.state, record.operation);
+      this.cleanupTelemetry(record.state);
       return;
     }
 
     if (status === 'completed') {
       record.state.consecutiveTimeouts = 0;
       if (record.halfOpenProbe) this.closeCircuit(record.state);
+      this.touchProvider(record.state);
+      this.touchOperation(record.state, record.operation);
+      this.cleanupTelemetry(record.state);
       return;
     }
 
     if (status === 'rejected') {
       record.state.consecutiveTimeouts = 0;
       if (record.halfOpenProbe) this.tripCircuit(record.state);
+      this.touchProvider(record.state);
+      this.touchOperation(record.state, record.operation);
+      this.cleanupTelemetry(record.state);
       return;
     }
 
     if (record.halfOpenProbe) this.tripCircuit(record.state);
+    this.touchProvider(record.state);
+    this.touchOperation(record.state, record.operation);
+    this.cleanupTelemetry(record.state);
   }
 
   private settlePhysical(record: OutstandingRecord): void {
@@ -496,6 +618,9 @@ export class ProviderAdmissionControl {
       record.state.lateSettledTotal += 1;
       record.operation.lateSettledTotal += 1;
     }
+    this.touchProvider(record.state);
+    this.touchOperation(record.state, record.operation);
+    this.cleanupTelemetry(record.state);
   }
 
   private tripCircuit(state: ProviderState): void {
@@ -512,6 +637,64 @@ export class ProviderAdmissionControl {
     state.openUntil = 0;
     state.halfOpenProbeActive = false;
     state.consecutiveTimeouts = 0;
+  }
+
+  private touchProvider(state: ProviderState): void {
+    if (!this.providers.delete(state.key)) return;
+    this.providers.set(state.key, state);
+  }
+
+  private touchOperation(state: ProviderState, operation: OperationState): void {
+    if (!state.operations.delete(operation.operationClass)) return;
+    state.operations.set(operation.operationClass, operation);
+  }
+
+  private providerCanBeEvicted(state: ProviderState): boolean {
+    return state.admittedActive === 0
+      && state.physicalOutstanding === 0
+      && state.timedOutOutstanding === 0
+      && state.circuitState === 'closed'
+      && !state.halfOpenProbeActive;
+  }
+
+  private operationCanBeEvicted(state: ProviderState, operation: OperationState): boolean {
+    return state.circuitState === 'closed'
+      && !state.halfOpenProbeActive
+      && operation.admittedActive === 0
+      && operation.physicalOutstanding === 0
+      && operation.timedOutOutstanding === 0;
+  }
+
+  private cleanupTelemetry(state?: ProviderState): void {
+    if (
+      state
+      && state.operations.size
+        > PROVIDER_ADMISSION_TELEMETRY_LIMITS.inactiveOperationsPerProvider
+    ) {
+      let removableOperations = [...state.operations.values()]
+        .filter((operation) => this.operationCanBeEvicted(state, operation)).length
+        - PROVIDER_ADMISSION_TELEMETRY_LIMITS.inactiveOperationsPerProvider;
+      if (removableOperations > 0) {
+        for (const [key, operation] of state.operations) {
+          if (removableOperations <= 0) break;
+          if (!this.operationCanBeEvicted(state, operation)) continue;
+          state.operations.delete(key);
+          removableOperations -= 1;
+        }
+      }
+    }
+
+    if (this.providers.size <= PROVIDER_ADMISSION_TELEMETRY_LIMITS.inactiveProviders) return;
+    let removableProviders = [...this.providers.values()]
+      .filter((state) => this.providerCanBeEvicted(state)).length
+      - PROVIDER_ADMISSION_TELEMETRY_LIMITS.inactiveProviders;
+    if (removableProviders <= 0) return;
+    for (const [key, state] of this.providers) {
+      if (removableProviders <= 0) break;
+      if (!this.providerCanBeEvicted(state)) continue;
+      this.providers.delete(key);
+      removableProviders -= 1;
+    }
   }
 
   private oldestAge(now: number, matches: (record: OutstandingRecord) => boolean): number {
