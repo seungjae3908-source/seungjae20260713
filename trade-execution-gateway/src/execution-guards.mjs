@@ -137,6 +137,8 @@ export function assessExecutionGuards({ intent, marketData, policy }) {
     state: blockers.length === 0 ? "PASS" : "BLOCKED",
     blockers: Object.freeze(blockers),
     publicEvidence: evidence,
+    evidenceTrust: "CALLER_SUPPLIED_UNATTESTED",
+    paperDecisionSupportOnly: true,
     metrics: Object.freeze({
       spreadBps,
       priceDeviationBps,
