@@ -185,7 +185,11 @@ export function normalizePublicMarketDataEvidence(input, policy) {
   const midPrice = (bestBid + bestAsk) / 2;
   return Object.freeze({
     evidenceVersion: "PUBLIC_EXECUTION_MARKET_DATA_V1",
-    authority: "PUBLIC_ONLY",
+    authority: "CALLER_SUPPLIED_PUBLIC_EVIDENCE",
+    callerSuppliedEvidence: true,
+    serverAttested: false,
+    transportObservedByGateway: false,
+    liveExecutionEligible: false,
     market,
     provider,
     source,
