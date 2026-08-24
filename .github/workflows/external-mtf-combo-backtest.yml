@@ -28,7 +28,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          body=$(printf '{"state":"pending","target_url":"https://github.com/%s/actions/runs/%s","description":"BTC MTF research running","context":"external-mtf-combo/research"}' "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")
+          body=$(printf '{"state":"pending","target_url":"https://github.com/%s/actions/runs/%s","description":"ETH cross-symbol research running","context":"external-mtf-combo/research"}' "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")
           curl --fail-with-body --silent --show-error \
             --request POST \
             --header "Authorization: Bearer $GH_TOKEN" \
@@ -68,28 +68,30 @@ jobs:
           test -f historical-harness/market-prediction-lab/src/independent-strategy-backtest.js
           cp market-prediction-lab/scripts/run-external-mtf-combo-backtest.mjs \
             historical-harness/market-prediction-lab/scripts/run-external-mtf-combo-backtest.mjs
+          sed 's/BTCUSDT/ETHUSDT/g' market-prediction-lab/scripts/run-external-mtf-combo-backtest.mjs > \
+            historical-harness/market-prediction-lab/scripts/run-external-mtf-combo-backtest-eth.mjs
 
       - name: Set up Node 20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Validate research script syntax
+      - name: Validate frozen ETH cross-symbol script syntax
         working-directory: historical-harness/market-prediction-lab
-        run: node --check scripts/run-external-mtf-combo-backtest.mjs
+        run: node --check scripts/run-external-mtf-combo-backtest-eth.mjs
 
-      - name: Run BTCUSDT multi-timeframe combination backtest
+      - name: Run ETHUSDT frozen cross-symbol backtest
         working-directory: historical-harness/market-prediction-lab
         env:
           RESEARCH_CODE_SHA: ${{ github.sha }}
-        run: node scripts/run-external-mtf-combo-backtest.mjs artifacts/external-mtf-combo/summary.json artifacts/external-mtf-combo/summary.md
+        run: node scripts/run-external-mtf-combo-backtest-eth.mjs artifacts/external-mtf-combo/ETHUSDT/summary.json artifacts/external-mtf-combo/ETHUSDT/summary.md
 
       - name: Upload immutable research evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: external-mtf-combo-btc-${{ github.sha }}
-          path: historical-harness/market-prediction-lab/artifacts/external-mtf-combo
+          name: external-mtf-combo-eth-${{ github.sha }}
+          path: historical-harness/market-prediction-lab/artifacts/external-mtf-combo/ETHUSDT
           if-no-files-found: warn
           retention-days: 90
 
@@ -113,9 +115,9 @@ jobs:
         run: |
           set -euo pipefail
           case "$JOB_STATUS" in
-            success) state=success; description='BTC MTF research succeeded' ;;
-            cancelled) state=error; description='BTC MTF research cancelled' ;;
-            *) state=failure; description='BTC MTF research failed' ;;
+            success) state=success; description='ETH cross-symbol research succeeded' ;;
+            cancelled) state=error; description='ETH cross-symbol research cancelled' ;;
+            *) state=failure; description='ETH cross-symbol research failed' ;;
           esac
           body=$(printf '{"state":"%s","target_url":"https://github.com/%s/actions/runs/%s","description":"%s","context":"external-mtf-combo/research"}' "$state" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$description")
           curl --fail-with-body --silent --show-error \
