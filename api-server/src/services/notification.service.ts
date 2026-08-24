@@ -1,7 +1,8 @@
 import webPush, { type PushSubscription } from 'web-push';
 import { getSupabase, isSupabaseConfigured } from '../lib/supabase';
 import { MarketDataService } from './market-data.service';
-import { sendTelegramAlert } from './telegram-notification.service';
+import { deliverPersonalTelegramAlert } from './personal-telegram-alert.service';
+import type { TelegramPolicyMarket } from './telegram-alert-policy.service';
 
 export const DEFAULT_NOTIFICATION_TYPES = [
   'news_positive',
@@ -263,6 +264,45 @@ function formatPrice(value: number, assetType: PriceAlertRow['asset_type']): str
   return value.toLocaleString('ko-KR', { maximumFractionDigits: 4 });
 }
 
+function priceAlertPolicyMarket(alert: PriceAlertRow): TelegramPolicyMarket {
+  if (alert.asset_type === 'coin_spot') return 'CRYPTO_SPOT';
+  if (alert.asset_type === 'coin_futures') return 'CRYPTO_FUTURES';
+  const market = String(alert.market ?? '').trim().toUpperCase();
+  return /(?:^US$|NASDAQ|NYSE|AMEX)/u.test(market) ? 'US' : 'KR';
+}
+
+async function deliverPersonalPriceTargetTelegram(
+  alert: PriceAlertRow,
+  currentPrice: number,
+  target: number,
+  now: Date,
+): Promise<void> {
+  const symbol = cleanSymbol(alert.symbol);
+  await deliverPersonalTelegramAlert({
+    userId: alert.member_id,
+    event: {
+      userId: alert.member_id,
+      eventId: `price-alert:${alert.id}:${alert.direction}:${target}`,
+      market: priceAlertPolicyMarket(alert),
+      signalType: 'PRICE_TARGET',
+      priority: 'IMPORTANT',
+      symbol,
+      occurredAt: now.toISOString(),
+    },
+    alert: {
+      type: 'price_alert',
+      symbol,
+      market: alert.market,
+      currentPrice,
+      targetPrice: target,
+      details: alert.direction === 'above' ? '설정가 이상 도달' : '설정가 이하 도달',
+      timestamp: now.toISOString(),
+      dedupeKey: `price-alert:${alert.id}:${alert.direction}:${target}`,
+    },
+    now,
+  });
+}
+
 async function evaluatePriceAlert(alert: PriceAlertRow): Promise<void> {
   const supabase = getSupabase();
   const now = new Date();
@@ -307,16 +347,7 @@ async function evaluatePriceAlert(alert: PriceAlertRow): Promise<void> {
           direction: alert.direction,
         },
       });
-      void sendTelegramAlert({
-        type: 'price_alert',
-        symbol: cleanSymbol(alert.symbol),
-        market: alert.market,
-        currentPrice,
-        targetPrice: target,
-        details: alert.direction === 'above' ? '설정가 이상 도달' : '설정가 이하 도달',
-        timestamp: now.toISOString(),
-        dedupeKey: `price-alert:${alert.id}:${alert.direction}:${target}`,
-      });
+      await deliverPersonalPriceTargetTelegram(alert, currentPrice, target, now);
       update.last_triggered_at = now.toISOString();
       if (!alert.repeat_enabled) update.enabled = false;
     }
