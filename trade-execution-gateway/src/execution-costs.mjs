@@ -42,7 +42,7 @@ function timestampMs(value, name) {
   return parsed;
 }
 
-function normalizeFundingEvents(events, market) {
+function normalizeFundingEvents(events, market, analysisThroughMs) {
   if (events == null) return Object.freeze([]);
   if (!Array.isArray(events) || events.length > MAX_FUNDING_EVENTS) {
     throw new GatewayError("INVALID_COST_EVIDENCE", `fundingEvents must contain at most ${MAX_FUNDING_EVENTS} events`);
@@ -52,17 +52,25 @@ function normalizeFundingEvents(events, market) {
   }
   return Object.freeze(events.map((raw, index) => {
     requireObject(raw, "INVALID_COST_EVIDENCE", "funding event must be an object");
+    if (raw.serverAttested === true) {
+      throw new GatewayError("CALLER_ATTESTATION_REJECTED", "caller-supplied funding evidence cannot self-assert server attestation");
+    }
     const payerSide = requireText(raw.payerSide, "fundingEvent.payerSide", 16).toUpperCase();
     if (!new Set(["LONG", "SHORT"]).has(payerSide)) {
       throw new GatewayError("INVALID_COST_EVIDENCE", "fundingEvent.payerSide must be LONG or SHORT");
+    }
+    const effectiveAtMs = timestampMs(raw.effectiveAt, "fundingEvent.effectiveAt");
+    if (effectiveAtMs > analysisThroughMs) {
+      throw new GatewayError("FUNDING_EVENT_AFTER_ANALYSIS_WINDOW", "funding event is later than the requested analysis window");
     }
     return Object.freeze({
       sequence: index + 1,
       rateBps: boundedBps(raw.rateBps, "fundingEvent.rateBps"),
       payerSide,
-      effectiveAt: new Date(timestampMs(raw.effectiveAt, "fundingEvent.effectiveAt")).toISOString(),
+      effectiveAt: new Date(effectiveAtMs).toISOString(),
       source: requireText(raw.source, "fundingEvent.source", 96),
-      serverAttested: raw.serverAttested === true,
+      serverAttested: false,
+      callerSuppliedEvidence: true,
       actualPrivateAccountEvidence: false,
     });
   }));
@@ -70,6 +78,9 @@ function normalizeFundingEvents(events, market) {
 
 export function normalizeExecutionCostSchedule(schedule, context = {}) {
   requireObject(schedule, "COST_SCHEDULE_REQUIRED", "explicit execution cost schedule is required");
+  if (schedule.serverAttested === true) {
+    throw new GatewayError("CALLER_ATTESTATION_REJECTED", "caller-supplied cost schedule cannot self-assert server attestation");
+  }
   const market = requireText(schedule.market, "market", 32).toUpperCase();
   const expectedMarket = context.market == null ? null : String(context.market).trim().toUpperCase();
   if (expectedMarket && market !== expectedMarket) {
@@ -121,6 +132,7 @@ export function normalizeExecutionCostSchedule(schedule, context = {}) {
     actualBrokerChargeEvidence: false,
     privateApiUsed: false,
     serverAttested: false,
+    callerSuppliedEvidence: true,
   });
 }
 
@@ -149,13 +161,14 @@ export function estimateExecutionCosts({
   const qty = positive(quantity, "quantity");
   const px = positive(price, "price");
   const notional = qty * px;
+  const analysisThroughMs = timestampMs(executionAt, "executionAt");
   const normalizedSchedule = normalizeExecutionCostSchedule(schedule, {
     market: normalizedMarket,
     provider,
     symbol,
-    atMs: executionAt,
+    atMs: analysisThroughMs,
   });
-  const normalizedFunding = normalizeFundingEvents(fundingEvents, normalizedMarket);
+  const normalizedFunding = normalizeFundingEvents(fundingEvents, normalizedMarket, analysisThroughMs);
 
   const feeRateBps = role === "MAKER" ? normalizedSchedule.rates.makerFeeBps : normalizedSchedule.rates.takerFeeBps;
   const taxRateBps = BUY_LIKE.has(normalizedSide) ? normalizedSchedule.rates.buyTaxBps : normalizedSchedule.rates.sellTaxBps;
@@ -174,7 +187,8 @@ export function estimateExecutionCosts({
     }
   }
 
-  const estimatedTotalCost = estimatedTradingFee + estimatedTax + estimatedFxConversionCost + estimatedFundingCost;
+  const estimatedExecutionCost = estimatedTradingFee + estimatedTax + estimatedFxConversionCost;
+  const estimatedTotalCost = estimatedExecutionCost + estimatedFundingCost;
   return Object.freeze({
     costVersion: "EXECUTION_COST_ESTIMATE_V1",
     authority: "READ_ONLY_PAPER_COST_ESTIMATE",
@@ -186,6 +200,7 @@ export function estimateExecutionCosts({
     quantity: qty,
     price: px,
     notional,
+    analysisThrough: new Date(analysisThroughMs).toISOString(),
     currency: normalizedSchedule.currency,
     components: Object.freeze({
       estimatedTradingFee,
@@ -195,6 +210,8 @@ export function estimateExecutionCosts({
     }),
     rates: normalizedSchedule.rates,
     fundingEvents: normalizedFunding,
+    estimatedExecutionCost,
+    estimatedCarryingCost: estimatedFundingCost,
     estimatedTotalCost,
     estimatedTotalCostBps: estimatedTotalCost / notional * 10_000,
     costSchedule: normalizedSchedule,
