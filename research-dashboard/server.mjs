@@ -15,18 +15,24 @@ const CONTENT_TYPES = Object.freeze({
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
-  '.webmanifest': 'application/manifest+json; charset=utf-8',
+  '.webmanifest': 'application/manifest+json',
   '.svg': 'image/svg+xml',
 });
 
 function finiteNumber(value) {
+  if (value === null || value === undefined || value === '') return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
 
-function integerCount(value) {
+function optionalIntegerCount(value) {
+  if (value === null || value === undefined || value === '') return null;
   const number = Number(value);
-  return Number.isInteger(number) && number >= 0 ? number : 0;
+  return Number.isInteger(number) && number >= 0 ? number : null;
+}
+
+function optionalBoolean(value) {
+  return typeof value === 'boolean' ? value : null;
 }
 
 async function readJsonOptional(path) {
@@ -54,9 +60,20 @@ function summarizeTask(row = {}) {
 
 function summarizeCycle(profile, value) {
   if (!value || typeof value !== 'object') {
-    return Object.freeze({ profile, present: false, status: 'not_started', tasks: [] });
+    return Object.freeze({
+      profile,
+      present: false,
+      status: 'not_started',
+      concurrency: null,
+      taskCount: null,
+      successCount: null,
+      blockedDataCount: null,
+      failedCount: null,
+      tasks: [],
+    });
   }
-  const tasks = Array.isArray(value.results) ? value.results.map(summarizeTask) : [];
+  const hasTaskEvidence = Array.isArray(value.results);
+  const tasks = hasTaskEvidence ? value.results.map(summarizeTask) : [];
   return Object.freeze({
     profile,
     present: true,
@@ -64,18 +81,32 @@ function summarizeCycle(profile, value) {
     cycleId: typeof value.cycleId === 'string' ? value.cycleId : null,
     researchSha: typeof value.researchSha === 'string' ? value.researchSha : null,
     generatedAt: finiteNumber(value.generatedAt),
-    concurrency: integerCount(value.concurrency),
-    taskCount: integerCount(value.taskCount ?? tasks.length),
-    successCount: integerCount(value.successCount),
-    blockedDataCount: integerCount(value.blockedDataCount),
-    failedCount: integerCount(value.failedCount),
+    concurrency: optionalIntegerCount(value.concurrency),
+    taskCount: optionalIntegerCount(value.taskCount) ?? (hasTaskEvidence ? tasks.length : null),
+    successCount: optionalIntegerCount(value.successCount) ?? (hasTaskEvidence ? tasks.filter((task) => task.status === 'success').length : null),
+    blockedDataCount: optionalIntegerCount(value.blockedDataCount) ?? (hasTaskEvidence ? tasks.filter((task) => task.status === 'blocked_data').length : null),
+    failedCount: optionalIntegerCount(value.failedCount) ?? (hasTaskEvidence ? tasks.filter((task) => task.status === 'failed').length : null),
     tasks,
   });
 }
 
 function summarizePaperRuntime(value) {
   if (!value || typeof value !== 'object') {
-    return Object.freeze({ present: false, status: 'not_started', lanes: [] });
+    return Object.freeze({
+      present: false,
+      status: 'not_started',
+      scheduleActive: null,
+      allProvidersReady: null,
+      publicForwardEvidenceAccumulating: null,
+      paperTradeOutcomeAccumulating: null,
+      privateRequestCount: null,
+      financialMutationCount: null,
+      orderCount: null,
+      liveTrading: null,
+      orderAuthority: null,
+      safetyEvidenceComplete: true,
+      lanes: [],
+    });
   }
   const lanes = Array.isArray(value.lanes)
     ? value.lanes.map((lane) => ({
@@ -83,32 +114,45 @@ function summarizePaperRuntime(value) {
         status: String(lane?.status ?? 'unknown'),
       }))
     : [];
+  const privateRequestCount = optionalIntegerCount(value.privateRequestCount);
+  const financialMutationCount = optionalIntegerCount(value.financialMutationCount);
+  const orderCount = optionalIntegerCount(value.orderCount);
+  const liveTrading = optionalBoolean(value.liveTrading);
+  const orderAuthority = optionalBoolean(value.orderAuthority);
+  const safetyEvidenceComplete = [
+    privateRequestCount,
+    financialMutationCount,
+    orderCount,
+    liveTrading,
+    orderAuthority,
+  ].every((item) => item !== null);
   return Object.freeze({
     present: true,
     status: String(value.status ?? 'unknown'),
     cycleId: typeof value.cycleId === 'string' ? value.cycleId : null,
-    scheduleActive: value.scheduleActive === true,
-    allProvidersReady: value.allProvidersReady === true,
-    publicForwardEvidenceAccumulating: value.publicForwardEvidenceAccumulating === true,
-    paperTradeOutcomeAccumulating: value.paperTradeOutcomeAccumulating === true,
-    privateRequestCount: integerCount(value.privateRequestCount),
-    financialMutationCount: integerCount(value.financialMutationCount),
-    orderCount: integerCount(value.orderCount),
-    liveTrading: value.liveTrading === true,
-    orderAuthority: value.orderAuthority === true,
+    scheduleActive: optionalBoolean(value.scheduleActive),
+    allProvidersReady: optionalBoolean(value.allProvidersReady),
+    publicForwardEvidenceAccumulating: optionalBoolean(value.publicForwardEvidenceAccumulating),
+    paperTradeOutcomeAccumulating: optionalBoolean(value.paperTradeOutcomeAccumulating),
+    privateRequestCount,
+    financialMutationCount,
+    orderCount,
+    liveTrading,
+    orderAuthority,
+    safetyEvidenceComplete,
     lanes,
   });
 }
 
 function summarizePaperLedger(value) {
   if (!value || typeof value !== 'object') {
-    return Object.freeze({ present: false, cycleCount: 0, positionCount: 0, settlementCount: 0 });
+    return Object.freeze({ present: false, cycleCount: null, positionCount: null, settlementCount: null });
   }
   return Object.freeze({
     present: true,
-    cycleCount: Array.isArray(value.cycles) ? value.cycles.length : 0,
-    positionCount: Array.isArray(value.positions) ? value.positions.length : 0,
-    settlementCount: Array.isArray(value.settlements) ? value.settlements.length : 0,
+    cycleCount: Array.isArray(value.cycles) ? value.cycles.length : null,
+    positionCount: Array.isArray(value.positions) ? value.positions.length : null,
+    settlementCount: Array.isArray(value.settlements) ? value.settlements.length : null,
   });
 }
 
@@ -142,6 +186,7 @@ function summarizeShadowGroups(value) {
 
 function countShadowRecords(value) {
   const seen = new Set();
+  let foundRecords = false;
   let total = 0;
   let settled = 0;
   let pending = 0;
@@ -153,6 +198,7 @@ function countShadowRecords(value) {
       return;
     }
     if (Array.isArray(node.records)) {
+      foundRecords = true;
       total += node.records.length;
       for (const record of node.records) {
         if (record?.status === 'settled') settled += 1;
@@ -165,11 +211,22 @@ function countShadowRecords(value) {
     }
   };
   visit(value);
-  return Object.freeze({ present: Boolean(value), totalRecords: total, settledRecords: settled, pendingRecords: pending });
+  return Object.freeze({
+    present: Boolean(value),
+    totalRecords: foundRecords ? total : null,
+    settledRecords: foundRecords ? settled : null,
+    pendingRecords: foundRecords ? pending : null,
+  });
 }
 
 function newestTimestamp(cycles) {
   return cycles.reduce((max, cycle) => Math.max(max, finiteNumber(cycle.generatedAt) ?? 0), 0) || null;
+}
+
+function sumKnownCycleCounts(cycles, key) {
+  const presentCycles = cycles.filter((cycle) => cycle.present);
+  if (presentCycles.some((cycle) => cycle[key] === null)) return null;
+  return presentCycles.reduce((sum, cycle) => sum + (cycle[key] ?? 0), 0);
 }
 
 export async function buildResearchOverview({ stateRoot = DEFAULT_STATE_ROOT } = {}) {
@@ -187,13 +244,23 @@ export async function buildResearchOverview({ stateRoot = DEFAULT_STATE_ROOT } =
   const paperLedger = summarizePaperLedger(paperLedgerRaw);
   const shadowGroups = summarizeShadowGroups(shadowSummaryRaw);
   const shadowRecords = countShadowRecords(shadowStateRaw);
-  const failedTasks = cycles.reduce((sum, cycle) => sum + cycle.failedCount, 0);
-  const blockedDataTasks = cycles.reduce((sum, cycle) => sum + cycle.blockedDataCount, 0);
-  const forbiddenAuthorityObserved = paperRuntime.privateRequestCount > 0
-    || paperRuntime.financialMutationCount > 0
-    || paperRuntime.orderCount > 0
-    || paperRuntime.liveTrading
-    || paperRuntime.orderAuthority;
+  const failedTasks = sumKnownCycleCounts(cycles, 'failedCount');
+  const blockedDataTasks = sumKnownCycleCounts(cycles, 'blockedDataCount');
+  const authorityEvidenceComplete = !paperRuntime.present || paperRuntime.safetyEvidenceComplete;
+  const forbiddenAuthorityObserved = paperRuntime.privateRequestCount !== null && paperRuntime.privateRequestCount > 0
+    || paperRuntime.financialMutationCount !== null && paperRuntime.financialMutationCount > 0
+    || paperRuntime.orderCount !== null && paperRuntime.orderCount > 0
+    || paperRuntime.liveTrading === true
+    || paperRuntime.orderAuthority === true;
+  const researchStatus = forbiddenAuthorityObserved
+    ? 'safety_block'
+    : !authorityEvidenceComplete
+      ? 'safety_evidence_incomplete'
+      : failedTasks === null || blockedDataTasks === null
+        ? 'evidence_incomplete'
+        : failedTasks > 0
+          ? 'attention'
+          : 'collecting';
 
   return Object.freeze({
     schemaVersion: 'research-dashboard-overview-v1',
@@ -207,10 +274,11 @@ export async function buildResearchOverview({ stateRoot = DEFAULT_STATE_ROOT } =
       liveTrading: false,
       privateApi: false,
       orderAuthority: false,
+      authorityEvidenceComplete,
       forbiddenAuthorityObserved,
     }),
     research: Object.freeze({
-      status: forbiddenAuthorityObserved ? 'safety_block' : failedTasks > 0 ? 'attention' : 'collecting',
+      status: researchStatus,
       failedTasks,
       blockedDataTasks,
       cycles,
