@@ -28,7 +28,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          body=$(printf '{"state":"pending","target_url":"https://github.com/%s/actions/runs/%s","description":"ETH cross-symbol research running","context":"external-mtf-combo/research"}' "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")
+          body=$(printf '{"state":"pending","target_url":"https://github.com/%s/actions/runs/%s","description":"multi-symbol frozen research running","context":"external-mtf-combo/research"}' "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")
           curl --fail-with-body --silent --show-error \
             --request POST \
             --header "Authorization: Bearer $GH_TOKEN" \
@@ -68,30 +68,45 @@ jobs:
           test -f historical-harness/market-prediction-lab/src/independent-strategy-backtest.js
           cp market-prediction-lab/scripts/run-external-mtf-combo-backtest.mjs \
             historical-harness/market-prediction-lab/scripts/run-external-mtf-combo-backtest.mjs
-          sed 's/BTCUSDT/ETHUSDT/g' market-prediction-lab/scripts/run-external-mtf-combo-backtest.mjs > \
-            historical-harness/market-prediction-lab/scripts/run-external-mtf-combo-backtest-eth.mjs
+          for symbol in BNBUSDT SOLUSDT XRPUSDT; do
+            lower=$(printf '%s' "$symbol" | tr '[:upper:]' '[:lower:]')
+            sed -e "s/BTCUSDT/$symbol/g" \
+                -e 's/RESEARCH_BACKTEST_PERIOD.startTime/Date.UTC(2021, 0, 1)/g' \
+              market-prediction-lab/scripts/run-external-mtf-combo-backtest.mjs > \
+              "historical-harness/market-prediction-lab/scripts/run-external-mtf-combo-backtest-$lower.mjs"
+          done
 
       - name: Set up Node 20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Validate frozen ETH cross-symbol script syntax
+      - name: Validate frozen multi-symbol scripts
         working-directory: historical-harness/market-prediction-lab
-        run: node --check scripts/run-external-mtf-combo-backtest-eth.mjs
+        run: |
+          node --check scripts/run-external-mtf-combo-backtest-bnbusdt.mjs
+          node --check scripts/run-external-mtf-combo-backtest-solusdt.mjs
+          node --check scripts/run-external-mtf-combo-backtest-xrpusdt.mjs
 
-      - name: Run ETHUSDT frozen cross-symbol backtest
+      - name: Run BNB SOL XRP frozen cross-symbol backtests
         working-directory: historical-harness/market-prediction-lab
         env:
           RESEARCH_CODE_SHA: ${{ github.sha }}
-        run: node scripts/run-external-mtf-combo-backtest-eth.mjs artifacts/external-mtf-combo/ETHUSDT/summary.json artifacts/external-mtf-combo/ETHUSDT/summary.md
+        run: |
+          set -euo pipefail
+          for symbol in BNBUSDT SOLUSDT XRPUSDT; do
+            lower=$(printf '%s' "$symbol" | tr '[:upper:]' '[:lower:]')
+            node "scripts/run-external-mtf-combo-backtest-$lower.mjs" \
+              "artifacts/external-mtf-combo/$symbol/summary.json" \
+              "artifacts/external-mtf-combo/$symbol/summary.md"
+          done
 
       - name: Upload immutable research evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: external-mtf-combo-eth-${{ github.sha }}
-          path: historical-harness/market-prediction-lab/artifacts/external-mtf-combo/ETHUSDT
+          name: external-mtf-combo-multisymbol-${{ github.sha }}
+          path: historical-harness/market-prediction-lab/artifacts/external-mtf-combo
           if-no-files-found: warn
           retention-days: 90
 
@@ -115,9 +130,9 @@ jobs:
         run: |
           set -euo pipefail
           case "$JOB_STATUS" in
-            success) state=success; description='ETH cross-symbol research succeeded' ;;
-            cancelled) state=error; description='ETH cross-symbol research cancelled' ;;
-            *) state=failure; description='ETH cross-symbol research failed' ;;
+            success) state=success; description='multi-symbol frozen research succeeded' ;;
+            cancelled) state=error; description='multi-symbol frozen research cancelled' ;;
+            *) state=failure; description='multi-symbol frozen research failed' ;;
           esac
           body=$(printf '{"state":"%s","target_url":"https://github.com/%s/actions/runs/%s","description":"%s","context":"external-mtf-combo/research"}' "$state" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$description")
           curl --fail-with-body --silent --show-error \
