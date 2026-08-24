@@ -146,11 +146,18 @@ function summarizePaperRuntime(value) {
 
 function summarizePaperLedger(value) {
   if (!value || typeof value !== 'object') {
-    return Object.freeze({ present: false, cycleCount: null, positionCount: null, settlementCount: null });
+    return Object.freeze({
+      present: false,
+      cycleCount: null,
+      sampleCount: null,
+      positionCount: null,
+      settlementCount: null,
+    });
   }
   return Object.freeze({
     present: true,
     cycleCount: Array.isArray(value.cycles) ? value.cycles.length : null,
+    sampleCount: Array.isArray(value.samples) ? value.samples.length : null,
     positionCount: Array.isArray(value.positions) ? value.positions.length : null,
     settlementCount: Array.isArray(value.settlements) ? value.settlements.length : null,
   });
@@ -164,13 +171,19 @@ function summarizeShadowGroups(value) {
   const groups = [];
   for (const [name, row] of Object.entries(source)) {
     if (!row || typeof row !== 'object' || Array.isArray(row)) continue;
+    const candidate = row.candidate && typeof row.candidate === 'object' && !Array.isArray(row.candidate)
+      ? row.candidate
+      : row;
     const total = finiteNumber(row.total ?? row.totalCount ?? row.records ?? row.sampleSize);
     const settled = finiteNumber(row.settled ?? row.settledCount);
     const pending = finiteNumber(row.pending ?? row.pendingCount);
-    const collapsed = row.predictionHealth?.collapsed ?? row.collapsed;
-    const macroF1 = finiteNumber(row.macroF1 ?? row.metrics?.macroF1);
-    const balancedAccuracy = finiteNumber(row.balancedAccuracy ?? row.metrics?.balancedAccuracy);
-    if ([total, settled, pending, macroF1, balancedAccuracy].every((item) => item === null) && collapsed === undefined) continue;
+    const collapsed = candidate.predictionHealth?.collapsed ?? row.predictionHealth?.collapsed ?? row.collapsed;
+    const macroF1 = finiteNumber(candidate.macroF1 ?? candidate.metrics?.macroF1);
+    const balancedAccuracy = finiteNumber(candidate.balancedAccuracy ?? candidate.metrics?.balancedAccuracy);
+    const bullRecall = finiteNumber(candidate.perClass?.bullish?.recall);
+    const bearRecall = finiteNumber(candidate.perClass?.bearish?.recall);
+    const neutralRecall = finiteNumber(candidate.perClass?.neutral?.recall);
+    if ([total, settled, pending, macroF1, balancedAccuracy, bullRecall, bearRecall, neutralRecall].every((item) => item === null) && collapsed === undefined) continue;
     groups.push({
       name,
       total,
@@ -179,6 +192,9 @@ function summarizeShadowGroups(value) {
       collapsed: typeof collapsed === 'boolean' ? collapsed : null,
       macroF1,
       balancedAccuracy,
+      bullRecall,
+      bearRecall,
+      neutralRecall,
     });
   }
   return groups;
@@ -261,7 +277,6 @@ export async function buildResearchOverview({ stateRoot = DEFAULT_STATE_ROOT } =
         : failedTasks > 0
           ? 'attention'
           : 'collecting';
-
   return Object.freeze({
     schemaVersion: 'research-dashboard-overview-v1',
     generatedAt: Date.now(),

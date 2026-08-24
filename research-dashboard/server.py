@@ -37,14 +37,20 @@ def finite_number(value):
     return number
 
 
-def integer_count(value):
-    if isinstance(value, bool):
-        return 0
+def optional_integer_count(value):
+    if value is None or value == '' or isinstance(value, bool):
+        return None
     try:
-        number = int(value)
+        number = float(value)
     except (TypeError, ValueError):
-        return 0
-    return number if number >= 0 else 0
+        return None
+    if not math.isfinite(number) or not number.is_integer() or number < 0:
+        return None
+    return int(number)
+
+
+def optional_boolean(value):
+    return value if isinstance(value, bool) else None
 
 
 def read_json_optional(path):
@@ -77,9 +83,24 @@ def summarize_task(row=None):
 
 def summarize_cycle(profile, value):
     if not isinstance(value, dict):
-        return {'profile': profile, 'present': False, 'status': 'not_started', 'tasks': []}
-    raw_results = value.get('results') if isinstance(value.get('results'), list) else []
+        return {
+            'profile': profile,
+            'present': False,
+            'status': 'not_started',
+            'concurrency': None,
+            'taskCount': None,
+            'successCount': None,
+            'blockedDataCount': None,
+            'failedCount': None,
+            'tasks': [],
+        }
+    has_task_evidence = isinstance(value.get('results'), list)
+    raw_results = value.get('results') if has_task_evidence else []
     tasks = [summarize_task(row) for row in raw_results]
+    task_count = optional_integer_count(value.get('taskCount'))
+    success_count = optional_integer_count(value.get('successCount'))
+    blocked_data_count = optional_integer_count(value.get('blockedDataCount'))
+    failed_count = optional_integer_count(value.get('failedCount'))
     return {
         'profile': profile,
         'present': True,
@@ -87,49 +108,77 @@ def summarize_cycle(profile, value):
         'cycleId': value.get('cycleId') if isinstance(value.get('cycleId'), str) else None,
         'researchSha': value.get('researchSha') if isinstance(value.get('researchSha'), str) else None,
         'generatedAt': finite_number(value.get('generatedAt')),
-        'concurrency': integer_count(value.get('concurrency')),
-        'taskCount': integer_count(value.get('taskCount', len(tasks))),
-        'successCount': integer_count(value.get('successCount')),
-        'blockedDataCount': integer_count(value.get('blockedDataCount')),
-        'failedCount': integer_count(value.get('failedCount')),
+        'concurrency': optional_integer_count(value.get('concurrency')),
+        'taskCount': task_count if task_count is not None else (len(tasks) if has_task_evidence else None),
+        'successCount': success_count if success_count is not None else (sum(task['status'] == 'success' for task in tasks) if has_task_evidence else None),
+        'blockedDataCount': blocked_data_count if blocked_data_count is not None else (sum(task['status'] == 'blocked_data' for task in tasks) if has_task_evidence else None),
+        'failedCount': failed_count if failed_count is not None else (sum(task['status'] == 'failed' for task in tasks) if has_task_evidence else None),
         'tasks': tasks,
     }
 
 
 def summarize_paper_runtime(value):
     if not isinstance(value, dict):
-        return {'present': False, 'status': 'not_started', 'lanes': []}
+        return {
+            'present': False,
+            'status': 'not_started',
+            'scheduleActive': None,
+            'allProvidersReady': None,
+            'publicForwardEvidenceAccumulating': None,
+            'paperTradeOutcomeAccumulating': None,
+            'privateRequestCount': None,
+            'financialMutationCount': None,
+            'orderCount': None,
+            'liveTrading': None,
+            'orderAuthority': None,
+            'safetyEvidenceComplete': True,
+            'lanes': [],
+        }
     raw_lanes = value.get('lanes') if isinstance(value.get('lanes'), list) else []
     lanes = []
     for lane in raw_lanes:
         lane = lane if isinstance(lane, dict) else {}
         market = lane.get('market', lane.get('lane', lane.get('provider', 'unknown')))
         lanes.append({'market': str(market), 'status': str(lane.get('status', 'unknown'))})
+    private_request_count = optional_integer_count(value.get('privateRequestCount'))
+    financial_mutation_count = optional_integer_count(value.get('financialMutationCount'))
+    order_count = optional_integer_count(value.get('orderCount'))
+    live_trading = optional_boolean(value.get('liveTrading'))
+    order_authority = optional_boolean(value.get('orderAuthority'))
+    safety_evidence_complete = all(item is not None for item in (
+        private_request_count,
+        financial_mutation_count,
+        order_count,
+        live_trading,
+        order_authority,
+    ))
     return {
         'present': True,
         'status': str(value.get('status', 'unknown')),
         'cycleId': value.get('cycleId') if isinstance(value.get('cycleId'), str) else None,
-        'scheduleActive': value.get('scheduleActive') is True,
-        'allProvidersReady': value.get('allProvidersReady') is True,
-        'publicForwardEvidenceAccumulating': value.get('publicForwardEvidenceAccumulating') is True,
-        'paperTradeOutcomeAccumulating': value.get('paperTradeOutcomeAccumulating') is True,
-        'privateRequestCount': integer_count(value.get('privateRequestCount')),
-        'financialMutationCount': integer_count(value.get('financialMutationCount')),
-        'orderCount': integer_count(value.get('orderCount')),
-        'liveTrading': value.get('liveTrading') is True,
-        'orderAuthority': value.get('orderAuthority') is True,
+        'scheduleActive': optional_boolean(value.get('scheduleActive')),
+        'allProvidersReady': optional_boolean(value.get('allProvidersReady')),
+        'publicForwardEvidenceAccumulating': optional_boolean(value.get('publicForwardEvidenceAccumulating')),
+        'paperTradeOutcomeAccumulating': optional_boolean(value.get('paperTradeOutcomeAccumulating')),
+        'privateRequestCount': private_request_count,
+        'financialMutationCount': financial_mutation_count,
+        'orderCount': order_count,
+        'liveTrading': live_trading,
+        'orderAuthority': order_authority,
+        'safetyEvidenceComplete': safety_evidence_complete,
         'lanes': lanes,
     }
 
 
 def summarize_paper_ledger(value):
     if not isinstance(value, dict):
-        return {'present': False, 'cycleCount': 0, 'positionCount': 0, 'settlementCount': 0}
+        return {'present': False, 'cycleCount': None, 'sampleCount': None, 'positionCount': None, 'settlementCount': None}
     return {
         'present': True,
-        'cycleCount': len(value.get('cycles')) if isinstance(value.get('cycles'), list) else 0,
-        'positionCount': len(value.get('positions')) if isinstance(value.get('positions'), list) else 0,
-        'settlementCount': len(value.get('settlements')) if isinstance(value.get('settlements'), list) else 0,
+        'cycleCount': len(value.get('cycles')) if isinstance(value.get('cycles'), list) else None,
+        'sampleCount': len(value.get('samples')) if isinstance(value.get('samples'), list) else None,
+        'positionCount': len(value.get('positions')) if isinstance(value.get('positions'), list) else None,
+        'settlementCount': len(value.get('settlements')) if isinstance(value.get('settlements'), list) else None,
     }
 
 
@@ -141,15 +190,23 @@ def summarize_shadow_groups(value):
     for name, row in source.items():
         if not isinstance(row, dict):
             continue
+        candidate = row.get('candidate') if isinstance(row.get('candidate'), dict) else row
         total = finite_number(row.get('total', row.get('totalCount', row.get('records', row.get('sampleSize')))))
         settled = finite_number(row.get('settled', row.get('settledCount')))
         pending = finite_number(row.get('pending', row.get('pendingCount')))
-        prediction_health = row.get('predictionHealth') if isinstance(row.get('predictionHealth'), dict) else {}
+        prediction_health = candidate.get('predictionHealth') if isinstance(candidate.get('predictionHealth'), dict) else {}
         collapsed = prediction_health.get('collapsed', row.get('collapsed'))
-        metrics = row.get('metrics') if isinstance(row.get('metrics'), dict) else {}
-        macro_f1 = finite_number(row.get('macroF1', metrics.get('macroF1')))
-        balanced = finite_number(row.get('balancedAccuracy', metrics.get('balancedAccuracy')))
-        if all(item is None for item in (total, settled, pending, macro_f1, balanced)) and not isinstance(collapsed, bool):
+        metrics = candidate.get('metrics') if isinstance(candidate.get('metrics'), dict) else {}
+        per_class = candidate.get('perClass') if isinstance(candidate.get('perClass'), dict) else {}
+        bullish = per_class.get('bullish') if isinstance(per_class.get('bullish'), dict) else {}
+        bearish = per_class.get('bearish') if isinstance(per_class.get('bearish'), dict) else {}
+        neutral = per_class.get('neutral') if isinstance(per_class.get('neutral'), dict) else {}
+        macro_f1 = finite_number(candidate.get('macroF1', metrics.get('macroF1')))
+        balanced = finite_number(candidate.get('balancedAccuracy', metrics.get('balancedAccuracy')))
+        bull_recall = finite_number(bullish.get('recall'))
+        bear_recall = finite_number(bearish.get('recall'))
+        neutral_recall = finite_number(neutral.get('recall'))
+        if all(item is None for item in (total, settled, pending, macro_f1, balanced, bull_recall, bear_recall, neutral_recall)) and not isinstance(collapsed, bool):
             continue
         groups.append({
             'name': str(name),
@@ -159,6 +216,9 @@ def summarize_shadow_groups(value):
             'collapsed': collapsed if isinstance(collapsed, bool) else None,
             'macroF1': macro_f1,
             'balancedAccuracy': balanced,
+            'bullRecall': bull_recall,
+            'bearRecall': bear_recall,
+            'neutralRecall': neutral_recall,
         })
     return groups
 
@@ -167,9 +227,10 @@ def count_shadow_records(value):
     total = 0
     settled = 0
     pending = 0
+    found_records = False
 
     def visit(node):
-        nonlocal total, settled, pending
+        nonlocal total, settled, pending, found_records
         if isinstance(node, list):
             for child in node:
                 visit(child)
@@ -178,6 +239,7 @@ def count_shadow_records(value):
             return
         records = node.get('records')
         if isinstance(records, list):
+            found_records = True
             total += len(records)
             for record in records:
                 if isinstance(record, dict) and record.get('status') == 'settled':
@@ -191,10 +253,17 @@ def count_shadow_records(value):
     visit(value)
     return {
         'present': value is not None,
-        'totalRecords': total,
-        'settledRecords': settled,
-        'pendingRecords': pending,
+        'totalRecords': total if found_records else None,
+        'settledRecords': settled if found_records else None,
+        'pendingRecords': pending if found_records else None,
     }
+
+
+def sum_known_cycle_counts(cycles, key):
+    present_cycles = [cycle for cycle in cycles if cycle.get('present')]
+    if any(cycle.get(key) is None for cycle in present_cycles):
+        return None
+    return sum(cycle.get(key) or 0 for cycle in present_cycles)
 
 
 def build_research_overview(state_root=DEFAULT_STATE_ROOT):
@@ -204,17 +273,25 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
     paper_ledger = summarize_paper_ledger(read_json_optional(root / 'forward' / 'paper' / 'state' / 'recurring-paper-loop.json'))
     shadow_groups = summarize_shadow_groups(read_json_optional(root / 'forward' / 'shadow-summary.json'))
     shadow_records = count_shadow_records(read_json_optional(root / 'forward' / 'shadow-state.json'))
-    failed_tasks = sum(cycle.get('failedCount', 0) for cycle in cycles)
-    blocked_data_tasks = sum(cycle.get('blockedDataCount', 0) for cycle in cycles)
+    failed_tasks = sum_known_cycle_counts(cycles, 'failedCount')
+    blocked_data_tasks = sum_known_cycle_counts(cycles, 'blockedDataCount')
+    authority_evidence_complete = not paper_runtime.get('present') or paper_runtime.get('safetyEvidenceComplete') is True
     forbidden_authority_observed = (
-        paper_runtime.get('privateRequestCount', 0) > 0
-        or paper_runtime.get('financialMutationCount', 0) > 0
-        or paper_runtime.get('orderCount', 0) > 0
+        paper_runtime.get('privateRequestCount') is not None and paper_runtime.get('privateRequestCount') > 0
+        or paper_runtime.get('financialMutationCount') is not None and paper_runtime.get('financialMutationCount') > 0
+        or paper_runtime.get('orderCount') is not None and paper_runtime.get('orderCount') > 0
         or paper_runtime.get('liveTrading') is True
         or paper_runtime.get('orderAuthority') is True
     )
     timestamps = [finite_number(cycle.get('generatedAt')) or 0 for cycle in cycles]
     latest_cycle_at = max(timestamps) if timestamps and max(timestamps) > 0 else None
+    research_status = (
+        'safety_block' if forbidden_authority_observed
+        else 'safety_evidence_incomplete' if not authority_evidence_complete
+        else 'evidence_incomplete' if failed_tasks is None or blocked_data_tasks is None
+        else 'attention' if failed_tasks > 0
+        else 'collecting'
+    )
     return {
         'schemaVersion': 'research-dashboard-overview-v1',
         'generatedAt': int(__import__('time').time() * 1000),
@@ -227,10 +304,11 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
             'liveTrading': False,
             'privateApi': False,
             'orderAuthority': False,
+            'authorityEvidenceComplete': authority_evidence_complete,
             'forbiddenAuthorityObserved': forbidden_authority_observed,
         },
         'research': {
-            'status': 'safety_block' if forbidden_authority_observed else ('attention' if failed_tasks > 0 else 'collecting'),
+            'status': research_status,
             'failedTasks': failed_tasks,
             'blockedDataTasks': blocked_data_tasks,
             'cycles': cycles,
