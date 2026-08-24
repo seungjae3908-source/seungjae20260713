@@ -168,10 +168,11 @@ button[data-testid="load-multi-timeframe"] {
   }
 }
 
-/* Short landscape screens (Fold/phone rotated) keep menus inside the usable height. */
+/* Short landscape screens (Fold/phone rotated) keep menus inside the space above BottomNav. */
 @media (orientation: landscape) and (max-height: 600px) and (max-width: 1199px) {
   nav[aria-label="주요 메뉴"] [role="menu"] {
-    max-height: calc(100dvh - var(--app-bottom-nav-reserve) - 0.75rem) !important;
+    max-height: calc(100dvh - var(--app-bottom-nav-reserve) - 4rem) !important;
+    overflow-y: auto !important;
   }
 
   button[aria-label="읽기 전용 호가창 열기"] {
