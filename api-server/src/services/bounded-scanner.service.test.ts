@@ -81,8 +81,42 @@ test('normal scan completes with bounded concurrency and separated diagnostics',
   assert.equal(result.insufficientDataCount, 0);
   assert.equal(result.filteredByStrategyCount, 0);
   assert.equal(result.staleCount, 0);
+  assert.equal(result.contextUnavailableCount, 0);
   assert.equal(result.cards.length, 3);
   assert.ok(result.maxConcurrency <= 2);
+});
+
+test('healthy optional context queues behind the cap instead of becoming a false partial', async () => {
+  let active = 0;
+  let maximum = 0;
+  let calls = 0;
+  const catalog = Array.from({ length: 6 }, (_, index) => item(index + 1));
+  const service = createBoundedScannerService(deps(catalog, {
+    getContext: async () => {
+      calls += 1;
+      active += 1;
+      maximum = Math.max(maximum, active);
+      try {
+        await wait(10);
+        return signalContext();
+      } finally {
+        active -= 1;
+      }
+    },
+  }));
+
+  const result = await service.scan('KR', ['PER 낮음'], {}, {
+    deadlineMs: 500,
+    itemTimeoutMs: 200,
+    concurrency: 6,
+  });
+
+  assert.equal(calls, 6);
+  assert.ok(maximum <= 2, `optional context real concurrency exceeded 2: ${maximum}`);
+  assert.equal(result.contextUnavailableCount, 0);
+  assert.equal(result.partial, false);
+  assert.equal(result.completedCount, 6);
+  assert.equal(result.cards.length, 6);
 });
 
 test('zero matches is complete filtered data instead of a provider or insufficient-data failure', async () => {
@@ -178,6 +212,63 @@ test('complete provider failure remains strict', async () => {
     }),
     ScanProviderUnavailableError,
   );
+});
+
+test('optional context failure is partial evidence instead of a mandatory provider failure', async () => {
+  const service = createBoundedScannerService(deps([item(1), item(2), item(3)], {
+    getContext: async () => {
+      throw new Error('optional context unavailable');
+    },
+  }));
+  const result = await service.scan('KR', ['AI 점수 상위'], {}, {
+    deadlineMs: 500,
+    itemTimeoutMs: 200,
+    concurrency: 3,
+  });
+  assert.equal(result.completedCount, 3);
+  assert.equal(result.providerAcceptedCount, 3);
+  assert.equal(result.providerErrorCount, 0);
+  assert.equal(result.timeoutCount, 0);
+  assert.equal(result.contextUnavailableCount, 3);
+  assert.equal(result.partial, true);
+  assert.equal(result.dataState, 'partial');
+});
+
+test('non-cooperative optional context is capped without retiring mandatory scanner lanes', async () => {
+  const releases: Array<() => void> = [];
+  let active = 0;
+  let maximum = 0;
+  let started = 0;
+  const catalog = Array.from({ length: 6 }, (_, index) => item(index + 1));
+  const service = createBoundedScannerService(deps(catalog, {
+    getContext: async () => {
+      started += 1;
+      active += 1;
+      maximum = Math.max(maximum, active);
+      await new Promise<void>((resolve) => releases.push(resolve));
+      active -= 1;
+      return signalContext();
+    },
+  }));
+
+  const result = await service.scan('KR', ['AI 점수 상위'], {}, {
+    deadlineMs: 250,
+    itemTimeoutMs: 80,
+    concurrency: 6,
+  });
+
+  assert.equal(result.completedCount, 6);
+  assert.equal(result.providerAcceptedCount, 6);
+  assert.equal(result.providerErrorCount, 0);
+  assert.equal(result.timeoutCount, 0);
+  assert.equal(result.contextUnavailableCount, 6);
+  assert.equal(result.partial, true);
+  assert.ok(maximum <= 2, `optional context real concurrency exceeded 2: ${maximum}`);
+  assert.ok(started <= 2, `timed-out optional context spawned replacement work: ${started}`);
+
+  for (const release of releases) release();
+  await wait(0);
+  assert.equal(active, 0);
 });
 
 test('deadline prevents the full catalog from starting', async () => {
