@@ -21,6 +21,19 @@ function attachBundle(card, bundle) {
   });
 }
 
+function throwCollectedErrors(errors) {
+  if (errors.length === 0) return;
+  const authoritative = errors.filter((error) => error?.code === "AUTHORITATIVE_ADMISSION_EVIDENCE_BLOCKED");
+  if (authoritative.length === errors.length) {
+    const combined = new Error("AUTHORITATIVE_ADMISSION_EVIDENCE_BLOCKED");
+    combined.code = "AUTHORITATIVE_ADMISSION_EVIDENCE_BLOCKED";
+    combined.authoritativeAdmissionBlockers = [...new Set(authoritative.flatMap((error) =>
+      Array.isArray(error?.authoritativeAdmissionBlockers) ? error.authoritativeAdmissionBlockers : []))];
+    throw combined;
+  }
+  throw errors[0];
+}
+
 export async function runCanonicalMeaningfulSearchPaperMarketWithAdmissionBundles({
   market,
   scanBatch,
@@ -38,10 +51,16 @@ export async function runCanonicalMeaningfulSearchPaperMarketWithAdmissionBundle
       throw new Error("PAPER_ADMISSION_SCAN_RESPONSE_INVALID");
     }
     const cards = [];
+    const errors = [];
     for (const card of response.cards) {
-      const bundle = await paperAdmissionBundleForCard(card, market);
-      cards.push(attachBundle(card, bundle));
+      try {
+        const bundle = await paperAdmissionBundleForCard(card, market);
+        cards.push(attachBundle(card, bundle));
+      } catch (error) {
+        errors.push(error);
+      }
     }
+    throwCollectedErrors(errors);
     return freeze({ ...response, cards: freeze(cards) });
   };
 
@@ -57,6 +76,7 @@ export async function runCanonicalMeaningfulSearchPaperMarketWithAdmissionBundle
       schemaVersion: "canonical-paper-admission-bundle-injection-runtime-v1",
       sourceSchemaVersion: PAPER_ADMISSION_BUNDLE_SCHEMA,
       callbackRequired: true,
+      batchEvidenceEvaluation: "COMPLETE_BEFORE_FAIL_CLOSED",
       executionAuthority: "NONE",
       simulatedOnly: true,
       liveOrderAllowed: false,
