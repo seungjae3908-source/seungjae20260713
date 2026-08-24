@@ -543,13 +543,6 @@ export function createBoundedScannerService(dependencies: BoundedScannerDependen
           itemTimeoutMs: Math.min(SCAN_EXECUTION_LIMITS.marketContextTimeoutMs, itemTimeoutMs),
           signal: execution.signal,
           now: dependencies.now,
-          admission: {
-            identity: {
-              provider: 'stock-scanner',
-              domain: market.toLowerCase(),
-              operationClass: 'market-context',
-            },
-          },
         },
       );
       throwIfAborted(execution.signal);
@@ -630,13 +623,6 @@ export function createBoundedScannerService(dependencies: BoundedScannerDependen
           itemTimeoutMs: Math.min(itemTimeoutMs, remainingMs),
           signal: execution.signal,
           now: dependencies.now,
-          admission: {
-            identity: {
-              provider: 'stock-scanner',
-              domain: market.toLowerCase(),
-              operationClass: 'asset-scan',
-            },
-          },
         },
       );
       throwIfAborted(execution.signal);
