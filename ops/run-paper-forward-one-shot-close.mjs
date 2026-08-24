@@ -140,7 +140,7 @@ export function buildCloseAction({ snapshotDigest, positionId, market }) {
   };
 }
 
-export function validateCloseResponse(body, { targetSha, publisherDigest }) {
+export function validateCloseResponse(body, { targetSha, publisherDigest, expectedPositionId }) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) fail('CLOSE_RESPONSE_INVALID');
   if (body.ok !== true || body.mode !== 'paper-only' || body.orderSubmitted !== false || body.exchangeRequestSent !== false) {
     fail('CLOSE_SAFETY_ENVELOPE_INVALID');
@@ -150,10 +150,12 @@ export function validateCloseResponse(body, { targetSha, publisherDigest }) {
     fail('CLOSE_RESULT_INVALID');
   }
   if (result.duplicateEvent !== false) fail('CLOSE_DUPLICATE_EVENT');
-  if (!Array.isArray(result.fills) || result.fills.length !== 1 || result.fills[0]?.fillReason !== 'manual_close') {
+  if (!Array.isArray(result.fills) || result.fills.length !== 1 || result.fills[0]?.fillReason !== 'manual_close'
+    || (expectedPositionId && result.fills[0]?.positionId !== expectedPositionId)) {
     fail('CLOSE_FILL_INVALID');
   }
-  if (!result.position || result.position.status !== 'closed' || !nonNegativeZero(result.position.remainingQuantity)) {
+  if (!result.position || (expectedPositionId && result.position.id !== expectedPositionId)
+    || result.position.status !== 'closed' || !nonNegativeZero(result.position.remainingQuantity)) {
     fail('CLOSE_POSITION_NOT_FLAT');
   }
   const state = result.state;
@@ -171,7 +173,7 @@ export function validateCloseResponse(body, { targetSha, publisherDigest }) {
   return { state, transportDigest: transport.stateDigestSha256, targetSha, publisherDigest };
 }
 
-export function validateFlatSnapshot(snapshot, { targetSha, publisherDigest, expectedDigest }) {
+export function validateFlatSnapshot(snapshot, { targetSha, publisherDigest, expectedDigest, expectedPositionId }) {
   if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) fail('FINAL_SNAPSHOT_REQUIRED');
   if (snapshot.schemaVersion !== SNAPSHOT_VERSION || snapshot.paperStateSchemaVersion !== 1) fail('FINAL_SNAPSHOT_SCHEMA_INVALID');
   if (snapshot.sourceSha !== targetSha) fail('FINAL_SNAPSHOT_TARGET_SHA_MISMATCH');
@@ -198,7 +200,8 @@ export function validateFlatSnapshot(snapshot, { targetSha, publisherDigest, exp
     fail('FINAL_SNAPSHOT_ACCOUNT_METADATA_MISMATCH');
   }
   const manualClosed = Array.isArray(snapshot.state?.journal)
-    && snapshot.state.journal.some((entry) => entry?.status === 'closed' && entry?.exitReason === 'manual_close' && Number(entry?.remainingQuantity) <= EPSILON);
+    && snapshot.state.journal.some((entry) => (!expectedPositionId || entry?.positionId === expectedPositionId)
+      && entry?.status === 'closed' && entry?.exitReason === 'manual_close' && Number(entry?.remainingQuantity) <= EPSILON);
   if (!manualClosed) fail('FINAL_MANUAL_CLOSE_JOURNAL_MISSING');
   return true;
 }
@@ -333,13 +336,14 @@ export async function runOneShotClose() {
     body: JSON.stringify({ state: snapshot.state, action, now: now.toISOString() }),
   }, 20_000);
   if (!closeResult.response.ok) fail(String(closeResult.body?.code ?? 'PAPER_CLOSE_REQUEST_FAILED'));
-  const validated = validateCloseResponse(closeResult.body, { targetSha, publisherDigest });
+  const validated = validateCloseResponse(closeResult.body, { targetSha, publisherDigest, expectedPositionId: recovery.position.id });
 
   const finalSnapshot = await readJson(snapshotPath, 'FINAL_SNAPSHOT_READ_FAILED');
   validateFlatSnapshot(finalSnapshot, {
     targetSha,
     publisherDigest,
     expectedDigest: validated.transportDigest,
+    expectedPositionId: recovery.position.id,
   });
   await requireHealth(baseUrl, targetSha);
   const markerAfter = String(await readFile(`${liveDir}/.deploy/current-sha`, 'utf8')).trim().toLowerCase();
