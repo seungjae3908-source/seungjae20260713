@@ -24,7 +24,11 @@ import {
   US_SEARCH_SOFT_DEADLINE_MS,
 } from '../services/unified-us-search-fallback';
 import { deriveUnifiedSearchState } from '../services/unified-search-state';
-import type { UnifiedAssetType, UnifiedSearchMarket } from '../lib/search-normalization';
+import {
+  canonicalProductCode,
+  type UnifiedAssetType,
+  type UnifiedSearchMarket,
+} from '../lib/search-normalization';
 
 const router: IRouter = Router();
 const EXACT_CODE_METADATA_DEADLINE_MS = 350;
@@ -114,13 +118,17 @@ async function searchWithMetadataSoftDeadline(input: {
   const metadataFallback = buildMetadataFallback(input.q, input.asset, input.market, input.limit);
   const configuredSoftDeadlineMs = metadataFallbackSoftDeadlineMs(input.asset, input.market);
   const exactCodeFallback = metadataFallback?.results.some((result) => result.matchType === 'code_exact') === true;
+  const canonicalQuery = canonicalProductCode(input.q);
+  const exactProductCodeFallback = metadataFallback?.results.some((result) =>
+    result.matchType === 'code_exact' && canonicalProductCode(result.productCode) === canonicalQuery
+  ) === true;
 
-  // An explicit US ticker identity is already available from the repository's factual
-  // metadata catalog. Starting the full provider index refresh before returning that
-  // identity can synchronously monopolize the Node event loop during a cold Finnhub
-  // universe build, delaying even the fallback timer. Return the truthful metadata
-  // evidence immediately and leave broad/name/fuzzy discovery on the provider path.
-  if (input.market === 'US' && exactCodeFallback && metadataFallback) {
+  // An explicit market + exact product code identity is already available from a factual static
+  // metadata catalog. Starting full provider discovery first can leave a cold shared
+  // index refresh running after the fallback response and monopolize the Node event loop
+  // for the immediately following request. Ambiguous base symbols such as BTC still need
+  // provider discovery for cross-market matches, as do broad/name/prefix/fuzzy searches.
+  if (exactProductCodeFallback && metadataFallback) {
     return metadataFallback;
   }
 
