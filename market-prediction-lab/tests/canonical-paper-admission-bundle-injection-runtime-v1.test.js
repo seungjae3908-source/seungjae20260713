@@ -175,6 +175,7 @@ test("P0-C6 injects a canonical-schema bundle into the existing #531/#532/#533 r
   assert.ok(result.admissionBlockers.length > 0);
   assert.ok(result.admissionBlockers.includes("ADMISSION_EVIDENCE_DIGEST_MISMATCH"));
   assert.equal(result.admissionBundleInjection.callbackRequired, true);
+  assert.equal(result.admissionBundleInjection.batchEvidenceEvaluation, "COMPLETE_BEFORE_FAIL_CLOSED");
   assert.equal(result.executionAuthority, "NONE");
   assert.equal(result.orderSubmitted, false);
   assert.equal(result.exchangeRequestSent, false);
@@ -219,4 +220,29 @@ test("P0-C6 requires an explicit bundle provider callback", async () => {
     }),
     /paperAdmissionBundleForCard must be a function/,
   );
+});
+
+test("P0-C6 evaluates the entire scanned batch before preserving authoritative fail-closed rejection", async () => {
+  const calls = [];
+  await assert.rejects(
+    () => runCanonicalMeaningfulSearchPaperMarketWithAdmissionBundles({
+      market: "CRYPTO_SPOT",
+      scanBatch: async () => response([card("a"), card("b"), card("c")]),
+      paperAdmissionBundleForCard: async (value) => {
+        calls.push(value.signalId);
+        const error = new Error("AUTHORITATIVE_ADMISSION_EVIDENCE_BLOCKED");
+        error.code = "AUTHORITATIVE_ADMISSION_EVIDENCE_BLOCKED";
+        error.authoritativeAdmissionBlockers = [`MISSING_${value.signalId}`];
+        throw error;
+      },
+      profitInputForCard: async () => profitableInput(),
+      now: () => NOW,
+    }),
+    (error) => {
+      assert.equal(error.code, "AUTHORITATIVE_ADMISSION_EVIDENCE_BLOCKED");
+      assert.deepEqual(error.authoritativeAdmissionBlockers, ["MISSING_a", "MISSING_b", "MISSING_c"]);
+      return true;
+    },
+  );
+  assert.deepEqual(calls, ["a", "b", "c"]);
 });
