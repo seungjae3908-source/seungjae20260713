@@ -5,7 +5,6 @@ import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
 import { ResponsiveTabs } from '@/components/responsive-tabs';
 import { UnifiedAssetSearch } from '@/components/unified-asset-search';
-import { ADAPTIVE_VIEWPORT_BREAKPOINTS } from '@/lib/adaptive-layout';
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { useAssetMode } from '@/lib/asset-mode';
 import {
@@ -132,7 +131,7 @@ function statusText(error: unknown): { title: string; description: string; icon:
 }
 
 function useDesktopRoom(): boolean {
-  const query = `(min-width: ${ADAPTIVE_VIEWPORT_BREAKPOINTS.desktopMin}px)`;
+  const query = '(min-width: 1200px)';
   const [desktop, setDesktop] = useState(() => typeof window !== 'undefined' && window.matchMedia(query).matches);
 
   useEffect(() => {
