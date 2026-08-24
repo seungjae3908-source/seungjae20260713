@@ -129,8 +129,8 @@ async function seedLayout(page: Page, device: 'mobile' | 'desktop') {
   }, { storageKey: key, value: layout });
 }
 
-for (const [width, height] of [[320, 760], [360, 800], [390, 844], [430, 932]] as const) {
-  test(`mobile ignores the legacy long Builder layout and keeps four dedicated workspaces at ${width}x${height}`, async ({ page }) => {
+for (const [width, height] of [[320, 760], [360, 800], [390, 844], [430, 932], [1024, 768], [1180, 820]] as const) {
+  test(`touch workspace ignores the legacy long Builder layout and keeps four dedicated workspaces at ${width}x${height}`, async ({ page }) => {
     const forbidden: string[] = [];
     const unexpectedHttp: string[] = [];
     const consoleErrors: string[] = [];
@@ -146,6 +146,7 @@ for (const [width, height] of [[320, 760], [360, 800], [390, 844], [430, 932]] a
     await page.goto('/__phase11-technical-workspace-e2e');
 
     await expect(page.getByTestId('ui-builder-signal-scanner-mobile')).toHaveCount(0);
+    await expect(page.getByTestId('ui-builder-signal-scanner-desktop')).toHaveCount(0);
     const tabs = page.getByTestId('technical-mobile-tabs');
     await expect(tabs.getByRole('tab')).toHaveCount(4);
     await expect(page.getByRole('button', { name: '코인 현물', exact: true })).toBeVisible();
@@ -170,7 +171,7 @@ for (const [width, height] of [[320, 760], [360, 800], [390, 844], [430, 932]] a
   });
 }
 
-for (const [width, height] of [[1024, 800], [1280, 900], [1440, 1000], [1920, 1080]] as const) {
+for (const [width, height] of [[1200, 800], [1280, 900], [1440, 1000], [1920, 1080]] as const) {
   test(`UI Builder desktop Signal Scanner layout is safe at ${width}x${height}`, async ({ page }) => {
     const forbidden: string[] = [];
     const unexpectedHttp: string[] = [];
@@ -222,7 +223,7 @@ test('invalid mobile Builder layout cannot inject a private endpoint and still o
   expect(unexpectedHttp).toEqual([]);
 });
 
-test('mobile and desktop remain isolated across viewport changes', async ({ page }) => {
+test('touch and desktop workspaces remain isolated across viewport changes', async ({ page }) => {
   await installMocks(page, [], []);
   await seedLayout(page, 'mobile');
   await seedLayout(page, 'desktop');
@@ -232,6 +233,10 @@ test('mobile and desktop remain isolated across viewport changes', async ({ page
   await expect(page.getByTestId('ui-builder-signal-scanner-mobile')).toHaveCount(0);
   await expect(page.getByTestId('technical-mobile-tabs').getByRole('tab')).toHaveCount(4);
 
-  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.setViewportSize({ width: 1180, height: 820 });
+  await expect(page.getByTestId('technical-mobile-tabs').getByRole('tab')).toHaveCount(4);
+  await expect(page.getByTestId('ui-builder-signal-scanner-desktop')).toHaveCount(0);
+
+  await page.setViewportSize({ width: 1200, height: 800 });
   await expect(page.getByTestId('ui-builder-signal-scanner-desktop')).toHaveAttribute('data-layout-id', 'signal-scanner-integration-desktop');
 });
