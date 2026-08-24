@@ -46,15 +46,44 @@ export function buildCancelReplacePlan(input) {
   if (String(replacement.mode ?? "").toUpperCase() !== "PAPER") {
     throw new GatewayError("LIVE_TRADING_DISABLED", "replacement intent must remain PAPER", 403);
   }
+
+  const originalMarket = String(order.intent?.market ?? "").toUpperCase();
+  const originalSymbol = String(order.intent?.symbol ?? "").toUpperCase();
+  const originalSide = String(order.intent?.side ?? "").toUpperCase();
   if (
-    String(replacement.market ?? "").toUpperCase() !== String(order.intent?.market ?? "").toUpperCase()
-    || String(replacement.symbol ?? "").toUpperCase() !== String(order.intent?.symbol ?? "").toUpperCase()
+    String(replacement.market ?? "").toUpperCase() !== originalMarket
+    || String(replacement.symbol ?? "").toUpperCase() !== originalSymbol
   ) {
     throw new GatewayError(
       "REPLACEMENT_IDENTITY_MISMATCH",
       "cancel/replace cannot change market or symbol identity",
     );
   }
+  if (String(replacement.side ?? "").toUpperCase() !== originalSide) {
+    throw new GatewayError(
+      "REPLACEMENT_SIDE_MISMATCH",
+      "cancel/replace cannot flip the order direction",
+    );
+  }
+
+  const totalQuantity = positive(order.intent?.quantity, "original quantity");
+  const filledQuantity = Number(order.filledQuantity ?? 0);
+  if (!Number.isFinite(filledQuantity) || filledQuantity < 0 || filledQuantity > totalQuantity) {
+    throw new GatewayError("INVALID_REPLACEMENT_FILL_STATE", "existing filled quantity is invalid", 409);
+  }
+  const remainingQuantity = totalQuantity - filledQuantity;
+  if (remainingQuantity <= 0) {
+    throw new GatewayError("ORDER_NOT_REPLACEABLE", "filled Paper order has no remaining quantity", 409);
+  }
+  const replacementQuantity = positive(replacement.quantity, "replacement quantity");
+  if (replacementQuantity > remainingQuantity + 1e-12) {
+    throw new GatewayError(
+      "REPLACEMENT_QUANTITY_EXCEEDS_REMAINING",
+      "replacement quantity cannot exceed the unfilled Paper quantity",
+      409,
+    );
+  }
+
   const replacementKey = text(replacement.idempotencyKey, "replacement idempotencyKey");
   if (replacementKey === order.intent?.idempotencyKey) {
     throw new GatewayError("REPLACEMENT_IDEMPOTENCY_REUSE", "replacement requires a new idempotency key");
@@ -64,6 +93,9 @@ export function buildCancelReplacePlan(input) {
     ...safeBase("CANCEL_REPLACE_PREVIEW_V1"),
     state: "AWAITING_EXPLICIT_CANCEL_CONFIRMATION",
     orderId: text(order.orderId, "orderId"),
+    originalFilledQuantity: filledQuantity,
+    originalRemainingQuantity: remainingQuantity,
+    replacementQuantity,
     replacementIntent: Object.freeze({ ...replacement }),
     steps: Object.freeze([
       "CANCEL_ORIGINAL_PAPER_ORDER",
