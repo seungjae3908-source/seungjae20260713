@@ -12,9 +12,9 @@ const outputRoot = resolve(
 const bundlePath = join(outputRoot, 'authoritative-paper-runtime-v1.mjs');
 const manifestPath = join(outputRoot, 'authoritative-paper-runtime-v1.manifest.json');
 
-const CANONICAL_PRODUCER_SOURCE_COMMIT_SHA = '3f85003368830fb570c05b3b2060da39f515696d';
-const CANONICAL_PRODUCER_SOURCE_GIT_BLOB_SHA = 'e4fe2e7c8cd0ec279cda8d696b4ae935bef86a4b';
-const CANONICAL_PRODUCER_SOURCE_SHA256 = 'e699e00ba64040aefec24b5b4992b4975531fdf88c1e4b2b164038ebed57dad7';
+const CANONICAL_PRODUCER_SOURCE_COMMIT_SHA = '58c6ff651912e27daccb7137aff11a4bc38f30a3';
+const CANONICAL_PRODUCER_SOURCE_GIT_BLOB_SHA = 'ffd1eaed99eaa2a0c9a3d4e6cc73dd6d0842928c';
+const CANONICAL_PRODUCER_SOURCE_SHA256 = 'e5bfec60589f3c48622fd97fca0eb43901a0365759c02aed66aea0b5080b99d8';
 const PRODUCER_SOURCE = 'src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.ts';
 const ALLOWED_INPUTS = Object.freeze([
   '../market-intelligence-sidecar/src/execution-quality.mjs',

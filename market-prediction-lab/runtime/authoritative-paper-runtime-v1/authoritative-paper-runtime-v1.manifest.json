@@ -4,11 +4,11 @@
   "canonicalProducer": {
     "version": "scanner-crypto-futures-paper-admission-evidence-producer-v1",
     "sourceFile": "api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.ts",
-    "sourceCommitSha": "3f85003368830fb570c05b3b2060da39f515696d",
-    "sourceGitBlobSha": "e4fe2e7c8cd0ec279cda8d696b4ae935bef86a4b",
-    "sourceSha256": "e699e00ba64040aefec24b5b4992b4975531fdf88c1e4b2b164038ebed57dad7"
+    "sourceCommitSha": "58c6ff651912e27daccb7137aff11a4bc38f30a3",
+    "sourceGitBlobSha": "ffd1eaed99eaa2a0c9a3d4e6cc73dd6d0842928c",
+    "sourceSha256": "e5bfec60589f3c48622fd97fca0eb43901a0365759c02aed66aea0b5080b99d8"
   },
-  "sourceGraphSha256": "209230cd71d45361f316146dd8716e9e6a1063e825c2038e5ef74a0dee72c918",
+  "sourceGraphSha256": "2ba4df3a3e585d531e20f134d8d75b9f7b7aedbbae6b5f75d8be15efb22a3c20",
   "sourceFiles": [
     "api-server/src/data/asset-type.ts",
     "api-server/src/lib/bounded-work-pool.ts",
@@ -48,7 +48,7 @@
   ],
   "sourceFileSha256": {
     "api-server/src/data/asset-type.ts": "ad88c2ca7032503eca9b364625b95913519c7452649a0975d838bddede27c0bf",
-    "api-server/src/lib/bounded-work-pool.ts": "8dc3eff3b957b8f98507102ff47ff4df125979684ea9eabc54722f21c591729d",
+    "api-server/src/lib/bounded-work-pool.ts": "6dc18bd432ebd9a54d606633ea5fcce37be5e74533839bb9f63f953af2fb7eb7",
     "api-server/src/services/authoritative-paper-callback-owners.service.ts": "a75666c380cc51ee4c24460c8747249f3051dff50b6dc87be94c43753da135f8",
     "api-server/src/services/authoritative-paper-evidence-sources.service.ts": "7f9861132bea5f38b5cf44f8c8871eff91f4d4484f36e4991f09e843b8fbdb41",
     "api-server/src/services/authoritative-paper-runtime-package.entry.ts": "ca0f0caec7b32b31daf5fdb2884b684344f6d1cbe0296824e2a468ddecdd7f1d",
@@ -64,7 +64,7 @@
     "api-server/src/services/scanner-candidate-ranking.service.ts": "84c24ec9729e4a5e36f7360ad1a6f4de2b8a8ed40c5a6ae9071fa810cb2ae82d",
     "api-server/src/services/scanner-canonical-paper-identity.service.ts": "160c0310312045f06c772604f5abe440f6e89485ae9d737592899d48bf034bb4",
     "api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.ts": "16ce3a22fc3dccbc37507cdfe85291b84d90dc9a0777bf6dab25b30b08a1a98b",
-    "api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.ts": "e699e00ba64040aefec24b5b4992b4975531fdf88c1e4b2b164038ebed57dad7",
+    "api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.ts": "e5bfec60589f3c48622fd97fca0eb43901a0365759c02aed66aea0b5080b99d8",
     "api-server/src/services/scanner-crypto-price-precision.service.ts": "4cd040019834e14c4436d1adfd0a43f98acf2b473c510fa485f236d2a85a757b",
     "api-server/src/services/scanner-data-quality.service.ts": "ba6f09b7589711c119294a1c8c47c12dfed93db3e4570c5e39c40db9d2c55551",
     "api-server/src/services/scanner-indicator-library.service.ts": "5927ae0dece726e516df8ced4b28637dbe8d20e464aa9b041cad3f93f6c295c2",
@@ -83,7 +83,7 @@
     "market-intelligence-sidecar/src/execution-quality.mjs": "d646fe71f323df5781625b8f97108101ec5fc64d5202c116a733211ebccd2cea",
     "market-prediction-lab/src/bitget-position-tier-v1.js": "ddfa77300339b0968e719bd547a84389c890cc1d03982ec3d2d7d30859f6ed01"
   },
-  "bundleSha256": "3113f56a18b37cb8988aeb768415a283c80151f23aaee0290edec269e37bcb11",
+  "bundleSha256": "7482db7befbaa06c7c0db961af7ce9ae3368c6007ec0192f390c6ec23f8a6ce7",
   "admissionBundleSchemaVersion": "scanner-paper-admission-evidence-bundle-v1",
   "paperStateSnapshotSchemaVersion": "paper-trading-state-snapshot-v2",
   "callbackOwnerContractSchemaVersion": "authoritative-paper-callback-owner-contract-v1",
