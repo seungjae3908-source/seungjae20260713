@@ -14,11 +14,12 @@ test('standalone backtest page uses the centered compact application shell', () 
   expect(backtests).toContain('<BacktestResearchPanel compact />');
 });
 
-test('settings page uses the shared centered page header', () => {
+test('settings page uses the shared centered page header without the removed long info popup', () => {
   const more = source('src/pages/more.tsx');
   expect(more).toContain("import { CenteredPageHeader } from '@/components/centered-page-header'");
   expect(more).toContain('title="설정"');
-  expect(more).toContain('infoTitle="설정 안내"');
+  expect(more).not.toContain('infoTitle=');
+  expect(more).not.toContain('설정 안내');
   expect(more).not.toContain('SlidersHorizontal');
 });
 

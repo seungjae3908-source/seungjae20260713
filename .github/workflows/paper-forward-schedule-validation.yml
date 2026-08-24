@@ -17,19 +17,27 @@ on:
       - market-intelligence-sidecar/src/execution-quality.d.mts
       - market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json
       - market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs
+      - market-prediction-lab/src/authoritative-natural-paper-accounting-v1.js
       - market-prediction-lab/src/authoritative-paper-evidence-source-ownership-v1.js
       - market-prediction-lab/src/authoritative-paper-runtime-factory-v1.js
       - market-prediction-lab/src/authoritative-paper-runtime-package-v1.js
+      - market-prediction-lab/src/authoritative-paper-natural-funnel-v1.js
+      - market-prediction-lab/src/canonical-paper-admission-bundle-injection-runtime-v1.js
       - market-prediction-lab/src/bitget-position-tier-v1.js
       - market-prediction-lab/src/bitget-position-tier-v1.d.ts
       - market-prediction-lab/src/eth-v6-paper-forward-source-v1.js
       - market-prediction-lab/src/eth-v6-paper-settlement-source-v1.js
       - market-prediction-lab/src/meaningful-search-scheduled-paper-provider-v1.js
       - market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
+      - market-prediction-lab/src/recurring-paper-loop-v1.js
       - market-prediction-lab/scripts/run-paper-forward-schedule.js
+      - market-prediction-lab/tests/authoritative-natural-paper-accounting-v1.test.js
       - market-prediction-lab/tests/authoritative-paper-runtime-factory-v1.test.js
       - market-prediction-lab/tests/authoritative-paper-runtime-package-v1.test.js
+      - market-prediction-lab/tests/authoritative-paper-natural-funnel-v1.test.js
+      - market-prediction-lab/tests/canonical-paper-admission-bundle-injection-runtime-v1.test.js
       - market-prediction-lab/tests/meaningful-search-scheduled-paper-provider-v1.test.js
+      - market-prediction-lab/tests/natural-paper-account-cli-contract-v1.test.js
       - market-prediction-lab/tests/paper-forward-schedule-authoritative-source-wiring-v1.test.js
       - market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
       - market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
@@ -48,8 +56,12 @@ on:
       - agent/paper-forward-outcome-natural-settlement-v1
       - agent/research-paper-forward-identity-cutover-v1
     paths:
+      - market-prediction-lab/src/authoritative-natural-paper-accounting-v1.js
       - market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
+      - market-prediction-lab/src/recurring-paper-loop-v1.js
       - market-prediction-lab/scripts/run-paper-forward-schedule.js
+      - market-prediction-lab/tests/authoritative-natural-paper-accounting-v1.test.js
+      - market-prediction-lab/tests/natural-paper-account-cli-contract-v1.test.js
       - market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
       - market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
       - ops/install-paper-forward-schedule.sh
@@ -107,19 +119,27 @@ jobs:
             market-intelligence-sidecar/src/execution-quality.d.mts
             market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json
             market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs
+            market-prediction-lab/src/authoritative-natural-paper-accounting-v1.js
             market-prediction-lab/src/authoritative-paper-evidence-source-ownership-v1.js
             market-prediction-lab/src/authoritative-paper-runtime-factory-v1.js
             market-prediction-lab/src/authoritative-paper-runtime-package-v1.js
+            market-prediction-lab/src/authoritative-paper-natural-funnel-v1.js
+            market-prediction-lab/src/canonical-paper-admission-bundle-injection-runtime-v1.js
             market-prediction-lab/src/bitget-position-tier-v1.js
             market-prediction-lab/src/bitget-position-tier-v1.d.ts
             market-prediction-lab/src/eth-v6-paper-forward-source-v1.js
             market-prediction-lab/src/eth-v6-paper-settlement-source-v1.js
             market-prediction-lab/src/meaningful-search-scheduled-paper-provider-v1.js
             market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
+            market-prediction-lab/src/recurring-paper-loop-v1.js
             market-prediction-lab/scripts/run-paper-forward-schedule.js
+            market-prediction-lab/tests/authoritative-natural-paper-accounting-v1.test.js
             market-prediction-lab/tests/authoritative-paper-runtime-factory-v1.test.js
             market-prediction-lab/tests/authoritative-paper-runtime-package-v1.test.js
+            market-prediction-lab/tests/authoritative-paper-natural-funnel-v1.test.js
+            market-prediction-lab/tests/canonical-paper-admission-bundle-injection-runtime-v1.test.js
             market-prediction-lab/tests/meaningful-search-scheduled-paper-provider-v1.test.js
+            market-prediction-lab/tests/natural-paper-account-cli-contract-v1.test.js
             market-prediction-lab/tests/paper-forward-canonical-admission-cutover-v1.test.js
             market-prediction-lab/tests/paper-forward-research-natural-source-integration-v1.test.js
             market-prediction-lab/tests/paper-forward-schedule-authoritative-source-wiring-v1.test.js
@@ -145,10 +165,14 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          node --check market-prediction-lab/src/authoritative-natural-paper-accounting-v1.js
           node --check market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
+          node --check market-prediction-lab/src/recurring-paper-loop-v1.js
           node --check market-prediction-lab/src/authoritative-paper-evidence-source-ownership-v1.js
           node --check market-prediction-lab/src/authoritative-paper-runtime-factory-v1.js
           node --check market-prediction-lab/src/authoritative-paper-runtime-package-v1.js
+          node --check market-prediction-lab/src/authoritative-paper-natural-funnel-v1.js
+          node --check market-prediction-lab/src/canonical-paper-admission-bundle-injection-runtime-v1.js
           node --check market-prediction-lab/src/bitget-position-tier-v1.js
           node --check market-prediction-lab/src/eth-v6-paper-forward-source-v1.js
           node --check market-prediction-lab/src/eth-v6-paper-settlement-source-v1.js
@@ -156,9 +180,13 @@ jobs:
           node --check market-intelligence-sidecar/src/execution-quality.mjs
           node --check market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs
           node --check market-prediction-lab/scripts/run-paper-forward-schedule.js
+          node --check market-prediction-lab/tests/authoritative-natural-paper-accounting-v1.test.js
           node --check market-prediction-lab/tests/authoritative-paper-runtime-factory-v1.test.js
           node --check market-prediction-lab/tests/authoritative-paper-runtime-package-v1.test.js
+          node --check market-prediction-lab/tests/authoritative-paper-natural-funnel-v1.test.js
+          node --check market-prediction-lab/tests/canonical-paper-admission-bundle-injection-runtime-v1.test.js
           node --check market-prediction-lab/tests/meaningful-search-scheduled-paper-provider-v1.test.js
+          node --check market-prediction-lab/tests/natural-paper-account-cli-contract-v1.test.js
           node --check market-prediction-lab/tests/paper-forward-schedule-authoritative-source-wiring-v1.test.js
           node --check market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
           node --check market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
@@ -169,6 +197,10 @@ jobs:
         working-directory: market-prediction-lab
         run: |
           node --test \
+            tests/authoritative-natural-paper-accounting-v1.test.js \
+            tests/authoritative-paper-natural-funnel-v1.test.js \
+            tests/canonical-paper-admission-bundle-injection-runtime-v1.test.js \
+            tests/natural-paper-account-cli-contract-v1.test.js \
             tests/authoritative-paper-runtime-factory-v1.test.js \
             tests/authoritative-paper-runtime-package-v1.test.js \
             tests/eth-v6-paper-forward-source-v1.test.js \
@@ -196,6 +228,10 @@ jobs:
           grep -F 'canonicalCycleIntervalMs: FOUR_HOURS_MS' market-prediction-lab/src/paper-forward-schedule-runtime-v1.js >/dev/null
           grep -F 'financialMutationAdaptersEnabled: false' market-prediction-lab/src/paper-forward-schedule-runtime-v1.js >/dev/null
           grep -F 'externalFinancialMutationAllowed: false' market-prediction-lab/src/paper-forward-schedule-runtime-v1.js >/dev/null
+          grep -F 'syntheticSeedAllowed: false' market-prediction-lab/src/authoritative-natural-paper-accounting-v1.js >/dev/null
+          grep -F 'recurringLedgerDerivationAllowed: false' market-prediction-lab/src/authoritative-natural-paper-accounting-v1.js >/dev/null
+          grep -F 'PAPER_FORWARD_AUTHORITATIVE_ACCOUNT_SEED_REQUIRED' market-prediction-lab/src/paper-forward-schedule-runtime-v1.js >/dev/null
+          grep -F 'paper-forward-authoritative-account-v1' market-prediction-lab/src/paper-forward-schedule-runtime-v1.js >/dev/null
           grep -F 'RESEARCH_PRODUCTION' market-prediction-lab/scripts/run-paper-forward-schedule.js >/dev/null
           grep -F 'loadValidatedAuthoritativePaperRuntimePackage' market-prediction-lab/scripts/run-paper-forward-schedule.js >/dev/null
           grep -F '3f85003368830fb570c05b3b2060da39f515696d' market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json >/dev/null
@@ -206,7 +242,11 @@ jobs:
           grep -F '"financialMutationAllowed": false' market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json >/dev/null
           grep -F 'research-production-paper-identity-cutover-v1' market-prediction-lab/scripts/run-paper-forward-schedule.js >/dev/null
           ! grep -R --line-number -E 'stock-analyzer/|LIVE_TRADING=.?(true|1)|PRIVATE_TRADING_API_ALLOWED=.?(true|1)|REAL_ORDER_ENABLED=.?(true|1)' \
+            market-prediction-lab/src/authoritative-natural-paper-accounting-v1.js \
+            market-prediction-lab/src/authoritative-paper-natural-funnel-v1.js \
+            market-prediction-lab/src/canonical-paper-admission-bundle-injection-runtime-v1.js \
             market-prediction-lab/src/paper-forward-schedule-runtime-v1.js \
+            market-prediction-lab/src/recurring-paper-loop-v1.js \
             market-prediction-lab/scripts/run-paper-forward-schedule.js \
             ops/install-paper-forward-schedule.sh \
             ops/disable-paper-forward-schedule.sh
