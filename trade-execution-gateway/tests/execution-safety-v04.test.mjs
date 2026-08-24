@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SAFETY_CONTRACT } from "../src/contracts.mjs";
+import { SAFETY_CONTRACT, publicContract } from "../src/contracts.mjs";
 import { assessExecutionGuards } from "../src/execution-guards.mjs";
 import { normalizePublicMarketDataEvidence } from "../src/market-data-evidence.mjs";
 import { PaperMockBrokerAdapter, TradeExecutionGateway } from "../src/gateway.mjs";
@@ -94,13 +94,22 @@ test("v0.4 preserves paper-only and zero-outbound safety", () => {
   assert.equal(SAFETY_CONTRACT.liveTrading, false);
   assert.equal(SAFETY_CONTRACT.privateTradingApiAllowed, false);
   assert.equal(SAFETY_CONTRACT.outboundNetwork, false);
+  const contract = publicContract();
+  assert.equal(contract.executionSafety.actualPublicWebSocketConnected, false);
+  assert.equal(contract.executionSafety.callerSuppliedEvidenceOnly, true);
+  assert.equal(contract.executionSafety.serverAttestedMarketData, false);
+  assert.equal(contract.executionSafety.liveExecutionEligibleMarketData, false);
 });
 
-test("fresh Upbit public book and trade evidence normalizes without network authority", () => {
+test("fresh Upbit public book and trade evidence normalizes without claiming server attestation", () => {
   const evidence = normalizePublicMarketDataEvidence(spotEvidence(), dataPolicy());
   assert.equal(evidence.provider, "upbit");
   assert.equal(evidence.bestBid, 99.9);
   assert.equal(evidence.bestAsk, 100.1);
+  assert.equal(evidence.callerSuppliedEvidence, true);
+  assert.equal(evidence.serverAttested, false);
+  assert.equal(evidence.transportObservedByGateway, false);
+  assert.equal(evidence.liveExecutionEligible, false);
   assert.equal(evidence.privateApiUsed, false);
   assert.equal(evidence.outboundNetworkPerformed, false);
 });
@@ -131,7 +140,7 @@ test("future and stale public trade evidence fail closed", () => {
   );
 });
 
-test("execution guard passes bounded fresh depth", () => {
+test("execution guard passes bounded fresh depth but remains Paper decision support only", () => {
   const result = assessExecutionGuards({
     intent: spotIntent(),
     marketData: spotEvidence(),
@@ -140,6 +149,8 @@ test("execution guard passes bounded fresh depth", () => {
   assert.equal(result.state, "PASS");
   assert.equal(result.blockers.length, 0);
   assert.equal(result.metrics.fullDepthAvailable, true);
+  assert.equal(result.evidenceTrust, "CALLER_SUPPLIED_UNATTESTED");
+  assert.equal(result.paperDecisionSupportOnly, true);
   assert.equal(result.orderSubmissionAllowed, false);
 });
 
