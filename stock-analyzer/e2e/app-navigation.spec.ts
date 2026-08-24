@@ -288,6 +288,7 @@ test('market submenu buttons reach the correct KR, US, spot, and futures screens
     await expect(page).toHaveTitle(new RegExp(heading));
   }
 
+  await page.getByRole('tab', { name: '선물' }).click();
   await expect(page.getByText('선물 지표')).toBeVisible();
   assertClean();
 });
