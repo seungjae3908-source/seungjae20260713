@@ -991,6 +991,12 @@ async function auditAuthenticatedViewport(
     ).toBe(200);
     const scannerError = await scannerResponse.finished();
     expect(scannerError, 'scanner viewport response must finish before the verifier leaves /scanner').toBeNull();
+    const scannerBody = await scannerResponse.json().catch(() => null) as { ok?: boolean; elapsedMs?: number } | null;
+    expect(scannerBody?.ok, 'scanner viewport API must return an explicit successful scanner envelope').toBe(true);
+    expect(
+      Number(scannerBody?.elapsedMs),
+      'scanner viewport API must remain inside the existing 12s scanner contract',
+    ).toBeLessThanOrEqual(12_000);
     await settle(page);
   }
   const layout = await page.evaluate(() => {
