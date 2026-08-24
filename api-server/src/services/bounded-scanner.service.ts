@@ -199,7 +199,12 @@ const defaultDependencies: BoundedScannerDependencies = {
   now: Date.now,
 };
 
+type OptionalContextWaiter = {
+  grant: () => void;
+};
+
 let activeOptionalContextLoads = 0;
+const optionalContextWaiters: OptionalContextWaiter[] = [];
 
 function minimalSignalContext(entry: CatalogEntry): SignalContext {
   return { currency: entry.currency };
@@ -207,6 +212,80 @@ function minimalSignalContext(entry: CatalogEntry): SignalContext {
 
 function abortReason(signal: AbortSignal): Error {
   return signal.reason instanceof Error ? signal.reason : new ScanRequestAbortedError();
+}
+
+function wakeOptionalContextWaiters(): void {
+  while (
+    activeOptionalContextLoads < SCAN_EXECUTION_LIMITS.optionalContextConcurrency
+    && optionalContextWaiters.length > 0
+  ) {
+    optionalContextWaiters.shift()?.grant();
+  }
+}
+
+function releaseOptionalContextSlot(): void {
+  activeOptionalContextLoads = Math.max(0, activeOptionalContextLoads - 1);
+  wakeOptionalContextWaiters();
+}
+
+async function acquireOptionalContextSlot(
+  signal: AbortSignal,
+  deadlineAt: number,
+): Promise<boolean> {
+  if (signal.aborted) throw abortReason(signal);
+  if (activeOptionalContextLoads < SCAN_EXECUTION_LIMITS.optionalContextConcurrency) {
+    activeOptionalContextLoads += 1;
+    return true;
+  }
+
+  return new Promise<boolean>((resolve, reject) => {
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+    let waiter: OptionalContextWaiter;
+
+    const cleanup = () => {
+      if (timer) clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+      const index = optionalContextWaiters.indexOf(waiter);
+      if (index >= 0) optionalContextWaiters.splice(index, 1);
+    };
+    const finish = (value: boolean) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(value);
+    };
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const onAbort = () => {
+      fail(abortReason(signal));
+      wakeOptionalContextWaiters();
+    };
+
+    waiter = {
+      grant: () => {
+        if (settled) return;
+        if (signal.aborted) {
+          fail(abortReason(signal));
+          return;
+        }
+        if (Date.now() >= deadlineAt) {
+          finish(false);
+          return;
+        }
+        activeOptionalContextLoads += 1;
+        finish(true);
+      },
+    };
+
+    optionalContextWaiters.push(waiter);
+    timer = setTimeout(() => finish(false), Math.max(1, deadlineAt - Date.now()));
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 async function loadOptionalContext(
@@ -217,16 +296,15 @@ async function loadOptionalContext(
 ): Promise<{ context: SignalContext; unavailable: boolean }> {
   if (signal.aborted) throw abortReason(signal);
 
-  if (activeOptionalContextLoads >= SCAN_EXECUTION_LIMITS.optionalContextConcurrency) {
-    return { context: minimalSignalContext(entry), unavailable: true };
-  }
+  const deadlineAt = Date.now() + deadlineMs;
+  const acquired = await acquireOptionalContextSlot(signal, deadlineAt);
+  if (!acquired) return { context: minimalSignalContext(entry), unavailable: true };
 
-  activeOptionalContextLoads += 1;
   let released = false;
   const release = () => {
     if (released) return;
     released = true;
-    activeOptionalContextLoads = Math.max(0, activeOptionalContextLoads - 1);
+    releaseOptionalContextSlot();
   };
   const task = Promise.resolve().then(() => loader(entry));
   void task.then(release, release);
@@ -234,7 +312,10 @@ async function loadOptionalContext(
   let timer: NodeJS.Timeout | undefined;
   let removeAbortListener: (() => void) | undefined;
   const deadline = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => reject(new Error('SCANNER_OPTIONAL_CONTEXT_DEADLINE')), deadlineMs);
+    timer = setTimeout(
+      () => reject(new Error('SCANNER_OPTIONAL_CONTEXT_DEADLINE')),
+      Math.max(1, deadlineAt - Date.now()),
+    );
   });
   const aborted = new Promise<never>((_resolve, reject) => {
     const onAbort = () => reject(abortReason(signal));
