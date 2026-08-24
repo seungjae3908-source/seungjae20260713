@@ -91,7 +91,7 @@ async function expectDetailContext(page: Page, ticker: string, name: string) {
   await expect(shell).toHaveAttribute('data-context-ticker', ticker);
   await expect(page.getByTestId('ai-chart-context-syncing')).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'AI 차트' })).toBeVisible();
-  await expect(page.locator('header')).toContainText(name);
+  await expect(shell.locator('header')).toContainText(name);
   await expect(page.locator('body')).not.toContainText('BTCUSDT');
 }
 
