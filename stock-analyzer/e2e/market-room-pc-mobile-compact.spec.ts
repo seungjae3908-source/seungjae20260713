@@ -126,13 +126,15 @@ async function installMocks(page: Page) {
   });
 }
 
-test('market-room source is Korean-first and mobile summary-tab based', () => {
+test('market-room source is Korean-first and follows the app-wide 1200px desktop breakpoint', () => {
   const pageSource = source('src/pages/market-information.tsx');
   expect(pageSource).toContain("type MobileRoomTab = 'market' | 'ranking' | 'news' | 'futures';");
   expect(pageSource).toContain("{ value: 'market', label: '시장' }");
   expect(pageSource).toContain("{ value: 'ranking', label: '순위' }");
   expect(pageSource).toContain("{ value: 'news', label: '소식' }");
   expect(pageSource).toContain("label: '선물'");
+  expect(pageSource).toContain('ADAPTIVE_VIEWPORT_BREAKPOINTS.desktopMin');
+  expect(pageSource).not.toContain("const query = '(min-width: 1024px)'");
   expect(pageSource).toContain('미결제약정');
   expect(pageSource).toContain('오래됨');
   expect(pageSource).not.toContain('>stale<');
@@ -142,13 +144,14 @@ test('market-room source is Korean-first and mobile summary-tab based', () => {
   expect(pageSource).not.toContain('<span>OI ');
 });
 
-for (const width of [360, 390, 412, 430]) {
-  test(`stock market room ${width}px shows one mobile section without horizontal overflow`, async ({ page }) => {
-    await page.setViewportSize({ width, height: 844 });
+for (const width of [360, 390, 412, 430, 1024, 1180]) {
+  test(`stock market room ${width}px stays touch-first with one section and no horizontal overflow`, async ({ page }) => {
+    await page.setViewportSize({ width, height: width >= 1024 ? 820 : 844 });
     await installMocks(page);
     await page.goto('/stocks/kr');
 
     await expect(page.getByTestId('market-room-mobile-tabs')).toBeVisible();
+    await expect(page.getByTestId('market-room-desktop-dashboard')).toHaveCount(0);
     await expect(page.getByTestId('market-room-overview')).toBeVisible();
     await expect(page.getByTestId('market-room-rankings')).toHaveCount(0);
     await expect(page.getByTestId('market-room-news')).toHaveCount(0);
@@ -172,14 +175,16 @@ test('futures mobile gets a separate futures tab', async ({ page }) => {
   await expect(page.getByText('미결제약정', { exact: false })).toHaveCount(0);
 });
 
-test('desktop market room keeps all sections together without mobile tabs', async ({ page }) => {
-  await page.setViewportSize({ width: 1440, height: 960 });
-  await installMocks(page);
-  await page.goto('/coins/futures');
-  await expect(page.getByTestId('market-room-mobile-tabs')).toHaveCount(0);
-  await expect(page.getByTestId('market-room-desktop-dashboard')).toBeVisible();
-  await expect(page.getByTestId('market-room-overview')).toBeVisible();
-  await expect(page.getByTestId('market-room-rankings')).toBeVisible();
-  await expect(page.getByTestId('market-room-futures')).toBeVisible();
-  await expect(page.getByTestId('market-room-news')).toBeVisible();
-});
+for (const width of [1200, 1440]) {
+  test(`desktop market room ${width}px keeps all sections together without mobile tabs`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 960 });
+    await installMocks(page);
+    await page.goto('/coins/futures');
+    await expect(page.getByTestId('market-room-mobile-tabs')).toHaveCount(0);
+    await expect(page.getByTestId('market-room-desktop-dashboard')).toBeVisible();
+    await expect(page.getByTestId('market-room-overview')).toBeVisible();
+    await expect(page.getByTestId('market-room-rankings')).toBeVisible();
+    await expect(page.getByTestId('market-room-futures')).toBeVisible();
+    await expect(page.getByTestId('market-room-news')).toBeVisible();
+  });
+}
