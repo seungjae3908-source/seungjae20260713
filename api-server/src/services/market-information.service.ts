@@ -161,7 +161,14 @@ async function stockRankings(
     const pool = await runBoundedWorkPool(
       marketKeys,
       async (marketKey) => MarketListingService.getMarketListings(marketKey),
-      { concurrency: 2, deadlineMs: 20_000, itemTimeoutMs: 15_000, signal },
+      {
+        concurrency: 2,
+        deadlineMs: 20_000,
+        itemTimeoutMs: 15_000,
+        signal,
+        // getMarketListings owns the provider-level admission for its inner work.
+        admission: false,
+      },
     );
     const rows: MarketInformationAssetRow[] = [];
     for (const outcome of pool.outcomes) {
@@ -227,7 +234,19 @@ async function stockNews(
     const pool = await runBoundedWorkPool(
       candidates.slice(0, 6),
       async (target) => ({ target, data: await NewsService.getNews(target.symbol) }),
-      { concurrency: 3, deadlineMs: 20_000, itemTimeoutMs: 10_000, signal },
+      {
+        concurrency: 3,
+        deadlineMs: 20_000,
+        itemTimeoutMs: 10_000,
+        signal,
+        admission: {
+          identity: {
+            provider: 'market-news',
+            domain: room,
+            operationClass: 'headline-load',
+          },
+        },
+      },
     );
     const rows: MarketInformationNewsRow[] = [];
     for (const outcome of pool.outcomes) {
@@ -264,7 +283,19 @@ async function stockDisclosures(
     const pool = await runBoundedWorkPool(
       candidates.slice(0, 6),
       async (target) => ({ target, data: await FilingService.getFilings(target.symbol) }),
-      { concurrency: 3, deadlineMs: 20_000, itemTimeoutMs: 10_000, signal },
+      {
+        concurrency: 3,
+        deadlineMs: 20_000,
+        itemTimeoutMs: 10_000,
+        signal,
+        admission: {
+          identity: {
+            provider: 'market-filings',
+            domain: room,
+            operationClass: 'disclosure-load',
+          },
+        },
+      },
     );
     const rows: MarketInformationNewsRow[] = [];
     for (const outcome of pool.outcomes) {
@@ -426,7 +457,19 @@ async function upbitTickers(markets: UpbitMarket[], signal?: AbortSignal) {
         `${UPBIT_BASE}/v1/ticker?markets=${encodeURIComponent(chunk.join(','))}`,
         { provider: 'Upbit', signal: itemSignal },
       ),
-      { concurrency: 2, deadlineMs: 16_000, itemTimeoutMs: 8_000, signal },
+      {
+        concurrency: 2,
+        deadlineMs: 16_000,
+        itemTimeoutMs: 8_000,
+        signal,
+        admission: {
+          identity: {
+            provider: 'upbit',
+            domain: 'api.upbit.com',
+            operationClass: 'ticker-chunk',
+          },
+        },
+      },
     );
     const names = new Map(markets.map((item) => [item.market, { name: item.name, warning: item.warning }]));
     const rows = pool.outcomes.flatMap((outcome) => (
