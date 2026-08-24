@@ -1,3 +1,10 @@
+import {
+  processWideProviderAdmission,
+  type ProviderAdmissionControl,
+  type ProviderAdmissionExecution,
+  type ProviderAdmissionIdentity,
+} from './provider-admission-control';
+
 export type BoundedWorkStatus = 'fulfilled' | 'rejected' | 'timed_out';
 
 export interface BoundedWorkOutcome<Result> {
@@ -14,6 +21,10 @@ export interface BoundedWorkPoolOptions {
   itemTimeoutMs: number;
   signal?: AbortSignal;
   now?: () => number;
+  admission?: false | {
+    control?: ProviderAdmissionControl;
+    identity?: ProviderAdmissionIdentity;
+  };
 }
 
 export interface BoundedWorkPoolResult<Result> {
@@ -89,6 +100,16 @@ export async function runBoundedWorkPool<Item, Result>(
   const deadlineMs = positiveInteger(options.deadlineMs, 'deadlineMs');
   const itemTimeoutMs = positiveInteger(options.itemTimeoutMs, 'itemTimeoutMs');
   const now = options.now ?? Date.now;
+  const admissionControl = options.admission === false
+    ? null
+    : options.admission?.control ?? processWideProviderAdmission;
+  const admissionIdentity = options.admission && options.admission.identity
+    ? options.admission.identity
+    : {
+      provider: 'bounded-work',
+      domain: 'default',
+      operationClass: 'generic',
+    };
   const startedAt = now();
   const deadlineAt = startedAt + deadlineMs;
   const outcomes: BoundedWorkOutcome<Result>[] = [];
@@ -124,16 +145,25 @@ export async function runBoundedWorkPool<Item, Result>(
       const timeoutMs = Math.min(itemTimeoutMs, remainingMs);
       const controller = new AbortController();
       let retireLane = false;
-      activeControllers.add(controller);
-      activeCount += 1;
-      maxConcurrency = Math.max(maxConcurrency, activeCount);
+      let admitted: ProviderAdmissionExecution<Result> | null = null;
 
       try {
+        if (admissionControl) {
+          admitted = admissionControl.start(
+            admissionIdentity,
+            () => worker(items[index], index, controller.signal),
+            controller.signal,
+          );
+        }
+        activeControllers.add(controller);
+        activeCount += 1;
+        maxConcurrency = Math.max(maxConcurrency, activeCount);
         const value = await runWithTimeout(
-          worker(items[index], index, controller.signal),
+          admitted?.task ?? worker(items[index], index, controller.signal),
           controller,
           timeoutMs,
         );
+        admitted?.lease.markCompleted();
         outcomes.push({
           index,
           status: 'fulfilled',
@@ -142,6 +172,9 @@ export async function runBoundedWorkPool<Item, Result>(
         });
       } catch (reason) {
         const timedOut = reason instanceof BoundedWorkTimeoutError;
+        if (timedOut) admitted?.lease.markTimedOut();
+        else if (controller.signal.aborted) admitted?.lease.markAborted();
+        else admitted?.lease.markRejected();
         if (timedOut) {
           // AbortSignal is cooperative. A provider may ignore it and keep consuming
           // sockets/CPU after the logical timeout. Retiring this lane prevents the
@@ -157,7 +190,9 @@ export async function runBoundedWorkPool<Item, Result>(
           elapsedMs: Math.max(0, now() - itemStartedAt),
         });
       } finally {
-        activeCount -= 1;
+        if (admitted || activeControllers.has(controller)) {
+          activeCount = Math.max(0, activeCount - 1);
+        }
         activeControllers.delete(controller);
       }
 
