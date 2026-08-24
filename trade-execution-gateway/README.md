@@ -1,59 +1,82 @@
-# Standalone Trade Execution Gateway v0.1
+# Standalone Trade Execution Gateway v0.2
 
-Production 앱과 분리된 **OMS / Risk / Broker Adapter 준비 서비스**입니다.
+Production 앱과 분리된 **OMS / Risk / Broker Adapter 준비 서비스**입니다. 기존 `api-server`, `stock-analyzer`, DB, Secret, Staging/Production 배포 경로는 수정하지 않습니다.
 
-현재 버전의 목적은 스마트 호가창/매매창 뒤에 붙을 주문 실행 계층을 독립적으로 준비하는 것입니다. 이 디렉터리는 기존 `api-server`, `stock-analyzer`, Production 배포, DB, Secret, 기존 주문 경로를 수정하지 않습니다.
-
-## 현재 권한
+## 안전 상태
 
 - `PAPER_ONLY`
 - `LIVE_TRADING=false`
 - `REAL_ORDER_ENABLED=false`
 - `PRIVATE_TRADING_API_ALLOWED=false`
-- 실계좌/잔고/포지션 조회 없음
-- 주문/취소를 포함한 외부 broker/exchange 네트워크 요청 없음
+- 외부 broker/exchange network outbound = 0
+- 계좌/잔고/포지션 private read = 0
 - 메모리 저장만 사용
-- 기본 bind `127.0.0.1:8792`
+- loopback `127.0.0.1:8792` 고정
 
-즉, 환경변수를 실수로 추가해도 v0.1은 live/private/network adapter 자체를 거부합니다.
+환경변수를 잘못 넣어도 live/private/network adapter는 `UNSAFE_ADAPTER_REJECTED`로 거부됩니다.
 
-## 구조
+## v0.2 연결 구조
 
 ```text
-스마트 호가창 / 주문 티켓 (향후 연결)
-        ↓
+기존 #88 AI 매매 워크스페이스 / 읽기전용 호가
+        │  (기존 파일 변경 0)
+        │  PreparedMockOrder 호환 계약
+        ▼
+Workspace Bridge
+        ├─ KR -> KR_STOCK
+        ├─ US -> US_STOCK
+        ├─ buy/sell -> BUY/SELL
+        ├─ limit/market -> LIMIT/MARKET
+        └─ MARKET referencePrice 없으면 fail-closed
+        ▼
 Trade Execution Gateway
         ├─ Order intent normalization
         ├─ Risk policy
         ├─ Idempotent OMS
-        └─ Broker Adapter contract
-                ↓
-        PaperMockBrokerAdapter (현재 유일)
+        └─ PaperMockBrokerAdapter
 ```
 
-기존 UI/거래 기능을 재작성하지 않습니다.
+기존 #88의 `sessionStorage` UI 파일은 이 PR에서 수정하지 않습니다. v0.2는 그 입력 형식을 독립 서비스가 받을 수 있는 호환 브리지와 endpoint만 준비합니다. 실제 앱 route 연결은 향후 별도 통합 승인 단계입니다.
 
-- 기존 AI 매매 워크스페이스/호가창: 향후 주문 티켓 producer로 연결
-- 기존 Paper approval: 향후 승인 evidence consumer로 연결
-- 기존 trading readiness/profitability/risk 계약: 향후 live adapter 승격 전 prerequisite로 연결
+## Workspace 호환 API
 
-현재 단계에서는 서로 import하거나 route를 바꾸지 않아 기존 운영 배포에 영향이 없습니다.
+### `POST /v1/workspace/orders/preview`
 
-## 실행
+기존 워크스페이스 주문 티켓을 OMS intent로 변환하고 Risk Preview만 수행합니다. Paper 주문조차 제출하지 않습니다.
 
-Node.js 20 이상:
-
-```bash
-cd trade-execution-gateway
-npm test
-npm start
+```json
+{
+  "order": {
+    "side": "buy",
+    "orderType": "limit",
+    "quantity": 10,
+    "price": 70000,
+    "ticker": "005930",
+    "displayName": "삼성전자",
+    "market": "KR"
+  },
+  "idempotencyKey": "workspace-005930-20260824-001"
+}
 ```
 
-`npm start`는 loopback에만 바인딩합니다. 외부 인터페이스 bind 옵션은 제공하지 않습니다.
+시장가 주문은 브리지에서 현재가를 추정하지 않습니다. 호출자가 검증된 현재가를 `referencePrice`로 명시해야 하며 없으면 `WORKSPACE_REFERENCE_PRICE_REQUIRED`입니다.
+
+### `POST /v1/workspace/paper/orders`
+
+동일한 변환 뒤 Paper OMS에 기록합니다. `confirmPaper: true`가 없으면 `PAPER_CONFIRMATION_REQUIRED`로 차단합니다. 실제 증권사 주문은 발생하지 않고 `PaperMockBrokerAdapter` 메모리 상태만 바뀝니다.
+
+## 기존 canonical API
+
+- `GET /health`
+- `GET /v1/contracts`
+- `POST /v1/orders/preview`
+- `POST /v1/paper/orders`
+- `GET /v1/orders/:orderId`
+- `POST /v1/paper/orders/:orderId/cancel`
 
 ## Paper risk 설정
 
-주문을 받으려면 시장별 수량/금액 상한을 둘 다 명시해야 합니다. 누락 시 `RISK_POLICY_NOT_CONFIGURED`로 fail-closed 합니다.
+시장별 수량/금액 상한을 모두 명시해야 합니다. 없으면 `RISK_POLICY_NOT_CONFIGURED`입니다.
 
 ```text
 TEG_PAPER_MAX_QUANTITY_KR_STOCK
@@ -66,76 +89,50 @@ TEG_PAPER_MAX_QUANTITY_CRYPTO_FUTURES
 TEG_PAPER_MAX_NOTIONAL_CRYPTO_FUTURES
 ```
 
-`TEG_PORT`만 1024~65535 범위에서 변경할 수 있습니다. host는 `127.0.0.1`로 고정됩니다.
+## 실제 증권사 Adapter 준비 상태
 
-## API
+실제 증권사 코드는 아직 실행 가능한 adapter가 아닙니다. 다음 disabled placeholder만 존재합니다.
 
-### `GET /health`
+| Provider | 상태 | 현재 canonical stock authority |
+|---|---|---|
+| Toss Securities | `CONTRACT_PLACEHOLDER_ONLY` | yes |
+| Korea Investment & Securities (KIS) | `NON_CANONICAL_CANDIDATE_DISABLED` | no |
+| Kiwoom Securities | `NON_CANONICAL_CANDIDATE_DISABLED` | no |
 
-실행 상태, adapter, 설정된 risk market과 안전 플래그를 반환합니다.
+모든 placeholder는:
 
-### `GET /v1/contracts`
+- `executionMode=DISABLED`
+- credential 수신 불가
+- account read 불가
+- submit/cancel/amend 불가
+- outbound network 불가
+- `TradeExecutionGateway`에 주입하면 `UNSAFE_ADAPTER_REJECTED`
 
-시장/방향/주문타입/상태 및 Broker Adapter 안전 계약을 반환합니다.
+따라서 KIS/키움 골격을 추가했지만 기존 canonical provider 계약을 바꾸거나 실주문 경로를 만들지 않습니다.
 
-### `POST /v1/orders/preview`
+## 실행/테스트
 
-주문을 제출하지 않고 intent + risk 검증만 수행합니다.
+Node.js 20 이상:
 
-### `POST /v1/paper/orders`
-
-Risk gate를 통과한 Paper 주문만 OMS에 등록하고 `PaperMockBrokerAdapter`에 제출합니다. 실제 체결을 만들지 않으며 `fillEvidence=null`입니다.
-
-### `GET /v1/orders/:orderId`
-
-메모리 OMS의 Paper 주문 상태를 조회합니다.
-
-### `POST /v1/paper/orders/:orderId/cancel`
-
-Paper mock 주문만 취소합니다.
-
-## 필수 주문 계약
-
-예시:
-
-```json
-{
-  "mode": "PAPER",
-  "market": "KR_STOCK",
-  "symbol": "005930",
-  "side": "BUY",
-  "orderType": "LIMIT",
-  "quantity": 10,
-  "limitPrice": 70000,
-  "idempotencyKey": "workspace-005930-20260824-001"
-}
+```bash
+cd trade-execution-gateway
+npm test
+npm start
 ```
 
-Cash 시장은 `BUY/SELL`, 코인 선물은 `LONG/SHORT`만 허용합니다. `MARKET` Paper 주문은 risk notional 계산을 위해 `referencePrice`가 필요합니다.
-
-## 실제 증권사 API를 붙이는 다음 단계
-
-v0.1에 실제 증권사 API 키를 넣지 않습니다. 이후 별도 승인된 PR에서만 다음을 추가합니다.
-
-1. 해당 증권사 공식 주문/취소/조회 capability 검증
-2. 별도 Broker Adapter 구현
-3. 서버 측 계좌/권한/수익성/리스크/중복주문/idempotency/reconciliation 검증
-4. Secret 저장 경계 및 감사로그
-5. Mock/Paper와 Live adapter의 완전 분리
-6. Staging에서 실제 계좌 주문 없이 private-read 및 계약 검증
-7. 별도 명시 승인 후에만 live-order 권한 검토
-
-현재 `TradeExecutionGateway`는 `liveTrading=true`, `privateTradingApiAllowed=true`, `outboundNetwork=true`인 adapter를 `UNSAFE_ADAPTER_REJECTED`로 차단하므로 실제 주문 연결은 암묵적으로 활성화될 수 없습니다.
+테스트는 기존 OMS/Risk/idempotency와 함께 Workspace 변환, 시장가 fail-closed, explicit Paper 확인, Toss/KIS/Kiwoom disabled adapter 차단을 검증합니다.
 
 ## 배포 상태
 
 `PREPARED_AS_ISOLATED_SOURCE_ONLY`
 
-- Production deploy: 하지 않음
-- Staging deploy: 하지 않음
-- 기존 서버/PM2/Caddy: 변경하지 않음
-- 기존 DB/Supabase: 변경하지 않음
-- 기존 Secret/env: 변경하지 않음
-- 기존 앱 route/navigation: 변경하지 않음
+- Production deploy: 0
+- Staging deploy: 0
+- 기존 서버/PM2/Caddy 변경: 0
+- 기존 DB/Supabase 변경: 0
+- 기존 Secret/env 변경: 0
+- 기존 앱 route/navigation 변경: 0
+- private broker request: 0
+- real order/cancel/amend/transfer/withdrawal: 0
 
-독립 실행/배포 활성화는 현재 PR 범위가 아니며 별도 승인 대상입니다.
+독립 실행/배포 활성화와 기존 앱 UI 연결은 별도 승인 대상입니다.
