@@ -334,9 +334,9 @@ export function buildMemberHoldingTelegramDispatch(
   const changePercent = finite(input.changePercent);
   const positionReturn = positionReturnPercent(currentPrice, averageEntryPrice);
   const aiSummary = cleanText(input.ai?.summary, 900) || cleanText(input.aiAnalysis, 900);
-  const verdict = aiVerdict(input.ai?.verdict);
   const aiReasons = cleanList(input.ai?.reasons, 6, 160);
-  const confidence = confidenceEvidence(input.ai);
+  const verdict = aiReasons.length > 0 ? aiVerdict(input.ai?.verdict) : null;
+  const confidence = aiReasons.length > 0 ? confidenceEvidence(input.ai) : null;
   const riskLevel = normalizedRiskLevel(input.risk?.level);
   const riskReasons = cleanList(input.risk?.reasons, 6, 160);
   const performance = validatedPerformance(input.performance);
