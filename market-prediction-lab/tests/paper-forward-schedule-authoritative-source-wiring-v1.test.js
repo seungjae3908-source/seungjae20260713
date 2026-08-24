@@ -3,12 +3,62 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { runPaperForwardScheduleCli } from "../scripts/run-paper-forward-schedule.js";
+import {
+  finalizeCanonicalNaturalStageEvidence,
+  runPaperForwardScheduleCli,
+} from "../scripts/run-paper-forward-schedule.js";
 
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 const PUBLISHER_ACCOUNT_ID_SHA256 = createHash("sha256")
   .update("publisher-account-fixture")
   .digest("hex");
+
+function directStage(count, prefix, overrides = {}) {
+  return Object.freeze({
+    status: "MEASURED",
+    count,
+    blocker: null,
+    provenance: `${prefix}-direct-boundary`,
+    observedAt: "2026-08-24T00:00:00.000Z",
+    observationIds: Object.freeze(Array.from({ length: count }, (_, index) => `${prefix}-${index + 1}`)),
+    ...overrides,
+  });
+}
+
+function canonicalSources(overrides = {}) {
+  return {
+    producerEvidence: {
+      stageCounts: {
+        signalCandidate: directStage(3, "signal"),
+        qualityPassed: directStage(2, "quality"),
+        riskPassed: directStage(1, "risk"),
+      },
+      reasonObservations: [],
+    },
+    loopEvidence: {
+      stageCounts: {
+        entryEligible: directStage(1, "eligible"),
+        entry: directStage(1, "entry"),
+        position: directStage(1, "position"),
+        settlement: directStage(1, "settlement"),
+      },
+      reasonObservations: [],
+    },
+    exitEligibilityEvidence: {
+      status: "MEASURED",
+      exitEligibleCount: 1,
+      provenance: "exact-open-position-identity-join",
+      observations: [{ observationId: "exit-1", exitEligible: true, observedAt: "2026-08-24T00:00:00.000Z" }],
+      reasonObservations: [],
+    },
+    cycleId: "natural-cycle-1",
+    researchCodeSha: SHA,
+    datasetIdentity: "natural-dataset-1",
+    naturalScheduleInvocation: true,
+    replayed: false,
+    ...overrides,
+  };
+}
 
 test("Research Production recurring CLI injects the audited authoritative source-wiring provider by default", async () => {
   const sourceWiring = Object.freeze({ marker: "concrete-source-owner-input" });
@@ -262,4 +312,71 @@ test("Research Production recurring CLI installs callback owners and defers miss
   assert.equal(output.canonicalPaperCandidateCount, null);
   assert.equal(output.entryCount, null);
   assert.equal(output.settlementCount, null);
+});
+
+test("canonical Natural Paper evidence preserves distinct stage provenance and classifies only a measured prefix", () => {
+  const sources = canonicalSources();
+  sources.loopEvidence = {
+    ...sources.loopEvidence,
+    stageCounts: {
+      ...sources.loopEvidence.stageCounts,
+      entryEligible: directStage(0, "eligible"),
+      entry: directStage(0, "entry"),
+      position: directStage(0, "position"),
+      settlement: directStage(0, "settlement"),
+    },
+    reasonObservations: [{
+      observationId: "account-block-1",
+      sourceStage: "ENTRY_ELIGIBLE",
+      rawReason: "AUTHORITATIVE_ACCOUNT_STATE_BLOCKED",
+      canonicalReason: "ACCOUNT_STATE_BLOCK",
+      lossless: true,
+    }],
+  };
+  sources.exitEligibilityEvidence = {
+    ...sources.exitEligibilityEvidence,
+    exitEligibleCount: 0,
+    observations: [],
+  };
+
+  const evidence = finalizeCanonicalNaturalStageEvidence(sources);
+
+  assert.equal(evidence.firstZeroStage, "ENTRY_ELIGIBLE");
+  assert.equal(evidence.firstZeroReason, "ACCOUNT_STATE_BLOCK");
+  assert.equal(evidence.stageCounts.signalCandidate.count, 3);
+  assert.equal(evidence.stageCounts.qualityPassed.count, 2);
+  assert.equal(evidence.stageCounts.riskPassed.count, 1);
+  assert.notEqual(evidence.stageCounts.entry.provenance, evidence.stageCounts.position.provenance);
+  assert.equal(evidence.replayCredit, 0);
+  assert.equal(evidence.duplicateCredit, 0);
+});
+
+test("canonical Natural Paper evidence leaves FIRST_ZERO unknown when an earlier direct boundary is unmeasured", () => {
+  const sources = canonicalSources();
+  sources.producerEvidence = {
+    ...sources.producerEvidence,
+    stageCounts: {
+      ...sources.producerEvidence.stageCounts,
+      qualityPassed: { status: "UNKNOWN", count: null, blocker: "QUALITY_GATE_NOT_DIRECTLY_OBSERVED" },
+      riskPassed: directStage(0, "risk"),
+    },
+  };
+
+  const evidence = finalizeCanonicalNaturalStageEvidence(sources);
+
+  assert.equal(evidence.stageCounts.qualityPassed.status, "UNKNOWN");
+  assert.equal(evidence.firstZeroStage, "UNKNOWN");
+  assert.equal(evidence.firstZeroReason, "UNKNOWN");
+  assert.equal(evidence.unknownIsZero, false);
+});
+
+test("replay never receives canonical Natural Paper stage credit", () => {
+  const evidence = finalizeCanonicalNaturalStageEvidence(canonicalSources({ replayed: true }));
+
+  assert.equal(evidence.firstZeroStage, "UNKNOWN");
+  assert.equal(evidence.firstZeroReason, "REPLAY_ONLY");
+  assert.equal(evidence.naturalCredit, 0);
+  assert.equal(evidence.replayCredit, 0);
+  assert.equal(evidence.duplicateCredit, 0);
+  assert.ok(Object.values(evidence.stageCounts).every((stage) => stage.status === "UNKNOWN"));
 });
