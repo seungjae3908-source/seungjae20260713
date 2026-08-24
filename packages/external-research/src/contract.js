@@ -77,6 +77,47 @@ function assertVersion(version) {
   if (version.providerUpdatedAt !== null) normalizeTemporal(version.providerUpdatedAt, 'PROVIDER_UPDATED_AT_INVALID');
 }
 
+function arxivWorkVersion(paper) {
+  if (paper.arXivId === null) {
+    if (paper.version.workVersion !== null) fail('WORK_VERSION_WITHOUT_ARXIV_ID');
+    return null;
+  }
+  if (paper.version.workVersion === null) return null;
+  const match = paper.version.workVersion.match(/^v([1-9]\d*)$/u);
+  const version = match == null ? NaN : Number(match[1]);
+  if (!Number.isSafeInteger(version)) fail('ARXIV_WORK_VERSION_INVALID');
+  return version;
+}
+
+function assertArxivCanonicalIdentity(paper, version) {
+  if (paper.DOI !== null || paper.arXivId === null) return;
+  let parsed;
+  try {
+    parsed = normalizeArxivId(paper.canonicalUrl);
+  } catch {
+    fail('ARXIV_CANONICAL_URL_MISMATCH');
+  }
+  if (parsed?.arXivId !== paper.arXivId || parsed.version !== version) fail('ARXIV_CANONICAL_URL_MISMATCH');
+  if (paper.canonicalUrl !== canonicalArxivUrl(paper.arXivId, version)) fail('ARXIV_CANONICAL_URL_MISMATCH');
+}
+
+function assertProviderRecordIdentity(paper, providerRecordId, version) {
+  if (paper.source === 'CROSSREF') {
+    const providerDOI = normalizeDoi(providerRecordId);
+    if (paper.DOI === null || providerDOI !== paper.DOI) fail('CROSSREF_PROVIDER_RECORD_ID_MISMATCH');
+    return;
+  }
+  if (paper.source === 'ARXIV') {
+    const providerArxiv = normalizeArxivId(providerRecordId);
+    if (paper.arXivId === null || providerArxiv?.arXivId !== paper.arXivId || providerArxiv.version !== version) {
+      fail('ARXIV_PROVIDER_RECORD_ID_MISMATCH');
+    }
+  }
+  // Semantic Scholar paper IDs are opaque provider identities. They are not
+  // aliases for DOI or arXiv IDs; the provider-scoped fallback paperId binds
+  // them when no external strong identity is available.
+}
+
 function assertIntegrityEvidence(evidence) {
   if (!Array.isArray(evidence)) fail('INTEGRITY_EVIDENCE_INVALID');
   for (const entry of evidence) {
@@ -181,12 +222,6 @@ export function assertResearchPaperV2(paper) {
   assertExactKeys(paper, TOP_LEVEL_KEYS, 'RESEARCH_PAPER_V2_SHAPE_INVALID');
   if (paper.schemaVersion !== RESEARCH_PAPER_SCHEMA_VERSION) fail('RESEARCH_PAPER_SCHEMA_VERSION_INVALID');
   if (!RESEARCH_PAPER_SOURCES.includes(paper.source)) fail('SOURCE_UNSUPPORTED');
-  const DOI = normalizeDoi(paper.DOI);
-  if (DOI !== paper.DOI) fail('DOI_NOT_CANONICAL');
-  const arxiv = normalizeArxivId(paper.arXivId);
-  if ((arxiv?.arXivId ?? null) !== paper.arXivId) fail('ARXIV_ID_NOT_CANONICAL');
-  const expectedPaperId = derivePaperId({ DOI, arXivId: paper.arXivId, source: paper.source, providerRecordId: paper.provenance?.providerRecordId });
-  if (paper.paperId !== expectedPaperId) fail('PAPER_ID_MISMATCH');
 
   const title = requireString(paper.title, 'TITLE_REQUIRED');
   if (title !== paper.title || title.length > 4096) fail('TITLE_NOT_CANONICAL');
@@ -195,18 +230,29 @@ export function assertResearchPaperV2(paper) {
   normalizeTemporal(paper.publishedAt, 'PUBLISHED_AT_INVALID');
   const canonicalUrl = assertWebUrl(paper.canonicalUrl, 'CANONICAL_URL_INVALID', { httpsOnly: true });
   if (canonicalUrl !== paper.canonicalUrl) fail('CANONICAL_URL_NOT_CANONICAL');
-  if (DOI && paper.canonicalUrl !== canonicalDoiUrl(DOI)) fail('DOI_CANONICAL_URL_MISMATCH');
-  if (!DOI && paper.arXivId && !paper.canonicalUrl.startsWith(canonicalArxivUrl(paper.arXivId))) fail('ARXIV_CANONICAL_URL_MISMATCH');
-
   assertVersion(paper.version);
   assertCorrectionState(paper.correctionState);
   assertRetractionState(paper.retractionState);
   assertLicense(paper.license);
   const retrievedAt = normalizeRetrievedAt(paper.retrievedAt);
   if (retrievedAt !== paper.retrievedAt) fail('RETRIEVED_AT_NOT_CANONICAL');
+  requirePlainObject(paper.provenance, 'PROVENANCE_INVALID');
+  const providerRecordId = normalizeProviderRecordId(paper.provenance.providerRecordId);
+
+  const DOI = normalizeDoi(paper.DOI);
+  if (DOI !== paper.DOI) fail('DOI_NOT_CANONICAL');
+  const arxiv = normalizeArxivId(paper.arXivId);
+  if ((arxiv?.arXivId ?? null) !== paper.arXivId) fail('ARXIV_ID_NOT_CANONICAL');
+  const expectedPaperId = derivePaperId({ DOI, arXivId: paper.arXivId, source: paper.source, providerRecordId });
+  if (paper.paperId !== expectedPaperId) fail('PAPER_ID_MISMATCH');
+  if (DOI && paper.canonicalUrl !== canonicalDoiUrl(DOI)) fail('DOI_CANONICAL_URL_MISMATCH');
+  const workVersion = arxivWorkVersion(paper);
+  assertArxivCanonicalIdentity(paper, workVersion);
+  assertProviderRecordIdentity(paper, providerRecordId, workVersion);
+  assertProvenance(paper.provenance, paper);
+
   if (!/^[0-9a-f]{64}$/u.test(paper.metadataHash)) fail('METADATA_HASH_INVALID');
   if (paper.metadataHash !== computeResearchPaperMetadataHash(paper)) fail('METADATA_HASH_MISMATCH');
-  assertProvenance(paper.provenance, paper);
   return paper;
 }
 
