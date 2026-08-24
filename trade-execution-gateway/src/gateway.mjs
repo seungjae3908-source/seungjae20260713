@@ -7,6 +7,7 @@ import {
   SAFETY_CONTRACT,
   sidesForMarket,
 } from "./contracts.mjs";
+import { applyPaperFillTransition, PaperLifecycleError } from "./order-lifecycle.mjs";
 
 export class GatewayError extends Error {
   constructor(code, message, statusCode = 400) {
@@ -348,6 +349,10 @@ export class TradeExecutionGateway {
         status: brokerOrder.status ?? ORDER_STATES.SUBMITTED,
         brokerOrderId: brokerOrder.brokerOrderId,
         broker: brokerOrder,
+        filledQuantity: 0,
+        remainingQuantity: intent.quantity,
+        averageFillPrice: null,
+        paperFillEvidence: [],
       };
       this.#orders.set(orderId, accepted);
       return accepted;
@@ -362,10 +367,29 @@ export class TradeExecutionGateway {
     }
   }
 
+  async applyPaperFill(orderId, fill) {
+    const order = this.#orders.get(orderId);
+    if (!order) throw new GatewayError("ORDER_NOT_FOUND", "order not found", 404);
+    try {
+      const updated = applyPaperFillTransition(order, fill);
+      this.#orders.set(orderId, updated);
+      return updated;
+    } catch (error) {
+      if (error instanceof PaperLifecycleError) {
+        throw new GatewayError(error.code, error.message, 409);
+      }
+      throw error;
+    }
+  }
+
   async cancelOrder(orderId) {
     const order = this.#orders.get(orderId);
     if (!order) {
       throw new GatewayError("ORDER_NOT_FOUND", "order not found", 404);
+    }
+    if (order.status === ORDER_STATES.CANCELED) return order;
+    if ([ORDER_STATES.FILLED, ORDER_STATES.REJECTED].includes(order.status)) {
+      throw new GatewayError("ORDER_NOT_CANCELABLE", `paper order is already ${order.status}`, 409);
     }
     if (!order.brokerOrderId) {
       throw new GatewayError("ORDER_NOT_CANCELABLE", "paper order has no broker id", 409);

@@ -14,6 +14,13 @@ import {
   previewCoinPaperOrder,
 } from "./coin-bridge.mjs";
 import { reconcileOrderEvidence } from "./reconciliation.mjs";
+import { normalizePublicMarketDataEvidence } from "./market-data-evidence.mjs";
+import { assessExecutionGuards } from "./execution-guards.mjs";
+import {
+  buildBracketPlan,
+  buildCancelReplacePlan,
+  buildTrailingPlan,
+} from "./order-plans.mjs";
 
 const HOST = "127.0.0.1";
 const DEFAULT_PORT = 8792;
@@ -119,9 +126,36 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/v1/execution/market-data/validate") {
+      const body = await readJson(request);
+      sendJson(response, 200, normalizePublicMarketDataEvidence(body.evidence, body.policy));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/v1/execution/guards/preview") {
+      const body = await readJson(request);
+      sendJson(response, 200, assessExecutionGuards(body));
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/v1/reconciliation/order/preview") {
       const body = await readJson(request);
       sendJson(response, 200, reconcileOrderEvidence(body));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/v1/plans/cancel-replace/preview") {
+      sendJson(response, 200, buildCancelReplacePlan(await readJson(request)));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/v1/plans/bracket/preview") {
+      sendJson(response, 200, buildBracketPlan(await readJson(request)));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/v1/plans/trailing/preview") {
+      sendJson(response, 200, buildTrailingPlan(await readJson(request)));
       return;
     }
 
@@ -152,6 +186,11 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST") {
+      const fillOrderId = routeOrderId(url.pathname, "/fill");
+      if (fillOrderId) {
+        sendJson(response, 200, await gateway.applyPaperFill(fillOrderId, await readJson(request)));
+        return;
+      }
       const orderId = routeOrderId(url.pathname, "/cancel");
       if (orderId) {
         sendJson(response, 200, await gateway.cancelOrder(orderId));
