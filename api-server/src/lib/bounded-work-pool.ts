@@ -150,6 +150,12 @@ export async function runBoundedWorkPool<Item, Result>(
           reason,
           elapsedMs: Math.max(0, now() - itemStartedAt),
         });
+
+        // A timeout only proves that the pool stopped awaiting the task. The
+        // underlying provider work may ignore AbortSignal and keep running.
+        // Retire this logical lane so a non-cooperative timed-out task cannot
+        // be replaced repeatedly and exceed the configured real concurrency.
+        if (timedOut) return;
       } finally {
         activeCount -= 1;
         activeControllers.delete(controller);
