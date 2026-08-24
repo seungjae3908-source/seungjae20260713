@@ -184,13 +184,15 @@ export async function deliverScannerTelegramAlerts(
   memberHoldingProducer: ScannerMemberHoldingProducer = fanoutMemberHoldingScannerAlert,
 ): Promise<void> {
   await Promise.all(alerts.map(async (alert, index) => {
-    // The member producer is independently default-off and fail-closed. It does
-    // not depend on the shared room being configured and never changes whether
-    // the public Scanner notification is marked announced.
-    await runMemberHoldingProducer(alert, memberHoldingProducer);
+    // Start the independently default-off member path without serializing the
+    // existing public-room path behind member DB/quote/Telegram latency.
+    const memberEvaluation = runMemberHoldingProducer(alert, memberHoldingProducer);
 
     const base = scannerTelegramInput(alert, resolveRoomChatId);
-    if (!base) return;
+    if (!base) {
+      await memberEvaluation;
+      return;
+    }
     const input = index < MAX_RICH_ALERTS_PER_BATCH ? await richInput(base, alert, context) : base;
     try {
       const result = await sender(input);
@@ -206,5 +208,6 @@ export async function deliverScannerTelegramAlerts(
         'scanner Telegram delivery failed open',
       );
     }
+    await memberEvaluation;
   }));
 }
