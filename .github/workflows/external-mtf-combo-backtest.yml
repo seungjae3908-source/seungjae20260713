@@ -51,17 +51,35 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(git symbolic-ref --quiet --short HEAD || true)" = ""
 
+      - name: Checkout immutable historical research harness
+        uses: actions/checkout@v4
+        with:
+          ref: ba181123e6b03c880d9c70174b16ae6eb528700b
+          path: historical-harness
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify historical harness identity and stage challenger
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C historical-harness rev-parse HEAD)" = "ba181123e6b03c880d9c70174b16ae6eb528700b"
+          test -f historical-harness/market-prediction-lab/src/binance-scalping-selection-provider.js
+          test -f historical-harness/market-prediction-lab/src/independent-strategy-backtest.js
+          cp market-prediction-lab/scripts/run-external-mtf-combo-backtest.mjs \
+            historical-harness/market-prediction-lab/scripts/run-external-mtf-combo-backtest.mjs
+
       - name: Set up Node 20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
       - name: Validate research script syntax
-        working-directory: market-prediction-lab
+        working-directory: historical-harness/market-prediction-lab
         run: node --check scripts/run-external-mtf-combo-backtest.mjs
 
       - name: Run BTCUSDT multi-timeframe combination backtest
-        working-directory: market-prediction-lab
+        working-directory: historical-harness/market-prediction-lab
         env:
           RESEARCH_CODE_SHA: ${{ github.sha }}
         run: node scripts/run-external-mtf-combo-backtest.mjs artifacts/external-mtf-combo/summary.json artifacts/external-mtf-combo/summary.md
@@ -71,7 +89,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: external-mtf-combo-btc-${{ github.sha }}
-          path: market-prediction-lab/artifacts/external-mtf-combo
+          path: historical-harness/market-prediction-lab/artifacts/external-mtf-combo
           if-no-files-found: warn
           retention-days: 90
 
@@ -80,6 +98,7 @@ jobs:
         shell: bash
         run: |
           printf '%s\n' \
+            'historicalHarnessSha=ba181123e6b03c880d9c70174b16ae6eb528700b' \
             'productionMutation=false' \
             'privateApiUsed=false' \
             'orderSubmitted=false' \
