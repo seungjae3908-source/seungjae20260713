@@ -1,6 +1,7 @@
-import { CATALOG } from '../data/catalog';
+import { CATALOG, type CatalogEntry } from '../data/catalog';
 import { aliasesForAsset } from '../data/search-aliases';
 import {
+  canonicalProductCode,
   createUnifiedAssetId,
   searchUnifiedAssetDocuments,
   type UnifiedAssetDocument,
@@ -41,56 +42,62 @@ export interface UsSearchFallbackResponse {
   hiddenMatches: [];
 }
 
-function usCatalogDocuments(now: string): UnifiedAssetDocument[] {
-  return CATALOG
-    .filter((item) => item.market === 'US')
-    .map((item, index) => {
-      const ticker = item.ticker.trim().toUpperCase();
-      const manual = aliasesForAsset('stock', 'US', ticker);
-      const koreanName = manual?.koreanName || '';
-      const englishName = manual?.englishName || item.name;
-      const document: UnifiedAssetDocument = {
-        id: '',
-        assetType: 'stock',
-        market: 'US',
-        instrumentType: 'stock',
-        exchange: 'US',
-        ticker,
-        productCode: ticker,
-        koreanName,
-        englishName,
-        displayName: koreanName || englishName || ticker,
-        aliases: Array.from(new Set([
-          ticker,
-          item.name,
-          ...(manual?.aliases ?? []),
-          manual?.koreanName ?? '',
-          manual?.englishName ?? '',
-        ].map((value) => value.trim()).filter(Boolean))),
-        baseSymbol: ticker,
-        quoteCurrency: 'USD',
-        active: false,
-        provider: 'STATIC_US_CATALOG',
-        dataAsOf: now,
-        liquidityRank: index + 1,
-      };
-      document.id = createUnifiedAssetId(document);
-      return document;
-    });
+type UsCatalogEntry = {
+  item: CatalogEntry;
+  index: number;
+};
+
+const US_CATALOG_ENTRIES: UsCatalogEntry[] = CATALOG
+  .filter((item) => item.market === 'US')
+  .map((item, index) => ({ item, index }));
+
+const US_CATALOG_BY_TICKER = new Map<string, UsCatalogEntry>();
+for (const entry of US_CATALOG_ENTRIES) {
+  const ticker = canonicalProductCode(entry.item.ticker);
+  if (ticker && !US_CATALOG_BY_TICKER.has(ticker)) US_CATALOG_BY_TICKER.set(ticker, entry);
 }
 
-export function buildUsSearchFallback(
-  query: string,
-  limit: number,
-  now = new Date().toISOString(),
-): UsSearchFallbackResponse | null {
-  const matches = searchUnifiedAssetDocuments(usCatalogDocuments(now), query, {
-    asset: 'stock',
+function usCatalogDocument(item: CatalogEntry, index: number, now: string): UnifiedAssetDocument {
+  const ticker = canonicalProductCode(item.ticker);
+  const manual = aliasesForAsset('stock', 'US', ticker);
+  const koreanName = manual?.koreanName || '';
+  const englishName = manual?.englishName || item.name;
+  const document: UnifiedAssetDocument = {
+    id: '',
+    assetType: 'stock',
     market: 'US',
-    limit,
-  });
-  if (matches.length === 0) return null;
+    instrumentType: 'stock',
+    exchange: 'US',
+    ticker,
+    productCode: ticker,
+    koreanName,
+    englishName,
+    displayName: koreanName || englishName || ticker,
+    aliases: Array.from(new Set([
+      ticker,
+      item.name,
+      ...(manual?.aliases ?? []),
+      manual?.koreanName ?? '',
+      manual?.englishName ?? '',
+    ].map((value) => value.trim()).filter(Boolean))),
+    baseSymbol: ticker,
+    quoteCurrency: 'USD',
+    active: false,
+    provider: 'STATIC_US_CATALOG',
+    dataAsOf: now,
+    liquidityRank: index + 1,
+  };
+  document.id = createUnifiedAssetId(document);
+  return document;
+}
 
+function usCatalogDocuments(now: string): UnifiedAssetDocument[] {
+  return US_CATALOG_ENTRIES.map(({ item, index }) => usCatalogDocument(item, index, now));
+}
+
+function responseFromMatches(
+  matches: Array<{ document: UnifiedAssetDocument; matchType: string }>,
+): UsSearchFallbackResponse {
   const results = matches.map(({ document, matchType }) => ({
     id: document.id,
     assetType: 'stock' as const,
@@ -107,7 +114,7 @@ export function buildUsSearchFallback(
     matchType,
     active: false as const,
     provider: 'STATIC_US_CATALOG' as const,
-    dataAsOf: now,
+    dataAsOf: document.dataAsOf,
   }));
 
   return {
@@ -125,4 +132,24 @@ export function buildUsSearchFallback(
     }],
     hiddenMatches: [],
   };
+}
+
+export function buildUsSearchFallback(
+  query: string,
+  limit: number,
+  now = new Date().toISOString(),
+): UsSearchFallbackResponse | null {
+  const exactEntry = US_CATALOG_BY_TICKER.get(canonicalProductCode(query));
+  if (exactEntry) {
+    const document = usCatalogDocument(exactEntry.item, exactEntry.index, now);
+    return responseFromMatches([{ document, matchType: 'code_exact' }]);
+  }
+
+  const matches = searchUnifiedAssetDocuments(usCatalogDocuments(now), query, {
+    asset: 'stock',
+    market: 'US',
+    limit,
+  });
+  if (matches.length === 0) return null;
+  return responseFromMatches(matches);
 }
