@@ -71,6 +71,41 @@ test('per-item timeout is explicit and aborts the timed-out worker signal', asyn
   assert.ok(result.outcomes.filter((item) => item.status === 'timed_out').every((item) => item.reason instanceof BoundedWorkTimeoutError));
 });
 
+test('timed-out non-cooperative work retires its lane instead of oversubscribing real work', async () => {
+  const started: number[] = [];
+  let active = 0;
+  let observedMaximum = 0;
+
+  const result = await runBoundedWorkPool(
+    Array.from({ length: 12 }, (_, index) => index),
+    async (item) => {
+      started.push(item);
+      active += 1;
+      observedMaximum = Math.max(observedMaximum, active);
+      try {
+        // Deliberately ignore AbortSignal to model a provider/client that keeps
+        // doing work after the pool's timeout has elapsed.
+        await delay(80);
+        return item;
+      } finally {
+        active -= 1;
+      }
+    },
+    { concurrency: 3, deadlineMs: 300, itemTimeoutMs: 20 },
+  );
+
+  assert.equal(result.startedCount, 3);
+  assert.equal(result.fulfilledCount, 0);
+  assert.equal(result.rejectedCount, 0);
+  assert.equal(result.timedOutCount, 3);
+  assert.equal(result.deadlineReached, true);
+  assert.deepEqual(started, [0, 1, 2]);
+  assert.equal(observedMaximum, 3);
+
+  await delay(90);
+  assert.equal(active, 0);
+});
+
 test('global deadline prevents new work from starting after the budget is exhausted', async () => {
   const repetitions = 25;
 
