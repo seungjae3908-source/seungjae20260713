@@ -969,7 +969,36 @@ async function auditAuthenticatedViewport(
     http: diagnostics.unexpected_http_errors.length,
   };
   await page.setViewportSize({ width, height });
+  const scannerOrigin = new URL(page.url()).origin;
+  const scannerResponsePromise = route === '/scanner'
+    ? page.waitForResponse((response) => {
+        try {
+          const url = new URL(response.url());
+          return response.request().method() === 'GET'
+            && url.origin === scannerOrigin
+            && url.pathname === '/api/market/scan';
+        } catch {
+          return false;
+        }
+      }, { timeout: 15_000 })
+    : null;
   await expectHealthyRoute(page, route);
+  if (scannerResponsePromise) {
+    const scannerResponse = await scannerResponsePromise;
+    expect(
+      scannerResponse.status(),
+      `scanner viewport API returned HTTP ${scannerResponse.status()}`,
+    ).toBe(200);
+    const scannerError = await scannerResponse.finished();
+    expect(scannerError, 'scanner viewport response must finish before the verifier leaves /scanner').toBeNull();
+    const scannerBody = await scannerResponse.json().catch(() => null) as { ok?: boolean; elapsedMs?: number } | null;
+    expect(scannerBody?.ok, 'scanner viewport API must return an explicit successful scanner envelope').toBe(true);
+    expect(
+      Number(scannerBody?.elapsedMs),
+      'scanner viewport API must remain inside the existing 12s scanner contract',
+    ).toBeLessThanOrEqual(12_000);
+    await settle(page);
+  }
   const layout = await page.evaluate(() => {
     const visible = (element: Element) => {
       const rect = (element as HTMLElement).getBoundingClientRect();
@@ -1539,4 +1568,3 @@ test.describe('real staging release readiness', () => {
     expect(diagnostics.expected_scanner_aborts, 'scanner net::ERR_ABORTED must remain zero').toEqual([]);
   });
 });
-
