@@ -199,8 +199,8 @@ test('Portfolio Intelligence와 AI Mentor는 partial provenance를 숨기지 않
   });
 
   await page.goto('/ai-chat');
-  await expect(page.getByRole('heading', { name: 'Information Hub' })).toBeVisible();
-  await page.getByRole('button', { name: 'Portfolio' }).click();
+  await expect(page.getByRole('heading', { name: 'AI 상담' })).toBeVisible();
+  await page.getByRole('button', { name: '포트폴리오' }).click();
   await expect(page.getByTestId('information-portfolio-ai-shortcut')).toContainText('포트폴리오 AI 진단');
   await page.getByRole('button', { name: '내 포트폴리오 분석 열기' }).click();
 
