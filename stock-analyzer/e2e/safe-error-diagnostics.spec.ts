@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
 import { formatSafeErrorDiagnostics, safeErrorPath } from '../src/lib/safe-error-diagnostics';
 
 test('safe error diagnostics copy only allowlisted metadata and strips route secrets', () => {
@@ -36,4 +37,11 @@ test('safe error diagnostics fail closed on invalid route, sha, and timestamp', 
   expect(diagnostics).toContain('provider: NOT_AVAILABLE');
   expect(diagnostics).toContain('error_code: UNKNOWN');
   expect(diagnostics).toContain('occurred_at: NOT_AVAILABLE');
+});
+
+test('common error actions keep the app-wide 44px touch contract', async () => {
+  const source = await readFile(new URL('../src/components/data-state.tsx', import.meta.url), 'utf8');
+  expect(source).toContain('className="min-h-11 rounded-lg border border-border px-3 py-2');
+  expect(source).toContain('className="inline-flex min-h-11 items-center gap-1.5');
+  expect(source).toContain('type="button"\n              onClick={onRetry}');
 });
