@@ -74,6 +74,20 @@ function paperPolicy() {
   };
 }
 
+function krPaperOrder(overrides = {}) {
+  return {
+    mode: "PAPER",
+    market: "KR_STOCK",
+    symbol: "005930",
+    side: "BUY",
+    orderType: "LIMIT",
+    quantity: 2,
+    limitPrice: 70_000,
+    idempotencyKey: "v04-default-paper-0001",
+    ...overrides,
+  };
+}
+
 test("v0.4 preserves paper-only and zero-outbound safety", () => {
   assert.equal(SAFETY_CONTRACT.version, "0.4.0");
   assert.equal(SAFETY_CONTRACT.executionMode, "PAPER_ONLY");
@@ -172,13 +186,8 @@ test("insufficient public depth and slippage fail closed", () => {
 test("paper OMS supports ACCEPTED -> PARTIALLY_FILLED -> FILLED only", async () => {
   const gateway = new TradeExecutionGateway({ adapter: new PaperMockBrokerAdapter(), policy: paperPolicy() });
   const order = await gateway.placeOrder({
-    mode: "PAPER",
-    market: "KR_STOCK",
-    symbol: "005930",
-    side: "BUY",
-    orderType: "LIMIT",
+    ...krPaperOrder(),
     quantity: 10,
-    limitPrice: 70_000,
     idempotencyKey: "v04-fill-test-0001",
   });
   const partial = await gateway.applyPaperFill(order.orderId, {
@@ -200,18 +209,27 @@ test("paper OMS supports ACCEPTED -> PARTIALLY_FILLED -> FILLED only", async () 
   assert.equal(filled.actualExchangeFillEvidence, null);
 });
 
+test("paper LIMIT fills reject prices worse than the limit", async () => {
+  const gateway = new TradeExecutionGateway({ policy: paperPolicy() });
+  const buy = await gateway.placeOrder(krPaperOrder({ idempotencyKey: "v04-limit-buy-0001" }));
+  await assert.rejects(
+    gateway.applyPaperFill(buy.orderId, { quantity: 1, price: 70_001, observedAt: "2026-08-24T10:00:00Z" }),
+    (error) => error.code === "PAPER_FILL_LIMIT_VIOLATION",
+  );
+
+  const sell = await gateway.placeOrder(krPaperOrder({
+    side: "SELL",
+    idempotencyKey: "v04-limit-sell-0001",
+  }));
+  await assert.rejects(
+    gateway.applyPaperFill(sell.orderId, { quantity: 1, price: 69_999, observedAt: "2026-08-24T10:00:00Z" }),
+    (error) => error.code === "PAPER_FILL_LIMIT_VIOLATION",
+  );
+});
+
 test("paper overfill and fill-after-terminal are rejected", async () => {
   const gateway = new TradeExecutionGateway({ policy: paperPolicy() });
-  const order = await gateway.placeOrder({
-    mode: "PAPER",
-    market: "KR_STOCK",
-    symbol: "005930",
-    side: "BUY",
-    orderType: "LIMIT",
-    quantity: 2,
-    limitPrice: 70_000,
-    idempotencyKey: "v04-fill-test-0002",
-  });
+  const order = await gateway.placeOrder(krPaperOrder({ idempotencyKey: "v04-fill-test-0002" }));
   await assert.rejects(
     gateway.applyPaperFill(order.orderId, { quantity: 3, price: 70_000, observedAt: "2026-08-24T10:00:00Z" }),
     (error) => error.code === "PAPER_OVERFILL_REJECTED",
@@ -226,16 +244,7 @@ test("paper overfill and fill-after-terminal are rejected", async () => {
 
 test("cancel/replace is planning-only and preserves exact order identity", async () => {
   const gateway = new TradeExecutionGateway({ policy: paperPolicy() });
-  const order = await gateway.placeOrder({
-    mode: "PAPER",
-    market: "KR_STOCK",
-    symbol: "005930",
-    side: "BUY",
-    orderType: "LIMIT",
-    quantity: 2,
-    limitPrice: 70_000,
-    idempotencyKey: "v04-replace-old-0001",
-  });
+  const order = await gateway.placeOrder(krPaperOrder({ idempotencyKey: "v04-replace-old-0001" }));
   const plan = buildCancelReplacePlan({
     order,
     replacementIntent: {
@@ -248,6 +257,57 @@ test("cancel/replace is planning-only and preserves exact order identity", async
   assert.equal(plan.automaticCancelPerformed, false);
   assert.equal(plan.replacementSubmitted, false);
   assert.equal(plan.requiresExplicitConfirmation, true);
+});
+
+test("cancel/replace cannot flip side or exceed remaining partial quantity", async () => {
+  const gateway = new TradeExecutionGateway({ policy: paperPolicy() });
+  const order = await gateway.placeOrder(krPaperOrder({
+    quantity: 5,
+    idempotencyKey: "v04-replace-partial-old-0001",
+  }));
+  const partial = await gateway.applyPaperFill(order.orderId, {
+    quantity: 2,
+    price: 70_000,
+    observedAt: "2026-08-24T10:00:00Z",
+  });
+
+  assert.throws(
+    () => buildCancelReplacePlan({
+      order: partial,
+      replacementIntent: {
+        ...partial.intent,
+        side: "SELL",
+        quantity: 3,
+        idempotencyKey: "v04-replace-side-new-0001",
+      },
+    }),
+    (error) => error.code === "REPLACEMENT_SIDE_MISMATCH",
+  );
+
+  assert.throws(
+    () => buildCancelReplacePlan({
+      order: partial,
+      replacementIntent: {
+        ...partial.intent,
+        quantity: 4,
+        idempotencyKey: "v04-replace-too-large-0001",
+      },
+    }),
+    (error) => error.code === "REPLACEMENT_QUANTITY_EXCEEDS_REMAINING",
+  );
+
+  const valid = buildCancelReplacePlan({
+    order: partial,
+    replacementIntent: {
+      ...partial.intent,
+      quantity: 3,
+      limitPrice: 69_900,
+      idempotencyKey: "v04-replace-valid-new-0001",
+    },
+  });
+  assert.equal(valid.originalFilledQuantity, 2);
+  assert.equal(valid.originalRemainingQuantity, 3);
+  assert.equal(valid.replacementQuantity, 3);
 });
 
 test("bracket OCO validates long and short price geometry without submitting children", () => {
