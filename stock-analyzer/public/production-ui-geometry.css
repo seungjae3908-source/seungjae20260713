@@ -61,6 +61,34 @@ button[data-testid="load-multi-timeframe"] {
   min-height: 2rem;
 }
 
+/*
+ * Chart controls are a toolbar, not plot data. Keep them in normal flow above
+ * the canvas so they cannot cover candles, the right price scale, or signal
+ * overlays at any zoom level. Component touch targets remain 44px.
+ */
+[data-testid="chart-floating-controls"] {
+  position: relative !important;
+  inset: auto !important;
+  z-index: 10;
+  width: max-content;
+  margin: 0.25rem 0.5rem 0.25rem auto;
+  opacity: 1 !important;
+}
+
+/* Compact/phone signal overlay defaults to the requested one-line chip. */
+@media (max-width: 599px) {
+  [data-testid="ai-chart-v2-signal-overlay"] {
+    width: max-content;
+    max-width: calc(100% - 1.5rem) !important;
+    padding: 0.375rem 0.625rem !important;
+    border-radius: 9999px !important;
+  }
+
+  [data-testid="ai-chart-v2-signal-overlay"] > p {
+    display: none;
+  }
+}
+
 /* Compact cover displays: preserve tap targets but reduce menu density. */
 @media (max-width: 359px) {
   nav[aria-label="주요 메뉴"] > div:last-child {
