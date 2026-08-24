@@ -46,6 +46,36 @@ function blockedProducer(...blockers) {
   });
 }
 
+function observedProducer(id, { qualityPassed, riskPassed, reasons = [] }) {
+  return Object.freeze({
+    ...readyProducer(),
+    gateObservability: Object.freeze({
+      schemaVersion: "scanner-crypto-futures-paper-gate-observability-v1",
+      qualityGate: Object.freeze({
+        status: "MEASURED",
+        evaluated: true,
+        passed: qualityPassed,
+        decision: qualityPassed ? "PASS" : "BLOCKED",
+        provenance: "quality-fixture",
+        observedAt: NOW,
+        observationId: id,
+        sourceCodes: Object.freeze([]),
+      }),
+      riskGate: Object.freeze({
+        status: "MEASURED",
+        evaluated: qualityPassed,
+        passed: riskPassed,
+        decision: qualityPassed ? (riskPassed ? "PASS" : "BLOCKED") : "NOT_REACHED",
+        provenance: "risk-fixture",
+        observedAt: NOW,
+        observationId: id,
+        sourceCodes: Object.freeze([]),
+      }),
+      reasonObservations: Object.freeze(reasons),
+    }),
+  });
+}
+
 function sourceWiring({ cards, totalCount, completedCount, producer }) {
   return Object.freeze({
     scanBatchForMarket: async () => async () => response(cards, { totalCount, completedCount }),
@@ -103,6 +133,48 @@ test("Candidate is the first zero only after Universe and Scanner Evaluated are 
   assert.match(result.naturalEvidenceIdentity, /^[0-9a-f]{64}$/u);
   assert.equal(result.naturalRuntimeSha, SHA);
   assert.deepEqual(result.authoritativeFirstZeroReasonEvidenceByStage, {});
+  assert.equal(result.canonicalNaturalStageEvidence.stageCounts.signalCandidate.count, 0);
+  assert.equal(result.canonicalNaturalStageEvidence.reasonObservations[0].canonicalReason, "NO_SIGNAL");
+  assert.equal(result.canonicalNaturalStageEvidence.stageCounts.qualityPassed.provenance.includes("qualityGate"), true);
+});
+
+test("direct Quality and Risk counts remain independent instead of aliasing producer READY", async () => {
+  const cards = [Object.freeze({ id: "c1" }), Object.freeze({ id: "c2" })];
+  const wiring = sourceWiring({
+    cards,
+    totalCount: 20,
+    completedCount: 2,
+    producer: ({ card }) => observedProducer(card.id, {
+      qualityPassed: true,
+      riskPassed: card.id === "c1",
+      reasons: card.id === "c2" ? [Object.freeze({
+        sourceStage: "RISK_GATE",
+        sourceCode: "RISK_BLOCKED_FIXTURE",
+        sourceReason: "RISK_BLOCKED_FIXTURE",
+        canonicalReason: "RISK_GATE",
+        lossless: true,
+        provenance: "risk-fixture",
+        observedAt: NOW,
+        identity: Object.freeze({ observationId: card.id }),
+        naturalCredit: 0,
+        replayCredit: 0,
+        duplicateCredit: 0,
+      })] : [],
+    }),
+  });
+  const runtime = createNaturalFunnelObservedPaperRuntimeFromSourceWiring({
+    sourceWiring: wiring,
+    now: () => NOW,
+    baseRuntimeFactory: (options) => baseRuntimeFactory(options, { admissionReady: 2 }),
+  });
+
+  const result = await runtime({ market: "CRYPTO_FUTURES", cycle: cycle() });
+  const stages = result.canonicalNaturalStageEvidence.stageCounts;
+  assert.equal(stages.signalCandidate.count, 2);
+  assert.equal(stages.qualityPassed.count, 2);
+  assert.equal(stages.riskPassed.count, 1);
+  assert.notEqual(stages.qualityPassed.provenance, stages.riskPassed.provenance);
+  assert.equal(result.canonicalNaturalStageEvidence.reasonObservations[0].sourceCode, "RISK_BLOCKED_FIXTURE");
 });
 
 test("natural dataset identity is stable across read-only re-observation time", async () => {

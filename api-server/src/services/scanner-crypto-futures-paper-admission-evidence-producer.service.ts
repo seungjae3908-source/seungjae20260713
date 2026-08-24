@@ -46,6 +46,7 @@ export type ScannerCryptoFuturesPaperAdmissionEvidenceProducerResult = Readonly<
   bundle: CanonicalPaperAdmissionEvidenceBundle | null;
   blockers: readonly string[];
   composerStatus: ScannerCryptoFuturesPaperAdmissionComposition['status'] | null;
+  gateObservability: ScannerCryptoFuturesPaperGateObservability;
   executionAuthority: 'NONE';
   simulatedOnly: true;
   liveOrderAllowed: false;
@@ -53,6 +54,38 @@ export type ScannerCryptoFuturesPaperAdmissionEvidenceProducerResult = Readonly<
   orderSubmitted: false;
   exchangeRequestSent: false;
   productionMutationAllowed: false;
+}>;
+
+export type ScannerCryptoFuturesPaperGateObservation = Readonly<{
+  status: 'MEASURED' | 'UNKNOWN';
+  evaluated: boolean;
+  passed: boolean | null;
+  decision: 'PASS' | 'BLOCKED' | 'NOT_REACHED' | 'UNKNOWN';
+  provenance: string;
+  observedAt: number | null;
+  observationId: string | null;
+  sourceCodes: readonly string[];
+}>;
+
+export type ScannerCryptoFuturesPaperReasonObservation = Readonly<{
+  sourceStage: 'QUALITY_GATE' | 'RISK_GATE' | 'EVIDENCE_SOURCE' | 'PAPER_ADMISSION';
+  sourceCode: string;
+  sourceReason: string;
+  canonicalReason: 'QUALITY_GATE' | 'RISK_GATE' | 'DATA_MISSING' | 'UNKNOWN';
+  lossless: boolean;
+  provenance: string;
+  observedAt: number | null;
+  identity: Readonly<{ observationId: string | null }>;
+  naturalCredit: 0;
+  replayCredit: 0;
+  duplicateCredit: 0;
+}>;
+
+export type ScannerCryptoFuturesPaperGateObservability = Readonly<{
+  schemaVersion: 'scanner-crypto-futures-paper-gate-observability-v1';
+  qualityGate: ScannerCryptoFuturesPaperGateObservation;
+  riskGate: ScannerCryptoFuturesPaperGateObservation;
+  reasonObservations: readonly ScannerCryptoFuturesPaperReasonObservation[];
 }>;
 
 type ProducerOptions = Readonly<{
@@ -87,9 +120,174 @@ function safetyEnvelope() {
   });
 }
 
+function observationId(card: unknown, signal: unknown): string | null {
+  const values = [
+    (signal as { signalId?: unknown } | null)?.signalId,
+    (card as { signalId?: unknown } | null)?.signalId,
+    (card as { id?: unknown } | null)?.id,
+    (card as { paperCandidate?: { signal?: { signalId?: unknown } } } | null)?.paperCandidate?.signal?.signalId,
+  ];
+  const value = values.find((candidate) => typeof candidate === 'string' && candidate.trim().length > 0);
+  return typeof value === 'string' ? value.trim() : null;
+}
+
+function gateObservation({
+  status = 'UNKNOWN', evaluated = false, passed = null, decision = 'UNKNOWN',
+  provenance, observedAt = null, observationId: id = null, sourceCodes = [],
+}: Readonly<{
+  status?: 'MEASURED' | 'UNKNOWN';
+  evaluated?: boolean;
+  passed?: boolean | null;
+  decision?: 'PASS' | 'BLOCKED' | 'NOT_REACHED' | 'UNKNOWN';
+  provenance: string;
+  observedAt?: number | null;
+  observationId?: string | null;
+  sourceCodes?: readonly string[];
+}>): ScannerCryptoFuturesPaperGateObservation {
+  const measured = status === 'MEASURED';
+  return Object.freeze({
+    status: measured ? 'MEASURED' : 'UNKNOWN',
+    evaluated: measured && evaluated,
+    passed: measured && typeof passed === 'boolean' ? passed : null,
+    decision: measured ? decision : 'UNKNOWN',
+    provenance,
+    observedAt: finite(observedAt) && observedAt > 0 ? observedAt : null,
+    observationId: typeof id === 'string' && id.length > 0 ? id : null,
+    sourceCodes: Object.freeze([...new Set(sourceCodes.filter((code) => typeof code === 'string' && code.length > 0))]),
+  });
+}
+
+function reasonObservations({
+  sourceStage, sourceCodes, canonicalReason, lossless, provenance, observedAt, observationId: id,
+}: Readonly<{
+  sourceStage: ScannerCryptoFuturesPaperReasonObservation['sourceStage'];
+  sourceCodes: readonly string[];
+  canonicalReason: ScannerCryptoFuturesPaperReasonObservation['canonicalReason'];
+  lossless: boolean;
+  provenance: string;
+  observedAt: number | null;
+  observationId: string | null;
+}>): readonly ScannerCryptoFuturesPaperReasonObservation[] {
+  return Object.freeze([...new Set(sourceCodes)].map((sourceCode) => Object.freeze({
+    sourceStage,
+    sourceCode,
+    sourceReason: sourceCode,
+    canonicalReason,
+    lossless,
+    provenance,
+    observedAt: finite(observedAt) && observedAt > 0 ? observedAt : null,
+    identity: Object.freeze({ observationId: id }),
+    naturalCredit: 0 as const,
+    replayCredit: 0 as const,
+    duplicateCredit: 0 as const,
+  })));
+}
+
+function gateObservability({
+  qualityGate, riskGate, reasonObservations: reasons = [],
+}: Readonly<{
+  qualityGate: ScannerCryptoFuturesPaperGateObservation;
+  riskGate: ScannerCryptoFuturesPaperGateObservation;
+  reasonObservations?: readonly ScannerCryptoFuturesPaperReasonObservation[];
+}>): ScannerCryptoFuturesPaperGateObservability {
+  return Object.freeze({
+    schemaVersion: 'scanner-crypto-futures-paper-gate-observability-v1',
+    qualityGate,
+    riskGate,
+    reasonObservations: Object.freeze([...reasons]),
+  });
+}
+
+function unknownGateObservability(
+  sourceCodes: readonly string[] = [],
+  observedAt: number | null = null,
+  id: string | null = null,
+  sourceStage: ScannerCryptoFuturesPaperReasonObservation['sourceStage'] = 'EVIDENCE_SOURCE',
+  canonicalReason: ScannerCryptoFuturesPaperReasonObservation['canonicalReason'] = 'UNKNOWN',
+  lossless = false,
+): ScannerCryptoFuturesPaperGateObservability {
+  return gateObservability({
+    qualityGate: gateObservation({ provenance: 'scanner admission Quality gate was not evaluated', observedAt, observationId: id }),
+    riskGate: gateObservation({ provenance: 'Trading Risk Engine was not evaluated', observedAt, observationId: id }),
+    reasonObservations: reasonObservations({
+      sourceStage,
+      sourceCodes,
+      canonicalReason,
+      lossless,
+      provenance: 'scanner-crypto-futures-paper-admission-evidence-producer-v1',
+      observedAt,
+      observationId: id,
+    }),
+  });
+}
+
+function compositionGateObservability(
+  composition: ScannerCryptoFuturesPaperAdmissionComposition,
+  observedAt: number,
+  id: string | null,
+): ScannerCryptoFuturesPaperGateObservability {
+  const qualityPassed = Boolean(composition.riskInput && composition.riskResult);
+  const riskEvaluated = Boolean(composition.riskResult);
+  const riskPassed = Boolean(composition.riskResult?.allowed && positive(composition.riskResult?.recommendedQuantity));
+  const qualityCodes = qualityPassed ? [] : [...(composition.blockers ?? [])];
+  const riskCodes = riskEvaluated && !riskPassed
+    ? [...(composition.riskResult?.blockCodes ?? []), ...(composition.blockers ?? [])]
+    : [];
+  return gateObservability({
+    qualityGate: gateObservation({
+      status: 'MEASURED', evaluated: true, passed: qualityPassed,
+      decision: qualityPassed ? 'PASS' : 'BLOCKED',
+      provenance: 'scanner-crypto-futures-paper-admission-composer.service.ts pre-risk validation outcome',
+      observedAt, observationId: id, sourceCodes: qualityCodes,
+    }),
+    riskGate: gateObservation({
+      status: 'MEASURED', evaluated: riskEvaluated, passed: riskPassed,
+      decision: riskEvaluated ? (riskPassed ? 'PASS' : 'BLOCKED') : 'NOT_REACHED',
+      provenance: riskEvaluated
+        ? 'scanner-crypto-futures-paper-admission-composer.service.ts riskResult'
+        : 'Trading Risk Engine not reached after measured Quality block',
+      observedAt, observationId: id, sourceCodes: riskCodes,
+    }),
+    reasonObservations: [
+      ...reasonObservations({
+        sourceStage: 'QUALITY_GATE', sourceCodes: qualityCodes, canonicalReason: 'QUALITY_GATE', lossless: true,
+        provenance: 'scanner-crypto-futures-paper-admission-composer.service.ts pre-risk blockers', observedAt, observationId: id,
+      }),
+      ...reasonObservations({
+        sourceStage: 'RISK_GATE', sourceCodes: riskCodes, canonicalReason: 'RISK_GATE', lossless: true,
+        provenance: 'scanner-crypto-futures-paper-admission-composer.service.ts riskResult.blockCodes', observedAt, observationId: id,
+      }),
+    ],
+  });
+}
+
+function withFinalRiskBlock(
+  observability: ScannerCryptoFuturesPaperGateObservability,
+  blockers: readonly string[],
+): ScannerCryptoFuturesPaperGateObservability {
+  const risk = observability.riskGate;
+  return gateObservability({
+    qualityGate: observability.qualityGate,
+    riskGate: gateObservation({
+      status: 'MEASURED', evaluated: true, passed: false, decision: 'BLOCKED',
+      provenance: 'scanner-crypto-futures-paper-admission-evidence-producer-v1 final risk-cost parity decision',
+      observedAt: risk.observedAt, observationId: risk.observationId, sourceCodes: blockers,
+    }),
+    reasonObservations: [
+      ...observability.reasonObservations,
+      ...reasonObservations({
+        sourceStage: 'RISK_GATE', sourceCodes: blockers, canonicalReason: 'RISK_GATE', lossless: true,
+        provenance: 'scanner-crypto-futures-paper-admission-evidence-producer-v1 final risk-cost parity decision',
+        observedAt: risk.observedAt, observationId: risk.observationId,
+      }),
+    ],
+  });
+}
+
 function blocked(
   blockers: readonly string[],
   composerStatus: ScannerCryptoFuturesPaperAdmissionComposition['status'] | null = null,
+  observability: ScannerCryptoFuturesPaperGateObservability = unknownGateObservability(blockers),
 ): ScannerCryptoFuturesPaperAdmissionEvidenceProducerResult {
   return Object.freeze({
     status: 'BLOCKED',
@@ -97,6 +295,7 @@ function blocked(
     bundle: null,
     blockers: Object.freeze([...new Set(blockers)]),
     composerStatus,
+    gateObservability: observability,
     ...safetyEnvelope(),
   });
 }
@@ -189,12 +388,17 @@ export function createScannerCryptoFuturesPaperAdmissionEvidenceProducer({
     cycle,
     signal,
   }: Readonly<{ card: unknown; market?: string; cycle?: unknown; signal?: unknown }>): Promise<ScannerCryptoFuturesPaperAdmissionEvidenceProducerResult> {
+    const id = observationId(card, signal);
     if (market !== 'CRYPTO_FUTURES') {
-      return blocked(['P0_C9_MARKET_NOT_OWNED']);
+      return blocked(['P0_C9_MARKET_NOT_OWNED'], null, unknownGateObservability(
+        ['P0_C9_MARKET_NOT_OWNED'], null, id, 'EVIDENCE_SOURCE', 'UNKNOWN', false,
+      ));
     }
 
     const nowMs = now();
-    if (!finite(nowMs) || nowMs <= 0) return blocked(['P0_C9_EVIDENCE_CLOCK_INVALID']);
+    if (!finite(nowMs) || nowMs <= 0) return blocked(['P0_C9_EVIDENCE_CLOCK_INVALID'], null, unknownGateObservability(
+      ['P0_C9_EVIDENCE_CLOCK_INVALID'], null, id, 'EVIDENCE_SOURCE', 'UNKNOWN', false,
+    ));
 
     const context: ScannerCryptoFuturesPaperAdmissionEvidenceContext = Object.freeze({
       card,
@@ -222,7 +426,9 @@ export function createScannerCryptoFuturesPaperAdmissionEvidenceProducer({
         executionObservation,
         supplementalCostEvidence,
       ].some((value) => value == null)) {
-        return blocked(['P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING']);
+        return blocked(['P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING'], null, unknownGateObservability(
+          ['P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING'], nowMs, id, 'EVIDENCE_SOURCE', 'DATA_MISSING', true,
+        ));
       }
 
       input = {
@@ -237,15 +443,20 @@ export function createScannerCryptoFuturesPaperAdmissionEvidenceProducer({
         ...(maxEvidenceAgeMs == null ? {} : { maxEvidenceAgeMs }),
       };
     } catch {
-      return blocked(['P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_FAILED']);
+      return blocked(['P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_FAILED'], null, unknownGateObservability(
+        ['P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_FAILED'], nowMs, id, 'EVIDENCE_SOURCE', 'UNKNOWN', false,
+      ));
     }
 
     let composition: ScannerCryptoFuturesPaperAdmissionComposition;
     try {
       composition = compose(input);
     } catch {
-      return blocked(['P0_C9_ADMISSION_COMPOSER_FAILED']);
+      return blocked(['P0_C9_ADMISSION_COMPOSER_FAILED'], null, unknownGateObservability(
+        ['P0_C9_ADMISSION_COMPOSER_FAILED'], nowMs, id, 'PAPER_ADMISSION', 'UNKNOWN', false,
+      ));
     }
+    const observedGates = compositionGateObservability(composition, nowMs, id);
 
     if (composition.status !== 'READY'
       || composition.admissionResult?.status !== 'READY'
@@ -254,16 +465,18 @@ export function createScannerCryptoFuturesPaperAdmissionEvidenceProducer({
         'P0_C9_ADMISSION_COMPOSER_BLOCKED',
         ...(composition.blockers ?? []),
         ...(composition.admissionResult?.blockers ?? []),
-      ], composition.status);
+      ], composition.status, observedGates);
     }
 
     const bundle = composition.admissionResult.bundle;
     if (!validBundleSafety(bundle)) {
-      return blocked(['P0_C9_CANONICAL_ADMISSION_BUNDLE_INVALID'], composition.status);
+      return blocked(['P0_C9_CANONICAL_ADMISSION_BUNDLE_INVALID'], composition.status, observedGates);
     }
 
     const parityBlockers = riskCostParityBlockers(composition, nowMs, recalculateRisk);
-    if (parityBlockers.length > 0) return blocked(parityBlockers, composition.status);
+    if (parityBlockers.length > 0) {
+      return blocked(parityBlockers, composition.status, withFinalRiskBlock(observedGates, parityBlockers));
+    }
 
     return Object.freeze({
       status: 'READY',
@@ -271,6 +484,7 @@ export function createScannerCryptoFuturesPaperAdmissionEvidenceProducer({
       bundle,
       blockers: Object.freeze([]),
       composerStatus: composition.status,
+      gateObservability: observedGates,
       ...safetyEnvelope(),
     });
   };
