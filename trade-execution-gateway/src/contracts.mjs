@@ -17,7 +17,7 @@ export const ORDER_STATES = Object.freeze({
 
 export const SAFETY_CONTRACT = Object.freeze({
   service: "trade-execution-gateway",
-  version: "0.5.0",
+  version: "0.6.0",
   executionMode: "PAPER_ONLY",
   liveTrading: false,
   realOrderEnabled: false,
@@ -78,7 +78,7 @@ export function publicContract() {
       productionRouteMounted: false,
     },
     executionSafety: {
-      version: "V0_5",
+      version: "V0_6",
       callerSuppliedValidationEndpoint: "/v1/execution/market-data/validate",
       callerSuppliedGuardEndpoint: "/v1/execution/guards/preview",
       runtimeHealthEndpoint: "/v1/execution/runtime/health",
@@ -104,6 +104,29 @@ export function publicContract() {
       },
       planExecutionAuthority: "NONE",
     },
+    executionQuality: {
+      version: "V0_6",
+      costPreviewEndpoint: "/v1/execution/costs/preview",
+      tcaPreviewEndpoint: "/v1/execution/tca/preview",
+      paperOrderTcaEndpoint: "/v1/paper/orders/:orderId/tca/preview",
+      metrics: ["FILL_VWAP", "IMPLEMENTATION_SHORTFALL_BPS", "PREDICTION_ERROR_BPS", "ALL_IN_SHORTFALL_BPS"],
+      costScheduleAuthority: "CALLER_SUPPLIED_EXPLICIT_EVIDENCE_ONLY",
+      hardCodedBrokerFees: false,
+      hardCodedTaxes: false,
+      hardCodedFundingConvention: false,
+      actualBrokerChargesMeasured: false,
+      actualLiveExecutionMeasured: false,
+      executionAuthority: "NONE",
+    },
+    parity: {
+      version: "V0_6",
+      previewEndpoint: "/v1/parity/preview",
+      candidateRuntimeMustBeDisabled: true,
+      canonicalProviders: { KR_STOCK: "toss", US_STOCK: "toss", CRYPTO_SPOT: "upbit", CRYPTO_FUTURES: "bitget" },
+      actualRuntimeParityProven: false,
+      activationAllowed: false,
+      executionAuthority: "NONE",
+    },
     persistence: {
       mode: "LOCAL_FILE_PAPER_ONLY",
       atomicRename: true,
@@ -126,6 +149,7 @@ export function publicContract() {
       authority: "READ_ONLY_EVIDENCE",
       mutatesOms: false,
       brokerNetworkRead: false,
+      authenticatedReadAdapterEnabled: false,
     },
   };
 }
