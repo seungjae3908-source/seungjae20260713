@@ -288,7 +288,7 @@ test('market submenu buttons reach the correct KR, US, spot, and futures screens
     await expect(page).toHaveTitle(new RegExp(heading));
   }
 
-  await expect(page.getByText('선물 공개 파생지표')).toBeVisible();
+  await expect(page.getByText('선물 지표')).toBeVisible();
   assertClean();
 });
 
