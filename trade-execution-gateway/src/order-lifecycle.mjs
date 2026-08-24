@@ -7,6 +7,9 @@ export class PaperLifecycleError extends Error {
 }
 
 const FILLABLE_STATES = new Set(["ACCEPTED", "PARTIALLY_FILLED"]);
+const BUY_LIKE = new Set(["BUY", "LONG"]);
+const SELL_LIKE = new Set(["SELL", "SHORT"]);
+const EPSILON = 1e-12;
 
 function positive(value, code, message) {
   const number = Number(value);
@@ -20,6 +23,31 @@ function observedAt(value) {
     throw new PaperLifecycleError("INVALID_PAPER_FILL_TIME", "paper fill requires a valid observedAt timestamp");
   }
   return new Date(parsed).toISOString();
+}
+
+function validateLimitFill(order, fillPrice) {
+  if (String(order.intent?.orderType ?? "").toUpperCase() !== "LIMIT") return;
+  const limitPrice = positive(
+    order.intent?.limitPrice,
+    "INVALID_PAPER_LIMIT_PRICE",
+    "Paper LIMIT order requires a positive limitPrice",
+  );
+  const side = String(order.intent?.side ?? "").toUpperCase();
+  if (BUY_LIKE.has(side) && fillPrice > limitPrice + EPSILON) {
+    throw new PaperLifecycleError(
+      "PAPER_FILL_LIMIT_VIOLATION",
+      "BUY/LONG Paper fill cannot be worse than the limit price",
+    );
+  }
+  if (SELL_LIKE.has(side) && fillPrice < limitPrice - EPSILON) {
+    throw new PaperLifecycleError(
+      "PAPER_FILL_LIMIT_VIOLATION",
+      "SELL/SHORT Paper fill cannot be worse than the limit price",
+    );
+  }
+  if (!BUY_LIKE.has(side) && !SELL_LIKE.has(side)) {
+    throw new PaperLifecycleError("INVALID_PAPER_FILL_SIDE", "Paper fill side is unsupported");
+  }
 }
 
 export function applyPaperFillTransition(order, fill) {
@@ -45,13 +73,15 @@ export function applyPaperFillTransition(order, fill) {
 
   const fillQuantity = positive(fill?.quantity, "INVALID_PAPER_FILL_QUANTITY", "paper fill quantity must be positive");
   const fillPrice = positive(fill?.price, "INVALID_PAPER_FILL_PRICE", "paper fill price must be positive");
+  validateLimitFill(order, fillPrice);
+
   const remainingBefore = totalQuantity - priorFilled;
-  if (fillQuantity > remainingBefore + 1e-12) {
+  if (fillQuantity > remainingBefore + EPSILON) {
     throw new PaperLifecycleError("PAPER_OVERFILL_REJECTED", "paper fill cannot exceed remaining quantity");
   }
 
   const nextFilledRaw = priorFilled + fillQuantity;
-  const nextFilled = Math.abs(nextFilledRaw - totalQuantity) <= 1e-12 ? totalQuantity : nextFilledRaw;
+  const nextFilled = Math.abs(nextFilledRaw - totalQuantity) <= EPSILON ? totalQuantity : nextFilledRaw;
   const remainingQuantity = Math.max(0, totalQuantity - nextFilled);
   const priorAverage = order.averageFillPrice == null ? null : Number(order.averageFillPrice);
   const priorNotional = priorFilled > 0 && Number.isFinite(priorAverage) ? priorFilled * priorAverage : 0;
@@ -65,7 +95,7 @@ export function applyPaperFillTransition(order, fill) {
     sequence: priorEvidence.length + 1,
     quantity: fillQuantity,
     price: fillPrice,
-    observedAt: observedAt(fill.observedAt),
+    observedAt: observedAt(fill?.observedAt),
     source: "PAPER_SIMULATION_ONLY",
     realExchangeFill: false,
   });
