@@ -1397,7 +1397,7 @@ test.describe('real staging release readiness', () => {
     expect(response.status()).toBe(403);
   });
 
-  test('regular: safe access plus authenticated Search and AI Chart certification without real orders', async ({ page, browser }, testInfo) => {
+  test('regular: futures, scanner, paper trading, and safe AI preview are available without real orders', async ({ page, browser }, testInfo) => {
     await login(page, accounts.regular.loginName, accounts.regular.password);
     await expectMembership(page, /정회원/);
     await expectHealthyRoute(page, '/stock-info?asset=coin&coinMarket=futures&symbol=BTCUSDT');
