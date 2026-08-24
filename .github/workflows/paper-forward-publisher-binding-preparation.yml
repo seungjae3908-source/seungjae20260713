@@ -1,0 +1,327 @@
+name: Paper Forward Publisher Binding Preparation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/paper-forward-publisher-binding-preparation.yml
+      - ops/prepare-paper-forward-publisher-binding.sh
+      - market-prediction-lab/tests/paper-forward-publisher-binding-preparation-contract-v1.test.js
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  statuses: read
+
+concurrency:
+  group: paper-forward-publisher-binding-preparation-v1
+  cancel-in-progress: false
+
+jobs:
+  validate-contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify binding-only safety contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          workflow=.github/workflows/paper-forward-publisher-binding-preparation.yml
+          script=ops/prepare-paper-forward-publisher-binding.sh
+          bash -n "$script"
+          grep -F "startsWith(github.event.comment.body, '/prepare-paper-forward-publisher-binding ')" "$workflow" >/dev/null
+          grep -F 'environment: production' "$workflow" >/dev/null
+          grep -F "executionAuthority: 'NONE'" "$script" >/dev/null
+          grep -F 'privateApiAllowed: false' "$script" >/dev/null
+          grep -F 'liveTrading: false' "$script" >/dev/null
+          grep -F 'financialMutationAllowed: false' "$script" >/dev/null
+          ! grep -Eiq 'crontab[[:space:]]+-|pm2[[:space:]]+(start|restart|reload|delete|stop)|systemctl|deploy-production|REAL_ORDER_ENABLED=true|LIVE_TRADING=true|PRIVATE_TRADING_API_ALLOWED=true' "$script"
+
+  gate:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.number == 23 &&
+      github.event.issue.title == 'Staging Readiness Control' &&
+      startsWith(github.event.comment.body, '/prepare-paper-forward-publisher-binding ')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      target_sha: ${{ steps.command.outputs.sha }}
+      staging_run_id: ${{ steps.staging.outputs.run_id }}
+      postgres_run_id: ${{ steps.postgres.outputs.run_id }}
+    steps:
+      - name: Parse exact owner preparation command
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$COMMENT_AUTHOR" == 'seungjae3908-source' ]]
+          [[ "$AUTHOR_ASSOCIATION" == 'OWNER' ]]
+          node <<'NODE'
+          const fs = require('node:fs');
+          const body = String(process.env.COMMENT_BODY ?? '').trim();
+          const match = /^\/prepare-paper-forward-publisher-binding ([0-9a-f]{40})$/.exec(body);
+          if (!match) process.exit(1);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha=${match[1]}\n`);
+          NODE
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.command.outputs.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Require exact current main and Required CI 6/6
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const main = await github.rest.repos.getBranch({ owner: context.repo.owner, repo: context.repo.repo, branch: 'main' });
+            if (main.data.commit.sha !== target) {
+              core.setFailed(`Publisher binding target is stale: target=${target} main=${main.data.commit.sha}`);
+              return;
+            }
+            const required = new Set([
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ]);
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner, repo: context.repo.repo, ref: target, per_page: 100,
+            });
+            const latest = new Map();
+            for (const status of statuses) if (!latest.has(status.context)) latest.set(status.context, status);
+            const evidence = [...required].map((contextName) => latest.get(contextName));
+            if (evidence.length !== 6 || evidence.some((status) => status?.state !== 'success')) {
+              core.setFailed('Exact current main does not have all six successful Required statuses.');
+              return;
+            }
+            const runIds = new Set(evidence.map((status) => /\/actions\/runs\/(\d+)/.exec(String(status.target_url ?? ''))?.[1] ?? null));
+            if (runIds.size !== 1 || runIds.has(null)) {
+              core.setFailed('Required statuses do not share one exact Application CI provenance run.');
+              return;
+            }
+            const runId = Number([...runIds][0]);
+            const run = await github.rest.actions.getWorkflowRun({ owner: context.repo.owner, repo: context.repo.repo, run_id: runId });
+            if (run.data.head_sha !== target || run.data.status !== 'completed' || run.data.conclusion !== 'success') {
+              core.setFailed('Required status provenance is not an exact successful target run.');
+            }
+
+      - name: Locate successful exact-SHA PostgreSQL Auth evidence
+        id: postgres
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo, head_sha: target, branch: 'main', event: 'issue_comment', status: 'completed', per_page: 100,
+            });
+            for (const run of runs) {
+              if (run.name !== 'Staging PostgreSQL Auth Gate' || run.path !== '.github/workflows/staging-postgres-auth-gate.yml' || run.conclusion !== 'success') continue;
+              const artifacts = await github.rest.actions.listWorkflowRunArtifacts({ owner: context.repo.owner, repo: context.repo.repo, run_id: run.id, per_page: 100 });
+              const expected = `staging-postgres-auth-${target}`;
+              const artifact = (artifacts.data.artifacts ?? []).find((item) => item.name === expected && item.expired !== true && item.workflow_run?.head_sha === target);
+              if (artifact) {
+                core.setOutput('run_id', String(run.id));
+                return;
+              }
+            }
+            core.setFailed(`No successful exact-SHA PostgreSQL Auth evidence exists for ${target}.`);
+
+      - name: Locate successful exact-SHA Staging Readiness evidence
+        id: staging
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const name = `staging-verdict-${target}`;
+            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo, name, per_page: 100,
+            });
+            for (const artifact of artifacts) {
+              if (artifact.expired || artifact.workflow_run?.head_sha !== target) continue;
+              const response = await github.rest.actions.getWorkflowRun({ owner: context.repo.owner, repo: context.repo.repo, run_id: artifact.workflow_run.id });
+              const run = response.data;
+              if (run.event === 'workflow_dispatch' && run.head_branch === 'main' && run.head_sha === target && run.path === '.github/workflows/staging-readiness.yml' && run.status === 'completed' && run.conclusion === 'success') {
+                core.setOutput('run_id', String(run.id));
+                return;
+              }
+            }
+            core.setFailed(`No successful exact-SHA Staging Readiness verdict exists for ${target}.`);
+
+      - name: Download and verify release-ready Staging verdict
+        uses: actions/download-artifact@v4
+        with:
+          name: staging-verdict-${{ steps.command.outputs.sha }}
+          path: staging-verdict
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.staging.outputs.run_id }}
+
+      - name: Require exact release-ready Staging verdict
+        run: node api-server/scripts/verify-staging-verdict.mjs staging-verdict/staging-verdict.json
+
+  prepare:
+    if: github.event_name == 'issue_comment'
+    needs: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: production
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      PUBLISHER_ACCOUNT_ID_SHA256: ${{ secrets.PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256 }}
+      TARGET_SHA: ${{ needs.gate.outputs.target_sha }}
+      EVIDENCE_DIR: ${{ github.workspace }}/paper-forward-publisher-binding-evidence
+    steps:
+      - name: Revalidate current main after Production environment approval
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ env.TARGET_SHA }}
+        with:
+          script: |
+            const main = await github.rest.repos.getBranch({ owner: context.repo.owner, repo: context.repo.repo, branch: 'main' });
+            if (main.data.commit.sha !== process.env.TARGET_SHA) core.setFailed(`Publisher binding target became stale: ${process.env.TARGET_SHA} != ${main.data.commit.sha}`);
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Configure protected Production SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          [[ "$PUBLISHER_ACCOUNT_ID_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          umask 077
+          mkdir -p ~/.ssh "$EVIDENCE_DIR"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Verify live Production app supports runtime publisher binding
+        id: before
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          remote=(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$SSH_USER@$SSH_HOST")
+          app_sha="$("${remote[@]}" "tr -d '[:space:]' < /opt/stock-app/.deploy/current-sha")"
+          [[ "$app_sha" =~ ^[0-9a-f]{40}$ ]]
+          "${remote[@]}" "test -r /opt/stock-app/api-server/src/services/paper-trading-state-publisher.service.ts && grep -F 'paper-state-publisher-runtime-binding-v1' /opt/stock-app/api-server/src/services/paper-trading-state-publisher.service.ts >/dev/null"
+          cron_count="$("${remote[@]}" "crontab -l 2>/dev/null | grep -Fc '# stock-app-paper-forward-v1' || true")"
+          [[ "$cron_count" =~ ^[0-9]+$ ]]
+          printf 'app_sha=%s\n' "$app_sha" >> "$GITHUB_OUTPUT"
+          printf 'cron_count=%s\n' "$cron_count" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare exact-current-main publisher binding only
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          evidence="$EVIDENCE_DIR/publisher-binding-preparation.json"
+          printf -v remote_command \
+            'TARGET_SHA=%q PAPER_FORWARD_STATE_ROOT=%q PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256=%q bash -s' \
+            "$TARGET_SHA" '/opt/stock-app-data/paper-forward-v1' "$PUBLISHER_ACCOUNT_ID_SHA256"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_command" \
+            < ops/prepare-paper-forward-publisher-binding.sh > "$evidence"
+          test -s "$evidence"
+
+      - name: Verify no application or schedule mutation occurred
+        env:
+          APP_SHA_BEFORE: ${{ steps.before.outputs.app_sha }}
+          CRON_COUNT_BEFORE: ${{ steps.before.outputs.cron_count }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          remote=(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$SSH_USER@$SSH_HOST")
+          app_sha_after="$("${remote[@]}" "tr -d '[:space:]' < /opt/stock-app/.deploy/current-sha")"
+          cron_count_after="$("${remote[@]}" "crontab -l 2>/dev/null | grep -Fc '# stock-app-paper-forward-v1' || true")"
+          [[ "$app_sha_after" == "$APP_SHA_BEFORE" ]]
+          [[ "$cron_count_after" == "$CRON_COUNT_BEFORE" ]]
+          node --input-type=module - "$EVIDENCE_DIR/publisher-binding-preparation.json" "$TARGET_SHA" <<'NODE'
+          import fs from 'node:fs';
+          const [path, targetSha] = process.argv.slice(2);
+          const value = JSON.parse(fs.readFileSync(path, 'utf8'));
+          if (value?.schemaVersion !== 'paper-forward-publisher-binding-preparation-v1'
+            || value?.status !== 'PREPARED'
+            || value?.targetSha !== targetSha
+            || value?.accountBindingVerified !== true
+            || value?.scheduleMutationPerformed !== false
+            || value?.productionAppMutationPerformed !== false
+            || value?.privateApiUsed !== false
+            || value?.financialMutationPerformed !== false
+            || value?.orderAuthority !== false
+            || value?.liveTrading !== false
+            || value?.sensitiveValuesEmitted !== false) process.exit(1);
+          NODE
+          if grep -Eq '[0-9a-f]{64}' "$EVIDENCE_DIR/publisher-binding-preparation.json"; then
+            echo 'Prohibited publisher digest detected in sanitized evidence.' >&2
+            exit 1
+          fi
+
+      - name: Upload sanitized binding evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-forward-publisher-binding-${{ env.TARGET_SHA }}
+          path: paper-forward-publisher-binding-evidence
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Report binding preparation result to Release Control
+        uses: actions/github-script@v7
+        env:
+          EVIDENCE_PATH: ${{ env.EVIDENCE_DIR }}/publisher-binding-preparation.json
+          APP_SHA: ${{ steps.before.outputs.app_sha }}
+          POSTGRES_RUN_ID: ${{ needs.gate.outputs.postgres_run_id }}
+          STAGING_RUN_ID: ${{ needs.gate.outputs.staging_run_id }}
+        with:
+          script: |
+            const fs = require('node:fs');
+            const value = JSON.parse(fs.readFileSync(process.env.EVIDENCE_PATH, 'utf8'));
+            const lines = [
+              '[PAPER_FORWARD_PUBLISHER_BINDING_PREPARED]',
+              `target_sha: ${value.targetSha}`,
+              `previous_source_sha: ${value.previousSourceSha}`,
+              `production_app_sha_unchanged: ${process.env.APP_SHA}`,
+              `postgres_auth_run_id: ${process.env.POSTGRES_RUN_ID}`,
+              `staging_run_id: ${process.env.STAGING_RUN_ID}`,
+              'status: PREPARED',
+              'schedule_mutation: 0',
+              'production_app_mutation: 0',
+              'private_api: 0',
+              'financial_mutation: 0',
+              'real_order: 0',
+              'live_trading: false',
+              'next: perform an authenticated Paper-only action and require paperStateTransport=PUBLISHED before any schedule activation',
+            ];
+            await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: 23, body: lines.join('\n') });
