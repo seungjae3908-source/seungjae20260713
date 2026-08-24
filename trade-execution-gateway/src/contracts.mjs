@@ -29,10 +29,13 @@ export const SAFETY_CONTRACT = Object.freeze({
   persistence: "LOCAL_FILE_PAPER_ONLY",
   productionDatabaseUsed: false,
   outboundNetwork: false,
+  outboundNetworkScope: "ORDER_EXECUTION_AND_DEFAULT_RUNTIME",
+  executionOutboundNetwork: false,
+  privateTradingOutboundNetwork: false,
+  publicMarketDataOutboundCapable: true,
   publicMarketDataOutboundDefault: false,
   publicMarketDataOutboundRequiresExplicitEnable: true,
   publicMarketDataCredentialsAccepted: false,
-  privateTradingOutboundNetwork: false,
   defaultBind: "127.0.0.1:8792",
 });
 
@@ -104,6 +107,8 @@ export function publicContract() {
     persistence: {
       mode: "LOCAL_FILE_PAPER_ONLY",
       atomicRename: true,
+      fileFsyncBeforeRename: true,
+      directoryFsyncAfterRename: true,
       integrityChecksum: "SHA256",
       previousSnapshotBackup: true,
       durableIdempotency: true,

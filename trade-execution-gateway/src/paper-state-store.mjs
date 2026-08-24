@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, copyFile, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, open, readFile, rename, stat, unlink } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 const SCHEMA_VERSION = 1;
@@ -16,19 +16,11 @@ export class PaperStateStoreError extends Error {
 }
 
 function emptySnapshot() {
-  return {
-    schemaVersion: SCHEMA_VERSION,
-    mode: MODE,
-    orders: [],
-    idempotency: [],
-    revision: 0,
-  };
+  return { schemaVersion: SCHEMA_VERSION, mode: MODE, orders: [], idempotency: [], revision: 0 };
 }
 
 function requireObject(value, code, message) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new PaperStateStoreError(code, message);
-  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new PaperStateStoreError(code, message);
   return value;
 }
 
@@ -143,11 +135,8 @@ export class FilePaperStateStore {
     }
 
     let document;
-    try {
-      document = JSON.parse(raw);
-    } catch {
-      throw new PaperStateStoreError("PAPER_STATE_INVALID_JSON", "paper state file is not valid JSON");
-    }
+    try { document = JSON.parse(raw); }
+    catch { throw new PaperStateStoreError("PAPER_STATE_INVALID_JSON", "paper state file is not valid JSON"); }
     requireObject(document, "PAPER_STATE_INVALID", "paper state document must be an object");
     if (typeof document.checksum !== "string" || document.checksum !== checksum(document)) {
       throw new PaperStateStoreError("PAPER_STATE_CHECKSUM_MISMATCH", "paper state integrity checksum mismatch");
@@ -182,19 +171,44 @@ export class FilePaperStateStore {
       throw new PaperStateStoreError("PAPER_STATE_TOO_LARGE", "serialized paper state exceeds 5 MiB safety limit");
     }
 
-    await mkdir(dirname(this.#filePath), { recursive: true, mode: 0o700 });
+    const stateDir = dirname(this.#filePath);
+    await mkdir(stateDir, { recursive: true, mode: 0o700 });
+    await chmod(stateDir, 0o700);
     const tempPath = `${this.#filePath}.${process.pid}.${randomUUID()}.tmp`;
     const backupPath = `${this.#filePath}.bak`;
-    await writeFile(tempPath, serialized, { encoding: "utf8", mode: 0o600, flag: "wx" });
-    await chmod(tempPath, 0o600);
+    let renamed = false;
     try {
-      await copyFile(this.#filePath, backupPath);
-      await chmod(backupPath, 0o600);
-    } catch (error) {
-      if (error?.code !== "ENOENT") throw error;
+      const handle = await open(tempPath, "wx", 0o600);
+      try {
+        await handle.writeFile(serialized, "utf8");
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      await chmod(tempPath, 0o600);
+
+      try {
+        await copyFile(this.#filePath, backupPath);
+        await chmod(backupPath, 0o600);
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+      }
+
+      await rename(tempPath, this.#filePath);
+      renamed = true;
+      await chmod(this.#filePath, 0o600);
+      const directoryHandle = await open(stateDir, "r");
+      try {
+        await directoryHandle.sync();
+      } finally {
+        await directoryHandle.close();
+      }
+    } finally {
+      if (!renamed) {
+        try { await unlink(tempPath); } catch (error) { if (error?.code !== "ENOENT") throw error; }
+      }
     }
-    await rename(tempPath, this.#filePath);
-    await chmod(this.#filePath, 0o600);
+
     this.#revision = document.revision;
     this.#loaded = true;
     return this.getHealth();
@@ -208,6 +222,8 @@ export class FilePaperStateStore {
       loaded: this.#loaded,
       durableLocalFile: true,
       atomicRename: true,
+      fileFsyncBeforeRename: true,
+      directoryFsyncAfterRename: true,
       integrityChecksum: "SHA256",
       previousSnapshotBackup: true,
       productionDatabaseUsed: false,
