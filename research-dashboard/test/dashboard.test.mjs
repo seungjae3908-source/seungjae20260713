@@ -23,10 +23,16 @@ async function fixture() {
     lanes: [{ market: 'KR', status: 'ready' }, { market: 'US', status: 'ready' }],
   }));
   await writeFile(join(root, 'forward', 'paper', 'state', 'recurring-paper-loop.json'), JSON.stringify({
-    cycles: [{ id: 1 }], positions: [{ id: 1 }], settlements: [{ id: 1 }, { id: 2 }],
+    cycles: [{ id: 1 }], samples: [], positions: [{ id: 1 }], settlements: [{ id: 1 }, { id: 2 }],
   }));
   await writeFile(join(root, 'forward', 'shadow-summary.json'), JSON.stringify({ groups: {
-    rule0: { total: 5, settled: 3, pending: 2, predictionHealth: { collapsed: false }, metrics: { macroF1: .51, balancedAccuracy: .55 } },
+    rule0: {
+      total: 5, settled: 3, pending: 2,
+      candidate: {
+        predictionHealth: { collapsed: false }, macroF1: .51, balancedAccuracy: .55,
+        perClass: { bullish: { recall: .4 }, neutral: { recall: .5 }, bearish: { recall: 0 } },
+      },
+    },
   }}));
   await writeFile(join(root, 'forward', 'shadow-state.json'), JSON.stringify({ bucket: { records: [
     { status: 'settled' }, { status: 'settled' }, { status: 'pending' },
@@ -45,6 +51,7 @@ test('overview exposes only summarized read-only research evidence', async () =>
   assert.equal(overview.paper.ledger.settlementCount, 2);
   assert.equal(overview.shadow.records.settledRecords, 2);
   assert.equal(overview.shadow.groups[0].collapsed, false);
+  assert.equal(overview.shadow.groups[0].bearRecall, 0);
   assert.equal(overview.profitability.proven, false);
 });
 
