@@ -1,0 +1,435 @@
+name: Paper Forward Flat Snapshot Republish
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/paper-forward-flat-snapshot-republish.yml
+      - ops/run-paper-forward-flat-snapshot-republish.mjs
+      - market-prediction-lab/tests/paper-forward-flat-snapshot-republish-contract-v1.test.js
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  statuses: read
+
+concurrency:
+  group: paper-forward-flat-snapshot-republish-v1
+  cancel-in-progress: false
+
+jobs:
+  validate-contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify flat snapshot republish source and workflow contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check ops/run-paper-forward-flat-snapshot-republish.mjs
+          node --check market-prediction-lab/tests/paper-forward-flat-snapshot-republish-contract-v1.test.js
+          node --test market-prediction-lab/tests/paper-forward-flat-snapshot-republish-contract-v1.test.js
+
+  gate:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.number == 23 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control' &&
+      github.event.comment.user.login == 'seungjae3908-source' &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/run-paper-forward-flat-snapshot-republish ')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      target_sha: ${{ steps.command.outputs.target_sha }}
+      auth_run_id: ${{ steps.auth.outputs.run_id }}
+      staging_run_id: ${{ steps.staging.outputs.run_id }}
+      production_run_id: ${{ steps.production.outputs.run_id }}
+    steps:
+      - name: Parse exact owner republish command
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const body = String(process.env.COMMENT_BODY ?? '').trim();
+          const match = /^\/run-paper-forward-flat-snapshot-republish ([0-9a-f]{40})$/.exec(body);
+          if (!match) process.exit(1);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `target_sha=${match[1]}\n`);
+          NODE
+
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Require immutable exact current main
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main
+          [[ "$(git rev-parse origin/main^{commit})" == "$TARGET_SHA" ]]
+          [[ "$(git rev-parse HEAD^{commit})" == "$TARGET_SHA" ]]
+
+      - name: Require Required CI 6/6 SUCCESS from one exact Application CI run
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        with:
+          script: |
+            const required = [
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            const sha = process.env.TARGET_SHA;
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner, repo: context.repo.repo, ref: sha, per_page: 100,
+            });
+            const latest = new Map();
+            for (const status of statuses) if (!latest.has(status.context)) latest.set(status.context, status);
+            const selected = required.map((name) => latest.get(name));
+            if (selected.some((status) => status?.state !== 'success')) {
+              core.setFailed('Target current main does not have Required CI 6/6 SUCCESS.');
+              return;
+            }
+            const runIds = new Set(selected.map((status) => /\/actions\/runs\/(\d+)/.exec(String(status?.target_url ?? ''))?.[1] ?? null));
+            if (runIds.size !== 1 || runIds.has(null)) {
+              core.setFailed('Required CI 6/6 does not share one Application CI provenance run.');
+              return;
+            }
+            const runId = Number([...runIds][0]);
+            const run = (await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner, repo: context.repo.repo, run_id: runId,
+            })).data;
+            if (run.head_sha !== sha || run.status !== 'completed' || run.conclusion !== 'success') {
+              core.setFailed('Application CI provenance is not exact and successful.');
+            }
+
+      - name: Locate successful exact-SHA PostgreSQL Auth evidence
+        id: auth
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const expected = `staging-postgres-auth-${target}`;
+            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo, name: expected, per_page: 100,
+            });
+            for (const artifact of artifacts.filter((item) => !item.expired && item.workflow_run?.head_sha === target)) {
+              const run = (await github.rest.actions.getWorkflowRun({
+                owner: context.repo.owner, repo: context.repo.repo, run_id: artifact.workflow_run.id,
+              })).data;
+              if (run.name === 'Staging PostgreSQL Auth Gate'
+                && run.event === 'workflow_dispatch'
+                && run.head_branch === 'main'
+                && run.head_sha === target
+                && run.status === 'completed'
+                && run.conclusion === 'success') {
+                core.setOutput('run_id', String(run.id));
+                return;
+              }
+            }
+            core.setFailed(`No successful exact-SHA PostgreSQL Auth evidence exists for ${target}.`);
+
+      - name: Locate successful exact-SHA Staging Readiness evidence
+        id: staging
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const name = `staging-verdict-${target}`;
+            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo, name, per_page: 100,
+            });
+            for (const artifact of artifacts.filter((item) => !item.expired && item.workflow_run?.head_sha === target)) {
+              const run = (await github.rest.actions.getWorkflowRun({
+                owner: context.repo.owner, repo: context.repo.repo, run_id: artifact.workflow_run.id,
+              })).data;
+              if (run.name === 'Staging Readiness'
+                && run.path === '.github/workflows/staging-readiness.yml'
+                && run.event === 'workflow_dispatch'
+                && run.head_branch === 'main'
+                && run.head_sha === target
+                && run.status === 'completed'
+                && run.conclusion === 'success') {
+                core.setOutput('run_id', String(run.id));
+                return;
+              }
+            }
+            core.setFailed(`No successful exact-SHA Staging Readiness verdict exists for ${target}.`);
+
+      - name: Download exact Staging release verdict
+        uses: actions/download-artifact@v4
+        with:
+          name: staging-verdict-${{ steps.command.outputs.target_sha }}
+          path: staging-verdict
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.staging.outputs.run_id }}
+
+      - name: Require release_ready=true
+        run: node api-server/scripts/verify-staging-verdict.mjs staging-verdict/staging-verdict.json
+
+      - name: Require successful official Production Deploy for exact target
+        id: production
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head_sha: target,
+              branch: 'main',
+              event: 'workflow_dispatch',
+              status: 'completed',
+              per_page: 100,
+            });
+            const accepted = runs.filter((run) => run.name === 'Production Deploy'
+              && run.path === '.github/workflows/production-deploy.yml'
+              && run.head_sha === target
+              && run.status === 'completed'
+              && run.conclusion === 'success')[0];
+            if (!accepted) {
+              core.setFailed(`No successful official Production Deploy exists for ${target}.`);
+              return;
+            }
+            core.setOutput('run_id', String(accepted.id));
+
+      - name: Record non-mutating republish gate result
+        shell: bash
+        run: |
+          {
+            echo '## Paper Forward flat snapshot republish gate passed'
+            echo
+            echo "- Target SHA: \`${{ steps.command.outputs.target_sha }}\`"
+            echo "- PostgreSQL Auth Run: \`${{ steps.auth.outputs.run_id }}\`"
+            echo "- Staging Readiness Run: \`${{ steps.staging.outputs.run_id }}\`"
+            echo "- Production Deploy Run: \`${{ steps.production.outputs.run_id }}\`"
+            echo '- Paper mutation at gate: `0`'
+            echo '- Protected Production environment bypass: `0`'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  execute:
+    if: github.event_name == 'issue_comment'
+    needs: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: production
+    env:
+      TARGET_SHA: ${{ needs.gate.outputs.target_sha }}
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      PUBLISHER_ACCOUNT_ID_SHA256: ${{ secrets.PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256 }}
+      PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
+      PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
+      EVIDENCE_DIR: ${{ github.workspace }}/paper-forward-flat-snapshot-republish-evidence
+    steps:
+      - name: Revalidate exact current main after protected Production approval
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ env.TARGET_SHA }}
+        with:
+          script: |
+            const current = (await github.rest.repos.getBranch({
+              owner: context.repo.owner, repo: context.repo.repo, branch: 'main',
+            })).data.commit.sha;
+            if (current !== process.env.TARGET_SHA) {
+              core.setFailed(`Republish target became stale during Production approval: ${process.env.TARGET_SHA} != ${current}`);
+            }
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Validate protected execution secrets without emitting values
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          [[ "$PUBLISHER_ACCOUNT_ID_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          test -n "$PRODUCTION_QA_LOGIN"
+          test -n "$PRODUCTION_QA_PASSWORD"
+
+      - name: Configure protected Production SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          mkdir -p ~/.ssh "$EVIDENCE_DIR"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Republish flat Paper snapshot with zero trade authority
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          local_env="$(mktemp)"
+          remote_env="/tmp/paper-flat-republish-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.env"
+          evidence="$EVIDENCE_DIR/flat-snapshot-republish.json"
+          remote=(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$SSH_USER@$SSH_HOST")
+          cleanup() {
+            rm -f "$local_env"
+            "${remote[@]}" "rm -f -- $(printf '%q' "$remote_env")" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          {
+            printf 'export TARGET_SHA=%q\n' "$TARGET_SHA"
+            printf 'export PUBLISHER_ACCOUNT_ID_SHA256=%q\n' "$PUBLISHER_ACCOUNT_ID_SHA256"
+            printf 'export PRODUCTION_QA_LOGIN=%q\n' "$PRODUCTION_QA_LOGIN"
+            printf 'export PRODUCTION_QA_PASSWORD=%q\n' "$PRODUCTION_QA_PASSWORD"
+            printf 'export PAPER_FORWARD_STATE_ROOT=%q\n' '/opt/stock-app-data/paper-forward-v1'
+            printf 'export LIVE_DIR=%q\n' '/opt/stock-app'
+            printf 'export PM2_NAME=%q\n' 'stock-app'
+            printf 'export LIVE_PORT=%q\n' '8080'
+          } > "$local_env"
+          chmod 600 "$local_env"
+          scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$local_env" "$SSH_USER@$SSH_HOST:$remote_env"
+          "${remote[@]}" "chmod 600 -- $(printf '%q' "$remote_env")"
+          remote_command="$(printf 'set -Eeuo pipefail; source %q; PAPER_FLAT_SNAPSHOT_REPUBLISH_EXECUTE=1 node --input-type=module -' "$remote_env")"
+          "${remote[@]}" "$remote_command" < ops/run-paper-forward-flat-snapshot-republish.mjs > "$evidence"
+          test -s "$evidence"
+
+      - name: Verify sanitized REPUBLISHED_FLAT evidence
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --input-type=module - "$EVIDENCE_DIR/flat-snapshot-republish.json" "$TARGET_SHA" <<'NODE'
+          import fs from 'node:fs';
+          const [path, targetSha] = process.argv.slice(2);
+          const raw = fs.readFileSync(path, 'utf8');
+          if (/[0-9a-f]{64}/u.test(raw)) process.exit(1);
+          const v = JSON.parse(raw);
+          const ok = v?.schemaVersion === 'paper-forward-flat-snapshot-republish-v1'
+            && v?.status === 'REPUBLISHED_FLAT'
+            && v?.targetSha === targetSha
+            && /^[0-9a-f]{40}$/u.test(String(v?.previousSourceSha ?? ''))
+            && v?.publisherAccountBound === true
+            && v?.paperStateTransport === 'PUBLISHED'
+            && v?.finalFlat === true
+            && v?.openPositionCountBefore === 0 && v?.openPositionCountAfter === 0
+            && v?.pendingOrderCountBefore === 0 && v?.pendingOrderCountAfter === 0
+            && v?.usedMarginZero === true && v?.unrealizedPnlZero === true
+            && v?.positionsPreserved === true && v?.ordersPreserved === true
+            && v?.fillsPreserved === true && v?.journalPreserved === true
+            && v?.accountFinancialsPreserved === true && v?.riskWindowNormalizationOnly === true
+            && v?.freshnessEvent === 'mark_price' && v?.tradeFillCount === 0
+            && v?.paperTradeMutation === 0 && v?.paperFinancialMutation === 0
+            && v?.paperMetadataRepublish === 1 && v?.bindingUpdated === true && v?.snapshotRepublished === true
+            && v?.scheduleActiveBefore === false && v?.scheduleActiveAfter === false && v?.scheduleMutation === 0
+            && v?.productionAppMutation === 0 && v?.applicationDatabaseMutation === 0
+            && v?.privateApiUsed === false && v?.realOrder === 0 && v?.realCancel === 0
+            && v?.realAmend === 0 && v?.transfer === 0 && v?.withdrawal === 0
+            && v?.liveTrading === false && v?.executionAuthority === 'NONE'
+            && v?.naturalSampleCredit === 0 && v?.naturalSettlementCredit === 0
+            && v?.sensitiveValuesEmitted === false;
+          if (!ok) process.exit(1);
+          NODE
+
+      - name: Upload immutable sanitized republish evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-forward-flat-snapshot-republish-${{ env.TARGET_SHA }}
+          path: ${{ env.EVIDENCE_DIR }}/flat-snapshot-republish.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish sanitized Release Control completion
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ env.TARGET_SHA }}
+          AUTH_RUN_ID: ${{ needs.gate.outputs.auth_run_id }}
+          STAGING_RUN_ID: ${{ needs.gate.outputs.staging_run_id }}
+          PRODUCTION_RUN_ID: ${{ needs.gate.outputs.production_run_id }}
+          EVIDENCE_PATH: ${{ env.EVIDENCE_DIR }}/flat-snapshot-republish.json
+        with:
+          script: |
+            const fs = require('node:fs');
+            const v = JSON.parse(fs.readFileSync(process.env.EVIDENCE_PATH, 'utf8'));
+            const lines = [
+              '[PAPER_FORWARD_FLAT_SNAPSHOT_REPUBLISHED]',
+              `target_sha: ${process.env.TARGET_SHA}`,
+              `previous_source_sha: ${v.previousSourceSha}`,
+              `postgres_auth_run_id: ${process.env.AUTH_RUN_ID}`,
+              `staging_run_id: ${process.env.STAGING_RUN_ID}`,
+              `production_deploy_run_id: ${process.env.PRODUCTION_RUN_ID}`,
+              `republish_run_id: ${context.runId}`,
+              'status: REPUBLISHED_FLAT',
+              'open_positions: 0',
+              'pending_orders: 0',
+              'used_margin_zero: true',
+              'unrealized_pnl_zero: true',
+              'positions_orders_fills_journal_preserved: true',
+              'account_financials_preserved: true',
+              'paper_trade_mutation: 0',
+              'paper_financial_mutation: 0',
+              'schedule_mutation: 0',
+              'production_app_mutation: 0',
+              'private_api: 0',
+              'real_order: 0',
+              'live_trading: false',
+              'natural_sample_credit: 0',
+              'natural_settlement_credit: 0',
+            ];
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: 23, body: lines.join('\n'),
+            });
+
+      - name: Record zero-authority completion summary
+        shell: bash
+        run: |
+          {
+            echo '## Paper Forward flat snapshot republish complete'
+            echo
+            echo "- Target SHA: \`$TARGET_SHA\`"
+            echo '- Status: `REPUBLISHED_FLAT`'
+            echo '- Paper trade/financial mutation: `0 / 0`'
+            echo '- Schedule mutation: `0`'
+            echo '- Production app mutation: `0`'
+            echo '- Private API / real order / live trading: `0 / 0 / false`'
+            echo '- Natural sample / settlement credit: `0 / 0`'
+          } >> "$GITHUB_STEP_SUMMARY"
