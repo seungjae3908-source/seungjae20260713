@@ -7,6 +7,7 @@ import { comparePaperLiveParity } from "../src/parity-contract.mjs";
 import { TradeExecutionGateway } from "../src/gateway.mjs";
 
 const AT = "2026-08-24T11:00:00.000Z";
+const BEFORE = "2026-08-24T10:59:58.000Z";
 
 function schedule(overrides = {}) {
   return {
@@ -34,6 +35,18 @@ function futuresSchedule() {
     effectiveFrom: "2026-08-24T00:00:00.000Z",
     effectiveTo: "2026-08-25T00:00:00.000Z",
     rates: { makerFeeBps: 1, takerFeeBps: 2, buyTaxBps: 0, sellTaxBps: 0, fxConversionBps: 0 },
+  };
+}
+
+function benchmark(overrides = {}) {
+  return {
+    market: "KR_STOCK",
+    symbol: "005930",
+    arrivalPrice: 1000,
+    observedAt: BEFORE,
+    source: "TEST_BENCHMARK",
+    serverAttested: false,
+    ...overrides,
   };
 }
 
@@ -68,6 +81,7 @@ test("v0.6 publishes TCA, explicit-cost, and parity preview contracts without li
   assert.equal(contract.executionQuality.hardCodedBrokerFees, false);
   assert.equal(contract.executionQuality.hardCodedTaxes, false);
   assert.equal(contract.executionQuality.hardCodedFundingConvention, false);
+  assert.equal(contract.executionQuality.callerMaySelfAssertServerAttestation, false);
   assert.equal(contract.executionQuality.executionAuthority, "NONE");
   assert.equal(contract.parity.activationAllowed, false);
 });
@@ -83,6 +97,21 @@ test("cost schedule requires exact identity and active effective window", () => 
   );
 });
 
+test("caller cannot self-assert cost or funding server attestation", () => {
+  assert.throws(
+    () => normalizeExecutionCostSchedule(schedule({ serverAttested: true }), { market: "KR_STOCK", symbol: "005930", atMs: Date.parse(AT) }),
+    (error) => error.code === "CALLER_ATTESTATION_REJECTED",
+  );
+  assert.throws(
+    () => estimateExecutionCosts({
+      market: "CRYPTO_FUTURES", provider: "bitget", symbol: "BTCUSDT", side: "LONG", liquidityRole: "MAKER",
+      quantity: 1, price: 10_000, executionAt: AT, schedule: futuresSchedule(),
+      fundingEvents: [{ rateBps: 5, payerSide: "LONG", effectiveAt: AT, source: "TEST", serverAttested: true }],
+    }),
+    (error) => error.code === "CALLER_ATTESTATION_REJECTED",
+  );
+});
+
 test("explicit maker/taker, tax, and FX evidence produces estimated components only", () => {
   const result = estimateExecutionCosts({
     market: "KR_STOCK", symbol: "005930", side: "SELL", liquidityRole: "TAKER",
@@ -93,6 +122,7 @@ test("explicit maker/taker, tax, and FX evidence produces estimated components o
   assert.equal(result.components.estimatedTradingFee, 2);
   assert.equal(result.components.estimatedTax, 10);
   assert.equal(result.components.estimatedFxConversionCost, 5);
+  assert.equal(result.estimatedExecutionCost, 17);
   assert.equal(result.estimatedTotalCost, 17);
   assert.equal(result.actualBrokerChargeEvidence, false);
 });
@@ -111,6 +141,17 @@ test("funding direction is explicit in evidence instead of hard-coded provider c
   assert.equal(shortCost.components.estimatedFundingCost, -5);
 });
 
+test("funding after the requested analysis window is rejected", () => {
+  assert.throws(
+    () => estimateExecutionCosts({
+      market: "CRYPTO_FUTURES", provider: "bitget", symbol: "BTCUSDT", side: "LONG", liquidityRole: "MAKER",
+      quantity: 1, price: 10_000, executionAt: AT, schedule: futuresSchedule(),
+      fundingEvents: [{ rateBps: 5, payerSide: "LONG", effectiveAt: "2026-08-24T11:00:01Z", source: "TEST" }],
+    }),
+    (error) => error.code === "FUNDING_EVENT_AFTER_ANALYSIS_WINDOW",
+  );
+});
+
 test("Paper TCA computes fill VWAP, implementation shortfall, and all-in cost without claiming live evidence", async () => {
   const gateway = new TradeExecutionGateway({
     policy: { maxQuantityByMarket: { KR_STOCK: 100 }, maxNotionalByMarket: { KR_STOCK: 1_000_000 } },
@@ -123,7 +164,7 @@ test("Paper TCA computes fill VWAP, implementation shortfall, and all-in cost wi
   const filled = await gateway.applyPaperFill(order.orderId, { quantity: 1, price: 1000, observedAt: AT });
   const tca = analyzeExecutionQuality({
     order: filled,
-    benchmark: { arrivalPrice: 998, decisionPrice: 997, expectedFillPrice: 999, observedAt: AT, source: "TEST_BENCHMARK", serverAttested: false },
+    benchmark: benchmark({ arrivalPrice: 998, decisionPrice: 997, expectedFillPrice: 999 }),
     liquidityRole: "TAKER",
     costSchedule: schedule(),
   });
@@ -131,8 +172,29 @@ test("Paper TCA computes fill VWAP, implementation shortfall, and all-in cost wi
   assert.equal(tca.fillVwap, 999.5);
   assert.ok(tca.metrics.implementationShortfallBps > 0);
   assert.ok(tca.metrics.allInShortfallBps > tca.metrics.implementationShortfallBps);
+  assert.equal(tca.benchmark.authority, "CALLER_SUPPLIED_UNATTESTED");
   assert.equal(tca.actualLiveExecutionMeasured, false);
   assert.equal(tca.executionAuthority, "NONE");
+});
+
+test("TCA benchmark identity, timing, and attestation fail closed", () => {
+  const order = {
+    intent: { market: "KR_STOCK", symbol: "005930", side: "BUY", quantity: 1 },
+    paperFillEvidence: [{ quantity: 1, price: 1000, observedAt: AT, source: "PAPER_SIMULATION_ONLY", realExchangeFill: false }],
+  };
+  const base = { order, liquidityRole: "MAKER", costSchedule: schedule() };
+  assert.throws(
+    () => analyzeExecutionQuality({ ...base, benchmark: benchmark({ market: "US_STOCK" }) }),
+    (error) => error.code === "TCA_BENCHMARK_IDENTITY_MISMATCH",
+  );
+  assert.throws(
+    () => analyzeExecutionQuality({ ...base, benchmark: benchmark({ observedAt: "2026-08-24T11:00:01Z" }) }),
+    (error) => error.code === "TCA_BENCHMARK_AFTER_FILL",
+  );
+  assert.throws(
+    () => analyzeExecutionQuality({ ...base, benchmark: benchmark({ serverAttested: true }) }),
+    (error) => error.code === "CALLER_ATTESTATION_REJECTED",
+  );
 });
 
 test("partial fill TCA remains explicitly partial", () => {
@@ -140,27 +202,24 @@ test("partial fill TCA remains explicitly partial", () => {
     intent: { market: "KR_STOCK", symbol: "005930", side: "BUY", quantity: 10 },
     paperFillEvidence: [{ quantity: 4, price: 1000, observedAt: AT, source: "PAPER_SIMULATION_ONLY", realExchangeFill: false }],
   };
-  const tca = analyzeExecutionQuality({
-    order,
-    benchmark: { arrivalPrice: 1000, observedAt: AT, source: "TEST_BENCHMARK", serverAttested: false },
-    liquidityRole: "MAKER",
-    costSchedule: schedule(),
-  });
+  const tca = analyzeExecutionQuality({ order, benchmark: benchmark(), liquidityRole: "MAKER", costSchedule: schedule() });
   assert.equal(tca.completion, "PARTIAL");
   assert.equal(tca.fillRatio, 0.4);
 });
 
-test("TCA rejects overfill and claimed real-exchange fill evidence", () => {
+test("TCA rejects overfill, fill time regression, and claimed real-exchange evidence", () => {
   const order = { intent: { market: "KR_STOCK", symbol: "005930", side: "BUY", quantity: 1 } };
-  const base = {
-    order,
-    benchmark: { arrivalPrice: 1000, observedAt: AT, source: "TEST_BENCHMARK", serverAttested: false },
-    liquidityRole: "TAKER",
-    costSchedule: schedule(),
-  };
+  const base = { order, benchmark: benchmark(), liquidityRole: "TAKER", costSchedule: schedule() };
   assert.throws(
     () => analyzeExecutionQuality({ ...base, fills: [{ quantity: 2, price: 1000, observedAt: AT, source: "CALLER_SUPPLIED_READ_ONLY" }] }),
     (error) => error.code === "TCA_OVERFILL_REJECTED",
+  );
+  assert.throws(
+    () => analyzeExecutionQuality({ ...base, fills: [
+      { quantity: 0.5, price: 1000, observedAt: AT, source: "CALLER_SUPPLIED_READ_ONLY" },
+      { quantity: 0.5, price: 1000, observedAt: BEFORE, source: "CALLER_SUPPLIED_READ_ONLY" },
+    ] }),
+    (error) => error.code === "TCA_FILL_TIME_REGRESSION",
   );
   assert.throws(
     () => analyzeExecutionQuality({ ...base, fills: [{ quantity: 1, price: 1000, observedAt: AT, source: "CALLER_SUPPLIED_READ_ONLY", realExchangeFill: true }] }),
@@ -175,7 +234,7 @@ test("explicit TCA thresholds classify breaches without changing order authority
   };
   const tca = analyzeExecutionQuality({
     order,
-    benchmark: { arrivalPrice: 1000, expectedFillPrice: 1000, observedAt: AT, source: "TEST_BENCHMARK", serverAttested: false },
+    benchmark: benchmark({ arrivalPrice: 1000, expectedFillPrice: 1000 }),
     liquidityRole: "TAKER",
     costSchedule: schedule(),
     policy: { maxAllInShortfallBps: 50, maxPredictionErrorBps: 50 },

@@ -29,21 +29,13 @@ Production 앱과 분리된 **PAPER 전용 OMS / Execution Safety / Execution Qu
 
 ## v0.6 Execution Cost Evidence
 
-수수료/세금/환전비용/펀딩을 **코드에 현재 값으로 하드코딩하지 않습니다.**
+수수료/세금/환전비용/펀딩을 코드에 현재 값으로 하드코딩하지 않습니다.
 
 `POST /v1/execution/costs/preview`
 
-비용 schedule은 반드시 다음을 명시합니다.
+비용 schedule은 market/provider/symbol, source/version, currency, effective window, maker/taker fee, buy/sell tax, FX conversion cost를 명시해야 합니다. Caller가 `serverAttested=true`를 직접 넣어 신뢰도를 올릴 수 없습니다.
 
-- market/provider/symbol identity
-- source + scheduleVersion
-- currency
-- effectiveFrom/effectiveTo
-- maker/taker fee bps
-- buy/sell tax bps
-- FX conversion bps
-
-선물 funding은 각 event마다 `rateBps`와 `payerSide=LONG|SHORT`를 명시하므로 provider 방향 규칙을 코드가 추측하지 않습니다.
+선물 funding은 각 event에 `rateBps`와 `payerSide=LONG|SHORT`를 명시하므로 provider funding 방향을 코드가 추측하지 않습니다. 또한 분석 종료시점보다 미래의 funding event는 포함하지 않습니다.
 
 결과는 항상 `READ_ONLY_PAPER_COST_ESTIMATE`이며 actual broker charge evidence가 아닙니다.
 
@@ -52,14 +44,9 @@ Production 앱과 분리된 **PAPER 전용 OMS / Execution Safety / Execution Qu
 - `POST /v1/execution/tca/preview`
 - `POST /v1/paper/orders/:orderId/tca/preview`
 
-측정값:
+측정값은 fill VWAP, fill ratio, arrival/decision shortfall, pre-trade prediction error, 명시적 비용을 포함한 all-in shortfall입니다.
 
-- fill VWAP
-- fill ratio / COMPLETE vs PARTIAL
-- arrival-price implementation shortfall bps
-- decision-price shortfall bps
-- pre-trade expected-fill prediction error bps
-- explicit cost evidence 포함 all-in shortfall bps
+TCA benchmark는 반드시 분석 주문과 동일한 market/symbol이어야 하고 첫 fill보다 늦은 arrival benchmark는 거부됩니다. Generic TCA endpoint의 benchmark는 caller-supplied unattested only이며 caller가 server attestation을 자가 선언할 수 없습니다.
 
 실제 거래소 fill이라고 주장하는 evidence는 v0.6에서 검증된 것으로 받아들이지 않습니다. Paper fill 또는 caller-supplied read-only evidence만 분석하며 `executionAuthority=NONE`입니다.
 
@@ -67,30 +54,11 @@ Production 앱과 분리된 **PAPER 전용 OMS / Execution Safety / Execution Qu
 
 `POST /v1/parity/preview`
 
-현재 canonical provider 계약:
+Canonical provider 계약은 KR/US stock=Toss, crypto spot=Upbit, crypto futures=Bitget입니다. Live candidate는 반드시 `runtimeStatus=DISABLED`이고 private/order/cancel/amend runtime 권한이 모두 꺼져 있어야 합니다.
 
-- KR/US stock → Toss
-- crypto spot → Upbit
-- crypto futures → Bitget
+intent fields/order types/sides/OMS state/idempotency/strict precision/partial fill/cancel/replace/risk revalidation/cost evidence/reconciliation/futures reduceOnly을 비교합니다.
 
-Live candidate는 반드시 `runtimeStatus=DISABLED`이고 private/order/cancel/amend runtime 권한이 모두 꺼져 있어야 합니다.
-
-비교 항목:
-
-- order intent fields
-- LIMIT/MARKET
-- cash BUY/SELL 또는 futures LONG/SHORT
-- OMS state model
-- idempotency
-- strict precision
-- partial fill
-- cancel/replace semantics
-- risk revalidation
-- cost evidence
-- reconciliation
-- futures reduceOnly
-
-계약이 전부 맞아도 결과는 `CONTRACT_MATCH_DISABLED`일 뿐이며 `activationAllowed=false`, 실제 Paper↔Live runtime parity proven=false입니다.
+모두 맞아도 `CONTRACT_MATCH_DISABLED`일 뿐이며 `activationAllowed=false`, 실제 Paper↔Live runtime parity proven=false입니다.
 
 ## 검증
 
@@ -104,10 +72,10 @@ npm test
 ## 의도적 미연결
 
 - authenticated read-only account/order reconciliation adapter
-- 실제 broker/exchange fee statement ingestion
-- actual private order/cancel/amend adapter
+- actual broker/exchange fee statement ingestion
 - server-authoritative live portfolio policy
 - real Paper↔Live runtime replay/parity harness
+- actual private order/cancel/amend adapter
 - Production route / 실주문
 
 별도 승인 전까지 연결하지 않습니다.
