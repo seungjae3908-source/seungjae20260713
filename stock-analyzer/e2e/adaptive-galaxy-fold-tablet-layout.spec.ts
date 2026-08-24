@@ -92,6 +92,14 @@ const GEOMETRIES = [
   { width: 1440, height: 900, viewport: 'desktop', builder: 'desktop' },
 ] as const;
 
+const LANDSCAPES = [
+  { width: 740, height: 320, viewport: 'medium' },
+  { width: 844, height: 390, viewport: 'medium' },
+  { width: 915, height: 412, viewport: 'tablet' },
+  { width: 960, height: 540, viewport: 'tablet' },
+  { width: 1024, height: 600, viewport: 'tablet' },
+] as const;
+
 test('layout adapts across phone, fold-open, tablet and desktop widths without reload or overflow', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await installMocks(page);
@@ -139,22 +147,34 @@ test('layout adapts across phone, fold-open, tablet and desktop widths without r
   }
 });
 
-test('bottom navigation menu remains inside a short landscape fold/phone viewport', async ({ page }) => {
-  await page.setViewportSize({ width: 960, height: 540 });
+test('bottom navigation menu remains inside every required short landscape viewport without reload', async ({ page }) => {
+  await page.setViewportSize({ width: 740, height: 320 });
   await installMocks(page);
   await page.goto('/more');
 
+  const runtime = page.getByTestId('ui-builder-runtime-settings');
   const nav = page.getByRole('navigation', { name: '주요 메뉴' });
   await expect(nav).toBeVisible();
   const technical = nav.getByRole('button', { name: '기술' });
-  await technical.click();
-  const menu = page.getByRole('menu', { name: '기술 메뉴' });
-  await expect(menu).toBeVisible();
 
-  const rect = await menu.boundingBox();
-  expect(rect).not.toBeNull();
-  expect(rect!.x).toBeGreaterThanOrEqual(0);
-  expect(rect!.x + rect!.width).toBeLessThanOrEqual(960);
-  expect(rect!.y).toBeGreaterThanOrEqual(0);
-  expect(rect!.y + rect!.height).toBeLessThanOrEqual(540);
+  for (const geometry of LANDSCAPES) {
+    await page.setViewportSize({ width: geometry.width, height: geometry.height });
+    await expect(runtime).toHaveAttribute('data-adaptive-viewport', geometry.viewport);
+    await expect(runtime).toHaveAttribute('data-builder-device', 'mobile');
+
+    if (await page.getByRole('menu', { name: '기술 메뉴' }).isVisible().catch(() => false)) {
+      await page.keyboard.press('Escape');
+    }
+    await technical.click();
+    const menu = page.getByRole('menu', { name: '기술 메뉴' });
+    await expect(menu).toBeVisible();
+
+    const rect = await menu.boundingBox();
+    expect(rect, `${geometry.width}x${geometry.height} menu missing`).not.toBeNull();
+    expect(rect!.x).toBeGreaterThanOrEqual(0);
+    expect(rect!.x + rect!.width).toBeLessThanOrEqual(geometry.width);
+    expect(rect!.y).toBeGreaterThanOrEqual(0);
+    expect(rect!.y + rect!.height).toBeLessThanOrEqual(geometry.height);
+    await page.keyboard.press('Escape');
+  }
 });
