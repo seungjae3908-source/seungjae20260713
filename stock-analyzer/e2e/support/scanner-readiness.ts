@@ -7,6 +7,9 @@ type ScannerResponse = {
   dataState?: string;
   cards?: unknown[];
   message?: string;
+  error?: unknown;
+  outcome?: unknown;
+  providerHealth?: unknown;
   execution?: {
     partial?: boolean;
     timedOut?: boolean;
@@ -34,6 +37,42 @@ export type ScannerReadinessEvidence = {
 type ScannerOpenOptions = {
   open?: () => Promise<void>;
 };
+
+function safeDiagnosticText(value: unknown, maximumLength: number): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.replace(/[\u0000-\u001f\u007f]+/gu, ' ').trim();
+  return normalized ? normalized.slice(0, maximumLength) : null;
+}
+
+export function scannerFailureDiagnostic(status: number, value: unknown): string {
+  const body = value && typeof value === 'object' ? value as Record<string, unknown> : null;
+  const providerRows = Array.isArray(body?.providerHealth) ? body.providerHealth : [];
+  const providerHealth = providerRows.slice(0, 8).flatMap((row) => {
+    if (!row || typeof row !== 'object') return [];
+    const candidate = row as Record<string, unknown>;
+    return [{
+      provider: safeDiagnosticText(candidate.provider, 80),
+      state: safeDiagnosticText(candidate.state, 40),
+      latencyMs: typeof candidate.latencyMs === 'number' && Number.isFinite(candidate.latencyMs)
+        ? Math.max(0, Math.round(candidate.latencyMs))
+        : null,
+      retryCount: typeof candidate.retryCount === 'number' && Number.isFinite(candidate.retryCount)
+        ? Math.max(0, Math.round(candidate.retryCount))
+        : null,
+      timeout: candidate.timeout === true,
+      freshness: safeDiagnosticText(candidate.freshness, 40),
+      failureReason: safeDiagnosticText(candidate.failureReason, 240),
+    }];
+  });
+
+  return JSON.stringify({
+    httpStatus: status,
+    error: safeDiagnosticText(body?.error, 80),
+    outcome: safeDiagnosticText(body?.outcome, 80),
+    dataState: safeDiagnosticText(body?.dataState, 40),
+    providerHealth,
+  });
+}
 
 function isOrderCapablePath(pathname: string): boolean {
   return /\/(?:orders?|positions?|execute|approve|real-trade)(?:\/|$)/i.test(pathname);
@@ -81,14 +120,20 @@ export async function expectHealthyScannerRoute(
 
     const scanResponse = await scanResponsePromise;
     const scannerResponseAt = Date.now();
+    const parsedBody = await scanResponse.json().catch(() => null) as ScannerResponse | null;
+    const diagnostic = scannerFailureDiagnostic(scanResponse.status(), parsedBody);
     expect(
       scanResponse.status(),
-      `scanner API returned HTTP ${scanResponse.status()}`,
+      `scanner API returned HTTP ${scanResponse.status()}; diagnostic=${diagnostic}`,
     ).toBeGreaterThanOrEqual(200);
     expect(
       scanResponse.status(),
-      `scanner API returned HTTP ${scanResponse.status()}`,
+      `scanner API returned HTTP ${scanResponse.status()}; diagnostic=${diagnostic}`,
     ).toBeLessThan(300);
+    expect(
+      parsedBody,
+      `scanner API returned a non-JSON response; diagnostic=${diagnostic}`,
+    ).not.toBeNull();
     expect(scannerRequestStartedAt, 'scanner request start must be observed before its response').not.toBeNull();
     const requestElapsedMs = scannerResponseAt - Number(scannerRequestStartedAt);
     expect(
@@ -96,7 +141,7 @@ export async function expectHealthyScannerRoute(
       'scanner HTTP response must complete within the 12s browser contract',
     ).toBeLessThanOrEqual(12_000);
 
-    const body = await scanResponse.json() as ScannerResponse;
+    const body = parsedBody as ScannerResponse;
     expect(body.ok).toBe(true);
     expect(Number(body.elapsedMs)).toBeLessThanOrEqual(12_000);
     expect(['complete', 'partial', 'unavailable']).toContain(body.dataState);
