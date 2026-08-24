@@ -133,8 +133,9 @@ test('market-room source is Korean-first and follows the app-wide 1200px desktop
   expect(pageSource).toContain("{ value: 'ranking', label: '순위' }");
   expect(pageSource).toContain("{ value: 'news', label: '소식' }");
   expect(pageSource).toContain("label: '선물'");
-  expect(pageSource).toContain('ADAPTIVE_VIEWPORT_BREAKPOINTS.desktopMin');
+  expect(pageSource).toContain("const query = '(min-width: 1200px)';");
   expect(pageSource).not.toContain("const query = '(min-width: 1024px)'");
+  expect(pageSource).not.toContain("@/lib/adaptive-layout");
   expect(pageSource).toContain('미결제약정');
   expect(pageSource).toContain('오래됨');
   expect(pageSource).not.toContain('>stale<');
