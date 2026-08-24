@@ -77,6 +77,19 @@ test('unified search suggest route supports Korean, English, codes and market se
     assert.equal(filteredBody.partial, true);
     assert.equal(filteredBody.state, 'PARTIAL');
 
+    const exactUs = await fetch(`${base}/api/search/suggest?q=TSLA&asset=stock&market=US`);
+    assert.equal(exactUs.status, 200);
+    const exactUsBody = await exactUs.json() as Record<string, any>;
+    assert.equal(exactUsBody.ok, true);
+    assert.equal(exactUsBody.state, 'PARTIAL');
+    assert.equal(exactUsBody.results[0]?.ticker, 'TSLA');
+    assert.equal(exactUsBody.results[0]?.matchType, 'code_exact');
+    assert.equal(exactUsBody.results[0]?.provider, 'STATIC_US_CATALOG');
+    assert.equal(exactUsBody.results[0]?.active, false);
+    assert.equal(exactUsBody.providers.length, 1);
+    assert.equal(exactUsBody.providers[0]?.provider, 'finnhub');
+    assert.equal(exactUsBody.providers[0]?.status, 'stale');
+
     const missing = await fetch(`${base}/api/search/suggest?q=${encodeURIComponent('없는자산')}`);
     assert.equal(missing.status, 200);
     const missingBody = await missing.json() as Record<string, any>;
