@@ -9,6 +9,9 @@ import type { ScannerAlertCandidate } from './scanner-signal.types';
 
 export const MEMBER_HOLDINGS_TELEGRAM_PRODUCER_ENV = 'MEMBER_HOLDINGS_TELEGRAM_PRODUCER_ENABLED';
 
+const MAX_PROFILE_LOOKUP_BATCH = 200;
+const MAX_MEMBER_DELIVERY_CONCURRENCY = 8;
+
 export type CanonicalStockMarket = 'KR' | 'US';
 
 export type MemberHoldingStockHolder = {
@@ -128,20 +131,21 @@ class SupabaseMemberHoldingProducerRepository implements MemberHoldingProducerRe
     if (!candidates.length) return [];
 
     const userIds = [...new Set(candidates.map((row) => row.userId))];
-    const { data: profiles, error: profileError } = await client
-      .from('profiles')
-      .select('id,status')
-      .in('id', userIds)
-      .eq('status', 'approved');
-    if (profileError) throw new Error('MEMBER_HOLDINGS_PRODUCER_STORAGE_UNAVAILABLE');
-
-    const approved = new Set(
-      (Array.isArray(profiles) ? profiles : []).flatMap((raw): string[] => {
+    const approved = new Set<string>();
+    for (let index = 0; index < userIds.length; index += MAX_PROFILE_LOOKUP_BATCH) {
+      const batch = userIds.slice(index, index + MAX_PROFILE_LOOKUP_BATCH);
+      const { data: profiles, error: profileError } = await client
+        .from('profiles')
+        .select('id,status')
+        .in('id', batch)
+        .eq('status', 'approved');
+      if (profileError) throw new Error('MEMBER_HOLDINGS_PRODUCER_STORAGE_UNAVAILABLE');
+      for (const raw of Array.isArray(profiles) ? profiles : []) {
         const row = raw as ProfileRow;
         const id = cleanText(row.id, 128);
-        return id && row.status === 'approved' ? [id] : [];
-      }),
-    );
+        if (id && row.status === 'approved') approved.add(id);
+      }
+    }
     return candidates.filter((row) => approved.has(row.userId));
   }
 }
@@ -187,6 +191,19 @@ function scannerEvidenceForHolder(
   };
 }
 
+async function deliverInBoundedBatches(
+  holders: readonly MemberHoldingStockHolder[],
+  deliver: MemberHoldingAlertDeliverer,
+  evidenceFor: (holder: MemberHoldingStockHolder) => MemberHoldingTelegramEvidence,
+): Promise<PromiseSettledResult<PersonalTelegramAlertDispatchResult>[]> {
+  const settled: PromiseSettledResult<PersonalTelegramAlertDispatchResult>[] = [];
+  for (let index = 0; index < holders.length; index += MAX_MEMBER_DELIVERY_CONCURRENCY) {
+    const batch = holders.slice(index, index + MAX_MEMBER_DELIVERY_CONCURRENCY);
+    settled.push(...await Promise.allSettled(batch.map((holder) => deliver(evidenceFor(holder)))));
+  }
+  return settled;
+}
+
 export async function fanoutMemberHoldingScannerAlert(
   alert: ScannerAlertCandidate,
   dependencies: MemberHoldingProducerDependencies = {},
@@ -220,8 +237,10 @@ export async function fanoutMemberHoldingScannerAlert(
 
   const occurredAt = (dependencies.now ?? (() => new Date()))().toISOString();
   const deliver = dependencies.deliver ?? deliverMemberHoldingTelegramAlert;
-  const settled = await Promise.allSettled(
-    holders.map((holder) => deliver(scannerEvidenceForHolder(alert, holder, quote, occurredAt))),
+  const settled = await deliverInBoundedBatches(
+    holders,
+    deliver,
+    (holder) => scannerEvidenceForHolder(alert, holder, quote, occurredAt),
   );
 
   let policyCount = 0;
