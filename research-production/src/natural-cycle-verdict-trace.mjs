@@ -43,6 +43,55 @@ export const NATURAL_PAPER_FIRST_ZERO_CODES = Object.freeze({
   OUTCOME: 'OUTCOME_NOT_PERSISTED',
 });
 
+export const CANONICAL_NATURAL_PAPER_STAGE_ORDER = Object.freeze([
+  'SIGNAL_CANDIDATE',
+  'QUALITY_PASSED',
+  'RISK_PASSED',
+  'ENTRY_ELIGIBLE',
+  'ENTRY',
+  'POSITION',
+  'EXIT_ELIGIBLE',
+  'SETTLEMENT',
+]);
+
+export const CANONICAL_NATURAL_PAPER_STAGE_FIELDS = Object.freeze({
+  SIGNAL_CANDIDATE: 'signalCandidate',
+  QUALITY_PASSED: 'qualityPassed',
+  RISK_PASSED: 'riskPassed',
+  ENTRY_ELIGIBLE: 'entryEligible',
+  ENTRY: 'entry',
+  POSITION: 'position',
+  EXIT_ELIGIBLE: 'exitEligible',
+  SETTLEMENT: 'settlement',
+});
+
+export const CANONICAL_NATURAL_PAPER_REASON_TAXONOMY = Object.freeze([
+  'NO_SIGNAL',
+  'QUALITY_GATE',
+  'RISK_GATE',
+  'DATA_STALE',
+  'DATA_MISSING',
+  'MARKET_CLOSED',
+  'PROVIDER_FAILURE',
+  'IDENTITY_MISMATCH',
+  'ACCOUNT_STATE_BLOCK',
+  'COOLDOWN',
+  'DUPLICATE',
+  'REPLAY_ONLY',
+  'UNKNOWN',
+]);
+
+const CANONICAL_REASON_SOURCE_STAGE = Object.freeze({
+  SIGNAL_CANDIDATE: 'SIGNAL_CANDIDATE',
+  QUALITY_PASSED: 'QUALITY_GATE',
+  RISK_PASSED: 'RISK_GATE',
+  ENTRY_ELIGIBLE: 'ENTRY_ELIGIBLE',
+  ENTRY: 'ENTRY',
+  POSITION: 'POSITION',
+  EXIT_ELIGIBLE: 'EXIT_ELIGIBLE',
+  SETTLEMENT: 'SETTLEMENT',
+});
+
 const NATURAL_TRIGGER_SOURCES = new Set([
   'cron',
   'scheduler',
@@ -118,6 +167,168 @@ function evidenceIdentityMatches(evidence, identity) {
   return strategySha === identity.strategySha
     && runtimeSha === identity.runtimeSha
     && datasetIdentity === identity.datasetIdentity;
+}
+
+function canonicalIdentity(evidence = {}) {
+  const source = evidence.identity && typeof evidence.identity === 'object' ? evidence.identity : {};
+  const base = normalizeIdentity(source);
+  const cycleId = nonEmpty(source.cycleId) ? source.cycleId.trim() : null;
+  const triggerSource = nonEmpty(source.triggerSource) ? source.triggerSource.trim().toLowerCase() : null;
+  return Object.freeze({
+    ...base,
+    cycleId,
+    triggerSource,
+    complete: Boolean(base.complete && cycleId),
+  });
+}
+
+function canonicalIdentityMatches(source, identity) {
+  if (!source || typeof source !== 'object') return false;
+  return exactSha(source.strategySha) === identity.strategySha
+    && exactSha(source.runtimeSha) === identity.runtimeSha
+    && String(source.datasetIdentity ?? '').trim() === identity.datasetIdentity
+    && String(source.cycleId ?? '').trim() === identity.cycleId
+    && String(source.triggerSource ?? '').trim().toLowerCase() === identity.triggerSource;
+}
+
+function canonicalStageObservation(evidence, stage, identity, naturalCycle) {
+  const field = CANONICAL_NATURAL_PAPER_STAGE_FIELDS[stage];
+  const measurement = evidence?.stageCounts?.[field];
+  if (!measurement || typeof measurement !== 'object') {
+    return Object.freeze({ stage, field, count: null, status: 'UNKNOWN', evidenceStatus: 'MISSING' });
+  }
+  if (!identity.complete) {
+    return Object.freeze({ stage, field, count: null, status: 'UNKNOWN_IDENTITY', evidenceStatus: 'IDENTITY_INCOMPLETE' });
+  }
+  if (!naturalCycle) {
+    return Object.freeze({ stage, field, count: null, status: 'NOT_NATURAL_CYCLE', evidenceStatus: 'NON_NATURAL_CYCLE' });
+  }
+  if (measurement.status !== 'MEASURED') {
+    return Object.freeze({
+      stage,
+      field,
+      count: null,
+      status: 'UNKNOWN',
+      evidenceStatus: nonEmpty(measurement.blocker) ? measurement.blocker.trim() : 'UNMEASURED',
+    });
+  }
+  if (!canonicalIdentityMatches(measurement.identity, identity)) {
+    return Object.freeze({ stage, field, count: null, status: 'IDENTITY_MISMATCH', evidenceStatus: 'IDENTITY_MISMATCH' });
+  }
+  if (!Number.isSafeInteger(measurement.count) || measurement.count < 0) {
+    return Object.freeze({ stage, field, count: null, status: 'INVALID_COUNT', evidenceStatus: 'INVALID_COUNT' });
+  }
+  const ids = Array.isArray(measurement.observationIds)
+    ? measurement.observationIds.filter((value) => nonEmpty(value)).map((value) => value.trim())
+    : [];
+  if (ids.length !== measurement.count) {
+    return Object.freeze({ stage, field, count: null, status: 'INCOMPLETE_PROVENANCE', evidenceStatus: 'OBSERVATION_ID_COVERAGE_INCOMPLETE' });
+  }
+  if (new Set(ids).size !== ids.length) {
+    return Object.freeze({ stage, field, count: null, status: 'DUPLICATE_OBSERVATION_REJECTED', evidenceStatus: 'DUPLICATE_OBSERVATION_REJECTED' });
+  }
+  if (measurement.naturalCredit !== measurement.count
+    || measurement.replayCredit !== 0
+    || measurement.duplicateCredit !== 0) {
+    return Object.freeze({ stage, field, count: null, status: 'INVALID_CREDIT', evidenceStatus: 'NON_NATURAL_CREDIT_REJECTED' });
+  }
+  return Object.freeze({
+    stage,
+    field,
+    count: measurement.count,
+    status: measurement.count === 0 ? 'ZERO' : 'PASS',
+    evidenceStatus: 'ACCEPTED',
+    observationIds: Object.freeze(ids),
+    provenance: measurement.provenance ?? null,
+  });
+}
+
+function canonicalReasonFor(stage, evidence, identity) {
+  const allowed = new Set(CANONICAL_NATURAL_PAPER_REASON_TAXONOMY);
+  const expectedSourceStage = CANONICAL_REASON_SOURCE_STAGE[stage];
+  const accepted = (Array.isArray(evidence?.reasonObservations) ? evidence.reasonObservations : [])
+    .filter((row) => row?.sourceStage === expectedSourceStage
+      && row?.lossless === true
+      && nonEmpty(row?.rawReason)
+      && canonicalIdentityMatches(row?.identity, identity)
+      && row?.replayCredit === 0
+      && row?.duplicateCredit === 0)
+    .map((row) => String(row.canonicalReason ?? 'UNKNOWN').trim().toUpperCase())
+    .filter((reason) => allowed.has(reason) && reason !== 'UNKNOWN');
+  return accepted.length > 0 && new Set(accepted).size === 1
+    ? Object.freeze({ reason: accepted[0], status: 'ACCEPTED_LOSSLESS' })
+    : Object.freeze({ reason: 'UNKNOWN', status: 'MISSING_OR_LOSSY' });
+}
+
+export function buildCanonicalNaturalPaperFirstZeroTrace(evidence = {}) {
+  const identity = canonicalIdentity(evidence);
+  const naturalCycle = NATURAL_TRIGGER_SOURCES.has(identity.triggerSource);
+  const topLevelCreditValid = evidence.replayCredit === 0
+    && evidence.duplicateCredit === 0
+    && evidence.historicalCredit === 0
+    && (!naturalCycle || evidence.naturalCredit === 1);
+  const stages = CANONICAL_NATURAL_PAPER_STAGE_ORDER.map((stage) => (
+    topLevelCreditValid
+      ? canonicalStageObservation(evidence, stage, identity, naturalCycle)
+      : Object.freeze({
+          stage,
+          field: CANONICAL_NATURAL_PAPER_STAGE_FIELDS[stage],
+          count: null,
+          status: 'INVALID_CREDIT',
+          evidenceStatus: 'NON_NATURAL_CREDIT_REJECTED',
+        })
+  ));
+  let firstZero = null;
+  let firstUnknownStage = null;
+  for (const stage of stages) {
+    if (stage.evidenceStatus !== 'ACCEPTED') {
+      firstUnknownStage = stage.stage;
+      break;
+    }
+    if (stage.count === 0) {
+      firstZero = stage;
+      break;
+    }
+  }
+  const allPositive = stages.every((stage) => stage.evidenceStatus === 'ACCEPTED' && stage.count > 0);
+  const reason = firstZero
+    ? canonicalReasonFor(firstZero.stage, evidence, identity)
+    : Object.freeze({ reason: 'UNKNOWN', status: 'NOT_APPLICABLE' });
+  const status = !identity.complete
+    ? 'WAITING_IDENTITY'
+    : !naturalCycle
+      ? 'NOT_NATURAL_CYCLE'
+      : firstZero
+        ? 'BLOCKED'
+        : firstUnknownStage
+          ? 'WAITING_EVIDENCE'
+          : allPositive
+            ? 'COMPLETE'
+            : 'WAITING_EVIDENCE';
+  return Object.freeze({
+    schemaVersion: 'canonical-natural-paper-first-zero-trace-v1',
+    status,
+    identity,
+    naturalCycle,
+    stages: Object.freeze(stages),
+    firstZeroStage: firstZero,
+    firstZeroStageName: firstZero?.stage ?? (allPositive ? 'NONE' : 'UNKNOWN'),
+    firstZeroReason: reason.reason,
+    firstZeroReasonEvidenceStatus: reason.status,
+    firstUnknownStage,
+    suppliedFirstZeroIgnored: evidence.firstZeroStage !== undefined || evidence.firstZeroReason !== undefined,
+    unknownIsZero: false,
+    safety: Object.freeze({
+      readOnly: true,
+      executionAuthority: 'NONE',
+      replayEvidenceAsNaturalAllowed: false,
+      duplicateEvidenceAsNaturalAllowed: false,
+      historicalEvidenceAsNaturalAllowed: false,
+      liveTrading: false,
+      privateTradingApiAllowed: false,
+      orderCount: 0,
+    }),
+  });
 }
 
 function hasNonNaturalEvidence(evidence) {
@@ -399,12 +610,17 @@ export function buildNaturalPaperFirstZeroTraceFromRuntime(runtimeResult = {}) {
     stageEvidence,
     reasonEvidenceByStage: runtimeResult.authoritativeFirstZeroReasonEvidenceByStage,
   });
+  const canonicalTrace = runtimeResult.canonicalNaturalStageEvidence
+    ? buildCanonicalNaturalPaperFirstZeroTrace(runtimeResult.canonicalNaturalStageEvidence)
+    : null;
 
   return Object.freeze({
     ...trace,
+    canonicalTrace,
     runtimeAdapter: Object.freeze({
       authoritativeMeasurementsPresent: measurementsPresent(runtimeResult.authoritativeStageMeasurements),
       naturalMeasurementsPresent: measurementsPresent(runtimeResult.naturalFunnelMeasurements),
+      canonicalMeasurementsPresent: canonicalTrace !== null,
       selectedMeasurementSource: sourceName,
       completeIdentityPresent: identity.complete,
       suppliedFirstZeroStageIgnored: runtimeResult.firstZeroStage !== undefined
