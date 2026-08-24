@@ -23,7 +23,7 @@ export const ORDER_STATES = Object.freeze({
 
 export const SAFETY_CONTRACT = Object.freeze({
   service: "trade-execution-gateway",
-  version: "0.3.0",
+  version: "0.4.0",
   executionMode: "PAPER_ONLY",
   liveTrading: false,
   realOrderEnabled: false,
@@ -87,6 +87,23 @@ export function publicContract() {
       killSwitchStateRequired: true,
       privateProviderCalls: false,
       productionRouteMounted: false,
+    },
+    executionSafety: {
+      version: "V0_4",
+      normalizedPublicMarketDataOnly: true,
+      actualPublicWebSocketConnected: false,
+      marketDataValidationEndpoint: "/v1/execution/market-data/validate",
+      guardPreviewEndpoint: "/v1/execution/guards/preview",
+      guards: ["STALE_PRICE", "PRICE_DEVIATION", "SPREAD", "SLIPPAGE", "DEPTH"],
+      paperFillEndpoint: "/v1/paper/orders/:orderId/fill",
+      partialFillStateMachine: true,
+      actualExchangeFillEvidence: false,
+      plans: {
+        cancelReplace: "/v1/plans/cancel-replace/preview",
+        bracketOco: "/v1/plans/bracket/preview",
+        trailing: "/v1/plans/trailing/preview",
+      },
+      planExecutionAuthority: "NONE",
     },
     reconciliation: {
       endpoint: "/v1/reconciliation/order/preview",
