@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import './member-holdings-telegram-producer.service.test';
 
 import { HttpUserTelegramTransport } from '../features/user-broker-telegram/user-broker-telegram.transport';
 import {
