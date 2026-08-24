@@ -61,9 +61,9 @@ function missingEvidenceSources() {
   };
 }
 
-test("validated package loads exact #546 producer bundle and executes fail-closed without evidence", async () => {
+test("validated package loads the exact observed-gate producer bundle and executes fail-closed without evidence", async () => {
   const runtimePackage = await loadValidatedAuthoritativePaperRuntimePackage();
-  assert.equal(runtimePackage.sourceSha, "3f85003368830fb570c05b3b2060da39f515696d");
+  assert.equal(runtimePackage.sourceSha, "58c6ff651912e27daccb7137aff11a4bc38f30a3");
   assert.match(runtimePackage.sourceGraphSha256, /^[0-9a-f]{64}$/u);
   assert.match(runtimePackage.bundleSha256, /^[0-9a-f]{64}$/u);
   assert.equal(runtimePackage.admissionBundleSchemaVersion, "scanner-paper-admission-evidence-bundle-v1");
@@ -91,6 +91,10 @@ test("validated package loads exact #546 producer bundle and executes fail-close
   const result = await producer({ card: {}, market: "CRYPTO_FUTURES" });
   assert.equal(result.status, "BLOCKED");
   assert.deepEqual(result.blockers, ["P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING"]);
+  assert.equal(result.gateObservability.qualityGate.status, "UNKNOWN");
+  assert.equal(result.gateObservability.riskGate.status, "UNKNOWN");
+  assert.equal(result.gateObservability.reasonObservations[0].canonicalReason, "DATA_MISSING");
+  assert.equal(result.gateObservability.reasonObservations[0].lossless, true);
   assert.equal(result.executionAuthority, "NONE");
   assert.equal(result.privateTradingApiAllowed, false);
   assert.equal(result.productionMutationAllowed, false);

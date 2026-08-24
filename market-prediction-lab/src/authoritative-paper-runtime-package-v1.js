@@ -7,7 +7,7 @@ export const AUTHORITATIVE_PAPER_RUNTIME_PACKAGE_CONTRACT = Object.freeze({
   schemaVersion: "authoritative-paper-runtime-package-loader-v1",
   manifestSchemaVersion: "authoritative-paper-runtime-package-manifest-v1",
   canonicalProducerVersion: "scanner-crypto-futures-paper-admission-evidence-producer-v1",
-  canonicalProducerSourceCommitSha: "3f85003368830fb570c05b3b2060da39f515696d",
+  canonicalProducerSourceCommitSha: "58c6ff651912e27daccb7137aff11a4bc38f30a3",
   admissionBundleSchemaVersion: "scanner-paper-admission-evidence-bundle-v1",
   paperStateSnapshotSchemaVersion: "paper-trading-state-snapshot-v2",
   callbackOwnerContractSchemaVersion: "authoritative-paper-callback-owner-contract-v1",
