@@ -1,9 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import {
   BoundedWorkTimeoutError,
   runBoundedWorkPool,
 } from './bounded-work-pool';
+import {
+  collectMarketListingWork,
+  MARKET_LISTING_CONCURRENCY,
+  MARKET_LISTING_DEADLINE_MS,
+  MARKET_LISTING_ITEM_TIMEOUT_MS,
+} from '../services/market-listing-work-pool';
 
 function delay(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -61,6 +69,49 @@ test('per-item timeout is explicit and aborts the timed-out worker signal', asyn
   assert.equal(result.rejectedCount, 0);
   assert.equal(abortedSignals, 2);
   assert.ok(result.outcomes.filter((item) => item.status === 'timed_out').every((item) => item.reason instanceof BoundedWorkTimeoutError));
+});
+
+test('timed-out lanes are not reused while non-cooperative work is still running', async () => {
+  const started: number[] = [];
+  const releases: Array<() => void> = [];
+  let active = 0;
+  let observedMaximum = 0;
+
+  const result = await runBoundedWorkPool(
+    [0, 1, 2, 3, 4],
+    async (item) => {
+      started.push(item);
+      active += 1;
+      observedMaximum = Math.max(observedMaximum, active);
+      try {
+        await new Promise<void>((resolve) => {
+          releases.push(resolve);
+        });
+        return item;
+      } finally {
+        active -= 1;
+      }
+    },
+    { concurrency: 2, deadlineMs: 200, itemTimeoutMs: 25 },
+  );
+
+  try {
+    assert.deepEqual(started, [0, 1]);
+    assert.equal(result.startedCount, 2);
+    assert.equal(result.timedOutCount, 2);
+    assert.equal(result.fulfilledCount, 0);
+    assert.equal(result.rejectedCount, 0);
+    assert.equal(result.deadlineReached, true);
+    assert.equal(result.maxConcurrency, 2);
+    assert.equal(observedMaximum, 2);
+    assert.equal(active, 2);
+    assert.deepEqual(result.outcomes.map((item) => item.index), [0, 1]);
+  } finally {
+    for (const release of releases) release();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+
+  assert.equal(active, 0);
 });
 
 test('global deadline prevents new work from starting after the budget is exhausted', async () => {
@@ -126,4 +177,101 @@ test('external abort stops new work and aborts active workers', async () => {
   assert.equal(result.aborted, true);
   assert.ok(result.startedCount <= 3);
   assert.ok(started.length <= 3);
+});
+
+test('market listing work collector preserves full results under bounded concurrency', async () => {
+  let active = 0;
+  let observedMaximum = 0;
+  const result = await collectMarketListingWork(
+    Array.from({ length: 12 }, (_, index) => index),
+    async (item, _index, signal) => {
+      active += 1;
+      observedMaximum = Math.max(observedMaximum, active);
+      try {
+        await delay(8, signal);
+        return item * 3;
+      } finally {
+        active -= 1;
+      }
+    },
+    { concurrency: 3, deadlineMs: 500, itemTimeoutMs: 100 },
+  );
+
+  assert.deepEqual(result.values, [0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33]);
+  assert.equal(result.diagnostics.status, 'complete');
+  assert.equal(result.diagnostics.candidateCount, 12);
+  assert.equal(result.diagnostics.unstartedCount, 0);
+  assert.equal(result.diagnostics.unusableCount, 0);
+  assert.equal(result.diagnostics.maxConcurrency, 3);
+  assert.equal(observedMaximum, 3);
+});
+
+test('market listing work collector marks fulfilled unusable provider outcomes as partial without fabricating rows', async () => {
+  const result = await collectMarketListingWork(
+    ['ok', 'missing', 'provider-error'],
+    async (item) => {
+      try {
+        if (item === 'provider-error') throw new Error('provider unavailable');
+        if (item === 'missing') return null;
+        return item;
+      } catch {
+        return null;
+      }
+    },
+    { concurrency: 3, deadlineMs: 200, itemTimeoutMs: 100 },
+  );
+
+  const usable = result.values.filter((value): value is string => value !== null);
+  assert.deepEqual(usable, ['ok']);
+  assert.equal(result.diagnostics.status, 'partial');
+  assert.equal(result.diagnostics.fulfilledCount, 3);
+  assert.equal(result.diagnostics.rejectedCount, 0);
+  assert.equal(result.diagnostics.timedOutCount, 0);
+  assert.equal(result.diagnostics.unusableCount, 2);
+  assert.equal(result.values.length, 3);
+});
+
+test('market listing work collector reports deadline-limited data as partial without fabricated values', async () => {
+  const result = await collectMarketListingWork(
+    Array.from({ length: 40 }, (_, index) => index),
+    async (item, _index, signal) => {
+      await delay(80, signal);
+      return item;
+    },
+    { concurrency: 2, deadlineMs: 35, itemTimeoutMs: 30 },
+  );
+
+  assert.equal(result.diagnostics.status, 'partial');
+  assert.equal(result.diagnostics.deadlineReached, true);
+  assert.ok(result.diagnostics.timedOutCount > 0);
+  assert.ok(result.diagnostics.unstartedCount > 0);
+  assert.equal(result.diagnostics.unusableCount, 0);
+  assert.equal(result.values.length, 0);
+  assert.ok(result.diagnostics.maxConcurrency <= 2);
+});
+
+test('default market listing budgets keep stalled work at the pool concurrency ceiling', () => {
+  assert.ok(MARKET_LISTING_CONCURRENCY > 0);
+  assert.ok(MARKET_LISTING_CONCURRENCY <= 8);
+  assert.ok(MARKET_LISTING_ITEM_TIMEOUT_MS > 0);
+  assert.equal(MARKET_LISTING_ITEM_TIMEOUT_MS, MARKET_LISTING_DEADLINE_MS);
+  assert.ok(MARKET_LISTING_DEADLINE_MS <= 6_000);
+});
+
+test('market movers surfaces bounded listing completeness instead of hiding partial evidence', () => {
+  const routeSource = readFileSync(
+    path.resolve(process.cwd(), 'api-server/src/routes/market.ts'),
+    'utf8',
+  );
+  const listingSource = readFileSync(
+    path.resolve(process.cwd(), 'api-server/src/services/market-listing.service.ts'),
+    'utf8',
+  );
+
+  assert.match(routeSource, /liveListingsWithDiagnostics/);
+  assert.match(routeSource, /dataStatus:\s*live\.diagnostics\.status/);
+  assert.match(routeSource, /listingDiagnostics/);
+  assert.match(routeSource, /failedMarkets/);
+  assert.match(listingSource, /collectMarketListingWork\(\s*candidates/);
+  assert.doesNotMatch(listingSource, /Promise\.all\(candidates\.map\(toRow\)\)/);
 });

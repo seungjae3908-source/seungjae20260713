@@ -44,7 +44,7 @@ for (const width of VIEWPORTS) {
 
     const main = page.locator('main');
     await main.evaluate((element) => { element.scrollTop = element.scrollHeight; });
-    const lastAction = page.getByRole('button', { name: /시장 순위 보기/ });
+    const lastAction = page.getByRole('button', { name: /시장 순위/ });
     const lastBox = await lastAction.boundingBox();
     const navBox = await navigation.boundingBox();
     expect(lastBox, 'last action must be measurable').not.toBeNull();
