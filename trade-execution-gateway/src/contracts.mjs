@@ -1,10 +1,4 @@
-export const MARKETS = Object.freeze([
-  "KR_STOCK",
-  "US_STOCK",
-  "CRYPTO_SPOT",
-  "CRYPTO_FUTURES",
-]);
-
+export const MARKETS = Object.freeze(["KR_STOCK", "US_STOCK", "CRYPTO_SPOT", "CRYPTO_FUTURES"]);
 export const ORDER_TYPES = Object.freeze(["LIMIT", "MARKET"]);
 export const CASH_SIDES = Object.freeze(["BUY", "SELL"]);
 export const FUTURES_SIDES = Object.freeze(["LONG", "SHORT"]);
@@ -23,7 +17,7 @@ export const ORDER_STATES = Object.freeze({
 
 export const SAFETY_CONTRACT = Object.freeze({
   service: "trade-execution-gateway",
-  version: "0.4.0",
+  version: "0.5.0",
   executionMode: "PAPER_ONLY",
   liveTrading: false,
   realOrderEnabled: false,
@@ -32,8 +26,13 @@ export const SAFETY_CONTRACT = Object.freeze({
   transferAllowed: false,
   withdrawalAllowed: false,
   productionIntegrated: false,
-  persistence: "MEMORY_ONLY",
+  persistence: "LOCAL_FILE_PAPER_ONLY",
+  productionDatabaseUsed: false,
   outboundNetwork: false,
+  publicMarketDataOutboundDefault: false,
+  publicMarketDataOutboundRequiresExplicitEnable: true,
+  publicMarketDataCredentialsAccepted: false,
+  privateTradingOutboundNetwork: false,
   defaultBind: "127.0.0.1:8792",
 });
 
@@ -46,20 +45,10 @@ export function publicContract() {
     safety: SAFETY_CONTRACT,
     markets: MARKETS,
     orderTypes: ORDER_TYPES,
-    sides: {
-      cash: CASH_SIDES,
-      futures: FUTURES_SIDES,
-    },
+    sides: { cash: CASH_SIDES, futures: FUTURES_SIDES },
     futuresMarginModes: FUTURES_MARGIN_MODES,
-    states: ORDER_STATES,
     adapterContract: {
-      requiredMethods: [
-        "getCapabilities",
-        "previewOrder",
-        "submitOrder",
-        "cancelOrder",
-        "getOrder",
-      ],
+      requiredMethods: ["getCapabilities", "previewOrder", "submitOrder", "cancelOrder", "getOrder"],
       liveAdapterAccepted: false,
       brokerCredentialsAccepted: false,
     },
@@ -75,10 +64,7 @@ export function publicContract() {
     },
     coinBridge: {
       source: "COIN_TRADING_WORKSPACE_V1",
-      canonicalProviders: {
-        CRYPTO_SPOT: "upbit",
-        CRYPTO_FUTURES: "bitget",
-      },
+      canonicalProviders: { CRYPTO_SPOT: "upbit", CRYPTO_FUTURES: "bitget" },
       previewEndpoint: "/v1/coin/orders/preview",
       paperEndpoint: "/v1/coin/paper/orders",
       explicitPaperConfirmationRequired: true,
@@ -89,14 +75,21 @@ export function publicContract() {
       productionRouteMounted: false,
     },
     executionSafety: {
-      version: "V0_4",
-      normalizedPublicMarketDataOnly: true,
-      actualPublicWebSocketConnected: false,
-      callerSuppliedEvidenceOnly: true,
-      serverAttestedMarketData: false,
+      version: "V0_5",
+      callerSuppliedValidationEndpoint: "/v1/execution/market-data/validate",
+      callerSuppliedGuardEndpoint: "/v1/execution/guards/preview",
+      runtimeHealthEndpoint: "/v1/execution/runtime/health",
+      runtimeAttestedGuardEndpoint: "/v1/execution/runtime/guards/preview",
+      publicWebSocketProviders: ["upbit", "bitget"],
+      publicWebSocketDefaultEnabled: false,
+      hardCodedPublicEndpointsOnly: true,
+      credentialsAccepted: false,
+      serverAttestedMarketDataAvailableOnlyWhenRuntimeEnabled: true,
       liveExecutionEligibleMarketData: false,
-      marketDataValidationEndpoint: "/v1/execution/market-data/validate",
-      guardPreviewEndpoint: "/v1/execution/guards/preview",
+      bitgetSequenceGapRecovery: true,
+      upbitReconnectSnapshotRequired: true,
+      clockSkewGuard: true,
+      providerCircuitBreaker: true,
       guards: ["STALE_PRICE", "PRICE_DEVIATION", "SPREAD", "SLIPPAGE", "DEPTH"],
       paperFillEndpoint: "/v1/paper/orders/:orderId/fill",
       partialFillStateMachine: true,
@@ -107,6 +100,21 @@ export function publicContract() {
         trailing: "/v1/plans/trailing/preview",
       },
       planExecutionAuthority: "NONE",
+    },
+    persistence: {
+      mode: "LOCAL_FILE_PAPER_ONLY",
+      atomicRename: true,
+      integrityChecksum: "SHA256",
+      previousSnapshotBackup: true,
+      durableIdempotency: true,
+      automaticInterruptedOrderResubmission: false,
+      productionDatabaseUsed: false,
+      secretsStored: false,
+    },
+    validation: {
+      packageTestCommand: "npm test",
+      dedicatedWorkflow: ".github/workflows/trade-execution-gateway-validation.yml",
+      exactHeadBridge: ".github/tests/pr-exact-head-trade-execution-gateway.test.mjs",
     },
     reconciliation: {
       endpoint: "/v1/reconciliation/order/preview",

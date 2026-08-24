@@ -1,151 +1,106 @@
-# Standalone Trade Execution Gateway v0.3
+# Standalone Trade Execution Gateway v0.5
 
-Production 앱과 분리된 **PAPER 전용 OMS / Risk / Broker Adapter 준비 서비스**입니다.
+Production 앱과 분리된 **PAPER 전용 OMS / Execution Safety 준비 서비스**입니다.
 
-## 격리 원칙
-
-- 변경 경로: `trade-execution-gateway/**`만
-- 기존 `api-server`, `stock-analyzer`, `.github`, DB/Supabase, Production/Staging 설정 변경 없음
-- 기본 bind: `127.0.0.1:8792`
-- 메모리 저장만 사용
-- 실제 계좌/잔고/포지션/private provider 호출 없음
-- 실제 주문/취소/정정/이체/출금 없음
-
-## 안전 계약
+## 절대 안전 경계
 
 - `PAPER_ONLY`
 - `LIVE_TRADING=false`
 - `REAL_ORDER_ENABLED=false`
 - `PRIVATE_TRADING_API_ALLOWED=false`
-- `outboundNetwork=false`
-- `productionIntegrated=false`
-- live/private/network adapter 장착 불가
-- 실제 broker placeholder는 credential/account/order/network 권한이 모두 0
+- 실제 계좌/잔고/private provider API 호출 없음
+- 실제 주문/취소/정정/이체/출금 없음
+- Production/Staging route 미연결
+- 기본 bind `127.0.0.1:8792`
+- 기존 앱/Production workflow/DB/Supabase/Secret 수정 없음
 
-## v0.3 구조
+## v0.5 핵심
 
-```text
-AI 매매 워크스페이스 / 코인 주문 티켓
-              ↓
-     Workspace / Coin Bridge
-              ↓
-      Market Rule Evidence
-   tick / lot / min notional
-              ↓
-     Portfolio Risk Guard
- exposure / daily loss / leverage
-        / explicit kill switch
-              ↓
-              OMS
-              ↓
-       PaperMockBrokerAdapter
-              ↓
-    Reconciliation Preview
-```
+### Durable Paper OMS
 
-### 주식
+기존 메모리 전용 OMS를 **독립 로컬 파일 Paper state**로 보강했습니다.
 
-기존 #88 주문 티켓을 다음 독립 API로 변환할 수 있습니다.
+- 기본 파일: `trade-execution-gateway/.state/paper-state.json`
+- Production DB 사용: `false`
+- secret 저장: `false`
+- SHA-256 integrity checksum
+- temp file + atomic rename
+- 이전 snapshot `.bak` 유지
+- state file `0600`, state directory `0700`
+- 최대 5 MiB / 10,000 Paper orders fail-closed cap
+- 주문과 idempotency key 함께 복구
 
-- `POST /v1/workspace/orders/preview`
-- `POST /v1/workspace/paper/orders`
-- Paper 기록은 `confirmPaper=true` 필수
-- MARKET 주문은 명시적 `referencePrice` 필수
+가장 중요한 규칙은 **재시작 후 자동 재제출 금지**입니다. `CREATED/RISK_ACCEPTED/SUBMITTED` 중단 상태는 `recoveryHold=true`로 복구되며 같은 idempotency key가 재입력되어도 adapter submission을 실행하지 않습니다.
 
-### 코인 현물
+Paper adapter 호출 **전** durable state를 먼저 저장하고, adapter accepted 후 다시 저장합니다. accepted 저장 직전에 프로세스가 중단돼도 재시작 시 자동 재주문 대신 recovery hold로 멈춥니다.
 
-Canonical provider 계약:
+### Public-only WebSocket runtime
 
-- `CRYPTO_SPOT -> upbit`
-- side: `BUY / SELL`
-- leverage: 1x only
-- provider의 fresh market-rule evidence 필수
-- tick size / lot size / minimum notional이 맞지 않으면 자동 반올림하지 않고 fail-closed
-- portfolio exposure / open orders / daily loss / kill-switch evidence 필수
-
-### 코인 선물
-
-Canonical provider 계약:
-
-- `CRYPTO_FUTURES -> bitget`
-- side: `LONG / SHORT`
-- leverage 필수
-- margin mode: `ISOLATED / CROSS`
-- `reduceOnly` 명시 가능
-- provider max-leverage evidence 필수
-- portfolio max-leverage 정책도 별도 적용
-- market rule과 portfolio policy 중 더 강한 차단이 우선
-
-### 실제 Provider Adapter 준비 상태
-
-- Toss: stock canonical placeholder, disabled
-- Upbit: spot canonical placeholder, disabled
-- Bitget: futures canonical placeholder, disabled
-- KIS: non-canonical candidate, disabled
-- Kiwoom: non-canonical candidate, disabled
-
-모든 placeholder:
-
-- `executionMode=DISABLED`
-- credentials accepted = false
-- account read = false
-- order/cancel/amend = false
-- private WebSocket = false
-- outbound network = false
-
-## Reconciliation
-
-`POST /v1/reconciliation/order/preview`
-
-OMS order evidence와 caller-supplied broker evidence를 **읽기 전용으로 비교**합니다.
-
-- broker evidence가 없으면 `BROKER_EVIDENCE_MISSING`
-- broker order ID mismatch를 명시
-- order state mismatch를 명시
-- `FILLED/PARTIALLY_FILLED`인데 fill evidence가 없으면 `FILL_EVIDENCE_REQUIRED`
-- OMS state를 자동 변경하지 않음
-- broker network를 직접 조회하지 않음
-
-향후 실제 provider 연결 시에는 이 계약 뒤에 authenticated read adapter를 별도 승인으로 추가해야 합니다.
-
-## Paper Risk 설정
-
-기존 gateway max quantity/notional 상한은 환경변수로만 설정합니다.
+기본값은 네트워크 **OFF**입니다.
 
 ```text
-TEG_PAPER_MAX_QUANTITY_KR_STOCK
-TEG_PAPER_MAX_NOTIONAL_KR_STOCK
-TEG_PAPER_MAX_QUANTITY_US_STOCK
-TEG_PAPER_MAX_NOTIONAL_US_STOCK
-TEG_PAPER_MAX_QUANTITY_CRYPTO_SPOT
-TEG_PAPER_MAX_NOTIONAL_CRYPTO_SPOT
-TEG_PAPER_MAX_QUANTITY_CRYPTO_FUTURES
-TEG_PAPER_MAX_NOTIONAL_CRYPTO_FUTURES
+TEG_PUBLIC_MARKET_DATA_ENABLED=true
+TEG_UPBIT_PUBLIC_SYMBOL=KRW-BTC
+TEG_BITGET_PUBLIC_SYMBOL=BTCUSDT
 ```
 
-코인 v0.3 preflight의 market-rule / portfolio-policy / kill-switch 데이터는 **PAPER-only caller evidence**이며 live authority가 아닙니다. 실제 live 전환 시에는 반드시 서버 authoritative policy/evidence로 대체해야 합니다.
+명시적으로 활성화했을 때만 hard-coded 공개 endpoint에 연결할 수 있습니다.
 
-## 실행
+- Upbit Spot: `wss://api.upbit.com/websocket/v1`
+- Bitget Futures: `wss://ws.bitget.com/v2/ws/public`
+
+URL override 및 credentials/header/token/API key/passphrase 입력은 지원하지 않습니다. Private WebSocket은 구현하지 않습니다.
+
+Public runtime이 **직접 수신한** 메시지만 `serverAttested=true`, `transportObservedByGateway=true`, `callerSuppliedEvidence=false`로 승격됩니다. 그러나 항상 `liveExecutionEligible=false`, `orderSubmissionAllowed=false`입니다.
+
+### Stream 복구 / Clock / Health
+
+- Upbit: reconnect 후 orderbook `SNAPSHOT` 필수, timestamp regression 차단, `PING` keepalive
+- Bitget: `books` snapshot + incremental
+- Bitget: 첫 update는 snapshot seq가 `[pseq, seq]`에 포함되어야 함
+- Bitget: 이후 `previous seq == next pseq` 필수
+- Bitget: `pseq=0` reset은 fresh snapshot 재동기화 요구
+- Bitget: `ping/pong` keepalive
+- provider clock skew fail-closed
+- stale provider health
+- reconnect rate-limit + exponential backoff
+- consecutive failure circuit breaker
+
+### Execution guards
+
+Caller-supplied 공개 데이터와 gateway-observed 데이터는 분리합니다.
+
+- caller evidence → `CALLER_SUPPLIED_UNATTESTED`
+- actual public transport evidence → `GATEWAY_TRANSPORT_OBSERVED_PUBLIC`
+
+두 경우 모두 stale / price-deviation / spread / depth / slippage guard를 적용할 수 있지만 실주문 권한은 0입니다.
+
+### 검증
 
 ```bash
 cd trade-execution-gateway
 npm test
-npm start
 ```
 
-## 다음 단계
+`npm test`는 server/public-runtime/state-store syntax check 후 전체 Node test suite를 실행합니다.
 
-아직 의도적으로 연결하지 않은 항목:
+PR exact-head 검증:
 
-1. public-only WebSocket 호가/체결 stream
-2. stale-price / price-deviation / spread / slippage guard
-3. partial-fill state machine
-4. cancel/replace / OCO / bracket / trailing contract
-5. server-authoritative portfolio policy
-6. authenticated read-only reconciliation adapter
-7. rate-limit / clock-sync / provider-health circuit breaker
-8. execution-quality / TCA
-9. Paper↔Live parity harness
-10. 실제 private/live broker adapter
+- `.github/tests/pr-exact-head-trade-execution-gateway.test.mjs`
+  - 기존 Application CI exact-head 단계에서 `trade-execution-gateway/npm test` 직접 실행
+- `.github/workflows/trade-execution-gateway-validation.yml`
+  - 독립 package 전용 Node 22 exact-head validation
+  - deploy/secret/private network 없음
+  - deterministic mock tests only
 
-실제 private API, 실제 계좌 읽기, 실주문 및 Production 연결은 별도 명시 승인 전 금지입니다.
+## 현재 미연결
+
+- authenticated account read/reconciliation adapter
+- actual private order/cancel/amend adapter
+- Production route
+- server-authoritative live portfolio policy
+- Execution Quality / TCA
+- Paper↔Live parity harness
+- 실제 실주문
+
+이 항목들은 별도 승인 전까지 연결하지 않습니다.

@@ -1,31 +1,21 @@
 import http from "node:http";
+import { fileURLToPath } from "node:url";
 import { publicContract } from "./contracts.mjs";
-import {
-  GatewayError,
-  PaperMockBrokerAdapter,
-  TradeExecutionGateway,
-} from "./gateway.mjs";
-import {
-  placeWorkspacePaperOrder,
-  previewWorkspaceOrder,
-} from "./workspace-bridge.mjs";
-import {
-  placeCoinPaperOrder,
-  previewCoinPaperOrder,
-} from "./coin-bridge.mjs";
+import { GatewayError, PaperMockBrokerAdapter, TradeExecutionGateway } from "./gateway.mjs";
+import { placeWorkspacePaperOrder, previewWorkspaceOrder } from "./workspace-bridge.mjs";
+import { placeCoinPaperOrder, previewCoinPaperOrder } from "./coin-bridge.mjs";
 import { reconcileOrderEvidence } from "./reconciliation.mjs";
 import { normalizePublicMarketDataEvidence } from "./market-data-evidence.mjs";
-import { assessExecutionGuards } from "./execution-guards.mjs";
-import {
-  buildBracketPlan,
-  buildCancelReplacePlan,
-  buildTrailingPlan,
-} from "./order-plans.mjs";
+import { assessAttestedExecutionGuards, assessExecutionGuards } from "./execution-guards.mjs";
+import { buildBracketPlan, buildCancelReplacePlan, buildTrailingPlan } from "./order-plans.mjs";
+import { FilePaperStateStore } from "./paper-state-store.mjs";
+import { PublicMarketDataRuntimeRegistry } from "./public-websocket-runtime.mjs";
 
 const HOST = "127.0.0.1";
 const DEFAULT_PORT = 8792;
 const MAX_BODY_BYTES = 16 * 1024;
 const MARKETS = ["KR_STOCK", "US_STOCK", "CRYPTO_SPOT", "CRYPTO_FUTURES"];
+const DEFAULT_STATE_PATH = fileURLToPath(new URL("../.state/paper-state.json", import.meta.url));
 
 function boundedPort(value) {
   const port = Number(value);
@@ -49,10 +39,32 @@ function buildPaperPolicy() {
   return { maxQuantityByMarket, maxNotionalByMarket };
 }
 
+function publicRuntimeConfigs() {
+  if (process.env.TEG_PUBLIC_MARKET_DATA_ENABLED !== "true") return [];
+  const configs = [];
+  const upbit = process.env.TEG_UPBIT_PUBLIC_SYMBOL?.trim();
+  const bitget = process.env.TEG_BITGET_PUBLIC_SYMBOL?.trim();
+  if (upbit) configs.push({ provider: "upbit", market: "CRYPTO_SPOT", symbol: upbit });
+  if (bitget) configs.push({ provider: "bitget", market: "CRYPTO_FUTURES", symbol: bitget });
+  if (configs.length === 0) {
+    throw new GatewayError("PUBLIC_MARKET_DATA_CONFIG_REQUIRED", "explicit public market-data enable requires at least one public symbol", 503);
+  }
+  if (typeof globalThis.WebSocket !== "function") {
+    throw new GatewayError("PUBLIC_WEBSOCKET_RUNTIME_UNAVAILABLE", "explicit public WebSocket runtime requires a WebSocket-capable Node runtime", 503);
+  }
+  return configs;
+}
+
+const stateStore = new FilePaperStateStore(DEFAULT_STATE_PATH);
+const initialPaperState = await stateStore.load();
 const gateway = new TradeExecutionGateway({
   adapter: new PaperMockBrokerAdapter(),
   policy: buildPaperPolicy(),
+  initialPaperState,
+  persistPaperState: (snapshot, reason) => stateStore.save(snapshot, reason),
 });
+const publicRuntime = new PublicMarketDataRuntimeRegistry({ configs: publicRuntimeConfigs() });
+publicRuntime.startAll();
 
 function sendJson(response, statusCode, body) {
   const payload = JSON.stringify(body);
@@ -70,17 +82,12 @@ async function readJson(request) {
   const chunks = [];
   for await (const chunk of request) {
     bytes += chunk.length;
-    if (bytes > MAX_BODY_BYTES) {
-      throw new GatewayError("REQUEST_TOO_LARGE", "request body exceeds 16 KiB", 413);
-    }
+    if (bytes > MAX_BODY_BYTES) throw new GatewayError("REQUEST_TOO_LARGE", "request body exceeds 16 KiB", 413);
     chunks.push(chunk);
   }
   if (chunks.length === 0) return {};
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  } catch {
-    throw new GatewayError("INVALID_JSON", "request body must be valid JSON", 400);
-  }
+  try { return JSON.parse(Buffer.concat(chunks).toString("utf8")); }
+  catch { throw new GatewayError("INVALID_JSON", "request body must be valid JSON", 400); }
 }
 
 function routeOrderId(pathname, suffix = "") {
@@ -99,84 +106,76 @@ const server = http.createServer(async (request, response) => {
         service: "trade-execution-gateway",
         bind: `${HOST}:${boundedPort(process.env.TEG_PORT)}`,
         safety: gateway.getSafetyState(),
+        persistence: stateStore.getHealth(),
+        recovery: gateway.getRecoveryState(),
+        publicMarketData: publicRuntime.getHealth(),
       });
       return;
     }
-
     if (request.method === "GET" && url.pathname === "/v1/contracts") {
       sendJson(response, 200, publicContract());
       return;
     }
-
+    if (request.method === "GET" && url.pathname === "/v1/execution/runtime/health") {
+      sendJson(response, 200, publicRuntime.getHealth());
+      return;
+    }
     if (request.method === "POST" && url.pathname === "/v1/orders/preview") {
-      const body = await readJson(request);
-      sendJson(response, 200, await gateway.previewOrder(body));
+      sendJson(response, 200, await gateway.previewOrder(await readJson(request)));
       return;
     }
-
     if (request.method === "POST" && url.pathname === "/v1/workspace/orders/preview") {
-      const body = await readJson(request);
-      sendJson(response, 200, await previewWorkspaceOrder(gateway, body));
+      sendJson(response, 200, await previewWorkspaceOrder(gateway, await readJson(request)));
       return;
     }
-
     if (request.method === "POST" && url.pathname === "/v1/coin/orders/preview") {
-      const body = await readJson(request);
-      sendJson(response, 200, await previewCoinPaperOrder(gateway, body));
+      sendJson(response, 200, await previewCoinPaperOrder(gateway, await readJson(request)));
       return;
     }
-
     if (request.method === "POST" && url.pathname === "/v1/execution/market-data/validate") {
       const body = await readJson(request);
       sendJson(response, 200, normalizePublicMarketDataEvidence(body.evidence, body.policy));
       return;
     }
-
     if (request.method === "POST" && url.pathname === "/v1/execution/guards/preview") {
-      const body = await readJson(request);
-      sendJson(response, 200, assessExecutionGuards(body));
+      sendJson(response, 200, assessExecutionGuards(await readJson(request)));
       return;
     }
-
+    if (request.method === "POST" && url.pathname === "/v1/execution/runtime/guards/preview") {
+      const body = await readJson(request);
+      const evidence = publicRuntime.getLatestEvidence(body.provider, body.symbol);
+      if (!evidence) throw new GatewayError("ATTESTED_PUBLIC_MARKET_DATA_UNAVAILABLE", "fresh gateway-observed public market data is unavailable", 503);
+      sendJson(response, 200, assessAttestedExecutionGuards({ intent: body.intent, evidence, policy: body.policy }));
+      return;
+    }
     if (request.method === "POST" && url.pathname === "/v1/reconciliation/order/preview") {
-      const body = await readJson(request);
-      sendJson(response, 200, reconcileOrderEvidence(body));
+      sendJson(response, 200, reconcileOrderEvidence(await readJson(request)));
       return;
     }
-
     if (request.method === "POST" && url.pathname === "/v1/plans/cancel-replace/preview") {
       sendJson(response, 200, buildCancelReplacePlan(await readJson(request)));
       return;
     }
-
     if (request.method === "POST" && url.pathname === "/v1/plans/bracket/preview") {
       sendJson(response, 200, buildBracketPlan(await readJson(request)));
       return;
     }
-
     if (request.method === "POST" && url.pathname === "/v1/plans/trailing/preview") {
       sendJson(response, 200, buildTrailingPlan(await readJson(request)));
       return;
     }
-
     if (request.method === "POST" && url.pathname === "/v1/paper/orders") {
-      const body = await readJson(request);
-      sendJson(response, 201, await gateway.placeOrder(body));
+      sendJson(response, 201, await gateway.placeOrder(await readJson(request)));
       return;
     }
-
     if (request.method === "POST" && url.pathname === "/v1/workspace/paper/orders") {
-      const body = await readJson(request);
-      sendJson(response, 201, await placeWorkspacePaperOrder(gateway, body));
+      sendJson(response, 201, await placeWorkspacePaperOrder(gateway, await readJson(request)));
       return;
     }
-
     if (request.method === "POST" && url.pathname === "/v1/coin/paper/orders") {
-      const body = await readJson(request);
-      sendJson(response, 201, await placeCoinPaperOrder(gateway, body));
+      sendJson(response, 201, await placeCoinPaperOrder(gateway, await readJson(request)));
       return;
     }
-
     if (request.method === "GET") {
       const orderId = routeOrderId(url.pathname);
       if (orderId) {
@@ -184,7 +183,6 @@ const server = http.createServer(async (request, response) => {
         return;
       }
     }
-
     if (request.method === "POST") {
       const fillOrderId = routeOrderId(url.pathname, "/fill");
       if (fillOrderId) {
@@ -197,7 +195,6 @@ const server = http.createServer(async (request, response) => {
         return;
       }
     }
-
     sendJson(response, 404, { error: "NOT_FOUND" });
   } catch (error) {
     if (error instanceof GatewayError) {
@@ -214,6 +211,7 @@ server.listen(port, HOST, () => {
 });
 
 function shutdown() {
+  publicRuntime.stopAll();
   server.close(() => process.exit(0));
 }
 process.once("SIGINT", shutdown);
