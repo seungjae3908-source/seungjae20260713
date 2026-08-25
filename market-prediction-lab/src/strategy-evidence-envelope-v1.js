@@ -91,6 +91,7 @@ export function buildStrategyEvidenceEnvelope(input = {}) {
     if (Object.hasOwn(input, field)) blockers.push(`SELF_ATTESTATION_FORBIDDEN:${field}`);
   }
   blockers.push(...forbiddenAttestations(input.verdict));
+  blockers.push(...forbiddenAttestations(input.validation, "validation"));
   if (input.executionAuthority != null && input.executionAuthority !== "NONE") blockers.push("EXECUTION_AUTHORITY_FORBIDDEN");
 
   const resolvedIdentity = resolveCanonicalStrategyIdentity(input.strategyIdentity);
@@ -99,6 +100,9 @@ export function buildStrategyEvidenceEnvelope(input = {}) {
   }
   if (!HASH_64.test(input.strategyIdentityDigest ?? "")) blockers.push("STRATEGY_IDENTITY_DIGEST_REQUIRED");
   else if (input.strategyIdentityDigest.toLowerCase() !== resolvedIdentity.strategyIdentityDigest) blockers.push("STRATEGY_IDENTITY_DIGEST_MISMATCH");
+  if (resolvedIdentity.identity.evidenceSchemaVersion !== STRATEGY_EVIDENCE_ENVELOPE_SCHEMA_VERSION) {
+    blockers.push("EVIDENCE_SCHEMA_IDENTITY_MISMATCH");
+  }
 
   if (!STRATEGY_EVIDENCE_STAGES.includes(input.evidenceStage)) blockers.push("EVIDENCE_STAGE_UNSUPPORTED");
   if (!nonEmpty(input.evidenceType)) blockers.push("EVIDENCE_TYPE_REQUIRED");
