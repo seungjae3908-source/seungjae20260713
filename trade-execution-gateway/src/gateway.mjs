@@ -78,6 +78,12 @@ function normalizeExecutionContext(input, market) {
   return Object.freeze({ provider, leverage, marginMode, reduceOnly: input.reduceOnly === true });
 }
 
+function needsForeignCapitalValuation(market, side, executionContext) {
+  if (market === "US_STOCK") return side !== "SELL";
+  if (market === "CRYPTO_FUTURES") return executionContext.reduceOnly !== true;
+  return false;
+}
+
 function normalizeOrderIntent(input) {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new GatewayError("INVALID_ORDER_INTENT", "order intent must be an object");
@@ -115,17 +121,23 @@ function normalizeOrderIntent(input) {
     throw new GatewayError("REFERENCE_PRICE_REQUIRED", "PAPER MARKET order requires referencePrice for bounded risk preview");
   }
 
+  const executionContext = normalizeExecutionContext(input, market);
   let capitalValuationEvidence = null;
-  try {
-    capitalValuationEvidence = normalizeCapitalValuationEvidence(
-      input.capitalValuationEvidence,
-      { market, symbol },
-    );
-  } catch (error) {
-    if (error instanceof KrwValuationEvidenceError) {
-      throw new GatewayError(error.code, error.message, error.statusCode);
+  if (
+    needsForeignCapitalValuation(market, side, executionContext)
+    && input.capitalValuationEvidence != null
+  ) {
+    try {
+      capitalValuationEvidence = normalizeCapitalValuationEvidence(
+        input.capitalValuationEvidence,
+        { market, symbol },
+      );
+    } catch (error) {
+      if (error instanceof KrwValuationEvidenceError) {
+        throw new GatewayError(error.code, error.message, error.statusCode);
+      }
+      throw error;
     }
-    throw error;
   }
 
   return Object.freeze({
@@ -138,8 +150,8 @@ function normalizeOrderIntent(input) {
     quantity,
     limitPrice,
     referencePrice,
-    capitalValuationEvidence,
-    executionContext: normalizeExecutionContext(input, market),
+    ...(capitalValuationEvidence == null ? {} : { capitalValuationEvidence }),
+    executionContext,
   });
 }
 
