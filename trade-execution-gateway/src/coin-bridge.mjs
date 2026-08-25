@@ -105,7 +105,9 @@ export function coinOrderToPaperIntent(payload) {
     leverage,
     marginMode,
     reduceOnly,
-    capitalValuationEvidence: payload.capitalValuationEvidence ?? null,
+    ...(market === "CRYPTO_FUTURES" && reduceOnly !== true && payload.capitalValuationEvidence != null
+      ? { capitalValuationEvidence: payload.capitalValuationEvidence }
+      : {}),
     idempotencyKey,
   });
 }
