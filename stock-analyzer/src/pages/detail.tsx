@@ -6,7 +6,9 @@ import { BottomNav } from '@/components/bottom-nav';
 import { CenteredPageHeader } from '@/components/centered-page-header';
 import { ResponsiveTabs } from '@/components/responsive-tabs';
 import { apiGet } from '@/lib/api';
+import { useAnalysisSelection, type AnalysisSelection } from '@/lib/analysis-selection';
 import { displayStockName, formatAppPrice } from '@/lib/stock-display';
+import { UNIFIED_CHART_TIMEFRAMES } from '@/lib/unified-chart-data';
 
 const AiChartPage = lazy(() => import('@/pages/ai-chart'));
 const LegacyDetailPage = lazy(() => import('@/pages/detail-legacy'));
@@ -20,6 +22,7 @@ const DETAIL_TABS = [
   { value: 'news', label: '뉴스' },
   { value: 'analysis', label: '상세분석' },
 ] as const;
+const CHART_TIMEFRAMES = new Set(UNIFIED_CHART_TIMEFRAMES.map((item) => item.key));
 
 function queryState() {
   const params = typeof window === 'undefined' ? new URLSearchParams() : new URLSearchParams(window.location.search);
@@ -28,6 +31,27 @@ function queryState() {
   const requested = params.get('tab');
   const tab: DetailTab = requested === 'chart' || requested === 'news' || requested === 'analysis' ? requested : 'summary';
   return { params, ticker, market, tab } as const;
+}
+
+function validStockContext(ticker: string, market: 'KR' | 'US'): boolean {
+  if (market === 'KR') return /^\d{6}$/.test(ticker);
+  return /^[A-Z0-9^][A-Z0-9.^-]{0,29}$/.test(ticker);
+}
+
+function pageTimeframe(params: URLSearchParams): string {
+  const requested = String(params.get('timeframe') ?? '').trim();
+  return CHART_TIMEFRAMES.has(requested as never) ? requested : '5m';
+}
+
+function samePageChartContext(selection: AnalysisSelection | null, expected: AnalysisSelection): boolean {
+  return Boolean(
+    selection
+    && selection.assetType === expected.assetType
+    && selection.market === expected.market
+    && selection.ticker === expected.ticker
+    && selection.symbol === expected.symbol
+    && selection.timeframe === expected.timeframe,
+  );
 }
 
 function finite(...values: unknown[]) {
@@ -66,6 +90,7 @@ function LoadingStatus({ label = '확인 중' }: { label?: string }) {
 
 export default function DetailPage() {
   const [location, navigate] = useLocation();
+  const analysisSelection = useAnalysisSelection();
   const initial = useMemo(queryState, [location]);
   const [tab, setTabState] = useState<DetailTab>(initial.tab);
   const ticker = initial.ticker;
@@ -120,7 +145,8 @@ export default function DetailPage() {
 
   const quoteData = quote.data ?? {};
   const profileData = profile.data ?? {};
-  const name = displayStockName(ticker, text(quoteData.name, profileData.name, profileData.companyName, ticker) ?? ticker, market);
+  const routeName = text(initial.params.get('name'));
+  const name = displayStockName(ticker, text(quoteData.name, profileData.name, profileData.companyName, routeName, ticker) ?? ticker, market);
   const currency = text(quoteData.currency) ?? (market === 'KR' ? 'KRW' : 'USD');
   const price = finite(quoteData.price, quoteData.currentPrice, quoteData.close, quoteData.last);
   const changePercent = finite(quoteData.changePercent, quoteData.change_rate, quoteData.percentChange, quoteData.changePct);
@@ -129,6 +155,22 @@ export default function DetailPage() {
   const marketCap = compactNumber(profileData.marketCap ?? quoteData.marketCap, currency === 'KRW' ? '원' : ` ${currency}`);
   const newsRows = ((news.data?.news ?? news.data?.items ?? []) as AnyObj[]).slice(0, 40);
   const summaryLoading = (quote.isLoading || profile.isLoading) && !quote.data && !profile.data;
+  const routeContextValid = validStockContext(ticker, market);
+  const canonicalChartSelection = useMemo<AnalysisSelection>(() => ({
+    assetType: 'stock',
+    market,
+    symbol: ticker,
+    ticker,
+    displayName: name || ticker,
+    timeframe: pageTimeframe(initial.params),
+    selectedAt: new Date().toISOString(),
+  }), [initial.params, market, name, ticker]);
+  const chartContextReady = routeContextValid && samePageChartContext(analysisSelection.selection, canonicalChartSelection);
+
+  useEffect(() => {
+    if (!routeContextValid || samePageChartContext(analysisSelection.selection, canonicalChartSelection)) return;
+    analysisSelection.select(canonicalChartSelection);
+  }, [analysisSelection.select, analysisSelection.selection, canonicalChartSelection, routeContextValid]);
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background" data-testid="canonical-stock-analysis" data-ticker={ticker}>
@@ -184,8 +226,14 @@ export default function DetailPage() {
         ) : null}
 
         {tab === 'chart' ? (
-          <div className="mx-auto h-full min-h-[520px] w-full max-w-7xl overflow-hidden rounded-3xl border border-card-border bg-card sm:min-h-[560px]" data-testid="canonical-rich-detail-chart">
-            <Suspense fallback={<LoadingStatus label="차트 준비 중" />}><AiChartPage embedded /></Suspense>
+          <div className="mx-auto h-full min-h-[520px] w-full max-w-7xl overflow-hidden rounded-3xl border border-card-border bg-card sm:min-h-[560px]" data-testid="canonical-rich-detail-chart" data-context-ticker={ticker} data-context-market={market}>
+            {!routeContextValid ? (
+              <div role="alert" data-testid="ai-chart-context-missing" className="flex min-h-[240px] items-center justify-center p-6 text-center text-sm font-black text-destructive">현재 종목 정보가 올바르지 않아 차트를 표시하지 않습니다.</div>
+            ) : !chartContextReady ? (
+              <div role="status" data-testid="ai-chart-context-syncing" className="flex min-h-[240px] items-center justify-center p-6 text-center text-sm font-black text-muted-foreground">현재 종목과 차트 정보를 다시 동기화하고 있습니다.</div>
+            ) : (
+              <Suspense fallback={<LoadingStatus label="차트 준비 중" />}><AiChartPage embedded /></Suspense>
+            )}
           </div>
         ) : null}
 
