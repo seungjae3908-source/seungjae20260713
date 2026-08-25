@@ -30,6 +30,7 @@ import type { FrontendScannerMarket } from '@/lib/signal-scanner-url';
 export type ScannerView = 'KR' | 'US' | 'SPOT' | 'FUTURES';
 type RequestStatus = 'loading' | 'success' | 'empty' | 'partial' | 'cancelled' | 'error';
 type MobileDetailTab = 'summary' | 'chart' | 'evidence' | 'performance' | 'risk';
+type FuturesDirectionFilter = 'ALL' | 'LONG' | 'SHORT';
 
 const VIEWS: Array<{ value: ScannerView; market: FrontendScannerMarket; label: string; description: string }> = [
   { value: 'KR', market: 'KR_STOCK', label: '국내주식', description: 'KRX 주식·ETF·ETN' },
@@ -44,6 +45,12 @@ const MOBILE_DETAIL_TABS: ReadonlyArray<{ value: MobileDetailTab; label: string 
   { value: 'evidence', label: '근거' },
   { value: 'performance', label: '성과' },
   { value: 'risk', label: '위험' },
+];
+
+const FUTURES_DIRECTION_FILTERS: ReadonlyArray<{ value: FuturesDirectionFilter; label: string }> = [
+  { value: 'ALL', label: '전체' },
+  { value: 'LONG', label: '롱' },
+  { value: 'SHORT', label: '숏' },
 ];
 
 const EMBEDDED_TIMEFRAMES: Readonly<Record<UnifiedScannerStrategyMode, readonly SignalScannerRequest['timeframe'][]>> = Object.freeze({
@@ -83,18 +90,44 @@ function formatMetric(value: number | null | undefined, suffix = ''): string {
   return `${formatNumber(value)}${suffix}`;
 }
 
+function sameNameAndSymbol(card: ScannerSignalCard): boolean {
+  return card.name.trim().toUpperCase() === card.symbol.trim().toUpperCase();
+}
+
+function displaySignalTitle(card: ScannerSignalCard): string {
+  return sameNameAndSymbol(card) ? card.symbol : `${card.name} · ${card.symbol}`;
+}
+
+function marketDisplayLabel(card: ScannerSignalCard): string {
+  const exchange = card.exchange ?? '거래소 미확인';
+  if (card.assetClass === 'coin_futures') return `코인 선물 · ${exchange}`;
+  if (card.assetClass === 'coin_spot') return `코인 현물 · ${exchange}`;
+  return `${card.market === 'US' ? '미국주식' : '국내주식'} · ${exchange}`;
+}
+
+function cardMetaLabel(card: ScannerSignalCard): string {
+  const marketLabel = marketDisplayLabel(card);
+  return sameNameAndSymbol(card) ? marketLabel : `${card.symbol} · ${marketLabel}`;
+}
+
 function actionLabel(card: ScannerSignalCard): string {
   const futures = card.assetClass === 'coin_futures';
   if (futures) {
-    if (card.action === 'LONG') return '↑ 롱 신호';
-    if (card.action === 'SHORT') return '↓ 숏 신호';
-    if (card.action === 'NONE' || card.action === 'NO_TRADE') return '— 거래 안 함 · NO_TRADE';
-    return '? 선물 방향 확인 필요 · UNKNOWN';
+    if (card.action === 'LONG') return '롱';
+    if (card.action === 'SHORT') return '숏';
+    if (card.action === 'NONE' || card.action === 'NO_TRADE') return '거래 안 함';
+    return '방향 미확인';
   }
-  if (card.action === 'BUY') return '↗ 매수 신호';
-  if (card.action === 'SELL') return '↘ 보유분 매도·청산 참고';
-  if (card.action === 'NONE' || card.action === 'NO_TRADE') return '— 거래 안 함 · NO_TRADE';
-  return '? 현물 방향 확인 필요 · UNKNOWN';
+  if (card.action === 'BUY') return '매수';
+  if (card.action === 'SELL') return '매도 참고';
+  if (card.action === 'NONE' || card.action === 'NO_TRADE') return '거래 안 함';
+  return '방향 미확인';
+}
+
+function actionBadgeClass(card: ScannerSignalCard): string {
+  if (card.action === 'SHORT' || card.action === 'SELL') return 'border-destructive/35 bg-destructive/10 text-destructive';
+  if (card.action === 'LONG' || card.action === 'BUY') return 'border-positive/35 bg-positive/10 text-positive';
+  return 'border-card-border bg-background text-muted-foreground';
 }
 
 function evidenceGradeLabel(card: ScannerSignalCard): string {
@@ -109,15 +142,15 @@ function alertTitle(alert: ScannerAlertCandidate): string {
   const futures = alert.assetClass === 'coin_futures';
   let label: string;
   if (futures) {
-    if (alert.action === 'LONG') label = '↑ 롱 신호';
-    else if (alert.action === 'SHORT') label = '↓ 숏 신호';
-    else if (alert.action === 'NONE' || alert.action === 'NO_TRADE') label = '— 거래 안 함 · NO_TRADE';
-    else label = '? 선물 방향 확인 필요 · UNKNOWN';
+    if (alert.action === 'LONG') label = '롱';
+    else if (alert.action === 'SHORT') label = '숏';
+    else if (alert.action === 'NONE' || alert.action === 'NO_TRADE') label = '거래 안 함';
+    else label = '방향 미확인';
   } else {
-    if (alert.action === 'BUY') label = '↗ 매수 신호';
-    else if (alert.action === 'SELL') label = '↘ 보유분 매도·청산 참고';
-    else if (alert.action === 'NONE' || alert.action === 'NO_TRADE') label = '— 거래 안 함 · NO_TRADE';
-    else label = '? 현물 방향 확인 필요 · UNKNOWN';
+    if (alert.action === 'BUY') label = '매수';
+    else if (alert.action === 'SELL') label = '매도 참고';
+    else if (alert.action === 'NONE' || alert.action === 'NO_TRADE') label = '거래 안 함';
+    else label = '방향 미확인';
   }
   return `${label} 승인 대기 · ${alert.symbol}`;
 }
@@ -134,6 +167,23 @@ function strategyLabel(strategy: UnifiedScannerStrategyMode): string {
 
 function defaultEmbeddedTimeframe(strategy: UnifiedScannerStrategyMode): SignalScannerRequest['timeframe'] {
   return strategy === 'scalping' ? '5m' : '1D';
+}
+
+function canonicalRank(card: ScannerSignalCard): number | null {
+  const rank = card.candidateRanking?.rank;
+  return rank != null && Number.isFinite(rank) && rank > 0 ? rank : null;
+}
+
+function compareScannerCards(left: ScannerSignalCard, right: ScannerSignalCard): number {
+  const leftRank = canonicalRank(left);
+  const rightRank = canonicalRank(right);
+  if (leftRank != null && rightRank != null && leftRank !== rightRank) return leftRank - rightRank;
+  if (leftRank != null && rightRank == null) return -1;
+  if (leftRank == null && rightRank != null) return 1;
+  const leftScore = left.candidateRanking?.score ?? left.score;
+  const rightScore = right.candidateRanking?.score ?? right.score;
+  if (Number.isFinite(leftScore) && Number.isFinite(rightScore) && leftScore !== rightScore) return rightScore - leftScore;
+  return left.symbol.localeCompare(right.symbol);
 }
 
 const OUTCOME_COPY: Record<ScannerOutcomeCode, { title: string; description: string }> = {
@@ -289,7 +339,7 @@ function SignalDetailPanel({
       <section aria-label="이 신호인 이유" className="rounded-2xl border border-primary/25 bg-primary/5 p-3">
         <div className="flex items-center justify-between gap-2">
           <h3 className="text-xs font-black">왜 이 신호인가 · 핵심 판단</h3>
-          <span className="rounded-full border border-primary/25 px-2 py-1 text-[10px] font-black text-primary">{actionLabel(card)}</span>
+          <span className={`rounded-full border px-2 py-1 text-[10px] font-black ${actionBadgeClass(card)}`}>{actionLabel(card)}</span>
         </div>
         {why.length > 0
           ? <ul className="mt-2 space-y-1 text-xs leading-5">{why.slice(0, 3).map((reason, index) => <li key={`${reason}:${index}`}>• {reason}</li>)}</ul>
@@ -300,7 +350,7 @@ function SignalDetailPanel({
       {qualityPanel}
 
       <section className="rounded-2xl border border-card-border p-3" data-testid="scanner-price-plan">
-        <div className="flex items-center justify-between gap-2"><h3 className="text-xs font-black">진입 · 손절 · 목표</h3><span className="rounded-full border border-card-border px-2 py-1 text-[9px] font-black">NO SYNTHETIC PRICE</span></div>
+        <div className="flex items-center justify-between gap-2"><h3 className="text-xs font-black">진입 · 손절 · 목표</h3><span className="rounded-full border border-card-border px-2 py-1 text-[9px] font-black">서버 계획</span></div>
         <div className="mt-2 grid grid-cols-2 gap-2 text-center">
           <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">진입</p><p className="text-xs font-black">{card.pricePlan.entryZone ? `${formatNumber(card.pricePlan.entryZone.from)}~${formatNumber(card.pricePlan.entryZone.to)}` : '미확인'}</p></div>
           <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">손절</p><p className="text-xs font-black">{formatNumber(card.pricePlan.stopLoss)}</p></div>
@@ -310,8 +360,8 @@ function SignalDetailPanel({
       </section>
 
       <div className="grid grid-cols-2 gap-2">
-        <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={onAiChart} className="min-h-11 rounded-xl bg-primary px-3 text-xs font-black text-primary-foreground">AI Chart</button>
-        <button type="button" aria-label="주문 준비 열기" onClick={onOrderPreparation} className="min-h-11 rounded-xl border border-primary/40 px-3 text-xs font-black">Order Preparation</button>
+        <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={onAiChart} className="min-h-11 rounded-xl bg-primary px-3 text-xs font-black text-primary-foreground">AI 차트</button>
+        <button type="button" aria-label="주문 준비 열기" onClick={onOrderPreparation} className="min-h-11 rounded-xl border border-primary/40 px-3 text-xs font-black">주문 준비</button>
       </div>
     </div>
   );
@@ -353,9 +403,9 @@ function SignalDetailPanel({
 
   const chartContent = (
     <section data-testid="scanner-mobile-chart" className="rounded-2xl border border-card-border p-3">
-      <h3 className="text-xs font-black">AI Chart</h3>
+      <h3 className="text-xs font-black">AI 차트</h3>
       <p className="mt-2 break-keep text-xs leading-5 text-muted-foreground">모바일 상세 안에 차트를 길게 끼워 넣지 않고 전체 차트 화면으로 전환해 세로 스크롤을 줄입니다.</p>
-      <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={onAiChart} className="mt-3 min-h-11 w-full rounded-xl bg-primary px-3 text-sm font-black text-primary-foreground">AI Chart 전체화면 열기</button>
+      <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={onAiChart} className="mt-3 min-h-11 w-full rounded-xl bg-primary px-3 text-sm font-black text-primary-foreground">AI 차트 전체화면 열기</button>
     </section>
   );
 
@@ -365,7 +415,7 @@ function SignalDetailPanel({
       <section className="rounded-2xl border border-card-border p-3">
         <h3 className="text-xs font-black">위험 · 데이터 상태</h3>
         <div className="mt-2 grid grid-cols-2 gap-2 text-center">
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">Risk</p><p className="text-xs font-black">{card.riskScore ?? '미확인'} · {card.riskLevel}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">위험</p><p className="text-xs font-black">{formatNumber(card.riskScore, 1)} · {card.riskLevel}</p></div>
           <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">Data</p><p className="text-xs font-black">{card.dataState}</p></div>
         </div>
         <p className="mt-2 break-words text-[11px] leading-5 text-muted-foreground">출처 {card.dataSources.length ? card.dataSources.join(' · ') : '미확인'}</p>
@@ -373,14 +423,14 @@ function SignalDetailPanel({
         {risks.length ? <ul className="mt-2 space-y-1 text-[11px] leading-5 text-warning">{risks.map((risk) => <li key={risk}>• {risk}</li>)}</ul> : <p className="mt-2 text-[11px] text-muted-foreground">추가 Risk 경고 없음</p>}
       </section>
       <div className="grid grid-cols-2 gap-2">
-        <button type="button" aria-label="주문 준비 열기" onClick={onOrderPreparation} className="min-h-11 rounded-xl border border-primary/40 px-3 text-sm font-black">Order Preparation</button>
+        <button type="button" aria-label="주문 준비 열기" onClick={onOrderPreparation} className="min-h-11 rounded-xl border border-primary/40 px-3 text-sm font-black">주문 준비</button>
         <button type="button" onClick={onOpenAsset} className="min-h-11 rounded-xl border border-card-border px-3 text-sm font-bold">자산 상세</button>
       </div>
       <p className="text-center text-[10px] font-bold text-muted-foreground">두 액션 모두 클릭만으로 주문을 제출하지 않습니다 · real order 0</p>
       {showOrderPreparation ? (
         <div data-testid="order-preparation" className="border-t border-card-border pt-3">
           <div className="mb-3 rounded-2xl border border-warning/30 bg-warning/10 p-3">
-            <h3 className="text-xs font-black">Order Preparation · 실행 아님</h3>
+            <h3 className="text-xs font-black">주문 준비 · 실행 아님</h3>
             <p className="mt-1 break-keep text-[11px] leading-5 text-muted-foreground">기존 Risk Engine·승인형 Paper 계획만 재사용합니다. 이 화면은 실주문을 전송하지 않습니다.</p>
           </div>
           <ScannerApprovalComposer selection={selection} />
@@ -403,24 +453,24 @@ function SignalDetailPanel({
     <section data-testid="signal-detail" aria-label="Signal Detail" className="min-w-0 rounded-3xl border border-card-border bg-card p-4 shadow-xl">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-[11px] font-black text-primary">Signal Detail</p>
-          <h2 className="mt-1 break-words text-lg font-black">{card.name} · {card.symbol}</h2>
-          <p className="mt-1 text-xs font-bold text-muted-foreground">{card.market} · {card.exchange ?? '거래소 미확인'} · {card.assetType}</p>
+          <p className="text-[11px] font-black text-primary">신호 상세</p>
+          <h2 className="mt-1 break-words text-lg font-black">{displaySignalTitle(card)}</h2>
+          <p className="mt-1 text-xs font-bold text-muted-foreground">{marketDisplayLabel(card)}</p>
           <div className="mt-2 flex flex-wrap gap-1">
-            <span data-testid="scanner-direction-badge" className="rounded-full border border-primary/30 bg-primary/5 px-2 py-1 text-[10px] font-black">{actionLabel(card)}</span>
+            <span data-testid="scanner-direction-badge" className={`rounded-full border px-2 py-1 text-[10px] font-black ${actionBadgeClass(card)}`}>{actionLabel(card)}</span>
             <span data-testid="scanner-signal-state" className="rounded-full border border-primary/30 px-2 py-1 text-[10px] font-black">상태 {card.signalState || '미확인'}</span>
             <span data-testid="scanner-evidence-grade" className="rounded-full border border-card-border px-2 py-1 text-[10px] font-black">등급 {evidenceGradeLabel(card)}</span>
             <span data-testid="scanner-ttl-badge" className="rounded-full border border-card-border px-2 py-1 text-[10px] font-black">{remainingValidityLabel(card.expiresAt)}</span>
           </div>
         </div>
-        {onClose ? <button type="button" onClick={onClose} aria-label="Signal Detail 닫기" className="min-h-11 shrink-0 rounded-xl border border-card-border px-3 text-xs font-black">닫기</button> : null}
+        {onClose ? <button type="button" onClick={onClose} aria-label="Signal Detail 닫기" className="min-h-11 shrink-0 rounded-xl border border-card-border bg-background px-3 text-xs font-black">닫기</button> : null}
       </div>
 
       <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
         <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">현재가</p><p className="mt-1 break-words text-sm font-black">{formatNumber(card.price, card.currency === 'KRW' ? 0 : 6)} {card.currency}</p></div>
-        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">Signal Score</p><p className="mt-1 text-sm font-black">{card.score}</p></div>
-        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">Confidence</p><p className="mt-1 text-sm font-black">{card.confidence}</p></div>
-        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">Risk</p><p className="mt-1 text-sm font-black">{card.riskScore ?? '미확인'} · {card.riskLevel}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">신호 점수</p><p className="mt-1 text-sm font-black">{formatNumber(card.score, 1)}점</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">신뢰도</p><p className="mt-1 text-sm font-black">{formatNumber(card.confidence, 1)}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">위험</p><p className="mt-1 text-sm font-black">{formatNumber(card.riskScore, 1)} · {card.riskLevel}</p></div>
       </div>
 
       {mobile ? (
@@ -448,7 +498,7 @@ function SignalDetailPanel({
           {qualityPanel}
           {evidenceContent}
           <section className="mt-3 rounded-2xl border border-card-border p-3" data-testid="scanner-price-plan">
-            <div className="flex items-center justify-between gap-2"><h3 className="text-xs font-black">PricePlan · 서버 계산값만 표시</h3><span className="rounded-full border border-card-border px-2 py-1 text-[9px] font-black">NO SYNTHETIC PRICE</span></div>
+            <div className="flex items-center justify-between gap-2"><h3 className="text-xs font-black">진입 · 손절 · 목표</h3><span className="rounded-full border border-card-border px-2 py-1 text-[9px] font-black">서버 계획</span></div>
             <div className="mt-2 grid grid-cols-2 gap-2 text-center sm:grid-cols-5">
               <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">진입</p><p className="text-xs font-black">{card.pricePlan.entryZone ? `${formatNumber(card.pricePlan.entryZone.from)}~${formatNumber(card.pricePlan.entryZone.to)}` : '미확인'}</p></div>
               <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">손절</p><p className="text-xs font-black">{formatNumber(card.pricePlan.stopLoss)}</p></div>
@@ -465,15 +515,15 @@ function SignalDetailPanel({
             {risks.length ? <ul className="mt-2 space-y-1 text-[11px] leading-5 text-warning">{risks.map((risk) => <li key={risk}>• {risk}</li>)}</ul> : <p className="mt-2 text-[11px] text-muted-foreground">추가 Risk 경고 없음</p>}
           </section>
           <div className="mt-3 grid grid-cols-2 gap-2">
-            <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={onAiChart} className="min-h-11 rounded-xl bg-primary px-3 text-sm font-black text-primary-foreground">AI Chart</button>
-            <button type="button" aria-label="주문 준비 열기" onClick={onOrderPreparation} className="min-h-11 rounded-xl border border-primary/40 px-3 text-sm font-black">Order Preparation</button>
+            <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={onAiChart} className="min-h-11 rounded-xl bg-primary px-3 text-sm font-black text-primary-foreground">AI 차트</button>
+            <button type="button" aria-label="주문 준비 열기" onClick={onOrderPreparation} className="min-h-11 rounded-xl border border-primary/40 px-3 text-sm font-black">주문 준비</button>
             <button type="button" onClick={onOpenAsset} className="col-span-2 min-h-11 rounded-xl border border-card-border px-3 text-sm font-bold">기존 자산 상세 열기</button>
           </div>
           <p className="mt-2 text-center text-[10px] font-bold text-muted-foreground">두 액션 모두 클릭만으로 주문을 제출하지 않습니다 · real order 0</p>
           {showOrderPreparation ? (
             <div data-testid="order-preparation" className="mt-4 border-t border-card-border pt-4">
               <div className="mb-3 rounded-2xl border border-warning/30 bg-warning/10 p-3">
-                <h3 className="text-xs font-black">Order Preparation · 실행 아님</h3>
+                <h3 className="text-xs font-black">주문 준비 · 실행 아님</h3>
                 <p className="mt-1 break-keep text-[11px] leading-5 text-muted-foreground">기존 Risk Engine·승인형 Paper 계획만 재사용합니다. 이 화면은 실주문을 전송하지 않습니다.</p>
               </div>
               <ScannerApprovalComposer selection={selection} />
@@ -496,6 +546,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
   const [view, setView] = useState<ScannerView>(initialView);
   const [strategy, setStrategy] = useState<UnifiedScannerStrategyMode>(initialStrategy);
   const [embeddedTimeframe, setEmbeddedTimeframe] = useState<SignalScannerRequest['timeframe']>(() => defaultEmbeddedTimeframe(initialStrategy));
+  const [futuresDirectionFilter, setFuturesDirectionFilter] = useState<FuturesDirectionFilter>('ALL');
   const [cursor, setCursor] = useState(0);
   const [refreshToken, setRefreshToken] = useState(0);
   const [status, setStatus] = useState<RequestStatus>('loading');
@@ -540,11 +591,22 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
       if (!card?.signalId || !card.symbol || !card.name) continue;
       if (!map.has(card.symbol)) map.set(card.symbol, card);
     }
-    return Array.from(map.values());
+    return Array.from(map.values()).sort(compareScannerCards);
   }, [data?.cards]);
+  const futuresDirectionCounts = useMemo(() => ({
+    ALL: normalizedCards.length,
+    LONG: normalizedCards.filter((card) => card.action === 'LONG').length,
+    SHORT: normalizedCards.filter((card) => card.action === 'SHORT').length,
+  }), [normalizedCards]);
+  const visibleCards = useMemo(
+    () => view !== 'FUTURES' || futuresDirectionFilter === 'ALL'
+      ? normalizedCards
+      : normalizedCards.filter((card) => card.action === futuresDirectionFilter),
+    [futuresDirectionFilter, normalizedCards, view],
+  );
   const selectedCard = useMemo(
-    () => normalizedCards.find((card) => card.signalId === selectedSignalId) ?? null,
-    [normalizedCards, selectedSignalId],
+    () => visibleCards.find((card) => card.signalId === selectedSignalId) ?? null,
+    [visibleCards, selectedSignalId],
   );
   const outcome = data ? deriveScannerDisplayOutcome(data, normalizedCards.length) : null;
 
@@ -567,12 +629,12 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
   }, [requestKey]);
 
   useEffect(() => {
-    if (selectedSignalId && !normalizedCards.some((card) => card.signalId === selectedSignalId)) {
+    if (selectedSignalId && !visibleCards.some((card) => card.signalId === selectedSignalId)) {
       setSelectedSignalId(null);
       setDetailOpen(false);
       setShowOrderPreparation(false);
     }
-  }, [normalizedCards, selectedSignalId]);
+  }, [selectedSignalId, visibleCards]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -697,7 +759,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
 
         <section aria-label="검색 시장" className="grid grid-cols-2 gap-2 lg:grid-cols-4">
           {VIEWS.map((item) => (
-            <button key={item.value} type="button" aria-pressed={view === item.value} onClick={() => { setCursor(0); setView(item.value); }}
+            <button key={item.value} type="button" aria-pressed={view === item.value} onClick={() => { setCursor(0); setFuturesDirectionFilter('ALL'); setView(item.value); }}
               className={`min-h-14 rounded-2xl border px-3 py-2 text-left ${view === item.value ? 'border-primary bg-primary/10' : 'border-card-border bg-card'}`}>
               <span className="block break-keep text-sm font-black">{item.label}</span>
               <span className="hidden break-keep text-[11px] text-muted-foreground sm:block">{item.description}</span>
@@ -724,8 +786,24 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
             <span className="rounded-full border border-card-border px-3 py-1 text-[11px] font-bold">{profile.profileVersion}</span>
           </div>
           <p data-testid="scanner-market-signal-guide" className="mt-2 rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 text-xs font-black text-primary">
-            {view === 'FUTURES' ? '코인 선물 · ↑ 롱 신호 / ↓ 숏 신호' : `${view === 'KR' ? '국내주식' : view === 'US' ? '해외주식' : '코인 현물'} · ↗ 매수 신호`}
+            {view === 'FUTURES' ? '코인 선물 · 롱 / 숏' : `${view === 'KR' ? '국내주식' : view === 'US' ? '해외주식' : '코인 현물'} · 매수`}
           </p>
+          {view === 'FUTURES' ? (
+            <div data-testid="scanner-futures-direction-filter" role="tablist" aria-label="코인 선물 방향" className="mt-2 grid grid-cols-3 gap-2 rounded-2xl bg-background p-1">
+              {FUTURES_DIRECTION_FILTERS.map((item) => (
+                <button
+                  key={item.value}
+                  type="button"
+                  role="tab"
+                  aria-selected={futuresDirectionFilter === item.value}
+                  onClick={() => setFuturesDirectionFilter(item.value)}
+                  className={`min-h-11 rounded-xl px-3 text-xs font-black ${futuresDirectionFilter === item.value ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground'}`}
+                >
+                  {item.label} {futuresDirectionCounts[item.value]}
+                </button>
+              ))}
+            </div>
+          ) : null}
           <p className="mt-2 hidden break-keep text-[11px] text-muted-foreground sm:block">기술지표 직접 선택은 기본 화면에 노출하지 않습니다. 상세 근거는 결과 카드에서 확인할 수 있습니다.</p>
           {embedded && (
             <label className="mt-3 block space-y-1 text-xs font-bold">
@@ -797,27 +875,32 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
                   <span className="rounded-xl bg-background p-2">필터제외 {data.execution.filteredByStrategyCount ?? 0}</span>
                 </div>
               </section>
+            ) : visibleCards.length === 0 ? (
+              <section data-testid="scanner-direction-empty" className="rounded-3xl border border-card-border bg-card p-6 text-center">
+                <p className="text-sm font-black">선택한 방향의 후보가 없습니다.</p>
+                <p className="mt-2 text-xs text-muted-foreground">전체 탭에서 현재 검증된 롱·숏 후보를 함께 확인할 수 있습니다.</p>
+              </section>
             ) : (
               <section className={embedded ? 'space-y-3' : 'grid gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(420px,1.1fr)]'}>
                 <div data-testid="scanner-master-list" className="min-w-0 space-y-2">
-                  {normalizedCards.map((card) => (
-                    <article key={card.signalId} className={`min-w-0 rounded-2xl border bg-card p-3 ${selectedSignalId === card.signalId ? 'border-primary ring-1 ring-primary/20' : 'border-card-border'}`}>
+                  {visibleCards.map((card) => (
+                    <article key={card.signalId} data-testid="scanner-signal-card" data-rank={canonicalRank(card) ?? undefined} className={`min-w-0 rounded-2xl border bg-card p-3 ${selectedSignalId === card.signalId ? 'border-primary ring-1 ring-primary/20' : 'border-card-border'}`}>
                       <div className="flex items-start justify-between gap-3">
-                        <button type="button" aria-label={`${card.name} ${card.symbol} · ${card.market} · ${card.assetType}`} onClick={() => selectSignal(card)} className="min-h-11 min-w-0 flex-1 text-left">
-                          <p className="truncate font-black">{card.candidateRanking?.rank ? `${card.candidateRanking.rank}위 · ` : ''}{card.name}</p>
-                          <p className="truncate text-xs text-muted-foreground">{card.symbol} · {card.market}</p>
+                        <button type="button" aria-label={`${displaySignalTitle(card)} · ${marketDisplayLabel(card)}`} onClick={() => selectSignal(card)} className="min-h-11 min-w-0 flex-1 text-left">
+                          <p className="truncate font-black">{card.candidateRanking?.rank ? `${card.candidateRanking.rank}위 · ` : ''}{sameNameAndSymbol(card) ? card.symbol : card.name}</p>
+                          <p className="truncate text-xs text-muted-foreground">{cardMetaLabel(card)}</p>
                           <div className="mt-1 flex min-w-0 flex-wrap gap-1">
-                            <span data-testid="scanner-card-direction" className="rounded-full border border-primary/30 px-2 py-0.5 text-[10px] font-black">{actionLabel(card)}</span>
+                            <span data-testid="scanner-card-direction" className={`rounded-full border px-2 py-0.5 text-[10px] font-black ${actionBadgeClass(card)}`}>{actionLabel(card)}</span>
                             <span className="rounded-full border border-card-border px-2 py-0.5 text-[10px] font-black">등급 {evidenceGradeLabel(card)}</span>
                             <span className="rounded-full border border-card-border px-2 py-0.5 text-[10px] font-black">{remainingValidityLabel(card.expiresAt)}</span>
                           </div>
                         </button>
-                        <div className="shrink-0 text-right"><p className="text-sm font-black">{formatNumber(card.price, card.currency === 'KRW' ? 0 : 6)}</p><p className="text-xs text-muted-foreground">Score {card.score} · Risk {card.riskScore ?? '미확인'}</p></div>
+                        <div className="shrink-0 text-right"><p className="text-sm font-black">{formatNumber(card.price, card.currency === 'KRW' ? 0 : 6)}</p><p className="text-xs text-muted-foreground">점수 {formatNumber(card.score, 1)} · 위험 {formatNumber(card.riskScore, 1)}</p></div>
                       </div>
                       <div className="mt-2 flex min-w-0 flex-wrap gap-1">{card.matched.slice(0, 3).map((item) => <span key={item} className="max-w-full truncate rounded-lg bg-background px-2 py-1 text-[10px]">{item}</span>)}{card.unverified.length ? <span className="rounded-lg bg-warning/10 px-2 py-1 text-[10px] text-warning">미검증 {card.unverified.length}</span> : null}</div>
                       <div className="mt-2 grid grid-cols-2 gap-2">
-                        <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={() => openInAiChart(card)} className="min-h-11 rounded-xl bg-primary px-2 text-xs font-black text-primary-foreground">AI Chart</button>
-                        <button type="button" aria-label={`${card.name} 주문 준비`} onClick={() => openOrderPreparation(card)} className="min-h-11 rounded-xl border border-primary/40 px-2 text-xs font-black">Order Preparation</button>
+                        <button type="button" aria-label="AI 차트 분석기에서 보기" onClick={() => openInAiChart(card)} className="min-h-11 rounded-xl bg-primary px-2 text-xs font-black text-primary-foreground">AI 차트</button>
+                        <button type="button" aria-label={`${card.name} 주문 준비`} onClick={() => openOrderPreparation(card)} className="min-h-11 rounded-xl border border-primary/40 px-2 text-xs font-black">주문 준비</button>
                       </div>
                     </article>
                   ))}
@@ -830,7 +913,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
                 {!embedded ? (
                   <aside data-testid="scanner-desktop-detail" className="hidden min-w-0 lg:block">
                     <div className="sticky top-3">
-                      {selectedCard ? <SignalDetailPanel card={selectedCard} selection={selectionFor(selectedCard)} showOrderPreparation={showOrderPreparation} onOpenAsset={() => navigate(signalScannerDetailPath(selectedCard))} onAiChart={() => openInAiChart(selectedCard)} onOrderPreparation={() => openOrderPreparation(selectedCard)} /> : <section className="rounded-3xl border border-dashed border-card-border bg-card p-8 text-center"><p className="font-black">Signal Detail</p><p className="mt-2 text-xs text-muted-foreground">왼쪽 후보를 선택하면 근거·누락·PricePlan·Risk와 안전 액션을 표시합니다.</p></section>}
+                      {selectedCard ? <SignalDetailPanel card={selectedCard} selection={selectionFor(selectedCard)} showOrderPreparation={showOrderPreparation} onOpenAsset={() => navigate(signalScannerDetailPath(selectedCard))} onAiChart={() => openInAiChart(selectedCard)} onOrderPreparation={() => openOrderPreparation(selectedCard)} /> : <section className="rounded-3xl border border-dashed border-card-border bg-card p-8 text-center"><p className="font-black">신호 상세</p><p className="mt-2 text-xs text-muted-foreground">왼쪽 후보를 선택하면 근거·누락·진입·손절·목표와 안전 액션을 표시합니다.</p></section>}
                     </div>
                   </aside>
                 ) : null}
@@ -847,8 +930,8 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
       </div>
       {selectedCard && detailOpen ? (
         <div className="lg:hidden">
-          <button type="button" aria-label="Signal Detail 닫기" onClick={() => { setDetailOpen(false); setShowOrderPreparation(false); }} className="fixed inset-0 z-[60] bg-black/45" />
-          <div role="dialog" aria-modal="true" aria-label="Signal Detail" data-testid="scanner-mobile-sheet" className="fixed inset-x-0 bottom-0 z-[70] max-h-[calc(100dvh-0.75rem)] overflow-y-auto overscroll-contain rounded-t-3xl bg-background p-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] shadow-2xl">
+          <button type="button" aria-label="Signal Detail 닫기" onClick={() => { setDetailOpen(false); setShowOrderPreparation(false); }} className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-[1px]" />
+          <div role="dialog" aria-modal="true" aria-label="Signal Detail" data-testid="scanner-mobile-sheet" className="fixed inset-x-0 bottom-0 z-[70] max-h-[calc(100dvh-0.75rem)] overflow-y-auto overscroll-contain rounded-t-3xl border border-card-border bg-card p-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] shadow-2xl ring-1 ring-black/10">
             <SignalDetailPanel card={selectedCard} selection={selectionFor(selectedCard)} showOrderPreparation={showOrderPreparation} onClose={() => { setDetailOpen(false); setShowOrderPreparation(false); }} onOpenAsset={() => navigate(signalScannerDetailPath(selectedCard))} onAiChart={() => openInAiChart(selectedCard)} onOrderPreparation={() => openOrderPreparation(selectedCard)} />
           </div>
         </div>
