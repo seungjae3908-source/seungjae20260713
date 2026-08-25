@@ -23,6 +23,31 @@ function safety() {
   });
 }
 
+function deriveRiskReward(card, direction, blockers) {
+  if (![card?.entry, card?.stop, card?.target].every(finite)) {
+    blockers.push("ENTRY_RISK_PLAN_INCOMPLETE");
+    return null;
+  }
+  const normalizedDirection = typeof direction === "string" ? direction.trim().toUpperCase() : "";
+  let risk;
+  let reward;
+  if (["BUY", "LONG"].includes(normalizedDirection)) {
+    risk = card.entry - card.stop;
+    reward = card.target - card.entry;
+  } else if (["SELL", "SHORT"].includes(normalizedDirection)) {
+    risk = card.stop - card.entry;
+    reward = card.entry - card.target;
+  } else {
+    blockers.push("RISK_DIRECTION_UNSUPPORTED");
+    return null;
+  }
+  if (!(risk > 0) || !(reward > 0)) {
+    blockers.push("INVALID_ENTRY_STOP_TARGET_GEOMETRY");
+    return null;
+  }
+  return reward / risk;
+}
+
 function decision(card, champion, context) {
   const blockers = [];
   const identity = champion.strategyIdentity;
@@ -44,10 +69,18 @@ function decision(card, champion, context) {
   else if (!finite(card?.liquidity) || card.liquidity < context.minimumLiquidity) blockers.push("INVALID_LIQUIDITY");
 
   if (card?.riskEvidence?.status !== "PASS") blockers.push("INVALID_RISK_EVIDENCE");
-  if (![card?.entry, card?.stop, card?.target].every(finite)) blockers.push("ENTRY_RISK_PLAN_INCOMPLETE");
+  const derivedRiskReward = deriveRiskReward(card, identity.direction, blockers);
 
-  if (!finite(context.minimumRiskReward) || context.minimumRiskReward <= 0) blockers.push("RISK_REWARD_POLICY_MISSING");
-  else if (!finite(card?.riskReward) || card.riskReward < context.minimumRiskReward) blockers.push("UNACCEPTABLE_RISK_REWARD");
+  if (!finite(context.minimumRiskReward) || context.minimumRiskReward <= 0) {
+    blockers.push("RISK_REWARD_POLICY_MISSING");
+  } else if (derivedRiskReward != null) {
+    if (!finite(card?.riskReward)) blockers.push("RISK_REWARD_MISSING");
+    else {
+      const tolerance = Math.max(1, Math.abs(derivedRiskReward)) * 1e-9;
+      if (Math.abs(card.riskReward - derivedRiskReward) > tolerance) blockers.push("RISK_REWARD_MISMATCH");
+    }
+    if (derivedRiskReward < context.minimumRiskReward) blockers.push("UNACCEPTABLE_RISK_REWARD");
+  }
 
   const resolvedBlockers = unique(blockers);
   if (resolvedBlockers.length > 0) {
@@ -81,7 +114,7 @@ function decision(card, champion, context) {
     entry: card.entry,
     stop: card.stop,
     target: card.target,
-    riskReward: card.riskReward,
+    riskReward: derivedRiskReward,
     sourceCard: structuredClone(card),
     safety: safety(),
   });
