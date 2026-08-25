@@ -187,7 +187,7 @@ jobs:
           CONTROL_PLANE_SHA: ${{ github.sha }}
           PYTHONPATH: ${{ runner.temp }}/agent-hub-control-plane
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HUB_ISSUE_NUMBER: '660'
+          HUB_ISSUE_NUMBER: '62'
         run: |
           python3 "$CONTROL_PLANE_DIR/agent_hub_control_plane_v2.py" verify --destination "$CONTROL_PLANE_DIR" --source-sha "$CONTROL_PLANE_SHA"
           python3 "$CONTROL_PLANE_DIR/agent_hub_executor_gate_hardening_v2.py"
@@ -434,7 +434,7 @@ jobs:
           CONTROL_PLANE_SHA: ${{ github.sha }}
           PYTHONPATH: ${{ runner.temp }}/agent-hub-control-plane
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HUB_ISSUE_NUMBER: '660'
+          HUB_ISSUE_NUMBER: '62'
           COMMAND_ID: ${{ steps.prepare.outputs.command_id }}
           SOURCE_TASK_ID: ${{ steps.prepare.outputs.source_task_id }}
           TARGET_WORKER: ${{ steps.prepare.outputs.target_worker }}
