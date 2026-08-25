@@ -68,12 +68,13 @@ test("no eligible candidates returns NONE and never changes validated champion",
   assert.equal(none.validatedChampion, false);
 });
 
-test("production selection is locked until the Phase 5 canonical evidence adapter exists", () => {
+test("production selection rejects evidence that was not verified by the Phase 5 adapter", () => {
   const result = selectProvisionalChampion({ candidates: [candidate("production-shaped", { testOnly: false })] });
   assert.equal(result.status, "NONE");
   assert.equal(result.currentProvisionalChampion, "NONE");
   assert.ok(result.blockers.includes("CANONICAL_EVIDENCE_ADAPTER_NOT_READY"));
   assert.equal(result.canonicalEvidenceAuthority, "PHASE5_ADAPTER_REQUIRED");
+  assert.equal(result.orderSubmitted, false);
 });
 
 test("TEST_ONLY policy refuses an unmarked canonical-looking candidate", () => {
@@ -174,6 +175,7 @@ test("eligible selection is deterministic, TEST_ONLY and never Validated", () =>
   assert.equal(first.currentProvisionalChampion.evidenceClass, "TEST_ONLY");
   assert.equal(first.currentValidatedChampion, "NONE");
   assert.equal(first.executionAuthority, "NONE");
+  assert.equal(first.orderSubmitted, false);
   assert.equal(first.safety.LIVE_TRADING, false);
   assert.equal(first.safety.REAL_ORDER_ENABLED, false);
   assert.equal(first.safety.PRIVATE_TRADING_API_ALLOWED, false);
