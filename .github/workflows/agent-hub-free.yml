@@ -198,7 +198,7 @@ jobs:
       github.event_name == 'repository_dispatch' ||
       (
         github.event_name == 'issue_comment' &&
-        github.event.issue.number == 62 &&
+        github.event.issue.number == 660 &&
         !github.event.issue.pull_request &&
         contains(github.event.comment.body, '[WORKER_REPORT]') &&
         contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
@@ -220,7 +220,7 @@ jobs:
           PYTHONPATH: scripts
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          HUB_ISSUE_NUMBER: '62'
+          HUB_ISSUE_NUMBER: '660'
         run: python3 scripts/agent_hub_coordinator_hardening_v2.py
       - name: Wake controlled executor only for validated ready command
         if: steps.hub.outputs.executor_ready == 'true'
@@ -231,7 +231,7 @@ jobs:
           set -Eeuo pipefail
           [[ "$COMMAND_ID" =~ ^hub-[0-9]+-[0-9a-f]{16}$ ]]
           mapfile -t command_comment_ids < <(
-            gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/62/comments?per_page=100" \
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/660/comments?per_page=100" \
               --jq ".[] | select(.user.login == \"github-actions[bot]\") | select(.body | contains(\"<!-- agent-hub-command:${COMMAND_ID} -->\")) | .id"
           )
           test "${#command_comment_ids[@]}" -eq 1
