@@ -3,6 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { AUTHORITATIVE_PAPER_EVIDENCE_SOURCE_OWNERSHIP } from "../src/authoritative-paper-evidence-source-ownership-v1.js";
 import { createAuthoritativePaperForwardDependenciesFromSourceWiring } from "../src/authoritative-paper-runtime-factory-v1.js";
+import { createNaturalFunnelObservedPaperRuntimeFromSourceWiring } from "../src/authoritative-paper-natural-funnel-v1.js";
 import {
   createLosslessPaperStateSnapshotFileOwner,
   loadValidatedAuthoritativePaperRuntimePackage,
@@ -70,6 +71,59 @@ function stageMeasurementCount(stageMeasurements, stage) {
   return measurement?.status === "MEASURED" && Number.isInteger(measurement.count)
     ? measurement.count
     : null;
+}
+
+function naturalStageMeasurement(stage, count, provenance, blocker = null) {
+  const measured = Number.isInteger(count) && count >= 0;
+  return Object.freeze({
+    stage,
+    status: measured ? "MEASURED" : "UNKNOWN",
+    count: measured ? count : null,
+    blocker: measured ? null : blocker,
+    provenance: measured ? provenance : null,
+    measuredAtMs: null,
+  });
+}
+
+function finalizeNaturalFunnel(baseMeasurements, result) {
+  if (!Array.isArray(baseMeasurements)) return Object.freeze([]);
+  const measurements = baseMeasurements.map((row) => Object.freeze({ ...row }));
+  if (result?.invocation?.naturalScheduleInvocation !== true || result?.status === "REPLAYED") {
+    return Object.freeze(measurements.map((row) => ["PAPER_ENTRY", "POSITION", "SETTLEMENT", "OUTCOME"].includes(row.stage)
+      ? naturalStageMeasurement(row.stage, null, null, result?.status === "REPLAYED" ? "REPLAY_EXCLUDED_FROM_NATURAL_EVIDENCE" : "NON_NATURAL_INVOCATION")
+      : row));
+  }
+  const entries = Number.isInteger(result?.summary?.entries) && result.summary.entries >= 0
+    ? result.summary.entries
+    : null;
+  const settled = Number.isInteger(result?.summary?.tradesSettled) && result.summary.tradesSettled >= 0
+    ? result.summary.tradesSettled
+    : null;
+  return Object.freeze(measurements.map((row) => {
+    if (row.stage === "PAPER_ENTRY") {
+      return naturalStageMeasurement("PAPER_ENTRY", entries, "recurring-paper-loop-v1.summary.entries", "PAPER_ENTRY_NOT_MEASURED");
+    }
+    if (row.stage === "POSITION") {
+      return naturalStageMeasurement("POSITION", entries, "recurring-paper-loop-v1 successful entry creates OPEN position", "POSITION_NOT_MEASURED");
+    }
+    if (row.stage === "SETTLEMENT") {
+      return naturalStageMeasurement("SETTLEMENT", settled, "recurring-paper-loop-v1.summary.tradesSettled", "SETTLEMENT_NOT_MEASURED");
+    }
+    if (row.stage === "OUTCOME") {
+      return naturalStageMeasurement("OUTCOME", settled, "persistOutcome precedes each accepted recurring settlement", "OUTCOME_NOT_MEASURED");
+    }
+    return row;
+  }));
+}
+
+function naturalFirstZero(measurements) {
+  for (const measurement of measurements) {
+    if (measurement?.status !== "MEASURED") {
+      return Object.freeze({ stage: "UNKNOWN", reason: measurement?.blocker ?? `UNMEASURED_${measurement?.stage ?? "STAGE"}` });
+    }
+    if (measurement.count === 0) return Object.freeze({ stage: measurement.stage, reason: "MEASURED_ZERO" });
+  }
+  return Object.freeze({ stage: "UNKNOWN", reason: "NO_MEASURED_ZERO" });
 }
 
 async function readPersistedAuthoritativeAccountState({
@@ -475,16 +529,25 @@ export async function runPaperForwardScheduleCli(env = process.env, {
       const dependencies = authoritativePaperDependenciesFactory({
         sourceWiring: resolvedAuthoritativeSourceWiring,
         providerOptions: { env },
+        runtimeFactory: createNaturalFunnelObservedPaperRuntimeFromSourceWiring,
       });
       invocation.publicEvidenceProvider = Object.freeze({
         async collectPublicEvidence(input) {
           const evidence = await dependencies.publicEvidenceProvider.collectPublicEvidence(input);
+          const paperSource = evidence?.paperCandidateSource;
           if (input?.market === "CRYPTO_FUTURES"
-            && Array.isArray(evidence?.paperCandidateSource?.stageMeasurements)) {
+            && (Array.isArray(paperSource?.stageMeasurements) || Array.isArray(paperSource?.naturalFunnelMeasurements))) {
             authoritativeRuntimeMeasurement = Object.freeze({
-              stageMeasurements: evidence.paperCandidateSource.stageMeasurements,
-              firstZeroStage: evidence.paperCandidateSource.firstZeroStage ?? "UNKNOWN",
-              firstZeroReason: evidence.paperCandidateSource.firstZeroReason ?? evidence.blocker ?? null,
+              stageMeasurements: paperSource?.stageMeasurements ?? [],
+              firstZeroStage: paperSource?.firstZeroStage ?? "UNKNOWN",
+              firstZeroReason: paperSource?.firstZeroReason ?? evidence.blocker ?? null,
+              naturalFunnelMeasurements: paperSource?.naturalFunnelMeasurements ?? [],
+              naturalFirstZeroStage: paperSource?.naturalFirstZeroStage ?? "UNKNOWN",
+              naturalFirstZeroReason: paperSource?.naturalFirstZeroReason ?? null,
+              naturalEvidenceIdentity: paperSource?.naturalEvidenceIdentity ?? null,
+              naturalRuntimeSha: paperSource?.naturalRuntimeSha ?? null,
+              authoritativeFirstZeroReasonEvidenceByStage:
+                paperSource?.authoritativeFirstZeroReasonEvidenceByStage ?? {},
             });
           }
           return evidence;
@@ -496,8 +559,13 @@ export async function runPaperForwardScheduleCli(env = process.env, {
     const stageMeasurements = authoritativeRuntimeMeasurement?.stageMeasurements
       ?? authoritativeSourceWiringAudit?.stageMeasurements
       ?? [];
+    const naturalFunnelMeasurements = finalizeNaturalFunnel(
+      authoritativeRuntimeMeasurement?.naturalFunnelMeasurements ?? [],
+      result,
+    );
+    const naturalZero = naturalFirstZero(naturalFunnelMeasurements);
     const output = {
-      schemaVersion: "paper-forward-schedule-cli-v4",
+      schemaVersion: "paper-forward-schedule-cli-v5",
       status: result.status,
       cycleId: result.cycleId ?? null,
       mutationCount: result.mutationCount ?? 0,
@@ -524,6 +592,14 @@ export async function runPaperForwardScheduleCli(env = process.env, {
         ?? null,
       authoritativeSourceBlockers: authoritativeSourceWiringAudit?.blockers ?? [],
       authoritativeStageMeasurements: stageMeasurements,
+      naturalFunnelMeasurements,
+      naturalFirstZeroStage: naturalZero.stage,
+      naturalFirstZeroReason: naturalZero.reason,
+      naturalStrategySha: authoritativeRuntimeMeasurement?.naturalRuntimeSha ?? researchCodeSha,
+      naturalRuntimeSha: researchCodeSha,
+      naturalDatasetIdentity: authoritativeRuntimeMeasurement?.naturalEvidenceIdentity ?? null,
+      authoritativeFirstZeroReasonEvidenceByStage:
+        authoritativeRuntimeMeasurement?.authoritativeFirstZeroReasonEvidenceByStage ?? {},
       authoritativeRuntimePackage: authoritativeRuntimePackageAudit,
       paperStateTransport: Object.freeze({
         status: paperStateTransportStatus,
@@ -536,10 +612,22 @@ export async function runPaperForwardScheduleCli(env = process.env, {
         unknownIsZero: false,
       }),
       authoritativeEvidenceOwners: AUTHORITATIVE_PAPER_EVIDENCE_SOURCE_OWNERSHIP.sevenEvidenceOwnerSummary,
-      scannerCandidateCount: stageMeasurementCount(stageMeasurements, "Scanner Candidate"),
+      universeCount: stageMeasurementCount(naturalFunnelMeasurements, "UNIVERSE"),
+      scannerEvaluatedCount: stageMeasurementCount(naturalFunnelMeasurements, "SCANNER_EVALUATED"),
+      scannerCandidateCount: stageMeasurementCount(naturalFunnelMeasurements, "CANDIDATE")
+        ?? stageMeasurementCount(stageMeasurements, "Scanner Candidate"),
+      evidenceCompleteCount: stageMeasurementCount(naturalFunnelMeasurements, "EVIDENCE_COMPLETE"),
+      admissionPassCount: stageMeasurementCount(naturalFunnelMeasurements, "ADMISSION_PASS"),
+      riskPassCount: stageMeasurementCount(naturalFunnelMeasurements, "RISK_PASS"),
+      costPassCount: stageMeasurementCount(naturalFunnelMeasurements, "COST_PASS"),
+      accountReadyCount: stageMeasurementCount(naturalFunnelMeasurements, "ACCOUNT_READY"),
+      entryCount: stageMeasurementCount(naturalFunnelMeasurements, "PAPER_ENTRY")
+        ?? stageMeasurementCount(stageMeasurements, "Entry"),
+      positionCount: stageMeasurementCount(naturalFunnelMeasurements, "POSITION"),
+      settlementCount: stageMeasurementCount(naturalFunnelMeasurements, "SETTLEMENT")
+        ?? stageMeasurementCount(stageMeasurements, "Settlement"),
+      outcomeCount: stageMeasurementCount(naturalFunnelMeasurements, "OUTCOME"),
       canonicalPaperCandidateCount: stageMeasurementCount(stageMeasurements, "Identity"),
-      entryCount: stageMeasurementCount(stageMeasurements, "Entry"),
-      settlementCount: stageMeasurementCount(stageMeasurements, "Settlement"),
       privateRequestCount: 0,
       financialMutationCount: 0,
       orderCount: 0,
