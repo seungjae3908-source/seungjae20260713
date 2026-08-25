@@ -90,8 +90,12 @@ export function normalizeCapitalValuationEvidence(evidence, intent, options = {}
     || evidence.privateApiUsed !== false
     || evidence.realAccountData !== false
     || evidence.realOrderData === true
+    || evidence.privateProviderRequestPerformed === true
+    || evidence.realAccountReadPerformed === true
+    || evidence.realOrderSubmitted === true
     || evidence.liveTrading === true
-    || evidence.executionAuthority === true
+    || evidence.autoTrading === true
+    || (evidence.executionAuthority != null && String(evidence.executionAuthority).toUpperCase() !== "NONE")
   ) {
     throw new KrwValuationEvidenceError(
       "CAPITAL_KRW_VALUATION_UNSAFE_EVIDENCE",
