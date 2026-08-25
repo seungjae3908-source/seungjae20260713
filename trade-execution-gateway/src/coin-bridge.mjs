@@ -105,6 +105,7 @@ export function coinOrderToPaperIntent(payload) {
     leverage,
     marginMode,
     reduceOnly,
+    capitalValuationEvidence: payload.capitalValuationEvidence ?? null,
     idempotencyKey,
   });
 }
