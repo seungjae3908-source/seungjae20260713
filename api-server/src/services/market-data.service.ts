@@ -99,7 +99,19 @@ async function getBoundedKrInteractiveCandlesMeta(
 ): Promise<MarketDataCandlesMeta> {
   const controller = new AbortController();
   const deadlineAt = Date.now() + APP_KR_INTRADAY_DEADLINE_MS;
-  const timeout = setTimeout(() => controller.abort(), APP_KR_INTRADAY_DEADLINE_MS);
+  const deadlineError = new Error('KR_INTERACTIVE_PROVIDER_DEADLINE');
+  deadlineError.name = 'TimeoutError';
+  const timeout = setTimeout(
+    () => controller.abort(deadlineError),
+    APP_KR_INTRADAY_DEADLINE_MS,
+  );
+  const terminalDeadline = new Promise<never>((_resolve, reject) => {
+    const rejectFromSignal = () => {
+      reject(controller.signal.reason instanceof Error ? controller.signal.reason : deadlineError);
+    };
+    if (controller.signal.aborted) rejectFromSignal();
+    else controller.signal.addEventListener('abort', rejectFromSignal, { once: true });
+  });
   let kiwoomFailure: string | null = null;
 
   const kiwoomAttempt = (async (): Promise<MarketDataCandlesMeta> => {
@@ -163,8 +175,14 @@ async function getBoundedKrInteractiveCandlesMeta(
   })();
 
   try {
-    return await Promise.any([kiwoomAttempt, yahooAttempt]);
-  } catch {
+    return await Promise.race([
+      Promise.any([kiwoomAttempt, yahooAttempt]),
+      terminalDeadline,
+    ]);
+  } catch (error) {
+    if (error === deadlineError || (error instanceof Error && error.message === deadlineError.message)) {
+      kiwoomFailure = 'DEADLINE_REACHED';
+    }
     return {
       candles: [],
       provider: 'none',
