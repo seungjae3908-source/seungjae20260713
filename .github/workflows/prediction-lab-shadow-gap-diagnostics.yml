@@ -225,6 +225,29 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           test -n "$ARTIFACT_ID"
           [[ "$ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ]]
+          node <<'NODE'
+          const fs = require('fs');
+          const evidence = JSON.parse(fs.readFileSync('shadow-drift-evidence/diagnostic.json', 'utf8'));
+          const format = (value) => Number.isFinite(value) ? value.toFixed(6) : 'N/A';
+          const distribution = (value = {}) => `${value.LONG ?? 0}/${value.NEUTRAL ?? 0}/${value.SHORT ?? 0}`;
+          const lines = [
+            '',
+            '### Directional quality receipt',
+            '',
+            `- Generated evidence digest: ${evidence.evidenceDigest}`,
+            `- DRIFT_EVIDENCE_VALID / DRIFT_PROXY_ONLY: ${evidence.DRIFT_EVIDENCE_VALID} / ${evidence.DRIFT_PROXY_ONLY}`,
+            '',
+            '| Group | N | Model SHA | Provenance | Raw TRAIN/VALIDATION | Pred LONG/N/SHORT | Actual LONG/N/SHORT | Macro-F1 | Balanced Accuracy | Bear recall | PSI/KS/JSD |',
+            '|---|---:|---|---|---:|---|---|---:|---:|---:|---|',
+          ];
+          for (const [name, group] of Object.entries(evidence.groups ?? {})) {
+            const quality = group.diagnostics.directionalQuality;
+            const probabilities = group.diagnostics.probabilities;
+            const driftStates = [...new Set(Object.values(group.diagnostics.features ?? {}).map((feature) => feature.driftEvidenceStatus))].join(',');
+            lines.push(`| ${name} | ${group.diagnostics.count} | ${group.modelSha} | ${group.referenceEvidence.status} | ${group.referenceEvidence.rawTrainSampleN}/${group.referenceEvidence.rawValidationSampleN} | ${distribution(probabilities.predictedDirectionalDistribution)} | ${distribution(probabilities.actualDirectionalDistribution)} | ${format(quality.macroF1)} | ${format(quality.balancedAccuracy)} | ${format(quality.bearRecall)} | ${driftStates} |`);
+          }
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join('\n')}\n`);
+          NODE
 
       - name: Assert immutable checkout HEAD
         if: always()
