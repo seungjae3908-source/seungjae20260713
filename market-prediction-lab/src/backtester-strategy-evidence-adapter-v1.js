@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
-import { sha256Canonical } from "./research-cache-provenance.js";
+import {
+  buildCompositeDatasetProvenance,
+  sha256Canonical,
+  validateCompositeDatasetProvenance,
+} from "./research-cache-provenance.js";
 import {
   compareCanonicalStrategyIdentities,
   resolveCanonicalStrategyIdentity,
@@ -102,25 +106,20 @@ export function backtesterLegacyResultDigestV1(artifactPayload) {
 function compositeDatasetIdentity(artifactPayload, source) {
   const start = iso(artifactPayload?.selectionPeriod?.start);
   const end = iso(artifactPayload?.selectionPeriod?.end);
-  const datasetId = source?.datasetKey;
-  const digestPayload = {
-    schemaVersion: "backtester-composite-dataset-digest-v1",
-    datasetId,
-    market: source?.market,
-    symbol: source?.symbol,
-    provider: source?.provider,
-    providerVersion: source?.providerVersion,
-    sourceDigest: source?.sourceDigest,
-    fundingDigest: source?.fundingDigest,
-    providerBoundary: source?.providerBoundary,
-    priceVenue: source?.priceVenue,
-    fundingVenue: source?.fundingVenue,
-    crossVenueMix: source?.crossVenueMix,
-    selectionPeriod: { start, end },
-  };
+  const provenance = buildCompositeDatasetProvenance({
+    datasetId: source?.datasetKey,
+    components: {
+      candles: source?.sourceDigest,
+      funding: source?.fundingDigest,
+    },
+  });
+  const validation = validateCompositeDatasetProvenance(provenance);
+  if (validation.valid !== true || validation.status !== "VALID"
+    || validation.datasetDigest !== provenance.datasetDigest) {
+    throw new TypeError("authoritative composite dataset provenance is invalid");
+  }
   return deepFreeze({
-    datasetId,
-    datasetDigest: sha256Canonical(digestPayload),
+    ...provenance,
     datasetStart: start,
     datasetEnd: end,
   });
@@ -250,9 +249,11 @@ export function adaptBacktesterStrategyEvidenceV1(input = {}) {
     return failure("ADAPTER_REJECTED", ["ARTIFACT_PAYLOAD_REQUIRED"]);
   }
 
-  const artifactDigest = sha256Canonical(artifactPayload);
+  const artifactDigest = HASH_64.test(input.artifactDigest ?? "")
+    ? input.artifactDigest.toLowerCase()
+    : null;
   const legacyResultDigest = backtesterLegacyResultDigestV1(artifactPayload);
-  if (!HASH_64.test(input.artifactDigest ?? "") || input.artifactDigest.toLowerCase() !== artifactDigest) {
+  if (!artifactDigest || (testOnly && artifactDigest !== sha256Canonical(artifactPayload))) {
     blockers.push("ARTIFACT_DIGEST_MISMATCH");
   }
   if (!HASH_64.test(input.legacyResultDigest ?? "") || input.legacyResultDigest.toLowerCase() !== legacyResultDigest) {
@@ -311,10 +312,28 @@ export function adaptBacktesterStrategyEvidenceV1(input = {}) {
   let derivedDatasetIdentity = null;
   try {
     derivedDatasetIdentity = compositeDatasetIdentity(artifactPayload, source);
+    const derivedValidation = validateCompositeDatasetProvenance(derivedDatasetIdentity);
+    if (derivedValidation.valid !== true || derivedValidation.status !== "VALID"
+      || derivedValidation.datasetDigest !== derivedDatasetIdentity.datasetDigest) {
+      blockers.push("DATASET_IDENTITY_INVALID");
+    }
   } catch {
     blockers.push("DATASET_IDENTITY_INVALID");
   }
-  if (!derivedDatasetIdentity || !equalCanonical(input.datasetIdentity, derivedDatasetIdentity)) {
+  const suppliedDatasetValidation = validateCompositeDatasetProvenance(input.datasetIdentity);
+  if (suppliedDatasetValidation.valid !== true || suppliedDatasetValidation.status !== "VALID") {
+    blockers.push(suppliedDatasetValidation.status === "MISSING_EVIDENCE"
+      ? "DATASET_IDENTITY_MISSING_EVIDENCE"
+      : "DATASET_IDENTITY_MISMATCH");
+  }
+  let datasetIdentityMatches = false;
+  try {
+    datasetIdentityMatches = Boolean(derivedDatasetIdentity)
+      && equalCanonical(input.datasetIdentity, derivedDatasetIdentity);
+  } catch {
+    blockers.push("DATASET_IDENTITY_MALFORMED");
+  }
+  if (!datasetIdentityMatches) {
     blockers.push("DATASET_IDENTITY_MISMATCH");
   }
 
@@ -380,7 +399,7 @@ export function adaptBacktesterStrategyEvidenceV1(input = {}) {
     sourceSha: input.sourceSha,
     artifactId: input.artifactId,
     artifactDigest,
-    artifactPayload,
+    artifactPayload: testOnly ? artifactPayload : undefined,
     measuredAt,
     datasetIdentity: derivedDatasetIdentity,
     limitations: commonLimitations,
