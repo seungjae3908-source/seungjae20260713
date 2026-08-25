@@ -13,12 +13,16 @@ import { PublicMarketDataRuntimeRegistry } from "./public-websocket-runtime.mjs"
 import { estimateExecutionCosts } from "./execution-costs.mjs";
 import { analyzeExecutionQuality } from "./execution-quality.mjs";
 import { comparePaperLiveParity } from "./parity-contract.mjs";
+import { PAPER_MOCK_PROTECTION_CAPABILITIES } from "./server-failure-protection.mjs";
+import { FileServerFailureProtectionStore } from "./server-failure-protection-store.mjs";
+import { SupervisedPaperGateway } from "./supervised-paper-gateway.mjs";
 
 const HOST = "127.0.0.1";
 const DEFAULT_PORT = 8792;
 const MAX_BODY_BYTES = 16 * 1024;
 const MARKETS = ["KR_STOCK", "US_STOCK", "CRYPTO_SPOT", "CRYPTO_FUTURES"];
 const DEFAULT_STATE_PATH = fileURLToPath(new URL("../.state/paper-state.json", import.meta.url));
+const DEFAULT_PROTECTION_STATE_PATH = fileURLToPath(new URL("../.state/server-failure-protection.json", import.meta.url));
 
 function boundedPort(value) {
   const port = Number(value);
@@ -42,6 +46,14 @@ function buildPaperPolicy() {
   return { maxQuantityByMarket, maxNotionalByMarket };
 }
 
+function buildSupervisionPolicy() {
+  return {
+    enforceNewEntryGate: process.env.TEG_UNATTENDED_PAPER_ENABLED === "true",
+    heartbeatTimeoutMs: positiveEnv("TEG_SUPERVISOR_HEARTBEAT_TIMEOUT_MS") ?? 5_000,
+    maxFutureSkewMs: positiveEnv("TEG_SUPERVISOR_MAX_FUTURE_SKEW_MS") ?? 1_000,
+  };
+}
+
 function publicRuntimeConfigs() {
   if (process.env.TEG_PUBLIC_MARKET_DATA_ENABLED !== "true") return [];
   const configs = [];
@@ -59,12 +71,21 @@ function publicRuntimeConfigs() {
 }
 
 const stateStore = new FilePaperStateStore(DEFAULT_STATE_PATH);
+const protectionStore = new FileServerFailureProtectionStore(DEFAULT_PROTECTION_STATE_PATH);
 const initialPaperState = await stateStore.load();
-const gateway = new TradeExecutionGateway({
+const initialProtectionState = await protectionStore.load();
+const baseGateway = new TradeExecutionGateway({
   adapter: new PaperMockBrokerAdapter(),
   policy: buildPaperPolicy(),
   initialPaperState,
   persistPaperState: (snapshot, reason) => stateStore.save(snapshot, reason),
+});
+const gateway = new SupervisedPaperGateway({
+  gateway: baseGateway,
+  initialProtectionState,
+  persistProtectionState: (snapshot, reason) => protectionStore.save(snapshot, reason),
+  supervisionPolicy: buildSupervisionPolicy(),
+  providerCapabilities: PAPER_MOCK_PROTECTION_CAPABILITIES,
 });
 const publicRuntime = new PublicMarketDataRuntimeRegistry({ configs: publicRuntimeConfigs() });
 publicRuntime.startAll();
@@ -110,7 +131,9 @@ const server = http.createServer(async (request, response) => {
         bind: `${HOST}:${boundedPort(process.env.TEG_PORT)}`,
         safety: gateway.getSafetyState(),
         persistence: stateStore.getHealth(),
+        protectionPersistence: protectionStore.getHealth(),
         recovery: gateway.getRecoveryState(),
+        serverFailureProtection: gateway.getProtectionHealth(),
         publicMarketData: publicRuntime.getHealth(),
       });
       return;
@@ -121,6 +144,14 @@ const server = http.createServer(async (request, response) => {
     }
     if (request.method === "GET" && url.pathname === "/v1/execution/runtime/health") {
       sendJson(response, 200, publicRuntime.getHealth());
+      return;
+    }
+    if (request.method === "GET" && url.pathname === "/v1/protection/health") {
+      sendJson(response, 200, gateway.getProtectionHealth());
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/v1/protection/heartbeat") {
+      sendJson(response, 200, gateway.recordSupervisorHeartbeat(await readJson(request)));
       return;
     }
     if (request.method === "POST" && url.pathname === "/v1/orders/preview") {
@@ -199,6 +230,26 @@ const server = http.createServer(async (request, response) => {
       }
     }
     if (request.method === "POST") {
+      const protectionReconciliationOrderId = routeOrderId(url.pathname, "/protection/reconciliation/preview");
+      if (protectionReconciliationOrderId) {
+        sendJson(response, 200, gateway.previewProtectionReconciliation(protectionReconciliationOrderId, await readJson(request)));
+        return;
+      }
+      const protectionIntentOrderId = routeOrderId(url.pathname, "/protection/intent");
+      if (protectionIntentOrderId) {
+        const body = await readJson(request);
+        sendJson(response, 201, await gateway.registerProtectionIntent(protectionIntentOrderId, {
+          bracketPlan: body.bracketPlan,
+          protectionIdempotencyKey: body.protectionIdempotencyKey,
+          createdAt: new Date().toISOString(),
+        }));
+        return;
+      }
+      const protectionAckOrderId = routeOrderId(url.pathname, "/protection/ack");
+      if (protectionAckOrderId) {
+        sendJson(response, 200, await gateway.acknowledgeProtection(protectionAckOrderId, await readJson(request)));
+        return;
+      }
       const tcaOrderId = routeOrderId(url.pathname, "/tca/preview");
       if (tcaOrderId) {
         const body = await readJson(request);
