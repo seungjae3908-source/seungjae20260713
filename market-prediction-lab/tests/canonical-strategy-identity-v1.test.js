@@ -31,8 +31,10 @@ test("canonical identity digest is deterministic and field-order independent", (
   const first = resolveCanonicalStrategyIdentity(identity());
   const reversed = Object.fromEntries(Object.entries(identity()).reverse());
   const second = resolveCanonicalStrategyIdentity(reversed);
-  assert.equal(first.status, "READY");
+  assert.equal(first.status, "IDENTITY_COMPLETE");
+  assert.equal(second.status, "IDENTITY_COMPLETE");
   assert.equal(first.strategyIdentityDigest, second.strategyIdentityDigest);
+  assert.equal(compareCanonicalStrategyIdentities(identity(), reversed).status, "IDENTITY_COMPLETE");
 });
 
 test("parameter, dataset and cost policy mismatches never loosely match", () => {
