@@ -209,8 +209,8 @@ jobs:
       - name: Record immutable evidence receipt
         shell: bash
         env:
-          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
-          ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+          ARTIFACT_ID: ${{ steps.upload.outputs['artifact-id'] }}
+          ARTIFACT_DIGEST: ${{ steps.upload.outputs['artifact-digest'] }}
           SOURCE_RUN_ID: ${{ steps.shadow.outputs.run_id }}
           SOURCE_ARTIFACT_ID: ${{ steps.shadow.outputs.artifact_id }}
           SOURCE_ARTIFACT_DIGEST: ${{ steps.shadow.outputs.artifact_digest }}
