@@ -31,22 +31,46 @@ function card(overrides = {}) {
 
 const CONTEXT = Object.freeze({ environment: "TEST_ONLY", now: "2026-08-25T12:00:00.000Z", providerAvailable: true, minimumLiquidity: 1000, minimumRiskReward: 1.5 });
 
-test("Champion NONE preserves existing Scanner behavior", () => {
+test("Champion NONE preserves existing Scanner behavior only for a valid registry envelope", () => {
   const cards = [card()];
   const none = selectProvisionalChampion({ candidates: [] });
   const result = consumeProvisionalChampionForScanner({ registry: none, cards, context: CONTEXT });
   assert.equal(result.status, "LEGACY_UNCHANGED");
   assert.equal(result.cards, cards);
+  const forgedNone = consumeProvisionalChampionForScanner({ registry: { status: "NONE", currentProvisionalChampion: "NONE" }, cards, context: CONTEXT });
+  assert.equal(forgedNone.status, "NO_TRADE");
+  assert.ok(forgedNone.blockers.includes("CHAMPION_REGISTRY_SAFETY_INVALID"));
 });
 
-test("exact Provisional identity produces advisory metadata without trade authority in TEST_ONLY context", () => {
-  const result = consumeProvisionalChampionForScanner({ registry: registry(), cards: [card()], context: CONTEXT });
+test("exact Provisional identity produces advisory metadata with evidence lineage but no trade authority in TEST_ONLY context", () => {
+  const source = registry();
+  const result = consumeProvisionalChampionForScanner({ registry: source, cards: [card()], context: CONTEXT });
   assert.equal(result.status, "ADVISORY_CANDIDATES");
   assert.equal(result.cards[0].championState, "PROVISIONAL");
   assert.equal(result.cards[0].advisoryState, "ADVISORY");
   assert.equal(result.cards[0].riskReward, 2);
+  assert.equal(result.cards[0].evidenceDigest, source.evidenceDigest);
   assert.equal(result.cards[0].safety.executionAuthority, "NONE");
   assert.equal(result.cards[0].safety.orderSubmitted, false);
+});
+
+test("registry identity and evidence lineage are revalidated before Scanner consumption", () => {
+  const source = registry();
+  const tamperedIdentity = {
+    ...source,
+    currentProvisionalChampion: { ...source.currentProvisionalChampion, strategyIdentityDigest: HASH_B },
+  };
+  const identityResult = consumeProvisionalChampionForScanner({ registry: tamperedIdentity, cards: [card()], context: CONTEXT });
+  assert.equal(identityResult.status, "NO_TRADE");
+  assert.ok(identityResult.blockers.includes("CHAMPION_REGISTRY_SAFETY_INVALID"));
+
+  const tamperedEvidence = {
+    ...source,
+    currentProvisionalChampion: { ...source.currentProvisionalChampion, evidenceDigest: HASH_A },
+  };
+  const evidenceResult = consumeProvisionalChampionForScanner({ registry: tamperedEvidence, cards: [card()], context: CONTEXT });
+  assert.equal(evidenceResult.status, "NO_TRADE");
+  assert.ok(evidenceResult.blockers.includes("CHAMPION_REGISTRY_SAFETY_INVALID"));
 });
 
 test("TEST_ONLY champion is forbidden in production Scanner context", () => {
@@ -76,7 +100,19 @@ test("identity mismatch, stale data, provider failure and missing risk fail clos
     const result = consumeProvisionalChampionForScanner({ registry: registry(), cards: [card(overrides)], context });
     assert.equal(result.status, "NO_TRADE");
     assert.ok(result.decisions[0].blockers.includes(blocker));
+    assert.deepEqual(result.cards, []);
   }
+});
+
+test("a provider failure clears otherwise advisory cards at scan level", () => {
+  const result = consumeProvisionalChampionForScanner({
+    registry: registry(),
+    cards: [card(), card({ symbol: "MSFT", providerAvailable: false })],
+    context: CONTEXT,
+  });
+  assert.equal(result.status, "NO_TRADE");
+  assert.deepEqual(result.cards, []);
+  assert.ok(result.blockers.includes("PROVIDER_UNAVAILABLE"));
 });
 
 test("missing liquidity or RR policy fails closed instead of inventing thresholds", () => {
@@ -89,10 +125,14 @@ test("missing liquidity or RR policy fails closed instead of inventing threshold
   assert.ok(missingRr.decisions[0].blockers.includes("RISK_REWARD_POLICY_MISSING"));
 });
 
-test("RR is derived from Entry/Stop/Target and invalid geometry or spoofed RR fails closed", () => {
+test("RR is derived from positive Entry/Stop/Target and invalid geometry or spoofed RR fails closed", () => {
   const invalidGeometry = consumeProvisionalChampionForScanner({ registry: registry(), cards: [card({ stop: 105 })], context: CONTEXT });
   assert.equal(invalidGeometry.status, "NO_TRADE");
   assert.ok(invalidGeometry.decisions[0].blockers.includes("INVALID_ENTRY_STOP_TARGET_GEOMETRY"));
+
+  const nonPositivePrices = consumeProvisionalChampionForScanner({ registry: registry(), cards: [card({ entry: -100, stop: -105, target: -90 })], context: CONTEXT });
+  assert.equal(nonPositivePrices.status, "NO_TRADE");
+  assert.ok(nonPositivePrices.decisions[0].blockers.includes("INVALID_ENTRY_STOP_TARGET_GEOMETRY"));
 
   const spoofedRr = consumeProvisionalChampionForScanner({ registry: registry(), cards: [card({ riskReward: 9 })], context: CONTEXT });
   assert.equal(spoofedRr.status, "NO_TRADE");
