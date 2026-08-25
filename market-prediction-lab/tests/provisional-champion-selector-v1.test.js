@@ -76,6 +76,24 @@ test("production selection is locked until the Phase 5 canonical evidence adapte
   assert.equal(result.canonicalEvidenceAuthority, "PHASE5_ADAPTER_REQUIRED");
 });
 
+test("TEST_ONLY policy refuses an unmarked canonical-looking candidate", () => {
+  const result = selectProvisionalChampion({ candidates: [candidate("unmarked", { testOnly: false })], policy: TEST_POLICY });
+  assert.equal(result.status, "NONE");
+  assert.ok(result.blockers.includes("TEST_ONLY_MARKER_REQUIRED"));
+});
+
+test("missing evidence in any mandatory stage is NOT_ELIGIBLE", () => {
+  const strategyIdentity = identity("missing-stage-evidence");
+  const result = selectProvisionalChampion({ candidates: [candidate("missing-stage-evidence", { evidenceEnvelopes: [
+    stage(strategyIdentity, "OOS", { missingEvidence: ["OOS_SAMPLE_QUALITY_UNKNOWN"] }),
+    stage(strategyIdentity, "WALK_FORWARD"),
+    stage(strategyIdentity, "COST_STRESS"),
+    stage(strategyIdentity, "STATISTICAL_FIREWALL"),
+  ] })], policy: TEST_POLICY });
+  assert.equal(result.status, "NONE");
+  assert.ok(result.blockers.includes("MISSING_EVIDENCE:OOS:OOS_SAMPLE_QUALITY_UNKNOWN"));
+});
+
 test("highest historical return alone cannot win without mandatory forward-robustness evidence", () => {
   const strategyIdentity = identity("high-return");
   const historicalOnly = candidate("high-return", { evidenceEnvelopes: [stage(strategyIdentity, "HISTORICAL_BACKTEST", { metrics: { netReturn: 99 } })] });
