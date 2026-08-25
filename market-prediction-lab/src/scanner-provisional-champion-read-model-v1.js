@@ -1,6 +1,9 @@
 import { PROVISIONAL_CHAMPION_SAFETY } from "./provisional-champion-selector-v1.js";
+import { resolveCanonicalStrategyIdentity } from "./canonical-strategy-identity-v1.js";
 
 export const SCANNER_PROVISIONAL_CHAMPION_READ_MODEL_VERSION = "scanner-provisional-champion-read-model-v1";
+
+const HASH_64 = /^[0-9a-f]{64}$/u;
 
 function deepFreeze(value) {
   if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
@@ -26,6 +29,10 @@ function safety() {
 function deriveRiskReward(card, direction, blockers) {
   if (![card?.entry, card?.stop, card?.target].every(finite)) {
     blockers.push("ENTRY_RISK_PLAN_INCOMPLETE");
+    return null;
+  }
+  if ([card.entry, card.stop, card.target].some((value) => value <= 0)) {
+    blockers.push("INVALID_ENTRY_STOP_TARGET_GEOMETRY");
     return null;
   }
   const normalizedDirection = typeof direction === "string" ? direction.trim().toUpperCase() : "";
@@ -90,6 +97,7 @@ function decision(card, champion, context) {
       blockers: resolvedBlockers,
       championState: "PROVISIONAL",
       strategyIdentityDigest: champion.strategyIdentityDigest,
+      evidenceDigest: champion.evidenceDigest,
       safety: safety(),
     });
   }
@@ -101,6 +109,7 @@ function decision(card, champion, context) {
     strategyId: identity.strategyId,
     strategyVersion: identity.strategyVersion,
     strategyIdentityDigest: champion.strategyIdentityDigest,
+    evidenceDigest: champion.evidenceDigest,
     validationState: "PROVISIONAL_ONLY",
     evidenceState: "HARD_GATES_PASSED",
     market: identity.market,
@@ -133,9 +142,28 @@ function noTradeRegistry(blocker, championState = "INVALID") {
   });
 }
 
+function baseRegistrySafe(registry) {
+  return registry.schemaVersion === "provisional-champion-verdict-v1"
+    && registry.policyVersion === "PROVISIONAL_CHAMPION_POLICY_V1"
+    && registry.canonicalEvidenceAuthority === "PHASE5_ADAPTER_REQUIRED"
+    && registry.currentValidatedChampion === "NONE"
+    && registry.validatedChampion === false
+    && registry.profitabilityProven === false
+    && registry.liveTradingEligible === false
+    && registry.executionAuthority === "NONE"
+    && HASH_64.test(registry.evidenceDigest ?? "")
+    && registry.safety?.LIVE_TRADING === false
+    && registry.safety?.REAL_ORDER_ENABLED === false
+    && registry.safety?.PRIVATE_TRADING_API_ALLOWED === false
+    && registry.safety?.executionAuthority === "NONE"
+    && registry.safety?.orderSubmitApiCalls === 0;
+}
+
 export function consumeProvisionalChampionForScanner({ registry, cards = [], context = {} } = {}) {
   const rows = Array.isArray(cards) ? cards : [];
   if (registry == null) return noTradeRegistry("CHAMPION_REGISTRY_UNAVAILABLE", "UNAVAILABLE");
+  if (!baseRegistrySafe(registry)) return noTradeRegistry("CHAMPION_REGISTRY_SAFETY_INVALID");
+
   if (registry.status === "NONE" && registry.currentProvisionalChampion === "NONE") {
     return Object.freeze({
       schemaVersion: SCANNER_PROVISIONAL_CHAMPION_READ_MODEL_VERSION,
@@ -148,26 +176,24 @@ export function consumeProvisionalChampionForScanner({ registry, cards = [], con
       safety: safety(),
     });
   }
+
   const champion = registry.currentProvisionalChampion;
-  const registrySafe = registry.schemaVersion === "provisional-champion-verdict-v1"
-    && registry.policyVersion === "PROVISIONAL_CHAMPION_POLICY_V1"
-    && registry.status === "PROVISIONAL_CHAMPION"
+  const resolvedChampionIdentity = resolveCanonicalStrategyIdentity(champion?.strategyIdentity);
+  const championSafe = registry.status === "PROVISIONAL_CHAMPION"
     && champion?.championState === "PROVISIONAL"
     && ["TEST_ONLY", "CANONICAL"].includes(champion?.evidenceClass)
-    && registry.currentValidatedChampion === "NONE"
-    && registry.validatedChampion === false
-    && registry.profitabilityProven === false
-    && registry.liveTradingEligible === false
-    && registry.executionAuthority === "NONE"
-    && champion?.strategyIdentity != null
-    && /^[0-9a-f]{64}$/u.test(champion?.strategyIdentityDigest ?? "");
-  if (!registrySafe) return noTradeRegistry("CHAMPION_REGISTRY_SAFETY_INVALID");
+    && resolvedChampionIdentity.status === "IDENTITY_COMPLETE"
+    && champion.strategyIdentityDigest === resolvedChampionIdentity.strategyIdentityDigest
+    && champion.strategyId === resolvedChampionIdentity.identity.strategyId
+    && HASH_64.test(champion?.evidenceDigest ?? "")
+    && champion.evidenceDigest === registry.evidenceDigest;
+  if (!championSafe) return noTradeRegistry("CHAMPION_REGISTRY_SAFETY_INVALID");
 
   const environment = context.environment === "TEST_ONLY" ? "TEST_ONLY" : "PRODUCTION";
   if (champion.evidenceClass === "TEST_ONLY" && environment !== "TEST_ONLY") {
     return noTradeRegistry("TEST_ONLY_CHAMPION_FORBIDDEN");
   }
-  if (champion.evidenceClass === "CANONICAL" && registry.canonicalEvidenceAuthority === "PHASE5_ADAPTER_REQUIRED") {
+  if (champion.evidenceClass === "CANONICAL") {
     return noTradeRegistry("CANONICAL_EVIDENCE_ADAPTER_NOT_READY");
   }
 
@@ -185,14 +211,15 @@ export function consumeProvisionalChampionForScanner({ registry, cards = [], con
   const allCandidatesBlocked = decisions.length > 0 && advisoryCards.length === 0
     && decisions.some((row) => row.blockers.length > 0);
   const hardGateBlockers = unique(decisions.flatMap((row) => row.blockers));
+  const status = providerBlocked || allCandidatesBlocked ? "NO_TRADE" : advisoryCards.length > 0 ? "ADVISORY_CANDIDATES" : "VALID_EMPTY";
   return deepFreeze({
     schemaVersion: SCANNER_PROVISIONAL_CHAMPION_READ_MODEL_VERSION,
-    status: providerBlocked || allCandidatesBlocked ? "NO_TRADE" : advisoryCards.length > 0 ? "ADVISORY_CANDIDATES" : "VALID_EMPTY",
+    status,
     mode: "PROVISIONAL_CHAMPION",
     championState: "PROVISIONAL",
-    cards: advisoryCards,
+    cards: status === "ADVISORY_CANDIDATES" ? advisoryCards : [],
     decisions,
-    blockers: providerBlocked ? ["PROVIDER_UNAVAILABLE"] : allCandidatesBlocked ? hardGateBlockers : [],
+    blockers: status === "NO_TRADE" ? unique([...(providerBlocked ? ["PROVIDER_UNAVAILABLE"] : []), ...hardGateBlockers]) : [],
     safety: safety(),
   });
 }
