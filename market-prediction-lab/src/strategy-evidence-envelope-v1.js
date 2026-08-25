@@ -94,7 +94,7 @@ export function buildStrategyEvidenceEnvelope(input = {}) {
   if (input.executionAuthority != null && input.executionAuthority !== "NONE") blockers.push("EXECUTION_AUTHORITY_FORBIDDEN");
 
   const resolvedIdentity = resolveCanonicalStrategyIdentity(input.strategyIdentity);
-  if (resolvedIdentity.status !== "READY") {
+  if (resolvedIdentity.status !== "IDENTITY_COMPLETE") {
     return failure("UNLINKED_EVIDENCE", ["IDENTITY_INCOMPLETE", ...resolvedIdentity.blockers], resolvedIdentity.missingFields);
   }
   if (!HASH_64.test(input.strategyIdentityDigest ?? "")) blockers.push("STRATEGY_IDENTITY_DIGEST_REQUIRED");
