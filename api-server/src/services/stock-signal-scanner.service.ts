@@ -145,7 +145,9 @@ function abortError(): Error {
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
-  if (signal?.aborted) throw abortError();
+  if (!signal?.aborted) return;
+  if (signal.reason instanceof Error) throw signal.reason;
+  throw abortError();
 }
 
 async function loadStockCandles(
@@ -157,16 +159,16 @@ async function loadStockCandles(
 ): Promise<Candle[]> {
   throwIfAborted(signal);
   if (market === 'US' && timeframe === '3m') {
-    const oneMinute = await providerHealth.getCandles(market, ticker, '1m');
+    const oneMinute = await providerHealth.getCandles(market, ticker, '1m', signal);
     throwIfAborted(signal);
     return aggregateUsSessionCandles(oneMinute, 1, 3);
   }
   if (market === 'US' && timeframe === '4H') {
-    const hourly = await providerHealth.getCandles(market, ticker, '60m');
+    const hourly = await providerHealth.getCandles(market, ticker, '60m', signal);
     throwIfAborted(signal);
     return aggregateUsSessionCandles(hourly, 60, 240);
   }
-  const candles = await providerHealth.getCandles(market, ticker, timeframe as Timeframe);
+  const candles = await providerHealth.getCandles(market, ticker, timeframe as Timeframe, signal);
   throwIfAborted(signal);
   return candles;
 }
@@ -189,21 +191,22 @@ export const StockSignalScannerService = {
     const entryByTicker = new Map(universe.entries.map((entry) => [entry.ticker, entry]));
     const scanner = createBoundedScannerService({
       catalog: universe.entries,
-      getCandles: async (ticker) => {
-        throwIfAborted(request.signal);
+      getCandles: async (ticker, _timeframe, signal) => {
+        const operationSignal = signal ?? request.signal;
+        throwIfAborted(operationSignal);
         const [candles, context] = await Promise.all([
-          loadStockCandles(request.market, ticker, primaryTimeframe, providerHealth, request.signal),
-          primaryTimeframe === contextTimeframe ? Promise.resolve<Candle[] | null>(null) : loadStockCandles(request.market, ticker, contextTimeframe, providerHealth, request.signal).catch((error: unknown) => {
-            if (error instanceof Error && error.name === 'AbortError') throw error;
+          loadStockCandles(request.market, ticker, primaryTimeframe, providerHealth, operationSignal),
+          primaryTimeframe === contextTimeframe ? Promise.resolve<Candle[] | null>(null) : loadStockCandles(request.market, ticker, contextTimeframe, providerHealth, operationSignal).catch((error: unknown) => {
+            if (operationSignal?.aborted || (error instanceof Error && error.name === 'AbortError')) throw error;
             return [];
           }),
         ]);
-        throwIfAborted(request.signal);
+        throwIfAborted(operationSignal);
         candlesByTicker.set(ticker, candles);
         contextByTicker.set(ticker, context ?? candles);
         return candles;
       },
-      getQuote: (ticker) => providerHealth.getQuote(request.market, ticker),
+      getQuote: (ticker, signal) => providerHealth.getQuote(request.market, ticker, signal ?? request.signal),
       getContext: (entry) => publicCoreOnly ? Promise.resolve({}) : buildContext(entry),
       now: Date.now,
     });
