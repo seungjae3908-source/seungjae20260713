@@ -21,7 +21,7 @@ function object(value, code, message) {
 function exposureIncreasingIntent(input) {
   const market = String(input?.market ?? "").trim().toUpperCase();
   const side = String(input?.side ?? "").trim().toUpperCase();
-  if (market === "CRYPTO_FUTURES") return input?.executionContext?.reduceOnly !== true;
+  if (market === "CRYPTO_FUTURES") return !(input?.reduceOnly === true || input?.executionContext?.reduceOnly === true);
   if (CASH_MARKETS.has(market)) return side !== "SELL";
   return true;
 }
