@@ -1,0 +1,14 @@
+{
+  "name": "trade-execution-gateway",
+  "version": "0.7.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "check": "node --check src/server.mjs && node --check src/public-websocket-runtime.mjs && node --check src/paper-state-store.mjs && node --check src/execution-costs.mjs && node --check src/execution-quality.mjs && node --check src/parity-contract.mjs && node --check src/server-failure-protection.mjs && node --check src/server-failure-protection-store.mjs && node --check src/supervised-paper-gateway.mjs",
+    "test": "npm run check && node --test tests/*.test.mjs"
+  }
+}
