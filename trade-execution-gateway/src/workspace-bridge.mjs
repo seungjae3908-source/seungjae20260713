@@ -105,7 +105,9 @@ export function workspaceOrderToPaperIntent(payload) {
     quantity,
     limitPrice,
     referencePrice,
-    capitalValuationEvidence: envelope.capitalValuationEvidence ?? null,
+    ...(market === "US_STOCK" && side !== "SELL" && envelope.capitalValuationEvidence != null
+      ? { capitalValuationEvidence: envelope.capitalValuationEvidence }
+      : {}),
     idempotencyKey,
   });
 }
