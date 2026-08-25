@@ -1,16 +1,21 @@
 import { sha256Canonical } from "./research-cache-provenance.js";
 import { resolveCanonicalStrategyIdentity } from "./canonical-strategy-identity-v1.js";
 import {
+  BACKTESTER_STRATEGY_EVIDENCE_AUTHORITY,
   verifyBacktesterStrategyEvidenceAdapterV1,
 } from "./backtester-strategy-evidence-adapter-v1.js";
 
 export const CURRENT_PROVISIONAL_CHAMPION = "NONE";
 export const CURRENT_VALIDATED_CHAMPION = "NONE";
+export const PROFITABILITY_PROVEN = false;
+export const FORWARD_EVIDENCE_SUFFICIENT = false;
 export const PROVISIONAL_CHAMPION_SAFETY = Object.freeze({
   LIVE_TRADING: false,
+  AUTO_TRADING: false,
   REAL_ORDER_ENABLED: false,
   PRIVATE_TRADING_API_ALLOWED: false,
   executionAuthority: "NONE",
+  orderSubmitted: false,
   orderSubmitApiCalls: 0,
   brokerAdapters: 0,
   exchangePrivateEndpointCalls: 0,
@@ -23,7 +28,7 @@ export const PROVISIONAL_CHAMPION_POLICY_V1 = Object.freeze({
   requiredStages: Object.freeze(["OOS", "WALK_FORWARD", "COST_STRESS", "STATISTICAL_FIREWALL"]),
   statisticalFirewallRequired: true,
   rankingPolicy: "LEXICOGRAPHIC_SAFETY_V1",
-  canonicalEvidenceAuthority: "PHASE5_ADAPTER_REQUIRED",
+  canonicalEvidenceAuthority: BACKTESTER_STRATEGY_EVIDENCE_AUTHORITY,
   environment: "PRODUCTION",
 });
 
@@ -67,13 +72,15 @@ function stageMap(evidenceResults, blockers) {
 
 function evaluateCandidate(candidate, policy) {
   const blockers = [];
+  const adapterVerification = policy.environment === "PRODUCTION"
+    ? verifyBacktesterStrategyEvidenceAdapterV1(candidate)
+    : null;
   const resolved = resolveCanonicalStrategyIdentity(candidate?.strategyIdentity);
   if (resolved.status !== "IDENTITY_COMPLETE") blockers.push("IDENTITY_INCOMPLETE");
   if (resolved.status === "IDENTITY_COMPLETE" && candidate.strategyIdentityDigest !== resolved.strategyIdentityDigest) blockers.push("IDENTITY_MISMATCH");
   if (candidate?.testOnly === true && policy.environment !== "TEST_ONLY") blockers.push("TEST_ONLY_CANDIDATE_FORBIDDEN");
   if (policy.environment === "TEST_ONLY" && candidate?.testOnly !== true) blockers.push("TEST_ONLY_MARKER_REQUIRED");
   if (policy.environment === "PRODUCTION") {
-    const adapterVerification = verifyBacktesterStrategyEvidenceAdapterV1(candidate);
     if (adapterVerification.verified !== true || candidate?.testOnly === true) {
       blockers.push("CANONICAL_EVIDENCE_ADAPTER_NOT_READY");
       blockers.push(...adapterVerification.blockers.map((blocker) => `CANONICAL_EVIDENCE_ADAPTER_INVALID:${blocker}`));
@@ -100,12 +107,15 @@ function evaluateCandidate(candidate, policy) {
 
   if (oos && !(oos.sample.tradeN >= policy.minimumOosTradeN)) blockers.push("OOS_SAMPLE_INSUFFICIENT");
   if (oos && (!finite(oos.metrics.expectancy) || oos.metrics.expectancy <= 0)) blockers.push("OOS_POSITIVE_EXPECTANCY_REQUIRED");
-  if (oos && !finite(oos.metrics.profitFactor)) blockers.push("OOS_PROFIT_FACTOR_REQUIRED");
+  if (oos && (!finite(oos.metrics.profitFactor) || oos.metrics.profitFactor <= 1)) blockers.push("OOS_PROFIT_FACTOR_ABOVE_ONE_REQUIRED");
+  if (oos && (!finite(oos.metrics.netReturn) || oos.metrics.netReturn <= 0)) blockers.push("OOS_POSITIVE_NET_RETURN_REQUIRED");
   if (oos && !finite(oos.metrics.mdd)) blockers.push("OOS_MDD_REQUIRED");
   if (oos && oos.validation?.mddAcceptable !== true) blockers.push("OOS_ACCEPTABLE_MDD_REQUIRED");
 
   if (walkForward && walkForward.validation?.parameterStability !== "PASS") blockers.push("PARAMETER_STABILITY_REQUIRED");
-  if (walkForward && !finite(walkForward.metrics.positiveWindowRatio)) blockers.push("WALK_FORWARD_STABILITY_REQUIRED");
+  if (walkForward && (!finite(walkForward.metrics.positiveWindowRatio) || walkForward.metrics.positiveWindowRatio <= 0)) {
+    blockers.push("WALK_FORWARD_POSITIVE_WINDOW_REQUIRED");
+  }
 
   if (costStress && costStress.validation?.costStressSurvived !== true) blockers.push("COST_STRESS_SURVIVAL_REQUIRED");
   if (costStress && costStress.costs?.costPolicyVersion !== resolved.identity?.costPolicyVersion) blockers.push("MANDATORY_COST_EVIDENCE_REQUIRED");
@@ -137,7 +147,9 @@ function evaluateCandidate(candidate, policy) {
     blockers: unique(blockers),
     evidenceDigest,
     ranking,
-    evidenceClass: candidate?.testOnly === true ? "TEST_ONLY" : "CANONICAL",
+    evidenceClass: candidate?.testOnly === true ? "TEST_ONLY" : adapterVerification?.verified === true ? "CANONICAL" : "UNVERIFIED",
+    adapterVerification,
+    adapterAuthorityDigest: adapterVerification?.verified === true ? candidate.canonicalEvidenceAuthorityDigest : null,
     measuredAt: evidenceResults.map((row) => row?.envelope?.measuredAt).filter(Boolean).sort().at(-1) ?? null,
   });
 }
@@ -168,7 +180,8 @@ export function selectProvisionalChampion({ candidates = [], policy = PROVISIONA
       canonicalEvidenceAuthority: policy.canonicalEvidenceAuthority,
       selectedAt: null,
       validatedChampion: false,
-      profitabilityProven: false,
+      profitabilityProven: PROFITABILITY_PROVEN,
+      forwardEvidenceSufficient: FORWARD_EVIDENCE_SUFFICIENT,
       liveTradingEligible: false,
       executionAuthority: "NONE",
       orderSubmitted: false,
@@ -181,6 +194,7 @@ export function selectProvisionalChampion({ candidates = [], policy = PROVISIONA
     strategyIdentityDigest: selected.strategyIdentityDigest,
     evidenceDigest: selected.evidenceDigest,
     evidenceClass: selected.evidenceClass,
+    adapterAuthorityDigest: selected.adapterAuthorityDigest,
     championState: "PROVISIONAL",
   });
   return deepFreeze({
@@ -198,7 +212,8 @@ export function selectProvisionalChampion({ candidates = [], policy = PROVISIONA
     canonicalEvidenceAuthority: policy.canonicalEvidenceAuthority,
     selectedAt: selected.measuredAt,
     validatedChampion: false,
-    profitabilityProven: false,
+    profitabilityProven: PROFITABILITY_PROVEN,
+    forwardEvidenceSufficient: FORWARD_EVIDENCE_SUFFICIENT,
     liveTradingEligible: false,
     executionAuthority: "NONE",
     orderSubmitted: false,

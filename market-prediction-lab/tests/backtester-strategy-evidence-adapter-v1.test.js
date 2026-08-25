@@ -3,6 +3,7 @@ import test from "node:test";
 import { sha256Canonical } from "../src/research-cache-provenance.js";
 import {
   adaptBacktesterStrategyEvidenceV1,
+  BACKTESTER_ADAPTER_SAFETY,
   backtesterLegacyResultDigestV1,
   buildBacktesterCompositeDatasetIdentityV1,
   PR191_BACKTESTER_EVIDENCE_CONTRACT_V1,
@@ -242,6 +243,9 @@ test("exact OOS, Walk Forward, and Cost Stress metrics pass through without inpu
   const result = adaptBacktesterStrategyEvidenceV1(input);
   assert.equal(result.status, "ADAPTED");
   assert.deepEqual(input, before);
+  assert.deepEqual(result.safety, BACKTESTER_ADAPTER_SAFETY);
+  assert.deepEqual(result.candidate.safety, BACKTESTER_ADAPTER_SAFETY);
+  assert.ok(result.candidate.evidenceEnvelopes.every((row) => row.safety === BACKTESTER_ADAPTER_SAFETY));
 
   const nested = input.artifactPayload.results[0].research.families[0].candidates[0];
   const [oos, walkForward, costStress] = result.candidate.evidenceEnvelopes.map((row) => row.envelope);
@@ -326,11 +330,22 @@ test("negative real-shaped evidence remains NONE with no execution authority", (
   assert.equal(verdict.status, "NONE");
   assert.equal(verdict.currentProvisionalChampion, "NONE");
   assert.equal(verdict.currentValidatedChampion, "NONE");
+  assert.equal(verdict.profitabilityProven, false);
+  assert.equal(verdict.forwardEvidenceSufficient, false);
   assert.equal(verdict.executionAuthority, "NONE");
   assert.equal(verdict.orderSubmitted, false);
   assert.ok(verdict.blockers.includes("OOS_POSITIVE_EXPECTANCY_REQUIRED"));
+  assert.ok(verdict.blockers.includes("OOS_PROFIT_FACTOR_ABOVE_ONE_REQUIRED"));
+  assert.ok(verdict.blockers.includes("OOS_POSITIVE_NET_RETURN_REQUIRED"));
+  assert.ok(verdict.blockers.includes("WALK_FORWARD_POSITIVE_WINDOW_REQUIRED"));
   assert.ok(verdict.blockers.includes("COST_STRESS_SURVIVAL_REQUIRED"));
   assert.ok(verdict.blockers.includes("STATISTICAL_FIREWALL_METRICS_REQUIRED"));
   assert.ok(verdict.blockers.includes("MISSING_EVIDENCE:STATISTICAL_FIREWALL:DSR"));
   assert.ok(verdict.blockers.includes("MISSING_EVIDENCE:STATISTICAL_FIREWALL:PBO"));
+  assert.equal(verdict.safety.LIVE_TRADING, false);
+  assert.equal(verdict.safety.AUTO_TRADING, false);
+  assert.equal(verdict.safety.REAL_ORDER_ENABLED, false);
+  assert.equal(verdict.safety.PRIVATE_TRADING_API_ALLOWED, false);
+  assert.equal(verdict.safety.executionAuthority, "NONE");
+  assert.equal(verdict.safety.orderSubmitted, false);
 });

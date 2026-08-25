@@ -1,5 +1,6 @@
 import { PROVISIONAL_CHAMPION_SAFETY } from "./provisional-champion-selector-v1.js";
 import { resolveCanonicalStrategyIdentity } from "./canonical-strategy-identity-v1.js";
+import { BACKTESTER_STRATEGY_EVIDENCE_AUTHORITY } from "./backtester-strategy-evidence-adapter-v1.js";
 
 export const SCANNER_PROVISIONAL_CHAMPION_READ_MODEL_VERSION = "scanner-provisional-champion-read-model-v1";
 
@@ -55,6 +56,12 @@ function deriveRiskReward(card, direction, blockers) {
   return reward / risk;
 }
 
+function requireBoundEvidence(evidence, champion, prefix, blockers) {
+  if (evidence?.status !== "PASS") blockers.push(`${prefix}_EVIDENCE_INVALID`);
+  if (evidence?.strategyIdentityDigest !== champion.strategyIdentityDigest) blockers.push(`${prefix}_EVIDENCE_IDENTITY_MISMATCH`);
+  if (evidence?.executionAuthority !== "NONE") blockers.push(`${prefix}_EVIDENCE_EXECUTION_AUTHORITY_INVALID`);
+}
+
 function decision(card, champion, context) {
   const blockers = [];
   const identity = champion.strategyIdentity;
@@ -75,7 +82,23 @@ function decision(card, champion, context) {
   if (!finite(context.minimumLiquidity) || context.minimumLiquidity < 0) blockers.push("LIQUIDITY_POLICY_MISSING");
   else if (!finite(card?.liquidity) || card.liquidity < context.minimumLiquidity) blockers.push("INVALID_LIQUIDITY");
 
-  if (card?.riskEvidence?.status !== "PASS") blockers.push("INVALID_RISK_EVIDENCE");
+  requireBoundEvidence(card?.riskEvidence, champion, "RISK", blockers);
+  requireBoundEvidence(card?.costEvidence, champion, "COST", blockers);
+  if (card?.costEvidence?.costPolicyVersion !== identity.costPolicyVersion) blockers.push("COST_POLICY_IDENTITY_MISMATCH");
+  requireBoundEvidence(card?.strategyHealthEvidence, champion, "STRATEGY_HEALTH", blockers);
+  requireBoundEvidence(card?.regimeCompatibility, champion, "REGIME_COMPATIBILITY", blockers);
+  requireBoundEvidence(card?.executionCapability, champion, "EXECUTION_CAPABILITY", blockers);
+  if (card?.executionCapability?.mode !== "PAPER_ONLY"
+    || card?.executionCapability?.market !== identity.market
+    || card?.executionCapability?.direction !== identity.direction
+    || card?.executionCapability?.timeframe !== identity.timeframe
+    || card?.executionCapability?.LIVE_TRADING !== false
+    || card?.executionCapability?.AUTO_TRADING !== false
+    || card?.executionCapability?.REAL_ORDER_ENABLED !== false
+    || card?.executionCapability?.PRIVATE_TRADING_API_ALLOWED !== false
+    || card?.executionCapability?.orderSubmitted !== false) {
+    blockers.push("EXECUTION_CAPABILITY_INVALID");
+  }
   const derivedRiskReward = deriveRiskReward(card, identity.direction, blockers);
 
   if (!finite(context.minimumRiskReward) || context.minimumRiskReward <= 0) {
@@ -115,8 +138,10 @@ function decision(card, champion, context) {
     market: identity.market,
     direction: identity.direction,
     timeframe: identity.timeframe,
-    strategyHealthStatus: card.strategyHealthStatus ?? null,
-    regimeCompatibility: card.regimeCompatibility ?? null,
+    costEvidenceStatus: card.costEvidence.status,
+    strategyHealthStatus: card.strategyHealthEvidence.status,
+    regimeCompatibilityStatus: card.regimeCompatibility.status,
+    executionCapabilityStatus: card.executionCapability.status,
     dataCompleteness: card.dataCompleteness,
     freshness: "CURRENT",
     liquidity: card.liquidity,
@@ -145,17 +170,20 @@ function noTradeRegistry(blocker, championState = "INVALID") {
 function baseRegistrySafe(registry) {
   return registry.schemaVersion === "provisional-champion-verdict-v1"
     && registry.policyVersion === "PROVISIONAL_CHAMPION_POLICY_V1"
-    && registry.canonicalEvidenceAuthority === "PHASE5_ADAPTER_REQUIRED"
+    && registry.canonicalEvidenceAuthority === BACKTESTER_STRATEGY_EVIDENCE_AUTHORITY
     && registry.currentValidatedChampion === "NONE"
     && registry.validatedChampion === false
     && registry.profitabilityProven === false
+    && registry.forwardEvidenceSufficient === false
     && registry.liveTradingEligible === false
     && registry.executionAuthority === "NONE"
     && HASH_64.test(registry.evidenceDigest ?? "")
     && registry.safety?.LIVE_TRADING === false
+    && registry.safety?.AUTO_TRADING === false
     && registry.safety?.REAL_ORDER_ENABLED === false
     && registry.safety?.PRIVATE_TRADING_API_ALLOWED === false
     && registry.safety?.executionAuthority === "NONE"
+    && registry.safety?.orderSubmitted === false
     && registry.safety?.orderSubmitApiCalls === 0;
 }
 
@@ -165,16 +193,7 @@ export function consumeProvisionalChampionForScanner({ registry, cards = [], con
   if (!baseRegistrySafe(registry)) return noTradeRegistry("CHAMPION_REGISTRY_SAFETY_INVALID");
 
   if (registry.status === "NONE" && registry.currentProvisionalChampion === "NONE") {
-    return Object.freeze({
-      schemaVersion: SCANNER_PROVISIONAL_CHAMPION_READ_MODEL_VERSION,
-      status: "LEGACY_UNCHANGED",
-      mode: "CURRENT_OR_LEGACY",
-      championState: "NONE",
-      cards: rows,
-      decisions: [],
-      blockers: [],
-      safety: safety(),
-    });
+    return noTradeRegistry("NO_PROVISIONAL_CHAMPION", "NONE");
   }
 
   const champion = registry.currentProvisionalChampion;
@@ -186,17 +205,15 @@ export function consumeProvisionalChampionForScanner({ registry, cards = [], con
     && champion.strategyIdentityDigest === resolvedChampionIdentity.strategyIdentityDigest
     && champion.strategyId === resolvedChampionIdentity.identity.strategyId
     && HASH_64.test(champion?.evidenceDigest ?? "")
-    && champion.evidenceDigest === registry.evidenceDigest;
+    && champion.evidenceDigest === registry.evidenceDigest
+    && ((champion.evidenceClass === "TEST_ONLY" && champion.adapterAuthorityDigest === null)
+      || (champion.evidenceClass === "CANONICAL" && HASH_64.test(champion.adapterAuthorityDigest ?? "")));
   if (!championSafe) return noTradeRegistry("CHAMPION_REGISTRY_SAFETY_INVALID");
 
   const environment = context.environment === "TEST_ONLY" ? "TEST_ONLY" : "PRODUCTION";
   if (champion.evidenceClass === "TEST_ONLY" && environment !== "TEST_ONLY") {
     return noTradeRegistry("TEST_ONLY_CHAMPION_FORBIDDEN");
   }
-  if (champion.evidenceClass === "CANONICAL") {
-    return noTradeRegistry("CANONICAL_EVIDENCE_ADAPTER_NOT_READY");
-  }
-
   const resolvedContext = Object.freeze({
     environment,
     now: context.now ?? null,

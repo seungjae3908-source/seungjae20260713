@@ -11,6 +11,14 @@ import {
 
 export const BACKTESTER_STRATEGY_EVIDENCE_ADAPTER_SCHEMA_VERSION = "backtester-strategy-evidence-adapter-v1";
 export const BACKTESTER_STRATEGY_EVIDENCE_AUTHORITY = "BACKTESTER_STRATEGY_EVIDENCE_ADAPTER_V1";
+export const BACKTESTER_ADAPTER_SAFETY = Object.freeze({
+  LIVE_TRADING: false,
+  AUTO_TRADING: false,
+  REAL_ORDER_ENABLED: false,
+  PRIVATE_TRADING_API_ALLOWED: false,
+  executionAuthority: "NONE",
+  orderSubmitted: false,
+});
 
 const HASH_64 = /^[0-9a-f]{64}$/iu;
 const SHA_40 = /^[0-9a-f]{40}$/iu;
@@ -183,8 +191,11 @@ function failure(status, blockers, missingEvidence = []) {
     missingEvidence: unique(missingEvidence),
     currentProvisionalChampion: "NONE",
     currentValidatedChampion: "NONE",
+    profitabilityProven: false,
+    forwardEvidenceSufficient: false,
     executionAuthority: "NONE",
     orderSubmitted: false,
+    safety: BACKTESTER_ADAPTER_SAFETY,
   });
 }
 
@@ -206,7 +217,7 @@ function stagePayload({
   limitations,
   verdict,
 }) {
-  return buildStrategyEvidenceEnvelope({
+  const result = buildStrategyEvidenceEnvelope({
     strategyIdentity,
     strategyIdentityDigest,
     evidenceType: "PR191_IMMUTABLE_BACKTEST_RESULT_V1",
@@ -227,6 +238,7 @@ function stagePayload({
     verdict,
     executionAuthority: "NONE",
   });
+  return deepFreeze({ ...result, safety: BACKTESTER_ADAPTER_SAFETY });
 }
 
 export function adaptBacktesterStrategyEvidenceV1(input = {}) {
@@ -462,8 +474,11 @@ export function adaptBacktesterStrategyEvidenceV1(input = {}) {
     canonicalEvidenceAuthority: authority,
     canonicalEvidenceAuthorityDigest: sha256Canonical(authority),
     testOnly,
+    profitabilityProven: false,
+    forwardEvidenceSufficient: false,
     executionAuthority: "NONE",
     orderSubmitted: false,
+    safety: BACKTESTER_ADAPTER_SAFETY,
   });
   return deepFreeze({
     schemaVersion: BACKTESTER_STRATEGY_EVIDENCE_ADAPTER_SCHEMA_VERSION,
@@ -473,8 +488,11 @@ export function adaptBacktesterStrategyEvidenceV1(input = {}) {
     missingEvidence: unique(evidenceEnvelopes.flatMap((result) => result.missingEvidence)),
     currentProvisionalChampion: "NONE",
     currentValidatedChampion: "NONE",
+    profitabilityProven: false,
+    forwardEvidenceSufficient: false,
     executionAuthority: "NONE",
     orderSubmitted: false,
+    safety: BACKTESTER_ADAPTER_SAFETY,
   });
 }
 
@@ -487,6 +505,10 @@ export function verifyBacktesterStrategyEvidenceAdapterV1(candidate = {}) {
   if (!authority || candidate.canonicalEvidenceAuthorityDigest !== sha256Canonical(authority)) blockers.push("ADAPTER_AUTHORITY_DIGEST_MISMATCH");
   if (candidate.executionAuthority !== "NONE") blockers.push("EXECUTION_AUTHORITY_FORBIDDEN");
   if (candidate.orderSubmitted !== false) blockers.push("ORDER_SUBMISSION_FORBIDDEN");
+  if (!candidate.safety || sha256Canonical(candidate.safety) !== sha256Canonical(BACKTESTER_ADAPTER_SAFETY)
+    || candidate.profitabilityProven !== false || candidate.forwardEvidenceSufficient !== false) {
+    blockers.push("ADAPTER_SAFETY_INVALID");
+  }
   if (candidate.strategyIdentityDigest !== authority?.strategyIdentityDigest) blockers.push("STRATEGY_IDENTITY_MISMATCH");
   if (candidate.testOnly !== (authority?.evidenceClass === "TEST_ONLY")) blockers.push("EVIDENCE_CLASS_MISMATCH");
   if (authority?.evidenceClass === "CANONICAL") {
@@ -513,6 +535,9 @@ export function verifyBacktesterStrategyEvidenceAdapterV1(candidate = {}) {
     if (result?.envelope?.artifactId !== authority?.artifactId || result?.envelope?.artifactDigest !== authority?.artifactDigest) {
       blockers.push(`ARTIFACT_IDENTITY_MISMATCH:${stage}`);
     }
+    if (!result?.safety || sha256Canonical(result.safety) !== sha256Canonical(BACKTESTER_ADAPTER_SAFETY)) {
+      blockers.push(`ADAPTER_SAFETY_INVALID:${stage}`);
+    }
     if (proof?.stage !== stage || proof?.evidenceDigest !== result?.evidenceDigest) blockers.push(`EVIDENCE_DIGEST_MISMATCH:${stage}`);
   }
   return deepFreeze({
@@ -522,5 +547,6 @@ export function verifyBacktesterStrategyEvidenceAdapterV1(candidate = {}) {
     blockers: unique(blockers),
     executionAuthority: "NONE",
     orderSubmitted: false,
+    safety: BACKTESTER_ADAPTER_SAFETY,
   });
 }

@@ -4,6 +4,7 @@ import { sha256Canonical } from "../src/research-cache-provenance.js";
 import { resolveCanonicalStrategyIdentity } from "../src/canonical-strategy-identity-v1.js";
 import { buildStrategyEvidenceEnvelope } from "../src/strategy-evidence-envelope-v1.js";
 import { PROVISIONAL_CHAMPION_POLICY_V1, selectProvisionalChampion } from "../src/provisional-champion-selector-v1.js";
+import { BACKTESTER_STRATEGY_EVIDENCE_AUTHORITY } from "../src/backtester-strategy-evidence-adapter-v1.js";
 
 const HASH_A = "a".repeat(64);
 const HASH_B = "b".repeat(64);
@@ -73,7 +74,7 @@ test("production selection rejects evidence that was not verified by the Phase 5
   assert.equal(result.status, "NONE");
   assert.equal(result.currentProvisionalChampion, "NONE");
   assert.ok(result.blockers.includes("CANONICAL_EVIDENCE_ADAPTER_NOT_READY"));
-  assert.equal(result.canonicalEvidenceAuthority, "PHASE5_ADAPTER_REQUIRED");
+  assert.equal(result.canonicalEvidenceAuthority, BACKTESTER_STRATEGY_EVIDENCE_AUTHORITY);
   assert.equal(result.orderSubmitted, false);
 });
 
@@ -166,6 +167,20 @@ test("cost-adjusted survival must remain positive after mandatory costs", () => 
   assert.ok(result.blockers.includes("COST_ADJUSTED_EXPECTANCY_NOT_POSITIVE"));
 });
 
+test("profit factor, net return and walk-forward positive-window evidence must each be positive", () => {
+  const strategyIdentity = identity("non-positive-evidence");
+  const result = selectProvisionalChampion({ candidates: [candidate("non-positive-evidence", { evidenceEnvelopes: [
+    stage(strategyIdentity, "OOS", { metrics: { expectancy: 0.01, profitFactor: 1, netReturn: 0, mdd: 0.1 } }),
+    stage(strategyIdentity, "WALK_FORWARD", { metrics: { positiveWindowRatio: 0 } }),
+    stage(strategyIdentity, "COST_STRESS"),
+    stage(strategyIdentity, "STATISTICAL_FIREWALL"),
+  ] })], policy: TEST_POLICY });
+  assert.equal(result.status, "NONE");
+  assert.ok(result.blockers.includes("OOS_PROFIT_FACTOR_ABOVE_ONE_REQUIRED"));
+  assert.ok(result.blockers.includes("OOS_POSITIVE_NET_RETURN_REQUIRED"));
+  assert.ok(result.blockers.includes("WALK_FORWARD_POSITIVE_WINDOW_REQUIRED"));
+});
+
 test("eligible selection is deterministic, TEST_ONLY and never Validated", () => {
   const input = { candidates: [candidate("candidate-b"), candidate("candidate-a")], policy: TEST_POLICY };
   const first = selectProvisionalChampion(input);
@@ -174,11 +189,15 @@ test("eligible selection is deterministic, TEST_ONLY and never Validated", () =>
   assert.equal(first.status, "PROVISIONAL_CHAMPION");
   assert.equal(first.currentProvisionalChampion.evidenceClass, "TEST_ONLY");
   assert.equal(first.currentValidatedChampion, "NONE");
+  assert.equal(first.profitabilityProven, false);
+  assert.equal(first.forwardEvidenceSufficient, false);
   assert.equal(first.executionAuthority, "NONE");
   assert.equal(first.orderSubmitted, false);
   assert.equal(first.safety.LIVE_TRADING, false);
+  assert.equal(first.safety.AUTO_TRADING, false);
   assert.equal(first.safety.REAL_ORDER_ENABLED, false);
   assert.equal(first.safety.PRIVATE_TRADING_API_ALLOWED, false);
+  assert.equal(first.safety.orderSubmitted, false);
   assert.equal(first.safety.orderSubmitApiCalls, 0);
   assert.throws(
     () => selectProvisionalChampion({ ...input, policy: { ...TEST_POLICY, minimumOosTradeN: 1 } }),
