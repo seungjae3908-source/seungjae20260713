@@ -68,6 +68,7 @@ function evaluateCandidate(candidate, policy) {
   if (resolved.status !== "IDENTITY_COMPLETE") blockers.push("IDENTITY_INCOMPLETE");
   if (resolved.status === "IDENTITY_COMPLETE" && candidate.strategyIdentityDigest !== resolved.strategyIdentityDigest) blockers.push("IDENTITY_MISMATCH");
   if (candidate?.testOnly === true && policy.environment !== "TEST_ONLY") blockers.push("TEST_ONLY_CANDIDATE_FORBIDDEN");
+  if (policy.environment === "TEST_ONLY" && candidate?.testOnly !== true) blockers.push("TEST_ONLY_MARKER_REQUIRED");
   if (policy.environment === "PRODUCTION" && policy.canonicalEvidenceAuthority === "PHASE5_ADAPTER_REQUIRED") {
     blockers.push("CANONICAL_EVIDENCE_ADAPTER_NOT_READY");
   }
@@ -77,11 +78,12 @@ function evaluateCandidate(candidate, policy) {
   for (const stage of policy.requiredStages) if (!stages.has(stage)) blockers.push(`MISSING_REQUIRED_STAGE:${stage}`);
 
   for (const result of stages.values()) {
+    const stage = result.envelope.evidenceStage;
     if (resolved.status === "IDENTITY_COMPLETE" && result.envelope.strategyIdentityDigest !== resolved.strategyIdentityDigest) blockers.push("IDENTITY_MISMATCH");
-    if (result.envelope.missingEvidence.includes("ARTIFACT_CONTENT_UNAVAILABLE")) blockers.push(`ARTIFACT_LINKAGE_UNVERIFIED:${result.envelope.evidenceStage}`);
-    if (result.envelope.validation?.datasetIntegrity !== true) blockers.push(`DATASET_INTEGRITY_UNPROVEN:${result.envelope.evidenceStage}`);
-    if (result.envelope.validation?.noFutureLeakage !== true) blockers.push(`FUTURE_LEAKAGE_UNPROVEN:${result.envelope.evidenceStage}`);
-    if (result.envelope.validation?.noSameBarLeakage !== true) blockers.push(`SAME_BAR_LEAKAGE_UNPROVEN:${result.envelope.evidenceStage}`);
+    for (const missing of result.envelope.missingEvidence) blockers.push(`MISSING_EVIDENCE:${stage}:${missing}`);
+    if (result.envelope.validation?.datasetIntegrity !== true) blockers.push(`DATASET_INTEGRITY_UNPROVEN:${stage}`);
+    if (result.envelope.validation?.noFutureLeakage !== true) blockers.push(`FUTURE_LEAKAGE_UNPROVEN:${stage}`);
+    if (result.envelope.validation?.noSameBarLeakage !== true) blockers.push(`SAME_BAR_LEAKAGE_UNPROVEN:${stage}`);
   }
 
   const oos = stages.get("OOS")?.envelope;
