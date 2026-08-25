@@ -29,7 +29,7 @@ function card(overrides = {}) {
   return { symbol: "AAPL", market: "US_STOCK", direction: "BUY", timeframe: "1D", strategyIdentityDigest: digest, observedAt: "2026-08-25T00:00:00.000Z", expiresAt: "2026-08-26T00:00:00.000Z", providerAvailable: true, dataCompleteness: "COMPLETE", liquidity: 1_000_000, riskEvidence: { status: "PASS" }, entry: 100, stop: 95, target: 110, riskReward: 2, ...overrides };
 }
 
-const CONTEXT = Object.freeze({ now: "2026-08-25T12:00:00.000Z", providerAvailable: true, minimumLiquidity: 1000, minimumRiskReward: 1.5 });
+const CONTEXT = Object.freeze({ environment: "TEST_ONLY", now: "2026-08-25T12:00:00.000Z", providerAvailable: true, minimumLiquidity: 1000, minimumRiskReward: 1.5 });
 
 test("Champion NONE preserves existing Scanner behavior", () => {
   const cards = [card()];
@@ -39,7 +39,7 @@ test("Champion NONE preserves existing Scanner behavior", () => {
   assert.equal(result.cards, cards);
 });
 
-test("exact Provisional identity produces advisory metadata without trade authority", () => {
+test("exact Provisional identity produces advisory metadata without trade authority in TEST_ONLY context", () => {
   const result = consumeProvisionalChampionForScanner({ registry: registry(), cards: [card()], context: CONTEXT });
   assert.equal(result.status, "ADVISORY_CANDIDATES");
   assert.equal(result.cards[0].championState, "PROVISIONAL");
@@ -47,6 +47,23 @@ test("exact Provisional identity produces advisory metadata without trade author
   assert.equal(result.cards[0].riskReward, 2);
   assert.equal(result.cards[0].safety.executionAuthority, "NONE");
   assert.equal(result.cards[0].safety.orderSubmitted, false);
+});
+
+test("TEST_ONLY champion is forbidden in production Scanner context", () => {
+  const result = consumeProvisionalChampionForScanner({ registry: registry(), cards: [card()], context: { ...CONTEXT, environment: "PRODUCTION" } });
+  assert.equal(result.status, "NO_TRADE");
+  assert.ok(result.blockers.includes("TEST_ONLY_CHAMPION_FORBIDDEN"));
+});
+
+test("canonical-looking champion is blocked while Phase 5 evidence adapter is not ready", () => {
+  const source = registry();
+  const canonicalLooking = {
+    ...source,
+    currentProvisionalChampion: { ...source.currentProvisionalChampion, evidenceClass: "CANONICAL" },
+  };
+  const result = consumeProvisionalChampionForScanner({ registry: canonicalLooking, cards: [card()], context: { ...CONTEXT, environment: "PRODUCTION" } });
+  assert.equal(result.status, "NO_TRADE");
+  assert.ok(result.blockers.includes("CANONICAL_EVIDENCE_ADAPTER_NOT_READY"));
 });
 
 test("identity mismatch, stale data, provider failure and missing risk fail closed as NO_TRADE", () => {
