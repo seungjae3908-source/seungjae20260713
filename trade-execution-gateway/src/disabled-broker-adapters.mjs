@@ -57,6 +57,12 @@ class DisabledBrokerAdapter {
       transferAllowed: false,
       withdrawalAllowed: false,
       websocketPrivateAllowed: false,
+      paperProtectiveOrderSimulationSupported: false,
+      nativeProtectiveOrderSupported: false,
+      nativeProtectiveOrderTypes: [],
+      providerPersistsProtectiveOrders: false,
+      authenticatedProtectionReadAdapterEnabled: false,
+      unattendedLiveEligible: false,
     };
   }
 
