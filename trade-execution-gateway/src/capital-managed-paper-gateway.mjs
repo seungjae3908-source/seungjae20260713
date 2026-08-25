@@ -61,18 +61,26 @@ function committedOrderNotional(order) {
   return Math.ceil(Math.max(riskNotional, filled));
 }
 
-function afterSettlement(order, settlementMs) {
+function orderCreatedMs(order) {
   const createdMs = Date.parse(String(order?.createdAt ?? ""));
   if (!Number.isFinite(createdMs)) {
     throw new GatewayError("CAPITAL_OMS_ORDER_TIMESTAMP_INVALID", "Paper OMS order createdAt is invalid", 503);
   }
-  return createdMs > settlementMs;
+  return createdMs;
+}
+
+function orderId(order) {
+  if (typeof order?.orderId !== "string" || !order.orderId) {
+    throw new GatewayError("CAPITAL_OMS_ORDER_ID_INVALID", "Paper OMS orderId is invalid", 503);
+  }
+  return order.orderId;
 }
 
 export class CapitalManagedPaperGateway {
   #gateway;
   #capitalManager;
   #entryQueue = Promise.resolve();
+  #settledOrderIds = new Set();
 
   constructor({ gateway, capitalManager } = {}) {
     if (
@@ -93,6 +101,35 @@ export class CapitalManagedPaperGateway {
     }
     this.#gateway = gateway;
     this.#capitalManager = capitalManager;
+    this.#seedSettledOrderIdsAfterRestart();
+  }
+
+  #paperOrders() {
+    const paperState = object(
+      this.#gateway.exportPaperState(),
+      "CAPITAL_OMS_STATE_INVALID",
+      "Paper OMS state is required for capital admission",
+    );
+    if (!Array.isArray(paperState.orders)) {
+      throw new GatewayError("CAPITAL_OMS_STATE_INVALID", "Paper OMS state orders are invalid", 503);
+    }
+    return paperState.orders;
+  }
+
+  #seedSettledOrderIdsAfterRestart() {
+    const state = this.#capitalManager.getState();
+    if (!state.lastSettlement) return;
+    const settlementMs = Date.parse(state.lastSettlement.observedAt);
+    if (!Number.isFinite(settlementMs)) {
+      throw new GatewayError("CAPITAL_SETTLEMENT_TIMESTAMP_INVALID", "latest capital settlement timestamp is invalid", 503);
+    }
+    for (const order of this.#paperOrders()) {
+      const createdMs = orderCreatedMs(order);
+      const id = orderId(order);
+      // Strictly older orders are safely covered by the persisted settlement.
+      // Same-millisecond orders remain unsettled after restart because exact ordering is ambiguous.
+      if (createdMs < settlementMs) this.#settledOrderIds.add(id);
+    }
   }
 
   exportPaperState() {
@@ -118,28 +155,28 @@ export class CapitalManagedPaperGateway {
     return this.#gateway.recordSupervisorHeartbeat(input);
   }
 
-  async registerProtectionIntent(orderId, input) {
-    return this.#gateway.registerProtectionIntent(orderId, input);
+  async registerProtectionIntent(orderIdValue, input) {
+    return this.#gateway.registerProtectionIntent(orderIdValue, input);
   }
 
-  async acknowledgeProtection(orderId, input) {
-    return this.#gateway.acknowledgeProtection(orderId, input);
+  async acknowledgeProtection(orderIdValue, input) {
+    return this.#gateway.acknowledgeProtection(orderIdValue, input);
   }
 
-  previewProtectionReconciliation(orderId, input) {
-    return this.#gateway.previewProtectionReconciliation(orderId, input);
+  previewProtectionReconciliation(orderIdValue, input) {
+    return this.#gateway.previewProtectionReconciliation(orderIdValue, input);
   }
 
-  async applyPaperFill(orderId, fill) {
-    return this.#gateway.applyPaperFill(orderId, fill);
+  async applyPaperFill(orderIdValue, fill) {
+    return this.#gateway.applyPaperFill(orderIdValue, fill);
   }
 
-  async cancelOrder(orderId) {
-    return this.#gateway.cancelOrder(orderId);
+  async cancelOrder(orderIdValue) {
+    return this.#gateway.cancelOrder(orderIdValue);
   }
 
-  async getOrder(orderId) {
-    return this.#gateway.getOrder(orderId);
+  async getOrder(orderIdValue) {
+    return this.#gateway.getOrder(orderIdValue);
   }
 
   #currentCommittedExposureKrw() {
@@ -148,28 +185,15 @@ export class CapitalManagedPaperGateway {
       return Object.freeze({ exposureKrw: 0, blockers: Object.freeze([]), settlement: state.lastSettlement });
     }
 
-    const settlementMs = Date.parse(state.lastSettlement.observedAt);
-    if (!Number.isFinite(settlementMs)) {
-      throw new GatewayError("CAPITAL_SETTLEMENT_TIMESTAMP_INVALID", "latest capital settlement timestamp is invalid", 503);
-    }
-
-    const paperState = object(
-      this.#gateway.exportPaperState(),
-      "CAPITAL_OMS_STATE_INVALID",
-      "Paper OMS state is required for capital admission",
-    );
-    if (!Array.isArray(paperState.orders)) {
-      throw new GatewayError("CAPITAL_OMS_STATE_INVALID", "Paper OMS state orders are invalid", 503);
-    }
-
     let exposureKrw = 0;
     const blockers = [];
-    for (const order of paperState.orders) {
-      if (!afterSettlement(order, settlementMs) || !exposureIncreasingIntent(order?.intent)) continue;
+    for (const order of this.#paperOrders()) {
+      const id = orderId(order);
+      if (this.#settledOrderIds.has(id) || !exposureIncreasingIntent(order?.intent)) continue;
       const committed = committedOrderNotional(order);
       if (committed <= 0) continue;
       if (!directlyKrwValuedIntent(order.intent)) {
-        blockers.push(`KRW_VALUATION_REQUIRED:${order.orderId}`);
+        blockers.push(`KRW_VALUATION_REQUIRED:${id}`);
         continue;
       }
       exposureKrw += committed;
@@ -276,6 +300,8 @@ export class CapitalManagedPaperGateway {
         ? Math.max(0, state.effectiveTradingCapitalKrw - current.exposureKrw)
         : 0,
       filledExposureReleasedOnlyAfterFreshSettlement: true,
+      settlementOrderWatermarkRuntimeOnly: true,
+      ambiguousSameMillisecondOrderAfterRestartCountsAsUnsettled: true,
       reductionOrdersExemptFromCapitalGate: true,
       krwDirectValuationMarkets: Object.freeze(["KR_STOCK", "CRYPTO_SPOT:UPBIT:KRW-*"]),
       foreignCurrencyNewExposureRequiresAuthoritativeKrwValuation: true,
@@ -284,7 +310,7 @@ export class CapitalManagedPaperGateway {
     });
   }
 
-  async applyCapitalSettlement(input, options = {}) {
+  async #applyCapitalSettlement(input, options = {}) {
     object(input, "CAPITAL_SETTLEMENT_REQUIRED", "capital settlement evidence is required");
     if (input.positionsFlat !== true || Number(input.openOrderCount) !== 0 || Number(input.managedExposureKrw) !== 0) {
       throw new GatewayError(
@@ -294,16 +320,14 @@ export class CapitalManagedPaperGateway {
       );
     }
 
-    const state = this.#capitalManager.getState();
-    const paperState = object(this.#gateway.exportPaperState(), "CAPITAL_OMS_STATE_INVALID", "Paper OMS state is required");
-    const settlementMs = state.lastSettlement ? Date.parse(state.lastSettlement.observedAt) : Number.NEGATIVE_INFINITY;
-    if (state.lastSettlement && !Number.isFinite(settlementMs)) {
-      throw new GatewayError("CAPITAL_SETTLEMENT_TIMESTAMP_INVALID", "latest capital settlement timestamp is invalid", 503);
+    const settlementMs = Date.parse(String(input.observedAt ?? ""));
+    if (!Number.isFinite(settlementMs)) {
+      throw new GatewayError("CAPITAL_SETTLEMENT_TIMESTAMP_INVALID", "capital settlement observedAt is invalid", 400);
     }
-    const openEntries = (paperState.orders ?? []).filter(
-      (order) => exposureIncreasingIntent(order?.intent)
-        && NONTERMINAL_STATES.has(order?.status)
-        && (state.lastSettlement ? afterSettlement(order, settlementMs) : true),
+
+    const paperOrders = this.#paperOrders();
+    const openEntries = paperOrders.filter(
+      (order) => exposureIncreasingIntent(order?.intent) && NONTERMINAL_STATES.has(order?.status),
     );
     if (openEntries.length > 0) {
       throw new GatewayError(
@@ -313,14 +337,33 @@ export class CapitalManagedPaperGateway {
       );
     }
 
+    const uncoveredOrders = paperOrders.filter((order) => orderCreatedMs(order) > settlementMs);
+    if (uncoveredOrders.length > 0) {
+      throw new GatewayError(
+        "CAPITAL_SETTLEMENT_OMS_TIME_COVERAGE_REQUIRED",
+        "capital settlement observedAt must cover every current Paper OMS order",
+        409,
+      );
+    }
+
     const result = await this.#capitalManager.applySettlement(input, options);
+    if (result.idempotentReplay !== true) {
+      this.#settledOrderIds = new Set(paperOrders.map((order) => orderId(order)));
+    }
     return Object.freeze({
       ...result,
       settlementAuthority: "CALLER_SUPPLIED_SIMULATED_FLAT_EVIDENCE_ONLY",
       runtimePositionReconciliationProven: false,
+      settlementOrderWatermarkRecorded: result.idempotentReplay !== true,
       externalWithdrawalPerformed: false,
       executionAuthority: "NONE",
       liveAuthorityGranted: false,
     });
+  }
+
+  async applyCapitalSettlement(input, options = {}) {
+    const task = this.#entryQueue.then(() => this.#applyCapitalSettlement(input, options));
+    this.#entryQueue = task.catch(() => undefined);
+    return task;
   }
 }
