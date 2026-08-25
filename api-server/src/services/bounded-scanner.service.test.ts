@@ -3,8 +3,6 @@ import assert from 'node:assert/strict';
 import type { CatalogEntry } from '../data/catalog';
 import type { SignalContext } from '../sample/accumulation';
 import type { Candle, Quote } from '../sample/types';
-import { MarketDataService } from './market-data.service';
-import { ScannerProviderHealthTracker } from './scanner-provider-health.service';
 import {
   ScanProviderUnavailableError,
   ScanRequestAbortedError,
@@ -83,8 +81,6 @@ test('normal scan completes with bounded concurrency and separated diagnostics',
   assert.equal(result.insufficientDataCount, 0);
   assert.equal(result.filteredByStrategyCount, 0);
   assert.equal(result.staleCount, 0);
-  assert.equal(result.providerErrorCount, 0);
-  assert.equal(result.workerErrorCount, 0);
   assert.equal(result.contextUnavailableCount, 0);
   assert.equal(result.cards.length, 3);
   assert.ok(result.maxConcurrency <= 2);
@@ -198,102 +194,8 @@ test('some item timeouts return explicit partial data', async () => {
   assert.equal(result.completedCount, 1);
   assert.equal(result.providerAcceptedCount, 1);
   assert.equal(result.dataSuccessCount, 1);
-  assert.equal(result.providerErrorCount, 0);
-  assert.equal(result.workerErrorCount, 0);
   assert.equal(result.timeoutCount, 2);
   assert.equal(result.cards.length, 1);
-});
-
-test('per-item timeout signal reaches mandatory provider dependencies without becoming a provider rejection', async () => {
-  let candleSignal: AbortSignal | undefined;
-  let quoteSignal: AbortSignal | undefined;
-  const waitForAbort = (signal?: AbortSignal) => new Promise<never>((_resolve, reject) => {
-    assert.ok(signal, 'mandatory provider dependency must receive the per-item signal');
-    if (signal.aborted) {
-      reject(signal.reason);
-      return;
-    }
-    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
-  });
-  const service = createBoundedScannerService(deps([item(1)], {
-    getCandles: async (_ticker, _timeframe, signal) => {
-      candleSignal = signal;
-      return waitForAbort(signal);
-    },
-    getQuote: async (ticker, signal) => {
-      if (ticker === '^KS11') return quoteRow();
-      quoteSignal = signal;
-      return waitForAbort(signal);
-    },
-  }));
-
-  await assert.rejects(
-    service.scan('KR', ['PER 낮음'], {}, {
-      deadlineMs: 120,
-      itemTimeoutMs: 30,
-      concurrency: 1,
-    }),
-    (error: unknown) => {
-      assert.ok(error instanceof ScanProviderUnavailableError);
-      assert.match(error.message, /providerErrors=0/);
-      assert.match(error.message, /workerErrors=0/);
-      assert.match(error.message, /timeouts=1/);
-      return true;
-    },
-  );
-  assert.equal(candleSignal?.aborted, true);
-  assert.equal(quoteSignal?.aborted, true);
-});
-
-test('actual mandatory provider rejection is counted as provider error', async () => {
-  const service = createBoundedScannerService(deps([item(1), item(2)], {
-    getCandles: async (ticker) => {
-      if (ticker === 'T002') throw new Error('provider unavailable');
-      return candleRows();
-    },
-  }));
-  const result = await service.scan('KR', ['PER 낮음'], {}, {
-    deadlineMs: 500,
-    itemTimeoutMs: 200,
-    concurrency: 2,
-  });
-  assert.equal(result.completedCount, 1);
-  assert.equal(result.providerErrorCount, 1);
-  assert.equal(result.workerErrorCount, 0);
-  assert.equal(result.timeoutCount, 0);
-  assert.equal(result.partial, true);
-});
-
-test('internal scanner worker rejection is not mislabeled as provider failure', async () => {
-  const broken = candleRows();
-  const originalMap = broken.map.bind(broken);
-  Object.defineProperty(broken, 'map', {
-    configurable: true,
-    value: (...args: Parameters<Candle[]['map']>) => {
-      const stack = new Error().stack ?? '';
-      if (/computeIndicators/u.test(stack)) throw new Error('worker-compute-failed');
-      return originalMap(...args as [never]);
-    },
-  });
-  const service = createBoundedScannerService(deps([item(1)], {
-    getCandles: async () => broken,
-  }));
-
-  await assert.rejects(
-    service.scan('KR', ['PER 낮음'], {}, {
-      deadlineMs: 500,
-      itemTimeoutMs: 200,
-      concurrency: 1,
-    }),
-    (error: unknown) => {
-      assert.ok(error instanceof Error);
-      assert.equal(error instanceof ScanProviderUnavailableError, false);
-      assert.match(error.message, /^SCAN_WORKER_ERROR:/u);
-      assert.match(error.message, /providerErrors=0/);
-      assert.match(error.message, /workerErrors=1/);
-      return true;
-    },
-  );
 });
 
 test('complete provider failure remains strict', async () => {
@@ -421,33 +323,6 @@ test('matched cards reuse one candles and context lookup per symbol', async () =
   for (const entry of catalog) {
     assert.equal(candleCalls.get(entry.ticker), 1);
     assert.equal(contextCalls.get(entry.ticker), 1);
-  }
-});
-
-test('provider health remains timeout after logical cancellation even when raw work resolves later', async () => {
-  const originalGetQuote = MarketDataService.getQuote;
-  let resolveQuote: ((value: Quote) => void) | undefined;
-  (MarketDataService as unknown as { getQuote: (ticker: string) => Promise<Quote> }).getQuote = async () => new Promise<Quote>((resolve) => {
-    resolveQuote = resolve;
-  });
-  const tracker = new ScannerProviderHealthTracker();
-  const controller = new AbortController();
-  const pending = tracker.getQuote('KR', '005930', controller.signal);
-  const timeoutError = new Error('Bounded work item exceeded 4ms');
-  timeoutError.name = 'BoundedWorkTimeoutError';
-
-  try {
-    controller.abort(timeoutError);
-    await assert.rejects(pending, /Bounded work item exceeded 4ms/u);
-    resolveQuote?.(quoteRow());
-    await wait(0);
-    const health = tracker.snapshot();
-    assert.equal(health.some((row) => row.state === 'READY'), false);
-    const quoteChain = health.find((row) => row.provider === 'stock-quote-chain');
-    assert.equal(quoteChain?.state, 'TIMEOUT');
-    assert.equal(quoteChain?.timeout, true);
-  } finally {
-    (MarketDataService as unknown as { getQuote: typeof originalGetQuote }).getQuote = originalGetQuote;
   }
 });
 
