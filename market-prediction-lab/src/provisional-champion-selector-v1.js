@@ -17,8 +17,8 @@ export const PROVISIONAL_CHAMPION_SAFETY = Object.freeze({
 export const PROVISIONAL_CHAMPION_POLICY_V1 = Object.freeze({
   version: "PROVISIONAL_CHAMPION_POLICY_V1",
   minimumOosTradeN: 30,
-  requiredStages: Object.freeze(["OOS", "WALK_FORWARD", "COST_STRESS"]),
-  statisticalFirewallRequired: false,
+  requiredStages: Object.freeze(["OOS", "WALK_FORWARD", "COST_STRESS", "STATISTICAL_FIREWALL"]),
+  statisticalFirewallRequired: true,
   rankingPolicy: "LEXICOGRAPHIC_SAFETY_V1",
   environment: "PRODUCTION",
 });
@@ -31,7 +31,6 @@ function deepFreeze(value) {
 
 function finite(value) { return typeof value === "number" && Number.isFinite(value); }
 function unique(values) { return [...new Set(values)].sort(); }
-const MISSING_RANKING_VALUE = -Number.MAX_VALUE;
 
 function validatePolicy(policy) {
   const expectedStages = PROVISIONAL_CHAMPION_POLICY_V1.requiredStages;
@@ -64,8 +63,8 @@ function stageMap(evidenceResults, blockers) {
 function evaluateCandidate(candidate, policy) {
   const blockers = [];
   const resolved = resolveCanonicalStrategyIdentity(candidate?.strategyIdentity);
-  if (resolved.status !== "READY") blockers.push("IDENTITY_INCOMPLETE");
-  if (resolved.status === "READY" && candidate.strategyIdentityDigest !== resolved.strategyIdentityDigest) blockers.push("IDENTITY_MISMATCH");
+  if (resolved.status !== "IDENTITY_COMPLETE") blockers.push("IDENTITY_INCOMPLETE");
+  if (resolved.status === "IDENTITY_COMPLETE" && candidate.strategyIdentityDigest !== resolved.strategyIdentityDigest) blockers.push("IDENTITY_MISMATCH");
   if (candidate?.testOnly === true && policy.environment !== "TEST_ONLY") blockers.push("TEST_ONLY_CANDIDATE_FORBIDDEN");
 
   const evidenceResults = Array.isArray(candidate?.evidenceEnvelopes) ? candidate.evidenceEnvelopes : [];
@@ -73,7 +72,7 @@ function evaluateCandidate(candidate, policy) {
   for (const stage of policy.requiredStages) if (!stages.has(stage)) blockers.push(`MISSING_REQUIRED_STAGE:${stage}`);
 
   for (const result of stages.values()) {
-    if (resolved.status === "READY" && result.envelope.strategyIdentityDigest !== resolved.strategyIdentityDigest) blockers.push("IDENTITY_MISMATCH");
+    if (resolved.status === "IDENTITY_COMPLETE" && result.envelope.strategyIdentityDigest !== resolved.strategyIdentityDigest) blockers.push("IDENTITY_MISMATCH");
     if (result.envelope.missingEvidence.includes("ARTIFACT_CONTENT_UNAVAILABLE")) blockers.push(`ARTIFACT_LINKAGE_UNVERIFIED:${result.envelope.evidenceStage}`);
     if (result.envelope.validation?.datasetIntegrity !== true) blockers.push(`DATASET_INTEGRITY_UNPROVEN:${result.envelope.evidenceStage}`);
     if (result.envelope.validation?.noFutureLeakage !== true) blockers.push(`FUTURE_LEAKAGE_UNPROVEN:${result.envelope.evidenceStage}`);
@@ -83,29 +82,38 @@ function evaluateCandidate(candidate, policy) {
   const oos = stages.get("OOS")?.envelope;
   const walkForward = stages.get("WALK_FORWARD")?.envelope;
   const costStress = stages.get("COST_STRESS")?.envelope;
+  const firewall = stages.get("STATISTICAL_FIREWALL")?.envelope;
+
   if (oos && !(oos.sample.tradeN >= policy.minimumOosTradeN)) blockers.push("OOS_SAMPLE_INSUFFICIENT");
-  if (oos && !finite(oos.metrics.expectancy)) blockers.push("OOS_EXPECTANCY_REQUIRED");
+  if (oos && (!finite(oos.metrics.expectancy) || oos.metrics.expectancy <= 0)) blockers.push("OOS_POSITIVE_EXPECTANCY_REQUIRED");
   if (oos && !finite(oos.metrics.profitFactor)) blockers.push("OOS_PROFIT_FACTOR_REQUIRED");
   if (oos && !finite(oos.metrics.mdd)) blockers.push("OOS_MDD_REQUIRED");
+  if (oos && oos.validation?.mddAcceptable !== true) blockers.push("OOS_ACCEPTABLE_MDD_REQUIRED");
+
   if (walkForward && walkForward.validation?.parameterStability !== "PASS") blockers.push("PARAMETER_STABILITY_REQUIRED");
   if (walkForward && !finite(walkForward.metrics.positiveWindowRatio)) blockers.push("WALK_FORWARD_STABILITY_REQUIRED");
+
   if (costStress && costStress.validation?.costStressSurvived !== true) blockers.push("COST_STRESS_SURVIVAL_REQUIRED");
   if (costStress && costStress.costs?.costPolicyVersion !== resolved.identity?.costPolicyVersion) blockers.push("MANDATORY_COST_EVIDENCE_REQUIRED");
-  if (costStress && !finite(costStress.metrics.expectancy) && !finite(costStress.metrics.costAdjustedReturn)) blockers.push("COST_ADJUSTED_EXPECTANCY_REQUIRED");
+  const costAdjustedExpectation = finite(costStress?.metrics?.costAdjustedReturn)
+    ? costStress.metrics.costAdjustedReturn
+    : costStress?.metrics?.expectancy;
+  if (costStress && !finite(costAdjustedExpectation)) blockers.push("COST_ADJUSTED_EXPECTANCY_REQUIRED");
+  if (costStress && finite(costAdjustedExpectation) && costAdjustedExpectation <= 0) blockers.push("COST_ADJUSTED_EXPECTANCY_NOT_POSITIVE");
 
-  const firewall = stages.get("STATISTICAL_FIREWALL")?.envelope;
   if (policy.statisticalFirewallRequired && !firewall) blockers.push("STATISTICAL_FIREWALL_REQUIRED");
   if (firewall && firewall.validation?.overfitVerdict !== "PASS") blockers.push("STATISTICAL_OVERFIT_EVIDENCE_FAILED");
+  if (firewall && (!finite(firewall.metrics.dsr) || !finite(firewall.metrics.pbo))) blockers.push("STATISTICAL_FIREWALL_METRICS_REQUIRED");
 
   const evidenceDigest = sha256Canonical(evidenceResults.map((row) => row?.evidenceDigest ?? null).sort());
   const ranking = blockers.length === 0 ? Object.freeze([
     oos.metrics.expectancy,
     walkForward.metrics.positiveWindowRatio,
-    finite(costStress.metrics.costAdjustedReturn) ? costStress.metrics.costAdjustedReturn : costStress.metrics.expectancy,
+    costAdjustedExpectation,
     oos.metrics.profitFactor,
     -Math.abs(oos.metrics.mdd),
-    finite(firewall?.metrics?.dsr) ? firewall.metrics.dsr : MISSING_RANKING_VALUE,
-    finite(firewall?.metrics?.pbo) ? -firewall.metrics.pbo : MISSING_RANKING_VALUE,
+    firewall.metrics.dsr,
+    -firewall.metrics.pbo,
   ]) : null;
   return deepFreeze({
     status: blockers.length === 0 ? "ELIGIBLE" : "NOT_ELIGIBLE",
