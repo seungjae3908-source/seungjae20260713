@@ -51,21 +51,31 @@ test("missing metrics remain null and zero outcome samples never become zero pro
   assert.ok(result.missingEvidence.includes("ZERO_OUTCOME_SAMPLE_PROFITABILITY_METRICS_NA"));
 });
 
-test("mismatched identity, dataset and artifact remain unlinked", () => {
+test("mismatched identity, dataset, evidence schema and artifact remain unlinked", () => {
   const digestMismatch = envelope({ strategyIdentityDigest: HASH_A });
   assert.equal(digestMismatch.status, "IDENTITY_MISMATCH");
   const datasetMismatch = envelope({ datasetIdentity: { datasetId: "other", datasetDigest: HASH_B, datasetStart: identity().datasetStart, datasetEnd: identity().datasetEnd } });
   assert.equal(datasetMismatch.status, "IDENTITY_MISMATCH");
+  const schemaMismatch = envelope({ strategyIdentity: identity({ evidenceSchemaVersion: "other-envelope-v9" }) });
+  assert.equal(schemaMismatch.status, "IDENTITY_MISMATCH");
+  assert.ok(schemaMismatch.blockers.includes("EVIDENCE_SCHEMA_IDENTITY_MISMATCH"));
   const artifactMismatch = envelope({ artifactDigest: HASH_A });
   assert.equal(artifactMismatch.status, "UNLINKED_EVIDENCE");
   assert.ok(artifactMismatch.blockers.includes("ARTIFACT_DIGEST_MISMATCH"));
 });
 
-test("fake self-attestation cannot raise evidence authority", () => {
-  const result = envelope({ validated: true, profitabilityProven: true, verdict: { champion: true, executionAuthority: "LIVE" } });
+test("fake self-attestation cannot raise evidence authority at top level, verdict or validation", () => {
+  const result = envelope({
+    validated: true,
+    profitabilityProven: true,
+    verdict: { champion: true, executionAuthority: "LIVE" },
+    validation: { datasetIntegrity: true, validatedChampion: true, executionAuthority: "LIVE" },
+  });
   assert.equal(result.status, "UNLINKED_EVIDENCE");
   assert.equal(result.executionAuthority, "NONE");
   assert.ok(result.blockers.includes("SELF_ATTESTATION_FORBIDDEN:validated"));
   assert.ok(result.blockers.includes("SELF_ATTESTATION_FORBIDDEN:verdict.champion"));
   assert.ok(result.blockers.includes("EXECUTION_AUTHORITY_FORBIDDEN:verdict.executionAuthority"));
+  assert.ok(result.blockers.includes("SELF_ATTESTATION_FORBIDDEN:validation.validatedChampion"));
+  assert.ok(result.blockers.includes("EXECUTION_AUTHORITY_FORBIDDEN:validation.executionAuthority"));
 });
