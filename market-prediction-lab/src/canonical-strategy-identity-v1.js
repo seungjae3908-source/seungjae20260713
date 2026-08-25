@@ -121,7 +121,7 @@ export function resolveCanonicalStrategyIdentity(input = {}) {
   });
   return deepFreeze({
     schemaVersion: CANONICAL_STRATEGY_IDENTITY_SCHEMA_VERSION,
-    status: "READY",
+    status: "IDENTITY_COMPLETE",
     identity,
     strategyIdentityDigest: sha256Canonical(identity),
     missingFields: [],
@@ -133,7 +133,7 @@ export function resolveCanonicalStrategyIdentity(input = {}) {
 export function compareCanonicalStrategyIdentities(expectedInput, actualInput) {
   const expected = resolveCanonicalStrategyIdentity(expectedInput);
   const actual = resolveCanonicalStrategyIdentity(actualInput);
-  if (expected.status !== "READY" || actual.status !== "READY") {
+  if (expected.status !== "IDENTITY_COMPLETE" || actual.status !== "IDENTITY_COMPLETE") {
     return deepFreeze({
       status: "IDENTITY_INCOMPLETE",
       matched: false,
@@ -143,7 +143,7 @@ export function compareCanonicalStrategyIdentities(expectedInput, actualInput) {
     });
   }
   if (expected.strategyIdentityDigest === actual.strategyIdentityDigest) {
-    return deepFreeze({ status: "MATCH", matched: true, mismatchedFields: [], blockers: [], executionAuthority: "NONE" });
+    return deepFreeze({ status: "IDENTITY_COMPLETE", matched: true, mismatchedFields: [], blockers: [], executionAuthority: "NONE" });
   }
   const mismatchedFields = Object.keys(expected.identity)
     .filter((field) => sha256Canonical(expected.identity[field]) !== sha256Canonical(actual.identity[field]))
