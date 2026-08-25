@@ -57,6 +57,11 @@ function isBoundedKrInteractiveRequest(ticker: string, timeframe: Timeframe): bo
     && KR_INTERACTIVE_TIMEFRAMES.has(String(timeframe));
 }
 
+function isBoundedKrIntradayRequest(ticker: string, timeframe: Timeframe): boolean {
+  return isBoundedKrInteractiveRequest(ticker, timeframe)
+    && String(timeframe) !== '1D';
+}
+
 export function resolveKrInteractiveMaxPages(timeframe: Timeframe): number {
   const tf = String(timeframe);
 
@@ -175,6 +180,13 @@ async function getBoundedKrInteractiveCandlesMeta(
   }
 }
 
+async function getBoundedKrIntradayCandlesMeta(
+  ticker: string,
+  timeframe: Timeframe,
+): Promise<MarketDataCandlesMeta> {
+  return getBoundedKrInteractiveCandlesMeta(ticker, timeframe);
+}
+
 export class MarketDataService extends BaseMarketDataService {
   static async getQuote(ticker: string): Promise<Quote> {
     try {
@@ -208,6 +220,10 @@ export class MarketDataService extends BaseMarketDataService {
      * Research/long-history callers continue to use the lower-level APIs
      * directly and keep their deep pagination semantics.
      */
+    if (isBoundedKrIntradayRequest(ticker, timeframe)) {
+      return getBoundedKrIntradayCandlesMeta(ticker, timeframe);
+    }
+
     if (isBoundedKrInteractiveRequest(ticker, timeframe)) {
       return getBoundedKrInteractiveCandlesMeta(ticker, timeframe);
     }
