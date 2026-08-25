@@ -56,6 +56,38 @@ test("missing supervisor heartbeat blocks new Paper entry before broker submissi
   assert.equal(adapter.submissionCount, 0);
 });
 
+test("watchdog loss blocks new exposure but still permits cash SELL and futures reduce-only exits", async () => {
+  const { supervised, adapter } = buildGateway();
+  const cashExit = await supervised.placeOrder({
+    ...order("supervised-exit-cash-0001"),
+    side: "SELL",
+  });
+  await supervised.applyPaperFill(cashExit.orderId, { quantity: 10, price: 70_000, observedAt: new Date().toISOString() });
+
+  const futuresExit = await supervised.placeOrder({
+    mode: "PAPER",
+    market: "CRYPTO_FUTURES",
+    symbol: "BTCUSDT",
+    side: "LONG",
+    orderType: "LIMIT",
+    quantity: 0.01,
+    limitPrice: 100_000,
+    leverage: 2,
+    marginMode: "ISOLATED",
+    reduceOnly: true,
+    idempotencyKey: "supervised-exit-futures-0001",
+  });
+  await supervised.applyPaperFill(futuresExit.orderId, { quantity: 0.01, price: 100_000, observedAt: new Date().toISOString() });
+
+  assert.equal(adapter.submissionCount, 2);
+  const health = supervised.getProtectionHealth();
+  assert.equal(health.newEntryAllowed, false);
+  assert.ok(health.blockers.includes("SUPERVISOR_HEARTBEAT_MISSING"));
+  assert.equal(health.unprotectedPositions, 0);
+  assert.equal(health.emergencyIntents.length, 0);
+  assert.equal(health.reductionOrdersExemptFromNewEntryGate, true);
+});
+
 test("fresh heartbeat permits first Paper entry but filled unprotected exposure blocks the next entry", async () => {
   const { supervised, adapter } = buildGateway();
   supervised.recordSupervisorHeartbeat(heartbeat());
