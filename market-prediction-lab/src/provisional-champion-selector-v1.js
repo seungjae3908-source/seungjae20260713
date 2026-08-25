@@ -20,6 +20,7 @@ export const PROVISIONAL_CHAMPION_POLICY_V1 = Object.freeze({
   requiredStages: Object.freeze(["OOS", "WALK_FORWARD", "COST_STRESS", "STATISTICAL_FIREWALL"]),
   statisticalFirewallRequired: true,
   rankingPolicy: "LEXICOGRAPHIC_SAFETY_V1",
+  canonicalEvidenceAuthority: "PHASE5_ADAPTER_REQUIRED",
   environment: "PRODUCTION",
 });
 
@@ -38,6 +39,7 @@ function validatePolicy(policy) {
     || policy.minimumOosTradeN !== PROVISIONAL_CHAMPION_POLICY_V1.minimumOosTradeN
     || policy.statisticalFirewallRequired !== PROVISIONAL_CHAMPION_POLICY_V1.statisticalFirewallRequired
     || policy.rankingPolicy !== PROVISIONAL_CHAMPION_POLICY_V1.rankingPolicy
+    || policy.canonicalEvidenceAuthority !== PROVISIONAL_CHAMPION_POLICY_V1.canonicalEvidenceAuthority
     || !Array.isArray(policy.requiredStages)
     || policy.requiredStages.length !== expectedStages.length
     || policy.requiredStages.some((stage, index) => stage !== expectedStages[index])
@@ -66,6 +68,9 @@ function evaluateCandidate(candidate, policy) {
   if (resolved.status !== "IDENTITY_COMPLETE") blockers.push("IDENTITY_INCOMPLETE");
   if (resolved.status === "IDENTITY_COMPLETE" && candidate.strategyIdentityDigest !== resolved.strategyIdentityDigest) blockers.push("IDENTITY_MISMATCH");
   if (candidate?.testOnly === true && policy.environment !== "TEST_ONLY") blockers.push("TEST_ONLY_CANDIDATE_FORBIDDEN");
+  if (policy.environment === "PRODUCTION" && policy.canonicalEvidenceAuthority === "PHASE5_ADAPTER_REQUIRED") {
+    blockers.push("CANONICAL_EVIDENCE_ADAPTER_NOT_READY");
+  }
 
   const evidenceResults = Array.isArray(candidate?.evidenceEnvelopes) ? candidate.evidenceEnvelopes : [];
   const stages = stageMap(evidenceResults, blockers);
@@ -151,6 +156,7 @@ export function selectProvisionalChampion({ candidates = [], policy = PROVISIONA
       evaluations,
       evidenceDigest: sha256Canonical(evaluations.map((candidate) => candidate.evidenceDigest)),
       policyVersion: policy.version,
+      canonicalEvidenceAuthority: policy.canonicalEvidenceAuthority,
       selectedAt: null,
       validatedChampion: false,
       profitabilityProven: false,
@@ -179,6 +185,7 @@ export function selectProvisionalChampion({ candidates = [], policy = PROVISIONA
     evaluations,
     evidenceDigest: selected.evidenceDigest,
     policyVersion: policy.version,
+    canonicalEvidenceAuthority: policy.canonicalEvidenceAuthority,
     selectedAt: selected.measuredAt,
     validatedChampion: false,
     profitabilityProven: false,
