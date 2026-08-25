@@ -1,4 +1,6 @@
-import { expect, type Page, type Request } from '@playwright/test';
+import fs from 'node:fs';
+import path from 'node:path';
+import { expect, test, type Page, type Request } from '@playwright/test';
 
 type ScannerResponse = {
   ok?: boolean;
@@ -85,6 +87,40 @@ function isScannerRequest(request: Request): boolean {
   } catch {
     return false;
   }
+}
+
+const pendingStagingScannerDiagnostics = new WeakMap<Page, Set<Promise<void>>>();
+
+if (process.env.PHASE10_STAGING_E2E === 'true') {
+  test.beforeEach(async ({ page }) => {
+    const pending = new Set<Promise<void>>();
+    pendingStagingScannerDiagnostics.set(page, pending);
+    page.on('response', (response) => {
+      if (response.status() < 400 || !isScannerRequest(response.request())) return;
+      const task = (async () => {
+        const parsedBody = await response.json().catch(() => null);
+        const artifactDir = process.env.STAGING_ARTIFACT_DIR?.trim();
+        if (!artifactDir) return;
+        fs.mkdirSync(artifactDir, { recursive: true });
+        fs.appendFileSync(
+          path.join(artifactDir, 'scanner-provider-failure-diagnostics.jsonl'),
+          `${scannerFailureDiagnostic(response.status(), parsedBody)}\n`,
+          'utf8',
+        );
+      })();
+      pending.add(task);
+      void task.catch(() => undefined);
+    });
+  });
+
+  test.afterEach(async ({ page }) => {
+    const pending = pendingStagingScannerDiagnostics.get(page);
+    if (!pending) return;
+    const results = await Promise.allSettled([...pending]);
+    pendingStagingScannerDiagnostics.delete(page);
+    const failures = results.filter((result) => result.status === 'rejected');
+    expect(failures, 'scanner provider diagnostic persistence must not fail').toEqual([]);
+  });
 }
 
 export async function expectHealthyScannerRoute(
