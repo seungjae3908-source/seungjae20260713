@@ -4,6 +4,7 @@ export const CANONICAL_STRATEGY_IDENTITY_SCHEMA_VERSION = "canonical-strategy-id
 
 const HASH_64 = /^[0-9a-f]{64}$/iu;
 const SHA_40 = /^[0-9a-f]{40}$/iu;
+const MISSING_SENTINELS = new Set(["UNKNOWN", "MISSING", "MISSING_EVIDENCE", "NONE", "N/A", "NULL"]);
 const REQUIRED_STRING_FIELDS = Object.freeze([
   "strategyId",
   "strategyFamily",
@@ -39,7 +40,7 @@ function nonEmpty(value) {
 }
 
 function knownString(value) {
-  return nonEmpty(value) && !["UNKNOWN", "MISSING", "NONE"].includes(value.trim().toUpperCase());
+  return nonEmpty(value) && !MISSING_SENTINELS.has(value.trim().toUpperCase());
 }
 
 function hasFormulaIdentity(value) {
