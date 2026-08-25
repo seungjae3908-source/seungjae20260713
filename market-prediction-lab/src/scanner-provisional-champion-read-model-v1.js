@@ -120,20 +120,22 @@ function decision(card, champion, context) {
   });
 }
 
+function noTradeRegistry(blocker, championState = "INVALID") {
+  return deepFreeze({
+    schemaVersion: SCANNER_PROVISIONAL_CHAMPION_READ_MODEL_VERSION,
+    status: "NO_TRADE",
+    mode: "PROVISIONAL_CHAMPION",
+    championState,
+    cards: [],
+    decisions: [],
+    blockers: [blocker],
+    safety: safety(),
+  });
+}
+
 export function consumeProvisionalChampionForScanner({ registry, cards = [], context = {} } = {}) {
   const rows = Array.isArray(cards) ? cards : [];
-  if (registry == null) {
-    return deepFreeze({
-      schemaVersion: SCANNER_PROVISIONAL_CHAMPION_READ_MODEL_VERSION,
-      status: "NO_TRADE",
-      mode: "PROVISIONAL_CHAMPION",
-      championState: "UNAVAILABLE",
-      cards: [],
-      decisions: [],
-      blockers: ["CHAMPION_REGISTRY_UNAVAILABLE"],
-      safety: safety(),
-    });
-  }
+  if (registry == null) return noTradeRegistry("CHAMPION_REGISTRY_UNAVAILABLE", "UNAVAILABLE");
   if (registry.status === "NONE" && registry.currentProvisionalChampion === "NONE") {
     return Object.freeze({
       schemaVersion: SCANNER_PROVISIONAL_CHAMPION_READ_MODEL_VERSION,
@@ -147,8 +149,11 @@ export function consumeProvisionalChampionForScanner({ registry, cards = [], con
     });
   }
   const champion = registry.currentProvisionalChampion;
-  const registrySafe = registry.status === "PROVISIONAL_CHAMPION"
+  const registrySafe = registry.schemaVersion === "provisional-champion-verdict-v1"
+    && registry.policyVersion === "PROVISIONAL_CHAMPION_POLICY_V1"
+    && registry.status === "PROVISIONAL_CHAMPION"
     && champion?.championState === "PROVISIONAL"
+    && ["TEST_ONLY", "CANONICAL"].includes(champion?.evidenceClass)
     && registry.currentValidatedChampion === "NONE"
     && registry.validatedChampion === false
     && registry.profitabilityProven === false
@@ -156,20 +161,18 @@ export function consumeProvisionalChampionForScanner({ registry, cards = [], con
     && registry.executionAuthority === "NONE"
     && champion?.strategyIdentity != null
     && /^[0-9a-f]{64}$/u.test(champion?.strategyIdentityDigest ?? "");
-  if (!registrySafe) {
-    return deepFreeze({
-      schemaVersion: SCANNER_PROVISIONAL_CHAMPION_READ_MODEL_VERSION,
-      status: "NO_TRADE",
-      mode: "PROVISIONAL_CHAMPION",
-      championState: "INVALID",
-      cards: [],
-      decisions: [],
-      blockers: ["CHAMPION_REGISTRY_SAFETY_INVALID"],
-      safety: safety(),
-    });
+  if (!registrySafe) return noTradeRegistry("CHAMPION_REGISTRY_SAFETY_INVALID");
+
+  const environment = context.environment === "TEST_ONLY" ? "TEST_ONLY" : "PRODUCTION";
+  if (champion.evidenceClass === "TEST_ONLY" && environment !== "TEST_ONLY") {
+    return noTradeRegistry("TEST_ONLY_CHAMPION_FORBIDDEN");
+  }
+  if (champion.evidenceClass === "CANONICAL" && registry.canonicalEvidenceAuthority === "PHASE5_ADAPTER_REQUIRED") {
+    return noTradeRegistry("CANONICAL_EVIDENCE_ADAPTER_NOT_READY");
   }
 
   const resolvedContext = Object.freeze({
+    environment,
     now: context.now ?? null,
     providerAvailable: context.providerAvailable === true,
     minimumLiquidity: finite(context.minimumLiquidity) && context.minimumLiquidity >= 0 ? context.minimumLiquidity : null,
