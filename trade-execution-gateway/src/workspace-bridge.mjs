@@ -105,6 +105,7 @@ export function workspaceOrderToPaperIntent(payload) {
     quantity,
     limitPrice,
     referencePrice,
+    capitalValuationEvidence: envelope.capitalValuationEvidence ?? null,
     idempotencyKey,
   });
 }
