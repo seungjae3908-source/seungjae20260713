@@ -286,7 +286,7 @@ export class MarketDataService extends BaseMarketDataService {
     if (primary.description !== FALLBACK_PROFILE_DESCRIPTION || !isTossConfigured()) return primary;
     try {
       const entry = await super.getCatalogEntry(ticker);
-      return await getTossCompanyProfile(entry) as unknown as CompanyProfile;
+      return await getTossCompanyProfile(entry);
     } catch {
       return primary;
     }
