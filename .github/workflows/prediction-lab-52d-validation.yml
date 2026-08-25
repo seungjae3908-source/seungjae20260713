@@ -107,6 +107,9 @@ jobs:
         if: steps.validate.outcome == 'success'
         continue-on-error: true
         working-directory: market-prediction-lab
+        env:
+          RESEARCH_CODE_SHA: ${{ steps.sha.outputs.value }}
+          TRAINING_CODE_SHA: ${{ steps.sha.outputs.value }}
         run: node scripts/run-market-suite.js live-market-suite docs/market-suite-result.json docs/candidate-models
 
       - name: Audit frozen BTC and ETH futures models on unseen SOL
@@ -210,6 +213,146 @@ jobs:
           cat > market-prediction-lab/docs/market-suite-provenance.json <<JSON
           {"schemaVersion":1,"researchCodeSha":"$RESEARCH_SHA","runId":"$GITHUB_RUN_ID","branchWrite":false,"liveOrderAllowed":false,"privateAccountRequestAllowed":false}
           JSON
+
+      - name: Upload immutable raw model reference evidence
+        if: steps.market_suite.outcome == 'success'
+        id: raw_reference_upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: prediction-lab-model-reference-evidence-raw-${{ github.run_id }}
+          path: market-prediction-lab/live-market-suite/reference-evidence
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Resolve actual raw reference artifact metadata
+        if: steps.market_suite.outcome == 'success'
+        id: raw_reference
+        uses: actions/github-script@v7
+        env:
+          ARTIFACT_ID: ${{ steps.raw_reference_upload.outputs.artifact-id }}
+          UPLOAD_DIGEST: ${{ steps.raw_reference_upload.outputs.artifact-digest }}
+        with:
+          script: |
+            const artifactId = Number(process.env.ARTIFACT_ID);
+            if (!Number.isSafeInteger(artifactId) || artifactId <= 0) {
+              core.setFailed('Actual raw reference artifact ID is missing.');
+              return;
+            }
+            const { data: artifact } = await github.rest.actions.getArtifact({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              artifact_id: artifactId,
+            });
+            const expectedName = `prediction-lab-model-reference-evidence-raw-${context.runId}`;
+            if (artifact.name !== expectedName || artifact.expired || !artifact.created_at || !artifact.expires_at) {
+              core.setFailed('Actual raw reference artifact metadata is incomplete or expired.');
+              return;
+            }
+            const digest = String(artifact.digest ?? '').replace(/^sha256:/, '').toLowerCase();
+            const uploadDigest = String(process.env.UPLOAD_DIGEST ?? '').replace(/^sha256:/, '').toLowerCase();
+            if (!/^[0-9a-f]{64}$/.test(digest) || digest !== uploadDigest) {
+              core.setFailed('Raw reference artifact digest does not match upload evidence.');
+              return;
+            }
+            core.setOutput('artifact_id', String(artifact.id));
+            core.setOutput('artifact_name', artifact.name);
+            core.setOutput('artifact_digest', digest);
+            core.setOutput('created_at', artifact.created_at);
+            core.setOutput('expires_at', artifact.expires_at);
+            core.setOutput('artifact_reference', `${process.env.GITHUB_SERVER_URL}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}/artifacts/${artifact.id}`);
+
+      - name: Finalize #664 artifact receipt and reference provenance
+        if: steps.market_suite.outcome == 'success'
+        working-directory: market-prediction-lab
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.raw_reference.outputs.artifact_id }}
+          ARTIFACT_NAME: ${{ steps.raw_reference.outputs.artifact_name }}
+          ARTIFACT_REFERENCE: ${{ steps.raw_reference.outputs.artifact_reference }}
+          OUTER_ARTIFACT_DIGEST: ${{ steps.raw_reference.outputs.artifact_digest }}
+          ARTIFACT_CREATED_AT: ${{ steps.raw_reference.outputs.created_at }}
+          ARTIFACT_EXPIRES_AT: ${{ steps.raw_reference.outputs.expires_at }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import { finalizeModelReferenceEvidenceReceipts } from './src/model-reference-evidence.js';
+          const reports = await finalizeModelReferenceEvidenceReceipts('live-market-suite/reference-evidence', {
+            artifactId: process.env.ARTIFACT_ID,
+            artifactName: process.env.ARTIFACT_NAME,
+            artifactReference: process.env.ARTIFACT_REFERENCE,
+            outerArtifactDigest: process.env.OUTER_ARTIFACT_DIGEST,
+            createdAt: process.env.ARTIFACT_CREATED_AT,
+            expiresAt: process.env.ARTIFACT_EXPIRES_AT,
+            now: process.env.ARTIFACT_CREATED_AT,
+          });
+          if (!reports.length || reports.some((report) => report.rawReferenceValid !== true || report.receiptValidation?.status !== 'VALID')) {
+            throw new Error('Future raw TRAIN/VALIDATION evidence or #664 receipt did not validate.');
+          }
+          fs.writeFileSync('live-market-suite/reference-evidence/workflow-evidence.json', `${JSON.stringify(reports, null, 2)}\n`);
+          NODE
+
+      - name: Upload finalized model reference evidence
+        if: steps.market_suite.outcome == 'success'
+        id: reference_upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: prediction-lab-model-reference-evidence-${{ github.run_id }}
+          path: market-prediction-lab/live-market-suite/reference-evidence
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Record exact future reference evidence receipt
+        if: steps.market_suite.outcome == 'success'
+        uses: actions/github-script@v7
+        env:
+          EXACT_HEAD_SHA: ${{ steps.sha.outputs.value }}
+          ARTIFACT_ID: ${{ steps.reference_upload.outputs.artifact-id }}
+          UPLOAD_DIGEST: ${{ steps.reference_upload.outputs.artifact-digest }}
+          RAW_ARTIFACT_ID: ${{ steps.raw_reference.outputs.artifact_id }}
+          RAW_ARTIFACT_DIGEST: ${{ steps.raw_reference.outputs.artifact_digest }}
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const artifactId = Number(process.env.ARTIFACT_ID);
+            const { data: artifact } = await github.rest.actions.getArtifact({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              artifact_id: artifactId,
+            });
+            const digest = String(artifact.digest ?? '').replace(/^sha256:/, '').toLowerCase();
+            const uploadDigest = String(process.env.UPLOAD_DIGEST ?? '').replace(/^sha256:/, '').toLowerCase();
+            if (!/^[0-9a-f]{64}$/.test(digest) || digest !== uploadDigest || artifact.expired) {
+              core.setFailed('Final reference artifact metadata did not validate.');
+              return;
+            }
+            const root = 'market-prediction-lab/live-market-suite/reference-evidence';
+            const manifests = fs.readdirSync(root, { withFileTypes: true })
+              .filter((entry) => entry.isDirectory())
+              .map((entry) => JSON.parse(fs.readFileSync(path.join(root, entry.name, 'reference-manifest.json'), 'utf8')))
+              .sort((left, right) => left.group.localeCompare(right.group));
+            const lines = [
+              '## Future-only TRAIN / VALIDATION reference evidence',
+              '',
+              `- Exact HEAD: ${process.env.EXACT_HEAD_SHA}`,
+              `- Raw receipt artifact: ${process.env.RAW_ARTIFACT_ID}`,
+              `- Raw receipt outer digest: sha256:${process.env.RAW_ARTIFACT_DIGEST}`,
+              `- Final consumer artifact: ${artifact.id}`,
+              `- Final consumer artifact name: ${artifact.name}`,
+              `- Final consumer outer digest: ${artifact.digest}`,
+              `- Final consumer expiry: ${artifact.expires_at}`,
+              '- DURABLE_REFERENCE_STORE: NOT_CONFIGURED',
+              '- LONG_TERM_REFERENCE_PROVEN: false',
+              '',
+              '| Group | TRAIN N | VALIDATION N | trainSplitDigest | validationSplitDigest | modelSha | preprocessingVersion | featureOrderDigest | rawArtifactDigest | receipt | provenance |',
+              '|---|---:|---:|---|---|---|---|---|---|---|---|',
+            ];
+            for (const manifest of manifests) {
+              lines.push(`| ${manifest.group} | ${manifest.trainSampleN} | ${manifest.validationSampleN} | ${manifest.trainSplitDigest} | ${manifest.validationSplitDigest} | ${manifest.modelSha} | ${manifest.preprocessingVersion} | ${manifest.featureOrderDigest} | ${manifest.rawArtifactDigest} | ${manifest.artifactReceiptValidation.status} | ${manifest.referenceProvenanceStatus} |`);
+            }
+            core.summary.addRaw(`${lines.join('\n')}\n`);
+            await core.summary.write();
 
       - name: Upload immutable validation artifacts
         if: always()
