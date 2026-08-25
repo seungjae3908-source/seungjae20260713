@@ -80,8 +80,15 @@ export function isIgnorableProductionRequestFailure(
   }
 
   const normalizedMethod = method.toUpperCase();
+  const normalizedError = errorText.trim();
+  const cloudflareRumNavigationAbort = url.origin === productionOrigin
+    && url.pathname === '/cdn-cgi/rum'
+    && normalizedMethod === 'POST'
+    && normalizedError === 'net::ERR_ABORTED';
+  if (cloudflareRumNavigationAbort) return true;
+
   const readOnlyAbort = (normalizedMethod === 'GET' || normalizedMethod === 'HEAD')
-    && errorText.trim() === 'net::ERR_ABORTED';
+    && normalizedError === 'net::ERR_ABORTED';
   if (!readOnlyAbort) return false;
 
   if (url.origin === productionOrigin) return true;
