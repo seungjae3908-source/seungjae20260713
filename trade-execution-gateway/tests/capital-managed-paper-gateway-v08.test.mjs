@@ -75,6 +75,15 @@ function krSell(key, notionalKrw) {
   };
 }
 
+function coveredSettlement(sequence, equity, orders) {
+  const latestCreatedMs = Math.max(...orders.map((order) => Date.parse(order.createdAt)));
+  const observedMs = latestCreatedMs;
+  return {
+    input: settlement(sequence, equity, { observedAt: new Date(observedMs).toISOString() }),
+    options: { nowMs: observedMs + 1_000 },
+  };
+}
+
 test("1,000,000 KRW capital gate blocks aggregate new exposure before second broker submission", async () => {
   const { gateway, adapter } = build();
   await gateway.applyCapitalSettlement(settlement(1, 1_000_000));
@@ -181,12 +190,13 @@ test("flat capital settlement is blocked while exposure-increasing Paper order r
     (error) => error.code === "CAPITAL_SETTLEMENT_OPEN_ENTRY_ORDERS",
   );
 
-  await gateway.cancelOrder(placed.orderId);
-  const settled = await gateway.applyCapitalSettlement(settlement(2, 1_000_000));
+  const canceled = await gateway.cancelOrder(placed.orderId);
+  const freshSettlement = coveredSettlement(2, 1_000_000, [canceled]);
+  const settled = await gateway.applyCapitalSettlement(freshSettlement.input, freshSettlement.options);
   assert.equal(settled.settlementAuthority, "CALLER_SUPPLIED_SIMULATED_FLAT_EVIDENCE_ONLY");
 });
 
-test("filled entry exposure stays reserved until a fresh flat settlement releases it", async () => {
+test("filled entry exposure stays reserved until an OMS-covered fresh flat settlement releases it", async () => {
   const { gateway, adapter } = build();
   await gateway.applyCapitalSettlement(settlement(1, 1_000_000));
 
@@ -209,10 +219,39 @@ test("filled entry exposure stays reserved until a fresh flat settlement release
   );
   assert.equal(gateway.getCapitalHealth().currentCommittedExposureKrw, 700_000);
 
-  await gateway.applyCapitalSettlement(settlement(2, 1_000_000));
+  const freshSettlement = coveredSettlement(2, 1_000_000, [buy, sell]);
+  const settled = await gateway.applyCapitalSettlement(freshSettlement.input, freshSettlement.options);
+  assert.equal(settled.settlementOrderWatermarkRecorded, true);
   const fresh = await gateway.placeOrder(krBuy("capital-after-fresh-settlement", 1_000_000));
   assert.equal(fresh.capitalAdmission.currentManagedExposureKrw, 0);
-  assert.equal(adapter.submissionCount, 4);
+  assert.equal(adapter.submissionCount, 3);
+});
+
+test("stale settlement timestamp cannot clear a newer terminal OMS exposure", async () => {
+  const { gateway } = build();
+  await gateway.applyCapitalSettlement(settlement(1, 1_000_000));
+  const buy = await gateway.placeOrder(krBuy("capital-stale-watermark-buy", 100_000));
+  await gateway.applyPaperFill(buy.orderId, {
+    quantity: 1,
+    price: 100_000,
+    observedAt: new Date().toISOString(),
+  });
+  const sell = await gateway.placeOrder(krSell("capital-stale-watermark-sell", 100_000));
+  await gateway.applyPaperFill(sell.orderId, {
+    quantity: 1,
+    price: 100_000,
+    observedAt: new Date().toISOString(),
+  });
+
+  const beforeOrders = Math.min(Date.parse(buy.createdAt), Date.parse(sell.createdAt)) - 1;
+  await assert.rejects(
+    gateway.applyCapitalSettlement(
+      settlement(2, 1_000_000, { observedAt: new Date(beforeOrders).toISOString() }),
+      { nowMs: beforeOrders + 1_000 },
+    ),
+    (error) => error.code === "CAPITAL_SETTLEMENT_OMS_TIME_COVERAGE_REQUIRED",
+  );
+  assert.equal(gateway.getCapitalHealth().currentCommittedExposureKrw, 100_000);
 });
 
 test("settlement route requires explicit flat simulated evidence", async () => {
