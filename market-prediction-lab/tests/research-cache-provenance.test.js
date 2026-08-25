@@ -2,12 +2,23 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   CACHE_REUSE_STATUS,
+  REFERENCE_EVIDENCE_STATUS,
+  RESEARCH_COMPOSITE_DATASET_PROVENANCE_SCHEMA_VERSION,
   RESEARCH_DATASET_IDENTITY_SCHEMA_VERSION,
+  RESEARCH_REFERENCE_ARTIFACT_RECEIPT_SCHEMA_VERSION,
+  RESEARCH_REFERENCE_EVIDENCE_SCHEMA_VERSION,
+  buildCompositeDatasetProvenance,
   buildHistoricalCacheProvenance,
+  buildReferenceArtifactReceipt,
+  buildReferenceEvidenceProvenance,
   buildResearchDatasetIdentity,
   buildStrategyResultCacheProvenance,
+  compareReferenceEvidenceProvenance,
   sha256Canonical,
   validateCacheReuse,
+  validateCompositeDatasetProvenance,
+  validateReferenceArtifactReceipt,
+  validateReferenceEvidenceProvenance,
   validateResearchDatasetIdentity,
 } from "../src/research-cache-provenance.js";
 
@@ -75,6 +86,42 @@ function historical(identityOverrides = {}, cacheOverrides = {}) {
     duplicatesHandled: true,
     missingIntervalsDetected: true,
     ...cacheOverrides,
+  });
+}
+
+function reference(overrides = {}) {
+  const { artifactReceipt: receiptOverrides = {}, ...evidenceOverrides } = overrides;
+  const composite = buildCompositeDatasetProvenance({
+    datasetId: "futures-btc-long",
+    components: {
+      candles: SOURCE_DIGEST,
+      funding: "b".repeat(64),
+    },
+  });
+  const artifactReceipt = buildReferenceArtifactReceipt({
+    artifactId: "9552811517",
+    artifactName: "prediction-lab-train-validation-reference",
+    artifactReference: "actions://9552811517",
+    outerArtifactDigest: "c".repeat(64),
+    createdAt: "2026-08-25T00:00:00.000Z",
+    expiresAt: "2026-11-23T00:00:00.000Z",
+    ...receiptOverrides,
+  });
+  return buildReferenceEvidenceProvenance({
+    datasetId: composite.datasetId,
+    datasetDigest: composite.datasetDigest,
+    strategyIdentityDigest: "d".repeat(64),
+    researchCodeSha: RESEARCH_SHA,
+    trainingCodeSha: NEXT_RESEARCH_SHA,
+    modelSha: "e".repeat(64),
+    preprocessingVersion: "prediction-features-v1",
+    featureOrderDigest: "f".repeat(64),
+    trainSplitDigest: "1".repeat(64),
+    validationSplitDigest: "2".repeat(64),
+    rawArtifactDigest: "3".repeat(64),
+    measuredAt: "2026-08-25T00:15:00.000Z",
+    ...evidenceOverrides,
+    artifactReceipt,
   });
 }
 
@@ -240,4 +287,78 @@ test("strategy result cache carries canonical dataset lineage", () => {
   assert.equal(base.identity.datasetIdentityId, history.datasetIdentity.datasetIdentityId);
   assert.equal(base.identity.datasetDigest, history.datasetIdentity.datasetDigest);
   assert.equal(validateCacheReuse(base, same).CACHE_REUSE_ALLOWED, true);
+});
+
+test("composite dataset provenance is deterministic and binds every component digest", () => {
+  const components = { funding: "b".repeat(64), candles: SOURCE_DIGEST };
+  const first = buildCompositeDatasetProvenance({ datasetId: "futures-btc-long", components });
+  const reordered = buildCompositeDatasetProvenance({ datasetId: "futures-btc-long", components: { candles: SOURCE_DIGEST, funding: "b".repeat(64) } });
+  assert.equal(first.schemaVersion, RESEARCH_COMPOSITE_DATASET_PROVENANCE_SCHEMA_VERSION);
+  assert.equal(first.datasetDigest, reordered.datasetDigest);
+  assert.equal(first.componentCount, 2);
+  assert.deepEqual(components, { funding: "b".repeat(64), candles: SOURCE_DIGEST });
+  assert.equal(Object.isFrozen(first), true);
+  assert.equal(validateCompositeDatasetProvenance(first).valid, true);
+  assert.notEqual(first.datasetDigest, buildCompositeDatasetProvenance({ datasetId: "futures-btc-long", components: { candles: SOURCE_DIGEST, funding: "9".repeat(64) } }).datasetDigest);
+});
+
+test("reference artifact receipt separates outer upload evidence from raw reference bytes", () => {
+  const receipt = buildReferenceArtifactReceipt({
+    artifactId: "9552811517",
+    artifactName: "prediction-lab-train-validation-reference",
+    artifactReference: "actions://9552811517",
+    outerArtifactDigest: "c".repeat(64),
+    createdAt: "2026-08-25T00:00:00.000Z",
+    expiresAt: "2026-11-23T00:00:00.000Z",
+  });
+  assert.equal(receipt.schemaVersion, RESEARCH_REFERENCE_ARTIFACT_RECEIPT_SCHEMA_VERSION);
+  assert.equal(validateReferenceArtifactReceipt(receipt, { now: "2026-08-25T01:00:00.000Z" }).valid, true);
+  assert.equal(validateReferenceArtifactReceipt(receipt, { now: "2026-11-23T00:00:00.000Z" }).status, REFERENCE_EVIDENCE_STATUS.REFERENCE_EXPIRED);
+  assert.equal(Object.isFrozen(receipt), true);
+});
+
+test("reference evidence binds dataset, strategy, code, model, preprocessing, splits, raw artifact and receipt", () => {
+  const provenance = reference();
+  assert.equal(provenance.schemaVersion, RESEARCH_REFERENCE_EVIDENCE_SCHEMA_VERSION);
+  assert.equal(provenance.trainingCodeSha, NEXT_RESEARCH_SHA);
+  assert.equal(provenance.preprocessingVersion, "prediction-features-v1");
+  assert.equal(provenance.rawArtifactDigest, "3".repeat(64));
+  assert.equal(provenance.artifactReceipt.outerArtifactDigest, "c".repeat(64));
+  assert.notEqual(provenance.rawArtifactDigest, provenance.artifactReceipt.outerArtifactDigest);
+  assert.equal(validateReferenceEvidenceProvenance(provenance, { now: "2026-08-25T01:00:00.000Z" }).valid, true);
+  assert.equal(Object.isFrozen(provenance), true);
+  assert.equal(Object.isFrozen(provenance.artifactReceipt), true);
+});
+
+test("reference evidence tampering and missing evidence fail closed", () => {
+  const provenance = reference();
+  const tampered = { ...provenance, trainSplitDigest: "4".repeat(64) };
+  const tamperedAssessment = validateReferenceEvidenceProvenance(tampered, { now: "2026-08-25T01:00:00.000Z" });
+  assert.equal(tamperedAssessment.valid, false);
+  assert.equal(tamperedAssessment.status, REFERENCE_EVIDENCE_STATUS.IDENTITY_MISMATCH);
+
+  const missing = { ...provenance, preprocessingVersion: undefined };
+  const missingAssessment = validateReferenceEvidenceProvenance(missing, { now: "2026-08-25T01:00:00.000Z" });
+  assert.equal(missingAssessment.valid, false);
+  assert.equal(missingAssessment.status, REFERENCE_EVIDENCE_STATUS.MISSING_EVIDENCE);
+});
+
+test("another model or split cannot reuse reference evidence", () => {
+  const expected = reference();
+  const otherModel = reference({ modelSha: "9".repeat(64) });
+  const otherSplit = reference({ validationSplitDigest: "8".repeat(64) });
+  assert.deepEqual(compareReferenceEvidenceProvenance(expected, expected, { now: "2026-08-25T01:00:00.000Z" }), {
+    match: true,
+    status: REFERENCE_EVIDENCE_STATUS.EXACT_IDENTITY_MATCH,
+    reason: null,
+  });
+  assert.equal(compareReferenceEvidenceProvenance(expected, otherModel, { now: "2026-08-25T01:00:00.000Z" }).status, REFERENCE_EVIDENCE_STATUS.IDENTITY_MISMATCH);
+  assert.equal(compareReferenceEvidenceProvenance(expected, otherSplit, { now: "2026-08-25T01:00:00.000Z" }).status, REFERENCE_EVIDENCE_STATUS.IDENTITY_MISMATCH);
+});
+
+test("reference expiry fails closed without reconstructing missing evidence", () => {
+  const provenance = reference();
+  const assessment = validateReferenceEvidenceProvenance(provenance, { now: "2026-12-01T00:00:00.000Z" });
+  assert.equal(assessment.valid, false);
+  assert.equal(assessment.status, REFERENCE_EVIDENCE_STATUS.REFERENCE_EXPIRED);
 });
