@@ -1474,49 +1474,69 @@ test.describe('real staging release readiness', () => {
     await expectUiBuilderStagingReadiness(page, (route) => expectHealthyRoute(page, route));
   });
 
-  for (const [name, viewports] of [
-    ['desktop', [[1440, 900], [1024, 768]]],
-    ['mobile', [[320, 740], [360, 800], [390, 844], [412, 915], [430, 932]]],
-  ] as const) {
-    test(`${name}: major screens, search/detail, domestic/overseas/coin, watchlist, alerts, and settings`, async ({ page }, testInfo) => {
-      const [loginWidth, loginHeight] = viewports[0];
-      await page.setViewportSize({ width: loginWidth, height: loginHeight });
-      await login(page, accounts.regular.loginName, accounts.regular.password);
-      const certificationRoutes = [
-        '/', '/search', '/scanner', '/ai-chart', '/ai-chat', '/portfolio', '/account', '/learn', '/auto-trading',
-      ] as const;
-      const evidence: AuthenticatedViewportEvidence[] = [];
-      for (const [width, height] of viewports) {
-        for (const route of certificationRoutes) {
-          evidence.push(await auditAuthenticatedViewport(page, testInfo, route, width, height));
-        }
-      }
+  const certificationRoutes = [
+    '/', '/search', '/scanner', '/ai-chart', '/ai-chat', '/portfolio', '/account', '/learn', '/auto-trading',
+  ] as const;
+  const secondaryRoutes = [
+    '/stock/005930',
+    '/stock-info?asset=stock&market=KR&ticker=005930',
+    '/stock-info?asset=stock&market=US&ticker=AAPL',
+    '/stock-info?asset=coin&coinMarket=spot&symbol=BTC',
+    '/watchlist',
+    '/alerts',
+    '/themes',
+    '/market-overview',
+    '/more',
+  ] as const;
+  const assertViewportEvidence = (evidence: AuthenticatedViewportEvidence[]) => {
+    expect(evidence.filter((item) => item.blank), 'blank authenticated viewport').toEqual([]);
+    expect(evidence.filter((item) => item.horizontalOverflowPx > 0), 'horizontal overflow in authenticated viewport').toEqual([]);
+    expect(evidence.filter((item) => item.criticalNavOverlap.length > 0), 'critical navigation overlap').toEqual([]);
+    expect(evidence.filter((item) => item.inputOverlap.length > 0), 'input overlap').toEqual([]);
+    expect(evidence.filter((item) => item.deadScroll.length > 0), 'dead scroll container').toEqual([]);
+    expect(evidence.filter((item) => item.criticalClipping.length > 0), 'critical horizontal clipping').toEqual([]);
+    expect(evidence.filter((item) => item.consoleErrors > 0), 'viewport console errors').toEqual([]);
+    expect(evidence.filter((item) => item.pageErrors > 0), 'viewport page errors').toEqual([]);
+    expect(evidence.filter((item) => item.unexpectedHttpErrors > 0), 'viewport unexpected HTTP failures').toEqual([]);
+  };
 
-      await page.setViewportSize({ width: loginWidth, height: loginHeight });
-      for (const route of [
-        '/stock/005930',
-        '/stock-info?asset=stock&market=KR&ticker=005930',
-        '/stock-info?asset=stock&market=US&ticker=AAPL',
-        '/stock-info?asset=coin&coinMarket=spot&symbol=BTC',
-        '/watchlist',
-        '/alerts',
-        '/themes',
-        '/market-overview',
-        '/more',
-      ]) {
-        await expectHealthyRoute(page, route);
+  test('desktop: major screens, search/detail, domestic/overseas/coin, watchlist, alerts, and settings', async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await login(page, accounts.regular.loginName, accounts.regular.password);
+    const evidence: AuthenticatedViewportEvidence[] = [];
+    for (const [width, height] of [[1440, 900], [1024, 768]] as const) {
+      for (const route of certificationRoutes) {
+        evidence.push(await auditAuthenticatedViewport(page, testInfo, route, width, height));
       }
-      expect(evidence.filter((item) => item.blank), 'blank authenticated viewport').toEqual([]);
-      expect(evidence.filter((item) => item.horizontalOverflowPx > 0), 'horizontal overflow in authenticated viewport').toEqual([]);
-      expect(evidence.filter((item) => item.criticalNavOverlap.length > 0), 'critical navigation overlap').toEqual([]);
-      expect(evidence.filter((item) => item.inputOverlap.length > 0), 'input overlap').toEqual([]);
-      expect(evidence.filter((item) => item.deadScroll.length > 0), 'dead scroll container').toEqual([]);
-      expect(evidence.filter((item) => item.criticalClipping.length > 0), 'critical horizontal clipping').toEqual([]);
-      expect(evidence.filter((item) => item.consoleErrors > 0), 'viewport console errors').toEqual([]);
-      expect(evidence.filter((item) => item.pageErrors > 0), 'viewport page errors').toEqual([]);
-      expect(evidence.filter((item) => item.unexpectedHttpErrors > 0), 'viewport unexpected HTTP failures').toEqual([]);
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+    for (const route of secondaryRoutes) await expectHealthyRoute(page, route);
+    assertViewportEvidence(evidence);
+  });
+
+  for (const [width, height] of [
+    [320, 740],
+    [360, 800],
+    [390, 844],
+    [412, 915],
+    [430, 932],
+  ] as const) {
+    test(`mobile ${width}x${height}: major authenticated screens`, async ({ page }, testInfo) => {
+      await page.setViewportSize({ width, height });
+      await login(page, accounts.regular.loginName, accounts.regular.password);
+      const evidence: AuthenticatedViewportEvidence[] = [];
+      for (const route of certificationRoutes) {
+        evidence.push(await auditAuthenticatedViewport(page, testInfo, route, width, height));
+      }
+      assertViewportEvidence(evidence);
     });
   }
+
+  test('mobile 320x740: search/detail, domestic/overseas/coin, watchlist, alerts, and settings', async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 740 });
+    await login(page, accounts.regular.loginName, accounts.regular.password);
+    for (const route of secondaryRoutes) await expectHealthyRoute(page, route);
+  });
 
   test('bottom navigation and popup menus traverse every visible destination', async ({ page }) => {
     await login(page, accounts.regular.loginName, accounts.regular.password);
