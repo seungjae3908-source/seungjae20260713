@@ -8,6 +8,10 @@ import {
   sidesForMarket,
 } from "./contracts.mjs";
 import { applyPaperFillTransition, PaperLifecycleError } from "./order-lifecycle.mjs";
+import {
+  KrwValuationEvidenceError,
+  normalizeCapitalValuationEvidence,
+} from "./krw-valuation-evidence-v11.mjs";
 
 export class GatewayError extends Error {
   constructor(code, message, statusCode = 400) {
@@ -111,6 +115,19 @@ function normalizeOrderIntent(input) {
     throw new GatewayError("REFERENCE_PRICE_REQUIRED", "PAPER MARKET order requires referencePrice for bounded risk preview");
   }
 
+  let capitalValuationEvidence = null;
+  try {
+    capitalValuationEvidence = normalizeCapitalValuationEvidence(
+      input.capitalValuationEvidence,
+      { market, symbol },
+    );
+  } catch (error) {
+    if (error instanceof KrwValuationEvidenceError) {
+      throw new GatewayError(error.code, error.message, error.statusCode);
+    }
+    throw error;
+  }
+
   return Object.freeze({
     mode,
     market,
@@ -121,6 +138,7 @@ function normalizeOrderIntent(input) {
     quantity,
     limitPrice,
     referencePrice,
+    capitalValuationEvidence,
     executionContext: normalizeExecutionContext(input, market),
   });
 }
