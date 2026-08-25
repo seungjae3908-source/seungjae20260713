@@ -54,7 +54,7 @@ function candidate(id = "candidate-a", overrides = {}) {
       stage(strategyIdentity, "COST_STRESS"),
       stage(strategyIdentity, "STATISTICAL_FIREWALL"),
     ],
-    testOnly: true,
+    testOnly: overrides.testOnly ?? true,
   };
 }
 
@@ -66,6 +66,14 @@ test("no eligible candidates returns NONE and never changes validated champion",
   assert.equal(none.currentProvisionalChampion, "NONE");
   assert.equal(none.currentValidatedChampion, "NONE");
   assert.equal(none.validatedChampion, false);
+});
+
+test("production selection is locked until the Phase 5 canonical evidence adapter exists", () => {
+  const result = selectProvisionalChampion({ candidates: [candidate("production-shaped", { testOnly: false })] });
+  assert.equal(result.status, "NONE");
+  assert.equal(result.currentProvisionalChampion, "NONE");
+  assert.ok(result.blockers.includes("CANONICAL_EVIDENCE_ADAPTER_NOT_READY"));
+  assert.equal(result.canonicalEvidenceAuthority, "PHASE5_ADAPTER_REQUIRED");
 });
 
 test("highest historical return alone cannot win without mandatory forward-robustness evidence", () => {
