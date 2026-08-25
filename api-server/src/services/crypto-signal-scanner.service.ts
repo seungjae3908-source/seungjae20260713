@@ -905,6 +905,13 @@ export function createCryptoSignalScannerService(
           itemTimeoutMs: ITEM_TIMEOUT_MS,
           signal: request.signal,
           now: providers.now,
+          admission: {
+            identity: {
+              provider: 'crypto-scanner',
+              domain: request.market,
+              operationClass: 'asset-scan',
+            },
+          },
         },
       );
       if (request.signal?.aborted || work.aborted) throw request.signal?.reason ?? new Error('CRYPTO_SCAN_ABORTED');

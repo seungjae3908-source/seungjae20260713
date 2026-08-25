@@ -1873,6 +1873,486 @@ function validateImmutablePaperTradingStateSnapshot(value, nowMs = Date.now()) {
 // src/services/crypto-signal-scanner.service.ts
 import { createHash as createHash4, randomUUID } from "node:crypto";
 
+// src/lib/provider-admission-control.ts
+var PROVIDER_ADMISSION_CONFIG_LIMITS = Object.freeze({
+  globalCapacity: Object.freeze({ min: 2, max: 64 }),
+  providerCapacity: Object.freeze({ min: 1, max: 32 }),
+  timeoutThreshold: Object.freeze({ min: 1, max: 32 }),
+  cooldownMs: Object.freeze({ min: 10, max: 3e5 })
+});
+var PROVIDER_ADMISSION_TELEMETRY_LIMITS = Object.freeze({
+  inactiveProviders: 128,
+  inactiveOperationsPerProvider: 32
+});
+var ProviderAdmissionError = class extends Error {
+  constructor(code, retryAfterMs) {
+    super(code);
+    this.code = code;
+    this.retryAfterMs = retryAfterMs;
+    this.name = "ProviderAdmissionError";
+    this.statusCode = 503;
+  }
+  statusCode;
+};
+function boundedInteger(value, label, limits) {
+  if (!Number.isSafeInteger(value) || value < limits.min || value > limits.max) {
+    throw new Error(`${label} must be a safe integer between ${limits.min} and ${limits.max}`);
+  }
+  return value;
+}
+function normalizedPart(value, label) {
+  if (typeof value !== "string") {
+    throw new Error(`${label} must be a stable provider admission identifier`);
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!normalized || normalized.length > 80 || !/^[a-z0-9._:-]+$/.test(normalized)) {
+    throw new Error(`${label} must be a stable provider admission identifier`);
+  }
+  return normalized;
+}
+function normalizedDomain(value) {
+  if (typeof value !== "string") {
+    throw new Error("domain must be a stable provider admission domain");
+  }
+  const rawParts = value.trim().toLowerCase().split(":");
+  if (rawParts.some((part) => !part)) {
+    throw new Error("domain must be a stable provider admission domain");
+  }
+  if (rawParts[0]?.endsWith(".")) rawParts[0] = rawParts[0].slice(0, -1);
+  const normalized = rawParts.join(":");
+  const hostname = rawParts[0] ?? "";
+  const hostnameLabels = hostname.split(".");
+  const validHostname = hostname.length > 0 && hostname.length <= 253 && hostnameLabels.every((label) => label.length > 0 && label.length <= 63 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label));
+  const validNamespaces = rawParts.slice(1).every((part) => part.length <= 63 && /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/.test(part));
+  if (!validHostname || !validNamespaces || normalized.length > 253) {
+    throw new Error("domain must be a stable provider admission domain");
+  }
+  return normalized;
+}
+function normalizedIdentity(identity2) {
+  return {
+    provider: normalizedPart(identity2.provider, "provider"),
+    domain: normalizedDomain(identity2.domain),
+    operationClass: normalizedPart(identity2.operationClass, "operationClass")
+  };
+}
+function configuredInteger(env, name, fallback, limits) {
+  const value = Number(env[name]);
+  return Number.isSafeInteger(value) && value >= limits.min && value <= limits.max ? value : fallback;
+}
+function resolveProviderAdmissionDefaults(env = process.env) {
+  const providerCapacity = configuredInteger(
+    env,
+    "PROVIDER_ADMISSION_PROVIDER_CAPACITY",
+    6,
+    PROVIDER_ADMISSION_CONFIG_LIMITS.providerCapacity
+  );
+  const globalCapacity = Math.max(
+    providerCapacity + 1,
+    configuredInteger(
+      env,
+      "PROVIDER_ADMISSION_GLOBAL_CAPACITY",
+      12,
+      PROVIDER_ADMISSION_CONFIG_LIMITS.globalCapacity
+    )
+  );
+  const timeoutThreshold = Math.min(
+    providerCapacity,
+    configuredInteger(
+      env,
+      "PROVIDER_ADMISSION_TIMEOUT_THRESHOLD",
+      providerCapacity,
+      PROVIDER_ADMISSION_CONFIG_LIMITS.timeoutThreshold
+    )
+  );
+  return {
+    globalCapacity,
+    providerCapacity,
+    timeoutThreshold,
+    cooldownMs: configuredInteger(
+      env,
+      "PROVIDER_ADMISSION_COOLDOWN_MS",
+      2e3,
+      PROVIDER_ADMISSION_CONFIG_LIMITS.cooldownMs
+    )
+  };
+}
+var PROCESS_WIDE_PROVIDER_ADMISSION_DEFAULTS = Object.freeze(
+  resolveProviderAdmissionDefaults()
+);
+var ProviderAdmissionControl = class {
+  globalCapacity;
+  providerCapacity;
+  timeoutThreshold;
+  cooldownMs;
+  now;
+  providers = /* @__PURE__ */ new Map();
+  outstanding = /* @__PURE__ */ new Map();
+  nextId = 1;
+  admittedActive = 0;
+  physicalOutstanding = 0;
+  physicalOutstandingHighWater = 0;
+  timedOutOutstanding = 0;
+  lateSettledTotal = 0;
+  rejectedCapacityTotal = 0;
+  circuitOpenTotal = 0;
+  circuitTripTotal = 0;
+  constructor(options) {
+    this.globalCapacity = boundedInteger(
+      options.globalCapacity,
+      "globalCapacity",
+      PROVIDER_ADMISSION_CONFIG_LIMITS.globalCapacity
+    );
+    this.providerCapacity = boundedInteger(
+      options.providerCapacity,
+      "providerCapacity",
+      PROVIDER_ADMISSION_CONFIG_LIMITS.providerCapacity
+    );
+    this.timeoutThreshold = boundedInteger(
+      options.timeoutThreshold ?? this.providerCapacity,
+      "timeoutThreshold",
+      PROVIDER_ADMISSION_CONFIG_LIMITS.timeoutThreshold
+    );
+    this.cooldownMs = boundedInteger(
+      options.cooldownMs,
+      "cooldownMs",
+      PROVIDER_ADMISSION_CONFIG_LIMITS.cooldownMs
+    );
+    this.now = options.now ?? Date.now;
+    if (this.providerCapacity >= this.globalCapacity) {
+      throw new Error("providerCapacity must be lower than globalCapacity to preserve provider isolation");
+    }
+    if (this.timeoutThreshold > this.providerCapacity) {
+      throw new Error("timeoutThreshold must not exceed providerCapacity");
+    }
+  }
+  start(identityInput, taskFactory, signal) {
+    if (signal?.aborted) {
+      throw new ProviderAdmissionError("ABORTED", 0);
+    }
+    const identity2 = normalizedIdentity(identityInput);
+    const now = this.now();
+    const state = this.providerState(identity2);
+    const operation = this.operationState(state, identity2.operationClass);
+    let halfOpenProbe = false;
+    if (state.circuitState === "open") {
+      if (now < state.openUntil) {
+        const error = this.circuitOpen(state, operation, state.openUntil - now);
+        this.cleanupTelemetry(state);
+        throw error;
+      }
+      if (state.physicalOutstanding >= this.providerCapacity || this.physicalOutstanding >= this.globalCapacity) {
+        state.openUntil = now + this.cooldownMs;
+        const error = this.circuitOpen(state, operation, this.cooldownMs);
+        this.cleanupTelemetry(state);
+        throw error;
+      }
+      state.circuitState = "half_open";
+      state.halfOpenProbeActive = false;
+    }
+    if (state.circuitState === "half_open") {
+      if (state.halfOpenProbeActive) {
+        const error = this.circuitOpen(state, operation, this.cooldownMs);
+        this.cleanupTelemetry(state);
+        throw error;
+      }
+      halfOpenProbe = true;
+    }
+    if (this.physicalOutstanding >= this.globalCapacity || state.physicalOutstanding >= this.providerCapacity) {
+      this.rejectedCapacityTotal += 1;
+      state.rejectedCapacityTotal += 1;
+      operation.rejectedCapacityTotal += 1;
+      const error = new ProviderAdmissionError("CAPACITY_EXHAUSTED", this.cooldownMs);
+      this.cleanupTelemetry(state);
+      throw error;
+    }
+    if (halfOpenProbe) state.halfOpenProbeActive = true;
+    const record = {
+      id: this.nextId,
+      admittedAt: now,
+      state,
+      operation,
+      identity: identity2,
+      logicalStatus: "active",
+      physicalSettled: false,
+      halfOpenProbe
+    };
+    this.nextId += 1;
+    this.outstanding.set(record.id, record);
+    this.admittedActive += 1;
+    this.physicalOutstanding += 1;
+    state.admittedActive += 1;
+    state.physicalOutstanding += 1;
+    operation.admittedActive += 1;
+    operation.physicalOutstanding += 1;
+    this.touchProvider(state);
+    this.touchOperation(state, operation);
+    this.physicalOutstandingHighWater = Math.max(
+      this.physicalOutstandingHighWater,
+      this.physicalOutstanding
+    );
+    state.physicalOutstandingHighWater = Math.max(
+      state.physicalOutstandingHighWater,
+      state.physicalOutstanding
+    );
+    operation.physicalOutstandingHighWater = Math.max(
+      operation.physicalOutstandingHighWater,
+      operation.physicalOutstanding
+    );
+    const task = Promise.resolve().then(taskFactory).then(
+      (value) => {
+        this.settlePhysical(record);
+        return value;
+      },
+      (reason) => {
+        this.settlePhysical(record);
+        throw reason;
+      }
+    );
+    void task.catch(() => void 0);
+    let logicalSettled = false;
+    const settleLogical = (status) => {
+      if (logicalSettled) return;
+      logicalSettled = true;
+      this.settleLogical(record, status);
+    };
+    return {
+      task,
+      lease: {
+        identity: identity2,
+        markCompleted: () => settleLogical("completed"),
+        markRejected: () => settleLogical("rejected"),
+        markTimedOut: () => settleLogical("timed_out"),
+        markAborted: () => settleLogical("aborted")
+      }
+    };
+  }
+  snapshot() {
+    const now = this.now();
+    const providerRows = [...this.providers.values()].map((state) => ({
+      provider: state.provider,
+      domain: state.domain,
+      circuitState: state.circuitState,
+      admittedActive: state.admittedActive,
+      physicalOutstanding: state.physicalOutstanding,
+      physicalOutstandingHighWater: state.physicalOutstandingHighWater,
+      timedOutOutstanding: state.timedOutOutstanding,
+      lateSettledTotal: state.lateSettledTotal,
+      rejectedCapacityTotal: state.rejectedCapacityTotal,
+      circuitOpenTotal: state.circuitOpenTotal,
+      circuitTripTotal: state.circuitTripTotal,
+      oldestOutstandingAgeMs: this.oldestAge(now, (record) => record.state === state),
+      consecutiveTimeouts: state.consecutiveTimeouts,
+      operations: [...state.operations.values()].map((operation) => ({
+        operationClass: operation.operationClass,
+        admittedActive: operation.admittedActive,
+        physicalOutstanding: operation.physicalOutstanding,
+        physicalOutstandingHighWater: operation.physicalOutstandingHighWater,
+        timedOutOutstanding: operation.timedOutOutstanding,
+        lateSettledTotal: operation.lateSettledTotal,
+        rejectedCapacityTotal: operation.rejectedCapacityTotal,
+        circuitOpenTotal: operation.circuitOpenTotal,
+        oldestOutstandingAgeMs: this.oldestAge(
+          now,
+          (record) => record.state === state && record.operation === operation
+        )
+      })).sort((left, right) => left.operationClass.localeCompare(right.operationClass))
+    })).sort((left, right) => `${left.provider}:${left.domain}`.localeCompare(`${right.provider}:${right.domain}`));
+    return {
+      configuredGlobalCapacity: this.globalCapacity,
+      configuredProviderCapacity: this.providerCapacity,
+      configuredTimeoutThreshold: this.timeoutThreshold,
+      configuredCooldownMs: this.cooldownMs,
+      admittedActive: this.admittedActive,
+      physicalOutstanding: this.physicalOutstanding,
+      physicalOutstandingHighWater: this.physicalOutstandingHighWater,
+      timedOutOutstanding: this.timedOutOutstanding,
+      lateSettledTotal: this.lateSettledTotal,
+      rejectedCapacityTotal: this.rejectedCapacityTotal,
+      circuitOpenTotal: this.circuitOpenTotal,
+      circuitTripTotal: this.circuitTripTotal,
+      oldestOutstandingAgeMs: this.oldestAge(now, () => true),
+      providers: providerRows
+    };
+  }
+  providerState(identity2) {
+    const key = JSON.stringify([identity2.provider, identity2.domain]);
+    const existing = this.providers.get(key);
+    if (existing) {
+      this.touchProvider(existing);
+      return existing;
+    }
+    const state = {
+      key,
+      provider: identity2.provider,
+      domain: identity2.domain,
+      circuitState: "closed",
+      openUntil: 0,
+      halfOpenProbeActive: false,
+      consecutiveTimeouts: 0,
+      admittedActive: 0,
+      physicalOutstanding: 0,
+      physicalOutstandingHighWater: 0,
+      timedOutOutstanding: 0,
+      lateSettledTotal: 0,
+      rejectedCapacityTotal: 0,
+      circuitOpenTotal: 0,
+      circuitTripTotal: 0,
+      operations: /* @__PURE__ */ new Map()
+    };
+    this.providers.set(key, state);
+    return state;
+  }
+  operationState(state, operationClass) {
+    const existing = state.operations.get(operationClass);
+    if (existing) {
+      this.touchOperation(state, existing);
+      return existing;
+    }
+    const operation = {
+      operationClass,
+      admittedActive: 0,
+      physicalOutstanding: 0,
+      physicalOutstandingHighWater: 0,
+      timedOutOutstanding: 0,
+      lateSettledTotal: 0,
+      rejectedCapacityTotal: 0,
+      circuitOpenTotal: 0
+    };
+    state.operations.set(operationClass, operation);
+    return operation;
+  }
+  circuitOpen(state, operation, retryAfterMs) {
+    this.circuitOpenTotal += 1;
+    state.circuitOpenTotal += 1;
+    operation.circuitOpenTotal += 1;
+    return new ProviderAdmissionError("CIRCUIT_OPEN", Math.max(1, retryAfterMs));
+  }
+  settleLogical(record, status) {
+    if (record.logicalStatus !== "active") return;
+    record.logicalStatus = status;
+    this.admittedActive = Math.max(0, this.admittedActive - 1);
+    record.state.admittedActive = Math.max(0, record.state.admittedActive - 1);
+    record.operation.admittedActive = Math.max(0, record.operation.admittedActive - 1);
+    if (status === "timed_out") {
+      record.state.consecutiveTimeouts += 1;
+      if (!record.physicalSettled) {
+        this.timedOutOutstanding += 1;
+        record.state.timedOutOutstanding += 1;
+        record.operation.timedOutOutstanding += 1;
+      }
+      if (record.halfOpenProbe || record.state.consecutiveTimeouts >= this.timeoutThreshold) {
+        this.tripCircuit(record.state);
+      }
+      this.touchProvider(record.state);
+      this.touchOperation(record.state, record.operation);
+      this.cleanupTelemetry(record.state);
+      return;
+    }
+    if (status === "completed") {
+      record.state.consecutiveTimeouts = 0;
+      if (record.halfOpenProbe) this.closeCircuit(record.state);
+      this.touchProvider(record.state);
+      this.touchOperation(record.state, record.operation);
+      this.cleanupTelemetry(record.state);
+      return;
+    }
+    if (status === "rejected") {
+      record.state.consecutiveTimeouts = 0;
+      if (record.halfOpenProbe) this.tripCircuit(record.state);
+      this.touchProvider(record.state);
+      this.touchOperation(record.state, record.operation);
+      this.cleanupTelemetry(record.state);
+      return;
+    }
+    if (record.halfOpenProbe) this.tripCircuit(record.state);
+    this.touchProvider(record.state);
+    this.touchOperation(record.state, record.operation);
+    this.cleanupTelemetry(record.state);
+  }
+  settlePhysical(record) {
+    if (record.physicalSettled) return;
+    record.physicalSettled = true;
+    this.outstanding.delete(record.id);
+    this.physicalOutstanding = Math.max(0, this.physicalOutstanding - 1);
+    record.state.physicalOutstanding = Math.max(0, record.state.physicalOutstanding - 1);
+    record.operation.physicalOutstanding = Math.max(0, record.operation.physicalOutstanding - 1);
+    if (record.logicalStatus === "timed_out") {
+      this.timedOutOutstanding = Math.max(0, this.timedOutOutstanding - 1);
+      record.state.timedOutOutstanding = Math.max(0, record.state.timedOutOutstanding - 1);
+      record.operation.timedOutOutstanding = Math.max(0, record.operation.timedOutOutstanding - 1);
+    }
+    if (record.logicalStatus === "timed_out" || record.logicalStatus === "aborted") {
+      this.lateSettledTotal += 1;
+      record.state.lateSettledTotal += 1;
+      record.operation.lateSettledTotal += 1;
+    }
+    this.touchProvider(record.state);
+    this.touchOperation(record.state, record.operation);
+    this.cleanupTelemetry(record.state);
+  }
+  tripCircuit(state) {
+    if (state.circuitState === "open") return;
+    state.circuitState = "open";
+    state.openUntil = this.now() + this.cooldownMs;
+    state.halfOpenProbeActive = false;
+    state.circuitTripTotal += 1;
+    this.circuitTripTotal += 1;
+  }
+  closeCircuit(state) {
+    state.circuitState = "closed";
+    state.openUntil = 0;
+    state.halfOpenProbeActive = false;
+    state.consecutiveTimeouts = 0;
+  }
+  touchProvider(state) {
+    if (!this.providers.delete(state.key)) return;
+    this.providers.set(state.key, state);
+  }
+  touchOperation(state, operation) {
+    if (!state.operations.delete(operation.operationClass)) return;
+    state.operations.set(operation.operationClass, operation);
+  }
+  providerCanBeEvicted(state) {
+    return state.admittedActive === 0 && state.physicalOutstanding === 0 && state.timedOutOutstanding === 0 && state.circuitState === "closed" && !state.halfOpenProbeActive;
+  }
+  operationCanBeEvicted(state, operation) {
+    return state.circuitState === "closed" && !state.halfOpenProbeActive && operation.admittedActive === 0 && operation.physicalOutstanding === 0 && operation.timedOutOutstanding === 0;
+  }
+  cleanupTelemetry(state) {
+    if (state && state.operations.size > PROVIDER_ADMISSION_TELEMETRY_LIMITS.inactiveOperationsPerProvider) {
+      let removableOperations = [...state.operations.values()].filter((operation) => this.operationCanBeEvicted(state, operation)).length - PROVIDER_ADMISSION_TELEMETRY_LIMITS.inactiveOperationsPerProvider;
+      if (removableOperations > 0) {
+        for (const [key, operation] of state.operations) {
+          if (removableOperations <= 0) break;
+          if (!this.operationCanBeEvicted(state, operation)) continue;
+          state.operations.delete(key);
+          removableOperations -= 1;
+        }
+      }
+    }
+    if (this.providers.size <= PROVIDER_ADMISSION_TELEMETRY_LIMITS.inactiveProviders) return;
+    let removableProviders = [...this.providers.values()].filter((state2) => this.providerCanBeEvicted(state2)).length - PROVIDER_ADMISSION_TELEMETRY_LIMITS.inactiveProviders;
+    if (removableProviders <= 0) return;
+    for (const [key, state2] of this.providers) {
+      if (removableProviders <= 0) break;
+      if (!this.providerCanBeEvicted(state2)) continue;
+      this.providers.delete(key);
+      removableProviders -= 1;
+    }
+  }
+  oldestAge(now, matches) {
+    let oldest = 0;
+    for (const record of this.outstanding.values()) {
+      if (matches(record)) oldest = Math.max(oldest, Math.max(0, now - record.admittedAt));
+    }
+    return oldest;
+  }
+};
+var processWideProviderAdmission = new ProviderAdmissionControl(
+  PROCESS_WIDE_PROVIDER_ADMISSION_DEFAULTS
+);
+
 // src/lib/bounded-work-pool.ts
 var BoundedWorkTimeoutError = class extends Error {
   constructor(timeoutMs) {
@@ -1922,6 +2402,12 @@ async function runBoundedWorkPool(items, worker, options) {
   const deadlineMs = positiveInteger(options.deadlineMs, "deadlineMs");
   const itemTimeoutMs = positiveInteger(options.itemTimeoutMs, "itemTimeoutMs");
   const now = options.now ?? Date.now;
+  const admission = options.admission === false || options.admission == null ? null : options.admission;
+  if (admission && !admission.identity) {
+    throw new Error("admission.identity is required for process-wide provider isolation");
+  }
+  const admissionControl = admission?.control ?? (admission ? processWideProviderAdmission : null);
+  const admissionIdentity = admission?.identity;
   const startedAt = now();
   const deadlineAt = startedAt + deadlineMs;
   const outcomes = [];
@@ -1953,15 +2439,24 @@ async function runBoundedWorkPool(items, worker, options) {
       const timeoutMs = Math.min(itemTimeoutMs, remainingMs);
       const controller = new AbortController();
       let retireLane = false;
-      activeControllers.add(controller);
-      activeCount += 1;
-      maxConcurrency = Math.max(maxConcurrency, activeCount);
+      let admitted = null;
       try {
+        if (admissionControl && admissionIdentity) {
+          admitted = admissionControl.start(
+            admissionIdentity,
+            () => worker(items[index], index, controller.signal),
+            controller.signal
+          );
+        }
+        activeControllers.add(controller);
+        activeCount += 1;
+        maxConcurrency = Math.max(maxConcurrency, activeCount);
         const value = await runWithTimeout(
-          worker(items[index], index, controller.signal),
+          admitted?.task ?? worker(items[index], index, controller.signal),
           controller,
           timeoutMs
         );
+        admitted?.lease.markCompleted();
         outcomes.push({
           index,
           status: "fulfilled",
@@ -1970,6 +2465,9 @@ async function runBoundedWorkPool(items, worker, options) {
         });
       } catch (reason) {
         const timedOut = reason instanceof BoundedWorkTimeoutError;
+        if (timedOut) admitted?.lease.markTimedOut();
+        else if (controller.signal.aborted) admitted?.lease.markAborted();
+        else admitted?.lease.markRejected();
         if (timedOut) {
           retireLane = true;
           if (timeoutMs === remainingMs) deadlineExhausted = true;
@@ -1981,7 +2479,9 @@ async function runBoundedWorkPool(items, worker, options) {
           elapsedMs: Math.max(0, now() - itemStartedAt)
         });
       } finally {
-        activeCount -= 1;
+        if (admitted || activeControllers.has(controller)) {
+          activeCount = Math.max(0, activeCount - 1);
+        }
         activeControllers.delete(controller);
       }
       if (retireLane) return;
@@ -3843,7 +4343,14 @@ function createCryptoSignalScannerService(providers = defaultProviders) {
           deadlineMs: DEADLINE_MS,
           itemTimeoutMs: ITEM_TIMEOUT_MS,
           signal: request.signal,
-          now: providers.now
+          now: providers.now,
+          admission: {
+            identity: {
+              provider: "crypto-scanner",
+              domain: request.market,
+              operationClass: "asset-scan"
+            }
+          }
         }
       );
       if (request.signal?.aborted || work.aborted) throw request.signal?.reason ?? new Error("CRYPTO_SCAN_ABORTED");
