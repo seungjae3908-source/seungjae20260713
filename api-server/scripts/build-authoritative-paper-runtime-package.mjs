@@ -21,6 +21,7 @@ const ALLOWED_INPUTS = Object.freeze([
   '../market-prediction-lab/src/bitget-position-tier-v1.js',
   'src/data/asset-type.ts',
   'src/lib/bounded-work-pool.ts',
+  'src/lib/provider-admission-control.ts',
   'src/services/authoritative-paper-callback-owners.service.ts',
   'src/services/authoritative-paper-evidence-sources.service.ts',
   'src/services/authoritative-paper-runtime-package.entry.ts',

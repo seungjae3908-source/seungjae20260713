@@ -30,6 +30,7 @@ const MANIFEST_FILE = "authoritative-paper-runtime-v1.manifest.json";
 const EXPECTED_SOURCE_FILES = Object.freeze([
   "api-server/src/data/asset-type.ts",
   "api-server/src/lib/bounded-work-pool.ts",
+  "api-server/src/lib/provider-admission-control.ts",
   "api-server/src/services/authoritative-paper-callback-owners.service.ts",
   "api-server/src/services/authoritative-paper-evidence-sources.service.ts",
   "api-server/src/services/authoritative-paper-runtime-package.entry.ts",
