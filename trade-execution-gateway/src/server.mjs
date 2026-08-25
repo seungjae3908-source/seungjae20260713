@@ -16,6 +16,9 @@ import { comparePaperLiveParity } from "./parity-contract.mjs";
 import { PAPER_MOCK_PROTECTION_CAPABILITIES } from "./server-failure-protection.mjs";
 import { FileServerFailureProtectionStore } from "./server-failure-protection-store.mjs";
 import { SupervisedPaperGateway } from "./supervised-paper-gateway.mjs";
+import { PaperCompoundingCapitalManager } from "./paper-capital-manager.mjs";
+import { FilePaperCapitalStateStore } from "./paper-capital-state-store.mjs";
+import { CapitalManagedPaperGateway } from "./capital-managed-paper-gateway.mjs";
 
 const HOST = "127.0.0.1";
 const DEFAULT_PORT = 8792;
@@ -23,6 +26,7 @@ const MAX_BODY_BYTES = 16 * 1024;
 const MARKETS = ["KR_STOCK", "US_STOCK", "CRYPTO_SPOT", "CRYPTO_FUTURES"];
 const DEFAULT_STATE_PATH = fileURLToPath(new URL("../.state/paper-state.json", import.meta.url));
 const DEFAULT_PROTECTION_STATE_PATH = fileURLToPath(new URL("../.state/server-failure-protection.json", import.meta.url));
+const DEFAULT_CAPITAL_STATE_PATH = fileURLToPath(new URL("../.state/paper-compounding-capital.json", import.meta.url));
 
 function boundedPort(value) {
   const port = Number(value);
@@ -72,21 +76,34 @@ function publicRuntimeConfigs() {
 
 const stateStore = new FilePaperStateStore(DEFAULT_STATE_PATH);
 const protectionStore = new FileServerFailureProtectionStore(DEFAULT_PROTECTION_STATE_PATH);
+const capitalStore = new FilePaperCapitalStateStore(DEFAULT_CAPITAL_STATE_PATH);
 const initialPaperState = await stateStore.load();
 const initialProtectionState = await protectionStore.load();
+const initialCapitalState = await capitalStore.load();
+
 const baseGateway = new TradeExecutionGateway({
   adapter: new PaperMockBrokerAdapter(),
   policy: buildPaperPolicy(),
   initialPaperState,
   persistPaperState: (snapshot, reason) => stateStore.save(snapshot, reason),
 });
-const gateway = new SupervisedPaperGateway({
+const supervisedGateway = new SupervisedPaperGateway({
   gateway: baseGateway,
   initialProtectionState,
   persistProtectionState: (snapshot, reason) => protectionStore.save(snapshot, reason),
   supervisionPolicy: buildSupervisionPolicy(),
   providerCapabilities: PAPER_MOCK_PROTECTION_CAPABILITIES,
 });
+const capitalManager = new PaperCompoundingCapitalManager({
+  initialState: initialCapitalState,
+  persistState: (snapshot, reason) => capitalStore.save(snapshot, reason),
+  admissionGateEnabled: process.env.TEG_PAPER_COMPOUNDING_CAPITAL_ENABLED === "true",
+});
+const gateway = new CapitalManagedPaperGateway({
+  gateway: supervisedGateway,
+  capitalManager,
+});
+
 const publicRuntime = new PublicMarketDataRuntimeRegistry({ configs: publicRuntimeConfigs() });
 publicRuntime.startAll();
 
@@ -132,8 +149,10 @@ const server = http.createServer(async (request, response) => {
         safety: gateway.getSafetyState(),
         persistence: stateStore.getHealth(),
         protectionPersistence: protectionStore.getHealth(),
+        capitalPersistence: capitalStore.getHealth(),
         recovery: gateway.getRecoveryState(),
         serverFailureProtection: gateway.getProtectionHealth(),
+        compoundingCapital: gateway.getCapitalHealth(),
         publicMarketData: publicRuntime.getHealth(),
       });
       return;
@@ -150,8 +169,23 @@ const server = http.createServer(async (request, response) => {
       sendJson(response, 200, gateway.getProtectionHealth());
       return;
     }
+    if (request.method === "GET" && url.pathname === "/v1/capital/health") {
+      sendJson(response, 200, gateway.getCapitalHealth());
+      return;
+    }
     if (request.method === "POST" && url.pathname === "/v1/protection/heartbeat") {
       sendJson(response, 200, gateway.recordSupervisorHeartbeat(await readJson(request)));
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/v1/capital/settlement") {
+      if (process.env.TEG_PAPER_COMPOUNDING_SETTLEMENT_INGEST_ENABLED !== "true") {
+        throw new GatewayError(
+          "CAPITAL_SETTLEMENT_INGEST_DISABLED",
+          "Paper compounding settlement ingestion is default-off",
+          403,
+        );
+      }
+      sendJson(response, 200, await gateway.applyCapitalSettlement(await readJson(request)));
       return;
     }
     if (request.method === "POST" && url.pathname === "/v1/orders/preview") {
