@@ -199,8 +199,8 @@ test('desktop Signal Detail exposes server quality, quant and ranking evidence w
   await expect(panel.getByText('91', { exact: true })).toBeVisible();
   await expect(panel.getByText('92', { exact: true })).toBeVisible();
   await expect(panel.getByText('87%', { exact: true })).toBeVisible();
-  await expect(panel.getByText('추세 상위권 유지', { exact: true })).toBeVisible();
-  await expect(panel.getByText('유동성 통과', { exact: true })).toBeVisible();
+  await expect(panel.getByText('• 추세 상위권 유지', { exact: true })).toBeVisible();
+  await expect(panel.getByText('• 유동성 통과', { exact: true })).toBeVisible();
   await expect(panel.getByText('차단·경고 이슈 없음', { exact: true })).toBeVisible();
   expect(forbidden).toEqual([]);
 });
