@@ -187,14 +187,15 @@ test('desktop Signal Detail exposes server quality, quant and ranking evidence w
   await expect(samsung).toBeVisible();
   await samsung.click();
 
-  const panel = page.getByTestId('scanner-signal-quality-panel');
+  const desktopDetail = page.getByTestId('scanner-master-list').getByTestId('signal-detail');
+  const panel = desktopDetail.getByTestId('scanner-signal-quality-panel');
   await expect(panel).toBeVisible();
-  await expect(page.getByTestId('scanner-signal-state')).toHaveText('상태 CONFIRMED');
-  await expect(page.getByTestId('scanner-quality-data-state')).toHaveText('TRUSTED');
-  await expect(page.getByTestId('scanner-quality-data-score')).toHaveText('96');
-  await expect(page.getByTestId('scanner-quality-strong-allowed')).toHaveText('YES');
-  await expect(page.getByTestId('scanner-quality-hard-filter')).toHaveText('PASS');
-  await expect(page.getByTestId('scanner-quality-rank')).toHaveText('1위');
+  await expect(desktopDetail.getByTestId('scanner-signal-state')).toHaveText('상태 CONFIRMED');
+  await expect(panel.getByTestId('scanner-quality-data-state')).toHaveText('TRUSTED');
+  await expect(panel.getByTestId('scanner-quality-data-score')).toHaveText('96');
+  await expect(panel.getByTestId('scanner-quality-strong-allowed')).toHaveText('YES');
+  await expect(panel.getByTestId('scanner-quality-hard-filter')).toHaveText('PASS');
+  await expect(panel.getByTestId('scanner-quality-rank')).toHaveText('1위');
   await expect(panel.getByText('91', { exact: true })).toBeVisible();
   await expect(panel.getByText('92', { exact: true })).toBeVisible();
   await expect(panel.getByText('87%', { exact: true })).toBeVisible();
@@ -224,7 +225,7 @@ test('mobile quality panel fails closed for untrusted and missing evidence', asy
   await expect(panel.getByTestId('scanner-quality-strong-allowed')).toHaveText('NO');
   await expect(panel.getByTestId('scanner-quality-hard-filter')).toHaveText('미확인');
   await expect(panel.getByTestId('scanner-quality-rank')).toHaveText('미확인');
-  await expect(panel.getByText('차단 · STALE_CANDLES · 캔들 freshness 기준 미충족', { exact: true })).toBeVisible();
+  await expect(panel.getByText('• 차단 · STALE_CANDLES · 캔들 freshness 기준 미충족', { exact: true })).toBeVisible();
   expect(await panel.getByText('미확인', { exact: true }).count()).toBeGreaterThan(5);
   expect(forbidden).toEqual([]);
 });
