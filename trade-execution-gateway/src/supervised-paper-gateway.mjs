@@ -11,10 +11,19 @@ import {
 } from "./server-failure-protection.mjs";
 
 const PROTECTION_MODE = "PAPER_PROTECTION_ONLY";
+const CASH_MARKETS = new Set(["KR_STOCK", "US_STOCK", "CRYPTO_SPOT"]);
 
 function object(value, code, message) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new GatewayError(code, message, 503);
   return value;
+}
+
+function exposureIncreasingIntent(input) {
+  const market = String(input?.market ?? "").trim().toUpperCase();
+  const side = String(input?.side ?? "").trim().toUpperCase();
+  if (market === "CRYPTO_FUTURES") return input?.executionContext?.reduceOnly !== true;
+  if (CASH_MARKETS.has(market)) return side !== "SELL";
+  return true;
 }
 
 function normalizePolicy(raw = {}) {
@@ -147,6 +156,7 @@ export class SupervisedPaperGateway {
         heartbeatPersistedAcrossRestart: false,
         providerNativeProtectionAssumed: false,
         authenticatedProtectionReadAdapterEnabled: false,
+        reductionOrdersRemainAllowedDuringEntryBlock: true,
         emergencyIntentExecutionAuthority: "NONE",
         automaticEmergencyExecution: false,
         unattendedLiveEligible: false,
@@ -189,8 +199,10 @@ export class SupervisedPaperGateway {
 
   getProtectionHealth(nowMs = Date.now()) {
     try {
+      const paperState = this.#gateway.exportPaperState();
+      const exposureIncreasingOrders = paperState.orders.filter((order) => exposureIncreasingIntent(order?.intent));
       const assessment = assessUnattendedProtection({
-        orders: this.#gateway.exportPaperState().orders,
+        orders: exposureIncreasingOrders,
         protections: [...this.#protections.values()],
         heartbeat: this.#heartbeat,
         policy: this.#policy,
@@ -201,6 +213,7 @@ export class SupervisedPaperGateway {
         gateEnabled: this.#policy.enforceNewEntryGate,
         effectiveNewEntryAllowed: !this.#policy.enforceNewEntryGate || assessment.newEntryAllowed,
         protectionRecords: this.#protections.size,
+        reductionOrdersExemptFromNewEntryGate: true,
         automaticProtectionSubmission: false,
         automaticEmergencyExecutionPerformed: false,
       });
@@ -226,7 +239,7 @@ export class SupervisedPaperGateway {
   }
 
   async placeOrder(input) {
-    this.#requireNewEntrySafe();
+    if (exposureIncreasingIntent(input)) this.#requireNewEntrySafe();
     return this.#gateway.placeOrder(input);
   }
 
@@ -257,6 +270,9 @@ export class SupervisedPaperGateway {
     }
     try {
       const entryOrder = await this.#gateway.getOrder(orderId);
+      if (!exposureIncreasingIntent(entryOrder.intent)) {
+        throw new GatewayError("PROTECTION_NOT_REQUIRED_FOR_REDUCTION", "reduction-only orders do not create exposure requiring entry protection", 409);
+      }
       const intent = buildProtectionIntent({ entryOrder, bracketPlan, protectionIdempotencyKey, createdAt });
       this.#protections.set(orderId, intent);
       this.#protectionKeys.set(intent.protectionIdempotencyKey, orderId);
