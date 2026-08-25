@@ -9,6 +9,7 @@ import { normalizeCandleRows } from "../src/normalizers.js";
 import { buildTrainingRecords } from "../src/training-dataset.js";
 import { walkForwardSplit } from "../src/walk-forward.js";
 import { exportWalkForwardDataset } from "../src/dataset-export.js";
+import { preserveFutureModelReferenceEvidence } from "../src/model-reference-evidence.js";
 import { BASELINE_MODEL } from "../src/tiny-model.js";
 import {
   calibrateTemperature,
@@ -186,6 +187,13 @@ function combineSplits(datasets) {
   });
 }
 
+function referenceDatasetComponents(datasets) {
+  return Object.fromEntries(datasets.flatMap((dataset) => [
+    [`${dataset.spec.id}:train`, dataset.summary.outputs.train.sha256],
+    [`${dataset.spec.id}:validation`, dataset.summary.outputs.validation.sha256],
+  ]));
+}
+
 async function writeResearchHold({ group, datasets, split, outputRoot, candidateRoot, reason, classCounts }) {
   const artifact = {
     schemaVersion: 1,
@@ -207,7 +215,7 @@ async function writeResearchHold({ group, datasets, split, outputRoot, candidate
   return artifact;
 }
 
-async function trainGroup({ group, datasets, outputRoot, candidateRoot }) {
+async function trainGroup({ group, datasets, outputRoot, candidateRoot, researchCodeSha, trainingCodeSha, measuredAt }) {
   const split = combineSplits(datasets);
   const classCounts = {
     train: directionCounts(split.train),
@@ -270,13 +278,34 @@ async function trainGroup({ group, datasets, outputRoot, candidateRoot }) {
   };
   await writeJsonAtomically(resolve(outputRoot, "models", `${group}.json`), artifact);
   await writeJsonAtomically(resolve(candidateRoot, `${group}.json`), artifact);
+  const modelSha256 = sha256Json(calibrated);
+  const referenceEvidence = await preserveFutureModelReferenceEvidence({
+    outputRoot: resolve(outputRoot, "reference-evidence"),
+    group,
+    trainRecords: split.train,
+    validationRecords: split.validation,
+    model: calibrated,
+    modelSha: modelSha256,
+    datasetComponents: referenceDatasetComponents(datasets),
+    researchCodeSha,
+    trainingCodeSha,
+    measuredAt,
+    strategyIdentity: null,
+    sourceAttestation: {
+      sourceKind: "GENUINE_MARKET_DATA",
+      reconstructed: false,
+      synthetic: false,
+      shadowDerived: false,
+      finalHoldoutIncluded: false,
+    },
+  });
   return {
     status: artifact.status,
     crossSymbol,
     sourceDatasets: artifact.sourceDatasets,
     classCounts,
     modelId: calibrated.id,
-    modelSha256: sha256Json(calibrated),
+    modelSha256,
     temperature: calibrated.temperature,
     training: calibrated.training,
     calibration: calibrated.calibration,
@@ -285,6 +314,25 @@ async function trainGroup({ group, datasets, outputRoot, candidateRoot }) {
     comparison,
     perDataset,
     featureLimitations: artifact.featureLimitations,
+    referenceEvidence: {
+      status: referenceEvidence.status,
+      referenceProvenanceStatus: referenceEvidence.referenceProvenanceStatus,
+      missingEvidence: referenceEvidence.missingEvidence,
+      datasetId: referenceEvidence.datasetId,
+      datasetDigest: referenceEvidence.datasetDigest,
+      strategyIdentityDigest: referenceEvidence.strategyIdentityDigest,
+      preprocessingVersion: referenceEvidence.preprocessingVersion,
+      featureOrder: referenceEvidence.featureOrder,
+      featureOrderDigest: referenceEvidence.featureOrderDigest,
+      trainSampleN: referenceEvidence.trainSampleN,
+      validationSampleN: referenceEvidence.validationSampleN,
+      trainSplitDigest: referenceEvidence.trainSplitDigest,
+      validationSplitDigest: referenceEvidence.validationSplitDigest,
+      modelSha: referenceEvidence.modelSha,
+      modelArtifactCanonicalDigest: referenceEvidence.modelArtifactCanonicalDigest,
+      rawArtifactDigest: referenceEvidence.rawArtifactDigest,
+      measuredAt: referenceEvidence.measuredAt,
+    },
   };
 }
 
@@ -344,7 +392,15 @@ for (const group of [...new Set(SUITE_SPECS.map((spec) => spec.group))]) {
     continue;
   }
   try {
-    modelResults[group] = await trainGroup({ group, datasets: groupDatasets, outputRoot, candidateRoot });
+    modelResults[group] = await trainGroup({
+      group,
+      datasets: groupDatasets,
+      outputRoot,
+      candidateRoot,
+      researchCodeSha: process.env.RESEARCH_CODE_SHA,
+      trainingCodeSha: process.env.TRAINING_CODE_SHA,
+      measuredAt: new Date(suiteEndTime).toISOString(),
+    });
   } catch (error) {
     modelResults[group] = { status: "training_failed", error: serializeError(error) };
   }
