@@ -56,7 +56,11 @@ const Phase6PaperTradingE2EPage = lazy(() => import('@/pages/phase6-paper-tradin
 const Phase7JournalSyncE2EPage = lazy(() => import('@/pages/phase7-journal-sync-e2e'));
 const Phase8ReleaseCandidateE2EPage = lazy(() => import('@/pages/phase8-release-candidate-e2e'));
 const Phase9AiReviewE2EPage = lazy(() => import('@/pages/phase9-ai-review-e2e'));
-const AiChartPage = lazy(() => import('@/pages/ai-chart'));
+const loadAiChartPage = () => import('@/pages/ai-chart');
+if (typeof window !== 'undefined' && window.location.pathname.endsWith('/ai-chart')) {
+  void loadAiChartPage();
+}
+const AiChartPage = lazy(loadAiChartPage);
 const AiChatPage = lazy(() => import('@/pages/ai-chat'));
 const TechnicalWorkspacePage = lazy(() => import('@/pages/technical-workspace'));
 const Phase12TradeAutomationE2EPage = lazy(() => import('@/pages/phase12-trade-automation-e2e'));
