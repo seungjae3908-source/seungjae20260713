@@ -266,7 +266,7 @@ test('signal click explains why, preserves PricePlan, and exposes only safe cont
   await expect(detail).toContainText('왜 이 신호인가');
   await expect(detail).toContainText('실제 공개 캔들로 추세를 확인했습니다.');
   await expect(detail).toContainText('74,000~75,000');
-  await expect(detail).toContainText('NO SYNTHETIC PRICE');
+  await expect(detail).toContainText('서버 계획');
   await expect(detail).toContainText('public-candles');
   await detail.getByRole('button', { name: '주문 준비 열기' }).click();
   await expect(detail.getByTestId('order-preparation')).toContainText('실행 아님');
@@ -293,7 +293,7 @@ test('all four markets continue from canonical signal identity to AI Chart with 
     { market: /^국내주식/, card: /^삼성전자 005930/, url: /market=KR.*symbol=005930/ },
     { market: /^미국주식/, card: /^Apple AAPL/, url: /market=US.*symbol=AAPL/ },
     { market: /^코인 현물/, card: /^비트코인 BTC/, url: /market=UPBIT.*symbol=BTC/ },
-    { market: /^코인 선물/, card: /^BTCUSDT BTCUSDT/, url: /market=BITGET.*symbol=BTCUSDT/ },
+    { market: /^코인 선물/, card: /^BTCUSDT · 코인 선물 · BITGET$/, url: /market=BITGET.*symbol=BTCUSDT/ },
   ];
   for (const item of cases) {
     await page.setViewportSize({ width: 390, height: 844 });
