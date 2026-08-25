@@ -188,14 +188,24 @@ jobs:
           if (safety.LIVE_TRADING !== false || safety.AUTO_TRADING !== false || safety.REAL_ORDER_ENABLED !== false
               || safety.PRIVATE_TRADING_API_ALLOWED !== false || safety.executionAuthority !== 'NONE' || safety.orderSubmitted !== false) throw new Error('safety invariant violated');
           NODE
-          if rg -n 'feature/prediction-lab-standalone' \
-            market-prediction-lab/src/shadow-feature-drift-diagnostics.js \
-            market-prediction-lab/tests/shadow-feature-drift-diagnostics.test.js \
-            market-prediction-lab/scripts/run-shadow-feature-drift-diagnostics.js \
-            .github/workflows/prediction-lab-shadow-gap-diagnostics.yml; then
-            echo 'Obsolete hard-coded Shadow branch detected.' >&2
-            exit 1
-          fi
+          node <<'NODE'
+          const fs = require('fs');
+          const obsoleteBranch = 'feature/prediction-lab-' + 'standalone';
+          const files = [
+            'market-prediction-lab/src/shadow-feature-drift-diagnostics.js',
+            'market-prediction-lab/tests/shadow-feature-drift-diagnostics.test.js',
+            'market-prediction-lab/scripts/run-shadow-feature-drift-diagnostics.js',
+            '.github/workflows/prediction-lab-shadow-gap-diagnostics.yml',
+          ];
+          const matches = [];
+          for (const file of files) {
+            const content = fs.readFileSync(file, 'utf8');
+            if (content.includes(obsoleteBranch)) matches.push(file);
+          }
+          if (matches.length) {
+            throw new Error(`Obsolete hard-coded Shadow branch detected in: ${matches.join(', ')}`);
+          }
+          NODE
 
       - name: Upload immutable diagnostic evidence
         id: upload
