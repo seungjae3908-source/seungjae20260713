@@ -145,6 +145,7 @@ export interface BoundedScanResult {
   filteredByStrategyCount: number;
   staleCount: number;
   providerErrorCount: number;
+  workerErrorCount: number;
   timeoutCount: number;
   contextUnavailableCount: number;
   excludedCount: number;
@@ -168,8 +169,8 @@ export interface BoundedScanResult {
 
 export interface BoundedScannerDependencies {
   catalog: readonly CatalogEntry[];
-  getCandles: (ticker: string, timeframe: ScannerTimeframe) => Promise<CandleList>;
-  getQuote: (ticker: string) => Promise<Quote>;
+  getCandles: (ticker: string, timeframe: ScannerTimeframe, signal?: AbortSignal) => Promise<CandleList>;
+  getQuote: (ticker: string, signal?: AbortSignal) => Promise<Quote>;
   getContext: (entry: CatalogEntry) => Promise<SignalContext>;
   now: () => number;
 }
@@ -181,6 +182,16 @@ export class ScanProviderUnavailableError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'ScanProviderUnavailableError';
+  }
+}
+
+class ScanProviderWorkError extends Error {
+  readonly originalError: unknown;
+
+  constructor(readonly operation: 'candles' | 'quote', readonly ticker: string, error: unknown) {
+    super(`SCAN_PROVIDER_WORK_ERROR:${operation}:${ticker}`);
+    this.name = 'ScanProviderWorkError';
+    this.originalError = error;
   }
 }
 
@@ -380,7 +391,9 @@ function positiveBound(value: number | undefined, fallback: number, maximum: num
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
-  if (signal?.aborted) throw new ScanRequestAbortedError();
+  if (!signal?.aborted) return;
+  if (signal.reason instanceof Error) throw signal.reason;
+  throw new ScanRequestAbortedError();
 }
 
 function candleDataState(candles: CandleList, timeframe: ScannerTimeframe): ScanCard['dataState'] {
@@ -672,7 +685,7 @@ export function createBoundedScannerService(dependencies: BoundedScannerDependen
         async (targetMarket, _index, signal) => {
           throwIfAborted(signal);
           try {
-            const quote = await dependencies.getQuote(targetMarket === 'KR' ? '^KS11' : '^GSPC');
+            const quote = await dependencies.getQuote(targetMarket === 'KR' ? '^KS11' : '^GSPC', signal);
             if (!signal.aborted && Number.isFinite(quote.changePercent)) {
               marketMoves.set(targetMarket, quote.changePercent);
             }
@@ -698,6 +711,18 @@ export function createBoundedScannerService(dependencies: BoundedScannerDependen
         pool,
         async (entry, _index, signal): Promise<ScanCard | null> => {
           throwIfAborted(signal);
+          const providerCall = async <T>(
+            operation: 'candles' | 'quote',
+            task: () => Promise<T>,
+          ): Promise<T> => {
+            try {
+              return await task();
+            } catch (error) {
+              if (signal.aborted) throw abortReason(signal);
+              if (error instanceof ScanProviderWorkError) throw error;
+              throw new ScanProviderWorkError(operation, entry.ticker, error);
+            }
+          };
           const optionalContextPromise = loadOptionalContext(
             entry,
             dependencies.getContext,
@@ -705,8 +730,8 @@ export function createBoundedScannerService(dependencies: BoundedScannerDependen
             optionalContextDeadlineMs,
           );
           const [candles, quote, optionalContext] = await Promise.all([
-            dependencies.getCandles(entry.ticker, timeframe),
-            dependencies.getQuote(entry.ticker),
+            providerCall('candles', () => dependencies.getCandles(entry.ticker, timeframe, signal)),
+            providerCall('quote', () => dependencies.getQuote(entry.ticker, signal)),
             optionalContextPromise,
           ]);
           throwIfAborted(signal);
@@ -785,20 +810,28 @@ export function createBoundedScannerService(dependencies: BoundedScannerDependen
       const completedCount = work.fulfilledCount;
       const providerAcceptedCount = completedCount;
       const dataSuccessCount = Math.max(0, completedCount - insufficientDataCount);
-      const providerErrorCount = work.rejectedCount;
+      const providerErrorCount = work.outcomes.filter(
+        (outcome) => outcome.status === 'rejected' && outcome.reason instanceof ScanProviderWorkError,
+      ).length;
+      const workerErrorCount = Math.max(0, work.rejectedCount - providerErrorCount);
       const timeoutCount = work.timedOutCount;
-      const failureCount = providerErrorCount + timeoutCount;
-      const unreliable = pool.length > 0 && (
+      const providerFailureCount = providerErrorCount + timeoutCount;
+      const unreliable = pool.length > 0 && providerFailureCount > 0 && (
         completedCount === 0
         || (
           work.startedCount > 0
-          && failureCount >= Math.max(3, Math.ceil(work.startedCount * 0.8))
+          && providerFailureCount >= Math.max(3, Math.ceil(work.startedCount * 0.8))
           && completedCount < Math.min(3, pool.length)
         )
       );
       if (unreliable) {
         throw new ScanProviderUnavailableError(
-          `SCAN_PROVIDER_ERROR: completed=${completedCount}, providerErrors=${providerErrorCount}, timeouts=${timeoutCount}, started=${work.startedCount}`,
+          `SCAN_PROVIDER_ERROR: completed=${completedCount}, providerErrors=${providerErrorCount}, workerErrors=${workerErrorCount}, timeouts=${timeoutCount}, started=${work.startedCount}`,
+        );
+      }
+      if (pool.length > 0 && completedCount === 0 && workerErrorCount > 0) {
+        throw new Error(
+          `SCAN_WORKER_ERROR: completed=${completedCount}, providerErrors=${providerErrorCount}, workerErrors=${workerErrorCount}, timeouts=${timeoutCount}, started=${work.startedCount}`,
         );
       }
 
@@ -816,6 +849,7 @@ export function createBoundedScannerService(dependencies: BoundedScannerDependen
       const partial = work.deadlineReached
         || work.startedCount < pool.length
         || providerErrorCount > 0
+        || workerErrorCount > 0
         || timeoutCount > 0
         || contextUnavailableCount > 0;
       const dataState: BoundedScanResult['dataState'] = partial ? 'partial' : 'complete';
@@ -840,6 +874,7 @@ export function createBoundedScannerService(dependencies: BoundedScannerDependen
         filteredByStrategyCount,
         staleCount,
         providerErrorCount,
+        workerErrorCount,
         timeoutCount,
         contextUnavailableCount,
         excludedCount: Math.max(0, completedCount - matchedCards.length),
