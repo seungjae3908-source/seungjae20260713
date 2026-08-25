@@ -39,10 +39,15 @@ function decision(card, champion, context) {
   if (!Number.isFinite(now) || !Number.isFinite(observedAt) || !Number.isFinite(expiresAt)
     || observedAt > now || expiresAt <= now) blockers.push("STALE_MANDATORY_DATA");
   if (context.providerAvailable !== true || card?.providerAvailable !== true) blockers.push("PROVIDER_UNAVAILABLE");
-  if (!finite(card?.liquidity) || card.liquidity < context.minimumLiquidity) blockers.push("INVALID_LIQUIDITY");
+
+  if (!finite(context.minimumLiquidity) || context.minimumLiquidity < 0) blockers.push("LIQUIDITY_POLICY_MISSING");
+  else if (!finite(card?.liquidity) || card.liquidity < context.minimumLiquidity) blockers.push("INVALID_LIQUIDITY");
+
   if (card?.riskEvidence?.status !== "PASS") blockers.push("INVALID_RISK_EVIDENCE");
   if (![card?.entry, card?.stop, card?.target].every(finite)) blockers.push("ENTRY_RISK_PLAN_INCOMPLETE");
-  if (!finite(card?.riskReward) || card.riskReward < context.minimumRiskReward) blockers.push("UNACCEPTABLE_RISK_REWARD");
+
+  if (!finite(context.minimumRiskReward) || context.minimumRiskReward <= 0) blockers.push("RISK_REWARD_POLICY_MISSING");
+  else if (!finite(card?.riskReward) || card.riskReward < context.minimumRiskReward) blockers.push("UNACCEPTABLE_RISK_REWARD");
 
   const resolvedBlockers = unique(blockers);
   if (resolvedBlockers.length > 0) {
@@ -134,21 +139,24 @@ export function consumeProvisionalChampionForScanner({ registry, cards = [], con
   const resolvedContext = Object.freeze({
     now: context.now ?? null,
     providerAvailable: context.providerAvailable === true,
-    minimumLiquidity: finite(context.minimumLiquidity) && context.minimumLiquidity >= 0 ? context.minimumLiquidity : 0,
-    minimumRiskReward: finite(context.minimumRiskReward) && context.minimumRiskReward > 0 ? context.minimumRiskReward : 1.5,
+    minimumLiquidity: finite(context.minimumLiquidity) && context.minimumLiquidity >= 0 ? context.minimumLiquidity : null,
+    minimumRiskReward: finite(context.minimumRiskReward) && context.minimumRiskReward > 0 ? context.minimumRiskReward : null,
   });
   const decisions = rows.map((card) => decision(card, champion, resolvedContext));
   const advisoryCards = decisions.filter((row) => row.advisoryState === "ADVISORY");
   const providerBlocked = resolvedContext.providerAvailable !== true
     || decisions.some((row) => row.blockers.includes("PROVIDER_UNAVAILABLE"));
+  const allCandidatesBlocked = decisions.length > 0 && advisoryCards.length === 0
+    && decisions.some((row) => row.blockers.length > 0);
+  const hardGateBlockers = unique(decisions.flatMap((row) => row.blockers));
   return deepFreeze({
     schemaVersion: SCANNER_PROVISIONAL_CHAMPION_READ_MODEL_VERSION,
-    status: providerBlocked ? "NO_TRADE" : advisoryCards.length > 0 ? "ADVISORY_CANDIDATES" : "VALID_EMPTY",
+    status: providerBlocked || allCandidatesBlocked ? "NO_TRADE" : advisoryCards.length > 0 ? "ADVISORY_CANDIDATES" : "VALID_EMPTY",
     mode: "PROVISIONAL_CHAMPION",
     championState: "PROVISIONAL",
     cards: advisoryCards,
     decisions,
-    blockers: providerBlocked ? ["PROVIDER_UNAVAILABLE"] : [],
+    blockers: providerBlocked ? ["PROVIDER_UNAVAILABLE"] : allCandidatesBlocked ? hardGateBlockers : [],
     safety: safety(),
   });
 }
