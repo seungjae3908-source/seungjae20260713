@@ -1,5 +1,8 @@
 import { sha256Canonical } from "./research-cache-provenance.js";
 import { resolveCanonicalStrategyIdentity } from "./canonical-strategy-identity-v1.js";
+import {
+  verifyBacktesterStrategyEvidenceAdapterV1,
+} from "./backtester-strategy-evidence-adapter-v1.js";
 
 export const CURRENT_PROVISIONAL_CHAMPION = "NONE";
 export const CURRENT_VALIDATED_CHAMPION = "NONE";
@@ -69,8 +72,12 @@ function evaluateCandidate(candidate, policy) {
   if (resolved.status === "IDENTITY_COMPLETE" && candidate.strategyIdentityDigest !== resolved.strategyIdentityDigest) blockers.push("IDENTITY_MISMATCH");
   if (candidate?.testOnly === true && policy.environment !== "TEST_ONLY") blockers.push("TEST_ONLY_CANDIDATE_FORBIDDEN");
   if (policy.environment === "TEST_ONLY" && candidate?.testOnly !== true) blockers.push("TEST_ONLY_MARKER_REQUIRED");
-  if (policy.environment === "PRODUCTION" && policy.canonicalEvidenceAuthority === "PHASE5_ADAPTER_REQUIRED") {
-    blockers.push("CANONICAL_EVIDENCE_ADAPTER_NOT_READY");
+  if (policy.environment === "PRODUCTION") {
+    const adapterVerification = verifyBacktesterStrategyEvidenceAdapterV1(candidate);
+    if (adapterVerification.verified !== true || candidate?.testOnly === true) {
+      blockers.push("CANONICAL_EVIDENCE_ADAPTER_NOT_READY");
+      blockers.push(...adapterVerification.blockers.map((blocker) => `CANONICAL_EVIDENCE_ADAPTER_INVALID:${blocker}`));
+    }
   }
 
   const evidenceResults = Array.isArray(candidate?.evidenceEnvelopes) ? candidate.evidenceEnvelopes : [];
@@ -164,6 +171,7 @@ export function selectProvisionalChampion({ candidates = [], policy = PROVISIONA
       profitabilityProven: false,
       liveTradingEligible: false,
       executionAuthority: "NONE",
+      orderSubmitted: false,
       safety: PROVISIONAL_CHAMPION_SAFETY,
     });
   }
@@ -193,6 +201,7 @@ export function selectProvisionalChampion({ candidates = [], policy = PROVISIONA
     profitabilityProven: false,
     liveTradingEligible: false,
     executionAuthority: "NONE",
+    orderSubmitted: false,
     safety: PROVISIONAL_CHAMPION_SAFETY,
   });
 }
