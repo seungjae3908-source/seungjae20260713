@@ -37,7 +37,7 @@ test("diagnostic fails closed on model contract and future data", () => {
 test("missing and zero ratios stay explicit and PSI/KS remain unavailable without raw reference", () => {
   const diagnostic = build([
     record({ id: "a", anchorTimestamp: 1000, x: 0, y: 2 }),
-    record({ id: "b", anchorTimestamp: 2000, x: 1, y: undefined }),
+    record({ id: "b", anchorTimestamp: 2000, x: 1, y: null }),
     record({ id: "c", anchorTimestamp: 3000, x: 2, y: 6 }),
   ]);
   assert.equal(diagnostic.diagnostics.features.x.raw.zeroRatio, 1 / 3);
