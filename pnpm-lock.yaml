@@ -334,6 +334,8 @@ importers:
 
   packages/db: {}
 
+  packages/external-research: {}
+
   packages/stock-grade: {}
 
   stock-analyzer:
