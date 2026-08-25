@@ -1,4 +1,9 @@
 import { GatewayError } from "./gateway.mjs";
+import {
+  KRW_VALUATION_V11_CONTRACT,
+  KrwValuationEvidenceError,
+  valueForeignQuoteNotionalKrw,
+} from "./krw-valuation-evidence-v11.mjs";
 
 const CASH_MARKETS = new Set(["KR_STOCK", "US_STOCK", "CRYPTO_SPOT"]);
 const NONTERMINAL_STATES = new Set(["CREATED", "RISK_ACCEPTED", "SUBMITTED", "ACCEPTED", "PARTIALLY_FILLED"]);
@@ -36,6 +41,22 @@ function directlyKrwValuedIntent(intent) {
     && String(intent?.executionContext?.provider ?? intent?.provider ?? "").toLowerCase() === "upbit"
     && String(intent?.symbol ?? "").toUpperCase().startsWith("KRW-")
   );
+}
+
+function foreignQuoteNotionalToKrw(intent, quoteNotional, nowMs = Date.now()) {
+  try {
+    return valueForeignQuoteNotionalKrw({
+      intent,
+      quoteNotional,
+      evidence: intent?.capitalValuationEvidence,
+      nowMs,
+    }).krwNotional;
+  } catch (error) {
+    if (error instanceof KrwValuationEvidenceError) {
+      throw new GatewayError(error.code, error.message, error.statusCode);
+    }
+    throw error;
+  }
 }
 
 function actualFilledNotional(order) {
@@ -179,7 +200,7 @@ export class CapitalManagedPaperGateway {
     return this.#gateway.getOrder(orderIdValue);
   }
 
-  #currentCommittedExposureKrw() {
+  #currentCommittedExposureKrw(nowMs = Date.now()) {
     const state = this.#capitalManager.getState();
     if (!state.initialized || !state.lastSettlement) {
       return Object.freeze({ exposureKrw: 0, blockers: Object.freeze([]), settlement: state.lastSettlement });
@@ -192,11 +213,16 @@ export class CapitalManagedPaperGateway {
       if (this.#settledOrderIds.has(id) || !exposureIncreasingIntent(order?.intent)) continue;
       const committed = committedOrderNotional(order);
       if (committed <= 0) continue;
+      let committedKrw = committed;
       if (!directlyKrwValuedIntent(order.intent)) {
-        blockers.push(`KRW_VALUATION_REQUIRED:${id}`);
-        continue;
+        try {
+          committedKrw = foreignQuoteNotionalToKrw(order.intent, committed, nowMs);
+        } catch (error) {
+          blockers.push(`${error?.code ?? "KRW_VALUATION_REQUIRED"}:${id}`);
+          continue;
+        }
       }
-      exposureKrw += committed;
+      exposureKrw += committedKrw;
       if (!Number.isSafeInteger(exposureKrw)) {
         throw new GatewayError("CAPITAL_OMS_EXPOSURE_OVERFLOW", "managed Paper exposure exceeds safe integer bounds", 503);
       }
@@ -209,35 +235,36 @@ export class CapitalManagedPaperGateway {
     });
   }
 
-  #requestedExposureKrw(preview) {
+  #requestedExposureKrw(preview, nowMs = Date.now()) {
+    const quoteNotional = positiveFinite(
+      preview?.risk?.notional,
+      "CAPITAL_ORDER_NOTIONAL_INVALID",
+      "order risk notional is invalid",
+    );
     if (!directlyKrwValuedIntent(preview?.intent)) {
-      throw new GatewayError(
-        "CAPITAL_KRW_VALUATION_REQUIRED",
-        `${preview?.intent?.market ?? "UNKNOWN"} new exposure requires authoritative KRW valuation before compounding admission`,
-        503,
-      );
+      return foreignQuoteNotionalToKrw(preview?.intent, quoteNotional, nowMs);
     }
     return nonNegativeIntegerKrw(
-      Math.ceil(positiveFinite(preview?.risk?.notional, "CAPITAL_ORDER_NOTIONAL_INVALID", "order risk notional is invalid")),
+      Math.ceil(quoteNotional),
       "CAPITAL_ORDER_NOTIONAL_INVALID",
       "order KRW notional is invalid",
     );
   }
 
-  #assessNewEntry(preview) {
+  #assessNewEntry(preview, nowMs = Date.now()) {
     const state = this.#capitalManager.getState();
     if (state.admissionGateEnabled !== true) {
       return this.#capitalManager.assessAdmission({});
     }
-    const current = this.#currentCommittedExposureKrw();
+    const current = this.#currentCommittedExposureKrw(nowMs);
     if (current.blockers.length > 0) {
       throw new GatewayError(
         "CAPITAL_EXISTING_EXPOSURE_VALUATION_REQUIRED",
-        `existing managed exposure is missing KRW valuation: ${current.blockers.join(",")}`,
+        `existing managed exposure is missing fresh KRW valuation: ${current.blockers.join(",")}`,
         503,
       );
     }
-    const requestedNewExposureKrw = this.#requestedExposureKrw(preview);
+    const requestedNewExposureKrw = this.#requestedExposureKrw(preview, nowMs);
     return this.#capitalManager.assessAdmission({
       settlementId: state.lastSettlement?.settlementId,
       settlementSequence: state.lastSettlement?.sequence,
@@ -289,14 +316,14 @@ export class CapitalManagedPaperGateway {
     return task;
   }
 
-  getCapitalHealth() {
+  getCapitalHealth(nowMs = Date.now()) {
     const state = this.#capitalManager.getState();
-    const current = this.#currentCommittedExposureKrw();
+    const current = this.#currentCommittedExposureKrw(nowMs);
     return Object.freeze({
       ...state,
       currentCommittedExposureKrw: current.exposureKrw,
       valuationBlockers: current.blockers,
-      availableNewExposureKrw: state.initialized
+      availableNewExposureKrw: state.initialized && current.blockers.length === 0
         ? Math.max(0, state.effectiveTradingCapitalKrw - current.exposureKrw)
         : 0,
       filledExposureReleasedOnlyAfterFreshSettlement: true,
@@ -304,7 +331,13 @@ export class CapitalManagedPaperGateway {
       ambiguousSameMillisecondOrderAfterRestartCountsAsUnsettled: true,
       reductionOrdersExemptFromCapitalGate: true,
       krwDirectValuationMarkets: Object.freeze(["KR_STOCK", "CRYPTO_SPOT:UPBIT:KRW-*"]),
+      foreignKrwValuationMarkets: KRW_VALUATION_V11_CONTRACT.supportedForeignMarkets,
       foreignCurrencyNewExposureRequiresAuthoritativeKrwValuation: true,
+      foreignCurrencyValuationMaxAgeMs: KRW_VALUATION_V11_CONTRACT.maxEvidenceAgeMs,
+      staleForeignValuationBlocksAdditionalExposure: true,
+      valuationAuthority: "CALLER_SUPPLIED_PUBLIC_REFERENCE_ONLY",
+      brokerNetworkReadPerformed: false,
+      privateProviderRequestPerformed: false,
       executionAuthority: "NONE",
       liveAuthorityGranted: false,
     });
