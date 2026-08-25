@@ -1,0 +1,58 @@
+name: Prediction Lab Shadow Gap Diagnostics
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/prediction-lab-shadow-gap-diagnostics.yml
+      - market-prediction-lab/src/shadow-feature-drift-diagnostics.js
+      - market-prediction-lab/src/shadow-backtest-gap-diagnostics.js
+      - market-prediction-lab/tests/shadow-feature-drift-diagnostics.test.js
+      - market-prediction-lab/tests/shadow-backtest-gap-diagnostics.test.js
+      - market-prediction-lab/scripts/run-shadow-feature-drift-diagnostics.js
+      - market-prediction-lab/scripts/run-shadow-backtest-gap-diagnostics.js
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prediction-lab-shadow-gap-diagnostics-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  shadow-gap-diagnostics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Resolve immutable PR head
+        id: resolve
+        shell: bash
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$PR_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          echo "sha=$PR_HEAD_SHA" >> "$GITHUB_OUTPUT"
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.resolve.outputs.sha }}
+          persist-credentials: false
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Syntax-check diagnostic entrypoints
+        run: |
+          node --check market-prediction-lab/src/shadow-feature-drift-diagnostics.js
+          node --check market-prediction-lab/src/shadow-backtest-gap-diagnostics.js
+          node --check market-prediction-lab/scripts/run-shadow-feature-drift-diagnostics.js
+          node --check market-prediction-lab/scripts/run-shadow-backtest-gap-diagnostics.js
+      - name: Run bounded Shadow diagnostic regressions
+        run: node --test market-prediction-lab/tests/shadow-feature-drift-diagnostics.test.js market-prediction-lab/tests/shadow-backtest-gap-diagnostics.test.js
+      - name: Assert immutable checkout HEAD
+        if: always()
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.resolve.outputs.sha }}
+        run: test "$(git rev-parse HEAD)" = "$TARGET_SHA"
