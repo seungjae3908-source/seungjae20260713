@@ -45,7 +45,7 @@ test("parameter, dataset and cost policy mismatches never loosely match", () => 
   }
 });
 
-test("missing mandatory identity and self-attestation fail closed", () => {
+test("missing mandatory identity, sentinel placeholders and self-attestation fail closed", () => {
   const missing = resolveCanonicalStrategyIdentity(identity({ datasetId: "" }));
   assert.equal(missing.status, "IDENTITY_INCOMPLETE");
   assert.ok(missing.missingFields.includes("datasetId"));
@@ -53,5 +53,9 @@ test("missing mandatory identity and self-attestation fail closed", () => {
   assert.equal(fake.status, "IDENTITY_INCOMPLETE");
   assert.ok(fake.blockers.includes("SELF_ATTESTATION_FORBIDDEN:validated"));
   assert.equal(resolveCanonicalStrategyIdentity(identity({ formulaIdentity: "" })).status, "IDENTITY_INCOMPLETE");
-  assert.equal(resolveCanonicalStrategyIdentity(identity({ datasetId: "UNKNOWN" })).status, "IDENTITY_INCOMPLETE");
+  for (const sentinel of ["UNKNOWN", "MISSING", "MISSING_EVIDENCE", "NONE", "N/A", "NULL"]) {
+    const result = resolveCanonicalStrategyIdentity(identity({ datasetId: sentinel }));
+    assert.equal(result.status, "IDENTITY_INCOMPLETE");
+    assert.ok(result.missingFields.includes("datasetId"));
+  }
 });
