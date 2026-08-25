@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { sha256Canonical } from "../src/research-cache-provenance.js";
+import {
+  sha256Canonical,
+  validateCompositeDatasetProvenance,
+} from "../src/research-cache-provenance.js";
 import {
   adaptBacktesterStrategyEvidenceV1,
   BACKTESTER_ADAPTER_SAFETY,
@@ -19,6 +22,9 @@ const HARNESS_SHA = "2".repeat(40);
 const ARCHIVE_DIGEST = "3".repeat(64);
 const CANDLE_DIGEST = "4".repeat(64);
 const FUNDING_DIGEST = "5".repeat(64);
+const PR191_CANDLE_DIGEST = "475c63b21e726a6d156eb977ac3c5b035c04609d755475f734f5e85d14c965a6";
+const PR191_FUNDING_DIGEST = "2e538fba4f16d14499204f7d8b5ef7c156047491b3d604faff57d057c973e432";
+const PR191_COMPOSITE_DATASET_DIGEST = "3a0cdb64601b6df069126ef67a81473be069082b57d8e3457e6ed429f8fe0264";
 
 function backtesterFixture() {
   const contract = {
@@ -236,6 +242,84 @@ function adapterInput(raw = backtesterFixture(), overrides = {}) {
     ...overrides,
   };
 }
+
+test("Backtester dataset identity is the authoritative #664 composite provenance contract", () => {
+  const raw = backtesterFixture();
+  const source = raw.results[0].source;
+  const datasetIdentity = buildBacktesterCompositeDatasetIdentityV1(raw);
+  const validation = validateCompositeDatasetProvenance(datasetIdentity);
+
+  assert.equal(validation.valid, true);
+  assert.equal(validation.status, "VALID");
+  assert.equal(datasetIdentity.schemaVersion, "ResearchCompositeDatasetProvenanceV1");
+  assert.equal(datasetIdentity.componentCount, 2);
+  assert.equal(datasetIdentity.components.candles, source.sourceDigest);
+  assert.equal(datasetIdentity.components.funding, source.fundingDigest);
+  assert.equal(validation.datasetDigest, datasetIdentity.datasetDigest);
+  assert.equal(datasetIdentity.datasetStart, "2020-01-01T00:00:00.000Z");
+  assert.equal(datasetIdentity.datasetEnd, "2025-12-31T23:59:59.999Z");
+
+  source.datasetKey = "futures-btc-long";
+  source.sourceDigest = PR191_CANDLE_DIGEST;
+  source.fundingDigest = PR191_FUNDING_DIGEST;
+  const pr191Identity = buildBacktesterCompositeDatasetIdentityV1(raw);
+  assert.equal(pr191Identity.datasetDigest, PR191_COMPOSITE_DATASET_DIGEST);
+  assert.equal(validateCompositeDatasetProvenance(pr191Identity).status, "VALID");
+});
+
+test("legacy private dataset shape cannot claim authoritative #664 provenance", () => {
+  const authoritative = buildBacktesterCompositeDatasetIdentityV1(backtesterFixture());
+  const privateShape = {
+    datasetId: authoritative.datasetId,
+    datasetDigest: authoritative.datasetDigest,
+    datasetStart: authoritative.datasetStart,
+    datasetEnd: authoritative.datasetEnd,
+  };
+  const validation = validateCompositeDatasetProvenance(privateShape);
+  assert.equal(validation.valid, false);
+  assert.equal(validation.status, "MISSING_EVIDENCE");
+  assert.equal(validation.reason, "composite_dataset_schema_missing");
+
+  const input = adapterInput();
+  input.datasetIdentity = privateShape;
+  const result = adaptBacktesterStrategyEvidenceV1(input);
+  assert.equal(result.status, "ADAPTER_REJECTED");
+  assert.ok(result.blockers.includes("DATASET_IDENTITY_MISSING_EVIDENCE"));
+  assert.ok(result.blockers.includes("DATASET_IDENTITY_MISMATCH"));
+});
+
+test("authoritative composite provenance mismatches fail closed", () => {
+  const base = buildBacktesterCompositeDatasetIdentityV1(backtesterFixture());
+  const malformed = [
+    { ...base, schemaVersion: "backtester-composite-dataset-digest-v1" },
+    { ...base, componentCount: 1 },
+    { ...base, components: { ...base.components, candles: "6".repeat(64) } },
+    { ...base, components: { ...base.components, funding: "7".repeat(64) } },
+    { ...base, datasetId: "different-dataset" },
+    { ...base, datasetDigest: "8".repeat(64) },
+    { ...base, components: { funding: base.components.funding } },
+    { ...base, components: { candles: base.components.candles } },
+    { ...base, components: null },
+  ];
+
+  for (const datasetIdentity of malformed) {
+    const input = adapterInput();
+    input.datasetIdentity = datasetIdentity;
+    const result = adaptBacktesterStrategyEvidenceV1(input);
+    assert.notEqual(result.status, "ADAPTED");
+    assert.ok(result.blockers.includes("DATASET_IDENTITY_MISMATCH")
+      || result.blockers.includes("DATASET_IDENTITY_MISSING_EVIDENCE"));
+  }
+
+  const circularInput = adapterInput();
+  const circularIdentity = { ...base, components: {} };
+  circularIdentity.components.candles = circularIdentity.components;
+  circularIdentity.components.funding = base.components.funding;
+  circularInput.datasetIdentity = circularIdentity;
+  const circularResult = adaptBacktesterStrategyEvidenceV1(circularInput);
+  assert.equal(circularResult.status, "ADAPTER_REJECTED");
+  assert.ok(circularResult.blockers.includes("DATASET_IDENTITY_MALFORMED"));
+});
 
 test("exact OOS, Walk Forward, and Cost Stress metrics pass through without input mutation", () => {
   const input = adapterInput();
