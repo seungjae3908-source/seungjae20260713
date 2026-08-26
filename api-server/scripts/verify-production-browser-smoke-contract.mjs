@@ -77,8 +77,12 @@ assert(spec.includes("getByTestId('paper-trading-route-skeleton')"), 'browser sm
 assert(spec.includes('installProductionReadOnlyPolicy'), 'browser smoke must install fail-closed request policy');
 assert(spec.includes('isIgnorableProductionRequestFailure'), 'browser smoke must use the narrowly tested request-failure classifier');
 assert(policy.includes('isIgnorableProductionRequestFailure'), 'read-only policy must classify benign same-origin read aborts');
-assert(policy.includes("errorText.trim() === 'net::ERR_ABORTED'"), 'only exact net::ERR_ABORTED failures may be ignored');
-assert(policyTest.includes('same-origin read requests cancelled by navigation are the only ignored browser failures'), 'abort classifier must have explicit boundary tests');
+assert(policy.includes("normalizedError === 'net::ERR_ABORTED'"), 'ignored browser failures must require exact net::ERR_ABORTED');
+assert(policy.includes("url.pathname === '/cdn-cgi/rum'"), 'Cloudflare RUM exception must use the exact /cdn-cgi/rum path');
+assert(policy.includes("normalizedMethod === 'POST'"), 'Cloudflare RUM exception must be POST-only');
+assert(policy.includes('url.origin === productionOrigin'), 'Cloudflare RUM exception must remain same-origin');
+assert(policyTest.includes('same-origin read requests cancelled by navigation remain ignored without masking other failures'), 'read-abort classifier must have explicit boundary tests');
+assert(policyTest.includes('Cloudflare same-origin RUM POST navigation abort is ignored without masking other POST failures'), 'Cloudflare RUM abort exception must have explicit positive and negative boundary tests');
 assert(app.includes('loadPaperTradingPage'), 'approved sessions must preload the paper trading route');
 assert(app.includes('PaperTradingRouteFallback'), 'paper trading must use a route-specific progressive fallback');
 assert(app.includes('paper-trading-route-skeleton'), 'paper trading fallback must have a deterministic readiness marker');

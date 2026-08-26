@@ -48,7 +48,7 @@ jobs:
   authorize:
     if: >-
       github.event_name == 'issue_comment' &&
-      github.event.issue.number == 62 &&
+      github.event.issue.number == 660 &&
       github.event.comment.user.login == github.repository_owner
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -296,7 +296,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 62,
+              issue_number: 660,
               body: [
                 '[RESEARCH_PRODUCTION_ACTIVATION]',
                 'status: success',
@@ -324,7 +324,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 62,
+              issue_number: 660,
               body: [
                 '[RESEARCH_PRODUCTION_ACTIVATION]',
                 'status: failed_closed',
