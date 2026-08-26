@@ -5,6 +5,7 @@ import { CenteredPageHeader } from '@/components/centered-page-header';
 import { ResponsiveTabs } from '@/components/responsive-tabs';
 import { ScannerApprovalComposer } from '@/components/scanner-approval-composer';
 import { UiBuilderSignalScannerLayout } from '@/components/ui-builder-signal-scanner-layout';
+import { ADAPTIVE_VIEWPORT_BREAKPOINTS } from '@/lib/adaptive-layout';
 import { useAnalysisSelection } from '@/lib/analysis-selection';
 import { useAuth } from '@/lib/auth';
 import { getPortfolioChartOverlay } from '@/lib/portfolio-overlay';
@@ -39,7 +40,7 @@ const WORKSPACE_TITLES: Record<Workspace, string> = {
 };
 
 function useDesktopWorkspace() {
-  const query = '(min-width: 1024px)';
+  const query = `(min-width: ${ADAPTIVE_VIEWPORT_BREAKPOINTS.desktopMin}px)`;
   const [desktop, setDesktop] = useState(() => typeof window !== 'undefined' && window.matchMedia(query).matches);
 
   useEffect(() => {
@@ -48,7 +49,7 @@ function useDesktopWorkspace() {
     update();
     media.addEventListener('change', update);
     return () => media.removeEventListener('change', update);
-  }, []);
+  }, [query]);
 
   return desktop;
 }
