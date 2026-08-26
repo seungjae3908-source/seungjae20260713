@@ -35,6 +35,12 @@ for (const text of [
   'begin read only;',
   'rollback;',
   'delete childEnv.PROD_DATABASE_URL;',
+  'function psqlExistsOutsidePath() {',
+  "const candidates = ['/usr/bin/psql', '/usr/local/bin/psql'];",
+  "readdirSync('/usr/lib/postgresql'",
+  'accessSync(path, fsConstants.X_OK);',
+  "blocked('psql_installed_outside_path', connected)",
+  "blocked('psql_not_installed', connected)",
   'database_changed: false',
   'server_files_written: 0',
   'server_processes_restarted: 0',
@@ -43,9 +49,11 @@ for (const text of [
   'private_trading_api_count: 0',
   'live_trading_authority: false',
 ]) requireText(diagnostic, text);
+if (diagnostic.includes("blocked('psql_unavailable'")) throw new Error('legacy undifferentiated psql_unavailable classification is forbidden');
 const sql = /const SQL = String\.raw`([\s\S]*?)`;/.exec(diagnostic)?.[1];
 if (!sql) throw new Error('diagnostic SQL missing');
 forbid(sql, /^\s*(insert|update|delete|create|alter|drop|grant|revoke|truncate|comment|copy|merge|vacuum|reindex|cluster|refresh|do)\b/im);
 forbid(diagnostic, /\b(writeFileSync|appendFileSync|unlinkSync|rmSync|renameSync|mkdirSync)\b|\b(fetch|https?\.request|net\.connect|tls\.connect)\b/);
+forbid(diagnostic, /\b(?:apt|apt-get|yum|dnf|apk|brew)\b/);
 forbid(diagnostic, /console\.(?:log|error)\([^\n]*transientDatabaseUrl|process\.(?:stdout|stderr)\.write\([^\n]*transientDatabaseUrl/);
 process.stdout.write('production Telegram storage release diagnostic static contract: PASS\n');
