@@ -124,7 +124,7 @@ jobs:
           if (String(provenance.runId) !== process.env.PREDECESSOR_SHADOW_RUN_ID) throw new Error('Predecessor run identity mismatch.');
           if (!/^[0-9a-f]{40}$/.test(String(provenance.researchCodeSha ?? ''))) throw new Error('Predecessor research SHA is invalid.');
           if (provenance.researchCodeSha !== process.env.RESEARCH_SHA) {
-            execFileSync('git', ['fetch', '--no-tags', '--depth=1', 'origin', provenance.researchCodeSha], { stdio: 'inherit' });
+            execFileSync('git', ['fetch', '--no-tags', '--depth=50', 'origin', process.env.RESEARCH_SHA], { stdio: 'inherit' });
             execFileSync('git', ['merge-base', '--is-ancestor', provenance.researchCodeSha, process.env.RESEARCH_SHA], { stdio: 'inherit' });
           }
           if (String(provenance.producerRunId ?? '') !== process.env.PRODUCER_RUN_ID) throw new Error('Predecessor Producer run identity mismatch.');
