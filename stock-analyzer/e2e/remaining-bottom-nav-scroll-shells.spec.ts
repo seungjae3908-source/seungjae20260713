@@ -9,6 +9,7 @@ const NOW = '2026-08-26T07:30:00.000Z';
 const ROUTES = [
   { path: '/market-overview', title: '지수·시황' },
   { path: '/market-rankings', title: '시장 순위' },
+  { path: '/market-rankings?asset=coin&coinMarket=spot', title: '시장 순위', label: '시장 순위 · 코인' },
   { path: '/watchlist', title: '관심종목' },
   { path: '/alerts', title: '가격 알림' },
   { path: '/stock-info?asset=stock&market=KR', title: '종목 정보' },
@@ -87,6 +88,10 @@ async function installSessionAndMocks(page: Page) {
     const pathname = url.pathname;
     if (pathname === '/api/notifications/price-alerts') return fulfill(route, { alerts: [] });
     if (pathname === '/api/notifications/history') return fulfill(route, { notifications: [] });
+    if (pathname === '/api/crypto/status') return fulfill(route, { upbit: { ok: true }, bitget: { ok: true } });
+    if (pathname === '/api/crypto/spot/markets') return fulfill(route, { markets: [] });
+    if (pathname === '/api/crypto/spot/tickers') return fulfill(route, { tickers: [], updatedAt: NOW });
+    if (pathname === '/api/crypto/futures/tickers') return fulfill(route, { tickers: [], updatedAt: NOW });
     if (pathname.includes('/portfolio/intelligence')) {
       return fulfill(route, { ok: false, status: 'UNAVAILABLE', portfolio: null }, 503);
     }
@@ -96,7 +101,9 @@ async function installSessionAndMocks(page: Page) {
     if (pathname.includes('/briefing')) return fulfill(route, { headline: '스크롤 QA', lines: [] });
     if (pathname.includes('/sector')) return fulfill(route, { sectors: [] });
     if (pathname.includes('/special-feed')) {
-      return fulfill(route, { ok: true, asset: 'stock', market: 'KR', items: [], count: 0, latestDays: 7, updatedAt: NOW });
+      const asset = url.searchParams.get('asset') === 'coin' ? 'coin' : 'stock';
+      const market = asset === 'coin' ? (url.searchParams.get('market') === 'futures' ? 'futures' : 'spot') : 'KR';
+      return fulfill(route, { ok: true, asset, market, items: [], count: 0, latestDays: 7, updatedAt: NOW });
     }
     return fulfill(route, {
       ok: true,
@@ -157,7 +164,7 @@ test('remaining scroll-shell CSS is route-title bounded and does not target AI C
 });
 
 for (const route of ROUTES) {
-  test(`${route.title} owns content scrolling without moving BottomNav`, async ({ page }) => {
+  test(`${'label' in route ? route.label : route.title} owns content scrolling without moving BottomNav`, async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await installSessionAndMocks(page);
     await page.goto(route.path);
