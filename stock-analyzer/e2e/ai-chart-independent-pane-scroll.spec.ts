@@ -103,24 +103,32 @@ test('desktop chart wheel interaction and analysis scrolling are independent whi
   expect(await workspace.evaluate((node) => getComputedStyle(node).overflowY)).toBe('hidden');
   expect(await chartPane.evaluate((node) => getComputedStyle(node).overflowY)).toBe('auto');
   expect(await analysisPane.evaluate((node) => getComputedStyle(node).overflowY)).toBe('auto');
+  expect(await chartPane.evaluate((node) => node.scrollHeight > node.clientHeight + 1)).toBe(true);
   expect(await analysisPane.evaluate((node) => node.scrollHeight > node.clientHeight + 1)).toBe(true);
 
   const navBefore = await nav.boundingBox();
   expect(navBefore).not.toBeNull();
 
+  await canvas.scrollIntoViewIfNeeded();
+  const chartScrollBeforeZoom = await scrollTop(chartPane);
   const rangeBefore = await visibleRange(page);
-  await canvas.hover({ position: { x: 180, y: 180 } });
+  const box = await canvas.boundingBox();
+  expect(box).not.toBeNull();
+  const x = box!.x + box!.width * 0.58;
+  const y = box!.y + box!.height * 0.55;
+  await page.mouse.move(x, y);
   await expect.poll(() => chartPane.evaluate((node) => getComputedStyle(node).overflowY)).toBe('hidden');
   await page.mouse.wheel(0, -420);
   await expect.poll(() => visibleRange(page)).not.toBe(rangeBefore);
-  expect(await scrollTop(chartPane)).toBe(0);
+  expect(await scrollTop(chartPane)).toBe(chartScrollBeforeZoom);
   expect(await scrollTop(analysisPane)).toBe(0);
 
   await analysisPane.hover({ position: { x: 120, y: 160 } });
   await expect.poll(() => chartPane.evaluate((node) => getComputedStyle(node).overflowY)).toBe('auto');
+  const chartScrollBeforeAnalysis = await scrollTop(chartPane);
   await page.mouse.wheel(0, 700);
   await expect.poll(() => scrollTop(analysisPane)).toBeGreaterThan(0);
-  expect(await scrollTop(chartPane)).toBe(0);
+  expect(await scrollTop(chartPane)).toBe(chartScrollBeforeAnalysis);
 
   const navAfter = await nav.boundingBox();
   expect(navAfter).not.toBeNull();
