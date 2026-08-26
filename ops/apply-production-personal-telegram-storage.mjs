@@ -190,6 +190,7 @@ const migrationPaths = [
   'api-server/supabase/migrations/2026081501_personal_telegram_storage.sql',
   'api-server/supabase/migrations/2026081502_personal_telegram_policy_cleanup.sql',
   'api-server/supabase/migrations/2026082701_personal_telegram_generic_outbox.sql',
+  'api-server/supabase/migrations/2026082702_personal_telegram_digest_claim.sql',
 ];
 let migrationBodies;
 try {
@@ -208,6 +209,8 @@ declare
   expected_policy text;
   missing_column_count integer;
   event_id_nullable text;
+  digest_claim regprocedure;
+  digest_claim_security_definer boolean;
 begin
   if to_regclass('public.notification_preferences') is null then
     raise exception 'canonical notification preferences table is missing';
@@ -299,6 +302,23 @@ begin
   ) then
     raise exception 'durable personal Telegram outbox constraints are missing';
   end if;
+
+  digest_claim := to_regprocedure('public.claim_personal_telegram_digest(uuid,uuid,timestamptz,integer)');
+  if digest_claim is null then
+    raise exception 'personal Telegram digest claim function is missing';
+  end if;
+  select prosecdef into digest_claim_security_definer from pg_proc where oid = digest_claim;
+  if digest_claim_security_definer is distinct from true then
+    raise exception 'personal Telegram digest claim must be security definer';
+  end if;
+  if has_function_privilege('PUBLIC', digest_claim, 'EXECUTE')
+    or has_function_privilege('anon', digest_claim, 'EXECUTE')
+    or has_function_privilege('authenticated', digest_claim, 'EXECUTE') then
+    raise exception 'personal Telegram digest claim is exposed to an API role';
+  end if;
+  if not has_function_privilege('service_role', digest_claim, 'EXECUTE') then
+    raise exception 'service role lacks personal Telegram digest claim access';
+  end if;
 end
 $production_personal_telegram_storage_verify$;
 
@@ -308,9 +328,10 @@ select json_build_object(
   'approved_target_sha', current_setting('app.approved_target_sha'),
   'production_project_match', true,
   'atomic_transaction', true,
-  'migrations_applied', 3,
+  'migrations_applied', 4,
   'tables_verified', 4,
   'generic_outbox_verified', true,
+  'digest_claim_verified', true,
   'canonical_preferences_verified', true,
   'api_roles_revoked', true,
   'policies_fail_closed', true,
@@ -376,9 +397,10 @@ if (artifact?.status !== 'passed'
   || artifact?.approved_target_sha !== approvedTargetSha
   || artifact?.production_project_match !== true
   || artifact?.atomic_transaction !== true
-  || artifact?.migrations_applied !== 3
+  || artifact?.migrations_applied !== 4
   || artifact?.tables_verified !== 4
   || artifact?.generic_outbox_verified !== true
+  || artifact?.digest_claim_verified !== true
   || artifact?.policies_fail_closed !== true
   || artifact?.database_changed !== true
   || artifact?.credentials_recorded !== false
