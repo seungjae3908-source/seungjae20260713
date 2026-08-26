@@ -723,6 +723,31 @@ export function createCryptoSpotPublicFormulaTournamentDependenciesV1({ dataset 
         sourceDatasetIdentity: dataset.oosDatasetIdentity,
       });
     },
+
+    runStatisticalFirewall: async ({ canonicalOwner, finalHoldoutAccess }) => {
+      if (finalHoldoutAccess !== false) {
+        return Object.freeze({
+          status: "MISSING_EVIDENCE",
+          failureCode: "HOLDOUT_PREACCESS_FORBIDDEN",
+          failureReason: "statistical firewall cannot access Final Holdout during research selection",
+        });
+      }
+      if (canonicalOwner !== "#547") {
+        return Object.freeze({
+          status: "MISSING_EVIDENCE",
+          failureCode: "STATISTICAL_EVIDENCE_MISSING",
+          failureReason: "canonical Statistical Firewall owner must be #547",
+        });
+      }
+      return Object.freeze({
+        status: "MISSING_EVIDENCE",
+        failureCode: "STATISTICAL_EVIDENCE_MISSING",
+        failureReason: "canonical #547 Statistical Firewall evidence is external to this bounded public-OHLCV slice",
+        canonicalOwner: "#547",
+        evidenceAuthority: "EXTERNAL_REQUIRED",
+        finalHoldoutAccess: false,
+      });
+    },
   });
 }
 
