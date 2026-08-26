@@ -19,7 +19,7 @@ import type {
   TelegramTransport,
 } from '../features/user-broker-telegram/user-broker-telegram.types';
 import { defaultTelegramAlertPolicy } from '../services/telegram-alert-policy.service';
-import { sendTelegramAlert } from '../services/telegram-notification.service';
+import { sendPersonalTelegramTestMessage } from '../services/telegram-test-message.service';
 import { createSupabasePaperJournalRepository } from '../services/paper-journal-supabase.repository';
 import type { StoredPaperJournalRecord } from '../services/paper-journal.types';
 import {
@@ -112,7 +112,7 @@ function telegramStartPayload(body: unknown): { token: string; chatId: string; t
   const update = record(body);
   const message = record(update?.message);
   const chat = record(message?.chat);
-  const from = record(message?.from);
+  const from = record(update?.message) ? record(message?.from) : null;
   const text = typeof message?.text === 'string' ? message.text.trim() : '';
   const match = /^\/start\s+([A-Za-z0-9_-]{20,200})$/.exec(text);
   const chatId = chat?.id == null ? '' : String(chat.id);
@@ -317,51 +317,9 @@ userBrokerTelegramRouter.post('/telegram/link', async (req, res) => {
 userBrokerTelegramRouter.post('/telegram/test', async (req, res) => {
   try {
     const { userId } = member(req as AuthenticatedRequest);
-    const connection = await createSupabaseUserBrokerTelegramRepository().getTelegramConnection(userId);
-    if (!connection || connection.status !== 'ACTIVE' || !connection.telegramChatId.trim()) {
-      res.status(409).json({
-        ok: false,
-        error: 'TELEGRAM_NOT_CONNECTED',
-        privateApiRequests: 0,
-        ordersSubmitted: 0,
-        ordersCancelled: 0,
-      });
-      return;
-    }
-
-    const now = new Date();
-    const result = await sendTelegramAlert({
-      type: 'intelligence_report',
-      details: '[TEST] Telegram 연결 확인 메시지입니다. 투자 신호가 아니며 실제 주문/체결이 아닙니다.',
-      timestamp: now.toISOString(),
-      destinationChatId: connection.telegramChatId,
-      dedupeKey: `telegram-connection-test:${now.getTime()}`,
-      duplicateWindowMs: 0,
-      cooldownMs: 0,
-      linkPreview: false,
-    });
-    if (!result.ok) {
-      res.status(result.skipped === 'NOT_CONFIGURED' ? 503 : 502).json({
-        ok: false,
-        error: `TELEGRAM_TEST_${result.skipped}`,
-        attempts: result.attempts,
-        privateApiRequests: 0,
-        ordersSubmitted: 0,
-        ordersCancelled: 0,
-      });
-      return;
-    }
-    res.json({
-      ok: true,
-      status: 'DELIVERED',
-      attempts: result.attempts,
-      testOnly: true,
-      investmentSignal: false,
-      orderAuthority: 'NONE',
-      privateApiRequests: 0,
-      ordersSubmitted: 0,
-      ordersCancelled: 0,
-    });
+    const result = await sendPersonalTelegramTestMessage(userId);
+    const { httpStatus, ...payload } = result;
+    res.status(httpStatus).json(payload);
   } catch (error) {
     res.status(503).json({
       ok: false,
