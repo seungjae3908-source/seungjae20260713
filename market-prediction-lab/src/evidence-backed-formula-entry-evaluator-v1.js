@@ -1,4 +1,9 @@
-import { assertFormulaCandidateV1 } from "./autonomous-strategy-formula-generator-v1.js";
+import { createHash } from "node:crypto";
+
+import {
+  assertFormulaCandidateV1,
+  canonicalSerializeStrategyFormulaV1,
+} from "./autonomous-strategy-formula-generator-v1.js";
 
 export const EVIDENCE_BACKED_FORMULA_ENTRY_EVALUATOR_VERSION = 1;
 
@@ -42,6 +47,12 @@ function mean(values) {
   return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
+function parameterIdentity(formulaHash, selectedParameters) {
+  return createHash("sha256")
+    .update(canonicalSerializeStrategyFormulaV1({ formulaHash, selectedParameters }), "utf8")
+    .digest("hex");
+}
+
 function validateSelectedParameters(formulaCandidate, generatedCandidate) {
   if (!generatedCandidate || generatedCandidate.formulaCandidateId !== formulaCandidate.candidateId
     || generatedCandidate.formulaHash !== formulaCandidate.formulaHash
@@ -65,7 +76,15 @@ function validateSelectedParameters(formulaCandidate, generatedCandidate) {
     if (Math.abs(steps - Math.round(steps)) > 1e-8) fail("SELECTED_PARAMETER_OFF_GRID", { name, value });
     if (spec.valueType === "INTEGER" && !Number.isSafeInteger(value)) fail("SELECTED_PARAMETER_INTEGER_REQUIRED", { name, value });
   }
-  return Object.freeze({ ...selected });
+  const frozen = Object.freeze({ ...selected });
+  const expectedIdentity = parameterIdentity(formulaCandidate.formulaHash, frozen);
+  if (generatedCandidate.parameterIdentity !== expectedIdentity) {
+    fail("PARAMETER_IDENTITY_MISMATCH", {
+      expectedParameterIdentity: expectedIdentity,
+      actualParameterIdentity: generatedCandidate.parameterIdentity,
+    });
+  }
+  return frozen;
 }
 
 function validateFormulaScope(formulaCandidate) {
