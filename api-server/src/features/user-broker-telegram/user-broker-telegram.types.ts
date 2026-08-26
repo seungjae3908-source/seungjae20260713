@@ -74,6 +74,10 @@ export type StoredPersonalTelegramAlert = Omit<TelegramAlertInput, 'destinationC
 export type PersonalTelegramOutboxPayload = {
   event: TelegramPolicyEvent;
   alert: StoredPersonalTelegramAlert;
+  deliveryMode: 'IMMEDIATE' | 'BATCHED';
+  digestKey: string | null;
+  digestWindowMs: number | null;
+  digestDueAt: string | null;
 };
 
 export type NotificationDeliveryKind = 'EXECUTION_EVENT' | 'PERSONAL_ALERT';
