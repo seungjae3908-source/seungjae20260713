@@ -1,4 +1,6 @@
 import { expect, test } from '@playwright/test';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   evaluateTelegramSignalFreshness,
   formatTelegramAge,
@@ -102,4 +104,23 @@ test('age formatter stays bounded and never invents values', () => {
   expect(formatTelegramAge(45_000)).toBe('45초');
   expect(formatTelegramAge(5 * 60_000)).toBe('5분');
   expect(formatTelegramAge(2 * 60 * 60_000 + 5 * 60_000)).toBe('2시간 5분');
+});
+
+test('scanner Telegram delivery always appends visible freshness evidence before transport', () => {
+  const source = fs.readFileSync(
+    path.resolve(process.cwd(), '../api-server/src/services/scanner-telegram-delivery.service.ts'),
+    'utf8',
+  );
+  expect(source).toContain('export function addTelegramSignalFreshness(');
+  expect(source).toContain('generatedAt: context.generatedAt');
+  expect(source).toContain('expiresAt: alert.expiresAt');
+  expect(source).toContain('chart: evidence?.chart ?? null');
+  expect(source).toContain('Freshness: ${freshness.status} · 유효성 ${freshness.validity}');
+  expect(source).toContain('신호 생성 ${freshness.signalGeneratedAt ?? \'N/A\'}');
+  expect(source).toContain('데이터 기준 ${freshness.dataAsOf ?? \'N/A\'}');
+  expect(source).toContain('신호 만료 ${freshness.expiresAt ?? \'N/A\'}');
+  expect(source).toContain('⛔ 재검증 전 실시간 신호로 사용 금지');
+  expect(source).toContain('return addTelegramSignalFreshness(base, alert, context);');
+  expect(source).not.toContain('orderAuthority:');
+  expect(source).not.toContain('ordersSubmitted: 1');
 });
