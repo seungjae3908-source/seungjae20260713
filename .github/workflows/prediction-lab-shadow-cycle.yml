@@ -135,7 +135,7 @@ jobs:
 
       - name: Validate shadow and temporal modules
         working-directory: market-prediction-lab
-        run: node --test tests/derivatives-history.test.js tests/derivatives-normalized-compat.test.js tests/temporal-training-dataset.test.js tests/shadow-ledger.test.js tests/shadow-evidence-handoff-v1.test.js
+        run: node --test tests/derivatives-history.test.js tests/derivatives-normalized-compat.test.js tests/temporal-training-dataset.test.js tests/shadow-ledger.test.js tests/shadow-evidence-handoff-v1.test.js tests/shadow-state-root-transport-v1.test.js
 
       - name: Run one research-only shadow cycle
         id: shadow
@@ -174,6 +174,25 @@ jobs:
           {"schemaVersion":2,"researchCodeSha":"$RESEARCH_SHA","runId":"$GITHUB_RUN_ID","producerRunId":"$PRODUCER_RUN_ID","predecessorShadowRunId":"$PREDECESSOR_SHADOW_RUN_ID","branchWrite":false,"liveOrderAllowed":false,"privateAccountRequestAllowed":false,"scheduleActivated":false}
           JSON
 
+      - name: Build fail-closed state-root publication manifest
+        if: always()
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { writeFile } from 'node:fs/promises';
+          import { buildShadowArtifactPublicationManifestV1 } from './market-prediction-lab/src/shadow-state-root-transport-v1.js';
+
+          const manifest = await buildShadowArtifactPublicationManifestV1({
+            artifactRoot: 'market-prediction-lab/docs',
+            createdAt: new Date().toISOString(),
+          });
+          await writeFile(
+            'market-prediction-lab/docs/shadow-artifact-publication-manifest.json',
+            `${JSON.stringify(manifest, null, 2)}\n`,
+            { encoding: 'utf8', mode: 0o600 },
+          );
+          NODE
+
       - name: Upload shadow-cycle artifact
         if: always()
         uses: actions/upload-artifact@v4
@@ -183,6 +202,7 @@ jobs:
             market-prediction-lab/docs/shadow-state.json
             market-prediction-lab/docs/shadow-summary.json
             market-prediction-lab/docs/shadow-cycle-provenance.json
+            market-prediction-lab/docs/shadow-artifact-publication-manifest.json
           if-no-files-found: error
           retention-days: 90
 
