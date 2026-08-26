@@ -32,6 +32,9 @@ const requiredFragments = [
   'staging-verdict-${targetSha}',
   'verify-staging-verdict.mjs',
   'Apply and verify Production personal Telegram storage atomically',
+  'PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}',
+  'IFS= read -r PROD_DATABASE_URL && export PROD_DATABASE_URL',
+  `printf '%s\\n' "$PROD_DATABASE_URL" | ssh`,
   'production-personal-telegram-storage-${{ steps.command.outputs.sha }}',
   'ops/verify-production-personal-telegram-storage.mjs --artifact',
   "workflow_id: 'production-deploy.yml'",
@@ -63,8 +66,15 @@ if (storageMigrationIndex < 0 || productionDispatchIndex <= storageMigrationInde
   console.error('[telegram-production-release-contract] atomic personal Telegram storage migration must precede Production deployment');
   process.exit(1);
 }
-if (/\b(?:PROD_DATABASE_URL|DATABASE_URL|POSTGRES_URL)\b/.test(source)) {
-  console.error('[telegram-production-release-contract] Production workflow must reuse the server connection without adding a database secret');
+const productionDbSecretReferences = source.match(/secrets\.PROD_DATABASE_URL/g) ?? [];
+if (productionDbSecretReferences.length !== 1) {
+  console.error('[telegram-production-release-contract] PROD_DATABASE_URL must be referenced exactly once from the protected Production environment');
+  process.exit(1);
+}
+if (/PROD_DATABASE_URL=%q/.test(source)
+  || /printf\s+'?%q'?\s+"?\$PROD_DATABASE_URL"?/.test(source)
+  || /echo\s+"?\$PROD_DATABASE_URL"?/.test(source)) {
+  console.error('[telegram-production-release-contract] Production DB secret must travel only through encrypted SSH stdin, never argv or logs');
   process.exit(1);
 }
 
@@ -150,7 +160,7 @@ if (exactCommandMatches.length !== 1) {
   process.exit(1);
 }
 
-const secretNames = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'];
+const secretNames = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'PROD_DATABASE_URL'];
 for (const name of secretNames) {
   const outputPattern = new RegExp(`(?:GITHUB_OUTPUT|GITHUB_STEP_SUMMARY)[^\\n]*${name}`, 'i');
   if (outputPattern.test(source) || outputPattern.test(deploySource)) {
@@ -159,4 +169,4 @@ for (const name of secretNames) {
   }
 }
 
-console.log('[telegram-production-release-contract] owner gate, exact-main CI, staging evidence, canary fail-closed behavior, production Telegram activation, runtime identity, worker startup, sanitized Telegram proof, and zero-trading-authority contracts verified');
+console.log('[telegram-production-release-contract] owner gate, exact-main CI, staging evidence, stdin-only Production DB handoff, canary fail-closed behavior, production Telegram activation, runtime identity, worker startup, sanitized Telegram proof, and zero-trading-authority contracts verified');
