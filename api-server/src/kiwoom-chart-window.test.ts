@@ -404,6 +404,49 @@ test('KR 1D public Yahoo hedge can satisfy the chart without a second Kiwoom pas
   assert.ok(yahooCalls >= 1);
 });
 
+test('KR 1D whole provider hedge terminates at the existing interactive deadline', async () => {
+  let chartCalls = 0;
+  let yahooCalls = 0;
+  const neverSettles = new Promise<Response>(() => {});
+  const mockFetch = (async (input: string | URL | Request) => {
+    const url = typeof input === 'string'
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+
+    if (url.endsWith('/oauth2/token')) {
+      return jsonResponse({ return_code: 0, return_msg: 'OK', token: 'test-token' });
+    }
+    if (url.endsWith('/api/dostk/chart')) {
+      chartCalls += 1;
+      return jsonResponse({ return_code: 0, rows: chartRows(1) });
+    }
+    if (/query[12]\.finance\.yahoo\.com\/v8\/finance\/chart\/005930\.KS/.test(url)) {
+      yahooCalls += 1;
+      return neverSettles;
+    }
+    throw new Error(`unexpected chart hard-deadline URL: ${url}`);
+  }) as typeof fetch;
+
+  await new Promise((resolve) => setTimeout(resolve, 320));
+
+  await withMockKiwoom(mockFetch, async () => {
+    const startedAt = Date.now();
+    const result = await MarketDataService.getCandlesMeta('005930', '1D');
+    const elapsedMs = Date.now() - startedAt;
+
+    assert.equal(result.provider, 'none');
+    assert.equal(result.candles.length, 0);
+    assert.equal(result.fallbackFrom?.provider, 'kiwoom');
+    assert.equal(result.fallbackFrom?.reason, 'DEADLINE_REACHED');
+    assert.ok(elapsedMs < APP_KR_INTRADAY_DEADLINE_MS + 750);
+  });
+
+  assert.equal(chartCalls, 1);
+  assert.ok(yahooCalls >= 1);
+});
+
 test('interactive fallback classification keeps deadline/abort/upstream timeout distinct', async () => {
   const { readFile } = await import('node:fs/promises');
   const cwd = process.cwd();
@@ -422,4 +465,5 @@ test('interactive fallback classification keeps deadline/abort/upstream timeout 
     /if \(isBoundedKrInteractiveRequest\(ticker, timeframe\)\) \{\s*return getBoundedKrInteractiveCandlesMeta\(ticker, timeframe\);\s*\}/,
   );
   assert.match(source, /KR_INTERACTIVE_TIMEFRAMES[\s\S]*'1D'/);
+  assert.match(source, /Promise\.race\(\[\s*Promise\.any\(\[kiwoomAttempt, yahooAttempt\]\),\s*terminalDeadline,\s*\]\)/);
 });
