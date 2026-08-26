@@ -19,6 +19,7 @@ const POSTGRES_URI_PATTERN = /^postgres(?:ql)?:\/\//i;
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const expectedActiveSha = String(process.env.EXPECTED_ACTIVE_SHA ?? '').trim().toLowerCase();
 const approvedTargetSha = String(process.env.APPROVED_TARGET_SHA ?? '').trim().toLowerCase();
+const transientProductionDatabaseUrl = String(process.env.PROD_DATABASE_URL ?? '').trim();
 
 function fail(classification) {
   console.error(`[production-personal-telegram-storage] ${classification}`);
@@ -118,8 +119,8 @@ function productionDatabaseTarget(raw, projectRef) {
   };
 }
 
-function resolveProductionPostgresConnection(runtime, projectRef) {
-  const values = Object.values(runtime)
+function resolveProductionPostgresConnection(runtime, projectRef, transientDatabaseUrl) {
+  const values = [transientDatabaseUrl, ...Object.values(runtime)]
     .filter((value) => typeof value === 'string')
     .map((value) => value.trim())
     .filter((value) => POSTGRES_URI_PATTERN.test(value));
@@ -183,7 +184,7 @@ try {
 } catch {
   fail('production_project_mismatch');
 }
-const database = resolveProductionPostgresConnection(runtime, projectRef);
+const database = resolveProductionPostgresConnection(runtime, projectRef, transientProductionDatabaseUrl);
 
 const migrationPaths = [
   'api-server/supabase/migrations/2026081501_personal_telegram_storage.sql',
@@ -301,6 +302,7 @@ const sql = [
 
 const baseEnv = { ...process.env };
 for (const key of Object.keys(baseEnv)) if (key.startsWith('PG')) delete baseEnv[key];
+delete baseEnv.PROD_DATABASE_URL;
 const result = spawnSync('psql', [
   '-X',
   '--no-psqlrc',
