@@ -91,6 +91,34 @@ test('member watchlist signal goes only through the linked-user personal policy 
   expect(alerts.every((alert) => alert.details?.includes('실제 주문/체결 아님'))).toBe(true);
 });
 
+test('member watchlist fanout is bounded and isolates a single delivery failure', async () => {
+  let active = 0;
+  let maxActive = 0;
+  const subscribers = Array.from({ length: 17 }, (_, index) => ({ userId: `user-${index}` }));
+
+  const result = await deliverMemberWatchlistTelegramForSignal(baseSignal, {
+    findSubscribers: async () => subscribers,
+    deliver: async (input) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active -= 1;
+      if (input.userId === 'user-9') throw new Error('isolated delivery failure');
+      return delivered(input.userId);
+    },
+  }, { MEMBER_WATCHLIST_TELEGRAM_PRODUCER_ENABLED: 'true' });
+
+  expect(result).toMatchObject({
+    reason: 'PARTIAL',
+    matched: 17,
+    attempted: 17,
+    delivered: 16,
+    failed: 1,
+  });
+  expect(maxActive).toBeGreaterThan(1);
+  expect(maxActive).toBeLessThanOrEqual(8);
+});
+
 test('stock/spot SHORT is never promoted into a new-entry personal Telegram signal', async () => {
   let searches = 0;
   const findSubscribers = async () => {
@@ -137,11 +165,15 @@ test('crypto futures LONG and SHORT remain independent eligible directions', asy
   expect(signalTypes).toEqual(['LONG', 'SHORT']);
 });
 
-test('member ownership is auth/RLS based and client identity overrides are rejected', () => {
+test('member ownership, active membership, and delivery boundaries are fail-closed', () => {
   const root = repositoryRoot();
   const route = fs.readFileSync(path.join(root, 'api-server/src/routes/member-watchlist.ts'), 'utf8');
   const migration = fs.readFileSync(
     path.join(root, 'api-server/supabase/migrations/2026082704_member_watchlist_items.sql'),
+    'utf8',
+  );
+  const service = fs.readFileSync(
+    path.join(root, 'api-server/src/services/member-watchlist.service.ts'),
     'utf8',
   );
   const sync = fs.readFileSync(path.join(root, 'stock-analyzer/src/lib/watchlist-sync.ts'), 'utf8');
@@ -155,10 +187,15 @@ test('member ownership is auth/RLS based and client identity overrides are rejec
   expect(route).not.toContain('req.body.userId');
   expect(migration).toContain('auth.uid() = user_id');
   expect(migration).toContain("'UNRESOLVED'");
+  expect(service).toContain(".from('profiles')");
+  expect(service).toContain(".eq('status', 'approved')");
+  expect(service).toContain('MAX_PROFILE_LOOKUP_BATCH = 200');
   expect(sync).toContain("request('/member-watchlist/sync'");
   expect(sync).not.toContain('deviceId:');
   expect(sync).not.toContain('userId:');
   expect(producer).toContain("MEMBER_WATCHLIST_TELEGRAM_PRODUCER_ENABLED === 'true'");
+  expect(producer).toContain('MAX_MEMBER_WATCHLIST_DELIVERY_CONCURRENCY = 8');
+  expect(producer).toContain('Promise.allSettled');
   expect(producer).toContain('deliverPersonalTelegramAlert');
   expect(producer).not.toContain('sendTelegramAlert');
 });
