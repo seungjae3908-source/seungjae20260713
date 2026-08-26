@@ -14,6 +14,7 @@ import {
   type MemberAdministrationProfile,
   type MemberChangeRequest,
 } from '../services/member-administration.service';
+import { bindCanonicalStrategyHealth } from '../services/strategy-health-research-adapter.service';
 
 const router = Router();
 router.use(requireAuthenticated, requireAdmin);
@@ -263,7 +264,10 @@ router.get('/research/overview', async (_req: AuthenticatedRequest, res) => {
         message: 'Research Dashboard 안전 계약을 확인할 수 없습니다.',
       });
     }
-    return res.json(payload);
+    return res.json({
+      ...payload,
+      strategyHealth: bindCanonicalStrategyHealth(payload),
+    });
   } catch {
     return res.status(503).json({
       error: 'RESEARCH_DASHBOARD_UNAVAILABLE',
