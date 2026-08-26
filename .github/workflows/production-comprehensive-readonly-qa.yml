@@ -8,6 +8,7 @@ on:
       - stock-analyzer/e2e/production-comprehensive-readonly-qa.spec.ts
       - stock-analyzer/e2e/production-mobile-scroll-readonly-qa.spec.ts
       - stock-analyzer/e2e/production-critical-http-readonly-qa.spec.ts
+      - stock-analyzer/e2e/production-performance-readonly-qa.spec.ts
       - stock-analyzer/e2e/support/production-readonly-policy.ts
   workflow_dispatch:
     inputs:
@@ -24,13 +25,39 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  static-contract:
+    name: Validate Production comprehensive QA target and approval gate
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify official target and dispatch-only Production browsing
+        run: |
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const workflow = fs.readFileSync('.github/workflows/production-comprehensive-readonly-qa.yml', 'utf8');
+          const liveJob = workflow.split('  production-comprehensive-readonly:')[1] ?? '';
+
+          if (!liveJob.includes("if: github.event_name == 'workflow_dispatch'")) {
+            throw new Error('Live comprehensive QA must remain explicit-dispatch only');
+          }
+          if (!liveJob.includes('environment: production')) {
+            throw new Error('Live comprehensive QA must remain protected by the production environment');
+          }
+          if (!liveJob.includes('PRODUCTION_BASE_URL: https://lsj119.com')) {
+            throw new Error('Live comprehensive QA must target the official Production hostname');
+          }
+          NODE
+
   production-comprehensive-readonly:
     name: Real Production PC/mobile comprehensive read-only QA
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 80
     environment: production
     env:
-      PRODUCTION_BASE_URL: https://lsj119.duckdns.org
+      PRODUCTION_BASE_URL: https://lsj119.com
       PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
       PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
       PRODUCTION_READONLY_E2E: "true"
@@ -102,7 +129,8 @@ jobs:
             echo '- desktop search matrix: 20 symbols per market (80 total)'
             echo '- mobile search sample: 5 symbols per market (20 total)'
             echo '- chart matrix: 4 markets x 8 timeframes (32 actual UI transitions)'
-            echo '- route/layout sweep: desktop 1440/1024, mobile 320/360/390/412/430'
+            echo '- route/layout sweep: desktop 1920/1440/1024, Galaxy Fold-class 768, tablet 800, mobile 320/360/390/412/430'
+            echo '- performance evidence: TTFB / FCP / LCP / CLS plus same-origin API p50/p95/p99; evidence-only, no guessed budget'
             echo '- checks: finite loading, root/internal scroll, overlap, fixed-nav occlusion, horizontal overflow, safe tabs, console/page/request failures'
             echo '- authenticated same-origin GET 401/403/5xx: blocking failure on critical routes'
             echo '- latest-head only: superseded pending QA runs are cancelled by concurrency'

@@ -149,6 +149,11 @@ export function closePosition(state: PaperTradingState, action: ClosePaperPositi
   const at = toIso(action.at, now);
   const position = state.positions.find((item) => item.id === action.positionId);
   if (!position) throw new PaperTradingError('POSITION_NOT_FOUND', '청산할 모의포지션을 찾을 수 없습니다.');
+  const positionSymbol = String(position.symbol ?? '').trim().toUpperCase();
+  const marketSymbol = String(action.market.symbol ?? '').trim().toUpperCase();
+  if (!positionSymbol || marketSymbol !== positionSymbol) {
+    throw new PaperTradingError('MARKET_SYMBOL_MISMATCH', '모의포지션 종목과 청산 시장 데이터 종목이 일치하지 않습니다.');
+  }
   if (action.market.status !== 'live' || !isFresh(action.market.updatedAt, now, MARKET_FRESHNESS_MS)) {
     throw new PaperTradingError('DATA_NOT_LIVE', '실시간 시장 데이터가 아니므로 모의청산을 처리하지 않습니다.');
   }

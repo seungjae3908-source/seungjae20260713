@@ -546,6 +546,8 @@ export async function runPaperForwardScheduleCli(env = process.env, {
               naturalFirstZeroReason: paperSource?.naturalFirstZeroReason ?? null,
               naturalEvidenceIdentity: paperSource?.naturalEvidenceIdentity ?? null,
               naturalRuntimeSha: paperSource?.naturalRuntimeSha ?? null,
+              authoritativeFirstZeroReasonEvidenceByStage:
+                paperSource?.authoritativeFirstZeroReasonEvidenceByStage ?? {},
             });
           }
           return evidence;
@@ -596,6 +598,8 @@ export async function runPaperForwardScheduleCli(env = process.env, {
       naturalStrategySha: authoritativeRuntimeMeasurement?.naturalRuntimeSha ?? researchCodeSha,
       naturalRuntimeSha: researchCodeSha,
       naturalDatasetIdentity: authoritativeRuntimeMeasurement?.naturalEvidenceIdentity ?? null,
+      authoritativeFirstZeroReasonEvidenceByStage:
+        authoritativeRuntimeMeasurement?.authoritativeFirstZeroReasonEvidenceByStage ?? {},
       authoritativeRuntimePackage: authoritativeRuntimePackageAudit,
       paperStateTransport: Object.freeze({
         status: paperStateTransportStatus,
