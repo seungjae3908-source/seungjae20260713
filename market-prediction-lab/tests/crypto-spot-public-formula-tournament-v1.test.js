@@ -376,7 +376,8 @@ test("Bitget public OHLCV runs through Historical/OOS/Purged/WF/Cost/Regime and 
   const candidate = candidates[0];
   const byStage = new Map(candidate.stageRecords.map((record) => [record.stage, record]));
   for (const stage of ["FORMULA_CANDIDATE", "SANITY_CHECK", "HISTORICAL_BACKTEST", "OOS", "PURGED_OOS", "WALK_FORWARD", "COST_STRESS", "REGIME_STRESS"]) {
-    assert.equal(byStage.get(stage)?.status, "PASS", stage);
+    const stageRecord = byStage.get(stage);
+    assert.equal(stageRecord?.status, "PASS", `${stage}: ${JSON.stringify({ stageRecord, candidateFailure: candidate.failure })}`);
   }
   assert.equal(candidate.failure.failedStage, "STATISTICAL_FIREWALL");
   assert.equal(candidate.failure.failureCode, "STATISTICAL_EVIDENCE_MISSING");
