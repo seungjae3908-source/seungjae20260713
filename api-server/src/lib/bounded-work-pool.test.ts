@@ -5,7 +5,17 @@ import path from 'node:path';
 import {
   BoundedWorkTimeoutError,
   runBoundedWorkPool,
+  summarizeBoundedWorkAvailability,
 } from './bounded-work-pool';
+import {
+  PROCESS_WIDE_PROVIDER_ADMISSION_DEFAULTS,
+  PROVIDER_ADMISSION_CONFIG_LIMITS,
+  PROVIDER_ADMISSION_TELEMETRY_LIMITS,
+  ProviderAdmissionControl,
+  ProviderAdmissionError,
+  resolveProviderAdmissionDefaults,
+  type ProviderAdmissionIdentity,
+} from './provider-admission-control';
 import {
   collectMarketListingWork,
   MARKET_LISTING_CONCURRENCY,
@@ -21,6 +31,44 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
       reject(signal.reason instanceof Error ? signal.reason : new Error('aborted'));
     }, { once: true });
   });
+}
+
+function admissionIdentity(
+  provider = 'test-provider',
+  domain = 'provider.test',
+  operationClass = 'test-work',
+): ProviderAdmissionIdentity {
+  return { provider, domain, operationClass };
+}
+
+function admissionControl(options: Partial<{
+  globalCapacity: number;
+  providerCapacity: number;
+  timeoutThreshold: number;
+  cooldownMs: number;
+  now: () => number;
+}> = {}): ProviderAdmissionControl {
+  return new ProviderAdmissionControl({
+    globalCapacity: options.globalCapacity ?? 4,
+    providerCapacity: options.providerCapacity ?? 2,
+    timeoutThreshold: options.timeoutThreshold,
+    cooldownMs: options.cooldownMs ?? 20,
+    now: options.now,
+  });
+}
+
+async function flushSettlements(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+async function completeAdmission(
+  control: ProviderAdmissionControl,
+  identity: ProviderAdmissionIdentity,
+): Promise<void> {
+  const execution = control.start(identity, async () => undefined);
+  await execution.task;
+  execution.lease.markCompleted();
 }
 
 test('bounded worker pool completes normal work without exceeding concurrency', async () => {
@@ -69,6 +117,49 @@ test('per-item timeout is explicit and aborts the timed-out worker signal', asyn
   assert.equal(result.rejectedCount, 0);
   assert.equal(abortedSignals, 2);
   assert.ok(result.outcomes.filter((item) => item.status === 'timed_out').every((item) => item.reason instanceof BoundedWorkTimeoutError));
+});
+
+test('timed-out lanes are not reused while non-cooperative work is still running', async () => {
+  const started: number[] = [];
+  const releases: Array<() => void> = [];
+  let active = 0;
+  let observedMaximum = 0;
+
+  const result = await runBoundedWorkPool(
+    [0, 1, 2, 3, 4],
+    async (item) => {
+      started.push(item);
+      active += 1;
+      observedMaximum = Math.max(observedMaximum, active);
+      try {
+        await new Promise<void>((resolve) => {
+          releases.push(resolve);
+        });
+        return item;
+      } finally {
+        active -= 1;
+      }
+    },
+    { concurrency: 2, deadlineMs: 200, itemTimeoutMs: 25 },
+  );
+
+  try {
+    assert.deepEqual(started, [0, 1]);
+    assert.equal(result.startedCount, 2);
+    assert.equal(result.timedOutCount, 2);
+    assert.equal(result.fulfilledCount, 0);
+    assert.equal(result.rejectedCount, 0);
+    assert.equal(result.deadlineReached, true);
+    assert.equal(result.maxConcurrency, 2);
+    assert.equal(observedMaximum, 2);
+    assert.equal(active, 2);
+    assert.deepEqual(result.outcomes.map((item) => item.index), [0, 1]);
+  } finally {
+    for (const release of releases) release();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+
+  assert.equal(active, 0);
 });
 
 test('global deadline prevents new work from starting after the budget is exhausted', async () => {
@@ -134,6 +225,776 @@ test('external abort stops new work and aborts active workers', async () => {
   assert.equal(result.aborted, true);
   assert.ok(result.startedCount <= 3);
   assert.ok(started.length <= 3);
+});
+
+test('process-wide admission bounds repeated independent pools and drains late resolves', async () => {
+  const control = admissionControl({ timeoutThreshold: 2, cooldownMs: 100 });
+  const identity = admissionIdentity('scanner', 'kr', 'asset-scan');
+  const releases: Array<() => void> = [];
+  const physicalAfterEachPool: number[] = [];
+  let physicalActive = 0;
+  let physicalHighWater = 0;
+
+  const runPool = () => runBoundedWorkPool(
+    [0, 1],
+    async () => {
+      physicalActive += 1;
+      physicalHighWater = Math.max(physicalHighWater, physicalActive);
+      try {
+        await new Promise<void>((resolve) => releases.push(resolve));
+      } finally {
+        physicalActive -= 1;
+      }
+    },
+    {
+      concurrency: 2,
+      deadlineMs: 40,
+      itemTimeoutMs: 10,
+      admission: { control, identity },
+    },
+  );
+
+  const results = [];
+  for (let index = 0; index < 3; index += 1) {
+    results.push(await runPool());
+    physicalAfterEachPool.push(control.snapshot().physicalOutstanding);
+  }
+
+  assert.deepEqual(physicalAfterEachPool, [2, 2, 2]);
+  assert.equal(physicalHighWater, 2);
+  assert.equal(results[0].timedOutCount, 2);
+  assert.equal(results[1].rejectedCount, 2);
+  assert.equal(results[2].rejectedCount, 2);
+  assert.ok(
+    [...results[1].outcomes, ...results[2].outcomes]
+      .every((outcome) => outcome.reason instanceof ProviderAdmissionError
+        && outcome.reason.code === 'CIRCUIT_OPEN'),
+  );
+  assert.equal(control.snapshot().timedOutOutstanding, 2);
+
+  for (const release of releases) release();
+  await flushSettlements();
+  const drained = control.snapshot();
+  assert.equal(drained.physicalOutstanding, 0);
+  assert.equal(drained.timedOutOutstanding, 0);
+  assert.equal(drained.lateSettledTotal, 2);
+});
+
+test('parallel requests creating separate pools share the configured provider capacity', async () => {
+  const control = admissionControl({
+    globalCapacity: 5,
+    providerCapacity: 3,
+    timeoutThreshold: 3,
+  });
+  const identity = admissionIdentity('scanner', 'us', 'asset-scan');
+  const releases: Array<() => void> = [];
+  let physicalActive = 0;
+  let physicalHighWater = 0;
+
+  const request = () => runBoundedWorkPool(
+    [0, 1],
+    async () => {
+      physicalActive += 1;
+      physicalHighWater = Math.max(physicalHighWater, physicalActive);
+      try {
+        await new Promise<void>((resolve) => releases.push(resolve));
+      } finally {
+        physicalActive -= 1;
+      }
+    },
+    {
+      concurrency: 2,
+      deadlineMs: 50,
+      itemTimeoutMs: 12,
+      admission: { control, identity },
+    },
+  );
+
+  const results = await Promise.all([request(), request(), request(), request()]);
+  assert.equal(physicalHighWater, 3);
+  assert.equal(control.snapshot().physicalOutstanding, 3);
+  assert.equal(control.snapshot().physicalOutstandingHighWater, 3);
+  assert.equal(control.snapshot().providers[0]?.physicalOutstandingHighWater, 3);
+  assert.equal(results.reduce((sum, result) => sum + result.timedOutCount, 0), 3);
+  assert.ok(results.reduce((sum, result) => sum + result.rejectedCount, 0) >= 1);
+
+  for (const release of releases) release();
+  await flushSettlements();
+  assert.equal(control.snapshot().physicalOutstanding, 0);
+});
+
+test('a permanently hung provider remains observable while another provider domain stays available', async () => {
+  const control = admissionControl({ timeoutThreshold: 2, cooldownMs: 100 });
+  const hungIdentity = admissionIdentity('public-market', 'hung.example', 'quote');
+  const healthyIdentity = admissionIdentity('public-market', 'healthy.example', 'quote');
+  let healthyActive = 0;
+  let healthyHighWater = 0;
+
+  const hung = await runBoundedWorkPool(
+    [0, 1],
+    async () => new Promise<void>(() => undefined),
+    {
+      concurrency: 2,
+      deadlineMs: 40,
+      itemTimeoutMs: 10,
+      admission: { control, identity: hungIdentity },
+    },
+  );
+  const healthy = await runBoundedWorkPool(
+    [0, 1, 2, 3],
+    async (item, _index, signal) => {
+      healthyActive += 1;
+      healthyHighWater = Math.max(healthyHighWater, healthyActive);
+      try {
+        await delay(2, signal);
+        return item;
+      } finally {
+        healthyActive -= 1;
+      }
+    },
+    {
+      concurrency: 2,
+      deadlineMs: 100,
+      itemTimeoutMs: 30,
+      admission: { control, identity: healthyIdentity },
+    },
+  );
+
+  assert.equal(hung.timedOutCount, 2);
+  assert.equal(healthy.fulfilledCount, 4);
+  assert.equal(healthyHighWater, 2);
+  const snapshot = control.snapshot();
+  assert.equal(snapshot.physicalOutstanding, 2);
+  const hungProvider = snapshot.providers.find((item) => item.domain === 'hung.example');
+  const healthyProvider = snapshot.providers.find((item) => item.domain === 'healthy.example');
+  assert.equal(hungProvider?.circuitState, 'open');
+  assert.equal(hungProvider?.timedOutOutstanding, 2);
+  assert.equal(healthyProvider?.circuitState, 'closed');
+  assert.equal(healthyProvider?.physicalOutstanding, 0);
+});
+
+test('capacity exhaustion is synchronous and never queues new work', async () => {
+  const control = admissionControl();
+  const identity = admissionIdentity('scanner', 'kr', 'quote');
+  const releases: Array<() => void> = [];
+  let rejectedTaskStarted = false;
+  const first = control.start(identity, () => new Promise<void>((resolve) => releases.push(resolve)));
+  const second = control.start(identity, () => new Promise<void>((resolve) => releases.push(resolve)));
+
+  assert.throws(
+    () => control.start(identity, async () => { rejectedTaskStarted = true; }),
+    (error: unknown) => error instanceof ProviderAdmissionError
+      && error.code === 'CAPACITY_EXHAUSTED',
+  );
+  assert.equal(rejectedTaskStarted, false);
+  assert.equal(control.snapshot().rejectedCapacityTotal, 1);
+
+  await Promise.resolve();
+  for (const release of releases) release();
+  await Promise.all([first.task, second.task]);
+  first.lease.markCompleted();
+  second.lease.markCompleted();
+  assert.equal(control.snapshot().physicalOutstanding, 0);
+});
+
+test('circuit opens on a full timed-out partition and a bounded half-open success recovers it', async () => {
+  let fakeNow = 0;
+  const control = admissionControl({
+    timeoutThreshold: 2,
+    cooldownMs: 100,
+    now: () => fakeNow,
+  });
+  const identity = admissionIdentity('scanner', 'kr', 'quote');
+  const releases: Array<() => void> = [];
+  const timedOut = await runBoundedWorkPool(
+    [0, 1],
+    async () => new Promise<void>((resolve) => releases.push(resolve)),
+    {
+      concurrency: 2,
+      deadlineMs: 40,
+      itemTimeoutMs: 10,
+      admission: { control, identity },
+    },
+  );
+
+  assert.equal(timedOut.timedOutCount, 2);
+  assert.equal(control.snapshot().providers[0]?.circuitState, 'open');
+  assert.equal(control.snapshot().circuitTripTotal, 1);
+  assert.throws(
+    () => control.start(identity, async () => undefined),
+    (error: unknown) => error instanceof ProviderAdmissionError
+      && error.code === 'CIRCUIT_OPEN',
+  );
+
+  for (const release of releases) release();
+  await flushSettlements();
+  fakeNow = 100;
+  const probe = control.start(identity, async () => 'recovered');
+  assert.equal(await probe.task, 'recovered');
+  probe.lease.markCompleted();
+  const recovered = control.snapshot();
+  assert.equal(recovered.providers[0]?.circuitState, 'closed');
+  assert.equal(recovered.physicalOutstanding, 0);
+});
+
+test('late provider rejection is handled without process-level rejection or exception leakage', async () => {
+  const control = admissionControl({ timeoutThreshold: 1 });
+  const identity = admissionIdentity('scanner', 'kr', 'late-reject');
+  let rejectLate!: (reason: Error) => void;
+  let unhandledRejections = 0;
+  let uncaughtExceptions = 0;
+  const onUnhandled = () => { unhandledRejections += 1; };
+  const onUncaught = () => { uncaughtExceptions += 1; };
+  process.on('unhandledRejection', onUnhandled);
+  process.on('uncaughtException', onUncaught);
+
+  try {
+    const result = await runBoundedWorkPool(
+      [0],
+      async () => new Promise<void>((_resolve, reject) => { rejectLate = reject; }),
+      {
+        concurrency: 1,
+        deadlineMs: 40,
+        itemTimeoutMs: 10,
+        admission: { control, identity },
+      },
+    );
+    assert.equal(result.timedOutCount, 1);
+    rejectLate(new Error('late provider rejection'));
+    await flushSettlements();
+    assert.equal(unhandledRejections, 0);
+    assert.equal(uncaughtExceptions, 0);
+    assert.equal(control.snapshot().lateSettledTotal, 1);
+    assert.equal(control.snapshot().physicalOutstanding, 0);
+  } finally {
+    process.removeListener('unhandledRejection', onUnhandled);
+    process.removeListener('uncaughtException', onUncaught);
+  }
+});
+
+test('mixed cooperative and non-cooperative work preserves fast progress and eventual drain', async () => {
+  const control = admissionControl({
+    globalCapacity: 7,
+    providerCapacity: 5,
+    timeoutThreshold: 5,
+  });
+  const identity = admissionIdentity('mixed-provider', 'mixed.test', 'mixed-work');
+  let releaseLateResolve!: () => void;
+  let rejectLate!: (reason: Error) => void;
+  const completed: string[] = [];
+  let physicalActive = 0;
+  let physicalHighWater = 0;
+  const work = await runBoundedWorkPool(
+    ['fast', 'slow', 'cooperative-timeout', 'late-resolve', 'late-reject'],
+    async (item, _index, signal) => {
+      physicalActive += 1;
+      physicalHighWater = Math.max(physicalHighWater, physicalActive);
+      try {
+        if (item === 'fast') {
+          completed.push(item);
+          return item;
+        }
+        if (item === 'slow') {
+          await delay(5, signal);
+          completed.push(item);
+          return item;
+        }
+        if (item === 'cooperative-timeout') {
+          await delay(100, signal);
+          return item;
+        }
+        if (item === 'late-resolve') {
+          await new Promise<void>((resolve) => { releaseLateResolve = resolve; });
+          return item;
+        }
+        await new Promise<void>((_resolve, reject) => { rejectLate = reject; });
+        return item;
+      } finally {
+        physicalActive -= 1;
+      }
+    },
+    {
+      concurrency: 3,
+      deadlineMs: 100,
+      itemTimeoutMs: 20,
+      admission: { control, identity },
+    },
+  );
+
+  assert.deepEqual(completed, ['fast', 'slow']);
+  assert.equal(work.fulfilledCount, 2);
+  assert.equal(work.timedOutCount, 3);
+  assert.equal(physicalHighWater, 3);
+  await flushSettlements();
+  assert.equal(control.snapshot().physicalOutstanding, 2);
+  assert.equal(control.snapshot().lateSettledTotal, 1);
+  releaseLateResolve();
+  rejectLate(new Error('late mixed rejection'));
+  await flushSettlements();
+  assert.equal(control.snapshot().physicalOutstanding, 0);
+  assert.equal(control.snapshot().lateSettledTotal, 3);
+});
+
+test('outstanding age and timed-out physical work remain visible until the underlying task settles', async () => {
+  let fakeNow = 100;
+  const control = admissionControl({ timeoutThreshold: 1, now: () => fakeNow });
+  const identity = admissionIdentity('scanner', 'kr', 'age-proof');
+  let release!: () => void;
+  const execution = control.start(
+    identity,
+    () => new Promise<void>((resolve) => { release = resolve; }),
+  );
+
+  await Promise.resolve();
+  fakeNow = 145;
+  assert.equal(control.snapshot().oldestOutstandingAgeMs, 45);
+  assert.equal(control.snapshot().physicalOutstandingHighWater, 1);
+  assert.equal(control.snapshot().providers[0]?.operations[0]?.physicalOutstandingHighWater, 1);
+  execution.lease.markTimedOut();
+  assert.equal(control.snapshot().timedOutOutstanding, 1);
+  assert.equal(control.snapshot().physicalOutstanding, 1);
+  release();
+  await execution.task;
+  await flushSettlements();
+  const settled = control.snapshot();
+  assert.equal(settled.oldestOutstandingAgeMs, 0);
+  assert.equal(settled.timedOutOutstanding, 0);
+  assert.equal(settled.physicalOutstanding, 0);
+  assert.equal(settled.lateSettledTotal, 1);
+});
+
+test('caller abort is logically terminal while non-cooperative physical work remains observable', async () => {
+  const control = admissionControl();
+  const identity = admissionIdentity('scanner', 'kr', 'caller-abort');
+  const caller = new AbortController();
+  let release!: () => void;
+  const promise = runBoundedWorkPool(
+    [0],
+    async () => new Promise<void>((resolve) => { release = resolve; }),
+    {
+      concurrency: 1,
+      deadlineMs: 200,
+      itemTimeoutMs: 150,
+      signal: caller.signal,
+      admission: { control, identity },
+    },
+  );
+
+  setTimeout(() => caller.abort(new Error('caller disconnected')), 5);
+  const result = await promise;
+  assert.equal(result.aborted, true);
+  assert.equal(result.rejectedCount, 1);
+  assert.equal(control.snapshot().admittedActive, 0);
+  assert.equal(control.snapshot().physicalOutstanding, 1);
+  assert.equal(control.snapshot().timedOutOutstanding, 0);
+  release();
+  await flushSettlements();
+  assert.equal(control.snapshot().physicalOutstanding, 0);
+  assert.equal(control.snapshot().lateSettledTotal, 1);
+});
+
+test('fast provider work retains configured parallelism without capacity rejection', async () => {
+  const control = admissionControl({
+    globalCapacity: 12,
+    providerCapacity: 6,
+    timeoutThreshold: 6,
+  });
+  const identity = admissionIdentity('fast-provider', 'fast.test', 'quote');
+  let active = 0;
+  let highWater = 0;
+  const result = await runBoundedWorkPool(
+    Array.from({ length: 18 }, (_, index) => index),
+    async (item, _index, signal) => {
+      active += 1;
+      highWater = Math.max(highWater, active);
+      try {
+        await delay(2, signal);
+        return item;
+      } finally {
+        active -= 1;
+      }
+    },
+    {
+      concurrency: 6,
+      deadlineMs: 200,
+      itemTimeoutMs: 50,
+      admission: { control, identity },
+    },
+  );
+
+  assert.equal(result.fulfilledCount, 18);
+  assert.equal(result.rejectedCount, 0);
+  assert.equal(highWater, 6);
+  assert.equal(control.snapshot().rejectedCapacityTotal, 0);
+  assert.equal(control.snapshot().physicalOutstanding, 0);
+});
+
+test('provider admission config rejects unsafe and excessive values at deterministic bounds', () => {
+  const valid = new ProviderAdmissionControl({
+    globalCapacity: PROVIDER_ADMISSION_CONFIG_LIMITS.globalCapacity.max,
+    providerCapacity: PROVIDER_ADMISSION_CONFIG_LIMITS.providerCapacity.max,
+    timeoutThreshold: PROVIDER_ADMISSION_CONFIG_LIMITS.timeoutThreshold.max,
+    cooldownMs: PROVIDER_ADMISSION_CONFIG_LIMITS.cooldownMs.max,
+  });
+  assert.equal(
+    valid.snapshot().configuredGlobalCapacity,
+    PROVIDER_ADMISSION_CONFIG_LIMITS.globalCapacity.max,
+  );
+
+  const invalidNumbers = [
+    0,
+    -1,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    Number.MAX_SAFE_INTEGER + 1,
+    1_000_000_000,
+  ];
+  for (const value of invalidNumbers) {
+    assert.throws(() => new ProviderAdmissionControl({
+      globalCapacity: value,
+      providerCapacity: 2,
+      timeoutThreshold: 2,
+      cooldownMs: 20,
+    }));
+    assert.throws(() => new ProviderAdmissionControl({
+      globalCapacity: 12,
+      providerCapacity: value,
+      timeoutThreshold: 1,
+      cooldownMs: 20,
+    }));
+  }
+  assert.throws(() => new ProviderAdmissionControl({
+    globalCapacity: 6,
+    providerCapacity: 6,
+    timeoutThreshold: 6,
+    cooldownMs: 20,
+  }), /lower than globalCapacity/);
+  assert.throws(() => new ProviderAdmissionControl({
+    globalCapacity: PROVIDER_ADMISSION_CONFIG_LIMITS.globalCapacity.max + 1,
+    providerCapacity: 2,
+    timeoutThreshold: 2,
+    cooldownMs: 20,
+  }));
+  assert.throws(() => new ProviderAdmissionControl({
+    globalCapacity: 64,
+    providerCapacity: PROVIDER_ADMISSION_CONFIG_LIMITS.providerCapacity.max + 1,
+    timeoutThreshold: 2,
+    cooldownMs: 20,
+  }));
+  assert.throws(() => new ProviderAdmissionControl({
+    globalCapacity: 64,
+    providerCapacity: 32,
+    timeoutThreshold: PROVIDER_ADMISSION_CONFIG_LIMITS.timeoutThreshold.max + 1,
+    cooldownMs: 20,
+  }));
+  assert.throws(() => new ProviderAdmissionControl({
+    globalCapacity: 12,
+    providerCapacity: 6,
+    timeoutThreshold: 6,
+    cooldownMs: PROVIDER_ADMISSION_CONFIG_LIMITS.cooldownMs.min - 1,
+  }));
+  assert.throws(() => new ProviderAdmissionControl({
+    globalCapacity: 12,
+    providerCapacity: 6,
+    timeoutThreshold: 6,
+    cooldownMs: PROVIDER_ADMISSION_CONFIG_LIMITS.cooldownMs.max + 1,
+  }));
+});
+
+test('malformed environment admission config falls back within the bounded contract', () => {
+  assert.deepEqual(resolveProviderAdmissionDefaults({
+    PROVIDER_ADMISSION_GLOBAL_CAPACITY: 'Infinity',
+    PROVIDER_ADMISSION_PROVIDER_CAPACITY: '1000000000',
+    PROVIDER_ADMISSION_TIMEOUT_THRESHOLD: 'NaN',
+    PROVIDER_ADMISSION_COOLDOWN_MS: '0',
+  }), {
+    globalCapacity: 12,
+    providerCapacity: 6,
+    timeoutThreshold: 6,
+    cooldownMs: 2_000,
+  });
+  assert.deepEqual(PROCESS_WIDE_PROVIDER_ADMISSION_DEFAULTS, {
+    globalCapacity: 12,
+    providerCapacity: 6,
+    timeoutThreshold: 6,
+    cooldownMs: 2_000,
+  });
+  assert.deepEqual(resolveProviderAdmissionDefaults({
+    PROVIDER_ADMISSION_GLOBAL_CAPACITY: '32',
+    PROVIDER_ADMISSION_PROVIDER_CAPACITY: '32',
+    PROVIDER_ADMISSION_TIMEOUT_THRESHOLD: '32',
+    PROVIDER_ADMISSION_COOLDOWN_MS: '10',
+  }), {
+    globalCapacity: 33,
+    providerCapacity: 32,
+    timeoutThreshold: 32,
+    cooldownMs: 10,
+  });
+});
+
+test('domain identity canonicalizes case and a single trailing dot into one partition', async () => {
+  const control = admissionControl({ globalCapacity: 2, providerCapacity: 1, timeoutThreshold: 1 });
+  let release!: () => void;
+  const first = control.start(
+    admissionIdentity('Provider-A', 'API.Example.Com.', 'Read'),
+    () => new Promise<void>((resolve) => { release = resolve; }),
+  );
+  assert.throws(
+    () => control.start(admissionIdentity('provider-a', 'api.example.com', 'read'), async () => undefined),
+    (error: unknown) => error instanceof ProviderAdmissionError
+      && error.code === 'CAPACITY_EXHAUSTED',
+  );
+  await Promise.resolve();
+  release();
+  await first.task;
+  first.lease.markCompleted();
+  assert.equal(control.snapshot().providers[0]?.provider, 'provider-a');
+  assert.equal(control.snapshot().providers[0]?.domain, 'api.example.com');
+});
+
+test('structured provider-domain keys cannot collide across delimiter boundaries', async () => {
+  const control = admissionControl({ globalCapacity: 3, providerCapacity: 1, timeoutThreshold: 1 });
+  const releases: Array<() => void> = [];
+  const left = control.start(
+    admissionIdentity('a:b', 'c', 'read'),
+    () => new Promise<void>((resolve) => releases.push(resolve)),
+  );
+  const right = control.start(
+    admissionIdentity('a', 'b:c', 'read'),
+    () => new Promise<void>((resolve) => releases.push(resolve)),
+  );
+  await Promise.resolve();
+  assert.equal(control.snapshot().providers.length, 2);
+  releases.forEach((release) => release());
+  await Promise.all([left.task, right.task]);
+  left.lease.markCompleted();
+  right.lease.markCompleted();
+});
+
+test('malformed provider admission identities fail closed before task start', () => {
+  const control = admissionControl();
+  let taskStarted = false;
+  const invalid = [
+    admissionIdentity('', 'api.example.com', 'read'),
+    admissionIdentity('provider', '', 'read'),
+    admissionIdentity('provider', '.', 'read'),
+    admissionIdentity('provider', 'api..example.com', 'read'),
+    admissionIdentity('provider', 'api.example.com..', 'read'),
+    admissionIdentity('provider', 'https://api.example.com', 'read'),
+    admissionIdentity('provider', 'api.example.com', 'read work'),
+  ];
+  for (const identity of invalid) {
+    assert.throws(() => control.start(identity, async () => { taskStarted = true; }));
+  }
+  assert.equal(taskStarted, false);
+});
+
+test('identity-less pools remain independent and explicit admission requires an identity', async () => {
+  const timedOut = await runBoundedWorkPool(
+    [0],
+    async () => new Promise<void>(() => undefined),
+    { concurrency: 1, deadlineMs: 40, itemTimeoutMs: 10 },
+  );
+  const healthy = await runBoundedWorkPool(
+    [0],
+    async () => 'healthy',
+    { concurrency: 1, deadlineMs: 40, itemTimeoutMs: 10 },
+  );
+  assert.equal(timedOut.timedOutCount, 1);
+  assert.equal(healthy.fulfilledCount, 1);
+
+  await assert.rejects(runBoundedWorkPool(
+    [0],
+    async () => undefined,
+    {
+      concurrency: 1,
+      deadlineMs: 40,
+      itemTimeoutMs: 10,
+      admission: { control: admissionControl() } as never,
+    },
+  ), /admission\.identity is required/);
+});
+
+test('settled provider and operation telemetry cardinality stays deterministically bounded', async () => {
+  const control = admissionControl();
+  for (let index = 0; index < 1_005; index += 1) {
+    await completeAdmission(
+      control,
+      admissionIdentity('cardinality', `node-${index}.example`, 'read'),
+    );
+  }
+  assert.equal(
+    control.snapshot().providers.length,
+    PROVIDER_ADMISSION_TELEMETRY_LIMITS.inactiveProviders,
+  );
+
+  for (let index = 0; index < 1_005; index += 1) {
+    await completeAdmission(
+      control,
+      admissionIdentity('operations', 'operations.example', `read-${index}`),
+    );
+  }
+  const operations = control.snapshot().providers
+    .find((item) => item.domain === 'operations.example')?.operations;
+  assert.equal(
+    operations?.length,
+    PROVIDER_ADMISSION_TELEMETRY_LIMITS.inactiveOperationsPerProvider,
+  );
+});
+
+test('active, open-circuit, timed-out and unresolved late-settle rows are never evicted', async () => {
+  const control = admissionControl({ globalCapacity: 4, providerCapacity: 2, timeoutThreshold: 1, cooldownMs: 100 });
+  let releaseActive!: () => void;
+  let releaseTimedOut!: () => void;
+  const active = control.start(
+    admissionIdentity('protected', 'active.example', 'read'),
+    () => new Promise<void>((resolve) => { releaseActive = resolve; }),
+  );
+  const timedOut = control.start(
+    admissionIdentity('protected', 'open.example', 'read'),
+    () => new Promise<void>((resolve) => { releaseTimedOut = resolve; }),
+  );
+  await Promise.resolve();
+  timedOut.lease.markTimedOut();
+
+  for (let index = 0; index < 300; index += 1) {
+    await completeAdmission(control, admissionIdentity('churn', `churn-${index}.example`, 'read'));
+  }
+  const protectedRows = control.snapshot().providers;
+  assert.ok(protectedRows.some((item) => item.domain === 'active.example' && item.physicalOutstanding === 1));
+  assert.ok(protectedRows.some((item) => item.domain === 'open.example'
+    && item.circuitState === 'open'
+    && item.timedOutOutstanding === 1
+    && item.physicalOutstanding === 1));
+
+  releaseActive();
+  releaseTimedOut();
+  await Promise.all([active.task, timedOut.task]);
+  active.lease.markCompleted();
+  await flushSettlements();
+  const lateRow = control.snapshot().providers.find((item) => item.domain === 'open.example');
+  assert.equal(lateRow?.circuitState, 'open');
+  assert.equal(lateRow?.lateSettledTotal, 1);
+  assert.equal(control.snapshot().lateSettledTotal, 1);
+});
+
+test('telemetry eviction preserves lifetime aggregates and deterministic recent activity', async () => {
+  const control = admissionControl({ globalCapacity: 4, providerCapacity: 2, timeoutThreshold: 2 });
+  const releases: Array<() => void> = [];
+  const first = control.start(
+    admissionIdentity('aggregate', 'aggregate.example', 'read'),
+    () => new Promise<void>((resolve) => releases.push(resolve)),
+  );
+  const second = control.start(
+    admissionIdentity('aggregate', 'aggregate.example', 'read'),
+    () => new Promise<void>((resolve) => releases.push(resolve)),
+  );
+  assert.throws(
+    () => control.start(admissionIdentity('aggregate', 'aggregate.example', 'read'), async () => undefined),
+    (error: unknown) => error instanceof ProviderAdmissionError
+      && error.code === 'CAPACITY_EXHAUSTED',
+  );
+  await Promise.resolve();
+  first.lease.markTimedOut();
+  releases.forEach((release) => release());
+  await Promise.all([first.task, second.task]);
+  second.lease.markCompleted();
+  await flushSettlements();
+  assert.equal(control.snapshot().lateSettledTotal, 1);
+  assert.equal(control.snapshot().rejectedCapacityTotal, 1);
+
+  for (let index = 0; index < PROVIDER_ADMISSION_TELEMETRY_LIMITS.inactiveProviders; index += 1) {
+    await completeAdmission(control, admissionIdentity('recent', `recent-${index}.example`, 'read'));
+  }
+  await completeAdmission(control, admissionIdentity('recent', 'recent-0.example', 'read'));
+  await completeAdmission(control, admissionIdentity('recent', 'recent-new.example', 'read'));
+  const snapshot = control.snapshot();
+  assert.equal(snapshot.lateSettledTotal, 1);
+  assert.equal(snapshot.rejectedCapacityTotal, 1);
+  assert.ok(!snapshot.providers.some((item) => item.domain === 'aggregate.example'));
+  assert.ok(snapshot.providers.some((item) => item.domain === 'recent-0.example'));
+  assert.ok(snapshot.providers.some((item) => item.domain === 'recent-new.example'));
+  assert.ok(!snapshot.providers.some((item) => item.domain === 'recent-1.example'));
+});
+
+test('capacity exhaustion remains explicit availability instead of empty success', async () => {
+  const control = admissionControl({ globalCapacity: 2, providerCapacity: 1, timeoutThreshold: 1 });
+  const identity = admissionIdentity('availability', 'capacity.example', 'read');
+  let release!: () => void;
+  const held = control.start(identity, () => new Promise<void>((resolve) => { release = resolve; }));
+  const result = await runBoundedWorkPool(
+    [0],
+    async () => null,
+    { concurrency: 1, deadlineMs: 40, itemTimeoutMs: 10, admission: { control, identity } },
+  );
+  assert.deepEqual(summarizeBoundedWorkAvailability(result, 1), {
+    partial: true,
+    failureCode: 'CAPACITY_EXHAUSTED',
+  });
+  await Promise.resolve();
+  release();
+  await held.task;
+  held.lease.markCompleted();
+});
+
+test('open circuit remains explicit availability instead of empty success', async () => {
+  const control = admissionControl({ globalCapacity: 2, providerCapacity: 1, timeoutThreshold: 1, cooldownMs: 100 });
+  const identity = admissionIdentity('availability', 'circuit.example', 'read');
+  let release!: () => void;
+  const seed = control.start(identity, () => new Promise<void>((resolve) => { release = resolve; }));
+  await Promise.resolve();
+  seed.lease.markTimedOut();
+  release();
+  await seed.task;
+  const result = await runBoundedWorkPool(
+    [0],
+    async () => null,
+    { concurrency: 1, deadlineMs: 40, itemTimeoutMs: 10, admission: { control, identity } },
+  );
+  assert.deepEqual(summarizeBoundedWorkAvailability(result, 1), {
+    partial: true,
+    failureCode: 'CIRCUIT_OPEN',
+  });
+});
+
+test('genuine empty work stays complete while mixed provider failure stays partial', async () => {
+  const empty = await runBoundedWorkPool(
+    [0],
+    async () => null,
+    { concurrency: 1, deadlineMs: 40, itemTimeoutMs: 10 },
+  );
+  assert.deepEqual(summarizeBoundedWorkAvailability(empty, 1), {
+    partial: false,
+    failureCode: null,
+  });
+
+  const mixed = await runBoundedWorkPool(
+    [0, 1],
+    async (item) => {
+      if (item === 1) throw new Error('provider failed');
+      return null;
+    },
+    { concurrency: 2, deadlineMs: 40, itemTimeoutMs: 10 },
+  );
+  assert.deepEqual(summarizeBoundedWorkAvailability(mixed, 2), {
+    partial: true,
+    failureCode: 'PROVIDER_FAILURE',
+  });
+});
+
+test('market information sections propagate admission availability without changing global API semantics', () => {
+  const source = readFileSync(
+    path.resolve(process.cwd(), 'api-server/src/services/market-information.service.ts'),
+    'utf8',
+  );
+  assert.match(source, /summarizeBoundedWorkAvailability\(pool/);
+  assert.match(source, /availability\.partial/);
+  assert.match(source, /errorCode:\s*newsResult\.value\.value\.availability\.failureCode/);
+  assert.match(source, /errorCode:\s*disclosureResult\.value\.value\.availability\.failureCode/);
+  assert.match(source, /providerRowsMessage\('뉴스'/);
+  assert.match(source, /providerRowsMessage\('공시'/);
+  assert.doesNotMatch(source, /status\(newsResult\.value\.stale,\s*false/);
+  assert.doesNotMatch(source, /status\(disclosureResult\.value\.stale,\s*false/);
 });
 
 test('market listing work collector preserves full results under bounded concurrency', async () => {
