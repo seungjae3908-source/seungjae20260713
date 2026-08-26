@@ -11,6 +11,8 @@ const repository = source('../api-server/src/features/user-broker-telegram/user-
 const service = source('../api-server/src/features/user-broker-telegram/user-broker-telegram.service.ts');
 const worker = source('../api-server/src/features/user-broker-telegram/user-broker-telegram.worker.ts');
 const personal = source('../api-server/src/services/personal-telegram-alert.service.ts');
+const productionMigrator = source('../ops/apply-production-personal-telegram-storage.mjs');
+const productionVerifier = source('../ops/verify-production-personal-telegram-storage.mjs');
 
 test('personal investment alerts reuse notification_deliveries instead of creating a competing queue', () => {
   expect(migration).toContain('alter table public.notification_deliveries');
@@ -57,4 +59,17 @@ test('the existing worker processes personal alerts with the same bounded retry 
   expect(service).toContain('destinationChatId: connection.telegramChatId');
   expect(service).toContain('duplicateWindowMs: 0');
   expect(service).toContain('cooldownMs: 0');
+});
+
+test('protected Production storage apply knows and verifies the generic outbox migration before app deploy', () => {
+  expect(productionMigrator).toContain('2026082701_personal_telegram_generic_outbox.sql');
+  expect(productionMigrator).toContain("'migrations_applied', 3");
+  expect(productionMigrator).toContain("'generic_outbox_verified', true");
+  expect(productionMigrator).toContain("array['delivery_kind', 'payload']");
+  expect(productionMigrator).toContain('notification_deliveries_kind_check');
+  expect(productionMigrator).toContain('notification_deliveries_payload_contract_check');
+  expect(productionVerifier).toContain('2026082701_personal_telegram_generic_outbox.sql');
+  expect(productionVerifier).toContain('value?.migrations_applied === 3');
+  expect(productionVerifier).toContain('value?.generic_outbox_verified === true');
+  expect(productionVerifier).toContain('storage migration must finish before Production deployment dispatch');
 });
