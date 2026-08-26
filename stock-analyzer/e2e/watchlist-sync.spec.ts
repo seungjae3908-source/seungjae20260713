@@ -1,7 +1,6 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
 
 const WATCHLIST_KEY = 'seungjae_watchlist_v1';
-const DEVICE_KEY = 'seungjae_device_id_v1';
 const CHANGE_EVENT = 'seungjae-watchlist-changed';
 
 type ServerItem = {
@@ -13,7 +12,6 @@ type ServerItem = {
 };
 
 type SyncPayload = {
-  deviceId: string;
   items: ServerItem[];
 };
 
@@ -33,30 +31,30 @@ async function installWatchlistApi(
   posts: SyncPayload[],
   reads: { count: number },
 ) {
-  await page.route('**/api/watchlist**', async (route: Route) => {
+  await page.route('**/api/member-watchlist**', async (route: Route) => {
     const request = route.request();
     const url = new URL(request.url());
-    if (!['/api/watchlist', '/api/watchlist/sync'].includes(url.pathname)) {
+    if (!['/api/member-watchlist', '/api/member-watchlist/sync'].includes(url.pathname)) {
       await route.continue();
       return;
     }
 
-    if (request.method() === 'GET' && url.pathname === '/api/watchlist') {
+    if (request.method() === 'GET' && url.pathname === '/api/member-watchlist') {
       reads.count += 1;
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ ok: true, items: serverItems }),
+        body: JSON.stringify({ ok: true, items: serverItems, identitySource: 'AUTHENTICATED_MEMBER' }),
       });
       return;
     }
 
-    if (request.method() === 'POST' && url.pathname === '/api/watchlist/sync') {
+    if (request.method() === 'POST' && url.pathname === '/api/member-watchlist/sync') {
       posts.push(request.postDataJSON() as SyncPayload);
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ ok: true, items: posts.at(-1)?.items ?? [] }),
+        body: JSON.stringify({ ok: true, items: posts.at(-1)?.items ?? [], identitySource: 'AUTHENTICATED_MEMBER' }),
       });
       return;
     }
@@ -67,10 +65,9 @@ async function installWatchlistApi(
 
 async function openCleanPage(page: Page) {
   await page.goto('/login');
-  await page.evaluate(({ watchlistKey, deviceKey }) => {
+  await page.evaluate((watchlistKey) => {
     localStorage.removeItem(watchlistKey);
-    localStorage.removeItem(deviceKey);
-  }, { watchlistKey: WATCHLIST_KEY, deviceKey: DEVICE_KEY });
+  }, WATCHLIST_KEY);
 }
 
 test('unchanged empty state does not POST on initial load or hard reload', async ({ page }) => {
@@ -91,13 +88,13 @@ test('unchanged empty state does not POST on initial load or hard reload', async
   expect(posts).toEqual([]);
 });
 
-test('server-only merge updates local cache without echoing a POST', async ({ page }) => {
+test('server-only member state updates local cache without echoing a POST', async ({ page }) => {
   const posts: SyncPayload[] = [];
   const reads = { count: 0 };
   const serverItems: ServerItem[] = [{
     ticker: 'AAPL',
     name: 'Apple',
-    market: 'US',
+    market: 'US_STOCK',
     currency: 'USD',
     targetPrice: 225,
   }];
@@ -115,13 +112,13 @@ test('server-only merge updates local cache without echoing a POST', async ({ pa
   expect(localItems).toEqual([{
     ticker: 'AAPL',
     name: 'Apple',
-    market: 'US',
+    market: 'US_STOCK',
     currency: 'USD',
     targetPrice: 225,
   }]);
 });
 
-test('rapid local changes coalesce into one canonical latest-state POST', async ({ page }) => {
+test('rapid local changes coalesce into one member-owned latest-state POST with no client identity', async ({ page }) => {
   const posts: SyncPayload[] = [];
   const reads = { count: 0 };
   await installWatchlistApi(page, [], posts, reads);
@@ -146,7 +143,8 @@ test('rapid local changes coalesce into one canonical latest-state POST', async 
   await expect.poll(() => posts.length, { timeout: 5_000 }).toBe(1);
   await page.waitForTimeout(1_000);
   expect(posts).toHaveLength(1);
-  expect(posts[0]?.deviceId).toBeTruthy();
+  expect(posts[0]).not.toHaveProperty('deviceId');
+  expect(posts[0]).not.toHaveProperty('userId');
   expect(posts[0]?.items).toEqual([
     {
       ticker: 'AAPL',
