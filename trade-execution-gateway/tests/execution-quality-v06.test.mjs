@@ -75,9 +75,9 @@ function fullCandidate(overrides = {}) {
   };
 }
 
-test("v0.7 preserves v0.6 TCA, explicit-cost, and parity preview contracts without live authority", () => {
+test("v0.8 preserves v0.6 TCA, explicit-cost, and parity preview contracts without live authority", () => {
   const contract = publicContract();
-  assert.equal(contract.safety.version, "0.7.0");
+  assert.equal(contract.safety.version, "0.8.0");
   assert.equal(contract.executionQuality.hardCodedBrokerFees, false);
   assert.equal(contract.executionQuality.hardCodedTaxes, false);
   assert.equal(contract.executionQuality.hardCodedFundingConvention, false);
