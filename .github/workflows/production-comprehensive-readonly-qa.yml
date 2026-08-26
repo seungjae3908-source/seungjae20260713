@@ -32,12 +32,14 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: Verify official target and dispatch-only Production browsing
+      - name: Verify official target, dispatch-only browsing, and sanitized evidence retention
         run: |
           node - <<'NODE'
           const fs = require('node:fs');
           const workflow = fs.readFileSync('.github/workflows/production-comprehensive-readonly-qa.yml', 'utf8');
-          const liveJob = workflow.split('  production-comprehensive-readonly:')[1] ?? '';
+          const config = fs.readFileSync('stock-analyzer/playwright.production-comprehensive.config.ts', 'utf8');
+          const liveJob = workflow.split('\n  production-comprehensive-readonly:\n')[1] ?? '';
+          const uploadStep = liveJob.split('\n      - name: Upload comprehensive QA evidence\n')[1] ?? '';
 
           if (!liveJob.includes("if: github.event_name == 'workflow_dispatch'")) {
             throw new Error('Live comprehensive QA must remain explicit-dispatch only');
@@ -47,6 +49,18 @@ jobs:
           }
           if (!liveJob.includes('PRODUCTION_BASE_URL: https://lsj119.com')) {
             throw new Error('Live comprehensive QA must target the official Production hostname');
+          }
+          if (!config.includes("trace: 'off'")) {
+            throw new Error('Authenticated Production QA must not retain Playwright traces');
+          }
+          if (!config.includes("screenshot: 'off'")) {
+            throw new Error('Authenticated Production QA must not retain raw screenshots');
+          }
+          if (!uploadStep.includes('stock-analyzer/production-comprehensive-artifacts')) {
+            throw new Error('Structured Production QA evidence must remain uploaded');
+          }
+          if (uploadStep.includes('stock-analyzer/test-results')) {
+            throw new Error('Raw authenticated Playwright test-results must not be uploaded');
           }
           NODE
 
@@ -134,6 +148,7 @@ jobs:
             echo '- checks: finite loading, root/internal scroll, overlap, fixed-nav occlusion, horizontal overflow, safe tabs, console/page/request failures'
             echo '- authenticated same-origin GET 401/403/5xx: blocking failure on critical routes'
             echo '- latest-head only: superseded pending QA runs are cancelled by concurrency'
+            echo '- retained evidence: structured production-comprehensive-artifacts only; raw trace/screenshot/test-results retention disabled'
             echo '- Production DB/app mutations: blocked'
             echo '- private provider/account live requests: blocked or mocked disconnected'
             echo '- actual order/cancel/amend/transfer/withdrawal authority: 0'
@@ -144,8 +159,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: production-comprehensive-readonly-${{ github.run_id }}
-          path: |
-            stock-analyzer/production-comprehensive-artifacts
-            stock-analyzer/test-results
+          path: stock-analyzer/production-comprehensive-artifacts
           if-no-files-found: warn
           retention-days: 14
