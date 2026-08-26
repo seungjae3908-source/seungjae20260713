@@ -9,7 +9,15 @@ import { normalizeCandleRows } from "../src/normalizers.js";
 import { buildTrainingRecords } from "../src/training-dataset.js";
 import { walkForwardSplit } from "../src/walk-forward.js";
 import { exportWalkForwardDataset } from "../src/dataset-export.js";
-import { preserveFutureModelReferenceEvidence } from "../src/model-reference-evidence.js";
+import {
+  buildCanonicalModelReferenceStrategyIdentity,
+  preserveFutureModelReferenceEvidence,
+} from "../src/model-reference-evidence.js";
+import {
+  DEPLOYED_INFERENCE_CONTRACT,
+  DEPLOYED_MODEL_WEIGHT,
+  DEPLOYED_RULE_WEIGHT,
+} from "../src/deployment-inference.js";
 import { BASELINE_MODEL } from "../src/tiny-model.js";
 import {
   calibrateTemperature,
@@ -21,6 +29,13 @@ import {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const CLASS_NAMES = Object.freeze(["bullish", "neutral", "bearish"]);
+const TRAINING_PARAMETERS = Object.freeze({
+  epochs: 520,
+  learningRate: 0.075,
+  l2: 0.003,
+  patience: 60,
+  calibration: "validation-temperature-scaling-v1",
+});
 const SUITE_SPECS = Object.freeze([
   Object.freeze({ id: "btcusdt-futures-15m-52d", group: "crypto-futures-15m", market: "CRYPTO_FUTURES", symbol: "BTCUSDT", timeframe: "15m", days: 52, lookback: 200, horizon: 8, stride: 4 }),
   Object.freeze({ id: "ethusdt-futures-15m-52d", group: "crypto-futures-15m", market: "CRYPTO_FUTURES", symbol: "ETHUSDT", timeframe: "15m", days: 52, lookback: 200, horizon: 8, stride: 4 }),
@@ -237,10 +252,10 @@ async function trainGroup({ group, datasets, outputRoot, candidateRoot, research
   const model = trainTinySoftmaxModel(split.train, {
     featureOrder: BASELINE_MODEL.featureOrder,
     id: `tiny-softmax-${group}-v1`,
-    epochs: 520,
-    learningRate: 0.075,
-    l2: 0.003,
-    patience: 60,
+    epochs: TRAINING_PARAMETERS.epochs,
+    learningRate: TRAINING_PARAMETERS.learningRate,
+    l2: TRAINING_PARAMETERS.l2,
+    patience: TRAINING_PARAMETERS.patience,
   });
   const calibrated = calibrateTemperature(split.validation, model);
   const baseline = evaluateStoredBaseline(split.test);
@@ -279,6 +294,32 @@ async function trainGroup({ group, datasets, outputRoot, candidateRoot, research
   await writeJsonAtomically(resolve(outputRoot, "models", `${group}.json`), artifact);
   await writeJsonAtomically(resolve(candidateRoot, `${group}.json`), artifact);
   const modelSha256 = sha256Json(calibrated);
+  const markets = [...new Set(datasets.map((dataset) => dataset.spec.market))];
+  const timeframes = [...new Set(datasets.map((dataset) => dataset.spec.timeframe))];
+  if (markets.length !== 1 || timeframes.length !== 1) throw new Error("producer group market/timeframe identity is ambiguous");
+  const strategyResolution = buildCanonicalModelReferenceStrategyIdentity({
+    group,
+    market: markets[0],
+    timeframe: timeframes[0],
+    trainRecords: split.train,
+    validationRecords: split.validation,
+    datasetComponents: referenceDatasetComponents(datasets),
+    researchCodeSha,
+    featureOrder: calibrated.featureOrder,
+    trainingParameters: TRAINING_PARAMETERS,
+    datasetSpecifications: datasets.map(({ spec }) => ({
+      id: spec.id,
+      market: spec.market,
+      symbol: spec.symbol,
+      timeframe: spec.timeframe,
+      lookback: spec.lookback,
+      horizon: spec.horizon,
+      stride: spec.stride,
+    })),
+    inferenceContract: DEPLOYED_INFERENCE_CONTRACT,
+    ruleWeight: DEPLOYED_RULE_WEIGHT,
+    modelWeight: DEPLOYED_MODEL_WEIGHT,
+  });
   const referenceEvidence = await preserveFutureModelReferenceEvidence({
     outputRoot: resolve(outputRoot, "reference-evidence"),
     group,
@@ -290,7 +331,7 @@ async function trainGroup({ group, datasets, outputRoot, candidateRoot, research
     researchCodeSha,
     trainingCodeSha,
     measuredAt,
-    strategyIdentity: null,
+    strategyIdentity: strategyResolution.strategyIdentity,
     sourceAttestation: {
       sourceKind: "GENUINE_MARKET_DATA",
       reconstructed: false,
@@ -320,7 +361,9 @@ async function trainGroup({ group, datasets, outputRoot, candidateRoot, research
       missingEvidence: referenceEvidence.missingEvidence,
       datasetId: referenceEvidence.datasetId,
       datasetDigest: referenceEvidence.datasetDigest,
+      strategyIdentity: referenceEvidence.strategyIdentity,
       strategyIdentityDigest: referenceEvidence.strategyIdentityDigest,
+      strategyIdentityStatus: referenceEvidence.strategyIdentityStatus,
       preprocessingVersion: referenceEvidence.preprocessingVersion,
       featureOrder: referenceEvidence.featureOrder,
       featureOrderDigest: referenceEvidence.featureOrderDigest,
