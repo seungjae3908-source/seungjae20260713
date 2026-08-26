@@ -56,7 +56,8 @@ jobs:
         shell: bash
         env:
           PRODUCER_RUN_ID: ${{ inputs.producer_run_id }}
-        run: [[ "$PRODUCER_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+        run: |
+          [[ "$PRODUCER_RUN_ID" =~ ^[1-9][0-9]*$ ]]
 
       - name: Download finalized canonical Producer evidence
         if: inputs.producer_run_id != ''
