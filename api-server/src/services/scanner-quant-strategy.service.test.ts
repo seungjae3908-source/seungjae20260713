@@ -96,6 +96,9 @@ test('scalping and swing use independent thresholds and risk limits', () => {
   assert.equal(scannerStrategyTimeframeAllowed('swing', '4H'), true);
   assert.equal(scannerStrategyTimeframeAllowed('swing', '60m'), true);
   assert.equal(scannerStrategyTimeframeAllowed('swing', '3m'), false);
+  assert.equal(scannerStrategyTimeframeAllowed('position', '4H'), true);
+  assert.equal(scannerStrategyTimeframeAllowed('position', '1D'), true);
+  assert.equal(scannerStrategyTimeframeAllowed('position', '60m'), false);
   assert.equal(scannerContextTimeframe('scalping'), '15m');
   assert.equal(scannerContextTimeframe('swing'), '60m');
 });
