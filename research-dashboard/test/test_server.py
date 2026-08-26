@@ -45,7 +45,15 @@ class ResearchDashboardPythonRuntimeTest(unittest.TestCase):
                 },
             },
         }})
-        write_json(root / 'forward' / 'shadow-state.json', {'groups': {'15m': {'records': []}}})
+        write_json(root / 'forward' / 'shadow-state.json', {'groups': {'15m': {
+            'records': [],
+            'canonicalEvidence': {'handoff': {'strategyHealthHandoff': {
+                'schemaVersion': 'prediction-lab-strategy-health-shadow-handoff-v1',
+                'strategyIdentityDigest': 'a' * 64,
+                'evidenceDigest': 'b' * 64,
+                'executionAuthority': 'NONE',
+            }}},
+        }}})
         return root
 
     def test_runtime_read_model_preserves_measured_zero_and_directional_recall(self):
@@ -56,6 +64,9 @@ class ResearchDashboardPythonRuntimeTest(unittest.TestCase):
         self.assertTrue(overview['shadow']['groups'][0]['collapsed'])
         self.assertEqual(overview['shadow']['records']['totalRecords'], 0)
         self.assertTrue(overview['safety']['authorityEvidenceComplete'])
+        self.assertEqual(len(overview['shadow']['canonicalHandoffs']), 1)
+        self.assertEqual(overview['shadow']['canonicalHandoffs'][0]['group'], '15m')
+        self.assertEqual(overview['shadow']['canonicalHandoffs'][0]['handoff']['evidenceDigest'], 'b' * 64)
 
     def test_missing_runtime_values_remain_null_instead_of_becoming_zero_or_false(self):
         root = self.fixture()

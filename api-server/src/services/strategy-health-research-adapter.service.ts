@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import {
   evaluateStrategyHealth,
   type StrategyHealthInput,
@@ -26,6 +28,27 @@ export interface ResearchStrategyHealthBinding {
 
 const HEALTHY_TASK_STATES = new Set(['complete', 'completed', 'success', 'pass', 'ready', 'healthy']);
 const FAILED_TASK_STATES = new Set(['fail', 'failed', 'error', 'safety_block', 'critical']);
+const HASH_64 = /^[0-9a-f]{64}$/u;
+const CANONICAL_SHADOW_HEALTH_SCHEMA = 'prediction-lab-strategy-health-shadow-handoff-v1';
+
+function canonical(value: unknown, stack = new Set<object>()): unknown {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new TypeError('canonical values require finite numbers');
+    return Object.is(value, -0) ? 0 : value;
+  }
+  if (typeof value !== 'object' || value === undefined) throw new TypeError('unsupported canonical value');
+  if (stack.has(value)) throw new TypeError('circular canonical value');
+  const next = new Set(stack);
+  next.add(value);
+  if (Array.isArray(value)) return value.map((item) => canonical(item, next));
+  const source = value as Record<string, unknown>;
+  return Object.fromEntries(Object.keys(source).sort().map((key) => [key, canonical(source[key], next)]));
+}
+
+function canonicalDigest(value: unknown): string {
+  return createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
+}
 
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -130,22 +153,76 @@ function backtestEvidence(cycles: Record<string, unknown>[]): ResearchStrategyHe
   return evidence('WATCH', 'BACKTEST_CYCLE_NOT_TERMINAL_SUCCESS', 'research.cycles', observed.length);
 }
 
-function shadowQualityEvidence(overview: Record<string, unknown>): ResearchStrategyHealthEvidence {
-  const shadow = record(overview.shadow);
-  const groups = records(shadow?.groups);
-  if (!groups.length) return evidence('MISSING_EVIDENCE', 'SHADOW_QUALITY_MISSING', 'shadow.groups');
-  const complete = groups.every((group) => [
-    group.macroF1,
-    group.balancedAccuracy,
-    group.bullRecall,
-    group.bearRecall,
-    group.neutralRecall,
-  ].every((value) => typeof value === 'number' && Number.isFinite(value)) && typeof group.collapsed === 'boolean');
-  if (!complete) return evidence('MISSING_EVIDENCE', 'SHADOW_DIRECTIONAL_METRICS_MISSING', 'shadow.groups', groups.length);
-  if (groups.some((group) => group.collapsed === true || group.bullRecall === 0 || group.bearRecall === 0)) {
-    return evidence('FAIL', 'SHADOW_DIRECTIONAL_RECALL_ZERO_OR_COLLAPSED', 'shadow.groups', groups.length);
+function canonicalShadowDriftEvidence(overview: Record<string, unknown>): {
+  quality: ResearchStrategyHealthEvidence;
+  drift: ResearchStrategyHealthEvidence;
+} {
+  const wrappers = records(record(overview.shadow)?.canonicalHandoffs);
+  if (!wrappers.length) return {
+    quality: evidence('MISSING_EVIDENCE', 'CANONICAL_SHADOW_HANDOFF_MISSING', 'shadow.canonicalHandoffs'),
+    drift: evidence('MISSING_EVIDENCE', 'CANONICAL_DRIFT_HANDOFF_MISSING', 'shadow.canonicalHandoffs'),
+  };
+  const handoffs: Record<string, unknown>[] = [];
+  for (const wrapper of wrappers) {
+    const handoff = record(wrapper.handoff);
+    const identity = record(handoff?.strategyIdentity);
+    const model = record(handoff?.modelIdentity);
+    const modelDataset = record(model?.datasetIdentity);
+    const reference = record(handoff?.datasetReferenceIdentity);
+    const freshness = record(handoff?.freshness);
+    if (!handoff || handoff.schemaVersion !== CANONICAL_SHADOW_HEALTH_SCHEMA || handoff.executionAuthority !== 'NONE'
+        || typeof handoff.evidenceDigest !== 'string' || !HASH_64.test(handoff.evidenceDigest)
+        || !identity || typeof handoff.strategyIdentityDigest !== 'string' || !HASH_64.test(handoff.strategyIdentityDigest)
+        || !model || typeof handoff.modelIdentityDigest !== 'string' || !HASH_64.test(handoff.modelIdentityDigest)
+        || model.strategyIdentityDigest !== handoff.strategyIdentityDigest
+        || !modelDataset || !reference || modelDataset.datasetId !== reference.datasetId || modelDataset.datasetDigest !== reference.datasetDigest
+        || optionalCount(handoff.sampleN) === null || optionalCount(handoff.referenceN) === null
+        || freshness?.status !== 'FRESH' || typeof freshness.expiresAt !== 'string' || !Number.isFinite(Date.parse(freshness.expiresAt))) {
+      return {
+        quality: evidence('MISSING_EVIDENCE', 'CANONICAL_SHADOW_IDENTITY_OR_PROVENANCE_INVALID', 'shadow.canonicalHandoffs'),
+        drift: evidence('MISSING_EVIDENCE', 'CANONICAL_DRIFT_IDENTITY_OR_PROVENANCE_INVALID', 'shadow.canonicalHandoffs'),
+      };
+    }
+    const body = { ...handoff };
+    delete body.evidenceDigest;
+    if (canonicalDigest(body) !== handoff.evidenceDigest || Date.parse(freshness.expiresAt) <= Date.now()) {
+      return {
+        quality: evidence('MISSING_EVIDENCE', 'CANONICAL_SHADOW_DIGEST_OR_FRESHNESS_INVALID', 'shadow.canonicalHandoffs'),
+        drift: evidence('MISSING_EVIDENCE', 'CANONICAL_DRIFT_DIGEST_OR_FRESHNESS_INVALID', 'shadow.canonicalHandoffs'),
+      };
+    }
+    handoffs.push(handoff);
   }
-  return evidence('HEALTHY', 'SHADOW_DIRECTIONAL_METRICS_PRESENT', 'shadow.groups', groups.length);
+  const pairKeys = handoffs.map((handoff) => `${handoff.strategyIdentityDigest}:${handoff.modelIdentityDigest}`);
+  if (new Set(pairKeys).size !== pairKeys.length) return {
+    quality: evidence('MISSING_EVIDENCE', 'DUPLICATE_CANONICAL_SHADOW_HANDOFF', 'shadow.canonicalHandoffs'),
+    drift: evidence('MISSING_EVIDENCE', 'DUPLICATE_CANONICAL_DRIFT_HANDOFF', 'shadow.canonicalHandoffs'),
+  };
+
+  const qualities = handoffs.map((handoff) => record(handoff.directionalQuality));
+  const qualityCounts = qualities.map((quality) => optionalCount(quality?.settledN));
+  const qualityComplete = qualities.every((quality, index) => quality && (qualityCounts[index] ?? 0) > 0
+    && ['bullRecall', 'bearRecall', 'macroF1', 'balancedAccuracy'].every((field) => typeof quality[field] === 'number' && Number.isFinite(quality[field]))
+    && ['bullish', 'neutral', 'bearish'].every((name) => typeof record(quality.perClass)?.[name] === 'object'
+      && typeof record(record(quality.perClass)?.[name])?.recall === 'number'));
+  const observed = qualityCounts.every((count) => count !== null) ? qualityCounts.reduce((sum, count) => sum + (count ?? 0), 0) : null;
+  const quality = !qualityComplete
+    ? evidence('MISSING_EVIDENCE', 'CANONICAL_SHADOW_SETTLED_DIRECTIONAL_QUALITY_MISSING', 'shadow.canonicalHandoffs', observed)
+    : qualities.some((row) => row?.bullRecall === 0 || row?.bearRecall === 0)
+      ? evidence('FAIL', 'CANONICAL_SHADOW_DIRECTIONAL_RECALL_ZERO', 'shadow.canonicalHandoffs', observed)
+      : evidence('HEALTHY', 'CANONICAL_SHADOW_DIRECTIONAL_QUALITY_VALID', 'shadow.canonicalHandoffs', observed);
+
+  const driftStatuses = handoffs.map((handoff) => normalizedStatus(record(handoff.driftVerdict)?.status).toUpperCase());
+  const drift = driftStatuses.some((status) => status === 'BRAKE')
+    ? evidence('FAIL', 'CANONICAL_DRIFT_BRAKE', 'shadow.canonicalHandoffs', handoffs.length)
+    : driftStatuses.some((status) => status === 'NOT_EVALUABLE' || !status)
+      ? evidence('MISSING_EVIDENCE', 'CANONICAL_DRIFT_NOT_EVALUABLE', 'shadow.canonicalHandoffs', handoffs.length)
+      : driftStatuses.some((status) => status === 'WATCH')
+        ? evidence('WATCH', 'CANONICAL_DRIFT_WATCH', 'shadow.canonicalHandoffs', handoffs.length)
+        : driftStatuses.every((status) => status === 'STABLE')
+          ? evidence('HEALTHY', 'CANONICAL_DRIFT_STABLE', 'shadow.canonicalHandoffs', handoffs.length)
+          : evidence('MISSING_EVIDENCE', 'CANONICAL_DRIFT_STATUS_INVALID', 'shadow.canonicalHandoffs', handoffs.length);
+  return { quality, drift };
 }
 
 function naturalPaperEvidence(overview: Record<string, unknown>): ResearchStrategyHealthEvidence {
@@ -199,14 +276,15 @@ export function bindCanonicalStrategyHealth(overviewValue: unknown): ResearchStr
   const overview = record(overviewValue) ?? {};
   const cycles = records(record(overview.research)?.cycles);
   const canonical = canonicalCoreEvidence(overview);
+  const shadow = canonicalShadowDriftEvidence(overview);
   const inputs = Object.freeze({
     canonicalCore: canonical.row,
     backtest: backtestEvidence(cycles),
     oos: taskEvidence(cycles, [/\boos\b/i, /out[-_ ]?of[-_ ]?sample/i]),
     walkForward: taskEvidence(cycles, [/purged.*walk/i, /walk[-_ ]?forward/i]),
     holdout: taskEvidence(cycles, [/final[-_ ]?holdout/i, /holdout/i]),
-    shadowQuality: shadowQualityEvidence(overview),
-    drift: taskEvidence(cycles, [/drift/i]),
+    shadowQuality: shadow.quality,
+    drift: shadow.drift,
     naturalPaper: naturalPaperEvidence(overview),
     settlement: settlementEvidence(overview),
     profitability: profitabilityEvidence(overview),
