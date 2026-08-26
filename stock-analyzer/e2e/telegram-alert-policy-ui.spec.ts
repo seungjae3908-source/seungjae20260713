@@ -59,7 +59,7 @@ test('Telegram settings center exposes urgency, quiet hours, digest and bounded 
   expect(panel).toContain('sameSymbolRepeatLimit');
 });
 
-test('personal Telegram runtime health is sanitized and has zero trading authority', () => {
+test('personal Telegram runtime health is sanitized and visible without trading authority', () => {
   expect(route).toContain('function telegramRuntimeState()');
   expect(route).toContain('deliveryReady');
   expect(route).toContain('linkingReady');
@@ -70,6 +70,16 @@ test('personal Telegram runtime health is sanitized and has zero trading authori
   expect(route).toContain('realOrderAllowed: false as const');
   expect(route).not.toContain('TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN');
   expect(route).not.toContain('TELEGRAM_WEBHOOK_SECRET: process.env.TELEGRAM_WEBHOOK_SECRET');
+
+  expect(panel).toContain('Telegram 서비스 상태');
+  expect(panel).toContain('개인 전송');
+  expect(panel).toContain('주식방');
+  expect(panel).toContain('코인방');
+  expect(panel).toContain('Rich 차트');
+  expect(panel).toContain('AI 설명');
+  expect(panel).toContain('신호 후속');
+  expect(panel).toContain('보유종목 개인알림');
+  expect(panel).toContain('상태에는 Secret·chat ID를 표시하지 않습니다.');
 });
 
 test('personal Telegram test endpoint sends explicit test-only content to the already linked member chat', () => {
@@ -83,6 +93,11 @@ test('personal Telegram test endpoint sends explicit test-only content to the al
   expect(route).toContain('investmentSignal: false');
   expect(route).toContain("orderAuthority: 'NONE'");
   expect(route).not.toContain('ordersSubmitted: 1');
+
+  expect(panel).toContain("'/api/user-integrations/telegram/test'");
+  expect(panel).toContain('테스트 메시지 보내기');
+  expect(panel).toContain('테스트 전송 중…');
+  expect(panel).toContain('테스트 메시지는 투자 신호나 주문이 아닙니다.');
 });
 
 test('Telegram settings remain responsive and do not add Telegram-side trade execution controls', () => {
