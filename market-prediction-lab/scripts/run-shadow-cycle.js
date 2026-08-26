@@ -191,7 +191,8 @@ function firstZeroEvidence({ canonicalContext, canonicalRunError, identityChange
     POSITION: pendingN,
     SETTLEMENT: settledN,
     DRIFT: driftInputN,
-    STRATEGY_HEALTH: handoff?.strategyHealthHandoff ? 1 : 0,
+    STRATEGY_HEALTH_HANDOFF: handoff?.strategyHealthHandoff ? 1 : 0,
+    STRATEGY_HEALTH: 0,
   });
   let stage = null;
   let reason = null;
@@ -720,7 +721,7 @@ const canonicalGroupSummaries = Object.values(nextSummary.groups)
 const counterNames = ["RAW_RECORD_COUNT", "UNIQUE_GENUINE_OBSERVATION_COUNT", "UNIQUE_SETTLEMENT_COUNT", "DUPLICATE_COUNT", "REPLAY_COUNT"];
 const aggregateCounters = Object.fromEntries(counterNames.map((name) => [name, canonicalGroupSummaries
   .reduce((sum, group) => sum + (Number(group.runtimeCounters?.[name]) || 0), 0)]));
-const aggregateFunnel = Object.fromEntries(["SIGNAL", "OBSERVATION", "POSITION", "SETTLEMENT", "DRIFT", "STRATEGY_HEALTH"]
+const aggregateFunnel = Object.fromEntries(["SIGNAL", "OBSERVATION", "POSITION", "SETTLEMENT", "DRIFT", "STRATEGY_HEALTH_HANDOFF", "STRATEGY_HEALTH"]
   .map((name) => [name, canonicalGroupSummaries.reduce((sum, group) => sum + (Number(group.firstZero?.[name]) || 0), 0)]));
 const firstZeroOrder = ["SIGNAL", "OBSERVATION", "POSITION", "SETTLEMENT", "DRIFT", "STRATEGY_HEALTH"];
 const firstZeroStage = firstZeroOrder.find((name) => aggregateFunnel[name] === 0) ?? null;
