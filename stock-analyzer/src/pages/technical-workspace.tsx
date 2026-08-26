@@ -256,6 +256,7 @@ export default function TechnicalWorkspacePage() {
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background" data-testid="technical-workspace">
+      <h1 className="sr-only sm:hidden" data-testid="technical-mobile-accessible-title">{WORKSPACE_TITLES[workspace]}</h1>
       <div className="hidden sm:block" data-testid="technical-desktop-header">
         <CenteredPageHeader
           title={WORKSPACE_TITLES[workspace]}
