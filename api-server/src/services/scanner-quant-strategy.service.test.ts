@@ -6,6 +6,7 @@ import {
   SCALPING_LIMITS,
   SWING_LIMITS,
   scannerContextTimeframe,
+  scannerStrategyForTimeframe,
   scannerStrategyTimeframeAllowed,
 } from './scanner-quant-strategy.service';
 
@@ -68,21 +69,38 @@ function input(mode: 'scalping' | 'swing', candles = trendCandles()) {
   } as const;
 }
 
+test('default strategy mapping always maps to an allowed primary timeframe', () => {
+  const expected = [
+    ['1m', 'scalping'],
+    ['3m', 'scalping'],
+    ['5m', 'scalping'],
+    ['15m', 'scalping'],
+    ['60m', 'swing'],
+    ['4H', 'swing'],
+    ['1D', 'position'],
+  ] as const;
+
+  for (const [timeframe, mode] of expected) {
+    assert.equal(scannerStrategyForTimeframe(timeframe), mode);
+    assert.equal(scannerStrategyTimeframeAllowed(mode, timeframe), true);
+  }
+});
+
 test('scalping and swing use independent thresholds and risk limits', () => {
   assert.notDeepEqual(SCALPING_LIMITS, SWING_LIMITS);
   assert.ok(SCALPING_LIMITS.maxRiskScore < SWING_LIMITS.maxRiskScore);
   assert.ok(SCALPING_LIMITS.minLiquidityFactor > SWING_LIMITS.minLiquidityFactor);
   assert.equal(scannerStrategyTimeframeAllowed('scalping', '5m'), true);
-  assert.equal(scannerStrategyTimeframeAllowed('scalping', '15m'), false);
+  assert.equal(scannerStrategyTimeframeAllowed('scalping', '15m'), true);
   assert.equal(scannerStrategyTimeframeAllowed('scalping', '1D'), false);
   assert.equal(scannerStrategyTimeframeAllowed('swing', '4H'), true);
-  assert.equal(scannerStrategyTimeframeAllowed('swing', '60m'), false);
+  assert.equal(scannerStrategyTimeframeAllowed('swing', '60m'), true);
   assert.equal(scannerStrategyTimeframeAllowed('swing', '3m'), false);
   assert.equal(scannerContextTimeframe('scalping'), '15m');
   assert.equal(scannerContextTimeframe('swing'), '60m');
 });
 
-test('scalping uses 15m context as analysis evidence without exposing it as a primary timeframe', () => {
+test('scalping supports 15m primary while preserving independent context evidence', () => {
   const primary = trendCandles();
   const bullishContext = trendCandles().map((row, index) => ({
     ...row,
@@ -99,7 +117,7 @@ test('scalping uses 15m context as analysis evidence without exposing it as a pr
   });
 
   assert.equal(scannerContextTimeframe('scalping'), '15m');
-  assert.equal(scannerStrategyTimeframeAllowed('scalping', '15m'), false);
+  assert.equal(scannerStrategyTimeframeAllowed('scalping', '15m'), true);
   assert.ok(bullish.factors.trend > bearish.factors.trend);
   assert.ok(bullish.factors.marketRegime > bearish.factors.marketRegime);
   assert.notDeepEqual(bullish.context, bearish.context);
