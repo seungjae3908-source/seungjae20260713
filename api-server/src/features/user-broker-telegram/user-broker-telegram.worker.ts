@@ -6,6 +6,7 @@ import { HttpUserTelegramTransport } from './user-broker-telegram.transport';
 import type { NotificationDelivery, PortfolioSyncSink, TelegramTransport } from './user-broker-telegram.types';
 
 const noopPortfolioSink: PortfolioSyncSink = { async accept() {} };
+const STALE_SENDING_LEASE_MS = 2 * 60 * 1000;
 
 export interface TelegramDeliveryWorkerSource {
   listDue(now: string, limit: number): Promise<Array<Pick<NotificationDelivery, 'userId' | 'id'>>>;
@@ -53,8 +54,27 @@ export class TelegramDeliveryWorker {
 export class SupabaseTelegramDeliveryWorkerSource implements TelegramDeliveryWorkerSource {
   async listDue(now: string, limit: number) {
     if (!hasSupabaseServerKey()) throw new Error('TELEGRAM_WORKER_SERVICE_ROLE_REQUIRED');
+    const nowMs = Date.parse(now);
+    if (!Number.isFinite(nowMs)) throw new Error('TELEGRAM_WORKER_INVALID_TIME');
     const bounded = Math.min(100, Math.max(1, Number.isInteger(limit) ? limit : 50));
-    const { data, error } = await getSupabase().from('notification_deliveries')
+    const client = getSupabase();
+    const staleBefore = new Date(nowMs - STALE_SENDING_LEASE_MS).toISOString();
+
+    // A process can die after claiming a row but before finishDelivery(). Recover
+    // only leases older than the maximum plausible Telegram request window so a
+    // normal in-flight send is never stolen by another worker instance.
+    const { error: recoveryError } = await client.from('notification_deliveries')
+      .update({
+        state: 'RETRY_SCHEDULED',
+        next_retry_at: now,
+        last_error_code: 'STALE_SENDING_RECOVERED',
+        updated_at: now,
+      })
+      .eq('state', 'SENDING')
+      .lte('updated_at', staleBefore);
+    if (recoveryError) throw new Error('TELEGRAM_WORKER_STORAGE_UNAVAILABLE');
+
+    const { data, error } = await client.from('notification_deliveries')
       .select('user_id,id')
       .in('state', ['PENDING', 'RETRY_SCHEDULED', 'FAILED'])
       .or(`next_retry_at.is.null,next_retry_at.lte.${now}`)
