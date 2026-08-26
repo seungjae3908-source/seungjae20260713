@@ -969,7 +969,36 @@ async function auditAuthenticatedViewport(
     http: diagnostics.unexpected_http_errors.length,
   };
   await page.setViewportSize({ width, height });
+  const scannerOrigin = new URL(page.url()).origin;
+  const scannerResponsePromise = route === '/scanner'
+    ? page.waitForResponse((response) => {
+        try {
+          const url = new URL(response.url());
+          return response.request().method() === 'GET'
+            && url.origin === scannerOrigin
+            && url.pathname === '/api/market/scan';
+        } catch {
+          return false;
+        }
+      }, { timeout: 15_000 })
+    : null;
   await expectHealthyRoute(page, route);
+  if (scannerResponsePromise) {
+    const scannerResponse = await scannerResponsePromise;
+    expect(
+      scannerResponse.status(),
+      `scanner viewport API returned HTTP ${scannerResponse.status()}`,
+    ).toBe(200);
+    const scannerError = await scannerResponse.finished();
+    expect(scannerError, 'scanner viewport response must finish before the verifier leaves /scanner').toBeNull();
+    const scannerBody = await scannerResponse.json().catch(() => null) as { ok?: boolean; elapsedMs?: number } | null;
+    expect(scannerBody?.ok, 'scanner viewport API must return an explicit successful scanner envelope').toBe(true);
+    expect(
+      Number(scannerBody?.elapsedMs),
+      'scanner viewport API must remain inside the existing 12s scanner contract',
+    ).toBeLessThanOrEqual(12_000);
+    await settle(page);
+  }
   const layout = await page.evaluate(() => {
     const visible = (element: Element) => {
       const rect = (element as HTMLElement).getBoundingClientRect();
@@ -1445,49 +1474,67 @@ test.describe('real staging release readiness', () => {
     await expectUiBuilderStagingReadiness(page, (route) => expectHealthyRoute(page, route));
   });
 
-  for (const [name, viewports] of [
-    ['desktop', [[1440, 900], [1024, 768]]],
-    ['mobile', [[320, 740], [360, 800], [390, 844], [412, 915], [430, 932]]],
-  ] as const) {
-    test(`${name}: major screens, search/detail, domestic/overseas/coin, watchlist, alerts, and settings`, async ({ page }, testInfo) => {
-      const [loginWidth, loginHeight] = viewports[0];
-      await page.setViewportSize({ width: loginWidth, height: loginHeight });
-      await login(page, accounts.regular.loginName, accounts.regular.password);
-      const certificationRoutes = [
-        '/', '/search', '/scanner', '/ai-chart', '/ai-chat', '/portfolio', '/account', '/learn', '/auto-trading',
-      ] as const;
-      const evidence: AuthenticatedViewportEvidence[] = [];
-      for (const [width, height] of viewports) {
-        for (const route of certificationRoutes) {
-          evidence.push(await auditAuthenticatedViewport(page, testInfo, route, width, height));
-        }
-      }
+  const certificationRoutes = [
+    '/', '/search', '/scanner', '/ai-chart', '/ai-chat', '/portfolio', '/account', '/learn', '/auto-trading',
+  ] as const;
+  const functionalRoutes = [
+    '/stock/005930',
+    '/stock-info?asset=stock&market=KR&ticker=005930',
+    '/stock-info?asset=stock&market=US&ticker=AAPL',
+    '/stock-info?asset=coin&coinMarket=spot&symbol=BTC',
+    '/watchlist',
+    '/alerts',
+    '/themes',
+    '/market-overview',
+    '/more',
+  ] as const;
+  const assertViewportEvidence = (evidence: AuthenticatedViewportEvidence[]) => {
+    expect(evidence.filter((item) => item.blank), 'blank authenticated viewport').toEqual([]);
+    expect(evidence.filter((item) => item.horizontalOverflowPx > 0), 'horizontal overflow in authenticated viewport').toEqual([]);
+    expect(evidence.filter((item) => item.criticalNavOverlap.length > 0), 'critical navigation overlap').toEqual([]);
+    expect(evidence.filter((item) => item.inputOverlap.length > 0), 'input overlap').toEqual([]);
+    expect(evidence.filter((item) => item.deadScroll.length > 0), 'dead scroll container').toEqual([]);
+    expect(evidence.filter((item) => item.criticalClipping.length > 0), 'critical horizontal clipping').toEqual([]);
+    expect(evidence.filter((item) => item.consoleErrors > 0), 'viewport console errors').toEqual([]);
+    expect(evidence.filter((item) => item.pageErrors > 0), 'viewport page errors').toEqual([]);
+    expect(evidence.filter((item) => item.unexpectedHttpErrors > 0), 'viewport unexpected HTTP failures').toEqual([]);
+  };
 
-      await page.setViewportSize({ width: loginWidth, height: loginHeight });
-      for (const route of [
-        '/stock/005930',
-        '/stock-info?asset=stock&market=KR&ticker=005930',
-        '/stock-info?asset=stock&market=US&ticker=AAPL',
-        '/stock-info?asset=coin&coinMarket=spot&symbol=BTC',
-        '/watchlist',
-        '/alerts',
-        '/themes',
-        '/market-overview',
-        '/more',
-      ]) {
-        await expectHealthyRoute(page, route);
+  test('desktop: major screens, search/detail, domestic/overseas/coin, watchlist, alerts, and settings', async ({ page }, testInfo) => {
+    const viewports = [[1440, 900], [1024, 768]] as const;
+    const [loginWidth, loginHeight] = viewports[0];
+    await page.setViewportSize({ width: loginWidth, height: loginHeight });
+    await login(page, accounts.regular.loginName, accounts.regular.password);
+    const evidence: AuthenticatedViewportEvidence[] = [];
+    for (const [width, height] of viewports) {
+      for (const route of certificationRoutes) {
+        evidence.push(await auditAuthenticatedViewport(page, testInfo, route, width, height));
       }
-      expect(evidence.filter((item) => item.blank), 'blank authenticated viewport').toEqual([]);
-      expect(evidence.filter((item) => item.horizontalOverflowPx > 0), 'horizontal overflow in authenticated viewport').toEqual([]);
-      expect(evidence.filter((item) => item.criticalNavOverlap.length > 0), 'critical navigation overlap').toEqual([]);
-      expect(evidence.filter((item) => item.inputOverlap.length > 0), 'input overlap').toEqual([]);
-      expect(evidence.filter((item) => item.deadScroll.length > 0), 'dead scroll container').toEqual([]);
-      expect(evidence.filter((item) => item.criticalClipping.length > 0), 'critical horizontal clipping').toEqual([]);
-      expect(evidence.filter((item) => item.consoleErrors > 0), 'viewport console errors').toEqual([]);
-      expect(evidence.filter((item) => item.pageErrors > 0), 'viewport page errors').toEqual([]);
-      expect(evidence.filter((item) => item.unexpectedHttpErrors > 0), 'viewport unexpected HTTP failures').toEqual([]);
+    }
+    await page.setViewportSize({ width: loginWidth, height: loginHeight });
+    for (const route of functionalRoutes) await expectHealthyRoute(page, route);
+    assertViewportEvidence(evidence);
+  });
+
+  for (const [width, height] of [
+    [320, 740], [360, 800], [390, 844], [412, 915], [430, 932],
+  ] as const) {
+    test(`mobile ${width}x${height}: major screens`, async ({ page }, testInfo) => {
+      await page.setViewportSize({ width, height });
+      await login(page, accounts.regular.loginName, accounts.regular.password);
+      const evidence: AuthenticatedViewportEvidence[] = [];
+      for (const route of certificationRoutes) {
+        evidence.push(await auditAuthenticatedViewport(page, testInfo, route, width, height));
+      }
+      assertViewportEvidence(evidence);
     });
   }
+
+  test('mobile: search/detail, domestic/overseas/coin, watchlist, alerts, and settings', async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 740 });
+    await login(page, accounts.regular.loginName, accounts.regular.password);
+    for (const route of functionalRoutes) await expectHealthyRoute(page, route);
+  });
 
   test('bottom navigation and popup menus traverse every visible destination', async ({ page }) => {
     await login(page, accounts.regular.loginName, accounts.regular.password);
@@ -1539,4 +1586,3 @@ test.describe('real staging release readiness', () => {
     expect(diagnostics.expected_scanner_aborts, 'scanner net::ERR_ABORTED must remain zero').toEqual([]);
   });
 });
-
