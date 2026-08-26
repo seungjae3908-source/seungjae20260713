@@ -34,9 +34,23 @@ async function fixture() {
       },
     },
   }}));
-  await writeFile(join(root, 'forward', 'shadow-state.json'), JSON.stringify({ bucket: { records: [
-    { status: 'settled' }, { status: 'settled' }, { status: 'pending' },
-  ]}}));
+  await writeFile(join(root, 'forward', 'shadow-state.json'), JSON.stringify({
+    bucket: { records: [{ status: 'settled' }, { status: 'settled' }, { status: 'pending' }] },
+    groups: {
+      'crypto-futures-15m': {
+        canonicalEvidence: {
+          handoff: {
+            strategyHealthHandoff: {
+              schemaVersion: 'prediction-lab-strategy-health-shadow-handoff-v1',
+              strategyIdentityDigest: 'a'.repeat(64),
+              evidenceDigest: 'b'.repeat(64),
+              executionAuthority: 'NONE',
+            },
+          },
+        },
+      },
+    },
+  }));
   return root;
 }
 
@@ -52,6 +66,9 @@ test('overview exposes only summarized read-only research evidence', async () =>
   assert.equal(overview.shadow.records.settledRecords, 2);
   assert.equal(overview.shadow.groups[0].collapsed, false);
   assert.equal(overview.shadow.groups[0].bearRecall, 0);
+  assert.equal(overview.shadow.canonicalHandoffs.length, 1);
+  assert.equal(overview.shadow.canonicalHandoffs[0].group, 'crypto-futures-15m');
+  assert.equal(overview.shadow.canonicalHandoffs[0].handoff.evidenceDigest, 'b'.repeat(64));
   assert.equal(overview.profitability.proven, false);
 });
 

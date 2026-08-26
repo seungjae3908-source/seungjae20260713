@@ -259,6 +259,21 @@ def count_shadow_records(value):
     }
 
 
+def canonical_shadow_handoffs(value):
+    if not isinstance(value, dict):
+        return []
+    groups = value.get('groups') if isinstance(value.get('groups'), dict) else {}
+    handoffs = []
+    for group in sorted(groups):
+        row = groups.get(group)
+        canonical = row.get('canonicalEvidence') if isinstance(row, dict) and isinstance(row.get('canonicalEvidence'), dict) else {}
+        outer = canonical.get('handoff') if isinstance(canonical.get('handoff'), dict) else {}
+        handoff = outer.get('strategyHealthHandoff') if isinstance(outer.get('strategyHealthHandoff'), dict) else None
+        if handoff is not None:
+            handoffs.append({'group': str(group), 'handoff': handoff})
+    return handoffs
+
+
 def sum_known_cycle_counts(cycles, key):
     present_cycles = [cycle for cycle in cycles if cycle.get('present')]
     if any(cycle.get(key) is None for cycle in present_cycles):
@@ -272,7 +287,9 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
     paper_runtime = summarize_paper_runtime(read_json_optional(root / 'forward' / 'paper' / 'status' / 'runtime-status.json'))
     paper_ledger = summarize_paper_ledger(read_json_optional(root / 'forward' / 'paper' / 'state' / 'recurring-paper-loop.json'))
     shadow_groups = summarize_shadow_groups(read_json_optional(root / 'forward' / 'shadow-summary.json'))
-    shadow_records = count_shadow_records(read_json_optional(root / 'forward' / 'shadow-state.json'))
+    shadow_state = read_json_optional(root / 'forward' / 'shadow-state.json')
+    shadow_records = count_shadow_records(shadow_state)
+    shadow_canonical_handoffs = canonical_shadow_handoffs(shadow_state)
     failed_tasks = sum_known_cycle_counts(cycles, 'failedCount')
     blocked_data_tasks = sum_known_cycle_counts(cycles, 'blockedDataCount')
     authority_evidence_complete = not paper_runtime.get('present') or paper_runtime.get('safetyEvidenceComplete') is True
@@ -314,7 +331,7 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
             'cycles': cycles,
         },
         'paper': {'runtime': paper_runtime, 'ledger': paper_ledger},
-        'shadow': {'groups': shadow_groups, 'records': shadow_records},
+        'shadow': {'groups': shadow_groups, 'records': shadow_records, 'canonicalHandoffs': shadow_canonical_handoffs},
         'profitability': {
             'proven': False,
             'status': 'evidence_collection',
