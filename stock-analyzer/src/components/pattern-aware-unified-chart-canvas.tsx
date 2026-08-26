@@ -120,7 +120,11 @@ function createLine(
   chart: IChartApi,
   options: Record<string, unknown>,
 ): ISeriesApi<'Line'> {
-  return chart.addLineSeries(options);
+  return chart.addLineSeries({
+    lastValueVisible: false,
+    priceLineVisible: false,
+    ...options,
+  });
 }
 
 function setLineData(
@@ -434,6 +438,7 @@ export function PatternAwareUnifiedChartCanvas({
     })));
 
     const higherPriorityPrices = planPriorityPrices(pricePlan);
+    const showSecondaryAxisLabels = higherPriorityPrices.length === 0;
     removePriceLines(instance.candle, instance.referencePriceLines);
     if (overlays.levels) {
       const referenceRows = [
@@ -451,7 +456,7 @@ export function PatternAwareUnifiedChartCanvas({
           color: row.color,
           lineWidth: 1,
           lineStyle: row.style,
-          axisLabelVisible: !conflictsWithHigherPriority(row.price, higherPriorityPrices),
+          axisLabelVisible: showSecondaryAxisLabels && !conflictsWithHigherPriority(row.price, higherPriorityPrices),
           title: row.title,
         }));
       }
@@ -504,7 +509,7 @@ export function PatternAwareUnifiedChartCanvas({
           color: statusColor(patternOverlay.status),
           lineWidth: 2,
           lineStyle: LineStyle.Dashed,
-          axisLabelVisible: !conflictsWithHigherPriority(patternOverlay.confirmationPrice, higherPriorityPrices),
+          axisLabelVisible: showSecondaryAxisLabels && !conflictsWithHigherPriority(patternOverlay.confirmationPrice, higherPriorityPrices),
           title: `패턴 확인선 · ${patternOverlay.status}`,
         }));
         instance.analysisPriceLines.push(instance.candle.createPriceLine({
@@ -512,7 +517,7 @@ export function PatternAwareUnifiedChartCanvas({
           color: '#dc2626',
           lineWidth: 2,
           lineStyle: LineStyle.Dotted,
-          axisLabelVisible: !conflictsWithHigherPriority(patternOverlay.invalidationPrice, higherPriorityPrices),
+          axisLabelVisible: showSecondaryAxisLabels && !conflictsWithHigherPriority(patternOverlay.invalidationPrice, higherPriorityPrices),
           title: '패턴 무효화선',
         }));
       }
