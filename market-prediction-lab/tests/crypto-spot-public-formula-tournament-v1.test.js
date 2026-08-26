@@ -208,8 +208,8 @@ function producerFixture(hypothesis, decision) {
       parameter("rocMin", "NON_NEGATIVE_VALUE", "NUMBER", 0, 0, 0.01),
       parameter("rvolPeriod", "PERIOD", "INTEGER", 2, 2, 1),
       parameter("rvolMin", "NON_NEGATIVE_VALUE", "NUMBER", 1.2, 1.2, 0.1),
-      parameter("targetDistance", "PRICE_FRACTION", "NUMBER", 0.005, 0.005, 0.005),
-      parameter("timeBars", "BAR_COUNT", "INTEGER", 2, 2, 1),
+      parameter("targetDistance", "PRICE_FRACTION", "NUMBER", 0.01, 0.01, 0.005),
+      parameter("timeBars", "BAR_COUNT", "INTEGER", 3, 3, 1),
     ],
     limits: { maxAstDepth: 6, maxIndicatorCount: 8, maxRuleCount: 8, maxAstNodes: 64 },
   };
