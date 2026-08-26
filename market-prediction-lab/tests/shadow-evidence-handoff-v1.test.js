@@ -9,11 +9,13 @@ import {
   buildCanonicalShadowDriftHandoffV1,
   buildDriftVerdictV1,
   buildFutureShadowObservationV1,
+  buildNormalizedFeatureSnapshotV1,
   computeShadowObservationArtifactDigestV1,
   resolveModelIdentityMappingV1,
   resolveProducerStrategyIdentityV1,
   resolveTrainValidationReferenceV1,
   shadowEvidenceSafetyV1,
+  settleFutureShadowObservationV1,
   validateFutureShadowObservationBatchV1,
   validateFutureShadowObservationV1,
 } from "../src/shadow-evidence-handoff-v1.js";
@@ -270,6 +272,26 @@ test("mismatched Strategy Identity is rejected", () => {
   assert.equal(result.status, "IDENTITY_MISMATCH");
 });
 
+test("formula parameter timeframe market direction and dataset identity mismatches all fail closed", async (t) => {
+  const cases = {
+    formula: { formulaIdentity: { family: "other", rules: ["trend"] } },
+    parameter: { parameterHash: hash("other-parameters") },
+    timeframe: { timeframe: "1h" },
+    market: { market: "CRYPTO_SPOT" },
+    direction: { direction: "SHORT" },
+    datasetId: { datasetId: "other-dataset" },
+    datasetDigest: { datasetDigest: hash("other-dataset") },
+  };
+  for (const [name, overrides] of Object.entries(cases)) {
+    await t.test(name, () => {
+      const fixture = manifestFixture();
+      const result = resolveProducerStrategyIdentityV1(fixture.manifest, strategyInput(overrides));
+      assert.equal(result.status, "IDENTITY_MISMATCH");
+      assert.equal(result.valid, false);
+    });
+  }
+});
+
 test("exact model bytes SHA mismatch is distinct from canonical artifact digest", () => {
   const context = resolutions();
   const changedBytes = Buffer.from(`${context.fixture.modelBytes.toString("utf8")}\n`, "utf8");
@@ -319,6 +341,20 @@ test("preprocessingVersion mismatch between reference and observation fails clos
   assert.match(result.reason, /PREPROCESSINGVERSION_MISMATCH/);
 });
 
+test("normalized feature snapshot must reproduce the exact model preprocessing identity", () => {
+  const context = resolutions();
+  const observation = clone(makeObservations(context)[0]);
+  observation.normalizedFeatureSnapshot.return5 += 0.01;
+  observation.artifactDigest = computeShadowObservationArtifactDigestV1(observation);
+  const result = validateFutureShadowObservationV1({ observation, ...context, featureOrder: context.fixture.model.featureOrder });
+  assert.equal(result.status, "IDENTITY_MISMATCH");
+  assert.equal(result.reason, "NORMALIZED_FEATURE_SNAPSHOT_MISMATCH");
+  assert.deepEqual(buildNormalizedFeatureSnapshotV1({
+    rawFeatureSnapshot: observation.rawFeatureSnapshot,
+    exactModel: context.fixture.model,
+  }), { return5: -0.7, atrPct: -0.6000000000000001 });
+});
+
 test("expired reference emits REFERENCE_EXPIRED and no numeric drift credit", () => {
   const fixture = manifestFixture();
   fixture.manifest.artifactReceipt.expiresAt = "2026-08-25T00:00:00.000Z";
@@ -364,6 +400,20 @@ test("historical observation missing rule/model components stays MISSING_EVIDENC
   assert.equal(result.status, "MISSING_EVIDENCE");
 });
 
+test("each missing RULE_ONLY MODEL_ONLY or DEPLOYED_FROZEN_BLEND component is independently rejected", async (t) => {
+  const context = resolutions();
+  for (const name of ["RULE_ONLY", "MODEL_ONLY", "DEPLOYED_FROZEN_BLEND"]) {
+    await t.test(name, () => {
+      const observation = clone(makeObservations(context)[0]);
+      delete observation.components[name];
+      observation.artifactDigest = computeShadowObservationArtifactDigestV1(observation);
+      const result = validateFutureShadowObservationV1({ observation, ...context, featureOrder: context.fixture.model.featureOrder });
+      assert.equal(result.status, "MISSING_EVIDENCE");
+      assert.equal(result.reason, "RULE_MODEL_BLEND_COMPONENT_MISSING");
+    });
+  }
+});
+
 test("duplicate Shadow observation is rejected", () => {
   const context = resolutions();
   const observation = makeObservations(context)[0];
@@ -400,6 +450,20 @@ test("RULE_ONLY MODEL_ONLY and frozen 65/35 blend are immutably preserved", () =
   assert.deepEqual(observation.components.DEPLOYED_FROZEN_BLEND.probabilities, inference(0).probabilities);
   assert.deepEqual(observation.components.DEPLOYED_FROZEN_BLEND.weights, FROZEN_BLEND_WEIGHTS);
   assert.equal(Object.isFrozen(observation), true);
+});
+
+test("future settlement adds only the measured actual direction and recomputes immutable provenance", () => {
+  const context = resolutions();
+  const pending = clone(makeObservations(context)[0]);
+  pending.observationId = "future-pending";
+  pending.actualDirection = null;
+  pending.artifactDigest = computeShadowObservationArtifactDigestV1(pending);
+  const settled = settleFutureShadowObservationV1(pending, "SHORT");
+  assert.equal(pending.actualDirection, null);
+  assert.equal(settled.actualDirection, "bearish");
+  assert.notEqual(settled.artifactDigest, pending.artifactDigest);
+  assert.equal(computeShadowObservationArtifactDigestV1(settled), settled.artifactDigest);
+  assert.throws(() => settleFutureShadowObservationV1(settled, "LONG"), /settlement conflict/);
 });
 
 test("PSI deterministic reproduction uses genuine future Shadow features", () => {

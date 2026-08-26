@@ -7,6 +7,10 @@ on:
         description: Exact research commit/ref to validate
         required: false
         type: string
+      producer_run_id:
+        description: Exact successful #701 producer workflow run containing finalized canonical model reference evidence
+        required: false
+        type: string
 
 permissions:
   actions: read
@@ -47,15 +51,41 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Validate immutable Producer run identity
+        if: inputs.producer_run_id != ''
+        shell: bash
+        env:
+          PRODUCER_RUN_ID: ${{ inputs.producer_run_id }}
+        run: [[ "$PRODUCER_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+
+      - name: Download finalized canonical Producer evidence
+        if: inputs.producer_run_id != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: prediction-lab-model-reference-evidence-${{ inputs.producer_run_id }}
+          path: ${{ runner.temp }}/prediction-lab-model-reference-evidence
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.producer_run_id }}
+
       - name: Validate shadow and temporal modules
         working-directory: market-prediction-lab
-        run: node --test tests/derivatives-history.test.js tests/derivatives-normalized-compat.test.js tests/temporal-training-dataset.test.js tests/shadow-ledger.test.js
+        run: node --test tests/derivatives-history.test.js tests/derivatives-normalized-compat.test.js tests/temporal-training-dataset.test.js tests/shadow-ledger.test.js tests/shadow-evidence-handoff-v1.test.js
 
       - name: Run one research-only shadow cycle
         id: shadow
         continue-on-error: true
         working-directory: market-prediction-lab
-        run: node scripts/run-shadow-cycle.js docs/shadow-state.json docs/shadow-summary.json
+        shell: bash
+        env:
+          PRODUCER_RUN_ID: ${{ inputs.producer_run_id }}
+          PRODUCER_EVIDENCE_ROOT: ${{ runner.temp }}/prediction-lab-model-reference-evidence
+        run: |
+          if [ -n "$PRODUCER_RUN_ID" ]; then
+            node scripts/run-shadow-cycle.js docs/shadow-state.json docs/shadow-summary.json "$PRODUCER_EVIDENCE_ROOT"
+          else
+            node scripts/run-shadow-cycle.js docs/shadow-state.json docs/shadow-summary.json
+          fi
 
       - name: Record shadow failure
         if: steps.shadow.outcome != 'success'

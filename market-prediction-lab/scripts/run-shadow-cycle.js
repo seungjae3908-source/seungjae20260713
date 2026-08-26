@@ -1,9 +1,10 @@
+import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { analyzeMarket } from "../src/engine.js";
 import { BASELINE_MODEL } from "../src/tiny-model.js";
 import { BitgetPublicClient } from "../src/bitget-public-client.js";
-import { collectBitgetCandles, collectBitgetFuturesContext } from "../src/bitget-candle-collector.js";
+import { BITGET_TIMEFRAME_MS, collectBitgetCandles, collectBitgetFuturesContext } from "../src/bitget-candle-collector.js";
 import { collectFundingRateHistory, createTemporalDerivativesProvider } from "../src/derivatives-history.js";
 import { collectBitgetDerivedCandles, createTemporalMarketStructureProvider } from "../src/market-structure-history.js";
 import {
@@ -21,6 +22,16 @@ import {
   summarizeEthV6ForwardState,
 } from "../src/eth-v6-forward-validation.js";
 import { FROZEN_CANDIDATE_MANIFEST_SHA256 } from "../src/final-holdout-evaluator.js";
+import { predictDeployedTinyModel } from "../src/deployment-inference.js";
+import {
+  buildCanonicalShadowDriftHandoffV1,
+  buildFutureShadowObservationV1,
+  buildNormalizedFeatureSnapshotV1,
+  resolveModelIdentityMappingV1,
+  resolveProducerStrategyIdentityV1,
+  resolveTrainValidationReferenceV1,
+  settleFutureShadowObservationV1,
+} from "../src/shadow-evidence-handoff-v1.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const ETH_V6_LOOKBACK_DAYS = 120;
@@ -34,6 +45,14 @@ async function readJsonOptional(filePath, fallback) {
   try { return JSON.parse(await readFile(filePath, "utf8")); }
   catch (error) {
     if (error?.code === "ENOENT") return fallback;
+    throw error;
+  }
+}
+
+async function readBytesOptional(filePath) {
+  try { return await readFile(filePath); }
+  catch (error) {
+    if (error?.code === "ENOENT") return null;
     throw error;
   }
 }
@@ -52,6 +71,63 @@ function serializeError(error) {
     details: error?.details ?? null,
     stack: typeof error?.stack === "string" ? error.stack.split("\n").slice(0, 10) : [],
   };
+}
+
+async function loadCanonicalEvidenceContext(referenceEvidenceRoot, group, cycleTime) {
+  if (!referenceEvidenceRoot) return Object.freeze({ valid: false, status: "MISSING_EVIDENCE", reason: "PRODUCER_REFERENCE_ROOT_NOT_PROVIDED" });
+  const packageRoot = resolve(referenceEvidenceRoot, group);
+  const [manifestBytes, exactModelBytes, trainReferenceBytes, validationReferenceBytes] = await Promise.all([
+    readBytesOptional(resolve(packageRoot, "reference-manifest.json")),
+    readBytesOptional(resolve(packageRoot, "model/exact-model.json")),
+    readBytesOptional(resolve(packageRoot, "records/train.jsonl")),
+    readBytesOptional(resolve(packageRoot, "records/validation.jsonl")),
+  ]);
+  if (!manifestBytes || !exactModelBytes || !trainReferenceBytes || !validationReferenceBytes) {
+    return Object.freeze({ valid: false, status: "MISSING_EVIDENCE", reason: "PRODUCER_REFERENCE_PACKAGE_INCOMPLETE" });
+  }
+  let producerManifest;
+  try { producerManifest = JSON.parse(manifestBytes.toString("utf8")); }
+  catch { return Object.freeze({ valid: false, status: "IDENTITY_MISMATCH", reason: "PRODUCER_MANIFEST_MALFORMED" }); }
+  const strategyResolution = resolveProducerStrategyIdentityV1(producerManifest);
+  if (!strategyResolution.valid) return Object.freeze({ valid: false, status: strategyResolution.status, reason: strategyResolution.reason });
+  const modelResolution = resolveModelIdentityMappingV1({ producerManifest, exactModelBytes, strategyResolution });
+  if (!modelResolution.valid) return Object.freeze({ valid: false, status: modelResolution.status, reason: modelResolution.reason });
+  const asOf = new Date(cycleTime).toISOString();
+  const referenceResolution = resolveTrainValidationReferenceV1({ producerManifest, trainReferenceBytes, validationReferenceBytes, asOf });
+  if (!referenceResolution.valid) return Object.freeze({ valid: false, status: referenceResolution.status, reason: referenceResolution.reason });
+  return Object.freeze({
+    valid: true,
+    producerManifest,
+    exactModelBytes,
+    trainReferenceBytes,
+    validationReferenceBytes,
+    strategyResolution,
+    modelResolution,
+    referenceResolution,
+    asOf,
+  });
+}
+
+function canonicalObservationId(context, config, symbol, anchorTimestamp) {
+  return createHash("sha256").update([
+    context.strategyResolution.strategyIdentityDigest,
+    context.modelResolution.modelIdentityDigest,
+    config.group,
+    symbol,
+    config.timeframe,
+    anchorTimestamp,
+    config.horizon,
+  ].join("|")).digest("hex");
+}
+
+function settleCanonicalObservations(observations, records) {
+  const settledByAnchor = new Map(records.filter((record) => record.status === "settled")
+    .map((record) => [`${record.symbol}|${record.timeframe}|${record.anchorTimestamp}|${record.horizon}`, record.actualDirection]));
+  return observations.map((observation) => {
+    const source = observation.sourceProvenance;
+    const actual = settledByAnchor.get(`${observation.symbol}|${observation.timeframe}|${source.anchorTimestamp}|${source.horizon}`);
+    return actual ? settleFutureShadowObservationV1(observation, actual) : observation;
+  });
 }
 
 async function loadModelSelection(group) {
@@ -104,8 +180,18 @@ function mergeTemporalFeatures(base, structure) {
   });
 }
 
-async function processGroup({ client, config, previousGroupState, cycleTime }) {
+async function processGroup({ client, config, previousGroupState, cycleTime, referenceEvidenceRoot }) {
   const selection = await loadModelSelection(config.group);
+  const canonicalContext = await loadCanonicalEvidenceContext(referenceEvidenceRoot, config.group, cycleTime);
+  const previousCanonical = previousGroupState?.canonicalEvidence ?? null;
+  const identityChanged = canonicalContext.valid && previousCanonical?.strategyIdentityDigest
+    && (previousCanonical.strategyIdentityDigest !== canonicalContext.strategyResolution.strategyIdentityDigest
+      || previousCanonical.modelIdentityDigest !== canonicalContext.modelResolution.modelIdentityDigest);
+  let canonicalObservations = identityChanged
+    ? []
+    : [...(previousCanonical?.observations ?? [])];
+  let canonicalRunError = null;
+  let canonicalNewObservationCount = 0;
   let groupState = {
     schemaVersion: 2,
     createdAt: previousGroupState?.createdAt ?? cycleTime,
@@ -205,7 +291,117 @@ async function processGroup({ client, config, previousGroupState, cycleTime }) {
     if (!groupState.records.some((existing) => existing.id === record.id)) {
       groupState = upsertShadowPrediction(groupState, record);
     }
+    if (canonicalContext.valid && !identityChanged) {
+      const observationId = canonicalObservationId(canonicalContext, config, symbol, anchor.timestamp);
+      if (!canonicalObservations.some((observation) => observation.observationId === observationId)) {
+        try {
+          const exactInference = predictDeployedTinyModel({
+            features: candidate.features,
+            ruleScore: candidate.ruleScore,
+          }, canonicalContext.modelResolution.exactModel);
+          const rawFeatureSnapshot = Object.fromEntries(canonicalContext.modelResolution.exactModel.featureOrder
+            .map((name) => [name, candidate.features[name]]));
+          const normalizedFeatureSnapshot = buildNormalizedFeatureSnapshotV1({
+            rawFeatureSnapshot,
+            exactModel: canonicalContext.modelResolution.exactModel,
+          });
+          canonicalObservations.push(buildFutureShadowObservationV1({
+            observationId,
+            observedAt: new Date(cycleTime).toISOString(),
+            symbol,
+            market: canonicalContext.strategyResolution.strategyIdentity.market,
+            timeframe: canonicalContext.strategyResolution.strategyIdentity.timeframe,
+            direction: canonicalContext.strategyResolution.strategyIdentity.direction,
+            strategyIdentityDigest: canonicalContext.strategyResolution.strategyIdentityDigest,
+            modelIdentityDigest: canonicalContext.modelResolution.modelIdentityDigest,
+            referenceIdentity: canonicalContext.referenceResolution.referenceIdentity,
+            regime: record.regime,
+            rawFeatureSnapshot,
+            normalizedFeatureSnapshot,
+            inference: exactInference,
+            dataFreshness: {
+              status: "FRESH",
+              ageMs: cycleTime - anchor.timestamp,
+              maxAgeMs: BITGET_TIMEFRAME_MS[config.timeframe] * 3,
+            },
+            sourceProvenance: {
+              sourceKind: "GENUINE_SHADOW_OBSERVATION",
+              provider: "bitget-public-v2",
+              source: commonInput.source,
+              anchorTimestamp: anchor.timestamp,
+              horizon: config.horizon,
+              capturedAtObservationTime: true,
+              reconstructed: false,
+              synthetic: false,
+              replayed: false,
+              historicalBackfill: false,
+            },
+          }));
+          canonicalNewObservationCount += 1;
+        } catch (error) {
+          canonicalRunError = { status: "MISSING_EVIDENCE", reason: `GENUINE_SHADOW_OBSERVATION_REJECTED:${error.message}` };
+        }
+      }
+    }
   }
+
+  canonicalObservations = settleCanonicalObservations(canonicalObservations, groupState.records).slice(-10000);
+  let canonicalEvidence;
+  if (!canonicalContext.valid || canonicalRunError) {
+    const failure = canonicalRunError ?? canonicalContext;
+    canonicalEvidence = {
+      ...(previousCanonical ?? {}),
+      schemaVersion: "prediction-lab-shadow-runtime-evidence-v1",
+      runtimeStatus: failure.status,
+      runtimeReason: failure.reason,
+      currentRunCredited: false,
+      currentRunObservationCount: 0,
+      lastAttemptAt: new Date(cycleTime).toISOString(),
+      observations: canonicalObservations,
+      PROFITABILITY_PROVEN: false,
+      FORWARD_EVIDENCE_SUFFICIENT: false,
+    };
+  } else if (identityChanged) {
+    canonicalEvidence = {
+      ...(previousCanonical ?? {}),
+      schemaVersion: "prediction-lab-shadow-runtime-evidence-v1",
+      runtimeStatus: "IDENTITY_MISMATCH",
+      runtimeReason: "PREDECESSOR_CANONICAL_IDENTITY_MISMATCH",
+      currentRunCredited: false,
+      currentRunObservationCount: 0,
+      lastAttemptAt: new Date(cycleTime).toISOString(),
+      observations: previousCanonical?.observations ?? [],
+      PROFITABILITY_PROVEN: false,
+      FORWARD_EVIDENCE_SUFFICIENT: false,
+    };
+  } else {
+    const handoff = buildCanonicalShadowDriftHandoffV1({
+      producerManifest: canonicalContext.producerManifest,
+      exactModelBytes: canonicalContext.exactModelBytes,
+      trainReferenceBytes: canonicalContext.trainReferenceBytes,
+      validationReferenceBytes: canonicalContext.validationReferenceBytes,
+      observations: canonicalObservations,
+      expectedStrategyInput: canonicalContext.strategyResolution.strategyIdentity,
+      expectedModelIdentity: canonicalContext.modelResolution.modelIdentity,
+      canonicalDriftPolicy: null,
+      asOf: canonicalContext.asOf,
+    });
+    canonicalEvidence = {
+      schemaVersion: "prediction-lab-shadow-runtime-evidence-v1",
+      runtimeStatus: handoff.status,
+      runtimeReason: handoff.reason,
+      currentRunCredited: canonicalNewObservationCount > 0 && handoff.observationEvidence?.futureOnly === true,
+      currentRunObservationCount: canonicalNewObservationCount,
+      lastAttemptAt: new Date(cycleTime).toISOString(),
+      strategyIdentityDigest: canonicalContext.strategyResolution.strategyIdentityDigest,
+      modelIdentityDigest: canonicalContext.modelResolution.modelIdentityDigest,
+      observations: canonicalObservations,
+      handoff,
+      PROFITABILITY_PROVEN: false,
+      FORWARD_EVIDENCE_SUFFICIENT: false,
+    };
+  }
+  groupState = { ...groupState, canonicalEvidence };
 
   const summary = summarizeShadowState(groupState, {
     modelId: selection.candidate.id,
@@ -224,6 +420,17 @@ async function processGroup({ client, config, previousGroupState, cycleTime }) {
         requiresMarketStructure: selection.requiresMarketStructure,
       },
       contexts: contextBySymbol,
+      canonicalEvidence: {
+        runtimeStatus: canonicalEvidence.runtimeStatus,
+        runtimeReason: canonicalEvidence.runtimeReason,
+        currentRunCredited: canonicalEvidence.currentRunCredited,
+        currentRunObservationCount: canonicalEvidence.currentRunObservationCount ?? 0,
+        observationCount: canonicalEvidence.observations?.length ?? 0,
+        settledObservationCount: canonicalEvidence.observations?.filter((observation) => observation.actualDirection).length ?? 0,
+        strategyHealthHandoff: canonicalEvidence.handoff?.strategyHealthHandoff ?? null,
+        PROFITABILITY_PROVEN: false,
+        FORWARD_EVIDENCE_SUFFICIENT: false,
+      },
     },
   };
 }
@@ -301,6 +508,7 @@ async function processEthV6Forward({ client, previousForwardState, cycleTime }) 
 
 const statePath = resolve(process.argv[2] ?? "docs/shadow-state.json");
 const summaryPath = resolve(process.argv[3] ?? "docs/shadow-summary.json");
+const referenceEvidenceRoot = process.argv[4] ? resolve(process.argv[4]) : null;
 const cycleTime = Date.now();
 const previous = await readJsonOptional(statePath, { schemaVersion: 3, createdAt: cycleTime, groups: {}, forwardStrategies: {} });
 const client = new BitgetPublicClient({ minIntervalMs: 180, maxRetries: 4, timeoutMs: 12_000 });
@@ -335,6 +543,7 @@ for (const config of GROUPS) {
       config,
       previousGroupState: previous.groups?.[config.group],
       cycleTime,
+      referenceEvidenceRoot,
     });
     nextState.groups[config.group] = result.state;
     nextSummary.groups[config.group] = { status: "pass", ...result.summary };
