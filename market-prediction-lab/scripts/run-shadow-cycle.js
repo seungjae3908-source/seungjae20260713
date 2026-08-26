@@ -26,6 +26,7 @@ import { predictDeployedTinyModel } from "../src/deployment-inference.js";
 import {
   buildCanonicalShadowDriftHandoffV1,
   buildFutureShadowObservationV1,
+  buildFutureShadowSettlementEvidenceV1,
   buildNormalizedFeatureSnapshotV1,
   resolveModelIdentityMappingV1,
   resolveProducerStrategyIdentityV1,
@@ -120,13 +121,107 @@ function canonicalObservationId(context, config, symbol, anchorTimestamp) {
   ].join("|")).digest("hex");
 }
 
-function settleCanonicalObservations(observations, records) {
+function settleCanonicalObservations(observations, records, candlesBySymbol) {
   const settledByAnchor = new Map(records.filter((record) => record.status === "settled")
-    .map((record) => [`${record.symbol}|${record.timeframe}|${record.anchorTimestamp}|${record.horizon}`, record.actualDirection]));
+    .map((record) => [`${record.symbol}|${record.timeframe}|${record.anchorTimestamp}|${record.horizon}`, record]));
   return observations.map((observation) => {
     const source = observation.sourceProvenance;
-    const actual = settledByAnchor.get(`${observation.symbol}|${observation.timeframe}|${source.anchorTimestamp}|${source.horizon}`);
-    return actual ? settleFutureShadowObservationV1(observation, actual) : observation;
+    const record = settledByAnchor.get(`${observation.symbol}|${observation.timeframe}|${source.anchorTimestamp}|${source.horizon}`);
+    if (!record || observation.settlementStatus === "SETTLED") return observation;
+    const futureCandles = (candlesBySymbol[record.symbol] ?? [])
+      .filter((candle) => candle.timestamp > record.anchorTimestamp)
+      .slice(0, record.horizon);
+    if (futureCandles.length !== record.horizon) return observation;
+    const intervalMs = BITGET_TIMEFRAME_MS[record.timeframe];
+    const settlement = buildFutureShadowSettlementEvidenceV1({
+      observation,
+      actualDirection: record.actualDirection,
+      settlementPrice: futureCandles.at(-1).close,
+      futureCandles,
+      horizonBars: record.horizon,
+      outcomeAt: new Date(record.futureEndTimestamp + intervalMs).toISOString(),
+      settledAt: new Date(record.evaluatedAt).toISOString(),
+      costEvidence: {
+        applicable: false,
+        reason: "SHADOW_NO_EXECUTION",
+        commission: null,
+        slippage: null,
+        funding: null,
+        netReturn: null,
+      },
+      sourceProvenance: {
+        sourceKind: "GENUINE_FUTURE_SHADOW_OUTCOME",
+        provider: "bitget-public-v2",
+        firstCandleTimestamp: futureCandles[0].timestamp,
+        lastCandleTimestamp: futureCandles.at(-1).timestamp,
+        capturedAfterObservation: true,
+        reconstructed: false,
+        synthetic: false,
+        replayed: false,
+        historicalBackfill: false,
+      },
+    });
+    return settleFutureShadowObservationV1(observation, settlement);
+  });
+}
+
+function runtimeCounters(previousCanonical, {
+  rawRecordCount,
+  observations,
+  duplicateEvents,
+  replayEvents,
+} = {}) {
+  const previous = previousCanonical?.runtimeCounters ?? {};
+  return Object.freeze({
+    RAW_RECORD_COUNT: (Number(previous.RAW_RECORD_COUNT) || previousCanonical?.observations?.length || 0) + rawRecordCount,
+    UNIQUE_GENUINE_OBSERVATION_COUNT: observations.length,
+    UNIQUE_SETTLEMENT_COUNT: observations.filter((observation) => observation.settlementStatus === "SETTLED").length,
+    DUPLICATE_COUNT: (Number(previous.DUPLICATE_COUNT) || 0) + duplicateEvents.length,
+    REPLAY_COUNT: (Number(previous.REPLAY_COUNT) || 0) + replayEvents.length,
+  });
+}
+
+function firstZeroEvidence({ canonicalContext, canonicalRunError, identityChanged, currentRunAttemptCount, currentRunObservationCount, observations, handoff }) {
+  const settledN = observations.filter((observation) => observation.settlementStatus === "SETTLED").length;
+  const pendingN = observations.filter((observation) => observation.settlementStatus === "PENDING_SETTLEMENT").length;
+  const driftInputN = handoff?.observationEvidence?.driftInputN ?? 0;
+  const funnel = Object.freeze({
+    SIGNAL: currentRunAttemptCount,
+    OBSERVATION: currentRunObservationCount,
+    POSITION: pendingN,
+    SETTLEMENT: settledN,
+    DRIFT: driftInputN,
+    STRATEGY_HEALTH: handoff?.strategyHealthHandoff ? 1 : 0,
+  });
+  let stage = null;
+  let reason = null;
+  if (!currentRunAttemptCount) {
+    stage = "SIGNAL";
+    reason = "NO_ELIGIBLE_SIGNAL";
+  } else if (!currentRunObservationCount) {
+    stage = "OBSERVATION";
+    const failureReason = canonicalRunError?.reason ?? canonicalContext?.reason ?? "";
+    reason = failureReason.includes("REFERENCE_EXPIRED") ? "REFERENCE_EXPIRED"
+      : (identityChanged || failureReason.includes("MODEL") || failureReason.includes("IDENTITY_MISMATCH") ? "MODEL_IDENTITY_MISMATCH"
+        : (failureReason.includes("STRATEGY") || canonicalContext?.valid === false ? "STRATEGY_IDENTITY_MISSING"
+          : (canonicalRunError ? "OBSERVATION_WRITE_FAILED" : "DUPLICATE_ONLY")));
+  } else if (!pendingN && !settledN) {
+    stage = "POSITION";
+    reason = "OBSERVATION_WRITE_FAILED";
+  } else if (!settledN) {
+    stage = "SETTLEMENT";
+    reason = "SETTLEMENT_NOT_DUE";
+  } else if (handoff?.driftVerdict?.status === "NOT_EVALUABLE") {
+    stage = "DRIFT";
+    reason = handoff.driftVerdict.reason === "CANONICAL_DRIFT_POLICY_MISSING" ? "DRIFT_POLICY_MISSING" : "INSUFFICIENT_SAMPLE";
+  } else if (!handoff?.strategyHealthHandoff) {
+    stage = "STRATEGY_HEALTH";
+    reason = "STRATEGY_HEALTH_MISSING_EVIDENCE";
+  }
+  return Object.freeze({
+    ...funnel,
+    FIRST_ZERO_STAGE: stage,
+    FIRST_ZERO_REASON: reason,
   });
 }
 
@@ -191,7 +286,10 @@ async function processGroup({ client, config, previousGroupState, cycleTime, ref
     ? []
     : [...(previousCanonical?.observations ?? [])];
   let canonicalRunError = null;
+  let canonicalAttemptCount = 0;
   let canonicalNewObservationCount = 0;
+  const duplicateEvents = [];
+  const replayEvents = [];
   let groupState = {
     schemaVersion: 2,
     createdAt: previousGroupState?.createdAt ?? cycleTime,
@@ -291,9 +389,21 @@ async function processGroup({ client, config, previousGroupState, cycleTime, ref
     if (!groupState.records.some((existing) => existing.id === record.id)) {
       groupState = upsertShadowPrediction(groupState, record);
     }
+    canonicalAttemptCount += 1;
     if (canonicalContext.valid && !identityChanged) {
       const observationId = canonicalObservationId(canonicalContext, config, symbol, anchor.timestamp);
-      if (!canonicalObservations.some((observation) => observation.observationId === observationId)) {
+      if (canonicalObservations.some((observation) => observation.observationId === observationId)) {
+        duplicateEvents.push({
+          observationId,
+          strategyIdentityDigest: canonicalContext.strategyResolution.strategyIdentityDigest,
+          symbol,
+          timeframe: config.timeframe,
+          signalAt: new Date(anchor.timestamp + BITGET_TIMEFRAME_MS[config.timeframe]).toISOString(),
+          detectedAt: new Date(cycleTime).toISOString(),
+          reason: "DETERMINISTIC_OBSERVATION_ID_DUPLICATE",
+          credit: 0,
+        });
+      } else {
         try {
           const exactInference = predictDeployedTinyModel({
             features: candidate.features,
@@ -308,20 +418,31 @@ async function processGroup({ client, config, previousGroupState, cycleTime, ref
           canonicalObservations.push(buildFutureShadowObservationV1({
             observationId,
             observedAt: new Date(cycleTime).toISOString(),
+            signalAt: new Date(anchor.timestamp + BITGET_TIMEFRAME_MS[config.timeframe]).toISOString(),
             symbol,
             market: canonicalContext.strategyResolution.strategyIdentity.market,
             timeframe: canonicalContext.strategyResolution.strategyIdentity.timeframe,
             direction: canonicalContext.strategyResolution.strategyIdentity.direction,
+            strategyIdentity: canonicalContext.strategyResolution.strategyIdentity,
             strategyIdentityDigest: canonicalContext.strategyResolution.strategyIdentityDigest,
+            modelIdentity: canonicalContext.modelResolution.modelIdentity,
             modelIdentityDigest: canonicalContext.modelResolution.modelIdentityDigest,
             referenceIdentity: canonicalContext.referenceResolution.referenceIdentity,
             regime: record.regime,
             rawFeatureSnapshot,
             normalizedFeatureSnapshot,
             inference: exactInference,
+            referencePrice: anchor.close,
+            priceProvenance: {
+              provider: "bitget-public-v2",
+              source: commonInput.source,
+              priceField: "close",
+              candleTimestamp: anchor.timestamp,
+              signalAt: new Date(anchor.timestamp + BITGET_TIMEFRAME_MS[config.timeframe]).toISOString(),
+            },
             dataFreshness: {
               status: "FRESH",
-              ageMs: cycleTime - anchor.timestamp,
+              ageMs: cycleTime - (anchor.timestamp + BITGET_TIMEFRAME_MS[config.timeframe]),
               maxAgeMs: BITGET_TIMEFRAME_MS[config.timeframe] * 3,
             },
             sourceProvenance: {
@@ -329,6 +450,7 @@ async function processGroup({ client, config, previousGroupState, cycleTime, ref
               provider: "bitget-public-v2",
               source: commonInput.source,
               anchorTimestamp: anchor.timestamp,
+              signalTimestamp: anchor.timestamp + BITGET_TIMEFRAME_MS[config.timeframe],
               horizon: config.horizon,
               capturedAtObservationTime: true,
               reconstructed: false,
@@ -345,7 +467,7 @@ async function processGroup({ client, config, previousGroupState, cycleTime, ref
     }
   }
 
-  canonicalObservations = settleCanonicalObservations(canonicalObservations, groupState.records).slice(-10000);
+  canonicalObservations = settleCanonicalObservations(canonicalObservations, groupState.records, candlesBySymbol).slice(-10000);
   let canonicalEvidence;
   if (!canonicalContext.valid || canonicalRunError) {
     const failure = canonicalRunError ?? canonicalContext;
@@ -355,9 +477,21 @@ async function processGroup({ client, config, previousGroupState, cycleTime, ref
       runtimeStatus: failure.status,
       runtimeReason: failure.reason,
       currentRunCredited: false,
-      currentRunObservationCount: 0,
+      currentRunAttemptCount: canonicalAttemptCount,
+      currentRunObservationCount: canonicalNewObservationCount,
       lastAttemptAt: new Date(cycleTime).toISOString(),
       observations: canonicalObservations,
+      rejectedCredits: [
+        ...(previousCanonical?.rejectedCredits ?? []),
+        ...duplicateEvents,
+        ...replayEvents,
+      ].slice(-1000),
+      runtimeCounters: runtimeCounters(previousCanonical, {
+        rawRecordCount: canonicalAttemptCount,
+        observations: canonicalObservations,
+        duplicateEvents,
+        replayEvents,
+      }),
       PROFITABILITY_PROVEN: false,
       FORWARD_EVIDENCE_SUFFICIENT: false,
     };
@@ -368,9 +502,11 @@ async function processGroup({ client, config, previousGroupState, cycleTime, ref
       runtimeStatus: "IDENTITY_MISMATCH",
       runtimeReason: "PREDECESSOR_CANONICAL_IDENTITY_MISMATCH",
       currentRunCredited: false,
+      currentRunAttemptCount: canonicalAttemptCount,
       currentRunObservationCount: 0,
       lastAttemptAt: new Date(cycleTime).toISOString(),
       observations: previousCanonical?.observations ?? [],
+      runtimeCounters: previousCanonical?.runtimeCounters ?? null,
       PROFITABILITY_PROVEN: false,
       FORWARD_EVIDENCE_SUFFICIENT: false,
     };
@@ -391,16 +527,37 @@ async function processGroup({ client, config, previousGroupState, cycleTime, ref
       runtimeStatus: handoff.status,
       runtimeReason: handoff.reason,
       currentRunCredited: canonicalNewObservationCount > 0 && handoff.observationEvidence?.futureOnly === true,
+      currentRunAttemptCount: canonicalAttemptCount,
       currentRunObservationCount: canonicalNewObservationCount,
       lastAttemptAt: new Date(cycleTime).toISOString(),
       strategyIdentityDigest: canonicalContext.strategyResolution.strategyIdentityDigest,
       modelIdentityDigest: canonicalContext.modelResolution.modelIdentityDigest,
       observations: canonicalObservations,
+      rejectedCredits: [
+        ...(previousCanonical?.rejectedCredits ?? []),
+        ...duplicateEvents,
+        ...replayEvents,
+      ].slice(-1000),
+      runtimeCounters: runtimeCounters(previousCanonical, {
+        rawRecordCount: canonicalAttemptCount,
+        observations: canonicalObservations,
+        duplicateEvents,
+        replayEvents,
+      }),
       handoff,
       PROFITABILITY_PROVEN: false,
       FORWARD_EVIDENCE_SUFFICIENT: false,
     };
   }
+  canonicalEvidence.firstZero = firstZeroEvidence({
+    canonicalContext,
+    canonicalRunError,
+    identityChanged,
+    currentRunAttemptCount: canonicalAttemptCount,
+    currentRunObservationCount: canonicalNewObservationCount,
+    observations: canonicalEvidence.observations ?? canonicalObservations,
+    handoff: canonicalEvidence.handoff ?? null,
+  });
   groupState = { ...groupState, canonicalEvidence };
 
   const summary = summarizeShadowState(groupState, {
@@ -424,9 +581,12 @@ async function processGroup({ client, config, previousGroupState, cycleTime, ref
         runtimeStatus: canonicalEvidence.runtimeStatus,
         runtimeReason: canonicalEvidence.runtimeReason,
         currentRunCredited: canonicalEvidence.currentRunCredited,
+        currentRunAttemptCount: canonicalEvidence.currentRunAttemptCount ?? 0,
         currentRunObservationCount: canonicalEvidence.currentRunObservationCount ?? 0,
         observationCount: canonicalEvidence.observations?.length ?? 0,
         settledObservationCount: canonicalEvidence.observations?.filter((observation) => observation.actualDirection).length ?? 0,
+        runtimeCounters: canonicalEvidence.runtimeCounters ?? null,
+        firstZero: canonicalEvidence.firstZero ?? null,
         strategyHealthHandoff: canonicalEvidence.handoff?.strategyHealthHandoff ?? null,
         PROFITABILITY_PROVEN: false,
         FORWARD_EVIDENCE_SUFFICIENT: false,
@@ -553,6 +713,33 @@ for (const config of GROUPS) {
     nextSummary.status = "fail";
   }
 }
+
+const canonicalGroupSummaries = Object.values(nextSummary.groups)
+  .map((group) => group?.canonicalEvidence)
+  .filter(Boolean);
+const counterNames = ["RAW_RECORD_COUNT", "UNIQUE_GENUINE_OBSERVATION_COUNT", "UNIQUE_SETTLEMENT_COUNT", "DUPLICATE_COUNT", "REPLAY_COUNT"];
+const aggregateCounters = Object.fromEntries(counterNames.map((name) => [name, canonicalGroupSummaries
+  .reduce((sum, group) => sum + (Number(group.runtimeCounters?.[name]) || 0), 0)]));
+const aggregateFunnel = Object.fromEntries(["SIGNAL", "OBSERVATION", "POSITION", "SETTLEMENT", "DRIFT", "STRATEGY_HEALTH"]
+  .map((name) => [name, canonicalGroupSummaries.reduce((sum, group) => sum + (Number(group.firstZero?.[name]) || 0), 0)]));
+const firstZeroOrder = ["SIGNAL", "OBSERVATION", "POSITION", "SETTLEMENT", "DRIFT", "STRATEGY_HEALTH"];
+const firstZeroStage = firstZeroOrder.find((name) => aggregateFunnel[name] === 0) ?? null;
+const firstZeroReason = firstZeroStage
+  ? (canonicalGroupSummaries.find((group) => group.firstZero?.FIRST_ZERO_STAGE === firstZeroStage)?.firstZero?.FIRST_ZERO_REASON
+    ?? (firstZeroStage === "SETTLEMENT" ? "SETTLEMENT_NOT_DUE" : "INSUFFICIENT_SAMPLE"))
+  : null;
+nextSummary.canonicalEvidence = {
+  ...aggregateCounters,
+  ...aggregateFunnel,
+  FIRST_ZERO_STAGE: firstZeroStage,
+  FIRST_ZERO_REASON: firstZeroReason,
+  duplicateCredit: 0,
+  replayCredit: 0,
+  syntheticCredit: 0,
+  historicalBackfillCredit: 0,
+  PROFITABILITY_PROVEN: false,
+  FORWARD_EVIDENCE_SUFFICIENT: false,
+};
 
 try {
   const forward = await processEthV6Forward({
