@@ -2,12 +2,18 @@
 // Honest 503 SUPABASE_NOT_CONFIGURED until a server (secret) key is present;
 // the frontend keeps working from localStorage and syncs when this comes up.
 import { Router, type IRouter } from 'express';
+import memberWatchlistRouter from './member-watchlist';
 import {
 	WatchlistService,
 	type WatchlistInput,
 } from '../services/watchlist.service';
 
 const router: IRouter = Router();
+
+// Authenticated member-owned canonical Watchlist. The parent index mounts this
+// router behind requireAuthenticated + canAccessBasicInfo. These routes derive
+// identity only from req.member and never use the legacy deviceId as ownership.
+router.use('/', memberWatchlistRouter);
 
 function deviceIdOf(value: unknown): string {
 	const id = typeof value === 'string' ? value.trim() : '';
