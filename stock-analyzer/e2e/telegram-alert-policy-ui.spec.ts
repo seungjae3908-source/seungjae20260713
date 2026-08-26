@@ -1,0 +1,70 @@
+import { expect, test } from '@playwright/test';
+import fs from 'node:fs';
+import path from 'node:path';
+
+function source(relativePath: string) {
+  return fs.readFileSync(path.resolve(process.cwd(), relativePath), 'utf8');
+}
+
+const panel = source('src/components/user-broker-telegram-panel.tsx');
+
+test('Telegram settings center exposes the existing user-bound alert policy instead of inventing a second policy engine', () => {
+  expect(panel).toContain("'/api/user-integrations/telegram-policy'");
+  expect(panel).toContain("method: 'PATCH'");
+  expect(panel).toContain('Telegram 투자 알림센터');
+  expect(panel).toContain('투자 알림 전체');
+  expect(panel).toContain('alertPolicyStorageAvailable');
+  expect(panel).toContain('Telegram 개인 알림 저장소를 사용할 수 없어 설정 변경을 차단했습니다.');
+});
+
+test('Telegram settings center covers all canonical markets and scanner-facing signal classes', () => {
+  for (const label of ['국내주식', '미국주식', '코인 현물', '코인 선물']) {
+    expect(panel).toContain(label);
+  }
+  for (const signal of [
+    "BUY: 'BUY'",
+    "LONG: '선물 LONG'",
+    "SHORT: '선물 SHORT'",
+    "NO_TRADE: 'NO TRADE'",
+    "PRICE_TARGET: '목표가'",
+    "STRATEGY_HEALTH: '전략 상태'",
+    "CHAMPION: 'Champion'",
+    "RESEARCH: 'Research'",
+    "SETTLEMENT: '정산 결과'",
+    "PROVIDER_SERVER_ERROR: '데이터·서버 오류'",
+  ]) {
+    expect(panel).toContain(signal);
+  }
+});
+
+test('Telegram settings center exposes urgency, quiet hours, digest and bounded duplicate controls', () => {
+  for (const label of [
+    '긴급', '중요', '일반',
+    '지정 시간에는 일반 알림 끄기',
+    '긴급은 허용',
+    '즉시 받기',
+    '모아서 받기',
+    '모아보기 간격(분)',
+    '같은 대상 쿨다운(분)',
+    '같은 이벤트 차단(분)',
+    '같은 종목 창(분)',
+    '같은 종목 최대 횟수',
+  ]) {
+    expect(panel).toContain(label);
+  }
+  expect(panel).toContain("<option value=\"Asia/Seoul\">서울</option>");
+  expect(panel).toContain("<option value=\"America/New_York\">뉴욕</option>");
+  expect(panel).toContain("deliveryMode === 'BATCHED'");
+  expect(panel).toContain('sameSymbolRepeatLimit');
+});
+
+test('Telegram settings remain responsive and do not add Telegram-side trade execution controls', () => {
+  expect(panel).toContain('grid grid-cols-2 gap-2 sm:grid-cols-4');
+  expect(panel).toContain('min-h-11');
+  expect(panel).toContain('이 설정은 거래 판단이나 주문 권한을 바꾸지 않습니다.');
+  expect(panel).not.toContain('callback_data');
+  expect(panel).not.toContain('Telegram에서 매수');
+  expect(panel).not.toContain('Telegram에서 매도');
+  expect(panel).not.toContain('Telegram에서 LONG 진입');
+  expect(panel).not.toContain('Telegram에서 SHORT 진입');
+});
