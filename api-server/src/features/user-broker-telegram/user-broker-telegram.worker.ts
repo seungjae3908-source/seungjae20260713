@@ -1,4 +1,5 @@
 import { getSupabase, hasSupabaseServerKey } from '../../lib/supabase';
+import { sendTelegramAlert } from '../../services/telegram-notification.service';
 import { UserBrokerTelegramService } from './user-broker-telegram.service';
 import { createSupabaseUserBrokerTelegramRepository } from './user-broker-telegram.repository';
 import { HttpUserTelegramTransport } from './user-broker-telegram.transport';
@@ -90,7 +91,13 @@ export function startUserTelegramDeliveryWorker(
   }
   const transport = transportOverride ?? new HttpUserTelegramTransport(token!);
   const repository = createSupabaseUserBrokerTelegramRepository();
-  const service = new UserBrokerTelegramService(repository, transport, noopPortfolioSink);
+  const service = new UserBrokerTelegramService(
+    repository,
+    transport,
+    noopPortfolioSink,
+    process.env.TELEGRAM_BOT_USERNAME?.trim() || null,
+    sendTelegramAlert,
+  );
   const worker = new TelegramDeliveryWorker(new SupabaseTelegramDeliveryWorkerSource(), service);
   const tick = () => void worker.runOnce().catch((error) => {
     console.error('[user-telegram-worker] delivery tick failed', { code: error instanceof Error ? error.message : 'UNKNOWN' });
