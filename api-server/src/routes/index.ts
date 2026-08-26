@@ -31,6 +31,7 @@ import accountConnectionsRouter from './account-connections';
 import { createAccountReadonlyRouter, accountReadFlags } from '../features/account-readonly/account-readonly.route';
 import { AccountReadonlyService } from '../features/account-readonly/account-readonly.service';
 import { createVaultBackedAccountReaders } from '../features/account-readonly/account-readonly.runtime';
+import { accountReadonlyCredentialConfigured } from '../features/account-readonly/account-readonly.repository';
 import {
   manualPortfolioNotificationBridge,
   telegramWebhookRouter,
@@ -74,7 +75,12 @@ router.use('/account-connections', accountConnectionsRouter);
 router.use(
   '/accounts/read-only',
   requireCapability('canAccessBasicInfo'),
-  createAccountReadonlyRouter(new AccountReadonlyService(createVaultBackedAccountReaders(), accountReadFlags())),
+  createAccountReadonlyRouter(new AccountReadonlyService(
+    createVaultBackedAccountReaders(),
+    accountReadFlags(),
+    () => new Date(),
+    accountReadonlyCredentialConfigured,
+  )),
 );
 
 // Canonical AI Scanner routes must be registered before the legacy market
