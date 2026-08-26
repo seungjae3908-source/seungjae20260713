@@ -61,7 +61,7 @@ function hypothesisAndDecision() {
     statement: "Trend, momentum, breakout, or recovery structures may justify bounded out-of-sample research.",
     marketScope: ["US_LARGE_CAP"],
     assetClass: "EQUITY",
-    timeframeScope: ["60m"],
+    timeframeScope: ["1h"],
     directionality: "POSITIVE",
     rationale: "Formula seeds are research candidates only and require independent validation.",
     supportingPaperIds: [paper.paperId],
@@ -72,7 +72,7 @@ function hypothesisAndDecision() {
       direction: "INCREASE",
       minimumMagnitude: null,
       unit: "DECIMAL_RETURN",
-      evaluationWindow: "60m",
+      evaluationWindow: "1h",
     },
     falsificationCriteria: {
       observable: "NEXT_WINDOW_EXCESS_RETURN",
@@ -80,14 +80,14 @@ function hypothesisAndDecision() {
       operator: "LTE",
       threshold: 0,
       unit: "DECIMAL_RETURN",
-      evaluationWindow: "60m",
+      evaluationWindow: "1h",
       minimumObservations: 200,
       rejectionStatement: "Reject when the measured conditional mean is non-positive.",
     },
     requiredData: [{
       dataset: "LICENSED_INTRADAY_EQUITY_BARS",
       fields: ["security_id", "open", "high", "low", "close", "volume"],
-      frequency: "60m",
+      frequency: "1h",
       provenanceRequired: true,
       licenseRequired: true,
     }],
@@ -216,7 +216,7 @@ test("US swing seeds compile into FormulaCandidateV1 only as NOT_EVALUATED resea
   assert.deepEqual(candidates.map((candidate) => candidate.strategyFamily).sort(), [...EVIDENCE_BACKED_FORMULA_FAMILIES].sort());
   for (const candidate of candidates) {
     assert.equal(candidate.market, "US_STOCK");
-    assert.equal(candidate.timeframe, "60m");
+    assert.equal(candidate.timeframe, "1h");
     assert.equal(candidate.direction, "LONG");
     assert.equal(candidate.evaluationStatus, "NOT_EVALUATED");
     assert.equal(candidate.formulaPassed, false);
