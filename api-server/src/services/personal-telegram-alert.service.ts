@@ -63,6 +63,11 @@ function storedAlert(input: TelegramAlertInput): StoredPersonalTelegramAlert {
   };
 }
 
+function digestWindowDueAt(now: Date, windowMs: number): string {
+  const bucket = Math.floor(now.getTime() / windowMs) + 1;
+  return new Date(bucket * windowMs).toISOString();
+}
+
 export async function deliverPersonalTelegramAlert(
   input: {
     userId: string;
@@ -130,7 +135,7 @@ export async function deliverPersonalTelegramAlert(
     }
     const timestamp = now.toISOString();
     const digestDueAt = batched
-      ? new Date(now.getTime() + (decision.digestWindowMs ?? 0)).toISOString()
+      ? digestWindowDueAt(now, decision.digestWindowMs!)
       : null;
     const deliveryId = randomUUID();
     const deliveryQueued = await outboxRepository.enqueueDelivery({
