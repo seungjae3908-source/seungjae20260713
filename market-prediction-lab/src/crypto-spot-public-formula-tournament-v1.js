@@ -67,10 +67,6 @@ function requiredText(value, code) {
   return value.trim();
 }
 
-function clamp01(value) {
-  return Math.max(0, Math.min(1, value));
-}
-
 function average(values) {
   return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
 }
@@ -211,7 +207,7 @@ export function prepareCryptoSpotPublicFormulaTournamentDatasetV1({
   });
   const trainIdentity = datasetIdentity("train", { ...commonIdentity, fingerprint: trainFingerprint });
   const oosIdentity = datasetIdentity("oos", { ...commonIdentity, fingerprint: oosFingerprint });
-  const dataset = deepFreeze({
+  return deepFreeze({
     schemaVersion: CRYPTO_SPOT_PUBLIC_FORMULA_TOURNAMENT_VERSION,
     contract: CRYPTO_SPOT_PUBLIC_FORMULA_TOURNAMENT_CONTRACT,
     provider: collected.provider,
@@ -245,7 +241,6 @@ export function prepareCryptoSpotPublicFormulaTournamentDatasetV1({
       executionAuthority: "NONE",
     },
   });
-  return dataset;
 }
 
 export async function collectCryptoSpotPublicFormulaTournamentDatasetV1({
@@ -334,20 +329,10 @@ function stressedCostModel(multiplier) {
   });
 }
 
-function liquidityImpactEvidence(multiplier) {
-  const rate = BASE_LIQUIDITY_IMPACT_RATE * multiplier;
-  return Object.freeze({
-    value: 0,
-    evidenceId: `modeled:bitget-spot-liquidity-impact-rate:${rate.toFixed(8)}`,
-    rate,
-    status: "MODELED_CONSERVATIVE",
-  });
-}
-
 function backtestCandidate({ formulaCandidate, generatedCandidate, dataset, period, datasetIdentity: identity, costMultiplier = 1 }) {
   const executionParameters = buildEvidenceBackedFormulaExecutionParametersV1({ formulaCandidate, generatedCandidate });
   const { signalEvaluator, evaluatorContract } = createEvidenceBackedFormulaSignalEvaluatorV1({ formulaCandidate, generatedCandidate });
-  const result = runOnePassCandidateBacktestV1({
+  return runOnePassCandidateBacktestV1({
     formulaCandidate,
     generatedCandidate,
     datasetIdentity: identity,
@@ -366,9 +351,8 @@ function backtestCandidate({ formulaCandidate, generatedCandidate, dataset, peri
     signalEvaluator,
     evaluatorContract,
     period: { ...period, includeFinalHoldout: false },
-    liquidityImpactEvidence: liquidityImpactEvidence(costMultiplier),
+    liquidityImpactEvidence: null,
   });
-  return result;
 }
 
 function maximumEntryLookbackBars(formulaCandidate, generatedCandidate) {
@@ -623,6 +607,17 @@ export function createCryptoSpotPublicFormulaTournamentDependenciesV1({ dataset 
         embargoWindowBars,
         fingerprint: datasetFingerprint(usable),
       });
+      const purgedPeriod = periodFromCandles(usable);
+      const result = backtestCandidate({
+        formulaCandidate,
+        generatedCandidate,
+        dataset,
+        period: purgedPeriod,
+        datasetIdentity: purgedOosDatasetIdentity,
+      });
+      if (result.trades.length === 0) {
+        return { status: "MISSING_EVIDENCE", failureCode: "PURGED_OOS_INVALID", failureReason: "purged OOS produced zero trades" };
+      }
       return Object.freeze({
         status: "PASS",
         strategyHash: formulaCandidate.formulaHash,
@@ -636,6 +631,12 @@ export function createCryptoSpotPublicFormulaTournamentDependenciesV1({ dataset 
         parameterFrozen: true,
         strategyFrozen: true,
         usableCandleCount: usable.length,
+        canonicalBacktestOwner: result.canonicalBacktestOwner,
+        executionEquivalent: result.executionEquivalent,
+        executionEngine: result.executionEngine,
+        evaluatedTradeCount: result.trades.length,
+        evaluatedPeriod: purgedPeriod,
+        metrics: result.metrics,
       });
     },
 
