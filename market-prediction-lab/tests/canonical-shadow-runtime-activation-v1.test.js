@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import test from "node:test";
 
 import {
@@ -69,6 +70,25 @@ test("publisher fails closed unless source run and runtime authorization agree",
     publish: true,
     reason: "LEGACY_DISABLED_CANONICAL_ACTIVE",
   });
+});
+
+test("publisher workflow clean-skips artifactless source runs before mutation gates", () => {
+  const workflow = fs.readFileSync(new URL("../../.github/workflows/prediction-lab-canonical-shadow-publisher.yml", import.meta.url), "utf8");
+  const classifierStart = workflow.indexOf("  classify-source-artifact:");
+  const publishStart = workflow.indexOf("  publish:");
+  assert.ok(classifierStart >= 0, "publisher must classify source artifact availability");
+  assert.ok(publishStart > classifierStart, "artifact classifier must run before publisher");
+
+  const classifier = workflow.slice(classifierStart, publishStart);
+  const publisher = workflow.slice(publishStart);
+  assert.match(classifier, /matches\.length === 0/);
+  assert.match(classifier, /matches\.length === 1 \? 'true' : 'false'/);
+  assert.match(classifier, /matches\.length > 1/);
+  assert.match(classifier, /core\.setFailed/);
+  assert.match(classifier, /produced no publisher artifact; clean skip/);
+  assert.doesNotMatch(classifier, /secrets\./);
+  assert.match(publisher, /needs: classify-source-artifact/);
+  assert.match(publisher, /needs\.classify-source-artifact\.outputs\.eligible == 'true'/);
 });
 
 test("binding shape rejects guessed or mutable identities", () => {
