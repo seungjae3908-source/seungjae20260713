@@ -1,0 +1,575 @@
+name: Canonical Prediction Lab Shadow Publisher
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/prediction-lab-canonical-shadow-cycle.yml
+      - .github/workflows/prediction-lab-canonical-shadow-publisher.yml
+      - market-prediction-lab/src/canonical-shadow-runtime-activation-v1.js
+      - market-prediction-lab/scripts/publish-canonical-shadow-artifact.js
+      - market-prediction-lab/tests/canonical-shadow-runtime-activation-v1.test.js
+      - market-prediction-lab/src/shadow-state-root-transport-v1.js
+      - research-dashboard/server.mjs
+      - research-dashboard/server.py
+      - api-server/src/services/strategy-health-research-adapter.service.ts
+  workflow_run:
+    workflows: ['Canonical Prediction Lab Shadow Cycle']
+    types: [completed]
+
+permissions:
+  actions: write
+  contents: read
+  issues: write
+  statuses: read
+
+concurrency:
+  group: prediction-lab-canonical-shadow-writer-v1
+  cancel-in-progress: false
+
+jobs:
+  validate-contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Validate publisher contracts
+        working-directory: market-prediction-lab
+        run: >-
+          node --test
+          tests/canonical-shadow-runtime-activation-v1.test.js
+          tests/shadow-state-root-transport-v1.test.js
+      - name: Validate publisher CLI and cutover order
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check market-prediction-lab/scripts/publish-canonical-shadow-artifact.js
+          grep -q 'workflow_run' .github/workflows/prediction-lab-canonical-shadow-publisher.yml
+          grep -q 'publish-canonical-shadow-artifact.js' .github/workflows/prediction-lab-canonical-shadow-publisher.yml
+          grep -q 'prediction-lab-shadow-hourly.yml/disable' .github/workflows/prediction-lab-canonical-shadow-publisher.yml
+          grep -q 'bindCanonicalStrategyHealth' .github/workflows/prediction-lab-canonical-shadow-publisher.yml
+          node - <<'NODE'
+          const fs = require('fs');
+          const text = fs.readFileSync('.github/workflows/prediction-lab-canonical-shadow-publisher.yml', 'utf8');
+          const receipt = text.indexOf('- name: Upload canonical publication receipt');
+          const disable = text.indexOf('- name: Disable legacy Shadow only after first canonical state-root + #659 E2E succeeds');
+          if (receipt < 0 || disable < 0 || receipt >= disable) throw new Error('Publication receipt must be durable before legacy Shadow disable');
+          const localConsumers = text.indexOf('- name: Verify Node and Python dashboard consumers agree on canonical candidate');
+          const remotePublish = text.indexOf('- name: Atomically publish normalized state to the existing state root');
+          if (localConsumers < 0 || remotePublish < 0 || localConsumers >= remotePublish) throw new Error('Consumer E2E must validate the candidate before Production state-root mutation');
+          NODE
+
+  publish:
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      (github.event.workflow_run.event == 'issue_comment' || github.event.workflow_run.event == 'schedule')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+      SOURCE_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      SOURCE_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+      SOURCE_EVENT: ${{ github.event.workflow_run.event }}
+      REPOSITORY: ${{ github.repository }}
+      STATE_ROOT: /var/lib/investment-research-production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Verify terminal source artifact and activation/schedule authority
+        id: gate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$SOURCE_CONCLUSION" == 'success' ]]
+          [[ "$SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$SOURCE_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD_SHA"
+          current_main="$(gh api "repos/$REPOSITORY/branches/main" --jq '.commit.sha')"
+          [[ "$current_main" == "$SOURCE_HEAD_SHA" ]] || { echo "Source run is no longer exact current main" >&2; exit 1; }
+
+          artifact_json="$(gh api "repos/$REPOSITORY/actions/runs/$SOURCE_RUN_ID/artifacts")"
+          artifact_row="$RUNNER_TEMP/source-artifact-metadata-row.json"
+          printf '%s' "$artifact_json" | SOURCE_RUN_ID="$SOURCE_RUN_ID" node -e '
+            let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
+              const j=JSON.parse(s);const r=process.env.SOURCE_RUN_ID;
+              const rows=j.artifacts.filter(x=>x.name===`prediction-lab-shadow-cycle-${r}`&&!x.expired);
+              if(rows.length!==1) process.exit(2);
+              process.stdout.write(JSON.stringify(rows[0]));
+            });' > "$artifact_row"
+          artifact_id="$(node -p "String(require(process.argv[1]).id)" "$artifact_row")"
+          artifact_name="$(node -p "String(require(process.argv[1]).name)" "$artifact_row")"
+          expected_digest="$(node -p "String(require(process.argv[1]).digest ?? '')" "$artifact_row")"
+          created_at="$(node -p "String(require(process.argv[1]).created_at ?? '')" "$artifact_row")"
+          expires_at="$(node -p "String(require(process.argv[1]).expires_at ?? '')" "$artifact_row")"
+          [[ "$artifact_id" =~ ^[1-9][0-9]*$ ]]
+          [[ "${expected_digest#sha256:}" =~ ^[0-9a-f]{64}$ ]]
+
+          archive="$RUNNER_TEMP/source-shadow-artifact.zip"
+          curl --fail --location --silent --show-error \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            -o "$archive" \
+            "https://api.github.com/repos/$REPOSITORY/actions/artifacts/$artifact_id/zip"
+          downloaded_digest="$(sha256sum "$archive" | awk '{print $1}')"
+          [[ "$downloaded_digest" == "${expected_digest#sha256:}" ]] || { echo 'Downloaded archive digest mismatch' >&2; exit 1; }
+          artifact_root="$RUNNER_TEMP/source-shadow-artifact"
+          rm -rf "$artifact_root"
+          mkdir -p "$artifact_root"
+          unzip -q "$archive" -d "$artifact_root"
+          provenance="$(find "$artifact_root" -type f -name shadow-cycle-provenance.json -print -quit)"
+          [[ -f "$provenance" ]] || { echo 'Canonical provenance missing' >&2; exit 1; }
+          source_from_provenance="$(node -p "String(require(process.argv[1]).runId ?? '')" "$provenance")"
+          producer_run_id="$(node -p "String(require(process.argv[1]).producerRunId ?? '')" "$provenance")"
+          request_id="$(node -p "String(require(process.argv[1]).canonicalRuntimeRequestId ?? '')" "$provenance")"
+          mode="$(node -p "String(require(process.argv[1]).canonicalRuntimeMode ?? '')" "$provenance")"
+          provenance_sha="$(node -p "String(require(process.argv[1]).researchCodeSha ?? '')" "$provenance")"
+          [[ "$source_from_provenance" == "$SOURCE_RUN_ID" ]]
+          [[ "$provenance_sha" == "$SOURCE_HEAD_SHA" ]]
+          [[ "$producer_run_id" == '32921992780' ]] || { echo 'Unexpected Producer transition' >&2; exit 1; }
+          [[ "$request_id" =~ ^(activate|hourly)-[1-9][0-9]*$ ]]
+          legacy_state="$(gh api "repos/$REPOSITORY/actions/workflows/prediction-lab-shadow-hourly.yml" --jq '.state')"
+
+          activation_authorized='false'
+          if [[ "$request_id" =~ ^activate-([1-9][0-9]*)$ ]]; then
+            [[ "$mode" == 'ACTIVATION' ]]
+            [[ "$SOURCE_EVENT" == 'issue_comment' ]]
+            comment_id="${BASH_REMATCH[1]}"
+            comment_json="$(gh api "repos/$REPOSITORY/issues/comments/$comment_id")"
+            comment_user="$(printf '%s' "$comment_json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(String(JSON.parse(s).user?.login??"")))')"
+            comment_body="$(printf '%s' "$comment_json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(String(JSON.parse(s).body??"").trim()))')"
+            comment_issue="$(printf '%s' "$comment_json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(String(JSON.parse(s).issue_url??"")))')"
+            [[ "$comment_user" == "${REPOSITORY%%/*}" ]]
+            [[ "$comment_body" == "/activate-canonical-shadow $SOURCE_HEAD_SHA" ]]
+            [[ "$comment_issue" == "https://api.github.com/repos/$REPOSITORY/issues/660" ]]
+            [[ "$legacy_state" != 'disabled_manually' ]] || { echo 'Legacy workflow already disabled before activation publication' >&2; exit 1; }
+            activation_authorized='true'
+          elif [[ "$request_id" =~ ^hourly-([1-9][0-9]*)$ ]]; then
+            [[ "$mode" == 'HOURLY' ]]
+            [[ "$SOURCE_EVENT" == 'schedule' ]]
+            [[ "$legacy_state" == 'disabled_manually' ]] || { echo 'Canonical hourly publication rejected while legacy remains enabled' >&2; exit 1; }
+          else
+            echo 'Canonical runtime request invalid' >&2
+            exit 1
+          fi
+
+          REQUEST_ID="$request_id" SOURCE_CONCLUSION="$SOURCE_CONCLUSION" LEGACY_STATE="$legacy_state" ACTIVATION_AUTHORIZED="$activation_authorized" node --input-type=module <<'NODE'
+          import { canonicalShadowPublisherGateV1 } from './market-prediction-lab/src/canonical-shadow-runtime-activation-v1.js';
+          const gate = canonicalShadowPublisherGateV1({
+            sourceConclusion: process.env.SOURCE_CONCLUSION,
+            requestId: process.env.REQUEST_ID,
+            legacyWorkflowState: process.env.LEGACY_STATE,
+            activationAuthorized: process.env.ACTIVATION_AUTHORIZED === 'true',
+          });
+          if (!gate.publish) throw new Error(`Publisher gate rejected: ${gate.reason}`);
+          NODE
+
+          metadata="$RUNNER_TEMP/source-artifact-metadata.json"
+          SOURCE_RUN_ID="$SOURCE_RUN_ID" ARTIFACT_ID="$artifact_id" ARTIFACT_NAME="$artifact_name" SOURCE_HEAD_SHA="$SOURCE_HEAD_SHA" EXPECTED_DIGEST="$expected_digest" DOWNLOADED_DIGEST="$downloaded_digest" CREATED_AT="$created_at" EXPIRES_AT="$expires_at" REPOSITORY="$REPOSITORY" node - <<'NODE' > "$metadata"
+          const value = {
+            schemaVersion: 'github-actions-artifact-transport-v1',
+            repository: process.env.REPOSITORY,
+            sourceRunId: process.env.SOURCE_RUN_ID,
+            artifactId: process.env.ARTIFACT_ID,
+            artifactName: process.env.ARTIFACT_NAME,
+            sourceHeadSha: process.env.SOURCE_HEAD_SHA,
+            expectedArchiveDigest: process.env.EXPECTED_DIGEST,
+            downloadedArchiveDigest: `sha256:${process.env.DOWNLOADED_DIGEST}`,
+            createdAt: process.env.CREATED_AT,
+            expiresAt: process.env.EXPIRES_AT,
+            expired: false,
+            workflowConclusion: 'success',
+            replayArtifact: false,
+          };
+          process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+          NODE
+          echo "artifact_root=$artifact_root" >> "$GITHUB_OUTPUT"
+          echo "metadata=$metadata" >> "$GITHUB_OUTPUT"
+          echo "artifact_id=$artifact_id" >> "$GITHUB_OUTPUT"
+          echo "artifact_digest=$expected_digest" >> "$GITHUB_OUTPUT"
+          echo "producer_run_id=$producer_run_id" >> "$GITHUB_OUTPUT"
+          echo "request_id=$request_id" >> "$GITHUB_OUTPUT"
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "legacy_state=$legacy_state" >> "$GITHUB_OUTPUT"
+
+      - name: Configure SSH only after all GitHub-side gates pass
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+          SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Read-only canonical state-root preflight and last-good snapshot
+        id: state
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+        run: |
+          set -Eeuo pipefail
+          next_root="$RUNNER_TEMP/next-canonical-state-root"
+          mkdir -p "$next_root/forward"
+          remote() {
+            ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$SSH_USER@$SSH_HOST" "$@"
+          }
+          remote "set -Eeuo pipefail; command -v sudo >/dev/null; id investment-research >/dev/null; sudo -n -u investment-research test -d '$STATE_ROOT'; sudo -n -u investment-research test -d '$STATE_ROOT/forward'; sudo -n -u investment-research test -w '$STATE_ROOT/forward'"
+          current_state="$STATE_ROOT/forward/shadow-state.json"
+          if remote "sudo -n -u investment-research test -f '$current_state'"; then
+            remote "sudo -n -u investment-research cat '$current_state'" > "$next_root/forward/shadow-state.json"
+            echo 'current_state=present' >> "$GITHUB_OUTPUT"
+          else
+            echo 'current_state=absent' >> "$GITHUB_OUTPUT"
+          fi
+          echo "next_root=$next_root" >> "$GITHUB_OUTPUT"
+
+      - name: Validate, normalize, and preserve last-good locally
+        id: normalize
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          result="$RUNNER_TEMP/canonical-publication-result.json"
+          node market-prediction-lab/scripts/publish-canonical-shadow-artifact.js \
+            --artifact-root '${{ steps.gate.outputs.artifact_root }}' \
+            --metadata '${{ steps.gate.outputs.metadata }}' \
+            --state-root '${{ steps.state.outputs.next_root }}' \
+            --result "$result"
+          status="$(node -p "String(require(process.argv[1]).status)" "$result")"
+          state_sha="$(node -p "String(require(process.argv[1]).stateSha256)" "$result")"
+          settled_n="$(node -p "String(require(process.argv[1]).settledObservationCount)" "$result")"
+          [[ "$status" == 'PUBLISHED' || "$status" == 'DUPLICATE_ARTIFACT' ]]
+          [[ "$state_sha" =~ ^[0-9a-f]{64}$ ]]
+          echo "result=$result" >> "$GITHUB_OUTPUT"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "state_sha=$state_sha" >> "$GITHUB_OUTPUT"
+          echo "settled_n=$settled_n" >> "$GITHUB_OUTPUT"
+
+      - name: Verify Node and Python dashboard consumers agree on canonical candidate
+        shell: bash
+        env:
+          CANDIDATE_ROOT: ${{ steps.state.outputs.next_root }}
+        run: |
+          set -Eeuo pipefail
+          node --input-type=module <<'NODE' > "$RUNNER_TEMP/node-consumer-contract.json"
+          import { buildResearchOverview } from './research-dashboard/server.mjs';
+          const overview = await buildResearchOverview({ stateRoot: process.env.CANDIDATE_ROOT });
+          if (overview.safety.liveTrading !== false || overview.safety.privateApi !== false || overview.safety.orderAuthority !== false) process.exit(1);
+          if (overview.profitability.proven !== false) process.exit(1);
+          if (!overview.shadow.canonicalHandoffs.length) process.exit(1);
+          const compact = {
+            profitability: overview.profitability.proven,
+            safety: overview.safety,
+            handoffs: overview.shadow.canonicalHandoffs.map(({ group, handoff }) => ({
+              group,
+              strategyIdentityDigest: handoff.strategyIdentityDigest,
+              modelIdentityDigest: handoff.modelIdentityDigest,
+              settledN: handoff.settledN,
+              driftStatus: handoff.driftVerdict?.status ?? null,
+              executionAuthority: handoff.executionAuthority,
+            })),
+          };
+          process.stdout.write(`${JSON.stringify(compact, null, 2)}\n`);
+          NODE
+          CANDIDATE_ROOT="$CANDIDATE_ROOT" python3 - <<'PY' > "$RUNNER_TEMP/python-consumer-contract.json"
+          import importlib.util, json, os
+          from pathlib import Path
+          spec = importlib.util.spec_from_file_location('research_dashboard_server', Path('research-dashboard/server.py'))
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          overview = module.build_research_overview(Path(os.environ['CANDIDATE_ROOT']))
+          if overview['safety']['liveTrading'] is not False or overview['safety']['privateApi'] is not False or overview['safety']['orderAuthority'] is not False:
+              raise SystemExit(1)
+          if overview['profitability']['proven'] is not False:
+              raise SystemExit(1)
+          rows = overview['shadow']['canonicalHandoffs']
+          if not rows:
+              raise SystemExit(1)
+          compact = {
+              'profitability': overview['profitability']['proven'],
+              'safety': overview['safety'],
+              'handoffs': [{
+                  'group': row['group'],
+                  'strategyIdentityDigest': row['handoff'].get('strategyIdentityDigest'),
+                  'modelIdentityDigest': row['handoff'].get('modelIdentityDigest'),
+                  'settledN': row['handoff'].get('settledN'),
+                  'driftStatus': (row['handoff'].get('driftVerdict') or {}).get('status'),
+                  'executionAuthority': row['handoff'].get('executionAuthority'),
+              } for row in rows],
+          }
+          print(json.dumps(compact, indent=2))
+          PY
+          node - <<'NODE'
+          const assert = require('node:assert/strict');
+          const fs = require('fs');
+          const nodeValue = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/node-consumer-contract.json', 'utf8'));
+          const pythonValue = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/python-consumer-contract.json', 'utf8'));
+          const pick = (value) => ({
+            profitability: value.profitability,
+            safety: {
+              liveTrading: value.safety.liveTrading,
+              privateApi: value.safety.privateApi,
+              orderAuthority: value.safety.orderAuthority,
+              forbiddenAuthorityObserved: value.safety.forbiddenAuthorityObserved,
+            },
+            handoffs: value.handoffs,
+          });
+          assert.deepStrictEqual(pick(nodeValue), pick(pythonValue));
+          NODE
+
+      - name: Set up pnpm for first-cutover Strategy Health adapter verification
+        if: steps.gate.outputs.mode == 'ACTIVATION'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+      - name: Install workspace dependencies for first-cutover adapter verification
+        if: steps.gate.outputs.mode == 'ACTIVATION'
+        run: pnpm install --frozen-lockfile
+      - name: Verify merged #659 Strategy Health adapter against canonical candidate
+        if: steps.gate.outputs.mode == 'ACTIVATION'
+        shell: bash
+        env:
+          CANDIDATE_ROOT: ${{ steps.state.outputs.next_root }}
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir api-server exec esbuild \
+            src/services/strategy-health-research-adapter.service.ts \
+            --bundle --platform=node --format=esm \
+            --outfile="$RUNNER_TEMP/strategy-health-research-adapter.mjs"
+          CANDIDATE_ROOT="$CANDIDATE_ROOT" node --input-type=module <<'NODE'
+          import { buildResearchOverview } from './research-dashboard/server.mjs';
+          const { bindCanonicalStrategyHealth } = await import(`file://${process.env.RUNNER_TEMP}/strategy-health-research-adapter.mjs`);
+          const overview = await buildResearchOverview({ stateRoot: process.env.CANDIDATE_ROOT });
+          const handoffs = overview.shadow.canonicalHandoffs;
+          if (!handoffs.length) throw new Error('Canonical Shadow handoff missing');
+          for (const { handoff } of handoffs) {
+            if (handoff.settledN < 30 && handoff.driftVerdict?.status !== 'NOT_EVALUABLE') {
+              throw new Error('Drift verdict must remain NOT_EVALUABLE below N=30');
+            }
+            if (handoff.executionAuthority !== 'NONE') throw new Error('Execution authority changed');
+          }
+          const binding = bindCanonicalStrategyHealth(overview);
+          if (binding.executionAuthority !== 'NONE') throw new Error('Strategy Health acquired execution authority');
+          if (binding.inputs.drift?.status !== 'MISSING_EVIDENCE') throw new Error('N<30 drift must remain MISSING_EVIDENCE in Strategy Health');
+          if (binding.inputs.profitability?.status !== 'MISSING_EVIDENCE') throw new Error('Profitability must remain unproven');
+          if (binding.inputs.champion?.status !== 'MISSING_EVIDENCE') throw new Error('Champion must remain NONE');
+          if (binding.status === 'HEALTHY') throw new Error('Strategy Health cannot be HEALTHY with missing canonical evidence');
+          process.stdout.write(`${JSON.stringify({ status: binding.status, drift: binding.inputs.drift, profitability: binding.inputs.profitability, champion: binding.inputs.champion, executionAuthority: binding.executionAuthority })}\n`);
+          NODE
+
+      - name: Atomically publish normalized state to the existing state root
+        if: steps.normalize.outputs.status == 'PUBLISHED'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+        run: |
+          set -Eeuo pipefail
+          current_main="$(gh api "repos/$REPOSITORY/branches/main" --jq '.commit.sha')"
+          [[ "$current_main" == "$SOURCE_HEAD_SHA" ]] || { echo 'Main moved before state-root publication; preserve last-good' >&2; exit 1; }
+          local_state='${{ steps.state.outputs.next_root }}/forward/shadow-state.json'
+          remote_upload="/tmp/canonical-shadow-${GITHUB_RUN_ID}.json"
+          target="$STATE_ROOT/forward/shadow-state.json"
+          scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$local_state" "$SSH_USER@$SSH_HOST:$remote_upload"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$SSH_USER@$SSH_HOST" \
+            "sudo -n bash -s -- '$remote_upload' '$target'" <<'REMOTE'
+          set -Eeuo pipefail
+          upload="$1"
+          target="$2"
+          tmp="${target}.tmp-$$-$RANDOM"
+          cleanup() { rm -f -- "$tmp" "$upload"; }
+          trap cleanup EXIT
+          cat "$upload" | sudo -n -u investment-research sh -c 'umask 077; cat > "$1"' sh "$tmp"
+          sudo -n -u investment-research mv -Tf -- "$tmp" "$target"
+          rm -f -- "$upload"
+          trap - EXIT
+          REMOTE
+
+      - name: Read back exact canonical state and verify byte digest
+        id: readback
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+        run: |
+          set -Eeuo pipefail
+          readback_root="$RUNNER_TEMP/readback-canonical-state-root"
+          mkdir -p "$readback_root/forward"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$SSH_USER@$SSH_HOST" \
+            "sudo -n -u investment-research cat '$STATE_ROOT/forward/shadow-state.json'" \
+            > "$readback_root/forward/shadow-state.json"
+          readback_sha="$(sha256sum "$readback_root/forward/shadow-state.json" | awk '{print $1}')"
+          [[ "$readback_sha" == '${{ steps.normalize.outputs.state_sha }}' ]] || { echo 'State-root readback digest mismatch' >&2; exit 1; }
+          echo "root=$readback_root" >> "$GITHUB_OUTPUT"
+          echo "sha=$readback_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Build immutable publication receipt
+        id: receipt
+        shell: bash
+        env:
+          REQUEST_ID: ${{ steps.gate.outputs.request_id }}
+          MODE: ${{ steps.gate.outputs.mode }}
+          ARTIFACT_DIGEST: ${{ steps.gate.outputs.artifact_digest }}
+          PRODUCER_RUN_ID: ${{ steps.gate.outputs.producer_run_id }}
+          STATE_SHA: ${{ steps.readback.outputs.sha }}
+          PUBLISH_STATUS: ${{ steps.normalize.outputs.status }}
+          SETTLED_N: ${{ steps.normalize.outputs.settled_n }}
+          LEGACY_STATE_BEFORE: ${{ steps.gate.outputs.legacy_state }}
+        run: |
+          receipt="$RUNNER_TEMP/publication-receipt.json"
+          node - <<'NODE' > "$receipt"
+          const value = {
+            schemaVersion: 'prediction-lab-canonical-shadow-publication-receipt-v1',
+            status: process.env.PUBLISH_STATUS,
+            sourceRunId: process.env.SOURCE_RUN_ID,
+            sourceHeadSha: process.env.SOURCE_HEAD_SHA,
+            sourceArtifactDigest: process.env.ARTIFACT_DIGEST,
+            producerRunId: process.env.PRODUCER_RUN_ID,
+            requestId: process.env.REQUEST_ID,
+            mode: process.env.MODE,
+            stateSha256: process.env.STATE_SHA,
+            settledObservationCount: Number(process.env.SETTLED_N),
+            publishedAt: new Date().toISOString(),
+            legacyWorkflowStateBeforeCutover: process.env.LEGACY_STATE_BEFORE,
+            authoritativeOnlyWhenPublisherRunSucceeds: true,
+            PROFITABILITY_PROVEN: false,
+            FORWARD_EVIDENCE_SUFFICIENT: false,
+            safety: {
+              LIVE_TRADING: false,
+              AUTO_TRADING: false,
+              REAL_ORDER_ENABLED: false,
+              PRIVATE_TRADING_API_ALLOWED: false,
+              executionAuthority: 'NONE',
+              realOrderCount: 0,
+            },
+          };
+          process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+          NODE
+          echo "path=$receipt" >> "$GITHUB_OUTPUT"
+      - name: Upload canonical publication receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: canonical-shadow-publication-receipt-${{ github.event.workflow_run.id }}
+          path: ${{ steps.receipt.outputs.path }}
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Disable legacy Shadow only after first canonical state-root + #659 E2E succeeds
+        if: steps.gate.outputs.mode == 'ACTIVATION'
+        id: cutover
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          current_main="$(gh api "repos/$REPOSITORY/branches/main" --jq '.commit.sha')"
+          [[ "$current_main" == "$SOURCE_HEAD_SHA" ]] || { echo 'Main moved before legacy disable; preserve legacy runtime' >&2; exit 1; }
+          gh api --method PUT "repos/$REPOSITORY/actions/workflows/prediction-lab-shadow-hourly.yml/disable" >/dev/null
+          echo 'legacy_disable_request=accepted' >> "$GITHUB_OUTPUT"
+
+      - name: Record first cutover success in Central Hub (observability only)
+        if: steps.gate.outputs.mode == 'ACTIVATION' && success()
+        continue-on-error: true
+        uses: actions/github-script@v7
+        env:
+          ARTIFACT_DIGEST: ${{ steps.gate.outputs.artifact_digest }}
+          STATE_SHA: ${{ steps.readback.outputs.sha }}
+          SETTLED_N: ${{ steps.normalize.outputs.settled_n }}
+        with:
+          script: |
+            const legacy = await github.rest.actions.getWorkflow({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'prediction-lab-shadow-hourly.yml',
+            });
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 660,
+              body: [
+                '[CANONICAL_SHADOW_CUTOVER]',
+                'status: activation_command_completed',
+                `source_run: ${process.env.SOURCE_RUN_ID}`,
+                `source_head: ${process.env.SOURCE_HEAD_SHA}`,
+                `source_artifact_digest: ${process.env.ARTIFACT_DIGEST}`,
+                `state_root_sha256: ${process.env.STATE_SHA}`,
+                `settled_observation_count: ${process.env.SETTLED_N}`,
+                `legacy_shadow_state_observed: ${legacy.data.state}`,
+                `canonical_schedule_active: ${legacy.data.state === 'disabled_manually'}`,
+                'strategy_health_candidate_e2e: pass',
+                'state_root_readback: pass',
+                'production_app_deploy: 0',
+                'db_mutation: 0',
+                'secret_mutation: 0',
+                'live_trading: false',
+                'private_api: false',
+                'execution_authority: NONE',
+                'real_orders: 0',
+                'profitability_proven: false',
+              ].join('\n'),
+            });
+
+      - name: Record fail-closed publisher result in Central Hub
+        if: failure()
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const legacy = await github.rest.actions.getWorkflow({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'prediction-lab-shadow-hourly.yml',
+            });
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 660,
+              body: [
+                '[CANONICAL_SHADOW_CUTOVER]',
+                'status: failed_closed',
+                `publisher_run: ${context.runId}`,
+                `source_run: ${process.env.SOURCE_RUN_ID}`,
+                `source_head: ${process.env.SOURCE_HEAD_SHA}`,
+                `legacy_shadow_state_observed: ${legacy.data.state}`,
+                'automatic_retry: 0',
+                'live_trading: false',
+                'private_api: false',
+                'execution_authority: NONE',
+                'real_orders: 0',
+                'next: inspect exact failure; do not weaken gates',
+              ].join('\n'),
+            });
