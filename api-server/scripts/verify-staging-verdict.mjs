@@ -70,6 +70,13 @@ if (!Array.isArray(verdict.checks) || verdict.checks.length !== verdict.total) {
 const nonPassed = verdict.checks.filter((check) => check?.status !== 'passed');
 if (nonPassed.length) fail(`all staging check records must be passed, found ${nonPassed.length} non-passed checks`);
 
+const currentMobileViewportCheckNames = [
+  'browser: mobile 320x740: major screens []',
+  'browser: mobile 360x800: major screens []',
+  'browser: mobile 390x844: major screens []',
+  'browser: mobile 412x915: major screens []',
+  'browser: mobile 430x932: major screens []',
+];
 const requiredCheckNames = [
   'immutable target SHA',
   'full account and browser validation enabled',
@@ -78,7 +85,8 @@ const requiredCheckNames = [
   'browser: desktop: login, refresh session retention, responsive layout, and logout []',
   'browser: mobile: login, refresh session retention, responsive layout, and logout []',
   'browser: desktop: major screens, search/detail, domestic/overseas/coin, watchlist, alerts, and settings []',
-  'browser: mobile: major screens, search/detail, domestic/overseas/coin, watchlist, alerts, and settings []',
+  ...currentMobileViewportCheckNames,
+  'browser: mobile: search/detail, domestic/overseas/coin, watchlist, alerts, and settings []',
   'browser console errors',
   'browser page errors',
   'unhandled browser rejections',

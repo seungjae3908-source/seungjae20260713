@@ -4,6 +4,7 @@ import {
   calculateV1Signal,
   runV1Backtest,
 } from "./multi-market-backtest-engine.js";
+import { runIndependentSignalBacktest } from "./independent-strategy-backtest.js";
 import { summarizeResearchPerformance } from "./research-validation-layer.js";
 
 const EPSILON = 1e-9;
@@ -255,14 +256,57 @@ function validationPeriod() {
   return Object.freeze({ startTime: RESEARCH_BACKTEST_PERIOD.validationStartTime, endTime: RESEARCH_BACKTEST_PERIOD.validationEndTime, includeFinalHoldout: false });
 }
 
-function cloneTradeAsV4(trade, filter) {
-  return Object.freeze({ ...trade, strategy: "v4_ema_atr_regime_momentum", strategyVersion: "V4", entryFilter: filter });
+function v1RegimeAt(indicators, index) {
+  const fast = indicators.fast[index];
+  const slow = indicators.slow[index];
+  if (!Number.isFinite(fast) || !Number.isFinite(slow)) return "insufficient";
+  if (fast > slow) return "uptrend";
+  if (fast < slow) return "downtrend";
+  return "ranging";
 }
 
-function firstIndexAfter(candles, timestamp, startIndex) {
-  let index = Math.max(0, startIndex);
-  while (index < candles.length && candles[index].timestamp <= timestamp) index += 1;
-  return index;
+function cloneTradeAsV4(trade, filter, indicators, signalIndexByTimestamp) {
+  const signalIndex = signalIndexByTimestamp.get(trade.signalTime);
+  if (!Number.isInteger(signalIndex)) {
+    throw new ResearchContractError("V4_ENGINE_DIVERGENCE", "V4 one-pass trade signal time is not present in the canonical candle sequence", {
+      signalTime: trade.signalTime,
+    });
+  }
+  return Object.freeze({
+    id: `${trade.market}:${trade.symbol}:${trade.entryTime}:${trade.exitTime}:${trade.side}`,
+    market: trade.market,
+    symbol: trade.symbol,
+    strategy: "v4_ema_atr_regime_momentum",
+    strategyVersion: "V4",
+    timeframe: trade.timeframe,
+    side: trade.side,
+    action: trade.action,
+    regime: v1RegimeAt(indicators, signalIndex),
+    phase: trade.phase,
+    signalTime: trade.signalTime,
+    entryTime: trade.entryTime,
+    exitTime: trade.exitTime,
+    entryPrice: trade.entryPrice,
+    requestedExitPrice: trade.requestedExitPrice,
+    stopPrice: trade.stopPrice,
+    targetPrice: trade.targetPrice,
+    quantity: trade.quantity,
+    leverage: trade.leverage,
+    riskBudget: trade.riskBudget,
+    exitReason: trade.exitReason,
+    netPnl: trade.netPnl,
+    grossPnl: trade.grossPnl,
+    netReturnOnMargin: trade.netReturnOnMargin,
+    entryNotional: trade.entryNotional,
+    costsIncluded: trade.costsIncluded,
+    costs: trade.costs,
+    execution: trade.execution,
+    maximumFavorableExcursion: trade.maximumFavorableExcursion,
+    maximumAdverseExcursion: trade.maximumAdverseExcursion,
+    equityBefore: trade.equityBefore,
+    equityAfter: trade.equityAfter,
+    entryFilter: filter,
+  });
 }
 
 export function runV4FilteredBacktest({ backtestInput, parameters, filter, period } = {}) {
@@ -278,48 +322,72 @@ export function runV4FilteredBacktest({ backtestInput, parameters, filter, perio
     .sort((left, right) => left.timestamp - right.timestamp);
   if (candles.length === 0) throw new ResearchContractError("INVALID_V4_CANDLES", "V4 requires historical candles");
   const indicators = buildIndicators(candles, parameters);
+  const signalIndexByTimestamp = new Map(candles.map((candle, index) => [candle.timestamp, index]));
   const side = backtestInput.side ?? "long";
   const initialCapital = backtestInput.initialCapital ?? RESEARCH_BACKTEST_PERIOD.initialCapital;
-  const trades = [];
-  let equity = initialCapital;
-  let index = 1;
+  let firstEligibleSignalVerified = false;
 
-  while (index < candles.length - 1 && equity > 0) {
-    const candle = candles[index];
-    if (candle.timestamp < normalizedPeriod.startTime) {
-      index += 1;
-      continue;
-    }
-    const baseSignal = calculateV1Signal({ market: backtestInput.market, side, candles, indicators, index, parameters });
-    if (!baseSignal) {
-      index += 1;
-      continue;
-    }
-    const features = calculateV4SignalFeatures({ side, candles, indicators, index });
-    if (!passesFilter(features, normalizedFilter)) {
-      index += 1;
-      continue;
-    }
-    const continuation = runV1Backtest({
-      ...backtestInput,
-      candles,
-      parameters,
-      initialCapital: equity,
-      period: Object.freeze({ startTime: candle.timestamp, endTime: normalizedPeriod.endTime, includeFinalHoldout: false }),
-    });
-    const trade = continuation.trades[0];
-    if (!trade || trade.signalTime !== candle.timestamp) {
-      throw new ResearchContractError("V4_ENGINE_DIVERGENCE", "V4 filter signal did not match the reused V1 execution engine", {
-        expectedSignalTime: candle.timestamp,
-        actualSignalTime: trade?.signalTime ?? null,
+  const onePass = runIndependentSignalBacktest({
+    backtestInput: Object.freeze({ ...backtestInput, candles, initialCapital }),
+    strategy: "v1_ema_atr",
+    strategyVersion: "V1",
+    parameters,
+    period: normalizedPeriod,
+    signalEvaluator: ({ market, side: executionSide, candles: executionCandles, index }) => {
+      const baseSignal = calculateV1Signal({
+        market,
+        side: executionSide,
+        candles: executionCandles,
+        indicators,
+        index,
+        parameters,
       });
-    }
-    const v4Trade = cloneTradeAsV4(trade, normalizedFilter);
-    trades.push(v4Trade);
-    equity = v4Trade.equityAfter;
-    index = firstIndexAfter(candles, v4Trade.exitTime, index + 1);
-  }
+      if (!baseSignal) return null;
+      const features = calculateV4SignalFeatures({
+        side: executionSide,
+        candles: executionCandles,
+        indicators,
+        index,
+      });
+      if (!passesFilter(features, normalizedFilter)) return null;
 
+      if (!firstEligibleSignalVerified) {
+        firstEligibleSignalVerified = true;
+        const candle = executionCandles[index];
+        const continuation = runV1Backtest({
+          ...backtestInput,
+          candles: executionCandles,
+          parameters,
+          initialCapital,
+          period: Object.freeze({
+            startTime: candle.timestamp,
+            endTime: normalizedPeriod.endTime,
+            includeFinalHoldout: false,
+          }),
+        });
+        const trade = continuation.trades[0];
+        if (!trade || trade.signalTime !== candle.timestamp) {
+          throw new ResearchContractError("V4_ENGINE_DIVERGENCE", "V4 filter signal did not match the reused V1 execution engine", {
+            expectedSignalTime: candle.timestamp,
+            actualSignalTime: trade?.signalTime ?? null,
+          });
+        }
+      }
+
+      return Object.freeze({
+        v1Signal: true,
+        v4Filter: normalizedFilter,
+        features,
+      });
+    },
+  });
+
+  const trades = onePass.trades.map((trade) => cloneTradeAsV4(
+    trade,
+    normalizedFilter,
+    indicators,
+    signalIndexByTimestamp,
+  ));
   const performance = summarizeResearchPerformance(trades, { initialCapital });
   const metrics = compactPerformance(performance, initialCapital);
   return Object.freeze({

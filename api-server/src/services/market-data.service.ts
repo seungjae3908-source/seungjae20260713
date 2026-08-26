@@ -13,10 +13,20 @@ import type { Candle, CompanyProfile, Quote, Timeframe } from '../sample/types';
 export type { SearchResult, QuoteRow };
 
 const FALLBACK_PROFILE_DESCRIPTION = '기업 정보를 확인 중입니다.';
-const APP_KR_INTRADAY_CANDLE_LIMIT = 300;
+const APP_KR_INTERACTIVE_CANDLE_LIMIT = 300;
 export const APP_KR_INTRADAY_DEADLINE_MS = 2_000;
-const APP_KR_INTRADAY_YAHOO_HEDGE_DELAY_MS = 100;
-const KR_INTRADAY_TIMEFRAMES = new Set(['1m', '3m', '5m', '15m', '30m', '60m', '1H', '4H']);
+const APP_KR_INTERACTIVE_YAHOO_HEDGE_DELAY_MS = 100;
+const KR_INTERACTIVE_TIMEFRAMES = new Set([
+  '1m',
+  '3m',
+  '5m',
+  '15m',
+  '30m',
+  '60m',
+  '1H',
+  '4H',
+  '1D',
+]);
 
 export interface CandleEvidenceMeta {
   completeness: 'complete' | 'partial';
@@ -42,9 +52,14 @@ function minimumUsefulCandles(timeframe: Timeframe): number {
   return timeframe === '1D' ? 30 : 2;
 }
 
-function isBoundedKrIntradayRequest(ticker: string, timeframe: Timeframe): boolean {
+function isBoundedKrInteractiveRequest(ticker: string, timeframe: Timeframe): boolean {
   return /^\d{6}$/.test(String(ticker ?? '').trim())
-    && KR_INTRADAY_TIMEFRAMES.has(String(timeframe));
+    && KR_INTERACTIVE_TIMEFRAMES.has(String(timeframe));
+}
+
+function isBoundedKrIntradayRequest(ticker: string, timeframe: Timeframe): boolean {
+  return isBoundedKrInteractiveRequest(ticker, timeframe)
+    && String(timeframe) !== '1D';
 }
 
 export function resolveKrInteractiveMaxPages(timeframe: Timeframe): number {
@@ -54,6 +69,7 @@ export function resolveKrInteractiveMaxPages(timeframe: Timeframe): number {
   if (tf === '5m' || tf === '15m' || tf === '30m') return 8;
   if (tf === '60m' || tf === '1H') return 10;
   if (tf === '4H') return 12;
+  if (tf === '1D') return 4;
 
   return 8;
 }
@@ -77,13 +93,25 @@ function interactiveAbortError(): Error {
   return error;
 }
 
-async function getBoundedKrIntradayCandlesMeta(
+async function getBoundedKrInteractiveCandlesMeta(
   ticker: string,
   timeframe: Timeframe,
 ): Promise<MarketDataCandlesMeta> {
   const controller = new AbortController();
   const deadlineAt = Date.now() + APP_KR_INTRADAY_DEADLINE_MS;
-  const timeout = setTimeout(() => controller.abort(), APP_KR_INTRADAY_DEADLINE_MS);
+  const deadlineError = new Error('KR_INTERACTIVE_PROVIDER_DEADLINE');
+  deadlineError.name = 'TimeoutError';
+  const timeout = setTimeout(
+    () => controller.abort(deadlineError),
+    APP_KR_INTRADAY_DEADLINE_MS,
+  );
+  const terminalDeadline = new Promise<never>((_resolve, reject) => {
+    const rejectFromSignal = () => {
+      reject(controller.signal.reason instanceof Error ? controller.signal.reason : deadlineError);
+    };
+    if (controller.signal.aborted) rejectFromSignal();
+    else controller.signal.addEventListener('abort', rejectFromSignal, { once: true });
+  });
   let kiwoomFailure: string | null = null;
 
   const kiwoomAttempt = (async (): Promise<MarketDataCandlesMeta> => {
@@ -91,7 +119,7 @@ async function getBoundedKrIntradayCandlesMeta(
       const result = await getKiwoomChartCandlesMeta(
         String(ticker).trim(),
         String(timeframe),
-        APP_KR_INTRADAY_CANDLE_LIMIT,
+        APP_KR_INTERACTIVE_CANDLE_LIMIT,
         {
           signal: controller.signal,
           deadlineAt,
@@ -127,7 +155,7 @@ async function getBoundedKrIntradayCandlesMeta(
   })();
 
   const yahooAttempt = (async (): Promise<MarketDataCandlesMeta> => {
-    await new Promise((resolve) => setTimeout(resolve, APP_KR_INTRADAY_YAHOO_HEDGE_DELAY_MS));
+    await new Promise((resolve) => setTimeout(resolve, APP_KR_INTERACTIVE_YAHOO_HEDGE_DELAY_MS));
     if (controller.signal.aborted) throw interactiveAbortError();
 
     const candles = await getYahooCandles(String(ticker).trim(), String(timeframe));
@@ -147,8 +175,14 @@ async function getBoundedKrIntradayCandlesMeta(
   })();
 
   try {
-    return await Promise.any([kiwoomAttempt, yahooAttempt]);
-  } catch {
+    return await Promise.race([
+      Promise.any([kiwoomAttempt, yahooAttempt]),
+      terminalDeadline,
+    ]);
+  } catch (error) {
+    if (error === deadlineError || (error instanceof Error && error.message === deadlineError.message)) {
+      kiwoomFailure = 'DEADLINE_REACHED';
+    }
     return {
       candles: [],
       provider: 'none',
@@ -162,6 +196,13 @@ async function getBoundedKrIntradayCandlesMeta(
     clearTimeout(timeout);
     controller.abort();
   }
+}
+
+async function getBoundedKrIntradayCandlesMeta(
+  ticker: string,
+  timeframe: Timeframe,
+): Promise<MarketDataCandlesMeta> {
+  return getBoundedKrInteractiveCandlesMeta(ticker, timeframe);
 }
 
 export class MarketDataService extends BaseMarketDataService {
@@ -189,15 +230,20 @@ export class MarketDataService extends BaseMarketDataService {
     timeframe: Timeframe = '1D',
   ): Promise<MarketDataCandlesMeta> {
     /*
-     * App-facing KR intraday charts must terminate inside the browser's primary
-     * endpoint budget. Kiwoom and the public Yahoo fallback therefore race under
-     * one bounded deadline. If both fail, return truthful empty evidence instead
-     * of falling back into BaseMarketDataService's deep/unbounded Kiwoom history
-     * path. Research/long-history callers continue to use the lower-level APIs
+     * App-facing KR interactive charts must terminate inside the browser's
+     * primary endpoint budget. Kiwoom and the public Yahoo fallback therefore
+     * race under one bounded deadline for both intraday and daily visible
+     * windows. If both fail, return truthful empty evidence instead of falling
+     * back into BaseMarketDataService's deep/unbounded Kiwoom history path.
+     * Research/long-history callers continue to use the lower-level APIs
      * directly and keep their deep pagination semantics.
      */
     if (isBoundedKrIntradayRequest(ticker, timeframe)) {
       return getBoundedKrIntradayCandlesMeta(ticker, timeframe);
+    }
+
+    if (isBoundedKrInteractiveRequest(ticker, timeframe)) {
+      return getBoundedKrInteractiveCandlesMeta(ticker, timeframe);
     }
 
     let primaryResult: MarketDataCandlesMeta | null = null;
