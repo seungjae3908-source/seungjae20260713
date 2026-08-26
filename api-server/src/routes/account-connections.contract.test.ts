@@ -9,6 +9,7 @@ import {
   encryptTradingCredentials,
 } from '../services/trade-credential-vault.service';
 import type { ExchangeConnection } from '../services/trade-automation.types';
+import '../features/account-readonly/tests/account-readonly.test';
 import '../features/account-readonly/tests/account-readonly.runtime.test';
 
 const repositoryRoot = process.cwd();
@@ -131,6 +132,17 @@ test('server environment credentials can no longer become a user credential fall
     if (previousSecret == null) delete process.env.KIWOOM_APP_SECRET;
     else process.env.KIWOOM_APP_SECRET = previousSecret;
   }
+});
+
+test('disabled-read status lookup selects configured metadata without reading credential payloads', () => {
+  const repositorySource = source('api-server/src/features/account-readonly/account-readonly.repository.ts');
+  const lookup = repositorySource.match(
+    /export async function accountReadonlyCredentialConfigured[\s\S]*?\r?\n}\r?\n\r?\nexport class/,
+  )?.[0];
+
+  assert.ok(lookup, 'configured metadata lookup must remain explicit');
+  assert.match(lookup, /\.select\('configured'\)/);
+  assert.doesNotMatch(lookup, /encrypted_credentials|encryptedCredentials|decrypt/i);
 });
 
 test('account connection route requires approved-member capability and stays GET-only metadata-only', () => {
