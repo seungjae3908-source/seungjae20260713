@@ -98,6 +98,8 @@ test('personal Telegram test endpoint sends explicit test-only content to the al
   expect(panel).toContain('테스트 메시지 보내기');
   expect(panel).toContain('테스트 전송 중…');
   expect(panel).toContain('테스트 메시지는 투자 신호나 주문이 아닙니다.');
+  expect(panel).toContain('disabled={!state.telegram.connected || !state.telegramRuntime.deliveryReady || testSending}');
+  expect(panel).toContain('if (!state?.telegram.connected || !state.telegramRuntime.deliveryReady || testSending) return;');
 });
 
 test('Telegram settings remain responsive and do not add Telegram-side trade execution controls', () => {
