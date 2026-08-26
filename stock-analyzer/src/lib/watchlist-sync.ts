@@ -59,6 +59,25 @@ async function request<T>(path: string, init?: RequestInit): Promise<T | null> {
   }
 }
 
+function canonicalMarketForServer(value: unknown): string | null {
+  const market = String(value ?? '').trim().toUpperCase();
+  if (!market) return null;
+  if (['KR', 'KOSPI', 'KOSDAQ', 'KR_STOCK'].includes(market)) return 'KR_STOCK';
+  if (['US', 'NASDAQ', 'NYSE', 'AMEX', 'US_STOCK'].includes(market)) return 'US_STOCK';
+  if (['CRYPTO_SPOT', 'COIN_SPOT', 'SPOT', 'UPBIT'].includes(market)) return 'CRYPTO_SPOT';
+  if (['CRYPTO_FUTURES', 'COIN_FUTURES', 'FUTURES', 'BITGET'].includes(market)) return 'CRYPTO_FUTURES';
+  if (market === 'UNRESOLVED') return market;
+  return market;
+}
+
+function localMarketFromServer(value: unknown): string | undefined {
+  const market = String(value ?? '').trim().toUpperCase();
+  if (!market) return undefined;
+  if (market === 'KR_STOCK') return 'KR';
+  if (market === 'US_STOCK') return 'US';
+  return market;
+}
+
 function canonicalServerItems(
   items: ReadonlyArray<WatchlistItem | ServerWatchlistItem>,
 ): ServerWatchlistItem[] {
@@ -67,7 +86,7 @@ function canonicalServerItems(
     const ticker = String(item.ticker ?? '').trim().toUpperCase();
     if (!ticker) continue;
     const name = String(item.name ?? '').trim() || ticker;
-    const market = String(item.market ?? '').trim() || null;
+    const market = canonicalMarketForServer(item.market);
     const currency = String(item.currency ?? '').trim() || null;
     const targetPrice =
       typeof item.targetPrice === 'number' && Number.isFinite(item.targetPrice)
@@ -96,11 +115,12 @@ function mergeServerIntoLocal(serverItems: ServerWatchlistItem[]): void {
   for (const server of serverItems) {
     const key = server.ticker.toUpperCase();
     const local = map.get(key);
+    const localMarket = localMarketFromServer(server.market);
     if (!local) {
       map.set(key, {
         ticker: key,
         name: server.name || key,
-        market: server.market ?? undefined,
+        market: localMarket,
         currency: server.currency ?? undefined,
         targetPrice: server.targetPrice,
       });
@@ -111,7 +131,7 @@ function mergeServerIntoLocal(serverItems: ServerWatchlistItem[]): void {
     const merged: WatchlistItem = {
       ...local,
       name: server.name || local.name || key,
-      market: server.market ?? local.market,
+      market: localMarket ?? local.market,
       currency: server.currency ?? local.currency,
       targetPrice: server.targetPrice,
     };
