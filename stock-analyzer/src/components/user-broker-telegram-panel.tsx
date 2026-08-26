@@ -65,6 +65,22 @@ type TelegramAlertPolicy = {
   };
 };
 
+type TelegramRuntimeState = {
+  deliveryReady: boolean;
+  linkingReady: boolean;
+  webhookConfigured: boolean;
+  botUsernameConfigured: boolean;
+  stockRoomReady: boolean;
+  cryptoRoomReady: boolean;
+  richSignalEnabled: boolean;
+  aiExplanationEnabled: boolean;
+  signalFollowupEnabled: boolean;
+  memberHoldingsEnabled: boolean;
+  orderAuthority: 'NONE';
+  privateTradingApiAllowed: false;
+  realOrderAllowed: false;
+};
+
 type IntegrationState = {
   brokerConnections: BrokerConnection[];
   telegram: { connected: boolean; status: string; connectedAt: string | null };
@@ -72,6 +88,7 @@ type IntegrationState = {
   alertPolicy: TelegramAlertPolicy;
   alertPolicySource: string;
   alertPolicyStorageAvailable: boolean;
+  telegramRuntime: TelegramRuntimeState;
 };
 
 const preferenceLabels: Record<PreferenceKey, string> = {
@@ -169,6 +186,25 @@ function normalizeAlertPolicy(value: unknown): TelegramAlertPolicy {
   };
 }
 
+function normalizeTelegramRuntime(value: unknown): TelegramRuntimeState {
+  const runtime = record(value) ?? {};
+  return {
+    deliveryReady: runtime.deliveryReady === true,
+    linkingReady: runtime.linkingReady === true,
+    webhookConfigured: runtime.webhookConfigured === true,
+    botUsernameConfigured: runtime.botUsernameConfigured === true,
+    stockRoomReady: runtime.stockRoomReady === true,
+    cryptoRoomReady: runtime.cryptoRoomReady === true,
+    richSignalEnabled: runtime.richSignalEnabled === true,
+    aiExplanationEnabled: runtime.aiExplanationEnabled === true,
+    signalFollowupEnabled: runtime.signalFollowupEnabled === true,
+    memberHoldingsEnabled: runtime.memberHoldingsEnabled === true,
+    orderAuthority: 'NONE',
+    privateTradingApiAllowed: false,
+    realOrderAllowed: false,
+  };
+}
+
 function normalizeIntegrationState(value: unknown): IntegrationState {
   const root = record(value) ?? {};
   const telegram = record(root.telegram) ?? {};
@@ -203,6 +239,7 @@ function normalizeIntegrationState(value: unknown): IntegrationState {
     alertPolicy: normalizeAlertPolicy(root.alertPolicy),
     alertPolicySource: typeof root.alertPolicySource === 'string' ? root.alertPolicySource : 'DEFAULT_MISSING',
     alertPolicyStorageAvailable: root.alertPolicyStorageAvailable !== false,
+    telegramRuntime: normalizeTelegramRuntime(root.telegramRuntime),
   };
 }
 
@@ -213,6 +250,10 @@ function toggleListValue<T extends string>(values: readonly T[], value: T, check
 
 function minutes(ms: number): number {
   return Math.max(0, Math.round(ms / 60_000));
+}
+
+function statusLabel(value: boolean): string {
+  return value ? '정상' : '준비 필요';
 }
 
 async function api<T>(
@@ -236,6 +277,7 @@ export function UserBrokerTelegramPanel() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [policySaving, setPolicySaving] = useState(false);
+  const [testSending, setTestSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [syncNotice, setSyncNotice] = useState<string | null>(null);
   const [requestState, setRequestState] = useState<'pending' | 'success' | 'failure'>('pending');
@@ -319,6 +361,21 @@ export function UserBrokerTelegramPanel() {
     }
   }
 
+  async function sendTelegramTest() {
+    if (!state?.telegram.connected || !state.telegramRuntime.deliveryReady || testSending) return;
+    setTestSending(true);
+    setError(null);
+    setSyncNotice(null);
+    try {
+      const result = await api<{ status: string; attempts: number }>('/api/user-integrations/telegram/test', { method: 'POST' });
+      setSyncNotice(`Telegram 테스트 메시지 전송 완료 · ${result.attempts}회 시도`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Telegram 테스트 메시지 전송에 실패했습니다.');
+    } finally {
+      setTestSending(false);
+    }
+  }
+
   async function togglePreference(key: PreferenceKey, value: boolean) {
     if (!state) return;
     const previous = state;
@@ -392,6 +449,31 @@ export function UserBrokerTelegramPanel() {
           <button className="mt-2 min-h-11 rounded-xl border border-card-border px-3 text-xs font-bold" type="button" onClick={() => void createTelegramLink()}>Telegram 연결</button>
         )}
         {link ? <p className="mt-2 text-xs"><a className="underline" href={link} target="_blank" rel="noreferrer">Telegram에서 연결 완료</a></p> : null}
+
+        <div className="mt-3 rounded-2xl border border-card-border bg-background p-3" data-testid="telegram-runtime-health">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h4 className="text-[11px] font-extrabold">Telegram 서비스 상태</h4>
+            <button
+              type="button"
+              className="min-h-11 rounded-xl border border-card-border px-3 text-xs font-bold disabled:opacity-50"
+              disabled={!state.telegram.connected || !state.telegramRuntime.deliveryReady || testSending}
+              onClick={() => void sendTelegramTest()}
+            >
+              {testSending ? '테스트 전송 중…' : '테스트 메시지 보내기'}
+            </button>
+          </div>
+          <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <div className="rounded-xl border border-card-border p-2 text-[11px]">개인 전송 · <strong>{statusLabel(state.telegramRuntime.deliveryReady)}</strong></div>
+            <div className="rounded-xl border border-card-border p-2 text-[11px]">연결 기능 · <strong>{statusLabel(state.telegramRuntime.linkingReady)}</strong></div>
+            <div className="rounded-xl border border-card-border p-2 text-[11px]">주식방 · <strong>{statusLabel(state.telegramRuntime.stockRoomReady)}</strong></div>
+            <div className="rounded-xl border border-card-border p-2 text-[11px]">코인방 · <strong>{statusLabel(state.telegramRuntime.cryptoRoomReady)}</strong></div>
+            <div className="rounded-xl border border-card-border p-2 text-[11px]">Rich 차트 · <strong>{state.telegramRuntime.richSignalEnabled ? '켜짐' : '꺼짐'}</strong></div>
+            <div className="rounded-xl border border-card-border p-2 text-[11px]">AI 설명 · <strong>{state.telegramRuntime.aiExplanationEnabled ? '켜짐' : '꺼짐'}</strong></div>
+            <div className="rounded-xl border border-card-border p-2 text-[11px]">신호 후속 · <strong>{state.telegramRuntime.signalFollowupEnabled ? '켜짐' : '꺼짐'}</strong></div>
+            <div className="rounded-xl border border-card-border p-2 text-[11px]">보유종목 개인알림 · <strong>{state.telegramRuntime.memberHoldingsEnabled ? '켜짐' : '꺼짐'}</strong></div>
+          </div>
+          <p className="mt-2 text-[10px] text-muted-foreground">상태에는 Secret·chat ID를 표시하지 않습니다. 테스트 메시지는 투자 신호나 주문이 아닙니다.</p>
+        </div>
 
         <div className="mt-4 rounded-2xl border border-card-border bg-background p-3" data-testid="telegram-alert-policy-center" aria-busy={policySaving}>
           <div className="flex flex-wrap items-start justify-between gap-2">
