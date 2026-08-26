@@ -104,7 +104,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
-            base="${{ github.event.pull_request.base.sha }}"
+            base="$(git merge-base HEAD "origin/${{ github.event.pull_request.base.ref }}")"
           else
             base="$(git merge-base HEAD origin/main)"
           fi
