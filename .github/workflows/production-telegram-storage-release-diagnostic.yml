@@ -84,7 +84,11 @@ jobs:
           set -Eeuo pipefail
           git fetch --no-tags origin main "$TARGET_SHA"
           [[ "$TARGET_SHA" == "$(git rev-parse origin/main^{commit})" ]] || exit 1
-      - name: Require active Production SHA provenance
+      - name: Prepare sanitized diagnostic path
+        run: printf 'DIAGNOSTIC_ARTIFACT=%s\n' "$RUNNER_TEMP/production-telegram-storage-release-diagnostic.json" >> "$GITHUB_ENV"
+      - name: Resolve and require active Production SHA provenance
+        id: provenance
+        continue-on-error: true
         uses: actions/github-script@v7
         env:
           ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
@@ -92,17 +96,27 @@ jobs:
           script: |
             const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {owner: context.repo.owner, repo: context.repo.repo, workflow_id: 'production-deploy.yml', event: 'workflow_dispatch', per_page: 100});
             const latest = runs.filter((run) => run.status === 'completed' && run.conclusion === 'success').sort((a,b) => Date.parse(b.created_at)-Date.parse(a.created_at))[0];
-            if (!latest || String(latest.head_sha).toLowerCase() !== process.env.ACTIVE_SHA) core.setFailed('Active Production SHA provenance mismatch.');
+            const requested = String(process.env.ACTIVE_SHA || '').toLowerCase();
+            const latestSha = latest ? String(latest.head_sha || '').toLowerCase() : '';
+            core.setOutput('latest_sha', latestSha || 'unresolved');
+            core.setOutput('latest_run_id', latest ? String(latest.id) : 'unresolved');
+            if (!latest || !/^[0-9a-f]{40}$/.test(latestSha)) {
+              core.setFailed('No valid successful Production Deploy provenance is available.');
+              return;
+            }
+            if (latestSha !== requested) {
+              core.setFailed(`Active Production SHA provenance mismatch: requested=${requested}, latest=${latestSha}, run=${latest.id}.`);
+            }
       - name: Configure canonical Production SSH
+        if: steps.provenance.outcome == 'success'
         run: |
           set -Eeuo pipefail
           [[ -n "$SSH_HOST" && -n "$SSH_USER" && -n "$SSH_PRIVATE_KEY" ]] || exit 1
           umask 077; mkdir -p "$HOME/.ssh"; printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"; chmod 600 "$HOME/.ssh/id_ed25519"
           if [[ -n "$SSH_KNOWN_HOSTS" ]]; then printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"; else ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > "$HOME/.ssh/known_hosts" 2>/dev/null; fi
-      - name: Prepare sanitized diagnostic path
-        run: printf 'DIAGNOSTIC_ARTIFACT=%s\n' "$RUNNER_TEMP/production-telegram-storage-release-diagnostic.json" >> "$GITHUB_ENV"
       - name: Run fixed read-only Production Telegram storage release diagnostic
         id: diagnostic
+        if: steps.provenance.outcome == 'success'
         continue-on-error: true
         env:
           ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
@@ -116,13 +130,15 @@ jobs:
             echo 'Read-only Telegram storage diagnostic transport failed; remote stderr is intentionally not printed.' >&2; exit 1
           fi
       - name: Verify sanitized diagnostic artifact
-        if: always() && steps.command.outcome == 'success'
+        id: verify
+        if: steps.provenance.outcome == 'success' && steps.diagnostic.outcome == 'success'
+        continue-on-error: true
         run: |
           set -Eeuo pipefail
           [[ -s "$DIAGNOSTIC_ARTIFACT" ]] || exit 1
           node ops/production-telegram-storage-release-diagnostic.mjs --verify-artifact "$DIAGNOSTIC_ARTIFACT"
       - name: Upload sanitized read-only diagnostic evidence
-        if: always() && steps.command.outcome == 'success'
+        if: steps.provenance.outcome == 'success' && steps.diagnostic.outcome == 'success' && steps.verify.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: production-telegram-storage-release-diagnostic-${{ steps.command.outputs.active_sha }}-${{ steps.command.outputs.target_sha }}
@@ -133,17 +149,41 @@ jobs:
         if: always() && steps.command.outcome == 'success'
         uses: actions/github-script@v7
         env:
-          ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
+          REQUESTED_ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
           TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+          LATEST_ACTIVE_SHA: ${{ steps.provenance.outputs.latest_sha }}
+          LATEST_DEPLOY_RUN_ID: ${{ steps.provenance.outputs.latest_run_id }}
+          PROVENANCE_OUTCOME: ${{ steps.provenance.outcome }}
           DIAGNOSTIC_ARTIFACT: ${{ env.DIAGNOSTIC_ARTIFACT }}
           DIAGNOSTIC_OUTCOME: ${{ steps.diagnostic.outcome }}
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
           SOURCE_COMMENT_ID: ${{ github.event.comment.id }}
         with:
           script: |
             const fs = require('node:fs');
-            if (process.env.DIAGNOSTIC_OUTCOME !== 'success' || !fs.existsSync(process.env.DIAGNOSTIC_ARTIFACT)) {
-              await github.rest.issues.createComment({owner: context.repo.owner, repo: context.repo.repo, issue_number: 23, body: `Production Telegram storage release diagnostic failed safely.\n\n- Active Production SHA: \`${process.env.ACTIVE_SHA}\`\n- Exact current main SHA: \`${process.env.TARGET_SHA}\`\n- Database changed: \`false\`\n- Server mutation executed: \`false\`\n- Production deployment executed: \`false\`\n- Secret values recorded: \`false\`\n- Actual orders: \`0\`\n- Diagnostic Run ID: \`${context.runId}\``});
-              core.setFailed('Sanitized diagnostic evidence missing.'); return;
+            const latestSha = process.env.LATEST_ACTIVE_SHA || 'unresolved';
+            const latestRun = process.env.LATEST_DEPLOY_RUN_ID || 'unresolved';
+            if (process.env.PROVENANCE_OUTCOME !== 'success') {
+              const classification = latestSha === 'unresolved' ? 'production_deploy_provenance_missing' : 'active_production_sha_provenance_mismatch';
+              await github.rest.issues.createComment({owner: context.repo.owner, repo: context.repo.repo, issue_number: 23, body: [
+                'Production Telegram storage release diagnostic stopped safely before SSH/DB inspection.','',
+                `- Classification: \`${classification}\``,`- Requested Production SHA: \`${process.env.REQUESTED_ACTIVE_SHA}\``,`- Latest successful Production SHA: \`${latestSha}\``,`- Latest Production Deploy Run ID: \`${latestRun}\``,`- Exact current main SHA: \`${process.env.TARGET_SHA}\``,
+                '- Database read executed: `false`','- Database changed: `false`','- Server mutation executed: `false`','- Production deployment executed: `false`','- Secret values recorded: `false`','- Actual orders: `0`','- Live trading authority: `false`',`- Diagnostic Run ID: \`${context.runId}\``,`- Source command comment ID: \`${process.env.SOURCE_COMMENT_ID}\``].join('\n')});
+              return;
+            }
+            if (process.env.DIAGNOSTIC_OUTCOME !== 'success') {
+              await github.rest.issues.createComment({owner: context.repo.owner, repo: context.repo.repo, issue_number: 23, body: [
+                'Production Telegram storage release diagnostic failed safely during read-only execution.','',
+                `- Active Production SHA: \`${process.env.REQUESTED_ACTIVE_SHA}\``,`- Exact current main SHA: \`${process.env.TARGET_SHA}\``,`- Latest Production Deploy Run ID: \`${latestRun}\``,
+                '- Database changed: `false`','- Production deployment executed: `false`','- Secret values recorded: `false`','- Actual orders: `0`','- Live trading authority: `false`',`- Diagnostic Run ID: \`${context.runId}\``].join('\n')});
+              return;
+            }
+            if (process.env.VERIFY_OUTCOME !== 'success' || !process.env.DIAGNOSTIC_ARTIFACT || !fs.existsSync(process.env.DIAGNOSTIC_ARTIFACT)) {
+              await github.rest.issues.createComment({owner: context.repo.owner, repo: context.repo.repo, issue_number: 23, body: [
+                'Production Telegram storage release diagnostic produced invalid or missing sanitized evidence.','',
+                `- Active Production SHA: \`${process.env.REQUESTED_ACTIVE_SHA}\``,`- Exact current main SHA: \`${process.env.TARGET_SHA}\``,
+                '- Database changed: `false`','- Production deployment executed: `false`','- Secret values recorded: `false`','- Actual orders: `0`','- Live trading authority: `false`',`- Diagnostic Run ID: \`${context.runId}\``].join('\n')});
+              return;
             }
             const v = JSON.parse(fs.readFileSync(process.env.DIAGNOSTIC_ARTIFACT, 'utf8'));
             await github.rest.issues.createComment({owner: context.repo.owner, repo: context.repo.repo, issue_number: 23, body: [
@@ -152,6 +192,17 @@ jobs:
               `- PM2 online / exact SHA: \`${v.pm2_online}/${v.production_process_sha_match}\``,`- Production project match: \`${v.production_project_match}\``,`- PostgreSQL source / endpoint / port: \`${v.database_secret_source}/${v.postgres_endpoint_type}/${v.postgres_port}\``,`- Read-only DB probe: \`${v.read_only_probe}\``,
               `- auth.users / required roles: \`${v.auth_users_exists}/${v.required_roles_exist}\``,`- notification_preferences ready: \`${v.notification_preferences_ready}\``,`- Existing Telegram schema compatible: \`${v.telegram_existing_schema_compatible}\``,`- Migration privileges create/references/ownership: \`${v.public_schema_create}/${v.auth_users_references}/${v.existing_telegram_owned_or_superuser}\``,`- Conflicting relation lock: \`${v.blocking_relation_lock_detected}\``,
               '- Database changed: `false`','- Server files written: `0`','- Server processes restarted: `0`','- Production deployment executed: `false`','- Secret values recorded: `false`','- Actual orders: `0`','- Live trading authority: `false`',`- Diagnostic Run ID: \`${context.runId}\``,`- Source command comment ID: \`${process.env.SOURCE_COMMENT_ID}\``].join('\n')});
+      - name: Enforce diagnostic execution status
+        if: always() && steps.command.outcome == 'success'
+        env:
+          PROVENANCE_OUTCOME: ${{ steps.provenance.outcome }}
+          DIAGNOSTIC_OUTCOME: ${{ steps.diagnostic.outcome }}
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$PROVENANCE_OUTCOME" == 'success' ]] || { echo 'Production SHA provenance gate did not pass.' >&2; exit 1; }
+          [[ "$DIAGNOSTIC_OUTCOME" == 'success' ]] || { echo 'Read-only diagnostic execution did not pass.' >&2; exit 1; }
+          [[ "$VERIFY_OUTCOME" == 'success' ]] || { echo 'Sanitized diagnostic evidence verification did not pass.' >&2; exit 1; }
       - name: Write immutable safety summary
         if: always() && steps.command.outcome == 'success'
         run: |
