@@ -44,7 +44,7 @@ const HORIZON_CONFIG = Object.freeze({
     timeBars: [4, 24, 4],
   }),
   SWING: Object.freeze({
-    timeframe: "60m",
+    timeframe: "1h",
     emaFast: [10, 30, 10],
     emaSlow: [40, 100, 20],
     adxPeriod: [14, 28, 7],
