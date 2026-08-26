@@ -22,14 +22,36 @@ type AuditLog = {
   created_at: string;
 };
 
+const ADMIN_REQUEST_TIMEOUT_MS = 8_000;
+
 async function adminFetch(path: string, token: string, init?: RequestInit) {
-  const response = await fetch(`/api/admin${path}`, {
-    ...init,
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}`, ...(init?.headers ?? {}) },
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(typeof payload.message === 'string' ? payload.message : `관리자 요청 실패 (${response.status})`);
-  return payload;
+  const controller = new AbortController();
+  const externalSignal = init?.signal;
+  let timedOut = false;
+  const onExternalAbort = () => controller.abort();
+  if (externalSignal?.aborted) controller.abort();
+  else externalSignal?.addEventListener('abort', onExternalAbort, { once: true });
+  const timeout = window.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, ADMIN_REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(`/api/admin${path}`, {
+      ...init,
+      signal: controller.signal,
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}`, ...(init?.headers ?? {}) },
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(typeof payload.message === 'string' ? payload.message : `관리자 요청 실패 (${response.status})`);
+    return payload;
+  } catch (cause) {
+    if (timedOut) throw new Error('관리자 요청 시간이 초과됐습니다. 다시 시도해 주세요.');
+    throw cause;
+  } finally {
+    window.clearTimeout(timeout);
+    externalSignal?.removeEventListener('abort', onExternalAbort);
+  }
 }
 
 export default function AdminPage() {
@@ -43,13 +65,17 @@ export default function AdminPage() {
 
   const members = useQuery<{ members: AdminMember[] }>({
     queryKey: ['admin-members', search],
-    queryFn: () => adminFetch(`/members${search.trim() ? `?search=${encodeURIComponent(search.trim())}` : ''}`, token),
+    queryFn: ({ signal }) => adminFetch(`/members${search.trim() ? `?search=${encodeURIComponent(search.trim())}` : ''}`, token, { signal }),
     enabled: auth.isAdmin && Boolean(token),
+    retry: false,
+    refetchOnWindowFocus: false,
   });
   const audits = useQuery<{ logs: AuditLog[] }>({
     queryKey: ['admin-audit'],
-    queryFn: () => adminFetch('/audit-logs', token),
+    queryFn: ({ signal }) => adminFetch('/audit-logs', token, { signal }),
     enabled: auth.isAdmin && Boolean(token),
+    retry: false,
+    refetchOnWindowFocus: false,
   });
 
   async function changed(targetId: string) {
@@ -108,7 +134,7 @@ export default function AdminPage() {
       </label>
       {(notice || error) && <p role="status" className={`rounded-2xl p-3 text-sm font-bold ${error ? 'bg-destructive/10 text-destructive' : 'bg-positive/10 text-positive'}`}>{error || notice}</p>}
       {members.isLoading && <p>회원 목록을 불러오는 중입니다.</p>}
-      {members.error && <p className="text-destructive">{members.error.message}</p>}
+      {members.error && <div data-testid="admin-members-unavailable" className="rounded-2xl border border-destructive/30 bg-destructive/10 p-3"><p className="text-sm font-bold text-destructive">{members.error.message}</p><button type="button" onClick={() => void members.refetch()} className="mt-3 rounded-xl border border-destructive/30 px-3 py-2 text-xs font-bold">회원 목록 다시 시도</button></div>}
       <section className="space-y-3" aria-label="회원 목록">
         {members.data?.members.map((member) => <MemberCard key={`${member.id}:${member.membership_level ?? member.status}:${member.is_active !== false}`} member={member} onApprove={approve} onSubmit={submitChange} />)}
       </section>
@@ -117,14 +143,14 @@ export default function AdminPage() {
         <div className="flex items-center justify-between"><div><h2 className="font-black">변경 이력</h2><p className="mt-1 text-xs text-muted-foreground">개인 거래기록이나 원본 메모는 포함하지 않습니다.</p></div><button type="button" onClick={() => void audits.refetch()} className="rounded-xl border border-card-border px-3 py-2 text-xs font-bold">새로고침</button></div>
         <div className="mt-4 space-y-2">
           {audits.isLoading && <p className="text-sm">감사 이력을 불러오는 중입니다.</p>}
-          {audits.error && <p className="text-sm text-destructive">{audits.error.message}</p>}
+          {audits.error && <div data-testid="admin-audit-unavailable" className="rounded-2xl border border-destructive/30 bg-destructive/10 p-3"><p className="text-sm font-bold text-destructive">{audits.error.message}</p><button type="button" onClick={() => void audits.refetch()} className="mt-3 rounded-xl border border-destructive/30 px-3 py-2 text-xs font-bold">감사 이력 다시 시도</button></div>}
           {audits.data?.logs.map((log) => <article key={log.id} className="rounded-2xl bg-secondary/50 p-3 text-xs">
             <p className="font-extrabold">{log.action}</p>
             <p className="mt-1 break-all text-muted-foreground">대상 {log.target_user_id} · 관리자 {log.actor_id}</p>
             <p className="mt-1">{log.reason}</p>
             <p className="mt-1 text-muted-foreground">{new Date(log.created_at).toLocaleString()}</p>
           </article>)}
-          {!audits.isLoading && !audits.data?.logs.length && <p className="text-sm text-muted-foreground">기록된 권한 변경이 없습니다.</p>}
+          {!audits.isLoading && !audits.error && audits.data?.logs.length === 0 && <p className="text-sm text-muted-foreground">기록된 권한 변경이 없습니다.</p>}
         </div>
       </section>
     </main>
