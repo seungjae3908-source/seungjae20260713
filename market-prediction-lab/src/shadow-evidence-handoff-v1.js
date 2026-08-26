@@ -324,6 +324,24 @@ function component(probabilities, label) {
   return deepFreeze({ probabilities: validated, finalDirection: topClass(validated) });
 }
 
+export function buildNormalizedFeatureSnapshotV1({ rawFeatureSnapshot, exactModel } = {}) {
+  if (!object(rawFeatureSnapshot) || !object(exactModel) || !Array.isArray(exactModel.featureOrder) || !exactModel.featureOrder.length) {
+    throw new TypeError("raw feature snapshot and exact model feature order are required");
+  }
+  const normalization = exactModel.normalization;
+  if (normalization && (!Array.isArray(normalization.mean) || !Array.isArray(normalization.scale)
+      || normalization.mean.length !== exactModel.featureOrder.length || normalization.scale.length !== exactModel.featureOrder.length)) {
+    throw new Error("exact model normalization identity is invalid");
+  }
+  return deepFreeze(Object.fromEntries(exactModel.featureOrder.map((name, index) => {
+    const raw = finite(rawFeatureSnapshot[name]) ? rawFeatureSnapshot[name] : 0;
+    if (!normalization) return [name, raw];
+    const mean = finite(normalization.mean[index]) ? normalization.mean[index] : 0;
+    const scale = Math.max(Math.abs(finite(normalization.scale[index]) ? normalization.scale[index] : 1), 1e-9);
+    return [name, Math.min(12, Math.max(-12, (raw - mean) / scale))];
+  })));
+}
+
 export function buildFutureShadowObservationV1({
   observationId,
   observedAt,
@@ -384,6 +402,23 @@ export function buildFutureShadowObservationV1({
   return deepFreeze(body);
 }
 
+export function settleFutureShadowObservationV1(observation, actualDirection) {
+  if (!object(observation) || observation.schemaVersion !== SHADOW_OBSERVATION_SCHEMA_VERSION) {
+    throw new TypeError("canonical future Shadow observation is required");
+  }
+  const normalizedActual = normalizeDirection(actualDirection);
+  if (!normalizedActual) throw new TypeError("settled actual direction is required");
+  if (observation.actualDirection && observation.actualDirection !== normalizedActual) {
+    throw new Error("future Shadow observation settlement conflict");
+  }
+  if (observation.actualDirection === normalizedActual) return observation;
+  const body = structuredClone(observation);
+  delete body.artifactDigest;
+  body.actualDirection = normalizedActual;
+  body.artifactDigest = computeShadowObservationArtifactDigestV1(body);
+  return deepFreeze(body);
+}
+
 export function validateFutureShadowObservationV1({ observation, strategyResolution, modelResolution, referenceResolution, featureOrder } = {}) {
   if (!object(observation)) return failure("MISSING_EVIDENCE", "SHADOW_OBSERVATION_MISSING");
   if (observation.schemaVersion !== SHADOW_OBSERVATION_SCHEMA_VERSION) return failure("MISSING_EVIDENCE", "SHADOW_COMPONENT_SCHEMA_MISSING");
@@ -407,6 +442,16 @@ export function validateFutureShadowObservationV1({ observation, strategyResolut
   if (!object(observation.rawFeatureSnapshot) || !object(observation.normalizedFeatureSnapshot)
       || order.some((name) => !Object.hasOwn(observation.rawFeatureSnapshot, name) || !Object.hasOwn(observation.normalizedFeatureSnapshot, name))) {
     return failure("MISSING_EVIDENCE", "RAW_OR_NORMALIZED_FEATURE_SNAPSHOT_INCOMPLETE");
+  }
+  let expectedNormalized;
+  try {
+    expectedNormalized = buildNormalizedFeatureSnapshotV1({ rawFeatureSnapshot: observation.rawFeatureSnapshot, exactModel: modelResolution.exactModel });
+  } catch {
+    return failure("MISSING_EVIDENCE", "MODEL_PREPROCESSING_IDENTITY_INCOMPLETE");
+  }
+  if (order.some((name) => !finite(observation.normalizedFeatureSnapshot[name])
+      || Math.abs(observation.normalizedFeatureSnapshot[name] - expectedNormalized[name]) > 1e-12)) {
+    return failure("IDENTITY_MISMATCH", "NORMALIZED_FEATURE_SNAPSHOT_MISMATCH");
   }
   let rule;
   let model;
