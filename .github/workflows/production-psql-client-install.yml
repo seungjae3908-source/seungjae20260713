@@ -1,0 +1,343 @@
+name: Production PostgreSQL Client Install
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request:
+    paths:
+      - .github/workflows/production-psql-client-install.yml
+      - ops/verify-production-psql-client-install-contract.mjs
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  statuses: read
+
+concurrency:
+  group: production-psql-client-install-${{ github.event_name == 'issue_comment' && github.event.issue.number == 23 && startsWith(github.event.comment.body, '/run-production-psql-client-install ') && 'command' || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate bounded Production psql client install contract
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Verify package/server/trading safety contract
+        run: |
+          set -Eeuo pipefail
+          node --check ops/verify-production-psql-client-install-contract.mjs
+          node ops/verify-production-psql-client-install-contract.mjs
+
+  install:
+    name: Owner-approved Production PostgreSQL client install
+    if: >-
+      github.event_name == 'issue_comment' && github.event.action == 'created' &&
+      github.event.issue.number == 23 && github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' && github.event.issue.title == 'Staging Readiness Control' &&
+      github.event.comment.user.login == github.repository_owner && github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/run-production-psql-client-install ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      EXPECTED_PACKAGE: postgresql-client
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Parse exact owner install command
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const match = /^\/run-production-psql-client-install ([0-9a-fA-F]{40}) ([0-9a-fA-F]{40})$/.exec(String(process.env.COMMENT_BODY ?? '').trim());
+          if (!match) {
+            console.error('Exact command required: /run-production-psql-client-install <active-production-sha> <exact-current-main-sha>');
+            process.exit(1);
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `active_sha=${match[1].toLowerCase()}\ntarget_sha=${match[2].toLowerCase()}\n`);
+          NODE
+
+      - name: Require exact current main SHA
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main "$TARGET_SHA"
+          [[ "$TARGET_SHA" == "$(git rev-parse origin/main^{commit})" ]] || {
+            echo 'Production psql client install requires exact current main.' >&2
+            exit 1
+          }
+
+      - name: Require exact-main Required CI 6/6
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        with:
+          script: |
+            const required = [
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: process.env.TARGET_SHA,
+              per_page: 100,
+            });
+            for (const name of required) {
+              const latest = statuses.find((status) => status.context === name);
+              if (!latest || latest.state !== 'success') {
+                core.setFailed(`Required CI is not green: ${name}`);
+                return;
+              }
+            }
+            core.info('Exact-main Required CI 6/6 is green.');
+
+      - name: Require active Production SHA provenance
+        id: provenance
+        uses: actions/github-script@v7
+        env:
+          ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
+        with:
+          script: |
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'production-deploy.yml',
+              event: 'workflow_dispatch',
+              per_page: 100,
+            });
+            const latest = runs
+              .filter((run) => run.status === 'completed' && run.conclusion === 'success')
+              .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+            const requested = String(process.env.ACTIVE_SHA || '').toLowerCase();
+            const latestSha = latest ? String(latest.head_sha || '').toLowerCase() : '';
+            if (!latest || !/^[0-9a-f]{40}$/.test(latestSha) || latestSha !== requested) {
+              core.setFailed(`Active Production provenance mismatch: requested=${requested}, latest=${latestSha || 'unresolved'}.`);
+              return;
+            }
+            core.setOutput('run_id', String(latest.id));
+            core.info(`Active Production SHA accepted from Run ${latest.id}.`);
+
+      - name: Configure canonical Production SSH
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$SSH_HOST" && -n "$SSH_USER" && -n "$SSH_PRIVATE_KEY" ]] || exit 1
+          umask 077
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > "$HOME/.ssh/known_hosts" 2>/dev/null
+          fi
+
+      - name: Install only the PostgreSQL client and preserve app runtime
+        id: install_result
+        env:
+          ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
+        run: |
+          set -Eeuo pipefail
+          RESULT_FILE="$RUNNER_TEMP/production-psql-client-install.txt"
+          remote_env="$(printf 'EXPECTED_ACTIVE_SHA=%q EXPECTED_PACKAGE=%q' "$ACTIVE_SHA" "$EXPECTED_PACKAGE")"
+          if ! ssh -i "$HOME/.ssh/id_ed25519" -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env bash -s" > "$RESULT_FILE" <<'REMOTE'
+          set -Eeuo pipefail
+          [[ "$EXPECTED_PACKAGE" == 'postgresql-client' ]]
+
+          STATE_FILE=/opt/stock-app/.deploy/current-sha
+          [[ -s "$STATE_FILE" ]] || { echo 'Production SHA state file missing.' >&2; exit 1; }
+          ACTIVE_STATE_BEFORE="$(tr -d '[:space:]' < "$STATE_FILE")"
+          [[ "$ACTIVE_STATE_BEFORE" == "$EXPECTED_ACTIVE_SHA" ]] || { echo 'Production state SHA mismatch.' >&2; exit 1; }
+
+          command -v node >/dev/null 2>&1 || { echo 'node is unavailable.' >&2; exit 1; }
+          command -v pm2 >/dev/null 2>&1 || { echo 'pm2 is unavailable.' >&2; exit 1; }
+          PM2_BEFORE="$(pm2 jlist | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const rows=JSON.parse(s);const app=rows.find(r=>r.name==="stock-app");if(!app)process.exit(2);process.stdout.write(String(app.pid)+"|"+String(app.pm2_env?.restart_time ?? ""));})')"
+
+          source /etc/os-release
+          [[ "${ID:-}" == 'ubuntu' || "${ID:-}" == 'debian' ]] || { echo 'Unsupported Production OS for bounded apt install.' >&2; exit 1; }
+          command -v apt-get >/dev/null 2>&1 || { echo 'apt-get is unavailable.' >&2; exit 1; }
+          command -v dpkg-query >/dev/null 2>&1 || { echo 'dpkg-query is unavailable.' >&2; exit 1; }
+          command -v sudo >/dev/null 2>&1 || { echo 'sudo is unavailable.' >&2; exit 1; }
+          sudo -n true
+
+          installed_server_packages() {
+            dpkg-query -W -f='${db:Status-Abbrev} ${binary:Package}\n' postgresql 'postgresql-[0-9]*' 2>/dev/null \
+              | awk '$1 == "ii" {print $2}' \
+              | sort -u || true
+          }
+
+          SERVER_PACKAGES_BEFORE="$(installed_server_packages)"
+          CLASSIFICATION='already_installed'
+
+          if ! command -v psql >/dev/null 2>&1; then
+            shopt -s nullglob
+            OUTSIDE_PATH=()
+            for candidate in /usr/bin/psql /usr/local/bin/psql /usr/lib/postgresql/*/bin/psql; do
+              [[ -x "$candidate" ]] && OUTSIDE_PATH+=("$candidate")
+            done
+            if (( ${#OUTSIDE_PATH[@]} > 0 )); then
+              echo 'psql exists outside PATH; PATH mutation is not authorized by this workflow.' >&2
+              exit 1
+            fi
+
+            sudo -n apt-get update -qq
+            sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$EXPECTED_PACKAGE"
+            CLASSIFICATION='installed'
+          fi
+
+          command -v psql >/dev/null 2>&1 || { echo 'psql still unavailable after client install.' >&2; exit 1; }
+          PSQL_PATH="$(command -v psql)"
+          case "$PSQL_PATH" in
+            /usr/bin/psql|/usr/local/bin/psql|/usr/lib/postgresql/*/bin/psql) ;;
+            *) echo 'psql resolved to an unexpected path.' >&2; exit 1 ;;
+          esac
+          PSQL_VERSION="$(psql --version | tr -d '\r\n')"
+
+          SERVER_PACKAGES_AFTER="$(installed_server_packages)"
+          [[ "$SERVER_PACKAGES_AFTER" == "$SERVER_PACKAGES_BEFORE" ]] || { echo 'Unexpected PostgreSQL server package change detected.' >&2; exit 1; }
+
+          PM2_AFTER="$(pm2 jlist | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const rows=JSON.parse(s);const app=rows.find(r=>r.name==="stock-app");if(!app)process.exit(2);process.stdout.write(String(app.pid)+"|"+String(app.pm2_env?.restart_time ?? ""));})')"
+          [[ "$PM2_AFTER" == "$PM2_BEFORE" ]] || { echo 'stock-app PM2 process changed during client install.' >&2; exit 1; }
+
+          ACTIVE_STATE_AFTER="$(tr -d '[:space:]' < "$STATE_FILE")"
+          [[ "$ACTIVE_STATE_AFTER" == "$EXPECTED_ACTIVE_SHA" ]] || { echo 'Production application SHA changed during client install.' >&2; exit 1; }
+
+          printf 'classification=%s\n' "$CLASSIFICATION"
+          printf 'psql_path=%s\n' "$PSQL_PATH"
+          printf 'psql_version=%s\n' "$PSQL_VERSION"
+          printf 'production_sha=%s\n' "$ACTIVE_STATE_AFTER"
+          REMOTE
+          then
+            echo 'Bounded Production PostgreSQL client installation failed.' >&2
+            exit 1
+          fi
+
+          node <<'NODE'
+          const fs = require('node:fs');
+          const rows = Object.fromEntries(fs.readFileSync(process.env.RESULT_FILE, 'utf8').trim().split(/\r?\n/).map((line) => {
+            const i = line.indexOf('=');
+            return i > 0 ? [line.slice(0, i), line.slice(i + 1)] : ['', ''];
+          }).filter(([key]) => key));
+          for (const key of ['classification', 'psql_path', 'psql_version', 'production_sha']) {
+            if (!rows[key]) throw new Error(`missing sanitized install result: ${key}`);
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${rows[key]}\n`);
+          }
+          NODE
+        env:
+          RESULT_FILE: ${{ runner.temp }}/production-psql-client-install.txt
+
+      - name: Run existing fixed read-only Telegram storage diagnostic
+        id: diagnostic
+        env:
+          ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
+          PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$PROD_DATABASE_URL" && "$PROD_DATABASE_URL" =~ ^postgres(ql)?:// ]] || exit 1
+          DIAGNOSTIC_ARTIFACT="$RUNNER_TEMP/production-telegram-storage-release-diagnostic.json"
+          printf 'DIAGNOSTIC_ARTIFACT=%s\n' "$DIAGNOSTIC_ARTIFACT" >> "$GITHUB_ENV"
+          quoted_sha="$(printf '%q' "$ACTIVE_SHA")"
+          script_b64="$(base64 -w0 ops/production-telegram-storage-release-diagnostic.mjs)"
+          quoted_script="$(printf '%q' "$script_b64")"
+          remote_command="EXPECTED_PRODUCTION_SHA=$quoted_sha DIAGNOSTIC_SCRIPT_B64=$quoted_script bash -c 'IFS= read -r PROD_DATABASE_URL; export PROD_DATABASE_URL; printf \"%s\" \"\$DIAGNOSTIC_SCRIPT_B64\" | base64 -d | node --input-type=module -'"
+          if ! printf '%s\n' "$PROD_DATABASE_URL" | ssh -i "$HOME/.ssh/id_ed25519" -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_command" > "$DIAGNOSTIC_ARTIFACT" 2> /dev/null; then
+            echo 'Post-install read-only diagnostic failed; remote stderr is intentionally hidden.' >&2
+            exit 1
+          fi
+          node ops/production-telegram-storage-release-diagnostic.mjs --verify-artifact "$DIAGNOSTIC_ARTIFACT"
+
+      - name: Upload sanitized post-install diagnostic evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-psql-client-install-diagnostic-${{ steps.command.outputs.active_sha }}-${{ steps.command.outputs.target_sha }}
+          path: ${{ env.DIAGNOSTIC_ARTIFACT }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Report bounded install result
+        uses: actions/github-script@v7
+        env:
+          ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+          DEPLOY_RUN_ID: ${{ steps.provenance.outputs.run_id }}
+          INSTALL_CLASSIFICATION: ${{ steps.install_result.outputs.classification }}
+          PSQL_PATH: ${{ steps.install_result.outputs.psql_path }}
+          PSQL_VERSION: ${{ steps.install_result.outputs.psql_version }}
+          DIAGNOSTIC_ARTIFACT: ${{ env.DIAGNOSTIC_ARTIFACT }}
+          SOURCE_COMMENT_ID: ${{ github.event.comment.id }}
+        with:
+          script: |
+            const fs = require('node:fs');
+            const v = JSON.parse(fs.readFileSync(process.env.DIAGNOSTIC_ARTIFACT, 'utf8'));
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+              body: [
+                'Production PostgreSQL client installation completed within the bounded approval.',
+                '',
+                `- Active Production SHA: \`${process.env.ACTIVE_SHA}\``,
+                `- Exact current main SHA: \`${process.env.TARGET_SHA}\``,
+                `- Production Deploy provenance Run ID: \`${process.env.DEPLOY_RUN_ID}\``,
+                `- Install classification: \`${process.env.INSTALL_CLASSIFICATION}\``,
+                `- psql path: \`${process.env.PSQL_PATH}\``,
+                `- psql version: \`${process.env.PSQL_VERSION}\``,
+                `- Post-install diagnostic classification: \`${v.classification}\``,
+                `- Release preflight ready: \`${v.release_preflight_ready}\``,
+                `- Read-only DB probe: \`${v.read_only_probe}\``,
+                '- PostgreSQL server package installed by this workflow: `false`',
+                '- Database changed: `false`',
+                '- Production application deploy executed: `false`',
+                '- PM2 process restarted by this workflow: `false`',
+                '- PATH/profile mutation executed: `false`',
+                '- Secret values recorded: `false`',
+                '- Actual orders: `0`',
+                '- Live trading authority: `false`',
+                `- Install Run ID: \`${context.runId}\``,
+                `- Source command comment ID: \`${process.env.SOURCE_COMMENT_ID}\``,
+              ].join('\n'),
+            });
+
+      - name: Write immutable safety summary
+        run: |
+          echo '## Production PostgreSQL Client Install' >> "$GITHUB_STEP_SUMMARY"
+          echo '- package: postgresql-client only' >> "$GITHUB_STEP_SUMMARY"
+          echo '- PostgreSQL server package delta: 0' >> "$GITHUB_STEP_SUMMARY"
+          echo '- DB mutation: 0' >> "$GITHUB_STEP_SUMMARY"
+          echo '- app deploy: 0' >> "$GITHUB_STEP_SUMMARY"
+          echo '- PM2 restart: 0' >> "$GITHUB_STEP_SUMMARY"
+          echo '- PATH/profile mutation: 0' >> "$GITHUB_STEP_SUMMARY"
+          echo '- real orders: 0' >> "$GITHUB_STEP_SUMMARY"
