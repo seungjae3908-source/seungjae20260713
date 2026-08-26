@@ -290,11 +290,12 @@ function SignalDetailPanel({
 
       <div className="mt-3">
         <p className="text-[10px] font-black text-muted-foreground">후보 랭킹</p>
+        <p className="mt-1 text-[10px] leading-4 text-muted-foreground">순위는 신호점수 단독 정렬이 아닌 서버 랭킹 기준입니다.</p>
         <div className="mt-1 grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
           <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">순위</p><p data-testid="scanner-quality-rank" className="text-xs font-black">{ranking?.rank == null ? '미확인' : `${ranking.rank}위`}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">Relative Score</p><p className="text-xs font-black">{formatMetric(ranking?.relativeScore)}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">상대점수</p><p className="text-xs font-black">{formatMetric(ranking?.relativeScore)}</p></div>
           <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">Watch 완성도</p><p className="text-xs font-black">{formatMetric(ranking?.watchCompletionPercent, '%')}</p></div>
-          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">Rank Score</p><p className="text-xs font-black">{formatMetric(ranking?.score)}</p></div>
+          <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">랭킹점수</p><p className="text-xs font-black">{formatMetric(ranking?.score)}</p></div>
         </div>
         <div className="mt-2 grid grid-cols-2 gap-2 text-center sm:grid-cols-5">
           <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">거래대금 %ile</p><p className="text-xs font-black">{formatMetric(ranking?.relative.tradingValuePercentile, '%')}</p></div>
@@ -468,7 +469,7 @@ function SignalDetailPanel({
 
       <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
         <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">현재가</p><p className="mt-1 break-words text-sm font-black">{formatNumber(card.price, card.currency === 'KRW' ? 0 : 6)} {card.currency}</p></div>
-        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">신호 점수</p><p className="mt-1 text-sm font-black">{formatNumber(card.score, 1)}점</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">신호점수</p><p className="mt-1 text-sm font-black">{formatNumber(card.score, 1)}점</p></div>
         <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">신뢰도</p><p className="mt-1 text-sm font-black">{formatNumber(card.confidence, 1)}</p></div>
         <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">위험</p><p className="mt-1 text-sm font-black">{formatNumber(card.riskScore, 1)} · {card.riskLevel}</p></div>
       </div>
@@ -895,7 +896,7 @@ export default function SignalScannerPage({ embedded = false }: { embedded?: boo
                             <span className="rounded-full border border-card-border px-2 py-0.5 text-[10px] font-black">{remainingValidityLabel(card.expiresAt)}</span>
                           </div>
                         </button>
-                        <div className="shrink-0 text-right"><p className="text-sm font-black">{formatNumber(card.price, card.currency === 'KRW' ? 0 : 6)}</p><p className="text-xs text-muted-foreground">점수 {formatNumber(card.score, 1)} · 위험 {formatNumber(card.riskScore, 1)}</p></div>
+                        <div className="shrink-0 text-right"><p className="text-sm font-black">{formatNumber(card.price, card.currency === 'KRW' ? 0 : 6)}</p><p className="text-xs text-muted-foreground">신호점수 {formatNumber(card.score, 1)} · 위험 {formatNumber(card.riskScore, 1)}</p></div>
                       </div>
                       <div className="mt-2 flex min-w-0 flex-wrap gap-1">{card.matched.slice(0, 3).map((item) => <span key={item} className="max-w-full truncate rounded-lg bg-background px-2 py-1 text-[10px]">{item}</span>)}{card.unverified.length ? <span className="rounded-lg bg-warning/10 px-2 py-1 text-[10px] text-warning">미검증 {card.unverified.length}</span> : null}</div>
                       <div className="mt-2 grid grid-cols-2 gap-2">

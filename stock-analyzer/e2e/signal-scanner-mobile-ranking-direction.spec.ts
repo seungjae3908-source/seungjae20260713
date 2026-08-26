@@ -200,7 +200,7 @@ async function installMocks(page: Page, forbidden: string[]) {
   await page.route('**/api/scanner/crypto/futures**', (route) => fulfill(route, futuresResponse()));
 }
 
-test('mobile futures scanner sorts canonical ranks, filters long/short, rounds score and deduplicates symbol title', async ({ page }) => {
+test('mobile futures scanner sorts canonical ranks, labels signal/ranking scores, filters long/short and deduplicates symbol title', async ({ page }) => {
   const forbidden: string[] = [];
   await page.setViewportSize({ width: 390, height: 844 });
   await installMocks(page, forbidden);
@@ -217,10 +217,10 @@ test('mobile futures scanner sorts canonical ranks, filters long/short, rounds s
   const cards = page.getByTestId('scanner-signal-card');
   await expect(cards).toHaveCount(2);
   await expect(cards.nth(0)).toContainText('1위 · HYPEUSDT');
-  await expect(cards.nth(0)).toContainText('점수 61.8 · 위험 0');
+  await expect(cards.nth(0)).toContainText('신호점수 61.8 · 위험 0');
   await expect(cards.nth(0).getByTestId('scanner-card-direction')).toHaveText('롱');
   await expect(cards.nth(1)).toContainText('2위 · KORUUSDT');
-  await expect(cards.nth(1)).toContainText('점수 74.1 · 위험 0');
+  await expect(cards.nth(1)).toContainText('신호점수 74.1 · 위험 0');
   await expect(cards.nth(1).getByTestId('scanner-card-direction')).toHaveText('숏');
 
   await filter.getByRole('tab', { name: '롱 1', exact: true }).click();
@@ -236,8 +236,11 @@ test('mobile futures scanner sorts canonical ranks, filters long/short, rounds s
   await expect(sheet).toBeVisible();
   await expect(sheet.getByRole('heading', { name: 'HYPEUSDT', exact: true })).toBeVisible();
   await expect(sheet.getByText('HYPEUSDT · HYPEUSDT', { exact: true })).toHaveCount(0);
-  await expect(sheet.getByText('신호 점수')).toBeVisible();
+  await expect(sheet.getByText('신호점수', { exact: true })).toBeVisible();
   await expect(sheet.getByText('61.8점', { exact: true })).toBeVisible();
+  await expect(sheet.getByText('상대점수', { exact: true })).toBeVisible();
+  await expect(sheet.getByText('랭킹점수', { exact: true })).toBeVisible();
+  await expect(sheet.getByText('순위는 신호점수 단독 정렬이 아닌 서버 랭킹 기준입니다.', { exact: true })).toBeVisible();
   await expect(sheet.getByTestId('scanner-direction-badge')).toHaveText('롱');
   await expect(sheet).toHaveClass(/bg-card/);
 
