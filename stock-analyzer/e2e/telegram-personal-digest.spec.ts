@@ -1,3 +1,4 @@
+// Exact-head synchronization marker: no runtime behavior change.
 import { expect, test } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
