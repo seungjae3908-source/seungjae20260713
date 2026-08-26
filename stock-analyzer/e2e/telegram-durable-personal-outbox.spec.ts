@@ -61,6 +61,15 @@ test('the existing worker processes personal alerts with the same bounded retry 
   expect(service).toContain('cooldownMs: 0');
 });
 
+test('worker restart recovers stale SENDING leases through the same queue before normal claims', () => {
+  expect(worker).toContain('STALE_SENDING_LEASE_MS = 2 * 60 * 1000');
+  expect(worker).toContain(".eq('state', 'SENDING')");
+  expect(worker).toContain("state: 'RETRY_SCHEDULED'");
+  expect(worker).toContain("last_error_code: 'STALE_SENDING_RECOVERED'");
+  expect(worker).toContain(".lte('updated_at', staleBefore)");
+  expect(worker).toContain(".in('state', ['PENDING', 'RETRY_SCHEDULED', 'FAILED'])");
+});
+
 test('protected Production storage apply knows and verifies the generic outbox migration before app deploy', () => {
   expect(productionMigrator).toContain('2026082701_personal_telegram_generic_outbox.sql');
   expect(productionMigrator).toContain("'migrations_applied', 3");
