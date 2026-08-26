@@ -154,7 +154,7 @@ test('390x844 short Stocks content keeps BottomNav on the viewport floor', async
   await expectNoHorizontalOverflow(page);
 });
 
-test('390x844 long Stocks content scrolls independently without moving BottomNav', async ({ page }) => {
+test('390x844 long Stocks content accepts real wheel input and scrolls independently without moving BottomNav', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await installApprovedRuntime(page, 30);
   await page.goto('/market-browser');
@@ -163,6 +163,11 @@ test('390x844 long Stocks content scrolls independently without moving BottomNav
   await expect(content).toBeVisible();
   expect(await content.evaluate((node) => node.scrollHeight > node.clientHeight + 1)).toBe(true);
   const before = await navGeometry(page);
+
+  await content.hover();
+  await page.mouse.wheel(0, 1_200);
+  await expect.poll(() => content.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+
   await content.evaluate((node) => { node.scrollTop = node.scrollHeight; });
   await expect.poll(() => content.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
   const after = await navGeometry(page);
