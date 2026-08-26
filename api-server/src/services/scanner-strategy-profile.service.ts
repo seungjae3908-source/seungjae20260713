@@ -1,6 +1,8 @@
 export type ScannerProfileMarket = 'KR_STOCK' | 'US_STOCK' | 'CRYPTO_SPOT' | 'CRYPTO_FUTURES';
 export type ScannerProfileHorizon = 'SCALP' | 'SWING' | 'POSITION';
 export type ScannerProfileRegime = 'UPTREND' | 'DOWNTREND' | 'SIDEWAYS' | 'HIGH_VOL' | 'LOW_VOL';
+export type ScannerDirectionPolicy = 'LONG_ONLY' | 'LONG_SHORT';
+export type ScannerCalibrationPolicy = 'OOS_CALIBRATION_REQUIRED';
 
 export interface ScannerStrategyProfile {
   readonly id: string;
@@ -20,6 +22,10 @@ export interface ScannerStrategyProfile {
   readonly liquidityPolicy: string;
   readonly riskPolicy: string;
   readonly scannerConditions: readonly string[];
+  readonly requiredEvidence: readonly string[];
+  readonly requiredCostComponents: readonly string[];
+  readonly directionPolicy: ScannerDirectionPolicy;
+  readonly calibrationPolicy: ScannerCalibrationPolicy;
   readonly executionAuthority: 'NONE';
 }
 
@@ -30,10 +36,13 @@ function freezeProfile(profile: ScannerStrategyProfile): ScannerStrategyProfile 
   Object.freeze(profile.chartPatterns);
   Object.freeze(profile.confirmationTimeframes);
   Object.freeze(profile.scannerConditions);
+  Object.freeze(profile.requiredEvidence);
+  Object.freeze(profile.requiredCostComponents);
   return Object.freeze(profile);
 }
 
-const VERSION = 'signal-profile-v1';
+const VERSION = 'signal-profile-v2';
+const CALIBRATION_POLICY: ScannerCalibrationPolicy = 'OOS_CALIBRATION_REQUIRED';
 
 const BASE = {
   SCALP: {
@@ -69,7 +78,7 @@ const BASE = {
     chartPatterns: ['major_trend', 'base_breakout', 'support_resistance_structure'],
     volatilityPolicy: 'long-horizon ATR regime; reject unstable volatility transitions',
     volumePolicy: 'sustained accumulation/distribution confirmation',
-    trendPolicy: 'slow-trend and structure alignment across multiple timeframes',
+    trendPolicy: 'slow-trend and structure alignment across daily and weekly timeframes',
     marketRegimePolicy: 'regime stability is required; sideways signals are down-weighted',
     liquidityPolicy: 'minimum durable liquidity filter',
     riskPolicy: 'position risk budget; Risk Engine remains authoritative',
@@ -81,24 +90,27 @@ const TIMEFRAMES: Record<ScannerProfileMarket, Record<ScannerProfileHorizon, { p
   KR_STOCK: {
     SCALP: { primary: '5m', confirm: ['15m', '60m'] },
     SWING: { primary: '60m', confirm: ['4H', '1D'] },
-    POSITION: { primary: '1D', confirm: ['4H', '1D'] },
+    POSITION: { primary: '1D', confirm: ['4H', '1W'] },
   },
   US_STOCK: {
     SCALP: { primary: '5m', confirm: ['15m', '60m'] },
     SWING: { primary: '60m', confirm: ['4H', '1D'] },
-    POSITION: { primary: '1D', confirm: ['4H', '1D'] },
+    POSITION: { primary: '1D', confirm: ['4H', '1W'] },
   },
   CRYPTO_SPOT: {
     SCALP: { primary: '15m', confirm: ['60m'] },
     SWING: { primary: '4H', confirm: ['60m', '1D'] },
-    POSITION: { primary: '4H', confirm: ['1D'] },
+    POSITION: { primary: '1D', confirm: ['4H', '1W'] },
   },
   CRYPTO_FUTURES: {
     SCALP: { primary: '5m', confirm: ['15m', '60m'] },
     SWING: { primary: '60m', confirm: ['4H'] },
-    POSITION: { primary: '4H', confirm: ['1D'] },
+    POSITION: { primary: '4H', confirm: ['1D', '1W'] },
   },
 };
+
+const COMMON_EVIDENCE = ['candles', 'quote', 'freshness', 'liquidity'] as const;
+const COMMON_COSTS = ['commission', 'spread', 'slippage'] as const;
 
 function marketOverrides(market: ScannerProfileMarket, horizon: ScannerProfileHorizon): Partial<ScannerStrategyProfile> {
   if (market === 'KR_STOCK') {
@@ -107,6 +119,9 @@ function marketOverrides(market: ScannerProfileMarket, horizon: ScannerProfileHo
       scannerConditions: horizon === 'SCALP'
         ? ['volume_spike', 'transaction_value', 'ma_breakout', 'rsi', 'macd']
         : ['ma_breakout', 'volume_spike', 'ai_score'],
+      requiredEvidence: [...COMMON_EVIDENCE, 'kr_session', 'listing_status'],
+      requiredCostComponents: [...COMMON_COSTS, 'tax'],
+      directionPolicy: 'LONG_ONLY',
     };
   }
   if (market === 'US_STOCK') {
@@ -115,14 +130,28 @@ function marketOverrides(market: ScannerProfileMarket, horizon: ScannerProfileHo
       scannerConditions: horizon === 'SCALP'
         ? ['volume_spike', 'transaction_value', 'ma_breakout', 'rsi', 'macd']
         : ['ma_breakout', 'volume_spike', 'ai_score'],
+      requiredEvidence: [...COMMON_EVIDENCE, 'us_session', 'listing_status'],
+      requiredCostComponents: [...COMMON_COSTS, 'regulatory_fees'],
+      directionPolicy: 'LONG_ONLY',
     };
   }
   if (market === 'CRYPTO_FUTURES') {
     return {
-      riskPolicy: 'futures leverage-aware risk budget; liquidation and Risk Engine guards remain authoritative',
+      riskPolicy: 'futures leverage-aware risk budget; mark/index divergence, funding, OI, basis and liquidation-risk guards remain authoritative',
       scannerConditions: horizon === 'SCALP'
         ? ['trend_alignment', 'volume_spike', 'breakout', 'pullback', 'williams_atr']
         : ['trend_alignment', 'volume_spike', 'breakout', 'pullback'],
+      requiredEvidence: [
+        ...COMMON_EVIDENCE,
+        'mark_price',
+        'index_price',
+        'funding_rate',
+        'open_interest',
+        'basis',
+        'liquidation_risk',
+      ],
+      requiredCostComponents: [...COMMON_COSTS, 'funding', 'liquidity_impact'],
+      directionPolicy: 'LONG_SHORT',
     };
   }
   return {
@@ -130,6 +159,9 @@ function marketOverrides(market: ScannerProfileMarket, horizon: ScannerProfileHo
     scannerConditions: horizon === 'SCALP'
       ? ['trend_alignment', 'volume_spike', 'breakout', 'pullback', 'williams_atr']
       : ['trend_alignment', 'volume_spike', 'breakout', 'pullback'],
+    requiredEvidence: [...COMMON_EVIDENCE, 'spot_market_status'],
+    requiredCostComponents: [...COMMON_COSTS, 'liquidity_impact'],
+    directionPolicy: 'LONG_ONLY',
   };
 }
 
@@ -137,8 +169,11 @@ function buildProfile(market: ScannerProfileMarket, horizon: ScannerProfileHoriz
   const tf = TIMEFRAMES[market][horizon];
   const base = BASE[horizon];
   const override = marketOverrides(market, horizon);
+  if (!override.requiredEvidence || !override.requiredCostComponents || !override.directionPolicy) {
+    throw new Error(`Incomplete scanner market profile contract: ${market}/${horizon}`);
+  }
   return freezeProfile({
-    id: `${market}_${horizon}_V1`,
+    id: `${market}_${horizon}_V2`,
     version: VERSION,
     market,
     horizon,
@@ -155,6 +190,10 @@ function buildProfile(market: ScannerProfileMarket, horizon: ScannerProfileHoriz
     liquidityPolicy: override.liquidityPolicy ?? base.liquidityPolicy,
     riskPolicy: override.riskPolicy ?? base.riskPolicy,
     scannerConditions: override.scannerConditions ? [...override.scannerConditions] : [...base.scannerConditions],
+    requiredEvidence: [...override.requiredEvidence],
+    requiredCostComponents: [...override.requiredCostComponents],
+    directionPolicy: override.directionPolicy,
+    calibrationPolicy: CALIBRATION_POLICY,
     executionAuthority: 'NONE',
   });
 }
