@@ -179,3 +179,24 @@ button[data-testid="load-multi-timeframe"] {
     bottom: calc(var(--app-bottom-nav-reserve) + 3.75rem);
   }
 }
+
+/*
+ * MarketInformationPage still returns `main + BottomNav` as siblings and the
+ * main carries `min-h-screen`. Make only that legacy sibling pair obey the
+ * current page-shell contract without rewriting market/provider logic.
+ */
+#root div:has(> main[class~="min-h-screen"][class~="max-w-6xl"] + nav[aria-label="주요 메뉴"]) {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#root div:has(> main[class~="min-h-screen"][class~="max-w-6xl"] + nav[aria-label="주요 메뉴"]) > main[class~="min-h-screen"][class~="max-w-6xl"] {
+  min-height: 0 !important;
+  flex: 1 1 0%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: 1.5rem !important;
+}
