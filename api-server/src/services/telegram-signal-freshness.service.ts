@@ -37,7 +37,9 @@ function nonNegativeAge(nowMs: number, observedMs: number): number | null {
 export function evaluateTelegramSignalFreshness(
   input: TelegramSignalFreshnessInput,
 ): TelegramSignalFreshness {
-  const nowMs = Number.isFinite(input.nowMs) ? Number(input.nowMs) : Date.now();
+  const nowMs = typeof input.nowMs === 'number' && Number.isFinite(input.nowMs)
+    ? input.nowMs
+    : Date.now();
   const generated = parsedIso(input.generatedAt);
   const expires = parsedIso(input.expiresAt);
   const reasons: string[] = [];
@@ -51,15 +53,15 @@ export function evaluateTelegramSignalFreshness(
     validity = 'INVALID';
     if (!generated) reasons.push('SIGNAL_GENERATED_AT_INVALID');
     if (!expires) reasons.push('SIGNAL_EXPIRES_AT_INVALID');
+  } else if (expires.ms <= generated.ms) {
+    validity = 'INVALID';
+    reasons.push('SIGNAL_EXPIRY_ORDER_INVALID');
   } else if (generated.ms > nowMs) {
     validity = 'FUTURE';
     reasons.push('SIGNAL_GENERATED_AT_FUTURE');
   } else if (expires.ms <= nowMs) {
     validity = 'EXPIRED';
     reasons.push('SIGNAL_EXPIRED');
-  } else if (expires.ms <= generated.ms) {
-    validity = 'INVALID';
-    reasons.push('SIGNAL_EXPIRY_ORDER_INVALID');
   }
 
   let dataAsOf: string | null = null;
@@ -90,7 +92,7 @@ export function evaluateTelegramSignalFreshness(
     status = 'UNAVAILABLE';
   } else if (
     validity === 'EXPIRED'
-    || input.chart?.status === 'UNAVAILABLE' && input.chart.reason === 'STALE_CHART_EVIDENCE'
+    || (input.chart?.status === 'UNAVAILABLE' && input.chart.reason === 'STALE_CHART_EVIDENCE')
   ) {
     status = 'STALE';
   } else if (
