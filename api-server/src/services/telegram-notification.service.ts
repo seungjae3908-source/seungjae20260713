@@ -242,6 +242,7 @@ async function sendOnce(
       form.append('chat_id', destination);
       form.append('caption', text.slice(0, TELEGRAM_CAPTION_LIMIT));
       form.append('parse_mode', 'HTML');
+      form.append('protect_content', 'true');
       if (keyboard) form.append('reply_markup', JSON.stringify(keyboard));
       const bytes = Buffer.from(photo.bytes);
       const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
@@ -255,11 +256,13 @@ async function sendOnce(
             photo: photo.url,
             caption: text.slice(0, TELEGRAM_CAPTION_LIMIT),
             parse_mode: 'HTML',
+            protect_content: true,
           }
         : {
             chat_id: destination,
             text,
             parse_mode: 'HTML',
+            protect_content: true,
             link_preview_options: { is_disabled: input.linkPreview !== true },
           };
       if (keyboard) payload.reply_markup = keyboard;
