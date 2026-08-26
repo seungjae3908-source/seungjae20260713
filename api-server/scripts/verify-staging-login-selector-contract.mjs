@@ -44,7 +44,7 @@ assert(
 
 assert(spec.includes('expected_logout_aborts: Diagnostic[]'), 'expected logout abort diagnostics bucket is missing');
 assert(spec.includes('type LogoutObservation = {'), 'logout observation contract is missing');
-assert(spec.includes('personalIntegrationReads: Set<Request>'), 'logout observation must retain exact personal integration request identities');
+assert(spec.includes('logoutScopedReads: Set<Request>'), 'logout observation must retain exact logout-scoped read request identities');
 assert(spec.includes('const activeLogoutObservations = new WeakMap<Page, LogoutObservation>()'), 'logout observation must be scoped to the active page');
 assert(spec.includes('const confirmedLogoutAbortRequests = new WeakMap<Request, string>()'), 'confirmed delayed aborts must remain scoped to exact request identities');
 assert(spec.includes("request.method() === 'POST'"), 'only POST logout requests may be considered expected');
@@ -54,16 +54,31 @@ assert(spec.includes("query[0]?.[0] === 'scope'"), 'logout query key must be sco
 assert(spec.includes("query[0]?.[1] === 'global'"), 'logout scope must be global');
 assert(spec.includes("request.failure()?.errorText === 'net::ERR_ABORTED'"), 'only the exact Chromium abort reason may be expected');
 
+const scopedReadPaths = [
+  '/api/user-integrations',
+  '/api/accounts/read-only/toss',
+  '/api/accounts/read-only/upbit',
+  '/api/accounts/read-only/bitget',
+];
+assert(spec.includes('const logoutScopedReadPaths = new Set(['), 'logout-scoped read path allowlist is missing');
+for (const route of scopedReadPaths) {
+  assert(spec.includes(`  '${route}',`), `logout-scoped read path is missing: ${route}`);
+}
+assert(!spec.includes("  '/api/accounts/read-only/kiwoom',"), 'Kiwoom must remain excluded from the logout-scoped read allowlist');
+assert(spec.includes('function isLogoutScopedReadIdentity('), 'logout-scoped read identity matcher is missing');
+assert(spec.includes("return method === 'GET'"), 'logout-scoped reads must remain GET-only');
+assert(spec.includes('logoutScopedReadPaths.has(parsed.pathname)'), 'logout-scoped reads must match an exact enumerated pathname');
+assert(spec.includes('parsed.searchParams.size === 0'), 'logout-scoped read exception must reject query-bearing requests');
+assert(spec.includes('parsed.origin === expectedOrigin'), 'logout-scoped read exception must remain on the origin captured before logout');
+
 const visibleIndex = spec.indexOf('await expect(logoutButton).toBeVisible();');
 const observationIndex = spec.indexOf('activeLogoutObservations.set(page, observation);');
 const clickIndex = spec.indexOf('await logoutButton.click();');
 assert(visibleIndex >= 0 && observationIndex > visibleIndex && clickIndex > observationIndex, 'expected window must open only around an explicit visible logout-button click');
 assert(spec.includes('logoutObservation.candidates.push(diagnostic);'), 'matching logout aborts must be held as candidates first');
-assert(spec.includes("parsed.pathname === '/api/user-integrations'"), 'the personal integration read may be classified only by its exact API path');
-assert(spec.includes('parsed.searchParams.size === 0'), 'the personal integration logout exception must reject query-bearing requests');
-assert(spec.includes('parsed.origin === expectedOrigin'), 'the personal integration logout exception must remain on the origin captured before logout');
-assert(spec.includes('logoutObservation.personalIntegrationReads.add(request);'), 'only an exact request observed during the explicit logout window may become a delayed candidate');
-assert(spec.includes('observation.personalIntegrationReads.has(request)'), 'active abort classification must require exact request identity');
+assert(spec.includes("parsed.pathname === '/api/user-integrations'"), 'the personal integration drain must remain scoped to its exact API path');
+assert(spec.includes('logoutObservation.logoutScopedReads.add(request);'), 'only an exact logout-scoped request observed during the explicit logout window may become a delayed candidate');
+assert(spec.includes('observation.logoutScopedReads.has(request)'), 'active abort classification must require exact request identity');
 assert(spec.includes('confirmedLogoutAbortRequests.get(request)'), 'delayed abort classification must require an exact confirmed request identity');
 assert(spec.includes('routeObservation.candidates.push(diagnostic);'), 'matching route-transition aborts must be held as candidates first');
 assert(
@@ -210,6 +225,23 @@ assert(
 assert(
   scannerReadinessTestBlock.includes("expect(diagnostics.expected_scanner_aborts, 'scanner net::ERR_ABORTED must remain zero').toEqual([]);"),
   'scanner single-entry fixture must preserve the zero-abort contract',
+);
+
+const rejectedProfileBootstrapTestStart = spec.indexOf("test('bootstrap finite-state:");
+const rejectedProfileBootstrapTestEnd = spec.indexOf("\n  test('profile timeout abort:", rejectedProfileBootstrapTestStart);
+assert(
+  rejectedProfileBootstrapTestStart >= 0 && rejectedProfileBootstrapTestEnd > rejectedProfileBootstrapTestStart,
+  'rejected profile bootstrap fixture boundaries are missing',
+);
+const rejectedProfileBootstrapTestBlock = spec.slice(
+  rejectedProfileBootstrapTestStart,
+  rejectedProfileBootstrapTestEnd,
+);
+assert(
+  rejectedProfileBootstrapTestBlock.includes(
+    "expect(requestCount, 'initial bootstrap must issue one profile request').toBe(1);",
+  ),
+  'rejected profile bootstrap must prove exactly one initial profile request',
 );
 
 const retryRecoveryTestStart = spec.indexOf("test('retry recovery:");
@@ -460,4 +492,4 @@ assert(
 assert(clearSessionIndex > globalLogoutIndex, 'successful global logout must synchronously invalidate session identity');
 assert(releaseBarrierIndex > clearSessionIndex, 'logout barrier must remain active until session identity and profile cleanup finish');
 
-console.log('[staging-login-selector-contract] logout and route-transition candidate classification, scoped profile fault classification, current-session profile guard, diagnostic redaction, optional provider degradation, and polling-safe presentation stability are locked down');
+console.log('[staging-login-selector-contract] exact logout-scoped read classification, route-transition candidate classification, scoped profile fault classification, current-session profile guard, diagnostic redaction, optional provider degradation, and polling-safe presentation stability are locked down');

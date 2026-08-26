@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import './paper-flat-recovery-backend.test';
 import {
   PAPER_STORAGE_KEY,
   clearPaperState,
