@@ -94,6 +94,15 @@ type StoredViewport = {
   logicalRange: LogicalViewport;
 };
 
+type PlanLineRow = {
+  price: number | null | undefined;
+  title: string;
+  color: string;
+  style: LineStyle;
+  width: 1 | 2;
+  priority: number;
+};
+
 type Props = {
   candles: NormalizedChartCandle[];
   indicators: ChartIndicatorResult;
@@ -152,6 +161,55 @@ function exposeLogicalViewport(wrapper: HTMLDivElement | null, chart: IChartApi)
 
 function validPlanPrice(value: number | null | undefined): value is number {
   return value != null && Number.isFinite(value) && value > 0;
+}
+
+function sameVisiblePrice(left: number | null | undefined, right: number | null | undefined): boolean {
+  if (!validPlanPrice(left) || !validPlanPrice(right)) return false;
+  const scale = Math.max(Math.abs(left), Math.abs(right), 1);
+  return Math.abs(left - right) <= Math.max(scale * 0.000001, Number.EPSILON * 32);
+}
+
+function mergePlanRows(rows: PlanLineRow[]): PlanLineRow[] {
+  const merged: PlanLineRow[] = [];
+  for (const candidate of rows.filter((row) => validPlanPrice(row.price)).sort((a, b) => a.priority - b.priority)) {
+    const match = merged.find((row) => sameVisiblePrice(row.price, candidate.price));
+    if (!match) {
+      merged.push({ ...candidate });
+      continue;
+    }
+    const titles = new Set(`${match.title}·${candidate.title}`.split('·').map((title) => title.trim()).filter(Boolean));
+    const hasStop = Array.from(titles).some((title) => title.includes('손절'));
+    const hasInvalidation = Array.from(titles).some((title) => title.includes('무효화'));
+    const hasEntryTop = Array.from(titles).some((title) => title.includes('진입 상단'));
+    const hasEntryBottom = Array.from(titles).some((title) => title.includes('진입 하단'));
+    match.title = hasStop && hasInvalidation
+      ? '손절·무효화'
+      : hasEntryTop && hasEntryBottom
+        ? 'Scanner 진입'
+        : Array.from(titles).join('·');
+    if (candidate.priority < match.priority) {
+      match.color = candidate.color;
+      match.style = candidate.style;
+      match.width = candidate.width;
+      match.priority = candidate.priority;
+    }
+  }
+  return merged;
+}
+
+function planPriorityPrices(pricePlan: AnalysisPricePlan | undefined): number[] {
+  if (!pricePlan) return [];
+  return [
+    pricePlan.stopLoss,
+    pricePlan.invalidation,
+    pricePlan.entryZone?.from,
+    pricePlan.entryZone?.to,
+    ...pricePlan.targets,
+  ].filter(validPlanPrice);
+}
+
+function conflictsWithHigherPriority(price: number, higherPriorityPrices: number[]): boolean {
+  return higherPriorityPrices.some((candidate) => sameVisiblePrice(price, candidate));
 }
 
 function chartSymbolFromResetKey(
@@ -304,6 +362,7 @@ export function PatternAwareUnifiedChartCanvas({
       const rect = entries[0]?.contentRect;
       if (!rect) return;
       chart.applyOptions({ width: Math.max(rect.width, 1), height: Math.max(rect.height, 390) });
+      exposeLogicalViewport(wrapperRef.current, chart);
     });
     observer.observe(container);
     publishVisibleRange();
@@ -374,6 +433,7 @@ export function PatternAwareUnifiedChartCanvas({
       color: row.close >= row.open ? 'rgba(239,68,68,0.42)' : 'rgba(59,130,246,0.42)',
     })));
 
+    const higherPriorityPrices = planPriorityPrices(pricePlan);
     removePriceLines(instance.candle, instance.referencePriceLines);
     if (overlays.levels) {
       const referenceRows = [
@@ -391,7 +451,7 @@ export function PatternAwareUnifiedChartCanvas({
           color: row.color,
           lineWidth: 1,
           lineStyle: row.style,
-          axisLabelVisible: true,
+          axisLabelVisible: !conflictsWithHigherPriority(row.price, higherPriorityPrices),
           title: row.title,
         }));
       }
@@ -399,19 +459,20 @@ export function PatternAwareUnifiedChartCanvas({
 
     removePriceLines(instance.candle, instance.pricePlanLines);
     if (pricePlan) {
-      const planRows: Array<{ price: number | null | undefined; title: string; color: string; style: LineStyle; width: 1 | 2 }> = [
-        { price: pricePlan.entryZone?.from, title: 'Scanner 진입 하단', color: '#22c55e', style: LineStyle.Dashed, width: 2 },
-        { price: pricePlan.entryZone?.to, title: 'Scanner 진입 상단', color: '#22c55e', style: LineStyle.Dashed, width: 2 },
-        { price: pricePlan.stopLoss, title: 'Scanner 손절', color: '#dc2626', style: LineStyle.Solid, width: 2 },
-        { price: pricePlan.invalidation, title: 'Scanner 무효화', color: '#f97316', style: LineStyle.Dotted, width: 1 },
+      const planRows = mergePlanRows([
+        { price: pricePlan.stopLoss, title: 'Scanner 손절', color: '#dc2626', style: LineStyle.Solid, width: 2, priority: 1 },
+        { price: pricePlan.invalidation, title: 'Scanner 무효화', color: '#f97316', style: LineStyle.Dotted, width: 1, priority: 1 },
+        { price: pricePlan.entryZone?.from, title: 'Scanner 진입 하단', color: '#22c55e', style: LineStyle.Dashed, width: 2, priority: 2 },
+        { price: pricePlan.entryZone?.to, title: 'Scanner 진입 상단', color: '#22c55e', style: LineStyle.Dashed, width: 2, priority: 2 },
         ...pricePlan.targets.slice(0, 4).map((price, index) => ({
           price,
           title: `Scanner 목표 ${index + 1}`,
           color: '#8b5cf6',
           style: LineStyle.Dotted,
           width: 1 as const,
+          priority: 3,
         })),
-      ];
+      ]);
       for (const row of planRows) {
         if (!validPlanPrice(row.price)) continue;
         instance.pricePlanLines.push(instance.candle.createPriceLine({
@@ -443,7 +504,7 @@ export function PatternAwareUnifiedChartCanvas({
           color: statusColor(patternOverlay.status),
           lineWidth: 2,
           lineStyle: LineStyle.Dashed,
-          axisLabelVisible: true,
+          axisLabelVisible: !conflictsWithHigherPriority(patternOverlay.confirmationPrice, higherPriorityPrices),
           title: `패턴 확인선 · ${patternOverlay.status}`,
         }));
         instance.analysisPriceLines.push(instance.candle.createPriceLine({
@@ -451,7 +512,7 @@ export function PatternAwareUnifiedChartCanvas({
           color: '#dc2626',
           lineWidth: 2,
           lineStyle: LineStyle.Dotted,
-          axisLabelVisible: true,
+          axisLabelVisible: !conflictsWithHigherPriority(patternOverlay.invalidationPrice, higherPriorityPrices),
           title: '패턴 무효화선',
         }));
       }
@@ -490,7 +551,7 @@ export function PatternAwareUnifiedChartCanvas({
           color: '#14b8a6',
           lineWidth: 2,
           lineStyle: LineStyle.Dashed,
-          axisLabelVisible: true,
+          axisLabelVisible: !conflictsWithHigherPriority(average, planPriorityPrices(pricePlan)),
           title: positionOverlay.stale ? '내 평단 · 오래된 값' : '내 평단',
         }));
       }
@@ -510,7 +571,7 @@ export function PatternAwareUnifiedChartCanvas({
     restoreLogicalViewport(instance.chart, beforeUpdate);
     const afterUpdate = exposeLogicalViewport(wrapperRef.current, instance.chart);
     if (afterUpdate) storedViewportRef.current = { resetKey, logicalRange: afterUpdate };
-  }, [market, positionOverlay, resetKey]);
+  }, [market, positionOverlay, pricePlan, resetKey]);
 
   useEffect(() => {
     storedViewportRef.current = null;
@@ -538,7 +599,7 @@ export function PatternAwareUnifiedChartCanvas({
         data-position-liquidation={positionOverlay?.position.liquidationPrice ?? ''}
         className={cn('relative overflow-hidden bg-background', fullscreen && 'h-[100dvh] w-screen')}
       >
-        <div className="absolute right-2 top-2 z-10 flex gap-1 rounded-xl border border-card-border bg-background/90 p-1 shadow-sm backdrop-blur">
+        <div data-testid="chart-floating-controls" className="absolute left-2 top-2 z-10 flex gap-1 rounded-xl border border-card-border bg-background/90 p-1 opacity-60 shadow-sm backdrop-blur transition-opacity duration-200 hover:opacity-100 focus-within:opacity-100">
           <ChartControl label="전체 데이터 맞춤" testId="chart-fit-content" onClick={() => instanceRef.current?.chart.timeScale().fitContent()}><Expand className="h-4 w-4" /></ChartControl>
           <ChartControl label="최신 캔들로 이동" testId="chart-latest-candle" onClick={() => instanceRef.current?.chart.timeScale().scrollToRealTime()}><LocateFixed className="h-4 w-4" /></ChartControl>
           <ChartControl label={fullscreen ? '전체화면 해제' : '전체화면'} testId="chart-fullscreen" onClick={() => void toggleFullscreen()}>{fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}</ChartControl>
@@ -576,7 +637,7 @@ function ChartControl({ label, testId, onClick, children }: {
       title={label}
       aria-label={label}
       onClick={onClick}
-      className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-secondary"
+      className="flex h-11 w-11 touch-manipulation items-center justify-center rounded-lg hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
     >
       {children}
     </button>
