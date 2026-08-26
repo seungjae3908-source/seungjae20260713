@@ -1,10 +1,10 @@
-// Supabase 동기화 계층 (server를 경유: /api/watchlist*).
+// Authenticated member Watchlist sync layer (server: /api/member-watchlist*).
 //
-// localStorage가 즉각적인 로컬 캐시, Supabase(watchlist_items)가 원본 저장소.
-// - 앱 시작 시: 서버 목록을 내려받아 로컬과 병합(서버의 targetPrice 우선).
-// - 로컬 변경 시(WATCHLIST_CHANGE_EVENT): 디바운스 후 최신 전체 목록을 직렬 반영.
-// - 서버가 아직 설정 전(503 SUPABASE_NOT_CONFIGURED)이면 로컬 전용으로 동작하고
-//   콘솔에 한 번만 알린다 — 몰래 실패하지 않는다.
+// localStorage remains the immediate/offline cache. Supabase member_watchlist_items
+// is the cross-device canonical store for authenticated members.
+// - server identity is derived from the bearer-authenticated member only.
+// - client userId/deviceId is never sent as an ownership credential.
+// - server unavailable states keep local data intact and fail closed for Telegram.
 import { authorizedFetch } from './auth-fetch';
 import {
   readWatchlistItems,
@@ -14,7 +14,6 @@ import {
 } from './stock-display';
 
 const BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '/api';
-const DEVICE_KEY = 'seungjae_device_id_v1';
 // detail 페이지가 과거에 쓰던 별도 키 — 1회 병합 후 제거.
 const LEGACY_DETAIL_KEY = 'watchlist:tickers';
 
@@ -34,22 +33,6 @@ let pushInFlight = false;
 let pushPending = false;
 let applyingServerState = false;
 
-export function getDeviceId(): string {
-  if (typeof window === 'undefined') return 'default';
-  try {
-    const existing = window.localStorage.getItem(DEVICE_KEY);
-    if (existing) return existing;
-    const id =
-      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-        ? crypto.randomUUID()
-        : `dev-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`;
-    window.localStorage.setItem(DEVICE_KEY, id);
-    return id;
-  } catch {
-    return 'default';
-  }
-}
-
 function warn(message: string): void {
   if (warnedOnce) return;
   warnedOnce = true;
@@ -62,7 +45,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T | null> {
     const res = await authorizedFetch(`${BASE}${path}`, init);
     if (res.status === 503) {
       serverDisabled = true;
-      warn('Supabase 서버 키가 아직 없어 로컬 전용으로 동작합니다.');
+      warn('회원 관심종목 저장소를 사용할 수 없어 로컬 전용으로 동작합니다.');
       return null;
     }
     if (!res.ok) {
@@ -122,8 +105,18 @@ function mergeServerIntoLocal(serverItems: ServerWatchlistItem[]): void {
         targetPrice: server.targetPrice,
       });
       changed = true;
-    } else if ((local.targetPrice ?? null) !== (server.targetPrice ?? null)) {
-      map.set(key, { ...local, targetPrice: server.targetPrice });
+      continue;
+    }
+
+    const merged: WatchlistItem = {
+      ...local,
+      name: server.name || local.name || key,
+      market: server.market ?? local.market,
+      currency: server.currency ?? local.currency,
+      targetPrice: server.targetPrice,
+    };
+    if (JSON.stringify(canonicalServerItems([local])) !== JSON.stringify(canonicalServerItems([merged]))) {
+      map.set(key, merged);
       changed = true;
     }
   }
@@ -172,11 +165,10 @@ async function flushPush(): Promise<void> {
     do {
       pushPending = false;
       const controller = new AbortController();
-      await request('/watchlist/sync', {
+      await request('/member-watchlist/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          deviceId: getDeviceId(),
           items: canonicalServerItems(readWatchlistItems()),
         }),
         keepalive: true,
@@ -198,7 +190,7 @@ function schedulePush(): void {
   }, 800);
 }
 
-/** 앱 시작 시 1회 호출: 서버 병합 + 변경 감지 푸시를 설치한다. */
+/** 앱 시작 시 1회 호출: 회원 서버 병합 + 변경 감지 푸시를 설치한다. */
 export function ensureWatchlistSync(): void {
   if (installed || typeof window === 'undefined') return;
   installed = true;
@@ -207,9 +199,7 @@ export function ensureWatchlistSync(): void {
   window.addEventListener(WATCHLIST_CHANGE_EVENT, schedulePush);
 
   void (async () => {
-    const res = await request<{ items: ServerWatchlistItem[] }>(
-      `/watchlist?deviceId=${encodeURIComponent(getDeviceId())}`,
-    );
+    const res = await request<{ items: ServerWatchlistItem[] }>('/member-watchlist');
     if (!res) return;
     const serverItems = canonicalServerItems(res.items ?? []);
     mergeServerIntoLocal(serverItems);
