@@ -4,6 +4,10 @@ import {
   collectTelegramSignalIntelligence,
   type TelegramSignalDeliveryContext,
 } from './telegram-investment-intelligence.service';
+import {
+  fanoutMemberHoldingScannerAlert,
+  type MemberHoldingProducerSummary,
+} from './member-holdings-telegram-producer.service';
 import type { ScannerAlertCandidate, ScannerAssetClass } from './scanner-signal.types';
 import { markTelegramSignalAnnounced } from './telegram-signal-followup.service';
 import {
@@ -18,6 +22,9 @@ export type ScannerTelegramSender = (
 
 export type ScannerTelegramRoom = 'STOCK_ROOM' | 'CRYPTO_ROOM';
 export type ScannerTelegramRoomResolver = (room: ScannerTelegramRoom) => string | null;
+export type ScannerMemberHoldingProducer = (
+  alert: ScannerAlertCandidate,
+) => Promise<MemberHoldingProducerSummary>;
 
 const MAX_RICH_ALERTS_PER_BATCH = 3;
 
@@ -33,6 +40,7 @@ function tradePlanLines(alert: ScannerAlertCandidate): string[] {
   const stop = alert.stopLoss == null ? 'N/A' : String(alert.stopLoss);
   return [
     `진입가/진입구간 ${entry}`,
+    '분할 매수 N/A (검증된 1·2·3차 분할 진입가 미제공)',
     `분할 매도가 ${formatTargetPlan(alert.targets)}`,
     `손절가 ${stop}`,
     '실제 주문/체결 아님',
@@ -139,15 +147,52 @@ async function richInput(
   }
 }
 
+async function runMemberHoldingProducer(
+  alert: ScannerAlertCandidate,
+  producer: ScannerMemberHoldingProducer,
+): Promise<void> {
+  try {
+    const result = await producer(alert);
+    if (result.status === 'DISABLED' || result.status === 'UNSUPPORTED_ASSET') return;
+    logger.info(
+      {
+        symbol: alert.symbol,
+        memberHoldingsStatus: result.status,
+        matchedCount: result.matchedCount,
+        policyCount: result.policyCount,
+        skippedCount: result.skippedCount,
+        errorCount: result.errorCount,
+      },
+      'member holdings Telegram producer evaluated scanner alert',
+    );
+  } catch (error) {
+    logger.warn(
+      {
+        symbol: alert.symbol,
+        errorName: error instanceof Error ? error.name : 'UnknownError',
+      },
+      'member holdings Telegram producer failed closed',
+    );
+  }
+}
+
 export async function deliverScannerTelegramAlerts(
   alerts: ScannerAlertCandidate[],
   sender: ScannerTelegramSender = sendTelegramAlert,
   resolveRoomChatId: ScannerTelegramRoomResolver = scannerTelegramRoomChatId,
   context: TelegramSignalDeliveryContext = {},
+  memberHoldingProducer: ScannerMemberHoldingProducer = fanoutMemberHoldingScannerAlert,
 ): Promise<void> {
   await Promise.all(alerts.map(async (alert, index) => {
+    // Start the independently default-off member path without serializing the
+    // existing public-room path behind member DB/quote/Telegram latency.
+    const memberEvaluation = runMemberHoldingProducer(alert, memberHoldingProducer);
+
     const base = scannerTelegramInput(alert, resolveRoomChatId);
-    if (!base) return;
+    if (!base) {
+      await memberEvaluation;
+      return;
+    }
     const input = index < MAX_RICH_ALERTS_PER_BATCH ? await richInput(base, alert, context) : base;
     try {
       const result = await sender(input);
@@ -163,5 +208,6 @@ export async function deliverScannerTelegramAlerts(
         'scanner Telegram delivery failed open',
       );
     }
+    await memberEvaluation;
   }));
 }
