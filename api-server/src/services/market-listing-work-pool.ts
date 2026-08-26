@@ -43,6 +43,13 @@ export async function collectMarketListingWork<Item, Result>(
     itemTimeoutMs: options.itemTimeoutMs ?? MARKET_LISTING_ITEM_TIMEOUT_MS,
     signal: options.signal,
     now: options.now,
+    admission: {
+      identity: {
+        provider: 'market-listing',
+        domain: 'public-market',
+        operationClass: 'listing-work',
+      },
+    },
   });
 
   const values = pool.outcomes
