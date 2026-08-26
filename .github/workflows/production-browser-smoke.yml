@@ -110,7 +110,7 @@ jobs:
     timeout-minutes: 20
     environment: production
     env:
-      PRODUCTION_BASE_URL: https://lsj119.duckdns.org
+      PRODUCTION_BASE_URL: https://lsj119.com
       PRODUCTION_EXPECTED_SHA: ${{ inputs.sha }}
       PRODUCTION_HARNESS_SHA: ${{ needs.resolve-harness.outputs.harness_sha }}
       PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
