@@ -14,7 +14,7 @@ export const CRYPTO_FUTURES_POSITION_TIER_PROVIDER = Object.freeze({
 
 const SHA40 = /^[0-9a-f]{40}$/u;
 const SOURCE = "bitget-public-position-tier";
-const BOUNDARY_EPSILON = 1e-10;
+const FLOAT_EPSILON = 1e-10;
 
 function fail(code, detail = "") {
   throw new Error(detail ? `${code}:${detail}` : code);
@@ -91,7 +91,7 @@ function digest(value) {
 
 function closeEnough(left, right) {
   const scale = Math.max(1, Math.abs(left), Math.abs(right));
-  return Math.abs(left - right) <= scale * BOUNDARY_EPSILON;
+  return Math.abs(left - right) <= scale * FLOAT_EPSILON;
 }
 
 function normalizeTier(raw, expectedTier) {
@@ -176,7 +176,8 @@ export function calculateCryptoFuturesIsolatedLiquidationRiskV1({
   positionSize,
   averageEntryPrice,
   markPrice,
-  positionMargin,
+  positionMarginBeforeFunding,
+  fundingNetCost,
   takerFeeRate,
   openedAt,
   asOf,
@@ -186,7 +187,10 @@ export function calculateCryptoFuturesIsolatedLiquidationRiskV1({
   const size = positive(positionSize, "LIQUIDATION_POSITION_SIZE_INVALID");
   const entry = positive(averageEntryPrice, "LIQUIDATION_ENTRY_PRICE_INVALID");
   const mark = positive(markPrice, "LIQUIDATION_MARK_PRICE_INVALID");
-  const margin = positive(positionMargin, "LIQUIDATION_POSITION_MARGIN_INVALID");
+  const marginBeforeFunding = positive(positionMarginBeforeFunding, "LIQUIDATION_POSITION_MARGIN_INVALID");
+  const normalizedFundingNetCost = finite(fundingNetCost, "LIQUIDATION_FUNDING_NET_COST_INVALID");
+  const effectivePositionMargin = marginBeforeFunding - normalizedFundingNetCost;
+  if (!(effectivePositionMargin > 0) || !Number.isFinite(effectivePositionMargin)) fail("LIQUIDATION_EFFECTIVE_MARGIN_EXHAUSTED");
   const feeRate = nonNegative(takerFeeRate, "LIQUIDATION_TAKER_FEE_INVALID");
   if (feeRate >= 0.1) fail("LIQUIDATION_TAKER_FEE_INVALID");
   const normalizedOpenedAt = timestamp(openedAt, "LIQUIDATION_OPENED_AT_INVALID");
@@ -201,11 +205,19 @@ export function calculateCryptoFuturesIsolatedLiquidationRiskV1({
   if (!Array.isArray(positionTiers.rows) || positionTiers.rows.length === 0) fail("LIQUIDATION_POSITION_TIERS_INVALID");
 
   const positionValue = size * mark;
-  if (!Number.isFinite(positionValue) || !(positionValue > 0)) fail("LIQUIDATION_POSITION_VALUE_INVALID");
+  const entryNotional = size * entry;
+  if (!Number.isFinite(positionValue) || !(positionValue > 0) || !Number.isFinite(entryNotional) || !(entryNotional > 0)) {
+    fail("LIQUIDATION_POSITION_VALUE_INVALID");
+  }
   const tier = selectTier(positionTiers.rows, positionValue);
+  const impliedInitialLeverage = entryNotional / marginBeforeFunding;
+  if (!Number.isFinite(impliedInitialLeverage) || impliedInitialLeverage > tier.leverage + FLOAT_EPSILON) {
+    fail("LIQUIDATION_TIER_MAX_LEVERAGE_EXCEEDED", String(impliedInitialLeverage));
+  }
+
   const denominator = size * (tier.mmr + feeRate - normalizedDirection.sign);
   if (!Number.isFinite(denominator) || denominator === 0) fail("LIQUIDATION_DENOMINATOR_INVALID");
-  const numerator = margin + tier.preCalculatedOffset - size * entry * normalizedDirection.sign;
+  const numerator = effectivePositionMargin + tier.preCalculatedOffset - size * entry * normalizedDirection.sign;
   const liquidationPrice = numerator / denominator;
   if (!Number.isFinite(liquidationPrice) || liquidationPrice <= 0) fail("LIQUIDATION_PRICE_INVALID");
 
@@ -224,12 +236,17 @@ export function calculateCryptoFuturesIsolatedLiquidationRiskV1({
     positionSize: size,
     averageEntryPrice: entry,
     markPrice: mark,
-    positionMargin: margin,
+    positionMarginBeforeFunding: marginBeforeFunding,
+    fundingNetCost: normalizedFundingNetCost,
+    effectivePositionMargin,
     takerFeeRate: feeRate,
     openedAt: normalizedOpenedAt,
     asOf: normalizedAsOf,
     positionValue,
+    entryNotional,
+    impliedInitialLeverage,
     selectedTier: tier.tier,
+    tierMaxLeverage: tier.leverage,
     maintenanceMarginRate: tier.mmr,
     preCalculatedOffset: tier.preCalculatedOffset,
     tierObservedAt: positionTiers.observedAt,
@@ -286,6 +303,7 @@ export function cryptoFuturesIsolatedLiquidationModelReadinessV1() {
     historicalCoverageBeforeEffectiveAt: false,
     positionTierHistoryProvenanceReady: false,
     currentPublicPositionTierEndpointReady: true,
+    fundingAppliedToEffectiveMargin: true,
     formulaTournamentUnblocked: false,
     blocker: "POINT_IN_TIME_POSITION_TIER_HISTORY_REQUIRED",
     finalHoldoutAccessAllowed: false,
