@@ -1,9 +1,16 @@
 import { runEvidenceBackedFormulaTournamentAdapterV1 } from "./evidence-backed-formula-tournament-adapter-v1.js";
+import {
+  bindCryptoSpotPublicDatasetToAdapterInputV1,
+  buildCryptoSpotPublicFormulaDatasetSummaryV1,
+  collectCryptoSpotPublicFormulaTournamentDatasetV1,
+  createCryptoSpotPublicFormulaTournamentDependenciesV1,
+} from "./crypto-spot-public-formula-tournament-v1.js";
 import { evaluateGlobalStrategyStatisticalFirewall } from "./global-strategy-statistical-firewall-v1.js";
 import { researchDigest } from "./research-trial-registry.js";
 
 export const CRYPTO_SPOT_FORMULA_STATISTICAL_FIREWALL_ADAPTER_VERSION = 1;
 export const CRYPTO_SPOT_FORMULA_STATISTICAL_FIREWALL_ADAPTER_CONTRACT = "crypto-spot-formula-statistical-firewall-adapter/v1";
+export const CRYPTO_SPOT_CANONICAL_STATISTICAL_TOURNAMENT_CONTRACT = "crypto-spot-canonical-statistical-tournament/v1";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const CANONICAL_STATISTICAL_OWNER = "#547";
@@ -54,11 +61,7 @@ function nearlyEqual(left, right) {
   return Math.abs(left - right) <= scale * 1e-9;
 }
 
-export function buildAlignedRealizedEquityReturnSeriesV1({
-  backtest,
-  period,
-  bucketMs,
-} = {}) {
+export function buildAlignedRealizedEquityReturnSeriesV1({ backtest, period, bucketMs } = {}) {
   const selectedPeriod = assertSelectionOnlyPeriod(period ?? backtest?.period);
   positiveInteger(bucketMs, "STATISTICAL_RETURN_BUCKET_INVALID");
   const initialCapital = finite(backtest?.initialCapital, "STATISTICAL_INITIAL_CAPITAL_MISSING");
@@ -76,9 +79,7 @@ export function buildAlignedRealizedEquityReturnSeriesV1({
     const equityBefore = finite(trade.equityBefore, "STATISTICAL_EQUITY_BEFORE_MISSING", { index });
     const equityAfter = finite(trade.equityAfter, "STATISTICAL_EQUITY_AFTER_MISSING", { index });
     const netPnl = finite(trade.netPnl, "STATISTICAL_NET_PNL_MISSING", { index });
-    if (!nearlyEqual(equityBefore, expectedEquity)) {
-      fail("STATISTICAL_EQUITY_CHAIN_MISMATCH", { index, expectedEquity, equityBefore });
-    }
+    if (!nearlyEqual(equityBefore, expectedEquity)) fail("STATISTICAL_EQUITY_CHAIN_MISMATCH", { index, expectedEquity, equityBefore });
     if (!nearlyEqual(equityAfter, equityBefore + netPnl)) {
       fail("STATISTICAL_EQUITY_PNL_RECONCILIATION_FAILED", { index, equityBefore, equityAfter, netPnl });
     }
@@ -129,24 +130,15 @@ function canonicalFirewallFailureReason(firewall) {
   if (firewall?.pbo?.status !== "EVIDENCE_READY") missing.push("PBO");
   if (firewall?.realityCheckAndSpa?.status !== "EVIDENCE_READY") missing.push("REALITY_CHECK_AND_SPA");
   if (firewall?.decision?.status !== "STATISTICAL_REVIEW_READY") missing.push("EMPIRICAL_DECISION_POLICY");
-  return missing.length
-    ? `canonical #547 evidence is not admission-ready: ${missing.join(",")}`
-    : "canonical #547 evidence did not authorize statistical admission";
+  return missing.length ? `canonical #547 evidence is not admission-ready: ${missing.join(",")}` : "canonical #547 evidence did not authorize statistical admission";
 }
 
-export function evaluateCanonicalCryptoSpotFormulaStatisticalEvidenceV1({
-  trials,
-  selectedTrialId,
-  candidateFamilySize,
-  requiredAdjustedAlpha,
-} = {}) {
+export function evaluateCanonicalCryptoSpotFormulaStatisticalEvidenceV1({ trials, selectedTrialId, candidateFamilySize, requiredAdjustedAlpha } = {}) {
   if (!Array.isArray(trials) || trials.length === 0) fail("STATISTICAL_TRIALS_REQUIRED");
   positiveInteger(candidateFamilySize, "STATISTICAL_CANDIDATE_FAMILY_SIZE_INVALID");
   finite(requiredAdjustedAlpha, "STATISTICAL_ADJUSTED_ALPHA_INVALID");
   if (!(requiredAdjustedAlpha > 0 && requiredAdjustedAlpha <= 1)) fail("STATISTICAL_ADJUSTED_ALPHA_INVALID", { requiredAdjustedAlpha });
-  if (candidateFamilySize < trials.length) {
-    fail("STATISTICAL_FAMILY_SIZE_UNDERCOUNTS_TRIALS", { candidateFamilySize, trialCount: trials.length });
-  }
+  if (candidateFamilySize < trials.length) fail("STATISTICAL_FAMILY_SIZE_UNDERCOUNTS_TRIALS", { candidateFamilySize, trialCount: trials.length });
   if (!trials.some((trial) => trial?.trialId === selectedTrialId)) fail("STATISTICAL_SELECTED_TRIAL_MISSING", { selectedTrialId });
   const lengths = new Set(trials.map((trial) => trial?.returnSeries?.length));
   if (lengths.size !== 1) fail("STATISTICAL_TRIAL_SERIES_NOT_ALIGNED", { lengths: [...lengths] });
@@ -169,37 +161,10 @@ export function evaluateCanonicalCryptoSpotFormulaStatisticalEvidenceV1({
 
   const dsrValue = Number.isFinite(canonicalFirewall.dsr?.result?.probability) ? canonicalFirewall.dsr.result.probability : null;
   const pboValue = Number.isFinite(canonicalFirewall.pbo?.result?.pbo) ? canonicalFirewall.pbo.result.pbo : null;
-  const admissionReady = canonicalFirewall.status === "EVIDENCE_READY"
-    && canonicalFirewall.decision?.status === "STATISTICAL_REVIEW_READY";
-
-  if (!admissionReady) {
-    return deepFreeze({
-      status: "MISSING_EVIDENCE",
-      failureCode: "STATISTICAL_EVIDENCE_MISSING",
-      failureReason: canonicalFirewallFailureReason(canonicalFirewall),
-      canonicalOwner: CANONICAL_STATISTICAL_OWNER,
-      canonicalFirewall,
-      multipleTesting: {
-        method: "GLOBAL_FAMILY_ADJUSTED_ALPHA_INPUT",
-        candidateFamilySize,
-        adjustedAlpha: requiredAdjustedAlpha,
-        passed: null,
-      },
-      dsr: { value: dsrValue, passed: null },
-      pbo: { value: pboValue, passed: null },
-      empiricalDecisionPolicyApplied: false,
-      finalHoldoutAccess: false,
-      executionAuthority: "NONE",
-    });
-  }
-
-  // V1 intentionally has no path to a PASS because #547 currently has no empirically calibrated
-  // Reality Check / decision policy in this integration contract. A future version must add that
-  // policy as immutable evidence rather than silently promoting this result.
-  return deepFreeze({
+  const admissionReady = canonicalFirewall.status === "EVIDENCE_READY" && canonicalFirewall.decision?.status === "STATISTICAL_REVIEW_READY";
+  const common = {
     status: "MISSING_EVIDENCE",
     failureCode: "STATISTICAL_EVIDENCE_MISSING",
-    failureReason: "canonical #547 produced review-ready evidence but this V1 adapter has no immutable empirical policy binding for #551 admission",
     canonicalOwner: CANONICAL_STATISTICAL_OWNER,
     canonicalFirewall,
     multipleTesting: {
@@ -213,6 +178,12 @@ export function evaluateCanonicalCryptoSpotFormulaStatisticalEvidenceV1({
     empiricalDecisionPolicyApplied: false,
     finalHoldoutAccess: false,
     executionAuthority: "NONE",
+  };
+  if (!admissionReady) return deepFreeze({ ...common, failureReason: canonicalFirewallFailureReason(canonicalFirewall) });
+
+  return deepFreeze({
+    ...common,
+    failureReason: "canonical #547 produced review-ready evidence but this V1 adapter has no immutable empirical policy binding for #551 admission",
   });
 }
 
@@ -252,11 +223,7 @@ async function planExactGeneratedRegistry(boundInput) {
   });
 }
 
-export function createCryptoSpotFormulaCanonicalStatisticalFirewallAdapterV1({
-  boundInput,
-  dataset,
-  runSelectionBacktest,
-} = {}) {
+export function createCryptoSpotFormulaCanonicalStatisticalFirewallAdapterV1({ boundInput, dataset, runSelectionBacktest } = {}) {
   if (!boundInput || boundInput.seedResult?.profile?.market !== "CRYPTO_SPOT") fail("STATISTICAL_BOUND_CRYPTO_SPOT_INPUT_REQUIRED");
   if (boundInput.tournament?.search?.finalHoldoutAccess !== false) fail("STATISTICAL_FINAL_HOLDOUT_ACCESS_FORBIDDEN");
   if (!dataset || dataset.market !== "CRYPTO_SPOT" || !Number.isSafeInteger(dataset.intervalMs)) fail("STATISTICAL_CRYPTO_SPOT_DATASET_REQUIRED");
@@ -267,12 +234,10 @@ export function createCryptoSpotFormulaCanonicalStatisticalFirewallAdapterV1({
   let planningPromise = null;
   let evidencePromise = null;
   const bucketMs = Math.max(7 * DAY_MS, 30 * dataset.intervalMs);
-
   const loadPlan = () => {
     planningPromise ??= planExactGeneratedRegistry(boundInput);
     return planningPromise;
   };
-
   const loadTrialEvidence = () => {
     evidencePromise ??= (async () => {
       const plan = await loadPlan();
@@ -290,10 +255,7 @@ export function createCryptoSpotFormulaCanonicalStatisticalFirewallAdapterV1({
           fail("STATISTICAL_SELECTION_BACKTEST_SAFETY_INVALID", { generatedCandidateId: row.generatedCandidate.generatedCandidateId });
         }
         const returnEvidence = buildAlignedRealizedEquityReturnSeriesV1({ backtest, period: backtest.period, bucketMs });
-        trials.push(Object.freeze({
-          trialId: row.generatedCandidate.generatedCandidateId,
-          returnSeries: Object.freeze([...returnEvidence.returns]),
-        }));
+        trials.push(Object.freeze({ trialId: row.generatedCandidate.generatedCandidateId, returnSeries: Object.freeze([...returnEvidence.returns]) }));
         trialEvidence.push(Object.freeze({
           trialId: row.generatedCandidate.generatedCandidateId,
           formulaCandidateId: row.formulaCandidate.candidateId,
@@ -324,14 +286,7 @@ export function createCryptoSpotFormulaCanonicalStatisticalFirewallAdapterV1({
     schemaVersion: CRYPTO_SPOT_FORMULA_STATISTICAL_FIREWALL_ADAPTER_VERSION,
     contract: CRYPTO_SPOT_FORMULA_STATISTICAL_FIREWALL_ADAPTER_CONTRACT,
     canonicalOwner: CANONICAL_STATISTICAL_OWNER,
-    async runStatisticalFirewall({
-      formulaCandidate,
-      generatedCandidate,
-      canonicalOwner,
-      candidateFamilySize,
-      requiredAdjustedAlpha,
-      finalHoldoutAccess,
-    } = {}) {
+    async runStatisticalFirewall({ formulaCandidate, generatedCandidate, canonicalOwner, candidateFamilySize, requiredAdjustedAlpha, finalHoldoutAccess } = {}) {
       if (canonicalOwner !== CANONICAL_STATISTICAL_OWNER) {
         return Object.freeze({ status: "MISSING_EVIDENCE", failureCode: "STATISTICAL_EVIDENCE_MISSING", failureReason: "canonical Statistical Firewall owner must be #547" });
       }
@@ -341,9 +296,7 @@ export function createCryptoSpotFormulaCanonicalStatisticalFirewallAdapterV1({
       const evidence = await loadTrialEvidence();
       const selectedTrialId = generatedCandidate?.generatedCandidateId;
       const selected = evidence.plan.registry.find((row) => row.generatedCandidate.generatedCandidateId === selectedTrialId);
-      if (!selected
-        || selected.formulaCandidate.formulaHash !== formulaCandidate?.formulaHash
-        || selected.generatedCandidate.parameterIdentity !== generatedCandidate?.parameterIdentity) {
+      if (!selected || selected.formulaCandidate.formulaHash !== formulaCandidate?.formulaHash || selected.generatedCandidate.parameterIdentity !== generatedCandidate?.parameterIdentity) {
         return Object.freeze({ status: "MISSING_EVIDENCE", failureCode: "STATISTICAL_EVIDENCE_MISSING", failureReason: "current tournament candidate is absent from the exact #722 generated registry" });
       }
       if (!Number.isSafeInteger(candidateFamilySize) || candidateFamilySize < evidence.plan.globalPlannedCandidateFamilySize) {
@@ -387,5 +340,68 @@ export function createCryptoSpotFormulaCanonicalStatisticalFirewallAdapterV1({
       privateTradingApiAllowed: false,
       executionAuthority: "NONE",
     }),
+  });
+}
+
+export async function runCryptoSpotPublicFormulaTournamentWithCanonicalStatisticsV1({
+  client,
+  symbol,
+  startTime,
+  endTime,
+  maxCandles = 250_000,
+  minimumPartitionCandles = 120,
+  adapterInput,
+  onPage,
+} = {}) {
+  const timeframe = adapterInput?.seedResult?.profile?.timeframe;
+  const dataset = await collectCryptoSpotPublicFormulaTournamentDatasetV1({
+    client,
+    symbol,
+    timeframe,
+    startTime,
+    endTime,
+    maxCandles,
+    minimumPartitionCandles,
+    onPage,
+  });
+  const boundInput = bindCryptoSpotPublicDatasetToAdapterInputV1(adapterInput, dataset);
+  const baseDependencies = createCryptoSpotPublicFormulaTournamentDependenciesV1({ dataset });
+  const statisticalAdapter = createCryptoSpotFormulaCanonicalStatisticalFirewallAdapterV1({
+    boundInput,
+    dataset,
+    runSelectionBacktest: ({ formulaCandidate, generatedCandidate }) => baseDependencies.runHistoricalBacktest({
+      formulaCandidate,
+      generatedCandidate,
+      datasetIdentity: dataset.datasetIdentity,
+    }),
+  });
+  const dependencies = Object.freeze({
+    ...baseDependencies,
+    runStatisticalFirewall: statisticalAdapter.runStatisticalFirewall,
+  });
+  const result = await runEvidenceBackedFormulaTournamentAdapterV1(boundInput, dependencies);
+  const candidates = result.tournament?.candidates ?? [];
+  const statisticalRecords = candidates.flatMap((candidate) => candidate.stageRecords?.filter((record) => record.stage === "STATISTICAL_FIREWALL") ?? []);
+  return deepFreeze({
+    schemaVersion: CRYPTO_SPOT_FORMULA_STATISTICAL_FIREWALL_ADAPTER_VERSION,
+    contract: CRYPTO_SPOT_CANONICAL_STATISTICAL_TOURNAMENT_CONTRACT,
+    status: "COMPLETED",
+    dataset: buildCryptoSpotPublicFormulaDatasetSummaryV1(dataset),
+    result,
+    canonicalStatisticalOwner: CANONICAL_STATISTICAL_OWNER,
+    canonicalStatisticalInvocationCount: statisticalRecords.length,
+    finalHoldoutEvaluated: false,
+    profitabilityClaimAllowed: false,
+    championPromotionAllowed: false,
+    tradingAuthority: false,
+    safety: {
+      researchOnly: true,
+      finalHoldoutPreAccessAllowed: false,
+      liveTrading: false,
+      autoTrading: false,
+      realOrderEnabled: false,
+      privateTradingApiAllowed: false,
+      executionAuthority: "NONE",
+    },
   });
 }
