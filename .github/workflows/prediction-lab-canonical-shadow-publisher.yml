@@ -269,27 +269,31 @@ jobs:
         if: steps.normalize.outputs.status == 'PUBLISHED'
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
           SSH_USER: ${{ secrets.PROD_SSH_USER }}
           SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
         run: |
           set -Eeuo pipefail
+          current_main="$(gh api "repos/$REPOSITORY/branches/main" --jq '.commit.sha')"
+          [[ "$current_main" == "$SOURCE_HEAD_SHA" ]] || { echo 'Main moved before state-root publication; preserve last-good' >&2; exit 1; }
           local_state='${{ steps.state.outputs.next_root }}/forward/shadow-state.json'
           remote_upload="/tmp/canonical-shadow-${GITHUB_RUN_ID}.json"
           target="$STATE_ROOT/forward/shadow-state.json"
           scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$local_state" "$SSH_USER@$SSH_HOST:$remote_upload"
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$SSH_USER@$SSH_HOST" \
-            "sudo -n -u investment-research env UPLOAD='$remote_upload' TARGET='$target' bash -s" <<'REMOTE'
+            "sudo -n bash -s -- '$remote_upload' '$target'" <<'REMOTE'
           set -Eeuo pipefail
-          umask 077
-          tmp="${TARGET}.tmp-$$-$RANDOM"
-          cleanup() { rm -f -- "$tmp"; }
+          upload="$1"
+          target="$2"
+          tmp="${target}.tmp-$$-$RANDOM"
+          cleanup() { rm -f -- "$tmp" "$upload"; }
           trap cleanup EXIT
-          cat "$UPLOAD" > "$tmp"
-          mv -Tf -- "$tmp" "$TARGET"
+          cat "$upload" | sudo -n -u investment-research sh -c 'umask 077; cat > "$1"' sh "$tmp"
+          sudo -n -u investment-research mv -Tf -- "$tmp" "$target"
+          rm -f -- "$upload"
           trap - EXIT
           REMOTE
-          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$SSH_USER@$SSH_HOST" "rm -f -- '$remote_upload'"
 
       - name: Read back exact canonical state and verify byte digest
         id: readback
@@ -362,11 +366,11 @@ jobs:
                   'executionAuthority': row['handoff'].get('executionAuthority'),
               } for row in rows],
           }
-          print(json.dumps(compact, indent=2, sort_keys=True))
+          print(json.dumps(compact, indent=2))
           PY
           node - <<'NODE'
+          const assert = require('node:assert/strict');
           const fs = require('fs');
-          const normalize = (value) => JSON.stringify(value, Object.keys(value).sort());
           const nodeValue = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/node-consumer-contract.json', 'utf8'));
           const pythonValue = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/python-consumer-contract.json', 'utf8'));
           const pick = (value) => ({
@@ -379,7 +383,7 @@ jobs:
             },
             handoffs: value.handoffs,
           });
-          if (JSON.stringify(pick(nodeValue)) !== JSON.stringify(pick(pythonValue))) throw new Error('Node/Python canonical Shadow consumer mismatch');
+          assert.deepStrictEqual(pick(nodeValue), pick(pythonValue));
           NODE
 
       - name: Set up pnpm for first-cutover Strategy Health adapter verification
