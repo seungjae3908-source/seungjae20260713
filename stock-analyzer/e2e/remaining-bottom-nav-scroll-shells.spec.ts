@@ -149,9 +149,47 @@ async function wheelTargetInsideScrollOwner(scroll: ReturnType<Page['locator']>)
       x,
       y,
       hitInside: Boolean(hit && node.contains(hit)),
+      hitTag: hit?.tagName ?? null,
+      hitClass: hit instanceof HTMLElement ? hit.className : null,
+      hitTestId: hit instanceof HTMLElement ? hit.dataset.testid ?? null : null,
       clientHeight: (node as HTMLElement).clientHeight,
       scrollHeight: (node as HTMLElement).scrollHeight,
     };
+  });
+}
+
+async function armWheelDiagnostic(page: Page) {
+  await page.evaluate(() => {
+    const targetWindow = window as typeof window & { __remainingScrollWheelDiagnostic?: unknown };
+    targetWindow.__remainingScrollWheelDiagnostic = null;
+    window.addEventListener('wheel', (event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const path = event.composedPath()
+        .filter((entry): entry is Element => entry instanceof Element)
+        .map((entry) => {
+          const style = getComputedStyle(entry);
+          return {
+            tag: entry.tagName,
+            className: entry instanceof HTMLElement ? entry.className : '',
+            testId: entry instanceof HTMLElement ? entry.dataset.testid ?? null : null,
+            overflowY: style.overflowY,
+            clientHeight: entry instanceof HTMLElement ? entry.clientHeight : null,
+            scrollHeight: entry instanceof HTMLElement ? entry.scrollHeight : null,
+            scrollTop: entry instanceof HTMLElement ? entry.scrollTop : null,
+          };
+        });
+      targetWindow.__remainingScrollWheelDiagnostic = {
+        received: true,
+        defaultPrevented: event.defaultPrevented,
+        cancelable: event.cancelable,
+        deltaX: event.deltaX,
+        deltaY: event.deltaY,
+        targetTag: target?.tagName ?? null,
+        targetClass: target instanceof HTMLElement ? target.className : null,
+        targetTestId: target instanceof HTMLElement ? target.dataset.testid ?? null : null,
+        path,
+      };
+    }, { once: true, passive: true });
   });
 }
 
@@ -197,8 +235,20 @@ for (const route of ROUTES) {
     const viewportHeight = await page.evaluate(() => window.innerHeight);
     expect(Math.abs(navBefore!.y + navBefore!.height - viewportHeight)).toBeLessThanOrEqual(1);
 
+    await armWheelDiagnostic(page);
     await page.mouse.move(target.x, target.y);
     await page.mouse.wheel(0, 700);
+    const wheelDiagnostic = await page.evaluate(() => (
+      window as typeof window & { __remainingScrollWheelDiagnostic?: unknown }
+    ).__remainingScrollWheelDiagnostic ?? null);
+    const postWheelGeometry = await scroll.evaluate((node) => ({
+      scrollTop: (node as HTMLElement).scrollTop,
+      clientHeight: (node as HTMLElement).clientHeight,
+      scrollHeight: (node as HTMLElement).scrollHeight,
+      connected: node.isConnected,
+      fillerConnected: Boolean(node.querySelector('[data-scroll-shell-filler="true"]')),
+    }));
+    process.stdout.write(`[remaining-scroll-wheel-diagnostic] ${route.path} ${JSON.stringify({ target, wheelDiagnostic, postWheelGeometry })}\n`);
     await expect.poll(() => scroll.evaluate((node) => (node as HTMLElement).scrollTop)).toBeGreaterThan(0);
 
     const navAfter = await nav.boundingBox();
