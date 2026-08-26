@@ -9,6 +9,7 @@ import {
   buildCanonicalShadowDriftHandoffV1,
   buildDriftVerdictV1,
   buildFutureShadowObservationV1,
+  buildFutureShadowSettlementEvidenceV1,
   buildNormalizedFeatureSnapshotV1,
   computeShadowObservationArtifactDigestV1,
   resolveModelIdentityMappingV1,
@@ -182,22 +183,24 @@ function inference(index = 0) {
   return rows[index % rows.length];
 }
 
-function makeObservations(context = resolutions()) {
+function makePendingObservations(context = resolutions()) {
   const raw = [
     { return5: -0.7, atrPct: 1.7 },
     { return5: 0.1, atrPct: 2.0 },
     { return5: 0.7, atrPct: 2.4 },
     { return5: 1.4, atrPct: 2.8 },
   ];
-  const actual = ["bullish", "bearish", "neutral", "bullish"];
   return raw.map((features, index) => buildFutureShadowObservationV1({
     observationId: `future-${index + 1}`,
     observedAt: `2026-08-26T00:${String(index + 10).padStart(2, "0")}:00.000Z`,
+    signalAt: `2026-08-26T00:${String(index + 9).padStart(2, "0")}:00.000Z`,
     symbol: index % 2 ? "ETHUSDT" : "BTCUSDT",
     market: context.strategyResolution.strategyIdentity.market,
     timeframe: context.strategyResolution.strategyIdentity.timeframe,
     direction: context.strategyResolution.strategyIdentity.direction,
+    strategyIdentity: context.strategyResolution.strategyIdentity,
     strategyIdentityDigest: context.strategyResolution.strategyIdentityDigest,
+    modelIdentity: context.modelResolution.modelIdentity,
     modelIdentityDigest: context.modelResolution.modelIdentityDigest,
     referenceIdentity: context.referenceResolution.referenceIdentity,
     regime: { key: index < 2 ? "Bear" : "Bull" },
@@ -207,17 +210,56 @@ function makeObservations(context = resolutions()) {
       atrPct: (features.atrPct - 2) / 0.5,
     },
     inference: inference(index),
+    referencePrice: 100 + index,
+    priceProvenance: {
+      provider: "bitget-public-v2",
+      source: "fixture-public-market-data",
+      priceField: "close",
+      candleTimestamp: Date.parse(`2026-08-26T00:${String(index + 8).padStart(2, "0")}:00.000Z`),
+      signalAt: `2026-08-26T00:${String(index + 9).padStart(2, "0")}:00.000Z`,
+    },
     dataFreshness: { status: "FRESH", ageMs: 500, maxAgeMs: 60_000 },
     sourceProvenance: {
       sourceKind: "GENUINE_SHADOW_OBSERVATION",
+      provider: "bitget-public-v2",
       capturedAtObservationTime: true,
       reconstructed: false,
       synthetic: false,
       replayed: false,
       historicalBackfill: false,
     },
-    actualDirection: actual[index],
   }));
+}
+
+function settlementFor(observation, index = 0, actualDirection = ["bullish", "bearish", "neutral", "bullish"][index % 4]) {
+  const signalPrice = observation.referencePrice;
+  const futureCandles = [
+    { timestamp: Date.parse(`2026-08-26T00:${String(index + 20).padStart(2, "0")}:00.000Z`), high: signalPrice * 1.02, low: signalPrice * 0.99, close: signalPrice * 1.01 },
+    { timestamp: Date.parse(`2026-08-26T00:${String(index + 21).padStart(2, "0")}:00.000Z`), high: signalPrice * 1.03, low: signalPrice * 0.98, close: signalPrice * (index % 2 ? 0.99 : 1.02) },
+  ];
+  return buildFutureShadowSettlementEvidenceV1({
+    observation,
+    actualDirection,
+    settlementPrice: futureCandles.at(-1).close,
+    futureCandles,
+    horizonBars: futureCandles.length,
+    outcomeAt: `2026-08-26T00:${String(index + 30).padStart(2, "0")}:00.000Z`,
+    settledAt: "2026-08-26T01:00:00.000Z",
+    costEvidence: { applicable: false, reason: "SHADOW_NO_EXECUTION", commission: null, slippage: null, funding: null, netReturn: null },
+    sourceProvenance: {
+      sourceKind: "GENUINE_FUTURE_SHADOW_OUTCOME",
+      provider: "bitget-public-v2",
+      capturedAfterObservation: true,
+      reconstructed: false,
+      synthetic: false,
+      replayed: false,
+      historicalBackfill: false,
+    },
+  });
+}
+
+function makeObservations(context = resolutions()) {
+  return makePendingObservations(context).map((observation, index) => settleFutureShadowObservationV1(observation, settlementFor(observation, index)));
 }
 
 function driftPolicy({ watch = { psi: 10, ksStatistic: 1, jsd: 1 }, brake = { psi: 20, ksStatistic: 2, jsd: 2, minimumTriggeredMetrics: 2 } } = {}) {
@@ -452,18 +494,66 @@ test("RULE_ONLY MODEL_ONLY and frozen 65/35 blend are immutably preserved", () =
   assert.equal(Object.isFrozen(observation), true);
 });
 
-test("future settlement adds only the measured actual direction and recomputes immutable provenance", () => {
+test("synthetic and historical backfill observations receive zero credit", async (t) => {
   const context = resolutions();
-  const pending = clone(makeObservations(context)[0]);
-  pending.observationId = "future-pending";
-  pending.actualDirection = null;
-  pending.artifactDigest = computeShadowObservationArtifactDigestV1(pending);
-  const settled = settleFutureShadowObservationV1(pending, "SHORT");
+  for (const flag of ["synthetic", "historicalBackfill"]) {
+    await t.test(flag, () => {
+      const observation = clone(makePendingObservations(context)[0]);
+      observation.sourceProvenance[flag] = true;
+      observation.artifactDigest = computeShadowObservationArtifactDigestV1(observation);
+      const result = validateFutureShadowObservationV1({ observation, ...context, featureOrder: context.fixture.model.featureOrder });
+      assert.equal(result.status, "MISSING_EVIDENCE");
+      assert.equal(result.reason, "HISTORICAL_OR_REPLAYED_COMPONENTS_NOT_CREDITABLE");
+    });
+  }
+});
+
+test("signal timestamp must precede observation capture", () => {
+  const context = resolutions();
+  const observation = clone(makePendingObservations(context)[0]);
+  observation.signalAt = "2026-08-26T00:59:00.000Z";
+  observation.priceProvenance.signalAt = observation.signalAt;
+  observation.artifactDigest = computeShadowObservationArtifactDigestV1(observation);
+  const result = validateFutureShadowObservationV1({ observation, ...context, featureOrder: context.fixture.model.featureOrder });
+  assert.equal(result.status, "MISSING_EVIDENCE");
+  assert.equal(result.reason, "FUTURE_TIMESTAMP_INTEGRITY_FAILED");
+});
+
+test("future settlement preserves deterministic price outcome excursions costs and immutable provenance", () => {
+  const context = resolutions();
+  const pending = makePendingObservations(context)[0];
+  const settlement = settlementFor(pending, 0, "SHORT");
+  const settled = settleFutureShadowObservationV1(pending, settlement);
   assert.equal(pending.actualDirection, null);
   assert.equal(settled.actualDirection, "bearish");
+  assert.equal(settled.settlementStatus, "SETTLED");
+  assert.equal(settled.settlement.signalPrice, pending.referencePrice);
+  assert.ok(Number.isFinite(settled.settlement.realizedMove));
+  assert.ok(Number.isFinite(settled.settlement.excursions.maximumFavorableExcursion));
+  assert.ok(Number.isFinite(settled.settlement.excursions.maximumAdverseExcursion));
+  assert.equal(settled.settlement.costEvidence.applicable, false);
+  assert.equal(settled.settlement.sourceProvenance.replayed, false);
   assert.notEqual(settled.artifactDigest, pending.artifactDigest);
   assert.equal(computeShadowObservationArtifactDigestV1(settled), settled.artifactDigest);
-  assert.throws(() => settleFutureShadowObservationV1(settled, "LONG"), /settlement conflict/);
+  assert.equal(settleFutureShadowObservationV1(settled, settlement), settled);
+  const conflicting = settlementFor(pending, 0, "LONG");
+  assert.throws(() => settleFutureShadowObservationV1(settled, conflicting), /settlement conflict/);
+});
+
+test("pending genuine observation remains POSITION and SETTLEMENT_NOT_DUE without fabricated outcome", () => {
+  const pending = makePendingObservations()[0];
+  assert.equal(pending.positionEvidence.status, "POSITION");
+  assert.equal(pending.settlementStatus, "PENDING_SETTLEMENT");
+  assert.equal(pending.settlement, null);
+  assert.equal(pending.actualDirection, null);
+});
+
+test("settlement outcome and evidence digest reproduce deterministically", () => {
+  const pending = makePendingObservations()[0];
+  const first = settlementFor(pending, 0);
+  const second = settlementFor(pending, 0);
+  assert.deepEqual(first, second);
+  assert.equal(first.evidenceDigest, second.evidenceDigest);
 });
 
 test("PSI deterministic reproduction uses genuine future Shadow features", () => {
@@ -487,6 +577,22 @@ test("JSD deterministic reproduction uses genuine future Shadow features", () =>
   const second = fullHandoff();
   assert.equal(first.featureMetrics[0].jsd, second.featureMetrics[0].jsd);
   assert.ok(Number.isFinite(first.featureMetrics[0].jsd));
+});
+
+test("unsettled future observations do not enter directional quality or PSI KS JSD", () => {
+  const context = resolutions();
+  const result = fullHandoff({ observations: makePendingObservations(context), canonicalDriftPolicy: driftPolicy() });
+  assert.equal(result.status, "MISSING_EVIDENCE");
+  assert.equal(result.observationEvidence.sampleN, 4);
+  assert.equal(result.observationEvidence.settledN, 0);
+  assert.equal(result.observationEvidence.driftInputN, 0);
+  assert.equal(result.directionalQuality.RULE_ONLY.sampleN, 0);
+  assert.equal(result.directionalQuality.MODEL_ONLY.sampleN, 0);
+  assert.equal(result.directionalQuality.DEPLOYED_FROZEN_BLEND.sampleN, 0);
+  assert.equal(result.featureMetrics.every((metric) => metric.psi === null && metric.ksStatistic === null && metric.jsd === null), true);
+  assert.equal(result.driftVerdict.status, "NOT_EVALUABLE");
+  assert.equal(result.driftVerdict.reason, "SETTLEMENT_NOT_DUE");
+  assert.deepEqual(result.strategyHealthHandoff.missingEvidence, ["SETTLEMENT_NOT_DUE"]);
 });
 
 test("Drift Verdict is NOT_EVALUABLE without canonical non-hindsight policy", () => {
