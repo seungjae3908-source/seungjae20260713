@@ -10,7 +10,7 @@ function fulfill(route: Route, body: unknown, status = 200) {
 
 function emptySnapshot(provider: 'toss' | 'upbit' | 'bitget', overrides: Record<string, unknown> = {}) {
   return {
-    provider, readOnly: true, connected: false, status: 'NOT_CONFIGURED', accounts: [], balances: [], positions: [], openOrders: [],
+    provider, readOnly: true, connected: false, status: 'NOT_CONFIGURED', accounts: null, balances: null, positions: null, openOrders: null,
     checkedAt: NOW, lastGoodAt: null, stale: false, errorCode: 'ACCOUNT_NOT_CONFIGURED',
     orderRequests: 0, cancelRequests: 0, amendRequests: 0, transferRequests: 0, withdrawalRequests: 0,
     credentialsReturned: false, liveTradingEnabled: false, autoTradingEnabled: false, ...overrides,
@@ -79,14 +79,14 @@ test('regular user sees only Toss Upbit Bitget account linking and Kiwoom is hid
 test('regular user saves Upbit credentials only through canonical account-readonly vault', async ({ page }) => {
   const { assertClean } = await installRegular(page);
   let savedBody: Record<string, unknown> | null = null;
-  let connected = false;
+  let configured = false;
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === '/api/accounts/read-only/toss') return fulfill(route, emptySnapshot('toss'));
     if (path === '/api/accounts/read-only/bitget') return fulfill(route, emptySnapshot('bitget'));
-    if (path === '/api/accounts/read-only/upbit') return fulfill(route, emptySnapshot('upbit', connected ? { connected: true, status: 'CONNECTED', errorCode: null, balances: [{ currency: 'KRW', available: 100000, locked: 0, total: 100000, estimatedKrwValue: 100000 }] } : {}));
+    if (path === '/api/accounts/read-only/upbit') return fulfill(route, emptySnapshot('upbit', configured ? { status: 'CONFIGURED_UNVERIFIED', errorCode: 'ACCOUNT_READ_DISABLED' } : {}));
     if (path === '/api/accounts/read-only/credentials/upbit' && route.request().method() === 'PUT') {
-      savedBody = route.request().postDataJSON() as Record<string, unknown>; connected = true;
+      savedBody = route.request().postDataJSON() as Record<string, unknown>; configured = true;
       return fulfill(route, { ok: true, provider: 'upbit', configured: true, purpose: 'read_only', credentialsReturned: false, privateProviderRequests: 0, orderRequests: 0, cancelRequests: 0, amendRequests: 0, transferRequests: 0, withdrawalRequests: 0, liveTradingEnabled: false, autoTradingEnabled: false });
     }
     if (path === '/api/user-integrations') return fulfill(route, { brokerConnections: [], telegram: { connected: false, status: 'DISCONNECTED', connectedAt: null }, preferences: {} });
@@ -96,7 +96,12 @@ test('regular user saves Upbit credentials only through canonical account-readon
   await page.getByRole('button', { name: 'Upbit 조회 연결 설정' }).click();
   const accessKey = 'UPBIT_ACCESS_TEST_ONLY_123'; const secretKey = 'UPBIT_SECRET_TEST_ONLY_456';
   await page.getByTestId('upbit-credential-primary').fill(accessKey); await page.getByTestId('upbit-credential-secret').fill(secretKey); await page.getByTestId('upbit-save-connection').click();
-  await expect(page.getByRole('status')).toContainText('암호화 저장'); await expect(page.getByTestId('connection-upbit')).toContainText('연결됨');
+  const upbit = page.getByTestId('connection-upbit');
+  await expect(page.getByRole('status')).toContainText('암호화 저장');
+  await expect(upbit).toContainText('검증 필요');
+  await expect(upbit).toContainText('보유 자산 미수집');
+  await expect(upbit).not.toContainText('보유 자산 0개');
+  await expect(upbit).not.toContainText('미연결');
   expect(savedBody).toEqual({ purpose: 'read_only', permissions: ['read'], credentials: { accessKey, secretKey } });
   expect(await page.locator('body').innerText()).not.toContain(accessKey); expect(await page.locator('body').innerText()).not.toContain(secretKey); assertClean();
 });
