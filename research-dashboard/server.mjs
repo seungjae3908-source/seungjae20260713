@@ -235,6 +235,18 @@ function countShadowRecords(value) {
   });
 }
 
+function canonicalShadowHandoffs(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  const groups = value.groups && typeof value.groups === 'object' && !Array.isArray(value.groups)
+    ? value.groups
+    : {};
+  return Object.entries(groups).sort(([left], [right]) => left.localeCompare(right)).flatMap(([group, row]) => {
+    const handoff = row?.canonicalEvidence?.handoff?.strategyHealthHandoff;
+    if (!handoff || typeof handoff !== 'object' || Array.isArray(handoff)) return [];
+    return [{ group, handoff }];
+  });
+}
+
 function newestTimestamp(cycles) {
   return cycles.reduce((max, cycle) => Math.max(max, finiteNumber(cycle.generatedAt) ?? 0), 0) || null;
 }
@@ -260,6 +272,7 @@ export async function buildResearchOverview({ stateRoot = DEFAULT_STATE_ROOT } =
   const paperLedger = summarizePaperLedger(paperLedgerRaw);
   const shadowGroups = summarizeShadowGroups(shadowSummaryRaw);
   const shadowRecords = countShadowRecords(shadowStateRaw);
+  const shadowCanonicalHandoffs = canonicalShadowHandoffs(shadowStateRaw);
   const failedTasks = sumKnownCycleCounts(cycles, 'failedCount');
   const blockedDataTasks = sumKnownCycleCounts(cycles, 'blockedDataCount');
   const authorityEvidenceComplete = !paperRuntime.present || paperRuntime.safetyEvidenceComplete;
@@ -299,7 +312,7 @@ export async function buildResearchOverview({ stateRoot = DEFAULT_STATE_ROOT } =
       cycles,
     }),
     paper: Object.freeze({ runtime: paperRuntime, ledger: paperLedger }),
-    shadow: Object.freeze({ groups: shadowGroups, records: shadowRecords }),
+    shadow: Object.freeze({ groups: shadowGroups, records: shadowRecords, canonicalHandoffs: shadowCanonicalHandoffs }),
     profitability: Object.freeze({
       proven: false,
       status: 'evidence_collection',
