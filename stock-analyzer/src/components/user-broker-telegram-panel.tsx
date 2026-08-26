@@ -26,10 +26,52 @@ type PreferenceKey =
   | 'STOP_FILLED'
   | 'MANUAL_PORTFOLIO_ENTRY';
 
+type TelegramPolicyMarket = 'KR' | 'US' | 'CRYPTO_SPOT' | 'CRYPTO_FUTURES';
+type TelegramPolicySignalType =
+  | 'BUY'
+  | 'LONG'
+  | 'SHORT'
+  | 'NO_TRADE'
+  | 'PRICE_TARGET'
+  | 'STRATEGY_HEALTH'
+  | 'CHAMPION'
+  | 'RESEARCH'
+  | 'SETTLEMENT'
+  | 'PROVIDER_SERVER_ERROR';
+type TelegramPolicyPriority = 'CRITICAL' | 'IMPORTANT' | 'INFO';
+type TelegramPolicyDeliveryMode = 'IMMEDIATE' | 'BATCHED';
+
+type TelegramAlertPolicy = {
+  userId: string;
+  enabled: boolean;
+  markets: TelegramPolicyMarket[];
+  signalTypes: TelegramPolicySignalType[];
+  priorities: TelegramPolicyPriority[];
+  quietHours: {
+    enabled: boolean;
+    start: string;
+    end: string;
+    timeZone: string;
+    criticalBypass: boolean;
+  };
+  cooldownMs: number;
+  sameEventDedupeMs: number;
+  sameSymbolWindowMs: number;
+  sameSymbolRepeatLimit: number;
+  deliveryMode: TelegramPolicyDeliveryMode;
+  digest: {
+    enabled: boolean;
+    windowMs: number;
+  };
+};
+
 type IntegrationState = {
   brokerConnections: BrokerConnection[];
   telegram: { connected: boolean; status: string; connectedAt: string | null };
   preferences: Record<PreferenceKey, boolean>;
+  alertPolicy: TelegramAlertPolicy;
+  alertPolicySource: string;
+  alertPolicyStorageAvailable: boolean;
 };
 
 const preferenceLabels: Record<PreferenceKey, string> = {
@@ -47,13 +89,84 @@ const preferenceLabels: Record<PreferenceKey, string> = {
   MANUAL_PORTFOLIO_ENTRY: '수동 포트폴리오 등록',
 };
 
+const marketLabels: Record<TelegramPolicyMarket, string> = {
+  KR: '국내주식',
+  US: '미국주식',
+  CRYPTO_SPOT: '코인 현물',
+  CRYPTO_FUTURES: '코인 선물',
+};
+
+const signalLabels: Record<TelegramPolicySignalType, string> = {
+  BUY: 'BUY',
+  LONG: '선물 LONG',
+  SHORT: '선물 SHORT',
+  NO_TRADE: 'NO TRADE',
+  PRICE_TARGET: '목표가',
+  STRATEGY_HEALTH: '전략 상태',
+  CHAMPION: 'Champion',
+  RESEARCH: 'Research',
+  SETTLEMENT: '정산 결과',
+  PROVIDER_SERVER_ERROR: '데이터·서버 오류',
+};
+
+const priorityLabels: Record<TelegramPolicyPriority, string> = {
+  CRITICAL: '긴급',
+  IMPORTANT: '중요',
+  INFO: '일반',
+};
+
 const preferenceKeys = Object.keys(preferenceLabels) as PreferenceKey[];
+const policyMarkets = Object.keys(marketLabels) as TelegramPolicyMarket[];
+const policySignalTypes = Object.keys(signalLabels) as TelegramPolicySignalType[];
+const policyPriorities = Object.keys(priorityLabels) as TelegramPolicyPriority[];
 const VISIBLE_ACCOUNT_EXCHANGES = new Set(['toss', 'upbit', 'bitget']);
+const DEFAULT_POLICY_WINDOW_MS = 5 * 60 * 1000;
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
+}
+
+function finiteNonNegative(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+
+function knownArray<T extends string>(value: unknown, allowed: readonly T[], fallback: readonly T[]): T[] {
+  if (!Array.isArray(value)) return [...fallback];
+  const normalized = value.filter((item): item is T => typeof item === 'string' && allowed.includes(item as T));
+  if (normalized.length !== value.length || new Set(normalized).size !== normalized.length) return [...fallback];
+  return normalized;
+}
+
+function normalizeAlertPolicy(value: unknown): TelegramAlertPolicy {
+  const policy = record(value) ?? {};
+  const quietHours = record(policy.quietHours) ?? {};
+  const digest = record(policy.digest) ?? {};
+  const deliveryMode = policy.deliveryMode === 'BATCHED' ? 'BATCHED' : 'IMMEDIATE';
+  return {
+    userId: typeof policy.userId === 'string' ? policy.userId : '',
+    enabled: policy.enabled === true,
+    markets: knownArray(policy.markets, policyMarkets, policyMarkets),
+    signalTypes: knownArray(policy.signalTypes, policySignalTypes, policySignalTypes),
+    priorities: knownArray(policy.priorities, policyPriorities, policyPriorities),
+    quietHours: {
+      enabled: quietHours.enabled === true,
+      start: typeof quietHours.start === 'string' ? quietHours.start : '22:00',
+      end: typeof quietHours.end === 'string' ? quietHours.end : '07:00',
+      timeZone: typeof quietHours.timeZone === 'string' ? quietHours.timeZone : 'Asia/Seoul',
+      criticalBypass: quietHours.criticalBypass === true,
+    },
+    cooldownMs: finiteNonNegative(policy.cooldownMs, DEFAULT_POLICY_WINDOW_MS),
+    sameEventDedupeMs: finiteNonNegative(policy.sameEventDedupeMs, 24 * 60 * 60 * 1000),
+    sameSymbolWindowMs: finiteNonNegative(policy.sameSymbolWindowMs, 60 * 60 * 1000),
+    sameSymbolRepeatLimit: finiteNonNegative(policy.sameSymbolRepeatLimit, 3),
+    deliveryMode,
+    digest: {
+      enabled: digest.enabled === true,
+      windowMs: finiteNonNegative(digest.windowMs, 30 * 60 * 1000),
+    },
+  };
 }
 
 function normalizeIntegrationState(value: unknown): IntegrationState {
@@ -87,7 +200,19 @@ function normalizeIntegrationState(value: unknown): IntegrationState {
     preferences: Object.fromEntries(
       preferenceKeys.map((key) => [key, preferences[key] === true]),
     ) as Record<PreferenceKey, boolean>,
+    alertPolicy: normalizeAlertPolicy(root.alertPolicy),
+    alertPolicySource: typeof root.alertPolicySource === 'string' ? root.alertPolicySource : 'DEFAULT_MISSING',
+    alertPolicyStorageAvailable: root.alertPolicyStorageAvailable !== false,
   };
+}
+
+function toggleListValue<T extends string>(values: readonly T[], value: T, checked: boolean): T[] {
+  if (checked) return values.includes(value) ? [...values] : [...values, value];
+  return values.filter((item) => item !== value);
+}
+
+function minutes(ms: number): number {
+  return Math.max(0, Math.round(ms / 60_000));
 }
 
 async function api<T>(
@@ -110,6 +235,7 @@ export function UserBrokerTelegramPanel() {
   const [link, setLink] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [policySaving, setPolicySaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [syncNotice, setSyncNotice] = useState<string | null>(null);
   const [requestState, setRequestState] = useState<'pending' | 'success' | 'failure'>('pending');
@@ -209,7 +335,31 @@ export function UserBrokerTelegramPanel() {
     }
   }
 
+  async function saveAlertPolicy(patch: Record<string, unknown>) {
+    if (!state || state.alertPolicyStorageAvailable === false || policySaving) return;
+    setPolicySaving(true);
+    setError(null);
+    try {
+      const result = await api<{ alertPolicy: unknown; alertPolicySource?: string }>('/api/user-integrations/telegram-policy', {
+        method: 'PATCH',
+        body: JSON.stringify(patch),
+      });
+      setState((current) => current ? {
+        ...current,
+        alertPolicy: normalizeAlertPolicy(result.alertPolicy),
+        alertPolicySource: typeof result.alertPolicySource === 'string' ? result.alertPolicySource : current.alertPolicySource,
+      } : current);
+      userIntegrationsRequestLifecycle.invalidate();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Telegram 투자 알림 설정 저장에 실패했습니다.');
+    } finally {
+      setPolicySaving(false);
+    }
+  }
+
   if (loading && !state) return <section aria-busy="true" className="rounded-3xl border border-card-border bg-card p-4" data-testid="user-broker-telegram-panel" data-user-integrations-request-state={requestState}>개인 연결 상태를 불러오는 중…</section>;
+
+  const policyDisabled = policySaving || state?.alertPolicyStorageAvailable === false;
 
   return (
     <section aria-labelledby="user-integrations-title" className="rounded-3xl border border-card-border bg-card p-4 text-left shadow-sm" data-testid="user-broker-telegram-panel" data-user-integrations-request-state={requestState}>
@@ -235,7 +385,7 @@ export function UserBrokerTelegramPanel() {
         ) : <p className="mt-2 text-xs text-muted-foreground">등록된 Broker 연결이 없습니다.</p>}
 
         <h3 className="mt-4 text-xs font-extrabold">Telegram</h3>
-        <p className="mt-1 text-xs">{state.telegram.connected ? '연결됨' : '연결 안 됨'}</p>
+        <p className="mt-1 text-xs">{state.telegram.connected ? '연결됨' : '연결 안 됨'} · {state.telegram.status}</p>
         {state.telegram.connected ? (
           <button className="mt-2 min-h-11 rounded-xl border border-card-border px-3 text-xs font-bold" type="button" onClick={() => void revokeTelegram()}>Telegram 연결 해제</button>
         ) : (
@@ -243,7 +393,230 @@ export function UserBrokerTelegramPanel() {
         )}
         {link ? <p className="mt-2 text-xs"><a className="underline" href={link} target="_blank" rel="noreferrer">Telegram에서 연결 완료</a></p> : null}
 
-        <h3 className="mt-4 text-xs font-extrabold">알림 설정</h3>
+        <div className="mt-4 rounded-2xl border border-card-border bg-background p-3" data-testid="telegram-alert-policy-center" aria-busy={policySaving}>
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <h3 className="text-xs font-extrabold">Telegram 투자 알림센터</h3>
+              <p className="mt-1 text-[11px] text-muted-foreground">시장·신호·우선순위와 알림 빈도를 개인별로 설정합니다. 이 설정은 거래 판단이나 주문 권한을 바꾸지 않습니다.</p>
+            </div>
+            <span className="rounded-full border border-card-border px-2 py-1 text-[10px] font-bold">{policySaving ? '저장 중…' : state.alertPolicySource}</span>
+          </div>
+
+          {state.alertPolicyStorageAvailable === false ? (
+            <div role="alert" className="mt-3 rounded-xl bg-destructive/10 p-3 text-xs text-destructive">Telegram 개인 알림 저장소를 사용할 수 없어 설정 변경을 차단했습니다.</div>
+          ) : null}
+
+          <label className="mt-3 flex min-h-11 items-center justify-between gap-3 rounded-xl border border-card-border px-3 text-xs font-bold">
+            <span>투자 알림 전체</span>
+            <input
+              type="checkbox"
+              checked={state.alertPolicy.enabled}
+              disabled={policyDisabled}
+              onChange={(event) => void saveAlertPolicy({ enabled: event.currentTarget.checked })}
+            />
+          </label>
+
+          <h4 className="mt-4 text-[11px] font-extrabold">시장</h4>
+          <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {policyMarkets.map((market) => (
+              <label key={market} className="flex min-h-11 items-center gap-2 rounded-xl border border-card-border px-3 text-xs">
+                <input
+                  type="checkbox"
+                  checked={state.alertPolicy.markets.includes(market)}
+                  disabled={policyDisabled}
+                  onChange={(event) => void saveAlertPolicy({
+                    markets: toggleListValue(state.alertPolicy.markets, market, event.currentTarget.checked),
+                  })}
+                />
+                {marketLabels[market]}
+              </label>
+            ))}
+          </div>
+
+          <h4 className="mt-4 text-[11px] font-extrabold">신호 종류</h4>
+          <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
+            {policySignalTypes.map((signalType) => (
+              <label key={signalType} className="flex min-h-11 items-center gap-2 rounded-xl border border-card-border px-3 text-xs">
+                <input
+                  type="checkbox"
+                  checked={state.alertPolicy.signalTypes.includes(signalType)}
+                  disabled={policyDisabled}
+                  onChange={(event) => void saveAlertPolicy({
+                    signalTypes: toggleListValue(state.alertPolicy.signalTypes, signalType, event.currentTarget.checked),
+                  })}
+                />
+                {signalLabels[signalType]}
+              </label>
+            ))}
+          </div>
+
+          <h4 className="mt-4 text-[11px] font-extrabold">우선순위</h4>
+          <div className="mt-2 grid grid-cols-3 gap-2">
+            {policyPriorities.map((priority) => (
+              <label key={priority} className="flex min-h-11 items-center gap-2 rounded-xl border border-card-border px-3 text-xs">
+                <input
+                  type="checkbox"
+                  checked={state.alertPolicy.priorities.includes(priority)}
+                  disabled={policyDisabled}
+                  onChange={(event) => void saveAlertPolicy({
+                    priorities: toggleListValue(state.alertPolicy.priorities, priority, event.currentTarget.checked),
+                  })}
+                />
+                {priorityLabels[priority]}
+              </label>
+            ))}
+          </div>
+
+          <h4 className="mt-4 text-[11px] font-extrabold">조용한 시간</h4>
+          <label className="mt-2 flex min-h-11 items-center gap-2 rounded-xl border border-card-border px-3 text-xs">
+            <input
+              type="checkbox"
+              checked={state.alertPolicy.quietHours.enabled}
+              disabled={policyDisabled}
+              onChange={(event) => void saveAlertPolicy({ quietHours: { enabled: event.currentTarget.checked } })}
+            />
+            지정 시간에는 일반 알림 끄기
+          </label>
+          <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <label className="text-[11px] text-muted-foreground">시작
+              <input
+                className="mt-1 min-h-11 w-full rounded-xl border border-card-border bg-background px-2 text-xs text-foreground"
+                type="time"
+                value={state.alertPolicy.quietHours.start}
+                disabled={policyDisabled}
+                onChange={(event) => void saveAlertPolicy({ quietHours: { start: event.currentTarget.value } })}
+              />
+            </label>
+            <label className="text-[11px] text-muted-foreground">종료
+              <input
+                className="mt-1 min-h-11 w-full rounded-xl border border-card-border bg-background px-2 text-xs text-foreground"
+                type="time"
+                value={state.alertPolicy.quietHours.end}
+                disabled={policyDisabled}
+                onChange={(event) => void saveAlertPolicy({ quietHours: { end: event.currentTarget.value } })}
+              />
+            </label>
+            <label className="text-[11px] text-muted-foreground">시간대
+              <select
+                className="mt-1 min-h-11 w-full rounded-xl border border-card-border bg-background px-2 text-xs text-foreground"
+                value={state.alertPolicy.quietHours.timeZone}
+                disabled={policyDisabled}
+                onChange={(event) => void saveAlertPolicy({ quietHours: { timeZone: event.currentTarget.value } })}
+              >
+                <option value="Asia/Seoul">서울</option>
+                <option value="America/New_York">뉴욕</option>
+                <option value="UTC">UTC</option>
+              </select>
+            </label>
+            <label className="flex min-h-11 items-center gap-2 self-end rounded-xl border border-card-border px-3 text-xs">
+              <input
+                type="checkbox"
+                checked={state.alertPolicy.quietHours.criticalBypass}
+                disabled={policyDisabled}
+                onChange={(event) => void saveAlertPolicy({ quietHours: { criticalBypass: event.currentTarget.checked } })}
+              />
+              긴급은 허용
+            </label>
+          </div>
+
+          <h4 className="mt-4 text-[11px] font-extrabold">전송 방식</h4>
+          <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <label className="text-[11px] text-muted-foreground">알림 방식
+              <select
+                className="mt-1 min-h-11 w-full rounded-xl border border-card-border bg-background px-2 text-xs text-foreground"
+                value={state.alertPolicy.deliveryMode}
+                disabled={policyDisabled}
+                onChange={(event) => {
+                  const deliveryMode = event.currentTarget.value as TelegramPolicyDeliveryMode;
+                  void saveAlertPolicy(deliveryMode === 'BATCHED'
+                    ? { deliveryMode, digest: { enabled: true, windowMs: Math.max(state.alertPolicy.digest.windowMs, 60_000) } }
+                    : { deliveryMode });
+                }}
+              >
+                <option value="IMMEDIATE">즉시 받기</option>
+                <option value="BATCHED">모아서 받기</option>
+              </select>
+            </label>
+            <label className="text-[11px] text-muted-foreground">모아보기 간격(분)
+              <input
+                className="mt-1 min-h-11 w-full rounded-xl border border-card-border bg-background px-2 text-xs text-foreground"
+                type="number"
+                min={1}
+                max={1440}
+                value={Math.max(1, minutes(state.alertPolicy.digest.windowMs))}
+                disabled={policyDisabled || state.alertPolicy.deliveryMode !== 'BATCHED'}
+                onChange={(event) => {
+                  const value = Number(event.currentTarget.value);
+                  if (Number.isFinite(value) && value >= 1) void saveAlertPolicy({ digest: { enabled: true, windowMs: value * 60_000 } });
+                }}
+              />
+            </label>
+          </div>
+
+          <details className="mt-3 rounded-xl border border-card-border p-3">
+            <summary className="cursor-pointer text-xs font-bold">고급 중복·빈도 설정</summary>
+            <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <label className="text-[11px] text-muted-foreground">같은 대상 쿨다운(분)
+                <input
+                  className="mt-1 min-h-11 w-full rounded-xl border border-card-border bg-background px-2 text-xs text-foreground"
+                  type="number"
+                  min={0}
+                  max={10080}
+                  value={minutes(state.alertPolicy.cooldownMs)}
+                  disabled={policyDisabled}
+                  onChange={(event) => {
+                    const value = Number(event.currentTarget.value);
+                    if (Number.isFinite(value) && value >= 0) void saveAlertPolicy({ cooldownMs: value * 60_000 });
+                  }}
+                />
+              </label>
+              <label className="text-[11px] text-muted-foreground">같은 이벤트 차단(분)
+                <input
+                  className="mt-1 min-h-11 w-full rounded-xl border border-card-border bg-background px-2 text-xs text-foreground"
+                  type="number"
+                  min={0}
+                  max={10080}
+                  value={minutes(state.alertPolicy.sameEventDedupeMs)}
+                  disabled={policyDisabled}
+                  onChange={(event) => {
+                    const value = Number(event.currentTarget.value);
+                    if (Number.isFinite(value) && value >= 0) void saveAlertPolicy({ sameEventDedupeMs: value * 60_000 });
+                  }}
+                />
+              </label>
+              <label className="text-[11px] text-muted-foreground">같은 종목 창(분)
+                <input
+                  className="mt-1 min-h-11 w-full rounded-xl border border-card-border bg-background px-2 text-xs text-foreground"
+                  type="number"
+                  min={0}
+                  max={10080}
+                  value={minutes(state.alertPolicy.sameSymbolWindowMs)}
+                  disabled={policyDisabled}
+                  onChange={(event) => {
+                    const value = Number(event.currentTarget.value);
+                    if (Number.isFinite(value) && value >= 0) void saveAlertPolicy({ sameSymbolWindowMs: value * 60_000 });
+                  }}
+                />
+              </label>
+              <label className="text-[11px] text-muted-foreground">같은 종목 최대 횟수
+                <input
+                  className="mt-1 min-h-11 w-full rounded-xl border border-card-border bg-background px-2 text-xs text-foreground"
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={state.alertPolicy.sameSymbolRepeatLimit}
+                  disabled={policyDisabled}
+                  onChange={(event) => {
+                    const value = Number(event.currentTarget.value);
+                    if (Number.isInteger(value) && value >= 0 && value <= 100) void saveAlertPolicy({ sameSymbolRepeatLimit: value });
+                  }}
+                />
+              </label>
+            </div>
+          </details>
+        </div>
+
+        <h3 className="mt-4 text-xs font-extrabold">주문·포지션 이벤트 알림</h3>
         <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
           {preferenceKeys.map((key) => (
             <label key={key} className="flex min-h-11 items-center gap-2 rounded-xl border border-card-border bg-background px-3 text-xs">
