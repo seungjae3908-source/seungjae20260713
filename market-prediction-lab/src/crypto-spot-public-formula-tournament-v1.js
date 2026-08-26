@@ -5,6 +5,7 @@ import {
 } from "./evidence-backed-formula-entry-evaluator-v1.js";
 import { runEvidenceBackedFormulaTournamentAdapterV1 } from "./evidence-backed-formula-tournament-adapter-v1.js";
 import { RESEARCH_BACKTEST_PERIOD } from "./multi-market-backtest-engine.js";
+import { normalizeResearchSymbol } from "./research-governance.js";
 import { runOnePassCandidateBacktestV1 } from "./research-tournament-engine-v1.js";
 import { researchDigest } from "./research-trial-registry.js";
 
@@ -12,6 +13,7 @@ export const CRYPTO_SPOT_PUBLIC_FORMULA_TOURNAMENT_VERSION = 1;
 export const CRYPTO_SPOT_PUBLIC_FORMULA_TOURNAMENT_CONTRACT = "crypto-spot-public-formula-tournament/v1";
 
 const SUPPORTED_TIMEFRAMES = new Set(["15m", "1h", "1d"]);
+const BITGET_SPOT_RESEARCH_QUOTES = Object.freeze(["USDT", "BTC"]);
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_INITIAL_CAPITAL = RESEARCH_BACKTEST_PERIOD.initialCapital;
 const DEFAULT_MINIMUM_PARTITION_CANDLES = 120;
@@ -65,6 +67,28 @@ function positiveInteger(value, code, details = {}) {
 function requiredText(value, code) {
   if (typeof value !== "string" || !value.trim()) fail(code, { value });
   return value.trim();
+}
+
+function bitgetSpotSymbolToResearchSymbol(symbol) {
+  const raw = requiredText(symbol, "CRYPTO_SPOT_SYMBOL_REQUIRED").toUpperCase();
+  if (!/^[A-Z0-9]{3,30}$/.test(raw)) {
+    fail("CRYPTO_SPOT_BITGET_SYMBOL_INVALID", { symbol: raw });
+  }
+  const quote = BITGET_SPOT_RESEARCH_QUOTES.find((candidate) => raw.endsWith(candidate) && raw.length > candidate.length);
+  if (!quote) {
+    fail("CRYPTO_SPOT_BITGET_QUOTE_UNSUPPORTED", { symbol: raw, supportedQuotes: BITGET_SPOT_RESEARCH_QUOTES });
+  }
+  const base = raw.slice(0, -quote.length);
+  try {
+    return normalizeResearchSymbol("CRYPTO_SPOT", `${quote}-${base}`);
+  } catch (error) {
+    fail("CRYPTO_SPOT_BITGET_SYMBOL_TO_RESEARCH_UNSUPPORTED", {
+      symbol: raw,
+      quote,
+      base,
+      cause: error?.code ?? error?.name ?? "UNKNOWN",
+    });
+  }
 }
 
 function average(values) {
@@ -129,6 +153,7 @@ function datasetSummary(dataset) {
     contract: dataset.contract,
     provider: dataset.provider,
     symbol: dataset.symbol,
+    researchSymbol: dataset.researchSymbol,
     market: dataset.market,
     timeframe: dataset.timeframe,
     requestedStartTime: dataset.requestedStartTime,
@@ -159,7 +184,8 @@ export function prepareCryptoSpotPublicFormulaTournamentDatasetV1({
   if (collected.provider !== "bitget-public-v2" || collected.market !== "CRYPTO_SPOT") {
     fail("CRYPTO_SPOT_PUBLIC_PROVIDER_CONTRACT_INVALID", { provider: collected.provider, market: collected.market });
   }
-  const symbol = requiredText(collected.symbol, "CRYPTO_SPOT_SYMBOL_REQUIRED");
+  const symbol = requiredText(collected.symbol, "CRYPTO_SPOT_SYMBOL_REQUIRED").toUpperCase();
+  const researchSymbol = bitgetSpotSymbolToResearchSymbol(symbol);
   const timeframe = requiredText(collected.timeframe, "CRYPTO_SPOT_TIMEFRAME_REQUIRED");
   const intervalMs = timeframeMs(timeframe);
   positiveInteger(requestedStartTime, "CRYPTO_SPOT_START_TIME_INVALID");
@@ -201,6 +227,7 @@ export function prepareCryptoSpotPublicFormulaTournamentDatasetV1({
     provider: collected.provider,
     market: "CRYPTO_SPOT",
     symbol,
+    researchSymbol,
     timeframe,
     requestedStartTime,
     requestedEndTime,
@@ -214,6 +241,7 @@ export function prepareCryptoSpotPublicFormulaTournamentDatasetV1({
     collectedAt: positiveInteger(collected.collectedAt, "CRYPTO_SPOT_COLLECTED_AT_INVALID"),
     market: "CRYPTO_SPOT",
     symbol,
+    researchSymbol,
     timeframe,
     intervalMs,
     requestedStartTime,
@@ -338,7 +366,7 @@ function backtestCandidate({ formulaCandidate, generatedCandidate, dataset, peri
     datasetIdentity: identity,
     backtestInput: {
       market: "CRYPTO_SPOT",
-      symbol: dataset.symbol,
+      symbol: dataset.researchSymbol,
       timeframe: dataset.timeframe,
       side: "long",
       candles: dataset.candles,
