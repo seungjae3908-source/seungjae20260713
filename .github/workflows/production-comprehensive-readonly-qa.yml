@@ -38,8 +38,8 @@ jobs:
           const fs = require('node:fs');
           const workflow = fs.readFileSync('.github/workflows/production-comprehensive-readonly-qa.yml', 'utf8');
           const config = fs.readFileSync('stock-analyzer/playwright.production-comprehensive.config.ts', 'utf8');
-          const liveJob = workflow.split('  production-comprehensive-readonly:')[1] ?? '';
-          const uploadStep = liveJob.split('      - name: Upload comprehensive QA evidence')[1] ?? '';
+          const liveJob = workflow.split('\n  production-comprehensive-readonly:\n')[1] ?? '';
+          const uploadStep = liveJob.split('\n      - name: Upload comprehensive QA evidence\n')[1] ?? '';
 
           if (!liveJob.includes("if: github.event_name == 'workflow_dispatch'")) {
             throw new Error('Live comprehensive QA must remain explicit-dispatch only');
