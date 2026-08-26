@@ -379,6 +379,7 @@ export async function executeAutonomousResearchJob(job, dependencies = {}) {
 
   const resultCacheProvenance = buildStrategyResultCacheProvenance({
     researchCodeSha: job.researchCodeSha,
+    historicalCacheProvenance: expectedHistorical,
     historicalCacheKey: expectedHistorical.cacheKey,
     strategyVersion: job.identity.formulaHash,
     parameters: job.candidate.parameters,
@@ -515,3 +516,4 @@ export function buildAutonomousResearchProductionPlan({ ownerRef = "#226", state
     safety: safetyEnvelope(),
   });
 }
+
