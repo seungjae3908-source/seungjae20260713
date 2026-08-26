@@ -8,7 +8,7 @@ if (process.env.PRODUCTION_READONLY_E2E !== 'true') {
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: /production-(?:comprehensive|mobile-scroll|critical-http|research-center)-readonly-qa\.spec\.ts/,
+  testMatch: /production-(?:comprehensive|mobile-scroll|critical-http|research-center|performance)-readonly-qa\.spec\.ts/,
   fullyParallel: false,
   workers: 1,
   retries: 0,
@@ -27,8 +27,11 @@ export default defineConfig({
     serviceWorkers: 'block',
   },
   projects: [
+    { name: 'prod-desktop-1920', use: { ...devices['Desktop Chrome'], viewport: { width: 1920, height: 1080 } } },
     { name: 'prod-desktop-1440', use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } } },
     { name: 'prod-desktop-1024', use: { ...devices['Desktop Chrome'], viewport: { width: 1024, height: 768 } } },
+    { name: 'prod-fold-768', use: { ...devices['Pixel 7'], viewport: { width: 768, height: 900 } } },
+    { name: 'prod-tablet-800', use: { ...devices['Pixel 7'], viewport: { width: 800, height: 1280 } } },
     { name: 'prod-mobile-320', use: { ...devices['Pixel 7'], viewport: { width: 320, height: 740 } } },
     { name: 'prod-mobile-360', use: { ...devices['Pixel 7'], viewport: { width: 360, height: 800 } } },
     { name: 'prod-mobile-390', use: { ...devices['Pixel 7'], viewport: { width: 390, height: 844 } } },
