@@ -167,9 +167,9 @@ jobs:
         id: install_result
         env:
           ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
+          RESULT_FILE: ${{ runner.temp }}/production-psql-client-install.txt
         run: |
           set -Eeuo pipefail
-          RESULT_FILE="$RUNNER_TEMP/production-psql-client-install.txt"
           remote_env="$(printf 'EXPECTED_ACTIVE_SHA=%q EXPECTED_PACKAGE=%q' "$ACTIVE_SHA" "$EXPECTED_PACKAGE")"
           if ! ssh -i "$HOME/.ssh/id_ed25519" -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" "$remote_env bash -s" > "$RESULT_FILE" <<'REMOTE'
@@ -255,8 +255,6 @@ jobs:
             fs.appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${rows[key]}\n`);
           }
           NODE
-        env:
-          RESULT_FILE: ${{ runner.temp }}/production-psql-client-install.txt
 
       - name: Run existing fixed read-only Telegram storage diagnostic
         id: diagnostic
