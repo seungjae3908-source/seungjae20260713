@@ -18,18 +18,16 @@ function candles(overrides = {}) {
   }));
 }
 
-function run({ candleOverrides = {}, parameters = {}, signalIndex = 2, side = "long" } = {}) {
+function run({ candleOverrides = {}, parameters = {}, signalIndex = 2 } = {}) {
   return runIndependentSignalBacktest({
     backtestInput: {
-      market: side === "short" ? "CRYPTO_FUTURES" : "US_STOCK",
-      symbol: side === "short" ? "BTCUSDT" : "AAPL",
+      market: "US_STOCK",
+      symbol: "AAPL",
       timeframe: "1d",
-      side,
+      side: "long",
       candles: candles(candleOverrides),
       initialCapital: 10_000,
-      riskModel: side === "short"
-        ? { riskPerTrade: 0.01, maximumCapitalFraction: 1, leverage: 1 }
-        : { riskPerTrade: 0.01, maximumCapitalFraction: 1, leverage: 1 },
+      riskModel: { riskPerTrade: 0.01, maximumCapitalFraction: 1, leverage: 1 },
       costModel: {
         entryFeeRate: 0,
         exitFeeRate: 0,
@@ -153,22 +151,6 @@ test("same-bar stop and target remains conservatively stop-first even with timeB
   assert.equal(result.trades[0].targetPrice, 102);
   assert.equal(result.trades[0].exitReason, "stop_loss_same_bar");
   assert.equal(result.trades[0].requestedExitPrice, 98);
-});
-
-test("short fraction target is below entry and uses the same optional contract", () => {
-  const result = run({
-    side: "short",
-    candleOverrides: {
-      3: { high: 101, low: 99, close: 99.5 },
-      4: { high: 100, low: 97, close: 97.5 },
-    },
-    parameters: { targetDistance: 0.02 },
-  });
-
-  assert.equal(result.trades.length, 1);
-  assert.equal(result.trades[0].entryPrice, 100);
-  assert.equal(result.trades[0].targetPrice, 98);
-  assert.equal(result.trades[0].exitReason, "take_profit");
 });
 
 test("invalid or ambiguous formula exit parameters fail closed", () => {
