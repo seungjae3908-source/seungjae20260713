@@ -7,6 +7,7 @@ on:
       - .github/workflows/prediction-lab-canonical-shadow-cycle.yml
       - .github/workflows/prediction-lab-canonical-shadow-publisher.yml
       - market-prediction-lab/src/canonical-shadow-runtime-activation-v1.js
+      - market-prediction-lab/scripts/publish-canonical-shadow-artifact.js
       - market-prediction-lab/tests/canonical-shadow-runtime-activation-v1.test.js
       - market-prediction-lab/src/canonical-shadow-runtime-cutover-v1.js
       - market-prediction-lab/src/shadow-state-root-transport-v1.js
@@ -19,7 +20,7 @@ on:
     types: [created]
 
 permissions:
-  actions: write
+  actions: read
   contents: read
   issues: read
   statuses: read
@@ -27,6 +28,11 @@ permissions:
 concurrency:
   group: prediction-lab-canonical-shadow-cycle-v1
   cancel-in-progress: false
+
+env:
+  CANONICAL_PRODUCER_RUN_ID: '32921992780'
+  BOOTSTRAP_PREDECESSOR_RUN_ID: '32933416612'
+  BOOTSTRAP_PREDECESSOR_DIGEST: '4604d37fbc6b8cf5c95bdb915f7a7de2e205bd3705ece148b7267d2782cebfb1'
 
 jobs:
   validate-contract:
@@ -54,9 +60,9 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          grep -q "LEGACY_ACTIVE_CANONICAL_DORMANT" market-prediction-lab/src/canonical-shadow-runtime-activation-v1.js
-          grep -q "canonicalRuntimeRequestId" .github/workflows/prediction-lab-canonical-shadow-cycle.yml
-          grep -q "workflow_run" .github/workflows/prediction-lab-canonical-shadow-publisher.yml
+          grep -q 'LEGACY_ACTIVE_CANONICAL_DORMANT' market-prediction-lab/src/canonical-shadow-runtime-activation-v1.js
+          grep -q 'canonicalRuntimeRequestId' .github/workflows/prediction-lab-canonical-shadow-cycle.yml
+          grep -q 'workflow_run' .github/workflows/prediction-lab-canonical-shadow-publisher.yml
 
   gate:
     if: github.event_name != 'pull_request'
@@ -125,6 +131,7 @@ jobs:
               core.setOutput('authorized', 'false');
               return;
             }
+
             const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -133,9 +140,9 @@ jobs:
             });
             const byRun = new Map();
             for (const status of statuses) {
-              const match = String(status.target_url ?? '').match(/\/actions\/runs\/(\d+)/);
-              if (!match) continue;
-              const runId = match[1];
+              const runMatch = String(status.target_url ?? '').match(/\/actions\/runs\/(\d+)/);
+              if (!runMatch) continue;
+              const runId = runMatch[1];
               if (!byRun.has(runId)) byRun.set(runId, new Map());
               const rows = byRun.get(runId);
               const prior = rows.get(status.context);
@@ -169,7 +176,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: Discover exact Producer and canonical predecessor
+      - name: Assert merged Canonical Shadow and Strategy Health ancestry
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "${{ needs.gate.outputs.target_sha }}"
+          git merge-base --is-ancestor 5a2615dc1ff69c121e0c326ea52513d4d533acbe HEAD
+          git merge-base --is-ancestor 9ba7c519f92c9743de69de48020be74c9d6ba044 HEAD
+      - name: Resolve exact Producer and last published canonical predecessor
         id: binding
         shell: bash
         env:
@@ -177,73 +191,68 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           TARGET_SHA: ${{ needs.gate.outputs.target_sha }}
           REQUEST_ID: ${{ needs.gate.outputs.request_id }}
+          MODE: ${{ needs.gate.outputs.mode }}
         run: |
           set -Eeuo pipefail
-          producer_run_id=''
-          while read -r run_id; do
-            [[ "$run_id" =~ ^[1-9][0-9]*$ ]] || continue
-            artifact_id="$(gh api "repos/$REPOSITORY/actions/runs/$run_id/artifacts" --jq ".artifacts[] | select(.name == \"prediction-lab-model-reference-evidence-$run_id\" and .expired == false) | .id" | head -n1)"
-            if [[ -n "$artifact_id" ]]; then
-              producer_run_id="$run_id"
-              break
-            fi
-          done < <(gh api "repos/$REPOSITORY/actions/workflows/prediction-lab-52d-validation.yml/runs?status=success&per_page=100" --jq '.workflow_runs[].id')
-          [[ "$producer_run_id" =~ ^[1-9][0-9]*$ ]] || { echo 'No finalized canonical Producer artifact found' >&2; exit 1; }
+          producer_run_id="$CANONICAL_PRODUCER_RUN_ID"
+          producer_run="$(gh api "repos/$REPOSITORY/actions/runs/$producer_run_id")"
+          [[ "$(printf '%s' "$producer_run" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(String(JSON.parse(s).conclusion??"")))')" == 'success' ]]
+          producer_artifacts="$(gh api "repos/$REPOSITORY/actions/runs/$producer_run_id/artifacts")"
+          producer_artifact_id="$(printf '%s' "$producer_artifacts" | PRODUCER_RUN_ID="$producer_run_id" node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);const r=process.env.PRODUCER_RUN_ID;const a=j.artifacts.find(x=>x.name===`prediction-lab-model-reference-evidence-${r}`&&!x.expired);if(a)process.stdout.write(String(a.id));})')"
+          [[ "$producer_artifact_id" =~ ^[1-9][0-9]*$ ]] || { echo 'Canonical Producer artifact missing or expired' >&2; exit 1; }
 
-          predecessor_run_id=''
-          predecessor_digest=''
-          mkdir -p "$RUNNER_TEMP/predecessor-discovery"
-          while read -r run_id; do
-            [[ "$run_id" =~ ^[1-9][0-9]*$ ]] || continue
-            metadata="$(gh api "repos/$REPOSITORY/actions/runs/$run_id/artifacts")"
-            artifact_id="$(printf '%s' "$metadata" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);const r=process.env.RUN;const a=j.artifacts.find(x=>x.name===`prediction-lab-shadow-cycle-${r}`&&!x.expired);if(a)process.stdout.write(String(a.id));})' RUN="$run_id")"
-            [[ -n "$artifact_id" ]] || continue
-            candidate="$RUNNER_TEMP/predecessor-discovery/$run_id"
-            rm -rf "$candidate"
-            mkdir -p "$candidate"
-            if ! gh run download "$run_id" --repo "$REPOSITORY" -n "prediction-lab-shadow-cycle-$run_id" -D "$candidate" >/dev/null 2>&1; then
-              continue
-            fi
-            provenance="$(find "$candidate" -type f -name shadow-cycle-provenance.json -print -quit)"
-            [[ -f "$provenance" ]] || continue
-            candidate_producer="$(node -p "String(require(process.argv[1]).producerRunId ?? '')" "$provenance")"
-            candidate_request="$(node -p "String(require(process.argv[1]).canonicalRuntimeRequestId ?? '')" "$provenance")"
-            candidate_sha="$(node -p "String(require(process.argv[1]).researchCodeSha ?? '')" "$provenance")"
-            [[ "$candidate_producer" == "$producer_run_id" ]] || continue
-            [[ "$candidate_request" =~ ^(activate|hourly)-[1-9][0-9]*$ ]] || continue
-            [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]] || continue
-            git cat-file -e "$candidate_sha^{commit}" 2>/dev/null || git fetch --no-tags --depth=100 origin "$candidate_sha" >/dev/null 2>&1 || continue
-            if git merge-base --is-ancestor "$candidate_sha" "$TARGET_SHA"; then
-              predecessor_run_id="$run_id"
-              predecessor_digest="$(printf '%s' "$metadata" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);const r=process.env.RUN;const a=j.artifacts.find(x=>x.name===`prediction-lab-shadow-cycle-${r}`&&!x.expired);if(a)process.stdout.write(String(a.digest??""));})' RUN="$run_id")"
-              break
-            fi
-          done < <(gh api "repos/$REPOSITORY/actions/workflows/prediction-lab-canonical-shadow-cycle.yml/runs?status=success&per_page=50" --jq '.workflow_runs[].id' 2>/dev/null || true)
-
-          if [[ -z "$predecessor_run_id" ]]; then
-            seed_run='32933416612'
-            seed_metadata="$(gh api "repos/$REPOSITORY/actions/runs/$seed_run/artifacts")"
-            seed_digest="$(printf '%s' "$seed_metadata" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);const a=j.artifacts.find(x=>x.name==="prediction-lab-shadow-cycle-32933416612"&&!x.expired);if(a)process.stdout.write(String(a.digest??""));})')"
-            node --input-type=module <<'NODE'
+          if [[ "$MODE" == 'ACTIVATION' ]]; then
+            predecessor_run_id="$BOOTSTRAP_PREDECESSOR_RUN_ID"
+            predecessor_artifacts="$(gh api "repos/$REPOSITORY/actions/runs/$predecessor_run_id/artifacts")"
+            predecessor_digest="$(printf '%s' "$predecessor_artifacts" | PREDECESSOR_RUN_ID="$predecessor_run_id" node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);const r=process.env.PREDECESSOR_RUN_ID;const a=j.artifacts.find(x=>x.name===`prediction-lab-shadow-cycle-${r}`&&!x.expired);if(a)process.stdout.write(String(a.digest??""));})')"
+            [[ "${predecessor_digest#sha256:}" == "$BOOTSTRAP_PREDECESSOR_DIGEST" ]] || { echo 'Exact bootstrap artifact digest mismatch' >&2; exit 1; }
+            REQUEST_ID="$REQUEST_ID" PRODUCER_RUN_ID="$producer_run_id" PREDECESSOR_RUN_ID="$predecessor_run_id" PREDECESSOR_DIGEST="$predecessor_digest" node --input-type=module <<'NODE'
           import { canonicalBootstrapSeedAllowedV1 } from './market-prediction-lab/src/canonical-shadow-runtime-activation-v1.js';
-          const allowed = canonicalBootstrapSeedAllowedV1({
+          if (!canonicalBootstrapSeedAllowedV1({
             requestId: process.env.REQUEST_ID,
             producerRunId: process.env.PRODUCER_RUN_ID,
-            predecessorRunId: '32933416612',
-            predecessorArtifactDigest: process.env.SEED_DIGEST,
-          });
-          if (!allowed) process.exit(1);
+            predecessorRunId: process.env.PREDECESSOR_RUN_ID,
+            predecessorArtifactDigest: process.env.PREDECESSOR_DIGEST,
+          })) process.exit(1);
           NODE
-            predecessor_run_id="$seed_run"
-            predecessor_digest="$seed_digest"
+          else
+            predecessor_run_id=''
+            predecessor_digest=''
+            mkdir -p "$RUNNER_TEMP/canonical-publication-receipts"
+            while read -r publisher_run_id; do
+              [[ "$publisher_run_id" =~ ^[1-9][0-9]*$ ]] || continue
+              receipt_root="$RUNNER_TEMP/canonical-publication-receipts/$publisher_run_id"
+              rm -rf "$receipt_root"
+              mkdir -p "$receipt_root"
+              if ! gh run download "$publisher_run_id" --repo "$REPOSITORY" -p 'canonical-shadow-publication-receipt-*' -D "$receipt_root" >/dev/null 2>&1; then
+                continue
+              fi
+              receipt="$(find "$receipt_root" -type f -name publication-receipt.json -print -quit)"
+              [[ -f "$receipt" ]] || continue
+              candidate_producer="$(node -p "String(require(process.argv[1]).producerRunId ?? '')" "$receipt")"
+              candidate_source_run="$(node -p "String(require(process.argv[1]).sourceRunId ?? '')" "$receipt")"
+              candidate_sha="$(node -p "String(require(process.argv[1]).sourceHeadSha ?? '')" "$receipt")"
+              candidate_digest="$(node -p "String(require(process.argv[1]).sourceArtifactDigest ?? '')" "$receipt")"
+              candidate_status="$(node -p "String(require(process.argv[1]).status ?? '')" "$receipt")"
+              [[ "$candidate_status" == 'PUBLISHED' || "$candidate_status" == 'DUPLICATE_ARTIFACT' ]] || continue
+              [[ "$candidate_producer" == "$producer_run_id" ]] || continue
+              [[ "$candidate_source_run" =~ ^[1-9][0-9]*$ ]] || continue
+              [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]] || continue
+              git cat-file -e "$candidate_sha^{commit}" 2>/dev/null || git fetch --no-tags --depth=100 origin "$candidate_sha" >/dev/null 2>&1 || continue
+              git merge-base --is-ancestor "$candidate_sha" "$TARGET_SHA" || continue
+              source_artifacts="$(gh api "repos/$REPOSITORY/actions/runs/$candidate_source_run/artifacts")"
+              current_digest="$(printf '%s' "$source_artifacts" | SOURCE_RUN_ID="$candidate_source_run" node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);const r=process.env.SOURCE_RUN_ID;const a=j.artifacts.find(x=>x.name===`prediction-lab-shadow-cycle-${r}`&&!x.expired);if(a)process.stdout.write(String(a.digest??""));})')"
+              [[ -n "$current_digest" && "${current_digest#sha256:}" == "${candidate_digest#sha256:}" ]] || continue
+              predecessor_run_id="$candidate_source_run"
+              predecessor_digest="$current_digest"
+              break
+            done < <(gh api "repos/$REPOSITORY/actions/workflows/prediction-lab-canonical-shadow-publisher.yml/runs?status=success&per_page=50" --jq '.workflow_runs[].id')
+            [[ "$predecessor_run_id" =~ ^[1-9][0-9]*$ ]] || { echo 'No successfully published canonical predecessor receipt found' >&2; exit 1; }
           fi
 
           echo "producer_run_id=$producer_run_id" >> "$GITHUB_OUTPUT"
           echo "predecessor_run_id=$predecessor_run_id" >> "$GITHUB_OUTPUT"
           echo "predecessor_digest=$predecessor_digest" >> "$GITHUB_OUTPUT"
-        env:
-          PRODUCER_RUN_ID: ${{ steps.binding.outputs.producer_run_id }}
-          SEED_DIGEST: ''
       - name: Validate immutable binding shape
         env:
           PRODUCER_RUN_ID: ${{ steps.binding.outputs.producer_run_id }}
@@ -252,7 +261,11 @@ jobs:
         run: |
           node --input-type=module <<'NODE'
           import { assertCanonicalRuntimeBindingShapeV1 } from './market-prediction-lab/src/canonical-shadow-runtime-activation-v1.js';
-          assertCanonicalRuntimeBindingShapeV1({ producerRunId: process.env.PRODUCER_RUN_ID, predecessorRunId: process.env.PREDECESSOR_RUN_ID, researchSha: process.env.TARGET_SHA });
+          assertCanonicalRuntimeBindingShapeV1({
+            producerRunId: process.env.PRODUCER_RUN_ID,
+            predecessorRunId: process.env.PREDECESSOR_RUN_ID,
+            researchSha: process.env.TARGET_SHA,
+          });
           NODE
       - name: Download canonical Producer evidence
         uses: actions/download-artifact@v4
@@ -270,7 +283,7 @@ jobs:
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
           run-id: ${{ steps.binding.outputs.predecessor_run_id }}
-      - name: Restore exact predecessor state with one-time bootstrap exception
+      - name: Restore exact predecessor with one-time bootstrap exception
         env:
           PREDECESSOR_RUN_ID: ${{ steps.binding.outputs.predecessor_run_id }}
           PREDECESSOR_DIGEST: ${{ steps.binding.outputs.predecessor_digest }}
@@ -284,22 +297,38 @@ jobs:
           import { basename, join } from 'node:path';
           import { execFileSync } from 'node:child_process';
           import { canonicalBootstrapSeedAllowedV1 } from './market-prediction-lab/src/canonical-shadow-runtime-activation-v1.js';
-          const files=[]; const walk=d=>{for(const e of readdirSync(d,{withFileTypes:true})){const p=join(d,e.name);e.isDirectory()?walk(p):files.push(p)}}; walk(process.env.PREDECESSOR_DIR);
-          const one=name=>{const rows=files.filter(f=>basename(f)===name);if(rows.length!==1)throw new Error(`Expected one ${name}; found ${rows.length}`);return rows[0]};
-          const stateFile=one('shadow-state.json');
-          const provenance=JSON.parse(readFileSync(one('shadow-cycle-provenance.json'),'utf8'));
-          if(String(provenance.runId)!==process.env.PREDECESSOR_RUN_ID) throw new Error('Predecessor run mismatch');
-          if(String(provenance.producerRunId)!==process.env.PRODUCER_RUN_ID) throw new Error('Predecessor Producer mismatch');
-          if(!/^[0-9a-f]{40}$/.test(String(provenance.researchCodeSha??''))) throw new Error('Invalid predecessor research SHA');
-          if(provenance.researchCodeSha!==process.env.TARGET_SHA){
-            const bootstrap=canonicalBootstrapSeedAllowedV1({requestId:process.env.REQUEST_ID,producerRunId:process.env.PRODUCER_RUN_ID,predecessorRunId:process.env.PREDECESSOR_RUN_ID,predecessorArtifactDigest:process.env.PREDECESSOR_DIGEST});
-            if(!bootstrap){
-              execFileSync('git',['merge-base','--is-ancestor',provenance.researchCodeSha,process.env.TARGET_SHA],{stdio:'inherit'});
+          const files = [];
+          const walk = (directory) => {
+            for (const entry of readdirSync(directory, { withFileTypes: true })) {
+              const target = join(directory, entry.name);
+              entry.isDirectory() ? walk(target) : files.push(target);
+            }
+          };
+          walk(process.env.PREDECESSOR_DIR);
+          const exactlyOne = (name) => {
+            const rows = files.filter((file) => basename(file) === name);
+            if (rows.length !== 1) throw new Error(`Expected one ${name}; found ${rows.length}`);
+            return rows[0];
+          };
+          const stateFile = exactlyOne('shadow-state.json');
+          const provenance = JSON.parse(readFileSync(exactlyOne('shadow-cycle-provenance.json'), 'utf8'));
+          if (String(provenance.runId) !== process.env.PREDECESSOR_RUN_ID) throw new Error('Predecessor run mismatch');
+          if (String(provenance.producerRunId) !== process.env.PRODUCER_RUN_ID) throw new Error('Predecessor Producer mismatch');
+          if (!/^[0-9a-f]{40}$/.test(String(provenance.researchCodeSha ?? ''))) throw new Error('Invalid predecessor research SHA');
+          if (provenance.researchCodeSha !== process.env.TARGET_SHA) {
+            const bootstrap = canonicalBootstrapSeedAllowedV1({
+              requestId: process.env.REQUEST_ID,
+              producerRunId: process.env.PRODUCER_RUN_ID,
+              predecessorRunId: process.env.PREDECESSOR_RUN_ID,
+              predecessorArtifactDigest: process.env.PREDECESSOR_DIGEST,
+            });
+            if (!bootstrap) {
+              execFileSync('git', ['merge-base', '--is-ancestor', provenance.researchCodeSha, process.env.TARGET_SHA], { stdio: 'inherit' });
             }
           }
-          const state=JSON.parse(readFileSync(stateFile,'utf8'));
-          if(!state||state.schemaVersion!==3||!state.groups||typeof state.groups!=='object') throw new Error('Invalid predecessor state');
-          copyFileSync(stateFile,'market-prediction-lab/docs/shadow-state.json');
+          const state = JSON.parse(readFileSync(stateFile, 'utf8'));
+          if (!state || state.schemaVersion !== 3 || !state.groups || typeof state.groups !== 'object') throw new Error('Invalid predecessor state');
+          copyFileSync(stateFile, 'market-prediction-lab/docs/shadow-state.json');
           NODE
       - name: Validate canonical shadow modules
         working-directory: market-prediction-lab
@@ -332,9 +361,21 @@ jobs:
           PREDECESSOR_RUN_ID: ${{ steps.binding.outputs.predecessor_run_id }}
         run: |
           node - <<'NODE'
-          const fs=require('fs');
-          const value={schemaVersion:2,researchCodeSha:process.env.TARGET_SHA,runId:process.env.GITHUB_RUN_ID,producerRunId:process.env.PRODUCER_RUN_ID,predecessorShadowRunId:process.env.PREDECESSOR_RUN_ID,canonicalRuntimeRequestId:process.env.REQUEST_ID,canonicalRuntimeMode:process.env.MODE,branchWrite:false,liveOrderAllowed:false,privateAccountRequestAllowed:false,scheduleActivated:false};
-          fs.writeFileSync('market-prediction-lab/docs/shadow-cycle-provenance.json',JSON.stringify(value)+'\n',{mode:0o600});
+          const fs = require('fs');
+          const value = {
+            schemaVersion: 2,
+            researchCodeSha: process.env.TARGET_SHA,
+            runId: process.env.GITHUB_RUN_ID,
+            producerRunId: process.env.PRODUCER_RUN_ID,
+            predecessorShadowRunId: process.env.PREDECESSOR_RUN_ID,
+            canonicalRuntimeRequestId: process.env.REQUEST_ID,
+            canonicalRuntimeMode: process.env.MODE,
+            branchWrite: false,
+            liveOrderAllowed: false,
+            privateAccountRequestAllowed: false,
+            scheduleActivated: false,
+          };
+          fs.writeFileSync('market-prediction-lab/docs/shadow-cycle-provenance.json', `${JSON.stringify(value)}\n`, { mode: 0o600 });
           NODE
       - name: Build validated publication manifest
         if: always()
@@ -342,8 +383,15 @@ jobs:
           node --input-type=module <<'NODE'
           import { writeFile } from 'node:fs/promises';
           import { buildShadowArtifactPublicationManifestV1 } from './market-prediction-lab/src/shadow-state-root-transport-v1.js';
-          const manifest=await buildShadowArtifactPublicationManifestV1({artifactRoot:'market-prediction-lab/docs',createdAt:new Date().toISOString()});
-          await writeFile('market-prediction-lab/docs/shadow-artifact-publication-manifest.json',`${JSON.stringify(manifest,null,2)}\n`,{encoding:'utf8',mode:0o600});
+          const manifest = await buildShadowArtifactPublicationManifestV1({
+            artifactRoot: 'market-prediction-lab/docs',
+            createdAt: new Date().toISOString(),
+          });
+          await writeFile(
+            'market-prediction-lab/docs/shadow-artifact-publication-manifest.json',
+            `${JSON.stringify(manifest, null, 2)}\n`,
+            { encoding: 'utf8', mode: 0o600 },
+          );
           NODE
       - name: Upload terminally verifiable canonical artifact
         if: always()
