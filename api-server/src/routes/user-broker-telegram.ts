@@ -19,6 +19,7 @@ import type {
   TelegramTransport,
 } from '../features/user-broker-telegram/user-broker-telegram.types';
 import { defaultTelegramAlertPolicy } from '../services/telegram-alert-policy.service';
+import { sendTelegramAlert } from '../services/telegram-notification.service';
 import { createSupabasePaperJournalRepository } from '../services/paper-journal-supabase.repository';
 import type { StoredPaperJournalRecord } from '../services/paper-journal.types';
 import {
@@ -68,6 +69,27 @@ function unavailableAlertPolicyState(userId: string) {
     alertPolicySource: 'DEFAULT_MISSING' as const,
     alertPolicyStorageAvailable: false,
     alertPolicyStorageErrorCode: 'USER_BROKER_TELEGRAM_STORAGE_UNAVAILABLE',
+  };
+}
+
+function telegramRuntimeState() {
+  const deliveryReady = Boolean(process.env.TELEGRAM_BOT_TOKEN?.trim());
+  const webhookConfigured = Boolean(process.env.TELEGRAM_WEBHOOK_SECRET?.trim());
+  const botUsernameConfigured = Boolean(process.env.TELEGRAM_BOT_USERNAME?.trim());
+  return {
+    deliveryReady,
+    linkingReady: deliveryReady && webhookConfigured && botUsernameConfigured,
+    webhookConfigured,
+    botUsernameConfigured,
+    stockRoomReady: Boolean(process.env.TELEGRAM_STOCK_CHAT_ID?.trim()),
+    cryptoRoomReady: Boolean(process.env.TELEGRAM_CRYPTO_CHAT_ID?.trim()),
+    richSignalEnabled: process.env.TELEGRAM_SIGNAL_RICH_MEDIA_ENABLED === 'true',
+    aiExplanationEnabled: process.env.TELEGRAM_SIGNAL_AI_ENABLED === 'true',
+    signalFollowupEnabled: process.env.TELEGRAM_SIGNAL_FOLLOWUP_ENABLED === 'true',
+    memberHoldingsEnabled: process.env.MEMBER_HOLDINGS_TELEGRAM_PRODUCER_ENABLED === 'true',
+    orderAuthority: 'NONE' as const,
+    privateTradingApiAllowed: false as const,
+    realOrderAllowed: false as const,
   };
 }
 
@@ -202,6 +224,7 @@ userBrokerTelegramRouter.get('/', async (req, res) => {
       brokerConnections: brokerState.brokerConnections,
       ...state,
       ...alertPolicyState,
+      telegramRuntime: telegramRuntimeState(),
       prioritySemantics: 'DELIVERY_URGENCY_ONLY',
       partial: state.telegramStorageAvailable === false || brokerState.brokerConnectionsAvailable === false
         || alertPolicyState.alertPolicyStorageAvailable === false,
@@ -288,6 +311,65 @@ userBrokerTelegramRouter.post('/telegram/link', async (req, res) => {
     res.status(201).json({ ok: true, ...link });
   } catch (error) {
     res.status(503).json({ ok: false, error: errorCode(error) });
+  }
+});
+
+userBrokerTelegramRouter.post('/telegram/test', async (req, res) => {
+  try {
+    const { userId } = member(req as AuthenticatedRequest);
+    const connection = await createSupabaseUserBrokerTelegramRepository().getTelegramConnection(userId);
+    if (!connection || connection.status !== 'ACTIVE' || !connection.telegramChatId.trim()) {
+      res.status(409).json({
+        ok: false,
+        error: 'TELEGRAM_NOT_CONNECTED',
+        privateApiRequests: 0,
+        ordersSubmitted: 0,
+        ordersCancelled: 0,
+      });
+      return;
+    }
+
+    const now = new Date();
+    const result = await sendTelegramAlert({
+      type: 'intelligence_report',
+      details: '[TEST] Telegram 연결 확인 메시지입니다. 투자 신호가 아니며 실제 주문/체결이 아닙니다.',
+      timestamp: now.toISOString(),
+      destinationChatId: connection.telegramChatId,
+      dedupeKey: `telegram-connection-test:${now.getTime()}`,
+      duplicateWindowMs: 0,
+      cooldownMs: 0,
+      linkPreview: false,
+    });
+    if (!result.ok) {
+      res.status(result.skipped === 'NOT_CONFIGURED' ? 503 : 502).json({
+        ok: false,
+        error: `TELEGRAM_TEST_${result.skipped}`,
+        attempts: result.attempts,
+        privateApiRequests: 0,
+        ordersSubmitted: 0,
+        ordersCancelled: 0,
+      });
+      return;
+    }
+    res.json({
+      ok: true,
+      status: 'DELIVERED',
+      attempts: result.attempts,
+      testOnly: true,
+      investmentSignal: false,
+      orderAuthority: 'NONE',
+      privateApiRequests: 0,
+      ordersSubmitted: 0,
+      ordersCancelled: 0,
+    });
+  } catch (error) {
+    res.status(503).json({
+      ok: false,
+      error: errorCode(error),
+      privateApiRequests: 0,
+      ordersSubmitted: 0,
+      ordersCancelled: 0,
+    });
   }
 });
 
