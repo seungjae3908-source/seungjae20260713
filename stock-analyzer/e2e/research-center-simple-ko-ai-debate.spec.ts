@@ -70,6 +70,19 @@ function overview(aiDebate?: Record<string, unknown>) {
       status: 'collecting',
       note: 'Paper 정산과 미래 표본이 충분히 쌓이기 전에는 수익성을 증명된 것으로 표시하지 않습니다.',
     },
+    strategyHealth: {
+      status: 'MISSING_EVIDENCE',
+      evaluator: 'strategy-health-observatory.service/evaluateStrategyHealth',
+      canonicalCoreStatus: null,
+      inputs: {
+        backtest: { status: 'HEALTHY', reason: 'CANONICAL_BACKTEST_PRESENT', source: 'research.cycles', observedCount: 1 },
+        settlement: { status: 'MISSING_EVIDENCE', reason: 'NATURAL_SETTLEMENT_MISSING', source: 'paper.ledger', observedCount: 0 },
+        profitability: { status: 'MISSING_EVIDENCE', reason: 'PROFITABILITY_NOT_PROVEN', source: 'profitability', observedCount: null },
+        champion: { status: 'MISSING_EVIDENCE', reason: 'CURRENT_VALIDATED_CHAMPION_NONE', source: 'champion', observedCount: null },
+      },
+      reasons: ['settlement:NATURAL_SETTLEMENT_MISSING', 'profitability:PROFITABILITY_NOT_PROVEN'],
+      executionAuthority: 'NONE',
+    },
     ...(aiDebate ? { aiDebate } : {}),
   };
 }
@@ -172,6 +185,8 @@ test('mobile Research Center starts with plain Korean summary and keeps raw evid
   await expect(page.getByTestId('research-current-conclusion')).toContainText('수익성 판단 보류');
   await expect(page.getByText('8회 확인 · 정산 0건', { exact: true })).toBeVisible();
   await expect(page.getByText('488건 중 460건 검증완료', { exact: true })).toBeVisible();
+  await expect(page.getByText('MISSING_EVIDENCE', { exact: true })).toBeVisible();
+  await expect(page.getByText(/settlement:NATURAL_SETTLEMENT_MISSING/)).toBeVisible();
   await expect(page.getByText('아직 대기', { exact: true })).toBeVisible();
   await expect(page.locator('body')).not.toContainText(RESEARCH_SHA);
 
