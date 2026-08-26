@@ -2,7 +2,12 @@ import './strategy-promotion.service.test';
 import '../routes/strategy-promotion.smoke.test';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { getScannerStrategyProfile, listScannerStrategyProfiles } from './scanner-strategy-profile.service';
+import {
+  getScannerProfileEvidenceContract,
+  getScannerStrategyProfile,
+  listScannerProfileEvidenceContracts,
+  listScannerStrategyProfiles,
+} from './scanner-strategy-profile.service';
 import { deriveScannerOutcome, type ScannerResponse } from './scanner-signal.types';
 
 function scannerOutcomeFixture(overrides: Partial<ScannerResponse> = {}): ScannerResponse {
@@ -37,18 +42,26 @@ describe('scanner strategy profiles', () => {
   it('defines four markets times three horizons without execution authority', () => {
     const profiles = listScannerStrategyProfiles();
     assert.equal(profiles.length, 12);
-    assert.equal(new Set(profiles.map((profile) => profile.id)).size, 12);
     for (const profile of profiles) {
       assert.equal(profile.executionAuthority, 'NONE');
-      assert.equal(profile.calibrationPolicy, 'OOS_CALIBRATION_REQUIRED');
       assert.ok(profile.version);
       assert.ok(profile.primaryTimeframe);
       assert.ok(profile.indicators.length > 0);
-      assert.ok(profile.requiredEvidence.length > 0);
-      assert.ok(profile.requiredCostComponents.length > 0);
       assert.equal(Object.isFrozen(profile), true);
-      assert.equal(Object.isFrozen(profile.requiredEvidence), true);
-      assert.equal(Object.isFrozen(profile.requiredCostComponents), true);
+    }
+  });
+
+  it('preserves the canonical V1 strategy identities and timeframes', () => {
+    const futures = getScannerStrategyProfile('CRYPTO_FUTURES', 'SCALP');
+    assert.equal(futures.id, 'CRYPTO_FUTURES_SCALP_V1');
+    assert.equal(futures.version, 'signal-profile-v1');
+
+    for (const profile of listScannerStrategyProfiles()) {
+      assert.match(profile.id, /_V1$/);
+      assert.equal(profile.version, 'signal-profile-v1');
+      if (profile.horizon === 'POSITION') {
+        assert.equal(profile.confirmationTimeframes.includes('1W'), false);
+      }
     }
   });
 
@@ -57,34 +70,63 @@ describe('scanner strategy profiles', () => {
     const futures = getScannerStrategyProfile('CRYPTO_FUTURES', 'SCALP');
     assert.notEqual(kr.id, futures.id);
     assert.notDeepEqual(kr.scannerConditions, futures.scannerConditions);
-    assert.notDeepEqual(kr.requiredEvidence, futures.requiredEvidence);
-    assert.notDeepEqual(kr.requiredCostComponents, futures.requiredCostComponents);
   });
 
-  it('defines an independent position profile with weekly confirmation', () => {
-    const markets = ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES'] as const;
-    for (const market of markets) {
-      const position = getScannerStrategyProfile(market, 'POSITION');
-      const swing = getScannerStrategyProfile(market, 'SWING');
-      assert.notEqual(position.id, swing.id);
-      assert.notDeepEqual(position.indicatorWeights, swing.indicatorWeights);
-      assert.ok(position.confirmationTimeframes.includes('1W'), `${market} POSITION must require 1W confirmation`);
+  it('defines an independent position profile', () => {
+    const position = getScannerStrategyProfile('US_STOCK', 'POSITION');
+    const swing = getScannerStrategyProfile('US_STOCK', 'SWING');
+    assert.notEqual(position.id, swing.id);
+    assert.notDeepEqual(position.indicatorWeights, swing.indicatorWeights);
+  });
+});
+
+describe('scanner profile evidence contracts', () => {
+  it('defines immutable evidence contracts for four markets times three horizons', () => {
+    const contracts = listScannerProfileEvidenceContracts();
+    assert.equal(contracts.length, 12);
+    assert.equal(new Set(contracts.map((contract) => contract.id)).size, 12);
+    for (const contract of contracts) {
+      assert.equal(contract.version, 'scanner-profile-evidence-v1');
+      assert.equal(contract.calibrationPolicy, 'OOS_CALIBRATION_REQUIRED');
+      assert.equal(contract.executionAuthority, 'NONE');
+      assert.match(contract.strategyProfileId, /_V1$/);
+      assert.ok(contract.requiredEvidence.length > 0);
+      assert.ok(contract.requiredCostComponents.length > 0);
+      assert.equal(Object.isFrozen(contract), true);
+      assert.equal(Object.isFrozen(contract.requiredEvidence), true);
+      assert.equal(Object.isFrozen(contract.requiredCostComponents), true);
     }
   });
 
-  it('requires derivatives evidence before a futures profile can be calibrated', () => {
-    const futures = getScannerStrategyProfile('CRYPTO_FUTURES', 'SCALP');
+  it('requires weekly evidence for position without changing the V1 runtime timeframe identity', () => {
+    for (const market of ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT', 'CRYPTO_FUTURES'] as const) {
+      const contract = getScannerProfileEvidenceContract(market, 'POSITION');
+      const profile = getScannerStrategyProfile(market, 'POSITION');
+      assert.ok(contract.requiredEvidence.includes('weekly_candles'), `${market} POSITION must require weekly evidence`);
+      assert.equal(profile.confirmationTimeframes.includes('1W'), false);
+      assert.equal(contract.strategyProfileId, profile.id);
+    }
+  });
+
+  it('requires derivatives evidence and funding cost for futures calibration', () => {
+    const futures = getScannerProfileEvidenceContract('CRYPTO_FUTURES', 'SCALP');
     for (const required of ['mark_price', 'index_price', 'funding_rate', 'open_interest', 'basis', 'liquidation_risk']) {
       assert.ok(futures.requiredEvidence.includes(required), `missing futures evidence: ${required}`);
     }
-    assert.ok(futures.requiredCostComponents.includes('funding'));
+    for (const cost of ['commission', 'spread', 'slippage', 'latency', 'liquidity_impact', 'partial_fill_impact', 'funding']) {
+      assert.ok(futures.requiredCostComponents.includes(cost), `missing futures cost: ${cost}`);
+    }
     assert.equal(futures.directionPolicy, 'LONG_SHORT');
   });
 
-  it('keeps stock and spot profiles long-only until a separate short contract exists', () => {
+  it('keeps stock and spot evidence contracts long-only with explicit execution costs', () => {
     for (const market of ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT'] as const) {
       for (const horizon of ['SCALP', 'SWING', 'POSITION'] as const) {
-        assert.equal(getScannerStrategyProfile(market, horizon).directionPolicy, 'LONG_ONLY');
+        const contract = getScannerProfileEvidenceContract(market, horizon);
+        assert.equal(contract.directionPolicy, 'LONG_ONLY');
+        for (const cost of ['commission', 'spread', 'slippage', 'latency', 'liquidity_impact', 'partial_fill_impact']) {
+          assert.ok(contract.requiredCostComponents.includes(cost), `${market}/${horizon} missing cost: ${cost}`);
+        }
       }
     }
   });
