@@ -1,0 +1,34 @@
+name: Strategy Hypothesis Foundation
+
+on:
+  pull_request:
+    paths:
+      - packages/strategy-hypothesis/**
+      - packages/external-research/**
+      - .github/workflows/strategy-hypothesis-foundation.yml
+  push:
+    branches: [main]
+    paths:
+      - packages/strategy-hypothesis/**
+      - packages/external-research/**
+      - .github/workflows/strategy-hypothesis-foundation.yml
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Falsifiable hypothesis and evidence boundary
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Check module syntax
+        run: find packages/strategy-hypothesis/src -name '*.js' -print0 | xargs -0 -n1 node --check
+      - name: Run isolated unit tests
+        run: node --test packages/strategy-hypothesis/test/*.test.js

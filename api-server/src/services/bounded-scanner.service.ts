@@ -22,6 +22,8 @@ export const SCAN_EXECUTION_LIMITS = Object.freeze({
   itemTimeoutMs: 4_000,
   concurrency: 6,
   marketContextTimeoutMs: 800,
+  optionalContextConcurrency: 2,
+  optionalContextDeadlineMs: 3_000,
 });
 
 const SCAN_CARD_LIMIT = 100;
@@ -144,6 +146,7 @@ export interface BoundedScanResult {
   staleCount: number;
   providerErrorCount: number;
   timeoutCount: number;
+  contextUnavailableCount: number;
   excludedCount: number;
   appliedFilters: {
     volumeThreshold: number | null;
@@ -195,6 +198,142 @@ const defaultDependencies: BoundedScannerDependencies = {
   getContext: (entry) => buildContext(entry),
   now: Date.now,
 };
+
+type OptionalContextWaiter = {
+  grant: () => void;
+};
+
+let activeOptionalContextLoads = 0;
+const optionalContextWaiters: OptionalContextWaiter[] = [];
+
+function minimalSignalContext(entry: CatalogEntry): SignalContext {
+  return { currency: entry.currency };
+}
+
+function abortReason(signal: AbortSignal): Error {
+  return signal.reason instanceof Error ? signal.reason : new ScanRequestAbortedError();
+}
+
+function wakeOptionalContextWaiters(): void {
+  while (
+    activeOptionalContextLoads < SCAN_EXECUTION_LIMITS.optionalContextConcurrency
+    && optionalContextWaiters.length > 0
+  ) {
+    optionalContextWaiters.shift()?.grant();
+  }
+}
+
+function releaseOptionalContextSlot(): void {
+  activeOptionalContextLoads = Math.max(0, activeOptionalContextLoads - 1);
+  wakeOptionalContextWaiters();
+}
+
+async function acquireOptionalContextSlot(
+  signal: AbortSignal,
+  deadlineAt: number,
+): Promise<boolean> {
+  if (signal.aborted) throw abortReason(signal);
+  if (activeOptionalContextLoads < SCAN_EXECUTION_LIMITS.optionalContextConcurrency) {
+    activeOptionalContextLoads += 1;
+    return true;
+  }
+
+  return new Promise<boolean>((resolve, reject) => {
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+    let waiter: OptionalContextWaiter;
+
+    const cleanup = () => {
+      if (timer) clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+      const index = optionalContextWaiters.indexOf(waiter);
+      if (index >= 0) optionalContextWaiters.splice(index, 1);
+    };
+    const finish = (value: boolean) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(value);
+    };
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const onAbort = () => {
+      fail(abortReason(signal));
+      wakeOptionalContextWaiters();
+    };
+
+    waiter = {
+      grant: () => {
+        if (settled) return;
+        if (signal.aborted) {
+          fail(abortReason(signal));
+          return;
+        }
+        if (Date.now() >= deadlineAt) {
+          finish(false);
+          return;
+        }
+        activeOptionalContextLoads += 1;
+        finish(true);
+      },
+    };
+
+    optionalContextWaiters.push(waiter);
+    timer = setTimeout(() => finish(false), Math.max(1, deadlineAt - Date.now()));
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+async function loadOptionalContext(
+  entry: CatalogEntry,
+  loader: BoundedScannerDependencies['getContext'],
+  signal: AbortSignal,
+  deadlineMs: number,
+): Promise<{ context: SignalContext; unavailable: boolean }> {
+  if (signal.aborted) throw abortReason(signal);
+
+  const deadlineAt = Date.now() + deadlineMs;
+  const acquired = await acquireOptionalContextSlot(signal, deadlineAt);
+  if (!acquired) return { context: minimalSignalContext(entry), unavailable: true };
+
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    releaseOptionalContextSlot();
+  };
+  const task = Promise.resolve().then(() => loader(entry));
+  void task.then(release, release);
+
+  let timer: NodeJS.Timeout | undefined;
+  let removeAbortListener: (() => void) | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new Error('SCANNER_OPTIONAL_CONTEXT_DEADLINE')),
+      Math.max(1, deadlineAt - Date.now()),
+    );
+  });
+  const aborted = new Promise<never>((_resolve, reject) => {
+    const onAbort = () => reject(abortReason(signal));
+    signal.addEventListener('abort', onAbort, { once: true });
+    removeAbortListener = () => signal.removeEventListener('abort', onAbort);
+  });
+
+  try {
+    const context = await Promise.race([task, deadline, aborted]);
+    return { context, unavailable: false };
+  } catch (error) {
+    if (signal.aborted) throw error;
+    return { context: minimalSignalContext(entry), unavailable: true };
+  } finally {
+    if (timer) clearTimeout(timer);
+    removeAbortListener?.();
+  }
+}
 
 function normalizeSelected(selected: string[]): ScanKey[] {
   const keys: ScanKey[] = [];
@@ -493,6 +632,10 @@ export function createBoundedScannerService(dependencies: BoundedScannerDependen
       const itemTimeoutMs = positiveBound(execution.itemTimeoutMs, SCAN_EXECUTION_LIMITS.itemTimeoutMs, deadlineMs);
       const concurrency = positiveBound(execution.concurrency, SCAN_EXECUTION_LIMITS.concurrency, 16);
       const limit = positiveBound(execution.limit, SCAN_POOL_LIMIT, SCAN_POOL_LIMIT);
+      const optionalContextDeadlineMs = Math.min(
+        SCAN_EXECUTION_LIMITS.optionalContextDeadlineMs,
+        Math.max(1, Math.floor(itemTimeoutMs * 3 / 4)),
+      );
       throwIfAborted(execution.signal);
 
       const keys = normalizeSelected(selected);
@@ -549,17 +692,26 @@ export function createBoundedScannerService(dependencies: BoundedScannerDependen
 
       let insufficientDataCount = 0;
       let staleCount = 0;
+      let contextUnavailableCount = 0;
       const remainingMs = Math.max(1, deadlineMs - (dependencies.now() - startedAt));
       const work = await runBoundedWorkPool(
         pool,
         async (entry, _index, signal): Promise<ScanCard | null> => {
           throwIfAborted(signal);
-          const [candles, quote, context] = await Promise.all([
+          const optionalContextPromise = loadOptionalContext(
+            entry,
+            dependencies.getContext,
+            signal,
+            optionalContextDeadlineMs,
+          );
+          const [candles, quote, optionalContext] = await Promise.all([
             dependencies.getCandles(entry.ticker, timeframe),
             dependencies.getQuote(entry.ticker),
-            dependencies.getContext(entry),
+            optionalContextPromise,
           ]);
           throwIfAborted(signal);
+          const context = optionalContext.context;
+          if (optionalContext.unavailable) contextUnavailableCount += 1;
           const inputDataState = candleDataState(candles, timeframe);
           if (inputDataState === 'unavailable' || inputDataState === 'insufficient') {
             insufficientDataCount += 1;
@@ -664,7 +816,8 @@ export function createBoundedScannerService(dependencies: BoundedScannerDependen
       const partial = work.deadlineReached
         || work.startedCount < pool.length
         || providerErrorCount > 0
-        || timeoutCount > 0;
+        || timeoutCount > 0
+        || contextUnavailableCount > 0;
       const dataState: BoundedScanResult['dataState'] = partial ? 'partial' : 'complete';
       const message = partial
         ? `일부 데이터가 지연되어 ${completedCount}/${pool.length}종목 처리 결과를 반환했습니다.`
@@ -688,6 +841,7 @@ export function createBoundedScannerService(dependencies: BoundedScannerDependen
         staleCount,
         providerErrorCount,
         timeoutCount,
+        contextUnavailableCount,
         excludedCount: Math.max(0, completedCount - matchedCards.length),
         appliedFilters: {
           volumeThreshold,
