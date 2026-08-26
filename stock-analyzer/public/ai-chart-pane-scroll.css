@@ -1,7 +1,9 @@
 /* Desktop AI Chart is a two-pane workspace.
- * Keep the outer route bounded to the AppShell and let the chart and analysis
- * columns own their vertical scroll independently. Mobile keeps its existing
- * single-pane/tab scrolling contract.
+ * Keep the outer route bounded to the AppShell and let chart-side content and
+ * analysis own vertical scrolling independently. While the actual chart canvas
+ * is hovered, suspend the chart column's document scrolling so the existing
+ * chart wheel zoom/pan interaction remains authoritative. Mobile keeps its
+ * existing single-pane/tab scrolling contract.
  */
 @media (min-width: 1024px) {
   div:has(> header h1[aria-label="AI 차트 생중계 · AI 차트 2.0"]) {
@@ -30,6 +32,13 @@
     overflow-y: auto;
     overscroll-behavior: contain;
     scrollbar-gutter: stable;
+  }
+
+  /* Lightweight chart owns wheel input over its canvas. Prevent the left
+   * column scroller from consuming that same wheel gesture; moving the pointer
+   * outside the canvas restores normal independent column scrolling. */
+  div:has(> header h1[aria-label="AI 차트 생중계 · AI 차트 2.0"]) > main.mx-auto.grid.max-w-7xl > section:has([data-testid="unified-chart-canvas"]:hover) {
+    overflow-y: hidden;
   }
 
   div:has(> header h1[aria-label="AI 차트 생중계 · AI 차트 2.0"]) > main.mx-auto.grid.max-w-7xl > aside {
