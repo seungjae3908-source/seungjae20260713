@@ -125,8 +125,6 @@ function normalizeRichTradePlan(
 ): TelegramAlertInput {
   if (!input.details) return input;
   const lines = input.details.split('\n');
-  // buildTelegramSignalIntelligenceInput puts its legacy compact price-plan on
-  // line 2. Replace only that canonical line so evidence/news/AI stay intact.
   if (lines.length >= 2) lines.splice(1, 1, ...tradePlanLines(alert));
   else lines.push(...tradePlanLines(alert));
   return { ...input, details: lines.join('\n') };
@@ -232,8 +230,6 @@ export async function deliverScannerTelegramAlerts(
   memberHoldingProducer: ScannerMemberHoldingProducer = fanoutMemberHoldingScannerAlert,
 ): Promise<void> {
   await Promise.all(alerts.map(async (alert, index) => {
-    // Start the independently default-off member path without serializing the
-    // existing public-room path behind member DB/quote/Telegram latency.
     const memberEvaluation = runMemberHoldingProducer(alert, memberHoldingProducer);
 
     const base = scannerTelegramInput(alert, resolveRoomChatId);
@@ -247,7 +243,7 @@ export async function deliverScannerTelegramAlerts(
     try {
       const result = await sender(input);
       if (result.ok || result.skipped === 'DUPLICATE') {
-        markTelegramSignalAnnounced(alert);
+        await markTelegramSignalAnnounced(alert);
       }
     } catch (error) {
       logger.warn(
