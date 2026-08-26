@@ -88,16 +88,25 @@ test('unchanged empty state does not POST on initial load or hard reload', async
   expect(posts).toEqual([]);
 });
 
-test('server-only member state updates local cache without echoing a POST', async ({ page }) => {
+test('server canonical stock markets restore legacy local UI aliases without echoing a POST', async ({ page }) => {
   const posts: SyncPayload[] = [];
   const reads = { count: 0 };
-  const serverItems: ServerItem[] = [{
-    ticker: 'AAPL',
-    name: 'Apple',
-    market: 'US_STOCK',
-    currency: 'USD',
-    targetPrice: 225,
-  }];
+  const serverItems: ServerItem[] = [
+    {
+      ticker: '005930',
+      name: 'Samsung Electronics',
+      market: 'KR_STOCK',
+      currency: 'KRW',
+      targetPrice: 90_000,
+    },
+    {
+      ticker: 'AAPL',
+      name: 'Apple',
+      market: 'US_STOCK',
+      currency: 'USD',
+      targetPrice: 225,
+    },
+  ];
   await installWatchlistApi(page, serverItems, posts, reads);
   await openCleanPage(page);
 
@@ -109,16 +118,25 @@ test('server-only member state updates local cache without echoing a POST', asyn
 
   expect(posts).toEqual([]);
   const localItems = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? '[]'), WATCHLIST_KEY);
-  expect(localItems).toEqual([{
-    ticker: 'AAPL',
-    name: 'Apple',
-    market: 'US_STOCK',
-    currency: 'USD',
-    targetPrice: 225,
-  }]);
+  expect(localItems).toEqual([
+    {
+      ticker: '005930',
+      name: 'Samsung Electronics',
+      market: 'KR',
+      currency: 'KRW',
+      targetPrice: 90_000,
+    },
+    {
+      ticker: 'AAPL',
+      name: 'Apple',
+      market: 'US',
+      currency: 'USD',
+      targetPrice: 225,
+    },
+  ]);
 });
 
-test('rapid local changes coalesce into one member-owned latest-state POST with no client identity', async ({ page }) => {
+test('rapid local changes coalesce into one member-owned canonical POST with no client identity', async ({ page }) => {
   const posts: SyncPayload[] = [];
   const reads = { count: 0 };
   await installWatchlistApi(page, [], posts, reads);
@@ -149,14 +167,14 @@ test('rapid local changes coalesce into one member-owned latest-state POST with 
     {
       ticker: 'AAPL',
       name: 'Apple',
-      market: 'US',
+      market: 'US_STOCK',
       currency: 'USD',
       targetPrice: 230,
     },
     {
       ticker: 'MSFT',
       name: 'Microsoft',
-      market: 'US',
+      market: 'US_STOCK',
       currency: 'USD',
       targetPrice: null,
     },
