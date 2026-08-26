@@ -117,8 +117,6 @@ test('stock/spot SHORT is never promoted into a new-entry personal Telegram sign
 
 test('crypto futures LONG and SHORT remain independent eligible directions', async () => {
   const signalTypes: string[] = [];
-  const deliver = async (input: Parameters<typeof deliverMemberWatchlistTelegramForSignal>[1] extends never ? never : never) => input;
-  void deliver;
 
   for (const direction of ['LONG', 'SHORT'] as const) {
     const result = await deliverMemberWatchlistTelegramForSignal({
