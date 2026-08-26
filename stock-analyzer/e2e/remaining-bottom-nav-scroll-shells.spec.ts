@@ -12,9 +12,11 @@ const ROUTES = [
   { path: '/market-rankings?asset=coin&coinMarket=spot', title: '시장 순위', label: '시장 순위 · 코인' },
   { path: '/watchlist', title: '관심종목' },
   { path: '/alerts', title: '가격 알림' },
-  { path: '/stock-info?asset=stock&market=KR', title: '종목 정보' },
+  { path: '/stock-info?asset=stock&market=KR', title: '종목 정보', label: '종목 정보 · 주식' },
+  { path: '/stock-info?asset=coin&coinMarket=spot', title: '종목 정보', label: '종목 정보 · 코인' },
   { path: '/research-center', title: '연구센터', contentDiv: true },
-  { path: '/portfolio?tab=holdings', title: '포트폴리오' },
+  { path: '/portfolio', title: '포트폴리오', label: '포트폴리오 · 인텔리전스', contentDiv: true },
+  { path: '/portfolio?tab=holdings', title: '포트폴리오', label: '포트폴리오 · 보유자산' },
   { path: '/account', title: '계정' },
 ] as const;
 
