@@ -24,6 +24,10 @@ export const PREPROCESSING_CONTRACT = Object.freeze({
   clippingBehavior: "normalized-feature-clamp-minus12-plus12-v1",
   orderingBehavior: "exact-model-feature-order-no-sort-v1",
 });
+export const MODEL_REFERENCE_STRATEGY_FORMULA_SCHEMA_VERSION = "prediction-lab-deployed-rule-model-formula-v1";
+export const MODEL_REFERENCE_STRATEGY_PARAMETER_SCHEMA_VERSION = "prediction-lab-tiny-softmax-parameters-v1";
+export const MODEL_REFERENCE_COST_POLICY_VERSION = "prediction-lab-shadow-observation-no-execution-cost-v1";
+export const MODEL_REFERENCE_RISK_POLICY_VERSION = "prediction-lab-shadow-observation-no-execution-risk-v1";
 
 const HASH_64 = /^[0-9a-f]{64}$/u;
 const SHA_40 = /^[0-9a-f]{40}$/u;
@@ -144,6 +148,93 @@ function buildReferenceProvenance(manifest) {
     rawArtifactDigest: manifest.rawArtifactDigest,
     measuredAt: manifest.measuredAt,
     artifactReceipt: manifest.artifactReceipt,
+  });
+}
+
+function recordRange(records) {
+  if (!Array.isArray(records) || records.length === 0) throw new TypeError("TRAIN and VALIDATION records are required for strategy identity");
+  const starts = records.map((record) => record?.anchorTimestamp);
+  const ends = records.map((record) => record?.futureEndTimestamp ?? record?.anchorTimestamp);
+  if ([...starts, ...ends].some((value) => !Number.isInteger(value) || value <= 0)) {
+    throw new TypeError("strategy identity dataset range requires immutable record timestamps");
+  }
+  return Object.freeze({
+    datasetStart: new Date(Math.min(...starts)).toISOString(),
+    datasetEnd: new Date(Math.max(...ends)).toISOString(),
+  });
+}
+
+export function buildCanonicalModelReferenceStrategyIdentity({
+  group,
+  market,
+  timeframe,
+  trainRecords,
+  validationRecords,
+  datasetComponents,
+  researchCodeSha,
+  featureOrder,
+  trainingParameters,
+  datasetSpecifications,
+  inferenceContract,
+  ruleWeight,
+  modelWeight,
+} = {}) {
+  if (typeof group !== "string" || !group) throw new TypeError("group is required");
+  if (typeof market !== "string" || !market || typeof timeframe !== "string" || !timeframe) {
+    throw new TypeError("market and timeframe are required");
+  }
+  if (!Array.isArray(featureOrder) || !featureOrder.length) throw new TypeError("featureOrder is required");
+  if (!trainingParameters || typeof trainingParameters !== "object") throw new TypeError("trainingParameters are required");
+  if (!Array.isArray(datasetSpecifications) || !datasetSpecifications.length) throw new TypeError("datasetSpecifications are required");
+  if (typeof inferenceContract !== "string" || !inferenceContract) throw new TypeError("inferenceContract is required");
+  if (!Number.isFinite(ruleWeight) || !Number.isFinite(modelWeight) || ruleWeight + modelWeight !== 1) {
+    throw new TypeError("exact frozen blend weights are required");
+  }
+  const normalizedResearchSha = normalizeSha(researchCodeSha);
+  if (!normalizedResearchSha) throw new TypeError("immutable researchCodeSha is required");
+  const datasetId = `prediction-lab:${group}:train-validation`;
+  const datasetProvenance = buildCompositeDatasetProvenance({ datasetId, components: datasetComponents });
+  const range = recordRange([...(trainRecords ?? []), ...(validationRecords ?? [])]);
+  const formulaIdentity = deepFreeze({
+    schemaVersion: MODEL_REFERENCE_STRATEGY_FORMULA_SCHEMA_VERSION,
+    inferenceContract,
+    classNames: ["bullish", "neutral", "bearish"],
+    featureOrder: [...featureOrder],
+    blendWeights: { rule: ruleWeight, model: modelWeight },
+  });
+  const parameterIdentity = deepFreeze({
+    schemaVersion: MODEL_REFERENCE_STRATEGY_PARAMETER_SCHEMA_VERSION,
+    training: structuredClone(trainingParameters),
+    datasets: structuredClone(datasetSpecifications),
+    preprocessingVersion: PREPROCESSING_VERSION,
+    preprocessingContractDigest: sha256Canonical(PREPROCESSING_CONTRACT),
+  });
+  const resolved = resolveCanonicalStrategyIdentity({
+    strategyId: `prediction-lab-${group}-deployed-blend-v1`,
+    strategyFamily: "prediction-lab-deployed-rule-model-blend",
+    strategyVersion: "v1",
+    market,
+    direction: "LONG_SHORT_NEUTRAL",
+    timeframe,
+    formulaIdentity,
+    parameterHash: sha256Canonical(parameterIdentity),
+    researchCodeSha: normalizedResearchSha,
+    datasetId,
+    datasetDigest: datasetProvenance.datasetDigest,
+    ...range,
+    costPolicyVersion: MODEL_REFERENCE_COST_POLICY_VERSION,
+    riskPolicyVersion: MODEL_REFERENCE_RISK_POLICY_VERSION,
+    evidenceSchemaVersion: MODEL_REFERENCE_EVIDENCE_SCHEMA_VERSION,
+  });
+  if (resolved.status !== "IDENTITY_COMPLETE") {
+    throw new Error(`canonical producer strategy identity is incomplete: ${[...resolved.missingFields, ...resolved.blockers].join(",")}`);
+  }
+  return deepFreeze({
+    strategyIdentity: resolved.identity,
+    strategyIdentityDigest: resolved.strategyIdentityDigest,
+    formulaIdentity,
+    parameterIdentity,
+    datasetProvenance,
   });
 }
 
