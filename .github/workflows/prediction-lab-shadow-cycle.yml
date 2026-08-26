@@ -137,6 +137,16 @@ jobs:
         working-directory: market-prediction-lab
         run: node --test tests/derivatives-history.test.js tests/derivatives-normalized-compat.test.js tests/temporal-training-dataset.test.js tests/shadow-ledger.test.js tests/canonical-shadow-drift-policy-v1.test.js tests/canonical-shadow-runtime-cutover-v1.test.js tests/shadow-evidence-handoff-v1.test.js tests/shadow-state-root-transport-v1.test.js
 
+      # Dormant only: inventory-driven discovery is exercised by fixtures/tests. This
+      # workflow still requires explicit immutable run IDs and never publishes a root.
+      - name: Assert canonical runtime remains dormant
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { CANONICAL_SHADOW_RUNTIME_CUTOVER_V1 as runtime } from './market-prediction-lab/src/canonical-shadow-runtime-cutover-v1.js';
+          if (runtime.cutoverEnabled !== false || runtime.scheduleActivated !== false) process.exit(1);
+          NODE
+
       - name: Run one research-only shadow cycle
         id: shadow
         continue-on-error: true

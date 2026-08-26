@@ -1,4 +1,8 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import {
   assertCanonicalShadowEquivalenceV1,
@@ -179,4 +183,39 @@ test("cutover plan stays disabled and carries an approval-gated rollback path", 
   assert.deepEqual(plan.rollback, CANONICAL_SHADOW_ROLLBACK_V1);
   assert.deepEqual(plan.rollback.steps, ["STOP_CANONICAL_WRITER", "PRESERVE_LAST_GOOD_STATE", "RESTORE_LEGACY_RUNTIME_PATH"]);
   assert.equal(plan.rollback.separateApprovalRequired, true);
+});
+
+test("inventory-driven dormant wiring resolves exact bindings without state-root mutation", () => {
+  const root = mkdtempSync(join(tmpdir(), "canonical-shadow-dormant-"));
+  const inventoryPath = join(root, "inventory.json");
+  writeFileSync(inventoryPath, JSON.stringify({
+    asOf: AS_OF,
+    researchSha: SHA,
+    researchAncestors: { [SHA]: [PRIOR_SHA] },
+    producerCandidates: [producer()],
+    predecessorCandidates: [predecessor({ pendingSettlementCount: 4 })],
+  }));
+  const stdout = execFileSync(process.execPath, [
+    "scripts/prepare-canonical-shadow-dormant-runtime.js",
+    "--inventory", inventoryPath,
+    "--dry-run", "true",
+  ], { cwd: new URL("..", import.meta.url), encoding: "utf8" });
+  const result = JSON.parse(stdout);
+  assert.equal(result.mode, "DRY_RUN_ONLY");
+  assert.equal(result.predecessor.pendingSettlementCount, 4);
+  assert.equal(result.plan.cutoverEnabled, false);
+  assert.equal(result.plan.scheduleActivated, false);
+  assert.equal(result.atomicPublishCandidate.execute, false);
+  assert.equal(result.stateRootMutation, 0);
+});
+
+test("dormant wiring refuses publish, state-root, schedule and cutover arguments", () => {
+  for (const [name, value] of [["state-root", "C:/tmp/root"], ["publish", "true"], ["activate-schedule", "true"], ["cutover-enabled", "true"]]) {
+    assert.throws(() => execFileSync(process.execPath, [
+      "scripts/prepare-canonical-shadow-dormant-runtime.js",
+      "--inventory", "unused.json",
+      "--dry-run", "true",
+      `--${name}`, value,
+    ], { cwd: new URL("..", import.meta.url), stdio: "pipe" }), /Command failed/);
+  }
 });
