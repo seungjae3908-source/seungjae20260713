@@ -7,6 +7,7 @@ const workflow = readFileSync(path.join(root, '.github/workflows/telegram-produc
 const migrator = readFileSync(path.join(root, 'ops/apply-production-personal-telegram-storage.mjs'), 'utf8');
 const cleanup = readFileSync(path.join(root, 'api-server/supabase/migrations/2026081502_personal_telegram_policy_cleanup.sql'), 'utf8');
 const genericOutbox = readFileSync(path.join(root, 'api-server/supabase/migrations/2026082701_personal_telegram_generic_outbox.sql'), 'utf8');
+const digestClaim = readFileSync(path.join(root, 'api-server/supabase/migrations/2026082702_personal_telegram_digest_claim.sql'), 'utf8');
 
 function fail(message) {
   console.error(`[production-personal-telegram-storage-contract] ${message}`);
@@ -50,22 +51,27 @@ function verifyStatic() {
     'process.env.PROD_DATABASE_URL',
     'transientProductionDatabaseUrl',
     'delete baseEnv.PROD_DATABASE_URL',
-    "runtime.DEPLOY_SHA",
+    'runtime.DEPLOY_SHA',
     'postgresUris.length !== 1',
     'stripOuterTransaction',
-    "begin;",
     'pg_advisory_xact_lock',
     '2026081501_personal_telegram_storage.sql',
     '2026081502_personal_telegram_policy_cleanup.sql',
     '2026082701_personal_telegram_generic_outbox.sql',
+    '2026082702_personal_telegram_digest_claim.sql',
     "array['member_id', 'enabled_types']",
     "array['delivery_kind', 'payload']",
     "column_name = 'event_id'",
     "event_id_nullable is distinct from 'YES'",
     'notification_deliveries_kind_check',
     'notification_deliveries_payload_contract_check',
-    "'migrations_applied', 3",
+    "to_regprocedure('public.claim_personal_telegram_digest(uuid,uuid,timestamptz,integer)')",
+    'digest_claim_security_definer',
+    "has_function_privilege('PUBLIC', digest_claim, 'EXECUTE')",
+    "has_function_privilege('service_role', digest_claim, 'EXECUTE')",
+    "'migrations_applied', 4",
     "'generic_outbox_verified', true",
+    "'digest_claim_verified', true",
     "qual <> 'false'",
     "with_check <> 'false'",
     "privilege.grantee in ('PUBLIC', 'anon', 'authenticated')",
@@ -90,11 +96,28 @@ function verifyStatic() {
 
   assert(!/\bcreate\s+table\s+(?:if\s+not\s+exists\s+)?public\.(?:telegram_)?(?:alert_)?(?:outbox|delivery_queue)\b/i.test(genericOutbox),
     'generic outbox migration must reuse notification_deliveries instead of creating a competing queue');
+
+  for (const marker of [
+    'create or replace function public.claim_personal_telegram_digest',
+    'returns setof public.notification_deliveries',
+    'security definer',
+    'set search_path = public, pg_temp',
+    "delivery.payload ->> 'deliveryMode' = 'BATCHED'",
+    "delivery.payload ->> 'digestKey' = v_digest_key",
+    'pg_advisory_xact_lock',
+    'for update skip locked',
+    'limit p_limit',
+    'revoke all on function public.claim_personal_telegram_digest',
+    'from public, anon, authenticated',
+    'grant execute on function public.claim_personal_telegram_digest',
+    'to service_role',
+  ]) assert(digestClaim.includes(marker), `digest claim migration is missing ${marker}`);
+
   assert(!/\beval\s*\(/.test(migrator), 'migrator must not eval server env files');
   assert(!/(^|\n)\s*(?:source|\.)\s+[^\n]+\.env/m.test(migrator), 'migrator must not source server env files');
   assert(!migrator.includes('console.log(postgresUris'), 'migrator must not print database URLs');
   assert(!migrator.includes('console.log(database'), 'migrator must not print database connection details');
-  assert(cleanup.includes("from pg_policy pol"), 'policy cleanup must enumerate legacy policies');
+  assert(cleanup.includes('from pg_policy pol'), 'policy cleanup must enumerate legacy policies');
   assert(cleanup.includes('for all using (false) with check (false)'), 'policy cleanup must recreate only fail-closed policies');
   console.log('[production-personal-telegram-storage-contract] static safeguards verified');
 }
@@ -108,9 +131,10 @@ function verifyArtifact(file, expectedTargetSha, expectedActiveSha) {
     && value?.expected_active_sha === expectedActiveSha
     && value?.production_project_match === true
     && value?.atomic_transaction === true
-    && value?.migrations_applied === 3
+    && value?.migrations_applied === 4
     && value?.tables_verified === 4
     && value?.generic_outbox_verified === true
+    && value?.digest_claim_verified === true
     && value?.canonical_preferences_verified === true
     && value?.api_roles_revoked === true
     && value?.policies_fail_closed === true
