@@ -135,7 +135,7 @@ jobs:
 
       - name: Validate shadow and temporal modules
         working-directory: market-prediction-lab
-        run: node --test tests/derivatives-history.test.js tests/derivatives-normalized-compat.test.js tests/temporal-training-dataset.test.js tests/shadow-ledger.test.js tests/canonical-shadow-drift-policy-v1.test.js tests/shadow-evidence-handoff-v1.test.js tests/shadow-state-root-transport-v1.test.js
+        run: node --test tests/derivatives-history.test.js tests/derivatives-normalized-compat.test.js tests/temporal-training-dataset.test.js tests/shadow-ledger.test.js tests/canonical-shadow-drift-policy-v1.test.js tests/canonical-shadow-runtime-cutover-v1.test.js tests/shadow-evidence-handoff-v1.test.js tests/shadow-state-root-transport-v1.test.js
 
       - name: Run one research-only shadow cycle
         id: shadow
