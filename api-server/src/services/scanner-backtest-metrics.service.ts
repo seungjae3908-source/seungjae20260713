@@ -32,6 +32,13 @@ export interface SwingBacktestMetrics extends CommonBacktestMetrics {
   averageMaePercent: number | null;
 }
 
+export interface PositionBacktestMetrics extends CommonBacktestMetrics {
+  strategy: 'position';
+  medianHoldingDays: number | null;
+  averageMfePercent: number | null;
+  averageMaePercent: number | null;
+}
+
 function average(values: number[]): number | null {
   return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
 }
@@ -150,6 +157,27 @@ export function calculateSwingBacktestMetrics(
     tradeSharpe: summary.tradeSharpe,
     netReturnPercent: summary.netReturnPercent,
     medianHoldingHours: median(summary.valid.map((trade) => trade.holdingMinutes / 60)),
+    averageMfePercent: average(summary.valid.map((trade) => trade.mfePercent)),
+    averageMaePercent: average(summary.valid.map((trade) => trade.maePercent)),
+  };
+}
+
+export function calculatePositionBacktestMetrics(
+  trades: ScannerBacktestTrade[],
+): PositionBacktestMetrics {
+  const summary = base(trades);
+  return {
+    strategy: 'position',
+    trades: summary.trades,
+    winRate: summary.winRate,
+    expectancyPercent: summary.expectancyPercent,
+    profitFactor: summary.profitFactor,
+    averageWinPercent: summary.averageWinPercent,
+    averageLossPercent: summary.averageLossPercent,
+    maxDrawdownPercent: summary.maxDrawdownPercent,
+    tradeSharpe: summary.tradeSharpe,
+    netReturnPercent: summary.netReturnPercent,
+    medianHoldingDays: median(summary.valid.map((trade) => trade.holdingMinutes / (60 * 24))),
     averageMfePercent: average(summary.valid.map((trade) => trade.mfePercent)),
     averageMaePercent: average(summary.valid.map((trade) => trade.maePercent)),
   };
