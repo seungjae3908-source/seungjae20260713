@@ -38,8 +38,17 @@ export type MemberWatchlistTelegramProducerResult = {
   delivered: number;
   skipped: number;
   failed: number;
-  reason: 'DISABLED' | 'INELIGIBLE' | 'NO_MATCH' | 'COMPLETE' | 'STORAGE_UNAVAILABLE';
+  reason:
+    | 'DISABLED'
+    | 'INELIGIBLE'
+    | 'NO_MATCH'
+    | 'COMPLETE'
+    | 'PARTIAL'
+    | 'DELIVERY_FAILED'
+    | 'STORAGE_UNAVAILABLE';
 };
+
+const MAX_MEMBER_WATCHLIST_DELIVERY_CONCURRENCY = 8;
 
 export function memberWatchlistTelegramProducerEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.MEMBER_WATCHLIST_TELEGRAM_PRODUCER_ENABLED === 'true';
@@ -120,9 +129,10 @@ export async function deliverMemberWatchlistTelegramForSignal(
     '실제 주문/체결 아님 · 주문 권한 없음',
   ].join('\n');
 
-  for (const subscriber of subscribers) {
-    result.attempted += 1;
-    const dispatch = await deliver({
+  for (let index = 0; index < subscribers.length; index += MAX_MEMBER_WATCHLIST_DELIVERY_CONCURRENCY) {
+    const batch = subscribers.slice(index, index + MAX_MEMBER_WATCHLIST_DELIVERY_CONCURRENCY);
+    result.attempted += batch.length;
+    const settled = await Promise.allSettled(batch.map((subscriber) => deliver({
       userId: subscriber.userId,
       event: {
         userId: subscriber.userId,
@@ -144,20 +154,29 @@ export async function deliverMemberWatchlistTelegramForSignal(
         cooldownMs: 0,
       },
       now: new Date(event.occurredAt),
-    });
+    })));
 
-    if (dispatch.status === 'SKIPPED') {
-      if (dispatch.reason === 'STORAGE_UNAVAILABLE') result.failed += 1;
-      else result.skipped += 1;
-      continue;
+    for (const outcome of settled) {
+      if (outcome.status === 'rejected') {
+        result.failed += 1;
+        continue;
+      }
+      const dispatch = outcome.value;
+      if (dispatch.status === 'SKIPPED') {
+        if (dispatch.reason === 'STORAGE_UNAVAILABLE') result.failed += 1;
+        else result.skipped += 1;
+        continue;
+      }
+      if (dispatch.policy.decision.action !== 'IMMEDIATE') {
+        result.skipped += 1;
+        continue;
+      }
+      if (dispatch.policy.transport?.ok) result.delivered += 1;
+      else result.failed += 1;
     }
-    if (dispatch.policy.decision.action !== 'IMMEDIATE') {
-      result.skipped += 1;
-      continue;
-    }
-    if (dispatch.policy.transport?.ok) result.delivered += 1;
-    else result.failed += 1;
   }
 
+  if (result.failed === result.attempted) result.reason = 'DELIVERY_FAILED';
+  else if (result.failed > 0) result.reason = 'PARTIAL';
   return result;
 }
