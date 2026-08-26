@@ -87,8 +87,14 @@ export default function RecommendationsPage() {
   const rows = (data?.rows ?? []).filter((row) => row.category === category);
 
   return (
-    <div className="h-full overflow-y-auto overscroll-contain bg-background">
-      <div className="px-4 pb-28 pt-4">
+    <div
+      className="flex h-full min-h-0 flex-col overflow-hidden bg-background"
+      data-testid="recommendations-shell"
+    >
+      <div
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-6 pt-4"
+        data-testid="recommendations-scroll-content"
+      >
         <header className="mb-3 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <button
