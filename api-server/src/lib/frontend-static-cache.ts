@@ -2,7 +2,6 @@ import {
   closeSync,
   existsSync,
   openSync,
-  readFileSync,
   readdirSync,
   readSync,
   statSync,
