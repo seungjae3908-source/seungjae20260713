@@ -32,6 +32,7 @@ export type MemberWatchlistSubscriber = {
 const MAX_ITEMS = 200;
 const MATCH_PAGE_SIZE = 500;
 const MAX_MATCH_PAGES = 20;
+const MAX_PROFILE_LOOKUP_BATCH = 200;
 
 function text(value: unknown, maxLength: number): string {
   return String(value ?? '').normalize('NFKC').trim().slice(0, maxLength);
@@ -169,6 +170,7 @@ export async function findMemberWatchlistSubscribers(
   if (!symbol) return [];
   const client = getSupabase();
   const userIds = new Set<string>();
+  let exhausted = false;
 
   for (let page = 0; page < MAX_MATCH_PAGES; page += 1) {
     const from = page * MATCH_PAGE_SIZE;
@@ -186,9 +188,32 @@ export async function findMemberWatchlistSubscribers(
       if (userId) userIds.add(userId);
     }
     if (rows.length < MATCH_PAGE_SIZE) {
-      return Array.from(userIds).sort().map((userId) => ({ userId }));
+      exhausted = true;
+      break;
     }
   }
 
-  throw new Error('MEMBER_WATCHLIST_MATCH_LIMIT_EXCEEDED');
+  if (!exhausted) throw new Error('MEMBER_WATCHLIST_MATCH_LIMIT_EXCEEDED');
+  const candidates = Array.from(userIds).sort();
+  if (candidates.length === 0) return [];
+
+  const approved = new Set<string>();
+  for (let index = 0; index < candidates.length; index += MAX_PROFILE_LOOKUP_BATCH) {
+    const batch = candidates.slice(index, index + MAX_PROFILE_LOOKUP_BATCH);
+    const { data: profiles, error: profileError } = await client
+      .from('profiles')
+      .select('id,status')
+      .in('id', batch)
+      .eq('status', 'approved');
+    if (profileError) throw new Error('MEMBER_WATCHLIST_STORAGE_UNAVAILABLE');
+    for (const row of Array.isArray(profiles) ? profiles : []) {
+      const profile = row as Record<string, unknown>;
+      const userId = text(profile.id, 64);
+      if (userId && profile.status === 'approved') approved.add(userId);
+    }
+  }
+
+  return candidates
+    .filter((userId) => approved.has(userId))
+    .map((userId) => ({ userId }));
 }
