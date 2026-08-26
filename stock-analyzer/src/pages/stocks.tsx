@@ -154,111 +154,111 @@ export default function StocksPage() {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background" data-testid="stocks-shell">
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain" data-testid="stocks-scroll-content">
-        {/* 상단 고정 없음 — 제목·검색창·탭·목록이 한 페이지로 함께 스크롤. */}
-        <header className="border-b border-card-border px-4 pb-3 pt-4">
-          <h1 className="text-xl font-black text-center">종목</h1>
+      {/* 상단 고정 없음 — 제목·검색창·탭·목록이 한 페이지로 함께 스크롤. */}
+      <header className="border-b border-card-border px-4 pb-3 pt-4">
+        <h1 className="text-xl font-black text-center">종목</h1>
 
-          {/* 1) 종목 검색창 — 제목 바로 아래에 붙여 하나의 상단 영역처럼 보이게(작은 간격). 입력 텍스트 왼쪽 정렬 유지 */}
-          <label className="mt-1.5 flex h-11 items-center gap-2 rounded-2xl border border-card-border bg-card px-3">
-            <Search className="h-4 w-4 text-muted-foreground" />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder={mode.asset === 'stock' ? '종목명·코드·영문명 검색' : '코인명·심볼 검색'}
-              className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none"
-            />
-          </label>
+        {/* 1) 종목 검색창 — 제목 바로 아래에 붙여 하나의 상단 영역처럼 보이게(작은 간격). 입력 텍스트 왼쪽 정렬 유지 */}
+        <label className="mt-1.5 flex h-11 items-center gap-2 rounded-2xl border border-card-border bg-card px-3">
+          <Search className="h-4 w-4 text-muted-foreground" />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={mode.asset === 'stock' ? '종목명·코드·영문명 검색' : '코인명·심볼 검색'}
+            className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none"
+          />
+        </label>
 
-          {/* 2) [주식][코인]  3) [국내][해외] / [현물][선물] */}
-          <AssetSwitch className="mt-3" />
+        {/* 2) [주식][코인]  3) [국내][해외] / [현물][선물] */}
+        <AssetSwitch className="mt-3" />
 
-          {/* 4) 분류 버튼 6개 */}
-          <div className="mt-3 grid grid-cols-3 gap-2">
-            {CATEGORIES.map((item) => (
-              <button
-                key={item.key}
-                type="button"
-                onClick={() => setCategory(item.key)}
-                className={cn(
-                  'inline-flex items-center justify-center text-center break-keep leading-tight rounded-xl border px-2 py-2 text-[11px] font-black',
-                  category === item.key ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-card text-muted-foreground',
-                )}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
-        </header>
-
-        <main className="space-y-4 px-4 pb-6 pt-4">
-          {/* 검색 중이면 검색 결과가 분류 목록 위 */}
-          {searching && (
-            <section>
-              <div className="mb-3 flex items-center justify-between">
-                <h2 className="text-sm font-black">검색 결과</h2>
-                <span className="text-[11px] font-bold text-muted-foreground">
-                  {mode.asset === 'stock'
-                    ? (stockRows.data ? `${searchStocks.length}개` : '조회 중')
-                    : `${searchCoins.length}개`}
-                </span>
-              </div>
-              {mode.asset === 'stock' ? (
-                <>
-                  {stockRows.isLoading && <LoadingState label="실제 종목을 검색하는 중입니다." />}
-                  {stockRows.isError && <ErrorState onRetry={() => { void stockRows.refetch(); }} />}
-                  {!stockRows.isLoading && !stockRows.isError && searchStocks.length === 0 && (
-                    <EmptyBox>검색어와 일치하는 실제 종목 데이터가 없습니다.</EmptyBox>
-                  )}
-                  <div className="space-y-2">
-                    {searchStocks.map((stock) => (
-                      <StockRow key={`${stock.market}:${stock.ticker}`} stock={stock} onClick={() => openStock(String(stock.ticker))} />
-                    ))}
-                  </div>
-                </>
-              ) : (
-                <>
-                  {coinTickerQuery.isLoading && <LoadingState label="실제 코인 시세를 불러오는 중입니다." />}
-                  {coinTickerQuery.isError && <ErrorState onRetry={() => { void coinTickerQuery.refetch(); }} />}
-                  {!coinTickerQuery.isLoading && !coinTickerQuery.isError && searchCoins.length === 0 && (
-                    <EmptyBox>검색어와 일치하는 실제 코인 데이터가 없습니다.</EmptyBox>
-                  )}
-                  <div className="space-y-2">
-                    {searchCoins.map((row) => (
-                      <CoinRow key={String(row.symbol)} row={row} coinMarket={mode.coinMarket} onClick={() => openCoin(String(row.symbol))} />
-                    ))}
-                  </div>
-                </>
+        {/* 4) 분류 버튼 6개 */}
+        <div className="mt-3 grid grid-cols-3 gap-2">
+          {CATEGORIES.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              onClick={() => setCategory(item.key)}
+              className={cn(
+                'inline-flex items-center justify-center text-center break-keep leading-tight rounded-xl border px-2 py-2 text-[11px] font-black',
+                category === item.key ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-card text-muted-foreground',
               )}
-            </section>
-          )}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      </header>
 
-          {/* 5) 선택한 분류의 실제 결과 목록 */}
+      <main className="space-y-4 px-4 pb-6 pt-4">
+        {/* 검색 중이면 검색 결과가 분류 목록 위 */}
+        {searching && (
           <section>
             <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-black">{CATEGORIES.find((c) => c.key === category)?.label}</h2>
+              <h2 className="text-sm font-black">검색 결과</h2>
+              <span className="text-[11px] font-bold text-muted-foreground">
+                {mode.asset === 'stock'
+                  ? (stockRows.data ? `${searchStocks.length}개` : '조회 중')
+                  : `${searchCoins.length}개`}
+              </span>
             </div>
-
-            {isStock ? (
-              <StockCategoryResults
-                category={category}
-                recommendations={recommendations}
-                themes={themes}
-                movers={movers}
-                stockMarket={mode.stockMarket}
-                onOpenStock={openStock}
-              />
+            {mode.asset === 'stock' ? (
+              <>
+                {stockRows.isLoading && <LoadingState label="실제 종목을 검색하는 중입니다." />}
+                {stockRows.isError && <ErrorState onRetry={() => { void stockRows.refetch(); }} />}
+                {!stockRows.isLoading && !stockRows.isError && searchStocks.length === 0 && (
+                  <EmptyBox>검색어와 일치하는 실제 종목 데이터가 없습니다.</EmptyBox>
+                )}
+                <div className="space-y-2">
+                  {searchStocks.map((stock) => (
+                    <StockRow key={`${stock.market}:${stock.ticker}`} stock={stock} onClick={() => openStock(String(stock.ticker))} />
+                  ))}
+                </div>
+              </>
             ) : (
-              <CoinCategoryResults
-                category={category}
-                coinCategorySupported={coinCategorySupported}
-                coinTickerQuery={coinTickerQuery}
-                sortedCoins={sortedCoins}
-                coinMarket={mode.coinMarket}
-                onOpenCoin={openCoin}
-              />
+              <>
+                {coinTickerQuery.isLoading && <LoadingState label="실제 코인 시세를 불러오는 중입니다." />}
+                {coinTickerQuery.isError && <ErrorState onRetry={() => { void coinTickerQuery.refetch(); }} />}
+                {!coinTickerQuery.isLoading && !coinTickerQuery.isError && searchCoins.length === 0 && (
+                  <EmptyBox>검색어와 일치하는 실제 코인 데이터가 없습니다.</EmptyBox>
+                )}
+                <div className="space-y-2">
+                  {searchCoins.map((row) => (
+                    <CoinRow key={String(row.symbol)} row={row} coinMarket={mode.coinMarket} onClick={() => openCoin(String(row.symbol))} />
+                  ))}
+                </div>
+              </>
             )}
           </section>
-        </main>
+        )}
+
+        {/* 5) 선택한 분류의 실제 결과 목록 */}
+        <section>
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-sm font-black">{CATEGORIES.find((c) => c.key === category)?.label}</h2>
+          </div>
+
+          {isStock ? (
+            <StockCategoryResults
+              category={category}
+              recommendations={recommendations}
+              themes={themes}
+              movers={movers}
+              stockMarket={mode.stockMarket}
+              onOpenStock={openStock}
+            />
+          ) : (
+            <CoinCategoryResults
+              category={category}
+              coinCategorySupported={coinCategorySupported}
+              coinTickerQuery={coinTickerQuery}
+              sortedCoins={sortedCoins}
+              coinMarket={mode.coinMarket}
+              onOpenCoin={openCoin}
+            />
+          )}
+        </section>
+      </main>
       </div>
       <BottomNav />
     </div>
