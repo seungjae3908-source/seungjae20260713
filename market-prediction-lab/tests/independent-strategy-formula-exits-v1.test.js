@@ -54,6 +54,10 @@ function run({ candleOverrides = {}, parameters = {}, signalIndex = 2 } = {}) {
   });
 }
 
+function hasCode(expected) {
+  return (error) => error?.code === expected;
+}
+
 test("legacy risk-multiple calls preserve the exact legacy parameter and safeguard shape", () => {
   const result = run({ parameters: { targetRiskMultiple: 2 } });
 
@@ -154,12 +158,12 @@ test("same-bar stop and target remains conservatively stop-first even with timeB
 });
 
 test("invalid or ambiguous formula exit parameters fail closed", () => {
-  assert.throws(() => run({ parameters: { targetDistance: 0 } }), /NON_POSITIVE_NUMBER/u);
-  assert.throws(() => run({ parameters: { targetDistance: 1.01 } }), /INVALID_TARGET_DISTANCE/u);
-  assert.throws(() => run({ parameters: { timeBars: 0 } }), /INVALID_TIME_BARS/u);
-  assert.throws(() => run({ parameters: { timeBars: 1.5 } }), /INVALID_TIME_BARS/u);
+  assert.throws(() => run({ parameters: { targetDistance: 0 } }), hasCode("NON_POSITIVE_NUMBER"));
+  assert.throws(() => run({ parameters: { targetDistance: 1.01 } }), hasCode("INVALID_TARGET_DISTANCE"));
+  assert.throws(() => run({ parameters: { timeBars: 0 } }), hasCode("INVALID_TIME_BARS"));
+  assert.throws(() => run({ parameters: { timeBars: 1.5 } }), hasCode("INVALID_TIME_BARS"));
   assert.throws(
     () => run({ parameters: { targetDistance: 0.02, targetRiskMultiple: 2 } }),
-    /AMBIGUOUS_TARGET_MODEL/u,
+    hasCode("AMBIGUOUS_TARGET_MODEL"),
   );
 });
