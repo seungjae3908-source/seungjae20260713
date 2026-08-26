@@ -52,8 +52,8 @@ for (const line of sudoLines) {
 
 const forbidden = [
   [/apt-get\s+(?:upgrade|dist-upgrade|full-upgrade|remove|purge|autoremove)\b/i, 'package upgrade/removal'],
-  [/\b(?:systemctl|service)\b[^\n]*(?:start|restart|stop|enable|disable)\b/i, 'service mutation'],
-  [/\bpm2\s+(?:start|restart|reload|stop|delete|save)\b/i, 'PM2 mutation'],
+  [/^\s*(?:systemctl|service)\b[^\n]*(?:start|restart|stop|enable|disable)\b/im, 'service mutation'],
+  [/^\s*pm2\s+(?:start|restart|reload|stop|delete|save)\b/im, 'PM2 mutation'],
   [/\bexport\s+PATH=/i, 'PATH export'],
   [/\/(?:etc\/environment|etc\/profile(?:\.d)?|home\/[^\s]+\/\.bashrc)\b/i, 'persistent PATH/profile mutation'],
   [/\bpsql\b[^\n]*(?:INSERT|UPDATE|DELETE|ALTER|CREATE|DROP|TRUNCATE|GRANT|REVOKE)\b/i, 'SQL mutation'],
