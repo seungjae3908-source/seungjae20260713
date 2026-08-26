@@ -19,6 +19,7 @@ export class HttpUserTelegramTransport implements TelegramTransport {
           chat_id: chatId,
           text,
           disable_web_page_preview: true,
+          protect_content: true,
         }),
         signal: controller.signal,
       });
