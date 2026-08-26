@@ -12,6 +12,8 @@ import {
 const LINK_TOKEN_TTL_MS = 10 * 60 * 1000;
 const MAX_DELIVERY_ATTEMPTS = 3;
 const MAX_RETRY_DELAY_MS = 15 * 60 * 1000;
+const MAX_DIGEST_CLAIM_ITEMS = 50;
+const MAX_DIGEST_RENDER_ITEMS = 12;
 type PersonalAlertSender = (input: TelegramAlertInput) => Promise<TelegramAlertResult>;
 
 export function hashTelegramLinkToken(token: string): string { return createHash('sha256').update(token).digest('hex'); }
@@ -117,6 +119,68 @@ function nextRetryAt(now: Date, attempts: number): string {
   return new Date(now.getTime() + delay).toISOString();
 }
 
+function isValidPersonalAlertDelivery(delivery: NotificationDelivery, userId: string): boolean {
+  const payload = delivery.payload;
+  return (delivery.kind ?? 'EXECUTION_EVENT') === 'PERSONAL_ALERT'
+    && payload != null
+    && payload.event.userId === userId
+    && Boolean(payload.event.eventId)
+    && Boolean(payload.event.signalType)
+    && Boolean(payload.event.priority);
+}
+
+function compactDigestDetail(value: unknown): string {
+  return String(value ?? '').normalize('NFKC').replace(/\s+/gu, ' ').trim().slice(0, 180);
+}
+
+function digestButtons(deliveries: readonly NotificationDelivery[]): TelegramAlertInput['buttons'] {
+  const rows = deliveries.flatMap((delivery) => {
+    const buttons = delivery.payload?.alert.buttons;
+    return Array.isArray(buttons) && buttons.length ? [buttons[0]] : [];
+  }).slice(0, 8);
+  return rows.length ? rows : undefined;
+}
+
+function renderPersonalDigestAlert(
+  deliveries: readonly NotificationDelivery[],
+  destinationChatId: string,
+  now: Date,
+): TelegramAlertInput | null {
+  const valid = deliveries.filter((delivery) => isValidPersonalAlertDelivery(delivery, delivery.userId));
+  if (!valid.length) return null;
+  const digestKey = valid[0].payload?.digestKey?.trim() || '';
+  if (!digestKey || valid.some((delivery) => delivery.payload?.deliveryMode !== 'BATCHED' || delivery.payload?.digestKey !== digestKey)) {
+    return null;
+  }
+
+  const lines = [`📚 모아보기 ${valid.length}건`];
+  valid.slice(0, MAX_DIGEST_RENDER_ITEMS).forEach((delivery, index) => {
+    const payload = delivery.payload!;
+    const event = payload.event;
+    const subject = [event.market ?? 'GLOBAL', event.signalType, event.symbol ?? '']
+      .filter(Boolean)
+      .join(' · ');
+    const details = compactDigestDetail(payload.alert.details);
+    lines.push(`${index + 1}. ${subject}${details ? ` — ${details}` : ''}`);
+  });
+  if (valid.length > MAX_DIGEST_RENDER_ITEMS) {
+    lines.push(`외 ${valid.length - MAX_DIGEST_RENDER_ITEMS}건은 다음 모아보기에서 이어집니다.`);
+  }
+
+  const dueAt = valid[0].payload?.digestDueAt ?? valid[0].createdAt;
+  return {
+    type: 'intelligence_report',
+    details: lines.join('\n'),
+    timestamp: now.toISOString(),
+    destinationChatId,
+    dedupeKey: `personal-digest:${digestKey}:${dueAt}`,
+    duplicateWindowMs: 0,
+    cooldownMs: 0,
+    linkPreview: false,
+    buttons: digestButtons(valid),
+  };
+}
+
 export class UserBrokerTelegramService {
   constructor(
     private readonly repository: UserBrokerTelegramRepository,
@@ -181,7 +245,98 @@ export class UserBrokerTelegramService {
     const deliveryQueued = await this.repository.enqueueDelivery(delivery);
     return { inserted: true, deliveryQueued, deliveryId: deliveryQueued ? delivery.id : null };
   }
+
+  private async finishPersonalDigestFailure(
+    userId: string,
+    deliveries: readonly NotificationDelivery[],
+    now: Date,
+    code: string,
+  ): Promise<'RETRY_SCHEDULED' | 'DEAD_LETTER'> {
+    let retryScheduled = false;
+    for (const delivery of deliveries) {
+      const attempt = delivery.attempts + 1;
+      const dead = attempt >= MAX_DELIVERY_ATTEMPTS;
+      if (!dead) retryScheduled = true;
+      await this.repository.finishDelivery(
+        userId,
+        delivery.id,
+        dead ? 'DEAD_LETTER' : 'RETRY_SCHEDULED',
+        attempt,
+        dead ? null : nextRetryAt(now, attempt),
+        code.slice(0, 120),
+        now.toISOString(),
+      );
+    }
+    return retryScheduled ? 'RETRY_SCHEDULED' : 'DEAD_LETTER';
+  }
+
+  private async processPersonalDigest(userId: string, deliveryId: string, now: Date) {
+    const timestamp = now.toISOString();
+    const claimed = await this.repository.claimPersonalDigest(userId, deliveryId, timestamp, MAX_DIGEST_CLAIM_ITEMS);
+    if (!claimed.length) return { processed: false, state: null as null };
+
+    const invalid = claimed.filter((delivery) => !isValidPersonalAlertDelivery(delivery, userId));
+    for (const delivery of invalid) {
+      await this.repository.finishDelivery(
+        userId,
+        delivery.id,
+        'DEAD_LETTER',
+        delivery.attempts,
+        null,
+        'PERSONAL_DIGEST_PAYLOAD_INVALID',
+        timestamp,
+      );
+    }
+    const valid = claimed.filter((delivery) => isValidPersonalAlertDelivery(delivery, userId));
+    if (!valid.length) return { processed: true, state: 'DEAD_LETTER' as const };
+
+    const connection = await this.repository.getTelegramConnection(userId);
+    if (!connection || connection.status !== 'ACTIVE') {
+      for (const delivery of valid) {
+        await this.repository.finishDelivery(userId, delivery.id, 'DEAD_LETTER', delivery.attempts, null,
+          'TELEGRAM_DISCONNECTED', timestamp);
+      }
+      return { processed: true, state: 'DEAD_LETTER' as const };
+    }
+    if (!this.personalAlertSender) {
+      for (const delivery of valid) {
+        await this.repository.finishDelivery(userId, delivery.id, 'DEAD_LETTER', delivery.attempts, null,
+          'PERSONAL_ALERT_SENDER_UNAVAILABLE', timestamp);
+      }
+      return { processed: true, state: 'DEAD_LETTER' as const };
+    }
+
+    const digest = renderPersonalDigestAlert(valid, connection.telegramChatId, now);
+    if (!digest) {
+      for (const delivery of valid) {
+        await this.repository.finishDelivery(userId, delivery.id, 'DEAD_LETTER', delivery.attempts, null,
+          'PERSONAL_DIGEST_PAYLOAD_INVALID', timestamp);
+      }
+      return { processed: true, state: 'DEAD_LETTER' as const };
+    }
+
+    let result: TelegramAlertResult;
+    try {
+      result = await this.personalAlertSender(digest);
+    } catch {
+      result = { ok: false, attempts: 0, skipped: 'DELIVERY_FAILED' };
+    }
+    if (result.ok) {
+      for (const delivery of valid) {
+        await this.repository.finishDelivery(userId, delivery.id, 'SENT', delivery.attempts + 1, null, null, timestamp);
+      }
+      return { processed: true, state: 'SENT' as const };
+    }
+    const state = await this.finishPersonalDigestFailure(userId, valid, now, `TELEGRAM_${result.skipped}`);
+    return { processed: true, state };
+  }
+
   async processDelivery(userId: string, deliveryId: string, now = new Date()) {
+    const current = await this.repository.getDelivery(userId, deliveryId);
+    if ((current?.kind ?? 'EXECUTION_EVENT') === 'PERSONAL_ALERT' && current?.payload?.deliveryMode === 'BATCHED') {
+      return this.processPersonalDigest(userId, deliveryId, now);
+    }
+
     const timestamp = now.toISOString(); const claimed = await this.repository.claimDelivery(userId, deliveryId, timestamp);
     if (!claimed) return { processed: false, state: null as null };
     const connection = await this.repository.getTelegramConnection(userId);
