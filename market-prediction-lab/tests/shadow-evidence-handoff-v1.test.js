@@ -5,6 +5,13 @@ import test from "node:test";
 import { resolveCanonicalStrategyIdentity } from "../src/canonical-strategy-identity-v1.js";
 import { sha256Canonical } from "../src/research-cache-provenance.js";
 import {
+  CANONICAL_SHADOW_DRIFT_POLICY_ID,
+  CANONICAL_SHADOW_DRIFT_POLICY_SCHEMA_VERSION,
+  CANONICAL_SHADOW_DRIFT_POLICY_VERSION,
+  DRIFT_METRIC_COMPUTABLE_MINIMUM_N,
+  DRIFT_VERDICT_MINIMUM_N,
+} from "../src/canonical-shadow-drift-policy-v1.js";
+import {
   FROZEN_BLEND_WEIGHTS,
   buildCanonicalShadowDriftHandoffV1,
   buildDriftVerdictV1,
@@ -183,59 +190,65 @@ function inference(index = 0) {
   return rows[index % rows.length];
 }
 
-function makePendingObservations(context = resolutions()) {
+function makePendingObservations(context = resolutions(), count = 32) {
   const raw = [
     { return5: -0.7, atrPct: 1.7 },
     { return5: 0.1, atrPct: 2.0 },
     { return5: 0.7, atrPct: 2.4 },
     { return5: 1.4, atrPct: 2.8 },
   ];
-  return raw.map((features, index) => buildFutureShadowObservationV1({
-    observationId: `future-${index + 1}`,
-    observedAt: `2026-08-26T00:${String(index + 10).padStart(2, "0")}:00.000Z`,
-    signalAt: `2026-08-26T00:${String(index + 9).padStart(2, "0")}:00.000Z`,
-    symbol: index % 2 ? "ETHUSDT" : "BTCUSDT",
-    market: context.strategyResolution.strategyIdentity.market,
-    timeframe: context.strategyResolution.strategyIdentity.timeframe,
-    direction: context.strategyResolution.strategyIdentity.direction,
-    strategyIdentity: context.strategyResolution.strategyIdentity,
-    strategyIdentityDigest: context.strategyResolution.strategyIdentityDigest,
-    modelIdentity: context.modelResolution.modelIdentity,
-    modelIdentityDigest: context.modelResolution.modelIdentityDigest,
-    referenceIdentity: context.referenceResolution.referenceIdentity,
-    regime: { key: index < 2 ? "Bear" : "Bull" },
-    rawFeatureSnapshot: features,
-    normalizedFeatureSnapshot: {
-      return5: features.return5,
-      atrPct: (features.atrPct - 2) / 0.5,
-    },
-    inference: inference(index),
-    referencePrice: 100 + index,
-    priceProvenance: {
-      provider: "bitget-public-v2",
-      source: "fixture-public-market-data",
-      priceField: "close",
-      candleTimestamp: Date.parse(`2026-08-26T00:${String(index + 8).padStart(2, "0")}:00.000Z`),
-      signalAt: `2026-08-26T00:${String(index + 9).padStart(2, "0")}:00.000Z`,
-    },
-    dataFreshness: { status: "FRESH", ageMs: 500, maxAgeMs: 60_000 },
-    sourceProvenance: {
-      sourceKind: "GENUINE_SHADOW_OBSERVATION",
-      provider: "bitget-public-v2",
-      capturedAtObservationTime: true,
-      reconstructed: false,
-      synthetic: false,
-      replayed: false,
-      historicalBackfill: false,
-    },
-  }));
+  return Array.from({ length: count }, (_, index) => {
+    const features = raw[index % raw.length];
+    const observedAt = new Date(Date.parse("2026-08-26T00:10:00.000Z") + index * 60_000).toISOString();
+    const signalAt = new Date(Date.parse(observedAt) - 60_000).toISOString();
+    return buildFutureShadowObservationV1({
+      observationId: `future-${index + 1}`,
+      observedAt,
+      signalAt,
+      symbol: index % 2 ? "ETHUSDT" : "BTCUSDT",
+      market: context.strategyResolution.strategyIdentity.market,
+      timeframe: context.strategyResolution.strategyIdentity.timeframe,
+      direction: context.strategyResolution.strategyIdentity.direction,
+      strategyIdentity: context.strategyResolution.strategyIdentity,
+      strategyIdentityDigest: context.strategyResolution.strategyIdentityDigest,
+      modelIdentity: context.modelResolution.modelIdentity,
+      modelIdentityDigest: context.modelResolution.modelIdentityDigest,
+      referenceIdentity: context.referenceResolution.referenceIdentity,
+      regime: { key: index < 2 ? "Bear" : "Bull" },
+      rawFeatureSnapshot: features,
+      normalizedFeatureSnapshot: {
+        return5: features.return5,
+        atrPct: (features.atrPct - 2) / 0.5,
+      },
+      inference: inference(index),
+      referencePrice: 100 + index,
+      priceProvenance: {
+        provider: "bitget-public-v2",
+        source: "fixture-public-market-data",
+        priceField: "close",
+        candleTimestamp: Date.parse(signalAt) - 60_000,
+        signalAt,
+      },
+      dataFreshness: { status: "FRESH", ageMs: 500, maxAgeMs: 60_000 },
+      sourceProvenance: {
+        sourceKind: "GENUINE_SHADOW_OBSERVATION",
+        provider: "bitget-public-v2",
+        capturedAtObservationTime: true,
+        reconstructed: false,
+        synthetic: false,
+        replayed: false,
+        historicalBackfill: false,
+      },
+    });
+  });
 }
 
 function settlementFor(observation, index = 0, actualDirection = ["bullish", "bearish", "neutral", "bullish"][index % 4]) {
   const signalPrice = observation.referencePrice;
+  const observationTime = Date.parse(observation.observedAt);
   const futureCandles = [
-    { timestamp: Date.parse(`2026-08-26T00:${String(index + 20).padStart(2, "0")}:00.000Z`), high: signalPrice * 1.02, low: signalPrice * 0.99, close: signalPrice * 1.01 },
-    { timestamp: Date.parse(`2026-08-26T00:${String(index + 21).padStart(2, "0")}:00.000Z`), high: signalPrice * 1.03, low: signalPrice * 0.98, close: signalPrice * (index % 2 ? 0.99 : 1.02) },
+    { timestamp: observationTime + 20 * 60_000, high: signalPrice * 1.02, low: signalPrice * 0.99, close: signalPrice * 1.01 },
+    { timestamp: observationTime + 21 * 60_000, high: signalPrice * 1.03, low: signalPrice * 0.98, close: signalPrice * (index % 2 ? 0.99 : 1.02) },
   ];
   return buildFutureShadowSettlementEvidenceV1({
     observation,
@@ -243,8 +256,8 @@ function settlementFor(observation, index = 0, actualDirection = ["bullish", "be
     settlementPrice: futureCandles.at(-1).close,
     futureCandles,
     horizonBars: futureCandles.length,
-    outcomeAt: `2026-08-26T00:${String(index + 30).padStart(2, "0")}:00.000Z`,
-    settledAt: "2026-08-26T01:00:00.000Z",
+    outcomeAt: new Date(observationTime + 30 * 60_000).toISOString(),
+    settledAt: new Date(observationTime + 2 * 60 * 60_000).toISOString(),
     costEvidence: { applicable: false, reason: "SHADOW_NO_EXECUTION", commission: null, slippage: null, funding: null, netReturn: null },
     sourceProvenance: {
       sourceKind: "GENUINE_FUTURE_SHADOW_OUTCOME",
@@ -262,15 +275,85 @@ function makeObservations(context = resolutions()) {
   return makePendingObservations(context).map((observation, index) => settleFutureShadowObservationV1(observation, settlementFor(observation, index)));
 }
 
-function driftPolicy({ watch = { psi: 10, ksStatistic: 1, jsd: 1 }, brake = { psi: 20, ksStatistic: 2, jsd: 2, minimumTriggeredMetrics: 2 } } = {}) {
+function driftPolicy(context = resolutions(), { watch = { psi: 10, ksStatistic: 1, jsd: 1 }, brake = { psi: 20, ksStatistic: 2, jsd: 2, minimumTriggeredMetrics: 2 } } = {}) {
+  const rules = {
+    psi: { comparison: "GT", watch: watch.psi, brake: brake.psi },
+    ksStatistic: { comparison: "GT", watch: watch.ksStatistic, brake: brake.ksStatistic },
+    jsd: { comparison: "GT", watch: watch.jsd, brake: brake.jsd },
+    standardizedMeanShift: { comparison: "GT", watch: 10, brake: 20 },
+    stdRatio: { comparison: "GT", watch: 10, brake: 20 },
+    missingRatio: { comparison: "GT", watch: 1, brake: 1 },
+    clippingRatio: { comparison: "GT", watch: 1, brake: 1 },
+  };
   const body = {
-    schemaVersion: "canonical-drift-policy-v1",
-    source: "CANONICAL_EXISTING_POLICY",
+    schemaVersion: CANONICAL_SHADOW_DRIFT_POLICY_SCHEMA_VERSION,
+    policyId: CANONICAL_SHADOW_DRIFT_POLICY_ID,
+    policyVersion: CANONICAL_SHADOW_DRIFT_POLICY_VERSION,
+    source: "CANONICAL_REFERENCE_CALIBRATED_POLICY",
     hindsightTuned: false,
-    watch,
-    brake,
+    provenance: {
+      authority: "PREDICTION_LAB_CANONICAL_SHADOW_DRIFT_POLICY_V1",
+      metricPrimitives: "market-prediction-lab/src/shadow-feature-drift-diagnostics.js",
+      calibrationContract: "TRAIN_VALIDATION_CHRONOLOGICAL_CONTROL_LIMITS_V1",
+      referenceIdentity: context.referenceResolution.referenceIdentity,
+      referenceIdentityDigest: sha256Canonical(context.referenceResolution.referenceIdentity),
+      strategyIdentityDigest: context.strategyResolution.strategyIdentityDigest,
+      modelIdentityDigest: context.modelResolution.modelIdentityDigest,
+    },
+    generatedFrom: {
+      sources: ["TRAIN", "VALIDATION"],
+      trainSplitDigest: context.fixture.manifest.trainSplitDigest,
+      validationSplitDigest: context.fixture.manifest.validationSplitDigest,
+      rawArtifactDigest: context.fixture.manifest.rawArtifactDigest,
+      referenceN: 8,
+      calibrationWindowN: 30,
+      calibrationWindowCount: 20,
+      watchQuantile: 0.95,
+      brakeQuantile: 0.99,
+      currentShadowUsed: false,
+      settledShadowUsed: false,
+      finalHoldoutUsed: false,
+      replayUsed: false,
+      historicalBackfillUsed: false,
+      syntheticUsed: false,
+    },
+    frozenAt: "2026-08-25T00:00:00.000Z",
+    expiresAt: "2026-09-30T00:00:00.000Z",
+    applicableMarkets: [context.strategyResolution.strategyIdentity.market],
+    applicableTimeframes: [context.strategyResolution.strategyIdentity.timeframe],
+    minimumSamplePolicy: {
+      metricComputableMinimumN: DRIFT_METRIC_COMPUTABLE_MINIMUM_N,
+      verdictMinimumN: DRIFT_VERDICT_MINIMUM_N,
+      profitabilitySufficientMinimumN: null,
+      profitabilityPolicySeparated: true,
+      rationale: "TEST_FIXTURE",
+    },
+    rules,
+    multiSignalAggregation: {
+      watchMinimumMetricFamilies: 1,
+      brakeMinimumMetricFamilies: brake.minimumTriggeredMetrics,
+      crossFeatureDuplicatesCountOncePerMetricFamily: true,
+    },
+    failClosedRules: ["POLICY_MISSING", "INSUFFICIENT_SAMPLE"],
   };
   return { ...body, policyDigest: sha256Canonical(body) };
+}
+
+function measuredMetric(overrides = {}) {
+  return {
+    feature: "return5",
+    status: "MEASURED",
+    psi: 0,
+    ksStatistic: 0,
+    jsd: 0,
+    standardizedMeanShift: 0,
+    stdRatio: 1,
+    missingRatio: { reference: 0, shadow: 0, delta: 0 },
+    clippingRatio: { reference: 0, shadow: 0 },
+    reference: { std: 1 },
+    shadow: { std: 1 },
+    ...overrides,
+  };
 }
 
 function fullHandoff(overrides = {}) {
@@ -284,7 +367,7 @@ function fullHandoff(overrides = {}) {
     validationReferenceBytes: context.fixture.references.validationBytes,
     observations,
     expectedStrategyInput: context.fixture.strategy,
-    canonicalDriftPolicy: driftPolicy(),
+    canonicalDriftPolicy: driftPolicy(context),
     asOf: AS_OF,
     ...overrides,
   });
@@ -428,7 +511,7 @@ test("genuine future Shadow sample validates against canonical identity chain", 
   const observations = makeObservations(context);
   const result = validateFutureShadowObservationBatchV1({ observations, ...context, featureOrder: context.fixture.model.featureOrder });
   assert.equal(result.status, "VALID");
-  assert.equal(result.sampleN, 4);
+  assert.equal(result.sampleN, 32);
 });
 
 test("historical observation missing rule/model components stays MISSING_EVIDENCE", () => {
@@ -581,9 +664,9 @@ test("JSD deterministic reproduction uses genuine future Shadow features", () =>
 
 test("unsettled future observations do not enter directional quality or PSI KS JSD", () => {
   const context = resolutions();
-  const result = fullHandoff({ observations: makePendingObservations(context), canonicalDriftPolicy: driftPolicy() });
+  const result = fullHandoff({ observations: makePendingObservations(context), canonicalDriftPolicy: driftPolicy(context) });
   assert.equal(result.status, "MISSING_EVIDENCE");
-  assert.equal(result.observationEvidence.sampleN, 4);
+  assert.equal(result.observationEvidence.sampleN, 32);
   assert.equal(result.observationEvidence.settledN, 0);
   assert.equal(result.observationEvidence.driftInputN, 0);
   assert.equal(result.directionalQuality.RULE_ONLY.sampleN, 0);
@@ -603,6 +686,8 @@ test("Drift Verdict is NOT_EVALUABLE without canonical non-hindsight policy", ()
     strategyIdentityDigest: measured.strategyResolution.strategyIdentityDigest,
     modelIdentityDigest: measured.modelResolution.modelIdentityDigest,
     referenceIdentity: measured.referenceResolution.referenceIdentity,
+    market: measured.strategyResolution.strategyIdentity.market,
+    timeframe: measured.strategyResolution.strategyIdentity.timeframe,
     sampleN: measured.observationEvidence.sampleN,
     referenceN: measured.referenceResolution.trainSampleN + measured.referenceResolution.validationSampleN,
     freshness: measured.referenceResolution.freshness,
@@ -615,10 +700,10 @@ test("Drift Verdict is NOT_EVALUABLE without canonical non-hindsight policy", ()
 test("single metric cannot trigger BRAKE; canonical multi-signal policy is required", () => {
   const context = resolutions();
   const featureMetrics = [
-    { feature: "return5", status: "MEASURED", psi: 100, ksStatistic: 0, jsd: 0 },
-    { feature: "atrPct", status: "MEASURED", psi: 0, ksStatistic: 0, jsd: 0 },
+    measuredMetric({ feature: "return5", psi: 100 }),
+    measuredMetric({ feature: "atrPct" }),
   ];
-  const policy = driftPolicy({
+  const policy = driftPolicy(context, {
     watch: { psi: 10, ksStatistic: 0.5, jsd: 0.5 },
     brake: { psi: 20, ksStatistic: 0.8, jsd: 0.8, minimumTriggeredMetrics: 2 },
   });
@@ -628,7 +713,9 @@ test("single metric cannot trigger BRAKE; canonical multi-signal policy is requi
     strategyIdentityDigest: context.strategyResolution.strategyIdentityDigest,
     modelIdentityDigest: context.modelResolution.modelIdentityDigest,
     referenceIdentity: context.referenceResolution.referenceIdentity,
-    sampleN: 4,
+    market: context.strategyResolution.strategyIdentity.market,
+    timeframe: context.strategyResolution.strategyIdentity.timeframe,
+    sampleN: 30,
     referenceN: 8,
     freshness: context.referenceResolution.freshness,
     asOf: AS_OF,
@@ -644,9 +731,9 @@ test("Strategy Health handoff exposes canonical identities component quality dri
   assert.equal(handoff.schemaVersion, "prediction-lab-strategy-health-shadow-handoff-v1");
   assert.equal(handoff.strategyIdentityDigest, result.strategyResolution.strategyIdentityDigest);
   assert.equal(handoff.modelIdentityDigest, result.modelResolution.modelIdentityDigest);
-  assert.equal(handoff.ruleOnlyQuality.sampleN, 4);
-  assert.equal(handoff.modelOnlyQuality.sampleN, 4);
-  assert.equal(handoff.blendQuality.sampleN, 4);
+  assert.equal(handoff.ruleOnlyQuality.sampleN, 32);
+  assert.equal(handoff.modelOnlyQuality.sampleN, 32);
+  assert.equal(handoff.blendQuality.sampleN, 32);
   assert.ok(typeof handoff.evidenceDigest === "string" && handoff.evidenceDigest.length === 64);
   assert.equal(handoff.executionAuthority, "NONE");
 });

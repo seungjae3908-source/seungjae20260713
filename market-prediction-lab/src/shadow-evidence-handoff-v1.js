@@ -7,6 +7,7 @@ import {
   kolmogorovSmirnovDistance,
   populationStabilityIndex,
 } from "./shadow-feature-drift-diagnostics.js";
+import { evaluateCanonicalShadowDriftPolicyV1 } from "./canonical-shadow-drift-policy-v1.js";
 
 export const SHADOW_EVIDENCE_HANDOFF_SCHEMA_VERSION = "prediction-lab-shadow-evidence-handoff-v1";
 export const MODEL_IDENTITY_MAPPING_SCHEMA_VERSION = "prediction-lab-model-identity-mapping-v1";
@@ -800,25 +801,7 @@ function featureDriftMetrics({ featureName, referenceRecords, observations, mode
   });
 }
 
-function canonicalPolicy(policy) {
-  if (!object(policy) || policy.source !== "CANONICAL_EXISTING_POLICY" || policy.hindsightTuned !== false) return null;
-  const watch = object(policy.watch);
-  const brake = object(policy.brake);
-  const metrics = ["psi", "ksStatistic", "jsd"];
-  if (!watch || !brake || metrics.some((name) => !finite(watch[name]) || !finite(brake[name]) || watch[name] < 0 || brake[name] < watch[name])) return null;
-  if (!Number.isInteger(brake.minimumTriggeredMetrics) || brake.minimumTriggeredMetrics < 2) return null;
-  const body = {
-    schemaVersion: policy.schemaVersion,
-    source: policy.source,
-    hindsightTuned: false,
-    watch: { psi: watch.psi, ksStatistic: watch.ksStatistic, jsd: watch.jsd },
-    brake: { psi: brake.psi, ksStatistic: brake.ksStatistic, jsd: brake.jsd, minimumTriggeredMetrics: brake.minimumTriggeredMetrics },
-  };
-  if (!digest(policy.policyDigest) || policy.policyDigest !== sha256Canonical(body)) return null;
-  return deepFreeze({ ...body, policyDigest: policy.policyDigest });
-}
-
-export function buildDriftVerdictV1({ featureMetrics, canonicalDriftPolicy, strategyIdentityDigest, modelIdentityDigest, referenceIdentity, sampleN, futureSampleN = sampleN, settledN = sampleN, referenceN, freshness, asOf } = {}) {
+export function buildDriftVerdictV1({ featureMetrics, canonicalDriftPolicy, strategyIdentityDigest, modelIdentityDigest, referenceIdentity, market, timeframe, sampleN, futureSampleN = sampleN, settledN = sampleN, referenceN, freshness, asOf } = {}) {
   const metrics = Array.isArray(featureMetrics) ? featureMetrics : [];
   if (!metrics.length || metrics.some((item) => item.status !== "MEASURED" || !finite(item.psi) || !finite(item.ksStatistic) || !finite(item.jsd))) {
     return deepFreeze({
@@ -837,12 +820,24 @@ export function buildDriftVerdictV1({ featureMetrics, canonicalDriftPolicy, stra
       evidenceDigest: null,
       asOf,
       freshness,
+      metricComputable: false,
+      verdictSufficient: false,
     });
   }
-  const policy = canonicalPolicy(canonicalDriftPolicy);
-  if (!policy) return deepFreeze({
+  const evaluated = evaluateCanonicalShadowDriftPolicyV1({
+    policy: canonicalDriftPolicy,
+    featureMetrics: metrics,
+    sampleN: settledN,
+    strategyIdentityDigest,
+    modelIdentityDigest,
+    referenceIdentity,
+    market,
+    timeframe,
+    asOf,
+  });
+  if (!evaluated.valid) return deepFreeze({
     status: "NOT_EVALUABLE",
-    reason: "CANONICAL_DRIFT_POLICY_MISSING",
+    reason: evaluated.reason,
     strategyIdentityDigest,
     modelIdentityDigest,
     referenceIdentity,
@@ -854,25 +849,35 @@ export function buildDriftVerdictV1({ featureMetrics, canonicalDriftPolicy, stra
     jsd: null,
     strongestDriftingFeatures: [],
     evidenceDigest: null,
+    policyId: evaluated.policy?.policyId ?? null,
+    policyVersion: evaluated.policy?.policyVersion ?? null,
+    policyDigest: evaluated.policy?.policyDigest ?? null,
+    policyFrozenAt: evaluated.policy?.frozenAt ?? null,
+    metricComputable: evaluated.metricComputable ?? true,
+    verdictSufficient: evaluated.verdictSufficient ?? false,
+    metricComputableMinimumN: evaluated.metricComputableMinimumN ?? evaluated.policy?.minimumSamplePolicy?.metricComputableMinimumN ?? null,
+    verdictMinimumN: evaluated.verdictMinimumN ?? evaluated.policy?.minimumSamplePolicy?.verdictMinimumN ?? null,
+    profitabilitySufficientMinimumN: null,
     asOf,
     freshness,
   });
-  const watchSignals = [];
-  const brakeSignals = [];
-  for (const item of metrics) {
-    for (const metricName of ["psi", "ksStatistic", "jsd"]) {
-      if (item[metricName] >= policy.watch[metricName]) watchSignals.push(`${item.feature}:${metricName}`);
-      if (item[metricName] >= policy.brake[metricName]) brakeSignals.push(`${item.feature}:${metricName}`);
-    }
-  }
-  const status = brakeSignals.length >= policy.brake.minimumTriggeredMetrics ? "BRAKE" : (watchSignals.length ? "WATCH" : "STABLE");
+  const status = evaluated.status;
   const strongestDriftingFeatures = [...metrics]
     .sort((a, b) => Math.max(b.psi, b.ksStatistic, b.jsd) - Math.max(a.psi, a.ksStatistic, a.jsd) || a.feature.localeCompare(b.feature))
     .slice(0, 5)
-    .map((item) => Object.freeze({ feature: item.feature, psi: item.psi, ks: item.ksStatistic, jsd: item.jsd }));
+    .map((item) => Object.freeze({
+      feature: item.feature,
+      psi: item.psi,
+      ks: item.ksStatistic,
+      jsd: item.jsd,
+      standardizedMeanShift: item.standardizedMeanShift,
+      stdRatio: item.stdRatio,
+      missingRatio: item.missingRatio,
+      clippingRatio: item.clippingRatio,
+    }));
   const body = {
     status,
-    reason: status === "STABLE" ? "CANONICAL_POLICY_WITHIN_LIMITS" : (status === "WATCH" ? "CANONICAL_POLICY_WATCH_SIGNAL" : "CANONICAL_POLICY_MULTI_SIGNAL_BRAKE"),
+    reason: evaluated.reason,
     strategyIdentityDigest,
     modelIdentityDigest,
     referenceIdentity,
@@ -880,10 +885,28 @@ export function buildDriftVerdictV1({ featureMetrics, canonicalDriftPolicy, stra
     futureSampleN,
     settledN,
     referenceN,
+    psi: evaluated.maxima.psi,
+    ksStatistic: evaluated.maxima.ksStatistic,
+    jsd: evaluated.maxima.jsd,
+    standardizedMeanShift: evaluated.maxima.standardizedMeanShift,
+    stdRatioLogDeviation: evaluated.maxima.stdRatio,
+    missingRatio: evaluated.maxima.missingRatio,
+    clippingRatio: evaluated.maxima.clippingRatio,
     strongestDriftingFeatures,
-    watchSignals,
-    brakeSignals,
-    policyDigest: policy.policyDigest,
+    watchSignals: evaluated.watchSignals,
+    brakeSignals: evaluated.brakeSignals,
+    watchMetricFamilies: evaluated.watchMetricFamilies,
+    brakeMetricFamilies: evaluated.brakeMetricFamilies,
+    policyId: evaluated.policy.policyId,
+    policyVersion: evaluated.policy.policyVersion,
+    policyDigest: evaluated.policy.policyDigest,
+    policyFrozenAt: evaluated.policy.frozenAt,
+    policyGeneratedFrom: evaluated.policy.generatedFrom,
+    metricComputable: evaluated.metricComputable,
+    verdictSufficient: evaluated.verdictSufficient,
+    metricComputableMinimumN: evaluated.policy.minimumSamplePolicy.metricComputableMinimumN,
+    verdictMinimumN: evaluated.policy.minimumSamplePolicy.verdictMinimumN,
+    profitabilitySufficientMinimumN: null,
     asOf,
     freshness,
   };
@@ -1028,6 +1051,8 @@ export function buildCanonicalShadowDriftHandoffV1({
     strategyIdentityDigest: strategyResolution.strategyIdentityDigest,
     modelIdentityDigest: modelResolution.modelIdentityDigest,
     referenceIdentity: referenceResolution.referenceIdentity,
+    market: strategyResolution.strategyIdentity.market,
+    timeframe: strategyResolution.strategyIdentity.timeframe,
     sampleN: settledObservations.length,
     futureSampleN: observationResolution.sampleN,
     settledN: settledObservations.length,
