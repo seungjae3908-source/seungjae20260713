@@ -81,6 +81,8 @@ test("publisher workflow clean-skips artifactless source runs before mutation ga
 
   const classifier = workflow.slice(classifierStart, publishStart);
   const publisher = workflow.slice(publishStart);
+  assert.match(classifier, /const artifacts = await github\.paginate\(/);
+  assert.doesNotMatch(classifier, /response\.data\.artifacts/);
   assert.match(classifier, /matches\.length === 0/);
   assert.match(classifier, /matches\.length === 1 \? 'true' : 'false'/);
   assert.match(classifier, /matches\.length > 1/);
