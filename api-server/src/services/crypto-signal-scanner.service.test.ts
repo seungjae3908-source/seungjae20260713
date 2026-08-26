@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import './crypto-futures-directional-scanner.service.test';
 import {
   createCryptoSignalScannerService,
   type CryptoCandle,
