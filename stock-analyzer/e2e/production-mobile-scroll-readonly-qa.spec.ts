@@ -28,6 +28,18 @@ const ROUTES = [
 
 const PROJECTS = new Set([
   'prod-desktop-1440',
+  'prod-fold-768',
+  'prod-tablet-800',
+  'prod-mobile-320',
+  'prod-mobile-360',
+  'prod-mobile-390',
+  'prod-mobile-412',
+  'prod-mobile-430',
+]);
+
+const TOUCH_PROJECTS = new Set([
+  'prod-fold-768',
+  'prod-tablet-800',
   'prod-mobile-320',
   'prod-mobile-360',
   'prod-mobile-390',
@@ -142,8 +154,8 @@ test.describe('Production root scroll and mobile geometry read-only QA', () => {
     expect(findings.filter((item) => item.navigationError), 'critical route navigation failed').toEqual([]);
     expect(findings.filter((item) => item.horizontalOverflowPx != null && item.horizontalOverflowPx > 2), 'critical route horizontal overflow detected').toEqual([]);
     expect(findings.filter((item) => item.documentScrollable === true && item.documentScrollMoved === false), 'document should scroll but root scroll did not move').toEqual([]);
-    if (testInfo.project.name.startsWith('prod-mobile-')) {
-      expect(findings.filter((item) => item.undersizedInteractiveCount != null && item.undersizedInteractiveCount > 0), 'mobile interactive controls below 28px detected').toEqual([]);
+    if (TOUCH_PROJECTS.has(testInfo.project.name)) {
+      expect(findings.filter((item) => item.undersizedInteractiveCount != null && item.undersizedInteractiveCount > 0), 'touch interactive controls below 28px detected').toEqual([]);
     }
     expect(diagnostics, 'browser/runtime failures detected during root-scroll audit').toEqual([]);
   });
