@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import './scanner-adaptive-threshold-arena.smoke.test';
 import './forward-recommendation-observer.service.test';
 import {
+  calculatePositionBacktestMetrics,
   calculateScalpingBacktestMetrics,
   calculateSwingBacktestMetrics,
   type ScannerBacktestTrade,
@@ -12,6 +13,12 @@ const trades: ScannerBacktestTrade[] = [
   { returnPercent: 1.2, holdingMinutes: 8, maePercent: -0.4, mfePercent: 1.5, slippageBps: 4 },
   { returnPercent: -0.6, holdingMinutes: 12, maePercent: -0.8, mfePercent: 0.3, slippageBps: 7 },
   { returnPercent: 2.1, holdingMinutes: 240, maePercent: -0.7, mfePercent: 2.8, slippageBps: 5 },
+];
+
+const positionTrades: ScannerBacktestTrade[] = [
+  { returnPercent: 12, holdingMinutes: 7 * 24 * 60, maePercent: -4, mfePercent: 15 },
+  { returnPercent: -5, holdingMinutes: 30 * 24 * 60, maePercent: -7, mfePercent: 2 },
+  { returnPercent: 8, holdingMinutes: 14 * 24 * 60, maePercent: -3, mfePercent: 11 },
 ];
 
 test('scalping metrics retain execution-oriented and profitability fields', () => {
@@ -40,6 +47,24 @@ test('swing metrics retain holding, downside and risk-adjusted fields without sc
   assert.ok(result.averageMaePercent != null);
   assert.ok(result.maxDrawdownPercent != null && result.maxDrawdownPercent < 0);
   assert.ok(result.tradeSharpe != null);
+  assert.equal('averageSlippageBps' in result, false);
+});
+
+test('position metrics retain long-horizon holding, excursion and profitability fields', () => {
+  const result = calculatePositionBacktestMetrics(positionTrades);
+  assert.equal(result.strategy, 'position');
+  assert.equal(result.trades, 3);
+  assert.equal(result.medianHoldingDays, 14);
+  assert.equal(result.averageWinPercent, 10);
+  assert.equal(result.averageLossPercent, -5);
+  assert.equal(result.averageMfePercent, 28 / 3);
+  assert.equal(result.averageMaePercent, -14 / 3);
+  assert.ok(result.expectancyPercent > 0);
+  assert.ok(result.profitFactor != null && result.profitFactor > 1);
+  assert.ok(result.maxDrawdownPercent != null && result.maxDrawdownPercent < 0);
+  assert.ok(result.tradeSharpe != null && Number.isFinite(result.tradeSharpe));
+  assert.ok(result.netReturnPercent > 0);
+  assert.equal('medianHoldingHours' in result, false);
   assert.equal('averageSlippageBps' in result, false);
 });
 
