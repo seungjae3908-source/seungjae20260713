@@ -182,6 +182,47 @@ test('missing, tampered, unsettled, or stale canonical handoff never falls back 
   assert.equal(unsettledResult.inputs.shadowQuality.reason, 'CANONICAL_SHADOW_SETTLED_DIRECTIONAL_QUALITY_MISSING');
 });
 
+test('forward evidence reuses canonical minimum sample policy and exposes exact deficits', () => {
+  const result = bindCanonicalStrategyHealth(overview({
+    shadow: { groups: [], canonicalHandoffs: [{ group: '15m', handoff: canonicalShadowHandoff({ settledN: 2 }) }] },
+    paper: {
+      runtime: { present: true, safetyEvidenceComplete: true },
+      ledger: { present: true, cycleCount: 1, sampleCount: 1, positionCount: 1, settlementCount: 0 },
+    },
+  }));
+
+  assert.equal(result.status, 'MISSING_EVIDENCE');
+  assert.equal(result.inputs.shadowQuality.reason, 'CANONICAL_SHADOW_MINIMUM_SAMPLE_DEFICIT');
+  assert.equal(result.inputs.shadowQuality.observedCount, 2);
+  assert.equal(result.inputs.shadowQuality.minimumRequiredCount, 30);
+  assert.equal(result.inputs.shadowQuality.deficitCount, 28);
+
+  assert.equal(result.inputs.naturalPaper.reason, 'NATURAL_SAMPLE_MINIMUM_DEFICIT');
+  assert.equal(result.inputs.naturalPaper.observedCount, 1);
+  assert.equal(result.inputs.naturalPaper.minimumRequiredCount, 30);
+  assert.equal(result.inputs.naturalPaper.deficitCount, 29);
+
+  assert.equal(result.inputs.settlement.reason, 'NATURAL_SETTLEMENT_MINIMUM_DEFICIT');
+  assert.equal(result.inputs.settlement.observedCount, 0);
+  assert.equal(result.inputs.settlement.minimumRequiredCount, 30);
+  assert.equal(result.inputs.settlement.deficitCount, 30);
+});
+
+test('forward evidence becomes healthy only after the canonical minimum is actually reached', () => {
+  const result = bindCanonicalStrategyHealth(overview({
+    shadow: { groups: [], canonicalHandoffs: [{ group: '15m', handoff: canonicalShadowHandoff({ settledN: 30 }) }] },
+    paper: {
+      runtime: { present: true, safetyEvidenceComplete: true },
+      ledger: { present: true, cycleCount: 2, sampleCount: 30, positionCount: 1, settlementCount: 30 },
+    },
+  }));
+
+  assert.equal(result.status, 'HEALTHY');
+  assert.equal(result.inputs.shadowQuality.deficitCount, 0);
+  assert.equal(result.inputs.naturalPaper.deficitCount, 0);
+  assert.equal(result.inputs.settlement.deficitCount, 0);
+});
+
 test('profitability false and Champion NONE remain explicit missing evidence', () => {
   const profitability = bindCanonicalStrategyHealth(overview({ profitability: { proven: false } }));
   assert.equal(profitability.status, 'MISSING_EVIDENCE');
