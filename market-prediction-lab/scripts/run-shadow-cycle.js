@@ -23,6 +23,7 @@ import {
 } from "../src/eth-v6-forward-validation.js";
 import { FROZEN_CANDIDATE_MANIFEST_SHA256 } from "../src/final-holdout-evaluator.js";
 import { predictDeployedTinyModel } from "../src/deployment-inference.js";
+import { buildCanonicalShadowDriftPolicyV1 } from "../src/canonical-shadow-drift-policy-v1.js";
 import {
   buildCanonicalShadowDriftHandoffV1,
   buildFutureShadowObservationV1,
@@ -96,6 +97,12 @@ async function loadCanonicalEvidenceContext(referenceEvidenceRoot, group, cycleT
   const asOf = new Date(cycleTime).toISOString();
   const referenceResolution = resolveTrainValidationReferenceV1({ producerManifest, trainReferenceBytes, validationReferenceBytes, asOf });
   if (!referenceResolution.valid) return Object.freeze({ valid: false, status: referenceResolution.status, reason: referenceResolution.reason });
+  const policyResolution = buildCanonicalShadowDriftPolicyV1({
+    producerManifest,
+    strategyResolution,
+    modelResolution,
+    referenceResolution,
+  });
   return Object.freeze({
     valid: true,
     producerManifest,
@@ -105,6 +112,7 @@ async function loadCanonicalEvidenceContext(referenceEvidenceRoot, group, cycleT
     strategyResolution,
     modelResolution,
     referenceResolution,
+    policyResolution,
     asOf,
   });
 }
@@ -520,7 +528,7 @@ async function processGroup({ client, config, previousGroupState, cycleTime, ref
       observations: canonicalObservations,
       expectedStrategyInput: canonicalContext.strategyResolution.strategyIdentity,
       expectedModelIdentity: canonicalContext.modelResolution.modelIdentity,
-      canonicalDriftPolicy: null,
+      canonicalDriftPolicy: canonicalContext.policyResolution.valid ? canonicalContext.policyResolution.policy : null,
       asOf: canonicalContext.asOf,
     });
     canonicalEvidence = {
