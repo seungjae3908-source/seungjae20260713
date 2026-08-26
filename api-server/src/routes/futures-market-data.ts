@@ -11,7 +11,10 @@ import {
   CryptoFuturesDirectionalScannerService,
   type FuturesDirectionalView,
 } from '../services/crypto-futures-directional-scanner.service';
-import { scannerRequestGuard } from '../services/scanner-request-guard.service';
+import {
+  ScannerRequestGuardError,
+  scannerRequestGuard,
+} from '../services/scanner-request-guard.service';
 import type { ScannerStrategyMode } from '../services/scanner-signal.types';
 
 const router: IRouter = Router();
@@ -139,12 +142,15 @@ router.get('/crypto/futures/scanner/directional', async (req: AuthenticatedReque
     return res.json(result);
   } catch (error) {
     if (controller.signal.aborted || res.writableEnded) return;
-    const retryAfterSeconds = typeof error === 'object' && error && 'retryAfterSeconds' in error
-      ? Number((error as { retryAfterSeconds?: unknown }).retryAfterSeconds)
-      : null;
-    if (retryAfterSeconds != null && Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
-      res.setHeader('Retry-After', String(Math.ceil(retryAfterSeconds)));
-      return res.status(429).json({ ok: false, error: 'SCANNER_REQUEST_LIMITED', retryAfterSeconds: Math.ceil(retryAfterSeconds) });
+    if (error instanceof ScannerRequestGuardError) {
+      res.setHeader('Retry-After', String(error.retryAfterSeconds));
+      return res.status(error.status).json({
+        ok: false,
+        error: error.code,
+        retryAfterSeconds: error.retryAfterSeconds,
+        orderSubmitted: false,
+        exchangeRequestSent: false,
+      });
     }
     return res.status(500).json({ ok: false, error: 'FUTURES_DIRECTIONAL_SCAN_FAILED', message: error instanceof Error ? error.message : 'unknown' });
   } finally {
