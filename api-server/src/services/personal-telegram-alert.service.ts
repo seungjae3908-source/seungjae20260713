@@ -120,11 +120,18 @@ export async function deliverPersonalTelegramAlert(
       transport: null,
       safety: TELEGRAM_POLICY_SAFETY,
     };
-    if (decision.action !== 'IMMEDIATE') {
+    if (decision.action === 'SUPPRESSED') {
       return { status: 'POLICY', reason: null, policy, deliveryQueued: false, deliveryId: null };
     }
 
+    const batched = decision.action === 'BATCHED';
+    if (batched && (!decision.digestKey || !decision.digestWindowMs || decision.digestWindowMs <= 0)) {
+      return { status: 'SKIPPED', reason: 'STORAGE_UNAVAILABLE', policy: null };
+    }
     const timestamp = now.toISOString();
+    const digestDueAt = batched
+      ? new Date(now.getTime() + (decision.digestWindowMs ?? 0)).toISOString()
+      : null;
     const deliveryId = randomUUID();
     const deliveryQueued = await outboxRepository.enqueueDelivery({
       id: deliveryId,
@@ -133,7 +140,7 @@ export async function deliverPersonalTelegramAlert(
       dedupeKey: `personal-alert:${input.event.eventId}`,
       state: 'PENDING',
       attempts: 0,
-      nextRetryAt: null,
+      nextRetryAt: digestDueAt,
       lastErrorCode: null,
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -141,6 +148,10 @@ export async function deliverPersonalTelegramAlert(
       payload: {
         event: structuredClone(input.event),
         alert: storedAlert(input.alert),
+        deliveryMode: batched ? 'BATCHED' : 'IMMEDIATE',
+        digestKey: batched ? decision.digestKey : null,
+        digestWindowMs: batched ? decision.digestWindowMs : null,
+        digestDueAt,
       },
     });
     return {
