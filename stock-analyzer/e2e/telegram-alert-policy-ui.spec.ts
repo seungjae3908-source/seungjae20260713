@@ -7,6 +7,7 @@ function source(relativePath: string) {
 }
 
 const panel = source('src/components/user-broker-telegram-panel.tsx');
+const route = source('../api-server/src/routes/user-broker-telegram.ts');
 
 test('Telegram settings center exposes the existing user-bound alert policy instead of inventing a second policy engine', () => {
   expect(panel).toContain("'/api/user-integrations/telegram-policy'");
@@ -56,6 +57,32 @@ test('Telegram settings center exposes urgency, quiet hours, digest and bounded 
   expect(panel).toContain("<option value=\"America/New_York\">뉴욕</option>");
   expect(panel).toContain("deliveryMode === 'BATCHED'");
   expect(panel).toContain('sameSymbolRepeatLimit');
+});
+
+test('personal Telegram runtime health is sanitized and has zero trading authority', () => {
+  expect(route).toContain('function telegramRuntimeState()');
+  expect(route).toContain('deliveryReady');
+  expect(route).toContain('linkingReady');
+  expect(route).toContain('stockRoomReady');
+  expect(route).toContain('cryptoRoomReady');
+  expect(route).toContain("orderAuthority: 'NONE' as const");
+  expect(route).toContain('privateTradingApiAllowed: false as const');
+  expect(route).toContain('realOrderAllowed: false as const');
+  expect(route).not.toContain('TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN');
+  expect(route).not.toContain('TELEGRAM_WEBHOOK_SECRET: process.env.TELEGRAM_WEBHOOK_SECRET');
+});
+
+test('personal Telegram test endpoint sends explicit test-only content to the already linked member chat', () => {
+  expect(route).toContain("userBrokerTelegramRouter.post('/telegram/test'");
+  expect(route).toContain("connection.status !== 'ACTIVE'");
+  expect(route).toContain("error: 'TELEGRAM_NOT_CONNECTED'");
+  expect(route).toContain("details: '[TEST] Telegram 연결 확인 메시지입니다. 투자 신호가 아니며 실제 주문/체결이 아닙니다.'");
+  expect(route).toContain('destinationChatId: connection.telegramChatId');
+  expect(route).toContain('duplicateWindowMs: 0');
+  expect(route).toContain('cooldownMs: 0');
+  expect(route).toContain('investmentSignal: false');
+  expect(route).toContain("orderAuthority: 'NONE'");
+  expect(route).not.toContain('ordersSubmitted: 1');
 });
 
 test('Telegram settings remain responsive and do not add Telegram-side trade execution controls', () => {
