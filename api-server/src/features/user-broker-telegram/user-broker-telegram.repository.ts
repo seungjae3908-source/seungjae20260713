@@ -27,6 +27,7 @@ export interface UserBrokerTelegramRepository {
   listDeliveries(userId: string): Promise<NotificationDelivery[]>;
   listPersonalAlertHistory(userId: string, since: string, limit?: number): Promise<TelegramPolicyDeliveryHistory[]>;
   claimDelivery(userId: string, deliveryId: string, updatedAt: string): Promise<NotificationDelivery | null>;
+  claimPersonalDigest(userId: string, deliveryId: string, updatedAt: string, limit?: number): Promise<NotificationDelivery[]>;
   finishDelivery(
     userId: string,
     deliveryId: string,
@@ -199,6 +200,34 @@ export class InMemoryUserBrokerTelegramRepository implements UserBrokerTelegramR
     current.state = 'SENDING';
     current.updatedAt = updatedAt;
     return copy(current);
+  }
+
+  async claimPersonalDigest(userId: string, deliveryId: string, updatedAt: string, limit = 50) {
+    const root = this.deliveries.get(`${userId}:${deliveryId}`);
+    const digestKey = root?.payload?.digestKey?.trim() || null;
+    if (!root
+      || (root.kind ?? 'EXECUTION_EVENT') !== 'PERSONAL_ALERT'
+      || root.payload?.deliveryMode !== 'BATCHED'
+      || !digestKey
+      || !['PENDING', 'RETRY_SCHEDULED', 'FAILED'].includes(root.state)
+      || (root.nextRetryAt != null && root.nextRetryAt > updatedAt)) {
+      return [];
+    }
+    const bounded = Math.min(50, Math.max(1, Number.isInteger(limit) ? limit : 50));
+    const claimed = [...this.deliveries.values()]
+      .filter((delivery) => delivery.userId === userId
+        && (delivery.kind ?? 'EXECUTION_EVENT') === 'PERSONAL_ALERT'
+        && delivery.payload?.deliveryMode === 'BATCHED'
+        && delivery.payload?.digestKey === digestKey
+        && ['PENDING', 'RETRY_SCHEDULED', 'FAILED'].includes(delivery.state)
+        && (delivery.nextRetryAt == null || delivery.nextRetryAt <= updatedAt))
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))
+      .slice(0, bounded);
+    claimed.forEach((delivery) => {
+      delivery.state = 'SENDING';
+      delivery.updatedAt = updatedAt;
+    });
+    return claimed.map(copy);
   }
 
   async finishDelivery(
@@ -471,6 +500,18 @@ export function createSupabaseUserBrokerTelegramRepository(): UserBrokerTelegram
         .maybeSingle();
       if (error) throw databaseError();
       return data ? toDelivery(data as Record<string, unknown>) : null;
+    },
+
+    async claimPersonalDigest(userId, deliveryId, updatedAt, limit = 50) {
+      const bounded = Math.min(50, Math.max(1, Number.isInteger(limit) ? limit : 50));
+      const { data, error } = await secureClient().rpc('claim_personal_telegram_digest', {
+        p_user_id: userId,
+        p_delivery_id: deliveryId,
+        p_now: updatedAt,
+        p_limit: bounded,
+      });
+      if (error) throw databaseError();
+      return (data ?? []).map((row) => toDelivery(row as Record<string, unknown>));
     },
 
     async finishDelivery(userId, deliveryId, state, attempts, nextRetryAt, lastErrorCode, updatedAt) {
