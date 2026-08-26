@@ -187,7 +187,7 @@ function tournamentInput(overrides = {}) {
     formulaCandidates: formulaCandidates(),
     generationBudget: generationBudget(),
     search: {
-      method: "GRID",
+      method: "BOUNDED_GRID",
       seed: 7,
       requestedCandidates: 1,
       datasetIdentity: TRAIN_DATASET,
@@ -405,6 +405,14 @@ test("canonical FSM enforces exact stage order, no skip, and no re-entry after n
   fsm = advanceResearchTournamentFsmV1(fsm, { stage: "FORMULA_CANDIDATE", status: "PASS" });
   fsm = advanceResearchTournamentFsmV1(fsm, { stage: "SANITY_CHECK", status: "FAIL" });
   assert.throws(() => advanceResearchTournamentFsmV1(fsm, { stage: "HISTORICAL_BACKTEST", status: "PASS" }), /TERMINAL_REENTRY/);
+
+  for (const gateStatus of ["MISSING_EVIDENCE", "NOT_EVALUABLE"]) {
+    let gated = createResearchTournamentFsmV1({ strategyHash: formula.formulaHash, observedAt: OBSERVED_AT });
+    gated = advanceResearchTournamentFsmV1(gated, { stage: "FORMULA_CANDIDATE", status: "PASS" });
+    gated = advanceResearchTournamentFsmV1(gated, { stage: "SANITY_CHECK", status: gateStatus });
+    assert.equal(gated.records.at(-1).status, gateStatus);
+    assert.throws(() => advanceResearchTournamentFsmV1(gated, { stage: "HISTORICAL_BACKTEST", status: "PASS" }), /TERMINAL_REENTRY/);
+  }
 });
 
 test("FormulaCandidateV1 automatically traverses the strict tournament and only then becomes RESEARCH_SURVIVOR", async () => {
@@ -698,7 +706,7 @@ test("#690 one-pass adapter is execution-equivalent and does not create a second
   const generation = generateBoundedFormulaCandidatesV1({
     formulaCandidates: [formula],
     budget: generationBudget(),
-    search: { method: "GRID", seed: 7, requestedCandidates: 1, datasetIdentity: TRAIN_DATASET, finalHoldoutAccess: false },
+    search: { method: "BOUNDED_GRID", seed: 7, requestedCandidates: 1, datasetIdentity: TRAIN_DATASET, finalHoldoutAccess: false },
   });
   const generated = generation.generatedCandidates[0];
   const start = Date.UTC(2020, 0, 1);
@@ -791,3 +799,4 @@ test("read model exposes compact tournament counts and ranking never includes mi
   assert.equal(missing.ranking.length, 0);
   assert.equal(missing.researchSurvivorCount, 0);
 });
+
