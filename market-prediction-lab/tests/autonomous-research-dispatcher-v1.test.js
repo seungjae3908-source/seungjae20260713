@@ -26,6 +26,7 @@ function historical(overrides = {}) {
     timeframe: "1d",
     provider: "PUBLIC_FIXTURE",
     providerVersion: "v1",
+    sourceType: "public_fixture_ohlcv",
     requestedStartTime: 1_577_836_800_000,
     requestedEndTime: 1_609_459_200_000,
     datasetDigest: DATA_DIGEST,
@@ -33,6 +34,17 @@ function historical(overrides = {}) {
     candleCount: 366,
     actualStartTime: 1_577_836_800_000,
     actualEndTime: 1_609_372_800_000,
+    adjustmentMode: "none",
+    timezone: "UTC",
+    splitContract: { version: "split-v1", finalHoldoutExcluded: true, selectionUsesFinalHoldout: false },
+    loaderVersion: "dispatcher-public-fixture-v1",
+    generatedAt: "2026-08-21T03:00:00.000Z",
+    missingIntervalCount: 0,
+    duplicateRowCount: 0,
+    dataQualityStatus: "VERIFIED",
+    closedCandlesOnly: true,
+    duplicatesHandled: true,
+    missingIntervalsDetected: true,
     ...overrides,
   });
 }
@@ -213,3 +225,4 @@ test("Research Production plan is executable-only-after-approval and never activ
   assert.equal(prepared.jobSpec.expectedProfitPriorityAllowed, false);
   assert.equal(prepared.safety.LIVE_TRADING, false);
 });
+
