@@ -1,5 +1,8 @@
 import type { Candle } from '../sample/types';
-import { evaluateScannerDataQuality } from './scanner-data-quality.service';
+import {
+  evaluateScannerDataQuality,
+  type ScannerProviderObservation,
+} from './scanner-data-quality.service';
 import { applyScannerMarketProfile, type ScannerMarketProfile } from './scanner-market-profile-overlay.service';
 import {
   runScannerQuantStrategy,
@@ -68,6 +71,36 @@ function marketProfileFor(card: ScannerSignalCard): ScannerMarketProfile {
   return card.market === 'US' ? 'US_STOCK' : 'KR_STOCK';
 }
 
+function futuresPriceObservations(
+  input: ScannerQuantHardeningInput,
+  qualityCandles: Candle[],
+): ScannerProviderObservation[] | undefined {
+  if (input.card.assetClass !== 'coin_futures') return undefined;
+  const latest = qualityCandles.at(-1);
+  if (
+    !latest
+    || !Number.isFinite(input.card.price)
+    || input.card.price <= 0
+    || !Number.isFinite(latest.close)
+    || latest.close <= 0
+  ) return undefined;
+  const provider = input.card.exchange?.trim() || 'CRYPTO_FUTURES';
+  return [
+    {
+      provider: `${provider}-ticker`,
+      symbol: input.card.symbol,
+      price: input.card.price,
+      observedAt: input.card.observedAt,
+    },
+    {
+      provider: `${provider}-candles`,
+      symbol: input.card.symbol,
+      price: latest.close,
+      observedAt: latest.time,
+    },
+  ];
+}
+
 function numberFromReason(reason: string | undefined): number | null {
   if (!reason) return null;
   const match = reason.match(/-?\d+(?:\.\d+)?/);
@@ -95,6 +128,7 @@ export function applyScannerQuantHardening(input: ScannerQuantHardeningInput): S
     timeframe: input.timeframe,
     candles: qualityCandles,
     now: input.now,
+    providerObservations: futuresPriceObservations(input, qualityCandles),
     marketClosed: input.marketClosed,
     tradingHalt: input.tradingHalt,
     sessionAware: input.sessionAware,
