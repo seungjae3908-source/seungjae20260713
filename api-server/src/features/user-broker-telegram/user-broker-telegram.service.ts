@@ -12,7 +12,7 @@ import {
 const LINK_TOKEN_TTL_MS = 10 * 60 * 1000;
 const MAX_DELIVERY_ATTEMPTS = 3;
 const MAX_RETRY_DELAY_MS = 15 * 60 * 1000;
-const MAX_DIGEST_CLAIM_ITEMS = 50;
+const MAX_DIGEST_CLAIM_ITEMS = 12;
 const MAX_DIGEST_RENDER_ITEMS = 12;
 type PersonalAlertSender = (input: TelegramAlertInput) => Promise<TelegramAlertResult>;
 
@@ -163,9 +163,6 @@ function renderPersonalDigestAlert(
     const details = compactDigestDetail(payload.alert.details);
     lines.push(`${index + 1}. ${subject}${details ? ` — ${details}` : ''}`);
   });
-  if (valid.length > MAX_DIGEST_RENDER_ITEMS) {
-    lines.push(`외 ${valid.length - MAX_DIGEST_RENDER_ITEMS}건은 다음 모아보기에서 이어집니다.`);
-  }
 
   const dueAt = valid[0].payload?.digestDueAt ?? valid[0].createdAt;
   return {
