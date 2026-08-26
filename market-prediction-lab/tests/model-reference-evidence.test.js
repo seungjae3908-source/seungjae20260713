@@ -6,7 +6,11 @@ import { join } from "node:path";
 
 import { sha256 } from "../src/data-quality.js";
 import {
+  MODEL_REFERENCE_COST_POLICY_VERSION,
+  MODEL_REFERENCE_EVIDENCE_SCHEMA_VERSION,
+  MODEL_REFERENCE_RISK_POLICY_VERSION,
   PREPROCESSING_VERSION,
+  buildCanonicalModelReferenceStrategyIdentity,
   finalizeModelReferenceEvidenceReceipts,
   modelReferenceSafety,
   preserveFutureModelReferenceEvidence,
@@ -93,6 +97,56 @@ function artifactMetadata() {
     now: "2026-08-26T00:00:00.000Z",
   };
 }
+
+test("producer derives one complete canonical identity from the exact unchanged formula, parameters, and TRAIN/VALIDATION provenance", () => {
+  const trainRecords = records("train", 12);
+  const validationRecords = records("validation", 6, 10_000_000);
+  const result = buildCanonicalModelReferenceStrategyIdentity({
+    group: GROUP,
+    market: "CRYPTO_FUTURES",
+    timeframe: "15m",
+    trainRecords,
+    validationRecords,
+    datasetComponents: COMPONENTS,
+    researchCodeSha: SHA_A,
+    featureOrder: MODEL.featureOrder,
+    trainingParameters: { epochs: 520, learningRate: 0.075, l2: 0.003, patience: 60, calibration: "validation-temperature-scaling-v1" },
+    datasetSpecifications: [{ id: "btcusdt-futures-15m-52d", market: "CRYPTO_FUTURES", symbol: "BTCUSDT", timeframe: "15m", lookback: 200, horizon: 8, stride: 4 }],
+    inferenceContract: "deployed-rule-model-65-35",
+    ruleWeight: 0.65,
+    modelWeight: 0.35,
+  });
+  assert.match(result.strategyIdentityDigest, /^[0-9a-f]{64}$/u);
+  assert.equal(result.strategyIdentity.direction, "LONG_SHORT_NEUTRAL");
+  assert.equal(result.strategyIdentity.datasetDigest, result.datasetProvenance.datasetDigest);
+  assert.equal(result.strategyIdentity.datasetStart, new Date(trainRecords[0].anchorTimestamp).toISOString());
+  assert.equal(result.strategyIdentity.datasetEnd, new Date(validationRecords.at(-1).futureEndTimestamp).toISOString());
+  assert.equal(result.strategyIdentity.costPolicyVersion, MODEL_REFERENCE_COST_POLICY_VERSION);
+  assert.equal(result.strategyIdentity.riskPolicyVersion, MODEL_REFERENCE_RISK_POLICY_VERSION);
+  assert.equal(result.strategyIdentity.evidenceSchemaVersion, MODEL_REFERENCE_EVIDENCE_SCHEMA_VERSION);
+  assert.deepEqual(result.formulaIdentity.blendWeights, { rule: 0.65, model: 0.35 });
+  assert.equal(result.parameterIdentity.training.epochs, 520);
+});
+
+test("producer identity refuses missing immutable provenance or non-exact frozen weights", () => {
+  const input = {
+    group: GROUP,
+    market: "CRYPTO_FUTURES",
+    timeframe: "15m",
+    trainRecords: records("train", 12),
+    validationRecords: records("validation", 6, 10_000_000),
+    datasetComponents: COMPONENTS,
+    researchCodeSha: SHA_A,
+    featureOrder: MODEL.featureOrder,
+    trainingParameters: { epochs: 520 },
+    datasetSpecifications: [{ id: "dataset" }],
+    inferenceContract: "deployed-rule-model-65-35",
+    ruleWeight: 0.65,
+    modelWeight: 0.35,
+  };
+  assert.throws(() => buildCanonicalModelReferenceStrategyIdentity({ ...input, researchCodeSha: null }), /researchCodeSha/);
+  assert.throws(() => buildCanonicalModelReferenceStrategyIdentity({ ...input, ruleWeight: 0.5 }), /frozen blend weights/);
+});
 
 async function fixture({ strategyIdentity = null, attestation = sourceAttestation() } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "model-reference-evidence-"));
