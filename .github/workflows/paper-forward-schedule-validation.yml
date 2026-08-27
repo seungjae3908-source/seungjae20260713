@@ -13,10 +13,13 @@ on:
       - api-server/src/routes/paper-trading.ts
       - api-server/src/routes/paper-trading.smoke.test.ts
       - api-server/src/services/paper-simulated-execution-evidence.service.ts
+      - api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.ts
+      - api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.test.ts
       - api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.ts
       - api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.test.ts
       - market-intelligence-sidecar/src/execution-quality.mjs
       - market-intelligence-sidecar/src/execution-quality.d.mts
+      - market-intelligence-sidecar/tests/execution-quality.test.mjs
       - market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json
       - market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs
       - market-prediction-lab/src/authoritative-natural-paper-accounting-v1.js
@@ -125,10 +128,13 @@ jobs:
             api-server/src/routes/paper-trading.ts
             api-server/src/routes/paper-trading.smoke.test.ts
             api-server/src/services/paper-simulated-execution-evidence.service.ts
+            api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.ts
+            api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.test.ts
             api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.ts
             api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.test.ts
             market-intelligence-sidecar/src/execution-quality.mjs
             market-intelligence-sidecar/src/execution-quality.d.mts
+            market-intelligence-sidecar/tests/execution-quality.test.mjs
             market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json
             market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs
             market-prediction-lab/src/authoritative-natural-paper-accounting-v1.js

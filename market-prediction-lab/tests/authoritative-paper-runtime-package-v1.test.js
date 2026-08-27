@@ -109,7 +109,7 @@ test("validated package reuses the sidecar book walk only as labeled simulated e
     direction: "LONG",
     targetQuantity: 2,
     bids: [[99, 3]],
-    asks: [[100, 1], [101, 1]],
+    asks: [[100, 1], [100.1, 1]],
     observedAtMs: 2_000,
     requestStartedAtMs: 1_990,
     requestCompletedAtMs: 2_000,
@@ -132,14 +132,79 @@ test("validated package reuses the sidecar book walk only as labeled simulated e
   assert.equal(evidence.observed.latencyEvidence.costPercent, null);
   assert.equal(evidence.estimated.partialFillEstimate.quality, "UNCALIBRATED_MODEL_ONLY");
   assert.equal(evidence.confidence.numericConfidence, null);
+  assert.equal(evidence.paperSimulation.status, "READY");
+  assert.equal(evidence.paperSimulation.evidenceClass, "SIMULATED");
+  assert.equal(evidence.paperSimulation.marketDataClass, "public-L2");
+  assert.deepEqual(evidence.paperSimulation.provenance.slice(0, 2), ["SIMULATED", "public-L2"]);
+  assert.equal(evidence.paperSimulation.realFillClaim, false);
+  assert.equal(evidence.paperSimulation.liveFillCalibrationRequired, false);
+  assert.equal(evidence.liveGradeFillReadiness.status, "BLOCKED_DATA");
+  assert.equal(evidence.liveGradeFillReadiness.sampleProvenance, null);
+  assert.equal(evidence.liveGradeFillReadiness.submittedExecutionSamples, null);
+  assert.equal(evidence.liveGradeFillReadiness.minimumSubmittedExecutionSamples, 500);
+  assert.equal(evidence.liveGradeFillReadiness.promotedToRealFill, false);
   assert.equal(evidence.costEvidenceReady, false);
-  assert.equal(evidence.blockers.includes("CALIBRATED_FILL_MODEL_EVIDENCE_MISSING"), true);
+  assert.equal(evidence.blockers.includes("CALIBRATED_FILL_MODEL_EVIDENCE_MISSING"), false);
+  assert.equal(evidence.liveGradeFillReadiness.blockers.includes("CALIBRATED_FILL_MODEL_EVIDENCE_MISSING"), true);
   assert.equal(evidence.blockers.includes("LATENCY_COST_EVIDENCE_UNAVAILABLE"), true);
   assert.equal(Object.isFrozen(evidence), true);
   assert.equal(Object.isFrozen(evidence.estimated), true);
 });
 
-test("callback owners require sized tiers, calibrated execution, and complete non-zero-filled costs", async () => {
+test("Live fill readiness requires 500 submitted-execution samples and never promotes Paper simulation to a real fill", async () => {
+  const runtimePackage = await loadValidatedAuthoritativePaperRuntimePackage();
+  const nowMs = 2_000_000;
+  const baseInput = {
+    source: "BITGET_PUBLIC_DEPTH_CONTRACT_FIXTURE",
+    market: "CRYPTO_FUTURES",
+    symbol: "ETHUSDT",
+    direction: "LONG",
+    targetQuantity: 2,
+    bids: [[99, 3]],
+    asks: [[100, 1], [100.1, 1]],
+    observedAtMs: nowMs - 100,
+    requestStartedAtMs: nowMs - 120,
+    requestCompletedAtMs: nowMs - 100,
+    maximumAgeMs: 30_000,
+    provenance: ["contract-fixture-public-depth"],
+    nowMs,
+  };
+  const model = {
+    modelId: "LIVE_FILL_CALIBRATION_CONTRACT_FIXTURE",
+    fillProbability: 0.9,
+    evaluationSamples: 500,
+    brierScore: 0.1,
+    calibrationError: 0.05,
+    evaluatedAt: nowMs - 1_000,
+  };
+
+  const unproven = runtimePackage.buildPaperSimulatedExecutionEvidence({
+    ...baseInput,
+    calibratedFillModel: model,
+  });
+  assert.equal(unproven.paperSimulation.status, "READY");
+  assert.equal(unproven.liveGradeFillReadiness.status, "BLOCKED_DATA");
+  assert.equal(unproven.liveGradeFillReadiness.submittedExecutionSamples, null);
+  assert.equal(unproven.liveGradeFillReadiness.blockers.includes("LIVE_SUBMITTED_EXECUTION_PROVENANCE_REQUIRED"), true);
+  assert.equal(unproven.estimated.partialFillEstimate.calibratedFillProbability, null);
+  assert.equal(unproven.estimated.partialFillEstimate.quality, "UNCALIBRATED_MODEL_ONLY");
+  assert.equal(unproven.confidence.classification, "UNCALIBRATED");
+
+  const submitted = runtimePackage.buildPaperSimulatedExecutionEvidence({
+    ...baseInput,
+    calibratedFillModel: { ...model, sampleProvenance: "LIVE_SUBMITTED_EXECUTION" },
+  });
+  assert.equal(submitted.liveGradeFillReadiness.status, "READY");
+  assert.equal(submitted.liveGradeFillReadiness.submittedExecutionSamples, 500);
+  assert.equal(submitted.liveGradeFillReadiness.minimumSubmittedExecutionSamples, 500);
+  assert.equal(submitted.liveGradeFillReadiness.promotedToRealFill, false);
+  assert.equal(submitted.realFillClaim, false);
+  assert.equal(submitted.paperSimulation.evidenceClass, "SIMULATED");
+  assert.equal(submitted.estimated.partialFillEstimate.quality, "CALIBRATED_ESTIMATE");
+  assert.equal(submitted.confidence.classification, "LIVE_GRADE_CALIBRATED");
+});
+
+test("callback owners separate Paper public-L2 simulation from Live fill calibration and still require complete costs", async () => {
   const runtimePackage = await loadValidatedAuthoritativePaperRuntimePackage();
   const nowMs = 2_000_000;
   const publicEvidence = {
@@ -188,35 +253,39 @@ test("callback owners require sized tiers, calibrated execution, and complete no
   }).contractRules.maintenanceMarginRate, 0.01);
   assert.equal(contract.executionAuthority, "NONE");
 
+  const executionEvidenceInput = {
+    source: "BITGET_PUBLIC_DEPTH",
+    market: "CRYPTO_FUTURES",
+    symbol: "ETHUSDT",
+    direction: "LONG",
+    targetQuantity: 2,
+    bids: [[99, 5]],
+    asks: [[100, 1], [100.1, 2]],
+    observedAtMs: nowMs - 100,
+    requestStartedAtMs: nowMs - 120,
+    requestCompletedAtMs: nowMs - 100,
+    maximumAgeMs: 30_000,
+    provenance: ["bitget-public-v2-merge-depth"],
+  };
   const execution = runtimePackage.buildAuthoritativePaperExecutionObservation({
-    executionEvidenceInput: {
-      source: "BITGET_PUBLIC_DEPTH",
-      market: "CRYPTO_FUTURES",
-      symbol: "ETHUSDT",
-      direction: "LONG",
-      targetQuantity: 2,
-      bids: [[99, 5]],
-      asks: [[100, 1], [101, 2]],
-      observedAtMs: nowMs - 100,
-      requestStartedAtMs: nowMs - 120,
-      requestCompletedAtMs: nowMs - 100,
-      maximumAgeMs: 30_000,
-      provenance: ["bitget-public-v2-merge-depth"],
-      calibratedFillModel: {
-        modelId: "PAPER_FILL_CALIBRATION_V1",
-        fillProbability: 0.9,
-        evaluationSamples: 500,
-        brierScore: 0.1,
-        calibrationError: 0.05,
-        evaluatedAt: nowMs - 1_000,
-      },
-    },
+    executionEvidenceInput,
     riskPolicy,
     nowMs,
   });
   assert.equal(execution.partialFill.model, "ORDER_BOOK");
+  assert.equal(execution.partialFill.source, "SIMULATED/public-L2:VISIBLE_L2_BOOK_WALK_ONLY");
   assert.equal(execution.slippage.quality, "ESTIMATED");
+  assert.equal(execution.providerProvenance.startsWith("SIMULATED+public-L2+"), true);
+  assert.equal(execution.executionProvenance.evidenceClass, "SIMULATED");
+  assert.equal(execution.executionProvenance.marketDataClass, "public-L2");
+  assert.equal(execution.executionProvenance.realFillClaim, false);
+  assert.equal(execution.executionProvenance.liveFillCalibrationStatus, "BLOCKED_DATA");
   assert.equal(execution.leverage, 1);
+  assert.throws(() => runtimePackage.buildAuthoritativePaperExecutionObservation({
+    executionEvidenceInput,
+    riskPolicy: null,
+    nowMs,
+  }), /AUTHORITATIVE_PAPER_RISK_POLICY_EVIDENCE_INVALID/u);
 
   const component = (valuePercent, quality, source) => ({
     valuePercent,
@@ -507,7 +576,14 @@ test("owner data contracts preserve UNKNOWN and separate public observations fro
   assert.equal(contracts.executionObservationForCard.fixedLatencyAllowed, false);
   assert.equal(contracts.executionObservationForCard.simulatedModelStatus, "EXECUTABLE_BLOCKED_DATA");
   assert.equal(contracts.executionObservationForCard.executionMode, "SIMULATED_EXECUTION_ONLY");
+  assert.equal(contracts.executionObservationForCard.paperSimulationStatus, "READY_WHEN_PUBLIC_L2_INPUTS_ARE_VALID");
+  assert.deepEqual(contracts.executionObservationForCard.paperSimulationProvenance, ["SIMULATED", "public-L2"]);
+  assert.equal(contracts.executionObservationForCard.liveFillCalibrationStatus, "BLOCKED_DATA_UNTIL_LIVE_SUBMITTED_EXECUTION_EVIDENCE");
+  assert.equal(contracts.executionObservationForCard.minimumLiveSubmittedExecutionSamples, 500);
+  assert.equal(contracts.executionObservationForCard.liveFillCalibrationRequiredForPaperObservation, false);
+  assert.equal(contracts.executionObservationForCard.liveFillCalibrationRequiredForRealFillClaim, true);
   assert.equal(contracts.executionObservationForCard.realFillClaimAllowed, false);
+  assert.equal(contracts.executionObservationForCard.simulatedObservationPromotionToRealFillAllowed, false);
   assert.equal(contracts.executionObservationForCard.costEvidenceReady, false);
 
   assert.deepEqual(contracts.supplementalCostEvidenceForCard.partiallyOwnedComponents, [
