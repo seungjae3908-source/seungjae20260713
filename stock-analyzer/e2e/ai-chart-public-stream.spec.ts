@@ -41,7 +41,7 @@ test('public stream subscriptions never use private endpoints', () => {
   expect(bitget.heartbeatPayload).toBe('ping');
 });
 
-test('Upbit trade parser preserves sequence, identity and aggressor', () => {
+test('Upbit sequential_id is preserved for uniqueness but never treated as ordered sequence', () => {
   const [event] = parseUpbitPublicTradeMessage({
     type: 'trade',
     code: 'KRW-BTC',
@@ -56,11 +56,12 @@ test('Upbit trade parser preserves sequence, identity and aggressor', () => {
     provider: 'UPBIT_PUBLIC',
     market: 'UPBIT',
     symbol: 'BTC',
-    sequence: 101,
+    sequence: null,
     price: 101,
     volume: 0.25,
     aggressor: 'BUY',
   });
+  expect(event.eventId).toContain('101');
 });
 
 test('Bitget public trade parser does not invent a sequence number', () => {
@@ -79,14 +80,14 @@ test('Bitget public trade parser does not invent a sequence number', () => {
   });
 });
 
-test('stream reducer detects duplicate, sequence gap, out-of-order and missing bars', () => {
+test('stream reducer detects duplicate, time out-of-order and missing bars without invented provider sequence', () => {
   const initial = createAiChartStreamReduction([bootstrapCandle]);
   const first = reduceAiChartPublicTrade(initial, {
     provider: 'UPBIT_PUBLIC',
     market: 'UPBIT',
     symbol: 'BTC',
     eventId: 'UPBIT:KRW-BTC:100',
-    sequence: 100,
+    sequence: null,
     eventTimeMs: 1_787_788_860_000,
     receivedAtMs: 1_787_788_860_100,
     price: 102,
@@ -95,6 +96,7 @@ test('stream reducer detects duplicate, sequence gap, out-of-order and missing b
   }, '1m');
 
   expect(first.duplicate).toBe(false);
+  expect(first.sequenceGap).toBe(false);
   expect(first.candles.at(-1)?.close).toBe(102);
 
   const duplicate = reduceAiChartPublicTrade(first, {
@@ -102,7 +104,7 @@ test('stream reducer detects duplicate, sequence gap, out-of-order and missing b
     market: 'UPBIT',
     symbol: 'BTC',
     eventId: 'UPBIT:KRW-BTC:100',
-    sequence: 100,
+    sequence: null,
     eventTimeMs: 1_787_788_860_000,
     receivedAtMs: 1_787_788_860_200,
     price: 999,
@@ -117,14 +119,14 @@ test('stream reducer detects duplicate, sequence gap, out-of-order and missing b
     market: 'UPBIT',
     symbol: 'BTC',
     eventId: 'UPBIT:KRW-BTC:103',
-    sequence: 103,
+    sequence: null,
     eventTimeMs: 1_787_789_040_000,
     receivedAtMs: 1_787_789_040_050,
     price: 103,
     volume: 0.5,
     aggressor: 'SELL',
   }, '1m');
-  expect(gap.sequenceGap).toBe(true);
+  expect(gap.sequenceGap).toBe(false);
   expect(gap.missingBars).toBeGreaterThan(0);
   expect(gap.candles.at(-2)?.isClosed).toBe(true);
 
@@ -133,7 +135,7 @@ test('stream reducer detects duplicate, sequence gap, out-of-order and missing b
     market: 'UPBIT',
     symbol: 'BTC',
     eventId: 'UPBIT:KRW-BTC:102',
-    sequence: 102,
+    sequence: null,
     eventTimeMs: 1_787_788_980_000,
     receivedAtMs: 1_787_789_040_060,
     price: 1,
@@ -142,6 +144,34 @@ test('stream reducer detects duplicate, sequence gap, out-of-order and missing b
   }, '1m');
   expect(old.outOfOrder).toBe(true);
   expect(old.candles.at(-1)?.close).toBe(103);
+});
+
+test('reducer only checks sequence gaps when a provider supplies a real ordered sequence', () => {
+  const first = reduceAiChartPublicTrade(createAiChartStreamReduction([]), {
+    provider: 'BITGET_PUBLIC',
+    market: 'BITGET',
+    symbol: 'BTCUSDT',
+    eventId: 'synthetic-ordered-10',
+    sequence: 10,
+    eventTimeMs: 10_000,
+    receivedAtMs: 10_010,
+    price: 100,
+    volume: 1,
+    aggressor: 'BUY',
+  }, '1m');
+  const next = reduceAiChartPublicTrade(first, {
+    provider: 'BITGET_PUBLIC',
+    market: 'BITGET',
+    symbol: 'BTCUSDT',
+    eventId: 'synthetic-ordered-12',
+    sequence: 12,
+    eventTimeMs: 70_000,
+    receivedAtMs: 70_010,
+    price: 101,
+    volume: 1,
+    aggressor: 'BUY',
+  }, '1m');
+  expect(next.sequenceGap).toBe(true);
 });
 
 test('freshness and reconnect logic fail closed into polling fallback', () => {
