@@ -100,8 +100,8 @@ jobs:
         run: |
           set -Eeuo pipefail
           mkdir -p stock-analyzer/production-health-observer-artifacts
-          node <<'NODE'
-          const fs = require('node:fs');
+          node --input-type=module <<'NODE'
+          const fs = await import('node:fs');
           const base = process.env.PRODUCTION_BASE_URL.replace(/\/$/, '');
           const paths = ['/api/health', '/', '/login', '/stocks', '/scanner', '/ai-chart', '/news-information'];
           const failures = [];
@@ -190,6 +190,7 @@ jobs:
         id: aggregate
         env:
           OBSERVER_MODE: ${{ steps.mode.outputs.mode }}
+          BROWSER_OUTCOME: ${{ steps.browser.outcome || 'skipped' }}
         run: |
           set -Eeuo pipefail
           python3 - <<'PY'
@@ -197,11 +198,15 @@ jobs:
           from pathlib import Path
           root=Path('stock-analyzer/production-health-observer-artifacts')
           failures=[]
+          browser_artifacts=[]
           for path in sorted(root.glob('*.json')):
               try: payload=json.loads(path.read_text(encoding='utf-8'))
               except Exception: continue
+              if path.name.startswith('observer-'): browser_artifacts.append(path.name)
               values=payload.get('failures') if isinstance(payload,dict) else None
               if isinstance(values,list): failures.extend(item for item in values if isinstance(item,dict))
+          if os.environ.get('BROWSER_OUTCOME') == 'failure' and not browser_artifacts:
+              failures.append({'kind':'browser-harness','route':'observer','path':'playwright.production-observer.config.ts','status':'','detail':'scheduled Playwright observer exited non-zero before structured browser evidence was written'})
           normalized=[]; seen=set()
           for item in failures:
               kind=re.sub(r'[^a-z0-9_-]+','-',str(item.get('kind') or 'unknown').lower())[:40]
@@ -217,7 +222,8 @@ jobs:
           normalized.sort(key=lambda x:(x['kind'],x['route'],x['path'],x['status'],x['detail']))
           canonical='\n'.join('|'.join((x['kind'],x['route'],x['path'],x['status'],re.sub(r'\d+','#',x['detail']))) for x in normalized)
           fingerprint=hashlib.sha256(canonical.encode()).hexdigest()[:20] if normalized else 'none'
-          primary=normalized[0] if normalized else {'path':'none','route':'none','kind':'none','status':'','detail':''}
+          actionable=[x for x in normalized if x['kind'] != 'browser-harness'] or normalized
+          primary=actionable[0] if actionable else {'path':'none','route':'none','kind':'none','status':'','detail':''}
           route=(primary.get('route') or '')+' '+(primary.get('path') or '')
           if 'scanner' in route: worker='ai-signal-scanner'
           elif 'ai-chart' in route or 'chart' in route: worker='ai-chart'
@@ -251,7 +257,7 @@ jobs:
           existing="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${HUB_ISSUE_NUMBER}/comments?per_page=100" --jq ".[] | select(.body | contains(\"${marker}\")) | .id" | tail -n 1)"
           if [ -z "$existing" ]; then
             AGGREGATE_FILE=stock-analyzer/production-health-observer-artifacts/aggregate.json \
-            MARKER="$marker" HUB="$HUB_ISSUE_NUMBER" SHA="$GITHUB_SHA" RUN_ID="$GITHUB_RUN_ID" \
+            MARKER="$marker" SHA="$GITHUB_SHA" RUN_ID="$GITHUB_RUN_ID" \
             python3 - <<'PY' > "$RUNNER_TEMP/incident.txt"
           import json, os
           p=json.load(open(os.environ['AGGREGATE_FILE'],encoding='utf-8'))
