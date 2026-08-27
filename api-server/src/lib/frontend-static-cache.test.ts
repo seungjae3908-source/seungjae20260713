@@ -10,7 +10,10 @@ import {
   FRONTEND_IMMUTABLE_CACHE_CONTROL,
   FRONTEND_REVALIDATE_CACHE_CONTROL,
   frontendStaticCacheControl,
+  planFrontendStaticWarmup,
+  resolveProductionFrontendDist,
   setFrontendStaticCacheHeaders,
+  warmFrontendStaticFiles,
 } from './frontend-static-cache';
 
 const frontendDist = path.resolve('stock-analyzer/dist');
@@ -60,6 +63,43 @@ test('the Express header adapter applies the resolved policy', () => {
     asset('assets/technical-workspace-DD-QAOoQ.js'),
   );
   assert.equal(headers.get('Cache-Control'), FRONTEND_IMMUTABLE_CACHE_CONTROL);
+});
+
+test('Production startup warmup prioritizes the app shell and critical lazy chunks within strict bounds', async (context) => {
+  const runtimeDist = await mkdtemp(path.join(tmpdir(), 'frontend-static-warmup-'));
+  const assetsDir = path.join(runtimeDist, 'assets');
+  await mkdir(assetsDir);
+  await writeFile(path.join(runtimeDist, 'index.html'), '<main>shell</main>');
+  await writeFile(path.join(assetsDir, 'ai-chart-aaaa.js'), 'a'.repeat(17));
+  await writeFile(path.join(assetsDir, 'backtests-bbbb.js'), 'b'.repeat(19));
+  await writeFile(path.join(assetsDir, 'paper-trading-cccc.js'), 'c'.repeat(23));
+  await writeFile(path.join(assetsDir, 'other-dddd.js'), 'd'.repeat(29));
+  await writeFile(path.join(assetsDir, 'style-eeee.css'), 'e'.repeat(31));
+  await writeFile(path.join(assetsDir, 'ignored.png'), 'not-warmable');
+  context.after(() => rm(runtimeDist, { recursive: true, force: true }));
+
+  const plan = planFrontendStaticWarmup(runtimeDist, { maxFiles: 4, maxBytes: 1024 });
+  assert.deepEqual(
+    plan.files.map((filePath) => path.basename(filePath)),
+    ['index.html', 'ai-chart-aaaa.js', 'backtests-bbbb.js', 'paper-trading-cccc.js'],
+  );
+  assert.equal(plan.criticalFiles, 3);
+  assert.equal(plan.truncated, true);
+
+  const result = warmFrontendStaticFiles(runtimeDist, { maxFiles: 4, maxBytes: 1024 });
+  assert.equal(result.warmedFiles, 4);
+  assert.equal(result.warmedBytes, result.plannedBytes);
+  assert.equal(result.errors, 0);
+});
+
+test('Production frontend dist resolver finds the deployed public build without network access', async (context) => {
+  const runtimeRoot = await mkdtemp(path.join(tmpdir(), 'frontend-static-resolve-'));
+  const runtimeDist = path.join(runtimeRoot, 'stock-analyzer', 'dist', 'public');
+  await mkdir(runtimeDist, { recursive: true });
+  await writeFile(path.join(runtimeDist, 'index.html'), '<main>shell</main>');
+  context.after(() => rm(runtimeRoot, { recursive: true, force: true }));
+
+  assert.equal(resolveProductionFrontendDist(runtimeRoot), runtimeDist);
 });
 
 test('Express serves fingerprinted assets as immutable while the SPA shell revalidates', async (context) => {
