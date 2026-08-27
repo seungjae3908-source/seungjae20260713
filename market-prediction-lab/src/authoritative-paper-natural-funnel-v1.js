@@ -57,6 +57,7 @@ const PRE_EVIDENCE_UNKNOWN_BLOCKERS = new Set([
   "P0_C9_MARKET_NOT_OWNED",
   "P0_C9_EVIDENCE_CLOCK_INVALID",
 ]);
+const EXACT_SOURCE_REASON = /^(P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_(?:MISSING|FAILED)):([A-Za-z][A-Za-z0-9]*)$/u;
 
 function freeze(value) {
   return Object.freeze(value);
@@ -461,6 +462,33 @@ function canonicalNaturalStageEvidence({
   });
 }
 
+function normalizeSourceKey(value) {
+  return String(value).replace(/([a-z0-9])([A-Z])/gu, "$1_$2").toUpperCase();
+}
+
+function exactSourceSetReason(counters, genericReason) {
+  const grouped = new Map();
+  for (const row of counters.directReasonObservations) {
+    if (row?.sourceStage !== "EVIDENCE_SOURCE" || row?.lossless !== true || !nonEmpty(row?.sourceCode)) continue;
+    const match = EXACT_SOURCE_REASON.exec(row.sourceCode.trim());
+    const observationId = row?.identity?.observationId;
+    if (!match || !nonEmpty(observationId) || match[1] !== genericReason) return null;
+    const code = `${match[1]}_${normalizeSourceKey(match[2])}`;
+    const values = grouped.get(observationId) ?? [];
+    values.push(code);
+    grouped.set(observationId, values);
+  }
+  if (grouped.size !== counters.producerAttemptCount || grouped.size === 0) return null;
+  const signatures = [...grouped.values()].map((values) => [...new Set(values)].sort().join("_AND_"));
+  if (new Set(signatures).size !== 1) return null;
+  return freeze({
+    reasonCode: signatures[0],
+    sourceCodes: freeze([...new Set(counters.directReasonObservations
+      .map((row) => nonEmpty(row?.sourceCode) ? row.sourceCode.trim() : null)
+      .filter(Boolean))].sort()),
+  });
+}
+
 function authoritativeFirstZeroReasonEvidenceByStage({
   firstZero,
   counters,
@@ -478,12 +506,15 @@ function authoritativeFirstZeroReasonEvidenceByStage({
   }
   if (new Set(reasons).size !== 1) return freeze({});
 
-  const reasonCode = reasons[0];
+  const genericReason = reasons[0];
+  const exact = exactSourceSetReason(counters, genericReason);
+  const reasonCode = exact?.reasonCode ?? genericReason;
   return freeze({
     EVIDENCE_COMPLETE: freeze({
       authoritative: true,
       freshness: "FRESH",
       reasonCode,
+      sourceCodes: exact?.sourceCodes ?? freeze([]),
       strategySha: runtimeSha,
       runtimeSha,
       datasetIdentity,
