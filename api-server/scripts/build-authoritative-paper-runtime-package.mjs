@@ -24,6 +24,7 @@ const ALLOWED_INPUTS = Object.freeze([
   'src/lib/provider-admission-control.ts',
   'src/services/authoritative-paper-callback-owners.service.ts',
   'src/services/authoritative-paper-evidence-sources.service.ts',
+  'src/services/authoritative-paper-execution-cost-sources.service.ts',
   'src/services/authoritative-paper-runtime-package.entry.ts',
   'src/services/bitget-futures-public-evidence.service.ts',
   'src/services/crypto-signal-scanner.service.ts',

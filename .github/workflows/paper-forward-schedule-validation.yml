@@ -7,12 +7,15 @@ on:
       - api-server/scripts/build-authoritative-paper-runtime-package.mjs
       - api-server/src/services/authoritative-paper-callback-owners.service.ts
       - api-server/src/services/authoritative-paper-evidence-sources.service.ts
+      - api-server/src/services/authoritative-paper-execution-cost-sources.service.ts
       - api-server/src/services/authoritative-paper-runtime-package.entry.ts
       - api-server/src/services/paper-trading-state-snapshot.service.ts
       - api-server/src/services/paper-trading-state-publisher.service.ts
       - api-server/src/routes/paper-trading.ts
       - api-server/src/routes/paper-trading.smoke.test.ts
       - api-server/src/services/paper-simulated-execution-evidence.service.ts
+      - api-server/src/services/crypto-signal-scanner.service.ts
+      - api-server/src/services/crypto-signal-scanner.service.test.ts
       - api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.ts
       - api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.test.ts
       - api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.ts
@@ -49,12 +52,7 @@ on:
       - market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
       - market-prediction-lab/tests/recurring-paper-loop-v1.test.js
       - market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
-      - research-production/deploy/prepare-paper-state-readonly-transport.mjs
-      - research-production/deploy/research-production@.service
-      - research-production/src/engine.mjs
       - research-production/src/natural-cycle-verdict-trace.mjs
-      - research-production/test/paper-state-readonly-transport.test.mjs
-      - research-production/test/research-engine.test.mjs
       - research-production/test/natural-cycle-verdict-trace.test.mjs
       - market-prediction-lab/tests/research-production-readonly-evidence-observability.test.js
       - ops/research-production-readonly-evidence.sh
@@ -127,12 +125,15 @@ jobs:
             api-server/scripts/build-authoritative-paper-runtime-package.mjs
             api-server/src/services/authoritative-paper-callback-owners.service.ts
             api-server/src/services/authoritative-paper-evidence-sources.service.ts
+            api-server/src/services/authoritative-paper-execution-cost-sources.service.ts
             api-server/src/services/authoritative-paper-runtime-package.entry.ts
             api-server/src/services/paper-trading-state-snapshot.service.ts
             api-server/src/services/paper-trading-state-publisher.service.ts
             api-server/src/routes/paper-trading.ts
             api-server/src/routes/paper-trading.smoke.test.ts
             api-server/src/services/paper-simulated-execution-evidence.service.ts
+            api-server/src/services/crypto-signal-scanner.service.ts
+            api-server/src/services/crypto-signal-scanner.service.test.ts
             api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.ts
             api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.test.ts
             api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.ts
@@ -173,12 +174,7 @@ jobs:
             market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
             market-prediction-lab/tests/recurring-paper-loop-v1.test.js
             market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
-            research-production/deploy/prepare-paper-state-readonly-transport.mjs
-            research-production/deploy/research-production@.service
-            research-production/src/engine.mjs
             research-production/src/natural-cycle-verdict-trace.mjs
-            research-production/test/paper-state-readonly-transport.test.mjs
-            research-production/test/research-engine.test.mjs
             research-production/test/natural-cycle-verdict-trace.test.mjs
             market-prediction-lab/tests/research-production-readonly-evidence-observability.test.js
             ops/research-production-readonly-evidence.sh
