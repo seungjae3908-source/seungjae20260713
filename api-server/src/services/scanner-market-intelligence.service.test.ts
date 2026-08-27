@@ -1,4 +1,3 @@
-import './market-intelligence-news-disclosure-sidecar.contract.test';
 import './decision-gate-attribution.service.test';
 import test from 'node:test';
 import assert from 'node:assert/strict';
