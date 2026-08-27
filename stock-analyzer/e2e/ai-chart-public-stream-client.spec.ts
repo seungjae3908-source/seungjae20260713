@@ -1,5 +1,8 @@
 import { expect, test } from '@playwright/test';
-import { createAiChartPublicStreamClient } from '../src/lib/ai-chart-public-stream-client';
+import {
+  createAiChartPublicStreamClient,
+  decodeAiChartWebSocketPayload,
+} from '../src/lib/ai-chart-public-stream-client';
 
 type MessageHandler = ((event: MessageEvent) => void) | null;
 type EventHandler = ((event: Event) => void) | null;
@@ -7,6 +10,7 @@ type CloseHandler = ((event: CloseEvent) => void) | null;
 
 class FakeSocket {
   readyState = 1;
+  binaryType: BinaryType = 'blob';
   sent: string[] = [];
   closed = false;
   onopen: EventHandler = null;
@@ -38,6 +42,7 @@ test('public stream client subscribes, emits public trades and tears down read-o
 
   client.start();
   expect(statuses).toEqual(['CONNECTING']);
+  expect(socket.binaryType).toBe('arraybuffer');
   socket.onopen?.({} as Event);
   expect(statuses.at(-1)).toBe('LIVE_STREAM');
   expect(client.snapshot().connectedAtMs).toBe(1_787_788_860_100);
@@ -58,6 +63,35 @@ test('public stream client subscribes, emits public trades and tears down read-o
   expect(statuses.at(-1)).toBe('DISCONNECTED');
   expect(client.snapshot().connectedAtMs).toBeNull();
   expect(socket.closed).toBe(true);
+});
+
+test('utf8 ArrayBuffer websocket frames are decoded instead of silently discarded', () => {
+  const socket = new FakeSocket();
+  const trades: Array<{ symbol: string; price: number }> = [];
+  const client = createAiChartPublicStreamClient({
+    market: 'UPBIT',
+    symbol: 'BTC',
+    socketFactory: () => socket,
+    now: () => 1_787_788_860_100,
+    onTrade: (event) => trades.push({ symbol: event.symbol, price: event.price }),
+  });
+  client.start();
+  socket.onopen?.({} as Event);
+
+  const bytes = new TextEncoder().encode(JSON.stringify({
+    type: 'trade',
+    code: 'KRW-BTC',
+    trade_price: 102.5,
+    trade_volume: 0.2,
+    trade_timestamp: 1_787_788_860_000,
+    sequential_id: 99,
+    ask_bid: 'BID',
+  }));
+  expect(decodeAiChartWebSocketPayload(bytes)).toContain('KRW-BTC');
+  socket.onmessage?.({ data: bytes.buffer } as MessageEvent);
+  expect(trades).toEqual([{ symbol: 'BTC', price: 102.5 }]);
+  expect(client.snapshot().freshness).toBe('FRESH');
+  client.stop();
 });
 
 test('connected socket with no first public trade fails closed to polling fallback', () => {
@@ -102,9 +136,7 @@ test('missing WebSocket capability fails closed to polling fallback', () => {
   const client = createAiChartPublicStreamClient({
     market: 'UPBIT',
     symbol: 'BTC',
-    socketFactory: () => {
-      throw new Error('blocked');
-    },
+    socketFactory: () => { throw new Error('blocked'); },
     onStatus: (status) => statuses.push(status),
   });
 
