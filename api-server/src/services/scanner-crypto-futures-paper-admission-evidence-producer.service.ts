@@ -367,6 +367,38 @@ function assertSources(sources: ScannerCryptoFuturesPaperAdmissionEvidenceSource
   }
 }
 
+class AuthoritativeEvidenceSourceFailure extends Error {
+  readonly sourceKey: SourceKey;
+
+  constructor(sourceKey: SourceKey) {
+    super('AUTHORITATIVE_EVIDENCE_SOURCE_FAILED');
+    this.name = 'AuthoritativeEvidenceSourceFailure';
+    this.sourceKey = sourceKey;
+  }
+}
+
+function authoritativeSourceCode(kind: 'MISSING' | 'FAILED', sourceKey: SourceKey): string {
+  return `P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_${kind}:${sourceKey}`;
+}
+
+async function readAuthoritativeSource<K extends SourceKey>(
+  sources: ScannerCryptoFuturesPaperAdmissionEvidenceSources,
+  sourceKey: K,
+  context: ScannerCryptoFuturesPaperAdmissionEvidenceContext,
+): Promise<ComposerInput[K]> {
+  try {
+    return await sources[sourceKey](context);
+  } catch {
+    throw new AuthoritativeEvidenceSourceFailure(sourceKey);
+  }
+}
+
+function authoritativeMissingSourceCodes(values: Readonly<Record<SourceKey, unknown>>): string[] {
+  return SOURCE_KEYS
+    .filter((sourceKey) => values[sourceKey] == null)
+    .map((sourceKey) => authoritativeSourceCode('MISSING', sourceKey));
+}
+
 export function createScannerCryptoFuturesPaperAdmissionEvidenceProducer({
   sources,
   compose = composeScannerCryptoFuturesPaperAdmission,
@@ -409,15 +441,15 @@ export function createScannerCryptoFuturesPaperAdmissionEvidenceProducer({
 
     let input: ComposerInput;
     try {
-      const paperCandidate = await sources.paperCandidate(context);
-      const learningSnapshot = await sources.learningSnapshot(context);
-      const paperState = await sources.paperState(context);
-      const contractRules = await sources.contractRules(context);
-      const publicEvidence = await sources.publicEvidence(context);
-      const executionObservation = await sources.executionObservation(context);
-      const supplementalCostEvidence = await sources.supplementalCostEvidence(context);
+      const paperCandidate = await readAuthoritativeSource(sources, 'paperCandidate', context);
+      const learningSnapshot = await readAuthoritativeSource(sources, 'learningSnapshot', context);
+      const paperState = await readAuthoritativeSource(sources, 'paperState', context);
+      const contractRules = await readAuthoritativeSource(sources, 'contractRules', context);
+      const publicEvidence = await readAuthoritativeSource(sources, 'publicEvidence', context);
+      const executionObservation = await readAuthoritativeSource(sources, 'executionObservation', context);
+      const supplementalCostEvidence = await readAuthoritativeSource(sources, 'supplementalCostEvidence', context);
 
-      if ([
+      const missingSourceCodes = authoritativeMissingSourceCodes({
         paperCandidate,
         learningSnapshot,
         paperState,
@@ -425,9 +457,10 @@ export function createScannerCryptoFuturesPaperAdmissionEvidenceProducer({
         publicEvidence,
         executionObservation,
         supplementalCostEvidence,
-      ].some((value) => value == null)) {
+      });
+      if (missingSourceCodes.length > 0) {
         return blocked(['P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING'], null, unknownGateObservability(
-          ['P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING'], nowMs, id, 'EVIDENCE_SOURCE', 'DATA_MISSING', true,
+          missingSourceCodes, nowMs, id, 'EVIDENCE_SOURCE', 'DATA_MISSING', true,
         ));
       }
 
@@ -442,9 +475,13 @@ export function createScannerCryptoFuturesPaperAdmissionEvidenceProducer({
         nowMs,
         ...(maxEvidenceAgeMs == null ? {} : { maxEvidenceAgeMs }),
       };
-    } catch {
+    } catch (error) {
+      const exactSourceFailure = error instanceof AuthoritativeEvidenceSourceFailure;
+      const sourceCodes = exactSourceFailure
+        ? [authoritativeSourceCode('FAILED', error.sourceKey)]
+        : ['P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_FAILED'];
       return blocked(['P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_FAILED'], null, unknownGateObservability(
-        ['P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_FAILED'], nowMs, id, 'EVIDENCE_SOURCE', 'UNKNOWN', false,
+        sourceCodes, nowMs, id, 'EVIDENCE_SOURCE', 'UNKNOWN', exactSourceFailure,
       ));
     }
 
