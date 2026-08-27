@@ -365,15 +365,19 @@ export function applyStockSignalPolicy(input: StockSignalPolicyInput): ScannerSi
       status,
       source: sourceForCondition(label),
       observedAt: card.analyzedAt ?? null,
-      reasons: semanticReason
-        ? [semanticReason]
-        : factor?.reasons?.length
+      reasons: factor?.status !== 'ok'
+        ? factor?.reasons?.length
           ? factor.reasons
-          : status === 'unverified'
-            ? ['필수 데이터가 없어 조건을 확인하지 못했습니다.']
-            : status === 'not_matched' || missingSet.has(label)
-              ? ['실제 데이터가 선택 조건을 충족하지 않았습니다.']
-              : ['백엔드가 실제 데이터로 조건을 확인했습니다.'],
+          : ['필수 데이터가 없어 조건을 확인하지 못했습니다.']
+        : semanticReason
+          ? [semanticReason]
+          : factor?.reasons?.length
+            ? factor.reasons
+            : status === 'unverified'
+              ? ['필수 데이터가 없어 조건을 확인하지 못했습니다.']
+              : status === 'not_matched' || missingSet.has(label)
+                ? ['실제 데이터가 선택 조건을 충족하지 않았습니다.']
+                : ['백엔드가 실제 데이터로 조건을 확인했습니다.'],
     };
   });
   const notMatched = evidence.filter((item) => item.status === 'not_matched').map((item) => item.label);
