@@ -99,7 +99,7 @@ function currentEvidenceFromExistingChart(
 ): AiChartTimeframeEvidence {
   const quality = dataQualityFromStatus(dataStatus);
   const scannerSide = normalizeContextSide(selection.action, selection.market);
-  const scannerScore = finiteScore(selection.confidence ?? selection.signalScore);
+  const scannerScore = finiteScore(selection.signalScore ?? selection.confidence);
   const reasons = (selection.reasons ?? []).filter(Boolean).slice(0, 8);
   const failClosed = quality === 'STALE' || quality === 'UNAVAILABLE' || quality === 'PARTIAL';
 
@@ -241,7 +241,7 @@ function AiChartSignalOverlayPortal({
       data-signal-id={signalId ?? 'UNAVAILABLE'}
       data-signal-status={lifecycle}
       className={cn(
-        'pointer-events-none absolute left-3 top-3 z-20 max-w-[calc(100%-1.5rem)] rounded-xl border bg-background/90 px-3 py-2 shadow-sm backdrop-blur-sm',
+        'pointer-events-none relative z-20 mx-3 mb-2 mt-2 max-w-[calc(100%-1.5rem)] rounded-xl border bg-background px-3 py-2 shadow-sm sm:absolute sm:left-3 sm:top-3 sm:mx-0 sm:mb-0 sm:mt-0 sm:bg-background/90 sm:backdrop-blur-sm',
         inactive ? 'border-dashed border-muted-foreground/40 opacity-60' : 'border-card-border',
       )}
       aria-label={`AI 신호 ${side}, 상태 ${lifecycle}`}
