@@ -39,6 +39,11 @@ function text(value: unknown, maxLength: number): string {
   return String(value ?? '').normalize('NFKC').trim().slice(0, maxLength);
 }
 
+export function memberEligibleForPersonalTelegram(profile: MemberAccessProfile): boolean {
+  return profile.status === 'approved'
+    && hasCapability(profile, 'canConnectPersonalTelegram');
+}
+
 function canonicalMarket(value: unknown, symbol: string): StoredMemberWatchlistMarket {
   const raw = text(value, 32).toUpperCase().replace(/[-\s]/gu, '_');
   if (['KR', 'KR_STOCK', 'KOSPI', 'KOSDAQ'].includes(raw)) return 'KR_STOCK';
@@ -210,13 +215,7 @@ export async function findMemberWatchlistSubscribers(
     for (const row of Array.isArray(profiles) ? profiles : []) {
       const profile = row as Record<string, unknown> & MemberAccessProfile;
       const userId = text(profile.id, 64);
-      if (
-        userId
-        && profile.status === 'approved'
-        && hasCapability(profile, 'canConnectPersonalTelegram')
-      ) {
-        eligible.add(userId);
-      }
+      if (userId && memberEligibleForPersonalTelegram(profile)) eligible.add(userId);
     }
   }
 
