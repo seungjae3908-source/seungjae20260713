@@ -36,6 +36,7 @@ export type AiChartStreamDiagnostic = {
   market: AiChartPublicStreamMarket;
   symbol: string;
   reconnectAttempts: number;
+  connectedAtMs: number | null;
   lastEventAtMs: number | null;
   freshness: 'FRESH' | 'DELAYED' | 'STALE' | 'UNAVAILABLE';
 };
@@ -71,6 +72,7 @@ export function createAiChartPublicStreamClient(
   let status: AiChartPublicStreamStatus = 'DISCONNECTED';
   let stopped = true;
   let reconnectAttempts = 0;
+  let connectedAtMs: number | null = null;
   let lastEventAtMs: number | null = null;
   let reconnectTimer: TimerHandle | null = null;
   let heartbeatTimer: TimerHandle | null = null;
@@ -82,6 +84,7 @@ export function createAiChartPublicStreamClient(
     market: options.market,
     symbol: options.symbol,
     reconnectAttempts,
+    connectedAtMs,
     lastEventAtMs,
     freshness: aiChartStreamFreshness({
       status,
@@ -112,6 +115,7 @@ export function createAiChartPublicStreamClient(
     clearRuntimeTimers();
     clearTimer(reconnectTimer);
     reconnectTimer = null;
+    connectedAtMs = null;
     const active = socket;
     socket = null;
     try {
@@ -147,20 +151,24 @@ export function createAiChartPublicStreamClient(
     watchdogTimer = setTimeoutFn(() => {
       watchdogTimer = null;
       if (stopped || status !== 'LIVE_STREAM') return;
-      if (shouldFallbackToPolling({
+      const currentNow = now();
+      const firstEventOverdue = lastEventAtMs == null
+        && connectedAtMs != null
+        && Math.max(0, currentNow - connectedAtMs) > subscription.staleAfterMs * 2;
+      if (firstEventOverdue || shouldFallbackToPolling({
         status,
         lastEventAtMs,
-        nowMs: now(),
+        nowMs: currentNow,
         staleAfterMs: subscription.staleAfterMs,
         reconnectAttempts,
       })) {
-        forceFallback('STREAM_STALE');
+        forceFallback(firstEventOverdue ? 'FIRST_EVENT_TIMEOUT' : 'STREAM_STALE');
         return;
       }
       const freshness = aiChartStreamFreshness({
         status,
         lastEventAtMs,
-        nowMs: now(),
+        nowMs: currentNow,
         staleAfterMs: subscription.staleAfterMs,
       });
       if (freshness === 'DELAYED') options.onDiagnostic?.({ ...snapshot(), reason: 'STREAM_DELAYED' });
@@ -171,6 +179,7 @@ export function createAiChartPublicStreamClient(
   const connect = () => {
     if (stopped || status === 'FALLBACK_POLLING') return;
     clearRuntimeTimers();
+    connectedAtMs = null;
     publish(reconnectAttempts > 0 ? 'RECOVERING' : 'CONNECTING', reconnectAttempts > 0 ? 'RECONNECTING' : 'CONNECTING');
 
     let nextSocket: WebSocketLike;
@@ -190,6 +199,7 @@ export function createAiChartPublicStreamClient(
         forceFallback('SUBSCRIBE_SEND_FAILED');
         return;
       }
+      connectedAtMs = now();
       publish('LIVE_STREAM', 'PUBLIC_STREAM_CONNECTED');
       scheduleHeartbeat();
       scheduleWatchdog();
@@ -214,6 +224,7 @@ export function createAiChartPublicStreamClient(
     nextSocket.onclose = () => {
       if (socket === nextSocket) socket = null;
       clearRuntimeTimers();
+      connectedAtMs = null;
       if (stopped || status === 'FALLBACK_POLLING') return;
       reconnectAttempts += 1;
       if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
@@ -234,6 +245,7 @@ export function createAiChartPublicStreamClient(
       if (!stopped) return;
       stopped = false;
       reconnectAttempts = 0;
+      connectedAtMs = null;
       lastEventAtMs = null;
       status = 'DISCONNECTED';
       connect();
@@ -244,6 +256,7 @@ export function createAiChartPublicStreamClient(
       clearRuntimeTimers();
       clearTimer(reconnectTimer);
       reconnectTimer = null;
+      connectedAtMs = null;
       const active = socket;
       socket = null;
       try {
