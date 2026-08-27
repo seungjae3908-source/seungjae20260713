@@ -20,6 +20,7 @@ test('embedded Scanner swing timeframe stays inside the canonical server contrac
   expect(scannerPageSource).toContain("if (strategy === 'swing') return '4H';");
   expect(scannerPageSource).not.toContain("return strategy === 'scalping' ? '5m' : '1D';");
 
-  expect(serverStrategySource).toContain("if (mode === 'swing') return ['60m', '4H'].includes(timeframe);");
+  expect(serverStrategySource).toContain("if (timeframe === '1D') return 'position';");
   expect(serverStrategySource).toContain("if (mode === 'position') return ['4H', '1D'].includes(timeframe);");
+  expect(serverStrategySource).toContain("return ['60m', '4H'].includes(timeframe);");
 });
