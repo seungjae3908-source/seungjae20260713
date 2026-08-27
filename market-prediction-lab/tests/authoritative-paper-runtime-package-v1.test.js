@@ -63,7 +63,7 @@ function missingEvidenceSources() {
 
 test("validated package loads the exact observed-gate producer bundle and executes fail-closed without evidence", async () => {
   const runtimePackage = await loadValidatedAuthoritativePaperRuntimePackage();
-  assert.equal(runtimePackage.sourceSha, "58c6ff651912e27daccb7137aff11a4bc38f30a3");
+  assert.equal(runtimePackage.sourceSha, "3dae58f78d1118bc5b9f5b431adbfa50d63d4f5c");
   assert.match(runtimePackage.sourceGraphSha256, /^[0-9a-f]{64}$/u);
   assert.match(runtimePackage.bundleSha256, /^[0-9a-f]{64}$/u);
   assert.equal(runtimePackage.admissionBundleSchemaVersion, "scanner-paper-admission-evidence-bundle-v1");
