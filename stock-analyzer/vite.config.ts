@@ -1,7 +1,7 @@
 import path from 'path';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
 import runtimeErrorOverlay from '@replit/vite-plugin-runtime-error-modal';
@@ -19,11 +19,46 @@ if (rawPort && (Number.isNaN(port) || port <= 0)) {
 
 const basePath = process.env.BASE_PATH ?? '/';
 
+function phase9MarketIntelligenceUnavailableFixture(): Plugin {
+  return {
+    name: 'phase9-market-intelligence-unavailable-fixture',
+    configureServer(server) {
+      if (process.env.VITE_PHASE9_E2E !== 'true') return;
+      server.middlewares.use('/api/market-intelligence/news-disclosure', (req, res, next) => {
+        if (req.method !== 'GET') {
+          next();
+          return;
+        }
+        res.statusCode = 200;
+        res.setHeader('content-type', 'application/json; charset=utf-8');
+        res.setHeader('cache-control', 'no-store');
+        res.end(JSON.stringify({
+          ok: true,
+          available: false,
+          cache: 'MISS',
+          result: null,
+          chartPolicy: {
+            evidenceOnly: true,
+            scoreImpact: 0,
+            probabilityImpact: 0,
+            sentimentIsPriceDirection: false,
+            executionAuthority: 'NONE',
+            orderAllowed: false,
+            maxAiEvents: 1,
+            serverCacheTtlMs: 60_000,
+          },
+        }));
+      });
+    },
+  };
+}
+
 export default defineConfig({
   base: basePath,
   plugins: [
     react(),
     tailwindcss(),
+    ...(process.env.VITE_PHASE9_E2E === 'true' ? [phase9MarketIntelligenceUnavailableFixture()] : []),
     runtimeErrorOverlay(),
     VitePWA({
       registerType: 'autoUpdate',
