@@ -8,7 +8,7 @@
     "sourceGitBlobSha": "7dc275b70f9379e32f3fd6c718a612b06ceb1c46",
     "sourceSha256": "8c7563936de865e9103d73d15c0442a44f1cf33426315e758abad83d96880e0c"
   },
-  "sourceGraphSha256": "b67f785830ec218bb5af85440c23f0715cc23582a78e44f9f06045f187033943",
+  "sourceGraphSha256": "99922c8a3e91b708702b23ff8bce7ac2f1c509441a5fc7f053458fae3e8a61c5",
   "sourceFiles": [
     "api-server/src/data/asset-type.ts",
     "api-server/src/lib/bounded-work-pool.ts",
@@ -75,7 +75,7 @@
     "api-server/src/services/scanner-paper-admission-evidence-bundle.service.ts": "80dcccd39396a01f7a2d5f7a00ee3921629fab66a59d48cec9aae16a9268cb2b",
     "api-server/src/services/scanner-profit-cost-evidence-adapter.service.ts": "df190fd98173c7f272cb309933d877a8f73a099d900c19159e083b36097d29e0",
     "api-server/src/services/scanner-quant-hardening.service.ts": "2dc7fc7bc34b58639adcfb8c4bd3a3ed861c4a9939d79350aa066bae2a1447de",
-    "api-server/src/services/scanner-quant-strategy.service.ts": "da8cf0705139c9c07da029bb25b3b0b92bbea54182313a902a2b32ad79329a8f",
+    "api-server/src/services/scanner-quant-strategy.service.ts": "25a2998a0f31776e2cdc0fddc3c151430c8673fc52fe9af35cb203ccc17d4ca8",
     "api-server/src/services/scanner-signal-lifecycle.service.ts": "6c8a85753f2484045371e16afa6232cd42f9ec24fb0852ffbc05818860be0c48",
     "api-server/src/services/scanner-strategy-profile.service.ts": "d0d2ebefd63c8d523fe8e7a459cb29c90341698b451ab6f479c7f02c6d7d4699",
     "api-server/src/services/signal-performance-learning.service.ts": "f4180691041a9f7f57cbfd7513ff6666260275efa6c49652c313ae6bc9195392",
