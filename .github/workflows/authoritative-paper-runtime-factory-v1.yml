@@ -95,6 +95,17 @@ jobs:
             market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs \
             market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json
 
+      - name: Upload regenerated package for bounded repair
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: authoritative-paper-runtime-regenerated-${{ github.event.pull_request.head.sha }}
+          path: |
+            market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs
+            market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Run exact-head P0-C9 runtime factory tests
         run: >-
           node --test
