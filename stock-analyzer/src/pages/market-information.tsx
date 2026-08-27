@@ -3,10 +3,12 @@ import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, BarChart3, ChevronRight, RefreshCw, WifiOff } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
+import { InvestmentExplanationButton } from '@/components/investment-explanation-sheet';
 import { ResponsiveTabs } from '@/components/responsive-tabs';
 import { UnifiedAssetSearch } from '@/components/unified-asset-search';
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { useAssetMode } from '@/lib/asset-mode';
+import type { InvestmentExplanationKey } from '@/lib/investment-explanations';
 import {
   marketInformationDetailPath,
   marketInformationRoute,
@@ -28,6 +30,21 @@ const MOBILE_ROOM_TABS = [
   { value: 'ranking', label: '순위' },
   { value: 'news', label: '소식' },
 ] as const;
+
+const RANKING_LABEL: Record<RankingKey, string> = {
+  tradingValue: '거래대금',
+  volume: '거래량',
+  gainers: '급등',
+  losers: '급락',
+  marketCap: '시가총액',
+};
+
+function rankingExplanationKey(key: RankingKey): InvestmentExplanationKey | null {
+  if (key === 'tradingValue') return 'tradingValue';
+  if (key === 'volume') return 'volume';
+  if (key === 'marketCap') return 'marketCap';
+  return null;
+}
 
 class MarketInformationRequestError extends Error {
   constructor(
@@ -146,10 +163,12 @@ function useDesktopRoom(): boolean {
 }
 
 function SourceMeta({ meta }: { meta: MarketInformationMeta }) {
+  const basis = formatDate(meta.providerUpdatedAt ?? meta.observedAt);
   return (
     <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-bold text-muted-foreground" aria-label="데이터 상태">
       <span>출처 {meta.source ?? meta.provider ?? '미연결'}</span>
-      <span>기준 {formatDate(meta.providerUpdatedAt ?? meta.observedAt)}</span>
+      <span>기준 {basis}</span>
+      <InvestmentExplanationButton metric="freshness" value={basis} status={meta.isStale ? '오래됨' : meta.isDelayed ? '지연' : '현재 제공 상태'} compact />
       <span>
         {meta.marketStatus === '24H' ? '24시간' : meta.marketStatus === 'OPEN' ? '장중' : meta.marketStatus === 'CLOSED' ? '마감' : '미확인'}
       </span>
@@ -367,6 +386,7 @@ export default function MarketInformationPage() {
   const mobileTabs = route.id === 'coins-futures'
     ? [...MOBILE_ROOM_TABS, { value: 'futures' as const, label: '선물' }]
     : MOBILE_ROOM_TABS;
+  const activeRankingExplanation = rankingExplanationKey(ranking);
 
   const overview = data ? (
     <div className="grid min-w-0 gap-3 lg:grid-cols-2" data-testid="market-room-overview">
@@ -402,6 +422,15 @@ export default function MarketInformationPage() {
           <span className="shrink-0 rounded-full bg-muted px-2 py-1 text-[10px] font-black">{visibleRows.length}개</span>
         </div>
         <RankingTabs value={ranking} onChange={setRanking} />
+        <div data-testid="market-ranking-explanation" className="mt-3 rounded-xl border border-primary/20 bg-primary/5 p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-black">현재 기준: {RANKING_LABEL[ranking]}</span>
+            {activeRankingExplanation ? <InvestmentExplanationButton metric={activeRankingExplanation} value={RANKING_LABEL[ranking]} compact /> : null}
+          </div>
+          <p className="mt-1 break-keep text-[10px] font-bold leading-4 text-muted-foreground">
+            이 순위는 현재 시장 데이터의 정렬 결과입니다. 순위가 높다는 이유만으로 매수·매도 신호로 해석하지 않습니다.
+          </p>
+        </div>
         {ranking === 'marketCap' && data.sections.rankings.data.every((row) => row.marketCap == null) ? (
           <p className="mt-3 rounded-xl border border-dashed p-3 text-xs font-bold text-muted-foreground">시가총액 미제공</p>
         ) : (
@@ -414,6 +443,11 @@ export default function MarketInformationPage() {
   const futures = data && route.id === 'coins-futures' ? (
     <div data-testid="market-room-futures">
       <SectionFrame title="선물 지표" section={data.sections.derivatives}>
+        <div className="mt-3 flex flex-wrap gap-2" data-testid="futures-metric-explanations">
+          <InvestmentExplanationButton metric="fundingRate" compact />
+          <InvestmentExplanationButton metric="openInterest" compact />
+        </div>
+        <p className="mt-2 text-[10px] font-bold leading-4 text-muted-foreground">펀딩비·미결제약정은 포지션 쏠림과 레버리지 참여를 보는 보조 근거이며 단독 롱·숏 신호가 아닙니다.</p>
         <div className="mt-3 grid grid-cols-3 gap-2">
           <div className="rounded-xl border bg-background p-3"><p className="text-[10px] font-bold text-muted-foreground">롱</p><p className="mt-1 text-base font-black">{formatPercent(data.sections.derivatives.data.longRatio == null ? null : data.sections.derivatives.data.longRatio * 100)}</p></div>
           <div className="rounded-xl border bg-background p-3"><p className="text-[10px] font-bold text-muted-foreground">숏</p><p className="mt-1 text-base font-black">{formatPercent(data.sections.derivatives.data.shortRatio == null ? null : data.sections.derivatives.data.shortRatio * 100)}</p></div>
@@ -451,11 +485,13 @@ export default function MarketInformationPage() {
               <RefreshCw className={cn('h-4 w-4', query.isFetching && 'animate-spin')} />새로고침
             </button>
           </div>
-          <div className="mt-2 flex flex-wrap gap-2 text-[10px] font-bold text-muted-foreground">
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] font-bold text-muted-foreground">
             <span className="rounded-full bg-emerald-500/10 px-2 py-1 text-emerald-700">공개 데이터</span>
             {data?.partial ? <span className="rounded-full bg-amber-500/10 px-2 py-1 text-amber-700">일부 데이터</span> : null}
             {data ? <span className="rounded-full bg-muted px-2 py-1">수집 {formatDate(data.fetchedAt)}</span> : null}
+            {data ? <InvestmentExplanationButton metric="freshness" value={formatDate(data.fetchedAt)} status={data.partial ? '일부 데이터' : '수집됨'} compact /> : null}
           </div>
+          <p className="mt-2 break-keep text-[10px] font-bold leading-4 text-muted-foreground">정보탭의 기본 화면은 공개 데이터와 규칙 기반 설명만 사용합니다. 화면 조회 자체가 AI 호출이나 주문을 만들지 않습니다.</p>
         </header>
 
         <section className="relative z-20 mt-3" aria-label="현재 정보방 검색">
