@@ -6,3 +6,76 @@
   min-width: 44px;
   min-height: 44px;
 }
+
+/*
+ * BottomNav is a normal-flow flex sibling inside each route shell. The legacy
+ * production geometry stylesheet still subtracts a second BottomNav reserve
+ * from AppShell, leaving a large blank strip and shortening every scroll owner.
+ * Restore the AppShell to the full viewport here; route flex shells continue to
+ * reserve the navigation naturally.
+ */
+#root:has(nav[aria-label="주요 메뉴"]) > div > div:nth-child(2)[class*="max-w-screen"] {
+  height: 100dvh !important;
+  min-height: 100svh !important;
+}
+
+/* All visible top-level back actions use the same mobile-safe touch target. */
+button[aria-label="기술 화면으로 돌아가기"],
+button[aria-label="종목 목록으로 돌아가기"] {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+/*
+ * A stock detail already owns market + symbol context. The embedded AI Chart
+ * must not offer a second market/symbol picker that can escape from the selected
+ * stock. Keep timeframe/indicator/chart controls, but remove the duplicated
+ * selector card and duplicated inner AI Chart header.
+ */
+[data-testid="canonical-rich-detail-chart"] [data-testid="unified-analysis-chart"] > section:first-child {
+  display: none !important;
+}
+
+[data-testid="canonical-rich-detail-chart"] > div > header:first-child {
+  display: none !important;
+}
+
+/*
+ * Stock detail owns the vertical scroll boundary. For the AI Chart tab, hand
+ * that boundary to the embedded chart instead of stacking two scroll owners.
+ */
+[data-testid="canonical-stock-analysis"]:has([data-testid="stock-detail-tabs"])
+  > main:has([data-testid="canonical-rich-detail-chart"]) {
+  overflow: hidden !important;
+  padding-top: 0.75rem !important;
+  padding-bottom: 0.75rem !important;
+}
+
+[data-testid="canonical-rich-detail-chart"] {
+  height: 100% !important;
+  min-height: 0 !important;
+}
+
+[data-testid="canonical-rich-detail-chart"] > div {
+  height: 100% !important;
+  min-height: 0 !important;
+  padding-bottom: 1rem !important;
+}
+
+/* Normal stock-detail tabs do not need legacy BottomNav-sized spacer padding. */
+[data-testid="canonical-stock-analysis"]:has([data-testid="stock-detail-tabs"])
+  > main:not(:has([data-testid="canonical-rich-detail-chart"])) {
+  padding-bottom: 1rem !important;
+}
+
+/* Legacy detail is embedded under the canonical 상세분석 tab; never render a second BottomNav inside it. */
+[data-testid="rich-detail-shell"] nav[aria-label="주요 메뉴"] {
+  display: none !important;
+}
+
+/* Keep the read-only orderbook opener just above the real BottomNav, not a second reserve above it. */
+@media (max-width: 1199px) {
+  button[aria-label="읽기 전용 호가창 열기"] {
+    bottom: calc(4.25rem + env(safe-area-inset-bottom)) !important;
+  }
+}
