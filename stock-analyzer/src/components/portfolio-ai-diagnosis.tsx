@@ -164,7 +164,7 @@ export function PortfolioAiDiagnosis() {
       </button>
     </div>
 
-    <div className="mt-2 flex flex-wrap gap-2">
+    <div className="mt-2 flex gap-2 overflow-x-auto pb-1" data-testid="portfolio-ai-quick-prompts">
       {[
         '내 포트폴리오를 요약해줘',
         '가장 큰 집중 위험은?',
@@ -174,7 +174,7 @@ export function PortfolioAiDiagnosis() {
         type="button"
         key={sample}
         onClick={() => setQuestion(sample)}
-        className="min-h-11 rounded-full border border-border px-3 py-1.5 text-[11px] font-bold"
+        className="min-h-11 shrink-0 rounded-full border border-border px-3 py-1.5 text-[11px] font-bold"
       >{sample}</button>)}
     </div>
 
