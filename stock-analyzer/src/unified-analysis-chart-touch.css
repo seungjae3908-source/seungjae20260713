@@ -155,9 +155,28 @@ button[aria-label="종목 목록으로 돌아가기"] {
   padding-bottom: 1rem !important;
 }
 
-/* Keep the read-only orderbook opener just above the real BottomNav, not a second reserve above it. */
+/* Keep the read-only orderbook opener just above the real BottomNav by default. */
 @media (max-width: 1199px) {
   button[aria-label="읽기 전용 호가창 열기"] {
     bottom: calc(4.25rem + env(safe-area-inset-bottom)) !important;
   }
+}
+
+/*
+ * Canonical stock detail already reserves a 44px action slot on the header's
+ * right edge. Reuse that slot for the read-only orderbook opener instead of
+ * floating a wide pill over chart/news content.
+ */
+#root > div:has([data-testid="canonical-stock-analysis"] [data-testid="stock-detail-tabs"])
+  > button[aria-label="읽기 전용 호가창 열기"] {
+  top: 0.75rem !important;
+  right: max(0.75rem, env(safe-area-inset-right)) !important;
+  bottom: auto !important;
+  width: 44px !important;
+  height: 44px !important;
+  min-width: 44px !important;
+  min-height: 44px !important;
+  padding: 0 !important;
+  justify-content: center !important;
+  font-size: 0 !important;
 }
