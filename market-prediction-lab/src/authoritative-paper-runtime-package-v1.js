@@ -33,6 +33,7 @@ const EXPECTED_SOURCE_FILES = Object.freeze([
   "api-server/src/lib/provider-admission-control.ts",
   "api-server/src/services/authoritative-paper-callback-owners.service.ts",
   "api-server/src/services/authoritative-paper-evidence-sources.service.ts",
+  "api-server/src/services/authoritative-paper-execution-cost-sources.service.ts",
   "api-server/src/services/authoritative-paper-runtime-package.entry.ts",
   "api-server/src/services/bitget-futures-public-evidence.service.ts",
   "api-server/src/services/crypto-signal-scanner.service.ts",
