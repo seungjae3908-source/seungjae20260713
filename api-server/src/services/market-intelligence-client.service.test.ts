@@ -1,5 +1,6 @@
 import './market-intelligence-ai-analysis.service.test';
 import './news-disclosure-market-intelligence.service.test';
+import '../routes/market-intelligence-news-disclosure.test';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -33,17 +34,12 @@ function readyPayload(input: {
         orderSubmissionAllowed: false,
       },
       scanner: {
-        mode: 'SOFT_INTELLIGENCE_LAYER',
-        adjustment: input.adjustment ?? 8,
-        intelligenceScore: 68,
-        bullishScore: 68,
-        bearishScore: 32,
-        hardBlockReason: input.hardBlockReason ?? null,
-        candidateDeletionAllowed: false,
+        mode: 'SOFT_INTELLIGENCE_LAYER', adjustment: input.adjustment ?? 8,
+        intelligenceScore: 68, bullishScore: 68, bearishScore: 32,
+        hardBlockReason: input.hardBlockReason ?? null, candidateDeletionAllowed: false,
       },
       autoTrading: {
-        mode: input.mode ?? 'PAPER_ONLY',
-        orderAllowed: false,
+        mode: input.mode ?? 'PAPER_ONLY', orderAllowed: false,
         evidenceReady: input.mode === 'ELIGIBLE_FOR_PARENT_GATE',
         parentEligibilityReady: input.mode === 'ELIGIBLE_FOR_PARENT_GATE',
         hardBlockReason: input.hardBlockReason ?? null,
@@ -63,11 +59,9 @@ function newsRoutePayload(input: { unsafe?: boolean } = {}) {
       orderSubmissionAllowed: input.unsafe ? true : false,
     },
     result: {
-      contract: 'MarketIntelAiRouteV1',
-      status: 'READY',
+      contract: 'MarketIntelAiRouteV1', status: 'READY',
       event: {
-        rawHash: id,
-        sourceId: 'FINNHUB:test', sourceType: 'NEWS', sourceTier: 'TIER_3_VERIFIED_NEWS',
+        rawHash: id, sourceId: 'FINNHUB:test', sourceType: 'NEWS', sourceTier: 'TIER_3_VERIFIED_NEWS',
         sourceUrl: 'https://news.example.com/1', sourceName: 'Example News', market: 'US_STOCK', symbol: 'AAPL',
         companyName: 'Apple', publishedAt: '2026-08-27T01:00:00.000Z', receivedAt: '2026-08-27T01:01:00.000Z',
         headline: 'Example headline', originalText: null, eventType: 'UNKNOWN',
