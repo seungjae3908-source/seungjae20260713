@@ -5,6 +5,10 @@ const intelligenceSource = readFileSync(
   new URL('../src/lib/ai-chart-v2-intelligence.ts', import.meta.url),
   'utf8',
 );
+const panelSource = readFileSync(
+  new URL('../src/components/ai-chart-v2-intelligence-panel.tsx', import.meta.url),
+  'utf8',
+);
 
 test('freshness quality is separate from live transport semantics', () => {
   expect(intelligenceSource).toContain(
@@ -15,4 +19,6 @@ test('freshness quality is separate from live transport semantics', () => {
   );
   expect(intelligenceSource).toContain("if (status === 'ok') return 'FRESH';");
   expect(intelligenceSource).not.toContain("if (status === 'ok') return 'LIVE';");
+  expect(panelSource).toContain("if (quality === 'FRESH')");
+  expect(panelSource).not.toContain("quality === 'LIVE'");
 });
