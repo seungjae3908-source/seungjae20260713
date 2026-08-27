@@ -255,7 +255,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           grep -F "PAPER_FORWARD_SCHEDULE_ACTIVE='true'" ops/install-paper-forward-schedule.sh >/dev/null
-          grep -F "PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED='$OUTCOME_ACCUMULATION_ENABLED'" ops/install-paper-forward-schedule.sh >/dev/null
+          grep -F "PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED='\$OUTCOME_ACCUMULATION_ENABLED'" ops/install-paper-forward-schedule.sh >/dev/null
           grep -F "PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED=true" .github/workflows/paper-forward-schedule-no-deploy-activation.yml >/dev/null
           grep -F "PRIVATE_TRADING_API_ALLOWED='false'" ops/install-paper-forward-schedule.sh >/dev/null
           grep -F "REAL_ORDER_ENABLED='false'" ops/install-paper-forward-schedule.sh >/dev/null
