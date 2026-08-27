@@ -13,6 +13,8 @@ on:
       - api-server/src/routes/paper-trading.ts
       - api-server/src/routes/paper-trading.smoke.test.ts
       - api-server/src/services/paper-simulated-execution-evidence.service.ts
+      - api-server/src/services/crypto-signal-scanner.service.ts
+      - api-server/src/services/crypto-signal-scanner.service.test.ts
       - api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.ts
       - api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.test.ts
       - api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.ts
@@ -128,6 +130,8 @@ jobs:
             api-server/src/routes/paper-trading.ts
             api-server/src/routes/paper-trading.smoke.test.ts
             api-server/src/services/paper-simulated-execution-evidence.service.ts
+            api-server/src/services/crypto-signal-scanner.service.ts
+            api-server/src/services/crypto-signal-scanner.service.test.ts
             api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.ts
             api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.test.ts
             api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.ts
