@@ -41,19 +41,19 @@ test('selected stock detail keeps one top-left back action with a 44px touch tar
   expect(touchCss).toContain('button[aria-label="종목 목록으로 돌아가기"]');
 });
 
-test('standalone AI Chart uses a bounded shell with fixed header tabs and BottomNav', () => {
+test('mobile standalone AI Chart keeps its overflow contract while bounding content above BottomNav', () => {
   expect(aiChartSource).toContain('h-full min-w-0 overflow-y-auto overscroll-contain bg-background');
   expect(aiChartSource).toContain('aria-label="AI 차트 생중계 · AI 차트 2.0"');
   expect(aiChartSource).toContain('{!embedded && !externalMode && <BottomNav />}');
+  expect(touchCss).toContain('@media (max-width: 1023px)');
   expect(touchCss).toContain('#root div:has(> header h1[aria-label="AI 차트 생중계 · AI 차트 2.0"]):has(> nav[aria-label="주요 메뉴"])');
-  expect(touchCss).toContain('flex-direction: column !important;');
+  expect(touchCss).toContain('overflow-y: auto !important;');
   expect(touchCss).toContain('> div:has([data-testid="ai-chart-mobile-tabs"])');
   expect(touchCss).toContain('> main {');
   expect(touchCss).toContain('flex: 1 1 0% !important;');
-  expect(touchCss).toContain('overflow-y: auto !important;');
 });
 
-test('embedded stock AI Chart hides duplicate market and symbol selection chrome', () => {
+test('embedded stock AI Chart removes duplicate market and symbol selection but keeps a compact semantic heading', () => {
   expect(detailSource).toContain('data-testid="canonical-rich-detail-chart"');
   expect(detailSource).toContain('<AiChartPage embedded />');
   expect(aiChartSource).toContain('export default function AiChartPage({ embedded = false }');
@@ -61,8 +61,9 @@ test('embedded stock AI Chart hides duplicate market and symbol selection chrome
   expect(unifiedChartSource).toContain('data-testid={`market-${item.key}`}');
   expect(unifiedChartSource).toContain('aria-label="차트 종목 심볼"');
   expect(touchCss).toContain('[data-testid="canonical-rich-detail-chart"] [data-testid="unified-analysis-chart"] > section:first-child');
-  expect(touchCss).toContain('[data-testid="canonical-rich-detail-chart"] > div > header:first-child');
-  expect(touchCss.match(/display: none !important;/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
+  expect(touchCss).toContain('display: none !important;');
+  expect(touchCss).toContain('[data-testid="canonical-rich-detail-chart"] > div > header:first-child h1');
+  expect(touchCss).toContain('font-size: 0.875rem !important;');
 });
 
 test('stock detail chart has a single vertical scroll owner and normal tabs lose legacy bottom spacer', () => {
@@ -97,9 +98,9 @@ test('modern home search theme learn order and settings routes lose obsolete Bot
   expect(touchCss).toContain('padding-bottom: 0 !important;');
 });
 
-test('paper trading gives its panel the remaining flex height instead of stacking a fixed-nav spacer', () => {
+test('paper trading gives its runtime panel the remaining flex height instead of stacking a fixed-nav spacer', () => {
   expect(paperTradingSource).toContain('data-testid="paper-trading-shell"');
-  expect(paperTradingSource).toContain('data-testid="paper-trading-page"');
+  expect(paperTradingSource).toContain('<PaperTradingPanel');
   expect(paperTradingSource).toContain('pb-[calc(5rem+env(safe-area-inset-bottom))]');
   expect(touchCss).toContain('[data-testid="paper-trading-shell"] {');
   expect(touchCss).toContain('[data-testid="paper-trading-shell"] > [data-testid="paper-trading-page"]');
