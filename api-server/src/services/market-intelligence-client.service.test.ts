@@ -1,3 +1,4 @@
+import './market-intelligence-ai-analysis.service.test';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
