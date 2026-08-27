@@ -161,7 +161,7 @@ for (const viewport of [
 
     await tabs.getByRole('tab', { name: '자동매매' }).click();
     await expect(tabs.getByRole('tab', { name: '자동매매' })).toHaveAttribute('aria-selected', 'true');
-    await expect(page.getByRole('heading', { name: '현재 주문 안전 상태' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '주문 안전 상태' })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
   });
 }

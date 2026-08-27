@@ -1,6 +1,6 @@
 import { Router, type IRouter } from 'express';
 
-import type { AuthenticatedRequest } from '../middleware/auth';
+import { requireCapability, type AuthenticatedRequest } from '../middleware/auth';
 import {
   createSupabaseTradingRepository,
   type TradingRepository,
@@ -17,6 +17,7 @@ export type BrokerConnectivityStatus =
   | 'not_configured'
   | 'waiting_for_api_access';
 export type BrokerCredentialSource = 'vault' | 'none';
+export type BrokerSnapshotEvidenceStatus = 'NOT_COLLECTED' | 'UNAVAILABLE' | 'PERMISSION_REQUIRED';
 
 export type NormalizedBrokerAccount = {
   provider: BrokerProviderId;
@@ -213,22 +214,35 @@ async function stateForRequest(req: AuthenticatedRequest): Promise<BrokerCommonS
   return buildBrokerCommonState(userId, connections);
 }
 
-function legacySnapshot(status: BrokerProviderStatus) {
+export function legacySnapshot(status: BrokerProviderStatus) {
+  const error = status.provider === 'toss'
+    ? 'TOSS_API_ACCESS_WAITING'
+    : status.configured
+      ? 'PRIVATE_PROVIDER_READ_DISABLED'
+      : 'ACCOUNT_NOT_CONFIGURED';
+  const evidenceStatus: BrokerSnapshotEvidenceStatus = status.provider === 'toss'
+    ? 'PERMISSION_REQUIRED'
+    : status.configured
+      ? 'NOT_COLLECTED'
+      : 'UNAVAILABLE';
+
   return {
     ok: false,
     configured: status.configured,
     connected: false,
     credentialSource: status.credentialSource,
-    currency: status.provider === 'bitget' ? 'USDT' : status.provider === 'toss' ? 'KRW' : status.provider === 'upbit' ? 'KRW' : 'KRW',
-    totalBalance: 0,
-    available: 0,
-    holdings: [],
-    positions: [],
-    error: status.provider === 'toss'
-      ? 'TOSS_API_ACCESS_WAITING'
-      : status.configured
-        ? 'PRIVATE_PROVIDER_READ_DISABLED'
-        : 'ACCOUNT_NOT_CONFIGURED',
+    currency: status.provider === 'bitget' ? 'USDT' : 'KRW',
+    evidenceStatus,
+    observed: false,
+    observedAt: null,
+    asOf: null,
+    freshness: 'UNKNOWN' as const,
+    provenance: status.provenance,
+    totalBalance: null,
+    available: null,
+    holdings: null,
+    positions: null,
+    error,
     message: status.message,
   };
 }
@@ -254,6 +268,11 @@ function baseResponse(state: BrokerCommonState) {
 }
 
 const router: IRouter = Router();
+
+// Account connection metadata is personal vault state. Authentication alone is
+// insufficient: pending/inactive profiles must not learn whether credentials are
+// configured. Approved associate/regular/admin members share canAccessBasicInfo.
+router.use(requireCapability('canAccessBasicInfo'));
 
 router.get('/contract', async (req: AuthenticatedRequest, res) => {
   res.setHeader('Cache-Control', 'no-store, max-age=0');
