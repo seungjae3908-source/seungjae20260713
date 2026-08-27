@@ -116,6 +116,45 @@ button[aria-label="종목 목록으로 돌아가기"] {
   display: none !important;
 }
 
+/*
+ * Modern pages already render BottomNav as a normal-flow sibling, so their old
+ * fixed-nav spacer classes create an empty tail after the real content. Keep a
+ * compact 1rem content finish on the routes that still carry those legacy pads.
+ */
+#root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="홈"]) > main,
+#root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="통합검색"]) > main,
+#root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="테마"]) > main,
+#root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="투자 공부"]) > main,
+#root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="승인형 주문"]) > main,
+#root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="앱 설정"]) > main {
+  padding-bottom: 1rem !important;
+}
+
+/* AI 정보 is already flex-bounded; remove only its obsolete root BottomNav reserve. */
+#root div:has(> nav[aria-label="주요 메뉴"][data-route-title="AI 정보"]) {
+  padding-bottom: 0 !important;
+}
+
+/*
+ * Paper Trading is the remaining modern route whose panel still consumes h-full
+ * ahead of a normal-flow BottomNav. Give the panel the remaining flex height and
+ * remove both old BottomNav-sized spacers.
+ */
+[data-testid="paper-trading-shell"] {
+  display: flex !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  flex-direction: column !important;
+  padding-bottom: 0 !important;
+}
+
+[data-testid="paper-trading-shell"] > [data-testid="paper-trading-page"] {
+  height: auto !important;
+  min-height: 0 !important;
+  flex: 1 1 0% !important;
+  padding-bottom: 1rem !important;
+}
+
 /* Keep the read-only orderbook opener just above the real BottomNav, not a second reserve above it. */
 @media (max-width: 1199px) {
   button[aria-label="읽기 전용 호가창 열기"] {
