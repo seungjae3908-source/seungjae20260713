@@ -63,9 +63,9 @@ test('BLOCKED_RISK demotes strong eligibility but preserves scanner candidate', 
 
 test('unavailable Market Intelligence is fail-soft and keeps original score', async () => {
   const [result] = await enrichScannerCardsWithMarketIntelligence([card()], async () =>
-    marketIntelligenceNotAvailable('CRYPTO_SPOT', 'KRW-BTC', 'INTELLIGENCE_DOWN'));
+    marketIntelligenceNotAvailable('CRYPTO_FUTURES', 'BTCUSDT', 'SIDECAR_DOWN'));
   assert.equal(result.score, 80);
   assert.equal(result.strongSignalEligible, true);
   assert.equal(result.marketIntelligence.status, 'NOT_AVAILABLE');
-  assert.ok(result.warnings.includes('MI:INTELLIGENCE_DOWN'));
+  assert.ok(result.warnings.includes('MI:SIDECAR_DOWN'));
 });
