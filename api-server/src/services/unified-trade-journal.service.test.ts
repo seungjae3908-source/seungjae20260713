@@ -6,6 +6,7 @@ import {
   JOURNAL_INTEGRATION_BASE_SHA,
   TOSS_LIVE_READ_INTEGRATION,
   buildUnifiedTradeJournal,
+  costEvidenceFromValues,
   maskBrokerAccountReference,
   normalizeTossOrderContract,
   tossJournalIntegrationStatus,
@@ -227,6 +228,49 @@ test('direct cycles ignore asserted net PnL when required cost evidence is missi
   }], { range: 'ALL' }, NOW);
   assert.equal(result.trades[0].netPnl, null);
   assert.equal(result.trades[0].costEvidence.status, 'NOT_AVAILABLE');
+});
+
+test('direct cycles recompute canonical net PnL instead of trusting an asserted net value', () => {
+  const result = buildUnifiedTradeJournal([{
+    id: 'asserted-net-bypass', status: 'closed', source: 'APP_PAPER', market: 'CRYPTO_FUTURES', symbol: 'BTCUSDT', side: 'long',
+    currency: 'USDT', filledAt: '2026-08-10T01:00:00.000Z', closedAt: '2026-08-10T02:00:00.000Z',
+    entryPrice: 100, exitPrice: 110, initialQuantity: 1, closedQuantity: 1, remainingQuantity: 0,
+    grossPnl: 10, fees: 2, tax: 1, netPnl: 10,
+  }], { range: 'ALL' }, NOW);
+  const trade = result.trades[0];
+  assert.equal(trade.costEvidence.status, 'READY');
+  assert.equal(trade.netPnl, 7);
+  assert.equal(trade.netReturnPercent, 7);
+});
+
+test('direct cycle aggregate costs stay cycle-level and never masquerade as entry or exit leg costs', () => {
+  const result = buildUnifiedTradeJournal([{
+    id: 'aggregate-only', status: 'closed', source: 'APP_PAPER', market: 'CRYPTO_FUTURES', symbol: 'BTCUSDT', side: 'long',
+    currency: 'USDT', filledAt: '2026-08-10T01:00:00.000Z', closedAt: '2026-08-10T02:00:00.000Z',
+    entryPrice: 100, exitPrice: 110, initialQuantity: 1, closedQuantity: 1, remainingQuantity: 0,
+    grossPnl: 10, fees: 2, tax: 1,
+  }], { range: 'ALL' }, NOW);
+  const trade = result.trades[0];
+  assert.equal(trade.costEvidence.status, 'READY');
+  assert.equal(trade.fees, 2);
+  assert.equal(trade.tax, 1);
+  assert.equal(trade.initialEntry.fees, null);
+  assert.equal(trade.initialEntry.tax, null);
+  assert.equal(trade.initialEntry.costEvidence.status, 'NOT_AVAILABLE');
+  assert.equal(trade.finalExit?.fees, null);
+  assert.equal(trade.finalExit?.tax, null);
+  assert.equal(trade.finalExit?.costEvidence.status, 'NOT_AVAILABLE');
+});
+
+test('negative transaction cost values can never produce READY evidence', () => {
+  const negativeFee = costEvidenceFromValues(-1, 0, 'CANONICAL_ORDER_RECORD');
+  const negativeTax = costEvidenceFromValues(0, -1, 'CANONICAL_ORDER_RECORD');
+  assert.equal(negativeFee.status, 'NOT_AVAILABLE');
+  assert.equal(negativeFee.fees.status, 'NOT_AVAILABLE');
+  assert.equal(negativeFee.fees.reason, 'JOURNAL_FEES_EVIDENCE_INVALID');
+  assert.equal(negativeTax.status, 'NOT_AVAILABLE');
+  assert.equal(negativeTax.tax.status, 'NOT_AVAILABLE');
+  assert.equal(negativeTax.tax.reason, 'JOURNAL_TAX_EVIDENCE_INVALID');
 });
 
 test('cumulative order reconciliation rejects fill regression and terminal status regression', () => {
