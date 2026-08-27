@@ -43,6 +43,7 @@ const groups = {
     path.join(repositoryRoot, 'stock-analyzer/src/lib/paper-journal-batching-phase8.test.ts'),
   ],
   phase9: [
+    path.join(root, 'src/services/strategy-health-research-adapter.service.test.ts'),
     path.join(root, 'src/services/trading-ai-review-phase9.test.ts'),
     path.join(root, 'src/routes/paper-journal-ai-preview-privileges.test.ts'),
     path.join(root, 'src/services/ai-chat.service.test.ts'),
