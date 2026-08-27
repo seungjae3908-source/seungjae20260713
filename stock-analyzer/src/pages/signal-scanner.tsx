@@ -55,7 +55,7 @@ const FUTURES_DIRECTION_FILTERS: ReadonlyArray<{ value: FuturesDirectionFilter; 
 
 const EMBEDDED_TIMEFRAMES: Readonly<Record<UnifiedScannerStrategyMode, readonly SignalScannerRequest['timeframe'][]>> = Object.freeze({
   scalping: ['1m', '3m', '5m'],
-  swing: ['4H', '1D'],
+  swing: ['60m', '4H'],
   position: ['1D'],
 });
 
@@ -166,7 +166,9 @@ function strategyLabel(strategy: UnifiedScannerStrategyMode): string {
 }
 
 function defaultEmbeddedTimeframe(strategy: UnifiedScannerStrategyMode): SignalScannerRequest['timeframe'] {
-  return strategy === 'scalping' ? '5m' : '1D';
+  if (strategy === 'scalping') return '5m';
+  if (strategy === 'swing') return '4H';
+  return '1D';
 }
 
 function canonicalRank(card: ScannerSignalCard): number | null {
