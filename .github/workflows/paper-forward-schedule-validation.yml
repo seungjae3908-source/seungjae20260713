@@ -256,7 +256,7 @@ jobs:
           grep -F 'paper-forward-authoritative-account-v1' market-prediction-lab/src/paper-forward-schedule-runtime-v1.js >/dev/null
           grep -F 'RESEARCH_PRODUCTION' market-prediction-lab/scripts/run-paper-forward-schedule.js >/dev/null
           grep -F 'loadValidatedAuthoritativePaperRuntimePackage' market-prediction-lab/scripts/run-paper-forward-schedule.js >/dev/null
-          grep -F '58c6ff651912e27daccb7137aff11a4bc38f30a3' market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json >/dev/null
+          grep -F '3dae58f78d1118bc5b9f5b431adbfa50d63d4f5c' market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json >/dev/null
           grep -F '"executionAuthority": "NONE"' market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json >/dev/null
           grep -F '"privateApiAllowed": false' market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json >/dev/null
           grep -F '"liveTrading": false' market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json >/dev/null
