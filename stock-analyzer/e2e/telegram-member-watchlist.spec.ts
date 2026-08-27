@@ -3,6 +3,9 @@ import path from 'node:path';
 import { expect, test } from '@playwright/test';
 import { TELEGRAM_POLICY_SAFETY } from '../../api-server/src/services/telegram-alert-policy.service';
 import type { PersonalTelegramAlertDispatchResult } from '../../api-server/src/services/personal-telegram-alert.service';
+import {
+  memberEligibleForPersonalTelegram,
+} from '../../api-server/src/services/member-watchlist.service';
 import { deliverMemberWatchlistTelegramForSignal } from '../../api-server/src/services/member-watchlist-telegram-producer.service';
 
 function repositoryRoot() {
@@ -61,6 +64,34 @@ test('member watchlist Telegram producer is fail-closed OFF by default', async (
   expect(result.reason).toBe('DISABLED');
   expect(searches).toBe(0);
   expect(sends).toBe(0);
+});
+
+test('personal watchlist eligibility follows current member capability, not approved status alone', () => {
+  expect(memberEligibleForPersonalTelegram({
+    status: 'approved',
+    membership_level: 'associate',
+    is_active: true,
+  })).toBe(true);
+  expect(memberEligibleForPersonalTelegram({
+    status: 'approved',
+    membership_level: 'regular',
+    is_active: true,
+  })).toBe(true);
+  expect(memberEligibleForPersonalTelegram({
+    status: 'approved',
+    membership_level: 'pending',
+    is_active: true,
+  })).toBe(false);
+  expect(memberEligibleForPersonalTelegram({
+    status: 'approved',
+    membership_level: 'regular',
+    is_active: false,
+  })).toBe(false);
+  expect(memberEligibleForPersonalTelegram({
+    status: 'suspended',
+    membership_level: 'regular',
+    is_active: true,
+  })).toBe(false);
 });
 
 test('member watchlist signal goes only through the linked-user personal policy gateway', async () => {
@@ -165,7 +196,7 @@ test('crypto futures LONG and SHORT remain independent eligible directions', asy
   expect(signalTypes).toEqual(['LONG', 'SHORT']);
 });
 
-test('member ownership, active membership, and delivery boundaries are fail-closed', () => {
+test('member ownership, current capability, and delivery boundaries are fail-closed', () => {
   const root = repositoryRoot();
   const route = fs.readFileSync(path.join(root, 'api-server/src/routes/member-watchlist.ts'), 'utf8');
   const migration = fs.readFileSync(
@@ -188,7 +219,9 @@ test('member ownership, active membership, and delivery boundaries are fail-clos
   expect(migration).toContain('auth.uid() = user_id');
   expect(migration).toContain("'UNRESOLVED'");
   expect(service).toContain(".from('profiles')");
+  expect(service).toContain(".select('id,status,membership_level,is_active,role')");
   expect(service).toContain(".eq('status', 'approved')");
+  expect(service).toContain("hasCapability(profile, 'canConnectPersonalTelegram')");
   expect(service).toContain('MAX_PROFILE_LOOKUP_BATCH = 200');
   expect(sync).toContain("request('/member-watchlist/sync'");
   expect(sync).not.toContain('deviceId:');
