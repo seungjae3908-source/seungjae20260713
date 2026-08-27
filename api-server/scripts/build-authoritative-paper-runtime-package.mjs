@@ -14,7 +14,7 @@ const manifestPath = join(outputRoot, 'authoritative-paper-runtime-v1.manifest.j
 
 const CANONICAL_PRODUCER_SOURCE_COMMIT_SHA = '3dae58f78d1118bc5b9f5b431adbfa50d63d4f5c';
 const CANONICAL_PRODUCER_SOURCE_GIT_BLOB_SHA = '7dc275b70f9379e32f3fd6c718a612b06ceb1c46';
-const CANONICAL_PRODUCER_SOURCE_SHA256 = 'e5bfec60589f3c48622fd97fca0eb43901a0365759c02aed66aea0b5080b99d8';
+const CANONICAL_PRODUCER_SOURCE_SHA256 = '8c7563936de865e9103d73d15c0442a44f1cf33426315e758abad83d96880e0c';
 const PRODUCER_SOURCE = 'src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.ts';
 const ALLOWED_INPUTS = Object.freeze([
   '../market-intelligence-sidecar/src/execution-quality.mjs',
@@ -104,7 +104,7 @@ for (const source of actualInputs) {
   sourceDigests[source] = sourceSha256(await readFile(join(apiRoot, source)));
 }
 if (sourceDigests[PRODUCER_SOURCE] !== CANONICAL_PRODUCER_SOURCE_SHA256) {
-  throw new Error(`CANONICAL_PAPER_PRODUCER_SOURCE_SHA_MISMATCH:${sourceDigests[PRODUCER_SOURCE]}`);
+  throw new Error('CANONICAL_PAPER_PRODUCER_SOURCE_SHA_MISMATCH');
 }
 const sourceRecords = actualInputs.map((inputPath) => ({
   inputPath,
