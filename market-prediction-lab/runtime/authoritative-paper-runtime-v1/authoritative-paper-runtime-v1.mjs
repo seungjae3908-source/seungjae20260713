@@ -1589,6 +1589,27 @@ function assertSources(sources) {
     }
   }
 }
+var AuthoritativeEvidenceSourceFailure = class extends Error {
+  sourceKey;
+  constructor(sourceKey) {
+    super("AUTHORITATIVE_EVIDENCE_SOURCE_FAILED");
+    this.name = "AuthoritativeEvidenceSourceFailure";
+    this.sourceKey = sourceKey;
+  }
+};
+function authoritativeSourceCode(kind, sourceKey) {
+  return `P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_${kind}:${sourceKey}`;
+}
+async function readAuthoritativeSource(sources, sourceKey, context) {
+  try {
+    return await sources[sourceKey](context);
+  } catch {
+    throw new AuthoritativeEvidenceSourceFailure(sourceKey);
+  }
+}
+function authoritativeMissingSourceCodes(values) {
+  return SOURCE_KEYS.filter((sourceKey) => values[sourceKey] == null).map((sourceKey) => authoritativeSourceCode("MISSING", sourceKey));
+}
 function createScannerCryptoFuturesPaperAdmissionEvidenceProducer({
   sources,
   compose = composeScannerCryptoFuturesPaperAdmission,
@@ -1637,14 +1658,14 @@ function createScannerCryptoFuturesPaperAdmissionEvidenceProducer({
     });
     let input;
     try {
-      const paperCandidate = await sources.paperCandidate(context);
-      const learningSnapshot = await sources.learningSnapshot(context);
-      const paperState = await sources.paperState(context);
-      const contractRules = await sources.contractRules(context);
-      const publicEvidence = await sources.publicEvidence(context);
-      const executionObservation = await sources.executionObservation(context);
-      const supplementalCostEvidence = await sources.supplementalCostEvidence(context);
-      if ([
+      const paperCandidate = await readAuthoritativeSource(sources, "paperCandidate", context);
+      const learningSnapshot = await readAuthoritativeSource(sources, "learningSnapshot", context);
+      const paperState = await readAuthoritativeSource(sources, "paperState", context);
+      const contractRules = await readAuthoritativeSource(sources, "contractRules", context);
+      const publicEvidence = await readAuthoritativeSource(sources, "publicEvidence", context);
+      const executionObservation = await readAuthoritativeSource(sources, "executionObservation", context);
+      const supplementalCostEvidence = await readAuthoritativeSource(sources, "supplementalCostEvidence", context);
+      const missingSourceCodes = authoritativeMissingSourceCodes({
         paperCandidate,
         learningSnapshot,
         paperState,
@@ -1652,9 +1673,10 @@ function createScannerCryptoFuturesPaperAdmissionEvidenceProducer({
         publicEvidence,
         executionObservation,
         supplementalCostEvidence
-      ].some((value) => value == null)) {
+      });
+      if (missingSourceCodes.length > 0) {
         return blocked3(["P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING"], null, unknownGateObservability(
-          ["P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING"],
+          missingSourceCodes,
           nowMs,
           id,
           "EVIDENCE_SOURCE",
@@ -1673,14 +1695,16 @@ function createScannerCryptoFuturesPaperAdmissionEvidenceProducer({
         nowMs,
         ...maxEvidenceAgeMs == null ? {} : { maxEvidenceAgeMs }
       };
-    } catch {
+    } catch (error) {
+      const exactSourceFailure = error instanceof AuthoritativeEvidenceSourceFailure;
+      const sourceCodes = exactSourceFailure ? [authoritativeSourceCode("FAILED", error.sourceKey)] : ["P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_FAILED"];
       return blocked3(["P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_FAILED"], null, unknownGateObservability(
-        ["P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_FAILED"],
+        sourceCodes,
         nowMs,
         id,
         "EVIDENCE_SOURCE",
         "UNKNOWN",
-        false
+        exactSourceFailure
       ));
     }
     let composition;
