@@ -1,3 +1,4 @@
+import { hasCapability, type MemberAccessProfile } from '../../../packages/member-access/src/index.js';
 import { getSupabase, getUserSupabase, hasSupabaseServerKey } from '../lib/supabase';
 
 export const MEMBER_WATCHLIST_MARKETS = [
@@ -197,23 +198,29 @@ export async function findMemberWatchlistSubscribers(
   const candidates = Array.from(userIds).sort();
   if (candidates.length === 0) return [];
 
-  const approved = new Set<string>();
+  const eligible = new Set<string>();
   for (let index = 0; index < candidates.length; index += MAX_PROFILE_LOOKUP_BATCH) {
     const batch = candidates.slice(index, index + MAX_PROFILE_LOOKUP_BATCH);
     const { data: profiles, error: profileError } = await client
       .from('profiles')
-      .select('id,status')
+      .select('id,status,membership_level,is_active,role')
       .in('id', batch)
       .eq('status', 'approved');
     if (profileError) throw new Error('MEMBER_WATCHLIST_STORAGE_UNAVAILABLE');
     for (const row of Array.isArray(profiles) ? profiles : []) {
-      const profile = row as Record<string, unknown>;
+      const profile = row as Record<string, unknown> & MemberAccessProfile;
       const userId = text(profile.id, 64);
-      if (userId && profile.status === 'approved') approved.add(userId);
+      if (
+        userId
+        && profile.status === 'approved'
+        && hasCapability(profile, 'canConnectPersonalTelegram')
+      ) {
+        eligible.add(userId);
+      }
     }
   }
 
   return candidates
-    .filter((userId) => approved.has(userId))
+    .filter((userId) => eligible.has(userId))
     .map((userId) => ({ userId }));
 }
