@@ -22,6 +22,10 @@ const bottomNavSource = fs.readFileSync(
   path.resolve(process.cwd(), 'src/components/bottom-nav.tsx'),
   'utf8',
 );
+const paperTradingSource = fs.readFileSync(
+  path.resolve(process.cwd(), 'src/pages/paper-trading.tsx'),
+  'utf8',
+);
 
 test('shared BottomNav remains a normal-flow sibling and AppShell no longer double-reserves its height', () => {
   expect(bottomNavSource).toContain('relative z-40 w-full shrink-0');
@@ -82,6 +86,25 @@ test('nested legacy 상세분석 cannot render a second BottomNav', () => {
   expect(detailSource).toContain('data-testid="rich-detail-shell"');
   expect(touchCss).toContain('[data-testid="rich-detail-shell"] nav[aria-label="주요 메뉴"]');
   expect(touchCss).toContain('display: none !important;');
+});
+
+test('modern home search theme learn order and settings routes lose obsolete BottomNav tail spacers', () => {
+  for (const title of ['홈', '통합검색', '테마', '투자 공부', '승인형 주문', '앱 설정']) {
+    expect(touchCss).toContain(`data-route-title="${title}"`);
+  }
+  expect(touchCss).toContain('padding-bottom: 1rem !important;');
+  expect(touchCss).toContain('data-route-title="AI 정보"');
+  expect(touchCss).toContain('padding-bottom: 0 !important;');
+});
+
+test('paper trading gives its panel the remaining flex height instead of stacking a fixed-nav spacer', () => {
+  expect(paperTradingSource).toContain('data-testid="paper-trading-shell"');
+  expect(paperTradingSource).toContain('data-testid="paper-trading-page"');
+  expect(paperTradingSource).toContain('pb-[calc(5rem+env(safe-area-inset-bottom))]');
+  expect(touchCss).toContain('[data-testid="paper-trading-shell"] {');
+  expect(touchCss).toContain('[data-testid="paper-trading-shell"] > [data-testid="paper-trading-page"]');
+  expect(touchCss).toContain('height: auto !important;');
+  expect(touchCss).toContain('flex: 1 1 0% !important;');
 });
 
 test('mobile orderbook opener is kept immediately above BottomNav instead of a duplicate reserve', () => {
