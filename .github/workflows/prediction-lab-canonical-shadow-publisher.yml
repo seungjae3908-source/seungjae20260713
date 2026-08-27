@@ -66,11 +66,51 @@ jobs:
           if (localConsumers < 0 || remotePublish < 0 || localConsumers >= remotePublish) throw new Error('Consumer E2E must validate the candidate before Production state-root mutation');
           NODE
 
-  publish:
+  classify-source-artifact:
     if: >-
       github.event_name == 'workflow_run' &&
       github.event.workflow_run.conclusion == 'success' &&
       (github.event.workflow_run.event == 'issue_comment' || github.event.workflow_run.event == 'schedule')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      eligible: ${{ steps.classify.outputs.eligible }}
+      artifact_count: ${{ steps.classify.outputs.artifact_count }}
+    steps:
+      - name: Classify canonical source artifact availability
+        id: classify
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const sourceRunId = context.payload.workflow_run.id;
+            const expectedName = `prediction-lab-shadow-cycle-${sourceRunId}`;
+            const artifacts = await github.paginate(
+              github.rest.actions.listWorkflowRunArtifacts,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: sourceRunId,
+                per_page: 100,
+              },
+            );
+            const matches = artifacts.filter((artifact) => artifact.name === expectedName && !artifact.expired);
+            core.setOutput('artifact_count', String(matches.length));
+            core.setOutput('eligible', matches.length === 1 ? 'true' : 'false');
+            if (matches.length === 0) {
+              core.notice(`Canonical source run ${sourceRunId} produced no publisher artifact; clean skip.`);
+              return;
+            }
+            if (matches.length > 1) {
+              core.setFailed(`Canonical source run ${sourceRunId} produced ${matches.length} matching artifacts; fail closed.`);
+              return;
+            }
+            core.notice(`Canonical source run ${sourceRunId} has exactly one eligible artifact.`);
+
+  publish:
+    needs: classify-source-artifact
+    if: >-
+      needs.classify-source-artifact.result == 'success' &&
+      needs.classify-source-artifact.outputs.eligible == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
