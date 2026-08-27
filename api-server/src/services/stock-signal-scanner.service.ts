@@ -12,6 +12,7 @@ import { applyStockSignalPolicy } from './scanner-signal-policy.service';
 import { applyScannerSignalLifecycle } from './scanner-signal-lifecycle.service';
 import { applyScannerQuantHardening } from './scanner-quant-hardening.service';
 import { applyScannerMarketProfile } from './scanner-market-profile-overlay.service';
+import { enrichStockScannerCardsWithNewsDisclosureIntelligence } from './scanner-news-disclosure-intelligence.service';
 import { ScannerProviderHealthTracker } from './scanner-provider-health.service';
 import {
   scannerContextTimeframe,
@@ -267,7 +268,16 @@ export const StockSignalScannerService = {
       ? { ...card, strongSignalEligible: false, signalState: 'CANDIDATE' as const }
       : card);
     const lifecycle = applyScannerSignalLifecycle(request.memberId, rankedCards);
-    const visibleTradeReviewCount = lifecycle.cards.filter((card) => card.direction === 'LONG').length;
+    const intelligenceBudgetMs = Math.max(0, Math.min(1_200, 9_300 - (Date.now() - startedAt)));
+    const intelligenceCards = await enrichStockScannerCardsWithNewsDisclosureIntelligence(lifecycle.cards, {
+      market: request.market,
+      enabled: !publicCoreOnly,
+      ...(publicCoreOnly ? { disabledReason: 'PUBLIC_CORE_RECURSION_GUARD' } : {}),
+      maxCandidates: 2,
+      budgetMs: intelligenceBudgetMs,
+      signal: request.signal,
+    });
+    const visibleTradeReviewCount = intelligenceCards.filter((card) => card.direction === 'LONG').length;
     const discovery = buildScannerDiscoveryView(broadCandidates, {
       tradeReviewCount: visibleTradeReviewCount,
       limit: 100,
@@ -284,7 +294,7 @@ export const StockSignalScannerService = {
         ? `일부 공급자 지연으로 ${completedCount}/${universe.entries.length}종목 중 확인 가능한 후보만 표시합니다.`
         : raw.dataSuccessCount === 0 && raw.insufficientDataCount > 0
           ? `현재 묶음에서 공급자 응답은 받았지만 ${raw.insufficientDataCount}종목의 분석 데이터가 부족합니다.`
-          : lifecycle.cards.length === 0
+          : intelligenceCards.length === 0
             ? `현재 묶음 ${completedCount}종목에서 Hard Risk Filter를 통과한 후보가 없습니다.`
             : actionableCount === 0
               ? `현재 진입 가능한 강한 신호 없음 · 관찰 후보 ${ranking.diagnostics.bGradeCount}개`
@@ -297,7 +307,7 @@ export const StockSignalScannerService = {
       assetClass: 'stock',
       market: request.market,
       timeframe: primaryTimeframe,
-      cards: lifecycle.cards,
+      cards: intelligenceCards,
       discovery,
       alerts: lifecycle.alerts,
       failures: [],
