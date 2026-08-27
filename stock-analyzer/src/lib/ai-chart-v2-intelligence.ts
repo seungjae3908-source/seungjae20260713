@@ -13,7 +13,8 @@ export type AiChartStrategyMode = 'SCALPING' | 'SWING' | 'MID_LONG';
 export type AiChartMarket = 'KR_STOCK' | 'US_STOCK' | 'CRYPTO_SPOT' | 'CRYPTO_FUTURES';
 export type AiChartSignalSide = 'BUY' | 'SELL' | 'LONG' | 'SHORT' | 'NO_TRADE' | 'UNKNOWN' | 'WAIT';
 export type AiChartSignalLifecycle = 'ACTIVE' | 'WEAKENED' | 'INVALIDATED' | 'EXPIRED';
-export type AiChartDataQuality = 'LIVE' | 'DELAYED' | 'STALE' | 'PARTIAL' | 'UNAVAILABLE';
+export type AiChartDataQuality = 'FRESH' | 'DELAYED' | 'STALE' | 'PARTIAL' | 'UNAVAILABLE';
+export type AiChartTransportMode = 'LIVE_STREAM' | 'FALLBACK_POLLING' | 'POLLING_PAUSED' | 'DISCONNECTED' | 'RECOVERING';
 export type AiChartEvidenceState = 'READY' | 'INSUFFICIENT_DATA';
 export type AiChartTrend = 'bullish' | 'bearish' | 'mixed' | 'insufficient';
 
@@ -196,7 +197,7 @@ export function defaultStrategyMode(timeframe: UnifiedChartTimeframe): AiChartSt
 }
 
 export function dataQualityFromStatus(status: UnifiedChartDataStatus): AiChartDataQuality {
-  if (status === 'ok') return 'LIVE';
+  if (status === 'ok') return 'FRESH';
   if (status === 'delayed') return 'DELAYED';
   if (status === 'stale') return 'STALE';
   if (status === 'insufficient') return 'PARTIAL';
