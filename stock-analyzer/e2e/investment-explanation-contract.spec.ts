@@ -46,6 +46,17 @@ test('AI information fails closed instead of rendering client fabricated target 
   expect(aiTab).toContain('판단 무효화 조건');
 });
 
+test('AI info calls only on send and reuses the same session answer for duplicate context', () => {
+  const aiInfo = source('src/pages/ai-chat.tsx');
+  expect(aiInfo).toContain('responseCacheRef');
+  expect(aiInfo).toContain('cacheKey(message)');
+  expect(aiInfo).toContain('캐시 재사용 · AI 호출 0');
+  expect(aiInfo).toContain("authorizedFetch('/api/ai/chat'");
+  expect(aiInfo).toContain('질문할 때만 AI를 호출하고');
+  expect(aiInfo).toContain("new URLSearchParams(window.location.search).get('prompt')");
+  expect(aiInfo).not.toContain('void send();\n  }, []);');
+});
+
 test('research center explains canonical metrics without creating fake profitability evidence', () => {
   const research = source('src/pages/research-center.tsx');
   expect(research).toContain('metric="macroF1"');
