@@ -12,8 +12,8 @@ const outputRoot = resolve(
 const bundlePath = join(outputRoot, 'authoritative-paper-runtime-v1.mjs');
 const manifestPath = join(outputRoot, 'authoritative-paper-runtime-v1.manifest.json');
 
-const CANONICAL_PRODUCER_SOURCE_COMMIT_SHA = '58c6ff651912e27daccb7137aff11a4bc38f30a3';
-const CANONICAL_PRODUCER_SOURCE_GIT_BLOB_SHA = 'ffd1eaed99eaa2a0c9a3d4e6cc73dd6d0842928c';
+const CANONICAL_PRODUCER_SOURCE_COMMIT_SHA = '3dae58f78d1118bc5b9f5b431adbfa50d63d4f5c';
+const CANONICAL_PRODUCER_SOURCE_GIT_BLOB_SHA = '7dc275b70f9379e32f3fd6c718a612b06ceb1c46';
 const CANONICAL_PRODUCER_SOURCE_SHA256 = 'e5bfec60589f3c48622fd97fca0eb43901a0365759c02aed66aea0b5080b99d8';
 const PRODUCER_SOURCE = 'src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.ts';
 const ALLOWED_INPUTS = Object.freeze([
@@ -104,7 +104,7 @@ for (const source of actualInputs) {
   sourceDigests[source] = sourceSha256(await readFile(join(apiRoot, source)));
 }
 if (sourceDigests[PRODUCER_SOURCE] !== CANONICAL_PRODUCER_SOURCE_SHA256) {
-  throw new Error('CANONICAL_PAPER_PRODUCER_SOURCE_SHA_MISMATCH');
+  throw new Error(`CANONICAL_PAPER_PRODUCER_SOURCE_SHA_MISMATCH:${sourceDigests[PRODUCER_SOURCE]}`);
 }
 const sourceRecords = actualInputs.map((inputPath) => ({
   inputPath,
