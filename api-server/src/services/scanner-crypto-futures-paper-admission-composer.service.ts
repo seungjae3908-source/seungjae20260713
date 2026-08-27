@@ -46,12 +46,21 @@ type PartialFillObservation = Readonly<{
   observedAtMs: number;
 }>;
 
+type LatencyObservation = Readonly<{
+  observedRoundTripMs: number | null;
+  costValuePercent: null;
+  source: string;
+  observedAtMs: number;
+}>;
+
 type PaperExecutionProvenance = Readonly<{
   evidenceClass: 'SIMULATED';
   marketDataClass: 'public-L2';
   executionMode: 'SIMULATED_EXECUTION_ONLY';
+  realFillObserved: false;
   realFillClaim: false;
   publicDepthIsFillProof: false;
+  liveSubmittedExecutionSampleCredit: 0;
   liveFillCalibrationStatus: 'READY' | 'VETO' | 'BLOCKED_DATA';
 }>;
 
@@ -60,6 +69,7 @@ export type ScannerCryptoFuturesPaperExecutionObservation = Readonly<{
   slippage: PercentCostEvidence;
   liquidity: LiquidityObservation;
   partialFill: PartialFillObservation;
+  latency: LatencyObservation;
   executionProvenance: PaperExecutionProvenance;
   leverage: number;
   riskPercent: number;
@@ -229,8 +239,10 @@ export function composeScannerCryptoFuturesPaperAdmission(
     observation?.executionProvenance?.evidenceClass !== 'SIMULATED'
     || observation?.executionProvenance?.marketDataClass !== 'public-L2'
     || observation?.executionProvenance?.executionMode !== 'SIMULATED_EXECUTION_ONLY'
+    || observation?.executionProvenance?.realFillObserved !== false
     || observation?.executionProvenance?.realFillClaim !== false
-    || observation?.executionProvenance?.publicDepthIsFillProof !== false);
+    || observation?.executionProvenance?.publicDepthIsFillProof !== false
+    || observation?.executionProvenance?.liveSubmittedExecutionSampleCredit !== 0);
   validateObservedCost(observation?.slippage, nowMs, maxEvidenceAgeMs, blockers);
   add(blockers, 'P0_C5_LIQUIDITY_EVIDENCE_INVALID', !positive(observation?.liquidity?.value));
   add(blockers, 'P0_C5_LIQUIDITY_SOURCE_REQUIRED', !nonEmpty(observation?.liquidity?.source));
@@ -376,8 +388,10 @@ export function composeScannerCryptoFuturesPaperAdmission(
     executionProvenance: observation.executionProvenance,
     executionMode: 'SIMULATED_EXECUTION_ONLY',
     publicL2Only: true,
+    realFillObserved: false,
     realFillClaim: false,
     publicDepthIsFillProof: false,
+    liveSubmittedExecutionSampleCredit: 0,
     liveFillCalibrationStatus: observation.executionProvenance.liveFillCalibrationStatus,
     privateTradingApiAllowed: false,
     liveOrderAllowed: false,
