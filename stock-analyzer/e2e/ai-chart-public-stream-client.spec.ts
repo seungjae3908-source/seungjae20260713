@@ -1,0 +1,76 @@
+import { expect, test } from '@playwright/test';
+import { createAiChartPublicStreamClient } from '../src/lib/ai-chart-public-stream-client';
+
+type MessageHandler = ((event: MessageEvent) => void) | null;
+type EventHandler = ((event: Event) => void) | null;
+type CloseHandler = ((event: CloseEvent) => void) | null;
+
+class FakeSocket {
+  readyState = 1;
+  sent: string[] = [];
+  closed = false;
+  onopen: EventHandler = null;
+  onmessage: MessageHandler = null;
+  onerror: EventHandler = null;
+  onclose: CloseHandler = null;
+
+  send(data: string | ArrayBufferLike | Blob | ArrayBufferView) {
+    this.sent.push(String(data));
+  }
+
+  close(_code?: number, _reason?: string) {
+    this.closed = true;
+  }
+}
+
+test('public stream client subscribes, emits public trades and tears down read-only socket', () => {
+  const socket = new FakeSocket();
+  const statuses: string[] = [];
+  const trades: Array<{ provider: string; symbol: string; price: number }> = [];
+  const client = createAiChartPublicStreamClient({
+    market: 'BITGET',
+    symbol: 'BTCUSDT',
+    socketFactory: () => socket,
+    now: () => 1_787_788_860_100,
+    onStatus: (status) => statuses.push(status),
+    onTrade: (event) => trades.push({ provider: event.provider, symbol: event.symbol, price: event.price }),
+  });
+
+  client.start();
+  expect(statuses).toEqual(['CONNECTING']);
+  socket.onopen?.({} as Event);
+  expect(statuses.at(-1)).toBe('LIVE_STREAM');
+  expect(socket.sent[0]).toContain('"channel":"trade"');
+  expect(socket.sent[0]).not.toContain('private');
+
+  socket.onmessage?.({
+    data: JSON.stringify({
+      action: 'snapshot',
+      arg: { instType: 'USDT-FUTURES', channel: 'trade', instId: 'BTCUSDT' },
+      data: [{ ts: '1787788860000', price: '101.5', size: '0.1', side: 'buy', tradeId: 'T-2' }],
+    }),
+  } as MessageEvent);
+  expect(trades).toEqual([{ provider: 'BITGET_PUBLIC', symbol: 'BTCUSDT', price: 101.5 }]);
+  expect(client.snapshot().freshness).toBe('FRESH');
+
+  client.stop();
+  expect(statuses.at(-1)).toBe('DISCONNECTED');
+  expect(socket.closed).toBe(true);
+});
+
+test('missing WebSocket capability fails closed to polling fallback', () => {
+  const statuses: string[] = [];
+  const client = createAiChartPublicStreamClient({
+    market: 'UPBIT',
+    symbol: 'BTC',
+    socketFactory: () => {
+      throw new Error('blocked');
+    },
+    onStatus: (status) => statuses.push(status),
+  });
+
+  client.start();
+  expect(statuses).toEqual(['CONNECTING', 'FALLBACK_POLLING']);
+  expect(client.snapshot().status).toBe('FALLBACK_POLLING');
+  expect(client.snapshot().freshness).toBe('UNAVAILABLE');
+});
