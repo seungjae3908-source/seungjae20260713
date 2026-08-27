@@ -513,6 +513,13 @@ test("lossless Paper state snapshot preserves the complete state and never suppl
       now: () => nowMs + 1,
     });
     await assert.rejects(wrongAccountSource(), /PAPER_STATE_PUBLISHER_ACCOUNT_BINDING_MISMATCH/u);
+    const staleSource = createPaperStateSourceFromLosslessSnapshotFile({
+      snapshotPath: path,
+      runtimePackage,
+      expectedPublisherAccountIdSha256: PUBLISHER_ACCOUNT_ID_SHA256,
+      now: () => nowMs + 30_001,
+    });
+    await assert.rejects(staleSource(), /PAPER_STATE_SNAPSHOT_STALE_OR_FUTURE/u);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
