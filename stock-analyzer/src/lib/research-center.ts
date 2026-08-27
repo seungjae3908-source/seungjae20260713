@@ -46,6 +46,7 @@ export interface ResearchPaperRuntime {
 export interface ResearchPaperLedger {
   present: boolean;
   cycleCount: number | null;
+  sampleCount?: number | null;
   positionCount: number | null;
   settlementCount: number | null;
 }
@@ -58,6 +59,27 @@ export interface ResearchShadowGroup {
   collapsed: boolean | null;
   macroF1: number | null;
   balancedAccuracy: number | null;
+  bullRecall?: number | null;
+  bearRecall?: number | null;
+  neutralRecall?: number | null;
+}
+
+export type StrategyHealthBindingStatus = 'HEALTHY' | 'WATCH' | 'FAIL' | 'MISSING_EVIDENCE';
+
+export interface StrategyHealthEvidenceInput {
+  status: StrategyHealthBindingStatus;
+  reason: string;
+  source: string;
+  observedCount: number | null;
+}
+
+export interface StrategyHealthBinding {
+  status: StrategyHealthBindingStatus;
+  evaluator: 'strategy-health-observatory.service/evaluateStrategyHealth';
+  canonicalCoreStatus: 'INSUFFICIENT_DATA' | 'HEALTHY' | 'WATCH' | 'DEGRADED' | 'CRITICAL' | null;
+  inputs: Record<string, StrategyHealthEvidenceInput>;
+  reasons: string[];
+  executionAuthority: 'NONE';
 }
 
 export interface ResearchCenterOverview {
@@ -99,6 +121,14 @@ export interface ResearchCenterOverview {
     status: string;
     note: string;
   };
+  canonicalStrategyHealth?: {
+    input?: Record<string, unknown>;
+    policy?: Record<string, unknown>;
+  };
+  champion?: {
+    currentValidatedChampion?: Record<string, unknown> | null;
+  };
+  strategyHealth?: StrategyHealthBinding;
 }
 
 export async function fetchResearchCenterOverview(signal?: AbortSignal): Promise<ResearchCenterOverview> {
