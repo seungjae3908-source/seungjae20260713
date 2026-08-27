@@ -249,7 +249,7 @@ function canonicalReasonFor(stage, evidence, identity) {
   const accepted = (Array.isArray(evidence?.reasonObservations) ? evidence.reasonObservations : [])
     .filter((row) => row?.sourceStage === expectedSourceStage
       && row?.lossless === true
-      && nonEmpty(row?.rawReason)
+      && nonEmpty(row?.rawReason ?? row?.sourceReason)
       && canonicalIdentityMatches(row?.identity, identity)
       && row?.replayCredit === 0
       && row?.duplicateCredit === 0)
