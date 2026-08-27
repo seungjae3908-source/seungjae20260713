@@ -95,13 +95,29 @@ function finite(value: number | null | undefined): number | null {
   return value != null && Number.isFinite(value) ? value : null;
 }
 
+function validCount(value: number): boolean {
+  return Number.isFinite(value) && Number.isInteger(value) && value >= 0;
+}
+
+function inRange(value: number | null, minimum: number, maximum: number): value is number {
+  return value != null && value >= minimum && value <= maximum;
+}
+
 export function classifyAiChartV3Regime(input: AiChartV3RegimeInput): AiChartV3Regime {
   const trend = finite(input.trendStrength);
   const atr = finite(input.atrPercentile);
   const volume = finite(input.volumePercentile);
   const liquidity = finite(input.liquidityScore);
   const benchmark = finite(input.benchmarkDirection);
-  if (input.sampleN < 30 || trend == null || atr == null || volume == null || liquidity == null || benchmark == null) {
+  if (
+    !validCount(input.sampleN)
+    || input.sampleN < 30
+    || !inRange(trend, -100, 100)
+    || !inRange(atr, 0, 100)
+    || !inRange(volume, 0, 100)
+    || !inRange(liquidity, 0, 100)
+    || !inRange(benchmark, -100, 100)
+  ) {
     return 'INSUFFICIENT_DATA';
   }
   if (liquidity < 20) return 'LOW_LIQUIDITY';
@@ -124,42 +140,90 @@ export function calibrateAiChartV3Performance(
   if (!evidence) {
     return { state: 'INSUFFICIENT_SAMPLE', probability: null, costAdjustedEvPct: null, totalCostPct: null, sampleN: 0 };
   }
-  const sampleN = Math.max(0, Math.floor(evidence.sampleN));
+
+  const safeMinimumSampleN = Number.isFinite(minimumSampleN) && minimumSampleN > 0
+    ? Math.max(1, Math.floor(minimumSampleN))
+    : 30;
+  const counts = [
+    evidence.sampleN,
+    evidence.oosSampleN,
+    evidence.holdoutSampleN,
+    evidence.shadowSampleN,
+    evidence.paperSampleN,
+  ];
+  if (counts.some((value) => !validCount(value))) {
+    return { state: 'INVALID_EVIDENCE', probability: null, costAdjustedEvPct: null, totalCostPct: null, sampleN: 0 };
+  }
+
+  const sampleN = evidence.sampleN;
   const probability = finite(evidence.calibratedProbability);
   const averageWin = finite(evidence.averageWinPct);
   const averageLoss = finite(evidence.averageLossPct);
-  const costs = [evidence.feesPct, evidence.spreadPct, evidence.slippagePct, evidence.fundingPct]
-    .map((value) => finite(value))
-    .filter((value): value is number => value != null);
-  if (sampleN < minimumSampleN || evidence.oosSampleN <= 0 || evidence.holdoutSampleN <= 0 || probability == null) {
-    return { state: 'INSUFFICIENT_SAMPLE', probability: null, costAdjustedEvPct: null, totalCostPct: costs.reduce((sum, value) => sum + value, 0), sampleN };
-  }
-  if (probability < 0 || probability > 1 || averageWin == null || averageLoss == null || averageWin <= 0 || averageLoss >= 0 || costs.some((value) => value < 0)) {
+  const profitFactor = finite(evidence.profitFactor);
+  const fees = finite(evidence.feesPct);
+  const spread = finite(evidence.spreadPct);
+  const slippage = finite(evidence.slippagePct);
+  const funding = finite(evidence.fundingPct);
+
+  if (
+    fees == null
+    || spread == null
+    || slippage == null
+    || funding == null
+    || fees < 0
+    || spread < 0
+    || slippage < 0
+    || (evidence.profitFactor != null && (profitFactor == null || profitFactor <= 0))
+  ) {
     return { state: 'INVALID_EVIDENCE', probability: null, costAdjustedEvPct: null, totalCostPct: null, sampleN };
   }
-  const totalCostPct = costs.reduce((sum, value) => sum + value, 0);
+
+  const totalCostPct = fees + spread + slippage + funding;
+  if (sampleN < safeMinimumSampleN || evidence.oosSampleN <= 0 || evidence.holdoutSampleN <= 0 || probability == null) {
+    return { state: 'INSUFFICIENT_SAMPLE', probability: null, costAdjustedEvPct: null, totalCostPct, sampleN };
+  }
+  if (probability < 0 || probability > 1 || averageWin == null || averageLoss == null || averageWin <= 0 || averageLoss >= 0) {
+    return { state: 'INVALID_EVIDENCE', probability: null, costAdjustedEvPct: null, totalCostPct: null, sampleN };
+  }
+
   const grossEv = probability * averageWin + (1 - probability) * averageLoss;
+  const costAdjustedEvPct = grossEv - totalCostPct;
+  if (!Number.isFinite(totalCostPct) || !Number.isFinite(costAdjustedEvPct)) {
+    return { state: 'INVALID_EVIDENCE', probability: null, costAdjustedEvPct: null, totalCostPct: null, sampleN };
+  }
+
   return {
     state: 'READY',
     probability,
-    costAdjustedEvPct: grossEv - totalCostPct,
+    costAdjustedEvPct,
     totalCostPct,
     sampleN,
   };
 }
 
 function directionalScore(evidence: AiChartV3EngineEvidence[], direction: 'BULLISH' | 'BEARISH'): number | null {
-  const available = evidence.filter((item) => item.available && item.score != null && Number.isFinite(item.score) && item.weight > 0);
+  const available = evidence.filter((item) => item.available && item.score != null && Number.isFinite(item.score) && Number.isFinite(item.weight) && item.weight > 0);
   if (!available.length) return null;
   let numerator = 0;
   let denominator = 0;
   for (const item of available) {
     const score = clamp100(item.score as number);
-    const signed = item.direction === direction ? score : item.direction === 'NEUTRAL' ? 50 : item.direction === 'WAIT' ? 0 : Math.max(0, 100 - score);
-    numerator += signed * item.weight;
+    // Directional evidence is independent: weak/low bullish evidence must never be inverted into bearish evidence, or vice versa.
+    const directional = item.direction === direction
+      ? score
+      : item.direction === 'NEUTRAL'
+        ? 50
+        : 0;
+    numerator += directional * item.weight;
     denominator += item.weight;
   }
   return denominator > 0 ? Math.round((numerator / denominator) * 10) / 10 : null;
+}
+
+function regimeEntryConflict(regime: AiChartV3Regime, longDominant: boolean, shortDominant: boolean): boolean {
+  if (longDominant && (regime === 'STRONG_DOWNTREND' || regime === 'BREAKDOWN' || regime === 'PANIC')) return true;
+  if (shortDominant && (regime === 'STRONG_UPTREND' || regime === 'BREAKOUT')) return true;
+  return false;
 }
 
 export function decideAiChartV3(input: AiChartV3DecisionInput): AiChartV3DecisionResult {
@@ -177,6 +241,9 @@ export function decideAiChartV3(input: AiChartV3DecisionInput): AiChartV3Decisio
   if (input.dataQuality === 'STALE' || input.dataQuality === 'PARTIAL' || input.dataQuality === 'UNAVAILABLE') {
     return { decision: input.hasPosition ? 'HOLD' : 'NO_TRADE', longScore, shortScore, calibratedProbability: null, costAdjustedEvPct: null, calibrationState: calibration.state, reasons: ['DATA_QUALITY_FAIL_CLOSED'] };
   }
+  if (input.regime === 'INSUFFICIENT_DATA' || input.regime === 'LOW_LIQUIDITY') {
+    return { decision: input.hasPosition ? 'HOLD' : 'NO_TRADE', longScore, shortScore, calibratedProbability: null, costAdjustedEvPct: null, calibrationState: calibration.state, reasons: ['REGIME_FAIL_CLOSED'] };
+  }
   if (input.strategyHealth === 'DISABLED' || input.strategyHealth === 'RESEARCH_ONLY') {
     return { decision: input.hasPosition ? 'HOLD' : 'NO_TRADE', longScore, shortScore, calibratedProbability: calibration.probability, costAdjustedEvPct: calibration.costAdjustedEvPct, calibrationState: calibration.state, reasons: ['STRATEGY_NOT_ACTIVE'] };
   }
@@ -190,17 +257,21 @@ export function decideAiChartV3(input: AiChartV3DecisionInput): AiChartV3Decisio
     return { decision: 'HOLD', longScore, shortScore, calibratedProbability: calibration.probability, costAdjustedEvPct: calibration.costAdjustedEvPct, calibrationState: calibration.state, reasons: ['POSITION_ACTIVE'] };
   }
 
+  const regimeConflict = regimeEntryConflict(input.regime, dominantLong, dominantShort);
   if (input.eventRisk === 'HIGH') reasons.push('EVENT_RISK_HIGH');
   if (input.higherTimeframeConflict) reasons.push('HIGHER_TIMEFRAME_CONFLICT');
   if (input.strategyHealth === 'DEGRADED') reasons.push('STRATEGY_DEGRADED');
   if (input.dataQuality === 'DELAYED') reasons.push('DATA_DELAYED');
-  if (calibration.state !== 'READY') reasons.push('INSUFFICIENT_SAMPLE');
+  if (regimeConflict) reasons.push('REGIME_DIRECTION_CONFLICT');
+  if (calibration.state === 'INSUFFICIENT_SAMPLE') reasons.push('INSUFFICIENT_SAMPLE');
+  if (calibration.state === 'INVALID_EVIDENCE') reasons.push('INVALID_PERFORMANCE_EVIDENCE');
   if (calibration.state === 'READY' && (calibration.costAdjustedEvPct ?? 0) <= 0) reasons.push('NON_POSITIVE_COST_ADJUSTED_EV');
 
   const vetoEntry = input.eventRisk === 'HIGH'
     || input.higherTimeframeConflict
     || input.strategyHealth === 'DEGRADED'
     || input.dataQuality === 'DELAYED'
+    || regimeConflict
     || calibration.state !== 'READY'
     || (calibration.costAdjustedEvPct ?? 0) <= 0;
   if (vetoEntry) {
