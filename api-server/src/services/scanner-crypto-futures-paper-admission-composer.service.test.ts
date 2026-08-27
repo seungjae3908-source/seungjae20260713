@@ -165,10 +165,18 @@ function supplemental(overrides: Partial<SupplementalExecutionCostEvidence> = {}
 
 function observation(overrides: Partial<ScannerCryptoFuturesPaperExecutionObservation> = {}): ScannerCryptoFuturesPaperExecutionObservation {
   return Object.freeze({
-    providerProvenance: 'bitget-public-v2:ticker+contracts+funding+open-interest+depth-observation',
+    providerProvenance: 'SIMULATED+public-L2+bitget-public-v2:ticker+contracts+funding+open-interest+depth-observation',
     slippage: observedPercent(0.05, 'bitget-depth-slippage-observer'),
     liquidity: Object.freeze({ value: 1_000_000, source: 'bitget-public-depth-notional', observedAtMs: MARKET_AT }),
-    partialFill: Object.freeze({ model: 'ORDER_BOOK' as const, source: 'paper-order-book-fill-model-v1', observedAtMs: MARKET_AT }),
+    partialFill: Object.freeze({ model: 'ORDER_BOOK' as const, source: 'SIMULATED/public-L2:VISIBLE_L2_BOOK_WALK_ONLY', observedAtMs: MARKET_AT }),
+    executionProvenance: Object.freeze({
+      evidenceClass: 'SIMULATED' as const,
+      marketDataClass: 'public-L2' as const,
+      executionMode: 'SIMULATED_EXECUTION_ONLY' as const,
+      realFillClaim: false as const,
+      publicDepthIsFillProof: false as const,
+      liveFillCalibrationStatus: 'BLOCKED_DATA' as const,
+    }),
     leverage: 1,
     riskPercent: 0.5,
     marginMode: 'isolated' as const,
@@ -203,6 +211,10 @@ test('P0-C5 composes a READY crypto-futures admission bundle only from authorita
   assert.equal(result.paperEvidence?.minimumOrderQuantity, 0.001);
   assert.equal(result.admissionResult?.status, 'READY');
   assert.ok(result.admissionResult?.bundle?.evidenceDigest);
+  assert.equal(result.executionDataEvidence?.executionMode, 'SIMULATED_EXECUTION_ONLY');
+  assert.equal(result.executionDataEvidence?.publicL2Only, true);
+  assert.equal(result.executionDataEvidence?.realFillClaim, false);
+  assert.equal(result.executionDataEvidence?.liveFillCalibrationStatus, 'BLOCKED_DATA');
   assert.equal(result.executionAuthority, 'NONE');
   assert.equal(result.liveOrderAllowed, false);
   assert.equal(result.privateTradingApiAllowed, false);
@@ -247,4 +259,30 @@ test('P0-C5 does not invent supplemental execution costs when the canonical cost
   const result = compose({ supplementalCostEvidence: supplemental({ costPolicyId: 'wrong-policy' }) });
   assert.equal(result.status, 'BLOCKED');
   assert.ok(result.blockers.includes('P0_C5_COST_POLICY_ID_MISMATCH'));
+});
+
+test('P0-C5 blocks admission when supplemental full-cost evidence is absent even when Paper L2 simulation is valid', () => {
+  const result = compose({ supplementalCostEvidence: undefined as never });
+  assert.equal(result.status, 'BLOCKED');
+  assert.ok(result.blockers.includes('P0_C5_SUPPLEMENTAL_FULL_COST_EVIDENCE_REQUIRED'));
+  assert.ok(result.blockers.includes('P0_C5_COST_POLICY_ID_MISMATCH'));
+  assert.equal(result.admissionResult, null);
+});
+
+test('P0-C5 rejects execution observations that are not explicitly SIMULATED/public-L2', () => {
+  const result = compose({
+    executionObservation: observation({
+      providerProvenance: 'bitget-public-depth-without-simulation-label',
+      executionProvenance: Object.freeze({
+        evidenceClass: 'SIMULATED',
+        marketDataClass: 'public-L2',
+        executionMode: 'SIMULATED_EXECUTION_ONLY',
+        realFillClaim: false,
+        publicDepthIsFillProof: false,
+        liveFillCalibrationStatus: 'BLOCKED_DATA',
+      }),
+    }),
+  });
+  assert.equal(result.status, 'BLOCKED');
+  assert.ok(result.blockers.includes('P0_C5_PROVIDER_PROVENANCE_REQUIRED'));
 });
