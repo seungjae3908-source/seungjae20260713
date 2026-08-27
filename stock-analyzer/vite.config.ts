@@ -19,6 +19,12 @@ if (rawPort && (Number.isNaN(port) || port <= 0)) {
 
 const basePath = process.env.BASE_PATH ?? '/';
 
+// Phase 9 browser tests intentionally run a frontend-only Vite server. Optional
+// Market Intelligence is a backend-owned read-only endpoint, so tests that are
+// not specifically about that feature must receive an explicit "not available"
+// contract rather than accidentally proxying to a nonexistent localhost:8080.
+// Dedicated Market Intelligence E2E tests intercept this URL in Playwright and
+// therefore still exercise READY evidence independently of this fallback.
 function phase9MarketIntelligenceUnavailableFixture(): Plugin {
   return {
     name: 'phase9-market-intelligence-unavailable-fixture',
