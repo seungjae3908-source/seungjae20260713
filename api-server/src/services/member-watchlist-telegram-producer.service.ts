@@ -36,6 +36,7 @@ export type MemberWatchlistTelegramProducerResult = {
   matched: number;
   attempted: number;
   delivered: number;
+  queued: number;
   skipped: number;
   failed: number;
   reason:
@@ -84,6 +85,11 @@ function tierLabel(tier: MemberWatchlistSignalEvent['validationTier']): string {
   return 'Research 후보 · 실전수익 미검증';
 }
 
+function durableQueueState(dispatch: object): boolean | null {
+  if (!Object.prototype.hasOwnProperty.call(dispatch, 'deliveryQueued')) return null;
+  return (dispatch as { deliveryQueued?: unknown }).deliveryQueued === true;
+}
+
 export async function deliverMemberWatchlistTelegramForSignal(
   event: MemberWatchlistSignalEvent,
   dependencies: MemberWatchlistTelegramProducerDependencies = {},
@@ -94,6 +100,7 @@ export async function deliverMemberWatchlistTelegramForSignal(
     matched: 0,
     attempted: 0,
     delivered: 0,
+    queued: 0,
     skipped: 0,
     failed: 0,
     reason,
@@ -117,6 +124,7 @@ export async function deliverMemberWatchlistTelegramForSignal(
     matched: subscribers.length,
     attempted: 0,
     delivered: 0,
+    queued: 0,
     skipped: 0,
     failed: 0,
     reason: 'COMPLETE',
@@ -171,12 +179,19 @@ export async function deliverMemberWatchlistTelegramForSignal(
         result.skipped += 1;
         continue;
       }
-      if (dispatch.policy.transport?.ok) result.delivered += 1;
+      if (dispatch.policy.transport?.ok) {
+        result.delivered += 1;
+        continue;
+      }
+      const queueState = durableQueueState(dispatch);
+      if (queueState === true) result.queued += 1;
+      else if (queueState === false) result.skipped += 1;
       else result.failed += 1;
     }
   }
 
-  if (result.failed === result.attempted) result.reason = 'DELIVERY_FAILED';
+  const accepted = result.delivered + result.queued;
+  if (result.failed > 0 && accepted === 0) result.reason = 'DELIVERY_FAILED';
   else if (result.failed > 0) result.reason = 'PARTIAL';
   return result;
 }
