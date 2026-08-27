@@ -187,6 +187,7 @@ test('P0-C9 identifies every missing authoritative source without converting it 
     sources: {
       ...(sources as Record<string, unknown>),
       paperState: async () => null,
+      contractRules: async () => null,
       executionObservation: async () => null,
       supplementalCostEvidence: async () => null,
     } as never,
@@ -203,6 +204,7 @@ test('P0-C9 identifies every missing authoritative source without converting it 
   assert.equal(composeCalls, 0);
   assert.deepEqual(result.gateObservability.reasonObservations.map((row) => row.sourceCode), [
     'P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING:paperState',
+    'P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING:contractRules',
     'P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING:executionObservation',
     'P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING:supplementalCostEvidence',
   ]);
