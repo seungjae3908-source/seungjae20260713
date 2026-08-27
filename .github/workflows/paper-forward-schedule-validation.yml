@@ -13,6 +13,8 @@ on:
       - api-server/src/routes/paper-trading.ts
       - api-server/src/routes/paper-trading.smoke.test.ts
       - api-server/src/services/paper-simulated-execution-evidence.service.ts
+      - api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.ts
+      - api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.test.ts
       - market-intelligence-sidecar/src/execution-quality.mjs
       - market-intelligence-sidecar/src/execution-quality.d.mts
       - market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json
@@ -23,6 +25,7 @@ on:
       - market-prediction-lab/src/authoritative-paper-runtime-package-v1.js
       - market-prediction-lab/src/authoritative-paper-natural-funnel-v1.js
       - market-prediction-lab/src/canonical-paper-admission-bundle-injection-runtime-v1.js
+      - market-prediction-lab/src/canonical-meaningful-search-paper-runtime-v1.js
       - market-prediction-lab/src/bitget-position-tier-v1.js
       - market-prediction-lab/src/bitget-position-tier-v1.d.ts
       - market-prediction-lab/src/eth-v6-paper-forward-source-v1.js
@@ -36,11 +39,18 @@ on:
       - market-prediction-lab/tests/authoritative-paper-runtime-package-v1.test.js
       - market-prediction-lab/tests/authoritative-paper-natural-funnel-v1.test.js
       - market-prediction-lab/tests/canonical-paper-admission-bundle-injection-runtime-v1.test.js
+      - market-prediction-lab/tests/canonical-meaningful-search-paper-runtime-v1.test.js
       - market-prediction-lab/tests/meaningful-search-scheduled-paper-provider-v1.test.js
       - market-prediction-lab/tests/natural-paper-account-cli-contract-v1.test.js
       - market-prediction-lab/tests/paper-forward-schedule-authoritative-source-wiring-v1.test.js
       - market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
+      - market-prediction-lab/tests/recurring-paper-loop-v1.test.js
       - market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
+      - research-production/src/natural-cycle-verdict-trace.mjs
+      - research-production/test/natural-cycle-verdict-trace.test.mjs
+      - market-prediction-lab/tests/research-production-readonly-evidence-observability.test.js
+      - ops/research-production-readonly-evidence.sh
+      - .github/workflows/research-production-natural-cycle-evidence.yml
       - ops/install-paper-forward-schedule.sh
       - ops/disable-paper-forward-schedule.sh
       - .github/workflows/paper-forward-schedule-activation.yml
@@ -97,7 +107,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
-            base="${{ github.event.pull_request.base.sha }}"
+            base="$(git merge-base HEAD "origin/${{ github.event.pull_request.base.ref }}")"
           else
             base="$(git merge-base HEAD origin/main)"
           fi
@@ -154,6 +164,9 @@ jobs:
             market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
             research-production/src/natural-cycle-verdict-trace.mjs
             research-production/test/natural-cycle-verdict-trace.test.mjs
+            market-prediction-lab/tests/research-production-readonly-evidence-observability.test.js
+            ops/research-production-readonly-evidence.sh
+            .github/workflows/research-production-natural-cycle-evidence.yml
             ops/install-paper-forward-schedule.sh
             ops/disable-paper-forward-schedule.sh
             .github/workflows/paper-forward-schedule-activation.yml
