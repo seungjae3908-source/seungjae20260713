@@ -13,6 +13,7 @@ import {
   assertCryptoFuturesLiquidationRiskAttestationV1,
 } from "../src/crypto-futures-derivatives-evidence-contract-v1.js";
 
+const SYMBOL = "BTCUSDT";
 const AS_OF = Date.UTC(2026, 7, 27, 0, 0, 0, 0);
 const OPENED_AT = CRYPTO_FUTURES_ISOLATED_LIQUIDATION_RULE_EFFECTIVE_AT + 24 * 60 * 60_000;
 const OBSERVED_AT = AS_OF - 60_000;
@@ -28,6 +29,7 @@ function tierRows() {
 
 function tiers(overrides = {}) {
   return normalizeCryptoFuturesPositionTiersV1({
+    symbol: SYMBOL,
     rows: tierRows(),
     observedAt: OBSERVED_AT,
     asOf: AS_OF,
@@ -37,6 +39,7 @@ function tiers(overrides = {}) {
 
 function liquidationInput(overrides = {}) {
   return {
+    symbol: SYMBOL,
     direction: "LONG",
     positionSize: 3,
     averageEntryPrice: 110_000,
@@ -57,6 +60,7 @@ function approximately(actual, expected, tolerance = 1e-9) {
 
 test("public Bitget tiers compute the recursive pre-calculated offset exactly", () => {
   const normalized = tiers();
+  assert.equal(normalized.symbol, SYMBOL);
   assert.deepEqual(normalized.rows.map((row) => row.preCalculatedOffset), [0, 200, 2700]);
   assert.equal(normalized.publicDataOnly, true);
   assert.equal(normalized.executionAuthority, "NONE");
@@ -67,6 +71,12 @@ test("public Bitget tiers compute the recursive pre-calculated offset exactly", 
   assert.equal(maintenanceMarginWithFee, 1648);
 });
 
+test("tier evidence digest is bound to the exact futures symbol", () => {
+  const btc = tiers();
+  const eth = tiers({ symbol: "ETHUSDT" });
+  assert.notEqual(btc.tierDigest, eth.tierDigest);
+});
+
 test("LONG isolated liquidation price uses mark-price tier, fee, offset and realized funding cost", () => {
   const result = calculateCryptoFuturesIsolatedLiquidationRiskV1(liquidationInput());
   const expectedEffectiveMargin = 33_000 - 100;
@@ -74,6 +84,7 @@ test("LONG isolated liquidation price uses mark-price tier, fee, offset and real
 
   assert.equal(result.modelId, CRYPTO_FUTURES_ISOLATED_LIQUIDATION_MODEL_ID);
   assert.equal(result.modelVersion, CRYPTO_FUTURES_ISOLATED_LIQUIDATION_MODEL_VERSION);
+  assert.equal(result.symbol, SYMBOL);
   assert.equal(result.selectedTier, 2);
   assert.equal(result.positionValue, 330_000);
   assert.equal(result.preCalculatedOffset, 200);
@@ -113,6 +124,25 @@ test("paying funding moves LONG liquidation closer while receiving funding moves
   assert.ok(neutral.liquidationDistancePercent < received.liquidationDistancePercent);
 });
 
+test("a tier snapshot from another symbol cannot contaminate the liquidation calculation", () => {
+  assert.throws(
+    () => calculateCryptoFuturesIsolatedLiquidationRiskV1(liquidationInput({ symbol: "ETHUSDT" })),
+    /LIQUIDATION_POSITION_TIER_SYMBOL_MISMATCH/,
+  );
+});
+
+test("tampered tier identity digest fails closed", () => {
+  const valid = tiers();
+  const tampered = {
+    ...valid,
+    tierDigest: "0".repeat(64),
+  };
+  assert.throws(
+    () => calculateCryptoFuturesIsolatedLiquidationRiskV1(liquidationInput({ positionTiers: tampered })),
+    /LIQUIDATION_POSITION_TIER_DIGEST_MISMATCH/,
+  );
+});
+
 test("positions opened before the 2025-11-10 classic-account rule remain fail closed", () => {
   assert.throws(
     () => calculateCryptoFuturesIsolatedLiquidationRiskV1(liquidationInput({
@@ -125,6 +155,7 @@ test("positions opened before the 2025-11-10 classic-account rule remain fail cl
 test("position tier observations must be point-in-time and cannot leak from the future", () => {
   assert.throws(
     () => normalizeCryptoFuturesPositionTiersV1({
+      symbol: SYMBOL,
       rows: tierRows(),
       observedAt: AS_OF + 1,
       asOf: AS_OF,
@@ -137,14 +168,14 @@ test("tier ranges and maintenance margin ratios are strict and monotonic", () =>
   const gap = tierRows();
   gap[1] = { ...gap[1], minTierValue: "210000" };
   assert.throws(
-    () => normalizeCryptoFuturesPositionTiersV1({ rows: gap, observedAt: OBSERVED_AT, asOf: AS_OF }),
+    () => normalizeCryptoFuturesPositionTiersV1({ symbol: SYMBOL, rows: gap, observedAt: OBSERVED_AT, asOf: AS_OF }),
     /POSITION_TIER_RANGE_NOT_CONTIGUOUS/,
   );
 
   const decreasing = tierRows();
   decreasing[2] = { ...decreasing[2], mmr: "0.003" };
   assert.throws(
-    () => normalizeCryptoFuturesPositionTiersV1({ rows: decreasing, observedAt: OBSERVED_AT, asOf: AS_OF }),
+    () => normalizeCryptoFuturesPositionTiersV1({ symbol: SYMBOL, rows: decreasing, observedAt: OBSERVED_AT, asOf: AS_OF }),
     /POSITION_TIER_MMR_NOT_MONOTONIC/,
   );
 });
