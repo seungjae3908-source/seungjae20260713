@@ -255,7 +255,13 @@ export function createAuthoritativePaperEvidenceSourceWiring({
     executionObservationForCard: ownedSource({
       callback: 'executionObservationForCard',
       implementation: 'buildAuthoritativePaperExecutionObservation/buildPaperSimulatedExecutionEvidence',
-      requiredData: ['public L2 depth', 'target quantity', 'request timing', 'calibrated fill model', 'immutable risk policy evidence'],
+      requiredData: [
+        'public L2 depth',
+        'target quantity',
+        'request timing',
+        'immutable risk policy evidence',
+        'optional LIVE_SUBMITTED_EXECUTION calibration reported separately from Paper simulation readiness',
+      ],
       source: async (context) => {
         const input = await dependencies.executionObservationInputForCard(context);
         return input == null ? null : buildAuthoritativePaperExecutionObservation(input);
