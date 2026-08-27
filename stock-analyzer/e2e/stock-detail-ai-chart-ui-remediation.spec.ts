@@ -107,8 +107,17 @@ test('paper trading gives its panel the remaining flex height instead of stackin
   expect(touchCss).toContain('flex: 1 1 0% !important;');
 });
 
-test('mobile orderbook opener is kept immediately above BottomNav instead of a duplicate reserve', () => {
+test('canonical stock detail reuses the header action slot for the read-only orderbook opener', () => {
+  expect(touchCss).toContain('#root > div:has([data-testid="canonical-stock-analysis"] [data-testid="stock-detail-tabs"])');
+  expect(touchCss).toContain('> button[aria-label="읽기 전용 호가창 열기"]');
+  expect(touchCss).toContain('top: 0.75rem !important;');
+  expect(touchCss).toContain('bottom: auto !important;');
+  expect(touchCss).toContain('width: 44px !important;');
+  expect(touchCss).toContain('height: 44px !important;');
+  expect(touchCss).toContain('font-size: 0 !important;');
+});
+
+test('mobile orderbook opener has a safe default immediately above BottomNav outside canonical stock detail', () => {
   expect(touchCss).toContain('button[aria-label="읽기 전용 호가창 열기"]');
   expect(touchCss).toContain('bottom: calc(4.25rem + env(safe-area-inset-bottom)) !important;');
-  expect(touchCss).not.toContain('+ 4.5rem\n      + env(safe-area-inset-bottom)');
 });
