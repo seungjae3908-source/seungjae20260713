@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 export const CRYPTO_FUTURES_ISOLATED_LIQUIDATION_MODEL_ID = "BITGET_CLASSIC_SINGLE_ASSET_ISOLATED_TIERED_V2025_11_10";
-export const CRYPTO_FUTURES_ISOLATED_LIQUIDATION_MODEL_VERSION = "1.0.0";
+export const CRYPTO_FUTURES_ISOLATED_LIQUIDATION_MODEL_VERSION = "1.0.1";
 export const CRYPTO_FUTURES_ISOLATED_LIQUIDATION_CONTRACT = "canonical-futures-liquidation-risk/v1";
 export const CRYPTO_FUTURES_ISOLATED_LIQUIDATION_RULE_EFFECTIVE_AT = Date.UTC(2025, 10, 10, 8, 0, 0, 0);
 export const CRYPTO_FUTURES_POSITION_TIER_PROVIDER = Object.freeze({
@@ -13,6 +13,7 @@ export const CRYPTO_FUTURES_POSITION_TIER_PROVIDER = Object.freeze({
 });
 
 const SHA40 = /^[0-9a-f]{40}$/u;
+const SYMBOL = /^[A-Z0-9_-]+$/u;
 const SOURCE = "bitget-public-position-tier";
 const FLOAT_EPSILON = 1e-10;
 
@@ -30,6 +31,12 @@ function plain(value, code) {
 function text(value, code) {
   if (typeof value !== "string" || !value.trim()) fail(code);
   return value.trim();
+}
+
+function normalizeSymbol(value, code) {
+  const symbol = text(value, code).toUpperCase();
+  if (!SYMBOL.test(symbol)) fail(code, symbol);
+  return symbol;
 }
 
 function finite(value, code) {
@@ -114,7 +121,8 @@ function normalizeTier(raw, expectedTier) {
   return { tier, minTierValue, maxTierValue, leverage, mmr };
 }
 
-export function normalizeCryptoFuturesPositionTiersV1({ rows, observedAt, asOf } = {}) {
+export function normalizeCryptoFuturesPositionTiersV1({ symbol, rows, observedAt, asOf } = {}) {
+  const normalizedSymbol = normalizeSymbol(symbol, "POSITION_TIERS_SYMBOL_INVALID");
   if (!Array.isArray(rows) || rows.length === 0) fail("POSITION_TIERS_EMPTY");
   const normalizedObservedAt = timestamp(observedAt, "POSITION_TIERS_OBSERVED_AT_INVALID");
   const normalizedAsOf = timestamp(asOf, "POSITION_TIERS_AS_OF_INVALID");
@@ -137,10 +145,11 @@ export function normalizeCryptoFuturesPositionTiersV1({ rows, observedAt, asOf }
     previousMmr = tier.mmr;
     return deepFreeze({ ...tier, preCalculatedOffset });
   });
-  const tierDigest = digest({ observedAt: normalizedObservedAt, rows: withOffsets });
+  const tierDigest = digest({ symbol: normalizedSymbol, observedAt: normalizedObservedAt, rows: withOffsets });
   return deepFreeze({
     provider: CRYPTO_FUTURES_POSITION_TIER_PROVIDER,
     source: SOURCE,
+    symbol: normalizedSymbol,
     observedAt: normalizedObservedAt,
     asOf: normalizedAsOf,
     rows: withOffsets,
@@ -172,6 +181,7 @@ function normalizeDirection(value) {
 }
 
 export function calculateCryptoFuturesIsolatedLiquidationRiskV1({
+  symbol,
   direction,
   positionSize,
   averageEntryPrice,
@@ -183,6 +193,7 @@ export function calculateCryptoFuturesIsolatedLiquidationRiskV1({
   asOf,
   positionTiers,
 } = {}) {
+  const normalizedSymbol = normalizeSymbol(symbol, "LIQUIDATION_SYMBOL_INVALID");
   const normalizedDirection = normalizeDirection(direction);
   const size = positive(positionSize, "LIQUIDATION_POSITION_SIZE_INVALID");
   const entry = positive(averageEntryPrice, "LIQUIDATION_ENTRY_PRICE_INVALID");
@@ -201,8 +212,12 @@ export function calculateCryptoFuturesIsolatedLiquidationRiskV1({
   if (normalizedOpenedAt > normalizedAsOf) fail("LIQUIDATION_OPENED_AT_FUTURE_LEAKAGE");
   plain(positionTiers, "LIQUIDATION_POSITION_TIERS_INVALID");
   if (positionTiers.publicDataOnly !== true || positionTiers.executionAuthority !== "NONE") fail("LIQUIDATION_POSITION_TIERS_UNSAFE");
+  const tierSymbol = normalizeSymbol(positionTiers.symbol, "LIQUIDATION_POSITION_TIER_SYMBOL_INVALID");
+  if (tierSymbol !== normalizedSymbol) fail("LIQUIDATION_POSITION_TIER_SYMBOL_MISMATCH", `${tierSymbol}->${normalizedSymbol}`);
   if (positionTiers.observedAt > normalizedAsOf) fail("LIQUIDATION_POSITION_TIERS_FUTURE_LEAKAGE");
   if (!Array.isArray(positionTiers.rows) || positionTiers.rows.length === 0) fail("LIQUIDATION_POSITION_TIERS_INVALID");
+  const expectedTierDigest = digest({ symbol: tierSymbol, observedAt: positionTiers.observedAt, rows: positionTiers.rows });
+  if (positionTiers.tierDigest !== expectedTierDigest) fail("LIQUIDATION_POSITION_TIER_DIGEST_MISMATCH");
 
   const positionValue = size * mark;
   const entryNotional = size * entry;
@@ -232,6 +247,7 @@ export function calculateCryptoFuturesIsolatedLiquidationRiskV1({
     modelId: CRYPTO_FUTURES_ISOLATED_LIQUIDATION_MODEL_ID,
     modelVersion: CRYPTO_FUTURES_ISOLATED_LIQUIDATION_MODEL_VERSION,
     rulesEffectiveAt: CRYPTO_FUTURES_ISOLATED_LIQUIDATION_RULE_EFFECTIVE_AT,
+    symbol: normalizedSymbol,
     direction: normalizedDirection.label,
     positionSize: size,
     averageEntryPrice: entry,
