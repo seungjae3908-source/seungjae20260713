@@ -16,6 +16,8 @@ export const PAPER_SIMULATED_EXECUTION_EVIDENCE_SAFETY = Object.freeze({
   currentPriceFillAssumptionAllowed: false,
   liveFillCalibrationRequiredForPaperObservation: false,
   liveFillCalibrationRequiredForRealFillClaim: true,
+  realFillObserved: false,
+  liveSubmittedExecutionSampleCredit: 0,
   supplementalFullCostEvidenceRequiredForAdmission: true,
   financialMutationAllowed: false,
 });
@@ -111,6 +113,9 @@ export function buildPaperSimulatedExecutionEvidence(
   if (!(targetQuantity != null && targetQuantity > 0)) blockPaperSimulation('TARGET_QUANTITY_REQUIRED');
   if (!(observedAtMs != null && observedAtMs > 0)) blockPaperSimulation('PUBLIC_DEPTH_TIMESTAMP_REQUIRED');
   if (!(maximumAgeMs != null && maximumAgeMs > 0)) blockPaperSimulation('PUBLIC_DEPTH_FRESHNESS_CONTRACT_REQUIRED');
+  if (observedAtMs != null && observedAtMs > nowMs) {
+    blockPaperSimulation('PUBLIC_DEPTH_FROM_FUTURE');
+  }
   if (observedAtMs != null && maximumAgeMs != null && nowMs - observedAtMs > maximumAgeMs) {
     blockPaperSimulation('PUBLIC_DEPTH_STALE');
   }
@@ -240,6 +245,7 @@ export function buildPaperSimulatedExecutionEvidence(
       provenance: enforcedProvenance,
       bookWalkStatus: bookWalk?.status ?? 'NOT_AVAILABLE',
       publicDepthIsFillProof: false,
+      realFillObserved: false,
       realFillClaim: false,
       liveFillCalibrationRequired: false,
     },
@@ -254,6 +260,9 @@ export function buildPaperSimulatedExecutionEvidence(
       submittedExecutionSamples: sampleProvenance === LIVE_SUBMITTED_EXECUTION_PROVENANCE
         ? finite(fillModel?.evaluationSamples)
         : null,
+      submittedExecutionSampleCredit: sampleProvenance === LIVE_SUBMITTED_EXECUTION_PROVENANCE
+        ? finite(fillModel?.evaluationSamples) ?? 0
+        : 0,
       minimumSubmittedExecutionSamples,
       fillModel,
       promotedToRealFill: false,
@@ -262,6 +271,7 @@ export function buildPaperSimulatedExecutionEvidence(
     provenance: enforcedProvenance,
     executionMode: 'SIMULATED_EXECUTION_ONLY',
     publicDepthIsFillProof: false,
+    realFillObserved: false,
     realFillClaim: false,
     currentPriceIsFillPrice: false,
     costEvidenceReady: false,
