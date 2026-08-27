@@ -212,16 +212,21 @@ button[aria-label="종목 목록으로 돌아가기"] {
 }
 
 /*
- * App-wide compact tab policy: every semantic tab control centers its visible
- * label on both axes. The aria/data selectors cover older tablists that predate
- * the shared ResponsiveTabs component without touching ordinary action buttons.
+ * App-wide tab typography contract: every semantic tab uses one visual spec —
+ * 12px / 900 weight / 16px line-height / 44px minimum hit target — and centers
+ * its visible label on both axes. The aria/data selectors cover older tablists
+ * that predate ResponsiveTabs without touching ordinary action buttons.
  */
 #root [role="tablist"] [role="tab"],
 #root [aria-label$="탭"] > button,
 #root [data-testid$="-tabs"] > button {
   display: inline-flex !important;
+  min-height: 44px !important;
   align-items: center !important;
   justify-content: center !important;
+  font-size: 0.75rem !important;
+  line-height: 1rem !important;
+  font-weight: 900 !important;
   text-align: center !important;
 }
 
@@ -229,6 +234,7 @@ button[aria-label="종목 목록으로 돌아가기"] {
 #root [aria-label$="탭"] > button > span,
 #root [data-testid$="-tabs"] > button > span {
   width: 100%;
+  line-height: 1rem !important;
   text-align: center !important;
 }
 
