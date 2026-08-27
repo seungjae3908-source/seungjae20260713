@@ -137,7 +137,9 @@ test("Research Production blocks the lane when canonical admission runtime is un
   assert.equal(evidence.legacyNaturalSettlementExits[0].positionId, "legacy-open-position");
   assert.equal(evidence.paperCandidateSource.status, "AUTHORITATIVE_ADMISSION_RUNTIME_UNAVAILABLE");
   assert.equal(evidence.paperCandidateSource.blocker, "AUTHORITATIVE_ADMISSION_RUNTIME_UNAVAILABLE");
-  assert.equal(evidence.paperCandidateSource.eligibleCandidates, 0);
+  assert.equal(evidence.paperCandidateSource.eligibleCandidates, null);
+  assert.equal(evidence.paperCandidateSource.firstZeroStage, "UNKNOWN");
+  assert.equal(evidence.paperCandidateSource.firstZeroReason, "AUTHORITATIVE_ADMISSION_RUNTIME_UNAVAILABLE");
 });
 
 test("injected canonical runtime becomes the only recurring ENTRY source while legacy settlement EXIT remains", async () => {

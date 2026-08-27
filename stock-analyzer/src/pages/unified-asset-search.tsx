@@ -88,31 +88,13 @@ export default function UnifiedAssetSearchPage() {
     navigate(unifiedAssetDetailPath(item, backPath));
   };
 
-  const canAccessSpot = allowedMarkets.includes('spot');
-  const canAccessFutures = allowedMarkets.includes('futures');
-
   return (
-    <div data-testid="unified-asset-search-page" className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
-      <CenteredPageHeader
-        title="종목"
-        infoTitle="통합 종목 검색"
-        infoItems={[
-          canAccessFutures
-            ? '국내주식·미국주식·코인 현물·코인 선물을 한 검색창에서 찾습니다.'
-            : canAccessSpot
-              ? '국내주식·미국주식·코인 현물을 한 검색창에서 찾습니다.'
-              : '국내주식·미국주식을 한 검색창에서 찾습니다.',
-          canAccessFutures
-            ? '종목명, 코드, 티커와 BTC/KRW·BTCUSDT 형식을 지원합니다.'
-            : canAccessSpot
-              ? '종목명, 코드, 티커와 BTC/KRW 형식을 지원합니다.'
-              : '종목명, 코드와 티커 형식을 지원합니다.',
-        ]}
-      />
+    <div data-testid="unified-asset-search-page" className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background">
+      <CenteredPageHeader title="종목" />
 
-      <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-28 pt-4 sm:px-4">
+      <main className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-28 pt-4 sm:px-4">
         <div className="mx-auto w-full max-w-4xl">
-          <nav className="mb-4 flex snap-x gap-2 overflow-x-auto pb-1" aria-label="종목 시장 필터" data-testid="unified-market-tabs">
+          <nav className="mb-3 grid grid-cols-3 gap-2 sm:mb-4 sm:grid-cols-5" aria-label="종목 시장 필터" data-testid="unified-market-tabs">
             {visibleMarketFilters.map((item) => (
               <button
                 key={item.label}
@@ -120,13 +102,13 @@ export default function UnifiedAssetSearchPage() {
                 aria-pressed={market === item.key}
                 onClick={() => selectMarket(item.key)}
                 className={cn(
-                  'min-h-11 shrink-0 snap-start rounded-xl border px-4 text-sm font-black transition',
+                  'min-h-11 min-w-0 rounded-xl border px-2 text-xs font-black transition sm:px-3 sm:text-sm',
                   market === item.key
                     ? 'border-primary bg-primary text-primary-foreground'
                     : 'border-card-border bg-card text-muted-foreground hover:text-foreground',
                 )}
               >
-                {item.label}
+                <span className="break-keep">{item.label}</span>
               </button>
             ))}
           </nav>
@@ -144,9 +126,9 @@ export default function UnifiedAssetSearchPage() {
           <button
             type="button"
             onClick={() => navigate('/market-rankings')}
-            className="mt-4 flex min-h-12 w-full items-center justify-center gap-2 rounded-xl border border-card-border bg-card px-4 text-sm font-black text-primary"
+            className="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-xl border border-card-border bg-card px-4 text-sm font-black text-primary sm:mt-4"
           >
-            <BarChart3 className="h-4 w-4" />시장 순위 보기
+            <BarChart3 className="h-4 w-4" />시장 순위
           </button>
         </div>
       </main>

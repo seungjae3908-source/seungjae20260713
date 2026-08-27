@@ -1,0 +1,391 @@
+name: Natural Paper Outcome Schedule Activation
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  statuses: read
+
+concurrency:
+  group: natural-paper-outcome-production-schedule-activation
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: Validate exact owner approval and immutable release evidence
+    if: >-
+      github.event.issue.number == 23 &&
+      github.event.issue.title == 'Staging Readiness Control' &&
+      startsWith(github.event.comment.body, '/activate-natural-paper-outcome-schedule ')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      target_sha: ${{ steps.command.outputs.sha }}
+      staging_run_id: ${{ steps.staging.outputs.run_id }}
+      postgres_run_id: ${{ steps.postgres.outputs.run_id }}
+    steps:
+      - name: Parse exact owner Natural Paper activation command
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$COMMENT_AUTHOR" == "seungjae3908-source" ]]
+          [[ "$AUTHOR_ASSOCIATION" == "OWNER" ]]
+          node <<'NODE'
+          const fs = require('node:fs');
+          const body = String(process.env.COMMENT_BODY ?? '').trim();
+          const match = /^\/activate-natural-paper-outcome-schedule ([0-9a-f]{40})$/.exec(body);
+          if (!match) {
+            console.error('Exact command required: /activate-natural-paper-outcome-schedule <40-character-current-main-sha>');
+            process.exit(1);
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha=${match[1]}\n`);
+          NODE
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.command.outputs.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Require exact current main and Required CI 6/6
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const main = await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: 'main',
+            });
+            if (main.data.commit.sha !== target) {
+              core.setFailed(`Activation target is stale: target=${target} main=${main.data.commit.sha}`);
+              return;
+            }
+            const required = new Set([
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ]);
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: target,
+              per_page: 100,
+            });
+            const latest = new Map();
+            for (const status of statuses) {
+              if (!latest.has(status.context)) latest.set(status.context, status);
+            }
+            const evidence = [...required].map((contextName) => latest.get(contextName));
+            if (evidence.length !== 6 || evidence.some((status) => status?.state !== 'success')) {
+              core.setFailed('Exact current main does not have all six successful Required statuses.');
+              return;
+            }
+            const runIds = new Set(evidence.map((status) => {
+              const match = /\/actions\/runs\/(\d+)/.exec(String(status.target_url ?? ''));
+              return match?.[1] ?? null;
+            }));
+            if (runIds.size !== 1 || runIds.has(null)) {
+              core.setFailed('Required statuses do not share one exact Application CI provenance run.');
+              return;
+            }
+            const runId = Number([...runIds][0]);
+            const run = await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId,
+            });
+            if (run.data.head_sha !== target || run.data.status !== 'completed' || run.data.conclusion !== 'success') {
+              core.setFailed('Required status workflow provenance is not an exact successful target run.');
+              return;
+            }
+            core.info(`Required CI 6/6 accepted from Run ${runId}.`);
+
+      - name: Locate successful exact-SHA PostgreSQL Auth evidence
+        id: postgres
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head_sha: target,
+              branch: 'main',
+              event: 'issue_comment',
+              status: 'completed',
+              per_page: 100,
+            });
+            for (const run of runs) {
+              if (run.name !== 'Staging PostgreSQL Auth Gate'
+                || run.path !== '.github/workflows/staging-postgres-auth-gate.yml'
+                || run.conclusion !== 'success') continue;
+              const artifacts = await github.rest.actions.listWorkflowRunArtifacts({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: run.id,
+                per_page: 100,
+              });
+              const expected = `staging-postgres-auth-${target}`;
+              const artifact = (artifacts.data.artifacts ?? []).find((item) =>
+                item.name === expected && item.expired !== true && item.workflow_run?.head_sha === target);
+              if (artifact) {
+                core.setOutput('run_id', String(run.id));
+                return;
+              }
+            }
+            core.setFailed(`No successful unexpired exact-SHA PostgreSQL Auth evidence exists for ${target}.`);
+
+      - name: Locate successful exact-SHA Staging Readiness evidence
+        id: staging
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const name = `staging-verdict-${target}`;
+            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name,
+              per_page: 100,
+            });
+            for (const artifact of artifacts) {
+              if (artifact.expired || artifact.workflow_run?.head_sha !== target) continue;
+              const response = await github.rest.actions.getWorkflowRun({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: artifact.workflow_run.id,
+              });
+              const run = response.data;
+              if (run.event === 'workflow_dispatch'
+                && run.head_branch === 'main'
+                && run.head_sha === target
+                && run.path === '.github/workflows/staging-readiness.yml'
+                && run.status === 'completed'
+                && run.conclusion === 'success') {
+                core.setOutput('run_id', String(run.id));
+                return;
+              }
+            }
+            core.setFailed(`No successful unexpired exact-SHA Staging Readiness verdict exists for ${target}.`);
+
+      - name: Download exact-SHA Staging verdict
+        uses: actions/download-artifact@v4
+        with:
+          name: staging-verdict-${{ steps.command.outputs.sha }}
+          path: staging-verdict
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.staging.outputs.run_id }}
+
+      - name: Require exact release-ready Staging verdict
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.sha }}
+        run: node api-server/scripts/verify-staging-verdict.mjs staging-verdict/staging-verdict.json
+
+  activate:
+    name: Activate outcome-capable Natural Paper cron and verify first natural cycle
+    needs: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: production
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      TARGET_SHA: ${{ needs.gate.outputs.target_sha }}
+      EVIDENCE_DIR: ${{ github.workspace }}/natural-paper-outcome-activation-evidence
+    steps:
+      - name: Revalidate current main after Production environment approval
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ env.TARGET_SHA }}
+        with:
+          script: |
+            const target = process.env.TARGET_SHA;
+            const main = await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: 'main',
+            });
+            if (main.data.commit.sha !== target) {
+              core.setFailed(`Natural Paper activation target became stale: target=${target} main=${main.data.commit.sha}.`);
+              return;
+            }
+            core.info(`Post-approval current-main guard accepted ${target}.`);
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate production secrets and configure SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          umask 077
+          mkdir -p ~/.ssh "$EVIDENCE_DIR"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Require Production already deployed at exact approved SHA
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "TARGET_SHA='$TARGET_SHA' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          MARKER=/opt/stock-app/.deploy/current-sha
+          [[ -r "$MARKER" ]]
+          [[ "$(tr -d '[:space:]' < "$MARKER")" == "$TARGET_SHA" ]]
+          REMOTE
+
+      - name: Install explicit Natural Paper outcome-capable schedule
+        id: install
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          activation="$EVIDENCE_DIR/activation.json"
+          remote_command="$(printf 'bash -s -- %q' "$TARGET_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_command" \
+            < ops/install-natural-paper-outcome-schedule.sh > "$activation"
+          node - "$activation" <<'NODE'
+          const fs = require('node:fs');
+          const value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const valid = value.status === 'ACTIVE_WAITING_FOR_NATURAL_CYCLE'
+            && value.targetSha === process.env.TARGET_SHA
+            && value.activationMode === 'NATURAL_PAPER_OUTCOME'
+            && value.scheduleActive === true
+            && value.paperTradeOutcomeAccumulationEnabled === true
+            && value.simulatedFinancialAdaptersEnabled === true
+            && value.externalFinancialMutationAllowed === false
+            && value.paperStatePublisherBindingConfigured === true
+            && value.paperStateSnapshotPathConfigured === true
+            && value.paperStatePublisherAccountBindingConfigured === true
+            && value.executionAuthority === 'NONE'
+            && value.privateRequestCount === 0
+            && value.financialMutationCount === 0
+            && value.orderCount === 0
+            && value.liveTrading === false;
+          if (!valid) process.exit(1);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `activation_at_ms=${value.activationAtMs}\n`);
+          NODE
+
+      - name: Wait for and verify first outcome-capable natural cron cycle
+        id: natural
+        shell: bash
+        env:
+          ACTIVATION_AT_MS: ${{ steps.install.outputs.activation_at_ms }}
+        run: |
+          set -Eeuo pipefail
+          evidence="$EVIDENCE_DIR/natural-cycle.json"
+          for attempt in $(seq 1 50); do
+            set +e
+            remote_command="$(printf 'bash -s -- %q %q' "$TARGET_SHA" "$ACTIVATION_AT_MS")"
+            ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+              "$SSH_USER@$SSH_HOST" "$remote_command" \
+              < ops/verify-natural-paper-outcome-cycle.sh > "$evidence.tmp"
+            status=$?
+            set -e
+            if [[ "$status" == 0 ]]; then
+              mv "$evidence.tmp" "$evidence"
+              exit 0
+            fi
+            if [[ "$status" != 75 ]]; then
+              cat "$evidence.tmp" >&2 || true
+              exit "$status"
+            fi
+            rm -f "$evidence.tmp"
+            sleep 30
+          done
+          echo "No completed Natural Paper cron cycle was observed within the bounded window." >&2
+          exit 78
+
+      - name: Disable schedule automatically if Natural Paper activation validation fails
+        if: failure() && steps.install.outcome == 'success'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" 'bash -s' < ops/disable-paper-forward-schedule.sh
+
+      - name: Upload immutable Natural Paper activation evidence
+        if: always() && steps.install.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: natural-paper-outcome-schedule-activation-${{ env.TARGET_SHA }}
+          path: natural-paper-outcome-activation-evidence
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Record successful Natural Paper outcome activation
+        if: success()
+        uses: actions/github-script@v7
+        env:
+          STAGING_RUN_ID: ${{ needs.gate.outputs.staging_run_id }}
+          POSTGRES_RUN_ID: ${{ needs.gate.outputs.postgres_run_id }}
+        with:
+          script: |
+            const fs = require('node:fs');
+            const evidence = JSON.parse(fs.readFileSync('natural-paper-outcome-activation-evidence/natural-cycle.json', 'utf8'));
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              '[NATURAL_PAPER_OUTCOME_ACTIVATION]',
+              `- Exact SHA: \`${process.env.TARGET_SHA}\``,
+              `- Activation Run: [${context.runId}](${runUrl})`,
+              `- Staging Run: \`${process.env.STAGING_RUN_ID}\``,
+              `- PostgreSQL Auth Run: \`${process.env.POSTGRES_RUN_ID}\``,
+              '- Outcome capability: `ENABLED`',
+              '- Authoritative Paper account binding: `VERIFIED`',
+              '- Four public provider lanes: `READY`',
+              `- First-cycle positions observed: \`${evidence.state.positionCount}\``,
+              `- First-cycle settlements observed: \`${evidence.state.settlementCount}\``,
+              `- Trade outcome accumulating in first cycle: \`${evidence.paperTradeOutcomeAccumulating}\``,
+              '- Zero-outcome first cycle is allowed; no fabricated trade is required.',
+              '- Profitability / Champion claim: `false`',
+              '- Private/account/trading requests: `0`',
+              '- Real orders/cancels/amends/transfers/withdrawals: `0`',
+              '- Live Trading: `false`',
+              '- Schedule active: `true`',
+            ].join('\n');
+            for (const issue_number of [23, 62]) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number,
+                body,
+              });
+            }
