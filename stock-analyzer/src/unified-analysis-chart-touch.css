@@ -27,6 +27,42 @@ button[aria-label="종목 목록으로 돌아가기"] {
 }
 
 /*
+ * Standalone AI Chart used to make the whole page, including BottomNav, the
+ * scroll owner. Convert only the standalone route shape into the common bounded
+ * shell: header/tabs/nav stay in normal flow and only the main content scrolls.
+ */
+#root div:has(> header h1[aria-label="AI 차트 생중계 · AI 차트 2.0"]):has(> nav[aria-label="주요 메뉴"]) {
+  display: flex !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+  padding-bottom: 0 !important;
+}
+
+#root div:has(> header h1[aria-label="AI 차트 생중계 · AI 차트 2.0"]):has(> nav[aria-label="주요 메뉴"])
+  > header:first-child {
+  position: relative !important;
+  top: auto !important;
+  flex: 0 0 auto;
+}
+
+#root div:has(> header h1[aria-label="AI 차트 생중계 · AI 차트 2.0"]):has(> nav[aria-label="주요 메뉴"])
+  > div:has([data-testid="ai-chart-mobile-tabs"]) {
+  position: relative !important;
+  top: auto !important;
+  flex: 0 0 auto;
+}
+
+#root div:has(> header h1[aria-label="AI 차트 생중계 · AI 차트 2.0"]):has(> nav[aria-label="주요 메뉴"])
+  > main {
+  min-height: 0 !important;
+  flex: 1 1 0% !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+}
+
+/*
  * A stock detail already owns market + symbol context. The embedded AI Chart
  * must not offer a second market/symbol picker that can escape from the selected
  * stock. Keep timeframe/indicator/chart controls, but remove the duplicated
@@ -66,6 +102,13 @@ button[aria-label="종목 목록으로 돌아가기"] {
 [data-testid="canonical-stock-analysis"]:has([data-testid="stock-detail-tabs"])
   > main:not(:has([data-testid="canonical-rich-detail-chart"])) {
   padding-bottom: 1rem !important;
+}
+
+/* News and summary/detail tabs keep one deliberate vertical pan owner on touch devices. */
+[data-testid="canonical-stock-analysis"]:has([data-testid="stock-detail-tabs"])
+  > main:not(:has([data-testid="canonical-rich-detail-chart"])) {
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* Legacy detail is embedded under the canonical 상세분석 tab; never render a second BottomNav inside it. */
