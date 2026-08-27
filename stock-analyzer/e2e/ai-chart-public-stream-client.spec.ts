@@ -40,6 +40,7 @@ test('public stream client subscribes, emits public trades and tears down read-o
   expect(statuses).toEqual(['CONNECTING']);
   socket.onopen?.({} as Event);
   expect(statuses.at(-1)).toBe('LIVE_STREAM');
+  expect(client.snapshot().connectedAtMs).toBe(1_787_788_860_100);
   expect(socket.sent[0]).toContain('"channel":"trade"');
   expect(socket.sent[0]).not.toContain('private');
 
@@ -55,6 +56,44 @@ test('public stream client subscribes, emits public trades and tears down read-o
 
   client.stop();
   expect(statuses.at(-1)).toBe('DISCONNECTED');
+  expect(client.snapshot().connectedAtMs).toBeNull();
+  expect(socket.closed).toBe(true);
+});
+
+test('connected socket with no first public trade fails closed to polling fallback', () => {
+  const socket = new FakeSocket();
+  const statuses: string[] = [];
+  const diagnostics: string[] = [];
+  const scheduled: Array<{ callback: () => void; delayMs: number }> = [];
+  let currentNow = 1_000;
+
+  const client = createAiChartPublicStreamClient({
+    market: 'UPBIT',
+    symbol: 'BTC',
+    socketFactory: () => socket,
+    now: () => currentNow,
+    setTimeoutFn: (callback, delayMs) => {
+      scheduled.push({ callback, delayMs });
+      return scheduled.length as unknown as ReturnType<typeof setTimeout>;
+    },
+    clearTimeoutFn: () => undefined,
+    onStatus: (status) => statuses.push(status),
+    onDiagnostic: (diagnostic) => diagnostics.push(diagnostic.reason),
+  });
+
+  client.start();
+  socket.onopen?.({} as Event);
+  expect(statuses.at(-1)).toBe('LIVE_STREAM');
+  expect(client.snapshot().freshness).toBe('UNAVAILABLE');
+
+  const watchdog = scheduled.find((timer) => timer.delayMs === 5_000);
+  expect(watchdog).toBeDefined();
+  currentNow += 90_001;
+  watchdog?.callback();
+
+  expect(statuses.at(-1)).toBe('FALLBACK_POLLING');
+  expect(diagnostics).toContain('FIRST_EVENT_TIMEOUT');
+  expect(client.snapshot().status).toBe('FALLBACK_POLLING');
   expect(socket.closed).toBe(true);
 });
 
