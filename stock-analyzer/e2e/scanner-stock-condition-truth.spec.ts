@@ -113,6 +113,19 @@ test('trading-value increase uses price times volume instead of volume alone', (
   const flat = Array.from({ length: 40 }, (_, index) => candle(index, 100, 100));
   expect(selectedConditionTruth('거래대금 증가', flat)).toBe(false);
   expect(selectedConditionTruth('거래대금 증가', flat.slice(-39))).toBeNull();
+
+  const result = applyStockSignalPolicy({
+    memberId: 'member-test',
+    card: card({ matched: ['거래대금 증가'] }),
+    universeEntry,
+    candles: risingValueCandles(),
+    selected: ['거래대금 증가'],
+    timeframe: '1D',
+  });
+  expect(result.evidence.find((item) => item.label === '거래대금 증가')).toMatchObject({
+    status: 'matched',
+    source: 'market-candles-volume',
+  });
 });
 
 test('MA20 MA60 and MA120 labels require a fresh prior-to-current upward cross', () => {

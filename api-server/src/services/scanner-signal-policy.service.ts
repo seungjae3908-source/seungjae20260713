@@ -50,8 +50,8 @@ function sourceForCondition(label: string): string {
   if (label.includes('뉴스')) return 'news-provider';
   if (label.includes('공시') || label.includes('기관') || label.includes('외국인')) return 'disclosure-risk-provider';
   if (label.includes('PER') || label.includes('PBR') || label.includes('ROE') || label.includes('저평가')) return 'financial-provider';
-  if (label.includes('거래량')) return 'market-candles-volume';
-  if (label.includes('거래대금') || label === '시총') return 'market-quote';
+  if (label.includes('거래량') || label.includes('거래대금')) return 'market-candles-volume';
+  if (label === '시총') return 'market-quote';
   return 'market-candles-technical';
 }
 
