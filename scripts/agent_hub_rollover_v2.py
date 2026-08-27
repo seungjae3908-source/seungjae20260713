@@ -4,11 +4,14 @@
 The bootstrap issue remains stable. Each archived Hub points to exactly one successor in
 its body, so callers can resolve the current canonical Hub without rewriting repository
 configuration or committing directly to main.
+
+The current Agent Hub processors intentionally read at most 1,000 comments per Hub. The
+rollover threshold therefore stays below that processing window rather than waiting for
+GitHub's larger hard comment limit.
 """
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import os
@@ -20,8 +23,9 @@ from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 BOOTSTRAP_HUB_ISSUE = 660
-PREPARE_THRESHOLD = 2200
-ROLLOVER_THRESHOLD = 2400
+PROCESSOR_COMMENT_WINDOW = 1000
+PREPARE_THRESHOLD = 850
+ROLLOVER_THRESHOLD = 950
 COMMENT_LIMIT = 2500
 MAX_CHAIN_DEPTH = 32
 TAIL_COMMENT_PAGES = 3
@@ -66,9 +70,12 @@ class RolloverError(RuntimeError):
     """Fail-closed rollover or routing error."""
 
 
-def _clean(value: Any, limit: int = 1200) -> str:
+def _safe_text(value: Any, limit: int = 1200) -> str:
     text = re.sub(r"[\r\n\t]+", " ", str(value or "")).strip()
     text = re.sub(r"\s{2,}", " ", text)
+    text = re.sub(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", "[REDACTED_EMAIL]", text, flags=re.I)
+    text = re.sub(r"\b01[016789][- ]?\d{3,4}[- ]?\d{4}\b", "[REDACTED_PHONE]", text)
+    text = re.sub(r"(?i)\b(password|secret|token|api[_ -]?key)\s*[:=]\s*\S+", r"\1=[REDACTED]", text)
     return text[:limit]
 
 
@@ -81,7 +88,7 @@ def _field_lines(body: str) -> dict[str, str]:
         key, value = line.split(":", 1)
         key = key.strip()
         if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
-            fields[key] = _clean(value, 1600)
+            fields[key] = _safe_text(value, 1600)
     return fields
 
 
@@ -170,8 +177,7 @@ class GitHubClient:
 
     def create_issue(self, *, title: str, body: str, labels: Sequence[str]) -> dict[str, Any]:
         payload = self.request(
-            "POST",
-            f"/repos/{self.repository}/issues",
+            "POST", f"/repos/{self.repository}/issues",
             {"title": title, "body": body, "labels": list(labels)},
         )
         if not isinstance(payload, dict) or int(payload.get("number") or 0) <= 0:
@@ -220,11 +226,16 @@ def resolve_active_issue(github: GitHubClient, bootstrap: int = BOOTSTRAP_HUB_IS
         issue = github.issue(current)
         successor = successor_from_body(str(issue.get("body") or ""))
         if successor is None:
+            if str(issue.get("state") or "") != "open":
+                raise RolloverError(f"terminal canonical Hub #{current} is not open")
             return current
         successor_issue = github.issue(successor)
-        predecessor = predecessor_from_body(str(successor_issue.get("body") or ""))
+        successor_body = str(successor_issue.get("body") or "")
+        predecessor = predecessor_from_body(successor_body)
         if predecessor != current:
             raise RolloverError(f"successor #{successor} does not attest predecessor #{current}")
+        if CANONICAL_MARKER not in successor_body:
+            raise RolloverError(f"successor #{successor} lacks canonical attestation")
         current = successor
     raise RolloverError("Central Hub successor chain exceeds safety depth")
 
@@ -240,7 +251,7 @@ def _safe_state_lines(comments: Sequence[Mapping[str, Any]]) -> list[str]:
                     continue
                 match = re.match(rf"^{re.escape(key)}\s*[:=]\s*(.+)$", line, flags=re.IGNORECASE)
                 if match:
-                    found[key] = _clean(match.group(1), 240)
+                    found[key] = _safe_text(match.group(1), 240)
         if len(found) == len(SAFE_STATE_KEYS):
             break
     return [f"- {key}: `{found[key]}`" for key in SAFE_STATE_KEYS if key in found]
@@ -253,7 +264,7 @@ def _recent_report_summaries(comments: Sequence[Mapping[str, Any]], limit: int =
         if "[WORKER_REPORT]" not in body:
             continue
         fields = _field_lines(body)
-        selected = [f"{key}={fields[key]}" for key in SAFE_REPORT_FIELDS if fields.get(key)]
+        selected = [f"{key}={_safe_text(fields[key], 700)}" for key in SAFE_REPORT_FIELDS if fields.get(key)]
         if selected:
             cid = int(comment.get("id") or 0)
             rows.append(f"- comment `{cid}` — " + "; ".join(selected)[:1600])
@@ -274,7 +285,7 @@ def _recent_lease_summaries(comments: Sequence[Mapping[str, Any]], limit: int = 
             if "=" in line:
                 key, value = line.split("=", 1)
                 if key in SAFE_LEASE_FIELDS:
-                    fields[key] = _clean(value, 800)
+                    fields[key] = _safe_text(value, 800)
         selected = [f"{key}={fields[key]}" for key in SAFE_LEASE_FIELDS if fields.get(key)]
         if selected:
             cid = int(comment.get("id") or 0)
@@ -288,7 +299,7 @@ def _open_pr_rows(pulls: Sequence[Mapping[str, Any]], limit: int = 40) -> list[s
     rows: list[str] = []
     for pull in sorted(pulls, key=lambda item: int(item.get("number") or 0), reverse=True)[:limit]:
         number = int(pull.get("number") or 0)
-        title = _clean(pull.get("title"), 180)
+        title = _safe_text(pull.get("title"), 180)
         draft = bool(pull.get("draft"))
         head = str(((pull.get("head") or {}).get("sha") or ""))[:12]
         base = str(((pull.get("base") or {}).get("ref") or ""))
@@ -296,7 +307,11 @@ def _open_pr_rows(pulls: Sequence[Mapping[str, Any]], limit: int = 40) -> list[s
     return rows
 
 
-def build_successor_body(*, predecessor: int, predecessor_comments: int, main_sha: str, statuses: Mapping[str, str], comments: Sequence[Mapping[str, Any]], pulls: Sequence[Mapping[str, Any]], repository: str, now_kst: datetime) -> str:
+def build_successor_body(
+    *, predecessor: int, predecessor_comments: int, main_sha: str,
+    statuses: Mapping[str, str], comments: Sequence[Mapping[str, Any]],
+    pulls: Sequence[Mapping[str, Any]], repository: str, now_kst: datetime,
+) -> str:
     status_lines = [f"- `{context}`: **{statuses.get(context, 'missing')}**" for context in REQUIRED_STATUS_CONTEXTS]
     report_rows = _recent_report_summaries(comments)
     lease_rows = _recent_lease_summaries(comments)
@@ -308,10 +323,11 @@ def build_successor_body(*, predecessor: int, predecessor_comments: int, main_sh
         "## Automatic rollover provenance", "", f"- predecessor: #{predecessor}",
         f"- rollover time KST: {now_kst.strftime('%Y-%m-%d %H:%M:%S %Z')}",
         f"- predecessor comment count at rollover: {predecessor_comments}",
-        f"- proactive threshold: {ROLLOVER_THRESHOLD} / hard limit: {COMMENT_LIMIT}",
+        f"- processor safety window: {PROCESSOR_COMMENT_WINDOW} comments",
+        f"- proactive threshold: {ROLLOVER_THRESHOLD} / GitHub hard limit: {COMMENT_LIMIT}",
         f"- repository: `{repository}`", f"- actual main at rollover: `{main_sha}`",
-        "- reason: preserve fresh `issue_comment` triggers and append-only audit continuity before GitHub comment exhaustion",
-        "- predecessor policy: close + lock only after successor verification; historical content is never deleted or rewritten", "",
+        "- reason: roll before the existing 1,000-comment processor window so fresh reports remain visible and append-only audit continuity is preserved",
+        "- predecessor policy: close + lock only after successor routing verification; historical comments are never deleted or rewritten", "",
         "## Exact-main Required CI snapshot", "", *status_lines, "", "## Carry-forward safe state", "",
         *(state_rows or ["- no whitelisted state key found in the retained tail window"]), "", "## Recent active leases", "",
         *(lease_rows or ["- none found in retained tail window"]), "", "## Recent worker reports", "",
@@ -337,9 +353,12 @@ def build_successor_body(*, predecessor: int, predecessor_comments: int, main_sh
 def _append_successor_marker(body: str, successor: int, now_kst: datetime) -> str:
     if successor_from_body(body) is not None:
         raise RolloverError("predecessor already has a successor")
-    addition = "\n".join(["", "## Automatic rollover", "", f"- successor: #{successor}",
+    addition = "\n".join([
+        "", "## Automatic rollover", "", f"- successor: #{successor}",
         f"- activated KST: {now_kst.strftime('%Y-%m-%d %H:%M:%S %Z')}",
-        "- this predecessor is archived after successor verification", f"<!-- agent-hub-successor:{successor} -->", ARCHIVE_MARKER, ""])
+        "- this predecessor is archived after successor verification",
+        f"<!-- agent-hub-successor:{successor} -->", ARCHIVE_MARKER, "",
+    ])
     result = body.rstrip() + "\n" + addition
     if len(result) > 64000:
         raise RolloverError("predecessor body lacks room for successor marker")
@@ -347,9 +366,13 @@ def _append_successor_marker(body: str, successor: int, now_kst: datetime) -> st
 
 
 def _prepare_comment(active: int, count: int) -> str:
-    return "\n".join(["[HUB_ROLLOVER_PREPARE]", "schema_version: 2", f"active_hub: #{active}",
-        f"comment_count: {count}", f"rollover_threshold: {ROLLOVER_THRESHOLD}", f"hard_limit: {COMMENT_LIMIT}",
-        "status: preparing", "action: no route change yet; automatic successor creation remains fail-closed", PREPARE_MARKER])
+    return "\n".join([
+        "[HUB_ROLLOVER_PREPARE]", "schema_version: 2", f"active_hub: #{active}",
+        f"comment_count: {count}", f"processor_window: {PROCESSOR_COMMENT_WINDOW}",
+        f"rollover_threshold: {ROLLOVER_THRESHOLD}", f"github_hard_limit: {COMMENT_LIMIT}",
+        "status: preparing", "action: no route change yet; automatic successor creation remains fail-closed",
+        PREPARE_MARKER,
+    ])
 
 
 def perform_rollover(github: GitHubClient, bootstrap: int = BOOTSTRAP_HUB_ISSUE) -> dict[str, Any]:
@@ -363,36 +386,82 @@ def perform_rollover(github: GitHubClient, bootstrap: int = BOOTSTRAP_HUB_ISSUE)
         return {"active_issue": active, "rolled_over": False, "prepared": True, "comment_count": count}
     if count < ROLLOVER_THRESHOLD:
         return {"active_issue": active, "rolled_over": False, "prepared": already_prepared, "comment_count": count}
+
     issue = github.issue(active)
     existing = successor_from_body(str(issue.get("body") or ""))
     if existing is not None:
         resolved = resolve_active_issue(github, bootstrap)
         return {"active_issue": resolved, "rolled_over": resolved != active, "prepared": True, "comment_count": count}
+
+    now_kst = datetime.now(timezone(timedelta(hours=9)))
+    # Refuse to create an orphan successor if the predecessor body cannot hold the routing marker.
+    _append_successor_marker(str(issue.get("body") or ""), 999999999, now_kst)
+
     main_sha = github.branch_sha("main")
     statuses = github.commit_status(main_sha)
     pulls = github.open_pulls()
-    now_kst = datetime.now(timezone(timedelta(hours=9)))
-    labels = [str(item.get("name") or "") for item in (issue.get("labels") or []) if isinstance(item, dict) and str(item.get("name") or "")]
+    labels = [
+        str(item.get("name") or "") for item in (issue.get("labels") or [])
+        if isinstance(item, dict) and str(item.get("name") or "")
+    ]
     if "active" not in labels:
         labels.append("active")
-    successor_body = build_successor_body(predecessor=active, predecessor_comments=count, main_sha=main_sha, statuses=statuses, comments=tail, pulls=pulls, repository=github.repository, now_kst=now_kst)
-    successor = github.create_issue(title=f"[AGENT-HUB] 중앙 명령·완료 보고 허브 — Auto Rollover {now_kst.strftime('%Y-%m-%d')}", body=successor_body, labels=labels)
+    successor_body = build_successor_body(
+        predecessor=active, predecessor_comments=count, main_sha=main_sha,
+        statuses=statuses, comments=tail, pulls=pulls, repository=github.repository, now_kst=now_kst,
+    )
+    successor = github.create_issue(
+        title=f"[AGENT-HUB] 중앙 명령·완료 보고 허브 — Auto Rollover {now_kst.strftime('%Y-%m-%d')}",
+        body=successor_body, labels=labels,
+    )
     successor_number = int(successor["number"])
     verified = github.issue(successor_number)
-    if predecessor_from_body(str(verified.get("body") or "")) != active or CANONICAL_MARKER not in str(verified.get("body") or "") or str(verified.get("state") or "") != "open":
+    verified_body = str(verified.get("body") or "")
+    if (
+        predecessor_from_body(verified_body) != active
+        or CANONICAL_MARKER not in verified_body
+        or str(verified.get("state") or "") != "open"
+    ):
         raise RolloverError("successor verification failed; predecessor remains canonical")
-    github.post_comment(successor_number, "\n".join([ROLLOVER_EVENT_MARKER, "schema_version: 2", f"predecessor: #{active}", f"successor: #{successor_number}", f"main_sha: {main_sha}", f"predecessor_comment_count: {count}", "status: successor_verified", "production_deploy: 0", "db_mutation: 0", "private_api: 0", "live_trading: 0", "real_orders: 0"]))
+
     predecessor_body = _append_successor_marker(str(issue.get("body") or ""), successor_number, now_kst)
     github.update_issue(active, body=predecessor_body)
     resolved = resolve_active_issue(github, bootstrap)
     if resolved != successor_number:
-        raise RolloverError("routing verification failed; predecessor was not archived")
-    github.update_issue(active, state="closed")
+        raise RolloverError("routing verification failed; predecessor remains open")
+
+    warnings: list[str] = []
+    try:
+        github.post_comment(successor_number, "\n".join([
+            ROLLOVER_EVENT_MARKER, "schema_version: 2", f"predecessor: #{active}",
+            f"successor: #{successor_number}", f"main_sha: {main_sha}",
+            f"predecessor_comment_count: {count}", "status: successor_verified",
+            "production_deploy: 0", "db_mutation: 0", "private_api: 0", "live_trading: 0", "real_orders: 0",
+        ]))
+    except RolloverError:
+        warnings.append("rollover_audit_comment_failed")
+    try:
+        github.update_issue(active, state="closed")
+    except RolloverError:
+        warnings.append("predecessor_close_failed")
     try:
         github.lock_issue(active)
     except RolloverError:
-        github.post_comment(successor_number, "[HUB_ROLLOVER_WARNING]\nstatus: predecessor_lock_failed\n" f"predecessor: #{active}\naction: predecessor is closed; routing remains successor #{successor_number}")
-    return {"active_issue": successor_number, "rolled_over": True, "prepared": True, "comment_count": count, "predecessor": active, "main_sha": main_sha}
+        warnings.append("predecessor_lock_failed")
+    if warnings:
+        try:
+            github.post_comment(successor_number, "\n".join([
+                "[HUB_ROLLOVER_WARNING]", "schema_version: 2", f"predecessor: #{active}",
+                f"successor: #{successor_number}", f"warnings: {','.join(warnings)}",
+                "routing_status: successor remains canonical; manual archival cleanup may be required",
+            ]))
+        except RolloverError:
+            pass
+    return {
+        "active_issue": successor_number, "rolled_over": True, "prepared": True,
+        "comment_count": count, "predecessor": active, "main_sha": main_sha,
+        "warnings": ",".join(warnings) if warnings else "none",
+    }
 
 
 def set_output(name: str, value: Any) -> None:
@@ -406,12 +475,15 @@ def set_output(name: str, value: Any) -> None:
 class FakeGitHub:
     def __init__(self) -> None:
         self.repository = "owner/repo"
-        self.issues: dict[int, dict[str, Any]] = {660: {"number": 660, "body": "", "comments": 10, "state": "open", "labels": [{"name": "active"}]}}
+        self.issues: dict[int, dict[str, Any]] = {
+            660: {"number": 660, "body": "", "comments": 10, "state": "open", "labels": [{"name": "active"}]}
+        }
     def issue(self, number: int) -> dict[str, Any]:
         return self.issues[number]
 
 
 def self_test() -> int:
+    assert 0 < PREPARE_THRESHOLD < ROLLOVER_THRESHOLD < PROCESSOR_COMMENT_WINDOW < COMMENT_LIMIT
     assert successor_from_body("x") is None
     assert successor_from_body("<!-- agent-hub-successor:777 -->") == 777
     try:
@@ -423,20 +495,37 @@ def self_test() -> int:
     fake = FakeGitHub()
     assert resolve_active_issue(fake) == 660
     fake.issues[660]["body"] = "<!-- agent-hub-successor:777 -->"
-    fake.issues[777] = {"number": 777, "body": "<!-- agent-hub-predecessor:660 -->\n<!-- agent-hub-canonical:v2 -->", "comments": 0, "state": "open", "labels": [{"name": "active"}]}
+    fake.issues[660]["state"] = "closed"
+    fake.issues[777] = {
+        "number": 777,
+        "body": "<!-- agent-hub-predecessor:660 -->\n<!-- agent-hub-canonical:v2 -->",
+        "comments": 0, "state": "open", "labels": [{"name": "active"}],
+    }
     assert resolve_active_issue(fake) == 777
     now = datetime(2026, 8, 27, 12, 0, tzinfo=timezone(timedelta(hours=9)))
-    body = build_successor_body(predecessor=660, predecessor_comments=2400, main_sha="a" * 40, statuses={context: "success" for context in REQUIRED_STATUS_CONTEXTS}, comments=[], pulls=[], repository="owner/repo", now_kst=now)
+    body = build_successor_body(
+        predecessor=660, predecessor_comments=ROLLOVER_THRESHOLD, main_sha="a" * 40,
+        statuses={context: "success" for context in REQUIRED_STATUS_CONTEXTS},
+        comments=[], pulls=[], repository="owner/repo", now_kst=now,
+    )
     assert "<!-- agent-hub-predecessor:660 -->" in body and CANONICAL_MARKER in body
     archived = _append_successor_marker("base\n", 777, now)
     assert successor_from_body(archived) == 777 and ARCHIVE_MARKER in archived
-    assert hashlib.sha256(b"dedup").hexdigest()
-    print(json.dumps({"agent_hub_rollover_v2": "pass", "bootstrap": 660, "prepare": 2200, "rollover": 2400}))
+    assert "[REDACTED_EMAIL]" in _safe_text("contact user@example.com")
+    print(json.dumps({
+        "agent_hub_rollover_v2": "pass", "bootstrap": BOOTSTRAP_HUB_ISSUE,
+        "processor_window": PROCESSOR_COMMENT_WINDOW, "prepare": PREPARE_THRESHOLD,
+        "rollover": ROLLOVER_THRESHOLD, "hard_limit": COMMENT_LIMIT,
+    }))
     return 0
 
 
 def _client_from_env() -> GitHubClient:
-    return GitHubClient(os.environ.get("GITHUB_TOKEN", ""), os.environ.get("GITHUB_API_URL", "https://api.github.com"), os.environ.get("GITHUB_REPOSITORY", ""))
+    return GitHubClient(
+        os.environ.get("GITHUB_TOKEN", ""),
+        os.environ.get("GITHUB_API_URL", "https://api.github.com"),
+        os.environ.get("GITHUB_REPOSITORY", ""),
+    )
 
 
 def main() -> int:
