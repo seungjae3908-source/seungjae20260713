@@ -14,6 +14,8 @@ import {
   TriangleAlert,
 } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
+import { InvestmentExplanationButton } from '@/components/investment-explanation-sheet';
+import type { InvestmentExplanationKey } from '@/lib/investment-explanations';
 import {
   fetchResearchCenterOverview,
   type ResearchCycleProfile,
@@ -90,11 +92,34 @@ function toneBadge(tone: ResearchSimpleTone): string {
   return '진행 중';
 }
 
+function researchExplanationKey(label: string): InvestmentExplanationKey | null {
+  const value = label.toLowerCase();
+  if (value.includes('macro f1')) return 'macroF1';
+  if (value.includes('균형') || value.includes('balanced')) return 'balancedAccuracy';
+  if (value.includes('profit factor') || value.includes('pf')) return 'profitFactor';
+  if (value.includes('기대값') || value.includes(' ev')) return 'expectancy';
+  if (value.includes('mdd')) return 'maxDrawdown';
+  if (value.includes('승률')) return 'winRate';
+  if (value.includes('표본')) return 'sampleN';
+  if (value.includes('holdout')) return 'holdout';
+  if (value.includes('shadow')) return 'shadow';
+  if (value.includes('natural') || value.includes('모의매매')) return 'naturalPaper';
+  if (value.includes('정산')) return 'settlement';
+  if (value.includes('수익성')) return 'profitability';
+  if (value.includes('건강')) return 'strategyHealth';
+  if (value.includes('승격')) return 'promotion';
+  return null;
+}
+
 function SimpleCard({ label, value, note, tone }: { label: string; value: string; note: string; tone: ResearchSimpleTone }) {
+  const explanationKey = researchExplanationKey(label);
   return (
     <article className={`min-w-0 rounded-2xl border p-4 shadow-sm ${toneClass(tone)}`}>
       <div className="flex items-center justify-between gap-2">
-        <p className="text-xs font-bold text-muted-foreground">{label}</p>
+        <div className="flex min-w-0 items-center gap-2">
+          <p className="truncate text-xs font-bold text-muted-foreground">{label}</p>
+          {explanationKey ? <InvestmentExplanationButton metric={explanationKey} value={value} compact /> : null}
+        </div>
         <span className="rounded-full border border-card-border bg-background/70 px-2 py-1 text-[10px] font-black text-muted-foreground">{toneBadge(tone)}</span>
       </div>
       <p className="mt-2 break-keep text-lg font-black tracking-tight text-foreground">{value}</p>
@@ -228,7 +253,7 @@ export default function ResearchCenterPage() {
                 <span className="rounded-full border border-card-border bg-background px-2.5 py-1 text-[10px] font-black text-muted-foreground">조회 전용</span>
               </div>
               <p className="mt-2 max-w-3xl break-keep text-xs leading-5 text-muted-foreground">
-                어려운 연구용 숫자보다 먼저 “지금 정상인지, 무엇이 부족한지, 다음에 뭘 해야 하는지”를 한글로 보여줍니다.
+                어려운 연구용 숫자보다 먼저 “지금 정상인지, 무엇이 부족한지, 다음에 뭘 해야 하는지”를 한글로 보여줍니다. 설명 가능한 항목의 <strong>왜?</strong>를 누르면 뜻·중요성·주의점·같이 볼 지표를 바로 확인할 수 있습니다.
               </p>
             </div>
             <button
@@ -386,11 +411,11 @@ export default function ResearchCenterPage() {
 
             <section className="grid min-w-0 gap-3 xl:grid-cols-2">
               <article className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-                <div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2"><Database className="h-4 w-4 text-primary" /><h2 className="text-sm font-black">자동 모의매매 상세</h2></div><StatusBadge status={overview.paper.runtime.present ? overview.paper.runtime.status : 'not_started'} /></div>
+                <div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2"><Database className="h-4 w-4 text-primary" /><h2 className="text-sm font-black">자동 모의매매 상세</h2><InvestmentExplanationButton metric="naturalPaper" compact /></div><StatusBadge status={overview.paper.runtime.present ? overview.paper.runtime.status : 'not_started'} /></div>
                 <dl className="mt-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-3">
                   <div className="rounded-xl bg-background p-3"><dt className="text-muted-foreground">확인 횟수</dt><dd className="mt-1 font-black tabular-nums">{overview.paper.ledger.present ? overview.paper.ledger.cycleCount : '미수집'}</dd></div>
                   <div className="rounded-xl bg-background p-3"><dt className="text-muted-foreground">모의 포지션</dt><dd className="mt-1 font-black tabular-nums">{overview.paper.ledger.present ? overview.paper.ledger.positionCount : '미수집'}</dd></div>
-                  <div className="rounded-xl bg-background p-3"><dt className="text-muted-foreground">정산 완료</dt><dd className="mt-1 font-black tabular-nums">{overview.paper.ledger.present ? overview.paper.ledger.settlementCount : '미수집'}</dd></div>
+                  <div className="rounded-xl bg-background p-3"><dt className="flex items-center gap-1 text-muted-foreground">정산 완료 <InvestmentExplanationButton metric="settlement" value={overview.paper.ledger.present ? overview.paper.ledger.settlementCount : '미수집'} compact /></dt><dd className="mt-1 font-black tabular-nums">{overview.paper.ledger.present ? overview.paper.ledger.settlementCount : '미수집'}</dd></div>
                   <div className="rounded-xl bg-background p-3"><dt className="text-muted-foreground">비공개 API 요청</dt><dd className="mt-1 font-black tabular-nums">{overview.paper.runtime.present ? overview.paper.runtime.privateRequestCount : '미수집'}</dd></div>
                   <div className="rounded-xl bg-background p-3"><dt className="text-muted-foreground">실제 금융 변경</dt><dd className="mt-1 font-black tabular-nums">{overview.paper.runtime.present ? overview.paper.runtime.financialMutationCount : '미수집'}</dd></div>
                   <div className="rounded-xl bg-background p-3"><dt className="text-muted-foreground">실제 주문</dt><dd className="mt-1 font-black tabular-nums">{overview.paper.runtime.present ? overview.paper.runtime.orderCount : '미수집'}</dd></div>
@@ -399,24 +424,24 @@ export default function ResearchCenterPage() {
               </article>
 
               <article className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-                <div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2"><Activity className="h-4 w-4 text-primary" /><h2 className="text-sm font-black">Shadow 미래 예측 검증</h2></div><span className="rounded-full border border-card-border bg-background px-2.5 py-1 text-[11px] font-black text-muted-foreground">증거 수집 중</span></div>
+                <div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2"><Activity className="h-4 w-4 text-primary" /><h2 className="text-sm font-black">Shadow 미래 예측 검증</h2><InvestmentExplanationButton metric="shadow" compact /></div><span className="rounded-full border border-card-border bg-background px-2.5 py-1 text-[11px] font-black text-muted-foreground">증거 수집 중</span></div>
                 <div className="mt-4 grid grid-cols-3 gap-2 text-xs">
                   <div className="rounded-xl bg-background p-3"><p className="text-muted-foreground">전체</p><p className="mt-1 text-base font-black">{overview.shadow.records.present ? overview.shadow.records.totalRecords : '미수집'}</p></div>
                   <div className="rounded-xl bg-background p-3"><p className="text-muted-foreground">정산</p><p className="mt-1 text-base font-black">{overview.shadow.records.present ? overview.shadow.records.settledRecords : '미수집'}</p></div>
                   <div className="rounded-xl bg-background p-3"><p className="text-muted-foreground">대기</p><p className="mt-1 text-base font-black">{overview.shadow.records.present ? overview.shadow.records.pendingRecords : '미수집'}</p></div>
                 </div>
-                <div className="mt-3 space-y-2">{overview.shadow.groups.map((group) => <div key={group.name} className="rounded-2xl border border-card-border bg-background p-3 text-xs"><div className="flex min-w-0 items-center justify-between gap-3"><span className="truncate font-black">{group.name}</span><span className="shrink-0 text-muted-foreground">Collapse {group.collapsed == null ? '미수집' : group.collapsed ? '감지' : '아님'}</span></div><p className="mt-2 break-keep leading-5 text-muted-foreground">Macro F1 {formatMetric(group.macroF1)} · 균형정확도 {formatMetric(group.balancedAccuracy)} · 정산 {group.settled ?? '미수집'} · 대기 {group.pending ?? '미수집'}</p></div>)}</div>
+                <div className="mt-3 space-y-2">{overview.shadow.groups.map((group) => <div key={group.name} className="rounded-2xl border border-card-border bg-background p-3 text-xs"><div className="flex min-w-0 items-center justify-between gap-3"><span className="truncate font-black">{group.name}</span><span className="shrink-0 text-muted-foreground">Collapse {group.collapsed == null ? '미수집' : group.collapsed ? '감지' : '아님'}</span></div><div className="mt-2 flex flex-wrap items-center gap-2 text-muted-foreground"><span>Macro F1 {formatMetric(group.macroF1)}</span><InvestmentExplanationButton metric="macroF1" value={formatMetric(group.macroF1)} compact /><span>· 균형정확도 {formatMetric(group.balancedAccuracy)}</span><InvestmentExplanationButton metric="balancedAccuracy" value={formatMetric(group.balancedAccuracy)} compact /><span>· 정산 {group.settled ?? '미수집'} · 대기 {group.pending ?? '미수집'}</span></div></div>)}</div>
               </article>
             </section>
 
             <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-              <h2 className="text-sm font-black">전략 건강도 / 승격</h2>
+              <div className="flex flex-wrap items-center gap-2"><h2 className="text-sm font-black">전략 건강도 / 승격</h2><InvestmentExplanationButton metric="strategyHealth" compact /><InvestmentExplanationButton metric="promotion" compact /></div>
               {governanceQuery.isError ? <p className="mt-3 text-xs text-destructive">승격 근거를 불러오지 못했습니다.</p> : <div className="mt-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4"><div className="rounded-xl bg-background p-3"><p className="text-muted-foreground">전략</p><p className="mt-1 text-base font-black">{promotion ? `${promotion.items.length}개` : '미수집'}</p></div><div className="rounded-xl bg-background p-3"><p className="text-muted-foreground">승격 후보</p><p className="mt-1 text-base font-black">{promotion ? `${promotion.promotionCandidates}개` : '미수집'}</p></div><div className="rounded-xl bg-background p-3"><p className="text-muted-foreground">Drift 측정</p><p className="mt-1 text-base font-black">{promotion ? `${driftMeasured.length}개` : '미수집'}</p></div><div className="rounded-xl bg-background p-3"><p className="text-muted-foreground">저하/위험</p><p className="mt-1 text-base font-black">{promotion ? `${driftWarnings}개` : '미수집'}</p></div></div>}
               <p className="mt-3 break-keep text-xs leading-5 text-muted-foreground">승격 후보는 Champion 또는 실거래 승인이 아닙니다. 최종 증거가 없으면 미승격 상태를 유지합니다.</p>
             </section>
 
             <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-              <h2 className="text-sm font-black">수익성 증거</h2>
+              <div className="flex flex-wrap items-center gap-2"><h2 className="text-sm font-black">수익성 증거</h2><InvestmentExplanationButton metric="profitability" value={overview.profitability.proven ? '증명됨' : '아직 미증명'} status={overview.profitability.status} compact /></div>
               <div className="mt-4 flex flex-wrap items-end justify-between gap-3"><div><p className="text-xs text-muted-foreground">현재 판정</p><p className="mt-1 text-xl font-black">{overview.profitability.proven ? '증명됨' : '아직 미증명'}</p></div><StatusBadge status={overview.profitability.status} /></div>
               <p className="mt-4 break-keep text-xs leading-5 text-muted-foreground">{overview.profitability.note}</p>
             </section>
