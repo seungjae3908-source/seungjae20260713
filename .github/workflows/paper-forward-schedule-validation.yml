@@ -7,6 +7,7 @@ on:
       - api-server/scripts/build-authoritative-paper-runtime-package.mjs
       - api-server/src/services/authoritative-paper-callback-owners.service.ts
       - api-server/src/services/authoritative-paper-evidence-sources.service.ts
+      - api-server/src/services/authoritative-paper-execution-cost-sources.service.ts
       - api-server/src/services/authoritative-paper-runtime-package.entry.ts
       - api-server/src/services/paper-trading-state-snapshot.service.ts
       - api-server/src/services/paper-trading-state-publisher.service.ts
@@ -124,6 +125,7 @@ jobs:
             api-server/scripts/build-authoritative-paper-runtime-package.mjs
             api-server/src/services/authoritative-paper-callback-owners.service.ts
             api-server/src/services/authoritative-paper-evidence-sources.service.ts
+            api-server/src/services/authoritative-paper-execution-cost-sources.service.ts
             api-server/src/services/authoritative-paper-runtime-package.entry.ts
             api-server/src/services/paper-trading-state-snapshot.service.ts
             api-server/src/services/paper-trading-state-publisher.service.ts
