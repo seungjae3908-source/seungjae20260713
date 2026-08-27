@@ -46,10 +46,13 @@ test('AI information fails closed instead of rendering client fabricated target 
   expect(aiTab).toContain('판단 무효화 조건');
 });
 
-test('AI info calls only on send and reuses the same session answer for duplicate context', () => {
+test('AI info calls only on send and reuses only freshness-bounded duplicate context', () => {
   const aiInfo = source('src/pages/ai-chat.tsx');
   expect(aiInfo).toContain('responseCacheRef');
   expect(aiInfo).toContain('cacheKey(message)');
+  expect(aiInfo).toContain('AI_CHAT_CACHE_TTL_MS = 60_000');
+  expect(aiInfo).toContain('now - cached.cachedAt <= AI_CHAT_CACHE_TTL_MS');
+  expect(aiInfo).toContain('responseCacheRef.current.delete(key)');
   expect(aiInfo).toContain('캐시 재사용 · AI 호출 0');
   expect(aiInfo).toContain("authorizedFetch('/api/ai/chat'");
   expect(aiInfo).toContain('질문할 때만 AI를 호출하고');
