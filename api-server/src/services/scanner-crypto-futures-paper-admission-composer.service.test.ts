@@ -6,6 +6,18 @@ import type { PaperContractRules, PaperTradingState } from './paper-trading.type
 import type { ScannerCanonicalPaperCandidate } from './scanner-canonical-paper-identity.service';
 import type { PercentCostEvidence, SupplementalExecutionCostEvidence } from './scanner-profit-cost-evidence-adapter.service';
 import {
+  buildAuthoritativePaperExecutionObservation,
+  type AuthoritativePaperRiskPolicyEvidence,
+} from './authoritative-paper-callback-owners.service';
+import {
+  AUTHORITATIVE_PAPER_EXECUTION_SIZING_EVIDENCE_VERSION,
+  auditAuthoritativeSupplementalCostSources,
+  collectAuthoritativePaperExecutionObservationInput,
+  type AuthoritativePaperExecutionSizingEvidence,
+} from './authoritative-paper-execution-cost-sources.service';
+import { createAuthoritativePaperEvidenceSourceWiring } from './authoritative-paper-evidence-sources.service';
+import { buildPaperSimulatedExecutionEvidence } from './paper-simulated-execution-evidence.service';
+import {
   composeScannerCryptoFuturesPaperAdmission,
   type ScannerCryptoFuturesPaperExecutionObservation,
 } from './scanner-crypto-futures-paper-admission-composer.service';
@@ -169,12 +181,20 @@ function observation(overrides: Partial<ScannerCryptoFuturesPaperExecutionObserv
     slippage: observedPercent(0.05, 'bitget-depth-slippage-observer'),
     liquidity: Object.freeze({ value: 1_000_000, source: 'bitget-public-depth-notional', observedAtMs: MARKET_AT }),
     partialFill: Object.freeze({ model: 'ORDER_BOOK' as const, source: 'SIMULATED/public-L2:VISIBLE_L2_BOOK_WALK_ONLY', observedAtMs: MARKET_AT }),
+    latency: Object.freeze({
+      observedRoundTripMs: 20,
+      costValuePercent: null,
+      source: 'BITGET_PUBLIC_L2_REQUEST_TIMING',
+      observedAtMs: MARKET_AT,
+    }),
     executionProvenance: Object.freeze({
       evidenceClass: 'SIMULATED' as const,
       marketDataClass: 'public-L2' as const,
       executionMode: 'SIMULATED_EXECUTION_ONLY' as const,
+      realFillObserved: false as const,
       realFillClaim: false as const,
       publicDepthIsFillProof: false as const,
+      liveSubmittedExecutionSampleCredit: 0 as const,
       liveFillCalibrationStatus: 'BLOCKED_DATA' as const,
     }),
     leverage: 1,
@@ -277,12 +297,193 @@ test('P0-C5 rejects execution observations that are not explicitly SIMULATED/pub
         evidenceClass: 'SIMULATED',
         marketDataClass: 'public-L2',
         executionMode: 'SIMULATED_EXECUTION_ONLY',
+        realFillObserved: false,
         realFillClaim: false,
         publicDepthIsFillProof: false,
+        liveSubmittedExecutionSampleCredit: 0,
         liveFillCalibrationStatus: 'BLOCKED_DATA',
       }),
     }),
   });
   assert.equal(result.status, 'BLOCKED');
   assert.ok(result.blockers.includes('P0_C5_PROVIDER_PROVENANCE_REQUIRED'));
+});
+
+function authoritativeRiskPolicy(observedAtMs = MARKET_AT): AuthoritativePaperRiskPolicyEvidence {
+  return Object.freeze({
+    schemaVersion: 'authoritative-paper-risk-policy-evidence-v1',
+    leverage: 1,
+    riskPercent: 0.5,
+    marginMode: 'isolated',
+    source: 'immutable-paper-risk-policy-v1',
+    observedAtMs,
+    maximumAgeMs: 30_000,
+  });
+}
+
+function sizingEvidence(targetQuantity = 2): AuthoritativePaperExecutionSizingEvidence {
+  return Object.freeze({
+    schemaVersion: AUTHORITATIVE_PAPER_EXECUTION_SIZING_EVIDENCE_VERSION,
+    signalId: 'scanner-futures-p0-c5-1',
+    symbol: 'BTCUSDT',
+    direction: 'LONG',
+    targetQuantity,
+    riskPolicy: authoritativeRiskPolicy(),
+    source: 'canonical-paper-risk-sizing-result-v1',
+    observedAtMs: MARKET_AT,
+    maximumAgeMs: 30_000,
+  });
+}
+
+const executionContext = Object.freeze({
+  card: Object.freeze({ signalId: 'scanner-futures-p0-c5-1', symbol: 'BTCUSDT', action: 'LONG' }),
+  market: 'CRYPTO_FUTURES' as const,
+});
+
+function l2Payload(asks: readonly (readonly [number, number])[] = [[100, 1], [100.1, 2]]) {
+  return Object.freeze({
+    code: '00000',
+    data: Object.freeze({
+      ts: String(MARKET_AT),
+      b: Object.freeze([[99.9, 3]]),
+      a: Object.freeze(asks),
+    }),
+  });
+}
+
+test('Worker D connects valid public L2 to the authoritative callback as SIMULATED with zero Live sample credit', async () => {
+  const calls: string[] = [];
+  const clock = [MARKET_AT + 10, MARKET_AT + 30];
+  const wiring = createAuthoritativePaperEvidenceSourceWiring({
+    researchCodeSha: 'a'.repeat(40),
+    dependencies: {
+      executionSizingEvidenceForCard: async () => sizingEvidence(),
+      fetchPublicJson: async (url, request) => {
+        calls.push(url.toString());
+        assert.equal(request.provider, 'bitget');
+        return l2Payload();
+      },
+      now: () => clock.shift() ?? MARKET_AT + 30,
+    },
+  });
+
+  const result = await wiring.executionObservationForCard(executionContext);
+  assert.ok(result);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0] ?? '', /\/api\/v3\/market\/orderbook\?category=USDT-FUTURES&symbol=BTCUSDT&limit=50/u);
+  assert.equal(result.executionProvenance.evidenceClass, 'SIMULATED');
+  assert.equal(result.executionProvenance.marketDataClass, 'public-L2');
+  assert.equal(result.executionProvenance.realFillObserved, false);
+  assert.equal(result.executionProvenance.realFillClaim, false);
+  assert.equal(result.executionProvenance.liveSubmittedExecutionSampleCredit, 0);
+  assert.equal(result.executionProvenance.liveFillCalibrationStatus, 'BLOCKED_DATA');
+  assert.equal(result.latency.observedRoundTripMs, 20);
+  assert.equal(result.latency.costValuePercent, null);
+});
+
+test('Worker D fails closed on incomplete visible depth and never manufactures fill probability', async () => {
+  const clock = [MARKET_AT + 10, MARKET_AT + 30];
+  const collected = await collectAuthoritativePaperExecutionObservationInput({
+    context: executionContext,
+    sizingEvidence: sizingEvidence(2),
+    fetchPublicJson: async () => l2Payload([[100, 0.5]]),
+    now: () => clock.shift() ?? MARKET_AT + 30,
+  });
+  assert.ok(collected);
+  const raw = buildPaperSimulatedExecutionEvidence({
+    ...collected.executionEvidenceInput,
+    nowMs: collected.nowMs,
+  }) as Readonly<{
+    paperSimulation: Readonly<{ status: string; realFillObserved: boolean }>;
+    liveGradeFillReadiness: Readonly<{
+      submittedExecutionSamples: number | null;
+      submittedExecutionSampleCredit: number;
+    }>;
+    estimated: Readonly<{
+      partialFillEstimate: Readonly<{ calibratedFillProbability: number | null }>;
+    }>;
+  }>;
+  assert.equal(raw.paperSimulation.status, 'VETO');
+  assert.equal(raw.paperSimulation.realFillObserved, false);
+  assert.equal(raw.liveGradeFillReadiness.submittedExecutionSamples, null);
+  assert.equal(raw.liveGradeFillReadiness.submittedExecutionSampleCredit, 0);
+  assert.equal(raw.estimated.partialFillEstimate.calibratedFillProbability, null);
+  assert.throws(
+    () => buildAuthoritativePaperExecutionObservation(collected),
+    /AUTHORITATIVE_EXECUTION_OBSERVATION_DATA_UNAVAILABLE/u,
+  );
+});
+
+test('Worker D keeps supplemental full-cost MISSING when only public/reference evidence exists', async () => {
+  const audit = auditAuthoritativeSupplementalCostSources({
+    publicEvidence: publicEvidence(),
+    executionObservation: observation(),
+    nowMs: NOW,
+    maximumAgeMs: 30_000,
+  });
+  assert.equal(audit.status, 'MISSING');
+  assert.equal(audit.supplementalCostInput, null);
+  assert.equal(audit.components.fees.state, 'PRESENT');
+  assert.equal(audit.components.spread.state, 'PRESENT');
+  assert.equal(audit.components.slippage.state, 'PRESENT');
+  assert.equal(audit.components.latency.state, 'REFERENCE_ONLY');
+  assert.equal(audit.components.latency.countsAsExecutionCost, false);
+  assert.equal(audit.components.liquidityImpact.state, 'REFERENCE_ONLY');
+  assert.equal(audit.components.partialFillImpact.state, 'REFERENCE_ONLY');
+  assert.equal(audit.components.funding.state, 'REFERENCE_ONLY');
+  assert.deepEqual(audit.blockers, [
+    'SUPPLEMENTAL_COST_POLICY_EVIDENCE_UNAVAILABLE',
+    'SUPPLEMENTAL_COST_OBSERVATION_UNAVAILABLE',
+    'LATENCY_COST_EVIDENCE_UNAVAILABLE',
+    'LIQUIDITY_IMPACT_COST_EVIDENCE_UNAVAILABLE',
+    'PARTIAL_FILL_COST_EVIDENCE_UNAVAILABLE',
+    'FUNDING_EXECUTION_COST_EVIDENCE_UNAVAILABLE',
+  ]);
+  assert.equal(audit.unknownIsZero, false);
+  assert.equal(audit.unavailableCostConvertedToZero, false);
+
+  const missing = auditAuthoritativeSupplementalCostSources({ nowMs: NOW });
+  for (const component of Object.values(missing.components)) {
+    assert.equal(component.state, 'UNAVAILABLE');
+    assert.equal(component.value, null);
+    assert.notEqual(component.value, 0);
+  }
+
+  const fullyObserved = auditAuthoritativeSupplementalCostSources({
+    supplemental: supplemental(),
+    nowMs: NOW,
+  });
+  assert.equal(fullyObserved.status, 'PRESENT');
+  assert.ok(fullyObserved.supplementalCostInput);
+
+  const futuresFundingMarkedNotApplicable = auditAuthoritativeSupplementalCostSources({
+    supplemental: supplemental({
+      funding: Object.freeze({
+        valuePercent: 0,
+        quality: 'NOT_APPLICABLE',
+        source: 'unsupported-futures-funding-not-applicable-claim',
+        observedAtMs: MARKET_AT,
+      }),
+    }),
+    nowMs: NOW,
+  });
+  assert.equal(futuresFundingMarkedNotApplicable.status, 'MISSING');
+  assert.equal(futuresFundingMarkedNotApplicable.components.funding.state, 'UNAVAILABLE');
+  assert.equal(futuresFundingMarkedNotApplicable.components.funding.value, null);
+  assert.ok(futuresFundingMarkedNotApplicable.blockers.includes(
+    'FUNDING_EXECUTION_COST_EVIDENCE_UNAVAILABLE',
+  ));
+
+  const wiring = createAuthoritativePaperEvidenceSourceWiring({
+    researchCodeSha: 'a'.repeat(40),
+    dependencies: {
+      supplementalCostInputForCard: async () => ({
+        costPolicyId: COST_POLICY,
+        observedAtMs: MARKET_AT,
+        latency: observedPercent(0.01, 'observed-latency-cost'),
+      }),
+      now: () => NOW,
+    },
+  });
+  assert.equal(await wiring.supplementalCostEvidenceForCard(executionContext), null);
 });
