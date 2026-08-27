@@ -1,6 +1,7 @@
 import { X } from 'lucide-react';
 import type { AiSignal } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { SOLID_MODAL_SURFACE_STYLE } from '@/components/ui/modal-surface';
 
 // Static "what / why" explanation per signal. The live status, reasons, missing
 // conditions and action come from the computed signal object.
@@ -100,8 +101,11 @@ export function SignalModal({ signal, onClose }: { signal: AiSignal; onClose: ()
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center" role="dialog" aria-modal="true">
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative z-10 max-h-[85vh] w-full max-w-md overflow-y-auto rounded-t-2xl border border-card-border bg-card p-4 sm:rounded-2xl">
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
+      <div
+        className="relative z-10 max-h-[85vh] w-full max-w-md overflow-y-auto rounded-t-2xl border border-card-border p-4 shadow-2xl sm:rounded-2xl"
+        style={SOLID_MODAL_SURFACE_STYLE}
+      >
         <div className="mb-3 flex items-start justify-between gap-2">
           <div className="flex items-center gap-2">
             <span className="flex h-7 w-7 items-center justify-center rounded-full bg-ai/15 text-xs font-bold text-ai">
