@@ -396,7 +396,7 @@ test('canonical trace classifies FIRST_ZERO only from the directly measured pref
   });
   evidence.reasonObservations = [{
     sourceStage: 'ENTRY_ELIGIBLE',
-    rawReason: 'AUTHORITATIVE_ACCOUNT_NOT_READY',
+    sourceReason: 'AUTHORITATIVE_ACCOUNT_NOT_READY',
     canonicalReason: 'ACCOUNT_STATE_BLOCK',
     lossless: true,
     identity: { ...evidence.identity, observationId: 'account-block-1' },
