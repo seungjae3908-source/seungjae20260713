@@ -355,7 +355,7 @@ function maxDrawdownFromReturns(returns) {
     peak = Math.max(peak, equity);
     worst = Math.min(worst, ((equity - peak) / peak) * 100);
   }
-  return worst * -1;
+  return worst === 0 ? 0 : worst * -1;
 }
 
 export function summarizeSettledPaperSamples(settlements = [], minimumSampleSize = SETTLED_MINIMUM_SAMPLE_SIZE) {
@@ -387,8 +387,9 @@ export function summarizeSettledPaperSamples(settlements = [], minimumSampleSize
     averageNetReturnPercent: sampleSize ? returns.reduce((a, b) => a + b, 0) / sampleSize : null,
     totalNetPnl: sampleSize ? completed.reduce((sum, item) => sum + item.netPnl, 0) : null,
     expectancyNetPnl: sampleSize ? completed.reduce((sum, item) => sum + item.netPnl, 0) / sampleSize : null,
-    profitFactor: lossAbs > 0 ? gains / lossAbs : gains > 0 ? null : 0,
+    profitFactor: sampleSize === 0 ? null : lossAbs > 0 ? gains / lossAbs : gains > 0 ? null : 0,
     maxDrawdownPercent: sampleSize ? maxDrawdownFromReturns(returns) : null,
+    profitability: "NOT_PROVEN",
     profitabilityClaimAllowed: false,
     promotionEvidenceReady: sampleSize >= minimumSampleSize,
     simulatedOnly: true,
