@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, Database } from 'lucide-react';
+import { AiChartMarketIntelligenceEvidencePanel } from '@/components/ai-chart-market-intelligence-evidence-panel';
 import type { AnalysisSelection } from '@/lib/analysis-selection';
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { resolveEvidenceDisplay } from '@/lib/evidence-display';
@@ -137,55 +138,59 @@ export function FuturesPublicContextPanel({ selection }: Props) {
     retry: false,
   });
 
-  if (selection.market !== 'BITGET') return null;
+  const newsDisclosureEvidence = <AiChartMarketIntelligenceEvidencePanel selection={selection} />;
+  if (selection.market !== 'BITGET') return newsDisclosureEvidence;
 
   const data = query.data;
   const missingEvidence = resolveEvidenceDisplay({ value: null, collected: false }).display;
   return (
-    <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="futures-public-context">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <Database className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
-          <div className="min-w-0">
-            <p className="text-[11px] font-extrabold text-primary">CRYPTO FUTURES PUBLIC CONTEXT</p>
-            <h2 className="truncate text-sm font-black">{symbol || selection.ticker} · Bitget 공개 데이터</h2>
+    <>
+      {newsDisclosureEvidence}
+      <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="futures-public-context">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <Database className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+            <div className="min-w-0">
+              <p className="text-[11px] font-extrabold text-primary">CRYPTO FUTURES PUBLIC CONTEXT</p>
+              <h2 className="truncate text-sm font-black">{symbol || selection.ticker} · Bitget 공개 데이터</h2>
+            </div>
           </div>
+          <span className="shrink-0 rounded-full border border-card-border bg-background px-2 py-1 text-[9px] font-black">
+            {query.isError ? 'UNAVAILABLE' : data ? statusText(data.status) : 'LOADING'}
+          </span>
         </div>
-        <span className="shrink-0 rounded-full border border-card-border bg-background px-2 py-1 text-[9px] font-black">
-          {query.isError ? 'UNAVAILABLE' : data ? statusText(data.status) : 'LOADING'}
-        </span>
-      </div>
 
-      {query.isError ? (
-        <div className="mt-3 flex gap-2 rounded-2xl border border-warning/30 bg-warning/5 p-3" role="status">
-          <AlertTriangle className="h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
-          <p className="text-[10px] font-bold leading-4 text-muted-foreground">
-            공개 선물 스냅샷을 확인할 수 없습니다. 값이나 확률을 임의 생성하지 않습니다.
-          </p>
-        </div>
-      ) : (
-        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5 lg:grid-cols-2 xl:grid-cols-5">
-          <Metric label="Mark Price" value={data ? `${formatNumber(data.markPrice, 8)}${data.markPrice == null ? '' : ' USDT'}` : missingEvidence} />
-          <Metric label="Funding" value={data ? formatFunding(data.fundingRate) : missingEvidence} />
-          <Metric label="Next Funding" value={data ? formatDate(data.nextFundingAt) : missingEvidence} />
-          <Metric label="Open Interest" value={data ? formatNumber(data.openInterest, 4) : missingEvidence} />
-          <Metric label="OI Change" value={data ? formatPercent(data.openInterestChangePercent) : missingEvidence} />
-        </div>
-      )}
+        {query.isError ? (
+          <div className="mt-3 flex gap-2 rounded-2xl border border-warning/30 bg-warning/5 p-3" role="status">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
+            <p className="text-[10px] font-bold leading-4 text-muted-foreground">
+              공개 선물 스냅샷을 확인할 수 없습니다. 값이나 확률을 임의 생성하지 않습니다.
+            </p>
+          </div>
+        ) : (
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5 lg:grid-cols-2 xl:grid-cols-5">
+            <Metric label="Mark Price" value={data ? `${formatNumber(data.markPrice, 8)}${data.markPrice == null ? '' : ' USDT'}` : missingEvidence} />
+            <Metric label="Funding" value={data ? formatFunding(data.fundingRate) : missingEvidence} />
+            <Metric label="Next Funding" value={data ? formatDate(data.nextFundingAt) : missingEvidence} />
+            <Metric label="Open Interest" value={data ? formatNumber(data.openInterest, 4) : missingEvidence} />
+            <Metric label="OI Change" value={data ? formatPercent(data.openInterestChangePercent) : missingEvidence} />
+          </div>
+        )}
 
-      {data?.warnings.length ? (
-        <ul className="mt-3 space-y-1 rounded-2xl border border-warning/20 bg-warning/5 p-3 text-[10px] font-bold text-muted-foreground">
-          {data.warnings.map((warning) => <li key={warning}>• {warning}</li>)}
-        </ul>
-      ) : null}
+        {data?.warnings.length ? (
+          <ul className="mt-3 space-y-1 rounded-2xl border border-warning/20 bg-warning/5 p-3 text-[10px] font-bold text-muted-foreground">
+            {data.warnings.map((warning) => <li key={warning}>• {warning}</li>)}
+          </ul>
+        ) : null}
 
-      <p className="mt-3 text-[10px] font-black text-muted-foreground">
-        Bitget public market data · read-only context · NOT A TRADE SIGNAL
-      </p>
-      {data?.updatedAt ? (
-        <p className="mt-1 text-[9px] font-semibold text-muted-foreground">Last update · {formatDate(data.updatedAt)}</p>
-      ) : null}
-    </section>
+        <p className="mt-3 text-[10px] font-black text-muted-foreground">
+          Bitget public market data · read-only context · NOT A TRADE SIGNAL
+        </p>
+        {data?.updatedAt ? (
+          <p className="mt-1 text-[9px] font-semibold text-muted-foreground">Last update · {formatDate(data.updatedAt)}</p>
+        ) : null}
+      </section>
+    </>
   );
 }
 
