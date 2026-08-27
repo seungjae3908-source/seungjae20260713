@@ -1,0 +1,357 @@
+name: Production Health Observer
+
+on:
+  schedule:
+    - cron: '7 * * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Optional observer depth
+        required: false
+        default: auto
+        type: choice
+        options:
+          - auto
+          - http-only
+          - critical
+          - full
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/production-health-observer.yml
+      - stock-analyzer/playwright.production-observer.config.ts
+      - stock-analyzer/e2e/production-health-observer.spec.ts
+      - stock-analyzer/e2e/support/production-readonly-policy.ts
+      - scripts/agent_hub_rollover_v2.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-health-observer-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  static-contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v6
+      - name: Validate observer and rollover contracts without Production access
+        run: |
+          set -Eeuo pipefail
+          python3 -m py_compile scripts/agent_hub_rollover_v2.py
+          python3 scripts/agent_hub_rollover_v2.py self-test
+          node <<'NODE'
+          const fs = require('node:fs');
+          const workflow = fs.readFileSync('.github/workflows/production-health-observer.yml', 'utf8');
+          const config = fs.readFileSync('stock-analyzer/playwright.production-observer.config.ts', 'utf8');
+          const spec = fs.readFileSync('stock-analyzer/e2e/production-health-observer.spec.ts', 'utf8');
+          if (!workflow.includes("cron: '7 * * * *'")) throw new Error('hourly observer cron missing');
+          if (!workflow.includes("github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'")) throw new Error('live observer event gate missing');
+          if (!workflow.includes('PRODUCTION_BASE_URL: https://lsj119.com')) throw new Error('official Production target missing');
+          if (!workflow.includes('scripts/agent_hub_rollover_v2.py rollover')) throw new Error('active Hub rollover resolver missing');
+          if (!workflow.includes('<!-- agent-executor-report -->')) throw new Error('trusted scheduled report attestation missing');
+          if (!config.includes("trace: 'off'") || !config.includes("screenshot: 'off'") || !config.includes("video: 'off'")) throw new Error('raw browser retention must remain disabled');
+          if (!spec.includes('installProductionReadOnlyPolicy')) throw new Error('read-only browser policy missing');
+          if (!spec.includes('authenticated: false')) throw new Error('observer must remain unauthenticated');
+          NODE
+      - name: Assert PR validation cannot run live observer job
+        run: |
+          test "${{ github.event_name }}" = pull_request
+          echo 'PR path validates static contracts only; no request to lsj119.com is performed.'
+
+  observe:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    permissions:
+      actions: read
+      contents: write
+      issues: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      PRODUCTION_BASE_URL: https://lsj119.com
+      PRODUCTION_READONLY_E2E: 'true'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Require exact default-branch execution
+        run: |
+          set -Eeuo pipefail
+          test "$GITHUB_REF" = 'refs/heads/main'
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Resolve or proactively roll the canonical Central Hub
+        id: routing
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/agent_hub_rollover_v2.py rollover
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run hourly zero-credential HTTP health checks
+        id: http
+        run: |
+          set -Eeuo pipefail
+          mkdir -p stock-analyzer/production-health-observer-artifacts
+          node <<'NODE'
+          const fs = require('node:fs');
+          const base = process.env.PRODUCTION_BASE_URL.replace(/\/$/, '');
+          const paths = ['/api/health', '/', '/login', '/stocks', '/scanner', '/ai-chart', '/news-information'];
+          const failures = [];
+          const results = [];
+          const clean = (value) => String(value ?? '').replace(/[\r\n\t]+/g, ' ').replace(/\s{2,}/g, ' ').slice(0, 400);
+          for (const pathname of paths) {
+            const started = Date.now();
+            try {
+              const response = await fetch(base + pathname, {
+                method: 'GET',
+                redirect: 'follow',
+                signal: AbortSignal.timeout(15000),
+                headers: { 'user-agent': 'production-health-observer/1.0', accept: pathname === '/api/health' ? 'application/json' : 'text/html,*/*;q=0.8' },
+              });
+              const item = { path: pathname, status: response.status, finalUrl: response.url, durationMs: Date.now() - started };
+              results.push(item);
+              if (pathname === '/api/health') {
+                let payload = null;
+                try { payload = await response.json(); } catch {}
+                if (!response.ok || payload?.ok !== true) {
+                  failures.push({ kind: 'health', route: pathname, path: pathname, status: response.status, detail: `health ok=${String(payload?.ok)} status=${response.status}` });
+                }
+              } else if (response.status === 404 || response.status >= 500) {
+                failures.push({ kind: 'http', route: pathname, path: pathname, status: response.status, detail: `navigation HTTP ${response.status}` });
+              }
+            } catch (error) {
+              results.push({ path: pathname, status: null, finalUrl: null, durationMs: Date.now() - started });
+              failures.push({ kind: 'network', route: pathname, path: pathname, detail: clean(error instanceof Error ? error.message : error) });
+            }
+          }
+          fs.writeFileSync('stock-analyzer/production-health-observer-artifacts/http-observer.json', JSON.stringify({ schemaVersion: 1, observedAt: new Date().toISOString(), results, failures, safety: { authenticated: false, mutations: 0, privateApi: 0, realOrders: 0 } }, null, 2));
+          NODE
+
+      - name: Select browser observation depth
+        id: mode
+        env:
+          REQUESTED_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'auto' }}
+        run: |
+          set -Eeuo pipefail
+          mode="$REQUESTED_MODE"
+          if [ "$mode" = auto ]; then
+            hour="$(TZ=Asia/Seoul date +%H)"
+            if [ "$hour" = 06 ]; then
+              mode=full
+            elif [ $((10#$hour % 6)) -eq 0 ]; then
+              mode=critical
+            else
+              mode=http-only
+            fi
+          fi
+          case "$mode" in http-only|critical|full) ;; *) exit 1 ;; esac
+          if [ "$mode" = http-only ]; then run_browser=false; else run_browser=true; fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "run_browser=$run_browser" >> "$GITHUB_OUTPUT"
+
+      - uses: pnpm/action-setup@v4
+        if: steps.mode.outputs.run_browser == 'true'
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        if: steps.mode.outputs.run_browser == 'true'
+        with:
+          node-version: '20'
+          cache: pnpm
+
+      - name: Install browser observer dependencies
+        if: steps.mode.outputs.run_browser == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium for scheduled public observer
+        if: steps.mode.outputs.run_browser == 'true'
+        working-directory: stock-analyzer
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run scheduled public desktop/mobile observer
+        if: steps.mode.outputs.run_browser == 'true'
+        id: browser
+        continue-on-error: true
+        env:
+          PRODUCTION_OBSERVER_MODE: ${{ steps.mode.outputs.mode }}
+        working-directory: stock-analyzer
+        run: pnpm exec playwright test --config=playwright.production-observer.config.ts
+
+      - name: Aggregate, sanitize, classify, and fingerprint failures
+        id: aggregate
+        env:
+          OBSERVER_MODE: ${{ steps.mode.outputs.mode }}
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, re
+          from pathlib import Path
+          root=Path('stock-analyzer/production-health-observer-artifacts')
+          failures=[]
+          for path in sorted(root.glob('*.json')):
+              try: payload=json.loads(path.read_text(encoding='utf-8'))
+              except Exception: continue
+              values=payload.get('failures') if isinstance(payload,dict) else None
+              if isinstance(values,list): failures.extend(item for item in values if isinstance(item,dict))
+          normalized=[]; seen=set()
+          for item in failures:
+              kind=re.sub(r'[^a-z0-9_-]+','-',str(item.get('kind') or 'unknown').lower())[:40]
+              route=str(item.get('route') or item.get('path') or 'unknown')[:240]
+              path=str(item.get('path') or route)[:240]
+              status=str(item.get('status') or '')[:8]
+              detail=re.sub(r'[\r\n\t]+',' ',str(item.get('detail') or ''))
+              detail=re.sub(r'([?&](?:token|key|secret|password|code)=)[^&\s]+',r'\1[REDACTED]',detail,flags=re.I)
+              detail=re.sub(r'\b\d{5,}\b','#',detail)[:360]
+              key=(kind,route,path,status,detail)
+              if key in seen: continue
+              seen.add(key); normalized.append({'kind':kind,'route':route,'path':path,'status':status,'detail':detail})
+          normalized.sort(key=lambda x:(x['kind'],x['route'],x['path'],x['status'],x['detail']))
+          canonical='\n'.join('|'.join((x['kind'],x['route'],x['path'],x['status'],re.sub(r'\d+','#',x['detail']))) for x in normalized)
+          fingerprint=hashlib.sha256(canonical.encode()).hexdigest()[:20] if normalized else 'none'
+          primary=normalized[0] if normalized else {'path':'none','route':'none','kind':'none','status':'','detail':''}
+          route=(primary.get('route') or '')+' '+(primary.get('path') or '')
+          if 'scanner' in route: worker='ai-signal-scanner'
+          elif 'ai-chart' in route or 'chart' in route: worker='ai-chart'
+          elif 'news' in route or 'information' in route or 'stock' in route: worker='market-information-room'
+          else: worker='test-runner'
+          severe=any(x['kind'] in {'health','network'} or (x.get('status') and str(x['status']).startswith('5')) for x in normalized)
+          severity='P0' if severe else 'P1'
+          summary=(f"{severity} Production observer detected {len(normalized)} reproducible diagnostic(s); primary={primary['kind']} {primary['path']} {primary['status']} {primary['detail']}")[:900]
+          out={'schemaVersion':1,'mode':os.environ.get('OBSERVER_MODE','unknown'),'failureCount':len(normalized),'fingerprint':fingerprint,'severity':severity,'worker':worker,'primaryPath':primary['path'],'summary':summary,'failures':normalized[:30]}
+          (root/'aggregate.json').write_text(json.dumps(out,ensure_ascii=False,indent=2),encoding='utf-8')
+          with open(os.environ['GITHUB_OUTPUT'],'a',encoding='utf-8') as f:
+              for k in ('failureCount','fingerprint','severity','worker'):
+                  name={'failureCount':'failure_count'}.get(k,k)
+                  f.write(f"{name}={out[k]}\n")
+          PY
+
+      - name: Create or escalate one deduplicated Central Hub incident
+        if: steps.aggregate.outputs.failure_count != '0'
+        id: incident
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HUB_ISSUE_NUMBER: ${{ steps.routing.outputs.active_issue }}
+          FINGERPRINT: ${{ steps.aggregate.outputs.fingerprint }}
+          SEVERITY: ${{ steps.aggregate.outputs.severity }}
+          TARGET_WORKER: ${{ steps.aggregate.outputs.worker }}
+        run: |
+          set -Eeuo pipefail
+          short_sha="${GITHUB_SHA:0:12}"
+          generation="${FINGERPRINT}-${short_sha}"
+          marker="<!-- production-health-fingerprint:${generation} -->"
+          existing="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${HUB_ISSUE_NUMBER}/comments?per_page=100" --jq ".[] | select(.body | contains(\"${marker}\")) | .id" | tail -n 1)"
+          if [ -z "$existing" ]; then
+            AGGREGATE_FILE=stock-analyzer/production-health-observer-artifacts/aggregate.json \
+            MARKER="$marker" HUB="$HUB_ISSUE_NUMBER" SHA="$GITHUB_SHA" RUN_ID="$GITHUB_RUN_ID" \
+            python3 - <<'PY' > "$RUNNER_TEMP/incident.txt"
+          import json, os
+          p=json.load(open(os.environ['AGGREGATE_FILE'],encoding='utf-8'))
+          print('[PRODUCTION_HEALTH_INCIDENT]')
+          print('schema_version: 2')
+          print(f"severity: {p['severity']}")
+          print(f"fingerprint: {p['fingerprint']}")
+          print(f"production_sha_observed: {os.environ['SHA']}")
+          print(f"observer_run_id: {os.environ['RUN_ID']}")
+          print(f"failure_count: {p['failureCount']}")
+          print('occurrence: 1')
+          print(f"summary: {p['summary']}")
+          print('status: observing_first_occurrence')
+          print('action: no code change on first occurrence; require one repeated observation on the same main SHA')
+          print('production_mutation: 0')
+          print('private_api: 0')
+          print('live_trading: 0')
+          print('real_orders: 0')
+          print(os.environ['MARKER'])
+          PY
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${HUB_ISSUE_NUMBER}/comments" -f body="$(cat "$RUNNER_TEMP/incident.txt")" >/dev/null
+            echo 'incident_action=created_first_occurrence' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          current_body="$(gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${existing}" --jq '.body')"
+          if grep -Fq '[WORKER_REPORT]' <<<"$current_body"; then
+            echo 'incident_action=already_escalated' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          branch="agent/hub-prod-health-${FINGERPRINT}-${GITHUB_SHA:0:8}"
+          ref_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${branch}" 2>/dev/null || true)"
+          if [ -n "$ref_json" ]; then
+            actual="$(jq -r '.object.sha // empty' <<<"$ref_json")"
+            test "$actual" = "$GITHUB_SHA"
+          else
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" -f ref="refs/heads/${branch}" -f sha="$GITHUB_SHA" >/dev/null
+          fi
+
+          AGGREGATE_FILE=stock-analyzer/production-health-observer-artifacts/aggregate.json \
+          MARKER="$marker" BRANCH="$branch" WORKER="$TARGET_WORKER" SHA="$GITHUB_SHA" RUN_ID="$GITHUB_RUN_ID" \
+          python3 - <<'PY' > "$RUNNER_TEMP/report.txt"
+          import json, os, re
+          p=json.load(open(os.environ['AGGREGATE_FILE'],encoding='utf-8'))
+          fp=p['fingerprint']; short=os.environ['SHA'][:8]
+          task=f"prod-health-{fp}-{short}"
+          checks=f"Production Health Observer Run {os.environ['RUN_ID']}; severity={p['severity']}; mode={p['mode']}; failure_count={p['failureCount']}; primary={p['primaryPath']}"
+          signature='; '.join(f"{x['kind']}|{x['route']}|{x['path']}|{x['status']}|{x['detail']}" for x in p['failures'][:8])[:1100]
+          fields={
+            'schema_version':'2','task_id':task,'root_task_id':task,'worker':os.environ['WORKER'],
+            'repository':os.environ['GITHUB_REPOSITORY'],'base_branch':'main','base_sha':os.environ['SHA'],
+            'branch':os.environ['BRANCH'],'status':'failed','head_sha':os.environ['SHA'],'pr_number':'none',
+            'changed_files':'[]','checks':checks,'ci_run_id':'none','summary':p['summary'],
+            'remaining':'Reproduce the Production failure, inspect current-main code and logs, then propose or apply only the smallest worker-scoped safe fix with deterministic validation.',
+            'dependencies':'none','conflicts':'none','approval_required':'no',
+            'prohibited_actions_confirmed':'No Production mutation, private API, live trading, real order, Ready, merge, deploy, DB, Secret, permission, or paid-fallback action was performed.',
+            'failure_signature':signature,
+          }
+          print('[WORKER_REPORT]')
+          for key,value in fields.items():
+              value=re.sub(r'[\r\n\t]+',' ',str(value)).strip()
+              print(f'{key}: {value}')
+          print(os.environ['MARKER'])
+          print('<!-- production-health-observer-report:v1 -->')
+          print('<!-- agent-executor-report -->')
+          PY
+          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${existing}" -f body="$(cat "$RUNNER_TEMP/report.txt")" >/dev/null
+          echo "incident_branch=$branch" >> "$GITHUB_OUTPUT"
+          echo 'incident_action=escalated_worker_report' >> "$GITHUB_OUTPUT"
+
+      - name: Upload structured observer evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-health-observer-${{ github.run_id }}
+          path: stock-analyzer/production-health-observer-artifacts
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Safety and routing summary
+        if: always()
+        run: |
+          {
+            echo '## Production Health Observer'
+            echo
+            echo "- active Central Hub: #${{ steps.routing.outputs.active_issue }}"
+            echo "- observer mode: ${{ steps.mode.outputs.mode || 'unknown' }}"
+            echo "- failure count: ${{ steps.aggregate.outputs.failure_count || 'unknown' }}"
+            echo "- fingerprint: ${{ steps.aggregate.outputs.fingerprint || 'none' }}"
+            echo "- incident action: ${{ steps.incident.outputs.incident_action || 'none' }}"
+            echo '- authentication/private-provider access: `0`'
+            echo '- Production app/DB mutation: `0`'
+            echo '- live trading/real orders: `0`'
+            echo '- Ready/merge/deploy authority: `0`'
+            echo '- paid AI fallback: `0`'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail visibly after evidence and Hub handoff
+        if: steps.aggregate.outputs.failure_count != '0'
+        run: |
+          echo 'Production Health Observer found a reproducible failure; evidence and bounded Central Hub incident were recorded.' >&2
+          exit 1
