@@ -3,12 +3,13 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { buildBrokerCommonState } from './account-connections';
+import { buildBrokerCommonState, legacySnapshot } from './account-connections';
 import {
   decryptTradingCredentials,
   encryptTradingCredentials,
 } from '../services/trade-credential-vault.service';
 import type { ExchangeConnection } from '../services/trade-automation.types';
+import '../features/account-readonly/tests/account-readonly.test';
 import '../features/account-readonly/tests/account-readonly.runtime.test';
 
 const repositoryRoot = process.cwd();
@@ -80,6 +81,30 @@ test('configured providers expose vault metadata only and never serialize encryp
   assert.equal(JSON.stringify(state).includes('MUST_NEVER_LEAVE_THE_VAULT'), false);
 });
 
+test('legacy account snapshot preserves unavailable evidence instead of fabricating zero balances', () => {
+  const configured = buildBrokerCommonState('user-a', [connection()]);
+  const configuredSnapshot = legacySnapshot(configured.providers.kiwoom);
+  assert.equal(configuredSnapshot.evidenceStatus, 'NOT_COLLECTED');
+  assert.equal(configuredSnapshot.observed, false);
+  assert.equal(configuredSnapshot.totalBalance, null);
+  assert.equal(configuredSnapshot.available, null);
+  assert.equal(configuredSnapshot.holdings, null);
+  assert.equal(configuredSnapshot.positions, null);
+  assert.equal(configuredSnapshot.error, 'PRIVATE_PROVIDER_READ_DISABLED');
+
+  const unconfigured = buildBrokerCommonState('user-a', []);
+  const unconfiguredSnapshot = legacySnapshot(unconfigured.providers.upbit);
+  assert.equal(unconfiguredSnapshot.evidenceStatus, 'UNAVAILABLE');
+  assert.equal(unconfiguredSnapshot.totalBalance, null);
+  assert.equal(unconfiguredSnapshot.available, null);
+  assert.equal(unconfiguredSnapshot.error, 'ACCOUNT_NOT_CONFIGURED');
+
+  const tossSnapshot = legacySnapshot(unconfigured.providers.toss);
+  assert.equal(tossSnapshot.evidenceStatus, 'PERMISSION_REQUIRED');
+  assert.equal(tossSnapshot.totalBalance, null);
+  assert.equal(tossSnapshot.error, 'TOSS_API_ACCESS_WAITING');
+});
+
 test('Toss stays an explicit waiting boundary without schema or private API changes', () => {
   const state = buildBrokerCommonState('user-a', []);
   assert.equal(state.providers.toss.configured, false);
@@ -109,12 +134,24 @@ test('server environment credentials can no longer become a user credential fall
   }
 });
 
-test('account connection route is GET-only metadata-only and has no provider network or credential decryption path', () => {
+test('disabled-read status lookup selects configured metadata without reading credential payloads', () => {
+  const repositorySource = source('api-server/src/features/account-readonly/account-readonly.repository.ts');
+  const lookup = repositorySource.match(
+    /export async function accountReadonlyCredentialConfigured[\s\S]*?\r?\n}\r?\n\r?\nexport class/,
+  )?.[0];
+
+  assert.ok(lookup, 'configured metadata lookup must remain explicit');
+  assert.match(lookup, /\.select\('configured'\)/);
+  assert.doesNotMatch(lookup, /encrypted_credentials|encryptedCredentials|decrypt/i);
+});
+
+test('account connection route requires approved-member capability and stays GET-only metadata-only', () => {
   const routeSource = source('api-server/src/routes/account-connections.ts');
   const indexSource = source('api-server/src/routes/index.ts');
 
   assert.match(indexSource, /router\.use\('\/account-connections',\s*accountConnectionsRouter\)/);
   assert.doesNotMatch(indexSource, /router\.use\('\/account-connections',\s*requireAdmin/);
+  assert.match(routeSource, /router\.use\(requireCapability\('canAccessBasicInfo'\)\)/);
   assert.match(routeSource, /router\.get\('\/contract'/);
   assert.match(routeSource, /router\.get\('\/status'/);
   assert.match(routeSource, /router\.get\('\/snapshot'/);
@@ -130,6 +167,10 @@ test('account connection route is GET-only metadata-only and has no provider net
   assert.match(routeSource, /mutationsAllowed:\s*false/);
   assert.match(routeSource, /orderSubmitted:\s*false/);
   assert.match(routeSource, /exchangeRequestSent:\s*false/);
+  assert.doesNotMatch(routeSource, /totalBalance:\s*0/);
+  assert.doesNotMatch(routeSource, /available:\s*0/);
+  assert.match(routeSource, /totalBalance:\s*null/);
+  assert.match(routeSource, /evidenceStatus/);
 
   for (const privatePath of [
     '/crypto/futures/auto',

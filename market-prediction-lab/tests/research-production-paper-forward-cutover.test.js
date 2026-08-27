@@ -28,6 +28,87 @@ test("Research Production enables simulated Paper outcome accumulation without e
   assert.equal(resolveOutcomeAccumulationEnabled({}), false);
 });
 
+test("Paper installer binds outcome accumulation mode to Research Production inside the isolated cron environment", async () => {
+  const installer = await readFile(new URL("../../ops/install-paper-forward-schedule.sh", import.meta.url), "utf8");
+  const outcomeBinding = "PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED='$OUTCOME_ACCUMULATION_ENABLED'";
+  const researchBinding = "RESEARCH_PRODUCTION='$OUTCOME_ACCUMULATION_ENABLED'";
+  assert.match(
+    installer,
+    /OUTCOME_ACCUMULATION_ENABLED="\$\{PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED:-false\}"/,
+  );
+  assert.ok(installer.includes(outcomeBinding));
+  assert.ok(installer.includes(researchBinding));
+  assert.ok(installer.indexOf(researchBinding) > installer.indexOf(outcomeBinding));
+  assert.doesNotMatch(installer, /RESEARCH_PRODUCTION='true'/);
+});
+
+test("Paper installer requires authenticated target-SHA seed before identity cutover and cron mutation", async () => {
+  const installer = await readFile(new URL("../../ops/install-paper-forward-schedule.sh", import.meta.url), "utf8");
+  assert.ok(installer.includes('PUBLISHER_BINDING_PATH="$STATE_ROOT/publisher-binding.json"'));
+  assert.ok(installer.includes('PAPER_STATE_SNAPSHOT_PATH="$PUBLISHER_DIR/paper-state-v2.json"'));
+  assert.ok(installer.includes("paper-state-publisher-runtime-binding-v1"));
+  assert.ok(installer.includes("validateAuthoritativeNaturalPaperLedger"));
+  assert.ok(installer.includes("createAuthoritativeNaturalPaperLedgerFromSnapshot"));
+  assert.ok(installer.includes("PAPER_FORWARD_AUTHORITATIVE_ACCOUNT_SEED_REQUIRED"));
+  assert.ok(installer.includes("PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH='$PAPER_STATE_SNAPSHOT_PATH'"));
+  assert.ok(installer.includes("PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256='$PUBLISHER_ACCOUNT_ID_SHA256'"));
+  assert.ok(installer.includes("LIVE_TRADING='false'"));
+  assert.ok(installer.includes("PRIVATE_TRADING_API_ALLOWED='false'"));
+  assert.ok(installer.includes("REAL_ORDER_ENABLED='false'"));
+
+  const seedPreflightIndex = installer.indexOf("createAuthoritativeNaturalPaperLedgerFromSnapshot");
+  const cutoverIndex = installer.indexOf('IDENTITY_CUTOVER="false"');
+  const cronMutationIndex = installer.indexOf('CRON_LINE="$CRON_EXPRESSION');
+  assert.ok(seedPreflightIndex >= 0);
+  assert.ok(cutoverIndex > seedPreflightIndex);
+  assert.ok(cronMutationIndex > cutoverIndex);
+});
+
+test("no-deploy activation passes only a protected lowercase publisher SHA-256 binding without disclosure", async () => {
+  const workflow = await readFile(
+    new URL("../../.github/workflows/paper-forward-schedule-no-deploy-activation.yml", import.meta.url),
+    "utf8",
+  );
+  const stepStart = workflow.indexOf("      - name: Install isolated exact-SHA Paper runtime and cron without application deployment");
+  const stepEnd = workflow.indexOf("      - name: Verify Production application identity remained unchanged", stepStart);
+  const installStep = workflow.slice(stepStart, stepEnd);
+
+  assert.ok(stepStart >= 0);
+  assert.ok(stepEnd > stepStart);
+  assert.ok(installStep.includes(
+    "PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256: ${{ secrets.PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256 }}",
+  ));
+  assert.equal(
+    (installStep.match(/\^\[0-9a-f\]\{64\}\$/gu) ?? []).length,
+    2,
+    "the protected binding must fail closed before SSH and again on the remote host",
+  );
+  assert.ok(installStep.includes("exit 14"));
+  assert.match(
+    installStep,
+    /PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256=%q bash -s'[\s\S]*"\$PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256"/u,
+  );
+  assert.ok(installStep.includes(
+    'PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256="$PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256" \\',
+  ));
+
+  const bindingContract = /^[0-9a-f]{64}$/u;
+  assert.equal(bindingContract.test("a".repeat(64)), true);
+  for (const invalid of ["", "a".repeat(63), "a".repeat(65), "A".repeat(64), ` ${"a".repeat(64)}`]) {
+    assert.equal(bindingContract.test(invalid), false);
+  }
+
+  assert.doesNotMatch(
+    installStep,
+    /(?:echo|printf\s+['"]%s\\n['"])\s+"\$PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256"/u,
+  );
+  assert.doesNotMatch(installStep, /publisherAccountIdSha256/u);
+  assert.doesNotMatch(
+    installStep,
+    /EVIDENCE_DIR[^\n]*PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256|PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256[^\n]*EVIDENCE_DIR/u,
+  );
+});
+
 test("Research Production archives predecessor Paper identity and starts the target identity from zero", async () => {
   const temp = await mkdtemp(join(tmpdir(), "research-paper-cutover-"));
   const root = join(temp, "forward", "paper");

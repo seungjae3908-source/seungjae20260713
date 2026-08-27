@@ -334,6 +334,14 @@ importers:
 
   packages/db: {}
 
+  packages/external-research: {}
+
+  packages/strategy-hypothesis:
+    dependencies:
+      '@workspace/external-research':
+        specifier: workspace:*
+        version: link:../external-research
+
   packages/stock-grade: {}
 
   stock-analyzer:

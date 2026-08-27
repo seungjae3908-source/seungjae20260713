@@ -86,7 +86,9 @@ test("Research Production scopes missing canonical runtime blocking to CRYPTO_FU
   assert.equal(futures.canonicalAdmissionCutover.blocker, "AUTHORITATIVE_ADMISSION_BUNDLE_REQUIRED");
   assert.equal(futures.paperCandidateSource.status, "AUTHORITATIVE_ADMISSION_RUNTIME_UNAVAILABLE");
   assert.equal(futures.paperCandidateSource.blocker, "AUTHORITATIVE_ADMISSION_RUNTIME_UNAVAILABLE");
-  assert.equal(futures.paperCandidateSource.eligibleCandidates, 0);
+  assert.equal(futures.paperCandidateSource.eligibleCandidates, null);
+  assert.equal(futures.paperCandidateSource.firstZeroStage, "UNKNOWN");
+  assert.equal(futures.paperCandidateSource.firstZeroReason, "AUTHORITATIVE_ADMISSION_RUNTIME_UNAVAILABLE");
   assert.equal(sourceCalls, 1);
 });
 
