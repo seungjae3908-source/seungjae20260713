@@ -447,7 +447,7 @@ export default function MarketInformationPage() {
           <InvestmentExplanationButton metric="fundingRate" compact />
           <InvestmentExplanationButton metric="openInterest" compact />
         </div>
-        <p className="mt-2 text-[10px] font-bold leading-4 text-muted-foreground">펀딩비·미결제약정은 포지션 쏠림과 레버리지 참여를 보는 보조 근거이며 단독 롱·숏 신호가 아닙니다.</p>
+        <p className="mt-2 text-[10px] font-bold leading-4 text-muted-foreground">선물 보조지표는 포지션 쏠림과 레버리지 참여를 보는 참고 근거이며 단독 롱·숏 신호가 아닙니다.</p>
         <div className="mt-3 grid grid-cols-3 gap-2">
           <div className="rounded-xl border bg-background p-3"><p className="text-[10px] font-bold text-muted-foreground">롱</p><p className="mt-1 text-base font-black">{formatPercent(data.sections.derivatives.data.longRatio == null ? null : data.sections.derivatives.data.longRatio * 100)}</p></div>
           <div className="rounded-xl border bg-background p-3"><p className="text-[10px] font-bold text-muted-foreground">숏</p><p className="mt-1 text-base font-black">{formatPercent(data.sections.derivatives.data.shortRatio == null ? null : data.sections.derivatives.data.shortRatio * 100)}</p></div>
