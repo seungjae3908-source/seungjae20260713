@@ -105,14 +105,18 @@ test('상세분석 replaces the embedded legacy full page with focused AI financ
   expect(detailAnalysisSource).not.toContain("label: '뉴스'");
 });
 
-test('all shared and semantic tab labels are centered on both axes', () => {
-  expect(responsiveTabsSource).toContain('inline-flex min-h-11 shrink-0 items-center justify-center rounded-xl text-center');
-  expect(responsiveTabsSource).toContain('<span className="block w-full text-center">');
+test('all shared and semantic tab labels use one centered 12px 900 weight 16px line-height spec', () => {
+  expect(responsiveTabsSource).toContain('inline-flex min-h-11 shrink-0 items-center justify-center rounded-xl text-center text-xs font-black leading-4');
+  expect(responsiveTabsSource).toContain('<span className="block w-full text-center leading-4">');
   expect(touchCss).toContain('#root [role="tablist"] [role="tab"]');
   expect(touchCss).toContain('#root [aria-label$="탭"] > button');
   expect(touchCss).toContain('#root [data-testid$="-tabs"] > button');
+  expect(touchCss).toContain('min-height: 44px !important;');
   expect(touchCss).toContain('align-items: center !important;');
   expect(touchCss).toContain('justify-content: center !important;');
+  expect(touchCss).toContain('font-size: 0.75rem !important;');
+  expect(touchCss).toContain('line-height: 1rem !important;');
+  expect(touchCss).toContain('font-weight: 900 !important;');
   expect(touchCss).toContain('text-align: center !important;');
 });
 
