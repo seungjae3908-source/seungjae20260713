@@ -92,7 +92,6 @@ jobs:
                 run_id: sourceRunId,
                 per_page: 100,
               },
-              (response) => response.data.artifacts,
             );
             const matches = artifacts.filter((artifact) => artifact.name === expectedName && !artifact.expired);
             core.setOutput('artifact_count', String(matches.length));
