@@ -141,6 +141,10 @@ test("canonical EXIT is preserved even when entry-only Profit-First evidence is 
   assert.equal(result.capturedProfitGateCandidates, 0);
   assert.equal(result.bridgeEligibleCandidates, 0);
   assert.equal(result.bridgeExitSignals, 1);
+  assert.equal(result.exitConditionEvidence.status, "MEASURED");
+  assert.equal(result.exitConditionEvidence.exitEvaluationCount, 1);
+  assert.equal(result.exitConditionEvidence.observations[0].requirementsSatisfied, true);
+  assert.equal(result.exitConditionEvidence.observations[0].provenance.includes("deriveExecutionDecision"), true);
   assert.equal(result.paperBridge.exitSignals.length, 1);
   assert.equal(result.paperBridge.exitSignals[0].signal.signalId, "spot-exit");
   assert.equal(result.paperBridge.exitSignals[0].executionIntent, "EXIT");
@@ -196,4 +200,8 @@ test("VALID_NO_TRADE remains zero-entry and does not fabricate Paper samples", a
   assert.equal(result.paperBridge.candidates.length, 0);
   assert.equal(result.paperBridge.exitSignals.length, 0);
   assert.equal(result.status, "VALID_NO_TRADE");
+  assert.equal(result.exitConditionEvidence.status, "MEASURED");
+  assert.equal(result.exitConditionEvidence.exitEvaluationCount, 1);
+  assert.equal(result.exitConditionEvidence.observations[0].requirementsSatisfied, false);
+  assert.equal(result.exitConditionEvidence.observations[0].sourceCode, "EXIT_REQUIREMENTS_NOT_SATISFIED");
 });
