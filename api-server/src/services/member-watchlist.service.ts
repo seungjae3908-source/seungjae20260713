@@ -1,4 +1,3 @@
-import { hasCapability, type MemberAccessProfile } from '../../../packages/member-access/src/index.js';
 import { getSupabase, getUserSupabase, hasSupabaseServerKey } from '../lib/supabase';
 
 export const MEMBER_WATCHLIST_MARKETS = [
@@ -9,6 +8,12 @@ export const MEMBER_WATCHLIST_MARKETS = [
 ] as const;
 export type MemberWatchlistMarket = (typeof MEMBER_WATCHLIST_MARKETS)[number];
 type StoredMemberWatchlistMarket = MemberWatchlistMarket | 'UNRESOLVED';
+
+type MemberTelegramEligibilityProfile = {
+  status?: unknown;
+  membership_level?: unknown;
+  is_active?: unknown;
+};
 
 export type MemberWatchlistInput = {
   ticker?: unknown;
@@ -39,9 +44,18 @@ function text(value: unknown, maxLength: number): string {
   return String(value ?? '').normalize('NFKC').trim().slice(0, maxLength);
 }
 
-export function memberEligibleForPersonalTelegram(profile: MemberAccessProfile): boolean {
+/**
+ * Database projection of the current canConnectPersonalTelegram gate.
+ * The query already requires status=approved. An explicitly inactive profile
+ * or an explicit pending membership tier must still fail closed immediately.
+ * Other approved tiers (associate/regular/admin, or legacy approved rows with
+ * no explicit tier) have the personal-Telegram capability in the canonical
+ * member-access matrix.
+ */
+export function memberEligibleForPersonalTelegram(profile: MemberTelegramEligibilityProfile): boolean {
   return profile.status === 'approved'
-    && hasCapability(profile, 'canConnectPersonalTelegram');
+    && profile.is_active !== false
+    && profile.membership_level !== 'pending';
 }
 
 function canonicalMarket(value: unknown, symbol: string): StoredMemberWatchlistMarket {
@@ -208,12 +222,12 @@ export async function findMemberWatchlistSubscribers(
     const batch = candidates.slice(index, index + MAX_PROFILE_LOOKUP_BATCH);
     const { data: profiles, error: profileError } = await client
       .from('profiles')
-      .select('id,status,membership_level,is_active,role')
+      .select('id,status,membership_level,is_active')
       .in('id', batch)
       .eq('status', 'approved');
     if (profileError) throw new Error('MEMBER_WATCHLIST_STORAGE_UNAVAILABLE');
     for (const row of Array.isArray(profiles) ? profiles : []) {
-      const profile = row as Record<string, unknown> & MemberAccessProfile;
+      const profile = row as Record<string, unknown> & MemberTelegramEligibilityProfile;
       const userId = text(profile.id, 64);
       if (userId && memberEligibleForPersonalTelegram(profile)) eligible.add(userId);
     }
