@@ -1171,7 +1171,13 @@ function composeScannerCryptoFuturesPaperAdmission(input) {
   add4(blockers, "P0_C5_PAPER_CONTRACT_PRECISION_REQUIRED", !positive3(rules?.quantityStep) || !Number.isInteger(rules?.quantityPrecision) || Number(rules.quantityPrecision) < 0 || !positive3(rules?.minimumQuantity) || !positive3(rules?.minimumNotional) || !nonNegative3(rules?.maintenanceMarginRate) || Number(rules.maintenanceMarginRate) >= 1 || !positive3(rules?.maximumLeverage));
   add4(blockers, "P0_C5_PUBLIC_PAPER_CONTRACT_MISMATCH", !sameNumber(rules?.quantityStep, publicEvidence?.sizeMultiplier) || !sameNumber(rules?.minimumQuantity, publicEvidence?.minTradeNum) || !sameNumber(rules?.minimumNotional, publicEvidence?.minTradeUsdt) || !sameNumber(rules?.maximumLeverage, publicEvidence?.maxLeverage));
   const observation = input.executionObservation;
-  add4(blockers, "P0_C5_PROVIDER_PROVENANCE_REQUIRED", !nonEmpty2(observation?.providerProvenance));
+  const providerProvenance = observation?.providerProvenance;
+  add4(blockers, "P0_C5_PROVIDER_PROVENANCE_REQUIRED", !nonEmpty2(providerProvenance) || !providerProvenance.split("+").includes("SIMULATED") || !providerProvenance.split("+").includes("public-L2"));
+  add4(
+    blockers,
+    "P0_C5_SIMULATED_PUBLIC_L2_PROVENANCE_REQUIRED",
+    observation?.executionProvenance?.evidenceClass !== "SIMULATED" || observation?.executionProvenance?.marketDataClass !== "public-L2" || observation?.executionProvenance?.executionMode !== "SIMULATED_EXECUTION_ONLY" || observation?.executionProvenance?.realFillClaim !== false || observation?.executionProvenance?.publicDepthIsFillProof !== false
+  );
   validateObservedCost(observation?.slippage, nowMs, maxEvidenceAgeMs, blockers);
   add4(blockers, "P0_C5_LIQUIDITY_EVIDENCE_INVALID", !positive3(observation?.liquidity?.value));
   add4(blockers, "P0_C5_LIQUIDITY_SOURCE_REQUIRED", !nonEmpty2(observation?.liquidity?.source));
@@ -1182,6 +1188,7 @@ function composeScannerCryptoFuturesPaperAdmission(input) {
   add4(blockers, "P0_C5_LEVERAGE_INVALID", !positive3(observation?.leverage) || positive3(rules?.maximumLeverage) && observation.leverage > rules.maximumLeverage);
   add4(blockers, "P0_C5_RISK_PERCENT_INVALID", !positive3(observation?.riskPercent) || observation.riskPercent > 1);
   add4(blockers, "P0_C5_MARGIN_MODE_REQUIRED", observation?.marginMode !== "isolated" && observation?.marginMode !== "cross");
+  add4(blockers, "P0_C5_SUPPLEMENTAL_FULL_COST_EVIDENCE_REQUIRED", !input.supplementalCostEvidence);
   add4(blockers, "P0_C5_COST_POLICY_ID_MISMATCH", input.supplementalCostEvidence?.costPolicyId !== signal?.strategyIdentity?.costPolicyVersion);
   const entryPrice = input.learningSnapshot?.entryPrice;
   const stopLoss = input.learningSnapshot?.stopLoss;
@@ -1304,6 +1311,12 @@ function composeScannerCryptoFuturesPaperAdmission(input) {
     marginMode: observation.marginMode.toUpperCase(),
     liquidationDistancePct: liquidationDistancePercent,
     privateApiUsed: false,
+    executionProvenance: observation.executionProvenance,
+    executionMode: "SIMULATED_EXECUTION_ONLY",
+    publicL2Only: true,
+    realFillClaim: false,
+    publicDepthIsFillProof: false,
+    liveFillCalibrationStatus: observation.executionProvenance.liveFillCalibrationStatus,
     privateTradingApiAllowed: false,
     liveOrderAllowed: false,
     orderSubmitted: false,
@@ -2091,7 +2104,7 @@ var ProviderAdmissionControl = class {
       throw error;
     }
     if (halfOpenProbe) state.halfOpenProbeActive = true;
-    const record = {
+    const record2 = {
       id: this.nextId,
       admittedAt: now,
       state,
@@ -2102,7 +2115,7 @@ var ProviderAdmissionControl = class {
       halfOpenProbe
     };
     this.nextId += 1;
-    this.outstanding.set(record.id, record);
+    this.outstanding.set(record2.id, record2);
     this.admittedActive += 1;
     this.physicalOutstanding += 1;
     state.admittedActive += 1;
@@ -2125,11 +2138,11 @@ var ProviderAdmissionControl = class {
     );
     const task = Promise.resolve().then(taskFactory).then(
       (value) => {
-        this.settlePhysical(record);
+        this.settlePhysical(record2);
         return value;
       },
       (reason) => {
-        this.settlePhysical(record);
+        this.settlePhysical(record2);
         throw reason;
       }
     );
@@ -2138,7 +2151,7 @@ var ProviderAdmissionControl = class {
     const settleLogical = (status) => {
       if (logicalSettled) return;
       logicalSettled = true;
-      this.settleLogical(record, status);
+      this.settleLogical(record2, status);
     };
     return {
       task,
@@ -2165,7 +2178,7 @@ var ProviderAdmissionControl = class {
       rejectedCapacityTotal: state.rejectedCapacityTotal,
       circuitOpenTotal: state.circuitOpenTotal,
       circuitTripTotal: state.circuitTripTotal,
-      oldestOutstandingAgeMs: this.oldestAge(now, (record) => record.state === state),
+      oldestOutstandingAgeMs: this.oldestAge(now, (record2) => record2.state === state),
       consecutiveTimeouts: state.consecutiveTimeouts,
       operations: [...state.operations.values()].map((operation) => ({
         operationClass: operation.operationClass,
@@ -2178,7 +2191,7 @@ var ProviderAdmissionControl = class {
         circuitOpenTotal: operation.circuitOpenTotal,
         oldestOutstandingAgeMs: this.oldestAge(
           now,
-          (record) => record.state === state && record.operation === operation
+          (record2) => record2.state === state && record2.operation === operation
         )
       })).sort((left, right) => left.operationClass.localeCompare(right.operationClass))
     })).sort((left, right) => `${left.provider}:${left.domain}`.localeCompare(`${right.provider}:${right.domain}`));
@@ -2252,68 +2265,68 @@ var ProviderAdmissionControl = class {
     operation.circuitOpenTotal += 1;
     return new ProviderAdmissionError("CIRCUIT_OPEN", Math.max(1, retryAfterMs));
   }
-  settleLogical(record, status) {
-    if (record.logicalStatus !== "active") return;
-    record.logicalStatus = status;
+  settleLogical(record2, status) {
+    if (record2.logicalStatus !== "active") return;
+    record2.logicalStatus = status;
     this.admittedActive = Math.max(0, this.admittedActive - 1);
-    record.state.admittedActive = Math.max(0, record.state.admittedActive - 1);
-    record.operation.admittedActive = Math.max(0, record.operation.admittedActive - 1);
+    record2.state.admittedActive = Math.max(0, record2.state.admittedActive - 1);
+    record2.operation.admittedActive = Math.max(0, record2.operation.admittedActive - 1);
     if (status === "timed_out") {
-      record.state.consecutiveTimeouts += 1;
-      if (!record.physicalSettled) {
+      record2.state.consecutiveTimeouts += 1;
+      if (!record2.physicalSettled) {
         this.timedOutOutstanding += 1;
-        record.state.timedOutOutstanding += 1;
-        record.operation.timedOutOutstanding += 1;
+        record2.state.timedOutOutstanding += 1;
+        record2.operation.timedOutOutstanding += 1;
       }
-      if (record.halfOpenProbe || record.state.consecutiveTimeouts >= this.timeoutThreshold) {
-        this.tripCircuit(record.state);
+      if (record2.halfOpenProbe || record2.state.consecutiveTimeouts >= this.timeoutThreshold) {
+        this.tripCircuit(record2.state);
       }
-      this.touchProvider(record.state);
-      this.touchOperation(record.state, record.operation);
-      this.cleanupTelemetry(record.state);
+      this.touchProvider(record2.state);
+      this.touchOperation(record2.state, record2.operation);
+      this.cleanupTelemetry(record2.state);
       return;
     }
     if (status === "completed") {
-      record.state.consecutiveTimeouts = 0;
-      if (record.halfOpenProbe) this.closeCircuit(record.state);
-      this.touchProvider(record.state);
-      this.touchOperation(record.state, record.operation);
-      this.cleanupTelemetry(record.state);
+      record2.state.consecutiveTimeouts = 0;
+      if (record2.halfOpenProbe) this.closeCircuit(record2.state);
+      this.touchProvider(record2.state);
+      this.touchOperation(record2.state, record2.operation);
+      this.cleanupTelemetry(record2.state);
       return;
     }
     if (status === "rejected") {
-      record.state.consecutiveTimeouts = 0;
-      if (record.halfOpenProbe) this.tripCircuit(record.state);
-      this.touchProvider(record.state);
-      this.touchOperation(record.state, record.operation);
-      this.cleanupTelemetry(record.state);
+      record2.state.consecutiveTimeouts = 0;
+      if (record2.halfOpenProbe) this.tripCircuit(record2.state);
+      this.touchProvider(record2.state);
+      this.touchOperation(record2.state, record2.operation);
+      this.cleanupTelemetry(record2.state);
       return;
     }
-    if (record.halfOpenProbe) this.tripCircuit(record.state);
-    this.touchProvider(record.state);
-    this.touchOperation(record.state, record.operation);
-    this.cleanupTelemetry(record.state);
+    if (record2.halfOpenProbe) this.tripCircuit(record2.state);
+    this.touchProvider(record2.state);
+    this.touchOperation(record2.state, record2.operation);
+    this.cleanupTelemetry(record2.state);
   }
-  settlePhysical(record) {
-    if (record.physicalSettled) return;
-    record.physicalSettled = true;
-    this.outstanding.delete(record.id);
+  settlePhysical(record2) {
+    if (record2.physicalSettled) return;
+    record2.physicalSettled = true;
+    this.outstanding.delete(record2.id);
     this.physicalOutstanding = Math.max(0, this.physicalOutstanding - 1);
-    record.state.physicalOutstanding = Math.max(0, record.state.physicalOutstanding - 1);
-    record.operation.physicalOutstanding = Math.max(0, record.operation.physicalOutstanding - 1);
-    if (record.logicalStatus === "timed_out") {
+    record2.state.physicalOutstanding = Math.max(0, record2.state.physicalOutstanding - 1);
+    record2.operation.physicalOutstanding = Math.max(0, record2.operation.physicalOutstanding - 1);
+    if (record2.logicalStatus === "timed_out") {
       this.timedOutOutstanding = Math.max(0, this.timedOutOutstanding - 1);
-      record.state.timedOutOutstanding = Math.max(0, record.state.timedOutOutstanding - 1);
-      record.operation.timedOutOutstanding = Math.max(0, record.operation.timedOutOutstanding - 1);
+      record2.state.timedOutOutstanding = Math.max(0, record2.state.timedOutOutstanding - 1);
+      record2.operation.timedOutOutstanding = Math.max(0, record2.operation.timedOutOutstanding - 1);
     }
-    if (record.logicalStatus === "timed_out" || record.logicalStatus === "aborted") {
+    if (record2.logicalStatus === "timed_out" || record2.logicalStatus === "aborted") {
       this.lateSettledTotal += 1;
-      record.state.lateSettledTotal += 1;
-      record.operation.lateSettledTotal += 1;
+      record2.state.lateSettledTotal += 1;
+      record2.operation.lateSettledTotal += 1;
     }
-    this.touchProvider(record.state);
-    this.touchOperation(record.state, record.operation);
-    this.cleanupTelemetry(record.state);
+    this.touchProvider(record2.state);
+    this.touchOperation(record2.state, record2.operation);
+    this.cleanupTelemetry(record2.state);
   }
   tripCircuit(state) {
     if (state.circuitState === "open") return;
@@ -2367,8 +2380,8 @@ var ProviderAdmissionControl = class {
   }
   oldestAge(now, matches) {
     let oldest = 0;
-    for (const record of this.outstanding.values()) {
-      if (matches(record)) oldest = Math.max(oldest, Math.max(0, now - record.admittedAt));
+    for (const record2 of this.outstanding.values()) {
+      if (matches(record2)) oldest = Math.max(oldest, Math.max(0, now - record2.admittedAt));
     }
     return oldest;
   }
@@ -2627,8 +2640,8 @@ function strategyScopedBaseSignalId(card) {
   return `${baseSignalId}:strategy:${card.strategyMode}`;
 }
 function applyScannerSignalLifecycle(memberId, cards, now = Date.now()) {
-  for (const [key, record] of records) {
-    if (now - record.lastSeenAt > RECORD_TTL_MS) records.delete(key);
+  for (const [key, record2] of records) {
+    if (now - record2.lastSeenAt > RECORD_TTL_MS) records.delete(key);
   }
   const alerts = [];
   const updated = cards.map((card) => {
@@ -5432,19 +5445,19 @@ var StrategyPromotionService = class {
     return this.list().items.find((item) => item.identity.strategyId === strategyId) ?? null;
   }
   history(strategyId) {
-    const record = this.get(strategyId);
-    if (!record) return null;
-    const events = record.stages.filter((stage) => stage.status !== "NOT_STARTED").map((stage) => ({ at: stage.validatedAt ?? stage.observedAt, type: "STAGE_EVALUATED", stage: stage.stage, status: stage.status, source: stage.source, sourceSha: stage.sourceSha }));
-    events.push({ at: this.now().toISOString(), type: "PROMOTION_STATE_EVALUATED", stage: "PROMOTION", status: record.promotionState, source: "strategy-promotion.service.ts", sourceSha: VALID_SHA.test(this.sourceSha) ? this.sourceSha : null });
+    const record2 = this.get(strategyId);
+    if (!record2) return null;
+    const events = record2.stages.filter((stage) => stage.status !== "NOT_STARTED").map((stage) => ({ at: stage.validatedAt ?? stage.observedAt, type: "STAGE_EVALUATED", stage: stage.stage, status: stage.status, source: stage.source, sourceSha: stage.sourceSha }));
+    events.push({ at: this.now().toISOString(), type: "PROMOTION_STATE_EVALUATED", stage: "PROMOTION", status: record2.promotionState, source: "strategy-promotion.service.ts", sourceSha: VALID_SHA.test(this.sourceSha) ? this.sourceSha : null });
     return { strategyId, events, executionAuthority: STRATEGY_PROMOTION_EXECUTION_AUTHORITY };
   }
   evidenceFor(strategyId) {
-    const record = this.get(strategyId);
-    if (!record) return null;
+    const record2 = this.get(strategyId);
+    if (!record2) return null;
     return {
       strategyId,
-      parameterHash: record.identity.parameterHash,
-      stages: record.stages,
+      parameterHash: record2.identity.parameterHash,
+      stages: record2.stages,
       sources: sourceRegistry(),
       exactIdentityRequired: true,
       inventedMetricsAllowed: false,
@@ -5511,15 +5524,15 @@ function canonicalHorizonBars(card, timeframe) {
 }
 function exactPromotionIdentity(input) {
   const profile = getScannerStrategyProfile(input.market, input.profileHorizon);
-  const matches = input.records.filter((record2) => record2.identity.market === input.market && record2.identity.strategyHorizon === input.profileHorizon && record2.identity.direction === input.direction);
+  const matches = input.records.filter((record3) => record3.identity.market === input.market && record3.identity.strategyHorizon === input.profileHorizon && record3.identity.direction === input.direction);
   const blockers = [];
   if (matches.length !== 1) {
     blockers.push(matches.length === 0 ? "CANONICAL_PROMOTION_IDENTITY_REQUIRED" : "CANONICAL_PROMOTION_IDENTITY_AMBIGUOUS");
     return { record: null, blockers };
   }
-  const record = matches[0];
-  const identity2 = record.identity;
-  if (record.executionAuthority !== "NONE" || record.liveTradingAuthority !== false || record.privateTradingApiCount !== 0) {
+  const record2 = matches[0];
+  const identity2 = record2.identity;
+  if (record2.executionAuthority !== "NONE" || record2.liveTradingAuthority !== false || record2.privateTradingApiCount !== 0) {
     blockers.push("CANONICAL_PROMOTION_SAFETY_ENVELOPE_INVALID");
   }
   if (identity2.strategyFamily !== "CANONICAL_SCANNER_PROFILE") blockers.push("PROMOTION_STRATEGY_FAMILY_MISMATCH");
@@ -5531,7 +5544,7 @@ function exactPromotionIdentity(input) {
     blockers.push("PROMOTION_RESEARCH_SHA_MISMATCH");
   }
   if (!nonEmpty4(identity2.costPolicyVersion)) blockers.push("PROMOTION_COST_POLICY_VERSION_REQUIRED");
-  return { record: blockers.length === 0 ? record : null, blockers };
+  return { record: blockers.length === 0 ? record2 : null, blockers };
 }
 function resolveScannerCanonicalPaperIdentity(input) {
   const researchCodeSha = input.researchCodeSha.trim().toLowerCase();
@@ -6328,11 +6341,12 @@ function evaluateCalibratedFillModel(raw = {}, policyInput = {}, nowInput = Date
   const evaluatedAt = finite12(raw.evaluatedAt);
   const now = finite12(nowInput, Date.now());
   const ageMs = evaluatedAt == null ? null : Math.max(0, now - evaluatedAt);
-  if (!modelId || fillProbability == null || brierScore == null || calibrationError == null || evaluatedAt == null) return { status: "NOT_AVAILABLE", reason: "CALIBRATED_FILL_MODEL_EVIDENCE_MISSING" };
-  if (!(fillProbability >= 0 && fillProbability <= 1)) return { status: "NOT_AVAILABLE", reason: "FILL_PROBABILITY_INVALID" };
+  const minimumSamples = policy.minFillModelSamples;
+  if (!modelId || fillProbability == null || brierScore == null || calibrationError == null || evaluatedAt == null) return { status: "NOT_AVAILABLE", reason: "CALIBRATED_FILL_MODEL_EVIDENCE_MISSING", minimumSamples };
+  if (!(fillProbability >= 0 && fillProbability <= 1)) return { status: "NOT_AVAILABLE", reason: "FILL_PROBABILITY_INVALID", minimumSamples };
   if (evaluationSamples < policy.minFillModelSamples) return { status: "NOT_AVAILABLE", reason: "FILL_MODEL_SAMPLE_INSUFFICIENT", evaluationSamples, minimumSamples: policy.minFillModelSamples };
-  if (ageMs > policy.maxFillModelAgeMs) return { status: "NOT_AVAILABLE", reason: "FILL_MODEL_EVIDENCE_STALE", ageMs };
-  if (brierScore > policy.maxFillModelBrierScore || calibrationError > policy.maxFillModelCalibrationError) return { status: "NOT_AVAILABLE", reason: "FILL_MODEL_CALIBRATION_QUALITY_INSUFFICIENT", brierScore, calibrationError };
+  if (ageMs > policy.maxFillModelAgeMs) return { status: "NOT_AVAILABLE", reason: "FILL_MODEL_EVIDENCE_STALE", ageMs, minimumSamples };
+  if (brierScore > policy.maxFillModelBrierScore || calibrationError > policy.maxFillModelCalibrationError) return { status: "NOT_AVAILABLE", reason: "FILL_MODEL_CALIBRATION_QUALITY_INSUFFICIENT", brierScore, calibrationError, minimumSamples };
   return {
     status: fillProbability >= policy.minFillProbability ? "PASS" : "VETO",
     reason: fillProbability >= policy.minFillProbability ? null : "FILL_PROBABILITY_TOO_LOW",
@@ -6340,6 +6354,7 @@ function evaluateCalibratedFillModel(raw = {}, policyInput = {}, nowInput = Date
     fillProbability,
     threshold: policy.minFillProbability,
     evaluationSamples,
+    minimumSamples,
     brierScore,
     calibrationError,
     evaluatedAt,
@@ -6357,8 +6372,13 @@ var PAPER_SIMULATED_EXECUTION_EVIDENCE_SAFETY = Object.freeze({
   liveTrading: false,
   realFillClaimAllowed: false,
   currentPriceFillAssumptionAllowed: false,
+  liveFillCalibrationRequiredForPaperObservation: false,
+  liveFillCalibrationRequiredForRealFillClaim: true,
+  supplementalFullCostEvidenceRequiredForAdmission: true,
   financialMutationAllowed: false
 });
+var PAPER_SIMULATED_PROVENANCE = Object.freeze(["SIMULATED", "public-L2"]);
+var LIVE_SUBMITTED_EXECUTION_PROVENANCE = "LIVE_SUBMITTED_EXECUTION";
 function finite13(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
@@ -6382,6 +6402,9 @@ function cloneLevel(level) {
 function unique2(values) {
   return Object.freeze([...new Set(values)]);
 }
+function record(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : Object.freeze({});
+}
 function freeze(value) {
   if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
   for (const child of Object.values(value)) freeze(child);
@@ -6393,37 +6416,63 @@ function buildPaperSimulatedExecutionEvidence(input) {
   const maximumAgeMs = finite13(input?.maximumAgeMs);
   const targetQuantity = finite13(input?.targetQuantity);
   const blockers = [];
-  if (!nonEmpty6(input?.source)) blockers.push("PUBLIC_DEPTH_SOURCE_REQUIRED");
-  if (!nonEmpty6(input?.market)) blockers.push("MARKET_REQUIRED");
-  if (!nonEmpty6(input?.symbol)) blockers.push("SYMBOL_REQUIRED");
-  if (!nonEmpty6(input?.direction)) blockers.push("EXECUTION_DIRECTION_REQUIRED");
-  if (!(targetQuantity != null && targetQuantity > 0)) blockers.push("TARGET_QUANTITY_REQUIRED");
-  if (!(observedAtMs != null && observedAtMs > 0)) blockers.push("PUBLIC_DEPTH_TIMESTAMP_REQUIRED");
-  if (!(maximumAgeMs != null && maximumAgeMs > 0)) blockers.push("PUBLIC_DEPTH_FRESHNESS_CONTRACT_REQUIRED");
+  const paperSimulationBlockers = [];
+  const blockPaperSimulation = (code) => {
+    paperSimulationBlockers.push(code);
+    blockers.push(code);
+  };
+  if (!nonEmpty6(input?.source)) blockPaperSimulation("PUBLIC_DEPTH_SOURCE_REQUIRED");
+  if (!nonEmpty6(input?.market)) blockPaperSimulation("MARKET_REQUIRED");
+  if (!nonEmpty6(input?.symbol)) blockPaperSimulation("SYMBOL_REQUIRED");
+  if (!nonEmpty6(input?.direction)) blockPaperSimulation("EXECUTION_DIRECTION_REQUIRED");
+  if (!(targetQuantity != null && targetQuantity > 0)) blockPaperSimulation("TARGET_QUANTITY_REQUIRED");
+  if (!(observedAtMs != null && observedAtMs > 0)) blockPaperSimulation("PUBLIC_DEPTH_TIMESTAMP_REQUIRED");
+  if (!(maximumAgeMs != null && maximumAgeMs > 0)) blockPaperSimulation("PUBLIC_DEPTH_FRESHNESS_CONTRACT_REQUIRED");
   if (observedAtMs != null && maximumAgeMs != null && nowMs - observedAtMs > maximumAgeMs) {
-    blockers.push("PUBLIC_DEPTH_STALE");
+    blockPaperSimulation("PUBLIC_DEPTH_STALE");
   }
   if (!Array.isArray(input?.provenance) || input.provenance.length === 0 || !input.provenance.every(nonEmpty6)) {
-    blockers.push("PUBLIC_DEPTH_PROVENANCE_REQUIRED");
+    blockPaperSimulation("PUBLIC_DEPTH_PROVENANCE_REQUIRED");
   }
   const bids = Array.isArray(input?.bids) ? input.bids.map(cloneLevel) : [];
   const asks = Array.isArray(input?.asks) ? input.asks.map(cloneLevel) : [];
   const bid = bestPrice(bids, "BID");
   const ask = bestPrice(asks, "ASK");
-  if (bid == null || ask == null || ask < bid) blockers.push("PUBLIC_DEPTH_BOOK_INVALID");
+  if (bid == null || ask == null || ask < bid) blockPaperSimulation("PUBLIC_DEPTH_BOOK_INVALID");
   const bookWalk = walkOrderBook({
     direction: input?.direction,
     targetQty: input?.targetQuantity,
     bids,
     asks
   }, input?.policy ?? {});
-  if (bookWalk?.status === "NOT_AVAILABLE") blockers.push(String(bookWalk.reason ?? "BOOK_WALK_NOT_AVAILABLE"));
+  if (bookWalk?.status === "NOT_AVAILABLE") {
+    blockPaperSimulation(String(bookWalk.reason ?? "BOOK_WALK_NOT_AVAILABLE"));
+  }
+  const calibratedFillModel = record(input?.calibratedFillModel);
   const fillModel = evaluateCalibratedFillModel(
-    input?.calibratedFillModel ?? {},
+    calibratedFillModel,
     input?.policy ?? {},
     nowMs
   );
-  if (fillModel?.status === "NOT_AVAILABLE") blockers.push(String(fillModel.reason ?? "CALIBRATED_FILL_MODEL_EVIDENCE_MISSING"));
+  const sampleProvenance = nonEmpty6(calibratedFillModel.sampleProvenance) ? calibratedFillModel.sampleProvenance.trim() : null;
+  const liveFillCalibrationBlockers = [];
+  if (sampleProvenance !== LIVE_SUBMITTED_EXECUTION_PROVENANCE) {
+    liveFillCalibrationBlockers.push("LIVE_SUBMITTED_EXECUTION_PROVENANCE_REQUIRED");
+  }
+  if (fillModel?.status === "NOT_AVAILABLE") {
+    liveFillCalibrationBlockers.push(String(fillModel.reason ?? "CALIBRATED_FILL_MODEL_EVIDENCE_MISSING"));
+  }
+  const minimumSubmittedExecutionSamples = finite13(fillModel?.minimumSamples);
+  if (!(minimumSubmittedExecutionSamples != null && minimumSubmittedExecutionSamples > 0)) {
+    throw new Error("LIVE_FILL_MINIMUM_SAMPLE_POLICY_UNAVAILABLE");
+  }
+  const paperSimulationStatus = paperSimulationBlockers.length > 0 || bookWalk?.status === "NOT_AVAILABLE" ? "BLOCKED_DATA" : bookWalk?.status === "VETO" ? "VETO" : "READY";
+  const liveFillCalibrationStatus = liveFillCalibrationBlockers.length > 0 ? "BLOCKED_DATA" : fillModel?.status === "VETO" ? "VETO" : "READY";
+  const liveFillCalibrationVerified = sampleProvenance === LIVE_SUBMITTED_EXECUTION_PROVENANCE && fillModel?.status !== "NOT_AVAILABLE";
+  const enforcedProvenance = unique2([
+    ...PAPER_SIMULATED_PROVENANCE,
+    ...Array.isArray(input?.provenance) ? input.provenance.filter(nonEmpty6) : []
+  ]);
   const requestStartedAtMs = finite13(input?.requestStartedAtMs);
   const requestCompletedAtMs = finite13(input?.requestCompletedAtMs);
   const observedRoundTripMs = requestStartedAtMs != null && requestCompletedAtMs != null && requestCompletedAtMs >= requestStartedAtMs ? requestCompletedAtMs - requestStartedAtMs : null;
@@ -6469,16 +6518,40 @@ function buildPaperSimulatedExecutionEvidence(input) {
       },
       partialFillEstimate: {
         visibleDepthFillFraction: finite13(bookWalk?.coverageRatio),
-        calibratedFillProbability: finite13(fillModel?.fillProbability),
-        quality: fillModel?.status === "NOT_AVAILABLE" ? "UNCALIBRATED_MODEL_ONLY" : "CALIBRATED_ESTIMATE"
+        calibratedFillProbability: liveFillCalibrationVerified ? finite13(fillModel?.fillProbability) : null,
+        quality: liveFillCalibrationVerified ? "CALIBRATED_ESTIMATE" : "UNCALIBRATED_MODEL_ONLY"
       }
     },
     confidence: {
-      classification: fillModel?.status === "NOT_AVAILABLE" ? "UNCALIBRATED" : "CALIBRATED",
+      classification: liveFillCalibrationVerified ? "LIVE_GRADE_CALIBRATED" : "UNCALIBRATED",
       numericConfidence: null,
       fillModel
     },
-    provenance: Array.isArray(input?.provenance) ? [...input.provenance] : [],
+    paperSimulation: {
+      schemaVersion: "paper-public-l2-simulated-execution-observation-v1",
+      status: paperSimulationStatus,
+      blockers: unique2(paperSimulationBlockers),
+      evidenceClass: "SIMULATED",
+      marketDataClass: "public-L2",
+      provenance: enforcedProvenance,
+      bookWalkStatus: bookWalk?.status ?? "NOT_AVAILABLE",
+      publicDepthIsFillProof: false,
+      realFillClaim: false,
+      liveFillCalibrationRequired: false
+    },
+    liveGradeFillReadiness: {
+      schemaVersion: "live-grade-fill-calibration-readiness-v1",
+      status: liveFillCalibrationStatus,
+      blockers: unique2(liveFillCalibrationBlockers),
+      requiredSampleProvenance: LIVE_SUBMITTED_EXECUTION_PROVENANCE,
+      sampleProvenance: sampleProvenance === LIVE_SUBMITTED_EXECUTION_PROVENANCE ? sampleProvenance : null,
+      submittedExecutionSamples: sampleProvenance === LIVE_SUBMITTED_EXECUTION_PROVENANCE ? finite13(fillModel?.evaluationSamples) : null,
+      minimumSubmittedExecutionSamples,
+      fillModel,
+      promotedToRealFill: false,
+      realFillClaim: false
+    },
+    provenance: enforcedProvenance,
     executionMode: "SIMULATED_EXECUTION_ONLY",
     publicDepthIsFillProof: false,
     realFillClaim: false,
@@ -6569,15 +6642,18 @@ function buildAuthoritativePaperExecutionObservation(input) {
   const estimated = evidence.estimated;
   const slippage = estimated?.slippageEstimate;
   const liquidity = estimated?.liquidityEvidence;
-  const partialFill = estimated?.partialFillEstimate;
-  const confidence = evidence.confidence;
-  const fillModel = confidence?.fillModel;
-  if (evidence.modelStatus !== "SIMULATION_AVAILABLE" || slippage?.quality !== "ESTIMATED" || !nonNegative5(slippage.percent) || !positive6(liquidity?.visibleExecutableQuantity) || !positive6(liquidity?.visibleCoverageRatio) || Number(liquidity.visibleCoverageRatio) < 1 || partialFill?.quality !== "CALIBRATED_ESTIMATE" || fillModel?.status !== "PASS") {
+  const paperSimulation = evidence.paperSimulation;
+  const liveGradeFillReadiness = evidence.liveGradeFillReadiness;
+  if (paperSimulation?.status !== "READY" || paperSimulation?.evidenceClass !== "SIMULATED" || paperSimulation?.marketDataClass !== "public-L2" || paperSimulation?.realFillClaim !== false || paperSimulation?.publicDepthIsFillProof !== false || slippage?.quality !== "ESTIMATED" || !nonNegative5(slippage.percent) || !positive6(liquidity?.visibleExecutableQuantity) || !positive6(liquidity?.visibleCoverageRatio) || Number(liquidity.visibleCoverageRatio) < 1) {
     throw new Error("AUTHORITATIVE_EXECUTION_OBSERVATION_DATA_UNAVAILABLE");
   }
   const observedAtMs = input.executionEvidenceInput.observedAtMs;
+  const provenance = Array.isArray(evidence.provenance) ? evidence.provenance.filter(nonEmpty7) : [];
+  if (!provenance.includes("SIMULATED") || !provenance.includes("public-L2")) {
+    throw new Error("AUTHORITATIVE_EXECUTION_OBSERVATION_PROVENANCE_INVALID");
+  }
   return freeze2({
-    providerProvenance: input.executionEvidenceInput.provenance.join("+"),
+    providerProvenance: provenance.join("+"),
     slippage: {
       valuePercent: Number(slippage.percent),
       quality: "ESTIMATED",
@@ -6591,8 +6667,16 @@ function buildAuthoritativePaperExecutionObservation(input) {
     },
     partialFill: {
       model: "ORDER_BOOK",
-      source: String(fillModel.modelId ?? "CALIBRATED_FILL_MODEL"),
+      source: "SIMULATED/public-L2:VISIBLE_L2_BOOK_WALK_ONLY",
       observedAtMs
+    },
+    executionProvenance: {
+      evidenceClass: "SIMULATED",
+      marketDataClass: "public-L2",
+      executionMode: "SIMULATED_EXECUTION_ONLY",
+      realFillClaim: false,
+      publicDepthIsFillProof: false,
+      liveFillCalibrationStatus: liveGradeFillReadiness?.status === "READY" || liveGradeFillReadiness?.status === "VETO" ? liveGradeFillReadiness.status : "BLOCKED_DATA"
     },
     leverage: policy.leverage,
     riskPercent: policy.riskPercent,
@@ -6633,6 +6717,10 @@ var AUTHORITATIVE_PAPER_CALLBACK_OWNERS_SAFETY = Object.freeze({
   recurringLedgerDerivationAllowed: false,
   scalarMaintenanceMarginDefaultAllowed: false,
   uncalibratedFillClaimAllowed: false,
+  paperPublicL2SimulationAllowed: true,
+  liveFillCalibrationRequiredForPaperObservation: false,
+  liveFillCalibrationRequiredForRealFillClaim: true,
+  supplementalFullCostEvidenceRequiredForAdmission: true,
   unknownCostIsZero: false,
   executionAuthority: "NONE",
   privateApiAllowed: false,
@@ -6762,7 +6850,13 @@ function createAuthoritativePaperEvidenceSourceWiring({
     executionObservationForCard: ownedSource({
       callback: "executionObservationForCard",
       implementation: "buildAuthoritativePaperExecutionObservation/buildPaperSimulatedExecutionEvidence",
-      requiredData: ["public L2 depth", "target quantity", "request timing", "calibrated fill model", "immutable risk policy evidence"],
+      requiredData: [
+        "public L2 depth",
+        "target quantity",
+        "request timing",
+        "immutable risk policy evidence",
+        "optional LIVE_SUBMITTED_EXECUTION calibration reported separately from Paper simulation readiness"
+      ],
       source: async (context) => {
         const input = await dependencies.executionObservationInputForCard(context);
         return input == null ? null : buildAuthoritativePaperExecutionObservation(input);
