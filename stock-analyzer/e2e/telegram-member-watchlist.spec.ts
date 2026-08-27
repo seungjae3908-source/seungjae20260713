@@ -258,9 +258,11 @@ test('member ownership, current capability, durable handoff, and delivery bounda
   expect(migration).toContain('auth.uid() = user_id');
   expect(migration).toContain("'UNRESOLVED'");
   expect(service).toContain(".from('profiles')");
-  expect(service).toContain(".select('id,status,membership_level,is_active,role')");
+  expect(service).toContain(".select('id,status,membership_level,is_active')");
   expect(service).toContain(".eq('status', 'approved')");
-  expect(service).toContain("hasCapability(profile, 'canConnectPersonalTelegram')");
+  expect(service).toContain("profile.membership_level !== 'pending'");
+  expect(service).toContain('profile.is_active !== false');
+  expect(service).not.toContain("packages/member-access/src/index.js");
   expect(service).toContain('MAX_PROFILE_LOOKUP_BATCH = 200');
   expect(sync).toContain("request('/member-watchlist/sync'");
   expect(sync).not.toContain('deviceId:');
