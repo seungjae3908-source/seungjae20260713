@@ -48,6 +48,9 @@ on:
       - market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
       - research-production/src/natural-cycle-verdict-trace.mjs
       - research-production/test/natural-cycle-verdict-trace.test.mjs
+      - market-prediction-lab/tests/research-production-readonly-evidence-observability.test.js
+      - ops/research-production-readonly-evidence.sh
+      - .github/workflows/research-production-natural-cycle-evidence.yml
       - ops/install-paper-forward-schedule.sh
       - ops/disable-paper-forward-schedule.sh
       - .github/workflows/paper-forward-schedule-activation.yml
@@ -159,6 +162,9 @@ jobs:
             market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
             research-production/src/natural-cycle-verdict-trace.mjs
             research-production/test/natural-cycle-verdict-trace.test.mjs
+            market-prediction-lab/tests/research-production-readonly-evidence-observability.test.js
+            ops/research-production-readonly-evidence.sh
+            .github/workflows/research-production-natural-cycle-evidence.yml
             ops/install-paper-forward-schedule.sh
             ops/disable-paper-forward-schedule.sh
             .github/workflows/paper-forward-schedule-activation.yml
