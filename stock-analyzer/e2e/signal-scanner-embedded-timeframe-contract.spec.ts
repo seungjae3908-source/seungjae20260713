@@ -1,8 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
 
-const repoRoot = path.resolve(__dirname, '..', '..');
+const currentDir = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(currentDir, '..', '..');
 const scannerPageSource = fs.readFileSync(
   path.join(repoRoot, 'stock-analyzer/src/pages/signal-scanner.tsx'),
   'utf8',
