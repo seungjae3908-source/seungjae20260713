@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { BrainCircuit, ShieldAlert, ShieldCheck } from 'lucide-react';
+import { InvestmentExplanationButton } from '@/components/investment-explanation-sheet';
 import { authorizedFetch } from '@/lib/auth-fetch';
 
 type PortfolioReply = {
@@ -65,6 +66,13 @@ function dataBasisLabel(value: string | undefined): string {
   return value === 'server_collection_time' ? '서버 수집 시각' : value || '기준 미제공';
 }
 
+function qualityLabel(value: string | undefined): string {
+  if (value === 'READY' || value === 'LIVE' || value === 'OK') return '확인된 데이터 기준';
+  if (value === 'PARTIAL') return '일부 데이터 부족';
+  if (value === 'NOT_AVAILABLE' || value === 'UNAVAILABLE') return '판단 근거 부족';
+  return value || '상태 미제공';
+}
+
 export function PortfolioAiDiagnosis() {
   const [question, setQuestion] = useState('내 포트폴리오를 요약해줘');
   const [reply, setReply] = useState<PortfolioReply | null>(null);
@@ -99,6 +107,7 @@ export function PortfolioAiDiagnosis() {
   const warnings = [...new Set([...(context?.warnings ?? []), ...(aiData?.missing ?? [])])];
   const evidence = context?.evidence ?? [];
   const partial = context?.dataQuality === 'PARTIAL' || context?.dataQuality === 'NOT_AVAILABLE' || warnings.length > 0;
+  const actionChecks = warnings.slice(0, 3);
 
   return <section
     id="portfolio-ai-diagnosis"
@@ -121,6 +130,19 @@ export function PortfolioAiDiagnosis() {
       </span>
     </div>
 
+    <div className="mt-4 rounded-2xl border border-card-border bg-background/60 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="text-[10px] font-black text-primary">먼저 확인</p>
+          <p className="mt-1 text-xs font-black">AI 답변보다 원본 데이터 품질과 누락 근거를 먼저 봅니다.</p>
+        </div>
+        <InvestmentExplanationButton metric="dataQuality" compact />
+      </div>
+      <p className="mt-2 text-[11px] font-bold leading-5 text-muted-foreground">
+        질문할 때만 AI를 호출합니다. 같은 화면을 보는 것만으로 AI 요청이 발생하지 않습니다.
+      </p>
+    </div>
+
     <div className="mt-4 flex gap-2">
       <input
         aria-label="포트폴리오 AI 질문"
@@ -130,7 +152,7 @@ export function PortfolioAiDiagnosis() {
           if (event.key === 'Enter') void askPortfolio();
         }}
         className="min-h-11 min-w-0 flex-1 rounded-xl border border-border bg-background px-3 py-2.5 text-sm"
-        placeholder="예: AAPL이 10% 하락하면? (보유자산 코드 입력)"
+        placeholder="예: 내 포트폴리오에서 지금 가장 먼저 확인할 위험은?"
       />
       <button
         type="button"
@@ -143,7 +165,12 @@ export function PortfolioAiDiagnosis() {
     </div>
 
     <div className="mt-2 flex flex-wrap gap-2">
-      {['내 포트폴리오를 요약해줘', '가장 큰 집중 위험은?', '내 포트폴리오 수익률을 요약해줘'].map((sample) => <button
+      {[
+        '내 포트폴리오를 요약해줘',
+        '가장 큰 집중 위험은?',
+        '오늘 확인할 것 3개만 알려줘',
+        '현재 누락 데이터가 판단에 어떤 영향을 줘?',
+      ].map((sample) => <button
         type="button"
         key={sample}
         onClick={() => setQuestion(sample)}
@@ -154,11 +181,37 @@ export function PortfolioAiDiagnosis() {
     {failure ? <p role="alert" className="mt-3 rounded-xl bg-destructive/10 p-3 text-sm font-bold text-destructive">{failure}</p> : null}
 
     {reply?.result ? <div className="mt-3 space-y-3 rounded-2xl border border-border bg-background/60 p-4" data-testid="portfolio-ai-diagnosis-result">
+      <section className="rounded-xl border border-card-border bg-card p-3" data-testid="portfolio-evidence-summary">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p className="text-[10px] font-black text-primary">현재 판단 기반</p>
+            <p className="mt-1 text-sm font-black">{qualityLabel(context?.dataQuality)}</p>
+          </div>
+          <InvestmentExplanationButton metric="dataQuality" value={context?.dataQuality || 'NOT_AVAILABLE'} compact />
+        </div>
+        <dl className="mt-3 grid grid-cols-3 gap-2 text-center text-[11px]">
+          <div className="rounded-lg bg-muted/50 p-2"><dt className="text-muted-foreground">근거</dt><dd className="mt-1 font-black tabular-nums">{evidence.length}개</dd></div>
+          <div className="rounded-lg bg-muted/50 p-2"><dt className="text-muted-foreground">누락/주의</dt><dd className="mt-1 font-black tabular-nums">{warnings.length}개</dd></div>
+          <div className="rounded-lg bg-muted/50 p-2"><dt className="text-muted-foreground">기준 시각</dt><dd className="mt-1 font-black">{formatBasisTime(context?.asOf)}</dd></div>
+        </dl>
+      </section>
+
       {partial ? <div data-testid="portfolio-ai-warnings" className="rounded-xl border border-warning/30 bg-warning/10 p-3 text-xs font-bold text-muted-foreground">
         <div className="flex items-center gap-2 font-black text-foreground"><ShieldAlert className="h-4 w-4" />일부 데이터 제한이 있습니다.</div>
         <p className="mt-1">AI는 누락된 현금·계좌·시장 데이터를 0으로 바꾸거나 추정해서 채우지 않습니다.</p>
         {warnings.length ? <ul className="mt-2 space-y-1">{warnings.map((warning) => <li key={warning}>• {warning}</li>)}</ul> : null}
       </div> : null}
+
+      <section className="rounded-xl border border-card-border p-3" data-testid="portfolio-action-checks">
+        <p className="text-xs font-black">오늘 먼저 확인할 것</p>
+        {actionChecks.length ? (
+          <ol className="mt-2 space-y-2 text-xs leading-5 text-muted-foreground">
+            {actionChecks.map((warning, index) => <li key={warning} className="rounded-lg bg-muted/40 p-2"><strong className="mr-1 text-foreground">{index + 1}.</strong>{warning}</li>)}
+          </ol>
+        ) : (
+          <p className="mt-2 text-xs font-bold leading-5 text-muted-foreground">현재 AI 응답에서 추가 Missing Evidence 경고가 확인되지 않았습니다. 이것만으로 전체 계좌 데이터가 완전하다는 뜻은 아닙니다.</p>
+        )}
+      </section>
 
       <p className="whitespace-pre-wrap text-sm leading-6">{reply.result.ai?.answer || '설명 응답이 없습니다.'}</p>
 
