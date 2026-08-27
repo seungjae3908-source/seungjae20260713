@@ -75,6 +75,8 @@ type PortfolioHoldingRow = {
 type ProfileRow = {
   id?: unknown;
   status?: unknown;
+  membership_level?: unknown;
+  is_active?: unknown;
 };
 
 function emptySummary(status: MemberHoldingProducerStatus): MemberHoldingProducerSummary {
@@ -98,6 +100,18 @@ function finiteNumber(value: unknown): number | null {
 function canonicalStockMarket(value: unknown): CanonicalStockMarket | null {
   const market = cleanText(value, 16).toUpperCase();
   return market === 'KR' || market === 'US' ? market : null;
+}
+
+/**
+ * Database projection of the current canConnectPersonalTelegram capability for
+ * rows that are otherwise status=approved. Explicitly inactive members and an
+ * explicit pending membership tier must stop receiving personal holdings
+ * alerts even when an older Telegram connection/policy still exists.
+ */
+export function memberHoldingProfileEligibleForPersonalTelegram(profile: ProfileRow): boolean {
+  return profile.status === 'approved'
+    && profile.is_active !== false
+    && profile.membership_level !== 'pending';
 }
 
 export function memberHoldingsTelegramProducerEnabled(
@@ -131,22 +145,22 @@ class SupabaseMemberHoldingProducerRepository implements MemberHoldingProducerRe
     if (!candidates.length) return [];
 
     const userIds = [...new Set(candidates.map((row) => row.userId))];
-    const approved = new Set<string>();
+    const eligible = new Set<string>();
     for (let index = 0; index < userIds.length; index += MAX_PROFILE_LOOKUP_BATCH) {
       const batch = userIds.slice(index, index + MAX_PROFILE_LOOKUP_BATCH);
       const { data: profiles, error: profileError } = await client
         .from('profiles')
-        .select('id,status')
+        .select('id,status,membership_level,is_active')
         .in('id', batch)
         .eq('status', 'approved');
       if (profileError) throw new Error('MEMBER_HOLDINGS_PRODUCER_STORAGE_UNAVAILABLE');
       for (const raw of Array.isArray(profiles) ? profiles : []) {
         const row = raw as ProfileRow;
         const id = cleanText(row.id, 128);
-        if (id && row.status === 'approved') approved.add(id);
+        if (id && memberHoldingProfileEligibleForPersonalTelegram(row)) eligible.add(id);
       }
     }
-    return candidates.filter((row) => approved.has(row.userId));
+    return candidates.filter((row) => eligible.has(row.userId));
   }
 }
 
