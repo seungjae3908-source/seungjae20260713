@@ -320,10 +320,10 @@ function calculateTradingRisk(input, now = /* @__PURE__ */ new Date()) {
     );
   }
   if (input.estimatedFundingRate !== 0) {
-    const positive7 = input.estimatedFundingRate > 0;
-    const likelyPays = positive7 && input.side === "long" || !positive7 && input.side === "short";
+    const positive8 = input.estimatedFundingRate > 0;
+    const likelyPays = positive8 && input.side === "long" || !positive8 && input.side === "short";
     warnings.push(
-      `${positive7 ? "양(+)" : "음(-)"} 펀딩 기준으로 ${input.side === "long" ? "롱" : "숏"} 포지션은 ${likelyPays ? "지급 가능성" : "수취 가능성"}이 있으나, 최대 손실 계산에서는 보수적으로 비용으로 반영했습니다.`
+      `${positive8 ? "양(+)" : "음(-)"} 펀딩 기준으로 ${input.side === "long" ? "롱" : "숏"} 포지션은 ${likelyPays ? "지급 가능성" : "수취 가능성"}이 있으나, 최대 손실 계산에서는 보수적으로 비용으로 반영했습니다.`
     );
   }
   const profit1 = calculateTargetProfit(
@@ -1176,7 +1176,7 @@ function composeScannerCryptoFuturesPaperAdmission(input) {
   add4(
     blockers,
     "P0_C5_SIMULATED_PUBLIC_L2_PROVENANCE_REQUIRED",
-    observation?.executionProvenance?.evidenceClass !== "SIMULATED" || observation?.executionProvenance?.marketDataClass !== "public-L2" || observation?.executionProvenance?.executionMode !== "SIMULATED_EXECUTION_ONLY" || observation?.executionProvenance?.realFillClaim !== false || observation?.executionProvenance?.publicDepthIsFillProof !== false
+    observation?.executionProvenance?.evidenceClass !== "SIMULATED" || observation?.executionProvenance?.marketDataClass !== "public-L2" || observation?.executionProvenance?.executionMode !== "SIMULATED_EXECUTION_ONLY" || observation?.executionProvenance?.realFillObserved !== false || observation?.executionProvenance?.realFillClaim !== false || observation?.executionProvenance?.publicDepthIsFillProof !== false || observation?.executionProvenance?.liveSubmittedExecutionSampleCredit !== 0
   );
   validateObservedCost(observation?.slippage, nowMs, maxEvidenceAgeMs, blockers);
   add4(blockers, "P0_C5_LIQUIDITY_EVIDENCE_INVALID", !positive3(observation?.liquidity?.value));
@@ -1314,8 +1314,10 @@ function composeScannerCryptoFuturesPaperAdmission(input) {
     executionProvenance: observation.executionProvenance,
     executionMode: "SIMULATED_EXECUTION_ONLY",
     publicL2Only: true,
+    realFillObserved: false,
     realFillClaim: false,
     publicDepthIsFillProof: false,
+    liveSubmittedExecutionSampleCredit: 0,
     liveFillCalibrationStatus: observation.executionProvenance.liveFillCalibrationStatus,
     privateTradingApiAllowed: false,
     liveOrderAllowed: false,
@@ -2104,7 +2106,7 @@ var ProviderAdmissionControl = class {
       throw error;
     }
     if (halfOpenProbe) state.halfOpenProbeActive = true;
-    const record2 = {
+    const record3 = {
       id: this.nextId,
       admittedAt: now,
       state,
@@ -2115,7 +2117,7 @@ var ProviderAdmissionControl = class {
       halfOpenProbe
     };
     this.nextId += 1;
-    this.outstanding.set(record2.id, record2);
+    this.outstanding.set(record3.id, record3);
     this.admittedActive += 1;
     this.physicalOutstanding += 1;
     state.admittedActive += 1;
@@ -2138,11 +2140,11 @@ var ProviderAdmissionControl = class {
     );
     const task = Promise.resolve().then(taskFactory).then(
       (value) => {
-        this.settlePhysical(record2);
+        this.settlePhysical(record3);
         return value;
       },
       (reason) => {
-        this.settlePhysical(record2);
+        this.settlePhysical(record3);
         throw reason;
       }
     );
@@ -2151,7 +2153,7 @@ var ProviderAdmissionControl = class {
     const settleLogical = (status) => {
       if (logicalSettled) return;
       logicalSettled = true;
-      this.settleLogical(record2, status);
+      this.settleLogical(record3, status);
     };
     return {
       task,
@@ -2178,7 +2180,7 @@ var ProviderAdmissionControl = class {
       rejectedCapacityTotal: state.rejectedCapacityTotal,
       circuitOpenTotal: state.circuitOpenTotal,
       circuitTripTotal: state.circuitTripTotal,
-      oldestOutstandingAgeMs: this.oldestAge(now, (record2) => record2.state === state),
+      oldestOutstandingAgeMs: this.oldestAge(now, (record3) => record3.state === state),
       consecutiveTimeouts: state.consecutiveTimeouts,
       operations: [...state.operations.values()].map((operation) => ({
         operationClass: operation.operationClass,
@@ -2191,7 +2193,7 @@ var ProviderAdmissionControl = class {
         circuitOpenTotal: operation.circuitOpenTotal,
         oldestOutstandingAgeMs: this.oldestAge(
           now,
-          (record2) => record2.state === state && record2.operation === operation
+          (record3) => record3.state === state && record3.operation === operation
         )
       })).sort((left, right) => left.operationClass.localeCompare(right.operationClass))
     })).sort((left, right) => `${left.provider}:${left.domain}`.localeCompare(`${right.provider}:${right.domain}`));
@@ -2265,68 +2267,68 @@ var ProviderAdmissionControl = class {
     operation.circuitOpenTotal += 1;
     return new ProviderAdmissionError("CIRCUIT_OPEN", Math.max(1, retryAfterMs));
   }
-  settleLogical(record2, status) {
-    if (record2.logicalStatus !== "active") return;
-    record2.logicalStatus = status;
+  settleLogical(record3, status) {
+    if (record3.logicalStatus !== "active") return;
+    record3.logicalStatus = status;
     this.admittedActive = Math.max(0, this.admittedActive - 1);
-    record2.state.admittedActive = Math.max(0, record2.state.admittedActive - 1);
-    record2.operation.admittedActive = Math.max(0, record2.operation.admittedActive - 1);
+    record3.state.admittedActive = Math.max(0, record3.state.admittedActive - 1);
+    record3.operation.admittedActive = Math.max(0, record3.operation.admittedActive - 1);
     if (status === "timed_out") {
-      record2.state.consecutiveTimeouts += 1;
-      if (!record2.physicalSettled) {
+      record3.state.consecutiveTimeouts += 1;
+      if (!record3.physicalSettled) {
         this.timedOutOutstanding += 1;
-        record2.state.timedOutOutstanding += 1;
-        record2.operation.timedOutOutstanding += 1;
+        record3.state.timedOutOutstanding += 1;
+        record3.operation.timedOutOutstanding += 1;
       }
-      if (record2.halfOpenProbe || record2.state.consecutiveTimeouts >= this.timeoutThreshold) {
-        this.tripCircuit(record2.state);
+      if (record3.halfOpenProbe || record3.state.consecutiveTimeouts >= this.timeoutThreshold) {
+        this.tripCircuit(record3.state);
       }
-      this.touchProvider(record2.state);
-      this.touchOperation(record2.state, record2.operation);
-      this.cleanupTelemetry(record2.state);
+      this.touchProvider(record3.state);
+      this.touchOperation(record3.state, record3.operation);
+      this.cleanupTelemetry(record3.state);
       return;
     }
     if (status === "completed") {
-      record2.state.consecutiveTimeouts = 0;
-      if (record2.halfOpenProbe) this.closeCircuit(record2.state);
-      this.touchProvider(record2.state);
-      this.touchOperation(record2.state, record2.operation);
-      this.cleanupTelemetry(record2.state);
+      record3.state.consecutiveTimeouts = 0;
+      if (record3.halfOpenProbe) this.closeCircuit(record3.state);
+      this.touchProvider(record3.state);
+      this.touchOperation(record3.state, record3.operation);
+      this.cleanupTelemetry(record3.state);
       return;
     }
     if (status === "rejected") {
-      record2.state.consecutiveTimeouts = 0;
-      if (record2.halfOpenProbe) this.tripCircuit(record2.state);
-      this.touchProvider(record2.state);
-      this.touchOperation(record2.state, record2.operation);
-      this.cleanupTelemetry(record2.state);
+      record3.state.consecutiveTimeouts = 0;
+      if (record3.halfOpenProbe) this.tripCircuit(record3.state);
+      this.touchProvider(record3.state);
+      this.touchOperation(record3.state, record3.operation);
+      this.cleanupTelemetry(record3.state);
       return;
     }
-    if (record2.halfOpenProbe) this.tripCircuit(record2.state);
-    this.touchProvider(record2.state);
-    this.touchOperation(record2.state, record2.operation);
-    this.cleanupTelemetry(record2.state);
+    if (record3.halfOpenProbe) this.tripCircuit(record3.state);
+    this.touchProvider(record3.state);
+    this.touchOperation(record3.state, record3.operation);
+    this.cleanupTelemetry(record3.state);
   }
-  settlePhysical(record2) {
-    if (record2.physicalSettled) return;
-    record2.physicalSettled = true;
-    this.outstanding.delete(record2.id);
+  settlePhysical(record3) {
+    if (record3.physicalSettled) return;
+    record3.physicalSettled = true;
+    this.outstanding.delete(record3.id);
     this.physicalOutstanding = Math.max(0, this.physicalOutstanding - 1);
-    record2.state.physicalOutstanding = Math.max(0, record2.state.physicalOutstanding - 1);
-    record2.operation.physicalOutstanding = Math.max(0, record2.operation.physicalOutstanding - 1);
-    if (record2.logicalStatus === "timed_out") {
+    record3.state.physicalOutstanding = Math.max(0, record3.state.physicalOutstanding - 1);
+    record3.operation.physicalOutstanding = Math.max(0, record3.operation.physicalOutstanding - 1);
+    if (record3.logicalStatus === "timed_out") {
       this.timedOutOutstanding = Math.max(0, this.timedOutOutstanding - 1);
-      record2.state.timedOutOutstanding = Math.max(0, record2.state.timedOutOutstanding - 1);
-      record2.operation.timedOutOutstanding = Math.max(0, record2.operation.timedOutOutstanding - 1);
+      record3.state.timedOutOutstanding = Math.max(0, record3.state.timedOutOutstanding - 1);
+      record3.operation.timedOutOutstanding = Math.max(0, record3.operation.timedOutOutstanding - 1);
     }
-    if (record2.logicalStatus === "timed_out" || record2.logicalStatus === "aborted") {
+    if (record3.logicalStatus === "timed_out" || record3.logicalStatus === "aborted") {
       this.lateSettledTotal += 1;
-      record2.state.lateSettledTotal += 1;
-      record2.operation.lateSettledTotal += 1;
+      record3.state.lateSettledTotal += 1;
+      record3.operation.lateSettledTotal += 1;
     }
-    this.touchProvider(record2.state);
-    this.touchOperation(record2.state, record2.operation);
-    this.cleanupTelemetry(record2.state);
+    this.touchProvider(record3.state);
+    this.touchOperation(record3.state, record3.operation);
+    this.cleanupTelemetry(record3.state);
   }
   tripCircuit(state) {
     if (state.circuitState === "open") return;
@@ -2380,8 +2382,8 @@ var ProviderAdmissionControl = class {
   }
   oldestAge(now, matches) {
     let oldest = 0;
-    for (const record2 of this.outstanding.values()) {
-      if (matches(record2)) oldest = Math.max(oldest, Math.max(0, now - record2.admittedAt));
+    for (const record3 of this.outstanding.values()) {
+      if (matches(record3)) oldest = Math.max(oldest, Math.max(0, now - record3.admittedAt));
     }
     return oldest;
   }
@@ -2640,8 +2642,8 @@ function strategyScopedBaseSignalId(card) {
   return `${baseSignalId}:strategy:${card.strategyMode}`;
 }
 function applyScannerSignalLifecycle(memberId, cards, now = Date.now()) {
-  for (const [key, record2] of records) {
-    if (now - record2.lastSeenAt > RECORD_TTL_MS) records.delete(key);
+  for (const [key, record3] of records) {
+    if (now - record3.lastSeenAt > RECORD_TTL_MS) records.delete(key);
   }
   const alerts = [];
   const updated = cards.map((card) => {
@@ -3340,14 +3342,14 @@ function scoreRelativeVolume(value) {
   if (value < 3) return 90;
   return 100;
 }
-function scoreLiquidity(spreadPercent2, tradingValue) {
+function scoreLiquidity(spreadPercent3, tradingValue) {
   let score = tradingValue != null && tradingValue > 0 ? 65 : 30;
-  if (spreadPercent2 == null) return score;
-  if (spreadPercent2 <= 0.05) score += 35;
-  else if (spreadPercent2 <= 0.1) score += 28;
-  else if (spreadPercent2 <= 0.2) score += 18;
-  else if (spreadPercent2 <= 0.4) score += 4;
-  else if (spreadPercent2 <= 0.8) score -= 20;
+  if (spreadPercent3 == null) return score;
+  if (spreadPercent3 <= 0.05) score += 35;
+  else if (spreadPercent3 <= 0.1) score += 28;
+  else if (spreadPercent3 <= 0.2) score += 18;
+  else if (spreadPercent3 <= 0.4) score += 4;
+  else if (spreadPercent3 <= 0.8) score -= 20;
   else score -= 40;
   return clamp3(score);
 }
@@ -4058,7 +4060,7 @@ function analyze(request, ticker, candles, spread, now) {
   const pullbackLong = ma20 != null && ma5 != null && ma5 > ma20 && ticker.price >= ma20 * 0.98 && ticker.price <= ma20 * 1.03;
   const pullbackShort = ma20 != null && ma5 != null && ma5 < ma20 && ticker.price <= ma20 * 1.02 && ticker.price >= ma20 * 0.97;
   const mid = spread.bid != null && spread.ask != null && spread.bid > 0 && spread.ask >= spread.bid ? (spread.bid + spread.ask) / 2 : null;
-  const spreadPercent2 = mid != null && spread.ask != null && spread.bid != null ? (spread.ask - spread.bid) / mid * 100 : null;
+  const spreadPercent3 = mid != null && spread.ask != null && spread.bid != null ? (spread.ask - spread.bid) / mid * 100 : null;
   const volatilityPercent = currentAtr != null ? currentAtr / ticker.price * 100 : null;
   const stale = now - latest.time > staleAfter(request.timeframe) || ticker.timestamp != null && now - ticker.timestamp > 10 * 6e4;
   let longScore = 35;
@@ -4142,23 +4144,23 @@ function analyze(request, ticker, candles, spread, now) {
     dataCompleteness += candles.length >= 30 ? 30 : Math.min(20, candles.length / 30 * 20);
     dataCompleteness += ticker.volume > 0 && ticker.tradingValue > 0 ? 15 : 0;
     dataCompleteness += !stale ? 15 : 0;
-    dataCompleteness += spreadPercent2 != null ? 15 : 0;
+    dataCompleteness += spreadPercent3 != null ? 15 : 0;
     dataCompleteness += conditionMatched ? 10 : 0;
   } else {
     dataCompleteness += ticker.price > 0 ? 10 : 0;
     dataCompleteness += candles.length >= 30 ? 25 : Math.min(18, candles.length / 30 * 18);
     dataCompleteness += ticker.volume > 0 && ticker.tradingValue > 0 ? 10 : 0;
     dataCompleteness += !stale ? 15 : 0;
-    dataCompleteness += spreadPercent2 != null ? 10 : 0;
+    dataCompleteness += spreadPercent3 != null ? 10 : 0;
     dataCompleteness += ticker.fundingRate != null ? 10 : 0;
     dataCompleteness += ticker.openInterest != null && ticker.openInterest > 0 ? 10 : 0;
     dataCompleteness += conditionMatched ? 10 : 0;
   }
   dataCompleteness = Math.round(clamp4(dataCompleteness));
   let riskScore = 0;
-  if (spreadPercent2 == null) riskScore += 20;
-  else if (spreadPercent2 > 0.6) riskScore += 35;
-  else if (spreadPercent2 > 0.25) riskScore += 18;
+  if (spreadPercent3 == null) riskScore += 20;
+  else if (spreadPercent3 > 0.6) riskScore += 35;
+  else if (spreadPercent3 > 0.25) riskScore += 18;
   if (volatilityPercent == null) riskScore += 15;
   else if (volatilityPercent > 6) riskScore += 30;
   else if (volatilityPercent > 3) riskScore += 15;
@@ -4216,10 +4218,10 @@ function analyze(request, ticker, candles, spread, now) {
     {
       key: "spread",
       label: "스프레드",
-      status: spreadPercent2 == null ? "unverified" : spreadPercent2 <= 0.25 ? "matched" : "not_matched",
+      status: spreadPercent3 == null ? "unverified" : spreadPercent3 <= 0.25 ? "matched" : "not_matched",
       source: request.market === "spot" ? "upbit-public-orderbook" : "bitget-public-ticker",
       observedAt,
-      reasons: [spreadPercent2 == null ? "호가 스프레드를 확인하지 못했습니다." : `스프레드 ${spreadPercent2.toFixed(3)}%`]
+      reasons: [spreadPercent3 == null ? "호가 스프레드를 확인하지 못했습니다." : `스프레드 ${spreadPercent3.toFixed(3)}%`]
     },
     {
       key: "risk",
@@ -4249,7 +4251,7 @@ function analyze(request, ticker, candles, spread, now) {
   if (stale) warnings.push("시세 또는 캔들이 오래됐습니다.");
   if (ticker.warning) warnings.push("업비트 유의 종목입니다.");
   if (Math.abs(ticker.changePercent) > 12) warnings.push("24시간 급변으로 추격 위험이 큽니다.");
-  if (spreadPercent2 == null) warnings.push("스프레드 미확인");
+  if (spreadPercent3 == null) warnings.push("스프레드 미확인");
   if (request.market === "spot") warnings.push("현물 Scanner에는 숏·레버리지를 적용하지 않습니다.");
   const selectedReasons = direction === "SHORT" ? shortReasons : longReasons;
   return {
@@ -4274,7 +4276,7 @@ function analyze(request, ticker, candles, spread, now) {
     liquidity: ticker.tradingValue,
     volume: ticker.volume,
     tradingValue: ticker.tradingValue,
-    spreadPercent: spreadPercent2 == null ? null : round(spreadPercent2, 4),
+    spreadPercent: spreadPercent3 == null ? null : round(spreadPercent3, 4),
     volatilityPercent: technicalPlan.volatilityPercent,
     matched: evidence.filter((item) => item.status === "matched").map((item) => item.label),
     notMatched: evidence.filter((item) => item.status === "not_matched").map((item) => item.label),
@@ -5445,19 +5447,19 @@ var StrategyPromotionService = class {
     return this.list().items.find((item) => item.identity.strategyId === strategyId) ?? null;
   }
   history(strategyId) {
-    const record2 = this.get(strategyId);
-    if (!record2) return null;
-    const events = record2.stages.filter((stage) => stage.status !== "NOT_STARTED").map((stage) => ({ at: stage.validatedAt ?? stage.observedAt, type: "STAGE_EVALUATED", stage: stage.stage, status: stage.status, source: stage.source, sourceSha: stage.sourceSha }));
-    events.push({ at: this.now().toISOString(), type: "PROMOTION_STATE_EVALUATED", stage: "PROMOTION", status: record2.promotionState, source: "strategy-promotion.service.ts", sourceSha: VALID_SHA.test(this.sourceSha) ? this.sourceSha : null });
+    const record3 = this.get(strategyId);
+    if (!record3) return null;
+    const events = record3.stages.filter((stage) => stage.status !== "NOT_STARTED").map((stage) => ({ at: stage.validatedAt ?? stage.observedAt, type: "STAGE_EVALUATED", stage: stage.stage, status: stage.status, source: stage.source, sourceSha: stage.sourceSha }));
+    events.push({ at: this.now().toISOString(), type: "PROMOTION_STATE_EVALUATED", stage: "PROMOTION", status: record3.promotionState, source: "strategy-promotion.service.ts", sourceSha: VALID_SHA.test(this.sourceSha) ? this.sourceSha : null });
     return { strategyId, events, executionAuthority: STRATEGY_PROMOTION_EXECUTION_AUTHORITY };
   }
   evidenceFor(strategyId) {
-    const record2 = this.get(strategyId);
-    if (!record2) return null;
+    const record3 = this.get(strategyId);
+    if (!record3) return null;
     return {
       strategyId,
-      parameterHash: record2.identity.parameterHash,
-      stages: record2.stages,
+      parameterHash: record3.identity.parameterHash,
+      stages: record3.stages,
       sources: sourceRegistry(),
       exactIdentityRequired: true,
       inventedMetricsAllowed: false,
@@ -5524,15 +5526,15 @@ function canonicalHorizonBars(card, timeframe) {
 }
 function exactPromotionIdentity(input) {
   const profile = getScannerStrategyProfile(input.market, input.profileHorizon);
-  const matches = input.records.filter((record3) => record3.identity.market === input.market && record3.identity.strategyHorizon === input.profileHorizon && record3.identity.direction === input.direction);
+  const matches = input.records.filter((record4) => record4.identity.market === input.market && record4.identity.strategyHorizon === input.profileHorizon && record4.identity.direction === input.direction);
   const blockers = [];
   if (matches.length !== 1) {
     blockers.push(matches.length === 0 ? "CANONICAL_PROMOTION_IDENTITY_REQUIRED" : "CANONICAL_PROMOTION_IDENTITY_AMBIGUOUS");
     return { record: null, blockers };
   }
-  const record2 = matches[0];
-  const identity2 = record2.identity;
-  if (record2.executionAuthority !== "NONE" || record2.liveTradingAuthority !== false || record2.privateTradingApiCount !== 0) {
+  const record3 = matches[0];
+  const identity2 = record3.identity;
+  if (record3.executionAuthority !== "NONE" || record3.liveTradingAuthority !== false || record3.privateTradingApiCount !== 0) {
     blockers.push("CANONICAL_PROMOTION_SAFETY_ENVELOPE_INVALID");
   }
   if (identity2.strategyFamily !== "CANONICAL_SCANNER_PROFILE") blockers.push("PROMOTION_STRATEGY_FAMILY_MISMATCH");
@@ -5544,7 +5546,7 @@ function exactPromotionIdentity(input) {
     blockers.push("PROMOTION_RESEARCH_SHA_MISMATCH");
   }
   if (!nonEmpty4(identity2.costPolicyVersion)) blockers.push("PROMOTION_COST_POLICY_VERSION_REQUIRED");
-  return { record: blockers.length === 0 ? record2 : null, blockers };
+  return { record: blockers.length === 0 ? record3 : null, blockers };
 }
 function resolveScannerCanonicalPaperIdentity(input) {
   const researchCodeSha = input.researchCodeSha.trim().toLowerCase();
@@ -6195,6 +6197,321 @@ async function fetchPublicMarketJson(value, options) {
   );
 }
 
+// src/services/authoritative-paper-execution-cost-sources.service.ts
+var AUTHORITATIVE_PAPER_EXECUTION_COST_SOURCES_VERSION = "authoritative-paper-execution-cost-sources-v1";
+var AUTHORITATIVE_PAPER_EXECUTION_SIZING_EVIDENCE_VERSION = "authoritative-paper-execution-sizing-evidence-v1";
+var BITGET_BASE_URL = "https://api.bitget.com";
+var PUBLIC_L2_MAXIMUM_AGE_MS = 3e4;
+var PUBLIC_L2_LIMIT = "50";
+var COST_EVIDENCE_QUALITIES = /* @__PURE__ */ new Set([
+  "OBSERVED",
+  "DOCUMENTED",
+  "ESTIMATED",
+  "NOT_APPLICABLE"
+]);
+function record(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+function finite11(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+function positive6(value) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+function nonNegative5(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+function nonEmpty6(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+function fresh2(observedAtMs, maximumAgeMs, nowMs) {
+  return positive6(observedAtMs) && positive6(maximumAgeMs) && observedAtMs <= nowMs && nowMs - observedAtMs <= maximumAgeMs;
+}
+function abortSignal(value) {
+  return value instanceof AbortSignal ? value : void 0;
+}
+function freeze(value) {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  for (const child of Object.values(value)) freeze(child);
+  return Object.freeze(value);
+}
+function scannerExecutionIdentity(context) {
+  const card = record(context?.card);
+  if (!card || context?.market !== "CRYPTO_FUTURES") return null;
+  const signalId2 = nonEmpty6(card.signalId) ? card.signalId.trim() : null;
+  const direction = card.action === "LONG" || card.action === "SHORT" ? card.action : null;
+  if (!signalId2 || !nonEmpty6(card.symbol) || !direction) return null;
+  try {
+    return freeze({ signalId: signalId2, symbol: normalizeBitgetFuturesSymbol(card.symbol), direction });
+  } catch {
+    return null;
+  }
+}
+function validDepthLevel(value) {
+  if (!Array.isArray(value) || value.length < 2) return false;
+  const price = finite11(value[0]);
+  const size = finite11(value[1]);
+  return positive6(price) && positive6(size);
+}
+function normalizedLevels(value) {
+  return Array.isArray(value) ? Object.freeze(value.filter(validDepthLevel).map((level) => Object.freeze([level[0], level[1]]))) : Object.freeze([]);
+}
+function bitgetPublicL2Url(symbol) {
+  const url = new URL("/api/v3/market/orderbook", BITGET_BASE_URL);
+  url.search = new URLSearchParams({
+    category: "USDT-FUTURES",
+    symbol: normalizeBitgetFuturesSymbol(symbol),
+    limit: PUBLIC_L2_LIMIT
+  }).toString();
+  return url;
+}
+function sizingMatches(sizing, identity2, nowMs) {
+  return sizing?.schemaVersion === AUTHORITATIVE_PAPER_EXECUTION_SIZING_EVIDENCE_VERSION && sizing.signalId === identity2.signalId && sizing.symbol === identity2.symbol && sizing.direction === identity2.direction && positive6(sizing.targetQuantity) && nonEmpty6(sizing.source) && fresh2(sizing.observedAtMs, sizing.maximumAgeMs, nowMs) && sizing.riskPolicy?.schemaVersion === "authoritative-paper-risk-policy-evidence-v1";
+}
+async function collectAuthoritativePaperExecutionObservationInput(input) {
+  if (typeof input?.fetchPublicJson !== "function") throw new TypeError("PUBLIC_L2_FETCH_REQUIRED");
+  const now = input.now ?? Date.now;
+  if (typeof now !== "function") throw new TypeError("PUBLIC_L2_CLOCK_REQUIRED");
+  const identity2 = scannerExecutionIdentity(input.context);
+  const requestStartedAtMs = now();
+  if (!identity2 || !positive6(requestStartedAtMs) || !sizingMatches(input.sizingEvidence, identity2, requestStartedAtMs)) return null;
+  const payload = record(await input.fetchPublicJson(bitgetPublicL2Url(identity2.symbol), {
+    provider: "bitget",
+    signal: abortSignal(input.context.signal)
+  }));
+  const requestCompletedAtMs = now();
+  if (!positive6(requestCompletedAtMs) || requestCompletedAtMs < requestStartedAtMs) return null;
+  if (!payload || payload.code !== "00000") return null;
+  const data = record(payload.data);
+  const observedAtMs = finite11(data?.ts);
+  const bids = normalizedLevels(data?.b);
+  const asks = normalizedLevels(data?.a);
+  if (!observedAtMs || observedAtMs > requestCompletedAtMs || requestCompletedAtMs - observedAtMs > PUBLIC_L2_MAXIMUM_AGE_MS || bids.length === 0 || asks.length === 0) return null;
+  return freeze({
+    executionEvidenceInput: {
+      source: "BITGET_PUBLIC_UTA_V3_ORDERBOOK",
+      market: "CRYPTO_FUTURES",
+      symbol: identity2.symbol,
+      direction: identity2.direction,
+      targetQuantity: input.sizingEvidence.targetQuantity,
+      bids,
+      asks,
+      observedAtMs,
+      requestStartedAtMs,
+      requestCompletedAtMs,
+      maximumAgeMs: PUBLIC_L2_MAXIMUM_AGE_MS,
+      provenance: Object.freeze(["SIMULATED", "public-L2", "bitget-public-uta-v3-orderbook"]),
+      calibratedFillModel: null
+    },
+    riskPolicy: input.sizingEvidence.riskPolicy,
+    nowMs: requestCompletedAtMs
+  });
+}
+function unavailable(unit = "PERCENT") {
+  return freeze({
+    state: "UNAVAILABLE",
+    value: null,
+    unit,
+    quality: null,
+    source: null,
+    observedAtMs: null,
+    countsAsExecutionCost: false,
+    unavailableIsZero: false
+  });
+}
+function componentFromPercentEvidence(value, nowMs, maximumAgeMs) {
+  if (!value || !nonNegative5(value.valuePercent) || !nonEmpty6(value.source) || !COST_EVIDENCE_QUALITIES.has(value.quality) || !fresh2(value.observedAtMs, maximumAgeMs, nowMs) || value.quality === "NOT_APPLICABLE" && value.valuePercent !== 0) return null;
+  return freeze({
+    state: "PRESENT",
+    value: value.valuePercent,
+    unit: "PERCENT",
+    quality: value.quality,
+    source: value.source.trim(),
+    observedAtMs: value.observedAtMs,
+    countsAsExecutionCost: true,
+    unavailableIsZero: false
+  });
+}
+function publicPercent(value, quality, source, observedAtMs, nowMs, maximumAgeMs) {
+  return value != null && value >= 0 && observedAtMs != null && fresh2(observedAtMs, maximumAgeMs, nowMs) ? freeze({
+    state: "PRESENT",
+    value,
+    unit: "PERCENT",
+    quality,
+    source,
+    observedAtMs,
+    countsAsExecutionCost: true,
+    unavailableIsZero: false
+  }) : unavailable();
+}
+function referenceOnly(value, unit, quality, source, observedAtMs, nowMs, maximumAgeMs) {
+  return (value == null || Number.isFinite(value)) && source && observedAtMs != null && fresh2(observedAtMs, maximumAgeMs, nowMs) ? freeze({
+    state: "REFERENCE_ONLY",
+    value,
+    unit,
+    quality,
+    source,
+    observedAtMs,
+    countsAsExecutionCost: false,
+    unavailableIsZero: false
+  }) : unavailable(unit);
+}
+function spreadPercent2(publicEvidence) {
+  const bid = publicEvidence?.bidPrice;
+  const ask = publicEvidence?.askPrice;
+  if (!positive6(bid) || !positive6(ask) || ask < bid) return null;
+  const midpoint = (bid + ask) / 2;
+  return midpoint > 0 ? (ask - bid) / midpoint * 100 : null;
+}
+function observationRecord(observation) {
+  return record(observation);
+}
+function resolvedSupplementalCostInput(input, nowMs, maximumAgeMs) {
+  if (!input || !nonEmpty6(input.costPolicyId) || !positive6(input.observedAtMs) || !fresh2(input.observedAtMs, maximumAgeMs, nowMs)) return null;
+  const latency = componentFromPercentEvidence(input.latency, nowMs, maximumAgeMs);
+  const liquidityImpact = componentFromPercentEvidence(input.liquidityImpact, nowMs, maximumAgeMs);
+  const partialFillImpact = componentFromPercentEvidence(input.partialFillImpact, nowMs, maximumAgeMs);
+  const funding = componentFromPercentEvidence(input.funding, nowMs, maximumAgeMs);
+  if (!latency || !liquidityImpact || !partialFillImpact || !funding || input.funding?.quality === "NOT_APPLICABLE") return null;
+  return freeze({
+    costPolicyId: input.costPolicyId.trim(),
+    observedAtMs: input.observedAtMs,
+    latency: input.latency,
+    liquidityImpact: input.liquidityImpact,
+    partialFillImpact: input.partialFillImpact,
+    funding: input.funding,
+    nowMs,
+    maximumAgeMs
+  });
+}
+function auditAuthoritativeSupplementalCostSources(input = {}) {
+  const nowMs = positive6(input.nowMs) ? input.nowMs : Date.now();
+  const maximumAgeMs = positive6(input.maximumAgeMs) ? input.maximumAgeMs : PUBLIC_L2_MAXIMUM_AGE_MS;
+  const publicEvidence = input.publicEvidence;
+  const execution = observationRecord(input.executionObservation);
+  const slippage = record(execution?.slippage);
+  const latency = record(execution?.latency);
+  const liquidity = record(execution?.liquidity);
+  const partialFill = record(execution?.partialFill);
+  const supplemental = input.supplemental;
+  const resolved = resolvedSupplementalCostInput(supplemental, nowMs, maximumAgeMs);
+  const latencyCost = componentFromPercentEvidence(supplemental?.latency, nowMs, maximumAgeMs);
+  const liquidityImpactCost = componentFromPercentEvidence(supplemental?.liquidityImpact, nowMs, maximumAgeMs);
+  const partialFillImpactCost = componentFromPercentEvidence(supplemental?.partialFillImpact, nowMs, maximumAgeMs);
+  const fundingCost = supplemental?.funding?.quality === "NOT_APPLICABLE" ? null : componentFromPercentEvidence(supplemental?.funding, nowMs, maximumAgeMs);
+  const blockers = [];
+  if (!supplemental || !nonEmpty6(supplemental.costPolicyId)) {
+    blockers.push("SUPPLEMENTAL_COST_POLICY_EVIDENCE_UNAVAILABLE");
+  }
+  if (!supplemental || !positive6(supplemental.observedAtMs) || !fresh2(supplemental.observedAtMs, maximumAgeMs, nowMs)) {
+    blockers.push("SUPPLEMENTAL_COST_OBSERVATION_UNAVAILABLE");
+  }
+  if (!latencyCost) blockers.push("LATENCY_COST_EVIDENCE_UNAVAILABLE");
+  if (!liquidityImpactCost) blockers.push("LIQUIDITY_IMPACT_COST_EVIDENCE_UNAVAILABLE");
+  if (!partialFillImpactCost) blockers.push("PARTIAL_FILL_COST_EVIDENCE_UNAVAILABLE");
+  if (!fundingCost) blockers.push("FUNDING_EXECUTION_COST_EVIDENCE_UNAVAILABLE");
+  const observedAtMs = positive6(publicEvidence?.observedAtMs) ? publicEvidence.observedAtMs : null;
+  const slippagePercent = finite11(slippage?.valuePercent);
+  const slippageAtMs = finite11(slippage?.observedAtMs);
+  const slippageQuality = COST_EVIDENCE_QUALITIES.has(slippage?.quality) ? slippage?.quality : null;
+  const observedRoundTripMs = finite11(latency?.observedRoundTripMs);
+  const latencyAtMs = finite11(latency?.observedAtMs);
+  const visibleLiquidity = finite11(liquidity?.value);
+  const liquidityAtMs = finite11(liquidity?.observedAtMs);
+  const partialFillAtMs = finite11(partialFill?.observedAtMs);
+  const fundingRate = finite11(publicEvidence?.fundingRate);
+  const takerFeeRate = finite11(publicEvidence?.takerFeeRate);
+  const fundingRatePercent = fundingRate == null ? null : fundingRate * 100;
+  return freeze({
+    schemaVersion: AUTHORITATIVE_PAPER_EXECUTION_COST_SOURCES_VERSION,
+    status: resolved ? "PRESENT" : "MISSING",
+    components: {
+      fees: publicPercent(
+        takerFeeRate == null ? null : takerFeeRate * 100,
+        "DOCUMENTED",
+        "BITGET_PUBLIC_CONTRACT_TAKER_FEE_RATE",
+        observedAtMs,
+        nowMs,
+        maximumAgeMs
+      ),
+      spread: publicPercent(
+        spreadPercent2(publicEvidence),
+        "OBSERVED",
+        "BITGET_PUBLIC_BEST_BID_ASK",
+        positive6(publicEvidence?.tickerTimestampMs) ? publicEvidence.tickerTimestampMs : null,
+        nowMs,
+        maximumAgeMs
+      ),
+      slippage: slippagePercent != null && slippagePercent >= 0 && slippageQuality != null && nonEmpty6(slippage?.source) && slippageAtMs != null && fresh2(slippageAtMs, maximumAgeMs, nowMs) ? freeze({
+        state: "PRESENT",
+        value: slippagePercent,
+        unit: "PERCENT",
+        quality: slippageQuality,
+        source: String(slippage.source),
+        observedAtMs: slippageAtMs,
+        countsAsExecutionCost: true,
+        unavailableIsZero: false
+      }) : unavailable(),
+      latency: latencyCost ?? referenceOnly(
+        observedRoundTripMs,
+        "MILLISECONDS",
+        "OBSERVED_DURATION_ONLY",
+        nonEmpty6(latency?.source) ? latency.source : null,
+        latencyAtMs,
+        nowMs,
+        maximumAgeMs
+      ),
+      liquidityImpact: liquidityImpactCost ?? referenceOnly(
+        visibleLiquidity,
+        "QUANTITY",
+        "OBSERVED_PUBLIC_DEPTH",
+        nonEmpty6(liquidity?.source) ? liquidity.source : null,
+        liquidityAtMs,
+        nowMs,
+        maximumAgeMs
+      ),
+      partialFillImpact: partialFillImpactCost ?? referenceOnly(
+        null,
+        "RATIO",
+        "OBSERVED_PUBLIC_DEPTH",
+        nonEmpty6(partialFill?.source) ? partialFill.source : null,
+        partialFillAtMs,
+        nowMs,
+        maximumAgeMs
+      ),
+      funding: fundingCost ?? referenceOnly(
+        fundingRatePercent,
+        "PERCENT",
+        "OBSERVED",
+        fundingRatePercent == null ? null : "BITGET_PUBLIC_CURRENT_FUNDING_RATE_SNAPSHOT",
+        observedAtMs,
+        nowMs,
+        maximumAgeMs
+      )
+    },
+    supplementalCostInput: resolved,
+    blockers: Object.freeze(blockers),
+    unknownIsZero: false,
+    unavailableCostConvertedToZero: false
+  });
+}
+var AUTHORITATIVE_PAPER_EXECUTION_COST_SOURCES_SAFETY = Object.freeze({
+  schemaVersion: AUTHORITATIVE_PAPER_EXECUTION_COST_SOURCES_VERSION,
+  executionMode: "SIMULATED_EXECUTION_ONLY",
+  executionAuthority: "NONE",
+  publicL2Only: true,
+  publicDepthIsFillProof: false,
+  realFillObserved: false,
+  realFillClaimAllowed: false,
+  liveSubmittedExecutionSampleCredit: 0,
+  unavailableCostConvertedToZero: false,
+  privateApiAllowed: false,
+  liveTrading: false,
+  orderSubmissionAllowed: false,
+  financialMutationAllowed: false
+});
+
 // ../market-prediction-lab/src/bitget-position-tier-v1.js
 var BITGET_POSITION_TIER_CONTRACT = Object.freeze({
   schemaVersion: "bitget-position-tier-v1",
@@ -6203,7 +6520,7 @@ var BITGET_POSITION_TIER_CONTRACT = Object.freeze({
   scalarDefaultAllowed: false,
   unknownIsZero: false
 });
-function finite11(value, code) {
+function finite12(value, code) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) throw new Error(code);
   return parsed;
@@ -6216,8 +6533,8 @@ function selectBitgetPositionTier(tiers, sizedNotional) {
     throw new Error("BITGET_POSITION_TIER_SCHEDULE_REQUIRED");
   }
   const normalized = tiers.map((tier, index) => {
-    const startUnit = finite11(tier?.startUnit ?? 0, "BITGET_POSITION_TIER_START_INVALID");
-    const maintenanceMarginRate = finite11(tier?.keepMarginRate, "BITGET_POSITION_TIER_MMR_INVALID");
+    const startUnit = finite12(tier?.startUnit ?? 0, "BITGET_POSITION_TIER_START_INVALID");
+    const maintenanceMarginRate = finite12(tier?.keepMarginRate, "BITGET_POSITION_TIER_MMR_INVALID");
     if (startUnit < 0 || maintenanceMarginRate < 0 || maintenanceMarginRate >= 1) {
       throw new Error("BITGET_POSITION_TIER_INVALID");
     }
@@ -6254,7 +6571,7 @@ var DEFAULT_EXECUTION_QUALITY_POLICY = Object.freeze({
   maxFillModelAgeMs: 7 * 24 * 60 * 60 * 1e3,
   maxObservedImplementationShortfallBps: 50
 });
-function finite12(value, fallback = null) {
+function finite13(value, fallback = null) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
@@ -6282,18 +6599,18 @@ function normalizeDirection(direction) {
   throw new Error("EXECUTION_DIRECTION_INVALID");
 }
 function normalizeLevels(levels, ascending) {
-  return (Array.isArray(levels) ? levels : []).map((level) => Array.isArray(level) ? { price: finite12(level[0]), size: finite12(level[1]) } : { price: finite12(level?.price), size: finite12(level?.size ?? level?.qty ?? level?.quantity) }).filter((level) => level.price > 0 && level.size > 0).sort((a, b) => ascending ? a.price - b.price : b.price - a.price);
+  return (Array.isArray(levels) ? levels : []).map((level) => Array.isArray(level) ? { price: finite13(level[0]), size: finite13(level[1]) } : { price: finite13(level?.price), size: finite13(level?.size ?? level?.qty ?? level?.quantity) }).filter((level) => level.price > 0 && level.size > 0).sort((a, b) => ascending ? a.price - b.price : b.price - a.price);
 }
 function walkOrderBook(raw = {}, policyInput = {}) {
   const policy = resolvePolicy(policyInput);
   const direction = String(raw.direction ?? "").trim();
   if (!direction) return { status: "NOT_AVAILABLE", reason: "EXECUTION_DIRECTION_REQUIRED" };
   const side = normalizeDirection(direction);
-  const targetQty = finite12(raw.targetQty);
+  const targetQty = finite13(raw.targetQty);
   if (!(targetQty > 0)) return { status: "NOT_AVAILABLE", reason: "TARGET_QTY_REQUIRED" };
   const levels = side === "BUY" ? normalizeLevels(raw.asks, true) : normalizeLevels(raw.bids, false);
   if (!levels.length) return { status: "NOT_AVAILABLE", reason: "EXECUTABLE_BOOK_NOT_AVAILABLE" };
-  const arrivalPrice = finite12(raw.arrivalPrice, levels[0].price);
+  const arrivalPrice = finite13(raw.arrivalPrice, levels[0].price);
   if (!(arrivalPrice > 0)) return { status: "NOT_AVAILABLE", reason: "ARRIVAL_PRICE_INVALID" };
   let remaining = targetQty;
   let filledQty = 0;
@@ -6334,12 +6651,12 @@ function walkOrderBook(raw = {}, policyInput = {}) {
 function evaluateCalibratedFillModel(raw = {}, policyInput = {}, nowInput = Date.now()) {
   const policy = resolvePolicy(policyInput);
   const modelId = String(raw.modelId ?? "").trim();
-  const fillProbability = finite12(raw.fillProbability);
-  const evaluationSamples = Math.max(0, finite12(raw.evaluationSamples, 0));
-  const brierScore = finite12(raw.brierScore);
-  const calibrationError = finite12(raw.calibrationError);
-  const evaluatedAt = finite12(raw.evaluatedAt);
-  const now = finite12(nowInput, Date.now());
+  const fillProbability = finite13(raw.fillProbability);
+  const evaluationSamples = Math.max(0, finite13(raw.evaluationSamples, 0));
+  const brierScore = finite13(raw.brierScore);
+  const calibrationError = finite13(raw.calibrationError);
+  const evaluatedAt = finite13(raw.evaluatedAt);
+  const now = finite13(nowInput, Date.now());
   const ageMs = evaluatedAt == null ? null : Math.max(0, now - evaluatedAt);
   const minimumSamples = policy.minFillModelSamples;
   if (!modelId || fillProbability == null || brierScore == null || calibrationError == null || evaluatedAt == null) return { status: "NOT_AVAILABLE", reason: "CALIBRATED_FILL_MODEL_EVIDENCE_MISSING", minimumSamples };
@@ -6374,21 +6691,23 @@ var PAPER_SIMULATED_EXECUTION_EVIDENCE_SAFETY = Object.freeze({
   currentPriceFillAssumptionAllowed: false,
   liveFillCalibrationRequiredForPaperObservation: false,
   liveFillCalibrationRequiredForRealFillClaim: true,
+  realFillObserved: false,
+  liveSubmittedExecutionSampleCredit: 0,
   supplementalFullCostEvidenceRequiredForAdmission: true,
   financialMutationAllowed: false
 });
 var PAPER_SIMULATED_PROVENANCE = Object.freeze(["SIMULATED", "public-L2"]);
 var LIVE_SUBMITTED_EXECUTION_PROVENANCE = "LIVE_SUBMITTED_EXECUTION";
-function finite13(value) {
+function finite14(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
-function nonEmpty6(value) {
+function nonEmpty7(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 function levelPrice(level) {
-  if (Array.isArray(level)) return finite13(level[0]);
-  return finite13(level.price);
+  if (Array.isArray(level)) return finite14(level[0]);
+  return finite14(level.price);
 }
 function bestPrice(levels, side) {
   const prices = levels.map(levelPrice).filter((value) => value != null && value > 0);
@@ -6402,36 +6721,39 @@ function cloneLevel(level) {
 function unique2(values) {
   return Object.freeze([...new Set(values)]);
 }
-function record(value) {
+function record2(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : Object.freeze({});
 }
-function freeze(value) {
+function freeze2(value) {
   if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
-  for (const child of Object.values(value)) freeze(child);
+  for (const child of Object.values(value)) freeze2(child);
   return Object.freeze(value);
 }
 function buildPaperSimulatedExecutionEvidence(input) {
-  const nowMs = finite13(input?.nowMs) ?? Date.now();
-  const observedAtMs = finite13(input?.observedAtMs);
-  const maximumAgeMs = finite13(input?.maximumAgeMs);
-  const targetQuantity = finite13(input?.targetQuantity);
+  const nowMs = finite14(input?.nowMs) ?? Date.now();
+  const observedAtMs = finite14(input?.observedAtMs);
+  const maximumAgeMs = finite14(input?.maximumAgeMs);
+  const targetQuantity = finite14(input?.targetQuantity);
   const blockers = [];
   const paperSimulationBlockers = [];
   const blockPaperSimulation = (code) => {
     paperSimulationBlockers.push(code);
     blockers.push(code);
   };
-  if (!nonEmpty6(input?.source)) blockPaperSimulation("PUBLIC_DEPTH_SOURCE_REQUIRED");
-  if (!nonEmpty6(input?.market)) blockPaperSimulation("MARKET_REQUIRED");
-  if (!nonEmpty6(input?.symbol)) blockPaperSimulation("SYMBOL_REQUIRED");
-  if (!nonEmpty6(input?.direction)) blockPaperSimulation("EXECUTION_DIRECTION_REQUIRED");
+  if (!nonEmpty7(input?.source)) blockPaperSimulation("PUBLIC_DEPTH_SOURCE_REQUIRED");
+  if (!nonEmpty7(input?.market)) blockPaperSimulation("MARKET_REQUIRED");
+  if (!nonEmpty7(input?.symbol)) blockPaperSimulation("SYMBOL_REQUIRED");
+  if (!nonEmpty7(input?.direction)) blockPaperSimulation("EXECUTION_DIRECTION_REQUIRED");
   if (!(targetQuantity != null && targetQuantity > 0)) blockPaperSimulation("TARGET_QUANTITY_REQUIRED");
   if (!(observedAtMs != null && observedAtMs > 0)) blockPaperSimulation("PUBLIC_DEPTH_TIMESTAMP_REQUIRED");
   if (!(maximumAgeMs != null && maximumAgeMs > 0)) blockPaperSimulation("PUBLIC_DEPTH_FRESHNESS_CONTRACT_REQUIRED");
+  if (observedAtMs != null && observedAtMs > nowMs) {
+    blockPaperSimulation("PUBLIC_DEPTH_FROM_FUTURE");
+  }
   if (observedAtMs != null && maximumAgeMs != null && nowMs - observedAtMs > maximumAgeMs) {
     blockPaperSimulation("PUBLIC_DEPTH_STALE");
   }
-  if (!Array.isArray(input?.provenance) || input.provenance.length === 0 || !input.provenance.every(nonEmpty6)) {
+  if (!Array.isArray(input?.provenance) || input.provenance.length === 0 || !input.provenance.every(nonEmpty7)) {
     blockPaperSimulation("PUBLIC_DEPTH_PROVENANCE_REQUIRED");
   }
   const bids = Array.isArray(input?.bids) ? input.bids.map(cloneLevel) : [];
@@ -6448,13 +6770,13 @@ function buildPaperSimulatedExecutionEvidence(input) {
   if (bookWalk?.status === "NOT_AVAILABLE") {
     blockPaperSimulation(String(bookWalk.reason ?? "BOOK_WALK_NOT_AVAILABLE"));
   }
-  const calibratedFillModel = record(input?.calibratedFillModel);
+  const calibratedFillModel = record2(input?.calibratedFillModel);
   const fillModel = evaluateCalibratedFillModel(
     calibratedFillModel,
     input?.policy ?? {},
     nowMs
   );
-  const sampleProvenance = nonEmpty6(calibratedFillModel.sampleProvenance) ? calibratedFillModel.sampleProvenance.trim() : null;
+  const sampleProvenance = nonEmpty7(calibratedFillModel.sampleProvenance) ? calibratedFillModel.sampleProvenance.trim() : null;
   const liveFillCalibrationBlockers = [];
   if (sampleProvenance !== LIVE_SUBMITTED_EXECUTION_PROVENANCE) {
     liveFillCalibrationBlockers.push("LIVE_SUBMITTED_EXECUTION_PROVENANCE_REQUIRED");
@@ -6462,7 +6784,7 @@ function buildPaperSimulatedExecutionEvidence(input) {
   if (fillModel?.status === "NOT_AVAILABLE") {
     liveFillCalibrationBlockers.push(String(fillModel.reason ?? "CALIBRATED_FILL_MODEL_EVIDENCE_MISSING"));
   }
-  const minimumSubmittedExecutionSamples = finite13(fillModel?.minimumSamples);
+  const minimumSubmittedExecutionSamples = finite14(fillModel?.minimumSamples);
   if (!(minimumSubmittedExecutionSamples != null && minimumSubmittedExecutionSamples > 0)) {
     throw new Error("LIVE_FILL_MINIMUM_SAMPLE_POLICY_UNAVAILABLE");
   }
@@ -6471,10 +6793,10 @@ function buildPaperSimulatedExecutionEvidence(input) {
   const liveFillCalibrationVerified = sampleProvenance === LIVE_SUBMITTED_EXECUTION_PROVENANCE && fillModel?.status !== "NOT_AVAILABLE";
   const enforcedProvenance = unique2([
     ...PAPER_SIMULATED_PROVENANCE,
-    ...Array.isArray(input?.provenance) ? input.provenance.filter(nonEmpty6) : []
+    ...Array.isArray(input?.provenance) ? input.provenance.filter(nonEmpty7) : []
   ]);
-  const requestStartedAtMs = finite13(input?.requestStartedAtMs);
-  const requestCompletedAtMs = finite13(input?.requestCompletedAtMs);
+  const requestStartedAtMs = finite14(input?.requestStartedAtMs);
+  const requestCompletedAtMs = finite14(input?.requestCompletedAtMs);
   const observedRoundTripMs = requestStartedAtMs != null && requestCompletedAtMs != null && requestCompletedAtMs >= requestStartedAtMs ? requestCompletedAtMs - requestStartedAtMs : null;
   if (observedRoundTripMs == null) blockers.push("OBSERVED_LATENCY_DURATION_MISSING");
   blockers.push(
@@ -6483,20 +6805,20 @@ function buildPaperSimulatedExecutionEvidence(input) {
     "PARTIAL_FILL_COST_EVIDENCE_UNAVAILABLE"
   );
   const spreadAbsolute = bid != null && ask != null && ask >= bid ? ask - bid : null;
-  const spreadPercent2 = spreadAbsolute != null && bid != null && ask != null ? spreadAbsolute / ((bid + ask) / 2) * 100 : null;
-  return freeze({
+  const spreadPercent3 = spreadAbsolute != null && bid != null && ask != null ? spreadAbsolute / ((bid + ask) / 2) * 100 : null;
+  return freeze2({
     schemaVersion: PAPER_SIMULATED_EXECUTION_EVIDENCE_VERSION,
     status: "BLOCKED_DATA",
     modelStatus: bookWalk?.status === "NOT_AVAILABLE" ? "BLOCKED_DATA" : "SIMULATION_AVAILABLE",
     blockers: unique2(blockers),
-    source: nonEmpty6(input?.source) ? input.source.trim() : null,
+    source: nonEmpty7(input?.source) ? input.source.trim() : null,
     timestamp: observedAtMs,
-    market: nonEmpty6(input?.market) ? input.market.trim() : null,
-    symbol: nonEmpty6(input?.symbol) ? input.symbol.trim() : null,
+    market: nonEmpty7(input?.market) ? input.market.trim() : null,
+    symbol: nonEmpty7(input?.symbol) ? input.symbol.trim() : null,
     observed: {
       bid,
       ask,
-      spread: { absolute: spreadAbsolute, percent: spreadPercent2, quality: "OBSERVED_PUBLIC_DEPTH" },
+      spread: { absolute: spreadAbsolute, percent: spreadPercent3, quality: "OBSERVED_PUBLIC_DEPTH" },
       depth: { bids, asks, quality: "OBSERVED_PUBLIC_DEPTH" },
       latencyEvidence: {
         observedRoundTripMs,
@@ -6506,19 +6828,19 @@ function buildPaperSimulatedExecutionEvidence(input) {
     },
     estimated: {
       slippageEstimate: {
-        percent: finite13(bookWalk?.slippageBps) == null ? null : Number(bookWalk.slippageBps) / 100,
+        percent: finite14(bookWalk?.slippageBps) == null ? null : Number(bookWalk.slippageBps) / 100,
         quality: bookWalk?.status === "NOT_AVAILABLE" ? "NOT_AVAILABLE" : "ESTIMATED",
         model: bookWalk?.model ?? null
       },
       liquidityEvidence: {
         targetQuantity: targetQuantity != null && targetQuantity > 0 ? targetQuantity : null,
-        visibleExecutableQuantity: finite13(bookWalk?.filledQty),
-        visibleCoverageRatio: finite13(bookWalk?.coverageRatio),
+        visibleExecutableQuantity: finite14(bookWalk?.filledQty),
+        visibleCoverageRatio: finite14(bookWalk?.coverageRatio),
         permanentMarketImpactEstimated: false
       },
       partialFillEstimate: {
-        visibleDepthFillFraction: finite13(bookWalk?.coverageRatio),
-        calibratedFillProbability: liveFillCalibrationVerified ? finite13(fillModel?.fillProbability) : null,
+        visibleDepthFillFraction: finite14(bookWalk?.coverageRatio),
+        calibratedFillProbability: liveFillCalibrationVerified ? finite14(fillModel?.fillProbability) : null,
         quality: liveFillCalibrationVerified ? "CALIBRATED_ESTIMATE" : "UNCALIBRATED_MODEL_ONLY"
       }
     },
@@ -6536,6 +6858,7 @@ function buildPaperSimulatedExecutionEvidence(input) {
       provenance: enforcedProvenance,
       bookWalkStatus: bookWalk?.status ?? "NOT_AVAILABLE",
       publicDepthIsFillProof: false,
+      realFillObserved: false,
       realFillClaim: false,
       liveFillCalibrationRequired: false
     },
@@ -6545,7 +6868,8 @@ function buildPaperSimulatedExecutionEvidence(input) {
       blockers: unique2(liveFillCalibrationBlockers),
       requiredSampleProvenance: LIVE_SUBMITTED_EXECUTION_PROVENANCE,
       sampleProvenance: sampleProvenance === LIVE_SUBMITTED_EXECUTION_PROVENANCE ? sampleProvenance : null,
-      submittedExecutionSamples: sampleProvenance === LIVE_SUBMITTED_EXECUTION_PROVENANCE ? finite13(fillModel?.evaluationSamples) : null,
+      submittedExecutionSamples: sampleProvenance === LIVE_SUBMITTED_EXECUTION_PROVENANCE ? finite14(fillModel?.evaluationSamples) : null,
+      submittedExecutionSampleCredit: sampleProvenance === LIVE_SUBMITTED_EXECUTION_PROVENANCE ? finite14(fillModel?.evaluationSamples) ?? 0 : 0,
       minimumSubmittedExecutionSamples,
       fillModel,
       promotedToRealFill: false,
@@ -6554,6 +6878,7 @@ function buildPaperSimulatedExecutionEvidence(input) {
     provenance: enforcedProvenance,
     executionMode: "SIMULATED_EXECUTION_ONLY",
     publicDepthIsFillProof: false,
+    realFillObserved: false,
     realFillClaim: false,
     currentPriceIsFillPrice: false,
     costEvidenceReady: false,
@@ -6564,31 +6889,31 @@ function buildPaperSimulatedExecutionEvidence(input) {
 // src/services/authoritative-paper-callback-owners.service.ts
 var AUTHORITATIVE_PAPER_CALLBACK_OWNERS_VERSION = "authoritative-paper-callback-owners-v1";
 var QUALITIES2 = /* @__PURE__ */ new Set(["OBSERVED", "DOCUMENTED", "ESTIMATED", "NOT_APPLICABLE"]);
-function finite14(value) {
+function finite15(value) {
   return typeof value === "number" && Number.isFinite(value);
 }
-function positive6(value) {
-  return finite14(value) && value > 0;
+function positive7(value) {
+  return finite15(value) && value > 0;
 }
-function nonNegative5(value) {
-  return finite14(value) && value >= 0;
+function nonNegative6(value) {
+  return finite15(value) && value >= 0;
 }
-function nonEmpty7(value) {
+function nonEmpty8(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
-function fresh2(observedAtMs, maximumAgeMs, nowMs) {
-  return positive6(observedAtMs) && positive6(maximumAgeMs) && observedAtMs <= nowMs && nowMs - observedAtMs <= maximumAgeMs;
+function fresh3(observedAtMs, maximumAgeMs, nowMs) {
+  return positive7(observedAtMs) && positive7(maximumAgeMs) && observedAtMs <= nowMs && nowMs - observedAtMs <= maximumAgeMs;
 }
-function freeze2(value) {
+function freeze3(value) {
   if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
-  for (const child of Object.values(value)) freeze2(child);
+  for (const child of Object.values(value)) freeze3(child);
   return Object.freeze(value);
 }
 function riskPolicy(value, nowMs) {
-  if (value?.schemaVersion !== "authoritative-paper-risk-policy-evidence-v1" || !positive6(value.leverage) || !positive6(value.riskPercent) || value.riskPercent > 1 || value.marginMode !== "isolated" && value.marginMode !== "cross" || !nonEmpty7(value.source) || !fresh2(value.observedAtMs, value.maximumAgeMs, nowMs)) {
+  if (value?.schemaVersion !== "authoritative-paper-risk-policy-evidence-v1" || !positive7(value.leverage) || !positive7(value.riskPercent) || value.riskPercent > 1 || value.marginMode !== "isolated" && value.marginMode !== "cross" || !nonEmpty8(value.source) || !fresh3(value.observedAtMs, value.maximumAgeMs, nowMs)) {
     throw new Error("AUTHORITATIVE_PAPER_RISK_POLICY_EVIDENCE_INVALID");
   }
-  return freeze2({ ...value, source: value.source.trim() });
+  return freeze3({ ...value, source: value.source.trim() });
 }
 function paperStateFromAuthoritativeSnapshot(snapshot, nowMs = Date.now()) {
   return validateImmutablePaperTradingStateSnapshot(snapshot, nowMs).state;
@@ -6597,13 +6922,13 @@ function buildAuthoritativeSizedContractRules(input) {
   const nowMs = input.nowMs ?? Date.now();
   const maximumAgeMs = input.maximumAgeMs ?? 3e4;
   const evidence = input.publicEvidence;
-  if (evidence?.provider !== "bitget" || evidence.dataQuality !== "ready" || !positive6(input.sizedNotional) || !fresh2(input.observedAtMs, maximumAgeMs, nowMs) || !positive6(evidence.sizeMultiplier) || !Number.isInteger(input.quantityPrecision) || input.quantityPrecision < 0 || !positive6(evidence.minTradeNum) || !positive6(evidence.minTradeUsdt) || !positive6(evidence.maxLeverage)) {
+  if (evidence?.provider !== "bitget" || evidence.dataQuality !== "ready" || !positive7(input.sizedNotional) || !fresh3(input.observedAtMs, maximumAgeMs, nowMs) || !positive7(evidence.sizeMultiplier) || !Number.isInteger(input.quantityPrecision) || input.quantityPrecision < 0 || !positive7(evidence.minTradeNum) || !positive7(evidence.minTradeUsdt) || !positive7(evidence.maxLeverage)) {
     throw new Error("AUTHORITATIVE_SIZED_CONTRACT_INPUT_INVALID");
   }
   const policy = riskPolicy(input.riskPolicy, nowMs);
   if (policy.leverage > evidence.maxLeverage) throw new Error("AUTHORITATIVE_RISK_POLICY_LEVERAGE_EXCEEDS_CONTRACT");
   const selectedTier = selectBitgetPositionTier(input.positionTiers, input.sizedNotional);
-  const contractRules = freeze2({
+  const contractRules = freeze3({
     symbol: evidence.symbol,
     quantityStep: evidence.sizeMultiplier,
     quantityPrecision: input.quantityPrecision,
@@ -6615,7 +6940,7 @@ function buildAuthoritativeSizedContractRules(input) {
     updatedAt: new Date(input.observedAtMs).toISOString(),
     warnings: []
   });
-  return freeze2({
+  return freeze3({
     schemaVersion: "sized-bitget-paper-contract-rules-v1",
     contractRules,
     riskPolicy: policy,
@@ -6639,20 +6964,22 @@ function buildAuthoritativePaperExecutionObservation(input) {
     ...input.executionEvidenceInput,
     nowMs
   });
+  const observed = evidence.observed;
+  const latency = observed?.latencyEvidence;
   const estimated = evidence.estimated;
   const slippage = estimated?.slippageEstimate;
   const liquidity = estimated?.liquidityEvidence;
   const paperSimulation = evidence.paperSimulation;
   const liveGradeFillReadiness = evidence.liveGradeFillReadiness;
-  if (paperSimulation?.status !== "READY" || paperSimulation?.evidenceClass !== "SIMULATED" || paperSimulation?.marketDataClass !== "public-L2" || paperSimulation?.realFillClaim !== false || paperSimulation?.publicDepthIsFillProof !== false || slippage?.quality !== "ESTIMATED" || !nonNegative5(slippage.percent) || !positive6(liquidity?.visibleExecutableQuantity) || !positive6(liquidity?.visibleCoverageRatio) || Number(liquidity.visibleCoverageRatio) < 1) {
+  if (paperSimulation?.status !== "READY" || paperSimulation?.evidenceClass !== "SIMULATED" || paperSimulation?.marketDataClass !== "public-L2" || paperSimulation?.realFillClaim !== false || paperSimulation?.publicDepthIsFillProof !== false || slippage?.quality !== "ESTIMATED" || !nonNegative6(slippage.percent) || !positive7(liquidity?.visibleExecutableQuantity) || !positive7(liquidity?.visibleCoverageRatio) || Number(liquidity.visibleCoverageRatio) < 1) {
     throw new Error("AUTHORITATIVE_EXECUTION_OBSERVATION_DATA_UNAVAILABLE");
   }
   const observedAtMs = input.executionEvidenceInput.observedAtMs;
-  const provenance = Array.isArray(evidence.provenance) ? evidence.provenance.filter(nonEmpty7) : [];
+  const provenance = Array.isArray(evidence.provenance) ? evidence.provenance.filter(nonEmpty8) : [];
   if (!provenance.includes("SIMULATED") || !provenance.includes("public-L2")) {
     throw new Error("AUTHORITATIVE_EXECUTION_OBSERVATION_PROVENANCE_INVALID");
   }
-  return freeze2({
+  return freeze3({
     providerProvenance: provenance.join("+"),
     slippage: {
       valuePercent: Number(slippage.percent),
@@ -6670,12 +6997,20 @@ function buildAuthoritativePaperExecutionObservation(input) {
       source: "SIMULATED/public-L2:VISIBLE_L2_BOOK_WALK_ONLY",
       observedAtMs
     },
+    latency: {
+      observedRoundTripMs: nonNegative6(latency?.observedRoundTripMs) ? Number(latency.observedRoundTripMs) : null,
+      costValuePercent: null,
+      source: "BITGET_PUBLIC_L2_REQUEST_TIMING",
+      observedAtMs
+    },
     executionProvenance: {
       evidenceClass: "SIMULATED",
       marketDataClass: "public-L2",
       executionMode: "SIMULATED_EXECUTION_ONLY",
+      realFillObserved: false,
       realFillClaim: false,
       publicDepthIsFillProof: false,
+      liveSubmittedExecutionSampleCredit: 0,
       liveFillCalibrationStatus: liveGradeFillReadiness?.status === "READY" || liveGradeFillReadiness?.status === "VETO" ? liveGradeFillReadiness.status : "BLOCKED_DATA"
     },
     leverage: policy.leverage,
@@ -6684,18 +7019,18 @@ function buildAuthoritativePaperExecutionObservation(input) {
   });
 }
 function validatedComponent(value, nowMs, maximumAgeMs, code) {
-  if (!value || !nonNegative5(value.valuePercent) || !QUALITIES2.has(value.quality) || !nonEmpty7(value.source) || !fresh2(value.observedAtMs, maximumAgeMs, nowMs) || value.quality === "NOT_APPLICABLE" && value.valuePercent !== 0) {
+  if (!value || !nonNegative6(value.valuePercent) || !QUALITIES2.has(value.quality) || !nonEmpty8(value.source) || !fresh3(value.observedAtMs, maximumAgeMs, nowMs) || value.quality === "NOT_APPLICABLE" && value.valuePercent !== 0) {
     throw new Error(code);
   }
-  return freeze2({ ...value, source: value.source.trim() });
+  return freeze3({ ...value, source: value.source.trim() });
 }
 function buildAuthoritativeSupplementalCostEvidence(input) {
   const nowMs = input.nowMs ?? Date.now();
   const maximumAgeMs = input.maximumAgeMs ?? 3e4;
-  if (!nonEmpty7(input.costPolicyId) || !fresh2(input.observedAtMs, maximumAgeMs, nowMs)) {
+  if (!nonEmpty8(input.costPolicyId) || !fresh3(input.observedAtMs, maximumAgeMs, nowMs)) {
     throw new Error("AUTHORITATIVE_COST_POLICY_EVIDENCE_INVALID");
   }
-  return freeze2({
+  return freeze3({
     costPolicyId: input.costPolicyId.trim(),
     observedAtMs: input.observedAtMs,
     latency: validatedComponent(input.latency, nowMs, maximumAgeMs, "AUTHORITATIVE_LATENCY_COST_EVIDENCE_REQUIRED"),
@@ -6733,7 +7068,7 @@ var AUTHORITATIVE_PAPER_CALLBACK_OWNERS_SAFETY = Object.freeze({
 var AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_VERSION = "authoritative-paper-evidence-sources-v1";
 var AUTHORITATIVE_PAPER_BLOCKED_DATA_SOURCE_CONTRACT_VERSION = "authoritative-paper-blocked-data-source-contract-v1";
 var AUTHORITATIVE_PAPER_CALLBACK_OWNER_CONTRACT_VERSION = "authoritative-paper-callback-owner-contract-v1";
-var BITGET_BASE_URL = "https://api.bitget.com";
+var BITGET_BASE_URL2 = "https://api.bitget.com";
 var FUTURES_LANE = FORWARD_OBSERVER_LANES.find((lane) => lane.market === "CRYPTO_FUTURES");
 function exactSha2(value) {
   return typeof value === "string" && /^[0-9a-f]{40}$/u.test(value);
@@ -6743,12 +7078,12 @@ function scannerCard(value) {
   const card = value;
   return typeof card.signalId === "string" && typeof card.symbol === "string" ? value : null;
 }
-function abortSignal(value) {
+function abortSignal2(value) {
   return value instanceof AbortSignal ? value : void 0;
 }
 function publicUrl(request) {
   if (request.method !== "GET") throw new Error("AUTHORITATIVE_PUBLIC_MARKET_GET_REQUIRED");
-  const url = new URL(request.path, BITGET_BASE_URL);
+  const url = new URL(request.path, BITGET_BASE_URL2);
   url.search = request.query;
   return url;
 }
@@ -6787,6 +7122,7 @@ function defaultDependencies() {
     paperStateSnapshotForCard: async () => null,
     sizedContractInputForCard: async () => null,
     executionObservationInputForCard: async () => null,
+    executionSizingEvidenceForCard: async () => null,
     supplementalCostInputForCard: async () => null,
     now: Date.now
   });
@@ -6858,7 +7194,17 @@ function createAuthoritativePaperEvidenceSourceWiring({
         "optional LIVE_SUBMITTED_EXECUTION calibration reported separately from Paper simulation readiness"
       ],
       source: async (context) => {
-        const input = await dependencies.executionObservationInputForCard(context);
+        let input = await dependencies.executionObservationInputForCard(context);
+        if (input == null) {
+          const sizingEvidence = await dependencies.executionSizingEvidenceForCard(context);
+          if (sizingEvidence == null) return null;
+          input = await collectAuthoritativePaperExecutionObservationInput({
+            context,
+            sizingEvidence,
+            fetchPublicJson: dependencies.fetchPublicJson,
+            now: dependencies.now
+          });
+        }
         return input == null ? null : buildAuthoritativePaperExecutionObservation(input);
       }
     }),
@@ -6868,14 +7214,18 @@ function createAuthoritativePaperEvidenceSourceWiring({
       requiredData: ["latency cost evidence", "liquidity impact cost evidence", "partial-fill cost evidence", "funding evidence"],
       source: async (context) => {
         const input = await dependencies.supplementalCostInputForCard(context);
-        return input == null ? null : buildAuthoritativeSupplementalCostEvidence(input);
+        const audit = auditAuthoritativeSupplementalCostSources({
+          supplemental: input,
+          nowMs: dependencies.now()
+        });
+        return audit.supplementalCostInput == null ? null : buildAuthoritativeSupplementalCostEvidence(audit.supplementalCostInput);
       }
     })
   });
   return Object.freeze({
     async scanBatchForMarket({ market, signal }) {
       if (market !== "CRYPTO_FUTURES") throw new Error("AUTHORITATIVE_SCANNER_MARKET_NOT_OWNED");
-      const outerSignal = abortSignal(signal);
+      const outerSignal = abortSignal2(signal);
       return async function scanBatch({ market: selectedMarket, cursor }) {
         if (selectedMarket !== "CRYPTO_FUTURES") throw new Error("AUTHORITATIVE_SCANNER_MARKET_MISMATCH");
         const scanned = await dependencies.scan({
@@ -6935,7 +7285,7 @@ function createAuthoritativePaperEvidenceSourceWiring({
       const value = scannerCard(card);
       if (!value || market !== "CRYPTO_FUTURES") return null;
       const requests = dependencies.buildPublicRequests(value.symbol);
-      const requestSignal = abortSignal(signal);
+      const requestSignal = abortSignal2(signal);
       const entries = await Promise.all(Object.entries(requests).map(async ([key, request]) => [
         key,
         await dependencies.fetchPublicJson(publicUrl(request), { provider: "bitget", signal: requestSignal })
