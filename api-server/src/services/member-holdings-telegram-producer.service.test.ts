@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   fanoutMemberHoldingScannerAlert,
+  memberHoldingProfileEligibleForPersonalTelegram,
   memberHoldingsTelegramProducerEnabled,
   type MemberHoldingProducerRepository,
   type MemberHoldingStockHolder,
@@ -77,6 +78,24 @@ test('member holdings producer is true-token opt-in and otherwise stays disabled
   assert.deepEqual(result, {
     status: 'DISABLED', matchedCount: 0, policyCount: 0, skippedCount: 0, errorCount: 0,
   });
+});
+
+test('approved status alone cannot preserve personal holdings Telegram capability', () => {
+  assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
+    status: 'approved', membership_level: 'associate', is_active: true,
+  }), true);
+  assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
+    status: 'approved', membership_level: 'regular', is_active: true,
+  }), true);
+  assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
+    status: 'approved', membership_level: 'pending', is_active: true,
+  }), false);
+  assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
+    status: 'approved', membership_level: 'regular', is_active: false,
+  }), false);
+  assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
+    status: 'suspended', membership_level: 'regular', is_active: true,
+  }), false);
 });
 
 test('canonical stock holder fanout uses one public quote and never fabricates AI evidence', async () => {
