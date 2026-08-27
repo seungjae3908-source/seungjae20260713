@@ -169,6 +169,8 @@ export function buildAuthoritativePaperExecutionObservation(input: Readonly<{
     ...input.executionEvidenceInput,
     nowMs,
   }) as Readonly<Record<string, unknown>>;
+  const observed = evidence.observed as Readonly<Record<string, unknown>> | undefined;
+  const latency = observed?.latencyEvidence as Readonly<Record<string, unknown>> | undefined;
   const estimated = evidence.estimated as Readonly<Record<string, unknown>> | undefined;
   const slippage = estimated?.slippageEstimate as Readonly<Record<string, unknown>> | undefined;
   const liquidity = estimated?.liquidityEvidence as Readonly<Record<string, unknown>> | undefined;
@@ -211,12 +213,22 @@ export function buildAuthoritativePaperExecutionObservation(input: Readonly<{
       source: 'SIMULATED/public-L2:VISIBLE_L2_BOOK_WALK_ONLY',
       observedAtMs,
     },
+    latency: {
+      observedRoundTripMs: nonNegative(latency?.observedRoundTripMs)
+        ? Number(latency.observedRoundTripMs)
+        : null,
+      costValuePercent: null,
+      source: 'BITGET_PUBLIC_L2_REQUEST_TIMING',
+      observedAtMs,
+    },
     executionProvenance: {
       evidenceClass: 'SIMULATED',
       marketDataClass: 'public-L2',
       executionMode: 'SIMULATED_EXECUTION_ONLY',
+      realFillObserved: false,
       realFillClaim: false,
       publicDepthIsFillProof: false,
+      liveSubmittedExecutionSampleCredit: 0,
       liveFillCalibrationStatus: liveGradeFillReadiness?.status === 'READY'
         || liveGradeFillReadiness?.status === 'VETO'
         ? liveGradeFillReadiness.status
