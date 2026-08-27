@@ -126,16 +126,16 @@ export function parseUpbitPublicTradeMessage(
   const price = positive(row.trade_price ?? row.price);
   const volume = nonNegative(row.trade_volume ?? row.volume);
   if (!code || eventTimeMs == null || price == null || volume == null) return [];
-  const sequenceValue = finite(row.sequential_id);
-  const sequence = sequenceValue != null && Number.isSafeInteger(sequenceValue) ? sequenceValue : null;
-  const rawEventId = String(row.sequential_id ?? `${eventTimeMs}:${price}:${volume}`).trim();
+  // Upbit documents sequential_id as a unique trade identifier, not an ordering guarantee.
+  // Keep it only inside eventId for deduplication; never treat it as a monotonic sequence.
+  const providerUniqueId = String(row.sequential_id ?? `${eventTimeMs}:${price}:${volume}`).trim();
   const side = String(row.ask_bid ?? '').toUpperCase();
   return [{
     provider: 'UPBIT_PUBLIC',
     market: 'UPBIT',
     symbol: code.replace(/^KRW-/, ''),
-    eventId: `UPBIT:${code}:${rawEventId}`,
-    sequence,
+    eventId: `UPBIT:${code}:${providerUniqueId}`,
+    sequence: null,
     eventTimeMs,
     receivedAtMs,
     price,
