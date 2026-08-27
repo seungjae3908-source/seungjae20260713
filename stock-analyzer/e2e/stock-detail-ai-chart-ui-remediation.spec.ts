@@ -37,6 +37,18 @@ test('selected stock detail keeps one top-left back action with a 44px touch tar
   expect(touchCss).toContain('button[aria-label="종목 목록으로 돌아가기"]');
 });
 
+test('standalone AI Chart uses a bounded shell with fixed header tabs and BottomNav', () => {
+  expect(aiChartSource).toContain('h-full min-w-0 overflow-y-auto overscroll-contain bg-background');
+  expect(aiChartSource).toContain('aria-label="AI 차트 생중계 · AI 차트 2.0"');
+  expect(aiChartSource).toContain('{!embedded && !externalMode && <BottomNav />}');
+  expect(touchCss).toContain('#root div:has(> header h1[aria-label="AI 차트 생중계 · AI 차트 2.0"]):has(> nav[aria-label="주요 메뉴"])');
+  expect(touchCss).toContain('flex-direction: column !important;');
+  expect(touchCss).toContain('> div:has([data-testid="ai-chart-mobile-tabs"])');
+  expect(touchCss).toContain('> main {');
+  expect(touchCss).toContain('flex: 1 1 0% !important;');
+  expect(touchCss).toContain('overflow-y: auto !important;');
+});
+
 test('embedded stock AI Chart hides duplicate market and symbol selection chrome', () => {
   expect(detailSource).toContain('data-testid="canonical-rich-detail-chart"');
   expect(detailSource).toContain('<AiChartPage embedded />');
@@ -56,6 +68,13 @@ test('stock detail chart has a single vertical scroll owner and normal tabs lose
   expect(touchCss).toContain('overflow: hidden !important;');
   expect(touchCss).toContain('[data-testid="canonical-rich-detail-chart"] > div');
   expect(touchCss).toContain('padding-bottom: 1rem !important;');
+});
+
+test('stock detail news and summary tabs keep one vertical pan scroll owner', () => {
+  expect(detailSource).toContain('data-testid="stock-detail-news"');
+  expect(touchCss).toContain('> main:not(:has([data-testid="canonical-rich-detail-chart"]))');
+  expect(touchCss).toContain('touch-action: pan-y;');
+  expect(touchCss).toContain('-webkit-overflow-scrolling: touch;');
 });
 
 test('nested legacy 상세분석 cannot render a second BottomNav', () => {
