@@ -33,6 +33,23 @@ function toRecord(row: Record<string, unknown>): ReadonlyCredentialRecord {
   };
 }
 
+export async function accountReadonlyCredentialConfigured(
+  authenticatedUserId: string,
+  provider: ReadonlyCredentialProvider,
+): Promise<boolean> {
+  const owner = authenticatedUserId.trim();
+  if (!owner) throw new Error('LOGIN_REQUIRED');
+  if (!hasSupabaseServerKey()) throw storageUnavailable();
+
+  const { data, error } = await getSupabase().from('account_readonly_credentials')
+    .select('configured')
+    .eq('user_id', owner)
+    .eq('provider', provider)
+    .maybeSingle();
+  if (error) throw storageUnavailable();
+  return data?.configured === true;
+}
+
 export class InMemoryAccountReadonlyCredentialRepository implements AccountReadonlyCredentialRepository {
   private readonly rows = new Map<string, ReadonlyCredentialRecord>();
 
