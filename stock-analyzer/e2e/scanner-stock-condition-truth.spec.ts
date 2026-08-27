@@ -128,6 +128,32 @@ test('trading-value increase uses price times volume instead of volume alone', (
   });
 });
 
+test('unavailable factor cannot describe unverified candle truth as confirmed', () => {
+  const input = card({
+    matched: ['거래대금 증가'],
+    scoreBreakdown: {
+      ...card().scoreBreakdown,
+      liquidity: { score: null, status: 'unavailable', reasons: ['liquidity factor unavailable'] },
+    },
+  });
+  const result = applyStockSignalPolicy({
+    memberId: 'member-test',
+    card: input,
+    universeEntry,
+    candles: risingValueCandles(),
+    selected: ['거래대금 증가'],
+    timeframe: '1D',
+  });
+  const evidence = result.evidence.find((item) => item.label === '거래대금 증가');
+  expect(evidence).toMatchObject({
+    status: 'unverified',
+    source: 'market-candles-volume',
+    reasons: ['liquidity factor unavailable'],
+  });
+  expect(evidence?.reasons.join(' ')).not.toContain('조건을 확인했습니다');
+  expect(result.strongSignalEligible).toBe(false);
+});
+
 test('MA20 MA60 and MA120 labels require a fresh prior-to-current upward cross', () => {
   const cases: Array<[string, number]> = [
     ['이평선 돌파', 20],
