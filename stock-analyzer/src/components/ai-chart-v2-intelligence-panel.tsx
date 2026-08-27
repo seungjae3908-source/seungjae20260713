@@ -60,7 +60,7 @@ function formatPrice(value: number | null, market: AnalysisSelection['market']):
 }
 
 function qualityClass(quality: AiChartTimeframeEvidence['quality']): string {
-  if (quality === 'LIVE') return 'border-positive/30 bg-positive/10 text-positive';
+  if (quality === 'FRESH') return 'border-positive/30 bg-positive/10 text-positive';
   if (quality === 'DELAYED' || quality === 'PARTIAL') return 'border-warning/30 bg-warning/10 text-warning';
   return 'border-destructive/30 bg-destructive/10 text-destructive';
 }
