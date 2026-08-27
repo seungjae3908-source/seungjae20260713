@@ -210,3 +210,51 @@ button[aria-label="종목 목록으로 돌아가기"] {
   justify-content: center !important;
   font-size: 0 !important;
 }
+
+/*
+ * App-wide tab typography contract: every semantic tab uses one visual spec —
+ * 12px / 900 weight / 16px line-height / 44px minimum hit target — and centers
+ * its visible label on both axes. The aria/data selectors cover older tablists
+ * that predate ResponsiveTabs without touching ordinary action buttons.
+ */
+#root [role="tablist"] [role="tab"],
+#root [aria-label$="탭"] > button,
+#root [data-testid$="-tabs"] > button {
+  display: inline-flex !important;
+  min-height: 44px !important;
+  align-items: center !important;
+  justify-content: center !important;
+  font-size: 0.75rem !important;
+  line-height: 1rem !important;
+  font-weight: 900 !important;
+  text-align: center !important;
+}
+
+#root [role="tablist"] [role="tab"] > span,
+#root [aria-label$="탭"] > button > span,
+#root [data-testid$="-tabs"] > button > span {
+  width: 100%;
+  line-height: 1rem !important;
+  text-align: center !important;
+}
+
+/*
+ * Remove only low-value helper/subtitle copy directly attached to a page title,
+ * tab row, or button. Runtime facts, alerts/status messages, article bodies,
+ * news/disclosure/evidence content, and AI reasoning remain visible.
+ */
+#root header :is(h1, h2, h3) + p[class*="text-muted-foreground"],
+#root [role="tablist"] + p[class*="text-muted-foreground"],
+#root button > p[class*="text-muted-foreground"],
+#root button + p[class*="text-muted-foreground"] {
+  display: none !important;
+}
+
+#root [role="alert"] p,
+#root [role="status"] p,
+#root article p,
+#root [data-testid*="news"] p,
+#root [data-testid*="disclosure"] p,
+#root [data-testid*="evidence"] p {
+  display: revert;
+}
