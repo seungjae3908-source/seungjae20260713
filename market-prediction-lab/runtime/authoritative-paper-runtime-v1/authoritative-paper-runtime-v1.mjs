@@ -3546,6 +3546,26 @@ function marketProfileFor(card) {
   if (card.assetClass === "coin_futures") return "CRYPTO_FUTURES";
   return card.market === "US" ? "US_STOCK" : "KR_STOCK";
 }
+function futuresPriceObservations(input, qualityCandles) {
+  if (input.card.assetClass !== "coin_futures") return void 0;
+  const latest = qualityCandles.at(-1);
+  if (!latest || !Number.isFinite(input.card.price) || input.card.price <= 0 || !Number.isFinite(latest.close) || latest.close <= 0) return void 0;
+  const provider = input.card.exchange?.trim() || "CRYPTO_FUTURES";
+  return [
+    {
+      provider: `${provider}-ticker`,
+      symbol: input.card.symbol,
+      price: input.card.price,
+      observedAt: input.card.observedAt
+    },
+    {
+      provider: `${provider}-candles`,
+      symbol: input.card.symbol,
+      price: latest.close,
+      observedAt: latest.time
+    }
+  ];
+}
 function numberFromReason(reason) {
   if (!reason) return null;
   const match = reason.match(/-?\d+(?:\.\d+)?/);
@@ -3571,6 +3591,7 @@ function applyScannerQuantHardening(input) {
     timeframe: input.timeframe,
     candles: qualityCandles,
     now: input.now,
+    providerObservations: futuresPriceObservations(input, qualityCandles),
     marketClosed: input.marketClosed,
     tradingHalt: input.tradingHalt,
     sessionAware: input.sessionAware
