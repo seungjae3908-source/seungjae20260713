@@ -180,14 +180,53 @@ test('P0-C9 preserves composer blockers and never upgrades missing authoritative
   assert.equal(result.gateObservability.qualityGate.provenance.includes('pre-risk'), true);
 });
 
-test('P0-C9 fails closed when any authoritative evidence source throws and does not invoke the composer', async () => {
+test('P0-C9 identifies every missing authoritative source without converting it to a sample or safe default', async () => {
   const { sources } = authoritativeSources();
   let composeCalls = 0;
   const producer = createScannerCryptoFuturesPaperAdmissionEvidenceProducer({
     sources: {
       ...(sources as Record<string, unknown>),
+      paperState: async () => null,
+      executionObservation: async () => null,
+      supplementalCostEvidence: async () => null,
+    } as never,
+    now: () => NOW,
+    compose: (() => {
+      composeCalls += 1;
+      return readyComposition();
+    }) as never,
+  });
+
+  const result = await producer({ card: { id: 'card-missing' }, market: 'CRYPTO_FUTURES' });
+  assert.equal(result.status, 'BLOCKED');
+  assert.deepEqual(result.blockers, ['P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING']);
+  assert.equal(composeCalls, 0);
+  assert.deepEqual(result.gateObservability.reasonObservations.map((row) => row.sourceCode), [
+    'P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING:paperState',
+    'P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING:executionObservation',
+    'P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING:supplementalCostEvidence',
+  ]);
+  for (const observation of result.gateObservability.reasonObservations) {
+    assert.equal(observation.canonicalReason, 'DATA_MISSING');
+    assert.equal(observation.lossless, true);
+    assert.equal(observation.identity.observationId, 'card-missing');
+    assert.equal(observation.naturalCredit, 0);
+    assert.equal(observation.replayCredit, 0);
+    assert.equal(observation.duplicateCredit, 0);
+  }
+  assert.equal(result.gateObservability.qualityGate.status, 'UNKNOWN');
+  assert.equal(result.gateObservability.riskGate.status, 'UNKNOWN');
+});
+
+test('P0-C9 fails closed when any authoritative evidence source throws and does not invoke the composer', async () => {
+  const { sources } = authoritativeSources();
+  let composeCalls = 0;
+  const sensitiveMessage = 'provider unavailable secret-token-should-never-escape';
+  const producer = createScannerCryptoFuturesPaperAdmissionEvidenceProducer({
+    sources: {
+      ...(sources as Record<string, unknown>),
       publicEvidence: async () => {
-        throw new Error('provider unavailable');
+        throw new Error(sensitiveMessage);
       },
     } as never,
     now: () => NOW,
@@ -203,7 +242,10 @@ test('P0-C9 fails closed when any authoritative evidence source throws and does 
   assert.equal(composeCalls, 0);
   assert.equal(result.gateObservability.qualityGate.status, 'UNKNOWN');
   assert.equal(result.gateObservability.riskGate.status, 'UNKNOWN');
+  assert.equal(result.gateObservability.reasonObservations[0].sourceCode, 'P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_FAILED:publicEvidence');
   assert.equal(result.gateObservability.reasonObservations[0].canonicalReason, 'UNKNOWN');
+  assert.equal(result.gateObservability.reasonObservations[0].lossless, true);
+  assert.equal(JSON.stringify(result).includes(sensitiveMessage), false);
 });
 
 test('P0-C9 owns CRYPTO_FUTURES only and does not touch evidence sources for another market', async () => {
