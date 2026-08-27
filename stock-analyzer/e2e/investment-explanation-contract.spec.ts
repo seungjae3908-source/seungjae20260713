@@ -10,7 +10,10 @@ test('shared investment explanation registry covers market, research, portfolio 
   const registry = source('src/lib/investment-explanations.ts');
   for (const required of [
     'tradingValue',
+    'volume',
+    'marketCap',
     'fundingRate',
+    'openInterest',
     'macroF1',
     'balancedAccuracy',
     'profitFactor',
@@ -23,6 +26,7 @@ test('shared investment explanation registry covers market, research, portfolio 
     'correlation',
     'dataQuality',
     'aiConfidence',
+    'freshness',
     'targetPrice',
     'stopLoss',
   ]) {
@@ -42,13 +46,43 @@ test('AI information fails closed instead of rendering client fabricated target 
   expect(aiTab).toContain('판단 무효화 조건');
 });
 
-test('explanation UI is deterministic and canonical market information keeps zero AI outbound authority', () => {
-  const sheet = source('src/components/investment-explanation-sheet.tsx');
+test('research center explains canonical metrics without creating fake profitability evidence', () => {
+  const research = source('src/pages/research-center.tsx');
+  expect(research).toContain('metric="macroF1"');
+  expect(research).toContain('metric="balancedAccuracy"');
+  expect(research).toContain('metric="settlement"');
+  expect(research).toContain('metric="profitability"');
+  expect(research).toContain('실제 Gemini/Groq 리뷰가 Research Production에 기록되기 전에는 AI 의견을 임의로 만들지 않습니다.');
+});
+
+test('market information explains ranking basis and freshness while preserving zero AI outbound authority', () => {
+  const marketPage = source('src/pages/market-information.tsx');
   const marketContract = source('src/lib/market-information.ts');
-  expect(sheet).toContain('AI 호출·주문·계좌 조회를 발생시키지 않습니다');
-  expect(sheet).toContain('role="dialog"');
-  expect(sheet).toContain('왜?');
+  expect(marketPage).toContain('market-ranking-explanation');
+  expect(marketPage).toContain('순위가 높다는 이유만으로 매수·매도 신호로 해석하지 않습니다');
+  expect(marketPage).toContain('metric="freshness"');
+  expect(marketPage).toContain('metric="fundingRate"');
+  expect(marketPage).toContain('metric="openInterest"');
+  expect(marketPage).toContain('화면 조회 자체가 AI 호출이나 주문을 만들지 않습니다');
   expect(marketContract).toMatch(/aiRequests:\s*0/);
   expect(marketContract).toMatch(/privateExchangeRequests:\s*0/);
+  expect(marketContract).toMatch(/accountRequests:\s*0/);
   expect(marketContract).toMatch(/orderRequests:\s*0/);
+});
+
+test('portfolio copilot exposes evidence quality and missing checks before interpretation', () => {
+  const portfolio = source('src/components/portfolio-ai-diagnosis.tsx');
+  expect(portfolio).toContain('portfolio-evidence-summary');
+  expect(portfolio).toContain('portfolio-action-checks');
+  expect(portfolio).toContain('AI 답변보다 원본 데이터 품질과 누락 근거를 먼저 봅니다');
+  expect(portfolio).toContain('질문할 때만 AI를 호출합니다');
+  expect(portfolio).toContain('누락된 현금·계좌·시장 데이터를 0으로 바꾸거나 추정해서 채우지 않습니다');
+});
+
+test('explanation UI is deterministic and accessible as a dialog', () => {
+  const sheet = source('src/components/investment-explanation-sheet.tsx');
+  expect(sheet).toContain('AI 호출·주문·계좌 조회를 발생시키지 않습니다');
+  expect(sheet).toContain('role="dialog"');
+  expect(sheet).toContain('aria-modal="true"');
+  expect(sheet).toContain('왜?');
 });
