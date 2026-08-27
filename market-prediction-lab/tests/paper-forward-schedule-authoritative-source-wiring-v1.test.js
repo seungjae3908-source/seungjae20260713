@@ -120,7 +120,7 @@ test("Research Production recurring CLI injects the audited authoritative source
   assert.equal(output.scannerCandidateCount, null);
   assert.equal(output.entryCount, null);
   assert.match(output.authoritativeRuntimePackage.bundleSha256, /^[0-9a-f]{64}$/u);
-  assert.equal(output.authoritativeRuntimePackage.sourceSha, "58c6ff651912e27daccb7137aff11a4bc38f30a3");
+  assert.equal(output.authoritativeRuntimePackage.sourceSha, "3dae58f78d1118bc5b9f5b431adbfa50d63d4f5c");
   assert.equal(output.authoritativeRuntimePackage.executionAuthority, "NONE");
   assert.equal(output.authoritativeRuntimePackage.privateApiAllowed, false);
   assert.equal(
