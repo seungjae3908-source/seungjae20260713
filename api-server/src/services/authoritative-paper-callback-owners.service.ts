@@ -172,22 +172,29 @@ export function buildAuthoritativePaperExecutionObservation(input: Readonly<{
   const estimated = evidence.estimated as Readonly<Record<string, unknown>> | undefined;
   const slippage = estimated?.slippageEstimate as Readonly<Record<string, unknown>> | undefined;
   const liquidity = estimated?.liquidityEvidence as Readonly<Record<string, unknown>> | undefined;
-  const partialFill = estimated?.partialFillEstimate as Readonly<Record<string, unknown>> | undefined;
-  const confidence = evidence.confidence as Readonly<Record<string, unknown>> | undefined;
-  const fillModel = confidence?.fillModel as Readonly<Record<string, unknown>> | undefined;
-  if (evidence.modelStatus !== 'SIMULATION_AVAILABLE'
+  const paperSimulation = evidence.paperSimulation as Readonly<Record<string, unknown>> | undefined;
+  const liveGradeFillReadiness = evidence.liveGradeFillReadiness as Readonly<Record<string, unknown>> | undefined;
+  if (paperSimulation?.status !== 'READY'
+    || paperSimulation?.evidenceClass !== 'SIMULATED'
+    || paperSimulation?.marketDataClass !== 'public-L2'
+    || paperSimulation?.realFillClaim !== false
+    || paperSimulation?.publicDepthIsFillProof !== false
     || slippage?.quality !== 'ESTIMATED'
     || !nonNegative(slippage.percent)
     || !positive(liquidity?.visibleExecutableQuantity)
     || !positive(liquidity?.visibleCoverageRatio)
-    || Number(liquidity.visibleCoverageRatio) < 1
-    || partialFill?.quality !== 'CALIBRATED_ESTIMATE'
-    || fillModel?.status !== 'PASS') {
+    || Number(liquidity.visibleCoverageRatio) < 1) {
     throw new Error('AUTHORITATIVE_EXECUTION_OBSERVATION_DATA_UNAVAILABLE');
   }
   const observedAtMs = input.executionEvidenceInput.observedAtMs;
+  const provenance = Array.isArray(evidence.provenance)
+    ? evidence.provenance.filter(nonEmpty)
+    : [];
+  if (!provenance.includes('SIMULATED') || !provenance.includes('public-L2')) {
+    throw new Error('AUTHORITATIVE_EXECUTION_OBSERVATION_PROVENANCE_INVALID');
+  }
   return freeze({
-    providerProvenance: input.executionEvidenceInput.provenance.join('+'),
+    providerProvenance: provenance.join('+'),
     slippage: {
       valuePercent: Number(slippage.percent),
       quality: 'ESTIMATED',
@@ -201,8 +208,19 @@ export function buildAuthoritativePaperExecutionObservation(input: Readonly<{
     },
     partialFill: {
       model: 'ORDER_BOOK',
-      source: String(fillModel.modelId ?? 'CALIBRATED_FILL_MODEL'),
+      source: 'SIMULATED/public-L2:VISIBLE_L2_BOOK_WALK_ONLY',
       observedAtMs,
+    },
+    executionProvenance: {
+      evidenceClass: 'SIMULATED',
+      marketDataClass: 'public-L2',
+      executionMode: 'SIMULATED_EXECUTION_ONLY',
+      realFillClaim: false,
+      publicDepthIsFillProof: false,
+      liveFillCalibrationStatus: liveGradeFillReadiness?.status === 'READY'
+        || liveGradeFillReadiness?.status === 'VETO'
+        ? liveGradeFillReadiness.status
+        : 'BLOCKED_DATA',
     },
     leverage: policy.leverage,
     riskPercent: policy.riskPercent,
@@ -255,6 +273,10 @@ export const AUTHORITATIVE_PAPER_CALLBACK_OWNERS_SAFETY = Object.freeze({
   recurringLedgerDerivationAllowed: false,
   scalarMaintenanceMarginDefaultAllowed: false,
   uncalibratedFillClaimAllowed: false,
+  paperPublicL2SimulationAllowed: true,
+  liveFillCalibrationRequiredForPaperObservation: false,
+  liveFillCalibrationRequiredForRealFillClaim: true,
+  supplementalFullCostEvidenceRequiredForAdmission: true,
   unknownCostIsZero: false,
   executionAuthority: 'NONE',
   privateApiAllowed: false,
