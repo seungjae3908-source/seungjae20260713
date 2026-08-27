@@ -1,10 +1,12 @@
 import './market-intelligence-ai-analysis.service.test';
+import './news-disclosure-market-intelligence.service.test';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   fetchMarketIntelligence,
   marketIntelligenceNotAvailable,
   marketIntelligenceTradeDecision,
+  routeNewsDisclosureMarketIntelligence,
   scannerDirectionalAdjustment,
 } from './market-intelligence-client.service';
 
@@ -51,6 +53,40 @@ function readyPayload(input: {
   };
 }
 
+function newsRoutePayload(input: { unsafe?: boolean } = {}) {
+  const id = 'a'.repeat(64);
+  return {
+    ok: true,
+    serviceSha: 'sidecar-sha',
+    safety: {
+      executionAuthority: 'NONE', privateTradingApiAllowed: false, realOrderAllowed: false,
+      orderSubmissionAllowed: input.unsafe ? true : false,
+    },
+    result: {
+      contract: 'MarketIntelAiRouteV1',
+      status: 'READY',
+      event: {
+        rawHash: id,
+        sourceId: 'FINNHUB:test', sourceType: 'NEWS', sourceTier: 'TIER_3_VERIFIED_NEWS',
+        sourceUrl: 'https://news.example.com/1', sourceName: 'Example News', market: 'US_STOCK', symbol: 'AAPL',
+        companyName: 'Apple', publishedAt: '2026-08-27T01:00:00.000Z', receivedAt: '2026-08-27T01:01:00.000Z',
+        headline: 'Example headline', originalText: null, eventType: 'UNKNOWN',
+        evidence: { facts: ['기사 제목 확인'], inferences: [], uncertainty: [] },
+      },
+      freshness: { state: 'FRESH', ageMs: 1_000, reason: null },
+      ai: {
+        level: 1, mode: 'CHEAP_AI', modelTier: 'CHEAP', realtimeClass: 'REALTIME', analysisKey: id,
+        cacheEligible: true, cacheReuse: false, batchEligible: false, maxOutputClass: 'COMPACT_STRUCTURED',
+      },
+      reasons: ['STANDARD_EVENT_CLASSIFICATION'],
+      safety: {
+        executionAuthority: 'NONE', orderAllowed: false, candidateDeletionAllowed: false,
+        sentimentIsPriceDirection: false, fabricatedEvidenceAllowed: false,
+      },
+    },
+  };
+}
+
 test('canonical client uses loopback public-only endpoint and preserves zero order authority', async () => {
   const requested: string[] = [];
   const intelligence = await fetchMarketIntelligence('CRYPTO_FUTURES', 'BTCUSDT', {
@@ -72,6 +108,52 @@ test('canonical client rejects non-loopback Market Intelligence configuration', 
     () => fetchMarketIntelligence('CRYPTO_SPOT', 'KRW-BTC', {
       baseUrl: 'https://example.com',
       fetchImpl: async () => response(readyPayload()),
+    }),
+    /MARKET_INTELLIGENCE_LOOPBACK_ONLY/,
+  );
+});
+
+test('news/disclosure router posts only to the loopback sidecar and validates zero authority', async () => {
+  let requested = '';
+  let method = '';
+  let body: any = null;
+  const route = await routeNewsDisclosureMarketIntelligence({
+    event: {
+      sourceType: 'NEWS', sourceTier: 'TIER_3_VERIFIED_NEWS', sourceUrl: 'https://news.example.com/1',
+      sourceName: 'Example News', market: 'US_STOCK', symbol: 'AAPL', publishedAt: '2026-08-27T01:00:00.000Z',
+      headline: 'Example headline', eventType: 'UNKNOWN', evidence: { facts: ['기사 제목 확인'] },
+    },
+    nowMs: Date.parse('2026-08-27T02:00:00.000Z'),
+  }, {
+    fetchImpl: async (url, init) => {
+      requested = String(url);
+      method = String(init?.method ?? 'GET');
+      body = JSON.parse(String(init?.body));
+      return response(newsRoutePayload());
+    },
+  });
+  assert.equal(requested, 'http://127.0.0.1:8791/v1/news-disclosure/route');
+  assert.equal(method, 'POST');
+  assert.equal(body.event.symbol, 'AAPL');
+  assert.equal(route.ai.mode, 'CHEAP_AI');
+  assert.equal(route.safety.executionAuthority, 'NONE');
+  assert.equal(route.safety.orderAllowed, false);
+});
+
+test('news/disclosure router rejects unsafe sidecar authority instead of returning it', async () => {
+  await assert.rejects(
+    routeNewsDisclosureMarketIntelligence({ event: { market: 'US_STOCK', symbol: 'AAPL', headline: 'x' } }, {
+      fetchImpl: async () => response(newsRoutePayload({ unsafe: true })),
+    }),
+    /MARKET_INTELLIGENCE_NEWS_ROUTE_UNSAFE_AUTHORITY/,
+  );
+});
+
+test('news/disclosure router also rejects non-loopback configuration', async () => {
+  await assert.rejects(
+    routeNewsDisclosureMarketIntelligence({ event: { market: 'US_STOCK', symbol: 'AAPL', headline: 'x' } }, {
+      baseUrl: 'https://example.com',
+      fetchImpl: async () => response(newsRoutePayload()),
     }),
     /MARKET_INTELLIGENCE_LOOPBACK_ONLY/,
   );
