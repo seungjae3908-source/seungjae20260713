@@ -11,6 +11,8 @@ import {
 import type { ExchangeConnection } from '../services/trade-automation.types';
 import '../features/account-readonly/tests/account-readonly.test';
 import '../features/account-readonly/tests/account-readonly.runtime.test';
+import '../features/member-investment/member-investment.test';
+import '../features/member-investment/member-investment.route.test';
 
 const repositoryRoot = process.cwd();
 
