@@ -240,7 +240,8 @@ test('direct cycles recompute canonical net PnL instead of trusting an asserted 
   const trade = result.trades[0];
   assert.equal(trade.costEvidence.status, 'READY');
   assert.equal(trade.netPnl, 7);
-  assert.equal(trade.netReturnPercent, 7);
+  assert.ok(trade.netReturnPercent != null);
+  assert.ok(Math.abs(trade.netReturnPercent - 7) < 1e-9);
 });
 
 test('direct cycle aggregate costs stay cycle-level and never masquerade as entry or exit leg costs', () => {
