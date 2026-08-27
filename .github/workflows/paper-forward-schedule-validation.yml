@@ -49,7 +49,12 @@ on:
       - market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
       - market-prediction-lab/tests/recurring-paper-loop-v1.test.js
       - market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
+      - research-production/deploy/prepare-paper-state-readonly-transport.mjs
+      - research-production/deploy/research-production@.service
+      - research-production/src/engine.mjs
       - research-production/src/natural-cycle-verdict-trace.mjs
+      - research-production/test/paper-state-readonly-transport.test.mjs
+      - research-production/test/research-engine.test.mjs
       - research-production/test/natural-cycle-verdict-trace.test.mjs
       - market-prediction-lab/tests/research-production-readonly-evidence-observability.test.js
       - ops/research-production-readonly-evidence.sh
@@ -168,7 +173,12 @@ jobs:
             market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
             market-prediction-lab/tests/recurring-paper-loop-v1.test.js
             market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
+            research-production/deploy/prepare-paper-state-readonly-transport.mjs
+            research-production/deploy/research-production@.service
+            research-production/src/engine.mjs
             research-production/src/natural-cycle-verdict-trace.mjs
+            research-production/test/paper-state-readonly-transport.test.mjs
+            research-production/test/research-engine.test.mjs
             research-production/test/natural-cycle-verdict-trace.test.mjs
             market-prediction-lab/tests/research-production-readonly-evidence-observability.test.js
             ops/research-production-readonly-evidence.sh
@@ -245,7 +255,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           grep -F "PAPER_FORWARD_SCHEDULE_ACTIVE='true'" ops/install-paper-forward-schedule.sh >/dev/null
-          grep -F "PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED='\$OUTCOME_ACCUMULATION_ENABLED'" ops/install-paper-forward-schedule.sh >/dev/null
+          grep -F "PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED='$OUTCOME_ACCUMULATION_ENABLED'" ops/install-paper-forward-schedule.sh >/dev/null
           grep -F "PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED=true" .github/workflows/paper-forward-schedule-no-deploy-activation.yml >/dev/null
           grep -F "PRIVATE_TRADING_API_ALLOWED='false'" ops/install-paper-forward-schedule.sh >/dev/null
           grep -F "REAL_ORDER_ENABLED='false'" ops/install-paper-forward-schedule.sh >/dev/null
