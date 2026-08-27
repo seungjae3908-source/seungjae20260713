@@ -25,7 +25,8 @@ type ChatMessage = {
   cached?: boolean;
 };
 
-type CachedReply = Pick<ChatMessage, 'content' | 'kind' | 'data'>;
+type CacheableReply = Pick<ChatMessage, 'content' | 'kind' | 'data'>;
+type CachedReply = { reply: CacheableReply; cachedAt: number };
 
 type AiChatPayload = {
   answer?: string;
@@ -47,6 +48,8 @@ const QUICK_PROMPTS = [
   '뉴스·공시 중 가격에 중요할 수 있는 것만 쉽게 설명해줘',
   '모르는 투자 용어를 초보자도 이해하게 설명해줘',
 ] as const;
+
+const AI_CHAT_CACHE_TTL_MS = 60_000;
 
 function PortfolioShortcutPanel() {
   const [, navigate] = useLocation();
@@ -150,20 +153,22 @@ export default function AiChatPage() {
     const userMessage: ChatMessage = { id: `user:${now}`, role: 'user', content: message, at: new Date(now).toISOString() };
     const key = cacheKey(message);
     const cached = responseCacheRef.current.get(key);
+    const cacheFresh = Boolean(cached && now - cached.cachedAt <= AI_CHAT_CACHE_TTL_MS);
     setMessages((current) => [...current, userMessage]);
     setDraft('');
     setError('');
 
-    if (cached) {
+    if (cached && cacheFresh) {
       setMessages((current) => [...current, {
         id: `assistant:cache:${now}`,
         role: 'assistant',
-        ...cached,
+        ...cached.reply,
         cached: true,
         at: new Date().toISOString(),
       }]);
       return;
     }
+    if (cached) responseCacheRef.current.delete(key);
 
     setBusy(true);
     const controller = new AbortController();
@@ -178,8 +183,8 @@ export default function AiChatPage() {
       const payload = await response.json().catch(() => null) as AiChatPayload | null;
       const answer = payload?.answer;
       if (!response.ok || !answer) throw new Error(errorMessage(payload));
-      const reply: CachedReply = { content: answer, kind: payload.kind, data: payload.data };
-      responseCacheRef.current.set(key, reply);
+      const reply: CacheableReply = { content: answer, kind: payload.kind, data: payload.data };
+      responseCacheRef.current.set(key, { reply, cachedAt: Date.now() });
       setMessages((current) => [...current, {
         id: `assistant:${Date.now()}`,
         role: 'assistant',
@@ -224,7 +229,7 @@ export default function AiChatPage() {
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <p className="text-[10px] font-black text-primary">무료 AI 효율 모드</p>
-              <p className="mt-1 text-xs font-black">질문할 때만 AI를 호출하고, 같은 종목의 같은 질문은 현재 세션의 답변을 재사용합니다.</p>
+              <p className="mt-1 text-xs font-black">질문할 때만 AI를 호출하고, 같은 종목의 같은 질문은 최근 1분 이내 답변만 재사용합니다.</p>
             </div>
             <InvestmentExplanationButton metric="dataQuality" compact />
           </div>
