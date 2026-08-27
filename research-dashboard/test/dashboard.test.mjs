@@ -23,14 +23,34 @@ async function fixture() {
     lanes: [{ market: 'KR', status: 'ready' }, { market: 'US', status: 'ready' }],
   }));
   await writeFile(join(root, 'forward', 'paper', 'state', 'recurring-paper-loop.json'), JSON.stringify({
-    cycles: [{ id: 1 }], positions: [{ id: 1 }], settlements: [{ id: 1 }, { id: 2 }],
+    cycles: [{ id: 1 }], samples: [], positions: [{ id: 1 }], settlements: [{ id: 1 }, { id: 2 }],
   }));
   await writeFile(join(root, 'forward', 'shadow-summary.json'), JSON.stringify({ groups: {
-    rule0: { total: 5, settled: 3, pending: 2, predictionHealth: { collapsed: false }, metrics: { macroF1: .51, balancedAccuracy: .55 } },
+    rule0: {
+      total: 5, settled: 3, pending: 2,
+      candidate: {
+        predictionHealth: { collapsed: false }, macroF1: .51, balancedAccuracy: .55,
+        perClass: { bullish: { recall: .4 }, neutral: { recall: .5 }, bearish: { recall: 0 } },
+      },
+    },
   }}));
-  await writeFile(join(root, 'forward', 'shadow-state.json'), JSON.stringify({ bucket: { records: [
-    { status: 'settled' }, { status: 'settled' }, { status: 'pending' },
-  ]}}));
+  await writeFile(join(root, 'forward', 'shadow-state.json'), JSON.stringify({
+    bucket: { records: [{ status: 'settled' }, { status: 'settled' }, { status: 'pending' }] },
+    groups: {
+      'crypto-futures-15m': {
+        canonicalEvidence: {
+          handoff: {
+            strategyHealthHandoff: {
+              schemaVersion: 'prediction-lab-strategy-health-shadow-handoff-v1',
+              strategyIdentityDigest: 'a'.repeat(64),
+              evidenceDigest: 'b'.repeat(64),
+              executionAuthority: 'NONE',
+            },
+          },
+        },
+      },
+    },
+  }));
   return root;
 }
 
@@ -38,11 +58,50 @@ test('overview exposes only summarized read-only research evidence', async () =>
   const root = await fixture();
   const overview = await buildResearchOverview({ stateRoot: root });
   assert.equal(overview.safety.readOnlyDashboard, true);
+  assert.equal(overview.safety.authorityEvidenceComplete, true);
   assert.equal(overview.safety.forbiddenAuthorityObserved, false);
+  assert.equal(overview.paper.runtime.privateRequestCount, 0);
+  assert.equal(overview.paper.runtime.liveTrading, false);
   assert.equal(overview.paper.ledger.settlementCount, 2);
   assert.equal(overview.shadow.records.settledRecords, 2);
   assert.equal(overview.shadow.groups[0].collapsed, false);
+  assert.equal(overview.shadow.groups[0].bearRecall, 0);
+  assert.equal(overview.shadow.canonicalHandoffs.length, 1);
+  assert.equal(overview.shadow.canonicalHandoffs[0].group, 'crypto-futures-15m');
+  assert.equal(overview.shadow.canonicalHandoffs[0].handoff.evidenceDigest, 'b'.repeat(64));
   assert.equal(overview.profitability.proven, false);
+});
+
+test('missing runtime safety evidence stays missing instead of becoming zero or false', async () => {
+  const root = await fixture();
+  await writeFile(join(root, 'forward', 'paper', 'status', 'runtime-status.json'), JSON.stringify({
+    status: 'running', scheduleActive: true, allProvidersReady: true,
+    publicForwardEvidenceAccumulating: true, paperTradeOutcomeAccumulating: true,
+    lanes: [{ market: 'KR', status: 'ready' }],
+  }));
+  const overview = await buildResearchOverview({ stateRoot: root });
+  assert.equal(overview.paper.runtime.privateRequestCount, null);
+  assert.equal(overview.paper.runtime.financialMutationCount, null);
+  assert.equal(overview.paper.runtime.orderCount, null);
+  assert.equal(overview.paper.runtime.liveTrading, null);
+  assert.equal(overview.paper.runtime.orderAuthority, null);
+  assert.equal(overview.paper.runtime.safetyEvidenceComplete, false);
+  assert.equal(overview.safety.authorityEvidenceComplete, false);
+  assert.equal(overview.safety.forbiddenAuthorityObserved, false);
+  assert.equal(overview.research.status, 'safety_evidence_incomplete');
+});
+
+test('missing ledger and shadow arrays stay missing instead of becoming zero', async () => {
+  const root = await fixture();
+  await writeFile(join(root, 'forward', 'paper', 'state', 'recurring-paper-loop.json'), JSON.stringify({ version: 1 }));
+  await writeFile(join(root, 'forward', 'shadow-state.json'), JSON.stringify({ bucket: { status: 'empty-shape' } }));
+  const overview = await buildResearchOverview({ stateRoot: root });
+  assert.equal(overview.paper.ledger.cycleCount, null);
+  assert.equal(overview.paper.ledger.positionCount, null);
+  assert.equal(overview.paper.ledger.settlementCount, null);
+  assert.equal(overview.shadow.records.totalRecords, null);
+  assert.equal(overview.shadow.records.settledRecords, null);
+  assert.equal(overview.shadow.records.pendingRecords, null);
 });
 
 test('dashboard refuses write methods', async () => {
