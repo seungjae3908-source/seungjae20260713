@@ -11,6 +11,11 @@ export type AccountReader = (
   signal?: AbortSignal,
 ) => Promise<CanonicalAccountSnapshot>;
 
+export type AccountCredentialConfigurationReader = (
+  userId: string,
+  provider: AccountProvider,
+) => Promise<boolean>;
+
 export class AccountReadonlyService {
   private lastGood = new Map<string, CanonicalAccountSnapshot>();
 
@@ -18,6 +23,7 @@ export class AccountReadonlyService {
     private readonly readers: Partial<Record<AccountProvider, AccountReader>>,
     private readonly flags: Partial<Record<AccountProvider, boolean>>,
     private readonly now = () => new Date(),
+    private readonly credentialConfigured: AccountCredentialConfigurationReader = async () => false,
   ) {}
 
   async read(scope: AccountReadScope, provider: AccountProvider, signal?: AbortSignal) {
@@ -33,7 +39,22 @@ export class AccountReadonlyService {
     }
 
     if (!this.flags[provider]) {
-      return emptySnapshot(provider, 'NOT_CONFIGURED', this.now().toISOString(), 'ACCOUNT_READ_DISABLED');
+      try {
+        const configured = await this.credentialConfigured(userId, provider);
+        return emptySnapshot(
+          provider,
+          configured ? 'CONFIGURED_UNVERIFIED' : 'NOT_CONFIGURED',
+          this.now().toISOString(),
+          configured ? 'ACCOUNT_READ_DISABLED' : 'ACCOUNT_NOT_CONFIGURED',
+        );
+      } catch {
+        return emptySnapshot(
+          provider,
+          'UNAVAILABLE',
+          this.now().toISOString(),
+          'ACCOUNT_CREDENTIAL_METADATA_UNAVAILABLE',
+        );
+      }
     }
 
     const reader = this.readers[provider];
