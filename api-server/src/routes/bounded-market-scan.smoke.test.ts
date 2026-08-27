@@ -366,7 +366,7 @@ test('scanner smoke path sends zero order-capable requests', async () => {
   await withServer(
     { scan: async () => completeResult({ market: 'US' }) },
     async (baseUrl) => {
-      const url = `${baseUrl}/api/market/scan?market=US&strategy=swing&timeframe=1D`;
+      const url = `${baseUrl}/api/market/scan?market=US&strategy=position&timeframe=1D`;
       requestedPaths.push(new URL(url).pathname);
       const response = await fetch(url);
       assert.equal(response.status, 200);
