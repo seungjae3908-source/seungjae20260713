@@ -69,10 +69,7 @@ type AnswerAiChat = (
   timeoutMs?: number,
 ) => Promise<AiChatResult>;
 
-type CacheEntry = {
-  expiresAt: number;
-  value: MarketIntelligenceAiAnalysisResult;
-};
+type CacheEntry = { expiresAt: number; value: MarketIntelligenceAiAnalysisResult };
 
 export interface MarketIntelligenceAiAnalyzerOptions {
   answerAiChatImpl?: AnswerAiChat;
@@ -87,7 +84,6 @@ const tradeInstructionPattern = /(?:확정\s*매수|반드시\s*(?:매수|매도
 const analysisKeyPattern = /^[a-f0-9]{64}$/i;
 const sentimentSet = new Set<MarketIntelligenceSentiment>(['POSITIVE', 'NEGATIVE', 'NEUTRAL', 'MIXED', 'UNKNOWN']);
 const horizonSet = new Set<MarketIntelligenceImpactHorizon>(['INTRADAY', 'SHORT', 'SWING', 'MID_LONG', 'UNKNOWN']);
-
 const safety = Object.freeze({
   publicEvidenceOnly: true as const,
   generatedFactsAllowed: false as const,
@@ -142,13 +138,7 @@ function parseStructuredAnalysis(answer: string, evidenceCount: number): MarketI
   const factEvidenceRefs = [...new Set(row.factEvidenceRefs)].filter((value): value is number => Number.isInteger(value));
   if (factEvidenceRefs.length !== row.factEvidenceRefs.length || factEvidenceRefs.some((value) => value < 0 || value >= evidenceCount)) return null;
   return {
-    schemaVersion: 'MarketIntelAiAnalysisV1',
-    summaryShort,
-    sentiment,
-    importanceScore,
-    confidenceScore,
-    impactHorizon,
-    factEvidenceRefs,
+    schemaVersion: 'MarketIntelAiAnalysisV1', summaryShort, sentiment, importanceScore, confidenceScore, impactHorizon, factEvidenceRefs,
     inferences: uniqueText(row.inferences, 8, 300),
     uncertainty: uniqueText(row.uncertainty, 8, 300),
     riskFlags: uniqueText(row.riskFlags, 12, 120),
@@ -178,19 +168,10 @@ function publicEvidence(input: MarketIntelligencePublicEvidenceInput): MarketInt
 
 function buildPrompt(input: MarketIntelligencePublicEvidenceInput): string {
   const payload = {
-    task: 'market_intelligence_structured_public_evidence_analysis',
-    mode: input.aiMode,
-    market: input.market,
-    symbol: input.symbol,
-    sourceType: input.sourceType,
-    sourceTier: input.sourceTier,
-    sourceName: input.sourceName,
-    publishedAt: input.publishedAt,
-    eventType: input.eventType,
-    headline: input.headline,
-    evidenceFacts: input.evidenceFacts,
-    conflictDetected: input.conflictDetected === true,
-    sourceTextExcerpt: input.sourceText,
+    task: 'market_intelligence_structured_public_evidence_analysis', mode: input.aiMode, market: input.market,
+    symbol: input.symbol, sourceType: input.sourceType, sourceTier: input.sourceTier, sourceName: input.sourceName,
+    publishedAt: input.publishedAt, eventType: input.eventType, headline: input.headline, evidenceFacts: input.evidenceFacts,
+    conflictDetected: input.conflictDetected === true, sourceTextExcerpt: input.sourceText,
   };
   const instruction = '공개 Evidence만 사용한다. 새 사실/숫자를 만들지 말고 매수·매도·롱·숏 지시를 하지 않는다. factEvidenceRefs는 evidenceFacts의 0-based index만 쓴다. 반드시 JSON 1개만 반환: {"schemaVersion":"MarketIntelAiAnalysisV1","summaryShort":"","sentiment":"POSITIVE|NEGATIVE|NEUTRAL|MIXED|UNKNOWN","importanceScore":0,"confidenceScore":0,"impactHorizon":"INTRADAY|SHORT|SWING|MID_LONG|UNKNOWN","factEvidenceRefs":[],"inferences":[],"uncertainty":[],"riskFlags":[],"catalystFlags":[]}\nDATA=';
   let prompt = `${instruction}${JSON.stringify(payload)}`;
@@ -198,6 +179,31 @@ function buildPrompt(input: MarketIntelligencePublicEvidenceInput): string {
   const reduced = { ...payload, sourceTextExcerpt: null, evidenceFacts: input.evidenceFacts.slice(0, 3).map((item) => item.slice(0, 180)) };
   prompt = `${instruction}${JSON.stringify(reduced)}`;
   return prompt.slice(0, 1_950);
+}
+
+function assistantEvidenceContext(input: MarketIntelligencePublicEvidenceInput) {
+  return {
+    dataQuality: input.evidenceStatus === 'READY' ? 'AVAILABLE' : 'PARTIAL',
+    asOf: input.publishedAt,
+    evidence: {
+      market: input.market,
+      symbol: input.symbol,
+      sourceType: input.sourceType,
+      sourceTier: input.sourceTier,
+      sourceName: input.sourceName,
+      sourceUrl: input.sourceUrl,
+      eventType: input.eventType,
+    },
+    warnings: input.conflictDetected ? ['CONFLICTING_EVIDENCE'] : [],
+    facts: {
+      headline: input.headline,
+      sourceText: input.sourceText,
+      evidenceFacts: input.evidenceFacts,
+    },
+    readOnly: true,
+    orderAuthority: 'none',
+    exchangeRequestSent: false,
+  };
 }
 
 function unavailable(input: MarketIntelligencePublicEvidenceInput, reason: string, cache: MarketIntelligenceAiAnalysisResult['cache'] = 'NOT_ELIGIBLE'): MarketIntelligenceAiAnalysisResult {
@@ -213,8 +219,7 @@ function canAnalyze(input: MarketIntelligencePublicEvidenceInput): string | null
   if (input.aiMode === 'NO_AI') return 'AI_ROUTE_NO_AI';
   if (input.evidenceStatus === 'NO_EVIDENCE' || input.evidenceStatus === 'INVALID_EVIDENCE') return 'AI_BLOCKED_BY_EVIDENCE_STATUS';
   if (!input.headline && !input.sourceText && input.evidenceFacts.length === 0) return 'PUBLIC_EVIDENCE_MISSING';
-  const serialized = JSON.stringify(input);
-  if (secretPattern.test(serialized)) return 'PRIVATE_OR_SECRET_DATA_BLOCKED';
+  if (secretPattern.test(JSON.stringify(input))) return 'PRIVATE_OR_SECRET_DATA_BLOCKED';
   return null;
 }
 
@@ -241,22 +246,13 @@ export class MarketIntelligenceAiAnalyzer {
 
   get stats(): Readonly<MarketIntelligenceAiAnalyzerStats> {
     this.pruneExpired();
-    return Object.freeze({
-      providerCalls: this.providerCalls,
-      cacheHits: this.cacheHits,
-      inFlightHits: this.inFlightHits,
-      unavailable: this.unavailableCount,
-      cacheEntries: this.completed.size,
-      inFlight: this.inFlight.size,
-    });
+    return Object.freeze({ providerCalls: this.providerCalls, cacheHits: this.cacheHits, inFlightHits: this.inFlightHits, unavailable: this.unavailableCount, cacheEntries: this.completed.size, inFlight: this.inFlight.size });
   }
 
   async analyze(rawInput: MarketIntelligencePublicEvidenceInput, signal?: AbortSignal): Promise<MarketIntelligenceAiAnalysisResult> {
     const input = publicEvidence(rawInput);
     const blocker = canAnalyze(input);
-    if (blocker) return blocker === 'AI_ROUTE_NO_AI' || blocker === 'AI_BLOCKED_BY_EVIDENCE_STATUS'
-      ? skipped(input, blocker)
-      : unavailable(input, blocker);
+    if (blocker) return blocker === 'AI_ROUTE_NO_AI' || blocker === 'AI_BLOCKED_BY_EVIDENCE_STATUS' ? skipped(input, blocker) : unavailable(input, blocker);
 
     this.pruneExpired();
     const cached = this.completed.get(input.analysisKey);
@@ -272,36 +268,31 @@ export class MarketIntelligenceAiAnalyzer {
       return { ...value, cache: 'IN_FLIGHT_REUSE' };
     }
 
-    const promise = this.perform(input, signal);
-    this.inFlight.set(input.analysisKey, promise);
-    try {
-      const value = await promise;
-      if (value.status === 'ANALYZED') this.putCache(input.analysisKey, value);
-      return value;
-    } finally {
-      if (this.inFlight.get(input.analysisKey) === promise) this.inFlight.delete(input.analysisKey);
-    }
+    const shared = this.perform(input)
+      .then((value) => {
+        if (value.status === 'ANALYZED') this.putCache(input.analysisKey, value);
+        return value;
+      })
+      .finally(() => {
+        if (this.inFlight.get(input.analysisKey) === shared) this.inFlight.delete(input.analysisKey);
+      });
+    this.inFlight.set(input.analysisKey, shared);
+    return await this.waitFor(shared, signal);
   }
 
-  private async perform(input: MarketIntelligencePublicEvidenceInput, signal?: AbortSignal): Promise<MarketIntelligenceAiAnalysisResult> {
+  private async perform(input: MarketIntelligencePublicEvidenceInput): Promise<MarketIntelligenceAiAnalysisResult> {
     this.providerCalls += 1;
     try {
-      const prompt = buildPrompt(input);
-      const result = await this.answer({ message: prompt }, undefined, signal, this.timeoutMs);
+      const result = await this.answer({
+        message: buildPrompt(input),
+        portfolioAssistantContext: assistantEvidenceContext(input),
+      }, undefined, undefined, this.timeoutMs);
       const analysis = parseStructuredAnalysis(result.answer, input.evidenceFacts.length);
       if (!analysis) {
         this.unavailableCount += 1;
         return unavailable(input, 'AI_STRUCTURED_RESPONSE_INVALID', 'MISS');
       }
-      return {
-        status: 'ANALYZED',
-        analysisKey: input.analysisKey,
-        model: result.model,
-        analysis,
-        reason: null,
-        cache: 'MISS',
-        safety,
-      };
+      return { status: 'ANALYZED', analysisKey: input.analysisKey, model: result.model, analysis, reason: null, cache: 'MISS', safety };
     } catch (cause) {
       this.unavailableCount += 1;
       const code = cause && typeof cause === 'object' && 'code' in cause && typeof (cause as { code?: unknown }).code === 'string'
