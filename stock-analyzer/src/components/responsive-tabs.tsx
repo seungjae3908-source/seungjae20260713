@@ -58,7 +58,7 @@ export function ResponsiveTabs<T extends string>({
               if (!option.disabled) onChange(option.value);
             }}
             className={cn(
-              'min-h-11 shrink-0 rounded-xl text-xs font-black transition-colors min-[1200px]:min-w-0',
+              'inline-flex min-h-11 shrink-0 items-center justify-center rounded-xl text-center text-xs font-black leading-4 transition-colors min-[1200px]:min-w-0',
               compact ? 'min-w-[88px] px-3' : 'min-w-[76px] px-3',
               option.disabled && 'cursor-not-allowed opacity-45',
               selected
@@ -66,7 +66,7 @@ export function ResponsiveTabs<T extends string>({
                 : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
             )}
           >
-            {option.label}{option.disabled ? ' · 잠김' : ''}
+            <span className="block w-full text-center leading-4">{option.label}{option.disabled ? ' · 잠김' : ''}</span>
           </button>
         );
       })}
