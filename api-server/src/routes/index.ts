@@ -13,7 +13,6 @@ import kiwoomRankingsSafeRouter from './kiwoom-rankings-safe';
 import adminRouter from './admin';
 import secRouter from './sec.routes';
 import cryptoRouter from './crypto';
-import coinSpecialFeedRouter from './coin-special-feed';
 import futuresMarketDataRouter from './futures-market-data';
 import stockOrderbookRouter from './stock-orderbook';
 import tradingRiskRouter from './trading-risk';
@@ -32,6 +31,7 @@ import accountConnectionsRouter from './account-connections';
 import { createAccountReadonlyRouter, accountReadFlags } from '../features/account-readonly/account-readonly.route';
 import { AccountReadonlyService } from '../features/account-readonly/account-readonly.service';
 import { createVaultBackedAccountReaders } from '../features/account-readonly/account-readonly.runtime';
+import { accountReadonlyCredentialConfigured } from '../features/account-readonly/account-readonly.repository';
 import {
   manualPortfolioNotificationBridge,
   telegramWebhookRouter,
@@ -75,7 +75,12 @@ router.use('/account-connections', accountConnectionsRouter);
 router.use(
   '/accounts/read-only',
   requireCapability('canAccessBasicInfo'),
-  createAccountReadonlyRouter(new AccountReadonlyService(createVaultBackedAccountReaders(), accountReadFlags())),
+  createAccountReadonlyRouter(new AccountReadonlyService(
+    createVaultBackedAccountReaders(),
+    accountReadFlags(),
+    () => new Date(),
+    accountReadonlyCredentialConfigured,
+  )),
 );
 
 // Canonical AI Scanner routes must be registered before the legacy market
@@ -169,25 +174,9 @@ router.use('/debug', requireAdmin, providerDebugRouter);
 router.use('/', pushRouter);
 router.use('/', watchlistRouter);
 
-// Coin special-feed uses only public Upbit/Bitget ticker endpoints. Preserve
-// the market capability boundary even though the transport itself is public.
-router.use('/stocks/special-feed', (req, res, next) => {
-  const asset = String(req.query.asset ?? 'stock').trim().toLowerCase();
-  if (asset !== 'coin') {
-    next();
-    return;
-  }
-  const capability = String(req.query.market ?? 'spot').trim().toLowerCase() === 'futures'
-    ? 'canAccessFutures'
-    : 'canAccessSpot';
-  requireCapability(capability)(req, res, next);
-});
-router.use('/stocks/special-feed', coinSpecialFeedRouter);
-
 // The coin special-feed provider is optional. A disconnected provider is an
 // empty, non-fatal feature state rather than a browser-visible HTTP failure.
-// This handler remains behind authentication and canAccessBasicInfo and is a
-// final fallback if the public-only provider router cannot own the request.
+// This handler remains behind authentication and canAccessBasicInfo.
 router.get('/stocks/special-feed', (req, res, next) => {
   const asset = String(req.query.asset ?? 'stock').trim().toLowerCase();
   if (asset !== 'coin') {
@@ -207,7 +196,7 @@ router.get('/stocks/special-feed', (req, res, next) => {
     items: [],
     count: 0,
     updatedAt: new Date().toISOString(),
-    message: '코인 특이정보 공개 제공기관을 사용할 수 없습니다.',
+    message: '코인 특이정보 피드는 아직 연결되지 않았습니다.',
   });
 });
 
