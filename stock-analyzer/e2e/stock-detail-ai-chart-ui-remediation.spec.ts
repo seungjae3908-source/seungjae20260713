@@ -10,6 +10,14 @@ const detailSource = fs.readFileSync(
   path.resolve(process.cwd(), 'src/pages/detail.tsx'),
   'utf8',
 );
+const detailAnalysisSource = fs.readFileSync(
+  path.resolve(process.cwd(), 'src/components/stock-detail-analysis-panel.tsx'),
+  'utf8',
+);
+const responsiveTabsSource = fs.readFileSync(
+  path.resolve(process.cwd(), 'src/components/responsive-tabs.tsx'),
+  'utf8',
+);
 const aiChartSource = fs.readFileSync(
   path.resolve(process.cwd(), 'src/pages/ai-chart.tsx'),
   'utf8',
@@ -82,11 +90,41 @@ test('stock detail news and summary tabs keep one vertical pan scroll owner', ()
   expect(touchCss).toContain('-webkit-overflow-scrolling: touch;');
 });
 
-test('nested legacy 상세분석 cannot render a second BottomNav', () => {
-  expect(detailSource).toContain('<LegacyDetailPage />');
-  expect(detailSource).toContain('data-testid="rich-detail-shell"');
-  expect(touchCss).toContain('[data-testid="rich-detail-shell"] nav[aria-label="주요 메뉴"]');
-  expect(touchCss).toContain('display: none !important;');
+test('상세분석 replaces the embedded legacy full page with focused AI financial and disclosure panels', () => {
+  expect(detailSource).not.toContain('LegacyDetailPage');
+  expect(detailSource).not.toContain("@/pages/detail-legacy");
+  expect(detailSource).toContain('<StockDetailAnalysisPanel ticker={ticker} market={market} />');
+  expect(detailAnalysisSource).toContain("{ value: 'ai', label: 'AI분석' }");
+  expect(detailAnalysisSource).toContain("{ value: 'financials', label: '재무제표' }");
+  expect(detailAnalysisSource).toContain("{ value: 'filings', label: '공시' }");
+  expect(detailAnalysisSource).toContain('<AiTab ticker={ticker} currency={currency} active />');
+  expect(detailAnalysisSource).toContain('<FinancialTab ticker={ticker} currency={currency} active />');
+  expect(detailAnalysisSource).toContain('<DisclosureTab ticker={ticker} active />');
+  expect(detailAnalysisSource).not.toContain('BottomNav');
+  expect(detailAnalysisSource).not.toContain("label: '차트'");
+  expect(detailAnalysisSource).not.toContain("label: '뉴스'");
+});
+
+test('all shared and semantic tab labels are centered on both axes', () => {
+  expect(responsiveTabsSource).toContain('inline-flex min-h-11 shrink-0 items-center justify-center rounded-xl text-center');
+  expect(responsiveTabsSource).toContain('<span className="block w-full text-center">');
+  expect(touchCss).toContain('#root [role="tablist"] [role="tab"]');
+  expect(touchCss).toContain('#root [aria-label$="탭"] > button');
+  expect(touchCss).toContain('#root [data-testid$="-tabs"] > button');
+  expect(touchCss).toContain('align-items: center !important;');
+  expect(touchCss).toContain('justify-content: center !important;');
+  expect(touchCss).toContain('text-align: center !important;');
+});
+
+test('compact copy policy removes attached helper prose but preserves runtime evidence and failures', () => {
+  expect(touchCss).toContain('#root header :is(h1, h2, h3) + p[class*="text-muted-foreground"]');
+  expect(touchCss).toContain('#root [role="tablist"] + p[class*="text-muted-foreground"]');
+  expect(touchCss).toContain('#root button > p[class*="text-muted-foreground"]');
+  expect(touchCss).toContain('#root button + p[class*="text-muted-foreground"]');
+  for (const protectedSelector of ['[role="alert"] p', '[role="status"] p', 'article p', '[data-testid*="news"] p', '[data-testid*="disclosure"] p', '[data-testid*="evidence"] p']) {
+    expect(touchCss).toContain(protectedSelector);
+  }
+  expect(touchCss).not.toContain('#root p {');
 });
 
 test('modern home search theme learn order and settings routes lose obsolete BottomNav tail spacers', () => {
