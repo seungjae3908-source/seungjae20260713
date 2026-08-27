@@ -317,9 +317,15 @@ function costComponent(
   source: JournalCostEvidenceSource,
   reason: string,
 ): JournalCostComponentEvidence {
-  return Object.freeze(value == null
-    ? { status: 'NOT_AVAILABLE' as const, source: null, reason }
-    : { status: 'READY' as const, source, reason: null });
+  if (value == null) return Object.freeze({ status: 'NOT_AVAILABLE' as const, source: null, reason });
+  if (!Number.isFinite(value) || value < 0) {
+    return Object.freeze({
+      status: 'NOT_AVAILABLE' as const,
+      source: null,
+      reason: reason.replace('_MISSING', '_INVALID'),
+    });
+  }
+  return Object.freeze({ status: 'READY' as const, source, reason: null });
 }
 
 export function costEvidenceFromValues(
@@ -365,7 +371,9 @@ function allocatedCost(value: number | null, ratio: number) {
 }
 
 function netFromCosts(grossPnl: number, fees: number | null, tax: number | null) {
-  return fees == null || tax == null ? null : grossPnl - fees - tax;
+  if (!Number.isFinite(grossPnl) || fees == null || tax == null) return null;
+  if (!Number.isFinite(fees) || !Number.isFinite(tax) || fees < 0 || tax < 0) return null;
+  return grossPnl - fees - tax;
 }
 
 function costWarnings(costEvidence: JournalCostEvidence) {
@@ -810,21 +818,20 @@ function directCycle(payload: Record<string, unknown>): UnifiedTradeCycle | null
   const tax = nonNegativeDecimal(payload.tax, 'tax', true);
   const costEvidence = costEvidenceFromValues(fees, tax, 'DIRECT_CYCLE_RECORD');
   const grossPnl = finite(payload.grossPnl) ?? 0;
-  const providedNetPnl = finite(payload.netPnl);
   const netPnl = costEvidence.status === 'READY'
-    ? (providedNetPnl ?? netFromCosts(grossPnl, fees, tax))
+    ? netFromCosts(grossPnl, fees, tax)
     : null;
   const closedQuantity = finite(payload.closedQuantity) ?? (status === 'closed' ? totalQuantity : 0);
   const remainingQuantity = Math.max(0, finite(payload.remainingQuantity) ?? totalQuantity - closedQuantity);
   const id = nullableText(payload.tradeId ?? payload.id, 160) ?? `direct:${hash(JSON.stringify(payload), 24)}`;
-  const initialEntryCostEvidence = costEvidenceFromValues(entryFee ?? aggregateFees, tax, 'DIRECT_CYCLE_RECORD');
+  const initialEntryCostEvidence = costEvidenceFromValues(entryFee, null, 'DIRECT_CYCLE_RECORD');
   const initialEntry: TradeLeg = {
     orderId: nullableText(payload.orderId, 160) ?? id,
     at: openedAt,
     price: entryPrice,
     quantity: totalQuantity,
-    fees: entryFee ?? aggregateFees,
-    tax,
+    fees: entryFee,
+    tax: null,
     costEvidence: initialEntryCostEvidence,
   };
   const finalExit = status === 'closed' && closedAt && exitPrice != null
@@ -834,8 +841,8 @@ function directCycle(payload: Record<string, unknown>): UnifiedTradeCycle | null
         price: exitPrice,
         quantity: closedQuantity,
         fees: exitFee,
-        tax,
-        costEvidence: costEvidenceFromValues(exitFee, tax, 'DIRECT_CYCLE_RECORD'),
+        tax: null,
+        costEvidence: costEvidenceFromValues(exitFee, null, 'DIRECT_CYCLE_RECORD'),
       }
     : null;
   const unsigned: Omit<UnifiedTradeCycle, 'review'> = {
@@ -906,7 +913,10 @@ type CompleteNetCycle = UnifiedTradeCycle & { fees: number; tax: number; netPnl:
 
 function completeNetCycles(cycles: UnifiedTradeCycle[]) {
   return cycles.filter((cycle): cycle is CompleteNetCycle => (
-    cycle.costEvidence.status === 'READY' && cycle.fees != null && cycle.tax != null && cycle.netPnl != null
+    cycle.costEvidence.status === 'READY'
+      && cycle.fees != null && Number.isFinite(cycle.fees) && cycle.fees >= 0
+      && cycle.tax != null && Number.isFinite(cycle.tax) && cycle.tax >= 0
+      && cycle.netPnl != null && Number.isFinite(cycle.netPnl)
   ));
 }
 
