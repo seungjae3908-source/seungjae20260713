@@ -86,6 +86,31 @@ const staleBtcSelection = {
   selectedAt: '2026-08-24T01:00:00.000Z',
 };
 
+const scannerHypeSelection = {
+  assetType: 'coin_futures',
+  market: 'BITGET',
+  symbol: 'HYPEUSDT',
+  ticker: 'HYPEUSDT',
+  displayName: 'HYPEUSDT',
+  timeframe: '5m',
+  searchRunId: 'scanner:hype:20260826',
+  signalScore: 77.123456789,
+  signalRank: 1,
+  confidence: 77,
+  riskLevel: 'LOW',
+  action: 'LONG',
+  pricePlan: {
+    entryZone: { from: 82.05, to: 82.45 },
+    invalidation: 80.95,
+    stopLoss: 80.95,
+    targets: [85.3, 87.45],
+    riskReward: 2.1,
+  },
+  matchedSignals: ['유동성·거래대금'],
+  reasons: ['공개 선물 데이터 근거'],
+  selectedAt: '2026-08-26T03:17:40.000Z',
+};
+
 async function expectDetailContext(page: Page, ticker: string, name: string) {
   const shell = page.getByTestId('canonical-rich-detail-chart');
   await expect(shell).toHaveAttribute('data-context-ticker', ticker);
@@ -133,4 +158,46 @@ test('explicit Scanner-to-AI-chart crypto route remains canonical', async ({ pag
   expect(persisted.market).toBe('BITGET');
   expect(persisted.ticker).toBe('BTCUSDT');
   expect(persisted.timeframe).toBe('4H');
+});
+
+test('same futures asset keeps Scanner price plan across timeframe changes and exposes one symbol search field', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installMocks(page, scannerHypeSelection);
+  await page.goto('/ai-chart?assetType=coin_futures&market=BITGET&symbol=HYPEUSDT&ticker=HYPEUSDT&name=HYPEUSDT&timeframe=5m&searchRunId=scanner%3Ahype%3A20260826');
+
+  await expect(page.getByRole('heading', { name: 'AI 차트' })).toBeVisible();
+  await page.getByRole('tab', { name: '차트', exact: true }).click();
+
+  const chart = page.getByTestId('ai-chart-mobile-chart');
+  await expect(chart.getByRole('textbox', { name: '차트 종목 심볼' })).toHaveCount(1);
+  await expect(chart.getByPlaceholder('종목명·심볼 검색')).toHaveCount(1);
+  await expect(chart.getByTestId('chart-stream-status')).toHaveText('FALLBACK POLLING');
+
+  const evidence = chart.getByTestId('ai-chart-v3-evidence-status');
+  await expect(evidence).toContainText('TECHNICAL SCORE');
+  await expect(evidence).toContainText('CALIBRATED PROBABILITY');
+  await expect(evidence).toContainText('INSUFFICIENT_SAMPLE');
+  await expect(evidence).toContainText('승률이 아닙니다');
+
+  const plan = chart.getByTestId('scanner-price-plan-chart');
+  await expect(plan).toContainText('진입 · 손절 · 목표가');
+  await expect(plan.getByTestId('scanner-price-plan-action')).toHaveText('롱');
+  await expect(plan).toContainText('82.05');
+  await expect(plan).toContainText('80.95');
+  await expect(plan).toContainText('85.3');
+
+  await chart.getByTestId('timeframe-1H').click();
+  await expect(page.locator('header')).toContainText('1H');
+  await expect(plan.getByTestId('scanner-price-plan-action')).toHaveText('롱');
+  await expect(plan).toContainText('80.95');
+  await expect(plan).toContainText('85.3');
+
+  const persisted = await page.evaluate((key) => JSON.parse(window.localStorage.getItem(key) ?? 'null'), ANALYSIS_STORAGE_KEY);
+  expect(persisted.market).toBe('BITGET');
+  expect(persisted.ticker).toBe('HYPEUSDT');
+  expect(persisted.timeframe).toBe('1H');
+  expect(persisted.searchRunId).toBe('scanner:hype:20260826');
+  expect(persisted.action).toBe('LONG');
+  expect(persisted.pricePlan?.stopLoss).toBe(80.95);
+  expect(persisted.pricePlan?.targets?.[0]).toBe(85.3);
 });
