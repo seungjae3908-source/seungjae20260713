@@ -1,5 +1,6 @@
-import { readFileSync } from 'node:fs';
+import { accessSync, constants as fsConstants, readFileSync, readdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { join } from 'node:path';
 import process from 'node:process';
 
 const PRODUCTION_PROJECT_REF = 'bawcbkoyovbeajkrnduq';
@@ -52,6 +53,26 @@ if (process.argv[2] === '--verify-artifact') {
   verifyArtifact(JSON.parse(readFileSync(file, 'utf8')));
   process.stdout.write('production Telegram storage release diagnostic artifact: PASS\n');
   process.exit(0);
+}
+
+function isExecutable(path) {
+  try {
+    accessSync(path, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function psqlExistsOutsidePath() {
+  const candidates = ['/usr/bin/psql', '/usr/local/bin/psql'];
+  try {
+    for (const entry of readdirSync('/usr/lib/postgresql', { withFileTypes: true })) {
+      if (!entry.isDirectory() || !/^[0-9]+(?:\.[0-9]+)?$/.test(entry.name)) continue;
+      candidates.push(join('/usr/lib/postgresql', entry.name, 'bin', 'psql'));
+    }
+  } catch {}
+  return candidates.some(isExecutable);
 }
 
 const expectedProductionSha = String(process.env.EXPECTED_PRODUCTION_SHA ?? '').trim().toLowerCase();
@@ -161,7 +182,10 @@ delete childEnv.PROD_DATABASE_URL;
 const result = spawnSync('psql', ['-X','--no-psqlrc','--quiet','--tuples-only','--no-align','--set=ON_ERROR_STOP=1','--host',database.hostname,'--port',database.port,'--username',database.username,'--dbname',database.database], {
   input: SQL, encoding: 'utf8', env: { ...childEnv, PGPASSWORD: database.password, PGCONNECT_TIMEOUT: '15', PGSSLMODE: 'require' }, stdio: ['pipe','pipe','pipe'], maxBuffer: 4 * 1024 * 1024,
 });
-if (result.error?.code === 'ENOENT') blocked('psql_unavailable', connected);
+if (result.error?.code === 'ENOENT') {
+  if (psqlExistsOutsidePath()) blocked('psql_installed_outside_path', connected);
+  blocked('psql_not_installed', connected);
+}
 if (result.error || result.status !== 0) {
   const stderr = String(result.stderr ?? '').toLowerCase();
   let classification = 'production_database_readonly_query_failed';
