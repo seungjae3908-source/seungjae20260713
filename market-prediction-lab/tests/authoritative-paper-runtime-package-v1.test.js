@@ -82,6 +82,7 @@ test("validated package loads the exact observed-gate producer bundle and execut
   assert.equal(runtimePackage.scheduleActivationAuthority, false);
   assert.equal(runtimePackage.financialMutationAllowed, false);
   assert.equal(typeof runtimePackage.createAuthoritativePaperEvidenceSourceWiring, "function");
+  assert.equal(typeof runtimePackage.createAuthoritativePaperNaturalCycleEvidenceSourceWiring, "function");
   assert.equal(typeof runtimePackage.buildPaperSimulatedExecutionEvidence, "function");
   assert.equal(typeof runtimePackage.buildAuthoritativeSizedContractRules, "function");
   assert.equal(typeof runtimePackage.buildAuthoritativePaperExecutionObservation, "function");
@@ -98,6 +99,245 @@ test("validated package loads the exact observed-gate producer bundle and execut
   assert.equal(result.executionAuthority, "NONE");
   assert.equal(result.privateTradingApiAllowed, false);
   assert.equal(result.productionMutationAllowed, false);
+});
+
+test("Natural candidate keeps incomplete P0-4 blocked and binds holding-horizon funding when all costs exist", async () => {
+  const runtimePackage = await loadValidatedAuthoritativePaperRuntimePackage();
+  const nowMs = Date.now();
+  const observedAt = new Date(nowMs - 1_000).toISOString();
+  const strategyScope = "scanner-crypto-futures-swing_LONG";
+  const candidate = Object.freeze({
+    signal: Object.freeze({
+      signalId: "natural-six-source-fixture-1",
+      market: "CRYPTO_FUTURES",
+      symbol: "BTCUSDT",
+      timestampMs: nowMs - 1_000,
+      ttlMs: 60_000,
+      expiresAtMs: nowMs + 59_000,
+      style: "SWING",
+      timeframe: "1H",
+      horizon: 1,
+      direction: "LONG",
+      signalDirection: "LONG",
+      strategyIdentity: Object.freeze({
+        strategyId: strategyScope,
+        strategyVersion: "fixture-v1",
+        parameterHash: "a".repeat(64),
+        researchCodeSha: SOURCE_SHA,
+        costPolicyVersion: "fixture-cost-v1",
+      }),
+    }),
+    executionAuthority: "NONE",
+    liveOrderAllowed: false,
+    privateTradingApiAllowed: false,
+    orderSubmitted: false,
+    exchangeRequestSent: false,
+  });
+  const learningSnapshot = Object.freeze({
+    signalId: candidate.signal.signalId,
+    timestamp: observedAt,
+    market: "CRYPTO_FUTURES",
+    symbol: "BTCUSDT",
+    symbolName: "Bitcoin",
+    strategyHorizon: "SWING",
+    direction: "LONG",
+    signalScore: 90,
+    displayConfidence: 0.9,
+    referencePrice: 100,
+    entryPrice: 100,
+    stopLoss: 99,
+    target1: 102,
+    target2: 103,
+    riskReward: 2,
+    timeframes: Object.freeze(["1H"]),
+    strategyProfileVersion: "fixture-v1",
+    indicatorSnapshot: Object.freeze({}),
+    indicatorScores: Object.freeze({}),
+    patternSnapshot: Object.freeze({}),
+    volumeContext: Object.freeze({}),
+    volatilityContext: Object.freeze({}),
+    trendContext: Object.freeze({}),
+    marketRegime: "UPTREND",
+    liquidityContext: Object.freeze({}),
+    aiValidatorResult: null,
+    riskEngineResult: null,
+    dataProvenance: Object.freeze(["canonical-forward-public-observation"]),
+    dataTimestamp: observedAt,
+    immutable: true,
+    executionAuthority: "NONE",
+  });
+  const snapshot = runtimePackage.createImmutablePaperTradingStateSnapshot({
+    state: paperState(nowMs),
+    sourceOwner: "AUTHENTICATED_PAPER_STATE_FIXTURE",
+    sourceSha: SOURCE_SHA,
+    market: "CRYPTO_FUTURES",
+    currency: "USDT",
+    provenance: ["authenticated-paper-state-fixture"],
+    publisherAccountIdSha256: PUBLISHER_ACCOUNT_ID_SHA256,
+    observedAtMs: nowMs,
+    maximumAgeMs: 30_000,
+  });
+  const publicEvidence = Object.freeze({
+    provider: "bitget",
+    productType: "USDT-FUTURES",
+    symbol: "BTCUSDT",
+    lastPrice: 100,
+    bidPrice: 99.9,
+    askPrice: 100,
+    markPrice: 100,
+    indexPrice: 100,
+    tickerTimestampMs: nowMs,
+    fundingRate: 0.0001,
+    fundingIntervalHours: 8,
+    nextFundingUpdateMs: nowMs + 30_000,
+    openInterest: 1_000_000,
+    openInterestTimestampMs: nowMs,
+    minTradeNum: 0.001,
+    sizeMultiplier: 0.001,
+    minTradeUsdt: 0.1,
+    priceStep: 0.1,
+    makerFeeRate: 0.0002,
+    takerFeeRate: 0.0006,
+    minLeverage: 1,
+    maxLeverage: 100,
+    candles5m: Object.freeze([]),
+    candles1h: Object.freeze([]),
+    benchmarkBtc1h: Object.freeze([]),
+    benchmarkBtc1d: Object.freeze([]),
+    observedAtMs: nowMs,
+    dataQuality: "ready",
+  });
+  const policyEvidence = Object.freeze({
+    schemaVersion: "authoritative-paper-generic-risk-policy-evidence-v1",
+    policyId: "fixture-explicit-paper-risk",
+    policyVersion: "v1",
+    source: "CANONICAL_EXPLICIT_PAPER_RISK_POLICY_FIXTURE",
+    provenance: Object.freeze(["canonical-risk-policy-record-fixture"]),
+    observedAtMs: nowMs,
+    maximumAgeMs: 30_000,
+    researchCodeSha: SOURCE_SHA,
+    marketScopes: Object.freeze(["CRYPTO_FUTURES"]),
+    strategyScopes: Object.freeze([strategyScope]),
+    symbolScopes: Object.freeze(["BTCUSDT"]),
+    riskPercent: 0.5,
+    requestedLeverage: 1,
+    maximumLeverage: 100,
+    marginMode: "isolated",
+  });
+  const card = Object.freeze({
+    signalId: candidate.signal.signalId,
+    symbol: "BTCUSDT",
+    action: "LONG",
+  });
+  async function runCase(supplementalCostInput) {
+    let supplementalCalls = 0;
+    let l2Calls = 0;
+    const wiring = runtimePackage.createAuthoritativePaperNaturalCycleEvidenceSourceWiring({
+      researchCodeSha: SOURCE_SHA,
+      sources: {
+        paperStateSnapshotForCard: async () => snapshot,
+        riskPolicyRecordForCard: async () => Object.freeze({
+          schemaVersion: "authoritative-paper-generic-risk-policy-record-v1",
+          recordId: "fixture-risk-record",
+          recordVersion: "v1",
+          policyId: policyEvidence.policyId,
+          policyVersion: policyEvidence.policyVersion,
+          source: "CANONICAL_READ_ONLY_FIXTURE_RECORD",
+          provenance: Object.freeze(["fixture-persisted-record"]),
+          observedAtMs: nowMs,
+          maximumAgeMs: 30_000,
+          researchCodeSha: SOURCE_SHA,
+          marketScopes: policyEvidence.marketScopes,
+          strategyScopes: policyEvidence.strategyScopes,
+          symbolScopes: policyEvidence.symbolScopes,
+          riskPercent: policyEvidence.riskPercent,
+          requestedLeverage: policyEvidence.requestedLeverage,
+          maximumLeverage: policyEvidence.maximumLeverage,
+          marginMode: policyEvidence.marginMode,
+        }),
+        supplementalCostInputForCard: async () => {
+          supplementalCalls += 1;
+          return supplementalCostInput;
+        },
+        positionTiersForCard: async () => Object.freeze([
+          Object.freeze({ startUnit: "0", keepMarginRate: "0.004" }),
+        ]),
+      },
+      dependencies: {
+        resolveCanonicalIdentity: () => Object.freeze({ paperCandidate: candidate, blockers: Object.freeze([]) }),
+        latestEvidenceTimestamp: () => observedAt,
+        prepareObservation: () => Object.freeze({
+          status: "OBSERVATION_READY",
+          observation: Object.freeze({ snapshot: learningSnapshot }),
+        }),
+        buildPublicRequests: () => Object.freeze({
+          ticker: Object.freeze({ method: "GET", path: "/fixture", query: "symbol=BTCUSDT" }),
+        }),
+        fetchPublicJson: async (url) => {
+          if (url.pathname.endsWith("/orderbook")) {
+            l2Calls += 1;
+            return Object.freeze({
+              code: "00000",
+              data: Object.freeze({
+                ts: String(nowMs),
+                b: Object.freeze([[99.9, 1_000]]),
+                a: Object.freeze([[100, 1_000]]),
+              }),
+            });
+          }
+          return Object.freeze({ code: "00000", data: Object.freeze([]) });
+        },
+        buildPublicEvidence: () => publicEvidence,
+        now: () => nowMs,
+      },
+    });
+    const producer = runtimePackage.createPaperAdmissionEvidenceProducer({
+      paperCandidateSource: wiring.paperCandidateForCard,
+      learningSnapshotSource: wiring.learningSnapshotForCard,
+      paperStateSource: wiring.paperStateForCard,
+      contractRulesSource: wiring.contractRulesForCard,
+      publicEvidenceSource: wiring.publicEvidenceForCard,
+      executionObservationSource: wiring.executionObservationForCard,
+      supplementalCostEvidenceSource: wiring.supplementalCostEvidenceForCard,
+    });
+    const result = await producer({ card, market: "CRYPTO_FUTURES" });
+    return { result, wiring, supplementalCalls, l2Calls };
+  }
+
+  const missing = await runCase(null);
+  const sourceCodes = missing.result.gateObservability.reasonObservations.map((row) => row.sourceCode);
+  assert.equal(missing.result.status, "BLOCKED");
+  assert.deepEqual(sourceCodes, [
+    "P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING:supplementalCostEvidence",
+  ]);
+  assert.equal(missing.supplementalCalls, 1);
+  assert.ok(missing.l2Calls > 0);
+  assert.equal(missing.wiring.naturalCycleSourceGraph.sizingIterationLimit, 8);
+  assert.equal(missing.wiring.naturalCycleSourceGraph.policyDefaultsAllowed, false);
+  assert.equal(missing.wiring.naturalCycleSourceGraph.unknownCostIsZero, false);
+  assert.equal(missing.wiring.naturalCycleSourceGraph.publicDepthIsRealFill, false);
+  assert.equal(missing.wiring.naturalCycleSourceGraph.realFillObserved, false);
+  assert.equal(missing.wiring.naturalCycleSourceGraph.executionAuthority, "NONE");
+
+  const observedCost = (valuePercent, source) => Object.freeze({
+    valuePercent,
+    quality: "OBSERVED",
+    source: `TEST_ONLY_${source}`,
+    observedAtMs: nowMs,
+  });
+  const complete = await runCase(Object.freeze({
+    costPolicyId: candidate.signal.strategyIdentity.costPolicyVersion,
+    observedAtMs: nowMs,
+    latency: observedCost(0.01, "INDEPENDENT_LATENCY_COST"),
+    liquidityImpact: observedCost(0.02, "INDEPENDENT_LIQUIDITY_IMPACT_COST"),
+    partialFillImpact: observedCost(0.03, "PARTIAL_FILL_IMPACT_COST"),
+    funding: observedCost(99, "UNBOUND_FUNDING_MUST_NOT_PASS"),
+  }));
+  assert.equal(complete.result.status, "READY", JSON.stringify(complete.result));
+  assert.equal(complete.result.bundle.executionEvidence.costPolicy.fundingRate, 0.0001);
+  assert.equal(complete.result.executionAuthority, "NONE");
+  assert.equal(complete.result.orderSubmitted, false);
+  assert.equal(complete.result.privateTradingApiAllowed, false);
 });
 
 test("validated package reuses the sidecar book walk only as labeled simulated execution", async () => {

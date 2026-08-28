@@ -34,6 +34,8 @@ const EXPECTED_SOURCE_FILES = Object.freeze([
   "api-server/src/services/authoritative-paper-callback-owners.service.ts",
   "api-server/src/services/authoritative-paper-evidence-sources.service.ts",
   "api-server/src/services/authoritative-paper-execution-cost-sources.service.ts",
+  "api-server/src/services/authoritative-paper-generic-risk-policy-producer.service.ts",
+  "api-server/src/services/authoritative-paper-risk-sizing-source.service.ts",
   "api-server/src/services/authoritative-paper-runtime-package.entry.ts",
   "api-server/src/services/bitget-futures-public-evidence.service.ts",
   "api-server/src/services/crypto-signal-scanner.service.ts",
@@ -165,6 +167,9 @@ function assertExports(runtime) {
       !== AUTHORITATIVE_PAPER_RUNTIME_PACKAGE_CONTRACT.blockedDataSourceContractSchemaVersion
     || typeof runtime?.createScannerCryptoFuturesPaperAdmissionEvidenceProducer !== "function"
     || typeof runtime?.createAuthoritativePaperEvidenceSourceWiring !== "function"
+    || typeof runtime?.createAuthoritativePaperNaturalCycleEvidenceSourceWiring !== "function"
+    || typeof runtime?.createAuthoritativePaperGenericRiskPolicyProducer !== "function"
+    || typeof runtime?.buildAuthoritativePaperRiskSizingFromGenericRiskPolicySource !== "function"
     || typeof runtime?.createImmutablePaperTradingStateSnapshot !== "function"
     || typeof runtime?.buildAuthoritativeSizedContractRules !== "function"
     || typeof runtime?.buildAuthoritativePaperExecutionObservation !== "function"
@@ -227,6 +232,12 @@ export async function loadValidatedAuthoritativePaperRuntimePackage({
     costPolicyVersionBinding: freeze(manifest.costPolicyVersionBinding),
     createPaperAdmissionEvidenceProducer: producerFactory(runtime),
     createAuthoritativePaperEvidenceSourceWiring: runtime.createAuthoritativePaperEvidenceSourceWiring,
+    createAuthoritativePaperNaturalCycleEvidenceSourceWiring:
+      runtime.createAuthoritativePaperNaturalCycleEvidenceSourceWiring,
+    createAuthoritativePaperGenericRiskPolicyProducer:
+      runtime.createAuthoritativePaperGenericRiskPolicyProducer,
+    buildAuthoritativePaperRiskSizingFromGenericRiskPolicySource:
+      runtime.buildAuthoritativePaperRiskSizingFromGenericRiskPolicySource,
     createImmutablePaperTradingStateSnapshot: runtime.createImmutablePaperTradingStateSnapshot,
     buildPaperSimulatedExecutionEvidence: runtime.buildPaperSimulatedExecutionEvidence,
     buildAuthoritativeSizedContractRules: runtime.buildAuthoritativeSizedContractRules,
@@ -275,6 +286,14 @@ export function createLosslessPaperStateSnapshotFileOwner({
   }
   if (typeof now !== "function") throw new TypeError("Paper state snapshot clock is required");
   const resolvedPath = snapshotPath.trim();
+  async function readValidatedSnapshot() {
+    const value = JSON.parse(await readFile(resolvedPath, "utf8"));
+    const snapshot = runtimePackage.validateImmutablePaperTradingStateSnapshot(value, now());
+    if (snapshot.publisherAccountIdSha256 !== expectedPublisherAccountIdSha256) {
+      throw new Error("PAPER_STATE_PUBLISHER_ACCOUNT_BINDING_MISMATCH");
+    }
+    return snapshot;
+  }
   return freeze({
     schemaVersion: "lossless-paper-state-snapshot-file-owner-v2",
     snapshotPath: resolvedPath,
@@ -308,13 +327,9 @@ export function createLosslessPaperStateSnapshotFileOwner({
       await atomicWriteText(resolvedPath, `${JSON.stringify(validated, null, 2)}\n`);
       return validated;
     },
+    paperStateSnapshotForCard: readValidatedSnapshot,
     async paperStateForCard() {
-      const value = JSON.parse(await readFile(resolvedPath, "utf8"));
-      const snapshot = runtimePackage.validateImmutablePaperTradingStateSnapshot(value, now());
-      if (snapshot.publisherAccountIdSha256 !== expectedPublisherAccountIdSha256) {
-        throw new Error("PAPER_STATE_PUBLISHER_ACCOUNT_BINDING_MISMATCH");
-      }
-      return snapshot.state;
+      return (await readValidatedSnapshot()).state;
     },
     executionAuthority: "NONE",
     privateApiAllowed: false,
