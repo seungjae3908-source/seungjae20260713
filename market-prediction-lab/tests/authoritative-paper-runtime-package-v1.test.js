@@ -72,6 +72,7 @@ test("validated package loads the exact observed-gate producer bundle and execut
   assert.equal(runtimePackage.blockedDataSourceContractSchemaVersion, "authoritative-paper-blocked-data-source-contract-v1");
   assert.equal(runtimePackage.simulatedExecutionEvidenceSchemaVersion, "paper-simulated-execution-evidence-v1");
   assert.match(runtimePackage.manifest.sourceFileSha256["api-server/src/services/paper-simulated-execution-evidence.service.ts"], /^[0-9a-f]{64}$/u);
+  assert.match(runtimePackage.manifest.sourceFileSha256["api-server/src/services/authoritative-paper-latency-cost-evidence.service.ts"], /^[0-9a-f]{64}$/u);
   assert.match(runtimePackage.manifest.sourceFileSha256["market-intelligence-sidecar/src/execution-quality.mjs"], /^[0-9a-f]{64}$/u);
   assert.match(runtimePackage.manifest.sourceFileSha256["market-prediction-lab/src/bitget-position-tier-v1.js"], /^[0-9a-f]{64}$/u);
   assert.equal(runtimePackage.costPolicyVersion, null);
@@ -87,6 +88,8 @@ test("validated package loads the exact observed-gate producer bundle and execut
   assert.equal(typeof runtimePackage.buildAuthoritativeSizedContractRules, "function");
   assert.equal(typeof runtimePackage.buildAuthoritativePaperExecutionObservation, "function");
   assert.equal(typeof runtimePackage.buildAuthoritativeSupplementalCostEvidence, "function");
+  assert.equal(typeof runtimePackage.collectAuthoritativePaperLatencyCostEvidence, "function");
+  assert.equal(typeof runtimePackage.readBitgetPublicLatencyMidpointQuote, "function");
 
   const producer = runtimePackage.createPaperAdmissionEvidenceProducer(missingEvidenceSources());
   const result = await producer({ card: {}, market: "CRYPTO_FUTURES" });
@@ -101,9 +104,9 @@ test("validated package loads the exact observed-gate producer bundle and execut
   assert.equal(result.productionMutationAllowed, false);
 });
 
-test("Natural candidate keeps incomplete P0-4 blocked and binds holding-horizon funding when all costs exist", async () => {
+test("Natural candidate fails closed without bracketed latency and binds canonical latency plus funding when all costs exist", async () => {
   const runtimePackage = await loadValidatedAuthoritativePaperRuntimePackage();
-  const nowMs = Date.now();
+  const nowMs = Date.now() - 1_000;
   const observedAt = new Date(nowMs - 1_000).toISOString();
   const strategyScope = "scanner-crypto-futures-swing_LONG";
   const candidate = Object.freeze({
@@ -229,9 +232,11 @@ test("Natural candidate keeps incomplete P0-4 blocked and binds holding-horizon 
     symbol: "BTCUSDT",
     action: "LONG",
   });
-  async function runCase(supplementalCostInput) {
+  async function runCase(supplementalCostInput, { bracketLatency = true } = {}) {
     let supplementalCalls = 0;
     let l2Calls = 0;
+    let clockNow = nowMs;
+    let expectPostQuote = false;
     const wiring = runtimePackage.createAuthoritativePaperNaturalCycleEvidenceSourceWiring({
       researchCodeSha: SOURCE_SHA,
       sources: {
@@ -276,19 +281,26 @@ test("Natural candidate keeps incomplete P0-4 blocked and binds holding-horizon 
         fetchPublicJson: async (url) => {
           if (url.pathname.endsWith("/orderbook")) {
             l2Calls += 1;
+            const isExecutionBook = url.searchParams.get("limit") === "50";
+            const isPostQuote = !isExecutionBook && expectPostQuote;
+            if (isExecutionBook) expectPostQuote = true;
+            if (isPostQuote) expectPostQuote = false;
             return Object.freeze({
               code: "00000",
               data: Object.freeze({
-                ts: String(nowMs),
-                b: Object.freeze([[99.9, 1_000]]),
-                a: Object.freeze([[100, 1_000]]),
+                ts: String(bracketLatency ? clockNow : nowMs),
+                b: Object.freeze([[isPostQuote ? 99.91 : 99.9, 1_000]]),
+                a: Object.freeze([[isPostQuote ? 100.01 : 100, 1_000]]),
               }),
             });
           }
           return Object.freeze({ code: "00000", data: Object.freeze([]) });
         },
         buildPublicEvidence: () => publicEvidence,
-        now: () => nowMs,
+        now: () => {
+          clockNow += 10;
+          return clockNow;
+        },
       },
     });
     const producer = runtimePackage.createPaperAdmissionEvidenceProducer({
@@ -317,6 +329,12 @@ test("Natural candidate keeps incomplete P0-4 blocked and binds holding-horizon 
   assert.equal(missing.wiring.naturalCycleSourceGraph.unknownCostIsZero, false);
   assert.equal(missing.wiring.naturalCycleSourceGraph.publicDepthIsRealFill, false);
   assert.equal(missing.wiring.naturalCycleSourceGraph.realFillObserved, false);
+  assert.equal(
+    missing.wiring.naturalCycleSourceGraph.latencyEvidenceOwner,
+    "AUTHORITATIVE_PUBLIC_BBO_REQUEST_BRACKET",
+  );
+  assert.equal(missing.wiring.naturalCycleSourceGraph.latencyEvidenceQuality, "ESTIMATED");
+  assert.equal(missing.wiring.naturalCycleSourceGraph.latencyMissingIsZero, false);
   assert.equal(missing.wiring.naturalCycleSourceGraph.executionAuthority, "NONE");
 
   const observedCost = (valuePercent, source) => Object.freeze({
@@ -325,16 +343,27 @@ test("Natural candidate keeps incomplete P0-4 blocked and binds holding-horizon 
     source: `TEST_ONLY_${source}`,
     observedAtMs: nowMs,
   });
-  const complete = await runCase(Object.freeze({
+  const completeInput = Object.freeze({
     costPolicyId: candidate.signal.strategyIdentity.costPolicyVersion,
     observedAtMs: nowMs,
-    latency: observedCost(0.01, "INDEPENDENT_LATENCY_COST"),
+    latency: observedCost(99, "UNBOUND_LATENCY_MUST_NOT_PASS"),
     liquidityImpact: observedCost(0.02, "INDEPENDENT_LIQUIDITY_IMPACT_COST"),
     partialFillImpact: observedCost(0.03, "PARTIAL_FILL_IMPACT_COST"),
     funding: observedCost(99, "UNBOUND_FUNDING_MUST_NOT_PASS"),
-  }));
+  });
+  const blockedLatency = await runCase(completeInput, { bracketLatency: false });
+  assert.equal(blockedLatency.result.status, "BLOCKED");
+  assert.deepEqual(
+    blockedLatency.result.gateObservability.reasonObservations.map((row) => row.sourceCode),
+    ["P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING:supplementalCostEvidence"],
+  );
+
+  const complete = await runCase(completeInput);
   assert.equal(complete.result.status, "READY", JSON.stringify(complete.result));
   assert.equal(complete.result.bundle.executionEvidence.costPolicy.fundingRate, 0.0001);
+  assert.ok(complete.result.bundle.executionEvidence.costPolicy.latencyRate > 0);
+  assert.ok(complete.result.bundle.executionEvidence.costPolicy.latencyRate < 0.01);
+  assert.ok(complete.l2Calls >= 3);
   assert.equal(complete.result.executionAuthority, "NONE");
   assert.equal(complete.result.orderSubmitted, false);
   assert.equal(complete.result.privateTradingApiAllowed, false);
