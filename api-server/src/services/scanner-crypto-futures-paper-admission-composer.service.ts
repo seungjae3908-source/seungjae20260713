@@ -46,11 +46,31 @@ type PartialFillObservation = Readonly<{
   observedAtMs: number;
 }>;
 
+type LatencyObservation = Readonly<{
+  observedRoundTripMs: number | null;
+  costValuePercent: null;
+  source: string;
+  observedAtMs: number;
+}>;
+
+type PaperExecutionProvenance = Readonly<{
+  evidenceClass: 'SIMULATED';
+  marketDataClass: 'public-L2';
+  executionMode: 'SIMULATED_EXECUTION_ONLY';
+  realFillObserved: false;
+  realFillClaim: false;
+  publicDepthIsFillProof: false;
+  liveSubmittedExecutionSampleCredit: 0;
+  liveFillCalibrationStatus: 'READY' | 'VETO' | 'BLOCKED_DATA';
+}>;
+
 export type ScannerCryptoFuturesPaperExecutionObservation = Readonly<{
   providerProvenance: string;
   slippage: PercentCostEvidence;
   liquidity: LiquidityObservation;
   partialFill: PartialFillObservation;
+  latency: LatencyObservation;
+  executionProvenance: PaperExecutionProvenance;
   leverage: number;
   riskPercent: number;
   marginMode: 'isolated' | 'cross';
@@ -211,7 +231,18 @@ export function composeScannerCryptoFuturesPaperAdmission(
     || !sameNumber(rules?.maximumLeverage, publicEvidence?.maxLeverage));
 
   const observation = input.executionObservation;
-  add(blockers, 'P0_C5_PROVIDER_PROVENANCE_REQUIRED', !nonEmpty(observation?.providerProvenance));
+  const providerProvenance = observation?.providerProvenance;
+  add(blockers, 'P0_C5_PROVIDER_PROVENANCE_REQUIRED', !nonEmpty(providerProvenance)
+    || !providerProvenance.split('+').includes('SIMULATED')
+    || !providerProvenance.split('+').includes('public-L2'));
+  add(blockers, 'P0_C5_SIMULATED_PUBLIC_L2_PROVENANCE_REQUIRED',
+    observation?.executionProvenance?.evidenceClass !== 'SIMULATED'
+    || observation?.executionProvenance?.marketDataClass !== 'public-L2'
+    || observation?.executionProvenance?.executionMode !== 'SIMULATED_EXECUTION_ONLY'
+    || observation?.executionProvenance?.realFillObserved !== false
+    || observation?.executionProvenance?.realFillClaim !== false
+    || observation?.executionProvenance?.publicDepthIsFillProof !== false
+    || observation?.executionProvenance?.liveSubmittedExecutionSampleCredit !== 0);
   validateObservedCost(observation?.slippage, nowMs, maxEvidenceAgeMs, blockers);
   add(blockers, 'P0_C5_LIQUIDITY_EVIDENCE_INVALID', !positive(observation?.liquidity?.value));
   add(blockers, 'P0_C5_LIQUIDITY_SOURCE_REQUIRED', !nonEmpty(observation?.liquidity?.source));
@@ -223,6 +254,7 @@ export function composeScannerCryptoFuturesPaperAdmission(
     || (positive(rules?.maximumLeverage) && observation.leverage > rules.maximumLeverage));
   add(blockers, 'P0_C5_RISK_PERCENT_INVALID', !positive(observation?.riskPercent) || observation.riskPercent > 1);
   add(blockers, 'P0_C5_MARGIN_MODE_REQUIRED', observation?.marginMode !== 'isolated' && observation?.marginMode !== 'cross');
+  add(blockers, 'P0_C5_SUPPLEMENTAL_FULL_COST_EVIDENCE_REQUIRED', !input.supplementalCostEvidence);
   add(blockers, 'P0_C5_COST_POLICY_ID_MISMATCH', input.supplementalCostEvidence?.costPolicyId !== signal?.strategyIdentity?.costPolicyVersion);
 
   const entryPrice = input.learningSnapshot?.entryPrice;
@@ -353,6 +385,14 @@ export function composeScannerCryptoFuturesPaperAdmission(
     marginMode: observation.marginMode.toUpperCase(),
     liquidationDistancePct: liquidationDistancePercent,
     privateApiUsed: false,
+    executionProvenance: observation.executionProvenance,
+    executionMode: 'SIMULATED_EXECUTION_ONLY',
+    publicL2Only: true,
+    realFillObserved: false,
+    realFillClaim: false,
+    publicDepthIsFillProof: false,
+    liveSubmittedExecutionSampleCredit: 0,
+    liveFillCalibrationStatus: observation.executionProvenance.liveFillCalibrationStatus,
     privateTradingApiAllowed: false,
     liveOrderAllowed: false,
     orderSubmitted: false,
