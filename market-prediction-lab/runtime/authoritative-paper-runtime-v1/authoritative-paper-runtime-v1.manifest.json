@@ -8,7 +8,7 @@
     "sourceGitBlobSha": "7dc275b70f9379e32f3fd6c718a612b06ceb1c46",
     "sourceSha256": "8c7563936de865e9103d73d15c0442a44f1cf33426315e758abad83d96880e0c"
   },
-  "sourceGraphSha256": "5c327a207740fec71d98b858b36377c70c8c756ade646d00984d21fc067a4464",
+  "sourceGraphSha256": "8c308d53f0223ac7e1236f0fa4b86f7045bd9e58806e19321b5da7d7cecd3bcd",
   "sourceFiles": [
     "api-server/src/data/asset-type.ts",
     "api-server/src/lib/bounded-work-pool.ts",
@@ -55,8 +55,8 @@
     "api-server/src/lib/bounded-work-pool.ts": "bd870fe9d205f6fb3aac0b62a2a6c3937c65093e9563def4346872c0cc30d2f5",
     "api-server/src/lib/provider-admission-control.ts": "38791f5181beedb3ffa382b7653ff607622a6d8e806d2788ccd124d5231e1205",
     "api-server/src/services/authoritative-paper-callback-owners.service.ts": "7812af2bfa71d255796ac6034108844038f54a06da2ef710c9f6d8f32ddfdae0",
-    "api-server/src/services/authoritative-paper-evidence-sources.service.ts": "238ea56a1232cfc120b2fcdc5f4f062bb46f7798cd70948af89c2d12c2369cca",
-    "api-server/src/services/authoritative-paper-execution-cost-sources.service.ts": "05084c754f4fd10cf0abab2595eac875efa79089a251747a580b6ef4906ee3d5",
+    "api-server/src/services/authoritative-paper-evidence-sources.service.ts": "6f71f1e6bc5933ba36cb6e565ec51c3faac9d202500e1cf5833485c268c18382",
+    "api-server/src/services/authoritative-paper-execution-cost-sources.service.ts": "b147b3d37c9db02c0a1546b68d8f036f94b2ff5891382986dac4b23f41ab6c17",
     "api-server/src/services/authoritative-paper-generic-risk-policy-producer.service.ts": "0d0a188033aa96e965eb94c3f52f2c59b0deb3e962c991e42d628f24219d06b5",
     "api-server/src/services/authoritative-paper-risk-sizing-source.service.ts": "aa9775518fd8cf13b804ba10ab21a195f1634b41060c7d5ba63189cb5b94ce1a",
     "api-server/src/services/authoritative-paper-runtime-package.entry.ts": "48af027f1c340ec87407cf776b1b3d33c228385b2c431f204561c2e760c15945",
@@ -71,7 +71,7 @@
     "api-server/src/services/public-market-http.ts": "f1ec00932db5a2e21c0e32d9c73026a4246cf162608eec153f05745079ddd9ce",
     "api-server/src/services/scanner-candidate-ranking.service.ts": "84c24ec9729e4a5e36f7360ad1a6f4de2b8a8ed40c5a6ae9071fa810cb2ae82d",
     "api-server/src/services/scanner-canonical-paper-identity.service.ts": "160c0310312045f06c772604f5abe440f6e89485ae9d737592899d48bf034bb4",
-    "api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.ts": "c39a2a880e435fc56fe8b317f1c69542cf3db716e02e554cb547f4ee01cff468",
+    "api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.ts": "2be1792a9fe142ad5378f92ce2252bff943a67d0813fda8c9115395e3d4da50c",
     "api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.ts": "8c7563936de865e9103d73d15c0442a44f1cf33426315e758abad83d96880e0c",
     "api-server/src/services/scanner-crypto-price-precision.service.ts": "4cd040019834e14c4436d1adfd0a43f98acf2b473c510fa485f236d2a85a757b",
     "api-server/src/services/scanner-data-quality.service.ts": "ba6f09b7589711c119294a1c8c47c12dfed93db3e4570c5e39c40db9d2c55551",
@@ -91,7 +91,7 @@
     "market-intelligence-sidecar/src/execution-quality.mjs": "f91139e1a06c26c3ac42920b3f95271aa96ee4bfacc228236ad4b313444c1cb8",
     "market-prediction-lab/src/bitget-position-tier-v1.js": "ddfa77300339b0968e719bd547a84389c890cc1d03982ec3d2d7d30859f6ed01"
   },
-  "bundleSha256": "1520bfdd62b71e6fb85558b53a3ce2bff1c3e386360447f20d24a27bfb571947",
+  "bundleSha256": "32ce994f056817eceb8e5223d052fac2f6cb540ec0c6229903e2dd02cf6ce805",
   "admissionBundleSchemaVersion": "scanner-paper-admission-evidence-bundle-v1",
   "paperStateSnapshotSchemaVersion": "paper-trading-state-snapshot-v2",
   "callbackOwnerContractSchemaVersion": "authoritative-paper-callback-owner-contract-v1",
