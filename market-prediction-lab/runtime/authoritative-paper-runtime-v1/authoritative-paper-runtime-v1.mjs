@@ -2140,7 +2140,7 @@ var ProviderAdmissionControl = class {
       throw error;
     }
     if (halfOpenProbe) state.halfOpenProbeActive = true;
-    const record5 = {
+    const record6 = {
       id: this.nextId,
       admittedAt: now,
       state,
@@ -2151,7 +2151,7 @@ var ProviderAdmissionControl = class {
       halfOpenProbe
     };
     this.nextId += 1;
-    this.outstanding.set(record5.id, record5);
+    this.outstanding.set(record6.id, record6);
     this.admittedActive += 1;
     this.physicalOutstanding += 1;
     state.admittedActive += 1;
@@ -2174,11 +2174,11 @@ var ProviderAdmissionControl = class {
     );
     const task = Promise.resolve().then(taskFactory).then(
       (value) => {
-        this.settlePhysical(record5);
+        this.settlePhysical(record6);
         return value;
       },
       (reason) => {
-        this.settlePhysical(record5);
+        this.settlePhysical(record6);
         throw reason;
       }
     );
@@ -2187,7 +2187,7 @@ var ProviderAdmissionControl = class {
     const settleLogical = (status) => {
       if (logicalSettled) return;
       logicalSettled = true;
-      this.settleLogical(record5, status);
+      this.settleLogical(record6, status);
     };
     return {
       task,
@@ -2214,7 +2214,7 @@ var ProviderAdmissionControl = class {
       rejectedCapacityTotal: state.rejectedCapacityTotal,
       circuitOpenTotal: state.circuitOpenTotal,
       circuitTripTotal: state.circuitTripTotal,
-      oldestOutstandingAgeMs: this.oldestAge(now, (record5) => record5.state === state),
+      oldestOutstandingAgeMs: this.oldestAge(now, (record6) => record6.state === state),
       consecutiveTimeouts: state.consecutiveTimeouts,
       operations: [...state.operations.values()].map((operation) => ({
         operationClass: operation.operationClass,
@@ -2227,7 +2227,7 @@ var ProviderAdmissionControl = class {
         circuitOpenTotal: operation.circuitOpenTotal,
         oldestOutstandingAgeMs: this.oldestAge(
           now,
-          (record5) => record5.state === state && record5.operation === operation
+          (record6) => record6.state === state && record6.operation === operation
         )
       })).sort((left, right) => left.operationClass.localeCompare(right.operationClass))
     })).sort((left, right) => `${left.provider}:${left.domain}`.localeCompare(`${right.provider}:${right.domain}`));
@@ -2301,68 +2301,68 @@ var ProviderAdmissionControl = class {
     operation.circuitOpenTotal += 1;
     return new ProviderAdmissionError("CIRCUIT_OPEN", Math.max(1, retryAfterMs));
   }
-  settleLogical(record5, status) {
-    if (record5.logicalStatus !== "active") return;
-    record5.logicalStatus = status;
+  settleLogical(record6, status) {
+    if (record6.logicalStatus !== "active") return;
+    record6.logicalStatus = status;
     this.admittedActive = Math.max(0, this.admittedActive - 1);
-    record5.state.admittedActive = Math.max(0, record5.state.admittedActive - 1);
-    record5.operation.admittedActive = Math.max(0, record5.operation.admittedActive - 1);
+    record6.state.admittedActive = Math.max(0, record6.state.admittedActive - 1);
+    record6.operation.admittedActive = Math.max(0, record6.operation.admittedActive - 1);
     if (status === "timed_out") {
-      record5.state.consecutiveTimeouts += 1;
-      if (!record5.physicalSettled) {
+      record6.state.consecutiveTimeouts += 1;
+      if (!record6.physicalSettled) {
         this.timedOutOutstanding += 1;
-        record5.state.timedOutOutstanding += 1;
-        record5.operation.timedOutOutstanding += 1;
+        record6.state.timedOutOutstanding += 1;
+        record6.operation.timedOutOutstanding += 1;
       }
-      if (record5.halfOpenProbe || record5.state.consecutiveTimeouts >= this.timeoutThreshold) {
-        this.tripCircuit(record5.state);
+      if (record6.halfOpenProbe || record6.state.consecutiveTimeouts >= this.timeoutThreshold) {
+        this.tripCircuit(record6.state);
       }
-      this.touchProvider(record5.state);
-      this.touchOperation(record5.state, record5.operation);
-      this.cleanupTelemetry(record5.state);
+      this.touchProvider(record6.state);
+      this.touchOperation(record6.state, record6.operation);
+      this.cleanupTelemetry(record6.state);
       return;
     }
     if (status === "completed") {
-      record5.state.consecutiveTimeouts = 0;
-      if (record5.halfOpenProbe) this.closeCircuit(record5.state);
-      this.touchProvider(record5.state);
-      this.touchOperation(record5.state, record5.operation);
-      this.cleanupTelemetry(record5.state);
+      record6.state.consecutiveTimeouts = 0;
+      if (record6.halfOpenProbe) this.closeCircuit(record6.state);
+      this.touchProvider(record6.state);
+      this.touchOperation(record6.state, record6.operation);
+      this.cleanupTelemetry(record6.state);
       return;
     }
     if (status === "rejected") {
-      record5.state.consecutiveTimeouts = 0;
-      if (record5.halfOpenProbe) this.tripCircuit(record5.state);
-      this.touchProvider(record5.state);
-      this.touchOperation(record5.state, record5.operation);
-      this.cleanupTelemetry(record5.state);
+      record6.state.consecutiveTimeouts = 0;
+      if (record6.halfOpenProbe) this.tripCircuit(record6.state);
+      this.touchProvider(record6.state);
+      this.touchOperation(record6.state, record6.operation);
+      this.cleanupTelemetry(record6.state);
       return;
     }
-    if (record5.halfOpenProbe) this.tripCircuit(record5.state);
-    this.touchProvider(record5.state);
-    this.touchOperation(record5.state, record5.operation);
-    this.cleanupTelemetry(record5.state);
+    if (record6.halfOpenProbe) this.tripCircuit(record6.state);
+    this.touchProvider(record6.state);
+    this.touchOperation(record6.state, record6.operation);
+    this.cleanupTelemetry(record6.state);
   }
-  settlePhysical(record5) {
-    if (record5.physicalSettled) return;
-    record5.physicalSettled = true;
-    this.outstanding.delete(record5.id);
+  settlePhysical(record6) {
+    if (record6.physicalSettled) return;
+    record6.physicalSettled = true;
+    this.outstanding.delete(record6.id);
     this.physicalOutstanding = Math.max(0, this.physicalOutstanding - 1);
-    record5.state.physicalOutstanding = Math.max(0, record5.state.physicalOutstanding - 1);
-    record5.operation.physicalOutstanding = Math.max(0, record5.operation.physicalOutstanding - 1);
-    if (record5.logicalStatus === "timed_out") {
+    record6.state.physicalOutstanding = Math.max(0, record6.state.physicalOutstanding - 1);
+    record6.operation.physicalOutstanding = Math.max(0, record6.operation.physicalOutstanding - 1);
+    if (record6.logicalStatus === "timed_out") {
       this.timedOutOutstanding = Math.max(0, this.timedOutOutstanding - 1);
-      record5.state.timedOutOutstanding = Math.max(0, record5.state.timedOutOutstanding - 1);
-      record5.operation.timedOutOutstanding = Math.max(0, record5.operation.timedOutOutstanding - 1);
+      record6.state.timedOutOutstanding = Math.max(0, record6.state.timedOutOutstanding - 1);
+      record6.operation.timedOutOutstanding = Math.max(0, record6.operation.timedOutOutstanding - 1);
     }
-    if (record5.logicalStatus === "timed_out" || record5.logicalStatus === "aborted") {
+    if (record6.logicalStatus === "timed_out" || record6.logicalStatus === "aborted") {
       this.lateSettledTotal += 1;
-      record5.state.lateSettledTotal += 1;
-      record5.operation.lateSettledTotal += 1;
+      record6.state.lateSettledTotal += 1;
+      record6.operation.lateSettledTotal += 1;
     }
-    this.touchProvider(record5.state);
-    this.touchOperation(record5.state, record5.operation);
-    this.cleanupTelemetry(record5.state);
+    this.touchProvider(record6.state);
+    this.touchOperation(record6.state, record6.operation);
+    this.cleanupTelemetry(record6.state);
   }
   tripCircuit(state) {
     if (state.circuitState === "open") return;
@@ -2416,8 +2416,8 @@ var ProviderAdmissionControl = class {
   }
   oldestAge(now, matches) {
     let oldest = 0;
-    for (const record5 of this.outstanding.values()) {
-      if (matches(record5)) oldest = Math.max(oldest, Math.max(0, now - record5.admittedAt));
+    for (const record6 of this.outstanding.values()) {
+      if (matches(record6)) oldest = Math.max(oldest, Math.max(0, now - record6.admittedAt));
     }
     return oldest;
   }
@@ -2676,8 +2676,8 @@ function strategyScopedBaseSignalId(card) {
   return `${baseSignalId}:strategy:${card.strategyMode}`;
 }
 function applyScannerSignalLifecycle(memberId, cards, now = Date.now()) {
-  for (const [key, record5] of records) {
-    if (now - record5.lastSeenAt > RECORD_TTL_MS) records.delete(key);
+  for (const [key, record6] of records) {
+    if (now - record6.lastSeenAt > RECORD_TTL_MS) records.delete(key);
   }
   const alerts = [];
   const updated = cards.map((card) => {
@@ -5481,19 +5481,19 @@ var StrategyPromotionService = class {
     return this.list().items.find((item) => item.identity.strategyId === strategyId) ?? null;
   }
   history(strategyId) {
-    const record5 = this.get(strategyId);
-    if (!record5) return null;
-    const events = record5.stages.filter((stage) => stage.status !== "NOT_STARTED").map((stage) => ({ at: stage.validatedAt ?? stage.observedAt, type: "STAGE_EVALUATED", stage: stage.stage, status: stage.status, source: stage.source, sourceSha: stage.sourceSha }));
-    events.push({ at: this.now().toISOString(), type: "PROMOTION_STATE_EVALUATED", stage: "PROMOTION", status: record5.promotionState, source: "strategy-promotion.service.ts", sourceSha: VALID_SHA.test(this.sourceSha) ? this.sourceSha : null });
+    const record6 = this.get(strategyId);
+    if (!record6) return null;
+    const events = record6.stages.filter((stage) => stage.status !== "NOT_STARTED").map((stage) => ({ at: stage.validatedAt ?? stage.observedAt, type: "STAGE_EVALUATED", stage: stage.stage, status: stage.status, source: stage.source, sourceSha: stage.sourceSha }));
+    events.push({ at: this.now().toISOString(), type: "PROMOTION_STATE_EVALUATED", stage: "PROMOTION", status: record6.promotionState, source: "strategy-promotion.service.ts", sourceSha: VALID_SHA.test(this.sourceSha) ? this.sourceSha : null });
     return { strategyId, events, executionAuthority: STRATEGY_PROMOTION_EXECUTION_AUTHORITY };
   }
   evidenceFor(strategyId) {
-    const record5 = this.get(strategyId);
-    if (!record5) return null;
+    const record6 = this.get(strategyId);
+    if (!record6) return null;
     return {
       strategyId,
-      parameterHash: record5.identity.parameterHash,
-      stages: record5.stages,
+      parameterHash: record6.identity.parameterHash,
+      stages: record6.stages,
       sources: sourceRegistry(),
       exactIdentityRequired: true,
       inventedMetricsAllowed: false,
@@ -5560,15 +5560,15 @@ function canonicalHorizonBars(card, timeframe) {
 }
 function exactPromotionIdentity(input) {
   const profile = getScannerStrategyProfile(input.market, input.profileHorizon);
-  const matches = input.records.filter((record6) => record6.identity.market === input.market && record6.identity.strategyHorizon === input.profileHorizon && record6.identity.direction === input.direction);
+  const matches = input.records.filter((record7) => record7.identity.market === input.market && record7.identity.strategyHorizon === input.profileHorizon && record7.identity.direction === input.direction);
   const blockers = [];
   if (matches.length !== 1) {
     blockers.push(matches.length === 0 ? "CANONICAL_PROMOTION_IDENTITY_REQUIRED" : "CANONICAL_PROMOTION_IDENTITY_AMBIGUOUS");
     return { record: null, blockers };
   }
-  const record5 = matches[0];
-  const identity2 = record5.identity;
-  if (record5.executionAuthority !== "NONE" || record5.liveTradingAuthority !== false || record5.privateTradingApiCount !== 0) {
+  const record6 = matches[0];
+  const identity2 = record6.identity;
+  if (record6.executionAuthority !== "NONE" || record6.liveTradingAuthority !== false || record6.privateTradingApiCount !== 0) {
     blockers.push("CANONICAL_PROMOTION_SAFETY_ENVELOPE_INVALID");
   }
   if (identity2.strategyFamily !== "CANONICAL_SCANNER_PROFILE") blockers.push("PROMOTION_STRATEGY_FAMILY_MISMATCH");
@@ -5580,7 +5580,7 @@ function exactPromotionIdentity(input) {
     blockers.push("PROMOTION_RESEARCH_SHA_MISMATCH");
   }
   if (!nonEmpty4(identity2.costPolicyVersion)) blockers.push("PROMOTION_COST_POLICY_VERSION_REQUIRED");
-  return { record: blockers.length === 0 ? record5 : null, blockers };
+  return { record: blockers.length === 0 ? record6 : null, blockers };
 }
 function resolveScannerCanonicalPaperIdentity(input) {
   const researchCodeSha = input.researchCodeSha.trim().toLowerCase();
@@ -6231,111 +6231,6 @@ async function fetchPublicMarketJson(value, options) {
   );
 }
 
-// src/services/authoritative-paper-latency-cost-evidence.service.ts
-var AUTHORITATIVE_PAPER_LATENCY_COST_EVIDENCE_VERSION = "authoritative-paper-latency-cost-evidence-v1";
-var DEFAULT_MAXIMUM_AGE_MS = 3e4;
-var DEFAULT_MAXIMUM_REQUEST_DURATION_MS = 3e4;
-function finite11(value) {
-  return typeof value === "number" && Number.isFinite(value);
-}
-function positive6(value) {
-  return finite11(value) && value > 0;
-}
-function nonEmpty6(value) {
-  return typeof value === "string" && value.trim().length > 0;
-}
-function blocked4(blockers) {
-  return Object.freeze({
-    schemaVersion: AUTHORITATIVE_PAPER_LATENCY_COST_EVIDENCE_VERSION,
-    status: "BLOCKED_DATA",
-    evidence: null,
-    observedRoundTripMs: null,
-    signedMidpointMovePercent: null,
-    adverseMovePercent: null,
-    blockers: Object.freeze([...blockers]),
-    executionAuthority: "NONE",
-    privateApiUsed: false,
-    liveTrading: false,
-    realFillObserved: false,
-    unknownCostIsZero: false
-  });
-}
-function buildAuthoritativePaperLatencyCostEvidence(input) {
-  const nowMs = positive6(input?.nowMs) ? input.nowMs : Date.now();
-  const maximumAgeMs = positive6(input?.maximumAgeMs) ? input.maximumAgeMs : DEFAULT_MAXIMUM_AGE_MS;
-  const maximumRequestDurationMs = positive6(input?.maximumRequestDurationMs) ? input.maximumRequestDurationMs : DEFAULT_MAXIMUM_REQUEST_DURATION_MS;
-  const blockers = [];
-  if (input?.direction !== "LONG" && input?.direction !== "SHORT") blockers.push("LATENCY_DIRECTION_INVALID");
-  if (!positive6(input?.requestStartedAtMs) || !positive6(input?.requestCompletedAtMs) || input.requestCompletedAtMs < input.requestStartedAtMs) {
-    blockers.push("LATENCY_REQUEST_TIMING_INVALID");
-  }
-  const roundTripMs = positive6(input?.requestStartedAtMs) && positive6(input?.requestCompletedAtMs) ? input.requestCompletedAtMs - input.requestStartedAtMs : null;
-  if (roundTripMs != null && roundTripMs > maximumRequestDurationMs) {
-    blockers.push("LATENCY_REQUEST_DURATION_EXCEEDS_POLICY");
-  }
-  const pre = input?.preRequest;
-  const post = input?.postRequest;
-  if (!positive6(pre?.midpoint) || !positive6(pre?.observedAtMs) || !nonEmpty6(pre?.source)) {
-    blockers.push("LATENCY_PRE_REQUEST_MIDPOINT_UNAVAILABLE");
-  }
-  if (!positive6(post?.midpoint) || !positive6(post?.observedAtMs) || !nonEmpty6(post?.source)) {
-    blockers.push("LATENCY_POST_REQUEST_MIDPOINT_UNAVAILABLE");
-  }
-  if (positive6(pre?.observedAtMs) && positive6(input?.requestStartedAtMs) && pre.observedAtMs > input.requestStartedAtMs) {
-    blockers.push("LATENCY_PRE_REQUEST_TIMESTAMP_NOT_BRACKETING_REQUEST");
-  }
-  if (positive6(post?.observedAtMs) && positive6(input?.requestCompletedAtMs) && post.observedAtMs < input.requestCompletedAtMs) {
-    blockers.push("LATENCY_POST_REQUEST_TIMESTAMP_NOT_BRACKETING_REQUEST");
-  }
-  if (positive6(post?.observedAtMs) && post.observedAtMs > nowMs) {
-    blockers.push("LATENCY_POST_REQUEST_EVIDENCE_FROM_FUTURE");
-  } else if (positive6(post?.observedAtMs) && nowMs - post.observedAtMs > maximumAgeMs) {
-    blockers.push("LATENCY_POST_REQUEST_EVIDENCE_STALE");
-  }
-  if (positive6(pre?.observedAtMs) && positive6(post?.observedAtMs) && post.observedAtMs < pre.observedAtMs) {
-    blockers.push("LATENCY_MIDPOINT_OBSERVATION_ORDER_INVALID");
-  }
-  if (blockers.length > 0) return blocked4(blockers);
-  const signedMovePercent = input.direction === "LONG" ? (post.midpoint - pre.midpoint) / pre.midpoint * 100 : (pre.midpoint - post.midpoint) / pre.midpoint * 100;
-  const adverseMovePercent = Math.max(0, signedMovePercent);
-  const observedAtMs = post.observedAtMs;
-  const evidence = Object.freeze({
-    valuePercent: adverseMovePercent,
-    quality: "ESTIMATED",
-    source: `PUBLIC_MIDPOINT_ADVERSE_MOVE_OVER_OBSERVED_REQUEST_LATENCY:${pre.source.trim()}->${post.source.trim()}`,
-    observedAtMs
-  });
-  return Object.freeze({
-    schemaVersion: AUTHORITATIVE_PAPER_LATENCY_COST_EVIDENCE_VERSION,
-    status: "PRESENT",
-    evidence,
-    observedRoundTripMs: roundTripMs,
-    signedMidpointMovePercent: signedMovePercent,
-    adverseMovePercent,
-    blockers: Object.freeze([]),
-    executionAuthority: "NONE",
-    privateApiUsed: false,
-    liveTrading: false,
-    realFillObserved: false,
-    unknownCostIsZero: false
-  });
-}
-var AUTHORITATIVE_PAPER_LATENCY_COST_EVIDENCE_SAFETY = Object.freeze({
-  schemaVersion: AUTHORITATIVE_PAPER_LATENCY_COST_EVIDENCE_VERSION,
-  publicMarketDataOnly: true,
-  observedRequestDurationRequired: true,
-  temporalBracketingRequired: true,
-  favorableMoveMayProduceObservedZeroAdverseCost: true,
-  missingDataMayProduceZeroCost: false,
-  causalExecutionClaimAllowed: false,
-  realFillObserved: false,
-  executionAuthority: "NONE",
-  privateApiAllowed: false,
-  liveTrading: false,
-  orderSubmissionAllowed: false,
-  financialMutationAllowed: false
-});
-
 // src/services/authoritative-paper-execution-cost-sources.service.ts
 var AUTHORITATIVE_PAPER_EXECUTION_COST_SOURCES_VERSION = "authoritative-paper-execution-cost-sources-v1";
 var AUTHORITATIVE_PAPER_EXECUTION_SIZING_EVIDENCE_VERSION = "authoritative-paper-execution-sizing-evidence-v1";
@@ -6361,17 +6256,17 @@ function finiteScalar(value) {
 function finiteNumber2(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
-function positive7(value) {
+function positive6(value) {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 function nonNegative5(value) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
-function nonEmpty7(value) {
+function nonEmpty6(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 function fresh2(observedAtMs, maximumAgeMs, nowMs) {
-  return positive7(observedAtMs) && positive7(maximumAgeMs) && observedAtMs <= nowMs && nowMs - observedAtMs <= maximumAgeMs;
+  return positive6(observedAtMs) && positive6(maximumAgeMs) && observedAtMs <= nowMs && nowMs - observedAtMs <= maximumAgeMs;
 }
 function abortSignal(value) {
   return value instanceof AbortSignal ? value : void 0;
@@ -6385,10 +6280,10 @@ function exactSha2(value) {
   return typeof value === "string" && /^[0-9a-f]{40}$/u.test(value);
 }
 function nonEmptyStrings(value) {
-  return Array.isArray(value) && value.length > 0 && value.every(nonEmpty7);
+  return Array.isArray(value) && value.length > 0 && value.every(nonEmpty6);
 }
 function normalizedFundingSymbol(value) {
-  if (!nonEmpty7(value)) return null;
+  if (!nonEmpty6(value)) return null;
   try {
     return normalizeBitgetFuturesSymbol(value);
   } catch {
@@ -6442,8 +6337,8 @@ function blockedFundingHorizonResult(blockers, partial = {}) {
   });
 }
 function buildAuthoritativePaperFundingHoldingHorizonCost(input) {
-  const nowMs = positive7(input?.nowMs) ? input.nowMs : Date.now();
-  const maximumAgeMs = positive7(input?.maximumAgeMs) ? input.maximumAgeMs : PUBLIC_L2_MAXIMUM_AGE_MS;
+  const nowMs = positive6(input?.nowMs) ? input.nowMs : Date.now();
+  const maximumAgeMs = positive6(input?.maximumAgeMs) ? input.maximumAgeMs : PUBLIC_L2_MAXIMUM_AGE_MS;
   const candidate = record(input?.candidate);
   const signal = record(candidate?.signal);
   const strategyIdentity = record(signal?.strategyIdentity);
@@ -6453,20 +6348,20 @@ function buildAuthoritativePaperFundingHoldingHorizonCost(input) {
   const market = signal?.market === "CRYPTO_FUTURES" ? "CRYPTO_FUTURES" : null;
   const symbol = normalizedFundingSymbol(signal?.symbol);
   const direction = signal?.direction === "LONG" || signal?.direction === "SHORT" ? signal.direction : null;
-  const signalId2 = nonEmpty7(signal?.signalId) ? signal.signalId.trim() : null;
-  const strategyId = nonEmpty7(strategyIdentity?.strategyId) ? strategyIdentity.strategyId.trim() : null;
+  const signalId2 = nonEmpty6(signal?.signalId) ? signal.signalId.trim() : null;
+  const strategyId = nonEmpty6(strategyIdentity?.strategyId) ? strategyIdentity.strategyId.trim() : null;
   const candidateResearchSha = exactSha2(strategyIdentity?.researchCodeSha) ? strategyIdentity.researchCodeSha : null;
-  const candidateCostPolicyId = nonEmpty7(strategyIdentity?.costPolicyVersion) ? strategyIdentity.costPolicyVersion.trim() : null;
-  const riskPolicyId = nonEmpty7(riskPolicy2?.policyId) ? riskPolicy2.policyId.trim() : null;
-  const riskPolicyVersion = nonEmpty7(riskPolicy2?.policyVersion) ? riskPolicy2.policyVersion.trim() : null;
-  const riskPolicySource = nonEmpty7(riskPolicy2?.source) ? riskPolicy2.source.trim() : null;
+  const candidateCostPolicyId = nonEmpty6(strategyIdentity?.costPolicyVersion) ? strategyIdentity.costPolicyVersion.trim() : null;
+  const riskPolicyId = nonEmpty6(riskPolicy2?.policyId) ? riskPolicy2.policyId.trim() : null;
+  const riskPolicyVersion = nonEmpty6(riskPolicy2?.policyVersion) ? riskPolicy2.policyVersion.trim() : null;
+  const riskPolicySource = nonEmpty6(riskPolicy2?.source) ? riskPolicy2.source.trim() : null;
   const riskPolicyProvenance = nonEmptyStrings(riskPolicy2?.provenance) ? Object.freeze(riskPolicy2.provenance.map((value) => value.trim())) : null;
-  const costPolicyId = nonEmpty7(input?.costPolicyId) ? input.costPolicyId.trim() : null;
+  const costPolicyId = nonEmpty6(input?.costPolicyId) ? input.costPolicyId.trim() : null;
   const researchCodeSha = exactSha2(input?.researchCodeSha) ? input.researchCodeSha : null;
   const entryTimestampMs = finiteNumber2(input?.entryTimestampMs);
   const exitTimestampMs = finiteNumber2(input?.expectedExitTimestampMs);
   const positionNotional = finiteNumber2(input?.positionNotional);
-  if (!positive7(nowMs) || !positive7(maximumAgeMs)) blockers.push("FUNDING_COST_CLOCK_INVALID");
+  if (!positive6(nowMs) || !positive6(maximumAgeMs)) blockers.push("FUNDING_COST_CLOCK_INVALID");
   if (!candidate || !signal || !strategyIdentity || !signalId2 || !strategyId) {
     blockers.push("CANONICAL_FUNDING_CANDIDATE_IDENTITY_REQUIRED");
   }
@@ -6485,19 +6380,19 @@ function buildAuthoritativePaperFundingHoldingHorizonCost(input) {
   const signalTimestampMs = finiteNumber2(signal?.timestampMs);
   const signalTtlMs = finiteNumber2(signal?.ttlMs);
   const candidateExitTimestampMs = finiteNumber2(signal?.expiresAtMs);
-  if (!positive7(signalTimestampMs) || !positive7(signalTtlMs) || !positive7(candidateExitTimestampMs) || candidateExitTimestampMs - signalTimestampMs !== signalTtlMs) {
+  if (!positive6(signalTimestampMs) || !positive6(signalTtlMs) || !positive6(candidateExitTimestampMs) || candidateExitTimestampMs - signalTimestampMs !== signalTtlMs) {
     blockers.push("FUNDING_HOLDING_HORIZON_MISSING_OR_INVALID");
   }
-  if (!positive7(entryTimestampMs) || !positive7(exitTimestampMs) || exitTimestampMs <= entryTimestampMs) {
+  if (!positive6(entryTimestampMs) || !positive6(exitTimestampMs) || exitTimestampMs <= entryTimestampMs) {
     blockers.push("FUNDING_HOLDING_INTERVAL_MISSING_OR_INVALID");
   }
-  if (positive7(signalTimestampMs) && positive7(entryTimestampMs) && entryTimestampMs < signalTimestampMs) {
+  if (positive6(signalTimestampMs) && positive6(entryTimestampMs) && entryTimestampMs < signalTimestampMs) {
     blockers.push("FUNDING_ENTRY_PRECEDES_CANDIDATE");
   }
-  if (positive7(candidateExitTimestampMs) && exitTimestampMs !== candidateExitTimestampMs) {
+  if (positive6(candidateExitTimestampMs) && exitTimestampMs !== candidateExitTimestampMs) {
     blockers.push("FUNDING_EXIT_HORIZON_NOT_CANONICAL");
   }
-  if (!positive7(positionNotional)) blockers.push("FUNDING_POSITION_NOTIONAL_REQUIRED");
+  if (!positive6(positionNotional)) blockers.push("FUNDING_POSITION_NOTIONAL_REQUIRED");
   if (!riskPolicy2 || riskPolicy2.schemaVersion !== "authoritative-paper-generic-risk-policy-evidence-v1") {
     blockers.push("FUNDING_RISK_POLICY_IDENTITY_REQUIRED");
   }
@@ -6530,18 +6425,18 @@ function buildAuthoritativePaperFundingHoldingHorizonCost(input) {
   const nextFundingTimestampMs = finiteNumber2(publicEvidence?.nextFundingUpdateMs);
   const observedAtMs = finiteNumber2(publicEvidence?.observedAtMs);
   if (fundingRateDecimal == null) blockers.push("FUNDING_RATE_MISSING");
-  if (!positive7(fundingIntervalHours)) blockers.push("FUNDING_INTERVAL_MISSING_OR_INVALID");
-  if (!positive7(nextFundingTimestampMs)) blockers.push("FUNDING_NEXT_TIMESTAMP_MISSING_OR_INVALID");
-  if (!positive7(observedAtMs) || !fresh2(observedAtMs, maximumAgeMs, nowMs)) {
+  if (!positive6(fundingIntervalHours)) blockers.push("FUNDING_INTERVAL_MISSING_OR_INVALID");
+  if (!positive6(nextFundingTimestampMs)) blockers.push("FUNDING_NEXT_TIMESTAMP_MISSING_OR_INVALID");
+  if (!positive6(observedAtMs) || !fresh2(observedAtMs, maximumAgeMs, nowMs)) {
     blockers.push("FUNDING_SOURCE_STALE_OR_INVALID");
   }
-  if (positive7(observedAtMs) && positive7(entryTimestampMs) && entryTimestampMs < observedAtMs) {
+  if (positive6(observedAtMs) && positive6(entryTimestampMs) && entryTimestampMs < observedAtMs) {
     blockers.push("FUNDING_ENTRY_PRECEDES_SNAPSHOT");
   }
-  if (positive7(observedAtMs) && positive7(nextFundingTimestampMs) && nextFundingTimestampMs < observedAtMs) {
+  if (positive6(observedAtMs) && positive6(nextFundingTimestampMs) && nextFundingTimestampMs < observedAtMs) {
     blockers.push("FUNDING_NEXT_TIMESTAMP_PRECEDES_SNAPSHOT");
   }
-  if (positive7(entryTimestampMs) && positive7(nextFundingTimestampMs) && nextFundingTimestampMs < entryTimestampMs) {
+  if (positive6(entryTimestampMs) && positive6(nextFundingTimestampMs) && nextFundingTimestampMs < entryTimestampMs) {
     blockers.push("FUNDING_NEXT_TIMESTAMP_PRECEDES_ENTRY");
   }
   const partial = {
@@ -6556,17 +6451,17 @@ function buildAuthoritativePaperFundingHoldingHorizonCost(input) {
     costPolicyId,
     entryTimestampMs,
     exitTimestampMs,
-    holdingHorizonMs: positive7(entryTimestampMs) && positive7(exitTimestampMs) ? exitTimestampMs - entryTimestampMs : null,
-    positionNotional: positive7(positionNotional) ? positionNotional : null,
+    holdingHorizonMs: positive6(entryTimestampMs) && positive6(exitTimestampMs) ? exitTimestampMs - entryTimestampMs : null,
+    positionNotional: positive6(positionNotional) ? positionNotional : null,
     fundingRateDecimal,
-    fundingIntervalHours: positive7(fundingIntervalHours) ? fundingIntervalHours : null,
-    nextFundingTimestampMs: positive7(nextFundingTimestampMs) ? nextFundingTimestampMs : null,
-    observedAtMs: positive7(observedAtMs) ? observedAtMs : null,
+    fundingIntervalHours: positive6(fundingIntervalHours) ? fundingIntervalHours : null,
+    nextFundingTimestampMs: positive6(nextFundingTimestampMs) ? nextFundingTimestampMs : null,
+    observedAtMs: positive6(observedAtMs) ? observedAtMs : null,
     maximumAgeMs,
-    ageMs: positive7(observedAtMs) && nowMs >= observedAtMs ? nowMs - observedAtMs : null,
-    freshness: positive7(observedAtMs) && fresh2(observedAtMs, maximumAgeMs, nowMs) ? "FRESH" : null
+    ageMs: positive6(observedAtMs) && nowMs >= observedAtMs ? nowMs - observedAtMs : null,
+    freshness: positive6(observedAtMs) && fresh2(observedAtMs, maximumAgeMs, nowMs) ? "FRESH" : null
   };
-  if (blockers.length > 0 || !market || !symbol || !direction || !signalId2 || !strategyId || !researchCodeSha || !riskPolicyId || !riskPolicyVersion || !riskPolicySource || !riskPolicyProvenance || !costPolicyId || !positive7(entryTimestampMs) || !positive7(exitTimestampMs) || !positive7(positionNotional) || fundingRateDecimal == null || !positive7(fundingIntervalHours) || !positive7(nextFundingTimestampMs) || !positive7(observedAtMs)) {
+  if (blockers.length > 0 || !market || !symbol || !direction || !signalId2 || !strategyId || !researchCodeSha || !riskPolicyId || !riskPolicyVersion || !riskPolicySource || !riskPolicyProvenance || !costPolicyId || !positive6(entryTimestampMs) || !positive6(exitTimestampMs) || !positive6(positionNotional) || fundingRateDecimal == null || !positive6(fundingIntervalHours) || !positive6(nextFundingTimestampMs) || !positive6(observedAtMs)) {
     return blockedFundingHorizonResult(blockers, partial);
   }
   const intervalMs = fundingIntervalHours * 60 * 6e4;
@@ -6721,9 +6616,9 @@ function buildAuthoritativePaperFundingHoldingHorizonCost(input) {
 function scannerExecutionIdentity(context) {
   const card = record(context?.card);
   if (!card || context?.market !== "CRYPTO_FUTURES") return null;
-  const signalId2 = nonEmpty7(card.signalId) ? card.signalId.trim() : null;
+  const signalId2 = nonEmpty6(card.signalId) ? card.signalId.trim() : null;
   const direction = card.action === "LONG" || card.action === "SHORT" ? card.action : null;
-  if (!signalId2 || !nonEmpty7(card.symbol) || !direction) return null;
+  if (!signalId2 || !nonEmpty6(card.symbol) || !direction) return null;
   try {
     return freeze({ signalId: signalId2, symbol: normalizeBitgetFuturesSymbol(card.symbol), direction });
   } catch {
@@ -6734,7 +6629,7 @@ function validDepthLevel(value) {
   if (!Array.isArray(value) || value.length < 2) return false;
   const price = finiteScalar(value[0]);
   const size = finiteScalar(value[1]);
-  return positive7(price) && positive7(size);
+  return positive6(price) && positive6(size);
 }
 function normalizedLevels(value) {
   return Array.isArray(value) ? Object.freeze(value.filter(validDepthLevel).map((level) => Object.freeze([level[0], level[1]]))) : Object.freeze([]);
@@ -6750,7 +6645,7 @@ function bitgetPublicL2Url(symbol) {
 }
 function validatedSizingSnapshot(sizing, identity2, nowMs) {
   const policy = sizing?.riskPolicy;
-  const valid = sizing?.schemaVersion === AUTHORITATIVE_PAPER_EXECUTION_SIZING_EVIDENCE_VERSION && sizing.signalId === identity2.signalId && sizing.symbol === identity2.symbol && sizing.direction === identity2.direction && positive7(sizing.targetQuantity) && nonEmpty7(sizing.source) && fresh2(sizing.observedAtMs, sizing.maximumAgeMs, nowMs) && policy?.schemaVersion === "authoritative-paper-risk-policy-evidence-v1" && positive7(policy.leverage) && positive7(policy.riskPercent) && policy.riskPercent <= 1 && (policy.marginMode === "isolated" || policy.marginMode === "cross") && nonEmpty7(policy.source) && fresh2(policy.observedAtMs, policy.maximumAgeMs, nowMs);
+  const valid = sizing?.schemaVersion === AUTHORITATIVE_PAPER_EXECUTION_SIZING_EVIDENCE_VERSION && sizing.signalId === identity2.signalId && sizing.symbol === identity2.symbol && sizing.direction === identity2.direction && positive6(sizing.targetQuantity) && nonEmpty6(sizing.source) && fresh2(sizing.observedAtMs, sizing.maximumAgeMs, nowMs) && policy?.schemaVersion === "authoritative-paper-risk-policy-evidence-v1" && positive6(policy.leverage) && positive6(policy.riskPercent) && policy.riskPercent <= 1 && (policy.marginMode === "isolated" || policy.marginMode === "cross") && nonEmpty6(policy.source) && fresh2(policy.observedAtMs, policy.maximumAgeMs, nowMs);
   if (!valid) return null;
   return freeze({
     schemaVersion: sizing.schemaVersion,
@@ -6778,7 +6673,7 @@ async function collectAuthoritativePaperExecutionObservationInput(input) {
   if (typeof now !== "function") throw new TypeError("PUBLIC_L2_CLOCK_REQUIRED");
   const identity2 = scannerExecutionIdentity(input.context);
   const requestStartedAtMs = now();
-  if (!identity2 || !positive7(requestStartedAtMs)) return null;
+  if (!identity2 || !positive6(requestStartedAtMs)) return null;
   const sizing = validatedSizingSnapshot(input.sizingEvidence, identity2, requestStartedAtMs);
   if (!sizing) return null;
   const payload = record(await input.fetchPublicJson(bitgetPublicL2Url(identity2.symbol), {
@@ -6786,7 +6681,7 @@ async function collectAuthoritativePaperExecutionObservationInput(input) {
     signal: abortSignal(input.context.signal)
   }));
   const requestCompletedAtMs = now();
-  if (!positive7(requestCompletedAtMs) || requestCompletedAtMs < requestStartedAtMs) return null;
+  if (!positive6(requestCompletedAtMs) || requestCompletedAtMs < requestStartedAtMs) return null;
   if (!payload || payload.code !== "00000") return null;
   const data = record(payload.data);
   const observedAtMs = finiteScalar(data?.ts);
@@ -6826,7 +6721,7 @@ function unavailable(unit = "PERCENT") {
   });
 }
 function componentFromPercentEvidence(value, nowMs, maximumAgeMs) {
-  if (!value || !nonNegative5(value.valuePercent) || !nonEmpty7(value.source) || !COST_EVIDENCE_QUALITIES.has(value.quality) || !fresh2(value.observedAtMs, maximumAgeMs, nowMs) || value.quality === "NOT_APPLICABLE") return null;
+  if (!value || !nonNegative5(value.valuePercent) || !nonEmpty6(value.source) || !COST_EVIDENCE_QUALITIES.has(value.quality) || !fresh2(value.observedAtMs, maximumAgeMs, nowMs) || value.quality === "NOT_APPLICABLE") return null;
   return freeze({
     state: "PRESENT",
     value: value.valuePercent,
@@ -6865,7 +6760,7 @@ function referenceOnly(value, unit, quality, source, observedAtMs, nowMs, maximu
 function spreadPercent2(publicEvidence) {
   const bid = publicEvidence?.bidPrice;
   const ask = publicEvidence?.askPrice;
-  if (!positive7(bid) || !positive7(ask) || ask < bid) return null;
+  if (!positive6(bid) || !positive6(ask) || ask < bid) return null;
   const midpoint = (bid + ask) / 2;
   return midpoint > 0 ? (ask - bid) / midpoint * 100 : null;
 }
@@ -6873,7 +6768,7 @@ function observationRecord(observation) {
   return record(observation);
 }
 function resolvedSupplementalCostInput(input, nowMs, maximumAgeMs) {
-  if (!input || !nonEmpty7(input.costPolicyId) || !positive7(input.observedAtMs) || !fresh2(input.observedAtMs, maximumAgeMs, nowMs)) return null;
+  if (!input || !nonEmpty6(input.costPolicyId) || !positive6(input.observedAtMs) || !fresh2(input.observedAtMs, maximumAgeMs, nowMs)) return null;
   const latency = componentFromPercentEvidence(input.latency, nowMs, maximumAgeMs);
   const liquidityImpact = componentFromPercentEvidence(input.liquidityImpact, nowMs, maximumAgeMs);
   const partialFillImpact = componentFromPercentEvidence(input.partialFillImpact, nowMs, maximumAgeMs);
@@ -6891,8 +6786,8 @@ function resolvedSupplementalCostInput(input, nowMs, maximumAgeMs) {
   });
 }
 function auditAuthoritativeSupplementalCostSources(input = {}) {
-  const nowMs = positive7(input.nowMs) ? input.nowMs : Date.now();
-  const maximumAgeMs = positive7(input.maximumAgeMs) ? input.maximumAgeMs : PUBLIC_L2_MAXIMUM_AGE_MS;
+  const nowMs = positive6(input.nowMs) ? input.nowMs : Date.now();
+  const maximumAgeMs = positive6(input.maximumAgeMs) ? input.maximumAgeMs : PUBLIC_L2_MAXIMUM_AGE_MS;
   const publicEvidence = input.publicEvidence;
   const execution = observationRecord(input.executionObservation);
   const slippage = record(execution?.slippage);
@@ -6906,17 +6801,17 @@ function auditAuthoritativeSupplementalCostSources(input = {}) {
   const partialFillImpactCost = componentFromPercentEvidence(supplemental?.partialFillImpact, nowMs, maximumAgeMs);
   const fundingCost = supplemental?.funding?.quality === "NOT_APPLICABLE" ? null : componentFromPercentEvidence(supplemental?.funding, nowMs, maximumAgeMs);
   const blockers = [];
-  if (!supplemental || !nonEmpty7(supplemental.costPolicyId)) {
+  if (!supplemental || !nonEmpty6(supplemental.costPolicyId)) {
     blockers.push("SUPPLEMENTAL_COST_POLICY_EVIDENCE_UNAVAILABLE");
   }
-  if (!supplemental || !positive7(supplemental.observedAtMs) || !fresh2(supplemental.observedAtMs, maximumAgeMs, nowMs)) {
+  if (!supplemental || !positive6(supplemental.observedAtMs) || !fresh2(supplemental.observedAtMs, maximumAgeMs, nowMs)) {
     blockers.push("SUPPLEMENTAL_COST_OBSERVATION_UNAVAILABLE");
   }
   if (!latencyCost) blockers.push("LATENCY_COST_EVIDENCE_UNAVAILABLE");
   if (!liquidityImpactCost) blockers.push("LIQUIDITY_IMPACT_COST_EVIDENCE_UNAVAILABLE");
   if (!partialFillImpactCost) blockers.push("PARTIAL_FILL_COST_EVIDENCE_UNAVAILABLE");
   if (!fundingCost) blockers.push("FUNDING_EXECUTION_COST_EVIDENCE_UNAVAILABLE");
-  const observedAtMs = positive7(publicEvidence?.observedAtMs) ? publicEvidence.observedAtMs : null;
+  const observedAtMs = positive6(publicEvidence?.observedAtMs) ? publicEvidence.observedAtMs : null;
   const slippagePercent = finiteNumber2(slippage?.valuePercent);
   const slippageAtMs = finiteNumber2(slippage?.observedAtMs);
   const slippageQuality = slippage?.quality !== "NOT_APPLICABLE" && COST_EVIDENCE_QUALITIES.has(slippage?.quality) ? slippage?.quality : null;
@@ -6941,11 +6836,11 @@ function auditAuthoritativeSupplementalCostSources(input = {}) {
       spreadPercent2(publicEvidence),
       "OBSERVED",
       "BITGET_PUBLIC_BEST_BID_ASK",
-      positive7(publicEvidence?.tickerTimestampMs) ? publicEvidence.tickerTimestampMs : null,
+      positive6(publicEvidence?.tickerTimestampMs) ? publicEvidence.tickerTimestampMs : null,
       nowMs,
       maximumAgeMs
     ),
-    slippage: slippagePercent != null && slippagePercent >= 0 && slippageQuality != null && nonEmpty7(slippage?.source) && slippageAtMs != null && fresh2(slippageAtMs, maximumAgeMs, nowMs) ? freeze({
+    slippage: slippagePercent != null && slippagePercent >= 0 && slippageQuality != null && nonEmpty6(slippage?.source) && slippageAtMs != null && fresh2(slippageAtMs, maximumAgeMs, nowMs) ? freeze({
       state: "PRESENT",
       value: slippagePercent,
       unit: "PERCENT",
@@ -6959,7 +6854,7 @@ function auditAuthoritativeSupplementalCostSources(input = {}) {
       observedRoundTripMs,
       "MILLISECONDS",
       "OBSERVED_DURATION_ONLY",
-      nonEmpty7(latency?.source) ? latency.source : null,
+      nonEmpty6(latency?.source) ? latency.source : null,
       latencyAtMs,
       nowMs,
       maximumAgeMs
@@ -6968,7 +6863,7 @@ function auditAuthoritativeSupplementalCostSources(input = {}) {
       visibleLiquidity,
       "QUANTITY",
       "OBSERVED_PUBLIC_DEPTH",
-      nonEmpty7(liquidity?.source) ? liquidity.source : null,
+      nonEmpty6(liquidity?.source) ? liquidity.source : null,
       liquidityAtMs,
       nowMs,
       maximumAgeMs
@@ -6977,7 +6872,7 @@ function auditAuthoritativeSupplementalCostSources(input = {}) {
       null,
       "RATIO",
       "OBSERVED_PUBLIC_DEPTH",
-      nonEmpty7(partialFill?.source) ? partialFill.source : null,
+      nonEmpty6(partialFill?.source) ? partialFill.source : null,
       partialFillAtMs,
       nowMs,
       maximumAgeMs
@@ -7017,6 +6912,300 @@ var AUTHORITATIVE_PAPER_EXECUTION_COST_SOURCES_SAFETY = Object.freeze({
   realFillClaimAllowed: false,
   liveSubmittedExecutionSampleCredit: 0,
   unavailableCostConvertedToZero: false,
+  privateApiAllowed: false,
+  liveTrading: false,
+  orderSubmissionAllowed: false,
+  financialMutationAllowed: false
+});
+
+// src/services/authoritative-paper-latency-cost-evidence.service.ts
+var AUTHORITATIVE_PAPER_LATENCY_COST_EVIDENCE_VERSION = "authoritative-paper-latency-cost-evidence-v1";
+var DEFAULT_MAXIMUM_AGE_MS = 3e4;
+var DEFAULT_MAXIMUM_REQUEST_DURATION_MS = 3e4;
+var DEFAULT_MAXIMUM_POST_OBSERVATION_ATTEMPTS = 3;
+var EXACT_SHA = /^[0-9a-f]{40}$/u;
+var BITGET_PUBLIC_BASE_URL = "https://api.bitget.com";
+function finite11(value) {
+  return typeof value === "number" && Number.isFinite(value);
+}
+function positive7(value) {
+  return finite11(value) && value > 0;
+}
+function nonEmpty7(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+function canonicalSymbol(value) {
+  if (!nonEmpty7(value)) return null;
+  const symbol = value.trim().toUpperCase().replace(/[^A-Z0-9]/gu, "");
+  return symbol.length > 4 && symbol.endsWith("USDT") ? symbol : null;
+}
+function exactSha3(value) {
+  return typeof value === "string" && EXACT_SHA.test(value.trim().toLowerCase());
+}
+function record2(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+function scalar(value) {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+function topPrice(value) {
+  if (!Array.isArray(value) || !Array.isArray(value[0])) return null;
+  const price = scalar(value[0][0]);
+  return positive7(price) ? price : null;
+}
+async function readBitgetPublicLatencyMidpointQuote(input) {
+  if (typeof input?.fetchPublicJson !== "function") throw new TypeError("PUBLIC_MIDPOINT_FETCH_REQUIRED");
+  const symbol = canonicalSymbol(input?.symbol);
+  const researchCodeSha = String(input?.researchCodeSha ?? "").trim().toLowerCase();
+  if (input?.market !== "CRYPTO_FUTURES" || !symbol || !exactSha3(researchCodeSha) || input?.phase !== "PRE" && input?.phase !== "POST" || !Number.isInteger(input?.attempt) || input.attempt < 1 || input.attempt > 5) return null;
+  const url = new URL("/api/v3/market/orderbook", BITGET_PUBLIC_BASE_URL);
+  url.search = new URLSearchParams({
+    category: "USDT-FUTURES",
+    symbol,
+    limit: "1"
+  }).toString();
+  const payload = record2(await input.fetchPublicJson(url, {
+    provider: "bitget",
+    signal: input.signal
+  }));
+  const data = record2(payload?.data);
+  const observedAtMs = scalar(data?.ts);
+  const bidPrice = topPrice(data?.b);
+  const askPrice = topPrice(data?.a);
+  if (payload?.code !== "00000" || !positive7(observedAtMs) || !positive7(bidPrice) || !positive7(askPrice) || askPrice < bidPrice) return null;
+  return Object.freeze({
+    market: "CRYPTO_FUTURES",
+    symbol,
+    researchCodeSha,
+    observationId: [
+      "bitget-public-uta-v3-orderbook-bbo",
+      input.phase.toLowerCase(),
+      String(input.attempt),
+      symbol,
+      String(observedAtMs),
+      String(bidPrice),
+      String(askPrice)
+    ].join(":"),
+    bidPrice,
+    askPrice,
+    observedAtMs,
+    source: `BITGET_PUBLIC_UTA_V3_ORDERBOOK_BBO_${input.phase}`,
+    endpointClass: "PUBLIC_MARKET",
+    privateApiUsed: false
+  });
+}
+function blocked4(blockers) {
+  return Object.freeze({
+    schemaVersion: AUTHORITATIVE_PAPER_LATENCY_COST_EVIDENCE_VERSION,
+    status: "BLOCKED_DATA",
+    evidence: null,
+    observedRoundTripMs: null,
+    signedMidpointMovePercent: null,
+    adverseMovePercent: null,
+    blockers: Object.freeze([...new Set(blockers)]),
+    executionAuthority: "NONE",
+    privateApiUsed: false,
+    liveTrading: false,
+    realFillObserved: false,
+    unknownCostIsZero: false
+  });
+}
+function observationBlockers(phase, value, identity2) {
+  const prefix = `LATENCY_${phase}_REQUEST`;
+  if (!value) return [`${prefix}_MIDPOINT_UNAVAILABLE`];
+  const blockers = [];
+  if (!positive7(value.midpoint) || !positive7(value.observedAtMs) || !nonEmpty7(value.source) || !nonEmpty7(value.observationId)) blockers.push(`${prefix}_MIDPOINT_UNAVAILABLE`);
+  if (value.evidenceClass !== "PUBLIC_MIDPOINT") blockers.push(`${prefix}_EVIDENCE_CLASS_INVALID`);
+  if (value.endpointClass !== "PUBLIC_MARKET" || value.privateApiUsed !== false) {
+    blockers.push(`${prefix}_PUBLIC_MARKET_EVIDENCE_REQUIRED`);
+  }
+  if (value.market !== identity2.market) blockers.push(`${prefix}_MARKET_MISMATCH`);
+  if (canonicalSymbol(value.symbol) !== canonicalSymbol(identity2.symbol)) blockers.push(`${prefix}_SYMBOL_MISMATCH`);
+  if (!exactSha3(value.researchCodeSha) || value.researchCodeSha.trim().toLowerCase() !== identity2.researchCodeSha.trim().toLowerCase()) {
+    blockers.push(`${prefix}_RESEARCH_SHA_MISMATCH`);
+  }
+  return blockers;
+}
+function buildAuthoritativePaperLatencyCostEvidence(input) {
+  const nowMs = positive7(input?.nowMs) ? input.nowMs : Date.now();
+  const maximumAgeMs = positive7(input?.maximumAgeMs) ? input.maximumAgeMs : DEFAULT_MAXIMUM_AGE_MS;
+  const maximumRequestDurationMs = positive7(input?.maximumRequestDurationMs) ? input.maximumRequestDurationMs : DEFAULT_MAXIMUM_REQUEST_DURATION_MS;
+  const blockers = [];
+  const symbol = canonicalSymbol(input?.symbol);
+  const identity2 = Object.freeze({
+    market: input?.market,
+    symbol: symbol ?? "",
+    researchCodeSha: String(input?.researchCodeSha ?? "").trim().toLowerCase()
+  });
+  if (input?.direction !== "LONG" && input?.direction !== "SHORT") blockers.push("LATENCY_DIRECTION_INVALID");
+  if (input?.market !== "CRYPTO_FUTURES") blockers.push("LATENCY_MARKET_INVALID");
+  if (!symbol) blockers.push("LATENCY_SYMBOL_INVALID");
+  if (!exactSha3(input?.researchCodeSha)) blockers.push("LATENCY_RESEARCH_SHA_INVALID");
+  if (!positive7(nowMs)) blockers.push("LATENCY_CLOCK_INVALID");
+  if (!positive7(input?.requestStartedAtMs) || !positive7(input?.requestCompletedAtMs) || input.requestCompletedAtMs <= input.requestStartedAtMs) {
+    blockers.push("LATENCY_REQUEST_TIMING_INVALID");
+  }
+  if (positive7(input?.requestStartedAtMs) && input.requestStartedAtMs > nowMs || positive7(input?.requestCompletedAtMs) && input.requestCompletedAtMs > nowMs) {
+    blockers.push("LATENCY_REQUEST_TIMING_FROM_FUTURE");
+  }
+  const roundTripMs = positive7(input?.requestStartedAtMs) && positive7(input?.requestCompletedAtMs) && input.requestCompletedAtMs > input.requestStartedAtMs ? input.requestCompletedAtMs - input.requestStartedAtMs : null;
+  if (roundTripMs != null && roundTripMs > maximumRequestDurationMs) {
+    blockers.push("LATENCY_REQUEST_DURATION_EXCEEDS_POLICY");
+  }
+  const pre = input?.preRequest;
+  const post = input?.postRequest;
+  blockers.push(...observationBlockers("PRE", pre, identity2));
+  blockers.push(...observationBlockers("POST", post, identity2));
+  if (positive7(pre?.observedAtMs) && pre.observedAtMs > nowMs) {
+    blockers.push("LATENCY_PRE_REQUEST_EVIDENCE_FROM_FUTURE");
+  } else if (positive7(pre?.observedAtMs) && nowMs - pre.observedAtMs > maximumAgeMs) {
+    blockers.push("LATENCY_PRE_REQUEST_EVIDENCE_STALE");
+  }
+  if (positive7(post?.observedAtMs) && post.observedAtMs > nowMs) {
+    blockers.push("LATENCY_POST_REQUEST_EVIDENCE_FROM_FUTURE");
+  } else if (positive7(post?.observedAtMs) && nowMs - post.observedAtMs > maximumAgeMs) {
+    blockers.push("LATENCY_POST_REQUEST_EVIDENCE_STALE");
+  }
+  if (positive7(pre?.observedAtMs) && positive7(input?.requestStartedAtMs) && pre.observedAtMs > input.requestStartedAtMs) {
+    blockers.push("LATENCY_PRE_REQUEST_TIMESTAMP_NOT_BRACKETING_REQUEST");
+  }
+  if (positive7(post?.observedAtMs) && positive7(input?.requestCompletedAtMs) && post.observedAtMs < input.requestCompletedAtMs) {
+    blockers.push("LATENCY_POST_REQUEST_TIMESTAMP_NOT_BRACKETING_REQUEST");
+  }
+  if (positive7(pre?.observedAtMs) && positive7(post?.observedAtMs) && post.observedAtMs <= pre.observedAtMs) {
+    blockers.push("LATENCY_MIDPOINT_OBSERVATION_ORDER_INVALID");
+  }
+  if (pre && post && (pre.observationId === post.observationId || pre.observedAtMs === post.observedAtMs)) {
+    blockers.push("LATENCY_REUSED_MIDPOINT_OBSERVATION");
+  }
+  if (blockers.length > 0 || !pre || !post) return blocked4(blockers);
+  const signedMovePercent = input.direction === "LONG" ? (post.midpoint - pre.midpoint) / pre.midpoint * 100 : (pre.midpoint - post.midpoint) / pre.midpoint * 100;
+  const adverseMovePercent = Math.max(0, signedMovePercent);
+  const evidence = Object.freeze({
+    valuePercent: adverseMovePercent,
+    quality: "ESTIMATED",
+    source: `PUBLIC_MIDPOINT_ADVERSE_MOVE_OVER_OBSERVED_REQUEST_LATENCY:${pre.source.trim()}->${post.source.trim()}`,
+    observedAtMs: post.observedAtMs
+  });
+  return Object.freeze({
+    schemaVersion: AUTHORITATIVE_PAPER_LATENCY_COST_EVIDENCE_VERSION,
+    status: "PRESENT",
+    evidence,
+    observedRoundTripMs: roundTripMs,
+    signedMidpointMovePercent: signedMovePercent,
+    adverseMovePercent,
+    blockers: Object.freeze([]),
+    executionAuthority: "NONE",
+    privateApiUsed: false,
+    liveTrading: false,
+    realFillObserved: false,
+    unknownCostIsZero: false
+  });
+}
+function quoteObservation(value) {
+  if (!value || !positive7(value.bidPrice) || !positive7(value.askPrice) || value.askPrice < value.bidPrice) return null;
+  return Object.freeze({
+    market: value.market,
+    symbol: value.symbol,
+    researchCodeSha: value.researchCodeSha,
+    observationId: value.observationId,
+    midpoint: (value.bidPrice + value.askPrice) / 2,
+    observedAtMs: value.observedAtMs,
+    source: value.source,
+    evidenceClass: "PUBLIC_MIDPOINT",
+    endpointClass: value.endpointClass,
+    privateApiUsed: value.privateApiUsed
+  });
+}
+async function collectAuthoritativePaperLatencyCostEvidence(input) {
+  if (typeof input?.readPublicMidpointQuote !== "function") throw new TypeError("PUBLIC_MIDPOINT_READER_REQUIRED");
+  if (typeof input?.executeMeasuredPublicRequest !== "function") throw new TypeError("MEASURED_PUBLIC_REQUEST_REQUIRED");
+  const now = input.now ?? Date.now;
+  if (typeof now !== "function") throw new TypeError("LATENCY_CLOCK_REQUIRED");
+  const attempts = Number.isInteger(input.maximumPostObservationAttempts) && Number(input.maximumPostObservationAttempts) > 0 && Number(input.maximumPostObservationAttempts) <= 5 ? Number(input.maximumPostObservationAttempts) : DEFAULT_MAXIMUM_POST_OBSERVATION_ATTEMPTS;
+  const preRequest = quoteObservation(await input.readPublicMidpointQuote("PRE", 1));
+  const requestStartedAtMs = now();
+  const requestResult = await input.executeMeasuredPublicRequest();
+  const requestCompletedAtMs = now();
+  let postRequest = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    postRequest = quoteObservation(await input.readPublicMidpointQuote("POST", attempt));
+    if (postRequest && positive7(requestCompletedAtMs) && postRequest.observedAtMs >= requestCompletedAtMs && (!preRequest || postRequest.observedAtMs > preRequest.observedAtMs && postRequest.observationId !== preRequest.observationId)) break;
+  }
+  const nowMs = now();
+  const latency = buildAuthoritativePaperLatencyCostEvidence({
+    market: input.market,
+    symbol: input.symbol,
+    researchCodeSha: input.researchCodeSha,
+    direction: input.direction,
+    requestStartedAtMs,
+    requestCompletedAtMs,
+    preRequest,
+    postRequest,
+    nowMs,
+    maximumAgeMs: input.maximumAgeMs,
+    maximumRequestDurationMs: input.maximumRequestDurationMs
+  });
+  return Object.freeze({
+    requestResult,
+    latency,
+    preRequest,
+    postRequest,
+    requestStartedAtMs,
+    requestCompletedAtMs,
+    evaluatedAtMs: nowMs,
+    realMeasuredRequestTiming: true,
+    executionAuthority: "NONE",
+    privateApiUsed: false,
+    realFillObserved: false
+  });
+}
+function bindAuthoritativePaperLatencyToSupplementalCostInput(input) {
+  const source = input?.sourceSupplementalCostInput;
+  const blockers = [...input?.latency?.blockers ?? []];
+  if (!source || !nonEmpty7(source.costPolicyId) || !positive7(source.observedAtMs)) {
+    blockers.push("SUPPLEMENTAL_COST_INPUT_UNAVAILABLE");
+  }
+  const latencyEvidence = input?.latency?.status === "PRESENT" ? input.latency.evidence : null;
+  if (!latencyEvidence) blockers.push("LATENCY_COST_EVIDENCE_UNAVAILABLE");
+  const supplementalCostInput = source == null ? null : Object.freeze({
+    ...source,
+    latency: latencyEvidence
+  });
+  return Object.freeze({
+    schemaVersion: AUTHORITATIVE_PAPER_LATENCY_COST_EVIDENCE_VERSION,
+    status: blockers.length === 0 ? "PRESENT" : "BLOCKED_DATA",
+    latencyStatus: latencyEvidence ? "PRESENT" : "BLOCKED_DATA",
+    supplementalCostInput,
+    blockers: Object.freeze([...new Set(blockers)]),
+    otherCostComponentsChanged: false,
+    fullCostReadyEvaluated: false,
+    executionAuthority: "NONE",
+    privateApiUsed: false,
+    realFillObserved: false,
+    unknownCostIsZero: false
+  });
+}
+var AUTHORITATIVE_PAPER_LATENCY_COST_EVIDENCE_SAFETY = Object.freeze({
+  schemaVersion: AUTHORITATIVE_PAPER_LATENCY_COST_EVIDENCE_VERSION,
+  publicMarketDataOnly: true,
+  observedRequestDurationRequired: true,
+  temporalBracketingRequired: true,
+  distinctPrePostObservationRequired: true,
+  exactMarketSymbolResearchShaBindingRequired: true,
+  favorableMoveMayProduceObservedZeroAdverseCost: true,
+  missingDataMayProduceZeroCost: false,
+  requestDurationMayBeUsedAsPercentCost: false,
+  spreadMayBeUsedAsLatencyCost: false,
+  bookWalkMayBeUsedAsLatencyCost: false,
+  liquidityImpactMayBeUsedAsLatencyCost: false,
+  partialFillMayBeUsedAsLatencyCost: false,
+  otherCostComponentsMutable: false,
+  riskSizingPolicyMutable: false,
+  causalExecutionClaimAllowed: false,
+  realFillObserved: false,
+  executionAuthority: "NONE",
   privateApiAllowed: false,
   liveTrading: false,
   orderSubmissionAllowed: false,
@@ -7234,7 +7423,7 @@ function cloneLevel(level) {
 function unique2(values) {
   return Object.freeze([...new Set(values)]);
 }
-function record2(value) {
+function record3(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : Object.freeze({});
 }
 function freeze2(value) {
@@ -7283,7 +7472,7 @@ function buildPaperSimulatedExecutionEvidence(input) {
   if (bookWalk?.status === "NOT_AVAILABLE") {
     blockPaperSimulation(String(bookWalk.reason ?? "BOOK_WALK_NOT_AVAILABLE"));
   }
-  const calibratedFillModel = record2(input?.calibratedFillModel);
+  const calibratedFillModel = record3(input?.calibratedFillModel);
   const fillModel = evaluateCalibratedFillModel(
     calibratedFillModel,
     input?.policy ?? {},
@@ -7579,7 +7768,7 @@ var AUTHORITATIVE_PAPER_CALLBACK_OWNERS_SAFETY = Object.freeze({
 
 // src/services/authoritative-paper-risk-sizing-source.service.ts
 var AUTHORITATIVE_PAPER_RISK_SIZING_SOURCE_VERSION = "authoritative-paper-risk-sizing-source-v1";
-function record3(value) {
+function record4(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : null;
 }
 function finite16(value) {
@@ -7594,7 +7783,7 @@ function nonNegative7(value) {
 function nonEmpty10(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
-function exactSha3(value) {
+function exactSha4(value) {
   return typeof value === "string" && /^[0-9a-f]{40}$/u.test(value);
 }
 function normalizeSymbol(value) {
@@ -7645,8 +7834,8 @@ function blankEvidence(input, nowMs, status, blockers, partial = {}) {
     symbol,
     strategyScope: nonEmpty10(input.strategyScope) ? input.strategyScope.trim() : null,
     side,
-    researchCodeSha: exactSha3(input.researchCodeSha) ? input.researchCodeSha : null,
-    paperStateSourceSha: exactSha3(input.paperStateSourceSha) ? input.paperStateSourceSha : null,
+    researchCodeSha: exactSha4(input.researchCodeSha) ? input.researchCodeSha : null,
+    paperStateSourceSha: exactSha4(input.paperStateSourceSha) ? input.paperStateSourceSha : null,
     paperAccountId: nonEmpty10(input.paperAccountId) ? input.paperAccountId.trim() : null,
     equity: null,
     riskPercent: null,
@@ -7679,7 +7868,7 @@ function blankEvidence(input, nowMs, status, blockers, partial = {}) {
 }
 function validatePolicy(value, input, nowMs) {
   const blockers = [];
-  const object = record3(value);
+  const object = record4(value);
   if (!object) return { policy: null, blockers: ["RISK_POLICY_MISSING"] };
   if (object.schemaVersion !== "authoritative-paper-generic-risk-policy-evidence-v1") blockers.push("RISK_POLICY_SCHEMA_INVALID");
   if (!nonEmpty10(object.policyId)) blockers.push("RISK_POLICY_ID_MISSING");
@@ -7687,7 +7876,7 @@ function validatePolicy(value, input, nowMs) {
   if (!nonEmpty10(object.source)) blockers.push("RISK_POLICY_SOURCE_MISSING");
   if (!nonEmptyStrings2(object.provenance)) blockers.push("RISK_POLICY_PROVENANCE_MISSING");
   if (!fresh4(Number(object.observedAtMs), Number(object.maximumAgeMs), nowMs)) blockers.push("RISK_POLICY_STALE_OR_INVALID");
-  if (!exactSha3(object.researchCodeSha) || object.researchCodeSha !== input.researchCodeSha) blockers.push("RISK_POLICY_RESEARCH_SHA_MISMATCH");
+  if (!exactSha4(object.researchCodeSha) || object.researchCodeSha !== input.researchCodeSha) blockers.push("RISK_POLICY_RESEARCH_SHA_MISMATCH");
   if (!Array.isArray(object.marketScopes) || !object.marketScopes.includes(input.market)) blockers.push("RISK_POLICY_WRONG_MARKET_SCOPE");
   if (!Array.isArray(object.strategyScopes) || !object.strategyScopes.includes(input.strategyScope)) blockers.push("RISK_POLICY_WRONG_STRATEGY_SCOPE");
   const symbolScopes = object.symbolScopes;
@@ -7709,7 +7898,7 @@ function validatePolicy(value, input, nowMs) {
 }
 function validateContractRulesEvidence(value, market, symbol, nowMs) {
   const blockers = [];
-  const object = record3(value);
+  const object = record4(value);
   if (!object) return { evidence: null, blockers: ["CONTRACT_RULES_MISSING"] };
   if (object.schemaVersion !== "authoritative-paper-contract-rules-evidence-v1") blockers.push("CONTRACT_RULES_SCHEMA_INVALID");
   if (object.market !== market) blockers.push("CONTRACT_RULES_WRONG_MARKET");
@@ -7718,7 +7907,7 @@ function validateContractRulesEvidence(value, market, symbol, nowMs) {
   if (!nonEmpty10(object.source)) blockers.push("CONTRACT_RULES_SOURCE_MISSING");
   if (!nonEmptyStrings2(object.provenance)) blockers.push("CONTRACT_RULES_PROVENANCE_MISSING");
   if (!fresh4(Number(object.observedAtMs), Number(object.maximumAgeMs), nowMs)) blockers.push("CONTRACT_RULES_STALE_OR_INVALID");
-  const rules = record3(object.rules);
+  const rules = record4(object.rules);
   if (!rules) return { evidence: null, blockers: [...blockers, "CONTRACT_RULES_INVALID"] };
   if (normalizeSymbol(rules.symbol) !== symbol) blockers.push("CONTRACT_RULES_PAYLOAD_SYMBOL_MISMATCH");
   if (rules.status !== "live") blockers.push("CONTRACT_RULES_NOT_LIVE");
@@ -7740,7 +7929,7 @@ function validateContractRulesEvidence(value, market, symbol, nowMs) {
 }
 function validateMarketEvidence(value, market, symbol, side, nowMs) {
   const blockers = [];
-  const object = record3(value);
+  const object = record4(value);
   if (!object) return { evidence: null, blockers: ["MARKET_EVIDENCE_MISSING"] };
   if (object.schemaVersion !== "authoritative-paper-market-risk-evidence-v1") blockers.push("MARKET_EVIDENCE_SCHEMA_INVALID");
   if (object.market !== market) blockers.push("MARKET_EVIDENCE_WRONG_MARKET");
@@ -7759,7 +7948,7 @@ function validateMarketEvidence(value, market, symbol, side, nowMs) {
 }
 function validateCostEvidence(value, market, symbol, nowMs) {
   const blockers = [];
-  const object = record3(value);
+  const object = record4(value);
   if (!object) return { evidence: null, blockers: ["RISK_COST_EVIDENCE_MISSING"] };
   if (object.schemaVersion !== "authoritative-paper-risk-cost-evidence-v1") blockers.push("RISK_COST_EVIDENCE_SCHEMA_INVALID");
   if (object.market !== market) blockers.push("RISK_COST_EVIDENCE_WRONG_MARKET");
@@ -7788,8 +7977,8 @@ function buildAuthoritativePaperRiskSizingEvidence(input, nowMs = Date.now()) {
   if (!symbol) return blankEvidence(input, nowMs, "BLOCKED_DATA", ["SYMBOL_INVALID"]);
   if (!nonEmpty10(input.strategyScope)) return blankEvidence(input, nowMs, "BLOCKED_DATA", ["STRATEGY_SCOPE_REQUIRED"]);
   if (!sideSupported(market, input.side)) return blankEvidence(input, nowMs, "BLOCKED_DATA", ["UNSUPPORTED_SIDE"]);
-  if (!exactSha3(input.researchCodeSha)) return blankEvidence(input, nowMs, "BLOCKED_DATA", ["RESEARCH_SHA_INVALID"]);
-  if (!exactSha3(input.paperStateSourceSha)) return blankEvidence(input, nowMs, "BLOCKED_DATA", ["PAPER_STATE_SOURCE_SHA_INVALID"]);
+  if (!exactSha4(input.researchCodeSha)) return blankEvidence(input, nowMs, "BLOCKED_DATA", ["RESEARCH_SHA_INVALID"]);
+  if (!exactSha4(input.paperStateSourceSha)) return blankEvidence(input, nowMs, "BLOCKED_DATA", ["PAPER_STATE_SOURCE_SHA_INVALID"]);
   if (!nonEmpty10(input.paperAccountId)) return blankEvidence(input, nowMs, "BLOCKED_DATA", ["PAPER_ACCOUNT_ID_REQUIRED"]);
   const strategyScope = input.strategyScope.trim();
   const policyCheck = validatePolicy(input.riskPolicy, {
@@ -8011,13 +8200,13 @@ var SUPPORTED_MARKETS = /* @__PURE__ */ new Set([
   "CRYPTO_SPOT",
   "CRYPTO_FUTURES"
 ]);
-function record4(value) {
+function record5(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : null;
 }
 function nonEmpty11(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
-function exactSha4(value) {
+function exactSha5(value) {
   return typeof value === "string" && /^[0-9a-f]{40}$/u.test(value);
 }
 function positive10(value) {
@@ -8053,7 +8242,7 @@ function blocked5(request, blockers) {
     provenance: Object.freeze([]),
     observedAtMs: null,
     maximumAgeMs: null,
-    researchCodeSha: exactSha4(request.researchCodeSha) ? request.researchCodeSha : null,
+    researchCodeSha: exactSha5(request.researchCodeSha) ? request.researchCodeSha : null,
     policyEvidence: null,
     blockers: Object.freeze([...new Set(blockers)]),
     executionAuthority: "NONE",
@@ -8068,12 +8257,12 @@ function validateRequest(request) {
   if (!SUPPORTED_MARKETS.has(request?.market)) blockers.push("RISK_POLICY_SOURCE_MARKET_UNSUPPORTED");
   if (!normalizeSymbol2(request?.symbol)) blockers.push("RISK_POLICY_SOURCE_SYMBOL_INVALID");
   if (!nonEmpty11(request?.strategyScope)) blockers.push("RISK_POLICY_SOURCE_STRATEGY_SCOPE_REQUIRED");
-  if (!exactSha4(request?.researchCodeSha)) blockers.push("RISK_POLICY_SOURCE_EXACT_RESEARCH_SHA_REQUIRED");
+  if (!exactSha5(request?.researchCodeSha)) blockers.push("RISK_POLICY_SOURCE_EXACT_RESEARCH_SHA_REQUIRED");
   return blockers;
 }
 function validateRecordEnvelope(value, request, nowMs) {
   const blockers = [];
-  const object = record4(value);
+  const object = record5(value);
   if (!object) return { record: null, blockers: ["RISK_POLICY_CANONICAL_RECORD_MISSING"] };
   if (object.schemaVersion !== AUTHORITATIVE_PAPER_GENERIC_RISK_POLICY_RECORD_VERSION) {
     blockers.push("RISK_POLICY_CANONICAL_RECORD_SCHEMA_INVALID");
@@ -8087,7 +8276,7 @@ function validateRecordEnvelope(value, request, nowMs) {
   if (!fresh5(object.observedAtMs, object.maximumAgeMs, nowMs)) {
     blockers.push("RISK_POLICY_CANONICAL_RECORD_STALE_OR_INVALID");
   }
-  if (!exactSha4(object.researchCodeSha) || object.researchCodeSha !== request.researchCodeSha) {
+  if (!exactSha5(object.researchCodeSha) || object.researchCodeSha !== request.researchCodeSha) {
     blockers.push("RISK_POLICY_CANONICAL_RECORD_RESEARCH_SHA_MISMATCH");
   }
   if (!supportedMarketScopes(object.marketScopes)) {
@@ -8246,7 +8435,7 @@ var BITGET_BASE_URL2 = "https://api.bitget.com";
 var FUTURES_LANE = FORWARD_OBSERVER_LANES.find((lane) => lane.market === "CRYPTO_FUTURES");
 var NATURAL_CYCLE_MAX_SIZING_ITERATIONS = 8;
 var NATURAL_CYCLE_EVIDENCE_MAXIMUM_AGE_MS = 3e4;
-function exactSha5(value) {
+function exactSha6(value) {
   return typeof value === "string" && /^[0-9a-f]{40}$/u.test(value);
 }
 function scannerCard(value) {
@@ -8262,36 +8451,6 @@ function publicUrl(request) {
   const url = new URL(request.path, BITGET_BASE_URL2);
   url.search = request.query;
   return url;
-}
-function latencyPositiveScalar(value) {
-  const parsed = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-}
-function latencyMidpoint(bid, ask) {
-  const normalizedBid = latencyPositiveScalar(bid);
-  const normalizedAsk = latencyPositiveScalar(ask);
-  if (normalizedBid == null || normalizedAsk == null || normalizedAsk < normalizedBid) return null;
-  return (normalizedBid + normalizedAsk) / 2;
-}
-function latencyTickerObservation(payload, symbol, observedAtMs) {
-  const envelope = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : null;
-  if (!envelope || envelope.code !== "00000" || !Array.isArray(envelope.data) || envelope.data.length !== 1) {
-    return null;
-  }
-  const rawRow = envelope.data[0];
-  const row = rawRow && typeof rawRow === "object" && !Array.isArray(rawRow) ? rawRow : null;
-  if (!row) return null;
-  const rowSymbol = String(row.symbol ?? "").trim().toUpperCase().replace(/[^A-Z0-9]/gu, "");
-  const midpoint = latencyMidpoint(row.bidPr, row.askPr);
-  const providerTimestampMs = latencyPositiveScalar(row.ts);
-  if (rowSymbol !== symbol || midpoint == null || providerTimestampMs == null || !naturalPositive(observedAtMs)) {
-    return null;
-  }
-  return Object.freeze({
-    midpoint,
-    observedAtMs,
-    source: `BITGET_PUBLIC_V2_TICKER_RECEIPT:providerTs=${String(providerTimestampMs)}`
-  });
 }
 function ownedSource({
   callback,
@@ -8369,7 +8528,7 @@ function createAuthoritativePaperEvidenceSourceWiring({
   dependencies: overrides = {}
 }) {
   const normalizedSha = String(researchCodeSha ?? "").trim().toLowerCase();
-  if (!exactSha5(normalizedSha)) throw new TypeError("authoritative Paper evidence sources require an exact research SHA");
+  if (!exactSha6(normalizedSha)) throw new TypeError("authoritative Paper evidence sources require an exact research SHA");
   if (!FUTURES_LANE) throw new Error("FORWARD_OBSERVER_FUTURES_LANE_REQUIRED");
   const dependencies = Object.freeze({ ...defaultDependencies(), ...overrides });
   const callbackOwnerSources = Object.freeze({
@@ -8418,7 +8577,7 @@ function createAuthoritativePaperEvidenceSourceWiring({
     }),
     supplementalCostEvidenceForCard: ownedSource({
       callback: "supplementalCostEvidenceForCard",
-      implementation: "buildAuthoritativeSupplementalCostEvidence",
+      implementation: "collectAuthoritativePaperLatencyCostEvidence/bindAuthoritativePaperLatencyToSupplementalCostInput/buildAuthoritativeSupplementalCostEvidence",
       requiredData: ["latency cost evidence", "liquidity impact cost evidence", "partial-fill cost evidence", "funding evidence"],
       source: async (context) => {
         const [input, publicEvidence, executionObservation] = await Promise.all([
@@ -8632,7 +8791,7 @@ function createAuthoritativePaperNaturalCycleEvidenceSourceWiring({
     throw new TypeError("AUTHORITATIVE_NATURAL_CYCLE_SOURCE_CALLBACKS_REQUIRED");
   }
   const normalizedSha = String(researchCodeSha ?? "").trim().toLowerCase();
-  if (!exactSha5(normalizedSha)) throw new TypeError("authoritative Natural cycle requires an exact research SHA");
+  if (!exactSha6(normalizedSha)) throw new TypeError("authoritative Natural cycle requires an exact research SHA");
   const dependencies = Object.freeze({ ...defaultDependencies(), ...overrides });
   const snapshotCache = /* @__PURE__ */ new WeakMap();
   const publicEvidenceCache = /* @__PURE__ */ new WeakMap();
@@ -8736,77 +8895,57 @@ function createAuthoritativePaperNaturalCycleEvidenceSourceWiring({
             observedAtMs: nowMs,
             maximumAgeMs: NATURAL_CYCLE_EVIDENCE_MAXIMUM_AGE_MS
           });
-          const executionInput = await collectAuthoritativePaperExecutionObservationInput({
-            context,
-            sizingEvidence: executionSizing,
-            fetchPublicJson: dependencies.fetchPublicJson,
-            now: dependencies.now
+          const latencyCollection = await collectAuthoritativePaperLatencyCostEvidence({
+            market: "CRYPTO_FUTURES",
+            symbol,
+            researchCodeSha: normalizedSha,
+            direction,
+            readPublicMidpointQuote: (phase, attempt) => readBitgetPublicLatencyMidpointQuote({
+              market: "CRYPTO_FUTURES",
+              symbol,
+              researchCodeSha: normalizedSha,
+              phase,
+              attempt,
+              fetchPublicJson: dependencies.fetchPublicJson,
+              signal: abortSignal2(context.signal)
+            }),
+            executeMeasuredPublicRequest: () => collectAuthoritativePaperExecutionObservationInput({
+              context,
+              sizingEvidence: executionSizing,
+              fetchPublicJson: dependencies.fetchPublicJson,
+              now: dependencies.now
+            }),
+            now: dependencies.now,
+            maximumAgeMs: NATURAL_CYCLE_EVIDENCE_MAXIMUM_AGE_MS,
+            maximumRequestDurationMs: NATURAL_CYCLE_EVIDENCE_MAXIMUM_AGE_MS,
+            maximumPostObservationAttempts: 3
           });
+          const executionInput = latencyCollection.requestResult;
           if (!executionInput) return partial;
           const executionObservation = buildAuthoritativePaperExecutionObservation(executionInput);
           const slippagePercent = executionObservation.slippage.valuePercent;
           if (!Number.isFinite(slippagePercent) || slippagePercent < 0) return partial;
-          const preLatencyMidpoint = latencyMidpoint(marketEvidence.bidPrice, marketEvidence.askPrice);
-          const requestStartedAtMs = executionInput.executionEvidenceInput.requestStartedAtMs;
-          const requestCompletedAtMs = executionInput.executionEvidenceInput.requestCompletedAtMs;
-          let latencyBoundSupplementalCostInput = sourceSupplementalCostInput;
-          if (preLatencyMidpoint != null && naturalPositive(requestStartedAtMs) && naturalPositive(requestCompletedAtMs)) {
-            const postTickerRequest = dependencies.buildPublicRequests(symbol).ticker;
-            const postTickerPayload = await dependencies.fetchPublicJson(publicUrl(postTickerRequest), {
-              provider: "bitget",
-              signal: abortSignal2(context.signal)
-            }).catch(() => null);
-            const postLatencyObservedAtMs = dependencies.now();
-            const postLatencyObservation = latencyTickerObservation(
-              postTickerPayload,
-              symbol,
-              postLatencyObservedAtMs
-            );
-            const latencyMeasurementNowMs = dependencies.now();
-            if (postLatencyObservation && naturalPositive(latencyMeasurementNowMs)) {
-              const latencyCost = buildAuthoritativePaperLatencyCostEvidence({
-                direction,
-                requestStartedAtMs,
-                requestCompletedAtMs,
-                preRequest: Object.freeze({
-                  midpoint: preLatencyMidpoint,
-                  observedAtMs: marketEvidence.observedAtMs,
-                  source: `BITGET_PUBLIC_V2_TICKER_RECEIPT:providerTs=${String(marketEvidence.tickerTimestampMs)}`
-                }),
-                postRequest: postLatencyObservation,
-                nowMs: latencyMeasurementNowMs,
-                maximumAgeMs: NATURAL_CYCLE_EVIDENCE_MAXIMUM_AGE_MS,
-                maximumRequestDurationMs: NATURAL_CYCLE_EVIDENCE_MAXIMUM_AGE_MS
-              });
-              if (latencyCost.status === "PRESENT" && latencyCost.evidence != null) {
-                latencyBoundSupplementalCostInput = Object.freeze({
-                  ...sourceSupplementalCostInput ?? {},
-                  latency: latencyCost.evidence,
-                  observedAtMs: postLatencyObservedAtMs,
-                  nowMs: latencyMeasurementNowMs,
-                  maximumAgeMs: NATURAL_CYCLE_EVIDENCE_MAXIMUM_AGE_MS
-                });
-              }
-            }
-          }
-          const costNowMs = dependencies.now();
-          if (!naturalPositive(costNowMs)) return partial;
-          const supplementalCostInput = naturalFundingBoundSupplementalCostInput({
+          const fundingBoundSupplementalCostInput = naturalFundingBoundSupplementalCostInput({
             candidate,
             riskPolicy: policySource.policyEvidence,
             publicEvidence: marketEvidence,
-            sourceSupplementalCostInput: latencyBoundSupplementalCostInput,
+            sourceSupplementalCostInput,
             researchCodeSha: normalizedSha,
             entryTimestampMs: nowMs,
             positionNotional: probeQuantity * learning.entryPrice,
-            nowMs: costNowMs
+            nowMs: latencyCollection.evaluatedAtMs
           });
+          const latencyBinding = bindAuthoritativePaperLatencyToSupplementalCostInput({
+            sourceSupplementalCostInput: fundingBoundSupplementalCostInput,
+            latency: latencyCollection.latency
+          });
+          const supplementalCostInput = latencyBinding.supplementalCostInput;
           if (!supplementalCostInput || !supplementalCostInput.funding) return partial;
           const supplementalAudit = auditAuthoritativeSupplementalCostSources({
             publicEvidence: marketEvidence,
             executionObservation,
             supplemental: supplementalCostInput,
-            nowMs: costNowMs,
+            nowMs: latencyCollection.evaluatedAtMs,
             maximumAgeMs: NATURAL_CYCLE_EVIDENCE_MAXIMUM_AGE_MS
           });
           const executionCostComponentNames = [
@@ -8874,7 +9013,7 @@ function createAuthoritativePaperNaturalCycleEvidenceSourceWiring({
               slippageRate: sizingExecutionCostRate,
               estimatedFundingRate: fundingExecutionCostRate
             })
-          }, stablePolicyProducer, costNowMs);
+          }, stablePolicyProducer, nowMs);
           const targetQuantity = bridge.sizingEvidence.targetQuantity;
           if (bridge.policySource !== policySource || bridge.sizingEvidence.status !== "PRESENT" || !naturalPositive(targetQuantity)) return partial;
           const converged = Math.abs(targetQuantity - probeQuantity) <= Number.EPSILON * Math.max(1, Math.abs(targetQuantity), Math.abs(probeQuantity)) * 8;
@@ -8882,7 +9021,7 @@ function createAuthoritativePaperNaturalCycleEvidenceSourceWiring({
             probeQuantity = targetQuantity;
             continue;
           }
-          const finalSupplementalCostInput = naturalFundingBoundSupplementalCostInput({
+          const finalFundingBoundSupplementalCostInput = naturalFundingBoundSupplementalCostInput({
             candidate,
             riskPolicy: policySource.policyEvidence,
             publicEvidence: marketEvidence,
@@ -8890,8 +9029,13 @@ function createAuthoritativePaperNaturalCycleEvidenceSourceWiring({
             researchCodeSha: normalizedSha,
             entryTimestampMs: nowMs,
             positionNotional: targetQuantity * learning.entryPrice,
-            nowMs
+            nowMs: latencyCollection.evaluatedAtMs
           });
+          const finalLatencyBinding = bindAuthoritativePaperLatencyToSupplementalCostInput({
+            sourceSupplementalCostInput: finalFundingBoundSupplementalCostInput,
+            latency: latencyCollection.latency
+          });
+          const finalSupplementalCostInput = finalLatencyBinding.supplementalCostInput;
           if (!finalSupplementalCostInput) return partial;
           return naturalEmptyResolution({
             paperStateSnapshot: snapshot,
@@ -8934,6 +9078,9 @@ function createAuthoritativePaperNaturalCycleEvidenceSourceWiring({
       unknownCostIsZero: false,
       publicDepthIsRealFill: false,
       realFillObserved: false,
+      latencyEvidenceOwner: "AUTHORITATIVE_PUBLIC_BBO_REQUEST_BRACKET",
+      latencyEvidenceQuality: "ESTIMATED",
+      latencyMissingIsZero: false,
       executionAuthority: "NONE"
     })
   });
@@ -8963,6 +9110,9 @@ var AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_SAFETY = Object.freeze({
   ownerMissingCallbacks: Object.freeze([]),
   ownerMissingCount: 0,
   ownerDataReadiness: AUTHORITATIVE_PAPER_CALLBACK_OWNERS_SAFETY.dataReadiness,
+  latencyEvidenceOwnerConnected: true,
+  latencyPublicRequestBracketingRequired: true,
+  latencyMissingIsZero: false,
   executionAuthority: "NONE",
   privateApiAllowed: false,
   liveTrading: false,
@@ -8990,6 +9140,8 @@ export {
   AUTHORITATIVE_PAPER_GENERIC_RISK_POLICY_PRODUCER_VERSION,
   AUTHORITATIVE_PAPER_GENERIC_RISK_POLICY_RECORD_VERSION,
   AUTHORITATIVE_PAPER_GENERIC_RISK_SIZING_BRIDGE_VERSION,
+  AUTHORITATIVE_PAPER_LATENCY_COST_EVIDENCE_SAFETY,
+  AUTHORITATIVE_PAPER_LATENCY_COST_EVIDENCE_VERSION,
   AUTHORITATIVE_PAPER_RISK_SIZING_SOURCE_SAFETY,
   AUTHORITATIVE_PAPER_RISK_SIZING_SOURCE_VERSION,
   AUTHORITATIVE_PAPER_RUNTIME_PACKAGE_SAFETY,
@@ -8997,17 +9149,21 @@ export {
   PAPER_SIMULATED_EXECUTION_EVIDENCE_VERSION,
   PAPER_TRADING_STATE_SNAPSHOT_VERSION,
   SCANNER_CRYPTO_FUTURES_PAPER_ADMISSION_EVIDENCE_PRODUCER_VERSION,
+  bindAuthoritativePaperLatencyToSupplementalCostInput,
   buildAuthoritativePaperExecutionObservation,
+  buildAuthoritativePaperLatencyCostEvidence,
   buildAuthoritativePaperRiskSizingEvidence,
   buildAuthoritativePaperRiskSizingFromGenericRiskPolicySource,
   buildAuthoritativeSizedContractRules,
   buildAuthoritativeSupplementalCostEvidence,
   buildPaperSimulatedExecutionEvidence,
+  collectAuthoritativePaperLatencyCostEvidence,
   createAuthoritativePaperEvidenceSourceWiring,
   createAuthoritativePaperGenericRiskPolicyProducer,
   createAuthoritativePaperNaturalCycleEvidenceSourceWiring,
   createImmutablePaperTradingStateSnapshot,
   createScannerCryptoFuturesPaperAdmissionEvidenceProducer,
   paperStateFromAuthoritativeSnapshot,
+  readBitgetPublicLatencyMidpointQuote,
   validateImmutablePaperTradingStateSnapshot
 };
