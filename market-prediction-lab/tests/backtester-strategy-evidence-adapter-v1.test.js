@@ -333,6 +333,7 @@ test("exact OOS, Walk Forward, and Cost Stress metrics pass through without inpu
 
   const nested = input.artifactPayload.results[0].research.families[0].candidates[0];
   const [oos, walkForward, costStress] = result.candidate.evidenceEnvelopes.map((row) => row.envelope);
+  assert.equal(oos.sample.sampleN, null);
   assert.equal(oos.sample.tradeN, nested.oos.tradeCount);
   assert.equal(oos.sample.settledN, null);
   assert.equal(oos.metrics.expectancy, nested.oos.expectancy);
@@ -340,6 +341,14 @@ test("exact OOS, Walk Forward, and Cost Stress metrics pass through without inpu
   assert.equal(oos.metrics.mdd, nested.oos.maximumDrawdown);
   assert.equal(oos.metrics.netReturn, nested.oos.totalReturn);
   assert.equal(oos.metrics.winRate, nested.oos.winRate);
+  assert.equal(oos.metrics.mae, null);
+  assert.equal(oos.metrics.mfe, null);
+  assert.equal(oos.costs.feeAmount, nested.oos.fees);
+  assert.equal(oos.costs.spreadAmount, nested.oos.spread);
+  assert.equal(oos.costs.slippageAmount, nested.oos.slippage);
+  assert.equal(oos.costs.fundingAmount, nested.oos.funding);
+  assert.equal(oos.costs.latencyAmount, nested.oos.latency);
+  assert.equal(oos.costs.costPolicyVersion, PR191_BACKTESTER_EVIDENCE_CONTRACT_V1.costPolicyVersion);
   assert.equal(walkForward.sample.tradeN, nested.statisticalQuality.wfTradeCount);
   assert.equal(walkForward.metrics.positiveWindowRatio, nested.walkForward.stability.profitableWindowsRatio);
   assert.equal(costStress.validation.costStressSurvived, false);
@@ -348,6 +357,11 @@ test("exact OOS, Walk Forward, and Cost Stress metrics pass through without inpu
   assert.equal(costStress.metrics.mdd, nested.executionCostStress.stressed.maximumDrawdown);
   assert.equal(costStress.metrics.netReturn, nested.executionCostStress.stressed.totalReturn);
   assert.equal(costStress.metrics.costAdjustedReturn, nested.executionCostStress.stressed.totalReturn);
+  assert.equal(costStress.costs.feeAmount, nested.executionCostStress.stressed.fees);
+  assert.equal(costStress.costs.spreadAmount, nested.executionCostStress.stressed.spread);
+  assert.equal(costStress.costs.slippageAmount, nested.executionCostStress.stressed.slippage);
+  assert.equal(costStress.costs.fundingAmount, nested.executionCostStress.stressed.funding);
+  assert.equal(costStress.costs.latencyAmount, nested.executionCostStress.stressed.latency);
   assert.deepEqual(verifyBacktesterStrategyEvidenceAdapterV1(result.candidate).blockers, []);
 
   const tampered = structuredClone(result.candidate);
@@ -394,9 +408,9 @@ test("Walk Forward leakage and missing measuredAt fail closed", () => {
   assert.equal(missingMeasuredAt.candidate, null);
 });
 
-test("missing statistical evidence remains missing and never becomes PASS", () => {
+test("missing statistical and path evidence remains missing and never becomes PASS", () => {
   const result = adaptBacktesterStrategyEvidenceV1(adapterInput());
-  const [oos, walkForward, , firewall] = result.candidate.evidenceEnvelopes.map((row) => row.envelope);
+  const [oos, walkForward, costStress, firewall] = result.candidate.evidenceEnvelopes.map((row) => row.envelope);
   assert.equal(oos.validation.mddAcceptable, "UNKNOWN");
   assert.equal(walkForward.validation.parameterStability, "UNKNOWN");
   assert.equal(firewall.metrics.dsr, null);
@@ -404,7 +418,13 @@ test("missing statistical evidence remains missing and never becomes PASS", () =
   assert.equal(firewall.validation.overfitVerdict, "UNKNOWN");
   assert.ok(firewall.missingEvidence.includes("DSR"));
   assert.ok(firewall.missingEvidence.includes("PBO"));
+  assert.ok(result.missingEvidence.includes("SAMPLE_N"));
   assert.ok(result.missingEvidence.includes("SETTLED_N"));
+  for (const field of ["MAE", "MFE", "ENTRY_CONTRIBUTION", "EXIT_CONTRIBUTION"]) {
+    assert.ok(oos.missingEvidence.includes(field));
+    assert.ok(costStress.missingEvidence.includes(field));
+    assert.ok(result.missingEvidence.includes(field));
+  }
 });
 
 test("negative real-shaped evidence remains NONE with no execution authority", () => {
