@@ -43,6 +43,15 @@ export {
 } from './authoritative-paper-callback-owners.service';
 
 export {
+  AUTHORITATIVE_PAPER_LATENCY_COST_EVIDENCE_SAFETY,
+  AUTHORITATIVE_PAPER_LATENCY_COST_EVIDENCE_VERSION,
+  bindAuthoritativePaperLatencyToSupplementalCostInput,
+  buildAuthoritativePaperLatencyCostEvidence,
+  collectAuthoritativePaperLatencyCostEvidence,
+  readBitgetPublicLatencyMidpointQuote,
+} from './authoritative-paper-latency-cost-evidence.service';
+
+export {
   buildPaperSimulatedExecutionEvidence,
   PAPER_SIMULATED_EXECUTION_EVIDENCE_SAFETY,
   PAPER_SIMULATED_EXECUTION_EVIDENCE_VERSION,
