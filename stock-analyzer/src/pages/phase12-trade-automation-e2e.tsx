@@ -126,5 +126,12 @@ const APPROVAL_FIXTURE: TradeApprovalQueueItem[] = [
 ];
 
 export default function Phase12TradeAutomationE2EPage() {
-  return <AutoTradingPage fixture={FIXTURE} approvalFixture={APPROVAL_FIXTURE} />;
+  const useLiveApprovalQueue = typeof window !== 'undefined'
+    && new URLSearchParams(window.location.search).get('approvalQueue') === 'live';
+  return (
+    <AutoTradingPage
+      fixture={FIXTURE}
+      approvalFixture={useLiveApprovalQueue ? undefined : APPROVAL_FIXTURE}
+    />
+  );
 }
