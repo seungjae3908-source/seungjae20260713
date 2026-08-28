@@ -1,8 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import * as authoritativePaperRuntime from "../runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs";
 import {
   finalizeCanonicalNaturalStageEvidence,
   runPaperForwardScheduleCli,
@@ -12,6 +14,148 @@ const SHA = "0123456789abcdef0123456789abcdef01234567";
 const PUBLISHER_ACCOUNT_ID_SHA256 = createHash("sha256")
   .update("publisher-account-fixture")
   .digest("hex");
+
+function paperState(nowMs) {
+  const at = new Date(nowMs - 1_000).toISOString();
+  return {
+    schemaVersion: 1,
+    account: {
+      id: "paper_state_schedule_fixture",
+      initialBalance: 10_000,
+      cashBalance: 10_000,
+      realizedPnl: 0,
+      unrealizedPnl: 0,
+      equity: 10_000,
+      usedMargin: 0,
+      availableMargin: 10_000,
+      createdAt: at,
+      updatedAt: at,
+    },
+    orders: [],
+    positions: [],
+    fills: [],
+    journal: [],
+    riskState: {
+      dayKey: at.slice(0, 10),
+      weekKey: "2026-W35",
+      dailyRealizedPnl: 0,
+      weeklyRealizedPnl: 0,
+      consecutiveLosses: 0,
+    },
+    processedEventIds: [],
+    createdAt: at,
+    updatedAt: at,
+  };
+}
+
+function runtimePackageFixture() {
+  return Object.freeze({
+    schemaVersion: "authoritative-paper-runtime-package-loaded-v1",
+    manifest: Object.freeze({ paperStateSnapshotSchemaVersion: "paper-trading-state-snapshot-v2" }),
+    sourceSha: "3dae58f78d1118bc5b9f5b431adbfa50d63d4f5c",
+    sourceGraphSha256: "a".repeat(64),
+    bundleSha256: "b".repeat(64),
+    admissionBundleSchemaVersion: "scanner-paper-admission-evidence-bundle-v1",
+    callbackOwnerContractSchemaVersion: "authoritative-paper-callback-owner-contract-v1",
+    blockedDataSourceContractSchemaVersion: "authoritative-paper-blocked-data-source-contract-v1",
+    simulatedExecutionEvidenceSchemaVersion: "paper-simulated-execution-evidence-v1",
+    costPolicyVersion: null,
+    costPolicyVersionBinding: Object.freeze({ status: "RUNTIME_EXACT_REQUIRED" }),
+    createPaperAdmissionEvidenceProducer: () => async () => Object.freeze({ status: "BLOCKED_DATA" }),
+    createAuthoritativePaperEvidenceSourceWiring:
+      authoritativePaperRuntime.createAuthoritativePaperEvidenceSourceWiring,
+    createImmutablePaperTradingStateSnapshot:
+      authoritativePaperRuntime.createImmutablePaperTradingStateSnapshot,
+    validateImmutablePaperTradingStateSnapshot:
+      authoritativePaperRuntime.validateImmutablePaperTradingStateSnapshot,
+    executionAuthority: "NONE",
+    privateApiAllowed: false,
+    liveTrading: false,
+    scheduleActivationAuthority: false,
+    financialMutationAllowed: false,
+  });
+}
+
+async function runReadonlyPaperStateCase({
+  bindingSha = SHA,
+  snapshotSha = bindingSha,
+  bindingDigest = PUBLISHER_ACCOUNT_ID_SHA256,
+  snapshotDigest = bindingDigest,
+  observedAtMs = Date.now(),
+  maximumAgeMs = 30_000,
+  removeBeforeCallback = false,
+} = {}) {
+  const root = await mkdtemp(join(tmpdir(), "paper-state-readonly-schedule-"));
+  const snapshotPath = join(root, "publisher", "paper-state-v2.json");
+  const bindingPath = join(root, "publisher-binding.json");
+  await mkdir(join(root, "publisher"), { recursive: true });
+  const runtimePackage = runtimePackageFixture();
+  const state = paperState(observedAtMs);
+  const snapshot = runtimePackage.createImmutablePaperTradingStateSnapshot({
+    state,
+    sourceOwner: "AUTHENTICATED_PAPER_STATE_TEST_FIXTURE",
+    sourceSha: snapshotSha,
+    market: "CRYPTO_FUTURES",
+    currency: "USDT",
+    provenance: ["canonical-paper-state-readonly-transport-test"],
+    publisherAccountIdSha256: snapshotDigest,
+    observedAtMs,
+    maximumAgeMs,
+  });
+  const binding = {
+    schemaVersion: "paper-state-publisher-runtime-binding-v1",
+    paperRuntimeSourceSha: bindingSha,
+    snapshotPath,
+    publisherAccountIdSha256: bindingDigest,
+    immutable: true,
+    executionAuthority: "NONE",
+    privateApiAllowed: false,
+    liveTrading: false,
+    financialMutationAllowed: false,
+  };
+  await writeFile(snapshotPath, `${JSON.stringify(snapshot)}\n`);
+  await writeFile(bindingPath, `${JSON.stringify(binding)}\n`);
+
+  let paperStateSeen = undefined;
+  let callbackError = null;
+  const output = await runPaperForwardScheduleCli(Object.freeze({
+    PAPER_FORWARD_SCHEDULE_ACTIVE: "true",
+    RESEARCH_PRODUCTION: "true",
+    PAPER_FORWARD_RESEARCH_SHA: SHA,
+    PAPER_FORWARD_ACTIVATION_AT_MS: "1",
+    PAPER_FORWARD_PUBLISHER_BINDING_PATH: bindingPath,
+    PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH: snapshotPath,
+    PAPER_FORWARD_ROOT: join(root, "runtime"),
+  }), {
+    authoritativePaperPackageLoader: async () => runtimePackage,
+    authoritativePaperDependenciesFactory: ({ sourceWiring }) => Object.freeze({
+      publicEvidenceProvider: Object.freeze({
+        async collectPublicEvidence() {
+          paperStateSeen = await sourceWiring.paperStateForCard();
+          return Object.freeze({ status: "BLOCKED_DATA" });
+        },
+      }),
+      sourceWiringAudit: Object.freeze({
+        status: "CALLBACKS_CONNECTED_BLOCKED_DATA",
+        firstZeroStage: "UNKNOWN",
+        firstZeroReason: "AUTHORITATIVE_EVIDENCE_DATA_UNAVAILABLE",
+        blockers: Object.freeze([]),
+        stageMeasurements: Object.freeze([]),
+      }),
+    }),
+    runScheduledInvocation: async (input) => {
+      if (removeBeforeCallback) await rm(snapshotPath, { force: true });
+      try {
+        await input.publicEvidenceProvider.collectPublicEvidence({ market: "CRYPTO_FUTURES" });
+      } catch (error) {
+        if (!removeBeforeCallback) throw error;
+        callbackError = error;
+      }
+      return Object.freeze({ status: "READY", mutationCount: 0 });
+    },
+  });
+  return { root, output, paperStateSeen, state, callbackError };
+}
 
 function directStage(count, prefix, overrides = {}) {
   return Object.freeze({
@@ -145,6 +289,8 @@ test("Research Production recurring CLI injects the audited authoritative source
     unknownIsZero: false,
   });
   assert.equal(output.paperStateTransport.status, "BLOCKED_DATA_CONFIG_ABSENT");
+  assert.equal(output.paperStateTransport.state, "MISSING");
+  assert.equal(output.paperStateTransport.reason, "PAPER_STATE_SNAPSHOT_MISSING");
   assert.equal(output.paperStateTransport.callbackInvoked, false);
 });
 
@@ -206,9 +352,86 @@ test("configured lossless Paper snapshot reader replaces only the scheduled stat
   assert.equal(sourceWiringSeen.contractRulesForCard.authoritativeOwner.missingDataBehavior, "BLOCKED_DATA");
   assert.equal(snapshotCallbackCalls, 1);
   assert.equal(output.paperStateTransport.status, "CONFIGURED_EXACT_ACCOUNT_BOUND");
+  assert.equal(output.paperStateTransport.state, "PRESENT");
+  assert.equal(output.paperStateTransport.publisherAccountBound, true);
   assert.equal(output.paperStateTransport.callbackInvocationCount, 1);
   assert.equal(output.paperStateTransport.callbackInvoked, true);
   assert.equal(output.paperStateTransport.unknownIsZero, false);
+});
+
+test("fresh exact-account and exact-cycle snapshot becomes PRESENT through the existing callback owner", async () => {
+  const result = await runReadonlyPaperStateCase();
+  try {
+    assert.deepEqual(result.paperStateSeen, result.state);
+    assert.equal(result.output.paperStateTransport.state, "PRESENT");
+    assert.equal(result.output.paperStateTransport.reason, null);
+    assert.equal(result.output.paperStateTransport.publisherAccountBound, true);
+    assert.equal(result.output.paperStateTransport.sourceShaExact, true);
+    assert.equal(result.output.paperStateTransport.observedAtMs > 0, true);
+    assert.equal(result.output.paperStateTransport.callbackInvocationCount, 1);
+  } finally {
+    await rm(result.root, { recursive: true, force: true });
+  }
+});
+
+test("stale canonical snapshot is classified STALE and remains fail-closed", async () => {
+  const result = await runReadonlyPaperStateCase({ observedAtMs: Date.now() - 120_000 });
+  try {
+    assert.equal(result.paperStateSeen, null);
+    assert.equal(result.output.paperStateTransport.state, "STALE");
+    assert.equal(result.output.paperStateTransport.reason, "PAPER_STATE_SNAPSHOT_STALE_OR_FUTURE");
+    assert.equal(result.output.paperStateTransport.callbackInvoked, false);
+  } finally {
+    await rm(result.root, { recursive: true, force: true });
+  }
+});
+
+test("wrong publisher account snapshot is classified and fails closed", async () => {
+  const result = await runReadonlyPaperStateCase({
+    bindingDigest: "b".repeat(64),
+    snapshotDigest: PUBLISHER_ACCOUNT_ID_SHA256,
+  });
+  try {
+    assert.equal(result.paperStateSeen, null);
+    assert.equal(result.output.paperStateTransport.state, "WRONG_ACCOUNT");
+    assert.equal(
+      result.output.paperStateTransport.reason,
+      "PAPER_STATE_PUBLISHER_ACCOUNT_BINDING_MISMATCH",
+    );
+    assert.equal(result.output.paperStateTransport.publisherAccountBound, false);
+    assert.equal(result.output.paperStateTransport.callbackInvoked, false);
+  } finally {
+    await rm(result.root, { recursive: true, force: true });
+  }
+});
+
+test("wrong Research cycle snapshot is classified and fails closed", async () => {
+  const wrongSha = "f".repeat(40);
+  const result = await runReadonlyPaperStateCase({ bindingSha: wrongSha });
+  try {
+    assert.equal(result.paperStateSeen, null);
+    assert.equal(result.output.paperStateTransport.state, "WRONG_CYCLE");
+    assert.equal(result.output.paperStateTransport.reason, "PAPER_STATE_SOURCE_SHA_MISMATCH");
+    assert.equal(result.output.paperStateTransport.sourceShaExact, false);
+    assert.equal(result.output.paperStateTransport.callbackInvoked, false);
+  } finally {
+    await rm(result.root, { recursive: true, force: true });
+  }
+});
+
+test("callback read failure is controlled and leaks neither raw exception nor snapshot path", async () => {
+  const result = await runReadonlyPaperStateCase({ removeBeforeCallback: true });
+  try {
+    assert.equal(result.paperStateSeen, undefined);
+    assert.equal(result.output.paperStateTransport.state, "INVALID");
+    assert.equal(result.output.paperStateTransport.reason, "PAPER_STATE_SNAPSHOT_INVALID");
+    assert.equal(result.output.paperStateTransport.callbackInvoked, true);
+    assert.equal(result.callbackError?.code, "PAPER_STATE_SNAPSHOT_INVALID");
+    assert.equal(result.callbackError?.message, "PAPER_STATE_SNAPSHOT_INVALID");
+    assert.equal(String(result.callbackError).includes(result.root), false);
+  } finally {
+    await rm(result.root, { recursive: true, force: true });
+  }
 });
 
 test("scheduled CLI reports a FIRST_ZERO only from the actually executed measured stage prefix", async () => {
