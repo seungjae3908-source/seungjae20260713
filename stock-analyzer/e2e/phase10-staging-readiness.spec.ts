@@ -197,14 +197,7 @@ function isLogoutScopedRead(request: Request, expectedOrigin: string) {
 }
 
 function isPersonalIntegrationLogoutRead(request: Request, expectedOrigin: string) {
-  let parsed: URL;
-  try {
-    parsed = new URL(request.url());
-  } catch {
-    return false;
-  }
-  return parsed.pathname === '/api/user-integrations'
-    && isLogoutScopedRead(request, expectedOrigin);
+  return isLogoutScopedRead(request, expectedOrigin);
 }
 
 function isExpectedLogoutAbort(request: Request, observation: LogoutObservation) {
@@ -451,7 +444,7 @@ async function waitForPendingPersonalIntegrationReads(page: Page) {
         .length;
     },
     {
-      message: 'personal integration GET must settle before verifier-owned authenticated navigation',
+      message: 'read-only integration GETs must settle before verifier-owned authenticated navigation',
       timeout: 15_000,
       intervals: [100, 200, 300, 500],
     },
