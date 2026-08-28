@@ -34,6 +34,12 @@ function cloneReasonEvidenceByStage(value) {
   ));
 }
 
+function cloneObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? freeze(structuredClone(value))
+    : null;
+}
+
 function naturalRuntimeMetadata(runtime) {
   return {
     naturalFunnelMeasurements: cloneMeasurements(runtime?.naturalFunnelMeasurements),
@@ -44,7 +50,92 @@ function naturalRuntimeMetadata(runtime) {
     authoritativeFirstZeroReasonEvidenceByStage: cloneReasonEvidenceByStage(
       runtime?.authoritativeFirstZeroReasonEvidenceByStage,
     ),
+    canonicalNaturalStageEvidence: cloneObject(runtime?.canonicalNaturalStageEvidence),
+    exitConditionEvidence: cloneObject(runtime?.exitConditionEvidence),
   };
+}
+
+function exactPositionIdentity(position) {
+  const sample = position?.sample?.identity ?? {};
+  return {
+    market: position?.market ?? sample.market,
+    symbol: sample.symbol,
+    timeframe: sample.timeframe,
+    horizon: sample.horizon,
+    strategyId: position?.strategyId ?? sample.strategyId,
+    strategyVersion: position?.strategyVersion ?? sample.strategyVersion,
+    parameterHash: position?.parameterHash ?? sample.parameterHash,
+    researchCodeSha: position?.researchCodeSha ?? sample.researchCodeSha,
+    costPolicyVersion: position?.costPolicyVersion ?? position?.sample?.profitEvidence?.costPolicyId,
+  };
+}
+
+function exactIdentityMatch(position, paperIdentity) {
+  if (!position || !paperIdentity) return false;
+  const value = exactPositionIdentity(position);
+  return ["market", "symbol", "timeframe", "strategyId", "strategyVersion", "parameterHash", "researchCodeSha", "costPolicyVersion"]
+    .every((key) => nonEmpty(value[key]) && value[key] === paperIdentity[key])
+    && Number.isInteger(value.horizon)
+    && value.horizon === paperIdentity.horizon;
+}
+
+function exitEligibilityEvidence(runtime, openPositions) {
+  const condition = runtime?.exitConditionEvidence;
+  const observations = Array.isArray(condition?.observations) ? condition.observations : [];
+  const positionsKnown = Array.isArray(openPositions);
+  const identityComplete = observations.every((row) => row?.paperIdentity && typeof row.paperIdentity === "object");
+  const measured = condition?.status === "MEASURED" && positionsKnown && identityComplete;
+  const reasonObservations = [];
+  const enriched = observations.map((row) => {
+    const matches = measured ? openPositions.filter((position) => exactIdentityMatch(position, row.paperIdentity)) : [];
+    const matchedOpenPosition = matches.length === 1;
+    const exitEligible = measured && matchedOpenPosition && row.requirementsSatisfied === true;
+    let sourceCode = null;
+    let canonicalReason = "UNKNOWN";
+    let lossless = false;
+    if (measured && row.requirementsSatisfied !== true) {
+      sourceCode = row.sourceCode ?? "EXIT_REQUIREMENTS_NOT_SATISFIED";
+    } else if (measured && matches.length === 0) {
+      sourceCode = "OPEN_POSITION_NOT_MATCHED";
+      canonicalReason = "IDENTITY_MISMATCH";
+      lossless = true;
+    } else if (measured && matches.length > 1) {
+      sourceCode = "OPEN_POSITION_MATCH_AMBIGUOUS";
+    }
+    if (sourceCode) reasonObservations.push(freeze({
+      sourceStage: "EXIT_ELIGIBLE",
+      sourceCode,
+      sourceReason: row.sourceReason ?? sourceCode,
+      canonicalReason,
+      lossless,
+      provenance: "meaningful-search-scheduled-paper-provider-v1 exact open-position identity join",
+      observedAt: row.observedAt ?? null,
+      identity: freeze({ observationId: row.observationId ?? null }),
+      naturalCredit: 0,
+      replayCredit: 0,
+      duplicateCredit: 0,
+    }));
+    return freeze({
+      ...structuredClone(row),
+      matchedOpenPosition,
+      matchedPositionId: matchedOpenPosition ? matches[0].positionId : null,
+      exitEligible,
+    });
+  });
+  return freeze({
+    schemaVersion: "canonical-paper-exit-eligibility-evidence-v1",
+    status: measured ? "MEASURED" : "UNKNOWN",
+    exitEvaluationCount: measured ? enriched.length : null,
+    matchedOpenPositionCount: measured ? enriched.filter((row) => row.matchedOpenPosition).length : null,
+    exitEligibleCount: measured ? enriched.filter((row) => row.exitEligible).length : null,
+    observations: freeze(enriched),
+    reasonObservations: freeze(reasonObservations),
+    blocker: measured ? null : "EXIT_ELIGIBILITY_DIRECT_PROVENANCE_INCOMPLETE",
+    provenance: "canonical exit condition evidence + exact open-position identity snapshot",
+    naturalCredit: 0,
+    replayCredit: 0,
+    duplicateCredit: 0,
+  });
 }
 
 function candidateIdentityBlockers(candidate, market, {
@@ -93,7 +184,7 @@ function candidateIdentityBlockers(candidate, market, {
   return [...new Set(blockers)];
 }
 
-function blockedEvidence(base, runtime, blocker) {
+function blockedEvidence(base, runtime, blocker, exitEligibility = null) {
   return freeze({
     ...base,
     status: "BLOCKED_DATA",
@@ -114,12 +205,13 @@ function blockedEvidence(base, runtime, blocker) {
       firstZeroStage: runtime?.firstZeroStage ?? "UNKNOWN",
       firstZeroReason: runtime?.firstZeroReason ?? blocker,
       ...naturalRuntimeMetadata(runtime),
+      exitEligibilityEvidence: exitEligibility,
       blocker,
     }),
   });
 }
 
-function readyEvidence(base, runtime, candidates, exits) {
+function readyEvidence(base, runtime, candidates, exits, exitEligibility) {
   return freeze({
     ...base,
     candidates: freeze(candidates.map((row) => freeze(structuredClone(row)))),
@@ -135,6 +227,7 @@ function readyEvidence(base, runtime, candidates, exits) {
       firstZeroStage: runtime.firstZeroStage ?? "UNKNOWN",
       firstZeroReason: runtime.firstZeroReason ?? null,
       ...naturalRuntimeMetadata(runtime),
+      exitEligibilityEvidence: exitEligibility,
       blocker: null,
     }),
   });
@@ -170,6 +263,7 @@ export function wrapPaperForwardProviderWithMeaningfulSearch({
       if (!runtime || runtime.market !== input.market || !safeEnvelope(runtime)) {
         return blockedEvidence(base, runtime, "PAPER_RUNTIME_CONTRACT_INVALID");
       }
+      const exitEligibility = exitEligibilityEvidence(runtime, input.openPositions);
       if (!READY_RUNTIME_STATUSES.has(runtime.status)) {
         const admissionBlockers = Array.isArray(runtime.admissionBlockers)
           ? runtime.admissionBlockers.filter(nonEmpty)
@@ -179,16 +273,16 @@ export function wrapPaperForwardProviderWithMeaningfulSearch({
           : runtime.status === "SEARCH_FAILURE_BLOCKED"
             ? "SEARCH_FAILURE"
             : runtime.status ?? "PAPER_RUNTIME_NOT_READY";
-        return blockedEvidence(base, runtime, blocker);
+        return blockedEvidence(base, runtime, blocker, exitEligibility);
       }
 
       const candidates = runtime?.paperBridge?.candidates ?? [];
       const exits = runtime?.paperBridge?.exitSignals ?? [];
       if (!Array.isArray(candidates) || !Array.isArray(exits)) {
-        return blockedEvidence(base, runtime, "PAPER_RUNTIME_PAYLOAD_INVALID");
+        return blockedEvidence(base, runtime, "PAPER_RUNTIME_PAYLOAD_INVALID", exitEligibility);
       }
       if (runtime.status === "VALID_NO_TRADE" && (candidates.length > 0 || exits.length > 0)) {
-        return blockedEvidence(base, runtime, "VALID_NO_TRADE_PAYLOAD_VIOLATION");
+        return blockedEvidence(base, runtime, "VALID_NO_TRADE_PAYLOAD_VIOLATION", exitEligibility);
       }
 
       const candidateBlockers = candidates.flatMap((candidate) => candidateIdentityBlockers(candidate, input.market));
@@ -197,9 +291,9 @@ export function wrapPaperForwardProviderWithMeaningfulSearch({
         requireExitIntent: true,
       }));
       const blockers = [...new Set([...candidateBlockers, ...exitBlockers])];
-      if (blockers.length > 0) return blockedEvidence(base, runtime, blockers.join("|"));
+      if (blockers.length > 0) return blockedEvidence(base, runtime, blockers.join("|"), exitEligibility);
 
-      return readyEvidence(base, runtime, candidates, exits);
+      return readyEvidence(base, runtime, candidates, exits, exitEligibility);
     },
   });
 }

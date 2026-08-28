@@ -6,3 +6,255 @@
   min-width: 44px;
   min-height: 44px;
 }
+
+/*
+ * BottomNav is a normal-flow flex sibling inside each route shell. The legacy
+ * production geometry stylesheet still subtracts a second BottomNav reserve
+ * from AppShell, leaving a large blank strip and shortening every scroll owner.
+ * Restore the AppShell to the full viewport here; route flex shells continue to
+ * reserve the navigation naturally.
+ */
+#root:has(nav[aria-label="주요 메뉴"]) > div > div:nth-child(2)[class*="max-w-screen"] {
+  height: 100dvh !important;
+  min-height: 100svh !important;
+}
+
+/* All visible top-level back actions use the same mobile-safe touch target. */
+button[aria-label="기술 화면으로 돌아가기"],
+button[aria-label="종목 목록으로 돌아가기"] {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+/*
+ * Mobile standalone AI Chart used to make the whole page, including BottomNav,
+ * the effective scroll owner. Keep its historical computed overflow:auto
+ * contract, but bound the flex children so only main needs to move and BottomNav
+ * remains on the viewport floor. Desktop keeps the dedicated two-pane stylesheet
+ * as the sole geometry owner.
+ */
+@media (max-width: 1023px) {
+  #root div:has(> header h1[aria-label="AI 차트 생중계 · AI 차트 2.0"]):has(> nav[aria-label="주요 메뉴"]) {
+    display: flex !important;
+    height: 100% !important;
+    min-height: 0 !important;
+    flex-direction: column !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    padding-bottom: 0 !important;
+  }
+
+  #root div:has(> header h1[aria-label="AI 차트 생중계 · AI 차트 2.0"]):has(> nav[aria-label="주요 메뉴"])
+    > header:first-child {
+    position: relative !important;
+    top: auto !important;
+    flex: 0 0 auto;
+  }
+
+  #root div:has(> header h1[aria-label="AI 차트 생중계 · AI 차트 2.0"]):has(> nav[aria-label="주요 메뉴"])
+    > div:has([data-testid="ai-chart-mobile-tabs"]) {
+    position: relative !important;
+    top: auto !important;
+    flex: 0 0 auto;
+  }
+
+  #root div:has(> header h1[aria-label="AI 차트 생중계 · AI 차트 2.0"]):has(> nav[aria-label="주요 메뉴"])
+    > main {
+    min-height: 0 !important;
+    flex: 1 1 0% !important;
+    overflow-y: auto !important;
+    overscroll-behavior: contain;
+  }
+}
+
+/*
+ * A stock detail already owns market + symbol context. The embedded AI Chart
+ * must not offer a second market/symbol picker that can escape from the selected
+ * stock. Keep timeframe/indicator/chart controls and retain one compact semantic
+ * AI Chart heading for route identity and accessibility.
+ */
+[data-testid="canonical-rich-detail-chart"] [data-testid="unified-analysis-chart"] > section:first-child {
+  display: none !important;
+}
+
+[data-testid="canonical-rich-detail-chart"] > div > header:first-child {
+  position: relative !important;
+  top: auto !important;
+  z-index: 10 !important;
+  border-bottom: 0 !important;
+  background: transparent !important;
+  padding: 0.4rem 0.75rem 0.2rem !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+[data-testid="canonical-rich-detail-chart"] > div > header:first-child p:first-child {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+[data-testid="canonical-rich-detail-chart"] > div > header:first-child h1 {
+  font-size: 0.875rem !important;
+  line-height: 1.25rem !important;
+  text-align: center !important;
+}
+
+/*
+ * Stock detail owns the vertical scroll boundary. For the AI Chart tab, hand
+ * that boundary to the embedded chart instead of stacking two scroll owners.
+ */
+[data-testid="canonical-stock-analysis"]:has([data-testid="stock-detail-tabs"])
+  > main:has([data-testid="canonical-rich-detail-chart"]) {
+  overflow: hidden !important;
+  padding-top: 0.75rem !important;
+  padding-bottom: 0.75rem !important;
+}
+
+[data-testid="canonical-rich-detail-chart"] {
+  height: 100% !important;
+  min-height: 0 !important;
+}
+
+[data-testid="canonical-rich-detail-chart"] > div {
+  height: 100% !important;
+  min-height: 0 !important;
+  padding-bottom: 1rem !important;
+}
+
+/* Normal stock-detail tabs do not need legacy BottomNav-sized spacer padding. */
+[data-testid="canonical-stock-analysis"]:has([data-testid="stock-detail-tabs"])
+  > main:not(:has([data-testid="canonical-rich-detail-chart"])) {
+  padding-bottom: 1rem !important;
+}
+
+/* News and summary/detail tabs keep one deliberate vertical pan owner on touch devices. */
+[data-testid="canonical-stock-analysis"]:has([data-testid="stock-detail-tabs"])
+  > main:not(:has([data-testid="canonical-rich-detail-chart"])) {
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Legacy detail is embedded under the canonical 상세분석 tab; never render a second BottomNav inside it. */
+[data-testid="rich-detail-shell"] nav[aria-label="주요 메뉴"] {
+  display: none !important;
+}
+
+/*
+ * Modern pages already render BottomNav as a normal-flow sibling, so their old
+ * fixed-nav spacer classes create an empty tail after the real content. Keep a
+ * compact 1rem content finish on the routes that still carry those legacy pads.
+ */
+#root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="홈"]) > main,
+#root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="통합검색"]) > main,
+#root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="테마"]) > main,
+#root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="투자 공부"]) > main,
+#root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="승인형 주문"]) > main,
+#root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="앱 설정"]) > main {
+  padding-bottom: 1rem !important;
+}
+
+/* AI 정보 is already flex-bounded; remove only its obsolete root BottomNav reserve. */
+#root div:has(> nav[aria-label="주요 메뉴"][data-route-title="AI 정보"]) {
+  padding-bottom: 0 !important;
+}
+
+/*
+ * Paper Trading is the remaining modern route whose panel still consumes h-full
+ * ahead of a normal-flow BottomNav. Give the panel the remaining flex height and
+ * remove both old BottomNav-sized spacers.
+ */
+[data-testid="paper-trading-shell"] {
+  display: flex !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  flex-direction: column !important;
+  padding-bottom: 0 !important;
+}
+
+[data-testid="paper-trading-shell"] > [data-testid="paper-trading-page"] {
+  height: auto !important;
+  min-height: 0 !important;
+  flex: 1 1 0% !important;
+  padding-bottom: 1rem !important;
+}
+
+/* Keep the read-only orderbook opener just above the real BottomNav by default. */
+@media (max-width: 1199px) {
+  button[aria-label="읽기 전용 호가창 열기"] {
+    bottom: calc(4.25rem + env(safe-area-inset-bottom)) !important;
+  }
+}
+
+/*
+ * Canonical stock detail already reserves a 44px action slot on the header's
+ * right edge. Reuse that slot for the read-only orderbook opener instead of
+ * floating a wide pill over chart/news content.
+ */
+#root > div:has([data-testid="canonical-stock-analysis"] [data-testid="stock-detail-tabs"])
+  > button[aria-label="읽기 전용 호가창 열기"] {
+  top: 0.75rem !important;
+  right: max(0.75rem, env(safe-area-inset-right)) !important;
+  bottom: auto !important;
+  width: 44px !important;
+  height: 44px !important;
+  min-width: 44px !important;
+  min-height: 44px !important;
+  padding: 0 !important;
+  justify-content: center !important;
+  font-size: 0 !important;
+}
+
+/*
+ * App-wide tab typography contract: every semantic tab uses one visual spec —
+ * 12px / 900 weight / 16px line-height / 44px minimum hit target — and centers
+ * its visible label on both axes. The aria/data selectors cover older tablists
+ * that predate ResponsiveTabs without touching ordinary action buttons.
+ */
+#root [role="tablist"] [role="tab"],
+#root [aria-label$="탭"] > button,
+#root [data-testid$="-tabs"] > button {
+  display: inline-flex !important;
+  min-height: 44px !important;
+  align-items: center !important;
+  justify-content: center !important;
+  font-size: 0.75rem !important;
+  line-height: 1rem !important;
+  font-weight: 900 !important;
+  text-align: center !important;
+}
+
+#root [role="tablist"] [role="tab"] > span,
+#root [aria-label$="탭"] > button > span,
+#root [data-testid$="-tabs"] > button > span {
+  width: 100%;
+  line-height: 1rem !important;
+  text-align: center !important;
+}
+
+/*
+ * Remove only low-value helper/subtitle copy directly attached to a page title,
+ * tab row, or button. Runtime facts, alerts/status messages, article bodies,
+ * news/disclosure/evidence content, and AI reasoning remain visible.
+ */
+#root header :is(h1, h2, h3) + p[class*="text-muted-foreground"],
+#root [role="tablist"] + p[class*="text-muted-foreground"],
+#root button > p[class*="text-muted-foreground"],
+#root button + p[class*="text-muted-foreground"] {
+  display: none !important;
+}
+
+#root [role="alert"] p,
+#root [role="status"] p,
+#root article p,
+#root [data-testid*="news"] p,
+#root [data-testid*="disclosure"] p,
+#root [data-testid*="evidence"] p {
+  display: revert;
+}

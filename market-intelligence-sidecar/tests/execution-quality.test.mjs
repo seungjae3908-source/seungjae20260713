@@ -52,9 +52,14 @@ test('queue analytics require verified order-level evidence and never infer L3 p
 test('fill probability is trusted only when empirical model calibration evidence is sufficient', () => {
   const pass = evaluateCalibratedFillModel(goodFillModel(), {}, NOW);
   assert.equal(pass.status, 'PASS');
+  assert.equal(pass.minimumSamples, 500);
   const undersampled = evaluateCalibratedFillModel({ ...goodFillModel(), evaluationSamples: 20 }, {}, NOW);
   assert.equal(undersampled.status, 'NOT_AVAILABLE');
   assert.equal(undersampled.reason, 'FILL_MODEL_SAMPLE_INSUFFICIENT');
+  assert.equal(undersampled.minimumSamples, 500);
+  const missing = evaluateCalibratedFillModel({}, {}, NOW);
+  assert.equal(missing.status, 'NOT_AVAILABLE');
+  assert.equal(missing.minimumSamples, 500);
   const low = evaluateCalibratedFillModel({ ...goodFillModel(), fillProbability: 0.4 }, {}, NOW);
   assert.equal(low.status, 'VETO');
   assert.equal(low.reason, 'FILL_PROBABILITY_TOO_LOW');
