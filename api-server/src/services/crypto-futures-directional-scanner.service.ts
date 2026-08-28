@@ -1,5 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  applyFuturesDerivativesEvidenceGate,
+  getFuturesDirectionalDerivativesEvidence,
+  type FuturesDirectionalDerivativesEvidence,
+} from './crypto-futures-derivatives-evidence.service';
+import {
   evaluateFuturesDirectionalPair,
   type FuturesDirectionalCandle,
   type FuturesDirectionalFormulaResult,
@@ -44,6 +49,7 @@ export interface FuturesDirectionalUniverse {
 export interface FuturesDirectionalRuntimeProviders {
   getUniverse(signal?: AbortSignal): Promise<FuturesDirectionalUniverse>;
   getCandles(symbol: string, timeframe: string, signal?: AbortSignal): Promise<FuturesDirectionalCandle[]>;
+  getDerivativesEvidence(symbol: string, signal?: AbortSignal): Promise<FuturesDirectionalDerivativesEvidence>;
   now(): number;
 }
 
@@ -295,6 +301,7 @@ async function defaultCandles(
 const defaultProviders: FuturesDirectionalRuntimeProviders = {
   getUniverse: defaultUniverse,
   getCandles: defaultCandles,
+  getDerivativesEvidence: getFuturesDirectionalDerivativesEvidence,
   now: Date.now,
 };
 
@@ -441,6 +448,7 @@ function isTimeout(error: unknown): boolean {
 type EvaluationRow = {
   ticker: FuturesDirectionalTicker;
   pair: ReturnType<typeof evaluateFuturesDirectionalPair> | null;
+  derivativesEvidence: FuturesDirectionalDerivativesEvidence | null;
   failure: FuturesDirectionalScanFailure | null;
 };
 
@@ -501,10 +509,12 @@ export function createCryptoFuturesDirectionalScannerService(
             return {
               ticker,
               pair: null,
+              derivativesEvidence: null,
               failure: { symbol: ticker.symbol, reason: 'invalid_data', message: 'CLOSED_CANDLES_INSUFFICIENT' },
             };
           }
-          const pair = evaluateFuturesDirectionalPair({
+
+          const baseInput = {
             timeframe: request.timeframe,
             condition: request.condition,
             price: ticker.price,
@@ -517,13 +527,53 @@ export function createCryptoFuturesDirectionalScannerService(
             tickerTimestamp: ticker.timestamp,
             candles,
             now: providers.now(),
+          };
+          const preliminaryPair = evaluateFuturesDirectionalPair(baseInput);
+          if (preliminaryPair.decision === 'NO_TRADE') {
+            return { ticker, pair: preliminaryPair, derivativesEvidence: null, failure: null };
+          }
+
+          let derivativesEvidence: FuturesDirectionalDerivativesEvidence;
+          try {
+            derivativesEvidence = await providers.getDerivativesEvidence(ticker.symbol, linked.controller.signal);
+          } catch (error) {
+            if (request.signal?.aborted) throw request.signal.reason ?? error;
+            return {
+              ticker,
+              pair: preliminaryPair,
+              derivativesEvidence: null,
+              failure: {
+                symbol: ticker.symbol,
+                reason: isTimeout(error) ? 'timeout' : 'provider_error',
+                message: `BLOCKED_DERIVATIVES_EVIDENCE:${error instanceof Error ? error.message : 'DERIVATIVES_EVIDENCE_UNAVAILABLE'}`,
+              },
+            };
+          }
+
+          const pair = evaluateFuturesDirectionalPair({
+            ...baseInput,
+            fundingRate: derivativesEvidence.fundingRate,
+            openInterest: derivativesEvidence.openInterest,
+            now: providers.now(),
           });
-          return { ticker, pair, failure: null };
+          return {
+            ticker,
+            pair,
+            derivativesEvidence,
+            failure: derivativesEvidence.status === 'READY'
+              ? null
+              : {
+                symbol: ticker.symbol,
+                reason: 'invalid_data',
+                message: `BLOCKED_DERIVATIVES_EVIDENCE:${derivativesEvidence.blockers.join(',') || 'UNKNOWN'}`,
+              },
+          };
         } catch (error) {
           if (request.signal?.aborted) throw request.signal.reason ?? error;
           return {
             ticker,
             pair: null,
+            derivativesEvidence: null,
             failure: {
               symbol: ticker.symbol,
               reason: isTimeout(error) ? 'timeout' : 'provider_error',
@@ -539,11 +589,17 @@ export function createCryptoFuturesDirectionalScannerService(
       const failures = evaluations.flatMap((row) => row.failure ? [row.failure] : []);
       const valid = evaluations.filter((row): row is EvaluationRow & { pair: NonNullable<EvaluationRow['pair']> } => row.pair != null);
       const conflicts: FuturesDirectionalConflict[] = valid
-        .filter((row) => row.pair.decision === 'SIGNAL_CONFLICT')
+        .filter((row) => row.pair.decision === 'SIGNAL_CONFLICT' && row.derivativesEvidence?.status === 'READY')
         .map((row) => ({ symbol: row.ticker.symbol, longScore: row.pair.long.score, shortScore: row.pair.short.score, reason: 'SIGNAL_CONFLICT' }));
       const conflictSymbols = new Set(conflicts.map((row) => row.symbol));
-      const longCards = rankLane(valid.map((row) => toCard(request, row.ticker, row.pair.long, providers.now(), conflictSymbols.has(row.ticker.symbol))), request);
-      const shortCards = rankLane(valid.map((row) => toCard(request, row.ticker, row.pair.short, providers.now(), conflictSymbols.has(row.ticker.symbol))), request);
+      const longCards = rankLane(valid.map((row) => applyFuturesDerivativesEvidenceGate(
+        toCard(request, row.ticker, row.pair.long, providers.now(), conflictSymbols.has(row.ticker.symbol)),
+        row.derivativesEvidence,
+      )), request);
+      const shortCards = rankLane(valid.map((row) => applyFuturesDerivativesEvidenceGate(
+        toCard(request, row.ticker, row.pair.short, providers.now(), conflictSymbols.has(row.ticker.symbol)),
+        row.derivativesEvidence,
+      )), request);
       const longActionable = longCards.filter((card) => card.strongSignalEligible).length;
       const shortActionable = shortCards.filter((card) => card.strongSignalEligible).length;
       const longLane: FuturesDirectionalLane = {
@@ -568,10 +624,12 @@ export function createCryptoFuturesDirectionalScannerService(
       const nextCursor = cursor + batchSize < universe.rows.length ? cursor + batchSize : null;
       const providerErrorCount = failures.filter((row) => row.reason === 'provider_error').length + universe.providerErrorCount;
       const timeoutCount = failures.filter((row) => row.reason === 'timeout').length;
-      const staleCount = [...longCards, ...shortCards].filter((card) => card.dataState === 'stale').length;
+      const allDirectionalCards = [...longCards, ...shortCards];
+      const staleCount = allDirectionalCards.filter((card) => card.dataState === 'stale').length;
+      const blockedDerivativesCount = allDirectionalCards.filter((card) => card.warnings.includes('BLOCKED_DERIVATIVES_EVIDENCE')).length;
       const dataState: ScannerDataState = valid.length === 0
         ? providerErrorCount > 0 ? 'unavailable' : 'insufficient'
-        : staleCount > 0 || failures.length > 0 ? 'partial' : 'complete';
+        : staleCount > 0 || failures.length > 0 || blockedDerivativesCount > 0 ? 'partial' : 'complete';
       const generatedAt = new Date(providers.now()).toISOString();
       const decisionText = `LONG ${longLane.decision}(${longActionable}) · SHORT ${shortLane.decision}(${shortActionable})`;
       return {
@@ -599,7 +657,7 @@ export function createCryptoFuturesDirectionalScannerService(
           maxConcurrency: MAX_CONCURRENCY,
         },
         dataState,
-        message: `${decisionText}${conflicts.length ? ` · SIGNAL_CONFLICT ${conflicts.length}` : ''}`,
+        message: `${decisionText}${conflicts.length ? ` · SIGNAL_CONFLICT ${conflicts.length}` : ''}${blockedDerivativesCount ? ` · BLOCKED_DERIVATIVES_EVIDENCE ${blockedDerivativesCount}` : ''}`,
         generatedAt,
         publicDataOnly: true,
         executionAuthority: 'NONE',
