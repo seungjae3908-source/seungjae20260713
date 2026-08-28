@@ -15,7 +15,23 @@ export {
   AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_SAFETY,
   AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_VERSION,
   createAuthoritativePaperEvidenceSourceWiring,
+  createAuthoritativePaperNaturalCycleEvidenceSourceWiring,
 } from './authoritative-paper-evidence-sources.service';
+
+export {
+  AUTHORITATIVE_PAPER_GENERIC_RISK_POLICY_PRODUCER_SAFETY,
+  AUTHORITATIVE_PAPER_GENERIC_RISK_POLICY_PRODUCER_VERSION,
+  AUTHORITATIVE_PAPER_GENERIC_RISK_POLICY_RECORD_VERSION,
+  AUTHORITATIVE_PAPER_GENERIC_RISK_SIZING_BRIDGE_VERSION,
+  buildAuthoritativePaperRiskSizingFromGenericRiskPolicySource,
+  createAuthoritativePaperGenericRiskPolicyProducer,
+} from './authoritative-paper-generic-risk-policy-producer.service';
+
+export {
+  AUTHORITATIVE_PAPER_RISK_SIZING_SOURCE_SAFETY,
+  AUTHORITATIVE_PAPER_RISK_SIZING_SOURCE_VERSION,
+  buildAuthoritativePaperRiskSizingEvidence,
+} from './authoritative-paper-risk-sizing-source.service';
 
 export {
   AUTHORITATIVE_PAPER_CALLBACK_OWNERS_SAFETY,
