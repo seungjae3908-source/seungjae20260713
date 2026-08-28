@@ -17,6 +17,7 @@ const BUNDLE_BYTES = Buffer.from("exact deterministic future reference bundle by
 const BUNDLE_DIGEST = sha256(BUNDLE_BYTES);
 const RELEASE_ID = "88001";
 const ASSET_ID = "99001";
+const RECEIPT_ASSET_ID = "99002";
 const ASSET_NAME = `prediction-lab-model-reference-evidence-${RUN_ID}-${BUNDLE_DIGEST}.tar.gz`;
 const ASSET_REFERENCE = `https://github.com/example/repo/releases/download/${MODEL_REFERENCE_DURABLE_TAG_PREFIX}-${RUN_ID}/${ASSET_NAME}`;
 
@@ -30,21 +31,37 @@ function manifest(group = "crypto-futures-15m", overrides = {}) {
     strategyIdentityDigest: "2".repeat(64),
     researchCodeSha: TARGET_SHA,
     trainingCodeSha: TARGET_SHA,
+    producerSha: TARGET_SHA,
     modelSha: "3".repeat(64),
     preprocessingVersion: "prediction-lab-training-preprocessing-v1",
     featureOrderDigest: "4".repeat(64),
+    trainDatasetIdentity: `prediction-lab-model-reference:train:${group}`,
+    validationDatasetIdentity: `prediction-lab-model-reference:validation:${group}`,
+    trainDatasetDigest: "5".repeat(64),
+    validationDatasetDigest: "6".repeat(64),
     trainSplitDigest: "5".repeat(64),
     validationSplitDigest: "6".repeat(64),
+    trainingInvocationDigest: "a".repeat(64),
+    oosExclusionDigest: "b".repeat(64),
+    splitIsolationStatus: "PASS",
     rawArtifactDigest: "7".repeat(64),
+    artifactIdentity: `prediction-lab-model-reference:${group}:sha256:${"7".repeat(64)}`,
+    artifactDigest: "7".repeat(64),
     measuredAt: "2026-08-28T00:00:00.000Z",
     trainSampleN: 1200,
     validationSampleN: 300,
     sourceAttestation: {
       sourceKind: "GENUINE_MARKET_DATA",
+      futureOnly: true,
       reconstructed: false,
+      historicalReconstruction: false,
       synthetic: false,
+      replayDerived: false,
       shadowDerived: false,
+      testFixture: false,
+      oosIncluded: false,
       finalHoldoutIncluded: false,
+      finalHoldoutAccessed: false,
     },
     referenceProvenance: {
       artifactReceiptDigest: "8".repeat(64),
@@ -84,6 +101,35 @@ function releaseMetadata(overrides = {}) {
     target_commitish: TARGET_SHA,
     immutable: true,
     draft: false,
+    assets: [{ id: Number(ASSET_ID) }, { id: Number(RECEIPT_ASSET_ID) }],
+    ...overrides,
+  };
+}
+
+function exactReceiptBytes(value) {
+  return Buffer.from(`${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+function receiptAssetMetadata(value, overrides = {}) {
+  const bytes = exactReceiptBytes(value);
+  return {
+    id: Number(RECEIPT_ASSET_ID),
+    name: value.receiptAssetName,
+    browser_download_url: `https://github.com/example/repo/releases/download/${value.releaseTag}/${value.receiptAssetName}`,
+    digest: `sha256:${sha256(bytes)}`,
+    size: bytes.length,
+    state: "uploaded",
+    ...overrides,
+  };
+}
+
+function validationEvidence(value, overrides = {}) {
+  return {
+    releaseMetadata: releaseMetadata(),
+    assetMetadata: assetMetadata(),
+    exactBundleBytes: BUNDLE_BYTES,
+    receiptAssetMetadata: receiptAssetMetadata(value),
+    exactReceiptBytes: exactReceiptBytes(value),
     ...overrides,
   };
 }
@@ -102,31 +148,27 @@ function assetMetadata(overrides = {}) {
 
 test("actual immutable release and exact asset bytes make the durable receipt VALID", () => {
   const value = receipt();
-  const result = validateModelReferenceDurableReceiptV1(value, {
-    releaseMetadata: releaseMetadata(),
-    assetMetadata: assetMetadata(),
-    exactBundleBytes: BUNDLE_BYTES,
-  });
+  const result = validateModelReferenceDurableReceiptV1(value, validationEvidence(value));
   assert.equal(result.valid, true);
   assert.equal(result.status, "VALID");
   assert.equal(result.durableReferenceStore, MODEL_REFERENCE_DURABLE_PROVIDER);
   assert.equal(result.longTermReferenceProven, true);
+  assert.equal(result.publicationReceiptProven, true);
   assert.equal(value.expiresAt, null);
   assert.deepEqual(value.references.map((item) => item.group), ["crypto-futures-15m", "crypto-futures-1h"]);
   assert.equal(value.sourceContract.actionsArtifactDigestIsDurableDigest, false);
+  assert.equal(value.sourceContract.exactStoredBytesConsumedByTraining, true);
 });
 
 test("missing or mutable release state never proves long-term preservation", () => {
   const value = receipt();
   assert.equal(validateModelReferenceDurableReceiptV1(value, {
+    ...validationEvidence(value),
     releaseMetadata: null,
-    assetMetadata: assetMetadata(),
-    exactBundleBytes: BUNDLE_BYTES,
   }).status, "MISSING_EVIDENCE");
   const mutable = validateModelReferenceDurableReceiptV1(value, {
+    ...validationEvidence(value),
     releaseMetadata: releaseMetadata({ immutable: false }),
-    assetMetadata: assetMetadata(),
-    exactBundleBytes: BUNDLE_BYTES,
   });
   assert.equal(mutable.status, "MISSING_EVIDENCE");
   assert.equal(mutable.longTermReferenceProven, false);
@@ -135,19 +177,18 @@ test("missing or mutable release state never proves long-term preservation", () 
 test("release, asset, and exact byte substitutions fail closed", async (t) => {
   const value = receipt();
   const cases = [
-    ["release target", releaseMetadata({ target_commitish: "b".repeat(40) }), assetMetadata(), BUNDLE_BYTES],
-    ["release tag", releaseMetadata({ tag_name: "other-tag" }), assetMetadata(), BUNDLE_BYTES],
-    ["asset id", releaseMetadata(), assetMetadata({ id: 123 }), BUNDLE_BYTES],
-    ["asset digest", releaseMetadata(), assetMetadata({ digest: `sha256:${"f".repeat(64)}` }), BUNDLE_BYTES],
-    ["bundle bytes", releaseMetadata(), assetMetadata(), Buffer.from("substituted", "utf8")],
+    ["release target", { releaseMetadata: releaseMetadata({ target_commitish: "b".repeat(40) }) }],
+    ["release tag", { releaseMetadata: releaseMetadata({ tag_name: "other-tag" }) }],
+    ["asset id", { assetMetadata: assetMetadata({ id: 123 }) }],
+    ["asset digest", { assetMetadata: assetMetadata({ digest: `sha256:${"f".repeat(64)}` }) }],
+    ["bundle bytes", { exactBundleBytes: Buffer.from("substituted", "utf8") }],
+    ["receipt asset digest", { receiptAssetMetadata: receiptAssetMetadata(value, { digest: `sha256:${"e".repeat(64)}` }) }],
+    ["receipt bytes", { exactReceiptBytes: Buffer.from("{}\n", "utf8") }],
+    ["release membership", { releaseMetadata: releaseMetadata({ assets: [{ id: Number(ASSET_ID) }] }) }],
   ];
-  for (const [name, release, asset, bytes] of cases) {
+  for (const [name, overrides] of cases) {
     await t.test(name, () => {
-      assert.equal(validateModelReferenceDurableReceiptV1(value, {
-        releaseMetadata: release,
-        assetMetadata: asset,
-        exactBundleBytes: bytes,
-      }).status, "IDENTITY_MISMATCH");
+      assert.equal(validateModelReferenceDurableReceiptV1(value, validationEvidence(value, overrides)).status, "IDENTITY_MISMATCH");
     });
   }
 });
@@ -155,17 +196,15 @@ test("release, asset, and exact byte substitutions fail closed", async (t) => {
 test("tampered durable receipt digest is rejected", () => {
   const value = structuredClone(receipt());
   value.references[0].modelSha = "f".repeat(64);
-  assert.equal(validateModelReferenceDurableReceiptV1(value, {
-    releaseMetadata: releaseMetadata(),
-    assetMetadata: assetMetadata(),
-    exactBundleBytes: BUNDLE_BYTES,
-  }).status, "IDENTITY_MISMATCH");
+  assert.equal(validateModelReferenceDurableReceiptV1(value, validationEvidence(value)).status, "IDENTITY_MISMATCH");
 });
 
 test("only VALID genuine future manifests can enter the durable receipt", () => {
   assert.throws(() => receipt({ referenceManifests: [manifest("crypto-futures-15m", { status: "MISSING_EVIDENCE" })] }), /canonically VALID/);
   assert.throws(() => receipt({ referenceManifests: [manifest("crypto-futures-15m", { sourceAttestation: { ...manifest().sourceAttestation, reconstructed: true } })] }), /substitution/);
   assert.throws(() => receipt({ referenceManifests: [manifest("crypto-futures-15m", { researchCodeSha: "b".repeat(40) })] }), /code SHA/);
+  assert.throws(() => receipt({ referenceManifests: [manifest("crypto-futures-15m", { producerSha: "b".repeat(40) })] }), /code SHA/);
+  assert.throws(() => receipt({ referenceManifests: [manifest("crypto-futures-15m", { validationDatasetDigest: "5".repeat(64) })] }), /distinct/u);
 });
 
 test("durable publisher workflow is main-only, immutability-gated, digest-bound, and preserves the #693 package layout", async () => {
@@ -179,6 +218,11 @@ test("durable publisher workflow is main-only, immutability-gated, digest-bound,
   assert.match(workflow, /draft:\s*true/u);
   assert.match(workflow, /uploadReleaseAsset/u);
   assert.match(workflow, /updateRelease/u);
+  assert.match(workflow, /receipt-asset-metadata\.json/u);
+  assert.match(workflow, /receiptAssetMetadata/u);
+  assert.match(workflow, /exactReceiptBytes/u);
+  assert.match(workflow, /gh release verify-asset "\$RELEASE_TAG" "\$DURABLE_ROOT\/\$RECEIPT_NAME"/u);
+  assert.match(workflow, /exact release tag already exists/u);
   assert.match(workflow, /prediction-lab-model-reference-evidence-\$\{\{ github\.run_id \}\}/u);
   for (const path of ["reference-manifest.json", "model/exact-model.json", "records/train.jsonl", "records/validation.jsonl"]) {
     assert.match(workflow, new RegExp(path.replace(/[./]/gu, "\\$&"), "u"));

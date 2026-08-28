@@ -2,7 +2,7 @@ import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
 import { sha256 } from "./data-quality.js";
-import { exportRawTrainValidationSplits } from "./dataset-export.js";
+import { isMaterializedExactTrainValidationSplits } from "./dataset-export.js";
 import { resolveCanonicalStrategyIdentity } from "./canonical-strategy-identity-v1.js";
 import {
   buildCompositeDatasetProvenance,
@@ -16,6 +16,7 @@ import {
 
 export const MODEL_REFERENCE_EVIDENCE_SCHEMA_VERSION = "PredictionLabModelReferenceEvidenceV1";
 export const RAW_REFERENCE_BUNDLE_SCHEMA_VERSION = "PredictionLabRawReferenceBundleIdentityV1";
+export const TRAINING_INVOCATION_SCHEMA_VERSION = "PredictionLabExactTrainingInvocationV1";
 export const PREPROCESSING_VERSION = "prediction-lab-training-preprocessing-v1";
 export const PREPROCESSING_CONTRACT = Object.freeze({
   featureCalculation: "analyzeMarket-training-record-features-v1",
@@ -73,11 +74,39 @@ async function writeJson(filePath, value) {
   await atomicWrite(filePath, Buffer.from(`${JSON.stringify(value, null, 2)}\n`, "utf8"));
 }
 
-function splitAttestations({ modelSha, trainSplitDigest, validationSplitDigest }) {
+function splitAttestations(manifest) {
   return {
-    train: { sourceKind: "RAW_TRAIN", modelSha, splitDigest: trainSplitDigest },
-    validation: { sourceKind: "RAW_VALIDATION", modelSha, splitDigest: validationSplitDigest },
+    train: {
+      sourceKind: "RAW_TRAIN",
+      modelSha: manifest.modelSha,
+      splitDigest: manifest.trainSplitDigest,
+      datasetIdentity: manifest.trainDatasetIdentity,
+      datasetDigest: manifest.trainDatasetDigest,
+      sampleN: manifest.trainSampleN,
+      byteLength: manifest.trainByteLength,
+      recordIdentityDigest: manifest.trainRecordIdentityDigest,
+    },
+    validation: {
+      sourceKind: "RAW_VALIDATION",
+      modelSha: manifest.modelSha,
+      splitDigest: manifest.validationSplitDigest,
+      datasetIdentity: manifest.validationDatasetIdentity,
+      datasetDigest: manifest.validationDatasetDigest,
+      sampleN: manifest.validationSampleN,
+      byteLength: manifest.validationByteLength,
+      recordIdentityDigest: manifest.validationRecordIdentityDigest,
+    },
   };
+}
+
+function expectedSplitDatasetIdentity(role, digest) {
+  return `prediction-lab-model-reference:${role.toLowerCase()}:sha256:${digest}`;
+}
+
+function recordIdentityDigest(records) {
+  const ids = records.map((record) => typeof record?.id === "string" ? record.id : "");
+  if (ids.some((id) => id.length === 0) || new Set(ids).size !== ids.length) return null;
+  return sha256(Buffer.from(`${[...ids].sort().join("\n")}\n`, "utf8"));
 }
 
 function rawArtifactIdentity(manifest) {
@@ -86,12 +115,24 @@ function rawArtifactIdentity(manifest) {
     datasetId: manifest.datasetId,
     datasetDigest: manifest.datasetDigest,
     modelSha: manifest.modelSha,
+    producerSha: manifest.producerSha,
+    trainingCodeSha: manifest.trainingCodeSha,
     preprocessingVersion: manifest.preprocessingVersion,
     featureOrderDigest: manifest.featureOrderDigest,
+    trainDatasetIdentity: manifest.trainDatasetIdentity,
+    validationDatasetIdentity: manifest.validationDatasetIdentity,
+    trainDatasetDigest: manifest.trainDatasetDigest,
+    validationDatasetDigest: manifest.validationDatasetDigest,
     trainSplitDigest: manifest.trainSplitDigest,
     validationSplitDigest: manifest.validationSplitDigest,
     trainSampleN: manifest.trainSampleN,
     validationSampleN: manifest.validationSampleN,
+    trainByteLength: manifest.trainByteLength,
+    validationByteLength: manifest.validationByteLength,
+    trainRecordIdentityDigest: manifest.trainRecordIdentityDigest,
+    validationRecordIdentityDigest: manifest.validationRecordIdentityDigest,
+    oosExclusionDigest: manifest.oosExclusionDigest,
+    trainingInvocationDigest: manifest.trainingInvocationDigest,
     trainPath: "records/train.jsonl",
     validationPath: "records/validation.jsonl",
     modelPath: "model/exact-model.json",
@@ -116,10 +157,16 @@ function assessStrategyIdentity(strategyIdentity, exact) {
 
 function requireGenuineSource(attestation = {}) {
   if (attestation.sourceKind !== "GENUINE_MARKET_DATA"
+      || attestation.futureOnly !== true
       || attestation.reconstructed !== false
+      || attestation.historicalReconstruction !== false
       || attestation.synthetic !== false
+      || attestation.replayDerived !== false
       || attestation.shadowDerived !== false
-      || attestation.finalHoldoutIncluded !== false) {
+      || attestation.testFixture !== false
+      || attestation.oosIncluded !== false
+      || attestation.finalHoldoutIncluded !== false
+      || attestation.finalHoldoutAccessed !== false) {
     throw new Error("only genuine future TRAIN/VALIDATION market-data evidence is allowed");
   }
 }
@@ -129,8 +176,37 @@ function missingIdentityFields(manifest) {
   if (!manifest.strategyIdentityDigest) missing.push("STRATEGY_IDENTITY_DIGEST");
   if (!normalizeSha(manifest.researchCodeSha)) missing.push("RESEARCH_CODE_SHA");
   if (!normalizeSha(manifest.trainingCodeSha)) missing.push("TRAINING_CODE_SHA");
+  if (!normalizeSha(manifest.producerSha)) missing.push("PRODUCER_SHA");
+  if (!manifest.trainingInvocationDigest) missing.push("TRAINING_INVOCATION_DIGEST");
   if (!manifest.artifactReceipt) missing.push("ARTIFACT_RECEIPT");
   return [...new Set(missing)];
+}
+
+function trainingInvocationIdentity(manifest) {
+  return {
+    schemaVersion: TRAINING_INVOCATION_SCHEMA_VERSION,
+    researchCodeSha: manifest.researchCodeSha,
+    trainingCodeSha: manifest.trainingCodeSha,
+    producerSha: manifest.producerSha,
+    datasetId: manifest.datasetId,
+    datasetDigest: manifest.datasetDigest,
+    trainDatasetIdentity: manifest.trainDatasetIdentity,
+    trainDatasetDigest: manifest.trainDatasetDigest,
+    trainSampleN: manifest.trainSampleN,
+    trainByteLength: manifest.trainByteLength,
+    validationDatasetIdentity: manifest.validationDatasetIdentity,
+    validationDatasetDigest: manifest.validationDatasetDigest,
+    validationSampleN: manifest.validationSampleN,
+    validationByteLength: manifest.validationByteLength,
+    preprocessingVersion: manifest.preprocessingVersion,
+    preprocessingContractDigest: manifest.preprocessingContractDigest,
+    featureOrderDigest: manifest.featureOrderDigest,
+    trainingParametersDigest: manifest.trainingParametersDigest,
+    modelSha: manifest.modelSha,
+    modelArtifactCanonicalDigest: manifest.modelArtifactCanonicalDigest,
+    oosExclusionDigest: manifest.oosExclusionDigest,
+    finalHoldoutAccessed: false,
+  };
 }
 
 function buildReferenceProvenance(manifest) {
@@ -241,24 +317,43 @@ export function buildCanonicalModelReferenceStrategyIdentity({
 export async function preserveFutureModelReferenceEvidence({
   outputRoot,
   group,
-  trainRecords,
-  validationRecords,
+  consumedSplits,
   model,
   modelSha,
   datasetComponents,
   researchCodeSha,
   trainingCodeSha,
+  producerSha,
+  trainingParameters,
   measuredAt,
   strategyIdentity = null,
   sourceAttestation,
 } = {}) {
   requireGenuineSource(sourceAttestation);
   if (typeof group !== "string" || group.length === 0) throw new TypeError("group is required");
+  if (!isMaterializedExactTrainValidationSplits(consumedSplits)) {
+    throw new TypeError("exact stored TRAIN/VALIDATION bytes must be materialized before training");
+  }
+  if (!trainingParameters || typeof trainingParameters !== "object" || Array.isArray(trainingParameters)) {
+    throw new TypeError("exact trainingParameters are required");
+  }
   if (!model || typeof model !== "object" || !Array.isArray(model.featureOrder) || model.featureOrder.length === 0) throw new TypeError("exact trained model is required");
   const exactModelSha = normalizeDigest(modelSha);
   if (!exactModelSha) throw new TypeError("existing modelSha is required");
   const packageRoot = resolve(outputRoot, group);
-  const outputs = await exportRawTrainValidationSplits(join(packageRoot, "records"), { train: trainRecords, validation: validationRecords });
+  const outputs = consumedSplits;
+  const expectedRecordsRoot = resolve(packageRoot, "records");
+  if (resolve(dirname(outputs.train.path)) !== expectedRecordsRoot || resolve(dirname(outputs.validation.path)) !== expectedRecordsRoot) {
+    throw new Error("materialized split paths do not match the immutable reference package");
+  }
+  const [storedTrainBytes, storedValidationBytes] = await Promise.all([
+    readFile(outputs.train.path),
+    readFile(outputs.validation.path),
+  ]);
+  if (sha256(storedTrainBytes) !== outputs.train.sha256 || sha256(storedValidationBytes) !== outputs.validation.sha256
+      || storedTrainBytes.length !== outputs.train.byteLength || storedValidationBytes.length !== outputs.validation.byteLength) {
+    throw new Error("materialized split bytes changed after the training input boundary");
+  }
   const modelBytes = Buffer.from(JSON.stringify(model), "utf8");
   if (sha256(modelBytes) !== exactModelSha) throw new Error("modelSha does not match exact model JSON bytes");
   await atomicWrite(join(packageRoot, "model", "exact-model.json"), modelBytes);
@@ -269,6 +364,17 @@ export async function preserveFutureModelReferenceEvidence({
   if (!datasetValidation.valid || datasetValidation.status !== "VALID") throw new Error("#664 composite dataset provenance is invalid");
   const normalizedResearchSha = normalizeSha(researchCodeSha);
   const normalizedTrainingSha = normalizeSha(trainingCodeSha);
+  const normalizedProducerSha = normalizeSha(producerSha);
+  if (!normalizedResearchSha || !normalizedTrainingSha || !normalizedProducerSha) {
+    throw new TypeError("exact research, training, and producer SHAs are required");
+  }
+  if (normalizedResearchSha !== normalizedTrainingSha || normalizedResearchSha !== normalizedProducerSha) {
+    throw new Error("research, training, and producer SHAs must bind the same exact checkout");
+  }
+  if (outputs.train.datasetIdentity === outputs.validation.datasetIdentity
+      || outputs.train.datasetDigest === outputs.validation.datasetDigest) {
+    throw new Error("TRAIN and VALIDATION dataset identities and digests must be distinct");
+  }
   const featureOrder = [...model.featureOrder];
   const base = {
     schemaVersion: MODEL_REFERENCE_EVIDENCE_SCHEMA_VERSION,
@@ -283,6 +389,7 @@ export async function preserveFutureModelReferenceEvidence({
     strategyIdentityStatus: "MISSING_EVIDENCE",
     researchCodeSha: normalizedResearchSha,
     trainingCodeSha: normalizedTrainingSha,
+    producerSha: normalizedProducerSha,
     modelSha: exactModelSha,
     modelShaSemantics: "sha256(exact UTF-8 bytes of model/exact-model.json; existing JSON.stringify model identity)",
     modelArtifactCanonicalDigest: sha256Canonical(model),
@@ -291,6 +398,12 @@ export async function preserveFutureModelReferenceEvidence({
     preprocessingContractDigest: sha256Canonical(PREPROCESSING_CONTRACT),
     featureOrder,
     featureOrderDigest: sha256Canonical(featureOrder),
+    trainingParameters: structuredClone(trainingParameters),
+    trainingParametersDigest: sha256Canonical(trainingParameters),
+    trainDatasetIdentity: outputs.train.datasetIdentity,
+    validationDatasetIdentity: outputs.validation.datasetIdentity,
+    trainDatasetDigest: outputs.train.datasetDigest,
+    validationDatasetDigest: outputs.validation.datasetDigest,
     trainSplitDigest: outputs.train.sha256,
     validationSplitDigest: outputs.validation.sha256,
     measuredAt: isoTimestamp(measuredAt, "measuredAt"),
@@ -298,15 +411,30 @@ export async function preserveFutureModelReferenceEvidence({
     validationSampleN: outputs.validation.count,
     trainByteLength: outputs.train.byteLength,
     validationByteLength: outputs.validation.byteLength,
+    trainRecordIdentityDigest: outputs.train.recordIdentityDigest,
+    validationRecordIdentityDigest: outputs.validation.recordIdentityDigest,
+    splitIsolation: structuredClone(outputs.isolation),
+    splitIsolationStatus: outputs.isolation.status,
+    oosExclusionDigest: sha256Canonical(outputs.isolation),
     sourceAttestation: {
       sourceKind: "GENUINE_MARKET_DATA",
+      futureOnly: true,
       reconstructed: false,
+      historicalReconstruction: false,
       synthetic: false,
+      replayDerived: false,
       shadowDerived: false,
+      testFixture: false,
+      oosIncluded: false,
       finalHoldoutIncluded: false,
+      finalHoldoutAccessed: false,
     },
     splitAttestations: null,
+    trainingInvocation: null,
+    trainingInvocationDigest: null,
     rawArtifactDigest: null,
+    artifactIdentity: null,
+    artifactDigest: null,
     artifactReceipt: null,
     artifactReceiptValidation: { valid: false, status: "MISSING_EVIDENCE", reason: "artifact_receipt_pending_upload" },
     referenceProvenance: null,
@@ -333,7 +461,11 @@ export async function preserveFutureModelReferenceEvidence({
     base.referenceProvenanceStatus = "IDENTITY_MISMATCH";
   }
   base.splitAttestations = splitAttestations(base);
+  base.trainingInvocation = trainingInvocationIdentity(base);
+  base.trainingInvocationDigest = sha256Canonical(base.trainingInvocation);
   base.rawArtifactDigest = sha256Canonical(rawArtifactIdentity(base));
+  base.artifactIdentity = `prediction-lab-model-reference:${group}:sha256:${base.rawArtifactDigest}`;
+  base.artifactDigest = base.rawArtifactDigest;
   base.missingEvidence = [...new Set([...strategy.missingEvidence, ...missingIdentityFields(base)])].sort();
   await writeJson(join(packageRoot, "reference-manifest.json"), base);
   return deepFreeze(structuredClone(base));
@@ -395,13 +527,17 @@ function decision(status, reason, manifest = null, extra = {}) {
   return deepFreeze({ valid: status === "VALID", status, reason, manifest, ...extra });
 }
 
-function jsonlCount(bytes) {
+function jsonlRecords(bytes) {
   const text = bytes.toString("utf8");
+  if (!Buffer.from(text, "utf8").equals(bytes)) throw new Error("raw split JSONL must be exact UTF-8 bytes");
   if (!text.endsWith("\n")) throw new Error("raw split JSONL must end with one newline");
   const lines = text.slice(0, -1).split("\n");
   if (lines.some((line) => line.length === 0)) throw new Error("raw split JSONL contains an empty record");
-  for (const line of lines) JSON.parse(line);
-  return lines.length;
+  const records = lines.map((line) => JSON.parse(line));
+  if (records.some((record) => !record || typeof record !== "object" || Array.isArray(record))) {
+    throw new Error("raw split JSONL records must be objects");
+  }
+  return records;
 }
 
 export async function validateModelReferenceEvidencePackage(packageRoot, { now = null } = {}) {
@@ -409,42 +545,105 @@ export async function validateModelReferenceEvidencePackage(packageRoot, { now =
   try { manifest = JSON.parse(await readFile(join(packageRoot, "reference-manifest.json"), "utf8")); }
   catch { return decision("MISSING_EVIDENCE", "reference_manifest_missing"); }
   if (manifest.schemaVersion !== MODEL_REFERENCE_EVIDENCE_SCHEMA_VERSION) return decision("MISSING_EVIDENCE", "reference_manifest_schema_missing", manifest);
-  const required = ["datasetId", "datasetDigest", "modelSha", "featureOrderDigest", "trainSplitDigest", "validationSplitDigest", "rawArtifactDigest", "measuredAt"];
+  const required = [
+    "datasetId", "datasetDigest", "modelSha", "producerSha", "trainingCodeSha", "featureOrderDigest",
+    "trainDatasetIdentity", "validationDatasetIdentity", "trainDatasetDigest", "validationDatasetDigest",
+    "trainSplitDigest", "validationSplitDigest", "trainingInvocationDigest", "oosExclusionDigest",
+    "rawArtifactDigest", "artifactIdentity", "artifactDigest", "measuredAt",
+  ];
   if (required.some((field) => !manifest[field])) return decision("MISSING_EVIDENCE", "reference_identity_field_missing", manifest);
+  if (!normalizeSha(manifest.researchCodeSha) || !normalizeSha(manifest.trainingCodeSha) || !normalizeSha(manifest.producerSha)
+      || manifest.researchCodeSha !== manifest.trainingCodeSha || manifest.researchCodeSha !== manifest.producerSha) {
+    return decision("IDENTITY_MISMATCH", "exact_code_sha_binding_mismatch", manifest);
+  }
   if (!manifest.preprocessingVersion) return decision("MISSING_EVIDENCE", "preprocessing_version_missing", manifest);
   if (manifest.preprocessingVersion !== PREPROCESSING_VERSION || manifest.preprocessingContractDigest !== sha256Canonical(PREPROCESSING_CONTRACT)) return decision("IDENTITY_MISMATCH", "preprocessing_identity_mismatch", manifest);
   if (!Array.isArray(manifest.featureOrder) || manifest.featureOrder.length === 0 || sha256Canonical(manifest.featureOrder) !== manifest.featureOrderDigest) return decision("IDENTITY_MISMATCH", "feature_order_mismatch", manifest);
+  if (!manifest.trainingParameters || sha256Canonical(manifest.trainingParameters) !== manifest.trainingParametersDigest) return decision("IDENTITY_MISMATCH", "training_parameters_identity_mismatch", manifest);
   const datasetValidation = validateCompositeDatasetProvenance(manifest.datasetProvenance);
   if (!datasetValidation.valid) return decision(datasetValidation.status, datasetValidation.reason, manifest);
   if (manifest.datasetId !== manifest.datasetProvenance.datasetId || manifest.datasetDigest !== manifest.datasetProvenance.datasetDigest) return decision("IDENTITY_MISMATCH", "dataset_identity_mismatch", manifest);
   const source = manifest.sourceAttestation;
-  if (source?.sourceKind !== "GENUINE_MARKET_DATA" || source.reconstructed !== false || source.synthetic !== false || source.shadowDerived !== false || source.finalHoldoutIncluded !== false) return decision("IDENTITY_MISMATCH", "reference_source_substitution_rejected", manifest);
+  if (source?.sourceKind !== "GENUINE_MARKET_DATA" || source.futureOnly !== true
+      || source.reconstructed !== false || source.historicalReconstruction !== false
+      || source.synthetic !== false || source.replayDerived !== false || source.shadowDerived !== false
+      || source.testFixture !== false || source.oosIncluded !== false
+      || source.finalHoldoutIncluded !== false || source.finalHoldoutAccessed !== false) {
+    return decision("IDENTITY_MISMATCH", "reference_source_substitution_rejected", manifest);
+  }
   const trainBytes = await readFile(join(packageRoot, "records", "train.jsonl")).catch(() => null);
   const validationBytes = await readFile(join(packageRoot, "records", "validation.jsonl")).catch(() => null);
   const modelBytes = await readFile(join(packageRoot, "model", "exact-model.json")).catch(() => null);
   if (!trainBytes || !validationBytes || !modelBytes) return decision("MISSING_EVIDENCE", "raw_reference_file_missing", manifest);
   if (sha256(trainBytes) !== manifest.trainSplitDigest || sha256(validationBytes) !== manifest.validationSplitDigest) return decision("IDENTITY_MISMATCH", "raw_split_byte_digest_mismatch", manifest);
-  let trainSampleN;
-  let validationSampleN;
+  if (trainBytes.equals(validationBytes) || manifest.trainSplitDigest === manifest.validationSplitDigest
+      || manifest.trainDatasetIdentity === manifest.validationDatasetIdentity
+      || manifest.trainDatasetDigest === manifest.validationDatasetDigest) {
+    return decision("IDENTITY_MISMATCH", "train_validation_independence_mismatch", manifest);
+  }
+  if (manifest.trainDatasetDigest !== manifest.trainSplitDigest || manifest.validationDatasetDigest !== manifest.validationSplitDigest
+      || manifest.trainDatasetIdentity !== expectedSplitDatasetIdentity("TRAIN", manifest.trainDatasetDigest)
+      || manifest.validationDatasetIdentity !== expectedSplitDatasetIdentity("VALIDATION", manifest.validationDatasetDigest)) {
+    return decision("IDENTITY_MISMATCH", "split_dataset_identity_mismatch", manifest);
+  }
+  let trainRecords;
+  let validationRecords;
   try {
-    trainSampleN = jsonlCount(trainBytes);
-    validationSampleN = jsonlCount(validationBytes);
+    trainRecords = jsonlRecords(trainBytes);
+    validationRecords = jsonlRecords(validationBytes);
   } catch {
     return decision("IDENTITY_MISMATCH", "raw_split_jsonl_malformed", manifest);
   }
+  const trainSampleN = trainRecords.length;
+  const validationSampleN = validationRecords.length;
   if (trainSampleN !== manifest.trainSampleN || validationSampleN !== manifest.validationSampleN
       || trainBytes.length !== manifest.trainByteLength || validationBytes.length !== manifest.validationByteLength) return decision("IDENTITY_MISMATCH", "raw_split_count_or_length_mismatch", manifest);
+  const trainIds = trainRecords.map((record) => record.id);
+  const validationIds = validationRecords.map((record) => record.id);
+  const validationIdSet = new Set(validationIds);
+  const trainIdentityDigest = recordIdentityDigest(trainRecords);
+  const validationIdentityDigest = recordIdentityDigest(validationRecords);
+  if (!trainIdentityDigest || !validationIdentityDigest
+      || trainIdentityDigest !== manifest.trainRecordIdentityDigest
+      || validationIdentityDigest !== manifest.validationRecordIdentityDigest
+      || trainIds.some((id) => validationIdSet.has(id))) {
+    return decision("IDENTITY_MISMATCH", "split_record_identity_overlap_or_mismatch", manifest);
+  }
+  const isolation = manifest.splitIsolation;
+  if (!isolation || isolation.schemaVersion !== "PredictionLabReferenceSplitIsolationV1" || isolation.status !== "PASS"
+      || isolation.trainValidationOverlapN !== 0 || isolation.trainOosOverlapN !== 0 || isolation.validationOosOverlapN !== 0
+      || !Number.isSafeInteger(isolation.oosSampleN) || isolation.oosSampleN <= 0
+      || !normalizeDigest(isolation.oosRecordIdentityDigest) || isolation.oosRawBytesPublished !== false
+      || isolation.finalHoldoutAccessed !== false || isolation.finalHoldoutIncluded !== false
+      || sha256Canonical(isolation) !== manifest.oosExclusionDigest || manifest.splitIsolationStatus !== "PASS") {
+    return decision("IDENTITY_MISMATCH", "oos_holdout_contamination_guard_mismatch", manifest);
+  }
   if (sha256(modelBytes) !== manifest.modelSha) return decision("IDENTITY_MISMATCH", "model_sha_mismatch", manifest);
   let model;
   try { model = JSON.parse(modelBytes.toString("utf8")); }
   catch { return decision("IDENTITY_MISMATCH", "model_json_malformed", manifest); }
   if (sha256Canonical(model) !== manifest.modelArtifactCanonicalDigest) return decision("IDENTITY_MISMATCH", "model_canonical_digest_mismatch", manifest);
   if (sha256Canonical(model.featureOrder) !== manifest.featureOrderDigest) return decision("IDENTITY_MISMATCH", "model_feature_order_mismatch", manifest);
+  const expectedInvocation = trainingInvocationIdentity(manifest);
+  if (!manifest.trainingInvocation || sha256Canonical(manifest.trainingInvocation) !== manifest.trainingInvocationDigest
+      || sha256Canonical(expectedInvocation) !== manifest.trainingInvocationDigest) {
+    return decision("IDENTITY_MISMATCH", "training_invocation_identity_mismatch", manifest);
+  }
   const attestations = manifest.splitAttestations;
   if (attestations?.train?.sourceKind !== "RAW_TRAIN" || attestations?.validation?.sourceKind !== "RAW_VALIDATION") return decision("MISSING_EVIDENCE", "split_attestation_missing", manifest);
   if (attestations.train.modelSha !== manifest.modelSha || attestations.validation.modelSha !== manifest.modelSha
-      || attestations.train.splitDigest !== manifest.trainSplitDigest || attestations.validation.splitDigest !== manifest.validationSplitDigest) return decision("IDENTITY_MISMATCH", "split_attestation_mismatch", manifest);
+      || attestations.train.splitDigest !== manifest.trainSplitDigest || attestations.validation.splitDigest !== manifest.validationSplitDigest
+      || attestations.train.datasetIdentity !== manifest.trainDatasetIdentity || attestations.validation.datasetIdentity !== manifest.validationDatasetIdentity
+      || attestations.train.datasetDigest !== manifest.trainDatasetDigest || attestations.validation.datasetDigest !== manifest.validationDatasetDigest
+      || attestations.train.sampleN !== manifest.trainSampleN || attestations.validation.sampleN !== manifest.validationSampleN
+      || attestations.train.byteLength !== manifest.trainByteLength || attestations.validation.byteLength !== manifest.validationByteLength
+      || attestations.train.recordIdentityDigest !== manifest.trainRecordIdentityDigest
+      || attestations.validation.recordIdentityDigest !== manifest.validationRecordIdentityDigest) return decision("IDENTITY_MISMATCH", "split_attestation_mismatch", manifest);
   if (sha256Canonical(rawArtifactIdentity(manifest)) !== manifest.rawArtifactDigest) return decision("IDENTITY_MISMATCH", "raw_artifact_digest_mismatch", manifest);
+  if (manifest.artifactDigest !== manifest.rawArtifactDigest
+      || manifest.artifactIdentity !== `prediction-lab-model-reference:${manifest.group}:sha256:${manifest.rawArtifactDigest}`) {
+    return decision("IDENTITY_MISMATCH", "artifact_identity_mismatch", manifest);
+  }
   const receiptValidation = validateReferenceArtifactReceipt(manifest.artifactReceipt, { now });
   if (!receiptValidation.valid) return decision(receiptValidation.status, receiptValidation.reason, manifest, { rawReferenceValid: true, receiptValidation });
   if (manifest.strategyIdentityStatus === "IDENTITY_MISMATCH") return decision("IDENTITY_MISMATCH", "strategy_identity_mismatch", manifest, { rawReferenceValid: true, receiptValidation });

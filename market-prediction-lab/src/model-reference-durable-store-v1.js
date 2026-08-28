@@ -69,31 +69,56 @@ function referenceBinding(manifest) {
   }
   const source = manifest.sourceAttestation;
   if (source?.sourceKind !== "GENUINE_MARKET_DATA"
+      || source.futureOnly !== true
       || source.reconstructed !== false
+      || source.historicalReconstruction !== false
       || source.synthetic !== false
+      || source.replayDerived !== false
       || source.shadowDerived !== false
-      || source.finalHoldoutIncluded !== false) {
+      || source.testFixture !== false
+      || source.oosIncluded !== false
+      || source.finalHoldoutIncluded !== false
+      || source.finalHoldoutAccessed !== false) {
     throw new Error("durable reference source substitution rejected");
   }
-  return Object.freeze({
+  const binding = Object.freeze({
     group: text(manifest.group, "reference.group"),
     datasetId: text(manifest.datasetId, "reference.datasetId"),
     datasetDigest: digest(manifest.datasetDigest, "reference.datasetDigest"),
     strategyIdentityDigest: digest(manifest.strategyIdentityDigest, "reference.strategyIdentityDigest"),
     researchCodeSha: sha(manifest.researchCodeSha, "reference.researchCodeSha"),
     trainingCodeSha: sha(manifest.trainingCodeSha, "reference.trainingCodeSha"),
+    producerSha: sha(manifest.producerSha, "reference.producerSha"),
     modelSha: digest(manifest.modelSha, "reference.modelSha"),
     preprocessingVersion: text(manifest.preprocessingVersion, "reference.preprocessingVersion"),
     featureOrderDigest: digest(manifest.featureOrderDigest, "reference.featureOrderDigest"),
+    trainDatasetIdentity: text(manifest.trainDatasetIdentity, "reference.trainDatasetIdentity"),
+    validationDatasetIdentity: text(manifest.validationDatasetIdentity, "reference.validationDatasetIdentity"),
+    trainDatasetDigest: digest(manifest.trainDatasetDigest, "reference.trainDatasetDigest"),
+    validationDatasetDigest: digest(manifest.validationDatasetDigest, "reference.validationDatasetDigest"),
     trainSplitDigest: digest(manifest.trainSplitDigest, "reference.trainSplitDigest"),
     validationSplitDigest: digest(manifest.validationSplitDigest, "reference.validationSplitDigest"),
+    trainingInvocationDigest: digest(manifest.trainingInvocationDigest, "reference.trainingInvocationDigest"),
+    oosExclusionDigest: digest(manifest.oosExclusionDigest, "reference.oosExclusionDigest"),
+    splitIsolationStatus: manifest.splitIsolationStatus === "PASS" ? "PASS" : (() => { throw new Error("reference split isolation must PASS"); })(),
     rawArtifactDigest: digest(manifest.rawArtifactDigest, "reference.rawArtifactDigest"),
+    artifactIdentity: text(manifest.artifactIdentity, "reference.artifactIdentity"),
+    artifactDigest: digest(manifest.artifactDigest, "reference.artifactDigest"),
     artifactReceiptDigest: digest(manifest.referenceProvenance?.artifactReceiptDigest, "reference.artifactReceiptDigest"),
     referenceProvenanceDigest: digest(manifest.referenceProvenance?.provenanceDigest, "reference.referenceProvenanceDigest"),
     measuredAt: iso(manifest.measuredAt, "reference.measuredAt"),
     trainSampleN: Number.isSafeInteger(manifest.trainSampleN) && manifest.trainSampleN > 0 ? manifest.trainSampleN : (() => { throw new TypeError("reference.trainSampleN is required"); })(),
     validationSampleN: Number.isSafeInteger(manifest.validationSampleN) && manifest.validationSampleN > 0 ? manifest.validationSampleN : (() => { throw new TypeError("reference.validationSampleN is required"); })(),
   });
+  if (binding.trainDatasetIdentity === binding.validationDatasetIdentity
+      || binding.trainDatasetDigest === binding.validationDatasetDigest
+      || binding.trainDatasetDigest !== binding.trainSplitDigest
+      || binding.validationDatasetDigest !== binding.validationSplitDigest
+      || binding.artifactDigest !== binding.rawArtifactDigest
+      || binding.artifactIdentity !== `prediction-lab-model-reference:${binding.group}:sha256:${binding.rawArtifactDigest}`) {
+    throw new Error("durable TRAIN and VALIDATION split identities must be distinct and exact");
+  }
+  return binding;
 }
 
 function receiptBody(receipt) {
@@ -129,7 +154,8 @@ export function buildModelReferenceDurableReceiptV1(input = {}) {
   }
   const references = input.referenceManifests.map(referenceBinding).sort((left, right) => left.group.localeCompare(right.group));
   if (new Set(references.map((item) => item.group)).size !== references.length) throw new Error("duplicate durable reference group");
-  if (references.some((item) => item.researchCodeSha !== targetCommitSha || item.trainingCodeSha !== targetCommitSha)) {
+  if (references.some((item) => item.researchCodeSha !== targetCommitSha
+      || item.trainingCodeSha !== targetCommitSha || item.producerSha !== targetCommitSha)) {
     throw new Error("durable reference code SHA does not match the exact release target");
   }
   const body = {
@@ -155,7 +181,12 @@ export function buildModelReferenceDurableReceiptV1(input = {}) {
       reconstructedReferenceAllowed: false,
       shadowReferenceAllowed: false,
       historicalBackfillAllowed: false,
+      replayReferenceAllowed: false,
+      testFixtureReferenceAllowed: false,
+      oosIncluded: false,
       finalHoldoutIncluded: false,
+      finalHoldoutAccessed: false,
+      exactStoredBytesConsumedByTraining: true,
     },
     safety: REQUIRED_SAFETY,
   };
@@ -166,7 +197,13 @@ function failure(status, reason, receipt = null) {
   return deepFreeze({ valid: false, status, reason, receipt, durableReferenceStore: "NOT_PROVEN", longTermReferenceProven: false, safety: REQUIRED_SAFETY });
 }
 
-export function validateModelReferenceDurableReceiptV1(receipt, { releaseMetadata, assetMetadata, exactBundleBytes } = {}) {
+export function validateModelReferenceDurableReceiptV1(receipt, {
+  releaseMetadata,
+  assetMetadata,
+  exactBundleBytes,
+  receiptAssetMetadata,
+  exactReceiptBytes,
+} = {}) {
   if (!object(receipt)) return failure("MISSING_EVIDENCE", "DURABLE_RECEIPT_MISSING");
   let rebuilt;
   try {
@@ -176,7 +213,19 @@ export function validateModelReferenceDurableReceiptV1(receipt, { releaseMetadat
         ...reference,
         status: "VALID",
         referenceProvenanceStatus: "VALID",
-        sourceAttestation: { sourceKind: "GENUINE_MARKET_DATA", reconstructed: false, synthetic: false, shadowDerived: false, finalHoldoutIncluded: false },
+        sourceAttestation: {
+          sourceKind: "GENUINE_MARKET_DATA",
+          futureOnly: true,
+          reconstructed: false,
+          historicalReconstruction: false,
+          synthetic: false,
+          replayDerived: false,
+          shadowDerived: false,
+          testFixture: false,
+          oosIncluded: false,
+          finalHoldoutIncluded: false,
+          finalHoldoutAccessed: false,
+        },
         referenceProvenance: { artifactReceiptDigest: reference.artifactReceiptDigest, provenanceDigest: reference.referenceProvenanceDigest },
       })),
     });
@@ -211,6 +260,32 @@ export function validateModelReferenceDurableReceiptV1(receipt, { releaseMetadat
   if (sha256(exactBundleBytes) !== receipt.bundleAsset.outerArtifactDigest) {
     return failure("IDENTITY_MISMATCH", "DURABLE_BUNDLE_BYTE_DIGEST_MISMATCH", receipt);
   }
+  if (!object(receiptAssetMetadata)) return failure("MISSING_EVIDENCE", "DURABLE_RECEIPT_ASSET_METADATA_MISSING", receipt);
+  if (!(Buffer.isBuffer(exactReceiptBytes) || exactReceiptBytes instanceof Uint8Array)) {
+    return failure("MISSING_EVIDENCE", "DURABLE_RECEIPT_EXACT_BYTES_MISSING", receipt);
+  }
+  const exactReceiptDigest = sha256(exactReceiptBytes);
+  const receiptAssetDigest = typeof receiptAssetMetadata.digest === "string"
+    ? receiptAssetMetadata.digest.replace(/^sha256:/u, "").toLowerCase()
+    : "";
+  let parsedReceipt;
+  try { parsedReceipt = JSON.parse(Buffer.from(exactReceiptBytes).toString("utf8")); }
+  catch { return failure("IDENTITY_MISMATCH", "DURABLE_RECEIPT_ASSET_JSON_MALFORMED", receipt); }
+  if (String(receiptAssetMetadata.id ?? "") === receipt.bundleAsset.assetId
+      || receiptAssetMetadata.name !== receipt.receiptAssetName
+      || receiptAssetMetadata.state !== "uploaded"
+      || receiptAssetMetadata.size !== exactReceiptBytes.length
+      || receiptAssetDigest !== exactReceiptDigest
+      || sha256Canonical(parsedReceipt) !== sha256Canonical(receipt)) {
+    return failure("IDENTITY_MISMATCH", "DURABLE_RECEIPT_ASSET_IDENTITY_MISMATCH", receipt);
+  }
+  const releaseAssetIds = new Set(Array.isArray(releaseMetadata.assets)
+    ? releaseMetadata.assets.map((asset) => String(asset?.id ?? ""))
+    : []);
+  if (!releaseAssetIds.has(receipt.bundleAsset.assetId)
+      || !releaseAssetIds.has(String(receiptAssetMetadata.id ?? ""))) {
+    return failure("IDENTITY_MISMATCH", "DURABLE_RELEASE_ASSET_MEMBERSHIP_MISMATCH", receipt);
+  }
   return deepFreeze({
     valid: true,
     status: "VALID",
@@ -218,6 +293,7 @@ export function validateModelReferenceDurableReceiptV1(receipt, { releaseMetadat
     receipt,
     durableReferenceStore: MODEL_REFERENCE_DURABLE_PROVIDER,
     longTermReferenceProven: true,
+    publicationReceiptProven: true,
     safety: REQUIRED_SAFETY,
   });
 }

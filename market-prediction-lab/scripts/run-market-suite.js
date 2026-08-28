@@ -8,7 +8,7 @@ import { verifyLiveCollection } from "../src/live-collection-verifier.js";
 import { normalizeCandleRows } from "../src/normalizers.js";
 import { buildTrainingRecords } from "../src/training-dataset.js";
 import { walkForwardSplit } from "../src/walk-forward.js";
-import { exportWalkForwardDataset } from "../src/dataset-export.js";
+import { exportWalkForwardDataset, materializeExactTrainValidationSplits } from "../src/dataset-export.js";
 import {
   buildCanonicalModelReferenceStrategyIdentity,
   preserveFutureModelReferenceEvidence,
@@ -230,7 +230,7 @@ async function writeResearchHold({ group, datasets, split, outputRoot, candidate
   return artifact;
 }
 
-async function trainGroup({ group, datasets, outputRoot, candidateRoot, researchCodeSha, trainingCodeSha, measuredAt }) {
+async function trainGroup({ group, datasets, outputRoot, candidateRoot, researchCodeSha, trainingCodeSha, producerSha, measuredAt }) {
   const split = combineSplits(datasets);
   const classCounts = {
     train: directionCounts(split.train),
@@ -249,7 +249,15 @@ async function trainGroup({ group, datasets, outputRoot, candidateRoot, research
     });
   }
 
-  const model = trainTinySoftmaxModel(split.train, {
+  // The immutable JSONL files are the training boundary: materialize first,
+  // re-read exact stored bytes, then train/calibrate only from those parsed bytes.
+  const consumedSplits = await materializeExactTrainValidationSplits(
+    resolve(outputRoot, "reference-evidence", group, "records"),
+    { train: split.train, validation: split.validation, oos: split.test },
+  );
+  const exactTrainRecords = consumedSplits.train.records;
+  const exactValidationRecords = consumedSplits.validation.records;
+  const model = trainTinySoftmaxModel(exactTrainRecords, {
     featureOrder: BASELINE_MODEL.featureOrder,
     id: `tiny-softmax-${group}-v1`,
     epochs: TRAINING_PARAMETERS.epochs,
@@ -257,7 +265,7 @@ async function trainGroup({ group, datasets, outputRoot, candidateRoot, research
     l2: TRAINING_PARAMETERS.l2,
     patience: TRAINING_PARAMETERS.patience,
   });
-  const calibrated = calibrateTemperature(split.validation, model);
+  const calibrated = calibrateTemperature(exactValidationRecords, model);
   const baseline = evaluateStoredBaseline(split.test);
   const candidate = evaluateTinyModel(split.test, calibrated);
   const comparison = compareCandidateToBaseline(baseline, candidate);
@@ -301,8 +309,8 @@ async function trainGroup({ group, datasets, outputRoot, candidateRoot, research
     group,
     market: markets[0],
     timeframe: timeframes[0],
-    trainRecords: split.train,
-    validationRecords: split.validation,
+    trainRecords: exactTrainRecords,
+    validationRecords: exactValidationRecords,
     datasetComponents: referenceDatasetComponents(datasets),
     researchCodeSha,
     featureOrder: calibrated.featureOrder,
@@ -323,21 +331,28 @@ async function trainGroup({ group, datasets, outputRoot, candidateRoot, research
   const referenceEvidence = await preserveFutureModelReferenceEvidence({
     outputRoot: resolve(outputRoot, "reference-evidence"),
     group,
-    trainRecords: split.train,
-    validationRecords: split.validation,
+    consumedSplits,
     model: calibrated,
     modelSha: modelSha256,
     datasetComponents: referenceDatasetComponents(datasets),
     researchCodeSha,
     trainingCodeSha,
+    producerSha,
+    trainingParameters: TRAINING_PARAMETERS,
     measuredAt,
     strategyIdentity: strategyResolution.strategyIdentity,
     sourceAttestation: {
       sourceKind: "GENUINE_MARKET_DATA",
+      futureOnly: true,
       reconstructed: false,
+      historicalReconstruction: false,
       synthetic: false,
+      replayDerived: false,
       shadowDerived: false,
+      testFixture: false,
+      oosIncluded: false,
       finalHoldoutIncluded: false,
+      finalHoldoutAccessed: false,
     },
   });
   return {
@@ -369,11 +384,21 @@ async function trainGroup({ group, datasets, outputRoot, candidateRoot, research
       featureOrderDigest: referenceEvidence.featureOrderDigest,
       trainSampleN: referenceEvidence.trainSampleN,
       validationSampleN: referenceEvidence.validationSampleN,
+      trainDatasetIdentity: referenceEvidence.trainDatasetIdentity,
+      validationDatasetIdentity: referenceEvidence.validationDatasetIdentity,
+      trainDatasetDigest: referenceEvidence.trainDatasetDigest,
+      validationDatasetDigest: referenceEvidence.validationDatasetDigest,
       trainSplitDigest: referenceEvidence.trainSplitDigest,
       validationSplitDigest: referenceEvidence.validationSplitDigest,
+      splitIsolationStatus: referenceEvidence.splitIsolationStatus,
+      oosExclusionDigest: referenceEvidence.oosExclusionDigest,
+      producerSha: referenceEvidence.producerSha,
+      trainingInvocationDigest: referenceEvidence.trainingInvocationDigest,
       modelSha: referenceEvidence.modelSha,
       modelArtifactCanonicalDigest: referenceEvidence.modelArtifactCanonicalDigest,
       rawArtifactDigest: referenceEvidence.rawArtifactDigest,
+      artifactIdentity: referenceEvidence.artifactIdentity,
+      artifactDigest: referenceEvidence.artifactDigest,
       measuredAt: referenceEvidence.measuredAt,
     },
   };
@@ -442,6 +467,7 @@ for (const group of [...new Set(SUITE_SPECS.map((spec) => spec.group))]) {
       candidateRoot,
       researchCodeSha: process.env.RESEARCH_CODE_SHA,
       trainingCodeSha: process.env.TRAINING_CODE_SHA,
+      producerSha: process.env.PRODUCER_SHA,
       measuredAt: new Date(suiteEndTime).toISOString(),
     });
   } catch (error) {
