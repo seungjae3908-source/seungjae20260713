@@ -19,7 +19,9 @@ export const PAPER_SCHEDULER_CONTRACT = Object.freeze({
   simulatedOnly: true,
   privateAccountAccess: false,
   liveTrading: false,
+  executionAuthority: "NONE",
   orderAuthority: false,
+  orderSubmitted: false,
   scheduleActive: false,
   leaseScope: "SINGLE_HOST_FILE_CAS",
   distributedMultiHostSupported: false,
@@ -37,6 +39,10 @@ function positiveInteger(value) {
 
 function finiteNumber(value) {
   return typeof value === "number" && Number.isFinite(value);
+}
+
+function nonNegativeInteger(value) {
+  return Number.isSafeInteger(value) && value >= 0;
 }
 
 function hash(value) {
@@ -392,6 +398,78 @@ function evidenceBlock(lane, evaluatedAtMs) {
   return null;
 }
 
+function canonicalStageTrace(value) {
+  if (!Array.isArray(value)) return Object.freeze([]);
+  return Object.freeze(value
+    .filter((row) => nonEmpty(row?.stage) && nonEmpty(row?.status))
+    .map((row) => Object.freeze({
+      stage: row.stage,
+      status: row.status,
+      count: nonNegativeInteger(row.count) ? row.count : null,
+      blocker: nonEmpty(row.blocker) ? row.blocker : null,
+      provenance: nonEmpty(row.provenance) ? row.provenance : null,
+      measuredAtMs: finiteNumber(row.measuredAtMs) ? row.measuredAtMs : null,
+    })));
+}
+
+function authoritativeFirstZeroTrace(value) {
+  const evidence = value?.EVIDENCE_COMPLETE;
+  if (!evidence || typeof evidence !== "object") return null;
+  return Object.freeze({
+    authoritative: evidence.authoritative === true,
+    freshness: nonEmpty(evidence.freshness) ? evidence.freshness : null,
+    reasonCode: nonEmpty(evidence.reasonCode) ? evidence.reasonCode : null,
+    sourceCodes: Object.freeze(Array.isArray(evidence.sourceCodes)
+      ? evidence.sourceCodes.filter(nonEmpty)
+      : []),
+    strategySha: nonEmpty(evidence.strategySha) ? evidence.strategySha : null,
+    runtimeSha: nonEmpty(evidence.runtimeSha) ? evidence.runtimeSha : null,
+    datasetIdentity: nonEmpty(evidence.datasetIdentity) ? evidence.datasetIdentity : null,
+    synthetic: evidence.synthetic === true,
+    testFixture: evidence.testFixture === true,
+    historical: evidence.historical === true,
+    replay: evidence.replay === true,
+    duplicateReplay: evidence.duplicateReplay === true,
+  });
+}
+
+function entryAdmissionBlockerEvidence(evidence) {
+  if (evidence?.status !== "BLOCKED_DATA") return null;
+  const source = evidence?.paperCandidateSource;
+  const sourceBlocker = nonEmpty(evidence?.blocker)
+    ? evidence.blocker
+    : nonEmpty(source?.blocker)
+      ? source.blocker
+      : null;
+  if (!sourceBlocker && (!source || typeof source !== "object")) return null;
+  return Object.freeze({
+    classification: "BLOCKED_DATA",
+    sourceBlocker,
+    producerStatus: nonEmpty(source?.status) ? source.status : null,
+    searchOutcome: nonEmpty(source?.searchOutcome) ? source.searchOutcome : null,
+    firstZeroStage: nonEmpty(source?.firstZeroStage) ? source.firstZeroStage : null,
+    firstZeroReason: nonEmpty(source?.firstZeroReason) ? source.firstZeroReason : null,
+    naturalFirstZeroStage: nonEmpty(source?.naturalFirstZeroStage)
+      ? source.naturalFirstZeroStage
+      : null,
+    naturalFirstZeroReason: nonEmpty(source?.naturalFirstZeroReason)
+      ? source.naturalFirstZeroReason
+      : null,
+    stageMeasurements: canonicalStageTrace(source?.stageMeasurements),
+    naturalFunnelMeasurements: canonicalStageTrace(source?.naturalFunnelMeasurements),
+    authoritativeFirstZeroReasonEvidence: authoritativeFirstZeroTrace(
+      source?.authoritativeFirstZeroReasonEvidenceByStage,
+    ),
+    provenance: Object.freeze({
+      schemaVersion: nonEmpty(source?.schemaVersion) ? source.schemaVersion : null,
+      naturalEvidenceIdentity: nonEmpty(source?.naturalEvidenceIdentity)
+        ? source.naturalEvidenceIdentity
+        : null,
+      naturalRuntimeSha: nonEmpty(source?.naturalRuntimeSha) ? source.naturalRuntimeSha : null,
+    }),
+  });
+}
+
 export async function runScheduledPaperCycle({
   state,
   cadence,
@@ -477,10 +555,17 @@ export async function runScheduledPaperCycle({
       throw new TypeError("clock must return a finite number");
     }
     const blockers = lanes
-      .map((lane) => ({
-        market: lane.market,
-        reason: evidenceBlock(lane, evidenceEvaluatedAtMs),
-      }))
+      .map((lane) => {
+        const reason = evidenceBlock(lane, evidenceEvaluatedAtMs);
+        const entryAdmissionEvidence = reason === "BLOCKED_DATA"
+          ? entryAdmissionBlockerEvidence(lane.result)
+          : null;
+        return Object.freeze({
+          market: lane.market,
+          reason,
+          ...(entryAdmissionEvidence ? { entryAdmissionEvidence } : {}),
+        });
+      })
       .filter((row) => row.reason);
 
     if (blockers.length > 0) {
