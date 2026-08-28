@@ -1,0 +1,111 @@
+name: Crypto Futures Position Tier Snapshot Capture V1
+
+on:
+  pull_request:
+    paths:
+      - "market-prediction-lab/src/crypto-futures-position-tier-snapshot-capture-v1.js"
+      - "market-prediction-lab/tests/crypto-futures-position-tier-snapshot-capture-v1.test.js"
+      - "market-prediction-lab/src/crypto-futures-position-tier-history-provenance-v1.js"
+      - "market-prediction-lab/tests/crypto-futures-position-tier-history-provenance-v1.test.js"
+      - ".github/workflows/crypto-futures-position-tier-snapshot-capture-v1.yml"
+  workflow_dispatch:
+    inputs:
+      confirm_public_capture:
+        description: "Type true to perform public-only Bitget snapshot capture on main"
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      max_symbols:
+        description: "Fail closed if active normal USDT perpetual universe exceeds this bound"
+        required: true
+        default: "1000"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: crypto-futures-position-tier-snapshot-v1-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact pull request head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Verify exact pull request head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+      - name: Run provenance and capture contract tests
+        run: >-
+          node --test
+          market-prediction-lab/tests/crypto-futures-position-tier-history-provenance-v1.test.js
+          market-prediction-lab/tests/crypto-futures-position-tier-snapshot-capture-v1.test.js
+      - name: Verify tests did not mutate repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain)"
+
+  capture:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.confirm_public_capture == 'true' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout immutable main commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Verify immutable checkout identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+      - name: Capture public Bitget USDT futures position tiers
+        id: capture
+        continue-on-error: true
+        env:
+          POSITION_TIER_CAPTURE_OUTPUT: capture/position-tier-capture-${{ github.run_id }}.json
+          POSITION_TIER_CAPTURE_MAX_SYMBOLS: ${{ inputs.max_symbols }}
+          POSITION_TIER_CAPTURE_DELAY_MS: "100"
+          POSITION_TIER_CAPTURE_MAX_ATTEMPTS: "2"
+          POSITION_TIER_CAPTURE_TIMEOUT_MS: "10000"
+        run: node market-prediction-lab/src/crypto-futures-position-tier-snapshot-capture-v1.js
+      - name: Upload immutable public snapshot evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crypto-futures-position-tier-snapshot-v1-${{ github.run_id }}
+          path: capture/position-tier-capture-${{ github.run_id }}.json
+          if-no-files-found: warn
+          retention-days: 90
+      - name: Fail closed on incomplete capture
+        if: steps.capture.outcome != 'success'
+        shell: bash
+        run: exit 1
+
+# Intentionally no schedule/cron trigger here.
+# Recurring schedule activation remains a separate explicit user-approval boundary.
