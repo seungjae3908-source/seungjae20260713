@@ -651,4 +651,3 @@ export function admitValidatedLiquidityImpactEvidenceForRuntime(input = {}) {
     safety: LIQUIDITY_IMPACT_EVIDENCE_FIREWALL_SAFETY,
   });
 }
-
