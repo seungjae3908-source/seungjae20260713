@@ -101,9 +101,9 @@ test("validated package loads the exact observed-gate producer bundle and execut
   assert.equal(result.productionMutationAllowed, false);
 });
 
-test("Natural candidate evaluates six authoritative runtime sources and stops exactly at missing P0-4 cost", async () => {
+test("Natural candidate keeps incomplete P0-4 blocked and binds holding-horizon funding when all costs exist", async () => {
   const runtimePackage = await loadValidatedAuthoritativePaperRuntimePackage();
-  const nowMs = Date.UTC(2026, 7, 28, 8, 0, 0);
+  const nowMs = Date.now();
   const observedAt = new Date(nowMs - 1_000).toISOString();
   const strategyScope = "scanner-crypto-futures-swing_LONG";
   const candidate = Object.freeze({
@@ -189,7 +189,7 @@ test("Natural candidate evaluates six authoritative runtime sources and stops ex
     tickerTimestampMs: nowMs,
     fundingRate: 0.0001,
     fundingIntervalHours: 8,
-    nextFundingUpdateMs: nowMs + 3_600_000,
+    nextFundingUpdateMs: nowMs + 30_000,
     openInterest: 1_000_000,
     openInterestTimestampMs: nowMs,
     minTradeNum: 0.001,
@@ -224,96 +224,120 @@ test("Natural candidate evaluates six authoritative runtime sources and stops ex
     maximumLeverage: 100,
     marginMode: "isolated",
   });
-  let supplementalCalls = 0;
-  let l2Calls = 0;
-  const wiring = runtimePackage.createAuthoritativePaperNaturalCycleEvidenceSourceWiring({
-    researchCodeSha: SOURCE_SHA,
-    sources: {
-      paperStateSnapshotForCard: async () => snapshot,
-      riskPolicyRecordForCard: async () => Object.freeze({
-        schemaVersion: "authoritative-paper-generic-risk-policy-record-v1",
-        recordId: "fixture-risk-record",
-        recordVersion: "v1",
-        policyId: policyEvidence.policyId,
-        policyVersion: policyEvidence.policyVersion,
-        source: "CANONICAL_READ_ONLY_FIXTURE_RECORD",
-        provenance: Object.freeze(["fixture-persisted-record"]),
-        observedAtMs: nowMs,
-        maximumAgeMs: 30_000,
-        researchCodeSha: SOURCE_SHA,
-        marketScopes: policyEvidence.marketScopes,
-        strategyScopes: policyEvidence.strategyScopes,
-        symbolScopes: policyEvidence.symbolScopes,
-        riskPercent: policyEvidence.riskPercent,
-        requestedLeverage: policyEvidence.requestedLeverage,
-        maximumLeverage: policyEvidence.maximumLeverage,
-        marginMode: policyEvidence.marginMode,
-      }),
-      supplementalCostInputForCard: async () => {
-        supplementalCalls += 1;
-        return null;
-      },
-      positionTiersForCard: async () => Object.freeze([
-        Object.freeze({ startUnit: "0", keepMarginRate: "0.004" }),
-      ]),
-    },
-    dependencies: {
-      resolveCanonicalIdentity: () => Object.freeze({ paperCandidate: candidate, blockers: Object.freeze([]) }),
-      latestEvidenceTimestamp: () => observedAt,
-      prepareObservation: () => Object.freeze({
-        status: "OBSERVATION_READY",
-        observation: Object.freeze({ snapshot: learningSnapshot }),
-      }),
-      buildPublicRequests: () => Object.freeze({
-        ticker: Object.freeze({ method: "GET", path: "/fixture", query: "symbol=BTCUSDT" }),
-      }),
-      fetchPublicJson: async (url) => {
-        if (url.pathname.endsWith("/orderbook")) {
-          l2Calls += 1;
-          return Object.freeze({
-            code: "00000",
-            data: Object.freeze({
-              ts: String(nowMs),
-              b: Object.freeze([[99.9, 1_000]]),
-              a: Object.freeze([[100, 1_000]]),
-            }),
-          });
-        }
-        return Object.freeze({ code: "00000", data: Object.freeze([]) });
-      },
-      buildPublicEvidence: () => publicEvidence,
-      now: () => nowMs,
-    },
-  });
-  const producer = runtimePackage.createPaperAdmissionEvidenceProducer({
-    paperCandidateSource: wiring.paperCandidateForCard,
-    learningSnapshotSource: wiring.learningSnapshotForCard,
-    paperStateSource: wiring.paperStateForCard,
-    contractRulesSource: wiring.contractRulesForCard,
-    publicEvidenceSource: wiring.publicEvidenceForCard,
-    executionObservationSource: wiring.executionObservationForCard,
-    supplementalCostEvidenceSource: wiring.supplementalCostEvidenceForCard,
-  });
   const card = Object.freeze({
     signalId: candidate.signal.signalId,
     symbol: "BTCUSDT",
     action: "LONG",
   });
-  const result = await producer({ card, market: "CRYPTO_FUTURES" });
-  const sourceCodes = result.gateObservability.reasonObservations.map((row) => row.sourceCode);
+  async function runCase(supplementalCostInput) {
+    let supplementalCalls = 0;
+    let l2Calls = 0;
+    const wiring = runtimePackage.createAuthoritativePaperNaturalCycleEvidenceSourceWiring({
+      researchCodeSha: SOURCE_SHA,
+      sources: {
+        paperStateSnapshotForCard: async () => snapshot,
+        riskPolicyRecordForCard: async () => Object.freeze({
+          schemaVersion: "authoritative-paper-generic-risk-policy-record-v1",
+          recordId: "fixture-risk-record",
+          recordVersion: "v1",
+          policyId: policyEvidence.policyId,
+          policyVersion: policyEvidence.policyVersion,
+          source: "CANONICAL_READ_ONLY_FIXTURE_RECORD",
+          provenance: Object.freeze(["fixture-persisted-record"]),
+          observedAtMs: nowMs,
+          maximumAgeMs: 30_000,
+          researchCodeSha: SOURCE_SHA,
+          marketScopes: policyEvidence.marketScopes,
+          strategyScopes: policyEvidence.strategyScopes,
+          symbolScopes: policyEvidence.symbolScopes,
+          riskPercent: policyEvidence.riskPercent,
+          requestedLeverage: policyEvidence.requestedLeverage,
+          maximumLeverage: policyEvidence.maximumLeverage,
+          marginMode: policyEvidence.marginMode,
+        }),
+        supplementalCostInputForCard: async () => {
+          supplementalCalls += 1;
+          return supplementalCostInput;
+        },
+        positionTiersForCard: async () => Object.freeze([
+          Object.freeze({ startUnit: "0", keepMarginRate: "0.004" }),
+        ]),
+      },
+      dependencies: {
+        resolveCanonicalIdentity: () => Object.freeze({ paperCandidate: candidate, blockers: Object.freeze([]) }),
+        latestEvidenceTimestamp: () => observedAt,
+        prepareObservation: () => Object.freeze({
+          status: "OBSERVATION_READY",
+          observation: Object.freeze({ snapshot: learningSnapshot }),
+        }),
+        buildPublicRequests: () => Object.freeze({
+          ticker: Object.freeze({ method: "GET", path: "/fixture", query: "symbol=BTCUSDT" }),
+        }),
+        fetchPublicJson: async (url) => {
+          if (url.pathname.endsWith("/orderbook")) {
+            l2Calls += 1;
+            return Object.freeze({
+              code: "00000",
+              data: Object.freeze({
+                ts: String(nowMs),
+                b: Object.freeze([[99.9, 1_000]]),
+                a: Object.freeze([[100, 1_000]]),
+              }),
+            });
+          }
+          return Object.freeze({ code: "00000", data: Object.freeze([]) });
+        },
+        buildPublicEvidence: () => publicEvidence,
+        now: () => nowMs,
+      },
+    });
+    const producer = runtimePackage.createPaperAdmissionEvidenceProducer({
+      paperCandidateSource: wiring.paperCandidateForCard,
+      learningSnapshotSource: wiring.learningSnapshotForCard,
+      paperStateSource: wiring.paperStateForCard,
+      contractRulesSource: wiring.contractRulesForCard,
+      publicEvidenceSource: wiring.publicEvidenceForCard,
+      executionObservationSource: wiring.executionObservationForCard,
+      supplementalCostEvidenceSource: wiring.supplementalCostEvidenceForCard,
+    });
+    const result = await producer({ card, market: "CRYPTO_FUTURES" });
+    return { result, wiring, supplementalCalls, l2Calls };
+  }
 
-  assert.equal(result.status, "BLOCKED");
+  const missing = await runCase(null);
+  const sourceCodes = missing.result.gateObservability.reasonObservations.map((row) => row.sourceCode);
+  assert.equal(missing.result.status, "BLOCKED");
   assert.deepEqual(sourceCodes, [
     "P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING:supplementalCostEvidence",
   ]);
-  assert.equal(supplementalCalls, 1);
-  assert.ok(l2Calls > 0);
-  assert.equal(wiring.naturalCycleSourceGraph.sizingIterationLimit, 8);
-  assert.equal(wiring.naturalCycleSourceGraph.policyDefaultsAllowed, false);
-  assert.equal(wiring.naturalCycleSourceGraph.unknownCostIsZero, false);
-  assert.equal(wiring.naturalCycleSourceGraph.publicDepthIsRealFill, false);
-  assert.equal(wiring.naturalCycleSourceGraph.realFillObserved, false);
-  assert.equal(wiring.naturalCycleSourceGraph.executionAuthority, "NONE");
+  assert.equal(missing.supplementalCalls, 1);
+  assert.ok(missing.l2Calls > 0);
+  assert.equal(missing.wiring.naturalCycleSourceGraph.sizingIterationLimit, 8);
+  assert.equal(missing.wiring.naturalCycleSourceGraph.policyDefaultsAllowed, false);
+  assert.equal(missing.wiring.naturalCycleSourceGraph.unknownCostIsZero, false);
+  assert.equal(missing.wiring.naturalCycleSourceGraph.publicDepthIsRealFill, false);
+  assert.equal(missing.wiring.naturalCycleSourceGraph.realFillObserved, false);
+  assert.equal(missing.wiring.naturalCycleSourceGraph.executionAuthority, "NONE");
+
+  const observedCost = (valuePercent, source) => Object.freeze({
+    valuePercent,
+    quality: "OBSERVED",
+    source: `TEST_ONLY_${source}`,
+    observedAtMs: nowMs,
+  });
+  const complete = await runCase(Object.freeze({
+    costPolicyId: candidate.signal.strategyIdentity.costPolicyVersion,
+    observedAtMs: nowMs,
+    latency: observedCost(0.01, "INDEPENDENT_LATENCY_COST"),
+    liquidityImpact: observedCost(0.02, "INDEPENDENT_LIQUIDITY_IMPACT_COST"),
+    partialFillImpact: observedCost(0.03, "PARTIAL_FILL_IMPACT_COST"),
+    funding: observedCost(99, "UNBOUND_FUNDING_MUST_NOT_PASS"),
+  }));
+  assert.equal(complete.result.status, "READY", JSON.stringify(complete.result));
+  assert.equal(complete.result.bundle.executionEvidence.costPolicy.fundingRate, 0.0001);
+  assert.equal(complete.result.executionAuthority, "NONE");
+  assert.equal(complete.result.orderSubmitted, false);
+  assert.equal(complete.result.privateTradingApiAllowed, false);
 });
 
 test("validated package reuses the sidecar book walk only as labeled simulated execution", async () => {
