@@ -19,6 +19,7 @@ const OWNERSHIP_SOURCE_DIGEST = '3'.repeat(64);
 const OOS_REFERENCE_DIGEST = '4'.repeat(64);
 const TRAIN_DIGEST = '5'.repeat(64);
 const VALIDATION_DIGEST = '6'.repeat(64);
+const OOS_DIGEST = '7'.repeat(64);
 
 function competingCostEvidence() {
   return [
@@ -63,6 +64,7 @@ function expected(overrides = {}) {
     side: 'LONG',
     quantityNotionalBucketIdentity: 'btc-usdt-notional-10k-25k-v1',
     volatilityRegimeIdentity: 'btc-realized-volatility-medium-v1',
+    liquidityRegimeIdentity: 'btc-visible-depth-medium-v1',
     provenance: {
       sourceType: 'PUBLIC_HISTORICAL_MARKET_DATA',
       sourceProvider: 'BITGET_PUBLIC_ARCHIVE',
@@ -88,13 +90,21 @@ function artifact(overrides = {}) {
     datasetIdentity: 'test-only-bitget-btc-public-history-2026w33-v1',
     datasetDigest: '0'.repeat(64),
     sampleN: 1_000,
-    trainSampleN: 800,
+    trainDatasetIdentity: 'test-only-bitget-btc-train-2026w29-w31-v1',
+    trainDatasetDigest: TRAIN_DIGEST,
+    trainSampleN: 600,
+    validationDatasetIdentity: 'test-only-bitget-btc-validation-2026w32-v1',
+    validationDatasetDigest: VALIDATION_DIGEST,
     validationSampleN: 200,
+    oosDatasetIdentity: 'test-only-bitget-btc-oos-2026w33-v1',
+    oosDatasetDigest: OOS_DIGEST,
+    oosSampleN: 200,
     marketScopes: ['CRYPTO_FUTURES'],
     symbolScopes: ['BTCUSDT'],
     sideScopes: ['LONG', 'SHORT'],
     quantityNotionalBucketIdentity: 'btc-usdt-notional-10k-25k-v1',
     volatilityRegimeIdentity: 'btc-realized-volatility-medium-v1',
+    liquidityRegimeIdentity: 'btc-visible-depth-medium-v1',
     calibratedAt: NOW - DAY,
     maximumAge: 7 * DAY,
     provenance: {
@@ -116,9 +126,12 @@ function artifact(overrides = {}) {
     outOfSampleValidationReference: {
       referenceId: 'test-only-liquidity-impact-oos-v1',
       referenceDigest: OOS_REFERENCE_DIGEST,
-      datasetIdentity: 'test-only-bitget-btc-public-history-2026w33-v1',
+      trainDatasetIdentity: 'test-only-bitget-btc-train-2026w29-w31-v1',
       trainDatasetDigest: TRAIN_DIGEST,
+      validationDatasetIdentity: 'test-only-bitget-btc-validation-2026w32-v1',
       validationDatasetDigest: VALIDATION_DIGEST,
+      oosDatasetIdentity: 'test-only-bitget-btc-oos-2026w33-v1',
+      oosDatasetDigest: OOS_DIGEST,
       sampleN: 200,
       status: 'PASS',
       heldOut: true,
@@ -134,6 +147,7 @@ function artifact(overrides = {}) {
       excludedCostOwners: [
         LIQUIDITY_IMPACT_COST_OWNERS.BOOK_WALK,
         LIQUIDITY_IMPACT_COST_OWNERS.LATENCY,
+        LIQUIDITY_IMPACT_COST_OWNERS.PARTIAL_FILL,
         LIQUIDITY_IMPACT_COST_OWNERS.SPREAD,
       ],
       sourceIdentity: 'independent-residual-impact-calibration-output-v1',
@@ -141,9 +155,11 @@ function artifact(overrides = {}) {
     },
     independenceEvidence: {
       status: 'VERIFIED',
-      targetVariable: 'RESIDUAL_PRICE_IMPACT_AFTER_VISIBLE_BOOK_WALK_AND_LATENCY',
+      targetVariable:
+        'RESIDUAL_PRICE_IMPACT_AFTER_SPREAD_VISIBLE_BOOK_WALK_LATENCY_AND_PARTIAL_FILL',
       bookWalkExcluded: true,
       latencyAdverseMoveExcluded: true,
+      partialFillExcluded: true,
       spreadExcluded: true,
       implementationShortfallDecomposed: true,
       fullImplementationShortfallUsed: false,
@@ -257,6 +273,38 @@ test('wrong market and symbol scopes are rejected', () => {
   assert.ok(validate(wrongSymbol).blockers.includes('SYMBOL_SCOPE_MISMATCH'));
 });
 
+test('wrong liquidity regime is rejected', () => {
+  const value = mutated((item) => {
+    item.liquidityRegimeIdentity = 'btc-visible-depth-thin-v1';
+  });
+  const result = validate(value);
+  assert.equal(result.validationStatus, 'REJECTED');
+  assert.ok(result.blockers.includes('LIQUIDITY_REGIME_MISMATCH'));
+});
+
+test('validation and untouched OOS identities and digests must be distinct', () => {
+  const value = mutated((item) => {
+    item.oosDatasetIdentity = item.validationDatasetIdentity;
+    item.oosDatasetDigest = item.validationDatasetDigest;
+    item.outOfSampleValidationReference.oosDatasetIdentity = item.validationDatasetIdentity;
+    item.outOfSampleValidationReference.oosDatasetDigest = item.validationDatasetDigest;
+  });
+  const result = validate(value);
+  assert.equal(result.validationStatus, 'REJECTED');
+  assert.ok(result.blockers.includes('SAMPLE_SPLIT_IDENTITY_INVALID'));
+  assert.ok(result.blockers.includes('SAMPLE_SPLIT_DIGEST_INVALID'));
+  assert.ok(result.blockers.includes('OOS_VALIDATION_REFERENCE_INVALID'));
+});
+
+test('OOS sample N must be independently present and match its reference', () => {
+  const missing = mutated((item) => { item.oosSampleN = null; });
+  const reusedValidation = mutated((item) => {
+    item.outOfSampleValidationReference.sampleN = item.validationSampleN - 1;
+  });
+  assert.ok(validate(missing).blockers.includes('OOS_SAMPLE_N_REQUIRED'));
+  assert.ok(validate(reusedValidation).blockers.includes('OOS_VALIDATION_REFERENCE_INVALID'));
+});
+
 test('producer and calibration SHA mismatches are rejected', () => {
   const producer = mutated((item) => { item.producerCodeSha = 'c'.repeat(40); });
   const calibration = mutated((item) => { item.calibrationCodeSha = 'd'.repeat(40); });
@@ -336,6 +384,26 @@ test('spread or slippage source identity cannot be reused', () => {
   assert.ok(result.blockers.includes('COST_SOURCE_IDENTITY_REUSED'));
 });
 
+test('different cost owners cannot share evidence or observation lineage', () => {
+  const evidence = competingCostEvidence();
+  evidence[2] = {
+    ...evidence[2],
+    evidenceDigest: evidence[0].evidenceDigest,
+    sourceObservationLineageId: evidence[1].sourceObservationLineageId,
+  };
+  const result = validate(artifact(), { competingCostEvidence: evidence });
+  assert.equal(result.validationStatus, 'REJECTED');
+  assert.ok(result.blockers.includes('COST_EVIDENCE_DIGEST_REUSED'));
+  assert.ok(result.blockers.includes('SOURCE_OBSERVATION_LINEAGE_REUSED'));
+});
+
+test('schema-declared unknown artifact fields fail closed', () => {
+  const value = mutated((item) => { item.runtimeOverrideBps = 99; });
+  const result = validate(value);
+  assert.equal(result.validationStatus, 'REJECTED');
+  assert.ok(result.blockers.includes('ARTIFACT_SCHEMA_MALFORMED'));
+});
+
 test('valid structurally independent fixture passes validator but earns zero runtime credit', () => {
   const value = artifact();
   const validation = validate(value);
@@ -373,4 +441,3 @@ test('forged PASS validation object cannot bypass raw artifact revalidation', ()
   assert.ok(runtime.blockers.includes('VALIDATION_CONTEXT_REQUIRED'));
   assert.equal(runtime.fullCostReady, false);
 });
-
