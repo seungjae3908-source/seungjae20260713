@@ -28,6 +28,12 @@ import {
   type AuthoritativePaperExecutionSizingEvidence,
 } from './authoritative-paper-execution-cost-sources.service';
 import {
+  bindAuthoritativePaperLatencyToSupplementalCostInput,
+  collectAuthoritativePaperLatencyCostEvidence,
+  readBitgetPublicLatencyMidpointQuote,
+  type AuthoritativePaperSupplementalCostInput,
+} from './authoritative-paper-latency-cost-evidence.service';
+import {
   AUTHORITATIVE_PAPER_CALLBACK_OWNERS_SAFETY,
   buildAuthoritativePaperExecutionObservation,
   buildAuthoritativeSizedContractRules,
@@ -120,7 +126,7 @@ type Dependencies = Readonly<{
   sizedContractInputForCard(context: EvidenceContext): Promise<SizedContractInput | null>;
   executionObservationInputForCard(context: EvidenceContext): Promise<ExecutionObservationInput | null>;
   executionSizingEvidenceForCard(context: EvidenceContext): Promise<AuthoritativePaperExecutionSizingEvidence | null>;
-  supplementalCostInputForCard(context: EvidenceContext): Promise<Partial<SupplementalCostInput> | null>;
+  supplementalCostInputForCard(context: EvidenceContext): Promise<AuthoritativePaperSupplementalCostInput | null>;
   publicEvidenceForSupplementalCostForCard(context: EvidenceContext): Promise<ReturnType<typeof buildBitgetFuturesPublicEvidence> | null>;
   executionObservationForSupplementalCostForCard(context: EvidenceContext): Promise<ScannerCryptoFuturesPaperExecutionObservation | null>;
   now: () => number;
@@ -132,7 +138,7 @@ export type AuthoritativePaperNaturalCycleEvidenceSources = Readonly<{
     context: EvidenceContext,
     request: AuthoritativePaperGenericRiskPolicyRequest,
   ): Promise<unknown | null>;
-  supplementalCostInputForCard(context: EvidenceContext): Promise<Partial<SupplementalCostInput> | null>;
+  supplementalCostInputForCard(context: EvidenceContext): Promise<AuthoritativePaperSupplementalCostInput | null>;
   positionTiersForCard?(context: EvidenceContext): Promise<unknown | null>;
 }>;
 
@@ -145,6 +151,9 @@ export type AuthoritativePaperNaturalCycleEvidenceSourceWiring =
       unknownCostIsZero: false;
       publicDepthIsRealFill: false;
       realFillObserved: false;
+      latencyEvidenceOwner: 'AUTHORITATIVE_PUBLIC_BBO_REQUEST_BRACKET';
+      latencyEvidenceQuality: 'ESTIMATED';
+      latencyMissingIsZero: false;
       executionAuthority: 'NONE';
     }>;
   }>;
@@ -329,7 +338,7 @@ export function createAuthoritativePaperEvidenceSourceWiring({
     }),
     supplementalCostEvidenceForCard: ownedSource({
       callback: 'supplementalCostEvidenceForCard',
-      implementation: 'buildAuthoritativeSupplementalCostEvidence',
+      implementation: 'collectAuthoritativePaperLatencyCostEvidence/bindAuthoritativePaperLatencyToSupplementalCostInput/buildAuthoritativeSupplementalCostEvidence',
       requiredData: ['latency cost evidence', 'liquidity impact cost evidence', 'partial-fill cost evidence', 'funding evidence'],
       source: async (context) => {
         const [input, publicEvidence, executionObservation] = await Promise.all([
@@ -448,7 +457,7 @@ type NaturalCycleResolution = Readonly<{
   sizedContractInput: SizedContractInput | null;
   executionObservationInput: ExecutionObservationInput | null;
   executionObservation: ScannerCryptoFuturesPaperExecutionObservation | null;
-  supplementalCostInput: Partial<SupplementalCostInput> | null;
+  supplementalCostInput: AuthoritativePaperSupplementalCostInput | null;
 }>;
 
 function naturalRecord(value: unknown): Record<string, unknown> | null {
@@ -476,12 +485,12 @@ function naturalFundingBoundSupplementalCostInput(input: Readonly<{
   candidate: ScannerCanonicalPaperCandidate;
   riskPolicy: unknown;
   publicEvidence: ReturnType<typeof buildBitgetFuturesPublicEvidence>;
-  sourceSupplementalCostInput: Partial<SupplementalCostInput> | null;
+  sourceSupplementalCostInput: AuthoritativePaperSupplementalCostInput | null;
   researchCodeSha: string;
   entryTimestampMs: number;
   positionNotional: number;
   nowMs: number;
-}>): Partial<SupplementalCostInput> | null {
+}>): AuthoritativePaperSupplementalCostInput | null {
   const costPolicyId = naturalNonEmpty(input.sourceSupplementalCostInput?.costPolicyId)
     ? input.sourceSupplementalCostInput.costPolicyId.trim()
     : input.candidate.signal.strategyIdentity.costPolicyVersion;
@@ -746,17 +755,37 @@ export function createAuthoritativePaperNaturalCycleEvidenceSourceWiring({
             observedAtMs: nowMs,
             maximumAgeMs: NATURAL_CYCLE_EVIDENCE_MAXIMUM_AGE_MS,
           });
-          const executionInput = await collectAuthoritativePaperExecutionObservationInput({
-            context,
-            sizingEvidence: executionSizing,
-            fetchPublicJson: dependencies.fetchPublicJson,
+          const latencyCollection = await collectAuthoritativePaperLatencyCostEvidence({
+            market: 'CRYPTO_FUTURES',
+            symbol,
+            researchCodeSha: normalizedSha,
+            direction,
+            readPublicMidpointQuote: (phase, attempt) => readBitgetPublicLatencyMidpointQuote({
+              market: 'CRYPTO_FUTURES',
+              symbol,
+              researchCodeSha: normalizedSha,
+              phase,
+              attempt,
+              fetchPublicJson: dependencies.fetchPublicJson,
+              signal: abortSignal(context.signal),
+            }),
+            executeMeasuredPublicRequest: () => collectAuthoritativePaperExecutionObservationInput({
+              context,
+              sizingEvidence: executionSizing,
+              fetchPublicJson: dependencies.fetchPublicJson,
+              now: dependencies.now,
+            }),
             now: dependencies.now,
+            maximumAgeMs: NATURAL_CYCLE_EVIDENCE_MAXIMUM_AGE_MS,
+            maximumRequestDurationMs: NATURAL_CYCLE_EVIDENCE_MAXIMUM_AGE_MS,
+            maximumPostObservationAttempts: 3,
           });
+          const executionInput = latencyCollection.requestResult;
           if (!executionInput) return partial;
           const executionObservation = buildAuthoritativePaperExecutionObservation(executionInput);
           const slippagePercent = executionObservation.slippage.valuePercent;
           if (!Number.isFinite(slippagePercent) || slippagePercent < 0) return partial;
-          const supplementalCostInput = naturalFundingBoundSupplementalCostInput({
+          const fundingBoundSupplementalCostInput = naturalFundingBoundSupplementalCostInput({
             candidate,
             riskPolicy: policySource.policyEvidence,
             publicEvidence: marketEvidence,
@@ -764,14 +793,19 @@ export function createAuthoritativePaperNaturalCycleEvidenceSourceWiring({
             researchCodeSha: normalizedSha,
             entryTimestampMs: nowMs,
             positionNotional: probeQuantity * learning.entryPrice,
-            nowMs,
+            nowMs: latencyCollection.evaluatedAtMs,
           });
+          const latencyBinding = bindAuthoritativePaperLatencyToSupplementalCostInput({
+            sourceSupplementalCostInput: fundingBoundSupplementalCostInput,
+            latency: latencyCollection.latency,
+          });
+          const supplementalCostInput = latencyBinding.supplementalCostInput;
           if (!supplementalCostInput || !supplementalCostInput.funding) return partial;
           const supplementalAudit = auditAuthoritativeSupplementalCostSources({
             publicEvidence: marketEvidence,
             executionObservation,
             supplemental: supplementalCostInput,
-            nowMs,
+            nowMs: latencyCollection.evaluatedAtMs,
             maximumAgeMs: NATURAL_CYCLE_EVIDENCE_MAXIMUM_AGE_MS,
           });
           const executionCostComponentNames = [
@@ -863,7 +897,7 @@ export function createAuthoritativePaperNaturalCycleEvidenceSourceWiring({
             continue;
           }
 
-          const finalSupplementalCostInput = naturalFundingBoundSupplementalCostInput({
+          const finalFundingBoundSupplementalCostInput = naturalFundingBoundSupplementalCostInput({
             candidate,
             riskPolicy: policySource.policyEvidence,
             publicEvidence: marketEvidence,
@@ -871,8 +905,13 @@ export function createAuthoritativePaperNaturalCycleEvidenceSourceWiring({
             researchCodeSha: normalizedSha,
             entryTimestampMs: nowMs,
             positionNotional: targetQuantity * learning.entryPrice,
-            nowMs,
+            nowMs: latencyCollection.evaluatedAtMs,
           });
+          const finalLatencyBinding = bindAuthoritativePaperLatencyToSupplementalCostInput({
+            sourceSupplementalCostInput: finalFundingBoundSupplementalCostInput,
+            latency: latencyCollection.latency,
+          });
+          const finalSupplementalCostInput = finalLatencyBinding.supplementalCostInput;
           if (!finalSupplementalCostInput) return partial;
           return naturalEmptyResolution({
             paperStateSnapshot: snapshot,
@@ -917,6 +956,9 @@ export function createAuthoritativePaperNaturalCycleEvidenceSourceWiring({
       unknownCostIsZero: false,
       publicDepthIsRealFill: false,
       realFillObserved: false,
+      latencyEvidenceOwner: 'AUTHORITATIVE_PUBLIC_BBO_REQUEST_BRACKET',
+      latencyEvidenceQuality: 'ESTIMATED',
+      latencyMissingIsZero: false,
       executionAuthority: 'NONE',
     }),
   });
@@ -947,6 +989,9 @@ export const AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_SAFETY = Object.freeze({
   ownerMissingCallbacks: Object.freeze([]),
   ownerMissingCount: 0,
   ownerDataReadiness: AUTHORITATIVE_PAPER_CALLBACK_OWNERS_SAFETY.dataReadiness,
+  latencyEvidenceOwnerConnected: true,
+  latencyPublicRequestBracketingRequired: true,
+  latencyMissingIsZero: false,
   executionAuthority: 'NONE',
   privateApiAllowed: false,
   liveTrading: false,
