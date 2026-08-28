@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import { Info } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { BottomNav } from '@/components/bottom-nav';
 import { CenteredPageHeader } from '@/components/centered-page-header';
@@ -38,6 +39,13 @@ const WORKSPACE_TITLES: Record<Workspace, string> = {
   backtest: '백테스트',
   trade: '자동매매',
 };
+
+const TECHNICAL_INFO_ITEMS = [
+  '모바일은 AI 검색기·AI 차트·백테스트·자동매매를 각각 독립 화면으로 열어 긴 스크롤을 줄입니다.',
+  '권한이 없는 고급 기능은 화면 구조에서 사라지지 않고 잠금 상태로 표시되며 실행되지 않습니다.',
+  'PC는 권한이 있는 경우에만 검색기와 AI 차트를 함께 표시하고, 기본 권한에서는 검색기만 표시합니다.',
+  '실전 주문은 활성화하지 않으며 사용자 승인과 최종 위험 검증을 유지합니다.',
+] as const;
 
 function useDesktopWorkspace() {
   const query = `(min-width: ${ADAPTIVE_VIEWPORT_BREAKPOINTS.desktopMin}px)`;
@@ -247,28 +255,45 @@ export default function TechnicalWorkspacePage() {
   if (location.startsWith('/auto-trading')) return <Suspense fallback={<WorkspaceFallback />}><AutoTradingPage /></Suspense>;
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background pb-[calc(5rem+env(safe-area-inset-bottom))]" data-testid="technical-workspace">
-      <CenteredPageHeader
-        title={WORKSPACE_TITLES[workspace]}
-        infoTitle="기술 기능 안내"
-        infoItems={[
-          '모바일은 AI 검색기·AI 차트·백테스트·자동매매를 각각 독립 화면으로 열어 긴 스크롤을 줄입니다.',
-          '권한이 없는 고급 기능은 화면 구조에서 사라지지 않고 잠금 상태로 표시되며 실행되지 않습니다.',
-          'PC는 권한이 있는 경우에만 검색기와 AI 차트를 함께 표시하고, 기본 권한에서는 검색기만 표시합니다.',
-          '실전 주문은 활성화하지 않으며 사용자 승인과 최종 위험 검증을 유지합니다.',
-        ]}
-      />
-      <div className="shrink-0 border-b border-card-border bg-background px-2 py-2 sm:px-3">
-        <ResponsiveTabs
-          value={workspace}
-          options={workspaceTabs}
-          onChange={(nextWorkspace) => {
-            if (workspaceAllowed(nextWorkspace)) setWorkspace(nextWorkspace);
-          }}
-          ariaLabel="기술 기능 탭"
-          testId={desktop ? 'technical-desktop-tabs' : 'technical-mobile-tabs'}
-          compact
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background" data-testid="technical-workspace">
+      <h1 className="sr-only sm:hidden" data-testid="technical-mobile-accessible-title">{WORKSPACE_TITLES[workspace]}</h1>
+      <div className="hidden sm:block" data-testid="technical-desktop-header">
+        <CenteredPageHeader
+          title={WORKSPACE_TITLES[workspace]}
+          infoTitle="기술 기능 안내"
+          infoItems={[...TECHNICAL_INFO_ITEMS]}
         />
+      </div>
+      <div className="shrink-0 border-b border-card-border bg-background px-2 py-2 sm:px-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <div className="min-w-0 flex-1">
+            <ResponsiveTabs
+              value={workspace}
+              options={workspaceTabs}
+              onChange={(nextWorkspace) => {
+                if (workspaceAllowed(nextWorkspace)) setWorkspace(nextWorkspace);
+              }}
+              ariaLabel="기술 기능 탭"
+              testId={desktop ? 'technical-desktop-tabs' : 'technical-mobile-tabs'}
+              compact
+            />
+          </div>
+          <details className="group relative shrink-0 sm:hidden">
+            <summary
+              aria-label="기술 기능 안내 보기"
+              className="flex h-9 w-9 cursor-pointer list-none items-center justify-center rounded-xl border border-card-border bg-background text-muted-foreground transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden"
+              data-testid="technical-mobile-help"
+            >
+              <Info className="h-4 w-4" aria-hidden="true" />
+            </summary>
+            <div className="absolute right-0 z-50 mt-2 w-[min(82vw,320px)] rounded-2xl border border-card-border bg-background p-4 text-left shadow-xl">
+              <p className="text-sm font-black text-foreground">기술 기능 안내</p>
+              <ul className="mt-2 space-y-1.5 text-xs font-medium leading-5 text-muted-foreground">
+                {TECHNICAL_INFO_ITEMS.map((item) => <li key={item}>• {item}</li>)}
+              </ul>
+            </div>
+          </details>
+        </div>
       </div>
       <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
         {desktop ? (
