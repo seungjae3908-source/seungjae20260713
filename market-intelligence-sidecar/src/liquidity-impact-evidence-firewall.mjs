@@ -12,7 +12,7 @@ export const LIQUIDITY_IMPACT_COST_OWNERS = Object.freeze({
   LIQUIDITY: 'INDEPENDENT_LIQUIDITY_IMPACT',
 });
 
-const PUBLIC_HISTORICAL_SOURCE = 'PUBLIC_HISTORICAL_MARKET_DATA';
+const PUBLIC_FORWARD_SOURCE = 'PUBLIC_FORWARD_MARKET_DATA';
 const RESIDUAL_TARGET =
   'RESIDUAL_PRICE_IMPACT_AFTER_SPREAD_VISIBLE_BOOK_WALK_LATENCY_AND_PARTIAL_FILL';
 const SHA256 = /^[a-f0-9]{64}$/u;
@@ -268,7 +268,7 @@ function validateProvenance(artifact, expected, reasons) {
     add(reasons, 'PROVENANCE_REQUIRED');
     return null;
   }
-  if (provenance.sourceType !== PUBLIC_HISTORICAL_SOURCE
+  if (provenance.sourceType !== PUBLIC_FORWARD_SOURCE
     || !text(provenance.sourceProvider)
     || !text(provenance.sourceIdentity)
     || !digest(provenance.sourceDigest)
@@ -297,7 +297,7 @@ function validateLineage(artifact, provenance, reasons) {
     return null;
   }
   if (!text(lineage.lineageId) || !digest(lineage.lineageDigest)
-    || lineage.sourceType !== PUBLIC_HISTORICAL_SOURCE
+    || lineage.sourceType !== PUBLIC_FORWARD_SOURCE
     || !text(lineage.sourceIdentity)
     || !positiveInteger(lineage.observationCount)
     || !positiveFinite(lineage.firstObservedAt)
