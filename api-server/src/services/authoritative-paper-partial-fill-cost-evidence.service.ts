@@ -75,7 +75,7 @@ function validSnapshot(
   snapshot: PublicDepthSnapshot | null | undefined,
   nowMs: number,
   maximumAgeMs: number,
-): boolean {
+): snapshot is PublicDepthSnapshot {
   return Boolean(
     snapshot
       && nonEmpty(snapshot.snapshotId)
