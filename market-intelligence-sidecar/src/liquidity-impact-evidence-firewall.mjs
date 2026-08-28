@@ -7,16 +7,24 @@ export const LIQUIDITY_IMPACT_EVIDENCE_VERSION = 1;
 export const LIQUIDITY_IMPACT_COST_OWNERS = Object.freeze({
   BOOK_WALK: 'VISIBLE_L2_BOOK_WALK_SLIPPAGE',
   LATENCY: 'LATENCY_ADVERSE_MOVE',
+  PARTIAL_FILL: 'PARTIAL_FILL',
   SPREAD: 'SPREAD',
   LIQUIDITY: 'INDEPENDENT_LIQUIDITY_IMPACT',
 });
 
 const PUBLIC_HISTORICAL_SOURCE = 'PUBLIC_HISTORICAL_MARKET_DATA';
-const RESIDUAL_TARGET = 'RESIDUAL_PRICE_IMPACT_AFTER_VISIBLE_BOOK_WALK_AND_LATENCY';
+const RESIDUAL_TARGET =
+  'RESIDUAL_PRICE_IMPACT_AFTER_SPREAD_VISIBLE_BOOK_WALK_LATENCY_AND_PARTIAL_FILL';
 const SHA256 = /^[a-f0-9]{64}$/u;
 const COMMIT_SHA = /^[a-f0-9]{40}$/u;
-const FORBIDDEN_SOURCE = /(?:VISIBLE[_ -]?L2[_ -]?BOOK[_ -]?WALK|BOOK[_ -]?WALK|IMPLEMENTATION[_ -]?SHORTFALL|LATENCY[_ -]?ADVERSE[_ -]?MOVE)/iu;
+const FORBIDDEN_SOURCE = /(?:VISIBLE[_ -]?L2[_ -]?BOOK[_ -]?WALK|BOOK[_ -]?WALK|IMPLEMENTATION[_ -]?SHORTFALL|LATENCY[_ -]?ADVERSE[_ -]?MOVE|(?:SPREAD|SLIPPAGE|PARTIAL[_ -]?FILL)(?:[_ -]?(?:ONLY|EVIDENCE|OUTPUT)))/iu;
 const REQUIRED_EXCLUDED_OWNERS = Object.freeze([
+  LIQUIDITY_IMPACT_COST_OWNERS.BOOK_WALK,
+  LIQUIDITY_IMPACT_COST_OWNERS.LATENCY,
+  LIQUIDITY_IMPACT_COST_OWNERS.PARTIAL_FILL,
+  LIQUIDITY_IMPACT_COST_OWNERS.SPREAD,
+]);
+const REQUIRED_COMPETING_EVIDENCE_OWNERS = Object.freeze([
   LIQUIDITY_IMPACT_COST_OWNERS.BOOK_WALK,
   LIQUIDITY_IMPACT_COST_OWNERS.LATENCY,
   LIQUIDITY_IMPACT_COST_OWNERS.SPREAD,
@@ -39,13 +47,21 @@ export const LIQUIDITY_IMPACT_EVIDENCE_JSON_SCHEMA = deepFreeze({
     datasetIdentity: { type: 'string', minLength: 1 },
     datasetDigest: { type: 'string', pattern: '^[a-f0-9]{64}$' },
     sampleN: { type: 'integer', minimum: 1 },
+    trainDatasetIdentity: { type: 'string', minLength: 1 },
+    trainDatasetDigest: { type: 'string', pattern: '^[a-f0-9]{64}$' },
     trainSampleN: { type: 'integer', minimum: 1 },
+    validationDatasetIdentity: { type: 'string', minLength: 1 },
+    validationDatasetDigest: { type: 'string', pattern: '^[a-f0-9]{64}$' },
     validationSampleN: { type: 'integer', minimum: 1 },
+    oosDatasetIdentity: { type: 'string', minLength: 1 },
+    oosDatasetDigest: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+    oosSampleN: { type: 'integer', minimum: 1 },
     marketScopes: stringArraySchema(),
     symbolScopes: stringArraySchema(),
     sideScopes: stringArraySchema(),
     quantityNotionalBucketIdentity: { type: 'string', minLength: 1 },
     volatilityRegimeIdentity: { type: 'string', minLength: 1 },
+    liquidityRegimeIdentity: { type: 'string', minLength: 1 },
     calibratedAt: { type: 'number', exclusiveMinimum: 0 },
     maximumAge: { type: 'number', exclusiveMinimum: 0 },
     provenance: { type: 'object' },
@@ -71,13 +87,21 @@ export const LIQUIDITY_IMPACT_EVIDENCE_JSON_SCHEMA = deepFreeze({
     'datasetIdentity',
     'datasetDigest',
     'sampleN',
+    'trainDatasetIdentity',
+    'trainDatasetDigest',
     'trainSampleN',
+    'validationDatasetIdentity',
+    'validationDatasetDigest',
     'validationSampleN',
+    'oosDatasetIdentity',
+    'oosDatasetDigest',
+    'oosSampleN',
     'marketScopes',
     'symbolScopes',
     'sideScopes',
     'quantityNotionalBucketIdentity',
     'volatilityRegimeIdentity',
+    'liquidityRegimeIdentity',
     'calibratedAt',
     'maximumAge',
     'provenance',
@@ -198,6 +222,15 @@ function add(reasons, code) {
   if (!reasons.includes(code)) reasons.push(code);
 }
 
+function validateArtifactShape(artifact, reasons) {
+  const allowed = new Set(Object.keys(LIQUIDITY_IMPACT_EVIDENCE_JSON_SCHEMA.properties));
+  const required = LIQUIDITY_IMPACT_EVIDENCE_JSON_SCHEMA.required;
+  if (Object.keys(artifact).some((field) => !allowed.has(field))
+    || required.some((field) => !Object.prototype.hasOwnProperty.call(artifact, field))) {
+    add(reasons, 'ARTIFACT_SCHEMA_MALFORMED');
+  }
+}
+
 function validateContext(context, reasons) {
   const expected = object(context);
   if (!expected) {
@@ -210,6 +243,7 @@ function validateContext(context, reasons) {
     ['EXPECTED_SIDE_REQUIRED', expected.side],
     ['EXPECTED_QUANTITY_NOTIONAL_BUCKET_REQUIRED', expected.quantityNotionalBucketIdentity],
     ['EXPECTED_VOLATILITY_REGIME_REQUIRED', expected.volatilityRegimeIdentity],
+    ['EXPECTED_LIQUIDITY_REGIME_REQUIRED', expected.liquidityRegimeIdentity],
   ]) {
     if (!text(value)) add(reasons, field);
   }
@@ -291,13 +325,30 @@ function validateOutOfSample(artifact, reasons) {
     return null;
   }
   if (!text(reference.referenceId) || !digest(reference.referenceDigest)
-    || !text(reference.datasetIdentity)
-    || reference.datasetIdentity !== artifact.datasetIdentity
+    || !text(reference.trainDatasetIdentity)
+    || reference.trainDatasetIdentity !== artifact.trainDatasetIdentity
     || !digest(reference.trainDatasetDigest)
+    || !sameDigest(reference.trainDatasetDigest, artifact.trainDatasetDigest)
+    || !text(reference.validationDatasetIdentity)
+    || reference.validationDatasetIdentity !== artifact.validationDatasetIdentity
     || !digest(reference.validationDatasetDigest)
-    || sameDigest(reference.trainDatasetDigest, reference.validationDatasetDigest)
+    || !sameDigest(reference.validationDatasetDigest, artifact.validationDatasetDigest)
+    || !text(reference.oosDatasetIdentity)
+    || reference.oosDatasetIdentity !== artifact.oosDatasetIdentity
+    || !digest(reference.oosDatasetDigest)
+    || !sameDigest(reference.oosDatasetDigest, artifact.oosDatasetDigest)
+    || new Set([
+      reference.trainDatasetIdentity,
+      reference.validationDatasetIdentity,
+      reference.oosDatasetIdentity,
+    ]).size !== 3
+    || new Set([
+      digest(reference.trainDatasetDigest),
+      digest(reference.validationDatasetDigest),
+      digest(reference.oosDatasetDigest),
+    ]).size !== 3
     || !positiveInteger(reference.sampleN)
-    || reference.sampleN !== artifact.validationSampleN
+    || reference.sampleN !== artifact.oosSampleN
     || reference.status !== 'PASS'
     || reference.heldOut !== true
     || reference.contaminationFree !== true
@@ -350,6 +401,7 @@ function validateOwnership(artifact, oos, reasons) {
     || independence.targetVariable !== RESIDUAL_TARGET
     || independence.bookWalkExcluded !== true
     || independence.latencyAdverseMoveExcluded !== true
+    || independence.partialFillExcluded !== true
     || independence.spreadExcluded !== true
     || independence.implementationShortfallDecomposed !== true
     || independence.fullImplementationShortfallUsed !== false
@@ -367,11 +419,13 @@ function validateCompetingCosts(artifact, expected, provenance, lineage, ownersh
   const competing = Array.isArray(expected?.competingCostEvidence)
     ? expected.competingCostEvidence
     : [];
-  for (const owner of REQUIRED_EXCLUDED_OWNERS.slice(0, 2)) {
+  for (const owner of REQUIRED_COMPETING_EVIDENCE_OWNERS) {
     if (!competing.some((item) => item?.costOwner === owner)) {
       add(reasons, `${owner}_EVIDENCE_REQUIRED`);
     }
   }
+  const acceptedOwners = new Set(Object.values(LIQUIDITY_IMPACT_COST_OWNERS));
+  const validCompeting = [];
   for (const raw of competing) {
     const item = object(raw);
     if (!item || !text(item.costOwner) || !text(item.evidenceIdentity)
@@ -381,6 +435,12 @@ function validateCompetingCosts(artifact, expected, provenance, lineage, ownersh
       add(reasons, 'COMPETING_COST_EVIDENCE_INVALID');
       continue;
     }
+    if (!acceptedOwners.has(item.costOwner)
+      || item.costOwner === LIQUIDITY_IMPACT_COST_OWNERS.LIQUIDITY) {
+      add(reasons, 'COMPETING_COST_OWNER_INVALID');
+      continue;
+    }
+    validCompeting.push(item);
     if (same(artifact.artifactId, item.evidenceIdentity)) {
       add(reasons, 'COST_EVIDENCE_IDENTITY_REUSED');
     }
@@ -399,6 +459,29 @@ function validateCompetingCosts(artifact, expected, provenance, lineage, ownersh
     if (same(lineage?.lineageId, item.sourceObservationLineageId)
       || sameDigest(lineage?.lineageDigest, item.sourceObservationLineageDigest)) {
       add(reasons, 'SOURCE_OBSERVATION_LINEAGE_REUSED');
+    }
+  }
+  for (let leftIndex = 0; leftIndex < validCompeting.length; leftIndex += 1) {
+    const left = validCompeting[leftIndex];
+    for (let rightIndex = leftIndex + 1; rightIndex < validCompeting.length; rightIndex += 1) {
+      const right = validCompeting[rightIndex];
+      if (left.costOwner === right.costOwner) continue;
+      if (same(left.evidenceIdentity, right.evidenceIdentity)) {
+        add(reasons, 'COST_EVIDENCE_IDENTITY_REUSED');
+      }
+      if (sameDigest(left.evidenceDigest, right.evidenceDigest)) {
+        add(reasons, 'COST_EVIDENCE_DIGEST_REUSED');
+      }
+      if (same(left.sourceIdentity, right.sourceIdentity)) {
+        add(reasons, 'COST_SOURCE_IDENTITY_REUSED');
+      }
+      if (sameDigest(left.sourceDigest, right.sourceDigest)) {
+        add(reasons, 'COST_SOURCE_DIGEST_REUSED');
+      }
+      if (same(left.sourceObservationLineageId, right.sourceObservationLineageId)
+        || sameDigest(left.sourceObservationLineageDigest, right.sourceObservationLineageDigest)) {
+        add(reasons, 'SOURCE_OBSERVATION_LINEAGE_REUSED');
+      }
     }
   }
 }
@@ -427,6 +510,7 @@ export function validateLiquidityImpactCalibrationEvidence(input = {}) {
     return rejectResult(reasons);
   }
 
+  validateArtifactShape(artifact, reasons);
   if (artifact.schema !== LIQUIDITY_IMPACT_EVIDENCE_SCHEMA) add(reasons, 'SCHEMA_INVALID');
   if (artifact.version !== LIQUIDITY_IMPACT_EVIDENCE_VERSION) add(reasons, 'VERSION_INVALID');
   if (!['CALIBRATION_ARTIFACT', 'TEST_FIXTURE'].includes(artifact.evidenceClass)) {
@@ -457,11 +541,36 @@ export function validateLiquidityImpactCalibrationEvidence(input = {}) {
   if (!text(artifact.datasetIdentity)) add(reasons, 'DATASET_IDENTITY_REQUIRED');
   if (!digest(artifact.datasetDigest)) add(reasons, 'DATASET_DIGEST_REQUIRED');
   if (!positiveInteger(artifact.sampleN)) add(reasons, 'SAMPLE_N_REQUIRED');
+  if (!text(artifact.trainDatasetIdentity)) add(reasons, 'TRAIN_DATASET_IDENTITY_REQUIRED');
+  if (!digest(artifact.trainDatasetDigest)) add(reasons, 'TRAIN_DATASET_DIGEST_REQUIRED');
   if (!positiveInteger(artifact.trainSampleN)) add(reasons, 'TRAIN_SAMPLE_N_REQUIRED');
+  if (!text(artifact.validationDatasetIdentity)) add(reasons, 'VALIDATION_DATASET_IDENTITY_REQUIRED');
+  if (!digest(artifact.validationDatasetDigest)) add(reasons, 'VALIDATION_DATASET_DIGEST_REQUIRED');
   if (!positiveInteger(artifact.validationSampleN)) add(reasons, 'VALIDATION_SAMPLE_N_REQUIRED');
+  if (!text(artifact.oosDatasetIdentity)) add(reasons, 'OOS_DATASET_IDENTITY_REQUIRED');
+  if (!digest(artifact.oosDatasetDigest)) add(reasons, 'OOS_DATASET_DIGEST_REQUIRED');
+  if (!positiveInteger(artifact.oosSampleN)) add(reasons, 'OOS_SAMPLE_N_REQUIRED');
+  const splitIdentities = [
+    text(artifact.trainDatasetIdentity),
+    text(artifact.validationDatasetIdentity),
+    text(artifact.oosDatasetIdentity),
+  ];
+  const splitDigests = [
+    digest(artifact.trainDatasetDigest),
+    digest(artifact.validationDatasetDigest),
+    digest(artifact.oosDatasetDigest),
+  ];
+  if (splitIdentities.every(Boolean) && new Set(splitIdentities).size !== 3) {
+    add(reasons, 'SAMPLE_SPLIT_IDENTITY_INVALID');
+  }
+  if (splitDigests.every(Boolean) && new Set(splitDigests).size !== 3) {
+    add(reasons, 'SAMPLE_SPLIT_DIGEST_INVALID');
+  }
   if (positiveInteger(artifact.sampleN) && positiveInteger(artifact.trainSampleN)
     && positiveInteger(artifact.validationSampleN)
-    && artifact.sampleN !== artifact.trainSampleN + artifact.validationSampleN) {
+    && positiveInteger(artifact.oosSampleN)
+    && artifact.sampleN !== artifact.trainSampleN
+      + artifact.validationSampleN + artifact.oosSampleN) {
     add(reasons, 'SAMPLE_SPLIT_IDENTITY_INVALID');
   }
 
@@ -478,6 +587,10 @@ export function validateLiquidityImpactCalibrationEvidence(input = {}) {
   if (!text(artifact.volatilityRegimeIdentity)
     || artifact.volatilityRegimeIdentity !== expected?.volatilityRegimeIdentity) {
     add(reasons, 'VOLATILITY_REGIME_MISMATCH');
+  }
+  if (!text(artifact.liquidityRegimeIdentity)
+    || artifact.liquidityRegimeIdentity !== expected?.liquidityRegimeIdentity) {
+    add(reasons, 'LIQUIDITY_REGIME_MISMATCH');
   }
   if (!positiveFinite(artifact.calibratedAt)) add(reasons, 'CALIBRATED_AT_INVALID');
   if (!positiveFinite(artifact.maximumAge)) add(reasons, 'MAXIMUM_AGE_INVALID');
