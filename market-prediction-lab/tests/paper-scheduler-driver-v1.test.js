@@ -10,6 +10,7 @@ import {
   createFilePaperSchedulerLeaseStore,
   runScheduledPaperCycle,
 } from "../src/paper-scheduler-driver-v1.js";
+import { wrapPaperForwardProviderWithMeaningfulSearch } from "../src/meaningful-search-scheduled-paper-provider-v1.js";
 
 const NOW = Date.parse("2026-08-15T03:00:00.000Z");
 const CADENCE = Object.freeze({ version: "paper-hourly-v1", intervalMs: 60 * 60 * 1_000 });
@@ -362,6 +363,134 @@ for (const [name, lane] of [
     assert.equal(calls.length, 0);
   });
 }
+
+test("scheduled Natural runtime preserves the exact pre-Entry blocker and canonical provenance", async (t) => {
+  const naturalRuntimeSha = "a".repeat(40);
+  const naturalEvidenceIdentity = "b".repeat(64);
+  const exactSourceBlocker = "P0_PAPER_SUPPLEMENTAL_FULL_COST_BLOCKED_DATA:liquidityImpactCostEvidence";
+  const naturalFunnelMeasurements = Object.freeze([
+    Object.freeze({
+      stage: "CANDIDATE",
+      status: "MEASURED",
+      count: 5,
+      blocker: null,
+      provenance: "ScannerResponse.cards.length",
+      measuredAtMs: NOW,
+    }),
+    Object.freeze({
+      stage: "EVIDENCE_COMPLETE",
+      status: "MEASURED",
+      count: 0,
+      blocker: null,
+      provenance: "authoritative source-completeness classification",
+      measuredAtMs: NOW,
+    }),
+    Object.freeze({
+      stage: "ADMISSION_PASS",
+      status: "UNKNOWN",
+      count: null,
+      blocker: "ADMISSION_STAGE_DEPENDS_ON_UNRESOLVED_EVIDENCE_OR_PRODUCER_BLOCK",
+      provenance: null,
+      measuredAtMs: NOW,
+    }),
+  ]);
+  const publicEvidenceProvider = wrapPaperForwardProviderWithMeaningfulSearch({
+    provider: Object.freeze({ async collectPublicEvidence() { return readyLane(); } }),
+    async paperRuntimeForMarket({ market }) {
+      const safety = {
+        market,
+        executionAuthority: "NONE",
+        simulatedOnly: true,
+        liveOrderAllowed: false,
+        privateTradingApiAllowed: false,
+        orderSubmitted: false,
+        exchangeRequestSent: false,
+      };
+      if (market !== "CRYPTO_FUTURES") {
+        return Object.freeze({
+          ...safety,
+          status: "VALID_NO_TRADE",
+          paperBridge: Object.freeze({ candidates: Object.freeze([]), exitSignals: Object.freeze([]) }),
+        });
+      }
+      return Object.freeze({
+        ...safety,
+        status: "BLOCKED_DATA",
+        search: Object.freeze({ outcome: "CANDIDATES_FOUND" }),
+        admissionBlockers: Object.freeze(["P0_PAPER_SUPPLEMENTAL_FULL_COST_BLOCKED_DATA"]),
+        firstZeroStage: "EVIDENCE_COMPLETE",
+        firstZeroReason: "P0_PAPER_SUPPLEMENTAL_FULL_COST_BLOCKED_DATA",
+        naturalFirstZeroStage: "EVIDENCE_COMPLETE",
+        naturalFirstZeroReason: "INDEPENDENT_LIQUIDITY_IMPACT_CALIBRATION_NOT_PROVEN",
+        naturalEvidenceIdentity,
+        naturalRuntimeSha,
+        naturalFunnelMeasurements,
+        authoritativeFirstZeroReasonEvidenceByStage: Object.freeze({
+          EVIDENCE_COMPLETE: Object.freeze({
+            authoritative: true,
+            freshness: "FRESH",
+            reasonCode: "P0_PAPER_SUPPLEMENTAL_FULL_COST_BLOCKED_DATA_LIQUIDITY_IMPACT_COST_EVIDENCE",
+            sourceCodes: Object.freeze([exactSourceBlocker]),
+            strategySha: naturalRuntimeSha,
+            runtimeSha: naturalRuntimeSha,
+            datasetIdentity: naturalEvidenceIdentity,
+            synthetic: false,
+            testFixture: false,
+            historical: false,
+            replay: false,
+            duplicateReplay: false,
+          }),
+        }),
+      });
+    },
+  });
+  const { calls, options } = await harness(t, { publicEvidenceProvider });
+
+  const result = await runScheduledPaperCycle(options);
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.equal(result.mutationCount, 0);
+  assert.equal(calls.length, 0);
+  assert.deepEqual(result.blockers, [{
+    market: "CRYPTO_FUTURES",
+    reason: "BLOCKED_DATA",
+    entryAdmissionEvidence: {
+      classification: "BLOCKED_DATA",
+      sourceBlocker: "P0_PAPER_SUPPLEMENTAL_FULL_COST_BLOCKED_DATA",
+      producerStatus: "BLOCKED_DATA",
+      searchOutcome: "CANDIDATES_FOUND",
+      firstZeroStage: "EVIDENCE_COMPLETE",
+      firstZeroReason: "P0_PAPER_SUPPLEMENTAL_FULL_COST_BLOCKED_DATA",
+      naturalFirstZeroStage: "EVIDENCE_COMPLETE",
+      naturalFirstZeroReason: "INDEPENDENT_LIQUIDITY_IMPACT_CALIBRATION_NOT_PROVEN",
+      stageMeasurements: [],
+      naturalFunnelMeasurements,
+      authoritativeFirstZeroReasonEvidence: {
+        authoritative: true,
+        freshness: "FRESH",
+        reasonCode: "P0_PAPER_SUPPLEMENTAL_FULL_COST_BLOCKED_DATA_LIQUIDITY_IMPACT_COST_EVIDENCE",
+        sourceCodes: [exactSourceBlocker],
+        strategySha: naturalRuntimeSha,
+        runtimeSha: naturalRuntimeSha,
+        datasetIdentity: naturalEvidenceIdentity,
+        synthetic: false,
+        testFixture: false,
+        historical: false,
+        replay: false,
+        duplicateReplay: false,
+      },
+      provenance: {
+        schemaVersion: "meaningful-search-scheduled-paper-provider-v1",
+        naturalEvidenceIdentity,
+        naturalRuntimeSha,
+      },
+    },
+  }]);
+  assert.equal(result.safety.privateAccountAccess, false);
+  assert.equal(result.safety.executionAuthority, "NONE");
+  assert.equal(result.safety.orderAuthority, false);
+  assert.equal(result.safety.orderSubmitted, false);
+  assert.equal(result.safety.liveTrading, false);
+});
 
 test("429 exhaustion blocks all lanes and does not fabricate another lane success", async (t) => {
   const attempts = new Map();
