@@ -78,6 +78,25 @@ function iso(value) {
 }
 function unique(values) { return [...new Set(values)].sort(); }
 function equalCanonical(left, right) { return sha256Canonical(left) === sha256Canonical(right); }
+function finiteOrNull(value) { return typeof value === "number" && Number.isFinite(value) ? value : null; }
+function exactCostEvidence(metrics = {}) {
+  return deepFreeze({
+    costPolicyVersion: PR191_BACKTESTER_EVIDENCE_CONTRACT_V1.costPolicyVersion,
+    feeAmount: finiteOrNull(metrics.fees),
+    spreadAmount: finiteOrNull(metrics.spread),
+    slippageAmount: finiteOrNull(metrics.slippage),
+    fundingAmount: finiteOrNull(metrics.funding),
+    latencyAmount: finiteOrNull(metrics.latency),
+  });
+}
+function missingPathMetrics(metrics = {}) {
+  return [
+    ...(finiteOrNull(metrics.mae) === null ? ["MAE"] : []),
+    ...(finiteOrNull(metrics.mfe) === null ? ["MFE"] : []),
+    ...(finiteOrNull(metrics.entryContribution) === null ? ["ENTRY_CONTRIBUTION"] : []),
+    ...(finiteOrNull(metrics.exitContribution) === null ? ["EXIT_CONTRIBUTION"] : []),
+  ];
+}
 
 function normalizeResearchCodeIdentity(value) {
   if (Array.isArray(value)) return value.map(normalizeResearchCodeIdentity);
@@ -412,10 +431,12 @@ export function adaptBacktesterStrategyEvidenceV1(input = {}) {
       sample: { sampleN: null, tradeN: oos.tradeCount, settledN: null },
       metrics: {
         netReturn: oos.totalReturn, winRate: oos.winRate, profitFactor: oos.profitFactor,
-        expectancy: oos.expectancy, mdd: oos.maximumDrawdown, sharpe: oos.sharpe, turnover: oos.turnover,
+        expectancy: oos.expectancy, mdd: oos.maximumDrawdown, sharpe: oos.sharpe,
+        mae: finiteOrNull(oos.mae), mfe: finiteOrNull(oos.mfe), turnover: oos.turnover,
       },
+      costs: exactCostEvidence(oos),
       validation: { ...commonValidation, mddAcceptable: "UNKNOWN" },
-      missingEvidence: [...commonMissing, "MDD_ACCEPTABLE"],
+      missingEvidence: [...commonMissing, "MDD_ACCEPTABLE", ...missingPathMetrics(oos)],
       verdict: { originalOosMetrics: oos },
     }),
     stagePayload({
@@ -434,16 +455,17 @@ export function adaptBacktesterStrategyEvidenceV1(input = {}) {
       metrics: {
         netReturn: stressed.totalReturn, winRate: stressed.winRate, profitFactor: stressed.profitFactor,
         expectancy: stressed.expectancy, mdd: stressed.maximumDrawdown, sharpe: stressed.sharpe,
+        mae: finiteOrNull(stressed.mae), mfe: finiteOrNull(stressed.mfe),
         turnover: stressed.turnover, costAdjustedReturn: stressed.totalReturn,
       },
       costs: {
-        costPolicyVersion: identity.costPolicyVersion,
+        ...exactCostEvidence(stressed),
         scenarioId: costStress.scenarioId,
         multiplier: costStress.multiplier,
         includes: costStress.includes,
       },
       validation: { ...commonValidation, costStressSurvived: costStress.positiveAfterStress === true },
-      missingEvidence: commonMissing,
+      missingEvidence: [...commonMissing, ...missingPathMetrics(stressed)],
       verdict: {
         originalStatus: costStress.status,
         originalBaseline: costStress.baseline,
