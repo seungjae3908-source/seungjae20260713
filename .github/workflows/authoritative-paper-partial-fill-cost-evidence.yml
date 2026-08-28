@@ -41,7 +41,10 @@ jobs:
           grep -q "executionAuthority: 'NONE'" api-server/src/services/authoritative-paper-partial-fill-cost-evidence.service.ts
           grep -q "privateApiAllowed: false" api-server/src/services/authoritative-paper-partial-fill-cost-evidence.service.ts
           grep -q "liveTrading: false" api-server/src/services/authoritative-paper-partial-fill-cost-evidence.service.ts
-          grep -q "missingDataMayProduceZeroCost: false" api-server/src/services/authoritative-paper-partial-fill-cost-evidence.service.ts
-          grep -q "partialVisibleCoverageRequiresIndependentCostEvidence: true" api-server/src/services/authoritative-paper-partial-fill-cost-evidence.service.ts
+          grep -q "directPublicL2SnapshotMayProducePartialFillCost: false" api-server/src/services/authoritative-paper-partial-fill-cost-evidence.service.ts
           grep -q "bookWalkSlippageReusedAsPartialFillCost: false" api-server/src/services/authoritative-paper-partial-fill-cost-evidence.service.ts
-          grep -q "interSnapshotPriceDriftCountedAsPartialFillCost: false" api-server/src/services/authoritative-paper-partial-fill-cost-evidence.service.ts
+          grep -q "latencyAdverseMoveReusedAsPartialFillCost: false" api-server/src/services/authoritative-paper-partial-fill-cost-evidence.service.ts
+          grep -q "liquidityImpactReusedAsPartialFillCost: false" api-server/src/services/authoritative-paper-partial-fill-cost-evidence.service.ts
+          grep -q "sharedObservationLineageAllowed: false" api-server/src/services/authoritative-paper-partial-fill-cost-evidence.service.ts
+          grep -q "testFixtureRuntimeCredit: 0" api-server/src/services/authoritative-paper-partial-fill-cost-evidence.service.ts
+          grep -q "missingDataMayProduceZeroCost: false" api-server/src/services/authoritative-paper-partial-fill-cost-evidence.service.ts
