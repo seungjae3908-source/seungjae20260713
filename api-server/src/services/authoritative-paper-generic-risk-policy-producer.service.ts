@@ -24,8 +24,8 @@ export type AuthoritativePaperGenericRiskPolicyRequest = Readonly<{
 /**
  * A canonical record is an explicit persisted/configured policy record.
  * The producer never derives financial choices from engine guardrails or market type.
- * `policyEvidence` is deliberately `unknown`: the merged #769 validator remains the
- * single authority for validating the complete risk-policy evidence contract.
+ * `policyEvidence` is deliberately `unknown`: merged #769 remains the single
+ * authority for validating the complete risk-policy evidence contract.
  */
 export type AuthoritativePaperGenericRiskPolicyRecordV1 = Readonly<{
   schemaVersion: typeof AUTHORITATIVE_PAPER_GENERIC_RISK_POLICY_RECORD_VERSION;
@@ -40,7 +40,7 @@ export type AuthoritativePaperGenericRiskPolicyRecordV1 = Readonly<{
 
 export type AuthoritativePaperGenericRiskPolicyRecordSource = (
   request: AuthoritativePaperGenericRiskPolicyRequest,
-) => unknown;
+) => unknown | Promise<unknown>;
 
 export type AuthoritativePaperGenericRiskPolicySourceResult = Readonly<{
   schemaVersion: typeof AUTHORITATIVE_PAPER_GENERIC_RISK_POLICY_PRODUCER_VERSION;
@@ -62,7 +62,7 @@ export type AuthoritativePaperGenericRiskPolicySourceResult = Readonly<{
 
 export type AuthoritativePaperGenericRiskPolicyProducer = (
   request: AuthoritativePaperGenericRiskPolicyRequest,
-) => AuthoritativePaperGenericRiskPolicySourceResult;
+) => Promise<AuthoritativePaperGenericRiskPolicySourceResult>;
 
 export type AuthoritativePaperGenericRiskSizingBridgeResult = Readonly<{
   schemaVersion: typeof AUTHORITATIVE_PAPER_GENERIC_RISK_SIZING_BRIDGE_VERSION;
@@ -187,7 +187,9 @@ export function createAuthoritativePaperGenericRiskPolicyProducer(input: Readonl
     throw new TypeError('AUTHORITATIVE_GENERIC_RISK_POLICY_CLOCK_REQUIRED');
   }
 
-  return Object.freeze((request: AuthoritativePaperGenericRiskPolicyRequest) => {
+  return async function produceAuthoritativePaperGenericRiskPolicy(
+    request: AuthoritativePaperGenericRiskPolicyRequest,
+  ): Promise<AuthoritativePaperGenericRiskPolicySourceResult> {
     const requestBlockers = validateRequest(request);
     if (requestBlockers.length > 0) return blocked(request ?? {}, requestBlockers);
 
@@ -196,7 +198,7 @@ export function createAuthoritativePaperGenericRiskPolicyProducer(input: Readonl
 
     let rawRecord: unknown;
     try {
-      rawRecord = input.readCanonicalRecord(Object.freeze({
+      rawRecord = await input.readCanonicalRecord(Object.freeze({
         market: request.market,
         symbol: normalizeSymbol(request.symbol) as string,
         strategyScope: request.strategyScope.trim(),
@@ -223,6 +225,8 @@ export function createAuthoritativePaperGenericRiskPolicyProducer(input: Readonl
       ]),
       persistedAtMs: canonicalRecord.persistedAtMs,
       researchCodeSha: canonicalRecord.researchCodeSha,
+      // Deliberately pass the explicit persisted policy object through unchanged.
+      // Merged #769 owns all financial-policy validation and quantity calculation.
       policyEvidence: canonicalRecord.policyEvidence,
       blockers: Object.freeze([]),
       executionAuthority: 'NONE',
@@ -231,7 +235,7 @@ export function createAuthoritativePaperGenericRiskPolicyProducer(input: Readonl
       realOrderAllowed: false,
       financialMutationAllowed: false,
     });
-  });
+  };
 }
 
 /**
@@ -240,16 +244,16 @@ export function createAuthoritativePaperGenericRiskPolicyProducer(input: Readonl
  * that validates riskPercent, requestedLeverage, marginMode, maximumLeverage,
  * freshness and market/strategy/symbol scope before any quantity can exist.
  */
-export function buildAuthoritativePaperRiskSizingFromGenericRiskPolicySource(
+export async function buildAuthoritativePaperRiskSizingFromGenericRiskPolicySource(
   input: Omit<AuthoritativePaperRiskSizingInput, 'riskPolicy'>,
   producer: AuthoritativePaperGenericRiskPolicyProducer,
   nowMs = Date.now(),
-): AuthoritativePaperGenericRiskSizingBridgeResult {
+): Promise<AuthoritativePaperGenericRiskSizingBridgeResult> {
   if (typeof producer !== 'function') {
     throw new TypeError('AUTHORITATIVE_GENERIC_RISK_POLICY_PRODUCER_REQUIRED');
   }
 
-  const policySource = producer({
+  const policySource = await producer({
     market: input.market,
     symbol: input.symbol,
     strategyScope: input.strategyScope,
@@ -275,6 +279,7 @@ export function buildAuthoritativePaperRiskSizingFromGenericRiskPolicySource(
 export const AUTHORITATIVE_PAPER_GENERIC_RISK_POLICY_PRODUCER_SAFETY = Object.freeze({
   schemaVersion: AUTHORITATIVE_PAPER_GENERIC_RISK_POLICY_PRODUCER_VERSION,
   explicitCanonicalRecordRequired: true,
+  asyncCanonicalRecordSourceSupported: true,
   engineGuardrailsArePolicyEvidence: false,
   riskPercentDefaultAllowed: false,
   requestedLeverageDefaultAllowed: false,
