@@ -86,55 +86,61 @@ execution_replacement = """          const executionObservation = buildAuthorita
           const slippagePercent = executionObservation.slippage.valuePercent;
           if (!Number.isFinite(slippagePercent) || slippagePercent < 0) return partial;
 
-          // #777 successor binding. The initial public ticker has already completed
-          // before the public-L2 execution request starts. After that exact L2
-          // request completes, collect a second public ticker receipt. The merged
-          // #777 producer validates temporal bracketing and converts only adverse
-          // direction-aware midpoint movement into latency cost evidence.
+          // #777 successor binding. Prefer a latency cost derived from the exact
+          // public-L2 request used by this Natural candidate. If its fresh post
+          // ticker bracket is unavailable, preserve an independently supplied
+          // authoritative latency component instead of erasing other evidence.
+          // With neither source present, the downstream supplemental audit remains
+          // fail-closed with LATENCY_COST_EVIDENCE_UNAVAILABLE; unknown is never 0.
           const preLatencyMidpoint = latencyMidpoint(marketEvidence.bidPrice, marketEvidence.askPrice);
           const requestStartedAtMs = executionInput.executionEvidenceInput.requestStartedAtMs;
           const requestCompletedAtMs = executionInput.executionEvidenceInput.requestCompletedAtMs;
-          if (preLatencyMidpoint == null
-            || !naturalPositive(requestStartedAtMs)
-            || !naturalPositive(requestCompletedAtMs)) return partial;
+          let latencyBoundSupplementalCostInput: Partial<SupplementalCostInput> | null = sourceSupplementalCostInput;
 
-          const postTickerRequest = dependencies.buildPublicRequests(symbol).ticker;
-          const postTickerPayload = await dependencies.fetchPublicJson(publicUrl(postTickerRequest), {
-            provider: 'bitget',
-            signal: abortSignal(context.signal),
-          }).catch(() => null);
-          const postLatencyObservedAtMs = dependencies.now();
-          const postLatencyObservation = latencyTickerObservation(
-            postTickerPayload,
-            symbol,
-            postLatencyObservedAtMs,
-          );
-          if (!postLatencyObservation) return partial;
+          if (preLatencyMidpoint != null
+            && naturalPositive(requestStartedAtMs)
+            && naturalPositive(requestCompletedAtMs)) {
+            const postTickerRequest = dependencies.buildPublicRequests(symbol).ticker;
+            const postTickerPayload = await dependencies.fetchPublicJson(publicUrl(postTickerRequest), {
+              provider: 'bitget',
+              signal: abortSignal(context.signal),
+            }).catch(() => null);
+            const postLatencyObservedAtMs = dependencies.now();
+            const postLatencyObservation = latencyTickerObservation(
+              postTickerPayload,
+              symbol,
+              postLatencyObservedAtMs,
+            );
+            const latencyMeasurementNowMs = dependencies.now();
+            if (postLatencyObservation && naturalPositive(latencyMeasurementNowMs)) {
+              const latencyCost = buildAuthoritativePaperLatencyCostEvidence({
+                direction,
+                requestStartedAtMs,
+                requestCompletedAtMs,
+                preRequest: Object.freeze({
+                  midpoint: preLatencyMidpoint,
+                  observedAtMs: marketEvidence.observedAtMs,
+                  source: `BITGET_PUBLIC_V2_TICKER_RECEIPT:providerTs=${String(marketEvidence.tickerTimestampMs)}`,
+                }),
+                postRequest: postLatencyObservation,
+                nowMs: latencyMeasurementNowMs,
+                maximumAgeMs: NATURAL_CYCLE_EVIDENCE_MAXIMUM_AGE_MS,
+                maximumRequestDurationMs: NATURAL_CYCLE_EVIDENCE_MAXIMUM_AGE_MS,
+              });
+              if (latencyCost.status === 'PRESENT' && latencyCost.evidence != null) {
+                latencyBoundSupplementalCostInput = Object.freeze({
+                  ...(sourceSupplementalCostInput ?? {}),
+                  latency: latencyCost.evidence,
+                  observedAtMs: postLatencyObservedAtMs,
+                  nowMs: latencyMeasurementNowMs,
+                  maximumAgeMs: NATURAL_CYCLE_EVIDENCE_MAXIMUM_AGE_MS,
+                });
+              }
+            }
+          }
 
           const costNowMs = dependencies.now();
           if (!naturalPositive(costNowMs)) return partial;
-          const latencyCost = buildAuthoritativePaperLatencyCostEvidence({
-            direction,
-            requestStartedAtMs,
-            requestCompletedAtMs,
-            preRequest: Object.freeze({
-              midpoint: preLatencyMidpoint,
-              observedAtMs: marketEvidence.observedAtMs,
-              source: `BITGET_PUBLIC_V2_TICKER_RECEIPT:providerTs=${String(marketEvidence.tickerTimestampMs)}`,
-            }),
-            postRequest: postLatencyObservation,
-            nowMs: costNowMs,
-            maximumAgeMs: NATURAL_CYCLE_EVIDENCE_MAXIMUM_AGE_MS,
-            maximumRequestDurationMs: NATURAL_CYCLE_EVIDENCE_MAXIMUM_AGE_MS,
-          });
-          if (latencyCost.status !== 'PRESENT' || latencyCost.evidence == null) return partial;
-          const latencyBoundSupplementalCostInput: Partial<SupplementalCostInput> = Object.freeze({
-            ...(sourceSupplementalCostInput ?? {}),
-            latency: latencyCost.evidence,
-            observedAtMs: postLatencyObservedAtMs,
-            nowMs: costNowMs,
-            maximumAgeMs: NATURAL_CYCLE_EVIDENCE_MAXIMUM_AGE_MS,
-          });
 """
 if "// #777 successor binding." not in text:
     text = replace_once(
