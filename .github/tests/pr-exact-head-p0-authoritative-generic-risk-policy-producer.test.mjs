@@ -24,6 +24,14 @@ test('P0 generic risk producer requires an explicit canonical policy record inst
   assert.doesNotMatch(producerSource, /marginMode:\s*(?:'cash'|'isolated'|'cross')/u);
 });
 
+test('P0 generic risk producer supports asynchronous persisted canonical sources', () => {
+  assert.match(producerSource, /unknown \| Promise<unknown>/u);
+  assert.match(producerSource, /Promise<AuthoritativePaperGenericRiskPolicySourceResult>/u);
+  assert.match(producerSource, /rawRecord = await input\.readCanonicalRecord/u);
+  assert.match(producerSource, /const policySource = await producer/u);
+  assert.match(producerSource, /asyncCanonicalRecordSourceSupported:\s*true/u);
+});
+
 test('P0 generic risk producer fails closed when canonical record evidence is absent or unusable', () => {
   assert.match(producerSource, /RISK_POLICY_CANONICAL_RECORD_MISSING/u);
   assert.match(producerSource, /RISK_POLICY_CANONICAL_RECORD_SOURCE_ERROR/u);
@@ -54,6 +62,7 @@ test('P0 generic risk producer preserves identity/provenance without manufacturi
   assert.match(producerSource, /researchCodeSha/u);
   assert.match(producerSource, /canonicalRecord:/u);
   assert.match(producerSource, /recordVersion:/u);
+  assert.match(producerSource, /policyEvidence:\s*canonicalRecord\.policyEvidence/u);
   assert.match(producerSource, /riskPercentDefaultAllowed:\s*false/u);
   assert.match(producerSource, /requestedLeverageDefaultAllowed:\s*false/u);
   assert.match(producerSource, /marginModeDefaultAllowed:\s*false/u);
