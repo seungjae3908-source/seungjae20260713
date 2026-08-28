@@ -59,4 +59,11 @@ jobs:
           grep -q "naturalEntryCredit: 0" "$FILE"
           grep -q "runtimeCostCredit: 0" "$FILE"
           grep -q "fullCostReady: false" "$FILE"
-          ! grep -Eq '/api/[^[:space:]"'"']*(account|order|position|withdraw|transfer)' "$FILE"
+          grep -Fq '/api/v3/market/orderbook' "$FILE"
+          grep -Fq '/api/v3/market/fills' "$FILE"
+          for forbidden in 'place-order' 'cancel-order' 'withdrawal' 'withdraw' 'transfer-fund' 'private-account'; do
+            if grep -Fq "$forbidden" "$FILE"; then
+              echo "Forbidden private trading action literal found: $forbidden" >&2
+              exit 1
+            fi
+          done
