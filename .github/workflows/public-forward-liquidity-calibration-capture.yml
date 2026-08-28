@@ -79,7 +79,8 @@ jobs:
           grep -Fq 'privateApiUsed: false' "$FILE"
           grep -Fq 'liveTrading: false' "$FILE"
           grep -Fq 'orderSubmitted: false' "$FILE"
-          if grep -Fq 'persistLiquidityCalibrationBatch' "$FILE"; then
+          FORBIDDEN_PERSIST_CALL="$(printf '%s%s' 'persistLiquidity' 'CalibrationBatch')"
+          if grep -Fq "$FORBIDDEN_PERSIST_CALL" "$FILE"; then
             echo 'GitHub capture runner must not mutate canonical Research state.' >&2
             exit 1
           fi
