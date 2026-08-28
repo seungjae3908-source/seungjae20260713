@@ -20,6 +20,7 @@ import {
   type BitgetPublicRequest,
 } from './bitget-futures-public-evidence.service';
 import { fetchPublicMarketJson } from './public-market-http';
+import { buildAuthoritativePaperLatencyCostEvidence } from './authoritative-paper-latency-cost-evidence.service';
 import {
   auditAuthoritativeSupplementalCostSources,
   buildAuthoritativePaperFundingHoldingHorizonCost,
@@ -187,6 +188,47 @@ function publicUrl(request: BitgetPublicRequest): URL {
   const url = new URL(request.path, BITGET_BASE_URL);
   url.search = request.query;
   return url;
+}
+
+function latencyPositiveScalar(value: unknown): number | null {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function latencyMidpoint(bid: unknown, ask: unknown): number | null {
+  const normalizedBid = latencyPositiveScalar(bid);
+  const normalizedAsk = latencyPositiveScalar(ask);
+  if (normalizedBid == null || normalizedAsk == null || normalizedAsk < normalizedBid) return null;
+  return (normalizedBid + normalizedAsk) / 2;
+}
+
+function latencyTickerObservation(
+  payload: unknown,
+  symbol: string,
+  observedAtMs: number,
+): Readonly<{ midpoint: number; observedAtMs: number; source: string }> | null {
+  const envelope = payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? payload as Record<string, unknown>
+    : null;
+  if (!envelope || envelope.code !== '00000' || !Array.isArray(envelope.data) || envelope.data.length !== 1) {
+    return null;
+  }
+  const rawRow = envelope.data[0];
+  const row = rawRow && typeof rawRow === 'object' && !Array.isArray(rawRow)
+    ? rawRow as Record<string, unknown>
+    : null;
+  if (!row) return null;
+  const rowSymbol = String(row.symbol ?? '').trim().toUpperCase().replace(/[^A-Z0-9]/gu, '');
+  const midpoint = latencyMidpoint(row.bidPr, row.askPr);
+  const providerTimestampMs = latencyPositiveScalar(row.ts);
+  if (rowSymbol !== symbol || midpoint == null || providerTimestampMs == null || !naturalPositive(observedAtMs)) {
+    return null;
+  }
+  return Object.freeze({
+    midpoint,
+    observedAtMs,
+    source: `BITGET_PUBLIC_V2_TICKER_RECEIPT:providerTs=${String(providerTimestampMs)}`,
+  });
 }
 
 function ownedSource<T>({
@@ -756,22 +798,78 @@ export function createAuthoritativePaperNaturalCycleEvidenceSourceWiring({
           const executionObservation = buildAuthoritativePaperExecutionObservation(executionInput);
           const slippagePercent = executionObservation.slippage.valuePercent;
           if (!Number.isFinite(slippagePercent) || slippagePercent < 0) return partial;
+
+          // #777 successor binding. Prefer a latency cost derived from the exact
+          // public-L2 request used by this Natural candidate. If its fresh post
+          // ticker bracket is unavailable, preserve an independently supplied
+          // authoritative latency component instead of erasing other evidence.
+          // With neither source present, the downstream supplemental audit remains
+          // fail-closed with LATENCY_COST_EVIDENCE_UNAVAILABLE; unknown is never 0.
+          const preLatencyMidpoint = latencyMidpoint(marketEvidence.bidPrice, marketEvidence.askPrice);
+          const requestStartedAtMs = executionInput.executionEvidenceInput.requestStartedAtMs;
+          const requestCompletedAtMs = executionInput.executionEvidenceInput.requestCompletedAtMs;
+          let latencyBoundSupplementalCostInput: Partial<SupplementalCostInput> | null = sourceSupplementalCostInput;
+
+          if (preLatencyMidpoint != null
+            && naturalPositive(requestStartedAtMs)
+            && naturalPositive(requestCompletedAtMs)) {
+            const postTickerRequest = dependencies.buildPublicRequests(symbol).ticker;
+            const postTickerPayload = await dependencies.fetchPublicJson(publicUrl(postTickerRequest), {
+              provider: 'bitget',
+              signal: abortSignal(context.signal),
+            }).catch(() => null);
+            const postLatencyObservedAtMs = dependencies.now();
+            const postLatencyObservation = latencyTickerObservation(
+              postTickerPayload,
+              symbol,
+              postLatencyObservedAtMs,
+            );
+            const latencyMeasurementNowMs = dependencies.now();
+            if (postLatencyObservation && naturalPositive(latencyMeasurementNowMs)) {
+              const latencyCost = buildAuthoritativePaperLatencyCostEvidence({
+                direction,
+                requestStartedAtMs,
+                requestCompletedAtMs,
+                preRequest: Object.freeze({
+                  midpoint: preLatencyMidpoint,
+                  observedAtMs: marketEvidence.observedAtMs,
+                  source: `BITGET_PUBLIC_V2_TICKER_RECEIPT:providerTs=${String(marketEvidence.tickerTimestampMs)}`,
+                }),
+                postRequest: postLatencyObservation,
+                nowMs: latencyMeasurementNowMs,
+                maximumAgeMs: NATURAL_CYCLE_EVIDENCE_MAXIMUM_AGE_MS,
+                maximumRequestDurationMs: NATURAL_CYCLE_EVIDENCE_MAXIMUM_AGE_MS,
+              });
+              if (latencyCost.status === 'PRESENT' && latencyCost.evidence != null) {
+                latencyBoundSupplementalCostInput = Object.freeze({
+                  ...(sourceSupplementalCostInput ?? {}),
+                  latency: latencyCost.evidence,
+                  observedAtMs: postLatencyObservedAtMs,
+                  nowMs: latencyMeasurementNowMs,
+                  maximumAgeMs: NATURAL_CYCLE_EVIDENCE_MAXIMUM_AGE_MS,
+                });
+              }
+            }
+          }
+
+          const costNowMs = dependencies.now();
+          if (!naturalPositive(costNowMs)) return partial;
           const supplementalCostInput = naturalFundingBoundSupplementalCostInput({
             candidate,
             riskPolicy: policySource.policyEvidence,
             publicEvidence: marketEvidence,
-            sourceSupplementalCostInput,
+            sourceSupplementalCostInput: latencyBoundSupplementalCostInput,
             researchCodeSha: normalizedSha,
             entryTimestampMs: nowMs,
             positionNotional: probeQuantity * learning.entryPrice,
-            nowMs,
+            nowMs: costNowMs,
           });
           if (!supplementalCostInput || !supplementalCostInput.funding) return partial;
           const supplementalAudit = auditAuthoritativeSupplementalCostSources({
             publicEvidence: marketEvidence,
             executionObservation,
             supplemental: supplementalCostInput,
-            nowMs,
+            nowMs: costNowMs,
             maximumAgeMs: NATURAL_CYCLE_EVIDENCE_MAXIMUM_AGE_MS,
           });
           const executionCostComponentNames = [
@@ -851,7 +949,7 @@ export function createAuthoritativePaperNaturalCycleEvidenceSourceWiring({
               slippageRate: sizingExecutionCostRate,
               estimatedFundingRate: fundingExecutionCostRate,
             }),
-          }, stablePolicyProducer, nowMs);
+          }, stablePolicyProducer, costNowMs);
           const targetQuantity = bridge.sizingEvidence.targetQuantity;
           if (bridge.policySource !== policySource
             || bridge.sizingEvidence.status !== 'PRESENT'

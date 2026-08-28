@@ -8,7 +8,7 @@
     "sourceGitBlobSha": "7dc275b70f9379e32f3fd6c718a612b06ceb1c46",
     "sourceSha256": "8c7563936de865e9103d73d15c0442a44f1cf33426315e758abad83d96880e0c"
   },
-  "sourceGraphSha256": "8c308d53f0223ac7e1236f0fa4b86f7045bd9e58806e19321b5da7d7cecd3bcd",
+  "sourceGraphSha256": "f944456ae4e091c21367ca615ea3ebc8273c91d3a4e177b70c483ad6876b385a",
   "sourceFiles": [
     "api-server/src/data/asset-type.ts",
     "api-server/src/lib/bounded-work-pool.ts",
@@ -17,6 +17,7 @@
     "api-server/src/services/authoritative-paper-evidence-sources.service.ts",
     "api-server/src/services/authoritative-paper-execution-cost-sources.service.ts",
     "api-server/src/services/authoritative-paper-generic-risk-policy-producer.service.ts",
+    "api-server/src/services/authoritative-paper-latency-cost-evidence.service.ts",
     "api-server/src/services/authoritative-paper-risk-sizing-source.service.ts",
     "api-server/src/services/authoritative-paper-runtime-package.entry.ts",
     "api-server/src/services/bitget-futures-public-evidence.service.ts",
@@ -55,9 +56,10 @@
     "api-server/src/lib/bounded-work-pool.ts": "bd870fe9d205f6fb3aac0b62a2a6c3937c65093e9563def4346872c0cc30d2f5",
     "api-server/src/lib/provider-admission-control.ts": "38791f5181beedb3ffa382b7653ff607622a6d8e806d2788ccd124d5231e1205",
     "api-server/src/services/authoritative-paper-callback-owners.service.ts": "7812af2bfa71d255796ac6034108844038f54a06da2ef710c9f6d8f32ddfdae0",
-    "api-server/src/services/authoritative-paper-evidence-sources.service.ts": "6f71f1e6bc5933ba36cb6e565ec51c3faac9d202500e1cf5833485c268c18382",
+    "api-server/src/services/authoritative-paper-evidence-sources.service.ts": "ddfc96131ef1f0520c6c8e8eea65b59aae4d4b2b598111eb5e5c8752483388d2",
     "api-server/src/services/authoritative-paper-execution-cost-sources.service.ts": "b147b3d37c9db02c0a1546b68d8f036f94b2ff5891382986dac4b23f41ab6c17",
     "api-server/src/services/authoritative-paper-generic-risk-policy-producer.service.ts": "0d0a188033aa96e965eb94c3f52f2c59b0deb3e962c991e42d628f24219d06b5",
+    "api-server/src/services/authoritative-paper-latency-cost-evidence.service.ts": "2765be34ac521dd7e27b4e5291bf0ceff04cee666a1a3575dd66bd59b4d5817a",
     "api-server/src/services/authoritative-paper-risk-sizing-source.service.ts": "aa9775518fd8cf13b804ba10ab21a195f1634b41060c7d5ba63189cb5b94ce1a",
     "api-server/src/services/authoritative-paper-runtime-package.entry.ts": "48af027f1c340ec87407cf776b1b3d33c228385b2c431f204561c2e760c15945",
     "api-server/src/services/bitget-futures-public-evidence.service.ts": "e6ebd43826d43fc93a16ca8516c8ca9c214f73677c706fdbdfff697ed0918a55",
@@ -91,7 +93,7 @@
     "market-intelligence-sidecar/src/execution-quality.mjs": "f91139e1a06c26c3ac42920b3f95271aa96ee4bfacc228236ad4b313444c1cb8",
     "market-prediction-lab/src/bitget-position-tier-v1.js": "ddfa77300339b0968e719bd547a84389c890cc1d03982ec3d2d7d30859f6ed01"
   },
-  "bundleSha256": "32ce994f056817eceb8e5223d052fac2f6cb540ec0c6229903e2dd02cf6ce805",
+  "bundleSha256": "0cba87f2ea7a4d46ac6d5ad262bced0e406dcea9a6e40872d7718cae113856e4",
   "admissionBundleSchemaVersion": "scanner-paper-admission-evidence-bundle-v1",
   "paperStateSnapshotSchemaVersion": "paper-trading-state-snapshot-v2",
   "callbackOwnerContractSchemaVersion": "authoritative-paper-callback-owner-contract-v1",
