@@ -398,10 +398,20 @@ jobs:
         if: always() && (steps.validate.outcome != 'success' || steps.market_suite.outcome != 'success' || steps.futures_generalization_suite.outcome != 'success' || steps.futures_pnl_suite.outcome != 'success' || steps.futures_regime_suite.outcome != 'success' || steps.upbit_spot_suite.outcome != 'success' || steps.upbit_spot_pnl_suite.outcome != 'success' || steps.upbit_spot_alternative_suite.outcome != 'success' || steps.stock_suite.outcome != 'success' || steps.stock_pnl_suite.outcome != 'success' || steps.stock_generalization_suite.outcome != 'success' || steps.us_pullback_suite.outcome != 'success' || steps.stock_regime_suite.outcome != 'success' || steps.derivatives_suite.outcome != 'success' || steps.structure_suite.outcome != 'success')
         run: exit 1
 
-  publish-durable-reference:
-    name: Publish immutable future model reference
+  durable-policy-preflight:
+    name: Verify immutable release policy
     needs: validate-and-train
     if: github.event_name == 'workflow_dispatch' && needs.validate-and-train.result == 'success'
+    uses: ./.github/workflows/prediction-lab-model-reference-durable-policy.yml
+    with:
+      expected_sha: ${{ needs.validate-and-train.outputs.research_sha }}
+
+  publish-durable-reference:
+    name: Publish immutable future model reference
+    needs:
+      - validate-and-train
+      - durable-policy-preflight
+    if: github.event_name == 'workflow_dispatch' && needs.validate-and-train.result == 'success' && needs.durable-policy-preflight.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -411,12 +421,12 @@ jobs:
       RESEARCH_SHA: ${{ needs.validate-and-train.outputs.research_sha }}
       RELEASE_TAG: prediction-lab-model-reference-v1-${{ github.run_id }}
     steps:
-      - name: Require exact latest main and enabled immutable releases
+      - name: Require exact latest main and verified immutable release policy
         id: durable_preflight
         uses: actions/github-script@v7
         env:
           EXPECTED_SHA: ${{ needs.validate-and-train.outputs.research_sha }}
-          IMMUTABLE_RELEASE_POLICY_TOKEN: ${{ secrets.PREDICTION_LAB_IMMUTABLE_RELEASE_POLICY_TOKEN }}
+          IMMUTABLE_ENABLED: ${{ needs.durable-policy-preflight.outputs.immutable_enabled }}
         with:
           script: |
             const expectedSha = String(process.env.EXPECTED_SHA ?? '').toLowerCase();
@@ -424,9 +434,8 @@ jobs:
               core.setFailed('DURABLE_REFERENCE_STORE_NOT_READY: exact producer SHA missing');
               return;
             }
-            const policyToken = String(process.env.IMMUTABLE_RELEASE_POLICY_TOKEN ?? '').trim();
-            if (!policyToken) {
-              core.setFailed('DURABLE_REFERENCE_STORE_NOT_READY: immutable release policy read credential missing');
+            if (process.env.IMMUTABLE_ENABLED !== 'true') {
+              core.setFailed('DURABLE_REFERENCE_STORE_NOT_READY: immutable release policy gate did not prove enabled');
               return;
             }
             const { data: repository } = await github.rest.repos.get({ owner: context.repo.owner, repo: context.repo.repo });
@@ -437,32 +446,6 @@ jobs:
             });
             if (repository.default_branch !== 'main' || String(main.commit.sha).toLowerCase() !== expectedSha) {
               core.setFailed('DURABLE_REFERENCE_STORE_NOT_READY: producer is not exact latest main');
-              return;
-            }
-            let policy;
-            try {
-              const response = await github.request('GET /repos/{owner}/{repo}/immutable-releases', {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                headers: {
-                  'X-GitHub-Api-Version': '2026-03-10',
-                  authorization: `Bearer ${policyToken}`,
-                },
-              });
-              policy = response.data;
-            } catch (error) {
-              if (error.status === 404) {
-                core.setFailed('DURABLE_REFERENCE_STORE_NOT_READY: immutable releases are not enabled');
-                return;
-              }
-              if (error.status === 401 || error.status === 403) {
-                core.setFailed('DURABLE_REFERENCE_STORE_NOT_READY: policy credential lacks repository Administration:read');
-                return;
-              }
-              throw error;
-            }
-            if (policy?.enabled !== true) {
-              core.setFailed('DURABLE_REFERENCE_STORE_NOT_READY: immutable release policy is not proven enabled');
               return;
             }
             try {
@@ -760,6 +743,7 @@ jobs:
           gh release verify-asset "$RELEASE_TAG" "$DURABLE_ROOT/$RECEIPT_NAME" --repo "$REPOSITORY"
           echo 'DURABLE_REFERENCE_STORE=GITHUB_IMMUTABLE_RELEASE'
           echo 'LONG_TERM_REFERENCE_PROVEN=true'
+
       - name: Upload immutable publication verification copy
         uses: actions/upload-artifact@v4
         with:
