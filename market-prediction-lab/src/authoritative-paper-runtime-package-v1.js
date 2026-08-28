@@ -158,6 +158,7 @@ function assertManifest(manifest, bundleDigest) {
 function assertExports(runtime) {
   const safety = runtime?.AUTHORITATIVE_PAPER_RUNTIME_PACKAGE_SAFETY;
   const evidenceSafety = runtime?.AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_SAFETY;
+  const latencySafety = runtime?.AUTHORITATIVE_PAPER_LATENCY_COST_EVIDENCE_SAFETY;
   if (runtime?.SCANNER_CRYPTO_FUTURES_PAPER_ADMISSION_EVIDENCE_PRODUCER_VERSION
       !== AUTHORITATIVE_PAPER_RUNTIME_PACKAGE_CONTRACT.canonicalProducerVersion
     || runtime?.PAPER_TRADING_STATE_SNAPSHOT_VERSION
@@ -175,6 +176,10 @@ function assertExports(runtime) {
     || typeof runtime?.buildAuthoritativeSizedContractRules !== "function"
     || typeof runtime?.buildAuthoritativePaperExecutionObservation !== "function"
     || typeof runtime?.buildAuthoritativeSupplementalCostEvidence !== "function"
+    || typeof runtime?.buildAuthoritativePaperLatencyCostEvidence !== "function"
+    || typeof runtime?.bindAuthoritativePaperLatencyToSupplementalCostInput !== "function"
+    || typeof runtime?.collectAuthoritativePaperLatencyCostEvidence !== "function"
+    || typeof runtime?.readBitgetPublicLatencyMidpointQuote !== "function"
     || typeof runtime?.paperStateFromAuthoritativeSnapshot !== "function"
     || typeof runtime?.buildPaperSimulatedExecutionEvidence !== "function"
     || typeof runtime?.validateImmutablePaperTradingStateSnapshot !== "function"
@@ -186,6 +191,10 @@ function assertExports(runtime) {
     || evidenceSafety?.liveTrading !== false
     || evidenceSafety?.scheduleActivationAuthority !== false
     || evidenceSafety?.financialMutationAllowed !== false
+    || latencySafety?.executionAuthority !== "NONE"
+    || latencySafety?.privateApiAllowed !== false
+    || latencySafety?.liveTrading !== false
+    || latencySafety?.financialMutationAllowed !== false
     || safety?.executionAuthority !== "NONE"
     || safety?.privateApiAllowed !== false
     || safety?.liveTrading !== false
@@ -244,6 +253,11 @@ export async function loadValidatedAuthoritativePaperRuntimePackage({
     buildAuthoritativeSizedContractRules: runtime.buildAuthoritativeSizedContractRules,
     buildAuthoritativePaperExecutionObservation: runtime.buildAuthoritativePaperExecutionObservation,
     buildAuthoritativeSupplementalCostEvidence: runtime.buildAuthoritativeSupplementalCostEvidence,
+    buildAuthoritativePaperLatencyCostEvidence: runtime.buildAuthoritativePaperLatencyCostEvidence,
+    bindAuthoritativePaperLatencyToSupplementalCostInput:
+      runtime.bindAuthoritativePaperLatencyToSupplementalCostInput,
+    collectAuthoritativePaperLatencyCostEvidence: runtime.collectAuthoritativePaperLatencyCostEvidence,
+    readBitgetPublicLatencyMidpointQuote: runtime.readBitgetPublicLatencyMidpointQuote,
     paperStateFromAuthoritativeSnapshot: runtime.paperStateFromAuthoritativeSnapshot,
     validateImmutablePaperTradingStateSnapshot: runtime.validateImmutablePaperTradingStateSnapshot,
     executionAuthority: "NONE",
