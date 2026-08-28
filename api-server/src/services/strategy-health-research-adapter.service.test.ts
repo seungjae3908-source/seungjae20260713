@@ -223,6 +223,25 @@ test('forward evidence becomes healthy only after the canonical minimum is actua
   assert.equal(result.inputs.settlement.deficitCount, 0);
 });
 
+test('canonical forward minimum reports exact deficits at every requested boundary', () => {
+  for (const [observedCount, deficitCount] of [[0, 30], [1, 29], [10, 20], [29, 1], [30, 0]] as const) {
+    const result = bindCanonicalStrategyHealth(overview({
+      shadow: { groups: [], canonicalHandoffs: [{ group: '15m', handoff: canonicalShadowHandoff({ settledN: observedCount }) }] },
+      paper: {
+        runtime: { present: true, safetyEvidenceComplete: true },
+        ledger: { present: true, cycleCount: 1, sampleCount: observedCount, positionCount: 1, settlementCount: observedCount },
+      },
+    }));
+
+    for (const key of ['shadowQuality', 'naturalPaper', 'settlement'] as const) {
+      assert.equal(result.inputs[key].observedCount, observedCount);
+      assert.equal(result.inputs[key].minimumRequiredCount, 30);
+      assert.equal(result.inputs[key].deficitCount, deficitCount);
+      assert.equal(result.inputs[key].status, observedCount < 30 ? 'MISSING_EVIDENCE' : 'HEALTHY');
+    }
+  }
+});
+
 test('profitability false and Champion NONE remain explicit missing evidence', () => {
   const profitability = bindCanonicalStrategyHealth(overview({ profitability: { proven: false } }));
   assert.equal(profitability.status, 'MISSING_EVIDENCE');
