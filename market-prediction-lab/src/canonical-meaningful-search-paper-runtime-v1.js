@@ -145,9 +145,26 @@ function preparedCandidateForCard(card, nowMs) {
   });
 }
 
-function needsPaperExitEvaluation(candidate) {
+function evaluatePaperExitCondition(candidate, observedAtMs) {
   const signal = candidate?.signal;
-  if (!signal || !finite(signal.timestampMs)) return false;
+  const observationId = nonEmpty(signal?.signalId) ? signal.signalId : null;
+  if (!signal || !finite(signal.timestampMs)) {
+    return freeze({
+      status: "MEASURED",
+      observationId,
+      evaluated: true,
+      requirementsSatisfied: false,
+      executionIntent: "NONE",
+      sourceCode: "EXIT_SIGNAL_CONTRACT_INCOMPLETE",
+      sourceReason: "EXIT_SIGNAL_CONTRACT_INCOMPLETE",
+      provenance: "canonical-meaningful-search-paper-runtime-v1 evaluatePaperExitCondition",
+      observedAt: observedAtMs,
+      paperIdentity: candidate?.paperIdentity ?? null,
+      naturalCredit: 0,
+      replayCredit: 0,
+      duplicateCredit: 0,
+    });
+  }
   const evaluatedAtMs = finite(candidate?.riskEvidence?.evaluatedAtMs)
     ? candidate.riskEvidence.evaluatedAtMs
     : finite(candidate?.execution?.dataEvidence?.asOfMs)
@@ -174,10 +191,79 @@ function needsPaperExitEvaluation(candidate) {
       lifecycle,
       reduceOnly: signal.reduceOnly === true || candidate?.reduceOnly === true,
     });
-    return execution.executionIntent === "EXIT" || execution.executionIntent === "REDUCE";
+    const requirementsSatisfied = execution.executionIntent === "EXIT" || execution.executionIntent === "REDUCE";
+    return freeze({
+      status: "MEASURED",
+      observationId,
+      evaluated: true,
+      requirementsSatisfied,
+      executionIntent: execution.executionIntent,
+      sourceCode: requirementsSatisfied ? "EXIT_REQUIREMENTS_SATISFIED" : "EXIT_REQUIREMENTS_NOT_SATISFIED",
+      sourceReason: execution.reason,
+      provenance: "canonical-meaningful-search-paper-runtime-v1 deriveExecutionDecision",
+      observedAt: observedAtMs,
+      paperIdentity: candidate?.paperIdentity ?? null,
+      naturalCredit: 0,
+      replayCredit: 0,
+      duplicateCredit: 0,
+    });
   } catch {
-    return false;
+    return freeze({
+      status: "MEASURED",
+      observationId,
+      evaluated: true,
+      requirementsSatisfied: false,
+      executionIntent: "NONE",
+      sourceCode: "EXIT_CONDITION_EVALUATION_FAILED",
+      sourceReason: "EXIT_CONDITION_EVALUATION_FAILED",
+      provenance: "canonical-meaningful-search-paper-runtime-v1 deriveExecutionDecision",
+      observedAt: observedAtMs,
+      paperIdentity: candidate?.paperIdentity ?? null,
+      naturalCredit: 0,
+      replayCredit: 0,
+      duplicateCredit: 0,
+    });
   }
+}
+
+function exitConditionEvidence(search, observations, bridge) {
+  const exitSignals = bridge?.exitSignals ?? [];
+  const exitSignalIds = new Set(exitSignals
+    .map((candidate) => candidate?.signal?.signalId)
+    .filter(nonEmpty));
+  const paperIdentityBySignal = new Map([
+    ...(bridge?.candidates ?? []),
+    ...exitSignals,
+  ].map((candidate) => [candidate?.signal?.signalId, candidate?.paperIdentity]));
+  const finalized = observations.map((observation) => {
+    const requirementsSatisfied = nonEmpty(observation.observationId)
+      && observation.requirementsSatisfied === true
+      && exitSignalIds.has(observation.observationId);
+    return freeze({
+      ...observation,
+      requirementsSatisfied,
+      sourceCode: requirementsSatisfied ? "EXIT_REQUIREMENTS_SATISFIED" : observation.sourceCode,
+      paperIdentity: observation.paperIdentity
+        ?? paperIdentityBySignal.get(observation.observationId)
+        ?? null,
+    });
+  });
+  const ids = finalized.map((row) => row.observationId).filter(nonEmpty);
+  const coverageComplete = Number.isInteger(search?.profitEvaluated)
+    && search.profitEvaluated === finalized.length
+    && ids.length === finalized.length
+    && new Set(ids).size === ids.length;
+  return freeze({
+    schemaVersion: "canonical-paper-exit-condition-evidence-v1",
+    status: coverageComplete ? "MEASURED" : "UNKNOWN",
+    exitEvaluationCount: coverageComplete ? finalized.length : null,
+    observations: freeze(finalized),
+    blocker: coverageComplete ? null : "EXIT_CONDITION_EVALUATION_COVERAGE_INCOMPLETE",
+    provenance: "canonical-meaningful-search-paper-runtime-v1 per-card deriveExecutionDecision",
+    naturalCredit: 0,
+    replayCredit: 0,
+    duplicateCredit: 0,
+  });
 }
 
 function runtimeStatus(search, evaluatedCount, bridge) {
@@ -205,6 +291,7 @@ export async function runCanonicalMeaningfulSearchPaperMarket({
   if (typeof now !== "function") throw new TypeError("now must be a function");
   const evaluated = [];
   const captured = [];
+  const exitConditionObservations = [];
   const captureProfitInput = async (card, selectedMarket) => {
     const evaluatedAtMs = now();
     if (!finite(evaluatedAtMs) || evaluatedAtMs <= 0) throw new TypeError("now must return a positive finite timestamp");
@@ -225,8 +312,10 @@ export async function runCanonicalMeaningfulSearchPaperMarket({
       simulationStatus: prepared.simulationStatus,
       simulationBlockers: prepared.simulationBlockers,
     });
+    const exitCondition = evaluatePaperExitCondition(row.candidate, evaluatedAtMs);
+    exitConditionObservations.push(exitCondition);
     if (profitGate.eligible === true) captured.push(row);
-    if (profitGate.eligible === true || needsPaperExitEvaluation(row.candidate)) evaluated.push(row);
+    if (profitGate.eligible === true || exitCondition.requirementsSatisfied === true) evaluated.push(row);
     return rawInput;
   };
 
@@ -251,6 +340,7 @@ export async function runCanonicalMeaningfulSearchPaperMarket({
   })));
   const admissionBlockers = uniqueBlockers(evaluated, "admissionBlockers");
   const simulationBlockers = uniqueBlockers(evaluated, "simulationBlockers");
+  const directExitConditionEvidence = exitConditionEvidence(search, exitConditionObservations, bridge);
 
   return freeze({
     schemaVersion: "canonical-meaningful-search-paper-runtime-v1",
@@ -269,6 +359,7 @@ export async function runCanonicalMeaningfulSearchPaperMarket({
     bridgeExitSignals: bridge.exits,
     bridgeBlockedCandidates: bridge.blocked,
     paperBridge: bridge,
+    exitConditionEvidence: directExitConditionEvidence,
     executionAuthority: "NONE",
     simulatedOnly: true,
     liveOrderAllowed: false,

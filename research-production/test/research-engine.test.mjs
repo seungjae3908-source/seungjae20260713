@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { access, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import {
   assertResearchSafety,
   buildTaskPlan,
@@ -53,16 +53,44 @@ test('child environment strips secrets and private credentials', () => {
 
 test('forward plan isolates state and orders natural Shadow before Paper', () => {
   const stateRoot = '/var/lib/investment-research-production';
-  const plan = buildTaskPlan({ profile: 'forward', stateRoot, researchSha: SHA, activationAtMs: 12345 });
+  const runtimeDirectory = resolve('/run/investment-research-forward');
+  const plan = buildTaskPlan({
+    profile: 'forward',
+    stateRoot,
+    researchSha: SHA,
+    activationAtMs: 12345,
+    env: { RUNTIME_DIRECTORY: runtimeDirectory },
+  });
   const paper = plan.find((task) => task.id === 'paper-forward');
   const shadow = plan.find((task) => task.id === 'shadow-forward');
   assert.deepEqual(plan.map((task) => task.id), ['shadow-forward', 'paper-forward']);
-  assert.equal(paper.env.PAPER_FORWARD_ROOT, `${stateRoot}/forward/paper`);
+  assert.equal(paper.env.PAPER_FORWARD_ROOT, join(stateRoot, 'forward', 'paper'));
   assert.equal(paper.env.PAPER_FORWARD_RESEARCH_SHA, SHA);
   assert.equal(paper.env.PAPER_FORWARD_ACTIVATION_AT_MS, '12345');
+  assert.equal(
+    paper.env.PAPER_FORWARD_PUBLISHER_BINDING_PATH,
+    join(runtimeDirectory, 'paper-state', 'publisher-binding.json'),
+  );
+  assert.equal(
+    paper.env.PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH,
+    join(runtimeDirectory, 'paper-state', 'paper-state-v2.json'),
+  );
   assert.equal(paper.env.LIVE_TRADING, 'false');
-  assert.equal(shadow.args.at(-2), `${stateRoot}/forward/shadow-state.json`);
-  assert.equal(shadow.args.at(-1), `${stateRoot}/forward/shadow-summary.json`);
+  assert.equal(shadow.args.at(-2), join(stateRoot, 'forward', 'shadow-state.json'));
+  assert.equal(shadow.args.at(-1), join(stateRoot, 'forward', 'shadow-summary.json'));
+});
+
+test('forward plan preserves missing Paper state as missing when no runtime transport exists', () => {
+  const plan = buildTaskPlan({
+    profile: 'forward',
+    stateRoot: '/var/lib/investment-research-production',
+    researchSha: SHA,
+    activationAtMs: 12345,
+    env: {},
+  });
+  const paper = plan.find((task) => task.id === 'paper-forward');
+  assert.equal(paper.env.PAPER_FORWARD_PUBLISHER_BINDING_PATH, undefined);
+  assert.equal(paper.env.PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH, undefined);
 });
 
 test('historical plan is parallelizable and contains no live authority', () => {
