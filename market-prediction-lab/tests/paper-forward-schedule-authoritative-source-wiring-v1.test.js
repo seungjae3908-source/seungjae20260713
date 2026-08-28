@@ -64,6 +64,8 @@ function runtimePackageFixture() {
     createPaperAdmissionEvidenceProducer: () => async () => Object.freeze({ status: "BLOCKED_DATA" }),
     createAuthoritativePaperEvidenceSourceWiring:
       authoritativePaperRuntime.createAuthoritativePaperEvidenceSourceWiring,
+    createAuthoritativePaperNaturalCycleEvidenceSourceWiring:
+      authoritativePaperRuntime.createAuthoritativePaperNaturalCycleEvidenceSourceWiring,
     createImmutablePaperTradingStateSnapshot:
       authoritativePaperRuntime.createImmutablePaperTradingStateSnapshot,
     validateImmutablePaperTradingStateSnapshot:

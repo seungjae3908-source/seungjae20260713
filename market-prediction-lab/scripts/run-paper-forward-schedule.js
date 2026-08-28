@@ -58,6 +58,21 @@ function safePaperEnvelope(value) {
     && value.financialMutationAllowed === false;
 }
 
+function configuredEvidencePath(env, key) {
+  const value = String(env[key] ?? "").trim();
+  return value && isAbsolute(value) ? value : null;
+}
+
+async function readConfiguredEvidenceRecord(path) {
+  if (!path) return null;
+  try {
+    const value = JSON.parse(await readFile(path, "utf8"));
+    return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 function paperStateSnapshotFailureState(error) {
   const code = String(error?.code ?? error?.message ?? "").trim();
   if (code === "PAPER_STATE_STALE" || code === "PAPER_STATE_SNAPSHOT_STALE_OR_FUTURE") {
@@ -682,6 +697,8 @@ export async function runPaperForwardScheduleCli(env = process.env, {
     let paperStatePublisherAccountBound = null;
     let authoritativeAccountSeedSnapshot = null;
     let expectedPublisherAccountIdSha256 = null;
+    let paperStateSnapshotForCard = async () => null;
+    let compatibilityPaperStateForCard = null;
     let resolvedAuthoritativeSourceWiring = authoritativePaperSourceWiring ?? {};
     let cutover = Object.freeze({ identityCutover: false, archivedResearchSha: null, archivedStrategyId: null });
 
@@ -755,21 +772,20 @@ export async function runPaperForwardScheduleCli(env = process.env, {
         authoritativeAccountRequired,
       });
 
-      resolvedAuthoritativeSourceWiring = {
-        ...runtimePackage.createAuthoritativePaperEvidenceSourceWiring({ researchCodeSha }),
-        ...resolvedAuthoritativeSourceWiring,
-        createPaperAdmissionEvidenceProducer: runtimePackage.createPaperAdmissionEvidenceProducer,
-      };
-
       if (authoritativeAccountRequired && persistedAccount) {
         const paperState = persistedAccount.paperState;
-        const paperStateForCard = async () => {
+        paperStateSnapshotForCard = async () => {
           paperStateCallbackInvocationCount += 1;
-          return paperState;
-        };
-        resolvedAuthoritativeSourceWiring = {
-          ...resolvedAuthoritativeSourceWiring,
-          paperStateForCard,
+          return runtimePackage.createImmutablePaperTradingStateSnapshot({
+            state: paperState,
+            sourceOwner: "PERSISTED_AUTHORITATIVE_NATURAL_PAPER_LEDGER",
+            sourceSha: researchCodeSha,
+            market: "CRYPTO_FUTURES",
+            currency: "USDT",
+            provenance: ["validated-authoritative-natural-paper-ledger"],
+            publisherAccountIdSha256: expectedPublisherAccountIdSha256,
+            observedAtMs: Date.now(),
+          });
         };
         paperStateTransportStatus = "PERSISTED_AUTHORITATIVE_ACCOUNT_BOUND";
         paperStateAvailability = "PRESENT";
@@ -789,13 +805,9 @@ export async function runPaperForwardScheduleCli(env = process.env, {
           unknownIsZero: false,
         });
       } else if (authoritativeAccountRequired && seedPaperState) {
-        const paperStateForCard = async () => {
+        paperStateSnapshotForCard = async () => {
           paperStateCallbackInvocationCount += 1;
-          return seedPaperState;
-        };
-        resolvedAuthoritativeSourceWiring = {
-          ...resolvedAuthoritativeSourceWiring,
-          paperStateForCard,
+          return authoritativeAccountSeedSnapshot;
         };
         paperStateTransportStatus = "AUTHENTICATED_SEED_SNAPSHOT_BOUND";
         paperStateAvailability = "PRESENT";
@@ -838,10 +850,12 @@ export async function runPaperForwardScheduleCli(env = process.env, {
             exactAccountBindingRequired: true,
             unknownIsZero: false,
           });
-        const paperStateForCard = async (...args) => {
+        const configuredPaperStateCallback = async (...args) => {
           paperStateCallbackInvocationCount += 1;
           try {
-            return await paperStateOwner.paperStateForCard(...args);
+            return typeof paperStateOwner.paperStateSnapshotForCard === "function"
+              ? await paperStateOwner.paperStateSnapshotForCard(...args)
+              : await paperStateOwner.paperStateForCard(...args);
           } catch (error) {
             paperStateAvailability = paperStateSnapshotFailureState(error);
             paperStateTransportReason = paperStateFailureReason(paperStateAvailability);
@@ -851,10 +865,13 @@ export async function runPaperForwardScheduleCli(env = process.env, {
             });
           }
         };
-        resolvedAuthoritativeSourceWiring = {
-          ...resolvedAuthoritativeSourceWiring,
-          paperStateForCard,
-        };
+        if (typeof paperStateOwner.paperStateSnapshotForCard === "function") {
+          paperStateSnapshotForCard = configuredPaperStateCallback;
+        } else {
+          // Compatibility-only state readers remain usable for the Paper-state
+          // callback, but cannot feed risk sizing without immutable snapshot metadata.
+          compatibilityPaperStateForCard = configuredPaperStateCallback;
+        }
         paperStateTransportStatus = "CONFIGURED_EXACT_ACCOUNT_BOUND";
         paperStateAvailability = "PRESENT";
         paperStateTransportReason = null;
@@ -874,6 +891,32 @@ export async function runPaperForwardScheduleCli(env = process.env, {
         paperStateTransportStatus = "BLOCKED_DATA_CONFIG_INCOMPLETE";
       }
 
+      const riskPolicyRecordPath = configuredEvidencePath(
+        env,
+        "PAPER_FORWARD_RISK_POLICY_RECORD_PATH",
+      );
+      const supplementalCostEvidencePath = configuredEvidencePath(
+        env,
+        "PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH",
+      );
+      const canonicalNaturalWiring = runtimePackage
+        .createAuthoritativePaperNaturalCycleEvidenceSourceWiring({
+          researchCodeSha,
+          sources: {
+            paperStateSnapshotForCard,
+            riskPolicyRecordForCard: async () => readConfiguredEvidenceRecord(riskPolicyRecordPath),
+            supplementalCostInputForCard: async () => readConfiguredEvidenceRecord(
+              supplementalCostEvidencePath,
+            ),
+          },
+        });
+      resolvedAuthoritativeSourceWiring = {
+        ...canonicalNaturalWiring,
+        ...(compatibilityPaperStateForCard == null ? {} : { paperStateForCard: compatibilityPaperStateForCard }),
+        ...resolvedAuthoritativeSourceWiring,
+        createPaperAdmissionEvidenceProducer: runtimePackage.createPaperAdmissionEvidenceProducer,
+      };
+
       authoritativeRuntimePackageAudit = Object.freeze({
         schemaVersion: runtimePackage.schemaVersion,
         sourceSha: runtimePackage.sourceSha,
@@ -890,6 +933,9 @@ export async function runPaperForwardScheduleCli(env = process.env, {
         scheduleActivationAuthority: runtimePackage.scheduleActivationAuthority,
         financialMutationAllowed: runtimePackage.financialMutationAllowed,
         paperStateOwner: paperStateOwnerAudit,
+        naturalCycleSourceGraph: canonicalNaturalWiring.naturalCycleSourceGraph,
+        riskPolicyRecordTransport: riskPolicyRecordPath == null ? "MISSING" : "CONFIGURED_READ_ONLY",
+        supplementalCostTransport: supplementalCostEvidencePath == null ? "MISSING" : "CONFIGURED_READ_ONLY",
       });
     }
 
