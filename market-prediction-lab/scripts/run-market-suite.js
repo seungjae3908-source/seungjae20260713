@@ -9,6 +9,15 @@ import { normalizeCandleRows } from "../src/normalizers.js";
 import { buildTrainingRecords } from "../src/training-dataset.js";
 import { walkForwardSplit } from "../src/walk-forward.js";
 import { exportWalkForwardDataset } from "../src/dataset-export.js";
+import {
+  buildCanonicalModelReferenceStrategyIdentity,
+  preserveFutureModelReferenceEvidence,
+} from "../src/model-reference-evidence.js";
+import {
+  DEPLOYED_INFERENCE_CONTRACT,
+  DEPLOYED_MODEL_WEIGHT,
+  DEPLOYED_RULE_WEIGHT,
+} from "../src/deployment-inference.js";
 import { BASELINE_MODEL } from "../src/tiny-model.js";
 import {
   calibrateTemperature,
@@ -20,6 +29,13 @@ import {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const CLASS_NAMES = Object.freeze(["bullish", "neutral", "bearish"]);
+const TRAINING_PARAMETERS = Object.freeze({
+  epochs: 520,
+  learningRate: 0.075,
+  l2: 0.003,
+  patience: 60,
+  calibration: "validation-temperature-scaling-v1",
+});
 const SUITE_SPECS = Object.freeze([
   Object.freeze({ id: "btcusdt-futures-15m-52d", group: "crypto-futures-15m", market: "CRYPTO_FUTURES", symbol: "BTCUSDT", timeframe: "15m", days: 52, lookback: 200, horizon: 8, stride: 4 }),
   Object.freeze({ id: "ethusdt-futures-15m-52d", group: "crypto-futures-15m", market: "CRYPTO_FUTURES", symbol: "ETHUSDT", timeframe: "15m", days: 52, lookback: 200, horizon: 8, stride: 4 }),
@@ -186,6 +202,13 @@ function combineSplits(datasets) {
   });
 }
 
+function referenceDatasetComponents(datasets) {
+  return Object.fromEntries(datasets.flatMap((dataset) => [
+    [`${dataset.spec.id}:train`, dataset.summary.outputs.train.sha256],
+    [`${dataset.spec.id}:validation`, dataset.summary.outputs.validation.sha256],
+  ]));
+}
+
 async function writeResearchHold({ group, datasets, split, outputRoot, candidateRoot, reason, classCounts }) {
   const artifact = {
     schemaVersion: 1,
@@ -207,7 +230,7 @@ async function writeResearchHold({ group, datasets, split, outputRoot, candidate
   return artifact;
 }
 
-async function trainGroup({ group, datasets, outputRoot, candidateRoot }) {
+async function trainGroup({ group, datasets, outputRoot, candidateRoot, researchCodeSha, trainingCodeSha, measuredAt }) {
   const split = combineSplits(datasets);
   const classCounts = {
     train: directionCounts(split.train),
@@ -229,10 +252,10 @@ async function trainGroup({ group, datasets, outputRoot, candidateRoot }) {
   const model = trainTinySoftmaxModel(split.train, {
     featureOrder: BASELINE_MODEL.featureOrder,
     id: `tiny-softmax-${group}-v1`,
-    epochs: 520,
-    learningRate: 0.075,
-    l2: 0.003,
-    patience: 60,
+    epochs: TRAINING_PARAMETERS.epochs,
+    learningRate: TRAINING_PARAMETERS.learningRate,
+    l2: TRAINING_PARAMETERS.l2,
+    patience: TRAINING_PARAMETERS.patience,
   });
   const calibrated = calibrateTemperature(split.validation, model);
   const baseline = evaluateStoredBaseline(split.test);
@@ -270,13 +293,60 @@ async function trainGroup({ group, datasets, outputRoot, candidateRoot }) {
   };
   await writeJsonAtomically(resolve(outputRoot, "models", `${group}.json`), artifact);
   await writeJsonAtomically(resolve(candidateRoot, `${group}.json`), artifact);
+  const modelSha256 = sha256Json(calibrated);
+  const markets = [...new Set(datasets.map((dataset) => dataset.spec.market))];
+  const timeframes = [...new Set(datasets.map((dataset) => dataset.spec.timeframe))];
+  if (markets.length !== 1 || timeframes.length !== 1) throw new Error("producer group market/timeframe identity is ambiguous");
+  const strategyResolution = buildCanonicalModelReferenceStrategyIdentity({
+    group,
+    market: markets[0],
+    timeframe: timeframes[0],
+    trainRecords: split.train,
+    validationRecords: split.validation,
+    datasetComponents: referenceDatasetComponents(datasets),
+    researchCodeSha,
+    featureOrder: calibrated.featureOrder,
+    trainingParameters: TRAINING_PARAMETERS,
+    datasetSpecifications: datasets.map(({ spec }) => ({
+      id: spec.id,
+      market: spec.market,
+      symbol: spec.symbol,
+      timeframe: spec.timeframe,
+      lookback: spec.lookback,
+      horizon: spec.horizon,
+      stride: spec.stride,
+    })),
+    inferenceContract: DEPLOYED_INFERENCE_CONTRACT,
+    ruleWeight: DEPLOYED_RULE_WEIGHT,
+    modelWeight: DEPLOYED_MODEL_WEIGHT,
+  });
+  const referenceEvidence = await preserveFutureModelReferenceEvidence({
+    outputRoot: resolve(outputRoot, "reference-evidence"),
+    group,
+    trainRecords: split.train,
+    validationRecords: split.validation,
+    model: calibrated,
+    modelSha: modelSha256,
+    datasetComponents: referenceDatasetComponents(datasets),
+    researchCodeSha,
+    trainingCodeSha,
+    measuredAt,
+    strategyIdentity: strategyResolution.strategyIdentity,
+    sourceAttestation: {
+      sourceKind: "GENUINE_MARKET_DATA",
+      reconstructed: false,
+      synthetic: false,
+      shadowDerived: false,
+      finalHoldoutIncluded: false,
+    },
+  });
   return {
     status: artifact.status,
     crossSymbol,
     sourceDatasets: artifact.sourceDatasets,
     classCounts,
     modelId: calibrated.id,
-    modelSha256: sha256Json(calibrated),
+    modelSha256,
     temperature: calibrated.temperature,
     training: calibrated.training,
     calibration: calibrated.calibration,
@@ -285,6 +355,27 @@ async function trainGroup({ group, datasets, outputRoot, candidateRoot }) {
     comparison,
     perDataset,
     featureLimitations: artifact.featureLimitations,
+    referenceEvidence: {
+      status: referenceEvidence.status,
+      referenceProvenanceStatus: referenceEvidence.referenceProvenanceStatus,
+      missingEvidence: referenceEvidence.missingEvidence,
+      datasetId: referenceEvidence.datasetId,
+      datasetDigest: referenceEvidence.datasetDigest,
+      strategyIdentity: referenceEvidence.strategyIdentity,
+      strategyIdentityDigest: referenceEvidence.strategyIdentityDigest,
+      strategyIdentityStatus: referenceEvidence.strategyIdentityStatus,
+      preprocessingVersion: referenceEvidence.preprocessingVersion,
+      featureOrder: referenceEvidence.featureOrder,
+      featureOrderDigest: referenceEvidence.featureOrderDigest,
+      trainSampleN: referenceEvidence.trainSampleN,
+      validationSampleN: referenceEvidence.validationSampleN,
+      trainSplitDigest: referenceEvidence.trainSplitDigest,
+      validationSplitDigest: referenceEvidence.validationSplitDigest,
+      modelSha: referenceEvidence.modelSha,
+      modelArtifactCanonicalDigest: referenceEvidence.modelArtifactCanonicalDigest,
+      rawArtifactDigest: referenceEvidence.rawArtifactDigest,
+      measuredAt: referenceEvidence.measuredAt,
+    },
   };
 }
 
@@ -344,7 +435,15 @@ for (const group of [...new Set(SUITE_SPECS.map((spec) => spec.group))]) {
     continue;
   }
   try {
-    modelResults[group] = await trainGroup({ group, datasets: groupDatasets, outputRoot, candidateRoot });
+    modelResults[group] = await trainGroup({
+      group,
+      datasets: groupDatasets,
+      outputRoot,
+      candidateRoot,
+      researchCodeSha: process.env.RESEARCH_CODE_SHA,
+      trainingCodeSha: process.env.TRAINING_CODE_SHA,
+      measuredAt: new Date(suiteEndTime).toISOString(),
+    });
   } catch (error) {
     modelResults[group] = { status: "training_failed", error: serializeError(error) };
   }
