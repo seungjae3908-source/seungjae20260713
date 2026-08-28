@@ -1,0 +1,39 @@
+name: Prediction Lab Shadow Blend Collapse Diagnostics V1
+
+on:
+  pull_request:
+    paths:
+      - 'market-prediction-lab/src/shadow-blend-collapse-diagnostics-v1.js'
+      - 'market-prediction-lab/tests/shadow-blend-collapse-diagnostics-v1.test.js'
+      - 'market-prediction-lab/scripts/run-shadow-blend-collapse-diagnostics-v1.js'
+      - '.github/workflows/prediction-lab-shadow-blend-collapse-diagnostics-v1.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Syntax check diagnostic and runner
+        run: |
+          node --check market-prediction-lab/src/shadow-blend-collapse-diagnostics-v1.js
+          node --check market-prediction-lab/scripts/run-shadow-blend-collapse-diagnostics-v1.js
+      - name: Run focused 15m blend-collapse diagnostics tests
+        working-directory: market-prediction-lab
+        run: node --test tests/shadow-blend-collapse-diagnostics-v1.test.js
+      - name: Verify fail-closed safety invariants
+        run: |
+          grep -q 'diagnosticsOnly: true' market-prediction-lab/src/shadow-blend-collapse-diagnostics-v1.js
+          grep -q 'blendWeightModified: false' market-prediction-lab/src/shadow-blend-collapse-diagnostics-v1.js
+          grep -q 'finalHoldoutOptimizationAllowed: false' market-prediction-lab/src/shadow-blend-collapse-diagnostics-v1.js
+          grep -q 'profitabilityCredit: 0' market-prediction-lab/src/shadow-blend-collapse-diagnostics-v1.js
+          grep -q 'promotionCredit: 0' market-prediction-lab/src/shadow-blend-collapse-diagnostics-v1.js
+          grep -q 'LIVE_TRADING: false' market-prediction-lab/src/shadow-blend-collapse-diagnostics-v1.js
+          grep -q 'executionAuthority: "NONE"' market-prediction-lab/src/shadow-blend-collapse-diagnostics-v1.js
