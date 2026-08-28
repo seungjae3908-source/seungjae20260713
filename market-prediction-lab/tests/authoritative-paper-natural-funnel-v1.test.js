@@ -46,6 +46,74 @@ function blockedProducer(...blockers) {
   });
 }
 
+function observedProducer(id, { qualityPassed, riskPassed, reasons = [] }) {
+  return Object.freeze({
+    ...readyProducer(),
+    gateObservability: Object.freeze({
+      schemaVersion: "scanner-crypto-futures-paper-gate-observability-v1",
+      qualityGate: Object.freeze({
+        status: "MEASURED",
+        evaluated: true,
+        passed: qualityPassed,
+        decision: qualityPassed ? "PASS" : "BLOCKED",
+        provenance: "quality-fixture",
+        observedAt: NOW,
+        observationId: id,
+        sourceCodes: Object.freeze([]),
+      }),
+      riskGate: Object.freeze({
+        status: "MEASURED",
+        evaluated: qualityPassed,
+        passed: riskPassed,
+        decision: qualityPassed ? (riskPassed ? "PASS" : "BLOCKED") : "NOT_REACHED",
+        provenance: "risk-fixture",
+        observedAt: NOW,
+        observationId: id,
+        sourceCodes: Object.freeze([]),
+      }),
+      reasonObservations: Object.freeze(reasons),
+    }),
+  });
+}
+
+function sourceBlockedProducer(
+  id,
+  sourceCodes,
+  genericBlocker = "P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING",
+) {
+  const unknownGate = (provenance) => Object.freeze({
+    status: "UNKNOWN",
+    evaluated: false,
+    passed: null,
+    decision: "UNKNOWN",
+    provenance,
+    observedAt: NOW,
+    observationId: id,
+    sourceCodes: Object.freeze([]),
+  });
+  return Object.freeze({
+    ...blockedProducer(genericBlocker),
+    gateObservability: Object.freeze({
+      schemaVersion: "scanner-crypto-futures-paper-gate-observability-v1",
+      qualityGate: unknownGate("quality-not-reached-source-fixture"),
+      riskGate: unknownGate("risk-not-reached-source-fixture"),
+      reasonObservations: Object.freeze(sourceCodes.map((sourceCode) => Object.freeze({
+        sourceStage: "EVIDENCE_SOURCE",
+        sourceCode,
+        sourceReason: sourceCode,
+        canonicalReason: genericBlocker.endsWith("_MISSING") ? "DATA_MISSING" : "UNKNOWN",
+        lossless: true,
+        provenance: "source-fixture",
+        observedAt: NOW,
+        identity: Object.freeze({ observationId: id }),
+        naturalCredit: 0,
+        replayCredit: 0,
+        duplicateCredit: 0,
+      }))),
+    }),
+  });
+}
+
 function sourceWiring({ cards, totalCount, completedCount, producer }) {
   return Object.freeze({
     scanBatchForMarket: async () => async () => response(cards, { totalCount, completedCount }),
@@ -103,6 +171,48 @@ test("Candidate is the first zero only after Universe and Scanner Evaluated are 
   assert.match(result.naturalEvidenceIdentity, /^[0-9a-f]{64}$/u);
   assert.equal(result.naturalRuntimeSha, SHA);
   assert.deepEqual(result.authoritativeFirstZeroReasonEvidenceByStage, {});
+  assert.equal(result.canonicalNaturalStageEvidence.stageCounts.signalCandidate.count, 0);
+  assert.equal(result.canonicalNaturalStageEvidence.reasonObservations[0].canonicalReason, "NO_SIGNAL");
+  assert.equal(result.canonicalNaturalStageEvidence.stageCounts.qualityPassed.provenance.includes("qualityGate"), true);
+});
+
+test("direct Quality and Risk counts remain independent instead of aliasing producer READY", async () => {
+  const cards = [Object.freeze({ id: "c1" }), Object.freeze({ id: "c2" })];
+  const wiring = sourceWiring({
+    cards,
+    totalCount: 20,
+    completedCount: 2,
+    producer: ({ card }) => observedProducer(card.id, {
+      qualityPassed: true,
+      riskPassed: card.id === "c1",
+      reasons: card.id === "c2" ? [Object.freeze({
+        sourceStage: "RISK_GATE",
+        sourceCode: "RISK_BLOCKED_FIXTURE",
+        sourceReason: "RISK_BLOCKED_FIXTURE",
+        canonicalReason: "RISK_GATE",
+        lossless: true,
+        provenance: "risk-fixture",
+        observedAt: NOW,
+        identity: Object.freeze({ observationId: card.id }),
+        naturalCredit: 0,
+        replayCredit: 0,
+        duplicateCredit: 0,
+      })] : [],
+    }),
+  });
+  const runtime = createNaturalFunnelObservedPaperRuntimeFromSourceWiring({
+    sourceWiring: wiring,
+    now: () => NOW,
+    baseRuntimeFactory: (options) => baseRuntimeFactory(options, { admissionReady: 2 }),
+  });
+
+  const result = await runtime({ market: "CRYPTO_FUTURES", cycle: cycle() });
+  const stages = result.canonicalNaturalStageEvidence.stageCounts;
+  assert.equal(stages.signalCandidate.count, 2);
+  assert.equal(stages.qualityPassed.count, 2);
+  assert.equal(stages.riskPassed.count, 1);
+  assert.notEqual(stages.qualityPassed.provenance, stages.riskPassed.provenance);
+  assert.equal(result.canonicalNaturalStageEvidence.reasonObservations[0].sourceCode, "RISK_BLOCKED_FIXTURE");
 });
 
 test("natural dataset identity is stable across read-only re-observation time", async () => {
@@ -149,6 +259,7 @@ test("Evidence Complete is measured zero when every evaluated candidate has auth
   assert.equal(reason.authoritative, true);
   assert.equal(reason.freshness, "FRESH");
   assert.equal(reason.reasonCode, "P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING");
+  assert.deepEqual(reason.sourceCodes, []);
   assert.equal(reason.strategySha, SHA);
   assert.equal(reason.runtimeSha, SHA);
   assert.equal(reason.datasetIdentity, result.naturalEvidenceIdentity);
@@ -157,6 +268,68 @@ test("Evidence Complete is measured zero when every evaluated candidate has auth
   assert.equal(reason.replay, false);
   assert.equal(reason.duplicateReplay, false);
   assert.equal(reason.futureTimeCompression, false);
+});
+
+test("identical lossless source sets are preserved in the authoritative Evidence Complete reason", async () => {
+  const cards = [Object.freeze({ id: "c1" }), Object.freeze({ id: "c2" })];
+  const sourceCodes = [
+    "P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING:paperState",
+    "P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING:executionObservation",
+    "P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING:supplementalCostEvidence",
+  ];
+  const wiring = sourceWiring({
+    cards,
+    totalCount: 50,
+    completedCount: 10,
+    producer: ({ card }) => sourceBlockedProducer(card.id, sourceCodes),
+  });
+  const runtime = createNaturalFunnelObservedPaperRuntimeFromSourceWiring({
+    sourceWiring: wiring,
+    now: () => NOW,
+    baseRuntimeFactory,
+  });
+
+  const result = await runtime({ market: "CRYPTO_FUTURES", cycle: cycle() });
+  const reason = result.authoritativeFirstZeroReasonEvidenceByStage.EVIDENCE_COMPLETE;
+  assert.equal(result.naturalFirstZeroStage, "EVIDENCE_COMPLETE");
+  assert.equal(
+    reason.reasonCode,
+    "P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING_EXECUTION_OBSERVATION_AND_P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING_PAPER_STATE_AND_P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING_SUPPLEMENTAL_COST_EVIDENCE",
+  );
+  assert.deepEqual(reason.sourceCodes, [
+    "P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING:executionObservation",
+    "P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING:paperState",
+    "P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING:supplementalCostEvidence",
+  ]);
+  assert.equal(result.canonicalNaturalStageEvidence.reasonObservations.length, 6);
+  assert.equal(result.canonicalNaturalStageEvidence.reasonObservations.every((row) => row.naturalCredit === 0), true);
+  assert.equal(result.canonicalNaturalStageEvidence.reasonObservations.every((row) => row.replayCredit === 0), true);
+  assert.equal(result.canonicalNaturalStageEvidence.reasonObservations.every((row) => row.duplicateCredit === 0), true);
+});
+
+test("heterogeneous exact source sets fall back to the generic reason instead of fabricating one root cause", async () => {
+  const cards = [Object.freeze({ id: "c1" }), Object.freeze({ id: "c2" })];
+  const wiring = sourceWiring({
+    cards,
+    totalCount: 50,
+    completedCount: 10,
+    producer: ({ card }) => sourceBlockedProducer(card.id, [
+      card.id === "c1"
+        ? "P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING:paperState"
+        : "P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING:executionObservation",
+    ]),
+  });
+  const runtime = createNaturalFunnelObservedPaperRuntimeFromSourceWiring({
+    sourceWiring: wiring,
+    now: () => NOW,
+    baseRuntimeFactory,
+  });
+
+  const result = await runtime({ market: "CRYPTO_FUTURES", cycle: cycle() });
+  const reason = result.authoritativeFirstZeroReasonEvidenceByStage.EVIDENCE_COMPLETE;
+  assert.equal(result.naturalFirstZeroStage, "EVIDENCE_COMPLETE");
+  assert.equal(reason.reasonCode, "P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING");
+  assert.deepEqual(reason.sourceCodes, []);
 });
 
 test("mixed direct source blockers remain UNKNOWN instead of fabricating one FIRST_ZERO reason", async () => {
