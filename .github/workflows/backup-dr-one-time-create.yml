@@ -72,9 +72,13 @@ jobs:
       C_DATABASE_URL: ${{ secrets.DATABASE_URL }}
       C_BACKUP_AGE_RECIPIENT_SECRET: ${{ secrets.BACKUP_AGE_RECIPIENT }}
       C_BACKUP_AGE_RECIPIENT_VAR: ${{ vars.BACKUP_AGE_RECIPIENT }}
-      LOCAL_BACKUP_DIR: ${{ runner.temp }}/backup-dr-one-time-create
 
     steps:
+      - name: Initialize ephemeral runner backup path
+        run: |
+          set -Eeuo pipefail
+          printf 'LOCAL_BACKUP_DIR=%s\n' "$RUNNER_TEMP/backup-dr-one-time-create" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v4
         with:
           ref: main
