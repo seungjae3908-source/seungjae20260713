@@ -51,6 +51,93 @@ function safetyEnvelope() {
   });
 }
 
+function directLoopStage(field, count, observationIds, provenance, observedAt) {
+  const measured = Number.isInteger(count) && count >= 0;
+  return Object.freeze({
+    field,
+    status: measured ? "MEASURED" : "UNKNOWN",
+    count: measured ? count : null,
+    blocker: measured ? null : `UNMEASURED_${field.toUpperCase()}`,
+    provenance: measured ? provenance : null,
+    observedAt: finite(observedAt) && observedAt > 0 ? observedAt : null,
+    observationIds: Object.freeze(measured ? [...observationIds] : []),
+    naturalCredit: 0,
+    replayCredit: 0,
+    duplicateCredit: 0,
+  });
+}
+
+function canonicalReasonForLoopCode(code) {
+  if (typeof code !== "string" || code.length === 0) return "UNKNOWN";
+  if (code === "STALE_DATA_FORBIDDEN") return "DATA_STALE";
+  if (code === "DATA_TIMESTAMP_REQUIRED") return "DATA_MISSING";
+  if (code === "RISK_EVIDENCE_NOT_APPROVED") return "RISK_GATE";
+  if (["STRATEGY_RESEARCH_SHA_MISMATCH", "STRATEGY_IDENTITY_REQUIRED", "PAPER_LOOP_EXIT_POSITION_NOT_FOUND"].includes(code)) {
+    return "IDENTITY_MISMATCH";
+  }
+  if (code.startsWith("PAPER_ACCOUNT_") || code.startsWith("PAPER_LEDGER_")) return "ACCOUNT_STATE_BLOCK";
+  if (code.startsWith("DUPLICATE_")) return "DUPLICATE";
+  if (code === "REPLAYED_CYCLE") return "REPLAY_ONLY";
+  if (code === "COOLDOWN") return "COOLDOWN";
+  return "UNKNOWN";
+}
+
+function loopReasonObservation({ sourceStage, sourceCode, provenance, observedAt, identity, observationId }) {
+  const canonicalReason = canonicalReasonForLoopCode(sourceCode);
+  return Object.freeze({
+    sourceStage,
+    sourceCode,
+    sourceReason: sourceCode,
+    canonicalReason,
+    lossless: canonicalReason !== "UNKNOWN",
+    provenance,
+    observedAt,
+    identity: Object.freeze({
+      cycleId: identity?.cycleId ?? null,
+      strategySha: identity?.researchCodeSha ?? null,
+      runtimeSha: identity?.researchCodeSha ?? null,
+      datasetIdentity: null,
+      observationId: observationId ?? null,
+    }),
+    naturalCredit: 0,
+    replayCredit: 0,
+    duplicateCredit: 0,
+  });
+}
+
+function recurringLoopStageEvidence({
+  cycle,
+  entryEligibleIds = [],
+  entryIds = [],
+  positionIds = [],
+  settlementIds = [],
+  reasonObservations = [],
+  replayed = false,
+} = {}) {
+  const count = (ids) => replayed ? null : ids.length;
+  const at = cycle?.evaluatedAtMs ?? null;
+  return Object.freeze({
+    schemaVersion: "canonical-natural-paper-loop-stage-evidence-v1",
+    identity: Object.freeze({
+      cycleId: cycle?.cycleId ?? null,
+      strategySha: cycle?.identity?.researchCodeSha ?? null,
+      runtimeSha: cycle?.identity?.researchCodeSha ?? null,
+      datasetIdentity: null,
+    }),
+    stageCounts: Object.freeze({
+      entryEligible: directLoopStage("entryEligible", count(entryEligibleIds), entryEligibleIds, "recurring-paper-loop-v1 immediately before ledgerAdapter.applyEntry", at),
+      entry: directLoopStage("entry", count(entryIds), entryIds, "recurring-paper-loop-v1 completed ledger apply and signal persistence", at),
+      position: directLoopStage("position", count(positionIds), positionIds, "recurring-paper-loop-v1 positions.push completion", at),
+      settlement: directLoopStage("settlement", count(settlementIds), settlementIds, "recurring-paper-loop-v1 accepted settlement state insertion", at),
+    }),
+    reasonObservations: Object.freeze(reasonObservations),
+    naturalCredit: 0,
+    replayCredit: 0,
+    duplicateCredit: 0,
+    replayed,
+  });
+}
+
 function validateIdentity(identity) {
   if (!nonEmpty(identity?.strategyId)) throw new Error("PAPER_LOOP_STRATEGY_ID_REQUIRED");
   if (!nonEmpty(identity?.strategyVersion)) throw new Error("PAPER_LOOP_STRATEGY_VERSION_REQUIRED");
@@ -234,7 +321,7 @@ function positionFromSample(sample, candidate) {
   });
 }
 
-function cycleSummary({ cycleId, state, entries, blocked, noTrade, settled, replayed = false }) {
+function cycleSummary({ cycleId, state, entries, blocked, noTrade, settled, replayed = false, directEvidence }) {
   const performance = summarizeSettledPaperSamples(state.settlements);
   if (isAuthoritativeNaturalPaperLedger(state.ledger)) {
     const accounting = authoritativeNaturalPaperAccountingSummary(state.ledger);
@@ -258,6 +345,7 @@ function cycleSummary({ cycleId, state, entries, blocked, noTrade, settled, repl
       blocked,
       noTrade,
       tradesSettled: settled,
+      canonicalNaturalStageEvidence: directEvidence,
       totalCosts: performance.sampleSize ? state.settlements.reduce((sum, row) => sum + row.totalExplicitCost, 0) : null,
       realizedGrossPnl: performance.sampleSize ? state.settlements.reduce((sum, row) => sum + row.grossPnl, 0) : null,
       realizedNetPnl: performance.totalNetPnl,
@@ -283,6 +371,7 @@ function cycleSummary({ cycleId, state, entries, blocked, noTrade, settled, repl
     blocked,
     noTrade,
     tradesSettled: settled,
+    canonicalNaturalStageEvidence: directEvidence,
     totalCosts: performance.sampleSize ? state.settlements.reduce((sum, row) => sum + row.totalExplicitCost, 0) : null,
     realizedGrossPnl: performance.sampleSize ? state.settlements.reduce((sum, row) => sum + row.grossPnl, 0) : null,
     realizedNetPnl: performance.totalNetPnl,
@@ -307,7 +396,22 @@ export async function runRecurringPaperCycle({
   validateState(predecessor);
   validateCycle(cycle, predecessor);
   if (predecessor.cycles.some((row) => row.cycleId === cycle.cycleId)) {
-    return Object.freeze({ state: predecessor, summary: cycleSummary({ cycleId: cycle.cycleId, state: predecessor, entries: 0, blocked: 0, noTrade: 0, settled: 0, replayed: true }) });
+    const replayReason = loopReasonObservation({
+      sourceStage: "SIGNAL_CANDIDATE",
+      sourceCode: "REPLAYED_CYCLE",
+      provenance: "recurring-paper-loop-v1 duplicate cycle guard",
+      observedAt: cycle.evaluatedAtMs,
+      identity: cycle.identity,
+      observationId: cycle.cycleId,
+    });
+    const directEvidence = recurringLoopStageEvidence({ cycle, replayed: true, reasonObservations: [replayReason] });
+    return Object.freeze({
+      state: predecessor,
+      summary: cycleSummary({
+        cycleId: cycle.cycleId, state: predecessor, entries: 0, blocked: 0, noTrade: 0, settled: 0,
+        replayed: true, directEvidence,
+      }),
+    });
   }
   if (!ledgerAdapter || typeof ledgerAdapter.applyEntry !== "function" || typeof ledgerAdapter.applySettlement !== "function") {
     throw new Error("PAPER_LOOP_LEDGER_ADAPTER_REQUIRED");
@@ -325,14 +429,39 @@ export async function runRecurringPaperCycle({
   let blockedCount = 0;
   let noTradeCount = 0;
   let settledCount = 0;
+  const entryEligibleIds = [];
+  const entryIds = [];
+  const positionIds = [];
+  const settlementIds = [];
+  const directReasons = [];
 
   for (const exit of exits) {
     const position = positions.find((row) => row.positionId === exit.positionId);
-    if (!position) continue;
+    if (!position) {
+      directReasons.push(loopReasonObservation({
+        sourceStage: "EXIT_ELIGIBLE",
+        sourceCode: "PAPER_LOOP_EXIT_POSITION_NOT_FOUND",
+        provenance: "recurring-paper-loop-v1 open position lookup",
+        observedAt: cycle.evaluatedAtMs,
+        identity: cycle.identity,
+        observationId: exit?.positionId ?? null,
+      }));
+      continue;
+    }
     const settlement = settleFourMarketPaperSample({ sample: position.sample, ...exit.settlementInput, evaluatedAtMs: cycle.evaluatedAtMs });
     if (settlement.status !== "SETTLED") continue;
     const settlementId = hash({ positionId: position.positionId, paperSampleId: settlement.paperSampleId, settledAtMs: settlement.settledAtMs });
-    if (settlements.some((row) => row.settlementId === settlementId || row.paperSampleId === settlement.paperSampleId)) continue;
+    if (settlements.some((row) => row.settlementId === settlementId || row.paperSampleId === settlement.paperSampleId)) {
+      directReasons.push(loopReasonObservation({
+        sourceStage: "SETTLEMENT",
+        sourceCode: "DUPLICATE_SETTLEMENT",
+        provenance: "recurring-paper-loop-v1 settlement identity guard",
+        observedAt: cycle.evaluatedAtMs,
+        identity: cycle.identity,
+        observationId: settlementId,
+      }));
+      continue;
+    }
     await learningAdapter.persistOutcome({
       cycle,
       identity: predecessor.identity,
@@ -345,12 +474,23 @@ export async function runRecurringPaperCycle({
     settlements.push(Object.freeze({ ...settlement, settlementId }));
     positions = positions.filter((row) => row.positionId !== position.positionId);
     settledCount += 1;
+    settlementIds.push(settlementId);
   }
 
   const consumedSignals = new Set(samples.map((sample) => sample.identity?.signalId ?? sample.signalId).filter(Boolean));
   for (const candidate of candidates) {
     if (!MARKET_SET.has(candidate?.signal?.market)) throw new Error("PAPER_LOOP_MARKET_UNSUPPORTED");
-    if (consumedSignals.has(candidate.signal.signalId)) continue;
+    if (consumedSignals.has(candidate.signal.signalId)) {
+      directReasons.push(loopReasonObservation({
+        sourceStage: "ENTRY_ELIGIBLE",
+        sourceCode: "DUPLICATE_SIGNAL_ID",
+        provenance: "recurring-paper-loop-v1 consumed signal guard",
+        observedAt: cycle.evaluatedAtMs,
+        identity: cycle.identity,
+        observationId: candidate.signal.signalId,
+      }));
+      continue;
+    }
     const blockers = evidenceBlockers(candidate, cycle.evaluatedAtMs, predecessor.identity);
     const sample = blockers.length
       ? blockedSample(candidate, cycle, blockers)
@@ -359,14 +499,45 @@ export async function runRecurringPaperCycle({
     consumedSignals.add(candidate.signal.signalId);
     if (sample.status === "NO_TRADE") {
       noTradeCount += 1;
+      for (const code of candidate?.profitGate?.reasons ?? ["NO_TRADE"]) {
+        directReasons.push(loopReasonObservation({
+          sourceStage: "ENTRY_ELIGIBLE",
+          sourceCode: code,
+          provenance: "recurring-paper-loop-v1 candidate profit gate",
+          observedAt: cycle.evaluatedAtMs,
+          identity: cycle.identity,
+          observationId: candidate.signal.signalId,
+        }));
+      }
       continue;
     }
     if (sample.status !== "OPEN") {
       blockedCount += 1;
+      for (const code of sample.blockers ?? ["PAPER_SAMPLE_BLOCKED"]) {
+        directReasons.push(loopReasonObservation({
+          sourceStage: "ENTRY_ELIGIBLE",
+          sourceCode: code,
+          provenance: "recurring-paper-loop-v1 evidenceBlockers/buildFourMarketPaperSample",
+          observedAt: cycle.evaluatedAtMs,
+          identity: cycle.identity,
+          observationId: candidate.signal.signalId,
+        }));
+      }
       continue;
     }
     const position = positionFromSample(sample, candidate);
-    if (positions.some((row) => row.positionId === position.positionId)) continue;
+    if (positions.some((row) => row.positionId === position.positionId)) {
+      directReasons.push(loopReasonObservation({
+        sourceStage: "ENTRY_ELIGIBLE",
+        sourceCode: "DUPLICATE_POSITION_ID",
+        provenance: "recurring-paper-loop-v1 position identity guard",
+        observedAt: cycle.evaluatedAtMs,
+        identity: cycle.identity,
+        observationId: position.positionId,
+      }));
+      continue;
+    }
+    entryEligibleIds.push(position.positionId);
     let nextLedger;
     try {
       nextLedger = await ledgerAdapter.applyEntry({ ledger, position, cycle });
@@ -375,11 +546,21 @@ export async function runRecurringPaperCycle({
       if (!isAuthoritativeNaturalPaperAccountError(error)) throw error;
       samples[samples.length - 1] = accountBlockedSample(sample, error.code);
       blockedCount += 1;
+      directReasons.push(loopReasonObservation({
+        sourceStage: "ENTRY_ELIGIBLE",
+        sourceCode: error.code,
+        provenance: "recurring-paper-loop-v1 ledgerAdapter.applyEntry",
+        observedAt: cycle.evaluatedAtMs,
+        identity: cycle.identity,
+        observationId: position.positionId,
+      }));
       continue;
     }
     await learningAdapter.persistSignal({ cycle, identity: predecessor.identity, candidate, sample });
     ledger = structuredClone(nextLedger);
+    entryIds.push(sample.paperSampleId);
     positions.push(position);
+    positionIds.push(position.positionId);
     entryCount += 1;
   }
 
@@ -398,9 +579,25 @@ export async function runRecurringPaperCycle({
     idempotencyKey: `paper-cycle:${cycle.cycleId}`,
     state: serializeRecurringPaperLoopState(nextState),
   });
+  const directEvidence = recurringLoopStageEvidence({
+    cycle,
+    entryEligibleIds,
+    entryIds,
+    positionIds,
+    settlementIds,
+    reasonObservations: directReasons,
+  });
   return Object.freeze({
     state: nextState,
-    summary: cycleSummary({ cycleId: cycle.cycleId, state: nextState, entries: entryCount, blocked: blockedCount, noTrade: noTradeCount, settled: settledCount }),
+    summary: cycleSummary({
+      cycleId: cycle.cycleId,
+      state: nextState,
+      entries: entryCount,
+      blocked: blockedCount,
+      noTrade: noTradeCount,
+      settled: settledCount,
+      directEvidence,
+    }),
   });
 }
 
