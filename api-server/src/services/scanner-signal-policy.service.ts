@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { CatalogEntry } from '../data/catalog';
 import type { AssetType } from '../data/asset-type';
+import { rsiSeries } from '../sample/indicators';
 import type { Candle } from '../sample/types';
 import { krxPriceTick, roundPriceToTick, usNmsPriceTick } from './market-price-precision.service';
 import type { ScanCard } from './signal.service';
@@ -49,8 +50,8 @@ function sourceForCondition(label: string): string {
   if (label.includes('뉴스')) return 'news-provider';
   if (label.includes('공시') || label.includes('기관') || label.includes('외국인')) return 'disclosure-risk-provider';
   if (label.includes('PER') || label.includes('PBR') || label.includes('ROE') || label.includes('저평가')) return 'financial-provider';
-  if (label.includes('거래량')) return 'market-candles-volume';
-  if (label.includes('거래대금') || label === '시총') return 'market-quote';
+  if (label.includes('거래량') || label.includes('거래대금')) return 'market-candles-volume';
+  if (label === '시총') return 'market-quote';
   return 'market-candles-technical';
 }
 
@@ -69,6 +70,111 @@ function mapDataState(value: ScanCard['dataState']): ScannerDataState {
   if (value === 'insufficient') return 'insufficient';
   if (value === 'unavailable') return 'unavailable';
   return 'partial';
+}
+
+function average(values: number[]): number | null {
+  if (!values.length || values.some((value) => !Number.isFinite(value))) return null;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function upwardCloseMaCross(candles: Candle[], period: number): boolean | null {
+  if (candles.length < period + 1) return null;
+  const closes = candles.map((candle) => candle.close);
+  const currentClose = closes.at(-1);
+  const previousClose = closes.at(-2);
+  const currentMa = average(closes.slice(-period));
+  const previousMa = average(closes.slice(-(period + 1), -1));
+  if (
+    currentClose == null
+    || previousClose == null
+    || currentMa == null
+    || previousMa == null
+    || !Number.isFinite(currentClose)
+    || !Number.isFinite(previousClose)
+    || currentClose <= 0
+    || previousClose <= 0
+    || currentMa <= 0
+    || previousMa <= 0
+  ) return null;
+  return previousClose <= previousMa && currentClose > currentMa;
+}
+
+function tradingValueIncrease(candles: Candle[]): boolean | null {
+  if (candles.length < 40) return null;
+  const previous = candles.slice(-40, -20).map((candle) => candle.close * candle.volume);
+  const recent = candles.slice(-20).map((candle) => candle.close * candle.volume);
+  if (
+    [...previous, ...recent].some((value) => !Number.isFinite(value) || value < 0)
+  ) return null;
+  const previousAverage = average(previous);
+  const recentAverage = average(recent);
+  if (previousAverage == null || recentAverage == null || previousAverage <= 0) return null;
+  return recentAverage >= previousAverage * 1.25;
+}
+
+function rsiOverheat(candles: Candle[]): boolean | null {
+  const closes = candles.map((candle) => candle.close);
+  const value = rsiSeries(closes, 14).at(-1);
+  if (value == null || !Number.isFinite(value)) return null;
+  return value >= 70;
+}
+
+function priorResistanceBreakout(candles: Candle[], lookback = 60): boolean | null {
+  if (candles.length < lookback + 1) return null;
+  const currentClose = candles.at(-1)?.close;
+  const priorHighs = candles.slice(-(lookback + 1), -1).map((candle) => candle.high);
+  if (
+    currentClose == null
+    || !Number.isFinite(currentClose)
+    || currentClose <= 0
+    || priorHighs.length !== lookback
+    || priorHighs.some((value) => !Number.isFinite(value) || value <= 0)
+  ) return null;
+  return currentClose > Math.max(...priorHighs);
+}
+
+/**
+ * Re-verifies labels whose legacy ScanCard match semantics are weaker than
+ * their displayed meaning. undefined means the label has no override here;
+ * null means the required evidence is missing and must stay unverified.
+ */
+export function selectedConditionTruth(label: string, candles: Candle[]): boolean | null | undefined {
+  switch (label) {
+    case '거래대금 증가':
+      return tradingValueIncrease(candles);
+    case '이평선 돌파':
+    case '20일선 회복':
+      return upwardCloseMaCross(candles, 20);
+    case '60일선 돌파':
+      return upwardCloseMaCross(candles, 60);
+    case '120일선 돌파':
+      return upwardCloseMaCross(candles, 120);
+    case 'RSI 과열':
+      return rsiOverheat(candles);
+    case '박스권 상단 돌파':
+    case '저항선 돌파':
+      return priorResistanceBreakout(candles, 60);
+    case 'ROE 개선':
+      // Current ROE level is not historical improvement evidence. Until the
+      // canonical financial context supplies a verified ROE series, fail closed.
+      return null;
+    default:
+      return undefined;
+  }
+}
+
+function conditionTruthReason(label: string, truth: boolean | null | undefined): string | null {
+  if (truth === undefined) return null;
+  if (label === 'ROE 개선') return '현재 ROE 수치만으로 개선 추세를 만들지 않습니다. 검증된 과거 ROE 시계열이 필요합니다.';
+  const evidence = label === '거래대금 증가'
+    ? '최근 20봉과 직전 20봉의 가격×거래량 평균'
+    : label === 'RSI 과열'
+      ? '실제 종가로 계산한 RSI(14) 70 이상'
+      : label.includes('박스권') || label.includes('저항선')
+        ? '현재 봉을 제외한 직전 60봉 최고가와 현재 종가'
+        : '직전 종가·직전 이동평균과 현재 종가·현재 이동평균의 상향 교차';
+  if (truth === null) return `${evidence} 근거가 부족해 조건을 확인하지 못했습니다.`;
+  return truth ? `${evidence}로 조건을 확인했습니다.` : `${evidence}가 조건을 충족하지 않았습니다.`;
 }
 
 function atr(candles: Candle[], period = 14): number | null {
@@ -240,24 +346,38 @@ export function applyStockSignalPolicy(input: StockSignalPolicyInput): ScannerSi
   const evidence: ScannerEvidence[] = selected.map((label) => {
     const factorKey = factorForCondition(label);
     const factor = factors[factorKey];
-    const status = matchedSet.has(label)
-      ? 'matched'
-      : factor?.status !== 'ok'
+    const semanticTruth = selectedConditionTruth(label, candles);
+    const semanticReason = conditionTruthReason(label, semanticTruth);
+    const status = factor?.status !== 'ok'
+      ? 'unverified'
+      : semanticTruth === null
         ? 'unverified'
-        : 'not_matched';
+        : semanticTruth === true
+          ? 'matched'
+          : semanticTruth === false
+            ? 'not_matched'
+            : matchedSet.has(label)
+              ? 'matched'
+              : 'not_matched';
     return {
       key: label,
       label,
       status,
       source: sourceForCondition(label),
       observedAt: card.analyzedAt ?? null,
-      reasons: factor?.reasons?.length
-        ? factor.reasons
-        : status === 'unverified'
-          ? ['필수 데이터가 없어 조건을 확인하지 못했습니다.']
-          : status === 'not_matched' || missingSet.has(label)
-            ? ['실제 데이터가 선택 조건을 충족하지 않았습니다.']
-            : ['백엔드가 실제 데이터로 조건을 확인했습니다.'],
+      reasons: factor?.status !== 'ok'
+        ? factor?.reasons?.length
+          ? factor.reasons
+          : ['필수 데이터가 없어 조건을 확인하지 못했습니다.']
+        : semanticReason
+          ? [semanticReason]
+          : factor?.reasons?.length
+            ? factor.reasons
+            : status === 'unverified'
+              ? ['필수 데이터가 없어 조건을 확인하지 못했습니다.']
+              : status === 'not_matched' || missingSet.has(label)
+                ? ['실제 데이터가 선택 조건을 충족하지 않았습니다.']
+                : ['백엔드가 실제 데이터로 조건을 확인했습니다.'],
     };
   });
   const notMatched = evidence.filter((item) => item.status === 'not_matched').map((item) => item.label);
