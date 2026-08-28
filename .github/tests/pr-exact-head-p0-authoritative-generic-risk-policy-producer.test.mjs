@@ -6,47 +6,62 @@ const producerSource = await readFile(new URL(
   '../../api-server/src/services/authoritative-paper-generic-risk-policy-producer.service.ts',
   import.meta.url,
 ), 'utf8');
-const canonicalRiskSource = await readFile(new URL(
-  '../../api-server/src/services/trading-risk-engine.service.ts',
-  import.meta.url,
-), 'utf8');
 const consumerSource = await readFile(new URL(
   '../../api-server/src/services/authoritative-paper-risk-sizing-source.service.ts',
   import.meta.url,
 ), 'utf8');
 
-test('P0 generic risk producer derives financial policy only from canonical TRADING_RISK_POLICY', () => {
-  assert.match(producerSource, /TRADING_RISK_POLICY\.riskWarningPercent/u);
-  assert.match(producerSource, /TRADING_RISK_POLICY\.maximumRiskPercent/u);
-  assert.match(producerSource, /TRADING_RISK_POLICY\.cryptoFuturesAppMaximumLeverage/u);
-  assert.match(canonicalRiskSource, /riskWarningPercent:\s*0\.5/u);
-  assert.match(canonicalRiskSource, /maximumRiskPercent:\s*1/u);
-  assert.match(canonicalRiskSource, /cryptoFuturesAppMaximumLeverage:\s*10/u);
-  assert.doesNotMatch(producerSource, /requestedLeverage:\s*(?:[2-9]|[1-9]\d+)/u);
-  assert.match(producerSource, /requestedLeverage:\s*1/u);
-  assert.match(producerSource, /leverageEscalationAllowed:\s*false/u);
+test('P0 generic risk producer requires an explicit canonical policy record instead of synthesizing financial choices', () => {
+  assert.match(producerSource, /authoritative-paper-generic-risk-policy-record-v1/u);
+  assert.match(producerSource, /readCanonicalRecord/u);
+  assert.match(producerSource, /explicitCanonicalRecordRequired:\s*true/u);
+  assert.match(producerSource, /engineGuardrailsArePolicyEvidence:\s*false/u);
+  assert.doesNotMatch(producerSource, /TRADING_RISK_POLICY/u);
+  assert.doesNotMatch(producerSource, /riskWarningPercent/u);
+  assert.doesNotMatch(producerSource, /cryptoFuturesAppMaximumLeverage/u);
+  assert.doesNotMatch(producerSource, /riskPercent:\s*(?:0(?:\.\d+)?|1(?:\.0+)?)/u);
+  assert.doesNotMatch(producerSource, /requestedLeverage:\s*1/u);
+  assert.doesNotMatch(producerSource, /marginMode:\s*(?:'cash'|'isolated'|'cross')/u);
 });
 
-test('P0 generic risk producer emits exactly the schema consumed by merged risk sizing source', () => {
-  assert.match(producerSource, /authoritative-paper-generic-risk-policy-evidence-v1/u);
-  assert.match(consumerSource, /schemaVersion:\s*'authoritative-paper-generic-risk-policy-evidence-v1'/u);
-  assert.match(producerSource, /marketScopes:\s*Object\.freeze\(\[request\.market\]\)/u);
-  assert.match(producerSource, /strategyScopes:\s*Object\.freeze\(\[request\.strategyScope\.trim\(\)\]\)/u);
-  assert.match(producerSource, /genericSymbolFallback:\s*'\*'/u);
+test('P0 generic risk producer fails closed when canonical record evidence is absent or unusable', () => {
+  assert.match(producerSource, /RISK_POLICY_CANONICAL_RECORD_MISSING/u);
+  assert.match(producerSource, /RISK_POLICY_CANONICAL_RECORD_SOURCE_ERROR/u);
+  assert.match(producerSource, /RISK_POLICY_CANONICAL_RECORD_SCHEMA_INVALID/u);
+  assert.match(producerSource, /RISK_POLICY_CANONICAL_RECORD_RESEARCH_SHA_MISMATCH/u);
+  assert.match(producerSource, /RISK_POLICY_CANONICAL_RECORD_POLICY_EVIDENCE_MISSING/u);
+  assert.match(producerSource, /status:\s*'BLOCKED_DATA'/u);
+  assert.match(producerSource, /policyEvidence:\s*null/u);
+});
+
+test('P0 generic risk producer delegates complete policy validation and sizing to merged #769', () => {
+  assert.match(producerSource, /buildAuthoritativePaperRiskSizingEvidence/u);
+  assert.match(producerSource, /riskPolicy:\s*policySource\.policyEvidence/u);
+  assert.match(producerSource, /canonicalConsumerValidationRequired:\s*true/u);
+  assert.match(producerSource, /riskSizingConsumer:\s*'authoritative-paper-risk-sizing-source\.service\.ts'/u);
+  assert.match(consumerSource, /RISK_POLICY_MISSING/u);
+  assert.match(consumerSource, /RISK_POLICY_RISK_PERCENT_INVALID/u);
+  assert.match(consumerSource, /RISK_POLICY_REQUESTED_LEVERAGE_MISSING_OR_INVALID/u);
+  assert.match(consumerSource, /RISK_POLICY_MARGIN_MODE_INVALID/u);
+  assert.match(consumerSource, /riskPercentDefaultAllowed:\s*false/u);
+  assert.match(consumerSource, /leverageDefaultAllowed:\s*false/u);
+});
+
+test('P0 generic risk producer preserves identity/provenance without manufacturing policy values', () => {
+  assert.match(producerSource, /recordId/u);
+  assert.match(producerSource, /recordVersion/u);
+  assert.match(producerSource, /persistedAtMs/u);
   assert.match(producerSource, /researchCodeSha/u);
-  assert.match(producerSource, /EXACT_RESEARCH_SHA_REQUIRED/u);
+  assert.match(producerSource, /canonicalRecord:/u);
+  assert.match(producerSource, /recordVersion:/u);
+  assert.match(producerSource, /riskPercentDefaultAllowed:\s*false/u);
+  assert.match(producerSource, /requestedLeverageDefaultAllowed:\s*false/u);
+  assert.match(producerSource, /marginModeDefaultAllowed:\s*false/u);
+  assert.match(producerSource, /maximumLeverageDefaultAllowed:\s*false/u);
+  assert.match(producerSource, /wildcardSymbolDefaultAllowed:\s*false/u);
 });
 
-test('P0 generic risk producer is cash-only outside futures and conservative isolated 1x for futures', () => {
-  assert.match(producerSource, /const futures = request\.market === 'CRYPTO_FUTURES'/u);
-  assert.match(producerSource, /maximumLeverage:\s*futures[\s\S]*TRADING_RISK_POLICY\.cryptoFuturesAppMaximumLeverage[\s\S]*:\s*null/u);
-  assert.match(producerSource, /marginMode:\s*futures \? 'isolated' as const : 'cash' as const/u);
-  assert.doesNotMatch(producerSource, /marginMode:\s*'cross'/u);
-  assert.doesNotMatch(producerSource, /BTC|ETH|SOL|005930|AAPL/u);
-  assert.match(producerSource, /fabricatedPairPolicyAllowed:\s*false/u);
-});
-
-test('P0 generic risk producer remains executionless and fail-closed', () => {
+test('P0 generic risk producer and bridge remain executionless', () => {
   for (const contract of [
     /executionAuthority:\s*'NONE'/u,
     /privateApiAllowed:\s*false/u,
@@ -54,8 +69,4 @@ test('P0 generic risk producer remains executionless and fail-closed', () => {
     /realOrderAllowed:\s*false/u,
     /financialMutationAllowed:\s*false/u,
   ]) assert.match(producerSource, contract);
-  assert.match(producerSource, /AUTHORITATIVE_GENERIC_RISK_POLICY_MARKET_UNSUPPORTED/u);
-  assert.match(producerSource, /AUTHORITATIVE_GENERIC_RISK_POLICY_STRATEGY_SCOPE_REQUIRED/u);
-  assert.match(producerSource, /AUTHORITATIVE_GENERIC_RISK_POLICY_SYMBOL_SCOPE_INVALID/u);
-  assert.match(producerSource, /AUTHORITATIVE_GENERIC_RISK_POLICY_CANONICAL_AUTHORITY_INVALID/u);
 });
