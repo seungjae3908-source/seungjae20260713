@@ -97,6 +97,7 @@ export type ResolvedSupplementalCostInput = Readonly<{
 export type AuthoritativeSupplementalCostSourceAudit = Readonly<{
   schemaVersion: typeof AUTHORITATIVE_PAPER_EXECUTION_COST_SOURCES_VERSION;
   status: 'PRESENT' | 'MISSING';
+  fullCostReady: boolean;
   components: Readonly<Record<
     'fees' | 'spread' | 'slippage' | 'latency' | 'liquidityImpact' | 'partialFillImpact' | 'funding',
     SupplementalCostSourceComponent
@@ -113,9 +114,15 @@ function record(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function finite(value: unknown): number | null {
+function finiteScalar(value: unknown): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value !== 'string' || value.trim().length === 0) return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
 function positive(value: unknown): value is number {
@@ -164,8 +171,8 @@ function scannerExecutionIdentity(context: ExecutionSourceContext): Readonly<{
 
 function validDepthLevel(value: unknown): value is DepthLevel {
   if (!Array.isArray(value) || value.length < 2) return false;
-  const price = finite(value[0]);
-  const size = finite(value[1]);
+  const price = finiteScalar(value[0]);
+  const size = finiteScalar(value[1]);
   return positive(price) && positive(size);
 }
 
@@ -185,19 +192,46 @@ function bitgetPublicL2Url(symbol: string): URL {
   return url;
 }
 
-function sizingMatches(
+function validatedSizingSnapshot(
   sizing: AuthoritativePaperExecutionSizingEvidence,
   identity: NonNullable<ReturnType<typeof scannerExecutionIdentity>>,
   nowMs: number,
-): boolean {
-  return sizing?.schemaVersion === AUTHORITATIVE_PAPER_EXECUTION_SIZING_EVIDENCE_VERSION
+): AuthoritativePaperExecutionSizingEvidence | null {
+  const policy = sizing?.riskPolicy;
+  const valid = sizing?.schemaVersion === AUTHORITATIVE_PAPER_EXECUTION_SIZING_EVIDENCE_VERSION
     && sizing.signalId === identity.signalId
     && sizing.symbol === identity.symbol
     && sizing.direction === identity.direction
     && positive(sizing.targetQuantity)
     && nonEmpty(sizing.source)
     && fresh(sizing.observedAtMs, sizing.maximumAgeMs, nowMs)
-    && sizing.riskPolicy?.schemaVersion === 'authoritative-paper-risk-policy-evidence-v1';
+    && policy?.schemaVersion === 'authoritative-paper-risk-policy-evidence-v1'
+    && positive(policy.leverage)
+    && positive(policy.riskPercent)
+    && policy.riskPercent <= 1
+    && (policy.marginMode === 'isolated' || policy.marginMode === 'cross')
+    && nonEmpty(policy.source)
+    && fresh(policy.observedAtMs, policy.maximumAgeMs, nowMs);
+  if (!valid) return null;
+  return freeze({
+    schemaVersion: sizing.schemaVersion,
+    signalId: sizing.signalId,
+    symbol: sizing.symbol,
+    direction: sizing.direction,
+    targetQuantity: sizing.targetQuantity,
+    riskPolicy: {
+      schemaVersion: policy.schemaVersion,
+      leverage: policy.leverage,
+      riskPercent: policy.riskPercent,
+      marginMode: policy.marginMode,
+      source: policy.source.trim(),
+      observedAtMs: policy.observedAtMs,
+      maximumAgeMs: policy.maximumAgeMs,
+    },
+    source: sizing.source.trim(),
+    observedAtMs: sizing.observedAtMs,
+    maximumAgeMs: sizing.maximumAgeMs,
+  });
 }
 
 export async function collectAuthoritativePaperExecutionObservationInput(input: Readonly<{
@@ -211,8 +245,9 @@ export async function collectAuthoritativePaperExecutionObservationInput(input: 
   if (typeof now !== 'function') throw new TypeError('PUBLIC_L2_CLOCK_REQUIRED');
   const identity = scannerExecutionIdentity(input.context);
   const requestStartedAtMs = now();
-  if (!identity || !positive(requestStartedAtMs)
-    || !sizingMatches(input.sizingEvidence, identity, requestStartedAtMs)) return null;
+  if (!identity || !positive(requestStartedAtMs)) return null;
+  const sizing = validatedSizingSnapshot(input.sizingEvidence, identity, requestStartedAtMs);
+  if (!sizing) return null;
 
   const payload = record(await input.fetchPublicJson(bitgetPublicL2Url(identity.symbol), {
     provider: 'bitget',
@@ -222,7 +257,7 @@ export async function collectAuthoritativePaperExecutionObservationInput(input: 
   if (!positive(requestCompletedAtMs) || requestCompletedAtMs < requestStartedAtMs) return null;
   if (!payload || payload.code !== '00000') return null;
   const data = record(payload.data);
-  const observedAtMs = finite(data?.ts);
+  const observedAtMs = finiteScalar(data?.ts);
   const bids = normalizedLevels(data?.b);
   const asks = normalizedLevels(data?.a);
   if (!observedAtMs || observedAtMs > requestCompletedAtMs
@@ -235,7 +270,7 @@ export async function collectAuthoritativePaperExecutionObservationInput(input: 
       market: 'CRYPTO_FUTURES',
       symbol: identity.symbol,
       direction: identity.direction,
-      targetQuantity: input.sizingEvidence.targetQuantity,
+      targetQuantity: sizing.targetQuantity,
       bids,
       asks,
       observedAtMs,
@@ -245,7 +280,7 @@ export async function collectAuthoritativePaperExecutionObservationInput(input: 
       provenance: Object.freeze(['SIMULATED', 'public-L2', 'bitget-public-uta-v3-orderbook']),
       calibratedFillModel: null,
     },
-    riskPolicy: input.sizingEvidence.riskPolicy,
+    riskPolicy: sizing.riskPolicy,
     nowMs: requestCompletedAtMs,
   });
 }
@@ -273,7 +308,7 @@ function componentFromPercentEvidence(
   if (!value || !nonNegative(value.valuePercent) || !nonEmpty(value.source)
     || !COST_EVIDENCE_QUALITIES.has(value.quality)
     || !fresh(value.observedAtMs, maximumAgeMs, nowMs)
-    || (value.quality === 'NOT_APPLICABLE' && value.valuePercent !== 0)) return null;
+    || value.quality === 'NOT_APPLICABLE') return null;
   return freeze({
     state: 'PRESENT',
     value: value.valuePercent,
@@ -358,8 +393,7 @@ function resolvedSupplementalCostInput(
   const liquidityImpact = componentFromPercentEvidence(input.liquidityImpact, nowMs, maximumAgeMs);
   const partialFillImpact = componentFromPercentEvidence(input.partialFillImpact, nowMs, maximumAgeMs);
   const funding = componentFromPercentEvidence(input.funding, nowMs, maximumAgeMs);
-  if (!latency || !liquidityImpact || !partialFillImpact || !funding
-    || input.funding?.quality === 'NOT_APPLICABLE') return null;
+  if (!latency || !liquidityImpact || !partialFillImpact || !funding) return null;
   return freeze({
     costPolicyId: input.costPolicyId.trim(),
     observedAtMs: input.observedAtMs,
@@ -410,24 +444,22 @@ export function auditAuthoritativeSupplementalCostSources(input: Readonly<{
   if (!fundingCost) blockers.push('FUNDING_EXECUTION_COST_EVIDENCE_UNAVAILABLE');
 
   const observedAtMs = positive(publicEvidence?.observedAtMs) ? publicEvidence.observedAtMs : null;
-  const slippagePercent = finite(slippage?.valuePercent);
-  const slippageAtMs = finite(slippage?.observedAtMs);
-  const slippageQuality = COST_EVIDENCE_QUALITIES.has(slippage?.quality as CostEvidenceQuality)
+  const slippagePercent = finiteNumber(slippage?.valuePercent);
+  const slippageAtMs = finiteNumber(slippage?.observedAtMs);
+  const slippageQuality = slippage?.quality !== 'NOT_APPLICABLE'
+    && COST_EVIDENCE_QUALITIES.has(slippage?.quality as CostEvidenceQuality)
     ? slippage?.quality as CostEvidenceQuality
     : null;
-  const observedRoundTripMs = finite(latency?.observedRoundTripMs);
-  const latencyAtMs = finite(latency?.observedAtMs);
-  const visibleLiquidity = finite(liquidity?.value);
-  const liquidityAtMs = finite(liquidity?.observedAtMs);
-  const partialFillAtMs = finite(partialFill?.observedAtMs);
-  const fundingRate = finite(publicEvidence?.fundingRate);
-  const takerFeeRate = finite(publicEvidence?.takerFeeRate);
+  const observedRoundTripMs = finiteNumber(latency?.observedRoundTripMs);
+  const latencyAtMs = finiteNumber(latency?.observedAtMs);
+  const visibleLiquidity = finiteNumber(liquidity?.value);
+  const liquidityAtMs = finiteNumber(liquidity?.observedAtMs);
+  const partialFillAtMs = finiteNumber(partialFill?.observedAtMs);
+  const fundingRate = finiteNumber(publicEvidence?.fundingRate);
+  const takerFeeRate = finiteNumber(publicEvidence?.takerFeeRate);
   const fundingRatePercent = fundingRate == null ? null : fundingRate * 100;
 
-  return freeze({
-    schemaVersion: AUTHORITATIVE_PAPER_EXECUTION_COST_SOURCES_VERSION,
-    status: resolved ? 'PRESENT' : 'MISSING',
-    components: {
+  const components = freeze({
       fees: publicPercent(
         takerFeeRate == null ? null : takerFeeRate * 100,
         'DOCUMENTED',
@@ -495,7 +527,20 @@ export function auditAuthoritativeSupplementalCostSources(input: Readonly<{
         nowMs,
         maximumAgeMs,
       ),
-    },
+  });
+  if (components.fees.state !== 'PRESENT') blockers.push('FEE_COST_EVIDENCE_UNAVAILABLE');
+  if (components.spread.state !== 'PRESENT') blockers.push('SPREAD_COST_EVIDENCE_UNAVAILABLE');
+  if (components.slippage.state !== 'PRESENT') blockers.push('SLIPPAGE_COST_EVIDENCE_UNAVAILABLE');
+  const fullCostReady = resolved != null
+    && Object.values(components).every((component) => (
+      component.state === 'PRESENT' && component.countsAsExecutionCost
+    ));
+
+  return freeze({
+    schemaVersion: AUTHORITATIVE_PAPER_EXECUTION_COST_SOURCES_VERSION,
+    status: fullCostReady ? 'PRESENT' : 'MISSING',
+    fullCostReady,
+    components,
     supplementalCostInput: resolved,
     blockers: Object.freeze(blockers),
     unknownIsZero: false,
