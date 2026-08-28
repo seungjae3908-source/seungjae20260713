@@ -20,6 +20,11 @@ import {
 } from './bitget-futures-public-evidence.service';
 import { fetchPublicMarketJson } from './public-market-http';
 import {
+  auditAuthoritativeSupplementalCostSources,
+  collectAuthoritativePaperExecutionObservationInput,
+  type AuthoritativePaperExecutionSizingEvidence,
+} from './authoritative-paper-execution-cost-sources.service';
+import {
   AUTHORITATIVE_PAPER_CALLBACK_OWNERS_SAFETY,
   buildAuthoritativePaperExecutionObservation,
   buildAuthoritativeSizedContractRules,
@@ -98,7 +103,8 @@ type Dependencies = Readonly<{
   paperStateSnapshotForCard(context: EvidenceContext): Promise<unknown | null>;
   sizedContractInputForCard(context: EvidenceContext): Promise<SizedContractInput | null>;
   executionObservationInputForCard(context: EvidenceContext): Promise<ExecutionObservationInput | null>;
-  supplementalCostInputForCard(context: EvidenceContext): Promise<SupplementalCostInput | null>;
+  executionSizingEvidenceForCard(context: EvidenceContext): Promise<AuthoritativePaperExecutionSizingEvidence | null>;
+  supplementalCostInputForCard(context: EvidenceContext): Promise<Partial<SupplementalCostInput> | null>;
   now: () => number;
 }>;
 
@@ -183,6 +189,7 @@ function defaultDependencies(): Dependencies {
     paperStateSnapshotForCard: async () => null,
     sizedContractInputForCard: async () => null,
     executionObservationInputForCard: async () => null,
+    executionSizingEvidenceForCard: async () => null,
     supplementalCostInputForCard: async () => null,
     now: Date.now,
   });
@@ -255,9 +262,25 @@ export function createAuthoritativePaperEvidenceSourceWiring({
     executionObservationForCard: ownedSource({
       callback: 'executionObservationForCard',
       implementation: 'buildAuthoritativePaperExecutionObservation/buildPaperSimulatedExecutionEvidence',
-      requiredData: ['public L2 depth', 'target quantity', 'request timing', 'calibrated fill model', 'immutable risk policy evidence'],
+      requiredData: [
+        'public L2 depth',
+        'target quantity',
+        'request timing',
+        'immutable risk policy evidence',
+        'optional LIVE_SUBMITTED_EXECUTION calibration reported separately from Paper simulation readiness',
+      ],
       source: async (context) => {
-        const input = await dependencies.executionObservationInputForCard(context);
+        let input = await dependencies.executionObservationInputForCard(context);
+        if (input == null) {
+          const sizingEvidence = await dependencies.executionSizingEvidenceForCard(context);
+          if (sizingEvidence == null) return null;
+          input = await collectAuthoritativePaperExecutionObservationInput({
+            context,
+            sizingEvidence,
+            fetchPublicJson: dependencies.fetchPublicJson,
+            now: dependencies.now,
+          });
+        }
         return input == null ? null : buildAuthoritativePaperExecutionObservation(input);
       },
     }),
@@ -267,7 +290,13 @@ export function createAuthoritativePaperEvidenceSourceWiring({
       requiredData: ['latency cost evidence', 'liquidity impact cost evidence', 'partial-fill cost evidence', 'funding evidence'],
       source: async (context) => {
         const input = await dependencies.supplementalCostInputForCard(context);
-        return input == null ? null : buildAuthoritativeSupplementalCostEvidence(input);
+        const audit = auditAuthoritativeSupplementalCostSources({
+          supplemental: input,
+          nowMs: dependencies.now(),
+        });
+        return audit.supplementalCostInput == null
+          ? null
+          : buildAuthoritativeSupplementalCostEvidence(audit.supplementalCostInput);
       },
     }),
   });
