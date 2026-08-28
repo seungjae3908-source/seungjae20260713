@@ -1,0 +1,228 @@
+name: Temporary Latency Successor Generator
+
+on:
+  push:
+    branches:
+      - feat/p0-latency-canonical-runtime-successor-20260828
+    paths:
+      - .github/workflows/_tmp-latency-successor-generator.yml
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout successor branch
+        uses: actions/checkout@v6
+        with:
+          ref: feat/p0-latency-canonical-runtime-successor-20260828
+          fetch-depth: 0
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Apply bounded canonical latency integration
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          evidence = Path('api-server/src/services/authoritative-paper-evidence-sources.service.ts')
+          text = evidence.read_text()
+          import_anchor = "import { fetchPublicMarketJson } from './public-market-http';\n"
+          latency_import = "import { buildAuthoritativePaperLatencyCostEvidence } from './authoritative-paper-latency-cost-evidence.service';\n"
+          if latency_import not in text:
+              if import_anchor not in text:
+                  raise SystemExit('LATENCY_IMPORT_ANCHOR_MISSING')
+              text = text.replace(import_anchor, import_anchor + latency_import, 1)
+
+          helper_anchor = "function ownedSource<T>({\n"
+          helper = r'''function latencyRecord(value: unknown): Record<string, unknown> | null {
+            return value && typeof value === 'object' && !Array.isArray(value)
+              ? value as Record<string, unknown>
+              : null;
+          }
+
+          function latencyPositiveScalar(value: unknown): number | null {
+            const parsed = typeof value === 'number' ? value : Number(value);
+            return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+          }
+
+          function latencyMidpoint(bid: unknown, ask: unknown): number | null {
+            const normalizedBid = latencyPositiveScalar(bid);
+            const normalizedAsk = latencyPositiveScalar(ask);
+            if (normalizedBid == null || normalizedAsk == null || normalizedAsk < normalizedBid) return null;
+            return (normalizedBid + normalizedAsk) / 2;
+          }
+
+          function latencyTickerObservation(
+            payload: unknown,
+            symbol: string,
+            observedAtMs: number,
+          ): Readonly<{ midpoint: number; observedAtMs: number; source: string }> | null {
+            const envelope = latencyRecord(payload);
+            if (!envelope || envelope.code !== '00000' || !Array.isArray(envelope.data) || envelope.data.length !== 1) {
+              return null;
+            }
+            const row = latencyRecord(envelope.data[0]);
+            if (!row) return null;
+            const rowSymbol = String(row.symbol ?? '').trim().toUpperCase().replace(/[^A-Z0-9]/gu, '');
+            const midpoint = latencyMidpoint(row.bidPr, row.askPr);
+            const providerTimestampMs = latencyPositiveScalar(row.ts);
+            if (rowSymbol !== symbol || midpoint == null || providerTimestampMs == null || !naturalPositive(observedAtMs)) {
+              return null;
+            }
+            return Object.freeze({
+              midpoint,
+              observedAtMs,
+              source: `BITGET_PUBLIC_V2_TICKER_RECEIPT:providerTs=${String(providerTimestampMs)}`,
+            });
+          }
+
+          '''
+          if 'function latencyTickerObservation(' not in text:
+              if helper_anchor not in text:
+                  raise SystemExit('LATENCY_HELPER_ANCHOR_MISSING')
+              text = text.replace(helper_anchor, helper + helper_anchor, 1)
+
+          insertion_anchor = "          const executionObservation = buildAuthoritativePaperExecutionObservation(executionInput);\n          const slippagePercent = executionObservation.slippage.valuePercent;\n          if (!Number.isFinite(slippagePercent) || slippagePercent < 0) return partial;\n"
+          insertion = r'''          const executionObservation = buildAuthoritativePaperExecutionObservation(executionInput);
+          const slippagePercent = executionObservation.slippage.valuePercent;
+          if (!Number.isFinite(slippagePercent) || slippagePercent < 0) return partial;
+
+          // #777 successor binding: the pre midpoint is the already-completed public
+          // ticker observation for this Natural candidate. The measured request is
+          // the exact public-L2 request used by simulated execution. A fresh ticker
+          // receipt is collected only after that request completes, so the latency
+          // producer can enforce temporal bracketing without inventing a cost.
+          const preLatencyMidpoint = latencyMidpoint(marketEvidence.bidPrice, marketEvidence.askPrice);
+          const requestStartedAtMs = executionInput.executionEvidenceInput.requestStartedAtMs;
+          const requestCompletedAtMs = executionInput.executionEvidenceInput.requestCompletedAtMs;
+          if (preLatencyMidpoint == null
+            || !naturalPositive(requestStartedAtMs)
+            || !naturalPositive(requestCompletedAtMs)) return partial;
+          const postTickerRequest = dependencies.buildPublicRequests(symbol).ticker;
+          const postTickerPayload = await dependencies.fetchPublicJson(publicUrl(postTickerRequest), {
+            provider: 'bitget',
+            signal: abortSignal(context.signal),
+          }).catch(() => null);
+          const postLatencyObservedAtMs = dependencies.now();
+          const postLatencyObservation = latencyTickerObservation(
+            postTickerPayload,
+            symbol,
+            postLatencyObservedAtMs,
+          );
+          if (!postLatencyObservation) return partial;
+          const costNowMs = dependencies.now();
+          if (!naturalPositive(costNowMs)) return partial;
+          const latencyCost = buildAuthoritativePaperLatencyCostEvidence({
+            direction,
+            requestStartedAtMs,
+            requestCompletedAtMs,
+            preRequest: Object.freeze({
+              midpoint: preLatencyMidpoint,
+              observedAtMs: marketEvidence.observedAtMs,
+              source: `BITGET_PUBLIC_V2_TICKER_RECEIPT:providerTs=${String(marketEvidence.tickerTimestampMs)}`,
+            }),
+            postRequest: postLatencyObservation,
+            nowMs: costNowMs,
+            maximumAgeMs: NATURAL_CYCLE_EVIDENCE_MAXIMUM_AGE_MS,
+            maximumRequestDurationMs: NATURAL_CYCLE_EVIDENCE_MAXIMUM_AGE_MS,
+          });
+          if (latencyCost.status !== 'PRESENT' || latencyCost.evidence == null) return partial;
+          const latencyBoundSupplementalCostInput: Partial<SupplementalCostInput> = Object.freeze({
+            ...(sourceSupplementalCostInput ?? {}),
+            latency: latencyCost.evidence,
+            observedAtMs: postLatencyObservedAtMs,
+            nowMs: costNowMs,
+            maximumAgeMs: NATURAL_CYCLE_EVIDENCE_MAXIMUM_AGE_MS,
+          });
+'''
+          if '#777 successor binding:' not in text:
+              if insertion_anchor not in text:
+                  raise SystemExit('LATENCY_RUNTIME_INSERTION_ANCHOR_MISSING')
+              text = text.replace(insertion_anchor, insertion, 1)
+
+          old = "            sourceSupplementalCostInput,\n            researchCodeSha: normalizedSha,"
+          new = "            sourceSupplementalCostInput: latencyBoundSupplementalCostInput,\n            researchCodeSha: normalizedSha,"
+          count = text.count(old)
+          if count not in (0, 2):
+              raise SystemExit(f'LATENCY_SUPPLEMENTAL_BINDING_COUNT_INVALID:{count}')
+          if count == 2:
+              text = text.replace(old, new)
+
+          # Cost evidence may be observed after the initial Natural-cycle clock.
+          # Use the refreshed clock for funding freshness, supplemental audit and
+          # the fixed-point bridge; all remain within the same bounded cycle.
+          text = text.replace("            nowMs,\n          });\n          if (!supplementalCostInput || !supplementalCostInput.funding) return partial;\n          const supplementalAudit", "            nowMs: costNowMs,\n          });\n          if (!supplementalCostInput || !supplementalCostInput.funding) return partial;\n          const supplementalAudit", 1)
+          text = text.replace("            nowMs,\n            maximumAgeMs: NATURAL_CYCLE_EVIDENCE_MAXIMUM_AGE_MS,\n          });\n          const executionCostComponentNames", "            nowMs: costNowMs,\n            maximumAgeMs: NATURAL_CYCLE_EVIDENCE_MAXIMUM_AGE_MS,\n          });\n          const executionCostComponentNames", 1)
+          text = text.replace("          }, stablePolicyProducer, nowMs);", "          }, stablePolicyProducer, costNowMs);", 1)
+          final_clock_anchor = "            positionNotional: targetQuantity * learning.entryPrice,\n            nowMs,\n          });"
+          if final_clock_anchor in text:
+              text = text.replace(final_clock_anchor, "            positionNotional: targetQuantity * learning.entryPrice,\n            nowMs: costNowMs,\n          });", 1)
+
+          evidence.write_text(text)
+
+          builder = Path('api-server/scripts/build-authoritative-paper-runtime-package.mjs')
+          b = builder.read_text()
+          source_line = "  'src/services/authoritative-paper-latency-cost-evidence.service.ts',\n"
+          anchor = "  'src/services/authoritative-paper-generic-risk-policy-producer.service.ts',\n"
+          if source_line not in b:
+              if anchor not in b:
+                  raise SystemExit('RUNTIME_ALLOWLIST_ANCHOR_MISSING')
+              b = b.replace(anchor, anchor + source_line, 1)
+          builder.write_text(b)
+
+          loader = Path('market-prediction-lab/src/authoritative-paper-runtime-package-v1.js')
+          l = loader.read_text()
+          expected_line = '  "api-server/src/services/authoritative-paper-latency-cost-evidence.service.ts",\n'
+          expected_anchor = '  "api-server/src/services/authoritative-paper-generic-risk-policy-producer.service.ts",\n'
+          if expected_line not in l:
+              if expected_anchor not in l:
+                  raise SystemExit('RUNTIME_EXPECTED_SOURCE_ANCHOR_MISSING')
+              l = l.replace(expected_anchor, expected_anchor + expected_line, 1)
+          loader.write_text(l)
+          PY
+
+      - name: Typecheck API server
+        run: pnpm --dir api-server run typecheck
+
+      - name: Run focused latency producer tests
+        run: |
+          pnpm --dir api-server exec esbuild \
+            src/services/authoritative-paper-latency-cost-evidence.service.test.ts \
+            --bundle --platform=node --format=cjs --target=node22 \
+            --outfile=/tmp/latency-successor.test.cjs
+          node --test /tmp/latency-successor.test.cjs
+
+      - name: Regenerate canonical runtime package
+        run: node api-server/scripts/build-authoritative-paper-runtime-package.mjs
+
+      - name: Run runtime package verification
+        run: node --test market-prediction-lab/tests/authoritative-paper-runtime-package-v1.test.js
+
+      - name: Remove temporary generator workflow
+        run: rm .github/workflows/_tmp-latency-successor-generator.yml
+
+      - name: Commit generated successor
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m "feat(paper): bind latency evidence into canonical runtime"
+          git push origin HEAD:feat/p0-latency-canonical-runtime-successor-20260828
