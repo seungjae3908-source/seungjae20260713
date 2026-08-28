@@ -7,6 +7,14 @@ on:
         description: Exact research commit/ref to validate
         required: false
         type: string
+      producer_run_id:
+        description: Exact successful #701 producer workflow run containing finalized canonical model reference evidence
+        required: false
+        type: string
+      predecessor_shadow_run_id:
+        description: Exact prior successful #704 shadow-cycle artifact to carry forward for future-only settlement
+        required: false
+        type: string
 
 permissions:
   actions: read
@@ -47,15 +55,112 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Validate immutable Producer run identity
+        if: inputs.producer_run_id != ''
+        shell: bash
+        env:
+          PRODUCER_RUN_ID: ${{ inputs.producer_run_id }}
+        run: |
+          [[ "$PRODUCER_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+
+      - name: Validate immutable predecessor Shadow run identity
+        if: inputs.predecessor_shadow_run_id != ''
+        shell: bash
+        env:
+          PREDECESSOR_SHADOW_RUN_ID: ${{ inputs.predecessor_shadow_run_id }}
+        run: |
+          [[ "$PREDECESSOR_SHADOW_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+
+      - name: Download finalized canonical Producer evidence
+        if: inputs.producer_run_id != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: prediction-lab-model-reference-evidence-${{ inputs.producer_run_id }}
+          path: ${{ runner.temp }}/prediction-lab-model-reference-evidence
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.producer_run_id }}
+
+      - name: Download exact predecessor Shadow evidence
+        if: inputs.predecessor_shadow_run_id != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: prediction-lab-shadow-cycle-${{ inputs.predecessor_shadow_run_id }}
+          path: ${{ runner.temp }}/predecessor-shadow
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.predecessor_shadow_run_id }}
+
+      - name: Restore exact predecessor Shadow state
+        if: inputs.predecessor_shadow_run_id != ''
+        shell: bash
+        env:
+          PREDECESSOR_SHADOW_RUN_ID: ${{ inputs.predecessor_shadow_run_id }}
+          PRODUCER_RUN_ID: ${{ inputs.producer_run_id }}
+          RESEARCH_SHA: ${{ steps.sha.outputs.value }}
+          PREDECESSOR_DIR: ${{ runner.temp }}/predecessor-shadow
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const { execFileSync } = require('child_process');
+          const files = [];
+          const walk = (directory) => {
+            for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+              const target = path.join(directory, entry.name);
+              if (entry.isDirectory()) walk(target);
+              else files.push(target);
+            }
+          };
+          walk(process.env.PREDECESSOR_DIR);
+          const exactlyOne = (name) => {
+            const matches = files.filter((file) => path.basename(file) === name);
+            if (matches.length !== 1) throw new Error(`Expected exactly one predecessor ${name}; found ${matches.length}.`);
+            return matches[0];
+          };
+          const stateFile = exactlyOne('shadow-state.json');
+          const provenanceFile = exactlyOne('shadow-cycle-provenance.json');
+          const provenance = JSON.parse(fs.readFileSync(provenanceFile, 'utf8'));
+          if (String(provenance.runId) !== process.env.PREDECESSOR_SHADOW_RUN_ID) throw new Error('Predecessor run identity mismatch.');
+          if (!/^[0-9a-f]{40}$/.test(String(provenance.researchCodeSha ?? ''))) throw new Error('Predecessor research SHA is invalid.');
+          if (provenance.researchCodeSha !== process.env.RESEARCH_SHA) {
+            execFileSync('git', ['fetch', '--no-tags', '--depth=50', 'origin', process.env.RESEARCH_SHA], { stdio: 'inherit' });
+            execFileSync('git', ['merge-base', '--is-ancestor', provenance.researchCodeSha, process.env.RESEARCH_SHA], { stdio: 'inherit' });
+          }
+          if (String(provenance.producerRunId ?? '') !== process.env.PRODUCER_RUN_ID) throw new Error('Predecessor Producer run identity mismatch.');
+          const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+          if (!state || state.schemaVersion !== 3 || !state.groups || typeof state.groups !== 'object') throw new Error('Predecessor Shadow state contract is invalid.');
+          fs.copyFileSync(stateFile, 'market-prediction-lab/docs/shadow-state.json');
+          NODE
+
       - name: Validate shadow and temporal modules
         working-directory: market-prediction-lab
-        run: node --test tests/derivatives-history.test.js tests/derivatives-normalized-compat.test.js tests/temporal-training-dataset.test.js tests/shadow-ledger.test.js
+        run: node --test tests/derivatives-history.test.js tests/derivatives-normalized-compat.test.js tests/temporal-training-dataset.test.js tests/shadow-ledger.test.js tests/canonical-shadow-drift-policy-v1.test.js tests/canonical-shadow-runtime-cutover-v1.test.js tests/shadow-evidence-handoff-v1.test.js tests/shadow-state-root-transport-v1.test.js
+
+      # Dormant only: inventory-driven discovery is exercised by fixtures/tests. This
+      # workflow still requires explicit immutable run IDs and never publishes a root.
+      - name: Assert canonical runtime remains dormant
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { CANONICAL_SHADOW_RUNTIME_CUTOVER_V1 as runtime } from './market-prediction-lab/src/canonical-shadow-runtime-cutover-v1.js';
+          if (runtime.cutoverEnabled !== false || runtime.scheduleActivated !== false) process.exit(1);
+          NODE
 
       - name: Run one research-only shadow cycle
         id: shadow
         continue-on-error: true
         working-directory: market-prediction-lab
-        run: node scripts/run-shadow-cycle.js docs/shadow-state.json docs/shadow-summary.json
+        shell: bash
+        env:
+          PRODUCER_RUN_ID: ${{ inputs.producer_run_id }}
+          PRODUCER_EVIDENCE_ROOT: ${{ runner.temp }}/prediction-lab-model-reference-evidence
+        run: |
+          if [ -n "$PRODUCER_RUN_ID" ]; then
+            node scripts/run-shadow-cycle.js docs/shadow-state.json docs/shadow-summary.json "$PRODUCER_EVIDENCE_ROOT"
+          else
+            node scripts/run-shadow-cycle.js docs/shadow-state.json docs/shadow-summary.json
+          fi
 
       - name: Record shadow failure
         if: steps.shadow.outcome != 'success'
@@ -72,10 +177,31 @@ jobs:
         shell: bash
         env:
           RESEARCH_SHA: ${{ steps.sha.outputs.value }}
+          PRODUCER_RUN_ID: ${{ inputs.producer_run_id }}
+          PREDECESSOR_SHADOW_RUN_ID: ${{ inputs.predecessor_shadow_run_id }}
         run: |
           cat > market-prediction-lab/docs/shadow-cycle-provenance.json <<JSON
-          {"schemaVersion":1,"researchCodeSha":"$RESEARCH_SHA","runId":"$GITHUB_RUN_ID","branchWrite":false,"liveOrderAllowed":false,"privateAccountRequestAllowed":false}
+          {"schemaVersion":2,"researchCodeSha":"$RESEARCH_SHA","runId":"$GITHUB_RUN_ID","producerRunId":"$PRODUCER_RUN_ID","predecessorShadowRunId":"$PREDECESSOR_SHADOW_RUN_ID","branchWrite":false,"liveOrderAllowed":false,"privateAccountRequestAllowed":false,"scheduleActivated":false}
           JSON
+
+      - name: Build fail-closed state-root publication manifest
+        if: always()
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { writeFile } from 'node:fs/promises';
+          import { buildShadowArtifactPublicationManifestV1 } from './market-prediction-lab/src/shadow-state-root-transport-v1.js';
+
+          const manifest = await buildShadowArtifactPublicationManifestV1({
+            artifactRoot: 'market-prediction-lab/docs',
+            createdAt: new Date().toISOString(),
+          });
+          await writeFile(
+            'market-prediction-lab/docs/shadow-artifact-publication-manifest.json',
+            `${JSON.stringify(manifest, null, 2)}\n`,
+            { encoding: 'utf8', mode: 0o600 },
+          );
+          NODE
 
       - name: Upload shadow-cycle artifact
         if: always()
@@ -86,6 +212,7 @@ jobs:
             market-prediction-lab/docs/shadow-state.json
             market-prediction-lab/docs/shadow-summary.json
             market-prediction-lab/docs/shadow-cycle-provenance.json
+            market-prediction-lab/docs/shadow-artifact-publication-manifest.json
           if-no-files-found: error
           retention-days: 90
 
