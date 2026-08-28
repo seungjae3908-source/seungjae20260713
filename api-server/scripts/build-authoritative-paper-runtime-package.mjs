@@ -12,17 +12,22 @@ const outputRoot = resolve(
 const bundlePath = join(outputRoot, 'authoritative-paper-runtime-v1.mjs');
 const manifestPath = join(outputRoot, 'authoritative-paper-runtime-v1.manifest.json');
 
-const CANONICAL_PRODUCER_SOURCE_COMMIT_SHA = '3f85003368830fb570c05b3b2060da39f515696d';
-const CANONICAL_PRODUCER_SOURCE_GIT_BLOB_SHA = 'e4fe2e7c8cd0ec279cda8d696b4ae935bef86a4b';
-const CANONICAL_PRODUCER_SOURCE_SHA256 = 'e699e00ba64040aefec24b5b4992b4975531fdf88c1e4b2b164038ebed57dad7';
+const CANONICAL_PRODUCER_SOURCE_COMMIT_SHA = '3dae58f78d1118bc5b9f5b431adbfa50d63d4f5c';
+const CANONICAL_PRODUCER_SOURCE_GIT_BLOB_SHA = '7dc275b70f9379e32f3fd6c718a612b06ceb1c46';
+const CANONICAL_PRODUCER_SOURCE_SHA256 = '8c7563936de865e9103d73d15c0442a44f1cf33426315e758abad83d96880e0c';
 const PRODUCER_SOURCE = 'src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.ts';
 const ALLOWED_INPUTS = Object.freeze([
   '../market-intelligence-sidecar/src/execution-quality.mjs',
   '../market-prediction-lab/src/bitget-position-tier-v1.js',
   'src/data/asset-type.ts',
   'src/lib/bounded-work-pool.ts',
+  'src/lib/provider-admission-control.ts',
   'src/services/authoritative-paper-callback-owners.service.ts',
   'src/services/authoritative-paper-evidence-sources.service.ts',
+  'src/services/authoritative-paper-execution-cost-sources.service.ts',
+  'src/services/authoritative-paper-generic-risk-policy-producer.service.ts',
+  'src/services/authoritative-paper-latency-cost-evidence.service.ts',
+  'src/services/authoritative-paper-risk-sizing-source.service.ts',
   'src/services/authoritative-paper-runtime-package.entry.ts',
   'src/services/bitget-futures-public-evidence.service.ts',
   'src/services/crypto-signal-scanner.service.ts',
@@ -146,18 +151,34 @@ const manifest = {
     'AUTHORITATIVE_PAPER_BLOCKED_DATA_SOURCE_CONTRACT_VERSION',
     'AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_SAFETY',
     'AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_VERSION',
+    'AUTHORITATIVE_PAPER_GENERIC_RISK_POLICY_PRODUCER_SAFETY',
+    'AUTHORITATIVE_PAPER_GENERIC_RISK_POLICY_PRODUCER_VERSION',
+    'AUTHORITATIVE_PAPER_GENERIC_RISK_POLICY_RECORD_VERSION',
+    'AUTHORITATIVE_PAPER_GENERIC_RISK_SIZING_BRIDGE_VERSION',
+    'AUTHORITATIVE_PAPER_LATENCY_COST_EVIDENCE_SAFETY',
+    'AUTHORITATIVE_PAPER_LATENCY_COST_EVIDENCE_VERSION',
+    'AUTHORITATIVE_PAPER_RISK_SIZING_SOURCE_SAFETY',
+    'AUTHORITATIVE_PAPER_RISK_SIZING_SOURCE_VERSION',
     'AUTHORITATIVE_PAPER_RUNTIME_PACKAGE_SAFETY',
     'PAPER_TRADING_STATE_SNAPSHOT_VERSION',
     'PAPER_SIMULATED_EXECUTION_EVIDENCE_SAFETY',
     'PAPER_SIMULATED_EXECUTION_EVIDENCE_VERSION',
     'SCANNER_CRYPTO_FUTURES_PAPER_ADMISSION_EVIDENCE_PRODUCER_VERSION',
     'createAuthoritativePaperEvidenceSourceWiring',
+    'createAuthoritativePaperNaturalCycleEvidenceSourceWiring',
+    'createAuthoritativePaperGenericRiskPolicyProducer',
     'createImmutablePaperTradingStateSnapshot',
     'buildPaperSimulatedExecutionEvidence',
     'buildAuthoritativePaperExecutionObservation',
     'buildAuthoritativeSizedContractRules',
     'buildAuthoritativeSupplementalCostEvidence',
+    'buildAuthoritativePaperRiskSizingEvidence',
+    'buildAuthoritativePaperRiskSizingFromGenericRiskPolicySource',
+    'buildAuthoritativePaperLatencyCostEvidence',
+    'bindAuthoritativePaperLatencyToSupplementalCostInput',
+    'collectAuthoritativePaperLatencyCostEvidence',
     'createScannerCryptoFuturesPaperAdmissionEvidenceProducer',
+    'readBitgetPublicLatencyMidpointQuote',
     'validateImmutablePaperTradingStateSnapshot',
     'paperStateFromAuthoritativeSnapshot',
   ],

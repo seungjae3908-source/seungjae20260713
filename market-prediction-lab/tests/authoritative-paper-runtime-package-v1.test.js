@@ -61,9 +61,9 @@ function missingEvidenceSources() {
   };
 }
 
-test("validated package loads exact #546 producer bundle and executes fail-closed without evidence", async () => {
+test("validated package loads the exact observed-gate producer bundle and executes fail-closed without evidence", async () => {
   const runtimePackage = await loadValidatedAuthoritativePaperRuntimePackage();
-  assert.equal(runtimePackage.sourceSha, "3f85003368830fb570c05b3b2060da39f515696d");
+  assert.equal(runtimePackage.sourceSha, "3dae58f78d1118bc5b9f5b431adbfa50d63d4f5c");
   assert.match(runtimePackage.sourceGraphSha256, /^[0-9a-f]{64}$/u);
   assert.match(runtimePackage.bundleSha256, /^[0-9a-f]{64}$/u);
   assert.equal(runtimePackage.admissionBundleSchemaVersion, "scanner-paper-admission-evidence-bundle-v1");
@@ -72,6 +72,7 @@ test("validated package loads exact #546 producer bundle and executes fail-close
   assert.equal(runtimePackage.blockedDataSourceContractSchemaVersion, "authoritative-paper-blocked-data-source-contract-v1");
   assert.equal(runtimePackage.simulatedExecutionEvidenceSchemaVersion, "paper-simulated-execution-evidence-v1");
   assert.match(runtimePackage.manifest.sourceFileSha256["api-server/src/services/paper-simulated-execution-evidence.service.ts"], /^[0-9a-f]{64}$/u);
+  assert.match(runtimePackage.manifest.sourceFileSha256["api-server/src/services/authoritative-paper-latency-cost-evidence.service.ts"], /^[0-9a-f]{64}$/u);
   assert.match(runtimePackage.manifest.sourceFileSha256["market-intelligence-sidecar/src/execution-quality.mjs"], /^[0-9a-f]{64}$/u);
   assert.match(runtimePackage.manifest.sourceFileSha256["market-prediction-lab/src/bitget-position-tier-v1.js"], /^[0-9a-f]{64}$/u);
   assert.equal(runtimePackage.costPolicyVersion, null);
@@ -82,18 +83,290 @@ test("validated package loads exact #546 producer bundle and executes fail-close
   assert.equal(runtimePackage.scheduleActivationAuthority, false);
   assert.equal(runtimePackage.financialMutationAllowed, false);
   assert.equal(typeof runtimePackage.createAuthoritativePaperEvidenceSourceWiring, "function");
+  assert.equal(typeof runtimePackage.createAuthoritativePaperNaturalCycleEvidenceSourceWiring, "function");
   assert.equal(typeof runtimePackage.buildPaperSimulatedExecutionEvidence, "function");
   assert.equal(typeof runtimePackage.buildAuthoritativeSizedContractRules, "function");
   assert.equal(typeof runtimePackage.buildAuthoritativePaperExecutionObservation, "function");
   assert.equal(typeof runtimePackage.buildAuthoritativeSupplementalCostEvidence, "function");
+  assert.equal(typeof runtimePackage.collectAuthoritativePaperLatencyCostEvidence, "function");
+  assert.equal(typeof runtimePackage.readBitgetPublicLatencyMidpointQuote, "function");
 
   const producer = runtimePackage.createPaperAdmissionEvidenceProducer(missingEvidenceSources());
   const result = await producer({ card: {}, market: "CRYPTO_FUTURES" });
   assert.equal(result.status, "BLOCKED");
   assert.deepEqual(result.blockers, ["P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING"]);
+  assert.equal(result.gateObservability.qualityGate.status, "UNKNOWN");
+  assert.equal(result.gateObservability.riskGate.status, "UNKNOWN");
+  assert.equal(result.gateObservability.reasonObservations[0].canonicalReason, "DATA_MISSING");
+  assert.equal(result.gateObservability.reasonObservations[0].lossless, true);
   assert.equal(result.executionAuthority, "NONE");
   assert.equal(result.privateTradingApiAllowed, false);
   assert.equal(result.productionMutationAllowed, false);
+});
+
+test("Natural candidate fails closed without bracketed latency and binds canonical latency plus funding when all costs exist", async () => {
+  const runtimePackage = await loadValidatedAuthoritativePaperRuntimePackage();
+  const nowMs = Date.now() - 1_000;
+  const observedAt = new Date(nowMs - 1_000).toISOString();
+  const strategyScope = "scanner-crypto-futures-swing_LONG";
+  const candidate = Object.freeze({
+    signal: Object.freeze({
+      signalId: "natural-six-source-fixture-1",
+      market: "CRYPTO_FUTURES",
+      symbol: "BTCUSDT",
+      timestampMs: nowMs - 1_000,
+      ttlMs: 60_000,
+      expiresAtMs: nowMs + 59_000,
+      style: "SWING",
+      timeframe: "1H",
+      horizon: 1,
+      direction: "LONG",
+      signalDirection: "LONG",
+      strategyIdentity: Object.freeze({
+        strategyId: strategyScope,
+        strategyVersion: "fixture-v1",
+        parameterHash: "a".repeat(64),
+        researchCodeSha: SOURCE_SHA,
+        costPolicyVersion: "fixture-cost-v1",
+      }),
+    }),
+    executionAuthority: "NONE",
+    liveOrderAllowed: false,
+    privateTradingApiAllowed: false,
+    orderSubmitted: false,
+    exchangeRequestSent: false,
+  });
+  const learningSnapshot = Object.freeze({
+    signalId: candidate.signal.signalId,
+    timestamp: observedAt,
+    market: "CRYPTO_FUTURES",
+    symbol: "BTCUSDT",
+    symbolName: "Bitcoin",
+    strategyHorizon: "SWING",
+    direction: "LONG",
+    signalScore: 90,
+    displayConfidence: 0.9,
+    referencePrice: 100,
+    entryPrice: 100,
+    stopLoss: 99,
+    target1: 102,
+    target2: 103,
+    riskReward: 2,
+    timeframes: Object.freeze(["1H"]),
+    strategyProfileVersion: "fixture-v1",
+    indicatorSnapshot: Object.freeze({}),
+    indicatorScores: Object.freeze({}),
+    patternSnapshot: Object.freeze({}),
+    volumeContext: Object.freeze({}),
+    volatilityContext: Object.freeze({}),
+    trendContext: Object.freeze({}),
+    marketRegime: "UPTREND",
+    liquidityContext: Object.freeze({}),
+    aiValidatorResult: null,
+    riskEngineResult: null,
+    dataProvenance: Object.freeze(["canonical-forward-public-observation"]),
+    dataTimestamp: observedAt,
+    immutable: true,
+    executionAuthority: "NONE",
+  });
+  const snapshot = runtimePackage.createImmutablePaperTradingStateSnapshot({
+    state: paperState(nowMs),
+    sourceOwner: "AUTHENTICATED_PAPER_STATE_FIXTURE",
+    sourceSha: SOURCE_SHA,
+    market: "CRYPTO_FUTURES",
+    currency: "USDT",
+    provenance: ["authenticated-paper-state-fixture"],
+    publisherAccountIdSha256: PUBLISHER_ACCOUNT_ID_SHA256,
+    observedAtMs: nowMs,
+    maximumAgeMs: 30_000,
+  });
+  const publicEvidence = Object.freeze({
+    provider: "bitget",
+    productType: "USDT-FUTURES",
+    symbol: "BTCUSDT",
+    lastPrice: 100,
+    bidPrice: 99.9,
+    askPrice: 100,
+    markPrice: 100,
+    indexPrice: 100,
+    tickerTimestampMs: nowMs,
+    fundingRate: 0.0001,
+    fundingIntervalHours: 8,
+    nextFundingUpdateMs: nowMs + 30_000,
+    openInterest: 1_000_000,
+    openInterestTimestampMs: nowMs,
+    minTradeNum: 0.001,
+    sizeMultiplier: 0.001,
+    minTradeUsdt: 0.1,
+    priceStep: 0.1,
+    makerFeeRate: 0.0002,
+    takerFeeRate: 0.0006,
+    minLeverage: 1,
+    maxLeverage: 100,
+    candles5m: Object.freeze([]),
+    candles1h: Object.freeze([]),
+    benchmarkBtc1h: Object.freeze([]),
+    benchmarkBtc1d: Object.freeze([]),
+    observedAtMs: nowMs,
+    dataQuality: "ready",
+  });
+  const policyEvidence = Object.freeze({
+    schemaVersion: "authoritative-paper-generic-risk-policy-evidence-v1",
+    policyId: "fixture-explicit-paper-risk",
+    policyVersion: "v1",
+    source: "CANONICAL_EXPLICIT_PAPER_RISK_POLICY_FIXTURE",
+    provenance: Object.freeze(["canonical-risk-policy-record-fixture"]),
+    observedAtMs: nowMs,
+    maximumAgeMs: 30_000,
+    researchCodeSha: SOURCE_SHA,
+    marketScopes: Object.freeze(["CRYPTO_FUTURES"]),
+    strategyScopes: Object.freeze([strategyScope]),
+    symbolScopes: Object.freeze(["BTCUSDT"]),
+    riskPercent: 0.5,
+    requestedLeverage: 1,
+    maximumLeverage: 100,
+    marginMode: "isolated",
+  });
+  const card = Object.freeze({
+    signalId: candidate.signal.signalId,
+    symbol: "BTCUSDT",
+    action: "LONG",
+  });
+  async function runCase(supplementalCostInput, { bracketLatency = true } = {}) {
+    let supplementalCalls = 0;
+    let l2Calls = 0;
+    let clockNow = nowMs;
+    let expectPostQuote = false;
+    const wiring = runtimePackage.createAuthoritativePaperNaturalCycleEvidenceSourceWiring({
+      researchCodeSha: SOURCE_SHA,
+      sources: {
+        paperStateSnapshotForCard: async () => snapshot,
+        riskPolicyRecordForCard: async () => Object.freeze({
+          schemaVersion: "authoritative-paper-generic-risk-policy-record-v1",
+          recordId: "fixture-risk-record",
+          recordVersion: "v1",
+          policyId: policyEvidence.policyId,
+          policyVersion: policyEvidence.policyVersion,
+          source: "CANONICAL_READ_ONLY_FIXTURE_RECORD",
+          provenance: Object.freeze(["fixture-persisted-record"]),
+          observedAtMs: nowMs,
+          maximumAgeMs: 30_000,
+          researchCodeSha: SOURCE_SHA,
+          marketScopes: policyEvidence.marketScopes,
+          strategyScopes: policyEvidence.strategyScopes,
+          symbolScopes: policyEvidence.symbolScopes,
+          riskPercent: policyEvidence.riskPercent,
+          requestedLeverage: policyEvidence.requestedLeverage,
+          maximumLeverage: policyEvidence.maximumLeverage,
+          marginMode: policyEvidence.marginMode,
+        }),
+        supplementalCostInputForCard: async () => {
+          supplementalCalls += 1;
+          return supplementalCostInput;
+        },
+        positionTiersForCard: async () => Object.freeze([
+          Object.freeze({ startUnit: "0", keepMarginRate: "0.004" }),
+        ]),
+      },
+      dependencies: {
+        resolveCanonicalIdentity: () => Object.freeze({ paperCandidate: candidate, blockers: Object.freeze([]) }),
+        latestEvidenceTimestamp: () => observedAt,
+        prepareObservation: () => Object.freeze({
+          status: "OBSERVATION_READY",
+          observation: Object.freeze({ snapshot: learningSnapshot }),
+        }),
+        buildPublicRequests: () => Object.freeze({
+          ticker: Object.freeze({ method: "GET", path: "/fixture", query: "symbol=BTCUSDT" }),
+        }),
+        fetchPublicJson: async (url) => {
+          if (url.pathname.endsWith("/orderbook")) {
+            l2Calls += 1;
+            const isExecutionBook = url.searchParams.get("limit") === "50";
+            const isPostQuote = !isExecutionBook && expectPostQuote;
+            if (isExecutionBook) expectPostQuote = true;
+            if (isPostQuote) expectPostQuote = false;
+            return Object.freeze({
+              code: "00000",
+              data: Object.freeze({
+                ts: String(bracketLatency ? clockNow : nowMs),
+                b: Object.freeze([[isPostQuote ? 99.91 : 99.9, 1_000]]),
+                a: Object.freeze([[isPostQuote ? 100.01 : 100, 1_000]]),
+              }),
+            });
+          }
+          return Object.freeze({ code: "00000", data: Object.freeze([]) });
+        },
+        buildPublicEvidence: () => publicEvidence,
+        now: () => {
+          clockNow += 10;
+          return clockNow;
+        },
+      },
+    });
+    const producer = runtimePackage.createPaperAdmissionEvidenceProducer({
+      paperCandidateSource: wiring.paperCandidateForCard,
+      learningSnapshotSource: wiring.learningSnapshotForCard,
+      paperStateSource: wiring.paperStateForCard,
+      contractRulesSource: wiring.contractRulesForCard,
+      publicEvidenceSource: wiring.publicEvidenceForCard,
+      executionObservationSource: wiring.executionObservationForCard,
+      supplementalCostEvidenceSource: wiring.supplementalCostEvidenceForCard,
+    });
+    const result = await producer({ card, market: "CRYPTO_FUTURES" });
+    return { result, wiring, supplementalCalls, l2Calls };
+  }
+
+  const missing = await runCase(null);
+  const sourceCodes = missing.result.gateObservability.reasonObservations.map((row) => row.sourceCode);
+  assert.equal(missing.result.status, "BLOCKED");
+  assert.deepEqual(sourceCodes, [
+    "P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING:supplementalCostEvidence",
+  ]);
+  assert.equal(missing.supplementalCalls, 1);
+  assert.ok(missing.l2Calls > 0);
+  assert.equal(missing.wiring.naturalCycleSourceGraph.sizingIterationLimit, 8);
+  assert.equal(missing.wiring.naturalCycleSourceGraph.policyDefaultsAllowed, false);
+  assert.equal(missing.wiring.naturalCycleSourceGraph.unknownCostIsZero, false);
+  assert.equal(missing.wiring.naturalCycleSourceGraph.publicDepthIsRealFill, false);
+  assert.equal(missing.wiring.naturalCycleSourceGraph.realFillObserved, false);
+  assert.equal(
+    missing.wiring.naturalCycleSourceGraph.latencyEvidenceOwner,
+    "AUTHORITATIVE_PUBLIC_BBO_REQUEST_BRACKET",
+  );
+  assert.equal(missing.wiring.naturalCycleSourceGraph.latencyEvidenceQuality, "ESTIMATED");
+  assert.equal(missing.wiring.naturalCycleSourceGraph.latencyMissingIsZero, false);
+  assert.equal(missing.wiring.naturalCycleSourceGraph.executionAuthority, "NONE");
+
+  const observedCost = (valuePercent, source) => Object.freeze({
+    valuePercent,
+    quality: "OBSERVED",
+    source: `TEST_ONLY_${source}`,
+    observedAtMs: nowMs,
+  });
+  const completeInput = Object.freeze({
+    costPolicyId: candidate.signal.strategyIdentity.costPolicyVersion,
+    observedAtMs: nowMs,
+    latency: observedCost(99, "UNBOUND_LATENCY_MUST_NOT_PASS"),
+    liquidityImpact: observedCost(0.02, "INDEPENDENT_LIQUIDITY_IMPACT_COST"),
+    partialFillImpact: observedCost(0.03, "PARTIAL_FILL_IMPACT_COST"),
+    funding: observedCost(99, "UNBOUND_FUNDING_MUST_NOT_PASS"),
+  });
+  const blockedLatency = await runCase(completeInput, { bracketLatency: false });
+  assert.equal(blockedLatency.result.status, "BLOCKED");
+  assert.deepEqual(
+    blockedLatency.result.gateObservability.reasonObservations.map((row) => row.sourceCode),
+    ["P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING:supplementalCostEvidence"],
+  );
+
+  const complete = await runCase(completeInput);
+  assert.equal(complete.result.status, "READY", JSON.stringify(complete.result));
+  assert.equal(complete.result.bundle.executionEvidence.costPolicy.fundingRate, 0.0001);
+  assert.ok(complete.result.bundle.executionEvidence.costPolicy.latencyRate > 0);
+  assert.ok(complete.result.bundle.executionEvidence.costPolicy.latencyRate < 0.01);
+  assert.ok(complete.l2Calls >= 3);
+  assert.equal(complete.result.executionAuthority, "NONE");
+  assert.equal(complete.result.orderSubmitted, false);
+  assert.equal(complete.result.privateTradingApiAllowed, false);
 });
 
 test("validated package reuses the sidecar book walk only as labeled simulated execution", async () => {
@@ -105,7 +378,7 @@ test("validated package reuses the sidecar book walk only as labeled simulated e
     direction: "LONG",
     targetQuantity: 2,
     bids: [[99, 3]],
-    asks: [[100, 1], [101, 1]],
+    asks: [[100, 1], [100.1, 1]],
     observedAtMs: 2_000,
     requestStartedAtMs: 1_990,
     requestCompletedAtMs: 2_000,
@@ -128,14 +401,79 @@ test("validated package reuses the sidecar book walk only as labeled simulated e
   assert.equal(evidence.observed.latencyEvidence.costPercent, null);
   assert.equal(evidence.estimated.partialFillEstimate.quality, "UNCALIBRATED_MODEL_ONLY");
   assert.equal(evidence.confidence.numericConfidence, null);
+  assert.equal(evidence.paperSimulation.status, "READY");
+  assert.equal(evidence.paperSimulation.evidenceClass, "SIMULATED");
+  assert.equal(evidence.paperSimulation.marketDataClass, "public-L2");
+  assert.deepEqual(evidence.paperSimulation.provenance.slice(0, 2), ["SIMULATED", "public-L2"]);
+  assert.equal(evidence.paperSimulation.realFillClaim, false);
+  assert.equal(evidence.paperSimulation.liveFillCalibrationRequired, false);
+  assert.equal(evidence.liveGradeFillReadiness.status, "BLOCKED_DATA");
+  assert.equal(evidence.liveGradeFillReadiness.sampleProvenance, null);
+  assert.equal(evidence.liveGradeFillReadiness.submittedExecutionSamples, null);
+  assert.equal(evidence.liveGradeFillReadiness.minimumSubmittedExecutionSamples, 500);
+  assert.equal(evidence.liveGradeFillReadiness.promotedToRealFill, false);
   assert.equal(evidence.costEvidenceReady, false);
-  assert.equal(evidence.blockers.includes("CALIBRATED_FILL_MODEL_EVIDENCE_MISSING"), true);
+  assert.equal(evidence.blockers.includes("CALIBRATED_FILL_MODEL_EVIDENCE_MISSING"), false);
+  assert.equal(evidence.liveGradeFillReadiness.blockers.includes("CALIBRATED_FILL_MODEL_EVIDENCE_MISSING"), true);
   assert.equal(evidence.blockers.includes("LATENCY_COST_EVIDENCE_UNAVAILABLE"), true);
   assert.equal(Object.isFrozen(evidence), true);
   assert.equal(Object.isFrozen(evidence.estimated), true);
 });
 
-test("callback owners require sized tiers, calibrated execution, and complete non-zero-filled costs", async () => {
+test("Live fill readiness requires 500 submitted-execution samples and never promotes Paper simulation to a real fill", async () => {
+  const runtimePackage = await loadValidatedAuthoritativePaperRuntimePackage();
+  const nowMs = 2_000_000;
+  const baseInput = {
+    source: "BITGET_PUBLIC_DEPTH_CONTRACT_FIXTURE",
+    market: "CRYPTO_FUTURES",
+    symbol: "ETHUSDT",
+    direction: "LONG",
+    targetQuantity: 2,
+    bids: [[99, 3]],
+    asks: [[100, 1], [100.1, 1]],
+    observedAtMs: nowMs - 100,
+    requestStartedAtMs: nowMs - 120,
+    requestCompletedAtMs: nowMs - 100,
+    maximumAgeMs: 30_000,
+    provenance: ["contract-fixture-public-depth"],
+    nowMs,
+  };
+  const model = {
+    modelId: "LIVE_FILL_CALIBRATION_CONTRACT_FIXTURE",
+    fillProbability: 0.9,
+    evaluationSamples: 500,
+    brierScore: 0.1,
+    calibrationError: 0.05,
+    evaluatedAt: nowMs - 1_000,
+  };
+
+  const unproven = runtimePackage.buildPaperSimulatedExecutionEvidence({
+    ...baseInput,
+    calibratedFillModel: model,
+  });
+  assert.equal(unproven.paperSimulation.status, "READY");
+  assert.equal(unproven.liveGradeFillReadiness.status, "BLOCKED_DATA");
+  assert.equal(unproven.liveGradeFillReadiness.submittedExecutionSamples, null);
+  assert.equal(unproven.liveGradeFillReadiness.blockers.includes("LIVE_SUBMITTED_EXECUTION_PROVENANCE_REQUIRED"), true);
+  assert.equal(unproven.estimated.partialFillEstimate.calibratedFillProbability, null);
+  assert.equal(unproven.estimated.partialFillEstimate.quality, "UNCALIBRATED_MODEL_ONLY");
+  assert.equal(unproven.confidence.classification, "UNCALIBRATED");
+
+  const submitted = runtimePackage.buildPaperSimulatedExecutionEvidence({
+    ...baseInput,
+    calibratedFillModel: { ...model, sampleProvenance: "LIVE_SUBMITTED_EXECUTION" },
+  });
+  assert.equal(submitted.liveGradeFillReadiness.status, "READY");
+  assert.equal(submitted.liveGradeFillReadiness.submittedExecutionSamples, 500);
+  assert.equal(submitted.liveGradeFillReadiness.minimumSubmittedExecutionSamples, 500);
+  assert.equal(submitted.liveGradeFillReadiness.promotedToRealFill, false);
+  assert.equal(submitted.realFillClaim, false);
+  assert.equal(submitted.paperSimulation.evidenceClass, "SIMULATED");
+  assert.equal(submitted.estimated.partialFillEstimate.quality, "CALIBRATED_ESTIMATE");
+  assert.equal(submitted.confidence.classification, "LIVE_GRADE_CALIBRATED");
+});
+
+test("callback owners separate Paper public-L2 simulation from Live fill calibration and still require complete costs", async () => {
   const runtimePackage = await loadValidatedAuthoritativePaperRuntimePackage();
   const nowMs = 2_000_000;
   const publicEvidence = {
@@ -184,35 +522,39 @@ test("callback owners require sized tiers, calibrated execution, and complete no
   }).contractRules.maintenanceMarginRate, 0.01);
   assert.equal(contract.executionAuthority, "NONE");
 
+  const executionEvidenceInput = {
+    source: "BITGET_PUBLIC_DEPTH",
+    market: "CRYPTO_FUTURES",
+    symbol: "ETHUSDT",
+    direction: "LONG",
+    targetQuantity: 2,
+    bids: [[99, 5]],
+    asks: [[100, 1], [100.1, 2]],
+    observedAtMs: nowMs - 100,
+    requestStartedAtMs: nowMs - 120,
+    requestCompletedAtMs: nowMs - 100,
+    maximumAgeMs: 30_000,
+    provenance: ["bitget-public-v2-merge-depth"],
+  };
   const execution = runtimePackage.buildAuthoritativePaperExecutionObservation({
-    executionEvidenceInput: {
-      source: "BITGET_PUBLIC_DEPTH",
-      market: "CRYPTO_FUTURES",
-      symbol: "ETHUSDT",
-      direction: "LONG",
-      targetQuantity: 2,
-      bids: [[99, 5]],
-      asks: [[100, 1], [101, 2]],
-      observedAtMs: nowMs - 100,
-      requestStartedAtMs: nowMs - 120,
-      requestCompletedAtMs: nowMs - 100,
-      maximumAgeMs: 30_000,
-      provenance: ["bitget-public-v2-merge-depth"],
-      calibratedFillModel: {
-        modelId: "PAPER_FILL_CALIBRATION_V1",
-        fillProbability: 0.9,
-        evaluationSamples: 500,
-        brierScore: 0.1,
-        calibrationError: 0.05,
-        evaluatedAt: nowMs - 1_000,
-      },
-    },
+    executionEvidenceInput,
     riskPolicy,
     nowMs,
   });
   assert.equal(execution.partialFill.model, "ORDER_BOOK");
+  assert.equal(execution.partialFill.source, "SIMULATED/public-L2:VISIBLE_L2_BOOK_WALK_ONLY");
   assert.equal(execution.slippage.quality, "ESTIMATED");
+  assert.equal(execution.providerProvenance.startsWith("SIMULATED+public-L2+"), true);
+  assert.equal(execution.executionProvenance.evidenceClass, "SIMULATED");
+  assert.equal(execution.executionProvenance.marketDataClass, "public-L2");
+  assert.equal(execution.executionProvenance.realFillClaim, false);
+  assert.equal(execution.executionProvenance.liveFillCalibrationStatus, "BLOCKED_DATA");
   assert.equal(execution.leverage, 1);
+  assert.throws(() => runtimePackage.buildAuthoritativePaperExecutionObservation({
+    executionEvidenceInput,
+    riskPolicy: null,
+    nowMs,
+  }), /AUTHORITATIVE_PAPER_RISK_POLICY_EVIDENCE_INVALID/u);
 
   const component = (valuePercent, quality, source) => ({
     valuePercent,
@@ -440,6 +782,13 @@ test("lossless Paper state snapshot preserves the complete state and never suppl
       now: () => nowMs + 1,
     });
     await assert.rejects(wrongAccountSource(), /PAPER_STATE_PUBLISHER_ACCOUNT_BINDING_MISMATCH/u);
+    const staleSource = createPaperStateSourceFromLosslessSnapshotFile({
+      snapshotPath: path,
+      runtimePackage,
+      expectedPublisherAccountIdSha256: PUBLISHER_ACCOUNT_ID_SHA256,
+      now: () => nowMs + 30_001,
+    });
+    await assert.rejects(staleSource(), /PAPER_STATE_SNAPSHOT_STALE_OR_FUTURE/u);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -503,7 +852,14 @@ test("owner data contracts preserve UNKNOWN and separate public observations fro
   assert.equal(contracts.executionObservationForCard.fixedLatencyAllowed, false);
   assert.equal(contracts.executionObservationForCard.simulatedModelStatus, "EXECUTABLE_BLOCKED_DATA");
   assert.equal(contracts.executionObservationForCard.executionMode, "SIMULATED_EXECUTION_ONLY");
+  assert.equal(contracts.executionObservationForCard.paperSimulationStatus, "READY_WHEN_PUBLIC_L2_INPUTS_ARE_VALID");
+  assert.deepEqual(contracts.executionObservationForCard.paperSimulationProvenance, ["SIMULATED", "public-L2"]);
+  assert.equal(contracts.executionObservationForCard.liveFillCalibrationStatus, "BLOCKED_DATA_UNTIL_LIVE_SUBMITTED_EXECUTION_EVIDENCE");
+  assert.equal(contracts.executionObservationForCard.minimumLiveSubmittedExecutionSamples, 500);
+  assert.equal(contracts.executionObservationForCard.liveFillCalibrationRequiredForPaperObservation, false);
+  assert.equal(contracts.executionObservationForCard.liveFillCalibrationRequiredForRealFillClaim, true);
   assert.equal(contracts.executionObservationForCard.realFillClaimAllowed, false);
+  assert.equal(contracts.executionObservationForCard.simulatedObservationPromotionToRealFillAllowed, false);
   assert.equal(contracts.executionObservationForCard.costEvidenceReady, false);
 
   assert.deepEqual(contracts.supplementalCostEvidenceForCard.partiallyOwnedComponents, [
