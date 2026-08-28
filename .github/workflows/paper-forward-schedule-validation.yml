@@ -7,14 +7,22 @@ on:
       - api-server/scripts/build-authoritative-paper-runtime-package.mjs
       - api-server/src/services/authoritative-paper-callback-owners.service.ts
       - api-server/src/services/authoritative-paper-evidence-sources.service.ts
+      - api-server/src/services/authoritative-paper-execution-cost-sources.service.ts
       - api-server/src/services/authoritative-paper-runtime-package.entry.ts
       - api-server/src/services/paper-trading-state-snapshot.service.ts
       - api-server/src/services/paper-trading-state-publisher.service.ts
       - api-server/src/routes/paper-trading.ts
       - api-server/src/routes/paper-trading.smoke.test.ts
       - api-server/src/services/paper-simulated-execution-evidence.service.ts
+      - api-server/src/services/crypto-signal-scanner.service.ts
+      - api-server/src/services/crypto-signal-scanner.service.test.ts
+      - api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.ts
+      - api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.test.ts
+      - api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.ts
+      - api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.test.ts
       - market-intelligence-sidecar/src/execution-quality.mjs
       - market-intelligence-sidecar/src/execution-quality.d.mts
+      - market-intelligence-sidecar/tests/execution-quality.test.mjs
       - market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json
       - market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs
       - market-prediction-lab/src/authoritative-natural-paper-accounting-v1.js
@@ -23,6 +31,7 @@ on:
       - market-prediction-lab/src/authoritative-paper-runtime-package-v1.js
       - market-prediction-lab/src/authoritative-paper-natural-funnel-v1.js
       - market-prediction-lab/src/canonical-paper-admission-bundle-injection-runtime-v1.js
+      - market-prediction-lab/src/canonical-meaningful-search-paper-runtime-v1.js
       - market-prediction-lab/src/bitget-position-tier-v1.js
       - market-prediction-lab/src/bitget-position-tier-v1.d.ts
       - market-prediction-lab/src/eth-v6-paper-forward-source-v1.js
@@ -36,11 +45,23 @@ on:
       - market-prediction-lab/tests/authoritative-paper-runtime-package-v1.test.js
       - market-prediction-lab/tests/authoritative-paper-natural-funnel-v1.test.js
       - market-prediction-lab/tests/canonical-paper-admission-bundle-injection-runtime-v1.test.js
+      - market-prediction-lab/tests/canonical-meaningful-search-paper-runtime-v1.test.js
       - market-prediction-lab/tests/meaningful-search-scheduled-paper-provider-v1.test.js
       - market-prediction-lab/tests/natural-paper-account-cli-contract-v1.test.js
       - market-prediction-lab/tests/paper-forward-schedule-authoritative-source-wiring-v1.test.js
       - market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
+      - market-prediction-lab/tests/recurring-paper-loop-v1.test.js
       - market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
+      - research-production/deploy/prepare-paper-state-readonly-transport.mjs
+      - research-production/deploy/research-production@.service
+      - research-production/src/engine.mjs
+      - research-production/src/natural-cycle-verdict-trace.mjs
+      - research-production/test/paper-state-readonly-transport.test.mjs
+      - research-production/test/research-engine.test.mjs
+      - research-production/test/natural-cycle-verdict-trace.test.mjs
+      - market-prediction-lab/tests/research-production-readonly-evidence-observability.test.js
+      - ops/research-production-readonly-evidence.sh
+      - .github/workflows/research-production-natural-cycle-evidence.yml
       - ops/install-paper-forward-schedule.sh
       - ops/disable-paper-forward-schedule.sh
       - .github/workflows/paper-forward-schedule-activation.yml
@@ -97,7 +118,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
-            base="${{ github.event.pull_request.base.sha }}"
+            base="$(git merge-base HEAD "origin/${{ github.event.pull_request.base.ref }}")"
           else
             base="$(git merge-base HEAD origin/main)"
           fi
@@ -109,14 +130,22 @@ jobs:
             api-server/scripts/build-authoritative-paper-runtime-package.mjs
             api-server/src/services/authoritative-paper-callback-owners.service.ts
             api-server/src/services/authoritative-paper-evidence-sources.service.ts
+            api-server/src/services/authoritative-paper-execution-cost-sources.service.ts
             api-server/src/services/authoritative-paper-runtime-package.entry.ts
             api-server/src/services/paper-trading-state-snapshot.service.ts
             api-server/src/services/paper-trading-state-publisher.service.ts
             api-server/src/routes/paper-trading.ts
             api-server/src/routes/paper-trading.smoke.test.ts
             api-server/src/services/paper-simulated-execution-evidence.service.ts
+            api-server/src/services/crypto-signal-scanner.service.ts
+            api-server/src/services/crypto-signal-scanner.service.test.ts
+            api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.ts
+            api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.test.ts
+            api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.ts
+            api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.test.ts
             market-intelligence-sidecar/src/execution-quality.mjs
             market-intelligence-sidecar/src/execution-quality.d.mts
+            market-intelligence-sidecar/tests/execution-quality.test.mjs
             market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json
             market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs
             market-prediction-lab/src/authoritative-natural-paper-accounting-v1.js
@@ -125,11 +154,13 @@ jobs:
             market-prediction-lab/src/authoritative-paper-runtime-package-v1.js
             market-prediction-lab/src/authoritative-paper-natural-funnel-v1.js
             market-prediction-lab/src/canonical-paper-admission-bundle-injection-runtime-v1.js
+            market-prediction-lab/src/canonical-meaningful-search-paper-runtime-v1.js
             market-prediction-lab/src/bitget-position-tier-v1.js
             market-prediction-lab/src/bitget-position-tier-v1.d.ts
             market-prediction-lab/src/eth-v6-paper-forward-source-v1.js
             market-prediction-lab/src/eth-v6-paper-settlement-source-v1.js
             market-prediction-lab/src/meaningful-search-scheduled-paper-provider-v1.js
+            market-prediction-lab/src/four-market-paper-settlement-v1.js
             market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
             market-prediction-lab/src/recurring-paper-loop-v1.js
             market-prediction-lab/scripts/run-paper-forward-schedule.js
@@ -138,13 +169,26 @@ jobs:
             market-prediction-lab/tests/authoritative-paper-runtime-package-v1.test.js
             market-prediction-lab/tests/authoritative-paper-natural-funnel-v1.test.js
             market-prediction-lab/tests/canonical-paper-admission-bundle-injection-runtime-v1.test.js
+            market-prediction-lab/tests/canonical-meaningful-search-paper-runtime-v1.test.js
+            market-prediction-lab/tests/four-market-paper-settlement-v1.test.js
             market-prediction-lab/tests/meaningful-search-scheduled-paper-provider-v1.test.js
             market-prediction-lab/tests/natural-paper-account-cli-contract-v1.test.js
             market-prediction-lab/tests/paper-forward-canonical-admission-cutover-v1.test.js
             market-prediction-lab/tests/paper-forward-research-natural-source-integration-v1.test.js
             market-prediction-lab/tests/paper-forward-schedule-authoritative-source-wiring-v1.test.js
             market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
+            market-prediction-lab/tests/recurring-paper-loop-v1.test.js
             market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
+            research-production/deploy/prepare-paper-state-readonly-transport.mjs
+            research-production/deploy/research-production@.service
+            research-production/src/engine.mjs
+            research-production/src/natural-cycle-verdict-trace.mjs
+            research-production/test/paper-state-readonly-transport.test.mjs
+            research-production/test/research-engine.test.mjs
+            research-production/test/natural-cycle-verdict-trace.test.mjs
+            market-prediction-lab/tests/research-production-readonly-evidence-observability.test.js
+            ops/research-production-readonly-evidence.sh
+            .github/workflows/research-production-natural-cycle-evidence.yml
             ops/install-paper-forward-schedule.sh
             ops/disable-paper-forward-schedule.sh
             .github/workflows/paper-forward-schedule-activation.yml
@@ -234,7 +278,7 @@ jobs:
           grep -F 'paper-forward-authoritative-account-v1' market-prediction-lab/src/paper-forward-schedule-runtime-v1.js >/dev/null
           grep -F 'RESEARCH_PRODUCTION' market-prediction-lab/scripts/run-paper-forward-schedule.js >/dev/null
           grep -F 'loadValidatedAuthoritativePaperRuntimePackage' market-prediction-lab/scripts/run-paper-forward-schedule.js >/dev/null
-          grep -F '3f85003368830fb570c05b3b2060da39f515696d' market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json >/dev/null
+          grep -F '3dae58f78d1118bc5b9f5b431adbfa50d63d4f5c' market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json >/dev/null
           grep -F '"executionAuthority": "NONE"' market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json >/dev/null
           grep -F '"privateApiAllowed": false' market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json >/dev/null
           grep -F '"liveTrading": false' market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json >/dev/null
