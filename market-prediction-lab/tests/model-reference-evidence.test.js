@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { sha256 } from "../src/data-quality.js";
+import { materializeExactTrainValidationSplits } from "../src/dataset-export.js";
 import {
   MODEL_REFERENCE_COST_POLICY_VERSION,
   MODEL_REFERENCE_EVIDENCE_SCHEMA_VERSION,
@@ -19,7 +20,6 @@ import {
 import { buildCompositeDatasetProvenance, sha256Canonical } from "../src/research-cache-provenance.js";
 
 const SHA_A = "a".repeat(40);
-const SHA_B = "b".repeat(40);
 const GROUP = "crypto-futures-15m";
 const COMPONENTS = Object.freeze({
   "btcusdt-futures-15m-52d:train": "1".repeat(64),
@@ -55,10 +55,16 @@ function records(prefix, count, offset = 0) {
 function sourceAttestation(overrides = {}) {
   return {
     sourceKind: "GENUINE_MARKET_DATA",
+    futureOnly: true,
     reconstructed: false,
+    historicalReconstruction: false,
     synthetic: false,
+    replayDerived: false,
     shadowDerived: false,
+    testFixture: false,
+    oosIncluded: false,
     finalHoldoutIncluded: false,
+    finalHoldoutAccessed: false,
     ...overrides,
   };
 }
@@ -148,26 +154,38 @@ test("producer identity refuses missing immutable provenance or non-exact frozen
   assert.throws(() => buildCanonicalModelReferenceStrategyIdentity({ ...input, ruleWeight: 0.5 }), /frozen blend weights/);
 });
 
-async function fixture({ strategyIdentity = null, attestation = sourceAttestation() } = {}) {
+async function fixture({
+  strategyIdentity = null,
+  attestation = sourceAttestation(),
+  trainRecords = records("train", 12),
+  validationRecords = records("validation", 6, 10_000_000),
+  oosRecords = records("oos", 5, 20_000_000),
+} = {}) {
   const directory = await mkdtemp(join(tmpdir(), "model-reference-evidence-"));
   try {
     const root = join(directory, "reference-evidence");
     const modelSha = sha256(Buffer.from(JSON.stringify(MODEL), "utf8"));
+    const consumedSplits = await materializeExactTrainValidationSplits(join(root, GROUP, "records"), {
+      train: trainRecords,
+      validation: validationRecords,
+      oos: oosRecords,
+    });
     const manifest = await preserveFutureModelReferenceEvidence({
       outputRoot: root,
       group: GROUP,
-      trainRecords: records("train", 12),
-      validationRecords: records("validation", 6, 10_000_000),
+      consumedSplits,
       model: MODEL,
       modelSha,
       datasetComponents: COMPONENTS,
       researchCodeSha: SHA_A,
-      trainingCodeSha: SHA_B,
+      trainingCodeSha: SHA_A,
+      producerSha: SHA_A,
+      trainingParameters: { epochs: 520, learningRate: 0.075, l2: 0.003, patience: 60, calibration: "validation-temperature-scaling-v1" },
       measuredAt: "2026-08-26T00:00:00.000Z",
       strategyIdentity,
       sourceAttestation: attestation,
     });
-    return { directory, root, packageRoot: join(root, GROUP), manifest };
+    return { directory, root, packageRoot: join(root, GROUP), manifest, consumedSplits };
   } catch (error) {
     await rm(directory, { recursive: true, force: true });
     throw error;
@@ -191,6 +209,18 @@ test("exact stored TRAIN and VALIDATION bytes produce the preserved split digest
     assert.equal(sha256(validation), value.manifest.validationSplitDigest);
     assert.equal(value.manifest.trainSampleN, 12);
     assert.equal(value.manifest.validationSampleN, 6);
+    assert.notEqual(value.manifest.trainDatasetIdentity, value.manifest.validationDatasetIdentity);
+    assert.notEqual(value.manifest.trainDatasetDigest, value.manifest.validationDatasetDigest);
+    assert.equal(value.manifest.trainDatasetDigest, value.manifest.trainSplitDigest);
+    assert.equal(value.manifest.validationDatasetDigest, value.manifest.validationSplitDigest);
+    assert.equal(value.manifest.splitIsolationStatus, "PASS");
+    assert.equal(value.manifest.splitIsolation.oosSampleN, 5);
+    assert.equal(value.manifest.splitIsolation.finalHoldoutAccessed, false);
+    assert.equal(value.manifest.producerSha, SHA_A);
+    assert.equal(value.manifest.trainingInvocation.producerSha, SHA_A);
+    assert.equal(sha256Canonical(value.manifest.trainingInvocation), value.manifest.trainingInvocationDigest);
+    assert.equal(value.manifest.artifactDigest, value.manifest.rawArtifactDigest);
+    assert.equal(value.manifest.artifactIdentity, `prediction-lab-model-reference:${GROUP}:sha256:${value.manifest.rawArtifactDigest}`);
     await assert.rejects(
       readFile(join(value.packageRoot, "records", "test.jsonl")),
       (error) => error?.code === "ENOENT",
@@ -199,6 +229,56 @@ test("exact stored TRAIN and VALIDATION bytes produce the preserved split digest
     assert.equal(assessment.status, "MISSING_EVIDENCE");
     assert.equal(assessment.rawReferenceValid, true);
   } finally { await rm(value.directory, { recursive: true, force: true }); }
+});
+
+test("the training and calibration caller consumes records parsed from the exact stored split bytes", async () => {
+  const source = await readFile(new URL("../scripts/run-market-suite.js", import.meta.url), "utf8");
+  assert.match(source, /materializeExactTrainValidationSplits[\s\S]*trainTinySoftmaxModel\(exactTrainRecords/u);
+  assert.match(source, /exactTrainRecords\s*=\s*consumedSplits\.train\.records/u);
+  assert.match(source, /exactValidationRecords\s*=\s*consumedSplits\.validation\.records/u);
+  assert.match(source, /calibrateTemperature\(exactValidationRecords/u);
+  assert.doesNotMatch(source, /trainTinySoftmaxModel\(split\.train/u);
+  assert.doesNotMatch(source, /calibrateTemperature\(split\.validation/u);
+});
+
+test("TRAIN and VALIDATION independence plus untouched OOS contamination gates fail closed", async (t) => {
+  await t.test("identical exact bytes", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "model-reference-identical-"));
+    const same = records("same", 6);
+    try {
+      await assert.rejects(
+        materializeExactTrainValidationSplits(directory, { train: same, validation: same, oos: records("oos", 3, 20_000_000) }),
+        /exact stored bytes must be distinct/u,
+      );
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+  await t.test("cross-split record identity", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "model-reference-overlap-"));
+    try {
+      await assert.rejects(
+        materializeExactTrainValidationSplits(directory, {
+          train: records("shared", 6),
+          validation: records("shared", 3, 10_000_000),
+          oos: records("oos", 3, 20_000_000),
+        }),
+        /record identity overlap/u,
+      );
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+  await t.test("OOS record identity", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "model-reference-oos-overlap-"));
+    const train = records("train", 6);
+    try {
+      await assert.rejects(
+        materializeExactTrainValidationSplits(directory, {
+          train,
+          validation: records("validation", 3, 10_000_000),
+          oos: [train[0], ...records("oos", 2, 20_000_000)],
+        }),
+        /contains an OOS record identity/u,
+      );
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
 });
 
 test("modified or swapped TRAIN and VALIDATION bytes are rejected", async (t) => {
@@ -290,6 +370,27 @@ test("#664 composite dataset identity is exact and dataset mismatches reject", a
   }
 });
 
+test("split dataset, exact producer SHA, isolation, and training invocation substitutions reject", async (t) => {
+  const cases = [
+    ["train dataset", (manifest) => { manifest.trainDatasetIdentity = "other-train"; }],
+    ["validation dataset", (manifest) => { manifest.validationDatasetDigest = "8".repeat(64); }],
+    ["producer SHA", (manifest) => { manifest.producerSha = "b".repeat(40); }],
+    ["training invocation", (manifest) => { manifest.trainingInvocation.modelSha = "9".repeat(64); }],
+    ["OOS isolation", (manifest) => { manifest.splitIsolation.trainOosOverlapN = 1; }],
+  ];
+  for (const [name, mutate] of cases) {
+    await t.test(name, async () => {
+      const value = await fixture();
+      try {
+        const manifest = await readManifest(value.packageRoot);
+        mutate(manifest);
+        await writeManifest(value.packageRoot, manifest);
+        assert.equal((await validateModelReferenceEvidencePackage(value.packageRoot)).status, "IDENTITY_MISMATCH");
+      } finally { await rm(value.directory, { recursive: true, force: true }); }
+    });
+  }
+});
+
 test("canonical strategy identity plus exact #664 receipt enables VALID provenance", async () => {
   const value = await fixture({ strategyIdentity: completeStrategyIdentity() });
   try {
@@ -346,12 +447,17 @@ test("expired and mismatched #664 artifact receipts fail closed", async (t) => {
   });
 });
 
-test("reconstructed, synthetic, Shadow, and Final Holdout substitutions are rejected", async (t) => {
+test("historical, synthetic, replay, Shadow, OOS, fixture, and Final Holdout substitutions are rejected", async (t) => {
   const cases = [
     ["reconstructed", { reconstructed: true }],
+    ["historical reconstruction", { historicalReconstruction: true }],
     ["synthetic", { synthetic: true }],
+    ["replay", { replayDerived: true }],
     ["Shadow", { sourceKind: "SHADOW", shadowDerived: true }],
+    ["OOS", { oosIncluded: true }],
+    ["test fixture", { testFixture: true }],
     ["Final Holdout", { finalHoldoutIncluded: true }],
+    ["Final Holdout access", { finalHoldoutAccessed: true }],
   ];
   for (const [name, overrides] of cases) {
     await t.test(name, async () => {
