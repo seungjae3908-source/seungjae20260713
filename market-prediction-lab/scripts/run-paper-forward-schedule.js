@@ -3,7 +3,11 @@ import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { AUTHORITATIVE_PAPER_EVIDENCE_SOURCE_OWNERSHIP } from "../src/authoritative-paper-evidence-source-ownership-v1.js";
 import { createAuthoritativePaperForwardDependenciesFromSourceWiring } from "../src/authoritative-paper-runtime-factory-v1.js";
-import { createNaturalFunnelObservedPaperRuntimeFromSourceWiring } from "../src/authoritative-paper-natural-funnel-v1.js";
+import {
+  CANONICAL_NATURAL_PAPER_STAGE_FIELDS,
+  CANONICAL_NATURAL_PAPER_STAGE_ORDER,
+  createNaturalFunnelObservedPaperRuntimeFromSourceWiring,
+} from "../src/authoritative-paper-natural-funnel-v1.js";
 import {
   createLosslessPaperStateSnapshotFileOwner,
   loadValidatedAuthoritativePaperRuntimePackage,
@@ -124,6 +128,159 @@ function naturalFirstZero(measurements) {
     if (measurement.count === 0) return Object.freeze({ stage: measurement.stage, reason: "MEASURED_ZERO" });
   }
   return Object.freeze({ stage: "UNKNOWN", reason: "NO_MEASURED_ZERO" });
+}
+
+const CANONICAL_REASON_TAXONOMY = new Set([
+  "NO_SIGNAL", "QUALITY_GATE", "RISK_GATE", "DATA_STALE", "DATA_MISSING",
+  "MARKET_CLOSED", "PROVIDER_FAILURE", "IDENTITY_MISMATCH", "ACCOUNT_STATE_BLOCK",
+  "COOLDOWN", "DUPLICATE", "REPLAY_ONLY", "UNKNOWN",
+]);
+
+const REASON_SOURCE_STAGE = Object.freeze({
+  SIGNAL_CANDIDATE: "SIGNAL_CANDIDATE",
+  QUALITY_PASSED: "QUALITY_GATE",
+  RISK_PASSED: "RISK_GATE",
+  ENTRY_ELIGIBLE: "ENTRY_ELIGIBLE",
+  ENTRY: "ENTRY",
+  POSITION: "POSITION",
+  EXIT_ELIGIBLE: "EXIT_ELIGIBLE",
+  SETTLEMENT: "SETTLEMENT",
+});
+
+function canonicalUnknownStage(stage, blocker) {
+  return Object.freeze({
+    stage,
+    field: CANONICAL_NATURAL_PAPER_STAGE_FIELDS[stage],
+    status: "UNKNOWN",
+    count: null,
+    blocker,
+    provenance: null,
+    observedAt: null,
+    observationIds: Object.freeze([]),
+    identity: null,
+    naturalCredit: 0,
+    replayCredit: 0,
+    duplicateCredit: 0,
+  });
+}
+
+function creditedCanonicalStage(stage, source, identity, natural) {
+  if (!natural || source?.status !== "MEASURED" || !Number.isInteger(source?.count) || source.count < 0) {
+    return canonicalUnknownStage(stage, natural ? source?.blocker ?? `UNMEASURED_${stage}` : "NON_NATURAL_CYCLE");
+  }
+  const ids = Array.isArray(source.observationIds) ? source.observationIds.filter((value) => typeof value === "string" && value.length > 0) : [];
+  if (ids.length !== source.count || new Set(ids).size !== ids.length) {
+    return canonicalUnknownStage(stage, "DIRECT_OBSERVATION_ID_COVERAGE_INCOMPLETE");
+  }
+  return Object.freeze({
+    ...structuredClone(source),
+    stage,
+    field: CANONICAL_NATURAL_PAPER_STAGE_FIELDS[stage],
+    status: "MEASURED",
+    count: source.count,
+    blocker: null,
+    identity,
+    observationIds: Object.freeze(ids),
+    naturalCredit: source.count,
+    replayCredit: 0,
+    duplicateCredit: 0,
+  });
+}
+
+function canonicalFirstZero(stageCounts) {
+  for (const stage of CANONICAL_NATURAL_PAPER_STAGE_ORDER) {
+    const measurement = stageCounts[CANONICAL_NATURAL_PAPER_STAGE_FIELDS[stage]];
+    if (measurement?.status !== "MEASURED") return Object.freeze({ stage: "UNKNOWN", reason: "UNKNOWN" });
+    if (measurement.count === 0) return Object.freeze({ stage, reason: null });
+  }
+  return Object.freeze({ stage: "NONE", reason: "UNKNOWN" });
+}
+
+function losslessReasonFor(stage, rows) {
+  const expectedSourceStage = REASON_SOURCE_STAGE[stage];
+  const reasons = rows
+    .filter((row) => row?.sourceStage === expectedSourceStage && row?.lossless === true)
+    .map((row) => String(row.canonicalReason ?? "UNKNOWN").toUpperCase())
+    .filter((reason) => CANONICAL_REASON_TAXONOMY.has(reason) && reason !== "UNKNOWN");
+  return reasons.length > 0 && new Set(reasons).size === 1 ? reasons[0] : "UNKNOWN";
+}
+
+export function finalizeCanonicalNaturalStageEvidence({
+  producerEvidence,
+  loopEvidence,
+  exitEligibilityEvidence,
+  cycleId,
+  researchCodeSha,
+  datasetIdentity,
+  naturalScheduleInvocation,
+  replayed,
+} = {}) {
+  const natural = naturalScheduleInvocation === true && replayed !== true;
+  const identity = Object.freeze({
+    cycleId: typeof cycleId === "string" && cycleId.length > 0 ? cycleId : null,
+    strategySha: immutableSha(researchCodeSha) ? researchCodeSha : null,
+    runtimeSha: immutableSha(researchCodeSha) ? researchCodeSha : null,
+    datasetIdentity: typeof datasetIdentity === "string" && datasetIdentity.length > 0 ? datasetIdentity : null,
+    triggerSource: natural ? "cron" : null,
+  });
+  const sourceStages = Object.freeze({
+    signalCandidate: producerEvidence?.stageCounts?.signalCandidate,
+    qualityPassed: producerEvidence?.stageCounts?.qualityPassed,
+    riskPassed: producerEvidence?.stageCounts?.riskPassed,
+    entryEligible: loopEvidence?.stageCounts?.entryEligible,
+    entry: loopEvidence?.stageCounts?.entry,
+    position: loopEvidence?.stageCounts?.position,
+    exitEligible: exitEligibilityEvidence?.status === "MEASURED"
+      ? Object.freeze({
+          status: "MEASURED",
+          count: exitEligibilityEvidence.exitEligibleCount,
+          blocker: null,
+          provenance: exitEligibilityEvidence.provenance,
+          observedAt: exitEligibilityEvidence.observations?.[0]?.observedAt ?? null,
+          observationIds: Object.freeze((exitEligibilityEvidence.observations ?? [])
+            .filter((row) => row.exitEligible === true)
+            .map((row) => row.observationId)),
+        })
+      : null,
+    settlement: loopEvidence?.stageCounts?.settlement,
+  });
+  const stageCounts = Object.fromEntries(CANONICAL_NATURAL_PAPER_STAGE_ORDER.map((stage) => {
+    const field = CANONICAL_NATURAL_PAPER_STAGE_FIELDS[stage];
+    return [field, creditedCanonicalStage(stage, sourceStages[field], identity, natural)];
+  }));
+  const rawReasons = [
+    ...(producerEvidence?.reasonObservations ?? []),
+    ...(loopEvidence?.reasonObservations ?? []),
+    ...(exitEligibilityEvidence?.reasonObservations ?? []),
+  ].map((row) => Object.freeze({
+    ...structuredClone(row),
+    identity: Object.freeze({ ...identity, observationId: row?.identity?.observationId ?? null }),
+    naturalCredit: natural ? 1 : 0,
+    replayCredit: 0,
+    duplicateCredit: 0,
+  }));
+  const firstZero = natural ? canonicalFirstZero(stageCounts) : Object.freeze({
+    stage: "UNKNOWN",
+    reason: replayed === true ? "REPLAY_ONLY" : "UNKNOWN",
+  });
+  const reason = firstZero.stage === "UNKNOWN" || firstZero.stage === "NONE"
+    ? firstZero.reason
+    : losslessReasonFor(firstZero.stage, rawReasons);
+  return Object.freeze({
+    schemaVersion: "canonical-natural-paper-stage-evidence-v1",
+    stageOrder: CANONICAL_NATURAL_PAPER_STAGE_ORDER,
+    identity,
+    stageCounts: Object.freeze(stageCounts),
+    exitEvidence: exitEligibilityEvidence ? Object.freeze(structuredClone(exitEligibilityEvidence)) : null,
+    reasonObservations: Object.freeze(rawReasons),
+    firstZeroStage: firstZero.stage,
+    firstZeroReason: reason,
+    naturalCredit: natural ? 1 : 0,
+    replayCredit: 0,
+    duplicateCredit: 0,
+    historicalCredit: 0,
+    unknownIsZero: false,
+  });
 }
 
 async function readPersistedAuthoritativeAccountState({
@@ -546,6 +703,8 @@ export async function runPaperForwardScheduleCli(env = process.env, {
               naturalFirstZeroReason: paperSource?.naturalFirstZeroReason ?? null,
               naturalEvidenceIdentity: paperSource?.naturalEvidenceIdentity ?? null,
               naturalRuntimeSha: paperSource?.naturalRuntimeSha ?? null,
+              canonicalNaturalStageEvidence: paperSource?.canonicalNaturalStageEvidence ?? null,
+              exitEligibilityEvidence: paperSource?.exitEligibilityEvidence ?? null,
               authoritativeFirstZeroReasonEvidenceByStage:
                 paperSource?.authoritativeFirstZeroReasonEvidenceByStage ?? {},
             });
@@ -564,6 +723,16 @@ export async function runPaperForwardScheduleCli(env = process.env, {
       result,
     );
     const naturalZero = naturalFirstZero(naturalFunnelMeasurements);
+    const canonicalNaturalStageEvidence = finalizeCanonicalNaturalStageEvidence({
+      producerEvidence: authoritativeRuntimeMeasurement?.canonicalNaturalStageEvidence,
+      loopEvidence: result?.summary?.canonicalNaturalStageEvidence,
+      exitEligibilityEvidence: authoritativeRuntimeMeasurement?.exitEligibilityEvidence,
+      cycleId: result?.cycleId,
+      researchCodeSha,
+      datasetIdentity: authoritativeRuntimeMeasurement?.naturalEvidenceIdentity,
+      naturalScheduleInvocation: result?.invocation?.naturalScheduleInvocation === true,
+      replayed: result?.status === "REPLAYED",
+    });
     const output = {
       schemaVersion: "paper-forward-schedule-cli-v5",
       status: result.status,
@@ -595,6 +764,9 @@ export async function runPaperForwardScheduleCli(env = process.env, {
       naturalFunnelMeasurements,
       naturalFirstZeroStage: naturalZero.stage,
       naturalFirstZeroReason: naturalZero.reason,
+      canonicalNaturalStageEvidence,
+      canonicalNaturalFirstZeroStage: canonicalNaturalStageEvidence.firstZeroStage,
+      canonicalNaturalFirstZeroReason: canonicalNaturalStageEvidence.firstZeroReason,
       naturalStrategySha: authoritativeRuntimeMeasurement?.naturalRuntimeSha ?? researchCodeSha,
       naturalRuntimeSha: researchCodeSha,
       naturalDatasetIdentity: authoritativeRuntimeMeasurement?.naturalEvidenceIdentity ?? null,
@@ -627,6 +799,14 @@ export async function runPaperForwardScheduleCli(env = process.env, {
       settlementCount: stageMeasurementCount(naturalFunnelMeasurements, "SETTLEMENT")
         ?? stageMeasurementCount(stageMeasurements, "Settlement"),
       outcomeCount: stageMeasurementCount(naturalFunnelMeasurements, "OUTCOME"),
+      signalCandidateCount: canonicalNaturalStageEvidence.stageCounts.signalCandidate.count,
+      qualityPassedCount: canonicalNaturalStageEvidence.stageCounts.qualityPassed.count,
+      riskPassedDirectCount: canonicalNaturalStageEvidence.stageCounts.riskPassed.count,
+      entryEligibleCount: canonicalNaturalStageEvidence.stageCounts.entryEligible.count,
+      canonicalEntryCount: canonicalNaturalStageEvidence.stageCounts.entry.count,
+      canonicalPositionCount: canonicalNaturalStageEvidence.stageCounts.position.count,
+      exitEligibleCount: canonicalNaturalStageEvidence.stageCounts.exitEligible.count,
+      canonicalSettlementCount: canonicalNaturalStageEvidence.stageCounts.settlement.count,
       canonicalPaperCandidateCount: stageMeasurementCount(stageMeasurements, "Identity"),
       privateRequestCount: 0,
       financialMutationCount: 0,
