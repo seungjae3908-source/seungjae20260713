@@ -1,5 +1,6 @@
 import {
   buildAuthoritativePaperRiskSizingEvidence,
+  type AuthoritativePaperRiskPolicyEvidenceV1,
   type AuthoritativePaperRiskSizingEvidence,
   type AuthoritativePaperRiskSizingInput,
   type AuthoritativePaperRiskSizingMarket,
@@ -24,18 +25,27 @@ export type AuthoritativePaperGenericRiskPolicyRequest = Readonly<{
 /**
  * A canonical record is an explicit persisted/configured policy record.
  * The producer never derives financial choices from engine guardrails or market type.
- * `policyEvidence` is deliberately `unknown`: merged #769 remains the single
- * authority for validating the complete risk-policy evidence contract.
+ * Every financial policy field is present on this record; merged #769 remains the
+ * final validator and the sole authority allowed to calculate target quantity.
  */
 export type AuthoritativePaperGenericRiskPolicyRecordV1 = Readonly<{
   schemaVersion: typeof AUTHORITATIVE_PAPER_GENERIC_RISK_POLICY_RECORD_VERSION;
   recordId: string;
   recordVersion: string;
+  policyId: string;
+  policyVersion: string;
   source: string;
   provenance: readonly string[];
-  persistedAtMs: number;
+  observedAtMs: number;
+  maximumAgeMs: number;
   researchCodeSha: string;
-  policyEvidence: unknown;
+  marketScopes: readonly AuthoritativePaperRiskSizingMarket[];
+  strategyScopes: readonly string[];
+  symbolScopes: '*' | readonly string[];
+  riskPercent: number;
+  requestedLeverage: number;
+  maximumLeverage: number | null;
+  marginMode: 'cash' | 'isolated' | 'cross';
 }>;
 
 export type AuthoritativePaperGenericRiskPolicyRecordSource = (
@@ -49,9 +59,10 @@ export type AuthoritativePaperGenericRiskPolicySourceResult = Readonly<{
   recordVersion: string | null;
   source: string | null;
   provenance: readonly string[];
-  persistedAtMs: number | null;
+  observedAtMs: number | null;
+  maximumAgeMs: number | null;
   researchCodeSha: string | null;
-  policyEvidence: unknown | null;
+  policyEvidence: AuthoritativePaperRiskPolicyEvidenceV1 | null;
   blockers: readonly string[];
   executionAuthority: 'NONE';
   privateApiAllowed: false;
@@ -100,8 +111,32 @@ function positive(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }
 
+function fresh(observedAtMs: unknown, maximumAgeMs: unknown, nowMs: number): boolean {
+  return positive(observedAtMs)
+    && positive(maximumAgeMs)
+    && observedAtMs <= nowMs
+    && nowMs - observedAtMs <= maximumAgeMs;
+}
+
 function nonEmptyStrings(value: unknown): value is readonly string[] {
   return Array.isArray(value) && value.length > 0 && value.every(nonEmpty);
+}
+
+function supportedMarketScopes(
+  value: unknown,
+): value is readonly AuthoritativePaperRiskSizingMarket[] {
+  return Array.isArray(value)
+    && value.length > 0
+    && value.every((market) => SUPPORTED_MARKETS.has(market as AuthoritativePaperRiskSizingMarket));
+}
+
+function normalizedSymbolScopes(value: unknown): '*' | readonly string[] | null {
+  if (value === '*') return '*';
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const scopes = value.map(normalizeSymbol);
+  return scopes.every((symbol): symbol is string => symbol != null)
+    ? Object.freeze(scopes)
+    : null;
 }
 
 function normalizeSymbol(value: unknown): string | null {
@@ -121,7 +156,8 @@ function blocked(
     recordVersion: null,
     source: null,
     provenance: Object.freeze([]),
-    persistedAtMs: null,
+    observedAtMs: null,
+    maximumAgeMs: null,
     researchCodeSha: exactSha(request.researchCodeSha) ? request.researchCodeSha : null,
     policyEvidence: null,
     blockers: Object.freeze([...new Set(blockers)]),
@@ -158,16 +194,47 @@ function validateRecordEnvelope(
   }
   if (!nonEmpty(object.recordId)) blockers.push('RISK_POLICY_CANONICAL_RECORD_ID_MISSING');
   if (!nonEmpty(object.recordVersion)) blockers.push('RISK_POLICY_CANONICAL_RECORD_VERSION_MISSING');
+  if (!nonEmpty(object.policyId)) blockers.push('RISK_POLICY_CANONICAL_RECORD_POLICY_ID_MISSING');
+  if (!nonEmpty(object.policyVersion)) blockers.push('RISK_POLICY_CANONICAL_RECORD_POLICY_VERSION_MISSING');
   if (!nonEmpty(object.source)) blockers.push('RISK_POLICY_CANONICAL_RECORD_SOURCE_MISSING');
   if (!nonEmptyStrings(object.provenance)) blockers.push('RISK_POLICY_CANONICAL_RECORD_PROVENANCE_MISSING');
-  if (!positive(object.persistedAtMs) || object.persistedAtMs > nowMs) {
-    blockers.push('RISK_POLICY_CANONICAL_RECORD_PERSISTED_AT_INVALID');
+  if (!fresh(object.observedAtMs, object.maximumAgeMs, nowMs)) {
+    blockers.push('RISK_POLICY_CANONICAL_RECORD_STALE_OR_INVALID');
   }
   if (!exactSha(object.researchCodeSha) || object.researchCodeSha !== request.researchCodeSha) {
     blockers.push('RISK_POLICY_CANONICAL_RECORD_RESEARCH_SHA_MISMATCH');
   }
-  if (!Object.prototype.hasOwnProperty.call(object, 'policyEvidence') || object.policyEvidence == null) {
-    blockers.push('RISK_POLICY_CANONICAL_RECORD_POLICY_EVIDENCE_MISSING');
+  if (!supportedMarketScopes(object.marketScopes)) {
+    blockers.push('RISK_POLICY_CANONICAL_RECORD_MARKET_SCOPES_INVALID');
+  } else if (!object.marketScopes.includes(request.market)) {
+    blockers.push('RISK_POLICY_CANONICAL_RECORD_WRONG_MARKET_SCOPE');
+  }
+  if (!nonEmptyStrings(object.strategyScopes)) {
+    blockers.push('RISK_POLICY_CANONICAL_RECORD_STRATEGY_SCOPES_INVALID');
+  } else if (!object.strategyScopes.map((scope) => scope.trim()).includes(request.strategyScope.trim())) {
+    blockers.push('RISK_POLICY_CANONICAL_RECORD_WRONG_STRATEGY_SCOPE');
+  }
+  const symbolScopes = normalizedSymbolScopes(object.symbolScopes);
+  if (!symbolScopes) {
+    blockers.push('RISK_POLICY_CANONICAL_RECORD_SYMBOL_SCOPES_INVALID');
+  } else if (symbolScopes !== '*' && !symbolScopes.includes(normalizeSymbol(request.symbol) as string)) {
+    blockers.push('RISK_POLICY_CANONICAL_RECORD_WRONG_SYMBOL_SCOPE');
+  }
+  if (!positive(object.riskPercent)) {
+    blockers.push('RISK_POLICY_CANONICAL_RECORD_RISK_PERCENT_INVALID');
+  }
+  if (!positive(object.requestedLeverage)) {
+    blockers.push('RISK_POLICY_CANONICAL_RECORD_REQUESTED_LEVERAGE_INVALID');
+  }
+  if (object.maximumLeverage != null && !positive(object.maximumLeverage)) {
+    blockers.push('RISK_POLICY_CANONICAL_RECORD_MAXIMUM_LEVERAGE_INVALID');
+  }
+  if (positive(object.requestedLeverage) && positive(object.maximumLeverage)
+    && object.requestedLeverage > object.maximumLeverage) {
+    blockers.push('RISK_POLICY_CANONICAL_RECORD_REQUESTED_LEVERAGE_EXCEEDS_MAXIMUM');
+  }
+  if (object.marginMode !== 'cash' && object.marginMode !== 'isolated' && object.marginMode !== 'cross') {
+    blockers.push('RISK_POLICY_CANONICAL_RECORD_MARGIN_MODE_INVALID');
   }
 
   return blockers.length > 0
@@ -211,6 +278,24 @@ export function createAuthoritativePaperGenericRiskPolicyProducer(input: Readonl
     const checked = validateRecordEnvelope(rawRecord, request, nowMs);
     if (!checked.record) return blocked(request, checked.blockers);
     const canonicalRecord = checked.record;
+    const symbolScopes = normalizedSymbolScopes(canonicalRecord.symbolScopes) as '*' | readonly string[];
+    const policyEvidence: AuthoritativePaperRiskPolicyEvidenceV1 = Object.freeze({
+      schemaVersion: 'authoritative-paper-generic-risk-policy-evidence-v1',
+      policyId: canonicalRecord.policyId.trim(),
+      policyVersion: canonicalRecord.policyVersion.trim(),
+      source: canonicalRecord.source.trim(),
+      provenance: Object.freeze(canonicalRecord.provenance.map((item) => item.trim())),
+      observedAtMs: canonicalRecord.observedAtMs,
+      maximumAgeMs: canonicalRecord.maximumAgeMs,
+      researchCodeSha: canonicalRecord.researchCodeSha,
+      marketScopes: Object.freeze([...canonicalRecord.marketScopes]),
+      strategyScopes: Object.freeze(canonicalRecord.strategyScopes.map((scope) => scope.trim())),
+      symbolScopes,
+      riskPercent: canonicalRecord.riskPercent,
+      requestedLeverage: canonicalRecord.requestedLeverage,
+      maximumLeverage: canonicalRecord.maximumLeverage,
+      marginMode: canonicalRecord.marginMode,
+    });
 
     return Object.freeze({
       schemaVersion: AUTHORITATIVE_PAPER_GENERIC_RISK_POLICY_PRODUCER_VERSION,
@@ -223,11 +308,12 @@ export function createAuthoritativePaperGenericRiskPolicyProducer(input: Readonl
         `canonicalRecord:${canonicalRecord.recordId.trim()}`,
         `recordVersion:${canonicalRecord.recordVersion.trim()}`,
       ]),
-      persistedAtMs: canonicalRecord.persistedAtMs,
+      observedAtMs: canonicalRecord.observedAtMs,
+      maximumAgeMs: canonicalRecord.maximumAgeMs,
       researchCodeSha: canonicalRecord.researchCodeSha,
-      // Deliberately pass the explicit persisted policy object through unchanged.
-      // Merged #769 owns all financial-policy validation and quantity calculation.
-      policyEvidence: canonicalRecord.policyEvidence,
+      // Every policy value comes from the explicit canonical record. Merged #769
+      // remains the final validator and the sole quantity calculator.
+      policyEvidence,
       blockers: Object.freeze([]),
       executionAuthority: 'NONE',
       privateApiAllowed: false,
@@ -239,8 +325,8 @@ export function createAuthoritativePaperGenericRiskPolicyProducer(input: Readonl
 }
 
 /**
- * Canonical caller seam: source selection happens first, then the complete policy
- * object (or null) is handed unchanged to merged #769. #769 remains the only place
+ * Canonical caller seam: source selection happens first, then the record-backed policy
+ * evidence (or null) is handed to merged #769. #769 remains the only place
  * that validates riskPercent, requestedLeverage, marginMode, maximumLeverage,
  * freshness and market/strategy/symbol scope before any quantity can exist.
  */
