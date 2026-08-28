@@ -289,6 +289,15 @@ test('P0-C5 blocks admission when supplemental full-cost evidence is absent even
   assert.equal(result.admissionResult, null);
 });
 
+test('P0-C5 keeps admission BLOCKED when any supplemental cost component is incomplete', () => {
+  const result = compose({ supplementalCostEvidence: supplemental({ latency: undefined as never }) });
+  assert.equal(result.status, 'BLOCKED');
+  assert.equal(result.admissionResult?.status, 'BLOCKED');
+  assert.ok(result.blockers.includes('SCANNER_COST_EVIDENCE_NOT_READY'));
+  assert.equal(result.executionAuthority, 'NONE');
+  assert.equal(result.orderSubmitted, false);
+});
+
 test('P0-C5 rejects execution observations that are not explicitly SIMULATED/public-L2', () => {
   const result = compose({
     executionObservation: observation({
@@ -381,6 +390,53 @@ test('Worker D connects valid public L2 to the authoritative callback as SIMULAT
   assert.equal(result.latency.costValuePercent, null);
 });
 
+test('Worker D rejects mismatched or stale execution sizing identity before any public L2 request', async () => {
+  const invalidSizing: readonly AuthoritativePaperExecutionSizingEvidence[] = [
+    { ...sizingEvidence(), signalId: 'wrong-signal' },
+    { ...sizingEvidence(), symbol: 'ETHUSDT' },
+    { ...sizingEvidence(), direction: 'SHORT' },
+    { ...sizingEvidence(), targetQuantity: 0 },
+    { ...sizingEvidence(), observedAtMs: MARKET_AT - 60_000 },
+    { ...sizingEvidence(), riskPolicy: authoritativeRiskPolicy(MARKET_AT - 60_000) },
+  ];
+  for (const sizing of invalidSizing) {
+    let fetchCalls = 0;
+    const result = await collectAuthoritativePaperExecutionObservationInput({
+      context: executionContext,
+      sizingEvidence: sizing,
+      fetchPublicJson: async () => {
+        fetchCalls += 1;
+        return l2Payload();
+      },
+      now: () => MARKET_AT + 10,
+    });
+    assert.equal(result, null);
+    assert.equal(fetchCalls, 0);
+  }
+});
+
+test('Worker D snapshots quantity and risk policy identity before awaiting public L2', async () => {
+  const mutableSizing = {
+    ...sizingEvidence(),
+    riskPolicy: { ...authoritativeRiskPolicy() },
+  };
+  const clock = [MARKET_AT + 10, MARKET_AT + 30];
+  const collected = await collectAuthoritativePaperExecutionObservationInput({
+    context: executionContext,
+    sizingEvidence: mutableSizing,
+    fetchPublicJson: async () => {
+      mutableSizing.targetQuantity = 999;
+      mutableSizing.riskPolicy.leverage = 99;
+      return l2Payload();
+    },
+    now: () => clock.shift() ?? MARKET_AT + 30,
+  });
+  assert.ok(collected);
+  assert.equal(collected.executionEvidenceInput.targetQuantity, 2);
+  assert.equal(collected.riskPolicy.leverage, 1);
+  assert.equal(Object.isFrozen(collected.riskPolicy), true);
+});
+
 test('Worker D fails closed on incomplete visible depth and never manufactures fill probability', async () => {
   const clock = [MARKET_AT + 10, MARKET_AT + 30];
   const collected = await collectAuthoritativePaperExecutionObservationInput({
@@ -414,6 +470,28 @@ test('Worker D fails closed on incomplete visible depth and never manufactures f
   );
 });
 
+test('Worker D preserves missing request timing as null rather than measured zero latency', async () => {
+  const clock = [MARKET_AT + 10, MARKET_AT + 30];
+  const collected = await collectAuthoritativePaperExecutionObservationInput({
+    context: executionContext,
+    sizingEvidence: sizingEvidence(),
+    fetchPublicJson: async () => l2Payload(),
+    now: () => clock.shift() ?? MARKET_AT + 30,
+  });
+  assert.ok(collected);
+  const raw = buildPaperSimulatedExecutionEvidence({
+    ...collected.executionEvidenceInput,
+    requestStartedAtMs: null,
+    requestCompletedAtMs: null,
+    nowMs: collected.nowMs,
+  }) as Readonly<{
+    blockers: readonly string[];
+    observed: Readonly<{ latencyEvidence: Readonly<{ observedRoundTripMs: number | null }> }>;
+  }>;
+  assert.equal(raw.observed.latencyEvidence.observedRoundTripMs, null);
+  assert.ok(raw.blockers.includes('OBSERVED_LATENCY_DURATION_MISSING'));
+});
+
 test('Worker D keeps supplemental full-cost MISSING when only public/reference evidence exists', async () => {
   const audit = auditAuthoritativeSupplementalCostSources({
     publicEvidence: publicEvidence(),
@@ -422,6 +500,7 @@ test('Worker D keeps supplemental full-cost MISSING when only public/reference e
     maximumAgeMs: 30_000,
   });
   assert.equal(audit.status, 'MISSING');
+  assert.equal(audit.fullCostReady, false);
   assert.equal(audit.supplementalCostInput, null);
   assert.equal(audit.components.fees.state, 'PRESENT');
   assert.equal(audit.components.spread.state, 'PRESENT');
@@ -449,12 +528,64 @@ test('Worker D keeps supplemental full-cost MISSING when only public/reference e
     assert.notEqual(component.value, 0);
   }
 
+  const supplementalOnly = auditAuthoritativeSupplementalCostSources({
+    supplemental: supplemental(),
+    nowMs: NOW,
+  });
+  assert.equal(supplementalOnly.status, 'MISSING');
+  assert.equal(supplementalOnly.fullCostReady, false);
+  assert.ok(supplementalOnly.supplementalCostInput);
+
   const fullyObserved = auditAuthoritativeSupplementalCostSources({
+    publicEvidence: publicEvidence(),
+    executionObservation: observation(),
     supplemental: supplemental(),
     nowMs: NOW,
   });
   assert.equal(fullyObserved.status, 'PRESENT');
+  assert.equal(fullyObserved.fullCostReady, true);
   assert.ok(fullyObserved.supplementalCostInput);
+  for (const component of Object.values(fullyObserved.components)) {
+    assert.equal(component.state, 'PRESENT');
+    assert.equal(component.countsAsExecutionCost, true);
+    assert.equal(component.unavailableIsZero, false);
+  }
+
+  const unknownNumericFields = auditAuthoritativeSupplementalCostSources({
+    publicEvidence: publicEvidence({ takerFeeRate: null as never }),
+    executionObservation: observation({
+      slippage: Object.freeze({
+        ...observedPercent(0.05, 'null-cost-must-remain-missing'),
+        valuePercent: null as never,
+      }),
+    }),
+    supplemental: supplemental(),
+    nowMs: NOW,
+  });
+  assert.equal(unknownNumericFields.fullCostReady, false);
+  assert.equal(unknownNumericFields.components.fees.state, 'UNAVAILABLE');
+  assert.equal(unknownNumericFields.components.fees.value, null);
+  assert.equal(unknownNumericFields.components.slippage.state, 'UNAVAILABLE');
+  assert.equal(unknownNumericFields.components.slippage.value, null);
+  assert.ok(unknownNumericFields.blockers.includes('FEE_COST_EVIDENCE_UNAVAILABLE'));
+  assert.ok(unknownNumericFields.blockers.includes('SLIPPAGE_COST_EVIDENCE_UNAVAILABLE'));
+
+  const measuredZero = auditAuthoritativeSupplementalCostSources({
+    publicEvidence: publicEvidence({ takerFeeRate: 0, bidPrice: 100, askPrice: 100 }),
+    executionObservation: observation({ slippage: observedPercent(0, 'measured-zero-slippage') }),
+    supplemental: supplemental({
+      latency: observedPercent(0, 'measured-zero-latency'),
+      liquidityImpact: observedPercent(0, 'measured-zero-liquidity-impact'),
+      partialFillImpact: observedPercent(0, 'measured-zero-partial-fill-impact'),
+      funding: observedPercent(0, 'measured-zero-funding'),
+    }),
+    nowMs: NOW,
+  });
+  assert.equal(measuredZero.fullCostReady, true);
+  for (const component of Object.values(measuredZero.components)) {
+    assert.equal(component.state, 'PRESENT');
+    assert.equal(component.value, 0);
+  }
 
   const futuresFundingMarkedNotApplicable = auditAuthoritativeSupplementalCostSources({
     supplemental: supplemental({
@@ -473,6 +604,22 @@ test('Worker D keeps supplemental full-cost MISSING when only public/reference e
   assert.ok(futuresFundingMarkedNotApplicable.blockers.includes(
     'FUNDING_EXECUTION_COST_EVIDENCE_UNAVAILABLE',
   ));
+
+  const latencyMarkedNotApplicable = auditAuthoritativeSupplementalCostSources({
+    supplemental: supplemental({
+      latency: Object.freeze({
+        valuePercent: 0,
+        quality: 'NOT_APPLICABLE',
+        source: 'unsupported-latency-not-applicable-claim',
+        observedAtMs: MARKET_AT,
+      }),
+    }),
+    nowMs: NOW,
+  });
+  assert.equal(latencyMarkedNotApplicable.status, 'MISSING');
+  assert.equal(latencyMarkedNotApplicable.components.latency.state, 'UNAVAILABLE');
+  assert.equal(latencyMarkedNotApplicable.components.latency.value, null);
+  assert.ok(latencyMarkedNotApplicable.blockers.includes('LATENCY_COST_EVIDENCE_UNAVAILABLE'));
 
   const wiring = createAuthoritativePaperEvidenceSourceWiring({
     researchCodeSha: 'a'.repeat(40),
