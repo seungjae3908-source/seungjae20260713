@@ -123,7 +123,12 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
     const onVisibility = () => { if (document.visibilityState === 'visible') void refresh(); };
     const onOnline = () => void refresh();
     document.addEventListener('visibilitychange', onVisibility); window.addEventListener('online', onOnline);
-    return () => { controllerRef.current?.abort(); document.removeEventListener('visibilitychange', onVisibility); window.removeEventListener('online', onOnline); };
+    return () => {
+      requestSequence.current += 1;
+      controllerRef.current = null;
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('online', onOnline);
+    };
   }, [refresh]);
 
   function openSetup(provider: CredentialProvider) { setEditing(provider); setCredentials(EMPTY_CREDENTIALS); setSaveMessage(''); }
