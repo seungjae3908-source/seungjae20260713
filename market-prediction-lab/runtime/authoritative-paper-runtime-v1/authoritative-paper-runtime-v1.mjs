@@ -320,10 +320,10 @@ function calculateTradingRisk(input, now = /* @__PURE__ */ new Date()) {
     );
   }
   if (input.estimatedFundingRate !== 0) {
-    const positive10 = input.estimatedFundingRate > 0;
-    const likelyPays = positive10 && input.side === "long" || !positive10 && input.side === "short";
+    const positive11 = input.estimatedFundingRate > 0;
+    const likelyPays = positive11 && input.side === "long" || !positive11 && input.side === "short";
     warnings.push(
-      `${positive10 ? "양(+)" : "음(-)"} 펀딩 기준으로 ${input.side === "long" ? "롱" : "숏"} 포지션은 ${likelyPays ? "지급 가능성" : "수취 가능성"}이 있으나, 최대 손실 계산에서는 보수적으로 비용으로 반영했습니다.`
+      `${positive11 ? "양(+)" : "음(-)"} 펀딩 기준으로 ${input.side === "long" ? "롱" : "숏"} 포지션은 ${likelyPays ? "지급 가능성" : "수취 가능성"}이 있으나, 최대 손실 계산에서는 보수적으로 비용으로 반영했습니다.`
     );
   }
   const profit1 = calculateTargetProfit(
@@ -6231,6 +6231,111 @@ async function fetchPublicMarketJson(value, options) {
   );
 }
 
+// src/services/authoritative-paper-latency-cost-evidence.service.ts
+var AUTHORITATIVE_PAPER_LATENCY_COST_EVIDENCE_VERSION = "authoritative-paper-latency-cost-evidence-v1";
+var DEFAULT_MAXIMUM_AGE_MS = 3e4;
+var DEFAULT_MAXIMUM_REQUEST_DURATION_MS = 3e4;
+function finite11(value) {
+  return typeof value === "number" && Number.isFinite(value);
+}
+function positive6(value) {
+  return finite11(value) && value > 0;
+}
+function nonEmpty6(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+function blocked4(blockers) {
+  return Object.freeze({
+    schemaVersion: AUTHORITATIVE_PAPER_LATENCY_COST_EVIDENCE_VERSION,
+    status: "BLOCKED_DATA",
+    evidence: null,
+    observedRoundTripMs: null,
+    signedMidpointMovePercent: null,
+    adverseMovePercent: null,
+    blockers: Object.freeze([...blockers]),
+    executionAuthority: "NONE",
+    privateApiUsed: false,
+    liveTrading: false,
+    realFillObserved: false,
+    unknownCostIsZero: false
+  });
+}
+function buildAuthoritativePaperLatencyCostEvidence(input) {
+  const nowMs = positive6(input?.nowMs) ? input.nowMs : Date.now();
+  const maximumAgeMs = positive6(input?.maximumAgeMs) ? input.maximumAgeMs : DEFAULT_MAXIMUM_AGE_MS;
+  const maximumRequestDurationMs = positive6(input?.maximumRequestDurationMs) ? input.maximumRequestDurationMs : DEFAULT_MAXIMUM_REQUEST_DURATION_MS;
+  const blockers = [];
+  if (input?.direction !== "LONG" && input?.direction !== "SHORT") blockers.push("LATENCY_DIRECTION_INVALID");
+  if (!positive6(input?.requestStartedAtMs) || !positive6(input?.requestCompletedAtMs) || input.requestCompletedAtMs < input.requestStartedAtMs) {
+    blockers.push("LATENCY_REQUEST_TIMING_INVALID");
+  }
+  const roundTripMs = positive6(input?.requestStartedAtMs) && positive6(input?.requestCompletedAtMs) ? input.requestCompletedAtMs - input.requestStartedAtMs : null;
+  if (roundTripMs != null && roundTripMs > maximumRequestDurationMs) {
+    blockers.push("LATENCY_REQUEST_DURATION_EXCEEDS_POLICY");
+  }
+  const pre = input?.preRequest;
+  const post = input?.postRequest;
+  if (!positive6(pre?.midpoint) || !positive6(pre?.observedAtMs) || !nonEmpty6(pre?.source)) {
+    blockers.push("LATENCY_PRE_REQUEST_MIDPOINT_UNAVAILABLE");
+  }
+  if (!positive6(post?.midpoint) || !positive6(post?.observedAtMs) || !nonEmpty6(post?.source)) {
+    blockers.push("LATENCY_POST_REQUEST_MIDPOINT_UNAVAILABLE");
+  }
+  if (positive6(pre?.observedAtMs) && positive6(input?.requestStartedAtMs) && pre.observedAtMs > input.requestStartedAtMs) {
+    blockers.push("LATENCY_PRE_REQUEST_TIMESTAMP_NOT_BRACKETING_REQUEST");
+  }
+  if (positive6(post?.observedAtMs) && positive6(input?.requestCompletedAtMs) && post.observedAtMs < input.requestCompletedAtMs) {
+    blockers.push("LATENCY_POST_REQUEST_TIMESTAMP_NOT_BRACKETING_REQUEST");
+  }
+  if (positive6(post?.observedAtMs) && post.observedAtMs > nowMs) {
+    blockers.push("LATENCY_POST_REQUEST_EVIDENCE_FROM_FUTURE");
+  } else if (positive6(post?.observedAtMs) && nowMs - post.observedAtMs > maximumAgeMs) {
+    blockers.push("LATENCY_POST_REQUEST_EVIDENCE_STALE");
+  }
+  if (positive6(pre?.observedAtMs) && positive6(post?.observedAtMs) && post.observedAtMs < pre.observedAtMs) {
+    blockers.push("LATENCY_MIDPOINT_OBSERVATION_ORDER_INVALID");
+  }
+  if (blockers.length > 0) return blocked4(blockers);
+  const signedMovePercent = input.direction === "LONG" ? (post.midpoint - pre.midpoint) / pre.midpoint * 100 : (pre.midpoint - post.midpoint) / pre.midpoint * 100;
+  const adverseMovePercent = Math.max(0, signedMovePercent);
+  const observedAtMs = post.observedAtMs;
+  const evidence = Object.freeze({
+    valuePercent: adverseMovePercent,
+    quality: "ESTIMATED",
+    source: `PUBLIC_MIDPOINT_ADVERSE_MOVE_OVER_OBSERVED_REQUEST_LATENCY:${pre.source.trim()}->${post.source.trim()}`,
+    observedAtMs
+  });
+  return Object.freeze({
+    schemaVersion: AUTHORITATIVE_PAPER_LATENCY_COST_EVIDENCE_VERSION,
+    status: "PRESENT",
+    evidence,
+    observedRoundTripMs: roundTripMs,
+    signedMidpointMovePercent: signedMovePercent,
+    adverseMovePercent,
+    blockers: Object.freeze([]),
+    executionAuthority: "NONE",
+    privateApiUsed: false,
+    liveTrading: false,
+    realFillObserved: false,
+    unknownCostIsZero: false
+  });
+}
+var AUTHORITATIVE_PAPER_LATENCY_COST_EVIDENCE_SAFETY = Object.freeze({
+  schemaVersion: AUTHORITATIVE_PAPER_LATENCY_COST_EVIDENCE_VERSION,
+  publicMarketDataOnly: true,
+  observedRequestDurationRequired: true,
+  temporalBracketingRequired: true,
+  favorableMoveMayProduceObservedZeroAdverseCost: true,
+  missingDataMayProduceZeroCost: false,
+  causalExecutionClaimAllowed: false,
+  realFillObserved: false,
+  executionAuthority: "NONE",
+  privateApiAllowed: false,
+  liveTrading: false,
+  orderSubmissionAllowed: false,
+  financialMutationAllowed: false
+});
+
 // src/services/authoritative-paper-execution-cost-sources.service.ts
 var AUTHORITATIVE_PAPER_EXECUTION_COST_SOURCES_VERSION = "authoritative-paper-execution-cost-sources-v1";
 var AUTHORITATIVE_PAPER_EXECUTION_SIZING_EVIDENCE_VERSION = "authoritative-paper-execution-sizing-evidence-v1";
@@ -6256,17 +6361,17 @@ function finiteScalar(value) {
 function finiteNumber2(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
-function positive6(value) {
+function positive7(value) {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 function nonNegative5(value) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
-function nonEmpty6(value) {
+function nonEmpty7(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 function fresh2(observedAtMs, maximumAgeMs, nowMs) {
-  return positive6(observedAtMs) && positive6(maximumAgeMs) && observedAtMs <= nowMs && nowMs - observedAtMs <= maximumAgeMs;
+  return positive7(observedAtMs) && positive7(maximumAgeMs) && observedAtMs <= nowMs && nowMs - observedAtMs <= maximumAgeMs;
 }
 function abortSignal(value) {
   return value instanceof AbortSignal ? value : void 0;
@@ -6280,10 +6385,10 @@ function exactSha2(value) {
   return typeof value === "string" && /^[0-9a-f]{40}$/u.test(value);
 }
 function nonEmptyStrings(value) {
-  return Array.isArray(value) && value.length > 0 && value.every(nonEmpty6);
+  return Array.isArray(value) && value.length > 0 && value.every(nonEmpty7);
 }
 function normalizedFundingSymbol(value) {
-  if (!nonEmpty6(value)) return null;
+  if (!nonEmpty7(value)) return null;
   try {
     return normalizeBitgetFuturesSymbol(value);
   } catch {
@@ -6337,8 +6442,8 @@ function blockedFundingHorizonResult(blockers, partial = {}) {
   });
 }
 function buildAuthoritativePaperFundingHoldingHorizonCost(input) {
-  const nowMs = positive6(input?.nowMs) ? input.nowMs : Date.now();
-  const maximumAgeMs = positive6(input?.maximumAgeMs) ? input.maximumAgeMs : PUBLIC_L2_MAXIMUM_AGE_MS;
+  const nowMs = positive7(input?.nowMs) ? input.nowMs : Date.now();
+  const maximumAgeMs = positive7(input?.maximumAgeMs) ? input.maximumAgeMs : PUBLIC_L2_MAXIMUM_AGE_MS;
   const candidate = record(input?.candidate);
   const signal = record(candidate?.signal);
   const strategyIdentity = record(signal?.strategyIdentity);
@@ -6348,20 +6453,20 @@ function buildAuthoritativePaperFundingHoldingHorizonCost(input) {
   const market = signal?.market === "CRYPTO_FUTURES" ? "CRYPTO_FUTURES" : null;
   const symbol = normalizedFundingSymbol(signal?.symbol);
   const direction = signal?.direction === "LONG" || signal?.direction === "SHORT" ? signal.direction : null;
-  const signalId2 = nonEmpty6(signal?.signalId) ? signal.signalId.trim() : null;
-  const strategyId = nonEmpty6(strategyIdentity?.strategyId) ? strategyIdentity.strategyId.trim() : null;
+  const signalId2 = nonEmpty7(signal?.signalId) ? signal.signalId.trim() : null;
+  const strategyId = nonEmpty7(strategyIdentity?.strategyId) ? strategyIdentity.strategyId.trim() : null;
   const candidateResearchSha = exactSha2(strategyIdentity?.researchCodeSha) ? strategyIdentity.researchCodeSha : null;
-  const candidateCostPolicyId = nonEmpty6(strategyIdentity?.costPolicyVersion) ? strategyIdentity.costPolicyVersion.trim() : null;
-  const riskPolicyId = nonEmpty6(riskPolicy2?.policyId) ? riskPolicy2.policyId.trim() : null;
-  const riskPolicyVersion = nonEmpty6(riskPolicy2?.policyVersion) ? riskPolicy2.policyVersion.trim() : null;
-  const riskPolicySource = nonEmpty6(riskPolicy2?.source) ? riskPolicy2.source.trim() : null;
+  const candidateCostPolicyId = nonEmpty7(strategyIdentity?.costPolicyVersion) ? strategyIdentity.costPolicyVersion.trim() : null;
+  const riskPolicyId = nonEmpty7(riskPolicy2?.policyId) ? riskPolicy2.policyId.trim() : null;
+  const riskPolicyVersion = nonEmpty7(riskPolicy2?.policyVersion) ? riskPolicy2.policyVersion.trim() : null;
+  const riskPolicySource = nonEmpty7(riskPolicy2?.source) ? riskPolicy2.source.trim() : null;
   const riskPolicyProvenance = nonEmptyStrings(riskPolicy2?.provenance) ? Object.freeze(riskPolicy2.provenance.map((value) => value.trim())) : null;
-  const costPolicyId = nonEmpty6(input?.costPolicyId) ? input.costPolicyId.trim() : null;
+  const costPolicyId = nonEmpty7(input?.costPolicyId) ? input.costPolicyId.trim() : null;
   const researchCodeSha = exactSha2(input?.researchCodeSha) ? input.researchCodeSha : null;
   const entryTimestampMs = finiteNumber2(input?.entryTimestampMs);
   const exitTimestampMs = finiteNumber2(input?.expectedExitTimestampMs);
   const positionNotional = finiteNumber2(input?.positionNotional);
-  if (!positive6(nowMs) || !positive6(maximumAgeMs)) blockers.push("FUNDING_COST_CLOCK_INVALID");
+  if (!positive7(nowMs) || !positive7(maximumAgeMs)) blockers.push("FUNDING_COST_CLOCK_INVALID");
   if (!candidate || !signal || !strategyIdentity || !signalId2 || !strategyId) {
     blockers.push("CANONICAL_FUNDING_CANDIDATE_IDENTITY_REQUIRED");
   }
@@ -6380,19 +6485,19 @@ function buildAuthoritativePaperFundingHoldingHorizonCost(input) {
   const signalTimestampMs = finiteNumber2(signal?.timestampMs);
   const signalTtlMs = finiteNumber2(signal?.ttlMs);
   const candidateExitTimestampMs = finiteNumber2(signal?.expiresAtMs);
-  if (!positive6(signalTimestampMs) || !positive6(signalTtlMs) || !positive6(candidateExitTimestampMs) || candidateExitTimestampMs - signalTimestampMs !== signalTtlMs) {
+  if (!positive7(signalTimestampMs) || !positive7(signalTtlMs) || !positive7(candidateExitTimestampMs) || candidateExitTimestampMs - signalTimestampMs !== signalTtlMs) {
     blockers.push("FUNDING_HOLDING_HORIZON_MISSING_OR_INVALID");
   }
-  if (!positive6(entryTimestampMs) || !positive6(exitTimestampMs) || exitTimestampMs <= entryTimestampMs) {
+  if (!positive7(entryTimestampMs) || !positive7(exitTimestampMs) || exitTimestampMs <= entryTimestampMs) {
     blockers.push("FUNDING_HOLDING_INTERVAL_MISSING_OR_INVALID");
   }
-  if (positive6(signalTimestampMs) && positive6(entryTimestampMs) && entryTimestampMs < signalTimestampMs) {
+  if (positive7(signalTimestampMs) && positive7(entryTimestampMs) && entryTimestampMs < signalTimestampMs) {
     blockers.push("FUNDING_ENTRY_PRECEDES_CANDIDATE");
   }
-  if (positive6(candidateExitTimestampMs) && exitTimestampMs !== candidateExitTimestampMs) {
+  if (positive7(candidateExitTimestampMs) && exitTimestampMs !== candidateExitTimestampMs) {
     blockers.push("FUNDING_EXIT_HORIZON_NOT_CANONICAL");
   }
-  if (!positive6(positionNotional)) blockers.push("FUNDING_POSITION_NOTIONAL_REQUIRED");
+  if (!positive7(positionNotional)) blockers.push("FUNDING_POSITION_NOTIONAL_REQUIRED");
   if (!riskPolicy2 || riskPolicy2.schemaVersion !== "authoritative-paper-generic-risk-policy-evidence-v1") {
     blockers.push("FUNDING_RISK_POLICY_IDENTITY_REQUIRED");
   }
@@ -6425,18 +6530,18 @@ function buildAuthoritativePaperFundingHoldingHorizonCost(input) {
   const nextFundingTimestampMs = finiteNumber2(publicEvidence?.nextFundingUpdateMs);
   const observedAtMs = finiteNumber2(publicEvidence?.observedAtMs);
   if (fundingRateDecimal == null) blockers.push("FUNDING_RATE_MISSING");
-  if (!positive6(fundingIntervalHours)) blockers.push("FUNDING_INTERVAL_MISSING_OR_INVALID");
-  if (!positive6(nextFundingTimestampMs)) blockers.push("FUNDING_NEXT_TIMESTAMP_MISSING_OR_INVALID");
-  if (!positive6(observedAtMs) || !fresh2(observedAtMs, maximumAgeMs, nowMs)) {
+  if (!positive7(fundingIntervalHours)) blockers.push("FUNDING_INTERVAL_MISSING_OR_INVALID");
+  if (!positive7(nextFundingTimestampMs)) blockers.push("FUNDING_NEXT_TIMESTAMP_MISSING_OR_INVALID");
+  if (!positive7(observedAtMs) || !fresh2(observedAtMs, maximumAgeMs, nowMs)) {
     blockers.push("FUNDING_SOURCE_STALE_OR_INVALID");
   }
-  if (positive6(observedAtMs) && positive6(entryTimestampMs) && entryTimestampMs < observedAtMs) {
+  if (positive7(observedAtMs) && positive7(entryTimestampMs) && entryTimestampMs < observedAtMs) {
     blockers.push("FUNDING_ENTRY_PRECEDES_SNAPSHOT");
   }
-  if (positive6(observedAtMs) && positive6(nextFundingTimestampMs) && nextFundingTimestampMs < observedAtMs) {
+  if (positive7(observedAtMs) && positive7(nextFundingTimestampMs) && nextFundingTimestampMs < observedAtMs) {
     blockers.push("FUNDING_NEXT_TIMESTAMP_PRECEDES_SNAPSHOT");
   }
-  if (positive6(entryTimestampMs) && positive6(nextFundingTimestampMs) && nextFundingTimestampMs < entryTimestampMs) {
+  if (positive7(entryTimestampMs) && positive7(nextFundingTimestampMs) && nextFundingTimestampMs < entryTimestampMs) {
     blockers.push("FUNDING_NEXT_TIMESTAMP_PRECEDES_ENTRY");
   }
   const partial = {
@@ -6451,17 +6556,17 @@ function buildAuthoritativePaperFundingHoldingHorizonCost(input) {
     costPolicyId,
     entryTimestampMs,
     exitTimestampMs,
-    holdingHorizonMs: positive6(entryTimestampMs) && positive6(exitTimestampMs) ? exitTimestampMs - entryTimestampMs : null,
-    positionNotional: positive6(positionNotional) ? positionNotional : null,
+    holdingHorizonMs: positive7(entryTimestampMs) && positive7(exitTimestampMs) ? exitTimestampMs - entryTimestampMs : null,
+    positionNotional: positive7(positionNotional) ? positionNotional : null,
     fundingRateDecimal,
-    fundingIntervalHours: positive6(fundingIntervalHours) ? fundingIntervalHours : null,
-    nextFundingTimestampMs: positive6(nextFundingTimestampMs) ? nextFundingTimestampMs : null,
-    observedAtMs: positive6(observedAtMs) ? observedAtMs : null,
+    fundingIntervalHours: positive7(fundingIntervalHours) ? fundingIntervalHours : null,
+    nextFundingTimestampMs: positive7(nextFundingTimestampMs) ? nextFundingTimestampMs : null,
+    observedAtMs: positive7(observedAtMs) ? observedAtMs : null,
     maximumAgeMs,
-    ageMs: positive6(observedAtMs) && nowMs >= observedAtMs ? nowMs - observedAtMs : null,
-    freshness: positive6(observedAtMs) && fresh2(observedAtMs, maximumAgeMs, nowMs) ? "FRESH" : null
+    ageMs: positive7(observedAtMs) && nowMs >= observedAtMs ? nowMs - observedAtMs : null,
+    freshness: positive7(observedAtMs) && fresh2(observedAtMs, maximumAgeMs, nowMs) ? "FRESH" : null
   };
-  if (blockers.length > 0 || !market || !symbol || !direction || !signalId2 || !strategyId || !researchCodeSha || !riskPolicyId || !riskPolicyVersion || !riskPolicySource || !riskPolicyProvenance || !costPolicyId || !positive6(entryTimestampMs) || !positive6(exitTimestampMs) || !positive6(positionNotional) || fundingRateDecimal == null || !positive6(fundingIntervalHours) || !positive6(nextFundingTimestampMs) || !positive6(observedAtMs)) {
+  if (blockers.length > 0 || !market || !symbol || !direction || !signalId2 || !strategyId || !researchCodeSha || !riskPolicyId || !riskPolicyVersion || !riskPolicySource || !riskPolicyProvenance || !costPolicyId || !positive7(entryTimestampMs) || !positive7(exitTimestampMs) || !positive7(positionNotional) || fundingRateDecimal == null || !positive7(fundingIntervalHours) || !positive7(nextFundingTimestampMs) || !positive7(observedAtMs)) {
     return blockedFundingHorizonResult(blockers, partial);
   }
   const intervalMs = fundingIntervalHours * 60 * 6e4;
@@ -6616,9 +6721,9 @@ function buildAuthoritativePaperFundingHoldingHorizonCost(input) {
 function scannerExecutionIdentity(context) {
   const card = record(context?.card);
   if (!card || context?.market !== "CRYPTO_FUTURES") return null;
-  const signalId2 = nonEmpty6(card.signalId) ? card.signalId.trim() : null;
+  const signalId2 = nonEmpty7(card.signalId) ? card.signalId.trim() : null;
   const direction = card.action === "LONG" || card.action === "SHORT" ? card.action : null;
-  if (!signalId2 || !nonEmpty6(card.symbol) || !direction) return null;
+  if (!signalId2 || !nonEmpty7(card.symbol) || !direction) return null;
   try {
     return freeze({ signalId: signalId2, symbol: normalizeBitgetFuturesSymbol(card.symbol), direction });
   } catch {
@@ -6629,7 +6734,7 @@ function validDepthLevel(value) {
   if (!Array.isArray(value) || value.length < 2) return false;
   const price = finiteScalar(value[0]);
   const size = finiteScalar(value[1]);
-  return positive6(price) && positive6(size);
+  return positive7(price) && positive7(size);
 }
 function normalizedLevels(value) {
   return Array.isArray(value) ? Object.freeze(value.filter(validDepthLevel).map((level) => Object.freeze([level[0], level[1]]))) : Object.freeze([]);
@@ -6645,7 +6750,7 @@ function bitgetPublicL2Url(symbol) {
 }
 function validatedSizingSnapshot(sizing, identity2, nowMs) {
   const policy = sizing?.riskPolicy;
-  const valid = sizing?.schemaVersion === AUTHORITATIVE_PAPER_EXECUTION_SIZING_EVIDENCE_VERSION && sizing.signalId === identity2.signalId && sizing.symbol === identity2.symbol && sizing.direction === identity2.direction && positive6(sizing.targetQuantity) && nonEmpty6(sizing.source) && fresh2(sizing.observedAtMs, sizing.maximumAgeMs, nowMs) && policy?.schemaVersion === "authoritative-paper-risk-policy-evidence-v1" && positive6(policy.leverage) && positive6(policy.riskPercent) && policy.riskPercent <= 1 && (policy.marginMode === "isolated" || policy.marginMode === "cross") && nonEmpty6(policy.source) && fresh2(policy.observedAtMs, policy.maximumAgeMs, nowMs);
+  const valid = sizing?.schemaVersion === AUTHORITATIVE_PAPER_EXECUTION_SIZING_EVIDENCE_VERSION && sizing.signalId === identity2.signalId && sizing.symbol === identity2.symbol && sizing.direction === identity2.direction && positive7(sizing.targetQuantity) && nonEmpty7(sizing.source) && fresh2(sizing.observedAtMs, sizing.maximumAgeMs, nowMs) && policy?.schemaVersion === "authoritative-paper-risk-policy-evidence-v1" && positive7(policy.leverage) && positive7(policy.riskPercent) && policy.riskPercent <= 1 && (policy.marginMode === "isolated" || policy.marginMode === "cross") && nonEmpty7(policy.source) && fresh2(policy.observedAtMs, policy.maximumAgeMs, nowMs);
   if (!valid) return null;
   return freeze({
     schemaVersion: sizing.schemaVersion,
@@ -6673,7 +6778,7 @@ async function collectAuthoritativePaperExecutionObservationInput(input) {
   if (typeof now !== "function") throw new TypeError("PUBLIC_L2_CLOCK_REQUIRED");
   const identity2 = scannerExecutionIdentity(input.context);
   const requestStartedAtMs = now();
-  if (!identity2 || !positive6(requestStartedAtMs)) return null;
+  if (!identity2 || !positive7(requestStartedAtMs)) return null;
   const sizing = validatedSizingSnapshot(input.sizingEvidence, identity2, requestStartedAtMs);
   if (!sizing) return null;
   const payload = record(await input.fetchPublicJson(bitgetPublicL2Url(identity2.symbol), {
@@ -6681,7 +6786,7 @@ async function collectAuthoritativePaperExecutionObservationInput(input) {
     signal: abortSignal(input.context.signal)
   }));
   const requestCompletedAtMs = now();
-  if (!positive6(requestCompletedAtMs) || requestCompletedAtMs < requestStartedAtMs) return null;
+  if (!positive7(requestCompletedAtMs) || requestCompletedAtMs < requestStartedAtMs) return null;
   if (!payload || payload.code !== "00000") return null;
   const data = record(payload.data);
   const observedAtMs = finiteScalar(data?.ts);
@@ -6721,7 +6826,7 @@ function unavailable(unit = "PERCENT") {
   });
 }
 function componentFromPercentEvidence(value, nowMs, maximumAgeMs) {
-  if (!value || !nonNegative5(value.valuePercent) || !nonEmpty6(value.source) || !COST_EVIDENCE_QUALITIES.has(value.quality) || !fresh2(value.observedAtMs, maximumAgeMs, nowMs) || value.quality === "NOT_APPLICABLE") return null;
+  if (!value || !nonNegative5(value.valuePercent) || !nonEmpty7(value.source) || !COST_EVIDENCE_QUALITIES.has(value.quality) || !fresh2(value.observedAtMs, maximumAgeMs, nowMs) || value.quality === "NOT_APPLICABLE") return null;
   return freeze({
     state: "PRESENT",
     value: value.valuePercent,
@@ -6760,7 +6865,7 @@ function referenceOnly(value, unit, quality, source, observedAtMs, nowMs, maximu
 function spreadPercent2(publicEvidence) {
   const bid = publicEvidence?.bidPrice;
   const ask = publicEvidence?.askPrice;
-  if (!positive6(bid) || !positive6(ask) || ask < bid) return null;
+  if (!positive7(bid) || !positive7(ask) || ask < bid) return null;
   const midpoint = (bid + ask) / 2;
   return midpoint > 0 ? (ask - bid) / midpoint * 100 : null;
 }
@@ -6768,7 +6873,7 @@ function observationRecord(observation) {
   return record(observation);
 }
 function resolvedSupplementalCostInput(input, nowMs, maximumAgeMs) {
-  if (!input || !nonEmpty6(input.costPolicyId) || !positive6(input.observedAtMs) || !fresh2(input.observedAtMs, maximumAgeMs, nowMs)) return null;
+  if (!input || !nonEmpty7(input.costPolicyId) || !positive7(input.observedAtMs) || !fresh2(input.observedAtMs, maximumAgeMs, nowMs)) return null;
   const latency = componentFromPercentEvidence(input.latency, nowMs, maximumAgeMs);
   const liquidityImpact = componentFromPercentEvidence(input.liquidityImpact, nowMs, maximumAgeMs);
   const partialFillImpact = componentFromPercentEvidence(input.partialFillImpact, nowMs, maximumAgeMs);
@@ -6786,8 +6891,8 @@ function resolvedSupplementalCostInput(input, nowMs, maximumAgeMs) {
   });
 }
 function auditAuthoritativeSupplementalCostSources(input = {}) {
-  const nowMs = positive6(input.nowMs) ? input.nowMs : Date.now();
-  const maximumAgeMs = positive6(input.maximumAgeMs) ? input.maximumAgeMs : PUBLIC_L2_MAXIMUM_AGE_MS;
+  const nowMs = positive7(input.nowMs) ? input.nowMs : Date.now();
+  const maximumAgeMs = positive7(input.maximumAgeMs) ? input.maximumAgeMs : PUBLIC_L2_MAXIMUM_AGE_MS;
   const publicEvidence = input.publicEvidence;
   const execution = observationRecord(input.executionObservation);
   const slippage = record(execution?.slippage);
@@ -6801,17 +6906,17 @@ function auditAuthoritativeSupplementalCostSources(input = {}) {
   const partialFillImpactCost = componentFromPercentEvidence(supplemental?.partialFillImpact, nowMs, maximumAgeMs);
   const fundingCost = supplemental?.funding?.quality === "NOT_APPLICABLE" ? null : componentFromPercentEvidence(supplemental?.funding, nowMs, maximumAgeMs);
   const blockers = [];
-  if (!supplemental || !nonEmpty6(supplemental.costPolicyId)) {
+  if (!supplemental || !nonEmpty7(supplemental.costPolicyId)) {
     blockers.push("SUPPLEMENTAL_COST_POLICY_EVIDENCE_UNAVAILABLE");
   }
-  if (!supplemental || !positive6(supplemental.observedAtMs) || !fresh2(supplemental.observedAtMs, maximumAgeMs, nowMs)) {
+  if (!supplemental || !positive7(supplemental.observedAtMs) || !fresh2(supplemental.observedAtMs, maximumAgeMs, nowMs)) {
     blockers.push("SUPPLEMENTAL_COST_OBSERVATION_UNAVAILABLE");
   }
   if (!latencyCost) blockers.push("LATENCY_COST_EVIDENCE_UNAVAILABLE");
   if (!liquidityImpactCost) blockers.push("LIQUIDITY_IMPACT_COST_EVIDENCE_UNAVAILABLE");
   if (!partialFillImpactCost) blockers.push("PARTIAL_FILL_COST_EVIDENCE_UNAVAILABLE");
   if (!fundingCost) blockers.push("FUNDING_EXECUTION_COST_EVIDENCE_UNAVAILABLE");
-  const observedAtMs = positive6(publicEvidence?.observedAtMs) ? publicEvidence.observedAtMs : null;
+  const observedAtMs = positive7(publicEvidence?.observedAtMs) ? publicEvidence.observedAtMs : null;
   const slippagePercent = finiteNumber2(slippage?.valuePercent);
   const slippageAtMs = finiteNumber2(slippage?.observedAtMs);
   const slippageQuality = slippage?.quality !== "NOT_APPLICABLE" && COST_EVIDENCE_QUALITIES.has(slippage?.quality) ? slippage?.quality : null;
@@ -6836,11 +6941,11 @@ function auditAuthoritativeSupplementalCostSources(input = {}) {
       spreadPercent2(publicEvidence),
       "OBSERVED",
       "BITGET_PUBLIC_BEST_BID_ASK",
-      positive6(publicEvidence?.tickerTimestampMs) ? publicEvidence.tickerTimestampMs : null,
+      positive7(publicEvidence?.tickerTimestampMs) ? publicEvidence.tickerTimestampMs : null,
       nowMs,
       maximumAgeMs
     ),
-    slippage: slippagePercent != null && slippagePercent >= 0 && slippageQuality != null && nonEmpty6(slippage?.source) && slippageAtMs != null && fresh2(slippageAtMs, maximumAgeMs, nowMs) ? freeze({
+    slippage: slippagePercent != null && slippagePercent >= 0 && slippageQuality != null && nonEmpty7(slippage?.source) && slippageAtMs != null && fresh2(slippageAtMs, maximumAgeMs, nowMs) ? freeze({
       state: "PRESENT",
       value: slippagePercent,
       unit: "PERCENT",
@@ -6854,7 +6959,7 @@ function auditAuthoritativeSupplementalCostSources(input = {}) {
       observedRoundTripMs,
       "MILLISECONDS",
       "OBSERVED_DURATION_ONLY",
-      nonEmpty6(latency?.source) ? latency.source : null,
+      nonEmpty7(latency?.source) ? latency.source : null,
       latencyAtMs,
       nowMs,
       maximumAgeMs
@@ -6863,7 +6968,7 @@ function auditAuthoritativeSupplementalCostSources(input = {}) {
       visibleLiquidity,
       "QUANTITY",
       "OBSERVED_PUBLIC_DEPTH",
-      nonEmpty6(liquidity?.source) ? liquidity.source : null,
+      nonEmpty7(liquidity?.source) ? liquidity.source : null,
       liquidityAtMs,
       nowMs,
       maximumAgeMs
@@ -6872,7 +6977,7 @@ function auditAuthoritativeSupplementalCostSources(input = {}) {
       null,
       "RATIO",
       "OBSERVED_PUBLIC_DEPTH",
-      nonEmpty6(partialFill?.source) ? partialFill.source : null,
+      nonEmpty7(partialFill?.source) ? partialFill.source : null,
       partialFillAtMs,
       nowMs,
       maximumAgeMs
@@ -6926,7 +7031,7 @@ var BITGET_POSITION_TIER_CONTRACT = Object.freeze({
   scalarDefaultAllowed: false,
   unknownIsZero: false
 });
-function finite11(value, code) {
+function finite12(value, code) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) throw new Error(code);
   return parsed;
@@ -6939,8 +7044,8 @@ function selectBitgetPositionTier(tiers, sizedNotional) {
     throw new Error("BITGET_POSITION_TIER_SCHEDULE_REQUIRED");
   }
   const normalized = tiers.map((tier, index) => {
-    const startUnit = finite11(tier?.startUnit ?? 0, "BITGET_POSITION_TIER_START_INVALID");
-    const maintenanceMarginRate = finite11(tier?.keepMarginRate, "BITGET_POSITION_TIER_MMR_INVALID");
+    const startUnit = finite12(tier?.startUnit ?? 0, "BITGET_POSITION_TIER_START_INVALID");
+    const maintenanceMarginRate = finite12(tier?.keepMarginRate, "BITGET_POSITION_TIER_MMR_INVALID");
     if (startUnit < 0 || maintenanceMarginRate < 0 || maintenanceMarginRate >= 1) {
       throw new Error("BITGET_POSITION_TIER_INVALID");
     }
@@ -6977,7 +7082,7 @@ var DEFAULT_EXECUTION_QUALITY_POLICY = Object.freeze({
   maxFillModelAgeMs: 7 * 24 * 60 * 60 * 1e3,
   maxObservedImplementationShortfallBps: 50
 });
-function finite12(value, fallback = null) {
+function finite13(value, fallback = null) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
@@ -7005,18 +7110,18 @@ function normalizeDirection(direction) {
   throw new Error("EXECUTION_DIRECTION_INVALID");
 }
 function normalizeLevels(levels, ascending) {
-  return (Array.isArray(levels) ? levels : []).map((level) => Array.isArray(level) ? { price: finite12(level[0]), size: finite12(level[1]) } : { price: finite12(level?.price), size: finite12(level?.size ?? level?.qty ?? level?.quantity) }).filter((level) => level.price > 0 && level.size > 0).sort((a, b) => ascending ? a.price - b.price : b.price - a.price);
+  return (Array.isArray(levels) ? levels : []).map((level) => Array.isArray(level) ? { price: finite13(level[0]), size: finite13(level[1]) } : { price: finite13(level?.price), size: finite13(level?.size ?? level?.qty ?? level?.quantity) }).filter((level) => level.price > 0 && level.size > 0).sort((a, b) => ascending ? a.price - b.price : b.price - a.price);
 }
 function walkOrderBook(raw = {}, policyInput = {}) {
   const policy = resolvePolicy(policyInput);
   const direction = String(raw.direction ?? "").trim();
   if (!direction) return { status: "NOT_AVAILABLE", reason: "EXECUTION_DIRECTION_REQUIRED" };
   const side = normalizeDirection(direction);
-  const targetQty = finite12(raw.targetQty);
+  const targetQty = finite13(raw.targetQty);
   if (!(targetQty > 0)) return { status: "NOT_AVAILABLE", reason: "TARGET_QTY_REQUIRED" };
   const levels = side === "BUY" ? normalizeLevels(raw.asks, true) : normalizeLevels(raw.bids, false);
   if (!levels.length) return { status: "NOT_AVAILABLE", reason: "EXECUTABLE_BOOK_NOT_AVAILABLE" };
-  const arrivalPrice = finite12(raw.arrivalPrice, levels[0].price);
+  const arrivalPrice = finite13(raw.arrivalPrice, levels[0].price);
   if (!(arrivalPrice > 0)) return { status: "NOT_AVAILABLE", reason: "ARRIVAL_PRICE_INVALID" };
   let remaining = targetQty;
   let filledQty = 0;
@@ -7057,12 +7162,12 @@ function walkOrderBook(raw = {}, policyInput = {}) {
 function evaluateCalibratedFillModel(raw = {}, policyInput = {}, nowInput = Date.now()) {
   const policy = resolvePolicy(policyInput);
   const modelId = String(raw.modelId ?? "").trim();
-  const fillProbability = finite12(raw.fillProbability);
-  const evaluationSamples = Math.max(0, finite12(raw.evaluationSamples, 0));
-  const brierScore = finite12(raw.brierScore);
-  const calibrationError = finite12(raw.calibrationError);
-  const evaluatedAt = finite12(raw.evaluatedAt);
-  const now = finite12(nowInput, Date.now());
+  const fillProbability = finite13(raw.fillProbability);
+  const evaluationSamples = Math.max(0, finite13(raw.evaluationSamples, 0));
+  const brierScore = finite13(raw.brierScore);
+  const calibrationError = finite13(raw.calibrationError);
+  const evaluatedAt = finite13(raw.evaluatedAt);
+  const now = finite13(nowInput, Date.now());
   const ageMs = evaluatedAt == null ? null : Math.max(0, now - evaluatedAt);
   const minimumSamples = policy.minFillModelSamples;
   if (!modelId || fillProbability == null || brierScore == null || calibrationError == null || evaluatedAt == null) return { status: "NOT_AVAILABLE", reason: "CALIBRATED_FILL_MODEL_EVIDENCE_MISSING", minimumSamples };
@@ -7104,18 +7209,18 @@ var PAPER_SIMULATED_EXECUTION_EVIDENCE_SAFETY = Object.freeze({
 });
 var PAPER_SIMULATED_PROVENANCE = Object.freeze(["SIMULATED", "public-L2"]);
 var LIVE_SUBMITTED_EXECUTION_PROVENANCE = "LIVE_SUBMITTED_EXECUTION";
-function finite13(value) {
+function finite14(value) {
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
   if (typeof value !== "string" || value.trim().length === 0) return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
-function nonEmpty7(value) {
+function nonEmpty8(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 function levelPrice(level) {
-  if (Array.isArray(level)) return finite13(level[0]);
-  return finite13(level.price);
+  if (Array.isArray(level)) return finite14(level[0]);
+  return finite14(level.price);
 }
 function bestPrice(levels, side) {
   const prices = levels.map(levelPrice).filter((value) => value != null && value > 0);
@@ -7138,20 +7243,20 @@ function freeze2(value) {
   return Object.freeze(value);
 }
 function buildPaperSimulatedExecutionEvidence(input) {
-  const nowMs = finite13(input?.nowMs) ?? Date.now();
-  const observedAtMs = finite13(input?.observedAtMs);
-  const maximumAgeMs = finite13(input?.maximumAgeMs);
-  const targetQuantity = finite13(input?.targetQuantity);
+  const nowMs = finite14(input?.nowMs) ?? Date.now();
+  const observedAtMs = finite14(input?.observedAtMs);
+  const maximumAgeMs = finite14(input?.maximumAgeMs);
+  const targetQuantity = finite14(input?.targetQuantity);
   const blockers = [];
   const paperSimulationBlockers = [];
   const blockPaperSimulation = (code) => {
     paperSimulationBlockers.push(code);
     blockers.push(code);
   };
-  if (!nonEmpty7(input?.source)) blockPaperSimulation("PUBLIC_DEPTH_SOURCE_REQUIRED");
-  if (!nonEmpty7(input?.market)) blockPaperSimulation("MARKET_REQUIRED");
-  if (!nonEmpty7(input?.symbol)) blockPaperSimulation("SYMBOL_REQUIRED");
-  if (!nonEmpty7(input?.direction)) blockPaperSimulation("EXECUTION_DIRECTION_REQUIRED");
+  if (!nonEmpty8(input?.source)) blockPaperSimulation("PUBLIC_DEPTH_SOURCE_REQUIRED");
+  if (!nonEmpty8(input?.market)) blockPaperSimulation("MARKET_REQUIRED");
+  if (!nonEmpty8(input?.symbol)) blockPaperSimulation("SYMBOL_REQUIRED");
+  if (!nonEmpty8(input?.direction)) blockPaperSimulation("EXECUTION_DIRECTION_REQUIRED");
   if (!(targetQuantity != null && targetQuantity > 0)) blockPaperSimulation("TARGET_QUANTITY_REQUIRED");
   if (!(observedAtMs != null && observedAtMs > 0)) blockPaperSimulation("PUBLIC_DEPTH_TIMESTAMP_REQUIRED");
   if (!(maximumAgeMs != null && maximumAgeMs > 0)) blockPaperSimulation("PUBLIC_DEPTH_FRESHNESS_CONTRACT_REQUIRED");
@@ -7161,7 +7266,7 @@ function buildPaperSimulatedExecutionEvidence(input) {
   if (observedAtMs != null && maximumAgeMs != null && nowMs - observedAtMs > maximumAgeMs) {
     blockPaperSimulation("PUBLIC_DEPTH_STALE");
   }
-  if (!Array.isArray(input?.provenance) || input.provenance.length === 0 || !input.provenance.every(nonEmpty7)) {
+  if (!Array.isArray(input?.provenance) || input.provenance.length === 0 || !input.provenance.every(nonEmpty8)) {
     blockPaperSimulation("PUBLIC_DEPTH_PROVENANCE_REQUIRED");
   }
   const bids = Array.isArray(input?.bids) ? input.bids.map(cloneLevel) : [];
@@ -7184,7 +7289,7 @@ function buildPaperSimulatedExecutionEvidence(input) {
     input?.policy ?? {},
     nowMs
   );
-  const sampleProvenance = nonEmpty7(calibratedFillModel.sampleProvenance) ? calibratedFillModel.sampleProvenance.trim() : null;
+  const sampleProvenance = nonEmpty8(calibratedFillModel.sampleProvenance) ? calibratedFillModel.sampleProvenance.trim() : null;
   const liveFillCalibrationBlockers = [];
   if (sampleProvenance !== LIVE_SUBMITTED_EXECUTION_PROVENANCE) {
     liveFillCalibrationBlockers.push("LIVE_SUBMITTED_EXECUTION_PROVENANCE_REQUIRED");
@@ -7192,7 +7297,7 @@ function buildPaperSimulatedExecutionEvidence(input) {
   if (fillModel?.status === "NOT_AVAILABLE") {
     liveFillCalibrationBlockers.push(String(fillModel.reason ?? "CALIBRATED_FILL_MODEL_EVIDENCE_MISSING"));
   }
-  const minimumSubmittedExecutionSamples = finite13(fillModel?.minimumSamples);
+  const minimumSubmittedExecutionSamples = finite14(fillModel?.minimumSamples);
   if (!(minimumSubmittedExecutionSamples != null && minimumSubmittedExecutionSamples > 0)) {
     throw new Error("LIVE_FILL_MINIMUM_SAMPLE_POLICY_UNAVAILABLE");
   }
@@ -7201,10 +7306,10 @@ function buildPaperSimulatedExecutionEvidence(input) {
   const liveFillCalibrationVerified = sampleProvenance === LIVE_SUBMITTED_EXECUTION_PROVENANCE && fillModel?.status !== "NOT_AVAILABLE";
   const enforcedProvenance = unique2([
     ...PAPER_SIMULATED_PROVENANCE,
-    ...Array.isArray(input?.provenance) ? input.provenance.filter(nonEmpty7) : []
+    ...Array.isArray(input?.provenance) ? input.provenance.filter(nonEmpty8) : []
   ]);
-  const requestStartedAtMs = finite13(input?.requestStartedAtMs);
-  const requestCompletedAtMs = finite13(input?.requestCompletedAtMs);
+  const requestStartedAtMs = finite14(input?.requestStartedAtMs);
+  const requestCompletedAtMs = finite14(input?.requestCompletedAtMs);
   const observedRoundTripMs = requestStartedAtMs != null && requestCompletedAtMs != null && requestCompletedAtMs >= requestStartedAtMs ? requestCompletedAtMs - requestStartedAtMs : null;
   if (observedRoundTripMs == null) blockers.push("OBSERVED_LATENCY_DURATION_MISSING");
   blockers.push(
@@ -7219,10 +7324,10 @@ function buildPaperSimulatedExecutionEvidence(input) {
     status: "BLOCKED_DATA",
     modelStatus: bookWalk?.status === "NOT_AVAILABLE" ? "BLOCKED_DATA" : "SIMULATION_AVAILABLE",
     blockers: unique2(blockers),
-    source: nonEmpty7(input?.source) ? input.source.trim() : null,
+    source: nonEmpty8(input?.source) ? input.source.trim() : null,
     timestamp: observedAtMs,
-    market: nonEmpty7(input?.market) ? input.market.trim() : null,
-    symbol: nonEmpty7(input?.symbol) ? input.symbol.trim() : null,
+    market: nonEmpty8(input?.market) ? input.market.trim() : null,
+    symbol: nonEmpty8(input?.symbol) ? input.symbol.trim() : null,
     observed: {
       bid,
       ask,
@@ -7236,19 +7341,19 @@ function buildPaperSimulatedExecutionEvidence(input) {
     },
     estimated: {
       slippageEstimate: {
-        percent: finite13(bookWalk?.slippageBps) == null ? null : Number(bookWalk.slippageBps) / 100,
+        percent: finite14(bookWalk?.slippageBps) == null ? null : Number(bookWalk.slippageBps) / 100,
         quality: bookWalk?.status === "NOT_AVAILABLE" ? "NOT_AVAILABLE" : "ESTIMATED",
         model: bookWalk?.model ?? null
       },
       liquidityEvidence: {
         targetQuantity: targetQuantity != null && targetQuantity > 0 ? targetQuantity : null,
-        visibleExecutableQuantity: finite13(bookWalk?.filledQty),
-        visibleCoverageRatio: finite13(bookWalk?.coverageRatio),
+        visibleExecutableQuantity: finite14(bookWalk?.filledQty),
+        visibleCoverageRatio: finite14(bookWalk?.coverageRatio),
         permanentMarketImpactEstimated: false
       },
       partialFillEstimate: {
-        visibleDepthFillFraction: finite13(bookWalk?.coverageRatio),
-        calibratedFillProbability: liveFillCalibrationVerified ? finite13(fillModel?.fillProbability) : null,
+        visibleDepthFillFraction: finite14(bookWalk?.coverageRatio),
+        calibratedFillProbability: liveFillCalibrationVerified ? finite14(fillModel?.fillProbability) : null,
         quality: liveFillCalibrationVerified ? "CALIBRATED_ESTIMATE" : "UNCALIBRATED_MODEL_ONLY"
       }
     },
@@ -7276,8 +7381,8 @@ function buildPaperSimulatedExecutionEvidence(input) {
       blockers: unique2(liveFillCalibrationBlockers),
       requiredSampleProvenance: LIVE_SUBMITTED_EXECUTION_PROVENANCE,
       sampleProvenance: sampleProvenance === LIVE_SUBMITTED_EXECUTION_PROVENANCE ? sampleProvenance : null,
-      submittedExecutionSamples: sampleProvenance === LIVE_SUBMITTED_EXECUTION_PROVENANCE ? finite13(fillModel?.evaluationSamples) : null,
-      submittedExecutionSampleCredit: sampleProvenance === LIVE_SUBMITTED_EXECUTION_PROVENANCE ? finite13(fillModel?.evaluationSamples) ?? 0 : 0,
+      submittedExecutionSamples: sampleProvenance === LIVE_SUBMITTED_EXECUTION_PROVENANCE ? finite14(fillModel?.evaluationSamples) : null,
+      submittedExecutionSampleCredit: sampleProvenance === LIVE_SUBMITTED_EXECUTION_PROVENANCE ? finite14(fillModel?.evaluationSamples) ?? 0 : 0,
       minimumSubmittedExecutionSamples,
       fillModel,
       promotedToRealFill: false,
@@ -7297,20 +7402,20 @@ function buildPaperSimulatedExecutionEvidence(input) {
 // src/services/authoritative-paper-callback-owners.service.ts
 var AUTHORITATIVE_PAPER_CALLBACK_OWNERS_VERSION = "authoritative-paper-callback-owners-v1";
 var QUALITIES2 = /* @__PURE__ */ new Set(["OBSERVED", "DOCUMENTED", "ESTIMATED", "NOT_APPLICABLE"]);
-function finite14(value) {
+function finite15(value) {
   return typeof value === "number" && Number.isFinite(value);
 }
-function positive7(value) {
-  return finite14(value) && value > 0;
+function positive8(value) {
+  return finite15(value) && value > 0;
 }
 function nonNegative6(value) {
-  return finite14(value) && value >= 0;
+  return finite15(value) && value >= 0;
 }
-function nonEmpty8(value) {
+function nonEmpty9(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 function fresh3(observedAtMs, maximumAgeMs, nowMs) {
-  return positive7(observedAtMs) && positive7(maximumAgeMs) && observedAtMs <= nowMs && nowMs - observedAtMs <= maximumAgeMs;
+  return positive8(observedAtMs) && positive8(maximumAgeMs) && observedAtMs <= nowMs && nowMs - observedAtMs <= maximumAgeMs;
 }
 function freeze3(value) {
   if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
@@ -7318,7 +7423,7 @@ function freeze3(value) {
   return Object.freeze(value);
 }
 function riskPolicy(value, nowMs) {
-  if (value?.schemaVersion !== "authoritative-paper-risk-policy-evidence-v1" || !positive7(value.leverage) || !positive7(value.riskPercent) || value.riskPercent > 1 || value.marginMode !== "isolated" && value.marginMode !== "cross" || !nonEmpty8(value.source) || !fresh3(value.observedAtMs, value.maximumAgeMs, nowMs)) {
+  if (value?.schemaVersion !== "authoritative-paper-risk-policy-evidence-v1" || !positive8(value.leverage) || !positive8(value.riskPercent) || value.riskPercent > 1 || value.marginMode !== "isolated" && value.marginMode !== "cross" || !nonEmpty9(value.source) || !fresh3(value.observedAtMs, value.maximumAgeMs, nowMs)) {
     throw new Error("AUTHORITATIVE_PAPER_RISK_POLICY_EVIDENCE_INVALID");
   }
   return freeze3({ ...value, source: value.source.trim() });
@@ -7330,7 +7435,7 @@ function buildAuthoritativeSizedContractRules(input) {
   const nowMs = input.nowMs ?? Date.now();
   const maximumAgeMs = input.maximumAgeMs ?? 3e4;
   const evidence = input.publicEvidence;
-  if (evidence?.provider !== "bitget" || evidence.dataQuality !== "ready" || !positive7(input.sizedNotional) || !fresh3(input.observedAtMs, maximumAgeMs, nowMs) || !positive7(evidence.sizeMultiplier) || !Number.isInteger(input.quantityPrecision) || input.quantityPrecision < 0 || !positive7(evidence.minTradeNum) || !positive7(evidence.minTradeUsdt) || !positive7(evidence.maxLeverage)) {
+  if (evidence?.provider !== "bitget" || evidence.dataQuality !== "ready" || !positive8(input.sizedNotional) || !fresh3(input.observedAtMs, maximumAgeMs, nowMs) || !positive8(evidence.sizeMultiplier) || !Number.isInteger(input.quantityPrecision) || input.quantityPrecision < 0 || !positive8(evidence.minTradeNum) || !positive8(evidence.minTradeUsdt) || !positive8(evidence.maxLeverage)) {
     throw new Error("AUTHORITATIVE_SIZED_CONTRACT_INPUT_INVALID");
   }
   const policy = riskPolicy(input.riskPolicy, nowMs);
@@ -7379,11 +7484,11 @@ function buildAuthoritativePaperExecutionObservation(input) {
   const liquidity = estimated?.liquidityEvidence;
   const paperSimulation = evidence.paperSimulation;
   const liveGradeFillReadiness = evidence.liveGradeFillReadiness;
-  if (paperSimulation?.status !== "READY" || paperSimulation?.evidenceClass !== "SIMULATED" || paperSimulation?.marketDataClass !== "public-L2" || paperSimulation?.realFillClaim !== false || paperSimulation?.publicDepthIsFillProof !== false || slippage?.quality !== "ESTIMATED" || !nonNegative6(slippage.percent) || !positive7(liquidity?.visibleExecutableQuantity) || !positive7(liquidity?.visibleCoverageRatio) || Number(liquidity.visibleCoverageRatio) < 1) {
+  if (paperSimulation?.status !== "READY" || paperSimulation?.evidenceClass !== "SIMULATED" || paperSimulation?.marketDataClass !== "public-L2" || paperSimulation?.realFillClaim !== false || paperSimulation?.publicDepthIsFillProof !== false || slippage?.quality !== "ESTIMATED" || !nonNegative6(slippage.percent) || !positive8(liquidity?.visibleExecutableQuantity) || !positive8(liquidity?.visibleCoverageRatio) || Number(liquidity.visibleCoverageRatio) < 1) {
     throw new Error("AUTHORITATIVE_EXECUTION_OBSERVATION_DATA_UNAVAILABLE");
   }
   const observedAtMs = input.executionEvidenceInput.observedAtMs;
-  const provenance = Array.isArray(evidence.provenance) ? evidence.provenance.filter(nonEmpty8) : [];
+  const provenance = Array.isArray(evidence.provenance) ? evidence.provenance.filter(nonEmpty9) : [];
   if (!provenance.includes("SIMULATED") || !provenance.includes("public-L2")) {
     throw new Error("AUTHORITATIVE_EXECUTION_OBSERVATION_PROVENANCE_INVALID");
   }
@@ -7427,7 +7532,7 @@ function buildAuthoritativePaperExecutionObservation(input) {
   });
 }
 function validatedComponent(value, nowMs, maximumAgeMs, code) {
-  if (!value || !nonNegative6(value.valuePercent) || !QUALITIES2.has(value.quality) || !nonEmpty8(value.source) || !fresh3(value.observedAtMs, maximumAgeMs, nowMs) || value.quality === "NOT_APPLICABLE" && value.valuePercent !== 0) {
+  if (!value || !nonNegative6(value.valuePercent) || !QUALITIES2.has(value.quality) || !nonEmpty9(value.source) || !fresh3(value.observedAtMs, maximumAgeMs, nowMs) || value.quality === "NOT_APPLICABLE" && value.valuePercent !== 0) {
     throw new Error(code);
   }
   return freeze3({ ...value, source: value.source.trim() });
@@ -7435,7 +7540,7 @@ function validatedComponent(value, nowMs, maximumAgeMs, code) {
 function buildAuthoritativeSupplementalCostEvidence(input) {
   const nowMs = input.nowMs ?? Date.now();
   const maximumAgeMs = input.maximumAgeMs ?? 3e4;
-  if (!nonEmpty8(input.costPolicyId) || !fresh3(input.observedAtMs, maximumAgeMs, nowMs)) {
+  if (!nonEmpty9(input.costPolicyId) || !fresh3(input.observedAtMs, maximumAgeMs, nowMs)) {
     throw new Error("AUTHORITATIVE_COST_POLICY_EVIDENCE_INVALID");
   }
   return freeze3({
@@ -7477,31 +7582,31 @@ var AUTHORITATIVE_PAPER_RISK_SIZING_SOURCE_VERSION = "authoritative-paper-risk-s
 function record3(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : null;
 }
-function finite15(value) {
+function finite16(value) {
   return typeof value === "number" && Number.isFinite(value);
 }
-function positive8(value) {
-  return finite15(value) && value > 0;
+function positive9(value) {
+  return finite16(value) && value > 0;
 }
 function nonNegative7(value) {
-  return finite15(value) && value >= 0;
+  return finite16(value) && value >= 0;
 }
-function nonEmpty9(value) {
+function nonEmpty10(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 function exactSha3(value) {
   return typeof value === "string" && /^[0-9a-f]{40}$/u.test(value);
 }
 function normalizeSymbol(value) {
-  if (!nonEmpty9(value)) return null;
+  if (!nonEmpty10(value)) return null;
   const symbol = value.trim().toUpperCase();
   return /^[A-Z0-9._:-]{1,40}$/u.test(symbol) ? symbol : null;
 }
 function fresh4(observedAtMs, maximumAgeMs, nowMs) {
-  return positive8(observedAtMs) && positive8(maximumAgeMs) && observedAtMs <= nowMs && nowMs - observedAtMs <= maximumAgeMs;
+  return positive9(observedAtMs) && positive9(maximumAgeMs) && observedAtMs <= nowMs && nowMs - observedAtMs <= maximumAgeMs;
 }
 function nonEmptyStrings2(value) {
-  return Array.isArray(value) && value.length > 0 && value.every(nonEmpty9);
+  return Array.isArray(value) && value.length > 0 && value.every(nonEmpty10);
 }
 function deepFreeze4(value) {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {
@@ -7538,11 +7643,11 @@ function blankEvidence(input, nowMs, status, blockers, partial = {}) {
     observedAtMs: null,
     market,
     symbol,
-    strategyScope: nonEmpty9(input.strategyScope) ? input.strategyScope.trim() : null,
+    strategyScope: nonEmpty10(input.strategyScope) ? input.strategyScope.trim() : null,
     side,
     researchCodeSha: exactSha3(input.researchCodeSha) ? input.researchCodeSha : null,
     paperStateSourceSha: exactSha3(input.paperStateSourceSha) ? input.paperStateSourceSha : null,
-    paperAccountId: nonEmpty9(input.paperAccountId) ? input.paperAccountId.trim() : null,
+    paperAccountId: nonEmpty10(input.paperAccountId) ? input.paperAccountId.trim() : null,
     equity: null,
     riskPercent: null,
     requestedLeverage: null,
@@ -7577,9 +7682,9 @@ function validatePolicy(value, input, nowMs) {
   const object = record3(value);
   if (!object) return { policy: null, blockers: ["RISK_POLICY_MISSING"] };
   if (object.schemaVersion !== "authoritative-paper-generic-risk-policy-evidence-v1") blockers.push("RISK_POLICY_SCHEMA_INVALID");
-  if (!nonEmpty9(object.policyId)) blockers.push("RISK_POLICY_ID_MISSING");
-  if (!nonEmpty9(object.policyVersion)) blockers.push("RISK_POLICY_VERSION_MISSING");
-  if (!nonEmpty9(object.source)) blockers.push("RISK_POLICY_SOURCE_MISSING");
+  if (!nonEmpty10(object.policyId)) blockers.push("RISK_POLICY_ID_MISSING");
+  if (!nonEmpty10(object.policyVersion)) blockers.push("RISK_POLICY_VERSION_MISSING");
+  if (!nonEmpty10(object.source)) blockers.push("RISK_POLICY_SOURCE_MISSING");
   if (!nonEmptyStrings2(object.provenance)) blockers.push("RISK_POLICY_PROVENANCE_MISSING");
   if (!fresh4(Number(object.observedAtMs), Number(object.maximumAgeMs), nowMs)) blockers.push("RISK_POLICY_STALE_OR_INVALID");
   if (!exactSha3(object.researchCodeSha) || object.researchCodeSha !== input.researchCodeSha) blockers.push("RISK_POLICY_RESEARCH_SHA_MISMATCH");
@@ -7589,12 +7694,12 @@ function validatePolicy(value, input, nowMs) {
   if (symbolScopes !== "*" && (!Array.isArray(symbolScopes) || !symbolScopes.map(normalizeSymbol).includes(input.symbol))) {
     blockers.push("RISK_POLICY_WRONG_SYMBOL_SCOPE");
   }
-  if (!positive8(object.riskPercent) || object.riskPercent > TRADING_RISK_POLICY.maximumRiskPercent) blockers.push("RISK_POLICY_RISK_PERCENT_INVALID");
-  if (!positive8(object.requestedLeverage)) blockers.push("RISK_POLICY_REQUESTED_LEVERAGE_MISSING_OR_INVALID");
-  if (object.maximumLeverage != null && !positive8(object.maximumLeverage)) blockers.push("RISK_POLICY_MAXIMUM_LEVERAGE_INVALID");
-  if (positive8(object.requestedLeverage) && positive8(object.maximumLeverage) && object.requestedLeverage > object.maximumLeverage) blockers.push("RISK_POLICY_REQUESTED_LEVERAGE_EXCEEDS_POLICY");
+  if (!positive9(object.riskPercent) || object.riskPercent > TRADING_RISK_POLICY.maximumRiskPercent) blockers.push("RISK_POLICY_RISK_PERCENT_INVALID");
+  if (!positive9(object.requestedLeverage)) blockers.push("RISK_POLICY_REQUESTED_LEVERAGE_MISSING_OR_INVALID");
+  if (object.maximumLeverage != null && !positive9(object.maximumLeverage)) blockers.push("RISK_POLICY_MAXIMUM_LEVERAGE_INVALID");
+  if (positive9(object.requestedLeverage) && positive9(object.maximumLeverage) && object.requestedLeverage > object.maximumLeverage) blockers.push("RISK_POLICY_REQUESTED_LEVERAGE_EXCEEDS_POLICY");
   if (input.market === "CRYPTO_FUTURES") {
-    if (!positive8(object.maximumLeverage)) blockers.push("RISK_POLICY_MAXIMUM_LEVERAGE_REQUIRED");
+    if (!positive9(object.maximumLeverage)) blockers.push("RISK_POLICY_MAXIMUM_LEVERAGE_REQUIRED");
     if (object.marginMode !== "isolated" && object.marginMode !== "cross") blockers.push("RISK_POLICY_MARGIN_MODE_INVALID");
   } else {
     if (object.marginMode !== "cash") blockers.push("RISK_POLICY_CASH_MARGIN_MODE_REQUIRED");
@@ -7609,8 +7714,8 @@ function validateContractRulesEvidence(value, market, symbol, nowMs) {
   if (object.schemaVersion !== "authoritative-paper-contract-rules-evidence-v1") blockers.push("CONTRACT_RULES_SCHEMA_INVALID");
   if (object.market !== market) blockers.push("CONTRACT_RULES_WRONG_MARKET");
   if (normalizeSymbol(object.symbol) !== symbol) blockers.push("CONTRACT_RULES_WRONG_SYMBOL");
-  if (!nonEmpty9(object.ruleVersion)) blockers.push("CONTRACT_RULE_VERSION_MISSING");
-  if (!nonEmpty9(object.source)) blockers.push("CONTRACT_RULES_SOURCE_MISSING");
+  if (!nonEmpty10(object.ruleVersion)) blockers.push("CONTRACT_RULE_VERSION_MISSING");
+  if (!nonEmpty10(object.source)) blockers.push("CONTRACT_RULES_SOURCE_MISSING");
   if (!nonEmptyStrings2(object.provenance)) blockers.push("CONTRACT_RULES_PROVENANCE_MISSING");
   if (!fresh4(Number(object.observedAtMs), Number(object.maximumAgeMs), nowMs)) blockers.push("CONTRACT_RULES_STALE_OR_INVALID");
   const rules = record3(object.rules);
@@ -7619,16 +7724,16 @@ function validateContractRulesEvidence(value, market, symbol, nowMs) {
   if (rules.status !== "live") blockers.push("CONTRACT_RULES_NOT_LIVE");
   const updatedAtMs = typeof rules.updatedAt === "string" ? Date.parse(rules.updatedAt) : Number.NaN;
   if (!Number.isFinite(updatedAtMs) || !fresh4(updatedAtMs, Number(object.maximumAgeMs), nowMs)) blockers.push("CONTRACT_RULES_PAYLOAD_STALE");
-  if (!positive8(rules.quantityStep)) blockers.push("CONTRACT_RULES_QUANTITY_STEP_REQUIRED");
-  if (!finite15(rules.quantityPrecision) || !Number.isInteger(rules.quantityPrecision) || rules.quantityPrecision < 0 || rules.quantityPrecision > 12) blockers.push("CONTRACT_RULES_QUANTITY_PRECISION_REQUIRED");
-  if (!positive8(rules.minimumQuantity)) blockers.push("CONTRACT_RULES_MINIMUM_QUANTITY_REQUIRED");
-  if (!positive8(rules.minimumNotional)) blockers.push("CONTRACT_RULES_MINIMUM_NOTIONAL_REQUIRED");
+  if (!positive9(rules.quantityStep)) blockers.push("CONTRACT_RULES_QUANTITY_STEP_REQUIRED");
+  if (!finite16(rules.quantityPrecision) || !Number.isInteger(rules.quantityPrecision) || rules.quantityPrecision < 0 || rules.quantityPrecision > 12) blockers.push("CONTRACT_RULES_QUANTITY_PRECISION_REQUIRED");
+  if (!positive9(rules.minimumQuantity)) blockers.push("CONTRACT_RULES_MINIMUM_QUANTITY_REQUIRED");
+  if (!positive9(rules.minimumNotional)) blockers.push("CONTRACT_RULES_MINIMUM_NOTIONAL_REQUIRED");
   if (market === "CRYPTO_FUTURES") {
-    if (!positive8(rules.maximumLeverage)) blockers.push("CONTRACT_RULES_MAXIMUM_LEVERAGE_REQUIRED");
+    if (!positive9(rules.maximumLeverage)) blockers.push("CONTRACT_RULES_MAXIMUM_LEVERAGE_REQUIRED");
     if (!nonNegative7(rules.maintenanceMarginRate) || Number(rules.maintenanceMarginRate) >= 1) {
       blockers.push("CONTRACT_RULES_MAINTENANCE_MARGIN_REQUIRED");
     }
-  } else if (rules.maximumLeverage != null && !positive8(rules.maximumLeverage)) {
+  } else if (rules.maximumLeverage != null && !positive9(rules.maximumLeverage)) {
     blockers.push("CONTRACT_RULES_MAXIMUM_LEVERAGE_INVALID");
   }
   return blockers.length > 0 ? { evidence: null, blockers } : { evidence: value, blockers };
@@ -7640,13 +7745,13 @@ function validateMarketEvidence(value, market, symbol, side, nowMs) {
   if (object.schemaVersion !== "authoritative-paper-market-risk-evidence-v1") blockers.push("MARKET_EVIDENCE_SCHEMA_INVALID");
   if (object.market !== market) blockers.push("MARKET_EVIDENCE_WRONG_MARKET");
   if (normalizeSymbol(object.symbol) !== symbol) blockers.push("MARKET_EVIDENCE_WRONG_SYMBOL");
-  if (!nonEmpty9(object.source)) blockers.push("MARKET_EVIDENCE_SOURCE_MISSING");
+  if (!nonEmpty10(object.source)) blockers.push("MARKET_EVIDENCE_SOURCE_MISSING");
   if (!nonEmptyStrings2(object.provenance)) blockers.push("MARKET_EVIDENCE_PROVENANCE_MISSING");
   if (!fresh4(Number(object.observedAtMs), Number(object.maximumAgeMs), nowMs)) blockers.push("MARKET_EVIDENCE_STALE_OR_INVALID");
   if (object.status !== "live") blockers.push("MARKET_EVIDENCE_NOT_LIVE");
-  if (!positive8(object.entryPrice)) blockers.push("MARKET_ENTRY_PRICE_INVALID");
-  if (!positive8(object.stopLossPrice)) blockers.push("MARKET_STOP_PRICE_INVALID");
-  if (positive8(object.entryPrice) && positive8(object.stopLossPrice)) {
+  if (!positive9(object.entryPrice)) blockers.push("MARKET_ENTRY_PRICE_INVALID");
+  if (!positive9(object.stopLossPrice)) blockers.push("MARKET_STOP_PRICE_INVALID");
+  if (positive9(object.entryPrice) && positive9(object.stopLossPrice)) {
     if (side === "LONG" && object.stopLossPrice >= object.entryPrice) blockers.push("MARKET_STOP_DIRECTION_INVALID");
     if (side === "SHORT" && object.stopLossPrice <= object.entryPrice) blockers.push("MARKET_STOP_DIRECTION_INVALID");
   }
@@ -7659,20 +7764,20 @@ function validateCostEvidence(value, market, symbol, nowMs) {
   if (object.schemaVersion !== "authoritative-paper-risk-cost-evidence-v1") blockers.push("RISK_COST_EVIDENCE_SCHEMA_INVALID");
   if (object.market !== market) blockers.push("RISK_COST_EVIDENCE_WRONG_MARKET");
   if (normalizeSymbol(object.symbol) !== symbol) blockers.push("RISK_COST_EVIDENCE_WRONG_SYMBOL");
-  if (!nonEmpty9(object.source)) blockers.push("RISK_COST_EVIDENCE_SOURCE_MISSING");
+  if (!nonEmpty10(object.source)) blockers.push("RISK_COST_EVIDENCE_SOURCE_MISSING");
   if (!nonEmptyStrings2(object.provenance)) blockers.push("RISK_COST_EVIDENCE_PROVENANCE_MISSING");
   if (!fresh4(Number(object.observedAtMs), Number(object.maximumAgeMs), nowMs)) blockers.push("RISK_COST_EVIDENCE_STALE_OR_INVALID");
   if (!nonNegative7(object.entryFeeRate) || !nonNegative7(object.exitFeeRate) || !nonNegative7(object.slippageRate)) {
     blockers.push("RISK_COST_RATE_INVALID");
   }
-  if (!finite15(object.estimatedFundingRate)) blockers.push("RISK_FUNDING_RATE_INVALID");
+  if (!finite16(object.estimatedFundingRate)) blockers.push("RISK_FUNDING_RATE_INVALID");
   if (market !== "CRYPTO_FUTURES" && object.estimatedFundingRate !== 0) {
     blockers.push("RISK_FUNDING_MUST_BE_EXPLICIT_ZERO_WHEN_NOT_APPLICABLE");
   }
   return blockers.length > 0 ? { evidence: null, blockers } : { evidence: value, blockers };
 }
 function buildAuthoritativePaperRiskSizingEvidence(input, nowMs = Date.now()) {
-  if (!finite15(nowMs) || nowMs <= 0) {
+  if (!finite16(nowMs) || nowMs <= 0) {
     throw new TypeError("AUTHORITATIVE_PAPER_RISK_SIZING_CLOCK_INVALID");
   }
   if (!marketSupported(input?.market)) {
@@ -7681,11 +7786,11 @@ function buildAuthoritativePaperRiskSizingEvidence(input, nowMs = Date.now()) {
   const market = input.market;
   const symbol = normalizeSymbol(input.symbol);
   if (!symbol) return blankEvidence(input, nowMs, "BLOCKED_DATA", ["SYMBOL_INVALID"]);
-  if (!nonEmpty9(input.strategyScope)) return blankEvidence(input, nowMs, "BLOCKED_DATA", ["STRATEGY_SCOPE_REQUIRED"]);
+  if (!nonEmpty10(input.strategyScope)) return blankEvidence(input, nowMs, "BLOCKED_DATA", ["STRATEGY_SCOPE_REQUIRED"]);
   if (!sideSupported(market, input.side)) return blankEvidence(input, nowMs, "BLOCKED_DATA", ["UNSUPPORTED_SIDE"]);
   if (!exactSha3(input.researchCodeSha)) return blankEvidence(input, nowMs, "BLOCKED_DATA", ["RESEARCH_SHA_INVALID"]);
   if (!exactSha3(input.paperStateSourceSha)) return blankEvidence(input, nowMs, "BLOCKED_DATA", ["PAPER_STATE_SOURCE_SHA_INVALID"]);
-  if (!nonEmpty9(input.paperAccountId)) return blankEvidence(input, nowMs, "BLOCKED_DATA", ["PAPER_ACCOUNT_ID_REQUIRED"]);
+  if (!nonEmpty10(input.paperAccountId)) return blankEvidence(input, nowMs, "BLOCKED_DATA", ["PAPER_ACCOUNT_ID_REQUIRED"]);
   const strategyScope = input.strategyScope.trim();
   const policyCheck = validatePolicy(input.riskPolicy, {
     market,
@@ -7713,10 +7818,10 @@ function buildAuthoritativePaperRiskSizingEvidence(input, nowMs = Date.now()) {
   if (snapshot.accountId !== input.paperAccountId.trim()) snapshotBlockers.push("PAPER_STATE_WRONG_ACCOUNT");
   if (snapshot.market !== market) snapshotBlockers.push("PAPER_STATE_WRONG_MARKET");
   if (snapshot.sourceSha !== input.paperStateSourceSha) snapshotBlockers.push("PAPER_STATE_WRONG_SOURCE_SHA");
-  if (!positive8(snapshot.equity) || snapshot.equity !== snapshot.state.account.equity) snapshotBlockers.push("PAPER_STATE_EQUITY_INVALID");
+  if (!positive9(snapshot.equity) || snapshot.equity !== snapshot.state.account.equity) snapshotBlockers.push("PAPER_STATE_EQUITY_INVALID");
   if (snapshotBlockers.length > 0) {
     return blankEvidence(input, nowMs, "BLOCKED_DATA", snapshotBlockers, {
-      equity: positive8(snapshot.equity) ? snapshot.equity : null,
+      equity: positive9(snapshot.equity) ? snapshot.equity : null,
       riskPercent: policy.riskPercent,
       requestedLeverage: policy.requestedLeverage,
       marginMode: policy.marginMode,
@@ -7737,7 +7842,7 @@ function buildAuthoritativePaperRiskSizingEvidence(input, nowMs = Date.now()) {
   }
   const contractEvidence = contractCheck.evidence;
   const rules = contractEvidence.rules;
-  if (positive8(rules.maximumLeverage) && policy.requestedLeverage > rules.maximumLeverage) {
+  if (positive9(rules.maximumLeverage) && policy.requestedLeverage > rules.maximumLeverage) {
     return blankEvidence(input, nowMs, "BLOCKED_DATA", ["REQUESTED_LEVERAGE_EXCEEDS_CONTRACT"], {
       equity: snapshot.equity,
       riskPercent: policy.riskPercent,
@@ -7817,7 +7922,7 @@ function buildAuthoritativePaperRiskSizingEvidence(input, nowMs = Date.now()) {
     marketEvidence.source,
     costEvidence.source,
     "trading-risk-engine.service.ts"
-  ].filter(nonEmpty9);
+  ].filter(nonEmpty10);
   const observedAtMs = Math.min(
     policy.observedAtMs,
     snapshot.observedAtMs,
@@ -7851,7 +7956,7 @@ function buildAuthoritativePaperRiskSizingEvidence(input, nowMs = Date.now()) {
     riskAmount: riskEngineResult.maximumRiskAmount,
     riskEngineResult
   };
-  if (!riskEngineResult.allowed || !positive8(riskEngineResult.recommendedQuantity) || !positive8(riskEngineResult.notionalValue) || !positive8(riskEngineResult.maximumRiskAmount)) {
+  if (!riskEngineResult.allowed || !positive9(riskEngineResult.recommendedQuantity) || !positive9(riskEngineResult.notionalValue) || !positive9(riskEngineResult.maximumRiskAmount)) {
     const blockers = riskEngineResult.blockCodes.length > 0 ? riskEngineResult.blockCodes.map((code) => `RISK_ENGINE_${code}`) : ["RISK_ENGINE_NO_ELIGIBLE_QUANTITY"];
     return blankEvidence(input, nowMs, "NO_TRADE", blockers, {
       ...common,
@@ -7909,20 +8014,20 @@ var SUPPORTED_MARKETS = /* @__PURE__ */ new Set([
 function record4(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : null;
 }
-function nonEmpty10(value) {
+function nonEmpty11(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 function exactSha4(value) {
   return typeof value === "string" && /^[0-9a-f]{40}$/u.test(value);
 }
-function positive9(value) {
+function positive10(value) {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 function fresh5(observedAtMs, maximumAgeMs, nowMs) {
-  return positive9(observedAtMs) && positive9(maximumAgeMs) && observedAtMs <= nowMs && nowMs - observedAtMs <= maximumAgeMs;
+  return positive10(observedAtMs) && positive10(maximumAgeMs) && observedAtMs <= nowMs && nowMs - observedAtMs <= maximumAgeMs;
 }
 function nonEmptyStrings3(value) {
-  return Array.isArray(value) && value.length > 0 && value.every(nonEmpty10);
+  return Array.isArray(value) && value.length > 0 && value.every(nonEmpty11);
 }
 function supportedMarketScopes(value) {
   return Array.isArray(value) && value.length > 0 && value.every((market) => SUPPORTED_MARKETS.has(market));
@@ -7934,11 +8039,11 @@ function normalizedSymbolScopes(value) {
   return scopes.every((symbol) => symbol != null) ? Object.freeze(scopes) : null;
 }
 function normalizeSymbol2(value) {
-  if (!nonEmpty10(value)) return null;
+  if (!nonEmpty11(value)) return null;
   const symbol = value.trim().toUpperCase();
   return /^[A-Z0-9._:-]{1,40}$/u.test(symbol) ? symbol : null;
 }
-function blocked4(request, blockers) {
+function blocked5(request, blockers) {
   return Object.freeze({
     schemaVersion: AUTHORITATIVE_PAPER_GENERIC_RISK_POLICY_PRODUCER_VERSION,
     status: "BLOCKED_DATA",
@@ -7962,7 +8067,7 @@ function validateRequest(request) {
   const blockers = [];
   if (!SUPPORTED_MARKETS.has(request?.market)) blockers.push("RISK_POLICY_SOURCE_MARKET_UNSUPPORTED");
   if (!normalizeSymbol2(request?.symbol)) blockers.push("RISK_POLICY_SOURCE_SYMBOL_INVALID");
-  if (!nonEmpty10(request?.strategyScope)) blockers.push("RISK_POLICY_SOURCE_STRATEGY_SCOPE_REQUIRED");
+  if (!nonEmpty11(request?.strategyScope)) blockers.push("RISK_POLICY_SOURCE_STRATEGY_SCOPE_REQUIRED");
   if (!exactSha4(request?.researchCodeSha)) blockers.push("RISK_POLICY_SOURCE_EXACT_RESEARCH_SHA_REQUIRED");
   return blockers;
 }
@@ -7973,11 +8078,11 @@ function validateRecordEnvelope(value, request, nowMs) {
   if (object.schemaVersion !== AUTHORITATIVE_PAPER_GENERIC_RISK_POLICY_RECORD_VERSION) {
     blockers.push("RISK_POLICY_CANONICAL_RECORD_SCHEMA_INVALID");
   }
-  if (!nonEmpty10(object.recordId)) blockers.push("RISK_POLICY_CANONICAL_RECORD_ID_MISSING");
-  if (!nonEmpty10(object.recordVersion)) blockers.push("RISK_POLICY_CANONICAL_RECORD_VERSION_MISSING");
-  if (!nonEmpty10(object.policyId)) blockers.push("RISK_POLICY_CANONICAL_RECORD_POLICY_ID_MISSING");
-  if (!nonEmpty10(object.policyVersion)) blockers.push("RISK_POLICY_CANONICAL_RECORD_POLICY_VERSION_MISSING");
-  if (!nonEmpty10(object.source)) blockers.push("RISK_POLICY_CANONICAL_RECORD_SOURCE_MISSING");
+  if (!nonEmpty11(object.recordId)) blockers.push("RISK_POLICY_CANONICAL_RECORD_ID_MISSING");
+  if (!nonEmpty11(object.recordVersion)) blockers.push("RISK_POLICY_CANONICAL_RECORD_VERSION_MISSING");
+  if (!nonEmpty11(object.policyId)) blockers.push("RISK_POLICY_CANONICAL_RECORD_POLICY_ID_MISSING");
+  if (!nonEmpty11(object.policyVersion)) blockers.push("RISK_POLICY_CANONICAL_RECORD_POLICY_VERSION_MISSING");
+  if (!nonEmpty11(object.source)) blockers.push("RISK_POLICY_CANONICAL_RECORD_SOURCE_MISSING");
   if (!nonEmptyStrings3(object.provenance)) blockers.push("RISK_POLICY_CANONICAL_RECORD_PROVENANCE_MISSING");
   if (!fresh5(object.observedAtMs, object.maximumAgeMs, nowMs)) {
     blockers.push("RISK_POLICY_CANONICAL_RECORD_STALE_OR_INVALID");
@@ -8001,16 +8106,16 @@ function validateRecordEnvelope(value, request, nowMs) {
   } else if (symbolScopes !== "*" && !symbolScopes.includes(normalizeSymbol2(request.symbol))) {
     blockers.push("RISK_POLICY_CANONICAL_RECORD_WRONG_SYMBOL_SCOPE");
   }
-  if (!positive9(object.riskPercent)) {
+  if (!positive10(object.riskPercent)) {
     blockers.push("RISK_POLICY_CANONICAL_RECORD_RISK_PERCENT_INVALID");
   }
-  if (!positive9(object.requestedLeverage)) {
+  if (!positive10(object.requestedLeverage)) {
     blockers.push("RISK_POLICY_CANONICAL_RECORD_REQUESTED_LEVERAGE_INVALID");
   }
-  if (object.maximumLeverage != null && !positive9(object.maximumLeverage)) {
+  if (object.maximumLeverage != null && !positive10(object.maximumLeverage)) {
     blockers.push("RISK_POLICY_CANONICAL_RECORD_MAXIMUM_LEVERAGE_INVALID");
   }
-  if (positive9(object.requestedLeverage) && positive9(object.maximumLeverage) && object.requestedLeverage > object.maximumLeverage) {
+  if (positive10(object.requestedLeverage) && positive10(object.maximumLeverage) && object.requestedLeverage > object.maximumLeverage) {
     blockers.push("RISK_POLICY_CANONICAL_RECORD_REQUESTED_LEVERAGE_EXCEEDS_MAXIMUM");
   }
   if (object.marginMode !== "cash" && object.marginMode !== "isolated" && object.marginMode !== "cross") {
@@ -8028,9 +8133,9 @@ function createAuthoritativePaperGenericRiskPolicyProducer(input) {
   }
   return async function produceAuthoritativePaperGenericRiskPolicy(request) {
     const requestBlockers = validateRequest(request);
-    if (requestBlockers.length > 0) return blocked4(request ?? {}, requestBlockers);
+    if (requestBlockers.length > 0) return blocked5(request ?? {}, requestBlockers);
     const nowMs = now();
-    if (!positive9(nowMs)) return blocked4(request, ["RISK_POLICY_SOURCE_CLOCK_INVALID"]);
+    if (!positive10(nowMs)) return blocked5(request, ["RISK_POLICY_SOURCE_CLOCK_INVALID"]);
     let rawRecord;
     try {
       rawRecord = await input.readCanonicalRecord(Object.freeze({
@@ -8040,10 +8145,10 @@ function createAuthoritativePaperGenericRiskPolicyProducer(input) {
         researchCodeSha: request.researchCodeSha
       }));
     } catch {
-      return blocked4(request, ["RISK_POLICY_CANONICAL_RECORD_SOURCE_ERROR"]);
+      return blocked5(request, ["RISK_POLICY_CANONICAL_RECORD_SOURCE_ERROR"]);
     }
     const checked = validateRecordEnvelope(rawRecord, request, nowMs);
-    if (!checked.record) return blocked4(request, checked.blockers);
+    if (!checked.record) return blocked5(request, checked.blockers);
     const canonicalRecord = checked.record;
     const symbolScopes = normalizedSymbolScopes(canonicalRecord.symbolScopes);
     const policyEvidence = Object.freeze({
@@ -8157,6 +8262,36 @@ function publicUrl(request) {
   const url = new URL(request.path, BITGET_BASE_URL2);
   url.search = request.query;
   return url;
+}
+function latencyPositiveScalar(value) {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+function latencyMidpoint(bid, ask) {
+  const normalizedBid = latencyPositiveScalar(bid);
+  const normalizedAsk = latencyPositiveScalar(ask);
+  if (normalizedBid == null || normalizedAsk == null || normalizedAsk < normalizedBid) return null;
+  return (normalizedBid + normalizedAsk) / 2;
+}
+function latencyTickerObservation(payload, symbol, observedAtMs) {
+  const envelope = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : null;
+  if (!envelope || envelope.code !== "00000" || !Array.isArray(envelope.data) || envelope.data.length !== 1) {
+    return null;
+  }
+  const rawRow = envelope.data[0];
+  const row = rawRow && typeof rawRow === "object" && !Array.isArray(rawRow) ? rawRow : null;
+  if (!row) return null;
+  const rowSymbol = String(row.symbol ?? "").trim().toUpperCase().replace(/[^A-Z0-9]/gu, "");
+  const midpoint = latencyMidpoint(row.bidPr, row.askPr);
+  const providerTimestampMs = latencyPositiveScalar(row.ts);
+  if (rowSymbol !== symbol || midpoint == null || providerTimestampMs == null || !naturalPositive(observedAtMs)) {
+    return null;
+  }
+  return Object.freeze({
+    midpoint,
+    observedAtMs,
+    source: `BITGET_PUBLIC_V2_TICKER_RECEIPT:providerTs=${String(providerTimestampMs)}`
+  });
 }
 function ownedSource({
   callback,
@@ -8611,22 +8746,67 @@ function createAuthoritativePaperNaturalCycleEvidenceSourceWiring({
           const executionObservation = buildAuthoritativePaperExecutionObservation(executionInput);
           const slippagePercent = executionObservation.slippage.valuePercent;
           if (!Number.isFinite(slippagePercent) || slippagePercent < 0) return partial;
+          const preLatencyMidpoint = latencyMidpoint(marketEvidence.bidPrice, marketEvidence.askPrice);
+          const requestStartedAtMs = executionInput.executionEvidenceInput.requestStartedAtMs;
+          const requestCompletedAtMs = executionInput.executionEvidenceInput.requestCompletedAtMs;
+          let latencyBoundSupplementalCostInput = sourceSupplementalCostInput;
+          if (preLatencyMidpoint != null && naturalPositive(requestStartedAtMs) && naturalPositive(requestCompletedAtMs)) {
+            const postTickerRequest = dependencies.buildPublicRequests(symbol).ticker;
+            const postTickerPayload = await dependencies.fetchPublicJson(publicUrl(postTickerRequest), {
+              provider: "bitget",
+              signal: abortSignal2(context.signal)
+            }).catch(() => null);
+            const postLatencyObservedAtMs = dependencies.now();
+            const postLatencyObservation = latencyTickerObservation(
+              postTickerPayload,
+              symbol,
+              postLatencyObservedAtMs
+            );
+            const latencyMeasurementNowMs = dependencies.now();
+            if (postLatencyObservation && naturalPositive(latencyMeasurementNowMs)) {
+              const latencyCost = buildAuthoritativePaperLatencyCostEvidence({
+                direction,
+                requestStartedAtMs,
+                requestCompletedAtMs,
+                preRequest: Object.freeze({
+                  midpoint: preLatencyMidpoint,
+                  observedAtMs: marketEvidence.observedAtMs,
+                  source: `BITGET_PUBLIC_V2_TICKER_RECEIPT:providerTs=${String(marketEvidence.tickerTimestampMs)}`
+                }),
+                postRequest: postLatencyObservation,
+                nowMs: latencyMeasurementNowMs,
+                maximumAgeMs: NATURAL_CYCLE_EVIDENCE_MAXIMUM_AGE_MS,
+                maximumRequestDurationMs: NATURAL_CYCLE_EVIDENCE_MAXIMUM_AGE_MS
+              });
+              if (latencyCost.status === "PRESENT" && latencyCost.evidence != null) {
+                latencyBoundSupplementalCostInput = Object.freeze({
+                  ...sourceSupplementalCostInput ?? {},
+                  latency: latencyCost.evidence,
+                  observedAtMs: postLatencyObservedAtMs,
+                  nowMs: latencyMeasurementNowMs,
+                  maximumAgeMs: NATURAL_CYCLE_EVIDENCE_MAXIMUM_AGE_MS
+                });
+              }
+            }
+          }
+          const costNowMs = dependencies.now();
+          if (!naturalPositive(costNowMs)) return partial;
           const supplementalCostInput = naturalFundingBoundSupplementalCostInput({
             candidate,
             riskPolicy: policySource.policyEvidence,
             publicEvidence: marketEvidence,
-            sourceSupplementalCostInput,
+            sourceSupplementalCostInput: latencyBoundSupplementalCostInput,
             researchCodeSha: normalizedSha,
             entryTimestampMs: nowMs,
             positionNotional: probeQuantity * learning.entryPrice,
-            nowMs
+            nowMs: costNowMs
           });
           if (!supplementalCostInput || !supplementalCostInput.funding) return partial;
           const supplementalAudit = auditAuthoritativeSupplementalCostSources({
             publicEvidence: marketEvidence,
             executionObservation,
             supplemental: supplementalCostInput,
-            nowMs,
+            nowMs: costNowMs,
             maximumAgeMs: NATURAL_CYCLE_EVIDENCE_MAXIMUM_AGE_MS
           });
           const executionCostComponentNames = [
@@ -8694,7 +8874,7 @@ function createAuthoritativePaperNaturalCycleEvidenceSourceWiring({
               slippageRate: sizingExecutionCostRate,
               estimatedFundingRate: fundingExecutionCostRate
             })
-          }, stablePolicyProducer, nowMs);
+          }, stablePolicyProducer, costNowMs);
           const targetQuantity = bridge.sizingEvidence.targetQuantity;
           if (bridge.policySource !== policySource || bridge.sizingEvidence.status !== "PRESENT" || !naturalPositive(targetQuantity)) return partial;
           const converged = Math.abs(targetQuantity - probeQuantity) <= Number.EPSILON * Math.max(1, Math.abs(targetQuantity), Math.abs(probeQuantity)) * 8;

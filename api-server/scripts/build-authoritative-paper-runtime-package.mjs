@@ -26,6 +26,7 @@ const ALLOWED_INPUTS = Object.freeze([
   'src/services/authoritative-paper-evidence-sources.service.ts',
   'src/services/authoritative-paper-execution-cost-sources.service.ts',
   'src/services/authoritative-paper-generic-risk-policy-producer.service.ts',
+  'src/services/authoritative-paper-latency-cost-evidence.service.ts',
   'src/services/authoritative-paper-risk-sizing-source.service.ts',
   'src/services/authoritative-paper-runtime-package.entry.ts',
   'src/services/bitget-futures-public-evidence.service.ts',

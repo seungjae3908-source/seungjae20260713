@@ -35,6 +35,7 @@ const EXPECTED_SOURCE_FILES = Object.freeze([
   "api-server/src/services/authoritative-paper-evidence-sources.service.ts",
   "api-server/src/services/authoritative-paper-execution-cost-sources.service.ts",
   "api-server/src/services/authoritative-paper-generic-risk-policy-producer.service.ts",
+  "api-server/src/services/authoritative-paper-latency-cost-evidence.service.ts",
   "api-server/src/services/authoritative-paper-risk-sizing-source.service.ts",
   "api-server/src/services/authoritative-paper-runtime-package.entry.ts",
   "api-server/src/services/bitget-futures-public-evidence.service.ts",
