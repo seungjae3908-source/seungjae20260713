@@ -1,4 +1,5 @@
 name: Temporary Latency Successor Generator
+# retry-contract: preserve-existing-authoritative-latency-v2
 
 on:
   push:
