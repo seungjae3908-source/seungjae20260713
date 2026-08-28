@@ -1,0 +1,91 @@
+name: Prediction Lab Settlement Profitability Evidence Gate
+
+on:
+  pull_request:
+    paths:
+      - "market-prediction-lab/src/settlement-profitability-evidence-gate-v1.js"
+      - "market-prediction-lab/tests/settlement-profitability-evidence-gate-v1.test.js"
+      - "market-prediction-lab/scripts/run-settlement-profitability-evidence-gate-v1.js"
+      - ".github/workflows/prediction-lab-settlement-profitability-evidence-gate.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  settlement-profitability-evidence-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Checkout exact requested SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Verify exact head and bounded four-file scope
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+        run: |
+          set -euo pipefail
+          actual_head="$(git rev-parse HEAD)"
+          test "$actual_head" = "$EXPECTED_HEAD"
+          if [[ -n "$BASE_SHA" ]]; then
+            mapfile -t changed < <(git diff --name-only "$BASE_SHA...$actual_head")
+            test "${#changed[@]}" -eq 4
+            for path in "${changed[@]}"; do
+              case "$path" in
+                market-prediction-lab/src/settlement-profitability-evidence-gate-v1.js|\
+                market-prediction-lab/tests/settlement-profitability-evidence-gate-v1.test.js|\
+                market-prediction-lab/scripts/run-settlement-profitability-evidence-gate-v1.js|\
+                .github/workflows/prediction-lab-settlement-profitability-evidence-gate.yml)
+                  ;;
+                *)
+                  echo "unexpected changed path: $path" >&2
+                  exit 1
+                  ;;
+              esac
+            done
+            git diff --check "$BASE_SHA...$actual_head"
+          fi
+
+      - name: Syntax check
+        run: |
+          node --check market-prediction-lab/src/settlement-profitability-evidence-gate-v1.js
+          node --check market-prediction-lab/scripts/run-settlement-profitability-evidence-gate-v1.js
+          node --check market-prediction-lab/tests/settlement-profitability-evidence-gate-v1.test.js
+
+      - name: Focused evidence-gate tests
+        run: node --test market-prediction-lab/tests/settlement-profitability-evidence-gate-v1.test.js
+
+      - name: Canonical Settlement regression
+        run: node --test market-prediction-lab/tests/four-market-paper-settlement-v1.test.js
+
+      - name: Verify zero-evidence runner stays fail-closed
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '[]\n' > /tmp/p1-5-empty-settlements.json
+          node market-prediction-lab/scripts/run-settlement-profitability-evidence-gate-v1.js \
+            --settlements /tmp/p1-5-empty-settlements.json \
+            --output /tmp/p1-5-zero-evidence-result.json \
+            | tee /tmp/p1-5-runner.stdout
+          node --input-type=module - <<'NODE'
+          import { readFile } from "node:fs/promises";
+          const result = JSON.parse(await readFile("/tmp/p1-5-zero-evidence-result.json", "utf8"));
+          if (result.sampleCount !== 0) throw new Error("TEST_FIXTURE_SAMPLE_CREDIT_FORBIDDEN");
+          if (result.p1_5Complete !== false) throw new Error("P1_5_FALSE_COMPLETION");
+          if (result.profitabilityProven !== false) throw new Error("P1_5_FALSE_PROFITABILITY_CLAIM");
+          if (result.currentValidatedChampion !== "NONE") throw new Error("P1_5_FALSE_CHAMPION");
+          if (result.liveTrading !== false || result.privateTradingApiAllowed !== false || result.executionAuthority !== "NONE" || result.realOrderCount !== 0) {
+            throw new Error("P1_5_SAFETY_INVARIANT_VIOLATION");
+          }
+          NODE
