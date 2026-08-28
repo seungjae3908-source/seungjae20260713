@@ -25,11 +25,9 @@ export type AuthoritativePaperPartialFillCostEvidenceResult = Readonly<{
   schemaVersion: typeof AUTHORITATIVE_PAPER_PARTIAL_FILL_COST_EVIDENCE_VERSION;
   status: 'PRESENT' | 'BLOCKED_DATA';
   evidence: PercentCostEvidence | null;
-  initialVisibleCoverageRatio: number | null;
-  initialVisibleFilledQuantity: number | null;
-  initialVisibleUnfilledQuantity: number | null;
-  residualVisibleCoverageRatio: number | null;
-  residualBookWalkSlippagePercent: number | null;
+  visibleCoverageRatio: number | null;
+  visibleFilledQuantity: number | null;
+  visibleUnfilledQuantity: number | null;
   partialFillImpactPercent: number | null;
   blockers: readonly string[];
   executionAuthority: 'NONE';
@@ -43,17 +41,12 @@ export type AuthoritativePaperPartialFillCostEvidenceResult = Readonly<{
 type Input = Readonly<{
   direction: PartialFillDirection;
   targetQuantity: number;
-  initial: PublicDepthSnapshot;
-  residual?: PublicDepthSnapshot | null;
+  snapshot: PublicDepthSnapshot;
   nowMs?: number;
   maximumAgeMs?: number;
-  minimumResidualDelayMs?: number;
-  maximumResidualDelayMs?: number;
 }>;
 
 const DEFAULT_MAXIMUM_AGE_MS = 30_000;
-const DEFAULT_MINIMUM_RESIDUAL_DELAY_MS = 1;
-const DEFAULT_MAXIMUM_RESIDUAL_DELAY_MS = 30_000;
 
 function finite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
@@ -95,24 +88,19 @@ function numeric(value: unknown): number | null {
 
 function blocked(
   blockers: readonly string[],
-  diagnostics: Partial<Pick<
-    AuthoritativePaperPartialFillCostEvidenceResult,
-    | 'initialVisibleCoverageRatio'
-    | 'initialVisibleFilledQuantity'
-    | 'initialVisibleUnfilledQuantity'
-    | 'residualVisibleCoverageRatio'
-    | 'residualBookWalkSlippagePercent'
-  >> = {},
+  diagnostics: Readonly<{
+    visibleCoverageRatio?: number | null;
+    visibleFilledQuantity?: number | null;
+    visibleUnfilledQuantity?: number | null;
+  }> = {},
 ): AuthoritativePaperPartialFillCostEvidenceResult {
   return Object.freeze({
     schemaVersion: AUTHORITATIVE_PAPER_PARTIAL_FILL_COST_EVIDENCE_VERSION,
     status: 'BLOCKED_DATA' as const,
     evidence: null,
-    initialVisibleCoverageRatio: diagnostics.initialVisibleCoverageRatio ?? null,
-    initialVisibleFilledQuantity: diagnostics.initialVisibleFilledQuantity ?? null,
-    initialVisibleUnfilledQuantity: diagnostics.initialVisibleUnfilledQuantity ?? null,
-    residualVisibleCoverageRatio: diagnostics.residualVisibleCoverageRatio ?? null,
-    residualBookWalkSlippagePercent: diagnostics.residualBookWalkSlippagePercent ?? null,
+    visibleCoverageRatio: diagnostics.visibleCoverageRatio ?? null,
+    visibleFilledQuantity: diagnostics.visibleFilledQuantity ?? null,
+    visibleUnfilledQuantity: diagnostics.visibleUnfilledQuantity ?? null,
     partialFillImpactPercent: null,
     blockers: Object.freeze([...new Set(blockers)]),
     executionAuthority: 'NONE' as const,
@@ -129,128 +117,58 @@ export function buildAuthoritativePaperPartialFillCostEvidence(
 ): AuthoritativePaperPartialFillCostEvidenceResult {
   const nowMs = positive(input?.nowMs) ? input.nowMs : Date.now();
   const maximumAgeMs = positive(input?.maximumAgeMs) ? input.maximumAgeMs : DEFAULT_MAXIMUM_AGE_MS;
-  const minimumResidualDelayMs = nonNegative(input?.minimumResidualDelayMs)
-    ? input.minimumResidualDelayMs
-    : DEFAULT_MINIMUM_RESIDUAL_DELAY_MS;
-  const maximumResidualDelayMs = positive(input?.maximumResidualDelayMs)
-    ? input.maximumResidualDelayMs
-    : DEFAULT_MAXIMUM_RESIDUAL_DELAY_MS;
   const blockers: string[] = [];
 
   if (input?.direction !== 'LONG' && input?.direction !== 'SHORT') blockers.push('PARTIAL_FILL_DIRECTION_INVALID');
   if (!positive(input?.targetQuantity)) blockers.push('PARTIAL_FILL_TARGET_QUANTITY_INVALID');
-  if (!validSnapshot(input?.initial, nowMs, maximumAgeMs)) blockers.push('PARTIAL_FILL_INITIAL_PUBLIC_DEPTH_INVALID_OR_STALE');
-  if (maximumResidualDelayMs < minimumResidualDelayMs) blockers.push('PARTIAL_FILL_RESIDUAL_DELAY_POLICY_INVALID');
+  if (!validSnapshot(input?.snapshot, nowMs, maximumAgeMs)) blockers.push('PARTIAL_FILL_PUBLIC_DEPTH_INVALID_OR_STALE');
   if (blockers.length > 0) return blocked(blockers);
 
   const direction = input.direction === 'LONG' ? 'BUY' : 'SELL';
-  const initialWalk = walkOrderBook({
+  const bookWalk = walkOrderBook({
     direction,
     targetQty: input.targetQuantity,
-    bids: input.initial.bids,
-    asks: input.initial.asks,
+    bids: input.snapshot.bids,
+    asks: input.snapshot.asks,
   });
-  if (initialWalk?.status === 'NOT_AVAILABLE') {
-    return blocked(['PARTIAL_FILL_INITIAL_BOOK_WALK_NOT_AVAILABLE']);
+  if (bookWalk?.status === 'NOT_AVAILABLE') {
+    return blocked(['PARTIAL_FILL_VISIBLE_COVERAGE_NOT_AVAILABLE']);
   }
 
-  const initialCoverage = numeric(initialWalk?.coverageRatio);
-  const initialFilled = numeric(initialWalk?.filledQty);
-  const initialUnfilled = numeric(initialWalk?.unfilledQty);
-  if (!nonNegative(initialCoverage) || initialCoverage > 1
-    || !nonNegative(initialFilled) || !nonNegative(initialUnfilled)) {
-    return blocked(['PARTIAL_FILL_INITIAL_BOOK_WALK_INVALID']);
-  }
-
+  const visibleCoverageRatio = numeric(bookWalk?.coverageRatio);
+  const visibleFilledQuantity = numeric(bookWalk?.filledQty);
+  const visibleUnfilledQuantity = numeric(bookWalk?.unfilledQty);
   const diagnostics = {
-    initialVisibleCoverageRatio: initialCoverage,
-    initialVisibleFilledQuantity: initialFilled,
-    initialVisibleUnfilledQuantity: initialUnfilled,
+    visibleCoverageRatio,
+    visibleFilledQuantity,
+    visibleUnfilledQuantity,
   } as const;
 
-  if (initialUnfilled === 0 && initialCoverage === 1) {
-    const evidence: PercentCostEvidence = Object.freeze({
-      valuePercent: 0,
-      quality: 'ESTIMATED',
-      source: `PUBLIC_L2_FULL_VISIBLE_COVERAGE_NO_PARTIAL_FILL:${input.initial.snapshotId.trim()}:${input.initial.source.trim()}`,
-      observedAtMs: input.initial.observedAtMs,
-    });
-    return Object.freeze({
-      schemaVersion: AUTHORITATIVE_PAPER_PARTIAL_FILL_COST_EVIDENCE_VERSION,
-      status: 'PRESENT' as const,
-      evidence,
-      ...diagnostics,
-      residualVisibleCoverageRatio: null,
-      residualBookWalkSlippagePercent: null,
-      partialFillImpactPercent: 0,
-      blockers: Object.freeze([]),
-      executionAuthority: 'NONE' as const,
-      privateApiUsed: false as const,
-      liveTrading: false as const,
-      realFillObserved: false as const,
-      publicDepthIsRealFillProof: false as const,
-      unknownCostIsZero: false as const,
-    });
+  if (!nonNegative(visibleCoverageRatio) || visibleCoverageRatio > 1
+    || !nonNegative(visibleFilledQuantity) || !nonNegative(visibleUnfilledQuantity)) {
+    return blocked(['PARTIAL_FILL_VISIBLE_COVERAGE_INVALID'], diagnostics);
   }
 
-  const residual = input.residual;
-  if (!validSnapshot(residual, nowMs, maximumAgeMs)) {
-    return blocked(['PARTIAL_FILL_RESIDUAL_PUBLIC_DEPTH_REQUIRED'], diagnostics);
-  }
-  if (residual.snapshotId.trim() === input.initial.snapshotId.trim()) {
-    return blocked(['PARTIAL_FILL_RESIDUAL_SNAPSHOT_ID_MUST_BE_DISTINCT'], diagnostics);
-  }
-  if (residual.observedAtMs <= input.initial.observedAtMs) {
-    return blocked(['PARTIAL_FILL_RESIDUAL_TIMESTAMP_MUST_FOLLOW_INITIAL'], diagnostics);
-  }
-  const residualDelayMs = residual.observedAtMs - input.initial.observedAtMs;
-  if (residualDelayMs < minimumResidualDelayMs || residualDelayMs > maximumResidualDelayMs) {
-    return blocked(['PARTIAL_FILL_RESIDUAL_DELAY_OUTSIDE_POLICY'], diagnostics);
+  if (visibleCoverageRatio !== 1 || visibleUnfilledQuantity !== 0) {
+    return blocked([
+      'PARTIAL_FILL_INDEPENDENT_COST_EVIDENCE_REQUIRED',
+      'PARTIAL_FILL_BOOK_WALK_SLIPPAGE_REUSE_FORBIDDEN',
+    ], diagnostics);
   }
 
-  const residualWalk = walkOrderBook({
-    direction,
-    targetQty: initialUnfilled,
-    bids: residual.bids,
-    asks: residual.asks,
-  });
-  if (residualWalk?.status === 'NOT_AVAILABLE') {
-    return blocked(['PARTIAL_FILL_RESIDUAL_BOOK_WALK_NOT_AVAILABLE'], diagnostics);
-  }
-
-  const residualCoverage = numeric(residualWalk?.coverageRatio);
-  const residualSlippageBps = numeric(residualWalk?.slippageBps);
-  const residualSlippagePercent = residualSlippageBps == null ? null : residualSlippageBps / 100;
-  const residualDiagnostics = {
-    ...diagnostics,
-    residualVisibleCoverageRatio: residualCoverage,
-    residualBookWalkSlippagePercent: residualSlippagePercent,
-  } as const;
-  if (!nonNegative(residualCoverage) || residualCoverage < 1) {
-    return blocked(['PARTIAL_FILL_RESIDUAL_VISIBLE_DEPTH_INCOMPLETE'], residualDiagnostics);
-  }
-  if (!nonNegative(residualSlippagePercent)) {
-    return blocked(['PARTIAL_FILL_RESIDUAL_SLIPPAGE_INVALID'], residualDiagnostics);
-  }
-
-  const residualRatio = initialUnfilled / input.targetQuantity;
-  if (!(residualRatio > 0 && residualRatio <= 1)) {
-    return blocked(['PARTIAL_FILL_RESIDUAL_RATIO_INVALID'], residualDiagnostics);
-  }
-  const partialFillImpactPercent = residualRatio * residualSlippagePercent;
   const evidence: PercentCostEvidence = Object.freeze({
-    valuePercent: partialFillImpactPercent,
+    valuePercent: 0,
     quality: 'ESTIMATED',
-    source: `PUBLIC_L2_DISTINCT_RESIDUAL_BOOK_WALK_PARTIAL_FILL:${input.initial.snapshotId.trim()}->${residual.snapshotId.trim()}:${residual.source.trim()}`,
-    observedAtMs: residual.observedAtMs,
+    source: `PUBLIC_L2_FULL_VISIBLE_COVERAGE_NO_PARTIAL_FILL:${input.snapshot.snapshotId.trim()}:${input.snapshot.source.trim()}`,
+    observedAtMs: input.snapshot.observedAtMs,
   });
 
   return Object.freeze({
     schemaVersion: AUTHORITATIVE_PAPER_PARTIAL_FILL_COST_EVIDENCE_VERSION,
     status: 'PRESENT' as const,
     evidence,
-    ...residualDiagnostics,
-    partialFillImpactPercent,
+    ...diagnostics,
+    partialFillImpactPercent: 0,
     blockers: Object.freeze([]),
     executionAuthority: 'NONE' as const,
     privateApiUsed: false as const,
@@ -265,11 +183,10 @@ export const AUTHORITATIVE_PAPER_PARTIAL_FILL_COST_EVIDENCE_SAFETY = Object.free
   schemaVersion: AUTHORITATIVE_PAPER_PARTIAL_FILL_COST_EVIDENCE_VERSION,
   publicMarketDataOnly: true,
   simulatedExecutionOnly: true,
-  distinctResidualSnapshotRequiredWhenInitialCoverageIsPartial: true,
-  fullResidualVisibleCoverageRequired: true,
-  interSnapshotPriceDriftCountedAsPartialFillCost: false,
-  initialSlippageReusedAsPartialFillCost: false,
   fullVisibleCoverageMayProduceEstimatedZeroPartialFillCost: true,
+  partialVisibleCoverageRequiresIndependentCostEvidence: true,
+  bookWalkSlippageReusedAsPartialFillCost: false,
+  interSnapshotPriceDriftCountedAsPartialFillCost: false,
   missingDataMayProduceZeroCost: false,
   publicDepthIsRealFillProof: false,
   causalRealFillClaimAllowed: false,
