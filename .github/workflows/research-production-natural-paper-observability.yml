@@ -1,0 +1,182 @@
+name: Research Production Natural Paper Observability
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/research-production-natural-paper-observability.yml'
+      - 'ops/research-production-natural-paper-observability.sh'
+      - 'research-production/src/natural-paper-evidence-observability.mjs'
+      - 'research-production/test/natural-paper-evidence-observability.test.mjs'
+  workflow_dispatch:
+    inputs:
+      research_sha:
+        description: Exact deployed Research Production commit SHA to verify
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-production-natural-paper-observability-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate-contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Validate exact-head read-only observability contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          bash -n ops/research-production-natural-paper-observability.sh
+          node --check research-production/src/natural-paper-evidence-observability.mjs
+          node --test research-production/test/natural-paper-evidence-observability.test.mjs
+          grep -Fxq "  'server_files_written=0' \\" ops/research-production-natural-paper-observability.sh
+          grep -Fxq "  'server_processes_restarted=0' \\" ops/research-production-natural-paper-observability.sh
+          grep -Fxq "  'runtime_mutations=0' \\" ops/research-production-natural-paper-observability.sh
+          grep -Fxq "  'database_mutations=0' \\" ops/research-production-natural-paper-observability.sh
+          grep -Fxq "  'private_api=0' \\" ops/research-production-natural-paper-observability.sh
+          grep -Fxq "  'live_trading=false' \\" ops/research-production-natural-paper-observability.sh
+          grep -Fxq "  'execution_authority=NONE' \\" ops/research-production-natural-paper-observability.sh
+          grep -Fxq "  'real_order_count=0'" ops/research-production-natural-paper-observability.sh
+          grep -q 'observationIdDigests' ops/research-production-natural-paper-observability.sh
+          grep -q 'NATURAL_PAPER_REJECTION_REASONS' research-production/src/natural-paper-evidence-observability.mjs
+          if grep -Eq '(^|[[:space:];])(rm|mv|cp|install|mkdir|touch|tee|truncate)([[:space:]]|$)|systemctl[[:space:]]+(enable|disable|start|stop|restart|reload|daemon-reload)|crontab|chmod|chown' ops/research-production-natural-paper-observability.sh; then
+            echo 'Natural Paper observability probe contains a prohibited mutation command.' >&2
+            exit 1
+          fi
+
+  observe-current-cycle:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      PROBE_OUTPUT: ${{ runner.temp }}/natural-paper-observability-probe.txt
+      SANITIZED_INPUT: ${{ runner.temp }}/natural-paper-observability-input.json
+      SANITIZED_ARTIFACT: ${{ runner.temp }}/natural-paper-observability-artifact.json
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Validate immutable Research release identity
+        id: source
+        env:
+          RESEARCH_SHA: ${{ inputs.research_sha }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$RESEARCH_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git cat-file -e "$RESEARCH_SHA^{commit}"
+          git merge-base --is-ancestor "$RESEARCH_SHA" origin/main
+          printf 'research_sha=%s\n' "$RESEARCH_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Configure read-only SSH transport
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Collect one sanitized Natural Paper cycle read-only
+        env:
+          RESEARCH_SHA: ${{ steps.source.outputs.research_sha }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          remote_env="$(printf 'TARGET_RESEARCH_SHA=%q' "$RESEARCH_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env bash -s" \
+            < ops/research-production-natural-paper-observability.sh > "$PROBE_OUTPUT"
+          grep -Fx 'NATURAL_PAPER_OBSERVABILITY_PROBE_BEGIN' "$PROBE_OUTPUT" >/dev/null
+          grep -Fx 'NATURAL_PAPER_OBSERVABILITY_PROBE_END' "$PROBE_OUTPUT" >/dev/null
+          grep -Fx "target_research_sha=$RESEARCH_SHA" "$PROBE_OUTPUT" >/dev/null
+          grep -Fx 'server_files_written=0' "$PROBE_OUTPUT" >/dev/null
+          grep -Fx 'server_processes_restarted=0' "$PROBE_OUTPUT" >/dev/null
+          grep -Fx 'runtime_mutations=0' "$PROBE_OUTPUT" >/dev/null
+          grep -Fx 'database_mutations=0' "$PROBE_OUTPUT" >/dev/null
+          grep -Fx 'private_api=0' "$PROBE_OUTPUT" >/dev/null
+          grep -Fx 'live_trading=false' "$PROBE_OUTPUT" >/dev/null
+          grep -Fx 'execution_authority=NONE' "$PROBE_OUTPUT" >/dev/null
+          grep -Fx 'real_order_count=0' "$PROBE_OUTPUT" >/dev/null
+
+      - name: Decode allowlisted probe payload
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const lines = fs.readFileSync(process.env.PROBE_OUTPUT, 'utf8').split(/\r?\n/);
+          const prefix = 'NATURAL_PAPER_OBSERVABILITY_INPUT_BASE64=';
+          const rows = lines.filter((line) => line.startsWith(prefix));
+          if (rows.length !== 1) throw new Error('EXACTLY_ONE_SANITIZED_OBSERVABILITY_INPUT_REQUIRED');
+          const decoded = Buffer.from(rows[0].slice(prefix.length), 'base64url').toString('utf8');
+          const value = JSON.parse(decoded);
+          fs.writeFileSync(process.env.SANITIZED_INPUT, `${JSON.stringify(value)}\n`, { flag: 'wx', mode: 0o600 });
+          NODE
+
+      - name: Build and self-verify immutable observability artifact
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node research-production/src/natural-paper-evidence-observability.mjs \
+            --input "$SANITIZED_INPUT" \
+            --output "$SANITIZED_ARTIFACT"
+
+      - name: Publish sanitized summary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const artifact = JSON.parse(fs.readFileSync(process.env.SANITIZED_ARTIFACT, 'utf8'));
+          const rows = [
+            '## Natural Paper Evidence Observability',
+            '',
+            `- NATURAL_FUNNEL_OBSERVABLE=${artifact.naturalFunnelObservable}`,
+            `- ENTRY_COUNT=${artifact.funnel.entryCreatedCount ?? 'unknown'}`,
+            `- POSITION_COUNT=${artifact.funnel.positionOpenCount ?? 'unknown'}`,
+            `- SETTLEMENT_COUNT=${artifact.funnel.settlementCreatedCount ?? 'unknown'}`,
+            `- FIRST_ZERO_STAGE=${artifact.firstZeroStage}`,
+            `- FIRST_ZERO_REASON=${artifact.firstZeroReason}`,
+            `- EVIDENCE_COMPLETE_COUNT=${artifact.funnel.authoritativeEvidenceReadyCount ?? 'unknown'}`,
+            `- ARTIFACT_DIGEST=${artifact.artifactDigest}`,
+            '',
+            'Safety: runtime mutation 0; DB mutation 0; private API 0; real order 0; executionAuthority=NONE.',
+          ];
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${rows.join('\n')}\n`);
+          NODE
+
+      - name: Upload sanitized immutable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: natural-paper-observability-${{ steps.source.outputs.research_sha }}
+          path: ${{ env.SANITIZED_ARTIFACT }}
+          if-no-files-found: error
+          retention-days: 30
