@@ -66,9 +66,9 @@ jobs:
       SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
       SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
       SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
-      PROBE_OUTPUT: ${{ runner.temp }}/natural-paper-observability-probe.txt
-      SANITIZED_INPUT: ${{ runner.temp }}/natural-paper-observability-input.json
-      SANITIZED_ARTIFACT: ${{ runner.temp }}/natural-paper-observability-artifact.json
+      PROBE_OUTPUT: natural-paper-observability-probe.txt
+      SANITIZED_INPUT: natural-paper-observability-input.json
+      SANITIZED_ARTIFACT: natural-paper-observability-artifact.json
     steps:
       - uses: actions/checkout@v4
         with:
