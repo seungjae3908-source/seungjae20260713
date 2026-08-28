@@ -261,10 +261,14 @@ test('network collector uses only allow-listed public Bitget market endpoints an
   assert.equal(result.status, 'PRESENT');
   assert.ok(result.observation);
   assert.equal(requestedUrls.length, 3);
-  assert.ok(requestedUrls[0].includes('/api/v3/market/orderbook'));
-  assert.ok(requestedUrls[1].includes('/api/v3/market/fills'));
-  assert.ok(requestedUrls[2].includes('/api/v3/market/orderbook'));
-  assert.equal(requestedUrls.some((url) => /account|order|position|withdraw|transfer/iu.test(url)), false);
+  const parsedUrls = requestedUrls.map((value) => new URL(value));
+  assert.ok(parsedUrls.every((url) => url.origin === 'https://api.bitget.com'));
+  assert.deepEqual(
+    parsedUrls.map((url) => url.pathname),
+    ['/api/v3/market/orderbook', '/api/v3/market/fills', '/api/v3/market/orderbook'],
+  );
+  assert.ok(parsedUrls.every((url) => url.searchParams.get('category') === 'USDT-FUTURES'));
+  assert.ok(parsedUrls.every((url) => url.searchParams.get('symbol') === 'BTCUSDT'));
   assert.equal(result.observation.privateApiUsed, false);
   assert.equal(result.observation.executionAuthority, 'NONE');
   assert.equal(result.observation.liveTrading, false);
