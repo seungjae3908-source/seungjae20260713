@@ -27,6 +27,28 @@ export const AUTHORITATIVE_PAPER_NATURAL_FUNNEL_CONTRACT = Object.freeze({
   scheduleActivationAuthority: false,
 });
 
+export const CANONICAL_NATURAL_PAPER_STAGE_ORDER = Object.freeze([
+  "SIGNAL_CANDIDATE",
+  "QUALITY_PASSED",
+  "RISK_PASSED",
+  "ENTRY_ELIGIBLE",
+  "ENTRY",
+  "POSITION",
+  "EXIT_ELIGIBLE",
+  "SETTLEMENT",
+]);
+
+export const CANONICAL_NATURAL_PAPER_STAGE_FIELDS = Object.freeze({
+  SIGNAL_CANDIDATE: "signalCandidate",
+  QUALITY_PASSED: "qualityPassed",
+  RISK_PASSED: "riskPassed",
+  ENTRY_ELIGIBLE: "entryEligible",
+  ENTRY: "entry",
+  POSITION: "position",
+  EXIT_ELIGIBLE: "exitEligible",
+  SETTLEMENT: "settlement",
+});
+
 const SOURCE_INCOMPLETE_BLOCKERS = new Set([
   "P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING",
   "P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_FAILED",
@@ -35,6 +57,7 @@ const PRE_EVIDENCE_UNKNOWN_BLOCKERS = new Set([
   "P0_C9_MARKET_NOT_OWNED",
   "P0_C9_EVIDENCE_CLOCK_INVALID",
 ]);
+const EXACT_SOURCE_REASON = /^(P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_(?:MISSING|FAILED)):([A-Za-z][A-Za-z0-9]*)$/u;
 
 function freeze(value) {
   return Object.freeze(value);
@@ -79,6 +102,40 @@ function stageMeasurement(stage, {
   });
 }
 
+function directStageMeasurement(stage, {
+  status = "UNKNOWN",
+  count = null,
+  blocker = null,
+  provenance = null,
+  observedAt = null,
+  observationIds = [],
+} = {}) {
+  const measured = status === "MEASURED" && nonNegativeInteger(count);
+  return freeze({
+    stage,
+    field: CANONICAL_NATURAL_PAPER_STAGE_FIELDS[stage],
+    status: measured ? "MEASURED" : "UNKNOWN",
+    count: measured ? count : null,
+    blocker: measured ? null : (nonEmpty(blocker) ? blocker : `UNMEASURED_${stage}`),
+    provenance: measured && nonEmpty(provenance) ? provenance : null,
+    observedAt: Number.isFinite(observedAt) && observedAt > 0 ? observedAt : null,
+    observationIds: freeze(measured ? [...observationIds] : []),
+    naturalCredit: 0,
+    replayCredit: 0,
+    duplicateCredit: 0,
+  });
+}
+
+function cardObservationId(card) {
+  const values = [card?.signalId, card?.id, card?.paperCandidate?.signal?.signalId, card?.signal?.signalId];
+  const value = values.find(nonEmpty);
+  return nonEmpty(value) ? value.trim() : null;
+}
+
+function uniqueComplete(ids, expectedCount) {
+  return ids.length === expectedCount && new Set(ids).size === ids.length;
+}
+
 function firstMeasuredZero(measurements) {
   for (const measurement of measurements) {
     if (measurement.status !== "MEASURED") {
@@ -117,6 +174,16 @@ function newCounters() {
     evidenceCompleteCount: 0,
     producerReadyCount: 0,
     directEvidenceBlockerSets: [],
+    candidateObservationIds: [],
+    qualityObservationIds: [],
+    riskObservationIds: [],
+    qualityPassedObservationIds: [],
+    riskPassedObservationIds: [],
+    qualityObservedCount: 0,
+    qualityPassedCount: 0,
+    riskObservedCount: 0,
+    riskPassedCount: 0,
+    directReasonObservations: [],
   };
 }
 
@@ -136,6 +203,10 @@ function wrapSourceWiring(sourceWiring, counters) {
           return response;
         }
         counters.scannerCandidateCount += response.cards.length;
+        for (const card of response.cards) {
+          const id = cardObservationId(card);
+          if (id) counters.candidateObservationIds.push(id);
+        }
         const totalCount = response?.universe?.totalCount;
         if (nonNegativeInteger(totalCount)) {
           counters.universeCount = counters.universeCount == null
@@ -166,6 +237,26 @@ function wrapSourceWiring(sourceWiring, counters) {
         if (completeness !== "UNKNOWN") counters.evidenceClassifiedCount += 1;
         if (completeness === "PASS") counters.evidenceCompleteCount += 1;
         if (produced?.status === "READY") counters.producerReadyCount += 1;
+        const gates = produced?.gateObservability;
+        if (gates?.qualityGate?.status === "MEASURED") {
+          counters.qualityObservedCount += 1;
+          if (gates.qualityGate.passed === true) {
+            counters.qualityPassedCount += 1;
+            if (nonEmpty(gates.qualityGate.observationId)) counters.qualityPassedObservationIds.push(gates.qualityGate.observationId);
+          }
+          if (nonEmpty(gates.qualityGate.observationId)) counters.qualityObservationIds.push(gates.qualityGate.observationId);
+        }
+        if (gates?.riskGate?.status === "MEASURED") {
+          counters.riskObservedCount += 1;
+          if (gates.riskGate.passed === true && gates.riskGate.evaluated === true) {
+            counters.riskPassedCount += 1;
+            if (nonEmpty(gates.riskGate.observationId)) counters.riskPassedObservationIds.push(gates.riskGate.observationId);
+          }
+          if (nonEmpty(gates.riskGate.observationId)) counters.riskObservationIds.push(gates.riskGate.observationId);
+        }
+        if (Array.isArray(gates?.reasonObservations)) {
+          counters.directReasonObservations.push(...gates.reasonObservations.map((row) => freeze(structuredClone(row))));
+        }
         if (completeness === "BLOCKED") {
           const blockers = Array.isArray(produced?.blockers)
             ? [...new Set(produced.blockers.filter(nonEmpty))]
@@ -280,6 +371,124 @@ function naturalEvidenceIdentity({ input, result, measurements }) {
   });
 }
 
+function canonicalNaturalStageEvidence({
+  input,
+  counters,
+  measuredAtMs,
+  runtimeSha,
+  datasetIdentity,
+}) {
+  const candidateMeasured = counters.scanBatchCalls > 0
+    && counters.candidateKnown
+    && uniqueComplete(counters.candidateObservationIds, counters.scannerCandidateCount);
+  const producerCoverage = candidateMeasured
+    && counters.producerAttemptCount === counters.scannerCandidateCount;
+  const qualityMeasured = producerCoverage
+    && counters.qualityObservedCount === counters.producerAttemptCount
+    && uniqueComplete(counters.qualityObservationIds, counters.qualityObservedCount);
+  const riskMeasured = producerCoverage
+    && counters.riskObservedCount === counters.producerAttemptCount
+    && uniqueComplete(counters.riskObservationIds, counters.riskObservedCount);
+  const cycleId = nonEmpty(input?.cycle?.cycleId) ? input.cycle.cycleId : null;
+  const identity = freeze({
+    cycleId,
+    strategySha: runtimeSha,
+    runtimeSha,
+    datasetIdentity: nonEmpty(datasetIdentity) ? datasetIdentity : null,
+  });
+  const stages = [
+    directStageMeasurement("SIGNAL_CANDIDATE", {
+      status: candidateMeasured ? "MEASURED" : "UNKNOWN",
+      count: candidateMeasured ? counters.scannerCandidateCount : null,
+      blocker: "SIGNAL_CANDIDATE_DIRECT_PROVENANCE_INCOMPLETE",
+      provenance: "authoritative-paper-natural-funnel-v1 wrapped ScannerResponse.cards",
+      observedAt: measuredAtMs,
+      observationIds: counters.candidateObservationIds,
+    }),
+    directStageMeasurement("QUALITY_PASSED", {
+      status: qualityMeasured ? "MEASURED" : "UNKNOWN",
+      count: qualityMeasured ? counters.qualityPassedCount : null,
+      blocker: "QUALITY_GATE_DIRECT_PROVENANCE_INCOMPLETE",
+      provenance: "scanner-crypto-futures-paper-admission-evidence-producer-v1 gateObservability.qualityGate",
+      observedAt: measuredAtMs,
+      observationIds: counters.qualityPassedObservationIds,
+    }),
+    directStageMeasurement("RISK_PASSED", {
+      status: riskMeasured ? "MEASURED" : "UNKNOWN",
+      count: riskMeasured ? counters.riskPassedCount : null,
+      blocker: "RISK_GATE_DIRECT_PROVENANCE_INCOMPLETE",
+      provenance: "scanner-crypto-futures-paper-admission-evidence-producer-v1 gateObservability.riskGate",
+      observedAt: measuredAtMs,
+      observationIds: counters.riskPassedObservationIds,
+    }),
+    directStageMeasurement("ENTRY_ELIGIBLE", { blocker: "RECURRING_LOOP_ENTRY_ELIGIBILITY_REQUIRED" }),
+    directStageMeasurement("ENTRY", { blocker: "RECURRING_LOOP_ENTRY_REQUIRED" }),
+    directStageMeasurement("POSITION", { blocker: "RECURRING_LOOP_POSITION_REQUIRED" }),
+    directStageMeasurement("EXIT_ELIGIBLE", { blocker: "OPEN_POSITION_EXIT_ELIGIBILITY_REQUIRED" }),
+    directStageMeasurement("SETTLEMENT", { blocker: "RECURRING_LOOP_SETTLEMENT_REQUIRED" }),
+  ];
+  const reasonRows = counters.directReasonObservations.map((row) => freeze({
+    ...structuredClone(row),
+    identity: freeze({ ...identity, observationId: row?.identity?.observationId ?? null }),
+    naturalCredit: 0,
+    replayCredit: 0,
+    duplicateCredit: 0,
+  }));
+  if (candidateMeasured && counters.scannerCandidateCount === 0) {
+    reasonRows.push(freeze({
+      sourceStage: "SIGNAL_CANDIDATE",
+      sourceCode: "NO_SIGNAL_CANDIDATE",
+      sourceReason: "NO_SIGNAL_CANDIDATE",
+      canonicalReason: "NO_SIGNAL",
+      lossless: true,
+      provenance: "authoritative-paper-natural-funnel-v1 wrapped ScannerResponse.cards",
+      observedAt: measuredAtMs,
+      identity,
+      naturalCredit: 0,
+      replayCredit: 0,
+      duplicateCredit: 0,
+    }));
+  }
+  return freeze({
+    schemaVersion: "canonical-natural-paper-stage-evidence-v1",
+    stageOrder: CANONICAL_NATURAL_PAPER_STAGE_ORDER,
+    identity,
+    stageCounts: freeze(Object.fromEntries(stages.map((stage) => [stage.field, stage]))),
+    reasonObservations: freeze(reasonRows),
+    naturalCredit: 0,
+    replayCredit: 0,
+    duplicateCredit: 0,
+    unknownIsZero: false,
+  });
+}
+
+function normalizeSourceKey(value) {
+  return String(value).replace(/([a-z0-9])([A-Z])/gu, "$1_$2").toUpperCase();
+}
+
+function exactSourceSetReason(counters, genericReason) {
+  const grouped = new Map();
+  for (const row of counters.directReasonObservations) {
+    if (row?.sourceStage !== "EVIDENCE_SOURCE" || row?.lossless !== true || !nonEmpty(row?.sourceCode)) continue;
+    const match = EXACT_SOURCE_REASON.exec(row.sourceCode.trim());
+    const observationId = row?.identity?.observationId;
+    if (!match || !nonEmpty(observationId) || match[1] !== genericReason) return null;
+    const code = `${match[1]}_${normalizeSourceKey(match[2])}`;
+    const values = grouped.get(observationId) ?? [];
+    values.push(code);
+    grouped.set(observationId, values);
+  }
+  if (grouped.size !== counters.producerAttemptCount || grouped.size === 0) return null;
+  const signatures = [...grouped.values()].map((values) => [...new Set(values)].sort().join("_AND_"));
+  if (new Set(signatures).size !== 1) return null;
+  return freeze({
+    reasonCode: signatures[0],
+    sourceCodes: freeze([...new Set(counters.directReasonObservations
+      .map((row) => nonEmpty(row?.sourceCode) ? row.sourceCode.trim() : null)
+      .filter(Boolean))].sort()),
+  });
+}
+
 function authoritativeFirstZeroReasonEvidenceByStage({
   firstZero,
   counters,
@@ -297,12 +506,15 @@ function authoritativeFirstZeroReasonEvidenceByStage({
   }
   if (new Set(reasons).size !== 1) return freeze({});
 
-  const reasonCode = reasons[0];
+  const genericReason = reasons[0];
+  const exact = exactSourceSetReason(counters, genericReason);
+  const reasonCode = exact?.reasonCode ?? genericReason;
   return freeze({
     EVIDENCE_COMPLETE: freeze({
       authoritative: true,
       freshness: "FRESH",
       reasonCode,
+      sourceCodes: exact?.sourceCodes ?? freeze([]),
       strategySha: runtimeSha,
       runtimeSha,
       datasetIdentity,
@@ -350,6 +562,13 @@ export function createNaturalFunnelObservedPaperRuntimeFromSourceWiring({
       runtimeSha,
       datasetIdentity: evidenceIdentity,
     });
+    const directEvidence = canonicalNaturalStageEvidence({
+      input,
+      counters,
+      measuredAtMs,
+      runtimeSha,
+      datasetIdentity: evidenceIdentity,
+    });
     return freeze({
       ...result,
       naturalFunnelContract: AUTHORITATIVE_PAPER_NATURAL_FUNNEL_CONTRACT,
@@ -359,6 +578,7 @@ export function createNaturalFunnelObservedPaperRuntimeFromSourceWiring({
       naturalEvidenceIdentity: evidenceIdentity,
       naturalRuntimeSha: runtimeSha,
       authoritativeFirstZeroReasonEvidenceByStage: reasonEvidenceByStage,
+      canonicalNaturalStageEvidence: directEvidence,
       universeCount: measurements[0].count,
       scannerEvaluatedCount: measurements[1].count,
       evidenceCompleteCount: measurements[3].count,

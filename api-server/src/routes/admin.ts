@@ -36,6 +36,29 @@ type AdminProfileRow = MemberAdministrationProfile & {
   created_at?: string | null;
 };
 
+type AdminReadFailure = {
+  statusCode: 503;
+  error: 'ADMIN_MEMBER_STORAGE_UNAVAILABLE' | 'ADMIN_AUDIT_STORAGE_UNAVAILABLE';
+  message: string;
+};
+
+export function classifyAdminReadFailure(
+  fallback: 'MEMBER_LIST_FAILED' | 'AUDIT_LIST_FAILED',
+): AdminReadFailure {
+  if (fallback === 'MEMBER_LIST_FAILED') {
+    return {
+      statusCode: 503,
+      error: 'ADMIN_MEMBER_STORAGE_UNAVAILABLE',
+      message: '회원 목록 저장소를 확인할 수 없습니다.',
+    };
+  }
+  return {
+    statusCode: 503,
+    error: 'ADMIN_AUDIT_STORAGE_UNAVAILABLE',
+    message: '권한 변경 감사 저장소를 확인할 수 없습니다.',
+  };
+}
+
 function adminDb(req: AuthenticatedRequest) {
   return getUserSupabase(req.accessToken!);
 }
@@ -53,6 +76,19 @@ function sendAdminError(res: any, cause: unknown, fallback: string) {
     return res.status(cause.statusCode).json({ error: cause.code, message: cause.message });
   }
   return res.status(500).json({ error: fallback, message: '관리자 요청을 처리하지 못했습니다.' });
+}
+
+function sendAdminReadError(
+  res: any,
+  fallback: 'MEMBER_LIST_FAILED' | 'AUDIT_LIST_FAILED',
+) {
+  const failure = classifyAdminReadFailure(fallback);
+  return res.status(failure.statusCode).json({
+    error: failure.error,
+    message: failure.message,
+    dataState: 'unavailable',
+    retryable: true,
+  });
 }
 
 function isReadOnlyResearchOverview(value: unknown): value is Record<string, unknown> {
@@ -153,8 +189,8 @@ router.get('/members', async (req: AuthenticatedRequest, res) => {
     const { data, error } = await query;
     if (error) throw new Error('MEMBER_LIST_FAILED');
     return res.json({ ok: true, members: (data ?? []) as unknown as AdminProfileRow[] });
-  } catch (cause) {
-    return sendAdminError(res, cause, 'MEMBER_LIST_FAILED');
+  } catch {
+    return sendAdminReadError(res, 'MEMBER_LIST_FAILED');
   }
 });
 
@@ -200,8 +236,8 @@ router.get('/audit-logs', async (req: AuthenticatedRequest, res) => {
     const { data, error } = await query;
     if (error) throw new Error('AUDIT_LIST_FAILED');
     return res.json({ ok: true, logs: data ?? [] });
-  } catch (cause) {
-    return sendAdminError(res, cause, 'AUDIT_LIST_FAILED');
+  } catch {
+    return sendAdminReadError(res, 'AUDIT_LIST_FAILED');
   }
 });
 
