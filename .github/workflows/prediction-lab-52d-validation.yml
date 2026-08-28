@@ -112,6 +112,7 @@ jobs:
         env:
           RESEARCH_CODE_SHA: ${{ steps.sha.outputs.value }}
           TRAINING_CODE_SHA: ${{ steps.sha.outputs.value }}
+          PRODUCER_SHA: ${{ steps.sha.outputs.value }}
         run: node scripts/run-market-suite.js live-market-suite docs/market-suite-result.json docs/candidate-models
 
       - name: Audit frozen BTC and ETH futures models on unseen SOL
@@ -347,11 +348,11 @@ jobs:
               '- DURABLE_REFERENCE_STORE: PENDING_IMMUTABLE_RELEASE_JOB',
               '- LONG_TERM_REFERENCE_PROVEN: false',
               '',
-              '| Group | TRAIN N | VALIDATION N | trainSplitDigest | validationSplitDigest | modelSha | preprocessingVersion | featureOrderDigest | rawArtifactDigest | receipt | provenance |',
-              '|---|---:|---:|---|---|---|---|---|---|---|---|',
+              '| Group | TRAIN N | VALIDATION N | trainDatasetIdentity | validationDatasetIdentity | trainSplitDigest | validationSplitDigest | modelSha | producerSha | invocation | isolation | receipt | provenance |',
+              '|---|---:|---:|---|---|---|---|---|---|---|---|---|---|',
             ];
             for (const manifest of manifests) {
-              lines.push(`| ${manifest.group} | ${manifest.trainSampleN} | ${manifest.validationSampleN} | ${manifest.trainSplitDigest} | ${manifest.validationSplitDigest} | ${manifest.modelSha} | ${manifest.preprocessingVersion} | ${manifest.featureOrderDigest} | ${manifest.rawArtifactDigest} | ${manifest.artifactReceiptValidation.status} | ${manifest.referenceProvenanceStatus} |`);
+              lines.push(`| ${manifest.group} | ${manifest.trainSampleN} | ${manifest.validationSampleN} | ${manifest.trainDatasetIdentity} | ${manifest.validationDatasetIdentity} | ${manifest.trainSplitDigest} | ${manifest.validationSplitDigest} | ${manifest.modelSha} | ${manifest.producerSha} | ${manifest.trainingInvocationDigest} | ${manifest.splitIsolationStatus} | ${manifest.artifactReceiptValidation.status} | ${manifest.referenceProvenanceStatus} |`);
             }
             core.summary.addRaw(`${lines.join('\n')}\n`);
             await core.summary.write();
@@ -658,6 +659,9 @@ jobs:
               return;
             }
             core.setOutput('receipt_asset_id', String(asset.id));
+            core.setOutput('receipt_asset_digest', String(asset.digest).replace(/^sha256:/, '').toLowerCase());
+            core.setOutput('receipt_asset_reference', asset.browser_download_url);
+            core.setOutput('receipt_asset_size', String(asset.size));
 
       - name: Publish and verify immutable release metadata
         uses: actions/github-script@v7
@@ -703,6 +707,7 @@ jobs:
             }
             fs.writeFileSync(`${process.env.DURABLE_ROOT}/release-metadata.json`, JSON.stringify(release));
             fs.writeFileSync(`${process.env.DURABLE_ROOT}/bundle-asset-metadata.json`, JSON.stringify(bundleAsset));
+            fs.writeFileSync(`${process.env.DURABLE_ROOT}/receipt-asset-metadata.json`, JSON.stringify(receiptAsset));
 
       - name: Validate durable receipt against exact bytes and release attestation
         shell: bash
@@ -717,13 +722,21 @@ jobs:
           import { readFile, writeFile } from 'node:fs/promises';
           import { join } from 'node:path';
           import { validateModelReferenceDurableReceiptV1 } from './market-prediction-lab/src/model-reference-durable-store-v1.js';
-          const [receipt, releaseMetadata, assetMetadata, exactBundleBytes] = await Promise.all([
+          const [receipt, releaseMetadata, assetMetadata, receiptAssetMetadata, exactBundleBytes, exactReceiptBytes] = await Promise.all([
             readFile(join(process.env.DURABLE_ROOT, process.env.RECEIPT_NAME), 'utf8').then(JSON.parse),
             readFile(join(process.env.DURABLE_ROOT, 'release-metadata.json'), 'utf8').then(JSON.parse),
             readFile(join(process.env.DURABLE_ROOT, 'bundle-asset-metadata.json'), 'utf8').then(JSON.parse),
+            readFile(join(process.env.DURABLE_ROOT, 'receipt-asset-metadata.json'), 'utf8').then(JSON.parse),
             readFile(process.env.BUNDLE_PATH),
+            readFile(join(process.env.DURABLE_ROOT, process.env.RECEIPT_NAME)),
           ]);
-          const result = validateModelReferenceDurableReceiptV1(receipt, { releaseMetadata, assetMetadata, exactBundleBytes });
+          const result = validateModelReferenceDurableReceiptV1(receipt, {
+            releaseMetadata,
+            assetMetadata,
+            exactBundleBytes,
+            receiptAssetMetadata,
+            exactReceiptBytes,
+          });
           if (!result.valid || result.status !== 'VALID' || result.longTermReferenceProven !== true) {
             throw new Error(`DURABLE_REFERENCE_STORE_NOT_READY: ${result.reason}`);
           }
@@ -731,6 +744,7 @@ jobs:
           NODE
           gh release verify "$RELEASE_TAG" --repo "$REPOSITORY"
           gh release verify-asset "$RELEASE_TAG" "$BUNDLE_PATH" --repo "$REPOSITORY"
+          gh release verify-asset "$RELEASE_TAG" "$DURABLE_ROOT/$RECEIPT_NAME" --repo "$REPOSITORY"
           echo 'DURABLE_REFERENCE_STORE=GITHUB_IMMUTABLE_RELEASE'
           echo 'LONG_TERM_REFERENCE_PROVEN=true'
 
@@ -743,5 +757,6 @@ jobs:
             ${{ runner.temp }}/prediction-lab-model-reference-durable/durable-validation.json
             ${{ runner.temp }}/prediction-lab-model-reference-durable/release-metadata.json
             ${{ runner.temp }}/prediction-lab-model-reference-durable/bundle-asset-metadata.json
+            ${{ runner.temp }}/prediction-lab-model-reference-durable/receipt-asset-metadata.json
           if-no-files-found: error
           retention-days: 90
