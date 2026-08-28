@@ -32,6 +32,8 @@ jobs:
     name: ${{ github.event_name == 'pull_request' && 'PR Exact Multi-Market' || 'Validate and train Multi-Market' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    outputs:
+      research_sha: ${{ steps.sha.outputs.value }}
     steps:
       - name: Resolve immutable research ref
         id: research
@@ -107,6 +109,10 @@ jobs:
         if: steps.validate.outcome == 'success'
         continue-on-error: true
         working-directory: market-prediction-lab
+        env:
+          RESEARCH_CODE_SHA: ${{ steps.sha.outputs.value }}
+          TRAINING_CODE_SHA: ${{ steps.sha.outputs.value }}
+          PRODUCER_SHA: ${{ steps.sha.outputs.value }}
         run: node scripts/run-market-suite.js live-market-suite docs/market-suite-result.json docs/candidate-models
 
       - name: Audit frozen BTC and ETH futures models on unseen SOL
@@ -211,6 +217,146 @@ jobs:
           {"schemaVersion":1,"researchCodeSha":"$RESEARCH_SHA","runId":"$GITHUB_RUN_ID","branchWrite":false,"liveOrderAllowed":false,"privateAccountRequestAllowed":false}
           JSON
 
+      - name: Upload immutable raw model reference evidence
+        if: steps.market_suite.outcome == 'success'
+        id: raw_reference_upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: prediction-lab-model-reference-evidence-raw-${{ github.run_id }}
+          path: market-prediction-lab/live-market-suite/reference-evidence
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Resolve actual raw reference artifact metadata
+        if: steps.market_suite.outcome == 'success'
+        id: raw_reference
+        uses: actions/github-script@v7
+        env:
+          ARTIFACT_ID: ${{ steps.raw_reference_upload.outputs.artifact-id }}
+          UPLOAD_DIGEST: ${{ steps.raw_reference_upload.outputs.artifact-digest }}
+        with:
+          script: |
+            const artifactId = Number(process.env.ARTIFACT_ID);
+            if (!Number.isSafeInteger(artifactId) || artifactId <= 0) {
+              core.setFailed('Actual raw reference artifact ID is missing.');
+              return;
+            }
+            const { data: artifact } = await github.rest.actions.getArtifact({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              artifact_id: artifactId,
+            });
+            const expectedName = `prediction-lab-model-reference-evidence-raw-${context.runId}`;
+            if (artifact.name !== expectedName || artifact.expired || !artifact.created_at || !artifact.expires_at) {
+              core.setFailed('Actual raw reference artifact metadata is incomplete or expired.');
+              return;
+            }
+            const digest = String(artifact.digest ?? '').replace(/^sha256:/, '').toLowerCase();
+            const uploadDigest = String(process.env.UPLOAD_DIGEST ?? '').replace(/^sha256:/, '').toLowerCase();
+            if (!/^[0-9a-f]{64}$/.test(digest) || digest !== uploadDigest) {
+              core.setFailed('Raw reference artifact digest does not match upload evidence.');
+              return;
+            }
+            core.setOutput('artifact_id', String(artifact.id));
+            core.setOutput('artifact_name', artifact.name);
+            core.setOutput('artifact_digest', digest);
+            core.setOutput('created_at', artifact.created_at);
+            core.setOutput('expires_at', artifact.expires_at);
+            core.setOutput('artifact_reference', `${process.env.GITHUB_SERVER_URL}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}/artifacts/${artifact.id}`);
+
+      - name: Finalize #664 artifact receipt and reference provenance
+        if: steps.market_suite.outcome == 'success'
+        working-directory: market-prediction-lab
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.raw_reference.outputs.artifact_id }}
+          ARTIFACT_NAME: ${{ steps.raw_reference.outputs.artifact_name }}
+          ARTIFACT_REFERENCE: ${{ steps.raw_reference.outputs.artifact_reference }}
+          OUTER_ARTIFACT_DIGEST: ${{ steps.raw_reference.outputs.artifact_digest }}
+          ARTIFACT_CREATED_AT: ${{ steps.raw_reference.outputs.created_at }}
+          ARTIFACT_EXPIRES_AT: ${{ steps.raw_reference.outputs.expires_at }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import { finalizeModelReferenceEvidenceReceipts } from './src/model-reference-evidence.js';
+          const reports = await finalizeModelReferenceEvidenceReceipts('live-market-suite/reference-evidence', {
+            artifactId: process.env.ARTIFACT_ID,
+            artifactName: process.env.ARTIFACT_NAME,
+            artifactReference: process.env.ARTIFACT_REFERENCE,
+            outerArtifactDigest: process.env.OUTER_ARTIFACT_DIGEST,
+            createdAt: process.env.ARTIFACT_CREATED_AT,
+            expiresAt: process.env.ARTIFACT_EXPIRES_AT,
+            now: process.env.ARTIFACT_CREATED_AT,
+          });
+          if (!reports.length || reports.some((report) => report.rawReferenceValid !== true || report.receiptValidation?.status !== 'VALID')) {
+            throw new Error('Future raw TRAIN/VALIDATION evidence or #664 receipt did not validate.');
+          }
+          fs.writeFileSync('live-market-suite/reference-evidence/workflow-evidence.json', `${JSON.stringify(reports, null, 2)}\n`);
+          NODE
+
+      - name: Upload finalized model reference evidence
+        if: steps.market_suite.outcome == 'success'
+        id: reference_upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: prediction-lab-model-reference-evidence-${{ github.run_id }}
+          path: market-prediction-lab/live-market-suite/reference-evidence
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Record exact future reference evidence receipt
+        if: steps.market_suite.outcome == 'success'
+        uses: actions/github-script@v7
+        env:
+          EXACT_HEAD_SHA: ${{ steps.sha.outputs.value }}
+          ARTIFACT_ID: ${{ steps.reference_upload.outputs.artifact-id }}
+          UPLOAD_DIGEST: ${{ steps.reference_upload.outputs.artifact-digest }}
+          RAW_ARTIFACT_ID: ${{ steps.raw_reference.outputs.artifact_id }}
+          RAW_ARTIFACT_DIGEST: ${{ steps.raw_reference.outputs.artifact_digest }}
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const artifactId = Number(process.env.ARTIFACT_ID);
+            const { data: artifact } = await github.rest.actions.getArtifact({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              artifact_id: artifactId,
+            });
+            const digest = String(artifact.digest ?? '').replace(/^sha256:/, '').toLowerCase();
+            const uploadDigest = String(process.env.UPLOAD_DIGEST ?? '').replace(/^sha256:/, '').toLowerCase();
+            if (!/^[0-9a-f]{64}$/.test(digest) || digest !== uploadDigest || artifact.expired) {
+              core.setFailed('Final reference artifact metadata did not validate.');
+              return;
+            }
+            const root = 'market-prediction-lab/live-market-suite/reference-evidence';
+            const manifests = fs.readdirSync(root, { withFileTypes: true })
+              .filter((entry) => entry.isDirectory())
+              .map((entry) => JSON.parse(fs.readFileSync(path.join(root, entry.name, 'reference-manifest.json'), 'utf8')))
+              .sort((left, right) => left.group.localeCompare(right.group));
+            const lines = [
+              '## Future-only TRAIN / VALIDATION reference evidence',
+              '',
+              `- Exact HEAD: ${process.env.EXACT_HEAD_SHA}`,
+              `- Raw receipt artifact: ${process.env.RAW_ARTIFACT_ID}`,
+              `- Raw receipt outer digest: sha256:${process.env.RAW_ARTIFACT_DIGEST}`,
+              `- Final consumer artifact: ${artifact.id}`,
+              `- Final consumer artifact name: ${artifact.name}`,
+              `- Final consumer outer digest: ${artifact.digest}`,
+              `- Final consumer expiry: ${artifact.expires_at}`,
+              '- DURABLE_REFERENCE_STORE: PENDING_IMMUTABLE_RELEASE_JOB',
+              '- LONG_TERM_REFERENCE_PROVEN: false',
+              '',
+              '| Group | TRAIN N | VALIDATION N | trainDatasetIdentity | validationDatasetIdentity | trainSplitDigest | validationSplitDigest | modelSha | producerSha | invocation | isolation | receipt | provenance |',
+              '|---|---:|---:|---|---|---|---|---|---|---|---|---|---|',
+            ];
+            for (const manifest of manifests) {
+              lines.push(`| ${manifest.group} | ${manifest.trainSampleN} | ${manifest.validationSampleN} | ${manifest.trainDatasetIdentity} | ${manifest.validationDatasetIdentity} | ${manifest.trainSplitDigest} | ${manifest.validationSplitDigest} | ${manifest.modelSha} | ${manifest.producerSha} | ${manifest.trainingInvocationDigest} | ${manifest.splitIsolationStatus} | ${manifest.artifactReceiptValidation.status} | ${manifest.referenceProvenanceStatus} |`);
+            }
+            core.summary.addRaw(`${lines.join('\n')}\n`);
+            await core.summary.write();
+
       - name: Upload immutable validation artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -251,3 +397,366 @@ jobs:
       - name: Fail workflow when technical validation failed
         if: always() && (steps.validate.outcome != 'success' || steps.market_suite.outcome != 'success' || steps.futures_generalization_suite.outcome != 'success' || steps.futures_pnl_suite.outcome != 'success' || steps.futures_regime_suite.outcome != 'success' || steps.upbit_spot_suite.outcome != 'success' || steps.upbit_spot_pnl_suite.outcome != 'success' || steps.upbit_spot_alternative_suite.outcome != 'success' || steps.stock_suite.outcome != 'success' || steps.stock_pnl_suite.outcome != 'success' || steps.stock_generalization_suite.outcome != 'success' || steps.us_pullback_suite.outcome != 'success' || steps.stock_regime_suite.outcome != 'success' || steps.derivatives_suite.outcome != 'success' || steps.structure_suite.outcome != 'success')
         run: exit 1
+
+  publish-durable-reference:
+    name: Publish immutable future model reference
+    needs: validate-and-train
+    if: github.event_name == 'workflow_dispatch' && needs.validate-and-train.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: write
+    env:
+      RESEARCH_SHA: ${{ needs.validate-and-train.outputs.research_sha }}
+      RELEASE_TAG: prediction-lab-model-reference-v1-${{ github.run_id }}
+    steps:
+      - name: Require exact latest main and enabled immutable releases
+        id: durable_preflight
+        uses: actions/github-script@v7
+        env:
+          EXPECTED_SHA: ${{ needs.validate-and-train.outputs.research_sha }}
+        with:
+          script: |
+            const expectedSha = String(process.env.EXPECTED_SHA ?? '').toLowerCase();
+            if (!/^[0-9a-f]{40}$/.test(expectedSha)) {
+              core.setFailed('DURABLE_REFERENCE_STORE_NOT_READY: exact producer SHA missing');
+              return;
+            }
+            const { data: repository } = await github.rest.repos.get({ owner: context.repo.owner, repo: context.repo.repo });
+            const { data: main } = await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: repository.default_branch,
+            });
+            if (repository.default_branch !== 'main' || String(main.commit.sha).toLowerCase() !== expectedSha) {
+              core.setFailed('DURABLE_REFERENCE_STORE_NOT_READY: producer is not exact latest main');
+              return;
+            }
+            let policy;
+            try {
+              const response = await github.request('GET /repos/{owner}/{repo}/immutable-releases', {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                headers: { 'X-GitHub-Api-Version': '2026-03-10' },
+              });
+              policy = response.data;
+            } catch (error) {
+              if (error.status === 404) {
+                core.setFailed('DURABLE_REFERENCE_STORE_NOT_READY: immutable releases are not enabled');
+                return;
+              }
+              throw error;
+            }
+            if (policy?.enabled !== true) {
+              core.setFailed('DURABLE_REFERENCE_STORE_NOT_READY: immutable release policy is not proven enabled');
+              return;
+            }
+            try {
+              await github.rest.repos.getReleaseByTag({ owner: context.repo.owner, repo: context.repo.repo, tag: process.env.RELEASE_TAG });
+              core.setFailed('DURABLE_REFERENCE_STORE_NOT_READY: exact release tag already exists');
+              return;
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+            core.setOutput('immutable_enabled', 'true');
+            core.exportVariable('REFERENCE_ROOT', `${process.env.RUNNER_TEMP}/prediction-lab-model-reference-evidence`);
+            core.exportVariable('DURABLE_ROOT', `${process.env.RUNNER_TEMP}/prediction-lab-model-reference-durable`);
+
+      - name: Checkout exact producer revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-and-train.outputs.research_sha }}
+          persist-credentials: false
+
+      - name: Download finalized #664 reference package
+        uses: actions/download-artifact@v4
+        with:
+          name: prediction-lab-model-reference-evidence-${{ github.run_id }}
+          path: ${{ runner.temp }}/prediction-lab-model-reference-evidence
+
+      - name: Validate exact #693-compatible package and build deterministic bundle
+        id: durable_bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RESEARCH_SHA"
+          test "${{ steps.durable_preflight.outputs.immutable_enabled }}" = 'true'
+          test -d "$REFERENCE_ROOT"
+          if find "$REFERENCE_ROOT" -type l -print -quit | grep -q .; then
+            echo 'DURABLE_REFERENCE_STORE_NOT_READY: symlink substitution rejected' >&2
+            exit 1
+          fi
+          mapfile -t manifests < <(find "$REFERENCE_ROOT" -mindepth 2 -maxdepth 2 -type f -name reference-manifest.json | sort)
+          test "${#manifests[@]}" -gt 0
+          for manifest in "${manifests[@]}"; do
+            group_root="$(dirname "$manifest")"
+            test -f "$group_root/reference-manifest.json"
+            test -f "$group_root/model/exact-model.json"
+            test -f "$group_root/records/train.jsonl"
+            test -f "$group_root/records/validation.jsonl"
+          done
+          node --input-type=module <<'NODE'
+          import { readdir } from 'node:fs/promises';
+          import { join } from 'node:path';
+          import { validateModelReferenceEvidencePackage } from './market-prediction-lab/src/model-reference-evidence.js';
+          const groups = (await readdir(process.env.REFERENCE_ROOT, { withFileTypes: true }))
+            .filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
+          if (!groups.length) throw new Error('DURABLE_REFERENCE_STORE_NOT_READY: no future reference groups');
+          for (const group of groups) {
+            const report = await validateModelReferenceEvidencePackage(join(process.env.REFERENCE_ROOT, group));
+            if (!report.valid || report.status !== 'VALID' || report.rawReferenceValid !== true) {
+              throw new Error(`DURABLE_REFERENCE_STORE_NOT_READY: ${group} is ${report.status}`);
+            }
+          }
+          NODE
+          mkdir -p "$DURABLE_ROOT"
+          bundle="$DURABLE_ROOT/prediction-lab-model-reference-evidence-${GITHUB_RUN_ID}.tar.gz"
+          tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner -cf - -C "$REFERENCE_ROOT" . | gzip -n > "$bundle"
+          digest="$(sha256sum "$bundle" | cut -d' ' -f1)"
+          size="$(stat -c '%s' "$bundle")"
+          asset_name="prediction-lab-model-reference-evidence-${GITHUB_RUN_ID}-${digest}.tar.gz"
+          mv "$bundle" "$DURABLE_ROOT/$asset_name"
+          echo "bundle_path=$DURABLE_ROOT/$asset_name" >> "$GITHUB_OUTPUT"
+          echo "asset_name=$asset_name" >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "byte_length=$size" >> "$GITHUB_OUTPUT"
+
+      - name: Create draft durable release
+        id: durable_release
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ needs.validate-and-train.outputs.research_sha }}
+        with:
+          script: |
+            const { data: release } = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              headers: { 'X-GitHub-Api-Version': '2026-03-10' },
+              tag_name: process.env.RELEASE_TAG,
+              target_commitish: process.env.TARGET_SHA,
+              name: `Future model reference ${context.runId}`,
+              body: 'Future-only genuine TRAIN/VALIDATION/model evidence. No historical reconstruction, no trading authority.',
+              draft: true,
+              prerelease: true,
+            });
+            if (!release.draft || !release.id || release.tag_name !== process.env.RELEASE_TAG) {
+              core.setFailed('DURABLE_REFERENCE_STORE_NOT_READY: draft release identity mismatch');
+              return;
+            }
+            core.setOutput('release_id', String(release.id));
+            core.setOutput('release_reference', release.html_url);
+
+      - name: Upload exact bundle asset and require GitHub digest
+        id: durable_asset
+        uses: actions/github-script@v7
+        env:
+          RELEASE_ID: ${{ steps.durable_release.outputs.release_id }}
+          BUNDLE_PATH: ${{ steps.durable_bundle.outputs.bundle_path }}
+          ASSET_NAME: ${{ steps.durable_bundle.outputs.asset_name }}
+          EXPECTED_DIGEST: ${{ steps.durable_bundle.outputs.digest }}
+          EXPECTED_SIZE: ${{ steps.durable_bundle.outputs.byte_length }}
+        with:
+          script: |
+            const fs = require('fs');
+            const bytes = fs.readFileSync(process.env.BUNDLE_PATH);
+            if (bytes.length !== Number(process.env.EXPECTED_SIZE)) {
+              core.setFailed('DURABLE_REFERENCE_STORE_NOT_READY: bundle size changed before upload');
+              return;
+            }
+            const { data: asset } = await github.rest.repos.uploadReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: Number(process.env.RELEASE_ID),
+              name: process.env.ASSET_NAME,
+              headers: {
+                'X-GitHub-Api-Version': '2026-03-10',
+                'content-type': 'application/gzip',
+                'content-length': bytes.length,
+              },
+              data: bytes,
+            });
+            const digest = String(asset.digest ?? '').replace(/^sha256:/, '').toLowerCase();
+            if (asset.state !== 'uploaded' || digest !== process.env.EXPECTED_DIGEST || asset.size !== bytes.length) {
+              core.setFailed('DURABLE_REFERENCE_STORE_NOT_READY: actual release asset metadata mismatch');
+              return;
+            }
+            core.setOutput('asset_id', String(asset.id));
+            core.setOutput('asset_reference', asset.browser_download_url);
+            core.setOutput('asset_digest', digest);
+            core.setOutput('asset_created_at', asset.created_at);
+
+      - name: Build canonical durable receipt from actual asset metadata
+        shell: bash
+        env:
+          RELEASE_ID: ${{ steps.durable_release.outputs.release_id }}
+          RELEASE_REFERENCE: ${{ steps.durable_release.outputs.release_reference }}
+          ASSET_ID: ${{ steps.durable_asset.outputs.asset_id }}
+          ASSET_NAME: ${{ steps.durable_bundle.outputs.asset_name }}
+          ASSET_REFERENCE: ${{ steps.durable_asset.outputs.asset_reference }}
+          ASSET_DIGEST: ${{ steps.durable_asset.outputs.asset_digest }}
+          ASSET_CREATED_AT: ${{ steps.durable_asset.outputs.asset_created_at }}
+          ASSET_SIZE: ${{ steps.durable_bundle.outputs.byte_length }}
+          RECEIPT_NAME: prediction-lab-model-reference-receipt-${{ github.run_id }}.json
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { readdir, readFile, writeFile } from 'node:fs/promises';
+          import { join } from 'node:path';
+          import { buildModelReferenceDurableReceiptV1 } from './market-prediction-lab/src/model-reference-durable-store-v1.js';
+          const groups = (await readdir(process.env.REFERENCE_ROOT, { withFileTypes: true }))
+            .filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
+          const manifests = await Promise.all(groups.map(async (group) => JSON.parse(
+            await readFile(join(process.env.REFERENCE_ROOT, group, 'reference-manifest.json'), 'utf8'),
+          )));
+          const receipt = buildModelReferenceDurableReceiptV1({
+            repository: process.env.GITHUB_REPOSITORY,
+            sourceWorkflowRunId: process.env.GITHUB_RUN_ID,
+            targetCommitSha: process.env.RESEARCH_SHA,
+            releaseId: process.env.RELEASE_ID,
+            releaseTag: process.env.RELEASE_TAG,
+            releaseReference: process.env.RELEASE_REFERENCE,
+            bundleAsset: {
+              assetId: process.env.ASSET_ID,
+              assetName: process.env.ASSET_NAME,
+              assetReference: process.env.ASSET_REFERENCE,
+              outerArtifactDigest: process.env.ASSET_DIGEST,
+              byteLength: Number(process.env.ASSET_SIZE),
+              createdAt: process.env.ASSET_CREATED_AT,
+              state: 'uploaded',
+            },
+            receiptAssetName: process.env.RECEIPT_NAME,
+            referenceManifests: manifests,
+          });
+          await writeFile(join(process.env.DURABLE_ROOT, process.env.RECEIPT_NAME), `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
+          NODE
+
+      - name: Upload durable receipt asset
+        id: durable_receipt_asset
+        uses: actions/github-script@v7
+        env:
+          RELEASE_ID: ${{ steps.durable_release.outputs.release_id }}
+          RECEIPT_NAME: prediction-lab-model-reference-receipt-${{ github.run_id }}.json
+        with:
+          script: |
+            const fs = require('fs');
+            const receiptPath = `${process.env.DURABLE_ROOT}/${process.env.RECEIPT_NAME}`;
+            const bytes = fs.readFileSync(receiptPath);
+            const { data: asset } = await github.rest.repos.uploadReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: Number(process.env.RELEASE_ID),
+              name: process.env.RECEIPT_NAME,
+              headers: {
+                'X-GitHub-Api-Version': '2026-03-10',
+                'content-type': 'application/json',
+                'content-length': bytes.length,
+              },
+              data: bytes,
+            });
+            if (asset.state !== 'uploaded' || !/^sha256:[0-9a-f]{64}$/.test(String(asset.digest ?? ''))) {
+              core.setFailed('DURABLE_REFERENCE_STORE_NOT_READY: durable receipt asset metadata missing');
+              return;
+            }
+            core.setOutput('receipt_asset_id', String(asset.id));
+            core.setOutput('receipt_asset_digest', String(asset.digest).replace(/^sha256:/, '').toLowerCase());
+            core.setOutput('receipt_asset_reference', asset.browser_download_url);
+            core.setOutput('receipt_asset_size', String(asset.size));
+
+      - name: Publish and verify immutable release metadata
+        uses: actions/github-script@v7
+        env:
+          RELEASE_ID: ${{ steps.durable_release.outputs.release_id }}
+          BUNDLE_ASSET_ID: ${{ steps.durable_asset.outputs.asset_id }}
+          RECEIPT_ASSET_ID: ${{ steps.durable_receipt_asset.outputs.receipt_asset_id }}
+        with:
+          script: |
+            const fs = require('fs');
+            const { data: published } = await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: Number(process.env.RELEASE_ID),
+              headers: { 'X-GitHub-Api-Version': '2026-03-10' },
+              draft: false,
+              prerelease: true,
+            });
+            const { data: release } = await github.rest.repos.getRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: Number(process.env.RELEASE_ID),
+              headers: { 'X-GitHub-Api-Version': '2026-03-10' },
+            });
+            const { data: bundleAsset } = await github.rest.repos.getReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              asset_id: Number(process.env.BUNDLE_ASSET_ID),
+              headers: { 'X-GitHub-Api-Version': '2026-03-10' },
+            });
+            const { data: receiptAsset } = await github.rest.repos.getReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              asset_id: Number(process.env.RECEIPT_ASSET_ID),
+              headers: { 'X-GitHub-Api-Version': '2026-03-10' },
+            });
+            if (published.immutable !== true || release.immutable !== true || release.draft !== false
+                || release.tag_name !== process.env.RELEASE_TAG
+                || String(release.target_commitish).toLowerCase() !== process.env.RESEARCH_SHA
+                || bundleAsset.state !== 'uploaded' || receiptAsset.state !== 'uploaded') {
+              core.setFailed('DURABLE_REFERENCE_STORE_NOT_READY: immutable publication not proven');
+              return;
+            }
+            fs.writeFileSync(`${process.env.DURABLE_ROOT}/release-metadata.json`, JSON.stringify(release));
+            fs.writeFileSync(`${process.env.DURABLE_ROOT}/bundle-asset-metadata.json`, JSON.stringify(bundleAsset));
+            fs.writeFileSync(`${process.env.DURABLE_ROOT}/receipt-asset-metadata.json`, JSON.stringify(receiptAsset));
+
+      - name: Validate durable receipt against exact bytes and release attestation
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          BUNDLE_PATH: ${{ steps.durable_bundle.outputs.bundle_path }}
+          RECEIPT_NAME: prediction-lab-model-reference-receipt-${{ github.run_id }}.json
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { readFile, writeFile } from 'node:fs/promises';
+          import { join } from 'node:path';
+          import { validateModelReferenceDurableReceiptV1 } from './market-prediction-lab/src/model-reference-durable-store-v1.js';
+          const [receipt, releaseMetadata, assetMetadata, receiptAssetMetadata, exactBundleBytes, exactReceiptBytes] = await Promise.all([
+            readFile(join(process.env.DURABLE_ROOT, process.env.RECEIPT_NAME), 'utf8').then(JSON.parse),
+            readFile(join(process.env.DURABLE_ROOT, 'release-metadata.json'), 'utf8').then(JSON.parse),
+            readFile(join(process.env.DURABLE_ROOT, 'bundle-asset-metadata.json'), 'utf8').then(JSON.parse),
+            readFile(join(process.env.DURABLE_ROOT, 'receipt-asset-metadata.json'), 'utf8').then(JSON.parse),
+            readFile(process.env.BUNDLE_PATH),
+            readFile(join(process.env.DURABLE_ROOT, process.env.RECEIPT_NAME)),
+          ]);
+          const result = validateModelReferenceDurableReceiptV1(receipt, {
+            releaseMetadata,
+            assetMetadata,
+            exactBundleBytes,
+            receiptAssetMetadata,
+            exactReceiptBytes,
+          });
+          if (!result.valid || result.status !== 'VALID' || result.longTermReferenceProven !== true) {
+            throw new Error(`DURABLE_REFERENCE_STORE_NOT_READY: ${result.reason}`);
+          }
+          await writeFile(join(process.env.DURABLE_ROOT, 'durable-validation.json'), `${JSON.stringify(result, null, 2)}\n`, { mode: 0o600 });
+          NODE
+          gh release verify "$RELEASE_TAG" --repo "$REPOSITORY"
+          gh release verify-asset "$RELEASE_TAG" "$BUNDLE_PATH" --repo "$REPOSITORY"
+          gh release verify-asset "$RELEASE_TAG" "$DURABLE_ROOT/$RECEIPT_NAME" --repo "$REPOSITORY"
+          echo 'DURABLE_REFERENCE_STORE=GITHUB_IMMUTABLE_RELEASE'
+          echo 'LONG_TERM_REFERENCE_PROVEN=true'
+
+      - name: Upload immutable publication verification copy
+        uses: actions/upload-artifact@v4
+        with:
+          name: prediction-lab-model-reference-durable-verification-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/prediction-lab-model-reference-durable/*receipt*.json
+            ${{ runner.temp }}/prediction-lab-model-reference-durable/durable-validation.json
+            ${{ runner.temp }}/prediction-lab-model-reference-durable/release-metadata.json
+            ${{ runner.temp }}/prediction-lab-model-reference-durable/bundle-asset-metadata.json
+            ${{ runner.temp }}/prediction-lab-model-reference-durable/receipt-asset-metadata.json
+          if-no-files-found: error
+          retention-days: 90
