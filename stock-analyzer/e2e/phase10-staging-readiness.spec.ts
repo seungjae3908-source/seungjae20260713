@@ -936,6 +936,7 @@ async function runAuthenticatedAiChartCertification(
       };
       sessions.push(timing);
       diagnostics.authenticated_ai_chart.sessions.push(timing);
+      await expectHealthyRoute(page, '/');
     } finally {
       await context.close();
     }
