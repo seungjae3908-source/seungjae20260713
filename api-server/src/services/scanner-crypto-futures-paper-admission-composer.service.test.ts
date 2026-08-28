@@ -10,12 +10,15 @@ import {
   type AuthoritativePaperRiskPolicyEvidence,
 } from './authoritative-paper-callback-owners.service';
 import {
+  AUTHORITATIVE_PAPER_FUNDING_HORIZON_COST_VERSION,
   AUTHORITATIVE_PAPER_EXECUTION_SIZING_EVIDENCE_VERSION,
   auditAuthoritativeSupplementalCostSources,
+  buildAuthoritativePaperFundingHoldingHorizonCost,
   collectAuthoritativePaperExecutionObservationInput,
   type AuthoritativePaperExecutionSizingEvidence,
 } from './authoritative-paper-execution-cost-sources.service';
 import { createAuthoritativePaperEvidenceSourceWiring } from './authoritative-paper-evidence-sources.service';
+import type { AuthoritativePaperRiskPolicyEvidenceV1 } from './authoritative-paper-risk-sizing-source.service';
 import { buildPaperSimulatedExecutionEvidence } from './paper-simulated-execution-evidence.service';
 import {
   composeScannerCryptoFuturesPaperAdmission,
@@ -67,6 +70,86 @@ function candidate(): ScannerCanonicalPaperCandidate {
     privateTradingApiAllowed: false,
     orderSubmitted: false,
     exchangeRequestSent: false,
+  });
+}
+
+function fundingCandidate(overrides: Readonly<{
+  market?: ScannerCanonicalPaperCandidate['signal']['market'];
+  symbol?: string;
+  direction?: 'LONG' | 'SHORT';
+  expiresAtMs?: number;
+  researchCodeSha?: string;
+}> = {}): ScannerCanonicalPaperCandidate {
+  const base = candidate();
+  const direction = overrides.direction ?? base.signal.direction;
+  const expiresAtMs = overrides.expiresAtMs ?? base.signal.expiresAtMs;
+  return Object.freeze({
+    ...base,
+    signal: Object.freeze({
+      ...base.signal,
+      market: overrides.market ?? base.signal.market,
+      symbol: overrides.symbol ?? base.signal.symbol,
+      direction,
+      signalDirection: direction,
+      ttlMs: expiresAtMs - base.signal.timestampMs,
+      expiresAtMs,
+      strategyIdentity: Object.freeze({
+        ...base.signal.strategyIdentity,
+        researchCodeSha: overrides.researchCodeSha ?? base.signal.strategyIdentity.researchCodeSha,
+      }),
+    }),
+  });
+}
+
+function genericRiskPolicy(
+  funding: ScannerCanonicalPaperCandidate,
+  overrides: Partial<AuthoritativePaperRiskPolicyEvidenceV1> = {},
+): AuthoritativePaperRiskPolicyEvidenceV1 {
+  return Object.freeze({
+    schemaVersion: 'authoritative-paper-generic-risk-policy-evidence-v1',
+    policyId: 'canonical-paper-risk-v1',
+    policyVersion: 'canonical-paper-risk-policy-v1',
+    source: 'canonical-paper-risk-policy-record',
+    provenance: Object.freeze(['canonical-risk-policy-store', 'exact-research-sha']),
+    observedAtMs: MARKET_AT,
+    maximumAgeMs: 30_000,
+    researchCodeSha: funding.signal.strategyIdentity.researchCodeSha,
+    marketScopes: Object.freeze(['CRYPTO_FUTURES'] as const),
+    strategyScopes: Object.freeze([funding.signal.strategyIdentity.strategyId]),
+    symbolScopes: Object.freeze([funding.signal.symbol]),
+    riskPercent: 0.5,
+    requestedLeverage: 1,
+    maximumLeverage: 10,
+    marginMode: 'isolated',
+    ...overrides,
+  });
+}
+
+function fundingCost(overrides: Readonly<{
+  candidate?: ScannerCanonicalPaperCandidate;
+  publicEvidence?: BitgetFuturesPublicEvidence;
+  riskPolicy?: AuthoritativePaperRiskPolicyEvidenceV1;
+  researchCodeSha?: string;
+  costPolicyId?: string;
+  entryTimestampMs?: number;
+  expectedExitTimestampMs?: number;
+  positionNotional?: number;
+  nowMs?: number;
+}> = {}) {
+  const funding = overrides.candidate ?? fundingCandidate();
+  return buildAuthoritativePaperFundingHoldingHorizonCost({
+    candidate: funding,
+    riskPolicy: overrides.riskPolicy ?? genericRiskPolicy(funding),
+    publicEvidence: overrides.publicEvidence ?? publicEvidence({
+      nextFundingUpdateMs: NOW + 20 * 60_000,
+    }),
+    researchCodeSha: overrides.researchCodeSha ?? funding.signal.strategyIdentity.researchCodeSha,
+    costPolicyId: overrides.costPolicyId ?? funding.signal.strategyIdentity.costPolicyVersion,
+    entryTimestampMs: overrides.entryTimestampMs ?? NOW,
+    expectedExitTimestampMs: overrides.expectedExitTimestampMs ?? funding.signal.expiresAtMs,
+    positionNotional: overrides.positionNotional ?? 10_000,
+    nowMs: overrides.nowMs ?? NOW,
+    maximumAgeMs: 30_000,
   });
 }
 
@@ -219,6 +302,174 @@ function compose(overrides: Partial<Parameters<typeof composeScannerCryptoFuture
   });
 }
 
+test('P0-4A emits an explicit zero only when the canonical holding horizon ends before funding', () => {
+  const funding = fundingCandidate();
+  const result = fundingCost({
+    candidate: funding,
+    publicEvidence: publicEvidence({ nextFundingUpdateMs: funding.signal.expiresAtMs + 1 }),
+  });
+  assert.equal(result.schemaVersion, AUTHORITATIVE_PAPER_FUNDING_HORIZON_COST_VERSION);
+  assert.equal(result.status, 'PRESENT');
+  assert.equal(result.scheduledSettlementCount, 0);
+  assert.equal(result.knownComponentCount, 1);
+  assert.equal(result.projectedComponentCount, 0);
+  assert.equal(result.unknownComponentCount, 0);
+  assert.equal(result.components[0]?.componentClass, 'KNOWN_COMPONENT');
+  assert.equal(result.fundingCostEvidence?.valuePercent, 0);
+  assert.equal(result.fundingCostEvidence?.evidenceClass, 'KNOWN_COMPONENT');
+  assert.equal(result.currentRateReplicatedAcrossFutureIntervals, false);
+  assert.equal(result.unknownIsZero, false);
+});
+
+test('P0-4A includes an exactly-on-exit funding boundary and preserves projected identity', () => {
+  const expiresAtMs = NOW + 4 * 60 * 60_000;
+  const funding = fundingCandidate({ expiresAtMs });
+  const result = fundingCost({
+    candidate: funding,
+    publicEvidence: publicEvidence({ nextFundingUpdateMs: expiresAtMs }),
+  });
+  assert.equal(result.status, 'PRESENT');
+  assert.equal(result.scheduledSettlementCount, 1);
+  assert.equal(result.components[0]?.componentClass, 'PROJECTED_COMPONENT');
+  assert.equal(result.components[0]?.fundingRateDecimal, 0.0001);
+  assert.equal(result.fundingCostEvidence?.valuePercent, 0.01);
+  assert.equal(result.fundingCostEvidence?.signedCostPercent, 0.01);
+  assert.equal(result.fundingCostEvidence?.projectedIsRealized, false);
+  assert.equal(result.realizedFundingCostPercent, null);
+  assert.equal(result.strategyId, funding.signal.strategyIdentity.strategyId);
+  assert.equal(result.freshness, 'FRESH');
+  assert.equal(result.ageMs, 0);
+  assert.equal(result.reconciliation?.fundingTimestamps[0], expiresAtMs);
+  assert.match(result.evidenceId ?? '', new RegExp(funding.signal.signalId, 'u'));
+});
+
+test('P0-4A refuses to clone the current funding rate across multiple future boundaries', () => {
+  const expiresAtMs = NOW + 20 * 60 * 60_000;
+  const funding = fundingCandidate({ expiresAtMs });
+  const result = fundingCost({
+    candidate: funding,
+    publicEvidence: publicEvidence({
+      fundingIntervalHours: 8,
+      nextFundingUpdateMs: NOW + 60 * 60_000,
+    }),
+  });
+  assert.equal(result.status, 'REFERENCE_ONLY');
+  assert.equal(result.scheduledSettlementCount, 3);
+  assert.equal(result.projectedComponentCount, 1);
+  assert.equal(result.unknownComponentCount, 2);
+  assert.equal(result.components[0]?.componentClass, 'PROJECTED_COMPONENT');
+  assert.equal(result.components[1]?.componentClass, 'UNKNOWN_COMPONENT');
+  assert.equal(result.components[1]?.fundingRateDecimal, null);
+  assert.equal(result.components[1]?.executionCostPercent, null);
+  assert.equal(result.fundingCostEvidence, null);
+  assert.deepEqual(result.blockers, ['FUTURE_FUNDING_RATE_UNKNOWN_FOR_LATER_BOUNDARIES']);
+  assert.equal(result.currentRateReplicatedAcrossFutureIntervals, false);
+});
+
+test('P0-4A applies LONG/SHORT funding sign and excludes projected credits from execution cost', () => {
+  const longResult = fundingCost();
+  const shortCandidate = fundingCandidate({ direction: 'SHORT' });
+  const shortResult = fundingCost({
+    candidate: shortCandidate,
+    riskPolicy: genericRiskPolicy(shortCandidate),
+  });
+  assert.equal(longResult.status, 'PRESENT');
+  assert.equal(longResult.fundingCostEvidence?.signedCostPercent, 0.01);
+  assert.equal(longResult.fundingCostEvidence?.valuePercent, 0.01);
+  assert.equal(shortResult.status, 'PRESENT');
+  assert.equal(shortResult.fundingCostEvidence?.signedCostPercent, -0.01);
+  assert.equal(shortResult.fundingCostEvidence?.valuePercent, 0);
+  assert.equal(shortResult.fundingCostEvidence?.creditPercent, 0.01);
+
+  const negativeRate = publicEvidence({
+    fundingRate: -0.0001,
+    nextFundingUpdateMs: NOW + 20 * 60_000,
+  });
+  const negativeLong = fundingCost({ candidate: fundingCandidate(), publicEvidence: negativeRate });
+  const negativeShort = fundingCost({
+    candidate: shortCandidate,
+    riskPolicy: genericRiskPolicy(shortCandidate),
+    publicEvidence: negativeRate,
+  });
+  assert.equal(negativeLong.fundingCostEvidence?.signedCostPercent, -0.01);
+  assert.equal(negativeLong.fundingCostEvidence?.valuePercent, 0);
+  assert.equal(negativeShort.fundingCostEvidence?.signedCostPercent, 0.01);
+  assert.equal(negativeShort.fundingCostEvidence?.valuePercent, 0.01);
+});
+
+test('P0-4A projected funding is accepted only through the existing canonical ESTIMATED cost policy', () => {
+  const funding = fundingCandidate();
+  const fundingPublicEvidence = publicEvidence({ nextFundingUpdateMs: NOW + 20 * 60_000 });
+  const result = fundingCost({ candidate: funding, publicEvidence: fundingPublicEvidence });
+  assert.equal(result.status, 'PRESENT');
+  assert.equal(result.fundingCostEvidence?.quality, 'ESTIMATED');
+  const admission = compose({
+    paperCandidate: funding,
+    publicEvidence: fundingPublicEvidence,
+    supplementalCostEvidence: supplemental({ funding: result.fundingCostEvidence! }),
+  });
+  assert.equal(admission.status, 'READY');
+  assert.equal(admission.admissionResult?.status, 'READY');
+  assert.equal(
+    admission.admissionResult?.bundle?.executionEvidence.costPolicy.fundingRate,
+    result.fundingCostEvidence!.valuePercent / 100,
+  );
+});
+
+test('P0-4A fails closed for stale/missing timing evidence and identity mismatches', () => {
+  const funding = fundingCandidate();
+  const stale = fundingCost({
+    candidate: funding,
+    publicEvidence: publicEvidence({ observedAtMs: NOW - 60_000 }),
+  });
+  assert.equal(stale.status, 'BLOCKED_DATA');
+  assert.ok(stale.blockers.includes('FUNDING_SOURCE_STALE_OR_INVALID'));
+
+  const missingInterval = fundingCost({
+    candidate: funding,
+    publicEvidence: publicEvidence({ fundingIntervalHours: 0 }),
+  });
+  assert.equal(missingInterval.status, 'BLOCKED_DATA');
+  assert.ok(missingInterval.blockers.includes('FUNDING_INTERVAL_MISSING_OR_INVALID'));
+
+  const missingHorizonCandidate = Object.freeze({
+    ...funding,
+    signal: Object.freeze({ ...funding.signal, ttlMs: 0, expiresAtMs: 0 }),
+  }) as ScannerCanonicalPaperCandidate;
+  const missingHorizon = fundingCost({
+    candidate: missingHorizonCandidate,
+    expectedExitTimestampMs: 0,
+  });
+  assert.equal(missingHorizon.status, 'BLOCKED_DATA');
+  assert.ok(missingHorizon.blockers.includes('FUNDING_HOLDING_HORIZON_MISSING_OR_INVALID'));
+
+  const wrongSymbol = fundingCost({
+    candidate: funding,
+    publicEvidence: publicEvidence({ symbol: 'ETHUSDT' }),
+  });
+  assert.equal(wrongSymbol.status, 'BLOCKED_DATA');
+  assert.ok(wrongSymbol.blockers.includes('FUNDING_PUBLIC_SYMBOL_MISMATCH'));
+
+  const wrongResearchSha = fundingCost({ candidate: funding, researchCodeSha: 'c'.repeat(40) });
+  assert.equal(wrongResearchSha.status, 'BLOCKED_DATA');
+  assert.ok(wrongResearchSha.blockers.includes('FUNDING_RESEARCH_SHA_MISMATCH'));
+  assert.ok(wrongResearchSha.blockers.includes('FUNDING_RISK_POLICY_RESEARCH_SHA_MISMATCH'));
+});
+
+test('P0-4A blocks spot/non-funding markets without creating a zero component', () => {
+  const spotCandidate = fundingCandidate({ market: 'CRYPTO_SPOT' });
+  const result = fundingCost({
+    candidate: spotCandidate,
+    riskPolicy: genericRiskPolicy(spotCandidate, {
+      marketScopes: Object.freeze(['CRYPTO_SPOT']),
+    }),
+  });
+  assert.equal(result.status, 'BLOCKED_DATA');
+  assert.ok(result.blockers.includes('NON_FUNDING_MARKET'));
+  assert.equal(result.fundingCostEvidence, null);
+  assert.deepEqual(result.components, []);
+});
+
 test('P0-C5 composes a READY crypto-futures admission bundle only from authoritative Paper/public evidence', () => {
   const result = compose();
   assert.equal(result.status, 'READY');
@@ -226,6 +477,8 @@ test('P0-C5 composes a READY crypto-futures admission bundle only from authorita
   assert.equal(result.riskInput?.accountBalance, 1_000_000);
   assert.equal(result.riskInput?.dataStatus, 'live');
   assert.equal(result.riskInput?.contractRulesStatus, 'live');
+  assert.ok(Math.abs(Number(result.riskInput?.slippageRate) - 0.0019) < 1e-12);
+  assert.equal(result.riskInput?.estimatedFundingRate, 0.0001);
   assert.equal(result.riskResult?.allowed, true);
   assert.equal(result.paperEvidence?.provider, 'bitget');
   assert.equal(result.paperEvidence?.minimumOrderQuantity, 0.001);
@@ -292,8 +545,8 @@ test('P0-C5 blocks admission when supplemental full-cost evidence is absent even
 test('P0-C5 keeps admission BLOCKED when any supplemental cost component is incomplete', () => {
   const result = compose({ supplementalCostEvidence: supplemental({ latency: undefined as never }) });
   assert.equal(result.status, 'BLOCKED');
-  assert.equal(result.admissionResult?.status, 'BLOCKED');
-  assert.ok(result.blockers.includes('SCANNER_COST_EVIDENCE_NOT_READY'));
+  assert.equal(result.admissionResult, null);
+  assert.ok(result.blockers.includes('P0_C5_LATENCY_COST_EVIDENCE_REQUIRED'));
   assert.equal(result.executionAuthority, 'NONE');
   assert.equal(result.orderSubmitted, false);
 });
@@ -569,6 +822,26 @@ test('Worker D keeps supplemental full-cost MISSING when only public/reference e
   assert.equal(unknownNumericFields.components.slippage.value, null);
   assert.ok(unknownNumericFields.blockers.includes('FEE_COST_EVIDENCE_UNAVAILABLE'));
   assert.ok(unknownNumericFields.blockers.includes('SLIPPAGE_COST_EVIDENCE_UNAVAILABLE'));
+
+  const staleFee = auditAuthoritativeSupplementalCostSources({
+    publicEvidence: publicEvidence({ observedAtMs: NOW - 60_000 }),
+    executionObservation: observation(),
+    supplemental: supplemental(),
+    nowMs: NOW,
+  });
+  assert.equal(staleFee.fullCostReady, false);
+  assert.equal(staleFee.components.fees.state, 'UNAVAILABLE');
+  assert.ok(staleFee.blockers.includes('FEE_COST_EVIDENCE_UNAVAILABLE'));
+
+  const missingSpread = auditAuthoritativeSupplementalCostSources({
+    publicEvidence: publicEvidence({ bidPrice: null as never }),
+    executionObservation: observation(),
+    supplemental: supplemental(),
+    nowMs: NOW,
+  });
+  assert.equal(missingSpread.fullCostReady, false);
+  assert.equal(missingSpread.components.spread.state, 'UNAVAILABLE');
+  assert.ok(missingSpread.blockers.includes('SPREAD_COST_EVIDENCE_UNAVAILABLE'));
 
   const measuredZero = auditAuthoritativeSupplementalCostSources({
     publicEvidence: publicEvidence({ takerFeeRate: 0, bidPrice: 100, askPrice: 100 }),
