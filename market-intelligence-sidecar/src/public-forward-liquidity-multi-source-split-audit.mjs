@@ -18,6 +18,7 @@ export const PUBLIC_FORWARD_LIQUIDITY_MULTI_SOURCE_SPLIT_AUDIT_VERSION =
 export const PUBLIC_FORWARD_LIQUIDITY_MULTI_SOURCE_SPLIT_SAFETY = Object.freeze({
   independentSplitSourceRequired: true,
   upstreamSourceLineageRequired: true,
+  completeIngestReceiptChainRequired: true,
   syntheticAggregateDatasetAllowed: false,
   syntheticSingleCollectorAllowed: false,
   externalScopeEvidenceRequired: true,
@@ -221,12 +222,40 @@ function validateSource(source) {
   if (!exactCommitSha(source.collectorCodeSha)) add(blockers, 'UPSTREAM_COLLECTOR_SHA_INVALID');
   if (!text(source.collectorImplementationPath)) add(blockers, 'UPSTREAM_COLLECTOR_PATH_INVALID');
   if (!exactCommitSha(source.collectorImplementationBlobSha)) add(blockers, 'UPSTREAM_COLLECTOR_BLOB_INVALID');
+  if (!text(source.ingestReceiptChainVersion)) add(blockers, 'UPSTREAM_RECEIPT_CHAIN_VERSION_INVALID');
+  if (!exactDigest(source.ingestReceiptChainDigest)) add(blockers, 'UPSTREAM_RECEIPT_CHAIN_DIGEST_INVALID');
+  if (!positiveInteger(source.ingestReceiptCount)) add(blockers, 'UPSTREAM_RECEIPT_CHAIN_COUNT_INVALID');
+  const chainCount = positiveInteger(source.ingestReceiptCount) ? source.ingestReceiptCount : 0;
+  const chainArrays = [
+    ['ingestReceiptDigests', 'UPSTREAM_RECEIPT_CHAIN_RECEIPTS_INVALID', exactDigest],
+    ['artifactIds', 'UPSTREAM_RECEIPT_CHAIN_ARTIFACT_IDS_INVALID', text],
+    ['artifactDigests', 'UPSTREAM_RECEIPT_CHAIN_ARTIFACT_DIGESTS_INVALID', exactDigest],
+    ['rawBatchDigests', 'UPSTREAM_RECEIPT_CHAIN_RAW_DIGESTS_INVALID', exactDigest],
+  ];
+  for (const [key, code, validator] of chainArrays) {
+    const values = source[key];
+    if (!Array.isArray(values) || values.length !== chainCount || values.some((value) => !validator(value))) {
+      add(blockers, code);
+    }
+  }
   if (!exactDigest(source.datasetDigest)) add(blockers, 'UPSTREAM_DATASET_DIGEST_INVALID');
   if (!text(source.datasetRelativePath)) add(blockers, 'UPSTREAM_DATASET_PATH_INVALID');
   if (!exactDigest(source.receiptDigest)) add(blockers, 'UPSTREAM_RECEIPT_DIGEST_INVALID');
   if (!text(source.artifactId)) add(blockers, 'UPSTREAM_ARTIFACT_ID_INVALID');
   if (!exactDigest(source.artifactDigest)) add(blockers, 'UPSTREAM_ARTIFACT_DIGEST_INVALID');
   if (!exactDigest(source.rawBatchDigest)) add(blockers, 'UPSTREAM_RAW_BATCH_DIGEST_INVALID');
+  if (Array.isArray(source.ingestReceiptDigests) && source.ingestReceiptDigests.at(-1) !== source.receiptDigest) {
+    add(blockers, 'UPSTREAM_RECEIPT_CHAIN_FINAL_RECEIPT_MISMATCH');
+  }
+  if (Array.isArray(source.artifactIds) && source.artifactIds.at(-1) !== source.artifactId) {
+    add(blockers, 'UPSTREAM_RECEIPT_CHAIN_FINAL_ARTIFACT_ID_MISMATCH');
+  }
+  if (Array.isArray(source.artifactDigests) && source.artifactDigests.at(-1) !== source.artifactDigest) {
+    add(blockers, 'UPSTREAM_RECEIPT_CHAIN_FINAL_ARTIFACT_DIGEST_MISMATCH');
+  }
+  if (Array.isArray(source.rawBatchDigests) && source.rawBatchDigests.at(-1) !== source.rawBatchDigest) {
+    add(blockers, 'UPSTREAM_RECEIPT_CHAIN_FINAL_RAW_DIGEST_MISMATCH');
+  }
   return blockers;
 }
 
@@ -248,7 +277,7 @@ function validateSplitSource(splitSource) {
   if (!Array.isArray(splitSource.upstreamSources) || splitSource.upstreamSources.length === 0) {
     add(blockers, 'UPSTREAM_SOURCES_REQUIRED');
   } else {
-    const keys = ['sourceIdentity', 'datasetDigest', 'receiptDigest', 'artifactId'];
+    const keys = ['sourceIdentity', 'ingestReceiptChainDigest', 'datasetDigest', 'receiptDigest', 'artifactId'];
     for (const source of splitSource.upstreamSources) {
       validateSource(source).forEach((code) => add(blockers, code));
     }
@@ -491,6 +520,8 @@ export function auditPublicForwardLiquidityIndependentSplits({
       sourceIdentity: entry.sourceIdentity,
       sourceDatasetDigest: upstream?.datasetDigest ?? null,
       sourceReceiptDigest: upstream?.receiptDigest ?? null,
+      sourceReceiptChainDigest: upstream?.ingestReceiptChainDigest ?? null,
+      sourceReceiptCount: upstream?.ingestReceiptCount ?? null,
       sourceCollectorCodeSha: upstream?.collectorCodeSha ?? null,
       sourceDigest: observation.sourceDigest,
       eventIdentity: entry.eventIdentity,
@@ -540,6 +571,8 @@ export function auditPublicForwardLiquidityIndependentSplits({
   const collectorCodeShas = Object.freeze([...new Set(upstreamSources.map((source) => source.collectorCodeSha))].sort());
   const datasetDigests = Object.freeze(upstreamSources.map((source) => source.datasetDigest));
   const receiptDigests = Object.freeze(upstreamSources.map((source) => source.receiptDigest));
+  const receiptChainDigests = Object.freeze(upstreamSources.map((source) => source.ingestReceiptChainDigest));
+  const receiptCounts = Object.freeze(upstreamSources.map((source) => source.ingestReceiptCount));
   const assignmentDigest = sha256(assignments);
   const auditBody = {
     schemaVersion: PUBLIC_FORWARD_LIQUIDITY_MULTI_SOURCE_SPLIT_AUDIT_VERSION,
@@ -554,6 +587,8 @@ export function auditPublicForwardLiquidityIndependentSplits({
     upstreamLineageDigest,
     datasetDigests,
     receiptDigests,
+    receiptChainDigests,
+    receiptCounts,
     collectorCodeShas,
     splitPolicyIdentity: policy.policyIdentity,
     splitPolicyVersion: policy.policyVersion,
