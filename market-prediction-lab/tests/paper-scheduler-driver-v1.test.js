@@ -550,3 +550,227 @@ test("NO_TRADE empty public lanes reach canonical path without fake entries or o
   assert.equal(result.summary.entries, 0);
   assert.equal(result.summary.settled, 0);
 });
+
+function positionFixture({ withRiskPolicy = false } = {}) {
+  const position = {
+    positionId: "position-1",
+    paperSampleId: "sample-1",
+    signalId: "signal-1",
+    market: "CRYPTO_FUTURES",
+    symbol: "BTCUSDT",
+    direction: "LONG",
+    strategyId: "strategy-1",
+    strategyVersion: "v1",
+    parameterHash: "parameter-1",
+    researchCodeSha: "a".repeat(40),
+    costPolicyVersion: "cost-v1",
+    entryTimestampMs: NOW - 10_000,
+    lifecycleState: "OPEN",
+    sample: {
+      identity: {
+        signalId: "signal-1",
+        market: "CRYPTO_FUTURES",
+        symbol: "BTCUSDT",
+        executionDirection: "LONG",
+        strategyId: "strategy-1",
+        strategyVersion: "v1",
+        parameterHash: "parameter-1",
+        researchCodeSha: "a".repeat(40),
+      },
+      profitEvidence: { costPolicyId: "cost-v1" },
+      entryEvidenceProvenance: {
+        schemaVersion: "paper-evidence-provenance-v1",
+        provenanceDigest: "b".repeat(64),
+        evidenceSnapshotDigest: "c".repeat(64),
+      },
+    },
+  };
+  if (withRiskPolicy) {
+    position.riskPolicyIdentity = {
+      policyId: "risk-v1",
+      policyVersion: "1.0.0",
+      source: "canonical-risk-record",
+      researchCodeSha: "a".repeat(40),
+    };
+  }
+  return position;
+}
+
+function stateWithPosition({ withRiskPolicy = false } = {}) {
+  const position = positionFixture({ withRiskPolicy });
+  return {
+    identityFingerprint: "paper-identity-v1",
+    positions: [position],
+    ledger: {
+      accountBinding: {
+        publisherAccountIdSha256: "d".repeat(64),
+        sourceSha: "a".repeat(40),
+        accountId: "canonical-paper-account-1",
+      },
+      reservations: [{
+        status: "OPEN",
+        positionId: position.positionId,
+        paperSampleId: position.paperSampleId,
+      }],
+    },
+  };
+}
+
+function genuineObservationFromProvider(input, overrides = {}) {
+  const binding = input.positionBindings[0];
+  const identity = binding.positionIdentity;
+  const base = {
+    observationId: "observation-1",
+    positionId: identity.positionId,
+    paperSampleId: identity.paperSampleId,
+    signalId: identity.signalId,
+    market: identity.market,
+    symbol: identity.symbol,
+    direction: identity.direction,
+    strategyId: identity.strategyId,
+    strategyVersion: identity.strategyVersion,
+    parameterHash: identity.parameterHash,
+    researchCodeSha: identity.researchCodeSha,
+    costPolicyVersion: identity.costPolicyVersion,
+    publicOnly: true,
+    source: "public-position-observation",
+    provenance: "public-only-position-observation-v1",
+    observedAtMs: NOW,
+    maxAgeMs: 60_000,
+    cycleIdentityDigest: input.cycleIdentity.identityDigest,
+    accountIdentityDigest: input.accountIdentity.identityDigest,
+    entryEvidenceDigest: binding.entryProvenance.evidenceSnapshotDigest,
+    riskPolicyIdentityDigest: binding.riskPolicyIdentity.identityDigest,
+    naturalEvidence: {
+      provenanceClass: "NATURAL_FORWARD",
+      synthetic: false,
+      replay: false,
+      testOnly: false,
+      backfill: false,
+      historical: false,
+      duplicate: false,
+      observationId: "observation-1",
+      observedAtMs: NOW,
+      source: "public-position-observation",
+      provenance: "public-only-position-observation-v1",
+    },
+    bar: { open: 100, high: 102, low: 99, close: 101 },
+  };
+  return {
+    ...base,
+    ...overrides,
+    naturalEvidence: { ...base.naturalEvidence, ...(overrides.naturalEvidence ?? {}) },
+  };
+}
+
+test("scheduler passes immutable open Positions and account binding while missing observations stay missing", async (t) => {
+  const canonicalState = stateWithPosition();
+  const { calls, providerCalls, options } = await harness(t, { state: canonicalState });
+  const result = await runScheduledPaperCycle(options);
+  const futures = providerCalls.find((row) => row.market === "CRYPTO_FUTURES");
+  assert.equal(futures.openPositions.length, 1);
+  assert.equal(futures.openPositions[0].positionId, "position-1");
+  assert.equal(futures.positionBindings[0].positionIdentity.paperSampleId, "sample-1");
+  assert.equal(futures.positionBindings[0].entryProvenance.evidenceSnapshotDigest, "c".repeat(64));
+  assert.equal(futures.positionBindings[0].costPolicyIdentity.version, "cost-v1");
+  assert.equal(futures.positionBindings[0].riskPolicyIdentity, null);
+  assert.equal(futures.accountIdentity.publisherAccountIdSha256, "d".repeat(64));
+  assert.equal(futures.accountIdentity.accountIdSha256, createHash("sha256").update("canonical-paper-account-1").digest("hex"));
+  assert.equal(result.positionObservationHandoff.status, "MISSING");
+  assert.equal(result.positionObservationHandoff.observationCount, null);
+  assert.equal(Object.hasOwn(calls[0], "positionObservations"), false);
+});
+
+test("scheduler passes an explicitly identity-bound genuine Position observation to the lifecycle input", async (t) => {
+  const canonicalState = stateWithPosition({ withRiskPolicy: true });
+  const { calls, options } = await harness(t, {
+    state: canonicalState,
+    publicEvidenceProvider: {
+      async collectPublicEvidence(input) {
+        if (input.market !== "CRYPTO_FUTURES") return readyLane();
+        return readyLane({ positionObservations: [genuineObservationFromProvider(input)] });
+      },
+    },
+  });
+  const result = await runScheduledPaperCycle(options);
+  assert.equal(result.status, "COMPLETED");
+  assert.equal(result.positionObservationHandoff.status, "PRESENT");
+  assert.equal(result.positionObservationHandoff.observationCount, 1);
+  assert.equal(calls[0].positionObservations.length, 1);
+  const observation = calls[0].positionObservations[0];
+  assert.equal(observation.schedulerHandoff.cycleIdentity.cycleId, CYCLE_ID);
+  assert.equal(observation.schedulerHandoff.positionIdentity.signalId, "signal-1");
+  assert.equal(observation.schedulerHandoff.accountIdentity.publisherAccountIdSha256, "d".repeat(64));
+  assert.equal(observation.schedulerHandoff.entryProvenance.evidenceSnapshotDigest, "c".repeat(64));
+  assert.equal(observation.schedulerHandoff.costPolicyIdentity.version, "cost-v1");
+  assert.equal(observation.schedulerHandoff.riskPolicyIdentity.policyId, "risk-v1");
+  assert.equal(observation.schedulerHandoff.naturalSampleCreditAuthority, "IDENTITY_GATES_PASSED");
+});
+
+for (const flag of ["synthetic", "replay", "testOnly", "backfill", "historical", "duplicate"]) {
+  test(`genuine Position observation rejects ${flag} credit`, async (t) => {
+    const canonicalState = stateWithPosition({ withRiskPolicy: true });
+    const { calls, options } = await harness(t, {
+      state: canonicalState,
+      publicEvidenceProvider: {
+        async collectPublicEvidence(input) {
+          if (input.market !== "CRYPTO_FUTURES") return readyLane();
+          return readyLane({
+            positionObservations: [genuineObservationFromProvider(input, { naturalEvidence: { [flag]: true } })],
+          });
+        },
+      },
+    });
+    const result = await runScheduledPaperCycle(options);
+    assert.equal(result.status, "BLOCKED_DATA");
+    assert.equal(result.mutationCount, 0);
+    assert.equal(calls.length, 0);
+    assert.ok(result.positionObservationHandoff.blockers.includes("POSITION_OBSERVATION_GENUINE_PROVENANCE_REQUIRED"));
+  });
+}
+
+for (const [name, mutate] of [
+  ["wrong cycle", (row) => { row.cycleIdentityDigest = "e".repeat(64); }],
+  ["wrong account", (row) => { row.accountIdentityDigest = "e".repeat(64); }],
+  ["wrong strategy", (row) => { row.strategyId = "wrong-strategy"; }],
+  ["wrong signal", (row) => { row.signalId = "wrong-signal"; }],
+  ["missing Entry provenance", (row) => { delete row.entryEvidenceDigest; }],
+  ["wrong risk policy", (row) => { row.riskPolicyIdentityDigest = "e".repeat(64); }],
+]) {
+  test(`genuine Position observation rejects ${name}`, async (t) => {
+    const canonicalState = stateWithPosition({ withRiskPolicy: true });
+    const { calls, options } = await harness(t, {
+      state: canonicalState,
+      publicEvidenceProvider: {
+        async collectPublicEvidence(input) {
+          if (input.market !== "CRYPTO_FUTURES") return readyLane();
+          const row = genuineObservationFromProvider(input);
+          mutate(row);
+          return readyLane({ positionObservations: [row] });
+        },
+      },
+    });
+    const result = await runScheduledPaperCycle(options);
+    assert.equal(result.status, "BLOCKED_DATA");
+    assert.equal(result.mutationCount, 0);
+    assert.equal(calls.length, 0);
+  });
+}
+
+test("legacy exits remain exits and are never synthesized into genuine Position observations", async (t) => {
+  const canonicalState = stateWithPosition({ withRiskPolicy: true });
+  const legacyExit = { positionId: "position-1", settlementInput: { legacy: true } };
+  const { calls, options } = await harness(t, {
+    state: canonicalState,
+    publicEvidenceProvider: {
+      async collectPublicEvidence(input) {
+        return input.market === "CRYPTO_FUTURES" ? readyLane({ exits: [legacyExit] }) : readyLane();
+      },
+    },
+  });
+  const result = await runScheduledPaperCycle(options);
+  assert.equal(result.status, "COMPLETED");
+  assert.deepEqual(calls[0].exits, [legacyExit]);
+  assert.equal(Object.hasOwn(calls[0], "positionObservations"), false);
+  assert.equal(result.positionObservationHandoff.status, "MISSING");
+});
