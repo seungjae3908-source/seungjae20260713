@@ -24,6 +24,8 @@ jobs:
           node-version: 22
       - name: Apply core patch
         run: python scripts/tmp-liquidity-receipt-chain-core-patch-v6.py
+      - name: Apply stricter test contract
+        run: python scripts/tmp-liquidity-receipt-chain-test-contract-v6.py
       - name: Validate core patch
         shell: bash
         run: |
