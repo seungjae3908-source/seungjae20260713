@@ -27,6 +27,8 @@ const rejectionCases: Array<[string, unknown, string]> = [
   ['rejects missing reason', { membershipLevel: 'associate' }, 'CHANGE_REASON_REQUIRED'],
   ['rejects short reason', { membershipLevel: 'associate', reason: 'no' }, 'CHANGE_REASON_REQUIRED'],
   ['rejects long reason', { membershipLevel: 'associate', reason: 'x'.repeat(501) }, 'CHANGE_REASON_REQUIRED'],
+  ['rejects invalid membership level even with active change', { membershipLevel: 'owner', isActive: true, reason: 'valid reason' }, 'INVALID_MEMBER_CHANGE'],
+  ['rejects non-boolean active state even with valid membership level', { membershipLevel: 'associate', isActive: 'true', reason: 'valid reason' }, 'INVALID_MEMBER_CHANGE'],
   ['rejects client role', { role: 'admin', membershipLevel: 'admin', reason: 'attempted role injection' }, 'CLIENT_AUTHORITY_FORBIDDEN'],
   ['rejects client user_id', { user_id: 'other', membershipLevel: 'regular', reason: 'attempted identity injection' }, 'CLIENT_AUTHORITY_FORBIDDEN'],
   ['rejects actor_id', { actor_id: 'other', isActive: false, reason: 'attempted actor injection' }, 'CLIENT_AUTHORITY_FORBIDDEN'],
