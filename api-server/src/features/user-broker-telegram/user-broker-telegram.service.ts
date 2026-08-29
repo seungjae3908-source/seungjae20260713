@@ -126,6 +126,11 @@ export class UserBrokerTelegramService {
     private readonly personalAlertSender?: PersonalAlertSender,
   ) {}
 
+  private async personalTelegramEligible(userId: string) {
+    const profile = await this.repository.getPersonalTelegramMemberProfile(userId);
+    return hasCapability(profile, 'canConnectPersonalTelegram');
+  }
+
   async createTelegramLink(userId: string, now = new Date()) {
     if (!userId) throw new Error('LOGIN_REQUIRED');
     const token = randomBytes(32).toString('base64url');
@@ -142,6 +147,7 @@ export class UserBrokerTelegramService {
     const now = input.now ?? new Date(); const timestamp = now.toISOString();
     const userId = await this.repository.consumeLinkToken(hashTelegramLinkToken(token), timestamp);
     if (!userId) throw new Error('TELEGRAM_LINK_EXPIRED_OR_USED');
+    if (!await this.personalTelegramEligible(userId)) throw new Error('TELEGRAM_MEMBER_INELIGIBLE');
     await this.repository.bindTelegramConnection({ userId, telegramChatId: chatId, telegramUserId, status: 'ACTIVE', connectedAt: timestamp, revokedAt: null, updatedAt: timestamp });
     return { userId, connected: true };
   }
@@ -188,6 +194,37 @@ export class UserBrokerTelegramService {
     if (!connection || connection.status !== 'ACTIVE') {
       const result = await this.repository.finishDelivery(userId, deliveryId, 'DEAD_LETTER', claimed.attempts, null,
         'TELEGRAM_DISCONNECTED', timestamp);
+      return { processed: true, state: result?.state ?? 'DEAD_LETTER' };
+    }
+
+    let eligible: boolean;
+    try {
+      eligible = await this.personalTelegramEligible(userId);
+    } catch {
+      const attempt = claimed.attempts + 1;
+      const dead = attempt >= MAX_DELIVERY_ATTEMPTS;
+      const state = dead ? 'DEAD_LETTER' as const : 'RETRY_SCHEDULED' as const;
+      const result = await this.repository.finishDelivery(
+        userId,
+        deliveryId,
+        state,
+        attempt,
+        dead ? null : nextRetryAt(now, attempt),
+        'TELEGRAM_MEMBER_ELIGIBILITY_UNAVAILABLE',
+        timestamp,
+      );
+      return { processed: true, state: result?.state ?? state };
+    }
+    if (!eligible) {
+      const result = await this.repository.finishDelivery(
+        userId,
+        deliveryId,
+        'DEAD_LETTER',
+        claimed.attempts,
+        null,
+        'TELEGRAM_MEMBER_INELIGIBLE',
+        timestamp,
+      );
       return { processed: true, state: result?.state ?? 'DEAD_LETTER' };
     }
 
