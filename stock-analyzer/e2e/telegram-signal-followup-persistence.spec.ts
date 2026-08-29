@@ -2,7 +2,10 @@ import { expect, test } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ScannerAlertCandidate, ScannerSignalCard } from '../../api-server/src/services/scanner-signal.types';
-import { InMemoryTelegramSignalFollowupRepository } from '../../api-server/src/services/telegram-signal-followup.repository';
+import {
+  InMemoryTelegramSignalFollowupRepository,
+  type TelegramSignalFollowupRepository,
+} from '../../api-server/src/services/telegram-signal-followup.repository';
 import {
   clearTelegramSignalFollowupState,
   deliverScannerTelegramFollowups,
@@ -110,6 +113,45 @@ test('failed Telegram followup restores the prior durable checkpoint so the even
       repository,
     );
     expect(retried).toBe(1);
+  });
+});
+
+test('checkpoint persistence failure before delivery sends zero Telegram followups and remains retryable', async () => {
+  await withFollowupEnv(async () => {
+    const repository = new InMemoryTelegramSignalFollowupRepository();
+    await markTelegramSignalAnnounced(announcedAlert(), 1_000, repository);
+    clearTelegramSignalFollowupState();
+
+    const unavailableAtCheckpoint: TelegramSignalFollowupRepository = {
+      list: (signalIds) => repository.list(signalIds),
+      pruneBefore: (cutoffMs) => repository.pruneBefore(cutoffMs),
+      save: async () => {
+        throw new Error('checkpoint unavailable');
+      },
+    };
+    let sends = 0;
+    await deliverScannerTelegramFollowups(
+      [followupCard()],
+      async () => {
+        sends += 1;
+        return { ok: true, attempts: 1 };
+      },
+      2_000,
+      unavailableAtCheckpoint,
+    );
+    expect(sends).toBe(0);
+
+    clearTelegramSignalFollowupState();
+    await deliverScannerTelegramFollowups(
+      [followupCard()],
+      async () => {
+        sends += 1;
+        return { ok: true, attempts: 1 };
+      },
+      3_000,
+      repository,
+    );
+    expect(sends).toBe(1);
   });
 });
 
