@@ -199,3 +199,63 @@ test('nested sizing payload cannot replace computed gate evidence or parent dire
   assert.equal(result.autoTrading.hardBlockReason, 'CONSERVATIVE_NET_ALPHA_BELOW_MINIMUM');
   assert.equal(result.autoTrading.orderAllowed, false);
 });
+
+test('nested execution-quality clock cannot make a stale calibrated fill model look fresh', () => {
+  const staleAt = NOW - 8 * 24 * 60 * 60 * 1000;
+  const result = evaluateMarketIntelligence({
+    ...baseInput(),
+    executionQuality: {
+      now: staleAt,
+      bookWalk: {
+        direction: 'BUY',
+        targetQty: 1,
+        asks: [[100, 10]],
+        arrivalPrice: 100,
+      },
+      fillModel: {
+        modelId: 'fill-model-v1',
+        fillProbability: 0.9,
+        evaluationSamples: 500,
+        brierScore: 0.1,
+        calibrationError: 0.05,
+        evaluatedAt: staleAt,
+      },
+    },
+    executionQualityPolicy: { enforcement: 'REQUIRED_FOR_PARENT_GATE' },
+  });
+  assert.equal(result.executionQuality.fillModel.status, 'NOT_AVAILABLE');
+  assert.equal(result.executionQuality.fillModel.reason, 'FILL_MODEL_EVIDENCE_STALE');
+  assert.equal(result.executionQuality.autoTrading.state, 'INSUFFICIENT_EVIDENCE');
+  assert.equal(result.autoTrading.mode, 'PAPER_ONLY');
+  assert.equal(result.autoTrading.parentEligibilityReady, false);
+});
+
+test('nested portfolio-safety clock cannot make an expired signal look fresh', () => {
+  const staleAt = NOW - 30 * 60 * 1000;
+  const result = evaluateMarketIntelligence({
+    ...baseInput(),
+    portfolioSafety: {
+      now: staleAt,
+      portfolio: {
+        equityKrw: 1_000_000,
+        positions: [],
+        proposedNotionalKrw: 10_000,
+        proposedSymbol: 'KRW-BTC',
+      },
+      expectedShortfall: {
+        lossSamplesPct: Array.from({ length: 250 }, () => 1),
+      },
+      signal: {
+        generatedAt: staleAt,
+        revalidatedAt: staleAt,
+      },
+    },
+    portfolioSafetyPolicy: { enforcement: 'REQUIRED_FOR_PARENT_GATE' },
+  });
+  assert.equal(result.portfolioSafety.signalFreshness.status, 'VETO');
+  assert.equal(result.portfolioSafety.signalFreshness.reason, 'SIGNAL_TTL_EXPIRED');
+  assert.equal(result.portfolioSafety.autoTrading.state, 'VETO');
+  assert.equal(result.autoTrading.mode, 'BLOCKED_RISK');
+  assert.equal(result.autoTrading.hardBlockReason, 'SIGNAL_TTL_EXPIRED');
+  assert.equal(result.autoTrading.orderAllowed, false);
+});
