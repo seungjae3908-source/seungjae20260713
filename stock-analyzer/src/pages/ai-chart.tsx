@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import {
   Activity,
   ArrowLeft,
@@ -13,9 +13,7 @@ import {
 } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { AiChartPositionPanel } from '@/components/ai-chart-position-panel';
-import { AiChartV2IntelligencePanel } from '@/components/ai-chart-v2-intelligence-panel';
 import { BottomNav } from '@/components/bottom-nav';
-import { FuturesPublicContextPanel } from '@/components/futures-public-context-panel';
 import { ResponsiveTabs } from '@/components/responsive-tabs';
 import { UnifiedAnalysisChart } from '@/components/unified-analysis-chart';
 import {
@@ -69,6 +67,17 @@ import { cn } from '@/lib/utils';
 
 const CURRENT_TIMEFRAMES = new Set(UNIFIED_CHART_TIMEFRAMES.map((item) => item.key));
 const AI_CHART_MODE_STORAGE_KEY = 'ai-chart-v2-strategy-mode.v1';
+
+const LazyAiChartV2IntelligencePanel = lazy(() =>
+  import('@/components/ai-chart-v2-intelligence-panel').then(({ AiChartV2IntelligencePanel }) => ({
+    default: AiChartV2IntelligencePanel,
+  })),
+);
+const LazyFuturesPublicContextPanel = lazy(() =>
+  import('@/components/futures-public-context-panel').then(({ FuturesPublicContextPanel }) => ({
+    default: FuturesPublicContextPanel,
+  })),
+);
 
 type MobileChartTab = 'summary' | 'chart' | 'position' | 'details';
 
@@ -699,18 +708,22 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   );
 
   const intelligencePanel = (
-    <AiChartV2IntelligencePanel
-      selection={selection}
-      analysis={analysis}
-      mode={strategyMode}
-      onModeChange={updateStrategyModeAndTimeframe}
-    />
+    <Suspense fallback={null}>
+      <LazyAiChartV2IntelligencePanel
+        selection={selection}
+        analysis={analysis}
+        mode={strategyMode}
+        onModeChange={updateStrategyModeAndTimeframe}
+      />
+    </Suspense>
   );
 
   const details = (
     <div className="space-y-4">
       {intelligencePanel}
-      <FuturesPublicContextPanel selection={selection} />
+      <Suspense fallback={null}>
+        <LazyFuturesPublicContextPanel selection={selection} />
+      </Suspense>
       <ContextCard selection={selection} analysis={analysis} />
       <DecisionCard analysis={analysis} />
       <SafetyNote />
