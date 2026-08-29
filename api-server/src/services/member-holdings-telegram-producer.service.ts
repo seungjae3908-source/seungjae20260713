@@ -1,3 +1,4 @@
+import { hasCapability } from '../../../packages/member-access/src/index.js';
 import { getSupabase, hasSupabaseServerKey } from '../lib/supabase';
 import { MarketDataService } from './market-data.service';
 import {
@@ -77,6 +78,7 @@ type ProfileRow = {
   status?: unknown;
   membership_level?: unknown;
   is_active?: unknown;
+  role?: unknown;
 };
 
 function emptySummary(status: MemberHoldingProducerStatus): MemberHoldingProducerSummary {
@@ -103,15 +105,12 @@ function canonicalStockMarket(value: unknown): CanonicalStockMarket | null {
 }
 
 /**
- * Database projection of the current canConnectPersonalTelegram capability for
- * rows that are otherwise status=approved. Explicitly inactive members and an
- * explicit pending membership tier must stop receiving personal holdings
- * alerts even when an older Telegram connection/policy still exists.
+ * Canonical #804 member-access capability is the only authorization source for
+ * personal Telegram delivery. The database query may narrow candidates, but it
+ * must not re-implement or widen membership truth here.
  */
 export function memberHoldingProfileEligibleForPersonalTelegram(profile: ProfileRow): boolean {
-  return profile.status === 'approved'
-    && profile.is_active !== false
-    && profile.membership_level !== 'pending';
+  return hasCapability(profile, 'canConnectPersonalTelegram');
 }
 
 export function memberHoldingsTelegramProducerEnabled(
@@ -150,7 +149,7 @@ class SupabaseMemberHoldingProducerRepository implements MemberHoldingProducerRe
       const batch = userIds.slice(index, index + MAX_PROFILE_LOOKUP_BATCH);
       const { data: profiles, error: profileError } = await client
         .from('profiles')
-        .select('id,status,membership_level,is_active')
+        .select('id,status,membership_level,is_active,role')
         .in('id', batch)
         .eq('status', 'approved');
       if (profileError) throw new Error('MEMBER_HOLDINGS_PRODUCER_STORAGE_UNAVAILABLE');
