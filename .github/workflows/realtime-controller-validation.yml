@@ -1,0 +1,41 @@
+name: Realtime Controller Validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - control-plane/realtime-controller/**
+      - .github/workflows/realtime-controller-validation.yml
+  push:
+    branches:
+      - feat/realtime-controller-v1-20260829
+    paths:
+      - control-plane/realtime-controller/**
+      - .github/workflows/realtime-controller-validation.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: realtime-controller-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - name: Compile persistent controller
+        run: python3 -m py_compile control-plane/realtime-controller/realtime_controller.py control-plane/realtime-controller/tests/test_realtime_controller.py
+      - name: Run focused controller suite
+        run: python3 control-plane/realtime-controller/tests/test_realtime_controller.py
+      - name: Assert deployment boundary remains repository-only
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test ! -e control-plane/realtime-controller/systemd/investment-realtime-controller.service
+          test ! -e control-plane/realtime-controller/.env
+          test ! -e control-plane/realtime-controller/secrets.json
+          echo 'Runtime/server/webhook-secret activation is intentionally not performed by this validation workflow.'
