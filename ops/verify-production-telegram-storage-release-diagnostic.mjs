@@ -31,6 +31,7 @@ forbid(workflow, /\bscp\b|mktemp\s+-d|createWorkflowDispatch|dispatchWorkflow|gh
 forbid(workflow, /core\.setFailed\(['"]Sanitized diagnostic evidence missing\./);
 forbid(workflow, /if: always\(\) && steps\.command\.outcome == 'success'\s*\n\s*run: \|\s*\n\s*set -Eeuo pipefail\s*\n\s*\[\[ -s "\$DIAGNOSTIC_ARTIFACT"/);
 for (const text of [
+  "const PRODUCTION_SESSION_POOLER_HOST = 'aws-1-ap-south-1.pooler.supabase.com';",
   "const transientDatabaseUrl = String(process.env.PROD_DATABASE_URL ?? '').trim();",
   'begin read only;',
   'rollback;',
@@ -42,12 +43,19 @@ for (const text of [
   "blocked('psql_installed_outside_path', connected)",
   "blocked('psql_not_installed', connected)",
   'function classifyPsqlFailure(stderrText) {',
+  "return 'production_database_supavisor_circuit_breaker'",
+  "return 'production_database_supavisor_tenant_unresolved'",
+  "return 'production_database_supavisor_auth_connection_closed'",
+  "return 'production_database_auth_failed'",
   "return 'production_database_dns_failed'",
   "return 'production_database_network_unreachable'",
   "return 'production_database_connection_timed_out'",
   "return 'production_database_connection_refused'",
   "return 'production_database_server_closed_connection'",
   "return 'production_database_connection_failed'",
+  "blocked('production_database_pooler_host_mismatch'",
+  'hostname !== PRODUCTION_SESSION_POOLER_HOST',
+  'const pooler = hostname === PRODUCTION_SESSION_POOLER_HOST && poolerUser;',
   'blocked(classifyPsqlFailure(result.stderr), connected);',
   'database_changed: false',
   'server_files_written: 0',
@@ -59,6 +67,7 @@ for (const text of [
 ]) requireText(diagnostic, text);
 if (diagnostic.includes("blocked('psql_unavailable'")) throw new Error('legacy undifferentiated psql_unavailable classification is forbidden');
 forbid(diagnostic, /else if \(\/could not translate host name\|could not connect\|connection refused\|connection timed out\|server closed the connection\|network is unreachable\/\.test\(stderr\)\) classification = 'production_database_connection_failed'/);
+if (diagnostic.indexOf("return 'production_database_supavisor_circuit_breaker'") > diagnostic.indexOf("return 'production_database_auth_failed'")) throw new Error('Supavisor circuit breaker classification must precede generic authentication failure');
 const sql = /const SQL = String\.raw`([\s\S]*?)`;/.exec(diagnostic)?.[1];
 if (!sql) throw new Error('diagnostic SQL missing');
 forbid(sql, /^\s*(insert|update|delete|create|alter|drop|grant|revoke|truncate|comment|copy|merge|vacuum|reindex|cluster|refresh|do)\b/im);
