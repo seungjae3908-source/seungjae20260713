@@ -419,7 +419,13 @@ function classifyNormalized(normalized, context) {
 
 function assertUpstreamTruthBoundary(receipt) {
   if (receipt.canonicalDatasetPersistencePerformed !== true
+    || receipt.canonicalDatasetCreditApplied !== false
     || receipt.duplicateCreditEvaluated !== true
+    || receipt.forwardCalibrationSampleCreditDelta !== 0
+    || receipt.independenceEvaluated !== false
+    || receipt.effectiveIndependentCalibrationN !== null
+    || receipt.calibrationSampleSufficient !== false
+    || receipt.independentSampleCreditAuthority !== 'NONE_UNTIL_CANONICAL_INDEPENDENCE_TRANSFORM'
     || receipt.splitAssignmentPerformed !== false
     || receipt.oosValidationComplete !== false
     || receipt.calibrationArtifactProduced !== false
@@ -464,6 +470,19 @@ function validateBoundSource(input, producerCodeSha) {
   if (exactSha(receipt.exactMainSha, 'UPSTREAM_RECEIPT_MAIN_SHA_INVALID') !== collectorCodeSha) {
     throw new Error('UPSTREAM_RECEIPT_COLLECTOR_SHA_MISMATCH');
   }
+  if (exactSha(receipt.collectorCodeSha, 'UPSTREAM_RECEIPT_COLLECTOR_SHA_INVALID') !== collectorCodeSha
+    || receipt.sampleClass !== dataset.sampleClass
+    || receipt.storeContract !== dataset.storeContract) {
+    throw new Error('UPSTREAM_RECEIPT_DATASET_CONTRACT_MISMATCH');
+  }
+  const predecessorDatasetDigest = dataset.predecessorDigest ?? null;
+  const receiptPredecessorDigest = receipt.predecessorDatasetDigest ?? null;
+  if ((predecessorDatasetDigest === null) !== (receiptPredecessorDigest === null)
+    || (predecessorDatasetDigest !== null
+      && exactDigest(receiptPredecessorDigest, 'UPSTREAM_PREDECESSOR_DIGEST_INVALID')
+        !== exactDigest(predecessorDatasetDigest, 'UPSTREAM_DATASET_PREDECESSOR_DIGEST_INVALID'))) {
+    throw new Error('UPSTREAM_RECEIPT_PREDECESSOR_MISMATCH');
+  }
   const datasetRelativePath = safeRelativePath(source.datasetRelativePath);
   if (safeRelativePath(receipt.datasetRelativePath) !== datasetRelativePath) {
     throw new Error('UPSTREAM_RECEIPT_DATASET_PATH_MISMATCH');
@@ -477,14 +496,9 @@ function validateBoundSource(input, producerCodeSha) {
     receipt.duplicateObservationCount,
     'UPSTREAM_DUPLICATE_COUNT_INVALID',
   );
-  if (receipt.canonicalDatasetCreditApplied !== (insertedObservationCount > 0)) {
-    throw new Error('UPSTREAM_CANONICAL_DATASET_CREDIT_INVALID');
-  }
-  if (nonNegativeInteger(
-    receipt.forwardCalibrationSampleCreditDelta,
-    'UPSTREAM_FORWARD_CREDIT_INVALID',
-  ) !== insertedObservationCount) {
-    throw new Error('UPSTREAM_FORWARD_CREDIT_COUNT_MISMATCH');
+  if (nonNegativeInteger(receipt.rawIngestObservationDelta, 'UPSTREAM_RAW_INGEST_DELTA_INVALID')
+    !== insertedObservationCount) {
+    throw new Error('UPSTREAM_RAW_INGEST_DELTA_MISMATCH');
   }
   if (dataset.predecessorDigest !== null
     || dataset.batchProvenance.length !== 1
