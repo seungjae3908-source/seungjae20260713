@@ -15,6 +15,8 @@ export interface ResearchStrategyHealthEvidence {
   reason: string;
   source: string;
   observedCount: number | null;
+  minimumRequiredCount?: number | null;
+  deficitCount?: number | null;
 }
 
 export interface ResearchStrategyHealthBinding {
@@ -64,6 +66,12 @@ function optionalCount(value: unknown): number | null {
   return Number.isInteger(value) && (value as number) >= 0 ? value as number : null;
 }
 
+function canonicalMinimumSampleSize(overview: Record<string, unknown>): number | null {
+  const policy = record(record(overview.canonicalStrategyHealth)?.policy);
+  const minimum = optionalCount(policy?.minimumSampleSize);
+  return minimum !== null && minimum > 0 ? minimum : null;
+}
+
 function normalizedStatus(value: unknown): string {
   return typeof value === 'string' ? value.trim().toLowerCase() : '';
 }
@@ -73,8 +81,11 @@ function evidence(
   reason: string,
   source: string,
   observedCount: number | null = null,
+  minimumRequiredCount: number | null = null,
 ): ResearchStrategyHealthEvidence {
-  return Object.freeze({ status, reason, source, observedCount });
+  if (minimumRequiredCount === null) return Object.freeze({ status, reason, source, observedCount });
+  const deficitCount = observedCount === null ? null : Math.max(0, minimumRequiredCount - observedCount);
+  return Object.freeze({ status, reason, source, observedCount, minimumRequiredCount, deficitCount });
 }
 
 function canonicalCoreEvidence(overview: Record<string, unknown>): {
@@ -153,13 +164,16 @@ function backtestEvidence(cycles: Record<string, unknown>[]): ResearchStrategyHe
   return evidence('WATCH', 'BACKTEST_CYCLE_NOT_TERMINAL_SUCCESS', 'research.cycles', observed.length);
 }
 
-function canonicalShadowDriftEvidence(overview: Record<string, unknown>): {
+function canonicalShadowDriftEvidence(
+  overview: Record<string, unknown>,
+  minimumRequiredCount: number | null,
+): {
   quality: ResearchStrategyHealthEvidence;
   drift: ResearchStrategyHealthEvidence;
 } {
   const wrappers = records(record(overview.shadow)?.canonicalHandoffs);
   if (!wrappers.length) return {
-    quality: evidence('MISSING_EVIDENCE', 'CANONICAL_SHADOW_HANDOFF_MISSING', 'shadow.canonicalHandoffs'),
+    quality: evidence('MISSING_EVIDENCE', 'CANONICAL_SHADOW_HANDOFF_MISSING', 'shadow.canonicalHandoffs', null, minimumRequiredCount),
     drift: evidence('MISSING_EVIDENCE', 'CANONICAL_DRIFT_HANDOFF_MISSING', 'shadow.canonicalHandoffs'),
   };
   const handoffs: Record<string, unknown>[] = [];
@@ -179,7 +193,7 @@ function canonicalShadowDriftEvidence(overview: Record<string, unknown>): {
         || optionalCount(handoff.sampleN) === null || optionalCount(handoff.referenceN) === null
         || freshness?.status !== 'FRESH' || typeof freshness.expiresAt !== 'string' || !Number.isFinite(Date.parse(freshness.expiresAt))) {
       return {
-        quality: evidence('MISSING_EVIDENCE', 'CANONICAL_SHADOW_IDENTITY_OR_PROVENANCE_INVALID', 'shadow.canonicalHandoffs'),
+        quality: evidence('MISSING_EVIDENCE', 'CANONICAL_SHADOW_IDENTITY_OR_PROVENANCE_INVALID', 'shadow.canonicalHandoffs', null, minimumRequiredCount),
         drift: evidence('MISSING_EVIDENCE', 'CANONICAL_DRIFT_IDENTITY_OR_PROVENANCE_INVALID', 'shadow.canonicalHandoffs'),
       };
     }
@@ -187,7 +201,7 @@ function canonicalShadowDriftEvidence(overview: Record<string, unknown>): {
     delete body.evidenceDigest;
     if (canonicalDigest(body) !== handoff.evidenceDigest || Date.parse(freshness.expiresAt) <= Date.now()) {
       return {
-        quality: evidence('MISSING_EVIDENCE', 'CANONICAL_SHADOW_DIGEST_OR_FRESHNESS_INVALID', 'shadow.canonicalHandoffs'),
+        quality: evidence('MISSING_EVIDENCE', 'CANONICAL_SHADOW_DIGEST_OR_FRESHNESS_INVALID', 'shadow.canonicalHandoffs', null, minimumRequiredCount),
         drift: evidence('MISSING_EVIDENCE', 'CANONICAL_DRIFT_DIGEST_OR_FRESHNESS_INVALID', 'shadow.canonicalHandoffs'),
       };
     }
@@ -195,7 +209,7 @@ function canonicalShadowDriftEvidence(overview: Record<string, unknown>): {
   }
   const pairKeys = handoffs.map((handoff) => `${handoff.strategyIdentityDigest}:${handoff.modelIdentityDigest}`);
   if (new Set(pairKeys).size !== pairKeys.length) return {
-    quality: evidence('MISSING_EVIDENCE', 'DUPLICATE_CANONICAL_SHADOW_HANDOFF', 'shadow.canonicalHandoffs'),
+    quality: evidence('MISSING_EVIDENCE', 'DUPLICATE_CANONICAL_SHADOW_HANDOFF', 'shadow.canonicalHandoffs', null, minimumRequiredCount),
     drift: evidence('MISSING_EVIDENCE', 'DUPLICATE_CANONICAL_DRIFT_HANDOFF', 'shadow.canonicalHandoffs'),
   };
 
@@ -206,11 +220,15 @@ function canonicalShadowDriftEvidence(overview: Record<string, unknown>): {
     && ['bullish', 'neutral', 'bearish'].every((name) => typeof record(quality.perClass)?.[name] === 'object'
       && typeof record(record(quality.perClass)?.[name])?.recall === 'number'));
   const observed = qualityCounts.every((count) => count !== null) ? qualityCounts.reduce((sum, count) => sum + (count ?? 0), 0) : null;
-  const quality = !qualityComplete
-    ? evidence('MISSING_EVIDENCE', 'CANONICAL_SHADOW_SETTLED_DIRECTIONAL_QUALITY_MISSING', 'shadow.canonicalHandoffs', observed)
-    : qualities.some((row) => row?.bullRecall === 0 || row?.bearRecall === 0)
-      ? evidence('FAIL', 'CANONICAL_SHADOW_DIRECTIONAL_RECALL_ZERO', 'shadow.canonicalHandoffs', observed)
-      : evidence('HEALTHY', 'CANONICAL_SHADOW_DIRECTIONAL_QUALITY_VALID', 'shadow.canonicalHandoffs', observed);
+  const quality = minimumRequiredCount === null
+    ? evidence('MISSING_EVIDENCE', 'CANONICAL_MINIMUM_SAMPLE_POLICY_MISSING', 'canonicalStrategyHealth.policy', observed)
+    : !qualityComplete
+      ? evidence('MISSING_EVIDENCE', 'CANONICAL_SHADOW_SETTLED_DIRECTIONAL_QUALITY_MISSING', 'shadow.canonicalHandoffs', observed, minimumRequiredCount)
+      : observed === null || observed < minimumRequiredCount
+        ? evidence('MISSING_EVIDENCE', 'CANONICAL_SHADOW_MINIMUM_SAMPLE_DEFICIT', 'shadow.canonicalHandoffs', observed, minimumRequiredCount)
+        : qualities.some((row) => row?.bullRecall === 0 || row?.bearRecall === 0)
+          ? evidence('FAIL', 'CANONICAL_SHADOW_DIRECTIONAL_RECALL_ZERO', 'shadow.canonicalHandoffs', observed, minimumRequiredCount)
+          : evidence('HEALTHY', 'CANONICAL_SHADOW_DIRECTIONAL_QUALITY_VALID', 'shadow.canonicalHandoffs', observed, minimumRequiredCount);
 
   const driftStatuses = handoffs.map((handoff) => normalizedStatus(record(handoff.driftVerdict)?.status).toUpperCase());
   const drift = driftStatuses.some((status) => status === 'BRAKE')
@@ -225,26 +243,42 @@ function canonicalShadowDriftEvidence(overview: Record<string, unknown>): {
   return { quality, drift };
 }
 
-function naturalPaperEvidence(overview: Record<string, unknown>): ResearchStrategyHealthEvidence {
+function naturalPaperEvidence(
+  overview: Record<string, unknown>,
+  minimumRequiredCount: number | null,
+): ResearchStrategyHealthEvidence {
   const ledger = record(record(overview.paper)?.ledger);
   const cycleCount = optionalCount(ledger?.cycleCount);
   const sampleCount = optionalCount(ledger?.sampleCount);
   if (!ledger || ledger.present !== true || cycleCount === null || sampleCount === null) {
-    return evidence('MISSING_EVIDENCE', 'NATURAL_PAPER_LEDGER_MISSING', 'paper.ledger');
+    return evidence('MISSING_EVIDENCE', 'NATURAL_PAPER_LEDGER_MISSING', 'paper.ledger', sampleCount, minimumRequiredCount);
   }
-  if (cycleCount === 0) return evidence('MISSING_EVIDENCE', 'NATURAL_CYCLE_MISSING', 'paper.ledger', 0);
-  if (sampleCount === 0) return evidence('WATCH', 'NATURAL_SAMPLE_ZERO', 'paper.ledger', 0);
-  return evidence('HEALTHY', 'NATURAL_SAMPLE_PRESENT', 'paper.ledger', sampleCount);
+  if (minimumRequiredCount === null) {
+    return evidence('MISSING_EVIDENCE', 'CANONICAL_MINIMUM_SAMPLE_POLICY_MISSING', 'canonicalStrategyHealth.policy', sampleCount);
+  }
+  if (cycleCount === 0) return evidence('MISSING_EVIDENCE', 'NATURAL_CYCLE_MISSING', 'paper.ledger', sampleCount, minimumRequiredCount);
+  if (sampleCount < minimumRequiredCount) {
+    return evidence('MISSING_EVIDENCE', 'NATURAL_SAMPLE_MINIMUM_DEFICIT', 'paper.ledger', sampleCount, minimumRequiredCount);
+  }
+  return evidence('HEALTHY', 'NATURAL_SAMPLE_PRESENT', 'paper.ledger', sampleCount, minimumRequiredCount);
 }
 
-function settlementEvidence(overview: Record<string, unknown>): ResearchStrategyHealthEvidence {
+function settlementEvidence(
+  overview: Record<string, unknown>,
+  minimumRequiredCount: number | null,
+): ResearchStrategyHealthEvidence {
   const ledger = record(record(overview.paper)?.ledger);
   const settlementCount = optionalCount(ledger?.settlementCount);
   if (!ledger || ledger.present !== true || settlementCount === null) {
-    return evidence('MISSING_EVIDENCE', 'SETTLEMENT_LEDGER_MISSING', 'paper.ledger');
+    return evidence('MISSING_EVIDENCE', 'SETTLEMENT_LEDGER_MISSING', 'paper.ledger', settlementCount, minimumRequiredCount);
   }
-  if (settlementCount === 0) return evidence('MISSING_EVIDENCE', 'NATURAL_SETTLEMENT_MISSING', 'paper.ledger', 0);
-  return evidence('HEALTHY', 'NATURAL_SETTLEMENT_PRESENT', 'paper.ledger', settlementCount);
+  if (minimumRequiredCount === null) {
+    return evidence('MISSING_EVIDENCE', 'CANONICAL_MINIMUM_SAMPLE_POLICY_MISSING', 'canonicalStrategyHealth.policy', settlementCount);
+  }
+  if (settlementCount < minimumRequiredCount) {
+    return evidence('MISSING_EVIDENCE', 'NATURAL_SETTLEMENT_MINIMUM_DEFICIT', 'paper.ledger', settlementCount, minimumRequiredCount);
+  }
+  return evidence('HEALTHY', 'NATURAL_SETTLEMENT_PRESENT', 'paper.ledger', settlementCount, minimumRequiredCount);
 }
 
 function profitabilityEvidence(overview: Record<string, unknown>): ResearchStrategyHealthEvidence {
@@ -275,8 +309,9 @@ function championEvidence(overview: Record<string, unknown>): ResearchStrategyHe
 export function bindCanonicalStrategyHealth(overviewValue: unknown): ResearchStrategyHealthBinding {
   const overview = record(overviewValue) ?? {};
   const cycles = records(record(overview.research)?.cycles);
+  const minimumRequiredCount = canonicalMinimumSampleSize(overview);
   const canonical = canonicalCoreEvidence(overview);
-  const shadow = canonicalShadowDriftEvidence(overview);
+  const shadow = canonicalShadowDriftEvidence(overview, minimumRequiredCount);
   const inputs = Object.freeze({
     canonicalCore: canonical.row,
     backtest: backtestEvidence(cycles),
@@ -285,8 +320,8 @@ export function bindCanonicalStrategyHealth(overviewValue: unknown): ResearchStr
     holdout: taskEvidence(cycles, [/final[-_ ]?holdout/i, /holdout/i]),
     shadowQuality: shadow.quality,
     drift: shadow.drift,
-    naturalPaper: naturalPaperEvidence(overview),
-    settlement: settlementEvidence(overview),
+    naturalPaper: naturalPaperEvidence(overview, minimumRequiredCount),
+    settlement: settlementEvidence(overview, minimumRequiredCount),
     profitability: profitabilityEvidence(overview),
     safety: safetyEvidence(overview),
     champion: championEvidence(overview),
