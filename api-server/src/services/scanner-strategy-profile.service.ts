@@ -275,3 +275,122 @@ export function scannerModeToHorizon(mode: 'scalping' | 'swing' | 'position'): S
   if (mode === 'swing') return 'SWING';
   return 'POSITION';
 }
+
+export type ScannerProfileEvidenceStatus = 'READY' | 'MISSING' | 'STALE' | 'BLOCKED_DATA' | 'NOT_READY' | 'INVALID';
+export type ScannerProfileValidationDirection = 'LONG' | 'SHORT' | null;
+export type ScannerProfileCalibrationSplit = 'OOS' | 'TRAIN' | 'VALIDATION' | 'HELD_OUT' | null;
+
+export interface ScannerProfileEvidenceObservation {
+  readonly status: ScannerProfileEvidenceStatus;
+  readonly provenance: string | null;
+}
+
+export interface ScannerProfileCostEvidence extends ScannerProfileEvidenceObservation {
+  readonly value: number | null;
+  readonly measured: boolean;
+}
+
+export interface ScannerProfileCalibrationEvidence {
+  readonly status: ScannerProfileEvidenceStatus;
+  readonly split: ScannerProfileCalibrationSplit;
+  readonly heldOut: boolean;
+  readonly provenance: string | null;
+  readonly strategyProfileId: string | null;
+  readonly strategyVersion: string | null;
+  readonly market: ScannerProfileMarket | null;
+  readonly horizon: ScannerProfileHorizon | null;
+}
+
+export interface ScannerProfileEvidenceValidationInput {
+  readonly market: ScannerProfileMarket;
+  readonly horizon: ScannerProfileHorizon;
+  readonly strategyProfileId: string | null;
+  readonly strategyVersion: string | null;
+  readonly direction: ScannerProfileValidationDirection;
+  readonly evidence: Readonly<Record<string, ScannerProfileEvidenceObservation | null | undefined>>;
+  readonly costs: Readonly<Record<string, ScannerProfileCostEvidence | null | undefined>>;
+  readonly calibration: ScannerProfileCalibrationEvidence | null;
+}
+
+export interface ScannerProfileEvidenceValidationResult {
+  readonly status: 'READY' | 'NOT_READY';
+  readonly ready: boolean;
+  readonly reasons: readonly string[];
+  readonly contractId: string;
+  readonly strategyProfileId: string;
+  readonly executionAuthority: 'NONE';
+}
+
+function hasProvenance(value: string | null | undefined): boolean {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function evidenceReady(value: ScannerProfileEvidenceObservation | null | undefined): boolean {
+  return value?.status === 'READY' && hasProvenance(value.provenance);
+}
+
+function uniqueReasons(reasons: string[]): readonly string[] {
+  return Object.freeze([...new Set(reasons)]);
+}
+
+export function validateScannerProfileEvidence(
+  input: ScannerProfileEvidenceValidationInput,
+): ScannerProfileEvidenceValidationResult {
+  const profile = getScannerStrategyProfile(input.market, input.horizon);
+  const contract = getScannerProfileEvidenceContract(input.market, input.horizon);
+  const reasons: string[] = [];
+
+  if (input.strategyProfileId !== profile.id) reasons.push('STRATEGY_PROFILE_ID_MISMATCH');
+  if (input.strategyVersion !== profile.version) reasons.push('STRATEGY_PROFILE_VERSION_MISMATCH');
+  if (contract.strategyProfileId !== profile.id) reasons.push('EVIDENCE_CONTRACT_PROFILE_MISMATCH');
+
+  if (input.direction == null) {
+    reasons.push('DIRECTION_MISSING');
+  } else if (contract.directionPolicy === 'LONG_ONLY' && input.direction !== 'LONG') {
+    reasons.push('DIRECTION_NOT_ALLOWED');
+  }
+
+  for (const key of contract.requiredEvidence) {
+    const value = input.evidence[key];
+    if (!evidenceReady(value)) reasons.push(`EVIDENCE_NOT_READY:${key}`);
+  }
+
+  const calibration = input.calibration;
+  if (!calibration || calibration.status !== 'READY') {
+    reasons.push('OOS_CALIBRATION_NOT_READY');
+  } else {
+    if (calibration.split !== 'OOS' || calibration.heldOut !== true) {
+      reasons.push('OOS_HELD_OUT_EVIDENCE_REQUIRED');
+    }
+    if (!hasProvenance(calibration.provenance)) reasons.push('OOS_CALIBRATION_PROVENANCE_MISSING');
+    if (calibration.strategyProfileId !== profile.id) reasons.push('OOS_STRATEGY_PROFILE_ID_MISMATCH');
+    if (calibration.strategyVersion !== profile.version) reasons.push('OOS_STRATEGY_VERSION_MISMATCH');
+    if (calibration.market !== profile.market) reasons.push('OOS_MARKET_MISMATCH');
+    if (calibration.horizon !== profile.horizon) reasons.push('OOS_HORIZON_MISMATCH');
+  }
+
+  for (const key of contract.requiredCostComponents) {
+    const value = input.costs[key];
+    if (!evidenceReady(value)) {
+      reasons.push(`COST_NOT_READY:${key}`);
+      continue;
+    }
+    if (value?.value == null || !Number.isFinite(value.value) || value.value < 0) {
+      reasons.push(`COST_VALUE_INVALID:${key}`);
+      continue;
+    }
+    if (value.value === 0 && value.measured !== true) {
+      reasons.push(`COST_ZERO_REQUIRES_MEASUREMENT:${key}`);
+    }
+  }
+
+  const unique = uniqueReasons(reasons);
+  return Object.freeze({
+    status: unique.length === 0 ? 'READY' : 'NOT_READY',
+    ready: unique.length === 0,
+    reasons: unique,
+    contractId: contract.id,
+    strategyProfileId: profile.id,
+    executionAuthority: 'NONE',
+  });
+}
