@@ -40,16 +40,63 @@ jobs:
           grep -q '/activate-research-production' .github/workflows/research-production-activation.yml
           grep -q 'checkout-only lifecycle failure' .github/workflows/research-production-activation.yml
           grep -q 'SOURCE_MERGE_SHA' .github/workflows/research-production-activation.yml
+          grep -Fq "needs.classify-command.outputs.is_activation == 'true'" .github/workflows/research-production-activation.yml
           grep -q 'LIVE_TRADING=false' research-production/deploy/activate-server.sh
           grep -q 'PRIVATE_API_ENABLED=false' research-production/deploy/activate-server.sh
           grep -q 'ORDER_AUTHORITY=false' research-production/deploy/activate-server.sh
           grep -q 'research-production-forward.timer' research-production/deploy/activate-server.sh
+          node <<'NODE'
+          const activationCommand = /^\/activate-research-production ([0-9a-f]{40})$/i;
+          const classify = (body) => activationCommand.test(String(body ?? '').trim());
+          const sha = 'a'.repeat(40);
+          const cases = [
+            [`/activate-research-production ${sha}`, true],
+            [`/activate-research-production ${sha.toUpperCase()}`, true],
+            [`/activate-research-production ${sha}\n`, true],
+            ['[COMMAND_ACK]\nNEW_COMMAND_VERSION=002', false],
+            ['/activate-research-production', false],
+            [`/activate-research-production ${'a'.repeat(39)}`, false],
+            [`/activate-research-production ${'a'.repeat(41)}`, false],
+            [`/activate-research-production ${'g'.repeat(40)}`, false],
+            [`/activate-research-production ${sha} extra`, false],
+          ];
+          for (const [body, expected] of cases) {
+            const actual = classify(body);
+            if (actual !== expected) {
+              throw new Error(`activation command classifier mismatch for ${JSON.stringify(body)}: expected=${expected} actual=${actual}`);
+            }
+          }
+          NODE
 
-  authorize:
+  classify-command:
     if: >-
       github.event_name == 'issue_comment' &&
       github.event.issue.number == 660 &&
       github.event.comment.user.login == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      is_activation: ${{ steps.classify.outputs.is_activation }}
+    steps:
+      - name: Classify exact Research Production activation command
+        id: classify
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = String(context.payload.comment?.body ?? '').trim();
+            const isActivation = /^\/activate-research-production ([0-9a-f]{40})$/i.test(body);
+            core.setOutput('is_activation', isActivation ? 'true' : 'false');
+            if (!isActivation) {
+              core.info('Non-activation #660 owner comment: authorize and activate will be skipped cleanly.');
+            }
+
+  authorize:
+    needs: classify-command
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.number == 660 &&
+      github.event.comment.user.login == github.repository_owner &&
+      needs.classify-command.outputs.is_activation == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:
