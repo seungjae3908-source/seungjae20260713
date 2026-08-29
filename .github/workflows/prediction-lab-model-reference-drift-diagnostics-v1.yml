@@ -7,6 +7,11 @@ on:
       - 'market-prediction-lab/scripts/run-model-reference-drift-diagnostics-v1.js'
       - 'market-prediction-lab/tests/model-reference-drift-diagnostics-v1.test.js'
       - '.github/workflows/prediction-lab-model-reference-drift-diagnostics-v1.yml'
+  workflow_run:
+    workflows:
+      - Prediction Lab Multi-Market Suite
+    types:
+      - completed
   workflow_dispatch:
     inputs:
       release_tag:
@@ -25,6 +30,11 @@ permissions:
 jobs:
   unit-contract:
     name: Verify drift diagnostic contract
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'workflow_dispatch' &&
+       github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -58,21 +68,87 @@ jobs:
   diagnose:
     name: Authenticate immutable reference and calculate PSI KS JSD
     needs: unit-contract
-    if: github.event_name == 'workflow_dispatch'
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'workflow_dispatch' &&
+       github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      RELEASE_TAG: ${{ inputs.release_tag }}
-      REQUESTED_BINS: ${{ inputs.requested_bins }}
       DOWNLOAD_ROOT: ${{ runner.temp }}/model-reference-durable-download
       REFERENCE_ROOT: ${{ runner.temp }}/model-reference-durable-reference
       OUTPUT_ROOT: ${{ runner.temp }}/model-reference-drift-diagnostics
     steps:
+      - name: Resolve authenticated durable publication source
+        id: source
+        uses: actions/github-script@v7
+        env:
+          INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
+          INPUT_REQUESTED_BINS: ${{ inputs.requested_bins }}
+        with:
+          script: |
+            let releaseTag;
+            let targetSha;
+            let requestedBins;
+            let sourceRunId;
+            if (context.eventName === 'workflow_run') {
+              const source = context.payload.workflow_run;
+              if (source?.name !== 'Prediction Lab Multi-Market Suite'
+                  || source?.conclusion !== 'success'
+                  || source?.event !== 'workflow_dispatch'
+                  || source?.head_branch !== 'main'
+                  || !/^[0-9a-f]{40}$/.test(String(source?.head_sha ?? '').toLowerCase())
+                  || !Number.isInteger(Number(source?.id))
+                  || Number(source.id) <= 0) {
+                core.setFailed('DURABLE_REFERENCE_PROVEN=false: workflow_run source identity is not an exact successful manual main publication');
+                return;
+              }
+              sourceRunId = String(source.id);
+              releaseTag = `prediction-lab-model-reference-v1-${sourceRunId}`;
+              targetSha = String(source.head_sha).toLowerCase();
+              requestedBins = 10;
+            } else if (context.eventName === 'workflow_dispatch') {
+              releaseTag = String(process.env.INPUT_RELEASE_TAG ?? '').trim();
+              targetSha = String(context.sha ?? '').toLowerCase();
+              requestedBins = Number(String(process.env.INPUT_REQUESTED_BINS ?? '10').trim() || '10');
+              const match = /^prediction-lab-model-reference-v1-([1-9][0-9]*)$/.exec(releaseTag);
+              sourceRunId = match?.[1] ?? '';
+              if (context.ref !== 'refs/heads/main') {
+                core.setFailed('DURABLE_REFERENCE_PROVEN=false: manual diagnostic must be dispatched on main');
+                return;
+              }
+            } else {
+              core.setFailed('DURABLE_REFERENCE_PROVEN=false: unsupported diagnostic trigger');
+              return;
+            }
+            const canonical = /^prediction-lab-model-reference-v1-([1-9][0-9]*)$/.exec(releaseTag);
+            if (!canonical || canonical[1] !== sourceRunId) {
+              core.setFailed('DURABLE_REFERENCE_PROVEN=false: release tag/source run identity is not canonical');
+              return;
+            }
+            if (!/^[0-9a-f]{40}$/.test(targetSha)) {
+              core.setFailed('DURABLE_REFERENCE_PROVEN=false: exact durable producer SHA is missing');
+              return;
+            }
+            if (!Number.isInteger(requestedBins) || requestedBins < 4 || requestedBins > 20) {
+              core.setFailed('DURABLE_REFERENCE_PROVEN=false: requested bins must be an integer from 4 to 20');
+              return;
+            }
+            core.setOutput('release_tag', releaseTag);
+            core.setOutput('source_run_id', sourceRunId);
+            core.setOutput('target_sha', targetSha);
+            core.setOutput('requested_bins', String(requestedBins));
+            core.notice(`Resolved durable publication ${releaseTag} at ${targetSha}; authority remains diagnostic-only.`);
+
       - name: Require exact latest main and immutable durable release metadata
         id: durable
         uses: actions/github-script@v7
         env:
-          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_TAG: ${{ steps.source.outputs.release_tag }}
+          SOURCE_RUN_ID: ${{ steps.source.outputs.source_run_id }}
+          EXPECTED_TARGET_SHA: ${{ steps.source.outputs.target_sha }}
           RELEASE_METADATA: ${{ runner.temp }}/model-reference-release-metadata.json
           BUNDLE_ASSET_METADATA: ${{ runner.temp }}/model-reference-bundle-asset-metadata.json
           RECEIPT_ASSET_METADATA: ${{ runner.temp }}/model-reference-receipt-asset-metadata.json
@@ -80,13 +156,11 @@ jobs:
           script: |
             const fs = require('fs');
             const tag = String(process.env.RELEASE_TAG ?? '').trim();
+            const sourceRunId = String(process.env.SOURCE_RUN_ID ?? '').trim();
+            const expectedTargetSha = String(process.env.EXPECTED_TARGET_SHA ?? '').toLowerCase();
             const match = /^prediction-lab-model-reference-v1-([1-9][0-9]*)$/.exec(tag);
-            if (!match) {
-              core.setFailed('DURABLE_REFERENCE_PROVEN=false: release tag is not canonical');
-              return;
-            }
-            if (context.eventName !== 'workflow_dispatch' || context.ref !== 'refs/heads/main') {
-              core.setFailed('DURABLE_REFERENCE_PROVEN=false: diagnostic must be manually dispatched on main');
+            if (!match || match[1] !== sourceRunId || !/^[0-9a-f]{40}$/.test(expectedTargetSha)) {
+              core.setFailed('DURABLE_REFERENCE_PROVEN=false: durable publication identity is not canonical');
               return;
             }
             const { data: repository } = await github.rest.repos.get({ owner: context.repo.owner, repo: context.repo.repo });
@@ -95,22 +169,30 @@ jobs:
               repo: context.repo.repo,
               branch: repository.default_branch,
             });
-            if (repository.default_branch !== 'main' || String(main.commit.sha).toLowerCase() !== String(context.sha).toLowerCase()) {
-              core.setFailed('DURABLE_REFERENCE_PROVEN=false: diagnostic checkout is not exact latest main');
+            if (repository.default_branch !== 'main' || String(main.commit.sha).toLowerCase() !== expectedTargetSha) {
+              core.setFailed('DURABLE_REFERENCE_PROVEN=false: durable publication is not bound to exact latest main');
               return;
             }
-            const { data: release } = await github.rest.repos.getReleaseByTag({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              tag,
-              headers: { 'X-GitHub-Api-Version': '2026-03-10' },
-            });
+            let release;
+            try {
+              ({ data: release } = await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag,
+                headers: { 'X-GitHub-Api-Version': '2026-03-10' },
+              }));
+            } catch (error) {
+              if (error.status === 404) {
+                core.setFailed('DURABLE_REFERENCE_PROVEN=false: expected immutable publication is missing');
+                return;
+              }
+              throw error;
+            }
             const targetSha = String(release.target_commitish ?? '').toLowerCase();
-            if (release.immutable !== true || release.draft !== false || targetSha !== String(main.commit.sha).toLowerCase()) {
+            if (release.immutable !== true || release.draft !== false || targetSha !== expectedTargetSha) {
               core.setFailed('DURABLE_REFERENCE_PROVEN=false: immutable exact-main release metadata not proven');
               return;
             }
-            const sourceRunId = match[1];
             const bundlePattern = new RegExp(`^prediction-lab-model-reference-evidence-${sourceRunId}-[0-9a-f]{64}\\.tar\\.gz$`);
             const receiptName = `prediction-lab-model-reference-receipt-${sourceRunId}.json`;
             const bundleAssets = release.assets.filter((asset) => bundlePattern.test(String(asset.name ?? '')));
@@ -149,6 +231,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.source.outputs.release_tag }}
           BUNDLE_NAME: ${{ steps.durable.outputs.bundle_name }}
           RECEIPT_NAME: ${{ steps.durable.outputs.receipt_name }}
         shell: bash
@@ -178,7 +261,7 @@ jobs:
             exit 1
           fi
           mkdir -p "$REFERENCE_ROOT"
-          tar -xzf "$bundle" -C "$REFERENCE_ROOT"
+          tar --no-same-owner --no-same-permissions -xzf "$bundle" -C "$REFERENCE_ROOT"
           if find "$REFERENCE_ROOT" -type l -print -quit | grep -q .; then
             echo 'DURABLE_REFERENCE_PROVEN=false: symlink substitution rejected' >&2
             exit 1
@@ -189,6 +272,7 @@ jobs:
         env:
           BUNDLE_NAME: ${{ steps.durable.outputs.bundle_name }}
           RECEIPT_NAME: ${{ steps.durable.outputs.receipt_name }}
+          REQUESTED_BINS: ${{ steps.source.outputs.requested_bins }}
           RELEASE_METADATA: ${{ runner.temp }}/model-reference-release-metadata.json
           BUNDLE_ASSET_METADATA: ${{ runner.temp }}/model-reference-bundle-asset-metadata.json
           RECEIPT_ASSET_METADATA: ${{ runner.temp }}/model-reference-receipt-asset-metadata.json
