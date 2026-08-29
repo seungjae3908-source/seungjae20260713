@@ -1,4 +1,4 @@
-import { hasCapability, type MemberAccessProfile } from '../../../../packages/member-access/src/index.js';
+import type { MemberAccessProfile } from '../../../../packages/member-access/src/index.js';
 import { getSupabase, hasSupabaseServerKey } from '../../lib/supabase';
 import type { TelegramPolicyDeliveryHistory } from '../../services/telegram-alert-policy.service';
 import {
@@ -370,9 +370,7 @@ export function createSupabaseUserBrokerTelegramRepository(): UserBrokerTelegram
         .eq('id', userId)
         .maybeSingle();
       if (error) throw databaseError();
-      if (!data) return null;
-      const profile = memberProfile(data as Record<string, unknown>);
-      return hasCapability(profile, 'canConnectPersonalTelegram') ? profile : profile;
+      return data ? memberProfile(data as Record<string, unknown>) : null;
     },
 
     async getTelegramConnection(userId) {
