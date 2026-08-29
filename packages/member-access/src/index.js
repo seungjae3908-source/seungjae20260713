@@ -48,7 +48,15 @@ export const MEMBER_PERMISSION_MATRIX = Object.freeze({
   admin: ADMIN,
 });
 
-const inactiveStatuses = new Set(['rejected', 'suspended', 'withdrawn', 'disabled', 'inactive']);
+const inactiveStatuses = new Set([
+  'pending',
+  'rejected',
+  'suspended',
+  'revoked',
+  'withdrawn',
+  'disabled',
+  'inactive',
+]);
 
 function asRecord(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -66,7 +74,7 @@ export function deriveMemberTier(profile) {
 
   if (!active || (status && inactiveStatuses.has(status))) return 'pending';
   if (explicit && MEMBER_TIERS.includes(explicit)) return explicit;
-  if (value.role === 'admin') return status === 'pending' ? 'pending' : 'admin';
+  if (value.role === 'admin') return 'admin';
   if (value.role === 'associate') return 'associate';
   if (value.role === 'regular') return 'regular';
   if (status === 'approved') return 'regular';
