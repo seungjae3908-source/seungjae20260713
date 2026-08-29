@@ -80,7 +80,7 @@ test('member holdings producer is true-token opt-in and otherwise stays disabled
   });
 });
 
-test('approved status alone cannot preserve personal holdings Telegram capability', () => {
+test('holdings Telegram eligibility reuses the canonical #804 member capability contract', () => {
   assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
     status: 'approved', membership_level: 'associate', is_active: true,
   }), true);
@@ -88,13 +88,22 @@ test('approved status alone cannot preserve personal holdings Telegram capabilit
     status: 'approved', membership_level: 'regular', is_active: true,
   }), true);
   assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
-    status: 'approved', membership_level: 'pending', is_active: true,
+    status: 'approved', membership_level: 'admin', is_active: true,
+  }), true);
+  assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
+    status: 'approved', membership_level: null, role: 'full', is_active: true,
+  }), true);
+  assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
+    status: 'approved', membership_level: 'pending', role: 'admin', is_active: true,
   }), false);
   assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
     status: 'approved', membership_level: 'regular', is_active: false,
   }), false);
   assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
     status: 'suspended', membership_level: 'regular', is_active: true,
+  }), false);
+  assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
+    status: 'rejected', membership_level: 'admin', role: 'admin', is_active: true,
   }), false);
 });
 
