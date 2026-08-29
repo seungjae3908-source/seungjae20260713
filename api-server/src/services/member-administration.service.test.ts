@@ -85,6 +85,57 @@ test('reactivation restores stored associate tier and approved state', () => {
   assert.equal(plan.changes.is_active, true);
 });
 
+test('reactivation restores legacy suspended full tier without canonical membership', () => {
+  const plan = planMemberChange(profile({ membership_level: null, role: 'full', is_active: false, status: 'suspended' }), { isActive: true, reason: '정지 계정 재활성화' }, ADMIN, 1, NOW);
+  assert.equal(plan.changes.membership_level, 'regular');
+  assert.equal(plan.changes.role, 'full');
+  assert.equal(plan.changes.status, 'approved');
+});
+
+test('rejected stale admin cannot regain admin by active-state-only change', () => {
+  const plan = planMemberChange(
+    profile({ membership_level: 'admin', role: 'admin', status: 'rejected', is_active: true }),
+    { isActive: true, reason: '거절 상태 재검토' },
+    ADMIN,
+    0,
+    NOW,
+  );
+  assert.equal(plan.changes.membership_level, 'pending');
+  assert.equal(plan.changes.role, 'pending');
+  assert.equal(plan.changes.status, 'pending');
+  assert.equal(plan.changes.approved_at, null);
+  assert.equal(plan.changes.approved_by, null);
+});
+
+test('revoked stale admin cannot regain admin by reactivation alone', () => {
+  const plan = planMemberChange(
+    profile({ membership_level: 'admin', role: 'admin', status: 'revoked', is_active: false }),
+    { isActive: true, reason: '회수 계정 재검토' },
+    ADMIN,
+    0,
+    NOW,
+  );
+  assert.equal(plan.changes.membership_level, 'pending');
+  assert.equal(plan.changes.role, 'pending');
+  assert.equal(plan.changes.status, 'pending');
+  assert.equal(plan.changes.is_active, true);
+});
+
+test('rejected member requires explicit tier assignment before approval', () => {
+  const plan = planMemberChange(
+    profile({ membership_level: 'admin', role: 'admin', status: 'rejected', is_active: true }),
+    { membershipLevel: 'associate', reason: '재심사 후 준회원 승인' },
+    ADMIN,
+    0,
+    NOW,
+  );
+  assert.equal(plan.action, 'member.approve');
+  assert.equal(plan.changes.membership_level, 'associate');
+  assert.equal(plan.changes.role, 'associate');
+  assert.equal(plan.changes.status, 'approved');
+  assert.equal(plan.changes.approved_by, ADMIN);
+});
+
 test('pending state does not create approved timestamp', () => {
   const plan = planMemberChange(profile({ membership_level: 'associate', status: 'approved' }), { membershipLevel: 'pending', reason: '승인 대기로 전환' }, ADMIN, 1, NOW);
   assert.equal(plan.changes.status, 'pending');
