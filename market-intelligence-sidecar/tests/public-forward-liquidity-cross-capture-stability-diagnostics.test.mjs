@@ -30,6 +30,11 @@ function observation(id, {
     sourceDigest: digest(id.charCodeAt(0).toString(16)[0] || 'f'),
     aggressiveSide: side,
     eventTimestampMs: timestamp,
+    calibrationSourceOnly: true,
+    executionCostEligible: false,
+    liquidityImpactCoefficient: null,
+    causalMarketImpactClaim: false,
+    paperOrderSourceAllowed: false,
     rawSourceProvenance: {
       preEventBook: {
         rawPayloadDigest: digest(frame),
@@ -194,7 +199,7 @@ test('rejects duplicate raw capture identity so the same immutable batch cannot 
   );
 });
 
-test('fails closed on private provenance, missing canonical endpoints, mutated safety, and count mismatch', () => {
+test('fails closed on private provenance, missing canonical endpoints, mutated safety, observation authority, and count mismatch', () => {
   const privateCapture = capture({ raw: '1', normalized: '4' });
   privateCapture.datasetProvenance.rawSource.privateApiUsed = true;
   assert.throws(
@@ -223,6 +228,20 @@ test('fails closed on private provenance, missing canonical endpoints, mutated s
       capture({ raw: '2', normalized: '5' }),
     ]),
     /CROSS_CAPTURE_SOURCE_SAFETY_INVALID/u,
+  );
+
+  const escalatedObservation = capture({
+    raw: '1',
+    normalized: '4',
+    observations: [observation('a-1')],
+  });
+  escalatedObservation.observations[0].executionCostEligible = true;
+  assert.throws(
+    () => analyzePublicForwardLiquidityCrossCaptureStability([
+      escalatedObservation,
+      capture({ raw: '2', normalized: '5' }),
+    ]),
+    /CROSS_CAPTURE_OBSERVATION_AUTHORITY_INVALID/u,
   );
 
   const mismatch = capture({
