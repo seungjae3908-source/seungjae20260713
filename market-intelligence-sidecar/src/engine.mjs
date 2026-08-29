@@ -280,7 +280,8 @@ export function evaluateMarketIntelligence(input = {}) {
   const market = String(input.market ?? '').toUpperCase();
   if (!MARKET_SET.has(market)) throw new Error(`UNSUPPORTED_MARKET:${market}`);
   const policy = resolvePolicy(input.policy);
-  const now = finite(input.now, Date.now());
+  const authoritativeNow = typeof input.now === 'number' && Number.isFinite(input.now) ? input.now : null;
+  const now = authoritativeNow ?? Date.now();
   const asOf = finite(input.asOf ?? input.orderBook?.ts ?? input.orderBook?.timestamp, now);
   const ageMs = Math.max(0, now - asOf);
   const stale = ageMs > policy.maxDataAgeMs;
@@ -306,22 +307,23 @@ export function evaluateMarketIntelligence(input = {}) {
   const currentTopDepthNotional = book.mid == null ? null : (book.bidQty + book.askQty) * book.mid;
   const regimeBrain = evaluateRegimeBrain({
     ...(input.regimeBrain ?? {}),
-    now,
+    now: authoritativeNow,
     market,
-    asOf: input.regimeBrain?.asOf ?? asOf,
+    asOf: input.regimeBrain?.asOf,
     spreadBps: input.regimeBrain?.spreadBps ?? book.spreadBps,
     topDepthNotional: input.regimeBrain?.topDepthNotional ?? currentTopDepthNotional,
   }, input.regimeBrainPolicy);
   const netAlpha = evaluateNetAlpha({
     ...(input.netAlpha ?? {}),
-    now,
+    now: authoritativeNow,
     market,
-    attestedNetEdgeBps: input.netAlpha?.attestedNetEdgeBps ?? finite(validation.expectedNetEdgeBps),
-    conformalLowerEdgeBps: input.netAlpha?.conformalLowerEdgeBps ?? advancedGates?.uncertainty?.lowerBps,
+    currentIdentity: input.strategyIdentity,
+    attestedNetEdgeBps: input.netAlpha?.attestedNetEdgeBps,
+    conformalLowerEdgeBps: input.netAlpha?.conformalLowerEdgeBps,
   }, input.netAlphaPolicy);
   const dynamicSizing = evaluateDynamicBetSizing({
     ...(input.dynamicSizing ?? {}),
-    now,
+    now: authoritativeNow,
     market,
     direction: input.direction,
     regimeBrain,
