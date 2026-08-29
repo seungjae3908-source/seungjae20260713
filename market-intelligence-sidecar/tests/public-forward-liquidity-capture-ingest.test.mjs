@@ -163,7 +163,7 @@ async function withRoots(callback) {
   }
 }
 
-test('ingests immutable #795-style capture into the existing #776 canonical dataset store', async () => {
+test('ingests immutable #795-style capture into the existing #776 canonical dataset store without independent sample credit', async () => {
   await withRoots(async ({ stateRoot, researchRepoRoot }) => {
     const rawBatch = validBatch();
     const capture = captureReceipt(rawBatch);
@@ -182,9 +182,14 @@ test('ingests immutable #795-style capture into the existing #776 canonical data
     assert.equal(result.schemaVersion, PUBLIC_FORWARD_LIQUIDITY_CAPTURE_INGEST_RECEIPT_VERSION);
     assert.equal(result.insertedObservationCount, 1);
     assert.equal(result.duplicateObservationCount, 0);
+    assert.equal(result.rawIngestObservationDelta, 1);
     assert.equal(result.canonicalDatasetPersistencePerformed, true);
-    assert.equal(result.canonicalDatasetCreditApplied, true);
-    assert.equal(result.forwardCalibrationSampleCreditDelta, 1);
+    assert.equal(result.canonicalDatasetCreditApplied, false);
+    assert.equal(result.forwardCalibrationSampleCreditDelta, 0);
+    assert.equal(result.independenceEvaluated, false);
+    assert.equal(result.effectiveIndependentCalibrationN, null);
+    assert.equal(result.calibrationSampleSufficient, false);
+    assert.equal(result.independentSampleCreditAuthority, 'NONE_UNTIL_CANONICAL_INDEPENDENCE_TRANSFORM');
     assert.equal(result.splitAssignmentPerformed, false);
     assert.equal(result.oosValidationComplete, false);
     assert.equal(result.calibrationArtifactProduced, false);
@@ -200,7 +205,7 @@ test('ingests immutable #795-style capture into the existing #776 canonical data
   });
 });
 
-test('re-ingesting the same immutable capture gives zero duplicate sample credit', async () => {
+test('re-ingesting the same immutable capture gives zero raw insert and zero independent sample credit', async () => {
   await withRoots(async ({ stateRoot, researchRepoRoot }) => {
     const rawBatch = validBatch();
     const capture = captureReceipt(rawBatch);
@@ -219,10 +224,14 @@ test('re-ingesting the same immutable capture gives zero duplicate sample credit
     const first = await ingestPublicForwardLiquidityCapture(input);
     const second = await ingestPublicForwardLiquidityCapture(input);
     assert.equal(first.insertedObservationCount, 1);
+    assert.equal(first.rawIngestObservationDelta, 1);
+    assert.equal(first.forwardCalibrationSampleCreditDelta, 0);
     assert.equal(second.insertedObservationCount, 0);
+    assert.equal(second.rawIngestObservationDelta, 0);
     assert.equal(second.duplicateObservationCount, 1);
     assert.equal(second.forwardCalibrationSampleCreditDelta, 0);
     assert.equal(second.canonicalDatasetCreditApplied, false);
+    assert.equal(second.effectiveIndependentCalibrationN, null);
     assert.notEqual(first.datasetDigest, second.datasetDigest);
     const stored = JSON.parse(await readFile(join(stateRoot, second.datasetRelativePath), 'utf8'));
     assert.equal(stored.observations.length, 1);
