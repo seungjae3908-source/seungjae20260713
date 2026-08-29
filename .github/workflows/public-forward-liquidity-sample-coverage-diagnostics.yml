@@ -62,4 +62,6 @@ jobs:
           grep -Fq 'validateSourceSafety(root);' "$FILE"
           grep -Fq "gaps.push('SOURCE_FRAME_CLUSTERING_OBSERVED')" "$FILE"
           grep -Fq 'effectiveIndependentSampleCount: null' "$FILE"
+          grep -Fq 'eventTimestampMs > receiveTimestampMs + 5_000' "$FILE"
+          grep -Fq "throw new Error('COVERAGE_EVENT_TIMESTAMP_AFTER_LOCAL_RECEIVE')" "$FILE"
           grep -Fq "nextActionType: 'COLLECT_OR_INSPECT_GENUINE_FORWARD_EVIDENCE_ONLY'" "$FILE"

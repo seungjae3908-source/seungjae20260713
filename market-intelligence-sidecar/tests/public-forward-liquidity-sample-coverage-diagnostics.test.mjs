@@ -209,6 +209,34 @@ test('single-side, missing post-event, and source-frame clustering are surfaced 
   assert.equal(report.authority.thresholdOrWindowRelaxationAuthorized, false);
 });
 
+test('accepts the canonical bounded five-second event clock lead', () => {
+  const batch = buildPublicLiquidityObservationBatch({
+    preEventBook: bookFrame(),
+    tradeFrame: tradesFrame({
+      trades: [{ execId: 'bounded-clock-lead', price: 101, size: 1, side: 'buy', ts: 1_200 }],
+      requestStartedAtMs: 1_060,
+      receiveTimestampMs: 1_100,
+    }),
+    postEventBooks: [],
+    collectorCodeSha: collectorSha,
+  });
+
+  assert.equal(batch.observations.length, 1);
+  assert.equal(batch.observations[0].eventTimestampMs, 1_200);
+  assert.equal(batch.observations[0].receiveTimestampMs, 1_100);
+  const report = analyzePublicForwardLiquiditySampleCoverage(batch);
+  assert.equal(report.acceptedSampleCount, 1);
+});
+
+test('rejects an event clock lead beyond the canonical five-second tolerance', () => {
+  const batch = structuredClone(coverageBatch());
+  batch.observations[0].eventTimestampMs = batch.observations[0].receiveTimestampMs + 5_001;
+  assert.throws(
+    () => analyzePublicForwardLiquiditySampleCoverage(batch),
+    /COVERAGE_EVENT_TIMESTAMP_AFTER_LOCAL_RECEIVE/u,
+  );
+});
+
 test('fails closed on private provenance, malformed frame provenance, and accepted observation identity', () => {
   const privateBatch = structuredClone(coverageBatch());
   privateBatch.datasetProvenance.rawSource.privateApiUsed = true;
