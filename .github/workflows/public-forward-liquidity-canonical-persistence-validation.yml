@@ -1,0 +1,67 @@
+name: Public Forward Liquidity Canonical Persistence Validation
+
+on:
+  pull_request:
+    paths:
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-canonical-persistence.mjs'
+      - 'market-intelligence-sidecar/scripts/run-public-forward-liquidity-canonical-persistence.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-canonical-persistence.test.mjs'
+      - '.github/workflows/public-forward-liquidity-canonical-persistence-validation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Syntax check
+        run: >-
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-canonical-persistence.mjs
+          && node --check market-intelligence-sidecar/scripts/run-public-forward-liquidity-canonical-persistence.mjs
+          && node --check market-intelligence-sidecar/tests/public-forward-liquidity-canonical-persistence.test.mjs
+
+      - name: Run canonical persistence, dedup, and independence tests
+        run: node --test market-intelligence-sidecar/tests/public-forward-liquidity-canonical-persistence.test.mjs
+
+      - name: Verify inert command entry point
+        run: node market-intelligence-sidecar/scripts/run-public-forward-liquidity-canonical-persistence.mjs --help
+
+      - name: Verify fail-closed evidence and safety boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE='market-intelligence-sidecar/src/public-forward-liquidity-canonical-persistence.mjs'
+          WORKFLOW='.github/workflows/public-forward-liquidity-canonical-persistence-validation.yml'
+          grep -Fq 'rawGithubArtifactIsCanonicalState: false' "$SOURCE"
+          grep -Fq 'crossBatchDedupRequired: true' "$SOURCE"
+          grep -Fq 'sourceFrameIndependenceRequired: true' "$SOURCE"
+          grep -Fq 'splitAssignmentPerformed: false' "$SOURCE"
+          grep -Fq "liquidityImpactStatus: 'BLOCKED_DATA'" "$SOURCE"
+          grep -Fq 'fullCostReady: false' "$SOURCE"
+          grep -Fq 'evidenceCompleteCredit: 0' "$SOURCE"
+          grep -Fq "executionAuthority: 'NONE'" "$SOURCE"
+          grep -Fq 'privateApiUsed: false' "$SOURCE"
+          grep -Fq 'liveTrading: false' "$SOURCE"
+          grep -Fq 'orderSubmitted: false' "$SOURCE"
+          grep -Fq 'CROSS_BATCH_DUPLICATE_N' "$SOURCE"
+          grep -Fq 'IDENTITY_COLLISION_N' "$SOURCE"
+          grep -Fq 'INDEPENDENT_N' "$SOURCE"
+          grep -Fq 'DEPENDENT_REJECTED_N' "$SOURCE"
+          grep -Fq 'SOURCE_FRAME_COLLISION_N' "$SOURCE"
+          grep -Fq 'public-forward-liquidity-canonical-independent-split-source-v1' "$SOURCE"
+          grep -Fq 'independenceCredit: 1' "$SOURCE"
+          if grep -Eq '^[[:space:]]+schedule:' "$WORKFLOW"; then
+            echo 'Scheduled persistence is forbidden.' >&2
+            exit 1
+          fi
