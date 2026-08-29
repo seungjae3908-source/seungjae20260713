@@ -19,7 +19,7 @@ jobs:
         with:
           ref: fix/durable-env-secret-binding-20260829
           persist-credentials: false
-      - name: Build and export exact durable caller patch
+      - name: Build exact durable caller patch
         shell: bash
         run: |
           python - <<'PY'
@@ -34,9 +34,17 @@ jobs:
               if text.count(needle) != 1:
                   raise SystemExit(f'expected exactly one durable-policy caller block, found {text.count(needle)}')
               workflow_path.write_text(text.replace(needle, replacement, 1))
+
+          test_path = Path('market-prediction-lab/tests/model-reference-durable-policy-workflow.test.js')
+          test_path.write_text('''import test from "node:test";\nimport assert from "node:assert/strict";\nimport { readFile } from "node:fs/promises";\n\nconst policyWorkflowUrl = new URL("../../.github/workflows/prediction-lab-model-reference-durable-policy.yml", import.meta.url);\nconst parentWorkflowUrl = new URL("../../.github/workflows/prediction-lab-52d-validation.yml", import.meta.url);\n\ntest("durable policy reusable workflow declares and consumes the environment-bound credential", async () => {\n  const [workflow, parentWorkflow] = await Promise.all([\n    readFile(policyWorkflowUrl, "utf8"),\n    readFile(parentWorkflowUrl, "utf8"),\n  ]);\n  assert.match(workflow, /workflow_call:[\\s\\S]*secrets:[\\s\\S]*PREDICTION_LAB_IMMUTABLE_RELEASE_POLICY_TOKEN:/u);\n  assert.match(workflow, /environment:\\s*prediction-lab-durable-reference/u);\n  assert.match(parentWorkflow, /durable-policy-preflight:[\\s\\S]*secrets:\\s*inherit/u);\n  assert.match(workflow, /IMMUTABLE_RELEASE_POLICY_TOKEN:\\s*\\$\\{\\{ secrets\\.PREDICTION_LAB_IMMUTABLE_RELEASE_POLICY_TOKEN \\}\\}/u);\n  assert.match(workflow, /Administration:read/u);\n  assert.match(workflow, /\\/immutable-releases/u);\n  assert.doesNotMatch(workflow, /Administration:\\s*write/u);\n});\n''')
           PY
-          echo 'PARENT_B64_BEGIN'
-          base64 -w0 .github/workflows/prediction-lab-52d-validation.yml
-          echo
-          echo 'PARENT_B64_END'
-          sha256sum .github/workflows/prediction-lab-52d-validation.yml
+          sha256sum .github/workflows/prediction-lab-52d-validation.yml market-prediction-lab/tests/model-reference-durable-policy-workflow.test.js
+      - name: Upload exact patch files
+        uses: actions/upload-artifact@v4
+        with:
+          name: durable-caller-patch-${{ github.run_id }}
+          path: |
+            .github/workflows/prediction-lab-52d-validation.yml
+            market-prediction-lab/tests/model-reference-durable-policy-workflow.test.js
+          if-no-files-found: error
+          retention-days: 1
