@@ -379,7 +379,7 @@ test('rejects authority escalation or an unverified empty capture', async () => 
   });
 });
 
-test('blocks protected application storage and relative state roots before mutation', async () => {
+test('blocks protected application storage, repository overlap, and relative state roots before mutation', async () => {
   const rawBatch = validBatch();
   const capture = captureReceipt(rawBatch);
   const artifact = artifactReceipt(capture);
@@ -400,6 +400,18 @@ test('blocks protected application storage and relative state roots before mutat
   await assert.rejects(
     ingestPublicForwardLiquidityCapture({ ...common, stateRoot: '/opt/stock-app-data/research' }),
     /OVERLAPS_PROTECTED_APPLICATION_STORAGE/u,
+  );
+  await assert.rejects(
+    ingestPublicForwardLiquidityCapture({ ...common, stateRoot: '/tmp/research-repo' }),
+    /STATE_ROOT_OVERLAPS_RESEARCH_CHECKOUT/u,
+  );
+  await assert.rejects(
+    ingestPublicForwardLiquidityCapture({ ...common, stateRoot: '/tmp/research-repo/runtime-state' }),
+    /STATE_ROOT_OVERLAPS_RESEARCH_CHECKOUT/u,
+  );
+  await assert.rejects(
+    ingestPublicForwardLiquidityCapture({ ...common, stateRoot: '/tmp' }),
+    /STATE_ROOT_OVERLAPS_RESEARCH_CHECKOUT/u,
   );
 });
 
