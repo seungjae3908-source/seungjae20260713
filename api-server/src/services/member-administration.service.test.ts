@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { deriveMemberTier, hasCapability } from '../../../packages/member-access/src/index.js';
 import {
   MemberAdministrationError,
   isActiveAdmin,
@@ -111,6 +112,24 @@ test('rejected admin-shaped row is not protected as an active admin', () => {
   const plan = planMemberChange(rejectedAdmin, { membershipLevel: 'regular', reason: '거절 상태 권한 정리' }, ADMIN, 0, NOW);
   assert.equal(plan.changes.membership_level, 'regular');
   assert.equal(plan.changes.role, 'full');
+});
+
+test('pending status overrides an explicit admin tier in shared capabilities', () => {
+  const pendingAdmin = profile({ membership_level: 'admin', role: 'admin', status: 'pending', is_active: true });
+  assert.equal(deriveMemberTier(pendingAdmin), 'pending');
+  assert.equal(hasCapability(pendingAdmin, 'canManageMembers'), false);
+  assert.equal(hasCapability(pendingAdmin, 'canPlaceOrders'), false);
+  assert.equal(hasCapability(pendingAdmin, 'canAccessFutures'), false);
+  assert.equal(hasCapability(pendingAdmin, 'canConnectPersonalTelegram'), false);
+});
+
+test('revoked status overrides an explicit admin tier in shared capabilities', () => {
+  const revokedAdmin = profile({ membership_level: 'admin', role: 'admin', status: 'revoked', is_active: true });
+  assert.equal(deriveMemberTier(revokedAdmin), 'pending');
+  assert.equal(hasCapability(revokedAdmin, 'canManageMembers'), false);
+  assert.equal(hasCapability(revokedAdmin, 'canPlaceOrders'), false);
+  assert.equal(hasCapability(revokedAdmin, 'canAccessFutures'), false);
+  assert.equal(hasCapability(revokedAdmin, 'canConnectPersonalTelegram'), false);
 });
 
 test('admin may be demoted when another active admin exists', () => {
