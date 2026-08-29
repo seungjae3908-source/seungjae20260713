@@ -437,7 +437,7 @@ export function buildAuthoritativePaperFundingHoldingHorizonCost(
   }
   const riskSymbolScopes = riskPolicy?.symbolScopes;
   if (symbol && riskSymbolScopes !== '*' && (!Array.isArray(riskSymbolScopes)
-    || !riskPolicy.symbolScopes.map(normalizedFundingSymbol).includes(symbol))) {
+    || !riskSymbolScopes.map(normalizedFundingSymbol).includes(symbol))) {
     blockers.push('FUNDING_RISK_POLICY_SYMBOL_SCOPE_MISMATCH');
   }
 
