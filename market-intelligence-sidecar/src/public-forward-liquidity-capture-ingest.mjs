@@ -45,6 +45,12 @@ function integer(value, code) {
   return parsed;
 }
 
+function positiveFinite(value, code) {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!(Number.isFinite(parsed) && parsed > 0)) throw new Error(code);
+  return parsed;
+}
+
 function decimalId(value, code) {
   const normalized = text(value, code);
   if (!DECIMAL_ID.test(normalized)) throw new Error(code);
@@ -124,6 +130,41 @@ async function proveCollectorImplementationBlobSha({ researchRepoRoot, exactMain
   } catch (error) {
     if (String(error?.message ?? '').startsWith('COLLECTOR_IMPLEMENTATION_')) throw error;
     throw new Error('COLLECTOR_IMPLEMENTATION_BLOB_UNPROVEN');
+  }
+}
+
+function validateObservationIdentity(observation) {
+  const rawSourceProvenance = object(
+    observation?.rawSourceProvenance,
+    'OBSERVATION_RAW_SOURCE_PROVENANCE_INVALID',
+  );
+  const publicTrade = object(
+    rawSourceProvenance.publicTrade,
+    'OBSERVATION_PUBLIC_TRADE_PROVENANCE_INVALID',
+  );
+  const aggressiveSide = text(observation.aggressiveSide, 'OBSERVATION_AGGRESSIVE_SIDE_INVALID');
+  if (!['BUY', 'SELL'].includes(aggressiveSide)) throw new Error('OBSERVATION_AGGRESSIVE_SIDE_INVALID');
+  const identityInput = {
+    contract: PUBLIC_LIQUIDITY_CALIBRATION_CONTRACT,
+    publicDataSource: text(observation.publicDataSource, 'OBSERVATION_PUBLIC_SOURCE_INVALID'),
+    market: text(observation.market, 'OBSERVATION_MARKET_INVALID'),
+    symbol: text(observation.symbol, 'OBSERVATION_SYMBOL_INVALID'),
+    publicExecutionId: text(publicTrade.publicExecutionId, 'OBSERVATION_PUBLIC_EXECUTION_ID_INVALID'),
+    eventTimestampMs: positiveFinite(observation.eventTimestampMs, 'OBSERVATION_EVENT_TIMESTAMP_INVALID'),
+    preEventBookDigest: exactDigest(observation.preEventBookDigest, 'OBSERVATION_PRE_EVENT_BOOK_DIGEST_INVALID'),
+  };
+  const expectedObservationId = `liquidity-observation:${sha256(canonicalJson(identityInput))}`;
+  if (observation.observationId !== expectedObservationId) throw new Error('OBSERVATION_ID_MISMATCH');
+
+  const expectedSourceDigest = sha256(canonicalJson({
+    identityInput,
+    aggressiveSide,
+    price: positiveFinite(observation.publicExecutionPrice, 'OBSERVATION_EXECUTION_PRICE_INVALID'),
+    quantity: positiveFinite(observation.tradeFlowQuantity, 'OBSERVATION_TRADE_FLOW_QUANTITY_INVALID'),
+    rawSourceProvenance,
+  }));
+  if (exactDigest(observation.sourceDigest, 'OBSERVATION_SOURCE_DIGEST_INVALID') !== expectedSourceDigest) {
+    throw new Error('OBSERVATION_SOURCE_DIGEST_MISMATCH');
   }
 }
 
@@ -218,7 +259,7 @@ function validateRawBatch(rawBatch, expectedMainSha, capture) {
       || observation.paperOrderSourceAllowed !== false) {
       throw new Error('OBSERVATION_AUTHORITY_INVALID');
     }
-    exactDigest(observation.sourceDigest, 'OBSERVATION_SOURCE_DIGEST_INVALID');
+    validateObservationIdentity(observation);
   }
 
   const rawBatchDigest = sha256(canonicalJson(batch));
