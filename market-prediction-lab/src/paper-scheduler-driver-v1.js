@@ -29,6 +29,8 @@ export const PAPER_SCHEDULER_CONTRACT = Object.freeze({
   liveOwnerExpiryStealAllowed: false,
 });
 
+const POSITION_OBSERVATION_HANDOFF_VERSION = "paper-scheduler-position-observation-handoff-v1";
+
 function nonEmpty(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
@@ -45,8 +47,27 @@ function nonNegativeInteger(value) {
   return Number.isSafeInteger(value) && value >= 0;
 }
 
+function digest64(value) {
+  return typeof value === "string" && /^[0-9a-f]{64}$/iu.test(value);
+}
+
+function immutableSha(value) {
+  return typeof value === "string" && /^[0-9a-f]{40}$/iu.test(value);
+}
+
 function hash(value) {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function deepFreeze(value) {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  Object.freeze(value);
+  for (const child of Object.values(value)) deepFreeze(child);
+  return value;
+}
+
+function frozenClone(value) {
+  return value == null ? value : deepFreeze(structuredClone(value));
 }
 
 function cycleFor({ cadence, identityFingerprint, nowMs }) {
@@ -347,7 +368,129 @@ function retryableProviderError(error) {
     || error?.code === "PROVIDER_TIMEOUT";
 }
 
-async function collectLane({ provider, market, cycle, retry, sleep }) {
+function cycleIdentityFor(state, cycle) {
+  const payload = Object.freeze({
+    cycleId: cycle.cycleId,
+    identityFingerprint: state.identityFingerprint,
+    scheduledAtMs: cycle.scheduledAtMs,
+    startedAtMs: cycle.startedAtMs,
+  });
+  return Object.freeze({ ...payload, identityDigest: hash(JSON.stringify(payload)) });
+}
+
+function accountIdentityFor(state) {
+  const binding = state?.ledger?.accountBinding;
+  if (!binding
+    || !digest64(binding.publisherAccountIdSha256)
+    || !immutableSha(binding.sourceSha)
+    || !nonEmpty(binding.accountId)) return null;
+  const payload = Object.freeze({
+    publisherAccountIdSha256: binding.publisherAccountIdSha256.toLowerCase(),
+    sourceSha: binding.sourceSha.toLowerCase(),
+    accountIdSha256: hash(binding.accountId),
+  });
+  return Object.freeze({ ...payload, identityDigest: hash(JSON.stringify(payload)) });
+}
+
+function positionIdentityFor(position) {
+  const sample = position?.sample?.identity ?? {};
+  const value = {
+    positionId: position?.positionId,
+    paperSampleId: position?.paperSampleId,
+    signalId: position?.signalId ?? sample.signalId,
+    market: position?.market ?? sample.market,
+    symbol: position?.symbol ?? sample.symbol,
+    direction: position?.direction ?? sample.executionDirection,
+    strategyId: position?.strategyId ?? sample.strategyId,
+    strategyVersion: position?.strategyVersion ?? sample.strategyVersion,
+    parameterHash: position?.parameterHash ?? sample.parameterHash,
+    researchCodeSha: position?.researchCodeSha ?? sample.researchCodeSha,
+    costPolicyVersion: position?.costPolicyVersion ?? position?.sample?.profitEvidence?.costPolicyId,
+  };
+  if ([
+    value.positionId, value.paperSampleId, value.signalId, value.market, value.symbol, value.direction,
+    value.strategyId, value.strategyVersion, value.parameterHash, value.costPolicyVersion,
+  ].some((item) => !nonEmpty(item)) || !immutableSha(value.researchCodeSha)) return null;
+  return Object.freeze({ ...value, researchCodeSha: value.researchCodeSha.toLowerCase() });
+}
+
+function entryProvenanceFor(position) {
+  const value = position?.sample?.entryEvidenceProvenance;
+  if (!value || value.schemaVersion !== "paper-evidence-provenance-v1"
+    || !digest64(value.provenanceDigest) || !digest64(value.evidenceSnapshotDigest)) return null;
+  return frozenClone(value);
+}
+
+function riskPolicyIdentityFor(position) {
+  const value = position?.riskPolicyIdentity
+    ?? position?.lifecycle?.riskPolicyIdentity
+    ?? position?.sample?.riskPolicyIdentity;
+  if (!value || !nonEmpty(value.policyId) || !nonEmpty(value.policyVersion)
+    || !nonEmpty(value.source) || !immutableSha(value.researchCodeSha)) return null;
+  const payload = Object.freeze({
+    policyId: value.policyId,
+    policyVersion: value.policyVersion,
+    source: value.source,
+    researchCodeSha: value.researchCodeSha.toLowerCase(),
+  });
+  return Object.freeze({ ...payload, identityDigest: hash(JSON.stringify(payload)) });
+}
+
+function positionAccountBound(state, identity, accountIdentity) {
+  if (!accountIdentity || !Array.isArray(state?.ledger?.reservations)) return false;
+  const matches = state.ledger.reservations.filter((row) => row?.status === "OPEN"
+    && row.positionId === identity.positionId
+    && row.paperSampleId === identity.paperSampleId);
+  return matches.length === 1;
+}
+
+function positionBindingFor(state, position, cycleIdentity, accountIdentity) {
+  const identity = positionIdentityFor(position);
+  if (!identity) return null;
+  const entryProvenance = entryProvenanceFor(position);
+  const riskPolicyIdentity = riskPolicyIdentityFor(position);
+  return Object.freeze({
+    schemaVersion: POSITION_OBSERVATION_HANDOFF_VERSION,
+    positionIdentity: identity,
+    cycleIdentity,
+    accountIdentity,
+    accountBound: positionAccountBound(state, identity, accountIdentity),
+    entryProvenance,
+    costPolicyIdentity: Object.freeze({ version: identity.costPolicyVersion }),
+    riskPolicyIdentity,
+    executionAuthority: "NONE",
+    liveTrading: false,
+    privateTradingApiAllowed: false,
+    orderSubmitted: false,
+  });
+}
+
+function positionContextForMarket(state, market, cycleIdentity, accountIdentity) {
+  if (!Array.isArray(state?.positions)) {
+    return Object.freeze({ openPositions: null, positionBindings: null });
+  }
+  const positions = state.positions.filter((position) => (position?.market ?? position?.sample?.identity?.market) === market);
+  const openPositions = Object.freeze(positions.map((position) => frozenClone(position)));
+  const positionBindings = Object.freeze(positions.map((position) => positionBindingFor(
+    state,
+    position,
+    cycleIdentity,
+    accountIdentity,
+  )));
+  return Object.freeze({ openPositions, positionBindings });
+}
+
+async function collectLane({
+  provider,
+  market,
+  cycle,
+  cycleIdentity,
+  accountIdentity,
+  openPositions,
+  positionBindings,
+  retry,
+  sleep,
+}) {
   let lastError;
   for (let attempt = 1; attempt <= retry.maxAttempts; attempt += 1) {
     try {
@@ -362,7 +505,16 @@ async function collectLane({ provider, market, cycle, retry, sleep }) {
         }, retry.timeoutMs);
       });
       const result = await Promise.race([
-        provider.collectPublicEvidence({ market, cycle, attempt, signal: controller.signal }),
+        provider.collectPublicEvidence({
+          market,
+          cycle,
+          cycleIdentity,
+          accountIdentity,
+          openPositions,
+          positionBindings,
+          attempt,
+          signal: controller.signal,
+        }),
         timeout,
       ]).finally(() => clearTimeout(timer));
       if (!result || result.publicOnly !== true) {
@@ -470,6 +622,166 @@ function entryAdmissionBlockerEvidence(evidence) {
   });
 }
 
+function naturalObservationBlockers({ observation, binding, laneMarket, cycleIdentity, accountIdentity, evaluatedAtMs }) {
+  const blockers = [];
+  const identity = binding?.positionIdentity;
+  if (!identity) return ["POSITION_OBSERVATION_OPEN_POSITION_IDENTITY_MISSING"];
+  if (!nonEmpty(observation?.observationId)) blockers.push("POSITION_OBSERVATION_ID_REQUIRED");
+  for (const key of [
+    "positionId", "paperSampleId", "signalId", "market", "symbol", "direction",
+    "strategyId", "strategyVersion", "parameterHash", "costPolicyVersion",
+  ]) {
+    if (observation?.[key] !== identity[key]) blockers.push(`POSITION_OBSERVATION_${key.toUpperCase()}_MISMATCH`);
+  }
+  if (!immutableSha(observation?.researchCodeSha)
+    || observation.researchCodeSha.toLowerCase() !== identity.researchCodeSha) {
+    blockers.push("POSITION_OBSERVATION_RESEARCH_SHA_MISMATCH");
+  }
+  if (observation?.market !== laneMarket) blockers.push("POSITION_OBSERVATION_LANE_MARKET_MISMATCH");
+  if (observation?.publicOnly !== true || !nonEmpty(observation?.source) || !nonEmpty(observation?.provenance)) {
+    blockers.push("POSITION_OBSERVATION_PUBLIC_PROVENANCE_REQUIRED");
+  }
+  if (!Number.isSafeInteger(observation?.observedAtMs)
+    || observation.observedAtMs <= 0
+    || observation.observedAtMs > evaluatedAtMs) {
+    blockers.push("POSITION_OBSERVATION_TIME_INVALID");
+  } else if (!positiveInteger(observation?.maxAgeMs)
+    || evaluatedAtMs - observation.observedAtMs > observation.maxAgeMs) {
+    blockers.push("POSITION_OBSERVATION_STALE");
+  }
+
+  const natural = observation?.naturalEvidence;
+  if (natural?.provenanceClass === "NATURAL_FORWARD") {
+    if (natural.synthetic !== false || natural.replay !== false || natural.testOnly !== false
+      || natural.backfill !== false || natural.historical !== false || natural.duplicate !== false) {
+      blockers.push("POSITION_OBSERVATION_GENUINE_PROVENANCE_REQUIRED");
+    }
+    if (natural.observationId !== observation.observationId
+      || natural.observedAtMs !== observation.observedAtMs
+      || !nonEmpty(natural.source) || !nonEmpty(natural.provenance)) {
+      blockers.push("POSITION_OBSERVATION_NATURAL_EVIDENCE_MISMATCH");
+    }
+    if (observation.cycleIdentityDigest !== cycleIdentity.identityDigest) {
+      blockers.push("POSITION_OBSERVATION_CYCLE_IDENTITY_MISMATCH");
+    }
+    if (!accountIdentity || binding.accountBound !== true
+      || observation.accountIdentityDigest !== accountIdentity.identityDigest) {
+      blockers.push("POSITION_OBSERVATION_ACCOUNT_IDENTITY_MISMATCH");
+    }
+    if (!binding.entryProvenance
+      || observation.entryEvidenceDigest !== binding.entryProvenance.evidenceSnapshotDigest) {
+      blockers.push("POSITION_OBSERVATION_ENTRY_PROVENANCE_MISMATCH");
+    }
+    if (!binding.riskPolicyIdentity
+      || observation.riskPolicyIdentityDigest !== binding.riskPolicyIdentity.identityDigest) {
+      blockers.push("POSITION_OBSERVATION_RISK_POLICY_IDENTITY_MISSING_OR_MISMATCH");
+    }
+  }
+  return [...new Set(blockers)];
+}
+
+function buildPositionObservationHandoff({ lanes, state, cycleIdentity, accountIdentity, evaluatedAtMs }) {
+  const explicit = lanes.filter((lane) => Object.prototype.hasOwnProperty.call(lane.result ?? {}, "positionObservations"));
+  const openPositionCount = Array.isArray(state?.positions) ? state.positions.length : null;
+  if (explicit.length === 0) {
+    return Object.freeze({
+      schemaVersion: POSITION_OBSERVATION_HANDOFF_VERSION,
+      status: "MISSING",
+      openPositionCount,
+      observationCount: null,
+      observations: null,
+      blockers: Object.freeze(["POSITION_OBSERVATIONS_MISSING"]),
+      executionAuthority: "NONE",
+    });
+  }
+  const malformed = explicit.filter((lane) => !Array.isArray(lane.result.positionObservations));
+  if (malformed.length > 0) {
+    return Object.freeze({
+      schemaVersion: POSITION_OBSERVATION_HANDOFF_VERSION,
+      status: "BLOCKED_DATA",
+      openPositionCount,
+      observationCount: null,
+      observations: null,
+      blockers: Object.freeze(["POSITION_OBSERVATIONS_PAYLOAD_INVALID"]),
+      executionAuthority: "NONE",
+    });
+  }
+
+  const bindings = Array.isArray(state?.positions)
+    ? state.positions.map((position) => positionBindingFor(state, position, cycleIdentity, accountIdentity))
+    : [];
+  const normalized = [];
+  const blockers = [];
+  const seenObservationIds = new Set();
+  for (const lane of explicit) {
+    for (const observation of lane.result.positionObservations) {
+      const matching = bindings.filter((binding) => binding?.positionIdentity?.positionId === observation?.positionId);
+      if (matching.length !== 1) {
+        blockers.push(matching.length === 0
+          ? "POSITION_OBSERVATION_OPEN_POSITION_NOT_FOUND"
+          : "POSITION_OBSERVATION_OPEN_POSITION_AMBIGUOUS");
+        continue;
+      }
+      if (nonEmpty(observation?.observationId)) {
+        if (seenObservationIds.has(observation.observationId)) {
+          blockers.push("POSITION_OBSERVATION_DUPLICATE_ID");
+          continue;
+        }
+        seenObservationIds.add(observation.observationId);
+      }
+      const binding = matching[0];
+      const rowBlockers = naturalObservationBlockers({
+        observation,
+        binding,
+        laneMarket: lane.market,
+        cycleIdentity,
+        accountIdentity,
+        evaluatedAtMs,
+      });
+      if (rowBlockers.length > 0) {
+        blockers.push(...rowBlockers);
+        continue;
+      }
+      normalized.push(deepFreeze({
+        ...structuredClone(observation),
+        schedulerHandoff: {
+          schemaVersion: POSITION_OBSERVATION_HANDOFF_VERSION,
+          cycleIdentity,
+          accountIdentity,
+          positionIdentity: binding.positionIdentity,
+          entryProvenance: binding.entryProvenance,
+          costPolicyIdentity: binding.costPolicyIdentity,
+          riskPolicyIdentity: binding.riskPolicyIdentity,
+          naturalSampleCreditAuthority: observation?.naturalEvidence?.provenanceClass === "NATURAL_FORWARD"
+            ? "IDENTITY_GATES_PASSED"
+            : "NO_GENUINE_CREDIT",
+          executionAuthority: "NONE",
+        },
+      }));
+    }
+  }
+  if (blockers.length > 0) {
+    return Object.freeze({
+      schemaVersion: POSITION_OBSERVATION_HANDOFF_VERSION,
+      status: "BLOCKED_DATA",
+      openPositionCount,
+      observationCount: null,
+      observations: null,
+      blockers: Object.freeze([...new Set(blockers)]),
+      executionAuthority: "NONE",
+    });
+  }
+  return Object.freeze({
+    schemaVersion: POSITION_OBSERVATION_HANDOFF_VERSION,
+    status: "PRESENT",
+    openPositionCount,
+    observationCount: normalized.length,
+    observations: Object.freeze(normalized),
+    blockers: Object.freeze([]),
+    executionAuthority: "NONE",
+  });
+}
+
 export async function runScheduledPaperCycle({
   state,
   cadence,
@@ -521,6 +833,8 @@ export async function runScheduledPaperCycle({
     identityFingerprint: state.identityFingerprint,
     nowMs,
   });
+  const cycleIdentity = cycleIdentityFor(state, cycle);
+  const accountIdentity = accountIdentityFor(state);
   const leaseNowMs = clock();
   if (!finiteNumber(leaseNowMs)) throw new TypeError("clock must return a finite number");
 
@@ -542,13 +856,19 @@ export async function runScheduledPaperCycle({
   }
 
   try {
-    const lanes = await Promise.all(RECURRING_PAPER_MARKETS.map((market) => collectLane({
-      provider: publicEvidenceProvider,
-      market,
-      cycle,
-      retry,
-      sleep,
-    })));
+    const lanes = await Promise.all(RECURRING_PAPER_MARKETS.map((market) => {
+      const positionContext = positionContextForMarket(state, market, cycleIdentity, accountIdentity);
+      return collectLane({
+        provider: publicEvidenceProvider,
+        market,
+        cycle,
+        cycleIdentity,
+        accountIdentity,
+        ...positionContext,
+        retry,
+        sleep,
+      });
+    }));
 
     const evidenceEvaluatedAtMs = clock();
     if (!finiteNumber(evidenceEvaluatedAtMs)) {
@@ -579,6 +899,29 @@ export async function runScheduledPaperCycle({
       });
     }
 
+    const positionObservationHandoff = buildPositionObservationHandoff({
+      lanes,
+      state,
+      cycleIdentity,
+      accountIdentity,
+      evaluatedAtMs: evidenceEvaluatedAtMs,
+    });
+    if (positionObservationHandoff.status === "BLOCKED_DATA") {
+      return Object.freeze({
+        status: "BLOCKED_DATA",
+        cycleId: cycle.cycleId,
+        mutationCount: 0,
+        blockers: Object.freeze([Object.freeze({
+          market: "POSITION_OBSERVATION",
+          reason: "BLOCKED_DATA",
+          details: positionObservationHandoff.blockers,
+        })]),
+        evidenceEvaluatedAtMs,
+        positionObservationHandoff,
+        safety: PAPER_SCHEDULER_CONTRACT,
+      });
+    }
+
     await leaseStore.assertOwned({
       leaseKey: cycle.leaseKey,
       ownerId,
@@ -592,6 +935,9 @@ export async function runScheduledPaperCycle({
       },
       candidates: lanes.flatMap((lane) => lane.result.candidates),
       exits: lanes.flatMap((lane) => lane.result.exits),
+      ...(positionObservationHandoff.status === "PRESENT"
+        ? { positionObservations: positionObservationHandoff.observations }
+        : {}),
       ledgerAdapter,
       learningAdapter,
       stateStore,
@@ -614,6 +960,7 @@ export async function runScheduledPaperCycle({
       evidenceEvaluatedAtMs,
       completedAtMs,
       ...result,
+      positionObservationHandoff,
       safety: PAPER_SCHEDULER_CONTRACT,
     });
   } finally {
