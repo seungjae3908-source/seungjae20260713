@@ -89,6 +89,9 @@ function validatePublicProvenance(source, provenance) {
   if (
     rawSource?.provider !== 'BITGET_PUBLIC_UTA_V3'
     || rawSource?.privateApiUsed !== false
+    || !Array.isArray(rawSource?.endpoints)
+    || !rawSource.endpoints.includes('/api/v3/market/orderbook')
+    || !rawSource.endpoints.includes('/api/v3/market/fills')
     || source?.safety?.executionAuthority !== 'NONE'
     || source?.safety?.privateTradingApiAllowed !== false
     || source?.safety?.liveTradingAllowed !== false
@@ -161,6 +164,7 @@ function aggregateMissingFlags(observations) {
 function normalizeSource(input) {
   const source = object(input);
   if (!source) throw new Error('DROP_DIAGNOSTIC_SOURCE_REQUIRED');
+  if (source.schemaVersion !== 1) throw new Error('DROP_DIAGNOSTIC_SOURCE_SCHEMA_INVALID');
   sourceContract(source.contract);
   const observations = normalizeObservations(source.observations);
   const provenance = object(source.datasetProvenance);
