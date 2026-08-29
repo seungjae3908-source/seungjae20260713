@@ -1,0 +1,49 @@
+name: Public Forward Liquidity Runtime Cost Evidence
+
+on:
+  pull_request:
+    paths:
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-runtime-cost-evidence.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-runtime-cost-evidence.test.mjs'
+      - '.github/workflows/public-forward-liquidity-runtime-cost-evidence.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Run liquidity runtime cost adapter tests
+        run: node --test market-intelligence-sidecar/tests/public-forward-liquidity-runtime-cost-evidence.test.mjs
+
+      - name: Run upstream liquidity firewall regression
+        run: node --test market-intelligence-sidecar/tests/liquidity-impact-evidence-firewall.test.mjs
+
+      - name: Run upstream calibration artifact regression
+        run: node --test market-intelligence-sidecar/tests/public-forward-liquidity-calibration-artifact.test.mjs
+
+      - name: Verify fail-closed runtime cost invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE='market-intelligence-sidecar/src/public-forward-liquidity-runtime-cost-evidence.mjs'
+          grep -Fq 'rawCalibrationArtifactRevalidated: true' "$FILE"
+          grep -Fq 'rawLiquidityFirewallRevalidated: true' "$FILE"
+          grep -Fq 'coefficientInventedByThisAdapter: false' "$FILE"
+          grep -Fq 'unknownCostIsZero: false' "$FILE"
+          grep -Fq "quality: 'ESTIMATED'" "$FILE"
+          grep -Fq "liquidityImpactStatus: 'PRESENT'" "$FILE"
+          grep -Fq 'runtimeLiquidityImpactCoefficient: null' "$FILE"
+          grep -Fq 'fullCostReady: false' "$FILE"
+          grep -Fq "executionAuthority: 'NONE'" "$FILE"
+          grep -Fq 'privateApiUsed: false' "$FILE"
+          grep -Fq 'liveTrading: false' "$FILE"
+          grep -Fq 'orderSubmitted: false' "$FILE"
