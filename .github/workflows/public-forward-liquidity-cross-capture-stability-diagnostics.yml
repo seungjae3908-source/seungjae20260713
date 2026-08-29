@@ -58,6 +58,8 @@ jobs:
           grep -Fq "gradingStatus: 'NOT_GRADED_NO_PREDECLARED_POLICY'" "$FILE"
           grep -Fq 'effectiveIndependentSampleCount: null' "$FILE"
           grep -Fq "throw new Error('CROSS_CAPTURE_DUPLICATE_RAW_DIGEST')" "$FILE"
+          grep -Fq "throw new Error('CROSS_CAPTURE_OBSERVATION_AUTHORITY_INVALID')" "$FILE"
+          grep -Fq 'item.executionCostEligible !== false' "$FILE"
           grep -Fq "executionAuthority: 'NONE'" "$FILE"
           grep -Fq 'privateTradingApiAllowed: false' "$FILE"
           grep -Fq 'liveTradingAllowed: false' "$FILE"
