@@ -86,6 +86,31 @@ function candleFallbackProviders(market: 'KR' | 'US', timeframe: Timeframe): str
   return providers;
 }
 
+function signalAbortReason(signal: AbortSignal): Error {
+  if (signal.reason instanceof Error) return signal.reason;
+  const error = new Error('Scanner provider request aborted');
+  error.name = 'AbortError';
+  return error;
+}
+
+async function runWithSignal<T>(signal: AbortSignal | undefined, task: () => Promise<T>): Promise<T> {
+  if (!signal) return task();
+  if (signal.aborted) throw signalAbortReason(signal);
+
+  let removeAbortListener: (() => void) | undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    const onAbort = () => reject(signalAbortReason(signal));
+    signal.addEventListener('abort', onAbort, { once: true });
+    removeAbortListener = () => signal.removeEventListener('abort', onAbort);
+  });
+
+  try {
+    return await Promise.race([task(), aborted]);
+  } finally {
+    removeAbortListener?.();
+  }
+}
+
 export class ScannerProviderHealthTracker {
   private readonly health = new Map<string, ScannerProviderHealth>();
 
@@ -152,10 +177,10 @@ export class ScannerProviderHealthTracker {
     }
   }
 
-  async getQuote(market: 'KR' | 'US', ticker: string): Promise<Quote> {
+  async getQuote(market: 'KR' | 'US', ticker: string, signal?: AbortSignal): Promise<Quote> {
     const startedAt = Date.now();
     try {
-      const quote = await MarketDataService.getQuote(ticker);
+      const quote = await runWithSignal(signal, () => MarketDataService.getQuote(ticker));
       const observedAt = typeof (quote as Quote & { updatedAt?: string }).updatedAt === 'string'
         ? (quote as Quote & { updatedAt?: string }).updatedAt ?? null
         : new Date().toISOString();
@@ -182,10 +207,11 @@ export class ScannerProviderHealthTracker {
     market: 'KR' | 'US',
     ticker: string,
     timeframe: Timeframe,
+    signal?: AbortSignal,
   ): Promise<Candle[]> {
     const startedAt = Date.now();
     try {
-      const meta = await MarketDataService.getCandlesMeta(ticker, timeframe);
+      const meta = await runWithSignal(signal, () => MarketDataService.getCandlesMeta(ticker, timeframe));
       const latencyMs = Math.max(0, Date.now() - startedAt);
       const freshness = candleFreshness(timeframe, meta.candles);
       if (meta.fallbackFrom) {

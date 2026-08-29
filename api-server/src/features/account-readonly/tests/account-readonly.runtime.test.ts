@@ -91,7 +91,7 @@ test('vault-backed Toss reader performs OAuth then account-list and holdings GET
     'GET https://openapi.tossinvest.com/api/v1/holdings',
   ]);
   assert.equal(seen[1]?.accountHeader, null); assert.equal(seen[2]?.accountHeader, '12345678');
-  assert.equal(result.connected, true); assert.equal(result.positions[0]?.symbol, '005930'); assert.equal(result.positions[0]?.market, 'KR'); assert.equal(result.positions[0]?.marketValue, 213000);
+  assert.equal(result.connected, true); assert.equal(result.positions?.[0]?.symbol, '005930'); assert.equal(result.positions?.[0]?.market, 'KR'); assert.equal(result.positions?.[0]?.marketValue, 213000);
   assert.equal(result.orderRequests, 0); assert.equal(result.cancelRequests, 0); assert.equal(result.transferRequests, 0); assert.equal(result.withdrawalRequests, 0);
   const serialized = JSON.stringify(result);
   assert.equal(serialized.includes('TOSS_CLIENT_RUNTIME_TEST_ONLY'), false); assert.equal(serialized.includes('TOSS_SECRET_RUNTIME_TEST_ONLY'), false); assert.equal(serialized.includes('TOSS_TOKEN_RUNTIME_TEST_ONLY'), false);

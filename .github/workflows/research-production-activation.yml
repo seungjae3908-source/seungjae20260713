@@ -38,6 +38,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
           bash -n research-production/deploy/activate-server.sh
           grep -q '/activate-research-production' .github/workflows/research-production-activation.yml
+          grep -Fq "startsWith(github.event.comment.body, '/activate-research-production ')" .github/workflows/research-production-activation.yml
           grep -q 'checkout-only lifecycle failure' .github/workflows/research-production-activation.yml
           grep -q 'SOURCE_MERGE_SHA' .github/workflows/research-production-activation.yml
           grep -q 'LIVE_TRADING=false' research-production/deploy/activate-server.sh
@@ -48,8 +49,9 @@ jobs:
   authorize:
     if: >-
       github.event_name == 'issue_comment' &&
-      github.event.issue.number == 62 &&
-      github.event.comment.user.login == github.repository_owner
+      github.event.issue.number == 660 &&
+      github.event.comment.user.login == github.repository_owner &&
+      startsWith(github.event.comment.body, '/activate-research-production ')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:
@@ -296,7 +298,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 62,
+              issue_number: 660,
               body: [
                 '[RESEARCH_PRODUCTION_ACTIVATION]',
                 'status: success',
@@ -324,7 +326,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 62,
+              issue_number: 660,
               body: [
                 '[RESEARCH_PRODUCTION_ACTIVATION]',
                 'status: failed_closed',

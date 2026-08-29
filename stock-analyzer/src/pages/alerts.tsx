@@ -224,7 +224,7 @@ function FilterButton({
       onClick={onClick}
       className={cn(
         'min-w-0 items-center justify-center rounded-xl border font-bold transition-colors',
-        compact ? 'flex min-h-10 gap-0.5 px-1 text-[11px]' : 'flex min-h-10 gap-1 px-2 text-xs sm:text-sm',
+        compact ? 'flex min-h-11 gap-0.5 px-1 text-[11px]' : 'flex min-h-11 gap-1 px-2 text-xs sm:text-sm',
         active ? activeClass : 'border-card-border bg-card text-muted-foreground',
       )}
     >

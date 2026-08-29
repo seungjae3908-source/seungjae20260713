@@ -1,9 +1,10 @@
+import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { analyzeMarket } from "../src/engine.js";
 import { BASELINE_MODEL } from "../src/tiny-model.js";
 import { BitgetPublicClient } from "../src/bitget-public-client.js";
-import { collectBitgetCandles, collectBitgetFuturesContext } from "../src/bitget-candle-collector.js";
+import { BITGET_TIMEFRAME_MS, collectBitgetCandles, collectBitgetFuturesContext } from "../src/bitget-candle-collector.js";
 import { collectFundingRateHistory, createTemporalDerivativesProvider } from "../src/derivatives-history.js";
 import { collectBitgetDerivedCandles, createTemporalMarketStructureProvider } from "../src/market-structure-history.js";
 import {
@@ -21,6 +22,18 @@ import {
   summarizeEthV6ForwardState,
 } from "../src/eth-v6-forward-validation.js";
 import { FROZEN_CANDIDATE_MANIFEST_SHA256 } from "../src/final-holdout-evaluator.js";
+import { predictDeployedTinyModel } from "../src/deployment-inference.js";
+import { buildCanonicalShadowDriftPolicyV1 } from "../src/canonical-shadow-drift-policy-v1.js";
+import {
+  buildCanonicalShadowDriftHandoffV1,
+  buildFutureShadowObservationV1,
+  buildFutureShadowSettlementEvidenceV1,
+  buildNormalizedFeatureSnapshotV1,
+  resolveModelIdentityMappingV1,
+  resolveProducerStrategyIdentityV1,
+  resolveTrainValidationReferenceV1,
+  settleFutureShadowObservationV1,
+} from "../src/shadow-evidence-handoff-v1.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const ETH_V6_LOOKBACK_DAYS = 120;
@@ -34,6 +47,14 @@ async function readJsonOptional(filePath, fallback) {
   try { return JSON.parse(await readFile(filePath, "utf8")); }
   catch (error) {
     if (error?.code === "ENOENT") return fallback;
+    throw error;
+  }
+}
+
+async function readBytesOptional(filePath) {
+  try { return await readFile(filePath); }
+  catch (error) {
+    if (error?.code === "ENOENT") return null;
     throw error;
   }
 }
@@ -52,6 +73,165 @@ function serializeError(error) {
     details: error?.details ?? null,
     stack: typeof error?.stack === "string" ? error.stack.split("\n").slice(0, 10) : [],
   };
+}
+
+async function loadCanonicalEvidenceContext(referenceEvidenceRoot, group, cycleTime) {
+  if (!referenceEvidenceRoot) return Object.freeze({ valid: false, status: "MISSING_EVIDENCE", reason: "PRODUCER_REFERENCE_ROOT_NOT_PROVIDED" });
+  const packageRoot = resolve(referenceEvidenceRoot, group);
+  const [manifestBytes, exactModelBytes, trainReferenceBytes, validationReferenceBytes] = await Promise.all([
+    readBytesOptional(resolve(packageRoot, "reference-manifest.json")),
+    readBytesOptional(resolve(packageRoot, "model/exact-model.json")),
+    readBytesOptional(resolve(packageRoot, "records/train.jsonl")),
+    readBytesOptional(resolve(packageRoot, "records/validation.jsonl")),
+  ]);
+  if (!manifestBytes || !exactModelBytes || !trainReferenceBytes || !validationReferenceBytes) {
+    return Object.freeze({ valid: false, status: "MISSING_EVIDENCE", reason: "PRODUCER_REFERENCE_PACKAGE_INCOMPLETE" });
+  }
+  let producerManifest;
+  try { producerManifest = JSON.parse(manifestBytes.toString("utf8")); }
+  catch { return Object.freeze({ valid: false, status: "IDENTITY_MISMATCH", reason: "PRODUCER_MANIFEST_MALFORMED" }); }
+  const strategyResolution = resolveProducerStrategyIdentityV1(producerManifest);
+  if (!strategyResolution.valid) return Object.freeze({ valid: false, status: strategyResolution.status, reason: strategyResolution.reason });
+  const modelResolution = resolveModelIdentityMappingV1({ producerManifest, exactModelBytes, strategyResolution });
+  if (!modelResolution.valid) return Object.freeze({ valid: false, status: modelResolution.status, reason: modelResolution.reason });
+  const asOf = new Date(cycleTime).toISOString();
+  const referenceResolution = resolveTrainValidationReferenceV1({ producerManifest, trainReferenceBytes, validationReferenceBytes, asOf });
+  if (!referenceResolution.valid) return Object.freeze({ valid: false, status: referenceResolution.status, reason: referenceResolution.reason });
+  const policyResolution = buildCanonicalShadowDriftPolicyV1({
+    producerManifest,
+    strategyResolution,
+    modelResolution,
+    referenceResolution,
+  });
+  return Object.freeze({
+    valid: true,
+    producerManifest,
+    exactModelBytes,
+    trainReferenceBytes,
+    validationReferenceBytes,
+    strategyResolution,
+    modelResolution,
+    referenceResolution,
+    policyResolution,
+    asOf,
+  });
+}
+
+function canonicalObservationId(context, config, symbol, anchorTimestamp) {
+  return createHash("sha256").update([
+    context.strategyResolution.strategyIdentityDigest,
+    context.modelResolution.modelIdentityDigest,
+    config.group,
+    symbol,
+    config.timeframe,
+    anchorTimestamp,
+    config.horizon,
+  ].join("|")).digest("hex");
+}
+
+function settleCanonicalObservations(observations, records, candlesBySymbol) {
+  const settledByAnchor = new Map(records.filter((record) => record.status === "settled")
+    .map((record) => [`${record.symbol}|${record.timeframe}|${record.anchorTimestamp}|${record.horizon}`, record]));
+  return observations.map((observation) => {
+    const source = observation.sourceProvenance;
+    const record = settledByAnchor.get(`${observation.symbol}|${observation.timeframe}|${source.anchorTimestamp}|${source.horizon}`);
+    if (!record || observation.settlementStatus === "SETTLED") return observation;
+    const futureCandles = (candlesBySymbol[record.symbol] ?? [])
+      .filter((candle) => candle.timestamp > record.anchorTimestamp)
+      .slice(0, record.horizon);
+    if (futureCandles.length !== record.horizon) return observation;
+    const intervalMs = BITGET_TIMEFRAME_MS[record.timeframe];
+    const settlement = buildFutureShadowSettlementEvidenceV1({
+      observation,
+      actualDirection: record.actualDirection,
+      settlementPrice: futureCandles.at(-1).close,
+      futureCandles,
+      horizonBars: record.horizon,
+      outcomeAt: new Date(record.futureEndTimestamp + intervalMs).toISOString(),
+      settledAt: new Date(record.evaluatedAt).toISOString(),
+      costEvidence: {
+        applicable: false,
+        reason: "SHADOW_NO_EXECUTION",
+        commission: null,
+        slippage: null,
+        funding: null,
+        netReturn: null,
+      },
+      sourceProvenance: {
+        sourceKind: "GENUINE_FUTURE_SHADOW_OUTCOME",
+        provider: "bitget-public-v2",
+        firstCandleTimestamp: futureCandles[0].timestamp,
+        lastCandleTimestamp: futureCandles.at(-1).timestamp,
+        capturedAfterObservation: true,
+        reconstructed: false,
+        synthetic: false,
+        replayed: false,
+        historicalBackfill: false,
+      },
+    });
+    return settleFutureShadowObservationV1(observation, settlement);
+  });
+}
+
+function runtimeCounters(previousCanonical, {
+  rawRecordCount,
+  observations,
+  duplicateEvents,
+  replayEvents,
+} = {}) {
+  const previous = previousCanonical?.runtimeCounters ?? {};
+  return Object.freeze({
+    RAW_RECORD_COUNT: (Number(previous.RAW_RECORD_COUNT) || previousCanonical?.observations?.length || 0) + rawRecordCount,
+    UNIQUE_GENUINE_OBSERVATION_COUNT: observations.length,
+    UNIQUE_SETTLEMENT_COUNT: observations.filter((observation) => observation.settlementStatus === "SETTLED").length,
+    DUPLICATE_COUNT: (Number(previous.DUPLICATE_COUNT) || 0) + duplicateEvents.length,
+    REPLAY_COUNT: (Number(previous.REPLAY_COUNT) || 0) + replayEvents.length,
+  });
+}
+
+function firstZeroEvidence({ canonicalContext, canonicalRunError, identityChanged, currentRunAttemptCount, currentRunObservationCount, observations, handoff }) {
+  const settledN = observations.filter((observation) => observation.settlementStatus === "SETTLED").length;
+  const pendingN = observations.filter((observation) => observation.settlementStatus === "PENDING_SETTLEMENT").length;
+  const driftInputN = handoff?.observationEvidence?.driftInputN ?? 0;
+  const funnel = Object.freeze({
+    SIGNAL: currentRunAttemptCount,
+    OBSERVATION: currentRunObservationCount,
+    POSITION: pendingN,
+    SETTLEMENT: settledN,
+    DRIFT: driftInputN,
+    STRATEGY_HEALTH_HANDOFF: handoff?.strategyHealthHandoff ? 1 : 0,
+    STRATEGY_HEALTH: 0,
+  });
+  let stage = null;
+  let reason = null;
+  if (!currentRunAttemptCount) {
+    stage = "SIGNAL";
+    reason = "NO_ELIGIBLE_SIGNAL";
+  } else if (!currentRunObservationCount) {
+    stage = "OBSERVATION";
+    const failureReason = canonicalRunError?.reason ?? canonicalContext?.reason ?? "";
+    reason = failureReason.includes("REFERENCE_EXPIRED") ? "REFERENCE_EXPIRED"
+      : (identityChanged || failureReason.includes("MODEL") || failureReason.includes("IDENTITY_MISMATCH") ? "MODEL_IDENTITY_MISMATCH"
+        : (failureReason.includes("STRATEGY") || canonicalContext?.valid === false ? "STRATEGY_IDENTITY_MISSING"
+          : (canonicalRunError ? "OBSERVATION_WRITE_FAILED" : "DUPLICATE_ONLY")));
+  } else if (!pendingN && !settledN) {
+    stage = "POSITION";
+    reason = "OBSERVATION_WRITE_FAILED";
+  } else if (!settledN) {
+    stage = "SETTLEMENT";
+    reason = "SETTLEMENT_NOT_DUE";
+  } else if (handoff?.driftVerdict?.status === "NOT_EVALUABLE") {
+    stage = "DRIFT";
+    reason = handoff.driftVerdict.reason === "CANONICAL_DRIFT_POLICY_MISSING" ? "DRIFT_POLICY_MISSING" : "INSUFFICIENT_SAMPLE";
+  } else if (!handoff?.strategyHealthHandoff) {
+    stage = "STRATEGY_HEALTH";
+    reason = "STRATEGY_HEALTH_MISSING_EVIDENCE";
+  }
+  return Object.freeze({
+    ...funnel,
+    FIRST_ZERO_STAGE: stage,
+    FIRST_ZERO_REASON: reason,
+  });
 }
 
 async function loadModelSelection(group) {
@@ -104,8 +284,21 @@ function mergeTemporalFeatures(base, structure) {
   });
 }
 
-async function processGroup({ client, config, previousGroupState, cycleTime }) {
+async function processGroup({ client, config, previousGroupState, cycleTime, referenceEvidenceRoot }) {
   const selection = await loadModelSelection(config.group);
+  const canonicalContext = await loadCanonicalEvidenceContext(referenceEvidenceRoot, config.group, cycleTime);
+  const previousCanonical = previousGroupState?.canonicalEvidence ?? null;
+  const identityChanged = canonicalContext.valid && previousCanonical?.strategyIdentityDigest
+    && (previousCanonical.strategyIdentityDigest !== canonicalContext.strategyResolution.strategyIdentityDigest
+      || previousCanonical.modelIdentityDigest !== canonicalContext.modelResolution.modelIdentityDigest);
+  let canonicalObservations = identityChanged
+    ? []
+    : [...(previousCanonical?.observations ?? [])];
+  let canonicalRunError = null;
+  let canonicalAttemptCount = 0;
+  let canonicalNewObservationCount = 0;
+  const duplicateEvents = [];
+  const replayEvents = [];
   let groupState = {
     schemaVersion: 2,
     createdAt: previousGroupState?.createdAt ?? cycleTime,
@@ -205,7 +398,176 @@ async function processGroup({ client, config, previousGroupState, cycleTime }) {
     if (!groupState.records.some((existing) => existing.id === record.id)) {
       groupState = upsertShadowPrediction(groupState, record);
     }
+    canonicalAttemptCount += 1;
+    if (canonicalContext.valid && !identityChanged) {
+      const observationId = canonicalObservationId(canonicalContext, config, symbol, anchor.timestamp);
+      if (canonicalObservations.some((observation) => observation.observationId === observationId)) {
+        duplicateEvents.push({
+          observationId,
+          strategyIdentityDigest: canonicalContext.strategyResolution.strategyIdentityDigest,
+          symbol,
+          timeframe: config.timeframe,
+          signalAt: new Date(anchor.timestamp + BITGET_TIMEFRAME_MS[config.timeframe]).toISOString(),
+          detectedAt: new Date(cycleTime).toISOString(),
+          reason: "DETERMINISTIC_OBSERVATION_ID_DUPLICATE",
+          credit: 0,
+        });
+      } else {
+        try {
+          const exactInference = predictDeployedTinyModel({
+            features: candidate.features,
+            ruleScore: candidate.ruleScore,
+          }, canonicalContext.modelResolution.exactModel);
+          const rawFeatureSnapshot = Object.fromEntries(canonicalContext.modelResolution.exactModel.featureOrder
+            .map((name) => [name, candidate.features[name]]));
+          const normalizedFeatureSnapshot = buildNormalizedFeatureSnapshotV1({
+            rawFeatureSnapshot,
+            exactModel: canonicalContext.modelResolution.exactModel,
+          });
+          canonicalObservations.push(buildFutureShadowObservationV1({
+            observationId,
+            observedAt: new Date(cycleTime).toISOString(),
+            signalAt: new Date(anchor.timestamp + BITGET_TIMEFRAME_MS[config.timeframe]).toISOString(),
+            symbol,
+            market: canonicalContext.strategyResolution.strategyIdentity.market,
+            timeframe: canonicalContext.strategyResolution.strategyIdentity.timeframe,
+            direction: canonicalContext.strategyResolution.strategyIdentity.direction,
+            strategyIdentity: canonicalContext.strategyResolution.strategyIdentity,
+            strategyIdentityDigest: canonicalContext.strategyResolution.strategyIdentityDigest,
+            modelIdentity: canonicalContext.modelResolution.modelIdentity,
+            modelIdentityDigest: canonicalContext.modelResolution.modelIdentityDigest,
+            referenceIdentity: canonicalContext.referenceResolution.referenceIdentity,
+            regime: record.regime,
+            rawFeatureSnapshot,
+            normalizedFeatureSnapshot,
+            inference: exactInference,
+            referencePrice: anchor.close,
+            priceProvenance: {
+              provider: "bitget-public-v2",
+              source: commonInput.source,
+              priceField: "close",
+              candleTimestamp: anchor.timestamp,
+              signalAt: new Date(anchor.timestamp + BITGET_TIMEFRAME_MS[config.timeframe]).toISOString(),
+            },
+            dataFreshness: {
+              status: "FRESH",
+              ageMs: cycleTime - (anchor.timestamp + BITGET_TIMEFRAME_MS[config.timeframe]),
+              maxAgeMs: BITGET_TIMEFRAME_MS[config.timeframe] * 3,
+            },
+            sourceProvenance: {
+              sourceKind: "GENUINE_SHADOW_OBSERVATION",
+              provider: "bitget-public-v2",
+              source: commonInput.source,
+              anchorTimestamp: anchor.timestamp,
+              signalTimestamp: anchor.timestamp + BITGET_TIMEFRAME_MS[config.timeframe],
+              horizon: config.horizon,
+              capturedAtObservationTime: true,
+              reconstructed: false,
+              synthetic: false,
+              replayed: false,
+              historicalBackfill: false,
+            },
+          }));
+          canonicalNewObservationCount += 1;
+        } catch (error) {
+          canonicalRunError = { status: "MISSING_EVIDENCE", reason: `GENUINE_SHADOW_OBSERVATION_REJECTED:${error.message}` };
+        }
+      }
+    }
   }
+
+  canonicalObservations = settleCanonicalObservations(canonicalObservations, groupState.records, candlesBySymbol).slice(-10000);
+  let canonicalEvidence;
+  if (!canonicalContext.valid || canonicalRunError) {
+    const failure = canonicalRunError ?? canonicalContext;
+    canonicalEvidence = {
+      ...(previousCanonical ?? {}),
+      schemaVersion: "prediction-lab-shadow-runtime-evidence-v1",
+      runtimeStatus: failure.status,
+      runtimeReason: failure.reason,
+      currentRunCredited: false,
+      currentRunAttemptCount: canonicalAttemptCount,
+      currentRunObservationCount: canonicalNewObservationCount,
+      lastAttemptAt: new Date(cycleTime).toISOString(),
+      observations: canonicalObservations,
+      rejectedCredits: [
+        ...(previousCanonical?.rejectedCredits ?? []),
+        ...duplicateEvents,
+        ...replayEvents,
+      ].slice(-1000),
+      runtimeCounters: runtimeCounters(previousCanonical, {
+        rawRecordCount: canonicalAttemptCount,
+        observations: canonicalObservations,
+        duplicateEvents,
+        replayEvents,
+      }),
+      PROFITABILITY_PROVEN: false,
+      FORWARD_EVIDENCE_SUFFICIENT: false,
+    };
+  } else if (identityChanged) {
+    canonicalEvidence = {
+      ...(previousCanonical ?? {}),
+      schemaVersion: "prediction-lab-shadow-runtime-evidence-v1",
+      runtimeStatus: "IDENTITY_MISMATCH",
+      runtimeReason: "PREDECESSOR_CANONICAL_IDENTITY_MISMATCH",
+      currentRunCredited: false,
+      currentRunAttemptCount: canonicalAttemptCount,
+      currentRunObservationCount: 0,
+      lastAttemptAt: new Date(cycleTime).toISOString(),
+      observations: previousCanonical?.observations ?? [],
+      runtimeCounters: previousCanonical?.runtimeCounters ?? null,
+      PROFITABILITY_PROVEN: false,
+      FORWARD_EVIDENCE_SUFFICIENT: false,
+    };
+  } else {
+    const handoff = buildCanonicalShadowDriftHandoffV1({
+      producerManifest: canonicalContext.producerManifest,
+      exactModelBytes: canonicalContext.exactModelBytes,
+      trainReferenceBytes: canonicalContext.trainReferenceBytes,
+      validationReferenceBytes: canonicalContext.validationReferenceBytes,
+      observations: canonicalObservations,
+      expectedStrategyInput: canonicalContext.strategyResolution.strategyIdentity,
+      expectedModelIdentity: canonicalContext.modelResolution.modelIdentity,
+      canonicalDriftPolicy: canonicalContext.policyResolution.valid ? canonicalContext.policyResolution.policy : null,
+      asOf: canonicalContext.asOf,
+    });
+    canonicalEvidence = {
+      schemaVersion: "prediction-lab-shadow-runtime-evidence-v1",
+      runtimeStatus: handoff.status,
+      runtimeReason: handoff.reason,
+      currentRunCredited: canonicalNewObservationCount > 0 && handoff.observationEvidence?.futureOnly === true,
+      currentRunAttemptCount: canonicalAttemptCount,
+      currentRunObservationCount: canonicalNewObservationCount,
+      lastAttemptAt: new Date(cycleTime).toISOString(),
+      strategyIdentityDigest: canonicalContext.strategyResolution.strategyIdentityDigest,
+      modelIdentityDigest: canonicalContext.modelResolution.modelIdentityDigest,
+      observations: canonicalObservations,
+      rejectedCredits: [
+        ...(previousCanonical?.rejectedCredits ?? []),
+        ...duplicateEvents,
+        ...replayEvents,
+      ].slice(-1000),
+      runtimeCounters: runtimeCounters(previousCanonical, {
+        rawRecordCount: canonicalAttemptCount,
+        observations: canonicalObservations,
+        duplicateEvents,
+        replayEvents,
+      }),
+      handoff,
+      PROFITABILITY_PROVEN: false,
+      FORWARD_EVIDENCE_SUFFICIENT: false,
+    };
+  }
+  canonicalEvidence.firstZero = firstZeroEvidence({
+    canonicalContext,
+    canonicalRunError,
+    identityChanged,
+    currentRunAttemptCount: canonicalAttemptCount,
+    currentRunObservationCount: canonicalNewObservationCount,
+    observations: canonicalEvidence.observations ?? canonicalObservations,
+    handoff: canonicalEvidence.handoff ?? null,
+  });
+  groupState = { ...groupState, canonicalEvidence };
 
   const summary = summarizeShadowState(groupState, {
     modelId: selection.candidate.id,
@@ -224,6 +586,20 @@ async function processGroup({ client, config, previousGroupState, cycleTime }) {
         requiresMarketStructure: selection.requiresMarketStructure,
       },
       contexts: contextBySymbol,
+      canonicalEvidence: {
+        runtimeStatus: canonicalEvidence.runtimeStatus,
+        runtimeReason: canonicalEvidence.runtimeReason,
+        currentRunCredited: canonicalEvidence.currentRunCredited,
+        currentRunAttemptCount: canonicalEvidence.currentRunAttemptCount ?? 0,
+        currentRunObservationCount: canonicalEvidence.currentRunObservationCount ?? 0,
+        observationCount: canonicalEvidence.observations?.length ?? 0,
+        settledObservationCount: canonicalEvidence.observations?.filter((observation) => observation.actualDirection).length ?? 0,
+        runtimeCounters: canonicalEvidence.runtimeCounters ?? null,
+        firstZero: canonicalEvidence.firstZero ?? null,
+        strategyHealthHandoff: canonicalEvidence.handoff?.strategyHealthHandoff ?? null,
+        PROFITABILITY_PROVEN: false,
+        FORWARD_EVIDENCE_SUFFICIENT: false,
+      },
     },
   };
 }
@@ -301,6 +677,7 @@ async function processEthV6Forward({ client, previousForwardState, cycleTime }) 
 
 const statePath = resolve(process.argv[2] ?? "docs/shadow-state.json");
 const summaryPath = resolve(process.argv[3] ?? "docs/shadow-summary.json");
+const referenceEvidenceRoot = process.argv[4] ? resolve(process.argv[4]) : null;
 const cycleTime = Date.now();
 const previous = await readJsonOptional(statePath, { schemaVersion: 3, createdAt: cycleTime, groups: {}, forwardStrategies: {} });
 const client = new BitgetPublicClient({ minIntervalMs: 180, maxRetries: 4, timeoutMs: 12_000 });
@@ -335,6 +712,7 @@ for (const config of GROUPS) {
       config,
       previousGroupState: previous.groups?.[config.group],
       cycleTime,
+      referenceEvidenceRoot,
     });
     nextState.groups[config.group] = result.state;
     nextSummary.groups[config.group] = { status: "pass", ...result.summary };
@@ -344,6 +722,33 @@ for (const config of GROUPS) {
     nextSummary.status = "fail";
   }
 }
+
+const canonicalGroupSummaries = Object.values(nextSummary.groups)
+  .map((group) => group?.canonicalEvidence)
+  .filter(Boolean);
+const counterNames = ["RAW_RECORD_COUNT", "UNIQUE_GENUINE_OBSERVATION_COUNT", "UNIQUE_SETTLEMENT_COUNT", "DUPLICATE_COUNT", "REPLAY_COUNT"];
+const aggregateCounters = Object.fromEntries(counterNames.map((name) => [name, canonicalGroupSummaries
+  .reduce((sum, group) => sum + (Number(group.runtimeCounters?.[name]) || 0), 0)]));
+const aggregateFunnel = Object.fromEntries(["SIGNAL", "OBSERVATION", "POSITION", "SETTLEMENT", "DRIFT", "STRATEGY_HEALTH_HANDOFF", "STRATEGY_HEALTH"]
+  .map((name) => [name, canonicalGroupSummaries.reduce((sum, group) => sum + (Number(group.firstZero?.[name]) || 0), 0)]));
+const firstZeroOrder = ["SIGNAL", "OBSERVATION", "POSITION", "SETTLEMENT", "DRIFT", "STRATEGY_HEALTH"];
+const firstZeroStage = firstZeroOrder.find((name) => aggregateFunnel[name] === 0) ?? null;
+const firstZeroReason = firstZeroStage
+  ? (canonicalGroupSummaries.find((group) => group.firstZero?.FIRST_ZERO_STAGE === firstZeroStage)?.firstZero?.FIRST_ZERO_REASON
+    ?? (firstZeroStage === "SETTLEMENT" ? "SETTLEMENT_NOT_DUE" : "INSUFFICIENT_SAMPLE"))
+  : null;
+nextSummary.canonicalEvidence = {
+  ...aggregateCounters,
+  ...aggregateFunnel,
+  FIRST_ZERO_STAGE: firstZeroStage,
+  FIRST_ZERO_REASON: firstZeroReason,
+  duplicateCredit: 0,
+  replayCredit: 0,
+  syntheticCredit: 0,
+  historicalBackfillCredit: 0,
+  PROFITABILITY_PROVEN: false,
+  FORWARD_EVIDENCE_SUFFICIENT: false,
+};
 
 try {
   const forward = await processEthV6Forward({

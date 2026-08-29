@@ -108,11 +108,10 @@ function reportDetails(kind: TelegramIntelligenceReportKind, localDate: string):
 }
 
 export function telegramDestinationChatId(destination: TelegramReportDestination): string | null {
-  const fallback = process.env.TELEGRAM_CHAT_ID?.trim() || null;
   switch (destination) {
-    case 'STOCK_ROOM': return process.env.TELEGRAM_STOCK_CHAT_ID?.trim() || fallback;
-    case 'CRYPTO_ROOM': return process.env.TELEGRAM_CRYPTO_CHAT_ID?.trim() || fallback;
-    case 'PERSONAL': return process.env.TELEGRAM_PERSONAL_CHAT_ID?.trim() || fallback;
+    case 'STOCK_ROOM': return process.env.TELEGRAM_STOCK_CHAT_ID?.trim() || null;
+    case 'CRYPTO_ROOM': return process.env.TELEGRAM_CRYPTO_CHAT_ID?.trim() || null;
+    case 'PERSONAL': return process.env.TELEGRAM_PERSONAL_CHAT_ID?.trim() || null;
   }
 }
 
@@ -259,8 +258,12 @@ export function startTelegramIntelligenceWorker(): TelegramIntelligenceWorkerCon
     console.log('[telegram-intelligence-worker] disabled; LIVE_TELEGRAM_ACTIVATION_APPROVED=true is required');
     return null;
   }
-  if (!process.env.TELEGRAM_BOT_TOKEN?.trim() || !process.env.TELEGRAM_CHAT_ID?.trim()) {
-    console.log('[telegram-intelligence-worker] disabled; Telegram bot token and default chat are required');
+  if (!process.env.TELEGRAM_BOT_TOKEN?.trim()) {
+    console.log('[telegram-intelligence-worker] disabled; Telegram bot token is required');
+    return null;
+  }
+  if (!process.env.TELEGRAM_STOCK_CHAT_ID?.trim() || !process.env.TELEGRAM_CRYPTO_CHAT_ID?.trim()) {
+    console.log('[telegram-intelligence-worker] disabled; dedicated stock and crypto Telegram rooms are required');
     return null;
   }
 

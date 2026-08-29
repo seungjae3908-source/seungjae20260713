@@ -43,6 +43,7 @@ const groups = {
     path.join(repositoryRoot, 'stock-analyzer/src/lib/paper-journal-batching-phase8.test.ts'),
   ],
   phase9: [
+    path.join(root, 'src/services/strategy-health-research-adapter.service.test.ts'),
     path.join(root, 'src/services/trading-ai-review-phase9.test.ts'),
     path.join(root, 'src/routes/paper-journal-ai-preview-privileges.test.ts'),
     path.join(root, 'src/services/ai-chat.service.test.ts'),
@@ -118,6 +119,7 @@ const groups = {
     path.join(root, 'src/services/market-information.service.test.ts'),
     path.join(root, 'src/services/public-market-http.test.ts'),
     path.join(root, 'src/lib/deployment-identity.test.ts'),
+    path.join(root, 'src/lib/frontend-static-cache.test.ts'),
     path.join(root, 'src/kiwoom-chart-window.test.ts'),
     path.join(root, 'src/features/user-broker-telegram/user-broker-telegram.service.test.ts'),
     path.join(root, 'src/features/user-broker-telegram/trade-execution-event-bridge.service.test.ts'),
