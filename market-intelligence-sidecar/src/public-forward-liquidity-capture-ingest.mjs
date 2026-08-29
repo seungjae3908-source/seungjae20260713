@@ -45,6 +45,12 @@ function integer(value, code) {
   return parsed;
 }
 
+function positiveFinite(value, code) {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!(Number.isFinite(parsed) && parsed > 0)) throw new Error(code);
+  return parsed;
+}
+
 function decimalId(value, code) {
   const normalized = text(value, code);
   if (!DECIMAL_ID.test(normalized)) throw new Error(code);
@@ -125,6 +131,42 @@ async function proveCollectorImplementationBlobSha({ researchRepoRoot, exactMain
     if (String(error?.message ?? '').startsWith('COLLECTOR_IMPLEMENTATION_')) throw error;
     throw new Error('COLLECTOR_IMPLEMENTATION_BLOB_UNPROVEN');
   }
+}
+
+export function validatePublicForwardLiquidityObservationIdentity(observation) {
+  const rawSourceProvenance = object(
+    observation?.rawSourceProvenance,
+    'OBSERVATION_RAW_SOURCE_PROVENANCE_INVALID',
+  );
+  const publicTrade = object(
+    rawSourceProvenance.publicTrade,
+    'OBSERVATION_PUBLIC_TRADE_PROVENANCE_INVALID',
+  );
+  const aggressiveSide = text(observation.aggressiveSide, 'OBSERVATION_AGGRESSIVE_SIDE_INVALID');
+  if (!['BUY', 'SELL'].includes(aggressiveSide)) throw new Error('OBSERVATION_AGGRESSIVE_SIDE_INVALID');
+  const identityInput = {
+    contract: PUBLIC_LIQUIDITY_CALIBRATION_CONTRACT,
+    publicDataSource: text(observation.publicDataSource, 'OBSERVATION_PUBLIC_SOURCE_INVALID'),
+    market: text(observation.market, 'OBSERVATION_MARKET_INVALID'),
+    symbol: text(observation.symbol, 'OBSERVATION_SYMBOL_INVALID'),
+    publicExecutionId: text(publicTrade.publicExecutionId, 'OBSERVATION_PUBLIC_EXECUTION_ID_INVALID'),
+    eventTimestampMs: positiveFinite(observation.eventTimestampMs, 'OBSERVATION_EVENT_TIMESTAMP_INVALID'),
+    preEventBookDigest: exactDigest(observation.preEventBookDigest, 'OBSERVATION_PRE_EVENT_BOOK_DIGEST_INVALID'),
+  };
+  const expectedObservationId = `liquidity-observation:${sha256(canonicalJson(identityInput))}`;
+  if (observation.observationId !== expectedObservationId) throw new Error('OBSERVATION_ID_MISMATCH');
+
+  const expectedSourceDigest = sha256(canonicalJson({
+    identityInput,
+    aggressiveSide,
+    price: positiveFinite(observation.publicExecutionPrice, 'OBSERVATION_EXECUTION_PRICE_INVALID'),
+    quantity: positiveFinite(observation.tradeFlowQuantity, 'OBSERVATION_TRADE_FLOW_QUANTITY_INVALID'),
+    rawSourceProvenance,
+  }));
+  if (exactDigest(observation.sourceDigest, 'OBSERVATION_SOURCE_DIGEST_INVALID') !== expectedSourceDigest) {
+    throw new Error('OBSERVATION_SOURCE_DIGEST_MISMATCH');
+  }
+  return Object.freeze({ observationId: expectedObservationId, sourceDigest: expectedSourceDigest });
 }
 
 function assertCaptureTruthBoundary(receipt) {
@@ -218,7 +260,7 @@ function validateRawBatch(rawBatch, expectedMainSha, capture) {
       || observation.paperOrderSourceAllowed !== false) {
       throw new Error('OBSERVATION_AUTHORITY_INVALID');
     }
-    exactDigest(observation.sourceDigest, 'OBSERVATION_SOURCE_DIGEST_INVALID');
+    validatePublicForwardLiquidityObservationIdentity(observation);
   }
 
   const rawBatchDigest = sha256(canonicalJson(batch));
@@ -313,6 +355,9 @@ export async function ingestPublicForwardLiquidityCapture({
   if (!datasetRelativePath || isAbsolute(datasetRelativePath) || datasetRelativePath.startsWith(`..${sep}`) || datasetRelativePath === '..') {
     throw new Error('DATASET_PATH_ESCAPED_STATE_ROOT');
   }
+  const batchObservationIds = Object.freeze(batch.observations.map((observation) => observation.observationId).sort());
+  const batchObservationsForDigest = [...batch.observations]
+    .sort((left, right) => left.observationId.localeCompare(right.observationId));
 
   const body = Object.freeze({
     schemaVersion: PUBLIC_FORWARD_LIQUIDITY_CAPTURE_INGEST_RECEIPT_VERSION,
@@ -326,12 +371,20 @@ export async function ingestPublicForwardLiquidityCapture({
     captureRunId,
     captureRunAttempt,
     rawBatchDigest,
+    batchObservationIds,
+    batchObservationCount: batch.observations.length,
+    batchObservationDigest: sha256(canonicalJson(batchObservationsForDigest)),
+    batchDatasetProvenanceDigest: sha256(canonicalJson(batch.datasetProvenance)),
+    batchProvenanceIndex: persisted.dataset.batchProvenance.length - 1,
     captureArtifactReceiptDigest,
     artifactId,
     artifactDigest,
     predecessorDatasetDigest: persisted.dataset.predecessorDigest ?? null,
     datasetDigest: persisted.dataset.datasetDigest,
     datasetRelativePath,
+    datasetObservationCount: persisted.dataset.observations.length,
+    datasetBatchProvenanceCount: persisted.dataset.batchProvenance.length,
+    datasetDuplicateAttemptCount: persisted.dataset.duplicateAttempts.length,
     insertedObservationCount: persisted.insertedObservationCount,
     duplicateObservationCount: persisted.duplicateObservationCount,
     rawIngestObservationDelta: persisted.insertedObservationCount,
