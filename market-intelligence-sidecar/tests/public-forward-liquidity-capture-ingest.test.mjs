@@ -9,6 +9,7 @@ import {
   normalizeBitgetPublicTradesFrame,
 } from '../src/public-data.mjs';
 import {
+  PUBLIC_LIQUIDITY_CALIBRATION_STORE_CONTRACT,
   buildPublicLiquidityObservationBatch,
   canonicalJson,
   sha256,
@@ -180,6 +181,10 @@ test('ingests immutable #795-style capture into the existing #776 canonical data
       artifactReceipt: artifact,
     });
     assert.equal(result.schemaVersion, PUBLIC_FORWARD_LIQUIDITY_CAPTURE_INGEST_RECEIPT_VERSION);
+    assert.equal(result.collectorCodeSha, MAIN_SHA);
+    assert.equal(result.sampleClass, 'FORWARD_NATURAL_SAMPLE');
+    assert.equal(result.storeContract, PUBLIC_LIQUIDITY_CALIBRATION_STORE_CONTRACT);
+    assert.equal(result.predecessorDatasetDigest, null);
     assert.equal(result.insertedObservationCount, 1);
     assert.equal(result.duplicateObservationCount, 0);
     assert.equal(result.rawIngestObservationDelta, 1);
@@ -198,14 +203,16 @@ test('ingests immutable #795-style capture into the existing #776 canonical data
     assert.equal(result.naturalEntryCredit, 0);
     assert.equal(result.runtimeCostCredit, 0);
     assert.equal(result.executionAuthority, 'NONE');
+    assert.match(result.datasetDigest, /^[a-f0-9]{64}$/u);
     assert.match(result.receiptDigest, /^[a-f0-9]{64}$/u);
     const stored = JSON.parse(await readFile(join(stateRoot, result.datasetRelativePath), 'utf8'));
     assert.equal(stored.observations.length, 1);
+    assert.equal(stored.datasetDigest, result.datasetDigest);
     assert.deepEqual(verifyLiquidityCalibrationDataset(stored), { valid: true, reason: null });
   });
 });
 
-test('re-ingesting the same immutable capture gives zero raw insert and zero independent sample credit', async () => {
+test('re-ingesting the same immutable capture binds the predecessor dataset while keeping sample credit zero', async () => {
   await withRoots(async ({ stateRoot, researchRepoRoot }) => {
     const rawBatch = validBatch();
     const capture = captureReceipt(rawBatch);
@@ -223,9 +230,14 @@ test('re-ingesting the same immutable capture gives zero raw insert and zero ind
     };
     const first = await ingestPublicForwardLiquidityCapture(input);
     const second = await ingestPublicForwardLiquidityCapture(input);
+    assert.equal(first.predecessorDatasetDigest, null);
     assert.equal(first.insertedObservationCount, 1);
     assert.equal(first.rawIngestObservationDelta, 1);
     assert.equal(first.forwardCalibrationSampleCreditDelta, 0);
+    assert.equal(second.predecessorDatasetDigest, first.datasetDigest);
+    assert.equal(second.storeContract, PUBLIC_LIQUIDITY_CALIBRATION_STORE_CONTRACT);
+    assert.equal(second.sampleClass, 'FORWARD_NATURAL_SAMPLE');
+    assert.equal(second.collectorCodeSha, MAIN_SHA);
     assert.equal(second.insertedObservationCount, 0);
     assert.equal(second.rawIngestObservationDelta, 0);
     assert.equal(second.duplicateObservationCount, 1);
@@ -234,6 +246,7 @@ test('re-ingesting the same immutable capture gives zero raw insert and zero ind
     assert.equal(second.effectiveIndependentCalibrationN, null);
     assert.notEqual(first.datasetDigest, second.datasetDigest);
     const stored = JSON.parse(await readFile(join(stateRoot, second.datasetRelativePath), 'utf8'));
+    assert.equal(stored.predecessorDigest, first.datasetDigest);
     assert.equal(stored.observations.length, 1);
     assert.equal(stored.duplicateAttempts.length, 1);
   });
