@@ -6,6 +6,7 @@ import hmac
 import importlib.util
 import json
 import sqlite3
+import sys
 import tempfile
 import time
 import unittest
@@ -16,6 +17,7 @@ MODULE_PATH = Path(__file__).resolve().parents[1] / "realtime_controller.py"
 SPEC = importlib.util.spec_from_file_location("realtime_controller_v1", MODULE_PATH)
 assert SPEC and SPEC.loader
 rc = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = rc
 SPEC.loader.exec_module(rc)
 
 REPOSITORY = "seungjae3908-source/seungjae20260713"
