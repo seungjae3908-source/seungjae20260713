@@ -305,21 +305,22 @@ export function evaluateMarketIntelligence(input = {}) {
   const portfolioSafety = evaluatePortfolioSafety({ now, ...(input.portfolioSafety ?? {}) }, input.portfolioSafetyPolicy);
   const currentTopDepthNotional = book.mid == null ? null : (book.bidQty + book.askQty) * book.mid;
   const regimeBrain = evaluateRegimeBrain({
+    ...(input.regimeBrain ?? {}),
     now,
     market,
     asOf: input.regimeBrain?.asOf ?? asOf,
     spreadBps: input.regimeBrain?.spreadBps ?? book.spreadBps,
     topDepthNotional: input.regimeBrain?.topDepthNotional ?? currentTopDepthNotional,
-    ...(input.regimeBrain ?? {}),
   }, input.regimeBrainPolicy);
   const netAlpha = evaluateNetAlpha({
+    ...(input.netAlpha ?? {}),
     now,
     market,
     attestedNetEdgeBps: input.netAlpha?.attestedNetEdgeBps ?? finite(validation.expectedNetEdgeBps),
     conformalLowerEdgeBps: input.netAlpha?.conformalLowerEdgeBps ?? advancedGates?.uncertainty?.lowerBps,
-    ...(input.netAlpha ?? {}),
   }, input.netAlphaPolicy);
   const dynamicSizing = evaluateDynamicBetSizing({
+    ...(input.dynamicSizing ?? {}),
     now,
     market,
     direction: input.direction,
@@ -328,7 +329,6 @@ export function evaluateMarketIntelligence(input = {}) {
     advancedGates,
     executionQuality,
     portfolioSafety,
-    ...(input.dynamicSizing ?? {}),
   }, input.dynamicSizingPolicy);
 
   let directional = 0;
