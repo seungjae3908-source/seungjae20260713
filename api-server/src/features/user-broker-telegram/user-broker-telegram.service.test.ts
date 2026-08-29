@@ -117,6 +117,20 @@ test('personal Telegram delivery is bounded by the server-resolved membership ma
   assert.equal((await repository.listDeliveries('associate-user')).length, 0);
 });
 
+test('missing membership scope fails closed before Telegram queueing', async () => {
+  const { service, repository } = fixture();
+  await link(service, 'user-a', 'chat-a');
+  const event = manualPortfolioEvent({
+    id: 'missing-membership', userId: 'user-a', symbol: '005930', market: 'KR', quantity: 1, price: 72000,
+  });
+  assert.deepEqual(await service.recordEvent(event), {
+    inserted: true,
+    deliveryQueued: false,
+    skipped: 'MEMBERSHIP_SCOPE',
+  });
+  assert.equal((await repository.listDeliveries('user-a')).length, 0);
+});
+
 test('user A manual event queues only Telegram A and does not re-sync canonical portfolio', async () => {
   const { service, repository, transport, portfolio } = fixture();
   await link(service, 'user-a', 'chat-a');
@@ -124,7 +138,7 @@ test('user A manual event queues only Telegram A and does not re-sync canonical 
   const event = manualPortfolioEvent({
     id: 'manual-a', userId: 'user-a', symbol: '005930', market: 'KR', quantity: 10, price: 72000,
   });
-  const queued = await service.recordEvent(event, new Date('2026-08-12T00:02:00.000Z'));
+  const queued = await service.recordEvent(event, new Date('2026-08-12T00:02:00.000Z'), 'associate');
   assert.equal(queued.deliveryQueued, true);
   assert.equal(portfolio.events.length, 0);
   const deliveriesA = await repository.listDeliveries('user-a');
@@ -142,8 +156,8 @@ test('duplicate execution event is ignored by source-event id and does not dupli
   const event = manualPortfolioEvent({
     id: 'same-source', userId: 'user-a', symbol: 'AAPL', market: 'US', quantity: 1, price: 220,
   });
-  assert.equal((await service.recordEvent(event)).inserted, true);
-  assert.equal((await service.recordEvent({ ...event, id: 'another-id' })).inserted, false);
+  assert.equal((await service.recordEvent(event, new Date(), 'associate')).inserted, true);
+  assert.equal((await service.recordEvent({ ...event, id: 'another-id' }, new Date(), 'associate')).inserted, false);
   assert.equal((await repository.listDeliveries('user-a')).length, 1);
   assert.equal(portfolio.events.length, 0);
 });
@@ -155,7 +169,7 @@ test('Telegram delivery retries are bounded and end in dead letter without chang
   const event = manualPortfolioEvent({
     id: 'retry-source', userId: 'user-a', symbol: 'BTC', market: 'spot', quantity: 0.01, price: 100000000,
   });
-  const queued = await service.recordEvent(event, new Date('2026-08-12T00:00:00.000Z'));
+  const queued = await service.recordEvent(event, new Date('2026-08-12T00:00:00.000Z'), 'associate');
   const deliveryId = queued.deliveryId!;
   assert.equal((await service.processDelivery('user-a', deliveryId, new Date('2026-08-12T00:00:01.000Z'))).state, 'RETRY_SCHEDULED');
   assert.equal((await service.processDelivery('user-a', deliveryId, new Date('2026-08-12T00:01:00.000Z'))).state, 'RETRY_SCHEDULED');
@@ -171,7 +185,7 @@ test('revoked Telegram connection cannot receive a queued event', async () => {
   const event = manualPortfolioEvent({
     id: 'revoke-source', userId: 'user-a', symbol: '005930', market: 'KR', quantity: 1, price: 72000,
   });
-  const queued = await service.recordEvent(event);
+  const queued = await service.recordEvent(event, new Date(), 'associate');
   await service.revokeTelegram('user-a');
   const result = await service.processDelivery('user-a', queued.deliveryId!);
   assert.equal(result.state, 'DEAD_LETTER');
