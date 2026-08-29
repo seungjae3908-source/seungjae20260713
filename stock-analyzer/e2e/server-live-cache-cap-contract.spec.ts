@@ -29,6 +29,28 @@ test('server live-data cache never exceeds its hard capacity and evicts least-re
   expect(cache.size).toBe(3);
 });
 
+test('cache hits refresh recency without extending the original TTL', async () => {
+  let now = 1_000;
+  const cache = new BoundedTtlCache(2, () => now);
+  let loads = 0;
+  const load = async () => {
+    loads += 1;
+    return `value-${loads}`;
+  };
+
+  expect(await cache.getOrLoad('a', 100, load)).toBe('value-1');
+  now = 1_050;
+
+  // A hit may move the entry to the MRU position, but the caller's new TTL
+  // must not replace the original expiry at t=1_100.
+  expect(await cache.getOrLoad('a', 10_000, load)).toBe('value-1');
+  expect(loads).toBe(1);
+
+  now = 1_101;
+  expect(await cache.getOrLoad('a', 10_000, load)).toBe('value-2');
+  expect(loads).toBe(2);
+});
+
 test('expired entries are removed before capacity eviction and failed loaders are never cached', async () => {
   let now = 10_000;
   const cache = new BoundedTtlCache(2, () => now);
