@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { isAbsolute, resolve, sep } from 'node:path';
 
 import type { PublicForwardPartialFillCalibrationObservation } from './public-forward-partial-fill-calibration-collector.service';
 import {
@@ -13,6 +14,7 @@ export const PUBLIC_FORWARD_PARTIAL_FILL_CAPTURE_INGEST_RECEIPT_VERSION = 'publi
 const SHA256 = /^[a-f0-9]{64}$/u;
 const COMMIT_SHA = /^[a-f0-9]{40}$/u;
 const DECIMAL_ID = /^[0-9]+$/u;
+const PROTECTED_APPLICATION_STORAGE = Object.freeze(['/opt/stock-app-data', '/srv/stock-app', '/var/lib/stock-app']);
 
 function canonicalize(value: unknown): unknown {
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
@@ -70,6 +72,29 @@ function verifyReceiptDigest(receipt: Record<string, unknown>, code: string): st
   return digest;
 }
 
+function isInside(parent: string, child: string): boolean {
+  const normalizedParent = resolve(parent) + sep;
+  const normalizedChild = resolve(child) + sep;
+  return normalizedChild.startsWith(normalizedParent);
+}
+
+export function assertPublicForwardPartialFillResearchStateRoot(input: Readonly<{
+  stateRoot: string;
+  researchRepoRoot: string;
+}>): string {
+  if (!isAbsolute(input.stateRoot)) throw new Error('BLOCKED_STORAGE:STATE_ROOT_MUST_BE_ABSOLUTE');
+  if (!isAbsolute(input.researchRepoRoot)) throw new Error('BLOCKED_STORAGE:RESEARCH_REPO_ROOT_MUST_BE_ABSOLUTE');
+  const stateRoot = resolve(input.stateRoot);
+  const researchRepoRoot = resolve(input.researchRepoRoot);
+  if (PROTECTED_APPLICATION_STORAGE.some((protectedRoot) => stateRoot === protectedRoot || isInside(protectedRoot, stateRoot))) {
+    throw new Error('BLOCKED_STORAGE:STATE_ROOT_OVERLAPS_PROTECTED_APPLICATION_STORAGE');
+  }
+  if (isInside(resolve(researchRepoRoot, 'stock-analyzer'), stateRoot)) {
+    throw new Error('BLOCKED_STORAGE:STATE_ROOT_OVERLAPS_PROTECTED_RESEARCH_CHECKOUT');
+  }
+  return stateRoot;
+}
+
 function assertFalseBoundary(receipt: Record<string, unknown>, prefix: string): void {
   if (receipt.durableDatasetPersistencePerformed !== false
     || receipt.canonicalDatasetCreditApplied !== false
@@ -119,6 +144,7 @@ export type PublicForwardPartialFillCaptureIngestResult = Readonly<{
 
 export async function ingestPublicForwardPartialFillCalibrationCapture(input: Readonly<{
   stateRoot: string;
+  researchRepoRoot: string;
   expectedMainSha: string;
   expectedRepository: string;
   expectedArtifactId: string;
@@ -127,6 +153,10 @@ export async function ingestPublicForwardPartialFillCalibrationCapture(input: Re
   artifactReceipt: unknown;
   nowMs?: number;
 }>): Promise<PublicForwardPartialFillCaptureIngestResult> {
+  const safeStateRoot = assertPublicForwardPartialFillResearchStateRoot({
+    stateRoot: input.stateRoot,
+    researchRepoRoot: input.researchRepoRoot,
+  });
   const expectedMainSha = exactSha(input.expectedMainSha, 'EXPECTED_MAIN_SHA_INVALID');
   const expectedRepository = string(input.expectedRepository, 'EXPECTED_REPOSITORY_INVALID');
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(expectedRepository)) throw new Error('EXPECTED_REPOSITORY_INVALID');
@@ -179,7 +209,7 @@ export async function ingestPublicForwardPartialFillCalibrationCapture(input: Re
   const captureArtifactReceiptDigest = verifyReceiptDigest(artifact, 'ARTIFACT_RECEIPT_DIGEST_INVALID');
 
   const persisted = await persistPublicForwardPartialFillCalibrationDataset({
-    stateRoot: input.stateRoot,
+    stateRoot: safeStateRoot,
     storeContract: PUBLIC_FORWARD_PARTIAL_FILL_CALIBRATION_STORE_CONTRACT,
     sampleClass: 'FORWARD_NATURAL_SAMPLE',
     collectorCodeSha: expectedMainSha,
