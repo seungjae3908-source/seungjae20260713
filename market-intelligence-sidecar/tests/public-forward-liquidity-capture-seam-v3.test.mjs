@@ -155,14 +155,16 @@ test('pre-eligibility, rerun, and duplicate attempts are zero-credit', () => {
   assert.equal(duplicate.prospectiveSlotCredit, 0);
 });
 
-test('manual capture reuses the collector but cannot receive V3 scheduled credit', async () => {
+test('manual capture preserves existing symbol scope but cannot receive V3 scheduled credit', async () => {
   const result = await executeCaptureSeam({
     triggerSource: MANUAL_TRIGGER_SOURCE,
     exactMainSha: EXACT_MAIN,
+    symbol: 'ETHUSDT',
     actualRunStartedAtMs: V3_POLICY_BINDING.cohortEligibleAfterMs,
-    collector: async () => validBatch(),
+    collector: async () => validBatch({ symbol: 'ETHUSDT' }),
   });
   assert.equal(result.captureReceipt.triggerSource, MANUAL_TRIGGER_SOURCE);
+  assert.equal(result.captureReceipt.symbol, 'ETHUSDT');
   assert.equal(result.captureReceipt.captureStatus, 'PRESENT');
   assert.equal(result.captureReceipt.prospectiveSlotCredit, 0);
   assert.equal(result.captureReceipt.manualCredit, 0);
@@ -223,7 +225,7 @@ test('provider failure still leaves ATTEMPTED=true and zero credit', async () =>
   assert.equal(result.captureReceipt.prospectiveSlotCredit, 0);
 });
 
-test('private provider or wrong symbol cannot gain scheduled credit', async () => {
+test('private provider or wrong scheduled symbol cannot gain scheduled credit', async () => {
   const [slot0] = buildV3ScheduleEntries();
   const authority = resolveScheduledAuthority({
     scheduleExpression: slot0.cronUtc,
