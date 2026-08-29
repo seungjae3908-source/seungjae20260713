@@ -6,12 +6,20 @@ import {
   PUBLIC_LIQUIDITY_CALIBRATION_STORE_CONTRACT,
 } from './public-forward-liquidity-calibration.mjs';
 import { PUBLIC_FORWARD_LIQUIDITY_SPLIT_AUDIT_VERSION } from './public-forward-liquidity-calibration-split-audit.mjs';
+import {
+  PUBLIC_FORWARD_LIQUIDITY_MULTI_SOURCE_SPLIT_AUDIT_VERSION,
+} from './public-forward-liquidity-multi-source-split-audit.mjs';
 
 export const PUBLIC_FORWARD_LIQUIDITY_OOS_VALIDATION_VERSION =
   'public-forward-liquidity-calibration-oos-validation-v1';
+export const PUBLIC_FORWARD_LIQUIDITY_MULTI_SOURCE_OOS_VALIDATION_VERSION =
+  'public-forward-liquidity-calibration-oos-validation-v2';
 
 export const PUBLIC_FORWARD_LIQUIDITY_OOS_VALIDATION_SAFETY = Object.freeze({
   verifiedFrozenSplitAuditRequired: true,
+  multiSourceLineageRequired: true,
+  syntheticAggregateDatasetAllowed: false,
+  syntheticSingleCollectorAllowed: false,
   exactOosCoverageRequired: true,
   genuinePublicForwardMarketDataRequired: true,
   methodologyFrozenBeforeOosRequired: true,
@@ -40,11 +48,11 @@ function object(value) {
 
 function text(value) {
   const normalized = typeof value === 'string' ? value.trim() : '';
-  return normalized.length > 0 && normalized.length <= 240 ? normalized : null;
+  return normalized.length > 0 && normalized.length <= 320 ? normalized : null;
 }
 
 function exactDigest(value) {
-  const normalized = text(value)?.toLowerCase() ?? null;
+  const normalized = text(value)?.replace(/^sha256:/u, '').toLowerCase() ?? null;
   return normalized && SHA256.test(normalized) ? normalized : null;
 }
 
@@ -81,6 +89,12 @@ function withoutKey(value, omittedKey) {
   return Object.fromEntries(Object.entries(value).filter(([key]) => key !== omittedKey));
 }
 
+function sameArray(left, right) {
+  return Array.isArray(left) && Array.isArray(right)
+    && left.length === right.length
+    && left.every((value, index) => value === right[index]);
+}
+
 export function computePublicForwardLiquidityOosMethodologyDigest(methodology) {
   if (!object(methodology)) throw new TypeError('OOS_METHODOLOGY_REQUIRED');
   return sha256(withoutKey(methodology, 'methodologyDigest'));
@@ -99,17 +113,71 @@ function blocked(blockers) {
   });
 }
 
+function multiSource(audit) {
+  return audit?.schemaVersion === PUBLIC_FORWARD_LIQUIDITY_MULTI_SOURCE_SPLIT_AUDIT_VERSION;
+}
+
+function validateUpstreamSource(source, blockers) {
+  if (!object(source)) {
+    add(blockers, 'UPSTREAM_SOURCE_INVALID');
+    return;
+  }
+  if (!text(source.sourceIdentity)) add(blockers, 'UPSTREAM_SOURCE_IDENTITY_INVALID');
+  if (!exactCommitSha(source.producerCodeSha)) add(blockers, 'UPSTREAM_SOURCE_PRODUCER_SHA_INVALID');
+  if (!exactCommitSha(source.collectorCodeSha)) add(blockers, 'UPSTREAM_SOURCE_COLLECTOR_SHA_INVALID');
+  if (!text(source.collectorImplementationPath)) add(blockers, 'UPSTREAM_SOURCE_COLLECTOR_PATH_INVALID');
+  if (!exactCommitSha(source.collectorImplementationBlobSha)) add(blockers, 'UPSTREAM_SOURCE_COLLECTOR_BLOB_INVALID');
+  if (!exactDigest(source.datasetDigest)) add(blockers, 'UPSTREAM_SOURCE_DATASET_DIGEST_INVALID');
+  if (!text(source.datasetRelativePath)) add(blockers, 'UPSTREAM_SOURCE_DATASET_PATH_INVALID');
+  if (!exactDigest(source.receiptDigest)) add(blockers, 'UPSTREAM_SOURCE_RECEIPT_DIGEST_INVALID');
+  if (!text(source.artifactId)) add(blockers, 'UPSTREAM_SOURCE_ARTIFACT_ID_INVALID');
+  if (!exactDigest(source.artifactDigest)) add(blockers, 'UPSTREAM_SOURCE_ARTIFACT_DIGEST_INVALID');
+  if (!exactDigest(source.rawBatchDigest)) add(blockers, 'UPSTREAM_SOURCE_RAW_BATCH_DIGEST_INVALID');
+}
+
+function validateMultiSourceLineage(audit, blockers) {
+  if (!exactDigest(audit.independentSplitSourceDigest)) add(blockers, 'INDEPENDENT_SPLIT_SOURCE_DIGEST_INVALID');
+  if (!exactDigest(audit.independenceAuditDigest)) add(blockers, 'INDEPENDENCE_AUDIT_DIGEST_INVALID');
+  if (!exactCommitSha(audit.producerCodeSha)) add(blockers, 'MULTI_SOURCE_PRODUCER_SHA_INVALID');
+  if (!Array.isArray(audit.upstreamSources) || audit.upstreamSources.length === 0) {
+    add(blockers, 'UPSTREAM_SOURCES_REQUIRED');
+    return;
+  }
+  audit.upstreamSources.forEach((source) => validateUpstreamSource(source, blockers));
+  for (const key of ['sourceIdentity', 'datasetDigest', 'receiptDigest', 'artifactId']) {
+    const values = audit.upstreamSources.map((source) => source?.[key]);
+    if (new Set(values).size !== values.length) add(blockers, `UPSTREAM_SOURCE_DUPLICATE:${key}`);
+  }
+  const ordered = [...audit.upstreamSources].sort((left, right) => left.sourceIdentity.localeCompare(right.sourceIdentity));
+  if (!exactDigest(audit.upstreamLineageDigest)) add(blockers, 'UPSTREAM_LINEAGE_DIGEST_INVALID');
+  else if (audit.upstreamLineageDigest !== sha256(ordered)) add(blockers, 'UPSTREAM_LINEAGE_DIGEST_MISMATCH');
+
+  const datasetDigests = ordered.map((source) => source.datasetDigest);
+  const receiptDigests = ordered.map((source) => source.receiptDigest);
+  const collectorCodeShas = [...new Set(ordered.map((source) => source.collectorCodeSha))].sort();
+  if (!sameArray(audit.datasetDigests, datasetDigests)) add(blockers, 'UPSTREAM_DATASET_DIGESTS_MISMATCH');
+  if (!sameArray(audit.receiptDigests, receiptDigests)) add(blockers, 'UPSTREAM_RECEIPT_DIGESTS_MISMATCH');
+  if (!sameArray(audit.collectorCodeShas, collectorCodeShas)) add(blockers, 'UPSTREAM_COLLECTOR_SHAS_MISMATCH');
+  if (audit.datasetDigest !== undefined && audit.datasetDigest !== null) add(blockers, 'SYNTHETIC_AGGREGATE_DATASET_FORBIDDEN');
+  if (audit.collectorCodeSha !== undefined && audit.collectorCodeSha !== null) add(blockers, 'SYNTHETIC_SINGLE_COLLECTOR_FORBIDDEN');
+}
+
 function validateSplitAudit(audit) {
   const blockers = [];
   if (!object(audit)) return ['SPLIT_AUDIT_REQUIRED'];
-  if (audit.schemaVersion !== PUBLIC_FORWARD_LIQUIDITY_SPLIT_AUDIT_VERSION) add(blockers, 'SPLIT_AUDIT_VERSION_INVALID');
+  const isLegacy = audit.schemaVersion === PUBLIC_FORWARD_LIQUIDITY_SPLIT_AUDIT_VERSION;
+  const isMulti = multiSource(audit);
+  if (!isLegacy && !isMulti) add(blockers, 'SPLIT_AUDIT_VERSION_INVALID');
   if (audit.datasetContract !== PUBLIC_LIQUIDITY_CALIBRATION_CONTRACT
     || audit.datasetStoreContract !== PUBLIC_LIQUIDITY_CALIBRATION_STORE_CONTRACT) {
     add(blockers, 'SPLIT_AUDIT_DATASET_CONTRACT_INVALID');
   }
   if (audit.sampleClass !== FORWARD_NATURAL_SAMPLE) add(blockers, 'SPLIT_AUDIT_FORWARD_SAMPLE_REQUIRED');
-  if (!exactDigest(audit.datasetDigest)) add(blockers, 'SPLIT_AUDIT_DATASET_DIGEST_INVALID');
-  if (!exactCommitSha(audit.collectorCodeSha)) add(blockers, 'SPLIT_AUDIT_COLLECTOR_SHA_INVALID');
+  if (isLegacy) {
+    if (!exactDigest(audit.datasetDigest)) add(blockers, 'SPLIT_AUDIT_DATASET_DIGEST_INVALID');
+    if (!exactCommitSha(audit.collectorCodeSha)) add(blockers, 'SPLIT_AUDIT_COLLECTOR_SHA_INVALID');
+  }
+  if (isMulti) validateMultiSourceLineage(audit, blockers);
   if (!exactDigest(audit.splitPolicyDigest)) add(blockers, 'SPLIT_POLICY_DIGEST_INVALID');
   if (!text(audit.splitPolicyIdentity) || !text(audit.splitPolicyVersion)) add(blockers, 'SPLIT_POLICY_IDENTITY_INVALID');
   if (!positiveFinite(audit.splitPolicyFrozenAtMs)) add(blockers, 'SPLIT_POLICY_FROZEN_AT_INVALID');
@@ -130,7 +198,10 @@ function validateSplitAudit(audit) {
   if (audit.liquidityImpactStatus !== 'BLOCKED_DATA' || audit.fullCostReady !== false) {
     add(blockers, 'UPSTREAM_FULL_COST_BOUNDARY_INVALID');
   }
-  if (audit.naturalEntryCredit !== 0 || audit.runtimeCostCredit !== 0) add(blockers, 'UPSTREAM_RUNTIME_CREDIT_INVALID');
+  if ((audit.evidenceCompleteCredit ?? 0) !== 0
+    || audit.naturalEntryCredit !== 0 || audit.runtimeCostCredit !== 0) {
+    add(blockers, 'UPSTREAM_RUNTIME_CREDIT_INVALID');
+  }
   if (audit.executionAuthority !== 'NONE' || audit.privateApiUsed !== false
     || audit.liveTrading !== false || audit.orderSubmitted !== false) {
     add(blockers, 'UPSTREAM_EXECUTION_SAFETY_INVALID');
@@ -163,7 +234,7 @@ function validateMethodology(methodology, earliestOosEventMs) {
   return blockers;
 }
 
-function validateAssignment(assignment) {
+function validateAssignment(assignment, audit) {
   const blockers = [];
   if (!object(assignment)) return ['OOS_ASSIGNMENT_INVALID'];
   if (!text(assignment.observationId)) add(blockers, 'OOS_ASSIGNMENT_OBSERVATION_ID_INVALID');
@@ -176,6 +247,22 @@ function validateAssignment(assignment) {
   if (!text(assignment.volatilityRegimeIdentity) || !text(assignment.liquidityRegimeIdentity)) {
     add(blockers, 'OOS_ASSIGNMENT_REGIME_INVALID');
   }
+  if (multiSource(audit)) {
+    if (!text(assignment.sourceObservationId)) add(blockers, 'OOS_ASSIGNMENT_SOURCE_OBSERVATION_ID_INVALID');
+    if (!text(assignment.sourceIdentity)) add(blockers, 'OOS_ASSIGNMENT_SOURCE_IDENTITY_INVALID');
+    if (!exactDigest(assignment.sourceDatasetDigest)) add(blockers, 'OOS_ASSIGNMENT_SOURCE_DATASET_DIGEST_INVALID');
+    if (!exactDigest(assignment.sourceReceiptDigest)) add(blockers, 'OOS_ASSIGNMENT_SOURCE_RECEIPT_DIGEST_INVALID');
+    if (!exactCommitSha(assignment.sourceCollectorCodeSha)) add(blockers, 'OOS_ASSIGNMENT_SOURCE_COLLECTOR_SHA_INVALID');
+    if (!text(assignment.eventIdentity)) add(blockers, 'OOS_ASSIGNMENT_EVENT_IDENTITY_INVALID');
+    if (!text(assignment.sourceFrameIdentity)) add(blockers, 'OOS_ASSIGNMENT_SOURCE_FRAME_IDENTITY_INVALID');
+    const upstream = audit.upstreamSources.find((source) => source.sourceIdentity === assignment.sourceIdentity);
+    if (!upstream) add(blockers, 'OOS_ASSIGNMENT_SOURCE_ORPHAN');
+    else if (assignment.sourceDatasetDigest !== upstream.datasetDigest
+      || assignment.sourceReceiptDigest !== upstream.receiptDigest
+      || assignment.sourceCollectorCodeSha !== upstream.collectorCodeSha) {
+      add(blockers, 'OOS_ASSIGNMENT_SOURCE_LINEAGE_MISMATCH');
+    }
+  }
   return blockers;
 }
 
@@ -187,7 +274,23 @@ function validateOutcome(outcome, assignment, audit, methodology, expectedOutcom
   if (outcome.referenceSourceDigest !== assignment.sourceDigest) add(blockers, 'OOS_REFERENCE_SOURCE_DIGEST_MISMATCH');
   if (outcome.publicExecutionId !== assignment.publicExecutionId) add(blockers, 'OOS_PUBLIC_EXECUTION_ID_MISMATCH');
   if (outcome.splitAuditDigest !== audit.auditDigest) add(blockers, 'OOS_SPLIT_AUDIT_DIGEST_MISMATCH');
-  if (outcome.datasetDigest !== audit.datasetDigest) add(blockers, 'OOS_DATASET_DIGEST_MISMATCH');
+  if (multiSource(audit)) {
+    if (outcome.datasetDigest !== undefined && outcome.datasetDigest !== null) {
+      add(blockers, 'OOS_SYNTHETIC_AGGREGATE_DATASET_FORBIDDEN');
+    }
+    if (outcome.sourceIdentity !== assignment.sourceIdentity) add(blockers, 'OOS_SOURCE_IDENTITY_MISMATCH');
+    if (outcome.sourceObservationId !== assignment.sourceObservationId) add(blockers, 'OOS_SOURCE_OBSERVATION_ID_MISMATCH');
+    if (outcome.sourceDatasetDigest !== assignment.sourceDatasetDigest) add(blockers, 'OOS_SOURCE_DATASET_DIGEST_MISMATCH');
+    if (outcome.sourceReceiptDigest !== assignment.sourceReceiptDigest) add(blockers, 'OOS_SOURCE_RECEIPT_DIGEST_MISMATCH');
+    if (outcome.sourceCollectorCodeSha !== assignment.sourceCollectorCodeSha) add(blockers, 'OOS_SOURCE_COLLECTOR_SHA_MISMATCH');
+    if (outcome.upstreamLineageDigest !== audit.upstreamLineageDigest) add(blockers, 'OOS_UPSTREAM_LINEAGE_DIGEST_MISMATCH');
+    if (outcome.independenceAuditDigest !== audit.independenceAuditDigest) add(blockers, 'OOS_INDEPENDENCE_AUDIT_DIGEST_MISMATCH');
+    if (outcome.independentSplitSourceDigest !== audit.independentSplitSourceDigest) {
+      add(blockers, 'OOS_INDEPENDENT_SPLIT_SOURCE_DIGEST_MISMATCH');
+    }
+  } else if (outcome.datasetDigest !== audit.datasetDigest) {
+    add(blockers, 'OOS_DATASET_DIGEST_MISMATCH');
+  }
   if (outcome.splitPolicyDigest !== audit.splitPolicyDigest) add(blockers, 'OOS_SPLIT_POLICY_DIGEST_MISMATCH');
   if (outcome.scopeKey !== assignment.scopeKey) add(blockers, 'OOS_SCOPE_KEY_MISMATCH');
   if (outcome.referenceEventTimestampMs !== assignment.eventTimestampMs) add(blockers, 'OOS_EVENT_TIMESTAMP_MISMATCH');
@@ -230,7 +333,8 @@ export function validatePublicForwardLiquidityOosOutcomes({
   const oosAssignments = splitAudit.assignments.filter((assignment) => assignment.split === 'OOS');
   if (oosAssignments.length === 0) return blocked(['OOS_ASSIGNMENTS_MISSING']);
   const assignmentBlockers = [];
-  oosAssignments.forEach((assignment) => validateAssignment(assignment).forEach((code) => add(assignmentBlockers, code)));
+  oosAssignments.forEach((assignment) => validateAssignment(assignment, splitAudit)
+    .forEach((code) => add(assignmentBlockers, code)));
   if (assignmentBlockers.length > 0) return blocked(assignmentBlockers);
 
   const earliestOosEventMs = Math.min(...oosAssignments.map((assignment) => assignment.eventTimestampMs));
@@ -268,13 +372,27 @@ export function validatePublicForwardLiquidityOosOutcomes({
   const orderedOutcomes = [...outcomes].sort((left, right) => left.observationId.localeCompare(right.observationId));
   const outcomeDigest = sha256(orderedOutcomes);
   const oosAssignmentDigest = sha256(oosAssignments);
+  const isMulti = multiSource(splitAudit);
   const validationBody = {
-    schemaVersion: PUBLIC_FORWARD_LIQUIDITY_OOS_VALIDATION_VERSION,
+    schemaVersion: isMulti
+      ? PUBLIC_FORWARD_LIQUIDITY_MULTI_SOURCE_OOS_VALIDATION_VERSION
+      : PUBLIC_FORWARD_LIQUIDITY_OOS_VALIDATION_VERSION,
+    splitAuditVersion: splitAudit.schemaVersion,
     splitAuditDigest: splitAudit.auditDigest,
     datasetContract: splitAudit.datasetContract,
     datasetStoreContract: splitAudit.datasetStoreContract,
-    datasetDigest: splitAudit.datasetDigest,
-    collectorCodeSha: splitAudit.collectorCodeSha,
+    ...(isMulti ? {
+      independentSplitSourceDigest: splitAudit.independentSplitSourceDigest,
+      independenceAuditDigest: splitAudit.independenceAuditDigest,
+      upstreamLineageDigest: splitAudit.upstreamLineageDigest,
+      upstreamSources: Object.freeze([...splitAudit.upstreamSources]),
+      datasetDigests: Object.freeze([...splitAudit.datasetDigests]),
+      receiptDigests: Object.freeze([...splitAudit.receiptDigests]),
+      collectorCodeShas: Object.freeze([...splitAudit.collectorCodeShas]),
+    } : {
+      datasetDigest: splitAudit.datasetDigest,
+      collectorCodeSha: splitAudit.collectorCodeSha,
+    }),
     sampleClass: splitAudit.sampleClass,
     splitPolicyIdentity: splitAudit.splitPolicyIdentity,
     splitPolicyVersion: splitAudit.splitPolicyVersion,
@@ -293,6 +411,8 @@ export function validatePublicForwardLiquidityOosOutcomes({
     heldOut: true,
     contaminationFree: true,
     genuinePublicForwardMarketData: true,
+    syntheticAggregateDataset: false,
+    syntheticSingleCollector: false,
     causalMarketImpactClaim: false,
     oosValidationComplete: true,
     calibrationArtifactProduced: false,
