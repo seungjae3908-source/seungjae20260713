@@ -58,6 +58,16 @@ test('missing member scope fails closed instead of defaulting Telegram delivery 
   expect(bridge).not.toContain("membership: MemberTier = 'admin'");
 });
 
+test('link binding and every durable send recheck canonical current member eligibility', () => {
+  expect(repository).toContain("from('profiles')");
+  expect(repository).toContain(".select('status,membership_level,is_active,role')");
+  expect(service).toContain("hasCapability(profile, 'canConnectPersonalTelegram')");
+  expect(service).toContain("throw new Error('TELEGRAM_MEMBER_INELIGIBLE')");
+  expect(service).toContain("'TELEGRAM_MEMBER_INELIGIBLE'");
+  expect(service).toContain("'TELEGRAM_MEMBER_ELIGIBILITY_UNAVAILABLE'");
+  expect(service.indexOf('personalTelegramEligible(userId)')).toBeLessThan(service.indexOf('destinationChatId: connection.telegramChatId'));
+});
+
 test('the existing worker processes personal alerts with the same bounded retry and dead-letter states', () => {
   expect(worker).toContain('sendTelegramAlert');
   expect(service).toContain("if (kind === 'PERSONAL_ALERT')");
