@@ -62,11 +62,11 @@ alter table public.profiles
   check (membership_level in ('pending', 'associate', 'regular', 'admin'));
 
 -- Canonical member administration uses suspended for an explicitly disabled member.
--- Preserve every legacy status and add only that non-privileged state.
+-- Keep every known non-approved legacy state so reconciliation cannot narrow access-state history.
 alter table public.profiles drop constraint if exists profiles_status_check;
 alter table public.profiles
   add constraint profiles_status_check
-  check (status in ('pending', 'approved', 'rejected', 'suspended'));
+  check (status in ('pending', 'approved', 'rejected', 'suspended', 'revoked', 'disabled'));
 
 create index if not exists profiles_membership_active_idx
   on public.profiles (membership_level, is_active, permissions_updated_at desc);
