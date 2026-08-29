@@ -18,6 +18,12 @@ const identity = Object.freeze({
   costPolicyVersion: "cost-v1",
   executionPolicyVersion: "execution-v1",
 });
+const RISK_POLICY_IDENTITY = Object.freeze({
+  policyId: "paper-risk-v1",
+  policyVersion: "2026-08-29",
+  source: "canonical-risk-policy-record",
+  researchCodeSha: SHA,
+});
 
 function ledger() {
   return {
@@ -124,6 +130,22 @@ function candidate(id = "entry-1", overrides = {}) {
     ...base,
     ...overrides,
     signal: { ...base.signal, ...(overrides.signal ?? {}) },
+  };
+}
+
+function naturalEvidence(observationId, observedAtMs) {
+  return {
+    provenanceClass: "NATURAL_FORWARD",
+    synthetic: false,
+    replay: false,
+    testOnly: false,
+    backfill: false,
+    historical: false,
+    duplicate: false,
+    observationId,
+    source: "public-natural-fixture",
+    provenance: "future-natural-cycle-fixture",
+    observedAtMs,
   };
 }
 
@@ -249,12 +271,72 @@ test("Entry becomes a durable Position without losing immutable lineage", async 
   assert.equal(position.lifecycle.entry.fillPrice, position.entryFillPrice);
   assert.equal(position.lifecycle.entry.timestampMs, position.entryTimestampMs);
   assert.equal(position.lifecycle.entry.evidenceDigest, position.sample.entryEvidenceProvenance.evidenceSnapshotDigest);
+  assert.equal(position.lifecycle.riskPolicyIdentity, null);
+  assert.equal(position.lifecycle.riskPolicyIdentityStatus, "MISSING_EVIDENCE");
   assert.equal(position.lifecycle.modelIdentity, null);
   assert.equal(position.lifecycle.modelIdentityStatus, "MISSING_EVIDENCE");
   assert.equal(position.lifecycle.sampleEligibility.provenanceClass, "TEST_ONLY");
   assert.equal(position.lifecycle.sampleEligibility.naturalSampleCredit, 0);
   assert.equal(position.lifecycle.executionAuthority, "NONE");
   assert.equal(position.lifecycle.orderSubmitted, false);
+});
+
+test("genuine Natural Position requires and immutably preserves canonical risk-policy identity", async () => {
+  const missingHarness = harness();
+  await assert.rejects(open(missingHarness, "natural-missing-risk", {
+    testOnly: false,
+    naturalEvidence: naturalEvidence("natural-entry-missing-risk", T0 - 1),
+  }), /PAPER_POSITION_RISK_POLICY_IDENTITY_REQUIRED/);
+
+  const h = harness();
+  const opened = await open(h, "natural-risk", {
+    testOnly: false,
+    naturalEvidence: naturalEvidence("natural-entry-risk", T0 - 1),
+    riskEvidence: {
+      status: "APPROVED",
+      evaluatedAtMs: T0 - 1,
+      simulatedOnly: true,
+      policyIdentity: RISK_POLICY_IDENTITY,
+    },
+  });
+  const position = opened.state.positions[0];
+  assert.deepEqual(position.lifecycle.riskPolicyIdentity, RISK_POLICY_IDENTITY);
+  assert.equal(position.lifecycle.riskPolicyIdentityStatus, "PRESENT");
+  assert.equal(position.lifecycle.sampleEligibility.provenanceClass, "NATURAL_FORWARD");
+
+  const restored = restoreRecurringPaperLoopState(serializeRecurringPaperLoopState(opened.state), identity);
+  assert.deepEqual(restored.positions[0].lifecycle.riskPolicyIdentity, RISK_POLICY_IDENTITY);
+});
+
+test("genuine Natural observation rejects mismatched scheduler risk-policy identity before mark mutation", async () => {
+  const h = harness();
+  const opened = await open(h, "natural-observation-risk", {
+    testOnly: false,
+    naturalEvidence: naturalEvidence("natural-entry-observation-risk", T0 - 1),
+    riskEvidence: {
+      status: "APPROVED",
+      evaluatedAtMs: T0 - 1,
+      simulatedOnly: true,
+      policyIdentity: RISK_POLICY_IDENTITY,
+    },
+  });
+  const position = opened.state.positions[0];
+  const mark = observation(position, "natural-mark-risk-mismatch", T0 + 1_000, {
+    open: 100, high: 103, low: 98, close: 102,
+  }, {
+    naturalEvidence: naturalEvidence("natural-mark-risk-mismatch", T0 + 1_000),
+    schedulerHandoff: {
+      riskPolicyIdentity: { ...RISK_POLICY_IDENTITY, policyVersion: "wrong-version" },
+    },
+  });
+  const result = await run(h, {
+    state: opened.state,
+    cycle: cycle("natural-mark-risk-mismatch-cycle", T0 + 1_000),
+    positionObservations: [mark],
+  });
+  assert.equal(result.state.positions[0].lifecycle.mark.observationCount, 0);
+  assert.equal(result.state.settlements.length, 0);
+  assert.equal(result.summary.canonicalNaturalStageEvidence.reasonObservations[0].canonicalReason, "IDENTITY_MISMATCH");
 });
 
 test("mark update survives restart and TP settles once with gross/cost/net separation", async () => {
