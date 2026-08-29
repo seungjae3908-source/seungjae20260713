@@ -247,6 +247,15 @@ function normalizeObservation(observation, expectedCollectorSha, localSeen) {
   ) {
     throw new Error('CROSS_CAPTURE_OBSERVATION_CONTRACT_INVALID');
   }
+  if (
+    item.calibrationSourceOnly !== true
+    || item.executionCostEligible !== false
+    || item.liquidityImpactCoefficient !== null
+    || item.causalMarketImpactClaim !== false
+    || item.paperOrderSourceAllowed !== false
+  ) {
+    throw new Error('CROSS_CAPTURE_OBSERVATION_AUTHORITY_INVALID');
+  }
 
   const observationId = nonEmptyString(
     item.observationId,
