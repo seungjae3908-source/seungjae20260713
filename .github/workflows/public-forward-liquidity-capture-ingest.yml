@@ -43,8 +43,13 @@ jobs:
           set -euo pipefail
           FILE='market-intelligence-sidecar/src/public-forward-liquidity-capture-ingest.mjs'
           grep -Fq 'persistLiquidityCalibrationBatch' "$FILE"
+          grep -Fq 'validatePublicForwardLiquidityObservationIdentity' "$FILE"
           grep -Fq 'OBSERVATION_ID_MISMATCH' "$FILE"
           grep -Fq 'OBSERVATION_SOURCE_DIGEST_MISMATCH' "$FILE"
+          grep -Fq 'batchObservationDigest' "$FILE"
+          grep -Fq 'batchDatasetProvenanceDigest' "$FILE"
+          grep -Fq 'datasetObservationCount' "$FILE"
+          grep -Fq 'datasetBatchProvenanceCount' "$FILE"
           grep -Fq 'duplicateCreditEvaluated: true' "$FILE"
           grep -Fq 'splitAssignmentPerformed: false' "$FILE"
           grep -Fq 'oosValidationComplete: false' "$FILE"
