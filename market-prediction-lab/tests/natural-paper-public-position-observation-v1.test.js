@@ -131,15 +131,16 @@ function position(overrides = {}) {
   });
 }
 
-function binding({
-  positionIdentity = identity(),
-  riskPolicyIdentity,
-  costPolicyIdentity,
-  cycle = cycleIdentity(),
-  account = accountIdentity(),
-  accountBound = true,
-  entryProvenance,
-} = {}) {
+function binding(options = {}) {
+  const {
+    positionIdentity = identity(),
+    riskPolicyIdentity,
+    costPolicyIdentity,
+    cycle = cycleIdentity(),
+    account = accountIdentity(),
+    accountBound = true,
+    entryProvenance,
+  } = options;
   return Object.freeze({
     schemaVersion: "paper-scheduler-position-observation-handoff-v1",
     positionIdentity,
@@ -152,7 +153,7 @@ function binding({
       evidenceSnapshotDigest: ENTRY_DIGEST,
     }),
     costPolicyIdentity: costPolicyIdentity ?? Object.freeze({ version: COST_POLICY }),
-    riskPolicyIdentity: riskPolicyIdentity ?? Object.freeze({
+    riskPolicyIdentity: Object.hasOwn(options, "riskPolicyIdentity") ? riskPolicyIdentity : Object.freeze({
       policyId: "generic-risk-policy",
       policyVersion: "v1",
       source: "authoritative-paper-generic-risk-policy",
@@ -266,7 +267,7 @@ test("missing canonical freshness policy fails closed instead of inventing an ag
 });
 
 const identityFailures = [
-  ["wrong positionId", { positionIdentity: identity({ positionId: "wrong-position" }) }, "POSITION_OBSERVATION_BINDING_POSITION_MISMATCH"],
+  ["wrong positionId", { positionIdentity: identity({ positionId: "wrong-position" }) }, "POSITION_OBSERVATION_POSITION_BINDING_MISSING"],
   ["wrong paperSampleId", { positionIdentity: identity({ paperSampleId: "wrong-sample" }) }, "POSITION_OBSERVATION_BINDING_POSITION_MISMATCH"],
   ["wrong signalId", { positionIdentity: identity({ signalId: "wrong-signal" }) }, "POSITION_OBSERVATION_BINDING_POSITION_MISMATCH"],
   ["wrong strategy", { positionIdentity: identity({ strategyId: "wrong-strategy" }) }, "POSITION_OBSERVATION_BINDING_POSITION_MISMATCH"],
