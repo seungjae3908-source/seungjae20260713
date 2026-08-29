@@ -52,6 +52,47 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+function errorText(cause: unknown) {
+  if (cause instanceof Error) return cause.message;
+  if (isObject(cause) && typeof cause.message === 'string') return cause.message;
+  return '';
+}
+
+export function classifyAtomicMemberChangeFailure(cause: unknown): MemberAdministrationError {
+  const message = errorText(cause);
+  if (message.includes('LAST_ACTIVE_ADMIN_PROTECTED')) {
+    return new MemberAdministrationError(
+      'LAST_ACTIVE_ADMIN_PROTECTED',
+      '마지막 활성 관리자의 등급을 내리거나 비활성화할 수 없습니다.',
+      409,
+    );
+  }
+  if (message.includes('MEMBER_STATE_CONFLICT')) {
+    return new MemberAdministrationError(
+      'MEMBER_STATE_CONFLICT',
+      '회원 상태가 다른 요청에 의해 변경되었습니다. 새 상태를 확인한 뒤 다시 시도하세요.',
+      409,
+    );
+  }
+  if (message.includes('MEMBER_NOT_FOUND')) {
+    return new MemberAdministrationError('MEMBER_NOT_FOUND', '회원을 찾을 수 없습니다.', 404);
+  }
+  if (message.includes('MEMBER_ADMIN_REQUIRED')) {
+    return new MemberAdministrationError('MEMBER_ADMIN_REQUIRED', '관리자 권한이 필요합니다.', 403);
+  }
+  if (message.includes('CHANGE_REASON_REQUIRED')) {
+    return new MemberAdministrationError('CHANGE_REASON_REQUIRED', '변경 사유를 3~500자로 입력하세요.', 400);
+  }
+  if (message.includes('INVALID_MEMBER_CHANGE')) {
+    return new MemberAdministrationError('INVALID_MEMBER_CHANGE', '회원 변경 요청을 확인하세요.', 400);
+  }
+  return new MemberAdministrationError(
+    'MEMBER_UPDATE_FAILED',
+    '회원 권한 변경을 원자적으로 저장하지 못했습니다.',
+    500,
+  );
+}
+
 function legacyStoredTier(profile: MemberAdministrationProfile): MemberTier {
   if (profile.role === 'admin' || profile.role === 'master') return 'admin';
   if (profile.role === 'associate') return 'associate';
@@ -110,7 +151,7 @@ export function parseMemberChangeRequest(value: unknown): MemberChangeRequest {
 
 export function isActiveAdmin(profile: MemberAdministrationProfile) {
   return profile.status === 'approved'
-    && profile.is_active !== false
+    && profile.is_active === true
     && storedMemberTier(profile) === 'admin';
 }
 
@@ -137,7 +178,7 @@ export function planMemberChange(
   // Preserve stored tier only for approved/suspended members. Other non-approved
   // states require an explicit membershipLevel change before they can be approved.
   const currentTier = storedMemberTier(current);
-  const currentActive = current.is_active !== false;
+  const currentActive = current.is_active === true;
   const nextTier = request.membershipLevel ?? currentTier;
   const nextActive = request.isActive ?? currentActive;
 
