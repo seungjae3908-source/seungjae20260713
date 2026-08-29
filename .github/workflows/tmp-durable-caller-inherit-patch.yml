@@ -26,7 +26,8 @@ jobs:
 
           workflow_path = Path('.github/workflows/prediction-lab-52d-validation.yml')
           text = workflow_path.read_text()
-          needle = """    with:\n      expected_sha: ${{ needs.validate-and-train.outputs.research_sha }}\n"""
+          expr = '$' + '{{ needs.validate-and-train.outputs.research_sha }}'
+          needle = "    with:\n      expected_sha: " + expr + "\n"
           replacement = needle + "    secrets: inherit\n"
           if replacement not in text:
               if text.count(needle) != 1:
