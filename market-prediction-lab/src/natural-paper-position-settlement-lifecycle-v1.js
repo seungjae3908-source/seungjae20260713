@@ -93,10 +93,37 @@ function normalizeSampleClass(candidate) {
     && evidence.synthetic === false
     && evidence.replay === false
     && evidence.testOnly === false
+    && evidence.backfill === false
+    && evidence.historical === false
+    && evidence.duplicate === false
     && nonEmpty(evidence.observationId)
     && nonEmpty(evidence.source)
     && finite(evidence.observedAtMs)) return NATURAL_FORWARD;
   return MISSING_EVIDENCE;
+}
+
+function canonicalRiskPolicyIdentity(candidate, researchCodeSha) {
+  const value = candidate?.riskPolicyIdentity ?? candidate?.riskEvidence?.policyIdentity;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  if (!nonEmpty(value.policyId)
+    || !nonEmpty(value.policyVersion)
+    || !nonEmpty(value.source)
+    || !immutableSha(value.researchCodeSha)
+    || value.researchCodeSha.toLowerCase() !== researchCodeSha.toLowerCase()) return null;
+  return Object.freeze({
+    policyId: value.policyId,
+    policyVersion: value.policyVersion,
+    source: value.source,
+    researchCodeSha: value.researchCodeSha.toLowerCase(),
+  });
+}
+
+function sameRiskPolicyIdentity(left, right) {
+  return Boolean(left && right
+    && left.policyId === right.policyId
+    && left.policyVersion === right.policyVersion
+    && left.source === right.source
+    && String(left.researchCodeSha ?? "").toLowerCase() === String(right.researchCodeSha ?? "").toLowerCase());
 }
 
 function positionIdentity(position) {
@@ -129,6 +156,8 @@ function immutableContractDigest(lifecycle) {
   return hash({
     identity: lifecycle.identity,
     strategyIdentity: lifecycle.strategyIdentity,
+    riskPolicyIdentity: lifecycle.riskPolicyIdentity,
+    riskPolicyIdentityStatus: lifecycle.riskPolicyIdentityStatus,
     modelIdentity: lifecycle.modelIdentity,
     modelIdentityStatus: lifecycle.modelIdentityStatus,
     entry: lifecycle.entry,
@@ -163,6 +192,12 @@ function assertLifecycle(position) {
     || lifecycle.strategyIdentity.parameterHash !== position.parameterHash
     || lifecycle.strategyIdentity.researchCodeSha !== position.researchCodeSha.toLowerCase()) {
     throw new Error("PAPER_POSITION_IMMUTABLE_LINEAGE_MISMATCH");
+  }
+  if (lifecycle.sampleEligibility?.provenanceClass === NATURAL_FORWARD) {
+    if (lifecycle.riskPolicyIdentityStatus !== "PRESENT"
+      || !canonicalRiskPolicyIdentity({ riskPolicyIdentity: lifecycle.riskPolicyIdentity }, identity.researchCodeSha)) {
+      throw new Error("PAPER_POSITION_RISK_POLICY_IDENTITY_REQUIRED");
+    }
   }
   return lifecycle;
 }
@@ -214,6 +249,13 @@ function validateObservation(position, observation, evaluatedAtMs) {
     || bar.high < bar.low || bar.open > bar.high || bar.open < bar.low || bar.close > bar.high || bar.close < bar.low) {
     throw new Error("PAPER_POSITION_MARK_BAR_INVALID");
   }
+  if (position?.lifecycle?.sampleEligibility?.provenanceClass === NATURAL_FORWARD) {
+    const expectedRiskPolicy = position.lifecycle.riskPolicyIdentity;
+    const observedRiskPolicy = observation?.schedulerHandoff?.riskPolicyIdentity;
+    if (!sameRiskPolicyIdentity(expectedRiskPolicy, observedRiskPolicy)) {
+      throw new Error("PAPER_POSITION_OBSERVATION_RISK_POLICY_IDENTITY_MISMATCH");
+    }
+  }
 }
 
 function observationSampleClass(observation) {
@@ -222,6 +264,9 @@ function observationSampleClass(observation) {
     && evidence.synthetic === false
     && evidence.replay === false
     && evidence.testOnly === false
+    && evidence.backfill === false
+    && evidence.historical === false
+    && evidence.duplicate === false
     && nonEmpty(evidence.observationId)
     && evidence.observationId === observation.observationId
     && nonEmpty(evidence.source)
@@ -300,6 +345,10 @@ export function createNaturalPaperPositionLifecycle({ position, sample, candidat
   const sameBarPolicy = candidate?.execution?.executionPolicy?.sameBarPolicy;
   if (sameBarPolicy !== "STOP_FIRST") throw new Error("PAPER_POSITION_SAME_BAR_POLICY_UNSUPPORTED");
   const sampleClass = normalizeSampleClass(candidate);
+  const riskPolicyIdentity = canonicalRiskPolicyIdentity(candidate, identity.researchCodeSha);
+  if (sampleClass === NATURAL_FORWARD && !riskPolicyIdentity) {
+    throw new Error("PAPER_POSITION_RISK_POLICY_IDENTITY_REQUIRED");
+  }
   const entry = Object.freeze({
     timestampMs: sample.identity.evaluatedAtMs,
     signalTimestampMs: candidate?.signal?.timestampMs ?? null,
@@ -335,6 +384,8 @@ export function createNaturalPaperPositionLifecycle({ position, sample, candidat
   const immutableContract = {
     identity: Object.freeze(identity),
     strategyIdentity,
+    riskPolicyIdentity,
+    riskPolicyIdentityStatus: riskPolicyIdentity ? "PRESENT" : MISSING_EVIDENCE,
     modelIdentity,
     modelIdentityStatus: modelIdentity ? "PRESENT" : MISSING_EVIDENCE,
     entry,
