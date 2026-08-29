@@ -124,6 +124,7 @@ export function evaluateNetAlpha(raw = {}, policyInput = {}) {
   const grossEvidenceSource = String(raw.grossEvidenceSource ?? '').trim();
   const costSource = String(raw.costSource ?? '').trim();
   const costPolicyVersion = String(raw.costPolicyVersion ?? '').trim();
+  const currentIdentity = normalizeIdentity(raw.currentIdentity);
   const grossIdentity = normalizeIdentity(raw.grossIdentity);
   const costIdentity = normalizeIdentity(raw.costIdentity);
   const market = String(raw.market ?? '').toUpperCase();
@@ -139,9 +140,12 @@ export function evaluateNetAlpha(raw = {}, policyInput = {}) {
   if (sourceSchemaVersion !== GROSS_EDGE_SCHEMA) reasons.push('CANONICAL_GROSS_EDGE_SCHEMA_REQUIRED');
   if (!costSource) reasons.push('FULL_COST_SOURCE_REQUIRED');
   if (!costPolicyVersion) reasons.push('COST_POLICY_VERSION_REQUIRED');
+  if (!currentIdentity) reasons.push('CURRENT_STRATEGY_IDENTITY_NOT_AVAILABLE');
   if (!grossIdentity) reasons.push('GROSS_IDENTITY_PROVENANCE_NOT_AVAILABLE');
   if (!costIdentity) reasons.push('COST_IDENTITY_PROVENANCE_NOT_AVAILABLE');
   if (grossIdentity && costIdentity && !sameIdentity(grossIdentity, costIdentity)) reasons.push('NET_ALPHA_IDENTITY_MISMATCH');
+  if (currentIdentity && grossIdentity && !sameIdentity(currentIdentity, grossIdentity)) reasons.push('CURRENT_GROSS_IDENTITY_MISMATCH');
+  if (currentIdentity && costIdentity && !sameIdentity(currentIdentity, costIdentity)) reasons.push('CURRENT_COST_IDENTITY_MISMATCH');
   if (grossIdentity && market && grossIdentity.market !== market) reasons.push('NET_ALPHA_MARKET_IDENTITY_MISMATCH');
 
   if (asOf == null) reasons.push('NET_ALPHA_AS_OF_NOT_AVAILABLE');
@@ -176,6 +180,7 @@ export function evaluateNetAlpha(raw = {}, policyInput = {}) {
     grossEvidenceSource: grossEvidenceSource || null,
     costSource: costSource || null,
     costPolicyVersion: costPolicyVersion || null,
+    currentIdentity,
     grossIdentity,
     costIdentity,
   };
