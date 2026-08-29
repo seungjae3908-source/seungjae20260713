@@ -92,14 +92,9 @@ test('paper approval -> execution bridge -> canonical journal -> Telegram A is i
   const approved = await automation.approvePlan(USER_A, created.plan.id);
   const pending = await automation.createOrder(USER_A, approved);
   await trading.saveConnection({
-    userId: USER_A,
-    exchange: 'upbit',
-    accountMode: 'paper',
-    configured: true,
+    userId: USER_A, exchange: 'upbit', accountMode: 'paper', configured: true,
     encryptedCredentials: encryptTradingCredentials({ accessKey: 'paper', secretKey: 'paper' }, MASTER_KEY),
-    lastVerifiedAt: null,
-    lastErrorCode: null,
-    updatedAt: new Date().toISOString(),
+    lastVerifiedAt: null, lastErrorCode: null, updatedAt: new Date().toISOString(),
   });
   const executed = await new TradeExecutionService(trading).execute(USER_A, approved, pending.order);
   assert.equal(executed.state, 'FILLED');
@@ -110,13 +105,13 @@ test('paper approval -> execution bridge -> canonical journal -> Telegram A is i
   const service = new UserBrokerTelegramService(integrationRepo, transport, new CanonicalPortfolioSyncSink(journal, USER_A), 'runtime_test_bot');
   await linked(service);
   const bridge = new TradeExecutionEventBridgeService(trading, service);
-  const first = await bridge.syncUser(USER_A);
+  const first = await bridge.syncUser(USER_A, 'associate');
   assert.ok(first.inserted >= 2);
   assert.equal(journal.mutations, 1);
-  const second = await bridge.syncUser(USER_A);
+  const second = await bridge.syncUser(USER_A, 'associate');
   assert.equal(second.inserted, 0);
   assert.equal(journal.mutations, 1);
-  assert.equal((await bridge.syncUser(USER_B)).inserted, 0);
+  assert.equal((await bridge.syncUser(USER_B, 'associate')).inserted, 0);
 
   const deliveries = await integrationRepo.listDeliveries(USER_A);
   const dueSource: TelegramDeliveryWorkerSource = { async listDue() { return deliveries.map((item) => ({ userId: item.userId, id: item.id })); } };
@@ -137,7 +132,7 @@ test('risk reject creates no broker order and no portfolio mutation', async () =
   assert.equal((await trading.listOrders(USER_A)).length, 0);
   const journal = new JournalRepository();
   const service = new UserBrokerTelegramService(new InMemoryUserBrokerTelegramRepository(), new FakeTransport(), new CanonicalPortfolioSyncSink(journal, USER_A), 'runtime_test_bot');
-  const sync = await new TradeExecutionEventBridgeService(trading, service).syncUser(USER_A);
+  const sync = await new TradeExecutionEventBridgeService(trading, service).syncUser(USER_A, 'associate');
   assert.equal(sync.ordersSubmitted, 0);
   assert.equal(journal.mutations, 0);
 });
@@ -155,7 +150,7 @@ test('Telegram failure schedules retry without changing FILLED execution or port
     remainingQuantity: 0, realizedPnl: null, averageEntryPrice: null, averageExitPrice: null,
     occurredAt: new Date().toISOString(), metadata: {},
   };
-  const queued = await service.recordEvent(event);
+  const queued = await service.recordEvent(event, new Date(), 'associate');
   assert.equal(queued.deliveryQueued, true);
   assert.equal(journal.mutations, 1);
   const delivery = (await repo.listDeliveries(USER_A))[0];
@@ -175,7 +170,7 @@ test('manual canonical entry notifies Telegram with MANUAL source and never muta
     createdAt: new Date().toISOString(), serverUpdatedAt: new Date().toISOString(),
     payload: { source: 'TOSS_MANUAL', market: 'KR_STOCK', symbol: '005930', quantity: 10, entryPrice: 72_000 },
   };
-  const queued = await queueManualPortfolioNotifications(USER_A, [record], service);
+  const queued = await queueManualPortfolioNotifications(USER_A, [record], service, 'associate');
   assert.equal(queued.queued, 1);
   assert.equal(queued.brokerSubmitCount, 0);
   assert.equal(queued.privateApiRequests, 0);
@@ -184,4 +179,18 @@ test('manual canonical entry notifies Telegram with MANUAL source and never muta
   await service.processDelivery(USER_A, delivery.id);
   assert.equal(transport.sent.length, 1);
   assert.match(transport.sent[0].text, /등록방식: 수동등록/);
+});
+
+test('manual notification helper fails closed when membership is omitted', async () => {
+  const repo = new InMemoryUserBrokerTelegramRepository();
+  const service = new UserBrokerTelegramService(repo, new FakeTransport(), { async accept() {} }, 'runtime_test_bot');
+  await linked(service);
+  const record: StoredPaperJournalRecord = {
+    kind: 'journal', id: 'manual-no-scope', version: 1, updatedAt: new Date().toISOString(), deletedAt: null,
+    createdAt: new Date().toISOString(), serverUpdatedAt: new Date().toISOString(),
+    payload: { source: 'TOSS_MANUAL', market: 'KR_STOCK', symbol: '005930', quantity: 1, entryPrice: 72_000 },
+  };
+  const queued = await queueManualPortfolioNotifications(USER_A, [record], service);
+  assert.equal(queued.queued, 0);
+  assert.equal((await repo.listDeliveries(USER_A)).length, 0);
 });
