@@ -10,6 +10,8 @@ export const PUBLIC_FORWARD_LIQUIDITY_SAMPLE_COVERAGE_SAFETY = Object.freeze({
   coverageDiagnosticOnly: true,
   populationBaselineAvailable: false,
   representativenessProven: false,
+  sourceFrameIndependenceProven: false,
+  effectiveIndependentSampleCountCredit: false,
   sampleSufficiencyCredit: false,
   calibrationCredit: false,
   oosCredit: false,
@@ -101,6 +103,16 @@ function distribution(values) {
   });
 }
 
+function validateSourceSafety(source) {
+  const safety = object(source?.safety);
+  if (
+    safety?.executionAuthority !== 'NONE'
+    || safety?.privateTradingApiAllowed !== false
+    || safety?.liveTradingAllowed !== false
+    || safety?.realOrderAllowed !== false
+  ) throw new Error('COVERAGE_SOURCE_SAFETY_INVALID');
+}
+
 function validatePublicProvenance(provenance) {
   const root = object(provenance);
   const rawSource = object(root?.rawSource);
@@ -125,6 +137,7 @@ function normalizedInput(payload) {
   if (!root || root.schemaVersion !== 1 || root.contract !== PUBLIC_LIQUIDITY_CALIBRATION_CONTRACT) {
     throw new Error('COVERAGE_INPUT_CONTRACT_INVALID');
   }
+  validateSourceSafety(root);
 
   if (root.kind === 'public-forward-liquidity-calibration-dataset') {
     const verification = verifyLiquidityCalibrationDataset(root);
@@ -146,6 +159,33 @@ function normalizedInput(payload) {
   }
 
   throw new Error('COVERAGE_INPUT_KIND_INVALID');
+}
+
+function sourceFrameIdentity(observation) {
+  const provenance = object(observation?.rawSourceProvenance);
+  const preEventBook = object(provenance?.preEventBook);
+  const publicTrade = object(provenance?.publicTrade);
+  const postEventBooks = provenance?.postEventBooks;
+  if (!preEventBook || !publicTrade || !Array.isArray(postEventBooks)) {
+    throw new Error('COVERAGE_SOURCE_FRAME_PROVENANCE_INVALID');
+  }
+  const preEventBookDigest = exactDigest(
+    preEventBook.rawPayloadDigest,
+    'COVERAGE_PRE_EVENT_BOOK_RAW_DIGEST_INVALID',
+  );
+  const publicTradeFrameDigest = exactDigest(
+    publicTrade.rawFrameDigest,
+    'COVERAGE_PUBLIC_TRADE_FRAME_DIGEST_INVALID',
+  );
+  const postEventBookDigests = postEventBooks.map((entry) => exactDigest(
+    object(entry)?.rawPayloadDigest,
+    'COVERAGE_POST_EVENT_BOOK_RAW_DIGEST_INVALID',
+  ));
+  return Object.freeze({
+    preEventBookDigest,
+    publicTradeFrameDigest,
+    compositeSourceFrameGroup: `${preEventBookDigest}|${publicTradeFrameDigest}|${postEventBookDigests.join(',')}`,
+  });
 }
 
 function validateObservation(observation, expectedCollectorSha, seenIds) {
@@ -182,6 +222,7 @@ function validateObservation(observation, expectedCollectorSha, seenIds) {
     entry?.horizonMs,
     'COVERAGE_POST_EVENT_HORIZON_INVALID',
   ));
+  const sourceFrame = sourceFrameIdentity(item);
 
   return Object.freeze({
     observationId,
@@ -194,16 +235,25 @@ function validateObservation(observation, expectedCollectorSha, seenIds) {
     spreadBps,
     missingDataFlags: Object.freeze([...missingDataFlags].sort()),
     horizons: Object.freeze([...horizons].sort((left, right) => left - right)),
+    sourceFrame,
   });
 }
 
-function gapAssessment({ acceptedSampleCount, uniqueTimestampCount, sideCounts, horizonCount, missingFlagObservationCount }) {
+function gapAssessment({
+  acceptedSampleCount,
+  uniqueTimestampCount,
+  sideCounts,
+  horizonCount,
+  missingFlagObservationCount,
+  largestSourceFrameGroupSize,
+}) {
   const gaps = [];
   if (acceptedSampleCount === 0) gaps.push('NO_ACCEPTED_OBSERVATIONS');
   if (acceptedSampleCount > 0 && (sideCounts.BUY === 0 || sideCounts.SELL === 0)) gaps.push('SINGLE_AGGRESSIVE_SIDE_OBSERVED');
   if (acceptedSampleCount > 1 && uniqueTimestampCount <= 1) gaps.push('SINGLE_EVENT_TIMESTAMP_ONLY');
   if (acceptedSampleCount > 0 && horizonCount === 0) gaps.push('NO_POST_EVENT_HORIZON_OBSERVED');
   if (missingFlagObservationCount > 0) gaps.push('ACCEPTED_MISSING_DATA_FLAGS_PRESENT');
+  if (largestSourceFrameGroupSize > 1) gaps.push('SOURCE_FRAME_CLUSTERING_OBSERVED');
   return Object.freeze(gaps.sort());
 }
 
@@ -223,6 +273,9 @@ function investigationTargets(gaps) {
   }
   if (gaps.includes('ACCEPTED_MISSING_DATA_FLAGS_PRESENT')) {
     targets.push('INSPECT_EXACT_ACCEPTED_SAMPLE_MISSING_DATA_FLAGS_WITHOUT_GRANTING_COST_OR_CALIBRATION_CREDIT');
+  }
+  if (gaps.includes('SOURCE_FRAME_CLUSTERING_OBSERVED')) {
+    targets.push('INSPECT_SOURCE_FRAME_CLUSTERING_OVER_ADDITIONAL_GENUINE_FORWARD_CAPTURES_WITHOUT_TREATING_GROUP_COUNT_AS_INDEPENDENT_N');
   }
   return Object.freeze(targets.sort());
 }
@@ -250,12 +303,22 @@ export function analyzePublicForwardLiquiditySampleCoverage(payload) {
   const missingFlags = normalized.flatMap((item) => item.missingDataFlags);
   const observationsWithMissingFlags = normalized.filter((item) => item.missingDataFlags.length > 0).length;
   const uniqueTimestampCount = new Set(eventTimestamps).size;
+  const sourceFrameGroupCounts = Object.values(sortedCounts(
+    normalized.map((item) => item.sourceFrame.compositeSourceFrameGroup),
+  ));
+  const largestSourceFrameGroupSize = sourceFrameGroupCounts.length
+    ? Math.max(...sourceFrameGroupCounts)
+    : 0;
+  const observationsInClusteredSourceFrameGroups = sourceFrameGroupCounts
+    .filter((count) => count > 1)
+    .reduce((total, count) => total + count, 0);
   const gaps = gapAssessment({
     acceptedSampleCount: normalized.length,
     uniqueTimestampCount,
     sideCounts,
     horizonCount: horizons.length,
     missingFlagObservationCount: observationsWithMissingFlags,
+    largestSourceFrameGroupSize,
   });
 
   return Object.freeze({
@@ -293,6 +356,18 @@ export function analyzePublicForwardLiquiditySampleCoverage(payload) {
       observationsWithPostEventDrift: normalized.filter((item) => item.horizons.length > 0).length,
       observationsWithoutPostEventDrift: normalized.filter((item) => item.horizons.length === 0).length,
     }),
+    sourceFrameCoverage: Object.freeze({
+      uniquePreEventBookFrameCount: new Set(normalized.map((item) => item.sourceFrame.preEventBookDigest)).size,
+      uniquePublicTradeFrameCount: new Set(normalized.map((item) => item.sourceFrame.publicTradeFrameDigest)).size,
+      uniqueCompositeSourceFrameGroupCount: sourceFrameGroupCounts.length,
+      compositeSourceFrameGroupSize: distribution(sourceFrameGroupCounts),
+      observationsInClusteredSourceFrameGroups,
+      shareOfAcceptedInClusteredSourceFrameGroups: normalized.length
+        ? observationsInClusteredSourceFrameGroups / normalized.length
+        : null,
+      sourceFrameIndependenceProven: false,
+      effectiveIndependentSampleCount: null,
+    }),
     acceptedMissingDataCoverage: Object.freeze({
       observationsWithMissingDataFlags: observationsWithMissingFlags,
       observationsWithoutMissingDataFlags: normalized.length - observationsWithMissingFlags,
@@ -307,6 +382,8 @@ export function analyzePublicForwardLiquiditySampleCoverage(payload) {
     }),
     authority: Object.freeze({
       diagnosticOnly: true,
+      sourceFrameIndependenceProven: false,
+      effectiveIndependentSampleCountCredit: false,
       sampleSufficiencyCredit: false,
       calibrationCredit: false,
       oosCredit: false,
