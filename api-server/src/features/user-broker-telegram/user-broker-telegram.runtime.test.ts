@@ -57,6 +57,16 @@ class FakeTransport implements TelegramTransport {
   }
 }
 
+function telegramRepository() {
+  const repository = new InMemoryUserBrokerTelegramRepository();
+  for (const userId of [USER_A, USER_B]) {
+    repository.setMemberProfile(userId, {
+      status: 'approved', membership_level: 'associate', is_active: true, role: 'associate',
+    });
+  }
+  return repository;
+}
+
 function input(): TradingPlanInput {
   const observedAt = new Date().toISOString();
   return {
@@ -100,7 +110,7 @@ test('paper approval -> execution bridge -> canonical journal -> Telegram A is i
   assert.equal(executed.state, 'FILLED');
 
   const journal = new JournalRepository();
-  const integrationRepo = new InMemoryUserBrokerTelegramRepository();
+  const integrationRepo = telegramRepository();
   const transport = new FakeTransport();
   const service = new UserBrokerTelegramService(integrationRepo, transport, new CanonicalPortfolioSyncSink(journal, USER_A), 'runtime_test_bot');
   await linked(service);
@@ -131,14 +141,14 @@ test('risk reject creates no broker order and no portfolio mutation', async () =
   assert.equal(result.plan, null);
   assert.equal((await trading.listOrders(USER_A)).length, 0);
   const journal = new JournalRepository();
-  const service = new UserBrokerTelegramService(new InMemoryUserBrokerTelegramRepository(), new FakeTransport(), new CanonicalPortfolioSyncSink(journal, USER_A), 'runtime_test_bot');
+  const service = new UserBrokerTelegramService(telegramRepository(), new FakeTransport(), new CanonicalPortfolioSyncSink(journal, USER_A), 'runtime_test_bot');
   const sync = await new TradeExecutionEventBridgeService(trading, service).syncUser(USER_A, 'associate');
   assert.equal(sync.ordersSubmitted, 0);
   assert.equal(journal.mutations, 0);
 });
 
 test('Telegram failure schedules retry without changing FILLED execution or portfolio journal', async () => {
-  const repo = new InMemoryUserBrokerTelegramRepository();
+  const repo = telegramRepository();
   const journal = new JournalRepository();
   const service = new UserBrokerTelegramService(repo, new FakeTransport(true), new CanonicalPortfolioSyncSink(journal, USER_A), 'runtime_test_bot');
   await linked(service);
@@ -160,7 +170,7 @@ test('Telegram failure schedules retry without changing FILLED execution or port
 });
 
 test('manual canonical entry notifies Telegram with MANUAL source and never mutates broker or portfolio again', async () => {
-  const repo = new InMemoryUserBrokerTelegramRepository();
+  const repo = telegramRepository();
   const transport = new FakeTransport();
   let portfolioSyncCalls = 0;
   const service = new UserBrokerTelegramService(repo, transport, { async accept() { portfolioSyncCalls += 1; } }, 'runtime_test_bot');
@@ -182,7 +192,7 @@ test('manual canonical entry notifies Telegram with MANUAL source and never muta
 });
 
 test('manual notification helper fails closed when membership is omitted', async () => {
-  const repo = new InMemoryUserBrokerTelegramRepository();
+  const repo = telegramRepository();
   const service = new UserBrokerTelegramService(repo, new FakeTransport(), { async accept() {} }, 'runtime_test_bot');
   await linked(service);
   const record: StoredPaperJournalRecord = {
