@@ -91,6 +91,16 @@ test('personal Telegram link webhook accepts only the users private chat', () =>
   expect(route).toContain('res.status(204).end()');
 });
 
+test('personal Telegram authority endpoints require the canonical member capability while revoke remains available', () => {
+  expect(route).toContain("userBrokerTelegramRouter.get('/telegram-policy', requireCapability('canConnectPersonalTelegram')");
+  expect(route).toContain("userBrokerTelegramRouter.patch('/telegram-policy', requireCapability('canConnectPersonalTelegram')");
+  expect(route).toContain("userBrokerTelegramRouter.post('/telegram/link', requireCapability('canConnectPersonalTelegram')");
+  expect(route).toContain("userBrokerTelegramRouter.post('/telegram/test', requireCapability('canConnectPersonalTelegram')");
+  expect(route).toContain("userBrokerTelegramRouter.patch('/notifications', requireCapability('canConnectPersonalTelegram')");
+  expect(route).toContain("userBrokerTelegramRouter.delete('/telegram', async");
+  expect(route).not.toContain("userBrokerTelegramRouter.delete('/telegram', requireCapability('canConnectPersonalTelegram')");
+});
+
 test('personal Telegram test endpoint preserves the route transport boundary and sends only explicit test content', () => {
   expect(route).toContain("userBrokerTelegramRouter.post('/telegram/test'");
   expect(route).toContain('sendPersonalTelegramTestMessage(userId)');
