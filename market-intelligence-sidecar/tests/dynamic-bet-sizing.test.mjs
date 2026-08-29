@@ -63,6 +63,8 @@ test('recommended sizing can only reduce parent-authorized exposure', () => {
   assert.ok(result.suggestedNotional <= result.parentBaseNotional);
   assert.equal(result.safety.canIncreaseParentExposure, false);
   assert.equal(result.safety.reductionOnly, true);
+  assert.equal(result.safety.aiNumericalAuthority, false);
+  assert.equal(result.safety.userMultiplierAuthority, false);
   assert.equal(result.autoTrading.orderAllowed, false);
 });
 
@@ -79,9 +81,9 @@ test('high volatility and drift watch automatically apply the stricter reduction
   assert.equal(result.recommendedMultiplier, 0.5);
 });
 
-test('SELL is treated as bearish for counter-trend reduction just like SHORT', () => {
+test('SHORT is reduced in a TREND_UP futures regime without flipping direction', () => {
   const result = evaluateDynamicBetSizing(readyInput({
-    direction: 'SELL',
+    direction: 'SHORT',
     regimeBrain: passGate({
       status: 'READY',
       regime: { label: 'TREND_UP' },
@@ -89,6 +91,7 @@ test('SELL is treated as bearish for counter-trend reduction just like SHORT', (
     }),
   }));
   assert.equal(result.state, 'PASS');
+  assert.equal(result.direction, 'SHORT');
   assert.equal(result.factors.regime, 0.5);
   assert.equal(result.recommendedMultiplier, 0.5);
 });
@@ -108,6 +111,40 @@ test('a veto anywhere in the decision chain becomes zero new exposure, not an or
   assert.equal(result.autoTrading.orderAllowed, false);
 });
 
+test('NO_TRADE and SIGNAL_CONFLICT are preserved as zero-exposure vetoes', () => {
+  const noTrade = evaluateDynamicBetSizing(readyInput({ direction: 'NO_TRADE' }));
+  assert.equal(noTrade.state, 'VETO');
+  assert.equal(noTrade.direction, 'NO_TRADE');
+  assert.equal(noTrade.recommendedMultiplier, 0);
+  assert.ok(noTrade.reasons.includes('UPSTREAM_NO_TRADE'));
+
+  const conflict = evaluateDynamicBetSizing(readyInput({ direction: 'SIGNAL_CONFLICT' }));
+  assert.equal(conflict.state, 'VETO');
+  assert.equal(conflict.direction, 'SIGNAL_CONFLICT');
+  assert.equal(conflict.recommendedMultiplier, 0);
+  assert.ok(conflict.reasons.includes('UPSTREAM_SIGNAL_CONFLICT'));
+});
+
+test('long-only markets cannot be converted into SHORT or SELL exposure', () => {
+  for (const market of ['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT']) {
+    for (const direction of ['SHORT', 'SELL']) {
+      const result = evaluateDynamicBetSizing(readyInput({ market, direction }));
+      assert.equal(result.state, 'VETO');
+      assert.equal(result.recommendedMultiplier, 0);
+      assert.ok(result.reasons.includes('DIRECTION_NOT_ALLOWED_FOR_MARKET'));
+    }
+  }
+});
+
+test('noncanonical futures BUY or SELL direction is vetoed rather than normalized', () => {
+  for (const direction of ['BUY', 'SELL']) {
+    const result = evaluateDynamicBetSizing(readyInput({ direction }));
+    assert.equal(result.state, 'VETO');
+    assert.equal(result.recommendedMultiplier, 0);
+    assert.ok(result.reasons.includes('DIRECTION_NOT_ALLOWED_FOR_MARKET'));
+  }
+});
+
 test('missing decision evidence stays unknown rather than being presented as a measured zero size', () => {
   const result = evaluateDynamicBetSizing(readyInput({ portfolioSafety: undefined }));
   assert.equal(result.state, 'INSUFFICIENT_EVIDENCE');
@@ -115,6 +152,18 @@ test('missing decision evidence stays unknown rather than being presented as a m
   assert.equal(result.advisoryMultiplier, null);
   assert.equal(result.suggestedNotional, null);
   assert.ok(result.reasons.includes('PORTFOLIO_EVIDENCE_INCOMPLETE'));
+});
+
+test('missing market or direction is insufficient evidence, not a full-size fallback', () => {
+  const marketMissing = evaluateDynamicBetSizing(readyInput({ market: '' }));
+  assert.equal(marketMissing.state, 'INSUFFICIENT_EVIDENCE');
+  assert.equal(marketMissing.recommendedMultiplier, null);
+  assert.ok(marketMissing.reasons.includes('MARKET_EVIDENCE_MISSING'));
+
+  const directionMissing = evaluateDynamicBetSizing(readyInput({ direction: '' }));
+  assert.equal(directionMissing.state, 'INSUFFICIENT_EVIDENCE');
+  assert.equal(directionMissing.recommendedMultiplier, null);
+  assert.ok(directionMissing.reasons.includes('DIRECTION_EVIDENCE_MISSING'));
 });
 
 test('observe-only PASS wrappers with missing underlying evidence cannot authorize a sizing recommendation', () => {
@@ -131,9 +180,28 @@ test('observe-only PASS wrappers with missing underlying evidence cannot authori
   assert.ok(result.reasons.includes('PORTFOLIO_EVIDENCE_INCOMPLETE'));
 });
 
-test('policy cannot configure a multiplier above parent exposure', () => {
+test('AI, user, nested multiplier, and maxMultiplier payloads have no numeric authority', () => {
+  const result = evaluateDynamicBetSizing(readyInput({
+    multiplier: 2,
+    maxMultiplier: 5,
+    ai: { multiplier: 4 },
+    user: { multiplier: 3 },
+    sizing: { multiplier: 2 },
+  }));
+  assert.equal(result.state, 'PASS');
+  assert.equal(result.recommendedMultiplier, 0.8);
+  assert.equal(result.safety.maximumMultiplier, 1);
+  assert.equal(result.safety.aiNumericalAuthority, false);
+  assert.equal(result.safety.userMultiplierAuthority, false);
+});
+
+test('policy cannot configure a multiplier above parent exposure or below zero', () => {
   assert.throws(
     () => evaluateDynamicBetSizing(readyInput(), { highVolMultiplier: 1.2 }),
+    /DYNAMIC_SIZING_MULTIPLIER_INVALID/,
+  );
+  assert.throws(
+    () => evaluateDynamicBetSizing(readyInput(), { counterTrendMultiplier: -0.1 }),
     /DYNAMIC_SIZING_MULTIPLIER_INVALID/,
   );
 });
