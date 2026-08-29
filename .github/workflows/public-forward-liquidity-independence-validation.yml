@@ -8,6 +8,7 @@ on:
       - 'market-intelligence-sidecar/src/public-forward-liquidity-multi-source-split-audit.mjs'
       - 'market-intelligence-sidecar/scripts/run-public-forward-liquidity-independence-audit.mjs'
       - 'market-intelligence-sidecar/tests/public-forward-liquidity-independence-audit.test.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-independence-runner-v2.test.mjs'
       - 'market-intelligence-sidecar/tests/public-forward-liquidity-capture-ingest.test.mjs'
       - 'market-intelligence-sidecar/tests/public-forward-liquidity-multi-source-split-audit.test.mjs'
       - '.github/workflows/public-forward-liquidity-independence-validation.yml'
@@ -35,14 +36,16 @@ jobs:
           && node --check market-intelligence-sidecar/src/public-forward-liquidity-multi-source-split-audit.mjs
           && node --check market-intelligence-sidecar/scripts/run-public-forward-liquidity-independence-audit.mjs
           && node --check market-intelligence-sidecar/tests/public-forward-liquidity-independence-audit.test.mjs
+          && node --check market-intelligence-sidecar/tests/public-forward-liquidity-independence-runner-v2.test.mjs
           && node --check market-intelligence-sidecar/tests/public-forward-liquidity-multi-source-split-audit.test.mjs
 
-      - name: Run upstream ingest, independence, and multi-source split tests
+      - name: Run upstream ingest, independence, multi-source split, and V2 producer tests
         run: >-
           node --test
           market-intelligence-sidecar/tests/public-forward-liquidity-capture-ingest.test.mjs
           market-intelligence-sidecar/tests/public-forward-liquidity-independence-audit.test.mjs
           market-intelligence-sidecar/tests/public-forward-liquidity-multi-source-split-audit.test.mjs
+          market-intelligence-sidecar/tests/public-forward-liquidity-independence-runner-v2.test.mjs
 
       - name: Verify inert CLI
         run: node market-intelligence-sidecar/scripts/run-public-forward-liquidity-independence-audit.mjs --help
