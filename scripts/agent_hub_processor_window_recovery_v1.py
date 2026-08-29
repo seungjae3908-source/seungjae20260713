@@ -69,8 +69,8 @@ def read_bounded_comment_window(github: Any, issue_number: int, total_count: int
 
     per_page = 100
     page_count = max(1, math.ceil(total_count / per_page))
-    pages_to_read = processor_window // per_page
-    first_page = max(1, page_count - pages_to_read + 1)
+    tail_start_offset = max(0, total_count - processor_window)
+    first_page = (tail_start_offset // per_page) + 1
     comments: list[Mapping[str, Any]] = []
     for page in range(first_page, page_count + 1):
         query = urlencode({"per_page": per_page, "page": page})
@@ -79,8 +79,11 @@ def read_bounded_comment_window(github: Any, issue_number: int, total_count: int
             raise ProcessorWindowRecoveryError("issue comments response was not a list")
         comments.extend(item for item in batch if isinstance(item, dict))
 
-    if len(comments) > processor_window:
-        comments = comments[-processor_window:]
+    if len(comments) < processor_window:
+        raise ProcessorWindowRecoveryError(
+            f"bounded recovery tail under-fetched comments: expected at least {processor_window}, got {len(comments)}"
+        )
+    comments = comments[-processor_window:]
     comments.sort(key=lambda item: int(item.get("id") or 0))
     return BoundedCommentWindow(
         comments=tuple(comments),
