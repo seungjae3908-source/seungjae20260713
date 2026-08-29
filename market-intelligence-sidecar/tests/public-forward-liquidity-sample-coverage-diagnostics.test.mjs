@@ -88,7 +88,7 @@ function coverageBatch() {
   });
 }
 
-test('reports empirical accepted-sample coverage without representativeness claims', () => {
+test('reports empirical accepted-sample coverage and source-frame clustering without representativeness claims', () => {
   const report = analyzePublicForwardLiquiditySampleCoverage(coverageBatch());
 
   assert.equal(report.inputKind, 'BATCH');
@@ -122,20 +122,35 @@ test('reports empirical accepted-sample coverage without representativeness clai
   ]);
   assert.equal(report.postEventHorizonCoverage.observationsWithPostEventDrift, 3);
   assert.equal(report.postEventHorizonCoverage.observationsWithoutPostEventDrift, 0);
-  assert.deepEqual(report.empiricalCoverageGaps, []);
+  assert.deepEqual(report.sourceFrameCoverage, {
+    uniquePreEventBookFrameCount: 1,
+    uniquePublicTradeFrameCount: 1,
+    uniqueCompositeSourceFrameGroupCount: 1,
+    compositeSourceFrameGroupSize: { count: 1, min: 3, p50: 3, p90: 3, max: 3 },
+    observationsInClusteredSourceFrameGroups: 3,
+    shareOfAcceptedInClusteredSourceFrameGroups: 1,
+    sourceFrameIndependenceProven: false,
+    effectiveIndependentSampleCount: null,
+  });
+  assert.deepEqual(report.empiricalCoverageGaps, ['SOURCE_FRAME_CLUSTERING_OBSERVED']);
   assert.equal(report.representativeness.populationBaselineAvailable, false);
   assert.equal(report.representativeness.representativenessProven, false);
+  assert.equal(report.authority.sourceFrameIndependenceProven, false);
+  assert.equal(report.authority.effectiveIndependentSampleCountCredit, false);
   assert.equal(report.authority.sampleSufficiencyCredit, false);
   assert.equal(report.authority.thresholdOrWindowRelaxationAuthorized, false);
 });
 
-test('diagnoses a verified persisted dataset without granting calibration credit', () => {
+test('diagnoses a verified persisted dataset without granting calibration or independent-N credit', () => {
   const dataset = mergeLiquidityCalibrationBatch(null, coverageBatch()).dataset;
   const report = analyzePublicForwardLiquiditySampleCoverage(dataset);
 
   assert.equal(report.inputKind, 'DATASET');
   assert.equal(report.acceptedSampleCount, 3);
   assert.equal(report.identityCoverage.uniqueObservationIdCount, 3);
+  assert.equal(report.sourceFrameCoverage.uniqueCompositeSourceFrameGroupCount, 1);
+  assert.equal(report.sourceFrameCoverage.effectiveIndependentSampleCount, null);
+  assert.equal(report.authority.effectiveIndependentSampleCountCredit, false);
   assert.equal(report.authority.calibrationCredit, false);
   assert.equal(report.authority.oosCredit, false);
   assert.equal(report.authority.fullCostCredit, false);
@@ -160,11 +175,14 @@ test('zero accepted observations are reported as an empirical gap rather than ma
   assert.equal(report.temporalCoverage.observedSpanMs, null);
   assert.equal(report.quantityCoverage.count, 0);
   assert.equal(report.sideCoverage.shares.BUY, null);
+  assert.equal(report.sourceFrameCoverage.uniqueCompositeSourceFrameGroupCount, 0);
+  assert.equal(report.sourceFrameCoverage.shareOfAcceptedInClusteredSourceFrameGroups, null);
+  assert.equal(report.sourceFrameCoverage.effectiveIndependentSampleCount, null);
   assert.equal(report.authority.naturalEntryCredit, 0);
   assert.equal(report.authority.settlementCredit, 0);
 });
 
-test('single-side and missing post-event coverage are surfaced without recommending relaxed gates', () => {
+test('single-side, missing post-event, and source-frame clustering are surfaced without relaxed gates', () => {
   const batch = buildPublicLiquidityObservationBatch({
     preEventBook: bookFrame(),
     tradeFrame: tradesFrame({
@@ -183,13 +201,15 @@ test('single-side and missing post-event coverage are surfaced without recommend
     'ACCEPTED_MISSING_DATA_FLAGS_PRESENT',
     'NO_POST_EVENT_HORIZON_OBSERVED',
     'SINGLE_AGGRESSIVE_SIDE_OBSERVED',
+    'SOURCE_FRAME_CLUSTERING_OBSERVED',
   ]);
   assert.equal(report.acceptedMissingDataCoverage.flagCounts.POST_EVENT_PUBLIC_OBSERVATION_MISSING, 2);
+  assert.equal(report.sourceFrameCoverage.observationsInClusteredSourceFrameGroups, 2);
   assert.equal(report.investigationTargets.every((target) => !target.includes('RELAX')), true);
   assert.equal(report.authority.thresholdOrWindowRelaxationAuthorized, false);
 });
 
-test('fails closed on private provenance and malformed accepted observation identity', () => {
+test('fails closed on private provenance, malformed frame provenance, and accepted observation identity', () => {
   const privateBatch = structuredClone(coverageBatch());
   privateBatch.datasetProvenance.rawSource.privateApiUsed = true;
   assert.throws(
@@ -197,11 +217,34 @@ test('fails closed on private provenance and malformed accepted observation iden
     /COVERAGE_PUBLIC_PROVENANCE_INVALID/u,
   );
 
+  const malformedFrameBatch = structuredClone(coverageBatch());
+  malformedFrameBatch.observations[0].rawSourceProvenance.publicTrade.rawFrameDigest = 'not-a-digest';
+  assert.throws(
+    () => analyzePublicForwardLiquiditySampleCoverage(malformedFrameBatch),
+    /COVERAGE_PUBLIC_TRADE_FRAME_DIGEST_INVALID/u,
+  );
+
   const duplicateBatch = structuredClone(coverageBatch());
   duplicateBatch.observations[1].observationId = duplicateBatch.observations[0].observationId;
   assert.throws(
     () => analyzePublicForwardLiquiditySampleCoverage(duplicateBatch),
     /COVERAGE_DUPLICATE_OBSERVATION_ID/u,
+  );
+});
+
+test('fails closed when source safety authority is absent or mutated', () => {
+  const mutated = structuredClone(coverageBatch());
+  mutated.safety.liveTradingAllowed = true;
+  assert.throws(
+    () => analyzePublicForwardLiquiditySampleCoverage(mutated),
+    /COVERAGE_SOURCE_SAFETY_INVALID/u,
+  );
+
+  const missing = structuredClone(coverageBatch());
+  delete missing.safety;
+  assert.throws(
+    () => analyzePublicForwardLiquiditySampleCoverage(missing),
+    /COVERAGE_SOURCE_SAFETY_INVALID/u,
   );
 });
 
@@ -214,11 +257,13 @@ test('fails closed on duplicate missing-data flags instead of double-counting co
   );
 });
 
-test('safety contract cannot be interpreted as sufficiency, OOS, cost, Natural, Settlement, Promotion, or trading authority', () => {
+test('safety contract cannot be interpreted as independent N, sufficiency, OOS, cost, Natural, Settlement, Promotion, or trading authority', () => {
   assert.deepEqual(PUBLIC_FORWARD_LIQUIDITY_SAMPLE_COVERAGE_SAFETY, {
     coverageDiagnosticOnly: true,
     populationBaselineAvailable: false,
     representativenessProven: false,
+    sourceFrameIndependenceProven: false,
+    effectiveIndependentSampleCountCredit: false,
     sampleSufficiencyCredit: false,
     calibrationCredit: false,
     oosCredit: false,
