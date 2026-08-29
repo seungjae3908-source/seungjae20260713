@@ -9,6 +9,7 @@ import {
   normalizeBitgetPublicTradesFrame,
 } from '../src/public-data.mjs';
 import {
+  PUBLIC_LIQUIDITY_CALIBRATION_STORE_CONTRACT,
   buildPublicLiquidityObservationBatch,
   canonicalJson,
   sha256,
@@ -163,7 +164,7 @@ async function withRoots(callback) {
   }
 }
 
-test('ingests immutable #795-style capture into the existing #776 canonical dataset store', async () => {
+test('ingests immutable #795-style capture into the existing #776 canonical dataset store without independent sample credit', async () => {
   await withRoots(async ({ stateRoot, researchRepoRoot }) => {
     const rawBatch = validBatch();
     const capture = captureReceipt(rawBatch);
@@ -180,11 +181,20 @@ test('ingests immutable #795-style capture into the existing #776 canonical data
       artifactReceipt: artifact,
     });
     assert.equal(result.schemaVersion, PUBLIC_FORWARD_LIQUIDITY_CAPTURE_INGEST_RECEIPT_VERSION);
+    assert.equal(result.collectorCodeSha, MAIN_SHA);
+    assert.equal(result.sampleClass, 'FORWARD_NATURAL_SAMPLE');
+    assert.equal(result.storeContract, PUBLIC_LIQUIDITY_CALIBRATION_STORE_CONTRACT);
+    assert.equal(result.predecessorDatasetDigest, null);
     assert.equal(result.insertedObservationCount, 1);
     assert.equal(result.duplicateObservationCount, 0);
+    assert.equal(result.rawIngestObservationDelta, 1);
     assert.equal(result.canonicalDatasetPersistencePerformed, true);
-    assert.equal(result.canonicalDatasetCreditApplied, true);
-    assert.equal(result.forwardCalibrationSampleCreditDelta, 1);
+    assert.equal(result.canonicalDatasetCreditApplied, false);
+    assert.equal(result.forwardCalibrationSampleCreditDelta, 0);
+    assert.equal(result.independenceEvaluated, false);
+    assert.equal(result.effectiveIndependentCalibrationN, null);
+    assert.equal(result.calibrationSampleSufficient, false);
+    assert.equal(result.independentSampleCreditAuthority, 'NONE_UNTIL_CANONICAL_INDEPENDENCE_TRANSFORM');
     assert.equal(result.splitAssignmentPerformed, false);
     assert.equal(result.oosValidationComplete, false);
     assert.equal(result.calibrationArtifactProduced, false);
@@ -193,14 +203,16 @@ test('ingests immutable #795-style capture into the existing #776 canonical data
     assert.equal(result.naturalEntryCredit, 0);
     assert.equal(result.runtimeCostCredit, 0);
     assert.equal(result.executionAuthority, 'NONE');
+    assert.match(result.datasetDigest, /^[a-f0-9]{64}$/u);
     assert.match(result.receiptDigest, /^[a-f0-9]{64}$/u);
     const stored = JSON.parse(await readFile(join(stateRoot, result.datasetRelativePath), 'utf8'));
     assert.equal(stored.observations.length, 1);
+    assert.equal(stored.datasetDigest, result.datasetDigest);
     assert.deepEqual(verifyLiquidityCalibrationDataset(stored), { valid: true, reason: null });
   });
 });
 
-test('re-ingesting the same immutable capture gives zero duplicate sample credit', async () => {
+test('re-ingesting the same immutable capture binds the predecessor dataset while keeping sample credit zero', async () => {
   await withRoots(async ({ stateRoot, researchRepoRoot }) => {
     const rawBatch = validBatch();
     const capture = captureReceipt(rawBatch);
@@ -218,13 +230,23 @@ test('re-ingesting the same immutable capture gives zero duplicate sample credit
     };
     const first = await ingestPublicForwardLiquidityCapture(input);
     const second = await ingestPublicForwardLiquidityCapture(input);
+    assert.equal(first.predecessorDatasetDigest, null);
     assert.equal(first.insertedObservationCount, 1);
+    assert.equal(first.rawIngestObservationDelta, 1);
+    assert.equal(first.forwardCalibrationSampleCreditDelta, 0);
+    assert.equal(second.predecessorDatasetDigest, first.datasetDigest);
+    assert.equal(second.storeContract, PUBLIC_LIQUIDITY_CALIBRATION_STORE_CONTRACT);
+    assert.equal(second.sampleClass, 'FORWARD_NATURAL_SAMPLE');
+    assert.equal(second.collectorCodeSha, MAIN_SHA);
     assert.equal(second.insertedObservationCount, 0);
+    assert.equal(second.rawIngestObservationDelta, 0);
     assert.equal(second.duplicateObservationCount, 1);
     assert.equal(second.forwardCalibrationSampleCreditDelta, 0);
     assert.equal(second.canonicalDatasetCreditApplied, false);
+    assert.equal(second.effectiveIndependentCalibrationN, null);
     assert.notEqual(first.datasetDigest, second.datasetDigest);
     const stored = JSON.parse(await readFile(join(stateRoot, second.datasetRelativePath), 'utf8'));
+    assert.equal(stored.predecessorDigest, first.datasetDigest);
     assert.equal(stored.observations.length, 1);
     assert.equal(stored.duplicateAttempts.length, 1);
   });
