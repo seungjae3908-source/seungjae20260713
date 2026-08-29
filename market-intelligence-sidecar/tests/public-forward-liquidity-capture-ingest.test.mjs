@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
 
 import {
@@ -23,10 +24,32 @@ import {
   ingestPublicForwardLiquidityCapture,
 } from '../src/public-forward-liquidity-capture-ingest.mjs';
 
-const MAIN_SHA = 'a'.repeat(40);
+const FALLBACK_MAIN_SHA = 'a'.repeat(40);
 const REPOSITORY = 'seungjae3908-source/seungjae20260713';
 const ARTIFACT_ID = '123456';
 const ARTIFACT_DIGEST = 'b'.repeat(64);
+const COLLECTOR_IMPLEMENTATION_PATH = 'market-intelligence-sidecar/src/public-forward-liquidity-calibration.mjs';
+
+function git(cwd, args) {
+  return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+}
+
+async function initializeExactCollectorCheckout(researchRepoRoot) {
+  const collectorPath = join(researchRepoRoot, COLLECTOR_IMPLEMENTATION_PATH);
+  await mkdir(dirname(collectorPath), { recursive: true });
+  await writeFile(collectorPath, 'export const fixtureCollectorImplementation = true;\n', 'utf8');
+  git(researchRepoRoot, ['init', '-q']);
+  git(researchRepoRoot, ['config', 'user.email', 'fixture@example.invalid']);
+  git(researchRepoRoot, ['config', 'user.name', 'Fixture']);
+  git(researchRepoRoot, ['add', COLLECTOR_IMPLEMENTATION_PATH]);
+  git(researchRepoRoot, ['commit', '-q', '-m', 'collector fixture']);
+  const mainSha = git(researchRepoRoot, ['rev-parse', 'HEAD']);
+  const collectorImplementationBlobSha = git(
+    researchRepoRoot,
+    ['rev-parse', `${mainSha}:${COLLECTOR_IMPLEMENTATION_PATH}`],
+  );
+  return { mainSha, collectorImplementationBlobSha };
+}
 
 function bookFrame({
   marketTimestampMs = 1_000,
@@ -68,7 +91,7 @@ function tradesFrame() {
   });
 }
 
-function validBatch() {
+function validBatch(mainSha = FALLBACK_MAIN_SHA) {
   return buildPublicLiquidityObservationBatch({
     preEventBook: bookFrame(),
     tradeFrame: tradesFrame(),
@@ -79,11 +102,11 @@ function validBatch() {
       bids: [[101, 2], [100, 5]],
       asks: [[102, 4], [103, 5]],
     })],
-    collectorCodeSha: MAIN_SHA,
+    collectorCodeSha: mainSha,
   });
 }
 
-function captureReceipt(batch) {
+function captureReceipt(batch, mainSha = FALLBACK_MAIN_SHA) {
   return {
     schemaVersion: PUBLIC_FORWARD_LIQUIDITY_CAPTURE_RECEIPT_VERSION,
     evidenceClass: 'PUBLIC_FORWARD_LIQUIDITY_CAPTURE_RECEIPT',
@@ -91,8 +114,8 @@ function captureReceipt(batch) {
     runId: '33225113204',
     runAttempt: '1',
     repository: REPOSITORY,
-    exactMainSha: MAIN_SHA,
-    collectorCodeSha: MAIN_SHA,
+    exactMainSha: mainSha,
+    collectorCodeSha: mainSha,
     symbol: 'BTCUSDT',
     sampleClass: 'FORWARD_NATURAL_SAMPLE',
     eventObservationDelayMs: 2_000,
@@ -157,7 +180,8 @@ async function withRoots(callback) {
   const stateRoot = await mkdtemp(join(tmpdir(), 'liquidity-state-'));
   const researchRepoRoot = await mkdtemp(join(tmpdir(), 'research-repo-'));
   try {
-    await callback({ stateRoot, researchRepoRoot });
+    const identity = await initializeExactCollectorCheckout(researchRepoRoot);
+    await callback({ stateRoot, researchRepoRoot, ...identity });
   } finally {
     await rm(stateRoot, { recursive: true, force: true });
     await rm(researchRepoRoot, { recursive: true, force: true });
@@ -165,14 +189,14 @@ async function withRoots(callback) {
 }
 
 test('ingests immutable #795-style capture into the existing #776 canonical dataset store without independent sample credit', async () => {
-  await withRoots(async ({ stateRoot, researchRepoRoot }) => {
-    const rawBatch = validBatch();
-    const capture = captureReceipt(rawBatch);
+  await withRoots(async ({ stateRoot, researchRepoRoot, mainSha, collectorImplementationBlobSha }) => {
+    const rawBatch = validBatch(mainSha);
+    const capture = captureReceipt(rawBatch, mainSha);
     const artifact = artifactReceipt(capture);
     const result = await ingestPublicForwardLiquidityCapture({
       stateRoot,
       researchRepoRoot,
-      expectedMainSha: MAIN_SHA,
+      expectedMainSha: mainSha,
       expectedRepository: REPOSITORY,
       expectedArtifactId: ARTIFACT_ID,
       expectedArtifactDigest: ARTIFACT_DIGEST,
@@ -181,7 +205,9 @@ test('ingests immutable #795-style capture into the existing #776 canonical data
       artifactReceipt: artifact,
     });
     assert.equal(result.schemaVersion, PUBLIC_FORWARD_LIQUIDITY_CAPTURE_INGEST_RECEIPT_VERSION);
-    assert.equal(result.collectorCodeSha, MAIN_SHA);
+    assert.equal(result.collectorCodeSha, mainSha);
+    assert.equal(result.collectorImplementationPath, COLLECTOR_IMPLEMENTATION_PATH);
+    assert.equal(result.collectorImplementationBlobSha, collectorImplementationBlobSha);
     assert.equal(result.sampleClass, 'FORWARD_NATURAL_SAMPLE');
     assert.equal(result.storeContract, PUBLIC_LIQUIDITY_CALIBRATION_STORE_CONTRACT);
     assert.equal(result.predecessorDatasetDigest, null);
@@ -213,14 +239,14 @@ test('ingests immutable #795-style capture into the existing #776 canonical data
 });
 
 test('re-ingesting the same immutable capture binds the predecessor dataset while keeping sample credit zero', async () => {
-  await withRoots(async ({ stateRoot, researchRepoRoot }) => {
-    const rawBatch = validBatch();
-    const capture = captureReceipt(rawBatch);
+  await withRoots(async ({ stateRoot, researchRepoRoot, mainSha, collectorImplementationBlobSha }) => {
+    const rawBatch = validBatch(mainSha);
+    const capture = captureReceipt(rawBatch, mainSha);
     const artifact = artifactReceipt(capture);
     const input = {
       stateRoot,
       researchRepoRoot,
-      expectedMainSha: MAIN_SHA,
+      expectedMainSha: mainSha,
       expectedRepository: REPOSITORY,
       expectedArtifactId: ARTIFACT_ID,
       expectedArtifactDigest: ARTIFACT_DIGEST,
@@ -231,13 +257,15 @@ test('re-ingesting the same immutable capture binds the predecessor dataset whil
     const first = await ingestPublicForwardLiquidityCapture(input);
     const second = await ingestPublicForwardLiquidityCapture(input);
     assert.equal(first.predecessorDatasetDigest, null);
+    assert.equal(first.collectorImplementationBlobSha, collectorImplementationBlobSha);
     assert.equal(first.insertedObservationCount, 1);
     assert.equal(first.rawIngestObservationDelta, 1);
     assert.equal(first.forwardCalibrationSampleCreditDelta, 0);
     assert.equal(second.predecessorDatasetDigest, first.datasetDigest);
+    assert.equal(second.collectorImplementationBlobSha, collectorImplementationBlobSha);
     assert.equal(second.storeContract, PUBLIC_LIQUIDITY_CALIBRATION_STORE_CONTRACT);
     assert.equal(second.sampleClass, 'FORWARD_NATURAL_SAMPLE');
-    assert.equal(second.collectorCodeSha, MAIN_SHA);
+    assert.equal(second.collectorCodeSha, mainSha);
     assert.equal(second.insertedObservationCount, 0);
     assert.equal(second.rawIngestObservationDelta, 0);
     assert.equal(second.duplicateObservationCount, 1);
@@ -252,16 +280,39 @@ test('re-ingesting the same immutable capture binds the predecessor dataset whil
   });
 });
 
+test('fails closed when the exact collector implementation blob cannot be proven from the captured checkout', async () => {
+  await withRoots(async ({ stateRoot, researchRepoRoot, mainSha }) => {
+    const rawBatch = validBatch(mainSha);
+    const capture = captureReceipt(rawBatch, mainSha);
+    const artifact = artifactReceipt(capture);
+    await rm(join(researchRepoRoot, '.git'), { recursive: true, force: true });
+    await assert.rejects(
+      ingestPublicForwardLiquidityCapture({
+        stateRoot,
+        researchRepoRoot,
+        expectedMainSha: mainSha,
+        expectedRepository: REPOSITORY,
+        expectedArtifactId: ARTIFACT_ID,
+        expectedArtifactDigest: ARTIFACT_DIGEST,
+        rawBatch,
+        captureReceipt: capture,
+        artifactReceipt: artifact,
+      }),
+      /COLLECTOR_IMPLEMENTATION_BLOB_UNPROVEN/u,
+    );
+  });
+});
+
 test('rejects forged raw batch digest and immutable artifact digest mismatch', async () => {
-  await withRoots(async ({ stateRoot, researchRepoRoot }) => {
-    const rawBatch = validBatch();
-    const capture = { ...captureReceipt(rawBatch), rawBatchDigest: 'c'.repeat(64) };
+  await withRoots(async ({ stateRoot, researchRepoRoot, mainSha }) => {
+    const rawBatch = validBatch(mainSha);
+    const capture = { ...captureReceipt(rawBatch, mainSha), rawBatchDigest: 'c'.repeat(64) };
     const artifact = artifactReceipt(capture);
     await assert.rejects(
       ingestPublicForwardLiquidityCapture({
         stateRoot,
         researchRepoRoot,
-        expectedMainSha: MAIN_SHA,
+        expectedMainSha: mainSha,
         expectedRepository: REPOSITORY,
         expectedArtifactId: ARTIFACT_ID,
         expectedArtifactDigest: ARTIFACT_DIGEST,
@@ -272,13 +323,13 @@ test('rejects forged raw batch digest and immutable artifact digest mismatch', a
       /CAPTURE_RAW_BATCH_DIGEST_MISMATCH/u,
     );
 
-    const validCapture = captureReceipt(rawBatch);
+    const validCapture = captureReceipt(rawBatch, mainSha);
     const wrongArtifact = artifactReceipt(validCapture, { artifactDigest: 'd'.repeat(64) });
     await assert.rejects(
       ingestPublicForwardLiquidityCapture({
         stateRoot,
         researchRepoRoot,
-        expectedMainSha: MAIN_SHA,
+        expectedMainSha: mainSha,
         expectedRepository: REPOSITORY,
         expectedArtifactId: ARTIFACT_ID,
         expectedArtifactDigest: ARTIFACT_DIGEST,
@@ -292,15 +343,15 @@ test('rejects forged raw batch digest and immutable artifact digest mismatch', a
 });
 
 test('rejects authority escalation or an unverified empty capture', async () => {
-  await withRoots(async ({ stateRoot, researchRepoRoot }) => {
-    const rawBatch = validBatch();
-    const capture = captureReceipt(rawBatch);
+  await withRoots(async ({ stateRoot, researchRepoRoot, mainSha }) => {
+    const rawBatch = validBatch(mainSha);
+    const capture = captureReceipt(rawBatch, mainSha);
     const escalated = { ...capture, liquidityImpactPresent: true };
     await assert.rejects(
       ingestPublicForwardLiquidityCapture({
         stateRoot,
         researchRepoRoot,
-        expectedMainSha: MAIN_SHA,
+        expectedMainSha: mainSha,
         expectedRepository: REPOSITORY,
         expectedArtifactId: ARTIFACT_ID,
         expectedArtifactDigest: ARTIFACT_DIGEST,
@@ -315,7 +366,7 @@ test('rejects authority escalation or an unverified empty capture', async () => 
       ingestPublicForwardLiquidityCapture({
         stateRoot,
         researchRepoRoot,
-        expectedMainSha: MAIN_SHA,
+        expectedMainSha: mainSha,
         expectedRepository: REPOSITORY,
         expectedArtifactId: ARTIFACT_ID,
         expectedArtifactDigest: ARTIFACT_DIGEST,
@@ -334,7 +385,7 @@ test('blocks protected application storage and relative state roots before mutat
   const artifact = artifactReceipt(capture);
   const common = {
     researchRepoRoot: '/tmp/research-repo',
-    expectedMainSha: MAIN_SHA,
+    expectedMainSha: FALLBACK_MAIN_SHA,
     expectedRepository: REPOSITORY,
     expectedArtifactId: ARTIFACT_ID,
     expectedArtifactDigest: ARTIFACT_DIGEST,
