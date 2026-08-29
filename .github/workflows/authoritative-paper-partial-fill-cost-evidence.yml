@@ -1,0 +1,50 @@
+name: Authoritative Paper Partial Fill Cost Evidence
+
+on:
+  pull_request:
+    paths:
+      - 'api-server/src/services/authoritative-paper-partial-fill-cost-evidence.service.ts'
+      - 'api-server/src/services/authoritative-paper-partial-fill-cost-evidence.service.test.ts'
+      - '.github/workflows/authoritative-paper-partial-fill-cost-evidence.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck API server
+        run: pnpm --dir api-server run typecheck
+      - name: Bundle focused partial-fill evidence test
+        run: >-
+          pnpm --dir api-server exec esbuild
+          src/services/authoritative-paper-partial-fill-cost-evidence.service.test.ts
+          --bundle --platform=node --format=cjs --target=node20
+          --outfile=/tmp/authoritative-paper-partial-fill-cost-evidence.test.cjs
+      - name: Run focused partial-fill evidence test
+        run: node --test /tmp/authoritative-paper-partial-fill-cost-evidence.test.cjs
+      - name: Verify safety invariants
+        run: |
+          grep -q "executionAuthority: 'NONE'" api-server/src/services/authoritative-paper-partial-fill-cost-evidence.service.ts
+          grep -q "privateApiAllowed: false" api-server/src/services/authoritative-paper-partial-fill-cost-evidence.service.ts
+          grep -q "liveTrading: false" api-server/src/services/authoritative-paper-partial-fill-cost-evidence.service.ts
+          grep -q "directPublicL2SnapshotMayProducePartialFillCost: false" api-server/src/services/authoritative-paper-partial-fill-cost-evidence.service.ts
+          grep -q "bookWalkSlippageReusedAsPartialFillCost: false" api-server/src/services/authoritative-paper-partial-fill-cost-evidence.service.ts
+          grep -q "latencyAdverseMoveReusedAsPartialFillCost: false" api-server/src/services/authoritative-paper-partial-fill-cost-evidence.service.ts
+          grep -q "liquidityImpactReusedAsPartialFillCost: false" api-server/src/services/authoritative-paper-partial-fill-cost-evidence.service.ts
+          grep -q "sharedObservationLineageAllowed: false" api-server/src/services/authoritative-paper-partial-fill-cost-evidence.service.ts
+          grep -q "testFixtureRuntimeCredit: 0" api-server/src/services/authoritative-paper-partial-fill-cost-evidence.service.ts
+          grep -q "missingDataMayProduceZeroCost: false" api-server/src/services/authoritative-paper-partial-fill-cost-evidence.service.ts
