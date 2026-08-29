@@ -26,6 +26,11 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
+function immutableDigest(value) {
+  const digest = String(value ?? '').trim();
+  return /^[0-9a-f]{64}$/i.test(digest) ? digest.toLowerCase() : null;
+}
+
 function resolvePolicy(input = {}) {
   const policy = { ...DEFAULT_REGIME_BRAIN_POLICY, ...(input ?? {}) };
   if (typeof policy.version !== 'string' || !policy.version.trim()) throw new Error('REGIME_POLICY_VERSION_REQUIRED');
@@ -60,20 +65,80 @@ function evidenceAge(now, asOf, policy) {
 
 function evaluateDrift(raw = {}, policy, now) {
   const evaluatedAt = finite(raw.evaluatedAt);
-  const sampleSize = Math.max(0, finite(raw.sampleSize, 0));
-  const featurePsi = raw.featurePsi && typeof raw.featurePsi === 'object' ? raw.featurePsi : null;
-  const rows = featurePsi
-    ? Object.entries(featurePsi)
-      .map(([feature, value]) => ({ feature, psi: finite(value) }))
-      .filter((row) => row.psi != null && row.psi >= 0)
-    : [];
+  const parsedSampleSize = finite(raw.sampleSize);
+  const sampleSize = Number.isInteger(parsedSampleSize) && parsedSampleSize >= 0 ? parsedSampleSize : null;
+  const referenceId = typeof raw.referenceId === 'string' && raw.referenceId.trim() ? raw.referenceId.trim() : null;
+  const referenceDigest = immutableDigest(raw.referenceDigest);
+  const referenceFrozen = raw.referenceFrozen === true;
+  const featurePsi = raw.featurePsi && typeof raw.featurePsi === 'object' && !Array.isArray(raw.featurePsi)
+    ? raw.featurePsi
+    : null;
+  const entries = featurePsi ? Object.entries(featurePsi) : [];
+  const invalidPsi = entries.some(([feature, value]) => {
+    const parsed = Number(value);
+    return !feature.trim() || !Number.isFinite(parsed) || parsed < 0;
+  });
+  const rows = invalidPsi
+    ? []
+    : entries.map(([feature, value]) => ({ feature, psi: Number(value) }));
 
-  if (evaluatedAt == null || !rows.length) {
-    return { status: 'NOT_AVAILABLE', reason: 'DRIFT_EVIDENCE_NOT_AVAILABLE', sampleSize, features: [] };
+  if (evaluatedAt == null || parsedSampleSize == null || !entries.length) {
+    return {
+      status: 'NOT_AVAILABLE',
+      reason: 'DRIFT_EVIDENCE_NOT_AVAILABLE',
+      sampleSize,
+      referenceId,
+      referenceDigest,
+      referenceFrozen,
+      features: [],
+    };
   }
+  if (sampleSize == null) {
+    return {
+      status: 'NOT_AVAILABLE',
+      reason: 'DRIFT_SAMPLE_INVALID',
+      sampleSize: null,
+      referenceId,
+      referenceDigest,
+      referenceFrozen,
+      features: [],
+    };
+  }
+  if (!referenceId || !referenceDigest || !referenceFrozen) {
+    return {
+      status: 'NOT_AVAILABLE',
+      reason: 'DRIFT_REFERENCE_PROVENANCE_NOT_AVAILABLE',
+      sampleSize,
+      referenceId,
+      referenceDigest,
+      referenceFrozen,
+      features: rows,
+    };
+  }
+  if (invalidPsi) {
+    return {
+      status: 'NOT_AVAILABLE',
+      reason: 'DRIFT_FEATURE_PSI_INVALID',
+      sampleSize,
+      referenceId,
+      referenceDigest,
+      referenceFrozen,
+      features: [],
+    };
+  }
+
   const freshness = evidenceAge(now, evaluatedAt, policy);
   if (!freshness.valid) {
-    return { status: 'NOT_AVAILABLE', reason: freshness.reason.replace('REGIME_', 'DRIFT_'), sampleSize, evidenceAgeMs: freshness.ageMs, features: rows };
+    return {
+      status: 'NOT_AVAILABLE',
+      reason: freshness.reason.replace('REGIME_', 'DRIFT_'),
+      sampleSize,
+      evidenceAgeMs: freshness.ageMs,
+      referenceId,
+      referenceDigest,
+      referenceFrozen,
+      features: rows,
+    };
   }
   if (sampleSize < policy.driftMinSamples) {
     return {
@@ -82,6 +147,9 @@ function evaluateDrift(raw = {}, policy, now) {
       sampleSize,
       minimumSamples: policy.driftMinSamples,
       evidenceAgeMs: freshness.ageMs,
+      referenceId,
+      referenceDigest,
+      referenceFrozen,
       features: rows,
     };
   }
@@ -98,6 +166,9 @@ function evaluateDrift(raw = {}, policy, now) {
     meanPsi,
     watchThreshold: policy.driftWatchPsi,
     brakeThreshold: policy.driftBrakePsi,
+    referenceId,
+    referenceDigest,
+    referenceFrozen,
     features: rows.sort((a, b) => b.psi - a.psi),
   };
 }
