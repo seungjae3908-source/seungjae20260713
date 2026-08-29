@@ -17,9 +17,15 @@ import {
 import {
   PUBLIC_FORWARD_LIQUIDITY_INDEPENDENCE_SAFETY,
   auditPublicForwardLiquidityIndependentSplits,
+  buildPublicForwardLiquidityIndependentSplitSource,
   buildPublicForwardLiquidityIndependentProjection,
+  classifyPublicForwardLiquidityBoundSources,
   classifyPublicForwardLiquidityIndependence,
 } from '../src/public-forward-liquidity-independence-audit.mjs';
+import {
+  PUBLIC_FORWARD_LIQUIDITY_CAPTURE_INGEST_RECEIPT_VERSION,
+  computePublicForwardLiquidityCaptureIngestReceiptDigest,
+} from '../src/public-forward-liquidity-capture-ingest.mjs';
 
 const COLLECTOR_SHA = 'a'.repeat(40);
 
@@ -64,7 +70,7 @@ function tradeFrame({ events, receiveTimestampMs, seed }) {
   });
 }
 
-function batch({ base, events, seed }) {
+function batch({ base, events, seed, collectorCodeSha = COLLECTOR_SHA }) {
   const preEventBook = bookFrame({ marketTimestampMs: base - 100, seed });
   const trades = tradeFrame({ events, receiveTimestampMs: base + 300, seed });
   const postEventBooks = [bookFrame({ marketTimestampMs: base + 600, seed: seed + 100 })];
@@ -72,9 +78,52 @@ function batch({ base, events, seed }) {
     preEventBook,
     tradeFrame: trades,
     postEventBooks,
-    collectorCodeSha: COLLECTOR_SHA,
+    collectorCodeSha,
     maxPreEventBookAgeMs: 5_000,
   });
+}
+
+function boundSource(dataset, { artifactId = '1001', receiptOverrides = {} } = {}) {
+  const datasetRelativePath = `forward/liquidity-calibration-v1/forward_natural_sample/${dataset.collectorCodeSha}/dataset.json`;
+  const body = {
+    schemaVersion: PUBLIC_FORWARD_LIQUIDITY_CAPTURE_INGEST_RECEIPT_VERSION,
+    exactMainSha: dataset.collectorCodeSha,
+    repository: 'seungjae3908-source/seungjae20260713',
+    captureRunId: artifactId,
+    captureRunAttempt: '1',
+    rawBatchDigest: dataset.batchProvenance[0].rawDigest,
+    captureArtifactReceiptDigest: sha256(`artifact-receipt-${artifactId}`),
+    artifactId,
+    artifactDigest: sha256(`artifact-${artifactId}`),
+    datasetDigest: dataset.datasetDigest,
+    datasetRelativePath,
+    insertedObservationCount: dataset.observations.length,
+    duplicateObservationCount: 0,
+    forwardCalibrationSampleCreditDelta: dataset.observations.length,
+    canonicalDatasetPersistencePerformed: true,
+    canonicalDatasetCreditApplied: true,
+    duplicateCreditEvaluated: true,
+    splitAssignmentPerformed: false,
+    oosValidationComplete: false,
+    calibrationArtifactProduced: false,
+    liquidityImpactPresent: false,
+    liquidityImpactStatus: 'BLOCKED_DATA',
+    fullCostReady: false,
+    evidenceCompleteCredit: 0,
+    naturalEntryCredit: 0,
+    runtimeCostCredit: 0,
+    executionAuthority: 'NONE',
+    privateApiUsed: false,
+    liveTrading: false,
+    orderSubmitted: false,
+    realOrders: 0,
+    ...receiptOverrides,
+  };
+  const ingestReceipt = {
+    ...body,
+    receiptDigest: computePublicForwardLiquidityCaptureIngestReceiptDigest(body),
+  };
+  return { dataset, ingestReceipt, datasetRelativePath };
 }
 
 function mergeBatches(batches) {
@@ -261,13 +310,125 @@ test('conflicting payloads for one public execution identity fail closed', () =>
   assert.equal(result.audit.fullCostReady, false);
 });
 
+test('receipt-bound datasets across collector SHAs produce one read-only independent split source', () => {
+  const firstSha = '1'.repeat(40);
+  const secondSha = '2'.repeat(40);
+  const firstDataset = mergeLiquidityCalibrationBatch(null, batch({
+    base: 10_000,
+    seed: 11,
+    collectorCodeSha: firstSha,
+    events: [{ execId: 'bound-event-1', eventTimestampMs: 10_000, quantity: 1 }],
+  })).dataset;
+  const secondDataset = mergeLiquidityCalibrationBatch(null, batch({
+    base: 20_000,
+    seed: 12,
+    collectorCodeSha: secondSha,
+    events: [{ execId: 'bound-event-2', eventTimestampMs: 20_000, quantity: 2 }],
+  })).dataset;
+  const sources = [
+    boundSource(firstDataset, { artifactId: '2001' }),
+    boundSource(secondDataset, { artifactId: '2002' }),
+  ];
+  const result = buildPublicForwardLiquidityIndependentSplitSource({
+    sources,
+    producerCodeSha: 'f'.repeat(40),
+  });
+  assert.equal(result.status, 'PRESENT');
+  assert.deepEqual(result.audit.collectorCodeShas, [firstSha, secondSha]);
+  assert.equal(result.audit.counts.RAW_ACCEPTED_N, 2);
+  assert.equal(result.audit.counts.CANONICAL_ACCEPTED_N, 2);
+  assert.equal(result.audit.counts.INDEPENDENT_N, 2);
+  assert.equal(result.audit.counts.CROSS_BATCH_DUPLICATE_N, 0);
+  assert.equal(result.splitSource.observations.length, 2);
+  assert.equal(result.splitSource.splitAssignmentPerformed, false);
+  assert.equal(result.splitSource.oosValidationComplete, false);
+  assert.equal(result.splitSource.fullCostReady, false);
+});
+
+test('the same public event in two receipt-bound datasets receives zero cross-batch duplicate credit', () => {
+  const event = { execId: 'same-public-event', eventTimestampMs: 40_000, quantity: 3 };
+  const firstDataset = mergeLiquidityCalibrationBatch(null, batch({
+    base: 40_000,
+    seed: 21,
+    collectorCodeSha: '3'.repeat(40),
+    events: [event],
+  })).dataset;
+  const secondDataset = mergeLiquidityCalibrationBatch(null, batch({
+    base: 40_000,
+    seed: 22,
+    collectorCodeSha: '4'.repeat(40),
+    events: [event],
+  })).dataset;
+  const result = classifyPublicForwardLiquidityBoundSources({
+    sources: [
+      boundSource(firstDataset, { artifactId: '3001' }),
+      boundSource(secondDataset, { artifactId: '3002' }),
+    ],
+    producerCodeSha: 'e'.repeat(40),
+  });
+  assert.equal(result.status, 'PRESENT');
+  assert.equal(result.audit.counts.RAW_ACCEPTED_N, 2);
+  assert.equal(result.audit.counts.UNIQUE_EVENT_N, 1);
+  assert.equal(result.audit.counts.CROSS_BATCH_DUPLICATE_N, 1);
+  assert.equal(result.audit.counts.CANONICAL_ACCEPTED_N, 1);
+  assert.equal(result.audit.counts.INDEPENDENT_N, 1);
+  assert.equal(result.audit.duplicateEvents[0].crossBatch, true);
+});
+
+test('bound-source adapter rejects missing receipt authority and incomplete canonical lineage', () => {
+  const dataset = mergeLiquidityCalibrationBatch(null, batch({
+    base: 50_000,
+    seed: 31,
+    collectorCodeSha: '5'.repeat(40),
+    events: [{ execId: 'receipt-bound-event', eventTimestampMs: 50_000 }],
+  })).dataset;
+  const mismatched = boundSource(dataset, {
+    artifactId: '4001',
+    receiptOverrides: { datasetDigest: '0'.repeat(64) },
+  });
+  const mismatchResult = classifyPublicForwardLiquidityBoundSources({
+    sources: [mismatched],
+    producerCodeSha: 'd'.repeat(40),
+  });
+  assert.equal(mismatchResult.status, 'BLOCKED_DATA');
+  assert.ok(mismatchResult.blockers.includes('UPSTREAM_RECEIPT_DATASET_DIGEST_MISMATCH'));
+
+  const incomplete = boundSource(genuineDataset(), { artifactId: '4002' });
+  const incompleteResult = classifyPublicForwardLiquidityBoundSources({
+    sources: [incomplete],
+    producerCodeSha: 'd'.repeat(40),
+  });
+  assert.equal(incompleteResult.status, 'BLOCKED_DATA');
+  assert.ok(incompleteResult.blockers.includes('UPSTREAM_DATASET_LINEAGE_INCOMPLETE'));
+});
+
+test('repeating one receipt-bound source in a manifest fails closed before raw N inflation', () => {
+  const dataset = mergeLiquidityCalibrationBatch(null, batch({
+    base: 60_000,
+    seed: 41,
+    collectorCodeSha: '6'.repeat(40),
+    events: [{ execId: 'duplicate-source-event', eventTimestampMs: 60_000 }],
+  })).dataset;
+  const source = boundSource(dataset, { artifactId: '5001' });
+  const result = classifyPublicForwardLiquidityBoundSources({
+    sources: [source, source],
+    producerCodeSha: 'c'.repeat(40),
+  });
+  assert.equal(result.status, 'BLOCKED_DATA');
+  assert.ok(result.blockers.includes('UPSTREAM_SOURCE_DUPLICATE:sourceIdentity'));
+});
+
 test('independence audit is deterministic and never produces cost or execution authority', () => {
   const dataset = genuineDataset();
   const first = classifyPublicForwardLiquidityIndependence(dataset);
   const second = classifyPublicForwardLiquidityIndependence(dataset);
   assert.equal(first.audit.auditDigest, second.audit.auditDigest);
   assert.deepEqual(PUBLIC_FORWARD_LIQUIDITY_INDEPENDENCE_SAFETY, {
-    singleRawDatasetSsotRequired: true,
+    upstreamCanonicalIngestSsotRequired: true,
+    rawPersistenceAuthority: PUBLIC_FORWARD_LIQUIDITY_CAPTURE_INGEST_RECEIPT_VERSION,
+    upstreamIngestReceiptRequired: true,
+    crossCollectorCanonicalDatasetSynthesisAllowed: false,
+    derivedAuditPersistenceOwned: false,
     rawAcceptedNDescriptiveOnly: true,
     crossEventDedupRequired: true,
     sourceFrameIndependenceRequired: true,
