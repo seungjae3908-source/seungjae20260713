@@ -22,9 +22,14 @@ function readyInput(overrides = {}) {
   return {
     now: NOW,
     asOf: NOW - 5_000,
+    costAsOf: NOW - 5_000,
     market: 'CRYPTO_FUTURES',
     evidenceReady: true,
-    source: 'SERVER_STRATEGY_PROMOTION',
+    forwardDataComplete: true,
+    fullCostReady: true,
+    evidenceComplete: 1,
+    source: 'forward-recommendation-profit-calibration-v2',
+    costSource: 'FULL_COST_EVIDENCE_V1',
     costPolicyVersion: 'cost-v7',
     expectedGrossEdgeBps: 20,
     conformalLowerEdgeBps: 15,
@@ -34,7 +39,7 @@ function readyInput(overrides = {}) {
   };
 }
 
-test('passes only after every explicit expected cost is deducted from the conservative edge', () => {
+test('passes only after every authoritative readiness gate and explicit expected cost are present', () => {
   const result = evaluateNetAlpha(readyInput());
   assert.equal(result.status, 'READY');
   assert.equal(result.totalExpectedCostBps, 5);
@@ -42,6 +47,11 @@ test('passes only after every explicit expected cost is deducted from the conser
   assert.equal(result.conservativeNetAlphaBps, 10);
   assert.equal(result.decision, 'TAKE');
   assert.equal(result.autoTrading.state, 'PASS');
+  assert.equal(result.readiness.forwardDataComplete, true);
+  assert.equal(result.readiness.fullCostReady, true);
+  assert.equal(result.readiness.evidenceComplete, true);
+  assert.equal(result.profitabilityClaimAllowed, false);
+  assert.equal(result.safety.aiNumericalAuthority, false);
   assert.equal(result.safety.executionAuthority, 'NONE');
   assert.equal(result.safety.orderAllowed, false);
 });
@@ -58,7 +68,31 @@ test('positive point estimate is skipped when the conservative lower edge is not
   assert.ok(result.reasons.includes('CONSERVATIVE_NET_ALPHA_BELOW_MINIMUM'));
 });
 
-test('missing cost evidence stays unavailable rather than assuming zero', () => {
+test('gross edge or conformal lower edge missing keeps Net Alpha unavailable', () => {
+  const grossMissing = evaluateNetAlpha(readyInput({ expectedGrossEdgeBps: Number.NaN }));
+  assert.equal(grossMissing.status, 'NOT_AVAILABLE');
+  assert.ok(grossMissing.reasons.includes('EXPECTED_GROSS_EDGE_NOT_AVAILABLE'));
+
+  const lowerMissing = evaluateNetAlpha(readyInput({ conformalLowerEdgeBps: null }));
+  assert.equal(lowerMissing.status, 'NOT_AVAILABLE');
+  assert.ok(lowerMissing.reasons.includes('CONFORMAL_LOWER_EDGE_NOT_AVAILABLE'));
+});
+
+test('Forward Data, Full Cost, and Evidence Complete readiness are independent hard gates', () => {
+  const forwardBlocked = evaluateNetAlpha(readyInput({ forwardDataComplete: false }));
+  assert.equal(forwardBlocked.status, 'NOT_AVAILABLE');
+  assert.ok(forwardBlocked.reasons.includes('FORWARD_DATA_INCOMPLETE'));
+
+  const fullCostBlocked = evaluateNetAlpha(readyInput({ fullCostReady: false }));
+  assert.equal(fullCostBlocked.status, 'NOT_AVAILABLE');
+  assert.ok(fullCostBlocked.reasons.includes('FULL_COST_NOT_READY'));
+
+  const evidenceBlocked = evaluateNetAlpha(readyInput({ evidenceComplete: 0 }));
+  assert.equal(evidenceBlocked.status, 'NOT_AVAILABLE');
+  assert.ok(evidenceBlocked.reasons.includes('EVIDENCE_COMPLETE_NOT_READY'));
+});
+
+test('missing or partial cost evidence stays unavailable rather than assuming zero', () => {
   const explicit = costs();
   delete explicit.liquidityImpactBps;
   const result = evaluateNetAlpha(readyInput({ costs: explicit }));
@@ -78,6 +112,38 @@ test('an explicitly measured zero cost is valid evidence', () => {
   assert.equal(result.expectedNetEdgeBps, 20);
   assert.equal(result.conservativeNetAlphaBps, 15);
   assert.equal(result.autoTrading.state, 'PASS');
+});
+
+test('cost provenance and clock are mandatory and independently fail closed', () => {
+  const noSource = evaluateNetAlpha(readyInput({ costSource: '' }));
+  assert.equal(noSource.status, 'NOT_AVAILABLE');
+  assert.ok(noSource.reasons.includes('FULL_COST_SOURCE_REQUIRED'));
+
+  const stale = evaluateNetAlpha(readyInput({ costAsOf: NOW - 120_000 }));
+  assert.equal(stale.status, 'NOT_AVAILABLE');
+  assert.ok(stale.reasons.includes('COST_EVIDENCE_STALE'));
+
+  const future = evaluateNetAlpha(readyInput({ costAsOf: NOW + 5_000 }));
+  assert.equal(future.status, 'NOT_AVAILABLE');
+  assert.ok(future.reasons.includes('COST_EVIDENCE_FROM_FUTURE'));
+});
+
+test('non-finite and negative cost components cannot enter the sum', () => {
+  const nonFinite = evaluateNetAlpha(readyInput({ costs: costs({ slippageBps: Number.POSITIVE_INFINITY }) }));
+  assert.equal(nonFinite.status, 'NOT_AVAILABLE');
+  assert.ok(nonFinite.reasons.includes('COST_EVIDENCE_MISSING:slippageBps'));
+
+  const negative = evaluateNetAlpha(readyInput({ costs: costs({ latencyBps: -0.1 }) }));
+  assert.equal(negative.status, 'NOT_AVAILABLE');
+  assert.ok(negative.reasons.includes('COST_EVIDENCE_INVALID:latencyBps'));
+});
+
+test('gross and cost freshness use the authoritative parent clock and reject future evidence', () => {
+  const staleGross = evaluateNetAlpha(readyInput({ asOf: NOW - 120_000 }));
+  assert.ok(staleGross.reasons.includes('NET_ALPHA_EVIDENCE_STALE'));
+
+  const futureGross = evaluateNetAlpha(readyInput({ asOf: NOW + 5_000 }));
+  assert.ok(futureGross.reasons.includes('NET_ALPHA_EVIDENCE_FROM_FUTURE'));
 });
 
 test('server attestation mismatch fails closed instead of trusting either number', () => {
