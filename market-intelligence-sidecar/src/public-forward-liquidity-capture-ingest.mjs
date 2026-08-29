@@ -356,6 +356,8 @@ export async function ingestPublicForwardLiquidityCapture({
     throw new Error('DATASET_PATH_ESCAPED_STATE_ROOT');
   }
   const batchObservationIds = Object.freeze(batch.observations.map((observation) => observation.observationId).sort());
+  const batchObservationsForDigest = [...batch.observations]
+    .sort((left, right) => left.observationId.localeCompare(right.observationId));
 
   const body = Object.freeze({
     schemaVersion: PUBLIC_FORWARD_LIQUIDITY_CAPTURE_INGEST_RECEIPT_VERSION,
@@ -370,8 +372,10 @@ export async function ingestPublicForwardLiquidityCapture({
     captureRunAttempt,
     rawBatchDigest,
     batchObservationIds,
-    batchObservationDigest: sha256(canonicalJson(batch.observations)),
+    batchObservationCount: batch.observations.length,
+    batchObservationDigest: sha256(canonicalJson(batchObservationsForDigest)),
     batchDatasetProvenanceDigest: sha256(canonicalJson(batch.datasetProvenance)),
+    batchProvenanceIndex: persisted.dataset.batchProvenance.length - 1,
     captureArtifactReceiptDigest,
     artifactId,
     artifactDigest,
