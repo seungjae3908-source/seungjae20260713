@@ -4,7 +4,7 @@ p = Path('market-intelligence-sidecar/tests/public-forward-liquidity-independenc
 s = p.read_text()
 s = s.replace(
     "assert.ok(mismatchResult.blockers.includes('UPSTREAM_RECEIPT_DATASET_DIGEST_MISMATCH'));",
-    "assert.ok(mismatchResult.blockers.includes('UPSTREAM_RECEIPT_CHAIN_FINAL_DATASET_DIGEST_MISMATCH'));",
+    "assert.ok(mismatchResult.blockers.includes('UPSTREAM_RECEIPT_INTERMEDIATE_DATASET_DIGEST_MISMATCH'));",
     1,
 )
 s = s.replace(
