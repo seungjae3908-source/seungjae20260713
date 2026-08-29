@@ -16,6 +16,7 @@ const repository = 'owner/repo';
 const artifactId = '999';
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
 const artifactDigest = digest('artifact');
+const researchRepoRoot = join(tmpdir(), 'investment-research-current');
 
 function observation() {
   return {
@@ -141,6 +142,7 @@ function resign<T extends Record<string, unknown>>(value: T) {
 function baseInput(stateRoot: string, capture = captureReceipt(), artifact = artifactReceipt(capture)) {
   return {
     stateRoot,
+    researchRepoRoot,
     expectedMainSha: mainSha,
     expectedRepository: repository,
     expectedArtifactId: artifactId,
@@ -183,6 +185,41 @@ test('persists one verified genuine capture into the existing canonical state ro
   } finally {
     await rm(stateRoot, { recursive: true, force: true });
   }
+});
+
+test('rejects protected application storage and research checkout overlap before persistence', async () => {
+  for (const stateRoot of [
+    '/opt/stock-app-data/partial-fill',
+    '/srv/stock-app/partial-fill',
+    '/var/lib/stock-app/partial-fill',
+  ]) {
+    await assert.rejects(
+      ingestPublicForwardPartialFillCalibrationCapture(baseInput(stateRoot)),
+      /BLOCKED_STORAGE:STATE_ROOT_OVERLAPS_PROTECTED_APPLICATION_STORAGE/,
+    );
+  }
+
+  await assert.rejects(
+    ingestPublicForwardPartialFillCalibrationCapture({
+      ...baseInput(join(researchRepoRoot, 'stock-analyzer', 'partial-fill')),
+      researchRepoRoot,
+    }),
+    /BLOCKED_STORAGE:STATE_ROOT_OVERLAPS_PROTECTED_RESEARCH_CHECKOUT/,
+  );
+});
+
+test('rejects non-absolute research storage inputs before persistence', async () => {
+  await assert.rejects(
+    ingestPublicForwardPartialFillCalibrationCapture({ ...baseInput('relative-state-root'), stateRoot: 'relative-state-root' }),
+    /BLOCKED_STORAGE:STATE_ROOT_MUST_BE_ABSOLUTE/,
+  );
+  const stateRoot = await mkdtemp(join(tmpdir(), 'partial-fill-ingest-'));
+  try {
+    await assert.rejects(
+      ingestPublicForwardPartialFillCalibrationCapture({ ...baseInput(stateRoot), researchRepoRoot: 'relative-repo-root' }),
+      /BLOCKED_STORAGE:RESEARCH_REPO_ROOT_MUST_BE_ABSOLUTE/,
+    );
+  } finally { await rm(stateRoot, { recursive: true, force: true }); }
 });
 
 test('rejects tampered raw receipt digest before persistence', async () => {
