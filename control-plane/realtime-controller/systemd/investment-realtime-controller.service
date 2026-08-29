@@ -1,0 +1,31 @@
+[Unit]
+Description=Investment Platform Realtime Agent Hub Controller
+Documentation=https://github.com/seungjae3908-source/seungjae20260713
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=true
+WorkingDirectory=/opt/investment-platform/current
+Environment=CONTROLLER_DB_PATH=/var/lib/investment-realtime-controller/controller.db
+Environment=CONTROLLER_BIND=127.0.0.1
+Environment=CONTROLLER_PORT=8787
+EnvironmentFile=/etc/investment-realtime-controller.env
+StateDirectory=investment-realtime-controller
+ExecStart=/usr/bin/python3 /opt/investment-platform/current/control-plane/realtime-controller/realtime_controller.py serve
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target
