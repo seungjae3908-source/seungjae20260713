@@ -22,7 +22,7 @@ const HELP = `Usage:
     [--output <new-report.json>]
 
 This command is offline/read-only with respect to canonical Research state.
-It verifies #811 ingest-receipt bindings for one or more existing #776 canonical
+It verifies the complete ordered #811 ingest-receipt chain for one or more existing #776 canonical
 datasets and derives cross-batch unique/independent sample credit. With the three
 frozen-split inputs it also produces the authoritative read-only multi-source V2
 split audit/receipt while preserving per-source dataset/receipt/collector lineage.
@@ -84,11 +84,14 @@ export function validatePublicForwardLiquiditySourceManifestLayout(manifest) {
     throw new Error('SOURCE_STATE_ROOT_OVERLAPS_RESEARCH_CHECKOUT');
   }
   for (const source of manifest.sources) {
+    const receiptPaths = Array.isArray(source?.ingestReceiptPaths)
+      ? source.ingestReceiptPaths
+      : (typeof source?.ingestReceiptPath === 'string' ? [source.ingestReceiptPath] : []);
     if (!source || typeof source !== 'object' || Array.isArray(source)
       || typeof source.datasetPath !== 'string'
-      || typeof source.ingestReceiptPath !== 'string'
       || !isAbsolute(source.datasetPath)
-      || !isAbsolute(source.ingestReceiptPath)) {
+      || receiptPaths.length === 0
+      || receiptPaths.some((receiptPath) => typeof receiptPath !== 'string' || !isAbsolute(receiptPath))) {
       throw new Error('SOURCE_MANIFEST_ENTRY_INVALID');
     }
   }
@@ -99,20 +102,24 @@ async function sourcesFromManifest(path) {
   const manifest = await json(path);
   const { stateRoot } = validatePublicForwardLiquiditySourceManifestLayout(manifest);
   const sources = await Promise.all(manifest.sources.map(async (source) => {
-    const [dataset, ingestReceipt] = await Promise.all([
+    const receiptPaths = Array.isArray(source.ingestReceiptPaths)
+      ? source.ingestReceiptPaths
+      : [source.ingestReceiptPath];
+    const [dataset, ingestReceipts] = await Promise.all([
       json(source.datasetPath),
-      json(source.ingestReceiptPath),
+      Promise.all(receiptPaths.map((receiptPath) => json(receiptPath))),
     ]);
     const datasetRelativePath = relative(stateRoot, resolve(source.datasetPath));
     if (!datasetRelativePath
       || isAbsolute(datasetRelativePath)
-      || datasetRelativePath.split(/[\\/]+/u).some((segment) => segment === '..')) {
+      || datasetRelativePath.split(/[\/]+/u).some((segment) => segment === '..')) {
       throw new Error('SOURCE_DATASET_OUTSIDE_STATE_ROOT');
     }
     return {
       dataset,
-      ingestReceipt,
-      datasetRelativePath: datasetRelativePath.replace(/\\/gu, '/'),
+      ingestReceipt: ingestReceipts.at(-1),
+      ingestReceipts,
+      datasetRelativePath: datasetRelativePath.replaceAll(String.fromCharCode(92), '/'),
     };
   }));
   return { manifest, sources };
