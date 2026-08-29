@@ -34,6 +34,9 @@ const EXPECTED_SOURCE_FILES = Object.freeze([
   "api-server/src/services/authoritative-paper-callback-owners.service.ts",
   "api-server/src/services/authoritative-paper-evidence-sources.service.ts",
   "api-server/src/services/authoritative-paper-execution-cost-sources.service.ts",
+  "api-server/src/services/authoritative-paper-generic-risk-policy-producer.service.ts",
+  "api-server/src/services/authoritative-paper-latency-cost-evidence.service.ts",
+  "api-server/src/services/authoritative-paper-risk-sizing-source.service.ts",
   "api-server/src/services/authoritative-paper-runtime-package.entry.ts",
   "api-server/src/services/bitget-futures-public-evidence.service.ts",
   "api-server/src/services/crypto-signal-scanner.service.ts",
@@ -155,6 +158,7 @@ function assertManifest(manifest, bundleDigest) {
 function assertExports(runtime) {
   const safety = runtime?.AUTHORITATIVE_PAPER_RUNTIME_PACKAGE_SAFETY;
   const evidenceSafety = runtime?.AUTHORITATIVE_PAPER_EVIDENCE_SOURCES_SAFETY;
+  const latencySafety = runtime?.AUTHORITATIVE_PAPER_LATENCY_COST_EVIDENCE_SAFETY;
   if (runtime?.SCANNER_CRYPTO_FUTURES_PAPER_ADMISSION_EVIDENCE_PRODUCER_VERSION
       !== AUTHORITATIVE_PAPER_RUNTIME_PACKAGE_CONTRACT.canonicalProducerVersion
     || runtime?.PAPER_TRADING_STATE_SNAPSHOT_VERSION
@@ -165,10 +169,17 @@ function assertExports(runtime) {
       !== AUTHORITATIVE_PAPER_RUNTIME_PACKAGE_CONTRACT.blockedDataSourceContractSchemaVersion
     || typeof runtime?.createScannerCryptoFuturesPaperAdmissionEvidenceProducer !== "function"
     || typeof runtime?.createAuthoritativePaperEvidenceSourceWiring !== "function"
+    || typeof runtime?.createAuthoritativePaperNaturalCycleEvidenceSourceWiring !== "function"
+    || typeof runtime?.createAuthoritativePaperGenericRiskPolicyProducer !== "function"
+    || typeof runtime?.buildAuthoritativePaperRiskSizingFromGenericRiskPolicySource !== "function"
     || typeof runtime?.createImmutablePaperTradingStateSnapshot !== "function"
     || typeof runtime?.buildAuthoritativeSizedContractRules !== "function"
     || typeof runtime?.buildAuthoritativePaperExecutionObservation !== "function"
     || typeof runtime?.buildAuthoritativeSupplementalCostEvidence !== "function"
+    || typeof runtime?.buildAuthoritativePaperLatencyCostEvidence !== "function"
+    || typeof runtime?.bindAuthoritativePaperLatencyToSupplementalCostInput !== "function"
+    || typeof runtime?.collectAuthoritativePaperLatencyCostEvidence !== "function"
+    || typeof runtime?.readBitgetPublicLatencyMidpointQuote !== "function"
     || typeof runtime?.paperStateFromAuthoritativeSnapshot !== "function"
     || typeof runtime?.buildPaperSimulatedExecutionEvidence !== "function"
     || typeof runtime?.validateImmutablePaperTradingStateSnapshot !== "function"
@@ -180,6 +191,10 @@ function assertExports(runtime) {
     || evidenceSafety?.liveTrading !== false
     || evidenceSafety?.scheduleActivationAuthority !== false
     || evidenceSafety?.financialMutationAllowed !== false
+    || latencySafety?.executionAuthority !== "NONE"
+    || latencySafety?.privateApiAllowed !== false
+    || latencySafety?.liveTrading !== false
+    || latencySafety?.financialMutationAllowed !== false
     || safety?.executionAuthority !== "NONE"
     || safety?.privateApiAllowed !== false
     || safety?.liveTrading !== false
@@ -227,11 +242,22 @@ export async function loadValidatedAuthoritativePaperRuntimePackage({
     costPolicyVersionBinding: freeze(manifest.costPolicyVersionBinding),
     createPaperAdmissionEvidenceProducer: producerFactory(runtime),
     createAuthoritativePaperEvidenceSourceWiring: runtime.createAuthoritativePaperEvidenceSourceWiring,
+    createAuthoritativePaperNaturalCycleEvidenceSourceWiring:
+      runtime.createAuthoritativePaperNaturalCycleEvidenceSourceWiring,
+    createAuthoritativePaperGenericRiskPolicyProducer:
+      runtime.createAuthoritativePaperGenericRiskPolicyProducer,
+    buildAuthoritativePaperRiskSizingFromGenericRiskPolicySource:
+      runtime.buildAuthoritativePaperRiskSizingFromGenericRiskPolicySource,
     createImmutablePaperTradingStateSnapshot: runtime.createImmutablePaperTradingStateSnapshot,
     buildPaperSimulatedExecutionEvidence: runtime.buildPaperSimulatedExecutionEvidence,
     buildAuthoritativeSizedContractRules: runtime.buildAuthoritativeSizedContractRules,
     buildAuthoritativePaperExecutionObservation: runtime.buildAuthoritativePaperExecutionObservation,
     buildAuthoritativeSupplementalCostEvidence: runtime.buildAuthoritativeSupplementalCostEvidence,
+    buildAuthoritativePaperLatencyCostEvidence: runtime.buildAuthoritativePaperLatencyCostEvidence,
+    bindAuthoritativePaperLatencyToSupplementalCostInput:
+      runtime.bindAuthoritativePaperLatencyToSupplementalCostInput,
+    collectAuthoritativePaperLatencyCostEvidence: runtime.collectAuthoritativePaperLatencyCostEvidence,
+    readBitgetPublicLatencyMidpointQuote: runtime.readBitgetPublicLatencyMidpointQuote,
     paperStateFromAuthoritativeSnapshot: runtime.paperStateFromAuthoritativeSnapshot,
     validateImmutablePaperTradingStateSnapshot: runtime.validateImmutablePaperTradingStateSnapshot,
     executionAuthority: "NONE",
@@ -275,6 +301,14 @@ export function createLosslessPaperStateSnapshotFileOwner({
   }
   if (typeof now !== "function") throw new TypeError("Paper state snapshot clock is required");
   const resolvedPath = snapshotPath.trim();
+  async function readValidatedSnapshot() {
+    const value = JSON.parse(await readFile(resolvedPath, "utf8"));
+    const snapshot = runtimePackage.validateImmutablePaperTradingStateSnapshot(value, now());
+    if (snapshot.publisherAccountIdSha256 !== expectedPublisherAccountIdSha256) {
+      throw new Error("PAPER_STATE_PUBLISHER_ACCOUNT_BINDING_MISMATCH");
+    }
+    return snapshot;
+  }
   return freeze({
     schemaVersion: "lossless-paper-state-snapshot-file-owner-v2",
     snapshotPath: resolvedPath,
@@ -308,13 +342,9 @@ export function createLosslessPaperStateSnapshotFileOwner({
       await atomicWriteText(resolvedPath, `${JSON.stringify(validated, null, 2)}\n`);
       return validated;
     },
+    paperStateSnapshotForCard: readValidatedSnapshot,
     async paperStateForCard() {
-      const value = JSON.parse(await readFile(resolvedPath, "utf8"));
-      const snapshot = runtimePackage.validateImmutablePaperTradingStateSnapshot(value, now());
-      if (snapshot.publisherAccountIdSha256 !== expectedPublisherAccountIdSha256) {
-        throw new Error("PAPER_STATE_PUBLISHER_ACCOUNT_BINDING_MISMATCH");
-      }
-      return snapshot.state;
+      return (await readValidatedSnapshot()).state;
     },
     executionAuthority: "NONE",
     privateApiAllowed: false,
