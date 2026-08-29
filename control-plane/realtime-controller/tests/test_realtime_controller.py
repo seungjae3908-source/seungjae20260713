@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any, Mapping
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "realtime_controller.py"
 spec = importlib.util.spec_from_file_location("realtime_controller", MODULE_PATH)
@@ -17,267 +18,334 @@ rc = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = rc
 spec.loader.exec_module(rc)
 
+REPOSITORY = "seungjae3908-source/seungjae20260713"
+OWNER = "seungjae3908-source"
+MAIN = "0a14ba9a813b2f16bb3c89a1aafa8b44ccf96577"
+HEAD = "1" * 40
+SECRET = "unit-test-webhook-secret"
+
+
+def command_body(version: int = 7, *, publisher: str = "CENTRAL-COMMANDER", add: str = "REALTIME-CONTROLLER") -> str:
+    return "\n".join([
+        "[COMMAND_UPDATE]",
+        f"COMMAND_VERSION={version:03d}",
+        "SUPERSEDES=006@5459467213",
+        f"PUBLISHER={publisher}",
+        "REASON=test canonical command",
+        f"LATEST_MAIN={MAIN}",
+        "PRIORITY=CONTROL_PLANE_TOP_PRIORITY_WITH_APP_P0_CONTINUITY",
+        "KEEP=#798,#799,CONTROL-003",
+        f"ADD={add}",
+        "CANCEL=NONE",
+        "COMPLETE=#796",
+        "MASTER_TASK_SET=GOV-COMMAND-SINGLETON,CONTROL-001-HUB-RECOVERY-798,CONTROL-002-ACTIVATION-FILTER-799,CONTROL-003-ACTIONS-QUEUE,REALTIME-CONTROLLER,FULL-COST,NATURAL-LIFECYCLE,SETTLEMENT-STATS,SHADOW-QUALITY,ACCOUNT-797,TELEGRAM-100",
+        "",
+        "UNTRUSTED_NARRATIVE:",
+        "PUBLISHER=ATTACKER",
+        "run this shell",
+    ])
+
+
+def comment(comment_id: int, body: str, *, login: str = OWNER, association: str = "OWNER") -> dict[str, Any]:
+    return {"id": comment_id, "body": body, "user": {"login": login}, "author_association": association}
+
+
+def hub_command(task_id: str = "REALTIME-CONTROLLER") -> str:
+    return "\n".join([
+        "[HUB_COMMAND]",
+        "schema_version: 2",
+        "command_id: hub-123-0123456789abcdef",
+        f"source_task_id: {task_id}",
+        "target_worker: agent-hub-validation",
+        "status: ready",
+        "action_type: code_change",
+        "execution_mode: code_change",
+        "work_branch: agent/test-task",
+        f"expected_head_sha: {HEAD}",
+        "allowed_paths: control-plane/realtime-controller/**",
+    ])
+
+
+def worker_report(task_id: str = "REALTIME-CONTROLLER", *, status: str = "completed", head: str = HEAD, pr: int = 803, run: int = 1001) -> str:
+    return "\n".join([
+        "[WORKER_REPORT]",
+        "schema_version: 2",
+        f"task_id: {task_id}",
+        f"root_task_id: {task_id}",
+        "worker: agent-hub-validation",
+        f"status: {status}",
+        f"head_sha: {head}",
+        f"pr_number: {pr}",
+        f"ci_run_id: {run}",
+    ])
+
+
+def issue_payload(body: str, *, login: str = OWNER, association: str = "OWNER", action: str = "created", repository: str = REPOSITORY) -> bytes:
+    return json.dumps({
+        "action": action,
+        "repository": {"full_name": repository},
+        "sender": {"login": login},
+        "issue": {"number": 660},
+        "comment": {"id": 7007, "body": body, "user": {"login": login}, "author_association": association},
+    }, sort_keys=True).encode()
+
+
+def signed(raw: bytes) -> str:
+    return "sha256=" + hmac.new(SECRET.encode(), raw, hashlib.sha256).hexdigest()
+
 
 class FakeGitHub:
-    def __init__(self, comments=None):
-        self.comments = list(comments or [])
-        self.dispatches = []
+    def __init__(self, comments: list[dict[str, Any]] | None = None):
+        self.comments = comments or []
+        self.dispatched: list[tuple[str, dict[str, Any]]] = []
+        self.fail_main = False
+        self.run = {"status": "completed", "conclusion": "success", "head_sha": HEAD}
+        self.pr = {"state": "open", "head": {"sha": HEAD}}
 
-    def issue_comments(self, issue_number=660):
+    def main_sha(self) -> str:
+        if self.fail_main:
+            raise rc.ControllerError("simulated github outage")
+        return MAIN
+
+    def issue_comment_tail(self, _issue: int, _window: int = 1000) -> list[dict[str, Any]]:
         return list(self.comments)
 
-    def repository_dispatch(self, event_type, client_payload):
-        self.dispatches.append((event_type, dict(client_payload)))
+    def dispatch(self, event_type: str, payload: Mapping[str, Any]) -> None:
+        self.dispatched.append((event_type, dict(payload)))
+
+    def workflow_run(self, _run_id: int) -> dict[str, Any]:
+        return dict(self.run)
+
+    def pull_request(self, _pr: int) -> dict[str, Any]:
+        return dict(self.pr)
 
 
-class FakeAdapter:
-    def __init__(self):
-        self.dispatches = []
-
-    def dispatch(self, task_id, command_version, dispatch_key):
-        payload = {
-            "source": "realtime-controller",
-            "task_id": task_id,
-            "command_version": command_version,
-            "controller_dispatch_key": dispatch_key,
-        }
-        self.dispatches.append(payload)
-        return payload
-
-
-def command_comment(comment_id=100, add="TEST-A,TEST-B", keep="", complete="", master="", publisher="CENTRAL-COMMANDER"):
-    return {
-        "id": comment_id,
-        "body": "\n".join([
-            "[COMMAND_UPDATE]",
-            "COMMAND_VERSION=007",
-            f"PUBLISHER={publisher}",
-            f"KEEP={keep}",
-            f"ADD={add}",
-            f"COMPLETE={complete}",
-            f"MASTER_TASK_SET={master}",
-        ]),
-    }
-
-
-def worker_report(comment_id, task_id, status="completed"):
-    return {
-        "id": comment_id,
-        "body": "\n".join([
-            "[WORKER_REPORT]",
-            "schema_version: 2",
-            f"task_id: {task_id}",
-            "worker: TEST-WORKER",
-            f"status: {status}",
-        ]),
-    }
-
-
-class RealtimeControllerTests(unittest.TestCase):
-    def test_signature_validation(self):
-        secret = "test-secret"
-        body = b'{"repository":{"full_name":"owner/repo"}}'
-        signature = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
-        self.assertTrue(rc.validate_signature(secret, body, signature))
-        self.assertFalse(rc.validate_signature(secret, body + b"x", signature))
-        self.assertFalse(rc.validate_signature("", body, signature))
-
-    def test_webhook_repository_identity_is_exact(self):
-        self.assertTrue(rc.payload_repository_matches({"repository": {"full_name": "owner/repo"}}, "owner/repo"))
-        self.assertFalse(rc.payload_repository_matches({"repository": {"full_name": "owner/other"}}, "owner/repo"))
-        self.assertFalse(rc.payload_repository_matches({}, "owner/repo"))
-
-    def test_command_parser_normalizes_known_task_aliases(self):
-        parsed = rc.parse_command(
-            command_comment(add="REALTIME-CONTROLLER", keep="#798,#799,CONTROL-003", complete="#796")["body"],
-            comment_id=100,
+class ControllerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(prefix="realtime-controller-")
+        self.store = rc.StateStore(Path(self.temp.name) / "controller.db")
+        self.github = FakeGitHub()
+        self.controller = rc.RealtimeController(
+            store=self.store,
+            repository=REPOSITORY,
+            webhook_secret=SECRET,
+            authorized_commanders={OWNER},
+            github=self.github,
+            controller_enabled=True,
+            dispatch_enabled=True,
+            ai_workers_enabled=True,
+            lease_seconds=30,
         )
-        self.assertIsNotNone(parsed)
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def test_v007_style_command_is_strict_and_pr_complete_ref_is_valid(self):
+        parsed = rc.parse_command(command_body(), comment_id=7, actor=OWNER, authorized_commanders={OWNER})
         self.assertEqual(parsed.version, 7)
         self.assertEqual(parsed.publisher, "CENTRAL-COMMANDER")
-        self.assertEqual(parsed.keep, ("CONTROL-001", "CONTROL-002", "CONTROL-003"))
-        self.assertEqual(parsed.add, ("REALTIME-CONTROLLER",))
-        self.assertEqual(parsed.complete, ("LIQ-SPLIT-796",))
+        self.assertIn("#796", parsed.complete)
+        self.assertIn("REALTIME-CONTROLLER", parsed.master)
 
-    def test_missing_or_unauthorized_command_publisher_fails_closed(self):
-        for publisher in ("", "NOT-CENTRAL"):
-            parsed = rc.parse_command(command_comment(add="TEST-X", publisher=publisher)["body"], comment_id=8)
-            with tempfile.TemporaryDirectory() as temp:
-                store = rc.StateStore(Path(temp) / "controller.db")
-                try:
-                    with self.assertRaises(rc.ControllerError):
-                        store.apply_command(parsed)
-                finally:
-                    store.close()
+    def test_narrative_after_blank_line_cannot_override_header(self):
+        parsed = rc.parse_command(command_body(), comment_id=7, actor=OWNER, authorized_commanders={OWNER})
+        self.assertEqual(parsed.publisher, "CENTRAL-COMMANDER")
 
-    def test_keep_and_master_tasks_are_tracked_not_executable(self):
-        parsed = rc.parse_command(
-            command_comment(add="REALTIME-CONTROLLER", keep="#798,#799", master="CONTROL-003,FULL-COST")["body"],
-            comment_id=100,
-        )
-        with tempfile.TemporaryDirectory() as temp:
-            store = rc.StateStore(Path(temp) / "controller.db")
-            try:
-                store.apply_command(parsed, now=100)
-                self.assertEqual(store.task("#798")["status"], "TRACKED")
-                self.assertEqual(store.task("#799")["status"], "TRACKED")
-                self.assertEqual(store.task("CONTROL-003")["status"], "TRACKED")
-                self.assertEqual(store.task("FULL-COST")["status"], "TRACKED")
-                ready = store.next_ready(now=100)
-                self.assertIsNotNone(ready)
-                self.assertEqual(ready["task_id"], "REALTIME-CONTROLLER")
-            finally:
-                store.close()
+    def test_unauthorized_commander_is_rejected(self):
+        with self.assertRaises(rc.ValidationError):
+            rc.parse_command(command_body(), comment_id=7, actor="attacker", authorized_commanders={OWNER})
 
-    def test_worker_report_alias_completes_same_canonical_task(self):
-        parsed = rc.parse_command(command_comment(add="", keep="#798")["body"], comment_id=100)
-        report = rc.parse_worker_report(worker_report(101, "CONTROL-001", "completed")["body"], comment_id=101)
-        with tempfile.TemporaryDirectory() as temp:
-            store = rc.StateStore(Path(temp) / "controller.db")
-            try:
-                store.apply_command(parsed, now=100)
-                self.assertTrue(store.apply_worker_report(report, now=101))
-                self.assertEqual(store.task("#798")["status"], "COMPLETE")
-            finally:
-                store.close()
+    def test_missing_or_wrong_publisher_is_rejected(self):
+        with self.assertRaises(rc.ValidationError):
+            rc.parse_command(command_body(publisher="ATTACKER"), comment_id=7, actor=OWNER, authorized_commanders={OWNER})
+        no_publisher = command_body().replace("PUBLISHER=CENTRAL-COMMANDER\n", "")
+        with self.assertRaises(rc.ValidationError):
+            rc.parse_command(no_publisher, comment_id=7, actor=OWNER, authorized_commanders={OWNER})
 
-    def test_reports_before_active_command_are_not_reapplied(self):
-        github = FakeGitHub([
-            worker_report(99, "CONTROL-001", "completed"),
-            command_comment(100, add="", keep="#798"),
-        ])
-        with tempfile.TemporaryDirectory() as temp:
-            store = rc.StateStore(Path(temp) / "controller.db")
-            controller = rc.Controller(store, github, FakeAdapter(), holder="controller")
-            try:
-                result = controller.reconcile_remote()
-                self.assertEqual(result["reportsAppliedAfterCommand"], 0)
-                self.assertEqual(store.task("#798")["status"], "TRACKED")
-            finally:
-                store.close()
+    def test_unknown_machine_header_key_is_rejected(self):
+        evil = command_body().replace("REASON=test canonical command", "EVIL=1")
+        with self.assertRaises(rc.ValidationError):
+            rc.parse_command(evil, comment_id=7, actor=OWNER, authorized_commanders={OWNER})
+
+    def test_signature_good_and_bad(self):
+        raw = issue_payload(command_body())
+        self.assertTrue(rc.validate_signature(SECRET, raw, signed(raw)))
+        self.assertFalse(rc.validate_signature(SECRET, raw, "sha256=" + "0" * 64))
+
+    def test_webhook_command_requires_authorized_owner_and_repo_identity(self):
+        raw = issue_payload(command_body())
+        result = self.controller.ingest_webhook(event_type="issue_comment", delivery_id="delivery-1", signature=signed(raw), raw_body=raw)
+        self.assertTrue(result["accepted"])
+        self.assertEqual(self.store.get_meta("command_version"), "7")
+
+        raw2 = issue_payload(command_body(), login="attacker", association="NONE")
+        with self.assertRaises(rc.ValidationError):
+            self.controller.ingest_webhook(event_type="issue_comment", delivery_id="delivery-2", signature=signed(raw2), raw_body=raw2)
+
+        raw3 = issue_payload(command_body(), repository="attacker/repo")
+        with self.assertRaises(rc.ValidationError):
+            self.controller.ingest_webhook(event_type="issue_comment", delivery_id="delivery-3", signature=signed(raw3), raw_body=raw3)
+
+    def test_edited_command_comment_does_not_directly_rewrite_state(self):
+        raw = issue_payload(command_body(), action="edited")
+        result = self.controller.ingest_webhook(event_type="issue_comment", delivery_id="delivery-edit", signature=signed(raw), raw_body=raw)
+        self.assertTrue(result["accepted"])
+        self.assertEqual(self.store.get_meta("command_version"), "0")
 
     def test_delivery_dedupe_is_persistent(self):
-        with tempfile.TemporaryDirectory() as temp:
-            path = Path(temp) / "controller.db"
-            store = rc.StateStore(path)
-            self.assertTrue(store.record_delivery("delivery-1", "push", {"a": 1}, now=10))
-            self.assertFalse(store.record_delivery("delivery-1", "push", {"a": 1}, now=11))
-            store.close()
-            reopened = rc.StateStore(path)
-            try:
-                self.assertFalse(reopened.record_delivery("delivery-1", "push", {"a": 1}, now=12))
-            finally:
-                reopened.close()
+        raw = issue_payload("normal comment")
+        first = self.controller.ingest_webhook(event_type="issue_comment", delivery_id="delivery-dupe", signature=signed(raw), raw_body=raw)
+        second = self.controller.ingest_webhook(event_type="issue_comment", delivery_id="delivery-dupe", signature=signed(raw), raw_body=raw)
+        self.assertTrue(first["accepted"])
+        self.assertTrue(second["duplicate"])
+        reopened = rc.StateStore(Path(self.temp.name) / "controller.db")
+        self.assertFalse(reopened.accept_delivery("delivery-dupe", "issue_comment", "abc"))
 
-    def test_crash_restart_does_not_duplicate_dispatched_worker(self):
-        with tempfile.TemporaryDirectory() as temp:
-            path = Path(temp) / "controller.db"
-            first = rc.StateStore(path)
-            parsed = rc.parse_command(command_comment(add="TEST-A")["body"], comment_id=100)
-            first.apply_command(parsed, now=100)
-            adapter1 = FakeAdapter()
-            controller1 = rc.Controller(first, FakeGitHub(), adapter1, holder="controller-1", lease_ttl=1800)
-            self.assertEqual(controller1.run_until_blocked()["state"], "DISPATCHED")
-            self.assertEqual(first.dispatch_count(), 1)
-            first.close()
+    def test_required_review_comment_event_is_supported(self):
+        self.assertIn("pull_request_review_comment", rc.SUPPORTED_EVENTS)
+        raw = json.dumps({"repository": {"full_name": REPOSITORY}}).encode()
+        result = self.controller.ingest_webhook(event_type="pull_request_review_comment", delivery_id="delivery-review", signature=signed(raw), raw_body=raw)
+        self.assertTrue(result["accepted"])
 
-            second = rc.StateStore(path)
-            adapter2 = FakeAdapter()
-            controller2 = rc.Controller(second, FakeGitHub(), adapter2, holder="controller-2", lease_ttl=1800)
-            try:
-                transition = controller2.run_until_blocked()
-                self.assertEqual(transition["state"], "WAITING_RESULT")
-                self.assertEqual(second.dispatch_count(), 1)
-                self.assertEqual(adapter2.dispatches, [])
-                self.assertEqual(second.task("TEST-A")["status"], "DISPATCHED")
-            finally:
-                second.close()
+    def test_unsupported_event_fails_closed(self):
+        raw = json.dumps({"repository": {"full_name": REPOSITORY}}).encode()
+        with self.assertRaises(rc.ValidationError):
+            self.controller.ingest_webhook(event_type="deployment", delivery_id="delivery-bad", signature=signed(raw), raw_body=raw)
 
-    def test_expired_inflight_fails_closed_instead_of_duplicate_dispatch(self):
-        with tempfile.TemporaryDirectory() as temp:
-            store = rc.StateStore(Path(temp) / "controller.db")
-            parsed = rc.parse_command(command_comment(add="TEST-A")["body"], comment_id=100)
-            store.apply_command(parsed, now=100)
-            self.assertTrue(store.acquire_task_lease("TEST-A", "controller-1", ttl=10, now=100))
-            store.mark_dispatched(
-                "TEST-A", "controller-1",
-                {"source": "realtime-controller", "task_id": "TEST-A", "command_version": 7, "controller_dispatch_key": "7:TEST-A"},
-                now=100,
-            )
-            try:
-                self.assertEqual(store.block_expired_dispatches(now=111), 1)
-                self.assertEqual(store.task("TEST-A")["status"], "BLOCKED")
-                self.assertEqual(store.task("TEST-A")["blocker"], "LEASE_EXPIRED_REQUIRES_REMOTE_RECONCILE")
-                self.assertIsNone(store.next_ready(now=111))
-            finally:
-                store.close()
+    def test_command_digest_prevents_same_comment_mutation(self):
+        command = rc.parse_command(command_body(), comment_id=7, actor=OWNER, authorized_commanders={OWNER})
+        self.store.apply_command(command)
+        mutated = rc.parse_command(command_body().replace("REASON=test canonical command", "REASON=mutated"), comment_id=7, actor=OWNER, authorized_commanders={OWNER})
+        with self.assertRaises(rc.ValidationError):
+            self.store.apply_command(mutated)
 
-    def test_controller_lease_and_heartbeat_prevent_double_controller(self):
-        with tempfile.TemporaryDirectory() as temp:
-            store = rc.StateStore(Path(temp) / "controller.db")
-            try:
-                self.assertTrue(store.acquire_controller_lease("one", ttl=30, now=100))
-                self.assertFalse(store.acquire_controller_lease("two", ttl=30, now=101))
-                self.assertTrue(store.heartbeat_controller("one", ttl=30, now=110))
-                self.assertFalse(store.acquire_controller_lease("two", ttl=30, now=120))
-                self.assertTrue(store.acquire_controller_lease("two", ttl=30, now=141))
-            finally:
-                store.close()
+    def test_same_version_different_comment_fails_closed(self):
+        one = rc.parse_command(command_body(), comment_id=7, actor=OWNER, authorized_commanders={OWNER})
+        two = rc.parse_command(command_body(), comment_id=8, actor=OWNER, authorized_commanders={OWNER})
+        self.store.apply_command(one)
+        with self.assertRaises(rc.ValidationError):
+            self.store.apply_command(two)
 
-    def test_worker_result_event_auto_dispatches_second_task_without_chat_input(self):
-        with tempfile.TemporaryDirectory() as temp:
-            store = rc.StateStore(Path(temp) / "controller.db")
-            github = FakeGitHub([command_comment()])
-            adapter = FakeAdapter()
-            controller = rc.Controller(store, github, adapter, holder="controller", lease_ttl=1800)
-            try:
-                controller.reconcile_remote()
-                first = controller.run_until_blocked()
-                self.assertEqual(first["taskId"], "TEST-A")
-                github.comments.append(worker_report(101, "TEST-A", "completed"))
-                result = controller.process_event(
-                    "delivery-result-a", "issue_comment",
-                    {"repository": {"full_name": "owner/repo"}, "issue": {"number": 660}, "comment": {"id": 101}},
-                )
-                self.assertTrue(result["reconcileTriggered"])
-                self.assertEqual(result["transition"]["taskId"], "TEST-B")
-                self.assertEqual(store.task("TEST-A")["status"], "COMPLETE")
-                self.assertEqual(store.task("TEST-B")["status"], "DISPATCHED")
-                self.assertEqual(len(adapter.dispatches), 2)
+    def test_master_queue_prioritizes_p0(self):
+        self.store.upsert_task("P2-CLEANUP", "P2", 7, "READY")
+        self.store.upsert_task("P0-SAFETY", "P0", 7, "READY")
+        self.assertEqual(self.store.next_ready()["task_id"], "P0-SAFETY")
 
-                duplicate = controller.process_event(
-                    "delivery-result-a", "issue_comment",
-                    {"repository": {"full_name": "owner/repo"}, "issue": {"number": 660}, "comment": {"id": 101}},
-                )
-                self.assertTrue(duplicate["duplicate"])
-                self.assertEqual(len(adapter.dispatches), 2)
-            finally:
-                store.close()
+    def test_dependency_cycle_detection(self):
+        self.store.upsert_task("P0-A", "P0", 7, "READY")
+        self.store.upsert_task("P0-B", "P0", 7, "READY")
+        with self.store.connection() as db:
+            db.execute("UPDATE tasks SET dependencies='[\"P0-B\"]' WHERE task_id='P0-A'")
+            db.execute("UPDATE tasks SET dependencies='[\"P0-A\"]' WHERE task_id='P0-B'")
+        self.assertTrue(self.store.dependency_cycles())
 
-    def test_startup_reconcile_recovers_missed_result_event(self):
-        with tempfile.TemporaryDirectory() as temp:
-            store = rc.StateStore(Path(temp) / "controller.db")
-            github = FakeGitHub([command_comment(), worker_report(101, "TEST-A", "completed")])
-            adapter = FakeAdapter()
-            controller = rc.Controller(store, github, adapter, holder="controller")
-            try:
-                reconciliation = controller.reconcile_remote()
-                transition = controller.run_until_blocked()
-                self.assertEqual(reconciliation["commandVersion"], 7)
-                self.assertEqual(store.task("TEST-A")["status"], "COMPLETE")
-                self.assertEqual(transition["taskId"], "TEST-B")
-                self.assertEqual(len(adapter.dispatches), 1)
-            finally:
-                store.close()
+    def test_unknown_file_ownership_serializes_leases(self):
+        self.store.upsert_task("P0-A", "P0", 7, "READY")
+        self.store.upsert_task("P0-B", "P0", 7, "READY")
+        first = self.store.acquire_lease("P0-A", "worker-a", [], 30)
+        second = self.store.acquire_lease("P0-B", "worker-b", [], 30)
+        self.assertIsNotNone(first)
+        self.assertIsNone(second)
 
-    def test_existing_adapter_only_wakes_existing_agent_hub(self):
-        github = FakeGitHub()
-        adapter = rc.AgentHubWakeupAdapter(github)
-        payload = adapter.dispatch("TEST-A", 7, "7:TEST-A")
-        self.assertEqual(github.dispatches, [("agent-hub-wakeup", payload)])
-        self.assertEqual(payload["source"], "realtime-controller")
-        self.assertNotIn("code", payload)
-        self.assertNotIn("production", json.dumps(payload).lower())
+    def test_non_overlapping_files_allow_parallel_leases(self):
+        self.store.upsert_task("P0-A", "P0", 7, "READY")
+        self.store.upsert_task("P0-B", "P0", 7, "READY")
+        self.assertIsNotNone(self.store.acquire_lease("P0-A", "worker-a", ["a.py"], 30))
+        self.assertIsNotNone(self.store.acquire_lease("P0-B", "worker-b", ["b.py"], 30))
+
+    def test_expired_lease_fails_closed_not_duplicate_ready(self):
+        self.store.upsert_task("P0-A", "P0", 7, "READY")
+        self.assertIsNotNone(self.store.acquire_lease("P0-A", "worker", ["a.py"], 30))
+        with self.store.connection() as db:
+            db.execute("UPDATE leases SET expires_at=0 WHERE task_id='P0-A'")
+        self.store.expire_leases()
+        task = self.store.task("P0-A")
+        self.assertEqual(task["status"], "BLOCKED")
+        self.assertEqual(task["blocked_by"], "LEASE_EXPIRED_REQUIRES_REMOTE_RECONCILE")
+
+    def test_restart_restores_inflight_state_without_duplicate_dispatch(self):
+        self.store.upsert_task("P0-A", "P0", 7, "READY")
+        self.assertIsNotNone(self.store.acquire_lease("P0-A", "worker", ["a.py"], 30))
+        reopened = rc.StateStore(Path(self.temp.name) / "controller.db")
+        self.assertEqual(reopened.task("P0-A")["status"], "CLAIMED")
+        self.assertIsNone(reopened.acquire_lease("P0-A", "worker-2", ["a.py"], 30))
+
+    def test_hub_command_parses_only_safe_registered_metadata(self):
+        parsed = rc.parse_hub_command(hub_command(), comment_id=99)
+        self.assertEqual(parsed.task_id, "REALTIME-CONTROLLER")
+        self.assertEqual(parsed.command_id, "hub-123-0123456789abcdef")
+        self.assertEqual(parsed.expected_head_sha, HEAD)
+
+    def test_dispatch_wakes_real_existing_coordinator_event(self):
+        self.store.upsert_task("REALTIME-CONTROLLER", "P0", 7, "READY")
+        task = self.controller.dispatch_next()
+        self.assertEqual(task, "REALTIME-CONTROLLER")
+        self.assertEqual(self.github.dispatched[0][0], "agent-executor-report-ready")
+        self.assertNotEqual(self.github.dispatched[0][0], "agent-hub-wakeup")
+        self.assertEqual(self.store.task("REALTIME-CONTROLLER")["status"], "IN_PROGRESS")
+
+    def test_kill_switches_prevent_dispatch(self):
+        self.store.upsert_task("REALTIME-CONTROLLER", "P0", 7, "READY")
+        self.controller.dispatch_enabled = False
+        self.assertIsNone(self.controller.dispatch_next())
+        self.assertEqual(self.github.dispatched, [])
+
+    def test_untrusted_worker_report_is_ignored_by_reconcile(self):
+        self.store.upsert_task("REALTIME-CONTROLLER", "P0", 7, "IN_PROGRESS")
+        self.github.comments = [comment(7, command_body()), comment(9, worker_report(), login="attacker", association="NONE")]
+        self.controller.reconcile()
+        self.assertNotEqual(self.store.task("REALTIME-CONTROLLER")["status"], "COMPLETED")
+
+    def test_completed_report_without_exact_evidence_stays_verifying(self):
+        self.store.upsert_task("REALTIME-CONTROLLER", "P0", 7, "IN_PROGRESS")
+        report = rc.parse_worker_report(worker_report(run=0), comment_id=9)
+        self.assertIsNotNone(report)
+        self.store.apply_verified_report(report, verification_ok=False)
+        self.assertEqual(self.store.task("REALTIME-CONTROLLER")["status"], "VERIFYING")
+
+    def test_exact_pr_head_ci_evidence_can_complete(self):
+        self.store.upsert_task("REALTIME-CONTROLLER", "P0", 7, "IN_PROGRESS")
+        report = rc.parse_worker_report(worker_report(), comment_id=9)
+        self.assertTrue(self.controller._verify_report(report))
+        self.store.apply_verified_report(report, verification_ok=True)
+        self.assertEqual(self.store.task("REALTIME-CONTROLLER")["status"], "COMPLETED")
+
+    def test_ci_success_alone_goes_to_verifying_not_complete(self):
+        self.store.upsert_task("REALTIME-CONTROLLER", "P0", 7, "IN_PROGRESS")
+        with self.store.connection() as db:
+            db.execute("UPDATE tasks SET head_sha=? WHERE task_id='REALTIME-CONTROLLER'", (HEAD,))
+        self.controller.handle_ci_event({"workflow_run": {"head_sha": HEAD, "status": "completed", "conclusion": "success"}}, "workflow_run")
+        self.assertEqual(self.store.task("REALTIME-CONTROLLER")["status"], "VERIFYING")
+
+    def test_ci_failure_blocks_task(self):
+        self.store.upsert_task("REALTIME-CONTROLLER", "P0", 7, "IN_PROGRESS")
+        with self.store.connection() as db:
+            db.execute("UPDATE tasks SET head_sha=? WHERE task_id='REALTIME-CONTROLLER'", (HEAD,))
+        self.controller.handle_ci_event({"workflow_run": {"head_sha": HEAD, "status": "completed", "conclusion": "failure"}}, "workflow_run")
+        self.assertEqual(self.store.task("REALTIME-CONTROLLER")["status"], "BLOCKED")
+
+    def test_reconcile_recovers_missed_command_and_dispatches_without_chat(self):
+        self.github.comments = [comment(7, command_body())]
+        snap = self.controller.reconcile()
+        self.assertEqual(snap["command_version"], 7)
+        self.assertEqual(self.github.dispatched[0][0], "agent-executor-report-ready")
+        self.assertEqual(self.store.task("REALTIME-CONTROLLER")["status"], "IN_PROGRESS")
+
+    def test_github_outage_trips_circuit_breaker(self):
+        self.github.fail_main = True
+        for _ in range(rc.CIRCUIT_THRESHOLD):
+            with self.assertRaises(rc.ControllerError):
+                self.controller.reconcile()
+        self.assertEqual(self.store.get_meta("controller_state"), "DEGRADED")
+
+    def test_status_never_contains_secret_and_safety_defaults_are_false(self):
+        text = json.dumps(self.store.snapshot())
+        self.assertNotIn(SECRET, text)
+        safety = self.store.snapshot()["safety"]
+        self.assertFalse(safety["LIVE_TRADING"])
+        self.assertFalse(safety["REAL_ORDER_ALLOWED"])
+        self.assertFalse(safety["PRIVATE_TRADING_API_ALLOWED"])
+        self.assertEqual(safety["realOrders"], 0)
 
 
 if __name__ == "__main__":
