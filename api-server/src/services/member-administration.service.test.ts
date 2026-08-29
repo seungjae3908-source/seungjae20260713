@@ -105,6 +105,14 @@ test('last active admin cannot be deactivated', () => {
   );
 });
 
+test('rejected admin-shaped row is not protected as an active admin', () => {
+  const rejectedAdmin = profile({ membership_level: 'admin', role: 'admin', status: 'rejected', is_active: true });
+  assert.equal(isActiveAdmin(rejectedAdmin), false);
+  const plan = planMemberChange(rejectedAdmin, { membershipLevel: 'regular', reason: '거절 상태 권한 정리' }, ADMIN, 0, NOW);
+  assert.equal(plan.changes.membership_level, 'regular');
+  assert.equal(plan.changes.role, 'full');
+});
+
 test('admin may be demoted when another active admin exists', () => {
   const plan = planMemberChange(profile({ membership_level: 'admin', role: 'admin', status: 'approved' }), { membershipLevel: 'regular', reason: '관리자 역할 조정' }, ADMIN, 2, NOW);
   assert.equal(plan.changes.membership_level, 'regular');
@@ -124,8 +132,10 @@ test('permission timestamp uses server time', () => {
   assert.equal(plan.changes.updated_at, NOW.toISOString());
 });
 
-test('active admin detection uses stored tier and active flag', () => {
+test('active admin detection requires approved status and active flag', () => {
   assert.equal(isActiveAdmin(profile({ membership_level: 'admin', status: 'approved' })), true);
+  assert.equal(isActiveAdmin(profile({ membership_level: 'admin', status: 'pending' })), false);
+  assert.equal(isActiveAdmin(profile({ membership_level: 'admin', status: 'rejected' })), false);
   assert.equal(isActiveAdmin(profile({ membership_level: 'admin', status: 'approved', is_active: false })), false);
   assert.equal(isActiveAdmin(profile({ role: 'admin', status: 'approved', membership_level: null })), true);
 });
