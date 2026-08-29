@@ -53,6 +53,12 @@ function eventFixture(order: TradingOrder, id: string, fromState: TradingOrderEv
 
 async function linkedService() {
   const integrationRepository = new InMemoryUserBrokerTelegramRepository();
+  integrationRepository.setMemberProfile('user-a', {
+    status: 'approved', membership_level: 'associate', is_active: true, role: 'associate',
+  });
+  integrationRepository.setMemberProfile('user-b', {
+    status: 'approved', membership_level: 'associate', is_active: true, role: 'associate',
+  });
   const transport = new FakeTransport();
   const portfolio = new CapturingPortfolioSink();
   const service = new UserBrokerTelegramService(integrationRepository, transport, portfolio, 'bridge_ci_bot');
