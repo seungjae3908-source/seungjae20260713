@@ -1,0 +1,96 @@
+name: Prediction Lab Durable Reference Policy Gate
+
+on:
+  workflow_call:
+    inputs:
+      expected_sha:
+        description: Exact latest-main research SHA authorized for durable publication
+        required: true
+        type: string
+    outputs:
+      immutable_enabled:
+        description: True only when exact-main identity and immutable-release policy are proven
+        value: ${{ jobs.policy.outputs.immutable_enabled }}
+
+permissions:
+  contents: read
+
+jobs:
+  policy:
+    name: Verify immutable release policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: prediction-lab-durable-reference
+    outputs:
+      immutable_enabled: ${{ steps.policy.outputs.immutable_enabled }}
+    steps:
+      - name: Verify caller identity, exact main, and immutable release policy
+        id: policy
+        uses: actions/github-script@v7
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          SOURCE_EVENT: ${{ github.event_name }}
+          SOURCE_WORKFLOW: ${{ github.workflow }}
+          SOURCE_REF: ${{ github.ref }}
+          SOURCE_SHA: ${{ github.sha }}
+          IMMUTABLE_RELEASE_POLICY_TOKEN: ${{ secrets.PREDICTION_LAB_IMMUTABLE_RELEASE_POLICY_TOKEN }}
+        with:
+          script: |
+            const expectedSha = String(process.env.EXPECTED_SHA ?? '').trim().toLowerCase();
+            if (!/^[0-9a-f]{40}$/.test(expectedSha)) {
+              core.setFailed('DURABLE_REFERENCE_STORE_NOT_READY: exact producer SHA missing');
+              return;
+            }
+            if (process.env.SOURCE_EVENT !== 'workflow_dispatch'
+                || process.env.SOURCE_WORKFLOW !== 'Prediction Lab Multi-Market Suite'
+                || process.env.SOURCE_REF !== 'refs/heads/main'
+                || String(process.env.SOURCE_SHA ?? '').toLowerCase() !== expectedSha) {
+              core.setFailed('DURABLE_REFERENCE_STORE_NOT_READY: caller is not the exact main manual Multi-Market run');
+              return;
+            }
+            const policyToken = String(process.env.IMMUTABLE_RELEASE_POLICY_TOKEN ?? '').trim();
+            if (!policyToken) {
+              core.setFailed('DURABLE_REFERENCE_STORE_NOT_READY: immutable release policy read credential missing');
+              return;
+            }
+            const { data: repository } = await github.rest.repos.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+            });
+            const { data: main } = await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: repository.default_branch,
+            });
+            if (repository.default_branch !== 'main' || String(main.commit.sha).toLowerCase() !== expectedSha) {
+              core.setFailed('DURABLE_REFERENCE_STORE_NOT_READY: producer is not exact latest main');
+              return;
+            }
+            let policy;
+            try {
+              const response = await github.request('GET /repos/{owner}/{repo}/immutable-releases', {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                headers: {
+                  'X-GitHub-Api-Version': '2026-03-10',
+                  authorization: `Bearer ${policyToken}`,
+                },
+              });
+              policy = response.data;
+            } catch (error) {
+              if (error.status === 404) {
+                core.setFailed('DURABLE_REFERENCE_STORE_NOT_READY: immutable releases are not enabled');
+                return;
+              }
+              if (error.status === 401 || error.status === 403) {
+                core.setFailed('DURABLE_REFERENCE_STORE_NOT_READY: policy credential lacks repository Administration:read');
+                return;
+              }
+              throw error;
+            }
+            if (policy?.enabled !== true) {
+              core.setFailed('DURABLE_REFERENCE_STORE_NOT_READY: immutable release policy is not proven enabled');
+              return;
+            }
+            core.setOutput('immutable_enabled', 'true');
+            core.notice('Immutable release policy verified for exact latest main; this gate performs no release mutation.');
