@@ -23,6 +23,7 @@ function baseInput() {
     market: 'CRYPTO_SPOT',
     symbol: 'KRW-BTC',
     direction: 'BUY',
+    strategyIdentity: { ...NET_ALPHA_IDENTITY },
     orderBook: { bids: [[100, 10]], asks: [[100.1, 10]], ts: NOW },
     trades: [
       { side: 'buy', price: 100.05, size: 1, ts: NOW - 1_000 },
@@ -286,6 +287,56 @@ test('nested net-alpha payload cannot replace the authoritative parent clock to 
   assert.ok(result.netAlpha.reasons.includes('COST_EVIDENCE_STALE'));
   assert.equal(result.autoTrading.mode, 'PAPER_ONLY');
   assert.equal(result.autoTrading.parentEligibilityReady, false);
+});
+
+test('missing parent clock cannot be replaced by Date.now for #612 Regime or Net Alpha authority', () => {
+  const input = {
+    ...baseInput(),
+    now: undefined,
+    regimeBrain: stableRegime({ now: NOW }),
+    netAlpha: authoritativeNetAlpha({ now: NOW }),
+    regimeBrainPolicy: { enforcement: 'REQUIRED_FOR_PARENT_GATE' },
+    netAlphaPolicy: { enforcement: 'REQUIRED_FOR_PARENT_GATE' },
+  };
+  const result = evaluateMarketIntelligence(input);
+  assert.equal(result.regimeBrain.status, 'NOT_AVAILABLE');
+  assert.ok(result.regimeBrain.reasons.includes('REGIME_CLOCK_NOT_AVAILABLE'));
+  assert.equal(result.netAlpha.status, 'NOT_AVAILABLE');
+  assert.ok(result.netAlpha.reasons.includes('AUTHORITATIVE_CLOCK_NOT_AVAILABLE'));
+  assert.equal(result.autoTrading.mode, 'PAPER_ONLY');
+});
+
+test('#719 null conformal lower edge cannot be substituted from Advanced Gate uncertainty', () => {
+  const result = evaluateMarketIntelligence({
+    ...baseInput(),
+    ...completeExistingSafetyEvidence(),
+    netAlpha: authoritativeNetAlpha({ conformalLowerEdgeBps: null }),
+    netAlphaPolicy: { enforcement: 'REQUIRED_FOR_PARENT_GATE' },
+  });
+  assert.equal(result.advancedGates.uncertainty.status, 'PASS');
+  assert.equal(result.netAlpha.status, 'NOT_AVAILABLE');
+  assert.equal(result.netAlpha.conformalLowerEdgeBps, null);
+  assert.ok(result.netAlpha.reasons.includes('CONFORMAL_LOWER_EDGE_NOT_AVAILABLE'));
+  assert.equal(result.autoTrading.mode, 'PAPER_ONLY');
+});
+
+test('current Scanner strategy identity must match Gross and Cost identity including horizon version and direction', () => {
+  for (const strategyIdentity of [
+    { ...NET_ALPHA_IDENTITY, horizon: 60 },
+    { ...NET_ALPHA_IDENTITY, strategyVersion: 'v8' },
+    { ...NET_ALPHA_IDENTITY, direction: 'SELL' },
+  ]) {
+    const result = evaluateMarketIntelligence({
+      ...baseInput(),
+      strategyIdentity,
+      netAlpha: authoritativeNetAlpha(),
+      netAlphaPolicy: { enforcement: 'REQUIRED_FOR_PARENT_GATE' },
+    });
+    assert.equal(result.netAlpha.status, 'NOT_AVAILABLE');
+    assert.ok(result.netAlpha.reasons.includes('CURRENT_GROSS_IDENTITY_MISMATCH'));
+    assert.ok(result.netAlpha.reasons.includes('CURRENT_COST_IDENTITY_MISMATCH'));
+    assert.equal(result.autoTrading.mode, 'PAPER_ONLY');
+  }
 });
 
 test('nested sizing payload cannot replace computed gate evidence or parent direction', () => {
