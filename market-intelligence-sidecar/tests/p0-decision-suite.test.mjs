@@ -303,7 +303,8 @@ test('missing parent clock cannot be replaced by Date.now for #612 Regime or Net
   assert.ok(result.regimeBrain.reasons.includes('REGIME_CLOCK_NOT_AVAILABLE'));
   assert.equal(result.netAlpha.status, 'NOT_AVAILABLE');
   assert.ok(result.netAlpha.reasons.includes('AUTHORITATIVE_CLOCK_NOT_AVAILABLE'));
-  assert.equal(result.autoTrading.mode, 'PAPER_ONLY');
+  assert.equal(result.autoTrading.mode, 'BLOCKED_RISK');
+  assert.equal(result.autoTrading.hardBlockReason, 'STALE_INTELLIGENCE_DATA');
 });
 
 test('#719 null conformal lower edge cannot be substituted from Advanced Gate uncertainty', () => {
