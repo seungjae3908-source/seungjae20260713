@@ -24,7 +24,7 @@ export type MemberChangePlan = {
   changes: {
     membership_level: MemberTier;
     is_active: boolean;
-    role: 'user' | 'admin';
+    role: 'pending' | 'associate' | 'full' | 'admin';
     status: 'pending' | 'approved' | 'suspended';
     approved_at: string | null;
     approved_by: string | null;
@@ -98,6 +98,19 @@ export function isActiveAdmin(profile: MemberAdministrationProfile) {
   return profile.is_active !== false && storedMemberTier(profile) === 'admin';
 }
 
+function legacyRoleForTier(tier: MemberTier): 'pending' | 'associate' | 'full' | 'admin' {
+  switch (tier) {
+    case 'admin':
+      return 'admin';
+    case 'associate':
+      return 'associate';
+    case 'regular':
+      return 'full';
+    default:
+      return 'pending';
+  }
+}
+
 export function planMemberChange(
   current: MemberAdministrationProfile,
   request: MemberChangeRequest,
@@ -122,7 +135,7 @@ export function planMemberChange(
 
   const timestamp = now.toISOString();
   const status = !nextActive ? 'suspended' : nextTier === 'pending' ? 'pending' : 'approved';
-  const role = nextTier === 'admin' ? 'admin' : 'user';
+  const role = legacyRoleForTier(nextTier);
   const action = currentTier === 'pending' && nextTier === 'associate' && nextActive
     ? 'member.approve'
     : currentTier !== nextTier
