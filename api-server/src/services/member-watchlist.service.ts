@@ -1,4 +1,7 @@
-import { hasCapability } from '../../../packages/member-access/src/index.js';
+import {
+  hasCapability,
+  type MemberAccessProfile,
+} from '../../../packages/member-access/src/index.js';
 import { getSupabase, getUserSupabase, hasSupabaseServerKey } from '../lib/supabase';
 
 export const MEMBER_WATCHLIST_MARKETS = [
@@ -9,13 +12,7 @@ export const MEMBER_WATCHLIST_MARKETS = [
 ] as const;
 export type MemberWatchlistMarket = (typeof MEMBER_WATCHLIST_MARKETS)[number];
 type StoredMemberWatchlistMarket = MemberWatchlistMarket | 'UNRESOLVED';
-
-type MemberTelegramEligibilityProfile = {
-  status?: unknown;
-  membership_level?: unknown;
-  is_active?: unknown;
-  role?: unknown;
-};
+type MemberTelegramEligibilityProfile = MemberAccessProfile;
 
 export type MemberWatchlistInput = {
   ticker?: unknown;
@@ -224,7 +221,7 @@ export async function findMemberWatchlistSubscribers(
       .eq('status', 'approved');
     if (profileError) throw new Error('MEMBER_WATCHLIST_STORAGE_UNAVAILABLE');
     for (const row of Array.isArray(profiles) ? profiles : []) {
-      const profile = row as Record<string, unknown> & MemberTelegramEligibilityProfile;
+      const profile = row as MemberTelegramEligibilityProfile & { id?: unknown };
       const userId = text(profile.id, 64);
       if (userId && memberEligibleForPersonalTelegram(profile)) eligible.add(userId);
     }
