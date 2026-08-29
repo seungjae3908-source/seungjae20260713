@@ -405,6 +405,7 @@ jobs:
     uses: ./.github/workflows/prediction-lab-model-reference-durable-policy.yml
     with:
       expected_sha: ${{ needs.validate-and-train.outputs.research_sha }}
+    secrets: inherit
 
   publish-durable-reference:
     name: Publish immutable future model reference
