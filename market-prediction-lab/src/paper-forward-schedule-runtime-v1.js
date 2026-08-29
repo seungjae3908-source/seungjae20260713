@@ -201,6 +201,21 @@ function buildIdentity(researchCodeSha, outcomeAccumulationEnabled = false, auth
   });
 }
 
+function bindIdentityToPublicEvidenceProvider(provider, identity) {
+  return Object.freeze({
+    collectPublicEvidence(input = {}) {
+      const cycle = input?.cycle;
+      if (!cycle || typeof cycle !== "object" || Array.isArray(cycle)) {
+        return provider.collectPublicEvidence(input);
+      }
+      return provider.collectPublicEvidence({
+        ...input,
+        cycle: Object.freeze({ ...cycle, identity }),
+      });
+    },
+  });
+}
+
 function initialLedger() {
   return Object.freeze({
     schemaVersion: "paper-forward-observation-ledger-v1",
@@ -480,9 +495,13 @@ export async function runPaperForwardScheduledInvocation({
     ledger: state.ledger,
   });
   const leaseStore = createFilePaperSchedulerLeaseStore({ directory: paths.leases });
+  const identityBoundPublicEvidenceProvider = bindIdentityToPublicEvidenceProvider(
+    publicEvidenceProvider,
+    identity,
+  );
 
   const result = await runRuntime({
-    publicEvidenceProvider,
+    publicEvidenceProvider: identityBoundPublicEvidenceProvider,
     runtimeStatusStore,
     runtimeClock: clock,
     state,
