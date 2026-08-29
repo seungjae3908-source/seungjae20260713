@@ -23,25 +23,37 @@ import {
 const PRODUCER_SHA = 'c'.repeat(40);
 const COLLECTOR_A = 'a'.repeat(40);
 const COLLECTOR_B = 'b'.repeat(40);
+const IMPLEMENTATION_BLOB = 'd'.repeat(40);
 
 function digest(value) {
   return sha256(canonicalJson(value));
 }
 
 function upstreamSource(identity, collectorCodeSha) {
+  const receiptDigest = digest(`receipt:${identity}`);
+  const artifactId = identity === 'source-a' ? '1001' : '1002';
+  const artifactDigest = digest(`artifact:${identity}`);
+  const rawBatchDigest = digest(`raw:${identity}`);
   return Object.freeze({
     schemaVersion: 'public-forward-liquidity-bound-source-v1',
     sourceIdentity: identity,
     producerCodeSha: PRODUCER_SHA,
     collectorCodeSha,
     collectorImplementationPath: 'market-intelligence-sidecar/src/public-forward-liquidity-calibration.mjs',
-    collectorImplementationBlobSha: collectorCodeSha,
+    collectorImplementationBlobSha: IMPLEMENTATION_BLOB,
+    ingestReceiptChainVersion: 'public-forward-liquidity-ingest-receipt-chain-v1',
+    ingestReceiptChainDigest: digest(`receipt-chain:${identity}`),
+    ingestReceiptCount: 1,
+    ingestReceiptDigests: Object.freeze([receiptDigest]),
+    artifactIds: Object.freeze([artifactId]),
+    artifactDigests: Object.freeze([artifactDigest]),
+    rawBatchDigests: Object.freeze([rawBatchDigest]),
     datasetDigest: digest(`dataset:${identity}`),
     datasetRelativePath: `forward/${identity}/dataset.json`,
-    receiptDigest: digest(`receipt:${identity}`),
-    artifactId: identity === 'source-a' ? '1001' : '1002',
-    artifactDigest: digest(`artifact:${identity}`),
-    rawBatchDigest: digest(`raw:${identity}`),
+    receiptDigest,
+    artifactId,
+    artifactDigest,
+    rawBatchDigest,
   });
 }
 
@@ -194,14 +206,19 @@ test('multi-source split audit preserves upstream provenance without synthetic s
   assert.equal(result.audit.collectorCodeSha, undefined);
   assert.equal(result.audit.upstreamSources.length, 2);
   assert.match(result.audit.upstreamLineageDigest, /^[a-f0-9]{64}$/u);
+  assert.deepEqual(result.audit.receiptChainDigests, source.upstreamSources.map((item) => item.ingestReceiptChainDigest));
+  assert.deepEqual(result.audit.receiptCounts, [1, 1]);
   assert.equal(result.audit.assignments.length, 3);
   assert.equal(result.audit.assignments[0].sourceDatasetDigest, source.upstreamSources[0].datasetDigest);
+  assert.equal(result.audit.assignments[0].sourceReceiptChainDigest, source.upstreamSources[0].ingestReceiptChainDigest);
+  assert.equal(result.audit.assignments[0].sourceReceiptCount, 1);
   assert.equal(result.audit.assignments[1].sourceCollectorCodeSha, COLLECTOR_B);
   assert.equal(result.audit.calibrationSampleSufficient, true);
   assert.equal(result.audit.oosValidationComplete, false);
   assert.equal(result.audit.fullCostReady, false);
   assert.equal(result.audit.evidenceCompleteCredit, 0);
   assert.equal(result.safety.syntheticAggregateDatasetAllowed, false);
+  assert.equal(result.safety.completeIngestReceiptChainRequired, true);
   assert.deepEqual(result.safety, PUBLIC_FORWARD_LIQUIDITY_MULTI_SOURCE_SPLIT_SAFETY);
 });
 
@@ -228,6 +245,19 @@ test('multi-source split audit rejects forged split-source digest', () => {
   const result = auditPublicForwardLiquidityIndependentSplits({ splitSource: forged, policy: splitPolicy, ...evidence });
   assert.equal(result.status, 'BLOCKED_DATA');
   assert.ok(result.blockers.includes('INDEPENDENT_SPLIT_SOURCE_DIGEST_MISMATCH'));
+});
+
+test('multi-source split audit rejects malformed receipt-chain lineage even with recomputed split-source digest', () => {
+  const source = splitSource();
+  const badUpstream = { ...source.upstreamSources[0], ingestReceiptCount: 2 };
+  const core = { ...source, upstreamSources: Object.freeze([badUpstream, source.upstreamSources[1]]) };
+  delete core.splitSourceDigest;
+  const forged = { ...core, splitSourceDigest: digest(core) };
+  const splitPolicy = policy();
+  const evidence = bindings(forged, splitPolicy);
+  const result = auditPublicForwardLiquidityIndependentSplits({ splitSource: forged, policy: splitPolicy, ...evidence });
+  assert.equal(result.status, 'BLOCKED_DATA');
+  assert.ok(result.blockers.includes('UPSTREAM_RECEIPT_CHAIN_RECEIPTS_INVALID'));
 });
 
 test('multi-source split audit rejects post-event regime evidence', () => {
