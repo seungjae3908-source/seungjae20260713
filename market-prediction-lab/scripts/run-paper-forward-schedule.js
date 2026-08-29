@@ -1,9 +1,13 @@
 import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { AUTHORITATIVE_PAPER_EVIDENCE_SOURCE_OWNERSHIP } from "../src/authoritative-paper-evidence-source-ownership-v1.js";
 import { createAuthoritativePaperForwardDependenciesFromSourceWiring } from "../src/authoritative-paper-runtime-factory-v1.js";
-import { createNaturalFunnelObservedPaperRuntimeFromSourceWiring } from "../src/authoritative-paper-natural-funnel-v1.js";
+import {
+  CANONICAL_NATURAL_PAPER_STAGE_FIELDS,
+  CANONICAL_NATURAL_PAPER_STAGE_ORDER,
+  createNaturalFunnelObservedPaperRuntimeFromSourceWiring,
+} from "../src/authoritative-paper-natural-funnel-v1.js";
 import {
   createLosslessPaperStateSnapshotFileOwner,
   loadValidatedAuthoritativePaperRuntimePackage,
@@ -28,6 +32,8 @@ const forbiddenActivationKeys = [
   "PRIVATE_ACCOUNT_ACCESS",
   "PRIVATE_TRADING_API_ALLOWED",
 ];
+const PAPER_STATE_BINDING_VERSION = "paper-state-publisher-runtime-binding-v1";
+const PAPER_STATE_SNAPSHOT_VERSION = "paper-trading-state-snapshot-v2";
 
 function truthy(value) {
   return TRUTHY.has(String(value ?? "").trim().toLowerCase());
@@ -39,6 +45,219 @@ function immutableSha(value) {
 
 function digest(value) {
   return typeof value === "string" && /^[0-9a-f]{64}$/u.test(value);
+}
+
+function safePaperEnvelope(value) {
+  return value
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && value.immutable === true
+    && value.executionAuthority === "NONE"
+    && value.privateApiAllowed === false
+    && value.liveTrading === false
+    && value.financialMutationAllowed === false;
+}
+
+function configuredEvidencePath(env, key) {
+  const value = String(env[key] ?? "").trim();
+  return value && isAbsolute(value) ? value : null;
+}
+
+async function readConfiguredEvidenceRecord(path) {
+  if (!path) return null;
+  try {
+    const value = JSON.parse(await readFile(path, "utf8"));
+    return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function paperStateSnapshotFailureState(error) {
+  const code = String(error?.code ?? error?.message ?? "").trim();
+  if (code === "PAPER_STATE_STALE" || code === "PAPER_STATE_SNAPSHOT_STALE_OR_FUTURE") {
+    return "STALE";
+  }
+  if (code === "PAPER_STATE_PUBLISHER_ACCOUNT_BINDING_MISMATCH") return "WRONG_ACCOUNT";
+  if (code === "PAPER_STATE_SOURCE_SHA_MISMATCH") return "WRONG_CYCLE";
+  return "INVALID";
+}
+
+function paperStateFailureReason(availability) {
+  if (availability === "STALE") return "PAPER_STATE_SNAPSHOT_STALE_OR_FUTURE";
+  if (availability === "WRONG_ACCOUNT") return "PAPER_STATE_PUBLISHER_ACCOUNT_BINDING_MISMATCH";
+  if (availability === "WRONG_CYCLE") return "PAPER_STATE_SOURCE_SHA_MISMATCH";
+  return "PAPER_STATE_SNAPSHOT_INVALID";
+}
+
+async function resolvePaperStateTransportConfiguration({
+  env,
+  researchCodeSha,
+  runtimePackage,
+  nowMs = Date.now(),
+}) {
+  const configuredSnapshotPath = String(env.PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH ?? "").trim();
+  const configuredPublisherDigest = String(
+    env.PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256 ?? "",
+  ).trim();
+  const bindingPath = String(env.PAPER_FORWARD_PUBLISHER_BINDING_PATH ?? "").trim();
+
+  if (!bindingPath) {
+    const snapshotConfigured = configuredSnapshotPath.length > 0;
+    const publisherConfigured = configuredPublisherDigest.length > 0;
+    const configured = snapshotConfigured && digest(configuredPublisherDigest);
+    const availability = configured
+      ? "CONFIGURED"
+      : !snapshotConfigured && !publisherConfigured
+        ? "MISSING"
+        : "CONFIG_INCOMPLETE";
+    return Object.freeze({
+      snapshotPath: configuredSnapshotPath,
+      publisherAccountIdSha256: digest(configuredPublisherDigest) ? configuredPublisherDigest : null,
+      availability,
+      reason: availability === "CONFIGURED"
+        ? null
+        : availability === "MISSING"
+          ? "PAPER_STATE_SNAPSHOT_MISSING"
+          : "PAPER_STATE_TRANSPORT_CONFIG_INCOMPLETE",
+      observedAtMs: null,
+      sourceShaExact: null,
+      publisherAccountBound: null,
+    });
+  }
+  if (!isAbsolute(bindingPath) || (configuredSnapshotPath && !isAbsolute(configuredSnapshotPath))) {
+    return Object.freeze({
+      snapshotPath: "",
+      publisherAccountIdSha256: null,
+      availability: "INVALID",
+      reason: "PAPER_STATE_TRANSPORT_PATH_INVALID",
+      observedAtMs: null,
+      sourceShaExact: false,
+      publisherAccountBound: false,
+    });
+  }
+
+  const [bindingPresent, snapshotPresent] = await Promise.all([
+    exists(bindingPath),
+    configuredSnapshotPath ? exists(configuredSnapshotPath) : Promise.resolve(false),
+  ]);
+  if (!bindingPresent || !snapshotPresent) {
+    return Object.freeze({
+      snapshotPath: "",
+      publisherAccountIdSha256: null,
+      availability: bindingPresent === snapshotPresent ? "MISSING" : "CONFIG_INCOMPLETE",
+      reason: bindingPresent === snapshotPresent
+        ? "PAPER_STATE_SNAPSHOT_MISSING"
+        : "PAPER_STATE_TRANSPORT_CONFIG_INCOMPLETE",
+      observedAtMs: null,
+      sourceShaExact: null,
+      publisherAccountBound: null,
+    });
+  }
+
+  let binding;
+  try {
+    binding = JSON.parse(await readFile(bindingPath, "utf8"));
+  } catch {
+    return Object.freeze({
+      snapshotPath: "",
+      publisherAccountIdSha256: null,
+      availability: "INVALID",
+      reason: "PAPER_STATE_RUNTIME_BINDING_INVALID",
+      observedAtMs: null,
+      sourceShaExact: false,
+      publisherAccountBound: false,
+    });
+  }
+  if (!safePaperEnvelope(binding)
+    || binding.schemaVersion !== PAPER_STATE_BINDING_VERSION
+    || !immutableSha(binding.paperRuntimeSourceSha)
+    || !digest(binding.publisherAccountIdSha256)
+    || typeof binding.snapshotPath !== "string"
+    || !isAbsolute(binding.snapshotPath)
+    || !/[\\/]publisher[\\/]paper-state-v2\.json$/u.test(binding.snapshotPath)) {
+    return Object.freeze({
+      snapshotPath: "",
+      publisherAccountIdSha256: null,
+      availability: "INVALID",
+      reason: "PAPER_STATE_RUNTIME_BINDING_INVALID",
+      observedAtMs: null,
+      sourceShaExact: false,
+      publisherAccountBound: false,
+    });
+  }
+  if (binding.paperRuntimeSourceSha !== researchCodeSha) {
+    return Object.freeze({
+      snapshotPath: "",
+      publisherAccountIdSha256: null,
+      availability: "WRONG_CYCLE",
+      reason: "PAPER_STATE_SOURCE_SHA_MISMATCH",
+      observedAtMs: null,
+      sourceShaExact: false,
+      publisherAccountBound: null,
+    });
+  }
+  if (configuredPublisherDigest && configuredPublisherDigest !== binding.publisherAccountIdSha256) {
+    return Object.freeze({
+      snapshotPath: "",
+      publisherAccountIdSha256: null,
+      availability: "WRONG_ACCOUNT",
+      reason: "PAPER_STATE_PUBLISHER_ACCOUNT_BINDING_MISMATCH",
+      observedAtMs: null,
+      sourceShaExact: true,
+      publisherAccountBound: false,
+    });
+  }
+
+  let snapshot;
+  try {
+    const rawSnapshot = JSON.parse(await readFile(configuredSnapshotPath, "utf8"));
+    snapshot = runtimePackage.validateImmutablePaperTradingStateSnapshot(rawSnapshot, nowMs);
+  } catch (error) {
+    const availability = paperStateSnapshotFailureState(error);
+    return Object.freeze({
+      snapshotPath: "",
+      publisherAccountIdSha256: null,
+      availability,
+      reason: paperStateFailureReason(availability),
+      observedAtMs: null,
+      sourceShaExact: null,
+      publisherAccountBound: null,
+    });
+  }
+  if (snapshot.schemaVersion !== PAPER_STATE_SNAPSHOT_VERSION
+    || snapshot.publisherAccountIdSha256 !== binding.publisherAccountIdSha256) {
+    return Object.freeze({
+      snapshotPath: "",
+      publisherAccountIdSha256: null,
+      availability: "WRONG_ACCOUNT",
+      reason: "PAPER_STATE_PUBLISHER_ACCOUNT_BINDING_MISMATCH",
+      observedAtMs: snapshot.observedAtMs ?? null,
+      sourceShaExact: snapshot.sourceSha === researchCodeSha,
+      publisherAccountBound: false,
+    });
+  }
+  if (snapshot.sourceSha !== researchCodeSha) {
+    return Object.freeze({
+      snapshotPath: "",
+      publisherAccountIdSha256: null,
+      availability: "WRONG_CYCLE",
+      reason: "PAPER_STATE_SOURCE_SHA_MISMATCH",
+      observedAtMs: snapshot.observedAtMs ?? null,
+      sourceShaExact: false,
+      publisherAccountBound: true,
+    });
+  }
+
+  return Object.freeze({
+    snapshotPath: configuredSnapshotPath,
+    publisherAccountIdSha256: binding.publisherAccountIdSha256,
+    availability: "PRESENT",
+    reason: null,
+    observedAtMs: snapshot.observedAtMs,
+    sourceShaExact: true,
+    publisherAccountBound: true,
+  });
 }
 
 async function exists(path) {
@@ -124,6 +343,159 @@ function naturalFirstZero(measurements) {
     if (measurement.count === 0) return Object.freeze({ stage: measurement.stage, reason: "MEASURED_ZERO" });
   }
   return Object.freeze({ stage: "UNKNOWN", reason: "NO_MEASURED_ZERO" });
+}
+
+const CANONICAL_REASON_TAXONOMY = new Set([
+  "NO_SIGNAL", "QUALITY_GATE", "RISK_GATE", "DATA_STALE", "DATA_MISSING",
+  "MARKET_CLOSED", "PROVIDER_FAILURE", "IDENTITY_MISMATCH", "ACCOUNT_STATE_BLOCK",
+  "COOLDOWN", "DUPLICATE", "REPLAY_ONLY", "UNKNOWN",
+]);
+
+const REASON_SOURCE_STAGE = Object.freeze({
+  SIGNAL_CANDIDATE: "SIGNAL_CANDIDATE",
+  QUALITY_PASSED: "QUALITY_GATE",
+  RISK_PASSED: "RISK_GATE",
+  ENTRY_ELIGIBLE: "ENTRY_ELIGIBLE",
+  ENTRY: "ENTRY",
+  POSITION: "POSITION",
+  EXIT_ELIGIBLE: "EXIT_ELIGIBLE",
+  SETTLEMENT: "SETTLEMENT",
+});
+
+function canonicalUnknownStage(stage, blocker) {
+  return Object.freeze({
+    stage,
+    field: CANONICAL_NATURAL_PAPER_STAGE_FIELDS[stage],
+    status: "UNKNOWN",
+    count: null,
+    blocker,
+    provenance: null,
+    observedAt: null,
+    observationIds: Object.freeze([]),
+    identity: null,
+    naturalCredit: 0,
+    replayCredit: 0,
+    duplicateCredit: 0,
+  });
+}
+
+function creditedCanonicalStage(stage, source, identity, natural) {
+  if (!natural || source?.status !== "MEASURED" || !Number.isInteger(source?.count) || source.count < 0) {
+    return canonicalUnknownStage(stage, natural ? source?.blocker ?? `UNMEASURED_${stage}` : "NON_NATURAL_CYCLE");
+  }
+  const ids = Array.isArray(source.observationIds) ? source.observationIds.filter((value) => typeof value === "string" && value.length > 0) : [];
+  if (ids.length !== source.count || new Set(ids).size !== ids.length) {
+    return canonicalUnknownStage(stage, "DIRECT_OBSERVATION_ID_COVERAGE_INCOMPLETE");
+  }
+  return Object.freeze({
+    ...structuredClone(source),
+    stage,
+    field: CANONICAL_NATURAL_PAPER_STAGE_FIELDS[stage],
+    status: "MEASURED",
+    count: source.count,
+    blocker: null,
+    identity,
+    observationIds: Object.freeze(ids),
+    naturalCredit: source.count,
+    replayCredit: 0,
+    duplicateCredit: 0,
+  });
+}
+
+function canonicalFirstZero(stageCounts) {
+  for (const stage of CANONICAL_NATURAL_PAPER_STAGE_ORDER) {
+    const measurement = stageCounts[CANONICAL_NATURAL_PAPER_STAGE_FIELDS[stage]];
+    if (measurement?.status !== "MEASURED") return Object.freeze({ stage: "UNKNOWN", reason: "UNKNOWN" });
+    if (measurement.count === 0) return Object.freeze({ stage, reason: null });
+  }
+  return Object.freeze({ stage: "NONE", reason: "UNKNOWN" });
+}
+
+function losslessReasonFor(stage, rows) {
+  const expectedSourceStage = REASON_SOURCE_STAGE[stage];
+  const reasons = rows
+    .filter((row) => row?.sourceStage === expectedSourceStage && row?.lossless === true)
+    .map((row) => String(row.canonicalReason ?? "UNKNOWN").toUpperCase())
+    .filter((reason) => CANONICAL_REASON_TAXONOMY.has(reason) && reason !== "UNKNOWN");
+  return reasons.length > 0 && new Set(reasons).size === 1 ? reasons[0] : "UNKNOWN";
+}
+
+export function finalizeCanonicalNaturalStageEvidence({
+  producerEvidence,
+  loopEvidence,
+  exitEligibilityEvidence,
+  cycleId,
+  researchCodeSha,
+  datasetIdentity,
+  naturalScheduleInvocation,
+  replayed,
+} = {}) {
+  const natural = naturalScheduleInvocation === true && replayed !== true;
+  const identity = Object.freeze({
+    cycleId: typeof cycleId === "string" && cycleId.length > 0 ? cycleId : null,
+    strategySha: immutableSha(researchCodeSha) ? researchCodeSha : null,
+    runtimeSha: immutableSha(researchCodeSha) ? researchCodeSha : null,
+    datasetIdentity: typeof datasetIdentity === "string" && datasetIdentity.length > 0 ? datasetIdentity : null,
+    triggerSource: natural ? "cron" : null,
+  });
+  const sourceStages = Object.freeze({
+    signalCandidate: producerEvidence?.stageCounts?.signalCandidate,
+    qualityPassed: producerEvidence?.stageCounts?.qualityPassed,
+    riskPassed: producerEvidence?.stageCounts?.riskPassed,
+    entryEligible: loopEvidence?.stageCounts?.entryEligible,
+    entry: loopEvidence?.stageCounts?.entry,
+    position: loopEvidence?.stageCounts?.position,
+    exitEligible: exitEligibilityEvidence?.status === "MEASURED"
+      ? Object.freeze({
+          status: "MEASURED",
+          count: exitEligibilityEvidence.exitEligibleCount,
+          blocker: null,
+          provenance: exitEligibilityEvidence.provenance,
+          observedAt: exitEligibilityEvidence.observations?.[0]?.observedAt ?? null,
+          observationIds: Object.freeze((exitEligibilityEvidence.observations ?? [])
+            .filter((row) => row.exitEligible === true)
+            .map((row) => row.observationId)),
+        })
+      : null,
+    settlement: loopEvidence?.stageCounts?.settlement,
+  });
+  const stageCounts = Object.fromEntries(CANONICAL_NATURAL_PAPER_STAGE_ORDER.map((stage) => {
+    const field = CANONICAL_NATURAL_PAPER_STAGE_FIELDS[stage];
+    return [field, creditedCanonicalStage(stage, sourceStages[field], identity, natural)];
+  }));
+  const rawReasons = [
+    ...(producerEvidence?.reasonObservations ?? []),
+    ...(loopEvidence?.reasonObservations ?? []),
+    ...(exitEligibilityEvidence?.reasonObservations ?? []),
+  ].map((row) => Object.freeze({
+    ...structuredClone(row),
+    identity: Object.freeze({ ...identity, observationId: row?.identity?.observationId ?? null }),
+    naturalCredit: natural ? 1 : 0,
+    replayCredit: 0,
+    duplicateCredit: 0,
+  }));
+  const firstZero = natural ? canonicalFirstZero(stageCounts) : Object.freeze({
+    stage: "UNKNOWN",
+    reason: replayed === true ? "REPLAY_ONLY" : "UNKNOWN",
+  });
+  const reason = firstZero.stage === "UNKNOWN" || firstZero.stage === "NONE"
+    ? firstZero.reason
+    : losslessReasonFor(firstZero.stage, rawReasons);
+  return Object.freeze({
+    schemaVersion: "canonical-natural-paper-stage-evidence-v1",
+    stageOrder: CANONICAL_NATURAL_PAPER_STAGE_ORDER,
+    identity,
+    stageCounts: Object.freeze(stageCounts),
+    exitEvidence: exitEligibilityEvidence ? Object.freeze(structuredClone(exitEligibilityEvidence)) : null,
+    reasonObservations: Object.freeze(rawReasons),
+    firstZeroStage: firstZero.stage,
+    firstZeroReason: reason,
+    naturalCredit: natural ? 1 : 0,
+    replayCredit: 0,
+    duplicateCredit: 0,
+    historicalCredit: 0,
+    unknownIsZero: false,
+  });
 }
 
 async function readPersistedAuthoritativeAccountState({
@@ -318,20 +690,38 @@ export async function runPaperForwardScheduleCli(env = process.env, {
     let authoritativeRuntimeMeasurement = null;
     let paperStateCallbackInvocationCount = 0;
     let paperStateTransportStatus = "BLOCKED_DATA_CONFIG_ABSENT";
+    let paperStateAvailability = "MISSING";
+    let paperStateTransportReason = "PAPER_STATE_SNAPSHOT_MISSING";
+    let paperStateObservedAtMs = null;
+    let paperStateSourceShaExact = null;
+    let paperStatePublisherAccountBound = null;
     let authoritativeAccountSeedSnapshot = null;
     let expectedPublisherAccountIdSha256 = null;
+    let paperStateSnapshotForCard = async () => null;
+    let compatibilityPaperStateForCard = null;
     let resolvedAuthoritativeSourceWiring = authoritativePaperSourceWiring ?? {};
     let cutover = Object.freeze({ identityCutover: false, archivedResearchSha: null, archivedStrategyId: null });
 
     if (researchProduction) {
       const runtimePackage = await authoritativePaperPackageLoader();
-      const stateSnapshotPath = String(env.PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH ?? "").trim();
-      const publisherAccountIdSha256 = String(
-        env.PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256 ?? "",
-      ).trim();
-      expectedPublisherAccountIdSha256 = digest(publisherAccountIdSha256)
-        ? publisherAccountIdSha256
-        : null;
+      const paperStateConfiguration = await resolvePaperStateTransportConfiguration({
+        env,
+        researchCodeSha,
+        runtimePackage,
+      });
+      const stateSnapshotPath = paperStateConfiguration.snapshotPath;
+      const publisherAccountIdSha256 = paperStateConfiguration.publisherAccountIdSha256 ?? "";
+      expectedPublisherAccountIdSha256 = paperStateConfiguration.publisherAccountIdSha256;
+      paperStateAvailability = paperStateConfiguration.availability;
+      paperStateTransportReason = paperStateConfiguration.reason;
+      paperStateObservedAtMs = paperStateConfiguration.observedAtMs;
+      paperStateSourceShaExact = paperStateConfiguration.sourceShaExact;
+      paperStatePublisherAccountBound = paperStateConfiguration.publisherAccountBound;
+      if (paperStateAvailability === "CONFIG_INCOMPLETE") {
+        paperStateTransportStatus = "BLOCKED_DATA_CONFIG_INCOMPLETE";
+      } else if (!["MISSING", "PRESENT", "CONFIGURED"].includes(paperStateAvailability)) {
+        paperStateTransportStatus = `BLOCKED_DATA_${paperStateAvailability}`;
+      }
 
       let persistedAccount = null;
       let seedPaperState = null;
@@ -382,23 +772,26 @@ export async function runPaperForwardScheduleCli(env = process.env, {
         authoritativeAccountRequired,
       });
 
-      resolvedAuthoritativeSourceWiring = {
-        ...runtimePackage.createAuthoritativePaperEvidenceSourceWiring({ researchCodeSha }),
-        ...resolvedAuthoritativeSourceWiring,
-        createPaperAdmissionEvidenceProducer: runtimePackage.createPaperAdmissionEvidenceProducer,
-      };
-
       if (authoritativeAccountRequired && persistedAccount) {
         const paperState = persistedAccount.paperState;
-        const paperStateForCard = async () => {
+        paperStateSnapshotForCard = async () => {
           paperStateCallbackInvocationCount += 1;
-          return paperState;
-        };
-        resolvedAuthoritativeSourceWiring = {
-          ...resolvedAuthoritativeSourceWiring,
-          paperStateForCard,
+          return runtimePackage.createImmutablePaperTradingStateSnapshot({
+            state: paperState,
+            sourceOwner: "PERSISTED_AUTHORITATIVE_NATURAL_PAPER_LEDGER",
+            sourceSha: researchCodeSha,
+            market: "CRYPTO_FUTURES",
+            currency: "USDT",
+            provenance: ["validated-authoritative-natural-paper-ledger"],
+            publisherAccountIdSha256: expectedPublisherAccountIdSha256,
+            observedAtMs: Date.now(),
+          });
         };
         paperStateTransportStatus = "PERSISTED_AUTHORITATIVE_ACCOUNT_BOUND";
+        paperStateAvailability = "PRESENT";
+        paperStateTransportReason = null;
+        paperStateSourceShaExact = true;
+        paperStatePublisherAccountBound = true;
         paperStateOwnerAudit = Object.freeze({
           schemaVersion: persistedAccount.ledgerSchemaVersion,
           snapshotPath: null,
@@ -412,15 +805,16 @@ export async function runPaperForwardScheduleCli(env = process.env, {
           unknownIsZero: false,
         });
       } else if (authoritativeAccountRequired && seedPaperState) {
-        const paperStateForCard = async () => {
+        paperStateSnapshotForCard = async () => {
           paperStateCallbackInvocationCount += 1;
-          return seedPaperState;
-        };
-        resolvedAuthoritativeSourceWiring = {
-          ...resolvedAuthoritativeSourceWiring,
-          paperStateForCard,
+          return authoritativeAccountSeedSnapshot;
         };
         paperStateTransportStatus = "AUTHENTICATED_SEED_SNAPSHOT_BOUND";
+        paperStateAvailability = "PRESENT";
+        paperStateTransportReason = null;
+        paperStateObservedAtMs = authoritativeAccountSeedSnapshot?.observedAtMs ?? null;
+        paperStateSourceShaExact = true;
+        paperStatePublisherAccountBound = true;
         paperStateOwnerAudit = Object.freeze({
           schemaVersion: seedOwner.schemaVersion,
           snapshotPath: seedOwner.snapshotPath,
@@ -456,15 +850,32 @@ export async function runPaperForwardScheduleCli(env = process.env, {
             exactAccountBindingRequired: true,
             unknownIsZero: false,
           });
-        const paperStateForCard = async (...args) => {
+        const configuredPaperStateCallback = async (...args) => {
           paperStateCallbackInvocationCount += 1;
-          return paperStateOwner.paperStateForCard(...args);
+          try {
+            return typeof paperStateOwner.paperStateSnapshotForCard === "function"
+              ? await paperStateOwner.paperStateSnapshotForCard(...args)
+              : await paperStateOwner.paperStateForCard(...args);
+          } catch (error) {
+            paperStateAvailability = paperStateSnapshotFailureState(error);
+            paperStateTransportReason = paperStateFailureReason(paperStateAvailability);
+            paperStateTransportStatus = `BLOCKED_DATA_${paperStateAvailability}`;
+            throw Object.assign(new Error(paperStateTransportReason), {
+              code: paperStateTransportReason,
+            });
+          }
         };
-        resolvedAuthoritativeSourceWiring = {
-          ...resolvedAuthoritativeSourceWiring,
-          paperStateForCard,
-        };
+        if (typeof paperStateOwner.paperStateSnapshotForCard === "function") {
+          paperStateSnapshotForCard = configuredPaperStateCallback;
+        } else {
+          // Compatibility-only state readers remain usable for the Paper-state
+          // callback, but cannot feed risk sizing without immutable snapshot metadata.
+          compatibilityPaperStateForCard = configuredPaperStateCallback;
+        }
         paperStateTransportStatus = "CONFIGURED_EXACT_ACCOUNT_BOUND";
+        paperStateAvailability = "PRESENT";
+        paperStateTransportReason = null;
+        paperStatePublisherAccountBound = true;
         paperStateOwnerAudit = Object.freeze({
           schemaVersion: paperStateOwner.schemaVersion,
           snapshotPath: paperStateOwner.snapshotPath,
@@ -475,9 +886,36 @@ export async function runPaperForwardScheduleCli(env = process.env, {
           exactAccountBindingRequired: paperStateOwner.exactAccountBindingRequired === true,
           unknownIsZero: paperStateOwner.unknownIsZero === true,
         });
-      } else if (!authoritativeAccountRequired && (stateSnapshotPath || publisherAccountIdSha256)) {
+      } else if (!authoritativeAccountRequired
+        && paperStateAvailability === "CONFIG_INCOMPLETE") {
         paperStateTransportStatus = "BLOCKED_DATA_CONFIG_INCOMPLETE";
       }
+
+      const riskPolicyRecordPath = configuredEvidencePath(
+        env,
+        "PAPER_FORWARD_RISK_POLICY_RECORD_PATH",
+      );
+      const supplementalCostEvidencePath = configuredEvidencePath(
+        env,
+        "PAPER_FORWARD_SUPPLEMENTAL_COST_EVIDENCE_PATH",
+      );
+      const canonicalNaturalWiring = runtimePackage
+        .createAuthoritativePaperNaturalCycleEvidenceSourceWiring({
+          researchCodeSha,
+          sources: {
+            paperStateSnapshotForCard,
+            riskPolicyRecordForCard: async () => readConfiguredEvidenceRecord(riskPolicyRecordPath),
+            supplementalCostInputForCard: async () => readConfiguredEvidenceRecord(
+              supplementalCostEvidencePath,
+            ),
+          },
+        });
+      resolvedAuthoritativeSourceWiring = {
+        ...canonicalNaturalWiring,
+        ...(compatibilityPaperStateForCard == null ? {} : { paperStateForCard: compatibilityPaperStateForCard }),
+        ...resolvedAuthoritativeSourceWiring,
+        createPaperAdmissionEvidenceProducer: runtimePackage.createPaperAdmissionEvidenceProducer,
+      };
 
       authoritativeRuntimePackageAudit = Object.freeze({
         schemaVersion: runtimePackage.schemaVersion,
@@ -495,6 +933,9 @@ export async function runPaperForwardScheduleCli(env = process.env, {
         scheduleActivationAuthority: runtimePackage.scheduleActivationAuthority,
         financialMutationAllowed: runtimePackage.financialMutationAllowed,
         paperStateOwner: paperStateOwnerAudit,
+        naturalCycleSourceGraph: canonicalNaturalWiring.naturalCycleSourceGraph,
+        riskPolicyRecordTransport: riskPolicyRecordPath == null ? "MISSING" : "CONFIGURED_READ_ONLY",
+        supplementalCostTransport: supplementalCostEvidencePath == null ? "MISSING" : "CONFIGURED_READ_ONLY",
       });
     }
 
@@ -546,6 +987,10 @@ export async function runPaperForwardScheduleCli(env = process.env, {
               naturalFirstZeroReason: paperSource?.naturalFirstZeroReason ?? null,
               naturalEvidenceIdentity: paperSource?.naturalEvidenceIdentity ?? null,
               naturalRuntimeSha: paperSource?.naturalRuntimeSha ?? null,
+              canonicalNaturalStageEvidence: paperSource?.canonicalNaturalStageEvidence ?? null,
+              exitEligibilityEvidence: paperSource?.exitEligibilityEvidence ?? null,
+              authoritativeFirstZeroReasonEvidenceByStage:
+                paperSource?.authoritativeFirstZeroReasonEvidenceByStage ?? {},
             });
           }
           return evidence;
@@ -562,6 +1007,16 @@ export async function runPaperForwardScheduleCli(env = process.env, {
       result,
     );
     const naturalZero = naturalFirstZero(naturalFunnelMeasurements);
+    const canonicalNaturalStageEvidence = finalizeCanonicalNaturalStageEvidence({
+      producerEvidence: authoritativeRuntimeMeasurement?.canonicalNaturalStageEvidence,
+      loopEvidence: result?.summary?.canonicalNaturalStageEvidence,
+      exitEligibilityEvidence: authoritativeRuntimeMeasurement?.exitEligibilityEvidence,
+      cycleId: result?.cycleId,
+      researchCodeSha,
+      datasetIdentity: authoritativeRuntimeMeasurement?.naturalEvidenceIdentity,
+      naturalScheduleInvocation: result?.invocation?.naturalScheduleInvocation === true,
+      replayed: result?.status === "REPLAYED",
+    });
     const output = {
       schemaVersion: "paper-forward-schedule-cli-v5",
       status: result.status,
@@ -593,12 +1048,22 @@ export async function runPaperForwardScheduleCli(env = process.env, {
       naturalFunnelMeasurements,
       naturalFirstZeroStage: naturalZero.stage,
       naturalFirstZeroReason: naturalZero.reason,
+      canonicalNaturalStageEvidence,
+      canonicalNaturalFirstZeroStage: canonicalNaturalStageEvidence.firstZeroStage,
+      canonicalNaturalFirstZeroReason: canonicalNaturalStageEvidence.firstZeroReason,
       naturalStrategySha: authoritativeRuntimeMeasurement?.naturalRuntimeSha ?? researchCodeSha,
       naturalRuntimeSha: researchCodeSha,
       naturalDatasetIdentity: authoritativeRuntimeMeasurement?.naturalEvidenceIdentity ?? null,
+      authoritativeFirstZeroReasonEvidenceByStage:
+        authoritativeRuntimeMeasurement?.authoritativeFirstZeroReasonEvidenceByStage ?? {},
       authoritativeRuntimePackage: authoritativeRuntimePackageAudit,
       paperStateTransport: Object.freeze({
         status: paperStateTransportStatus,
+        state: paperStateAvailability,
+        reason: paperStateTransportReason,
+        observedAtMs: paperStateObservedAtMs,
+        sourceShaExact: paperStateSourceShaExact,
+        publisherAccountBound: paperStatePublisherAccountBound,
         callbackInvocationCount: paperStateCallbackInvocationCount,
         callbackInvoked: paperStateCallbackInvocationCount > 0,
         authenticatedPublisherRequired: true,
@@ -623,6 +1088,14 @@ export async function runPaperForwardScheduleCli(env = process.env, {
       settlementCount: stageMeasurementCount(naturalFunnelMeasurements, "SETTLEMENT")
         ?? stageMeasurementCount(stageMeasurements, "Settlement"),
       outcomeCount: stageMeasurementCount(naturalFunnelMeasurements, "OUTCOME"),
+      signalCandidateCount: canonicalNaturalStageEvidence.stageCounts.signalCandidate.count,
+      qualityPassedCount: canonicalNaturalStageEvidence.stageCounts.qualityPassed.count,
+      riskPassedDirectCount: canonicalNaturalStageEvidence.stageCounts.riskPassed.count,
+      entryEligibleCount: canonicalNaturalStageEvidence.stageCounts.entryEligible.count,
+      canonicalEntryCount: canonicalNaturalStageEvidence.stageCounts.entry.count,
+      canonicalPositionCount: canonicalNaturalStageEvidence.stageCounts.position.count,
+      exitEligibleCount: canonicalNaturalStageEvidence.stageCounts.exitEligible.count,
+      canonicalSettlementCount: canonicalNaturalStageEvidence.stageCounts.settlement.count,
       canonicalPaperCandidateCount: stageMeasurementCount(stageMeasurements, "Identity"),
       privateRequestCount: 0,
       financialMutationCount: 0,
