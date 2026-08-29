@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { open, readFile } from 'node:fs/promises';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { canonicalJson } from '../src/public-forward-liquidity-calibration.mjs';
@@ -46,21 +46,43 @@ async function json(path) {
   return JSON.parse(await readFile(resolve(path), 'utf8'));
 }
 
-async function sourcesFromManifest(path) {
-  const manifest = await json(path);
+function isInside(parent, child) {
+  const normalizedParent = `${resolve(parent)}${sep}`.toLowerCase();
+  const normalizedChild = `${resolve(child)}${sep}`.toLowerCase();
+  return normalizedChild.startsWith(normalizedParent);
+}
+
+export function validatePublicForwardLiquiditySourceManifestLayout(manifest) {
   if (manifest?.schemaVersion !== SOURCE_MANIFEST_VERSION
     || typeof manifest.stateRoot !== 'string'
+    || typeof manifest.researchRepoRoot !== 'string'
+    || !isAbsolute(manifest.stateRoot)
+    || !isAbsolute(manifest.researchRepoRoot)
     || !Array.isArray(manifest.sources)
     || manifest.sources.length === 0) {
     throw new Error('SOURCE_MANIFEST_INVALID');
   }
   const stateRoot = resolve(manifest.stateRoot);
-  return Promise.all(manifest.sources.map(async (source) => {
+  const researchRepoRoot = resolve(manifest.researchRepoRoot);
+  if (isInside(researchRepoRoot, stateRoot) || isInside(stateRoot, researchRepoRoot)) {
+    throw new Error('SOURCE_STATE_ROOT_OVERLAPS_RESEARCH_CHECKOUT');
+  }
+  for (const source of manifest.sources) {
     if (!source || typeof source !== 'object' || Array.isArray(source)
       || typeof source.datasetPath !== 'string'
-      || typeof source.ingestReceiptPath !== 'string') {
+      || typeof source.ingestReceiptPath !== 'string'
+      || !isAbsolute(source.datasetPath)
+      || !isAbsolute(source.ingestReceiptPath)) {
       throw new Error('SOURCE_MANIFEST_ENTRY_INVALID');
     }
+  }
+  return Object.freeze({ stateRoot, researchRepoRoot });
+}
+
+async function sourcesFromManifest(path) {
+  const manifest = await json(path);
+  const { stateRoot } = validatePublicForwardLiquiditySourceManifestLayout(manifest);
+  return Promise.all(manifest.sources.map(async (source) => {
     const [dataset, ingestReceipt] = await Promise.all([
       json(source.datasetPath),
       json(source.ingestReceiptPath),
