@@ -112,12 +112,19 @@ function telegramStartPayload(body: unknown): { token: string; chatId: string; t
   const update = record(body);
   const message = record(update?.message);
   const chat = record(message?.chat);
-  const from = record(update?.message) ? record(message?.from) : null;
+  const from = record(message?.from);
   const text = typeof message?.text === 'string' ? message.text.trim() : '';
   const match = /^\/start\s+([A-Za-z0-9_-]{20,200})$/.exec(text);
+  const chatType = typeof chat?.type === 'string' ? chat.type : '';
   const chatId = chat?.id == null ? '' : String(chat.id);
   const telegramUserId = from?.id == null ? '' : String(from.id);
-  if (!match || !chatId || !telegramUserId) return null;
+  if (
+    !match
+    || chatType !== 'private'
+    || !chatId
+    || !telegramUserId
+    || chatId !== telegramUserId
+  ) return null;
   return { token: match[1], chatId, telegramUserId };
 }
 
