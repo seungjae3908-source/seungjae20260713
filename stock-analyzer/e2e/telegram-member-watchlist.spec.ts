@@ -228,14 +228,14 @@ test('crypto futures LONG and SHORT remain independent eligible directions', asy
         signalTypes.push(input.event.signalType);
         return delivered(input.userId);
       },
-    }, { MEMBER_WATCHLIST_TELEGRAM_PRODUCER_ENABLED: 'true' });
+    }, { MEMBER_WATCHLIST_TEGRAM_PRODUCER_ENABLED: 'true', MEMBER_WATCHLIST_TELEGRAM_PRODUCER_ENABLED: 'true' });
     expect(result.delivered).toBe(1);
   }
 
   expect(signalTypes).toEqual(['LONG', 'SHORT']);
 });
 
-test('member ownership, current capability, durable handoff, and delivery boundaries are fail-closed', () => {
+test('member ownership, canonical capability, durable handoff, and delivery boundaries are fail-closed', () => {
   const root = repositoryRoot();
   const route = fs.readFileSync(path.join(root, 'api-server/src/routes/member-watchlist.ts'), 'utf8');
   const migration = fs.readFileSync(
@@ -258,11 +258,12 @@ test('member ownership, current capability, durable handoff, and delivery bounda
   expect(migration).toContain('auth.uid() = user_id');
   expect(migration).toContain("'UNRESOLVED'");
   expect(service).toContain(".from('profiles')");
-  expect(service).toContain(".select('id,status,membership_level,is_active')");
+  expect(service).toContain(".select('id,status,membership_level,is_active,role')");
   expect(service).toContain(".eq('status', 'approved')");
-  expect(service).toContain("profile.membership_level !== 'pending'");
-  expect(service).toContain('profile.is_active !== false');
-  expect(service).not.toContain("packages/member-access/src/index.js");
+  expect(service).toContain("packages/member-access/src/index.js");
+  expect(service).toContain("hasCapability(profile, 'canConnectPersonalTelegram')");
+  expect(service).not.toContain("profile.membership_level !== 'pending'");
+  expect(service).not.toContain('profile.is_active !== false');
   expect(service).toContain('MAX_PROFILE_LOOKUP_BATCH = 200');
   expect(sync).toContain("request('/member-watchlist/sync'");
   expect(sync).not.toContain('deviceId:');
