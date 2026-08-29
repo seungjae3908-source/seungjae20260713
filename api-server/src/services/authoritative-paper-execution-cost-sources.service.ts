@@ -147,6 +147,12 @@ export type AuthoritativePaperFundingPercentCostEvidence = PercentCostEvidence &
   signedCostPercent: number;
   creditPercent: number;
   projectedIsRealized: false;
+  riskPolicyIdentity: Readonly<{
+    policyId: string;
+    policyVersion: string;
+    source: string;
+    researchCodeSha: string;
+  }>;
 }>;
 
 export type AuthoritativePaperFundingHorizonCostResult = Readonly<{
@@ -431,7 +437,7 @@ export function buildAuthoritativePaperFundingHoldingHorizonCost(
   }
   const riskSymbolScopes = riskPolicy?.symbolScopes;
   if (symbol && riskSymbolScopes !== '*' && (!Array.isArray(riskSymbolScopes)
-    || !riskSymbolScopes.map(normalizedFundingSymbol).includes(symbol))) {
+    || !riskPolicy.symbolScopes.map(normalizedFundingSymbol).includes(symbol))) {
     blockers.push('FUNDING_RISK_POLICY_SYMBOL_SCOPE_MISMATCH');
   }
 
@@ -619,6 +625,12 @@ export function buildAuthoritativePaperFundingHoldingHorizonCost(
       signedCostPercent,
       creditPercent,
       projectedIsRealized: false as const,
+      riskPolicyIdentity: freeze({
+        policyId: riskPolicyId,
+        policyVersion: riskPolicyVersion,
+        source: riskPolicySource,
+        researchCodeSha,
+      }),
     }) as AuthoritativePaperFundingPercentCostEvidence
     : null;
   const referenceBlockers = present
