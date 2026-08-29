@@ -1,0 +1,80 @@
+name: Public Forward Liquidity Calibration OOS Validation
+
+on:
+  pull_request:
+    paths:
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-calibration-oos-outcome-validator.mjs'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-multi-source-split-audit.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-calibration-oos-outcome-validator.test.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-multi-source-split-audit.test.mjs'
+      - '.github/workflows/public-forward-liquidity-calibration-oos-validation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Syntax check
+        run: >-
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-calibration-oos-outcome-validator.mjs
+          && node --check market-intelligence-sidecar/tests/public-forward-liquidity-calibration-oos-outcome-validator.test.mjs
+
+      - name: Run focused held-out OOS outcome validator tests
+        run: node --test market-intelligence-sidecar/tests/public-forward-liquidity-calibration-oos-outcome-validator.test.mjs
+
+      - name: Verify fail-closed OOS, lineage, and safety invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE='market-intelligence-sidecar/src/public-forward-liquidity-calibration-oos-outcome-validator.mjs'
+          grep -Fq 'verifiedFrozenSplitAuditRequired: true' "$FILE"
+          grep -Fq 'multiSourceLineageRequired: true' "$FILE"
+          grep -Fq 'syntheticAggregateDatasetAllowed: false' "$FILE"
+          grep -Fq 'syntheticSingleCollectorAllowed: false' "$FILE"
+          grep -Fq 'PUBLIC_FORWARD_LIQUIDITY_MULTI_SOURCE_SPLIT_AUDIT_VERSION' "$FILE"
+          grep -Fq 'PUBLIC_FORWARD_LIQUIDITY_MULTI_SOURCE_OOS_VALIDATION_VERSION' "$FILE"
+          grep -Fq 'upstreamLineageDigest' "$FILE"
+          grep -Fq 'datasetDigests' "$FILE"
+          grep -Fq 'receiptDigests' "$FILE"
+          grep -Fq 'collectorCodeShas' "$FILE"
+          grep -Fq 'sourceDatasetDigest' "$FILE"
+          grep -Fq 'sourceReceiptDigest' "$FILE"
+          grep -Fq 'sourceCollectorCodeSha' "$FILE"
+          grep -Fq 'OOS_SYNTHETIC_AGGREGATE_DATASET_FORBIDDEN' "$FILE"
+          grep -Fq 'OOS_ASSIGNMENT_SOURCE_LINEAGE_MISMATCH' "$FILE"
+          grep -Fq 'exactOosCoverageRequired: true' "$FILE"
+          grep -Fq 'genuinePublicForwardMarketDataRequired: true' "$FILE"
+          grep -Fq 'methodologyFrozenBeforeOosRequired: true' "$FILE"
+          grep -Fq 'oosDataAccessBeforeFreezeAllowed: false' "$FILE"
+          grep -Fq 'historicalBackfillCreditAllowed: false' "$FILE"
+          grep -Fq 'testFixtureRuntimeCreditAllowed: false' "$FILE"
+          grep -Fq 'causalMarketImpactClaimAllowed: false' "$FILE"
+          grep -Fq 'outcomeExecutionCostEligible: false' "$FILE"
+          grep -Fq 'calibrationArtifactProduced: false' "$FILE"
+          grep -Fq 'liquidityImpactProduced: false' "$FILE"
+          grep -Fq 'naturalEntryCredit: 0' "$FILE"
+          grep -Fq 'runtimeCostCredit: 0' "$FILE"
+          grep -Fq "executionAuthority: 'NONE'" "$FILE"
+          grep -Fq 'privateApiAllowed: false' "$FILE"
+          grep -Fq 'liveTrading: false' "$FILE"
+          grep -Fq 'orderSubmissionAllowed: false' "$FILE"
+          grep -Fq 'fullCostReady: false' "$FILE"
+          grep -Fq "sourceType !== 'PUBLIC_FORWARD_MARKET_DATA'" "$FILE"
+          grep -Fq 'OOS_METHODOLOGY_NOT_FROZEN_BEFORE_OOS' "$FILE"
+          grep -Fq 'OOS_PRE_FREEZE_DATA_ACCESS_FORBIDDEN' "$FILE"
+          grep -Fq 'OOS_EXACT_COVERAGE_MISMATCH' "$FILE"
+          grep -Fq 'OOS_CAUSAL_MARKET_IMPACT_CLAIM_FORBIDDEN' "$FILE"
+          grep -Fq 'OOS_EXECUTION_COST_CREDIT_FORBIDDEN' "$FILE"
+          grep -Fq 'OOS_LIQUIDITY_COEFFICIENT_FORBIDDEN' "$FILE"
