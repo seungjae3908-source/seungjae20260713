@@ -141,6 +141,21 @@ class RealtimeControllerTests(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_reports_before_active_command_are_not_reapplied(self):
+        github = FakeGitHub([
+            worker_report(99, "CONTROL-001", "completed"),
+            command_comment(100, add="", keep="#798"),
+        ])
+        with tempfile.TemporaryDirectory() as temp:
+            store = rc.StateStore(Path(temp) / "controller.db")
+            controller = rc.Controller(store, github, FakeAdapter(), holder="controller")
+            try:
+                result = controller.reconcile_remote()
+                self.assertEqual(result["reportsAppliedAfterCommand"], 0)
+                self.assertEqual(store.task("#798")["status"], "TRACKED")
+            finally:
+                store.close()
+
     def test_delivery_dedupe_is_persistent(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "controller.db"
