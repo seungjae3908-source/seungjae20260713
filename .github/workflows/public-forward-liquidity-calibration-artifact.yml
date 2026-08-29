@@ -1,0 +1,47 @@
+name: Public Forward Liquidity Calibration Artifact
+
+on:
+  pull_request:
+    paths:
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-calibration-artifact.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-calibration-artifact.test.mjs'
+      - '.github/workflows/public-forward-liquidity-calibration-artifact.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Verify exact checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+
+      - name: Syntax check
+        run: |
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-calibration-artifact.mjs
+          node --check market-intelligence-sidecar/tests/public-forward-liquidity-calibration-artifact.test.mjs
+
+      - name: Run focused contract tests
+        run: node --test market-intelligence-sidecar/tests/public-forward-liquidity-calibration-artifact.test.mjs
+
+      - name: Verify fail-closed safety boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          file='market-intelligence-sidecar/src/public-forward-liquidity-calibration-artifact.mjs'
+          grep -F "runtimeCostProduced: false" "$file"
+          grep -F "liquidityImpactPresent: false" "$file"
+          grep -F "executionAuthority: 'NONE'" "$file"
+          grep -F "fullCostReady: false" "$file"
+          grep -F "RUNTIME_LIQUIDITY_COST_FORBIDDEN" "$file"
