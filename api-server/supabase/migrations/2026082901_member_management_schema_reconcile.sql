@@ -22,7 +22,9 @@ alter table public.profiles
   add column if not exists permissions_updated_at timestamptz;
 
 -- Preserve the legacy effective tier exactly:
--- * unapproved rows remain pending/inactive, including legacy admin-role rows;
+-- * pending/rejected/revoked/withdrawn/disabled/inactive rows stay pending/inactive;
+-- * suspended rows stay inactive but preserve their last stored tier so an explicit
+--   administration reactivation can restore the pre-suspension tier;
 -- * approved associate stays associate;
 -- * approved full/regular stays regular;
 -- * only an already-approved legacy admin/master remains admin.
@@ -30,6 +32,13 @@ alter table public.profiles
 -- is_active=false instead of widening access during an idempotent re-run.
 update public.profiles
 set membership_level = case
+      when coalesce(status, 'pending') = 'suspended' then case
+        when membership_level in ('pending', 'associate', 'regular', 'admin') then membership_level
+        when role in ('admin', 'master') then 'admin'
+        when role = 'associate' then 'associate'
+        when role in ('full', 'regular') then 'regular'
+        else 'pending'
+      end
       when coalesce(status, 'pending') <> 'approved' then 'pending'
       when membership_level in ('pending', 'associate', 'regular', 'admin') then membership_level
       when role in ('admin', 'master') then 'admin'
@@ -52,7 +61,11 @@ where membership_level is null
    or is_active is null
    or permissions_updated_at is null
    or (
-     coalesce(status, 'pending') <> 'approved'
+     coalesce(status, 'pending') = 'suspended'
+     and is_active is true
+   )
+   or (
+     coalesce(status, 'pending') not in ('approved', 'suspended')
      and (membership_level <> 'pending' or is_active is true)
    );
 
@@ -74,7 +87,7 @@ alter table public.profiles
 alter table public.profiles drop constraint if exists profiles_status_check;
 alter table public.profiles
   add constraint profiles_status_check
-  check (status in ('pending', 'approved', 'rejected', 'suspended', 'revoked', 'disabled'));
+  check (status in ('pending', 'approved', 'rejected', 'suspended', 'revoked', 'withdrawn', 'disabled', 'inactive'));
 
 create index if not exists profiles_membership_active_idx
   on public.profiles (membership_level, is_active, permissions_updated_at desc);
