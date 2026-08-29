@@ -132,10 +132,25 @@ as $function$
   )
 $function$;
 
+-- Legacy profiles/audit RLS policies call public.is_admin(). Keep those policies
+-- recursion-safe while making their authority identical to the canonical active
+-- member gate. An approved role=admin row with is_active=false is not an admin.
+create or replace function public.is_admin()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public, pg_temp
+as $function$
+  select coalesce(public.current_membership_level() = 'admin', false)
+$function$;
+
 revoke all on function public.current_membership_level() from public;
 revoke all on function public.is_approved_member() from public;
+revoke all on function public.is_admin() from public;
 grant execute on function public.current_membership_level() to anon, authenticated;
 grant execute on function public.is_approved_member() to anon, authenticated;
+grant execute on function public.is_admin() to anon, authenticated;
 
 create table if not exists public.member_permission_audit (
   id uuid primary key default gen_random_uuid(),
