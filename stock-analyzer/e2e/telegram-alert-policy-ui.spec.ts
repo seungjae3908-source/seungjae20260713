@@ -83,6 +83,14 @@ test('personal Telegram runtime health is sanitized and visible without trading 
   expect(panel).toContain('상태에는 Secret·chat ID를 표시하지 않습니다.');
 });
 
+test('personal Telegram link webhook accepts only the users private chat', () => {
+  expect(route).toContain("const chatType = typeof chat?.type === 'string' ? chat.type : '';");
+  expect(route).toContain("chatType !== 'private'");
+  expect(route).toContain('chatId !== telegramUserId');
+  expect(route).toContain('if (!payload)');
+  expect(route).toContain('res.status(204).end()');
+});
+
 test('personal Telegram test endpoint preserves the route transport boundary and sends only explicit test content', () => {
   expect(route).toContain("userBrokerTelegramRouter.post('/telegram/test'");
   expect(route).toContain('sendPersonalTelegramTestMessage(userId)');
