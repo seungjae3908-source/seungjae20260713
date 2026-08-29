@@ -274,13 +274,14 @@ export async function executeCaptureSeam({
 } = {}) {
   const mainSha = exactSha(exactMainSha, 'EXACT_MAIN_SHA_INVALID');
   const normalizedSymbol = String(symbol ?? '').trim().toUpperCase();
-  if (normalizedSymbol !== V3_POLICY_BINDING.symbol) throw new Error('CAPTURE_SYMBOL_NOT_V3_SCOPE');
+  if (!/^[A-Z0-9]{4,30}$/u.test(normalizedSymbol)) throw new Error('CAPTURE_SYMBOL_INVALID');
   const normalizedTrigger = String(triggerSource ?? '').trim();
   if (![MANUAL_TRIGGER_SOURCE, SCHEDULED_TRIGGER_SOURCE].includes(normalizedTrigger)) throw new Error('CAPTURE_TRIGGER_SOURCE_INVALID');
   const actualMs = positiveInteger(actualRunStartedAtMs, 'ACTUAL_RUN_STARTED_AT_MS_INVALID');
   const attempt = positiveInteger(runAttempt, 'RUN_ATTEMPT_INVALID');
 
   const isScheduled = normalizedTrigger === SCHEDULED_TRIGGER_SOURCE;
+  if (isScheduled && normalizedSymbol !== V3_POLICY_BINDING.symbol) throw new Error('CAPTURE_SYMBOL_NOT_V3_SCOPE');
   if (isScheduled) {
     if (!scheduledAuthority?.slot) throw new Error('SCHEDULED_AUTHORITY_MISSING');
     const policyVerification = verifyV3PolicyBinding();
