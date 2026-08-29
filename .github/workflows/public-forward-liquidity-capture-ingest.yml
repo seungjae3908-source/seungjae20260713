@@ -76,7 +76,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      STATE_ROOT: ${{ runner.temp }}/authoritative-liquidity-ingest-state
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -171,7 +170,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "${STATE_ROOT}" = "${RUNNER_TEMP}/authoritative-liquidity-ingest-state"
+          STATE_ROOT="${RUNNER_TEMP}/authoritative-liquidity-ingest-state"
+          export STATE_ROOT
           mkdir -p "${STATE_ROOT}"
           RUNNER='market-intelligence-sidecar/scripts/run-public-forward-liquidity-capture-ingest.mjs'
 
@@ -215,6 +215,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          export STATE_ROOT="${RUNNER_TEMP}/authoritative-liquidity-ingest-state"
           node --input-type=module <<'NODE'
           import { createHash } from 'node:crypto';
           import { readFile, writeFile } from 'node:fs/promises';
