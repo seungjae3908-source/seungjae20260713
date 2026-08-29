@@ -1,0 +1,55 @@
+name: Realtime Controller Validation
+
+on:
+  pull_request:
+    paths:
+      - 'control-plane/realtime-controller/**'
+      - '.github/workflows/realtime-controller-validation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: realtime-controller-validation-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Compile controller
+        run: >-
+          python -m py_compile
+          control-plane/realtime-controller/realtime_controller.py
+          control-plane/realtime-controller/tests/test_realtime_controller.py
+
+      - name: Run focused controller regressions
+        run: python control-plane/realtime-controller/tests/test_realtime_controller.py
+
+      - name: Verify reuse and safety boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          controller='control-plane/realtime-controller/realtime_controller.py'
+          readme='control-plane/realtime-controller/README.md'
+          service='control-plane/realtime-controller/systemd/investment-realtime-controller.service'
+          grep -Fq 'agent-hub-wakeup' "$controller"
+          grep -Fq 'CENTRAL-COMMANDER' "$controller"
+          grep -Fq 'GITHUB_WEBHOOK_SECRET' "$controller"
+          grep -Fq 'X-Hub-Signature-256' "$controller"
+          grep -Fq 'LEASE_EXPIRED_REQUIRES_REMOTE_RECONCILE' "$controller"
+          grep -Fq 'Restart=always' "$service"
+          grep -Fq 'WantedBy=multi-user.target' "$service"
+          grep -Fq 'REALTIME_CONTROLLER_READY=false' "$readme"
+          grep -Fq '.github/workflows/agent-hub-executor.yml' "$readme"
+          ! grep -Eq 'submit[-_ ]?order|cancel[-_ ]?order|withdraw|transfer|private trading' "$controller"
