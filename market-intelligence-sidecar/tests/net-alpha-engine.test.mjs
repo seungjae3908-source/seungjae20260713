@@ -45,6 +45,7 @@ function readyInput(overrides = {}) {
     grossEvidenceSource: 'LIVE_RECOMMENDATION',
     costSource: 'FULL_COST_EVIDENCE_V1',
     costPolicyVersion: 'cost-v7',
+    currentIdentity: { ...IDENTITY },
     grossIdentity: { ...IDENTITY },
     costIdentity: { ...IDENTITY },
     expectedGrossEdgeBps: 20,
@@ -63,6 +64,7 @@ test('passes only after every authoritative readiness gate explicit cost and ide
   assert.equal(result.conservativeNetAlphaBps, 10);
   assert.equal(result.decision, 'TAKE');
   assert.equal(result.autoTrading.state, 'PASS');
+  assert.deepEqual(result.currentIdentity, IDENTITY);
   assert.equal(result.readiness.forwardDataComplete, true);
   assert.equal(result.readiness.fullCostReady, true);
   assert.equal(result.readiness.evidenceComplete, true);
@@ -168,6 +170,23 @@ test('canonical Gross Edge source schema and identity lineage are mandatory', ()
   }));
   assert.equal(mismatch.status, 'NOT_AVAILABLE');
   assert.ok(mismatch.reasons.includes('NET_ALPHA_IDENTITY_MISMATCH'));
+});
+
+test('current Scanner strategy identity is mandatory and cannot mix horizon version or direction', () => {
+  const missingCurrent = evaluateNetAlpha(readyInput({ currentIdentity: null }));
+  assert.equal(missingCurrent.status, 'NOT_AVAILABLE');
+  assert.ok(missingCurrent.reasons.includes('CURRENT_STRATEGY_IDENTITY_NOT_AVAILABLE'));
+
+  for (const currentIdentity of [
+    { ...IDENTITY, horizon: 60 },
+    { ...IDENTITY, strategyVersion: 'v8' },
+    { ...IDENTITY, direction: 'SHORT' },
+  ]) {
+    const result = evaluateNetAlpha(readyInput({ currentIdentity }));
+    assert.equal(result.status, 'NOT_AVAILABLE');
+    assert.ok(result.reasons.includes('CURRENT_GROSS_IDENTITY_MISMATCH'));
+    assert.ok(result.reasons.includes('CURRENT_COST_IDENTITY_MISMATCH'));
+  }
 });
 
 test('cost provenance and clock are mandatory and independently fail closed', () => {
