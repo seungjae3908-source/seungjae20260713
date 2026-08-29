@@ -795,6 +795,9 @@ function positive2(value) {
 function nonNegative2(value) {
   return finite3(value) && value >= 0;
 }
+function exactSha(value) {
+  return typeof value === "string" && /^[0-9a-f]{40}$/u.test(value);
+}
 function add3(blockers, blocker, condition = true) {
   if (condition && !blockers.includes(blocker)) blockers.push(blocker);
 }
@@ -870,7 +873,7 @@ function validateLearning(candidate, learning, blockers) {
   if (dataTimestampMs == null || timestampMs != null && dataTimestampMs > timestampMs) add3(blockers, "LEARNING_DATA_TIMESTAMP_INVALID");
   if (!Array.isArray(learning?.dataProvenance) || learning.dataProvenance.length === 0 || learning.dataProvenance.some((source) => !nonEmpty(source))) add3(blockers, "LEARNING_DATA_PROVENANCE_REQUIRED");
 }
-function validateRisk(candidate, riskInput, riskResult, nowMs, maxEvidenceAgeMs, blockers) {
+function validateRisk(candidate, riskInput, riskResult, riskPolicyIdentity, nowMs, maxEvidenceAgeMs, blockers) {
   const expectedSide = expectedRiskSide(candidate.signal.direction);
   if (!expectedSide) add3(blockers, "PAPER_ENTRY_DIRECTION_UNSUPPORTED");
   if (riskInput?.market !== RISK_MARKET[candidate.signal.market]) add3(blockers, "RISK_MARKET_MISMATCH");
@@ -886,6 +889,21 @@ function validateRisk(candidate, riskInput, riskResult, nowMs, maxEvidenceAgeMs,
   if (!positive2(riskResult?.recommendedQuantity)) add3(blockers, "RISK_RECOMMENDED_QUANTITY_REQUIRED");
   if (!finite3(riskResult?.actualRiskPercent) && riskResult?.actualRiskPercent != null) add3(blockers, "RISK_PERCENT_INVALID");
   if (finite3(riskResult?.actualRiskPercent) && positive2(riskInput?.riskPercent) && riskResult.actualRiskPercent > riskInput.riskPercent + 1e-9) add3(blockers, "RISK_PERCENT_EXCEEDS_REQUEST");
+  let normalizedPolicyIdentity = null;
+  if (candidate.signal.market === "CRYPTO_FUTURES") {
+    if (!riskPolicyIdentity || !nonEmpty(riskPolicyIdentity.policyId) || !nonEmpty(riskPolicyIdentity.policyVersion) || !nonEmpty(riskPolicyIdentity.source) || !exactSha(riskPolicyIdentity.researchCodeSha)) {
+      add3(blockers, "RISK_POLICY_IDENTITY_REQUIRED");
+    } else if (riskPolicyIdentity.researchCodeSha !== candidate.signal.strategyIdentity.researchCodeSha) {
+      add3(blockers, "RISK_POLICY_RESEARCH_SHA_MISMATCH");
+    } else {
+      normalizedPolicyIdentity = Object.freeze({
+        policyId: riskPolicyIdentity.policyId.trim(),
+        policyVersion: riskPolicyIdentity.policyVersion.trim(),
+        source: riskPolicyIdentity.source.trim(),
+        researchCodeSha: riskPolicyIdentity.researchCodeSha
+      });
+    }
+  }
   if (blockers.length > 0 || evaluatedAtMs == null || !positive2(riskResult.recommendedQuantity)) return null;
   return Object.freeze({
     status: "APPROVED",
@@ -898,6 +916,7 @@ function validateRisk(candidate, riskInput, riskResult, nowMs, maxEvidenceAgeMs,
     actualRiskPercent: riskResult.actualRiskPercent,
     riskReward1: riskResult.riskReward1,
     riskReward2: riskResult.riskReward2,
+    policyIdentity: normalizedPolicyIdentity,
     executionAuthority: "NONE"
   });
 }
@@ -1052,7 +1071,15 @@ function buildScannerCanonicalPaperAdmissionEvidence(input) {
   });
   if (cost.status !== "READY" || !cost.policy || !cost.provenance) add3(blockers, "SCANNER_COST_EVIDENCE_NOT_READY");
   if (cost.provenance && (cost.provenance.policyId !== canonicalCostPolicyVersion || cost.provenance.paperCostPolicyVersion !== canonicalCostPolicyVersion)) add3(blockers, "COST_PROVENANCE_POLICY_VERSION_MISMATCH");
-  const riskEvidence = validateRisk(input.paperCandidate, input.riskInput, input.riskResult, nowMs, maxEvidenceAgeMs, blockers);
+  const riskEvidence = validateRisk(
+    input.paperCandidate,
+    input.riskInput,
+    input.riskResult,
+    input.riskPolicyIdentity,
+    nowMs,
+    maxEvidenceAgeMs,
+    blockers
+  );
   const executionDataEvidence = normalizeExecutionEvidence(input.paperCandidate, input.paperEvidence, input.executionDataEvidence, nowMs, blockers);
   if (blockers.length > 0 || !riskEvidence || !executionDataEvidence || !cost.provenance) return blocked(blockers);
   const bundleWithoutDigest = {
@@ -1074,6 +1101,9 @@ function buildScannerCanonicalPaperAdmissionEvidence(input) {
 // src/services/scanner-crypto-futures-paper-admission-composer.service.ts
 var SCANNER_CRYPTO_FUTURES_PAPER_ADMISSION_COMPOSER_VERSION = "scanner-crypto-futures-paper-admission-composer-v1";
 var DEFAULT_MAX_EVIDENCE_AGE_MS4 = 3e4;
+function record(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
 function finite4(value) {
   return typeof value === "number" && Number.isFinite(value);
 }
@@ -1085,6 +1115,9 @@ function nonNegative3(value) {
 }
 function nonEmpty2(value) {
   return typeof value === "string" && value.trim().length > 0;
+}
+function exactSha2(value) {
+  return typeof value === "string" && /^[0-9a-f]{40}$/u.test(value);
 }
 function add4(blockers, code, condition = true) {
   if (condition && !blockers.includes(code)) blockers.push(code);
@@ -1142,6 +1175,17 @@ function validateObservedCost(value, nowMs, maxEvidenceAgeMs, blockers) {
 }
 function validSupplementalCost(value, nowMs, maxEvidenceAgeMs) {
   return nonNegative3(value?.valuePercent) && (value?.quality === "OBSERVED" || value?.quality === "ESTIMATED" || value?.quality === "DOCUMENTED") && nonEmpty2(value?.source) && fresh(value?.observedAtMs, nowMs, maxEvidenceAgeMs);
+}
+function riskPolicyIdentityFromFunding(funding, expectedResearchCodeSha) {
+  const fundingRecord = record(funding);
+  const identity2 = record(fundingRecord?.riskPolicyIdentity);
+  if (!identity2 || !nonEmpty2(identity2.policyId) || !nonEmpty2(identity2.policyVersion) || !nonEmpty2(identity2.source) || !exactSha2(identity2.researchCodeSha) || !exactSha2(expectedResearchCodeSha) || identity2.researchCodeSha !== expectedResearchCodeSha) return null;
+  return Object.freeze({
+    policyId: identity2.policyId.trim(),
+    policyVersion: identity2.policyVersion.trim(),
+    source: identity2.source.trim(),
+    researchCodeSha: identity2.researchCodeSha
+  });
 }
 function composeScannerCryptoFuturesPaperAdmission(input) {
   const nowMs = input.nowMs ?? Date.now();
@@ -1218,6 +1262,11 @@ function composeScannerCryptoFuturesPaperAdmission(input) {
     "P0_C5_FUNDING_COST_EVIDENCE_REQUIRED",
     !validSupplementalCost(input.supplementalCostEvidence?.funding, nowMs, maxEvidenceAgeMs)
   );
+  const riskPolicyIdentity = riskPolicyIdentityFromFunding(
+    input.supplementalCostEvidence?.funding,
+    signal?.strategyIdentity?.researchCodeSha
+  );
+  add4(blockers, "P0_C5_RISK_POLICY_IDENTITY_REQUIRED", riskPolicyIdentity == null);
   const entryPrice = input.learningSnapshot?.entryPrice;
   const stopLoss = input.learningSnapshot?.stopLoss;
   add4(blockers, "P0_C5_LEARNING_ENTRY_PRICE_REQUIRED", !positive3(entryPrice));
@@ -1226,7 +1275,7 @@ function composeScannerCryptoFuturesPaperAdmission(input) {
   if (side === "short" && positive3(entryPrice) && positive3(stopLoss)) add4(blockers, "P0_C5_LEARNING_STOP_DIRECTION_INVALID", stopLoss <= entryPrice);
   const spread = spreadPercent(publicEvidence?.bidPrice, publicEvidence?.askPrice);
   add4(blockers, "P0_C5_SPREAD_EVIDENCE_INVALID", spread == null);
-  if (blockers.length > 0 || !signal || !side || !positive3(entryPrice) || !positive3(stopLoss) || spread == null || !input.supplementalCostEvidence?.funding) {
+  if (blockers.length > 0 || !signal || !side || !positive3(entryPrice) || !positive3(stopLoss) || spread == null || !input.supplementalCostEvidence?.funding || !riskPolicyIdentity) {
     return blocked2(blockers);
   }
   const supplemental = input.supplementalCostEvidence;
@@ -1363,6 +1412,7 @@ function composeScannerCryptoFuturesPaperAdmission(input) {
     learningSnapshot: input.learningSnapshot,
     riskInput,
     riskResult,
+    riskPolicyIdentity,
     paperEvidence,
     supplementalCostEvidence: input.supplementalCostEvidence,
     executionDataEvidence,
@@ -2140,7 +2190,7 @@ var ProviderAdmissionControl = class {
       throw error;
     }
     if (halfOpenProbe) state.halfOpenProbeActive = true;
-    const record6 = {
+    const record7 = {
       id: this.nextId,
       admittedAt: now,
       state,
@@ -2151,7 +2201,7 @@ var ProviderAdmissionControl = class {
       halfOpenProbe
     };
     this.nextId += 1;
-    this.outstanding.set(record6.id, record6);
+    this.outstanding.set(record7.id, record7);
     this.admittedActive += 1;
     this.physicalOutstanding += 1;
     state.admittedActive += 1;
@@ -2174,11 +2224,11 @@ var ProviderAdmissionControl = class {
     );
     const task = Promise.resolve().then(taskFactory).then(
       (value) => {
-        this.settlePhysical(record6);
+        this.settlePhysical(record7);
         return value;
       },
       (reason) => {
-        this.settlePhysical(record6);
+        this.settlePhysical(record7);
         throw reason;
       }
     );
@@ -2187,7 +2237,7 @@ var ProviderAdmissionControl = class {
     const settleLogical = (status) => {
       if (logicalSettled) return;
       logicalSettled = true;
-      this.settleLogical(record6, status);
+      this.settleLogical(record7, status);
     };
     return {
       task,
@@ -2214,7 +2264,7 @@ var ProviderAdmissionControl = class {
       rejectedCapacityTotal: state.rejectedCapacityTotal,
       circuitOpenTotal: state.circuitOpenTotal,
       circuitTripTotal: state.circuitTripTotal,
-      oldestOutstandingAgeMs: this.oldestAge(now, (record6) => record6.state === state),
+      oldestOutstandingAgeMs: this.oldestAge(now, (record7) => record7.state === state),
       consecutiveTimeouts: state.consecutiveTimeouts,
       operations: [...state.operations.values()].map((operation) => ({
         operationClass: operation.operationClass,
@@ -2227,7 +2277,7 @@ var ProviderAdmissionControl = class {
         circuitOpenTotal: operation.circuitOpenTotal,
         oldestOutstandingAgeMs: this.oldestAge(
           now,
-          (record6) => record6.state === state && record6.operation === operation
+          (record7) => record7.state === state && record7.operation === operation
         )
       })).sort((left, right) => left.operationClass.localeCompare(right.operationClass))
     })).sort((left, right) => `${left.provider}:${left.domain}`.localeCompare(`${right.provider}:${right.domain}`));
@@ -2301,68 +2351,68 @@ var ProviderAdmissionControl = class {
     operation.circuitOpenTotal += 1;
     return new ProviderAdmissionError("CIRCUIT_OPEN", Math.max(1, retryAfterMs));
   }
-  settleLogical(record6, status) {
-    if (record6.logicalStatus !== "active") return;
-    record6.logicalStatus = status;
+  settleLogical(record7, status) {
+    if (record7.logicalStatus !== "active") return;
+    record7.logicalStatus = status;
     this.admittedActive = Math.max(0, this.admittedActive - 1);
-    record6.state.admittedActive = Math.max(0, record6.state.admittedActive - 1);
-    record6.operation.admittedActive = Math.max(0, record6.operation.admittedActive - 1);
+    record7.state.admittedActive = Math.max(0, record7.state.admittedActive - 1);
+    record7.operation.admittedActive = Math.max(0, record7.operation.admittedActive - 1);
     if (status === "timed_out") {
-      record6.state.consecutiveTimeouts += 1;
-      if (!record6.physicalSettled) {
+      record7.state.consecutiveTimeouts += 1;
+      if (!record7.physicalSettled) {
         this.timedOutOutstanding += 1;
-        record6.state.timedOutOutstanding += 1;
-        record6.operation.timedOutOutstanding += 1;
+        record7.state.timedOutOutstanding += 1;
+        record7.operation.timedOutOutstanding += 1;
       }
-      if (record6.halfOpenProbe || record6.state.consecutiveTimeouts >= this.timeoutThreshold) {
-        this.tripCircuit(record6.state);
+      if (record7.halfOpenProbe || record7.state.consecutiveTimeouts >= this.timeoutThreshold) {
+        this.tripCircuit(record7.state);
       }
-      this.touchProvider(record6.state);
-      this.touchOperation(record6.state, record6.operation);
-      this.cleanupTelemetry(record6.state);
+      this.touchProvider(record7.state);
+      this.touchOperation(record7.state, record7.operation);
+      this.cleanupTelemetry(record7.state);
       return;
     }
     if (status === "completed") {
-      record6.state.consecutiveTimeouts = 0;
-      if (record6.halfOpenProbe) this.closeCircuit(record6.state);
-      this.touchProvider(record6.state);
-      this.touchOperation(record6.state, record6.operation);
-      this.cleanupTelemetry(record6.state);
+      record7.state.consecutiveTimeouts = 0;
+      if (record7.halfOpenProbe) this.closeCircuit(record7.state);
+      this.touchProvider(record7.state);
+      this.touchOperation(record7.state, record7.operation);
+      this.cleanupTelemetry(record7.state);
       return;
     }
     if (status === "rejected") {
-      record6.state.consecutiveTimeouts = 0;
-      if (record6.halfOpenProbe) this.tripCircuit(record6.state);
-      this.touchProvider(record6.state);
-      this.touchOperation(record6.state, record6.operation);
-      this.cleanupTelemetry(record6.state);
+      record7.state.consecutiveTimeouts = 0;
+      if (record7.halfOpenProbe) this.tripCircuit(record7.state);
+      this.touchProvider(record7.state);
+      this.touchOperation(record7.state, record7.operation);
+      this.cleanupTelemetry(record7.state);
       return;
     }
-    if (record6.halfOpenProbe) this.tripCircuit(record6.state);
-    this.touchProvider(record6.state);
-    this.touchOperation(record6.state, record6.operation);
-    this.cleanupTelemetry(record6.state);
+    if (record7.halfOpenProbe) this.tripCircuit(record7.state);
+    this.touchProvider(record7.state);
+    this.touchOperation(record7.state, record7.operation);
+    this.cleanupTelemetry(record7.state);
   }
-  settlePhysical(record6) {
-    if (record6.physicalSettled) return;
-    record6.physicalSettled = true;
-    this.outstanding.delete(record6.id);
+  settlePhysical(record7) {
+    if (record7.physicalSettled) return;
+    record7.physicalSettled = true;
+    this.outstanding.delete(record7.id);
     this.physicalOutstanding = Math.max(0, this.physicalOutstanding - 1);
-    record6.state.physicalOutstanding = Math.max(0, record6.state.physicalOutstanding - 1);
-    record6.operation.physicalOutstanding = Math.max(0, record6.operation.physicalOutstanding - 1);
-    if (record6.logicalStatus === "timed_out") {
+    record7.state.physicalOutstanding = Math.max(0, record7.state.physicalOutstanding - 1);
+    record7.operation.physicalOutstanding = Math.max(0, record7.operation.physicalOutstanding - 1);
+    if (record7.logicalStatus === "timed_out") {
       this.timedOutOutstanding = Math.max(0, this.timedOutOutstanding - 1);
-      record6.state.timedOutOutstanding = Math.max(0, record6.state.timedOutOutstanding - 1);
-      record6.operation.timedOutOutstanding = Math.max(0, record6.operation.timedOutOutstanding - 1);
+      record7.state.timedOutOutstanding = Math.max(0, record7.state.timedOutOutstanding - 1);
+      record7.operation.timedOutOutstanding = Math.max(0, record7.operation.timedOutOutstanding - 1);
     }
-    if (record6.logicalStatus === "timed_out" || record6.logicalStatus === "aborted") {
+    if (record7.logicalStatus === "timed_out" || record7.logicalStatus === "aborted") {
       this.lateSettledTotal += 1;
-      record6.state.lateSettledTotal += 1;
-      record6.operation.lateSettledTotal += 1;
+      record7.state.lateSettledTotal += 1;
+      record7.operation.lateSettledTotal += 1;
     }
-    this.touchProvider(record6.state);
-    this.touchOperation(record6.state, record6.operation);
-    this.cleanupTelemetry(record6.state);
+    this.touchProvider(record7.state);
+    this.touchOperation(record7.state, record7.operation);
+    this.cleanupTelemetry(record7.state);
   }
   tripCircuit(state) {
     if (state.circuitState === "open") return;
@@ -2416,8 +2466,8 @@ var ProviderAdmissionControl = class {
   }
   oldestAge(now, matches) {
     let oldest = 0;
-    for (const record6 of this.outstanding.values()) {
-      if (matches(record6)) oldest = Math.max(oldest, Math.max(0, now - record6.admittedAt));
+    for (const record7 of this.outstanding.values()) {
+      if (matches(record7)) oldest = Math.max(oldest, Math.max(0, now - record7.admittedAt));
     }
     return oldest;
   }
@@ -2676,8 +2726,8 @@ function strategyScopedBaseSignalId(card) {
   return `${baseSignalId}:strategy:${card.strategyMode}`;
 }
 function applyScannerSignalLifecycle(memberId, cards, now = Date.now()) {
-  for (const [key, record6] of records) {
-    if (now - record6.lastSeenAt > RECORD_TTL_MS) records.delete(key);
+  for (const [key, record7] of records) {
+    if (now - record7.lastSeenAt > RECORD_TTL_MS) records.delete(key);
   }
   const alerts = [];
   const updated = cards.map((card) => {
@@ -5481,19 +5531,19 @@ var StrategyPromotionService = class {
     return this.list().items.find((item) => item.identity.strategyId === strategyId) ?? null;
   }
   history(strategyId) {
-    const record6 = this.get(strategyId);
-    if (!record6) return null;
-    const events = record6.stages.filter((stage) => stage.status !== "NOT_STARTED").map((stage) => ({ at: stage.validatedAt ?? stage.observedAt, type: "STAGE_EVALUATED", stage: stage.stage, status: stage.status, source: stage.source, sourceSha: stage.sourceSha }));
-    events.push({ at: this.now().toISOString(), type: "PROMOTION_STATE_EVALUATED", stage: "PROMOTION", status: record6.promotionState, source: "strategy-promotion.service.ts", sourceSha: VALID_SHA.test(this.sourceSha) ? this.sourceSha : null });
+    const record7 = this.get(strategyId);
+    if (!record7) return null;
+    const events = record7.stages.filter((stage) => stage.status !== "NOT_STARTED").map((stage) => ({ at: stage.validatedAt ?? stage.observedAt, type: "STAGE_EVALUATED", stage: stage.stage, status: stage.status, source: stage.source, sourceSha: stage.sourceSha }));
+    events.push({ at: this.now().toISOString(), type: "PROMOTION_STATE_EVALUATED", stage: "PROMOTION", status: record7.promotionState, source: "strategy-promotion.service.ts", sourceSha: VALID_SHA.test(this.sourceSha) ? this.sourceSha : null });
     return { strategyId, events, executionAuthority: STRATEGY_PROMOTION_EXECUTION_AUTHORITY };
   }
   evidenceFor(strategyId) {
-    const record6 = this.get(strategyId);
-    if (!record6) return null;
+    const record7 = this.get(strategyId);
+    if (!record7) return null;
     return {
       strategyId,
-      parameterHash: record6.identity.parameterHash,
-      stages: record6.stages,
+      parameterHash: record7.identity.parameterHash,
+      stages: record7.stages,
       sources: sourceRegistry(),
       exactIdentityRequired: true,
       inventedMetricsAllowed: false,
@@ -5524,7 +5574,7 @@ var STYLE_BY_MODE = Object.freeze({
   swing: "SWING",
   position: "MID_LONG"
 });
-function exactSha(value) {
+function exactSha3(value) {
   return /^[0-9a-f]{40}$/u.test(value);
 }
 function nonEmpty4(value) {
@@ -5560,15 +5610,15 @@ function canonicalHorizonBars(card, timeframe) {
 }
 function exactPromotionIdentity(input) {
   const profile = getScannerStrategyProfile(input.market, input.profileHorizon);
-  const matches = input.records.filter((record7) => record7.identity.market === input.market && record7.identity.strategyHorizon === input.profileHorizon && record7.identity.direction === input.direction);
+  const matches = input.records.filter((record8) => record8.identity.market === input.market && record8.identity.strategyHorizon === input.profileHorizon && record8.identity.direction === input.direction);
   const blockers = [];
   if (matches.length !== 1) {
     blockers.push(matches.length === 0 ? "CANONICAL_PROMOTION_IDENTITY_REQUIRED" : "CANONICAL_PROMOTION_IDENTITY_AMBIGUOUS");
     return { record: null, blockers };
   }
-  const record6 = matches[0];
-  const identity2 = record6.identity;
-  if (record6.executionAuthority !== "NONE" || record6.liveTradingAuthority !== false || record6.privateTradingApiCount !== 0) {
+  const record7 = matches[0];
+  const identity2 = record7.identity;
+  if (record7.executionAuthority !== "NONE" || record7.liveTradingAuthority !== false || record7.privateTradingApiCount !== 0) {
     blockers.push("CANONICAL_PROMOTION_SAFETY_ENVELOPE_INVALID");
   }
   if (identity2.strategyFamily !== "CANONICAL_SCANNER_PROFILE") blockers.push("PROMOTION_STRATEGY_FAMILY_MISMATCH");
@@ -5576,15 +5626,15 @@ function exactPromotionIdentity(input) {
   if (identity2.strategyVersion !== profile.version) blockers.push("PROMOTION_STRATEGY_VERSION_MISMATCH");
   if (identity2.parameterHash !== strategyParameterHash(profile)) blockers.push("PROMOTION_PARAMETER_HASH_MISMATCH");
   if (identity2.timeframe !== profile.primaryTimeframe) blockers.push("PROMOTION_TIMEFRAME_MISMATCH");
-  if (!exactSha(identity2.researchCodeSha) || identity2.researchCodeSha !== input.researchCodeSha) {
+  if (!exactSha3(identity2.researchCodeSha) || identity2.researchCodeSha !== input.researchCodeSha) {
     blockers.push("PROMOTION_RESEARCH_SHA_MISMATCH");
   }
   if (!nonEmpty4(identity2.costPolicyVersion)) blockers.push("PROMOTION_COST_POLICY_VERSION_REQUIRED");
-  return { record: blockers.length === 0 ? record6 : null, blockers };
+  return { record: blockers.length === 0 ? record7 : null, blockers };
 }
 function resolveScannerCanonicalPaperIdentity(input) {
   const researchCodeSha = input.researchCodeSha.trim().toLowerCase();
-  if (!exactSha(researchCodeSha)) {
+  if (!exactSha3(researchCodeSha)) {
     return Object.freeze({ paperCandidate: null, blockers: Object.freeze(["IMMUTABLE_RESEARCH_SHA_REQUIRED"]) });
   }
   const blockers = [];
@@ -5646,7 +5696,7 @@ function resolveScannerCanonicalPaperIdentity(input) {
 }
 function attachScannerCanonicalPaperIdentity(input) {
   const researchCodeSha = input.researchCodeSha.trim().toLowerCase();
-  if (!exactSha(researchCodeSha)) return input.response;
+  if (!exactSha3(researchCodeSha)) return input.response;
   const service = new StrategyPromotionService({ sourceSha: researchCodeSha });
   const promotionRecords = service.list({ market: input.market }).items;
   const cards = input.response.cards.map((card) => {
@@ -6244,7 +6294,7 @@ var COST_EVIDENCE_QUALITIES = /* @__PURE__ */ new Set([
   "ESTIMATED",
   "NOT_APPLICABLE"
 ]);
-function record(value) {
+function record2(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : null;
 }
 function finiteScalar(value) {
@@ -6276,7 +6326,7 @@ function freeze(value) {
   for (const child of Object.values(value)) freeze(child);
   return Object.freeze(value);
 }
-function exactSha2(value) {
+function exactSha4(value) {
   return typeof value === "string" && /^[0-9a-f]{40}$/u.test(value);
 }
 function nonEmptyStrings(value) {
@@ -6339,25 +6389,25 @@ function blockedFundingHorizonResult(blockers, partial = {}) {
 function buildAuthoritativePaperFundingHoldingHorizonCost(input) {
   const nowMs = positive6(input?.nowMs) ? input.nowMs : Date.now();
   const maximumAgeMs = positive6(input?.maximumAgeMs) ? input.maximumAgeMs : PUBLIC_L2_MAXIMUM_AGE_MS;
-  const candidate = record(input?.candidate);
-  const signal = record(candidate?.signal);
-  const strategyIdentity = record(signal?.strategyIdentity);
-  const riskPolicy2 = record(input?.riskPolicy);
-  const publicEvidence = record(input?.publicEvidence);
+  const candidate = record2(input?.candidate);
+  const signal = record2(candidate?.signal);
+  const strategyIdentity = record2(signal?.strategyIdentity);
+  const riskPolicy2 = record2(input?.riskPolicy);
+  const publicEvidence = record2(input?.publicEvidence);
   const blockers = [];
   const market = signal?.market === "CRYPTO_FUTURES" ? "CRYPTO_FUTURES" : null;
   const symbol = normalizedFundingSymbol(signal?.symbol);
   const direction = signal?.direction === "LONG" || signal?.direction === "SHORT" ? signal.direction : null;
   const signalId2 = nonEmpty6(signal?.signalId) ? signal.signalId.trim() : null;
   const strategyId = nonEmpty6(strategyIdentity?.strategyId) ? strategyIdentity.strategyId.trim() : null;
-  const candidateResearchSha = exactSha2(strategyIdentity?.researchCodeSha) ? strategyIdentity.researchCodeSha : null;
+  const candidateResearchSha = exactSha4(strategyIdentity?.researchCodeSha) ? strategyIdentity.researchCodeSha : null;
   const candidateCostPolicyId = nonEmpty6(strategyIdentity?.costPolicyVersion) ? strategyIdentity.costPolicyVersion.trim() : null;
   const riskPolicyId = nonEmpty6(riskPolicy2?.policyId) ? riskPolicy2.policyId.trim() : null;
   const riskPolicyVersion = nonEmpty6(riskPolicy2?.policyVersion) ? riskPolicy2.policyVersion.trim() : null;
   const riskPolicySource = nonEmpty6(riskPolicy2?.source) ? riskPolicy2.source.trim() : null;
   const riskPolicyProvenance = nonEmptyStrings(riskPolicy2?.provenance) ? Object.freeze(riskPolicy2.provenance.map((value) => value.trim())) : null;
   const costPolicyId = nonEmpty6(input?.costPolicyId) ? input.costPolicyId.trim() : null;
-  const researchCodeSha = exactSha2(input?.researchCodeSha) ? input.researchCodeSha : null;
+  const researchCodeSha = exactSha4(input?.researchCodeSha) ? input.researchCodeSha : null;
   const entryTimestampMs = finiteNumber2(input?.entryTimestampMs);
   const exitTimestampMs = finiteNumber2(input?.expectedExitTimestampMs);
   const positionNotional = finiteNumber2(input?.positionNotional);
@@ -6574,7 +6624,13 @@ function buildAuthoritativePaperFundingHoldingHorizonCost(input) {
     scheduledSettlementCount,
     signedCostPercent,
     creditPercent,
-    projectedIsRealized: false
+    projectedIsRealized: false,
+    riskPolicyIdentity: freeze({
+      policyId: riskPolicyId,
+      policyVersion: riskPolicyVersion,
+      source: riskPolicySource,
+      researchCodeSha
+    })
   }) : null;
   const referenceBlockers = present ? [] : ["FUTURE_FUNDING_RATE_UNKNOWN_FOR_LATER_BOUNDARIES"];
   return freeze({
@@ -6614,7 +6670,7 @@ function buildAuthoritativePaperFundingHoldingHorizonCost(input) {
   });
 }
 function scannerExecutionIdentity(context) {
-  const card = record(context?.card);
+  const card = record2(context?.card);
   if (!card || context?.market !== "CRYPTO_FUTURES") return null;
   const signalId2 = nonEmpty6(card.signalId) ? card.signalId.trim() : null;
   const direction = card.action === "LONG" || card.action === "SHORT" ? card.action : null;
@@ -6676,14 +6732,14 @@ async function collectAuthoritativePaperExecutionObservationInput(input) {
   if (!identity2 || !positive6(requestStartedAtMs)) return null;
   const sizing = validatedSizingSnapshot(input.sizingEvidence, identity2, requestStartedAtMs);
   if (!sizing) return null;
-  const payload = record(await input.fetchPublicJson(bitgetPublicL2Url(identity2.symbol), {
+  const payload = record2(await input.fetchPublicJson(bitgetPublicL2Url(identity2.symbol), {
     provider: "bitget",
     signal: abortSignal(input.context.signal)
   }));
   const requestCompletedAtMs = now();
   if (!positive6(requestCompletedAtMs) || requestCompletedAtMs < requestStartedAtMs) return null;
   if (!payload || payload.code !== "00000") return null;
-  const data = record(payload.data);
+  const data = record2(payload.data);
   const observedAtMs = finiteScalar(data?.ts);
   const bids = normalizedLevels(data?.b);
   const asks = normalizedLevels(data?.a);
@@ -6765,7 +6821,7 @@ function spreadPercent2(publicEvidence) {
   return midpoint > 0 ? (ask - bid) / midpoint * 100 : null;
 }
 function observationRecord(observation) {
-  return record(observation);
+  return record2(observation);
 }
 function resolvedSupplementalCostInput(input, nowMs, maximumAgeMs) {
   if (!input || !nonEmpty6(input.costPolicyId) || !positive6(input.observedAtMs) || !fresh2(input.observedAtMs, maximumAgeMs, nowMs)) return null;
@@ -6790,10 +6846,10 @@ function auditAuthoritativeSupplementalCostSources(input = {}) {
   const maximumAgeMs = positive6(input.maximumAgeMs) ? input.maximumAgeMs : PUBLIC_L2_MAXIMUM_AGE_MS;
   const publicEvidence = input.publicEvidence;
   const execution = observationRecord(input.executionObservation);
-  const slippage = record(execution?.slippage);
-  const latency = record(execution?.latency);
-  const liquidity = record(execution?.liquidity);
-  const partialFill = record(execution?.partialFill);
+  const slippage = record2(execution?.slippage);
+  const latency = record2(execution?.latency);
+  const liquidity = record2(execution?.liquidity);
+  const partialFill = record2(execution?.partialFill);
   const supplemental = input.supplemental;
   const resolved = resolvedSupplementalCostInput(supplemental, nowMs, maximumAgeMs);
   const latencyCost = componentFromPercentEvidence(supplemental?.latency, nowMs, maximumAgeMs);
@@ -6939,10 +6995,10 @@ function canonicalSymbol(value) {
   const symbol = value.trim().toUpperCase().replace(/[^A-Z0-9]/gu, "");
   return symbol.length > 4 && symbol.endsWith("USDT") ? symbol : null;
 }
-function exactSha3(value) {
+function exactSha5(value) {
   return typeof value === "string" && EXACT_SHA.test(value.trim().toLowerCase());
 }
-function record2(value) {
+function record3(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : null;
 }
 function scalar(value) {
@@ -6958,18 +7014,18 @@ async function readBitgetPublicLatencyMidpointQuote(input) {
   if (typeof input?.fetchPublicJson !== "function") throw new TypeError("PUBLIC_MIDPOINT_FETCH_REQUIRED");
   const symbol = canonicalSymbol(input?.symbol);
   const researchCodeSha = String(input?.researchCodeSha ?? "").trim().toLowerCase();
-  if (input?.market !== "CRYPTO_FUTURES" || !symbol || !exactSha3(researchCodeSha) || input?.phase !== "PRE" && input?.phase !== "POST" || !Number.isInteger(input?.attempt) || input.attempt < 1 || input.attempt > 5) return null;
+  if (input?.market !== "CRYPTO_FUTURES" || !symbol || !exactSha5(researchCodeSha) || input?.phase !== "PRE" && input?.phase !== "POST" || !Number.isInteger(input?.attempt) || input.attempt < 1 || input.attempt > 5) return null;
   const url = new URL("/api/v3/market/orderbook", BITGET_PUBLIC_BASE_URL);
   url.search = new URLSearchParams({
     category: "USDT-FUTURES",
     symbol,
     limit: "1"
   }).toString();
-  const payload = record2(await input.fetchPublicJson(url, {
+  const payload = record3(await input.fetchPublicJson(url, {
     provider: "bitget",
     signal: input.signal
   }));
-  const data = record2(payload?.data);
+  const data = record3(payload?.data);
   const observedAtMs = scalar(data?.ts);
   const bidPrice = topPrice(data?.b);
   const askPrice = topPrice(data?.a);
@@ -7022,7 +7078,7 @@ function observationBlockers(phase, value, identity2) {
   }
   if (value.market !== identity2.market) blockers.push(`${prefix}_MARKET_MISMATCH`);
   if (canonicalSymbol(value.symbol) !== canonicalSymbol(identity2.symbol)) blockers.push(`${prefix}_SYMBOL_MISMATCH`);
-  if (!exactSha3(value.researchCodeSha) || value.researchCodeSha.trim().toLowerCase() !== identity2.researchCodeSha.trim().toLowerCase()) {
+  if (!exactSha5(value.researchCodeSha) || value.researchCodeSha.trim().toLowerCase() !== identity2.researchCodeSha.trim().toLowerCase()) {
     blockers.push(`${prefix}_RESEARCH_SHA_MISMATCH`);
   }
   return blockers;
@@ -7041,7 +7097,7 @@ function buildAuthoritativePaperLatencyCostEvidence(input) {
   if (input?.direction !== "LONG" && input?.direction !== "SHORT") blockers.push("LATENCY_DIRECTION_INVALID");
   if (input?.market !== "CRYPTO_FUTURES") blockers.push("LATENCY_MARKET_INVALID");
   if (!symbol) blockers.push("LATENCY_SYMBOL_INVALID");
-  if (!exactSha3(input?.researchCodeSha)) blockers.push("LATENCY_RESEARCH_SHA_INVALID");
+  if (!exactSha5(input?.researchCodeSha)) blockers.push("LATENCY_RESEARCH_SHA_INVALID");
   if (!positive7(nowMs)) blockers.push("LATENCY_CLOCK_INVALID");
   if (!positive7(input?.requestStartedAtMs) || !positive7(input?.requestCompletedAtMs) || input.requestCompletedAtMs <= input.requestStartedAtMs) {
     blockers.push("LATENCY_REQUEST_TIMING_INVALID");
@@ -7423,7 +7479,7 @@ function cloneLevel(level) {
 function unique2(values) {
   return Object.freeze([...new Set(values)]);
 }
-function record3(value) {
+function record4(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : Object.freeze({});
 }
 function freeze2(value) {
@@ -7472,7 +7528,7 @@ function buildPaperSimulatedExecutionEvidence(input) {
   if (bookWalk?.status === "NOT_AVAILABLE") {
     blockPaperSimulation(String(bookWalk.reason ?? "BOOK_WALK_NOT_AVAILABLE"));
   }
-  const calibratedFillModel = record3(input?.calibratedFillModel);
+  const calibratedFillModel = record4(input?.calibratedFillModel);
   const fillModel = evaluateCalibratedFillModel(
     calibratedFillModel,
     input?.policy ?? {},
@@ -7768,7 +7824,7 @@ var AUTHORITATIVE_PAPER_CALLBACK_OWNERS_SAFETY = Object.freeze({
 
 // src/services/authoritative-paper-risk-sizing-source.service.ts
 var AUTHORITATIVE_PAPER_RISK_SIZING_SOURCE_VERSION = "authoritative-paper-risk-sizing-source-v1";
-function record4(value) {
+function record5(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : null;
 }
 function finite16(value) {
@@ -7783,7 +7839,7 @@ function nonNegative7(value) {
 function nonEmpty10(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
-function exactSha4(value) {
+function exactSha6(value) {
   return typeof value === "string" && /^[0-9a-f]{40}$/u.test(value);
 }
 function normalizeSymbol(value) {
@@ -7834,8 +7890,8 @@ function blankEvidence(input, nowMs, status, blockers, partial = {}) {
     symbol,
     strategyScope: nonEmpty10(input.strategyScope) ? input.strategyScope.trim() : null,
     side,
-    researchCodeSha: exactSha4(input.researchCodeSha) ? input.researchCodeSha : null,
-    paperStateSourceSha: exactSha4(input.paperStateSourceSha) ? input.paperStateSourceSha : null,
+    researchCodeSha: exactSha6(input.researchCodeSha) ? input.researchCodeSha : null,
+    paperStateSourceSha: exactSha6(input.paperStateSourceSha) ? input.paperStateSourceSha : null,
     paperAccountId: nonEmpty10(input.paperAccountId) ? input.paperAccountId.trim() : null,
     equity: null,
     riskPercent: null,
@@ -7868,7 +7924,7 @@ function blankEvidence(input, nowMs, status, blockers, partial = {}) {
 }
 function validatePolicy(value, input, nowMs) {
   const blockers = [];
-  const object = record4(value);
+  const object = record5(value);
   if (!object) return { policy: null, blockers: ["RISK_POLICY_MISSING"] };
   if (object.schemaVersion !== "authoritative-paper-generic-risk-policy-evidence-v1") blockers.push("RISK_POLICY_SCHEMA_INVALID");
   if (!nonEmpty10(object.policyId)) blockers.push("RISK_POLICY_ID_MISSING");
@@ -7876,7 +7932,7 @@ function validatePolicy(value, input, nowMs) {
   if (!nonEmpty10(object.source)) blockers.push("RISK_POLICY_SOURCE_MISSING");
   if (!nonEmptyStrings2(object.provenance)) blockers.push("RISK_POLICY_PROVENANCE_MISSING");
   if (!fresh4(Number(object.observedAtMs), Number(object.maximumAgeMs), nowMs)) blockers.push("RISK_POLICY_STALE_OR_INVALID");
-  if (!exactSha4(object.researchCodeSha) || object.researchCodeSha !== input.researchCodeSha) blockers.push("RISK_POLICY_RESEARCH_SHA_MISMATCH");
+  if (!exactSha6(object.researchCodeSha) || object.researchCodeSha !== input.researchCodeSha) blockers.push("RISK_POLICY_RESEARCH_SHA_MISMATCH");
   if (!Array.isArray(object.marketScopes) || !object.marketScopes.includes(input.market)) blockers.push("RISK_POLICY_WRONG_MARKET_SCOPE");
   if (!Array.isArray(object.strategyScopes) || !object.strategyScopes.includes(input.strategyScope)) blockers.push("RISK_POLICY_WRONG_STRATEGY_SCOPE");
   const symbolScopes = object.symbolScopes;
@@ -7898,7 +7954,7 @@ function validatePolicy(value, input, nowMs) {
 }
 function validateContractRulesEvidence(value, market, symbol, nowMs) {
   const blockers = [];
-  const object = record4(value);
+  const object = record5(value);
   if (!object) return { evidence: null, blockers: ["CONTRACT_RULES_MISSING"] };
   if (object.schemaVersion !== "authoritative-paper-contract-rules-evidence-v1") blockers.push("CONTRACT_RULES_SCHEMA_INVALID");
   if (object.market !== market) blockers.push("CONTRACT_RULES_WRONG_MARKET");
@@ -7907,7 +7963,7 @@ function validateContractRulesEvidence(value, market, symbol, nowMs) {
   if (!nonEmpty10(object.source)) blockers.push("CONTRACT_RULES_SOURCE_MISSING");
   if (!nonEmptyStrings2(object.provenance)) blockers.push("CONTRACT_RULES_PROVENANCE_MISSING");
   if (!fresh4(Number(object.observedAtMs), Number(object.maximumAgeMs), nowMs)) blockers.push("CONTRACT_RULES_STALE_OR_INVALID");
-  const rules = record4(object.rules);
+  const rules = record5(object.rules);
   if (!rules) return { evidence: null, blockers: [...blockers, "CONTRACT_RULES_INVALID"] };
   if (normalizeSymbol(rules.symbol) !== symbol) blockers.push("CONTRACT_RULES_PAYLOAD_SYMBOL_MISMATCH");
   if (rules.status !== "live") blockers.push("CONTRACT_RULES_NOT_LIVE");
@@ -7929,7 +7985,7 @@ function validateContractRulesEvidence(value, market, symbol, nowMs) {
 }
 function validateMarketEvidence(value, market, symbol, side, nowMs) {
   const blockers = [];
-  const object = record4(value);
+  const object = record5(value);
   if (!object) return { evidence: null, blockers: ["MARKET_EVIDENCE_MISSING"] };
   if (object.schemaVersion !== "authoritative-paper-market-risk-evidence-v1") blockers.push("MARKET_EVIDENCE_SCHEMA_INVALID");
   if (object.market !== market) blockers.push("MARKET_EVIDENCE_WRONG_MARKET");
@@ -7948,7 +8004,7 @@ function validateMarketEvidence(value, market, symbol, side, nowMs) {
 }
 function validateCostEvidence(value, market, symbol, nowMs) {
   const blockers = [];
-  const object = record4(value);
+  const object = record5(value);
   if (!object) return { evidence: null, blockers: ["RISK_COST_EVIDENCE_MISSING"] };
   if (object.schemaVersion !== "authoritative-paper-risk-cost-evidence-v1") blockers.push("RISK_COST_EVIDENCE_SCHEMA_INVALID");
   if (object.market !== market) blockers.push("RISK_COST_EVIDENCE_WRONG_MARKET");
@@ -7977,8 +8033,8 @@ function buildAuthoritativePaperRiskSizingEvidence(input, nowMs = Date.now()) {
   if (!symbol) return blankEvidence(input, nowMs, "BLOCKED_DATA", ["SYMBOL_INVALID"]);
   if (!nonEmpty10(input.strategyScope)) return blankEvidence(input, nowMs, "BLOCKED_DATA", ["STRATEGY_SCOPE_REQUIRED"]);
   if (!sideSupported(market, input.side)) return blankEvidence(input, nowMs, "BLOCKED_DATA", ["UNSUPPORTED_SIDE"]);
-  if (!exactSha4(input.researchCodeSha)) return blankEvidence(input, nowMs, "BLOCKED_DATA", ["RESEARCH_SHA_INVALID"]);
-  if (!exactSha4(input.paperStateSourceSha)) return blankEvidence(input, nowMs, "BLOCKED_DATA", ["PAPER_STATE_SOURCE_SHA_INVALID"]);
+  if (!exactSha6(input.researchCodeSha)) return blankEvidence(input, nowMs, "BLOCKED_DATA", ["RESEARCH_SHA_INVALID"]);
+  if (!exactSha6(input.paperStateSourceSha)) return blankEvidence(input, nowMs, "BLOCKED_DATA", ["PAPER_STATE_SOURCE_SHA_INVALID"]);
   if (!nonEmpty10(input.paperAccountId)) return blankEvidence(input, nowMs, "BLOCKED_DATA", ["PAPER_ACCOUNT_ID_REQUIRED"]);
   const strategyScope = input.strategyScope.trim();
   const policyCheck = validatePolicy(input.riskPolicy, {
@@ -8200,13 +8256,13 @@ var SUPPORTED_MARKETS = /* @__PURE__ */ new Set([
   "CRYPTO_SPOT",
   "CRYPTO_FUTURES"
 ]);
-function record5(value) {
+function record6(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : null;
 }
 function nonEmpty11(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
-function exactSha5(value) {
+function exactSha7(value) {
   return typeof value === "string" && /^[0-9a-f]{40}$/u.test(value);
 }
 function positive10(value) {
@@ -8242,7 +8298,7 @@ function blocked5(request, blockers) {
     provenance: Object.freeze([]),
     observedAtMs: null,
     maximumAgeMs: null,
-    researchCodeSha: exactSha5(request.researchCodeSha) ? request.researchCodeSha : null,
+    researchCodeSha: exactSha7(request.researchCodeSha) ? request.researchCodeSha : null,
     policyEvidence: null,
     blockers: Object.freeze([...new Set(blockers)]),
     executionAuthority: "NONE",
@@ -8257,12 +8313,12 @@ function validateRequest(request) {
   if (!SUPPORTED_MARKETS.has(request?.market)) blockers.push("RISK_POLICY_SOURCE_MARKET_UNSUPPORTED");
   if (!normalizeSymbol2(request?.symbol)) blockers.push("RISK_POLICY_SOURCE_SYMBOL_INVALID");
   if (!nonEmpty11(request?.strategyScope)) blockers.push("RISK_POLICY_SOURCE_STRATEGY_SCOPE_REQUIRED");
-  if (!exactSha5(request?.researchCodeSha)) blockers.push("RISK_POLICY_SOURCE_EXACT_RESEARCH_SHA_REQUIRED");
+  if (!exactSha7(request?.researchCodeSha)) blockers.push("RISK_POLICY_SOURCE_EXACT_RESEARCH_SHA_REQUIRED");
   return blockers;
 }
 function validateRecordEnvelope(value, request, nowMs) {
   const blockers = [];
-  const object = record5(value);
+  const object = record6(value);
   if (!object) return { record: null, blockers: ["RISK_POLICY_CANONICAL_RECORD_MISSING"] };
   if (object.schemaVersion !== AUTHORITATIVE_PAPER_GENERIC_RISK_POLICY_RECORD_VERSION) {
     blockers.push("RISK_POLICY_CANONICAL_RECORD_SCHEMA_INVALID");
@@ -8276,7 +8332,7 @@ function validateRecordEnvelope(value, request, nowMs) {
   if (!fresh5(object.observedAtMs, object.maximumAgeMs, nowMs)) {
     blockers.push("RISK_POLICY_CANONICAL_RECORD_STALE_OR_INVALID");
   }
-  if (!exactSha5(object.researchCodeSha) || object.researchCodeSha !== request.researchCodeSha) {
+  if (!exactSha7(object.researchCodeSha) || object.researchCodeSha !== request.researchCodeSha) {
     blockers.push("RISK_POLICY_CANONICAL_RECORD_RESEARCH_SHA_MISMATCH");
   }
   if (!supportedMarketScopes(object.marketScopes)) {
@@ -8435,7 +8491,7 @@ var BITGET_BASE_URL2 = "https://api.bitget.com";
 var FUTURES_LANE = FORWARD_OBSERVER_LANES.find((lane) => lane.market === "CRYPTO_FUTURES");
 var NATURAL_CYCLE_MAX_SIZING_ITERATIONS = 8;
 var NATURAL_CYCLE_EVIDENCE_MAXIMUM_AGE_MS = 3e4;
-function exactSha6(value) {
+function exactSha8(value) {
   return typeof value === "string" && /^[0-9a-f]{40}$/u.test(value);
 }
 function scannerCard(value) {
@@ -8528,7 +8584,7 @@ function createAuthoritativePaperEvidenceSourceWiring({
   dependencies: overrides = {}
 }) {
   const normalizedSha = String(researchCodeSha ?? "").trim().toLowerCase();
-  if (!exactSha6(normalizedSha)) throw new TypeError("authoritative Paper evidence sources require an exact research SHA");
+  if (!exactSha8(normalizedSha)) throw new TypeError("authoritative Paper evidence sources require an exact research SHA");
   if (!FUTURES_LANE) throw new Error("FORWARD_OBSERVER_FUTURES_LANE_REQUIRED");
   const dependencies = Object.freeze({ ...defaultDependencies(), ...overrides });
   const callbackOwnerSources = Object.freeze({
@@ -8791,7 +8847,7 @@ function createAuthoritativePaperNaturalCycleEvidenceSourceWiring({
     throw new TypeError("AUTHORITATIVE_NATURAL_CYCLE_SOURCE_CALLBACKS_REQUIRED");
   }
   const normalizedSha = String(researchCodeSha ?? "").trim().toLowerCase();
-  if (!exactSha6(normalizedSha)) throw new TypeError("authoritative Natural cycle requires an exact research SHA");
+  if (!exactSha8(normalizedSha)) throw new TypeError("authoritative Natural cycle requires an exact research SHA");
   const dependencies = Object.freeze({ ...defaultDependencies(), ...overrides });
   const snapshotCache = /* @__PURE__ */ new WeakMap();
   const publicEvidenceCache = /* @__PURE__ */ new WeakMap();
