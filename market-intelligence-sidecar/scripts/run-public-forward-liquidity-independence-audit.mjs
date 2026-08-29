@@ -4,23 +4,30 @@ import { open, readFile } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { canonicalJson } from '../src/public-forward-liquidity-calibration.mjs';
+import { canonicalJson, sha256 } from '../src/public-forward-liquidity-calibration.mjs';
 import { buildPublicForwardLiquidityIndependentSplitSource } from '../src/public-forward-liquidity-independence-audit.mjs';
+import { auditPublicForwardLiquidityIndependentSplits } from '../src/public-forward-liquidity-multi-source-split-audit.mjs';
 
 const SOURCE_MANIFEST_VERSION = 'public-forward-liquidity-bound-source-manifest-v1';
+export const PUBLIC_FORWARD_LIQUIDITY_MULTI_SOURCE_SPLIT_RECEIPT_VERSION =
+  'public-forward-liquidity-multi-source-split-receipt-v1';
 
 const HELP = `Usage:
   node market-intelligence-sidecar/scripts/run-public-forward-liquidity-independence-audit.mjs \\
     --source-manifest <bound-source-manifest.json> \\
     --producer-sha <exact-40-character-git-sha> \\
+    [--split-policy <frozen-split-policy.json> \\
+     --scope-bindings <scope-bindings.json> \\
+     --regime-bindings <regime-bindings.json>] \\
     [--output <new-report.json>]
 
 This command is offline/read-only with respect to canonical Research state.
 It verifies #811 ingest-receipt bindings for one or more existing #776 canonical
-datasets, derives cross-batch unique/independent sample credit, and emits a
-read-only split-source adapter. Frozen split integration remains NEEDS_INTEGRATION.
-It performs no network, state-root, private API, order, OOS,
-calibration-coefficient, or Full Cost mutation.
+datasets and derives cross-batch unique/independent sample credit. With the three
+frozen-split inputs it also produces the authoritative read-only multi-source V2
+split audit/receipt while preserving per-source dataset/receipt/collector lineage.
+It never synthesizes one aggregate dataset/collector identity and performs no
+network, state-root, private API, order, OOS, calibration-coefficient, or Full Cost mutation.
 `;
 
 function parse(argv) {
@@ -33,12 +40,21 @@ function parse(argv) {
     index += 1;
     if (key === '--source-manifest') result.sourceManifest = value;
     else if (key === '--producer-sha') result.producerSha = value;
+    else if (key === '--split-policy') result.splitPolicy = value;
+    else if (key === '--scope-bindings') result.scopeBindings = value;
+    else if (key === '--regime-bindings') result.regimeBindings = value;
     else if (key === '--output') result.output = value;
     else throw new Error(`ARGUMENT_UNKNOWN:${key}`);
   }
   for (const key of ['sourceManifest', 'producerSha']) {
     if (!result[key]) throw new Error(`ARGUMENT_REQUIRED:${key}`);
   }
+  const v2Inputs = ['splitPolicy', 'scopeBindings', 'regimeBindings'];
+  const supplied = v2Inputs.filter((key) => Boolean(result[key]));
+  if (supplied.length !== 0 && supplied.length !== v2Inputs.length) {
+    throw new Error('MULTI_SOURCE_SPLIT_INPUTS_MUST_BE_COMPLETE');
+  }
+  result.multiSourceSplit = supplied.length === v2Inputs.length;
   return result;
 }
 
@@ -82,7 +98,7 @@ export function validatePublicForwardLiquiditySourceManifestLayout(manifest) {
 async function sourcesFromManifest(path) {
   const manifest = await json(path);
   const { stateRoot } = validatePublicForwardLiquiditySourceManifestLayout(manifest);
-  return Promise.all(manifest.sources.map(async (source) => {
+  const sources = await Promise.all(manifest.sources.map(async (source) => {
     const [dataset, ingestReceipt] = await Promise.all([
       json(source.datasetPath),
       json(source.ingestReceiptPath),
@@ -99,6 +115,7 @@ async function sourcesFromManifest(path) {
       datasetRelativePath: datasetRelativePath.replace(/\\/gu, '/'),
     };
   }));
+  return { manifest, sources };
 }
 
 async function writeNew(path, value) {
@@ -111,16 +128,84 @@ async function writeNew(path, value) {
   }
 }
 
+function multiSourceReceipt({ splitSourceResult, splitResult, producerCodeSha, policy, scopeBindings, regimeBindings }) {
+  const splitAudit = splitResult.audit ?? null;
+  const body = {
+    schemaVersion: PUBLIC_FORWARD_LIQUIDITY_MULTI_SOURCE_SPLIT_RECEIPT_VERSION,
+    status: splitResult.status,
+    blockers: Object.freeze([...(splitResult.blockers ?? [])]),
+    producerCodeSha,
+    independenceAuditDigest: splitSourceResult.audit?.auditDigest ?? null,
+    independentSplitSourceDigest: splitSourceResult.splitSource?.splitSourceDigest ?? null,
+    splitAuditDigest: splitAudit?.auditDigest ?? null,
+    upstreamLineageDigest: splitAudit?.upstreamLineageDigest ?? null,
+    datasetDigests: Object.freeze([...(splitAudit?.datasetDigests ?? [])]),
+    receiptDigests: Object.freeze([...(splitAudit?.receiptDigests ?? [])]),
+    collectorCodeShas: Object.freeze([...(splitAudit?.collectorCodeShas ?? [])]),
+    splitPolicyDigest: policy?.policyDigest ?? null,
+    scopeBindingsDigest: sha256(canonicalJson(scopeBindings)),
+    regimeBindingsDigest: sha256(canonicalJson(regimeBindings)),
+    splitAudit,
+    syntheticAggregateDataset: false,
+    syntheticSingleCollector: false,
+    oosValidationComplete: false,
+    calibrationArtifactProduced: false,
+    liquidityImpactPresent: false,
+    liquidityImpactStatus: 'BLOCKED_DATA',
+    evidenceCompleteCredit: 0,
+    naturalEntryCredit: 0,
+    runtimeCostCredit: 0,
+    fullCostReady: false,
+    executionAuthority: 'NONE',
+    privateApiUsed: false,
+    liveTrading: false,
+    orderSubmitted: false,
+  };
+  return Object.freeze({ ...body, receiptDigest: sha256(canonicalJson(body)) });
+}
+
 export async function run(argv = process.argv.slice(2)) {
   const args = parse(argv);
   if (args.help) {
     process.stdout.write(HELP);
     return null;
   }
-  const result = buildPublicForwardLiquidityIndependentSplitSource({
-    sources: await sourcesFromManifest(args.sourceManifest),
+  const { sources } = await sourcesFromManifest(args.sourceManifest);
+  const splitSourceResult = buildPublicForwardLiquidityIndependentSplitSource({
+    sources,
     producerCodeSha: args.producerSha,
   });
+
+  let result = splitSourceResult;
+  if (args.multiSourceSplit && splitSourceResult.status === 'PRESENT') {
+    const [policy, scopeBindings, regimeBindings] = await Promise.all([
+      json(args.splitPolicy),
+      json(args.scopeBindings),
+      json(args.regimeBindings),
+    ]);
+    if (!Array.isArray(scopeBindings) || !Array.isArray(regimeBindings)) {
+      throw new Error('MULTI_SOURCE_BINDINGS_MUST_BE_ARRAYS');
+    }
+    const splitResult = auditPublicForwardLiquidityIndependentSplits({
+      splitSource: splitSourceResult.splitSource,
+      scopeBindings,
+      regimeBindings,
+      policy,
+    });
+    result = Object.freeze({
+      status: splitResult.status,
+      blockers: splitResult.blockers,
+      receipt: multiSourceReceipt({
+        splitSourceResult,
+        splitResult,
+        producerCodeSha: args.producerSha,
+        policy,
+        scopeBindings,
+        regimeBindings,
+      }),
+    });
+  }
+
   if (args.output) await writeNew(args.output, result);
   process.stdout.write(`${canonicalJson(result)}\n`);
   if (result.status !== 'PRESENT') process.exitCode = 2;
