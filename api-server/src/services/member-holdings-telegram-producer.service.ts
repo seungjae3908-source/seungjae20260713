@@ -75,10 +75,10 @@ type PortfolioHoldingRow = {
 
 type ProfileRow = {
   id?: unknown;
-  status?: unknown;
-  membership_level?: unknown;
-  is_active?: unknown;
-  role?: unknown;
+  status?: string | null;
+  membership_level?: string | null;
+  is_active?: boolean | null;
+  role?: string | null;
 };
 
 function emptySummary(status: MemberHoldingProducerStatus): MemberHoldingProducerSummary {
