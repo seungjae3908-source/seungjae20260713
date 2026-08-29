@@ -7,6 +7,10 @@ on:
         description: Exact latest-main research SHA authorized for durable publication
         required: true
         type: string
+    secrets:
+      PREDICTION_LAB_IMMUTABLE_RELEASE_POLICY_TOKEN:
+        description: Environment-bound repository Administration:read credential used only for immutable policy read
+        required: false
     outputs:
       immutable_enabled:
         description: True only when exact-main identity and immutable-release policy are proven
