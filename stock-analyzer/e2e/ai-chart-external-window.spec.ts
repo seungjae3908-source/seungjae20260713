@@ -313,6 +313,8 @@ test('hidden state accepts only ordered snapshots and sends a fresh ready signal
     body: '<!doctype html><meta charset="utf-8"><title>sync-controller</title>',
   }));
   await page.goto(externalUrl);
+  await expect(page.getByRole('heading', { name: 'AI 차트 생중계', level: 1 })).toBeVisible();
+  await expect(page.getByText('외부 AI 차트', { exact: true })).toBeVisible();
   const origin = new URL(page.url()).origin;
 
   // Use a separate visible document as the synthetic main window. Posting from
