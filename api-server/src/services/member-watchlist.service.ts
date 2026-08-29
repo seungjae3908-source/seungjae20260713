@@ -1,3 +1,4 @@
+import { hasCapability } from '../../../packages/member-access/src/index.js';
 import { getSupabase, getUserSupabase, hasSupabaseServerKey } from '../lib/supabase';
 
 export const MEMBER_WATCHLIST_MARKETS = [
@@ -13,6 +14,7 @@ type MemberTelegramEligibilityProfile = {
   status?: unknown;
   membership_level?: unknown;
   is_active?: unknown;
+  role?: unknown;
 };
 
 export type MemberWatchlistInput = {
@@ -45,17 +47,12 @@ function text(value: unknown, maxLength: number): string {
 }
 
 /**
- * Database projection of the current canConnectPersonalTelegram gate.
- * The query already requires status=approved. An explicitly inactive profile
- * or an explicit pending membership tier must still fail closed immediately.
- * Other approved tiers (associate/regular/admin, or legacy approved rows with
- * no explicit tier) have the personal-Telegram capability in the canonical
- * member-access matrix.
+ * Use the canonical member-access capability matrix from #804 as the single
+ * authorization source for personal Telegram delivery. Database filtering may
+ * reduce the candidate set, but it must not re-implement membership truth.
  */
 export function memberEligibleForPersonalTelegram(profile: MemberTelegramEligibilityProfile): boolean {
-  return profile.status === 'approved'
-    && profile.is_active !== false
-    && profile.membership_level !== 'pending';
+  return hasCapability(profile, 'canConnectPersonalTelegram');
 }
 
 function canonicalMarket(value: unknown, symbol: string): StoredMemberWatchlistMarket {
@@ -222,7 +219,7 @@ export async function findMemberWatchlistSubscribers(
     const batch = candidates.slice(index, index + MAX_PROFILE_LOOKUP_BATCH);
     const { data: profiles, error: profileError } = await client
       .from('profiles')
-      .select('id,status,membership_level,is_active')
+      .select('id,status,membership_level,is_active,role')
       .in('id', batch)
       .eq('status', 'approved');
     if (profileError) throw new Error('MEMBER_WATCHLIST_STORAGE_UNAVAILABLE');
