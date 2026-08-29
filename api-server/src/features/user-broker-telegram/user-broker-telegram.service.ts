@@ -161,7 +161,7 @@ export class UserBrokerTelegramService {
     }
     await this.repository.savePreferences(userId, next, now.toISOString()); return next;
   }
-  async recordEvent(event: UserExecutionEvent, now = new Date(), membership: MemberTier = 'admin') {
+  async recordEvent(event: UserExecutionEvent, now = new Date(), membership: MemberTier = 'pending') {
     const inserted = await this.repository.insertExecutionEvent(event);
     if (!inserted) return { inserted: false, deliveryQueued: false };
     if (event.type !== 'MANUAL_PORTFOLIO_ENTRY') await this.portfolioSink.accept(event);
