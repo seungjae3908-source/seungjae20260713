@@ -24,7 +24,7 @@ test("durable drift workflow auto-follows only successful manual main publicatio
 test("durable drift workflow keeps readback diagnostic-only and fail-closed", async () => {
   const workflow = await readFile(WORKFLOW_URL, "utf8");
   assert.match(workflow, /DURABLE_REFERENCE_PROVEN=false/u);
-  assert.match(workflow, /calculate authenticated PSI KS JSD/u);
+  assert.match(workflow, /Authenticate immutable reference and calculate PSI KS JSD/u);
   assert.match(workflow, /model-reference-drift-diagnostics-v1\.js/u);
   assert.match(workflow, /if-no-files-found: error/u);
   assert.match(workflow, /retention-days: 90/u);
