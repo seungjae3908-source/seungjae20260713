@@ -4,7 +4,9 @@ on:
   pull_request:
     paths:
       - 'market-intelligence-sidecar/src/public-forward-liquidity-calibration-oos-outcome-validator.mjs'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-multi-source-split-audit.mjs'
       - 'market-intelligence-sidecar/tests/public-forward-liquidity-calibration-oos-outcome-validator.test.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-multi-source-split-audit.test.mjs'
       - '.github/workflows/public-forward-liquidity-calibration-oos-validation.yml'
   workflow_dispatch:
 
@@ -32,12 +34,26 @@ jobs:
       - name: Run focused held-out OOS outcome validator tests
         run: node --test market-intelligence-sidecar/tests/public-forward-liquidity-calibration-oos-outcome-validator.test.mjs
 
-      - name: Verify fail-closed OOS and safety invariants
+      - name: Verify fail-closed OOS, lineage, and safety invariants
         shell: bash
         run: |
           set -euo pipefail
           FILE='market-intelligence-sidecar/src/public-forward-liquidity-calibration-oos-outcome-validator.mjs'
           grep -Fq 'verifiedFrozenSplitAuditRequired: true' "$FILE"
+          grep -Fq 'multiSourceLineageRequired: true' "$FILE"
+          grep -Fq 'syntheticAggregateDatasetAllowed: false' "$FILE"
+          grep -Fq 'syntheticSingleCollectorAllowed: false' "$FILE"
+          grep -Fq 'PUBLIC_FORWARD_LIQUIDITY_MULTI_SOURCE_SPLIT_AUDIT_VERSION' "$FILE"
+          grep -Fq 'PUBLIC_FORWARD_LIQUIDITY_MULTI_SOURCE_OOS_VALIDATION_VERSION' "$FILE"
+          grep -Fq 'upstreamLineageDigest' "$FILE"
+          grep -Fq 'datasetDigests' "$FILE"
+          grep -Fq 'receiptDigests' "$FILE"
+          grep -Fq 'collectorCodeShas' "$FILE"
+          grep -Fq 'sourceDatasetDigest' "$FILE"
+          grep -Fq 'sourceReceiptDigest' "$FILE"
+          grep -Fq 'sourceCollectorCodeSha' "$FILE"
+          grep -Fq 'OOS_SYNTHETIC_AGGREGATE_DATASET_FORBIDDEN' "$FILE"
+          grep -Fq 'OOS_ASSIGNMENT_SOURCE_LINEAGE_MISMATCH' "$FILE"
           grep -Fq 'exactOosCoverageRequired: true' "$FILE"
           grep -Fq 'genuinePublicForwardMarketDataRequired: true' "$FILE"
           grep -Fq 'methodologyFrozenBeforeOosRequired: true' "$FILE"
