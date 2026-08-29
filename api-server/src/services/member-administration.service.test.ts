@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { deriveMemberTier, hasCapability } from '../../../packages/member-access/src/index.js';
 import {
   MemberAdministrationError,
+  classifyAtomicMemberChangeFailure,
   isActiveAdmin,
   parseMemberChangeRequest,
   planMemberChange,
@@ -39,6 +40,30 @@ for (const [name, input, code] of rejectionCases) {
     );
   });
 }
+
+test('maps atomic member state conflict to HTTP 409', () => {
+  const error = classifyAtomicMemberChangeFailure({ message: 'P0001: MEMBER_STATE_CONFLICT' });
+  assert.equal(error.code, 'MEMBER_STATE_CONFLICT');
+  assert.equal(error.statusCode, 409);
+});
+
+test('maps atomic last active admin protection to HTTP 409', () => {
+  const error = classifyAtomicMemberChangeFailure(new Error('LAST_ACTIVE_ADMIN_PROTECTED'));
+  assert.equal(error.code, 'LAST_ACTIVE_ADMIN_PROTECTED');
+  assert.equal(error.statusCode, 409);
+});
+
+test('maps atomic database authority denial to HTTP 403', () => {
+  const error = classifyAtomicMemberChangeFailure({ message: 'MEMBER_ADMIN_REQUIRED' });
+  assert.equal(error.code, 'MEMBER_ADMIN_REQUIRED');
+  assert.equal(error.statusCode, 403);
+});
+
+test('unknown atomic mutation failure remains fail closed', () => {
+  const error = classifyAtomicMemberChangeFailure({ message: 'unexpected postgres failure' });
+  assert.equal(error.code, 'MEMBER_UPDATE_FAILED');
+  assert.equal(error.statusCode, 500);
+});
 
 test('parses valid associate approval', () => {
   assert.deepEqual(parseMemberChangeRequest({ membershipLevel: 'associate', isActive: true, reason: '신규 회원 승인' }), {
@@ -221,6 +246,7 @@ test('active admin detection requires approved status and active flag', () => {
   assert.equal(isActiveAdmin(profile({ membership_level: 'admin', status: 'pending' })), false);
   assert.equal(isActiveAdmin(profile({ membership_level: 'admin', status: 'rejected' })), false);
   assert.equal(isActiveAdmin(profile({ membership_level: 'admin', status: 'approved', is_active: false })), false);
+  assert.equal(isActiveAdmin(profile({ membership_level: 'admin', status: 'approved', is_active: null })), false);
   assert.equal(isActiveAdmin(profile({ role: 'admin', status: 'approved', membership_level: null })), true);
 });
 
