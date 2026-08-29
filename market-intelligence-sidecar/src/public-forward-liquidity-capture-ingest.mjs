@@ -1,4 +1,6 @@
+import { execFile } from 'node:child_process';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { promisify } from 'node:util';
 
 import {
   FORWARD_NATURAL_SAMPLE,
@@ -17,8 +19,10 @@ export const PUBLIC_FORWARD_LIQUIDITY_CAPTURE_INGEST_RECEIPT_VERSION =
   'public-forward-liquidity-capture-ingest-receipt-v1';
 
 const SHA256 = /^[a-f0-9]{64}$/u;
-const COMMIT_SHA = /^[a-f0-9]{40}$/u;
+const GIT_OBJECT_SHA = /^[a-f0-9]{40}$/u;
 const DECIMAL_ID = /^[0-9]+$/u;
+const COLLECTOR_IMPLEMENTATION_PATH = 'market-intelligence-sidecar/src/public-forward-liquidity-calibration.mjs';
+const execFileAsync = promisify(execFile);
 const PROTECTED_APPLICATION_STORAGE = Object.freeze([
   '/opt/stock-app-data',
   '/srv/stock-app',
@@ -49,7 +53,7 @@ function decimalId(value, code) {
 
 function exactSha(value, code) {
   const normalized = text(value, code).toLowerCase();
-  if (!COMMIT_SHA.test(normalized)) throw new Error(code);
+  if (!GIT_OBJECT_SHA.test(normalized)) throw new Error(code);
   return normalized;
 }
 
@@ -94,6 +98,32 @@ export function assertPublicForwardLiquidityResearchStateRoot({ stateRoot, resea
     throw new Error('BLOCKED_STORAGE:STATE_ROOT_OVERLAPS_PROTECTED_RESEARCH_CHECKOUT');
   }
   return normalizedStateRoot;
+}
+
+async function proveCollectorImplementationBlobSha({ researchRepoRoot, exactMainSha }) {
+  const repoRoot = resolve(researchRepoRoot);
+  try {
+    const commitType = await execFileAsync(
+      'git',
+      ['-C', repoRoot, 'cat-file', '-t', `${exactMainSha}^{commit}`],
+      { encoding: 'utf8', maxBuffer: 1024 * 1024 },
+    );
+    if (commitType.stdout.trim() !== 'commit') throw new Error('COLLECTOR_IMPLEMENTATION_COMMIT_UNPROVEN');
+    const treeEntry = await execFileAsync(
+      'git',
+      ['-C', repoRoot, 'ls-tree', exactMainSha, '--', COLLECTOR_IMPLEMENTATION_PATH],
+      { encoding: 'utf8', maxBuffer: 1024 * 1024 },
+    );
+    const line = treeEntry.stdout.trim();
+    const match = /^100644 blob ([a-f0-9]{40})\t(.+)$/u.exec(line);
+    if (!match || match[2] !== COLLECTOR_IMPLEMENTATION_PATH) {
+      throw new Error('COLLECTOR_IMPLEMENTATION_BLOB_UNPROVEN');
+    }
+    return exactSha(match[1], 'COLLECTOR_IMPLEMENTATION_BLOB_INVALID');
+  } catch (error) {
+    if (String(error?.message ?? '').startsWith('COLLECTOR_IMPLEMENTATION_')) throw error;
+    throw new Error('COLLECTOR_IMPLEMENTATION_BLOB_UNPROVEN');
+  }
 }
 
 function assertCaptureTruthBoundary(receipt) {
@@ -241,6 +271,10 @@ export async function ingestPublicForwardLiquidityCapture({
   if (capture.sampleClass !== FORWARD_NATURAL_SAMPLE) throw new Error('CAPTURE_SAMPLE_CLASS_INVALID');
   assertCaptureTruthBoundary(capture);
 
+  const collectorImplementationBlobSha = await proveCollectorImplementationBlobSha({
+    researchRepoRoot,
+    exactMainSha: mainSha,
+  });
   const { batch, rawBatchDigest } = validateRawBatch(rawBatch, mainSha, capture);
 
   const artifact = object(artifactReceipt, 'ARTIFACT_RECEIPT_INVALID');
@@ -283,6 +317,8 @@ export async function ingestPublicForwardLiquidityCapture({
     schemaVersion: PUBLIC_FORWARD_LIQUIDITY_CAPTURE_INGEST_RECEIPT_VERSION,
     exactMainSha: mainSha,
     collectorCodeSha: persisted.dataset.collectorCodeSha,
+    collectorImplementationPath: COLLECTOR_IMPLEMENTATION_PATH,
+    collectorImplementationBlobSha,
     repository,
     sampleClass: batch.sampleClass,
     storeContract: PUBLIC_LIQUIDITY_CALIBRATION_STORE_CONTRACT,
