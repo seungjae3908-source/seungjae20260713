@@ -47,6 +47,7 @@ function dataHealth(input) {
     warnings.push("flow_data_missing");
   }
   if (input.marketFeatures.sentimentScore === undefined) warnings.push("news_sentiment_missing");
+  if (input.marketFeatures.benchmarkReturn === undefined) warnings.push("benchmark_return_missing");
   return Object.freeze({
     candleCount: input.candles.length,
     status: warnings.length === 0 ? "complete" : "partial",
