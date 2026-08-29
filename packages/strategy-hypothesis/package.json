@@ -1,0 +1,20 @@
+{
+  "name": "@workspace/strategy-hypothesis",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "import": "./src/index.js"
+    }
+  },
+  "main": "./src/index.js",
+  "types": "./src/index.d.ts",
+  "dependencies": {
+    "@workspace/external-research": "workspace:*"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}
