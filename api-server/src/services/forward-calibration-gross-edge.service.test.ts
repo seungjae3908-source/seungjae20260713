@@ -260,7 +260,13 @@ test('rejects stale source data and strategy lineage drift instead of treating t
   const rows = observations();
   const calibration = buildForwardObservationProfitCalibration(rows);
   const staleRows = [...rows];
-  staleRows[0] = Object.freeze({ ...staleRows[0]!, dataMaxAgeMs: 1 });
+  const staleDataTimestamp = iso(-2 * 60_000);
+  staleRows[0] = Object.freeze({
+    ...staleRows[0]!,
+    dataTimestamp: staleDataTimestamp,
+    dataMaxAgeMs: 60_000,
+    snapshot: Object.freeze({ ...staleRows[0]!.snapshot, dataTimestamp: staleDataTimestamp }),
+  });
   const stale = evidenceFrom(staleRows, calibration);
   assert.equal(stale.status, 'NOT_AVAILABLE');
   assert.ok(stale.reasons.includes('FORWARD_OBSERVATION_SOURCE_DATA_STALE'));
