@@ -1,4 +1,6 @@
 const ENFORCEMENT_MODES = new Set(['OBSERVE_ONLY', 'REQUIRED_FOR_PARENT_GATE']);
+const GROSS_EDGE_SOURCE = 'forward-recommendation-profit-calibration-v2';
+const GROSS_EDGE_SCHEMA = 'forward-calibration-gross-edge-v2';
 const COST_FIELDS = Object.freeze([
   'commissionBps',
   'taxBps',
@@ -8,6 +10,17 @@ const COST_FIELDS = Object.freeze([
   'latencyBps',
   'liquidityImpactBps',
   'partialFillImpactBps',
+]);
+const IDENTITY_FIELDS = Object.freeze([
+  'strategyId',
+  'strategyVersion',
+  'parameterHash',
+  'researchCodeSha',
+  'market',
+  'symbol',
+  'timeframe',
+  'horizon',
+  'direction',
 ]);
 
 export const DEFAULT_NET_ALPHA_POLICY = Object.freeze({
@@ -19,32 +32,51 @@ export const DEFAULT_NET_ALPHA_POLICY = Object.freeze({
   attestationToleranceBps: 0.5,
 });
 
+const LOCKED_POLICY_FIELDS = Object.freeze([
+  'maxEvidenceAgeMs', 'maxFutureSkewMs', 'minConservativeNetAlphaBps', 'attestationToleranceBps',
+]);
+
 function finite(value, fallback = null) {
-  if (value == null || value === '') return fallback;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
 function evidenceComplete(value) {
   if (value === true) return true;
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed > 0;
+  return typeof value === 'number' && Number.isInteger(value) && value > 0;
+}
+
+function normalizeIdentity(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const normalized = {};
+  for (const field of IDENTITY_FIELDS) {
+    const raw = value[field];
+    if (typeof raw !== 'string' || !raw.trim()) return null;
+    normalized[field] = field === 'market' || field === 'direction'
+      ? raw.trim().toUpperCase()
+      : raw.trim();
+  }
+  if (!/^[0-9a-f]{40}$/i.test(normalized.researchCodeSha)) return null;
+  return normalized;
+}
+
+function sameIdentity(a, b) {
+  return Boolean(a && b && IDENTITY_FIELDS.every((field) => a[field] === b[field]));
 }
 
 function resolvePolicy(input = {}) {
-  const policy = { ...DEFAULT_NET_ALPHA_POLICY, ...(input ?? {}) };
-  if (typeof policy.version !== 'string' || !policy.version.trim()) throw new Error('NET_ALPHA_POLICY_VERSION_REQUIRED');
-  policy.enforcement = String(policy.enforcement ?? '').toUpperCase();
-  if (!ENFORCEMENT_MODES.has(policy.enforcement)) throw new Error('NET_ALPHA_POLICY_ENFORCEMENT_INVALID');
-  for (const field of ['maxEvidenceAgeMs', 'maxFutureSkewMs', 'minConservativeNetAlphaBps', 'attestationToleranceBps']) {
-    const value = Number(policy[field]);
-    if (!Number.isFinite(value)) throw new Error(`NET_ALPHA_POLICY_FIELD_INVALID:${field}`);
-    policy[field] = value;
+  if (input == null) input = {};
+  if (typeof input !== 'object' || Array.isArray(input)) throw new Error('NET_ALPHA_POLICY_INVALID');
+  if (input.version != null && input.version !== DEFAULT_NET_ALPHA_POLICY.version) {
+    throw new Error('NET_ALPHA_POLICY_VERSION_OVERRIDE_NOT_ALLOWED');
   }
-  if (policy.maxEvidenceAgeMs <= 0 || policy.maxFutureSkewMs < 0 || policy.attestationToleranceBps < 0) {
-    throw new Error('NET_ALPHA_POLICY_BOUND_INVALID');
+  for (const field of LOCKED_POLICY_FIELDS) {
+    if (Object.hasOwn(input, field) && input[field] !== DEFAULT_NET_ALPHA_POLICY[field]) {
+      throw new Error(`NET_ALPHA_POLICY_OVERRIDE_NOT_ALLOWED:${field}`);
+    }
   }
-  return policy;
+  const enforcement = String(input.enforcement ?? DEFAULT_NET_ALPHA_POLICY.enforcement).toUpperCase();
+  if (!ENFORCEMENT_MODES.has(enforcement)) throw new Error('NET_ALPHA_POLICY_ENFORCEMENT_INVALID');
+  return { ...DEFAULT_NET_ALPHA_POLICY, enforcement };
 }
 
 function missingResult(policy, raw, reasons, extra = {}) {
@@ -64,6 +96,7 @@ function missingResult(policy, raw, reasons, extra = {}) {
     },
     safety: {
       executionAuthority: 'NONE',
+      liveTrading: false,
       numericalAuthority: 'CROSS_CHECK_ONLY',
       aiNumericalAuthority: false,
       profitabilityClaimAllowed: false,
@@ -74,32 +107,42 @@ function missingResult(policy, raw, reasons, extra = {}) {
 
 export function evaluateNetAlpha(raw = {}, policyInput = {}) {
   const policy = resolvePolicy(policyInput);
-  const now = finite(raw.now, Date.now());
+  const now = finite(raw.now);
   const asOf = finite(raw.asOf);
   const costAsOf = finite(raw.costAsOf);
   const expectedGrossEdgeBps = finite(raw.expectedGrossEdgeBps);
   const conformalLowerEdgeBps = finite(raw.conformalLowerEdgeBps);
   const attestedNetEdgeBps = finite(raw.attestedNetEdgeBps);
   const source = String(raw.source ?? '').trim();
+  const sourceSchemaVersion = String(raw.sourceSchemaVersion ?? '').trim();
   const costSource = String(raw.costSource ?? '').trim();
   const costPolicyVersion = String(raw.costPolicyVersion ?? '').trim();
+  const grossIdentity = normalizeIdentity(raw.grossIdentity);
+  const costIdentity = normalizeIdentity(raw.costIdentity);
+  const market = String(raw.market ?? '').toUpperCase();
   const reasons = [];
 
+  if (now == null) reasons.push('AUTHORITATIVE_CLOCK_NOT_AVAILABLE');
   if (raw.evidenceReady !== true) reasons.push('AUTHORITATIVE_PROFIT_EVIDENCE_NOT_READY');
   if (raw.forwardDataComplete !== true) reasons.push('FORWARD_DATA_INCOMPLETE');
   if (raw.fullCostReady !== true) reasons.push('FULL_COST_NOT_READY');
   if (!evidenceComplete(raw.evidenceComplete)) reasons.push('EVIDENCE_COMPLETE_NOT_READY');
-  if (!source) reasons.push('NET_ALPHA_SOURCE_REQUIRED');
+  if (source !== GROSS_EDGE_SOURCE) reasons.push('CANONICAL_GROSS_EDGE_SOURCE_REQUIRED');
+  if (sourceSchemaVersion !== GROSS_EDGE_SCHEMA) reasons.push('CANONICAL_GROSS_EDGE_SCHEMA_REQUIRED');
   if (!costSource) reasons.push('FULL_COST_SOURCE_REQUIRED');
   if (!costPolicyVersion) reasons.push('COST_POLICY_VERSION_REQUIRED');
+  if (!grossIdentity) reasons.push('GROSS_IDENTITY_PROVENANCE_NOT_AVAILABLE');
+  if (!costIdentity) reasons.push('COST_IDENTITY_PROVENANCE_NOT_AVAILABLE');
+  if (grossIdentity && costIdentity && !sameIdentity(grossIdentity, costIdentity)) reasons.push('NET_ALPHA_IDENTITY_MISMATCH');
+  if (grossIdentity && market && grossIdentity.market !== market) reasons.push('NET_ALPHA_MARKET_IDENTITY_MISMATCH');
 
   if (asOf == null) reasons.push('NET_ALPHA_AS_OF_NOT_AVAILABLE');
-  else if (asOf > now + policy.maxFutureSkewMs) reasons.push('NET_ALPHA_EVIDENCE_FROM_FUTURE');
-  else if (now - asOf > policy.maxEvidenceAgeMs) reasons.push('NET_ALPHA_EVIDENCE_STALE');
+  else if (now != null && asOf > now + policy.maxFutureSkewMs) reasons.push('NET_ALPHA_EVIDENCE_FROM_FUTURE');
+  else if (now != null && now - asOf > policy.maxEvidenceAgeMs) reasons.push('NET_ALPHA_EVIDENCE_STALE');
 
   if (costAsOf == null) reasons.push('COST_AS_OF_NOT_AVAILABLE');
-  else if (costAsOf > now + policy.maxFutureSkewMs) reasons.push('COST_EVIDENCE_FROM_FUTURE');
-  else if (now - costAsOf > policy.maxEvidenceAgeMs) reasons.push('COST_EVIDENCE_STALE');
+  else if (now != null && costAsOf > now + policy.maxFutureSkewMs) reasons.push('COST_EVIDENCE_FROM_FUTURE');
+  else if (now != null && now - costAsOf > policy.maxEvidenceAgeMs) reasons.push('COST_EVIDENCE_STALE');
 
   if (expectedGrossEdgeBps == null) reasons.push('EXPECTED_GROSS_EDGE_NOT_AVAILABLE');
   if (conformalLowerEdgeBps == null) reasons.push('CONFORMAL_LOWER_EDGE_NOT_AVAILABLE');
@@ -116,15 +159,23 @@ export function evaluateNetAlpha(raw = {}, policyInput = {}) {
     forwardDataComplete: raw.forwardDataComplete === true,
     fullCostReady: raw.fullCostReady === true,
     evidenceComplete: evidenceComplete(raw.evidenceComplete),
+    profitabilityProven: raw.profitabilityProven === true,
+  };
+
+  const provenance = {
+    source: source || null,
+    sourceSchemaVersion: sourceSchemaVersion || null,
+    costSource: costSource || null,
+    costPolicyVersion: costPolicyVersion || null,
+    grossIdentity,
+    costIdentity,
   };
 
   if (reasons.length) {
     return missingResult(policy, raw, reasons, {
       asOf,
       costAsOf,
-      source: source || null,
-      costSource: costSource || null,
-      costPolicyVersion: costPolicyVersion || null,
+      ...provenance,
       expectedGrossEdgeBps,
       conformalLowerEdgeBps,
       attestedNetEdgeBps,
@@ -146,9 +197,7 @@ export function evaluateNetAlpha(raw = {}, policyInput = {}) {
       costAsOf,
       evidenceAgeMs,
       costEvidenceAgeMs,
-      source,
-      costSource,
-      costPolicyVersion,
+      ...provenance,
       expectedGrossEdgeBps,
       conformalLowerEdgeBps,
       totalExpectedCostBps,
@@ -165,7 +214,7 @@ export function evaluateNetAlpha(raw = {}, policyInput = {}) {
   return {
     contract: 'market-intelligence-net-alpha/v1',
     policy,
-    market: String(raw.market ?? '').toUpperCase() || null,
+    market: market || null,
     status: 'READY',
     decision: pass ? 'TAKE' : 'SKIP',
     reasons: vetoReasons,
@@ -174,9 +223,7 @@ export function evaluateNetAlpha(raw = {}, policyInput = {}) {
     costAsOf,
     evidenceAgeMs,
     costEvidenceAgeMs,
-    source,
-    costSource,
-    costPolicyVersion,
+    ...provenance,
     expectedGrossEdgeBps,
     conformalLowerEdgeBps,
     conservativeGrossEdgeBps,
@@ -194,6 +241,7 @@ export function evaluateNetAlpha(raw = {}, policyInput = {}) {
     },
     safety: {
       executionAuthority: 'NONE',
+      liveTrading: false,
       numericalAuthority: 'CROSS_CHECK_ONLY',
       aiNumericalAuthority: false,
       profitabilityClaimAllowed: false,
@@ -202,4 +250,4 @@ export function evaluateNetAlpha(raw = {}, policyInput = {}) {
   };
 }
 
-export { COST_FIELDS };
+export { COST_FIELDS, GROSS_EDGE_SOURCE, GROSS_EDGE_SCHEMA };
