@@ -133,7 +133,7 @@ async function proveCollectorImplementationBlobSha({ researchRepoRoot, exactMain
   }
 }
 
-function validateObservationIdentity(observation) {
+export function validatePublicForwardLiquidityObservationIdentity(observation) {
   const rawSourceProvenance = object(
     observation?.rawSourceProvenance,
     'OBSERVATION_RAW_SOURCE_PROVENANCE_INVALID',
@@ -166,6 +166,7 @@ function validateObservationIdentity(observation) {
   if (exactDigest(observation.sourceDigest, 'OBSERVATION_SOURCE_DIGEST_INVALID') !== expectedSourceDigest) {
     throw new Error('OBSERVATION_SOURCE_DIGEST_MISMATCH');
   }
+  return Object.freeze({ observationId: expectedObservationId, sourceDigest: expectedSourceDigest });
 }
 
 function assertCaptureTruthBoundary(receipt) {
@@ -259,7 +260,7 @@ function validateRawBatch(rawBatch, expectedMainSha, capture) {
       || observation.paperOrderSourceAllowed !== false) {
       throw new Error('OBSERVATION_AUTHORITY_INVALID');
     }
-    validateObservationIdentity(observation);
+    validatePublicForwardLiquidityObservationIdentity(observation);
   }
 
   const rawBatchDigest = sha256(canonicalJson(batch));
@@ -354,6 +355,7 @@ export async function ingestPublicForwardLiquidityCapture({
   if (!datasetRelativePath || isAbsolute(datasetRelativePath) || datasetRelativePath.startsWith(`..${sep}`) || datasetRelativePath === '..') {
     throw new Error('DATASET_PATH_ESCAPED_STATE_ROOT');
   }
+  const batchObservationIds = Object.freeze(batch.observations.map((observation) => observation.observationId).sort());
 
   const body = Object.freeze({
     schemaVersion: PUBLIC_FORWARD_LIQUIDITY_CAPTURE_INGEST_RECEIPT_VERSION,
@@ -367,12 +369,18 @@ export async function ingestPublicForwardLiquidityCapture({
     captureRunId,
     captureRunAttempt,
     rawBatchDigest,
+    batchObservationIds,
+    batchObservationDigest: sha256(canonicalJson(batch.observations)),
+    batchDatasetProvenanceDigest: sha256(canonicalJson(batch.datasetProvenance)),
     captureArtifactReceiptDigest,
     artifactId,
     artifactDigest,
     predecessorDatasetDigest: persisted.dataset.predecessorDigest ?? null,
     datasetDigest: persisted.dataset.datasetDigest,
     datasetRelativePath,
+    datasetObservationCount: persisted.dataset.observations.length,
+    datasetBatchProvenanceCount: persisted.dataset.batchProvenance.length,
+    datasetDuplicateAttemptCount: persisted.dataset.duplicateAttempts.length,
     insertedObservationCount: persisted.insertedObservationCount,
     duplicateObservationCount: persisted.duplicateObservationCount,
     rawIngestObservationDelta: persisted.insertedObservationCount,
