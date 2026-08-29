@@ -27,7 +27,7 @@ jobs:
         with:
           node-version: 20
 
-      - name: Verify exact-head policy contract and tests
+      - name: Verify exact-head V2 policy contract and tests
         shell: bash
         run: |
           set -euo pipefail
@@ -41,7 +41,7 @@ jobs:
           node --check market-intelligence-sidecar/scripts/run-public-forward-liquidity-prospective-policy.mjs
           node --test market-intelligence-sidecar/tests/public-forward-liquidity-prospective-policy.test.mjs
 
-      - name: Freeze deterministic new-cohort-only policy candidate
+      - name: Freeze immutable V2 new-cohort-only policy
         shell: bash
         run: |
           set -euo pipefail
@@ -60,6 +60,7 @@ jobs:
           node --input-type=module <<'NODE'
           import { readFile } from 'node:fs/promises';
           import {
+            CAPTURE_TRIGGER_TYPE,
             verifyProspectiveLiquidityPolicyArtifact,
           } from './market-intelligence-sidecar/src/public-forward-liquidity-prospective-policy.mjs';
           const artifact = JSON.parse(await readFile(
@@ -69,25 +70,37 @@ jobs:
           const verification = verifyProspectiveLiquidityPolicyArtifact(artifact);
           if (!verification.valid) throw new Error(`POLICY_VERIFY_FAILED:${verification.blockers.join(',')}`);
           if (artifact.exactPolicyHeadSha !== process.env.EXACT_HEAD_SHA) throw new Error('POLICY_HEAD_SHA_MISMATCH');
+          if (artifact.policy.policyVersion !== '2') throw new Error('POLICY_VERSION_NOT_V2');
           if (artifact.cohort.policyFrozenAtMs !== Number(process.env.POLICY_FROZEN_AT_MS)) throw new Error('POLICY_FREEZE_TIMESTAMP_MISMATCH');
           if (artifact.cohort.cohortEligibleAfterMs <= artifact.cohort.policyFrozenAtMs) throw new Error('COHORT_NOT_STRICTLY_PROSPECTIVE');
-          if (artifact.cohort.historicalObservationCredit !== 0
-            || artifact.cohort.replayCredit !== 0
-            || artifact.cohort.backfillCredit !== 0
-            || artifact.cohort.duplicateCredit !== 0) throw new Error('NON_GENUINE_CREDIT_FORBIDDEN');
-          if (artifact.readiness.FULL_COST_READY !== false || artifact.readiness.EVIDENCE_COMPLETE !== 0) {
+          if (artifact.supersedes.supersededBeforeFirstSample !== true || artifact.supersedes.priorProspectiveSampleCredit !== 0) {
+            throw new Error('V1_SUPERSEDE_BOUNDARY_INVALID');
+          }
+          if (artifact.captureSelectionPolicy.triggerType !== CAPTURE_TRIGGER_TYPE
+            || artifact.captureSelectionPolicy.slotIntervalMs !== 30 * 60 * 1000
+            || artifact.captureSelectionPolicy.completeWindowAttemptLogRequired !== true
+            || artifact.captureSelectionPolicy.manualDispatchCredit !== 0
+            || artifact.captureSelectionPolicy.operatorSelectedDispatchCredit !== 0
+            || artifact.captureSelectionPolicy.scheduleActivationRequired !== true) {
+            throw new Error('CAPTURE_SELECTION_FIREWALL_INVALID');
+          }
+          if (artifact.readiness.CAPTURE_SCHEDULE_ACTIVATED !== false
+            || artifact.readiness.NEW_PROSPECTIVE_SAMPLE_N !== 0
+            || artifact.readiness.FULL_COST_READY !== false
+            || artifact.readiness.EVIDENCE_COMPLETE !== 0) {
             throw new Error('POLICY_ARTIFACT_AUTHORITY_ESCALATION');
           }
           if (artifact.safety.executionAuthority !== 'NONE'
             || artifact.safety.privateApiUsed !== false
             || artifact.safety.liveTrading !== false
-            || artifact.safety.orderSubmitted !== false) throw new Error('POLICY_ARTIFACT_SAFETY_INVALID');
+            || artifact.safety.orderSubmitted !== false
+            || artifact.safety.scheduleActivationPerformed !== false) throw new Error('POLICY_ARTIFACT_SAFETY_INVALID');
           NODE
 
-      - name: Upload immutable prospective policy candidate
+      - name: Upload immutable prospective policy V2
         uses: actions/upload-artifact@v4
         with:
-          name: public-forward-liquidity-prospective-policy-${{ github.event.pull_request.head.sha }}
+          name: public-forward-liquidity-prospective-policy-v2-${{ github.event.pull_request.head.sha }}
           path: public-forward-liquidity-prospective-policy
           if-no-files-found: error
           retention-days: 90
