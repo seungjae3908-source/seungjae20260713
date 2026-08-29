@@ -12,7 +12,7 @@
   "collectorCodeSha": "8044d5cb136eb30a531608392c73a45be601e5ba",
   "collectorCodeShaSemantics": "GIT_BLOB_SHA1_OF_CANONICAL_COLLECTOR_IMPLEMENTATION",
   "runtimeCollectorCodeShaRule": "EQUALS_EXACT_MAIN_SHA_AT_RUN",
-  "seamSourceBlobSha": "5517fdd1e18e24c4246db46b9d2560d181b94d04",
+  "seamSourceBlobSha": "7bd8d4342ae397556ccbaa4b63ed4d4629869f0f",
   "seamRunnerBlobSha": "63de1d006fa234a97580b8116538942e67aec864",
   "slotExecutionRule": "FIRST_WHOLE_MINUTE_STRICTLY_AT_OR_AFTER_COHORT_ELIGIBLE_THEN_EXACT_30_MINUTE_SEQUENCE",
   "firstNominalScheduledAtMs": 1788129780000,
@@ -75,7 +75,7 @@
   "backfillCredit": 0,
   "operatorSelectedCredit": 0,
   "scheduleActivated": false,
-  "createdAt": "2026-08-29T23:12:12.000Z",
+  "createdAt": "2026-08-29T23:19:09.000Z",
   "initialCompleteWindowAttemptLog": {
     "schemaVersion": "public-forward-liquidity-complete-window-attempt-log-v1",
     "asOfMs": 1788129739999,
@@ -119,5 +119,5 @@
     "fullCostReady": false,
     "evidenceComplete": 0
   },
-  "activationContractDigest": "0d76788a7623e8a9c7e37a20f7b30049b09951ebcbd9af243044cda9763598f5"
+  "activationContractDigest": "8cc6a8aded51f833103d110f6409ac503014d9908c93cabe801010ff46b85892"
 }
