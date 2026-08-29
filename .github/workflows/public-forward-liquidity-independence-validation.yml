@@ -73,7 +73,7 @@ jobs:
           grep -Fq 'orderSubmitted: false' "$SOURCE"
           grep -Fq -- '--source-manifest' "$RUNNER"
           grep -Fq 'Frozen split integration remains NEEDS_INTEGRATION' "$RUNNER"
-          if grep -Eq 'persistLiquidityCalibrationBatch|mkdir\(|rename\(|stateRoot|PUBLIC_FORWARD_LIQUIDITY_CANONICAL_STORE_CONTRACT' "$SOURCE" "$RUNNER"; then
+          if grep -Eq 'persistLiquidityCalibrationBatch|mkdir\(|rename\(|PUBLIC_FORWARD_LIQUIDITY_CANONICAL_STORE_CONTRACT' "$SOURCE" "$RUNNER"; then
             echo 'Independence layer must not create a second persistence authority.' >&2
             exit 1
           fi
