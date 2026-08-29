@@ -28,6 +28,7 @@ export const PUBLIC_FORWARD_LIQUIDITY_INDEPENDENCE_SAFETY = Object.freeze({
   upstreamCanonicalIngestSsotRequired: true,
   rawPersistenceAuthority: PUBLIC_FORWARD_LIQUIDITY_CAPTURE_INGEST_RECEIPT_VERSION,
   upstreamIngestReceiptRequired: true,
+  collectorImplementationBlobRequired: true,
   crossCollectorCanonicalDatasetSynthesisAllowed: false,
   derivedAuditPersistenceOwned: false,
   rawAcceptedNDescriptiveOnly: true,
@@ -55,6 +56,8 @@ export const PUBLIC_FORWARD_LIQUIDITY_INDEPENDENCE_SAFETY = Object.freeze({
 const SHA256 = /^[a-f0-9]{64}$/u;
 const COMMIT_SHA = /^[a-f0-9]{40}$/u;
 const DECIMAL_ID = /^[0-9]+$/u;
+const COLLECTOR_IMPLEMENTATION_PATH =
+  'market-intelligence-sidecar/src/public-forward-liquidity-calibration.mjs';
 
 function object(value, code) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(code);
@@ -475,6 +478,13 @@ function validateBoundSource(input, producerCodeSha) {
     || receipt.storeContract !== dataset.storeContract) {
     throw new Error('UPSTREAM_RECEIPT_DATASET_CONTRACT_MISMATCH');
   }
+  if (receipt.collectorImplementationPath !== COLLECTOR_IMPLEMENTATION_PATH) {
+    throw new Error('UPSTREAM_COLLECTOR_IMPLEMENTATION_PATH_INVALID');
+  }
+  const collectorImplementationBlobSha = exactSha(
+    receipt.collectorImplementationBlobSha,
+    'UPSTREAM_COLLECTOR_IMPLEMENTATION_BLOB_INVALID',
+  );
   const predecessorDatasetDigest = dataset.predecessorDigest ?? null;
   const receiptPredecessorDigest = receipt.predecessorDatasetDigest ?? null;
   if ((predecessorDatasetDigest === null) !== (receiptPredecessorDigest === null)
@@ -519,6 +529,8 @@ function validateBoundSource(input, producerCodeSha) {
     schemaVersion: PUBLIC_FORWARD_LIQUIDITY_BOUND_SOURCE_VERSION,
     producerCodeSha,
     collectorCodeSha,
+    collectorImplementationPath: COLLECTOR_IMPLEMENTATION_PATH,
+    collectorImplementationBlobSha,
     datasetDigest,
     datasetRelativePath,
     receiptDigest,
@@ -601,6 +613,8 @@ export function classifyPublicForwardLiquidityBoundSources({ sources, producerCo
     sourceIdentity: source.sourceIdentity,
     producerCodeSha: source.producerCodeSha,
     collectorCodeSha: source.collectorCodeSha,
+    collectorImplementationPath: source.collectorImplementationPath,
+    collectorImplementationBlobSha: source.collectorImplementationBlobSha,
     datasetDigest: source.datasetDigest,
     datasetRelativePath: source.datasetRelativePath,
     receiptDigest: source.receiptDigest,
