@@ -12,7 +12,7 @@ const NET_ALPHA_IDENTITY = Object.freeze({
   market: 'CRYPTO_SPOT',
   symbol: 'KRW-BTC',
   timeframe: '15m',
-  horizon: 'SCALP',
+  horizon: 15,
   direction: 'BUY',
 });
 
@@ -63,6 +63,7 @@ function authoritativeNetAlpha(overrides = {}) {
     profitabilityProven: true,
     source: 'forward-recommendation-profit-calibration-v2',
     sourceSchemaVersion: 'forward-calibration-gross-edge-v2',
+    grossEvidenceSource: 'LIVE_RECOMMENDATION',
     costSource: 'FULL_COST_EVIDENCE_V1',
     costPolicyVersion: 'cost-v1',
     grossIdentity: { ...NET_ALPHA_IDENTITY },
