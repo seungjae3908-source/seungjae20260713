@@ -239,10 +239,9 @@ function isExpectedAuthFault(request: Request, observation: AuthFaultObservation
   return observation.requests.has(request) && isProfileRequest(request);
 }
 
-function isExpectedLateAiChartCandleAbortIdentity(input: {
+function isAiChartTransitionCandleReadIdentity(input: {
   method: string;
   rawUrl: string;
-  errorText: string | undefined;
   frameRoute: string;
   observation: Pick<RouteTransitionObservation, 'fromRoute' | 'toRoute' | 'origin'>;
 }) {
@@ -254,11 +253,21 @@ function isExpectedLateAiChartCandleAbortIdentity(input: {
       && routeIdentity(input.frameRoute, input.observation.origin) === input.observation.toRoute
       && input.method === 'GET'
       && parsed.origin === input.observation.origin
-      && /^\/api\/stocks\/[^/]+\/candles$/.test(parsed.pathname)
-      && input.errorText === 'net::ERR_ABORTED';
+      && /^\/api\/stocks\/[^/]+\/candles$/.test(parsed.pathname);
   } catch {
     return false;
   }
+}
+
+function isExpectedLateAiChartCandleAbortIdentity(input: {
+  method: string;
+  rawUrl: string;
+  errorText: string | undefined;
+  frameRoute: string;
+  observation: Pick<RouteTransitionObservation, 'fromRoute' | 'toRoute' | 'origin'>;
+}) {
+  return isAiChartTransitionCandleReadIdentity(input)
+    && input.errorText === 'net::ERR_ABORTED';
 }
 
 function isExpectedRouteTransitionAbort(
@@ -345,7 +354,18 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
     if (isSameOriginApiGet(request)) {
       apiGets.add(request);
       const routeObservation = activeRouteTransitionObservations.get(page);
-      if (routeObservation && routeIdentity(page.url()) === routeObservation.fromRoute) {
+      if (
+        routeObservation
+        && (
+          routeIdentity(page.url()) === routeObservation.fromRoute
+          || isAiChartTransitionCandleReadIdentity({
+            method: request.method(),
+            rawUrl: request.url(),
+            frameRoute: request.frame().url(),
+            observation: routeObservation,
+          })
+        )
+      ) {
         routeObservation.pendingGetRequests.add(request);
       }
     }
@@ -531,20 +551,28 @@ async function finishRouteTransition(
   observation: RouteTransitionObservation,
   confirmed: boolean,
 ) {
+  const fromPath = new URL(observation.fromRoute, observation.origin).pathname;
+  let quietSince: number | null = null;
   await expect.poll(
     () => {
       const pending = pendingApiGetRequests.get(page);
-      if (!pending) return 0;
-      return [...observation.pendingGetRequests]
-        .filter((request) => pending.has(request))
-        .length;
+      const pendingCount = pending
+        ? [...observation.pendingGetRequests].filter((request) => pending.has(request)).length
+        : 0;
+      if (pendingCount > 0) {
+        quietSince = null;
+        return 'pending';
+      }
+      if (fromPath !== '/ai-chart') return 'settled';
+      if (quietSince === null) quietSince = Date.now();
+      return Date.now() - quietSince >= 500 ? 'settled' : 'quiet';
     },
     {
-      message: 'pre-navigation GET requests must settle before route observation closes',
+      message: 'route-transition GET requests must settle before route observation closes',
       timeout: 15_000,
       intervals: [100, 200, 300, 500],
     },
-  ).toBe(0);
+  ).toBe('settled');
 
   activeRouteTransitionObservations.delete(page);
   if (confirmed) {
@@ -1104,12 +1132,25 @@ test('logout abort proof keeps session-scoped account reads exact and query-free
   expect(isLogoutScopedReadIdentity('GET', 'https://other.example.test/api/accounts/read-only/toss', origin)).toBe(false);
 
   const observation = { fromRoute: '/ai-chart', toRoute: '/portfolio', origin };
-  const lateCandleAbort = {
+  const lateCandleRead = {
     method: 'GET',
     rawUrl: `${origin}/api/stocks/005930/candles?tf=1D`,
-    errorText: 'net::ERR_ABORTED',
     frameRoute: `${origin}/portfolio`,
     observation,
+  };
+  expect(isAiChartTransitionCandleReadIdentity(lateCandleRead)).toBe(true);
+  expect(isAiChartTransitionCandleReadIdentity({ ...lateCandleRead, method: 'POST' })).toBe(false);
+  expect(isAiChartTransitionCandleReadIdentity({ ...lateCandleRead, rawUrl: `${origin}/api/stocks/005930/chart` })).toBe(false);
+  expect(isAiChartTransitionCandleReadIdentity({ ...lateCandleRead, rawUrl: 'https://other.example.test/api/stocks/005930/candles' })).toBe(false);
+  expect(isAiChartTransitionCandleReadIdentity({ ...lateCandleRead, frameRoute: `${origin}/ai-chart` })).toBe(false);
+  expect(isAiChartTransitionCandleReadIdentity({
+    ...lateCandleRead,
+    observation: { ...observation, fromRoute: '/scanner' },
+  })).toBe(false);
+
+  const lateCandleAbort = {
+    ...lateCandleRead,
+    errorText: 'net::ERR_ABORTED',
   };
   expect(isExpectedLateAiChartCandleAbortIdentity(lateCandleAbort)).toBe(true);
   expect(isExpectedLateAiChartCandleAbortIdentity({ ...lateCandleAbort, method: 'POST' })).toBe(false);
