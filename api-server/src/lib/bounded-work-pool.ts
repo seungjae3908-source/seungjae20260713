@@ -1,3 +1,11 @@
+import {
+  ProviderAdmissionError,
+  processWideProviderAdmission,
+  type ProviderAdmissionControl,
+  type ProviderAdmissionExecution,
+  type ProviderAdmissionIdentity,
+} from './provider-admission-control';
+
 export type BoundedWorkStatus = 'fulfilled' | 'rejected' | 'timed_out';
 
 export interface BoundedWorkOutcome<Result> {
@@ -14,6 +22,10 @@ export interface BoundedWorkPoolOptions {
   itemTimeoutMs: number;
   signal?: AbortSignal;
   now?: () => number;
+  admission?: false | {
+    control?: ProviderAdmissionControl;
+    identity: ProviderAdmissionIdentity;
+  };
 }
 
 export interface BoundedWorkPoolResult<Result> {
@@ -28,11 +40,47 @@ export interface BoundedWorkPoolResult<Result> {
   maxConcurrency: number;
 }
 
+export type BoundedWorkAvailabilityCode =
+  | 'CAPACITY_EXHAUSTED'
+  | 'CIRCUIT_OPEN'
+  | 'PROVIDER_TIMEOUT'
+  | 'PROVIDER_FAILURE'
+  | 'MISSING_EVIDENCE';
+
+export interface BoundedWorkAvailability {
+  partial: boolean;
+  failureCode: BoundedWorkAvailabilityCode | null;
+}
+
 export class BoundedWorkTimeoutError extends Error {
   constructor(readonly timeoutMs: number) {
     super(`Bounded work item exceeded ${timeoutMs}ms`);
     this.name = 'BoundedWorkTimeoutError';
   }
+}
+
+export function summarizeBoundedWorkAvailability<Result>(
+  result: BoundedWorkPoolResult<Result>,
+  requestedCount: number,
+): BoundedWorkAvailability {
+  const admissionCodes = result.outcomes.flatMap((outcome) => (
+    outcome.reason instanceof ProviderAdmissionError ? [outcome.reason.code] : []
+  ));
+  const failureCode: BoundedWorkAvailabilityCode | null = admissionCodes.includes('CIRCUIT_OPEN')
+    ? 'CIRCUIT_OPEN'
+    : admissionCodes.includes('CAPACITY_EXHAUSTED')
+      ? 'CAPACITY_EXHAUSTED'
+      : result.timedOutCount > 0
+        ? 'PROVIDER_TIMEOUT'
+        : result.rejectedCount > 0
+          ? 'PROVIDER_FAILURE'
+          : result.deadlineReached || result.startedCount < requestedCount
+            ? 'MISSING_EVIDENCE'
+            : null;
+  return {
+    partial: failureCode != null || result.aborted,
+    failureCode,
+  };
 }
 
 function positiveInteger(value: number, label: string): number {
@@ -89,6 +137,14 @@ export async function runBoundedWorkPool<Item, Result>(
   const deadlineMs = positiveInteger(options.deadlineMs, 'deadlineMs');
   const itemTimeoutMs = positiveInteger(options.itemTimeoutMs, 'itemTimeoutMs');
   const now = options.now ?? Date.now;
+  const admission = options.admission === false || options.admission == null
+    ? null
+    : options.admission;
+  if (admission && !admission.identity) {
+    throw new Error('admission.identity is required for process-wide provider isolation');
+  }
+  const admissionControl = admission?.control ?? (admission ? processWideProviderAdmission : null);
+  const admissionIdentity = admission?.identity;
   const startedAt = now();
   const deadlineAt = startedAt + deadlineMs;
   const outcomes: BoundedWorkOutcome<Result>[] = [];
@@ -123,16 +179,26 @@ export async function runBoundedWorkPool<Item, Result>(
       const remainingMs = Math.max(1, deadlineAt - itemStartedAt);
       const timeoutMs = Math.min(itemTimeoutMs, remainingMs);
       const controller = new AbortController();
-      activeControllers.add(controller);
-      activeCount += 1;
-      maxConcurrency = Math.max(maxConcurrency, activeCount);
+      let retireLane = false;
+      let admitted: ProviderAdmissionExecution<Result> | null = null;
 
       try {
+        if (admissionControl && admissionIdentity) {
+          admitted = admissionControl.start(
+            admissionIdentity,
+            () => worker(items[index], index, controller.signal),
+            controller.signal,
+          );
+        }
+        activeControllers.add(controller);
+        activeCount += 1;
+        maxConcurrency = Math.max(maxConcurrency, activeCount);
         const value = await runWithTimeout(
-          worker(items[index], index, controller.signal),
+          admitted?.task ?? worker(items[index], index, controller.signal),
           controller,
           timeoutMs,
         );
+        admitted?.lease.markCompleted();
         outcomes.push({
           index,
           status: 'fulfilled',
@@ -141,8 +207,16 @@ export async function runBoundedWorkPool<Item, Result>(
         });
       } catch (reason) {
         const timedOut = reason instanceof BoundedWorkTimeoutError;
-        if (timedOut && timeoutMs === remainingMs) {
-          deadlineExhausted = true;
+        if (timedOut) admitted?.lease.markTimedOut();
+        else if (controller.signal.aborted) admitted?.lease.markAborted();
+        else admitted?.lease.markRejected();
+        if (timedOut) {
+          // AbortSignal is cooperative. A provider may ignore it and keep consuming
+          // sockets/CPU after the logical timeout. Retiring this lane prevents the
+          // pool from repeatedly replacing still-running work and exceeding the
+          // configured real concurrency ceiling.
+          retireLane = true;
+          if (timeoutMs === remainingMs) deadlineExhausted = true;
         }
         outcomes.push({
           index,
@@ -151,9 +225,13 @@ export async function runBoundedWorkPool<Item, Result>(
           elapsedMs: Math.max(0, now() - itemStartedAt),
         });
       } finally {
-        activeCount -= 1;
+        if (admitted || activeControllers.has(controller)) {
+          activeCount = Math.max(0, activeCount - 1);
+        }
         activeControllers.delete(controller);
       }
+
+      if (retireLane) return;
     }
   };
 

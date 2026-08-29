@@ -1,9 +1,14 @@
-import { ChevronRight, ExternalLink, ShieldCheck } from "lucide-react";
+import { ChevronRight, ExternalLink } from "lucide-react";
 import { Panel } from "@/components/ui-bits";
 import { SourceLogo } from "@/components/source-logo";
 import { LoadingState, ErrorState } from "@/components/data-state";
 import { useNews } from "@/hooks/use-stock-data";
 import { toneText, type Tone } from "@/lib/labels";
+import {
+  newsEvidenceDisplay,
+  type NewsEvidenceProvenance,
+  type NewsRelevanceProvenance,
+} from "@/lib/news-evidence-display";
 import { cn } from "@/lib/utils";
 import { ApiError, type NewsItem } from "@/lib/api";
 
@@ -11,6 +16,13 @@ type ExtendedNewsItem = NewsItem & {
   reliability?: number;
   summary?: string;
   impact?: string;
+  provider?: string;
+  publishedAt?: string;
+  collectedAt?: string;
+  relevanceProvenance?: NewsRelevanceProvenance;
+  confidenceProvenance?: NewsEvidenceProvenance;
+  summaryProvenance?: NewsEvidenceProvenance;
+  impactProvenance?: NewsEvidenceProvenance;
 };
 
 function sentimentTone(score: number): Tone {
@@ -19,69 +31,24 @@ function sentimentTone(score: number): Tone {
   return "warning";
 }
 
-function openNews(url?: string) {
-  if (!url || !url.startsWith("http")) {
-    alert("원문 링크를 사용할 수 없습니다.");
-    return;
-  }
+function keywordToneLabel(tone: ExtendedNewsItem["tone"]): string {
+  if (tone === "positive") return "긍정";
+  if (tone === "negative") return "부정";
+  return "중립";
+}
 
+function usableNewsUrl(url?: string): string | null {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function openNews(url: string) {
   window.open(url, "_blank", "noopener,noreferrer");
-}
-
-function sourceAccuracy(item: ExtendedNewsItem): number {
-  if (typeof item.reliability === "number") return item.reliability;
-
-  const s = (item.source || "").toLowerCase();
-
-  if (
-    s.includes("reuters") ||
-    s.includes("bloomberg") ||
-    s.includes("wall street") ||
-    s.includes("연합") ||
-    s.includes("한국경제")
-  ) {
-    return 95;
-  }
-
-  if (
-    s.includes("cnbc") ||
-    s.includes("marketwatch") ||
-    s.includes("매일경제") ||
-    s.includes("서울경제") ||
-    s.includes("이데일리")
-  ) {
-    return 88;
-  }
-
-  return 75;
-}
-
-function accuracyLabel(score: number) {
-  if (score >= 90) return "매우 높음";
-  if (score >= 80) return "높음";
-  if (score >= 70) return "보통";
-  return "낮음";
-}
-
-function impactLabel(item: ExtendedNewsItem) {
-  if (item.impact) return item.impact;
-  if (item.tone === "positive") return "주가 영향: 긍정";
-  if (item.tone === "negative") return "주가 영향: 부정";
-  return "주가 영향: 보통";
-}
-
-function summaryText(item: ExtendedNewsItem) {
-  if (item.summary) return item.summary;
-
-  if (item.tone === "positive") {
-    return "AI 요약: 이 뉴스는 투자 심리와 단기 수급에 긍정적으로 작용할 수 있습니다.";
-  }
-
-  if (item.tone === "negative") {
-    return "AI 요약: 이 뉴스는 변동성 확대와 단기 투자심리 위축 요인으로 볼 수 있습니다.";
-  }
-
-  return "AI 요약: 해당 뉴스는 종목의 단기 흐름에 영향을 줄 수 있습니다.";
 }
 
 function NewsList({ items }: { items: ExtendedNewsItem[] }) {
@@ -92,13 +59,16 @@ function NewsList({ items }: { items: ExtendedNewsItem[] }) {
   return (
     <ul className="space-y-2">
       {items.map((n, i) => {
-        const accuracy = sourceAccuracy(n);
+        const evidence = newsEvidenceDisplay(n);
+        const newsUrl = usableNewsUrl(n.url);
 
         return (
-          <li key={i}>
+          <li key={`${n.sourceDomain}:${n.title}:${i}`}>
             <button
-              onClick={() => openNews(n.url)}
-              className="w-full rounded-xl bg-secondary/40 p-3 text-left transition-colors hover:bg-secondary/70"
+              type="button"
+              onClick={() => newsUrl && openNews(newsUrl)}
+              disabled={!newsUrl}
+              className="w-full rounded-xl bg-secondary/40 p-3 text-left transition-colors hover:bg-secondary/70 disabled:cursor-default disabled:hover:bg-secondary/40"
             >
               <div className="flex items-start gap-3">
                 <SourceLogo domain={n.sourceDomain} name={n.source} />
@@ -108,38 +78,50 @@ function NewsList({ items }: { items: ExtendedNewsItem[] }) {
                     {n.title}
                   </div>
 
-                  <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
-                    <span>출처: {n.source}</span>
-                    <span>·</span>
-                    <span className="font-mono">{n.date}</span>
-                  </div>
-
-                  <div className="mt-2 break-keep text-xs leading-relaxed text-muted-foreground">
-                    {summaryText(n)}
+                  <div className="mt-2 grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
+                    <span>언론사: {n.source || "미제공"}</span>
+                    <span>공급자: {evidence.provider ?? "미제공"}</span>
+                    <span className="font-mono">기사 발행: {evidence.publishedAt ?? (n.date || "미제공")}</span>
+                    <span className="font-mono">앱 수집: {evidence.collectedAt ?? "미제공"}</span>
                   </div>
 
                   <div className="mt-2 flex flex-wrap gap-2 text-xs">
-                    <span className="rounded-full bg-primary/15 px-2 py-1 text-primary">
-                      정확도 {accuracy}%
-                    </span>
-
                     <span className="rounded-full bg-muted px-2 py-1 text-muted-foreground">
-                      신뢰도 {accuracyLabel(accuracy)}
+                      키워드 분류: {keywordToneLabel(n.tone)}
                     </span>
+                    <span className="rounded-full bg-muted px-2 py-1 text-muted-foreground">
+                      {evidence.relevanceLabel}
+                    </span>
+                  </div>
 
-                    <span className="rounded-full bg-green-500/15 px-2 py-1 text-green-400">
-                      <ShieldCheck className="mr-1 inline h-3 w-3" />
-                      출처 확인
-                    </span>
+                  <div className="mt-2 break-keep text-xs leading-relaxed text-muted-foreground">
+                    {evidence.summary ? `제공 요약: ${evidence.summary}` : "요약: 공급자 근거 미제공"}
+                  </div>
+
+                  <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                    {evidence.reliabilityScore == null ? (
+                      <span className="rounded-full bg-muted px-2 py-1 text-muted-foreground">
+                        신뢰도: 공급자 미제공
+                      </span>
+                    ) : (
+                      <>
+                        <span className="rounded-full bg-primary/15 px-2 py-1 text-primary">
+                          제공 신뢰도 {evidence.reliabilityScore}%
+                        </span>
+                        <span className="rounded-full bg-muted px-2 py-1 text-muted-foreground">
+                          신뢰도 {evidence.reliabilityLabel} · 공급자 제공
+                        </span>
+                      </>
+                    )}
 
                     <span className="rounded-full bg-blue-500/15 px-2 py-1 text-blue-400">
                       <ExternalLink className="mr-1 inline h-3 w-3" />
-                      원문 보기
+                      {newsUrl ? "원문 보기" : "원문 링크 미제공"}
                     </span>
                   </div>
 
                   <div className="mt-2 text-xs font-medium text-muted-foreground">
-                    {impactLabel(n)}
+                    {evidence.impact ? `제공 영향: ${evidence.impact}` : "주가 영향: 공급자 근거 미제공"}
                   </div>
                 </div>
 
@@ -176,10 +158,11 @@ export function NewsTab({
   }
 
   const tone = sentimentTone(data.sentimentScore);
+  const neutral = (data.news ?? []).filter((item) => item.tone === "neutral");
 
   return (
     <div className="space-y-3">
-      <Panel title="뉴스 감성 점수">
+      <Panel title="뉴스 키워드 감성 점수">
         <div className="flex items-center gap-4">
           <span className={cn("font-mono text-3xl font-bold", toneText(tone))}>
             {data.sentimentScore > 0 ? "+" : ""}
@@ -219,15 +202,24 @@ export function NewsTab({
             </div>
           </div>
         </div>
+        <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+          제목·공급자 제공 요약의 제한된 키워드 분류입니다. 검색 결과의 관련성, 신뢰도, 실제 주가 영향은 별도 근거 없이는 검증된 것으로 표시하지 않습니다.
+        </p>
       </Panel>
 
-      <Panel title={`호재 뉴스 (${data.positive.length})`}>
+      <Panel title={`긍정 키워드 뉴스 (${data.positive.length})`}>
         <NewsList items={data.positive as ExtendedNewsItem[]} />
       </Panel>
 
-      <Panel title={`악재 뉴스 (${data.negative.length})`}>
+      <Panel title={`부정 키워드 뉴스 (${data.negative.length})`}>
         <NewsList items={data.negative as ExtendedNewsItem[]} />
       </Panel>
+
+      {neutral.length > 0 ? (
+        <Panel title={`중립·분류 근거 부족 뉴스 (${neutral.length})`}>
+          <NewsList items={neutral as ExtendedNewsItem[]} />
+        </Panel>
+      ) : null}
     </div>
   );
 }

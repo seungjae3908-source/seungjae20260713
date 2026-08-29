@@ -8,14 +8,14 @@ export type CanonicalAccount = { market: 'KR' | 'US' | 'UPBIT' | 'BITGET'; accou
 
 export type CanonicalAccountSnapshot = {
   provider: AccountProvider; readOnly: true; connected: boolean; status: AccountReadStatus;
-  accounts: CanonicalAccount[]; balances: CanonicalBalance[]; positions: CanonicalPosition[]; openOrders: CanonicalReadonlyOrder[];
+  accounts: CanonicalAccount[] | null; balances: CanonicalBalance[] | null; positions: CanonicalPosition[] | null; openOrders: CanonicalReadonlyOrder[] | null;
   checkedAt: string; lastGoodAt: string | null; stale: boolean; errorCode: string | null;
   orderRequests: 0; cancelRequests: 0; amendRequests: 0; transferRequests: 0; withdrawalRequests: 0;
   credentialsReturned: false; liveTradingEnabled: false; autoTradingEnabled: false;
 };
 
 export function emptySnapshot(provider: AccountProvider, status: AccountReadStatus, checkedAt: string, errorCode: string | null = null): CanonicalAccountSnapshot {
-  return { provider, readOnly: true, connected: false, status, accounts: [], balances: [], positions: [], openOrders: [], checkedAt, lastGoodAt: null, stale: status === 'STALE', errorCode, orderRequests: 0, cancelRequests: 0, amendRequests: 0, transferRequests: 0, withdrawalRequests: 0, credentialsReturned: false, liveTradingEnabled: false, autoTradingEnabled: false };
+  return { provider, readOnly: true, connected: false, status, accounts: null, balances: null, positions: null, openOrders: null, checkedAt, lastGoodAt: null, stale: status === 'STALE', errorCode, orderRequests: 0, cancelRequests: 0, amendRequests: 0, transferRequests: 0, withdrawalRequests: 0, credentialsReturned: false, liveTradingEnabled: false, autoTradingEnabled: false };
 }
 
 export function nullableNumber(value: unknown): number | null {

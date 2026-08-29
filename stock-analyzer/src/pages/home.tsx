@@ -6,6 +6,7 @@ import { BottomNav } from '@/components/bottom-nav';
 import { CenteredPageHeader } from '@/components/centered-page-header';
 import { ResponsiveTabs } from '@/components/responsive-tabs';
 import { UnifiedAssetSearch } from '@/components/unified-asset-search';
+import { ADAPTIVE_VIEWPORT_BREAKPOINTS } from '@/lib/adaptive-layout';
 import { useAnalysisSelection, type AnalysisTradeAction } from '@/lib/analysis-selection';
 import { apiGet, type SummaryItem } from '@/lib/api';
 import { useAssetMode } from '@/lib/asset-mode';
@@ -82,7 +83,7 @@ function actionLabel(action: AnalysisTradeAction | undefined): string {
 }
 
 function useDesktopHome(): boolean {
-  const query = '(min-width: 1024px)';
+  const query = `(min-width: ${ADAPTIVE_VIEWPORT_BREAKPOINTS.desktopMin}px)`;
   const [desktop, setDesktop] = useState(() => typeof window !== 'undefined' && window.matchMedia(query).matches);
 
   useEffect(() => {
@@ -91,7 +92,7 @@ function useDesktopHome(): boolean {
     update();
     media.addEventListener('change', update);
     return () => media.removeEventListener('change', update);
-  }, []);
+  }, [query]);
 
   return desktop;
 }

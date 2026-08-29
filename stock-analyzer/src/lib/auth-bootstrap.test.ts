@@ -5,6 +5,7 @@ import {
   reconcileInitialSessionProfile,
   runFiniteAuthBootstrap,
   shouldReconcileInitialSession,
+  shouldRecoverDeferredInitialSession,
   withFiniteDeadline,
 } from './auth-bootstrap';
 
@@ -103,6 +104,32 @@ test('INITIAL_SESSION only reconciles a restored authenticated identity that is 
     incomingUserId: 'user-1',
     currentUserId: null,
     hasProfile: false,
+  }), false);
+});
+
+test('deferred INITIAL_SESSION does not duplicate a same-identity profile bootstrap', () => {
+  assert.equal(shouldRecoverDeferredInitialSession({
+    incomingUserId: 'user-1',
+    initialBootstrapUserId: 'user-1',
+  }), false);
+});
+
+test('deferred INITIAL_SESSION recovers null, failed, or changed bootstrap identity', () => {
+  assert.equal(shouldRecoverDeferredInitialSession({
+    incomingUserId: 'user-1',
+    initialBootstrapUserId: null,
+  }), true);
+  assert.equal(shouldRecoverDeferredInitialSession({
+    incomingUserId: 'user-1',
+    initialBootstrapUserId: undefined,
+  }), true);
+  assert.equal(shouldRecoverDeferredInitialSession({
+    incomingUserId: 'user-2',
+    initialBootstrapUserId: 'user-1',
+  }), true);
+  assert.equal(shouldRecoverDeferredInitialSession({
+    incomingUserId: null,
+    initialBootstrapUserId: null,
   }), false);
 });
 

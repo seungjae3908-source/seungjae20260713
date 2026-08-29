@@ -139,7 +139,13 @@ function canonicalExitCandidate() {
   return decision.candidate;
 }
 
-function runtime({ status = "PAPER_CANDIDATES_READY", candidates = [candidate()], exits = [], outcome = "TRADE_CANDIDATES" } = {}) {
+function runtime({
+  status = "PAPER_CANDIDATES_READY",
+  candidates = [candidate()],
+  exits = [],
+  outcome = "TRADE_CANDIDATES",
+  naturalMetadata = {},
+} = {}) {
   return Object.freeze({
     market: "CRYPTO_SPOT",
     status,
@@ -152,7 +158,95 @@ function runtime({ status = "PAPER_CANDIDATES_READY", candidates = [candidate()]
     privateTradingApiAllowed: false,
     orderSubmitted: false,
     exchangeRequestSent: false,
+    ...naturalMetadata,
   });
+}
+
+function exitConditionObservation(value, requirementsSatisfied) {
+  return Object.freeze({
+    schemaVersion: "canonical-paper-exit-condition-evidence-v1",
+    status: "MEASURED",
+    exitEvaluationCount: 1,
+    observations: Object.freeze([Object.freeze({
+      status: "MEASURED",
+      observationId: value.signal.signalId,
+      evaluated: true,
+      requirementsSatisfied,
+      executionIntent: requirementsSatisfied ? "EXIT" : "NONE",
+      sourceCode: requirementsSatisfied ? "EXIT_REQUIREMENTS_SATISFIED" : "EXIT_REQUIREMENTS_NOT_SATISFIED",
+      sourceReason: requirementsSatisfied ? "LONG_EXIT" : "ENTRY_ONLY",
+      provenance: "exit-condition-fixture",
+      observedAt: NOW,
+      paperIdentity: value.paperIdentity,
+      naturalCredit: 0,
+      replayCredit: 0,
+      duplicateCredit: 0,
+    })]),
+  });
+}
+
+function openPositionFor(value) {
+  return Object.freeze({
+    positionId: "position-1",
+    market: value.paperIdentity.market,
+    strategyId: value.paperIdentity.strategyId,
+    strategyVersion: value.paperIdentity.strategyVersion,
+    parameterHash: value.paperIdentity.parameterHash,
+    researchCodeSha: value.paperIdentity.researchCodeSha,
+    costPolicyVersion: value.paperIdentity.costPolicyVersion,
+    sample: Object.freeze({
+      identity: Object.freeze({
+        market: value.paperIdentity.market,
+        symbol: value.paperIdentity.symbol,
+        timeframe: value.paperIdentity.timeframe,
+        horizon: value.paperIdentity.horizon,
+        strategyId: value.paperIdentity.strategyId,
+        strategyVersion: value.paperIdentity.strategyVersion,
+        parameterHash: value.paperIdentity.parameterHash,
+        researchCodeSha: value.paperIdentity.researchCodeSha,
+      }),
+      profitEvidence: Object.freeze({ costPolicyId: value.paperIdentity.costPolicyVersion }),
+    }),
+  });
+}
+
+function naturalMetadata() {
+  const datasetIdentity = "natural-dataset-identity-1";
+  return Object.freeze({
+    naturalFunnelMeasurements: Object.freeze([
+      Object.freeze({ stage: "CANDIDATE", status: "MEASURED", count: 2, blocker: null }),
+      Object.freeze({ stage: "EVIDENCE_COMPLETE", status: "MEASURED", count: 0, blocker: null }),
+    ]),
+    naturalFirstZeroStage: "EVIDENCE_COMPLETE",
+    naturalFirstZeroReason: "MEASURED_ZERO",
+    naturalEvidenceIdentity: datasetIdentity,
+    naturalRuntimeSha: SHA,
+    authoritativeFirstZeroReasonEvidenceByStage: Object.freeze({
+      EVIDENCE_COMPLETE: Object.freeze({
+        authoritative: true,
+        freshness: "FRESH",
+        reasonCode: "P0_C9_AUTHORITATIVE_EVIDENCE_SOURCE_MISSING",
+        strategySha: SHA,
+        runtimeSha: SHA,
+        datasetIdentity,
+        synthetic: false,
+        historical: false,
+        replay: false,
+      }),
+    }),
+  });
+}
+
+function assertNaturalMetadataPreserved(source, expected) {
+  assert.deepEqual(source.naturalFunnelMeasurements, expected.naturalFunnelMeasurements);
+  assert.equal(source.naturalFirstZeroStage, expected.naturalFirstZeroStage);
+  assert.equal(source.naturalFirstZeroReason, expected.naturalFirstZeroReason);
+  assert.equal(source.naturalEvidenceIdentity, expected.naturalEvidenceIdentity);
+  assert.equal(source.naturalRuntimeSha, expected.naturalRuntimeSha);
+  assert.deepEqual(
+    source.authoritativeFirstZeroReasonEvidenceByStage,
+    expected.authoritativeFirstZeroReasonEvidenceByStage,
+  );
 }
 
 test("scheduled provider attaches canonical eligible Paper candidates without execution authority", async () => {
@@ -169,6 +263,37 @@ test("scheduled provider attaches canonical eligible Paper candidates without ex
   assert.equal(result.paperCandidateSource.status, "PAPER_CANDIDATES_READY");
   assert.equal(result.paperCandidateSource.eligibleCandidates, 1);
   assert.equal(result.blocker, null);
+});
+
+test("scheduled provider preserves authoritative Natural FIRST_ZERO metadata on READY runtime", async () => {
+  const expected = naturalMetadata();
+  const provider = wrapPaperForwardProviderWithMeaningfulSearch({
+    provider: { collectPublicEvidence: async ({ market }) => baseEvidence(market) },
+    paperRuntimeForMarket: async () => runtime({ naturalMetadata: expected }),
+  });
+
+  const result = await provider.collectPublicEvidence({ market: "CRYPTO_SPOT", cycle: { cycleId: "cycle-natural-ready" } });
+  assert.equal(result.status, "READY");
+  assertNaturalMetadataPreserved(result.paperCandidateSource, expected);
+  assert.equal(result.paperCandidateSource.authoritativeFirstZeroReasonEvidenceByStage.EVIDENCE_COMPLETE.authoritative, true);
+});
+
+test("scheduled provider preserves authoritative Natural FIRST_ZERO metadata on BLOCKED runtime", async () => {
+  const expected = naturalMetadata();
+  const provider = wrapPaperForwardProviderWithMeaningfulSearch({
+    provider: { collectPublicEvidence: async ({ market }) => baseEvidence(market) },
+    paperRuntimeForMarket: async () => runtime({
+      status: "SEARCH_FAILURE_BLOCKED",
+      candidates: [],
+      outcome: "SEARCH_FAILURE",
+      naturalMetadata: expected,
+    }),
+  });
+
+  const result = await provider.collectPublicEvidence({ market: "CRYPTO_SPOT", cycle: { cycleId: "cycle-natural-blocked" } });
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.equal(result.blocker, "SEARCH_FAILURE");
+  assertNaturalMetadataPreserved(result.paperCandidateSource, expected);
 });
 
 test("ENTRY still requires Profit-First cost evidence", async () => {
@@ -201,6 +326,70 @@ test("canonical EXIT keeps exact identity without requiring entry-only ProfitEvi
   assert.equal(result.exits[0].paperIdentity.researchCodeSha, SHA);
   assert.equal(result.exits[0].profitEvidence, undefined);
   assert.equal(result.blocker, null);
+});
+
+test("exit condition evaluation without an open-position match is measured but not exitEligible", async () => {
+  const exit = canonicalExitCandidate();
+  const provider = wrapPaperForwardProviderWithMeaningfulSearch({
+    provider: { collectPublicEvidence: async ({ market }) => baseEvidence(market) },
+    paperRuntimeForMarket: async () => runtime({
+      candidates: [],
+      exits: [exit],
+      naturalMetadata: { exitConditionEvidence: exitConditionObservation(exit, true) },
+    }),
+  });
+
+  const result = await provider.collectPublicEvidence({ market: "CRYPTO_SPOT", openPositions: [] });
+  const evidence = result.paperCandidateSource.exitEligibilityEvidence;
+  assert.equal(evidence.status, "MEASURED");
+  assert.equal(evidence.exitEvaluationCount, 1);
+  assert.equal(evidence.matchedOpenPositionCount, 0);
+  assert.equal(evidence.exitEligibleCount, 0);
+  assert.equal(evidence.reasonObservations[0].sourceCode, "OPEN_POSITION_NOT_MATCHED");
+});
+
+test("matching open position remains non-eligible when exit requirements are not satisfied", async () => {
+  const entryOnly = candidate();
+  const provider = wrapPaperForwardProviderWithMeaningfulSearch({
+    provider: { collectPublicEvidence: async ({ market }) => baseEvidence(market) },
+    paperRuntimeForMarket: async () => runtime({
+      candidates: [entryOnly],
+      exits: [],
+      naturalMetadata: { exitConditionEvidence: exitConditionObservation(entryOnly, false) },
+    }),
+  });
+
+  const result = await provider.collectPublicEvidence({
+    market: "CRYPTO_SPOT",
+    openPositions: [openPositionFor(entryOnly)],
+  });
+  const evidence = result.paperCandidateSource.exitEligibilityEvidence;
+  assert.equal(evidence.exitEvaluationCount, 1);
+  assert.equal(evidence.matchedOpenPositionCount, 1);
+  assert.equal(evidence.exitEligibleCount, 0);
+  assert.equal(evidence.observations[0].matchedPositionId, "position-1");
+});
+
+test("exitEligible requires both satisfied exit requirements and one exact open-position match", async () => {
+  const exit = canonicalExitCandidate();
+  const provider = wrapPaperForwardProviderWithMeaningfulSearch({
+    provider: { collectPublicEvidence: async ({ market }) => baseEvidence(market) },
+    paperRuntimeForMarket: async () => runtime({
+      candidates: [],
+      exits: [exit],
+      naturalMetadata: { exitConditionEvidence: exitConditionObservation(exit, true) },
+    }),
+  });
+
+  const result = await provider.collectPublicEvidence({
+    market: "CRYPTO_SPOT",
+    openPositions: [openPositionFor(exit)],
+  });
+  const evidence = result.paperCandidateSource.exitEligibilityEvidence;
+  assert.equal(evidence.exitEvaluationCount, 1);
+  assert.equal(evidence.matchedOpenPositionCount, 1);
+  assert.equal(evidence.exitEligibleCount, 1);
+  assert.equal(evidence.observations[0].exitEligible, true);
 });
 
 test("EXIT still blocks cost-policy identity mismatch", async () => {

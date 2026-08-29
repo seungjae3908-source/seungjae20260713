@@ -28,6 +28,18 @@ const ROUTES = [
 
 const PROJECTS = new Set([
   'prod-desktop-1440',
+  'prod-fold-768',
+  'prod-tablet-800',
+  'prod-mobile-320',
+  'prod-mobile-360',
+  'prod-mobile-390',
+  'prod-mobile-412',
+  'prod-mobile-430',
+]);
+
+const TOUCH_PROJECTS = new Set([
+  'prod-fold-768',
+  'prod-tablet-800',
   'prod-mobile-320',
   'prod-mobile-360',
   'prod-mobile-390',
@@ -38,10 +50,10 @@ const PROJECTS = new Set([
 type Finding = {
   route: string;
   finalUrl: string;
-  horizontalOverflowPx: number;
-  documentScrollable: boolean;
-  documentScrollMoved: boolean;
-  undersizedInteractiveCount: number;
+  horizontalOverflowPx: number | null;
+  documentScrollable: boolean | null;
+  documentScrollMoved: boolean | null;
+  undersizedInteractiveCount: number | null;
   navigationError: string | null;
 };
 
@@ -121,6 +133,18 @@ test.describe('Production root scroll and mobile geometry read-only QA', () => {
       await page.goto(route, { waitUntil: 'domcontentloaded', timeout: 15_000 }).catch((error) => {
         navigationError = String(error).split('\n')[0].slice(0, 220);
       });
+      if (navigationError) {
+        findings.push({
+          route,
+          finalUrl: page.url(),
+          navigationError,
+          horizontalOverflowPx: null,
+          documentScrollable: null,
+          documentScrollMoved: null,
+          undersizedInteractiveCount: null,
+        });
+        continue;
+      }
       await expect(page.getByTestId('page-fallback')).toHaveCount(0, { timeout: 5_000 }).catch(() => undefined);
       const audit = await auditDocumentScroll(page);
       findings.push({ route, finalUrl: page.url(), navigationError, ...audit });
@@ -128,10 +152,10 @@ test.describe('Production root scroll and mobile geometry read-only QA', () => {
 
     expect(blocked, 'Production scroll QA attempted a blocked mutation').toEqual([]);
     expect(findings.filter((item) => item.navigationError), 'critical route navigation failed').toEqual([]);
-    expect(findings.filter((item) => item.horizontalOverflowPx > 2), 'critical route horizontal overflow detected').toEqual([]);
-    expect(findings.filter((item) => item.documentScrollable && !item.documentScrollMoved), 'document should scroll but root scroll did not move').toEqual([]);
-    if (testInfo.project.name.startsWith('prod-mobile-')) {
-      expect(findings.filter((item) => item.undersizedInteractiveCount > 0), 'mobile interactive controls below 28px detected').toEqual([]);
+    expect(findings.filter((item) => item.horizontalOverflowPx != null && item.horizontalOverflowPx > 2), 'critical route horizontal overflow detected').toEqual([]);
+    expect(findings.filter((item) => item.documentScrollable === true && item.documentScrollMoved === false), 'document should scroll but root scroll did not move').toEqual([]);
+    if (TOUCH_PROJECTS.has(testInfo.project.name)) {
+      expect(findings.filter((item) => item.undersizedInteractiveCount != null && item.undersizedInteractiveCount > 0), 'touch interactive controls below 28px detected').toEqual([]);
     }
     expect(diagnostics, 'browser/runtime failures detected during root-scroll audit').toEqual([]);
   });

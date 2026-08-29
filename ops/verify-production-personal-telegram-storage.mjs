@@ -23,12 +23,17 @@ function verifyStatic() {
     'production-personal-telegram-storage-${{ steps.command.outputs.sha }}',
     'ops/apply-production-personal-telegram-storage.mjs',
     'ops/verify-production-personal-telegram-storage.mjs --artifact',
+    'PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}',
+    'IFS= read -r PROD_DATABASE_URL && export PROD_DATABASE_URL',
+    `printf '%s\\n' "$PROD_DATABASE_URL" | ssh`,
   ]) assert(workflow.includes(marker), `workflow is missing ${marker}`);
 
   const migrationIndex = workflow.indexOf('Apply and verify Production personal Telegram storage atomically');
   const deployIndex = workflow.indexOf('Dispatch existing Production Deploy and require exact-run success');
   assert(migrationIndex >= 0 && deployIndex > migrationIndex, 'storage migration must finish before Production deployment dispatch');
-  assert(!/\b(?:PROD_DATABASE_URL|DATABASE_URL|POSTGRES_URL)\b/.test(workflow), 'workflow must not introduce a database secret');
+  assert(!/PROD_DATABASE_URL=%q/.test(workflow), 'database secret must not be embedded in the remote command line');
+  assert(!/printf\s+'?%q'?\s+"?\$PROD_DATABASE_URL"?/.test(workflow), 'database secret must not be shell-escaped into argv');
+  assert(!/echo\s+"?\$PROD_DATABASE_URL"?/.test(workflow), 'database secret must never be echoed');
 
   for (const marker of [
     "const PRODUCTION_PROJECT_REF = 'bawcbkoyovbeajkrnduq'",
@@ -41,6 +46,9 @@ function verifyStatic() {
     'realpathSync',
     '(stat.mode & 0o022)',
     'readAllowedEnvValues',
+    'process.env.PROD_DATABASE_URL',
+    'transientProductionDatabaseUrl',
+    'delete baseEnv.PROD_DATABASE_URL',
     "runtime.DEPLOY_SHA",
     'postgresUris.length !== 1',
     'stripOuterTransaction',

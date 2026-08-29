@@ -9,6 +9,7 @@ import type {
 } from './market-listing.service';
 import type { QuoteRow } from './market-data.service';
 
+type RankingMarketListings = Omit<MarketListings, 'diagnostics'>;
 type NaverMarketCode = 'KOSPI' | 'KOSDAQ' | 'ETF' | 'ETN';
 
 interface NaverRankingResponse {
@@ -141,7 +142,7 @@ function uniqueRows(rows: QuoteRow[]): QuoteRow[] {
   return out;
 }
 
-function buildListings(market: MarketKey, rows: QuoteRow[]): MarketListings {
+function buildListings(market: MarketKey, rows: QuoteRow[]): RankingMarketListings {
   const unique = uniqueRows(rows);
 
   const gainersBase = [...unique]
@@ -552,7 +553,7 @@ export const RANKING_SOURCE: RankingSource = {
 };
 
 export interface RankedListings {
-  listings: MarketListings;
+  listings: RankingMarketListings;
   source: MoverSource;
   rankingSource: RankingSource;
 }

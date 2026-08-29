@@ -252,13 +252,22 @@ jobs:
         id: install
         env:
           PRODUCTION_APP_SHA: ${{ steps.app_before.outputs.sha }}
+          PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256: ${{ secrets.PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256 }}
         shell: bash
         run: |
           set -Eeuo pipefail
+          [[ "$PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+            printf '%s\n' '::error::Protected Paper publisher SHA-256 binding is missing or invalid.' >&2
+            exit 14
+          }
+          printf -v remote_command \
+            'TARGET_SHA=%q REPOSITORY_URL=%q PRODUCTION_APP_SHA=%q PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256=%q bash -s' \
+            "$TARGET_SHA" "$REPOSITORY_URL" "$PRODUCTION_APP_SHA" "$PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256"
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" \
-            "TARGET_SHA='$TARGET_SHA' REPOSITORY_URL='$REPOSITORY_URL' PRODUCTION_APP_SHA='$PRODUCTION_APP_SHA' bash -s" <<'REMOTE' > "$EVIDENCE_DIR/activation.json"
+            "$remote_command" <<'REMOTE' > "$EVIDENCE_DIR/activation.json"
           set -Eeuo pipefail
+          [[ "$PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256" =~ ^[0-9a-f]{64}$ ]] || exit 14
           STATE_ROOT=/opt/stock-app-data/paper-forward-v1
           SOURCE_DIR="$(mktemp -d /tmp/paper-forward-source.XXXXXX)"
           cleanup() { rm -rf -- "$SOURCE_DIR"; }
@@ -271,6 +280,7 @@ jobs:
           mkdir -p "$SOURCE_DIR/.deploy"
           printf '%s\n' "$TARGET_SHA" > "$SOURCE_DIR/.deploy/current-sha"
           LIVE_DIR="$SOURCE_DIR" PAPER_FORWARD_STATE_ROOT="$STATE_ROOT" PAPER_FORWARD_OUTCOME_ACCUMULATION_ENABLED=true \
+            PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256="$PAPER_FORWARD_PAPER_STATE_PUBLISHER_ACCOUNT_ID_SHA256" \
             "$SOURCE_DIR/ops/install-paper-forward-schedule.sh" "$TARGET_SHA" >/dev/null
           PRODUCTION_APP_SHA="$PRODUCTION_APP_SHA" TARGET_SHA="$TARGET_SHA" node - "$STATE_ROOT/activation.json" <<'NODE'
           const fs = require('node:fs');

@@ -90,12 +90,12 @@ export default function AutoTradingPage({ fixture, approvalFixture, embedded = f
       {!embedded ? <CenteredPageHeader title="자동매매" eyebrow="승인형 주문" /> : null}
 
       <main className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain p-3 pb-24 sm:p-4">
-        <div className="mx-auto grid w-full max-w-6xl gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)] lg:items-start" data-testid="auto-trading-responsive-layout">
+        <div className="mx-auto grid w-full max-w-6xl gap-4 min-[1200px]:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)] min-[1200px]:items-start" data-testid="auto-trading-responsive-layout">
           <div className="min-w-0 space-y-4">
             {safety}
             <TradeApprovalQueue fixture={approvalFixture} />
           </div>
-          <aside className="min-w-0 lg:sticky lg:top-4">
+          <aside className="min-w-0 min-[1200px]:sticky min-[1200px]:top-4">
             {settings}
           </aside>
         </div>
