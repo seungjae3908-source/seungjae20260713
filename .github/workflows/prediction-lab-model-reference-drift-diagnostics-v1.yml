@@ -77,9 +77,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      DOWNLOAD_ROOT: ${{ runner.temp }}/model-reference-durable-download
-      REFERENCE_ROOT: ${{ runner.temp }}/model-reference-durable-reference
-      OUTPUT_ROOT: ${{ runner.temp }}/model-reference-drift-diagnostics
+      DOWNLOAD_ROOT: /tmp/model-reference-durable-download-${{ github.run_id }}
+      REFERENCE_ROOT: /tmp/model-reference-durable-reference-${{ github.run_id }}
+      OUTPUT_ROOT: /tmp/model-reference-drift-diagnostics-${{ github.run_id }}
     steps:
       - name: Resolve authenticated durable publication source
         id: source
@@ -294,6 +294,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: prediction-lab-model-reference-drift-diagnostics-v1-${{ github.run_id }}
-          path: ${{ runner.temp }}/model-reference-drift-diagnostics/*.json
+          path: /tmp/model-reference-drift-diagnostics-${{ github.run_id }}/*.json
           if-no-files-found: error
           retention-days: 90
