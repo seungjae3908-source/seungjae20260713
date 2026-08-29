@@ -37,7 +37,7 @@ on:
       - market-intelligence-sidecar/src/execution-quality.d.mts
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   authoritative-paper-runtime-factory:
@@ -101,6 +101,21 @@ jobs:
             market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json
           if-no-files-found: error
           retention-days: 1
+
+      - name: Commit regenerated runtime package to exact owner branch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git add -- \
+            market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs \
+            market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'build(paper): regenerate authoritative runtime package'
+          git push origin "HEAD:${{ github.head_ref }}"
 
       - name: Verify exact authoritative runtime package
         run: |
