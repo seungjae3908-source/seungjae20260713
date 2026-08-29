@@ -133,24 +133,32 @@ jobs:
           REMOTE_MAIN="$(git rev-parse FETCH_HEAD)"
           test "$REMOTE_MAIN" = "$GITHUB_SHA"
 
-      - name: Resolve authoritative GitHub workflow-run start
-        id: clock
+      - name: Verify immutable V3 policy artifact metadata
         uses: actions/github-script@v7
         with:
           script: |
-            const response = await github.rest.actions.getWorkflowRun({
+            const expectedId = 9722465890;
+            const expectedName = 'public-forward-liquidity-prospective-policy-v3-43b15ea7cb4edfc84ce7e3055e6b8d7e5443c0f6';
+            const expectedDigest = '476b302eb38d8b17c30d4f3ed0d97f87fd16118d5b201cc03d9aff4b26b8eb7a';
+            const { data: artifact } = await github.rest.actions.getArtifact({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              run_id: context.runId,
+              artifact_id: expectedId,
             });
-            const raw = response.data.run_started_at || response.data.created_at;
-            const startedAtMs = Date.parse(raw || '');
-            if (!Number.isSafeInteger(startedAtMs) || startedAtMs <= 0) {
-              core.setFailed(`Invalid workflow run start timestamp: ${raw}`);
-              return;
+            const actualDigest = String(artifact.digest || '').replace(/^sha256:/, '').toLowerCase();
+            if (artifact.expired || artifact.name !== expectedName || actualDigest !== expectedDigest) {
+              core.setFailed(`V3 immutable policy artifact mismatch: id=${artifact.id} name=${artifact.name} digest=${actualDigest} expired=${artifact.expired}`);
             }
-            core.setOutput('actual_run_started_at_ms', String(startedAtMs));
-            core.info(`authoritative workflow run start=${raw} (${startedAtMs})`);
+
+      - name: Record actual scheduled capture preflight start
+        id: clock
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTUAL_RUN_STARTED_AT_MS="$(date +%s%3N)"
+          test "$ACTUAL_RUN_STARTED_AT_MS" -gt 0
+          echo "actual_run_started_at_ms=$ACTUAL_RUN_STARTED_AT_MS" >> "$GITHUB_OUTPUT"
+          echo "actual scheduled capture preflight start=$ACTUAL_RUN_STARTED_AT_MS"
 
       - name: Resolve exact V3 slot from immutable cron identity
         id: slot
