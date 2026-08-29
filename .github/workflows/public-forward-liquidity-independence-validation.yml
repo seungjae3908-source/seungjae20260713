@@ -18,6 +18,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   verify:
@@ -112,3 +113,161 @@ jobs:
             echo 'Scheduled independence validation is forbidden.' >&2
             exit 1
           fi
+
+  produce-authoritative-independence-evidence:
+    if: github.event_name == 'pull_request'
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PRODUCER_SHA: ${{ github.event.pull_request.head.sha }}
+      INGEST_RUN_ID: '33251065520'
+      INGEST_ARTIFACT_ID: '9714378567'
+      INGEST_ARTIFACT_NAME: public-forward-liquidity-authoritative-ingest-05b1434dd6de60ab92c9164de02a47fe79d27c8b
+      INGEST_ARTIFACT_DIGEST: dcbcf8ad6f0ca88f6d7314a92ceb7bb8c3159b0f7d7ed130b765237990d0b279
+    steps:
+      - name: Checkout full repository history without credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Re-verify immutable #811 ingest artifact metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${INGEST_ARTIFACT_ID}" --jq '.name')" = "${INGEST_ARTIFACT_NAME}"
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${INGEST_ARTIFACT_ID}" --jq '.digest')" = "sha256:${INGEST_ARTIFACT_DIGEST}"
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${INGEST_ARTIFACT_ID}" --jq '.expired')" = "false"
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${INGEST_ARTIFACT_ID}" --jq '.workflow_run.id')" = "${INGEST_RUN_ID}"
+
+      - name: Download authenticated #811 ingest evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.INGEST_ARTIFACT_NAME }}
+          path: /tmp/public-forward-liquidity-authoritative-state
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: 33251065520
+
+      - name: Build canonical reusable source manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          export STATE_ROOT='/tmp/public-forward-liquidity-authoritative-state'
+          node --input-type=module <<'NODE'
+          import { createHash } from 'node:crypto';
+          import { readFile, writeFile } from 'node:fs/promises';
+          import { join } from 'node:path';
+          const stateRoot = process.env.STATE_ROOT;
+          const inventory = JSON.parse(await readFile(join(stateRoot, 'portable-source-inventory.json'), 'utf8'));
+          if (inventory.schemaVersion !== 'public-forward-liquidity-authoritative-ingest-inventory-v1'
+            || inventory.persistentResearchStateMutation !== false
+            || inventory.acceptedN !== 116
+            || inventory.buyN !== 0
+            || inventory.sellN !== 116
+            || !Array.isArray(inventory.sources)
+            || inventory.sources.length !== 3) {
+            throw new Error('AUTHORITATIVE_INGEST_INVENTORY_INVALID');
+          }
+          const manifest = {
+            schemaVersion: 'public-forward-liquidity-bound-source-manifest-v1',
+            stateRoot,
+            researchRepoRoot: process.env.GITHUB_WORKSPACE,
+            sources: inventory.sources.map((source) => ({
+              sourceIdentity: source.sourceIdentity,
+              datasetPath: join(stateRoot, source.datasetRelativePath),
+              ingestReceiptPaths: source.ingestReceiptRelativePaths.map((path) => join(stateRoot, path)),
+            })),
+          };
+          const canonicalize = (value) => Array.isArray(value)
+            ? value.map(canonicalize)
+            : (value && typeof value === 'object'
+              ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]))
+              : value);
+          const canonical = JSON.stringify(canonicalize(manifest));
+          const manifestDigest = createHash('sha256').update(canonical).digest('hex');
+          await writeFile(join(stateRoot, 'source-manifest.json'), `${canonical}\n`, 'utf8');
+          await writeFile(join(stateRoot, 'source-manifest-digest.json'), `${JSON.stringify({ schemaVersion: 'public-forward-liquidity-source-manifest-digest-v1', manifestDigest })}\n`, 'utf8');
+          NODE
+
+      - name: Execute real receipt-bound independence audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          STATE_ROOT='/tmp/public-forward-liquidity-authoritative-state'
+          node market-intelligence-sidecar/scripts/run-public-forward-liquidity-independence-audit.mjs \
+            --source-manifest "${STATE_ROOT}/source-manifest.json" \
+            --producer-sha "${PRODUCER_SHA}" \
+            --output "${STATE_ROOT}/independence-report.json"
+
+      - name: Assert empirical authority and zero downstream escalation
+        shell: bash
+        run: |
+          set -euo pipefail
+          STATE_ROOT='/tmp/public-forward-liquidity-authoritative-state'
+          export STATE_ROOT
+          node --input-type=module <<'NODE'
+          import { createHash } from 'node:crypto';
+          import { readFile, writeFile } from 'node:fs/promises';
+          import { join } from 'node:path';
+          const root = process.env.STATE_ROOT;
+          const result = JSON.parse(await readFile(join(root, 'independence-report.json'), 'utf8'));
+          const manifestDigest = JSON.parse(await readFile(join(root, 'source-manifest-digest.json'), 'utf8')).manifestDigest;
+          if (result.status !== 'PRESENT' || !result.audit || !result.splitSource) throw new Error('REAL_INDEPENDENCE_NOT_PRESENT');
+          const counts = result.audit.counts;
+          if (counts.RAW_ACCEPTED_N !== 116
+            || counts.INDEPENDENT_BUY_N !== 0
+            || counts.INDEPENDENT_SELL_N <= 0
+            || counts.INDEPENDENT_N !== counts.INDEPENDENT_BUY_N + counts.INDEPENDENT_SELL_N) {
+            throw new Error('REAL_INDEPENDENCE_COUNT_CONTRACT_INVALID');
+          }
+          if (result.splitSource.splitAssignmentPerformed !== false
+            || result.splitSource.oosValidationComplete !== false
+            || result.splitSource.calibrationArtifactProduced !== false
+            || result.splitSource.liquidityImpactStatus !== 'BLOCKED_DATA'
+            || result.splitSource.fullCostReady !== false
+            || result.splitSource.evidenceCompleteCredit !== 0
+            || result.splitSource.executionAuthority !== 'NONE') {
+            throw new Error('REAL_INDEPENDENCE_AUTHORITY_ESCALATION');
+          }
+          const body = {
+            schemaVersion: 'public-forward-liquidity-authoritative-independence-report-v1',
+            producerSha: process.env.PRODUCER_SHA,
+            upstreamIngestRunId: process.env.INGEST_RUN_ID,
+            upstreamIngestArtifactId: process.env.INGEST_ARTIFACT_ID,
+            upstreamIngestArtifactDigest: process.env.INGEST_ARTIFACT_DIGEST,
+            sourceManifestDigest: manifestDigest,
+            independenceAuditDigest: result.audit.auditDigest,
+            independentSplitSourceDigest: result.splitSource.splitSourceDigest,
+            counts,
+            buyCoverageProven: counts.INDEPENDENT_BUY_N > 0,
+            frozenMinimumPolicyStatus: 'MISSING_EVIDENCE',
+            v2SplitReceiptPresent: false,
+            frozenAssignmentN: null,
+            fullCostReady: false,
+            evidenceComplete: 0,
+            executionAuthority: 'NONE',
+          };
+          const canonicalize = (value) => Array.isArray(value)
+            ? value.map(canonicalize)
+            : (value && typeof value === 'object'
+              ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]))
+              : value);
+          const canonical = JSON.stringify(canonicalize(body));
+          const report = { ...body, reportDigest: createHash('sha256').update(canonical).digest('hex') };
+          await writeFile(join(root, 'authoritative-independence-summary.json'), `${JSON.stringify(report)}\n`, 'utf8');
+          NODE
+
+      - name: Upload immutable authoritative independence evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-forward-liquidity-authoritative-independence-${{ github.event.pull_request.head.sha }}
+          path: /tmp/public-forward-liquidity-authoritative-state
+          if-no-files-found: error
+          retention-days: 90
