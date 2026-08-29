@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Persistent, event-driven, fail-closed Agent Hub controller.
+"""Persistent event-driven controller around the existing Agent Hub.
 
-This daemon does not execute natural-language GitHub content and does not automate
-web ChatGPT.  It treats GitHub as an untrusted event source, persists operational
-state locally, and only wakes the repository's existing deterministic Agent Hub
-coordinator/executor after strict validation.
-
-Runtime activation, webhook registration, secrets, server configuration, Production
-operations, private trading APIs, and financial actions are intentionally outside
-this module.
+Security model:
+- GitHub webhook bodies are untrusted input.
+- Only HMAC-verified, deduplicated, repository-matched events are processed.
+- Only a compact machine-readable COMMAND_UPDATE header from an authorized actor
+  and CENTRAL-COMMANDER publisher mutates the master queue.
+- Natural-language comments are never executed as shell/code.
+- Actual code work is delegated to the repository's existing bounded Agent Hub
+  executor through repository_dispatch after a validated HUB_COMMAND exists.
+- Production/live/private-trading/financial actions remain outside this service.
 """
 from __future__ import annotations
 
@@ -35,16 +36,14 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-CONTROLLER_VERSION = "1.0.0"
+CONTROLLER_VERSION = "1.0.1"
 GITHUB_API_VERSION = "2022-11-28"
 DEFAULT_HUB_ISSUE = 660
 DEFAULT_RECONCILE_SECONDS = 30.0
+COMMENT_WINDOW = 1000
 MAX_WEBHOOK_BYTES = 2 * 1024 * 1024
-MAX_EVENT_TYPE_LENGTH = 80
-MAX_DELIVERY_ID_LENGTH = 160
 MAX_TASK_ATTEMPTS = 3
 LEASE_SECONDS = 300
-HEARTBEAT_STALE_SECONDS = 180
 CIRCUIT_FAILURE_THRESHOLD = 3
 CIRCUIT_COOLDOWN_SECONDS = 120
 
@@ -57,11 +56,11 @@ TASK_STATES = {
     "WAITING_DEPENDENCY", "BLOCKED", "VERIFYING", "COMPLETED", "FAILED",
     "CANCELLED", "SUPERSEDED",
 }
-WORKER_STATES = {"AVAILABLE", "ACTIVE", "WAITING_CI", "BLOCKED", "STALE", "DEAD", "DRAINING"}
 ALLOWED_EVENTS = {
     "issue_comment", "issues", "push", "pull_request", "pull_request_review",
     "pull_request_review_comment", "workflow_run", "check_run", "check_suite",
 }
+AUTHORIZED_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 COMMAND_MARKER = "[COMMAND_UPDATE]"
 HUB_COMMAND_MARKER = "[HUB_COMMAND]"
 WORKER_REPORT_MARKER = "[WORKER_REPORT]"
@@ -74,8 +73,9 @@ COMMAND_HEADER_KEYS = {
 COMMAND_REQUIRED_KEYS = {"COMMAND_VERSION", "SUPERSEDES", "LATEST_MAIN", "MASTER_TASK_SET"}
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:#-]{0,179}$")
+REFERENCE_RE = re.compile(r"^(?:#[1-9][0-9]*|[A-Za-z0-9][A-Za-z0-9._:#-]{0,179})$")
 DELIVERY_RE = re.compile(r"^[A-Za-z0-9._:-]{1,160}$")
-
+HUB_COMMAND_ID_RE = re.compile(r"^hub-[0-9]+-[0-9a-f]{16}$")
 SAFE_TASK_TYPES = {
     "CI_DIAGNOSIS", "PR_ALIGNMENT", "FORWARD_DIAGNOSTIC", "CODE_REMEDIATION",
     "RUNTIME_VERIFY", "CONTROL_PLANE_REMEDIATION",
@@ -85,40 +85,43 @@ FORBIDDEN_ACTION_FRAGMENTS = {
     "place_order", "cancel_order", "amend_order", "transfer", "withdraw",
     "private_trading", "secret_rotation", "destructive_migration",
 }
-TERMINAL_TASK_STATES = {"COMPLETED", "FAILED", "CANCELLED", "SUPERSEDED"}
+TERMINAL_TASK_STATES = {"COMPLETED", "CANCELLED", "SUPERSEDED"}
 
 
 class ControllerError(RuntimeError):
-    """Expected fail-closed controller error."""
+    """Expected controller failure."""
 
 
 class ValidationError(ControllerError):
-    """Untrusted event or command failed validation."""
+    """Untrusted event/command failed validation."""
 
 
 class SafetyError(ControllerError):
-    """Requested transition exceeds the controller safety boundary."""
+    """Requested operation crossed the controller safety boundary."""
 
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def sha256_text(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
 def json_dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def csv_items(value: str | None) -> list[str]:
+def sha256_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _split_csv(value: str | None) -> list[str]:
     text = str(value or "").strip()
     if not text or text.upper() in {"NONE", "[]"}:
         return []
-    items = [item.strip() for item in re.split(r"[,;]", text) if item.strip()]
+    return [item.strip() for item in re.split(r"[,;]", text) if item.strip()]
+
+
+def csv_tasks(value: str | None) -> list[str]:
     result: list[str] = []
-    for item in items:
+    for item in _split_csv(value):
         if not TASK_ID_RE.fullmatch(item):
             raise ValidationError(f"invalid task id: {item[:80]}")
         if item not in result:
@@ -126,9 +129,19 @@ def csv_items(value: str | None) -> list[str]:
     return result
 
 
+def csv_references(value: str | None) -> list[str]:
+    result: list[str] = []
+    for item in _split_csv(value):
+        if not REFERENCE_RE.fullmatch(item):
+            raise ValidationError(f"invalid task/PR reference: {item[:80]}")
+        if item not in result:
+            result.append(item)
+    return result
+
+
 def infer_priority(task_id: str) -> str:
     upper = task_id.upper()
-    if upper.startswith("P0") or upper.startswith("GOV-") or upper.startswith("CONTROL-"):
+    if upper.startswith(("P0", "GOV-", "CONTROL-")):
         return "P0"
     if upper.startswith("P1"):
         return "P1"
@@ -143,13 +156,9 @@ def infer_priority(task_id: str) -> str:
     return "P2"
 
 
-def priority_rank(priority: str) -> int:
-    return {"P0": 0, "P1": 1, "P2": 2, "P3": 3}.get(priority, 9)
-
-
 def task_type_for(task_id: str) -> str:
     upper = task_id.upper()
-    if "CONTROL" in upper or "GOV" in upper:
+    if "CONTROL" in upper or "GOV" in upper or "REALTIME" in upper:
         return "CONTROL_PLANE_REMEDIATION"
     if "CI" in upper:
         return "CI_DIAGNOSIS"
@@ -169,26 +178,26 @@ def paths_overlap(left: Sequence[str], right: Sequence[str]) -> bool:
 def parse_colon_fields(body: str) -> dict[str, str]:
     fields: dict[str, str] = {}
     current = ""
-    buf: list[str] = []
+    buffer: list[str] = []
 
     def flush() -> None:
-        nonlocal current, buf
+        nonlocal current, buffer
         if current:
-            fields[current] = "\n".join(buf).strip()
+            fields[current] = "\n".join(buffer).strip()
         current = ""
-        buf = []
+        buffer = []
 
     for raw in body.splitlines():
-        stripped = raw.strip()
-        if stripped.startswith("[") or stripped.startswith("<!--"):
+        line = raw.strip()
+        if line.startswith("[") or line.startswith("<!--"):
             continue
-        match = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$", stripped)
+        match = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$", line)
         if match:
             flush()
             current = match.group(1).lower()
-            buf = [match.group(2)]
-        elif current and stripped:
-            buf.append(stripped)
+            buffer = [match.group(2)]
+        elif current and line:
+            buffer.append(line)
     flush()
     return fields
 
@@ -200,6 +209,7 @@ class CommandUpdate:
     publisher: str
     latest_main: str
     priority: str
+    keep: tuple[str, ...]
     add: tuple[str, ...]
     cancel: tuple[str, ...]
     complete: tuple[str, ...]
@@ -216,7 +226,7 @@ def parse_command_update(body: str, *, comment_id: int, actor: str, authorized_a
         raise ValidationError("command actor is not authorized")
     lines = body.replace("\r\n", "\n").split("\n")
     try:
-        marker_index = next(index for index, value in enumerate(lines) if value.strip() == COMMAND_MARKER)
+        marker_index = next(i for i, line in enumerate(lines) if line.strip() == COMMAND_MARKER)
     except StopIteration as exc:
         raise ValidationError("command marker must occupy its own line") from exc
     fields: dict[str, str] = {}
@@ -245,9 +255,12 @@ def parse_command_update(body: str, *, comment_id: int, actor: str, authorized_a
     main_sha = fields["LATEST_MAIN"].lower()
     if not SHA_RE.fullmatch(main_sha):
         raise ValidationError("command LATEST_MAIN is not a full SHA")
+    master = tuple(csv_tasks(fields.get("MASTER_TASK_SET")))
+    if not master:
+        raise ValidationError("MASTER_TASK_SET must not be empty")
     explicit: dict[str, str] = {}
     for priority in ("P0", "P1", "P2", "P3"):
-        for task_id in csv_items(fields.get(f"{priority}_TASKS")):
+        for task_id in csv_tasks(fields.get(f"{priority}_TASKS")):
             explicit[task_id] = priority
     return CommandUpdate(
         version=int(version_raw),
@@ -255,10 +268,11 @@ def parse_command_update(body: str, *, comment_id: int, actor: str, authorized_a
         publisher=publisher,
         latest_main=main_sha,
         priority=fields.get("PRIORITY", ""),
-        add=tuple(csv_items(fields.get("ADD"))),
-        cancel=tuple(csv_items(fields.get("CANCEL"))),
-        complete=tuple(csv_items(fields.get("COMPLETE"))),
-        master=tuple(csv_items(fields.get("MASTER_TASK_SET"))),
+        keep=tuple(csv_references(fields.get("KEEP"))),
+        add=tuple(csv_tasks(fields.get("ADD"))),
+        cancel=tuple(csv_tasks(fields.get("CANCEL"))),
+        complete=tuple(csv_references(fields.get("COMPLETE"))),
+        master=master,
         explicit_priorities=explicit,
         comment_id=comment_id,
         actor=actor,
@@ -266,35 +280,36 @@ def parse_command_update(body: str, *, comment_id: int, actor: str, authorized_a
 
 
 class PersistentStore:
-    """SQLite operational store; independent of application/financial databases."""
+    """Durable operational state, intentionally separate from financial app DBs."""
 
     def __init__(self, path: str | Path) -> None:
         self.path = str(path)
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        self._local = threading.local()
         self._initialize()
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path, timeout=10, isolation_level=None)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA journal_mode=WAL")
-        connection.execute("PRAGMA foreign_keys=ON")
-        connection.execute("PRAGMA busy_timeout=10000")
-        return connection
+        db = sqlite3.connect(self.path, timeout=10, isolation_level=None)
+        db.row_factory = sqlite3.Row
+        db.execute("PRAGMA journal_mode=WAL")
+        db.execute("PRAGMA foreign_keys=ON")
+        db.execute("PRAGMA busy_timeout=10000")
+        return db
 
     @contextlib.contextmanager
     def connection(self) -> Iterable[sqlite3.Connection]:
-        connection = self._connect()
+        db = self._connect()
         try:
-            yield connection
+            yield db
         finally:
-            connection.close()
+            db.close()
 
     def _initialize(self) -> None:
         with self.connection() as db:
             db.executescript(
                 """
-                CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS meta(
+                  key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS events(
                   delivery_id TEXT PRIMARY KEY, event_type TEXT NOT NULL, payload_digest TEXT NOT NULL,
                   received_at TEXT NOT NULL, processed_at TEXT, status TEXT NOT NULL, error TEXT
@@ -310,9 +325,9 @@ class PersistentStore:
                 );
                 CREATE TABLE IF NOT EXISTS workers(
                   worker_id TEXT PRIMARY KEY, capabilities TEXT NOT NULL, status TEXT NOT NULL,
-                  current_task TEXT, lease_id TEXT, pr TEXT, head_sha TEXT, owned_files TEXT NOT NULL DEFAULT '[]',
-                  command_version INTEGER NOT NULL DEFAULT 0, last_heartbeat TEXT, last_progress TEXT,
-                  attempts INTEGER NOT NULL DEFAULT 0, blocked_by TEXT
+                  current_task TEXT, lease_id TEXT, pr TEXT, head_sha TEXT,
+                  owned_files TEXT NOT NULL DEFAULT '[]', command_version INTEGER NOT NULL DEFAULT 0,
+                  last_heartbeat TEXT, last_progress TEXT, attempts INTEGER NOT NULL DEFAULT 0, blocked_by TEXT
                 );
                 CREATE TABLE IF NOT EXISTS leases(
                   lease_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, worker_id TEXT NOT NULL, files TEXT NOT NULL,
@@ -322,8 +337,9 @@ class PersistentStore:
                 CREATE INDEX IF NOT EXISTS leases_status_expiry ON leases(status, expires_at);
                 CREATE TABLE IF NOT EXISTS errors(
                   error_id TEXT PRIMARY KEY, component TEXT NOT NULL, severity TEXT NOT NULL, message TEXT NOT NULL,
-                  digest TEXT NOT NULL, event_id TEXT, task_id TEXT, worker_id TEXT, first_seen TEXT NOT NULL,
-                  last_seen TEXT NOT NULL, retry_count INTEGER NOT NULL, root_cause TEXT, recovery TEXT, status TEXT NOT NULL
+                  digest TEXT NOT NULL, event_id TEXT, task_id TEXT, worker_id TEXT,
+                  first_seen TEXT NOT NULL, last_seen TEXT NOT NULL, retry_count INTEGER NOT NULL,
+                  root_cause TEXT, recovery TEXT, status TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS checkpoints(
                   id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL, state_json TEXT NOT NULL
@@ -335,43 +351,54 @@ class PersistentStore:
                 self.set_meta("controller_state", "BOOTING", db=db)
             if self.get_meta("command_version", db=db) is None:
                 self.set_meta("command_version", "0", db=db)
+            if self.get_meta("duplicate_events_total", db=db) is None:
+                self.set_meta("duplicate_events_total", "0", db=db)
 
     def set_meta(self, key: str, value: str, *, db: sqlite3.Connection | None = None) -> None:
         own = db is None
-        connection = db or self._connect()
+        conn = db or self._connect()
         try:
-            connection.execute(
-                "INSERT INTO meta(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",
+            conn.execute(
+                "INSERT INTO meta(key,value,updated_at) VALUES(?,?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",
                 (key, str(value), utc_now()),
             )
         finally:
             if own:
-                connection.close()
+                conn.close()
 
     def get_meta(self, key: str, *, db: sqlite3.Connection | None = None) -> str | None:
         own = db is None
-        connection = db or self._connect()
+        conn = db or self._connect()
         try:
-            row = connection.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+            row = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
             return str(row[0]) if row else None
         finally:
             if own:
-                connection.close()
+                conn.close()
+
+    def increment_meta(self, key: str) -> None:
+        with self.connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            current = int(self.get_meta(key, db=db) or "0")
+            self.set_meta(key, str(current + 1), db=db)
+            db.execute("COMMIT")
 
     def set_controller_state(self, state: str) -> None:
         if state not in CONTROLLER_STATES:
             raise ControllerError(f"invalid controller state: {state}")
         self.set_meta("controller_state", state)
 
-    def accept_event(self, delivery_id: str, event_type: str, payload_digest: str) -> bool:
+    def accept_event(self, delivery_id: str, event_type: str, digest: str) -> bool:
         with self.connection() as db:
             try:
                 db.execute(
                     "INSERT INTO events(delivery_id,event_type,payload_digest,received_at,status) VALUES(?,?,?,?,?)",
-                    (delivery_id, event_type, payload_digest, utc_now(), "RECEIVED"),
+                    (delivery_id, event_type, digest, utc_now(), "RECEIVED"),
                 )
                 return True
             except sqlite3.IntegrityError:
+                self.increment_meta("duplicate_events_total")
                 return False
 
     def finish_event(self, delivery_id: str, status: str, error: str | None = None) -> None:
@@ -394,12 +421,11 @@ class PersistentStore:
         files: Sequence[str] = (),
         next_action: str = "await_hub_command_or_reconcile",
     ) -> None:
-        if status not in TASK_STATES:
-            raise ControllerError("invalid task status")
+        if not TASK_ID_RE.fullmatch(task_id) or status not in TASK_STATES:
+            raise ControllerError("invalid task")
         task_type = task_type or task_type_for(task_id)
         if task_type not in SAFE_TASK_TYPES:
             raise SafetyError("task type is not registered")
-        now = utc_now()
         with self.connection() as db:
             db.execute(
                 """
@@ -411,10 +437,10 @@ class PersistentStore:
                   dependencies=CASE WHEN excluded.dependencies='[]' THEN tasks.dependencies ELSE excluded.dependencies END,
                   files=CASE WHEN excluded.files='[]' THEN tasks.files ELSE excluded.files END,
                   status=CASE WHEN tasks.status IN ('COMPLETED','CANCELLED','SUPERSEDED') THEN tasks.status ELSE excluded.status END,
-                  last_update=excluded.last_update,
-                  next_action=excluded.next_action
+                  last_update=excluded.last_update,next_action=excluded.next_action
                 """,
-                (task_id, priority, area, command_version, task_type, json_dumps(list(dependencies)), json_dumps(list(files)), status, now, next_action),
+                (task_id, priority, area, command_version, task_type, json_dumps(list(dependencies)),
+                 json_dumps(list(files)), status, utc_now(), next_action),
             )
 
     def task(self, task_id: str) -> dict[str, Any] | None:
@@ -422,7 +448,14 @@ class PersistentStore:
             row = db.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
             return dict(row) if row else None
 
-    def set_task_status(self, task_id: str, status: str, *, next_action: str | None = None, blocked_by: str | None = None) -> None:
+    def set_task_status(
+        self,
+        task_id: str,
+        status: str,
+        *,
+        next_action: str | None = None,
+        blocked_by: str | None = None,
+    ) -> None:
         if status not in TASK_STATES:
             raise ControllerError("invalid task status")
         with self.connection() as db:
@@ -431,10 +464,21 @@ class PersistentStore:
                 (status, next_action, blocked_by, utc_now(), task_id),
             )
 
-    def attach_hub_command(self, task_id: str, *, command_id: str, worker_id: str, files: Sequence[str], branch: str | None, head_sha: str | None) -> None:
+    def attach_hub_command(
+        self,
+        task_id: str,
+        *,
+        command_id: str,
+        worker_id: str,
+        files: Sequence[str],
+        branch: str | None,
+        head_sha: str | None,
+    ) -> None:
         with self.connection() as db:
             db.execute(
-                "UPDATE tasks SET hub_command_id=?,owner_worker=?,files=?,branch=COALESCE(?,branch),head_sha=COALESCE(?,head_sha),status='READY',next_action='dispatch_existing_agent_hub_executor',last_update=? WHERE task_id=? AND status NOT IN ('COMPLETED','CANCELLED','SUPERSEDED')",
+                "UPDATE tasks SET hub_command_id=?,owner_worker=?,files=?,branch=COALESCE(?,branch),"
+                "head_sha=COALESCE(?,head_sha),status='READY',next_action='dispatch_existing_agent_hub_executor',last_update=? "
+                "WHERE task_id=? AND status NOT IN ('COMPLETED','CANCELLED','SUPERSEDED')",
                 (command_id, worker_id, json_dumps(list(files)), branch, head_sha, utc_now(), task_id),
             )
 
@@ -443,32 +487,44 @@ class PersistentStore:
         if command.version < current:
             return
         if command.version == current:
-            stored_comment = self.get_meta("command_comment_id")
-            if stored_comment and int(stored_comment) != command.comment_id:
-                raise ValidationError("same command version arrived from a different comment")
+            stored = self.get_meta("command_comment_id")
+            if stored and int(stored) != command.comment_id:
+                raise ValidationError("same COMMAND_VERSION from different comments")
             return
         with self.connection() as db:
             db.execute("BEGIN IMMEDIATE")
             for task_id in command.master:
-                priority = command.explicit_priorities.get(task_id, infer_priority(task_id))
                 existing = db.execute("SELECT status FROM tasks WHERE task_id=?", (task_id,)).fetchone()
-                if existing and str(existing[0]) in {"COMPLETED", "CANCELLED", "SUPERSEDED"}:
+                if existing and str(existing[0]) in TERMINAL_TASK_STATES:
                     continue
+                priority = command.explicit_priorities.get(task_id, infer_priority(task_id))
                 status = "READY" if task_id in command.add else "PENDING"
+                area = "CONTROL_PLANE" if any(k in task_id.upper() for k in ("CONTROL", "GOV", "REALTIME")) else "APP"
                 db.execute(
                     """
                     INSERT INTO tasks(task_id,priority,area,command_version,task_type,status,last_update,next_action)
                     VALUES(?,?,?,?,?,?,?,?)
-                    ON CONFLICT(task_id) DO UPDATE SET priority=excluded.priority,command_version=excluded.command_version,
+                    ON CONFLICT(task_id) DO UPDATE SET
+                      priority=excluded.priority,command_version=excluded.command_version,
                       status=CASE WHEN tasks.status IN ('COMPLETED','CANCELLED','SUPERSEDED') THEN tasks.status ELSE excluded.status END,
                       last_update=excluded.last_update,next_action=excluded.next_action
                     """,
-                    (task_id, priority, "CONTROL_PLANE" if "CONTROL" in task_id.upper() or "GOV" in task_id.upper() or "REALTIME" in task_id.upper() else "APP", command.version, task_type_for(task_id), status, utc_now(), "await_hub_command_or_reconcile"),
+                    (task_id, priority, area, command.version, task_type_for(task_id), status,
+                     utc_now(), "await_hub_command_or_reconcile"),
                 )
-            for task_id in command.complete:
-                db.execute("UPDATE tasks SET status='COMPLETED',next_action='none',last_update=? WHERE task_id=?", (utc_now(), task_id))
+            for reference in command.complete:
+                if reference.startswith("#"):
+                    continue
+                db.execute(
+                    "UPDATE tasks SET status='COMPLETED',next_action='none',last_update=? WHERE task_id=?",
+                    (utc_now(), reference),
+                )
             for task_id in command.cancel:
-                db.execute("UPDATE tasks SET status='CANCELLED',next_action='none',last_update=? WHERE task_id=? AND status!='COMPLETED'", (utc_now(), task_id))
+                db.execute(
+                    "UPDATE tasks SET status='CANCELLED',next_action='none',last_update=? "
+                    "WHERE task_id=? AND status!='COMPLETED'",
+                    (utc_now(), task_id),
+                )
             self.set_meta("command_version", str(command.version), db=db)
             self.set_meta("command_comment_id", str(command.comment_id), db=db)
             self.set_meta("command_main_sha", command.latest_main, db=db)
@@ -476,11 +532,13 @@ class PersistentStore:
             db.execute("COMMIT")
 
     def register_worker(self, worker_id: str, capabilities: Sequence[str]) -> None:
+        if not worker_id or len(worker_id) > 128:
+            raise ControllerError("invalid worker id")
         with self.connection() as db:
             db.execute(
                 """
                 INSERT INTO workers(worker_id,capabilities,status,last_heartbeat,last_progress)
-                VALUES(?,?, 'AVAILABLE',?,?)
+                VALUES(?,?,'AVAILABLE',?,?)
                 ON CONFLICT(worker_id) DO UPDATE SET capabilities=excluded.capabilities
                 """,
                 (worker_id, json_dumps(list(capabilities)), utc_now(), utc_now()),
@@ -490,14 +548,21 @@ class PersistentStore:
         now = utc_now()
         with self.connection() as db:
             db.execute(
-                "UPDATE workers SET last_heartbeat=?,last_progress=CASE WHEN ? THEN ? ELSE last_progress END,current_task=COALESCE(?,current_task) WHERE worker_id=?",
+                "UPDATE workers SET last_heartbeat=?,last_progress=CASE WHEN ? THEN ? ELSE last_progress END,"
+                "current_task=COALESCE(?,current_task) WHERE worker_id=?",
                 (now, 1 if progress else 0, now, task_id, worker_id),
             )
             if task_id:
-                lease = db.execute("SELECT lease_id FROM leases WHERE task_id=? AND worker_id=? AND status='ACTIVE'", (task_id, worker_id)).fetchone()
-                if lease:
+                row = db.execute(
+                    "SELECT lease_id FROM leases WHERE task_id=? AND worker_id=? AND status='ACTIVE'",
+                    (task_id, worker_id),
+                ).fetchone()
+                if row:
                     epoch = int(time.time())
-                    db.execute("UPDATE leases SET heartbeat_at=?,expires_at=? WHERE lease_id=?", (epoch, epoch + LEASE_SECONDS, str(lease[0])))
+                    db.execute(
+                        "UPDATE leases SET heartbeat_at=?,expires_at=? WHERE lease_id=?",
+                        (epoch, epoch + LEASE_SECONDS, str(row[0])),
+                    )
 
     def acquire_lease(self, task_id: str, worker_id: str, files: Sequence[str]) -> str | None:
         epoch = int(time.time())
@@ -508,28 +573,44 @@ class PersistentStore:
             if not task or str(task[0]) != "READY" or int(task[1]) >= MAX_TASK_ATTEMPTS:
                 db.execute("ROLLBACK")
                 return None
-            active = db.execute("SELECT task_id,files FROM leases WHERE status='ACTIVE' AND expires_at>?", (epoch,)).fetchall()
+            active = db.execute(
+                "SELECT task_id,files FROM leases WHERE status='ACTIVE' AND expires_at>?", (epoch,)
+            ).fetchall()
             for row in active:
                 if str(row[0]) == task_id or paths_overlap(list(files), json.loads(str(row[1]) or "[]")):
                     db.execute("ROLLBACK")
                     return None
             db.execute(
-                "INSERT INTO leases(lease_id,task_id,worker_id,files,acquired_at,heartbeat_at,expires_at,status) VALUES(?,?,?,?,?,?,?,'ACTIVE')",
+                "INSERT INTO leases(lease_id,task_id,worker_id,files,acquired_at,heartbeat_at,expires_at,status) "
+                "VALUES(?,?,?,?,?,?,?,'ACTIVE')",
                 (lease_id, task_id, worker_id, json_dumps(list(files)), epoch, epoch, epoch + LEASE_SECONDS),
             )
-            db.execute("UPDATE tasks SET status='CLAIMED',owner_worker=?,lease_id=?,attempts=attempts+1,last_update=?,next_action='dispatch' WHERE task_id=?", (worker_id, lease_id, utc_now(), task_id))
-            db.execute("UPDATE workers SET status='ACTIVE',current_task=?,lease_id=?,owned_files=?,last_heartbeat=?,last_progress=? WHERE worker_id=?", (task_id, lease_id, json_dumps(list(files)), utc_now(), utc_now(), worker_id))
+            db.execute(
+                "UPDATE tasks SET status='CLAIMED',owner_worker=?,lease_id=?,attempts=attempts+1,"
+                "last_update=?,next_action='dispatch' WHERE task_id=?",
+                (worker_id, lease_id, utc_now(), task_id),
+            )
+            db.execute(
+                "UPDATE workers SET status='ACTIVE',current_task=?,lease_id=?,owned_files=?,"
+                "last_heartbeat=?,last_progress=? WHERE worker_id=?",
+                (task_id, lease_id, json_dumps(list(files)), utc_now(), utc_now(), worker_id),
+            )
             db.execute("COMMIT")
         return lease_id
 
     def release_lease(self, task_id: str, *, final_worker_state: str = "AVAILABLE") -> None:
         with self.connection() as db:
-            row = db.execute("SELECT lease_id,worker_id FROM leases WHERE task_id=? AND status='ACTIVE'", (task_id,)).fetchone()
+            row = db.execute(
+                "SELECT lease_id,worker_id FROM leases WHERE task_id=? AND status='ACTIVE'", (task_id,)
+            ).fetchone()
             if not row:
                 return
             lease_id, worker_id = str(row[0]), str(row[1])
             db.execute("UPDATE leases SET status='RELEASED' WHERE lease_id=?", (lease_id,))
-            db.execute("UPDATE workers SET status=?,current_task=NULL,lease_id=NULL,owned_files='[]' WHERE worker_id=?", (final_worker_state, worker_id))
+            db.execute(
+                "UPDATE workers SET status=?,current_task=NULL,lease_id=NULL,owned_files='[]' WHERE worker_id=?",
+                (final_worker_state, worker_id),
+            )
             db.execute("UPDATE tasks SET lease_id=NULL WHERE task_id=?", (task_id,))
 
     def recover_expired_leases(self) -> list[str]:
@@ -537,14 +618,23 @@ class PersistentStore:
         recovered: list[str] = []
         with self.connection() as db:
             db.execute("BEGIN IMMEDIATE")
-            rows = db.execute("SELECT lease_id,task_id,worker_id FROM leases WHERE status='ACTIVE' AND expires_at<=?", (epoch,)).fetchall()
+            rows = db.execute(
+                "SELECT lease_id,task_id,worker_id FROM leases WHERE status='ACTIVE' AND expires_at<=?", (epoch,)
+            ).fetchall()
             for row in rows:
                 lease_id, task_id, worker_id = map(str, row)
                 db.execute("UPDATE leases SET status='EXPIRED' WHERE lease_id=?", (lease_id,))
-                db.execute("UPDATE workers SET status='STALE',lease_id=NULL,current_task=NULL,owned_files='[]' WHERE worker_id=?", (worker_id,))
+                db.execute(
+                    "UPDATE workers SET status='STALE',lease_id=NULL,current_task=NULL,owned_files='[]' WHERE worker_id=?",
+                    (worker_id,),
+                )
                 task = db.execute("SELECT attempts FROM tasks WHERE task_id=?", (task_id,)).fetchone()
-                status = "BLOCKED" if task and int(task[0]) >= MAX_TASK_ATTEMPTS else "READY"
-                db.execute("UPDATE tasks SET status=?,lease_id=NULL,blocked_by=?,next_action=?,last_update=? WHERE task_id=?", (status, "LEASE_EXPIRED" if status == "BLOCKED" else None, "manual_escalation" if status == "BLOCKED" else "recover_and_redispatch", utc_now(), task_id))
+                blocked = bool(task and int(task[0]) >= MAX_TASK_ATTEMPTS)
+                db.execute(
+                    "UPDATE tasks SET status=?,lease_id=NULL,blocked_by=?,next_action=?,last_update=? WHERE task_id=?",
+                    ("BLOCKED" if blocked else "READY", "LEASE_EXPIRED" if blocked else None,
+                     "manual_escalation" if blocked else "recover_and_redispatch", utc_now(), task_id),
+                )
                 recovered.append(task_id)
             db.execute("COMMIT")
         return recovered
@@ -552,18 +642,29 @@ class PersistentStore:
     def record_task_failure(self, task_id: str, message: str) -> None:
         digest = sha256_text(message)[:24]
         with self.connection() as db:
-            row = db.execute("SELECT last_error_digest,same_error_count,attempts FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+            row = db.execute(
+                "SELECT last_error_digest,same_error_count,attempts FROM tasks WHERE task_id=?", (task_id,)
+            ).fetchone()
             if not row:
                 return
             same = int(row[1]) + 1 if str(row[0] or "") == digest else 1
             loop = same >= 2
-            status = "BLOCKED" if loop or int(row[2]) >= MAX_TASK_ATTEMPTS else "FAILED"
-            db.execute("UPDATE tasks SET status=?,last_error_digest=?,same_error_count=?,loop_detected=?,blocked_by=?,next_action=?,last_update=? WHERE task_id=?", (status, digest, same, 1 if loop else 0, "LOOP_DETECTED" if loop else None, "root_cause_escalation" if loop else "diagnose_failure", utc_now(), task_id))
+            blocked = loop or int(row[2]) >= MAX_TASK_ATTEMPTS
+            db.execute(
+                "UPDATE tasks SET status=?,last_error_digest=?,same_error_count=?,loop_detected=?,"
+                "blocked_by=?,next_action=?,last_update=? WHERE task_id=?",
+                ("BLOCKED" if blocked else "FAILED", digest, same, 1 if loop else 0,
+                 "LOOP_DETECTED" if loop else None,
+                 "root_cause_escalation" if loop else "diagnose_failure", utc_now(), task_id),
+            )
         self.release_lease(task_id, final_worker_state="BLOCKED" if loop else "AVAILABLE")
 
     def ready_tasks(self) -> list[dict[str, Any]]:
         with self.connection() as db:
-            rows = db.execute("SELECT * FROM tasks WHERE status='READY' ORDER BY CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,last_update,task_id").fetchall()
+            rows = db.execute(
+                "SELECT * FROM tasks WHERE status='READY' ORDER BY "
+                "CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,last_update,task_id"
+            ).fetchall()
             return [dict(row) for row in rows]
 
     def dependencies_satisfied(self, task: Mapping[str, Any]) -> bool:
@@ -579,23 +680,24 @@ class PersistentStore:
 
     def dependency_cycles(self) -> list[list[str]]:
         with self.connection() as db:
-            rows = db.execute("SELECT task_id,dependencies FROM tasks WHERE status NOT IN ('COMPLETED','CANCELLED','SUPERSEDED')").fetchall()
+            rows = db.execute(
+                "SELECT task_id,dependencies FROM tasks WHERE status NOT IN ('COMPLETED','CANCELLED','SUPERSEDED')"
+            ).fetchall()
         graph = {str(row[0]): list(json.loads(str(row[1]) or "[]")) for row in rows}
         cycles: list[list[str]] = []
-        visiting: list[str] = []
         visited: set[str] = set()
+        stack: list[str] = []
 
         def visit(node: str) -> None:
-            if node in visiting:
-                index = visiting.index(node)
-                cycles.append(visiting[index:] + [node])
+            if node in stack:
+                cycles.append(stack[stack.index(node):] + [node])
                 return
             if node in visited or node not in graph:
                 return
-            visiting.append(node)
+            stack.append(node)
             for child in graph[node]:
                 visit(child)
-            visiting.pop()
+            stack.pop()
             visited.add(node)
 
         for node in graph:
@@ -604,22 +706,25 @@ class PersistentStore:
 
     def status_snapshot(self) -> dict[str, Any]:
         with self.connection() as db:
-            counts = {row[0]: int(row[1]) for row in db.execute("SELECT priority,COUNT(*) FROM tasks WHERE status NOT IN ('COMPLETED','CANCELLED','SUPERSEDED') GROUP BY priority")}
-            states = {row[0]: int(row[1]) for row in db.execute("SELECT status,COUNT(*) FROM tasks GROUP BY status")}
-            workers = {row[0]: int(row[1]) for row in db.execute("SELECT status,COUNT(*) FROM workers GROUP BY status")}
-            leases = int(db.execute("SELECT COUNT(*) FROM leases WHERE status='ACTIVE' AND expires_at>?", (int(time.time()),)).fetchone()[0])
-            duplicate_events = int(db.execute("SELECT COUNT(*) FROM events WHERE status='DUPLICATE'").fetchone()[0])
+            counts = {str(r[0]): int(r[1]) for r in db.execute(
+                "SELECT priority,COUNT(*) FROM tasks WHERE status NOT IN ('COMPLETED','CANCELLED','SUPERSEDED') GROUP BY priority"
+            )}
+            states = {str(r[0]): int(r[1]) for r in db.execute("SELECT status,COUNT(*) FROM tasks GROUP BY status")}
+            workers = {str(r[0]): int(r[1]) for r in db.execute("SELECT status,COUNT(*) FROM workers GROUP BY status")}
+            leases = int(db.execute(
+                "SELECT COUNT(*) FROM leases WHERE status='ACTIVE' AND expires_at>?", (int(time.time()),)
+            ).fetchone()[0])
         return {
             "controller_version": CONTROLLER_VERSION,
             "controller_state": self.get_meta("controller_state") or "ERROR",
             "command_version": int(self.get_meta("command_version") or "0"),
             "latest_main": self.get_meta("latest_main") or "unknown",
             "last_reconcile_at": self.get_meta("last_reconcile_at") or "never",
-            "queue_depth_by_priority": {priority: counts.get(priority, 0) for priority in ("P0", "P1", "P2", "P3")},
+            "queue_depth_by_priority": {p: counts.get(p, 0) for p in ("P0", "P1", "P2", "P3")},
             "task_states": states,
             "worker_states": workers,
             "active_leases": leases,
-            "duplicate_events": duplicate_events,
+            "duplicate_events": int(self.get_meta("duplicate_events_total") or "0"),
             "safety": {
                 "LIVE_TRADING": False,
                 "executionAuthority": "NONE",
@@ -632,7 +737,9 @@ class PersistentStore:
     def checkpoint(self) -> dict[str, Any]:
         state = self.status_snapshot()
         with self.connection() as db:
-            db.execute("INSERT INTO checkpoints(created_at,state_json) VALUES(?,?)", (utc_now(), json_dumps(state)))
+            db.execute(
+                "INSERT INTO checkpoints(created_at,state_json) VALUES(?,?)", (utc_now(), json_dumps(state))
+            )
         return state
 
 
@@ -677,22 +784,27 @@ class GitHubClient:
         payload = self.request("GET", f"/repos/{self.repository}/issues/{issue_number}")
         return int((payload or {}).get("comments") or 0)
 
-    def issue_comment_tail(self, issue_number: int, window: int = 500) -> list[dict[str, Any]]:
+    def issue_comment_tail(self, issue_number: int, window: int = COMMENT_WINDOW) -> list[dict[str, Any]]:
         total = self.issue_comment_count(issue_number)
         if total <= 0:
             return []
         per_page = 100
-        first_offset = max(0, total - max(1, window))
+        desired = max(1, min(int(window), COMMENT_WINDOW))
+        first_offset = max(0, total - desired)
         first_page = first_offset // per_page + 1
         last_page = (total - 1) // per_page + 1
         comments: list[dict[str, Any]] = []
         for page in range(first_page, last_page + 1):
             query = urlencode({"per_page": per_page, "page": page})
-            payload = self.request("GET", f"/repos/{self.repository}/issues/{issue_number}/comments?{query}")
+            payload = self.request(
+                "GET", f"/repos/{self.repository}/issues/{issue_number}/comments?{query}"
+            )
             if not isinstance(payload, list):
                 raise ControllerError("issue comment page is not a list")
             comments.extend(item for item in payload if isinstance(item, dict))
-        return comments[-window:]
+        if len(comments) < min(total, desired):
+            raise ControllerError("could not fetch complete bounded comment tail")
+        return comments[-desired:]
 
     def workflow_run(self, run_id: int) -> dict[str, Any]:
         payload = self.request("GET", f"/repos/{self.repository}/actions/runs/{run_id}")
@@ -701,21 +813,24 @@ class GitHubClient:
         return payload
 
     def dispatch(self, event_type: str, payload: Mapping[str, Any]) -> None:
-        self.request("POST", f"/repos/{self.repository}/dispatches", {"event_type": event_type, "client_payload": dict(payload)})
+        self.request(
+            "POST", f"/repos/{self.repository}/dispatches",
+            {"event_type": event_type, "client_payload": dict(payload)},
+        )
 
 
 class RepositoryDispatchWorkerAdapter:
-    """Wakes existing Agent Hub workflows; never executes issue text as code."""
+    """Adapter that wakes the existing bounded Agent Hub executor."""
 
     def __init__(self, github: GitHubClient) -> None:
         self.github = github
 
     def start_task(self, task: Mapping[str, Any]) -> None:
         command_id = str(task.get("hub_command_id") or "")
-        if not command_id:
-            raise ControllerError("task has no validated HUB_COMMAND to execute")
-        action = str(task.get("next_action") or "")
-        if any(fragment in action.casefold() for fragment in FORBIDDEN_ACTION_FRAGMENTS):
+        if not HUB_COMMAND_ID_RE.fullmatch(command_id):
+            raise ControllerError("task has no validated HUB_COMMAND")
+        action = str(task.get("next_action") or "").casefold()
+        if any(fragment in action for fragment in FORBIDDEN_ACTION_FRAGMENTS):
             raise SafetyError("forbidden action requested")
         self.github.dispatch(
             "agent-hub-command-ready",
@@ -723,7 +838,10 @@ class RepositoryDispatchWorkerAdapter:
         )
 
     def wake_coordinator(self, *, report_comment_id: int) -> None:
-        self.github.dispatch("agent-executor-report-ready", {"source": "realtime-controller", "report_comment_id": report_comment_id})
+        self.github.dispatch(
+            "agent-executor-report-ready",
+            {"source": "realtime-controller", "report_comment_id": report_comment_id},
+        )
 
 
 class RealtimeController:
@@ -766,10 +884,12 @@ class RealtimeController:
         if not hmac.compare_digest(expected, signature):
             raise ValidationError("webhook signature mismatch")
 
-    def ingest_webhook(self, *, event_type: str, delivery_id: str, signature: str, raw_body: bytes) -> dict[str, Any]:
-        if event_type not in ALLOWED_EVENTS or len(event_type) > MAX_EVENT_TYPE_LENGTH:
+    def ingest_webhook(
+        self, *, event_type: str, delivery_id: str, signature: str, raw_body: bytes
+    ) -> dict[str, Any]:
+        if event_type not in ALLOWED_EVENTS:
             raise ValidationError("event type is not allowlisted")
-        if not DELIVERY_RE.fullmatch(delivery_id) or len(delivery_id) > MAX_DELIVERY_ID_LENGTH:
+        if not DELIVERY_RE.fullmatch(delivery_id):
             raise ValidationError("delivery id is invalid")
         if len(raw_body) > MAX_WEBHOOK_BYTES:
             raise ValidationError("webhook payload exceeds limit")
@@ -797,8 +917,7 @@ class RealtimeController:
             issue_number = int(((payload.get("issue") or {}).get("number") or 0))
             if issue_number != self.hub_issue:
                 return
-            action = str(payload.get("action") or "")
-            if action not in {"created", "edited"}:
+            if str(payload.get("action") or "") != "created":
                 return
             comment = payload.get("comment") or {}
             if not isinstance(comment, Mapping):
@@ -806,8 +925,14 @@ class RealtimeController:
             body = str(comment.get("body") or "")
             comment_id = int(comment.get("id") or 0)
             actor = str(((comment.get("user") or {}).get("login") or ""))
+            sender = str(((payload.get("sender") or {}).get("login") or ""))
+            association = str(comment.get("author_association") or "").upper()
             if COMMAND_MARKER in body:
-                command = parse_command_update(body, comment_id=comment_id, actor=actor, authorized_actors=self.authorized_commanders)
+                if sender != actor or association not in AUTHORIZED_ASSOCIATIONS:
+                    raise ValidationError("command sender/author identity is not authorized")
+                command = parse_command_update(
+                    body, comment_id=comment_id, actor=actor, authorized_actors=self.authorized_commanders
+                )
                 self.store.apply_command(command)
             elif HUB_COMMAND_MARKER in body:
                 self._ingest_hub_command(body)
@@ -824,36 +949,41 @@ class RealtimeController:
         status = fields.get("status", "").strip().lower()
         execution_mode = fields.get("execution_mode", "").strip().lower()
         action_type = fields.get("action_type", "").strip().lower()
-        if not TASK_ID_RE.fullmatch(task_id) or not command_id or status != "ready":
+        if not TASK_ID_RE.fullmatch(task_id) or not HUB_COMMAND_ID_RE.fullmatch(command_id) or status != "ready":
             return
         if execution_mode not in {"read_only", "code_change"}:
             return
         if any(fragment in action_type for fragment in FORBIDDEN_ACTION_FRAGMENTS):
             raise SafetyError("HUB_COMMAND requests a forbidden action")
-        files = [item.strip() for item in re.split(r"[,;|\n]", fields.get("allowed_paths", "")) if item.strip() and item.strip().lower() != "none"]
-        task = self.store.task(task_id)
-        if not task:
-            self.store.upsert_task(task_id, priority=infer_priority(task_id), command_version=int(self.store.get_meta("command_version") or "0"), status="PENDING")
+        files = [
+            item.strip() for item in re.split(r"[,;|\n]", fields.get("allowed_paths", ""))
+            if item.strip() and item.strip().lower() != "none"
+        ]
+        if not self.store.task(task_id):
+            self.store.upsert_task(
+                task_id,
+                priority=infer_priority(task_id),
+                command_version=int(self.store.get_meta("command_version") or "0"),
+                status="PENDING",
+            )
+        expected = fields.get("expected_head_sha", "").lower()
         self.store.attach_hub_command(
             task_id,
             command_id=command_id,
             worker_id=worker or "agent-hub-validation",
             files=files,
             branch=fields.get("work_branch") or fields.get("target_branch") or None,
-            head_sha=fields.get("expected_head_sha") if SHA_RE.fullmatch(fields.get("expected_head_sha", "")) else None,
+            head_sha=expected if SHA_RE.fullmatch(expected) else None,
         )
 
     def _ingest_worker_report(self, body: str, *, comment_id: int) -> None:
         fields = parse_colon_fields(body)
         task_id = (fields.get("root_task_id") or fields.get("task_id") or "").strip()
-        if not TASK_ID_RE.fullmatch(task_id):
+        if not TASK_ID_RE.fullmatch(task_id) or not self.store.task(task_id):
             return
         status = fields.get("status", "").strip().lower()
         head_sha = fields.get("head_sha", "").strip().lower()
         run_id = fields.get("ci_run_id", "").strip()
-        task = self.store.task(task_id)
-        if not task:
-            return
         if status == "completed":
             if self.github is None or not run_id.isdigit() or not SHA_RE.fullmatch(head_sha):
                 self.store.set_task_status(task_id, "VERIFYING", next_action="verify_ci_and_success_criteria")
@@ -862,36 +992,46 @@ class RealtimeController:
             if str(run.get("head_sha") or "").lower() != head_sha:
                 self.store.record_task_failure(task_id, "worker report CI SHA mismatch")
                 return
-            if str(run.get("status") or "") == "completed" and str(run.get("conclusion") or "") in {"success", "neutral", "skipped"}:
+            if str(run.get("status") or "") == "completed" and str(run.get("conclusion") or "") in {
+                "success", "neutral", "skipped"
+            }:
                 self.store.set_task_status(task_id, "COMPLETED", next_action="reconcile_next_task")
                 self.store.release_lease(task_id)
             else:
-                self.store.record_task_failure(task_id, f"worker report CI not successful: {run.get('status')}/{run.get('conclusion')}")
+                self.store.record_task_failure(
+                    task_id, f"worker report CI not successful: {run.get('status')}/{run.get('conclusion')}"
+                )
         elif status in {"failed", "blocked", "stale", "expired"}:
             self.store.record_task_failure(task_id, f"worker report status={status}")
         else:
             self.store.set_task_status(task_id, "VERIFYING", next_action="verify_worker_report")
         if self.worker_adapter and comment_id > 0 and status in {"completed", "failed", "blocked"}:
-            # Existing coordinator remains authoritative for its own command/report lifecycle.
             self.worker_adapter.wake_coordinator(report_comment_id=comment_id)
 
     def _ingest_ci_event(self, event_type: str, payload: Mapping[str, Any]) -> None:
-        obj = payload.get(event_type) or payload.get(event_type.replace("_", "")) or {}
+        obj = payload.get(event_type) or {}
         if not isinstance(obj, Mapping):
             return
-        head_sha = str(obj.get("head_sha") or ((obj.get("check_suite") or {}).get("head_sha") if isinstance(obj.get("check_suite"), Mapping) else "") or "").lower()
+        nested_suite = obj.get("check_suite") if isinstance(obj.get("check_suite"), Mapping) else {}
+        head_sha = str(obj.get("head_sha") or nested_suite.get("head_sha") or "").lower()
         if not SHA_RE.fullmatch(head_sha):
             return
         status = str(obj.get("status") or "").lower()
         conclusion = str(obj.get("conclusion") or "").lower()
         with self.store.connection() as db:
-            rows = db.execute("SELECT task_id,status FROM tasks WHERE head_sha=? AND status IN ('CLAIMED','IN_PROGRESS','WAITING_CI','VERIFYING')", (head_sha,)).fetchall()
+            rows = db.execute(
+                "SELECT task_id FROM tasks WHERE head_sha=? AND status IN "
+                "('CLAIMED','IN_PROGRESS','WAITING_CI','VERIFYING')",
+                (head_sha,),
+            ).fetchall()
         for row in rows:
             task_id = str(row[0])
             if status != "completed":
                 self.store.set_task_status(task_id, "WAITING_CI", next_action="await_ci_terminal_event")
             elif conclusion in {"success", "neutral", "skipped"}:
-                self.store.set_task_status(task_id, "VERIFYING", next_action="verify_worker_report_and_success_criteria")
+                self.store.set_task_status(
+                    task_id, "VERIFYING", next_action="verify_worker_report_and_success_criteria"
+                )
             elif conclusion in {"failure", "cancelled", "timed_out", "action_required", "startup_failure"}:
                 self.store.record_task_failure(task_id, f"{event_type}:{conclusion}")
 
@@ -910,29 +1050,34 @@ class RealtimeController:
         try:
             main_sha = self.github.repository_default_branch_sha()
             self.store.set_meta("latest_main", main_sha)
-            comments = self.github.issue_comment_tail(self.hub_issue, window=500)
+            comments = self.github.issue_comment_tail(self.hub_issue, window=COMMENT_WINDOW)
             valid_commands: list[CommandUpdate] = []
             for comment in comments:
                 body = str(comment.get("body") or "")
                 if COMMAND_MARKER not in body:
+                    continue
+                actor = str(((comment.get("user") or {}).get("login") or ""))
+                association = str(comment.get("author_association") or "").upper()
+                if association not in AUTHORIZED_ASSOCIATIONS:
                     continue
                 try:
                     valid_commands.append(
                         parse_command_update(
                             body,
                             comment_id=int(comment.get("id") or 0),
-                            actor=str(((comment.get("user") or {}).get("login") or "")),
+                            actor=actor,
                             authorized_actors=self.authorized_commanders,
                         )
                     )
                 except ValidationError:
                     continue
             if valid_commands:
-                highest_version = max(item.version for item in valid_commands)
-                candidates = [item for item in valid_commands if item.version == highest_version]
-                if len(candidates) != 1:
+                highest = max(item.version for item in valid_commands)
+                candidates = [item for item in valid_commands if item.version == highest]
+                unique_comment_ids = {item.comment_id for item in candidates}
+                if len(unique_comment_ids) != 1:
                     raise ValidationError("ambiguous highest COMMAND_VERSION")
-                latest = candidates[0]
+                latest = candidates[-1]
                 if latest.latest_main != main_sha:
                     self.store.set_meta("command_main_drift", f"{latest.latest_main}->{main_sha}")
                 self.store.apply_command(latest)
@@ -940,11 +1085,11 @@ class RealtimeController:
                 body = str(comment.get("body") or "")
                 if HUB_COMMAND_MARKER in body:
                     self._ingest_hub_command(body)
-            cycles = self.store.dependency_cycles()
-            if cycles:
-                for cycle in cycles:
-                    for task_id in set(cycle):
-                        self.store.set_task_status(task_id, "BLOCKED", next_action="dependency_cycle_escalation", blocked_by="DEPENDENCY_CYCLE")
+            for cycle in self.store.dependency_cycles():
+                for task_id in set(cycle):
+                    self.store.set_task_status(
+                        task_id, "BLOCKED", next_action="dependency_cycle_escalation", blocked_by="DEPENDENCY_CYCLE"
+                    )
             self.store.recover_expired_leases()
             self._consecutive_external_failures = 0
             self.store.set_meta("last_reconcile_at", utc_now())
@@ -970,28 +1115,28 @@ class RealtimeController:
             return None
         self.store.set_controller_state("DISPATCHING")
         for task in self.store.ready_tasks():
+            task_id = str(task["task_id"])
             if int(task.get("loop_detected") or 0):
                 continue
             if not self.store.dependencies_satisfied(task):
-                self.store.set_task_status(str(task["task_id"]), "WAITING_DEPENDENCY", next_action="await_dependencies")
+                self.store.set_task_status(task_id, "WAITING_DEPENDENCY", next_action="await_dependencies")
                 continue
             if not task.get("hub_command_id"):
-                self.store.set_task_status(str(task["task_id"]), "PENDING", next_action="await_validated_hub_command")
+                self.store.set_task_status(task_id, "PENDING", next_action="await_validated_hub_command")
                 continue
             worker_id = str(task.get("owner_worker") or "agent-hub-validation")
             self.store.register_worker(worker_id, [str(task.get("task_type") or "CODE_REMEDIATION")])
             files = list(json.loads(str(task.get("files") or "[]")))
-            lease_id = self.store.acquire_lease(str(task["task_id"]), worker_id, files)
-            if not lease_id:
+            if not self.store.acquire_lease(task_id, worker_id, files):
                 continue
             try:
-                self.worker_adapter.start_task(self.store.task(str(task["task_id"])) or task)
-                self.store.set_task_status(str(task["task_id"]), "IN_PROGRESS", next_action="await_worker_or_ci_event")
-                self.store.heartbeat(worker_id, task_id=str(task["task_id"]), progress=True)
-                return str(task["task_id"])
+                current = self.store.task(task_id) or task
+                self.worker_adapter.start_task(current)
+                self.store.set_task_status(task_id, "IN_PROGRESS", next_action="await_worker_or_ci_event")
+                self.store.heartbeat(worker_id, task_id=task_id, progress=True)
+                return task_id
             except Exception as exc:
-                self.store.record_task_failure(str(task["task_id"]), f"dispatch failure: {exc}")
-                continue
+                self.store.record_task_failure(task_id, f"dispatch failure: {exc}")
         return None
 
     def stop(self) -> None:
@@ -1018,7 +1163,6 @@ class ControllerHTTPHandler(BaseHTTPRequestHandler):
         return getattr(self.server, "controller")  # type: ignore[no-any-return]
 
     def log_message(self, fmt: str, *args: Any) -> None:
-        # Keep server logs concise and never log request bodies, signatures, or tokens.
         print(json_dumps({"timestamp": utc_now(), "component": "http", "message": fmt % args}))
 
     def _json(self, status: int, payload: Mapping[str, Any]) -> None:
@@ -1033,11 +1177,14 @@ class ControllerHTTPHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/health/live":
             state = self.controller.store.get_meta("controller_state") or "ERROR"
-            self._json(HTTPStatus.OK if state not in {"ERROR", "SHUTTING_DOWN"} else HTTPStatus.SERVICE_UNAVAILABLE, {"live": state not in {"ERROR", "SHUTTING_DOWN"}, "state": state})
+            live = state not in {"ERROR", "SHUTTING_DOWN"}
+            self._json(HTTPStatus.OK if live else HTTPStatus.SERVICE_UNAVAILABLE, {"live": live, "state": state})
             return
         if self.path == "/health/ready":
             state = self.controller.store.get_meta("controller_state") or "ERROR"
-            ready = state in {"RUNNING", "WAITING_EVENT", "RECONCILING", "DISPATCHING"} and bool(self.controller.webhook_secret)
+            ready = state in {"RUNNING", "WAITING_EVENT", "RECONCILING", "DISPATCHING"} and bool(
+                self.controller.webhook_secret
+            )
             self._json(HTTPStatus.OK if ready else HTTPStatus.SERVICE_UNAVAILABLE, {"ready": ready, "state": state})
             return
         if self.path == "/status":
@@ -1075,9 +1222,9 @@ def load_authorized_commanders(policy_path: Path) -> set[str]:
     except (OSError, json.JSONDecodeError) as exc:
         raise ControllerError(f"cannot load Agent Hub policy: {exc}") from exc
     candidates = payload.get("allowed_command_authors") or payload.get("central_commander_logins") or []
-    if not isinstance(candidates, list) or not candidates or any(not isinstance(item, str) for item in candidates):
+    if not isinstance(candidates, list) or not candidates or any(not isinstance(v, str) for v in candidates):
         raise ControllerError("Agent Hub policy has no authorized command authors")
-    return {item.strip() for item in candidates if item.strip()}
+    return {value.strip() for value in candidates if value.strip()}
 
 
 def load_worker_registry(store: PersistentStore, workers_path: Path) -> None:
@@ -1085,12 +1232,9 @@ def load_worker_registry(store: PersistentStore, workers_path: Path) -> None:
         payload = json.loads(workers_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ControllerError(f"cannot load Agent Hub worker registry: {exc}") from exc
-    values = payload.get("workers") if isinstance(payload, dict) else payload
-    if isinstance(values, dict):
-        iterable = values.values()
-    elif isinstance(values, list):
-        iterable = values
-    else:
+    values: Any = payload.get("workers") if isinstance(payload, dict) else payload
+    iterable = values.values() if isinstance(values, dict) else values
+    if not isinstance(iterable, Iterable):
         raise ControllerError("worker registry shape is invalid")
     for value in iterable:
         if not isinstance(value, Mapping):
@@ -1099,20 +1243,22 @@ def load_worker_registry(store: PersistentStore, workers_path: Path) -> None:
         if not worker_id:
             continue
         raw_caps = value.get("allowed_action_types") or value.get("capabilities") or []
-        caps = [str(item) for item in raw_caps] if isinstance(raw_caps, list) else []
-        store.register_worker(worker_id, caps)
+        capabilities = [str(item) for item in raw_caps] if isinstance(raw_caps, list) else []
+        store.register_worker(worker_id, capabilities)
 
 
 def build_controller_from_env() -> RealtimeController:
     repository = os.environ.get("CONTROLLER_REPOSITORY", "seungjae3908-source/seungjae20260713").strip()
-    db_path = os.environ.get("CONTROLLER_DB_PATH", "/var/lib/investment-realtime-controller/controller.sqlite3")
+    db_path = os.environ.get(
+        "CONTROLLER_DB_PATH", "/var/lib/investment-realtime-controller/controller.sqlite3"
+    )
     repo_root = Path(os.environ.get("CONTROLLER_REPO_ROOT", Path(__file__).resolve().parents[2]))
     store = PersistentStore(db_path)
     authorized = load_authorized_commanders(repo_root / ".github" / "agent-hub" / "policy.json")
     load_worker_registry(store, repo_root / ".github" / "agent-hub" / "workers.json")
     token = os.environ.get("GITHUB_TOKEN", "").strip()
     github = GitHubClient(repository=repository, token=token) if token else None
-    controller = RealtimeController(
+    return RealtimeController(
         store=store,
         repository=repository,
         webhook_secret=os.environ.get("GITHUB_WEBHOOK_SECRET", ""),
@@ -1123,14 +1269,15 @@ def build_controller_from_env() -> RealtimeController:
         dispatch_enabled=os.environ.get("DISPATCH_ENABLED", "false").lower() == "true",
         ai_workers_enabled=os.environ.get("AI_WORKERS_ENABLED", "false").lower() == "true",
     )
-    return controller
 
 
 def serve(controller: RealtimeController, host: str, port: int, reconcile_seconds: float) -> None:
     server = ThreadingHTTPServer((host, port), ControllerHTTPHandler)
     setattr(server, "controller", controller)
-    loop_thread = threading.Thread(target=controller.run_loop, args=(reconcile_seconds,), name="controller-reconciler", daemon=True)
-    loop_thread.start()
+    thread = threading.Thread(
+        target=controller.run_loop, args=(reconcile_seconds,), name="controller-reconciler", daemon=True
+    )
+    thread.start()
 
     def shutdown(_signum: int, _frame: Any) -> None:
         controller.stop()
@@ -1142,7 +1289,7 @@ def serve(controller: RealtimeController, host: str, port: int, reconcile_second
         server.serve_forever(poll_interval=0.5)
     finally:
         controller.stop()
-        loop_thread.join(timeout=10)
+        thread.join(timeout=10)
         server.server_close()
 
 
@@ -1150,8 +1297,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Persistent realtime Agent Hub controller")
     parser.add_argument("--host", default=os.environ.get("CONTROLLER_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.environ.get("CONTROLLER_PORT", "8765")))
-    parser.add_argument("--reconcile-seconds", type=float, default=float(os.environ.get("CONTROLLER_RECONCILE_SECONDS", str(DEFAULT_RECONCILE_SECONDS))))
-    parser.add_argument("--once", action="store_true", help="run one reconciliation cycle and exit")
+    parser.add_argument(
+        "--reconcile-seconds",
+        type=float,
+        default=float(os.environ.get("CONTROLLER_RECONCILE_SECONDS", str(DEFAULT_RECONCILE_SECONDS))),
+    )
+    parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
     controller = build_controller_from_env()
     if args.once:
