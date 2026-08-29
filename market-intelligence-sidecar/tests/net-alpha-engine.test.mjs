@@ -3,6 +3,17 @@ import assert from 'node:assert/strict';
 import { evaluateNetAlpha } from '../src/net-alpha-engine.mjs';
 
 const NOW = Date.UTC(2026, 7, 22, 3, 20, 0);
+const IDENTITY = Object.freeze({
+  strategyId: 'scanner-12-strategy',
+  strategyVersion: 'v7',
+  parameterHash: 'param-hash-v7',
+  researchCodeSha: 'a'.repeat(40),
+  market: 'CRYPTO_FUTURES',
+  symbol: 'BTCUSDT',
+  timeframe: '15m',
+  horizon: 'SCALP',
+  direction: 'LONG',
+});
 
 function costs(overrides = {}) {
   return {
@@ -28,9 +39,13 @@ function readyInput(overrides = {}) {
     forwardDataComplete: true,
     fullCostReady: true,
     evidenceComplete: 1,
+    profitabilityProven: true,
     source: 'forward-recommendation-profit-calibration-v2',
+    sourceSchemaVersion: 'forward-calibration-gross-edge-v2',
     costSource: 'FULL_COST_EVIDENCE_V1',
     costPolicyVersion: 'cost-v7',
+    grossIdentity: { ...IDENTITY },
+    costIdentity: { ...IDENTITY },
     expectedGrossEdgeBps: 20,
     conformalLowerEdgeBps: 15,
     attestedNetEdgeBps: 15,
@@ -39,7 +54,7 @@ function readyInput(overrides = {}) {
   };
 }
 
-test('passes only after every authoritative readiness gate and explicit expected cost are present', () => {
+test('passes only after every authoritative readiness gate explicit cost and identity lineage are present', () => {
   const result = evaluateNetAlpha(readyInput());
   assert.equal(result.status, 'READY');
   assert.equal(result.totalExpectedCostBps, 5);
@@ -50,9 +65,11 @@ test('passes only after every authoritative readiness gate and explicit expected
   assert.equal(result.readiness.forwardDataComplete, true);
   assert.equal(result.readiness.fullCostReady, true);
   assert.equal(result.readiness.evidenceComplete, true);
+  assert.equal(result.readiness.profitabilityProven, true);
   assert.equal(result.profitabilityClaimAllowed, false);
   assert.equal(result.safety.aiNumericalAuthority, false);
   assert.equal(result.safety.executionAuthority, 'NONE');
+  assert.equal(result.safety.liveTrading, false);
   assert.equal(result.safety.orderAllowed, false);
 });
 
@@ -78,7 +95,7 @@ test('gross edge or conformal lower edge missing keeps Net Alpha unavailable', (
   assert.ok(lowerMissing.reasons.includes('CONFORMAL_LOWER_EDGE_NOT_AVAILABLE'));
 });
 
-test('Forward Data, Full Cost, and Evidence Complete readiness are independent hard gates', () => {
+test('Forward Data Full Cost and Evidence Complete readiness are independent hard gates', () => {
   const forwardBlocked = evaluateNetAlpha(readyInput({ forwardDataComplete: false }));
   assert.equal(forwardBlocked.status, 'NOT_AVAILABLE');
   assert.ok(forwardBlocked.reasons.includes('FORWARD_DATA_INCOMPLETE'));
@@ -90,6 +107,20 @@ test('Forward Data, Full Cost, and Evidence Complete readiness are independent h
   const evidenceBlocked = evaluateNetAlpha(readyInput({ evidenceComplete: 0 }));
   assert.equal(evidenceBlocked.status, 'NOT_AVAILABLE');
   assert.ok(evidenceBlocked.reasons.includes('EVIDENCE_COMPLETE_NOT_READY'));
+});
+
+test('numeric strings cannot manufacture readiness gross edge or cost evidence', () => {
+  const evidenceString = evaluateNetAlpha(readyInput({ evidenceComplete: '1' }));
+  assert.equal(evidenceString.status, 'NOT_AVAILABLE');
+  assert.ok(evidenceString.reasons.includes('EVIDENCE_COMPLETE_NOT_READY'));
+
+  const grossString = evaluateNetAlpha(readyInput({ expectedGrossEdgeBps: '20' }));
+  assert.equal(grossString.status, 'NOT_AVAILABLE');
+  assert.ok(grossString.reasons.includes('EXPECTED_GROSS_EDGE_NOT_AVAILABLE'));
+
+  const costString = evaluateNetAlpha(readyInput({ costs: costs({ slippageBps: '1' }) }));
+  assert.equal(costString.status, 'NOT_AVAILABLE');
+  assert.ok(costString.reasons.includes('COST_EVIDENCE_MISSING:slippageBps'));
 });
 
 test('missing or partial cost evidence stays unavailable rather than assuming zero', () => {
@@ -114,7 +145,31 @@ test('an explicitly measured zero cost is valid evidence', () => {
   assert.equal(result.autoTrading.state, 'PASS');
 });
 
+test('canonical Gross Edge source schema and identity lineage are mandatory', () => {
+  const wrongSource = evaluateNetAlpha(readyInput({ source: 'scanner-score' }));
+  assert.equal(wrongSource.status, 'NOT_AVAILABLE');
+  assert.ok(wrongSource.reasons.includes('CANONICAL_GROSS_EDGE_SOURCE_REQUIRED'));
+
+  const wrongSchema = evaluateNetAlpha(readyInput({ sourceSchemaVersion: 'v1' }));
+  assert.equal(wrongSchema.status, 'NOT_AVAILABLE');
+  assert.ok(wrongSchema.reasons.includes('CANONICAL_GROSS_EDGE_SCHEMA_REQUIRED'));
+
+  const missingIdentity = evaluateNetAlpha(readyInput({ grossIdentity: null }));
+  assert.equal(missingIdentity.status, 'NOT_AVAILABLE');
+  assert.ok(missingIdentity.reasons.includes('GROSS_IDENTITY_PROVENANCE_NOT_AVAILABLE'));
+
+  const mismatch = evaluateNetAlpha(readyInput({
+    costIdentity: { ...IDENTITY, horizon: 'POSITION' },
+  }));
+  assert.equal(mismatch.status, 'NOT_AVAILABLE');
+  assert.ok(mismatch.reasons.includes('NET_ALPHA_IDENTITY_MISMATCH'));
+});
+
 test('cost provenance and clock are mandatory and independently fail closed', () => {
+  const noClock = evaluateNetAlpha(readyInput({ now: undefined }));
+  assert.equal(noClock.status, 'NOT_AVAILABLE');
+  assert.ok(noClock.reasons.includes('AUTHORITATIVE_CLOCK_NOT_AVAILABLE'));
+
   const noSource = evaluateNetAlpha(readyInput({ costSource: '' }));
   assert.equal(noSource.status, 'NOT_AVAILABLE');
   assert.ok(noSource.reasons.includes('FULL_COST_SOURCE_REQUIRED'));
@@ -151,4 +206,18 @@ test('server attestation mismatch fails closed instead of trusting either number
   assert.equal(result.status, 'NOT_AVAILABLE');
   assert.equal(result.autoTrading.state, 'INSUFFICIENT_EVIDENCE');
   assert.ok(result.reasons.includes('NET_EDGE_ATTESTATION_MISMATCH'));
+});
+
+test('request-supplied Net Alpha thresholds and freshness windows cannot weaken canonical policy', () => {
+  assert.throws(
+    () => evaluateNetAlpha(readyInput(), { maxEvidenceAgeMs: 120_000 }),
+    /NET_ALPHA_POLICY_OVERRIDE_NOT_ALLOWED:maxEvidenceAgeMs/,
+  );
+  assert.throws(
+    () => evaluateNetAlpha(readyInput(), { minConservativeNetAlphaBps: -10 }),
+    /NET_ALPHA_POLICY_OVERRIDE_NOT_ALLOWED:minConservativeNetAlphaBps/,
+  );
+  const required = evaluateNetAlpha(readyInput(), { enforcement: 'REQUIRED_FOR_PARENT_GATE' });
+  assert.equal(required.policy.enforcement, 'REQUIRED_FOR_PARENT_GATE');
+  assert.equal(required.policy.minConservativeNetAlphaBps, 1);
 });
