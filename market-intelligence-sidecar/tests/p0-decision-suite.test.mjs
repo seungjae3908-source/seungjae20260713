@@ -4,6 +4,17 @@ import { evaluateMarketIntelligence } from '../src/engine.mjs';
 
 const NOW = Date.UTC(2026, 7, 22, 3, 20, 0);
 const DRIFT_REFERENCE_DIGEST = 'b'.repeat(64);
+const NET_ALPHA_IDENTITY = Object.freeze({
+  strategyId: 'scanner-12-strategy',
+  strategyVersion: 'v7',
+  parameterHash: 'param-hash-v7',
+  researchCodeSha: 'c'.repeat(40),
+  market: 'CRYPTO_SPOT',
+  symbol: 'KRW-BTC',
+  timeframe: '15m',
+  horizon: 'SCALP',
+  direction: 'BUY',
+});
 
 function baseInput() {
   return {
@@ -49,9 +60,13 @@ function authoritativeNetAlpha(overrides = {}) {
     forwardDataComplete: true,
     fullCostReady: true,
     evidenceComplete: 1,
+    profitabilityProven: true,
     source: 'forward-recommendation-profit-calibration-v2',
+    sourceSchemaVersion: 'forward-calibration-gross-edge-v2',
     costSource: 'FULL_COST_EVIDENCE_V1',
     costPolicyVersion: 'cost-v1',
+    grossIdentity: { ...NET_ALPHA_IDENTITY },
+    costIdentity: { ...NET_ALPHA_IDENTITY },
     expectedGrossEdgeBps: 12,
     conformalLowerEdgeBps: 10,
     attestedNetEdgeBps: 9,
@@ -75,6 +90,10 @@ function stableRegime(overrides = {}) {
       referenceId: 'TRAIN_REFERENCE_V1',
       referenceDigest: DRIFT_REFERENCE_DIGEST,
       referenceFrozen: true,
+      referenceValidatedAt: NOW,
+      referenceSampleSize: 500,
+      referenceComputable: true,
+      zeroVarianceFeatures: [],
       featurePsi: { trend: 0.05, volatility: 0.04 },
     },
     ...overrides,
@@ -295,6 +314,7 @@ test('nested sizing payload cannot replace computed gate evidence or parent dire
   assert.equal(result.netAlpha.autoTrading.state, 'VETO');
   assert.equal(result.dynamicSizing.state, 'VETO');
   assert.equal(result.dynamicSizing.direction, 'BUY');
+  assert.equal(result.dynamicSizing.advisoryMultiplier, 0);
   assert.equal(result.dynamicSizing.recommendedMultiplier, 0);
   assert.equal(result.dynamicSizing.suggestedNotional, 0);
   assert.equal(result.autoTrading.mode, 'BLOCKED_RISK');
@@ -318,6 +338,7 @@ test('NO_TRADE and SIGNAL_CONFLICT cannot be promoted back into positive exposur
     });
     assert.equal(result.dynamicSizing.state, 'VETO');
     assert.equal(result.dynamicSizing.direction, direction);
+    assert.equal(result.dynamicSizing.advisoryMultiplier, 0);
     assert.equal(result.dynamicSizing.recommendedMultiplier, 0);
     assert.equal(result.dynamicSizing.suggestedNotional, 0);
     assert.equal(result.autoTrading.mode, 'BLOCKED_RISK');
@@ -339,6 +360,7 @@ test('long-only market SHORT cannot become a positive sizing recommendation', ()
     dynamicSizingPolicy: { enforcement: 'REQUIRED_FOR_PARENT_GATE' },
   });
   assert.equal(result.dynamicSizing.state, 'VETO');
+  assert.equal(result.dynamicSizing.advisoryMultiplier, 0);
   assert.equal(result.dynamicSizing.recommendedMultiplier, 0);
   assert.ok(result.dynamicSizing.reasons.includes('DIRECTION_NOT_ALLOWED_FOR_MARKET'));
   assert.equal(result.autoTrading.mode, 'BLOCKED_RISK');
@@ -403,4 +425,28 @@ test('nested portfolio-safety clock cannot make an expired signal look fresh', (
   assert.equal(result.autoTrading.mode, 'BLOCKED_RISK');
   assert.equal(result.autoTrading.hardBlockReason, 'SIGNAL_TTL_EXPIRED');
   assert.equal(result.autoTrading.orderAllowed, false);
+});
+
+test('nested #612 policy payloads cannot reshape canonical thresholds', () => {
+  assert.throws(
+    () => evaluateMarketIntelligence({
+      ...baseInput(),
+      regimeBrainPolicy: { maxEvidenceAgeMs: 120_000 },
+    }),
+    /REGIME_POLICY_OVERRIDE_NOT_ALLOWED:maxEvidenceAgeMs/,
+  );
+  assert.throws(
+    () => evaluateMarketIntelligence({
+      ...baseInput(),
+      netAlphaPolicy: { minConservativeNetAlphaBps: -10 },
+    }),
+    /NET_ALPHA_POLICY_OVERRIDE_NOT_ALLOWED:minConservativeNetAlphaBps/,
+  );
+  assert.throws(
+    () => evaluateMarketIntelligence({
+      ...baseInput(),
+      dynamicSizingPolicy: { highVolMultiplier: 1 },
+    }),
+    /DYNAMIC_SIZING_POLICY_OVERRIDE_NOT_ALLOWED:highVolMultiplier/,
+  );
 });
