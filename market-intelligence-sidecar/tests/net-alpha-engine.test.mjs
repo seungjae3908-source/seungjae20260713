@@ -11,7 +11,7 @@ const IDENTITY = Object.freeze({
   market: 'CRYPTO_FUTURES',
   symbol: 'BTCUSDT',
   timeframe: '15m',
-  horizon: 'SCALP',
+  horizon: 15,
   direction: 'LONG',
 });
 
@@ -42,6 +42,7 @@ function readyInput(overrides = {}) {
     profitabilityProven: true,
     source: 'forward-recommendation-profit-calibration-v2',
     sourceSchemaVersion: 'forward-calibration-gross-edge-v2',
+    grossEvidenceSource: 'LIVE_RECOMMENDATION',
     costSource: 'FULL_COST_EVIDENCE_V1',
     costPolicyVersion: 'cost-v7',
     grossIdentity: { ...IDENTITY },
@@ -150,6 +151,10 @@ test('canonical Gross Edge source schema and identity lineage are mandatory', ()
   assert.equal(wrongSource.status, 'NOT_AVAILABLE');
   assert.ok(wrongSource.reasons.includes('CANONICAL_GROSS_EDGE_SOURCE_REQUIRED'));
 
+  const wrongEvidenceSource = evaluateNetAlpha(readyInput({ grossEvidenceSource: 'SYNTHETIC' }));
+  assert.equal(wrongEvidenceSource.status, 'NOT_AVAILABLE');
+  assert.ok(wrongEvidenceSource.reasons.includes('CANONICAL_GROSS_EDGE_EVIDENCE_SOURCE_REQUIRED'));
+
   const wrongSchema = evaluateNetAlpha(readyInput({ sourceSchemaVersion: 'v1' }));
   assert.equal(wrongSchema.status, 'NOT_AVAILABLE');
   assert.ok(wrongSchema.reasons.includes('CANONICAL_GROSS_EDGE_SCHEMA_REQUIRED'));
@@ -159,7 +164,7 @@ test('canonical Gross Edge source schema and identity lineage are mandatory', ()
   assert.ok(missingIdentity.reasons.includes('GROSS_IDENTITY_PROVENANCE_NOT_AVAILABLE'));
 
   const mismatch = evaluateNetAlpha(readyInput({
-    costIdentity: { ...IDENTITY, horizon: 'POSITION' },
+    costIdentity: { ...IDENTITY, horizon: 60 },
   }));
   assert.equal(mismatch.status, 'NOT_AVAILABLE');
   assert.ok(mismatch.reasons.includes('NET_ALPHA_IDENTITY_MISMATCH'));
