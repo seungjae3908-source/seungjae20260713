@@ -109,14 +109,15 @@ test('Bitget wrapper uses only signed GET account and position requests and reda
   assert.ok(seen.every((r) => r.method === 'GET')); assert.equal(result.positions?.[0]?.liquidationPrice, null); assert.equal(JSON.stringify(result).includes('BITGET_PASSPHRASE_TEST_ONLY'), false); assert.equal(result.withdrawalRequests, 0);
 });
 
-test('last-good data becomes stale only inside the same authenticated user scope', async () => {
-  let failUserA = false;
+test('last-good fallback is same-user only and auth failure evicts it fail-closed', async () => {
+  let userAMode: 'ok' | 'timeout' | 'auth' = 'ok';
   const snapshot = { provider: 'upbit' as const, readOnly: true as const, connected: true, status: 'CONNECTED' as const, accounts: [], balances: [{ currency: 'KRW', available: 0, locked: 0, total: 0, estimatedKrwValue: 0 }], positions: [], openOrders: [], checkedAt: '2026-01-01T00:00:00.000Z', lastGoodAt: '2026-01-01T00:00:00.000Z', stale: false, errorCode: null, orderRequests: 0 as const, cancelRequests: 0 as const, amendRequests: 0 as const, transferRequests: 0 as const, withdrawalRequests: 0 as const, credentialsReturned: false as const, liveTradingEnabled: false as const, autoTradingEnabled: false as const };
   const service = new AccountReadonlyService(
     {
       upbit: async (scope) => {
         if (scope.userId === USER_B.userId) throw new Error('401 user-b');
-        if (failUserA) throw new Error('401 user-a');
+        if (userAMode === 'timeout') throw new Error('provider timeout');
+        if (userAMode === 'auth') throw new Error('401 user-a');
         return snapshot;
       },
     },
@@ -130,9 +131,21 @@ test('last-good data becomes stale only inside the same authenticated user scope
   assert.equal(userB.stale, false);
   assert.equal(userB.balances, null);
 
-  failUserA = true;
+  userAMode = 'timeout';
   const staleUserA = await service.read(USER_A, 'upbit');
   assert.equal(staleUserA.status, 'STALE');
-  assert.equal(staleUserA.errorCode, 'AUTH_FAILED');
+  assert.equal(staleUserA.errorCode, 'PROVIDER_TIMEOUT');
   assert.equal(staleUserA.balances?.[0]?.total, 0);
+
+  userAMode = 'auth';
+  const authFailedUserA = await service.read(USER_A, 'upbit');
+  assert.equal(authFailedUserA.status, 'AUTH_FAILED');
+  assert.equal(authFailedUserA.stale, false);
+  assert.equal(authFailedUserA.balances, null);
+
+  userAMode = 'timeout';
+  const afterEviction = await service.read(USER_A, 'upbit');
+  assert.equal(afterEviction.status, 'UNAVAILABLE');
+  assert.equal(afterEviction.stale, false);
+  assert.equal(afterEviction.balances, null);
 });
