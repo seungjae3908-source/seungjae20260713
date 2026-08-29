@@ -1,5 +1,8 @@
 // The canonical implementation is JavaScript owned by market-intelligence-sidecar.
-import { evaluateCalibratedFillModel, walkOrderBook } from '../../../market-intelligence-sidecar/src/execution-quality.mjs';
+import {
+  evaluateCalibratedFillModel,
+  walkOrderBook,
+} from '../../../market-intelligence-sidecar/src/execution-quality.mjs';
 
 export const PAPER_SIMULATED_EXECUTION_EVIDENCE_VERSION = 'paper-simulated-execution-evidence-v1';
 
@@ -11,8 +14,16 @@ export const PAPER_SIMULATED_EXECUTION_EVIDENCE_SAFETY = Object.freeze({
   liveTrading: false,
   realFillClaimAllowed: false,
   currentPriceFillAssumptionAllowed: false,
+  liveFillCalibrationRequiredForPaperObservation: false,
+  liveFillCalibrationRequiredForRealFillClaim: true,
+  realFillObserved: false,
+  liveSubmittedExecutionSampleCredit: 0,
+  supplementalFullCostEvidenceRequiredForAdmission: true,
   financialMutationAllowed: false,
 });
+
+const PAPER_SIMULATED_PROVENANCE = Object.freeze(['SIMULATED', 'public-L2'] as const);
+const LIVE_SUBMITTED_EXECUTION_PROVENANCE = 'LIVE_SUBMITTED_EXECUTION' as const;
 
 type DepthLevel = readonly [number | string, number | string] | Readonly<{
   price: number | string;
@@ -40,6 +51,8 @@ export interface PaperSimulatedExecutionEvidenceInput {
 }
 
 function finite(value: unknown): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value !== 'string' || value.trim().length === 0) return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
@@ -68,6 +81,12 @@ function unique(values: readonly string[]): readonly string[] {
   return Object.freeze([...new Set(values)]);
 }
 
+function record(value: unknown): Readonly<Record<string, unknown>> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Readonly<Record<string, unknown>>
+    : Object.freeze({});
+}
+
 function freeze<T>(value: T): Readonly<T> {
   if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
   for (const child of Object.values(value as Record<string, unknown>)) freeze(child);
@@ -82,26 +101,35 @@ export function buildPaperSimulatedExecutionEvidence(
   const maximumAgeMs = finite(input?.maximumAgeMs);
   const targetQuantity = finite(input?.targetQuantity);
   const blockers: string[] = [];
+  const paperSimulationBlockers: string[] = [];
 
-  if (!nonEmpty(input?.source)) blockers.push('PUBLIC_DEPTH_SOURCE_REQUIRED');
-  if (!nonEmpty(input?.market)) blockers.push('MARKET_REQUIRED');
-  if (!nonEmpty(input?.symbol)) blockers.push('SYMBOL_REQUIRED');
-  if (!nonEmpty(input?.direction)) blockers.push('EXECUTION_DIRECTION_REQUIRED');
-  if (!(targetQuantity != null && targetQuantity > 0)) blockers.push('TARGET_QUANTITY_REQUIRED');
-  if (!(observedAtMs != null && observedAtMs > 0)) blockers.push('PUBLIC_DEPTH_TIMESTAMP_REQUIRED');
-  if (!(maximumAgeMs != null && maximumAgeMs > 0)) blockers.push('PUBLIC_DEPTH_FRESHNESS_CONTRACT_REQUIRED');
+  const blockPaperSimulation = (code: string) => {
+    paperSimulationBlockers.push(code);
+    blockers.push(code);
+  };
+
+  if (!nonEmpty(input?.source)) blockPaperSimulation('PUBLIC_DEPTH_SOURCE_REQUIRED');
+  if (!nonEmpty(input?.market)) blockPaperSimulation('MARKET_REQUIRED');
+  if (!nonEmpty(input?.symbol)) blockPaperSimulation('SYMBOL_REQUIRED');
+  if (!nonEmpty(input?.direction)) blockPaperSimulation('EXECUTION_DIRECTION_REQUIRED');
+  if (!(targetQuantity != null && targetQuantity > 0)) blockPaperSimulation('TARGET_QUANTITY_REQUIRED');
+  if (!(observedAtMs != null && observedAtMs > 0)) blockPaperSimulation('PUBLIC_DEPTH_TIMESTAMP_REQUIRED');
+  if (!(maximumAgeMs != null && maximumAgeMs > 0)) blockPaperSimulation('PUBLIC_DEPTH_FRESHNESS_CONTRACT_REQUIRED');
+  if (observedAtMs != null && observedAtMs > nowMs) {
+    blockPaperSimulation('PUBLIC_DEPTH_FROM_FUTURE');
+  }
   if (observedAtMs != null && maximumAgeMs != null && nowMs - observedAtMs > maximumAgeMs) {
-    blockers.push('PUBLIC_DEPTH_STALE');
+    blockPaperSimulation('PUBLIC_DEPTH_STALE');
   }
   if (!Array.isArray(input?.provenance) || input.provenance.length === 0 || !input.provenance.every(nonEmpty)) {
-    blockers.push('PUBLIC_DEPTH_PROVENANCE_REQUIRED');
+    blockPaperSimulation('PUBLIC_DEPTH_PROVENANCE_REQUIRED');
   }
 
   const bids = Array.isArray(input?.bids) ? input.bids.map(cloneLevel) : [];
   const asks = Array.isArray(input?.asks) ? input.asks.map(cloneLevel) : [];
   const bid = bestPrice(bids, 'BID');
   const ask = bestPrice(asks, 'ASK');
-  if (bid == null || ask == null || ask < bid) blockers.push('PUBLIC_DEPTH_BOOK_INVALID');
+  if (bid == null || ask == null || ask < bid) blockPaperSimulation('PUBLIC_DEPTH_BOOK_INVALID');
 
   const bookWalk = walkOrderBook({
     direction: input?.direction,
@@ -109,14 +137,43 @@ export function buildPaperSimulatedExecutionEvidence(
     bids,
     asks,
   }, input?.policy ?? {});
-  if (bookWalk?.status === 'NOT_AVAILABLE') blockers.push(String(bookWalk.reason ?? 'BOOK_WALK_NOT_AVAILABLE'));
+  if (bookWalk?.status === 'NOT_AVAILABLE') {
+    blockPaperSimulation(String(bookWalk.reason ?? 'BOOK_WALK_NOT_AVAILABLE'));
+  }
 
+  const calibratedFillModel = record(input?.calibratedFillModel);
   const fillModel = evaluateCalibratedFillModel(
-    input?.calibratedFillModel ?? {},
+    calibratedFillModel,
     input?.policy ?? {},
     nowMs,
   );
-  if (fillModel?.status === 'NOT_AVAILABLE') blockers.push(String(fillModel.reason ?? 'CALIBRATED_FILL_MODEL_EVIDENCE_MISSING'));
+
+  const sampleProvenance = nonEmpty(calibratedFillModel.sampleProvenance)
+    ? calibratedFillModel.sampleProvenance.trim()
+    : null;
+  const liveFillCalibrationBlockers: string[] = [];
+  if (sampleProvenance !== LIVE_SUBMITTED_EXECUTION_PROVENANCE) {
+    liveFillCalibrationBlockers.push('LIVE_SUBMITTED_EXECUTION_PROVENANCE_REQUIRED');
+  }
+  if (fillModel?.status === 'NOT_AVAILABLE') {
+    liveFillCalibrationBlockers.push(String(fillModel.reason ?? 'CALIBRATED_FILL_MODEL_EVIDENCE_MISSING'));
+  }
+  const minimumSubmittedExecutionSamples = finite(fillModel?.minimumSamples);
+  if (!(minimumSubmittedExecutionSamples != null && minimumSubmittedExecutionSamples > 0)) {
+    throw new Error('LIVE_FILL_MINIMUM_SAMPLE_POLICY_UNAVAILABLE');
+  }
+  const paperSimulationStatus = paperSimulationBlockers.length > 0 || bookWalk?.status === 'NOT_AVAILABLE'
+    ? 'BLOCKED_DATA'
+    : bookWalk?.status === 'VETO' ? 'VETO' : 'READY';
+  const liveFillCalibrationStatus = liveFillCalibrationBlockers.length > 0
+    ? 'BLOCKED_DATA'
+    : fillModel?.status === 'VETO' ? 'VETO' : 'READY';
+  const liveFillCalibrationVerified = sampleProvenance === LIVE_SUBMITTED_EXECUTION_PROVENANCE
+    && fillModel?.status !== 'NOT_AVAILABLE';
+  const enforcedProvenance = unique([
+    ...PAPER_SIMULATED_PROVENANCE,
+    ...(Array.isArray(input?.provenance) ? input.provenance.filter(nonEmpty) : []),
+  ]);
 
   const requestStartedAtMs = finite(input?.requestStartedAtMs);
   const requestCompletedAtMs = finite(input?.requestCompletedAtMs);
@@ -172,18 +229,51 @@ export function buildPaperSimulatedExecutionEvidence(
       },
       partialFillEstimate: {
         visibleDepthFillFraction: finite(bookWalk?.coverageRatio),
-        calibratedFillProbability: finite(fillModel?.fillProbability),
-        quality: fillModel?.status === 'NOT_AVAILABLE' ? 'UNCALIBRATED_MODEL_ONLY' : 'CALIBRATED_ESTIMATE',
+        calibratedFillProbability: liveFillCalibrationVerified ? finite(fillModel?.fillProbability) : null,
+        quality: liveFillCalibrationVerified ? 'CALIBRATED_ESTIMATE' : 'UNCALIBRATED_MODEL_ONLY',
       },
     },
     confidence: {
-      classification: fillModel?.status === 'NOT_AVAILABLE' ? 'UNCALIBRATED' : 'CALIBRATED',
+      classification: liveFillCalibrationVerified ? 'LIVE_GRADE_CALIBRATED' : 'UNCALIBRATED',
       numericConfidence: null,
       fillModel,
     },
-    provenance: Array.isArray(input?.provenance) ? [...input.provenance] : [],
+    paperSimulation: {
+      schemaVersion: 'paper-public-l2-simulated-execution-observation-v1',
+      status: paperSimulationStatus,
+      blockers: unique(paperSimulationBlockers),
+      evidenceClass: 'SIMULATED',
+      marketDataClass: 'public-L2',
+      provenance: enforcedProvenance,
+      bookWalkStatus: bookWalk?.status ?? 'NOT_AVAILABLE',
+      publicDepthIsFillProof: false,
+      realFillObserved: false,
+      realFillClaim: false,
+      liveFillCalibrationRequired: false,
+    },
+    liveGradeFillReadiness: {
+      schemaVersion: 'live-grade-fill-calibration-readiness-v1',
+      status: liveFillCalibrationStatus,
+      blockers: unique(liveFillCalibrationBlockers),
+      requiredSampleProvenance: LIVE_SUBMITTED_EXECUTION_PROVENANCE,
+      sampleProvenance: sampleProvenance === LIVE_SUBMITTED_EXECUTION_PROVENANCE
+        ? sampleProvenance
+        : null,
+      submittedExecutionSamples: sampleProvenance === LIVE_SUBMITTED_EXECUTION_PROVENANCE
+        ? finite(fillModel?.evaluationSamples)
+        : null,
+      submittedExecutionSampleCredit: sampleProvenance === LIVE_SUBMITTED_EXECUTION_PROVENANCE
+        ? finite(fillModel?.evaluationSamples) ?? 0
+        : 0,
+      minimumSubmittedExecutionSamples,
+      fillModel,
+      promotedToRealFill: false,
+      realFillClaim: false,
+    },
+    provenance: enforcedProvenance,
     executionMode: 'SIMULATED_EXECUTION_ONLY',
     publicDepthIsFillProof: false,
+    realFillObserved: false,
     realFillClaim: false,
     currentPriceIsFillPrice: false,
     costEvidenceReady: false,
