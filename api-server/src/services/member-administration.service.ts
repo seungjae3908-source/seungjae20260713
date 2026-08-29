@@ -131,9 +131,17 @@ export function parseMemberChangeRequest(value: unknown): MemberChangeRequest {
   if ('role' in value || 'user_id' in value || 'userId' in value || 'actor_id' in value) {
     throw new MemberAdministrationError('CLIENT_AUTHORITY_FORBIDDEN', '권한 식별자는 서버가 결정합니다.');
   }
+  if (
+    'membershipLevel' in value
+    && (typeof value.membershipLevel !== 'string' || !MEMBER_TIERS.includes(value.membershipLevel as MemberTier))
+  ) {
+    throw new MemberAdministrationError('INVALID_MEMBER_CHANGE', '회원 등급 값을 확인하세요.');
+  }
+  if ('isActive' in value && typeof value.isActive !== 'boolean') {
+    throw new MemberAdministrationError('INVALID_MEMBER_CHANGE', '회원 활성 상태 값을 확인하세요.');
+  }
 
   const membershipLevel = typeof value.membershipLevel === 'string'
-    && MEMBER_TIERS.includes(value.membershipLevel as MemberTier)
     ? value.membershipLevel as MemberTier
     : undefined;
   const isActive = typeof value.isActive === 'boolean' ? value.isActive : undefined;
