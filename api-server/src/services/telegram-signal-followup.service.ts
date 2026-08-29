@@ -103,6 +103,17 @@ async function persistCurrentStates(
   await repository.save(states);
 }
 
+function restoreSnapshots(
+  signalIds: readonly string[],
+  snapshots: ReadonlyMap<string, AnnouncedSignal>,
+): void {
+  for (const signalId of new Set(signalIds)) {
+    const snapshot = snapshots.get(signalId);
+    if (snapshot) announced.set(signalId, cloneState(snapshot));
+    else announced.delete(signalId);
+  }
+}
+
 export function clearTelegramSignalFollowupState(): void {
   announced.clear();
 }
@@ -265,6 +276,22 @@ export async function deliverScannerTelegramFollowups(
   }
 
   const updates = buildTelegramSignalFollowups(cards, now);
+  const signalIds = cards.map((card) => card.signalId);
+
+  // A follow-up is never emitted unless the advanced lifecycle checkpoint is
+  // durable first. This deliberately prefers at-most-once/fail-closed behavior
+  // over a restart window where Telegram may receive the same follow-up twice.
+  try {
+    await persistCurrentStates(signalIds, repository);
+  } catch (error) {
+    restoreSnapshots(signalIds, snapshots);
+    logger.warn(
+      { errorName: error instanceof Error ? error.name : 'UnknownError' },
+      'Telegram signal followup checkpoint unavailable before delivery; transport skipped fail closed',
+    );
+    return;
+  }
+
   const failedSignals = new Set<string>();
 
   for (const update of updates) {
@@ -291,26 +318,20 @@ export async function deliverScannerTelegramFollowups(
       failedSignals.add(update.signalId);
       logger.warn(
         { signalId: update.signalId, errorName: error instanceof Error ? error.name : 'UnknownError' },
-        'Telegram signal followup transport failed; durable state kept retryable',
+        'Telegram signal followup transport failed; restoring prior checkpoint when durable storage is available',
       );
     }
   }
 
-  for (const signalId of failedSignals) {
-    const snapshot = snapshots.get(signalId);
-    if (snapshot) announced.set(signalId, snapshot);
-    else announced.delete(signalId);
-  }
+  if (failedSignals.size === 0) return;
 
+  restoreSnapshots([...failedSignals], snapshots);
   try {
-    await persistCurrentStates(
-      cards.map((card) => card.signalId).filter((signalId) => !failedSignals.has(signalId)),
-      repository,
-    );
+    await persistCurrentStates([...failedSignals], repository);
   } catch (error) {
     logger.warn(
       { errorName: error instanceof Error ? error.name : 'UnknownError' },
-      'Telegram signal followup durable checkpoint failed after delivery',
+      'Telegram signal followup durable rollback unavailable; precommitted checkpoint remains fail closed across restart',
     );
   }
 }
