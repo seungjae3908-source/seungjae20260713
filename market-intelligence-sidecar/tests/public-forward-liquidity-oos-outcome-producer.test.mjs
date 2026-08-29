@@ -409,7 +409,10 @@ test('split receipt authenticity and upstream lineage tampering fail closed', ()
   const embeddedBody = { ...embedded };
   delete embeddedBody.receiptDigest;
   embedded.receiptDigest = sha256(canonicalJson(embeddedBody));
-  assert.ok(produce(fixture, { splitReceipt: embedded }).blockers.includes('MULTI_SOURCE_SPLIT_RECEIPT_EMBEDDED_AUDIT_MISMATCH'));
+  const embeddedResult = produce(fixture, { splitReceipt: embedded });
+  assert.equal(embeddedResult.status, 'BLOCKED_DATA');
+  assert.ok(embeddedResult.blockers.includes('SPLIT_ASSIGNMENT_DIGEST_MISMATCH'));
+  assert.ok(embeddedResult.blockers.includes('SPLIT_AUDIT_DIGEST_MISMATCH'));
 
   const wrongIndependence = { ...fixture.splitReceipt, independenceAuditDigest: sha256('wrong-independence') };
   const wrongIndependenceBody = { ...wrongIndependence };
