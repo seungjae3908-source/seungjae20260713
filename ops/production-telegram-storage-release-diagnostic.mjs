@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import process from 'node:process';
 
 const PRODUCTION_PROJECT_REF = 'bawcbkoyovbeajkrnduq';
+const PRODUCTION_SESSION_POOLER_HOST = 'aws-1-ap-south-1.pooler.supabase.com';
 const POSTGRES_URI_PATTERN = /^postgres(?:ql)?:\/\//i;
 const ARTIFACT_KEYS = new Set([
   'status', 'classification', 'production_sha', 'pm2_online',
@@ -77,6 +78,9 @@ function psqlExistsOutsidePath() {
 
 function classifyPsqlFailure(stderrText) {
   const stderr = String(stderrText ?? '').toLowerCase();
+  if (/circuit breaker open|failed to retrieve database credentials after multiple attempts|too many failed attempts to connect to the database|too many authentication failures/.test(stderr)) return 'production_database_supavisor_circuit_breaker';
+  if (/worker_not_found|worker not found|tenant or user not found|necessary information to route the connection/.test(stderr)) return 'production_database_supavisor_tenant_unresolved';
+  if (/connection closed when state was authentication/.test(stderr)) return 'production_database_supavisor_auth_connection_closed';
   if (/password authentication failed|authentication failed/.test(stderr)) return 'production_database_auth_failed';
   if (/could not translate host name|name or service not known|temporary failure in name resolution/.test(stderr)) return 'production_database_dns_failed';
   if (/network is unreachable|no route to host/.test(stderr)) return 'production_database_network_unreachable';
@@ -148,10 +152,22 @@ try {
   const parsed = new URL(transientDatabaseUrl);
   const hostname = parsed.hostname.toLowerCase();
   const username = decodeURIComponent(parsed.username);
-  const direct = hostname === `db.${projectRef}.supabase.co` && username.toLowerCase() === 'postgres';
-  const pooler = /(^|\.)pooler\.supabase\.com$/i.test(hostname) && username.toLowerCase() === `postgres.${projectRef}`;
   const databaseName = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
   const port = parsed.port || '5432';
+  const direct = hostname === `db.${projectRef}.supabase.co` && username.toLowerCase() === 'postgres';
+  const poolerDomain = /(^|\.)pooler\.supabase\.com$/i.test(hostname);
+  const poolerUser = username.toLowerCase() === `postgres.${projectRef}`;
+  if (poolerDomain && poolerUser && hostname !== PRODUCTION_SESSION_POOLER_HOST
+    && parsed.password && databaseName === 'postgres' && port === '5432') {
+    blocked('production_database_pooler_host_mismatch', {
+      ...identity,
+      postgres_connection_count: 1,
+      postgres_endpoint_type: 'pooler',
+      postgres_port: '5432',
+      database_secret_source: 'github_protected_secret',
+    });
+  }
+  const pooler = hostname === PRODUCTION_SESSION_POOLER_HOST && poolerUser;
   if ((!direct && !pooler) || !parsed.password || databaseName !== 'postgres' || port !== '5432') throw new Error('bad target');
   database = { hostname, username, password: decodeURIComponent(parsed.password), database: databaseName, port, endpointType: direct ? 'direct' : 'pooler' };
 } catch {
