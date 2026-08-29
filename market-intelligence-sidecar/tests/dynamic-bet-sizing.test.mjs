@@ -10,18 +10,42 @@ function passGate(extra = {}) {
   };
 }
 
+function completeAdvancedGate() {
+  return passGate({
+    uncertainty: { status: 'PASS' },
+    metaLabel: { status: 'PASS' },
+    eventRisk: { status: 'PASS' },
+  });
+}
+
+function completeExecutionGate() {
+  return passGate({
+    bookWalk: { status: 'PASS' },
+    fillModel: { status: 'PASS' },
+  });
+}
+
+function completePortfolioGate() {
+  return passGate({
+    portfolio: { status: 'PASS' },
+    expectedShortfall: { status: 'PASS' },
+    signalFreshness: { status: 'PASS' },
+  });
+}
+
 function readyInput(overrides = {}) {
   return {
     market: 'CRYPTO_FUTURES',
     direction: 'LONG',
     regimeBrain: passGate({
+      status: 'READY',
       regime: { label: 'TREND_UP' },
       drift: { status: 'STABLE' },
     }),
-    netAlpha: passGate({ conservativeNetAlphaBps: 8 }),
-    advancedGates: passGate(),
-    executionQuality: passGate(),
-    portfolioSafety: passGate(),
+    netAlpha: passGate({ status: 'READY', conservativeNetAlphaBps: 8 }),
+    advancedGates: completeAdvancedGate(),
+    executionQuality: completeExecutionGate(),
+    portfolioSafety: completePortfolioGate(),
     currentDrawdownPct: 2,
     parentBaseRiskFraction: 0.01,
     parentBaseNotional: 1_000_000,
@@ -45,8 +69,23 @@ test('recommended sizing can only reduce parent-authorized exposure', () => {
 test('high volatility and drift watch automatically apply the stricter reduction', () => {
   const result = evaluateDynamicBetSizing(readyInput({
     regimeBrain: passGate({
+      status: 'READY',
       regime: { label: 'HIGH_VOL' },
       drift: { status: 'WATCH' },
+    }),
+  }));
+  assert.equal(result.state, 'PASS');
+  assert.equal(result.factors.regime, 0.5);
+  assert.equal(result.recommendedMultiplier, 0.5);
+});
+
+test('SELL is treated as bearish for counter-trend reduction just like SHORT', () => {
+  const result = evaluateDynamicBetSizing(readyInput({
+    direction: 'SELL',
+    regimeBrain: passGate({
+      status: 'READY',
+      regime: { label: 'TREND_UP' },
+      drift: { status: 'STABLE' },
     }),
   }));
   assert.equal(result.state, 'PASS');
@@ -57,6 +96,7 @@ test('high volatility and drift watch automatically apply the stricter reduction
 test('a veto anywhere in the decision chain becomes zero new exposure, not an order', () => {
   const result = evaluateDynamicBetSizing(readyInput({
     netAlpha: {
+      status: 'READY',
       policy: { enforcement: 'OBSERVE_ONLY' },
       conservativeNetAlphaBps: -2,
       autoTrading: { state: 'VETO', reasons: ['CONSERVATIVE_NET_ALPHA_BELOW_MINIMUM'] },
@@ -72,7 +112,22 @@ test('missing decision evidence stays unknown rather than being presented as a m
   const result = evaluateDynamicBetSizing(readyInput({ portfolioSafety: undefined }));
   assert.equal(result.state, 'INSUFFICIENT_EVIDENCE');
   assert.equal(result.recommendedMultiplier, null);
+  assert.equal(result.advisoryMultiplier, null);
   assert.equal(result.suggestedNotional, null);
+  assert.ok(result.reasons.includes('PORTFOLIO_EVIDENCE_INCOMPLETE'));
+});
+
+test('observe-only PASS wrappers with missing underlying evidence cannot authorize a sizing recommendation', () => {
+  const result = evaluateDynamicBetSizing(readyInput({
+    advancedGates: passGate(),
+    executionQuality: passGate(),
+    portfolioSafety: passGate(),
+  }));
+  assert.equal(result.state, 'INSUFFICIENT_EVIDENCE');
+  assert.equal(result.advisoryMultiplier, null);
+  assert.equal(result.recommendedMultiplier, null);
+  assert.ok(result.reasons.includes('ADVANCED_EVIDENCE_INCOMPLETE'));
+  assert.ok(result.reasons.includes('EXECUTION_EVIDENCE_INCOMPLETE'));
   assert.ok(result.reasons.includes('PORTFOLIO_EVIDENCE_INCOMPLETE'));
 });
 
