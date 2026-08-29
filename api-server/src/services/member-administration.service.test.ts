@@ -45,12 +45,12 @@ test('parses valid associate approval', () => {
   });
 });
 
-test('pending to associate is recorded as approval', () => {
+test('pending to associate is recorded as approval with legacy-compatible associate role', () => {
   const plan = planMemberChange(profile(), { membershipLevel: 'associate', isActive: true, reason: '회원 승인 처리' }, ADMIN, 1, NOW);
   assert.equal(plan.action, 'member.approve');
   assert.equal(plan.changes.membership_level, 'associate');
   assert.equal(plan.changes.status, 'approved');
-  assert.equal(plan.changes.role, 'user');
+  assert.equal(plan.changes.role, 'associate');
   assert.equal(plan.changes.approved_by, ADMIN);
 });
 
@@ -58,6 +58,13 @@ test('regular to admin changes legacy compatibility role', () => {
   const plan = planMemberChange(profile({ membership_level: 'regular', status: 'approved' }), { membershipLevel: 'admin', reason: '관리자 승격' }, ADMIN, 2, NOW);
   assert.equal(plan.action, 'member.membership.change');
   assert.equal(plan.changes.role, 'admin');
+  assert.equal(plan.changes.status, 'approved');
+});
+
+test('regular tier uses legacy full role instead of unsupported user role', () => {
+  const plan = planMemberChange(profile({ membership_level: 'associate', role: 'associate', status: 'approved' }), { membershipLevel: 'regular', reason: '정회원 승급' }, ADMIN, 1, NOW);
+  assert.equal(plan.changes.membership_level, 'regular');
+  assert.equal(plan.changes.role, 'full');
   assert.equal(plan.changes.status, 'approved');
 });
 
@@ -72,6 +79,7 @@ test('deactivation records suspended compatibility status', () => {
 test('reactivation restores stored associate tier and approved state', () => {
   const plan = planMemberChange(profile({ membership_level: 'associate', is_active: false, status: 'suspended' }), { isActive: true, reason: '계정 재활성화' }, ADMIN, 1, NOW);
   assert.equal(plan.changes.membership_level, 'associate');
+  assert.equal(plan.changes.role, 'associate');
   assert.equal(plan.changes.status, 'approved');
   assert.equal(plan.changes.is_active, true);
 });
@@ -79,6 +87,7 @@ test('reactivation restores stored associate tier and approved state', () => {
 test('pending state does not create approved timestamp', () => {
   const plan = planMemberChange(profile({ membership_level: 'associate', status: 'approved' }), { membershipLevel: 'pending', reason: '승인 대기로 전환' }, ADMIN, 1, NOW);
   assert.equal(plan.changes.status, 'pending');
+  assert.equal(plan.changes.role, 'pending');
   assert.equal(plan.changes.approved_at, null);
 });
 
@@ -99,12 +108,13 @@ test('last active admin cannot be deactivated', () => {
 test('admin may be demoted when another active admin exists', () => {
   const plan = planMemberChange(profile({ membership_level: 'admin', role: 'admin', status: 'approved' }), { membershipLevel: 'regular', reason: '관리자 역할 조정' }, ADMIN, 2, NOW);
   assert.equal(plan.changes.membership_level, 'regular');
+  assert.equal(plan.changes.role, 'full');
 });
 
 test('audit values include actor-independent before and after data', () => {
   const plan = planMemberChange(profile(), { membershipLevel: 'associate', reason: '회원 승인 처리' }, ADMIN, 1, NOW);
   assert.deepEqual(plan.beforeValue, { membershipLevel: 'pending', isActive: true, role: 'user', status: 'pending' });
-  assert.deepEqual(plan.afterValue, { membershipLevel: 'associate', isActive: true, role: 'user', status: 'approved' });
+  assert.deepEqual(plan.afterValue, { membershipLevel: 'associate', isActive: true, role: 'associate', status: 'approved' });
   assert.equal(plan.reason, '회원 승인 처리');
 });
 
