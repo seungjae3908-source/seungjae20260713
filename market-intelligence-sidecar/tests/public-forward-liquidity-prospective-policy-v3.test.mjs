@@ -17,19 +17,6 @@ function artifact() {
   });
 }
 
-function reseal(value) {
-  const clone = structuredClone(value);
-  delete clone.artifactDigest;
-  const canonicalize = (input) => {
-    if (Array.isArray(input)) return input.map(canonicalize);
-    if (input && typeof input === 'object') {
-      return Object.fromEntries(Object.entries(input).sort(([a], [b]) => a.localeCompare(b)).map(([key, child]) => [key, canonicalize(child)]));
-    }
-    return input;
-  };
-  return { ...clone, artifactDigest: (await import('node:crypto')).createHash('sha256').update(JSON.stringify(canonicalize(clone))).digest('hex') };
-}
-
 test('V3 supersedes V2 before first genuine sample and changes no empirical policy value', () => {
   const value = artifact();
   assert.equal(verifyProspectiveLiquidityPolicyV3Artifact(value).valid, true);
