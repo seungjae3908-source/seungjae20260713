@@ -1,0 +1,79 @@
+name: Agent Hub Processor Window Recovery
+
+on:
+  pull_request:
+    paths:
+      - scripts/agent_hub_processor_window_recovery_v1.py
+      - scripts/test_agent_hub_processor_window_recovery_v1.py
+      - .github/workflows/agent-hub-processor-window-recovery.yml
+  workflow_dispatch:
+    inputs:
+      source_issue:
+        description: Overflowed canonical Hub issue number
+        required: true
+        default: "660"
+        type: string
+      confirmation:
+        description: Must be RECOVER_ISSUE_<number>_PROCESSOR_OVERFLOW
+        required: true
+        type: string
+      apply:
+        description: Apply issue rollover mutations after dry-run validation
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-hub-processor-window-recovery-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile recovery path
+        run: >-
+          python -m py_compile
+          scripts/agent_hub_processor_window_recovery_v1.py
+          scripts/test_agent_hub_processor_window_recovery_v1.py
+      - name: Run fail-closed recovery tests
+        run: python -m unittest scripts.test_agent_hub_processor_window_recovery_v1 -v
+
+  recover:
+    if: github.event_name == 'workflow_dispatch'
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    env:
+      RECOVERY_SOURCE_ISSUE: ${{ inputs.source_issue }}
+      RECOVERY_CONFIRMATION: ${{ inputs.confirmation }}
+      RECOVERY_APPLY: ${{ inputs.apply }}
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Recover processor-window overflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(
+            --source-issue "$RECOVERY_SOURCE_ISSUE"
+            --confirmation "$RECOVERY_CONFIRMATION"
+          )
+          if [[ "$RECOVERY_APPLY" == "true" ]]; then
+            args+=(--apply)
+          fi
+          python scripts/agent_hub_processor_window_recovery_v1.py "${args[@]}"
