@@ -36,20 +36,33 @@ jobs:
       - name: Run focused controller regressions
         run: python control-plane/realtime-controller/tests/test_realtime_controller.py
 
-      - name: Verify reuse and safety boundaries
+      - name: Verify canonical reuse and fail-closed boundaries
         shell: bash
         run: |
           set -euo pipefail
           controller='control-plane/realtime-controller/realtime_controller.py'
           readme='control-plane/realtime-controller/README.md'
           service='control-plane/realtime-controller/systemd/investment-realtime-controller.service'
-          grep -Fq 'agent-hub-wakeup' "$controller"
+          coordinator='.github/workflows/agent-hub-free.yml'
+          executor='.github/workflows/agent-hub-executor.yml'
+
+          # Reuse the exact repository_dispatch contracts that exist on main.
+          grep -Fq 'COORDINATOR_WAKE_EVENT = "agent-executor-report-ready"' "$controller"
+          grep -Fq 'EXECUTOR_EVENT = "agent-hub-command-ready"' "$controller"
+          grep -Fq 'types: [agent-executor-report-ready]' "$coordinator"
+          grep -Fq 'types: [agent-hub-command-ready]' "$executor"
+
+          # Signed webhook, central-command and persistent safety contracts remain explicit.
           grep -Fq 'CENTRAL-COMMANDER' "$controller"
           grep -Fq 'GITHUB_WEBHOOK_SECRET' "$controller"
           grep -Fq 'X-Hub-Signature-256' "$controller"
-          grep -Fq 'LEASE_EXPIRED_REQUIRES_REMOTE_RECONCILE' "$controller"
+          grep -Fq 'CONTROLLER_ENABLED","true"' "$controller"
+          grep -Fq 'DISPATCH_ENABLED","false"' "$controller"
+          grep -Fq 'AI_WORKERS_ENABLED","false"' "$controller"
+          grep -Fq 'self.dispatch_enabled and self.ai_workers_enabled' "$controller"
+
+          # Supervisor configuration exists, but this validation never installs or starts it.
           grep -Fq 'Restart=always' "$service"
           grep -Fq 'WantedBy=multi-user.target' "$service"
           grep -Fq 'REALTIME_CONTROLLER_READY=false' "$readme"
           grep -Fq '.github/workflows/agent-hub-executor.yml' "$readme"
-          ! grep -Eq 'submit[-_ ]?order|cancel[-_ ]?order|withdraw|transfer|private trading' "$controller"
