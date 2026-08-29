@@ -66,9 +66,9 @@ function expected(overrides = {}) {
     volatilityRegimeIdentity: 'btc-realized-volatility-medium-v1',
     liquidityRegimeIdentity: 'btc-visible-depth-medium-v1',
     provenance: {
-      sourceType: 'PUBLIC_HISTORICAL_MARKET_DATA',
-      sourceProvider: 'BITGET_PUBLIC_ARCHIVE',
-      sourceIdentity: 'bitget-public-historical-depth-trades-v1',
+      sourceType: 'PUBLIC_FORWARD_MARKET_DATA',
+      sourceProvider: 'BITGET_PUBLIC_UTA_V3',
+      sourceIdentity: 'bitget-public-forward-depth-trades-v1',
       sourceDigest: PUBLIC_SOURCE_DIGEST,
     },
     competingCostEvidence: competingCostEvidence(),
@@ -87,7 +87,7 @@ function artifact(overrides = {}) {
     methodologyVersion: 'residual-liquidity-impact-calibration-v1',
     producerCodeSha: PRODUCER_SHA,
     calibrationCodeSha: CALIBRATION_SHA,
-    datasetIdentity: 'test-only-bitget-btc-public-history-2026w33-v1',
+    datasetIdentity: 'test-only-bitget-btc-public-forward-2026w33-v1',
     datasetDigest: '0'.repeat(64),
     sampleN: 1_000,
     trainDatasetIdentity: 'test-only-bitget-btc-train-2026w29-w31-v1',
@@ -108,17 +108,17 @@ function artifact(overrides = {}) {
     calibratedAt: NOW - DAY,
     maximumAge: 7 * DAY,
     provenance: {
-      sourceType: 'PUBLIC_HISTORICAL_MARKET_DATA',
-      sourceProvider: 'BITGET_PUBLIC_ARCHIVE',
-      sourceIdentity: 'bitget-public-historical-depth-trades-v1',
+      sourceType: 'PUBLIC_FORWARD_MARKET_DATA',
+      sourceProvider: 'BITGET_PUBLIC_UTA_V3',
+      sourceIdentity: 'bitget-public-forward-depth-trades-v1',
       sourceDigest: PUBLIC_SOURCE_DIGEST,
       immutable: true,
     },
     sourceObservationLineage: {
       lineageId: 'independent-post-trade-residual-lineage-v1',
       lineageDigest: LINEAGE_DIGEST,
-      sourceType: 'PUBLIC_HISTORICAL_MARKET_DATA',
-      sourceIdentity: 'bitget-public-historical-depth-trades-v1',
+      sourceType: 'PUBLIC_FORWARD_MARKET_DATA',
+      sourceIdentity: 'bitget-public-forward-depth-trades-v1',
       observationCount: 1_000,
       firstObservedAt: NOW - 30 * DAY,
       lastObservedAt: NOW - 2 * DAY,
@@ -192,6 +192,21 @@ test('missing calibration artifact remains BLOCKED_DATA', () => {
   assert.equal(result.liquidityImpactStatus, 'BLOCKED_DATA');
   assert.ok(result.blockers.includes('CALIBRATION_ARTIFACT_REQUIRED'));
   assert.equal(result.fullCostReady, false);
+});
+
+test('historical replay provenance cannot receive liquidity-impact calibration credit', () => {
+  const value = mutated((item) => {
+    item.provenance.sourceType = 'PUBLIC_HISTORICAL_MARKET_DATA';
+    item.provenance.sourceProvider = 'BITGET_PUBLIC_ARCHIVE';
+    item.provenance.sourceIdentity = 'bitget-public-historical-depth-trades-v1';
+    item.sourceObservationLineage.sourceType = 'PUBLIC_HISTORICAL_MARKET_DATA';
+    item.sourceObservationLineage.sourceIdentity = 'bitget-public-historical-depth-trades-v1';
+  });
+  const result = validate(value);
+  assert.equal(result.validationStatus, 'REJECTED');
+  assert.equal(result.runtimeEligible, false);
+  assert.ok(result.blockers.includes('PROVENANCE_INVALID'));
+  assert.ok(result.blockers.includes('SOURCE_OBSERVATION_LINEAGE_INVALID'));
 });
 
 test('same visible book-walk digest cannot be reused as liquidity impact', () => {
