@@ -52,10 +52,24 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+function legacyStoredTier(profile: MemberAdministrationProfile): MemberTier {
+  if (profile.role === 'admin' || profile.role === 'master') return 'admin';
+  if (profile.role === 'associate') return 'associate';
+  if (profile.role === 'full' || profile.role === 'regular') return 'regular';
+  return 'pending';
+}
+
 function storedMemberTier(profile: MemberAdministrationProfile): MemberTier {
+  const status = typeof profile.status === 'string' ? profile.status : null;
+  // Only an already-approved member, or a deliberately suspended member being
+  // reactivated, may preserve a stored tier. Rejected/revoked/pending/disabled
+  // rows must not regain a stale privileged tier through an active-state-only change.
+  if (status && status !== 'approved' && status !== 'suspended') return 'pending';
+
   if (typeof profile.membership_level === 'string' && MEMBER_TIERS.includes(profile.membership_level as MemberTier)) {
     return profile.membership_level as MemberTier;
   }
+  if (status === 'suspended') return legacyStoredTier(profile);
   return deriveMemberTier(profile);
 }
 
@@ -120,8 +134,8 @@ export function planMemberChange(
   activeAdminCount: number,
   now = new Date(),
 ): MemberChangePlan {
-  // Authorization treats inactive members as pending, but administration must
-  // preserve their stored tier so a reactivation does not silently demote them.
+  // Preserve stored tier only for approved/suspended members. Other non-approved
+  // states require an explicit membershipLevel change before they can be approved.
   const currentTier = storedMemberTier(current);
   const currentActive = current.is_active !== false;
   const nextTier = request.membershipLevel ?? currentTier;
