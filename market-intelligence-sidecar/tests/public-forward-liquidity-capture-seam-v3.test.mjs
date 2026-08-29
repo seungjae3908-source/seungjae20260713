@@ -318,8 +318,22 @@ test('scheduled wrapper cron set is exactly the 48 V3-derived UTC slots and manu
   assert.deepEqual(declaredCron, buildV3ScheduleEntries().map((entry) => entry.cronUtc));
   assert.match(scheduledWorkflow, /schedule:/u);
   assert.match(scheduledWorkflow, /github\.event_name == 'schedule'/u);
+  assert.match(scheduledWorkflow, /date \+%s%3N/u);
+  assert.match(scheduledWorkflow, /github\.rest\.actions\.getArtifact/u);
+  assert.doesNotMatch(scheduledWorkflow, /getWorkflowRun/u);
   const manualWorkflow = await readFile(new URL('../../.github/workflows/public-forward-liquidity-calibration-capture.yml', import.meta.url), 'utf8');
   assert.match(manualWorkflow, /workflow_dispatch:/u);
   assert.doesNotMatch(manualWorkflow, /^\s+schedule:/mu);
   assert.match(manualWorkflow, /MANUAL_WORKFLOW_DISPATCH/u);
+});
+
+test('shared runner preserves legacy manual v1 receipts for #811 while scheduled receipts remain V3', async () => {
+  const runner = await readFile(new URL('../scripts/run-public-forward-liquidity-capture-seam-v3.mjs', import.meta.url), 'utf8');
+  assert.match(runner, /buildLegacyManualCaptureReceipt/u);
+  assert.match(runner, /public-forward-liquidity-capture-receipt-v1/u);
+  assert.match(runner, /PUBLIC_FORWARD_LIQUIDITY_CAPTURE_RECEIPT/u);
+  assert.match(runner, /public-forward-liquidity-capture-artifact-receipt-v1/u);
+  assert.match(runner, /captureReceipt\.schemaVersion === 'public-forward-liquidity-capture-receipt-v1'/u);
+  assert.match(runner, /seamSourceBlobSha/u);
+  assert.match(runner, /seamRunnerBlobSha/u);
 });
