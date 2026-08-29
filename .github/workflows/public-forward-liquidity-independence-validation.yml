@@ -4,9 +4,11 @@ on:
   pull_request:
     paths:
       - 'market-intelligence-sidecar/src/public-forward-liquidity-independence-audit.mjs'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-multi-source-split-audit.mjs'
       - 'market-intelligence-sidecar/src/public-forward-liquidity-capture-ingest.mjs'
       - 'market-intelligence-sidecar/scripts/run-public-forward-liquidity-independence-audit.mjs'
       - 'market-intelligence-sidecar/tests/public-forward-liquidity-independence-audit.test.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-multi-source-split-audit.test.mjs'
       - 'market-intelligence-sidecar/tests/public-forward-liquidity-capture-ingest.test.mjs'
       - '.github/workflows/public-forward-liquidity-independence-validation.yml'
   workflow_dispatch:
@@ -30,14 +32,17 @@ jobs:
       - name: Syntax check
         run: >-
           node --check market-intelligence-sidecar/src/public-forward-liquidity-independence-audit.mjs
+          && node --check market-intelligence-sidecar/src/public-forward-liquidity-multi-source-split-audit.mjs
           && node --check market-intelligence-sidecar/scripts/run-public-forward-liquidity-independence-audit.mjs
           && node --check market-intelligence-sidecar/tests/public-forward-liquidity-independence-audit.test.mjs
+          && node --check market-intelligence-sidecar/tests/public-forward-liquidity-multi-source-split-audit.test.mjs
 
-      - name: Run upstream ingest and bound independence tests
+      - name: Run upstream ingest, independence, and multi-source split tests
         run: >-
           node --test
           market-intelligence-sidecar/tests/public-forward-liquidity-capture-ingest.test.mjs
           market-intelligence-sidecar/tests/public-forward-liquidity-independence-audit.test.mjs
+          market-intelligence-sidecar/tests/public-forward-liquidity-multi-source-split-audit.test.mjs
 
       - name: Verify inert CLI
         run: node market-intelligence-sidecar/scripts/run-public-forward-liquidity-independence-audit.mjs --help
@@ -47,6 +52,7 @@ jobs:
         run: |
           set -euo pipefail
           SOURCE='market-intelligence-sidecar/src/public-forward-liquidity-independence-audit.mjs'
+          MULTI_SOURCE='market-intelligence-sidecar/src/public-forward-liquidity-multi-source-split-audit.mjs'
           RUNNER='market-intelligence-sidecar/scripts/run-public-forward-liquidity-independence-audit.mjs'
           WORKFLOW='.github/workflows/public-forward-liquidity-independence-validation.yml'
           grep -Fq 'verifyLiquidityCalibrationDataset' "$SOURCE"
@@ -73,11 +79,23 @@ jobs:
           grep -Fq 'privateApiUsed: false' "$SOURCE"
           grep -Fq 'liveTrading: false' "$SOURCE"
           grep -Fq 'orderSubmitted: false' "$SOURCE"
+          grep -Fq 'PUBLIC_FORWARD_LIQUIDITY_MULTI_SOURCE_SPLIT_AUDIT_VERSION' "$MULTI_SOURCE"
+          grep -Fq 'syntheticAggregateDatasetAllowed: false' "$MULTI_SOURCE"
+          grep -Fq 'syntheticSingleCollectorAllowed: false' "$MULTI_SOURCE"
+          grep -Fq 'upstreamLineageDigest' "$MULTI_SOURCE"
+          grep -Fq 'datasetDigests' "$MULTI_SOURCE"
+          grep -Fq 'collectorCodeShas' "$MULTI_SOURCE"
+          grep -Fq 'sourceDatasetDigest' "$MULTI_SOURCE"
+          grep -Fq 'sourceReceiptDigest' "$MULTI_SOURCE"
+          grep -Fq 'sourceCollectorCodeSha' "$MULTI_SOURCE"
+          grep -Fq 'CALIBRATION_SAMPLE_INSUFFICIENT' "$MULTI_SOURCE"
+          grep -Fq "fullCostReady: false" "$MULTI_SOURCE"
+          grep -Fq "executionAuthority: 'NONE'" "$MULTI_SOURCE"
           grep -Fq -- '--source-manifest' "$RUNNER"
           grep -Fq 'SOURCE_STATE_ROOT_OVERLAPS_RESEARCH_CHECKOUT' "$RUNNER"
           grep -Fq 'Frozen split integration remains NEEDS_INTEGRATION' "$RUNNER"
-          if grep -Eq 'persistLiquidityCalibrationBatch|mkdir\(|rename\(|PUBLIC_FORWARD_LIQUIDITY_CANONICAL_STORE_CONTRACT' "$SOURCE" "$RUNNER"; then
-            echo 'Independence layer must not create a second persistence authority.' >&2
+          if grep -Eq 'persistLiquidityCalibrationBatch|mkdir\(|rename\(|PUBLIC_FORWARD_LIQUIDITY_CANONICAL_STORE_CONTRACT' "$SOURCE" "$MULTI_SOURCE" "$RUNNER"; then
+            echo 'Independence/split layers must not create a second persistence authority.' >&2
             exit 1
           fi
           if grep -Eq '^[[:space:]]+schedule:' "$WORKFLOW"; then
