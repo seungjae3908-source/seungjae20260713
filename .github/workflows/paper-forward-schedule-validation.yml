@@ -37,6 +37,8 @@ on:
       - market-prediction-lab/src/eth-v6-paper-forward-source-v1.js
       - market-prediction-lab/src/eth-v6-paper-settlement-source-v1.js
       - market-prediction-lab/src/meaningful-search-scheduled-paper-provider-v1.js
+      - market-prediction-lab/src/paper-forward-evidence-runtime-v1.js
+      - market-prediction-lab/src/natural-paper-public-position-observation-v1.js
       - market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
       - market-prediction-lab/src/natural-paper-position-settlement-lifecycle-v1.js
       - market-prediction-lab/src/recurring-paper-loop-v1.js
@@ -49,6 +51,9 @@ on:
       - market-prediction-lab/tests/canonical-meaningful-search-paper-runtime-v1.test.js
       - market-prediction-lab/tests/meaningful-search-scheduled-paper-provider-v1.test.js
       - market-prediction-lab/tests/natural-paper-account-cli-contract-v1.test.js
+      - market-prediction-lab/tests/paper-forward-evidence-runtime-v1.test.js
+      - market-prediction-lab/tests/natural-paper-public-position-observation-v1.test.js
+      - market-prediction-lab/tests/natural-paper-public-position-observation-runtime-v1.test.js
       - market-prediction-lab/tests/paper-forward-schedule-authoritative-source-wiring-v1.test.js
       - market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
       - market-prediction-lab/tests/natural-paper-position-settlement-lifecycle-v1.test.js
@@ -163,6 +168,8 @@ jobs:
             market-prediction-lab/src/eth-v6-paper-settlement-source-v1.js
             market-prediction-lab/src/meaningful-search-scheduled-paper-provider-v1.js
             market-prediction-lab/src/four-market-paper-settlement-v1.js
+            market-prediction-lab/src/paper-forward-evidence-runtime-v1.js
+            market-prediction-lab/src/natural-paper-public-position-observation-v1.js
             market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
             market-prediction-lab/src/natural-paper-position-settlement-lifecycle-v1.js
             market-prediction-lab/src/recurring-paper-loop-v1.js
@@ -178,6 +185,9 @@ jobs:
             market-prediction-lab/tests/natural-paper-account-cli-contract-v1.test.js
             market-prediction-lab/tests/paper-forward-canonical-admission-cutover-v1.test.js
             market-prediction-lab/tests/paper-forward-research-natural-source-integration-v1.test.js
+            market-prediction-lab/tests/paper-forward-evidence-runtime-v1.test.js
+            market-prediction-lab/tests/natural-paper-public-position-observation-v1.test.js
+            market-prediction-lab/tests/natural-paper-public-position-observation-runtime-v1.test.js
             market-prediction-lab/tests/paper-forward-schedule-authoritative-source-wiring-v1.test.js
             market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
             market-prediction-lab/tests/natural-paper-position-settlement-lifecycle-v1.test.js
@@ -221,7 +231,19 @@ jobs:
             node --check "$lifecycle_source"
             node --check "$lifecycle_test"
           fi
+          producer_source=market-prediction-lab/src/natural-paper-public-position-observation-v1.js
+          producer_test=market-prediction-lab/tests/natural-paper-public-position-observation-v1.test.js
+          producer_runtime_test=market-prediction-lab/tests/natural-paper-public-position-observation-runtime-v1.test.js
+          if [[ -e "$producer_source" || -e "$producer_test" || -e "$producer_runtime_test" ]]; then
+            test -f "$producer_source"
+            test -f "$producer_test"
+            test -f "$producer_runtime_test"
+            node --check "$producer_source"
+            node --check "$producer_test"
+            node --check "$producer_runtime_test"
+          fi
           node --check market-prediction-lab/src/authoritative-natural-paper-accounting-v1.js
+          node --check market-prediction-lab/src/paper-forward-evidence-runtime-v1.js
           node --check market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
           node --check market-prediction-lab/src/recurring-paper-loop-v1.js
           node --check market-prediction-lab/src/authoritative-paper-evidence-source-ownership-v1.js
@@ -243,6 +265,7 @@ jobs:
           node --check market-prediction-lab/tests/canonical-paper-admission-bundle-injection-runtime-v1.test.js
           node --check market-prediction-lab/tests/meaningful-search-scheduled-paper-provider-v1.test.js
           node --check market-prediction-lab/tests/natural-paper-account-cli-contract-v1.test.js
+          node --check market-prediction-lab/tests/paper-forward-evidence-runtime-v1.test.js
           node --check market-prediction-lab/tests/paper-forward-schedule-authoritative-source-wiring-v1.test.js
           node --check market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
           node --check market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
@@ -269,6 +292,13 @@ jobs:
             tests/research-production-paper-forward-cutover.test.js
           if [[ -f tests/natural-paper-position-settlement-lifecycle-v1.test.js ]]; then
             node --test tests/natural-paper-position-settlement-lifecycle-v1.test.js
+          fi
+          if [[ -f tests/natural-paper-public-position-observation-v1.test.js || -f tests/natural-paper-public-position-observation-runtime-v1.test.js ]]; then
+            test -f tests/natural-paper-public-position-observation-v1.test.js
+            test -f tests/natural-paper-public-position-observation-runtime-v1.test.js
+            node --test \
+              tests/natural-paper-public-position-observation-v1.test.js \
+              tests/natural-paper-public-position-observation-runtime-v1.test.js
           fi
 
       - name: Verify activation remains Paper-only and fail-closed
@@ -304,6 +334,7 @@ jobs:
             market-prediction-lab/src/authoritative-natural-paper-accounting-v1.js \
             market-prediction-lab/src/authoritative-paper-natural-funnel-v1.js \
             market-prediction-lab/src/canonical-paper-admission-bundle-injection-runtime-v1.js \
+            market-prediction-lab/src/paper-forward-evidence-runtime-v1.js \
             market-prediction-lab/src/paper-forward-schedule-runtime-v1.js \
             market-prediction-lab/src/recurring-paper-loop-v1.js \
             market-prediction-lab/scripts/run-paper-forward-schedule.js \
