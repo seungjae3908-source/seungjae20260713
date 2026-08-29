@@ -1,0 +1,71 @@
+name: Public Forward Liquidity Capture Dataset Ingest Validation
+
+on:
+  pull_request:
+    paths:
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-capture-ingest.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-capture-ingest.test.mjs'
+      - 'market-intelligence-sidecar/scripts/run-public-forward-liquidity-capture-ingest.mjs'
+      - '.github/workflows/public-forward-liquidity-capture-ingest.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Syntax check bounded ingest caller
+        run: |
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-capture-ingest.mjs
+          node --check market-intelligence-sidecar/tests/public-forward-liquidity-capture-ingest.test.mjs
+          node --check market-intelligence-sidecar/scripts/run-public-forward-liquidity-capture-ingest.mjs
+
+      - name: Run focused capture-ingest tests
+        run: node --test market-intelligence-sidecar/tests/public-forward-liquidity-capture-ingest.test.mjs
+
+      - name: Run merged collector/store regression
+        run: node --test market-intelligence-sidecar/tests/public-forward-liquidity-calibration.test.mjs
+
+      - name: Verify fail-closed truth boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE='market-intelligence-sidecar/src/public-forward-liquidity-capture-ingest.mjs'
+          RUNNER='market-intelligence-sidecar/scripts/run-public-forward-liquidity-capture-ingest.mjs'
+          grep -Fq 'persistLiquidityCalibrationBatch' "$FILE"
+          grep -Fq 'validatePublicForwardLiquidityObservationIdentity' "$FILE"
+          grep -Fq 'OBSERVATION_ID_MISMATCH' "$FILE"
+          grep -Fq 'OBSERVATION_SOURCE_DIGEST_MISMATCH' "$FILE"
+          grep -Fq 'batchObservationDigest' "$FILE"
+          grep -Fq 'batchDatasetProvenanceDigest' "$FILE"
+          grep -Fq 'batchProvenanceIndex' "$FILE"
+          grep -Fq 'datasetObservationCount' "$FILE"
+          grep -Fq 'datasetBatchProvenanceCount' "$FILE"
+          grep -Fq 'datasetDuplicateAttemptCount' "$FILE"
+          grep -Fq 'duplicateCreditEvaluated: true' "$FILE"
+          grep -Fq 'splitAssignmentPerformed: false' "$FILE"
+          grep -Fq 'oosValidationComplete: false' "$FILE"
+          grep -Fq 'liquidityImpactPresent: false' "$FILE"
+          grep -Fq "liquidityImpactStatus: 'BLOCKED_DATA'" "$FILE"
+          grep -Fq 'fullCostReady: false' "$FILE"
+          grep -Fq "executionAuthority: 'NONE'" "$FILE"
+          grep -Fq -- '--receipt-output' "$RUNNER"
+          grep -Fq 'RECEIPT_OUTPUT_OUTSIDE_STATE_ROOT' "$RUNNER"
+          grep -Fq "open(receiptOutput, 'wx', 0o600)" "$RUNNER"
+          grep -Fq 'receiptHandle.sync()' "$RUNNER"
+          grep -Fq 'canonicalJson(result)' "$RUNNER"
+          if grep -Eq '^[[:space:]]+workflow_dispatch:' .github/workflows/public-forward-liquidity-capture-ingest.yml; then
+            echo 'Validation workflow must not mutate Research state.' >&2
+            exit 1
+          fi
