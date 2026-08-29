@@ -60,6 +60,35 @@ function gateReasons(result) {
   return Array.isArray(result?.autoTrading?.reasons) ? result.autoTrading.reasons : [];
 }
 
+function usableStatus(value) {
+  const status = String(value ?? '').toUpperCase();
+  return status && status !== 'NOT_AVAILABLE';
+}
+
+function gateEvidenceComplete(name, result) {
+  if (!result || typeof result !== 'object') return false;
+  if (name === 'REGIME') {
+    return result.status === 'READY' && usableStatus(result.drift?.status);
+  }
+  if (name === 'NET_ALPHA') {
+    return result.status === 'READY';
+  }
+  if (name === 'ADVANCED') {
+    return usableStatus(result.uncertainty?.status)
+      && usableStatus(result.metaLabel?.status)
+      && usableStatus(result.eventRisk?.status);
+  }
+  if (name === 'EXECUTION') {
+    return usableStatus(result.bookWalk?.status) && usableStatus(result.fillModel?.status);
+  }
+  if (name === 'PORTFOLIO') {
+    return usableStatus(result.portfolio?.status)
+      && usableStatus(result.expectedShortfall?.status)
+      && usableStatus(result.signalFreshness?.status);
+  }
+  return false;
+}
+
 function regimeFactor(regimeBrain, direction, policy) {
   const label = String(regimeBrain?.regime?.label ?? '').toUpperCase();
   let factor = 1;
@@ -70,7 +99,7 @@ function regimeFactor(regimeBrain, direction, policy) {
 
   const dir = String(direction ?? '').toUpperCase();
   const bullish = dir === 'BUY' || dir === 'LONG';
-  const bearish = dir === 'SHORT';
+  const bearish = dir === 'SELL' || dir === 'SHORT';
   if ((bullish && label === 'TREND_DOWN') || (bearish && label === 'TREND_UP')) {
     factor = Math.min(factor, policy.counterTrendMultiplier);
   }
@@ -107,17 +136,24 @@ export function evaluateDynamicBetSizing(raw = {}, policyInput = {}) {
     ['PORTFOLIO', portfolioSafety],
   ];
   const vetoes = gates.filter(([, result]) => gateState(result) === 'VETO');
-  const incomplete = gates.filter(([, result]) => gateState(result) !== 'PASS' && gateState(result) !== 'VETO');
+  const incomplete = gates.filter(([name, result]) => {
+    const state = gateState(result);
+    return (state !== 'PASS' && state !== 'VETO') || !gateEvidenceComplete(name, result);
+  });
 
   const conservativeNetAlphaBps = finite(netAlpha?.conservativeNetAlphaBps);
   const alphaFactor = conservativeNetAlphaBps == null
     ? null
     : clamp(conservativeNetAlphaBps / policy.fullSizeNetAlphaBps, policy.minimumActiveMultiplier, 1);
-  const regimeSizeFactor = gateState(regimeBrain) === 'PASS' ? regimeFactor(regimeBrain, raw.direction, policy) : null;
+  const regimeSizeFactor = gateState(regimeBrain) === 'PASS' && gateEvidenceComplete('REGIME', regimeBrain)
+    ? regimeFactor(regimeBrain, raw.direction, policy)
+    : null;
   const ddFactor = drawdownFactor(currentDrawdownPct, policy);
 
   const knownFactors = [alphaFactor, regimeSizeFactor, ddFactor].filter((value) => value != null);
-  const advisoryMultiplier = knownFactors.length ? clamp(Math.min(...knownFactors), 0, 1) : null;
+  const advisoryMultiplier = incomplete.length === 0 && knownFactors.length
+    ? clamp(Math.min(...knownFactors), 0, 1)
+    : null;
 
   const vetoReasons = vetoes.flatMap(([name, result]) => {
     const reasons = gateReasons(result);
