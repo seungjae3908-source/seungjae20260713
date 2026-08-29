@@ -155,7 +155,7 @@ function boundSource(dataset, { artifactId = '1001', batchObservationIds = null,
     ...body,
     receiptDigest: computePublicForwardLiquidityCaptureIngestReceiptDigest(body),
   };
-  return { dataset, ingestReceipt, datasetRelativePath };
+  return { dataset, ingestReceipt, ingestReceipts: [ingestReceipt], datasetRelativePath };
 }
 
 function mergeBatches(batches) {
@@ -163,6 +163,40 @@ function mergeBatches(batches) {
   for (const current of batches) dataset = mergeLiquidityCalibrationBatch(dataset, current).dataset;
   assert.deepEqual(verifyLiquidityCalibrationDataset(dataset), { valid: true, reason: null });
   return dataset;
+}
+
+function mergeBatchHistory(batches) {
+  let dataset = null;
+  const history = [];
+  for (const current of batches) {
+    dataset = mergeLiquidityCalibrationBatch(dataset, current).dataset;
+    history.push(dataset);
+  }
+  return history;
+}
+
+function boundSourceChain(history, { artifactIdStart = 6000, collectorImplementationBlobSha = 'f'.repeat(40) } = {}) {
+  const receipts = [];
+  let previousIds = new Set();
+  for (let index = 0; index < history.length; index += 1) {
+    const dataset = history[index];
+    const currentIds = dataset.observations.map((observation) => observation.observationId);
+    const batchObservationIds = currentIds.filter((observationId) => !previousIds.has(observationId));
+    const source = boundSource(dataset, {
+      artifactId: String(artifactIdStart + index),
+      batchObservationIds,
+      collectorImplementationBlobSha,
+    });
+    receipts.push(source.ingestReceipt);
+    previousIds = new Set(currentIds);
+  }
+  const finalDataset = history.at(-1);
+  return {
+    dataset: finalDataset,
+    ingestReceipt: receipts.at(-1),
+    ingestReceipts: receipts,
+    datasetRelativePath: `forward/liquidity-calibration-v1/forward_natural_sample/${finalDataset.collectorCodeSha}/dataset.json`,
+  };
 }
 
 function genuineDataset() {
@@ -185,6 +219,21 @@ function genuineDataset() {
       seed: 3,
       events: [{ execId: 'exec-oos', eventTimestampMs: 30_000, quantity: 1 }],
     }),
+  ]);
+}
+
+function genuineDatasetHistory() {
+  return mergeBatchHistory([
+    batch({
+      base: 10_000,
+      seed: 1,
+      events: [
+        { execId: 'exec-train-1', eventTimestampMs: 10_000, quantity: 1 },
+        { execId: 'exec-train-2', eventTimestampMs: 10_050, quantity: 2 },
+      ],
+    }),
+    batch({ base: 20_000, seed: 2, events: [{ execId: 'exec-validation', eventTimestampMs: 20_000, quantity: 1 }] }),
+    batch({ base: 30_000, seed: 3, events: [{ execId: 'exec-oos', eventTimestampMs: 30_000, quantity: 1 }] }),
   ]);
 }
 
@@ -423,7 +472,7 @@ test('bound-source adapter rejects missing receipt authority and incomplete cano
     producerCodeSha: 'd'.repeat(40),
   });
   assert.equal(mismatchResult.status, 'BLOCKED_DATA');
-  assert.ok(mismatchResult.blockers.includes('UPSTREAM_RECEIPT_DATASET_DIGEST_MISMATCH'));
+  assert.ok(mismatchResult.blockers.includes('UPSTREAM_RECEIPT_INTERMEDIATE_DATASET_DIGEST_MISMATCH'));
 
   const missingBlob = boundSource(dataset, {
     artifactId: '4003',
@@ -436,30 +485,26 @@ test('bound-source adapter rejects missing receipt authority and incomplete cano
   assert.equal(missingBlobResult.status, 'BLOCKED_DATA');
   assert.ok(missingBlobResult.blockers.includes('UPSTREAM_COLLECTOR_IMPLEMENTATION_BLOB_INVALID'));
 
-  const cumulativeDataset = genuineDataset();
-  const latestObservationId = cumulativeDataset.observations
-    .find((observation) => observation.eventTimestampMs === 30_000).observationId;
-  const cumulative = boundSource(cumulativeDataset, {
-    artifactId: '4002',
-    batchObservationIds: [latestObservationId],
-  });
+  const cumulative = boundSourceChain(genuineDatasetHistory(), { artifactIdStart: 4002 });
   const cumulativeResult = classifyPublicForwardLiquidityBoundSources({
     sources: [cumulative],
     producerCodeSha: 'd'.repeat(40),
   });
   assert.equal(cumulativeResult.status, 'PRESENT');
+  assert.equal(cumulativeResult.audit.upstreamSources[0].ingestReceiptCount, 3);
 
-  const brokenIndex = boundSource(cumulativeDataset, {
-    artifactId: '4004',
-    batchObservationIds: [latestObservationId],
-    receiptOverrides: { batchProvenanceIndex: 0 },
-  });
-  const brokenIndexResult = classifyPublicForwardLiquidityBoundSources({
-    sources: [brokenIndex],
-    producerCodeSha: 'd'.repeat(40),
-  });
-  assert.equal(brokenIndexResult.status, 'BLOCKED_DATA');
-  assert.ok(brokenIndexResult.blockers.includes('UPSTREAM_BATCH_PROVENANCE_INDEX_MISMATCH'));
+  const missing = { ...cumulative, ingestReceipts: cumulative.ingestReceipts.slice(1) };
+  const missingResult = classifyPublicForwardLiquidityBoundSources({ sources: [missing], producerCodeSha: 'd'.repeat(40) });
+  assert.equal(missingResult.status, 'BLOCKED_DATA');
+  assert.ok(missingResult.blockers.includes('UPSTREAM_INGEST_RECEIPT_CHAIN_LENGTH_MISMATCH'));
+
+  const swapped = {
+    ...cumulative,
+    ingestReceipts: [cumulative.ingestReceipts[1], cumulative.ingestReceipts[0], cumulative.ingestReceipts[2]],
+  };
+  const swappedResult = classifyPublicForwardLiquidityBoundSources({ sources: [swapped], producerCodeSha: 'd'.repeat(40) });
+  assert.equal(swappedResult.status, 'BLOCKED_DATA');
+  assert.ok(swappedResult.blockers.includes('UPSTREAM_RECEIPT_BATCH_INDEX_MISMATCH'));
 });
 
 test('receipt-bound sources must share one exact collector implementation blob', () => {
@@ -540,6 +585,7 @@ test('independence audit is deterministic and never produces cost or execution a
     upstreamCanonicalIngestSsotRequired: true,
     rawPersistenceAuthority: PUBLIC_FORWARD_LIQUIDITY_CAPTURE_INGEST_RECEIPT_VERSION,
     upstreamIngestReceiptRequired: true,
+    completeIngestReceiptChainRequired: true,
     collectorImplementationBlobRequired: true,
     homogeneousCollectorImplementationRequired: true,
     crossCollectorCanonicalDatasetSynthesisAllowed: false,

@@ -14,6 +14,9 @@ import {
   PUBLIC_FORWARD_LIQUIDITY_CAPTURE_INGEST_RECEIPT_VERSION,
   computePublicForwardLiquidityCaptureIngestReceiptDigest,
 } from './public-forward-liquidity-capture-ingest.mjs';
+import {
+  verifyPublicForwardLiquidityIngestReceiptChain,
+} from './public-forward-liquidity-ingest-receipt-chain.mjs';
 
 export const PUBLIC_FORWARD_LIQUIDITY_INDEPENDENCE_AUDIT_VERSION =
   'public-forward-liquidity-independence-audit-v1';
@@ -28,6 +31,7 @@ export const PUBLIC_FORWARD_LIQUIDITY_INDEPENDENCE_SAFETY = Object.freeze({
   upstreamCanonicalIngestSsotRequired: true,
   rawPersistenceAuthority: PUBLIC_FORWARD_LIQUIDITY_CAPTURE_INGEST_RECEIPT_VERSION,
   upstreamIngestReceiptRequired: true,
+  completeIngestReceiptChainRequired: true,
   collectorImplementationBlobRequired: true,
   homogeneousCollectorImplementationRequired: true,
   crossCollectorCanonicalDatasetSynthesisAllowed: false,
@@ -451,7 +455,17 @@ function assertUpstreamTruthBoundary(receipt) {
 function validateBoundSource(input, producerCodeSha) {
   const source = object(input, 'UPSTREAM_SOURCE_INVALID');
   const dataset = object(source.dataset, 'UPSTREAM_DATASET_INVALID');
-  const receipt = object(source.ingestReceipt, 'UPSTREAM_INGEST_RECEIPT_INVALID');
+  const ingestReceipts = Array.isArray(source.ingestReceipts)
+    ? source.ingestReceipts
+    : [object(source.ingestReceipt, 'UPSTREAM_INGEST_RECEIPT_INVALID')];
+  const datasetRelativePath = safeRelativePath(source.datasetRelativePath);
+  const receiptChain = verifyPublicForwardLiquidityIngestReceiptChain({
+    dataset,
+    ingestReceipts,
+    datasetRelativePath,
+    collectorImplementationPath: COLLECTOR_IMPLEMENTATION_PATH,
+  });
+  const receipt = object(ingestReceipts.at(-1), 'UPSTREAM_INGEST_RECEIPT_INVALID');
   const verification = verifyLiquidityCalibrationDataset(dataset);
   if (!verification.valid) throw new Error(`UPSTREAM_DATASET_INVALID:${verification.reason}`);
   if (dataset.contract !== PUBLIC_LIQUIDITY_CALIBRATION_CONTRACT
@@ -486,6 +500,9 @@ function validateBoundSource(input, producerCodeSha) {
     receipt.collectorImplementationBlobSha,
     'UPSTREAM_COLLECTOR_IMPLEMENTATION_BLOB_INVALID',
   );
+  if (collectorImplementationBlobSha !== receiptChain.collectorImplementationBlobSha) {
+    throw new Error('UPSTREAM_COLLECTOR_IMPLEMENTATION_CHAIN_MISMATCH');
+  }
   const predecessorDatasetDigest = dataset.predecessorDigest ?? null;
   const receiptPredecessorDigest = receipt.predecessorDatasetDigest ?? null;
   if ((predecessorDatasetDigest === null) !== (receiptPredecessorDigest === null)
@@ -494,7 +511,6 @@ function validateBoundSource(input, producerCodeSha) {
         !== exactDigest(predecessorDatasetDigest, 'UPSTREAM_DATASET_PREDECESSOR_DIGEST_INVALID'))) {
     throw new Error('UPSTREAM_RECEIPT_PREDECESSOR_MISMATCH');
   }
-  const datasetRelativePath = safeRelativePath(source.datasetRelativePath);
   if (safeRelativePath(receipt.datasetRelativePath) !== datasetRelativePath) {
     throw new Error('UPSTREAM_RECEIPT_DATASET_PATH_MISMATCH');
   }
@@ -577,6 +593,13 @@ function validateBoundSource(input, producerCodeSha) {
     collectorCodeSha,
     collectorImplementationPath: COLLECTOR_IMPLEMENTATION_PATH,
     collectorImplementationBlobSha,
+    ingestReceiptChainVersion: receiptChain.schemaVersion,
+    ingestReceiptChainDigest: receiptChain.receiptChainDigest,
+    ingestReceiptCount: receiptChain.receiptCount,
+    ingestReceiptDigests: receiptChain.receiptDigests,
+    artifactIds: receiptChain.artifactIds,
+    artifactDigests: receiptChain.artifactDigests,
+    rawBatchDigests: receiptChain.rawBatchDigests,
     datasetDigest,
     datasetRelativePath,
     receiptDigest,
@@ -594,7 +617,7 @@ function validateBoundSource(input, producerCodeSha) {
 function validateBoundSources(sources, producerCodeSha) {
   if (!Array.isArray(sources) || sources.length === 0) throw new Error('UPSTREAM_SOURCES_REQUIRED');
   const validated = sources.map((source) => validateBoundSource(source, producerCodeSha));
-  for (const key of ['sourceIdentity', 'receiptDigest', 'datasetDigest', 'artifactId']) {
+  for (const key of ['sourceIdentity', 'ingestReceiptChainDigest', 'receiptDigest', 'datasetDigest', 'artifactId']) {
     const values = validated.map((source) => source[key]);
     if (new Set(values).size !== values.length) throw new Error(`UPSTREAM_SOURCE_DUPLICATE:${key}`);
   }
@@ -663,6 +686,13 @@ export function classifyPublicForwardLiquidityBoundSources({ sources, producerCo
     collectorCodeSha: source.collectorCodeSha,
     collectorImplementationPath: source.collectorImplementationPath,
     collectorImplementationBlobSha: source.collectorImplementationBlobSha,
+    ingestReceiptChainVersion: source.ingestReceiptChainVersion,
+    ingestReceiptChainDigest: source.ingestReceiptChainDigest,
+    ingestReceiptCount: source.ingestReceiptCount,
+    ingestReceiptDigests: source.ingestReceiptDigests,
+    artifactIds: source.artifactIds,
+    artifactDigests: source.artifactDigests,
+    rawBatchDigests: source.rawBatchDigests,
     datasetDigest: source.datasetDigest,
     datasetRelativePath: source.datasetRelativePath,
     receiptDigest: source.receiptDigest,

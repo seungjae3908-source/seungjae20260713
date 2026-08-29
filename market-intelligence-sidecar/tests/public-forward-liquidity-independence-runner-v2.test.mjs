@@ -88,18 +88,21 @@ function batch(base, seed) {
   });
 }
 
-function cumulativeDataset() {
+function cumulativeHistory() {
   let dataset = null;
+  const history = [];
   for (const [base, seed] of [[10_000, 1], [20_000, 2], [30_000, 3]]) {
     dataset = mergeLiquidityCalibrationBatch(dataset, batch(base, seed)).dataset;
+    history.push(dataset);
   }
-  return dataset;
+  return history;
 }
 
-function ingestReceipt(dataset, datasetRelativePath) {
+function ingestReceipt(dataset, datasetRelativePath, batchObservationIds, artifactOffset) {
   const batchProvenanceIndex = dataset.batchProvenance.length - 1;
-  const latestObservation = dataset.observations.find((observation) => observation.eventTimestampMs === 30_000);
-  const batchObservationIds = [latestObservation.observationId];
+  const batchObservations = dataset.observations
+    .filter((observation) => batchObservationIds.includes(observation.observationId))
+    .sort((left, right) => left.observationId.localeCompare(right.observationId));
   const body = {
     schemaVersion: PUBLIC_FORWARD_LIQUIDITY_CAPTURE_INGEST_RECEIPT_VERSION,
     exactMainSha: COLLECTOR_SHA,
@@ -109,26 +112,26 @@ function ingestReceipt(dataset, datasetRelativePath) {
     repository: 'seungjae3908-source/seungjae20260713',
     sampleClass: dataset.sampleClass,
     storeContract: PUBLIC_LIQUIDITY_CALIBRATION_STORE_CONTRACT,
-    captureRunId: '7001',
+    captureRunId: String(7001 + artifactOffset),
     captureRunAttempt: '1',
     rawBatchDigest: dataset.batchProvenance[batchProvenanceIndex].rawDigest,
-    batchObservationIds,
-    batchObservationCount: 1,
-    batchObservationDigest: sha256(canonicalJson([latestObservation])),
+    batchObservationIds: [...batchObservationIds].sort(),
+    batchObservationCount: batchObservationIds.length,
+    batchObservationDigest: sha256(canonicalJson(batchObservations)),
     batchDatasetProvenanceDigest: sha256(canonicalJson(dataset.batchProvenance[batchProvenanceIndex])),
     batchProvenanceIndex,
     captureArtifactReceiptDigest: sha256('capture-artifact-receipt'),
-    artifactId: '8001',
-    artifactDigest: sha256('capture-artifact'),
+    artifactId: String(8001 + artifactOffset),
+    artifactDigest: sha256(`capture-artifact-${artifactOffset}`),
     predecessorDatasetDigest: dataset.predecessorDigest,
     datasetDigest: dataset.datasetDigest,
     datasetRelativePath,
     datasetObservationCount: dataset.observations.length,
     datasetBatchProvenanceCount: dataset.batchProvenance.length,
     datasetDuplicateAttemptCount: dataset.duplicateAttempts.length,
-    insertedObservationCount: 1,
+    insertedObservationCount: batchObservationIds.length,
     duplicateObservationCount: 0,
-    rawIngestObservationDelta: 1,
+    rawIngestObservationDelta: batchObservationIds.length,
     forwardCalibrationSampleCreditDelta: 0,
     independenceEvaluated: false,
     effectiveIndependentCalibrationN: null,
@@ -234,15 +237,29 @@ test('CLI produces deterministic provenance-bound V2 split receipt from cumulati
     await mkdir(dataDir, { recursive: true });
     await mkdir(researchRepoRoot, { recursive: true });
 
-    const dataset = cumulativeDataset();
+    const history = cumulativeHistory();
+    const dataset = history.at(-1);
     const datasetPath = join(dataDir, 'dataset.json');
-    const receiptPath = join(dataDir, 'ingest-receipt.json');
     const datasetRelativePath = 'forward/liquidity/dataset.json';
-    const receipt = ingestReceipt(dataset, datasetRelativePath);
-    await writeFile(datasetPath, `${canonicalJson(dataset)}\n`);
-    await writeFile(receiptPath, `${canonicalJson(receipt)}\n`);
+    const receiptPaths = [];
+    const receipts = [];
+    let previousIds = new Set();
+    for (let index = 0; index < history.length; index += 1) {
+      const current = history[index];
+      const currentIds = current.observations.map((observation) => observation.observationId);
+      const batchObservationIds = currentIds.filter((observationId) => !previousIds.has(observationId));
+      const receipt = ingestReceipt(current, datasetRelativePath, batchObservationIds, index);
+      const receiptPath = join(dataDir, `ingest-receipt-${index}.json`);
+      await writeFile(receiptPath, `${canonicalJson(receipt)}
+`);
+      receiptPaths.push(receiptPath);
+      receipts.push(receipt);
+      previousIds = new Set(currentIds);
+    }
+    await writeFile(datasetPath, `${canonicalJson(dataset)}
+`);
 
-    const source = { dataset, ingestReceipt: receipt, datasetRelativePath };
+    const source = { dataset, ingestReceipt: receipts.at(-1), ingestReceipts: receipts, datasetRelativePath };
     const splitSourceResult = buildPublicForwardLiquidityIndependentSplitSource({
       sources: [source],
       producerCodeSha: PRODUCER_SHA,
@@ -261,7 +278,7 @@ test('CLI produces deterministic provenance-bound V2 split receipt from cumulati
       schemaVersion: 'public-forward-liquidity-bound-source-manifest-v1',
       stateRoot,
       researchRepoRoot,
-      sources: [{ datasetPath, ingestReceiptPath: receiptPath }],
+      sources: [{ datasetPath, ingestReceiptPaths: receiptPaths }],
     }));
     await writeFile(policyPath, canonicalJson(policy));
     await writeFile(scopePath, canonicalJson(scopeBindings));
