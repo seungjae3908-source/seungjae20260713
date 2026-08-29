@@ -58,6 +58,57 @@ function stableRegime(overrides = {}) {
   };
 }
 
+function completeExistingSafetyEvidence() {
+  return {
+    advancedGates: {
+      uncertainty: {
+        expectedDirectionalEdgeBps: 10,
+        calibrationNonconformityBps: Array.from({ length: 100 }, () => 1),
+      },
+      metaLabel: {
+        modelId: 'meta-v1',
+        takeProbability: 0.8,
+        evaluationSamples: 300,
+        brierScore: 0.1,
+        calibrationError: 0.05,
+        evaluatedAt: NOW,
+      },
+      events: [],
+    },
+    executionQuality: {
+      bookWalk: {
+        direction: 'BUY',
+        targetQty: 1,
+        asks: [[100, 10]],
+        arrivalPrice: 100,
+      },
+      fillModel: {
+        modelId: 'fill-model-v1',
+        fillProbability: 0.9,
+        evaluationSamples: 500,
+        brierScore: 0.1,
+        calibrationError: 0.05,
+        evaluatedAt: NOW,
+      },
+    },
+    portfolioSafety: {
+      portfolio: {
+        equityKrw: 1_000_000,
+        positions: [],
+        proposedNotionalKrw: 10_000,
+        proposedSymbol: 'KRW-BTC',
+      },
+      expectedShortfall: {
+        lossSamplesPct: Array.from({ length: 250 }, () => 1),
+      },
+      signal: {
+        generatedAt: NOW,
+        revalidatedAt: NOW,
+      },
+    },
+  };
+}
+
 test('P0 modules are observe-only by default and do not break existing forward-ready parent eligibility', () => {
   const result = evaluateMarketIntelligence(baseInput());
   assert.equal(result.autoTrading.evidenceReady, true);
@@ -65,6 +116,8 @@ test('P0 modules are observe-only by default and do not break existing forward-r
   assert.equal(result.regimeBrain.policy.enforcement, 'OBSERVE_ONLY');
   assert.equal(result.netAlpha.policy.enforcement, 'OBSERVE_ONLY');
   assert.equal(result.dynamicSizing.policy.enforcement, 'OBSERVE_ONLY');
+  assert.equal(result.dynamicSizing.state, 'INSUFFICIENT_EVIDENCE');
+  assert.equal(result.dynamicSizing.recommendedMultiplier, null);
   assert.equal(result.scanner.candidateDeletionAllowed, false);
   assert.equal(result.autoTrading.orderAllowed, false);
   assert.equal(result.safety.executionAuthority, 'NONE');
@@ -111,6 +164,7 @@ test('required regime evidence stays paper-only when drift evidence is not avail
 test('complete P0 evidence composes into a reduction-only sizing recommendation when the existing safety chain also passes', () => {
   const result = evaluateMarketIntelligence({
     ...baseInput(),
+    ...completeExistingSafetyEvidence(),
     regimeBrain: stableRegime(),
     netAlpha: {
       asOf: NOW,
@@ -127,6 +181,9 @@ test('complete P0 evidence composes into a reduction-only sizing recommendation 
       parentBaseNotional: 1_000_000,
     },
   });
+  assert.equal(result.advancedGates.autoTrading.state, 'PASS');
+  assert.equal(result.executionQuality.autoTrading.state, 'PASS');
+  assert.equal(result.portfolioSafety.autoTrading.state, 'PASS');
   assert.equal(result.regimeBrain.autoTrading.state, 'PASS');
   assert.equal(result.netAlpha.autoTrading.state, 'PASS');
   assert.equal(result.netAlpha.conservativeNetAlphaBps, 6.5);
@@ -137,6 +194,39 @@ test('complete P0 evidence composes into a reduction-only sizing recommendation 
   assert.equal(result.dynamicSizing.safety.canIncreaseParentExposure, false);
   assert.equal(result.dynamicSizing.safety.reductionOnly, true);
   assert.equal(result.autoTrading.orderAllowed, false);
+});
+
+test('required sizing cannot treat observe-only wrappers with missing underlying evidence as complete', () => {
+  const result = evaluateMarketIntelligence({
+    ...baseInput(),
+    regimeBrain: stableRegime(),
+    netAlpha: {
+      asOf: NOW,
+      evidenceReady: true,
+      source: 'SERVER_STRATEGY_PROMOTION',
+      costPolicyVersion: 'cost-v1',
+      expectedGrossEdgeBps: 12,
+      conformalLowerEdgeBps: 10,
+      attestedNetEdgeBps: 9,
+      costs: explicitCosts(),
+    },
+    dynamicSizing: {
+      currentDrawdownPct: 3,
+      parentBaseNotional: 1_000_000,
+    },
+    dynamicSizingPolicy: { enforcement: 'REQUIRED_FOR_PARENT_GATE' },
+  });
+  assert.equal(result.advancedGates.autoTrading.state, 'PASS');
+  assert.equal(result.executionQuality.autoTrading.state, 'PASS');
+  assert.equal(result.portfolioSafety.autoTrading.state, 'PASS');
+  assert.equal(result.dynamicSizing.state, 'INSUFFICIENT_EVIDENCE');
+  assert.equal(result.dynamicSizing.advisoryMultiplier, null);
+  assert.equal(result.dynamicSizing.recommendedMultiplier, null);
+  assert.ok(result.dynamicSizing.reasons.includes('ADVANCED_EVIDENCE_INCOMPLETE'));
+  assert.ok(result.dynamicSizing.reasons.includes('EXECUTION_EVIDENCE_INCOMPLETE'));
+  assert.ok(result.dynamicSizing.reasons.includes('PORTFOLIO_EVIDENCE_INCOMPLETE'));
+  assert.equal(result.autoTrading.mode, 'PAPER_ONLY');
+  assert.equal(result.autoTrading.parentEligibilityReady, false);
 });
 
 test('nested net-alpha payload cannot replace the authoritative parent clock to make stale evidence look fresh', () => {
