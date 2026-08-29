@@ -41,6 +41,14 @@ for (const text of [
   'accessSync(path, fsConstants.X_OK);',
   "blocked('psql_installed_outside_path', connected)",
   "blocked('psql_not_installed', connected)",
+  'function classifyPsqlFailure(stderrText) {',
+  "return 'production_database_dns_failed'",
+  "return 'production_database_network_unreachable'",
+  "return 'production_database_connection_timed_out'",
+  "return 'production_database_connection_refused'",
+  "return 'production_database_server_closed_connection'",
+  "return 'production_database_connection_failed'",
+  'blocked(classifyPsqlFailure(result.stderr), connected);',
   'database_changed: false',
   'server_files_written: 0',
   'server_processes_restarted: 0',
@@ -50,6 +58,7 @@ for (const text of [
   'live_trading_authority: false',
 ]) requireText(diagnostic, text);
 if (diagnostic.includes("blocked('psql_unavailable'")) throw new Error('legacy undifferentiated psql_unavailable classification is forbidden');
+forbid(diagnostic, /else if \(\/could not translate host name\|could not connect\|connection refused\|connection timed out\|server closed the connection\|network is unreachable\/\.test\(stderr\)\) classification = 'production_database_connection_failed'/);
 const sql = /const SQL = String\.raw`([\s\S]*?)`;/.exec(diagnostic)?.[1];
 if (!sql) throw new Error('diagnostic SQL missing');
 forbid(sql, /^\s*(insert|update|delete|create|alter|drop|grant|revoke|truncate|comment|copy|merge|vacuum|reindex|cluster|refresh|do)\b/im);
