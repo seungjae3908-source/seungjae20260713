@@ -1,5 +1,6 @@
 const ENFORCEMENT_MODES = new Set(['OBSERVE_ONLY', 'REQUIRED_FOR_PARENT_GATE']);
 const GROSS_EDGE_SOURCE = 'forward-recommendation-profit-calibration-v2';
+const GROSS_EDGE_EVIDENCE_SOURCE = 'LIVE_RECOMMENDATION';
 const GROSS_EDGE_SCHEMA = 'forward-calibration-gross-edge-v2';
 const COST_FIELDS = Object.freeze([
   'commissionBps',
@@ -50,6 +51,11 @@ function normalizeIdentity(value) {
   const normalized = {};
   for (const field of IDENTITY_FIELDS) {
     const raw = value[field];
+    if (field === 'horizon') {
+      if (!Number.isInteger(raw) || raw <= 0) return null;
+      normalized[field] = raw;
+      continue;
+    }
     if (typeof raw !== 'string' || !raw.trim()) return null;
     normalized[field] = field === 'market' || field === 'direction'
       ? raw.trim().toUpperCase()
@@ -115,6 +121,7 @@ export function evaluateNetAlpha(raw = {}, policyInput = {}) {
   const attestedNetEdgeBps = finite(raw.attestedNetEdgeBps);
   const source = String(raw.source ?? '').trim();
   const sourceSchemaVersion = String(raw.sourceSchemaVersion ?? '').trim();
+  const grossEvidenceSource = String(raw.grossEvidenceSource ?? '').trim();
   const costSource = String(raw.costSource ?? '').trim();
   const costPolicyVersion = String(raw.costPolicyVersion ?? '').trim();
   const grossIdentity = normalizeIdentity(raw.grossIdentity);
@@ -128,6 +135,7 @@ export function evaluateNetAlpha(raw = {}, policyInput = {}) {
   if (raw.fullCostReady !== true) reasons.push('FULL_COST_NOT_READY');
   if (!evidenceComplete(raw.evidenceComplete)) reasons.push('EVIDENCE_COMPLETE_NOT_READY');
   if (source !== GROSS_EDGE_SOURCE) reasons.push('CANONICAL_GROSS_EDGE_SOURCE_REQUIRED');
+  if (grossEvidenceSource !== GROSS_EDGE_EVIDENCE_SOURCE) reasons.push('CANONICAL_GROSS_EDGE_EVIDENCE_SOURCE_REQUIRED');
   if (sourceSchemaVersion !== GROSS_EDGE_SCHEMA) reasons.push('CANONICAL_GROSS_EDGE_SCHEMA_REQUIRED');
   if (!costSource) reasons.push('FULL_COST_SOURCE_REQUIRED');
   if (!costPolicyVersion) reasons.push('COST_POLICY_VERSION_REQUIRED');
@@ -165,6 +173,7 @@ export function evaluateNetAlpha(raw = {}, policyInput = {}) {
   const provenance = {
     source: source || null,
     sourceSchemaVersion: sourceSchemaVersion || null,
+    grossEvidenceSource: grossEvidenceSource || null,
     costSource: costSource || null,
     costPolicyVersion: costPolicyVersion || null,
     grossIdentity,
@@ -250,4 +259,4 @@ export function evaluateNetAlpha(raw = {}, policyInput = {}) {
   };
 }
 
-export { COST_FIELDS, GROSS_EDGE_SOURCE, GROSS_EDGE_SCHEMA };
+export { COST_FIELDS, GROSS_EDGE_SOURCE, GROSS_EDGE_EVIDENCE_SOURCE, GROSS_EDGE_SCHEMA };
