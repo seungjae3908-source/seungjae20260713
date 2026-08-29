@@ -615,6 +615,7 @@ class Controller:
             if report:
                 reports.append(report)
 
+        command_floor = 0
         if commands:
             latest = max(commands, key=lambda item: (item.version, item.source_comment_id))
             if latest.publisher != CENTRAL_PUBLISHER:
@@ -622,15 +623,21 @@ class Controller:
                 raise ControllerError("latest command publisher is not CENTRAL-COMMANDER")
             self.store.apply_command(latest)
             self.store.set_meta("control_blocker", "")
+            command_floor = latest.source_comment_id
 
+        applied_reports = 0
         for report in reports:
-            self.store.apply_worker_report(report)
+            if report.source_comment_id <= command_floor:
+                continue
+            if self.store.apply_worker_report(report):
+                applied_reports += 1
         expired = self.store.block_expired_dispatches()
         self.store.set_meta("last_reconcile_epoch", str(now_epoch()))
         return {
             "commandVersion": int(self.store.get_meta("command_version", "0") or 0),
             "commentsExamined": len(comments),
             "reportsExamined": len(reports),
+            "reportsAppliedAfterCommand": applied_reports,
             "expiredDispatchesBlocked": expired,
         }
 
