@@ -247,7 +247,7 @@ userBrokerTelegramRouter.get('/', async (req, res) => {
   }
 });
 
-userBrokerTelegramRouter.get('/telegram-policy', async (req, res) => {
+userBrokerTelegramRouter.get('/telegram-policy', requireCapability('canConnectPersonalTelegram'), async (req, res) => {
   try {
     const { userId } = member(req as AuthenticatedRequest);
     const state = await createSupabaseTelegramAlertPolicyRepository().getPolicy(userId);
@@ -271,7 +271,7 @@ userBrokerTelegramRouter.get('/telegram-policy', async (req, res) => {
   }
 });
 
-userBrokerTelegramRouter.patch('/telegram-policy', async (req, res) => {
+userBrokerTelegramRouter.patch('/telegram-policy', requireCapability('canConnectPersonalTelegram'), async (req, res) => {
   try {
     const { userId } = member(req as AuthenticatedRequest);
     const state = await createSupabaseTelegramAlertPolicyRepository()
@@ -311,7 +311,7 @@ userBrokerTelegramRouter.post('/execution/sync', requireCapability('canAccessJou
   }
 });
 
-userBrokerTelegramRouter.post('/telegram/link', async (req, res) => {
+userBrokerTelegramRouter.post('/telegram/link', requireCapability('canConnectPersonalTelegram'), async (req, res) => {
   try {
     const { userId } = member(req as AuthenticatedRequest);
     const link = await service().createTelegramLink(userId);
@@ -321,7 +321,7 @@ userBrokerTelegramRouter.post('/telegram/link', async (req, res) => {
   }
 });
 
-userBrokerTelegramRouter.post('/telegram/test', async (req, res) => {
+userBrokerTelegramRouter.post('/telegram/test', requireCapability('canConnectPersonalTelegram'), async (req, res) => {
   try {
     const { userId } = member(req as AuthenticatedRequest);
     const result = await sendPersonalTelegramTestMessage(userId);
@@ -348,7 +348,7 @@ userBrokerTelegramRouter.delete('/telegram', async (req, res) => {
   }
 });
 
-userBrokerTelegramRouter.patch('/notifications', async (req, res) => {
+userBrokerTelegramRouter.patch('/notifications', requireCapability('canConnectPersonalTelegram'), async (req, res) => {
   try {
     const { userId } = member(req as AuthenticatedRequest);
     const body = record(req.body) ?? {};
