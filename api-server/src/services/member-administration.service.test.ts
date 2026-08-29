@@ -183,6 +183,20 @@ test('revoked status overrides an explicit admin tier in shared capabilities', (
   assert.equal(hasCapability(revokedAdmin, 'canConnectPersonalTelegram'), false);
 });
 
+test('missing status fails closed even with explicit admin tier', () => {
+  const missingStatusAdmin = profile({ membership_level: 'admin', role: 'admin', status: null, is_active: true });
+  assert.equal(deriveMemberTier(missingStatusAdmin), 'pending');
+  assert.equal(hasCapability(missingStatusAdmin, 'canManageMembers'), false);
+  assert.equal(hasCapability(missingStatusAdmin, 'canPlaceOrders'), false);
+  const plan = planMemberChange(missingStatusAdmin, { isActive: true, reason: '상태 누락 행 검증' }, ADMIN, 0, NOW);
+  assert.equal(plan.changes.membership_level, 'pending');
+  assert.equal(plan.changes.status, 'pending');
+});
+
+test('approved legacy full role derives regular tier', () => {
+  assert.equal(deriveMemberTier(profile({ membership_level: null, role: 'full', status: 'approved' })), 'regular');
+});
+
 test('admin may be demoted when another active admin exists', () => {
   const plan = planMemberChange(profile({ membership_level: 'admin', role: 'admin', status: 'approved' }), { membershipLevel: 'regular', reason: '관리자 역할 조정' }, ADMIN, 2, NOW);
   assert.equal(plan.changes.membership_level, 'regular');
