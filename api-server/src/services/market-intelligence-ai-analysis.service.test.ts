@@ -103,6 +103,37 @@ test('verified structured AI output can only reference caller-supplied fact inde
   assert.ok(prompt.length <= 1_950);
 });
 
+test('AI free text rejects invented URLs and unsupported numeric factual claims', async () => {
+  const inventedUrl = new MarketIntelligenceAiAnalyzer({
+    answerAiChatImpl: async () => aiResult(analysisAnswer({ summaryShort: '공식 공시는 https://fake.example 에서 확인된다.' })),
+  });
+  const inventedUrlResult = await inventedUrl.analyze(input({ analysisKey: 'e'.repeat(64) }));
+  assert.equal(inventedUrlResult.status, 'AI_ANALYSIS_UNAVAILABLE');
+  assert.equal(inventedUrlResult.reason, 'AI_STRUCTURED_RESPONSE_INVALID');
+
+  const inventedAmount = new MarketIntelligenceAiAnalyzer({
+    answerAiChatImpl: async () => aiResult(analysisAnswer({ summaryShort: '계약 금액은 999억원이다.' })),
+  });
+  const inventedAmountResult = await inventedAmount.analyze(input({ analysisKey: 'f'.repeat(64) }));
+  assert.equal(inventedAmountResult.status, 'AI_ANALYSIS_UNAVAILABLE');
+  assert.equal(inventedAmountResult.reason, 'AI_STRUCTURED_RESPONSE_INVALID');
+});
+
+test('numeric fact copied from public evidence remains allowed without becoming scanner authority', async () => {
+  const analyzer = new MarketIntelligenceAiAnalyzer({
+    answerAiChatImpl: async () => aiResult(analysisAnswer({ summaryShort: '공식 공시의 계약 금액은 120억원이며 추가 검증이 필요하다.' })),
+  });
+  const result = await analyzer.analyze(input({
+    analysisKey: '1'.repeat(64),
+    sourceText: '공식 공시의 계약 금액은 120억원이다.',
+    evidenceFacts: ['공급계약 체결 사실', '계약 금액은 120억원'],
+  }));
+  assert.equal(result.status, 'ANALYZED');
+  assert.equal(result.analysis?.summaryShort, '공식 공시의 계약 금액은 120억원이며 추가 검증이 필요하다.');
+  assert.equal(result.safety.executionAuthority, 'NONE');
+  assert.equal(result.safety.generatedFactsAllowed, false);
+});
+
 test('malformed or out-of-range structured responses fail closed', async () => {
   const malformed = new MarketIntelligenceAiAnalyzer({ answerAiChatImpl: async () => aiResult('not-json') });
   const malformedResult = await malformed.analyze(input());
