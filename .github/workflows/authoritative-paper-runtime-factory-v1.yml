@@ -89,9 +89,21 @@ jobs:
       - name: Run authenticated Paper snapshot-v2 transport tests
         run: node --test /tmp/paper-trading-snapshot-transport.test.cjs
 
-      - name: Rebuild and verify exact authoritative runtime package
+      - name: Rebuild exact authoritative runtime package
+        run: node api-server/scripts/build-authoritative-paper-runtime-package.mjs
+
+      - name: Upload regenerated runtime package for bounded branch repair
+        uses: actions/upload-artifact@v4
+        with:
+          name: authoritative-paper-runtime-regenerated-${{ github.event.pull_request.head.sha }}
+          path: |
+            market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs
+            market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Verify exact authoritative runtime package
         run: |
-          node api-server/scripts/build-authoritative-paper-runtime-package.mjs
           git diff --exit-code -- \
             market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs \
             market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json
