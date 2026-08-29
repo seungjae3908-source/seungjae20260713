@@ -9,6 +9,7 @@ function source(relativePath: string) {
 const migration = source('../api-server/supabase/migrations/2026082701_personal_telegram_generic_outbox.sql');
 const repository = source('../api-server/src/features/user-broker-telegram/user-broker-telegram.repository.ts');
 const service = source('../api-server/src/features/user-broker-telegram/user-broker-telegram.service.ts');
+const bridge = source('../api-server/src/features/user-broker-telegram/trade-execution-event-bridge.service.ts');
 const worker = source('../api-server/src/features/user-broker-telegram/user-broker-telegram.worker.ts');
 const personal = source('../api-server/src/services/personal-telegram-alert.service.ts');
 const productionMigrator = source('../ops/apply-production-personal-telegram-storage.mjs');
@@ -48,6 +49,23 @@ test('injected sender remains a direct deterministic test seam while runtime def
   expect(personal).toContain('deliverTelegramAlertWithPolicy');
   expect(personal).toContain('const outboxRepository = dependencies.outboxRepository ?? runtimeRepository');
   expect(personal).toContain('deliveryQueued');
+});
+
+test('missing member scope fails closed instead of defaulting Telegram delivery to admin', () => {
+  expect(service).toContain("membership: MemberTier = 'pending'");
+  expect(bridge).toContain("membership: MemberTier = 'pending'");
+  expect(service).not.toContain("membership: MemberTier = 'admin'");
+  expect(bridge).not.toContain("membership: MemberTier = 'admin'");
+});
+
+test('link binding and every durable send recheck canonical current member eligibility', () => {
+  expect(repository).toContain("from('profiles')");
+  expect(repository).toContain(".select('status,membership_level,is_active,role')");
+  expect(service).toContain("hasCapability(profile, 'canConnectPersonalTelegram')");
+  expect(service).toContain("throw new Error('TELEGRAM_MEMBER_INELIGIBLE')");
+  expect(service).toContain("'TELEGRAM_MEMBER_INELIGIBLE'");
+  expect(service).toContain("'TELEGRAM_MEMBER_ELIGIBILITY_UNAVAILABLE'");
+  expect(service.indexOf('personalTelegramEligible(userId)')).toBeLessThan(service.indexOf('destinationChatId: connection.telegramChatId'));
 });
 
 test('the existing worker processes personal alerts with the same bounded retry and dead-letter states', () => {

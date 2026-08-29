@@ -1,3 +1,4 @@
+import type { MemberAccessProfile } from '../../../../packages/member-access/src/index.js';
 import { getSupabase, hasSupabaseServerKey } from '../../lib/supabase';
 import type { TelegramPolicyDeliveryHistory } from '../../services/telegram-alert-policy.service';
 import {
@@ -15,6 +16,7 @@ import {
 export interface UserBrokerTelegramRepository {
   createLinkToken(record: TelegramLinkTokenRecord): Promise<void>;
   consumeLinkToken(tokenHash: string, consumedAt: string): Promise<string | null>;
+  getPersonalTelegramMemberProfile(userId: string): Promise<MemberAccessProfile | null>;
   getTelegramConnection(userId: string): Promise<UserTelegramConnection | null>;
   bindTelegramConnection(connection: UserTelegramConnection): Promise<void>;
   revokeTelegramConnection(userId: string, revokedAt: string): Promise<void>;
@@ -94,11 +96,17 @@ function personalHistoryFromDelivery(delivery: NotificationDelivery): TelegramPo
 
 export class InMemoryUserBrokerTelegramRepository implements UserBrokerTelegramRepository {
   private linkTokens = new Map<string, TelegramLinkTokenRecord>();
+  private memberProfiles = new Map<string, MemberAccessProfile>();
   private connections = new Map<string, UserTelegramConnection>();
   private preferences = new Map<string, NotificationPreferences>();
   private events = new Map<string, UserExecutionEvent>();
   private deliveries = new Map<string, NotificationDelivery>();
   private deliveryDedupe = new Map<string, string>();
+
+  setMemberProfile(userId: string, profile: MemberAccessProfile | null) {
+    if (!profile) this.memberProfiles.delete(userId);
+    else this.memberProfiles.set(userId, copy(profile));
+  }
 
   async createLinkToken(record: TelegramLinkTokenRecord) {
     this.linkTokens.set(record.tokenHash, copy(record));
@@ -109,6 +117,11 @@ export class InMemoryUserBrokerTelegramRepository implements UserBrokerTelegramR
     if (!record || record.consumedAt || record.expiresAt <= consumedAt) return null;
     record.consumedAt = consumedAt;
     return record.userId;
+  }
+
+  async getPersonalTelegramMemberProfile(userId: string) {
+    const profile = this.memberProfiles.get(userId);
+    return profile ? copy(profile) : null;
   }
 
   async getTelegramConnection(userId: string) {
@@ -317,6 +330,15 @@ function toDelivery(row: Record<string, unknown>): NotificationDelivery {
   };
 }
 
+function memberProfile(row: Record<string, unknown>): MemberAccessProfile {
+  return {
+    status: typeof row.status === 'string' ? row.status : null,
+    membership_level: typeof row.membership_level === 'string' ? row.membership_level : null,
+    is_active: typeof row.is_active === 'boolean' ? row.is_active : null,
+    role: typeof row.role === 'string' ? row.role : null,
+  };
+}
+
 export function createSupabaseUserBrokerTelegramRepository(): UserBrokerTelegramRepository {
   return {
     async createLinkToken(record) {
@@ -340,6 +362,15 @@ export function createSupabaseUserBrokerTelegramRepository(): UserBrokerTelegram
         .maybeSingle();
       if (error) throw databaseError();
       return data?.user_id ? String(data.user_id) : null;
+    },
+
+    async getPersonalTelegramMemberProfile(userId) {
+      const { data, error } = await secureClient().from('profiles')
+        .select('status,membership_level,is_active,role')
+        .eq('id', userId)
+        .maybeSingle();
+      if (error) throw databaseError();
+      return data ? memberProfile(data as Record<string, unknown>) : null;
     },
 
     async getTelegramConnection(userId) {
