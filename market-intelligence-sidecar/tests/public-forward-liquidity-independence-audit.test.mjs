@@ -10,6 +10,7 @@ import {
   PUBLIC_LIQUIDITY_CALIBRATION_STORE_CONTRACT,
   buildPublicLiquidityObservationBatch,
   mergeLiquidityCalibrationBatch,
+  canonicalJson,
   sha256,
   verifyLiquidityCalibrationDataset,
 } from '../src/public-forward-liquidity-calibration.mjs';
@@ -88,29 +89,44 @@ function batch({ base, events, seed, collectorCodeSha = COLLECTOR_SHA }) {
   });
 }
 
-function boundSource(dataset, { artifactId = '1001', receiptOverrides = {} } = {}) {
+function boundSource(dataset, { artifactId = '1001', batchObservationIds = null, collectorImplementationBlobSha = 'f'.repeat(40), receiptOverrides = {} } = {}) {
   const datasetRelativePath = `forward/liquidity-calibration-v1/forward_natural_sample/${dataset.collectorCodeSha}/dataset.json`;
+  const batchProvenanceIndex = dataset.batchProvenance.length - 1;
+  const selectedIds = [...(batchObservationIds ?? dataset.observations.map((observation) => observation.observationId))].sort();
+  const selected = new Set(selectedIds);
+  const batchObservations = dataset.observations
+    .filter((observation) => selected.has(observation.observationId))
+    .sort((left, right) => left.observationId.localeCompare(right.observationId));
+  if (batchObservations.length !== selectedIds.length) throw new Error('TEST_BATCH_OBSERVATION_MISSING');
   const body = {
     schemaVersion: PUBLIC_FORWARD_LIQUIDITY_CAPTURE_INGEST_RECEIPT_VERSION,
     exactMainSha: dataset.collectorCodeSha,
     collectorCodeSha: dataset.collectorCodeSha,
     collectorImplementationPath: 'market-intelligence-sidecar/src/public-forward-liquidity-calibration.mjs',
-    collectorImplementationBlobSha: sha256(`collector-blob-${artifactId}`).slice(0, 40),
+    collectorImplementationBlobSha,
     repository: 'seungjae3908-source/seungjae20260713',
     sampleClass: dataset.sampleClass,
     storeContract: PUBLIC_LIQUIDITY_CALIBRATION_STORE_CONTRACT,
     captureRunId: artifactId,
     captureRunAttempt: '1',
-    rawBatchDigest: dataset.batchProvenance[0].rawDigest,
+    rawBatchDigest: dataset.batchProvenance[batchProvenanceIndex].rawDigest,
+    batchObservationIds: selectedIds,
+    batchObservationCount: selectedIds.length,
+    batchObservationDigest: sha256(canonicalJson(batchObservations)),
+    batchDatasetProvenanceDigest: sha256(canonicalJson(dataset.batchProvenance[batchProvenanceIndex])),
+    batchProvenanceIndex,
     captureArtifactReceiptDigest: sha256(`artifact-receipt-${artifactId}`),
     artifactId,
     artifactDigest: sha256(`artifact-${artifactId}`),
     predecessorDatasetDigest: dataset.predecessorDigest ?? null,
     datasetDigest: dataset.datasetDigest,
     datasetRelativePath,
-    insertedObservationCount: dataset.observations.length,
+    datasetObservationCount: dataset.observations.length,
+    datasetBatchProvenanceCount: dataset.batchProvenance.length,
+    datasetDuplicateAttemptCount: dataset.duplicateAttempts.length,
+    insertedObservationCount: selectedIds.length,
     duplicateObservationCount: 0,
-    rawIngestObservationDelta: dataset.observations.length,
+    rawIngestObservationDelta: selectedIds.length,
     forwardCalibrationSampleCreditDelta: 0,
     independenceEvaluated: false,
     effectiveIndependentCalibrationN: null,
@@ -420,13 +436,54 @@ test('bound-source adapter rejects missing receipt authority and incomplete cano
   assert.equal(missingBlobResult.status, 'BLOCKED_DATA');
   assert.ok(missingBlobResult.blockers.includes('UPSTREAM_COLLECTOR_IMPLEMENTATION_BLOB_INVALID'));
 
-  const incomplete = boundSource(genuineDataset(), { artifactId: '4002' });
-  const incompleteResult = classifyPublicForwardLiquidityBoundSources({
-    sources: [incomplete],
+  const cumulativeDataset = genuineDataset();
+  const latestObservationId = cumulativeDataset.observations
+    .find((observation) => observation.eventTimestampMs === 30_000).observationId;
+  const cumulative = boundSource(cumulativeDataset, {
+    artifactId: '4002',
+    batchObservationIds: [latestObservationId],
+  });
+  const cumulativeResult = classifyPublicForwardLiquidityBoundSources({
+    sources: [cumulative],
     producerCodeSha: 'd'.repeat(40),
   });
-  assert.equal(incompleteResult.status, 'BLOCKED_DATA');
-  assert.ok(incompleteResult.blockers.includes('UPSTREAM_DATASET_LINEAGE_INCOMPLETE'));
+  assert.equal(cumulativeResult.status, 'PRESENT');
+
+  const brokenIndex = boundSource(cumulativeDataset, {
+    artifactId: '4004',
+    batchObservationIds: [latestObservationId],
+    receiptOverrides: { batchProvenanceIndex: 0 },
+  });
+  const brokenIndexResult = classifyPublicForwardLiquidityBoundSources({
+    sources: [brokenIndex],
+    producerCodeSha: 'd'.repeat(40),
+  });
+  assert.equal(brokenIndexResult.status, 'BLOCKED_DATA');
+  assert.ok(brokenIndexResult.blockers.includes('UPSTREAM_BATCH_PROVENANCE_INDEX_MISMATCH'));
+});
+
+test('receipt-bound sources must share one exact collector implementation blob', () => {
+  const firstDataset = mergeLiquidityCalibrationBatch(null, batch({
+    base: 55_000,
+    seed: 35,
+    collectorCodeSha: '7'.repeat(40),
+    events: [{ execId: 'cohort-event-1', eventTimestampMs: 55_000 }],
+  })).dataset;
+  const secondDataset = mergeLiquidityCalibrationBatch(null, batch({
+    base: 56_000,
+    seed: 36,
+    collectorCodeSha: '8'.repeat(40),
+    events: [{ execId: 'cohort-event-2', eventTimestampMs: 56_000 }],
+  })).dataset;
+  const result = classifyPublicForwardLiquidityBoundSources({
+    sources: [
+      boundSource(firstDataset, { artifactId: '4501', collectorImplementationBlobSha: '1'.repeat(40) }),
+      boundSource(secondDataset, { artifactId: '4502', collectorImplementationBlobSha: '2'.repeat(40) }),
+    ],
+    producerCodeSha: 'd'.repeat(40),
+  });
+  assert.equal(result.status, 'BLOCKED_DATA');
+  assert.ok(result.blockers.includes('UPSTREAM_COLLECTOR_IMPLEMENTATION_COHORT_MISMATCH'));
 });
 
 test('repeating one receipt-bound source in a manifest fails closed before raw N inflation', () => {
@@ -484,6 +541,7 @@ test('independence audit is deterministic and never produces cost or execution a
     rawPersistenceAuthority: PUBLIC_FORWARD_LIQUIDITY_CAPTURE_INGEST_RECEIPT_VERSION,
     upstreamIngestReceiptRequired: true,
     collectorImplementationBlobRequired: true,
+    homogeneousCollectorImplementationRequired: true,
     crossCollectorCanonicalDatasetSynthesisAllowed: false,
     derivedAuditPersistenceOwned: false,
     rawAcceptedNDescriptiveOnly: true,
