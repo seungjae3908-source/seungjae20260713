@@ -138,3 +138,64 @@ test('complete P0 evidence composes into a reduction-only sizing recommendation 
   assert.equal(result.dynamicSizing.safety.reductionOnly, true);
   assert.equal(result.autoTrading.orderAllowed, false);
 });
+
+test('nested net-alpha payload cannot replace the authoritative parent clock to make stale evidence look fresh', () => {
+  const staleAt = NOW - 120_000;
+  const result = evaluateMarketIntelligence({
+    ...baseInput(),
+    netAlpha: {
+      now: staleAt,
+      asOf: staleAt,
+      evidenceReady: true,
+      source: 'SERVER_STRATEGY_PROMOTION',
+      costPolicyVersion: 'cost-v1',
+      expectedGrossEdgeBps: 12,
+      conformalLowerEdgeBps: 10,
+      attestedNetEdgeBps: 9,
+      costs: explicitCosts(),
+    },
+    netAlphaPolicy: { enforcement: 'REQUIRED_FOR_PARENT_GATE' },
+  });
+  assert.equal(result.netAlpha.status, 'NOT_AVAILABLE');
+  assert.equal(result.netAlpha.autoTrading.state, 'INSUFFICIENT_EVIDENCE');
+  assert.ok(result.netAlpha.reasons.includes('NET_ALPHA_EVIDENCE_STALE'));
+  assert.equal(result.autoTrading.mode, 'PAPER_ONLY');
+  assert.equal(result.autoTrading.parentEligibilityReady, false);
+});
+
+test('nested sizing payload cannot replace computed gate evidence or parent direction', () => {
+  const fakePass = { autoTrading: { state: 'PASS', reasons: [], orderAllowed: false } };
+  const result = evaluateMarketIntelligence({
+    ...baseInput(),
+    regimeBrain: stableRegime(),
+    netAlpha: {
+      asOf: NOW,
+      evidenceReady: true,
+      source: 'SERVER_STRATEGY_PROMOTION',
+      costPolicyVersion: 'cost-v1',
+      expectedGrossEdgeBps: 6,
+      conformalLowerEdgeBps: 2,
+      attestedNetEdgeBps: 3,
+      costs: explicitCosts(),
+    },
+    dynamicSizing: {
+      direction: 'SHORT',
+      currentDrawdownPct: 3,
+      parentBaseNotional: 1_000_000,
+      regimeBrain: { ...fakePass, regime: { label: 'TREND_UP' }, drift: { status: 'STABLE' } },
+      netAlpha: { ...fakePass, conservativeNetAlphaBps: 100 },
+      advancedGates: fakePass,
+      executionQuality: fakePass,
+      portfolioSafety: fakePass,
+    },
+    dynamicSizingPolicy: { enforcement: 'REQUIRED_FOR_PARENT_GATE' },
+  });
+  assert.equal(result.netAlpha.autoTrading.state, 'VETO');
+  assert.equal(result.dynamicSizing.state, 'VETO');
+  assert.equal(result.dynamicSizing.direction, 'BUY');
+  assert.equal(result.dynamicSizing.recommendedMultiplier, 0);
+  assert.equal(result.dynamicSizing.suggestedNotional, 0);
+  assert.equal(result.autoTrading.mode, 'BLOCKED_RISK');
+  assert.equal(result.autoTrading.hardBlockReason, 'CONSERVATIVE_NET_ALPHA_BELOW_MINIMUM');
+  assert.equal(result.autoTrading.orderAllowed, false);
+});
