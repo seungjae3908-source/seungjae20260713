@@ -3,6 +3,10 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 import {
+  canonicalJson,
+  sha256,
+} from '../src/public-forward-liquidity-calibration.mjs';
+import {
   CAPTURE_PARAMETER_POLICY,
   CAPTURE_PARAMETER_POLICY_DIGEST,
   MANUAL_TRIGGER_SOURCE,
@@ -21,6 +25,8 @@ const contractPath = resolve(process.env.ACTIVATION_CONTRACT_PATH || 'market-int
 const scheduledWorkflowPath = '.github/workflows/public-forward-liquidity-calibration-scheduled-v3.yml';
 const captureWorkflowPath = '.github/workflows/public-forward-liquidity-calibration-capture.yml';
 const collectorPath = 'market-intelligence-sidecar/src/public-forward-liquidity-calibration.mjs';
+const seamSourcePath = 'market-intelligence-sidecar/src/public-forward-liquidity-capture-seam-v3.mjs';
+const seamRunnerPath = 'market-intelligence-sidecar/scripts/run-public-forward-liquidity-capture-seam-v3.mjs';
 
 function gitBlobSha(path) {
   return execFileSync('git', ['hash-object', path], { encoding: 'utf8' }).trim().toLowerCase();
@@ -59,16 +65,109 @@ function captureParametersFromEnv() {
   return { eventObservationDelayMs, postObservationDelaysMs: [post1, post2], maxPreEventBookAgeMs: maxAge };
 }
 
+function buildLegacyManualCaptureReceipt(captureReceipt, batch) {
+  if (captureReceipt?.triggerSource !== MANUAL_TRIGGER_SOURCE) return captureReceipt;
+  return Object.freeze({
+    schemaVersion: 'public-forward-liquidity-capture-receipt-v1',
+    evidenceClass: 'PUBLIC_FORWARD_LIQUIDITY_CAPTURE_RECEIPT',
+    triggerSource: MANUAL_TRIGGER_SOURCE,
+    runId: String(captureReceipt.runId ?? ''),
+    runAttempt: String(captureReceipt.runAttempt ?? ''),
+    repository: String(captureReceipt.repository ?? ''),
+    exactMainSha: captureReceipt.exactMainSha,
+    collectorCodeSha: captureReceipt.collectorCodeSha,
+    symbol: captureReceipt.symbol,
+    sampleClass: captureReceipt.sampleClass,
+    eventObservationDelayMs: captureReceipt.eventObservationDelayMs,
+    postObservationDelaysMs: [...(captureReceipt.postObservationDelaysMs ?? [])],
+    maxPreEventBookAgeMs: captureReceipt.maxPreEventBookAgeMs,
+    captureStatus: captureReceipt.captureStatus,
+    blockers: [...(captureReceipt.blockers ?? [])],
+    prospectiveObservationCount: captureReceipt.prospectiveObservationCount,
+    droppedObservationCount: captureReceipt.droppedObservationCount,
+    datasetProvenance: batch?.datasetProvenance ?? null,
+    rawBatchDigest: captureReceipt.rawBatchDigest,
+    canonicalDatasetPersistencePerformed: false,
+    canonicalDatasetCreditApplied: false,
+    duplicateCreditEvaluated: false,
+    splitAssignmentPerformed: false,
+    oosValidationComplete: false,
+    calibrationArtifactProduced: false,
+    liquidityImpactPresent: false,
+    fullCostReady: false,
+    evidenceCompleteCredit: 0,
+    naturalEntryCredit: 0,
+    runtimeCostCredit: 0,
+    executionAuthority: 'NONE',
+    privateApiUsed: false,
+    liveTrading: false,
+    orderSubmitted: false,
+    realOrders: 0,
+  });
+}
+
+function buildLegacyManualArtifactReceipt(captureReceipt, { artifactId, artifactDigest, artifactName, artifactReference }) {
+  const normalizedArtifactId = String(artifactId ?? '').trim();
+  if (!/^[0-9]+$/u.test(normalizedArtifactId)) throw new Error('ARTIFACT_ID_INVALID');
+  const normalizedArtifactDigest = String(artifactDigest ?? '').trim().replace(/^sha256:/u, '').toLowerCase();
+  if (!/^[a-f0-9]{64}$/u.test(normalizedArtifactDigest)) throw new Error('ARTIFACT_DIGEST_INVALID');
+  const body = {
+    schemaVersion: 'public-forward-liquidity-capture-artifact-receipt-v1',
+    exactMainSha: captureReceipt.exactMainSha,
+    collectorCodeSha: captureReceipt.collectorCodeSha,
+    captureStatus: captureReceipt.captureStatus,
+    rawBatchDigest: captureReceipt.rawBatchDigest,
+    prospectiveObservationCount: captureReceipt.prospectiveObservationCount,
+    artifactId: normalizedArtifactId,
+    artifactName: String(artifactName ?? '').trim(),
+    artifactDigest: normalizedArtifactDigest,
+    artifactReference,
+    canonicalDatasetPersistencePerformed: false,
+    canonicalDatasetCreditApplied: false,
+    splitAssignmentPerformed: false,
+    oosValidationComplete: false,
+    calibrationArtifactProduced: false,
+    liquidityImpactPresent: false,
+    fullCostReady: false,
+    naturalEntryCredit: 0,
+    runtimeCostCredit: 0,
+    executionAuthority: 'NONE',
+    privateApiUsed: false,
+    liveTrading: false,
+    orderSubmitted: false,
+  };
+  return Object.freeze({ ...body, receiptDigest: sha256(canonicalJson(body)) });
+}
+
 async function verifyActivation() {
   const contract = await loadActivationContract();
   const fileIdentity = {
     scheduledWorkflowBlobSha: gitBlobSha(scheduledWorkflowPath),
     captureWorkflowBlobSha: gitBlobSha(captureWorkflowPath),
     collectorBlobSha: gitBlobSha(collectorPath),
+    seamSourceBlobSha: gitBlobSha(seamSourcePath),
+    seamRunnerBlobSha: gitBlobSha(seamRunnerPath),
   };
   const verification = verifyActivationContract(contract, fileIdentity);
-  if (!verification.valid) throw new Error(`ACTIVATION_CONTRACT_INVALID:${verification.blockers.join(',')}`);
-  return { contract, fileIdentity, verification };
+  const extraBlockers = [];
+  if (contract?.v3PolicyInternalArtifactDigest !== V3_POLICY_BINDING.policyInternalArtifactDigest) {
+    extraBlockers.push('ACTIVATION_V3_INTERNAL_ARTIFACT_DIGEST_MISMATCH');
+  }
+  if (contract?.v3CohortId !== V3_POLICY_BINDING.cohortId) extraBlockers.push('ACTIVATION_V3_COHORT_ID_MISMATCH');
+  if (contract?.seamSourceBlobSha !== fileIdentity.seamSourceBlobSha) extraBlockers.push('ACTIVATION_SEAM_SOURCE_SHA_MISMATCH');
+  if (contract?.seamRunnerBlobSha !== fileIdentity.seamRunnerBlobSha) extraBlockers.push('ACTIVATION_SEAM_RUNNER_SHA_MISMATCH');
+  if (contract?.replayCredit !== 0 || contract?.backfillCredit !== 0 || contract?.operatorSelectedCredit !== 0) {
+    extraBlockers.push('ACTIVATION_NON_SCHEDULED_CREDIT_BOUNDARY_INVALID');
+  }
+  if (contract?.scheduleActivated !== false) extraBlockers.push('ACTIVATION_CONTRACT_MUST_BE_PRE_ACTIVATION');
+  if (!verification.valid || extraBlockers.length > 0) {
+    throw new Error(`ACTIVATION_CONTRACT_INVALID:${[...verification.blockers, ...extraBlockers].join(',')}`);
+  }
+  return {
+    contract,
+    fileIdentity,
+    verification: Object.freeze({ valid: true, blockers: Object.freeze([]) }),
+  };
 }
 
 async function runSlotPreflight() {
@@ -139,18 +238,21 @@ async function runCapture() {
     scheduledAuthority,
     activationContract,
   });
+  const persistedCaptureReceipt = triggerSource === MANUAL_TRIGGER_SOURCE
+    ? buildLegacyManualCaptureReceipt(captureReceipt, batch)
+    : captureReceipt;
 
   await rm(outputDir, { recursive: true, force: true });
   await mkdir(outputDir, { recursive: true });
   if (batch) await writeFile(resolve(outputDir, 'raw-batch.json'), `${JSON.stringify(batch, null, 2)}\n`, 'utf8');
-  await writeFile(resolve(outputDir, 'capture-receipt.json'), `${JSON.stringify(captureReceipt, null, 2)}\n`, 'utf8');
+  await writeFile(resolve(outputDir, 'capture-receipt.json'), `${JSON.stringify(persistedCaptureReceipt, null, 2)}\n`, 'utf8');
   const terminal = {
-    captureStatus: captureReceipt.captureStatus,
-    prospectiveSlotCredit: captureReceipt.prospectiveSlotCredit,
-    ATTEMPTED: captureReceipt.ATTEMPTED,
+    captureStatus: persistedCaptureReceipt.captureStatus,
+    prospectiveSlotCredit: persistedCaptureReceipt.prospectiveSlotCredit ?? 0,
+    ATTEMPTED: persistedCaptureReceipt.ATTEMPTED ?? true,
     rawBatchPresent: Boolean(batch),
-    rawBatchDigest: captureReceipt.rawBatchDigest,
-    blockers: captureReceipt.blockers,
+    rawBatchDigest: persistedCaptureReceipt.rawBatchDigest,
+    blockers: persistedCaptureReceipt.blockers,
   };
   await writeFile(resolve(outputDir, 'capture-terminal.json'), `${JSON.stringify(terminal, null, 2)}\n`, 'utf8');
   await appendGithubOutput({
@@ -169,14 +271,16 @@ async function runBindArtifact() {
   const artifactReference = artifactId && process.env.GITHUB_REPOSITORY && process.env.GITHUB_RUN_ID
     ? `https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}/artifacts/${artifactId}`
     : null;
-  const artifactReceipt = finalizeArtifactReceipt({ captureReceipt, artifactId, artifactDigest, artifactName, artifactReference });
+  const artifactReceipt = captureReceipt.schemaVersion === 'public-forward-liquidity-capture-receipt-v1'
+    ? buildLegacyManualArtifactReceipt(captureReceipt, { artifactId, artifactDigest, artifactName, artifactReference })
+    : finalizeArtifactReceipt({ captureReceipt, artifactId, artifactDigest, artifactName, artifactReference });
   await writeFile(resolve(outputDir, 'artifact-receipt.json'), `${JSON.stringify(artifactReceipt, null, 2)}\n`, 'utf8');
   console.log(JSON.stringify({
     receiptDigest: artifactReceipt.receiptDigest,
     artifactId: artifactReceipt.artifactId,
     artifactDigest: artifactReceipt.artifactDigest,
     captureStatus: artifactReceipt.captureStatus,
-    prospectiveSlotCredit: artifactReceipt.prospectiveSlotCredit,
+    prospectiveSlotCredit: artifactReceipt.prospectiveSlotCredit ?? 0,
   }));
 }
 
@@ -188,6 +292,8 @@ async function runVerifyActivation() {
     exactScheduledWorkflowSha: result.fileIdentity.scheduledWorkflowBlobSha,
     captureWorkflowSha: result.fileIdentity.captureWorkflowBlobSha,
     collectorCodeSha: result.fileIdentity.collectorBlobSha,
+    seamSourceBlobSha: result.fileIdentity.seamSourceBlobSha,
+    seamRunnerBlobSha: result.fileIdentity.seamRunnerBlobSha,
     captureParameterPolicyDigest: CAPTURE_PARAMETER_POLICY_DIGEST,
     valid: result.verification.valid,
     blockers: result.verification.blockers,
@@ -202,20 +308,29 @@ async function runVerifyActivation() {
 async function runMarkStaleMain() {
   const path = resolve(outputDir, 'capture-receipt.json');
   const captureReceipt = JSON.parse(await readFile(path, 'utf8'));
-  const { captureReceiptDigest: _ignored, ...body } = captureReceipt;
-  body.captureStatus = 'STALE_MAIN_DURING_CAPTURE';
-  body.blockers = [...new Set([...(body.blockers ?? []), 'REMOTE_MAIN_MOVED_DURING_CAPTURE'])];
-  body.prospectiveSlotCredit = 0;
-  body.canonicalDatasetCreditApplied = false;
-  body.fullCostReady = false;
-  body.evidenceCompleteCredit = 0;
-  const { canonicalJson, sha256 } = await import('../src/public-forward-liquidity-calibration.mjs');
-  const updated = { ...body, captureReceiptDigest: sha256(canonicalJson(body)) };
-  await writeFile(path, `${JSON.stringify(updated, null, 2)}\n`, 'utf8');
+  if (captureReceipt.schemaVersion === 'public-forward-liquidity-capture-receipt-v1') {
+    captureReceipt.captureStatus = 'STALE_MAIN_DURING_CAPTURE';
+    captureReceipt.blockers = [...new Set([...(captureReceipt.blockers ?? []), 'REMOTE_MAIN_MOVED_DURING_CAPTURE'])];
+    captureReceipt.canonicalDatasetCreditApplied = false;
+    captureReceipt.fullCostReady = false;
+    captureReceipt.evidenceCompleteCredit = 0;
+    await writeFile(path, `${JSON.stringify(captureReceipt, null, 2)}\n`, 'utf8');
+  } else {
+    const { captureReceiptDigest: _ignored, ...body } = captureReceipt;
+    body.captureStatus = 'STALE_MAIN_DURING_CAPTURE';
+    body.blockers = [...new Set([...(body.blockers ?? []), 'REMOTE_MAIN_MOVED_DURING_CAPTURE'])];
+    body.prospectiveSlotCredit = 0;
+    body.canonicalDatasetCreditApplied = false;
+    body.fullCostReady = false;
+    body.evidenceCompleteCredit = 0;
+    const updated = { ...body, captureReceiptDigest: sha256(canonicalJson(body)) };
+    await writeFile(path, `${JSON.stringify(updated, null, 2)}\n`, 'utf8');
+  }
+  const updated = JSON.parse(await readFile(path, 'utf8'));
   const terminal = {
     captureStatus: updated.captureStatus,
-    prospectiveSlotCredit: 0,
-    ATTEMPTED: updated.ATTEMPTED,
+    prospectiveSlotCredit: updated.prospectiveSlotCredit ?? 0,
+    ATTEMPTED: updated.ATTEMPTED ?? true,
     rawBatchPresent: await readFile(resolve(outputDir, 'raw-batch.json'), 'utf8').then(() => true).catch(() => false),
     rawBatchDigest: updated.rawBatchDigest,
     blockers: updated.blockers,
