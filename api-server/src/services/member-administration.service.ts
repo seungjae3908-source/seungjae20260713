@@ -62,9 +62,9 @@ function legacyStoredTier(profile: MemberAdministrationProfile): MemberTier {
 function storedMemberTier(profile: MemberAdministrationProfile): MemberTier {
   const status = typeof profile.status === 'string' ? profile.status : null;
   // Only an already-approved member, or a deliberately suspended member being
-  // reactivated, may preserve a stored tier. Rejected/revoked/pending/disabled
-  // rows must not regain a stale privileged tier through an active-state-only change.
-  if (status && status !== 'approved' && status !== 'suspended') return 'pending';
+  // reactivated, may preserve a stored tier. Missing/rejected/revoked/pending/
+  // disabled rows must not regain a stale privileged tier through an active-state-only change.
+  if (status !== 'approved' && status !== 'suspended') return 'pending';
 
   if (typeof profile.membership_level === 'string' && MEMBER_TIERS.includes(profile.membership_level as MemberTier)) {
     return profile.membership_level as MemberTier;
