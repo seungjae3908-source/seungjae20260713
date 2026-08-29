@@ -1,13 +1,53 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import test from 'node:test';
 import { buildUpbitJwt } from '../../../services/trade-exchange-adapters.service';
 import { maskAccountRef } from '../account-readonly.contract';
+import { bindAccountReadonlyDisconnectAbort } from '../account-readonly.route';
 import { AccountReadonlyService } from '../account-readonly.service';
 import { TossReadonlyProvider, TossTokenManager, type ReadonlyTransport } from '../providers/toss-readonly.provider';
 import { readBitgetSnapshot, readUpbitSnapshot } from '../providers/exchange-readonly.providers';
 
 const USER_A = { userId: 'user-a', accessToken: 'SUPABASE_ACCESS_A_TEST_ONLY' };
 const USER_B = { userId: 'user-b', accessToken: 'SUPABASE_ACCESS_B_TEST_ONLY' };
+
+test('client response close aborts unfinished account read and cleanup removes both listeners', () => {
+  const request = new EventEmitter();
+  const response = Object.assign(new EventEmitter(), { writableEnded: false });
+  const controller = new AbortController();
+  const cleanup = bindAccountReadonlyDisconnectAbort(request, response, controller);
+
+  assert.equal(request.listenerCount('aborted'), 1);
+  assert.equal(response.listenerCount('close'), 1);
+  response.emit('close');
+  assert.equal(controller.signal.aborted, true);
+
+  cleanup();
+  assert.equal(request.listenerCount('aborted'), 0);
+  assert.equal(response.listenerCount('close'), 0);
+});
+
+test('normal completed response close does not abort completed account read', () => {
+  const request = new EventEmitter();
+  const response = Object.assign(new EventEmitter(), { writableEnded: true });
+  const controller = new AbortController();
+  const cleanup = bindAccountReadonlyDisconnectAbort(request, response, controller);
+
+  response.emit('close');
+  assert.equal(controller.signal.aborted, false);
+  cleanup();
+});
+
+test('request aborted event still aborts unfinished account read', () => {
+  const request = new EventEmitter();
+  const response = Object.assign(new EventEmitter(), { writableEnded: false });
+  const controller = new AbortController();
+  const cleanup = bindAccountReadonlyDisconnectAbort(request, response, controller);
+
+  request.emit('aborted');
+  assert.equal(controller.signal.aborted, true);
+  cleanup();
+});
 
 test('disabled feature flag reports configured credentials as unverified with zero private calls', async () => {
   let privateCalls = 0;
