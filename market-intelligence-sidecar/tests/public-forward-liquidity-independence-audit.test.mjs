@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { join, resolve } from 'node:path';
 import test from 'node:test';
 
 import {
@@ -27,6 +28,9 @@ import {
   PUBLIC_FORWARD_LIQUIDITY_CAPTURE_INGEST_RECEIPT_VERSION,
   computePublicForwardLiquidityCaptureIngestReceiptDigest,
 } from '../src/public-forward-liquidity-capture-ingest.mjs';
+import {
+  validatePublicForwardLiquiditySourceManifestLayout,
+} from '../scripts/run-public-forward-liquidity-independence-audit.mjs';
 
 const COLLECTOR_SHA = 'a'.repeat(40);
 
@@ -439,6 +443,35 @@ test('repeating one receipt-bound source in a manifest fails closed before raw N
   });
   assert.equal(result.status, 'BLOCKED_DATA');
   assert.ok(result.blockers.includes('UPSTREAM_SOURCE_DUPLICATE:sourceIdentity'));
+});
+
+test('source manifest requires absolute canonical state paths isolated from the Research checkout', () => {
+  const stateRoot = resolve('fixture-liquidity-state');
+  const researchRepoRoot = resolve('fixture-research-checkout');
+  const manifest = {
+    schemaVersion: 'public-forward-liquidity-bound-source-manifest-v1',
+    stateRoot,
+    researchRepoRoot,
+    sources: [{
+      datasetPath: join(stateRoot, 'forward', 'dataset.json'),
+      ingestReceiptPath: join(stateRoot, 'receipts', 'ingest.json'),
+    }],
+  };
+  assert.deepEqual(validatePublicForwardLiquiditySourceManifestLayout(manifest), {
+    stateRoot,
+    researchRepoRoot,
+  });
+  assert.throws(
+    () => validatePublicForwardLiquiditySourceManifestLayout({
+      ...manifest,
+      stateRoot: join(researchRepoRoot, 'runtime-state'),
+    }),
+    /SOURCE_STATE_ROOT_OVERLAPS_RESEARCH_CHECKOUT/u,
+  );
+  assert.throws(
+    () => validatePublicForwardLiquiditySourceManifestLayout({ ...manifest, stateRoot: 'relative-state' }),
+    /SOURCE_MANIFEST_INVALID/u,
+  );
 });
 
 test('independence audit is deterministic and never produces cost or execution authority', () => {
