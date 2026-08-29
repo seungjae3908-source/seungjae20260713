@@ -29,6 +29,7 @@ export const PUBLIC_FORWARD_LIQUIDITY_INDEPENDENCE_SAFETY = Object.freeze({
   rawPersistenceAuthority: PUBLIC_FORWARD_LIQUIDITY_CAPTURE_INGEST_RECEIPT_VERSION,
   upstreamIngestReceiptRequired: true,
   collectorImplementationBlobRequired: true,
+  homogeneousCollectorImplementationRequired: true,
   crossCollectorCanonicalDatasetSynthesisAllowed: false,
   derivedAuditPersistenceOwned: false,
   rawAcceptedNDescriptiveOnly: true,
@@ -510,17 +511,62 @@ function validateBoundSource(input, producerCodeSha) {
     !== insertedObservationCount) {
     throw new Error('UPSTREAM_RAW_INGEST_DELTA_MISMATCH');
   }
-  if (dataset.predecessorDigest !== null
-    || dataset.batchProvenance.length !== 1
-    || dataset.duplicateAttempts.length !== 0
-    || duplicateObservationCount !== 0
-    || insertedObservationCount !== dataset.observations.length) {
-    throw new Error('UPSTREAM_DATASET_LINEAGE_INCOMPLETE');
+  const datasetObservationCount = nonNegativeInteger(
+    receipt.datasetObservationCount,
+    'UPSTREAM_DATASET_OBSERVATION_COUNT_INVALID',
+  );
+  const datasetBatchProvenanceCount = nonNegativeInteger(
+    receipt.datasetBatchProvenanceCount,
+    'UPSTREAM_DATASET_BATCH_COUNT_INVALID',
+  );
+  const datasetDuplicateAttemptCount = nonNegativeInteger(
+    receipt.datasetDuplicateAttemptCount,
+    'UPSTREAM_DATASET_DUPLICATE_COUNT_INVALID',
+  );
+  const batchProvenanceIndex = nonNegativeInteger(
+    receipt.batchProvenanceIndex,
+    'UPSTREAM_BATCH_PROVENANCE_INDEX_INVALID',
+  );
+  const batchObservationCount = nonNegativeInteger(
+    receipt.batchObservationCount,
+    'UPSTREAM_BATCH_OBSERVATION_COUNT_INVALID',
+  );
+  if (datasetObservationCount !== dataset.observations.length
+    || datasetBatchProvenanceCount !== dataset.batchProvenance.length
+    || datasetDuplicateAttemptCount !== dataset.duplicateAttempts.length) {
+    throw new Error('UPSTREAM_DATASET_CUMULATIVE_COUNTS_MISMATCH');
   }
-  if (exactDigest(
-    dataset.batchProvenance[0]?.rawDigest,
-    'UPSTREAM_BATCH_RAW_DIGEST_INVALID',
-  ) !== exactDigest(receipt.rawBatchDigest, 'UPSTREAM_RECEIPT_RAW_DIGEST_INVALID')) {
+  if (batchProvenanceIndex !== dataset.batchProvenance.length - 1) {
+    throw new Error('UPSTREAM_BATCH_PROVENANCE_INDEX_MISMATCH');
+  }
+  if (!Array.isArray(receipt.batchObservationIds)
+    || receipt.batchObservationIds.length !== batchObservationCount
+    || new Set(receipt.batchObservationIds).size !== batchObservationCount
+    || canonicalJson(receipt.batchObservationIds) !== canonicalJson([...receipt.batchObservationIds].sort())) {
+    throw new Error('UPSTREAM_BATCH_OBSERVATION_IDS_INVALID');
+  }
+  if (insertedObservationCount + duplicateObservationCount !== batchObservationCount) {
+    throw new Error('UPSTREAM_BATCH_INSERT_DUPLICATE_COUNT_MISMATCH');
+  }
+  const datasetByObservationId = new Map(dataset.observations.map((observation) => [observation.observationId, observation]));
+  const batchObservations = receipt.batchObservationIds
+    .map((observationId) => datasetByObservationId.get(observationId))
+    .filter(Boolean)
+    .sort((left, right) => left.observationId.localeCompare(right.observationId));
+  if (batchObservations.length !== batchObservationCount) {
+    throw new Error('UPSTREAM_BATCH_OBSERVATION_NOT_IN_DATASET');
+  }
+  if (exactDigest(receipt.batchObservationDigest, 'UPSTREAM_BATCH_OBSERVATION_DIGEST_INVALID')
+    !== digest(batchObservations)) {
+    throw new Error('UPSTREAM_BATCH_OBSERVATION_DIGEST_MISMATCH');
+  }
+  const batchProvenance = dataset.batchProvenance[batchProvenanceIndex];
+  if (exactDigest(receipt.batchDatasetProvenanceDigest, 'UPSTREAM_BATCH_PROVENANCE_DIGEST_INVALID')
+    !== digest(batchProvenance)) {
+    throw new Error('UPSTREAM_BATCH_PROVENANCE_DIGEST_MISMATCH');
+  }
+  if (exactDigest(batchProvenance?.rawDigest, 'UPSTREAM_BATCH_RAW_DIGEST_INVALID')
+    !== exactDigest(receipt.rawBatchDigest, 'UPSTREAM_RECEIPT_RAW_DIGEST_INVALID')) {
     throw new Error('UPSTREAM_RECEIPT_RAW_DIGEST_MISMATCH');
   }
   const artifactId = decimalId(receipt.artifactId, 'UPSTREAM_ARTIFACT_ID_INVALID');
@@ -552,6 +598,8 @@ function validateBoundSources(sources, producerCodeSha) {
     const values = validated.map((source) => source[key]);
     if (new Set(values).size !== values.length) throw new Error(`UPSTREAM_SOURCE_DUPLICATE:${key}`);
   }
+  const implementationBlobs = new Set(validated.map((source) => source.collectorImplementationBlobSha));
+  if (implementationBlobs.size !== 1) throw new Error('UPSTREAM_COLLECTOR_IMPLEMENTATION_COHORT_MISMATCH');
   return validated.sort((left, right) => left.sourceIdentity.localeCompare(right.sourceIdentity));
 }
 
