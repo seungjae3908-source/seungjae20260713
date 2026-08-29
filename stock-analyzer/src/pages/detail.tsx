@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState, type MouseEvent } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, BarChart3, ExternalLink, Newspaper, RefreshCw } from 'lucide-react';
 import { useLocation } from 'wouter';
@@ -11,7 +11,7 @@ import { displayStockName, formatAppPrice } from '@/lib/stock-display';
 import { UNIFIED_CHART_TIMEFRAMES } from '@/lib/unified-chart-data';
 
 const AiChartPage = lazy(() => import('@/pages/ai-chart'));
-const LegacyDetailPage = lazy(() => import('@/pages/detail-legacy'));
+const StockDetailAnalysisPanel = lazy(() => import('@/components/stock-detail-analysis-panel'));
 
 type AnyObj = Record<string, any>;
 type DetailTab = 'summary' | 'chart' | 'news' | 'analysis';
@@ -133,15 +133,6 @@ export default function DetailPage() {
     const back = initial.params.get('back')?.trim() || '/stocks';
     navigate(back);
   };
-
-  function openCanonicalChart(event: MouseEvent<HTMLDivElement>) {
-    const target = event.target as HTMLElement | null;
-    const button = target?.closest('button');
-    if (!button || button.textContent?.trim() !== '차트') return;
-    event.preventDefault();
-    event.stopPropagation();
-    setTab('chart');
-  }
 
   const quoteData = quote.data ?? {};
   const profileData = profile.data ?? {};
@@ -268,8 +259,10 @@ export default function DetailPage() {
         ) : null}
 
         {tab === 'analysis' ? (
-          <div className="mx-auto min-h-full w-full max-w-7xl" onClickCapture={openCanonicalChart} data-testid="rich-detail-shell" data-ticker={ticker}>
-            <Suspense fallback={<LoadingStatus label="상세 준비 중" />}><LegacyDetailPage /></Suspense>
+          <div className="mx-auto min-h-full w-full max-w-7xl" data-testid="rich-detail-shell" data-ticker={ticker}>
+            <Suspense fallback={<LoadingStatus label="상세 준비 중" />}>
+              <StockDetailAnalysisPanel ticker={ticker} market={market} />
+            </Suspense>
           </div>
         ) : null}
       </main>
