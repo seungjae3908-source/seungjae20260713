@@ -12,6 +12,10 @@ import {
   type FuturesDirectionalView,
 } from '../services/crypto-futures-directional-scanner.service';
 import {
+  scannerStrategyForTimeframe,
+  scannerStrategyTimeframeAllowed,
+} from '../services/scanner-quant-strategy.service';
+import {
   ScannerRequestGuardError,
   scannerRequestGuard,
 } from '../services/scanner-request-guard.service';
@@ -44,23 +48,14 @@ function directionalTimeframe(value: unknown): string | null {
   return ['1m', '3m', '5m', '15m', '60m', '4H', '1D'].includes(normalized) ? normalized : null;
 }
 
-function defaultStrategy(timeframe: string): ScannerStrategyMode {
-  if (timeframe === '1D') return 'position';
-  if (timeframe === '60m' || timeframe === '4H') return 'swing';
-  return 'scalping';
-}
-
 function directionalStrategy(value: unknown, timeframe: string): ScannerStrategyMode | null {
   const requested = String(value ?? '').trim().toLowerCase();
   const selected = requested === ''
-    ? defaultStrategy(timeframe)
+    ? scannerStrategyForTimeframe(timeframe)
     : requested === 'scalping' || requested === 'swing' || requested === 'position'
       ? requested
       : null;
-  if (!selected) return null;
-  if (selected === 'scalping' && !['1m', '3m', '5m', '15m'].includes(timeframe)) return null;
-  if (selected === 'swing' && !['15m', '60m', '4H'].includes(timeframe)) return null;
-  if (selected === 'position' && !['4H', '1D'].includes(timeframe)) return null;
+  if (!selected || !scannerStrategyTimeframeAllowed(selected, timeframe)) return null;
   return selected;
 }
 
