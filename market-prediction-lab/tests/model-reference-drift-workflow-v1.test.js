@@ -17,7 +17,7 @@ test("durable drift workflow auto-follows only successful manual main publicatio
   assert.match(workflow, /durable publication is not bound to exact latest main/u);
   assert.match(workflow, /expected immutable publication is missing/u);
   assert.match(workflow, /release\.immutable !== true/u);
-  assert.match(workflow, /gh release verify \"\$RELEASE_TAG\"/u);
+  assert.match(workflow, /gh release verify "\$RELEASE_TAG"/u);
   assert.match(workflow, /gh release verify-asset/u);
 });
 
