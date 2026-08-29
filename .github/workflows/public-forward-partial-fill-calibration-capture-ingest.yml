@@ -67,15 +67,22 @@ jobs:
           grep -Fq 'persistPublicForwardPartialFillCalibrationDataset' "$SERVICE"
           grep -Fq 'ARTIFACT_ID_EXPECTATION_MISMATCH' "$SERVICE"
           grep -Fq 'ARTIFACT_DIGEST_EXPECTATION_MISMATCH' "$SERVICE"
+          grep -Fq 'STATE_ROOT_OVERLAPS_PROTECTED_APPLICATION_STORAGE' "$SERVICE"
+          grep -Fq 'STATE_ROOT_OVERLAPS_PROTECTED_RESEARCH_CHECKOUT' "$SERVICE"
+          grep -Fq "'/opt/stock-app-data'" "$SERVICE"
+          grep -Fq "'/srv/stock-app'" "$SERVICE"
+          grep -Fq "'/var/lib/stock-app'" "$SERVICE"
           grep -Fq 'canonicalDatasetCreditApplied: persisted.insertedObservationCount === 1' "$SERVICE"
           grep -Fq 'duplicateCreditEvaluated: true' "$SERVICE"
           grep -Fq 'calibrationArtifactProduced: false' "$SERVICE"
           grep -Fq 'partialFillCostPresent: false' "$SERVICE"
           grep -Fq 'fullCostReady: false' "$SERVICE"
           grep -Fq "executionAuthority: 'NONE'" "$SERVICE"
+          grep -Fq -- '--research-repo-root' "$CLI"
           grep -Fq -- '--expected-artifact-id' "$CLI"
           grep -Fq -- '--expected-artifact-digest' "$CLI"
           grep -Fq 'if (!isAbsolute(stateRoot))' "$CLI"
+          grep -Fq 'if (!isAbsolute(researchRepoRoot))' "$CLI"
           if grep -Eq 'fetch\(|axios|PRIVATE_API|ORDER_SUBMIT|orderSubmitted: true|LIVE_TRADING=true' "$CLI"; then
             echo 'Ingest CLI contains forbidden network/private/live execution behavior.' >&2
             exit 1

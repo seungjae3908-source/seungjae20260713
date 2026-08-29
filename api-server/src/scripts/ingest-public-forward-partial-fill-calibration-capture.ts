@@ -10,6 +10,7 @@ function usage(): string {
     '    --capture-receipt <path>',
     '    --artifact-receipt <path>',
     '    --state-root <absolute-existing-research-state-root>',
+    '    --research-repo-root <absolute-research-repo-root>',
     '    --expected-sha <40-char-current-main-sha>',
     '    --expected-repository <owner/repo>',
     '    --expected-artifact-id <github-artifact-id>',
@@ -41,19 +42,22 @@ async function main(): Promise<void> {
   const capturePath = args['capture-receipt'];
   const artifactPath = args['artifact-receipt'];
   const stateRoot = args['state-root'];
+  const researchRepoRoot = args['research-repo-root'];
   const expectedMainSha = args['expected-sha'];
   const expectedRepository = args['expected-repository'];
   const expectedArtifactId = args['expected-artifact-id'];
   const expectedArtifactDigest = args['expected-artifact-digest'];
-  if (!capturePath || !artifactPath || !stateRoot || !expectedMainSha || !expectedRepository || !expectedArtifactId || !expectedArtifactDigest) {
+  if (!capturePath || !artifactPath || !stateRoot || !researchRepoRoot || !expectedMainSha || !expectedRepository || !expectedArtifactId || !expectedArtifactDigest) {
     throw new Error(`REQUIRED_ARGUMENT_MISSING\n${usage()}`);
   }
   if (!isAbsolute(stateRoot)) throw new Error('STATE_ROOT_MUST_BE_ABSOLUTE');
+  if (!isAbsolute(researchRepoRoot)) throw new Error('RESEARCH_REPO_ROOT_MUST_BE_ABSOLUTE');
 
   const captureReceipt = JSON.parse(await readFile(capturePath, 'utf8')) as unknown;
   const artifactReceipt = JSON.parse(await readFile(artifactPath, 'utf8')) as unknown;
   const result = await ingestPublicForwardPartialFillCalibrationCapture({
     stateRoot,
+    researchRepoRoot,
     expectedMainSha,
     expectedRepository,
     expectedArtifactId,
