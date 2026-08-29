@@ -9,7 +9,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: staging-account-readonly-evidence
+  group: >-
+    ${{ github.event.issue.number == 23 &&
+        github.event.comment.user.login == github.repository_owner &&
+        startsWith(github.event.comment.body, '/run-staging-account-readonly ') &&
+        'staging-account-readonly-evidence' ||
+        format('staging-account-readonly-evidence-skip-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:
