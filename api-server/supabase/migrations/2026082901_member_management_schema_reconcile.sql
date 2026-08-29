@@ -357,4 +357,12 @@ $function$;
 revoke all on function public.apply_member_permission_change(uuid, text, boolean, text, timestamptz) from public;
 grant execute on function public.apply_member_permission_change(uuid, text, boolean, text, timestamptz) to authenticated;
 
+-- Privileged profile changes must not have a second PostgREST path. The legacy
+-- policy allowed an approved admin JWT to UPDATE profiles directly, bypassing the
+-- serialized last-admin invariant and the mandatory member_permission_audit row.
+-- New-user profile creation remains the SECURITY DEFINER auth trigger path and the
+-- atomic function above continues to update as its owner.
+drop policy if exists "admins update profiles" on public.profiles;
+revoke insert, update, delete on table public.profiles from public, anon, authenticated;
+
 commit;
