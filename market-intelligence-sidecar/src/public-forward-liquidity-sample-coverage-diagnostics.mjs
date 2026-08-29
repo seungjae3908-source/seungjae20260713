@@ -206,7 +206,9 @@ function validateObservation(observation, expectedCollectorSha, seenIds) {
 
   const eventTimestampMs = positiveTimestamp(item.eventTimestampMs, 'COVERAGE_EVENT_TIMESTAMP_INVALID');
   const receiveTimestampMs = positiveTimestamp(item.receiveTimestampMs, 'COVERAGE_RECEIVE_TIMESTAMP_INVALID');
-  if (receiveTimestampMs < eventTimestampMs) throw new Error('COVERAGE_RECEIVE_BEFORE_EVENT');
+  if (eventTimestampMs > receiveTimestampMs + 5_000) {
+    throw new Error('COVERAGE_EVENT_TIMESTAMP_AFTER_LOCAL_RECEIVE');
+  }
 
   const quantity = positiveFinite(item.tradeFlowQuantity, 'COVERAGE_QUANTITY_INVALID');
   const notional = positiveFinite(item.tradeFlowNotional, 'COVERAGE_NOTIONAL_INVALID');
