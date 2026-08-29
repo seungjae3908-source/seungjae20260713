@@ -7,7 +7,7 @@
   "v3PolicyInternalArtifactDigest": "6cd95ffb7bf23bab34d53ff7d0b2eb6c2fc3b58dcf9a36cad9ef883a68c02009",
   "v3CohortId": "PUBLIC_FORWARD_LIQUIDITY_NEW_PROSPECTIVE_COHORT_V3:43b15ea7cb4edfc84ce7e3055e6b8d7e5443c0f6",
   "v3CohortDigest": "a1f176c286e40b3ca4182167c9357e57b39a7c40540b81ff6e206402f67dff9c",
-  "exactScheduledWorkflowSha": "3b148729a9788afa1a378b9ba6aaa60d1fca3e92",
+  "exactScheduledWorkflowSha": "3f17f1afcf26d1ed35d91e6f0205ed3947a0bf1d",
   "captureWorkflowSha": "43b7326179b7e1e3c0641bef87d9da46d3a5acbf",
   "collectorCodeSha": "8044d5cb136eb30a531608392c73a45be601e5ba",
   "collectorCodeShaSemantics": "GIT_BLOB_SHA1_OF_CANONICAL_COLLECTOR_IMPLEMENTATION",
@@ -75,7 +75,7 @@
   "backfillCredit": 0,
   "operatorSelectedCredit": 0,
   "scheduleActivated": false,
-  "createdAt": "2026-08-29T23:19:09.000Z",
+  "createdAt": "2026-08-29T23:23:19.000Z",
   "initialCompleteWindowAttemptLog": {
     "schemaVersion": "public-forward-liquidity-complete-window-attempt-log-v1",
     "asOfMs": 1788129739999,
@@ -119,5 +119,5 @@
     "fullCostReady": false,
     "evidenceComplete": 0
   },
-  "activationContractDigest": "8cc6a8aded51f833103d110f6409ac503014d9908c93cabe801010ff46b85892"
+  "activationContractDigest": "878f473831f07fc42cd7976677c86a8c6f9f3e70f64238329f46ce3951559b01"
 }
