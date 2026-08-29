@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { evaluateMarketIntelligence } from '../src/engine.mjs';
 
 const NOW = Date.UTC(2026, 7, 22, 3, 20, 0);
+const DRIFT_REFERENCE_DIGEST = 'b'.repeat(64);
 
 function baseInput() {
   return {
@@ -40,6 +41,25 @@ function explicitCosts(overrides = {}) {
   };
 }
 
+function authoritativeNetAlpha(overrides = {}) {
+  return {
+    asOf: NOW,
+    costAsOf: NOW,
+    evidenceReady: true,
+    forwardDataComplete: true,
+    fullCostReady: true,
+    evidenceComplete: 1,
+    source: 'forward-recommendation-profit-calibration-v2',
+    costSource: 'FULL_COST_EVIDENCE_V1',
+    costPolicyVersion: 'cost-v1',
+    expectedGrossEdgeBps: 12,
+    conformalLowerEdgeBps: 10,
+    attestedNetEdgeBps: 9,
+    costs: explicitCosts(),
+    ...overrides,
+  };
+}
+
 function stableRegime(overrides = {}) {
   return {
     asOf: NOW,
@@ -52,6 +72,9 @@ function stableRegime(overrides = {}) {
     drift: {
       evaluatedAt: NOW,
       sampleSize: 500,
+      referenceId: 'TRAIN_REFERENCE_V1',
+      referenceDigest: DRIFT_REFERENCE_DIGEST,
+      referenceFrozen: true,
       featurePsi: { trend: 0.05, volatility: 0.04 },
     },
     ...overrides,
@@ -126,16 +149,11 @@ test('P0 modules are observe-only by default and do not break existing forward-r
 test('required conservative net alpha veto blocks a positive point estimate after explicit costs', () => {
   const result = evaluateMarketIntelligence({
     ...baseInput(),
-    netAlpha: {
-      asOf: NOW,
-      evidenceReady: true,
-      source: 'SERVER_STRATEGY_PROMOTION',
-      costPolicyVersion: 'cost-v1',
+    netAlpha: authoritativeNetAlpha({
       expectedGrossEdgeBps: 6,
       conformalLowerEdgeBps: 2,
       attestedNetEdgeBps: 3,
-      costs: explicitCosts(),
-    },
+    }),
     netAlphaPolicy: { enforcement: 'REQUIRED_FOR_PARENT_GATE' },
   });
   assert.equal(result.netAlpha.expectedNetEdgeBps, 2.5);
@@ -144,6 +162,26 @@ test('required conservative net alpha veto blocks a positive point estimate afte
   assert.equal(result.autoTrading.mode, 'BLOCKED_RISK');
   assert.equal(result.autoTrading.hardBlockReason, 'CONSERVATIVE_NET_ALPHA_BELOW_MINIMUM');
   assert.equal(result.autoTrading.orderAllowed, false);
+});
+
+test('required Net Alpha remains paper-only when Full Cost or Evidence Complete is not ready', () => {
+  const fullCostBlocked = evaluateMarketIntelligence({
+    ...baseInput(),
+    netAlpha: authoritativeNetAlpha({ fullCostReady: false }),
+    netAlphaPolicy: { enforcement: 'REQUIRED_FOR_PARENT_GATE' },
+  });
+  assert.equal(fullCostBlocked.netAlpha.status, 'NOT_AVAILABLE');
+  assert.ok(fullCostBlocked.netAlpha.reasons.includes('FULL_COST_NOT_READY'));
+  assert.equal(fullCostBlocked.autoTrading.mode, 'PAPER_ONLY');
+
+  const evidenceBlocked = evaluateMarketIntelligence({
+    ...baseInput(),
+    netAlpha: authoritativeNetAlpha({ evidenceComplete: 0 }),
+    netAlphaPolicy: { enforcement: 'REQUIRED_FOR_PARENT_GATE' },
+  });
+  assert.equal(evidenceBlocked.netAlpha.status, 'NOT_AVAILABLE');
+  assert.ok(evidenceBlocked.netAlpha.reasons.includes('EVIDENCE_COMPLETE_NOT_READY'));
+  assert.equal(evidenceBlocked.autoTrading.mode, 'PAPER_ONLY');
 });
 
 test('required regime evidence stays paper-only when drift evidence is not available', () => {
@@ -166,16 +204,7 @@ test('complete P0 evidence composes into a reduction-only sizing recommendation 
     ...baseInput(),
     ...completeExistingSafetyEvidence(),
     regimeBrain: stableRegime(),
-    netAlpha: {
-      asOf: NOW,
-      evidenceReady: true,
-      source: 'SERVER_STRATEGY_PROMOTION',
-      costPolicyVersion: 'cost-v1',
-      expectedGrossEdgeBps: 12,
-      conformalLowerEdgeBps: 10,
-      attestedNetEdgeBps: 9,
-      costs: explicitCosts(),
-    },
+    netAlpha: authoritativeNetAlpha(),
     dynamicSizing: {
       currentDrawdownPct: 3,
       parentBaseNotional: 1_000_000,
@@ -200,16 +229,7 @@ test('required sizing cannot treat observe-only wrappers with missing underlying
   const result = evaluateMarketIntelligence({
     ...baseInput(),
     regimeBrain: stableRegime(),
-    netAlpha: {
-      asOf: NOW,
-      evidenceReady: true,
-      source: 'SERVER_STRATEGY_PROMOTION',
-      costPolicyVersion: 'cost-v1',
-      expectedGrossEdgeBps: 12,
-      conformalLowerEdgeBps: 10,
-      attestedNetEdgeBps: 9,
-      costs: explicitCosts(),
-    },
+    netAlpha: authoritativeNetAlpha(),
     dynamicSizing: {
       currentDrawdownPct: 3,
       parentBaseNotional: 1_000_000,
@@ -233,22 +253,17 @@ test('nested net-alpha payload cannot replace the authoritative parent clock to 
   const staleAt = NOW - 120_000;
   const result = evaluateMarketIntelligence({
     ...baseInput(),
-    netAlpha: {
+    netAlpha: authoritativeNetAlpha({
       now: staleAt,
       asOf: staleAt,
-      evidenceReady: true,
-      source: 'SERVER_STRATEGY_PROMOTION',
-      costPolicyVersion: 'cost-v1',
-      expectedGrossEdgeBps: 12,
-      conformalLowerEdgeBps: 10,
-      attestedNetEdgeBps: 9,
-      costs: explicitCosts(),
-    },
+      costAsOf: staleAt,
+    }),
     netAlphaPolicy: { enforcement: 'REQUIRED_FOR_PARENT_GATE' },
   });
   assert.equal(result.netAlpha.status, 'NOT_AVAILABLE');
   assert.equal(result.netAlpha.autoTrading.state, 'INSUFFICIENT_EVIDENCE');
   assert.ok(result.netAlpha.reasons.includes('NET_ALPHA_EVIDENCE_STALE'));
+  assert.ok(result.netAlpha.reasons.includes('COST_EVIDENCE_STALE'));
   assert.equal(result.autoTrading.mode, 'PAPER_ONLY');
   assert.equal(result.autoTrading.parentEligibilityReady, false);
 });
@@ -258,16 +273,11 @@ test('nested sizing payload cannot replace computed gate evidence or parent dire
   const result = evaluateMarketIntelligence({
     ...baseInput(),
     regimeBrain: stableRegime(),
-    netAlpha: {
-      asOf: NOW,
-      evidenceReady: true,
-      source: 'SERVER_STRATEGY_PROMOTION',
-      costPolicyVersion: 'cost-v1',
+    netAlpha: authoritativeNetAlpha({
       expectedGrossEdgeBps: 6,
       conformalLowerEdgeBps: 2,
       attestedNetEdgeBps: 3,
-      costs: explicitCosts(),
-    },
+    }),
     dynamicSizing: {
       direction: 'SHORT',
       currentDrawdownPct: 3,
@@ -277,6 +287,8 @@ test('nested sizing payload cannot replace computed gate evidence or parent dire
       advancedGates: fakePass,
       executionQuality: fakePass,
       portfolioSafety: fakePass,
+      multiplier: 2,
+      ai: { multiplier: 2 },
     },
     dynamicSizingPolicy: { enforcement: 'REQUIRED_FOR_PARENT_GATE' },
   });
@@ -287,6 +299,49 @@ test('nested sizing payload cannot replace computed gate evidence or parent dire
   assert.equal(result.dynamicSizing.suggestedNotional, 0);
   assert.equal(result.autoTrading.mode, 'BLOCKED_RISK');
   assert.equal(result.autoTrading.hardBlockReason, 'CONSERVATIVE_NET_ALPHA_BELOW_MINIMUM');
+  assert.equal(result.autoTrading.orderAllowed, false);
+});
+
+test('NO_TRADE and SIGNAL_CONFLICT cannot be promoted back into positive exposure', () => {
+  for (const direction of ['NO_TRADE', 'SIGNAL_CONFLICT']) {
+    const result = evaluateMarketIntelligence({
+      ...baseInput(),
+      ...completeExistingSafetyEvidence(),
+      direction,
+      regimeBrain: stableRegime(),
+      netAlpha: authoritativeNetAlpha(),
+      dynamicSizing: {
+        currentDrawdownPct: 3,
+        parentBaseNotional: 1_000_000,
+      },
+      dynamicSizingPolicy: { enforcement: 'REQUIRED_FOR_PARENT_GATE' },
+    });
+    assert.equal(result.dynamicSizing.state, 'VETO');
+    assert.equal(result.dynamicSizing.direction, direction);
+    assert.equal(result.dynamicSizing.recommendedMultiplier, 0);
+    assert.equal(result.dynamicSizing.suggestedNotional, 0);
+    assert.equal(result.autoTrading.mode, 'BLOCKED_RISK');
+    assert.equal(result.autoTrading.orderAllowed, false);
+  }
+});
+
+test('long-only market SHORT cannot become a positive sizing recommendation', () => {
+  const result = evaluateMarketIntelligence({
+    ...baseInput(),
+    ...completeExistingSafetyEvidence(),
+    direction: 'SHORT',
+    regimeBrain: stableRegime(),
+    netAlpha: authoritativeNetAlpha(),
+    dynamicSizing: {
+      currentDrawdownPct: 3,
+      parentBaseNotional: 1_000_000,
+    },
+    dynamicSizingPolicy: { enforcement: 'REQUIRED_FOR_PARENT_GATE' },
+  });
+  assert.equal(result.dynamicSizing.state, 'VETO');
+  assert.equal(result.dynamicSizing.recommendedMultiplier, 0);
+  assert.ok(result.dynamicSizing.reasons.includes('DIRECTION_NOT_ALLOWED_FOR_MARKET'));
+  assert.equal(result.autoTrading.mode, 'BLOCKED_RISK');
   assert.equal(result.autoTrading.orderAllowed, false);
 });
 

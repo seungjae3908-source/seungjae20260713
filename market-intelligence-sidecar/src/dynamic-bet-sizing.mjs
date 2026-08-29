@@ -1,4 +1,6 @@
 const ENFORCEMENT_MODES = new Set(['OBSERVE_ONLY', 'REQUIRED_FOR_PARENT_GATE']);
+const LONG_ONLY_MARKETS = new Set(['KR_STOCK', 'US_STOCK', 'CRYPTO_SPOT']);
+const FUTURES_DIRECTIONS = new Set(['LONG', 'SHORT']);
 
 export const DEFAULT_DYNAMIC_SIZING_POLICY = Object.freeze({
   version: 'MIS_DYNAMIC_BET_SIZING_V1',
@@ -89,6 +91,26 @@ function gateEvidenceComplete(name, result) {
   return false;
 }
 
+function directionGate(marketInput, directionInput) {
+  const market = String(marketInput ?? '').toUpperCase();
+  const direction = String(directionInput ?? '').toUpperCase();
+  if (!market) return { state: 'INSUFFICIENT_EVIDENCE', reason: 'MARKET_EVIDENCE_MISSING' };
+  if (!direction) return { state: 'INSUFFICIENT_EVIDENCE', reason: 'DIRECTION_EVIDENCE_MISSING' };
+  if (direction === 'NO_TRADE') return { state: 'VETO', reason: 'UPSTREAM_NO_TRADE' };
+  if (direction === 'SIGNAL_CONFLICT') return { state: 'VETO', reason: 'UPSTREAM_SIGNAL_CONFLICT' };
+  if (LONG_ONLY_MARKETS.has(market)) {
+    return direction === 'BUY'
+      ? { state: 'PASS', reason: null }
+      : { state: 'VETO', reason: 'DIRECTION_NOT_ALLOWED_FOR_MARKET' };
+  }
+  if (market === 'CRYPTO_FUTURES') {
+    return FUTURES_DIRECTIONS.has(direction)
+      ? { state: 'PASS', reason: null }
+      : { state: 'VETO', reason: 'DIRECTION_NOT_ALLOWED_FOR_MARKET' };
+  }
+  return { state: 'INSUFFICIENT_EVIDENCE', reason: 'MARKET_NOT_SUPPORTED_FOR_SIZING' };
+}
+
 function regimeFactor(regimeBrain, direction, policy) {
   const label = String(regimeBrain?.regime?.label ?? '').toUpperCase();
   let factor = 1;
@@ -99,7 +121,7 @@ function regimeFactor(regimeBrain, direction, policy) {
 
   const dir = String(direction ?? '').toUpperCase();
   const bullish = dir === 'BUY' || dir === 'LONG';
-  const bearish = dir === 'SELL' || dir === 'SHORT';
+  const bearish = dir === 'SHORT';
   if ((bullish && label === 'TREND_DOWN') || (bearish && label === 'TREND_UP')) {
     factor = Math.min(factor, policy.counterTrendMultiplier);
   }
@@ -119,6 +141,9 @@ function drawdownFactor(currentDrawdownPct, policy) {
 
 export function evaluateDynamicBetSizing(raw = {}, policyInput = {}) {
   const policy = resolvePolicy(policyInput);
+  const market = String(raw.market ?? '').toUpperCase() || null;
+  const direction = String(raw.direction ?? '').toUpperCase() || null;
+  const canonicalDirection = directionGate(market, direction);
   const regimeBrain = raw.regimeBrain;
   const netAlpha = raw.netAlpha;
   const advancedGates = raw.advancedGates;
@@ -146,12 +171,12 @@ export function evaluateDynamicBetSizing(raw = {}, policyInput = {}) {
     ? null
     : clamp(conservativeNetAlphaBps / policy.fullSizeNetAlphaBps, policy.minimumActiveMultiplier, 1);
   const regimeSizeFactor = gateState(regimeBrain) === 'PASS' && gateEvidenceComplete('REGIME', regimeBrain)
-    ? regimeFactor(regimeBrain, raw.direction, policy)
+    ? regimeFactor(regimeBrain, direction, policy)
     : null;
   const ddFactor = drawdownFactor(currentDrawdownPct, policy);
 
   const knownFactors = [alphaFactor, regimeSizeFactor, ddFactor].filter((value) => value != null);
-  const advisoryMultiplier = incomplete.length === 0 && knownFactors.length
+  const advisoryMultiplier = canonicalDirection.state === 'PASS' && incomplete.length === 0 && knownFactors.length
     ? clamp(Math.min(...knownFactors), 0, 1)
     : null;
 
@@ -159,6 +184,7 @@ export function evaluateDynamicBetSizing(raw = {}, policyInput = {}) {
     const reasons = gateReasons(result);
     return reasons.length ? reasons : [`${name}_GATE_VETO`];
   });
+  if (canonicalDirection.state === 'VETO') vetoReasons.push(canonicalDirection.reason);
   if (ddFactor === 0 && currentDrawdownPct != null) vetoReasons.push('DRAWDOWN_BRAKE');
 
   let state;
@@ -168,9 +194,10 @@ export function evaluateDynamicBetSizing(raw = {}, policyInput = {}) {
     state = 'VETO';
     reasons = [...new Set(vetoReasons)];
     recommendedMultiplier = 0;
-  } else if (incomplete.length || alphaFactor == null || regimeSizeFactor == null || ddFactor == null) {
+  } else if (canonicalDirection.state !== 'PASS' || incomplete.length || alphaFactor == null || regimeSizeFactor == null || ddFactor == null) {
     state = 'INSUFFICIENT_EVIDENCE';
     reasons = [
+      ...(canonicalDirection.reason ? [canonicalDirection.reason] : []),
       ...incomplete.map(([name]) => `${name}_EVIDENCE_INCOMPLETE`),
       ...(alphaFactor == null ? ['NET_ALPHA_SIZING_EVIDENCE_MISSING'] : []),
       ...(regimeSizeFactor == null ? ['REGIME_SIZING_EVIDENCE_MISSING'] : []),
@@ -193,8 +220,9 @@ export function evaluateDynamicBetSizing(raw = {}, policyInput = {}) {
   return {
     contract: 'market-intelligence-dynamic-bet-sizing/v1',
     policy,
-    market: String(raw.market ?? '').toUpperCase() || null,
-    direction: String(raw.direction ?? '').toUpperCase() || null,
+    market,
+    direction,
+    directionGate: canonicalDirection,
     state,
     reasons: [...new Set(reasons)],
     factors: {
@@ -216,6 +244,8 @@ export function evaluateDynamicBetSizing(raw = {}, policyInput = {}) {
     },
     safety: {
       executionAuthority: 'NONE',
+      aiNumericalAuthority: false,
+      userMultiplierAuthority: false,
       orderAllowed: false,
       canIncreaseParentExposure: false,
       maximumMultiplier: 1,
