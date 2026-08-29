@@ -1,0 +1,220 @@
+name: Public Forward Liquidity Calibration Scheduled V3
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/public-forward-liquidity-calibration-scheduled-v3.yml'
+      - '.github/workflows/public-forward-liquidity-calibration-capture.yml'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-capture-seam-v3.mjs'
+      - 'market-intelligence-sidecar/scripts/run-public-forward-liquidity-capture-seam-v3.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-capture-seam-v3.test.mjs'
+      - 'market-intelligence-sidecar/config/public-forward-liquidity-v3-activation-contract.json'
+  schedule:
+    - cron: '43 22 30 8 *'
+    - cron: '13 23 30 8 *'
+    - cron: '43 23 30 8 *'
+    - cron: '13 0 31 8 *'
+    - cron: '43 0 31 8 *'
+    - cron: '13 1 31 8 *'
+    - cron: '43 1 31 8 *'
+    - cron: '13 2 31 8 *'
+    - cron: '43 2 31 8 *'
+    - cron: '13 3 31 8 *'
+    - cron: '43 3 31 8 *'
+    - cron: '13 4 31 8 *'
+    - cron: '43 4 31 8 *'
+    - cron: '13 5 31 8 *'
+    - cron: '43 5 31 8 *'
+    - cron: '13 6 31 8 *'
+    - cron: '43 6 31 8 *'
+    - cron: '13 7 31 8 *'
+    - cron: '43 7 31 8 *'
+    - cron: '13 8 31 8 *'
+    - cron: '43 8 31 8 *'
+    - cron: '13 9 31 8 *'
+    - cron: '43 9 31 8 *'
+    - cron: '13 10 31 8 *'
+    - cron: '43 10 31 8 *'
+    - cron: '13 11 31 8 *'
+    - cron: '43 11 31 8 *'
+    - cron: '13 12 31 8 *'
+    - cron: '43 12 31 8 *'
+    - cron: '13 13 31 8 *'
+    - cron: '43 13 31 8 *'
+    - cron: '13 14 31 8 *'
+    - cron: '43 14 31 8 *'
+    - cron: '13 15 31 8 *'
+    - cron: '43 15 31 8 *'
+    - cron: '13 16 31 8 *'
+    - cron: '43 16 31 8 *'
+    - cron: '13 17 31 8 *'
+    - cron: '43 17 31 8 *'
+    - cron: '13 18 31 8 *'
+    - cron: '43 18 31 8 *'
+    - cron: '13 19 31 8 *'
+    - cron: '43 19 31 8 *'
+    - cron: '13 20 31 8 *'
+    - cron: '43 20 31 8 *'
+    - cron: '13 21 31 8 *'
+    - cron: '43 21 31 8 *'
+    - cron: '13 22 31 8 *'
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: public-forward-liquidity-v3-scheduled-canonical-capture
+  cancel-in-progress: false
+
+jobs:
+  verify-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact workflow revision without credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Verify V3 schedule seam syntax and focused contract tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-capture-seam-v3.mjs
+          node --check market-intelligence-sidecar/scripts/run-public-forward-liquidity-capture-seam-v3.mjs
+          node --check market-intelligence-sidecar/tests/public-forward-liquidity-capture-seam-v3.test.mjs
+          node --test market-intelligence-sidecar/tests/public-forward-liquidity-capture-seam-v3.test.mjs
+
+      - name: Verify immutable activation contract against exact code blobs
+        env:
+          OUTPUT_DIR: public-forward-liquidity-v3-activation-preflight
+        run: node market-intelligence-sidecar/scripts/run-public-forward-liquidity-capture-seam-v3.mjs verify-activation
+
+      - name: Upload immutable activation preflight evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-forward-liquidity-v3-activation-preflight-${{ github.sha }}-${{ github.run_id }}
+          path: public-forward-liquidity-v3-activation-preflight
+          if-no-files-found: error
+          retention-days: 90
+
+  capture:
+    if: github.event_name == 'schedule'
+    needs: verify-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact default-branch scheduled SHA without credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Verify default branch and exact current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = 'refs/heads/main'
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+          test "$ACTUAL_SHA" = "$GITHUB_SHA"
+          git fetch --no-tags --depth=1 origin main
+          REMOTE_MAIN="$(git rev-parse FETCH_HEAD)"
+          test "$REMOTE_MAIN" = "$GITHUB_SHA"
+
+      - name: Record actual capture-run start
+        id: clock
+        shell: bash
+        run: echo "actual_run_started_at_ms=$(date +%s%3N)" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve exact V3 slot from immutable cron identity
+        id: slot
+        env:
+          SCHEDULE_EXPRESSION: ${{ github.event.schedule }}
+          ACTUAL_RUN_STARTED_AT_MS: ${{ steps.clock.outputs.actual_run_started_at_ms }}
+        run: node market-intelligence-sidecar/scripts/run-public-forward-liquidity-capture-seam-v3.mjs slot-preflight
+
+      - name: Check for prior canonical attempt artifact for this slot
+        id: duplicate
+        uses: actions/github-script@v7
+        env:
+          ARTIFACT_NAME: ${{ steps.slot.outputs.raw_artifact_name }}
+        with:
+          script: |
+            const name = process.env.ARTIFACT_NAME;
+            const response = await github.rest.actions.listArtifactsForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name,
+              per_page: 100,
+            });
+            const duplicate = response.data.artifacts.some((artifact) => !artifact.expired);
+            core.setOutput('duplicate', duplicate ? 'true' : 'false');
+            core.info(`slot artifact ${name} duplicate=${duplicate}`);
+
+      - name: Execute canonical scheduled public capture seam
+        id: capture_seam
+        env:
+          CAPTURE_TRIGGER_SOURCE: GITHUB_ACTIONS_SCHEDULED_CANONICAL_PUBLIC_CAPTURE
+          EXPECTED_SHA: ${{ github.sha }}
+          SYMBOL: BTCUSDT
+          SCHEDULE_EXPRESSION: ${{ github.event.schedule }}
+          ACTUAL_RUN_STARTED_AT_MS: ${{ steps.clock.outputs.actual_run_started_at_ms }}
+          DUPLICATE_CANONICAL_ARTIFACT: ${{ steps.duplicate.outputs.duplicate }}
+          OUTPUT_DIR: public-forward-liquidity-capture
+        run: node market-intelligence-sidecar/scripts/run-public-forward-liquidity-capture-seam-v3.mjs capture
+
+      - name: Recheck exact main and zero stale-main credit without hiding the attempt
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          OUTPUT_DIR: public-forward-liquidity-capture
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin main
+          REMOTE_MAIN="$(git rev-parse FETCH_HEAD)"
+          if [[ "$REMOTE_MAIN" != "$EXPECTED_SHA" ]]; then
+            node market-intelligence-sidecar/scripts/run-public-forward-liquidity-capture-seam-v3.mjs mark-stale-main
+          fi
+
+      - name: Upload immutable slot attempt artifact
+        id: capture_upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.slot.outputs.raw_artifact_name }}
+          path: public-forward-liquidity-capture
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Bind scheduled attempt to immutable GitHub artifact identity
+        env:
+          OUTPUT_DIR: public-forward-liquidity-capture
+          ARTIFACT_ID: ${{ steps.capture_upload.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.capture_upload.outputs.artifact-digest }}
+          ARTIFACT_NAME: ${{ steps.slot.outputs.raw_artifact_name }}
+        run: node market-intelligence-sidecar/scripts/run-public-forward-liquidity-capture-seam-v3.mjs bind-artifact
+
+      - name: Upload finalized scheduled receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-forward-liquidity-v3-slot-receipt-${{ steps.slot.outputs.slot_index }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: public-forward-liquidity-capture/artifact-receipt.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Fail closed unless capture is PRESENT or a duplicate diagnostic
+        env:
+          OUTPUT_DIR: public-forward-liquidity-capture
+          ALLOW_DIAGNOSTIC_ONLY: 'true'
+        run: node market-intelligence-sidecar/scripts/run-public-forward-liquidity-capture-seam-v3.mjs assert-terminal
