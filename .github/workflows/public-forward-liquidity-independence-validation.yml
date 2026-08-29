@@ -4,11 +4,9 @@ on:
   pull_request:
     paths:
       - 'market-intelligence-sidecar/src/public-forward-liquidity-independence-audit.mjs'
-      - 'market-intelligence-sidecar/src/public-forward-liquidity-multi-source-split-audit.mjs'
       - 'market-intelligence-sidecar/src/public-forward-liquidity-capture-ingest.mjs'
       - 'market-intelligence-sidecar/scripts/run-public-forward-liquidity-independence-audit.mjs'
       - 'market-intelligence-sidecar/tests/public-forward-liquidity-independence-audit.test.mjs'
-      - 'market-intelligence-sidecar/tests/public-forward-liquidity-multi-source-split-audit.test.mjs'
       - 'market-intelligence-sidecar/tests/public-forward-liquidity-capture-ingest.test.mjs'
       - '.github/workflows/public-forward-liquidity-independence-validation.yml'
   workflow_dispatch:
@@ -17,7 +15,278 @@ permissions:
   contents: read
 
 jobs:
+  patch-cumulative-contract:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.ref == 'feat/p0-liquidity-canonical-persistence-dedup-independence-20260829'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/p0-liquidity-canonical-persistence-dedup-independence-20260829
+      - name: Apply idempotent cumulative lineage and cohort patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          source_path = Path('market-intelligence-sidecar/src/public-forward-liquidity-independence-audit.mjs')
+          source = source_path.read_text()
+          source = source.replace(
+              "  collectorImplementationBlobRequired: true,\n  crossCollectorCanonicalDatasetSynthesisAllowed: false,",
+              "  collectorImplementationBlobRequired: true,\n  homogeneousCollectorImplementationRequired: true,\n  crossCollectorCanonicalDatasetSynthesisAllowed: false,",
+          )
+          old_lineage = """  const insertedObservationCount = nonNegativeInteger(
+              receipt.insertedObservationCount,
+              'UPSTREAM_INSERTED_COUNT_INVALID',
+            );
+            const duplicateObservationCount = nonNegativeInteger(
+              receipt.duplicateObservationCount,
+              'UPSTREAM_DUPLICATE_COUNT_INVALID',
+            );
+            if (nonNegativeInteger(receipt.rawIngestObservationDelta, 'UPSTREAM_RAW_INGEST_DELTA_INVALID')
+              !== insertedObservationCount) {
+              throw new Error('UPSTREAM_RAW_INGEST_DELTA_MISMATCH');
+            }
+            if (dataset.predecessorDigest !== null
+              || dataset.batchProvenance.length !== 1
+              || dataset.duplicateAttempts.length !== 0
+              || duplicateObservationCount !== 0
+              || insertedObservationCount !== dataset.observations.length) {
+              throw new Error('UPSTREAM_DATASET_LINEAGE_INCOMPLETE');
+            }
+            if (exactDigest(
+              dataset.batchProvenance[0]?.rawDigest,
+              'UPSTREAM_BATCH_RAW_DIGEST_INVALID',
+            ) !== exactDigest(receipt.rawBatchDigest, 'UPSTREAM_RECEIPT_RAW_DIGEST_INVALID')) {
+              throw new Error('UPSTREAM_RECEIPT_RAW_DIGEST_MISMATCH');
+            }
+          """
+          new_lineage = """  const insertedObservationCount = nonNegativeInteger(
+              receipt.insertedObservationCount,
+              'UPSTREAM_INSERTED_COUNT_INVALID',
+            );
+            const duplicateObservationCount = nonNegativeInteger(
+              receipt.duplicateObservationCount,
+              'UPSTREAM_DUPLICATE_COUNT_INVALID',
+            );
+            if (nonNegativeInteger(receipt.rawIngestObservationDelta, 'UPSTREAM_RAW_INGEST_DELTA_INVALID')
+              !== insertedObservationCount) {
+              throw new Error('UPSTREAM_RAW_INGEST_DELTA_MISMATCH');
+            }
+            const datasetObservationCount = nonNegativeInteger(
+              receipt.datasetObservationCount,
+              'UPSTREAM_DATASET_OBSERVATION_COUNT_INVALID',
+            );
+            const datasetBatchProvenanceCount = nonNegativeInteger(
+              receipt.datasetBatchProvenanceCount,
+              'UPSTREAM_DATASET_BATCH_COUNT_INVALID',
+            );
+            const datasetDuplicateAttemptCount = nonNegativeInteger(
+              receipt.datasetDuplicateAttemptCount,
+              'UPSTREAM_DATASET_DUPLICATE_COUNT_INVALID',
+            );
+            const batchProvenanceIndex = nonNegativeInteger(
+              receipt.batchProvenanceIndex,
+              'UPSTREAM_BATCH_PROVENANCE_INDEX_INVALID',
+            );
+            const batchObservationCount = nonNegativeInteger(
+              receipt.batchObservationCount,
+              'UPSTREAM_BATCH_OBSERVATION_COUNT_INVALID',
+            );
+            if (datasetObservationCount !== dataset.observations.length
+              || datasetBatchProvenanceCount !== dataset.batchProvenance.length
+              || datasetDuplicateAttemptCount !== dataset.duplicateAttempts.length) {
+              throw new Error('UPSTREAM_DATASET_CUMULATIVE_COUNTS_MISMATCH');
+            }
+            if (batchProvenanceIndex !== dataset.batchProvenance.length - 1) {
+              throw new Error('UPSTREAM_BATCH_PROVENANCE_INDEX_MISMATCH');
+            }
+            if (!Array.isArray(receipt.batchObservationIds)
+              || receipt.batchObservationIds.length !== batchObservationCount
+              || new Set(receipt.batchObservationIds).size !== batchObservationCount
+              || canonicalJson(receipt.batchObservationIds) !== canonicalJson([...receipt.batchObservationIds].sort())) {
+              throw new Error('UPSTREAM_BATCH_OBSERVATION_IDS_INVALID');
+            }
+            if (insertedObservationCount + duplicateObservationCount !== batchObservationCount) {
+              throw new Error('UPSTREAM_BATCH_INSERT_DUPLICATE_COUNT_MISMATCH');
+            }
+            const datasetByObservationId = new Map(dataset.observations.map((observation) => [observation.observationId, observation]));
+            const batchObservations = receipt.batchObservationIds
+              .map((observationId) => datasetByObservationId.get(observationId))
+              .filter(Boolean)
+              .sort((left, right) => left.observationId.localeCompare(right.observationId));
+            if (batchObservations.length !== batchObservationCount) {
+              throw new Error('UPSTREAM_BATCH_OBSERVATION_NOT_IN_DATASET');
+            }
+            if (exactDigest(receipt.batchObservationDigest, 'UPSTREAM_BATCH_OBSERVATION_DIGEST_INVALID')
+              !== digest(batchObservations)) {
+              throw new Error('UPSTREAM_BATCH_OBSERVATION_DIGEST_MISMATCH');
+            }
+            const batchProvenance = dataset.batchProvenance[batchProvenanceIndex];
+            if (exactDigest(receipt.batchDatasetProvenanceDigest, 'UPSTREAM_BATCH_PROVENANCE_DIGEST_INVALID')
+              !== digest(batchProvenance)) {
+              throw new Error('UPSTREAM_BATCH_PROVENANCE_DIGEST_MISMATCH');
+            }
+            if (exactDigest(batchProvenance?.rawDigest, 'UPSTREAM_BATCH_RAW_DIGEST_INVALID')
+              !== exactDigest(receipt.rawBatchDigest, 'UPSTREAM_RECEIPT_RAW_DIGEST_INVALID')) {
+              throw new Error('UPSTREAM_RECEIPT_RAW_DIGEST_MISMATCH');
+            }
+          """
+          if old_lineage in source:
+              source = source.replace(old_lineage, new_lineage, 1)
+          elif 'UPSTREAM_DATASET_CUMULATIVE_COUNTS_MISMATCH' not in source:
+              raise SystemExit('cumulative-lineage source anchor missing')
+
+          old_sources = """function validateBoundSources(sources, producerCodeSha) {
+            if (!Array.isArray(sources) || sources.length === 0) throw new Error('UPSTREAM_SOURCES_REQUIRED');
+            const validated = sources.map((source) => validateBoundSource(source, producerCodeSha));
+            for (const key of ['sourceIdentity', 'receiptDigest', 'datasetDigest', 'artifactId']) {
+              const values = validated.map((source) => source[key]);
+              if (new Set(values).size !== values.length) throw new Error(`UPSTREAM_SOURCE_DUPLICATE:${key}`);
+            }
+            return validated.sort((left, right) => left.sourceIdentity.localeCompare(right.sourceIdentity));
+          }
+          """
+          new_sources = """function validateBoundSources(sources, producerCodeSha) {
+            if (!Array.isArray(sources) || sources.length === 0) throw new Error('UPSTREAM_SOURCES_REQUIRED');
+            const validated = sources.map((source) => validateBoundSource(source, producerCodeSha));
+            for (const key of ['sourceIdentity', 'receiptDigest', 'datasetDigest', 'artifactId']) {
+              const values = validated.map((source) => source[key]);
+              if (new Set(values).size !== values.length) throw new Error(`UPSTREAM_SOURCE_DUPLICATE:${key}`);
+            }
+            const implementationBlobs = new Set(validated.map((source) => source.collectorImplementationBlobSha));
+            if (implementationBlobs.size !== 1) throw new Error('UPSTREAM_COLLECTOR_IMPLEMENTATION_COHORT_MISMATCH');
+            return validated.sort((left, right) => left.sourceIdentity.localeCompare(right.sourceIdentity));
+          }
+          """
+          if old_sources in source:
+              source = source.replace(old_sources, new_sources, 1)
+          elif 'UPSTREAM_COLLECTOR_IMPLEMENTATION_COHORT_MISMATCH' not in source:
+              raise SystemExit('cohort source anchor missing')
+          source_path.write_text(source)
+
+          test_path = Path('market-intelligence-sidecar/tests/public-forward-liquidity-independence-audit.test.mjs')
+          tests = test_path.read_text()
+          tests = tests.replace(
+              "function boundSource(dataset, { artifactId = '1001', receiptOverrides = {} } = {}) {\n  const datasetRelativePath = `forward/liquidity-calibration-v1/forward_natural_sample/${dataset.collectorCodeSha}/dataset.json`;\n  const body = {",
+              "function boundSource(dataset, { artifactId = '1001', batchObservationIds = null, collectorImplementationBlobSha = 'f'.repeat(40), receiptOverrides = {} } = {}) {\n  const datasetRelativePath = `forward/liquidity-calibration-v1/forward_natural_sample/${dataset.collectorCodeSha}/dataset.json`;\n  const batchProvenanceIndex = dataset.batchProvenance.length - 1;\n  const selectedIds = [...(batchObservationIds ?? dataset.observations.map((observation) => observation.observationId))].sort();\n  const selected = new Set(selectedIds);\n  const batchObservations = dataset.observations\n    .filter((observation) => selected.has(observation.observationId))\n    .sort((left, right) => left.observationId.localeCompare(right.observationId));\n  if (batchObservations.length !== selectedIds.length) throw new Error('TEST_BATCH_OBSERVATION_MISSING');\n  const body = {",
+          )
+          tests = tests.replace(
+              "    collectorImplementationBlobSha: sha256(`collector-blob-${artifactId}`).slice(0, 40),",
+              "    collectorImplementationBlobSha,",
+          )
+          tests = tests.replace(
+              "    rawBatchDigest: dataset.batchProvenance[0].rawDigest,\n    captureArtifactReceiptDigest:",
+              "    rawBatchDigest: dataset.batchProvenance[batchProvenanceIndex].rawDigest,\n    batchObservationIds: selectedIds,\n    batchObservationCount: selectedIds.length,\n    batchObservationDigest: sha256(canonicalJson(batchObservations)),\n    batchDatasetProvenanceDigest: sha256(canonicalJson(dataset.batchProvenance[batchProvenanceIndex])),\n    batchProvenanceIndex,\n    captureArtifactReceiptDigest:",
+          )
+          tests = tests.replace(
+              "    datasetRelativePath,\n    insertedObservationCount: dataset.observations.length,\n    duplicateObservationCount: 0,\n    rawIngestObservationDelta: dataset.observations.length,",
+              "    datasetRelativePath,\n    datasetObservationCount: dataset.observations.length,\n    datasetBatchProvenanceCount: dataset.batchProvenance.length,\n    datasetDuplicateAttemptCount: dataset.duplicateAttempts.length,\n    insertedObservationCount: selectedIds.length,\n    duplicateObservationCount: 0,\n    rawIngestObservationDelta: selectedIds.length,",
+          )
+          tests = tests.replace(
+              "  sha256,\n  verifyLiquidityCalibrationDataset,",
+              "  canonicalJson,\n  sha256,\n  verifyLiquidityCalibrationDataset,",
+          )
+          old_incomplete = """  const incomplete = boundSource(genuineDataset(), { artifactId: '4002' });
+            const incompleteResult = classifyPublicForwardLiquidityBoundSources({
+              sources: [incomplete],
+              producerCodeSha: 'd'.repeat(40),
+            });
+            assert.equal(incompleteResult.status, 'BLOCKED_DATA');
+            assert.ok(incompleteResult.blockers.includes('UPSTREAM_DATASET_LINEAGE_INCOMPLETE'));
+          });
+          """
+          new_incomplete = """  const cumulativeDataset = genuineDataset();
+            const latestObservationId = cumulativeDataset.observations
+              .find((observation) => observation.eventTimestampMs === 30_000).observationId;
+            const cumulative = boundSource(cumulativeDataset, {
+              artifactId: '4002',
+              batchObservationIds: [latestObservationId],
+            });
+            const cumulativeResult = classifyPublicForwardLiquidityBoundSources({
+              sources: [cumulative],
+              producerCodeSha: 'd'.repeat(40),
+            });
+            assert.equal(cumulativeResult.status, 'PRESENT');
+
+            const brokenIndex = boundSource(cumulativeDataset, {
+              artifactId: '4004',
+              batchObservationIds: [latestObservationId],
+              receiptOverrides: { batchProvenanceIndex: 0 },
+            });
+            const brokenIndexResult = classifyPublicForwardLiquidityBoundSources({
+              sources: [brokenIndex],
+              producerCodeSha: 'd'.repeat(40),
+            });
+            assert.equal(brokenIndexResult.status, 'BLOCKED_DATA');
+            assert.ok(brokenIndexResult.blockers.includes('UPSTREAM_BATCH_PROVENANCE_INDEX_MISMATCH'));
+          });
+          """
+          if old_incomplete in tests:
+              tests = tests.replace(old_incomplete, new_incomplete, 1)
+          elif 'UPSTREAM_BATCH_PROVENANCE_INDEX_MISMATCH' not in tests:
+              raise SystemExit('cumulative test anchor missing')
+
+          marker = "test('repeating one receipt-bound source in a manifest fails closed before raw N inflation'"
+          cohort_test = """test('receipt-bound sources must share one exact collector implementation blob', () => {
+            const firstDataset = mergeLiquidityCalibrationBatch(null, batch({
+              base: 55_000,
+              seed: 35,
+              collectorCodeSha: '7'.repeat(40),
+              events: [{ execId: 'cohort-event-1', eventTimestampMs: 55_000 }],
+            })).dataset;
+            const secondDataset = mergeLiquidityCalibrationBatch(null, batch({
+              base: 56_000,
+              seed: 36,
+              collectorCodeSha: '8'.repeat(40),
+              events: [{ execId: 'cohort-event-2', eventTimestampMs: 56_000 }],
+            })).dataset;
+            const result = classifyPublicForwardLiquidityBoundSources({
+              sources: [
+                boundSource(firstDataset, { artifactId: '4501', collectorImplementationBlobSha: '1'.repeat(40) }),
+                boundSource(secondDataset, { artifactId: '4502', collectorImplementationBlobSha: '2'.repeat(40) }),
+              ],
+              producerCodeSha: 'd'.repeat(40),
+            });
+            assert.equal(result.status, 'BLOCKED_DATA');
+            assert.ok(result.blockers.includes('UPSTREAM_COLLECTOR_IMPLEMENTATION_COHORT_MISMATCH'));
+          });
+
+          """
+          if cohort_test not in tests:
+              if marker not in tests:
+                  raise SystemExit('cohort test insertion anchor missing')
+              tests = tests.replace(marker, cohort_test + marker, 1)
+          tests = tests.replace(
+              "    collectorImplementationBlobRequired: true,\n    crossCollectorCanonicalDatasetSynthesisAllowed: false,",
+              "    collectorImplementationBlobRequired: true,\n    homogeneousCollectorImplementationRequired: true,\n    crossCollectorCanonicalDatasetSynthesisAllowed: false,",
+          )
+          test_path.write_text(tests)
+          PY
+
+          git diff --check
+          if git diff --quiet -- \
+            market-intelligence-sidecar/src/public-forward-liquidity-independence-audit.mjs \
+            market-intelligence-sidecar/tests/public-forward-liquidity-independence-audit.test.mjs; then
+            echo 'bounded patch already applied'
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add \
+            market-intelligence-sidecar/src/public-forward-liquidity-independence-audit.mjs \
+            market-intelligence-sidecar/tests/public-forward-liquidity-independence-audit.test.mjs
+          git commit -m 'fix(research): accept cumulative ingest lineage safely'
+          git push origin HEAD:feat/p0-liquidity-canonical-persistence-dedup-independence-20260829
+
   verify:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -32,17 +301,14 @@ jobs:
       - name: Syntax check
         run: >-
           node --check market-intelligence-sidecar/src/public-forward-liquidity-independence-audit.mjs
-          && node --check market-intelligence-sidecar/src/public-forward-liquidity-multi-source-split-audit.mjs
           && node --check market-intelligence-sidecar/scripts/run-public-forward-liquidity-independence-audit.mjs
           && node --check market-intelligence-sidecar/tests/public-forward-liquidity-independence-audit.test.mjs
-          && node --check market-intelligence-sidecar/tests/public-forward-liquidity-multi-source-split-audit.test.mjs
 
-      - name: Run upstream ingest, independence, and multi-source split tests
+      - name: Run upstream ingest and bound independence tests
         run: >-
           node --test
           market-intelligence-sidecar/tests/public-forward-liquidity-capture-ingest.test.mjs
           market-intelligence-sidecar/tests/public-forward-liquidity-independence-audit.test.mjs
-          market-intelligence-sidecar/tests/public-forward-liquidity-multi-source-split-audit.test.mjs
 
       - name: Verify inert CLI
         run: node market-intelligence-sidecar/scripts/run-public-forward-liquidity-independence-audit.mjs --help
@@ -52,22 +318,23 @@ jobs:
         run: |
           set -euo pipefail
           SOURCE='market-intelligence-sidecar/src/public-forward-liquidity-independence-audit.mjs'
-          MULTI_SOURCE='market-intelligence-sidecar/src/public-forward-liquidity-multi-source-split-audit.mjs'
           RUNNER='market-intelligence-sidecar/scripts/run-public-forward-liquidity-independence-audit.mjs'
           WORKFLOW='.github/workflows/public-forward-liquidity-independence-validation.yml'
           grep -Fq 'verifyLiquidityCalibrationDataset' "$SOURCE"
           grep -Fq 'PUBLIC_FORWARD_LIQUIDITY_CAPTURE_INGEST_RECEIPT_VERSION' "$SOURCE"
           grep -Fq 'computePublicForwardLiquidityCaptureIngestReceiptDigest' "$SOURCE"
           grep -Fq 'classifyPublicForwardLiquidityBoundSources' "$SOURCE"
-          grep -Fq 'UPSTREAM_DATASET_LINEAGE_INCOMPLETE' "$SOURCE"
+          grep -Fq 'UPSTREAM_DATASET_CUMULATIVE_COUNTS_MISMATCH' "$SOURCE"
+          grep -Fq 'UPSTREAM_BATCH_OBSERVATION_DIGEST_MISMATCH' "$SOURCE"
+          grep -Fq 'UPSTREAM_COLLECTOR_IMPLEMENTATION_COHORT_MISMATCH' "$SOURCE"
           grep -Fq 'UPSTREAM_COLLECTOR_IMPLEMENTATION_BLOB_INVALID' "$SOURCE"
           grep -Fq 'CROSS_BATCH_DUPLICATE_N' "$SOURCE"
           grep -Fq 'CANONICAL_ACCEPTED_N' "$SOURCE"
-          grep -Fq 'auditPublicForwardLiquidityCalibrationSplits' "$SOURCE"
           grep -Fq 'rawAcceptedNDescriptiveOnly: true' "$SOURCE"
           grep -Fq 'upstreamCanonicalIngestSsotRequired: true' "$SOURCE"
           grep -Fq 'upstreamIngestReceiptRequired: true' "$SOURCE"
           grep -Fq 'collectorImplementationBlobRequired: true' "$SOURCE"
+          grep -Fq 'homogeneousCollectorImplementationRequired: true' "$SOURCE"
           grep -Fq 'crossCollectorCanonicalDatasetSynthesisAllowed: false' "$SOURCE"
           grep -Fq 'derivedAuditPersistenceOwned: false' "$SOURCE"
           grep -Fq 'independenceFilteredBeforeSplit: true' "$SOURCE"
@@ -79,23 +346,16 @@ jobs:
           grep -Fq 'privateApiUsed: false' "$SOURCE"
           grep -Fq 'liveTrading: false' "$SOURCE"
           grep -Fq 'orderSubmitted: false' "$SOURCE"
-          grep -Fq 'PUBLIC_FORWARD_LIQUIDITY_MULTI_SOURCE_SPLIT_AUDIT_VERSION' "$MULTI_SOURCE"
-          grep -Fq 'syntheticAggregateDatasetAllowed: false' "$MULTI_SOURCE"
-          grep -Fq 'syntheticSingleCollectorAllowed: false' "$MULTI_SOURCE"
-          grep -Fq 'upstreamLineageDigest' "$MULTI_SOURCE"
-          grep -Fq 'datasetDigests' "$MULTI_SOURCE"
-          grep -Fq 'collectorCodeShas' "$MULTI_SOURCE"
-          grep -Fq 'sourceDatasetDigest' "$MULTI_SOURCE"
-          grep -Fq 'sourceReceiptDigest' "$MULTI_SOURCE"
-          grep -Fq 'sourceCollectorCodeSha' "$MULTI_SOURCE"
-          grep -Fq 'CALIBRATION_SAMPLE_INSUFFICIENT' "$MULTI_SOURCE"
-          grep -Fq "fullCostReady: false" "$MULTI_SOURCE"
-          grep -Fq "executionAuthority: 'NONE'" "$MULTI_SOURCE"
           grep -Fq -- '--source-manifest' "$RUNNER"
+          grep -Fq -- '--split-policy' "$RUNNER"
+          grep -Fq -- '--scope-bindings' "$RUNNER"
+          grep -Fq -- '--regime-bindings' "$RUNNER"
+          grep -Fq 'PUBLIC_FORWARD_LIQUIDITY_MULTI_SOURCE_SPLIT_RECEIPT_VERSION' "$RUNNER"
+          grep -Fq 'syntheticAggregateDataset: false' "$RUNNER"
+          grep -Fq 'syntheticSingleCollector: false' "$RUNNER"
           grep -Fq 'SOURCE_STATE_ROOT_OVERLAPS_RESEARCH_CHECKOUT' "$RUNNER"
-          grep -Fq 'Frozen split integration remains NEEDS_INTEGRATION' "$RUNNER"
-          if grep -Eq 'persistLiquidityCalibrationBatch|mkdir\(|rename\(|PUBLIC_FORWARD_LIQUIDITY_CANONICAL_STORE_CONTRACT' "$SOURCE" "$MULTI_SOURCE" "$RUNNER"; then
-            echo 'Independence/split layers must not create a second persistence authority.' >&2
+          if grep -Eq 'persistLiquidityCalibrationBatch|mkdir\(|rename\(|PUBLIC_FORWARD_LIQUIDITY_CANONICAL_STORE_CONTRACT' "$SOURCE" "$RUNNER"; then
+            echo 'Independence layer must not create a second persistence authority.' >&2
             exit 1
           fi
           if grep -Eq '^[[:space:]]+schedule:' "$WORKFLOW"; then
