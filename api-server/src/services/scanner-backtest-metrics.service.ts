@@ -216,9 +216,10 @@ export function calculatePositionBacktestMetrics(
   const valid = trades.filter(isValidPositionTrade);
   const excludedTrades = trades.length - valid.length;
   const sampleComplete = excludedTrades === 0;
-  const hasEligibleTrades = valid.length > 0;
-  const metricsReady = sampleComplete && hasEligibleTrades;
-  const summary = base(valid);
+  const metricsReady = sampleComplete && valid.length > 0;
+  const winners = valid.filter((trade) => trade.returnPercent > 0);
+  const losers = valid.filter((trade) => trade.returnPercent < 0);
+  const returns = valid.map((trade) => trade.returnPercent);
 
   return {
     strategy: 'position',
@@ -226,15 +227,17 @@ export function calculatePositionBacktestMetrics(
     trades: valid.length,
     excludedTrades,
     sampleComplete,
-    winRate: metricsReady ? finiteOrNull(summary.winRate) : null,
-    expectancyPercent: metricsReady ? finiteOrNull(summary.expectancyPercent) : null,
+    // Breakeven trades stay in the eligible denominator and are not winners.
+    winRate: metricsReady ? finiteOrNull(winners.length / valid.length * 100) : null,
+    // POSITION expectancy is the arithmetic mean of the exact eligible return universe.
+    expectancyPercent: metricsReady ? average(returns) : null,
     // No-loss samples have an undefined PF denominator. Never serialize Infinity.
-    profitFactor: metricsReady ? finiteOrNull(summary.profitFactor) : null,
-    averageWinPercent: metricsReady ? finiteOrNull(summary.averageWinPercent) : null,
-    averageLossPercent: metricsReady ? finiteOrNull(summary.averageLossPercent) : null,
-    maxDrawdownPercent: metricsReady ? finiteOrNull(summary.maxDrawdownPercent) : null,
-    tradeSharpe: metricsReady ? finiteOrNull(summary.tradeSharpe) : null,
-    netReturnPercent: metricsReady ? finiteOrNull(summary.netReturnPercent) : null,
+    profitFactor: metricsReady ? finiteOrNull(profitFactor(valid)) : null,
+    averageWinPercent: metricsReady ? average(winners.map((trade) => trade.returnPercent)) : null,
+    averageLossPercent: metricsReady ? average(losers.map((trade) => trade.returnPercent)) : null,
+    maxDrawdownPercent: metricsReady ? maxDrawdownPercent(returns) : null,
+    tradeSharpe: metricsReady ? tradeSharpe(returns) : null,
+    netReturnPercent: metricsReady ? finiteOrNull(compoundedReturnPercent(returns)) : null,
     medianHoldingDays: metricsReady
       ? median(valid.map((trade) => trade.holdingMinutes / (60 * 24)))
       : null,
