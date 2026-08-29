@@ -75,6 +75,20 @@ function psqlExistsOutsidePath() {
   return candidates.some(isExecutable);
 }
 
+function classifyPsqlFailure(stderrText) {
+  const stderr = String(stderrText ?? '').toLowerCase();
+  if (/password authentication failed|authentication failed/.test(stderr)) return 'production_database_auth_failed';
+  if (/could not translate host name|name or service not known|temporary failure in name resolution/.test(stderr)) return 'production_database_dns_failed';
+  if (/network is unreachable|no route to host/.test(stderr)) return 'production_database_network_unreachable';
+  if (/connection timed out|timeout expired/.test(stderr)) return 'production_database_connection_timed_out';
+  if (/connection refused/.test(stderr)) return 'production_database_connection_refused';
+  if (/server closed the connection/.test(stderr)) return 'production_database_server_closed_connection';
+  if (/could not connect|connection to server .* failed/.test(stderr)) return 'production_database_connection_failed';
+  if (/permission denied/.test(stderr)) return 'production_database_readonly_permission_failed';
+  if (/statement timeout|lock timeout|canceling statement/.test(stderr)) return 'production_database_readonly_timeout';
+  return 'production_database_readonly_query_failed';
+}
+
 const expectedProductionSha = String(process.env.EXPECTED_PRODUCTION_SHA ?? '').trim().toLowerCase();
 const transientDatabaseUrl = String(process.env.PROD_DATABASE_URL ?? '').trim();
 const base = {
@@ -187,13 +201,7 @@ if (result.error?.code === 'ENOENT') {
   blocked('psql_not_installed', connected);
 }
 if (result.error || result.status !== 0) {
-  const stderr = String(result.stderr ?? '').toLowerCase();
-  let classification = 'production_database_readonly_query_failed';
-  if (/password authentication failed|authentication failed/.test(stderr)) classification = 'production_database_auth_failed';
-  else if (/could not translate host name|could not connect|connection refused|connection timed out|server closed the connection|network is unreachable/.test(stderr)) classification = 'production_database_connection_failed';
-  else if (/permission denied/.test(stderr)) classification = 'production_database_readonly_permission_failed';
-  else if (/statement timeout|lock timeout|canceling statement/.test(stderr)) classification = 'production_database_readonly_timeout';
-  blocked(classification, connected);
+  blocked(classifyPsqlFailure(result.stderr), connected);
 }
 let catalog;
 try {
