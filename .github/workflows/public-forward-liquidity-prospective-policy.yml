@@ -19,6 +19,7 @@ jobs:
       - name: Checkout exact PR head without credentials
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
           fetch-depth: 1
 
@@ -30,6 +31,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          EXPECTED_HEAD="${{ github.event.pull_request.head.sha }}"
+          ACTUAL_HEAD="$(git rev-parse HEAD)"
+          if [[ "$ACTUAL_HEAD" != "$EXPECTED_HEAD" ]]; then
+            echo "Exact-head checkout mismatch: expected=$EXPECTED_HEAD actual=$ACTUAL_HEAD" >&2
+            exit 1
+          fi
           node --check market-intelligence-sidecar/src/public-forward-liquidity-prospective-policy.mjs
           node --check market-intelligence-sidecar/scripts/run-public-forward-liquidity-prospective-policy.mjs
           node --test market-intelligence-sidecar/tests/public-forward-liquidity-prospective-policy.test.mjs
