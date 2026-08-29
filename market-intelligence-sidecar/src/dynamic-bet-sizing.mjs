@@ -17,10 +17,21 @@ export const DEFAULT_DYNAMIC_SIZING_POLICY = Object.freeze({
   drawdownStopPct: 15,
 });
 
+const LOCKED_POLICY_FIELDS = Object.freeze([
+  'fullSizeNetAlphaBps',
+  'minimumActiveMultiplier',
+  'highVolMultiplier',
+  'lowVolRangeMultiplier',
+  'rangeMultiplier',
+  'lowLiquidityMultiplier',
+  'counterTrendMultiplier',
+  'driftWatchMultiplier',
+  'drawdownScaleStartPct',
+  'drawdownStopPct',
+]);
+
 function finite(value, fallback = null) {
-  if (value == null || value === '') return fallback;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
 function clamp(value, min, max) {
@@ -28,30 +39,19 @@ function clamp(value, min, max) {
 }
 
 function resolvePolicy(input = {}) {
-  const policy = { ...DEFAULT_DYNAMIC_SIZING_POLICY, ...(input ?? {}) };
-  if (typeof policy.version !== 'string' || !policy.version.trim()) throw new Error('DYNAMIC_SIZING_POLICY_VERSION_REQUIRED');
-  policy.enforcement = String(policy.enforcement ?? '').toUpperCase();
-  if (!ENFORCEMENT_MODES.has(policy.enforcement)) throw new Error('DYNAMIC_SIZING_POLICY_ENFORCEMENT_INVALID');
-  const multiplierFields = [
-    'minimumActiveMultiplier', 'highVolMultiplier', 'lowVolRangeMultiplier', 'rangeMultiplier',
-    'lowLiquidityMultiplier', 'counterTrendMultiplier', 'driftWatchMultiplier',
-  ];
-  const numericFields = [
-    'fullSizeNetAlphaBps', ...multiplierFields, 'drawdownScaleStartPct', 'drawdownStopPct',
-  ];
-  for (const field of numericFields) {
-    const value = Number(policy[field]);
-    if (!Number.isFinite(value)) throw new Error(`DYNAMIC_SIZING_POLICY_FIELD_INVALID:${field}`);
-    policy[field] = value;
+  if (input == null) input = {};
+  if (typeof input !== 'object' || Array.isArray(input)) throw new Error('DYNAMIC_SIZING_POLICY_INVALID');
+  if (input.version != null && input.version !== DEFAULT_DYNAMIC_SIZING_POLICY.version) {
+    throw new Error('DYNAMIC_SIZING_POLICY_VERSION_OVERRIDE_NOT_ALLOWED');
   }
-  if (policy.fullSizeNetAlphaBps <= 0) throw new Error('DYNAMIC_SIZING_FULL_ALPHA_INVALID');
-  for (const field of multiplierFields) {
-    if (policy[field] < 0 || policy[field] > 1) throw new Error(`DYNAMIC_SIZING_MULTIPLIER_INVALID:${field}`);
+  for (const field of LOCKED_POLICY_FIELDS) {
+    if (Object.hasOwn(input, field) && input[field] !== DEFAULT_DYNAMIC_SIZING_POLICY[field]) {
+      throw new Error(`DYNAMIC_SIZING_POLICY_OVERRIDE_NOT_ALLOWED:${field}`);
+    }
   }
-  if (policy.drawdownScaleStartPct < 0 || policy.drawdownStopPct <= policy.drawdownScaleStartPct) {
-    throw new Error('DYNAMIC_SIZING_DRAWDOWN_POLICY_INVALID');
-  }
-  return policy;
+  const enforcement = String(input.enforcement ?? DEFAULT_DYNAMIC_SIZING_POLICY.enforcement).toUpperCase();
+  if (!ENFORCEMENT_MODES.has(enforcement)) throw new Error('DYNAMIC_SIZING_POLICY_ENFORCEMENT_INVALID');
+  return { ...DEFAULT_DYNAMIC_SIZING_POLICY, enforcement };
 }
 
 function gateState(result) {
@@ -70,10 +70,22 @@ function usableStatus(value) {
 function gateEvidenceComplete(name, result) {
   if (!result || typeof result !== 'object') return false;
   if (name === 'REGIME') {
-    return result.status === 'READY' && usableStatus(result.drift?.status);
+    return result.status === 'READY'
+      && usableStatus(result.drift?.status)
+      && result.safety?.executionAuthority === 'NONE'
+      && result.safety?.liveTrading !== true;
   }
   if (name === 'NET_ALPHA') {
-    return result.status === 'READY';
+    return result.status === 'READY'
+      && result.role === 'CONSERVATIVE_CROSS_CHECK_ONLY'
+      && result.readiness?.forwardDataComplete === true
+      && result.readiness?.fullCostReady === true
+      && result.readiness?.evidenceComplete === true
+      && result.readiness?.profitabilityProven === true
+      && result.safety?.executionAuthority === 'NONE'
+      && result.safety?.aiNumericalAuthority === false
+      && result.safety?.profitabilityClaimAllowed === false
+      && result.safety?.liveTrading !== true;
   }
   if (name === 'ADVANCED') {
     return usableStatus(result.uncertainty?.status)
@@ -175,11 +187,6 @@ export function evaluateDynamicBetSizing(raw = {}, policyInput = {}) {
     : null;
   const ddFactor = drawdownFactor(currentDrawdownPct, policy);
 
-  const knownFactors = [alphaFactor, regimeSizeFactor, ddFactor].filter((value) => value != null);
-  const advisoryMultiplier = canonicalDirection.state === 'PASS' && incomplete.length === 0 && knownFactors.length
-    ? clamp(Math.min(...knownFactors), 0, 1)
-    : null;
-
   const vetoReasons = vetoes.flatMap(([name, result]) => {
     const reasons = gateReasons(result);
     return reasons.length ? reasons : [`${name}_GATE_VETO`];
@@ -209,6 +216,12 @@ export function evaluateDynamicBetSizing(raw = {}, policyInput = {}) {
     reasons = [];
     recommendedMultiplier = clamp(Math.min(alphaFactor, regimeSizeFactor, ddFactor), 0, 1);
   }
+
+  const advisoryMultiplier = state === 'VETO'
+    ? 0
+    : state === 'PASS'
+      ? recommendedMultiplier
+      : null;
 
   const suggestedRiskFraction = parentBaseRiskFraction != null && parentBaseRiskFraction >= 0 && recommendedMultiplier != null
     ? Math.min(parentBaseRiskFraction, parentBaseRiskFraction * recommendedMultiplier)
@@ -244,6 +257,7 @@ export function evaluateDynamicBetSizing(raw = {}, policyInput = {}) {
     },
     safety: {
       executionAuthority: 'NONE',
+      liveTrading: false,
       aiNumericalAuthority: false,
       userMultiplierAuthority: false,
       orderAllowed: false,
