@@ -90,6 +90,8 @@ function boundSource(dataset, { artifactId = '1001', receiptOverrides = {} } = {
     schemaVersion: PUBLIC_FORWARD_LIQUIDITY_CAPTURE_INGEST_RECEIPT_VERSION,
     exactMainSha: dataset.collectorCodeSha,
     collectorCodeSha: dataset.collectorCodeSha,
+    collectorImplementationPath: 'market-intelligence-sidecar/src/public-forward-liquidity-calibration.mjs',
+    collectorImplementationBlobSha: sha256(`collector-blob-${artifactId}`).slice(0, 40),
     repository: 'seungjae3908-source/seungjae20260713',
     sampleClass: dataset.sampleClass,
     storeContract: PUBLIC_LIQUIDITY_CALIBRATION_STORE_CONTRACT,
@@ -403,6 +405,17 @@ test('bound-source adapter rejects missing receipt authority and incomplete cano
   assert.equal(mismatchResult.status, 'BLOCKED_DATA');
   assert.ok(mismatchResult.blockers.includes('UPSTREAM_RECEIPT_DATASET_DIGEST_MISMATCH'));
 
+  const missingBlob = boundSource(dataset, {
+    artifactId: '4003',
+    receiptOverrides: { collectorImplementationBlobSha: null },
+  });
+  const missingBlobResult = classifyPublicForwardLiquidityBoundSources({
+    sources: [missingBlob],
+    producerCodeSha: 'd'.repeat(40),
+  });
+  assert.equal(missingBlobResult.status, 'BLOCKED_DATA');
+  assert.ok(missingBlobResult.blockers.includes('UPSTREAM_COLLECTOR_IMPLEMENTATION_BLOB_INVALID'));
+
   const incomplete = boundSource(genuineDataset(), { artifactId: '4002' });
   const incompleteResult = classifyPublicForwardLiquidityBoundSources({
     sources: [incomplete],
@@ -437,6 +450,7 @@ test('independence audit is deterministic and never produces cost or execution a
     upstreamCanonicalIngestSsotRequired: true,
     rawPersistenceAuthority: PUBLIC_FORWARD_LIQUIDITY_CAPTURE_INGEST_RECEIPT_VERSION,
     upstreamIngestReceiptRequired: true,
+    collectorImplementationBlobRequired: true,
     crossCollectorCanonicalDatasetSynthesisAllowed: false,
     derivedAuditPersistenceOwned: false,
     rawAcceptedNDescriptiveOnly: true,
