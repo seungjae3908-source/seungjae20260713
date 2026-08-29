@@ -68,6 +68,22 @@ class ProcessorWindowRecoveryTests(unittest.TestCase):
         self.assertLessEqual(window.comments_examined, 1000)
         self.assertEqual(window.comments_examined, 1000)
 
+    def test_overflow_reads_exact_tail_when_final_page_is_partial(self) -> None:
+        pages: dict[int, list[dict[str, Any]]] = {}
+        for page in range(1, 12):
+            start = ((page - 1) * 100) + 1
+            pages[page] = [comment(start + idx, "x") for idx in range(100)]
+        pages[12] = [comment(cid, "x") for cid in range(1101, 1108)]
+        github = FakeGitHub(pages)
+
+        window = read_bounded_comment_window(github, 660, 1107, 1000)
+
+        self.assertEqual(window.comments_examined, 1000)
+        self.assertEqual(window.comments[0]["id"], 108)
+        self.assertEqual(window.comments[-1]["id"], 1107)
+        self.assertTrue(github.requests[0].endswith("page=2"))
+        self.assertTrue(github.requests[-1].endswith("page=12"))
+
     def test_missing_required_anchor_fails_closed(self) -> None:
         window = BoundedCommentWindow(
             comments=(
