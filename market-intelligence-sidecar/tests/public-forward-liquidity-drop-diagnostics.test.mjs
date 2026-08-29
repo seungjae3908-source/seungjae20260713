@@ -173,12 +173,34 @@ test('rejects aggregate dropped counts that do not reconcile', () => {
 });
 
 test('rejects private or non-canonical source provenance', () => {
-  const source = batch({ reasons: ['EVENT_NOT_AFTER_PRE_EVENT_BOOK'] });
-  source.datasetProvenance.rawSource.privateApiUsed = true;
+  const privateSource = batch({ reasons: ['EVENT_NOT_AFTER_PRE_EVENT_BOOK'] });
+  privateSource.datasetProvenance.rawSource.privateApiUsed = true;
+  assert.throws(
+    () => analyzePublicForwardLiquidityDropQuality(privateSource),
+    /DROP_DIAGNOSTIC_PUBLIC_PROVENANCE_REQUIRED/u,
+  );
 
+  const missingOrderbook = batch({ reasons: ['EVENT_NOT_AFTER_PRE_EVENT_BOOK'] });
+  missingOrderbook.datasetProvenance.rawSource.endpoints = ['/api/v3/market/fills'];
+  assert.throws(
+    () => analyzePublicForwardLiquidityDropQuality(missingOrderbook),
+    /DROP_DIAGNOSTIC_PUBLIC_PROVENANCE_REQUIRED/u,
+  );
+
+  const missingFills = batch({ reasons: ['EVENT_NOT_AFTER_PRE_EVENT_BOOK'] });
+  missingFills.datasetProvenance.rawSource.endpoints = ['/api/v3/market/orderbook'];
+  assert.throws(
+    () => analyzePublicForwardLiquidityDropQuality(missingFills),
+    /DROP_DIAGNOSTIC_PUBLIC_PROVENANCE_REQUIRED/u,
+  );
+});
+
+test('rejects a non-canonical source schema version', () => {
+  const source = batch({ reasons: ['EVENT_NOT_AFTER_PRE_EVENT_BOOK'] });
+  source.schemaVersion = 2;
   assert.throws(
     () => analyzePublicForwardLiquidityDropQuality(source),
-    /DROP_DIAGNOSTIC_PUBLIC_PROVENANCE_REQUIRED/u,
+    /DROP_DIAGNOSTIC_SOURCE_SCHEMA_INVALID/u,
   );
 });
 
