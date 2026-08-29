@@ -1,0 +1,114 @@
+name: Public Forward Liquidity Independence Validation
+
+on:
+  pull_request:
+    paths:
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-independence-audit.mjs'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-capture-ingest.mjs'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-ingest-receipt-chain.mjs'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-multi-source-split-audit.mjs'
+      - 'market-intelligence-sidecar/scripts/run-public-forward-liquidity-independence-audit.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-independence-audit.test.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-ingest-receipt-chain.test.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-independence-runner-v2.test.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-capture-ingest.test.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-multi-source-split-audit.test.mjs'
+      - '.github/workflows/public-forward-liquidity-independence-validation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Syntax check
+        run: >-
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-independence-audit.mjs
+          && node --check market-intelligence-sidecar/src/public-forward-liquidity-ingest-receipt-chain.mjs
+          && node --check market-intelligence-sidecar/src/public-forward-liquidity-multi-source-split-audit.mjs
+          && node --check market-intelligence-sidecar/scripts/run-public-forward-liquidity-independence-audit.mjs
+          && node --check market-intelligence-sidecar/tests/public-forward-liquidity-independence-audit.test.mjs
+          && node --check market-intelligence-sidecar/tests/public-forward-liquidity-ingest-receipt-chain.test.mjs
+          && node --check market-intelligence-sidecar/tests/public-forward-liquidity-independence-runner-v2.test.mjs
+          && node --check market-intelligence-sidecar/tests/public-forward-liquidity-multi-source-split-audit.test.mjs
+
+      - name: Run upstream ingest, receipt-chain, independence, multi-source split, and V2 producer tests
+        run: >-
+          node --test
+          market-intelligence-sidecar/tests/public-forward-liquidity-capture-ingest.test.mjs
+          market-intelligence-sidecar/tests/public-forward-liquidity-ingest-receipt-chain.test.mjs
+          market-intelligence-sidecar/tests/public-forward-liquidity-independence-audit.test.mjs
+          market-intelligence-sidecar/tests/public-forward-liquidity-multi-source-split-audit.test.mjs
+          market-intelligence-sidecar/tests/public-forward-liquidity-independence-runner-v2.test.mjs
+
+      - name: Verify inert CLI
+        run: node market-intelligence-sidecar/scripts/run-public-forward-liquidity-independence-audit.mjs --help
+
+      - name: Verify single-SSOT fail-closed boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE='market-intelligence-sidecar/src/public-forward-liquidity-independence-audit.mjs'
+          CHAIN='market-intelligence-sidecar/src/public-forward-liquidity-ingest-receipt-chain.mjs'
+          MULTI='market-intelligence-sidecar/src/public-forward-liquidity-multi-source-split-audit.mjs'
+          RUNNER='market-intelligence-sidecar/scripts/run-public-forward-liquidity-independence-audit.mjs'
+          WORKFLOW='.github/workflows/public-forward-liquidity-independence-validation.yml'
+          grep -Fq 'verifyLiquidityCalibrationDataset' "$SOURCE"
+          grep -Fq 'PUBLIC_FORWARD_LIQUIDITY_CAPTURE_INGEST_RECEIPT_VERSION' "$SOURCE"
+          grep -Fq 'computePublicForwardLiquidityCaptureIngestReceiptDigest' "$SOURCE"
+          grep -Fq 'verifyPublicForwardLiquidityIngestReceiptChain' "$SOURCE"
+          grep -Fq 'classifyPublicForwardLiquidityBoundSources' "$SOURCE"
+          grep -Fq 'completeIngestReceiptChainRequired: true' "$SOURCE"
+          grep -Fq 'UPSTREAM_INGEST_RECEIPT_CHAIN_LENGTH_MISMATCH' "$CHAIN"
+          grep -Fq 'UPSTREAM_RECEIPT_CHAIN_PREDECESSOR_MISMATCH' "$CHAIN"
+          grep -Fq 'UPSTREAM_RECEIPT_INTERMEDIATE_DATASET_DIGEST_MISMATCH' "$CHAIN"
+          grep -Fq 'UPSTREAM_RECEIPT_CHAIN_FINAL_DATASET_DIGEST_MISMATCH' "$CHAIN"
+          grep -Fq 'UPSTREAM_DUPLICATE_ATTEMPT_HISTORY_INVALID' "$CHAIN"
+          grep -Fq 'UPSTREAM_COLLECTOR_IMPLEMENTATION_COHORT_MISMATCH' "$SOURCE"
+          grep -Fq 'homogeneousCollectorImplementationRequired: true' "$SOURCE"
+          grep -Fq 'crossCollectorCanonicalDatasetSynthesisAllowed: false' "$SOURCE"
+          grep -Fq 'CROSS_BATCH_DUPLICATE_N' "$SOURCE"
+          grep -Fq 'CANONICAL_ACCEPTED_N' "$SOURCE"
+          grep -Fq 'rawAcceptedNDescriptiveOnly: true' "$SOURCE"
+          grep -Fq 'effectiveIndependentSampleCreditOwnedHere: true' "$SOURCE"
+          grep -Fq 'PUBLIC_FORWARD_LIQUIDITY_MULTI_SOURCE_SPLIT_AUDIT_VERSION' "$MULTI"
+          grep -Fq 'completeIngestReceiptChainRequired: true' "$MULTI"
+          grep -Fq 'syntheticAggregateDatasetAllowed: false' "$MULTI"
+          grep -Fq 'syntheticSingleCollectorAllowed: false' "$MULTI"
+          grep -Fq 'upstreamLineageDigest' "$MULTI"
+          grep -Fq 'sourceReceiptDigest' "$MULTI"
+          grep -Fq 'sourceReceiptChainDigest' "$MULTI"
+          grep -Fq 'sourceReceiptCount' "$MULTI"
+          grep -Fq 'receiptChainDigests' "$MULTI"
+          grep -Fq 'receiptCounts' "$MULTI"
+          grep -Fq -- '--source-manifest' "$RUNNER"
+          grep -Fq 'ingestReceiptPaths' "$RUNNER"
+          grep -Fq -- '--split-policy' "$RUNNER"
+          grep -Fq -- '--scope-bindings' "$RUNNER"
+          grep -Fq -- '--regime-bindings' "$RUNNER"
+          grep -Fq 'PUBLIC_FORWARD_LIQUIDITY_MULTI_SOURCE_SPLIT_RECEIPT_VERSION' "$RUNNER"
+          grep -Fq 'syntheticAggregateDataset: false' "$RUNNER"
+          grep -Fq 'syntheticSingleCollector: false' "$RUNNER"
+          grep -Fq 'SOURCE_STATE_ROOT_OVERLAPS_RESEARCH_CHECKOUT' "$RUNNER"
+          grep -Fq "liquidityImpactStatus: 'BLOCKED_DATA'" "$RUNNER"
+          grep -Fq 'fullCostReady: false' "$RUNNER"
+          grep -Fq "executionAuthority: 'NONE'" "$RUNNER"
+          if grep -Eq 'persistLiquidityCalibrationBatch|mkdir\(|rename\(|PUBLIC_FORWARD_LIQUIDITY_CANONICAL_STORE_CONTRACT' "$SOURCE" "$CHAIN" "$MULTI" "$RUNNER"; then
+            echo 'Derived independence/split layer must not create a second persistence authority.' >&2
+            exit 1
+          fi
+          if grep -Eq '^[[:space:]]+schedule:' "$WORKFLOW"; then
+            echo 'Scheduled independence validation is forbidden.' >&2
+            exit 1
+          fi
