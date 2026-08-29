@@ -94,8 +94,9 @@ export function assertPublicForwardLiquidityResearchStateRoot({ stateRoot, resea
   )) {
     throw new Error('BLOCKED_STORAGE:STATE_ROOT_OVERLAPS_PROTECTED_APPLICATION_STORAGE');
   }
-  if (isInside(resolve(normalizedResearchRoot, 'stock-analyzer'), normalizedStateRoot)) {
-    throw new Error('BLOCKED_STORAGE:STATE_ROOT_OVERLAPS_PROTECTED_RESEARCH_CHECKOUT');
+  if (isInside(normalizedResearchRoot, normalizedStateRoot)
+    || isInside(normalizedStateRoot, normalizedResearchRoot)) {
+    throw new Error('BLOCKED_STORAGE:STATE_ROOT_OVERLAPS_RESEARCH_CHECKOUT');
   }
   return normalizedStateRoot;
 }
