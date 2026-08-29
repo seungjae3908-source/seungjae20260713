@@ -1,0 +1,59 @@
+name: Temporary Durable Caller Secret Inheritance Patch
+
+on:
+  push:
+    branches:
+      - fix/durable-env-secret-binding-20260829
+    paths:
+      - .github/workflows/tmp-durable-caller-inherit-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/durable-env-secret-binding-20260829
+      - name: Patch durable caller contract
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          workflow_path = Path('.github/workflows/prediction-lab-52d-validation.yml')
+          text = workflow_path.read_text()
+          needle = """    with:\n      expected_sha: ${{ needs.validate-and-train.outputs.research_sha }}\n"""
+          replacement = needle + "    secrets: inherit\n"
+          if replacement not in text:
+              if text.count(needle) != 1:
+                  raise SystemExit(f'expected exactly one durable-policy caller block, found {text.count(needle)}')
+              text = text.replace(needle, replacement, 1)
+              workflow_path.write_text(text)
+
+          test_path = Path('market-prediction-lab/tests/model-reference-durable-policy-workflow.test.js')
+          test_text = test_path.read_text()
+          assertion = "  assert.match(workflow, /durable-policy-preflight:[\\s\\S]*secrets:\\s*inherit/u);\n"
+          anchor = "  assert.match(workflow, /environment:\\s*prediction-lab-durable-reference/u);\n"
+          if assertion not in test_text:
+              if anchor not in test_text:
+                  raise SystemExit('test insertion anchor missing')
+              test_text = test_text.replace(anchor, anchor + assertion, 1)
+              test_path.write_text(test_text)
+          PY
+      - name: Commit branch-only patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- .github/workflows/prediction-lab-52d-validation.yml market-prediction-lab/tests/model-reference-durable-policy-workflow.test.js; then
+            echo "no patch required"
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .github/workflows/prediction-lab-52d-validation.yml market-prediction-lab/tests/model-reference-durable-policy-workflow.test.js
+          git commit -m "fix(research): inherit secrets into durable reusable gate"
+          git push origin HEAD:fix/durable-env-secret-binding-20260829
