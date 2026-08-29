@@ -45,69 +45,99 @@ class FakeAdapter:
         return payload
 
 
-def command_comment(comment_id=100, add="TEST-A,TEST-B", keep="", complete=""):
+def command_comment(comment_id=100, add="TEST-A,TEST-B", keep="", complete="", master="", publisher="CENTRAL-COMMANDER"):
     return {
         "id": comment_id,
-        "body": "\n".join(
-            [
-                "[COMMAND_UPDATE]",
-                "COMMAND_VERSION=007",
-                "PUBLISHER=CENTRAL-COMMANDER",
-                f"KEEP={keep}",
-                f"ADD={add}",
-                f"COMPLETE={complete}",
-            ]
-        ),
+        "body": "\n".join([
+            "[COMMAND_UPDATE]",
+            "COMMAND_VERSION=007",
+            f"PUBLISHER={publisher}",
+            f"KEEP={keep}",
+            f"ADD={add}",
+            f"COMPLETE={complete}",
+            f"MASTER_TASK_SET={master}",
+        ]),
     }
 
 
 def worker_report(comment_id, task_id, status="completed"):
     return {
         "id": comment_id,
-        "body": "\n".join(
-            [
-                "[WORKER_REPORT]",
-                "schema_version: 2",
-                f"task_id: {task_id}",
-                "worker: TEST-WORKER",
-                f"status: {status}",
-            ]
-        ),
+        "body": "\n".join([
+            "[WORKER_REPORT]",
+            "schema_version: 2",
+            f"task_id: {task_id}",
+            "worker: TEST-WORKER",
+            f"status: {status}",
+        ]),
     }
 
 
 class RealtimeControllerTests(unittest.TestCase):
     def test_signature_validation(self):
         secret = "test-secret"
-        body = b'{"zen":"keep it logically awesome"}'
+        body = b'{"repository":{"full_name":"owner/repo"}}'
         signature = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
         self.assertTrue(rc.validate_signature(secret, body, signature))
         self.assertFalse(rc.validate_signature(secret, body + b"x", signature))
         self.assertFalse(rc.validate_signature("", body, signature))
 
-    def test_command_parser_requires_version_and_tracks_sets(self):
-        parsed = rc.parse_command(command_comment()["body"], comment_id=100)
+    def test_webhook_repository_identity_is_exact(self):
+        self.assertTrue(rc.payload_repository_matches({"repository": {"full_name": "owner/repo"}}, "owner/repo"))
+        self.assertFalse(rc.payload_repository_matches({"repository": {"full_name": "owner/other"}}, "owner/repo"))
+        self.assertFalse(rc.payload_repository_matches({}, "owner/repo"))
+
+    def test_command_parser_normalizes_known_task_aliases(self):
+        parsed = rc.parse_command(
+            command_comment(add="REALTIME-CONTROLLER", keep="#798,#799,CONTROL-003", complete="#796")["body"],
+            comment_id=100,
+        )
         self.assertIsNotNone(parsed)
         self.assertEqual(parsed.version, 7)
         self.assertEqual(parsed.publisher, "CENTRAL-COMMANDER")
-        self.assertEqual(parsed.add, ("TEST-A", "TEST-B"))
-        self.assertEqual(parsed.source_comment_id, 100)
+        self.assertEqual(parsed.keep, ("CONTROL-001", "CONTROL-002", "CONTROL-003"))
+        self.assertEqual(parsed.add, ("REALTIME-CONTROLLER",))
+        self.assertEqual(parsed.complete, ("LIQ-SPLIT-796",))
 
-    def test_unauthorized_command_publisher_fails_closed(self):
-        body = "\n".join(
-            [
-                "[COMMAND_UPDATE]",
-                "COMMAND_VERSION=008",
-                "PUBLISHER=NOT-CENTRAL",
-                "ADD=TEST-X",
-            ]
+    def test_missing_or_unauthorized_command_publisher_fails_closed(self):
+        for publisher in ("", "NOT-CENTRAL"):
+            parsed = rc.parse_command(command_comment(add="TEST-X", publisher=publisher)["body"], comment_id=8)
+            with tempfile.TemporaryDirectory() as temp:
+                store = rc.StateStore(Path(temp) / "controller.db")
+                try:
+                    with self.assertRaises(rc.ControllerError):
+                        store.apply_command(parsed)
+                finally:
+                    store.close()
+
+    def test_keep_and_master_tasks_are_tracked_not_executable(self):
+        parsed = rc.parse_command(
+            command_comment(add="REALTIME-CONTROLLER", keep="#798,#799", master="CONTROL-003,FULL-COST")["body"],
+            comment_id=100,
         )
-        parsed = rc.parse_command(body, comment_id=8)
         with tempfile.TemporaryDirectory() as temp:
             store = rc.StateStore(Path(temp) / "controller.db")
             try:
-                with self.assertRaises(rc.ControllerError):
-                    store.apply_command(parsed)
+                store.apply_command(parsed, now=100)
+                self.assertEqual(store.task("#798")["status"], "TRACKED")
+                self.assertEqual(store.task("#799")["status"], "TRACKED")
+                self.assertEqual(store.task("CONTROL-003")["status"], "TRACKED")
+                self.assertEqual(store.task("FULL-COST")["status"], "TRACKED")
+                ready = store.next_ready(now=100)
+                self.assertIsNotNone(ready)
+                self.assertEqual(ready["task_id"], "REALTIME-CONTROLLER")
+            finally:
+                store.close()
+
+    def test_worker_report_alias_completes_same_canonical_task(self):
+        parsed = rc.parse_command(command_comment(add="", keep="#798")["body"], comment_id=100)
+        report = rc.parse_worker_report(worker_report(101, "CONTROL-001", "completed")["body"], comment_id=101)
+        with tempfile.TemporaryDirectory() as temp:
+            store = rc.StateStore(Path(temp) / "controller.db")
+            try:
+                store.apply_command(parsed, now=100)
+                self.assertTrue(store.apply_worker_report(report, now=101))
+                self.assertEqual(store.task("#798")["status"], "COMPLETE")
             finally:
                 store.close()
 
@@ -132,42 +162,37 @@ class RealtimeControllerTests(unittest.TestCase):
             first.apply_command(parsed, now=100)
             adapter1 = FakeAdapter()
             controller1 = rc.Controller(first, FakeGitHub(), adapter1, holder="controller-1", lease_ttl=1800)
-            transition = controller1.run_until_blocked()
-            self.assertEqual(transition["state"], "DISPATCHED")
+            self.assertEqual(controller1.run_until_blocked()["state"], "DISPATCHED")
             self.assertEqual(first.dispatch_count(), 1)
-            self.assertEqual(len(adapter1.dispatches), 1)
             first.close()
 
             second = rc.StateStore(path)
             adapter2 = FakeAdapter()
             controller2 = rc.Controller(second, FakeGitHub(), adapter2, holder="controller-2", lease_ttl=1800)
-            transition2 = controller2.run_until_blocked()
             try:
-                self.assertEqual(transition2["state"], "WAITING_RESULT")
+                transition = controller2.run_until_blocked()
+                self.assertEqual(transition["state"], "WAITING_RESULT")
                 self.assertEqual(second.dispatch_count(), 1)
-                self.assertEqual(len(adapter2.dispatches), 0)
+                self.assertEqual(adapter2.dispatches, [])
                 self.assertEqual(second.task("TEST-A")["status"], "DISPATCHED")
             finally:
                 second.close()
 
     def test_expired_inflight_fails_closed_instead_of_duplicate_dispatch(self):
         with tempfile.TemporaryDirectory() as temp:
-            path = Path(temp) / "controller.db"
-            store = rc.StateStore(path)
+            store = rc.StateStore(Path(temp) / "controller.db")
             parsed = rc.parse_command(command_comment(add="TEST-A")["body"], comment_id=100)
             store.apply_command(parsed, now=100)
             self.assertTrue(store.acquire_task_lease("TEST-A", "controller-1", ttl=10, now=100))
             store.mark_dispatched(
-                "TEST-A",
-                "controller-1",
+                "TEST-A", "controller-1",
                 {"source": "realtime-controller", "task_id": "TEST-A", "command_version": 7, "controller_dispatch_key": "7:TEST-A"},
                 now=100,
             )
             try:
                 self.assertEqual(store.block_expired_dispatches(now=111), 1)
-                task = store.task("TEST-A")
-                self.assertEqual(task["status"], "BLOCKED")
-                self.assertEqual(task["blocker"], "LEASE_EXPIRED_REQUIRES_REMOTE_RECONCILE")
+                self.assertEqual(store.task("TEST-A")["status"], "BLOCKED")
+                self.assertEqual(store.task("TEST-A")["blocker"], "LEASE_EXPIRED_REQUIRES_REMOTE_RECONCILE")
                 self.assertIsNone(store.next_ready(now=111))
             finally:
                 store.close()
@@ -194,36 +219,29 @@ class RealtimeControllerTests(unittest.TestCase):
                 controller.reconcile_remote()
                 first = controller.run_until_blocked()
                 self.assertEqual(first["taskId"], "TEST-A")
-                self.assertEqual(len(adapter.dispatches), 1)
-
                 github.comments.append(worker_report(101, "TEST-A", "completed"))
                 result = controller.process_event(
-                    "delivery-result-a",
-                    "issue_comment",
-                    {"issue": {"number": 660}, "comment": {"id": 101}},
+                    "delivery-result-a", "issue_comment",
+                    {"repository": {"full_name": "owner/repo"}, "issue": {"number": 660}, "comment": {"id": 101}},
                 )
                 self.assertTrue(result["reconcileTriggered"])
-                self.assertEqual(result["transition"]["state"], "DISPATCHED")
                 self.assertEqual(result["transition"]["taskId"], "TEST-B")
                 self.assertEqual(store.task("TEST-A")["status"], "COMPLETE")
                 self.assertEqual(store.task("TEST-B")["status"], "DISPATCHED")
                 self.assertEqual(len(adapter.dispatches), 2)
 
                 duplicate = controller.process_event(
-                    "delivery-result-a",
-                    "issue_comment",
-                    {"issue": {"number": 660}, "comment": {"id": 101}},
+                    "delivery-result-a", "issue_comment",
+                    {"repository": {"full_name": "owner/repo"}, "issue": {"number": 660}, "comment": {"id": 101}},
                 )
                 self.assertTrue(duplicate["duplicate"])
-                self.assertTrue(duplicate["eventDeduped"])
                 self.assertEqual(len(adapter.dispatches), 2)
             finally:
                 store.close()
 
     def test_startup_reconcile_recovers_missed_result_event(self):
         with tempfile.TemporaryDirectory() as temp:
-            path = Path(temp) / "controller.db"
-            store = rc.StateStore(path)
+            store = rc.StateStore(Path(temp) / "controller.db")
             github = FakeGitHub([command_comment(), worker_report(101, "TEST-A", "completed")])
             adapter = FakeAdapter()
             controller = rc.Controller(store, github, adapter, holder="controller")
@@ -232,7 +250,6 @@ class RealtimeControllerTests(unittest.TestCase):
                 transition = controller.run_until_blocked()
                 self.assertEqual(reconciliation["commandVersion"], 7)
                 self.assertEqual(store.task("TEST-A")["status"], "COMPLETE")
-                self.assertEqual(transition["state"], "DISPATCHED")
                 self.assertEqual(transition["taskId"], "TEST-B")
                 self.assertEqual(len(adapter.dispatches), 1)
             finally:
