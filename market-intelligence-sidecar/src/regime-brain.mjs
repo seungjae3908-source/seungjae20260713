@@ -16,10 +16,14 @@ export const DEFAULT_REGIME_BRAIN_POLICY = Object.freeze({
   driftBrakePsi: 0.25,
 });
 
+const LOCKED_POLICY_FIELDS = Object.freeze([
+  'maxEvidenceAgeMs', 'maxFutureSkewMs', 'minReferenceSamples', 'trendThreshold',
+  'highVolRatio', 'lowVolRatio', 'maxSpreadRatio', 'minDepthRatio',
+  'driftMinSamples', 'driftWatchPsi', 'driftBrakePsi',
+]);
+
 function finite(value, fallback = null) {
-  if (value == null || value === '') return fallback;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
 function clamp(value, min, max) {
@@ -32,34 +36,27 @@ function immutableDigest(value) {
 }
 
 function resolvePolicy(input = {}) {
-  const policy = { ...DEFAULT_REGIME_BRAIN_POLICY, ...(input ?? {}) };
-  if (typeof policy.version !== 'string' || !policy.version.trim()) throw new Error('REGIME_POLICY_VERSION_REQUIRED');
-  policy.enforcement = String(policy.enforcement ?? '').toUpperCase();
-  if (!ENFORCEMENT_MODES.has(policy.enforcement)) throw new Error('REGIME_POLICY_ENFORCEMENT_INVALID');
-
-  for (const field of [
-    'maxEvidenceAgeMs', 'maxFutureSkewMs', 'minReferenceSamples', 'trendThreshold',
-    'highVolRatio', 'lowVolRatio', 'maxSpreadRatio', 'minDepthRatio',
-    'driftMinSamples', 'driftWatchPsi', 'driftBrakePsi',
-  ]) {
-    const value = Number(policy[field]);
-    if (!Number.isFinite(value)) throw new Error(`REGIME_POLICY_FIELD_INVALID:${field}`);
-    policy[field] = value;
+  if (input == null) input = {};
+  if (typeof input !== 'object' || Array.isArray(input)) throw new Error('REGIME_POLICY_INVALID');
+  if (input.version != null && input.version !== DEFAULT_REGIME_BRAIN_POLICY.version) {
+    throw new Error('REGIME_POLICY_VERSION_OVERRIDE_NOT_ALLOWED');
   }
-  if (policy.maxEvidenceAgeMs <= 0 || policy.maxFutureSkewMs < 0) throw new Error('REGIME_POLICY_TIME_INVALID');
-  if (policy.minReferenceSamples < 1 || policy.driftMinSamples < 1) throw new Error('REGIME_POLICY_SAMPLE_INVALID');
-  if (!(policy.trendThreshold > 0 && policy.trendThreshold <= 1)) throw new Error('REGIME_POLICY_TREND_THRESHOLD_INVALID');
-  if (!(policy.highVolRatio > 1 && policy.lowVolRatio > 0 && policy.lowVolRatio < 1)) throw new Error('REGIME_POLICY_VOL_RATIO_INVALID');
-  if (!(policy.maxSpreadRatio > 1 && policy.minDepthRatio > 0 && policy.minDepthRatio < 1)) throw new Error('REGIME_POLICY_LIQUIDITY_RATIO_INVALID');
-  if (!(policy.driftWatchPsi >= 0 && policy.driftBrakePsi > policy.driftWatchPsi)) throw new Error('REGIME_POLICY_DRIFT_THRESHOLD_INVALID');
-  return policy;
+  for (const field of LOCKED_POLICY_FIELDS) {
+    if (Object.hasOwn(input, field) && input[field] !== DEFAULT_REGIME_BRAIN_POLICY[field]) {
+      throw new Error(`REGIME_POLICY_OVERRIDE_NOT_ALLOWED:${field}`);
+    }
+  }
+  const enforcement = String(input.enforcement ?? DEFAULT_REGIME_BRAIN_POLICY.enforcement).toUpperCase();
+  if (!ENFORCEMENT_MODES.has(enforcement)) throw new Error('REGIME_POLICY_ENFORCEMENT_INVALID');
+  return { ...DEFAULT_REGIME_BRAIN_POLICY, enforcement };
 }
 
-function evidenceAge(now, asOf, policy) {
-  if (asOf == null) return { valid: false, reason: 'REGIME_AS_OF_NOT_AVAILABLE', ageMs: null };
-  if (asOf > now + policy.maxFutureSkewMs) return { valid: false, reason: 'REGIME_EVIDENCE_FROM_FUTURE', ageMs: null };
+function evidenceAge(now, asOf, policy, prefix = 'REGIME') {
+  if (now == null) return { valid: false, reason: `${prefix}_CLOCK_NOT_AVAILABLE`, ageMs: null };
+  if (asOf == null) return { valid: false, reason: `${prefix}_AS_OF_NOT_AVAILABLE`, ageMs: null };
+  if (asOf > now + policy.maxFutureSkewMs) return { valid: false, reason: `${prefix}_EVIDENCE_FROM_FUTURE`, ageMs: null };
   const ageMs = Math.max(0, now - asOf);
-  if (ageMs > policy.maxEvidenceAgeMs) return { valid: false, reason: 'REGIME_EVIDENCE_STALE', ageMs };
+  if (ageMs > policy.maxEvidenceAgeMs) return { valid: false, reason: `${prefix}_EVIDENCE_STALE`, ageMs };
   return { valid: true, reason: null, ageMs };
 }
 
@@ -70,26 +67,44 @@ function evaluateDrift(raw = {}, policy, now) {
   const referenceId = typeof raw.referenceId === 'string' && raw.referenceId.trim() ? raw.referenceId.trim() : null;
   const referenceDigest = immutableDigest(raw.referenceDigest);
   const referenceFrozen = raw.referenceFrozen === true;
+  const referenceValidatedAt = finite(raw.referenceValidatedAt);
+  const parsedReferenceSampleSize = finite(raw.referenceSampleSize);
+  const referenceSampleSize = Number.isInteger(parsedReferenceSampleSize) && parsedReferenceSampleSize >= 0
+    ? parsedReferenceSampleSize
+    : null;
+  const referenceComputable = raw.referenceComputable === true;
+  const zeroVarianceFeatures = Array.isArray(raw.zeroVarianceFeatures)
+    && raw.zeroVarianceFeatures.every((feature) => typeof feature === 'string' && feature.trim())
+    ? raw.zeroVarianceFeatures.map((feature) => feature.trim())
+    : null;
+
   const featurePsi = raw.featurePsi && typeof raw.featurePsi === 'object' && !Array.isArray(raw.featurePsi)
     ? raw.featurePsi
     : null;
   const entries = featurePsi ? Object.entries(featurePsi) : [];
-  const invalidPsi = entries.some(([feature, value]) => {
-    const parsed = Number(value);
-    return !feature.trim() || !Number.isFinite(parsed) || parsed < 0;
-  });
+  const invalidPsi = entries.some(([feature, value]) => (
+    !feature.trim() || typeof value !== 'number' || !Number.isFinite(value) || value < 0
+  ));
   const rows = invalidPsi
     ? []
-    : entries.map(([feature, value]) => ({ feature, psi: Number(value) }));
+    : entries.map(([feature, value]) => ({ feature, psi: value }));
+
+  const provenance = {
+    referenceId,
+    referenceDigest,
+    referenceFrozen,
+    referenceValidatedAt,
+    referenceSampleSize,
+    referenceComputable,
+    zeroVarianceFeatures,
+  };
 
   if (evaluatedAt == null || parsedSampleSize == null || !entries.length) {
     return {
       status: 'NOT_AVAILABLE',
       reason: 'DRIFT_EVIDENCE_NOT_AVAILABLE',
       sampleSize,
-      referenceId,
-      referenceDigest,
-      referenceFrozen,
+      ...provenance,
       features: [],
     };
   }
@@ -98,20 +113,17 @@ function evaluateDrift(raw = {}, policy, now) {
       status: 'NOT_AVAILABLE',
       reason: 'DRIFT_SAMPLE_INVALID',
       sampleSize: null,
-      referenceId,
-      referenceDigest,
-      referenceFrozen,
+      ...provenance,
       features: [],
     };
   }
-  if (!referenceId || !referenceDigest || !referenceFrozen) {
+  if (!referenceId || !referenceDigest || !referenceFrozen
+      || referenceValidatedAt == null || referenceSampleSize == null || zeroVarianceFeatures == null) {
     return {
       status: 'NOT_AVAILABLE',
       reason: 'DRIFT_REFERENCE_PROVENANCE_NOT_AVAILABLE',
       sampleSize,
-      referenceId,
-      referenceDigest,
-      referenceFrozen,
+      ...provenance,
       features: rows,
     };
   }
@@ -120,23 +132,32 @@ function evaluateDrift(raw = {}, policy, now) {
       status: 'NOT_AVAILABLE',
       reason: 'DRIFT_FEATURE_PSI_INVALID',
       sampleSize,
-      referenceId,
-      referenceDigest,
-      referenceFrozen,
+      ...provenance,
       features: [],
     };
   }
 
-  const freshness = evidenceAge(now, evaluatedAt, policy);
+  const freshness = evidenceAge(now, evaluatedAt, policy, 'DRIFT');
   if (!freshness.valid) {
     return {
       status: 'NOT_AVAILABLE',
-      reason: freshness.reason.replace('REGIME_', 'DRIFT_'),
+      reason: freshness.reason,
       sampleSize,
       evidenceAgeMs: freshness.ageMs,
-      referenceId,
-      referenceDigest,
-      referenceFrozen,
+      ...provenance,
+      features: rows,
+    };
+  }
+
+  const referenceFreshness = evidenceAge(now, referenceValidatedAt, policy, 'DRIFT_REFERENCE_VALIDATION');
+  if (!referenceFreshness.valid) {
+    return {
+      status: 'NOT_AVAILABLE',
+      reason: referenceFreshness.reason,
+      sampleSize,
+      evidenceAgeMs: freshness.ageMs,
+      referenceValidationAgeMs: referenceFreshness.ageMs,
+      ...provenance,
       features: rows,
     };
   }
@@ -147,9 +168,31 @@ function evaluateDrift(raw = {}, policy, now) {
       sampleSize,
       minimumSamples: policy.driftMinSamples,
       evidenceAgeMs: freshness.ageMs,
-      referenceId,
-      referenceDigest,
-      referenceFrozen,
+      referenceValidationAgeMs: referenceFreshness.ageMs,
+      ...provenance,
+      features: rows,
+    };
+  }
+  if (referenceSampleSize < policy.driftMinSamples) {
+    return {
+      status: 'NOT_AVAILABLE',
+      reason: 'DRIFT_REFERENCE_SAMPLE_INSUFFICIENT',
+      sampleSize,
+      minimumReferenceSamples: policy.driftMinSamples,
+      evidenceAgeMs: freshness.ageMs,
+      referenceValidationAgeMs: referenceFreshness.ageMs,
+      ...provenance,
+      features: rows,
+    };
+  }
+  if (!referenceComputable || zeroVarianceFeatures.length > 0) {
+    return {
+      status: 'NOT_AVAILABLE',
+      reason: 'DRIFT_REFERENCE_NOT_COMPUTABLE',
+      sampleSize,
+      evidenceAgeMs: freshness.ageMs,
+      referenceValidationAgeMs: referenceFreshness.ageMs,
+      ...provenance,
       features: rows,
     };
   }
@@ -159,23 +202,26 @@ function evaluateDrift(raw = {}, policy, now) {
   const status = maxPsi >= policy.driftBrakePsi ? 'BRAKE' : maxPsi >= policy.driftWatchPsi ? 'WATCH' : 'STABLE';
   return {
     status,
-    reason: status === 'BRAKE' ? 'FEATURE_DISTRIBUTION_DRIFT_BRAKE' : status === 'WATCH' ? 'FEATURE_DISTRIBUTION_DRIFT_WATCH' : null,
+    reason: status === 'BRAKE'
+      ? 'FEATURE_DISTRIBUTION_DRIFT_BRAKE'
+      : status === 'WATCH'
+        ? 'FEATURE_DISTRIBUTION_DRIFT_WATCH'
+        : null,
     sampleSize,
     evidenceAgeMs: freshness.ageMs,
+    referenceValidationAgeMs: referenceFreshness.ageMs,
     maxPsi,
     meanPsi,
     watchThreshold: policy.driftWatchPsi,
     brakeThreshold: policy.driftBrakePsi,
-    referenceId,
-    referenceDigest,
-    referenceFrozen,
+    ...provenance,
     features: rows.sort((a, b) => b.psi - a.psi),
   };
 }
 
 export function evaluateRegimeBrain(raw = {}, policyInput = {}) {
   const policy = resolvePolicy(policyInput);
-  const now = finite(raw.now, Date.now());
+  const now = finite(raw.now);
   const asOf = finite(raw.asOf);
   const freshness = evidenceAge(now, asOf, policy);
   const trendScore = finite(raw.trendScore);
@@ -185,7 +231,8 @@ export function evaluateRegimeBrain(raw = {}, policyInput = {}) {
   const referenceSpreadBps = finite(raw.referenceSpreadBps);
   const topDepthNotional = finite(raw.topDepthNotional);
   const referenceTopDepthNotional = finite(raw.referenceTopDepthNotional);
-  const referenceSamples = Math.max(0, finite(raw.referenceSamples, 0));
+  const rawReferenceSamples = finite(raw.referenceSamples);
+  const referenceSamples = Number.isInteger(rawReferenceSamples) && rawReferenceSamples >= 0 ? rawReferenceSamples : null;
   const drift = evaluateDrift(raw.drift, policy, now);
 
   const missing = [];
@@ -197,7 +244,17 @@ export function evaluateRegimeBrain(raw = {}, policyInput = {}) {
   if (!(referenceSpreadBps > 0)) missing.push('REFERENCE_SPREAD_NOT_AVAILABLE');
   if (!(topDepthNotional > 0)) missing.push('TOP_DEPTH_NOT_AVAILABLE');
   if (!(referenceTopDepthNotional > 0)) missing.push('REFERENCE_TOP_DEPTH_NOT_AVAILABLE');
-  if (referenceSamples < policy.minReferenceSamples) missing.push('REGIME_REFERENCE_SAMPLE_INSUFFICIENT');
+  if (referenceSamples == null || referenceSamples < policy.minReferenceSamples) {
+    missing.push('REGIME_REFERENCE_SAMPLE_INSUFFICIENT');
+  }
+
+  const safety = {
+    executionAuthority: 'NONE',
+    liveTrading: false,
+    aiNumericalAuthority: false,
+    candidateDeletionAllowed: false,
+    orderAllowed: false,
+  };
 
   if (missing.length) {
     return {
@@ -213,11 +270,7 @@ export function evaluateRegimeBrain(raw = {}, policyInput = {}) {
         reasons: [...new Set(missing)],
         orderAllowed: false,
       },
-      safety: {
-        executionAuthority: 'NONE',
-        candidateDeletionAllowed: false,
-        orderAllowed: false,
-      },
+      safety,
     };
   }
 
@@ -273,10 +326,6 @@ export function evaluateRegimeBrain(raw = {}, policyInput = {}) {
         ...(drift.status === 'BRAKE' ? ['FEATURE_DISTRIBUTION_DRIFT_BRAKE'] : []),
       ],
     },
-    safety: {
-      executionAuthority: 'NONE',
-      candidateDeletionAllowed: false,
-      orderAllowed: false,
-    },
+    safety,
   };
 }
