@@ -301,8 +301,8 @@ export function evaluateMarketIntelligence(input = {}) {
     metaLabel: input.advancedGates?.metaLabel,
     events: input.advancedGates?.events,
   }, input.advancedGatePolicy);
-  const executionQuality = evaluateExecutionQuality({ now, ...(input.executionQuality ?? {}) }, input.executionQualityPolicy);
-  const portfolioSafety = evaluatePortfolioSafety({ now, ...(input.portfolioSafety ?? {}) }, input.portfolioSafetyPolicy);
+  const executionQuality = evaluateExecutionQuality({ ...(input.executionQuality ?? {}), now }, input.executionQualityPolicy);
+  const portfolioSafety = evaluatePortfolioSafety({ ...(input.portfolioSafety ?? {}), now }, input.portfolioSafetyPolicy);
   const currentTopDepthNotional = book.mid == null ? null : (book.bidQty + book.askQty) * book.mid;
   const regimeBrain = evaluateRegimeBrain({
     ...(input.regimeBrain ?? {}),
