@@ -26,9 +26,12 @@ alter table public.profiles
 -- * approved associate stays associate;
 -- * approved full/regular stays regular;
 -- * only an already-approved legacy admin/master remains admin.
+-- If canonical fields already exist, preserve a valid tier and an explicit
+-- is_active=false instead of widening access during an idempotent re-run.
 update public.profiles
 set membership_level = case
       when coalesce(status, 'pending') <> 'approved' then 'pending'
+      when membership_level in ('pending', 'associate', 'regular', 'admin') then membership_level
       when role in ('admin', 'master') then 'admin'
       when role = 'associate' then 'associate'
       when role in ('full', 'regular') then 'regular'
@@ -36,6 +39,7 @@ set membership_level = case
     end,
     is_active = case
       when coalesce(status, 'pending') <> 'approved' then false
+      when is_active is false then false
       else true
     end,
     approved_at = case
@@ -46,7 +50,11 @@ set membership_level = case
 where membership_level is null
    or membership_level not in ('pending', 'associate', 'regular', 'admin')
    or is_active is null
-   or permissions_updated_at is null;
+   or permissions_updated_at is null
+   or (
+     coalesce(status, 'pending') <> 'approved'
+     and (membership_level <> 'pending' or is_active is true)
+   );
 
 alter table public.profiles
   alter column membership_level set default 'pending',
@@ -79,9 +87,9 @@ security definer
 set search_path = public, pg_temp
 as $function$
   select case
+    when coalesce(p.status, 'pending') <> 'approved' then 'pending'
     when p.is_active is not true then 'pending'
     when p.membership_level in ('pending', 'associate', 'regular', 'admin') then p.membership_level
-    when p.status <> 'approved' then 'pending'
     when p.role in ('admin', 'master') then 'admin'
     when p.role = 'associate' then 'associate'
     else 'regular'
