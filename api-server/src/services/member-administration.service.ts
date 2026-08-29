@@ -95,7 +95,9 @@ export function parseMemberChangeRequest(value: unknown): MemberChangeRequest {
 }
 
 export function isActiveAdmin(profile: MemberAdministrationProfile) {
-  return profile.is_active !== false && storedMemberTier(profile) === 'admin';
+  return profile.status === 'approved'
+    && profile.is_active !== false
+    && storedMemberTier(profile) === 'admin';
 }
 
 function legacyRoleForTier(tier: MemberTier): 'pending' | 'associate' | 'full' | 'admin' {
@@ -125,7 +127,7 @@ export function planMemberChange(
   const nextTier = request.membershipLevel ?? currentTier;
   const nextActive = request.isActive ?? currentActive;
 
-  if (currentTier === 'admin' && currentActive && (nextTier !== 'admin' || !nextActive) && activeAdminCount <= 1) {
+  if (isActiveAdmin(current) && (nextTier !== 'admin' || !nextActive) && activeAdminCount <= 1) {
     throw new MemberAdministrationError(
       'LAST_ACTIVE_ADMIN_PROTECTED',
       '마지막 활성 관리자의 등급을 내리거나 비활성화할 수 없습니다.',
