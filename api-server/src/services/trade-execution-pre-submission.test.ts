@@ -328,6 +328,7 @@ test('Bitget execution obtains server FX and rejects unavailable or stale conver
         '/api/v2/mix/account/accounts': [{ marginCoin: 'USDT', available: '10000', accountEquity: '100000', posMode: 'one_way_mode' }],
         '/api/v2/mix/position/all-position': [], '/api/v2/mix/order/orders-pending': { entrustedList: [] },
         '/api/v2/mix/market/contracts': [{ symbol: 'BTCUSDT', minTradeNum: '0.00001', sizeMultiplier: '0.00001', minTradeUSDT: '5',
+          quoteCoin: 'USDT', supportMarginCoins: ['USDT'], minLever: '1', maxLever: '100',
           symbolStatus: 'normal', takerFeeRate: '0.0005', maxMarketOrderQty: '10' }],
         '/api/v2/mix/market/ticker': [{ symbol: 'BTCUSDT', markPrice: '100000', ts: now }],
         '/api/v2/mix/market/merge-depth': { bids: [[99999, 10], [99998, 10]], asks: [[100001, 10], [100002, 10]], ts: now },
@@ -341,6 +342,51 @@ test('Bitget execution obtains server FX and rejects unavailable or stale conver
     assert.equal(fxReads, 1);
     assert.equal(mutations, 0);
     assert.equal(result.submissionStartedAt ?? null, null);
+  }
+});
+
+test('Bitget invalid contract or quote evidence blocks all exchange mutations before submission intent', async () => {
+  const contract = { symbol: 'BTCUSDT', quoteCoin: 'USDT', supportMarginCoins: ['USDT'], minLever: '1', maxLever: '100',
+    minTradeNum: '0.00001', sizeMultiplier: '0.00001', minTradeUSDT: '5',
+    symbolStatus: 'normal', takerFeeRate: '0.0005', maxMarketOrderQty: '10' };
+  const cases = [
+    { contracts: [{ ...contract, minTradeUSDT: undefined }], code: /BITGET_CONTRACT_RULES_UNAVAILABLE/ },
+    { contracts: [{ ...contract, maxMarketOrderQty: true }], code: /BITGET_CONTRACT_RULES_UNAVAILABLE/ },
+    { contracts: [contract, contract], code: /BITGET_CONTRACT_RULES_UNAVAILABLE/ },
+    { contracts: [{ ...contract, symbol: 'ETHUSDT' }], code: /BITGET_CONTRACT_RULES_UNAVAILABLE/ },
+    { contracts: [{ ...contract, symbolStatus: 'maintain' }], code: /BITGET_CONTRACT_NOT_TRADABLE/ },
+    { ticker: [{ symbol: 'ETHUSDT', markPrice: '100000' }], code: /BITGET_TICKER_IDENTITY_INVALID/ },
+    { ticker: [{ symbol: 'BTCUSDT', markPrice: '100000' }, { symbol: 'BTCUSDT', markPrice: '100000' }], code: /BITGET_TICKER_IDENTITY_INVALID/ },
+    { ticker: [{ symbol: 'BTCUSDT', markPrice: true }], code: /BITGET_REFERENCE_PRICE_INVALID/ },
+  ];
+  for (const invalid of cases) {
+    const { repository, approved, order } = await setup({ exchange: 'bitget', market: 'USDT-FUTURES', symbol: 'BTCUSDT',
+      side: 'long', quantity: 0.00014, quoteAmount: null, leverage: 2, marginMode: 'isolated' });
+    let mutations = 0;
+    globalThis.fetch = async (request, init) => {
+      const url = new URL(String(request));
+      if ((init?.method ?? 'GET') !== 'GET') { mutations++; throw new Error('UNEXPECTED_MUTATION'); }
+      const json = (body: unknown) => new Response(JSON.stringify(body));
+      const now = Date.now();
+      if (url.hostname === 'api.upbit.com' && url.pathname === '/v1/ticker' && url.searchParams.get('markets') === 'KRW-USDT') {
+        return json([{ market: 'KRW-USDT', trade_price: 1400, timestamp: now }]);
+      }
+      assert.equal(url.hostname, 'api.bitget.com');
+      const data: Record<string, unknown> = {
+        '/api/v2/mix/account/accounts': [{ marginCoin: 'USDT', available: '10000', accountEquity: '100000', posMode: 'one_way_mode' }],
+        '/api/v2/mix/position/all-position': [], '/api/v2/mix/order/orders-pending': { entrustedList: [] },
+        '/api/v2/mix/market/contracts': invalid.contracts ?? [contract],
+        '/api/v2/mix/market/ticker': invalid.ticker ?? [{ symbol: 'BTCUSDT', markPrice: '100000', ts: now }],
+        '/api/v2/mix/market/merge-depth': { bids: [[99999, 10]], asks: [[100001, 10]], ts: now },
+      };
+      assert.ok(Object.hasOwn(data, url.pathname), `unexpected isolated fixture request: ${url.pathname}`);
+      return json({ code: '00000', data: data[url.pathname] });
+    };
+    const result = await new TradeExecutionService(repository).execute(USER_ID, approved, order);
+    assert.equal(result.state, 'REJECTED');
+    assert.match(result.lastErrorCode ?? '', invalid.code);
+    assert.equal(result.submissionStartedAt ?? null, null);
+    assert.equal(mutations, 0);
   }
 });
 
