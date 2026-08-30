@@ -34,8 +34,9 @@ function requestUrl(input: RequestInfo | URL): URL | null {
 function isPortfolioHoldingsRead(input: RequestInfo | URL, init: RequestInit): boolean {
   if (requestMethod(input, init) !== 'GET') return false;
   const parsed = requestUrl(input);
-  if (parsed?.pathname.replace(/\/+$/u, '') !== '/rest/v1/portfolio_holdings') return false;
-  return parsed.searchParams.get('select') === '*';
+  const pathname = parsed?.pathname.replace(/\/+$/u, '') ?? '';
+  if (!pathname.endsWith('/rest/v1/portfolio_holdings')) return false;
+  return parsed?.searchParams.get('select') === '*';
 }
 
 function portfolioHoldingDataErrorResponse(response: Response, code: string, rowIndex: number | null): Response {
