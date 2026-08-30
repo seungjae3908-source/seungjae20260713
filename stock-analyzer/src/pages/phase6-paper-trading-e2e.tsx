@@ -117,9 +117,14 @@ const candle: NormalizedCandle = { timestamp: Date.parse('2026-08-02T02:45:00Z')
   quoteVolume: 10_000_000, timeframe: '15m', symbol: 'BTCUSDT', market: 'crypto-futures', source: 'fixture', isClosed: true, isDelayed: false, updatedAt: NOW };
 
 export default function Phase6PaperTradingE2EPage() {
-  const errorMode = new URLSearchParams(window.location.search).get('mode') === 'error';
+  const mode = new URLSearchParams(window.location.search).get('mode');
+  const errorMode = mode === 'error';
   const fixtureExecute = errorMode
     ? async () => { await new Promise((resolve) => setTimeout(resolve, 120)); throw new Error('모의거래 fixture 오류입니다.'); }
+    : mode === 'deferred' ? async (state: PaperTradingState, action: PaperTradingAction) => {
+      await new Promise<void>((resolve) => window.addEventListener('phase6-release-execution', () => resolve(), { once: true }));
+      return execute(state, action);
+    }
     : execute;
   return <PaperTradingPanel compact execute={fixtureExecute} loadMarket={async () => snapshot} loadRules={async () => rules} loadCandle={async () => candle} />;
 }
