@@ -8,9 +8,8 @@ import { BottomNav } from "@/components/bottom-nav";
 import { CoinInfo } from "@/pages/stock-info";
 import {
   displayStockName,
-  formatAppPercent,
-  formatAppPrice,
 } from "@/lib/stock-display";
+import { formatPercent as formatAppPercent, formatPrice as formatAppPrice } from '@/lib/format';
 import { classifyStock, stockClassBadgeClass } from "@/lib/stock-classifier";
 import { readWatchlistItems, WATCHLIST_CHANGE_EVENT } from "@/lib/stock-display";
 import { cn } from "@/lib/utils";
@@ -51,7 +50,7 @@ interface StockRow {
     confidence?: number | null;
   } | null;
 
-  classification: ClassificationLabel;
+  classification: ClassificationLabel | null;
   raw?: AnyObj;
 }
 
@@ -87,7 +86,7 @@ const RANK_TABS: Array<{
   },
   {
     key: "recommended",
-    label: "AI추천",
+    label: "규칙 평가",
   },
   {
     key: "gainers",
@@ -126,7 +125,7 @@ function toNumber(value: unknown): number | null {
 function absoluteNumber(value: unknown): number | null {
   const parsed = toNumber(value);
 
-  return parsed == null ? null : Math.abs(parsed);
+  return parsed == null || parsed < 0 ? null : parsed;
 }
 
 function firstValue(row: AnyObj, keys: string[]): unknown {
@@ -214,13 +213,15 @@ function marketFromRow(row: AnyObj, fallback: Market): Market {
 }
 
 function scoreOf(row: AnyObj): number | null {
-  return toNumber(
+  if (row?.ratingStatus === 'MISSING_EVIDENCE') return null;
+  const score = toNumber(
     row?.rating?.score ??
       row?.aiRating?.score ??
       row?.analysis?.score ??
       row?.score ??
       row?.aiScore,
   );
+  return score != null && score >= 0 && score <= 100 ? score : null;
 }
 
 function explicitClassification(row: AnyObj): ClassificationLabel | null {
@@ -245,7 +246,8 @@ function explicitClassification(row: AnyObj): ClassificationLabel | null {
   return null;
 }
 
-function classifyRow(row: AnyObj, score: number | null): ClassificationLabel {
+function classifyRow(row: AnyObj, score: number | null): ClassificationLabel | null {
+  if (score == null || [row?.marketCap, row?.per, row?.pbr, row?.roe, row?.debtRatio].some((value) => toNumber(value) == null)) return null;
   const explicit = explicitClassification(row);
   if (explicit) return explicit;
 
@@ -623,9 +625,8 @@ async function fetchAiScorePool(
     ...firstArray(data, ["risky"]),
   ];
 
-  return normalizeRows(merged, market).filter(
-    (row) => row.rating?.score != null,
-  );
+  // Market-cap and price lists remain useful without recommendation evidence.
+  return normalizeRows(merged, market);
 }
 
 async function fetchExistingAiRecommendedRows(
@@ -634,6 +635,10 @@ async function fetchExistingAiRecommendedRows(
   signal?: AbortSignal,
 ): Promise<StockRow[]> {
   const data = await fetchJson(`/api/market/movers?market=${market}`, signal);
+
+  if (data.recommendationStatus === 'MISSING_EVIDENCE') {
+    throw new Error('MISSING_RECOMMENDATION_EVIDENCE');
+  }
 
   const rows = normalizeRows(
     firstArray(data, ["recommended", "picks", "aiRecommended"]),
@@ -651,11 +656,13 @@ async function fetchExistingAiRecommendedRows(
 
       reason:
         row.reason ||
-        `AI 점수 ${Math.round(row.rating?.score ?? 0)}점 기준 추천 종목입니다.`,
+        (row.rating?.score != null
+          ? `규칙 점수 ${Math.round(row.rating.score)}점입니다. 성공확률이 아닙니다.`
+          : '평가 근거 부족'),
     }));
 
   if (!rows.length) {
-    throw new Error("기존 AI 추천 종목이 없습니다.");
+    throw new Error('MISSING_RECOMMENDATION_EVIDENCE');
   }
 
   return rows;
@@ -739,7 +746,7 @@ async function fetchKiwoomAiRecommendedRows(
 
       classification: scored.classification,
 
-      reason: `AI 점수 ${Math.round(
+      reason: `규칙 점수 ${Math.round(
         score,
       )}점 · 키움증권 거래대금·거래량·급상승 후보입니다.`,
     });
@@ -767,7 +774,7 @@ async function fetchKiwoomAiRecommendedRows(
 
       reason:
         row.reason ||
-        `AI 점수 ${Math.round(
+        `규칙 점수 ${Math.round(
           row.rating?.score ?? 0,
         )}점 기준 보충 추천 종목입니다.`,
     });
@@ -780,7 +787,7 @@ async function fetchKiwoomAiRecommendedRows(
   }));
 
   if (!result.length) {
-    throw new Error("키움 후보와 AI 점수가 일치하는 종목이 없습니다.");
+    throw new Error("키움 후보와 규칙 점수가 일치하는 종목이 없습니다.");
   }
 
   return result;
@@ -791,25 +798,7 @@ async function fetchSingleMarketAiRecommendedRows(
   limit = 30,
   signal?: AbortSignal,
 ): Promise<StockRow[]> {
-  try {
-    return await fetchKiwoomAiRecommendedRows(market, limit, signal);
-  } catch (error) {
-    if (isSearchRequestAbort(error, signal)) {
-      throw error;
-    }
-    console.error(`${market} 키움 AI 추천 실패`, error);
-
-    try {
-      return await fetchExistingAiRecommendedRows(market, limit, signal);
-    } catch (fallbackError) {
-      if (isSearchRequestAbort(fallbackError, signal)) {
-        throw fallbackError;
-      }
-      console.error(`${market} 기존 AI 추천 실패`, fallbackError);
-
-      return fetchFallbackMoverRows(market, "recommended", signal);
-    }
-  }
+  return fetchExistingAiRecommendedRows(market, limit, signal);
 }
 
 async function fetchMoverRows(
@@ -930,8 +919,8 @@ function rowDescription(row: StockRow, rank: RankType): string {
 
   if (rank === "recommended") {
     return row.rating?.score != null
-      ? `AI 점수 ${Math.round(row.rating.score)}점 기준 추천 종목입니다.`
-      : "AI 분석 기준 추천 종목입니다.";
+      ? `규칙 점수 ${Math.round(row.rating.score)}점입니다. 성공확률이 아닙니다.`
+      : "검증된 평가 근거가 부족합니다.";
   }
 
   if (rank === "volume") {
@@ -1097,6 +1086,10 @@ export default function SearchPage() {
     : rankingQuery.isLoading;
 
   const isError = trimmedQuery ? searchQuery.isError : rankingQuery.isError;
+  const activeQuery = trimmedQuery ? searchQuery : rankingQuery;
+  const missingRecommendation = activeQuery.error instanceof Error
+    && activeQuery.error.message === 'MISSING_RECOMMENDATION_EVIDENCE';
+  const isOffline = activeQuery.fetchStatus === 'paused';
 
   const handleAssetChange = (nextAsset: AssetTab) => {
     setAsset(nextAsset);
@@ -1105,28 +1098,28 @@ export default function SearchPage() {
 
     if (nextAsset === "stock") {
       setMarket("KR");
-      navigate(`/search?asset=stock&market=KR&rank=${rank}`);
+      navigate(`/market-rankings?asset=stock&market=KR&rank=${rank}`);
       return;
     }
 
-    navigate("/search?asset=coin&coinMarket=spot");
+    navigate("/market-rankings?asset=coin&coinMarket=spot");
   };
 
   const handleMarketChange = (nextMarket: Market) => {
     setMarket(nextMarket);
 
-    navigate(`/search?asset=stock&market=${nextMarket}&rank=${rank}`);
+    navigate(`/market-rankings?asset=stock&market=${nextMarket}&rank=${rank}`);
   };
 
   const handleRankChange = (nextRank: RankType) => {
     setRank(nextRank);
 
-    navigate(`/search?asset=stock&market=${market}&rank=${nextRank}`);
+    navigate(`/market-rankings?asset=stock&market=${market}&rank=${nextRank}`);
   };
 
   const openDetail = (row: StockRow) => {
     const back = encodeURIComponent(
-      `/search?asset=stock&market=${market}&rank=${rank}`,
+      `/market-rankings?asset=stock&market=${market}&rank=${rank}`,
     );
 
     navigate(`/stock/${encodeURIComponent(row.ticker)}?back=${back}`);
@@ -1232,7 +1225,7 @@ export default function SearchPage() {
       </header>
 
       {asset === "coin" ? (
-        <CoinInfo nowMs={nowMs} basePath="/search" />
+        <CoinInfo nowMs={nowMs} basePath="/market-rankings" />
       ) : (
       <main className="flex-none px-4 pb-24 pt-4">
         <div className="mb-3 flex items-end justify-between gap-3">
@@ -1253,7 +1246,7 @@ export default function SearchPage() {
           )}
         </div>
 
-        {isLoading && (
+        {isLoading && !isOffline && (
           <section className="rounded-3xl border border-card-border bg-card p-8 text-center">
             <p className="text-sm font-bold text-muted-foreground">
               종목 데이터를 불러오는 중...
@@ -1261,11 +1254,20 @@ export default function SearchPage() {
           </section>
         )}
 
-        {isError && (
+        {isOffline ? (
+          <section role="status" className="rounded-3xl border border-card-border bg-card p-6 text-center text-sm">
+            오프라인입니다. 연결이 복구되면 다시 조회합니다.
+          </section>
+        ) : null}
+
+        {isError && !isOffline && (
           <section className="rounded-3xl border border-destructive/30 bg-card p-8 text-center">
             <p className="break-keep text-sm font-bold text-destructive">
-              종목 데이터를 불러오지 못했습니다. 잠시 후 새로고침해 주세요.
+              {missingRecommendation
+                ? '검증된 평가 근거가 부족합니다. 시세 목록은 다른 정렬에서 확인할 수 있습니다.'
+                : '종목 데이터 공급자 응답을 확인할 수 없습니다.'}
             </p>
+            <button type="button" className="mt-3 min-h-11 rounded-xl border px-4 text-sm font-bold" onClick={() => { void activeQuery.refetch(); }}>다시 조회</button>
           </section>
         )}
 
@@ -1285,7 +1287,7 @@ export default function SearchPage() {
               row.market,
             );
 
-            const positive = (row.changePercent ?? 0) >= 0;
+            const positive = row.changePercent != null && row.changePercent >= 0;
 
             return (
               <button
@@ -1300,7 +1302,7 @@ export default function SearchPage() {
                   </div>
 
                   <div className="min-w-0">
-                    <div className="flex min-w-0 items-center gap-2">
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
                       <p className="truncate text-base font-extrabold">
                         {stockName}
                       </p>
@@ -1309,10 +1311,10 @@ export default function SearchPage() {
                         className={cn(
                           "shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-extrabold",
 
-                          stockClassBadgeClass(row.classification),
+                          row.classification ? stockClassBadgeClass(row.classification) : 'border-border text-muted-foreground',
                         )}
                       >
-                        {row.classification}
+                        {row.classification ?? '평가 근거 부족'}
                       </span>
                     </div>
 
@@ -1321,7 +1323,7 @@ export default function SearchPage() {
                     </p>
                   </div>
 
-                  <div className="shrink-0 text-right">
+                  <div className="max-w-[120px] shrink-0 break-all text-right">
                     <p className="text-sm font-extrabold">
                       {formatAppPrice(row.price, row.currency)}
                     </p>
@@ -1330,10 +1332,10 @@ export default function SearchPage() {
                       className={cn(
                         "mt-1 flex items-center justify-end gap-1 text-xs font-extrabold",
 
-                        positive ? "text-positive" : "text-destructive",
+                        row.changePercent == null ? 'text-muted-foreground' : positive ? "text-positive" : "text-destructive",
                       )}
                     >
-                      {positive ? (
+                      {row.changePercent == null ? null : positive ? (
                         <TrendingUp className="h-3.5 w-3.5" />
                       ) : (
                         <TrendingDown className="h-3.5 w-3.5" />

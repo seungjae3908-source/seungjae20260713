@@ -5,7 +5,8 @@ import { ScoreRing } from '@/components/score-ring';
 import { useWatchlist } from '@/hooks/use-watchlist';
 import { formatPrice, formatPercent } from '@/lib/format';
 import { changeTone, ratingTone, toneText } from '@/lib/labels';
-import type { QuoteRow, RiskLevel } from '@/lib/api';
+import type { RiskLevel } from '@/lib/api';
+import { quoteRating, type QuoteEvidenceRow } from '@/lib/quote-row-evidence';
 import { cn } from '@/lib/utils';
 
 const RISK_KO: Record<RiskLevel, string> = { LOW: '낮음', MEDIUM: '보통', HIGH: '높음' };
@@ -26,10 +27,11 @@ function Level({ label, value, tone }: { label: string; value?: number; tone: st
   );
 }
 
-export function RecommendationCard({ stock }: { stock: QuoteRow }) {
+export function RecommendationCard({ stock }: { stock: QuoteEvidenceRow }) {
   const { isWatchlisted, toggle } = useWatchlist();
   const watched = isWatchlisted(stock.ticker);
   const cTone = changeTone(stock.changePercent);
+  const rating = quoteRating(stock);
 
   return (
     <Link
@@ -51,7 +53,7 @@ export function RecommendationCard({ stock }: { stock: QuoteRow }) {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="break-keep font-semibold leading-relaxed">{stock.name}</span>
-            <RatingBadge rating={stock.rating.rating} />
+            {rating ? <RatingBadge rating={rating.rating} /> : <span className="text-xs text-muted-foreground">평가 근거 부족</span>}
           </div>
           <div className="text-xs text-muted-foreground">{stock.ticker}</div>
         </div>
@@ -59,17 +61,17 @@ export function RecommendationCard({ stock }: { stock: QuoteRow }) {
           <div className="font-mono text-sm font-semibold tabular-nums">{formatPrice(stock.price, stock.currency)}</div>
           <div className={cn('font-mono text-xs tabular-nums', toneText(cTone))}>{formatPercent(stock.changePercent)}</div>
         </div>
-        <ScoreRing score={stock.rating.score} tone={ratingTone(stock.rating.rating)} size={48} label="AI" />
+        {rating ? <ScoreRing score={rating.score} tone={ratingTone(rating.rating)} size={48} label="규칙" /> : null}
       </div>
 
-      {(stock.entry != null || stock.take1 != null) && (
+      {rating && (stock.entry != null || stock.take1 != null) ? (
         <div className="mt-3 grid grid-cols-4 gap-1.5">
           <Level label="진입가" value={stock.entry} tone="text-foreground" />
           <Level label="1차 익절" value={stock.take1} tone="text-positive" />
           <Level label="2차 익절" value={stock.take2} tone="text-positive" />
           <Level label="손절가" value={stock.stop} tone="text-destructive" />
         </div>
-      )}
+      ) : null}
 
       <div className="mt-3 flex items-center justify-between">
         {stock.riskLevel ? (
