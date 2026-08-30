@@ -30,6 +30,7 @@ async function mockApprovalApi(page: Page, options: ApprovalApiOptions = {}) {
   await page.route(/\/api\/trade-automation\/plans\/[^/]+\/approval-status(?:\?.*)?$/, async (route) => {
     counts.status += 1;
     const invalid = options.invalidateAfterFirstStatus === true && counts.status > 1;
+    const approvalExpiresAt = new Date(Date.now() + 5 * 60_000).toISOString();
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -39,7 +40,7 @@ async function mockApprovalApi(page: Page, options: ApprovalApiOptions = {}) {
           state: invalid ? 'EXPIRED' : 'APPROVAL_PENDING',
           signalState: invalid ? 'INVALIDATED' : 'READY_FOR_APPROVAL',
           signalInvalidationReason: invalid ? 'SIGNAL_CORE_CONDITION_BROKEN' : null,
-          approvalExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+          approvalExpiresAt,
           updatedAt: new Date().toISOString(),
         },
         approval: {
@@ -47,7 +48,7 @@ async function mockApprovalApi(page: Page, options: ApprovalApiOptions = {}) {
           signalState: invalid ? 'INVALIDATED' : 'READY_FOR_APPROVAL',
           planState: invalid ? 'EXPIRED' : 'APPROVAL_PENDING',
           reasonCode: invalid ? 'SIGNAL_INVALIDATED' : null,
-          expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+          expiresAt: approvalExpiresAt,
           lastValidatedAt: new Date().toISOString(),
         },
         orderSubmitted: false,

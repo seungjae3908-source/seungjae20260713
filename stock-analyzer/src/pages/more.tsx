@@ -15,6 +15,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
+import { BackupSettings } from '@/components/backup-settings';
 import { CenteredPageHeader } from '@/components/centered-page-header';
 import { useSettings, type AiVerbosity, type ScannerMode, type ThemeMode } from '@/lib/settings';
 import { cn } from '@/lib/utils';
@@ -248,6 +249,8 @@ function DetailPanel({ section, navigate }: { section: SettingsSection; navigate
       ) : null}
 
       {section.id === 'advanced' ? (
+        <>
+        <BackupSettings />
         <div className="space-y-3 rounded-2xl border border-card-border bg-card/70 p-4">
           <p className="text-xs font-bold leading-5 text-muted-foreground">이 브라우저의 화면 설정만 초기화합니다.</p>
           <button
@@ -259,6 +262,7 @@ function DetailPanel({ section, navigate }: { section: SettingsSection; navigate
             화면 설정 초기화
           </button>
         </div>
+        </>
       ) : null}
     </div>
   );
