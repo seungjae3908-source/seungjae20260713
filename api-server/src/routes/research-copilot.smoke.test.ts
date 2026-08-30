@@ -7,6 +7,9 @@ import { createResearchCopilotRouter } from './research-copilot';
 import { ResearchCopilotService } from '../services/research-copilot.service';
 import { createDefaultStrategyPromotionService } from '../services/strategy-promotion.service';
 import { ResearchBundleService } from '../services/research-bundle.service';
+import type { ResearchBundleResolution } from '../services/research-bundle.contract';
+import { researchBundleFixture, AUTHORITATIVE_NOW_MS } from '../services/research-bundle.test-fixtures.mjs';
+import { runOnePassCandidateBacktestV1 } from '../../../market-prediction-lab/src/research-tournament-engine-v1.js';
 
 test('HTTP admin boundary rejects other members, blocks injected instructions and never calls AI on GET', async () => {
   const previousUrl = process.env.SUPABASE_URL, previousKey = process.env.SUPABASE_ANON_KEY;
@@ -64,4 +67,47 @@ test('HTTP admin boundary rejects other members, blocks injected instructions an
     if (previousKey === undefined) delete process.env.SUPABASE_ANON_KEY; else process.env.SUPABASE_ANON_KEY = previousKey;
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   }
+});
+
+test('admin HTTP validates canonical TEST_ONLY bundle and submits exactly once to the real #690 executor', async () => {
+  const fixture = researchBundleFixture(), receipts = new Map<string, ResearchBundleResolution>();
+  let calls = 0;
+  const bundles = new ResearchBundleService({ readCanonicalBundle: async () => fixture.bundle,
+    allowTestEvidence: true, now: () => AUTHORITATIVE_NOW_MS,
+    submissions: {
+      reserve: async (key, receipt) => {
+        const previous = receipts.get(key);
+        if (previous) return { acquired: false, receipt: previous };
+        receipts.set(key, receipt); return { acquired: true, receipt };
+      },
+      complete: async (key, receipt) => { receipts.set(key, receipt); },
+    },
+    runBacktest: input => { calls += 1; return runOnePassCandidateBacktestV1(input); },
+  });
+  const app = express(); app.use(express.json());
+  app.use((req: AuthenticatedRequest, _res, next) => {
+    req.member = { id: 'TEST_ONLY_ADMIN', login_name: 'fixture', display_name: 'fixture', role: 'admin', membership_level: 'admin', status: 'approved', is_active: true };
+    req.accessToken = 'TEST_ONLY'; next();
+  });
+  app.use('/copilot', createResearchCopilotRouter(undefined, bundles));
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise<void>(resolve => server.once('listening', resolve));
+  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/copilot`;
+  const headers = { 'Content-Type': 'application/json' };
+  try {
+    const validation = await fetch(url + '/validate-dsl', { method: 'POST', headers, body: JSON.stringify(fixture.dsl) });
+    assert.equal(validation.status, 200);
+    const validated = await validation.json();
+    assert.equal(validated.bundle.researchBundleReady, true); assert.equal(calls, 0);
+    const body = JSON.stringify({ dsl: fixture.dsl, bundleDigest: validated.bundle.bundleDigest, strategyIdentityDigest: validated.bundle.strategyIdentityDigest });
+    for (let i = 0; i < 2; i += 1) {
+      const response = await fetch(url + '/submit-backtest', { method: 'POST', headers, body });
+      assert.equal(response.status, 200); const result = await response.json();
+      assert.equal(result.backtestStatus, 'COMPLETED'); assert.equal(result.backtesterCalls, 1);
+      assert.equal(result.oosStatus, 'NOT_EVALUATED'); assert.equal(result.wfStatus, 'NOT_EVALUATED');
+      assert.equal(result.holdoutStatus, 'LOCKED'); assert.equal(result.promotionEligible, false);
+      assert.equal(result.evidenceCredit, 0);
+    }
+    assert.equal(calls, 1);
+  } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 });
