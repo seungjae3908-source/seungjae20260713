@@ -4,13 +4,15 @@ export type { CopilotSnapshot, CopilotReview, CopilotTask, DslValidation };
 
 async function request<T>(path: string, init: RequestInit, validate: (value: unknown) => boolean): Promise<T> {
   const response = await authorizedFetch('/api/admin/research/copilot' + path, init);
-  const body: unknown = await response.json();
   if (!response.ok) {
     if (response.status === 401 || response.status === 403) throw new Error('관리자 권한이 필요합니다.');
     if (response.status === 409) throw new Error('증거가 변경되었습니다. 새로고침 후 다시 검토하세요.');
     if (response.status === 429) throw new Error('검토 한도에 도달했습니다. 잠시 후 다시 요청하세요.');
     throw new Error('연구 기능을 사용할 수 없습니다. 데이터 또는 무료 공급자 상태를 확인하세요.');
   }
+  let body: unknown;
+  try { body = await response.json(); }
+  catch { throw new Error('연구 응답 계약을 확인할 수 없습니다.'); }
   if (!validate(body)) throw new Error('연구 응답 계약을 확인할 수 없습니다.');
   return body as T;
 }
@@ -24,6 +26,9 @@ function fields(value: unknown, names: string[]): boolean {
   const row = record(value);
   return names.every(name => typeof row[name] === 'string');
 }
+function count(value: unknown): boolean {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
 function safe(value: unknown): boolean {
   const authority = record(record(value).authority);
   return authority.executionAuthority === 'NONE' && authority.orderAllowed === false && authority.numericPerformanceAuthority === false &&
@@ -34,12 +39,13 @@ export function fetchCopilotSnapshot(signal?: AbortSignal): Promise<CopilotSnaps
   return request('', { signal }, value => {
     const row = record(value);
     return safe(row) && row.schemaVersion === 'research-copilot-v1' && Array.isArray(row.stages) &&
-      row.stages.every(stage => fields(stage, ['key', 'label', 'status', 'reason']) && Array.isArray(record(stage).observedTasks) &&
+      row.stages.every(stage => fields(stage, ['key', 'label', 'status', 'reason']) && ['READY', 'BLOCKED_DATA', 'MISSING_EVIDENCE'].includes(String(record(stage).status)) && count(record(stage).verifiedReceiptCount) && Array.isArray(record(stage).observedTasks) &&
         (record(stage).observedTasks as unknown[]).every(task => fields(task, ['id', 'status']))) &&
       Array.isArray(row.comparisons) && row.comparisons.every(item => fields(item, ['strategyId', 'market', 'direction', 'timeframe', 'costPolicyVersion'])) &&
       strings(row.missing_data) && strings(row.data_sources) && strings(record(row.health).reasons) && fields(row.health, ['status', 'source']) &&
       (row.timestamp === null || typeof row.timestamp === 'number' && Number.isFinite(row.timestamp) && Math.abs(row.timestamp) <= 8.64e15) &&
-      fields(row, ['status', 'freshness', 'evidenceDigest', 'next_action']) && fields(row.ai, ['reason']) && typeof record(row.ai).available === 'boolean';
+      fields(row, ['status', 'freshness', 'evidenceDigest', 'next_action']) && /^[a-f0-9]{64}$/.test(String(row.evidenceDigest)) &&
+      fields(row.ai, ['reason']) && typeof record(row.ai).available === 'boolean' && count(record(row.ai).calls) && count(record(row.ai).cacheHits);
   });
 }
 export function reviewCopilot(task: CopilotTask, evidenceDigest: string, signal?: AbortSignal): Promise<CopilotReview> {
@@ -47,6 +53,8 @@ export function reviewCopilot(task: CopilotTask, evidenceDigest: string, signal?
     const row = record(value);
     const review = record(row.review);
     return safe(row) && row.evidenceDigest === evidenceDigest && row.task === task && typeof review.summary === 'string' &&
+      row.confidence === null && row.signal === null && row.risk_reward === null && row.entry_zone === null && row.stop_loss === null &&
+      row.invalidation === null && Array.isArray(row.targets) && row.targets.length === 0 && row.approval_required === false &&
       fields(review, ['provider', 'model']) && strings(review.findings) && strings(row.missing_data) &&
       Array.isArray(review.hypotheses) && review.hypotheses.every(hypothesis => fields(hypothesis, ['hypothesisId', 'thesis', 'falsification']) && strings(record(hypothesis).requiredEvidence));
   });

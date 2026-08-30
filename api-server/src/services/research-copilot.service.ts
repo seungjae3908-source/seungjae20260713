@@ -29,7 +29,7 @@ const STAGES: Array<[string, string, RegExp]> = [
   ['health', 'Strategy Health', /strategy.health/i],
 ];
 const CANONICAL_STAGE: Record<string, string> = {
-  candidate: 'RESEARCH_DESIGN', backtest: 'HISTORICAL_BACKTEST', oos: 'OUT_OF_SAMPLE',
+  backtest: 'HISTORICAL_BACKTEST', oos: 'OUT_OF_SAMPLE',
   'walk-forward': 'PURGED_WALK_FORWARD', holdout: 'FINAL_HOLDOUT', shadow: 'SHADOW',
 };
 function receiptAvailable(stage: PromotionStageEvidence, sourceSha: string, now: number): boolean {
@@ -37,7 +37,8 @@ function receiptAvailable(stage: PromotionStageEvidence, sourceSha: string, now:
   if (stage.status !== 'PASS' || stage.gateResult !== 'PASS' || stage.dataQuality !== 'VERIFIED' ||
       stage.sourceSha !== sourceSha || !/^[a-f0-9]{40}$/.test(sourceSha) || !stage.provenance.length) return false;
   if (!stage.validatedAt || !Number.isFinite(Date.parse(stage.validatedAt)) || Date.parse(stage.validatedAt) > now) return false;
-  if (stage.stage === 'RESEARCH_DESIGN') return true;
+  // A scanner profile is not a compiler-approved FormulaCandidate receipt.
+  if (stage.stage === 'RESEARCH_DESIGN') return false;
   if (!stage.datasetId || !stage.dataRange || !stage.provider || !stage.metrics) return false;
   const start = Date.parse(stage.dataRange.start), end = Date.parse(stage.dataRange.end);
   if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end || end > now) return false;
@@ -77,7 +78,7 @@ export function buildCopilotSnapshot(raw: unknown, now: number, promotions?: Str
       return taskId ? [{ id: taskId, status: task.timedOut === true ? 'TIMEOUT' : knownTaskStatus(task.status), observedAt: timestamp(cycle.generatedAt) }] : [];
     });
   });
-  const health = bindCanonicalStrategyHealth(safe ? root : {});
+  const health = bindCanonicalStrategyHealth(safe && freshness === 'FRESH' ? root : {});
   const stages: CopilotStage[] = STAGES.map(([key, label, pattern]) => {
     const verifiedReceiptCount = safe && freshness === 'FRESH'
       ? (promotions?.items ?? []).filter(item => item.stages.some(stage => stage.stage === CANONICAL_STAGE[key] && receiptAvailable(stage, item.identity.researchCodeSha, observedAt!))).length
@@ -102,7 +103,17 @@ export function buildCopilotSnapshot(raw: unknown, now: number, promotions?: Str
     researchCodeSha: item.identity.researchCodeSha,
     stages: item.stages.map(stage => ({ stage: stage.stage, status: stage.status, source: stage.source, sourceSha: stage.sourceSha, datasetId: stage.datasetId, sampleCount: stage.sampleCount })),
   })).sort((a, b) => a.strategyId.localeCompare(b.strategyId));
-  const evidence = { observedAt, freshness, safe, tasks, comparisons, health };
+  // A receipt can be revoked/corrected without changing its visible stage label.
+  // Bind the full canonical receipt material, but never send it to the AI.
+  const receiptDigest = digest(promotions?.items.map(item => ({ identity: item.identity, stages: item.stages.map(stage => {
+    const { observedAt: _pollTime, ...receipt } = stage;
+    // The canonical registry rebuilds its code-design row on every list call.
+    // Those wall-clock fields are not immutable empirical receipt timestamps.
+    return stage.stage === 'RESEARCH_DESIGN' && stage.provider === 'INTERNAL_CANONICAL_REGISTRY'
+      ? { ...receipt, startedAt: null, completedAt: null, validatedAt: null }
+      : receipt;
+  }) })) ?? []);
+  const evidence = { observedAt, freshness, safe, tasks, comparisons, health, receiptDigest };
   return {
     schemaVersion: 'research-copilot-v1', status: safe && freshness === 'FRESH' ? 'needs_context' : 'blocked',
     timestamp: observedAt, evidenceDigest: digest(evidence), data_sources: [SOURCE, 'strategy-promotion.service (identity only)'],
@@ -182,21 +193,32 @@ export class ResearchCopilotService {
     const cached = this.cache.get(key);
     if (cached) { this.cacheHits += 1; return { ...structuredClone(cached.result), cacheHit: true }; }
     const running = this.inFlight.get(key);
-    if (running) { this.cacheHits += 1; return { ...structuredClone(await running), cacheHit: true }; }
+    if (running) {
+      const result = await running;
+      this.cacheHits += 1;
+      return { ...structuredClone(result), cacheHit: true };
+    }
     const userKey = digest(userId);
     this.attemptTimes = this.attemptTimes.filter(attempt => now - attempt < CACHE_MS);
     if (this.inFlight.size > 0 || this.attemptTimes.length >= 4 || now - (this.lastAttempt.get(userKey) ?? -Infinity) < CACHE_MS) throw new ResearchDualFreeAiError('RESEARCH_AI_BUSY', 'bounded review budget exhausted');
     this.attemptTimes.push(now);
     if (this.lastAttempt.size >= MAX_CACHE) this.lastAttempt.delete(this.lastAttempt.keys().next().value!);
     this.lastAttempt.set(userKey, now);
-    const pending = this.invokeReview(snapshot, task, policy.provider);
-    this.inFlight.set(key, pending);
-    try {
-      const result = await pending;
+    const pending = this.invokeReview(snapshot, task, policy.provider).then(async result => {
+      const current = await this.snapshot();
+      if (current.evidenceDigest !== expectedDigest || current.status === 'blocked') {
+        throw new ResearchDualFreeAiError('EVIDENCE_CHANGED', 'evidence changed during review; refresh before retrying');
+      }
+      if (!current.ai.available || current.ai.provider !== policy.provider) {
+        throw new ResearchDualFreeAiError('AI_RESEARCH_UNAVAILABLE', 'provider policy changed during review');
+      }
       if (this.cache.size >= MAX_CACHE) this.cache.delete(this.cache.keys().next().value!);
       this.cache.set(key, { until: this.deps.now() + CACHE_MS, result: structuredClone(result) });
       return result;
-    } finally { this.inFlight.delete(key); }
+    });
+    this.inFlight.set(key, pending);
+    try { return await pending; }
+    finally { this.inFlight.delete(key); }
   }
 
   private async invokeReview(snapshot: CopilotSnapshot, task: CopilotTask, provider: ResearchFreeAiProvider): Promise<CopilotReview> {

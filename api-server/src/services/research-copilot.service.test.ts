@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ResearchCopilotService, buildCopilotSnapshot, researchProviderPolicy, validateCopilotDsl } from './research-copilot.service';
-import { createDefaultStrategyPromotionService } from './strategy-promotion.service';
+import { createDefaultStrategyPromotionService, StrategyPromotionService } from './strategy-promotion.service';
 import { runResearchDualFreeAiReview } from './research-dual-free-ai.service';
 import { validateChatMessage } from './ai-chat.service';
 
@@ -79,6 +79,48 @@ test('free entitlement, isolated route and allowed model are required without ch
   assert.equal(researchProviderPolicy({ RESEARCH_AI_FREE_TIER_CONFIRMED: 'true', AI_CHAT_PROVIDER: 'gemini', GEMINI_API_KEY: 'fixture', GROQ_API_KEY: 'fixture' }).provider, null);
   assert.equal(researchProviderPolicy({ RESEARCH_AI_FREE_TIER_CONFIRMED: 'true', AI_CHAT_PROVIDER: 'groq', GROQ_API_KEY: 'fixture', GROQ_MODEL: 'paid-model' }).provider, null);
   assert.equal(researchProviderPolicy({ RESEARCH_AI_FREE_TIER_CONFIRMED: 'true', AI_CHAT_PROVIDER: 'groq', GROQ_API_KEY: 'fixture' }).provider, 'groq');
+});
+test('receipt corrections invalidate evidence while registry polling timestamps do not', () => {
+  let polledAt = NOW;
+  const registry = new StrategyPromotionService({ sourceSha: 'b'.repeat(40), now: () => new Date(polledAt) });
+  const first = buildCopilotSnapshot(overviewFixture(), NOW, registry.list());
+  assert.equal(first.stages.find(stage => stage.key === 'candidate')?.verifiedReceiptCount, 0);
+  polledAt += 1_000;
+  const rows = structuredClone(registry.list());
+  assert.equal(buildCopilotSnapshot(overviewFixture(), polledAt, rows).evidenceDigest, first.evidenceDigest);
+  const stage = rows.items[0].stages.find(row => row.stage === 'OUT_OF_SAMPLE');
+  assert(stage);
+  for (const correction of [{ dataQuality: 'PARTIAL' as const }, { validatedAt: new Date(NOW).toISOString() }, { provenance: ['corrected receipt binding'] }, { metrics: { expectedValue: -1 } }]) {
+    const corrected = structuredClone(rows);
+    Object.assign(corrected.items[0].stages.find(row => row.stage === stage.stage)!, correction);
+    assert.notEqual(buildCopilotSnapshot(overviewFixture(), polledAt, corrected).evidenceDigest, first.evidenceDigest);
+  }
+});
+test('all duplicate waiters reject evidence changes during AI invocation without caching old explanations', async () => {
+  let complete: (value: { answer: string; model: string }) => void = () => { throw new Error('invocation not started'); };
+  let started: () => void = () => { throw new Error('start gate missing'); };
+  const invocationStarted = new Promise<void>(resolve => { started = resolve; });
+  const overview = overviewFixture();
+  const copilot = new ResearchCopilotService({
+    loadOverview: async () => overview, promotions, now: () => NOW,
+    policy: () => ({ provider: 'groq', reason: 'TEST_ONLY' }),
+    invoke: () => new Promise(resolve => { complete = resolve; started(); }),
+  });
+  const initial = await copilot.snapshot();
+  const outcomes = Promise.allSettled([
+    copilot.review('admin', 'propose_candidates', initial.evidenceDigest),
+    copilot.review('admin', 'propose_candidates', initial.evidenceDigest),
+  ]);
+  await invocationStarted;
+  overview.safety.liveTrading = true;
+  complete({ answer, model: 'openai/gpt-oss-20b' });
+  for (const outcome of await outcomes) {
+    assert.equal(outcome.status, 'rejected');
+    if (outcome.status === 'rejected') assert.match(String(outcome.reason), /evidence changed during review/);
+  }
+  await assert.rejects(copilot.review('admin', 'propose_candidates', initial.evidenceDigest), /refresh evidence/);
+  assert.equal((await copilot.snapshot()).ai.calls, 1);
+  assert.equal((await copilot.snapshot()).ai.cacheHits, 0);
 });
 test('deduplicates concurrent and cached requests but isolates users and expires cache', async () => {
   let now = NOW; let calls = 0;
