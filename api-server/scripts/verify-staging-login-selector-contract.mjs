@@ -76,7 +76,7 @@ const observationIndex = spec.indexOf('activeLogoutObservations.set(page, observ
 const clickIndex = spec.indexOf('await logoutButton.click();');
 assert(visibleIndex >= 0 && observationIndex > visibleIndex && clickIndex > observationIndex, 'expected window must open only around an explicit visible logout-button click');
 assert(spec.includes('logoutObservation.candidates.push(diagnostic);'), 'matching logout aborts must be held as candidates first');
-assert(spec.includes("parsed.pathname === '/api/user-integrations'"), 'the personal integration drain must remain scoped to its exact API path');
+assert(spec.includes('return isLogoutScopedRead(request, expectedOrigin);'), 'read-only integration drain must reuse the exact enumerated same-origin GET classifier');
 assert(spec.includes('logoutObservation.logoutScopedReads.add(request);'), 'only an exact logout-scoped request observed during the explicit logout window may become a delayed candidate');
 assert(spec.includes('observation.logoutScopedReads.has(request)'), 'active abort classification must require exact request identity');
 assert(spec.includes('confirmedLogoutAbortRequests.get(request)'), 'delayed abort classification must require an exact confirmed request identity');
