@@ -72,6 +72,8 @@ const groups = {
     path.join(root, 'src/services/crypto-futures-directional-scanner.service.test.ts'),
     path.join(root, 'src/services/scanner-crypto-price-precision.service.test.ts'),
     path.join(root, 'src/services/market-intelligence-client.service.test.ts'),
+    path.join(root, 'src/services/market-intelligence-ai-analysis.service.test.ts'),
+    path.join(root, 'src/services/news-disclosure-market-intelligence.service.test.ts'),
     path.join(root, 'src/services/scanner-market-intelligence.service.test.ts'),
     path.join(root, 'src/lib/bounded-work-pool.test.ts'),
     path.join(root, 'src/lib/cache.test.ts'),
