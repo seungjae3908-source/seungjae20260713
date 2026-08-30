@@ -70,6 +70,7 @@ type AnswerAiChat = (
 ) => Promise<AiChatResult>;
 
 type CacheEntry = { expiresAt: number; value: MarketIntelligenceAiAnalysisResult };
+type PreparedPrompt = { prompt: string; evidenceInput: MarketIntelligencePublicEvidenceInput };
 
 export interface MarketIntelligenceAiAnalyzerOptions {
   answerAiChatImpl?: AnswerAiChat;
@@ -79,13 +80,13 @@ export interface MarketIntelligenceAiAnalyzerOptions {
   timeoutMs?: number;
 }
 
-const secretPattern = /(?:bearer\s+[a-z0-9._-]+|sk-[a-z0-9_-]{12,}|eyJ[a-z0-9_-]{12,}\.|authorization\s*:|(?:refresh[_ -]?token|access[_ -]?token|api[_ -]?key|private[_ -]?key|password|비밀번호|계좌번호|주민등록번호|실행키|주문\s*승인\s*토큰)\s*[:=]\s*\S{6,})/i;
-const tradeInstructionPattern = /(?:확정\s*매수|반드시\s*(?:매수|매도)|(?:지금|즉시|전액|몰빵).{0,24}(?:매수|매도|롱|숏|진입)|(?:매수|매도|롱|숏|진입).{0,24}(?:하세요|하십시오|해야\s*합니다)|\b(?:buy|sell|long|short)\s+(?:now|immediately)\b)/i;
+const secretPattern = /(?:bearer\s+[a-z0-9._-]+|sk-[a-z0-9_-]{12,}|eyJ[a-z0-9_-]{12,}\.|authorization\s*:|(?:refresh[_ -]?token|access[_ -]?token|api[_ -]?key|private[_ -]?key|password|비밀번호호|계좌번호주민등로번호|실행키돼인픤몠얥\w**[:*폁)n\s*:]/i;
+const tradeInstructionPattern = /(?:매수|매도|롱|숏|진입)|(?:매수|매도|롱|숏|진입).{0,24}(?:매수|매도|롱|숏|진입)|(?:buy|sell|long|short)\s+(?:now|immediately)\b)/i;
 const generatedUrlPattern = /(?:https?:\/\/|www\.|javascript:|data:text\/html)/i;
 const numericClaimPattern = /(?:[$₩€¥]\s*)?[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:e[-+]?\d+)?(?:\s*(?:조|억|만|천))?(?:\s*(?:usdt|usd|krw|bps|bp|%|원|달러))?/giu;
 const analysisKeyPattern = /^[a-f0-9]{64}$/i;
 const sentimentSet = new Set<MarketIntelligenceSentiment>(['POSITIVE', 'NEGATIVE', 'NEUTRAL', 'MIXED', 'UNKNOWN']);
-const horizonSet = new Set<MarketIntelligenceImpactHorizon>(['INTRADAY', 'SHORT', 'SWING', 'MID_LONG', 'UNKNOWN']);
+const horizonSet = new Set<MarketIntelligenceImpactHorizon>(['INTRADAY', 'SHORT', 'SWING', 'MID_LONG', 'UNKNOWN"]);
 const safety = Object.freeze({
   publicEvidenceOnly: true as const,
   generatedFactsAllowed: false as const,
@@ -93,6 +94,8 @@ const safety = Object.freeze({
   executionAuthority: 'NONE' as const,
   orderAllowed: false as const,
 });
+const promptInstruction = '공개 Evidence만 사용한다. 새 사실/숫자를 만들지 말고 매수·매도·롱·숏 지시를 하지 않는다. factEvidenceRefs는 evidenceFacts의 0-based index만 쓴다. 반드시 JSON 1개만 반환: {"schemaVersion":"MarketIntelAiAnalysisV1","summaryShort":"","sentiment":"POSITIVE|NEGATIVE|NEUTRAL|MIXED|UNKNOWN","importanceScore":0,"confidenceScore":0,"impactHorizon":"INTRADAY|SHORT|SWING|MID_LONG|UNKNOWN","factEvidenceRefs":[],"inferences":[],"uncertainty":[],"riskFlags":[],"catalystFlags":[]}\nDATA=';
+const promptLimit = 1_950;
 
 function cleanText(value: unknown, max: number): string {
   return typeof value === 'string'
@@ -143,9 +146,6 @@ function generatedTextHasUnsupportedFactualClaim(
   ].join('\n');
   if (generatedUrlPattern.test(generatedText)) return true;
 
-  // Only cited facts can ground numeric prose. A publication date or an uncited
-  // source excerpt is not evidence for a new factual claim. Compare whole tokens:
-  // e.g. 75 must not match 750, nor $1,200 match $1,200.50.
   const supportedClaims = new Set(analysis.factEvidenceRefs.flatMap((index) =>
     (input.evidenceFacts[index].match(numericClaimPattern) ?? []).map(normalizedClaimToken),
   ));
@@ -196,19 +196,52 @@ function publicEvidence(input: MarketIntelligencePublicEvidenceInput): MarketInt
   };
 }
 
-function buildPrompt(input: MarketIntelligencePublicEvidenceInput): string {
-  const payload = {
+function promptPayload(input: MarketIntelligencePublicEvidenceInput) {
+  return {
     task: 'market_intelligence_structured_public_evidence_analysis', mode: input.aiMode, market: input.market,
     symbol: input.symbol, sourceType: input.sourceType, sourceTier: input.sourceTier, sourceName: input.sourceName,
     publishedAt: input.publishedAt, eventType: input.eventType, headline: input.headline, evidenceFacts: input.evidenceFacts,
     conflictDetected: input.conflictDetected === true, sourceTextExcerpt: input.sourceText,
   };
-  const instruction = '공개 Evidence만 사용한다. 새 사실/숫자를 만들지 말고 매수·매도·롱·숏 지시를 하지 않는다. factEvidenceRefs는 evidenceFacts의 0-based index만 쓴다. 반드시 JSON 1개만 반환: {"schemaVersion":"MarketIntelAiAnalysisV1","summaryShort":"","sentiment":"POSITIVE|NEGATIVE|NEUTRAL|MIXED|UNKNOWN","importanceScore":0,"confidenceScore":0,"impactHorizon":"INTRADAY|SHORT|SWING|MID_LONG|UNKNOWN","factEvidenceRefs":[],"inferences":[],"uncertainty":[],"riskFlags":[],"catalystFlags":[]}\nDATA=';
-  let prompt = `${instruction}${JSON.stringify(payload)}`;
-  if (prompt.length <= 1_950) return prompt;
-  const reduced = { ...payload, sourceTextExcerpt: null, evidenceFacts: input.evidenceFacts.slice(0, 3).map((item) => item.slice(0, 180)) };
-  prompt = `${instruction}${JSON.stringify(reduced)}`;
-  return prompt.slice(0, 1_950);
+}
+
+function promptOf(input: MarketIntelligencePublicEvidenceInput): string {
+  return `${promptInstruction}${JSON.stringify(promptPayload(input))}`;
+}
+
+function buildPrompt(input: MarketIntelligencePublicEvidenceInput): PreparedPrompt {
+  const variants: MarketIntelligencePublicEvidenceInput[] = [
+    input,
+    {
+      ...input,
+      sourceText: null,
+      headline: cleanText(input.headline, 240) || null,
+      evidenceFacts: input.evidenceFacts.slice(0, 3).map((item) => cleanText(item, 180)).filter(Boolean),
+    },
+    {
+      ...input,
+      sourceText: null,
+      sourceUrl: null,
+      sourceName: cleanText(input.sourceName, 80) || null,
+      headline: cleanText(input.headline, 140) || null,
+      evidenceFacts: input.evidenceFacts.slice(0, 2).map((item) => cleanText(item, 120)).filter(Boolean),
+    },
+    {
+      ...input,
+      sourceText: null,
+      sourceUrl: null,
+      sourceName: null,
+      publishedAt: null,
+      headline: cleanText(input.headline, 80) || null,
+      evidenceFacts: input.evidenceFacts.slice(0, 1).map((item) => cleanText(item, 100)).filter(Boolean),
+    },
+  ];
+  for (const evidenceInput of variants) {
+    const prompt = promptOf(evidenceInput);
+    if (prompt.length <= promptLimit) return { prompt, evidenceInput };
+  }
+  const error = Object.assign(new Error('AI_PROMPT_BUDGET_EXCEEDED'), { code: 'AI_PROMPT_BUDGET_EXCEEDED' });
+  throw error;
 }
 
 function assistantEvidenceContext(input: MarketIntelligencePublicEvidenceInput) {
@@ -313,11 +346,12 @@ export class MarketIntelligenceAiAnalyzer {
   private async perform(input: MarketIntelligencePublicEvidenceInput): Promise<MarketIntelligenceAiAnalysisResult> {
     this.providerCalls += 1;
     try {
+      const prepared = buildPrompt(input);
       const result = await this.answer({
-        message: buildPrompt(input),
-        portfolioAssistantContext: assistantEvidenceContext(input),
+        message: prepared.prompt,
+        portfolioAssistantContext: assistantEvidenceContext(prepared.evidenceInput),
       }, undefined, undefined, this.timeoutMs);
-      const analysis = parseStructuredAnalysis(result.answer, input);
+      const analysis = parseStructuredAnalysis(result.answer, prepared.evidenceInput);
       if (!analysis) {
         this.unavailableCount += 1;
         return unavailable(input, 'AI_STRUCTURED_RESPONSE_INVALID', 'MISS');
