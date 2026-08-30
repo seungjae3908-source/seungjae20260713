@@ -10,6 +10,10 @@ import {
   wrapPaperForwardProviderWithEthV6Source,
 } from "./eth-v6-paper-forward-source-v1.js";
 import { wrapPaperForwardProviderWithMeaningfulSearch } from "./meaningful-search-scheduled-paper-provider-v1.js";
+import {
+  createNaturalPaperPublicPositionObservationProducer,
+  wrapPaperForwardProviderWithNaturalPositionObservations,
+} from "./natural-paper-public-position-observation-v1.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
@@ -242,6 +246,29 @@ function maybeAttachCanonicalAdmissionCutover({ provider, env, paperRuntimeForMa
   });
 }
 
+function maybeAttachNaturalPositionObservationProducer({
+  provider,
+  env,
+  authority,
+  collectYahoo,
+  collectUpbit,
+  collectBitget,
+  bitgetClient,
+  clock,
+  positionObservationProducerFactory,
+}) {
+  if (!truthy(env?.RESEARCH_PRODUCTION)) return provider;
+  const producer = positionObservationProducerFactory({
+    authority,
+    collectYahoo,
+    collectUpbit,
+    collectBitget,
+    bitgetClient,
+    clock,
+  });
+  return wrapPaperForwardProviderWithNaturalPositionObservations({ provider, producer });
+}
+
 export function createCanonicalPaperForwardEvidenceProvider({
   collectYahoo = collectYahooStockHistory,
   collectUpbit = collectUpbitSpotHistory,
@@ -253,6 +280,7 @@ export function createCanonicalPaperForwardEvidenceProvider({
   sleep = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
   env = process.env,
   naturalSourceFactory = createEthV6PaperForwardSource,
+  positionObservationProducerFactory = createNaturalPaperPublicPositionObservationProducer,
   paperRuntimeForMarket,
 } = {}) {
   if (!Number.isInteger(providerRetry?.maxAttempts) || providerRetry.maxAttempts < 1 || providerRetry.maxAttempts > 5
@@ -260,6 +288,7 @@ export function createCanonicalPaperForwardEvidenceProvider({
     throw new TypeError("bounded providerRetry configuration is required");
   }
   if (typeof naturalSourceFactory !== "function") throw new TypeError("naturalSourceFactory must be a function");
+  if (typeof positionObservationProducerFactory !== "function") throw new TypeError("positionObservationProducerFactory must be a function");
   const provider = Object.freeze({
     async collectPublicEvidence({ market, signal }) {
       const lane = authority[market];
@@ -295,7 +324,18 @@ export function createCanonicalPaperForwardEvidenceProvider({
     },
   });
   const naturalProvider = maybeAttachResearchNaturalSource({ provider, env, clock, bitgetClient, naturalSourceFactory });
-  return maybeAttachCanonicalAdmissionCutover({ provider: naturalProvider, env, paperRuntimeForMarket });
+  const canonicalProvider = maybeAttachCanonicalAdmissionCutover({ provider: naturalProvider, env, paperRuntimeForMarket });
+  return maybeAttachNaturalPositionObservationProducer({
+    provider: canonicalProvider,
+    env,
+    authority,
+    collectYahoo,
+    collectUpbit,
+    collectBitget,
+    bitgetClient,
+    clock,
+    positionObservationProducerFactory,
+  });
 }
 
 function sanitizeLane(market, evidence) {
