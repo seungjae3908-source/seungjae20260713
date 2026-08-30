@@ -192,6 +192,7 @@ export type TradingMarketSnapshot = {
   providerTimeOffsetMs?: number;
   source?: string;
   availableLiquidityKrw?: number | null;
+  currencyConversion?: { pair: 'USDT/KRW'; krwRate: number; source: string; asOf: string } | null;
   estimatedSlippagePercent?: number | null;
   estimatedFeePercent?: number | null;
   correlatedExposurePercent?: number | null;

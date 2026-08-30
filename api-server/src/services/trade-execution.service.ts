@@ -47,6 +47,7 @@ import {
   type PreSubmissionRiskResult,
 } from './trade-pre-submission-risk.service';
 import { getScannerSignalLifecycleSnapshot } from './scanner-signal-lifecycle.service';
+import { loadUsdtKrw } from './public-fx.service';
 import type {
   TradingOrder,
   TradingPlan,
@@ -494,13 +495,14 @@ export class TradeExecutionService {
     order: TradingOrder,
     credentials: BitgetCredentials,
   ) {
-    const [accounts, positions, pending, contracts, ticker, depth] = await Promise.all([
+    const [accounts, positions, pending, contracts, ticker, depth, fxQuote] = await Promise.all([
       sendExchangeRequest(BASE_URLS.bitget, prepareBitgetAccount(credentials), PREFLIGHT_TIMEOUT_MS).then(assertBitgetSuccess),
       sendExchangeRequest(BASE_URLS.bitget, prepareBitgetPositions(credentials), PREFLIGHT_TIMEOUT_MS).then(assertBitgetSuccess),
       sendExchangeRequest(BASE_URLS.bitget, prepareBitgetPendingOrders(credentials, plan.symbol), PREFLIGHT_TIMEOUT_MS).then(assertBitgetSuccess),
       sendExchangeRequest(BASE_URLS.bitget, prepareBitgetContractConfig(plan.symbol), PREFLIGHT_TIMEOUT_MS).then(assertBitgetSuccess),
       sendExchangeRequest(BASE_URLS.bitget, prepareBitgetTicker(plan.symbol), PREFLIGHT_TIMEOUT_MS).then(assertBitgetSuccess),
       sendExchangeRequest(BASE_URLS.bitget, prepareBitgetExecutionDepth(plan.symbol), PREFLIGHT_TIMEOUT_MS).then(assertBitgetSuccess),
+      loadUsdtKrw(),
     ]);
     const contractRows = Array.isArray(contracts) ? contracts.filter(isRecord) : [];
     const contract = contractRows.find((row) => String(row.symbol ?? '').toUpperCase() === plan.symbol.toUpperCase());
@@ -516,7 +518,7 @@ export class TradeExecutionService {
       expectedPlan: plan,
       order,
       snapshot: buildBitgetExecutionSnapshot({
-        plan, accounts, positions, ticker, depth, contract,
+        plan, accounts, positions, ticker, depth, contract, fxQuote,
         signal: this.signalSnapshot(userId, plan),
       }),
       serverLiveEnabled: liveExecutionEnabled('bitget'),
