@@ -41,7 +41,7 @@ async function loadUsdKrw(fetchImpl: FetchLike, now: Date): Promise<FxQuote> {
   };
 }
 
-async function loadUsdtKrw(fetchImpl: FetchLike, now: Date): Promise<FxQuote> {
+export async function loadUsdtKrw(fetchImpl: FetchLike = fetch, now?: Date): Promise<FxQuote> {
   const payload = await fetchJsonWithTimeout(
     fetchImpl,
     'https://api.upbit.com/v1/ticker?markets=KRW-USDT',
@@ -49,9 +49,10 @@ async function loadUsdtKrw(fetchImpl: FetchLike, now: Date): Promise<FxQuote> {
   const ticker = payload[0];
   const rate = finitePositive(ticker?.trade_price);
   const timestamp = ticker?.timestamp;
-  const iso = typeof timestamp === 'number' && Number.isSafeInteger(timestamp) && timestamp >= 1e12 && timestamp <= now.getTime()
+  const checkedAt = (now ?? new Date()).getTime();
+  const iso = typeof timestamp === 'number' && Number.isSafeInteger(timestamp) && timestamp >= 1e12 && timestamp <= checkedAt
     ? new Date(timestamp).toISOString() : null;
-  const time = quoteTimeEvidence(iso, 'iso', now.getTime());
+  const time = quoteTimeEvidence(iso, 'iso', checkedAt);
   if (!Array.isArray(payload) || payload.length !== 1 || ticker?.market !== 'KRW-USDT' || rate == null || !time.updatedAt) throw new Error('USDT_KRW_FX_UNAVAILABLE');
   return {
     currency: 'USDT',
