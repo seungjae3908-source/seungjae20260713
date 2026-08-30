@@ -42,8 +42,8 @@ function trade(index: number, overrides: Record<string, unknown> = {}) {
 
 const sample = (count = 12) => Array.from({ length: count }, (_, index) => trade(index));
 
-test('counts only closed valid trades', () => {
-  const result = calculatePaperJournalAnalytics([trade(0), { ...trade(1), status: 'open' }, { broken: true }]);
+test('counts only closed trades and excludes known open records', () => {
+  const result = calculatePaperJournalAnalytics([trade(0), { ...trade(1), status: 'open' }]);
   assert.equal(result.totalTrades, 1);
 });
 
@@ -222,14 +222,26 @@ test('detects positive gross but non-positive net after costs', () => {
   assert.equal((signal?.count ?? 0) >= 1, true);
 });
 
-test('invalid NaN trade is excluded', () => {
-  const result = calculatePaperJournalAnalytics([...sample(5), trade(9, { netPnl: Number.NaN })]);
-  assert.equal(result.totalTrades, 5);
+test('invalid NaN trade blocks a partial profitability claim', () => {
+  assert.throws(() => calculatePaperJournalAnalytics([...sample(5), trade(9, { netPnl: Number.NaN })]), /근거가 불완전/);
 });
 
-test('invalid Infinity trade is excluded', () => {
-  const result = calculatePaperJournalAnalytics([...sample(5), trade(9, { netPnl: Number.POSITIVE_INFINITY })]);
-  assert.equal(result.totalTrades, 5);
+test('invalid Infinity trade blocks a partial profitability claim', () => {
+  assert.throws(() => calculatePaperJournalAnalytics([...sample(5), trade(9, { netPnl: Number.POSITIVE_INFINITY })]), /근거가 불완전/);
+});
+
+test('missing costs, malformed source time and arithmetic overflow never become zero-cost profitability', () => {
+  for (const invalid of [{ entryFee: null }, { exitFee: undefined }, { slippageCost: '0' }, { fundingCost: null },
+    { grossPnl: undefined }, { filledAt: '2026-02-30T00:00:00Z' }, { closedAt: '2099-01-01T00:00:00Z' }]) {
+    assert.throws(() => calculatePaperJournalAnalytics([trade(0, invalid)]), /근거가 불완전/);
+  }
+  assert.throws(() => calculatePaperJournalAnalytics([trade(0, { netPnl: Number.MAX_VALUE }), trade(1, { netPnl: Number.MAX_VALUE })]), /계산 범위/);
+});
+
+test('conflict copies stay out of profitability and AI review samples', () => {
+  const rows = [trade(0), trade(1, { conflictCopyOf: 'internal-uuid-0', researchEvidenceEligible: false })];
+  assert.equal(calculatePaperJournalAnalytics(rows).totalTrades, 1);
+  assert.equal(createTradingReviewDataset(rows).sampleSize, 1);
 });
 
 test('review dataset never includes email', () => {
