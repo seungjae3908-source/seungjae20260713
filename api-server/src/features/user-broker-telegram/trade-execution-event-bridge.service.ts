@@ -24,7 +24,7 @@ export class TradeExecutionEventBridgeService {
     private readonly integrationService: UserBrokerTelegramService,
   ) {}
 
-  async syncUser(userId: string, membership: MemberTier = 'admin'): Promise<TradeExecutionEventBridgeResult> {
+  async syncUser(userId: string, membership: MemberTier = 'pending'): Promise<TradeExecutionEventBridgeResult> {
     const transitions = await this.tradingRepository.listEvents(userId);
     let mapped = 0;
     let inserted = 0;
