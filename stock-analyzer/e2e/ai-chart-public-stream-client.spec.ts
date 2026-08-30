@@ -145,3 +145,51 @@ test('missing WebSocket capability fails closed to polling fallback', () => {
   expect(client.snapshot().status).toBe('FALLBACK_POLLING');
   expect(client.snapshot().freshness).toBe('UNAVAILABLE');
 });
+
+test('foreign symbol events cannot enter the selected instrument or refresh its clock', () => {
+  for (const market of ['UPBIT', 'BITGET'] as const) {
+    const socket = new FakeSocket();
+    const trades: unknown[] = [];
+    const client = createAiChartPublicStreamClient({ market, symbol: market === 'UPBIT' ? 'KRW-BTC' : 'BTC-USDT', socketFactory: () => socket, now: () => 10_100, onTrade: (event) => trades.push(event) });
+    client.start();
+    socket.onopen?.({} as Event);
+    const data = market === 'UPBIT'
+      ? { type: 'trade', code: 'KRW-ETH', trade_price: 100, trade_volume: 1, trade_timestamp: 10_000 }
+      : { arg: { instType: 'USDT-FUTURES', channel: 'trade', instId: 'ETHUSDT' }, data: [{ ts: '10000', price: '100', size: '1', tradeId: 'foreign' }] };
+    socket.onmessage?.({ data: JSON.stringify(data) } as MessageEvent);
+    expect(trades).toEqual([]);
+    expect(client.snapshot().lastEventAtMs).toBeNull();
+    client.stop();
+  }
+});
+
+test('a delayed old socket close cannot tear down the replacement connection', () => {
+  const sockets = [new FakeSocket(), new FakeSocket()];
+  let index = 0;
+  const scheduled: Array<() => void> = [];
+  const client = createAiChartPublicStreamClient({ market: 'UPBIT', symbol: 'BTC', socketFactory: () => sockets[index++], now: () => 10_100, setTimeoutFn: (callback) => { scheduled.push(callback); return scheduled.length as unknown as ReturnType<typeof setTimeout>; }, clearTimeoutFn: () => undefined });
+  client.start();
+  sockets[0].onopen?.({} as Event);
+  sockets[0].onclose?.({} as CloseEvent);
+  scheduled.at(-1)?.();
+  sockets[1].onopen?.({} as Event);
+  sockets[0].onclose?.({} as CloseEvent);
+  expect(client.snapshot().status).toBe('LIVE_STREAM');
+  expect(client.snapshot().connectedAtMs).toBe(10_100);
+  expect(client.snapshot().reconnectAttempts).toBe(1);
+  client.stop();
+});
+
+test('a socket that never opens exits CONNECTING through bounded polling fallback', () => {
+  const socket = new FakeSocket();
+  const scheduled: Array<{ callback: () => void; delayMs: number }> = [];
+  const client = createAiChartPublicStreamClient({ market: 'UPBIT', symbol: 'BTC', socketFactory: () => socket, setTimeoutFn: (callback, delayMs) => { scheduled.push({ callback, delayMs }); return scheduled.length as unknown as ReturnType<typeof setTimeout>; }, clearTimeoutFn: () => undefined });
+  client.start();
+  const connectionDeadline = scheduled.find((timer) => timer.delayMs === 45_000);
+  expect(connectionDeadline).toBeDefined();
+  connectionDeadline?.callback();
+  expect(client.snapshot().status).toBe('FALLBACK_POLLING');
+  expect(client.snapshot().freshness).toBe('UNAVAILABLE');
+  expect(socket.closed).toBe(true);
+  client.stop();
+});

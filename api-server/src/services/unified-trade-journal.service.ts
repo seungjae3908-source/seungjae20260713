@@ -33,6 +33,21 @@ export type TradeRange = typeof TRADE_RANGES[number];
 export type TradeCurrency = 'KRW' | 'USD' | 'USDT';
 export type CanonicalOrderStatus = 'OPEN' | 'PARTIALLY_FILLED' | 'FILLED' | 'CANCELED' | 'REJECTED' | 'UNKNOWN';
 export type SnapshotContextSource = 'PRE_TRADE_SNAPSHOT' | 'POST_HOC_RECONSTRUCTION' | 'NO_PRE_TRADE_CONTEXT';
+export type JournalCostEvidenceStatus = 'READY' | 'NOT_AVAILABLE';
+export type JournalCostEvidenceSource = 'TOSS_EXECUTION_AGGREGATE' | 'CANONICAL_ORDER_RECORD' | 'DIRECT_CYCLE_RECORD' | 'ORDER_LEGS';
+
+export type JournalCostComponentEvidence = Readonly<{
+  status: JournalCostEvidenceStatus;
+  source: JournalCostEvidenceSource | null;
+  reason: string | null;
+}>;
+
+export type JournalCostEvidence = Readonly<{
+  status: JournalCostEvidenceStatus;
+  reasons: readonly string[];
+  fees: JournalCostComponentEvidence;
+  tax: JournalCostComponentEvidence;
+}>;
 
 export type TechnicalSnapshot = Readonly<{
   snapshotId: string;
@@ -78,8 +93,9 @@ export type UnifiedTradeOrder = {
   filledQuantity: number;
   remainingQuantity: number;
   averageFillPrice: number | null;
-  fees: number;
-  tax: number;
+  fees: number | null;
+  tax: number | null;
+  costEvidence: JournalCostEvidence;
   currency: TradeCurrency;
   status: CanonicalOrderStatus;
   strategy: string | null;
@@ -120,8 +136,9 @@ export type TradeLeg = {
   at: string;
   price: number;
   quantity: number;
-  fees: number;
-  tax: number;
+  fees: number | null;
+  tax: number | null;
+  costEvidence: JournalCostEvidence;
 };
 
 export type TradeReview = {
@@ -159,9 +176,10 @@ export type UnifiedTradeCycle = {
   remainingQuantity: number;
   holdingTimeMs: number | null;
   grossPnl: number;
-  fees: number;
-  tax: number;
-  netPnl: number;
+  fees: number | null;
+  tax: number | null;
+  costEvidence: JournalCostEvidence;
+  netPnl: number | null;
   netReturnPercent: number | null;
   strategy: string | null;
   timeframe: string | null;
@@ -198,7 +216,7 @@ export type UnifiedJournalAnalytics = {
   winRate: number | null;
   profitFactor: number | null;
   averageReturnPercent: number | null;
-  maximumConsecutiveLosses: number;
+  maximumConsecutiveLosses: number | null;
   netPnlByCurrency: CurrencyMetric[];
   totalCostsByCurrency: CurrencyMetric[];
   byMarket: GroupMetric[];
@@ -224,6 +242,7 @@ export type UnifiedTradeJournalResult = {
 
 const TERMINAL = new Set<CanonicalOrderStatus>(['FILLED', 'CANCELED', 'REJECTED']);
 const EPSILON = 1e-10;
+const JOURNAL_COST_MISSING_WARNING = 'JOURNAL_TRANSACTION_COST_EVIDENCE_NOT_AVAILABLE';
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -291,6 +310,74 @@ function stringArray(value: unknown) {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === 'string').map((item) => item.slice(0, 160)).slice(0, 30)
     : [];
+}
+
+function costComponent(
+  value: number | null,
+  source: JournalCostEvidenceSource,
+  reason: string,
+): JournalCostComponentEvidence {
+  if (value == null) return Object.freeze({ status: 'NOT_AVAILABLE' as const, source: null, reason });
+  if (!Number.isFinite(value) || value < 0) {
+    return Object.freeze({
+      status: 'NOT_AVAILABLE' as const,
+      source: null,
+      reason: reason.replace('_MISSING', '_INVALID'),
+    });
+  }
+  return Object.freeze({ status: 'READY' as const, source, reason: null });
+}
+
+export function costEvidenceFromValues(
+  fees: number | null,
+  tax: number | null,
+  source: JournalCostEvidenceSource,
+): JournalCostEvidence {
+  const feesEvidence = costComponent(fees, source, 'JOURNAL_FEES_EVIDENCE_MISSING');
+  const taxEvidence = costComponent(tax, source, 'JOURNAL_TAX_EVIDENCE_MISSING');
+  const reasons = [feesEvidence.reason, taxEvidence.reason].flatMap((item) => item == null ? [] : [item]);
+  return Object.freeze({
+    status: reasons.length === 0 ? 'READY' as const : 'NOT_AVAILABLE' as const,
+    reasons: Object.freeze(reasons),
+    fees: feesEvidence,
+    tax: taxEvidence,
+  });
+}
+
+function mergeCostEvidence(left: JournalCostEvidence, right: JournalCostEvidence): JournalCostEvidence {
+  const feesReady = left.fees.status === 'READY' && right.fees.status === 'READY';
+  const taxReady = left.tax.status === 'READY' && right.tax.status === 'READY';
+  const fees = Object.freeze(feesReady
+    ? { status: 'READY' as const, source: 'ORDER_LEGS' as const, reason: null }
+    : { status: 'NOT_AVAILABLE' as const, source: null, reason: 'JOURNAL_FEES_EVIDENCE_MISSING' });
+  const tax = Object.freeze(taxReady
+    ? { status: 'READY' as const, source: 'ORDER_LEGS' as const, reason: null }
+    : { status: 'NOT_AVAILABLE' as const, source: null, reason: 'JOURNAL_TAX_EVIDENCE_MISSING' });
+  const reasons = [fees.reason, tax.reason].flatMap((item) => item == null ? [] : [item]);
+  return Object.freeze({
+    status: reasons.length === 0 ? 'READY' as const : 'NOT_AVAILABLE' as const,
+    reasons: Object.freeze(reasons),
+    fees,
+    tax,
+  });
+}
+
+function sumCost(left: number | null, right: number | null) {
+  return left == null || right == null ? null : left + right;
+}
+
+function allocatedCost(value: number | null, ratio: number) {
+  return value == null ? null : value * ratio;
+}
+
+function netFromCosts(grossPnl: number, fees: number | null, tax: number | null) {
+  if (!Number.isFinite(grossPnl) || fees == null || tax == null) return null;
+  if (!Number.isFinite(fees) || !Number.isFinite(tax) || fees < 0 || tax < 0) return null;
+  return grossPnl - fees - tax;
+}
+
+function costWarnings(costEvidence: JournalCostEvidence) {
+  return costEvidence.status === 'READY' ? [] : [JOURNAL_COST_MISSING_WARNING, ...costEvidence.reasons];
 }
 
 function deepFreezeSnapshot(snapshot: TechnicalSnapshot): TechnicalSnapshot {
@@ -380,6 +467,9 @@ export function normalizeTossOrderContract(
   const executionKey = filledQuantity > 0
     ? `TOSS_AGGREGATE:${brokerOrderId}:${filledQuantity}:${filledAt}`
     : `TOSS_ORDER:${brokerOrderId}:UNFILLED`;
+  const fees = nonNegativeDecimal(value.execution.commission, 'commission', true);
+  const tax = nonNegativeDecimal(value.execution.tax, 'tax', true);
+  const costEvidence = costEvidenceFromValues(fees, tax, 'TOSS_EXECUTION_AGGREGATE');
   return {
     schemaVersion: 1,
     recordType: 'unified_trade_order',
@@ -403,8 +493,9 @@ export function normalizeTossOrderContract(
     filledQuantity,
     remainingQuantity: Math.max(0, quantity - filledQuantity),
     averageFillPrice,
-    fees: nonNegativeDecimal(value.execution.commission, 'commission', true) ?? 0,
-    tax: nonNegativeDecimal(value.execution.tax, 'tax', true) ?? 0,
+    fees,
+    tax,
+    costEvidence,
     currency,
     status: tossStatus(stringValue(value.status, 'status')),
     strategy: null,
@@ -412,7 +503,7 @@ export function normalizeTossOrderContract(
     stopLossPrice: null,
     targetPrice: null,
     ruleViolation: false,
-    warnings: ['TOSS_ORDER_EXECUTION_IS_CUMULATIVE_AGGREGATE_WITHOUT_FILL_ID'],
+    warnings: ['TOSS_ORDER_EXECUTION_IS_CUMULATIVE_AGGREGATE_WITHOUT_FILL_ID', ...costWarnings(costEvidence)],
     technicalSnapshot: technicalSnapshot(null, executionKey),
   };
 }
@@ -446,6 +537,9 @@ function normalizeCanonicalOrder(payload: Record<string, unknown>): UnifiedTrade
   const executionKey = fillId
     ? `${broker}:${brokerOrderId}:${fillId}`
     : `${broker}_AGGREGATE:${brokerOrderId}:${filledQuantity}:${filledAt ?? 'UNFILLED'}`;
+  const fees = nonNegativeDecimal(payload.fees, 'fees', true);
+  const tax = nonNegativeDecimal(payload.tax, 'tax', true);
+  const costEvidence = costEvidenceFromValues(fees, tax, 'CANONICAL_ORDER_RECORD');
   return {
     schemaVersion: 1,
     recordType: 'unified_trade_order',
@@ -469,8 +563,9 @@ function normalizeCanonicalOrder(payload: Record<string, unknown>): UnifiedTrade
     filledQuantity,
     remainingQuantity,
     averageFillPrice,
-    fees: nonNegativeDecimal(payload.fees, 'fees', true) ?? 0,
-    tax: nonNegativeDecimal(payload.tax, 'tax', true) ?? 0,
+    fees,
+    tax,
+    costEvidence,
     currency,
     status,
     strategy: nullableText(payload.strategy, 80),
@@ -478,7 +573,7 @@ function normalizeCanonicalOrder(payload: Record<string, unknown>): UnifiedTrade
     stopLossPrice: nullableFinite(payload.stopLossPrice),
     targetPrice: nullableFinite(payload.targetPrice),
     ruleViolation: payload.ruleViolation === true,
-    warnings: stringArray(payload.warnings),
+    warnings: [...stringArray(payload.warnings), ...costWarnings(costEvidence)],
     technicalSnapshot: technicalSnapshot(payload.technicalSnapshot, executionKey),
   };
 }
@@ -553,14 +648,20 @@ function reviewCycle(cycle: Omit<UnifiedTradeCycle, 'review'>): TradeReview {
   if (!cycle.ruleViolation) { qualityScore += 15; good.push('기록된 규칙 위반이 없습니다.'); }
   else { bad.push('거래 규칙 위반이 기록되었습니다.'); improvements.push('동일 규칙 위반을 차단할 체크리스트를 추가하세요.'); mistakes.push('RULE_VIOLATION'); }
   const entryNotional = cycle.entryPrice * Math.max(cycle.totalQuantity, EPSILON);
-  const costRatio = entryNotional > 0 ? (cycle.fees + cycle.tax) / entryNotional * 100 : null;
-  if (costRatio != null && costRatio <= 1) qualityScore += 5;
-  else if (costRatio != null) { bad.push('비용 비중이 진입금액의 1%를 초과했습니다.'); improvements.push('수수료·세금을 포함한 최소 기대수익 기준을 높이세요.'); mistakes.push('HIGH_COST_RATIO'); }
+  if (cycle.costEvidence.status === 'READY' && cycle.fees != null && cycle.tax != null) {
+    const costRatio = entryNotional > 0 ? (cycle.fees + cycle.tax) / entryNotional * 100 : null;
+    if (costRatio != null && costRatio <= 1) qualityScore += 5;
+    else if (costRatio != null) { bad.push('비용 비중이 진입금액의 1%를 초과했습니다.'); improvements.push('수수료·세금을 포함한 최소 기대수익 기준을 높이세요.'); mistakes.push('HIGH_COST_RATIO'); }
+  } else {
+    bad.push('수수료·세금 근거가 없어 순손익을 확정하지 않았습니다.');
+    improvements.push('실현 체결 또는 검증된 비용 근거를 수집한 뒤 순손익을 계산하세요.');
+    mistakes.push('MISSING_TRANSACTION_COST_EVIDENCE');
+  }
   if (cycle.status === 'CLOSED') qualityScore += 5;
   if (cycle.targetPrice != null && cycle.exitPrice != null) qualityScore += 5;
   qualityScore = Math.round(Math.max(0, Math.min(100, qualityScore)));
-  if (cycle.netPnl > 0) good.push('비용 차감 후 순손익이 양수입니다.');
-  if (cycle.netPnl < 0) improvements.push('손실 거래의 진입 근거와 무효화 시점을 다시 확인하세요.');
+  if (cycle.netPnl != null && cycle.netPnl > 0) good.push('비용 차감 후 순손익이 양수입니다.');
+  if (cycle.netPnl != null && cycle.netPnl < 0) improvements.push('손실 거래의 진입 근거와 무효화 시점을 다시 확인하세요.');
   return { performanceScore, qualityScore, grade: grade(qualityScore), good, bad, improvements, mistakes, deterministic: true, externalAiCalled: false };
 }
 
@@ -587,6 +688,7 @@ function buildCyclesFromOrders(orders: UnifiedTradeOrder[], issues: JournalInteg
       quantity: order.filledQuantity,
       fees: order.fees,
       tax: order.tax,
+      costEvidence: order.costEvidence,
     };
     if (effect === 'OPEN') {
       const existing = open.get(key);
@@ -618,7 +720,8 @@ function buildCyclesFromOrders(orders: UnifiedTradeOrder[], issues: JournalInteg
           grossPnl: 0,
           fees: order.fees,
           tax: order.tax,
-          netPnl: -order.fees - order.tax,
+          costEvidence: order.costEvidence,
+          netPnl: netFromCosts(0, order.fees, order.tax),
           netReturnPercent: null,
           strategy: order.strategy,
           timeframe: order.timeframe ?? order.technicalSnapshot.timeframe,
@@ -635,11 +738,12 @@ function buildCyclesFromOrders(orders: UnifiedTradeOrder[], issues: JournalInteg
         existing.totalQuantity += leg.quantity;
         existing.remainingQuantity += leg.quantity;
         existing.entryPrice = existing.entryValue / existing.totalQuantity;
-        existing.fees += leg.fees;
-        existing.tax += leg.tax;
-        existing.netPnl = existing.grossPnl - existing.fees - existing.tax;
+        existing.fees = sumCost(existing.fees, leg.fees);
+        existing.tax = sumCost(existing.tax, leg.tax);
+        existing.costEvidence = mergeCostEvidence(existing.costEvidence, leg.costEvidence);
+        existing.netPnl = netFromCosts(existing.grossPnl, existing.fees, existing.tax);
         existing.ruleViolation ||= order.ruleViolation;
-        existing.warnings.push(...order.warnings);
+        existing.warnings.push(...order.warnings, ...costWarnings(existing.costEvidence));
       }
       continue;
     }
@@ -652,19 +756,26 @@ function buildCyclesFromOrders(orders: UnifiedTradeOrder[], issues: JournalInteg
     if (leg.quantity > current.remainingQuantity + EPSILON) {
       issues.push({ code: 'EXIT_QUANTITY_EXCEEDED', orderId: order.brokerOrderId, message: '청산 수량이 현재 포지션 수량을 초과했습니다.' });
     }
-    const allocated = { ...leg, quantity: closeQuantity, fees: leg.fees * closeQuantity / leg.quantity, tax: leg.tax * closeQuantity / leg.quantity };
+    const ratio = closeQuantity / leg.quantity;
+    const allocated: TradeLeg = {
+      ...leg,
+      quantity: closeQuantity,
+      fees: allocatedCost(leg.fees, ratio),
+      tax: allocatedCost(leg.tax, ratio),
+    };
     const sign = positionSide === 'LONG' ? 1 : -1;
     current.grossPnl += (allocated.price - current.entryPrice) * allocated.quantity * sign;
     current.exitValue += allocated.price * allocated.quantity;
     current.closedQuantity += allocated.quantity;
     current.remainingQuantity = Math.max(0, current.remainingQuantity - allocated.quantity);
-    current.fees += allocated.fees;
-    current.tax += allocated.tax;
+    current.fees = sumCost(current.fees, allocated.fees);
+    current.tax = sumCost(current.tax, allocated.tax);
+    current.costEvidence = mergeCostEvidence(current.costEvidence, allocated.costEvidence);
     current.exitPrice = current.exitValue / current.closedQuantity;
-    current.netPnl = current.grossPnl - current.fees - current.tax;
-    current.netReturnPercent = current.entryValue > 0 ? current.netPnl / current.entryValue * 100 : null;
+    current.netPnl = netFromCosts(current.grossPnl, current.fees, current.tax);
+    current.netReturnPercent = current.entryValue > 0 && current.netPnl != null ? current.netPnl / current.entryValue * 100 : null;
     current.ruleViolation ||= order.ruleViolation;
-    current.warnings.push(...order.warnings);
+    current.warnings.push(...order.warnings, ...costWarnings(current.costEvidence));
     if (current.remainingQuantity > EPSILON) {
       current.partialExits.push(allocated);
     } else {
@@ -700,16 +811,39 @@ function directCycle(payload: Record<string, unknown>): UnifiedTradeCycle | null
   const currency = ['KRW', 'USD', 'USDT'].includes(String(payload.currency)) ? payload.currency as TradeCurrency : 'USDT';
   const totalQuantity = finite(payload.initialQuantity ?? payload.quantity) ?? 0;
   if (totalQuantity <= 0) return null;
-  const fees = Math.max(0, finite(payload.fees) ?? ((finite(payload.entryFee) ?? 0) + (finite(payload.exitFee) ?? 0)));
-  const tax = Math.max(0, finite(payload.tax) ?? 0);
+  const aggregateFees = nonNegativeDecimal(payload.fees, 'fees', true);
+  const entryFee = nonNegativeDecimal(payload.entryFee, 'entryFee', true);
+  const exitFee = nonNegativeDecimal(payload.exitFee, 'exitFee', true);
+  const fees = aggregateFees ?? (entryFee != null && (status !== 'closed' || exitFee != null) ? entryFee + (exitFee ?? 0) : null);
+  const tax = nonNegativeDecimal(payload.tax, 'tax', true);
+  const costEvidence = costEvidenceFromValues(fees, tax, 'DIRECT_CYCLE_RECORD');
   const grossPnl = finite(payload.grossPnl) ?? 0;
-  const netPnl = finite(payload.netPnl) ?? grossPnl - fees - tax;
+  const netPnl = costEvidence.status === 'READY'
+    ? netFromCosts(grossPnl, fees, tax)
+    : null;
   const closedQuantity = finite(payload.closedQuantity) ?? (status === 'closed' ? totalQuantity : 0);
   const remainingQuantity = Math.max(0, finite(payload.remainingQuantity) ?? totalQuantity - closedQuantity);
   const id = nullableText(payload.tradeId ?? payload.id, 160) ?? `direct:${hash(JSON.stringify(payload), 24)}`;
-  const initialEntry: TradeLeg = { orderId: nullableText(payload.orderId, 160) ?? id, at: openedAt, price: entryPrice, quantity: totalQuantity, fees: Math.max(0, finite(payload.entryFee) ?? 0), tax: 0 };
+  const initialEntryCostEvidence = costEvidenceFromValues(entryFee, null, 'DIRECT_CYCLE_RECORD');
+  const initialEntry: TradeLeg = {
+    orderId: nullableText(payload.orderId, 160) ?? id,
+    at: openedAt,
+    price: entryPrice,
+    quantity: totalQuantity,
+    fees: entryFee,
+    tax: null,
+    costEvidence: initialEntryCostEvidence,
+  };
   const finalExit = status === 'closed' && closedAt && exitPrice != null
-    ? { orderId: nullableText(payload.exitOrderId, 160) ?? `${id}:exit`, at: closedAt, price: exitPrice, quantity: closedQuantity, fees: Math.max(0, finite(payload.exitFee) ?? 0), tax }
+    ? {
+        orderId: nullableText(payload.exitOrderId, 160) ?? `${id}:exit`,
+        at: closedAt,
+        price: exitPrice,
+        quantity: closedQuantity,
+        fees: exitFee,
+        tax: null,
+        costEvidence: costEvidenceFromValues(exitFee, null, 'DIRECT_CYCLE_RECORD'),
+      }
     : null;
   const unsigned: Omit<UnifiedTradeCycle, 'review'> = {
     id,
@@ -736,14 +870,15 @@ function directCycle(payload: Record<string, unknown>): UnifiedTradeCycle | null
     grossPnl,
     fees,
     tax,
+    costEvidence,
     netPnl,
-    netReturnPercent: entryPrice * totalQuantity > 0 ? netPnl / (entryPrice * totalQuantity) * 100 : null,
+    netReturnPercent: entryPrice * totalQuantity > 0 && netPnl != null ? netPnl / (entryPrice * totalQuantity) * 100 : null,
     strategy: nullableText(payload.strategy ?? payload.strategyName, 80),
     timeframe: nullableText(payload.timeframe, 20),
     stopLossPrice: nullableFinite(payload.stopLossPrice),
     targetPrice: nullableFinite(payload.targetPrice ?? payload.takeProfitPrice1),
     ruleViolation: payload.ruleViolation === true,
-    warnings: stringArray(payload.warnings),
+    warnings: [...stringArray(payload.warnings), ...costWarnings(costEvidence)],
     technicalSnapshot: technicalSnapshot(payload.technicalSnapshot, id),
   };
   return { ...unsigned, review: reviewCycle(unsigned) };
@@ -774,6 +909,17 @@ function filterCycles(cycles: UnifiedTradeCycle[], filters: UnifiedJournalFilter
   });
 }
 
+type CompleteNetCycle = UnifiedTradeCycle & { fees: number; tax: number; netPnl: number };
+
+function completeNetCycles(cycles: UnifiedTradeCycle[]) {
+  return cycles.filter((cycle): cycle is CompleteNetCycle => (
+    cycle.costEvidence.status === 'READY'
+      && cycle.fees != null && Number.isFinite(cycle.fees) && cycle.fees >= 0
+      && cycle.tax != null && Number.isFinite(cycle.tax) && cycle.tax >= 0
+      && cycle.netPnl != null && Number.isFinite(cycle.netPnl)
+  ));
+}
+
 function groupMetric(cycles: UnifiedTradeCycle[], selector: (cycle: UnifiedTradeCycle) => string): GroupMetric[] {
   const groups = new Map<string, UnifiedTradeCycle[]>();
   for (const cycle of cycles) {
@@ -781,23 +927,25 @@ function groupMetric(cycles: UnifiedTradeCycle[], selector: (cycle: UnifiedTrade
     groups.set(key, [...(groups.get(key) ?? []), cycle]);
   }
   return [...groups.entries()].map(([key, items]) => {
-    const returns = items.map((item) => item.netReturnPercent).filter((item): item is number => item != null);
+    const complete = completeNetCycles(items);
+    const returns = complete.map((item) => item.netReturnPercent).filter((item): item is number => item != null);
+    const fullyCosted = complete.length === items.length;
     return {
       key,
       sampleSize: items.length,
-      winRate: items.length >= 5 ? items.filter((item) => item.netPnl > 0).length / items.length * 100 : null,
-      averageReturnPercent: items.length >= 5 && returns.length === items.length ? returns.reduce((sum, item) => sum + item, 0) / returns.length : null,
+      winRate: fullyCosted && items.length >= 5 ? complete.filter((item) => item.netPnl > 0).length / items.length * 100 : null,
+      averageReturnPercent: fullyCosted && items.length >= 5 && returns.length === items.length ? returns.reduce((sum, item) => sum + item, 0) / returns.length : null,
     };
   }).sort((left, right) => left.key.localeCompare(right.key));
 }
 
-function currencyMetrics(cycles: UnifiedTradeCycle[], selector: (cycle: UnifiedTradeCycle) => number): CurrencyMetric[] {
+function currencyMetrics(cycles: CompleteNetCycle[], selector: (cycle: CompleteNetCycle) => number): CurrencyMetric[] {
   const totals = new Map<TradeCurrency, number>();
   for (const cycle of cycles) totals.set(cycle.currency, (totals.get(cycle.currency) ?? 0) + selector(cycle));
   return [...totals.entries()].map(([currency, value]) => ({ currency, value })).sort((a, b) => a.currency.localeCompare(b.currency));
 }
 
-function maximumConsecutiveLosses(cycles: UnifiedTradeCycle[]) {
+function maximumConsecutiveLosses(cycles: CompleteNetCycle[]) {
   let current = 0;
   let maximum = 0;
   for (const cycle of [...cycles].sort((a, b) => Date.parse(a.closedAt!) - Date.parse(b.closedAt!))) {
@@ -809,9 +957,11 @@ function maximumConsecutiveLosses(cycles: UnifiedTradeCycle[]) {
 
 function analytics(cycles: UnifiedTradeCycle[]): UnifiedJournalAnalytics {
   const closed = cycles.filter((cycle) => cycle.status === 'CLOSED');
-  const returns = closed.map((cycle) => cycle.netReturnPercent).filter((item): item is number => item != null);
-  const wins = closed.filter((cycle) => cycle.netPnl > 0);
-  const losses = closed.filter((cycle) => cycle.netPnl < 0);
+  const completeClosed = completeNetCycles(closed);
+  const fullyCosted = completeClosed.length === closed.length;
+  const returns = completeClosed.map((cycle) => cycle.netReturnPercent).filter((item): item is number => item != null);
+  const wins = completeClosed.filter((cycle) => cycle.netPnl > 0);
+  const losses = completeClosed.filter((cycle) => cycle.netPnl < 0);
   const grossProfit = wins.reduce((sum, cycle) => sum + cycle.netPnl, 0);
   const grossLoss = Math.abs(losses.reduce((sum, cycle) => sum + cycle.netPnl, 0));
   const mistakes = new Map<string, number>();
@@ -821,7 +971,10 @@ function analytics(cycles: UnifiedTradeCycle[]): UnifiedJournalAnalytics {
     const month = cycle.closedAt!.slice(0, 7);
     months.set(month, [...(months.get(month) ?? []), cycle]);
   }
-  const enough = closed.length >= 5;
+  const enough = fullyCosted && closed.length >= 5;
+  const warnings = [] as string[];
+  if (closed.length < 5) warnings.push('확정 통계에는 종료 거래가 최소 5건 필요하며 부족한 지표는 N/A로 표시됩니다.');
+  if (!fullyCosted) warnings.push('수수료·세금 근거가 누락된 종료 거래가 있어 순손익 기반 통계는 N/A로 표시됩니다.');
   return {
     sampleSize: cycles.length,
     openTrades: cycles.length - closed.length,
@@ -829,9 +982,9 @@ function analytics(cycles: UnifiedTradeCycle[]): UnifiedJournalAnalytics {
     winRate: enough ? wins.length / closed.length * 100 : null,
     profitFactor: enough && grossLoss > 0 ? grossProfit / grossLoss : null,
     averageReturnPercent: enough && returns.length === closed.length ? returns.reduce((sum, item) => sum + item, 0) / returns.length : null,
-    maximumConsecutiveLosses: maximumConsecutiveLosses(closed),
-    netPnlByCurrency: currencyMetrics(closed, (cycle) => cycle.netPnl),
-    totalCostsByCurrency: currencyMetrics(closed, (cycle) => cycle.fees + cycle.tax),
+    maximumConsecutiveLosses: fullyCosted ? maximumConsecutiveLosses(completeClosed) : null,
+    netPnlByCurrency: fullyCosted ? currencyMetrics(completeClosed, (cycle) => cycle.netPnl) : [],
+    totalCostsByCurrency: fullyCosted ? currencyMetrics(completeClosed, (cycle) => cycle.fees + cycle.tax) : [],
     byMarket: groupMetric(closed, (cycle) => cycle.market),
     bySource: groupMetric(closed, (cycle) => cycle.source),
     byStrategy: groupMetric(closed, (cycle) => cycle.strategy ?? 'UNSPECIFIED'),
@@ -839,16 +992,18 @@ function analytics(cycles: UnifiedTradeCycle[]): UnifiedJournalAnalytics {
     byGrade: groupMetric(closed, (cycle) => cycle.review.grade),
     mistakes: [...mistakes.entries()].map(([code, count]) => ({ code, count })).sort((a, b) => b.count - a.count || a.code.localeCompare(b.code)),
     monthlyReport: [...months.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([month, items]) => {
-      const monthReturns = items.map((item) => item.netReturnPercent).filter((item): item is number => item != null);
+      const completeItems = completeNetCycles(items);
+      const monthFullyCosted = completeItems.length === items.length;
+      const monthReturns = completeItems.map((item) => item.netReturnPercent).filter((item): item is number => item != null);
       return {
         month,
         sampleSize: items.length,
-        winRate: items.length >= 5 ? items.filter((item) => item.netPnl > 0).length / items.length * 100 : null,
-        averageReturnPercent: items.length >= 5 && monthReturns.length === items.length ? monthReturns.reduce((sum, item) => sum + item, 0) / monthReturns.length : null,
-        netPnlByCurrency: currencyMetrics(items, (item) => item.netPnl),
+        winRate: monthFullyCosted && items.length >= 5 ? completeItems.filter((item) => item.netPnl > 0).length / items.length * 100 : null,
+        averageReturnPercent: monthFullyCosted && items.length >= 5 && monthReturns.length === items.length ? monthReturns.reduce((sum, item) => sum + item, 0) / monthReturns.length : null,
+        netPnlByCurrency: monthFullyCosted ? currencyMetrics(completeItems, (item) => item.netPnl) : [],
       };
     }),
-    warnings: enough ? [] : ['확정 통계에는 종료 거래가 최소 5건 필요하며 부족한 지표는 N/A로 표시됩니다.'],
+    warnings,
   };
 }
 
