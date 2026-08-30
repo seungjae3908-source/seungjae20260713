@@ -99,7 +99,7 @@ function position(overrides = {}) {
   const baseIdentity = identity();
   return Object.freeze({
     ...baseIdentity,
-    entryTimestampMs: firstClose + 1_000,
+    entryTimestampMs: firstClose,
     quantity: 1,
     entryFillPrice: 100,
     lifecycleState: "OPEN",
@@ -435,4 +435,13 @@ test("calls without scheduler openPositions remain unchanged for read-only valid
   const baseProvider = Object.freeze({ async collectPublicEvidence() { return base; } });
   const wrapped = wrapPaperForwardProviderWithNaturalPositionObservations({ provider: baseProvider, producer: producer() });
   assert.equal(await wrapped.collectPublicEvidence({ market: "CRYPTO_FUTURES" }), base);
+});
+
+test("first post-cursor candle that opened before Entry fails closed instead of contaminating MAE/MFE with pre-Entry OHLC", async () => {
+  const firstOpen = NOW_MS - (3 * INTERVAL_MS);
+  const entryTimestampMs = firstOpen + INTERVAL_MS + 1_000;
+  const observed = await collect({ openPositions: [position({ entryTimestampMs })] });
+  assert.equal(observed.status, "MISSING");
+  assert.equal(observed.blocker, "POSITION_OBSERVATION_PARTIAL_FRAME_AT_CURSOR");
+  assert.equal(observed.observations, null);
 });

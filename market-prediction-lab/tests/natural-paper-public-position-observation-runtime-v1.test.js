@@ -103,7 +103,7 @@ function futuresPosition() {
     parameterHash: "parameter-hash",
     researchCodeSha: RESEARCH_SHA,
     costPolicyVersion: COST_POLICY,
-    entryTimestampMs: NOW_MS - (2 * FOUR_HOURS_MS) + 1_000,
+    entryTimestampMs: NOW_MS - (2 * FOUR_HOURS_MS),
     quantity: 1,
     entryFillPrice: 100,
     lifecycleState: "OPEN",
