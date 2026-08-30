@@ -267,6 +267,14 @@ export function simulateAdditionalInvestment(input: {
     : null;
   const projectedPortfolio = input.portfolioValueKRW + additionalInvestmentKRW;
   const projectedPosition = input.currentPositionValueKRW + additionalInvestmentKRW;
+  if (![quantity, additionalInvestmentKRW, totalQuantity, newAveragePrice, projectedPortfolio, projectedPosition]
+    .every((value) => typeof value === 'number' && Number.isFinite(value) && value > 0)) {
+    return {
+      status: 'UNAVAILABLE', additionalQuantity: null, additionalInvestmentKRW: null, newAveragePrice: null,
+      currentWeightPercent: null, projectedWeightPercent: null, stopLoss: null, targets: [], estimatedMaxLossKRW: null,
+      targetProfitsKRW: [], missing: ['SIMULATION_NUMERIC_OVERFLOW'],
+    };
+  }
   const stopLoss = finitePositive(input.stopLoss ?? Number.NaN) ? input.stopLoss! : null;
   const targets = (input.targets ?? []).filter(finitePositive);
   return {
@@ -306,6 +314,7 @@ export function buildMonthlyInvestmentPlan(input: {
   const weightTotal = input.allocation.reduce((sum, item) => sum + item.weight, 0);
   if (Math.abs(weightTotal - 1) > 1e-9) return null;
   const cumulativeInvestmentKRW = input.monthlyAmountKRW * input.months;
+  if (!Number.isFinite(cumulativeInvestmentKRW)) return null;
   return {
     monthlyAmountKRW: input.monthlyAmountKRW,
     months: input.months,

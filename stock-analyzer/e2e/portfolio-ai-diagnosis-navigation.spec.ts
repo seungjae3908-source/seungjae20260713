@@ -110,6 +110,8 @@ test('portfolio intelligence rejects incomplete schemas, coerced metrics and sta
     { ...good, portfolio: { ...good.portfolio, asOf: NOW } },
     { ...good, portfolio: { ...good.portfolio, holdings: [{ ...good.portfolio.holdings[0], currency: 'KRW' }] } },
     { ...good, portfolio: { ...good.portfolio, holdings: [{ ...good.portfolio.holdings[0], asOf: null }] } },
+    { ...good, portfolio: { ...good.portfolio, holdings: [...good.portfolio.holdings, { ...good.portfolio.holdings[0], id: 'second-lot' }] } },
+    { ...good, portfolio: { ...good.portfolio, topHoldings: [{ ...good.portfolio.topHoldings[0], currentPrice: 999999 }] } },
     { ...good, portfolio: { ...good.portfolio, fx: { ...good.portfolio.fx, quotes: [{ rate: 1, pair: 'USD/KRW', source: 'fixture', asOf: '2099-01-01T00:00:00Z', quality: 'FRESH' }] } } },
   ]) expect(() => parsePortfolioIntelligence(invalid)).toThrow();
   const input = { monthlyAmountKRW: 100, months: 2, profile: 'BALANCED' };
@@ -120,7 +122,49 @@ test('portfolio intelligence rejects incomplete schemas, coerced metrics and sta
   expect(parseMonthlyPlan(plan, input).plan?.cumulativeInvestmentKRW).toBe(200);
   expect(() => parseMonthlyPlan({ ...plan, plan: { ...plan.plan, cumulativeInvestmentKRW: 999 } }, input)).toThrow();
   expect(() => parseMonthlyPlan({ ...plan, profileUsedForAllocation: true }, input)).toThrow();
-  expect(() => parseAdditionalBuy({ ok: true }, { ticker: 'NVDA', market: 'US', currency: 'USD' })).toThrow();
+  expect(() => parseAdditionalBuy({ ok: true }, { id: 'nvda', ticker: 'NVDA', market: 'US', currency: 'USD' }, { additionalAmountKRW: 100_000 })).toThrow();
+  const buy = { ok: true, asOf: new Date().toISOString(), status: 'READY', priceBasis: 'NORMALIZED_KRW',
+    holding: { id: 'nvda', quantity: 1, ticker: 'NVDA', market: 'US', nativeCurrency: 'USD', currentPriceNative: 160, currentAveragePriceNative: 150, currentPositionValueKRW: 220000 },
+    result: { status: 'READY', additionalQuantity: 1, additionalInvestmentKRW: 220000, newAveragePrice: 213125,
+      currentWeightPercent: 10, projectedWeightPercent: 20, stopLoss: null, targets: [], estimatedMaxLossKRW: null, targetProfitsKRW: [], missing: ['STOP_UNAVAILABLE'] },
+    evidence: { source: null, stopLoss: 'UNAVAILABLE', targets: 'UNAVAILABLE' } };
+  const identity = { id: 'nvda', ticker: 'NVDA', market: 'US', currency: 'USD' };
+  expect(parseAdditionalBuy(buy, identity, { additionalQuantity: 1 }).result.newAveragePrice).toBe(213125);
+  expect(() => parseAdditionalBuy(buy, { ...identity, id: 'other' }, { additionalQuantity: 1 })).toThrow();
+  expect(() => parseAdditionalBuy(buy, identity, { additionalQuantity: 2 })).toThrow();
+  for (const patch of [{ newAveragePrice: 1 }, { additionalInvestmentKRW: -1 }, { projectedWeightPercent: 101 }, { status: 'UNAVAILABLE' }]) {
+    expect(() => parseAdditionalBuy({ ...buy, result: { ...buy.result, ...patch } }, identity, { additionalQuantity: 1 })).toThrow();
+  }
+});
+
+test('additional-buy never silently selects a different position after holdings refresh', async ({ page }) => {
+  await installApprovedRuntime(page);
+  let changed = false;
+  let calls = 0;
+  await page.route('**/api/**', (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === '/api/portfolio/intelligence') {
+      const payload = freshPortfolioFixture();
+      if (changed) {
+        payload.portfolio.holdings[0] = { ...payload.portfolio.holdings[0], id: 'aapl', ticker: 'AAPL', name: 'Apple' };
+        payload.portfolio.topHoldings = structuredClone(payload.portfolio.holdings);
+      }
+      return fulfill(route, payload);
+    }
+    if (path === '/api/portfolio/intelligence/additional-buy') calls++;
+    return fulfill(route, { ok: true, exists: false, items: [] });
+  });
+  await page.goto('/portfolio');
+  await page.getByLabel('추가 투자 금액').fill('100000');
+  const calculate = page.getByRole('button', { name: '추가매수 계산' });
+  await expect(calculate).toBeEnabled();
+  changed = true;
+  await page.getByRole('button', { name: '포트폴리오 인텔리전스 새로고침' }).click();
+  await expect(calculate).toBeDisabled();
+  await expect(page.getByLabel('추가매수 보유자산')).toHaveValue('');
+  expect(calls).toBe(0);
+  await page.getByLabel('추가매수 보유자산').selectOption('aapl');
+  await expect(calculate).toBeEnabled();
 });
 
 test('monthly simulation ignores a late answer for changed inputs and rejects malformed success', async ({ page }) => {
@@ -216,10 +260,12 @@ test('Portfolio Intelligence와 AI Mentor는 partial provenance를 숨기지 않
       expect(body).toMatchObject({ ticker: 'NVDA', additionalAmountKRW: 100_000 });
       return fulfill(route, {
         ok: true,
-        status: 'UNAVAILABLE',
+        status: 'READY',
         priceBasis: 'NORMALIZED_KRW',
         asOf: new Date().toISOString(),
         holding: {
+          id: 'nvda',
+          quantity: 1,
           ticker: 'NVDA',
           name: 'NVIDIA',
           market: 'US',
@@ -229,10 +275,10 @@ test('Portfolio Intelligence와 AI Mentor는 partial provenance를 숨기지 않
           currentPositionValueKRW: 220_000,
         },
         result: {
-          status: 'UNAVAILABLE',
-          additionalQuantity: 0.4545,
+          status: 'READY',
+          additionalQuantity: 100_000 / 220_000,
           additionalInvestmentKRW: 100_000,
-          newAveragePrice: 213_125,
+          newAveragePrice: (150 * 1375 + 100_000) / (1 + 100_000 / 220_000),
           currentWeightPercent: 4.56,
           projectedWeightPercent: 6.51,
           stopLoss: null,
