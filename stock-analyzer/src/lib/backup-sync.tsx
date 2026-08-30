@@ -1,5 +1,6 @@
 import { useEffect, useSyncExternalStore } from 'react';
-import { api, type LatestBackupResponse } from '@/lib/api';
+import { api } from '@/lib/api';
+import { backupChecksum, parseBackupEvidence, verifyBackupAcknowledgement } from '@/lib/backup-evidence';
 import { useAuth } from '@/lib/auth';
 import {
   backupMutationCoordinator,
@@ -36,7 +37,7 @@ export type BackupSyncStatus = {
   mode: BackupMode;
   message: string;
   memberId: string | null;
-  itemCount: number;
+  itemCount: number | null;
   updatedAt: string | null;
   remoteUpdatedAt: string | null;
 };
@@ -45,7 +46,7 @@ let status: BackupSyncStatus = {
   mode: 'idle',
   message: '자동백업 대기 중',
   memberId: null,
-  itemCount: 0,
+  itemCount: null,
   updatedAt: null,
   remoteUpdatedAt: null,
 };
@@ -136,40 +137,45 @@ async function uploadCurrent(
   force = false,
   generation = lifecycleGeneration,
 ) {
-  if (!isActive(memberId, generation)) return;
+  if (!isActive(memberId, generation)) return false;
   const localStorage = collectBackupData();
   const currentFingerprint = fingerprint(localStorage);
-  if (!force && currentFingerprint === lastFingerprint) return;
+  if (!force && currentFingerprint === lastFingerprint) return true;
 
   try {
     await backupMutationCoordinator.run(async () => {
       if (!isActive(memberId, generation)) return;
       updateStatus({
         mode: 'syncing',
+        memberId,
         message: '최신 설정을 자동백업하고 있습니다.',
         itemCount: Object.keys(localStorage).length,
       });
-      const saved = await api.saveLatestBackup({
+      const clientUpdatedAt = new Date().toISOString();
+      const response = await api.saveLatestBackup({
         schemaVersion: BACKUP_SCHEMA_VERSION,
         localStorage,
-        clientUpdatedAt: new Date().toISOString(),
+        clientUpdatedAt,
       });
+      const saved = await verifyBackupAcknowledgement(response, localStorage, clientUpdatedAt);
       if (!isActive(memberId, generation)) return;
       lastFingerprint = currentFingerprint;
       updateStatus({
         mode: 'synced',
         message: '최신 1개 백업으로 자동 저장되었습니다.',
-        itemCount: saved.itemCount ?? Object.keys(localStorage).length,
-        updatedAt: saved.updatedAt ?? new Date().toISOString(),
-        remoteUpdatedAt: saved.updatedAt ?? null,
+        itemCount: saved.itemCount,
+        updatedAt: saved.updatedAt,
+        remoteUpdatedAt: saved.updatedAt,
       });
     });
+    return isActive(memberId, generation) && lastFingerprint === currentFingerprint;
   } catch (cause) {
-    if (!isActive(memberId, generation)) return;
+    if (!isActive(memberId, generation)) return false;
     updateStatus({
       mode: 'error',
       message: cause instanceof Error ? `자동백업 실패: ${cause.message}` : '자동백업에 실패했습니다.',
     });
+    return false;
   }
 }
 
@@ -210,7 +216,7 @@ export async function startAutoBackup(memberId: string) {
     mode: 'checking',
     message: '서버의 최신 백업을 확인하고 있습니다.',
     memberId,
-    itemCount: 0,
+    itemCount: null,
     updatedAt: null,
     remoteUpdatedAt: null,
   });
@@ -219,7 +225,7 @@ export async function startAutoBackup(memberId: string) {
   if (!isActive(memberId, generation)) return;
 
   try {
-    const remote = await api.backupLatest();
+    const remote = parseBackupEvidence(await api.backupLatest());
     if (!isActive(memberId, generation)) return;
     const deviceReady = window.localStorage.getItem(readyKey(memberId)) === '1';
 
@@ -227,14 +233,20 @@ export async function startAutoBackup(memberId: string) {
       updateStatus({
         mode: 'paused',
         message: '서버에 기존 백업이 있습니다. 설정에서 복원 또는 현재 기기로 덮어쓰기를 선택하세요.',
-        itemCount: remote.itemCount ?? 0,
-        remoteUpdatedAt: remote.updatedAt ?? null,
+        itemCount: remote.itemCount,
+        remoteUpdatedAt: remote.updatedAt,
       });
       return;
     }
 
     window.localStorage.setItem(readyKey(memberId), '1');
     lastFingerprint = '';
+    updateStatus({
+      mode: 'idle',
+      message: remote.exists ? '서버 백업을 확인했습니다. 자동 저장을 준비합니다.' : '서버 백업이 없습니다. 첫 자동 저장을 준비합니다.',
+      itemCount: remote.exists ? remote.itemCount : 0,
+      remoteUpdatedAt: remote.exists ? remote.updatedAt : null,
+    });
     scheduleInitialSync(memberId, generation);
   } catch (cause) {
     if (!isActive(memberId, generation)) return;
@@ -271,28 +283,31 @@ async function prepareManualBackup(memberId: string) {
 export async function overwriteRemoteBackup(memberId: string) {
   if (!memberId) throw new Error('로그인 회원을 확인할 수 없습니다.');
   const generation = await prepareManualBackup(memberId);
-  window.localStorage.setItem(readyKey(memberId), '1');
   lastFingerprint = '';
-  await uploadCurrent(memberId, true, generation);
+  if (!await uploadCurrent(memberId, true, generation)) throw new Error(status.message);
+  window.localStorage.setItem(readyKey(memberId), '1');
   beginInterval(memberId, generation);
 }
 
 export async function restoreRemoteBackup(memberId: string): Promise<number> {
   if (!memberId) throw new Error('로그인 회원을 확인할 수 없습니다.');
   const generation = await prepareManualBackup(memberId);
-  const remote: LatestBackupResponse = await api.backupLatest();
+  const remote = parseBackupEvidence(await api.backupLatest());
   if (!isActive(memberId, generation)) throw new Error('백업 세션이 변경되었습니다.');
   if (!remote.exists || !remote.localStorage) throw new Error('복원할 서버 백업이 없습니다.');
+  if (Object.keys(remote.localStorage).some((key) => !allowedKeySet.has(key))
+    || remote.checksum !== await backupChecksum(remote.localStorage)) throw new Error('복원할 백업의 내용 무결성을 확인하지 못했습니다.');
+  if (!isActive(memberId, generation)) throw new Error('백업 세션이 변경되었습니다.');
   const count = applyBackupData(remote.localStorage);
   window.localStorage.setItem(readyKey(memberId), '1');
   lastFingerprint = fingerprint(collectBackupData());
   updateStatus({
     mode: 'synced',
-    message: '서버 최신 백업을 복원했습니다. 화면을 새로고침합니다.',
+    message: '서버 최신 백업을 복원했습니다. 새로고침하여 설정을 적용하세요.',
     memberId,
     itemCount: count,
-    updatedAt: remote.updatedAt ?? null,
-    remoteUpdatedAt: remote.updatedAt ?? null,
+    updatedAt: remote.updatedAt,
+    remoteUpdatedAt: remote.updatedAt,
   });
   beginInterval(memberId, generation);
   return count;
@@ -301,8 +316,8 @@ export async function restoreRemoteBackup(memberId: string): Promise<number> {
 export async function saveBackupNow(memberId: string) {
   if (!memberId) throw new Error('로그인 회원을 확인할 수 없습니다.');
   const generation = await prepareManualBackup(memberId);
+  if (!await uploadCurrent(memberId, true, generation)) throw new Error(status.message);
   window.localStorage.setItem(readyKey(memberId), '1');
-  await uploadCurrent(memberId, true, generation);
   beginInterval(memberId, generation);
 }
 

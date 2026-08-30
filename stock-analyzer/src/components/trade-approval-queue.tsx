@@ -11,6 +11,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { authorizedFetch } from '@/lib/auth-fetch';
+import { parseApprovalQueue, parseApprovalStatus } from '@/lib/approval-queue-evidence';
 import { TradeApprovalConfirmationDialog } from '@/components/trade-approval-confirmation-dialog';
 import { CardListSkeleton } from '@/components/data-state';
 import {
@@ -27,7 +28,7 @@ type SignalState = 'WATCHING' | 'READY_FOR_APPROVAL' | 'WEAKENED' | 'INVALIDATED
 type PlanState = 'PLANNED' | 'APPROVAL_PENDING' | 'SUBMITTED' | 'EXPIRED' | string;
 type QueueDataState = 'loading' | 'ready' | 'unavailable';
 
-type ApprovalStatus = {
+export type ApprovalStatus = {
   approvalEnabled: boolean;
   signalState: SignalState;
   planState: PlanState;
@@ -80,7 +81,7 @@ type QueueResponse = {
   error?: string;
 };
 
-type ApprovalStatusResponse = {
+export type ApprovalStatusResponse = {
   ok?: boolean;
   plan?: Partial<Pick<TradeApprovalQueueItem,
     'state' | 'signalState' | 'signalInvalidationReason' | 'approvalExpiresAt' | 'updatedAt'>>;
@@ -103,8 +104,8 @@ const SIGNAL_LABEL: Record<SignalState, string> = {
 };
 
 function formatNumber(value: number | null | undefined, maximumFractionDigits = 0) {
-  if (value == null || !Number.isFinite(Number(value))) return '-';
-  return new Intl.NumberFormat('ko-KR', { maximumFractionDigits }).format(Number(value));
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '-';
+  return new Intl.NumberFormat('ko-KR', { maximumFractionDigits }).format(value);
 }
 
 function timeText(value: string | null | undefined) {
@@ -135,8 +136,8 @@ function mergeApprovalStatus(item: TradeApprovalQueueItem, payload: ApprovalStat
     ...item,
     state: payload.plan?.state ?? payload.approval?.planState ?? item.state,
     signalState: payload.plan?.signalState ?? payload.approval?.signalState ?? item.signalState,
-    signalInvalidationReason: payload.plan?.signalInvalidationReason ?? item.signalInvalidationReason,
-    approvalExpiresAt: payload.plan?.approvalExpiresAt ?? payload.approval?.expiresAt ?? item.approvalExpiresAt,
+    signalInvalidationReason: payload.plan ? payload.plan.signalInvalidationReason ?? null : item.signalInvalidationReason,
+    approvalExpiresAt: payload.approval ? payload.approval.expiresAt : item.approvalExpiresAt,
     updatedAt: payload.plan?.updatedAt ?? item.updatedAt,
     approval: payload.approval ?? item.approval,
   };
@@ -179,9 +180,10 @@ export function TradeApprovalQueue({ fixture }: { fixture?: TradeApprovalQueueIt
       });
       const payload = await response.json().catch(() => ({})) as QueueResponse;
       if (!response.ok || !payload.ok) throw new Error(payload.error ?? 'APPROVAL_QUEUE_LOAD_FAILED');
+      const verified = parseApprovalQueue(payload);
       if (requestSequence !== requestSequenceRef.current) return;
-      setItems(Array.isArray(payload.items) ? payload.items : []);
-      setLastUpdatedAt(payload.updatedAt ?? new Date().toISOString());
+      setItems(verified.items);
+      setLastUpdatedAt(verified.updatedAt);
       setDataState('ready');
       setStale(false);
       setOffline(false);
@@ -276,7 +278,7 @@ export function TradeApprovalQueue({ fixture }: { fixture?: TradeApprovalQueueIt
       if (!response.ok || !payload.ok || !payload.approval) {
         throw new Error(payload.error ?? 'SIGNAL_REVALIDATION_REQUIRED');
       }
-      return payload;
+      return parseApprovalStatus(payload);
     } finally {
       window.clearTimeout(timeout);
     }
