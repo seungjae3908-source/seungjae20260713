@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
 import { buildCopilotSnapshot, COPILOT_AUTHORITY, validateCopilotDsl } from '../../api-server/src/services/research-copilot.service';
+import { ResearchBundleService } from '../../api-server/src/services/research-bundle.service';
 
 const NOW = Date.parse('2026-08-30T09:00:00Z');
 const USER = '77777777-7777-4777-8777-777777777777';
@@ -14,6 +15,19 @@ const fixture = {
 function fulfill(route: Route, body: unknown, status = 200) {
   return route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 }
+const researchDsl = {
+  market: 'US_STOCK', timeframe: '15m', direction: 'LONG', availableDataFields: ['close'],
+  entryDsl: { action: 'LONG', rules: [{ kind: 'OPERATOR', operator: 'CROSSOVER', operands: [
+    { kind: 'INDICATOR', name: 'EMA', input: 'close', parameters: { period: 'fast' } },
+    { kind: 'INDICATOR', name: 'EMA', input: 'close', parameters: { period: 'slow' } },
+  ] }] },
+  exitDsl: { rules: [{ type: 'TIME_EXIT', barsParameter: 'holding' }] },
+  parameterSpace: [
+    { name: 'fast', domain: 'PERIOD', valueType: 'INTEGER', min: 5, max: 10, step: 5 },
+    { name: 'slow', domain: 'PERIOD', valueType: 'INTEGER', min: 20, max: 30, step: 10 },
+    { name: 'holding', domain: 'BAR_COUNT', valueType: 'INTEGER', min: 2, max: 4, step: 2 },
+  ], limits: { maxAstDepth: 6, maxIndicatorCount: 8, maxRuleCount: 8, maxAstNodes: 64 },
+};
 async function setup(page: Page, options: { available?: boolean; regular?: boolean; failure?: boolean; malformed?: boolean; changedAfterReview?: boolean; numericReview?: boolean } = {}) {
   const snapshot = buildCopilotSnapshot(fixture, NOW);
   snapshot.ai.available = options.available === true;
@@ -54,7 +68,7 @@ async function setup(page: Page, options: { available?: boolean; regular?: boole
         : snapshot;
       return fulfill(route, options.failure ? { error: 'RESEARCH_SOURCE_UNAVAILABLE' } : options.malformed ? { ...current, stages: [null] } : current, options.failure ? 503 : 200);
     }
-    if (path.endsWith('/copilot/validate-dsl')) return fulfill(route, validateCopilotDsl(request.postDataJSON()));
+    if (path.endsWith('/copilot/validate-dsl')) return fulfill(route, { ...validateCopilotDsl(request.postDataJSON()), bundle: await new ResearchBundleService().resolve(request.postDataJSON()) });
     if (path.endsWith('/copilot/review')) {
       reviewRequests += 1;
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -91,6 +105,20 @@ for (const width of [390, 1440]) {
     await page.getByLabel('연구 DSL JSON').fill('{"code":"process.exit()"}');
     await page.getByRole('button', { name: 'DSL 검증', exact: true }).click();
     await expect(page.getByText('DSL 차단:', { exact: false })).toBeVisible();
+    await page.getByLabel('연구 DSL JSON').fill(JSON.stringify(researchDsl));
+    await page.getByRole('button', { name: 'DSL 검증', exact: true }).click();
+    await expect(page.getByText('DSL 유효 · 전략 미평가')).toBeVisible();
+    const bundle = page.getByLabel('Backtest Bundle');
+    await expect(bundle).toContainText('RESEARCH_BUNDLE_READY=false');
+    await expect(bundle).toContainText('DATASET_IDENTITY_MISSING');
+    await expect(bundle).toContainText('FROZEN_SPLIT_RECEIPT_MISSING');
+    await expect(bundle).toContainText('RISK_POLICY_RECORD_MISSING');
+    await expect(bundle).toContainText('OOS_HORIZON_POLICY_MISSING');
+    await expect(bundle).toContainText('HOLDOUT_IDENTITY_MISSING');
+    await expect(bundle.getByRole('button', { name: '검증된 Bundle로 연구 백테스트 제출' })).toBeDisabled();
+    expect(diagnostics.calls.filter(call => call.endsWith('/submit-backtest'))).toEqual([]);
+    await bundle.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath(`research-bundle-${width}.png`) });
     await expect(page.getByRole('link', { name: '기존 백테스터 열기 (조건을 별도로 입력)' })).toHaveAttribute('href', '/backtests');
     await expect(page.getByRole('link', { name: 'canonical 승격 증거 조회' })).toHaveAttribute('href', '/strategy-promotion');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);

@@ -1,4 +1,5 @@
 import type { ResearchDualFreeAiResult } from './research-dual-free-ai.service';
+import type { ResearchBundleResolution } from './research-bundle.contract';
 
 export type CopilotTask = 'propose_candidates' | 'interpret_evidence' | 'compare_strategies' | 'explain_health';
 export type CopilotStatus = 'ready' | 'needs_context' | 'waiting_approval' | 'blocked' | 'no_action';
@@ -60,6 +61,7 @@ export interface CopilotReview {
   authority: CopilotSnapshot['authority'];
 }
 export interface DslValidation {
+  bundle?: ResearchBundleResolution;
   status: 'ready' | 'blocked';
   task: 'validate_dsl';
   candidateId: string | null;

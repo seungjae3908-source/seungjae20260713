@@ -8,6 +8,10 @@ import { ResearchCopilotService } from '../services/research-copilot.service';
 import { createDefaultStrategyPromotionService } from '../services/strategy-promotion.service';
 
 test('HTTP admin boundary rejects other members, blocks injected instructions and never calls AI on GET', async () => {
+  const previousUrl = process.env.SUPABASE_URL, previousKey = process.env.SUPABASE_ANON_KEY;
+  // Process-local fixture configuration reaches the no-token 401 branch; no auth network request.
+  process.env.SUPABASE_URL = 'http://127.0.0.1:1/TEST_ONLY';
+  process.env.SUPABASE_ANON_KEY = 'TEST_ONLY_PUBLIC_KEY';
   let calls = 0; let reads = 0;
   const service = new ResearchCopilotService({
     loadOverview: async () => { reads += 1; return {}; }, promotions: () => createDefaultStrategyPromotionService().list(), now: Date.now,
@@ -16,6 +20,7 @@ test('HTTP admin boundary rejects other members, blocks injected instructions an
   });
   const app = express(); app.use(express.json());
   app.use((req: AuthenticatedRequest, _res, next) => {
+    if (req.header('x-test-role') === 'anonymous') return next();
     const admin = req.header('x-test-role') === 'admin';
     req.member = { id: 'fixture-member', login_name: 'fixture', display_name: 'fixture', role: admin ? 'admin' : 'user', membership_level: admin ? 'admin' : 'regular', status: 'approved', is_active: true };
     req.accessToken = 'fixture-only'; next();
@@ -37,5 +42,19 @@ test('HTTP admin boundary rejects other members, blocks injected instructions an
     const invalid = await fetch(url + '/validate-dsl', { method: 'POST', headers, body: JSON.stringify({ code: 'process.exit()' }) });
     assert.equal((await invalid.json()).status, 'blocked'); assert.equal(calls, 0);
     assert.equal((await fetch(url + '/validate-dsl', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 403);
-  } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+    for (const path of ['/resolve-bundle', '/submit-backtest']) {
+      assert.equal((await fetch(url + path, { method: 'POST', headers: { 'x-test-role': 'anonymous', 'Content-Type': 'application/json' }, body: '{}' })).status, 401);
+      assert.equal((await fetch(url + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 403);
+      const response = await fetch(url + path, { method: 'POST', headers, body: '{}' });
+      assert.equal(response.status, 200);
+      const result = await response.json();
+      assert.equal(result.backtestExecutable, false);
+      assert.equal(result.backtesterCalls, 0);
+      assert.equal(result.backtestStatus, 'BLOCKED_DATA');
+    }
+  } finally {
+    if (previousUrl === undefined) delete process.env.SUPABASE_URL; else process.env.SUPABASE_URL = previousUrl;
+    if (previousKey === undefined) delete process.env.SUPABASE_ANON_KEY; else process.env.SUPABASE_ANON_KEY = previousKey;
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  }
 });
