@@ -23,6 +23,7 @@ LEDGER_START = "[PERSISTENT_TASK_LEDGER]"
 LEDGER_END = "[/PERSISTENT_TASK_LEDGER]"
 REQUIRED_ANCHORS = ("[PIPELINE_SNAPSHOT]", "[LEASE]", "[WATCH_EVENT]")
 MAX_LEDGER_CHARS = 18000
+MAX_LEDGER_ANCHOR_LOOKBACK_COMMENTS = 1500
 
 
 class ProcessorWindowRecoveryError(RuntimeError):
@@ -178,7 +179,71 @@ def latest_complete_ledger(comments: Sequence[Mapping[str, Any]]) -> tuple[int, 
     return int(latest.get("id") or 0), block
 
 
-def validate_continuity_anchors(window: BoundedCommentWindow) -> dict[str, int]:
+def resolve_complete_ledger_anchor(
+    github: Any,
+    issue_number: int,
+    window: BoundedCommentWindow,
+    *,
+    max_lookback_comments: int = MAX_LEDGER_ANCHOR_LOOKBACK_COMMENTS,
+) -> tuple[int, str, int]:
+    """Resolve the newest ledger without expanding executable control validation.
+
+    Pending control work is always evaluated only from ``window.comments``. If the ledger
+    anchor has aged out of that processor-visible tail, this helper performs a separate,
+    bounded, continuity-only lookup in the older prefix. It never claims full-history
+    validation and fails closed on malformed pagination, an incomplete newest ledger, or
+    an exhausted lookback budget.
+    """
+    if _latest_comment_with_marker(window.comments, LEDGER_START) is not None:
+        ledger_id, block = latest_complete_ledger(window.comments)
+        if ledger_id <= 0:
+            raise ProcessorWindowRecoveryError("PERSISTENT_TASK_LEDGER anchor has no valid comment id")
+        return ledger_id, block, 0
+
+    older_count = max(0, window.source_total_comments - window.comments_examined)
+    if older_count <= 0:
+        raise ProcessorWindowRecoveryError("bounded recovery window is missing PERSISTENT_TASK_LEDGER")
+    if max_lookback_comments <= 0:
+        raise ProcessorWindowRecoveryError("ledger anchor lookback budget must be positive")
+    if older_count > max_lookback_comments:
+        raise ProcessorWindowRecoveryError(
+            "PERSISTENT_TASK_LEDGER anchor is outside bounded lookback budget: "
+            f"older_prefix={older_count}, limit={max_lookback_comments}"
+        )
+
+    per_page = 100
+    page_count = max(1, math.ceil(older_count / per_page))
+    comments_examined = 0
+    for page in range(page_count, 0, -1):
+        query = urlencode({"per_page": per_page, "page": page})
+        batch = github.request("GET", f"/repos/{github.repository}/issues/{issue_number}/comments?{query}")
+        if not isinstance(batch, list):
+            raise ProcessorWindowRecoveryError("ledger anchor lookup comments response was not a list")
+        if any(not isinstance(item, dict) for item in batch):
+            raise ProcessorWindowRecoveryError("ledger anchor lookup comments response contained malformed entries")
+
+        take = older_count - ((page_count - 1) * per_page) if page == page_count else per_page
+        if len(batch) < take:
+            raise ProcessorWindowRecoveryError(
+                f"ledger anchor lookup under-fetched page {page}: expected at least {take}, got {len(batch)}"
+            )
+        selected = batch[:take]
+        comments_examined += len(selected)
+        for comment in reversed(selected):
+            if LEDGER_START not in str(comment.get("body") or ""):
+                continue
+            ledger_id, block = latest_complete_ledger((comment,))
+            if ledger_id <= 0:
+                raise ProcessorWindowRecoveryError("PERSISTENT_TASK_LEDGER anchor has no valid comment id")
+            return ledger_id, block, comments_examined
+
+    raise ProcessorWindowRecoveryError(
+        "bounded ledger anchor lookup is missing PERSISTENT_TASK_LEDGER after examining "
+        f"{comments_examined} older comments"
+    )
+
+
+def validate_continuity_anchors(window: BoundedCommentWindow, *, ledger_id: int | None = None) -> dict[str, int]:
     anchors: dict[str, int] = {}
     for marker in REQUIRED_ANCHORS:
         comment = _latest_comment_with_marker(window.comments, marker)
@@ -188,10 +253,12 @@ def validate_continuity_anchors(window: BoundedCommentWindow) -> dict[str, int]:
         if cid <= 0:
             raise ProcessorWindowRecoveryError(f"continuity anchor {marker} has no valid comment id")
         anchors[marker] = cid
-    ledger_id, _ = latest_complete_ledger(window.comments)
-    if ledger_id <= 0:
+    resolved_ledger_id = ledger_id
+    if resolved_ledger_id is None:
+        resolved_ledger_id, _ = latest_complete_ledger(window.comments)
+    if resolved_ledger_id <= 0:
         raise ProcessorWindowRecoveryError("PERSISTENT_TASK_LEDGER anchor has no valid comment id")
-    anchors[LEDGER_START] = ledger_id
+    anchors[LEDGER_START] = resolved_ledger_id
     return anchors
 
 
@@ -206,7 +273,11 @@ def augment_successor_body(
     anchors: Mapping[str, int],
     ledger_block: str,
     sanitizer: Callable[[str], str],
+    ledger_anchor_lookup_comments_examined: int = 0,
+    ledger_anchor_lookup_limit: int = MAX_LEDGER_ANCHOR_LOOKBACK_COMMENTS,
 ) -> str:
+    if ledger_anchor_lookup_comments_examined < 0 or ledger_anchor_lookup_comments_examined > ledger_anchor_lookup_limit:
+        raise ProcessorWindowRecoveryError("ledger anchor lookup provenance exceeded configured bounds")
     sanitized_ledger = sanitize_ledger_block(ledger_block, sanitizer)
     anchor_lines = [f"- `{marker}`: comment `{anchors[marker]}`" for marker in (*REQUIRED_ANCHORS, LEDGER_START)]
     prefix = "\n".join([
@@ -217,7 +288,10 @@ def augment_successor_body(
         f"- source_total_comments: `{window.source_total_comments}`",
         f"- processor_window_comments_examined: `{window.comments_examined}`",
         f"- processor_window_limit: `{window.processor_window}`",
-        "- recovery_scope: latest bounded processor-visible tail only; no claim of full-history validation",
+        f"- ledger_anchor_lookup_comments_examined: `{ledger_anchor_lookup_comments_examined}`",
+        f"- ledger_anchor_lookup_limit: `{ledger_anchor_lookup_limit}`",
+        "- ledger_anchor_lookup_scope: continuity-only older-prefix lookup when the ledger is absent from the processor tail; excluded from pending control-work validation",
+        "- recovery_scope: executable pending-control validation remains the latest bounded processor-visible tail only; no claim of full-history validation",
         "- scheduled/default rollover semantics: unchanged and fail-closed",
         "- continuity_anchors_verified:",
         *anchor_lines,
@@ -248,7 +322,8 @@ def build_recovery_plan(github: Any, source_issue: int) -> dict[str, Any]:
         raise ProcessorWindowRecoveryError("source Hub is at or above the GitHub comment hard limit")
 
     window = read_bounded_comment_window(github, source_issue, total_count, rollover.PROCESSOR_COMMENT_WINDOW)
-    anchors = validate_continuity_anchors(window)
+    ledger_id, ledger, ledger_lookup_comments_examined = resolve_complete_ledger_anchor(github, source_issue, window)
+    anchors = validate_continuity_anchors(window, ledger_id=ledger_id)
     actionable_comments = coordinator_actionable_control_comments(window.comments, github.repository)
     pending = rollover.unresolved_control_work(actionable_comments)
     if pending:
@@ -277,13 +352,13 @@ def build_recovery_plan(github: Any, source_issue: int) -> dict[str, Any]:
         repository=github.repository,
         now_kst=now_kst,
     )
-    _, ledger = latest_complete_ledger(window.comments)
     successor_body = augment_successor_body(
         standard_body,
         window=window,
         anchors=anchors,
         ledger_block=ledger,
         sanitizer=lambda line: rollover._safe_text(line, 1600),
+        ledger_anchor_lookup_comments_examined=ledger_lookup_comments_examined,
     )
     labels = [
         str(item.get("name") or "") for item in (issue.get("labels") or [])
@@ -301,6 +376,7 @@ def build_recovery_plan(github: Any, source_issue: int) -> dict[str, Any]:
         "now_kst": now_kst,
         "successor_body": successor_body,
         "labels": labels,
+        "ledger_anchor_lookup_comments_examined": ledger_lookup_comments_examined,
     }
 
 
@@ -314,6 +390,7 @@ def perform_recovery(github: Any, source_issue: int, *, apply: bool) -> dict[str
         "full_history_validated": FULL_HISTORY_VALIDATED,
         "source_total_comments": window.source_total_comments,
         "comments_examined": window.comments_examined,
+        "ledger_anchor_lookup_comments_examined": plan["ledger_anchor_lookup_comments_examined"],
         "main_sha": plan["main_sha"],
         "continuity_anchors": plan["anchors"],
         "apply": apply,
@@ -357,6 +434,7 @@ def perform_recovery(github: Any, source_issue: int, *, apply: bool) -> dict[str
             f"main_sha: {plan['main_sha']}",
             f"source_total_comments: {window.source_total_comments}",
             f"comments_examined: {window.comments_examined}",
+            f"ledger_anchor_lookup_comments_examined: {plan['ledger_anchor_lookup_comments_examined']}",
             f"history_validation_mode: {RECOVERY_MODE}",
             "full_history_validated: false",
             "production_deploy: 0",
