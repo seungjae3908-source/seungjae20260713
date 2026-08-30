@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 import {
@@ -13,6 +13,7 @@ import {
   SCHEDULED_TRIGGER_SOURCE,
   V3_POLICY_BINDING,
   buildCompleteWindowAttemptLog,
+  buildV3ScheduleEntries,
   executeCaptureSeam,
   finalizeArtifactReceipt,
   resolveScheduledAuthority,
@@ -139,6 +140,63 @@ function buildLegacyManualArtifactReceipt(captureReceipt, { artifactId, artifact
   return Object.freeze({ ...body, receiptDigest: sha256(canonicalJson(body)) });
 }
 
+function bindScheduledCompletionBoundary(captureReceipt, actualRunCompletedAtMs) {
+  if (captureReceipt?.triggerSource !== SCHEDULED_TRIGGER_SOURCE) return captureReceipt;
+  const completedAtMs = requiredInteger(actualRunCompletedAtMs, 'ACTUAL_RUN_COMPLETED_AT_MS_INVALID');
+  const { captureReceiptDigest: _ignored, ...body } = captureReceipt;
+  body.actualRunCompletedAtMs = completedAtMs;
+  if (Number.isInteger(body.slotEndMs) && completedAtMs >= body.slotEndMs) {
+    body.captureStatus = 'MISSED_SLOT';
+    body.blockers = [...new Set([...(body.blockers ?? []), 'CAPTURE_COMPLETED_OUTSIDE_BOUND_SLOT'])].sort();
+    body.prospectiveSlotCredit = 0;
+  }
+  body.fullCostReady = false;
+  body.evidenceCompleteCredit = 0;
+  return Object.freeze({ ...body, captureReceiptDigest: sha256(canonicalJson(body)) });
+}
+
+function withElapsedExpectedCounts(log, { asOfMs }) {
+  const now = requiredInteger(asOfMs, 'ATTEMPT_LOG_AS_OF_INVALID');
+  const schedule = buildV3ScheduleEntries();
+  const splits = {};
+  let expectedTotalSlotN = 0;
+  for (const split of ['TRAIN', 'VALIDATION', 'OOS']) {
+    const policyExpectedSlotN = V3_POLICY_BINDING.slotCounts[split];
+    const expectedSlotN = schedule.filter(
+      (slot) => slot.split === split && slot.nominalScheduledAtMs <= now,
+    ).length;
+    expectedTotalSlotN += expectedSlotN;
+    splits[split] = Object.freeze({
+      ...log.splits[split],
+      policyExpectedSlotN,
+      expectedSlotN,
+    });
+  }
+  return Object.freeze({
+    ...log,
+    policyExpectedTotalSlotN: 48,
+    expectedTotalSlotN,
+    splits: Object.freeze(splits),
+  });
+}
+
+async function findReceiptFiles(root) {
+  const files = [];
+  let entries;
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === 'ENOENT') return files;
+    throw error;
+  }
+  for (const entry of entries) {
+    const path = resolve(root, entry.name);
+    if (entry.isDirectory()) files.push(...await findReceiptFiles(path));
+    else if (entry.isFile() && ['capture-receipt.json', 'artifact-receipt.json'].includes(entry.name)) files.push(path);
+  }
+  return files;
+}
+
 async function verifyActivation() {
   const contract = await loadActivationContract();
   const fileIdentity = {
@@ -238,9 +296,12 @@ async function runCapture() {
     scheduledAuthority,
     activationContract,
   });
-  const persistedCaptureReceipt = triggerSource === MANUAL_TRIGGER_SOURCE
+  let persistedCaptureReceipt = triggerSource === MANUAL_TRIGGER_SOURCE
     ? buildLegacyManualCaptureReceipt(captureReceipt, batch)
     : captureReceipt;
+  if (triggerSource === SCHEDULED_TRIGGER_SOURCE) {
+    persistedCaptureReceipt = bindScheduledCompletionBoundary(persistedCaptureReceipt, Date.now());
+  }
 
   await rm(outputDir, { recursive: true, force: true });
   await mkdir(outputDir, { recursive: true });
@@ -300,9 +361,52 @@ async function runVerifyActivation() {
   };
   await mkdir(outputDir, { recursive: true });
   await writeFile(resolve(outputDir, 'activation-contract-verification.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8');
-  const initialAttemptLog = buildCompleteWindowAttemptLog([], { asOfMs: V3_POLICY_BINDING.cohortEligibleAfterMs - 1 });
+  const initialRawLog = buildCompleteWindowAttemptLog([], { asOfMs: V3_POLICY_BINDING.cohortEligibleAfterMs - 1 });
+  const initialAttemptLog = withElapsedExpectedCounts(initialRawLog, { asOfMs: V3_POLICY_BINDING.cohortEligibleAfterMs - 1 });
   await writeFile(resolve(outputDir, 'complete-window-attempt-log-initial.json'), `${JSON.stringify(initialAttemptLog, null, 2)}\n`, 'utf8');
   console.log(JSON.stringify(report));
+}
+
+async function runCompleteWindow() {
+  const receiptRoot = resolve(process.env.ATTEMPT_RECEIPT_ROOT || 'public-forward-liquidity-v3-attempt-receipts');
+  const asOfMs = requiredInteger(process.env.ATTEMPT_LOG_AS_OF_MS ?? Date.now(), 'ATTEMPT_LOG_AS_OF_INVALID');
+  const files = await findReceiptFiles(receiptRoot);
+  const receipts = [];
+  for (const path of files) {
+    let receipt;
+    try {
+      receipt = JSON.parse(await readFile(path, 'utf8'));
+    } catch {
+      continue;
+    }
+    if (receipt?.triggerSource !== SCHEDULED_TRIGGER_SOURCE) continue;
+    if (receipt?.policyDigest !== V3_POLICY_BINDING.policyDigest) continue;
+    if (receipt?.cohortDigest !== V3_POLICY_BINDING.cohortDigest) continue;
+    if (!Number.isInteger(receipt?.slotIndex)) continue;
+    receipts.push(receipt);
+  }
+  const rawLog = buildCompleteWindowAttemptLog(receipts, { asOfMs });
+  const log = withElapsedExpectedCounts(rawLog, { asOfMs });
+  await mkdir(outputDir, { recursive: true });
+  await writeFile(resolve(outputDir, 'complete-window-attempt-log.json'), `${JSON.stringify(log, null, 2)}\n`, 'utf8');
+  await writeFile(resolve(outputDir, 'complete-window-source-summary.json'), `${JSON.stringify({
+    schemaVersion: 'public-forward-liquidity-v3-complete-window-source-summary-v1',
+    asOfMs,
+    receiptFileN: files.length,
+    acceptedScheduledReceiptN: receipts.length,
+    policyDigest: V3_POLICY_BINDING.policyDigest,
+    cohortDigest: V3_POLICY_BINDING.cohortDigest,
+    selectionComplete: log.selectionComplete,
+    fullCostReady: false,
+    evidenceComplete: 0,
+  }, null, 2)}\n`, 'utf8');
+  console.log(JSON.stringify({
+    receiptFileN: files.length,
+    acceptedScheduledReceiptN: receipts.length,
+    expectedTotalSlotN: log.expectedTotalSlotN,
+    policyExpectedTotalSlotN: log.policyExpectedTotalSlotN,
+    selectionComplete: log.selectionComplete,
+  }));
 }
 
 async function runMarkStaleMain() {
@@ -359,6 +463,9 @@ switch (mode) {
     break;
   case 'verify-activation':
     await runVerifyActivation();
+    break;
+  case 'complete-window':
+    await runCompleteWindow();
     break;
   case 'mark-stale-main':
     await runMarkStaleMain();
