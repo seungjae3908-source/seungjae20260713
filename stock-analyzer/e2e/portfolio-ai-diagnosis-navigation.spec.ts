@@ -1,4 +1,5 @@
 import { test, expect, type Page, type Route } from '@playwright/test';
+import { parsePortfolioIntelligence, parseMonthlyPlan, parseAdditionalBuy } from '../src/lib/portfolio-intelligence-evidence';
 
 const NOW = '2026-08-21T05:55:00.000Z';
 const USER_ID = '22222222-2222-4222-8222-222222222222';
@@ -89,6 +90,110 @@ const portfolioFixture = {
   },
 };
 
+function freshPortfolioFixture() {
+  const payload = structuredClone(portfolioFixture);
+  const asOf = new Date().toISOString();
+  payload.portfolio.asOf = asOf;
+  payload.portfolio.holdings = payload.portfolio.holdings.map((row) => ({ ...row, asOf, source: 'fixture-public-quote' }));
+  payload.portfolio.topHoldings = payload.portfolio.topHoldings.map((row) => ({ ...row, asOf, source: 'fixture-public-quote' }));
+  payload.portfolio.fx.quotes = payload.portfolio.fx.quotes.map((row) => ({ ...row, asOf }));
+  return payload;
+}
+
+test('portfolio intelligence rejects incomplete schemas, coerced metrics and stale or foreign evidence', () => {
+  const good = freshPortfolioFixture();
+  expect(parsePortfolioIntelligence(good)).toEqual(good.portfolio);
+  for (const invalid of [
+    {}, [], null, { ...good, ok: false }, { ok: true, portfolio: {} },
+    { ...good, portfolio: { ...good.portfolio, totalAssets: { ...good.portfolio.totalAssets, knownNormalizedKRW: true } } },
+    { ...good, portfolio: { ...good.portfolio, status: ['PARTIAL'] } },
+    { ...good, portfolio: { ...good.portfolio, asOf: NOW } },
+    { ...good, portfolio: { ...good.portfolio, holdings: [{ ...good.portfolio.holdings[0], currency: 'KRW' }] } },
+    { ...good, portfolio: { ...good.portfolio, holdings: [{ ...good.portfolio.holdings[0], asOf: null }] } },
+    { ...good, portfolio: { ...good.portfolio, fx: { ...good.portfolio.fx, quotes: [{ rate: 1, pair: 'USD/KRW', source: 'fixture', asOf: '2099-01-01T00:00:00Z', quality: 'FRESH' }] } } },
+  ]) expect(() => parsePortfolioIntelligence(invalid)).toThrow();
+  const input = { monthlyAmountKRW: 100, months: 2, profile: 'BALANCED' };
+  const plan = { ok: true, asOf: new Date().toISOString(), status: 'PARTIAL', assumption: 'NO_VALIDATED_RETURN_ASSUMPTION',
+    allocationBasis: 'CURRENT_KNOWN_ALLOCATION', allocationKnownTotalKRW: 100, profileForPolicyComparison: 'BALANCED',
+    profileUsedForAllocation: false, unavailableOutputs: ['FUTURE_RETURN'],
+    plan: { monthlyAmountKRW: 100, months: 2, cumulativeInvestmentKRW: 200, allocations: [{ key: 'KR_STOCKS', weight: 1, cumulativeContributionKRW: 200 }] } };
+  expect(parseMonthlyPlan(plan, input).plan?.cumulativeInvestmentKRW).toBe(200);
+  expect(() => parseMonthlyPlan({ ...plan, plan: { ...plan.plan, cumulativeInvestmentKRW: 999 } }, input)).toThrow();
+  expect(() => parseMonthlyPlan({ ...plan, profileUsedForAllocation: true }, input)).toThrow();
+  expect(() => parseAdditionalBuy({ ok: true }, { ticker: 'NVDA', market: 'US', currency: 'USD' })).toThrow();
+});
+
+test('monthly simulation ignores a late answer for changed inputs and rejects malformed success', async ({ page }) => {
+  await installApprovedRuntime(page);
+  let release: () => void = () => { throw new Error('response not pending'); };
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  let calls = 0;
+  await page.route('**/api/**', async (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname === '/api/portfolio/intelligence') return fulfill(route, freshPortfolioFixture());
+    if (pathname === '/api/portfolio/intelligence/monthly-contribution') {
+      calls++;
+      if (calls > 1) return fulfill(route, { ok: true });
+      const body = route.request().postDataJSON() as { monthlyAmountKRW: number; months: number; profile: string };
+      await pending;
+      return fulfill(route, { ok: true, status: 'PARTIAL', asOf: new Date().toISOString(),
+        assumption: 'NO_VALIDATED_RETURN_ASSUMPTION', allocationBasis: 'CURRENT_KNOWN_ALLOCATION',
+        allocationKnownTotalKRW: 4_820_000, profileForPolicyComparison: body.profile, profileUsedForAllocation: false,
+        unavailableOutputs: ['FUTURE_RETURN'], plan: { ...body, cumulativeInvestmentKRW: body.monthlyAmountKRW * body.months,
+          allocations: [{ key: 'KR_STOCKS', weight: 1, cumulativeContributionKRW: body.monthlyAmountKRW * body.months }] } });
+    }
+    if (pathname === '/api/backup/latest') return fulfill(route, { ok: true, exists: false });
+    return fulfill(route, { ok: true, items: [], rows: [], results: [] });
+  });
+  await page.goto('/portfolio');
+  const calculate = page.getByRole('button', { name: '적립 시뮬레이션 계산' });
+  await expect(calculate).toBeVisible();
+  await page.getByLabel('적립 기간', { exact: true }).fill('');
+  await expect(calculate).toBeDisabled();
+  expect(calls).toBe(0);
+  await page.getByLabel('적립 기간', { exact: true }).fill('12');
+  await calculate.click();
+  await expect.poll(() => calls).toBe(1);
+  await page.getByLabel('월 적립액', { exact: true }).fill('450000');
+  release();
+  await expect(calculate).toBeEnabled();
+  await expect(page.getByText(/^누적 납입금/)).toHaveCount(0);
+  await calculate.click();
+  await expect(page.getByRole('alert')).toContainText('SIMULATION_RESPONSE_INVALID');
+  await expect(page.getByText(/^누적 납입금/)).toHaveCount(0);
+});
+
+for (const [width, height] of [[1440, 900], [1024, 768], [320, 740], [360, 800], [390, 844], [412, 915], [430, 932]]) {
+  test(`portfolio intelligence clears prior financial facts after malformed refresh ${width}`, async ({ page }) => {
+    await installApprovedRuntime(page);
+    await page.setViewportSize({ width, height });
+    let malformed = false;
+    const errors: string[] = [];
+    const mutations: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
+    page.on('request', (request) => {
+      if (request.method() !== 'GET' && new URL(request.url()).pathname.startsWith('/api/')) mutations.push(request.method());
+    });
+    await page.route('**/api/**', (route) => {
+      const pathname = new URL(route.request().url()).pathname;
+      if (pathname === '/api/portfolio/intelligence') return fulfill(route, malformed ? { ok: true, portfolio: {} } : freshPortfolioFixture());
+      if (pathname === '/api/backup/latest') return fulfill(route, { ok: true, exists: false });
+      return fulfill(route, { ok: true, items: [], rows: [], results: [] });
+    });
+    await page.goto('/portfolio');
+    await expect(page.getByTestId('portfolio-known-total')).toContainText('4,820,000원');
+    malformed = true;
+    await page.getByRole('button', { name: '포트폴리오 인텔리전스 새로고침' }).click();
+    await expect(page.getByText('Portfolio Intelligence API를 불러오지 못했습니다. 실제 서버 오류를 숨기지 않습니다.')).toBeVisible();
+    await expect(page.getByTestId('portfolio-known-total')).toHaveCount(0);
+    await expect(page.getByTestId('portfolio-data-quality')).toHaveCount(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width + 1);
+    expect(errors).toEqual([]);
+    expect(mutations).toEqual([]);
+  });
+}
+
 test('Portfolio Intelligence와 AI Mentor는 partial provenance를 숨기지 않고 read-only를 유지한다', async ({ page }) => {
   await installApprovedRuntime(page);
 
@@ -103,7 +208,7 @@ test('Portfolio Intelligence와 AI Mentor는 partial provenance를 숨기지 않
   await page.route('**/api/**', async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname === '/api/portfolio/intelligence') {
-      return fulfill(route, portfolioFixture);
+      return fulfill(route, freshPortfolioFixture());
     }
     if (url.pathname === '/api/portfolio/intelligence/additional-buy') {
       expect(route.request().method()).toBe('POST');
@@ -113,6 +218,7 @@ test('Portfolio Intelligence와 AI Mentor는 partial provenance를 숨기지 않
         ok: true,
         status: 'UNAVAILABLE',
         priceBasis: 'NORMALIZED_KRW',
+        asOf: new Date().toISOString(),
         holding: {
           ticker: 'NVDA',
           name: 'NVIDIA',
@@ -150,6 +256,7 @@ test('Portfolio Intelligence와 AI Mentor는 partial provenance를 숨기지 않
         profileForPolicyComparison: 'BALANCED',
         profileUsedForAllocation: false,
         assumption: 'NO_VALIDATED_RETURN_ASSUMPTION',
+        asOf: new Date().toISOString(),
         unavailableOutputs: ['FUTURE_RETURN', 'FUTURE_ASSET_VALUE', 'EXPECTED_CAGR'],
         plan: {
           monthlyAmountKRW: 300_000,

@@ -1,3 +1,5 @@
+import { quoteTimeEvidence } from '../../providers/market-evidence';
+
 export type PortfolioCurrency = 'KRW' | 'USD' | 'USDT';
 export type PortfolioDataQuality = 'LIVE' | 'DELAYED' | 'STALE' | 'PARTIAL' | 'UNAVAILABLE';
 export type PortfolioAssetBucket = 'CASH' | 'KR_STOCKS' | 'US_STOCKS' | 'CRYPTO_SPOT' | 'CRYPTO_FUTURES_EQUITY';
@@ -47,7 +49,8 @@ function timestampMs(value: string): number | null {
 }
 
 function isFresh(asOf: string, now: Date, maxAgeMs: number): boolean {
-  const parsed = timestampMs(asOf);
+  const instant = quoteTimeEvidence(asOf, 'iso', now.getTime()).updatedAt;
+  const parsed = instant === null ? null : Date.parse(instant);
   return parsed != null && parsed <= now.getTime() && now.getTime() - parsed <= maxAgeMs;
 }
 
@@ -58,26 +61,29 @@ export function normalizeMoneyToKRW(
 ): NormalizedMoney {
   const now = options.now ?? new Date();
   const maxFxAgeMs = options.maxFxAgeMs ?? 6 * 60 * 60 * 1000;
-  if (!finiteNonNegative(money.amount)) {
+  if (!finiteNonNegative(money.amount) || !quoteTimeEvidence(money.asOf, 'iso', now.getTime()).updatedAt
+    || typeof money.source !== 'string' || !money.source.trim() || money.quality === 'STALE' || money.quality === 'UNAVAILABLE') {
     return { ...money, normalizedKRWAmount: null, fxRate: null, fxSource: null, fxAsOf: null, status: 'FX_UNAVAILABLE' };
   }
   if (money.currency === 'KRW') {
     return {
       ...money,
-      normalizedKRWAmount: money.quality === 'UNAVAILABLE' ? null : money.amount,
+      normalizedKRWAmount: money.amount,
       fxRate: 1,
       fxSource: 'native-krw',
       fxAsOf: money.asOf,
-      status: money.quality === 'UNAVAILABLE' ? 'FX_UNAVAILABLE' : 'READY',
+      status: 'READY',
     };
   }
-  const quote = fxQuotes.find((candidate) => candidate.currency === money.currency);
+  const matching = fxQuotes.filter((candidate) => candidate.currency === money.currency);
+  const quote = matching.length === 1 ? matching[0] : null;
   const quoteUsable = quote
     && finitePositive(quote.krwRate)
     && quote.quality !== 'STALE'
     && quote.quality !== 'UNAVAILABLE'
+    && typeof quote.source === 'string' && quote.source.trim().length > 0
     && isFresh(quote.asOf, now, maxFxAgeMs);
-  if (!quoteUsable || money.quality === 'UNAVAILABLE') {
+  if (!quoteUsable || !Number.isFinite(money.amount * quote.krwRate)) {
     return { ...money, normalizedKRWAmount: null, fxRate: quote?.krwRate ?? null, fxSource: quote?.source ?? null, fxAsOf: quote?.asOf ?? null, status: 'FX_UNAVAILABLE' };
   }
   return {

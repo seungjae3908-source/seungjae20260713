@@ -1,6 +1,7 @@
 import { getUserSupabase } from '../lib/supabase.ts';
 import { MarketDataService } from './market-data.service.ts';
 import { loadFreePublicFxQuotes } from './public-fx.service.ts';
+import { marketNumber, quoteTimeEvidence } from '../providers/market-evidence';
 import {
   aggregatePortfolioProviderSnapshots,
   calculateAlignedCorrelation,
@@ -40,25 +41,28 @@ type KnownHolding = {
   nativeCost: number;
   changePercent: number | null;
   asOf: string;
+  source: string;
 };
 
 function finiteNonNegative(value: unknown): number | null {
-  const number = typeof value === 'number' ? value : Number(value);
-  return Number.isFinite(number) && number >= 0 ? number : null;
+  const number = marketNumber(value);
+  return number !== null && number >= 0 ? number : null;
 }
 
 function cleanHolding(value: unknown): HoldingRow | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const row = value as Record<string, unknown>;
-  const ticker = String(row.ticker ?? '').trim().toUpperCase();
+  const ticker = typeof row.ticker === 'string' ? row.ticker.trim().toUpperCase() : '';
   const name = String(row.name ?? ticker).trim();
   const market = String(row.market ?? '').trim().toUpperCase();
-  const currency = String(row.currency ?? (market === 'US' ? 'USD' : 'KRW')).trim().toUpperCase();
+  const currency = typeof row.currency === 'string' ? row.currency : '';
   const quantity = finiteNonNegative(row.quantity);
   const averagePrice = finiteNonNegative(row.average_price);
-  if (!ticker || !name || !['KR', 'US'].includes(market) || !['KRW', 'USD'].includes(currency) || quantity == null || averagePrice == null) return null;
+  if (typeof row.id !== 'string' || !row.id.trim() || !ticker || !name || !['KR', 'US'].includes(market)
+    || currency !== (market === 'US' ? 'USD' : 'KRW') || quantity == null || quantity <= 0
+    || averagePrice == null || averagePrice <= 0 || !Number.isFinite(quantity * averagePrice)) return null;
   return {
-    id: String(row.id ?? ticker), ticker, name, market, currency, quantity, average_price: averagePrice,
+    id: row.id, ticker, name, market, currency, quantity, average_price: averagePrice,
     purchase_date: row.purchase_date == null ? null : String(row.purchase_date),
     created_at: row.created_at == null ? null : String(row.created_at),
   };
@@ -96,34 +100,54 @@ export async function buildPortfolioIntelligence(input: {
   profile?: unknown;
   fetchImpl?: typeof fetch;
   now?: Date;
+  loadHoldings?: () => Promise<unknown>;
+  loadQuote?: typeof MarketDataService.getQuoteRow;
+  loadCandles?: typeof MarketDataService.getCandles;
 }) {
-  const now = input.now ?? new Date();
-  const client = getUserSupabase(input.accessToken);
-  const holdingsResult = await client
+  let now = input.now ?? new Date();
+  const readHoldings = async () => {
+    const client = getUserSupabase(input.accessToken);
+    const holdingsResult = await client
     .from('portfolio_holdings')
     .select('id,ticker,name,market,currency,quantity,average_price,purchase_date,created_at')
     .order('created_at', { ascending: false });
 
-  if (holdingsResult.error) {
-    throw new Error(`PORTFOLIO_HOLDINGS_READ_FAILED:${holdingsResult.error.code ?? 'UNKNOWN'}`);
-  }
+    if (holdingsResult.error) throw new Error(`PORTFOLIO_HOLDINGS_READ_FAILED:${holdingsResult.error.code ?? 'UNKNOWN'}`);
+    return holdingsResult.data;
+  };
 
-  const rawRows = Array.isArray(holdingsResult.data) ? holdingsResult.data : [];
-  const holdings = rawRows.map(cleanHolding).filter((row): row is HoldingRow => row != null);
+  const rawRows = await (input.loadHoldings ?? readHoldings)();
+  if (!Array.isArray(rawRows)) throw new Error('PORTFOLIO_HOLDINGS_READ_FAILED:INVALID_SHAPE');
+  const parsedRows = rawRows.map(cleanHolding);
+  const identityCounts = new Map<string, number>();
+  for (const row of parsedRows) if (row) identityCounts.set(row.id, (identityCounts.get(row.id) ?? 0) + 1);
+  const holdings = parsedRows.filter((row): row is HoldingRow => row !== null
+    && identityCounts.get(row.id) === 1);
   const invalidRowCount = rawRows.length - holdings.length;
-  const quoteResults = await Promise.allSettled(holdings.map((holding) => MarketDataService.getQuote(holding.ticker)));
+  const quoteResults = await Promise.allSettled(holdings.map((holding) => (input.loadQuote ?? MarketDataService.getQuoteRow.bind(MarketDataService))(holding.ticker)));
+  now = input.now ?? new Date();
   const knownHoldings: KnownHolding[] = [];
   const missingSources: string[] = [];
 
   quoteResults.forEach((result, index) => {
     const holding = holdings[index];
-    if (result.status === 'rejected') {
+    if (result.status === 'rejected' || result.value === null) {
       missingSources.push(`QUOTE:${holding.ticker}:UNAVAILABLE`);
       return;
     }
     const price = finiteNonNegative(result.value.price);
-    if (price == null || price <= 0) {
+    const time = quoteTimeEvidence(result.value.updatedAt, 'iso', now.getTime());
+    if (price == null || price <= 0 || !Number.isFinite(price * holding.quantity)) {
       missingSources.push(`QUOTE:${holding.ticker}:INVALID_PRICE`);
+      return;
+    }
+    if (result.value.ticker !== holding.ticker || result.value.market !== holding.market || result.value.currency !== holding.currency
+      || typeof result.value.source !== 'string' || !result.value.source.trim()) {
+      missingSources.push(`QUOTE:${holding.ticker}:INVALID_IDENTITY`);
+      return;
+    }
+    if (time.freshness.status !== 'FRESH' || !time.updatedAt || (result.value.freshness && !['FRESH', 'LIVE'].includes(result.value.freshness.status))) {
+      missingSources.push(`QUOTE:${holding.ticker}:${time.freshness.status === 'FRESH' ? result.value.freshness?.status : time.freshness.status}`);
       return;
     }
     knownHoldings.push({
@@ -138,13 +162,14 @@ export async function buildPortfolioIntelligence(input: {
       nativeValue: price * holding.quantity,
       nativeCost: holding.average_price * holding.quantity,
       changePercent: Number.isFinite(result.value.changePercent) ? result.value.changePercent : null,
-      asOf: now.toISOString(),
+      asOf: time.updatedAt,
+      source: result.value.source,
     });
   });
 
   if (invalidRowCount > 0) missingSources.push(`PORTFOLIO_HOLDINGS:INVALID_ROWS:${invalidRowCount}`);
 
-  const { quotes: fxQuotes, missing: fxMissing } = await loadFreePublicFxQuotes(input.fetchImpl ?? fetch);
+  const { quotes: fxQuotes, missing: fxMissing } = await loadFreePublicFxQuotes(input.fetchImpl ?? fetch, now);
   missingSources.push(...fxMissing);
 
   const snapshots: PortfolioProviderSnapshot[] = [];
@@ -153,15 +178,15 @@ export async function buildPortfolioIntelligence(input: {
     ['US', 'US_STOCKS', 'USD'],
   ] as const) {
     const marketRows = knownHoldings.filter((row) => row.market === market);
-    const missingMarketQuotes = holdings.some((row) => row.market === market && !knownHoldings.some((known) => known.id === row.id));
+    const missingMarketQuotes = invalidRowCount > 0 || holdings.some((row) => row.market === market && !knownHoldings.some((known) => known.id === row.id));
     snapshots.push({
       provider: `portfolio-holdings-${market.toLowerCase()}`,
       source: 'portfolio_holdings + public quote provider',
-      asOf: now.toISOString(),
-      quality: missingMarketQuotes ? 'PARTIAL' : 'LIVE',
+      asOf: marketRows.length ? marketRows.map((row) => row.asOf).sort()[0] : now.toISOString(),
+      quality: missingMarketQuotes ? 'PARTIAL' : 'DELAYED',
       status: missingMarketQuotes ? 'PARTIAL' : 'READY',
       errorCode: missingMarketQuotes ? 'QUOTE_PARTIAL' : null,
-      assets: [{ bucket, amount: marketRows.reduce((sum, row) => sum + row.nativeValue, 0), currency }],
+      assets: missingMarketQuotes && !marketRows.length ? [] : [{ bucket, amount: marketRows.reduce((sum, row) => sum + row.nativeValue, 0), currency }],
     });
   }
 
@@ -178,14 +203,14 @@ export async function buildPortfolioIntelligence(input: {
       currency: currencyFor(holding.currency),
       source: `quote:${holding.ticker}`,
       asOf: holding.asOf,
-      quality: 'LIVE',
+      quality: 'DELAYED',
     }, fxQuotes, { now });
     const normalizedCost = normalizeMoneyToKRW({
       amount: holding.nativeCost,
       currency: currencyFor(holding.currency),
       source: `cost:${holding.ticker}`,
       asOf: holding.asOf,
-      quality: 'LIVE',
+      quality: 'DELAYED',
     }, fxQuotes, { now });
     return { ...holding, normalizedKRW: normalized.normalizedKRWAmount, normalizedCostKRW: normalizedCost.normalizedKRWAmount, fxSource: normalized.fxSource };
   });
@@ -194,7 +219,8 @@ export async function buildPortfolioIntelligence(input: {
   const bucketValues = new Map<string, number | null>();
   for (const bucket of ['KR_STOCKS', 'US_STOCKS'] as const) {
     const values = normalizedHoldings.filter((holding) => bucketFor(holding.market) === bucket).map((holding) => holding.normalizedKRW);
-    bucketValues.set(bucket, values.some((value) => value == null) ? null : values.reduce<number>((sum, value) => sum + (value ?? 0), 0));
+    const incomplete = invalidRowCount > 0 || holdings.some((row) => bucketFor(row.market as KnownHolding['market']) === bucket && !knownHoldings.some((known) => known.id === row.id));
+    bucketValues.set(bucket, incomplete || values.some((value) => value == null) ? null : values.reduce<number>((sum, value) => sum + (value ?? 0), 0));
   }
   bucketValues.set('CASH', null);
   bucketValues.set('CRYPTO', null);
@@ -220,7 +246,7 @@ export async function buildPortfolioIntelligence(input: {
   };
   if (topHoldings.length >= 2) {
     const pair = topHoldings.slice(0, 2);
-    const histories = await Promise.allSettled(pair.map((holding) => MarketDataService.getCandles(holding.ticker, '1D')));
+    const histories = await Promise.allSettled(pair.map((holding) => (input.loadCandles ?? MarketDataService.getCandles.bind(MarketDataService))(holding.ticker, '1D')));
     if (histories.every((result) => result.status === 'fulfilled')) {
       const left = histories[0].status === 'fulfilled' ? closeReturns(histories[0].value) : [];
       const right = histories[1].status === 'fulfilled' ? closeReturns(histories[1].value) : [];
@@ -233,9 +259,16 @@ export async function buildPortfolioIntelligence(input: {
   }
 
   const knownCost = normalizedHoldings.reduce((sum, holding) => sum + (holding.normalizedCostKRW ?? 0), 0);
-  const costComplete = normalizedHoldings.every((holding) => holding.normalizedCostKRW != null) && holdings.length === knownHoldings.length;
+  const costComplete = invalidRowCount === 0 && normalizedHoldings.every((holding) => holding.normalizedCostKRW != null) && holdings.length === knownHoldings.length;
   const knownValue = normalizedHoldings.reduce((sum, holding) => sum + (holding.normalizedKRW ?? 0), 0);
-  const valueComplete = normalizedHoldings.every((holding) => holding.normalizedKRW != null) && holdings.length === knownHoldings.length;
+  const valueComplete = invalidRowCount === 0 && normalizedHoldings.every((holding) => holding.normalizedKRW != null) && holdings.length === knownHoldings.length;
+  const noValuationEvidence = rawRows.length > 0 && knownHoldings.length === 0;
+  const nativeBalance = (currency: 'KRW' | 'USD') => {
+    const rows = knownHoldings.filter((row) => row.currency === currency);
+    const missing = invalidRowCount > 0 || holdings.some((row) => row.currency === currency && !knownHoldings.some((known) => known.id === row.id));
+    const amount = rows.reduce((sum, row) => sum + row.nativeValue, 0);
+    return { amount: missing || !Number.isFinite(amount) ? null : amount, status: missing ? 'UNAVAILABLE' : 'READY', source: 'known-stock-valuation-only' };
+  };
 
   return {
     status: aggregate.status,
@@ -243,20 +276,20 @@ export async function buildPortfolioIntelligence(input: {
     totalAssets: {
       status: aggregate.status,
       normalizedKRW: aggregate.assets.totalNormalizedKRWAmount,
-      knownNormalizedKRW: aggregate.assets.knownNormalizedKRWAmount,
+      knownNormalizedKRW: noValuationEvidence ? null : aggregate.assets.knownNormalizedKRWAmount,
     },
-    investmentPrincipal: { status: costComplete ? 'READY' : 'PARTIAL', normalizedKRW: costComplete ? knownCost : null, knownNormalizedKRW: knownCost },
+    investmentPrincipal: { status: costComplete ? 'READY' : 'PARTIAL', normalizedKRW: costComplete ? knownCost : null, knownNormalizedKRW: noValuationEvidence ? null : knownCost },
     valuationPnl: {
       status: costComplete && valueComplete ? 'READY' : 'PARTIAL',
       normalizedKRW: costComplete && valueComplete ? knownValue - knownCost : null,
       returnPercent: costComplete && valueComplete && knownCost > 0 ? ((knownValue - knownCost) / knownCost) * 100 : null,
     },
     nativeBalances: {
-      KRW: { amount: knownHoldings.filter((row) => row.currency === 'KRW').reduce((sum, row) => sum + row.nativeValue, 0), status: 'PARTIAL', source: 'known-stock-valuation-only' },
-      USD: { amount: knownHoldings.filter((row) => row.currency === 'USD').reduce((sum, row) => sum + row.nativeValue, 0), status: 'PARTIAL', source: 'known-stock-valuation-only' },
+      KRW: nativeBalance('KRW'),
+      USD: nativeBalance('USD'),
       USDT: { amount: null, status: 'UNAVAILABLE', source: 'private-provider-not-called' },
     },
-    normalizedKRW: aggregate.assets,
+    normalizedKRW: { ...aggregate.assets, knownNormalizedKRWAmount: noValuationEvidence ? null : aggregate.assets.knownNormalizedKRWAmount },
     fx: {
       quotes: fxQuotes.map((quote: FxQuote) => ({ rate: quote.krwRate, pair: `${quote.currency}/KRW`, source: quote.source, asOf: quote.asOf, quality: quote.quality })),
       status: fxMissing.length ? 'PARTIAL' : 'READY',
@@ -273,7 +306,7 @@ export async function buildPortfolioIntelligence(input: {
     },
     allocation: {
       status: 'PARTIAL',
-      knownTotalKRW: knownBucketTotal,
+      knownTotalKRW: noValuationEvidence ? null : knownBucketTotal,
       buckets: {
         KR_STOCKS: bucketPercent('KR_STOCKS'),
         US_STOCKS: bucketPercent('US_STOCKS'),
@@ -293,6 +326,8 @@ export async function buildPortfolioIntelligence(input: {
       providerCount: aggregate.provenance.providerCount,
       includedProviderCount: aggregate.provenance.includedProviderCount,
       invalidHoldingRows: invalidRowCount,
+      requestedHoldingCount: invalidRowCount > 0 ? null : holdings.length,
+      knownHoldingCount: knownHoldings.length,
     },
     missingSources: [...new Set([...aggregate.missing, ...missingSources])],
     safety: {
