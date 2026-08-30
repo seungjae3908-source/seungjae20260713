@@ -321,6 +321,10 @@ test('scheduled wrapper cron set is exactly the 48 V3-derived UTC slots and manu
   assert.match(scheduledWorkflow, /date \+%s%3N/u);
   assert.match(scheduledWorkflow, /github\.rest\.actions\.getArtifact/u);
   assert.doesNotMatch(scheduledWorkflow, /getWorkflowRun/u);
+  assert.match(scheduledWorkflow, /Choose immutable attempt artifact name/u);
+  assert.match(scheduledWorkflow, /diagnostic-\$GITHUB_RUN_ID-\$GITHUB_RUN_ATTEMPT/u);
+  assert.match(scheduledWorkflow, /downloadArtifact/u);
+  assert.match(scheduledWorkflow, /complete-window/u);
   const manualWorkflow = await readFile(new URL('../../.github/workflows/public-forward-liquidity-calibration-capture.yml', import.meta.url), 'utf8');
   assert.match(manualWorkflow, /workflow_dispatch:/u);
   assert.doesNotMatch(manualWorkflow, /^\s+schedule:/mu);
@@ -336,4 +340,29 @@ test('shared runner preserves legacy manual v1 receipts for #811 while scheduled
   assert.match(runner, /captureReceipt\.schemaVersion === 'public-forward-liquidity-capture-receipt-v1'/u);
   assert.match(runner, /seamSourceBlobSha/u);
   assert.match(runner, /seamRunnerBlobSha/u);
+});
+
+test('scheduled runner binds completion time and aggregates immutable complete-window receipts without a second store', async () => {
+  const runner = await readFile(new URL('../scripts/run-public-forward-liquidity-capture-seam-v3.mjs', import.meta.url), 'utf8');
+  assert.match(runner, /actualRunCompletedAtMs/u);
+  assert.match(runner, /CAPTURE_COMPLETED_OUTSIDE_BOUND_SLOT/u);
+  assert.match(runner, /prospectiveSlotCredit = 0/u);
+  assert.match(runner, /runCompleteWindow/u);
+  assert.match(runner, /findReceiptFiles/u);
+  assert.match(runner, /policyExpectedSlotN/u);
+  assert.match(runner, /expectedTotalSlotN/u);
+  assert.match(runner, /complete-window-attempt-log\.json/u);
+});
+
+test('immutable activation contract keeps policy counts while pre-first-slot dynamic expected counts are zero', async () => {
+  const contract = JSON.parse(await readFile(new URL('../config/public-forward-liquidity-v3-activation-contract.json', import.meta.url), 'utf8'));
+  assert.equal(contract.scheduleActivated, false);
+  assert.equal(contract.initialCompleteWindowAttemptLog.policyExpectedTotalSlotN, 48);
+  assert.equal(contract.initialCompleteWindowAttemptLog.expectedTotalSlotN, 0);
+  assert.equal(contract.initialCompleteWindowAttemptLog.splits.TRAIN.policyExpectedSlotN, 24);
+  assert.equal(contract.initialCompleteWindowAttemptLog.splits.TRAIN.expectedSlotN, 0);
+  assert.equal(contract.initialCompleteWindowAttemptLog.splits.VALIDATION.policyExpectedSlotN, 12);
+  assert.equal(contract.initialCompleteWindowAttemptLog.splits.VALIDATION.expectedSlotN, 0);
+  assert.equal(contract.initialCompleteWindowAttemptLog.splits.OOS.policyExpectedSlotN, 12);
+  assert.equal(contract.initialCompleteWindowAttemptLog.splits.OOS.expectedSlotN, 0);
 });
