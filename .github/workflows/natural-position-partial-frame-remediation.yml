@@ -38,8 +38,7 @@ jobs:
           new = '''  const selected = frames.filter((frame) => frame.sourceObservedAtMs > cursor);\n  if (selected.length > 0 && selected[0].timestamp < cursor) {\n    return Object.freeze({ status: STATUS.MISSING, blocker: "POSITION_OBSERVATION_PARTIAL_FRAME_AT_CURSOR", frames: null });\n  }\n  if (selected.length === 0) {'''
           if old not in source:
               raise SystemExit('PARTIAL_FRAME_SOURCE_ANCHOR_NOT_FOUND')
-          source = source.replace(old, new, 1)
-          source_path.write_text(source)
+          source_path.write_text(source.replace(old, new, 1))
 
           tests = test_path.read_text()
           fixture_old = '    entryTimestampMs: firstClose + 1_000,\n'
@@ -48,10 +47,20 @@ jobs:
               raise SystemExit('PARTIAL_FRAME_FIXTURE_ANCHOR_NOT_FOUND')
           tests = tests.replace(fixture_old, fixture_new, 1)
 
-          regression = '''\n\ntest("first post-cursor candle that opened before Entry fails closed instead of contaminating MAE/MFE with pre-Entry OHLC", async () => {\n  const firstOpen = NOW_MS - (3 * INTERVAL_MS);\n  const entryTimestampMs = firstOpen + INTERVAL_MS + 1_000;\n  const observed = await collect({ openPositions: [position({ entryTimestampMs })] });\n  assert.equal(observed.status, "MISSING");\n  assert.equal(observed.blocker, "POSITION_OBSERVATION_PARTIAL_FRAME_AT_CURSOR");\n  assert.equal(observed.observations, null);\n});\n'''
+          regression = '''
+
+test("first post-cursor candle that opened before Entry fails closed instead of contaminating MAE/MFE with pre-Entry OHLC", async () => {
+  const firstOpen = NOW_MS - (3 * INTERVAL_MS);
+  const entryTimestampMs = firstOpen + INTERVAL_MS + 1_000;
+  const observed = await collect({ openPositions: [position({ entryTimestampMs })] });
+  assert.equal(observed.status, "MISSING");
+  assert.equal(observed.blocker, "POSITION_OBSERVATION_PARTIAL_FRAME_AT_CURSOR");
+  assert.equal(observed.observations, null);
+});
+'''
           if 'POSITION_OBSERVATION_PARTIAL_FRAME_AT_CURSOR' in tests:
               raise SystemExit('PARTIAL_FRAME_REGRESSION_ALREADY_PRESENT')
-          test_path.write_text(tests.rstrip() + regression + '\n')
+          test_path.write_text(tests.rstrip() + regression.rstrip() + '\n')
 
           runtime_tests = runtime_test_path.read_text()
           runtime_fixture_old = '    entryTimestampMs: NOW_MS - (2 * FOUR_HOURS_MS) + 1_000,\n'
