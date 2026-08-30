@@ -89,8 +89,10 @@ PR #756. The backend uses authenticated, administrator-only
 - POST `/review` accepts only a task enum and the exact displayed evidence digest.
   It re-reads canonical state before dispatch. User prompts, account context,
   prices and holdout outcomes are not transmitted.
-- POST `/validate-dsl` invokes the existing `createSafeStrategyDslV1`. Its identity
-  is the canonical DSL digest; a valid DSL remains `NOT_EVALUATED`.
+- POST `/validate-dsl` invokes the existing `createSafeStrategyDslV1` and resolves
+  the canonical bundle. Its identity is the canonical DSL digest; DSL validity
+  alone grants no backtest or later-stage evidence. Explicit `/submit-backtest`
+  admission rechecks the server-owned bundle before the existing executor.
 - Backtester and promotion links open existing user paths. They do not submit a
   job or carry an incompatible DSL into an unrelated strategy.
 
@@ -137,9 +139,11 @@ window is a display/transport policy, not an investment threshold.
 1. The current default Strategy Promotion source does not ingest immutable
    strategy-specific OOS/WF/Holdout/statistical-firewall receipts. This consumer
    must not manufacture them from runtime task success.
-2. A validated P1 DSL is not yet bound to the canonical backtest dispatcher's
-   immutable dataset, frozen split, cost and risk policy. No fake queue entry is
-   created. The UI explicitly reports `CANONICAL_BACKTEST_BINDING` missing.
+2. The resolver and canonical backtester submission seam are connected, but no
+   strategy-specific immutable dataset, frozen split, risk, full-cost and
+   OOS/WF/holdout source catalog or durable submission store is connected to the
+   default API. The UI reports each missing component and `BLOCKED_DATA`;
+   executor calls remain zero. No fake dataset, policy or queue entry is created.
 3. Qualitative AI criticism is not deterministic overfitting/leakage clearance.
    Statistical-firewall and untouched final-holdout owners must supply verified
    receipts. Final holdout outcomes are excluded from proposal input.
