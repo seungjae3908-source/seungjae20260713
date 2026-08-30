@@ -1,4 +1,4 @@
-import { apiGet, type SummaryItem } from './api';
+import type { SummaryItem } from './api';
 
 export type MarketSummaryDataState = 'ready' | 'partial' | 'provider_error';
 export type MarketSummaryErrorCode =
@@ -85,6 +85,7 @@ export function normalizeMarketSummaryResponse(
 }
 
 export async function getMarketSummary(): Promise<MarketSummaryResponse> {
+  const { apiGet } = await import('./api');
   const raw = await apiGet<MarketSummaryWireResponse>('/market/summary');
   return normalizeMarketSummaryResponse(raw);
 }
