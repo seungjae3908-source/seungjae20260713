@@ -1,0 +1,443 @@
+name: Backup DR One-Time Local Restore Drill
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/backup-dr-one-time-restore-drill.yml'
+      - 'ops/backup-dr/one-time-restore-drill-contract.test.mjs'
+      - 'ops/backup-dr/restore-encrypted-postgres-backup-drill.mjs'
+      - 'ops/backup-dr/policy.json'
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  statuses: read
+
+concurrency:
+  group: backup-dr-restore-${{ github.event_name == 'issue_comment' && github.event.comment.id || github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    name: Validate one-time local restore drill contract
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Require exact PR HEAD and validate contract
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          node --check ops/backup-dr/one-time-restore-drill-contract.test.mjs
+          node ops/backup-dr/one-time-restore-drill-contract.test.mjs
+
+  restore-drill:
+    name: Owner-approved localhost-only logical restore drill
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 23 &&
+      !github.event.issue.pull_request &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control' &&
+      github.event.comment.user.login == github.repository_owner &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/run-encrypted-db-restore-drill ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment: production
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+
+    steps:
+      - name: Initialize ephemeral runner restore path
+        run: |
+          set -Eeuo pipefail
+          printf 'LOCAL_RESTORE_DIR=%s\n' "$RUNNER_TEMP/backup-dr-one-time-restore" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Parse exact owner command
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const body = String(process.env.COMMENT_BODY ?? '').trim();
+          const match = /^\/run-encrypted-db-restore-drill ([0-9a-fA-F]{40}) ([0-9a-fA-F]{40}) (postgres-production-[A-Za-z0-9_-]{8,100})$/.exec(body);
+          if (!match) {
+            console.error('Expected /run-encrypted-db-restore-drill <active-production-sha> <exact-current-main-sha> <backup-id>');
+            process.exit(1);
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, [
+            `active_sha=${match[1].toLowerCase()}`,
+            `source_sha=${match[2].toLowerCase()}`,
+            `backup_id=${match[3]}`,
+            '',
+          ].join('\n'));
+          NODE
+
+      - name: Require exact current main and coherent Required CI 6/6
+        id: ci
+        uses: actions/github-script@v7
+        env:
+          SOURCE_SHA: ${{ steps.command.outputs.source_sha }}
+        with:
+          script: |
+            const target = process.env.SOURCE_SHA;
+            const main = await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: 'main',
+            });
+            if (main.data.commit.sha !== target) {
+              core.setFailed(`Restore drill source SHA is stale: target=${target} main=${main.data.commit.sha}`);
+              return;
+            }
+            const required = [
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: target,
+              per_page: 100,
+            });
+            const latest = new Map();
+            for (const status of statuses) {
+              if (!latest.has(status.context)) latest.set(status.context, status);
+            }
+            const evidence = required.map((name) => latest.get(name));
+            if (evidence.some((status) => status?.state !== 'success')) {
+              core.setFailed('Exact current main does not have all six successful Required statuses.');
+              return;
+            }
+            const runIds = new Set(evidence.map((status) => {
+              const match = /\/actions\/runs\/(\d+)/.exec(String(status.target_url ?? ''));
+              return match?.[1] ?? null;
+            }));
+            if (runIds.size !== 1 || runIds.has(null)) {
+              core.setFailed('Required statuses do not share one exact Application CI provenance run.');
+              return;
+            }
+            const runId = Number([...runIds][0]);
+            const run = await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId,
+            });
+            if (run.data.head_sha !== target || run.data.status !== 'completed' || run.data.conclusion !== 'success') {
+              core.setFailed('Required CI provenance is not an exact successful current-main run.');
+              return;
+            }
+            core.setOutput('run_id', String(runId));
+
+      - name: Require matching encrypted-backup creation receipt
+        id: backup_receipt
+        uses: actions/github-script@v7
+        env:
+          SOURCE_SHA: ${{ steps.command.outputs.source_sha }}
+          ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
+          BACKUP_ID: ${{ steps.command.outputs.backup_id }}
+        with:
+          script: |
+            const parse = (body) => Object.fromEntries(String(body ?? '')
+              .split(/\r?\n/)
+              .slice(1)
+              .map((line) => {
+                const index = line.indexOf(':');
+                return index > 0 ? [line.slice(0, index).trim(), line.slice(index + 1).trim()] : null;
+              })
+              .filter(Boolean));
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+              per_page: 100,
+            });
+            const candidates = comments
+              .filter((comment) => String(comment.body ?? '').startsWith('[BACKUP_DR_ONE_TIME_RESULT]\n'))
+              .map((comment) => ({ comment, fields: parse(comment.body) }))
+              .filter(({ fields }) => fields.backup_id === process.env.BACKUP_ID
+                && fields.source_sha === process.env.SOURCE_SHA
+                && fields.active_production_sha === process.env.ACTIVE_SHA
+                && fields.outcome === 'success'
+                && fields.encrypted === 'true'
+                && fields.plaintext_at_rest === 'false'
+                && fields.github_backup_artifact_uploaded === 'false'
+                && fields.restore_drill_executed === 'false'
+                && fields.database_mutation === 'false'
+                && /^[0-9a-f]{64}$/.test(fields.sha256 ?? '')
+                && /^\d+$/.test(fields.workflow_run ?? ''))
+              .sort((left, right) => Date.parse(right.comment.created_at) - Date.parse(left.comment.created_at));
+            if (candidates.length !== 1) {
+              core.setFailed(`Expected exactly one authoritative matching backup receipt; found ${candidates.length}.`);
+              return;
+            }
+            const selected = candidates[0].fields;
+            const runId = Number(selected.workflow_run);
+            const run = await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId,
+            });
+            if (run.data.name !== 'Backup DR One-Time Encrypted Create'
+                || run.data.event !== 'issue_comment'
+                || run.data.status !== 'completed'
+                || run.data.conclusion !== 'success'
+                || String(run.data.head_sha ?? '').toLowerCase() !== process.env.SOURCE_SHA) {
+              core.setFailed('Backup receipt workflow provenance is not an exact successful one-time create run.');
+              return;
+            }
+            core.setOutput('sha256', selected.sha256);
+            core.setOutput('create_run_id', String(runId));
+
+      - name: Require latest successful Production deployment provenance
+        uses: actions/github-script@v7
+        env:
+          ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
+        with:
+          script: |
+            const active = process.env.ACTIVE_SHA;
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'production-deploy.yml',
+              event: 'workflow_dispatch',
+              per_page: 100,
+            });
+            const latest = runs
+              .filter((run) => run.status === 'completed' && run.conclusion === 'success')
+              .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))[0];
+            if (!latest || String(latest.head_sha).toLowerCase() !== active) {
+              core.setFailed('Active Production SHA does not match the latest successful Production Deploy.');
+              return;
+            }
+            core.info(`Production provenance accepted from Run ${latest.id}.`);
+
+      - name: Require exact checked-out source and Backup DR contracts
+        env:
+          SOURCE_SHA: ${{ steps.command.outputs.source_sha }}
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main
+          test "$(git rev-parse origin/main^{commit})" = "$SOURCE_SHA"
+          git checkout --detach "$SOURCE_SHA"
+          node --check ops/backup-dr/restore-encrypted-postgres-backup-drill.mjs
+          node ops/backup-dr/contract.test.mjs
+          node ops/backup-dr/one-time-restore-drill-contract.test.mjs
+
+      - name: Configure Production SSH for read-only backup retrieval
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          umask 077
+          mkdir -p ~/.ssh "$LOCAL_RESTORE_DIR"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts 2>/dev/null
+          fi
+
+      - name: Verify deployed Production identity and fetch exact encrypted bundle read-only
+        env:
+          ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
+          BACKUP_ID: ${{ steps.command.outputs.backup_id }}
+          EXPECTED_SHA256: ${{ steps.backup_receipt.outputs.sha256 }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$BACKUP_ID" =~ ^postgres-production-[A-Za-z0-9_-]{8,100}$ ]]
+          [[ "$EXPECTED_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          PAYLOAD="$BACKUP_ID.dump.age"
+          REMOTE_DIR=".local/share/investment-platform/backups/postgres/$BACKUP_ID"
+          quoted_sha="$(printf '%q' "$ACTIVE_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "ACTIVE_SHA=$quoted_sha REMOTE_DIR='$REMOTE_DIR' PAYLOAD='$PAYLOAD' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          case "$REMOTE_DIR" in .local/share/investment-platform/backups/postgres/postgres-production-*) ;; *) exit 10;; esac
+          test -f /opt/stock-app/.deploy/current-sha
+          test "$(tr -d '\r\n' < /opt/stock-app/.deploy/current-sha)" = "$ACTIVE_SHA"
+          test -d "$REMOTE_DIR"
+          test "$(find "$REMOTE_DIR" -maxdepth 1 -type f | wc -l | tr -d ' ')" = 3
+          for file in "$PAYLOAD" "$PAYLOAD.sha256" "$PAYLOAD.json"; do
+            test -f "$REMOTE_DIR/$file"
+            test ! -L "$REMOTE_DIR/$file"
+            test -s "$REMOTE_DIR/$file"
+          done
+          REMOTE
+          scp -i ~/.ssh/id_ed25519 -P "$SSH_PORT" -o BatchMode=yes \
+            "$SSH_USER@$SSH_HOST:$REMOTE_DIR/$PAYLOAD" \
+            "$SSH_USER@$SSH_HOST:$REMOTE_DIR/$PAYLOAD.sha256" \
+            "$SSH_USER@$SSH_HOST:$REMOTE_DIR/$PAYLOAD.json" \
+            "$LOCAL_RESTORE_DIR/"
+          node - "$LOCAL_RESTORE_DIR/$PAYLOAD" "$BACKUP_ID" "$EXPECTED_SHA256" <<'NODE'
+          const fs = require('node:fs');
+          const crypto = require('node:crypto');
+          const [payload, backupId, expected] = process.argv.slice(2);
+          const actual = crypto.createHash('sha256').update(fs.readFileSync(payload)).digest('hex');
+          const sidecar = fs.readFileSync(`${payload}.sha256`, 'utf8').trim().split(/\s+/)[0];
+          const manifest = JSON.parse(fs.readFileSync(`${payload}.json`, 'utf8'));
+          if (actual !== expected || sidecar !== expected || manifest?.sha256 !== expected
+              || manifest?.backupId !== backupId || manifest?.encrypted !== true
+              || manifest?.plaintextAtRest !== false) process.exit(1);
+          NODE
+
+      - name: Install ephemeral restore tools on runner only
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq age postgresql-client >/dev/null
+          age --version >/dev/null
+          pg_restore --version >/dev/null
+          psql --version >/dev/null
+
+      - name: Create isolated localhost-only restore database
+        run: |
+          set -Eeuo pipefail
+          DB_NAME="backup_restore_drill_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+          DB_USER="backup_restore_runner"
+          DB_PASSWORD="$(openssl rand -hex 24)"
+          echo "::add-mask::$DB_PASSWORD"
+          export PGPASSWORD=postgres
+          psql -X -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE $DB_USER LOGIN PASSWORD '$DB_PASSWORD';"
+          createdb -h 127.0.0.1 -U postgres -O "$DB_USER" "$DB_NAME"
+          printf 'RESTORE_DRILL_DATABASE_URL=postgresql://%s:%s@127.0.0.1:5432/%s\n' \
+            "$DB_USER" "$DB_PASSWORD" "$DB_NAME" >> "$GITHUB_ENV"
+
+      - name: Restore encrypted backup into isolated localhost PostgreSQL and verify receipt
+        id: restore
+        env:
+          BACKUP_ID: ${{ steps.command.outputs.backup_id }}
+          RESTORE_DRILL_EXECUTION_APPROVED: RESTORE_TO_LOCAL_EPHEMERAL
+          RESTORE_DRILL_AGE_IDENTITY: ${{ secrets.BACKUP_AGE_IDENTITY }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$RESTORE_DRILL_AGE_IDENTITY"
+          receipt="$RUNNER_TEMP/backup-dr-restore-receipt.json"
+          node ops/backup-dr/restore-encrypted-postgres-backup-drill.mjs \
+            "$LOCAL_RESTORE_DIR/$BACKUP_ID.dump.age" > "$receipt"
+          node - "$receipt" "$BACKUP_ID" "$GITHUB_OUTPUT" <<'NODE'
+          const fs = require('node:fs');
+          const [path, expectedBackupId, output] = process.argv.slice(2);
+          const value = JSON.parse(fs.readFileSync(path, 'utf8'));
+          if (value?.backupId !== expectedBackupId
+              || value?.checksumVerified !== true
+              || value?.targetScope !== 'LOCALHOST_EPHEMERAL_ONLY'
+              || value?.targetDatabasePrefixVerified !== true
+              || value?.destructiveCleanUsed !== false
+              || value?.productionCredentialUsed !== false
+              || value?.logicalRestoreVerified !== true
+              || !Number.isSafeInteger(value?.restoredTableCount)
+              || value.restoredTableCount <= 0
+              || value?.providerPitrRestoreVerified !== false
+              || value?.storageObjectRestoreVerified !== false) process.exit(1);
+          fs.appendFileSync(output, [
+            `backup_id=${value.backupId}`,
+            `restored_table_count=${value.restoredTableCount}`,
+            '',
+          ].join('\n'));
+          NODE
+          rm -f -- "$receipt"
+
+      - name: Record sanitized logical-restore evidence on release control and canonical hub
+        env:
+          ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
+          SOURCE_SHA: ${{ steps.command.outputs.source_sha }}
+          BACKUP_ID: ${{ steps.restore.outputs.backup_id }}
+          SHA256: ${{ steps.backup_receipt.outputs.sha256 }}
+          CREATE_RUN_ID: ${{ steps.backup_receipt.outputs.create_run_id }}
+          RESTORED_TABLE_COUNT: ${{ steps.restore.outputs.restored_table_count }}
+          REQUIRED_CI_RUN: ${{ steps.ci.outputs.run_id }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = [
+              '[BACKUP_DR_LOGICAL_RESTORE_RESULT]',
+              `source_sha: ${process.env.SOURCE_SHA}`,
+              `active_production_sha: ${process.env.ACTIVE_SHA}`,
+              `required_ci_run: ${process.env.REQUIRED_CI_RUN}`,
+              `backup_create_run: ${process.env.CREATE_RUN_ID}`,
+              `restore_workflow_run: ${context.runId}`,
+              'outcome: success',
+              `backup_id: ${process.env.BACKUP_ID}`,
+              `sha256: ${process.env.SHA256}`,
+              'restore_drill_executed: true',
+              'restore_scope: LOCALHOST_EPHEMERAL_LOGICAL_ONLY',
+              'checksum_verified: true',
+              'logical_restore_verified: true',
+              `restored_table_count: ${process.env.RESTORED_TABLE_COUNT}`,
+              'ephemeral_local_database_mutation: true',
+              'production_database_mutation: false',
+              'production_credential_used: false',
+              'destructive_clean_used: false',
+              'provider_pitr_restore_verified: false',
+              'storage_object_restore_verified: false',
+              'offsite_restore_verified: false',
+              'backup_material_uploaded_to_github: false',
+              'schedule_activated: false',
+              'production_deploy_executed: false',
+              'private_trading_api: false',
+              'live_trading: false',
+              'real_order_count: 0',
+              'dr_claim_scope: LOGICAL_DATABASE_RESTORE_EVIDENCED_ONLY',
+            ].join('\n');
+            for (const issue_number of [23, 838]) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number,
+                body,
+              });
+            }
+
+      - name: Remove ephemeral runner restore material
+        if: always()
+        run: |
+          set -Eeuo pipefail
+          rm -rf -- "$LOCAL_RESTORE_DIR"
+          rm -f -- ~/.ssh/id_ed25519
