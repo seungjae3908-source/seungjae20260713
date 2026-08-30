@@ -1,6 +1,8 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
 import { buildCopilotSnapshot, COPILOT_AUTHORITY, validateCopilotDsl } from '../../api-server/src/services/research-copilot.service';
 import { ResearchBundleService } from '../../api-server/src/services/research-bundle.service';
+import type { ResearchBundleResolution } from '../../api-server/src/services/research-bundle.contract';
+import { researchBundleFixture, AUTHORITATIVE_NOW_MS } from '../../api-server/src/services/research-bundle.test-fixtures.mjs';
 
 const NOW = Date.parse('2026-08-30T09:00:00Z');
 const USER = '77777777-7777-4777-8777-777777777777';
@@ -28,8 +30,18 @@ const researchDsl = {
     { name: 'holding', domain: 'BAR_COUNT', valueType: 'INTEGER', min: 2, max: 4, step: 2 },
   ], limits: { maxAstDepth: 6, maxIndicatorCount: 8, maxRuleCount: 8, maxAstNodes: 64 },
 };
-async function setup(page: Page, options: { available?: boolean; regular?: boolean; failure?: boolean; malformed?: boolean; changedAfterReview?: boolean; numericReview?: boolean } = {}) {
+async function setup(page: Page, options: { available?: boolean; regular?: boolean; failure?: boolean; refreshFailure?: boolean; malformed?: boolean; changedAfterReview?: boolean; numericReview?: boolean; executableBundle?: boolean; stale?: boolean } = {}) {
   const snapshot = buildCopilotSnapshot(fixture, NOW);
+  if (options.stale) Object.assign(snapshot, buildCopilotSnapshot({ ...fixture, state: { latestCycleAt: NOW - 86_400_001 } }, NOW));
+  const canonical = researchBundleFixture();
+  const receipts = new Map<string, ResearchBundleResolution>(), artifacts = new Map<string, unknown>();
+  const bundles = options.executableBundle ? new ResearchBundleService({ readCanonicalBundle: async () => canonical.bundle,
+    now: () => AUTHORITATIVE_NOW_MS, allowTestEvidence: true, submissions: {
+      reserve: async (key, receipt) => { const previous = receipts.get(key); if (previous) return { acquired: false, receipt: previous }; receipts.set(key, receipt); return { acquired: true, receipt }; },
+      complete: async (key, receipt, artifact) => { receipts.set(key, receipt); artifacts.set(key, artifact); },
+      read: async key => { const receipt = receipts.get(key); return receipt ? { receipt, artifact: artifacts.get(key) } : null; },
+    } }) : new ResearchBundleService();
+  const processing: Array<{ path: string; ms: number }> = [];
   snapshot.ai.available = options.available === true;
   snapshot.ai.reason = options.available ? 'TEST_ONLY' : 'FREE_TIER_NOT_CONFIRMED';
   snapshot.ai.provider = options.available ? 'groq' : null;
@@ -38,6 +50,7 @@ async function setup(page: Page, options: { available?: boolean; regular?: boole
   const pageErrors: string[] = [];
   const unexpectedHttp: string[] = [];
   let reviewRequests = 0;
+  let snapshotRequests = 0;
   await page.addInitScript(({ user }) => {
     const encode = (value: Record<string, unknown>) => btoa(JSON.stringify(value)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
     localStorage.setItem('sb-127-auth-token', JSON.stringify({
@@ -49,7 +62,7 @@ async function setup(page: Page, options: { available?: boolean; regular?: boole
   }, { user: USER });
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   page.on('pageerror', error => pageErrors.push(error.message));
-  page.on('response', response => { if (response.status() >= 400 && !(options.failure && response.url().endsWith('/copilot'))) unexpectedHttp.push(`${response.status()} ${response.url()}`); });
+  page.on('response', response => { if (response.status() >= 400 && !((options.failure || options.refreshFailure) && response.url().endsWith('/copilot'))) unexpectedHttp.push(`${response.status()} ${response.url()}`); });
   await page.route('**/__e2e-supabase/**', route => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith('/profiles')) return fulfill(route, { id: USER, login_name: 'fixture', display_name: '테스트 관리자', role: options.regular ? 'user' : 'admin', membership_level: options.regular ? 'regular' : 'admin', status: 'approved', is_active: true });
@@ -63,12 +76,20 @@ async function setup(page: Page, options: { available?: boolean; regular?: boole
     if (path === '/api/admin/research/overview') return fulfill(route, fixture);
     if (path === '/api/strategy-promotion') return fulfill(route, { items: [], counts: {}, evidenceSources: [], promotionCandidates: 0, executionAuthority: 'NONE' });
     if (path === '/api/admin/research/copilot') {
+      snapshotRequests += 1;
+      if (options.refreshFailure && snapshotRequests > 1) return fulfill(route, { error: 'RESEARCH_SOURCE_UNAVAILABLE' }, 503);
       const current = options.changedAfterReview && reviewRequests > 0
         ? buildCopilotSnapshot({ ...fixture, state: { present: true, latestCycleAt: NOW - 1_000 } }, NOW)
         : snapshot;
       return fulfill(route, options.failure ? { error: 'RESEARCH_SOURCE_UNAVAILABLE' } : options.malformed ? { ...current, stages: [null] } : current, options.failure ? 503 : 200);
     }
-    if (path.endsWith('/copilot/validate-dsl')) return fulfill(route, { ...validateCopilotDsl(request.postDataJSON()), bundle: await new ResearchBundleService().resolve(request.postDataJSON()) });
+    if (path.endsWith('/copilot/validate-dsl')) return fulfill(route, { ...validateCopilotDsl(request.postDataJSON()), bundle: await bundles.resolve(request.postDataJSON()) });
+    if (path.endsWith('/copilot/submit-backtest') || path.endsWith('/copilot/read-backtest')) {
+      const started = performance.now();
+      const result = path.endsWith('/read-backtest') ? await bundles.readback(request.postDataJSON()) : await bundles.submit('TEST_ONLY_ADMIN', request.postDataJSON());
+      processing.push({ path, ms: performance.now() - started });
+      return fulfill(route, result);
+    }
     if (path.endsWith('/copilot/review')) {
       reviewRequests += 1;
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -84,13 +105,25 @@ async function setup(page: Page, options: { available?: boolean; regular?: boole
     return fulfill(route, { ok: true, items: [], rows: [], results: [] });
   });
   return {
-    calls, reviewRequests: () => reviewRequests,
-    clean() { expect(pageErrors).toEqual([]); expect(unexpectedHttp).toEqual([]); expect(errors.filter(error => !(options.failure && error.includes('503')))).toEqual([]); },
+    calls, processing, canonical, reviewRequests: () => reviewRequests,
+    clean() { expect(pageErrors).toEqual([]); expect(unexpectedHttp).toEqual([]); expect(errors.filter(error => !((options.failure || options.refreshFailure) && error.includes('503')))).toEqual([]); },
   };
 }
-for (const width of [390, 1440]) {
+test('failed refresh removes previous evidence instead of retaining a fresh-looking read model', async ({ page }) => {
+  const diagnostics = await setup(page, { refreshFailure: true });
+  await page.goto('/research-center');
+  await page.getByRole('button', { name: 'AI Research Copilot', exact: true }).click();
+  await expect(page.getByRole('region', { name: '연구 단계' })).toBeVisible();
+  await page.getByRole('button', { name: '증거 새로고침' }).click();
+  await expect(page.getByRole('alert')).toContainText('연구 기능을 사용할 수 없습니다.');
+  await expect(page.getByRole('region', { name: '연구 단계' })).toHaveCount(0);
+  await expect(page.getByRole('region', { name: '전략 상태와 인계' })).toHaveCount(0);
+  diagnostics.clean();
+});
+const viewports = [[1440, 900], [1024, 768], [320, 740], [360, 800], [390, 844], [412, 915], [430, 932]];
+for (const [width, height] of viewports) {
   test(`copilot ${width}px preserves missing evidence, no automatic AI, safe DSL and handoff links`, async ({ page }, testInfo) => {
-    await page.setViewportSize({ width, height: 900 });
+    await page.setViewportSize({ width, height });
     const diagnostics = await setup(page);
     await page.goto('/research-center');
     await expect(page.getByRole('heading', { name: '연구센터', exact: true })).toBeVisible();
@@ -125,6 +158,41 @@ for (const width of [390, 1440]) {
     diagnostics.clean();
   });
 }
+for (const [width, height] of viewports) test(`canonical TEST_ONLY candidate ${width}x${height} submits and reads exact artifact without downstream credit`, async ({ page }, testInfo) => {
+  await page.setViewportSize({ width, height });
+  const diagnostics = await setup(page, { executableBundle: true });
+  const started = performance.now();
+  await page.goto('/research-center');
+  await page.getByRole('button', { name: 'AI Research Copilot', exact: true }).click();
+  await expect(page.getByRole('region', { name: '연구 단계' })).toBeVisible();
+  const loadMs = performance.now() - started;
+  await page.getByLabel('연구 DSL JSON').fill(JSON.stringify(diagnostics.canonical.dsl));
+  await page.getByRole('button', { name: 'DSL 검증', exact: true }).click();
+  const submit = page.getByRole('button', { name: '검증된 Bundle로 연구 백테스트 제출' });
+  await expect(submit).toBeEnabled(); await submit.click();
+  await expect(page.getByLabel('Backtest Bundle')).toContainText('Backtest Bundle · COMPLETED');
+  await expect(page.getByLabel('Backtest Bundle')).toContainText('영구 결과 재조회 미확인');
+  await page.getByRole('button', { name: '저장된 연구 결과 재조회' }).click();
+  await expect(page.getByLabel('Backtest Bundle')).toContainText('결과 보존·재조회: READBACK_VERIFIED');
+  await expect(page.getByLabel('선택 후보의 증거 연결')).toContainText('동일 후보의 OOS/WF/Holdout 평가 증거 부족');
+  await expect(submit).toBeDisabled();
+  await page.getByText('이 후보의 식별자와 출처 자세히', { exact: true }).press('Enter');
+  await expect(page.getByLabel('선택 후보의 증거 연결')).toContainText(diagnostics.canonical.bundle.dataset.id);
+  await expect(page.getByLabel('선택 후보의 증거 연결')).toContainText('genuine 독립 표본 수: 확인 불가');
+  expect(diagnostics.calls.filter(call => call.endsWith('/submit-backtest'))).toHaveLength(1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.getByLabel('선택 후보의 증거 연결').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath(`candidate-lineage-${width}.png`) });
+  await testInfo.attach('TEST_ONLY-local-performance', { body: JSON.stringify({ viewport: [width, height], loadMs, processing: diagnostics.processing, db: 'NOT_CONNECTED', provider: 'NOT_CALLED', artifactStorage: 'TEST_ONLY_INJECTED_STORE', genuineCredit: 0 }), contentType: 'application/json' });
+  diagnostics.clean();
+});
+test('stale overview cannot credit current receipts', async ({ page }) => {
+  const diagnostics = await setup(page, { stale: true });
+  await page.goto('/research-center'); await page.getByRole('button', { name: 'AI Research Copilot', exact: true }).click();
+  await expect(page.getByRole('region', { name: '연구 근거와 AI 한도' })).toContainText('STALE');
+  await expect(page.getByRole('region', { name: '연구 단계' })).toContainText('BLOCKED_DATA');
+  diagnostics.clean();
+});
 test('manual AI review disables duplicate submission and remains advisory', async ({ page }) => {
   const diagnostics = await setup(page, { available: true });
   await page.goto('/research-center');

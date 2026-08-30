@@ -11,6 +11,8 @@ export interface ResearchBundleResolution {
   backtestCompleted: boolean;
   backtestStatus: 'NOT_SUBMITTED' | 'BLOCKED_DATA' | 'RUNNING' | 'COMPLETED' | 'FAILED';
   backtesterCalls: number;
+  resultArtifactDigest: string | null;
+  publicationStatus: 'MISSING_EVIDENCE' | 'BLOCKED_DATA' | 'READBACK_VERIFIED';
   components: Array<{ key: string; status: 'READY' | 'MISSING_EVIDENCE' | 'BLOCKED_DATA'; blockers: string[] }>;
   blockers: string[];
   wfStatus: 'NOT_EVALUATED' | 'MISSING_EVIDENCE' | 'PASS' | 'FAIL';
@@ -46,5 +48,8 @@ export interface ResearchBundleResolution {
  * Failed/unknown completions must never release reservations for automatic replay. */
 export interface ResearchSubmissionStore {
   reserve(key: string, receipt: ResearchBundleResolution): Promise<{ acquired: boolean; receipt: ResearchBundleResolution }>;
-  complete(key: string, receipt: ResearchBundleResolution): Promise<void>;
+  /** Retain the unmodified #690 result with its receipt atomically. Never rebuild metrics. */
+  complete(key: string, receipt: ResearchBundleResolution, artifact?: Record<string, unknown>): Promise<void>;
+  /** Durable owner read, independent of an in-process response/cache. */
+  read?(key: string): Promise<{ receipt: ResearchBundleResolution; artifact: unknown } | null>;
 }

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { ResearchBundleService } from './research-bundle.service.ts';
 import { researchBundleFixture as fixture, AUTHORITATIVE_NOW_MS as NOW } from './research-bundle.test-fixtures.mjs';
 import { sha256Canonical as hash } from '../../../market-prediction-lab/src/research-cache-provenance.js';
+import { runOnePassCandidateBacktestV1 } from '../../../market-prediction-lab/src/research-tournament-engine-v1.js';
 
 function harness(bundle) {
   let calls = 0;
@@ -13,7 +14,7 @@ function harness(bundle) {
       const prior = receipts.get(key); if (prior) return { acquired: false, receipt: prior };
       receipts.set(key, receipt); return { acquired: true, receipt };
     }, complete: async (key, receipt) => { receipts.set(key, receipt); } },
-    runBacktest: async () => { calls++; return { status: 'PASS', canonicalBacktestOwner: '#690', executionEquivalent: true }; } };
+    runBacktest: async input => { calls++; return runOnePassCandidateBacktestV1(input); } };
   return { service: new ResearchBundleService(dependencies), dependencies, calls: () => calls };
 }
 async function request(service, dsl) {
@@ -91,6 +92,74 @@ test('default runtime refuses TEST_ONLY receipts and never invents a source', as
   assert.equal(missing.backtestStatus, 'BLOCKED_DATA'); assert.equal(missing.backtesterCalls, 0);
 });
 export { fixture as researchBundleFixture, harness as researchBundleHarness };
+
+for (const field of ['datasetIdentity', 'strategyHash', 'parameterIdentity', 'formulaCandidateId']) test('foreign executor ' + field + ' cannot complete this candidate', async () => {
+  const f = fixture(), h = harness(f.bundle), run = h.dependencies.runBacktest;
+  h.dependencies.runBacktest = async input => ({ ...await run(input), [field]: 'foreign' });
+  const result = await h.service.submit('admin', await request(h.service, f.dsl));
+  assert.equal(result.backtestCompleted, false);
+  assert(result.blockers.includes('BACKTEST_RESULT_IDENTITY_MISMATCH'));
+});
+
+test('durable result readback binds exact artifact and never executes a second backtest', async () => {
+  const f = fixture(), h = harness(f.bundle), publications = new Map();
+  const complete = h.dependencies.submissions.complete;
+  h.dependencies.submissions.complete = async (key, receipt, artifact) => {
+    await complete(key, receipt); publications.set(key, { receipt: structuredClone(receipt), artifact: structuredClone(artifact) });
+  };
+  h.dependencies.submissions.read = async key => publications.get(key) ?? null;
+  const input = await request(h.service, f.dsl);
+  const submitted = await h.service.submit('admin', input);
+  const reader = new ResearchBundleService(h.dependencies);
+  const read = await reader.readback(input);
+  assert.equal(read.publicationStatus, 'READBACK_VERIFIED');
+  assert.equal(read.resultArtifactDigest, submitted.resultArtifactDigest);
+  assert.equal(read.receipt.requestDigest, submitted.receipt.requestDigest);
+  assert.equal(h.calls(), 1); assert.equal(read.evidenceCredit, 0); assert.equal(read.profitabilityProven, false);
+  publications.get(read.receipt.requestDigest).artifact.datasetIdentity = 'foreign';
+  const corrupt = await reader.readback(input);
+  assert.equal(corrupt.publicationStatus, 'BLOCKED_DATA');
+  assert.equal(corrupt.backtestCompleted, false); assert.equal(h.calls(), 1);
+});
+
+test('completion alone is not durable publication; absent or failing readback stays blocked', async () => {
+  const f = fixture(), h = harness(f.bundle), input = await request(h.service, f.dsl);
+  const submitted = await h.service.submit('admin', input);
+  assert.equal(submitted.publicationStatus, 'MISSING_EVIDENCE');
+  assert.equal((await h.service.readback(input)).publicationStatus, 'MISSING_EVIDENCE');
+  h.dependencies.submissions.read = async () => { throw new Error('provider unavailable'); };
+  assert.equal((await h.service.readback(input)).publicationStatus, 'BLOCKED_DATA');
+  assert.equal(h.calls(), 1);
+});
+
+for (const [name, mutate] of [
+  ['wrong request identity', p => p.receipt.receipt.requestDigest = 'f'.repeat(64)],
+  ['future submission timestamp', p => p.receipt.receipt.submittedAt = NOW + 1],
+  ['forged artifact digest', p => p.receipt.resultArtifactDigest = 'f'.repeat(64)],
+  ['unlocked final holdout', p => p.receipt.holdoutStatus = 'PASS'],
+  ['promotion authority', p => p.receipt.promotionEligible = true],
+  ['missing artifact', p => p.artifact = null],
+  ['nonfinite output', p => p.artifact.metrics.trades = Infinity],
+  ['foreign period with recomputed digest', p => { p.artifact.period.endTime += 1; p.receipt.resultArtifactDigest = hash(p.artifact); }],
+]) test('durable readback rejects ' + name, async () => {
+  const f = fixture(), h = harness(f.bundle); let publication;
+  h.dependencies.submissions.complete = async (_key, receipt, artifact) => { publication = structuredClone({ receipt, artifact }); };
+  h.dependencies.submissions.read = async () => publication;
+  const input = await request(h.service, f.dsl); await h.service.submit('admin', input);
+  mutate(publication);
+  const read = await h.service.readback(input);
+  assert.equal(read.publicationStatus, 'BLOCKED_DATA'); assert.equal(read.backtestCompleted, false);
+  assert.equal(read.resultArtifactDigest, null); assert.equal(read.evidenceCredit, 0); assert.equal(h.calls(), 1);
+});
+
+test('source change during artifact read blocks the prior identity without running again', async () => {
+  const f = fixture(), h = harness(f.bundle); let publication;
+  h.dependencies.submissions.complete = async (_key, receipt, artifact) => { publication = structuredClone({ receipt, artifact }); };
+  h.dependencies.submissions.read = async () => { f.bundle.dataset.immutable = false; return publication; };
+  const input = await request(h.service, f.dsl); await h.service.submit('admin', input);
+  const read = await h.service.readback(input);
+  assert.equal(read.publicationStatus, 'BLOCKED_DATA'); assert.equal(h.calls(), 1);
+});
 
 test('real #690 one-pass executor receives TRAIN only and preserves later evidence as unevaluated', async () => {
   const f = fixture(), h = harness(f.bundle);
