@@ -19,3 +19,12 @@ test('special feed never promotes malformed or future timestamps as fresh eviden
   expect(source).not.toContain("if (!Number.isFinite(timestamp)) return '방금 전';");
   expect(source).not.toContain('Math.max(0, Math.floor((nowMs - timestamp) / 60_000))');
 });
+
+test('stock info never coerces missing numeric evidence into genuine zero', async () => {
+  const source = await readFile(pagePath, 'utf8');
+
+  expect(source).toContain('if (value == null || typeof value === \'boolean\') return null;');
+  expect(source).toContain("if (typeof value === 'string' && value.trim() === '') return null;");
+  expect(source).toContain("tone={finite(quote.data.changePercent) == null ? undefined : Number(quote.data.changePercent) >= 0 ? 'up' : 'down'}");
+  expect(source).toContain("tone={finite(selected.changePercent ?? selected.changePercent24h) == null ? undefined : Number(selected.changePercent ?? selected.changePercent24h) >= 0 ? 'up' : 'down'}");
+});
