@@ -6,6 +6,7 @@ import {
   TradePreSubmissionRiskService,
 } from './trade-pre-submission-risk.service';
 import { buildRiskEnvelope } from './trade-risk-envelope.service';
+import { checkExecutionNotional } from './trade-order-notional.service';
 import { allowServerProfitabilityAttestationForTests } from './trade-profitability-attestation.test-fixture';
 import { setTradeProfitabilityAttestationRunnerForTests } from './trade-profitability-attestation.service';
 import {
@@ -144,6 +145,31 @@ test('fresh approval, risk evidence, signal, liquidity, cost, limits, and risk e
   assert.equal(result.allowed, true);
   assert.deepEqual(result.blockCodes, []);
   assert.equal(result.priceDriftPercent, 0);
+});
+
+test('order units bind quote totals, limit quantity and server FX to the unchanged approval ceiling', () => {
+  const now = new Date();
+  const approved = plan(now);
+  const live = { ...snapshot(now), executionPrice: 100001 };
+  assert.deepEqual(checkExecutionNotional({ ...approved, quantity: 999 }, live, now.getTime()), { notionalKrw: 20000, blockCodes: [] });
+  assert.deepEqual(checkExecutionNotional({ ...approved, quoteAmount: 20000.01 }, live, now.getTime()).blockCodes, ['EXECUTION_NOTIONAL_EXCEEDS_APPROVAL']);
+  const limit = { ...approved, orderType: 'limit' as const, quantity: 0.2, limitPrice: 100000 };
+  assert.deepEqual(checkExecutionNotional(limit, live, now.getTime()), { notionalKrw: 20000, blockCodes: [] });
+  assert.deepEqual(checkExecutionNotional({ ...limit, quantity: 1 }, live, now.getTime()).blockCodes, ['EXECUTION_NOTIONAL_EXCEEDS_APPROVAL']);
+  assert.deepEqual(checkExecutionNotional({ ...limit, quantity: 0.3, limitPrice: 0.3, estimatedKrw: 0.09 }, live, now.getTime()), { notionalKrw: 0.09, blockCodes: [] });
+  const future = { ...approved, exchange: 'bitget' as const, market: 'USDT-FUTURES', quantity: 0.001, quoteAmount: null, leverage: 3, estimatedKrw: 140001.4 };
+  const fx = { ...live, currencyConversion: { pair: 'USDT/KRW' as const, krwRate: 1400, source: 'isolated-public-fx', asOf: now.toISOString() } };
+  assert.deepEqual(checkExecutionNotional(future, fx, now.getTime()), { notionalKrw: 140001.4, blockCodes: [] });
+  assert.deepEqual(checkExecutionNotional({ ...future, estimatedKrw: 50000 }, fx, now.getTime()).blockCodes, ['EXECUTION_NOTIONAL_EXCEEDS_APPROVAL']);
+  assert.equal(future.leverage, 3);
+  assert.equal(future.estimatedKrw, 140001.4);
+  for (const currencyConversion of [null, { ...fx.currencyConversion, source: '' }, { ...fx.currencyConversion, krwRate: Infinity },
+    { ...fx.currencyConversion, asOf: new Date(now.getTime() - 300001).toISOString() },
+    { ...fx.currencyConversion, asOf: new Date(now.getTime() + 1).toISOString() }]) {
+    assert.deepEqual(checkExecutionNotional(future, { ...live, currencyConversion }, now.getTime()).blockCodes, ['EXECUTION_NOTIONAL_FX_UNAVAILABLE']);
+  }
+  assert.deepEqual(checkExecutionNotional(future, { ...fx, executionPrice: null }, now.getTime()).blockCodes, ['EXECUTION_NOTIONAL_UNAVAILABLE']);
+  assert.deepEqual(checkExecutionNotional({ ...future, quantity: Number.MAX_VALUE }, fx, now.getTime()).blockCodes, ['EXECUTION_NOTIONAL_UNAVAILABLE']);
 });
 
 test('stale risk evidence, approval price drift, and broken signal fail closed together', async () => {

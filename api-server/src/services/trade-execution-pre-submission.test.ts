@@ -415,6 +415,23 @@ test('two concurrent executions produce one provider order POST behind one atomi
   assert.equal(provider.counts().actualOrderPosts, 1);
 });
 
+test('actual order amount cannot exceed the user approval by understating estimatedKrw', async () => {
+  for (const overrides of [
+    { quoteAmount: 30000 },
+    { orderType: 'limit' as const, limitPrice: 100000, quantity: 1 },
+  ]) {
+    const { repository, approved, order } = await setup(overrides);
+    const provider = installUpbitMock(100000);
+    const result = await new TradeExecutionService(repository).execute(USER_ID, approved, order);
+    assert.equal(result.state, 'REJECTED');
+    assert.ok(result.preSubmissionDecision?.blockCodes.includes('EXECUTION_NOTIONAL_EXCEEDS_APPROVAL'));
+    assert.equal(result.submissionStartedAt ?? null, null);
+    assert.equal(provider.counts().orderTestPosts, 0);
+    assert.equal(provider.counts().actualOrderPosts, 0);
+    assert.equal((await repository.getPlan(USER_ID, approved.id))?.estimatedKrw, 20000);
+  }
+});
+
 test('orphan Upbit open order blocks before order test, submission intent, and actual POST', async () => {
   const { repository, approved, order } = await setup();
   const provider = installUpbitMock(100_000, [{
