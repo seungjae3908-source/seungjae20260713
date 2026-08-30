@@ -333,6 +333,39 @@ test("settled sample statistics remain insufficient before canonical 30 outcomes
   assert.equal(summary.profitabilityClaimAllowed, false);
 });
 
+test("zero settlements preserve unknown profitability metrics as null", () => {
+  const summary = summarizeSettledPaperSamples([]);
+  assert.equal(summary.sampleSize, 0);
+  assert.equal(summary.hitRate, null);
+  assert.equal(summary.averageNetReturnPercent, null);
+  assert.equal(summary.totalNetPnl, null);
+  assert.equal(summary.expectancyNetPnl, null);
+  assert.equal(summary.profitFactor, null);
+  assert.equal(summary.maxDrawdownPercent, null);
+  assert.equal(summary.profitability, "NOT_PROVEN");
+  assert.equal(summary.profitabilityClaimAllowed, false);
+});
+
+test("an explicitly measured neutral settlement preserves mathematical zero", () => {
+  const summary = summarizeSettledPaperSamples([{
+    status: "SETTLED",
+    paperSampleId: "measured-neutral-sample",
+    netPnl: 0,
+    netReturnPercent: 0,
+    orderSubmitted: false,
+    exchangeRequestSent: false,
+    liveOrderAllowed: false,
+  }]);
+  assert.equal(summary.sampleSize, 1);
+  assert.equal(summary.hitRate, 0);
+  assert.equal(summary.averageNetReturnPercent, 0);
+  assert.equal(summary.totalNetPnl, 0);
+  assert.equal(summary.expectancyNetPnl, 0);
+  assert.equal(summary.profitFactor, 0);
+  assert.equal(summary.maxDrawdownPercent, 0);
+  assert.equal(summary.profitability, "NOT_PROVEN");
+});
+
 test("30 unique settled samples can satisfy sample-count readiness but still cannot authorize profit claims", () => {
   const settlements = [];
   for (let index = 0; index < 30; index += 1) {
