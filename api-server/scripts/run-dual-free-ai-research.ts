@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { answerAiChat } from '../src/services/ai-chat.service';
 import {
   ResearchDualFreeAiError,
   runResearchDualFreeAiReview,
@@ -46,6 +47,14 @@ function isolateProviderEnvironment(provider: ResearchFreeAiProvider): void {
   }
 }
 
+async function invokeCanonicalResearchTransport(message: string): Promise<{ answer: string; model: string | null }> {
+  const result = await answerAiChat({ message });
+  if (result.kind !== 'answer' || !result.model) {
+    throw new ResearchDualFreeAiError('AI_ANALYSIS_UNAVAILABLE', 'canonical AI transport did not return an answer');
+  }
+  return { answer: result.answer, model: result.model };
+}
+
 async function main(): Promise<void> {
   const provider = providerFrom(argument('--provider'));
   const role = roleFrom(argument('--role'));
@@ -59,7 +68,7 @@ async function main(): Promise<void> {
     promptVersion: String(raw.promptVersion ?? ''),
     evidenceDigest: String(raw.evidenceDigest ?? ''),
     evidenceSummary: String(raw.evidenceSummary ?? ''),
-  });
+  }, invokeCanonicalResearchTransport);
 
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
