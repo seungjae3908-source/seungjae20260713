@@ -139,7 +139,7 @@ function normalizeRow(row: RawCandle): Omit<NormalizedChartCandle, 'isClosed' | 
   const open = finite(row.open ?? row.openPrice ?? row.open_prc);
   const high = finite(row.high ?? row.highPrice ?? row.high_prc);
   const low = finite(row.low ?? row.lowPrice ?? row.low_prc);
-  const volume = finite(row.volume ?? row.acc_trde_qty ?? row.tradeVolume ?? row.tradingVolume ?? 0);
+  const volume = finite(row.volume ?? row.acc_trde_qty ?? row.tradeVolume ?? row.tradingVolume);
   const sourceTime = String(rawTimestamp(row) ?? '').trim();
   const time = parseChartCandleTime(sourceTime);
 
