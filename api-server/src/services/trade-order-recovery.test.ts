@@ -116,6 +116,91 @@ async function setup(
   return { repository, planValue, orderValue };
 }
 
+test('missing or invalid executed quantity never becomes zero or a recovered order', async () => {
+  for (const exchange of ['upbit', 'bitget'] as const) {
+    for (const quantity of [undefined, '', true, -1, []]) {
+      const { repository, planValue, orderValue } = await setup(exchange, 'live',
+        exchange === 'upbit' ? { accessKey: 'fixture', secretKey: 'fixture' } : { apiKey: 'fixture', secretKey: 'fixture', passphrase: 'fixture' });
+      const nativeFetch = globalThis.fetch;
+      const methods: string[] = [];
+      globalThis.fetch = async (_input, init) => {
+        methods.push(init?.method ?? 'GET');
+        const payload = exchange === 'upbit'
+          ? { uuid: 'provider-order', identifier: orderValue.clientOrderId, market: 'KRW-BTC', state: 'wait', volume: '0.001', executed_volume: quantity }
+          : { code: '00000', data: { symbol: 'BTCUSDT', clientOid: orderValue.clientOrderId, orderId: 'provider-order', state: 'live', size: '1', baseVolume: quantity } };
+        return new Response(JSON.stringify(payload), { status: 200 });
+      };
+      try {
+        const result = await new TradeExecutionService(repository).execute(USER_ID, planValue, orderValue);
+        assert.equal(result.state, 'RECOVERY_REQUIRED');
+        assert.equal(result.lastErrorCode, 'RECONCILIATION_FILLED_QUANTITY_MISSING_OR_INVALID');
+        assert.equal(result.manualReviewRequired, true);
+        assert.equal(result.exchangeOrderId, null);
+        assert.deepEqual(result.fills, []);
+        assert.deepEqual(methods, ['GET']);
+      } finally { globalThis.fetch = nativeFetch; }
+    }
+  }
+});
+
+test('recovery rejects missing fill identity/time and malformed fills without inventing epoch records', async () => {
+  const validFill = { uuid: 'fill-verified', price: '100000000', volume: '0.001', created_at: '2026-08-05T03:30:01Z' };
+  const cases: Array<{ trades: unknown; error: string }> = [
+    { trades: [{ ...validFill, created_at: undefined }], error: 'RECONCILIATION_FILL_TIME_MISSING' },
+    { trades: [{ ...validFill, uuid: undefined }], error: 'RECONCILIATION_FILL_ID_MISSING' },
+    { trades: [{ ...validFill, created_at: '2099-01-01T00:00:00Z' }], error: 'RECONCILIATION_TIMESTAMP_INVALID' },
+    { trades: [{ ...validFill, created_at: '2026-02-30T00:00:00Z' }], error: 'RECONCILIATION_TIMESTAMP_INVALID' },
+    { trades: [null], error: 'RECONCILIATION_FILL_SHAPE_INVALID' },
+    { trades: [{ ...validFill, volume: true }], error: 'RECONCILIATION_FILL_VALUE_INVALID' },
+  ];
+  for (const scenario of cases) {
+    const { repository, planValue, orderValue } = await setup('upbit', 'live', { accessKey: 'fixture', secretKey: 'fixture' });
+    const nativeFetch = globalThis.fetch;
+    globalThis.fetch = async (_input, init) => {
+      assert.equal(init?.method, 'GET');
+      return new Response(JSON.stringify({
+        uuid: 'provider-order', identifier: orderValue.clientOrderId, market: 'KRW-BTC', state: 'done',
+        volume: '0.001', remaining_volume: '0', executed_volume: '0.001', created_at: '2026-08-05T03:30:00Z', trades: scenario.trades,
+      }), { status: 200 });
+    };
+    try {
+      const result = await new TradeExecutionService(repository).execute(USER_ID, planValue, orderValue);
+      assert.equal(result.state, 'RECOVERY_REQUIRED');
+      assert.equal(result.lastErrorCode, scenario.error);
+      assert.equal(result.manualReviewRequired, true);
+      assert.deepEqual(result.fills, []);
+      assert.equal(result.exchangeOrderId, null);
+    } finally { globalThis.fetch = nativeFetch; }
+  }
+});
+
+test('new partial quantity cannot reuse order price, creation time, old average or old fee as current fill evidence', async () => {
+  const { repository, planValue, orderValue } = await setup('upbit', 'live', { accessKey: 'fixture', secretKey: 'fixture' });
+  orderValue.filledQuantity = 0.0001;
+  orderValue.averageFillPrice = 99_000_000;
+  orderValue.feeAmount = 10;
+  orderValue.feeCurrency = 'KRW';
+  await repository.saveOrder(orderValue);
+  const nativeFetch = globalThis.fetch;
+  globalThis.fetch = async (_input, init) => {
+    assert.equal(init?.method, 'GET');
+    return new Response(JSON.stringify({
+      uuid: 'provider-order', identifier: orderValue.clientOrderId, market: 'KRW-BTC', state: 'wait',
+      volume: '0.001', remaining_volume: '0.0006', executed_volume: '0.0004',
+      price: '100000', created_at: '2026-08-05T03:30:00Z', trades: [],
+    }), { status: 200 });
+  };
+  try {
+    const result = await new TradeExecutionService(repository).execute(USER_ID, planValue, orderValue);
+    assert.equal(result.state, 'PARTIALLY_FILLED');
+    assert.equal(result.filledQuantity, 0.0004);
+    assert.equal(result.averageFillPrice, null);
+    assert.equal(result.feeAmount, null);
+    assert.equal(result.exchangeUpdatedAt, null);
+    assert.deepEqual(result.fills, []);
+  } finally { globalThis.fetch = nativeFetch; }
+});
+
 test.before(() => {
   process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
 });
