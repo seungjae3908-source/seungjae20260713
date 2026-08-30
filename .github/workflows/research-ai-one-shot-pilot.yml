@@ -69,7 +69,7 @@ jobs:
 
           ! grep -Eq 'HUB_ISSUE_NUMBER.{0,12}62|github\.event\.issue\.number\s*==\s*62|pulls/555|PR_NUMBER.{0,12}555' "$workflow"
           ! grep -Eq 'generativelanguage\.googleapis\.com|api\.groq\.com|api\.openai\.com' "$service" "$runner"
-          grep -Fq "answerAiChat" "$service"
+          grep -Fq "answerAiChat" "$runner"
           grep -Fq "delete process.env.GROQ_API_KEY" "$runner"
           grep -Fq "delete process.env.GEMINI_API_KEY" "$runner"
           grep -Fq "PAID_FALLBACK: \"false\"" "$workflow"
