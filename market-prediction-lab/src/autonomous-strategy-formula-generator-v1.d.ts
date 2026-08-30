@@ -7,3 +7,4 @@ export interface SafeStrategyDsl {
   readonly astStats: { readonly nodes: number; readonly indicators: number; readonly rules: number };
 }
 export function createSafeStrategyDslV1(input: unknown): SafeStrategyDsl;
+export function assertFormulaCandidateV1(input: unknown): unknown;
