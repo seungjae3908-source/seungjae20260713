@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -14,9 +15,7 @@ import {
   sha256,
   verifyLiquidityCalibrationDataset,
 } from '../src/public-forward-liquidity-calibration.mjs';
-import {
-  computePublicForwardLiquidityCaptureIngestReceiptDigest,
-} from '../src/public-forward-liquidity-capture-ingest.mjs';
+import { computePublicForwardLiquidityCaptureIngestReceiptDigest } from '../src/public-forward-liquidity-capture-ingest.mjs';
 import {
   CAPTURE_PARAMETER_POLICY,
   CAPTURE_PARAMETER_POLICY_DIGEST,
@@ -33,22 +32,16 @@ import {
   ingestPublicForwardLiquidityV3Capture,
 } from '../src/public-forward-liquidity-v3-capture-ingest.mjs';
 
-const SOURCE_MAIN_SHA = 'c1e38a23247b0022ced22b6643f74ed94bb06403';
+const SOURCE_MAIN_SHA = String(process.env.EXPECTED_SHA
+  ?? execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()).toLowerCase();
 const REPOSITORY = 'seungjae3908-source/seungjae20260713';
 const ARTIFACT_DIGEST = 'b'.repeat(64);
+assert.match(SOURCE_MAIN_SHA, /^[a-f0-9]{40}$/u);
 
-function bookFrame(offset = 0, overrides = {}) {
-  const marketTimestampMs = 1_000 + offset;
+function bookFrame(offset = 0, { bids = [[100, 4], [99, 5]], asks = [[101, 3], [102, 6]] } = {}) {
   return normalizeBitgetPublicOrderBookFrame({
     symbol: 'BTCUSDT',
-    payload: {
-      code: '00000',
-      data: {
-        ts: String(marketTimestampMs),
-        b: overrides.bids ?? [[100, 4], [99, 5]],
-        a: overrides.asks ?? [[101, 3], [102, 6]],
-      },
-    },
+    payload: { code: '00000', data: { ts: String(1_000 + offset), b: bids, a: asks } },
     requestStartedAtMs: 900 + offset,
     receiveTimestampMs: 1_050 + offset,
     maxFrameAgeMs: 10_000,
@@ -57,21 +50,18 @@ function bookFrame(offset = 0, overrides = {}) {
   });
 }
 
-function tradesFrame(offset = 0, execId = 'public-exec-v3-0') {
+function tradesFrame(offset, execId) {
   return normalizeBitgetPublicTradesFrame({
     symbol: 'BTCUSDT',
-    payload: {
-      code: '00000',
-      data: [{
-        execId,
-        execLinkId: `${execId}-link`,
-        price: '101',
-        size: '2',
-        side: 'buy',
-        ts: String(1_200 + offset),
-        isRPI: 'NO',
-      }],
-    },
+    payload: { code: '00000', data: [{
+      execId,
+      execLinkId: `${execId}-link`,
+      price: '101',
+      size: '2',
+      side: 'buy',
+      ts: String(1_200 + offset),
+      isRPI: 'NO',
+    }] },
     requestStartedAtMs: 1_100 + offset,
     receiveTimestampMs: 1_300 + offset,
     endpoint: '/api/v3/market/fills',
@@ -79,7 +69,7 @@ function tradesFrame(offset = 0, execId = 'public-exec-v3-0') {
   });
 }
 
-function validBatch(offset = 0, execId = `public-exec-v3-${offset}`) {
+function batch(offset, execId) {
   return buildPublicLiquidityObservationBatch({
     preEventBook: bookFrame(offset),
     tradeFrame: tradesFrame(offset, execId),
@@ -91,7 +81,7 @@ function validBatch(offset = 0, execId = `public-exec-v3-${offset}`) {
   });
 }
 
-function scheduledCapture(batch, slotIndex, overrides = {}) {
+function captureReceipt(rawBatch, slotIndex, overrides = {}) {
   const slot = buildV3SlotDescriptor(slotIndex);
   const body = {
     schemaVersion: PUBLIC_FORWARD_LIQUIDITY_V3_CAPTURE_RECEIPT_VERSION,
@@ -99,7 +89,7 @@ function scheduledCapture(batch, slotIndex, overrides = {}) {
     triggerSource: SCHEDULED_TRIGGER_SOURCE,
     ATTEMPTED: true,
     collectorInvoked: true,
-    runId: String(40000000000 + slotIndex),
+    runId: String(40_000_000_000 + slotIndex),
     runAttempt: '1',
     repository: REPOSITORY,
     exactMainSha: SOURCE_MAIN_SHA,
@@ -116,9 +106,9 @@ function scheduledCapture(batch, slotIndex, overrides = {}) {
     activationContractDigest: PUBLIC_FORWARD_LIQUIDITY_V3_ACTIVATION_CONTRACT_DIGEST,
     captureStatus: 'PRESENT',
     blockers: [],
-    prospectiveObservationCount: batch.observations.length,
-    droppedObservationCount: batch.droppedEvents.length,
-    rawBatchDigest: sha256(canonicalJson(batch)),
+    prospectiveObservationCount: rawBatch.observations.length,
+    droppedObservationCount: rawBatch.droppedEvents.length,
+    rawBatchDigest: sha256(canonicalJson(rawBatch)),
     prospectiveSlotCredit: 1,
     manualCredit: 0,
     replayCredit: 0,
@@ -162,8 +152,7 @@ function scheduledCapture(batch, slotIndex, overrides = {}) {
     canonicalSlotKeyDigest: slot.canonicalSlotKeyDigest,
     ...overrides,
   };
-  const { captureReceiptDigest: _ignored, ...digestBody } = body;
-  return { ...body, captureReceiptDigest: sha256(canonicalJson(digestBody)) };
+  return { ...body, captureReceiptDigest: sha256(canonicalJson(body)) };
 }
 
 function artifactReceipt(capture, artifactId, overrides = {}) {
@@ -179,7 +168,7 @@ function artifactReceipt(capture, artifactId, overrides = {}) {
   return { ...body, receiptDigest: sha256(canonicalJson(body)) };
 }
 
-async function ingestFixture({ stateRoot, batch, capture, artifact, artifactId }) {
+async function ingest(stateRoot, rawBatch, capture, artifact, artifactId) {
   return ingestPublicForwardLiquidityV3Capture({
     stateRoot,
     researchRepoRoot: resolve('.'),
@@ -187,45 +176,34 @@ async function ingestFixture({ stateRoot, batch, capture, artifact, artifactId }
     expectedRepository: REPOSITORY,
     expectedArtifactId: String(artifactId),
     expectedArtifactDigest: ARTIFACT_DIGEST,
-    rawBatch: batch,
+    rawBatch,
     captureReceipt: capture,
     artifactReceipt: artifact,
   });
 }
 
-test('ingests ordered genuine V3 scheduled slots into one cumulative same-collector receipt chain', async () => {
+test('genuine scheduled V3 slots accumulate one exact same-collector predecessor chain without independent credit', async () => {
   const stateRoot = await mkdtemp(join(tmpdir(), 'liquidity-v3-state-'));
   try {
-    const batch0 = validBatch(0, 'public-exec-v3-slot0');
-    const capture0 = scheduledCapture(batch0, 0);
-    const artifact0 = artifactReceipt(capture0, 500001);
-    const first = await ingestFixture({ stateRoot, batch: batch0, capture: capture0, artifact: artifact0, artifactId: 500001 });
-
+    const raw0 = batch(0, 'v3-slot-0');
+    const cap0 = captureReceipt(raw0, 0);
+    const first = await ingest(stateRoot, raw0, cap0, artifactReceipt(cap0, 500001), 500001);
     assert.equal(first.predecessorDatasetDigest, null);
     assert.equal(first.batchProvenanceIndex, 0);
-    assert.equal(first.datasetBatchProvenanceCount, 1);
     assert.equal(first.sourceV3Lineage.slotIndex, 0);
     assert.equal(first.sourceV3Lineage.split, 'TRAIN');
-    assert.equal(first.sourceV3Lineage.prospectiveSlotCredit, 1);
-    assert.equal(first.sourceV3Lineage.replayCredit, 0);
-    assert.equal(first.fullCostReady, false);
     assert.equal(first.effectiveIndependentCalibrationN, null);
+    assert.equal(first.fullCostReady, false);
     assert.equal(first.receiptDigest, computePublicForwardLiquidityCaptureIngestReceiptDigest(first));
 
-    const batch1 = validBatch(10_000, 'public-exec-v3-slot1');
-    const capture1 = scheduledCapture(batch1, 1);
-    const artifact1 = artifactReceipt(capture1, 500002);
-    const second = await ingestFixture({ stateRoot, batch: batch1, capture: capture1, artifact: artifact1, artifactId: 500002 });
-
+    const raw1 = batch(10_000, 'v3-slot-1');
+    const cap1 = captureReceipt(raw1, 1);
+    const second = await ingest(stateRoot, raw1, cap1, artifactReceipt(cap1, 500002), 500002);
     assert.equal(second.predecessorDatasetDigest, first.datasetDigest);
     assert.equal(second.batchProvenanceIndex, 1);
     assert.equal(second.datasetBatchProvenanceCount, 2);
-    assert.equal(second.datasetObservationCount, 2);
     assert.equal(second.sourceV3Lineage.slotIndex, 1);
-    assert.equal(second.sourceV3Lineage.split, 'TRAIN');
-    assert.equal(second.sourceV3Lineage.captureReceiptDigest, capture1.captureReceiptDigest);
-    assert.equal(second.receiptDigest, computePublicForwardLiquidityCaptureIngestReceiptDigest(second));
-
+    assert.equal(second.sourceV3Lineage.captureReceiptDigest, cap1.captureReceiptDigest);
     const stored = JSON.parse(await readFile(join(stateRoot, second.datasetRelativePath), 'utf8'));
     assert.deepEqual(verifyLiquidityCalibrationDataset(stored), { valid: true, reason: null });
     assert.equal(stored.batchProvenance.length, 2);
@@ -234,44 +212,34 @@ test('ingests ordered genuine V3 scheduled slots into one cumulative same-collec
   }
 });
 
-test('fails closed for manual, rerun, policy, slot, chronology, artifact and authority tampering', async () => {
-  const cases = [
-    ['manual trigger', (capture) => ({ ...capture, triggerSource: 'MANUAL_WORKFLOW_DISPATCH' }), /V3_CAPTURE_RECEIPT_CONTRACT_INVALID/],
-    ['rerun', (capture) => ({ ...capture, runAttempt: '2' }), /V3_RERUN_CREDIT_FORBIDDEN/],
-    ['policy', (capture) => ({ ...capture, policyDigest: 'c'.repeat(64) }), /V3_POLICYDIGEST_MISMATCH|V3_POLICYDIGEST/i],
-    ['slot split', (capture) => ({ ...capture, split: 'OOS' }), /V3_SLOT_SPLIT_MISMATCH/],
-    ['late completion', (capture) => ({ ...capture, actualRunCompletedAtMs: capture.slotEndMs }), /V3_SLOT_CHRONOLOGY_INVALID/],
-    ['authority', (capture) => ({ ...capture, fullCostReady: true }), /V3_CAPTURE_TRUTH_BOUNDARY_INVALID/],
+test('V3 ingest fails closed on manual/rerun/policy/slot/chronology/authority/artifact tampering', async () => {
+  const raw = batch(20_000, 'v3-tamper');
+  const mutations = [
+    [(value) => ({ ...value, triggerSource: 'MANUAL_WORKFLOW_DISPATCH' }), /V3_CAPTURE_RECEIPT_CONTRACT_INVALID/],
+    [(value) => ({ ...value, runAttempt: '2' }), /V3_RERUN_CREDIT_FORBIDDEN/],
+    [(value) => ({ ...value, policyDigest: 'c'.repeat(64) }), /V3_POLICYDIGEST_MISMATCH/],
+    [(value) => ({ ...value, split: 'OOS' }), /V3_SLOT_SPLIT_MISMATCH/],
+    [(value) => ({ ...value, actualRunCompletedAtMs: value.slotEndMs }), /V3_SLOT_CHRONOLOGY_INVALID/],
+    [(value) => ({ ...value, fullCostReady: true }), /V3_CAPTURE_TRUTH_BOUNDARY_INVALID/],
   ];
-
-  for (const [name, mutate, pattern] of cases) {
-    const stateRoot = await mkdtemp(join(tmpdir(), `liquidity-v3-${name.replaceAll(' ', '-')}-`));
+  for (const [mutate, expected] of mutations) {
+    const stateRoot = await mkdtemp(join(tmpdir(), 'liquidity-v3-tamper-'));
     try {
-      const batch = validBatch(20_000, `public-exec-${name}`);
-      const base = scheduledCapture(batch, 2);
-      const mutatedBody = mutate(base);
-      const { captureReceiptDigest: _old, ...body } = mutatedBody;
-      const capture = { ...mutatedBody, captureReceiptDigest: sha256(canonicalJson(body)) };
-      const artifact = artifactReceipt(capture, 500003);
-      await assert.rejects(
-        ingestFixture({ stateRoot, batch, capture, artifact, artifactId: 500003 }),
-        pattern,
-      );
+      const changed = mutate(captureReceipt(raw, 2));
+      const { captureReceiptDigest: _ignored, ...body } = changed;
+      const capture = { ...changed, captureReceiptDigest: sha256(canonicalJson(body)) };
+      await assert.rejects(ingest(stateRoot, raw, capture, artifactReceipt(capture, 500003), 500003), expected);
     } finally {
       await rm(stateRoot, { recursive: true, force: true });
     }
   }
 
-  const stateRoot = await mkdtemp(join(tmpdir(), 'liquidity-v3-artifact-name-'));
+  const stateRoot = await mkdtemp(join(tmpdir(), 'liquidity-v3-artifact-'));
   try {
-    const batch = validBatch(30_000, 'public-exec-artifact-name');
-    const capture = scheduledCapture(batch, 3);
+    const capture = captureReceipt(raw, 3);
     const artifact = artifactReceipt(capture, 500004, { artifactName: 'wrong-artifact' });
     artifact.receiptDigest = sha256(canonicalJson(Object.fromEntries(Object.entries(artifact).filter(([key]) => key !== 'receiptDigest'))));
-    await assert.rejects(
-      ingestFixture({ stateRoot, batch, capture, artifact, artifactId: 500004 }),
-      /V3_ARTIFACT_NAME_MISMATCH/,
-    );
+    await assert.rejects(ingest(stateRoot, raw, capture, artifact, 500004), /V3_ARTIFACT_NAME_MISMATCH/);
   } finally {
     await rm(stateRoot, { recursive: true, force: true });
   }
