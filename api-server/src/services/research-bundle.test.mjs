@@ -161,6 +161,20 @@ test('source change during artifact read blocks the prior identity without runni
   assert.equal(read.publicationStatus, 'BLOCKED_DATA'); assert.equal(h.calls(), 1);
 });
 
+test('readback pins the previously returned artifact digest even if storage rehashes a changed result', async () => {
+  const f = fixture(), h = harness(f.bundle); let publication;
+  h.dependencies.submissions.complete = async (_key, receipt, artifact) => { publication = structuredClone({ receipt, artifact }); };
+  h.dependencies.submissions.read = async () => publication;
+  const input = await request(h.service, f.dsl), submitted = await h.service.submit('admin', input);
+  const pinned = { ...input, resultArtifactDigest: submitted.resultArtifactDigest };
+  assert.equal((await h.service.readback(pinned)).publicationStatus, 'READBACK_VERIFIED');
+  publication.artifact.metrics.trades += 1;
+  publication.receipt.resultArtifactDigest = hash(publication.artifact);
+  const read = await h.service.readback(pinned);
+  assert.equal(read.publicationStatus, 'BLOCKED_DATA'); assert(read.blockers.includes('CANONICAL_ARTIFACT_DIGEST_MISMATCH'));
+  assert.equal(h.calls(), 1);
+});
+
 test('real #690 one-pass executor receives TRAIN only and preserves later evidence as unevaluated', async () => {
   const f = fixture(), h = harness(f.bundle);
   const service = new ResearchBundleService({ ...h.dependencies, runBacktest: undefined });

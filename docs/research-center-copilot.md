@@ -166,7 +166,9 @@ credit and invoke no external AI, database or trading provider.
 ## Candidate result identity and durable readback
 
 `POST /api/admin/research/copilot/read-backtest` uses the same strict
-`{dsl, bundleDigest, strategyIdentityDigest}` request as submission. It is an
+`{dsl, bundleDigest, strategyIdentityDigest}` binding as submission and accepts
+`resultArtifactDigest` to pin a previously returned result. The UI sends that
+digest and rejects a changed result even when storage rehashes it. It is an
 authenticated administrator read operation and never reserves or executes a job.
 The server rereads the canonical bundle before and after artifact storage IO.
 

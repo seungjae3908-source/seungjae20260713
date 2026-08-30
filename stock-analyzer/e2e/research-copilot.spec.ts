@@ -3,6 +3,7 @@ import { buildCopilotSnapshot, COPILOT_AUTHORITY, validateCopilotDsl } from '../
 import { ResearchBundleService } from '../../api-server/src/services/research-bundle.service';
 import type { ResearchBundleResolution } from '../../api-server/src/services/research-bundle.contract';
 import { researchBundleFixture, AUTHORITATIVE_NOW_MS } from '../../api-server/src/services/research-bundle.test-fixtures.mjs';
+import { sha256Canonical } from '../../market-prediction-lab/src/research-cache-provenance.js';
 
 const NOW = Date.parse('2026-08-30T09:00:00Z');
 const USER = '77777777-7777-4777-8777-777777777777';
@@ -30,7 +31,7 @@ const researchDsl = {
     { name: 'holding', domain: 'BAR_COUNT', valueType: 'INTEGER', min: 2, max: 4, step: 2 },
   ], limits: { maxAstDepth: 6, maxIndicatorCount: 8, maxRuleCount: 8, maxAstNodes: 64 },
 };
-async function setup(page: Page, options: { available?: boolean; regular?: boolean; failure?: boolean; refreshFailure?: boolean; malformed?: boolean; changedAfterReview?: boolean; numericReview?: boolean; executableBundle?: boolean; stale?: boolean } = {}) {
+async function setup(page: Page, options: { available?: boolean; regular?: boolean; failure?: boolean; refreshFailure?: boolean; malformed?: boolean; changedAfterReview?: boolean; numericReview?: boolean; executableBundle?: boolean; stale?: boolean; tamperArtifact?: boolean } = {}) {
   const snapshot = buildCopilotSnapshot(fixture, NOW);
   if (options.stale) Object.assign(snapshot, buildCopilotSnapshot({ ...fixture, state: { latestCycleAt: NOW - 86_400_001 } }, NOW));
   const canonical = researchBundleFixture();
@@ -42,6 +43,7 @@ async function setup(page: Page, options: { available?: boolean; regular?: boole
       read: async key => { const receipt = receipts.get(key); return receipt ? { receipt, artifact: artifacts.get(key) } : null; },
     } }) : new ResearchBundleService();
   const processing: Array<{ path: string; ms: number }> = [];
+  const readPins: unknown[] = [];
   snapshot.ai.available = options.available === true;
   snapshot.ai.reason = options.available ? 'TEST_ONLY' : 'FREE_TIER_NOT_CONFIRMED';
   snapshot.ai.provider = options.available ? 'groq' : null;
@@ -86,6 +88,17 @@ async function setup(page: Page, options: { available?: boolean; regular?: boole
     if (path.endsWith('/copilot/validate-dsl')) return fulfill(route, { ...validateCopilotDsl(request.postDataJSON()), bundle: await bundles.resolve(request.postDataJSON()) });
     if (path.endsWith('/copilot/submit-backtest') || path.endsWith('/copilot/read-backtest')) {
       const started = performance.now();
+      if (path.endsWith('/read-backtest')) {
+        readPins.push(request.postDataJSON().resultArtifactDigest);
+        if (options.tamperArtifact && readPins.length === 1) {
+          for (const [key, artifact] of artifacts) {
+            const changed = structuredClone(artifact) as { metrics: { trades: number } };
+            changed.metrics.trades += 1; artifacts.set(key, changed);
+            const receipt = receipts.get(key);
+            if (receipt) receipts.set(key, { ...receipt, resultArtifactDigest: sha256Canonical(changed) });
+          }
+        }
+      }
       const result = path.endsWith('/read-backtest') ? await bundles.readback(request.postDataJSON()) : await bundles.submit('TEST_ONLY_ADMIN', request.postDataJSON());
       processing.push({ path, ms: performance.now() - started });
       return fulfill(route, result);
@@ -105,7 +118,7 @@ async function setup(page: Page, options: { available?: boolean; regular?: boole
     return fulfill(route, { ok: true, items: [], rows: [], results: [] });
   });
   return {
-    calls, processing, canonical, reviewRequests: () => reviewRequests,
+    calls, processing, canonical, readPins, reviewRequests: () => reviewRequests,
     clean() { expect(pageErrors).toEqual([]); expect(unexpectedHttp).toEqual([]); expect(errors.filter(error => !((options.failure || options.refreshFailure) && error.includes('503')))).toEqual([]); },
   };
 }
@@ -191,6 +204,22 @@ test('stale overview cannot credit current receipts', async ({ page }) => {
   await page.goto('/research-center'); await page.getByRole('button', { name: 'AI Research Copilot', exact: true }).click();
   await expect(page.getByRole('region', { name: '연구 근거와 AI 한도' })).toContainText('STALE');
   await expect(page.getByRole('region', { name: '연구 단계' })).toContainText('BLOCKED_DATA');
+  diagnostics.clean();
+});
+test('repeated readback cannot discard the original artifact pin after a changed storage response', async ({ page }) => {
+  const diagnostics = await setup(page, { executableBundle: true, tamperArtifact: true });
+  await page.goto('/research-center'); await page.getByRole('button', { name: 'AI Research Copilot', exact: true }).click();
+  await page.getByLabel('연구 DSL JSON').fill(JSON.stringify(diagnostics.canonical.dsl));
+  await page.getByRole('button', { name: 'DSL 검증', exact: true }).click();
+  await page.getByRole('button', { name: '검증된 Bundle로 연구 백테스트 제출' }).click();
+  await expect(page.getByLabel('Backtest Bundle')).toContainText('Backtest Bundle · COMPLETED');
+  for (let i = 0; i < 2; i++) {
+    await page.getByRole('button', { name: '저장된 연구 결과 재조회' }).click();
+    await expect(page.getByLabel('Backtest Bundle')).toContainText('CANONICAL_ARTIFACT_DIGEST_MISMATCH');
+    await expect(page.getByLabel('Backtest Bundle')).toContainText('결과 보존·재조회: BLOCKED_DATA');
+  }
+  expect(diagnostics.readPins).toHaveLength(2); expect(new Set(diagnostics.readPins).size).toBe(1);
+  expect(diagnostics.readPins[0]).toMatch(/^[a-f0-9]{64}$/);
   diagnostics.clean();
 });
 test('manual AI review disables duplicate submission and remains advisory', async ({ page }) => {

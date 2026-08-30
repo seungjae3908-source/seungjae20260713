@@ -78,7 +78,8 @@ export class ResearchBundleService {
 
   async readback(request: unknown): Promise<ResearchBundleResolution> {
     const input = row(request);
-    if (Object.keys(input).sort().join(',') !== 'bundleDigest,dsl,strategyIdentityDigest') return block(blank(), 'INVALID_RESEARCH_READBACK');
+    if (!['bundleDigest,dsl,strategyIdentityDigest', 'bundleDigest,dsl,resultArtifactDigest,strategyIdentityDigest'].includes(Object.keys(input).sort().join(',')) ||
+      (input.resultArtifactDigest != null && !/^[a-f0-9]{64}$/.test(String(input.resultArtifactDigest)))) return block(blank(), 'INVALID_RESEARCH_READBACK');
     const { result, source } = await this.admit(input.dsl);
     if (!result.researchBundleReady) return result;
     const reject = (code: string) => ({ ...block(result, code), publicationStatus: 'BLOCKED_DATA' as const });
@@ -97,6 +98,7 @@ export class ResearchBundleService {
         saved.statisticalFirewallPass !== false || saved.statisticalFirewallStatus !== 'MISSING_EVIDENCE' ||
         typeof saved.resultArtifactDigest !== 'string' || !/^[a-f0-9]{64}$/.test(saved.resultArtifactDigest) ||
         saved.resultArtifactDigest !== hash(publication.artifact) || !resultMatches(row(publication.artifact), source)) return reject('DURABLE_RESULT_READBACK_MISMATCH');
+      if (input.resultArtifactDigest != null && input.resultArtifactDigest !== saved.resultArtifactDigest) return reject('CANONICAL_ARTIFACT_DIGEST_MISMATCH');
       // Revalidate source after storage IO; stale or changed policies cannot be relabeled current.
       const current = await this.admit(input.dsl);
       if (!current.result.researchBundleReady || current.result.bundleDigest !== result.bundleDigest) return reject('CANONICAL_READBACK_MISMATCH');
