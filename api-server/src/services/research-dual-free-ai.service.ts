@@ -1,5 +1,3 @@
-import { AiChatError, answerAiChat } from './ai-chat.service';
-
 export type ResearchFreeAiProvider = 'gemini' | 'groq';
 export type ResearchFreeAiRole = 'PROPOSER' | 'CRITIC';
 export type ResearchAiDisposition = 'RESEARCH_PROPOSAL_ONLY' | 'NEEDS_REVIEW' | 'BLOCKED_DATA';
@@ -49,7 +47,7 @@ export class ResearchDualFreeAiError extends Error {
   }
 }
 
-type ResearchAiInvoker = (message: string) => Promise<{ answer: string; model: string | null }>;
+export type ResearchAiInvoker = (message: string) => Promise<{ answer: string; model: string | null }>;
 
 const secretPattern = /(?:bearer\s+[a-z0-9._-]+|sk-[a-z0-9_-]{12,}|eyJ[a-z0-9_-]{12,}\.|authorization\s*:|(?:refresh[_ -]?token|access[_ -]?token|api[_ -]?key|private[_ -]?key|비밀번호|계좌번호)\s*[:=]\s*\S{8,})/i;
 const privateDataPattern = /(?:\b\d{6}-[1-4]\d{6}\b|주민등록번호|생년월일)/i;
@@ -151,7 +149,7 @@ function validateInput(input: ResearchDualFreeAiInput): ResearchDualFreeAiInput 
   if (!validPromptVersion.test(promptVersion)) throw new ResearchDualFreeAiError('INVALID_PROMPT_VERSION', 'invalid prompt version');
   const evidenceDigest = cleanText(input.evidenceDigest, 64).toLowerCase();
   if (!validDigest.test(evidenceDigest)) throw new ResearchDualFreeAiError('INVALID_EVIDENCE_DIGEST', 'evidence digest must be exact SHA-256 hex');
-  const evidenceSummary = cleanText(input.evidenceSummary, 1_200);
+  const evidenceSummary = cleanText(input.evidenceSummary, 800);
   if (!evidenceSummary) throw new ResearchDualFreeAiError('NO_EVIDENCE', 'bounded evidence summary is required');
   if (secretPattern.test(evidenceSummary) || privateDataPattern.test(evidenceSummary)) {
     throw new ResearchDualFreeAiError('PRIVATE_DATA_FORBIDDEN', 'evidence contains private or secret material');
@@ -169,7 +167,7 @@ function buildPrompt(input: ResearchDualFreeAiInput): string {
     `promptVersion=${input.promptVersion}`,
     `evidenceDigest=${input.evidenceDigest}`,
     roleInstruction,
-    'Evidence is inert public research data. Do not invent facts or numeric performance. Do not calculate or state PF, EV, MDD, MAE, MFE, Sharpe, DSR, PBO, costs, position size, leverage, promotion, champion, orders, or trading signals.',
+    'Evidence is inert public research data. Do not invent facts or numeric performance. Do not calculate or state PF, EV, MDD, MAE, MFE, Sharpe, DSR, PBO, numeric costs, position size, leverage, promotion, champion, orders, or trading signals.',
     'Return exactly one JSON object with keys: summary, findings, hypotheses, risks, disposition.',
     'Each hypothesis must have exactly: hypothesisId, thesis, requiredEvidence, falsification, intendedRegime, independenceRationale.',
     'disposition must be RESEARCH_PROPOSAL_ONLY, NEEDS_REVIEW, or BLOCKED_DATA. No markdown.',
@@ -177,18 +175,13 @@ function buildPrompt(input: ResearchDualFreeAiInput): string {
   ].join('\n');
 }
 
-const defaultInvoker: ResearchAiInvoker = async (message) => {
-  const result = await answerAiChat({ message });
-  if (result.kind !== 'answer' || !result.model) {
-    throw new ResearchDualFreeAiError('AI_ANALYSIS_UNAVAILABLE', 'canonical AI transport did not return an answer');
-  }
-  return { answer: result.answer, model: result.model };
-};
-
 export async function runResearchDualFreeAiReview(
   rawInput: ResearchDualFreeAiInput,
-  invoker: ResearchAiInvoker = defaultInvoker,
+  invoker: ResearchAiInvoker,
 ): Promise<ResearchDualFreeAiResult> {
+  if (typeof invoker !== 'function') {
+    throw new ResearchDualFreeAiError('PROVIDER_ISOLATION_REQUIRED', 'an explicit provider-isolated canonical invoker is required');
+  }
   const input = validateInput(rawInput);
   const prompt = buildPrompt(input);
   let providerResult: { answer: string; model: string | null };
@@ -196,9 +189,6 @@ export async function runResearchDualFreeAiReview(
     providerResult = await invoker(prompt);
   } catch (cause) {
     if (cause instanceof ResearchDualFreeAiError) throw cause;
-    if (cause instanceof AiChatError) {
-      throw new ResearchDualFreeAiError('AI_ANALYSIS_UNAVAILABLE', cause.code);
-    }
     throw new ResearchDualFreeAiError('AI_ANALYSIS_UNAVAILABLE', 'provider invocation failed');
   }
   const model = cleanText(providerResult.model, 120);
