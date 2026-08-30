@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { PAPER_FORWARD_PROVIDER_AUTHORITY } from "./paper-public-provider-authority-v1.js";
 
 export const NATURAL_PAPER_POSITION_SETTLEMENT_LIFECYCLE_VERSION =
   "natural-paper-position-settlement-lifecycle-v1";
@@ -126,6 +127,79 @@ function sameRiskPolicyIdentity(left, right) {
     && String(left.researchCodeSha ?? "").toLowerCase() === String(right.researchCodeSha ?? "").toLowerCase());
 }
 
+function jsonDigest(value) {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function validateNaturalHandoff(position, observation, state, cycle) {
+  if (position.lifecycle.sampleEligibility.provenanceClass !== NATURAL_FORWARD) return;
+  const handoff = observation?.schedulerHandoff;
+  if (!handoff || handoff.schemaVersion !== "paper-scheduler-position-observation-handoff-v1"
+    || handoff.executionAuthority !== "NONE"
+    || handoff.naturalSampleCreditAuthority !== "IDENTITY_GATES_PASSED") {
+    throw new Error("PAPER_POSITION_OBSERVATION_HANDOFF_IDENTITY_MISSING");
+  }
+  if (observationSampleClass(observation) !== NATURAL_FORWARD) {
+    throw new Error("PAPER_POSITION_OBSERVATION_GENUINE_PROVENANCE_REQUIRED");
+  }
+  const expectedPosition = positionIdentity(position);
+  for (const [key, value] of Object.entries(expectedPosition)) {
+    if (handoff.positionIdentity?.[key] !== value || observation[key] !== value) {
+      throw new Error("PAPER_POSITION_OBSERVATION_POSITION_IDENTITY_MISMATCH");
+    }
+  }
+  const currentCycle = handoff.cycleIdentity;
+  const cyclePayload = {
+    cycleId: cycle?.cycleId,
+    identityFingerprint: state?.identityFingerprint,
+    scheduledAtMs: currentCycle?.scheduledAtMs,
+    startedAtMs: currentCycle?.startedAtMs,
+  };
+  if (!nonEmpty(cyclePayload.cycleId) || !nonEmpty(cyclePayload.identityFingerprint)
+    || !Number.isSafeInteger(cyclePayload.scheduledAtMs) || !Number.isSafeInteger(cyclePayload.startedAtMs)
+    || cyclePayload.scheduledAtMs > cyclePayload.startedAtMs || cyclePayload.startedAtMs > cycle.evaluatedAtMs
+    || currentCycle?.cycleId !== cyclePayload.cycleId
+    || currentCycle.identityFingerprint !== cyclePayload.identityFingerprint
+    || currentCycle.identityDigest !== jsonDigest(cyclePayload)
+    || observation.cycleIdentityDigest !== currentCycle.identityDigest) {
+    throw new Error("PAPER_POSITION_OBSERVATION_CYCLE_IDENTITY_MISMATCH");
+  }
+  const binding = state?.ledger?.accountBinding;
+  if (!binding || !nonEmpty(binding.accountId) || !immutableSha(binding.sourceSha)
+    || !/^[0-9a-f]{64}$/iu.test(binding.publisherAccountIdSha256 ?? "")) {
+    throw new Error("PAPER_POSITION_OBSERVATION_ACCOUNT_IDENTITY_MISSING");
+  }
+  const accountPayload = {
+    publisherAccountIdSha256: binding.publisherAccountIdSha256.toLowerCase(),
+    sourceSha: binding.sourceSha.toLowerCase(),
+    accountIdSha256: createHash("sha256").update(binding.accountId).digest("hex"),
+  };
+  const accountDigest = jsonDigest(accountPayload);
+  const reservations = state.ledger.reservations?.filter((row) => row.status === OPEN
+    && row.positionId === position.positionId && row.paperSampleId === position.paperSampleId);
+  if (reservations?.length !== 1 || handoff.accountIdentity?.identityDigest !== accountDigest
+    || observation.accountIdentityDigest !== accountDigest
+    || Object.entries(accountPayload).some(([key, value]) => handoff.accountIdentity[key] !== value)) {
+    throw new Error("PAPER_POSITION_OBSERVATION_ACCOUNT_IDENTITY_MISMATCH");
+  }
+  const entry = position.sample.entryEvidenceProvenance;
+  if (!entry || hash(handoff.entryProvenance) !== hash(entry)
+    || observation.entryEvidenceDigest !== entry.evidenceSnapshotDigest
+    || position.lifecycle.entry.evidenceDigest !== entry.evidenceSnapshotDigest) {
+    throw new Error("PAPER_POSITION_OBSERVATION_ENTRY_IDENTITY_MISMATCH");
+  }
+  const risk = position.lifecycle.riskPolicyIdentity;
+  if (!sameRiskPolicyIdentity(risk, handoff.riskPolicyIdentity)
+    || handoff.riskPolicyIdentity.identityDigest !== jsonDigest(risk)
+    || observation.riskPolicyIdentityDigest !== jsonDigest(risk)) {
+    throw new Error("PAPER_POSITION_OBSERVATION_RISK_POLICY_IDENTITY_MISMATCH");
+  }
+  if (handoff.costPolicyIdentity?.version !== position.costPolicyVersion
+    || observation.costPolicyIdentity?.version !== position.costPolicyVersion) {
+    throw new Error("PAPER_POSITION_OBSERVATION_COST_POLICY_IDENTITY_MISMATCH");
+  }
+}
+
 function positionIdentity(position) {
   return Object.freeze({
     positionId: position.positionId,
@@ -133,6 +207,8 @@ function positionIdentity(position) {
     signalId: position.signalId,
     market: position.market,
     symbol: position.symbol,
+    signalTimeframe: position.sample?.identity?.timeframe,
+    horizon: position.sample?.identity?.horizon,
     direction: position.direction,
     strategyId: position.strategyId,
     strategyVersion: position.strategyVersion,
@@ -150,6 +226,9 @@ function validatePositionIdentity(identity) {
     if (!nonEmpty(identity?.[key])) throw new Error(`PAPER_POSITION_${key.toUpperCase()}_REQUIRED`);
   }
   if (!immutableSha(identity.researchCodeSha)) throw new Error("PAPER_POSITION_RESEARCH_SHA_REQUIRED");
+  if (!positive(timeframeMs(identity.signalTimeframe)) || !Number.isSafeInteger(identity.horizon) || identity.horizon <= 0) {
+    throw new Error("PAPER_POSITION_SIGNAL_HORIZON_REQUIRED");
+  }
 }
 
 function immutableContractDigest(lifecycle) {
@@ -255,6 +334,34 @@ function validateObservation(position, observation, evaluatedAtMs) {
     if (!sameRiskPolicyIdentity(expectedRiskPolicy, observedRiskPolicy)) {
       throw new Error("PAPER_POSITION_OBSERVATION_RISK_POLICY_IDENTITY_MISMATCH");
     }
+    const frame = observation.closedFrame;
+    const intervalMs = timeframeMs(observation.timeframe);
+    const authority = PAPER_FORWARD_PROVIDER_AUTHORITY[position.market];
+    const cursor = position.lifecycle.mark.lastObservedAtMs ?? position.entryTimestampMs;
+    if (!authority || observation.source !== authority.provider || observation.timeframe !== authority.timeframe
+      || observation.maxAgeMs !== authority.maxAgeMs || frame?.intervalMs !== authority.intervalMs
+      || frame?.closeOffsetMs !== (authority.closeOffsetMs ?? authority.intervalMs)) {
+      throw new Error("PAPER_POSITION_PUBLIC_PROVIDER_AUTHORITY_MISMATCH");
+    }
+    if (!frame || !Number.isSafeInteger(frame.openAtMs) || frame.closeAtMs !== observation.observedAtMs
+      || !Number.isSafeInteger(intervalMs) || intervalMs <= 0 || frame.intervalMs !== intervalMs
+      || frame.timeframe !== observation.timeframe || frame.provider !== observation.source
+      || !positive(frame.closeOffsetMs) || frame.closeOffsetMs > intervalMs
+      || frame.openAtMs + frame.closeOffsetMs !== frame.closeAtMs
+      || frame.sourceDigest !== observation.sourceDigest || !/^[0-9a-f]{64}$/u.test(frame.sourceDigest ?? "")) {
+      throw new Error("PAPER_POSITION_CLOSED_FRAME_PROVENANCE_REQUIRED");
+    }
+    if (!position.lifecycle.pendingExit) {
+      if (frame.openAtMs < cursor) throw new Error("PAPER_POSITION_OBSERVATION_PARTIAL_FRAME_AT_CURSOR");
+      if (position.market.startsWith("CRYPTO_") && frame.openAtMs !== cursor) {
+        throw new Error("PAPER_POSITION_OBSERVATION_INTERVAL_GAP");
+      }
+    }
+    const framePayload = {
+      provider: frame.provider, market: position.market, symbol: position.symbol, timeframe: frame.timeframe,
+      sourceObservedAtMs: frame.closeAtMs, open: bar.open, high: bar.high, low: bar.low, close: bar.close,
+    };
+    if (frame.sourceDigest !== hash(framePayload)) throw new Error("PAPER_POSITION_FRAME_DIGEST_MISMATCH");
   }
 }
 
@@ -289,39 +396,97 @@ function excursion(position, bar, current) {
   });
 }
 
-function settlementEvidenceBlockers(position, observation, evaluatedAtMs) {
+export const NATURAL_SETTLEMENT_COST_COMPONENTS = Object.freeze([
+  "commission", "tax", "spread", "slippage", "funding", "latency", "liquidityImpact", "partialFillImpact",
+]);
+
+// Transport canonical PercentCostEvidence; never estimate or fill an absent cost.
+export function adaptNaturalPaperSettlementFullCost({ position, observation, trigger, evaluatedAtMs } = {}) {
   const blockers = [];
   const cost = observation?.settlementCostEvidence;
-  const componentNames = ["fees", "spread", "slippage", "funding", "latency", "liquidityImpact", "partialFillImpact"];
-  const maximumAgeMs = observation?.maxAgeMs;
-  const completeComponents = componentNames.every((name) => {
+  const maximumAgeMs = cost?.maximumAgeMs;
+  const policy = observation?.settlementInput?.exitExecution?.costPolicy;
+  const qualities = new Set(["OBSERVED", "DOCUMENTED", "ESTIMATED", "NOT_APPLICABLE"]);
+  const components = {};
+  for (const name of NATURAL_SETTLEMENT_COST_COMPONENTS) {
     const component = cost?.components?.[name];
-    return component?.state === "PRESENT"
-      && component.countsAsExecutionCost === true
-      && finite(component.value)
-      && nonEmpty(component.unit)
-      && nonEmpty(component.quality)
-      && nonEmpty(component.source)
-      && finite(component.observedAtMs)
-      && component.observedAtMs <= evaluatedAtMs
-      && finite(maximumAgeMs)
-      && evaluatedAtMs - component.observedAtMs <= maximumAgeMs;
-  });
+    if (component?.status !== "PRESENT" || !finite(component.valuePercent) || component.valuePercent < 0
+      || !qualities.has(component.quality) || !nonEmpty(component.source) || !nonEmpty(component.provenance)
+      || component.policyIdentity?.version !== position.costPolicyVersion
+      || !Number.isSafeInteger(component.observedAtMs) || component.observedAtMs > evaluatedAtMs
+      || !positive(maximumAgeMs) || maximumAgeMs > observation.maxAgeMs
+      || evaluatedAtMs - component.observedAtMs > maximumAgeMs
+      || (component.quality === "NOT_APPLICABLE" && component.valuePercent !== 0)) {
+      blockers.push(`PAPER_POSITION_SETTLEMENT_${name.toUpperCase()}_COST_EVIDENCE_MISSING`);
+      continue;
+    }
+    if (component.valuePercent / 100 !== policy?.[`${name}Rate`]) {
+      blockers.push("BLOCKED_SETTLEMENT_COST_POLICY_MISMATCH");
+    }
+    if (name === "tax" && (position.market.endsWith("STOCK")
+      ? component.quality !== "DOCUMENTED"
+      : component.quality !== "NOT_APPLICABLE" || component.valuePercent !== 0)) {
+      blockers.push("PAPER_POSITION_SETTLEMENT_TAX_EVIDENCE_MISMATCH");
+    }
+    if (name === "funding" && position.market !== "CRYPTO_FUTURES"
+      && (component.quality !== "NOT_APPLICABLE" || component.valuePercent !== 0)) {
+      blockers.push("PAPER_POSITION_FUNDING_EVIDENCE_MISMATCH");
+    }
+    components[name] = structuredClone(component);
+  }
   if (!nonEmpty(cost?.schemaVersion)
     || cost?.status !== "PRESENT"
     || cost?.fullCostReady !== true
     || cost?.unknownIsZero !== false
     || cost?.unavailableCostConvertedToZero !== false
-    || cost?.supplementalCostInput?.costPolicyId !== position.costPolicyVersion
-    || !completeComponents) {
+    || cost?.costPolicyIdentity?.version !== position.costPolicyVersion
+    || policy?.version !== position.costPolicyVersion) {
     blockers.push("PAPER_POSITION_SETTLEMENT_COST_EVIDENCE_MISSING");
   }
   const funding = observation?.settlementInput?.fundingEvidence;
   if (funding?.complete !== true || !Array.isArray(funding?.payments)) {
     blockers.push("PAPER_POSITION_FUNDING_EVIDENCE_MISSING");
   }
+  if (position.market === "CRYPTO_FUTURES") {
+    const lineage = cost?.components?.funding?.holdingPeriod;
+    const payments = funding?.payments;
+    const entryNotional = position.sample?.fill?.notional;
+    const totalFunding = Array.isArray(payments) ? payments.reduce((sum, payment) => sum + payment.amount, 0) : NaN;
+    if (!positive(entryNotional) || !finite(totalFunding)
+      || (totalFunding / entryNotional) * 100 !== cost?.components?.funding?.valuePercent) {
+      blockers.push("BLOCKED_SETTLEMENT_COST_POLICY_MISMATCH");
+    }
+    if (lineage?.entryTimestampMs !== position.entryTimestampMs
+      || lineage?.exitTriggerTimestampMs !== trigger.triggeredAtMs
+      || lineage?.paperSampleId !== position.paperSampleId
+      || lineage?.positionId !== position.positionId
+      || !nonEmpty(lineage?.paymentsDigest) || lineage.paymentsDigest !== hash(funding?.payments)
+      || funding?.entryTimestampMs !== position.entryTimestampMs
+      || funding?.exitTimestampMs !== trigger.triggeredAtMs
+      || cost?.components?.funding?.quality !== "OBSERVED"
+      || payments?.some((payment, index) => !Number.isSafeInteger(payment.asOfMs)
+        || payment.asOfMs < position.entryTimestampMs || payment.asOfMs > trigger.triggeredAtMs
+        || (index > 0 && payments[index - 1].asOfMs >= payment.asOfMs)
+        || !finite(payment.amount) || !nonEmpty(payment.source) || !nonEmpty(payment.provenance) || !nonEmpty(payment.version))) {
+      blockers.push("PAPER_POSITION_FUNDING_HOLDING_PERIOD_MISMATCH");
+    }
+  } else if (funding?.payments?.length !== 0) {
+    blockers.push("PAPER_POSITION_FUNDING_EVIDENCE_MISMATCH");
+  }
   if (!observation?.settlementInput?.exitExecution) blockers.push("PAPER_POSITION_EXIT_EXECUTION_EVIDENCE_MISSING");
-  return blockers;
+  return deepFreeze({
+    schemaVersion: "natural-paper-settlement-full-cost-v1",
+    status: blockers.length ? "BLOCKED_DATA" : "PRESENT",
+    fullCostReady: blockers.length === 0,
+    components,
+    costPolicyIdentity: { version: position.costPolicyVersion },
+    exitTriggerId: trigger.exitTriggerId,
+    evidenceDigest: hash({ components, exitTriggerId: trigger.exitTriggerId, policy }),
+    blockers: [...new Set(blockers)],
+    unknownIsZero: false,
+    naturalSampleCredit: 0,
+    executionAuthority: "NONE",
+  });
 }
 
 export function createNaturalPaperPositionLifecycle({ position, sample, candidate } = {}) {
@@ -412,10 +577,105 @@ export function createNaturalPaperPositionLifecycle({ position, sample, candidat
   });
 }
 
-export function advanceNaturalPaperPositionLifecycle({ position, observation, evaluatedAtMs } = {}) {
+function exitMarketEvidence(input) {
+  return {
+    exitBar: input?.exitBar ?? null,
+    exitQuote: input?.exitQuote ?? null,
+    exitDepth: input?.exitDepth ?? null,
+    dataEvidence: input?.exitExecution?.dataEvidence ?? null,
+  };
+}
+
+function freezeExitTrigger(position, lifecycle, observation, exit) {
+  const payload = {
+    ...exit,
+    positionId: position.positionId,
+    paperSampleId: position.paperSampleId,
+    observationId: observation.observationId,
+    triggeredAtMs: observation.observedAtMs,
+    triggerTimestamp: observation.observedAtMs,
+    triggerPrice: exit.price ?? observation.bar.close,
+    exitReason: exit.reason,
+    exitType: exit.type,
+    source: observation.source,
+    provenance: observation.provenance,
+    sourceDigest: observation.sourceDigest ?? null,
+    pathEvidenceDigest: hash(lifecycle.pathBars),
+    positionLifecycleDigest: lifecycle.immutableContractDigest,
+    strategyIdentity: lifecycle.strategyIdentity,
+    researchCodeSha: position.researchCodeSha,
+    costPolicyVersion: position.costPolicyVersion,
+    marketEvidence: exitMarketEvidence(observation.settlementInput),
+    bar: structuredClone(observation.bar),
+    naturalEvidence: structuredClone(observation.naturalEvidence),
+  };
+  return deepFreeze({ ...payload, exitTriggerId: hash(payload) });
+}
+
+function finalizeExit(position, observation, evaluatedAtMs) {
+  const lifecycle = position.lifecycle;
+  const trigger = lifecycle.pendingExit;
+  const { exitTriggerId, ...payload } = trigger;
+  if (exitTriggerId !== hash(payload) || trigger.pathEvidenceDigest !== hash(lifecycle.pathBars)
+    || trigger.positionLifecycleDigest !== lifecycle.immutableContractDigest) {
+    throw new Error("PAPER_POSITION_EXIT_TRIGGER_IDENTITY_MISMATCH");
+  }
+  const input = observation.settlementInput;
+  const delayed = observation.observationId !== trigger.observationId || observation.observedAtMs !== trigger.triggeredAtMs;
+  const triggerMismatch = (delayed && (input?.exitTriggerId !== exitTriggerId
+      || observation.settlementCostEvidence?.exitTriggerId !== exitTriggerId))
+    || hash(exitMarketEvidence(input)) !== hash(trigger.marketEvidence)
+    || input?.exitBar?.timestampMs !== trigger.triggeredAtMs
+    || input.exitBar.open !== trigger.bar.open || input.exitBar.high !== trigger.bar.high
+    || input.exitBar.low !== trigger.bar.low || input.exitBar.close !== trigger.bar.close;
+  const cost = adaptNaturalPaperSettlementFullCost({ position, observation, trigger, evaluatedAtMs });
+  const blockers = [...cost.blockers];
+  if (triggerMismatch) blockers.push("PAPER_POSITION_EXIT_TRIGGER_EVIDENCE_MISMATCH");
+  if (lifecycle.sampleEligibility.provenanceClass === NATURAL_FORWARD
+    && Array.isArray(input?.pathBars) && input.pathBars.length > 0
+    && hash(input.pathBars) !== hash(lifecycle.pathBars)) {
+    blockers.push("PAPER_POSITION_SETTLEMENT_PATH_UNIVERSE_MISMATCH");
+  }
+  if (blockers.length > 0) return Object.freeze({
+    status: "BLOCKED_SETTLEMENT_EVIDENCE", position, exitReason: trigger.reason, blockers: Object.freeze(blockers),
+  });
+  const naturalSampleCredit = lifecycle.sampleEligibility.provenanceClass === NATURAL_FORWARD
+    && trigger.naturalEvidence?.provenanceClass === NATURAL_FORWARD ? 1 : 0;
+  const settlementInput = {
+    ...structuredClone(input),
+    exitOrderType: trigger.type,
+    pathBars: lifecycle.sampleEligibility.provenanceClass === NATURAL_FORWARD
+      ? structuredClone(lifecycle.pathBars)
+      : [...(input.pathBars ?? []), ...lifecycle.pathBars],
+  };
+  if (trigger.type === "LIMIT") settlementInput.exitLimitPrice = trigger.price;
+  if (trigger.type === "STOP_MARKET") settlementInput.exitStopPrice = trigger.price;
+  return Object.freeze({
+    status: "EXIT_ELIGIBLE", position, exitReason: trigger.reason,
+    settlementInput: deepFreeze(settlementInput),
+    evidence: deepFreeze({
+      observationId: trigger.observationId,
+      observedAtMs: trigger.triggeredAtMs,
+      exitTriggerId,
+      exitTriggerTimestampMs: trigger.triggeredAtMs,
+      source: trigger.source,
+      provenance: trigger.provenance,
+      pathEvidenceDigest: trigger.pathEvidenceDigest,
+      costEvidence: cost,
+      naturalSampleCredit,
+      testOnlySampleCredit: 0,
+      executionAuthority: "NONE",
+      orderSubmitted: false,
+    }),
+  });
+}
+
+export function advanceNaturalPaperPositionLifecycle({ position, observation, evaluatedAtMs, state, cycle } = {}) {
   const lifecycle = assertLifecycle(position);
   if (!Number.isSafeInteger(evaluatedAtMs)) throw new Error("PAPER_POSITION_EVALUATED_AT_REQUIRED");
   validateObservation(position, observation, evaluatedAtMs);
+  validateNaturalHandoff(position, observation, state, cycle);
+  if (lifecycle.pendingExit) return finalizeExit(position, observation, evaluatedAtMs);
   if (lifecycle.processedObservationIds.includes(observation.observationId)) {
     return Object.freeze({ status: "DUPLICATE_OBSERVATION", blocker: "DUPLICATE_POSITION_OBSERVATION", position });
   }
@@ -440,7 +700,7 @@ export function advanceNaturalPaperPositionLifecycle({ position, observation, ev
     })]),
   });
 
-  let exit = lifecycle.pendingExit ?? priceRules(position.direction, lifecycle.exitPolicy, observation.bar);
+  let exit = priceRules(position.direction, lifecycle.exitPolicy, observation.bar);
   const invalidation = observation.invalidationEvidence;
   if (!exit && invalidation?.invalidated === true) {
     if (!nonEmpty(lifecycle.exitPolicy.invalidationPolicyId)
@@ -460,48 +720,11 @@ export function advanceNaturalPaperPositionLifecycle({ position, observation, ev
   if (exit && lifecycle.pendingExit == null) {
     nextLifecycle = Object.freeze({
       ...nextLifecycle,
-      pendingExit: Object.freeze({ ...exit, triggeredAtMs: observation.observedAtMs }),
+      pendingExit: freezeExitTrigger(position, nextLifecycle, observation, exit),
     });
   }
   const updatedPosition = Object.freeze({ ...position, lifecycle: nextLifecycle });
   if (!exit) return Object.freeze({ status: "HOLD", position: updatedPosition, exitReason: null });
 
-  const blockers = settlementEvidenceBlockers(position, observation, evaluatedAtMs);
-  if (blockers.length > 0) {
-    return Object.freeze({
-      status: "BLOCKED_SETTLEMENT_EVIDENCE",
-      position: updatedPosition,
-      exitReason: exit.reason,
-      blockers: Object.freeze(blockers),
-    });
-  }
-  const observedClass = observationSampleClass(observation);
-  const naturalSampleCredit = lifecycle.sampleEligibility.provenanceClass === NATURAL_FORWARD
-    && observedClass === NATURAL_FORWARD ? 1 : 0;
-  const settlementInput = {
-    ...structuredClone(observation.settlementInput),
-    exitOrderType: exit.type,
-    pathBars: [...(observation.settlementInput.pathBars ?? []), ...nextLifecycle.pathBars]
-      .filter((bar, index, rows) => rows.findIndex((candidate) => candidate.timestampMs === bar.timestampMs
-        && candidate.high === bar.high && candidate.low === bar.low) === index),
-  };
-  if (exit.type === "LIMIT") settlementInput.exitLimitPrice = exit.price;
-  if (exit.type === "STOP_MARKET") settlementInput.exitStopPrice = exit.price;
-  return Object.freeze({
-    status: "EXIT_ELIGIBLE",
-    position: updatedPosition,
-    exitReason: exit.reason,
-    settlementInput: Object.freeze(settlementInput),
-    evidence: Object.freeze({
-      observationId: observation.observationId,
-      observedAtMs: observation.observedAtMs,
-      source: observation.source,
-      provenance: observation.provenance,
-      costEvidence: deepFreeze(structuredClone(observation.settlementCostEvidence)),
-      naturalSampleCredit,
-      testOnlySampleCredit: 0,
-      executionAuthority: "NONE",
-      orderSubmitted: false,
-    }),
-  });
+  return finalizeExit(updatedPosition, observation, evaluatedAtMs);
 }

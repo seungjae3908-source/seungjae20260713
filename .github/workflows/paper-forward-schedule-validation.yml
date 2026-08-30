@@ -2,8 +2,13 @@ name: Paper Forward Schedule Activation Validation
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, fix/natural-position-observation-clean-transport-20260830]
     paths:
+      - .github/workflows/paper-forward-schedule-validation.yml
+      - market-prediction-lab/src/paper-public-provider-authority-v1.js
+      - market-prediction-lab/src/natural-paper-public-position-observation-v1.js
+      - market-prediction-lab/src/natural-paper-position-settlement-lifecycle-v1.js
+      - market-prediction-lab/tests/natural-paper-position-settlement-lifecycle-v1.test.js
       - .github/workflows/authoritative-paper-runtime-factory-v1.yml
       - api-server/scripts/build-authoritative-paper-runtime-package.mjs
       - api-server/src/services/authoritative-paper-callback-owners.service.ts
@@ -122,6 +127,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
