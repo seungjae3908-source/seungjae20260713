@@ -1,4 +1,5 @@
 export type StockClassLabel = '우량주' | '보통주' | '저평가주' | '잡주';
+export type StockClassDisplayLabel = StockClassLabel | '분류 확인 필요';
 
 export interface StockClassifierInput {
 	ticker?: string;
@@ -29,7 +30,7 @@ export interface StockClassifierInput {
 }
 
 export interface StockClassification {
-	label: StockClassLabel | null;
+	label: StockClassDisplayLabel;
 	score: number | null;
 	evidenceState: 'EVALUABLE' | 'MISSING_EVIDENCE';
 	reason: string;
@@ -260,7 +261,7 @@ export function classifyStock(input: StockClassifierInput): StockClassification 
 
 	if (ai == null) {
 		return {
-			label: null,
+			label: '분류 확인 필요',
 			score: null,
 			evidenceState: 'MISSING_EVIDENCE',
 			reason: seriousDelisting
@@ -434,7 +435,7 @@ export function classifyStock(input: StockClassifierInput): StockClassification 
 }
 
 export function stockClassBadgeClass(
-	label: StockClassLabel | null | undefined,
+	label: StockClassDisplayLabel | null | undefined,
 ): string {
 	if (label === '우량주') {
 		return 'border-green-500/40 bg-green-500/10 text-green-600 dark:text-green-400';
