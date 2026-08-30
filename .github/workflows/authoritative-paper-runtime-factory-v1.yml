@@ -6,19 +6,48 @@ on:
     paths:
       - .github/workflows/authoritative-paper-runtime-factory-v1.yml
       - api-server/scripts/build-authoritative-paper-runtime-package.mjs
+      - api-server/src/data/asset-type.ts
+      - api-server/src/lib/bounded-work-pool.ts
+      - api-server/src/lib/provider-admission-control.ts
+      - api-server/src/routes/paper-trading.ts
+      - api-server/src/routes/paper-trading.smoke.test.ts
       - api-server/src/services/authoritative-paper-callback-owners.service.ts
       - api-server/src/services/authoritative-paper-evidence-sources.service.ts
       - api-server/src/services/authoritative-paper-execution-cost-sources.service.ts
+      - api-server/src/services/authoritative-paper-generic-risk-policy-producer.service.ts
+      - api-server/src/services/authoritative-paper-latency-cost-evidence.service.ts
+      - api-server/src/services/authoritative-paper-risk-sizing-source.service.ts
       - api-server/src/services/authoritative-paper-runtime-package.entry.ts
-      - api-server/src/services/paper-trading-state-snapshot.service.ts
-      - api-server/src/services/paper-trading-state-publisher.service.ts
-      - api-server/src/routes/paper-trading.ts
-      - api-server/src/routes/paper-trading.smoke.test.ts
+      - api-server/src/services/bitget-futures-public-evidence.service.ts
+      - api-server/src/services/crypto-signal-scanner.service.ts
+      - api-server/src/services/forward-recommendation-observer-runtime.service.ts
+      - api-server/src/services/forward-recommendation-observer.service.ts
+      - api-server/src/services/market-price-precision.service.ts
+      - api-server/src/services/paper-trading-core.service.ts
       - api-server/src/services/paper-simulated-execution-evidence.service.ts
+      - api-server/src/services/paper-trading-state-publisher.service.ts
+      - api-server/src/services/paper-trading-state-snapshot.service.ts
+      - api-server/src/services/public-market-http.ts
+      - api-server/src/services/scanner-candidate-ranking.service.ts
+      - api-server/src/services/scanner-canonical-paper-identity.service.ts
+      - api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.ts
       - api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.ts
       - api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.test.ts
-      - api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.ts
+      - api-server/src/services/scanner-crypto-price-precision.service.ts
+      - api-server/src/services/scanner-data-quality.service.ts
+      - api-server/src/services/scanner-indicator-library.service.ts
+      - api-server/src/services/scanner-market-action.service.ts
+      - api-server/src/services/scanner-market-profile-overlay.service.ts
       - api-server/src/services/scanner-paper-admission-evidence-bundle.service.ts
+      - api-server/src/services/scanner-profit-cost-evidence-adapter.service.ts
+      - api-server/src/services/scanner-quant-hardening.service.ts
+      - api-server/src/services/scanner-quant-strategy.service.ts
+      - api-server/src/services/scanner-signal-lifecycle.service.ts
+      - api-server/src/services/scanner-strategy-profile.service.ts
+      - api-server/src/services/signal-performance-learning.service.ts
+      - api-server/src/services/strategy-promotion.service.ts
+      - api-server/src/services/trade-paper-market-contract.service.ts
+      - api-server/src/services/trading-risk-engine.service.ts
       - market-prediction-lab/src/authoritative-paper-runtime-factory-v1.js
       - market-prediction-lab/src/authoritative-paper-runtime-package-v1.js
       - market-prediction-lab/src/authoritative-paper-evidence-source-ownership-v1.js
