@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page, type Route } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -9,6 +9,155 @@ function source(relativePath: string) {
 const panel = source('src/components/user-broker-telegram-panel.tsx');
 const route = source('../api-server/src/routes/user-broker-telegram.ts');
 const testMessageService = source('../api-server/src/services/telegram-test-message.service.ts');
+
+const E2E_USER_ID = '73737373-7373-4737-8737-737373737373';
+const E2E_NOW = '2026-08-30T00:00:00.000Z';
+const AUTH_STORAGE_KEY = 'sb-127-auth-token';
+
+function fulfill(routeHandler: Route, body: unknown, status = 200) {
+  return routeHandler.fulfill({
+    status,
+    contentType: 'application/json; charset=utf-8',
+    body: JSON.stringify(body),
+  });
+}
+
+async function installTelegramButtonRuntime(page: Page) {
+  await page.addInitScript(({ storageKey, userId, now }) => {
+    const encode = (value: Record<string, unknown>) => window.btoa(JSON.stringify(value))
+      .replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+    const expiresAt = 4_102_444_800;
+    const accessToken = `${encode({ alg: 'none', typ: 'JWT' })}.${encode({ sub: userId, role: 'authenticated', exp: expiresAt })}.e2e`;
+    window.localStorage.setItem(storageKey, JSON.stringify({
+      access_token: accessToken,
+      refresh_token: 'telegram-button-e2e-refresh',
+      expires_in: 3600,
+      expires_at: expiresAt,
+      token_type: 'bearer',
+      user: {
+        id: userId,
+        aud: 'authenticated',
+        role: 'authenticated',
+        email: 'telegram-buttons@accounts.invalid',
+        app_metadata: { provider: 'email', providers: ['email'] },
+        user_metadata: { display_name: 'Telegram Button Member' },
+        identities: [],
+        created_at: now,
+      },
+    }));
+  }, { storageKey: AUTH_STORAGE_KEY, userId: E2E_USER_ID, now: E2E_NOW });
+
+  let connected = false;
+  let linkRequests = 0;
+  let testRequests = 0;
+  let integrationReads = 0;
+  const unexpectedMutations: string[] = [];
+
+  await page.route('**/__e2e-supabase/**', async (routeHandler) => {
+    const request = routeHandler.request();
+    const pathname = new URL(request.url()).pathname;
+    if (pathname.endsWith('/rest/v1/profiles')) {
+      return fulfill(routeHandler, {
+        id: E2E_USER_ID,
+        login_name: 'telegram-button-member',
+        display_name: 'Telegram Button Member',
+        role: 'full',
+        status: 'approved',
+        membership_level: 'regular',
+        is_active: true,
+        permissions_updated_at: E2E_NOW,
+        updated_at: E2E_NOW,
+      });
+    }
+    if (pathname.endsWith('/auth/v1/user')) {
+      return fulfill(routeHandler, {
+        id: E2E_USER_ID,
+        aud: 'authenticated',
+        role: 'authenticated',
+        email: 'telegram-buttons@accounts.invalid',
+        app_metadata: { provider: 'email', providers: ['email'] },
+        user_metadata: { display_name: 'Telegram Button Member' },
+        identities: [],
+        created_at: E2E_NOW,
+      });
+    }
+    return fulfill(routeHandler, { ok: true });
+  });
+
+  await page.route('**/api/**', async (routeHandler) => {
+    const request = routeHandler.request();
+    const url = new URL(request.url());
+    const requestPath = url.pathname;
+    const method = request.method();
+
+    if (requestPath === '/api/user-integrations' && method === 'GET') {
+      integrationReads += 1;
+      return fulfill(routeHandler, {
+        ok: true,
+        brokerConnections: [],
+        telegram: {
+          connected,
+          status: connected ? 'ACTIVE' : 'DISCONNECTED',
+          connectedAt: connected ? E2E_NOW : null,
+        },
+        preferences: {},
+        alertPolicy: { userId: E2E_USER_ID, enabled: false },
+        alertPolicySource: 'DEFAULT_MISSING',
+        alertPolicyStorageAvailable: true,
+        telegramRuntime: {
+          deliveryReady: true,
+          linkingReady: true,
+          webhookConfigured: true,
+          botUsernameConfigured: true,
+          stockRoomReady: false,
+          cryptoRoomReady: false,
+          richSignalEnabled: false,
+          aiExplanationEnabled: false,
+          signalFollowupEnabled: false,
+          memberHoldingsEnabled: false,
+          orderAuthority: 'NONE',
+          privateTradingApiAllowed: false,
+          realOrderAllowed: false,
+        },
+        privateApiRequests: 0,
+        ordersSubmitted: 0,
+        ordersCancelled: 0,
+      });
+    }
+
+    if (requestPath === '/api/user-integrations/telegram/link' && method === 'POST') {
+      linkRequests += 1;
+      return fulfill(routeHandler, {
+        ok: true,
+        deepLink: 'https://t.me/InvestmentTestBot?start=safe-e2e-token',
+        expiresAt: '2026-08-30T00:10:00.000Z',
+      }, 201);
+    }
+
+    if (requestPath === '/api/user-integrations/telegram/test' && method === 'POST') {
+      testRequests += 1;
+      return fulfill(routeHandler, {
+        ok: true,
+        status: 'SENT',
+        attempts: 1,
+        investmentSignal: false,
+        orderAuthority: 'NONE',
+        privateApiRequests: 0,
+        ordersSubmitted: 0,
+        ordersCancelled: 0,
+      });
+    }
+
+    if (method !== 'GET') unexpectedMutations.push(`${method} ${requestPath}`);
+    return fulfill(routeHandler, { ok: true, items: [] });
+  });
+
+  return {
+    connect() { connected = true; },
+    counters() { return { linkRequests, testRequests, integrationReads }; },
+    unexpectedMutations,
+  };
+}
 
 test('Telegram settings center exposes the existing user-bound alert policy instead of inventing a second policy engine', () => {
   expect(panel).toContain("'/api/user-integrations/telegram-policy'");
@@ -115,6 +264,36 @@ test('personal Telegram test endpoint preserves the route transport boundary and
   expect(panel).toContain('테스트 메시지는 투자 신호나 주문이 아닙니다.');
   expect(panel).toContain('disabled={!state.telegram.connected || !state.telegramRuntime.deliveryReady || testSending}');
   expect(panel).toContain('if (!state?.telegram.connected || !state.telegramRuntime.deliveryReady || testSending) return;');
+});
+
+test('actual Account UI clicks Telegram link on mobile and test-message on desktop through the exact safe endpoints', async ({ page }) => {
+  const runtime = await installTelegramButtonRuntime(page);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/account');
+  const integrationPanel = page.getByTestId('user-broker-telegram-panel');
+  await expect(integrationPanel).toHaveAttribute('data-user-integrations-request-state', 'success');
+  await expect(integrationPanel).toContainText('연결 안 됨');
+
+  await page.getByRole('button', { name: 'Telegram 연결', exact: true }).click();
+  await expect.poll(() => runtime.counters().linkRequests).toBe(1);
+  await expect(page.getByRole('link', { name: 'Telegram에서 연결 완료' }))
+    .toHaveAttribute('href', 'https://t.me/InvestmentTestBot?start=safe-e2e-token');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(391);
+
+  runtime.connect();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.getByRole('button', { name: '연결 상태 새로고침' }).click();
+  await expect(integrationPanel).toContainText('연결됨 · ACTIVE');
+  const testButton = page.getByRole('button', { name: '테스트 메시지 보내기' });
+  await expect(testButton).toBeEnabled();
+  await testButton.click();
+  await expect.poll(() => runtime.counters().testRequests).toBe(1);
+  await expect(integrationPanel.getByRole('status')).toContainText('Telegram 테스트 메시지 전송 완료 · 1회 시도');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1441);
+
+  expect(runtime.counters().integrationReads).toBeGreaterThanOrEqual(2);
+  expect(runtime.unexpectedMutations).toEqual([]);
 });
 
 test('Telegram settings remain responsive and do not add Telegram-side trade execution controls', () => {
