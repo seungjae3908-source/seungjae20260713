@@ -2,6 +2,7 @@ export type PortfolioHoldingTruthCode =
   | 'INVALID_RESPONSE_SHAPE'
   | 'INVALID_ROW_SHAPE'
   | 'INVALID_IDENTITY'
+  | 'DUPLICATE_IDENTITY'
   | 'INVALID_MARKET'
   | 'INVALID_CURRENCY'
   | 'INVALID_QUANTITY'
@@ -23,7 +24,7 @@ function record(value: unknown): Record<string, unknown> | null {
 
 function positiveFiniteNumberLike(value: unknown): boolean {
   if (typeof value === 'number') return Number.isFinite(value) && value > 0;
-  if (typeof value !== 'string' || value.trim() === '') return false;
+  if (typeof value !== 'string' || !/^\+?\d+(?:\.\d+)?$/.test(value.trim())) return false;
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0;
 }
@@ -33,6 +34,7 @@ export function validatePortfolioHoldingRows(payload: unknown): PortfolioHolding
     return { ok: false, code: 'INVALID_RESPONSE_SHAPE', rowIndex: null };
   }
 
+  const ids = new Set<string>();
   for (let index = 0; index < payload.length; index += 1) {
     const row = record(payload[index]);
     if (!row) return { ok: false, code: 'INVALID_ROW_SHAPE', rowIndex: index };
@@ -45,6 +47,8 @@ export function validatePortfolioHoldingRows(payload: unknown): PortfolioHolding
     if (row.market !== 'KR' && row.market !== 'US') {
       return { ok: false, code: 'INVALID_MARKET', rowIndex: index };
     }
+    if (ids.has(row.id)) return { ok: false, code: 'DUPLICATE_IDENTITY', rowIndex: index };
+    ids.add(row.id);
 
     const expectedCurrency = row.market === 'US' ? 'USD' : 'KRW';
     if (row.currency !== expectedCurrency) {
