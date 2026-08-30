@@ -91,6 +91,26 @@ async function installApprovedSessionWithInvalidHolding(page: Page) {
   });
 }
 
+async function installGlobalReadOnlyShellFixtures(page: Page) {
+  await page.route('**/api/watchlist**', async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (request.method() === 'GET' && url.pathname === '/api/watchlist') {
+      return fulfill(route, { ok: true, items: [] });
+    }
+    return route.continue();
+  });
+
+  await page.route('**/api/backup/latest**', async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (request.method() === 'GET' && url.pathname === '/api/backup/latest') {
+      return fulfill(route, { ok: true, exists: false });
+    }
+    return route.continue();
+  });
+}
+
 test('portfolio holding truth accepts explicit finite positive numeric facts', () => {
   expect(validatePortfolioHoldingRows([VALID_ROW])).toEqual({ ok: true });
   expect(validatePortfolioHoldingRows([{
@@ -176,6 +196,7 @@ test('portfolio holdings UI never presents load failure as zero-valued portfolio
 
 test('malformed holding fails closed on the real portfolio holdings route without zero summary or private calls', async ({ page }) => {
   await installApprovedSessionWithInvalidHolding(page);
+  await installGlobalReadOnlyShellFixtures(page);
 
   const consoleErrors: string[] = [];
   const quoteRequests: string[] = [];
