@@ -45,6 +45,66 @@ def _rollover_module():
     return rollover
 
 
+def _contract_module():
+    try:
+        import agent_hub_contract_v2 as contract  # type: ignore
+    except ModuleNotFoundError:
+        from scripts import agent_hub_contract_v2 as contract  # type: ignore
+    return contract
+
+
+def coordinator_actionable_control_comments(
+    comments: Sequence[Mapping[str, Any]],
+    repository: str,
+) -> tuple[Mapping[str, Any], ...]:
+    """Keep only control-work reports that the canonical schema-v2 coordinator can consume.
+
+    Overflow recovery must preserve every historical comment in the predecessor/successor
+    continuity evidence, but an OWNER-authored string that merely says `schema_version: 2`
+    cannot permanently block rollover when it is outside the coordinator's executable
+    report contract (for example an unregistered human-readable worker label). Valid
+    registered reports, trusted bot commands, executor states, and all non-report comments
+    remain unchanged and continue to fail closed through `unresolved_control_work`.
+    """
+    rollover = _rollover_module()
+    contract = _contract_module()
+    retained: list[Mapping[str, Any]] = []
+
+    for comment in comments:
+        if not rollover.trusted_report_comment(comment):
+            retained.append(comment)
+            continue
+
+        body = str(comment.get("body") or "")
+        fields = rollover.parse_fields(body)
+        if fields.get("schema_version") != "2":
+            retained.append(comment)
+            continue
+
+        try:
+            comment_id = int(comment.get("id") or 0)
+        except (TypeError, ValueError):
+            comment_id = 0
+        author = str((comment.get("user") or {}).get("login") or "unknown")
+
+        try:
+            contract.validate_report(
+                body,
+                comment_id=comment_id,
+                author=author,
+                expected_repository=repository,
+                allowed_workers=contract.WORKER_IDS,
+            )
+        except contract.ContractError:
+            # Preserve the comment in the audit history, but do not represent it as
+            # executable/pending control work when the coordinator itself rejects it.
+            continue
+
+        retained.append(comment)
+
+    return tuple(retained)
+
+
 def expected_confirmation(source_issue: int) -> str:
     return f"RECOVER_ISSUE_{source_issue}_PROCESSOR_OVERFLOW"
 
@@ -186,7 +246,8 @@ def build_recovery_plan(github: Any, source_issue: int) -> dict[str, Any]:
 
     window = read_bounded_comment_window(github, source_issue, total_count, rollover.PROCESSOR_COMMENT_WINDOW)
     anchors = validate_continuity_anchors(window)
-    pending = rollover.unresolved_control_work(window.comments)
+    actionable_comments = coordinator_actionable_control_comments(window.comments, github.repository)
+    pending = rollover.unresolved_control_work(actionable_comments)
     if pending:
         raise ProcessorWindowRecoveryError("bounded continuity window contains unresolved control work: " + ",".join(pending[:8]))
 
