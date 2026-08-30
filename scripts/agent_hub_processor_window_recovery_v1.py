@@ -57,14 +57,14 @@ def coordinator_actionable_control_comments(
     comments: Sequence[Mapping[str, Any]],
     repository: str,
 ) -> tuple[Mapping[str, Any], ...]:
-    """Keep only control-work reports that the canonical schema-v2 coordinator can consume.
+    """Keep control-work reports aligned with the canonical schema-v2 worker registry.
 
-    Overflow recovery must preserve every historical comment in the predecessor/successor
-    continuity evidence, but an OWNER-authored string that merely says `schema_version: 2`
-    cannot permanently block rollover when it is outside the coordinator's executable
-    report contract (for example an unregistered human-readable worker label). Valid
-    registered reports, trusted bot commands, executor states, and all non-report comments
-    remain unchanged and continue to fail closed through `unresolved_control_work`.
+    Overflow recovery preserves every historical comment in predecessor/successor
+    continuity evidence. The only compatibility exception is a trusted OWNER report that
+    declares schema v2 but uses a worker label the canonical Coordinator rejects as
+    `unregistered worker`. Such a report can never receive an attested Hub command, so it
+    is continuity evidence rather than executable pending work. Every other validation
+    failure remains in the control-work set and therefore continues to fail closed.
     """
     rollover = _rollover_module()
     contract = _contract_module()
@@ -95,9 +95,12 @@ def coordinator_actionable_control_comments(
                 expected_repository=repository,
                 allowed_workers=contract.WORKER_IDS,
             )
-        except contract.ContractError:
-            # Preserve the comment in the audit history, but do not represent it as
-            # executable/pending control work when the coordinator itself rejects it.
+        except contract.ContractError as exc:
+            if str(exc) == "unregistered worker":
+                # Preserve the report in audit/ledger continuity, but do not represent an
+                # impossible Coordinator input as executable pending control work.
+                continue
+            retained.append(comment)
             continue
 
         retained.append(comment)
