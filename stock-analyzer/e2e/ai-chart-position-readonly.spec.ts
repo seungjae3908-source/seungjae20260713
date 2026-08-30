@@ -13,6 +13,13 @@ function source(relativePath: string) {
   return fs.readFileSync(path.resolve(process.cwd(), relativePath), 'utf8');
 }
 
+function positionPanelSources() {
+  return {
+    wrapper: source('src/components/ai-chart-position-panel.tsx'),
+    implementation: source('src/components/ai-chart-position-panel-impl.tsx'),
+  };
+}
+
 const chartUrl = '/ai-chart?assetType=stock&market=KR&symbol=005930&ticker=005930&name=%EC%82%BC%EC%84%B1%EC%A0%84%EC%9E%90&timeframe=5m&strategyMode=SCALPING';
 
 function candleRows() {
@@ -32,7 +39,14 @@ function candleRows() {
 }
 
 test('AI Chart position panel stays explicit read-only and fail-closed', () => {
-  const panel = source('src/components/ai-chart-position-panel.tsx');
+  const { wrapper, implementation: panel } = positionPanelSources();
+
+  expect(wrapper).toContain("import { lazy, Suspense } from 'react';");
+  expect(wrapper).toContain("import('./ai-chart-position-panel-impl')");
+  expect(wrapper).toContain('<Suspense');
+  expect(wrapper).toContain('<LazyAiChartPositionPanel {...props} />');
+  expect(wrapper).not.toContain("import { authorizedFetch } from '@/lib/auth-fetch';");
+  expect(wrapper).not.toContain('authorizedFetch(`/api/accounts/read-only/${provider}`');
 
   expect(panel).toContain("import { authorizedFetch } from '@/lib/auth-fetch';");
   expect(panel).toContain('authorizedFetch(`/api/accounts/read-only/${provider}`');
@@ -61,7 +75,7 @@ test('AI Chart position panel stays explicit read-only and fail-closed', () => {
 });
 
 test('AI Chart matches four-market positions without inventing missing values', () => {
-  const panel = source('src/components/ai-chart-position-panel.tsx');
+  const { implementation: panel } = positionPanelSources();
 
   expect(panel).toContain("if (market === 'UPBIT') return 'upbit';");
   expect(panel).toContain("if (market === 'BITGET') return 'bitget';");
@@ -90,10 +104,11 @@ test('AI Chart draws only evidence-backed average-entry and liquidation position
 });
 
 test('AI Chart wires Scanner PricePlan into position analytics without execution authority', () => {
-  const panel = source('src/components/ai-chart-position-panel.tsx');
+  const { wrapper, implementation: panel } = positionPanelSources();
   const canvas = source('src/components/pattern-aware-unified-chart-canvas.tsx');
 
-  expect(panel).toContain('pricePlan?: AnalysisPricePlan;');
+  expect(wrapper).toContain('pricePlan?: AnalysisPricePlan;');
+  expect(wrapper).toContain("import('./ai-chart-position-panel-impl')");
   expect(canvas).toContain('pricePlan={pricePlan}');
   expect(panel).toContain('data-testid="ai-chart-price-scenarios"');
   expect(panel).toContain('data-testid="ai-chart-additional-entry"');
