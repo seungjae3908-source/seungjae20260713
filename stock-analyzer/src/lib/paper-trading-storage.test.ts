@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import './paper-flat-recovery-backend.test';
+import { paperJournalFixture, paperOrderFixture, paperFillFixture } from './paper-journal-test-fixture';
 import {
   PAPER_STORAGE_KEY,
   clearPaperState,
@@ -37,14 +38,19 @@ test('uses named storage key', () => {
   assert.ok(storage.getItem(PAPER_STORAGE_KEY));
 });
 test('restores empty storage with new state', () => assert.equal(loadPaperState(new MemoryStorage()).state.account.initialBalance, 10_000));
-test('corrupted JSON is recovered and removed', () => {
+test('corrupted JSON is blocked and preserved without replacing the ledger', () => {
   const storage = new MemoryStorage(); storage.setItem(PAPER_STORAGE_KEY, '{bad');
   const result = loadPaperState(storage);
-  assert.equal(result.recovered, true); assert.equal(storage.getItem(PAPER_STORAGE_KEY), null);
+  assert.equal(result.recovered, false); assert.equal(result.blocked, true);
+  assert.equal(storage.getItem(PAPER_STORAGE_KEY), '{bad');
+  assert.equal(result.rawExport, '{bad');
+  assert.throws(() => savePaperState(storage, createLocalPaperState()), /덮어쓰지/);
+  assert.equal(storage.getItem(PAPER_STORAGE_KEY), '{bad');
 });
-test('wrong schema version is recovered', () => {
+test('wrong schema version is blocked without inventing a recovery', () => {
   const storage = new MemoryStorage(); storage.setItem(PAPER_STORAGE_KEY, JSON.stringify({ schemaVersion: 2, state: {} }));
-  assert.equal(loadPaperState(storage).recovered, true);
+  assert.equal(loadPaperState(storage).blocked, true);
+  assert.equal(loadPaperState(storage).recovered, false);
 });
 test('state validation rejects NaN', () => {
   const state = createLocalPaperState(10_000, NOW); state.account.cashBalance = Number.NaN;
@@ -69,21 +75,26 @@ test('browser storage guard rejects malformed rows and future evidence before im
     assert.throws(() => importPaperState(JSON.stringify({ schemaVersion: 1, state: invalid })), /올바른/);
   }
 });
-test('repair caps order count', () => {
-  const state = createLocalPaperState(10_000, NOW); state.orders = Array.from({ length: 510 }, (_, index) => ({ id: String(index) } as any));
-  assert.equal(repairPaperState(state).orders.length, 500);
+test('storage preserves pending orders beyond the old display limit', () => {
+  const state = createLocalPaperState(10_000, NOW); state.orders = Array.from({ length: 510 }, (_, index) => paperOrderFixture(String(index), NOW.toISOString()));
+  const storage = new MemoryStorage();
+  savePaperState(storage, state);
+  assert.equal(loadPaperState(storage).state.orders.length, 510);
+  assert.equal(loadPaperState(storage).state.orders[0]?.id, '0');
 });
-test('repair caps fill count', () => {
-  const state = createLocalPaperState(10_000, NOW); state.fills = Array.from({ length: 1010 }, (_, index) => ({ id: String(index) } as any));
-  assert.equal(repairPaperState(state).fills.length, 1000);
+test('storage preserves fill evidence beyond the old display limit', () => {
+  const state = createLocalPaperState(10_000, NOW); state.fills = Array.from({ length: 1010 }, (_, index) => paperFillFixture(String(index), NOW.toISOString()));
+  const storage = new MemoryStorage();
+  savePaperState(storage, state);
+  assert.equal(loadPaperState(storage).state.fills.length, 1010);
 });
-test('repair caps processed events', () => {
+test('storage preserves the engine event history without a separate truncation', () => {
   const state = createLocalPaperState(10_000, NOW); state.processedEventIds = Array.from({ length: 510 }, (_, index) => String(index));
-  assert.equal(repairPaperState(state).processedEventIds.length, 500);
+  assert.equal(repairPaperState(state).processedEventIds.length, 510);
 });
-test('repair truncates journal notes', () => {
-  const state = createLocalPaperState(10_000, NOW); state.journal = [{ note: 'x'.repeat(3000) } as any];
-  assert.equal(repairPaperState(state).journal[0].note.length, 2000);
+test('repair preserves imported journal notes', () => {
+  const state = createLocalPaperState(10_000, NOW); state.journal = [paperJournalFixture('note-test', NOW.toISOString(), { note: 'x'.repeat(3000) })];
+  assert.equal(repairPaperState(state).journal[0].note.length, 3000);
 });
 test('exports valid JSON', () => assert.equal(JSON.parse(exportPaperState(createLocalPaperState(10_000, NOW))).schemaVersion, 1));
 test('imports exported state', () => {
@@ -92,7 +103,7 @@ test('imports exported state', () => {
 });
 test('rejects invalid import', () => assert.throws(() => importPaperState('{"schemaVersion":1,"state":{}}'), /올바른/));
 test('rejects import containing secret key', () => {
-  const state = createLocalPaperState(10_000, NOW) as any; state.secret = 'x';
+  const state = { ...createLocalPaperState(10_000, NOW), secret: 'x' };
   assert.throws(() => importPaperState(JSON.stringify({ schemaVersion: 1, state })), /올바른/);
 });
 test('rejects oversized import', () => assert.throws(() => importPaperState('x'.repeat(2_000_001)), /너무 큽니다/));

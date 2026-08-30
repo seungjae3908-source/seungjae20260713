@@ -121,11 +121,42 @@ test('account switch creates isolated namespaces without exposing UUID', async (
   await page.getByTestId('switch-account').click();
   const second = await page.getByTestId('active-account').textContent();
   expect(first).not.toBe(second);
-  const keys = await page.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith('seungjae.paper-trading.v2:')));
+  const keys = await page.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith('seungjae.paper-trading.v3:')));
   expect(keys.length).toBeGreaterThanOrEqual(2);
   expect(keys.join(' ')).not.toContain('phase7-user-a');
   expect(keys.join(' ')).not.toContain('phase7-user-b');
 });
+
+test('late account A sync cannot fetch pages or persist after switching to B', async ({ page }) => {
+  const errors = captureErrors(page);
+  await open(page);
+  await page.getByLabel('시나리오').selectOption('deferred');
+  await page.getByTestId('journal-sync-button').click();
+  await expect(page.getByTestId('journal-sync-button')).toBeDisabled();
+  await page.getByTestId('switch-account').click();
+  await expect(page.getByTestId('active-account')).toHaveText('phase7-user-b');
+  const before = await page.evaluate(() => JSON.stringify(Object.entries(localStorage).sort()));
+  await page.evaluate(() => window.dispatchEvent(new Event('phase7-release-sync')));
+  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.phase7SyncReturned)).toBe('true');
+  expect(await page.evaluate(() => document.documentElement.dataset.phase7SnapshotCalls ?? '0')).toBe('0');
+  expect(await page.evaluate(() => JSON.stringify(Object.entries(localStorage).sort()))).toBe(before);
+  await expect(page.getByTestId('journal-sync-button')).toBeEnabled();
+  expect(errors).toEqual([]);
+});
+
+for (const mode of ['malformed', 'endless']) {
+  test(`sync ${mode} preserves the original ledger and never reports completion`, async ({ page }) => {
+    const errors = captureErrors(page);
+    await open(page);
+    await page.getByLabel('시나리오').selectOption(mode);
+    const before = await page.evaluate(() => JSON.stringify(Object.entries(localStorage).filter(([key]) => key.startsWith('seungjae.paper-trading.v3:')).sort()));
+    await page.getByTestId('journal-sync-button').click();
+    await expect(page.getByRole('alert')).toContainText(mode === 'malformed' ? '수치 근거' : '페이지 한도');
+    expect(await page.evaluate(() => JSON.stringify(Object.entries(localStorage).filter(([key]) => key.startsWith('seungjae.paper-trading.v3:')).sort()))).toBe(before);
+    await expect(page.getByTestId('journal-sync-status')).not.toContainText('동기화 완료');
+    expect(errors).toEqual([]);
+  });
+}
 
 for (const viewport of [
   { name: 'mobile 390x844', width: 390, height: 844 },

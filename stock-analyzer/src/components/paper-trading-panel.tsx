@@ -59,6 +59,7 @@ type Props = {
   loadRules?: (symbol: string) => Promise<FuturesContractRules>;
   loadCandle?: (symbol: string) => ReturnType<typeof getLatestCompletedCandle>;
   storage?: StorageLike;
+  storageWarning?: string;
   compact?: boolean;
 };
 
@@ -76,10 +77,12 @@ export function PaperTradingPanel({
   loadRules = getFuturesContractRules,
   loadCandle = getLatestCompletedCandle,
   storage = window.localStorage,
+  storageWarning = '',
   compact = false,
 }: Props) {
   const initial = useMemo(() => loadPaperState(storage), [storage]);
   const [state, setState] = useState(initial.state);
+  const [readBlocked, setReadBlocked] = useState(initial.blocked);
   const [form, setForm] = useState(DEFAULT_FORM);
   const [market, setMarket] = useState<FuturesMarketSnapshot | null>(null);
   const [rules, setRules] = useState<FuturesContractRules | null>(null);
@@ -109,9 +112,10 @@ export function PaperTradingPanel({
   const filteredJournal = state.journal.filter((entry) => journalFilter === 'all' || entry.side === journalFilter || entry.symbol === journalFilter);
 
   useEffect(() => {
+    if (readBlocked) return;
     try { savePaperState(storage, state); }
     catch { setError('모의거래 기록을 로컬에 저장하지 못했습니다. 내보내기로 기록을 보존하세요.'); }
-  }, [state, storage]);
+  }, [state, storage, readBlocked]);
 
   useEffect(() => {
     const sequence = ++requestSequence.current;
@@ -170,7 +174,7 @@ export function PaperTradingPanel({
   }, [form, market, rules]);
 
   async function runAction(action: PaperTradingAction | (() => Promise<PaperTradingAction>)) {
-    if (actionLock.current) return;
+    if (actionLock.current || readBlocked) return;
     actionLock.current = true;
     const generation = ++actionGeneration.current;
     const controller = new AbortController();
@@ -256,7 +260,9 @@ export function PaperTradingPanel({
   }
 
   function downloadJson() {
-    const blob = new Blob([exportPaperState(state)], { type: 'application/json' });
+    const contents = readBlocked ? initial.rawExport : exportPaperState(state);
+    if (contents === null) { setError('저장소 원본을 읽지 못했습니다. 브라우저 저장소 접근을 확인하세요.'); return; }
+    const blob = new Blob([contents], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url; anchor.download = `paper-trading-${new Date().toISOString().slice(0, 10)}.json`; anchor.click();
@@ -271,6 +277,8 @@ export function PaperTradingPanel({
     try {
       const next = importPaperState(await file.text());
       if (generation !== actionGeneration.current) return;
+      savePaperState(storage, next, { replaceCorrupt: true });
+      setReadBlocked(false);
       stateRef.current = next; setState(next); setNotice('모의거래 JSON을 가져왔습니다.'); setError('');
     } catch (cause) {
       if (generation === actionGeneration.current) setError(cause instanceof Error ? cause.message : 'JSON을 가져오지 못했습니다.');
@@ -284,14 +292,34 @@ export function PaperTradingPanel({
     try {
       const next = clearPaperState(storage);
       requestSequence.current++; actionGeneration.current++;
-      stateRef.current = next; setState(next); setResetStep(false); setNotice('모의거래 기록을 초기화했습니다.');
+      setReadBlocked(false);
+      stateRef.current = next; setState(next); setResetStep(false); setNotice('모의거래 기록을 초기화했습니다.'); setError('');
     } catch { setError('로컬 기록을 초기화하지 못했습니다. 저장소 상태를 확인하세요.'); }
   }
 
   function updateNote(id: string, value: string) {
-    if (actionLock.current) return;
+    if (actionLock.current || readBlocked) return;
     setState((current) => ({ ...current, journal: current.journal.map((entry) => entry.id === id ? { ...entry, note: value.slice(0, 2_000) } : entry) }));
   }
+
+  if (readBlocked) return <main className="h-full overflow-y-auto p-4" data-testid="paper-trading-page">
+    <section className="mx-auto grid max-w-2xl gap-4 rounded-2xl border border-border bg-card p-4" data-testid="paper-storage-blocked">
+      <h1 className="text-lg font-bold">모의거래 기록 확인 필요</h1>
+      <p>모의매매입니다. 실제 거래소 주문은 전송되지 않습니다.</p>
+      <p role="alert">{initial.warning}</p>
+      {error ? <p role="alert">{error}</p> : null}
+      <p className="text-sm text-muted-foreground">원본 내보내기 후 검증된 JSON을 가져오거나, 초기화를 명시적으로 선택하세요. 새 모의계좌는 과거 잔액 복구를 의미하지 않습니다.</p>
+      <button className={buttonClass} disabled={initial.rawExport === null} onClick={downloadJson}>원본 JSON 내보내기</button>
+      <button className={buttonClass} disabled={busy} onClick={() => fileRef.current?.click()}>JSON 가져오기</button>
+      <button className={buttonClass} disabled={busy} onClick={() => setResetStep(true)}>전체 초기화</button>
+      <input ref={fileRef} className="hidden" type="file" accept="application/json,.json" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importJson(file); event.currentTarget.value = ''; }} />
+      {resetStep ? <div role="dialog" aria-modal="true" aria-label="전체 초기화 확인" className="grid gap-3 border border-destructive p-3">
+        <p>현재 기록을 초기화하고 새 10,000 USDT 모의계좌를 시작합니다. 별도 보관된 과거 거래일지는 유지됩니다.</p>
+        <button className={buttonClass} onClick={() => setResetStep(false)}>돌아가기</button>
+        <button className={buttonClass} disabled={busy} onClick={resetState}>2단계 초기화</button>
+      </div> : null}
+    </section>
+  </main>;
 
   return <main className="h-full overflow-y-auto overscroll-contain pb-28" data-testid="paper-trading-page">
     <div className={`mx-auto w-full ${compact ? 'max-w-5xl' : 'max-w-6xl'} space-y-4 px-4 py-5 sm:px-5`}>
@@ -303,6 +331,7 @@ export function PaperTradingPanel({
 
       {error ? <div role="alert" className="rounded-xl border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">{error}</div> : null}
       {notice ? <div role="status" className="rounded-xl border border-border bg-muted p-3 text-sm">{notice}</div> : null}
+      {storageWarning ? <p role="status" className="rounded-xl border border-amber-500/40 p-3 text-sm">{storageWarning}</p> : null}
 
       <section className="rounded-2xl border border-border bg-card p-4" data-testid="paper-account">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2"><h2 className="font-bold">모의계좌</h2><div className="flex gap-2"><button type="button" className={buttonClass} onClick={() => void refreshMarket()} disabled={busy}>현재가 갱신</button><button type="button" className={buttonClass} onClick={() => void applyCandle()} disabled={busy}>완료 봉 처리</button></div></div>
