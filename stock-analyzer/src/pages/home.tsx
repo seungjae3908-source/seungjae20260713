@@ -217,18 +217,25 @@ export default function HomePage() {
       </div>
       <div className="mt-3 space-y-2">
         {watchlist.length
-          ? watchlist.slice(0, 5).map((item) => (
-            <div key={item.ticker} className="flex min-h-14 items-center justify-between gap-3 rounded-2xl bg-background px-3 py-2">
-              <div className="min-w-0">
-                <p className="truncate text-sm font-black">{item.name || item.ticker}</p>
-                <p className="truncate text-[10px] font-bold text-muted-foreground">{item.ticker} · {item.market ?? '시장 미확인'}</p>
+          ? watchlist.slice(0, 5).map((item) => {
+            const watchlistPrice = finite(item.price);
+            const watchlistChangePercent = finite(item.changePercent);
+            const watchlistCurrency = typeof item.currency === 'string' && item.currency.trim()
+              ? item.currency.trim().toUpperCase()
+              : null;
+            return (
+              <div key={item.ticker} className="flex min-h-14 items-center justify-between gap-3 rounded-2xl bg-background px-3 py-2">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-black">{item.name || item.ticker}</p>
+                  <p className="truncate text-[10px] font-bold text-muted-foreground">{item.ticker} · {item.market ?? '시장 미확인'}</p>
+                </div>
+                <div className="shrink-0 text-right text-xs font-black">
+                  <p>{watchlistPrice == null ? '가격 미확인' : watchlistCurrency == null ? '통화 미확인' : formatAppPrice(watchlistPrice, watchlistCurrency)}</p>
+                  <p className="text-[10px] text-muted-foreground">{watchlistChangePercent == null ? '등락 미확인' : formatAppPercent(watchlistChangePercent)}</p>
+                </div>
               </div>
-              <div className="shrink-0 text-right text-xs font-black">
-                <p>{item.price == null ? '가격 미확인' : formatAppPrice(item.price, item.currency ?? 'KRW')}</p>
-                <p className="text-[10px] text-muted-foreground">{item.changePercent == null ? '등락 미확인' : formatAppPercent(item.changePercent)}</p>
-              </div>
-            </div>
-          ))
+            );
+          })
           : <p className="rounded-2xl bg-background p-4 text-center text-xs font-bold text-muted-foreground">관심종목 없음</p>}
       </div>
     </section>
