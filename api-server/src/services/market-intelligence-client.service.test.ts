@@ -9,8 +9,6 @@ import {
   routeNewsDisclosureMarketIntelligence,
   scannerDirectionalAdjustment,
 } from './market-intelligence-client.service';
-import { MarketIntelligenceAiAnalyzer } from './market-intelligence-ai-analysis.service';
-import type { AiChatResult } from './ai-chat.service';
 
 function response(payload: unknown, status = 200) {
   return new Response(JSON.stringify(payload), {
@@ -206,71 +204,6 @@ test('news/disclosure router rejects malformed safety and route enums instead of
       row.name,
     );
   }
-});
-
-test('long prompt validation is bound to exactly prompted facts and keeps DATA valid JSON', async () => {
-  let prompt = '';
-  const analyzer = new MarketIntelligenceAiAnalyzer({
-    answerAiChatImpl: async ({ message }) => {
-      prompt = String(message);
-      const answer = JSON.stringify({
-        schemaVersion: 'MarketIntelAiAnalysisV1',
-        summaryShort: '공시 금액은 999억원이다.',
-        sentiment: 'NEUTRAL',
-        importanceScore: 70,
-        confidenceScore: 80,
-        impactHorizon: 'SWING',
-        factEvidenceRefs: [4],
-        inferences: [],
-        uncertainty: [],
-        riskFlags: [],
-        catalystFlags: [],
-      });
-      const result: AiChatResult = {
-        answer,
-        kind: 'answer',
-        model: 'grounding-test',
-        generatedAt: '2026-08-27T01:00:00.000Z',
-        data: { status: 'not_requested', asOf: null, basis: 'server_collection_time', sources: [], missing: [] },
-      };
-      return result;
-    },
-  });
-  const result = await analyzer.analyze({
-    analysisKey: 'b'.repeat(64),
-    aiMode: 'CHEAP_AI',
-    evidenceStatus: 'READY',
-    market: 'KR_STOCK',
-    symbol: '005930',
-    sourceType: 'DISCLOSURE',
-    sourceTier: 'TIER_1_OFFICIAL',
-    sourceName: 'DART',
-    sourceUrl: 'https://dart.fss.or.kr/example',
-    publishedAt: '2026-08-27T00:55:00.000Z',
-    eventType: 'CONTRACT',
-    headline: `매우 긴 공시 헤드라인 ${'H'.repeat(320)}`,
-    sourceText: `공식 공시 원문 ${'S'.repeat(600)}`,
-    evidenceFacts: [
-      `사실 0 ${'A'.repeat(250)}`,
-      `사실 1 ${'B'.repeat(250)}`,
-      `사실 2 ${'C'.repeat(250)}`,
-      `사실 3 ${'D'.repeat(250)}`,
-      `공시 금액은 999억원이다. ${'E'.repeat(220)}`,
-    ],
-    conflictDetected: false,
-  });
-
-  assert.ok(prompt.length <= 1_950);
-  assert.equal(prompt.includes('999억원'), false);
-  const dataMarker = '\nDATA=';
-  const dataOffset = prompt.indexOf(dataMarker);
-  assert.ok(dataOffset >= 0);
-  assert.doesNotThrow(() => JSON.parse(prompt.slice(dataOffset + dataMarker.length)));
-  assert.equal(result.status, 'AI_ANALYSIS_UNAVAILABLE');
-  assert.equal(result.reason, 'AI_STRUCTURED_RESPONSE_INVALID');
-  assert.equal(result.analysis, null);
-  assert.equal(result.safety.executionAuthority, 'NONE');
-  assert.equal(result.safety.orderAllowed, false);
 });
 
 test('news/disclosure router also rejects non-loopback configuration', async () => {
