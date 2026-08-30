@@ -1,0 +1,77 @@
+name: ROOM B 780 Anchor Guard Remediation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/room-b-780-anchor-guard-remediation.yml
+
+permissions:
+  contents: write
+
+jobs:
+  remediate:
+    if: ${{ github.event.pull_request.number == 780 }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact PR head branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Apply fail-closed sequence-anchor guard and regression
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          source = Path('market-prediction-lab/src/natural-paper-public-position-observation-v1.js')
+          text = source.read_text()
+          old = 'if (anchorIndex < 0 && cursor > frames[0].sourceObservedAtMs) {'
+          new = 'if (anchorIndex < 0) {'
+          if text.count(old) != 1:
+              raise SystemExit('ANCHOR_GUARD_SOURCE_MATCH_COUNT_INVALID')
+          source.write_text(text.replace(old, new, 1))
+
+          test_file = Path('market-prediction-lab/tests/natural-paper-public-position-observation-v1.test.js')
+          tests = test_file.read_text()
+          marker = 'test("stale next frame is not converted into a current price", async () => {'
+          if tests.count(marker) != 1:
+              raise SystemExit('ANCHOR_GUARD_TEST_MARKER_COUNT_INVALID')
+          regression = '''test("missing closed-frame anchor fails closed instead of crediting truncated or partial Position history", async () => {
+            const firstOpen = NOW_MS - (3 * INTERVAL_MS);
+            for (const entryTimestampMs of [firstOpen - 1_000, firstOpen + 1_000]) {
+              const observed = await collect({ openPositions: [position({ entryTimestampMs })] });
+              assert.equal(observed.status, "MISSING");
+              assert.equal(observed.blocker, "POSITION_OBSERVATION_SEQUENCE_ANCHOR_MISSING");
+              assert.equal(observed.observations, null);
+            }
+          });
+
+          '''
+          test_file.write_text(tests.replace(marker, regression + marker, 1))
+          PY
+
+          git diff --check
+          node --check market-prediction-lab/src/natural-paper-public-position-observation-v1.js
+          node --check market-prediction-lab/tests/natural-paper-public-position-observation-v1.test.js
+          node --test market-prediction-lab/tests/natural-paper-public-position-observation-v1.test.js
+
+      - name: Commit exact bounded remediation to existing PR branch
+        shell: bash
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            market-prediction-lab/src/natural-paper-public-position-observation-v1.js \
+            market-prediction-lab/tests/natural-paper-public-position-observation-v1.test.js
+          test "$(git diff --cached --name-only | wc -l)" -eq 2
+          git commit -m 'fix(paper): fail closed on missing Position frame anchor'
+          git push origin "HEAD:${HEAD_REF}"
