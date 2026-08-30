@@ -15,6 +15,7 @@ import {
   buildCompleteWindowAttemptLog,
   buildV3ScheduleEntries,
   executeCaptureSeam,
+  finalizeArtifactReceipt,
   resolveScheduledAuthority,
   verifyActivationContract,
   verifyV3PolicyBinding,
@@ -365,4 +366,32 @@ test('immutable activation contract keeps policy counts while pre-first-slot dyn
   assert.equal(contract.initialCompleteWindowAttemptLog.splits.VALIDATION.expectedSlotN, 0);
   assert.equal(contract.initialCompleteWindowAttemptLog.splits.OOS.policyExpectedSlotN, 12);
   assert.equal(contract.initialCompleteWindowAttemptLog.splits.OOS.expectedSlotN, 0);
+});
+
+
+test('scheduled artifact receipt retains explicit artifact-v3 schema after capture receipt spread', () => {
+  const captureReceipt = Object.freeze({
+    schemaVersion: 'public-forward-liquidity-capture-receipt-v3',
+    triggerSource: SCHEDULED_TRIGGER_SOURCE,
+    captureStatus: 'PRESENT',
+    prospectiveSlotCredit: 1,
+    executionAuthority: 'NONE',
+    privateApiUsed: false,
+    liveTrading: false,
+    orderSubmitted: false,
+  });
+  const receipt = finalizeArtifactReceipt({
+    captureReceipt,
+    artifactId: '123456',
+    artifactDigest: 'b'.repeat(64),
+    artifactName: 'public-forward-liquidity-v3-slot-test',
+  });
+  assert.equal(receipt.schemaVersion, 'public-forward-liquidity-capture-artifact-receipt-v3');
+  assert.equal(receipt.triggerSource, SCHEDULED_TRIGGER_SOURCE);
+  assert.equal(receipt.prospectiveSlotCredit, 1);
+  assert.equal(receipt.executionAuthority, 'NONE');
+  assert.equal(receipt.privateApiUsed, false);
+  assert.equal(receipt.liveTrading, false);
+  assert.equal(receipt.orderSubmitted, false);
+  assert.match(receipt.receiptDigest, /^[a-f0-9]{64}$/u);
 });
