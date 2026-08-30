@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { hasCapability, type MemberTier } from '../../../../packages/member-access/src/index.js';
+import type { TelegramAlertInput, TelegramAlertResult } from '../../services/telegram-notification.service';
 import type { TradingOrder, TradingOrderEvent, TradingPlan } from '../../services/trade-automation.types';
 import type { UserBrokerTelegramRepository } from './user-broker-telegram.repository';
 import {
@@ -11,6 +12,7 @@ import {
 const LINK_TOKEN_TTL_MS = 10 * 60 * 1000;
 const MAX_DELIVERY_ATTEMPTS = 3;
 const MAX_RETRY_DELAY_MS = 15 * 60 * 1000;
+type PersonalAlertSender = (input: TelegramAlertInput) => Promise<TelegramAlertResult>;
 
 export function hashTelegramLinkToken(token: string): string { return createHash('sha256').update(token).digest('hex'); }
 export function maskBrokerAccount(value: string | null | undefined): string | null {
@@ -121,7 +123,13 @@ export class UserBrokerTelegramService {
     private readonly transport: TelegramTransport,
     private readonly portfolioSink: PortfolioSyncSink,
     private readonly botUsername: string | null = process.env.TELEGRAM_BOT_USERNAME?.trim() || null,
+    private readonly personalAlertSender?: PersonalAlertSender,
   ) {}
+
+  private async personalTelegramEligible(userId: string) {
+    const profile = await this.repository.getPersonalTelegramMemberProfile(userId);
+    return hasCapability(profile, 'canConnectPersonalTelegram');
+  }
 
   async createTelegramLink(userId: string, now = new Date()) {
     if (!userId) throw new Error('LOGIN_REQUIRED');
@@ -139,6 +147,7 @@ export class UserBrokerTelegramService {
     const now = input.now ?? new Date(); const timestamp = now.toISOString();
     const userId = await this.repository.consumeLinkToken(hashTelegramLinkToken(token), timestamp);
     if (!userId) throw new Error('TELEGRAM_LINK_EXPIRED_OR_USED');
+    if (!await this.personalTelegramEligible(userId)) throw new Error('TELEGRAM_MEMBER_INELIGIBLE');
     await this.repository.bindTelegramConnection({ userId, telegramChatId: chatId, telegramUserId, status: 'ACTIVE', connectedAt: timestamp, revokedAt: null, updatedAt: timestamp });
     return { userId, connected: true };
   }
@@ -148,7 +157,7 @@ export class UserBrokerTelegramService {
     const preferences = await this.repository.getPreferences(userId);
     const deliveries = await this.repository.listDeliveries(userId);
     return { telegram: { connected: connection?.status === 'ACTIVE', status: connection?.status ?? 'DISCONNECTED', connectedAt: connection?.connectedAt ?? null }, preferences,
-      deliveries: deliveries.map(({ userId: _userId, dedupeKey: _dedupeKey, ...delivery }) => delivery) };
+      deliveries: deliveries.map(({ userId: _userId, dedupeKey: _dedupeKey, payload: _payload, ...delivery }) => delivery) };
   }
   async savePreferences(userId: string, patch: Partial<NotificationPreferences>, now = new Date()) {
     const current = await this.repository.getPreferences(userId); const allowed = new Set<string>(NOTIFICATION_PREFERENCE_KEYS); const next = { ...current };
@@ -158,7 +167,7 @@ export class UserBrokerTelegramService {
     }
     await this.repository.savePreferences(userId, next, now.toISOString()); return next;
   }
-  async recordEvent(event: UserExecutionEvent, now = new Date(), membership: MemberTier = 'admin') {
+  async recordEvent(event: UserExecutionEvent, now = new Date(), membership: MemberTier = 'pending') {
     const inserted = await this.repository.insertExecutionEvent(event);
     if (!inserted) return { inserted: false, deliveryQueued: false };
     if (event.type !== 'MANUAL_PORTFOLIO_ENTRY') await this.portfolioSink.accept(event);
@@ -170,19 +179,95 @@ export class UserBrokerTelegramService {
     const connection = await this.repository.getTelegramConnection(event.userId);
     if (!connection || connection.status !== 'ACTIVE') return { inserted: true, deliveryQueued: false };
     const timestamp = now.toISOString();
-    const delivery: NotificationDelivery = { id: randomUUID(), userId: event.userId, eventId: event.id, dedupeKey: `${event.id}:${event.type}`,
-      state: 'PENDING', attempts: 0, nextRetryAt: null, lastErrorCode: null, createdAt: timestamp, updatedAt: timestamp };
+    const delivery: NotificationDelivery = {
+      id: randomUUID(), userId: event.userId, eventId: event.id, dedupeKey: `${event.id}:${event.type}`,
+      state: 'PENDING', attempts: 0, nextRetryAt: null, lastErrorCode: null, createdAt: timestamp, updatedAt: timestamp,
+      kind: 'EXECUTION_EVENT', payload: null,
+    };
     const deliveryQueued = await this.repository.enqueueDelivery(delivery);
     return { inserted: true, deliveryQueued, deliveryId: deliveryQueued ? delivery.id : null };
   }
   async processDelivery(userId: string, deliveryId: string, now = new Date()) {
     const timestamp = now.toISOString(); const claimed = await this.repository.claimDelivery(userId, deliveryId, timestamp);
     if (!claimed) return { processed: false, state: null as null };
-    const event = await this.repository.getExecutionEvent(userId, claimed.eventId);
     const connection = await this.repository.getTelegramConnection(userId);
-    if (!event || !connection || connection.status !== 'ACTIVE') {
+    if (!connection || connection.status !== 'ACTIVE') {
       const result = await this.repository.finishDelivery(userId, deliveryId, 'DEAD_LETTER', claimed.attempts, null,
-        !event ? 'EVENT_NOT_FOUND' : 'TELEGRAM_DISCONNECTED', timestamp);
+        'TELEGRAM_DISCONNECTED', timestamp);
+      return { processed: true, state: result?.state ?? 'DEAD_LETTER' };
+    }
+
+    let eligible: boolean;
+    try {
+      eligible = await this.personalTelegramEligible(userId);
+    } catch {
+      const attempt = claimed.attempts + 1;
+      const dead = attempt >= MAX_DELIVERY_ATTEMPTS;
+      const state = dead ? 'DEAD_LETTER' as const : 'RETRY_SCHEDULED' as const;
+      const result = await this.repository.finishDelivery(
+        userId,
+        deliveryId,
+        state,
+        attempt,
+        dead ? null : nextRetryAt(now, attempt),
+        'TELEGRAM_MEMBER_ELIGIBILITY_UNAVAILABLE',
+        timestamp,
+      );
+      return { processed: true, state: result?.state ?? state };
+    }
+    if (!eligible) {
+      const result = await this.repository.finishDelivery(
+        userId,
+        deliveryId,
+        'DEAD_LETTER',
+        claimed.attempts,
+        null,
+        'TELEGRAM_MEMBER_INELIGIBLE',
+        timestamp,
+      );
+      return { processed: true, state: result?.state ?? 'DEAD_LETTER' };
+    }
+
+    const kind = claimed.kind ?? 'EXECUTION_EVENT';
+    if (kind === 'PERSONAL_ALERT') {
+      const payload = claimed.payload;
+      if (!payload || payload.event.userId !== userId || !this.personalAlertSender) {
+        const result = await this.repository.finishDelivery(userId, deliveryId, 'DEAD_LETTER', claimed.attempts, null,
+          !payload || payload.event.userId !== userId ? 'PERSONAL_ALERT_PAYLOAD_INVALID' : 'PERSONAL_ALERT_SENDER_UNAVAILABLE', timestamp);
+        return { processed: true, state: result?.state ?? 'DEAD_LETTER' };
+      }
+      const attempt = claimed.attempts + 1;
+      let alertResult: TelegramAlertResult;
+      try {
+        alertResult = await this.personalAlertSender({
+          ...payload.alert,
+          destinationChatId: connection.telegramChatId,
+          duplicateWindowMs: 0,
+          cooldownMs: 0,
+        });
+      } catch {
+        alertResult = { ok: false, attempts: 0, skipped: 'DELIVERY_FAILED' };
+      }
+      if (alertResult.ok) {
+        await this.repository.finishDelivery(userId, deliveryId, 'SENT', attempt, null, null, timestamp);
+        return { processed: true, state: 'SENT' as const };
+      }
+      const dead = attempt >= MAX_DELIVERY_ATTEMPTS;
+      const state = dead ? 'DEAD_LETTER' as const : 'RETRY_SCHEDULED' as const;
+      await this.repository.finishDelivery(userId, deliveryId, state, attempt, dead ? null : nextRetryAt(now, attempt),
+        `TELEGRAM_${alertResult.skipped}`.slice(0, 120), timestamp);
+      return { processed: true, state };
+    }
+
+    if (!claimed.eventId) {
+      const result = await this.repository.finishDelivery(userId, deliveryId, 'DEAD_LETTER', claimed.attempts, null,
+        'EVENT_NOT_FOUND', timestamp);
+      return { processed: true, state: result?.state ?? 'DEAD_LETTER' };
+    }
+    const event = await this.repository.getExecutionEvent(userId, claimed.eventId);
+    if (!event) {
+      const result = await this.repository.finishDelivery(userId, deliveryId, 'DEAD_LETTER', claimed.attempts, null,
+        'EVENT_NOT_FOUND', timestamp);
       return { processed: true, state: result?.state ?? 'DEAD_LETTER' };
     }
     const attempt = claimed.attempts + 1;
