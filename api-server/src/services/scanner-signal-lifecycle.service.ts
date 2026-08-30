@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { quoteTimeEvidence } from '../providers/market-evidence';
 import type {
   ScannerAlertCandidate,
   ScannerSignalCard,
@@ -12,6 +13,7 @@ type LifecycleRecord = {
   confirmationStreak: number;
   firstSeenAt: number;
   lastSeenAt: number;
+  lastObservedAt: number | null;
   lastAlertKey: string | null;
 };
 
@@ -44,7 +46,7 @@ const ORDER_OWNED_STATES = new Set<ScannerSignalState>([
   'CANCELLED',
 ]);
 
-function alertKey(signalId: string, expiresAt: string): string {
+function alertKey(signalId: string, expiresAt: string | null): string {
   return `scanner-alert:${createHash('sha256')
     .update(`${signalId}:APPROVAL_PENDING:${expiresAt}`)
     .digest('hex')
@@ -102,8 +104,14 @@ function nextState(
   now: number,
 ): ScannerSignalState {
   const previous = normalizedPrevious(previousState);
-  if (Date.parse(card.expiresAt) <= now) return 'EXPIRED';
+  // Filled positions and accepted orders remain owned by order/risk management.
   if (previous && ORDER_OWNED_STATES.has(previous)) return previous;
+  const observedAt = quoteTimeEvidence(card.observedAt, 'iso', now).updatedAt;
+  const expiresAt = card.expiresAt == null ? NaN : Date.parse(card.expiresAt);
+  if (observedAt == null || !Number.isFinite(expiresAt)) return 'INVALIDATED';
+  if (quoteTimeEvidence(card.expiresAt, 'iso', Math.max(now, expiresAt)).updatedAt == null) return 'INVALIDATED';
+  if (expiresAt <= now) return 'EXPIRED';
+  if (expiresAt <= Date.parse(observedAt)) return 'INVALIDATED';
   if (invalid(card)) return 'INVALIDATED';
   if (!card.strongSignalEligible) {
     return previous && ['CONFIRMED', 'ARMED', 'ENTRY_ZONE', 'APPROVAL_PENDING'].includes(previous)
@@ -120,6 +128,7 @@ function nextState(
 }
 
 function alertFrom(card: ScannerSignalCard, idempotencyKey: string): ScannerAlertCandidate {
+  if (card.expiresAt == null) throw new Error('SCANNER_ALERT_EXPIRY_REQUIRED');
   return {
     idempotencyKey,
     signalId: card.signalId,
@@ -233,13 +242,17 @@ export function applyScannerSignalLifecycle(
       && existingState != null
       && SCANNER_TERMINAL_STATES.has(existingState)
       && card.strongSignalEligible
+      && card.observedAt != null
+      && Date.parse(card.observedAt) > (existing.lastObservedAt ?? 0)
       && !['APPROVED', 'EXECUTING', 'PARTIALLY_FILLED', 'FILLED', 'MANAGING'].includes(existingState)
     ) {
       cycle += 1;
     }
     const resetCycle = !existing || cycle !== existing.cycle;
     const previous = resetCycle ? null : existingState;
-    const state = nextState(previous, card, now);
+    const state = existing && !resetCycle && existingState != null && SCANNER_TERMINAL_STATES.has(existingState)
+      ? existingState
+      : nextState(previous, card, now);
     const confirmationStreak = card.strongSignalEligible
       ? resetCycle ? 1 : (existing?.confirmationStreak ?? 0) + 1
       : 0;
@@ -258,6 +271,10 @@ export function applyScannerSignalLifecycle(
       confirmationStreak,
       firstSeenAt: resetCycle ? now : existing?.firstSeenAt ?? now,
       lastSeenAt: now,
+      lastObservedAt: (() => {
+        const valid = quoteTimeEvidence(card.observedAt, 'iso', now).updatedAt;
+        return valid == null ? existing?.lastObservedAt ?? null : Math.max(existing?.lastObservedAt ?? 0, Date.parse(valid));
+      })(),
       lastAlertKey,
     });
     return nextCard;

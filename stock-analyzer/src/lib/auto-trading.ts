@@ -11,8 +11,10 @@ export interface AutoTradeCandidate {
 	exchange: AutoTradeExchange | null;
 	rank: number;
 	score: number;
-	probability: number;
-	riskScore: number;
+	probability: null;
+	ruleScore: number | null;
+	ruleMethod: 'AUTO_RESEARCH_RULES_V2';
+	riskScore: number | null;
 	dataCompleteness: number;
 	price: number | null;
 	changePercent: number | null;
@@ -123,6 +125,7 @@ function clamp(value: number, min: number, max: number) {
 }
 
 function safeNumber(value: unknown, fallback = 0) {
+	if (value == null || typeof value === 'boolean' || typeof value === 'string' && value.trim() === '') return fallback;
 	const parsed =
 		typeof value === "number"
 			? value
@@ -304,114 +307,8 @@ export function saveAutoTradeSettings(
 	return normalized;
 }
 
-export interface AutoTradeAssessmentInput {
-	score: number;
-	matchedCount: number;
-	selectedCount: number;
-	changePercent?: number | null;
-	breakoutProbability?: number | null;
-	price?: number | null;
-	volume?: number | null;
-	tradingValue?: number | null;
-	marketCap?: number | null;
-	confidence?: number | null;
-	newsScore?: number | null;
-	disclosureScore?: number | null;
-	financialScore?: number | null;
-	riskLevel?: string | null;
-	isLeveraged?: boolean;
-	isInverse?: boolean;
-	isDerivative?: boolean;
-}
-
-export interface AutoTradeAssessment {
-	probability: number;
-	riskScore: number;
-	dataCompleteness: number;
-	factors: string[];
-}
-
-/**
- * 차트·수급·거래량·뉴스·공시·재무 데이터가 들어오는 만큼 가중하고,
- * 결측치와 급등락·고위험 상품을 감점하는 상대평가 모델입니다.
- * 반환값은 수익 보장이 아닌 후보 비교용 모델점수입니다.
- */
-export function assessAutoTradeCandidate(input: AutoTradeAssessmentInput): AutoTradeAssessment {
-	const selectedCount = Math.max(1, input.selectedCount);
-	const matchRatio = input.matchedCount / selectedCount;
-	const breakout = safeNumber(input.breakoutProbability, Number.NaN);
-	const change = safeNumber(input.changePercent, 0);
-	const normalizedBreakout = Number.isFinite(breakout) && breakout > 0
-		? clamp(breakout, 0, 100)
-		: 50;
-	const optionalValues = [
-		input.volume,
-		input.tradingValue,
-		input.marketCap,
-		input.confidence,
-		input.newsScore,
-		input.disclosureScore,
-		input.financialScore,
-	];
-	const availableOptional = optionalValues.filter(
-		(value) => value != null && Number.isFinite(Number(value)),
-	).length;
-	const dataCompleteness = clamp(
-		Math.round(45 + (availableOptional / optionalValues.length) * 55),
-		0,
-		100,
-	);
-
-	let riskScore = 14;
-	const absoluteChange = Math.abs(change);
-	if (absoluteChange > 5) riskScore += Math.min(24, (absoluteChange - 5) * 1.8);
-	if (change < -3) riskScore += Math.min(12, Math.abs(change));
-	const riskLevel = String(input.riskLevel ?? "").toUpperCase();
-	if (riskLevel.includes("HIGH") || riskLevel.includes("위험")) riskScore += 28;
-	else if (riskLevel.includes("CAUTION") || riskLevel.includes("주의")) riskScore += 14;
-	if (input.isLeveraged) riskScore += 28;
-	if (input.isInverse) riskScore += 35;
-	if (input.isDerivative) riskScore += 24;
-	if (dataCompleteness < 60) riskScore += (60 - dataCompleteness) * 0.35;
-	riskScore = clamp(Math.round(riskScore), 0, 100);
-
-	const confidence = clamp(safeNumber(input.confidence, 50), 0, 100);
-	const contextScores = [input.newsScore, input.disclosureScore, input.financialScore]
-		.map((value) => safeNumber(value, Number.NaN))
-		.filter(Number.isFinite);
-	const context = contextScores.length
-		? contextScores.reduce((sum, value) => sum + value, 0) / contextScores.length
-		: 50;
-	const trendBonus = change > 0 ? Math.min(5, change * 0.8) : Math.max(-7, change);
-	const technical =
-		clamp(input.score, 0, 100) * 0.48 +
-		matchRatio * 27 +
-		normalizedBreakout * 0.25;
-	const probability = clamp(
-		Math.round(
-			technical * 0.64 +
-			confidence * 0.12 +
-			context * 0.14 +
-			dataCompleteness * 0.1 +
-			trendBonus -
-			riskScore * 0.28,
-		),
-		1,
-		95,
-	);
-	const factors = [
-		`기술지표 ${Math.round(technical)}점`,
-		`데이터 ${dataCompleteness}%`,
-		`위험 ${riskScore}점`,
-		contextScores.length ? `뉴스·공시·재무 ${Math.round(context)}점` : "뉴스·공시·재무 확인 필요",
-	];
-
-	return { probability, riskScore, dataCompleteness, factors };
-}
-
-export function estimateAutoTradeProbability(input: AutoTradeAssessmentInput) {
-	return assessAutoTradeCandidate(input).probability;
-}
+export { assessAutoTradeCandidate, estimateAutoTradeProbability } from './auto-trade-research-rules';
+export type { AutoTradeAssessmentInput, AutoTradeAssessment } from './auto-trade-research-rules';
 
 export function saveAutoTradeCandidates(candidates: AutoTradeCandidate[]) {
 	if (!storageAvailable()) return;
@@ -444,14 +341,13 @@ export function loadAutoTradeCandidates(): AutoTradeCandidate[] {
 					: null,
 				rank: clamp(Math.round(safeNumber(item?.rank, 100)), 1, 100),
 				score: clamp(Math.round(safeNumber(item?.score, 0)), 0, 100),
-				probability: clamp(
-					Math.round(safeNumber(item?.probability, 0)),
-					0,
-					100,
-				),
-				riskScore: clamp(Math.round(safeNumber(item?.riskScore, 50)), 0, 100),
+				// Old local probability values have no calibration/provenance.
+				probability: null,
+				ruleScore: item?.ruleMethod === 'AUTO_RESEARCH_RULES_V2' && typeof item.ruleScore === 'number' && Number.isFinite(item.ruleScore) ? clamp(item.ruleScore, 0, 100) : null,
+				ruleMethod: 'AUTO_RESEARCH_RULES_V2',
+				riskScore: item?.ruleMethod === 'AUTO_RESEARCH_RULES_V2' && typeof item.riskScore === 'number' && Number.isFinite(item.riskScore) ? clamp(item.riskScore, 0, 100) : null,
 				dataCompleteness: clamp(
-					Math.round(safeNumber(item?.dataCompleteness, 50)),
+					Math.round(safeNumber(item?.dataCompleteness, 0)),
 					0,
 					100,
 				),
@@ -490,7 +386,7 @@ export function getAutoTradeSignal(ticker: string) {
 		!candidate ||
 		!settings.enabled ||
 		candidate.rank > settings.maxRanks ||
-		candidate.probability < settings.minProbability
+		candidate.probability == null
 	) {
 		return null;
 	}
@@ -612,7 +508,7 @@ export function pendingAutoTradeCandidates(
 		.filter(
 			(candidate) =>
 				candidate.rank <= settings.maxRanks &&
-				candidate.probability >= settings.minProbability,
+				candidate.probability != null,
 		)
 		.filter(
 			(candidate) => !executed.has(`${dateKey}:${candidate.ticker}:BUY`),
@@ -681,7 +577,7 @@ export async function executeAutoTradeCandidates(
 	if (targets.length === 0) {
 		return {
 			ok: true,
-			message: "오늘 이미 주문했거나 기준을 충족한 신규 후보가 없습니다.",
+			message: "검증된 확률 근거와 승인 가능한 신규 후보가 없습니다. 규칙 점수만으로 주문하지 않습니다.",
 			results: [],
 		};
 	}
