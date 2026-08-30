@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { validPaperRecord, validPaperTimestamp } from '../../../packages/api-zod/src/paper-state-evidence.js';
 import { PAPER_RESEARCH_PERSISTED_LEDGER_ID, validResearchLedgerPayload } from './paper-research-ledger-evidence';
+import { otherPaperPayloadNamespace, otherPaperRecordNamespace, reservedPaperRecordId, type OtherPaperNamespace } from './paper-journal-domain';
 import {
   CLOCK_SKEW_WARNING_MS,
   DELETE_ALL_CONFIRMATION,
@@ -76,7 +77,8 @@ function validateRecord(value: unknown, latest: number, scope: SyncScope = 'manu
   if (forbidden) throw new PaperJournalError(forbidden.code, '사용자 식별자, Secret 또는 안전하지 않은 객체 키는 payload에 포함할 수 없습니다.');
   const validPayload = scope === 'currency-ledger'
     ? value.kind === 'account' && value.id === PAPER_RESEARCH_PERSISTED_LEDGER_ID && deletedAt === null && validResearchLedgerPayload(value.payload, latest)
-    : value.id !== PAPER_RESEARCH_PERSISTED_LEDGER_ID && (deletedAt === null ? value.payload.id === value.id && validPaperRecord(value.kind, value.payload, latest) : Object.keys(value.payload).length === 0);
+    : !reservedPaperRecordId(value.id) && !otherPaperPayloadNamespace(value.payload)
+      && (deletedAt === null ? value.payload.id === value.id && validPaperRecord(value.kind, value.payload, latest) : Object.keys(value.payload).length === 0);
   if (!validPayload) {
     throw new PaperJournalError('INVALID_RECORD_EVIDENCE', '동기화 기록의 식별자·시각·수치 근거를 확인하세요.');
   }
@@ -246,14 +248,31 @@ export async function getPaperJournalSnapshot(repository: PaperJournalRepository
   const requested = Number(limitValue ?? 50);
   if (!Number.isSafeInteger(requested) || requested < 1) throw new PaperJournalError('INVALID_PAGE_SIZE', '페이지 크기를 확인하세요.');
   const limit = Math.min(requested, MAX_SNAPSHOT_PAGE_SIZE);
-  const records = (await repository.listSnapshot(userId)).map((record) => validatedStored(record, now)).sort((left, right) => left.serverUpdatedAt.localeCompare(right.serverUpdatedAt) || left.kind.localeCompare(right.kind) || left.id.localeCompare(right.id));
+  const allRecords = await repository.listSnapshot(userId);
+  if (!Array.isArray(allRecords) || allRecords.length > 10000
+    || allRecords.some((record) => !record || typeof record.id !== 'string' || !idPattern.test(record.id) || !PAPER_JOURNAL_RECORD_KINDS.includes(record.kind))) throw new PaperJournalError('INVALID_STORED_RECORD', '저장된 원장 목록을 확인하지 못했습니다.');
+  if (new Set(allRecords.map((record) => `${record.kind}:${record.id}`)).size !== allRecords.length) throw new PaperJournalError('DUPLICATE_STORED_RECORD', '서버 snapshot에 중복 기록이 있습니다.');
+  const excluded = new Map<OtherPaperNamespace, number>();
+  const records = allRecords.filter((record) => {
+    if (!record || !record.payload || typeof record.payload !== 'object' || Array.isArray(record.payload)
+      || !Number.isSafeInteger(record.version) || record.version < 1 || !validPaperTimestamp(record.serverUpdatedAt, now.getTime())
+      || !validPaperTimestamp(record.updatedAt, now.getTime()) || !validPaperTimestamp(record.createdAt, now.getTime())
+      || Date.parse(record.createdAt) > Date.parse(record.serverUpdatedAt)) throw new PaperJournalError('INVALID_STORED_RECORD', '저장된 원장 식별자·시각을 확인하지 못했습니다.');
+    const namespace = otherPaperRecordNamespace(record, userId);
+    if (!namespace) return true;
+    if (namespace === 'currency-research') validatedStored(record, now, 'currency-ledger');
+    excluded.set(namespace, (excluded.get(namespace) ?? 0) + 1);
+    return false;
+  }).map((record) => validatedStored(record, now)).sort((left, right) => left.serverUpdatedAt.localeCompare(right.serverUpdatedAt) || left.kind.localeCompare(right.kind) || left.id.localeCompare(right.id));
   if (new Set(records.map((record) => `${record.kind}:${record.id}`)).size !== records.length) throw new PaperJournalError('DUPLICATE_STORED_RECORD', '서버 snapshot에 중복 기록이 있습니다.');
-  const fingerprint = createHash('sha256').update(canonical(records)).digest('hex');
+  const excludedNamespaces = [...excluded].map(([namespace, count]) => ({ namespace, count })).sort((a, b) => a.namespace.localeCompare(b.namespace));
+  const fingerprint = createHash('sha256').update(canonical({ records, excludedNamespaces })).digest('hex');
   if (cursor.fingerprint !== null && cursor.fingerprint !== fingerprint) throw new PaperJournalError('SNAPSHOT_CHANGED', '페이지 조회 중 서버 원장이 변경되었습니다. 일관된 기록을 위해 다시 동기화하세요.', 409);
   const page = records.slice(cursor.offset, cursor.offset + limit);
   return {
     ok: true, mode: JOURNAL_SYNC_MODE, orderSubmitted: false, exchangeRequestSent: false,
     records: page, nextCursor: cursor.offset + page.length < records.length ? encodeCursor(cursor.offset + page.length, fingerprint) : null,
+    scope: 'manual-paper-trading', excludedNamespaces,
     serverTime: now.toISOString(),
   };
 }
