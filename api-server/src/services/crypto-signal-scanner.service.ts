@@ -770,7 +770,7 @@ function analyze(
       ? ['upbit-public-market', 'upbit-public-ticker', 'upbit-public-candles', 'upbit-public-orderbook']
       : ['bitget-public-ticker', 'bitget-public-candles'],
     observedAt,
-    expiresAt: expiry(request.timeframe, now),
+    expiresAt: expiry(request.timeframe, observedTimestamp),
     strongSignalEligible,
     warnings,
   };
