@@ -42,7 +42,9 @@ jobs:
           node --check market-intelligence-sidecar/src/public-data.mjs
           node --check market-intelligence-sidecar/src/server.mjs
           node --check market-intelligence-sidecar/src/fake-wall-forward-ledger.mjs
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-calibration.mjs
           node --check market-intelligence-sidecar/scripts/run-fake-wall-forward-ledger.mjs
+          node --check market-intelligence-sidecar/scripts/run-public-forward-liquidity-calibration.mjs
           node --check market-intelligence-sidecar/scripts/verify-contract.mjs
 
       - name: Unit and service tests
@@ -59,15 +61,19 @@ jobs:
           for attempt in 1 2 3; do
             if node --input-type=module - <<'NODE'
           import { fetchBitgetFuturesEvidence, fetchUpbitSpotEvidence } from './market-intelligence-sidecar/src/public-data.mjs';
+          import { probeBitgetPublicCalibrationCapability } from './market-intelligence-sidecar/src/public-forward-liquidity-calibration.mjs';
           const futures = await fetchBitgetFuturesEvidence('BTCUSDT');
           if (futures.market !== 'CRYPTO_FUTURES' || futures.provenance?.privateApiUsed !== false) process.exit(1);
           if (!futures.orderBook?.bids?.length || !futures.orderBook?.asks?.length || !futures.trades?.length) process.exit(1);
           const spot = await fetchUpbitSpotEvidence('KRW-BTC');
           if (spot.market !== 'CRYPTO_SPOT' || spot.provenance?.privateApiUsed !== false) process.exit(1);
           if (!spot.orderBook?.bids?.length || !spot.orderBook?.asks?.length || !spot.trades?.length) process.exit(1);
+          const calibration = await probeBitgetPublicCalibrationCapability({ symbol: 'BTCUSDT' });
+          if (calibration.PUBLIC_CALIBRATION_DATA_CAPABLE !== true || calibration.privateApiUsed !== false) process.exit(1);
           console.log(JSON.stringify({
             bitget: { symbol: futures.symbol, bookTs: futures.orderBook.ts, fills: futures.trades.length },
             upbit: { symbol: spot.symbol, bookTs: spot.orderBook.ts, trades: spot.trades.length },
+            calibration: { capable: calibration.PUBLIC_CALIBRATION_DATA_CAPABLE, fields: calibration.fields },
             privateRequests: 0,
             orders: 0,
           }));
