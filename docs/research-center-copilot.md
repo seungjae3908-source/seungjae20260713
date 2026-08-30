@@ -162,3 +162,36 @@ code injection and administrator permissions.
 AI requests, duplicate prevention, invalid DSL, malformed/unavailable responses,
 missing evidence and member access. Browser fixtures have no runtime evidence
 credit and invoke no external AI, database or trading provider.
+
+## Candidate result identity and durable readback
+
+`POST /api/admin/research/copilot/read-backtest` uses the same strict
+`{dsl, bundleDigest, strategyIdentityDigest}` request as submission. It is an
+authenticated administrator read operation and never reserves or executes a job.
+The server rereads the canonical bundle before and after artifact storage IO.
+
+The existing #690 executor result must match the exact formula candidate,
+formula hash, parameter identity, dataset and TRAIN period, with holdout and all
+execution authority disabled. A `PASS` string alone cannot complete a candidate.
+The original result is passed unchanged as the third argument to
+`ResearchSubmissionStore.complete(key, receipt, artifact)`, with its canonical
+SHA-256 on the receipt. Store implementations must retain both atomically.
+No financial metric is recalculated by the Copilot or sent to AI.
+
+An owner-provided `ResearchSubmissionStore.read(key)` returns the stored receipt
+and artifact. Readback revalidates receipt binding, result digest, identity,
+period, authority and time. Only this independent read can produce
+`publicationStatus=READBACK_VERIFIED`; historical completion alone remains
+`MISSING_EVIDENCE`. Missing readers/publications and failed/corrupt reads are
+explicit and never trigger a resubmission. The default runtime has no connected
+catalog/store, so remains `BLOCKED_DATA`. Injected test stores prove the contract,
+not production durability or genuine evidence.
+
+The UI exposes a working result-readback action and candidate-specific identity
+details, and keeps OOS/WF/Holdout, model/features/trial, Shadow/Forward,
+independence and full-cost/Health gaps explicit. Whole-registry stage counts and
+operational Health summaries are labeled separately from this candidate.
+Provider refresh failure removes cached evidence instead of leaving it visible
+as fresh. Tested sizes: 1440×900, 1024×768, 320×740, 360×800, 390×844, 412×915,
+430×932. No production deployment, model tuning, owner-engine change or approval
+authority is part of this work.

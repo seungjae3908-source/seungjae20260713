@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from 'wouter';
 import { BottomNav } from './bottom-nav';
 import { useAuth } from '@/lib/auth';
-import { fetchCopilotSnapshot, reviewCopilot, validateResearchDsl, submitResearchBacktest, type CopilotReview, type CopilotTask, type DslValidation } from '@/lib/research-copilot';
+import { fetchCopilotSnapshot, reviewCopilot, validateResearchDsl, submitResearchBacktest, readResearchBacktest, type CopilotReview, type CopilotTask, type DslValidation } from '@/lib/research-copilot';
 
 const ACTIONS: Array<[CopilotTask, string]> = [
   ['propose_candidates', '후보 가설 제안'], ['interpret_evidence', '검증 증거 해석'],
@@ -23,7 +23,8 @@ export function ResearchCopilotPanel() {
   const [busy, setBusy] = useState(false);
   const pending = useRef<AbortController | null>(null);
   const sequence = useRef(0);
-  const data = snapshot.data;
+  // React Query retains cached data on refetch failure. It must not look like current evidence.
+  const data = snapshot.isError ? undefined : snapshot.data;
   useEffect(() => () => { sequence.current += 1; pending.current?.abort(); }, []);
   useEffect(() => { sequence.current += 1; pending.current?.abort(); setReview(null); setValidation(null); setBusy(false); }, [profile?.id]);
   const visibleReview = !snapshot.isError && review?.evidenceDigest === data?.evidenceDigest && data?.freshness === 'FRESH' ? review : null;
@@ -67,6 +68,14 @@ export function ResearchCopilotPanel() {
       if (!signal.aborted) setValidation(previous => previous ? { ...previous, bundle: result } : null);
     });
   }
+  function readBacktest() {
+    const bundle = validation?.bundle;
+    if (!bundle?.researchBundleReady || busy) return;
+    void run(async signal => {
+      const result = await readResearchBacktest(JSON.parse(dsl), bundle, signal);
+      if (!signal.aborted) setValidation(previous => previous ? { ...previous, bundle: result } : null);
+    });
+  }
   return <main className="h-full overflow-y-auto bg-background pb-28" data-testid="research-copilot">
     <div className="mx-auto max-w-7xl space-y-5 p-4 sm:p-6">
       <header className="rounded-2xl border border-border bg-card p-5">
@@ -98,6 +107,7 @@ export function ResearchCopilotPanel() {
           <p className="mt-3 text-sm">신뢰 확률·성과 수치: 미생성. 후보 가설은 검증된 전략이 아닙니다.</p>
         </section> : null}
         <section aria-label="연구 단계" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <p className="text-sm sm:col-span-2 lg:col-span-3">전체 등록 전략의 단계별 조회 현황입니다. 서로 다른 전략의 receipt 수를 합쳐 한 후보의 검증 완료로 판단하지 않습니다.</p>
           {data.stages.map(stage => <article key={stage.key} className="min-w-0 rounded-2xl border border-border bg-card p-4">
             <h2 className="font-bold">{stage.label}</h2><p className="mt-2 text-xs font-bold text-amber-600">{stage.status}</p>
             <p className="mt-2 text-xs">검증 receipt를 조회할 수 있는 전략: {stage.verifiedReceiptCount}개</p>
@@ -115,7 +125,7 @@ export function ResearchCopilotPanel() {
             {validation.candidateId ? <p className="mt-2">{validation.candidateId}</p> : null}
             {!validation.bundle ? <p className="mt-2">Bundle 응답 없음 · 실행 차단</p> : null}
           </div> : null}
-          {validation?.bundle ? <div aria-label="Backtest Bundle" className="mt-4 space-y-3 text-sm">
+          {validation?.bundle ? <div aria-label="Backtest Bundle" className="mt-4 space-y-3 break-words text-sm [overflow-wrap:anywhere]">
             <p className="font-bold">Backtest Bundle · {validation.bundle.backtestStatus}</p>
             <p>DSL_VALID={String(validation.bundle.dslValid)} · RESEARCH_BUNDLE_READY={String(validation.bundle.researchBundleReady)} · BACKTEST_EXECUTABLE={String(validation.bundle.backtestExecutable)}</p>
             <div className="grid gap-2 sm:grid-cols-2">{validation.bundle.components.map(component => <div key={component.key} className="min-w-0 rounded-xl border border-border p-3">
@@ -126,7 +136,27 @@ export function ResearchCopilotPanel() {
             <p>WF: {validation.bundle.wfStatus} · OOS: {validation.bundle.oosStatus} · Holdout: {validation.bundle.holdoutStatus}</p>
             <p>통계 방화벽: {validation.bundle.statisticalFirewallStatus} · Promotion: 불가 · Champion: 없음</p>
             <p>이 요청의 백테스터 호출: {validation.bundle.backtesterCalls}회. 역사 백테스트 완료는 WF/OOS/Holdout 통과가 아닙니다.</p>
+            <p>결과 보존·재조회: {validation.bundle.publicationStatus}. READBACK_VERIFIED는 동일 artifact의 재조회 확인이며 전략 성과 통과가 아닙니다.</p>
             <button className={button} disabled={busy || !validation.bundle.backtestExecutable || validation.bundle.backtestSubmitted} onClick={submitBacktest}>검증된 Bundle로 연구 백테스트 제출</button>
+            <button className={button + ' ml-0 sm:ml-2'} disabled={busy || !validation.bundle.researchBundleReady} onClick={readBacktest}>저장된 연구 결과 재조회</button>
+            <section aria-label="선택 후보의 증거 연결" className="rounded-xl border border-border p-3">
+              <h3 className="font-bold">이 후보의 다음 단절 지점</h3>
+              <p className="mt-2">{!validation.bundle.researchBundleReady ? 'BLOCKED_DATA · 실행 가능한 canonical Bundle 부족' : !validation.bundle.backtestCompleted ? `Backtest · ${validation.bundle.backtestStatus}` : validation.bundle.publicationStatus !== 'READBACK_VERIFIED' ? 'MISSING_EVIDENCE · 영구 결과 재조회 미확인' : 'NOT_EVALUABLE · 동일 후보의 OOS/WF/Holdout 평가 증거 부족'}</p>
+              <p className="mt-2">Shadow · MISSING_EVIDENCE / Forward · MISSING_EVIDENCE</p>
+              <p className="mt-2">Feature·Model·Trial·Observation 연결과 genuine 독립 표본 수: 확인 불가. 전체 운영 집계를 이 후보의 표본으로 사용하지 않습니다.</p>
+              <p className="mt-2">Full Cost / Health / Promotion 판정: NOT_EVALUABLE. 수익성 입증 없음 · 검증 Champion 없음.</p>
+              <details className="mt-3">
+                <summary className="min-h-11 cursor-pointer py-3 font-bold">이 후보의 식별자와 출처 자세히</summary>
+                <dl className="space-y-2 break-all text-xs">
+                  {Object.entries({ DSL: validation.bundle.dslDigest, Strategy: validation.bundle.strategyIdentityDigest, Bundle: validation.bundle.bundleDigest,
+                    Dataset: validation.bundle.receipt?.datasetIdentity, 'Dataset SHA-256': validation.bundle.receipt?.datasetDigest,
+                    Split: validation.bundle.receipt?.splitReceiptDigest, Risk: validation.bundle.receipt?.riskPolicyId,
+                    Cost: validation.bundle.receipt?.costPolicyIdentity, 'Research SHA': validation.bundle.receipt?.researchCodeSha,
+                    'Request / Publication key': validation.bundle.receipt?.requestDigest, 'Result artifact SHA-256': validation.bundle.resultArtifactDigest,
+                  }).map(([label, value]) => <div key={label}><dt className="font-bold">{label}</dt><dd>{value ?? 'MISSING_EVIDENCE'}</dd></div>)}
+                </dl>
+              </details>
+            </section>
           </div> : null}
           <Link href="/backtests" className="mt-4 inline-block text-sm font-bold text-primary underline">기존 백테스터 열기 (조건을 별도로 입력)</Link>
         </section>
@@ -136,7 +166,8 @@ export function ResearchCopilotPanel() {
           {data.comparisons.length ? <div className="mt-3 max-w-full overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr>{['전략', '시장', '방향', '주기', '비용 정책'].map(label => <th key={label} className="p-2">{label}</th>)}</tr></thead><tbody>{data.comparisons.map(row => <tr key={row.strategyId} className="border-t border-border"><td className="max-w-64 break-all p-2">{row.strategyId}</td><td className="p-2">{row.market}</td><td className="p-2">{row.direction}</td><td className="p-2">{row.timeframe}</td><td className="p-2">{row.costPolicyVersion}</td></tr>)}</tbody></table></div> : <p className="mt-2 text-sm">비교할 canonical 전략 식별자가 없습니다.</p>}
         </section>
         <section aria-label="전략 상태와 인계" className="rounded-2xl border border-border bg-card p-4">
-          <h2 className="font-bold">Strategy Health: {data.health.status}</h2>
+          <h2 className="font-bold">전체 연구 운영 Health: {data.health.status}</h2>
+          <p className="mt-2 text-sm">서로 다른 전략과 작업을 포함한 운영 요약입니다. 위 DSL 후보의 Strategy Health 판정은 아닙니다.</p>
           <ul className="mt-3 list-disc space-y-2 break-all pl-5 text-xs">{data.health.reasons.map(reason => <li key={reason}>{reason}</li>)}</ul>
           <p className="mt-3 text-sm">{data.next_action}</p>
           <p className="mt-2 text-sm">Shadow/Forward는 이 화면에서 활성화하지 않습니다. Holdout 열람·승격·Champion 지정·주문 실행은 모두 차단됩니다.</p>
