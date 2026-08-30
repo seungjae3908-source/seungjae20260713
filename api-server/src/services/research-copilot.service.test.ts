@@ -1,4 +1,5 @@
 import test from 'node:test';
+import './research-bundle.test.mjs';
 import assert from 'node:assert/strict';
 import { ResearchCopilotService, buildCopilotSnapshot, researchProviderPolicy, validateCopilotDsl } from './research-copilot.service';
 import { createDefaultStrategyPromotionService, StrategyPromotionService } from './strategy-promotion.service';
