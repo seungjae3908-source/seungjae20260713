@@ -1,4 +1,4 @@
-name: ROOM B 817 Trigger Coverage Remediation
+name: ROOM B 817 Trigger Coverage Artifact
 
 on:
   pull_request:
@@ -7,31 +7,29 @@ on:
       - .github/workflows/room-b-817-trigger-coverage-remediation.yml
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  remediate:
+  build-patch-artifact:
     if: ${{ github.event.pull_request.number == 817 }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Checkout exact PR head branch
+      - name: Checkout exact PR head
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.ref }}
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
 
-      - name: Patch exact validator trigger/allowlist coverage
+      - name: Build exact trigger-coverage patch
         shell: bash
         run: |
           set -Eeuo pipefail
           python - <<'PY'
           from pathlib import Path
-
           path = Path('.github/workflows/paper-forward-schedule-validation.yml')
           text = path.read_text()
-
           replacements = [
             (
               '    paths:\n      - api-server/scripts/build-authoritative-paper-runtime-package.mjs',
@@ -58,7 +56,6 @@ jobs:
             if text.count(old) != 1:
               raise SystemExit(f'VALIDATOR_PATCH_MATCH_COUNT_INVALID:{old[:80]}')
             text = text.replace(old, new, 1)
-
           marker = '      - name: Require bounded non-UI diff\n'
           if text.count(marker) != 1:
             raise SystemExit('VALIDATOR_SELF_CHECK_MARKER_INVALID')
@@ -66,7 +63,6 @@ jobs:
           text = text.replace(marker, self_check + marker, 1)
           path.write_text(text)
           PY
-
           git diff --check
           python - <<'PY'
           from pathlib import Path
@@ -90,15 +86,10 @@ jobs:
           assert required <= set(allowed)
           PY
 
-      - name: Commit exact validator remediation
-        shell: bash
-        env:
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
-        run: |
-          set -Eeuo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add .github/workflows/paper-forward-schedule-validation.yml
-          test "$(git diff --cached --name-only | wc -l)" -eq 1
-          git commit -m 'fix(ci): close Paper Forward trigger coverage gaps'
-          git push origin "HEAD:${HEAD_REF}"
+      - name: Upload exact patched validator
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-forward-validator-trigger-coverage
+          path: .github/workflows/paper-forward-schedule-validation.yml
+          if-no-files-found: error
+          retention-days: 1
