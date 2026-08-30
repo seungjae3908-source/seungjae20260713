@@ -8,7 +8,7 @@ import { MarketListingService } from './market-listing.service';
 import marketRouter from '../routes/market';
 import { quoteTimeEvidence, marketNumber } from '../providers/market-evidence';
 import { getQuote as yahooQuote, parseYahooQuote, normalizeYahooCandles } from '../providers/yahoo';
-import { getQuote as naverQuote, parseNaverPollQuote } from '../providers/naver';
+import { getQuote as naverQuote, parseNaverPollQuote, normalizeNaverCandles } from '../providers/naver';
 import { normalizeQuoteRow } from './market-data.base.service';
 
 test('market time evidence rejects missing, malformed, impossible, timezone-free and future timestamps without clock substitution', () => {
@@ -93,6 +93,15 @@ test('quote normalization never substitutes previous close for current price or 
   assert.equal(row.previousClose, undefined);
   assert.equal(row.open, undefined);
   assert.equal(row.changePercent, 0);
+});
+
+test('Naver candles reject fabricated dates, duplicate periods and impossible OHLC while preserving zero volume', () => {
+  const candle = { localDate: '20260828', openPrice: 100, highPrice: 102, lowPrice: 99, closePrice: 101, accumulatedTradingVolume: 0 };
+  assert.equal(normalizeNaverCandles([candle])[0].volume, 0);
+  assert.throws(() => normalizeNaverCandles([candle, candle]), /DUPLICATE/);
+  for (const localDate of ['', 'not-date', '20260230', '20990101']) assert.throws(() => normalizeNaverCandles([{ ...candle, localDate }]));
+  assert.throws(() => normalizeNaverCandles([{ ...candle, highPrice: 50 }]), /OHLC_INVALID/);
+  assert.throws(() => normalizeNaverCandles([{ ...candle, accumulatedTradingVolume: -1 }]), /volume/);
 });
 
 test('live quote and listing boundaries never generate ratings, probabilities or trade levels', async (t) => {
