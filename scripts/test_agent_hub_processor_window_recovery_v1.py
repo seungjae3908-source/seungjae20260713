@@ -3,11 +3,13 @@ from __future__ import annotations
 import unittest
 from typing import Any
 
+from scripts import agent_hub_rollover_v2 as rollover
 from scripts.agent_hub_processor_window_recovery_v1 import (
     BoundedCommentWindow,
     ProcessorWindowRecoveryError,
     augment_successor_body,
     assert_manual_invocation,
+    coordinator_actionable_control_comments,
     expected_confirmation,
     latest_complete_ledger,
     read_bounded_comment_window,
@@ -36,6 +38,36 @@ class FakeGitHub:
 
 def comment(cid: int, body: str) -> dict[str, Any]:
     return {"id": cid, "body": body}
+
+
+def worker_report(cid: int, worker: str) -> dict[str, Any]:
+    return {
+        "id": cid,
+        "body": "\n".join([
+            "[WORKER_REPORT]",
+            "schema_version: 2",
+            "task_id: demo-task",
+            f"worker: {worker}",
+            "repository: owner/repo",
+            "base_branch: main",
+            f"base_sha: {'a' * 40}",
+            "branch: feature/demo",
+            "status: partial",
+            f"head_sha: {'b' * 40}",
+            "pr_number: none",
+            "changed_files: []",
+            "checks: focused checks pending",
+            "ci_run_id: none",
+            "summary: bounded report",
+            "remaining: continue safely",
+            "dependencies: none",
+            "conflicts: none",
+            "approval_required: no",
+            "prohibited_actions_confirmed: yes, no prohibited actions performed",
+        ]),
+        "user": {"login": "owner"},
+        "author_association": "OWNER",
+    }
 
 
 class ProcessorWindowRecoveryTests(unittest.TestCase):
@@ -83,6 +115,35 @@ class ProcessorWindowRecoveryTests(unittest.TestCase):
         self.assertEqual(window.comments[-1]["id"], 1107)
         self.assertTrue(github.requests[0].endswith("page=2"))
         self.assertTrue(github.requests[-1].endswith("page=12"))
+
+    def test_unregistered_schema_v2_owner_report_is_continuity_only(self) -> None:
+        filtered = coordinator_actionable_control_comments(
+            (worker_report(10, "ChatGPT Direct Work"),),
+            "owner/repo",
+        )
+        self.assertEqual(filtered, ())
+        self.assertEqual(rollover.unresolved_control_work(filtered), [])
+
+    def test_registered_schema_v2_owner_report_still_blocks_rollover(self) -> None:
+        filtered = coordinator_actionable_control_comments(
+            (worker_report(11, "ai-chart"),),
+            "owner/repo",
+        )
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(
+            rollover.unresolved_control_work(filtered),
+            ["pending_report:11:demo-task"],
+        )
+
+    def test_malformed_registered_schema_v2_report_still_blocks_rollover(self) -> None:
+        malformed = worker_report(12, "ai-chart")
+        malformed["body"] = str(malformed["body"]).replace("checks: focused checks pending\n", "")
+        filtered = coordinator_actionable_control_comments((malformed,), "owner/repo")
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(
+            rollover.unresolved_control_work(filtered),
+            ["pending_report:12:demo-task"],
+        )
 
     def test_missing_required_anchor_fails_closed(self) -> None:
         window = BoundedCommentWindow(
