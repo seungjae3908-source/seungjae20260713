@@ -3,8 +3,9 @@ import { requireAdmin, requireAuthenticated, type AuthenticatedRequest } from '.
 import { createResearchCopilotService, validateCopilotDsl, type ResearchCopilotService } from '../services/research-copilot.service';
 import { ResearchDualFreeAiError } from '../services/research-dual-free-ai.service';
 import type { CopilotTask } from '../services/research-copilot.contract';
+import { ResearchBundleService } from '../services/research-bundle.service';
 
-export function createResearchCopilotRouter(service: ResearchCopilotService = createResearchCopilotService()): IRouter {
+export function createResearchCopilotRouter(service: ResearchCopilotService = createResearchCopilotService(), bundles = new ResearchBundleService()): IRouter {
   const router: IRouter = Router();
   router.use(requireAuthenticated, requireAdmin);
   router.use((_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
@@ -16,9 +17,18 @@ export function createResearchCopilotRouter(service: ResearchCopilotService = cr
     catch { res.status(503).json({ status: 'blocked', error: 'RESEARCH_SOURCE_UNAVAILABLE', executionAuthority: 'NONE' }); }
     finally { req.off('aborted', abort); }
   });
-  router.post('/validate-dsl', (req, res) => {
+  router.post('/validate-dsl', async (req, res) => {
     if (JSON.stringify(req.body ?? null).length > 32_000) return res.status(413).json({ status: 'blocked', error: 'DSL_TOO_LARGE' });
-    return res.json(validateCopilotDsl(req.body));
+    return res.json({ ...validateCopilotDsl(req.body), bundle: await bundles.resolve(req.body) });
+  });
+  router.post('/resolve-bundle', async (req, res) => {
+    if (JSON.stringify(req.body ?? null).length > 32_000) return res.status(413).json({ error: 'DSL_TOO_LARGE' });
+    return res.json(await bundles.resolve(req.body));
+  });
+  router.post('/submit-backtest', async (req: AuthenticatedRequest, res) => {
+    if (!req.member) return res.status(401).json({ error: 'LOGIN_REQUIRED' });
+    if (JSON.stringify(req.body ?? null).length > 33_000) return res.status(413).json({ error: 'RESEARCH_SUBMISSION_TOO_LARGE' });
+    return res.json(await bundles.submit(req.member.id, req.body));
   });
   router.post('/review', async (req: AuthenticatedRequest, res) => {
     const body: unknown = req.body;

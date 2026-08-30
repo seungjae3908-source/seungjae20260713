@@ -3,13 +3,15 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from 'wouter';
 import { BottomNav } from './bottom-nav';
 import { useAuth } from '@/lib/auth';
-import { fetchCopilotSnapshot, reviewCopilot, validateResearchDsl, type CopilotReview, type CopilotTask, type DslValidation } from '@/lib/research-copilot';
+import { fetchCopilotSnapshot, reviewCopilot, validateResearchDsl, submitResearchBacktest, type CopilotReview, type CopilotTask, type DslValidation } from '@/lib/research-copilot';
 
 const ACTIONS: Array<[CopilotTask, string]> = [
   ['propose_candidates', '후보 가설 제안'], ['interpret_evidence', '검증 증거 해석'],
   ['compare_strategies', '비교 시 필요한 증거'], ['explain_health', 'Health 부족 증거 설명'],
 ];
 const button = 'min-h-11 rounded-xl border border-border px-4 py-2 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-50';
+const bundleLabels: Record<string, string> = { strategy: 'Strategy Identity', dataset: 'Dataset', split: 'Frozen Split',
+  risk: 'Risk Policy', fullCost: 'Full Cost (8 components)', oos: 'OOS Horizon', wf: 'Walk-forward Policy', holdout: 'Final Holdout' };
 
 export function ResearchCopilotPanel() {
   const { profile, isAdmin } = useAuth();
@@ -23,6 +25,7 @@ export function ResearchCopilotPanel() {
   const sequence = useRef(0);
   const data = snapshot.data;
   useEffect(() => () => { sequence.current += 1; pending.current?.abort(); }, []);
+  useEffect(() => { sequence.current += 1; pending.current?.abort(); setReview(null); setValidation(null); setBusy(false); }, [profile?.id]);
   const visibleReview = !snapshot.isError && review?.evidenceDigest === data?.evidenceDigest && data?.freshness === 'FRESH' ? review : null;
 
   async function run(operation: (signal: AbortSignal) => Promise<void>) {
@@ -54,6 +57,14 @@ export function ResearchCopilotPanel() {
       try { value = JSON.parse(dsl); } catch { throw new Error('올바른 JSON DSL을 입력하세요. 실행 코드는 허용하지 않습니다.'); }
       const result = await validateResearchDsl(value, signal);
       if (!signal.aborted) setValidation(result);
+    });
+  }
+  function submitBacktest() {
+    const bundle = validation?.bundle;
+    if (!bundle?.backtestExecutable || busy) return;
+    void run(async signal => {
+      const result = await submitResearchBacktest(JSON.parse(dsl), bundle, signal);
+      if (!signal.aborted) setValidation(previous => previous ? { ...previous, bundle: result } : null);
     });
   }
   return <main className="h-full overflow-y-auto bg-background pb-28" data-testid="research-copilot">
@@ -102,7 +113,20 @@ export function ResearchCopilotPanel() {
           <button className={button + ' mt-3'} disabled={busy || !dsl.trim()} onClick={validate}>DSL 검증</button>
           {validation ? <div role="status" className="mt-3 break-all text-sm"><p>{validation.status === 'ready' ? 'DSL 유효 · 전략 미평가' : 'DSL 차단: 지원 범위·필드·연산자·깊이를 확인하세요.'}</p>
             {validation.candidateId ? <p className="mt-2">{validation.candidateId}</p> : null}
-            <p className="mt-2">백테스트 미제출: {validation.backtest.missing_data.join(' · ')}</p>
+            {!validation.bundle ? <p className="mt-2">Bundle 응답 없음 · 실행 차단</p> : null}
+          </div> : null}
+          {validation?.bundle ? <div aria-label="Backtest Bundle" className="mt-4 space-y-3 text-sm">
+            <p className="font-bold">Backtest Bundle · {validation.bundle.backtestStatus}</p>
+            <p>DSL_VALID={String(validation.bundle.dslValid)} · RESEARCH_BUNDLE_READY={String(validation.bundle.researchBundleReady)} · BACKTEST_EXECUTABLE={String(validation.bundle.backtestExecutable)}</p>
+            <div className="grid gap-2 sm:grid-cols-2">{validation.bundle.components.map(component => <div key={component.key} className="min-w-0 rounded-xl border border-border p-3">
+              <p className="font-bold">{bundleLabels[component.key] ?? component.key} · {component.status}</p>
+              <ul className="mt-2 space-y-1 break-all text-xs">{component.blockers.map(reason => <li key={reason}>{reason}</li>)}</ul>
+            </div>)}</div>
+            <p className="break-all text-xs">{validation.bundle.blockers.join(' · ')}</p>
+            <p>WF: {validation.bundle.wfStatus} · OOS: {validation.bundle.oosStatus} · Holdout: {validation.bundle.holdoutStatus}</p>
+            <p>통계 방화벽: {validation.bundle.statisticalFirewallStatus} · Promotion: 불가 · Champion: 없음</p>
+            <p>이 요청의 백테스터 호출: {validation.bundle.backtesterCalls}회. 역사 백테스트 완료는 WF/OOS/Holdout 통과가 아닙니다.</p>
+            <button className={button} disabled={busy || !validation.bundle.backtestExecutable || validation.bundle.backtestSubmitted} onClick={submitBacktest}>검증된 Bundle로 연구 백테스트 제출</button>
           </div> : null}
           <Link href="/backtests" className="mt-4 inline-block text-sm font-bold text-primary underline">기존 백테스터 열기 (조건을 별도로 입력)</Link>
         </section>

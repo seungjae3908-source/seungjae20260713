@@ -1,6 +1,26 @@
 import { authorizedFetch } from './auth-fetch';
 import type { CopilotSnapshot, CopilotReview, CopilotTask, DslValidation } from '../../../api-server/src/services/research-copilot.contract';
+import type { ResearchBundleResolution } from '../../../api-server/src/services/research-bundle.contract';
 export type { CopilotSnapshot, CopilotReview, CopilotTask, DslValidation };
+export type { ResearchBundleResolution };
+
+function validBundle(value: unknown): boolean {
+  const b = record(value);
+  return b.schemaVersion === 'research-bundle-resolution-v1' && b.executionAuthority === 'NONE' &&
+    b.promotionEligible === false && b.profitabilityProven === false && b.champion === null && b.evidenceCredit === 0 &&
+    b.statisticalFirewallPass === false && b.statisticalFirewallStatus === 'MISSING_EVIDENCE' &&
+    b.wfEvidencePresent === false && b.oosEvidencePresent === false && b.holdoutEvidencePresent === false &&
+    b.wfStatus === 'NOT_EVALUATED' && b.oosStatus === 'NOT_EVALUATED' && ['LOCKED', 'NOT_EVALUATED'].includes(String(b.holdoutStatus)) &&
+    ['NOT_SUBMITTED', 'BLOCKED_DATA', 'RUNNING', 'COMPLETED', 'FAILED'].includes(String(b.backtestStatus)) &&
+    ['dslValid', 'researchBundleReady', 'backtestExecutable', 'backtestSubmitted', 'backtestCompleted'].every(k => typeof b[k] === 'boolean') &&
+    (!b.backtestExecutable || b.researchBundleReady === true && b.dslValid === true && typeof b.bundleDigest === 'string' && typeof b.strategyIdentityDigest === 'string') &&
+    count(b.backtesterCalls) && strings(b.blockers) && Array.isArray(b.components) && b.components.every(c =>
+      fields(c, ['key', 'status']) && ['READY', 'MISSING_EVIDENCE', 'BLOCKED_DATA'].includes(String(record(c).status)) && strings(record(c).blockers));
+}
+export function submitResearchBacktest(dsl: unknown, bundle: ResearchBundleResolution, signal?: AbortSignal): Promise<ResearchBundleResolution> {
+  return request('/submit-backtest', { method: 'POST', signal, headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dsl, bundleDigest: bundle.bundleDigest, strategyIdentityDigest: bundle.strategyIdentityDigest }) }, validBundle);
+}
 
 async function request<T>(path: string, init: RequestInit, validate: (value: unknown) => boolean): Promise<T> {
   const response = await authorizedFetch('/api/admin/research/copilot' + path, init);
@@ -62,5 +82,6 @@ export function reviewCopilot(task: CopilotTask, evidenceDigest: string, signal?
 export function validateResearchDsl(dsl: unknown, signal?: AbortSignal): Promise<DslValidation> {
   return request('/validate-dsl', { method: 'POST', signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(dsl) },
     value => safe(value) && record(value).validator === 'createSafeStrategyDslV1' && record(value).evaluationStatus === 'NOT_EVALUATED' &&
-      record(value).profitabilityProven === false && record(record(value).backtest).submitted === false && strings(record(record(value).backtest).missing_data));
+      record(value).profitabilityProven === false && record(record(value).backtest).submitted === false && strings(record(record(value).backtest).missing_data) &&
+      validBundle(record(value).bundle));
 }
