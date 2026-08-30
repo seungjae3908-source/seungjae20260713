@@ -11,7 +11,7 @@ import {
 } from "@/lib/stock-display";
 import { formatPercent as formatAppPercent, formatPrice as formatAppPrice } from '@/lib/format';
 import { quoteFreshness } from '@/lib/market-freshness';
-import { classifyStock, stockClassBadgeClass } from "@/lib/stock-classifier";
+import { classifyStock, stockClassBadgeClass, type StockClassLabel } from "@/lib/stock-classifier";
 import { readWatchlistItems, WATCHLIST_CHANGE_EVENT } from "@/lib/stock-display";
 import { cn } from "@/lib/utils";
 
@@ -28,7 +28,7 @@ type RankType =
   | "gainers"
   | "losers";
 
-type ClassificationLabel = "우량주" | "보통주" | "저평가주" | "잡주";
+type ClassificationLabel = StockClassLabel;
 
 interface StockRow {
   ticker: string;
@@ -257,6 +257,7 @@ function classifyRow(row: AnyObj, score: number | null): ClassificationLabel | n
     name: String(row?.name ?? row?.stockName ?? row?.item_name ?? ""),
     score,
     aiScore: score,
+    changePercent: toNumber(row.changePercent),
     marketCap: toNumber(row?.marketCap ?? row?.market_cap ?? row?.marketValue),
     per: toNumber(row?.per),
     pbr: toNumber(row?.pbr),

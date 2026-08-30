@@ -7,7 +7,9 @@ import { CenteredPageHeader } from '@/components/centered-page-header';
 import { ResponsiveTabs } from '@/components/responsive-tabs';
 import { apiGet } from '@/lib/api';
 import { useAnalysisSelection, type AnalysisSelection } from '@/lib/analysis-selection';
-import { displayStockName, formatAppPrice } from '@/lib/stock-display';
+import { displayStockName } from '@/lib/stock-display';
+import { formatPrice } from '@/lib/format';
+import { quoteFreshness } from '@/lib/market-freshness';
 import { UNIFIED_CHART_TIMEFRAMES } from '@/lib/unified-chart-data';
 
 const AiChartPage = lazy(() => import('@/pages/ai-chart'));
@@ -56,7 +58,8 @@ function samePageChartContext(selection: AnalysisSelection | null, expected: Ana
 
 function finite(...values: unknown[]) {
   for (const value of values) {
-    const number = Number(value);
+    if (typeof value !== 'number' && (typeof value !== 'string' || !/^[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?$/.test(value.trim()))) continue;
+    const number = typeof value === 'string' ? Number(value.replace(/,/g, '')) : value;
     if (Number.isFinite(number)) return number;
   }
   return null;
@@ -101,21 +104,21 @@ export default function DetailPage() {
   }, [location]);
 
   const quote = useQuery({
-    queryKey: ['clean-stock-detail-quote', ticker],
+    queryKey: ['clean-stock-detail-quote', market, ticker],
     queryFn: () => apiGet<AnyObj>(`/stocks/${encodeURIComponent(ticker)}/quote`),
     enabled: Boolean(ticker) && tab === 'summary',
     staleTime: 30_000,
     gcTime: 10 * 60_000,
   });
   const profile = useQuery({
-    queryKey: ['clean-stock-detail-profile', ticker],
+    queryKey: ['clean-stock-detail-profile', market, ticker],
     queryFn: () => apiGet<AnyObj>(`/stocks/${encodeURIComponent(ticker)}/profile`),
     enabled: Boolean(ticker) && tab === 'summary',
     staleTime: 5 * 60_000,
     gcTime: 30 * 60_000,
   });
   const news = useQuery({
-    queryKey: ['clean-stock-detail-news', ticker],
+    queryKey: ['clean-stock-detail-news', market, ticker],
     queryFn: () => apiGet<AnyObj>(`/stocks/${encodeURIComponent(ticker)}/news?all=1`),
     enabled: Boolean(ticker) && tab === 'news',
     staleTime: 60_000,
@@ -131,21 +134,30 @@ export default function DetailPage() {
 
   const leaveDetail = () => {
     const back = initial.params.get('back')?.trim() || '/stocks';
-    navigate(back);
+    navigate(back.startsWith('/') && !back.startsWith('//') ? back : '/stocks');
   };
 
-  const quoteData = quote.data ?? {};
-  const profileData = profile.data ?? {};
+  const expectedCurrency = market === 'KR' ? 'KRW' : 'USD';
+  const sameIdentity = (row: Record<string, unknown>) => String(row.ticker ?? row.symbol ?? '').toUpperCase() === ticker
+    && (row.currency == null || row.currency === expectedCurrency)
+    && (row.market == null || row.market === market);
+  const identityError = Boolean(quote.data && !sameIdentity(quote.data));
+  const quoteData = quote.data && sameIdentity(quote.data) ? quote.data : {};
+  const profileData = profile.data && sameIdentity(profile.data) ? profile.data : {};
   const routeName = text(initial.params.get('name'));
   const name = displayStockName(ticker, text(quoteData.name, profileData.name, profileData.companyName, routeName, ticker) ?? ticker, market);
   const currency = text(quoteData.currency) ?? (market === 'KR' ? 'KRW' : 'USD');
-  const price = finite(quoteData.price, quoteData.currentPrice, quoteData.close, quoteData.last);
+  const priceValue = finite(quoteData.price, quoteData.currentPrice, quoteData.close, quoteData.last);
+  const price = priceValue !== null && priceValue > 0 ? priceValue : null;
   const changePercent = finite(quoteData.changePercent, quoteData.change_rate, quoteData.percentChange, quoteData.changePct);
   const exchange = text(quoteData.exchange, profileData.exchange, market === 'KR' ? 'KR 시장' : '미국 시장') ?? '-';
   const sector = text(profileData.sector, profileData.industry, profileData.category) ?? '-';
   const marketCap = compactNumber(profileData.marketCap ?? quoteData.marketCap, currency === 'KRW' ? '원' : ` ${currency}`);
   const newsRows = ((news.data?.news ?? news.data?.items ?? []) as AnyObj[]).slice(0, 40);
   const summaryLoading = (quote.isLoading || profile.isLoading) && !quote.data && !profile.data;
+  // The legacy stock route also uses updatedAt for retrieval time. Only an
+  // explicit source-time evidence payload can describe quote freshness here.
+  const freshness = quoteFreshness(quoteData.freshness ? quoteData : {});
   const routeContextValid = validStockContext(ticker, market);
   const canonicalChartSelection = useMemo<AnalysisSelection>(() => ({
     assetType: 'stock',
@@ -189,13 +201,15 @@ export default function DetailPage() {
                 </div>
               </section>
             ) : null}
+            {identityError ? <p role="alert" className="text-sm text-destructive">응답의 종목·시장·통화가 현재 선택과 일치하지 않아 시세를 표시하지 않습니다.</p> : null}
 
             <section className="rounded-3xl border border-card-border bg-card p-4 sm:p-5">
               <div className="text-center">
                 <p className="text-sm font-bold text-muted-foreground">{ticker}</p>
-                <p className="mt-2 text-3xl font-black tabular-nums">
-                  {price == null ? (summaryLoading ? '확인 중' : '미확인') : formatAppPrice(price, currency)}
+                <p className="mt-2 break-all text-3xl font-black tabular-nums">
+                  {price == null ? (summaryLoading ? '확인 중' : '미확인') : formatPrice(price, currency)}
                 </p>
+                <p className="mt-2 text-xs text-muted-foreground">{freshness.label}</p>
                 <p className={`mt-2 text-sm font-black ${changePercent == null ? 'text-muted-foreground' : changePercent >= 0 ? 'text-emerald-500' : 'text-destructive'}`}>
                   {changePercent == null ? (summaryLoading ? '등락 확인 중' : '등락 미확인') : `${changePercent >= 0 ? '+' : ''}${changePercent.toFixed(2)}%`}
                 </p>
@@ -204,7 +218,7 @@ export default function DetailPage() {
                 <div className="min-w-0 rounded-2xl bg-background p-3"><p className="text-[11px] font-bold text-muted-foreground">시장</p><p className="mt-1 truncate text-sm font-black">{exchange}</p></div>
                 <div className="min-w-0 rounded-2xl bg-background p-3"><p className="text-[11px] font-bold text-muted-foreground">업종</p><p className="mt-1 truncate text-sm font-black">{profile.isLoading && sector === '-' ? '확인 중' : sector}</p></div>
                 <div className="min-w-0 rounded-2xl bg-background p-3"><p className="text-[11px] font-bold text-muted-foreground">시가총액</p><p className="mt-1 truncate text-sm font-black">{profile.isLoading && marketCap === '-' ? '확인 중' : marketCap}</p></div>
-                <div className="min-w-0 rounded-2xl bg-background p-3"><p className="text-[11px] font-bold text-muted-foreground">상태</p><p className="mt-1 text-sm font-black">{quote.isError ? '오류' : summaryLoading ? '확인 중' : price == null ? '부분' : '정상'}</p></div>
+                <div className="min-w-0 rounded-2xl bg-background p-3"><p className="text-[11px] font-bold text-muted-foreground">상태</p><p className="mt-1 text-sm font-black">{quote.isError || identityError ? '오류' : summaryLoading ? '확인 중' : price == null ? '부분' : '시세 있음'}</p></div>
               </div>
             </section>
 
@@ -245,7 +259,8 @@ export default function DetailPage() {
               const summary = text(item.summary, item.description, item.content);
               const source = text(item.source, item.publisher) ?? '출처 미확인';
               const published = text(item.publishedAt, item.published_at, item.date, item.datetime);
-              const url = text(item.url, item.link);
+              const candidateUrl = text(item.url, item.link);
+              const url = candidateUrl && /^https?:\/\//i.test(candidateUrl) ? candidateUrl : null;
               const content = (
                 <>
                   <h2 className="break-keep text-sm font-black leading-6">{title}</h2>
