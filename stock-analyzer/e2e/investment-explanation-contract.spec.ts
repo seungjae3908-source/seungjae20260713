@@ -46,6 +46,17 @@ test('AI information fails closed instead of rendering client fabricated target 
   expect(aiTab).toContain('판단 무효화 조건');
 });
 
+test('AI information rejects malformed successful payloads instead of hiding missing evidence', () => {
+  const aiTab = source('src/components/tabs/ai-tab.tsx');
+  expect(aiTab).toContain('function validAnalysisPayload');
+  expect(aiTab).toContain('AI_ANALYSIS_CONTRACT_INVALID');
+  expect(aiTab).toContain('Array.isArray(value)');
+  expect(aiTab).toContain('validReasonList(record.buyReasons)');
+  expect(aiTab).toContain('validReasonList(record.sellReasons)');
+  expect(aiTab).not.toContain('data.buyReasons ?? []');
+  expect(aiTab).not.toContain('data.sellReasons ?? []');
+});
+
 test('analysis client preserves server target and stop evidence without current-price synthesis', () => {
   const apiSource = source('src/lib/api.ts');
   expect(apiSource).not.toContain('function clampAnalysisPrice');
