@@ -15,7 +15,7 @@ import { syncJournalRecords } from '@/lib/paper-journal-sync';
 
 const NOW = '2026-08-02T07:00:00.000Z';
 const USERS = ['phase7-user-a', 'phase7-user-b'];
-type Mode = 'success'|'failure'|'conflict'|'insufficient'|'deferred'|'malformed'|'endless'|'byte-batch';
+type Mode = 'success'|'failure'|'conflict'|'insufficient'|'deferred'|'malformed'|'endless'|'byte-batch'|'scoped';
 
 const conflict: JournalConflict = {
   id: 'conflict:phase7', kind: 'journal', recordId: 'journal-1', version: 2,
@@ -74,7 +74,10 @@ function unifiedJournal() {
 
 export default function Phase7JournalSyncE2EPage() {
   const [userIndex, setUserIndex] = useState(0);
-  const [mode, setMode] = useState<Mode>(() => new URLSearchParams(window.location.search).get('mode') === 'byte-batch' ? 'byte-batch' : 'success');
+  const [mode, setMode] = useState<Mode>(() => {
+    const requested = new URLSearchParams(window.location.search).get('mode');
+    return requested === 'byte-batch' || requested === 'scoped' ? requested : 'success';
+  });
   const userId = USERS[userIndex];
   const paperStorage = useMemo(() => {
     const adapter = createUserPaperStorage(window.localStorage, userId, new Date(NOW));
@@ -107,7 +110,9 @@ export default function Phase7JournalSyncE2EPage() {
   };
   const fakeSnapshot = async (): Promise<JournalSnapshotResult> => {
     document.documentElement.dataset.phase7SnapshotCalls = String(Number(document.documentElement.dataset.phase7SnapshotCalls ?? 0) + 1);
-    return { ok: true, mode: 'journal-sync-only', orderSubmitted: false, exchangeRequestSent: false, records: [], nextCursor: mode === 'endless' ? 'more-pages' : null, serverTime: mode === 'byte-batch' ? new Date().toISOString() : NOW };
+    return { ok: true, mode: 'journal-sync-only', orderSubmitted: false, exchangeRequestSent: false, records: [], nextCursor: mode === 'endless' ? 'more-pages' : null, serverTime: mode === 'byte-batch' ? new Date().toISOString() : NOW,
+      ...(mode === 'scoped' ? { scope: 'manual-paper-trading' as const, excludedNamespaces: [{ namespace: 'currency-research' as const, count: 1 }] } : {}),
+    };
   };
   const fakeResolve = async (_id: string, choice: 'server'|'device'|'preserve_both'): Promise<ConflictResolutionResult> => ({ ok: true, mode: 'journal-sync-only', orderSubmitted: false, exchangeRequestSent: false, conflictId: conflict.id, choice, records: choice === 'server' ? [conflict.serverRecord] : [], serverTime: NOW });
 

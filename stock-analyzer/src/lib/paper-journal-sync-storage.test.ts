@@ -50,6 +50,17 @@ function conflictFixture(id: string): JournalConflict {
   return { id, kind: 'journal', recordId: 'journal-1', version: 1, serverRecord: stored(), deviceRecord: stored(), differenceSummary: ['note differs'], createdAt: NOW.toISOString(), status: 'open' };
 }
 
+test('scoped snapshot preserves the explicit other-ledger notice without changing paper balances', () => {
+  const storage = new MemoryStorage();
+  const state = createLocalPaperState(10000, NOW);
+  const snapshot: JournalSnapshotResult = { ok: true, mode: 'journal-sync-only', orderSubmitted: false, exchangeRequestSent: false,
+    records: [], serverTime: NOW.toISOString(), nextCursor: null, scope: 'manual-paper-trading', excludedNamespaces: [{ namespace: 'currency-research', count: 1 }] };
+  const applied = applyJournalSnapshot(storage, USER_A, state, snapshot);
+  assert.deepEqual(applied.state.account, state.account);
+  assert.match(applied.metadata.warning, /별도 원장에 보존/);
+  assert.throws(() => applyJournalSnapshot(storage, USER_A, state, { ...snapshot, excludedNamespaces: [{ namespace: 'currency-research', count: Number.NaN }] }), /복원 범위/);
+});
+
 test('owner namespace is deterministic and hides raw UUID', () => {
   const value = paperOwnerNamespace(USER_A);
   assert.equal(value, paperOwnerNamespace(USER_A));

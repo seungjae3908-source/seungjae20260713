@@ -3,6 +3,15 @@ import type { JournalSyncRecord } from '../src/lib/paper-journal-sync';
 
 const PATH = '/__phase7-journal-sync-e2e';
 
+test('scoped synchronization discloses preserved research and broker ledgers', async ({ page }) => {
+  const errors = captureErrors(page);
+  await page.goto(`${PATH}?mode=scoped`);
+  await page.getByTestId('journal-sync-button').click();
+  await expect(page.getByTestId('journal-sync-status')).toContainText('동기화 완료');
+  await expect(page.getByRole('status')).toContainText('별도 원장에 보존되며 합산하지 않습니다');
+  expect(errors).toEqual([]);
+});
+
 test('real browser sync transport respects the server byte budget for Korean journal notes', async ({ page }) => {
   const errors = captureErrors(page);
   const bodies: Array<{ bytes: number; key: string; ids: string[] }> = [];
