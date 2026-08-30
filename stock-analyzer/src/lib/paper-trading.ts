@@ -136,6 +136,7 @@ export function paperStateTransportNotice(transport: PaperStateTransport | null)
 
 export async function evaluatePaperTrading(state: PaperTradingState, action: PaperTradingAction, signal?: AbortSignal) {
   const resolvedAction = await resolvePaperTradingActionMarket(state, action);
+  signal?.throwIfAborted();
   const response = await authorizedFetch('/api/paper-trading/evaluate', {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ state, action: resolvedAction }), signal,
   });
