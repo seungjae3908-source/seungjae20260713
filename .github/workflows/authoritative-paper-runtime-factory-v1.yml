@@ -95,6 +95,42 @@ jobs:
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Verify runtime input trigger coverage
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+
+          const buildSource = readFileSync(
+            'api-server/scripts/build-authoritative-paper-runtime-package.mjs',
+            'utf8',
+          );
+          const workflowSource = readFileSync(
+            '.github/workflows/authoritative-paper-runtime-factory-v1.yml',
+            'utf8',
+          );
+          const allowedInputsMatch = buildSource.match(
+            /const ALLOWED_INPUTS = Object\.freeze\(\[\n(?<body>[\s\S]*?)\n\]\.sort\(\)\);/u,
+          );
+          if (!allowedInputsMatch?.groups?.body) {
+            throw new Error('AUTHORITATIVE_PAPER_RUNTIME_ALLOWED_INPUTS_NOT_FOUND');
+          }
+          const inputs = [...allowedInputsMatch.groups.body.matchAll(/'([^']+)'/gu)].map(
+            ([, input]) => input,
+          );
+          const repositoryPaths = inputs.map((input) =>
+            input.startsWith('../') ? input.slice(3) : `api-server/${input}`,
+          );
+          const missing = repositoryPaths.filter(
+            (input) => !workflowSource.includes(`      - ${input}\n`),
+          );
+          if (missing.length > 0) {
+            console.error('AUTHORITATIVE_PAPER_RUNTIME_TRIGGER_COVERAGE_MISSING');
+            for (const input of missing) console.error(input);
+            process.exit(1);
+          }
+          console.log(`Authoritative Paper runtime trigger coverage: ${repositoryPaths.length}/${repositoryPaths.length}`);
+          NODE
+
       - name: Typecheck API server
         run: pnpm --dir api-server run typecheck
 
