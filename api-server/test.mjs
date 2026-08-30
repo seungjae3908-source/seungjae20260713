@@ -68,6 +68,8 @@ const groups = {
     path.join(root, 'src/services/scanner-candidate-ranking.service.test.ts'),
     path.join(root, 'src/services/stock-signal-scanner-aggregation.test.ts'),
     path.join(root, 'src/services/crypto-signal-scanner.service.test.ts'),
+    path.join(root, 'src/services/crypto-futures-directional-formula.service.test.ts'),
+    path.join(root, 'src/services/crypto-futures-directional-scanner.service.test.ts'),
     path.join(root, 'src/services/scanner-crypto-price-precision.service.test.ts'),
     path.join(root, 'src/services/market-intelligence-client.service.test.ts'),
     path.join(root, 'src/services/scanner-market-intelligence.service.test.ts'),
