@@ -1,0 +1,151 @@
+name: Room A V3 Artifact Receipt Schema Fix
+
+on:
+  push:
+    branches:
+      - 'feat/room-a-v3-scheduled-capture-seam-20260830'
+    paths:
+      - '.github/workflows/room-a-v3-artifact-schema-fix.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: room-a-v3-artifact-schema-fix
+  cancel-in-progress: false
+
+jobs:
+  fix:
+    if: github.ref == 'refs/heads/feat/room-a-v3-scheduled-capture-seam-20260830'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact bounded branch
+        uses: actions/checkout@v4
+        with:
+          ref: feat/room-a-v3-scheduled-capture-seam-20260830
+          fetch-depth: 1
+          persist-credentials: true
+
+      - name: Verify exact triggering head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$GITHUB_REF" = 'refs/heads/feat/room-a-v3-scheduled-capture-seam-20260830'
+
+      - name: Fix artifact receipt schema precedence and add regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          source_path = Path('market-intelligence-sidecar/src/public-forward-liquidity-capture-seam-v3.mjs')
+          source = source_path.read_text()
+          old = """  const body = {\n    schemaVersion: 'public-forward-liquidity-capture-artifact-receipt-v3',\n    ...captureReceipt,\n    artifactId: normalizedArtifactId,\n"""
+          new = """  const body = {\n    ...captureReceipt,\n    schemaVersion: 'public-forward-liquidity-capture-artifact-receipt-v3',\n    artifactId: normalizedArtifactId,\n"""
+          if source.count(old) != 1:
+              raise SystemExit('EXPECTED_ARTIFACT_SCHEMA_SPREAD_PATTERN_NOT_FOUND_EXACTLY_ONCE')
+          source_path.write_text(source.replace(old, new, 1))
+
+          test_path = Path('market-intelligence-sidecar/tests/public-forward-liquidity-capture-seam-v3.test.mjs')
+          text = test_path.read_text()
+          import_old = """  executeCaptureSeam,\n  resolveScheduledAuthority,\n"""
+          import_new = """  executeCaptureSeam,\n  finalizeArtifactReceipt,\n  resolveScheduledAuthority,\n"""
+          if text.count(import_old) != 1:
+              raise SystemExit('EXPECTED_TEST_IMPORT_PATTERN_NOT_FOUND_EXACTLY_ONCE')
+          text = text.replace(import_old, import_new, 1)
+          marker = "test('scheduled artifact receipt retains explicit artifact-v3 schema after capture receipt spread', () => {"
+          if marker not in text:
+              text += """
+
+test('scheduled artifact receipt retains explicit artifact-v3 schema after capture receipt spread', () => {
+  const captureReceipt = Object.freeze({
+    schemaVersion: 'public-forward-liquidity-capture-receipt-v3',
+    triggerSource: SCHEDULED_TRIGGER_SOURCE,
+    captureStatus: 'PRESENT',
+    prospectiveSlotCredit: 1,
+    executionAuthority: 'NONE',
+    privateApiUsed: false,
+    liveTrading: false,
+    orderSubmitted: false,
+  });
+  const receipt = finalizeArtifactReceipt({
+    captureReceipt,
+    artifactId: '123456',
+    artifactDigest: 'b'.repeat(64),
+    artifactName: 'public-forward-liquidity-v3-slot-test',
+  });
+  assert.equal(receipt.schemaVersion, 'public-forward-liquidity-capture-artifact-receipt-v3');
+  assert.equal(receipt.triggerSource, SCHEDULED_TRIGGER_SOURCE);
+  assert.equal(receipt.prospectiveSlotCredit, 1);
+  assert.equal(receipt.executionAuthority, 'NONE');
+  assert.equal(receipt.privateApiUsed, false);
+  assert.equal(receipt.liveTrading, false);
+  assert.equal(receipt.orderSubmitted, false);
+  assert.match(receipt.receiptDigest, /^[a-f0-9]{64}$/u);
+});
+"""
+          test_path.write_text(text)
+          PY
+
+      - name: Rebind immutable activation contract to corrected seam source blob
+        shell: bash
+        run: |
+          set -euo pipefail
+          export NEW_SEAM_SOURCE_BLOB_SHA="$(git hash-object market-intelligence-sidecar/src/public-forward-liquidity-capture-seam-v3.mjs)"
+          node --input-type=module <<'NODE'
+          import { createHash } from 'node:crypto';
+          import { readFile, writeFile } from 'node:fs/promises';
+          const path = 'market-intelligence-sidecar/config/public-forward-liquidity-v3-activation-contract.json';
+          const contract = JSON.parse(await readFile(path, 'utf8'));
+          const canonicalize = (value) => {
+            if (Array.isArray(value)) return value.map(canonicalize);
+            if (value && typeof value === 'object') {
+              return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]));
+            }
+            if (typeof value === 'number' && !Number.isFinite(value)) return null;
+            return value;
+          };
+          const canonicalJson = (value) => JSON.stringify(canonicalize(value));
+          const sha256 = (value) => createHash('sha256').update(String(value)).digest('hex');
+          contract.seamSourceBlobSha = String(process.env.NEW_SEAM_SOURCE_BLOB_SHA).trim().toLowerCase();
+          delete contract.activationContractDigest;
+          contract.activationContractDigest = sha256(canonicalJson(contract));
+          await writeFile(path, `${JSON.stringify(contract, null, 2)}\n`, 'utf8');
+          console.log(JSON.stringify({ seamSourceBlobSha: contract.seamSourceBlobSha, activationContractDigest: contract.activationContractDigest }));
+          NODE
+
+      - name: Validate exact corrected contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-capture-seam-v3.mjs
+          node --check market-intelligence-sidecar/tests/public-forward-liquidity-capture-seam-v3.test.mjs
+          node --test market-intelligence-sidecar/tests/public-forward-liquidity-capture-seam-v3.test.mjs
+          OUTPUT_DIR=/tmp/v3-activation-verify \
+            node market-intelligence-sidecar/scripts/run-public-forward-liquidity-capture-seam-v3.mjs verify-activation
+          node --input-type=module <<'NODE'
+          import { readFile } from 'node:fs/promises';
+          const report = JSON.parse(await readFile('/tmp/v3-activation-verify/activation-contract-verification.json', 'utf8'));
+          if (report.valid !== true || report.blockers.length !== 0) process.exit(1);
+          NODE
+
+      - name: Commit only non-workflow owner files without force
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- \
+            market-intelligence-sidecar/src/public-forward-liquidity-capture-seam-v3.mjs \
+            market-intelligence-sidecar/tests/public-forward-liquidity-capture-seam-v3.test.mjs \
+            market-intelligence-sidecar/config/public-forward-liquidity-v3-activation-contract.json
+          git diff --cached --check
+          if git diff --cached --name-only | grep -q '^\.github/workflows/'; then
+            echo 'Unexpected workflow mutation in schema-fix commit.' >&2
+            exit 1
+          fi
+          git commit -m 'fix(full-cost): preserve V3 artifact receipt schema identity'
+          git push origin HEAD:refs/heads/feat/room-a-v3-scheduled-capture-seam-20260830
