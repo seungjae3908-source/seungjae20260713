@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } 
 import { AlertTriangle, Download, Loader2, RotateCcw, Upload, X } from 'lucide-react';
 import { getFuturesContractRules, getFuturesMarketSnapshot, type FuturesContractRules, type FuturesMarketSnapshot } from '@/lib/futures-market-data';
 import type { RiskEngineInput } from '@/lib/trading-risk';
+import { evidenceNumber } from '@/lib/server-evidence';
 import {
   calculatePaperStatistics,
   clearPaperState,
@@ -21,8 +22,11 @@ import {
 const inputClass = 'h-10 min-w-0 rounded-lg border border-border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring';
 const buttonClass = 'inline-flex min-h-10 items-center justify-center rounded-lg border border-border px-3 text-sm font-semibold disabled:opacity-50';
 const fmt = new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 6 });
-const number = (value: number | null | undefined) => value == null ? '-' : fmt.format(value);
-const money = (value: number) => `${fmt.format(value)} USDT`;
+const number = (value: number | null | undefined) => evidenceNumber(value) ? fmt.format(value) : '-';
+const money = (value: number | null) => evidenceNumber(value) ? `${fmt.format(value)} USDT` : '-';
+const positive = (value: unknown): value is number => evidenceNumber(value) && value > 0;
+const referencePrice = (market: FuturesMarketSnapshot | null, side: 'long' | 'short') =>
+  (side === 'long' ? market?.askPrice : market?.bidPrice) ?? market?.markPrice ?? market?.price ?? null;
 const eventId = (prefix: string) => `${prefix}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
 
 type FormValues = {
@@ -33,7 +37,7 @@ type FormValues = {
   leverage: number;
   requestedPrice: string;
   triggerPrice: string;
-  stopLossPrice: number;
+  stopLossPrice: number | null;
   takeProfitPrice1: string;
   takeProfitPrice2: string;
   targetClosePercent1: number;
@@ -43,8 +47,8 @@ type FormValues = {
 
 const DEFAULT_FORM: FormValues = {
   symbol: 'BTCUSDT', side: 'long', orderType: 'market', quantity: '', leverage: 2,
-  requestedPrice: '99000', triggerPrice: '101000', stopLossPrice: 98000,
-  takeProfitPrice1: '104000', takeProfitPrice2: '108000',
+  requestedPrice: '', triggerPrice: '', stopLossPrice: null,
+  takeProfitPrice1: '', takeProfitPrice2: '',
   targetClosePercent1: 50, targetClosePercent2: 50, riskPercent: 0.5,
 };
 
@@ -87,6 +91,7 @@ export function PaperTradingPanel({
   const [closeQuantities, setCloseQuantities] = useState<Record<string, string>>({});
   const fileRef = useRef<HTMLInputElement>(null);
   const requestSequence = useRef(0);
+  const actionLock = useRef(false);
 
   const openPositions = state.positions.filter((position) => position.status !== 'closed');
   const statistics = useMemo(() => calculatePaperStatistics(state.journal), [state.journal]);
@@ -101,14 +106,14 @@ export function PaperTradingPanel({
       .then(([nextMarket, nextRules]) => {
         if (sequence !== requestSequence.current) return;
         setMarket(nextMarket); setRules(nextRules);
-        const price = nextMarket.markPrice ?? nextMarket.price ?? 100;
+        const price = nextMarket.markPrice ?? nextMarket.price;
         setForm((current) => ({
           ...current,
-          requestedPrice: String(price * 0.99),
-          triggerPrice: String(price * 1.01),
-          stopLossPrice: current.side === 'long' ? price * 0.98 : price * 1.02,
-          takeProfitPrice1: String(current.side === 'long' ? price * 1.04 : price * 0.96),
-          takeProfitPrice2: String(current.side === 'long' ? price * 1.08 : price * 0.92),
+          requestedPrice: positive(price) ? String(price * 0.99) : '',
+          triggerPrice: positive(price) ? String(price * 1.01) : '',
+          stopLossPrice: positive(price) ? current.side === 'long' ? price * 0.98 : price * 1.02 : null,
+          takeProfitPrice1: positive(price) ? String(current.side === 'long' ? price * 1.04 : price * 0.96) : '',
+          takeProfitPrice2: positive(price) ? String(current.side === 'long' ? price * 1.08 : price * 0.92) : '',
         }));
       })
       .catch((cause) => { if (sequence === requestSequence.current) setError(cause instanceof Error ? cause.message : '시장 데이터를 불러오지 못했습니다.'); });
@@ -117,39 +122,42 @@ export function PaperTradingPanel({
   const update = <K extends keyof FormValues,>(key: K, value: FormValues[K]) => setForm((current) => ({ ...current, [key]: value }));
 
   const changeSide = (side: FormValues['side']) => {
-    const price = market?.markPrice ?? market?.price ?? 100;
+    const price = market?.markPrice ?? market?.price;
     setForm((current) => ({
       ...current,
       side,
-      stopLossPrice: side === 'long' ? price * 0.98 : price * 1.02,
-      takeProfitPrice1: String(side === 'long' ? price * 1.04 : price * 0.96),
-      takeProfitPrice2: String(side === 'long' ? price * 1.08 : price * 0.92),
+      stopLossPrice: positive(price) ? side === 'long' ? price * 0.98 : price * 1.02 : null,
+      takeProfitPrice1: positive(price) ? String(side === 'long' ? price * 1.04 : price * 0.96) : '',
+      takeProfitPrice2: positive(price) ? String(side === 'long' ? price * 1.08 : price * 0.92) : '',
     }));
   };
 
   const estimatedRiskReward = useMemo(() => {
-    const entry = market?.askPrice ?? market?.bidPrice ?? market?.markPrice ?? market?.price ?? null;
+    const entry = referencePrice(market, form.side);
     const target = form.takeProfitPrice1 === '' ? null : Number(form.takeProfitPrice1);
-    if (entry == null || target == null || !Number.isFinite(target)) return null;
-    const risk = Math.abs(entry - form.stopLossPrice);
-    const reward = Math.abs(target - entry);
-    return risk > 0 && Number.isFinite(reward) ? reward / risk : null;
-  }, [form.stopLossPrice, form.takeProfitPrice1, market]);
+    if (!positive(entry) || !positive(target) || !positive(form.stopLossPrice)) return null;
+    const risk = form.side === 'long' ? entry - form.stopLossPrice : form.stopLossPrice - entry;
+    const reward = form.side === 'long' ? target - entry : entry - target;
+    return risk > 0 && reward > 0 && Number.isFinite(reward / risk) ? reward / risk : null;
+  }, [form.side, form.stopLossPrice, form.takeProfitPrice1, market]);
 
   const localBlocks = useMemo(() => {
     const blocks: string[] = [];
-    const price = market?.askPrice ?? market?.bidPrice ?? market?.markPrice ?? market?.price ?? null;
+    const price = referencePrice(market, form.side);
     if (!market || market.status !== 'live') blocks.push('시장 데이터가 live가 아닙니다.');
     if (!rules || rules.status !== 'live') blocks.push('계약 규칙이 live가 아닙니다.');
-    if (price == null) blocks.push('진입 기준가격이 없습니다.');
-    if (form.side === 'long' && price != null && form.stopLossPrice >= price) blocks.push('롱 손절가는 진입가보다 낮아야 합니다.');
-    if (form.side === 'short' && price != null && form.stopLossPrice <= price) blocks.push('숏 손절가는 진입가보다 높아야 합니다.');
+    if (!positive(price)) blocks.push('유효한 진입 기준가격이 없습니다.');
+    if (!evidenceNumber(market?.fundingRate)) blocks.push('펀딩비 근거가 없어 모의주문을 차단합니다.');
+    if (!positive(form.stopLossPrice)) blocks.push('유효한 손절가를 입력하세요.');
+    if (form.side === 'long' && positive(price) && positive(form.stopLossPrice) && form.stopLossPrice >= price) blocks.push('롱 손절가는 진입가보다 낮아야 합니다.');
+    if (form.side === 'short' && positive(price) && positive(form.stopLossPrice) && form.stopLossPrice <= price) blocks.push('숏 손절가는 진입가보다 높아야 합니다.');
     if (form.targetClosePercent1 + form.targetClosePercent2 > 100) blocks.push('부분익절 비율 합계는 100% 이하여야 합니다.');
     return blocks;
   }, [form, market, rules]);
 
   async function runAction(action: PaperTradingAction) {
-    if (busy) return;
+    if (actionLock.current) return;
+    actionLock.current = true;
     setBusy(true); setError(''); setNotice('');
     try {
       const result = await execute(state, action);
@@ -157,12 +165,15 @@ export function PaperTradingPanel({
       setNotice(result.duplicateEvent ? '중복 이벤트를 무시했습니다.' : result.warnings.join(' '));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '모의거래 작업을 처리하지 못했습니다.');
-    } finally { setBusy(false); }
+    } finally { actionLock.current = false; setBusy(false); }
   }
 
   function buildPlaceAction(): PaperTradingAction {
     if (!market || !rules) throw new Error('시장 데이터와 계약 규칙을 확인하세요.');
-    const reference = market.askPrice ?? market.bidPrice ?? market.markPrice ?? market.price ?? 0;
+    const reference = referencePrice(market, form.side);
+    if (localBlocks.length || !positive(reference) || !positive(form.stopLossPrice) || !evidenceNumber(market.fundingRate)) {
+      throw new Error(localBlocks.join(' ') || '모의주문 근거를 확인하지 못했습니다.');
+    }
     const request: PaperOrderRequest = {
       symbol: form.symbol.trim().toUpperCase(), side: form.side, orderType: form.orderType,
       quantity: form.quantity === '' ? null : Number(form.quantity), leverage: form.leverage,
@@ -179,7 +190,7 @@ export function PaperTradingPanel({
       entryPrice: reference, stopLossPrice: request.stopLossPrice, targetPrice1: request.takeProfitPrice1,
       targetPrice2: request.takeProfitPrice2, leverage: request.leverage, riskPercent: form.riskPercent,
       entryFeeRate: 0.0006, exitFeeRate: 0.0006, slippageRate: 0.0005,
-      estimatedFundingRate: market.fundingRate ?? 0, quantityStep: rules.quantityStep,
+      estimatedFundingRate: market.fundingRate, quantityStep: rules.quantityStep,
       quantityPrecision: rules.quantityPrecision, minimumQuantity: rules.minimumQuantity,
       minimumNotional: rules.minimumNotional, maintenanceMarginRate: rules.maintenanceMarginRate,
       maximumLeverage: rules.maximumLeverage, contractRulesStatus: rules.status,
@@ -193,7 +204,11 @@ export function PaperTradingPanel({
   }
 
   function submit(event: FormEvent) { event.preventDefault(); setConfirming(true); }
-  async function confirmOrder() { setConfirming(false); await runAction(buildPlaceAction()); }
+  async function confirmOrder() {
+    setConfirming(false);
+    try { await runAction(buildPlaceAction()); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : '모의주문 근거를 확인하지 못했습니다.'); }
+  }
 
   async function refreshMarket() {
     const sequence = ++requestSequence.current;
@@ -203,7 +218,7 @@ export function PaperTradingPanel({
       if (sequence !== requestSequence.current) return;
       setMarket(next);
       const price = next.markPrice ?? next.price;
-      if (price != null) await runAction({ type: 'mark_price', eventId: eventId('mark'), symbol: form.symbol, price, at: next.updatedAt });
+      if (next.status === 'live' && positive(price)) await runAction({ type: 'mark_price', eventId: eventId('mark'), symbol: form.symbol, price, at: next.updatedAt });
     } catch (cause) { setError(cause instanceof Error ? cause.message : '시장 데이터를 갱신하지 못했습니다.'); }
   }
 
@@ -251,6 +266,7 @@ export function PaperTradingPanel({
 
       <form onSubmit={submit} className="rounded-2xl border border-border bg-card p-4" data-testid="paper-order-form">
         <h2 className="mb-3 font-bold">모의주문</h2>
+        <p className="mb-3 text-xs text-muted-foreground">가격 입력의 초기값은 수동 실험용 비율 예시입니다. 진입·청산 수수료 각 0.06%, 슬리피지 0.05%는 시뮬레이션 가정이며 실제 비용 검증(FULL_COST_READY)이 아닙니다. 펀딩비는 시장 응답 근거가 필요합니다.</p>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <Field label="종목"><input className={inputClass} value={form.symbol} onChange={(e) => update('symbol', e.target.value.toUpperCase())} /></Field>
           <Field label="롱·숏"><select className={inputClass} value={form.side} onChange={(e) => changeSide(e.target.value as FormValues['side'])}><option value="long">롱</option><option value="short">숏</option></select></Field>
@@ -259,14 +275,14 @@ export function PaperTradingPanel({
           <Field label="레버리지"><input className={inputClass} type="number" min="1" max="10" value={form.leverage} onChange={(e) => update('leverage', Number(e.target.value))} /></Field>
           {form.orderType === 'limit' ? <Field label="지정가"><input className={inputClass} type="number" min="0" step="any" value={form.requestedPrice} onChange={(e) => update('requestedPrice', e.target.value)} /></Field> : null}
           {form.orderType === 'stop_market' ? <Field label="트리거 가격"><input className={inputClass} type="number" min="0" step="any" value={form.triggerPrice} onChange={(e) => update('triggerPrice', e.target.value)} /></Field> : null}
-          <Field label="손절가"><input className={inputClass} type="number" min="0" step="any" value={form.stopLossPrice} onChange={(e) => update('stopLossPrice', Number(e.target.value))} /></Field>
+          <Field label="손절가"><input className={inputClass} type="number" min="0" step="any" value={form.stopLossPrice ?? ''} onChange={(e) => update('stopLossPrice', e.target.value === '' ? null : Number(e.target.value))} /></Field>
           <Field label="목표가 1"><input className={inputClass} type="number" min="0" step="any" value={form.takeProfitPrice1} onChange={(e) => update('takeProfitPrice1', e.target.value)} /></Field>
           <Field label="목표가 2"><input className={inputClass} type="number" min="0" step="any" value={form.takeProfitPrice2} onChange={(e) => update('takeProfitPrice2', e.target.value)} /></Field>
           <Field label="목표 1 비율"><input className={inputClass} type="number" min="0" max="100" value={form.targetClosePercent1} onChange={(e) => update('targetClosePercent1', Number(e.target.value))} /></Field>
           <Field label="목표 2 비율"><input className={inputClass} type="number" min="0" max="100" value={form.targetClosePercent2} onChange={(e) => update('targetClosePercent2', Number(e.target.value))} /></Field>
           <Field label="거래당 위험률 %"><input className={inputClass} type="number" min="0.01" max="1" step="0.01" value={form.riskPercent} onChange={(e) => update('riskPercent', Number(e.target.value))} /></Field>
         </div>
-        <div className="mt-3 rounded-xl border border-border bg-muted/50 p-3 text-xs"><div>시장 상태: <b>{market?.status ?? '불러오는 중'}</b> / 계약 규칙: <b>{rules?.status ?? '불러오는 중'}</b></div><div className="mt-1">현재가 {number(market?.price)} · bid {number(market?.bidPrice)} · ask {number(market?.askPrice)} · 예상 최대손실 {money(state.account.equity * form.riskPercent / 100)} · 예상 손익비 {number(estimatedRiskReward)}</div>{localBlocks.map((block) => <div className="mt-1 text-destructive" key={block}>• {block}</div>)}</div>
+        <div className="mt-3 rounded-xl border border-border bg-muted/50 p-3 text-xs"><div>시장 상태: <b>{market?.status === 'live' ? '응답 수신 · 실시간 여부 미확인' : market?.status ?? '불러오는 중'}</b> / 계약 규칙: <b>{rules?.status ?? '불러오는 중'}</b></div><div className="mt-1">현재가 {number(market?.price)} · bid {number(market?.bidPrice)} · ask {number(market?.askPrice)} · 예상 최대손실 {money(state.account.equity * form.riskPercent / 100)} · 예상 손익비 {number(estimatedRiskReward)}</div>{localBlocks.map((block) => <div className="mt-1 text-destructive" key={block}>• {block}</div>)}</div>
         <button data-testid="paper-submit" className="mt-3 min-h-11 w-full rounded-xl bg-primary px-4 font-bold text-primary-foreground disabled:opacity-50" disabled={busy || localBlocks.length > 0}>{busy ? <Loader2 className="mr-2 inline h-4 w-4 animate-spin" /> : null}모의주문</button>
       </form>
 
@@ -274,7 +290,7 @@ export function PaperTradingPanel({
 
       <section className="rounded-2xl border border-border bg-card p-4" data-testid="paper-orders"><h2 className="mb-3 font-bold">주문 목록</h2><div className="space-y-2">{state.orders.length === 0 ? <p className="text-sm text-muted-foreground">모의주문이 없습니다.</p> : [...state.orders].reverse().map((order) => <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border p-3 text-xs" key={order.id}><span>{order.symbol} · {order.side} · {order.orderType} · <b>{order.status}</b></span>{order.status === 'pending' ? <button type="button" className={buttonClass} disabled={busy} onClick={() => void runAction({ type: 'cancel_order', eventId: eventId('cancel'), orderId: order.id })}>취소</button> : null}{order.rejectionCodes.length ? <span className="w-full text-destructive">{order.rejectionCodes.join(', ')}</span> : null}</div>)}</div></section>
 
-      <section className="rounded-2xl border border-border bg-card p-4" data-testid="paper-journal"><div className="mb-3 flex flex-wrap items-center justify-between gap-2"><h2 className="font-bold">거래일지</h2><select className={inputClass} value={journalFilter} onChange={(e) => setJournalFilter(e.target.value)}><option value="all">전체</option><option value="long">롱</option><option value="short">숏</option><option value="BTCUSDT">BTCUSDT</option></select></div><div className="grid grid-cols-2 gap-2 sm:grid-cols-4"><Metric label="총 거래" value={String(statistics.totalTrades)} /><Metric label="승률" value={`${number(statistics.winRate)}%`} /><Metric label="누적 순손익" value={money(statistics.cumulativeNetPnl)} /><Metric label="Profit Factor" value={number(statistics.profitFactor)} /><Metric label="총 수수료" value={money(statistics.totalFees)} /><Metric label="총 슬리피지" value={money(statistics.totalSlippage)} /><Metric label="총 펀딩비" value={money(statistics.totalFunding)} /><Metric label="최대 연속 손실" value={String(statistics.maximumConsecutiveLosses)} /></div><div className="mt-3 space-y-2">{filteredJournal.length === 0 ? <p className="text-sm text-muted-foreground">종료된 거래일지가 없습니다.</p> : [...filteredJournal].reverse().map((entry) => <article className="rounded-xl border border-border p-3 text-xs" key={entry.id}><div className="flex flex-wrap justify-between gap-2"><b>{entry.symbol} {entry.side}</b><span>{entry.status} · {entry.exitReason}</span></div><div className="mt-2">진입 {number(entry.entryPrice)} · 종료 {number(entry.exitPrice)} · 순손익 {money(entry.netPnl)} · R {number(entry.rMultiple)}</div><textarea aria-label={`${entry.symbol} 거래 메모`} className="mt-2 min-h-20 w-full rounded-lg border border-border bg-background p-2" value={entry.note} onChange={(e) => updateNote(entry.id, e.target.value)} placeholder="복기 메모 (일반 텍스트)" /></article>)}</div></section>
+      <section className="rounded-2xl border border-border bg-card p-4" data-testid="paper-journal"><div className="mb-3 flex flex-wrap items-center justify-between gap-2"><h2 className="font-bold">거래일지</h2><select className={inputClass} value={journalFilter} onChange={(e) => setJournalFilter(e.target.value)}><option value="all">전체</option><option value="long">롱</option><option value="short">숏</option><option value="BTCUSDT">BTCUSDT</option></select></div><div className="grid grid-cols-2 gap-2 sm:grid-cols-4"><Metric label="총 거래" value={String(statistics.totalTrades)} /><Metric label="승률" value={statistics.winRate === null ? '검증 근거 부족' : `${number(statistics.winRate)}%`} /><Metric label="누적 순손익" value={money(statistics.cumulativeNetPnl)} /><Metric label="Profit Factor" value={number(statistics.profitFactor)} /><Metric label="총 수수료" value={money(statistics.totalFees)} /><Metric label="총 슬리피지" value={money(statistics.totalSlippage)} /><Metric label="총 펀딩비" value={money(statistics.totalFunding)} /><Metric label="최대 연속 손실" value={number(statistics.maximumConsecutiveLosses)} /></div><div className="mt-3 space-y-2">{filteredJournal.length === 0 ? <p className="text-sm text-muted-foreground">종료된 거래일지가 없습니다.</p> : [...filteredJournal].reverse().map((entry) => <article className="rounded-xl border border-border p-3 text-xs" key={entry.id}><div className="flex flex-wrap justify-between gap-2"><b>{entry.symbol} {entry.side}</b><span>{entry.status} · {entry.exitReason}</span></div><div className="mt-2">진입 {number(entry.entryPrice)} · 종료 {number(entry.exitPrice)} · 순손익 {money(entry.netPnl)} · R {number(entry.rMultiple)}</div><textarea aria-label={`${entry.symbol} 거래 메모`} className="mt-2 min-h-20 w-full rounded-lg border border-border bg-background p-2" value={entry.note} onChange={(e) => updateNote(entry.id, e.target.value)} placeholder="복기 메모 (일반 텍스트)" /></article>)}</div></section>
 
       <section className="rounded-2xl border border-border bg-card p-4"><h2 className="mb-3 font-bold">로컬 기록 관리</h2><div className="grid grid-cols-2 gap-2 sm:grid-cols-3"><button type="button" className={buttonClass} onClick={downloadJson}><Download className="mr-2 h-4 w-4" />JSON 내보내기</button><button type="button" className={buttonClass} onClick={() => fileRef.current?.click()}><Upload className="mr-2 h-4 w-4" />JSON 가져오기</button><button type="button" className={buttonClass} onClick={() => setResetStep(true)}><RotateCcw className="mr-2 h-4 w-4" />전체 초기화</button></div><input ref={fileRef} className="hidden" type="file" accept="application/json,.json" onChange={(e) => { const file = e.target.files?.[0]; if (file) void importJson(file); e.currentTarget.value = ''; }} /></section>
     </div>
