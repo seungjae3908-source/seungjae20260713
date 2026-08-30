@@ -434,3 +434,24 @@ test('invalid, duplicated, unsupported, and incomplete route inputs fail closed 
   }
   await assertCleanRuntime(runtime);
 });
+
+test('deferred intelligence reports loading while keeping the chart available', async ({ page, context }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockChartApis(context);
+  let releaseModule!: () => void;
+  const pendingModule = new Promise<void>((resolve) => { releaseModule = resolve; });
+  await context.route('**/src/components/ai-chart-v2-intelligence-panel.tsx*', async (route) => {
+    await pendingModule;
+    await route.continue();
+  });
+  try {
+    await page.goto(initialUrl);
+    await expect(page.getByRole('heading', { name: 'AI 차트 생중계', level: 1 })).toBeVisible();
+    await expect(page.getByRole('status', { name: 'AI 분석 근거 불러오는 중' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '15분', exact: true })).toBeEnabled();
+  } finally {
+    releaseModule();
+  }
+  await expect(page.getByRole('heading', { name: '분석 모드', exact: true })).toBeVisible();
+  await expect(page.getByRole('status', { name: 'AI 분석 근거 불러오는 중' })).toHaveCount(0);
+});

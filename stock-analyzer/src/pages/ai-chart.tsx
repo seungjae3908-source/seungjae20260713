@@ -708,7 +708,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   );
 
   const intelligencePanel = (
-    <Suspense fallback={null}>
+    <Suspense fallback={<p role="status" aria-label="AI 분석 근거 불러오는 중" className="rounded-2xl border border-card-border bg-card p-4 text-sm text-muted-foreground">AI 분석 근거를 불러오는 중입니다. 차트는 계속 사용할 수 있습니다.</p>}>
       <LazyAiChartV2IntelligencePanel
         selection={selection}
         analysis={analysis}
@@ -721,7 +721,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   const details = (
     <div className="space-y-4">
       {intelligencePanel}
-      <Suspense fallback={null}>
+      <Suspense fallback={<p role="status" aria-label="공개 시장 근거 불러오는 중" className="rounded-2xl border border-card-border bg-card p-4 text-sm text-muted-foreground">공개 시장 근거를 불러오는 중입니다.</p>}>
         <LazyFuturesPublicContextPanel selection={selection} />
       </Suspense>
       <ContextCard selection={selection} analysis={analysis} />
