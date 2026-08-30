@@ -4,6 +4,7 @@ export const PAPER_STORAGE_SCHEMA_VERSION = 1;
 export const PAPER_STORAGE_LIMITS = Object.freeze({ orders: 500, positions: 200, fills: 1_000, journal: 500, events: 500 });
 
 import type { PaperTradingState } from './paper-trading';
+import { validPaperState } from '../../../packages/api-zod/src/paper-state-evidence.js';
 
 export type StorageLike = Pick<Storage, 'getItem'|'setItem'|'removeItem'>;
 export type PaperStorageEnvelope = { schemaVersion: 1; savedAt: string; state: PaperTradingState };
@@ -35,11 +36,7 @@ export function createLocalPaperState(initialBalance = 10_000, now = new Date())
 }
 
 export function validatePaperState(value: unknown): value is PaperTradingState {
-  if (!value || typeof value !== 'object' || containsSecretKey(value)) return false;
-  const state = value as Partial<PaperTradingState>;
-  if (state.schemaVersion !== 1 || !state.account || !Array.isArray(state.orders) || !Array.isArray(state.positions) || !Array.isArray(state.fills) || !Array.isArray(state.journal) || !Array.isArray(state.processedEventIds)) return false;
-  const numbers = [state.account.initialBalance, state.account.cashBalance, state.account.realizedPnl, state.account.unrealizedPnl, state.account.equity, state.account.usedMargin, state.account.availableMargin];
-  return numbers.every(finite) && (state.account.initialBalance ?? 0) > 0;
+  return validPaperState(value, Date.now());
 }
 
 function safeJournalEntry(entry: PaperTradingState['journal'][number]) {

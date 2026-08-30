@@ -15,6 +15,7 @@ import {
   type PaperTradingState,
 } from './paper-trading-engine.service.js';
 import type { RiskEngineInput } from './trading-risk-engine.service.js';
+import { validPaperActionResult, validPaperState } from '../../../packages/api-zod/src/paper-state-evidence.js';
 
 const NOW = new Date('2026-08-02T02:30:00.000Z');
 const NOW_ISO = NOW.toISOString();
@@ -138,7 +139,7 @@ function process(state: PaperTradingState, candle: Partial<{timestamp:number;ope
       isClosed: true,
       ...candle,
     },
-  }, NOW);
+  }, new Date(candle.timestamp ?? NOW.getTime() + 15 * 60_000));
 }
 
 test('creates a versioned paper account', () => {
@@ -577,6 +578,54 @@ test('finite mark inputs whose position arithmetic overflows cannot become a zer
   assert.deepEqual(opened.state, before, 'a rejected calculation must not corrupt the source ledger');
 });
 
+test('future candle and future mark timestamp cannot produce a published paper state', () => {
+  const opened = place();
+  assert.throws(() => applyPaperTradingAction(opened.state, { type: 'process_candle', eventId: 'future-candle',
+    candle: { symbol: 'BTCUSDT', timestamp: NOW.getTime() + 1, open: 100, high: 101, low: 99, close: 100, isClosed: true } }, NOW),
+    (error: Error & { code?: string }) => error.code === 'CANDLE_FROM_FUTURE');
+  assert.throws(() => applyPaperTradingAction(opened.state, { type: 'mark_price', eventId: 'future-mark', symbol: 'BTCUSDT',
+    price: 101, at: new Date(NOW.getTime() + 1).toISOString() }, NOW),
+    (error: Error & { code?: string }) => error.code === 'INVALID_PAPER_STATE');
+});
+
+test('shared API and storage guards reject malformed financial rows, duplicate IDs and source clocks', () => {
+  const opened = place();
+  const state = opened.state;
+  assert.equal(validPaperState(state, NOW.getTime()), true);
+  for (const invalid of [
+    { ...state, riskState: null }, { ...state, riskState: { ...state.riskState, consecutiveLosses: '0' } },
+    { ...state, account: { ...state.account, usedMargin: -1 } }, { ...state, processedEventIds: ['duplicate', 'duplicate'] },
+    { ...state, orders: [null] }, { ...state, positions: [{}] }, { ...state, fills: [null] }, { ...state, journal: [{}] },
+    { ...state, orders: [state.orders[0], state.orders[0]] }, { ...state, positions: [state.positions[0], state.positions[0]] },
+    { ...state, positions: [{ ...state.positions[0], currentPrice: '100' }] },
+    { ...state, positions: [{ ...state.positions[0], remainingQuantity: -1 }] },
+    { ...state, positions: [{ ...state.positions[0], totalFees: null }] },
+    { ...state, orders: [{ ...state.orders[0], side: 'longish' }] },
+    { ...state, orders: [{ ...state.orders[0], orderSubmitted: true }] },
+    { ...state, fills: [{ ...state.fills[0], quantity: false }] },
+    { ...state, fills: [{ ...state.fills[0], fundingCost: undefined }] },
+    { ...state, updatedAt: '2026-02-30T00:00:00Z' },
+    { ...state, account: { ...state.account, createdAt: '2099-01-01T00:00:00Z' } },
+  ]) {
+    assert.equal(validPaperState(invalid, NOW.getTime()), false);
+  }
+});
+
+test('paper action result binds account, event, prior records and returned financial facts', () => {
+  const previous = createPaperTradingState(10_000, NOW);
+  const opened = place(previous);
+  assert.equal(validPaperActionResult(opened, previous, 'place-1', NOW.getTime()), true);
+  for (const invalid of [null, {}, { ...opened, ok: false }, { ...opened, warnings: [1] }, { ...opened, duplicateEvent: true },
+    { ...opened, state: { ...opened.state, account: { ...opened.state.account, id: 'different-account' } } },
+    { ...opened, state: { ...opened.state, processedEventIds: [] } },
+    { ...opened, position: { ...opened.position, entryPrice: 99999 } }, { ...opened, fills: [{ ...opened.fills[0], netPnl: 99999 }] }]) {
+    assert.equal(validPaperActionResult(invalid, previous, 'place-1', NOW.getTime()), false);
+  }
+  const closed = close(opened.state);
+  assert.equal(validPaperActionResult(closed, opened.state, 'close-100', NOW.getTime()), true);
+  assert.equal(validPaperActionResult({ ...closed, state: { ...closed.state, orders: [] } }, opened.state, 'close-100', NOW.getTime()), false);
+});
+
 test('manual close requires live data', () => {
   const opened = place();
   assert.throws(() => applyPaperTradingAction(opened.state, { type: 'close_position', eventId: 'bad-close-data', positionId: opened.position!.id, percentage: 100, market: market({status:'delayed'}) }, NOW), /실시간 시장 데이터/);
@@ -593,7 +642,9 @@ test('order response always carries paper-only safety contract', () => {
 test('processed event list is capped', () => {
   let state = createPaperTradingState(10_000, NOW);
   for (let index = 0; index < 520; index += 1) {
-    state = applyPaperTradingAction(state, { type: 'mark_price', eventId: `mark-${index}`, symbol: 'NONE', price: 1 }, NOW).state;
+    const result = applyPaperTradingAction(state, { type: 'mark_price', eventId: `mark-${index}`, symbol: 'NONE', price: 1 }, NOW);
+    assert.equal(validPaperActionResult(result, state, `mark-${index}`, NOW.getTime()), true);
+    state = result.state;
   }
   assert.equal(state.processedEventIds.length, 500);
 });

@@ -122,6 +122,22 @@ test('two-step reset clears restored state', async ({ page }) => {
   await expect(page.getByTestId('paper-orders').getByText('모의주문이 없습니다.')).toBeVisible();
 });
 
+for (const mode of ['invalid-number', 'wrong-account']) {
+  test(`invalid paper result ${mode} never replaces the persisted ledger`, async ({ page }) => {
+    const errors = await openAt(page, 320, 740, `/__phase6-paper-trading-e2e?mode=${mode}`);
+    const original = await page.evaluate(() => localStorage.getItem('seungjae.paper-trading.v1'));
+    await page.getByTestId('paper-submit').click();
+    await page.getByTestId('confirm-paper-order').click();
+    await expect(page.getByRole('alert')).toContainText('기록·식별자·수치 근거를 확인하지 못했습니다.');
+    await expect(page.getByTestId('paper-orders').getByText('모의주문이 없습니다.')).toBeVisible();
+    expect(await page.evaluate(() => localStorage.getItem('seungjae.paper-trading.v1'))).toEqual(original);
+    await page.reload();
+    await expect(page.getByTestId('paper-orders').getByText('모의주문이 없습니다.')).toBeVisible();
+    expect(errors).toEqual([]);
+    await assertNoHorizontalOverflow(page);
+  });
+}
+
 test('pending paper calculation serializes reset and import without resurrecting a cleared ledger', async ({ page }) => {
   const errors = await openAt(page, 390, 844, '/__phase6-paper-trading-e2e?mode=deferred');
   await page.getByTestId('paper-submit').tap();

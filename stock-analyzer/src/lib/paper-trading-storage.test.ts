@@ -54,6 +54,21 @@ test('state validation rejects secret-looking keys', () => {
   const state = { ...createLocalPaperState(10_000, NOW), apiKey: 'forbidden' };
   assert.equal(validatePaperState(state), false);
 });
+
+test('browser storage guard rejects malformed rows and future evidence before import or save', () => {
+  const state = createLocalPaperState(10_000, NOW);
+  for (const invalid of [
+    { ...state, orders: [{ id: 'missing-financial-record' }] },
+    { ...state, positions: [null] },
+    { ...state, journal: [{ id: 'missing-journal' }] },
+    { ...state, account: { ...state.account, equity: '10000' } },
+    { ...state, updatedAt: '2099-01-01T00:00:00.000Z' },
+    { ...state, processedEventIds: ['same', 'same'] },
+  ]) {
+    assert.equal(validatePaperState(invalid), false);
+    assert.throws(() => importPaperState(JSON.stringify({ schemaVersion: 1, state: invalid })), /올바른/);
+  }
+});
 test('repair caps order count', () => {
   const state = createLocalPaperState(10_000, NOW); state.orders = Array.from({ length: 510 }, (_, index) => ({ id: String(index) } as any));
   assert.equal(repairPaperState(state).orders.length, 500);

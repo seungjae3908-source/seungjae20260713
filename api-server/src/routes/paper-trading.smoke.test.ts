@@ -95,6 +95,23 @@ test('paper evaluate rejects invalid timestamp', async () => {
   } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
 });
 
+test('paper HTTP rejects corrupt stored rows with 400 before publishing instead of empty success or 500', async () => {
+  let published = false;
+  const { server, baseUrl } = await startServer({ publishState: async () => { published = true; throw new Error('unexpected'); } });
+  try {
+    const state = createPaperTradingState(10_000, NOW);
+    for (const invalid of [{ ...state, orders: [{}] }, { ...state, positions: [null] }, { ...state, fills: [{ id: 'missing-facts' }] },
+      { ...state, riskState: { ...state.riskState, consecutiveLosses: null } }, { ...state, processedEventIds: ['x', 'x'] }]) {
+      const response = await fetch(`${baseUrl}/api/paper-trading/evaluate`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ state: invalid, action }),
+      });
+      assert.equal(response.status, 400);
+      assert.equal((await safeJson(response)).code, 'INVALID_PAPER_STATE');
+    }
+    assert.equal(published, false);
+  } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
+});
+
 test('paper client future clock is rejected before evaluation or immutable publishing', async () => {
   let evaluated = false;
   let published = false;

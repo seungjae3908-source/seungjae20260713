@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { paperJournalFixture } from './paper-journal-test-fixture';
 import {
   PAPER_ARCHIVE_KEY,
   PAPER_STORAGE_KEY,
@@ -31,12 +32,7 @@ class MemoryStorage implements StorageLike {
 
 function stateWithJournal(count: number) {
   const state = createLocalPaperState(10_000, NOW);
-  state.journal = Array.from({ length: count }, (_, index) => ({
-    id: `journal-${index}`,
-    orderId: `order-${index}`,
-    note: `note-${index}`,
-    status: 'closed',
-  } as never));
+  state.journal = Array.from({ length: count }, (_, index) => paperJournalFixture(`journal-${index}`, NOW.toISOString(), { note: `note-${index}` }));
   return state;
 }
 
