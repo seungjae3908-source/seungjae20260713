@@ -30,9 +30,10 @@ function validReceipt(bundle: Record<string, unknown>): boolean {
 }
 export function readResearchBacktest(dsl: unknown, bundle: ResearchBundleResolution, signal?: AbortSignal): Promise<ResearchBundleResolution> {
   return request('/read-backtest', { method: 'POST', signal, headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ dsl, bundleDigest: bundle.bundleDigest, strategyIdentityDigest: bundle.strategyIdentityDigest }) },
+    body: JSON.stringify({ dsl, bundleDigest: bundle.bundleDigest, strategyIdentityDigest: bundle.strategyIdentityDigest, resultArtifactDigest: bundle.resultArtifactDigest }) },
   value => validBundle(value) && (record(value).publicationStatus !== 'READBACK_VERIFIED' ||
-    record(value).bundleDigest === bundle.bundleDigest && record(value).strategyIdentityDigest === bundle.strategyIdentityDigest && record(value).dslDigest === bundle.dslDigest));
+    record(value).bundleDigest === bundle.bundleDigest && record(value).strategyIdentityDigest === bundle.strategyIdentityDigest && record(value).dslDigest === bundle.dslDigest &&
+    (bundle.resultArtifactDigest === null || record(value).resultArtifactDigest === bundle.resultArtifactDigest)));
 }
 export function submitResearchBacktest(dsl: unknown, bundle: ResearchBundleResolution, signal?: AbortSignal): Promise<ResearchBundleResolution> {
   return request('/submit-backtest', { method: 'POST', signal, headers: { 'Content-Type': 'application/json' },

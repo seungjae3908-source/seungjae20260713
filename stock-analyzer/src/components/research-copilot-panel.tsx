@@ -23,10 +23,11 @@ export function ResearchCopilotPanel() {
   const [busy, setBusy] = useState(false);
   const pending = useRef<AbortController | null>(null);
   const sequence = useRef(0);
+  const artifactPin = useRef<string | null>(null);
   // React Query retains cached data on refetch failure. It must not look like current evidence.
   const data = snapshot.isError ? undefined : snapshot.data;
   useEffect(() => () => { sequence.current += 1; pending.current?.abort(); }, []);
-  useEffect(() => { sequence.current += 1; pending.current?.abort(); setReview(null); setValidation(null); setBusy(false); }, [profile?.id]);
+  useEffect(() => { sequence.current += 1; pending.current?.abort(); artifactPin.current = null; setReview(null); setValidation(null); setBusy(false); }, [profile?.id]);
   const visibleReview = !snapshot.isError && review?.evidenceDigest === data?.evidenceDigest && data?.freshness === 'FRESH' ? review : null;
 
   async function run(operation: (signal: AbortSignal) => Promise<void>) {
@@ -51,6 +52,7 @@ export function ResearchCopilotPanel() {
     });
   }
   function validate() {
+    artifactPin.current = null;
     setValidation(null);
     void run(async signal => {
       if (dsl.length > 32_000) throw new Error('DSL은 32,000자 이내여야 합니다.');
@@ -65,15 +67,18 @@ export function ResearchCopilotPanel() {
     if (!bundle?.backtestExecutable || busy) return;
     void run(async signal => {
       const result = await submitResearchBacktest(JSON.parse(dsl), bundle, signal);
-      if (!signal.aborted) setValidation(previous => previous ? { ...previous, bundle: result } : null);
+      if (!signal.aborted) { artifactPin.current = result.resultArtifactDigest; setValidation(previous => previous ? { ...previous, bundle: result } : null); }
     });
   }
   function readBacktest() {
     const bundle = validation?.bundle;
     if (!bundle?.researchBundleReady || busy) return;
     void run(async signal => {
-      const result = await readResearchBacktest(JSON.parse(dsl), bundle, signal);
-      if (!signal.aborted) setValidation(previous => previous ? { ...previous, bundle: result } : null);
+      const result = await readResearchBacktest(JSON.parse(dsl), { ...bundle, resultArtifactDigest: artifactPin.current ?? bundle.resultArtifactDigest }, signal);
+      if (!signal.aborted) {
+        if (result.publicationStatus === 'READBACK_VERIFIED') artifactPin.current = result.resultArtifactDigest;
+        setValidation(previous => previous ? { ...previous, bundle: result } : null);
+      }
     });
   }
   return <main className="h-full overflow-y-auto bg-background pb-28" data-testid="research-copilot">
@@ -119,7 +124,7 @@ export function ResearchCopilotPanel() {
           <h2 className="font-bold">canonical DSL / Formula 검증</h2>
           <p className="mt-2 text-sm text-muted-foreground">기존 createSafeStrategyDslV1 검증기를 사용합니다. DSL 통과는 백테스트·수익성 통과가 아닙니다. AI가 만든 가설을 실행 코드로 변환하지 않습니다.</p>
           <label htmlFor="research-dsl" className="mt-4 block text-sm font-bold">연구 DSL JSON</label>
-          <textarea id="research-dsl" value={dsl} disabled={busy} maxLength={32_001} onChange={event => { setDsl(event.target.value); setValidation(null); }} rows={6} className="mt-2 w-full rounded-xl border border-border bg-background p-3 font-mono text-xs" spellCheck={false} />
+          <textarea id="research-dsl" value={dsl} disabled={busy} maxLength={32_001} onChange={event => { artifactPin.current = null; setDsl(event.target.value); setValidation(null); }} rows={6} className="mt-2 w-full rounded-xl border border-border bg-background p-3 font-mono text-xs" spellCheck={false} />
           <button className={button + ' mt-3'} disabled={busy || !dsl.trim()} onClick={validate}>DSL 검증</button>
           {validation ? <div role="status" className="mt-3 break-all text-sm"><p>{validation.status === 'ready' ? 'DSL 유효 · 전략 미평가' : 'DSL 차단: 지원 범위·필드·연산자·깊이를 확인하세요.'}</p>
             {validation.candidateId ? <p className="mt-2">{validation.candidateId}</p> : null}
