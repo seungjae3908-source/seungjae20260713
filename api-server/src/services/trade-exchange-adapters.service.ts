@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 import type { TradingPlanInput } from './trade-automation.types';
+import { marketNumber } from '../providers/market-evidence';
 
 export type PreparedExchangeRequest = {
   method: 'GET' | 'POST' | 'DELETE';
@@ -75,31 +76,57 @@ export function prepareBitgetTicker(symbol: string): PreparedExchangeRequest {
 export function validateBitgetContractRules(
   plan: TradingPlanInput, contract: Record<string, unknown>, referencePrice?: number,
 ) {
-  const quantity = Number(plan.quantity);
-  const minimumQuantity = Number(contract.minTradeNum ?? 0);
-  const quantityStep = Number(contract.sizeMultiplier ?? 0);
-  if (!Number.isFinite(quantity) || quantity <= 0) throw new Error('BITGET_QUANTITY_INVALID');
-  if (minimumQuantity > 0 && quantity < minimumQuantity) throw new Error('BITGET_MINIMUM_QUANTITY');
-  if (quantityStep > 0 && Math.abs(quantity / quantityStep - Math.round(quantity / quantityStep)) > 1e-8) {
+  const positiveRule = (field: string) => {
+    const value = marketNumber(contract[field]);
+    if (value === null || value <= 0) throw new Error(`BITGET_CONTRACT_RULES_UNAVAILABLE:${field}`);
+    return value;
+  };
+  const decimal = (value: number) => {
+    const [coefficient, exponent = '0'] = value.toString().split('e');
+    const fraction = coefficient.split('.')[1]?.length ?? 0;
+    const scale = fraction - Number(exponent);
+    const units = BigInt(coefficient.replace('.', ''));
+    return scale < 0 ? { units: units * 10n ** BigInt(-scale), scale: 0 } : { units, scale };
+  };
+  const aligned = (value: number, step: number) => {
+    const left = decimal(value), right = decimal(step);
+    return (left.units * 10n ** BigInt(right.scale)) % (right.units * 10n ** BigInt(left.scale)) === 0n;
+  };
+  if (typeof contract.symbol !== 'string' || contract.symbol !== plan.symbol.toUpperCase()
+    || contract.quoteCoin !== 'USDT' || !Array.isArray(contract.supportMarginCoins) || !contract.supportMarginCoins.includes('USDT')) throw new Error('BITGET_CONTRACT_IDENTITY_INVALID');
+  if (contract.symbolStatus !== 'normal') throw new Error('BITGET_CONTRACT_NOT_TRADABLE');
+  const quantity = plan.quantity;
+  if (typeof quantity !== 'number' || !Number.isFinite(quantity) || quantity <= 0) throw new Error('BITGET_QUANTITY_INVALID');
+  const minimumQuantity = positiveRule('minTradeNum');
+  const quantityStep = positiveRule('sizeMultiplier');
+  const minimumNotional = positiveRule('minTradeUSDT');
+  const maximumQuantity = positiveRule(plan.orderType === 'market' ? 'maxMarketOrderQty' : 'maxOrderQty');
+  const minimumLeverage = positiveRule('minLever'), maximumLeverage = positiveRule('maxLever');
+  if (maximumQuantity < minimumQuantity || maximumLeverage < minimumLeverage) throw new Error('BITGET_CONTRACT_RULES_INCONSISTENT');
+  if (typeof plan.leverage !== 'number' || !Number.isFinite(plan.leverage) || plan.leverage < minimumLeverage || plan.leverage > maximumLeverage) throw new Error('BITGET_CONTRACT_LEVERAGE_INVALID');
+  if (quantity < minimumQuantity) throw new Error('BITGET_MINIMUM_QUANTITY');
+  if (!aligned(quantity, quantityStep)) {
     throw new Error('BITGET_QUANTITY_STEP');
   }
-  const maximumQuantity = Number(plan.orderType === 'market' ? contract.maxMarketOrderQty : contract.maxOrderQty);
-  if (maximumQuantity > 0 && quantity > maximumQuantity) throw new Error('BITGET_MAXIMUM_QUANTITY');
-  const contractStatus = String(contract.symbolStatus ?? '').toLowerCase();
-  if (contractStatus && contractStatus !== 'normal') throw new Error('BITGET_CONTRACT_NOT_TRADABLE');
+  if (quantity > maximumQuantity) throw new Error('BITGET_MAXIMUM_QUANTITY');
   if (plan.orderType === 'limit') {
-    const price = Number(plan.limitPrice);
-    const pricePlace = Number(contract.pricePlace ?? 0);
-    const priceEndStep = Number(contract.priceEndStep ?? 1);
-    const priceStep = priceEndStep * (10 ** -pricePlace);
-    if (!Number.isFinite(price) || price <= 0) throw new Error('BITGET_PRICE_INVALID');
-    if (priceStep > 0 && Math.abs(price / priceStep - Math.round(price / priceStep)) > 1e-8) {
+    const price = plan.limitPrice;
+    const pricePlace = marketNumber(contract.pricePlace);
+    const priceEndStep = positiveRule('priceEndStep');
+    if (pricePlace === null || !Number.isSafeInteger(pricePlace) || pricePlace < 0 || !Number.isSafeInteger(priceEndStep)) throw new Error('BITGET_PRICE_RULES_UNAVAILABLE');
+    const priceStep = Number(`${priceEndStep}e-${pricePlace}`);
+    if (!Number.isFinite(priceStep) || priceStep <= 0) throw new Error('BITGET_PRICE_RULES_UNAVAILABLE');
+    if (typeof price !== 'number' || !Number.isFinite(price) || price <= 0) throw new Error('BITGET_PRICE_INVALID');
+    if (!aligned(price, priceStep)) {
       throw new Error('BITGET_PRICE_STEP');
     }
   }
-  const notionalPrice = plan.orderType === 'limit' ? Number(plan.limitPrice) : Number(referencePrice);
-  const minimumNotional = Number(contract.minTradeUSDT ?? 0);
-  if (minimumNotional > 0 && (!Number.isFinite(notionalPrice) || notionalPrice * quantity < minimumNotional)) {
+  const notionalPrice = plan.orderType === 'limit' ? plan.limitPrice : referencePrice;
+  if (typeof notionalPrice !== 'number' || !Number.isFinite(notionalPrice) || notionalPrice <= 0
+    || !Number.isFinite(notionalPrice * quantity)) throw new Error('BITGET_REFERENCE_PRICE_INVALID');
+  const priceUnits = decimal(notionalPrice), quantityUnits = decimal(quantity), minimumUnits = decimal(minimumNotional);
+  if (priceUnits.units * quantityUnits.units * 10n ** BigInt(minimumUnits.scale)
+    < minimumUnits.units * 10n ** BigInt(priceUnits.scale + quantityUnits.scale)) {
     throw new Error('BITGET_MINIMUM_NOTIONAL');
   }
 }

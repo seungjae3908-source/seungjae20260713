@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { marketNumber } from '../providers/market-evidence';
 import type { TradingRepository } from './trade-automation.repository';
 import { TradeAutomationService, liveExecutionEnabled } from './trade-automation.service';
 import { TradeCancelReconciliationService } from './trade-cancel-reconciliation.service';
@@ -505,12 +506,14 @@ export class TradeExecutionService {
       loadUsdtKrw(),
     ]);
     const contractRows = Array.isArray(contracts) ? contracts.filter(isRecord) : [];
-    const contract = contractRows.find((row) => String(row.symbol ?? '').toUpperCase() === plan.symbol.toUpperCase());
-    if (!contract) throw new Error('BITGET_CONTRACT_RULES_UNAVAILABLE');
+    const matchingContracts = contractRows.filter((row) => row.symbol === plan.symbol.toUpperCase());
+    if (matchingContracts.length !== 1) throw new Error('BITGET_CONTRACT_RULES_UNAVAILABLE');
+    const contract = matchingContracts[0];
     const tickerRows = Array.isArray(ticker) ? ticker.filter(isRecord) : [];
-    const tickerRow = tickerRows.find((row) => String(row.symbol ?? '').toUpperCase() === plan.symbol.toUpperCase())
-      ?? tickerRows[0];
-    validateBitgetContractRules(plan, contract, Number(tickerRow?.markPrice ?? tickerRow?.lastPr ?? 0));
+    const matchingTickers = tickerRows.filter((row) => row.symbol === plan.symbol.toUpperCase());
+    if (matchingTickers.length !== 1) throw new Error('BITGET_TICKER_IDENTITY_INVALID');
+    const tickerRow = matchingTickers[0];
+    validateBitgetContractRules(plan, contract, marketNumber(tickerRow.markPrice ?? tickerRow.lastPr) ?? undefined);
     const canChangeMarginMode = bitgetPreflight([accounts, positions, pending, ticker], plan, order.clientOrderId);
     assertNoOrphanExchangeOrders('bitget', bitgetPendingRefs(pending), await this.repository.listOrders(userId));
     const risk = await this.riskService.evaluate({
