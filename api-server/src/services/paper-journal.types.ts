@@ -64,6 +64,7 @@ export type PaperJournalSyncResult = {
   orderSubmitted: false;
   exchangeRequestSent: false;
   idempotencyKey: string;
+  requestFingerprint?: string;
   serverTime: string;
   uploaded: StoredPaperJournalRecord[];
   downloaded: StoredPaperJournalRecord[];

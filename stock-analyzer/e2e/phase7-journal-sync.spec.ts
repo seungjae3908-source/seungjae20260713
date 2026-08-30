@@ -1,6 +1,36 @@
 import { expect, test, type Page } from '@playwright/test';
+import type { JournalSyncRecord } from '../src/lib/paper-journal-sync';
 
 const PATH = '/__phase7-journal-sync-e2e';
+
+test('real browser sync transport respects the server byte budget for Korean journal notes', async ({ page }) => {
+  const errors = captureErrors(page);
+  const bodies: Array<{ bytes: number; key: string; ids: string[] }> = [];
+  await page.route('**/api/paper-journal/sync', async (route) => {
+    const body = route.request().postDataJSON() as { idempotencyKey: string; clientTime: string; records: JournalSyncRecord[] };
+    const bytes = route.request().postDataBuffer()?.byteLength ?? 0;
+    bodies.push({ bytes, key: body.idempotencyKey, ids: body.records.map((record) => `${record.kind}:${record.id}`) });
+    const now = new Date().toISOString();
+    await route.fulfill({ status: bytes <= 512 * 1024 ? 200 : 413, contentType: 'application/json', body: JSON.stringify({
+      ok: true, mode: 'journal-sync-only', orderSubmitted: false, exchangeRequestSent: false,
+      idempotencyKey: body.idempotencyKey, serverTime: now,
+      uploaded: body.records.map((record) => ({ ...record, createdAt: now, serverUpdatedAt: now })),
+      downloaded: [], unchanged: [], conflicts: [], failed: [], warnings: [], clockSkewMs: 0,
+    }) });
+  });
+  await page.goto(`${PATH}?mode=byte-batch`);
+  await page.getByTestId('journal-sync-button').click();
+  await expect(page.getByTestId('journal-sync-status')).toContainText('동기화 완료');
+  expect(bodies.length).toBeGreaterThan(1);
+  expect(bodies.every((body) => body.bytes > 0 && body.bytes <= 512 * 1024)).toBeTruthy();
+  expect(new Set(bodies.map((body) => body.key)).size).toBe(bodies.length);
+  const ids = bodies.flatMap((body) => body.ids);
+  expect(ids.length).toBe(201);
+  expect(new Set(ids).size).toBe(201);
+  await test.info().attach('journal-batch-byte-evidence', { contentType: 'application/json',
+    body: JSON.stringify({ source: 'local browser transport with mocked API response', records: ids.length, maxRequestBytes: 512 * 1024, requestBytes: bodies.map((body) => body.bytes) }) });
+  expect(errors).toEqual([]);
+});
 
 async function open(page: Page) {
   await page.goto(PATH);
