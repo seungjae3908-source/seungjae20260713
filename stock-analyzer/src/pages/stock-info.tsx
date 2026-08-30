@@ -30,6 +30,7 @@ type CoinMarketTab = 'spot' | 'futures';
 type SpecialFeedMarket = MarketTab | CoinMarketTab;
 type SpecialFeedFilter = 'all' | 'news' | 'positive' | 'negative' | 'disclosure' | 'signal';
 type SpecialFeedView = 'latest' | 'archive';
+type SpecialFeedFreshness = 'latest' | 'archive' | 'unknown';
 type SpecialFeedItem = {
 	id: string;
 	asset: AssetTab;
@@ -347,7 +348,6 @@ export default function StockInfoPage() {
 
 					{ticker && (
 						<>
-							{/* 항상 표시되는 최상단 종목 헤더 (종목명·현재가·등락률) */}
 							<section id="stock-info-selected" className="scroll-mt-4 rounded-3xl border border-primary/20 bg-primary/5 p-4 text-center shadow-sm">
 								{quote.isLoading && <InlineState>시세를 불러오는 중입니다.</InlineState>}
 								{quote.isError && <InlineState tone="error">시세를 불러오지 못했습니다.</InlineState>}
@@ -435,7 +435,6 @@ export default function StockInfoPage() {
 	);
 }
 
-
 function SpecialFeedPanel({
 	asset,
 	market,
@@ -488,10 +487,8 @@ function SpecialFeedPanel({
 		const needle = query.trim().toLowerCase();
 		return [...items]
 			.filter((item) => {
-				const archiveAt = Date.parse(item.archiveAt);
-				const fallbackArchiveAt = Date.parse(item.detectedAt) + 7 * 24 * 60 * 60_000;
-				const isLatest = (Number.isFinite(archiveAt) ? archiveAt : fallbackArchiveAt) > nowMs;
-				return view === 'latest' ? isLatest : !isLatest;
+				const freshness = specialFeedFreshness(item, nowMs);
+				return view === 'latest' ? freshness === 'latest' : freshness !== 'latest';
 			})
 			.filter((item) => {
 				if (filter === 'all') return true;
@@ -541,7 +538,7 @@ function SpecialFeedPanel({
 					<h2 className="text-base font-black">특이정보</h2>
 					<p className="mt-1 break-keep text-[10px] font-bold leading-relaxed text-muted-foreground">
 						{marketLabel} {asset === 'stock' ? '앱 종목' : '코인'} {catalogSize ? `${catalogSize}개` : '전체'}를 순환 확인합니다.
-						1주일 이내는 최신으로, 1주일이 지나면 보관함의 지난 정보로 표시됩니다.
+						1주일 이내는 최신으로, 1주일이 지나면 보관함의 지난 정보로 표시됩니다. 시각이 없거나 미래이면 최신으로 간주하지 않습니다.
 					</p>
 					{fetching && !loading && (
 						<p className="mt-1 text-[10px] font-black text-primary">새 정보를 확인하는 중입니다.</p>
@@ -572,7 +569,7 @@ function SpecialFeedPanel({
 						)}
 					>
 						<Archive className="h-3.5 w-3.5" />
-						보관함
+						보관·확인
 					</button>
 				</div>
 
@@ -625,7 +622,7 @@ function SpecialFeedPanel({
 					)}
 					{!loading && !error && filteredItems.length === 0 && (
 						<InlineState>
-							{view === 'latest' ? '최근 1주일 이내' : '1주일이 지난 보관함'}에 해당 정보가 없습니다.
+							{view === 'latest' ? '최근 1주일 이내' : '1주일이 지난 정보·시각 미확인'}에 해당 정보가 없습니다.
 						</InlineState>
 					)}
 					{!loading && !error && visibleItems.map((item) => (
@@ -661,7 +658,7 @@ function SpecialFeedPanel({
 					<div className="flex max-h-[82vh] w-full max-w-md flex-col overflow-hidden rounded-3xl border border-card-border bg-card shadow-2xl">
 						<div className="flex items-center justify-between border-b border-card-border px-4 py-3">
 							<div>
-								<p className="text-sm font-black">{view === 'latest' ? '최신정보' : '보관함'} 더보기</p>
+								<p className="text-sm font-black">{view === 'latest' ? '최신정보' : '보관·확인'} 더보기</p>
 								<p className="mt-0.5 text-[10px] font-bold text-muted-foreground">페이지당 10개 · 전체 {filteredItems.length}건</p>
 							</div>
 							<button type="button" onClick={() => setMoreOpen(false)} aria-label="닫기" className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border">
@@ -720,9 +717,9 @@ function SpecialFeedRow({
 	nowMs: number;
 	onOpenItem: () => void;
 }) {
-	const isArchived = specialFeedArchiveTime(item) <= nowMs;
-	const prefix = isArchived ? '지난' : '최신';
-	const label =
+	const freshness = specialFeedFreshness(item, nowMs);
+	const prefix = freshness === 'archive' ? '지난' : '최신';
+	const label = freshness === 'unknown' ? '시각 확인 필요' :
 		item.kind === 'signal'
 			? `${prefix}차트`
 			: item.kind === 'disclosure'
@@ -733,11 +730,13 @@ function SpecialFeedRow({
 						? `${prefix}악재`
 						: `${prefix}뉴스`;
 	const badgeClass =
-		item.tone === 'positive'
-			? 'bg-positive/10 text-positive'
-			: item.tone === 'negative'
-				? 'bg-destructive/10 text-destructive'
-				: 'bg-primary/10 text-primary';
+		freshness === 'unknown'
+			? 'bg-secondary text-muted-foreground'
+			: item.tone === 'positive'
+				? 'bg-positive/10 text-positive'
+				: item.tone === 'negative'
+					? 'bg-destructive/10 text-destructive'
+					: 'bg-primary/10 text-primary';
 	const itemName =
 		item.asset === 'coin'
 			? displayCoinName(item.ticker, item.name, item.name)
@@ -778,7 +777,7 @@ function SpecialFeedRow({
 
 			<div className="mt-2 flex flex-wrap items-center justify-between gap-1 text-[10px] font-bold text-muted-foreground">
 				<span>{item.source} · {elapsedFeedText(item.sourceAt ?? item.detectedAt, nowMs)}</span>
-				<span>{isArchived ? '보관함' : '1주일 이내'}</span>
+				<span>{freshness === 'latest' ? '1주일 이내' : freshness === 'archive' ? '보관함' : '시각 미확인'}</span>
 			</div>
 		</div>
 	);
@@ -798,17 +797,23 @@ function SpecialFeedRow({
 	);
 }
 
-function specialFeedArchiveTime(item: SpecialFeedItem) {
-	const archiveAt = Date.parse(item.archiveAt);
-	if (Number.isFinite(archiveAt)) return archiveAt;
+function specialFeedFreshness(item: SpecialFeedItem, nowMs: number): SpecialFeedFreshness {
 	const detectedAt = Date.parse(item.detectedAt);
-	return Number.isFinite(detectedAt) ? detectedAt + 7 * 24 * 60 * 60_000 : Number.POSITIVE_INFINITY;
+	const displayAt = Date.parse(item.sourceAt ?? item.detectedAt);
+	if (!Number.isFinite(detectedAt) || detectedAt > nowMs) return 'unknown';
+	if (!Number.isFinite(displayAt) || displayAt > nowMs) return 'unknown';
+	const archiveAt = Date.parse(item.archiveAt);
+	const effectiveArchiveAt = Number.isFinite(archiveAt)
+		? archiveAt
+		: detectedAt + 7 * 24 * 60 * 60_000;
+	if (!Number.isFinite(effectiveArchiveAt) || effectiveArchiveAt < detectedAt) return 'unknown';
+	return effectiveArchiveAt <= nowMs ? 'archive' : 'latest';
 }
 
 function elapsedFeedText(value: string, nowMs: number) {
 	const timestamp = Date.parse(value);
-	if (!Number.isFinite(timestamp)) return '방금 전';
-	const minutes = Math.max(0, Math.floor((nowMs - timestamp) / 60_000));
+	if (!Number.isFinite(timestamp) || timestamp > nowMs) return '시각 확인 필요';
+	const minutes = Math.floor((nowMs - timestamp) / 60_000);
 	if (minutes < 1) return '방금 전';
 	if (minutes < 60) return `${minutes}분 전`;
 	const hours = Math.floor(minutes / 60);
@@ -821,7 +826,6 @@ function Tab({ active, onClick, children }: { active: boolean; onClick: () => vo
 	return <button type="button" onClick={onClick} className={cn('inline-flex items-center justify-center text-center break-keep leading-tight rounded-xl border px-3 py-2 text-sm font-black', active ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-card text-muted-foreground')}>{children}</button>;
 }
 
-// 상세 카드 — 기본 접힘, 제목 영역 전체 탭으로 펼침/접힘.
 function Section({ title, state, action, children }: { title: string; state?: string | null; action?: ReactNode; children: ReactNode }) {
 	const [open, setOpen] = useState(false);
 	return (
@@ -906,20 +910,16 @@ export function CoinInfo({ nowMs, basePath = '/stock-info' }: { nowMs: number; b
 		const nextParams = new URLSearchParams(nextLocationQuery || nextBrowserQuery);
 		const nextMarket: CoinMarketTab = nextParams.get('coinMarket') === 'futures' ? 'futures' : 'spot';
 		setCoinMarket(nextMarket);
-		// 기본 코인 자동 선택 없음 — 사용자가 검색·선택해야 상세 정보를 표시한다.
 		setSymbol(String(nextParams.get('symbol') ?? '').toUpperCase());
 	}, [location]);
 
 	const changeCoin = (nextMarket: CoinMarketTab, nextSymbol?: string) => {
 		const resolved = String(nextSymbol ?? '').toUpperCase();
-
-		// 같은 경로에서 쿼리만 바뀌는 경우에도 버튼과 상세 화면이 즉시 갱신되게 한다.
 		setCoinMarket(nextMarket);
 		setSymbol(resolved);
 		setSearchText('');
 		appMode.setAsset('coin');
 		appMode.setCoinMarket(nextMarket);
-
 		const next = new URLSearchParams({ asset: 'coin', coinMarket: nextMarket });
 		if (resolved) next.set('symbol', resolved);
 		navigate(`${basePath}?${next.toString()}`, { replace: true });
@@ -932,13 +932,8 @@ export function CoinInfo({ nowMs, basePath = '/stock-info' }: { nowMs: number; b
 				`/api/stocks/special-feed?asset=coin&market=${coinMarket}&limit=2000&_ts=${Date.now()}`,
 				{ cache: 'no-store', signal },
 			);
-			const payload = (await response.json().catch(() => ({}))) as SpecialFeedResponse & {
-				error?: string;
-				message?: string;
-			};
-			if (!response.ok) {
-				throw new Error(payload.error ?? payload.message ?? `HTTP_${response.status}`);
-			}
+			const payload = (await response.json().catch(() => ({}))) as SpecialFeedResponse & { error?: string; message?: string };
+			if (!response.ok) throw new Error(payload.error ?? payload.message ?? `HTTP_${response.status}`);
 			return payload;
 		},
 		refetchInterval: 30_000,
@@ -947,57 +942,21 @@ export function CoinInfo({ nowMs, basePath = '/stock-info' }: { nowMs: number; b
 		retry: 1,
 	});
 
-	const status = useQuery({
-		queryKey: ['crypto-status'],
-		queryFn: () => apiGet<AnyObj>('/crypto/status'),
-		staleTime: 30_000,
-	});
-	const spotMarkets = useQuery({
-		queryKey: ['crypto-spot-markets'],
-		queryFn: () => apiGet<AnyObj>('/crypto/spot/markets'),
-		enabled: coinMarket === 'spot',
-		staleTime: 10 * 60_000,
-	});
-	const spotTickers = useQuery({
-		queryKey: ['crypto-spot-tickers'],
-		queryFn: () => apiGet<AnyObj>('/crypto/spot/tickers'),
-		enabled: coinMarket === 'spot',
-		refetchInterval: 15_000,
-	});
-	const orderbook = useQuery({
-		queryKey: ['crypto-spot-orderbook', symbol],
-		queryFn: () => apiGet<AnyObj>(`/crypto/spot/orderbook?symbol=${encodeURIComponent(symbol)}`),
-		enabled: coinMarket === 'spot' && Boolean(symbol),
-		refetchInterval: 5_000,
-	});
+	const status = useQuery({ queryKey: ['crypto-status'], queryFn: () => apiGet<AnyObj>('/crypto/status'), staleTime: 30_000 });
+	const spotMarkets = useQuery({ queryKey: ['crypto-spot-markets'], queryFn: () => apiGet<AnyObj>('/crypto/spot/markets'), enabled: coinMarket === 'spot', staleTime: 10 * 60_000 });
+	const spotTickers = useQuery({ queryKey: ['crypto-spot-tickers'], queryFn: () => apiGet<AnyObj>('/crypto/spot/tickers'), enabled: coinMarket === 'spot', refetchInterval: 15_000 });
+	const orderbook = useQuery({ queryKey: ['crypto-spot-orderbook', symbol], queryFn: () => apiGet<AnyObj>(`/crypto/spot/orderbook?symbol=${encodeURIComponent(symbol)}`), enabled: coinMarket === 'spot' && Boolean(symbol), refetchInterval: 5_000 });
 	const [coinTf, setCoinTf] = useState<'15m' | '1D' | '1W' | '1M'>('15m');
 	const spotCandles = useQuery({
 		queryKey: ['crypto-spot-candles', symbol, coinTf],
-		queryFn: () =>
-			apiGet<AnyObj>(
-				coinTf === '15m'
-					? `/crypto/spot/candles?symbol=${encodeURIComponent(symbol)}&unit=15&count=120`
-					: `/crypto/spot/candles?symbol=${encodeURIComponent(symbol)}&tf=${coinTf}&count=200`,
-			),
+		queryFn: () => apiGet<AnyObj>(coinTf === '15m' ? `/crypto/spot/candles?symbol=${encodeURIComponent(symbol)}&unit=15&count=120` : `/crypto/spot/candles?symbol=${encodeURIComponent(symbol)}&tf=${coinTf}&count=200`),
 		enabled: coinMarket === 'spot' && Boolean(symbol),
 		refetchInterval: 30_000,
 	});
-	const futuresTickers = useQuery({
-		queryKey: ['crypto-futures-tickers'],
-		queryFn: () => apiGet<AnyObj>('/crypto/futures/tickers'),
-		enabled: coinMarket === 'futures',
-		refetchInterval: 10_000,
-	});
-	const futuresCandles = useQuery({
-		queryKey: ['crypto-futures-candles', symbol],
-		queryFn: () => apiGet<AnyObj>(`/crypto/futures/candles?symbol=${encodeURIComponent(symbol)}&granularity=15m&limit=200`),
-		enabled: coinMarket === 'futures' && Boolean(symbol),
-		refetchInterval: 30_000,
-	});
+	const futuresTickers = useQuery({ queryKey: ['crypto-futures-tickers'], queryFn: () => apiGet<AnyObj>('/crypto/futures/tickers'), enabled: coinMarket === 'futures', refetchInterval: 10_000 });
+	const futuresCandles = useQuery({ queryKey: ['crypto-futures-candles', symbol], queryFn: () => apiGet<AnyObj>(`/crypto/futures/candles?symbol=${encodeURIComponent(symbol)}&granularity=15m&limit=200`), enabled: coinMarket === 'futures' && Boolean(symbol), refetchInterval: 30_000 });
 
-	const marketNames = new Map<string, AnyObj>(
-		((spotMarkets.data?.markets ?? []) as AnyObj[]).map((item) => [String(item.symbol), item]),
-	);
+	const marketNames = new Map<string, AnyObj>(((spotMarkets.data?.markets ?? []) as AnyObj[]).map((item) => [String(item.symbol), item]));
 	const spotRows = ((spotTickers.data?.tickers ?? []) as AnyObj[]).map((item) => ({ ...item, ...(marketNames.get(String(item.symbol)) ?? {}) }));
 	const futureRows = (futuresTickers.data?.tickers ?? []) as AnyObj[];
 	const rows = coinMarket === 'spot' ? spotRows : futureRows;
@@ -1081,15 +1040,7 @@ export function CoinInfo({ nowMs, basePath = '/stock-info' }: { nowMs: number; b
 						{coinMarket === 'spot' && (
 							<div className="mt-3 grid grid-cols-4 gap-1">
 								{(['15m', '1D', '1W', '1M'] as const).map((tf) => (
-									<button
-										key={tf}
-										type="button"
-										onClick={() => setCoinTf(tf)}
-										className={cn(
-											'rounded-xl border px-2 py-1.5 text-[11px] font-black',
-											coinTf === tf ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-card text-muted-foreground',
-										)}
-									>
+									<button key={tf} type="button" onClick={() => setCoinTf(tf)} className={cn('rounded-xl border px-2 py-1.5 text-[11px] font-black', coinTf === tf ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-card text-muted-foreground')}>
 										{tf === '15m' ? '15분' : tf === '1D' ? '일봉' : tf === '1W' ? '주봉' : '월봉'}
 									</button>
 								))}
