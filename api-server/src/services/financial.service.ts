@@ -1,8 +1,7 @@
 // FinancialService — quarterly/annual statements, ratios, growth, cash burn.
-// Live-first: US statements from SEC XBRL + ratios from Finnhub; KR statements
-// from DART + ratios from Naver. Falls back to the deterministic sample model
-// only when a live source is unavailable, so the tab always renders coherently.
-import { getFinancials as getSampleFinancials } from '../sample/financials';
+// US statements from SEC XBRL + ratios from Finnhub; KR statements from DART
+// + ratios from Naver. Provider failures propagate as missing evidence; sample
+// financials must never enter runtime grading, recommendations or AI context.
 import { getCatalogEntry, type CatalogEntry } from '../data/catalog';
 import * as sec from '../providers/sec-edgar';
 import * as dart from '../providers/dart';
@@ -84,7 +83,7 @@ async function getLive(entry: CatalogEntry): Promise<Financials> {
       naver.getRatios(entry).catch(() => ({ eps: 0, per: 0, pbr: 0, bps: 0 })),
     ]);
     if (raw.quarterly.length === 0) {
-      // Incomplete live data — fall back to a coherent full sample view.
+      // Incomplete live data cannot establish financial evidence.
       throw new Error('no live KR quarterly statements');
     }
     const equity = raw.latest.equity;
@@ -132,14 +131,7 @@ async function getLive(entry: CatalogEntry): Promise<Financials> {
 async function getFinancials(ticker: string): Promise<Financials | null> {
   const entry = getCatalogEntry(ticker);
   if (!entry) return null;
-  try {
-    return await getLive(entry);
-  } catch (err) {
-    console.error(`live financials failed for ${ticker}:`, err);
-    const sample = getSampleFinancials(ticker);
-    // 추천 엔진 등이 실데이터와 구분할 수 있도록 출처를 명시한다.
-    return sample ? { ...sample, source: 'sample' as const } : sample;
-  }
+  return getLive(entry);
 }
 
 export const FinancialService = {
