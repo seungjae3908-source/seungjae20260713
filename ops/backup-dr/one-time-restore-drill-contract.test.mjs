@@ -106,9 +106,10 @@ assert.ok(!/rm\s+-rf\s+--?\s+\/(?:opt|srv|var)\b/.test(workflow), 'workflow must
 
 assert.equal(policy?.restoreDrill?.required, true, 'policy must continue to require restore drills');
 assert.equal(policy?.restoreDrill?.repositoryDefaultState, 'MISSING', 'default truth must stay MISSING until a real receipt exists');
-assert.equal(policy?.executionControls?.actualRestoreAuthorized, false, 'repository default must not grant standing restore authority');
-assert.equal(policy?.executionControls?.remoteDatabaseTargetsForbidden, true, 'remote DB restore targets must remain forbidden');
-assert.equal(policy?.executionControls?.productionCredentialUseForbidden, true, 'Production DB credentials must remain forbidden during restore drill');
+assert.equal(policy?.activation?.actualRestoreAuthorized, false, 'repository default must not grant standing restore authority');
+assert.equal(policy?.restoreDrill?.remoteDatabaseTargetsAllowed, false, 'remote DB restore targets must remain forbidden');
+assert.equal(policy?.restoreDrill?.localhostEphemeralTargetOnly, true, 'restore target must remain localhost ephemeral only');
+assert.equal(policy?.restoreDrill?.productionCredentialsAllowed, false, 'Production DB credentials must remain forbidden during restore drill');
 
 for (const token of [
   "approval !== 'RESTORE_TO_LOCAL_EPHEMERAL'",
