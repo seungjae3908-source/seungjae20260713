@@ -9,6 +9,7 @@ import { ThemesService } from '../services/themes.service';
 import { SectorPopularService } from '../services/sector-popular.service';
 import { SignalService } from '../services/signal.service';
 import { RecommendationService } from '../services/recommendation.service';
+import { hasQuoteRating } from '../services/quote-rating-evidence';
 
 const router: IRouter = Router();
 
@@ -75,8 +76,8 @@ function rankByChange(rows: QuoteRow[], direction: 'asc' | 'desc'): QuoteRow[] {
 }
 
 function rankByScore(rows: QuoteRow[]): QuoteRow[] {
-  return [...rows].sort(
-    (a, b) => Number(b.rating?.score ?? 0) - Number(a.rating?.score ?? 0),
+  return rows.filter(hasQuoteRating).sort(
+    (a, b) => b.rating.score - a.rating.score,
   );
 }
 
@@ -140,10 +141,6 @@ async function liveListingsWithDiagnostics(
   };
 }
 
-async function liveListings(scope: MarketScope): Promise<QuoteRow[]> {
-  return (await liveListingsWithDiagnostics(scope)).rows;
-}
-
 router.get('/config', (_req, res) => {
   res.json({
     ok: true,
@@ -180,7 +177,13 @@ router.get('/search/quotes', async (req, res) => {
     const matches = await MarketDataService.search(q, 100);
     const quotes = await MarketDataService.getQuotes(matches.map((item) => item.ticker));
     const rows = uniqueRows(quotes);
-    return res.json({ q, results: rows, count: rows.length, updatedAt: new Date().toISOString() });
+    const unavailable = matches.length > 0 && rows.length === 0;
+    return res.status(unavailable ? 503 : 200).json({
+      q, results: rows, count: rows.length,
+      dataStatus: unavailable ? 'unavailable' : rows.length < matches.length ? 'partial' : 'complete',
+      ...(unavailable ? { error: 'QUOTE_SEARCH_PROVIDER_UNAVAILABLE' } : {}),
+      fetchedAt: new Date().toISOString(),
+    });
   } catch (error) {
     console.error('market quote search error:', error);
     return res.status(502).json({ q, results: [], count: 0, error: 'QUOTE_SEARCH_PROVIDER_ERROR' });
@@ -192,11 +195,15 @@ router.get('/quotes', async (req, res) => {
     req.query.tickers ?? req.query.symbols ?? req.query.symbol ?? req.query.ticker ?? '';
   const tickers = uniqueTickers(String(raw).split(','));
   const quotes = await MarketDataService.getQuotes(tickers);
-  return res.json({
-    quotes: uniqueRows(quotes),
+  const rows = uniqueRows(quotes);
+  const unavailable = tickers.length > 0 && rows.length === 0;
+  return res.status(unavailable ? 503 : 200).json({
+    quotes: rows,
     requested: tickers.length,
-    available: quotes.length,
-    updatedAt: new Date().toISOString(),
+    available: rows.length,
+    dataStatus: unavailable ? 'unavailable' : rows.length < tickers.length ? 'partial' : 'complete',
+    ...(unavailable ? { error: 'QUOTE_PROVIDER_UNAVAILABLE' } : {}),
+    fetchedAt: new Date().toISOString(),
   });
 });
 
@@ -235,6 +242,7 @@ router.get('/market/movers', async (req, res) => {
       popular,
       volume,
       recommended,
+      recommendationStatus: recommended.length ? 'AVAILABLE' : 'MISSING_EVIDENCE',
       gainers,
       losers,
       risky: losers,
@@ -242,7 +250,7 @@ router.get('/market/movers', async (req, res) => {
         popular: '실제 거래대금 기준',
         gainers: '실제 등락률 기준',
         losers: '실제 등락률 기준',
-        recommended: '실제 데이터 기반 종합점수 기준',
+        recommended: recommended.length ? '규칙 점수 기준 (성공확률 아님)' : '검증된 추천 근거 부족',
       },
       updatedAt: new Date().toISOString(),
     });
@@ -457,7 +465,14 @@ router.get('/market/recommendations', async (req, res) => {
 router.get('/market/alerts', async (req, res) => {
   const scope = normalizeMarket(req.query.market);
   try {
-    const rows = rankByChange(await liveListings(scope), 'desc').slice(0, 20);
+    const live = await liveListingsWithDiagnostics(scope);
+    if (live.rows.length === 0) {
+      return res.status(503).json({
+        market: scope, positive: [], negative: [], alerts: [],
+        dataStatus: 'unavailable', error: 'ALERT_PROVIDER_UNAVAILABLE', diagnostics: live.diagnostics,
+      });
+    }
+    const rows = rankByChange(live.rows, 'desc').slice(0, 20);
     const alerts = rows.map((row, index) => ({
       id: `${row.market}:${row.ticker}:movement`,
       ticker: row.ticker,
@@ -470,7 +485,8 @@ router.get('/market/alerts', async (req, res) => {
       time: row.updatedAt,
       url: null,
     }));
-    return res.json({ market: scope, positive: alerts.filter((item) => item.kind === 'positive'), negative: alerts.filter((item) => item.kind === 'negative'), alerts, updatedAt: new Date().toISOString() });
+    return res.json({ market: scope, positive: alerts.filter((item) => item.kind === 'positive'), negative: alerts.filter((item) => item.kind === 'negative'), alerts,
+      dataStatus: live.diagnostics.status, diagnostics: live.diagnostics, fetchedAt: new Date().toISOString() });
   } catch (error) {
     console.error('market alerts error:', error);
     return res.status(502).json({ market: scope, positive: [], negative: [], alerts: [], error: 'ALERT_PROVIDER_ERROR' });
