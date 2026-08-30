@@ -7,6 +7,11 @@ import {
   serializeRecurringPaperLoopState,
 } from "../src/recurring-paper-loop-v1.js";
 import { FOUR_MARKET_EXECUTION_PROFILES } from "../src/four-market-execution-v2.js";
+import { createHash } from "node:crypto";
+import { adaptNaturalPaperSettlementFullCost } from "../src/natural-paper-position-settlement-lifecycle-v1.js";
+import { runScheduledPaperCycle } from "../src/paper-scheduler-driver-v1.js";
+import { createNaturalPaperPublicPositionObservationProducer } from "../src/natural-paper-public-position-observation-v1.js";
+import { PAPER_FORWARD_PROVIDER_AUTHORITY } from "../src/paper-public-provider-authority-v1.js";
 
 const T0 = 1_800_000_000_000;
 const SHA = "b".repeat(40);
@@ -24,6 +29,250 @@ const RISK_POLICY_IDENTITY = Object.freeze({
   source: "canonical-risk-policy-record",
   researchCodeSha: SHA,
 });
+
+const sha256 = (value) => createHash("sha256").update(value).digest("hex");
+const FOUR_HOURS = 4 * 60 * 60 * 1000;
+test("real producer to scheduler to lifecycle contract preserves closed-frame evidence", async () => {
+  const { h, state } = await naturalFixture();
+  const now = T0 + FOUR_HOURS;
+  const source = createNaturalPaperPublicPositionObservationProducer({
+    authority: PAPER_FORWARD_PROVIDER_AUTHORITY, clock: () => now,
+    collectYahoo: async () => { throw new Error("unexpected Yahoo call"); },
+    collectBitget: async () => { throw new Error("unexpected Bitget call"); },
+    collectUpbit: async ({ symbol }) => ({
+      market: "CRYPTO_SPOT", symbol, provider: "upbit-public-candles", timeframe: "4h",
+      candles: [
+        { timestamp: T0 - FOUR_HOURS, open: 100, high: 101, low: 99, close: 100 },
+        { timestamp: T0, open: 100, high: 102, low: 99, close: 101 },
+      ],
+    }),
+  });
+  const result = await runScheduledPaperCycle({
+    state, cadence: { version: "test-contract-4h", intervalMs: FOUR_HOURS }, nowMs: now,
+    ownerId: "contract-fixture", leaseDurationMs: 20_000, clock: () => now,
+    retry: { maxAttempts: 1, baseBackoffMs: 1, timeoutMs: 1_000 },
+    leaseStore: {
+      async acquire() { return { acquired: true, token: "test-token" }; },
+      async assertOwned() {}, async complete() {}, async release() {},
+    },
+    publicEvidenceProvider: {
+      async collectPublicEvidence(input) {
+        const observed = await source.collect(input);
+        assert.equal(observed.status, "PRESENT");
+        return { status: "READY", publicOnly: true, observedAtMs: now, maxAgeMs: FOUR_HOURS,
+          candidates: [], exits: [], positionObservations: observed.observations };
+      },
+    },
+    ledgerAdapter: h.ledgerAdapter, learningAdapter: h.learningAdapter, stateStore: h.stateStore,
+  });
+  assert.equal(result.status, "COMPLETED");
+  assert.equal(result.state.positions[0].lifecycle.mark.observationCount, 1);
+  assert.equal(result.state.positions[0].lifecycle.mark.maePercent, -1);
+  assert.equal(result.state.positions[0].lifecycle.mark.mfePercent, 2);
+  assert.equal(result.state.settlements.length, 0);
+  assert.equal(h.getSettlementMutations(), 0);
+  assert.equal(result.safety.executionAuthority, "NONE");
+});
+test("Natural lifecycle blocks malformed or discontinuous closed frames before mark mutation", async () => {
+  const { h, state } = await naturalFixture();
+  const row = boundNaturalObservation(state, "frames", "closed", T0 + FOUR_HOURS, { open: 100, high: 102, low: 99, close: 101 });
+  for (const mutate of [
+    (o) => { delete o.closedFrame; },
+    (o) => { o.closedFrame.openAtMs = T0 - 1; },
+    (o) => { o.closedFrame.openAtMs += 1; },
+    (o) => { o.closedFrame.sourceDigest = "f".repeat(64); },
+    (o) => { o.source = "wrong-provider"; },
+    (o) => { o.symbol = "wrong-symbol"; },
+    (o) => { o.market = "US_STOCK"; },
+    (o) => { o.timeframe = "1m"; },
+    (o) => { o.signalTimeframe = "1d"; },
+    (o) => { o.horizon += 1; },
+    (o) => { o.observedAtMs += FOUR_HOURS; },
+    (o) => { o.bar.high = 90; },
+    (o) => { o.maxAgeMs *= 100; },
+  ]) {
+    const bad = structuredClone(row);
+    mutate(bad);
+    const result = await run(h, { state, cycle: cycle("frames", T0 + FOUR_HOURS), positionObservations: [bad] });
+    assert.deepEqual(result.state.positions, state.positions);
+    assert.equal(result.state.settlements.length, 0);
+  }
+});
+
+test("external exit payload cannot bypass a Natural Position lifecycle", async () => {
+  const { h, state } = await naturalFixture();
+  const row = observation(state.positions[0], "external", T0 + FOUR_HOURS, { open: 100, high: 106, low: 99, close: 105 });
+  const result = await run(h, { state, cycle: cycle("external", T0 + FOUR_HOURS), exits: [{
+    positionId: state.positions[0].positionId, settlementInput: row.settlementInput,
+    lifecycleEvidence: { naturalSampleCredit: 1 },
+  }] });
+  assert.deepEqual(result.state.positions, state.positions);
+  assert.equal(result.state.settlements.length, 0);
+  assert.equal(h.getSettlementMutations(), 0);
+});
+
+test("legacy external exit cannot claim Natural credit through supplied lifecycle evidence", async () => {
+  const h = harness();
+  const { state } = await open(h);
+  const now = T0 + 1_000;
+  const row = observation(state.positions[0], "legacy", now, { open: 100, high: 106, low: 99, close: 105 });
+  const result = await run(h, { state, cycle: cycle("legacy", now), exits: [{
+    positionId: state.positions[0].positionId, settlementInput: row.settlementInput,
+    lifecycleEvidence: { naturalSampleCredit: 1, exitTriggerTimestampMs: T0 + 1 },
+  }] });
+  assert.equal(result.state.settlements.length, 1);
+  assert.equal(result.state.settlements[0].naturalSampleCredit, 0);
+  assert.equal(result.state.settlements[0].lifecycleEvidence, null);
+});
+
+test("futures Full Cost requires exact observed holding-period funding lineage", async () => {
+  const h = harness();
+  const opened = await open(h);
+  const position = { ...opened.state.positions[0], market: "CRYPTO_FUTURES" };
+  const now = T0 + 1_000;
+  const row = observation(position, "funding", now, { open: 100, high: 106, low: 99, close: 105 });
+  const trigger = { exitTriggerId: "trigger", triggeredAtMs: now };
+  const payment = { asOfMs: T0 + 500, amount: position.sample.fill.notional * 0.0001, source: "public-funding-history-fixture", provenance: "contract-fixture", version: "v1" };
+  row.settlementInput.fundingEvidence = { complete: true, payments: [payment], entryTimestampMs: T0, exitTimestampMs: now };
+  row.settlementCostEvidence.components.funding = {
+    ...row.settlementCostEvidence.components.funding, quality: "OBSERVED", valuePercent: 0.01,
+    holdingPeriod: { entryTimestampMs: T0, exitTriggerTimestampMs: now, paperSampleId: position.paperSampleId,
+      positionId: position.positionId, paymentsDigest: sha256(stableJson([payment])) },
+  };
+  row.settlementInput.exitExecution.costPolicy.fundingRate = 0.0001;
+  assert.equal(adaptNaturalPaperSettlementFullCost({ position, observation: row, trigger, evaluatedAtMs: now }).status, "PRESENT");
+  for (const mutate of [
+    (o) => { o.settlementCostEvidence.components.funding.holdingPeriod.entryTimestampMs += 1; },
+    (o) => { o.settlementCostEvidence.components.funding.holdingPeriod.exitTriggerTimestampMs += 1; },
+    (o) => { o.settlementCostEvidence.components.funding.holdingPeriod.paymentsDigest = "f".repeat(64); },
+    (o) => { o.settlementCostEvidence.components.funding.quality = "ESTIMATED"; },
+    (o) => { o.settlementInput.fundingEvidence.payments[0].amount *= 2; },
+    (o) => { o.settlementInput.fundingEvidence.payments[0].asOfMs = now + 1; },
+  ]) {
+    const invalid = structuredClone(row);
+    mutate(invalid);
+    assert.equal(adaptNaturalPaperSettlementFullCost({ position, observation: invalid, trigger, evaluatedAtMs: now }).status, "BLOCKED_DATA");
+  }
+});
+function stableJson(value) {
+  if (Array.isArray(value)) return "[" + value.map(stableJson).join(",") + "]";
+  if (value && typeof value === "object") return "{" + Object.keys(value).sort().map((key) => JSON.stringify(key) + ":" + stableJson(value[key])).join(",") + "}";
+  return JSON.stringify(value);
+}
+async function naturalFixture() {
+  const h = harness();
+  const opened = await open(h, "bound-natural", {
+    testOnly: false, naturalEvidence: naturalEvidence("entry-natural", T0 - 1),
+    signal: { expiresAtMs: T0 + 2 * FOUR_HOURS },
+    riskEvidence: { status: "APPROVED", evaluatedAtMs: T0 - 1, simulatedOnly: true, policyIdentity: RISK_POLICY_IDENTITY },
+  });
+  const state = structuredClone(opened.state);
+  state.ledger.accountBinding = { accountId: "paper-account", publisherAccountIdSha256: "d".repeat(64), sourceSha: SHA };
+  state.ledger.reservations = [{ status: "OPEN", positionId: state.positions[0].positionId, paperSampleId: state.positions[0].paperSampleId }];
+  return { h, state };
+}
+
+function boundNaturalObservation(state, cycleId, id, now, bar) {
+  const p = state.positions[0];
+  const row = observation(p, id, now, bar);
+  const cycleIdentity = { cycleId, identityFingerprint: state.identityFingerprint, scheduledAtMs: now, startedAtMs: now };
+  cycleIdentity.identityDigest = sha256(JSON.stringify(cycleIdentity));
+  const binding = state.ledger.accountBinding;
+  const accountIdentity = { publisherAccountIdSha256: binding.publisherAccountIdSha256, sourceSha: binding.sourceSha, accountIdSha256: sha256(binding.accountId) };
+  accountIdentity.identityDigest = sha256(JSON.stringify(accountIdentity));
+  const riskPolicyIdentity = { ...RISK_POLICY_IDENTITY, identityDigest: sha256(JSON.stringify(RISK_POLICY_IDENTITY)) };
+  const source = "upbit-public-candles";
+  const sourceDigest = sha256(stableJson({
+    provider: source, market: p.market, symbol: p.symbol, timeframe: "4h",
+    sourceObservedAtMs: now, ...bar,
+  }));
+  return {
+    ...row, signalId: p.signalId, signalTimeframe: p.sample.identity.timeframe, horizon: p.sample.identity.horizon,
+    cycleIdentityDigest: cycleIdentity.identityDigest,
+    source, sourceDigest, timeframe: "4h", maxAgeMs: 2 * FOUR_HOURS,
+    closedFrame: { openAtMs: now - FOUR_HOURS, closeAtMs: now, intervalMs: FOUR_HOURS,
+      closeOffsetMs: FOUR_HOURS, provider: source, timeframe: "4h", sourceDigest },
+    accountIdentityDigest: accountIdentity.identityDigest,
+    entryEvidenceDigest: p.sample.entryEvidenceProvenance.evidenceSnapshotDigest,
+    riskPolicyIdentityDigest: riskPolicyIdentity.identityDigest,
+    costPolicyIdentity: { version: p.costPolicyVersion },
+    naturalEvidence: naturalEvidence(id, now),
+    schedulerHandoff: {
+      schemaVersion: "paper-scheduler-position-observation-handoff-v1", cycleIdentity, accountIdentity,
+      positionIdentity: { ...p.lifecycle.identity }, entryProvenance: structuredClone(p.sample.entryEvidenceProvenance),
+      riskPolicyIdentity, costPolicyIdentity: { version: p.costPolicyVersion },
+      naturalSampleCreditAuthority: "IDENTITY_GATES_PASSED", executionAuthority: "NONE",
+    },
+  };
+}
+
+test("complete scheduler handoff reaches lifecycle; each independent identity corruption blocks", async () => {
+  const { h, state } = await naturalFixture();
+  const row = boundNaturalObservation(state, "valid-cycle", "valid-row", T0 + FOUR_HOURS, { open: 100, high: 102, low: 99, close: 101 });
+  const valid = await run(h, { state, cycle: cycle("valid-cycle", T0 + FOUR_HOURS), positionObservations: [row] });
+  assert.equal(valid.state.positions[0].lifecycle.mark.observationCount, 1);
+  assert.equal(valid.state.settlements.length, 0);
+  for (const change of [
+    (o) => { delete o.schedulerHandoff; },
+    (o) => { o.schedulerHandoff.cycleIdentity.cycleId = "other"; },
+    (o) => { o.schedulerHandoff.accountIdentity.accountIdSha256 = "f".repeat(64); },
+    (o) => { o.schedulerHandoff.entryProvenance.evidenceSnapshotDigest = "f".repeat(64); },
+    (o) => { o.schedulerHandoff.riskPolicyIdentity.policyId = "other"; },
+    (o) => { o.schedulerHandoff.costPolicyIdentity.version = "other"; },
+    (o) => { o.schedulerHandoff.positionIdentity.researchCodeSha = "f".repeat(40); },
+    (o) => { o.schedulerHandoff.positionIdentity.positionId = "other"; },
+    (o) => { o.schedulerHandoff.positionIdentity.paperSampleId = "other"; },
+    (o) => { o.naturalEvidence.synthetic = true; },
+    (o) => { o.naturalEvidence.replay = true; },
+    (o) => { o.naturalEvidence.backfill = true; },
+    (o) => { o.naturalEvidence.duplicate = true; },
+  ]) {
+    const invalid = structuredClone(row);
+    change(invalid);
+    const blocked = await run(h, { state, cycle: cycle("valid-cycle", T0 + FOUR_HOURS), positionObservations: [invalid] });
+    assert.deepEqual(blocked.state.positions, state.positions);
+    assert.equal(blocked.state.settlements.length, 0);
+  }
+});
+
+test("delayed evidence for the exact original trigger settles at trigger time and only once", async () => {
+  const h = harness();
+  const opened = await open(h);
+  const first = observation(opened.state.positions[0], "trigger", T0 + 1_000, { open: 100, high: 106, low: 99, close: 105 });
+  const complete = structuredClone(first);
+  first.settlementCostEvidence = null;
+  const pending = await run(h, { state: opened.state, cycle: cycle("trigger", T0 + 1_000), positionObservations: [first] });
+  const restored = restoreRecurringPaperLoopState(serializeRecurringPaperLoopState(pending.state), identity);
+  const trigger = restored.positions[0].lifecycle.pendingExit;
+  complete.settlementInput.exitTriggerId = trigger.exitTriggerId;
+  complete.settlementCostEvidence.exitTriggerId = trigger.exitTriggerId;
+  const result = await run(h, { state: restored, cycle: cycle("late-cost", T0 + 5_000), positionObservations: [complete] });
+  assert.equal(result.state.settlements.length, 1);
+  assert.equal(result.state.settlements[0].settledAtMs, T0 + 1_000);
+  assert.equal(result.state.settlements[0].settlementRecordedAtMs, T0 + 5_000);
+  assert.equal(result.state.settlements[0].positionLifecycle.mark.observationCount, 1);
+  assert.equal(result.state.settlements[0].naturalSampleCredit, 0);
+  const duplicate = await run(h, { state: result.state, cycle: cycle("duplicate-cost", T0 + 6_000), positionObservations: [complete] });
+  assert.equal(duplicate.state.settlements.length, 1);
+  assert.equal(h.getSettlementMutations(), 1);
+});
+
+for (const component of ["commission", "tax", "spread", "slippage", "funding", "latency", "liquidityImpact", "partialFillImpact"]) {
+  test(`Full Cost ${component} missing or numeric mismatch cannot settle`, async () => {
+    const h = harness();
+    const opened = await open(h);
+    for (const mode of ["missing", "mismatch", "unknown", "wrong-policy"]) {
+      const row = observation(opened.state.positions[0], "exit", T0 + 1_000, { open: 100, high: 106, low: 99, close: 105 });
+      if (mode === "missing") delete row.settlementCostEvidence.components[component];
+      if (mode === "mismatch") row.settlementInput.exitExecution.costPolicy[component + "Rate"] += 0.001;
+      if (mode === "unknown") row.settlementCostEvidence.components[component].status = "UNKNOWN";
+      if (mode === "wrong-policy") row.settlementCostEvidence.components[component].policyIdentity.version = "wrong";
+      const result = await run(h, { state: opened.state, cycle: cycle("exit", T0 + 1_000), positionObservations: [row] });
+      assert.equal(result.state.settlements.length, 0, component + ":" + mode);
+      assert.equal(h.getSettlementMutations(), 0);
+    }
+  });
+}
 
 function ledger() {
   return {
@@ -192,11 +441,12 @@ function run(h, input) {
 
 function costEvidence(now) {
   const component = (name, value = 0) => ({
-    state: "PRESENT",
-    value,
-    unit: "PERCENT",
-    quality: value === 0 ? "MEASURED_ZERO" : "OBSERVED",
+    status: "PRESENT",
+    valuePercent: value,
+    quality: ["tax", "funding"].includes(name) ? "NOT_APPLICABLE" : name === "commission" ? "DOCUMENTED" : "OBSERVED",
     source: `test-only-${name}-producer`,
+    provenance: "contract-fixture-runtime-credit-zero",
+    policyIdentity: { version: "cost-v1" },
     observedAtMs: now - 1,
     countsAsExecutionCost: true,
     unavailableIsZero: false,
@@ -205,8 +455,10 @@ function costEvidence(now) {
     schemaVersion: "authoritative-paper-execution-cost-sources-v1",
     status: "PRESENT",
     fullCostReady: true,
+    maximumAgeMs: 60_000,
     components: {
-      fees: component("fees", 0.1),
+      commission: component("commission", 0.1),
+      tax: component("tax"),
       spread: component("spread"),
       slippage: component("slippage"),
       funding: component("funding"),
@@ -215,6 +467,7 @@ function costEvidence(now) {
       partialFillImpact: component("partial-fill-impact"),
     },
     supplementalCostInput: { costPolicyId: "cost-v1" },
+    costPolicyIdentity: { version: "cost-v1" },
     unknownIsZero: false,
     unavailableCostConvertedToZero: false,
   };
@@ -493,3 +746,84 @@ test("STOP_FIRST, timeout, and explicit invalidation are canonical and fail clos
   });
   assert.equal(invalidated.state.settlements[0].exitReason, "INVALIDATION");
 });
+for (const [name, mutate] of [
+  ["missing handoff", (row) => { delete row.schedulerHandoff; }],
+  ["wrong cycle", (row) => { row.schedulerHandoff.cycleIdentity.cycleId = "wrong-cycle"; }],
+  ["wrong account", (row) => { row.schedulerHandoff.accountIdentity.accountIdSha256 = "f".repeat(64); }],
+  ["wrong entry", (row) => { row.schedulerHandoff.entryProvenance.evidenceSnapshotDigest = "f".repeat(64); }],
+  ["wrong risk", (row) => { row.schedulerHandoff.riskPolicyIdentity.policyId = "wrong"; }],
+  ["wrong cost", (row) => { row.schedulerHandoff.costPolicyIdentity.version = "wrong"; }],
+  ["wrong research SHA", (row) => { row.schedulerHandoff.positionIdentity.researchCodeSha = "f".repeat(40); }],
+  ["wrong position", (row) => { row.schedulerHandoff.positionIdentity.positionId = "wrong"; }],
+  ["wrong sample", (row) => { row.schedulerHandoff.positionIdentity.paperSampleId = "wrong"; }],
+]) {
+  test(`direct recurring caller rejects ${name} without mutating Natural Position`, async () => {
+    const h = harness();
+    const opened = await open(h, name, {
+      testOnly: false,
+      naturalEvidence: naturalEvidence("entry", T0 - 1),
+      riskEvidence: { status: "APPROVED", evaluatedAtMs: T0 - 1, simulatedOnly: true, policyIdentity: RISK_POLICY_IDENTITY },
+    });
+    const p = opened.state.positions[0];
+    const now = T0 + 1_000;
+    const row = observation(p, "direct-observation", now, { open: 100, high: 103, low: 98, close: 102 }, {
+      signalId: p.signalId,
+      naturalEvidence: naturalEvidence("direct-observation", now),
+      schedulerHandoff: {
+        schemaVersion: "paper-scheduler-position-observation-handoff-v1",
+        cycleIdentity: { cycleId: "observe", identityFingerprint: opened.state.identityFingerprint, scheduledAtMs: now, startedAtMs: now },
+        accountIdentity: { publisherAccountIdSha256: "d".repeat(64), sourceSha: SHA, accountIdSha256: sha256("paper-account") },
+        positionIdentity: { ...p.lifecycle.identity },
+        entryProvenance: structuredClone(p.sample.entryEvidenceProvenance),
+        riskPolicyIdentity: { ...RISK_POLICY_IDENTITY },
+        costPolicyIdentity: { version: p.costPolicyVersion },
+        naturalSampleCreditAuthority: "IDENTITY_GATES_PASSED",
+        executionAuthority: "NONE",
+      },
+    });
+    mutate(row);
+    const result = await run(h, { state: opened.state, cycle: cycle("observe", now), positionObservations: [row] });
+    assert.deepEqual(result.state.positions, opened.state.positions);
+    assert.equal(result.state.settlements.length, 0);
+    assert.equal(h.getSettlementMutations(), 0);
+  });
+}
+
+for (const [reason, bar, options] of [
+  ["TAKE_PROFIT", { open: 100, high: 106, low: 99, close: 105 }, {}],
+  ["STOP_LOSS", { open: 100, high: 101, low: 94, close: 95 }, {}],
+  ["TIMEOUT", { open: 100, high: 101, low: 99, close: 100 }, { signal: { expiresAtMs: T0 + 1_000 } }],
+  ["INVALIDATION", { open: 100, high: 101, low: 99, close: 100 }, { signal: { invalidationPolicyId: "regime-v1" } }],
+]) {
+  test(`${reason} pending trigger rejects later quote and freezes its path`, async () => {
+    const h = harness();
+    const opened = await open(h, reason, options);
+    const p = opened.state.positions[0];
+    const first = observation(p, "trigger", T0 + 1_000, bar, {
+      settlementCostEvidence: null,
+      ...(reason === "INVALIDATION" ? { invalidationEvidence: {
+        status: "PRESENT", invalidated: true, policyId: "regime-v1", source: "fixture",
+        provenance: "test-only", observedAtMs: T0 + 1_000,
+      } } : {}),
+    });
+    const pending = await run(h, { state: opened.state, cycle: cycle("trigger", T0 + 1_000), positionObservations: [first] });
+    assert.equal(pending.state.positions[0].lifecycle.pendingExit.reason, reason);
+    const later = observation(pending.state.positions[0], "later", T0 + 2_000, { open: 100, high: 200, low: 1, close: 150 });
+    const result = await run(h, { state: pending.state, cycle: cycle("later", T0 + 2_000), positionObservations: [later] });
+    assert.equal(result.state.settlements.length, 0);
+    assert.deepEqual(result.state.positions[0].lifecycle, pending.state.positions[0].lifecycle);
+    assert.equal(h.getSettlementMutations(), 0);
+  });
+}
+
+for (const missing of ["commission", "tax"]) {
+  test(`Full Cost cannot settle with ${missing} absent`, async () => {
+    const h = harness();
+    const opened = await open(h);
+    const row = observation(opened.state.positions[0], "exit", T0 + 1_000, { open: 100, high: 106, low: 99, close: 105 });
+    delete row.settlementCostEvidence.components[missing];
+    const result = await run(h, { state: opened.state, cycle: cycle("exit", T0 + 1_000), positionObservations: [row] });
+    assert.equal(result.state.settlements.length, 0);
+    assert.equal(h.getSettlementMutations(), 0);
+  });
+}
