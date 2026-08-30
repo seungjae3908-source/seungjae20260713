@@ -74,6 +74,11 @@ export class AccountReadonlyService {
       return value;
     } catch (error) {
       const classified = classifyProviderError(error);
+      if (classified.code === 'AUTH_FAILED') {
+        this.lastGood.delete(cacheKey);
+        return emptySnapshot(provider, 'AUTH_FAILED', this.now().toISOString(), classified.code);
+      }
+
       const prior = this.lastGood.get(cacheKey);
       if (prior) {
         return {
@@ -85,11 +90,9 @@ export class AccountReadonlyService {
         };
       }
 
-      const status = classified.code === 'AUTH_FAILED'
-        ? 'AUTH_FAILED'
-        : classified.code === 'RATE_LIMITED'
-          ? 'RATE_LIMITED'
-          : 'UNAVAILABLE';
+      const status = classified.code === 'RATE_LIMITED'
+        ? 'RATE_LIMITED'
+        : 'UNAVAILABLE';
       return emptySnapshot(provider, status, this.now().toISOString(), classified.code);
     }
   }
