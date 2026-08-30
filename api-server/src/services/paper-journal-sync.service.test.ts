@@ -230,18 +230,18 @@ test('malformed stored rows never become a successful snapshot or download', asy
   assert.deepEqual((await repository.getRecord(USER_A, 'journal', 'trade-1'))?.payload, corrupted.payload);
 });
 
-test('downloads higher server version', async () => {
+test('downloads higher server version only when device still has its acknowledged version', async () => {
   const repository = new MemoryRepository();
   await seed(repository, USER_A, record({ version: 3, payload: { value: 'server' } }));
-  const result = await syncPaperJournal(repository, USER_A, request([record({ version: 2, payload: { value: 'device' } })]), NOW);
+  const result = await syncPaperJournal(repository, USER_A, request([record({ version: 2, baseVersion: 2, payload: { value: 'device' } })]), NOW);
   assert.equal(result.downloaded[0]?.version, 3);
   assert.equal(result.uploaded.length, 0);
 });
 
-test('higher device version replaces server record', async () => {
+test('higher device version replaces exactly its acknowledged server version', async () => {
   const repository = new MemoryRepository();
   await seed(repository, USER_A, record({ version: 1, payload: { value: 'server' } }));
-  const result = await syncPaperJournal(repository, USER_A, request([record({ version: 2, payload: { value: 'device' } })]), NOW);
+  const result = await syncPaperJournal(repository, USER_A, request([record({ version: 2, baseVersion: 1, payload: { value: 'device' } })]), NOW);
   assert.equal(result.uploaded[0]?.version, 2);
   assert.equal(result.uploaded[0]?.payload.value, 'device');
 });
@@ -279,8 +279,38 @@ test('different tombstone state creates conflict at same version', async () => {
 test('higher version tombstone is uploaded', async () => {
   const repository = new MemoryRepository();
   await seed(repository, USER_A, record({ version: 1 }));
-  const result = await syncPaperJournal(repository, USER_A, request([record({ version: 2, deletedAt: NOW.toISOString(), payload: {} })]), NOW);
+  const result = await syncPaperJournal(repository, USER_A, request([record({ version: 2, baseVersion: 1, deletedAt: NOW.toISOString(), payload: {} })]), NOW);
   assert.equal(result.uploaded[0]?.deletedAt, NOW.toISOString());
+});
+
+test('offline edit counters cannot replace a different server branch or discard unacknowledged local edits', async () => {
+  for (const [version, baseVersion] of [[7, 1], [2, 1], [7, undefined], [2, undefined], [7, null]] as const) {
+    const repository = new MemoryRepository();
+    const original = record({ version: 3, payload: { note: 'other device saved after v1' } });
+    await seed(repository, USER_A, original);
+    const device = record({ version, baseVersion, payload: { note: 'offline local edit' } });
+    const result = await syncPaperJournal(repository, USER_A, request([device]), NOW);
+    assert.equal(result.uploaded.length, 0);
+    assert.equal(result.downloaded.length, 0);
+    assert.equal(result.conflicts.length, 1);
+    assert.equal(result.conflicts[0].deviceRecord.payload.note, device.payload.note);
+    assert.equal((await repository.getRecord(USER_A, 'journal', device.id))?.payload.note, original.payload.note);
+  }
+});
+
+test('known server ancestry cannot silently resurrect a missing record', async () => {
+  const repository = new MemoryRepository();
+  const result = await syncPaperJournal(repository, USER_A, request([record({ version: 4, baseVersion: 2 })]), NOW);
+  assert.equal(result.uploaded.length, 0);
+  assert.equal(result.failed[0]?.code, 'SERVER_RECORD_MISSING');
+  assert.equal(repository.records.size, 0);
+});
+
+test('server base version must be an explicit valid integer within the local version', () => {
+  for (const baseVersion of [0, -1, 1.5, 2, NaN, Infinity, true, '1', {}]) {
+    assert.throws(() => validatePaperJournalSyncRequest(request([record({ baseVersion } as any)]), NOW),
+      (error: unknown) => error instanceof PaperJournalError && error.code === 'INVALID_RECORD_BASE_VERSION');
+  }
 });
 
 test('same idempotency request returns cached response without duplicate write', async () => {
@@ -349,12 +379,13 @@ test('device conflict choice creates a higher version', async () => {
 
 test('preserve both conflict choice creates a copy', async () => {
   const repository = new MemoryRepository();
-  await seed(repository, USER_A, record({ payload: { value: 'server' } }));
-  const sync = await syncPaperJournal(repository, USER_A, request([record({ payload: { value: 'device' } })]), NOW);
+  await seed(repository, USER_A, record({ version: 4, payload: { value: 'server' } }));
+  const sync = await syncPaperJournal(repository, USER_A, request([record({ version: 7, baseVersion: 2, payload: { value: 'device' } })]), NOW);
   const resolved = await resolvePaperJournalConflict(repository, USER_A, sync.conflicts[0]?.id, 'preserve_both', NOW);
   assert.equal(resolved.records.length, 2);
   assert.match(resolved.records[1]?.id ?? '', /trade-1-copy-/);
   assert.equal(resolved.records[1]?.version, 1);
+  assert.equal(resolved.records[1]?.baseVersion, null);
   assert.equal(resolved.records[1]?.payload.id, resolved.records[1]?.id);
   assert.equal(resolved.records[1]?.payload.conflictCopyOf, 'trade-1');
   assert.equal(resolved.records[1]?.payload.researchEvidenceEligible, false);

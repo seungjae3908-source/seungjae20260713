@@ -23,6 +23,8 @@ export type PaperJournalSyncRecord = {
   kind: PaperJournalRecordKind;
   id: string;
   version: number;
+  /** Last server-acknowledged version. null = new record; absent = legacy/unknown ancestry. */
+  baseVersion?: number | null;
   updatedAt: string;
   deletedAt: string | null;
   payload: Record<string, unknown>;

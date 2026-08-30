@@ -70,6 +70,10 @@ function validateRecord(value: unknown, latest: number, scope: SyncScope = 'manu
   if (!PAPER_JOURNAL_RECORD_KINDS.includes(value.kind as PaperJournalRecordKind)) throw new PaperJournalError('INVALID_RECORD_KIND', '지원하지 않는 동기화 레코드 종류입니다.');
   if (typeof value.id !== 'string' || !idPattern.test(value.id)) throw new PaperJournalError('INVALID_RECORD_ID', '동기화 레코드 ID를 확인하세요.');
   if (!Number.isSafeInteger(value.version) || Number(value.version) < 1) throw new PaperJournalError('INVALID_RECORD_VERSION', '동기화 version은 1 이상의 정수여야 합니다.');
+  if (value.baseVersion !== undefined && value.baseVersion !== null
+    && (!Number.isSafeInteger(value.baseVersion) || Number(value.baseVersion) < 1 || Number(value.baseVersion) > Number(value.version))) {
+    throw new PaperJournalError('INVALID_RECORD_BASE_VERSION', '마지막 서버 확인 버전을 검증하지 못했습니다.');
+  }
   const updatedAt = parseTimestamp(value.updatedAt, 'INVALID_RECORD_TIMESTAMP', latest);
   const deletedAt = value.deletedAt == null ? null : parseTimestamp(value.deletedAt, 'INVALID_TOMBSTONE_TIMESTAMP', latest);
   if (!isObject(value.payload)) throw new PaperJournalError('INVALID_RECORD_PAYLOAD', '동기화 payload를 확인하세요.');
@@ -82,7 +86,9 @@ function validateRecord(value: unknown, latest: number, scope: SyncScope = 'manu
   if (!validPayload) {
     throw new PaperJournalError('INVALID_RECORD_EVIDENCE', '동기화 기록의 식별자·시각·수치 근거를 확인하세요.');
   }
-  return { kind: value.kind as PaperJournalRecordKind, id: value.id, version: Number(value.version), updatedAt, deletedAt, payload: structuredClone(value.payload) };
+  return { kind: value.kind as PaperJournalRecordKind, id: value.id, version: Number(value.version),
+    ...(value.baseVersion !== undefined ? { baseVersion: value.baseVersion as number | null } : {}),
+    updatedAt, deletedAt, payload: structuredClone(value.payload) };
 }
 
 export function validatePaperJournalSyncRequest(value: unknown, now = new Date(), scope: SyncScope = 'manual'): PaperJournalSyncRequest {
@@ -172,7 +178,7 @@ async function executeSync(
   if (claimedResponse) return validateCachedResponse(claimedResponse, request, now, scope);
   const clockSkewMs = Date.parse(request.clientTime) - now.getTime();
   const warnings = Math.abs(clockSkewMs) > CLOCK_SKEW_WARNING_MS
-    ? ['기기 시각과 서버 시각 차이가 큽니다. version을 우선하고 서버 시각을 기록했습니다.'] : [];
+    ? ['기기 시각과 서버 시각 차이가 큽니다. 서버 확인 버전과 충돌 여부를 검사하고 서버 시각을 기록했습니다.'] : [];
   const uploaded: StoredPaperJournalRecord[] = [];
   const downloaded: StoredPaperJournalRecord[] = [];
   const unchanged: PaperJournalSyncResult['unchanged'] = [];
@@ -183,9 +189,14 @@ async function executeSync(
     try {
       const server = await repository.getRecord(userId, record.kind, record.id);
       if (server) validatedStored(server, now, scope);
-      if (!server || record.version > server.version) {
+      if (!server && record.baseVersion != null) {
+        throw new PaperJournalError('SERVER_RECORD_MISSING', '이전에 확인한 서버 기록이 없습니다. 로컬 기록을 자동으로 재생성하지 않았습니다.', 409);
+      }
+      // Local edit counters do not prove ancestry. Offline edits must never win
+      // solely because their counter is larger than another device's version.
+      if (!server || record.version > server.version && (record.baseVersion === server.version || scope === 'currency-ledger')) {
         uploaded.push(validatedAcknowledgement(await repository.upsertRecord(userId, record, serverTime, server?.version ?? null), record, now, scope));
-      } else if (record.version < server.version) {
+      } else if (record.version < server.version && (record.baseVersion === record.version || scope === 'currency-ledger')) {
         downloaded.push(server);
       } else if (sameRecord(server, record)) {
         unchanged.push({ kind: record.kind, id: record.id, version: record.version });
@@ -285,7 +296,7 @@ function cloneWithVersion(record: PaperJournalSyncRecord, version: number, updat
     copy.payload.researchEvidenceEligible = false;
     if (Array.isArray(copy.payload.warnings)) copy.payload.warnings.push('충돌 보존 사본이며 추가 체결 또는 별도 거래 성과로 집계하지 않습니다.');
   }
-  return { ...copy, id, version, updatedAt };
+  return { ...copy, id, version, updatedAt, ...(id !== record.id ? { baseVersion: null } : {}) };
 }
 
 export async function resolvePaperJournalConflict(repository: PaperJournalRepository, userId: string, conflictIdValue: unknown, choiceValue: unknown, now = new Date()): Promise<ConflictResolutionResult> {
