@@ -10,6 +10,7 @@ import type {
   TradingAccountMode,
   TradingExchange,
 } from '../services/trade-automation.types';
+import memberInvestmentRouter from '../features/member-investment/member-investment.route';
 
 export type BrokerProviderId = 'toss' | 'kiwoom' | 'upbit' | 'bitget';
 export type BrokerConnectivityStatus =
@@ -273,6 +274,7 @@ const router: IRouter = Router();
 // insufficient: pending/inactive profiles must not learn whether credentials are
 // configured. Approved associate/regular/admin members share canAccessBasicInfo.
 router.use(requireCapability('canAccessBasicInfo'));
+router.use('/platform', memberInvestmentRouter);
 
 router.get('/contract', async (req: AuthenticatedRequest, res) => {
   res.setHeader('Cache-Control', 'no-store, max-age=0');
