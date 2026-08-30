@@ -82,7 +82,7 @@ export interface MarketIntelligenceAiAnalyzerOptions {
 const secretPattern = /(?:bearer\s+[a-z0-9._-]+|sk-[a-z0-9_-]{12,}|eyJ[a-z0-9_-]{12,}\.|authorization\s*:|(?:refresh[_ -]?token|access[_ -]?token|api[_ -]?key|private[_ -]?key|password|비밀번호|계좌번호|주민등록번호|실행키|주문\s*승인\s*토큰)\s*[:=]\s*\S{6,})/i;
 const tradeInstructionPattern = /(?:확정\s*매수|반드시\s*(?:매수|매도)|(?:지금|즉시|전액|몰빵).{0,24}(?:매수|매도|롱|숏|진입)|(?:매수|매도|롱|숏|진입).{0,24}(?:하세요|하십시오|해야\s*합니다)|\b(?:buy|sell|long|short)\s+(?:now|immediately)\b)/i;
 const generatedUrlPattern = /(?:https?:\/\/|www\.|javascript:|data:text\/html)/i;
-const numericClaimPattern = /(?:[$₩€¥]\s*)?[-+]?\d[\d,.]*(?:\s*(?:%|bp|bps|원|달러|usd|krw|usdt|억|만|천|조))?/giu;
+const numericClaimPattern = /(?:[$₩€¥]\s*)?[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:e[-+]?\d+)?(?:\s*(?:조|억|만|천))?(?:\s*(?:usdt|usd|krw|bps|bp|%|원|달러))?/giu;
 const analysisKeyPattern = /^[a-f0-9]{64}$/i;
 const sentimentSet = new Set<MarketIntelligenceSentiment>(['POSITIVE', 'NEGATIVE', 'NEUTRAL', 'MIXED', 'UNKNOWN']);
 const horizonSet = new Set<MarketIntelligenceImpactHorizon>(['INTRADAY', 'SHORT', 'SWING', 'MID_LONG', 'UNKNOWN']);
@@ -143,15 +143,14 @@ function generatedTextHasUnsupportedFactualClaim(
   ].join('\n');
   if (generatedUrlPattern.test(generatedText)) return true;
 
-  const factualCorpus = [
-    input.headline,
-    input.sourceText,
-    input.publishedAt,
-    ...input.evidenceFacts,
-  ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0).join('\n');
-  const normalizedCorpus = normalizedClaimToken(factualCorpus);
+  // Only cited facts can ground numeric prose. A publication date or an uncited
+  // source excerpt is not evidence for a new factual claim. Compare whole tokens:
+  // e.g. 75 must not match 750, nor $1,200 match $1,200.50.
+  const supportedClaims = new Set(analysis.factEvidenceRefs.flatMap((index) =>
+    (input.evidenceFacts[index].match(numericClaimPattern) ?? []).map(normalizedClaimToken),
+  ));
   const numericClaims = generatedText.match(numericClaimPattern) ?? [];
-  return numericClaims.some((claim) => !normalizedCorpus.includes(normalizedClaimToken(claim)));
+  return numericClaims.some((claim) => !supportedClaims.has(normalizedClaimToken(claim)));
 }
 
 function parseStructuredAnalysis(answer: string, input: MarketIntelligencePublicEvidenceInput): MarketIntelligenceStructuredAnalysis | null {
