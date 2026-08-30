@@ -30,15 +30,33 @@ test('execution snapshot rejects wrong identity and malformed positions instead 
   const { approved } = await setup();
   const now = Date.now();
   const input = {
-    plan: { ...approved, exchange: 'bitget' as const, symbol: 'BTCUSDT', leverage: 2 },
+    plan: { ...approved, exchange: 'bitget' as const, market: 'USDT-FUTURES', symbol: 'BTCUSDT', leverage: 2 },
     accounts: [{ marginCoin: 'USDT', available: '10000', accountEquity: '100000' }],
     positions: [] as Record<string, unknown>[],
     ticker: [{ symbol: 'BTCUSDT', markPrice: '100000', ts: now }],
     depth: { bids: [[99999, 10], [99998, 10]], asks: [[100001, 10], [100002, 10]], ts: now },
     contract: { symbol: 'BTCUSDT', takerFeeRate: '0.0005' },
+    fxQuote: { currency: 'USDT' as const, krwRate: 1400, source: 'isolated-FX-fixture', asOf: new Date(now).toISOString(), quality: 'DELAYED' as const },
     signal: null,
   };
   assert.equal(buildBitgetExecutionSnapshot(input).openPositionCount, 0);
+  const snapshot = buildBitgetExecutionSnapshot(input);
+  assert.equal(snapshot.availableBalance, 14_000_000);
+  assert.equal(snapshot.accountValueKrw, 140_000_000);
+  assert.equal(snapshot.availableLiquidityKrw, 2_800_042_000);
+  assert.deepEqual(snapshot.currencyConversion, { pair: 'USDT/KRW', krwRate: 1400, source: 'isolated-FX-fixture', asOf: new Date(now).toISOString() });
+  for (const estimatedKrw of [1, 1_000_000_000]) {
+    const changed = buildBitgetExecutionSnapshot({ ...input, plan: { ...input.plan, estimatedKrw } });
+    assert.equal(changed.availableBalance, snapshot.availableBalance);
+    assert.equal(changed.accountValueKrw, snapshot.accountValueKrw);
+    assert.equal(changed.availableLiquidityKrw, snapshot.availableLiquidityKrw);
+  }
+  for (const fxQuote of [undefined, { ...input.fxQuote, currency: 'USD' as const }, { ...input.fxQuote, source: '' },
+    { ...input.fxQuote, krwRate: NaN }, { ...input.fxQuote, krwRate: 0 }, { ...input.fxQuote, quality: 'STALE' as const },
+    { ...input.fxQuote, asOf: new Date(now - 300_001).toISOString() }, { ...input.fxQuote, asOf: new Date(now + 60_000).toISOString() }]) {
+    assert.throws(() => buildBitgetExecutionSnapshot({ ...input, fxQuote }), /FX_UNAVAILABLE/);
+  }
+  assert.throws(() => buildBitgetExecutionSnapshot({ ...input, fxQuote: { ...input.fxQuote, krwRate: Number.MAX_VALUE } }), /OVERFLOW/);
   assert.equal(buildBitgetExecutionSnapshot({ ...input, positions: [
     { symbol: 'ETHUSDT', total: '1', holdSide: 'long' },
     { symbol: 'SOLUSDT', total: '2', holdSide: 'short' },
@@ -73,6 +91,8 @@ test('Upbit snapshot keeps locked holdings in exposure and validates both quote 
     signal: null,
   };
   const snapshot = buildUpbitExecutionSnapshot(input);
+  assert.equal(snapshot.availableLiquidityKrw, 2_000_030);
+  assert.equal(buildUpbitExecutionSnapshot({ ...input, plan: { ...approved, estimatedKrw: 1 } }).availableLiquidityKrw, 2_000_030);
   assert.equal(snapshot.openPositionCount, 1);
   assert.equal(snapshot.assetExposurePercent, 2);
   assert.equal(buildUpbitExecutionSnapshot({ ...input, chance: {} }).marketStatus, 'UNKNOWN');
@@ -171,11 +191,12 @@ async function eligibleMarketIntelligence(
   };
 }
 
-async function setup() {
+async function setup(overrides: Partial<TradingPlanInput> = {}) {
   process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
   process.env.ORDER_EXECUTION_ENABLED = 'true';
   process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
   process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
+  process.env.BITGET_LIVE_ORDER_ENABLED = 'true';
   setTradingPlanMarketIntelligenceRunnerForTests(eligibleMarketIntelligence);
   setTradeProfitabilityAttestationRunnerForTests(allowServerProfitabilityAttestationForTests);
   const repository = new InMemoryTradingRepository();
@@ -183,18 +204,20 @@ async function setup() {
     ...DEFAULT_TRADING_POLICY,
     pilotStage: 'limited-50',
   });
+  const input = { ...planInput(new Date()), ...overrides };
   await repository.saveConnection({
     userId: USER_ID,
-    exchange: 'upbit',
+    exchange: input.exchange,
     accountMode: 'live',
     configured: true,
-    encryptedCredentials: encryptTradingCredentials({ accessKey: 'access', secretKey: 'secret' }),
+    encryptedCredentials: encryptTradingCredentials(input.exchange === 'bitget'
+      ? { apiKey: 'isolated-fixture', secretKey: 'isolated-fixture', passphrase: 'isolated-fixture' }
+      : { accessKey: 'access', secretKey: 'secret' }),
     lastVerifiedAt: new Date().toISOString(),
     lastErrorCode: null,
     updatedAt: new Date().toISOString(),
   });
   const automation = new TradeAutomationService(repository);
-  const input = planInput(new Date());
   const policy = await repository.getPolicy(USER_ID);
   const created = await automation.createPlan(USER_ID, input, policy, false);
   assert.ok(created.plan);
@@ -280,9 +303,46 @@ function resetEnvironment() {
   delete process.env.ORDER_EXECUTION_ENABLED;
   delete process.env.LIVE_TRADING_ACTIVATION_APPROVED;
   delete process.env.UPBIT_LIVE_ORDER_ENABLED;
+  delete process.env.BITGET_LIVE_ORDER_ENABLED;
 }
 
 test.afterEach(resetEnvironment);
+
+test('Bitget execution obtains server FX and rejects unavailable or stale conversion before any exchange mutation', async () => {
+  for (const fxState of ['unavailable', 'stale'] as const) {
+    const { repository, approved, order } = await setup({ exchange: 'bitget', market: 'USDT-FUTURES', symbol: 'BTCUSDT',
+      side: 'long', quantity: 0.00014, quoteAmount: null, leverage: 2, marginMode: 'isolated' });
+    let mutations = 0;
+    let fxReads = 0;
+    globalThis.fetch = async (request, init) => {
+      const url = new URL(String(request));
+      if ((init?.method ?? 'GET') !== 'GET') { mutations++; throw new Error('UNEXPECTED_MUTATION'); }
+      const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+      const now = Date.now();
+      if (url.hostname === 'api.upbit.com' && url.pathname === '/v1/ticker' && url.searchParams.get('markets') === 'KRW-USDT') {
+        fxReads++;
+        return fxState === 'unavailable' ? json({}, 503) : json([{ market: 'KRW-USDT', trade_price: 1400, timestamp: now - 600_000 }]);
+      }
+      assert.equal(url.hostname, 'api.bitget.com');
+      const data: Record<string, unknown> = {
+        '/api/v2/mix/account/accounts': [{ marginCoin: 'USDT', available: '10000', accountEquity: '100000', posMode: 'one_way_mode' }],
+        '/api/v2/mix/position/all-position': [], '/api/v2/mix/order/orders-pending': { entrustedList: [] },
+        '/api/v2/mix/market/contracts': [{ symbol: 'BTCUSDT', minTradeNum: '0.00001', sizeMultiplier: '0.00001', minTradeUSDT: '5',
+          symbolStatus: 'normal', takerFeeRate: '0.0005', maxMarketOrderQty: '10' }],
+        '/api/v2/mix/market/ticker': [{ symbol: 'BTCUSDT', markPrice: '100000', ts: now }],
+        '/api/v2/mix/market/merge-depth': { bids: [[99999, 10], [99998, 10]], asks: [[100001, 10], [100002, 10]], ts: now },
+      };
+      assert.ok(Object.hasOwn(data, url.pathname), `unexpected isolated fixture request: ${url.pathname}`);
+      return json({ code: '00000', data: data[url.pathname] });
+    };
+    const result = await new TradeExecutionService(repository).execute(USER_ID, approved, order);
+    assert.equal(result.state, 'REJECTED');
+    assert.match(result.lastErrorCode ?? '', /FX_/);
+    assert.equal(fxReads, 1);
+    assert.equal(mutations, 0);
+    assert.equal(result.submissionStartedAt ?? null, null);
+  }
+});
 
 test('two concurrent executions produce one provider order POST behind one atomic intent', async () => {
   const { repository, approved, order } = await setup();
