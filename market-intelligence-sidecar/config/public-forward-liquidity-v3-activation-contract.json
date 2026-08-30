@@ -12,7 +12,7 @@
   "collectorCodeSha": "8044d5cb136eb30a531608392c73a45be601e5ba",
   "collectorCodeShaSemantics": "GIT_BLOB_SHA1_OF_CANONICAL_COLLECTOR_IMPLEMENTATION",
   "runtimeCollectorCodeShaRule": "EQUALS_EXACT_MAIN_SHA_AT_RUN",
-  "seamSourceBlobSha": "7bd8d4342ae397556ccbaa4b63ed4d4629869f0f",
+  "seamSourceBlobSha": "08cf04adfd006f492a5d6bfcf7013f47d3b04ae7",
   "seamRunnerBlobSha": "ffbf7d89169088321dfab8c13f41e9e8b5043544",
   "slotExecutionRule": "FIRST_WHOLE_MINUTE_STRICTLY_AT_OR_AFTER_COHORT_ELIGIBLE_THEN_EXACT_30_MINUTE_SEQUENCE",
   "firstNominalScheduledAtMs": 1788129780000,
@@ -123,5 +123,5 @@
     "fullCostReady": false,
     "evidenceComplete": 0
   },
-  "activationContractDigest": "22d7f460a7a04ead588ac45d9fa20c75473afc87ee49f0c025bed6faa08d07ad"
+  "activationContractDigest": "3875488f527b16493aa45abce1ea150a52ba5ec6c896996341bb0bd5d2d2f85e"
 }
