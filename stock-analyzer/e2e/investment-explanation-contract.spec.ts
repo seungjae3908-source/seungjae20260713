@@ -46,6 +46,14 @@ test('AI information fails closed instead of rendering client fabricated target 
   expect(aiTab).toContain('판단 무효화 조건');
 });
 
+test('analysis client preserves server target and stop evidence without current-price synthesis', () => {
+  const apiSource = source('src/lib/api.ts');
+  expect(apiSource).not.toContain('function clampAnalysisPrice');
+  expect(apiSource).not.toContain('return clampAnalysisPrice');
+  expect(apiSource).not.toContain('const [analysis, overview] = await Promise.all');
+  expect(apiSource).toContain("apiGet<AiAnalysis>(`/stocks/${enc(ticker)}/analysis`)");
+});
+
 test('AI info calls only on send and reuses only freshness-bounded duplicate context', () => {
   const aiInfo = source('src/pages/ai-chat.tsx');
   expect(aiInfo).toContain('responseCacheRef');
