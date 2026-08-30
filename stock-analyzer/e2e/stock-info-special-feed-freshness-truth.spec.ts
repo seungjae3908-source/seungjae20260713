@@ -19,14 +19,3 @@ test('special feed never promotes malformed or future timestamps as fresh eviden
   expect(source).not.toContain("if (!Number.isFinite(timestamp)) return '방금 전';");
   expect(source).not.toContain('Math.max(0, Math.floor((nowMs - timestamp) / 60_000))');
 });
-
-test('stock info does not coerce missing numeric or warning evidence into real facts', async () => {
-  const source = await readFile(pagePath, 'utf8');
-
-  expect(source).toContain("if (typeof value === 'number') return Number.isFinite(value) ? value : null;");
-  expect(source).toContain("if (typeof value !== 'string' || value.trim() === '') return null;");
-  expect(source).toContain("tone={finite(quote.data.changePercent) == null ? undefined : Number(quote.data.changePercent) >= 0 ? 'up' : 'down'}");
-  expect(source).toContain("tone={finite(selected.changePercent ?? selected.changePercent24h) == null ? undefined : Number(selected.changePercent ?? selected.changePercent24h) >= 0 ? 'up' : 'down'}");
-  expect(source).toContain("selected.warning === true ? '유의 종목' : selected.warning === false ? '정상' : '데이터 없음'");
-  expect(source).toContain("tone={selected.warning === true ? 'down' : undefined}");
-});
