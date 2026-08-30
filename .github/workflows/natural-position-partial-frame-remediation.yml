@@ -98,3 +98,5 @@ test("first post-cursor candle that opened before Entry fails closed instead of 
             market-prediction-lab/tests/natural-paper-public-position-observation-runtime-v1.test.js
           git commit -m 'fix(paper): reject pre-entry partial candle observations'
           git push origin HEAD:${{ github.event.pull_request.head.ref }}
+
+# retrigger-after-824: 2026-08-30
