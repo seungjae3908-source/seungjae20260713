@@ -10,6 +10,7 @@ import { SectorPopularService } from '../services/sector-popular.service';
 import { SignalService } from '../services/signal.service';
 import { RecommendationService } from '../services/recommendation.service';
 import { hasQuoteRating } from '../services/quote-rating-evidence';
+import { quoteTimeEvidence } from '../providers/market-evidence';
 
 const router: IRouter = Router();
 
@@ -464,6 +465,7 @@ router.get('/market/recommendations', async (req, res) => {
 });
 
 router.get('/market/alerts', async (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
   const scope = normalizeMarket(req.query.market);
   try {
     const live = await liveListingsWithDiagnostics(scope);
@@ -473,21 +475,33 @@ router.get('/market/alerts', async (req, res) => {
         dataStatus: 'unavailable', error: 'ALERT_PROVIDER_UNAVAILABLE', diagnostics: live.diagnostics,
       });
     }
-    const rows = rankByChange(live.rows, 'desc').slice(0, 20);
+    const supported = live.rows.filter((row) => typeof row.changePercent === 'number' && Number.isFinite(row.changePercent)
+      && typeof row.source === 'string' && row.source.trim().length > 0
+      && ((row.market === 'KR' && row.currency === 'KRW') || (row.market === 'US' && row.currency === 'USD'))
+      && quoteTimeEvidence(row.updatedAt).updatedAt !== null);
+    const missingEvidenceRows = live.rows.length - supported.length;
+    if (!supported.length) return res.status(503).json({
+      market: scope, positive: [], negative: [], alerts: [], dataStatus: 'unavailable',
+      error: 'ALERT_EVIDENCE_UNAVAILABLE', missingEvidenceRows, diagnostics: live.diagnostics,
+    });
+    // An observed unchanged price is not an upward signal. Missing change is never zero.
+    const rows = rankByChange(supported.filter((row) => row.changePercent !== 0), 'desc').slice(0, 20);
     const alerts = rows.map((row, index) => ({
       id: `${row.market}:${row.ticker}:movement`,
       ticker: row.ticker,
       name: row.name,
       market: row.market,
-      kind: Number(row.changePercent ?? 0) >= 0 ? 'positive' : 'negative',
+      kind: row.changePercent > 0 ? 'positive' : 'negative',
       category: '시세 변동',
-      title: `${row.name} ${Number(row.changePercent ?? 0) >= 0 ? '상승' : '하락'} ${Math.abs(Number(row.changePercent ?? 0)).toFixed(2)}%`,
+      title: `${row.name} ${row.changePercent > 0 ? '상승' : '하락'} ${Math.abs(row.changePercent).toFixed(2)}%`,
       importance: index < 5 ? 'high' : index < 12 ? 'medium' : 'low',
       time: row.updatedAt,
+      source: row.source,
       url: null,
     }));
     return res.json({ market: scope, positive: alerts.filter((item) => item.kind === 'positive'), negative: alerts.filter((item) => item.kind === 'negative'), alerts,
-      dataStatus: live.diagnostics.status, diagnostics: live.diagnostics, fetchedAt: new Date().toISOString() });
+      dataStatus: missingEvidenceRows > 0 ? 'partial' : live.diagnostics.status,
+      missingEvidenceRows, diagnostics: live.diagnostics, fetchedAt: new Date().toISOString() });
   } catch (error) {
     console.error('market alerts error:', error);
     return res.status(502).json({ market: scope, positive: [], negative: [], alerts: [], error: 'ALERT_PROVIDER_ERROR' });
