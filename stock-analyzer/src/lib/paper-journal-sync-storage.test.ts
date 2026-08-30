@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { paperJournalFixture, paperOrderFixture } from './paper-journal-test-fixture';
 import {
   LEGACY_OWNER_KEY,
   applyConflictResolution,
@@ -16,7 +17,7 @@ import {
   syncMetadataStorageKey,
 } from './paper-journal-sync-storage';
 import { createLocalPaperState, PAPER_STORAGE_KEY, savePaperState, type StorageLike } from './paper-trading-storage';
-import type { ConflictResolutionResult, JournalSnapshotResult, JournalSyncResult, StoredJournalSyncRecord } from './paper-journal-sync';
+import type { ConflictResolutionResult, JournalSnapshotResult, JournalSyncResult, StoredJournalSyncRecord, JournalConflict } from './paper-journal-sync';
 
 const NOW = new Date('2026-08-02T06:00:00.000Z');
 const USER_A = '11111111-1111-1111-1111-111111111111';
@@ -32,7 +33,7 @@ class MemoryStorage implements StorageLike {
 function stored(overrides: Partial<StoredJournalSyncRecord> = {}): StoredJournalSyncRecord {
   return {
     kind: 'journal', id: 'journal-1', version: 1, updatedAt: NOW.toISOString(), deletedAt: null,
-    payload: { id: 'journal-1', status: 'closed', note: '' }, createdAt: NOW.toISOString(), serverUpdatedAt: NOW.toISOString(),
+    payload: { ...paperJournalFixture('journal-1', NOW.toISOString()) }, createdAt: NOW.toISOString(), serverUpdatedAt: NOW.toISOString(),
     ...overrides,
   };
 }
@@ -45,6 +46,10 @@ function syncResult(overrides: Partial<JournalSyncResult> = {}): JournalSyncResu
   };
 }
 
+function conflictFixture(id: string): JournalConflict {
+  return { id, kind: 'journal', recordId: 'journal-1', version: 1, serverRecord: stored(), deviceRecord: stored(), differenceSummary: ['note differs'], createdAt: NOW.toISOString(), status: 'open' };
+}
+
 test('owner namespace is deterministic and hides raw UUID', () => {
   const value = paperOwnerNamespace(USER_A);
   assert.equal(value, paperOwnerNamespace(USER_A));
@@ -55,28 +60,40 @@ test('different users receive different storage namespaces', () => {
   assert.notEqual(namespacedPaperStorageKey(USER_A), namespacedPaperStorageKey(USER_B));
 });
 
-test('first authenticated user migrates legacy v1 without deleting original', () => {
+test('first authenticated user cannot claim unowned legacy v1 data', () => {
   const storage = new MemoryStorage();
   const state = createLocalPaperState(10_000, NOW);
   savePaperState(storage, state);
   const adapter = createUserPaperStorage(storage, USER_A, NOW);
-  assert.notEqual(adapter.getItem(PAPER_STORAGE_KEY), null);
+  assert.equal(adapter.getItem(PAPER_STORAGE_KEY), null);
   assert.notEqual(storage.getItem(PAPER_STORAGE_KEY), null);
-  assert.equal(storage.getItem(LEGACY_OWNER_KEY), paperOwnerNamespace(USER_A));
+  assert.equal(storage.getItem(LEGACY_OWNER_KEY), null);
 });
 
-test('legacy migration creates a backup', () => {
+test('reading unowned legacy data does not copy or mutate any storage key', () => {
   const storage = new MemoryStorage();
   savePaperState(storage, createLocalPaperState(10_000, NOW));
+  const original = [...storage.map.entries()];
   createUserPaperStorage(storage, USER_A, NOW).getItem(PAPER_STORAGE_KEY);
-  assert.equal([...storage.map.keys()].some((key) => key.startsWith(`${PAPER_STORAGE_KEY}.backup:`)), true);
+  assert.deepEqual([...storage.map.entries()], original);
 });
 
-test('second user cannot inherit first user legacy data', () => {
+test('neither user can inherit unowned legacy data', () => {
   const storage = new MemoryStorage();
   savePaperState(storage, createLocalPaperState(12_345, NOW));
-  createUserPaperStorage(storage, USER_A, NOW).getItem(PAPER_STORAGE_KEY);
+  assert.equal(createUserPaperStorage(storage, USER_A, NOW).getItem(PAPER_STORAGE_KEY), null);
   assert.equal(createUserPaperStorage(storage, USER_B, NOW).getItem(PAPER_STORAGE_KEY), null);
+});
+
+test('known 32-bit hash collision cannot share a paper state or recovery namespace', () => {
+  const storage = new MemoryStorage();
+  const first = createUserPaperStorage(storage, 'costarring');
+  const second = createUserPaperStorage(storage, 'liquid');
+  first.setItem(PAPER_STORAGE_KEY, 'first-state');
+  first.setItem(`${PAPER_STORAGE_KEY}.corrupt:sample`, 'first-recovery');
+  assert.equal(second.getItem(PAPER_STORAGE_KEY), null);
+  assert.equal(second.getItem(`${PAPER_STORAGE_KEY}.corrupt:sample`), null);
+  assert.notEqual(paperOwnerNamespace('costarring'), paperOwnerNamespace('liquid'));
 });
 
 test('adapter writes only to user namespace', () => {
@@ -153,7 +170,7 @@ test('changed local data increments version', () => {
 test('new order creates independent record version', () => {
   const storage = new MemoryStorage();
   const state = createLocalPaperState(10_000, NOW);
-  state.orders.push({ id: 'order-1' } as any);
+  state.orders.push(paperOrderFixture('order-1', NOW.toISOString()));
   const result = prepareJournalSync(storage, USER_A, state, NOW);
   assert.equal(result.records.find((item) => item.kind === 'order')?.version, 1);
 });
@@ -161,7 +178,7 @@ test('new order creates independent record version', () => {
 test('removed order becomes tombstone and is not silently forgotten', () => {
   const storage = new MemoryStorage();
   const state = createLocalPaperState(10_000, NOW);
-  state.orders.push({ id: 'order-1' } as any);
+  state.orders.push(paperOrderFixture('order-1', NOW.toISOString()));
   prepareJournalSync(storage, USER_A, state, NOW);
   state.orders = [];
   const result = prepareJournalSync(storage, USER_A, state, new Date(NOW.getTime() + 60_000));
@@ -173,7 +190,7 @@ test('removed order becomes tombstone and is not silently forgotten', () => {
 test('tombstone retry keeps version until server success', () => {
   const storage = new MemoryStorage();
   const state = createLocalPaperState(10_000, NOW);
-  state.orders.push({ id: 'order-1' } as any);
+  state.orders.push(paperOrderFixture('order-1', NOW.toISOString()));
   prepareJournalSync(storage, USER_A, state, NOW);
   state.orders = [];
   const first = prepareJournalSync(storage, USER_A, state, new Date(NOW.getTime() + 60_000));
@@ -192,7 +209,7 @@ test('apply sync result downloads server journal', () => {
 test('apply sync result records partial failure without deleting state', () => {
   const storage = new MemoryStorage();
   const state = createLocalPaperState(10_000, NOW);
-  state.journal.push({ id: 'local-journal' } as any);
+  state.journal.push(paperJournalFixture('local-journal', NOW.toISOString()));
   const result = applyJournalSyncResult(storage, USER_A, state, syncResult({ failed: [{ kind: 'journal', id: 'local-journal', code: 'FAILED', message: 'retry' }] }));
   assert.equal(result.metadata.status, 'failed');
   assert.equal(result.metadata.failedCount, 1);
@@ -201,7 +218,7 @@ test('apply sync result records partial failure without deleting state', () => {
 
 test('apply sync result preserves unresolved conflict', () => {
   const storage = new MemoryStorage();
-  const conflict = { id: 'conflict:1', kind: 'journal', recordId: 'journal-1', version: 1, serverRecord: stored(), deviceRecord: stored(), differenceSummary: ['note differs'], createdAt: NOW.toISOString(), status: 'open' } as any;
+  const conflict = conflictFixture('conflict:1');
   const result = applyJournalSyncResult(storage, USER_A, createLocalPaperState(10_000, NOW), syncResult({ conflicts: [conflict] }));
   assert.equal(result.metadata.status, 'conflict');
   assert.equal(result.metadata.conflicts.length, 1);
@@ -210,7 +227,7 @@ test('apply sync result preserves unresolved conflict', () => {
 test('downloaded tombstone removes matching local row', () => {
   const storage = new MemoryStorage();
   const state = createLocalPaperState(10_000, NOW);
-  state.journal.push({ id: 'journal-1' } as any);
+  state.journal.push(paperJournalFixture('journal-1', NOW.toISOString()));
   const tombstone = stored({ deletedAt: NOW.toISOString(), payload: {} });
   const result = applyJournalSyncResult(storage, USER_A, state, syncResult({ downloaded: [tombstone] }));
   assert.equal(result.state.journal.length, 0);
@@ -227,7 +244,7 @@ test('snapshot applies downloaded records', () => {
 test('conflict resolution removes only resolved conflict', () => {
   const storage = new MemoryStorage();
   const metadata = loadJournalSyncMetadata(storage, USER_A, NOW).metadata;
-  metadata.conflicts = [{ id: 'conflict:1' }, { id: 'conflict:2' }] as any;
+  metadata.conflicts = [conflictFixture('conflict:1'), conflictFixture('conflict:2')];
   saveJournalSyncMetadata(storage, USER_A, metadata);
   const resolution: ConflictResolutionResult = { ok: true, mode: 'journal-sync-only', orderSubmitted: false, exchangeRequestSent: false, conflictId: 'conflict:1', choice: 'server', records: [stored()], serverTime: NOW.toISOString() };
   const result = applyConflictResolution(storage, USER_A, createLocalPaperState(10_000, NOW), resolution);
@@ -253,4 +270,49 @@ test('clear user namespace does not clear another account', () => {
   assert.equal(storage.getItem(namespacedPaperStorageKey(USER_A)), null);
   assert.equal(storage.getItem(namespacedPaperStorageKey(USER_B)), 'b');
   assert.notEqual(storage.getItem(syncMetadataStorageKey(USER_B)), null);
+});
+
+test('invalid server records cannot mutate the local state or synchronization acknowledgement', () => {
+  const storage = new MemoryStorage();
+  const state = createLocalPaperState(10_000, NOW);
+  loadJournalSyncMetadata(storage, USER_A, NOW);
+  const before = [...storage.map.entries()];
+  const original = structuredClone(state);
+  const invalidRows = [
+    stored({ payload: { id: 'journal-1' } }),
+    stored({ payload: { ...paperJournalFixture('journal-1', NOW.toISOString()), netPnl: Number.NaN } }),
+    stored({ payload: { ...paperJournalFixture('different-id', NOW.toISOString()) } }),
+    stored({ version: 0 }), stored({ serverUpdatedAt: '2099-01-01T00:00:00.000Z' }),
+  ];
+  for (const row of invalidRows) {
+    assert.throws(() => applyJournalSyncResult(storage, USER_A, state, syncResult({ downloaded: [row] })), /원장/);
+    assert.deepEqual(state, original);
+    assert.deepEqual([...storage.map.entries()], before);
+  }
+  const mixed = syncResult({ downloaded: [stored(), stored({ payload: { ...paperJournalFixture('journal-1', NOW.toISOString()), netPnl: 999 } })] });
+  assert.throws(() => applyJournalSyncResult(storage, USER_A, state, mixed), /중복/);
+  assert.deepEqual([...storage.map.entries()], before);
+});
+
+test('validated results defer durable acknowledgement until the ledger is saved', () => {
+  const storage = new MemoryStorage();
+  const state = createLocalPaperState(10_000, NOW);
+  loadJournalSyncMetadata(storage, USER_A, NOW);
+  const before = [...storage.map.entries()];
+  const result = applyJournalSyncResult(storage, USER_A, state, syncResult({ downloaded: [stored()] }));
+  assert.equal(result.metadata.status, 'completed');
+  assert.deepEqual([...storage.map.entries()], before);
+});
+
+test('older and conflicting server versions cannot overwrite newer local records', () => {
+  const storage = new MemoryStorage();
+  const state = createLocalPaperState(10_000, NOW);
+  state.journal.push(paperJournalFixture('journal-1', NOW.toISOString()));
+  prepareJournalSync(storage, USER_A, state, NOW);
+  state.journal[0].note = 'newer local note';
+  prepareJournalSync(storage, USER_A, state, NOW);
+  const before = [...storage.map.entries()];
+  assert.throws(() => applyJournalSyncResult(storage, USER_A, state, syncResult({ downloaded: [stored()] })), /서버 버전/);
+  assert.throws(() => applyJournalSyncResult(storage, USER_A, state, syncResult({ downloaded: [stored({ version: 2 })] })), /서버 버전/);
+  assert.deepEqual([...storage.map.entries()], before);
 });

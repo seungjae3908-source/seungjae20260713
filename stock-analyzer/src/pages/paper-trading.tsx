@@ -4,11 +4,11 @@ import { BottomNav } from '@/components/bottom-nav';
 import { PaperJournalSyncAnalyticsPanel } from '@/components/paper-journal-sync-analytics-panel';
 import { PaperTradingPanel } from '@/components/paper-trading-panel';
 import { useAuth } from '@/lib/auth';
-import { createUserPaperStorage } from '@/lib/paper-journal-sync-storage';
+import { createUserPaperStorage, legacyPaperStorageWarning } from '@/lib/paper-journal-sync-storage';
 
 export default function PaperTradingPage() {
-  const { user, profile } = useAuth();
-  const userId = user?.id ?? profile?.id ?? '';
+  const { user } = useAuth();
+  const userId = user?.id ?? '';
   const [showJournalTools, setShowJournalTools] = useState(false);
   const [paperRevision, setPaperRevision] = useState(0);
   const paperStorage = useMemo(
@@ -21,7 +21,7 @@ export default function PaperTradingPage() {
   }
 
   return <div className="relative h-full min-h-0 overflow-hidden pb-[calc(5rem+env(safe-area-inset-bottom))]" data-testid="paper-trading-shell">
-    <PaperTradingPanel key={`${userId}:${paperRevision}`} storage={paperStorage} />
+    <PaperTradingPanel key={`${userId}:${paperRevision}`} storage={paperStorage} storageWarning={legacyPaperStorageWarning(window.localStorage, userId)} />
     <button
       type="button"
       className="absolute right-4 top-4 z-30 inline-flex min-h-10 items-center gap-2 rounded-xl border border-border bg-background/95 px-3 text-sm font-bold shadow-lg backdrop-blur"
@@ -37,6 +37,7 @@ export default function PaperTradingPage() {
           <ArrowLeft className="h-4 w-4" />모의매매로 돌아가기
         </button>
         <PaperJournalSyncAnalyticsPanel
+          key={userId}
           userId={userId}
           rootStorage={window.localStorage}
           paperStorage={paperStorage}
