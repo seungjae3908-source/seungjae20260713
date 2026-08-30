@@ -368,8 +368,11 @@ export function prepareKiwoomCancel(
   };
 }
 
-export function prepareKiwoomOrderable(credentials: KiwoomCredentials): PreparedExchangeRequest {
+export function prepareKiwoomOrderable(credentials: KiwoomCredentials, plan: TradingPlanInput, referencePrice: number): PreparedExchangeRequest {
   if (!credentials.accessToken) throw new Error('KIWOOM_ACCESS_TOKEN_REQUIRED');
+  if (plan.exchange !== 'kiwoom' || plan.market !== 'KR' || !/^\d{6}$/.test(plan.symbol)
+    || !['buy', 'sell'].includes(plan.side) || !Number.isSafeInteger(plan.quantity) || Number(plan.quantity) < 1
+    || typeof referencePrice !== 'number' || !Number.isFinite(referencePrice) || referencePrice <= 0) throw new Error('KIWOOM_ORDERABLE_INPUT_INVALID');
   return {
     method: 'POST', path: '/api/dostk/acnt', query: '',
     headers: {
@@ -377,7 +380,7 @@ export function prepareKiwoomOrderable(credentials: KiwoomCredentials): Prepared
       'Content-Type': 'application/json;charset=UTF-8',
       'api-id': 'kt00010',
     },
-    body: '{}',
+    body: jsonBody({ stk_cd: plan.symbol, trde_tp: plan.side === 'buy' ? '2' : '1', uv: String(referencePrice), trde_qty: String(plan.quantity) }),
   };
 }
 
@@ -390,7 +393,7 @@ export function prepareKiwoomUnfilled(credentials: KiwoomCredentials): PreparedE
       'Content-Type': 'application/json;charset=UTF-8',
       'api-id': 'ka10075',
     },
-    body: '{}',
+    body: jsonBody({ all_stk_tp: '0', trde_tp: '0', stex_tp: '1' }),
   };
 }
 

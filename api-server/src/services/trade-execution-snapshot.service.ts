@@ -94,16 +94,18 @@ function objectLevels(value: unknown): { bids: Level[]; asks: Level[]; timestamp
 function kiwoomLevels(value: JsonObject): { bids: Level[]; asks: Level[] } {
   const asks: Level[] = [];
   const bids: Level[] = [];
-  const bestAsk = positive(value.sel_fpr_bid);
+  // Kiwoom documents directional signs on prices; they are not negative cash balances.
+  const price = (input: unknown) => { const amount = absolute(input); return amount !== null && amount > 0 ? amount : null; };
+  const bestAsk = price(value.sel_fpr_bid);
   const bestAskSize = positive(value.sel_fpr_req);
-  const bestBid = positive(value.buy_fpr_bid);
+  const bestBid = price(value.buy_fpr_bid);
   const bestBidSize = positive(value.buy_fpr_req);
   if (bestAsk != null && bestAskSize != null) asks.push({ price: bestAsk, size: bestAskSize });
   if (bestBid != null && bestBidSize != null) bids.push({ price: bestBid, size: bestBidSize });
   for (let index = 2; index <= 10; index += 1) {
-    const askPrice = positive(value[`sel_${index}th_pre_bid`]);
+    const askPrice = price(value[`sel_${index}th_pre_bid`]);
     const askSize = positive(value[`sel_${index}th_pre_req`]);
-    const bidPrice = positive(value[`buy_${index}th_pre_bid`]);
+    const bidPrice = price(value[`buy_${index}th_pre_bid`]);
     const bidSize = positive(value[`buy_${index}th_pre_req`]);
     if (askPrice != null && askSize != null) asks.push({ price: askPrice, size: askSize });
     if (bidPrice != null && bidSize != null) bids.push({ price: bidPrice, size: bidSize });
@@ -428,6 +430,7 @@ export function buildUpbitExecutionSnapshot(input: {
 
 export function buildKiwoomExecutionSnapshot(input: {
   plan: TradingPlan;
+  account: JsonObject;
   orderable: JsonObject;
   unfilled: JsonObject;
   orderbook: JsonObject;
@@ -438,25 +441,70 @@ export function buildKiwoomExecutionSnapshot(input: {
   const currentPrice = input.plan.side === 'buy' ? book.asks[0]?.price ?? null : book.bids[0]?.price ?? null;
   const providerTimestamp = finite(input.orderbook.timestamp ?? input.orderbook.ts);
   const observedAtMs = timestampMs([providerTimestamp]);
-  const availableBalance = positive(
-    input.orderable.ord_alow_amt
-      ?? input.orderable.ord_psbl_cash
-      ?? input.orderable.ord_psbl_amt
-      ?? input.orderable.cash,
-  ) ?? 0;
+  const accountValueKrw = positive(input.account.prsm_dpst_aset_amt);
+  if (accountValueKrw === null) throw new Error('EXECUTION_ACCOUNT_EQUITY_UNAVAILABLE');
+  const holdings = list(input.account.acnt_evlt_remn_indv_tot);
+  const symbols = new Set<string>();
+  let instrumentValue = 0, tradableQuantity = 0, accountExposureKrw = 0, openPositionCount = 0;
+  for (const holding of holdings) {
+    const rawSymbol = typeof holding.stk_cd === 'string' ? holding.stk_cd.trim() : '';
+    if (!/^A?\d{6}$/.test(rawSymbol)) throw new Error('EXECUTION_POSITION_IDENTITY_INVALID');
+    const symbol = rawSymbol.replace(/^A/, '');
+    if (symbols.has(symbol)) throw new Error('EXECUTION_POSITION_IDENTITY_DUPLICATE');
+    symbols.add(symbol);
+    const quantity = nonNegative(holding.rmnd_qty, 'holding.rmnd_qty');
+    const tradable = nonNegative(holding.trde_able_qty, 'holding.trde_able_qty');
+    const value = nonNegative(holding.evlt_amt, 'holding.evlt_amt');
+    if (!Number.isSafeInteger(quantity) || !Number.isSafeInteger(tradable) || tradable > quantity
+      || quantity === 0 && value !== 0) throw new Error('EXECUTION_POSITION_EVIDENCE_INVALID');
+    if (quantity > 0) openPositionCount++;
+    accountExposureKrw += value;
+    if (symbol === input.plan.symbol) { instrumentValue = value; tradableQuantity = tradable; }
+  }
+  const pending = list(input.unfilled.oso);
+  const pendingIds = new Set<string>();
+  let openOrderExposureKrw = 0;
+  for (const row of pending) {
+    const id = identity(row.ord_no);
+    if (pendingIds.has(id)) throw new Error('EXECUTION_PENDING_ORDER_DUPLICATE');
+    pendingIds.add(id);
+    const remaining = nonNegative(row.oso_qty, 'pending.oso_qty');
+    if (!Number.isSafeInteger(remaining)) throw new Error('EXECUTION_PENDING_ORDER_QUANTITY_INVALID');
+    if (remaining > 0) {
+      const price = positive(row.ord_pric);
+      if (price === null) throw new Error('EXECUTION_PENDING_ORDER_PRICE_UNAVAILABLE');
+      openOrderExposureKrw += remaining * price;
+    }
+  }
+  const orderableCash = nonNegative(input.orderable.ord_alowa, 'orderable.ord_alowa');
+  if (input.plan.side === 'sell' && (!Number.isSafeInteger(input.plan.quantity) || Number(input.plan.quantity) > tradableQuantity)) throw new Error('KIWOOM_INSUFFICIENT_ASSET_BALANCE');
+  const availableBalance = input.plan.side === 'sell'
+    ? currentPrice === null ? NaN : tradableQuantity * currentPrice
+    : orderableCash;
+  const assetExposurePercent = instrumentValue / accountValueKrw * 100;
+  if (![availableBalance, accountExposureKrw, openOrderExposureKrw, assetExposurePercent].every(Number.isFinite)) throw new Error('EXECUTION_ACCOUNT_EVIDENCE_OVERFLOW');
   const feePercent = absolute(input.plan.marketSnapshot.estimatedFeePercent);
-  return baseSnapshot({
+  return { ...baseSnapshot({
     plan: input.plan,
-    source: 'kiwoom-private-account+orderbook',
+    source: 'kiwoom-kt00018+kt00010+ka10075+ka10004',
     observedAtMs,
     currentPrice,
     bids: book.bids,
     asks: book.asks,
     availableBalance,
+    accountValueKrw,
+    assetExposurePercent,
     quoteToKrwRate: 1,
-    openPositionCount: rows(input.unfilled).length,
+    openPositionCount,
     estimatedFeePercent: feePercent,
     marketStatus: 'OPEN',
     signal: input.signal,
-  });
+  }), accountExposureKrw, instrumentExposureKrw: instrumentValue, openOrderExposureKrw };
+}
+
+export function kiwoomOrderableReferencePrice(plan: TradingPlan, orderbook: JsonObject): number {
+  const book = kiwoomLevels(orderbook);
+  const price = plan.orderType === 'limit' ? positive(plan.limitPrice) : plan.side === 'buy' ? book.asks[0]?.price : book.bids[0]?.price;
+  if (price == null) throw new Error('KIWOOM_ORDERABLE_PRICE_UNAVAILABLE');
+  return price;
 }
