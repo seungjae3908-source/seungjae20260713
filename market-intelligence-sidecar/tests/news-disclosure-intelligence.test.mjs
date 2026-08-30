@@ -44,27 +44,27 @@ function baseEvent(overrides = {}) {
   };
 }
 
-test('same exact event produces deterministic rawHash and reusable analysisKey', () => {
+test('same exact event and AI policy produces deterministic rawHash and reusable analysisKey', () => {
   const first = canonicalizeMarketIntelEvent(baseEvent());
   const second = canonicalizeMarketIntelEvent(baseEvent());
   assert.equal(first.rawHash, second.rawHash);
   assert.equal(
-    buildAnalysisKey(first, { promptVersion: 'market-intel-v1', analysisScope: 'CORE' }),
-    buildAnalysisKey(second, { promptVersion: 'market-intel-v1', analysisScope: 'CORE' }),
+    buildAnalysisKey(first, { promptVersion: 'market-intel-v1', analysisScope: 'CORE', aiMode: 'CHEAP_AI' }),
+    buildAnalysisKey(second, { promptVersion: 'market-intel-v1', analysisScope: 'CORE', aiMode: 'CHEAP_AI' }),
   );
 });
 
 test('prompt version change invalidates analysis cache identity without changing raw evidence identity', () => {
   const event = canonicalizeMarketIntelEvent(baseEvent());
-  const v1 = buildAnalysisKey(event, { promptVersion: 'market-intel-v1', analysisScope: 'CORE' });
-  const v2 = buildAnalysisKey(event, { promptVersion: 'market-intel-v2', analysisScope: 'CORE' });
+  const v1 = buildAnalysisKey(event, { promptVersion: 'market-intel-v1', analysisScope: 'CORE', aiMode: 'CHEAP_AI' });
+  const v2 = buildAnalysisKey(event, { promptVersion: 'market-intel-v2', analysisScope: 'CORE', aiMode: 'CHEAP_AI' });
   assert.notEqual(v1, v2);
   assert.equal(event.rawHash, canonicalizeMarketIntelEvent(baseEvent()).rawHash);
 });
 
-test('exact duplicate or cached analysis reuses evidence without another AI call', () => {
+test('exact duplicate or matching-policy cached analysis reuses evidence without another AI call', () => {
   const event = canonicalizeMarketIntelEvent(baseEvent());
-  const analysisKey = buildAnalysisKey(event, { promptVersion: 'market-intel-v1', analysisScope: 'CORE' });
+  const analysisKey = buildAnalysisKey(event, { promptVersion: 'market-intel-v1', analysisScope: 'CORE', aiMode: 'CHEAP_AI' });
   const duplicate = routeMarketIntelAi({
     event: baseEvent(), nowMs: NOW, freshnessPolicyMs: FRESHNESS,
     seenRawHashes: [event.rawHash], promptVersion: 'market-intel-v1',
@@ -81,6 +81,54 @@ test('exact duplicate or cached analysis reuses evidence without another AI call
   assert.equal(cached.ai.level, 0);
   assert.equal(cached.ai.cacheReuse, true);
   assert.ok(cached.reasons.includes('ANALYSIS_CACHE_HIT'));
+});
+
+test('cheap and deep policy identities never share cache entries', () => {
+  const cheap = routeMarketIntelAi({
+    event: baseEvent({ eventType: 'CONTRACT' }),
+    nowMs: NOW,
+    freshnessPolicyMs: FRESHNESS,
+    promptVersion: 'market-intel-v1',
+    analysisScope: 'CORE',
+  });
+  const deep = routeMarketIntelAi({
+    event: baseEvent({ eventType: 'CONTRACT' }),
+    nowMs: NOW,
+    freshnessPolicyMs: FRESHNESS,
+    promptVersion: 'market-intel-v1',
+    analysisScope: 'CORE',
+    context: { portfolioHolding: true },
+  });
+  assert.equal(cheap.ai.mode, 'CHEAP_AI');
+  assert.equal(deep.ai.mode, 'DEEP_AI');
+  assert.notEqual(cheap.ai.analysisKey, deep.ai.analysisKey);
+
+  const deepWithCheapCache = routeMarketIntelAi({
+    event: baseEvent({ eventType: 'CONTRACT' }),
+    nowMs: NOW,
+    freshnessPolicyMs: FRESHNESS,
+    promptVersion: 'market-intel-v1',
+    analysisScope: 'CORE',
+    context: { portfolioHolding: true },
+    cachedAnalysisKeys: [cheap.ai.analysisKey],
+  });
+  assert.equal(deepWithCheapCache.ai.mode, 'DEEP_AI');
+  assert.equal(deepWithCheapCache.ai.cacheReuse, false);
+  assert.ok(!deepWithCheapCache.reasons.includes('ANALYSIS_CACHE_HIT'));
+
+  const deepWithDeepCache = routeMarketIntelAi({
+    event: baseEvent({ eventType: 'CONTRACT' }),
+    nowMs: NOW,
+    freshnessPolicyMs: FRESHNESS,
+    promptVersion: 'market-intel-v1',
+    analysisScope: 'CORE',
+    context: { portfolioHolding: true },
+    cachedAnalysisKeys: [deep.ai.analysisKey],
+  });
+  assert.equal(deepWithDeepCache.ai.mode, 'NO_AI');
+  assert.equal(deepWithDeepCache.ai.cacheReuse, true);
+  assert.equal(deepWithDeepCache.ai.analysisKey, deep.ai.analysisKey);
+  assert.ok(deepWithDeepCache.reasons.includes('ANALYSIS_CACHE_HIT'));
 });
 
 test('ordinary fresh verified news routes to cheap structured AI only', () => {
