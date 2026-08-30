@@ -49,16 +49,19 @@ router.get('/portfolio/intelligence', async (req: AuthenticatedRequest, res) => 
 router.post('/portfolio/intelligence/additional-buy', async (req: AuthenticatedRequest, res) => {
   if (!req.accessToken) return res.status(401).json({ ok: false, error: 'LOGIN_REQUIRED' });
   const body = asRecord(req.body);
-  const ticker = String(body.ticker ?? '').trim().toUpperCase();
+  const ticker = typeof body.ticker === 'string' ? body.ticker.trim().toUpperCase() : '';
   const additionalAmountKRW = positiveNumber(body.additionalAmountKRW);
   const additionalQuantity = positiveNumber(body.additionalQuantity);
-  if (!ticker || (additionalAmountKRW == null) === (additionalQuantity == null)) {
+  if (!ticker || !['KR', 'US'].includes(String(body.market)) || typeof body.market !== 'string'
+    || body.currency !== (body.market === 'KR' ? 'KRW' : 'USD')
+    || (body.additionalAmountKRW !== undefined && body.additionalQuantity !== undefined)
+    || (additionalAmountKRW == null) === (additionalQuantity == null)) {
     return res.status(400).json({ ok: false, error: 'INVALID_SIMULATION_INPUT', message: '종목과 추가 금액 또는 추가 수량 중 하나만 입력해 주세요.' });
   }
 
   try {
     const portfolio = await buildPortfolioIntelligence({ accessToken: req.accessToken });
-    const holding = portfolio.holdings.find((row) => row.ticker === ticker);
+    const holding = portfolio.holdings.find((row) => row.ticker === ticker && row.market === body.market && row.currency === body.currency);
     if (!holding) return res.status(404).json({ ok: false, error: 'HOLDING_NOT_FOUND' });
 
     const quantity = holding.quantity;
@@ -84,6 +87,9 @@ router.post('/portfolio/intelligence/additional-buy', async (req: AuthenticatedR
       ok: true,
       status: result.status,
       holding: {
+        id: holding.id,
+        sourceHoldingIds: holding.sourceHoldingIds,
+        quantity: holding.quantity,
         ticker: holding.ticker,
         name: holding.name,
         market: holding.market,
