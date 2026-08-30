@@ -176,7 +176,7 @@ function bookMetrics(plan: TradingPlan, bids: Level[], asks: Level[], currentPri
     cost += quantity * level.price;
     remaining -= quantity;
   }
-  const vwap = filled > 0 && remaining <= 1e-12 ? cost / filled : null;
+  const vwap = filled > 0 && remaining === 0 && Number.isFinite(cost) ? cost / filled : null;
   const estimatedSlippagePercent = vwap != null && currentPrice != null && currentPrice > 0
     ? Math.abs(vwap - currentPrice) / currentPrice * 100
     : Number.POSITIVE_INFINITY;
@@ -187,6 +187,7 @@ function bookMetrics(plan: TradingPlan, bids: Level[], asks: Level[], currentPri
     orderbookGapPercent: gapPercent,
     availableLiquidityKrw,
     estimatedSlippagePercent,
+    executionPrice: vwap,
   };
 }
 
@@ -223,6 +224,7 @@ function baseSnapshot(input: {
     providerTimeOffsetMs: input.observedAtMs == null ? Number.POSITIVE_INFINITY : now - input.observedAtMs,
     source: input.source,
     currentPrice: input.currentPrice,
+    executionPrice: metrics.executionPrice,
     plannedPrice,
     oneMinuteMovePercent,
     spreadPercent: metrics.spreadPercent,

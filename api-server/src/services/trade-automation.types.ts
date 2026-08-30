@@ -187,6 +187,8 @@ export type TradingMarketSnapshot = {
   liquidationDistancePercent?: number | null;
   openOrderExposureKrw?: number;
   currentPrice?: number | null;
+  /** Server-observed orderbook VWAP for the complete requested quantity; never an actual fill. */
+  executionPrice?: number | null;
   plannedPrice?: number | null;
   marketStatus?: 'OPEN' | 'CLOSED' | 'HALTED' | 'UNKNOWN';
   providerTimeOffsetMs?: number;
