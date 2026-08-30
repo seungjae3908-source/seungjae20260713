@@ -15,6 +15,15 @@ test('rule-based recommendation score is not presented as calibrated probability
   expect(page).not.toContain('상승 확률 {row.score}');
   expect(page).not.toContain('승률 {row.score}');
 
-  // Presentation-only remediation: preserve the existing score threshold semantics.
+  // Presentation-only score remediation: preserve the existing score threshold semantics.
   expect(page).toContain('row.score >= 70 ? "positive" : "muted"');
+});
+
+test('recommendation change percent keeps missing distinct from genuine zero in the UI', () => {
+  const page = source('src/pages/recommendations.tsx');
+
+  expect(page).toContain('changePercent: number | null;');
+  expect(page).toContain('row.changePercent == null');
+  expect(page).toContain('? "text-muted-foreground"');
+  expect(page).toContain('row.changePercent == null ? "—" : formatAppPercent(row.changePercent)');
 });
