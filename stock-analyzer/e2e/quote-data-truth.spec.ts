@@ -48,7 +48,7 @@ test('local research rules never synthesize a probability or authorize an order'
   expect(assessAutoTradeCandidate({ ...complete, riskLevel: 'UNAVAILABLE' }).riskScore).toBeNull();
 });
 
-async function installRuntime(page: Page, financialScenario?: 'legacy' | 'current' | 'provider-shape' | 'summary-missing' | 'summary-wrong' | 'scanner-missing') {
+async function installRuntime(page: Page, financialScenario?: 'legacy' | 'current' | 'provider-shape' | 'summary-missing' | 'summary-wrong' | 'scanner-missing' | 'paper-missing-price' | 'paper-missing-funding' | 'paper-zero-funding') {
   await page.addInitScript(({ userId, now }) => {
     const encode = (value: Record<string, unknown>) => btoa(JSON.stringify(value)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
     const exp = 4102444800;
@@ -74,6 +74,20 @@ async function installRuntime(page: Page, financialScenario?: 'legacy' | 'curren
   ];
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (financialScenario?.startsWith('paper-')) {
+      const missingPrice = financialScenario === 'paper-missing-price';
+      if (path === '/api/crypto/futures/BTCUSDT/snapshot') return fulfill(route, { ok: true, data: {
+        symbol: 'BTCUSDT', price: missingPrice ? null : 1000, markPrice: missingPrice ? null : 1000,
+        bidPrice: missingPrice ? null : 999, askPrice: missingPrice ? null : 1001,
+        fundingRate: financialScenario === 'paper-missing-funding' ? null : 0, status: 'live',
+        source: 'fixture-only', updatedAt: new Date().toISOString(), warnings: [],
+      } });
+      if (path === '/api/crypto/futures/BTCUSDT/contract-rules') return fulfill(route, { ok: true, data: {
+        symbol: 'BTCUSDT', source: 'bitget', quantityStep: 0.001, minimumQuantity: 0.001, minimumNotional: 5,
+        quantityPrecision: 3, pricePrecision: 1, priceStep: 0.1, minimumLeverage: 1, maximumLeverage: 10,
+        maintenanceMarginRate: 0.005, contractSize: null, status: 'live', updatedAt: new Date().toISOString(), warnings: [],
+      } });
+    }
     if (financialScenario === 'scanner-missing' && path === '/api/market/scan') return fulfill(route, scannerSourceFixture());
     if (financialScenario) {
       if (path === '/api/stocks/AAPL/quote' && financialScenario === 'summary-missing') return fulfill(route, { ticker: 'AAPL', currency: 'USD', price: null, changePercent: null, updatedAt: NOW });
@@ -101,6 +115,77 @@ async function installRuntime(page: Page, financialScenario?: 'legacy' | 'curren
     return fulfill(route, { error: 'UNEXPECTED_FIXTURE_API_REQUEST' }, 400);
   });
   return unexpected;
+}
+
+for (const [width, height] of sizes) {
+  test(`actual paper route blocks missing price or funding at ${width}x${height}`, async ({ page }, testInfo) => {
+    const errors: string[] = [];
+    const httpErrors: number[] = [];
+    const mutations: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
+    page.on('response', (response) => { if (response.status() >= 400) httpErrors.push(response.status()); });
+    page.on('request', (request) => { if (request.url().includes('/api/') && request.method() !== 'GET') mutations.push(request.method()); });
+    await page.setViewportSize({ width, height });
+    const scenario = width % 2 === 0 && width !== 1440 ? 'paper-missing-price' : 'paper-missing-funding';
+    const unexpected = await installRuntime(page, scenario);
+    const started = performance.now();
+    await page.goto('/paper-trading');
+    await expect(page.getByTestId('paper-trading-page')).toBeVisible();
+    await expect(page.getByTestId('paper-submit')).toBeDisabled();
+    await expect(page.getByTestId('paper-journal')).toContainText('검증 근거 부족');
+    await expect(page.getByTestId('paper-order-form')).toContainText('FULL_COST_READY');
+    if (scenario === 'paper-missing-price') {
+      await expect(page.getByTestId('paper-order-form')).toContainText('유효한 진입 기준가격이 없습니다.');
+      await expect(page.getByLabel('손절가', { exact: true })).toHaveValue('');
+      await page.getByLabel('롱·숏').selectOption('short');
+      await expect(page.getByLabel('목표가 1', { exact: true })).toHaveValue('');
+    } else await expect(page.getByTestId('paper-order-form')).toContainText('펀딩비 근거가 없어');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    expect(errors).toEqual([]); expect(httpErrors).toEqual([]); expect(mutations).toEqual([]); expect(unexpected).toEqual([]);
+    await testInfo.attach('paper-route-proof.json', { body: JSON.stringify({ width, height, scenario, route: '/paper-trading', fixture: true, elapsedMs: performance.now() - started, consolePageErrors: 0, httpErrors: 0, mutations: 0 }), contentType: 'application/json' });
+  });
+}
+
+test('actual paper route accepts known zero funding without submitting an order', async ({ page }) => {
+  const unexpected = await installRuntime(page, 'paper-zero-funding');
+  await page.goto('/paper-trading');
+  await expect(page.getByTestId('paper-submit')).toBeEnabled();
+  await expect(page.getByTestId('paper-order-form')).not.toContainText('펀딩비 근거가 없어');
+  expect(unexpected).toEqual([]);
+});
+
+for (const [width, height] of sizes) {
+  test(`settings exposes backup failure and requires explicit change approval at ${width}x${height}`, async ({ page }) => {
+    const errors: string[] = [];
+    let writes = 0;
+    page.on('pageerror', (error) => errors.push(error.message));
+    page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
+    await page.setViewportSize({ width, height });
+    const unexpected = await installRuntime(page);
+    await page.route(/\/api\/backup\/latest(?:\?.*)?$/, (route) => {
+      if (route.request().method() === 'PUT') writes++;
+      return fulfill(route, { ok: true });
+    });
+    await page.goto('/settings?section=advanced');
+    const backup = page.getByTestId('backup-settings');
+    await expect(backup).toBeVisible();
+    await expect(backup).toContainText('자동백업 확인 실패');
+    await expect(backup).toContainText('미확인');
+    await backup.getByRole('button', { name: '현재 설정 저장', exact: true }).click();
+    await expect(backup.getByRole('alertdialog')).toBeVisible();
+    expect(writes).toBe(0);
+    await backup.getByRole('button', { name: '취소', exact: true }).click();
+    expect(writes).toBe(0);
+    await backup.getByRole('button', { name: '현재 설정 저장', exact: true }).click();
+    await backup.getByRole('button', { name: '변경 승인', exact: true }).click();
+    await expect(backup).toContainText('자동백업 실패');
+    await expect(backup).not.toContainText('synced');
+    expect(writes).toBe(1);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    expect(errors).toEqual([]);
+    expect(unexpected).toEqual([]);
+  });
 }
 
 for (const [width, height] of sizes) {
