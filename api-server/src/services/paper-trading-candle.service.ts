@@ -45,6 +45,7 @@ export function processCandle(state: PaperTradingState, action: ProcessPaperCand
     || candle.open < candle.low || candle.open > candle.high || candle.close < candle.low || candle.close > candle.high) {
     throw new PaperTradingError('INVALID_CANDLE', '완료 캔들 값이 올바르지 않습니다.');
   }
+  if (candle.timestamp > now.getTime()) throw new PaperTradingError('CANDLE_FROM_FUTURE', '미래 시각의 캔들로 모의거래를 처리할 수 없습니다.');
   const at = new Date(candle.timestamp).toISOString();
   const fills: PaperFill[] = [];
   const openedPositionIds = new Set<string>();
