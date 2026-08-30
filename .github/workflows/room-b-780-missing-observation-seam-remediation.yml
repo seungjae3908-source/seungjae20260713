@@ -1,5 +1,6 @@
 name: ROOM B 780 Missing Observation Seam Remediation
 
+# retrigger after workflow exists on the PR branch
 on:
   pull_request:
     branches: [main]
