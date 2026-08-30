@@ -118,4 +118,23 @@ test('two-step reset clears restored state', async ({ page }) => {
   await expect(dialog).toBeVisible();
   await dialog.getByRole('button', { name: '2단계 초기화' }).tap();
   await expect(page.getByTestId('paper-orders').getByText('모의주문이 없습니다.')).toBeVisible();
+  await page.reload();
+  await expect(page.getByTestId('paper-orders').getByText('모의주문이 없습니다.')).toBeVisible();
+});
+
+test('pending paper calculation serializes reset and import without resurrecting a cleared ledger', async ({ page }) => {
+  const errors = await openAt(page, 390, 844, '/__phase6-paper-trading-e2e?mode=deferred');
+  await page.getByTestId('paper-submit').tap();
+  await page.getByTestId('confirm-paper-order').tap();
+  await expect(page.getByRole('button', { name: '전체 초기화', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'JSON 가져오기' })).toBeDisabled();
+  await page.evaluate(() => window.dispatchEvent(new Event('phase6-release-execution')));
+  await expect(page.getByTestId('paper-positions').getByText('BTCUSDT 롱')).toBeVisible();
+  await page.getByRole('button', { name: '전체 초기화', exact: true }).tap();
+  await page.getByRole('dialog', { name: '전체 초기화 확인' }).getByRole('button', { name: '2단계 초기화' }).tap();
+  await expect(page.getByTestId('paper-orders').getByText('모의주문이 없습니다.')).toBeVisible();
+  await page.reload();
+  await expect(page.getByTestId('paper-orders').getByText('모의주문이 없습니다.')).toBeVisible();
+  await expect(page.getByTestId('paper-positions').getByText('열린 모의포지션이 없습니다.')).toBeVisible();
+  expect(errors).toEqual([]);
 });
