@@ -84,6 +84,8 @@ for (const [name, mutate, blocker] of [
   reference.producerManifest.featureOrderDigest = hash(model.featureOrder);
   const h = harness(f.bundle), result = await h.service.resolve(f.dsl);
   assert.equal(result.researchBundleReady, false); assert(result.blockers.includes(blocker)); assert.equal(h.calls(), 0);
+  assert.equal(result.components.find(component => component.key === 'model').status, 'BLOCKED_DATA');
+  assert.equal(result.modelIdentityDigest, null);
 });
 test('N forged expected digest and changed canonical readback never submit', async () => {
   const f = fixture(), h = harness(f.bundle), input = await request(h.service, f.dsl);
