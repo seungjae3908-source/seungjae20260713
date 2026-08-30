@@ -6,6 +6,7 @@ from typing import Any
 from scripts import agent_hub_rollover_v2 as rollover
 from scripts.agent_hub_processor_window_recovery_v1 import (
     BoundedCommentWindow,
+    MAX_LEDGER_ANCHOR_LOOKBACK_COMMENTS,
     ProcessorWindowRecoveryError,
     augment_successor_body,
     assert_manual_invocation,
@@ -13,6 +14,7 @@ from scripts.agent_hub_processor_window_recovery_v1 import (
     expected_confirmation,
     latest_complete_ledger,
     read_bounded_comment_window,
+    resolve_complete_ledger_anchor,
     validate_continuity_anchors,
 )
 
@@ -20,7 +22,7 @@ from scripts.agent_hub_processor_window_recovery_v1 import (
 class FakeGitHub:
     repository = "owner/repo"
 
-    def __init__(self, pages: dict[int, list[dict[str, Any]]]) -> None:
+    def __init__(self, pages: dict[int, Any]) -> None:
         self.pages = pages
         self.requests: list[str] = []
 
@@ -167,6 +169,98 @@ class ProcessorWindowRecoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(ProcessorWindowRecoveryError, "incomplete"):
             latest_complete_ledger(comments)
 
+    def test_tail_ledger_uses_no_older_lookup(self) -> None:
+        github = FakeGitHub({})
+        window = BoundedCommentWindow(
+            comments=(comment(1100, "[PERSISTENT_TASK_LEDGER]\n- current\n[/PERSISTENT_TASK_LEDGER]"),),
+            source_total_comments=1100,
+            comments_examined=1000,
+            processor_window=1000,
+        )
+        ledger_id, block, examined = resolve_complete_ledger_anchor(github, 660, window)
+        self.assertEqual(ledger_id, 1100)
+        self.assertIn("- current", block)
+        self.assertEqual(examined, 0)
+        self.assertEqual(github.requests, [])
+
+    def test_ledger_anchor_resolves_from_bounded_older_prefix(self) -> None:
+        older = [comment(cid, "x") for cid in range(1, 101)]
+        older[94] = comment(95, "[PERSISTENT_TASK_LEDGER]\n- durable\n[/PERSISTENT_TASK_LEDGER]")
+        github = FakeGitHub({1: older})
+        window = BoundedCommentWindow(
+            comments=tuple(comment(cid, "tail") for cid in range(101, 1101)),
+            source_total_comments=1100,
+            comments_examined=1000,
+            processor_window=1000,
+        )
+
+        ledger_id, block, examined = resolve_complete_ledger_anchor(github, 660, window)
+
+        self.assertEqual(ledger_id, 95)
+        self.assertIn("- durable", block)
+        self.assertEqual(examined, 100)
+        self.assertEqual(len(github.requests), 1)
+        self.assertTrue(github.requests[0].endswith("page=1"))
+
+    def test_newest_older_incomplete_ledger_fails_closed(self) -> None:
+        older = [comment(cid, "x") for cid in range(1, 101)]
+        older[79] = comment(80, "[PERSISTENT_TASK_LEDGER]\n- older-complete\n[/PERSISTENT_TASK_LEDGER]")
+        older[89] = comment(90, "[PERSISTENT_TASK_LEDGER]\nnewest-truncated")
+        github = FakeGitHub({1: older})
+        window = BoundedCommentWindow(
+            comments=tuple(comment(cid, "tail") for cid in range(101, 1101)),
+            source_total_comments=1100,
+            comments_examined=1000,
+            processor_window=1000,
+        )
+
+        with self.assertRaisesRegex(ProcessorWindowRecoveryError, "incomplete"):
+            resolve_complete_ledger_anchor(github, 660, window)
+
+    def test_ledger_anchor_lookup_budget_exhaustion_fails_before_fetch(self) -> None:
+        github = FakeGitHub({})
+        window = BoundedCommentWindow(
+            comments=tuple(comment(cid, "tail") for cid in range(1502, 2502)),
+            source_total_comments=2501,
+            comments_examined=1000,
+            processor_window=1000,
+        )
+        with self.assertRaisesRegex(ProcessorWindowRecoveryError, "lookback budget"):
+            resolve_complete_ledger_anchor(
+                github,
+                660,
+                window,
+                max_lookback_comments=MAX_LEDGER_ANCHOR_LOOKBACK_COMMENTS,
+            )
+        self.assertEqual(github.requests, [])
+
+    def test_ledger_anchor_lookup_malformed_page_fails_closed(self) -> None:
+        github = FakeGitHub({1: "not-a-list"})
+        window = BoundedCommentWindow(
+            comments=tuple(comment(cid, "tail") for cid in range(101, 1101)),
+            source_total_comments=1100,
+            comments_examined=1000,
+            processor_window=1000,
+        )
+        with self.assertRaisesRegex(ProcessorWindowRecoveryError, "not a list"):
+            resolve_complete_ledger_anchor(github, 660, window)
+
+    def test_resolved_older_ledger_id_does_not_expand_tail_control_set(self) -> None:
+        window = BoundedCommentWindow(
+            comments=(
+                comment(101, "[PIPELINE_SNAPSHOT]"),
+                comment(102, "[LEASE]"),
+                comment(103, "[WATCH_EVENT]"),
+            ),
+            source_total_comments=1100,
+            comments_examined=1000,
+            processor_window=1000,
+        )
+        anchors = validate_continuity_anchors(window, ledger_id=95)
+        self.assertEqual(anchors["[PERSISTENT_TASK_LEDGER]"], 95)
+        filtered = coordinator_actionable_control_comments(window.comments, "owner/repo")
+        self.assertEqual(rollover.unresolved_control_work(filtered), [])
+
     def test_complete_continuity_anchors_pass(self) -> None:
         window = BoundedCommentWindow(
             comments=(
@@ -198,11 +292,15 @@ class ProcessorWindowRecoveryTests(unittest.TestCase):
             anchors=anchors,
             ledger_block="[PERSISTENT_TASK_LEDGER]\n- keep-me\n[/PERSISTENT_TASK_LEDGER]",
             sanitizer=lambda value: value,
+            ledger_anchor_lookup_comments_examined=94,
         )
         self.assertIn("history_validation_mode: `bounded_overflow_recovery`", body)
         self.assertIn("full_history_validated: `false`", body)
         self.assertIn("source_total_comments: `1094`", body)
         self.assertIn("processor_window_comments_examined: `994`", body)
+        self.assertIn("ledger_anchor_lookup_comments_examined: `94`", body)
+        self.assertIn("continuity-only older-prefix lookup", body)
+        self.assertIn("executable pending-control validation remains", body)
         self.assertIn("- keep-me", body)
         self.assertIn("<!-- agent-hub-canonical:v2 -->", body)
 
