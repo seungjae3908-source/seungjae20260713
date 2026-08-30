@@ -247,7 +247,7 @@ router.get('/market/movers', async (req, res) => {
       losers,
       risky: losers,
       rankingSource: {
-        popular: '실제 거래대금 기준',
+        popular: rows.some((row) => row.tradingValueSource === 'LAST_PRICE_X_VOLUME_ESTIMATE') ? '거래대금 기준 (현재가×거래량 추정 포함)' : '공급자 거래대금 기준',
         gainers: '실제 등락률 기준',
         losers: '실제 등락률 기준',
         recommended: recommended.length ? '규칙 점수 기준 (성공확률 아님)' : '검증된 추천 근거 부족',
@@ -300,10 +300,11 @@ router.get('/market/home', async (_req, res) => {
         price: row.price,
         changeAmount: null,
         changePercent: row.changePercent,
-        direction: row.changePercent > 0 ? 'up' : row.changePercent < 0 ? 'down' : 'flat',
+        direction: row.changePercent == null ? null : row.changePercent > 0 ? 'up' : row.changePercent < 0 ? 'down' : 'flat',
         spark: row.spark,
         provider: 'Yahoo Finance',
-        updatedAt: new Date().toISOString(),
+        updatedAt: row.updatedAt ?? null,
+        freshness: row.freshness,
       }));
     return res.status(indices.length ? 200 : 503).json({
       ok: indices.length > 0,
@@ -342,7 +343,7 @@ router.get('/market/briefing', async (_req, res) => {
     console.error('market briefing error:', error);
     return res.status(502).json({
       asOf: new Date().toISOString(),
-      mood: 'neutral',
+      mood: null,
       headline: '실제 시장 브리핑 데이터를 불러오지 못했습니다.',
       lines: [],
       strongSectors: [],

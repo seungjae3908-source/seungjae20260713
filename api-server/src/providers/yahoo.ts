@@ -1,5 +1,6 @@
 import type { CatalogEntry } from '../data/catalog';
 import type { Candle, Quote } from '../sample/types';
+import { marketNumber, requireMarketNumber, requireSourceTime, type QuoteTimeEvidence } from './market-evidence';
 
 type YahooChartQuote = {
   open?: Array<number | null>;
@@ -14,6 +15,10 @@ type YahooChartResult = {
     symbol?: string;
     currency?: string;
     regularMarketPrice?: number;
+    regularMarketTime?: number;
+    regularMarketVolume?: number;
+    regularMarketDayHigh?: number;
+    regularMarketDayLow?: number;
     previousClose?: number;
     chartPreviousClose?: number;
   };
@@ -29,7 +34,9 @@ export interface YahooIndexQuote {
   changePercent: number;
   spark: number[];
   unit?: 'index' | 'krw' | 'usd';
-  updatedAt: string;
+  updatedAt: string | null;
+  freshness: QuoteTimeEvidence['freshness'];
+  source: 'yahoo';
 }
 
 // The stock Scanner has a four-second per-symbol budget. Keep each Yahoo
@@ -40,18 +47,6 @@ const YAHOO_HEDGE_DELAY_MS = 180;
 
 function cleanTicker(value: unknown) {
   return String(value ?? '').trim().toUpperCase();
-}
-
-function safeNumber(value: unknown, fallback = 0) {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-
-  if (typeof value === 'string') {
-    const parsed = Number(value.replace(/[,\s$%]/g, ''));
-
-    if (Number.isFinite(parsed)) return parsed;
-  }
-
-  return fallback;
 }
 
 function isKrTicker(ticker: string) {
@@ -188,24 +183,22 @@ function lastValidIndex(values: Array<number | null | undefined>) {
   return -1;
 }
 
-function normalizeYahooCandles(result: YahooChartResult): Candle[] {
+export function normalizeYahooCandles(result: YahooChartResult): Candle[] {
   const quote = result.indicators?.quote?.[0];
-  if (!result.timestamp?.length || !quote) return [];
-
-  return result.timestamp
-    .map((timestamp, index) => {
-      const close = safeNumber(quote.close?.[index]);
-
-      return {
-        time: new Date(timestamp * 1000).toISOString(),
-        open: safeNumber(quote.open?.[index]),
-        high: safeNumber(quote.high?.[index]),
-        low: safeNumber(quote.low?.[index]),
-        close,
-        volume: safeNumber(quote.volume?.[index]),
-      } as Candle;
-    })
-    .filter((candle) => candle.close > 0);
+  if (!result.timestamp?.length || !quote) throw new Error('YAHOO_CANDLES_MISSING');
+  let previous = -Infinity;
+  return result.timestamp.map((timestamp, index) => {
+    const time = requireSourceTime(timestamp, 'unix-seconds');
+    if (!time.updatedAt || timestamp <= previous) throw new Error('YAHOO_CANDLE_TIME_INVALID');
+    previous = timestamp;
+    const open = requireMarketNumber(quote.open?.[index], 'yahoo.candle.open', Number.MIN_VALUE);
+    const high = requireMarketNumber(quote.high?.[index], 'yahoo.candle.high', Number.MIN_VALUE);
+    const low = requireMarketNumber(quote.low?.[index], 'yahoo.candle.low', Number.MIN_VALUE);
+    const close = requireMarketNumber(quote.close?.[index], 'yahoo.candle.close', Number.MIN_VALUE);
+    const volume = requireMarketNumber(quote.volume?.[index], 'yahoo.candle.volume', 0);
+    if (low > Math.min(open, close) || high < Math.max(open, close) || high < low) throw new Error('YAHOO_CANDLE_OHLC_INVALID');
+    return { time: time.updatedAt, open, high, low, close, volume };
+  });
 }
 
 function aggregateContinuousCandles(
@@ -263,75 +256,47 @@ export function aggregateYahooDerivedTimeframe(timeframe: string, rows: Candle[]
   }
 }
 
-export async function getQuote(
-  entryOrTicker: CatalogEntry | string,
-): Promise<Partial<Quote>> {
+export function parseYahooQuote(result: YahooChartResult, symbol: string, currency?: string) {
+  if (result.meta?.symbol !== symbol || (currency && result.meta?.currency !== currency)) {
+    throw new Error('YAHOO_IDENTITY_MISMATCH:' + symbol);
+  }
+  const quote = result.indicators?.quote?.[0];
+  const index = lastValidIndex(quote?.close ?? []);
+  if (!quote || index < 0) throw new Error('YAHOO_NO_VALID_PRICE:' + symbol);
+  const hasMarketPrice = result.meta?.regularMarketPrice != null;
+  const price = requireMarketNumber(hasMarketPrice ? result.meta.regularMarketPrice : quote.close?.[index], 'yahoo.price', Number.MIN_VALUE);
+  const time = requireSourceTime(hasMarketPrice ? result.meta.regularMarketTime : result.timestamp?.[index], 'unix-seconds');
+  // chartPreviousClose is the start of the requested range, not yesterday's
+  // close. For a 1mo chart it must never become the daily-change baseline.
+  let previousClose = marketNumber(result.meta.previousClose);
+  if (previousClose === null) {
+    const previousIndex = lastValidIndex((quote.close ?? []).slice(0, index));
+    previousClose = previousIndex >= 0 ? marketNumber(quote.close?.[previousIndex]) : null;
+  }
+  previousClose = requireMarketNumber(previousClose, 'yahoo.previousClose', Number.MIN_VALUE);
+  const changeAmount = requireMarketNumber(price - previousClose, 'yahoo.changeAmount');
+  const changePercent = requireMarketNumber(changeAmount / previousClose * 100, 'yahoo.changePercent');
+  const volume = requireMarketNumber(result.meta.regularMarketVolume ?? quote.volume?.[index], 'yahoo.volume', 0);
+  return {
+    price, currentPrice: price, regularMarketPrice: price, close: price,
+    previousClose, prevClose: previousClose,
+    change: changeAmount, changeAmount, changePercent, regularMarketChangePercent: changePercent,
+    volume,
+    tradingValue: requireMarketNumber(price * volume, 'yahoo.estimatedTradingValue', 0),
+    tradingValueSource: 'LAST_PRICE_X_VOLUME_ESTIMATE' as const,
+    open: requireMarketNumber(quote.open?.[index], 'yahoo.open', Number.MIN_VALUE),
+    high: requireMarketNumber(result.meta.regularMarketDayHigh ?? quote.high?.[index], 'yahoo.high', Number.MIN_VALUE),
+    low: requireMarketNumber(result.meta.regularMarketDayLow ?? quote.low?.[index], 'yahoo.low', Number.MIN_VALUE),
+    ...time, source: 'yahoo' as const,
+  };
+}
+
+export async function getQuote(entryOrTicker: CatalogEntry | string): Promise<Partial<Quote>> {
   const ticker = getTickerFromEntry(entryOrTicker);
   const symbol = yahooSymbol(ticker);
   const result = await fetchYahooChart(symbol);
-  const quote = result.indicators?.quote?.[0];
-
-  if (!quote?.close?.length) {
-    throw new Error(`YAHOO_PROVIDER_MARKER_20260711_NO_CLOSE:${symbol}`);
-  }
-
-  const index = lastValidIndex(quote.close);
-
-  if (index < 0) {
-    throw new Error(`YAHOO_PROVIDER_MARKER_20260711_NO_VALID_PRICE:${symbol}`);
-  }
-
-  const price =
-    safeNumber(result.meta?.regularMarketPrice) ||
-    safeNumber(quote.close[index]);
-
-  if (!price) {
-    throw new Error(`YAHOO_PROVIDER_MARKER_20260711_ZERO_PRICE:${symbol}`);
-  }
-
-  let previousClose =
-    safeNumber(result.meta?.previousClose) ||
-    safeNumber(result.meta?.chartPreviousClose);
-
-  if (!previousClose) {
-    for (let i = index - 1; i >= 0; i -= 1) {
-      const candidate = safeNumber(quote.close[i]);
-
-      if (candidate > 0) {
-        previousClose = candidate;
-        break;
-      }
-    }
-  }
-
-  if (!previousClose) previousClose = price;
-
-  const changeAmount = price - previousClose;
-  const changePercent = previousClose ? (changeAmount / previousClose) * 100 : 0;
-  const volume = safeNumber(quote.volume?.[index]);
-  const tradingValue = price * volume;
-
-  return {
-    ticker,
-    symbol,
-    name: getNameFromEntry(entryOrTicker, ticker),
-    price,
-    currentPrice: price,
-    regularMarketPrice: price,
-    close: price,
-    previousClose,
-    prevClose: previousClose,
-    change: changeAmount,
-    changeAmount,
-    changePercent,
-    regularMarketChangePercent: changePercent,
-    volume,
-    tradingValue,
-    open: safeNumber(quote.open?.[index]),
-    high: safeNumber(quote.high?.[index]),
-    low: safeNumber(quote.low?.[index]),
-    updatedAt: new Date().toISOString(),
-  } as Partial<Quote>;
+  const currency = typeof entryOrTicker === 'string' ? undefined : entryOrTicker.currency;
+  return { ...parseYahooQuote(result, symbol, currency), ticker, symbol, name: getNameFromEntry(entryOrTicker, ticker) } as Partial<Quote>;
 }
 
 export const quote = getQuote;
@@ -386,46 +351,11 @@ export const candles = getCandles;
 export async function getIndexQuote(symbol: string): Promise<YahooIndexQuote> {
   const clean = cleanTicker(symbol);
   const result = await fetchYahooChart(clean);
-  const quote = result.indicators?.quote?.[0];
-
-  if (!quote?.close?.length) {
-    throw new Error(`YAHOO_INDEX_NO_CLOSE:${clean}`);
-  }
-
-  const index = lastValidIndex(quote.close);
-  if (index < 0) {
-    throw new Error(`YAHOO_INDEX_NO_VALID_PRICE:${clean}`);
-  }
-
-  const price =
-    safeNumber(result.meta?.regularMarketPrice) || safeNumber(quote.close[index]);
-  let previousClose =
-    safeNumber(result.meta?.previousClose) ||
-    safeNumber(result.meta?.chartPreviousClose);
-
-  if (!previousClose) {
-    for (let i = index - 1; i >= 0; i -= 1) {
-      const candidate = safeNumber(quote.close[i]);
-      if (candidate > 0) {
-        previousClose = candidate;
-        break;
-      }
-    }
-  }
-
-  if (!price || !previousClose) {
-    throw new Error(`YAHOO_INDEX_INCOMPLETE:${clean}`);
-  }
-
-  const changeAmount = price - previousClose;
+  const parsed = parseYahooQuote(result, clean);
   return {
-    price,
-    changeAmount,
-    changePercent: (changeAmount / previousClose) * 100,
-    spark: quote.close
-      .map((value) => safeNumber(value))
-      .filter((value) => value > 0),
-    updatedAt: new Date().toISOString(),
+    price: parsed.price, changeAmount: parsed.changeAmount, changePercent: parsed.changePercent,
+    spark: (result.indicators?.quote?.[0]?.close ?? []).filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0),
+    updatedAt: parsed.updatedAt, freshness: parsed.freshness, source: 'yahoo',
   };
 }
 
