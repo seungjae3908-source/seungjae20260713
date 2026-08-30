@@ -184,3 +184,18 @@ test('no durable store and persistence failures never submit', async () => {
   const result = await h.service.submit('admin', await request(h.service, f.dsl));
   assert(result.blockers.includes('SUBMISSION_PERSISTENCE_UNAVAILABLE')); assert.equal(h.calls(), 0);
 });
+test('relabeling TEST_ONLY rows as canonical cannot activate the runtime', async () => {
+  const f = fixture(), h = harness(f.bundle); f.bundle.evidenceClass = 'CANONICAL';
+  const runtime = new ResearchBundleService({ ...h.dependencies, allowTestEvidence: false });
+  const result = await runtime.resolve(f.dsl);
+  assert.equal(result.researchBundleReady, false);
+  assert(result.blockers.includes('NON_CANONICAL_EVIDENCE_CLASS'));
+});
+test('a corrupt persisted receipt cannot grant promotion or be reported as completed', async () => {
+  const f = fixture(), h = harness(f.bundle), input = await request(h.service, f.dsl);
+  const complete = h.dependencies.submissions.complete;
+  h.dependencies.submissions.complete = async (key, receipt) => complete(key, { ...receipt, promotionEligible: true });
+  await h.service.submit('admin', input);
+  const replay = await h.service.submit('admin', input);
+  assert.equal(replay.backtestStatus, 'BLOCKED_DATA'); assert.equal(replay.promotionEligible, false); assert.equal(h.calls(), 1);
+});
