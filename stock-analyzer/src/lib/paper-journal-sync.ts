@@ -1,5 +1,5 @@
 import { authorizedFetch } from '@/lib/auth-fetch';
-import { createBatchIdempotencyKey, JOURNAL_SYNC_BATCH_SIZE } from './paper-journal-batching';
+import { createJournalSyncBatches } from './paper-journal-batching';
 export { createBatchIdempotencyKey, JOURNAL_SYNC_BATCH_SIZE, MAX_IDEMPOTENCY_KEY_LENGTH } from './paper-journal-batching';
 
 export type JournalRecordKind = 'account' | 'order' | 'position' | 'fill' | 'journal';
@@ -139,6 +139,7 @@ async function syncSingleBatch(
   const body = await parseJson(response);
   assertSyncEnvelope(body);
   if (!response.ok || body?.ok !== true) throw new Error(safeError(body, '거래일지를 동기화하지 못했습니다.'));
+  if (body.idempotencyKey !== input.idempotencyKey) throw new Error('동기화 응답의 요청 식별자가 일치하지 않습니다.');
   return body as unknown as JournalSyncResult;
 }
 
@@ -146,17 +147,13 @@ export async function syncJournalRecords(
   input: { idempotencyKey: string; clientTime: string; records: JournalSyncRecord[] },
   signal?: AbortSignal,
 ) {
-  if (input.records.length <= JOURNAL_SYNC_BATCH_SIZE) return syncSingleBatch(input, signal);
+  const batches = createJournalSyncBatches(input);
+  if (batches.length === 1) return syncSingleBatch(batches[0], signal);
 
   const results: JournalSyncResult[] = [];
-  for (let offset = 0; offset < input.records.length; offset += JOURNAL_SYNC_BATCH_SIZE) {
+  for (const batch of batches) {
     if (signal?.aborted) throw new DOMException('동기화가 중단되었습니다.', 'AbortError');
-    const index = Math.floor(offset / JOURNAL_SYNC_BATCH_SIZE);
-    results.push(await syncSingleBatch({
-      idempotencyKey: createBatchIdempotencyKey(input.idempotencyKey, index),
-      clientTime: input.clientTime,
-      records: input.records.slice(offset, offset + JOURNAL_SYNC_BATCH_SIZE),
-    }, signal));
+    results.push(await syncSingleBatch(batch, signal));
   }
 
   const latest = results.at(-1)!;

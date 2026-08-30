@@ -11,10 +11,11 @@ import type {
 import { createUserPaperStorage, loadJournalSyncMetadata, saveJournalSyncMetadata } from '@/lib/paper-journal-sync-storage';
 import { createLocalPaperState, savePaperState } from '@/lib/paper-trading';
 import { paperJournalFixture } from '@/lib/paper-journal-test-fixture';
+import { syncJournalRecords } from '@/lib/paper-journal-sync';
 
 const NOW = '2026-08-02T07:00:00.000Z';
 const USERS = ['phase7-user-a', 'phase7-user-b'];
-type Mode = 'success'|'failure'|'conflict'|'insufficient'|'deferred'|'malformed'|'endless';
+type Mode = 'success'|'failure'|'conflict'|'insufficient'|'deferred'|'malformed'|'endless'|'byte-batch';
 
 const conflict: JournalConflict = {
   id: 'conflict:phase7', kind: 'journal', recordId: 'journal-1', version: 2,
@@ -73,14 +74,14 @@ function unifiedJournal() {
 
 export default function Phase7JournalSyncE2EPage() {
   const [userIndex, setUserIndex] = useState(0);
-  const [mode, setMode] = useState<Mode>('success');
+  const [mode, setMode] = useState<Mode>(() => new URLSearchParams(window.location.search).get('mode') === 'byte-batch' ? 'byte-batch' : 'success');
   const userId = USERS[userIndex];
   const paperStorage = useMemo(() => {
     const adapter = createUserPaperStorage(window.localStorage, userId, new Date(NOW));
     const loaded = adapter.getItem('seungjae.paper-trading.v1');
     if (!loaded) {
       const state = createLocalPaperState(userIndex ? 20_000 : 10_000, new Date(NOW));
-      state.journal = Array.from({ length: mode === 'insufficient' ? 3 : 12 }, (_, index) => paperJournalFixture(`journal-${userIndex}-${index}`, NOW));
+      state.journal = Array.from({ length: mode === 'byte-batch' ? 200 : mode === 'insufficient' ? 3 : 12 }, (_, index) => paperJournalFixture(`journal-${userIndex}-${index}`, NOW, { note: mode === 'byte-batch' ? '한'.repeat(1000) : '' }));
       savePaperState(adapter, state);
     }
     if (mode === 'conflict') {
@@ -106,7 +107,7 @@ export default function Phase7JournalSyncE2EPage() {
   };
   const fakeSnapshot = async (): Promise<JournalSnapshotResult> => {
     document.documentElement.dataset.phase7SnapshotCalls = String(Number(document.documentElement.dataset.phase7SnapshotCalls ?? 0) + 1);
-    return { ok: true, mode: 'journal-sync-only', orderSubmitted: false, exchangeRequestSent: false, records: [], nextCursor: mode === 'endless' ? 'more-pages' : null, serverTime: NOW };
+    return { ok: true, mode: 'journal-sync-only', orderSubmitted: false, exchangeRequestSent: false, records: [], nextCursor: mode === 'endless' ? 'more-pages' : null, serverTime: mode === 'byte-batch' ? new Date().toISOString() : NOW };
   };
   const fakeResolve = async (_id: string, choice: 'server'|'device'|'preserve_both'): Promise<ConflictResolutionResult> => ({ ok: true, mode: 'journal-sync-only', orderSubmitted: false, exchangeRequestSent: false, conflictId: conflict.id, choice, records: choice === 'server' ? [conflict.serverRecord] : [], serverTime: NOW });
 
@@ -122,7 +123,7 @@ export default function Phase7JournalSyncE2EPage() {
         userId={userId}
         rootStorage={window.localStorage}
         paperStorage={paperStorage}
-        syncApi={fakeSync}
+        syncApi={mode === 'byte-batch' ? syncJournalRecords : fakeSync}
         snapshotApi={fakeSnapshot}
         resolveApi={fakeResolve}
         analyticsApi={async () => analytics(mode === 'insufficient')}

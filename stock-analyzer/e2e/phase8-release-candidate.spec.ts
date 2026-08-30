@@ -73,7 +73,7 @@ test('sync failure remains visible and requires explicit retry', async ({ page }
   expect(errors).toEqual([]);
 });
 
-test('account switch uses isolated hashed local namespaces', async ({ page }) => {
+test('account switch uses isolated exact member namespaces', async ({ page }) => {
   const errors = await open(page);
   await chooseTier(page, 'regular');
   const first = await page.getByTestId('phase8-active-namespace').textContent();
@@ -81,8 +81,8 @@ test('account switch uses isolated hashed local namespaces', async ({ page }) =>
   await page.getByTestId('phase8-account-switch').click();
   const second = await page.getByTestId('phase8-active-namespace').textContent();
   expect(first).not.toBe(second);
-  expect(first).toMatch(/^u_[a-f0-9]{8}$/);
-  expect(second).toMatch(/^u_[a-f0-9]{8}$/);
+  expect(first).toMatch(/^u3_[A-Za-z0-9_-]+$/);
+  expect(second).toMatch(/^u3_[A-Za-z0-9_-]+$/);
   await expect(page.getByTestId('phase8-step-0')).toContainText('실행');
   expect(errors).toEqual([]);
 });

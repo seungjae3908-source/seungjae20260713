@@ -241,8 +241,9 @@ export function PaperJournalSyncAnalyticsPanel({
         <div className="mt-3 grid gap-2 sm:grid-cols-3">
           <button className={buttonClass} type="button" disabled={busy} onClick={() => void resolve(conflict, 'server')}>서버 버전 유지</button>
           <button className={buttonClass} type="button" disabled={busy} onClick={() => void resolve(conflict, 'device')}>이 기기 버전 유지</button>
-          <button className={buttonClass} type="button" disabled={busy} onClick={() => void resolve(conflict, 'preserve_both')}>둘 다 사본으로 보존</button>
+          <button className={buttonClass} type="button" disabled={busy || conflict.kind !== 'journal'} onClick={() => void resolve(conflict, 'preserve_both')}>둘 다 사본으로 보존</button>
         </div>
+        <p className="mt-2 text-xs text-muted-foreground">{conflict.kind === 'journal' ? '보존 사본은 별도 체결이나 거래 성과로 집계하지 않습니다.' : '주문·포지션·체결·계좌는 실행 원장에 복제할 수 없습니다.'}</p>
       </article>)}</div>
     </div> : null}
 

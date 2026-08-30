@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { paperJournalFixture } from './paper-journal-test-fixture';
 import { performance } from 'node:perf_hooks';
 import {
   getPaperJournalSnapshot,
@@ -27,8 +28,8 @@ const keyOf = (user: string, kind: string, id: string) => `${user}:${kind}:${id}
 function syncRecord(index: number, overrides: Partial<PaperJournalSyncRecord> = {}): PaperJournalSyncRecord {
   return {
     kind: 'journal', id: `trade-${index}`, version: 1, updatedAt: NOW.toISOString(), deletedAt: null,
-    payload: { id: `trade-${index}`, tradeId: `trade-${index}`, status: 'closed', netPnl: index % 3 ? 10 : -5 },
     ...overrides,
+    payload: overrides.deletedAt ? {} : { ...paperJournalFixture(overrides.id ?? `trade-${index}`, NOW.toISOString()), netPnl: index % 3 ? 10 : -5, ...overrides.payload },
   };
 }
 

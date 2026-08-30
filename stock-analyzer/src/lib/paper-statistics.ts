@@ -9,10 +9,10 @@ export type PaperStatistics = {
   cumulativeNetPnl: number | null; totalFees: number | null; totalSlippage: number | null; totalFunding: number | null;
 };
 
-type StatisticsEntry = Pick<PaperJournalEntry, 'status' | 'netPnl' | 'entryFee' | 'exitFee' | 'slippageCost' | 'fundingCost' | 'rMultiple' | 'closedAt'>;
+type StatisticsEntry = Pick<PaperJournalEntry, 'status' | 'netPnl' | 'entryFee' | 'exitFee' | 'slippageCost' | 'fundingCost' | 'rMultiple' | 'closedAt' | 'conflictCopyOf'>;
 
 export function calculatePaperStatistics(journal: readonly StatisticsEntry[]): PaperStatistics {
-  const entries = journal.filter((item) => item.status === 'closed');
+  const entries = journal.filter((item) => item.status === 'closed' && !item.conflictCopyOf);
   const total = entries.length;
   const valid = entries.every((item) => [item.netPnl, item.entryFee, item.exitFee, item.slippageCost, item.fundingCost].every(evidenceNumber));
   const ordered = entries.every((item) => evidenceInstant(item.closedAt, Date.now()));
