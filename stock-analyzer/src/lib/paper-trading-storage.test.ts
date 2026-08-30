@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import './paper-flat-recovery-backend.test';
 import { paperJournalFixture, paperOrderFixture, paperFillFixture } from './paper-journal-test-fixture';
+import { calculatePaperStatistics } from './paper-statistics';
 import {
   PAPER_STORAGE_KEY,
   clearPaperState,
@@ -24,6 +25,14 @@ class MemoryStorage {
 const NOW = new Date('2026-08-02T02:30:00.000Z');
 
 test('creates local version one state', () => assert.equal(createLocalPaperState(10_000, NOW).schemaVersion, 1));
+
+test('conflict preservation copies do not create extra trades or profit in local statistics', () => {
+  const trade = paperJournalFixture('original', NOW.toISOString());
+  const copy = { ...trade, id: 'original-copy', conflictCopyOf: trade.id, researchEvidenceEligible: false as const };
+  const stats = calculatePaperStatistics([trade, copy]);
+  assert.equal(stats.totalTrades, 1);
+  assert.equal(stats.cumulativeNetPnl, trade.netPnl);
+});
 test('rejects invalid initial balance', () => assert.throws(() => createLocalPaperState(0, NOW), /초기 자본/));
 test('saves and restores state', () => {
   const storage = new MemoryStorage();

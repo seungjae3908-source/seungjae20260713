@@ -1,9 +1,11 @@
 import { createHash } from 'node:crypto';
+import { validPaperTimestamp } from '../../../packages/api-zod/src/paper-state-evidence.js';
 import {
   BASIC_ANALYTICS_MIN_SAMPLE,
   BEHAVIOR_ANALYTICS_MIN_SAMPLE,
   GROUP_ANALYTICS_MIN_SAMPLE,
   MAX_REVIEW_REPRESENTATIVE_TRADES,
+  PaperJournalError,
   type AnalysisCertainty,
   type AnalyticsMetricGroup,
   type BehaviorSignal,
@@ -39,21 +41,33 @@ const WEEKDAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 const text = (value: unknown, fallback = '') => typeof value === 'string' ? value : fallback;
 const nullableNumber = (value: unknown) => finite(value) ? value : null;
-const validDate = (value: unknown) => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? value : null;
+const validDate = (value: unknown) => typeof value === 'string' && validPaperTimestamp(value, Date.now()) ? value : null;
+
+function assertFiniteEvidence(value: unknown): void {
+  if (typeof value === 'number' && !Number.isFinite(value)) throw new PaperJournalError('ANALYTICS_OVERFLOW', '거래 분석 계산 범위를 초과했습니다. 성과를 확정하지 않습니다.');
+  if (value && typeof value === 'object') for (const child of Object.values(value)) assertFiniteEvidence(child);
+}
 
 function normalizeTrade(payload: Record<string, unknown>): NormalizedTrade | null {
+  if (payload.conflictCopyOf) return null;
   const status = text(payload.status);
+  if (status === 'open' || status === 'partially_closed') return null;
   const filledAt = validDate(payload.filledAt);
   const closedAt = validDate(payload.closedAt);
   const side = payload.side === 'long' || payload.side === 'short' ? payload.side : null;
-  if (status !== 'closed' || !filledAt || !closedAt || !side || !finite(payload.netPnl)) return null;
+  if (status !== 'closed' || !filledAt || !closedAt || Date.parse(closedAt) < Date.parse(filledAt) || !side || !finite(payload.netPnl)
+    || !text(payload.tradeId, text(payload.id)).trim() || !text(payload.symbol).trim()
+    || !finite(payload.grossPnl) || !finite(payload.entryFee) || payload.entryFee < 0 || !finite(payload.exitFee) || payload.exitFee < 0
+    || !finite(payload.slippageCost) || payload.slippageCost < 0 || !finite(payload.fundingCost)) {
+    throw new PaperJournalError('INVALID_ANALYTICS_EVIDENCE', '거래 손익·비용·시각 근거가 불완전합니다. 누락 항목을 0으로 계산하지 않습니다.');
+  }
   const warnings = Array.isArray(payload.warnings)
     ? payload.warnings.filter((item): item is string => typeof item === 'string').slice(0, 50)
     : [];
-  const entryFee = finite(payload.entryFee) ? payload.entryFee : 0;
-  const exitFee = finite(payload.exitFee) ? payload.exitFee : 0;
-  const slippage = finite(payload.slippageCost) ? payload.slippageCost : 0;
-  const funding = finite(payload.fundingCost) ? payload.fundingCost : 0;
+  const entryFee = payload.entryFee;
+  const exitFee = payload.exitFee;
+  const slippage = payload.slippageCost;
+  const funding = payload.fundingCost;
   return {
     id: text(payload.tradeId, text(payload.id, 'unknown')),
     side,
@@ -62,7 +76,7 @@ function normalizeTrade(payload: Record<string, unknown>): NormalizedTrade | nul
     filledAt,
     closedAt,
     netPnl: payload.netPnl,
-    grossPnl: finite(payload.grossPnl) ? payload.grossPnl : payload.netPnl + entryFee + exitFee + slippage + funding,
+    grossPnl: payload.grossPnl,
     rMultiple: nullableNumber(payload.rMultiple),
     notionalValue: nullableNumber(payload.notionalValue),
     leverage: nullableNumber(payload.leverage),
@@ -231,7 +245,7 @@ export function calculatePaperJournalAnalytics(payloads: readonly Record<string,
   const period = [...trades].sort((a, b) => Date.parse(a.filledAt) - Date.parse(b.filledAt));
   const missingStop = trades.filter((trade) => trade.stopLossPrice == null).length;
 
-  return {
+  const result: PaperJournalAnalytics = {
     periodStart: period.at(0)?.filledAt ?? null,
     periodEnd: period.at(-1)?.closedAt ?? null,
     sampleSize: total,
@@ -268,6 +282,8 @@ export function calculatePaperJournalAnalytics(payloads: readonly Record<string,
     ],
     warnings: enough ? [] : [`기본 통계 확정에는 최소 ${BASIC_ANALYTICS_MIN_SAMPLE}건이 필요합니다.`],
   };
+  assertFiniteEvidence(result);
+  return result;
 }
 
 function anonymizedId(id: string) {
@@ -282,7 +298,7 @@ export function createTradingReviewDataset(
   const representative = [...trades]
     .sort((left, right) => Math.abs(right.rMultiple ?? 0) - Math.abs(left.rMultiple ?? 0) || left.id.localeCompare(right.id))
     .slice(0, MAX_REVIEW_REPRESENTATIVE_TRADES);
-  return {
+  const result: TradingReviewDataset = {
     periodStart: analytics.periodStart ?? '',
     periodEnd: analytics.periodEnd ?? '',
     sampleSize: analytics.sampleSize,
@@ -335,4 +351,6 @@ export function createTradingReviewDataset(
       '대표 거래에는 익명화된 ID와 최소화된 성과 필드만 포함합니다.',
     ],
   };
+  assertFiniteEvidence(result);
+  return result;
 }

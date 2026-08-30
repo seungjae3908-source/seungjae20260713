@@ -46,6 +46,7 @@ export type PaperJournalEntry = {
   fundingCost: number; grossPnl: number; netPnl: number; rMultiple: number | null; exitReason: PaperFillReason | null;
   dataStatusAtEntry: DataStatus; marketRegimeAtEntry: string; riskBlocked: boolean; warnings: string[];
   ruleViolation: boolean; status: PaperPositionStatus; note: string;
+  conflictCopyOf?: string; researchEvidenceEligible?: false;
 };
 
 export type PaperTradingState = {

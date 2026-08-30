@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
 import { createPaperJournalRouter } from './paper-journal';
+import { paperJournalFixture } from '../services/paper-journal-test-fixture';
 import type { PaperJournalRepository } from '../services/paper-journal.types';
 import type { TradingReviewProvider } from '../services/trading-review-provider';
 
@@ -76,7 +77,7 @@ async function safeJson(response: Response) {
 
 const syncBody = {
   idempotencyKey: 'phase7-smoke-0001', clientTime: NOW.toISOString(),
-  records: [{ kind: 'journal', id: 'trade-smoke', version: 1, updatedAt: NOW.toISOString(), deletedAt: null, payload: { id: 'trade-smoke', status: 'closed', netPnl: 10 } }],
+  records: [{ kind: 'journal', id: 'trade-smoke', version: 1, updatedAt: NOW.toISOString(), deletedAt: null, payload: { ...paperJournalFixture('trade-smoke', NOW.toISOString()) } }],
 };
 
 test('sync endpoint returns journal-sync-only safety contract', async () => {
@@ -96,6 +97,17 @@ test('sync endpoint rejects body user_id', async () => {
     const response = await fetch(`${baseUrl}/api/paper-journal/sync`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...syncBody, user_id: 'other' }) });
     assert.equal(response.status, 400);
     assert.equal((await safeJson(response)).code, 'CLIENT_USER_ID_FORBIDDEN');
+  } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
+});
+
+test('sync endpoint rejects incomplete financial payload before persistence', async () => {
+  const { server, baseUrl, repository } = await startServer();
+  try {
+    const response = await fetch(`${baseUrl}/api/paper-journal/sync`, { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...syncBody, records: [{ ...syncBody.records[0], payload: { id: 'trade-smoke', status: 'closed', netPnl: 999 } }] }) });
+    assert.equal(response.status, 400);
+    assert.equal((await safeJson(response)).code, 'INVALID_RECORD_EVIDENCE');
+    assert.equal((await repository.listSnapshot(USER)).length, 0);
   } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
 });
 
