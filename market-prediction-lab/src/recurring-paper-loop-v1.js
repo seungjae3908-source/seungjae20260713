@@ -467,7 +467,9 @@ export async function runRecurringPaperCycle({
     const position = positions[positionIndex];
     let decision;
     try {
-      decision = advanceNaturalPaperPositionLifecycle({ position, observation, evaluatedAtMs: cycle.evaluatedAtMs });
+      decision = advanceNaturalPaperPositionLifecycle({
+        position, observation, evaluatedAtMs: cycle.evaluatedAtMs, state: predecessor, cycle,
+      });
     } catch (error) {
       if (typeof error?.message !== "string" || !error.message.startsWith("PAPER_POSITION_")) throw error;
       directReasons.push(loopReasonObservation({
@@ -529,7 +531,20 @@ export async function runRecurringPaperCycle({
       }));
       continue;
     }
-    const settlement = settleFourMarketPaperSample({ sample: position.sample, ...exit.settlementInput, evaluatedAtMs: cycle.evaluatedAtMs });
+    if (position.lifecycle?.sampleEligibility?.provenanceClass === "NATURAL_FORWARD"
+      && !lifecycleExits.includes(exit)) {
+      directReasons.push(loopReasonObservation({
+        sourceStage: "EXIT_ELIGIBLE", sourceCode: "PAPER_POSITION_EXTERNAL_EXIT_IDENTITY_FORBIDDEN",
+        provenance: "recurring-paper-loop-v1 Natural lifecycle trust boundary",
+        observedAt: cycle.evaluatedAtMs, identity: cycle.identity, observationId: exit.positionId,
+      }));
+      continue;
+    }
+    const canonicalLifecycleEvidence = lifecycleExits.includes(exit) ? exit.lifecycleEvidence : null;
+    const settlement = settleFourMarketPaperSample({
+      sample: position.sample, ...exit.settlementInput,
+      evaluatedAtMs: canonicalLifecycleEvidence?.exitTriggerTimestampMs ?? cycle.evaluatedAtMs,
+    });
     if (settlement.status !== "SETTLED") {
       for (const blocker of settlement.blockers ?? ["PAPER_SETTLEMENT_NOT_READY"]) {
         directReasons.push(loopReasonObservation({
@@ -560,9 +575,10 @@ export async function runRecurringPaperCycle({
       settlementId,
       positionId: position.positionId,
       exitReason: exit.exitReason ?? "CANONICAL_EXTERNAL_EXIT",
+      settlementRecordedAtMs: cycle.evaluatedAtMs,
       positionLifecycle: position.lifecycle ?? null,
-      lifecycleEvidence: exit.lifecycleEvidence ?? null,
-      naturalSampleCredit: exit.lifecycleEvidence?.naturalSampleCredit ?? 0,
+      lifecycleEvidence: canonicalLifecycleEvidence,
+      naturalSampleCredit: canonicalLifecycleEvidence?.naturalSampleCredit ?? 0,
       testOnlySampleCredit: 0,
       executionAuthority: "NONE",
       orderSubmitted: false,
