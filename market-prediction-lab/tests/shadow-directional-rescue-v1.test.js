@@ -87,13 +87,14 @@ test("directional rescue never overrides frozen Blend when Rule is actionable", 
   }), "SHORT");
 });
 
-test("policy is zero-parameter research-only and gives historical evidence zero credit", () => {
+test("policy is zero-parameter research-only and gives historically selected evidence zero credit", () => {
   assert.equal(SHADOW_DIRECTIONAL_RESCUE_POLICY_V1.newThresholds, 0);
   assert.equal(SHADOW_DIRECTIONAL_RESCUE_POLICY_V1.thresholdModified, false);
   assert.equal(SHADOW_DIRECTIONAL_RESCUE_POLICY_V1.labelModified, false);
   assert.equal(SHADOW_DIRECTIONAL_RESCUE_POLICY_V1.classWeightModified, false);
   assert.equal(SHADOW_DIRECTIONAL_RESCUE_POLICY_V1.blendWeightModified, false);
   assert.equal(SHADOW_DIRECTIONAL_RESCUE_POLICY_V1.modelModified, false);
+  assert.equal(SHADOW_DIRECTIONAL_RESCUE_POLICY_V1.historicalEvidenceUsedToSelectPolicy, true);
   assert.equal(SHADOW_DIRECTIONAL_RESCUE_POLICY_V1.historicalPromotionCredit, 0);
   assert.equal(SHADOW_DIRECTIONAL_RESCUE_POLICY_V1.prospectiveGenuineEvidenceRequired, true);
   assert.match(SHADOW_DIRECTIONAL_RESCUE_POLICY_V1_SHA256, /^[0-9a-f]{64}$/u);
@@ -106,6 +107,7 @@ test("authenticated all-neutral Rule cohort can derive an exact historical rescu
   assert.equal(candidate.reason, null);
   assert.equal(candidate.derivation.mode, "EXACT_COUNTERFACTUAL_IDENTITY");
   assert.equal(candidate.derivation.newParameterCount, 0);
+  assert.equal(candidate.derivation.historicalDataUsedForPolicySelection, true);
   assert.equal(candidate.derivation.historicalDataUsedForParameterSelection, false);
   assert.equal(candidate.historicalEvaluation.rescue, diagnostic.lanes.model);
   assert.equal(candidate.historicalEvaluation.promotionCredit, 0);
