@@ -2,6 +2,7 @@ import { authorizedFetch } from '@/lib/auth-fetch';
 import { apiGet } from '@/lib/api';
 import { getFuturesMarketSnapshot, type DataStatus, type FuturesContractRules, type FuturesMarketSnapshot, type NormalizedCandle } from '@/lib/futures-market-data';
 import type { RiskEngineInput, RiskEngineResult } from '@/lib/trading-risk';
+import { validPaperActionResult, validPaperState } from '../../../packages/api-zod/src/paper-state-evidence.js';
 
 export type PaperSide = 'long' | 'short';
 export type PaperOrderType = 'market' | 'limit' | 'stop_market';
@@ -135,6 +136,7 @@ export function paperStateTransportNotice(transport: PaperStateTransport | null)
 }
 
 export async function evaluatePaperTrading(state: PaperTradingState, action: PaperTradingAction, signal?: AbortSignal) {
+  if (!validPaperState(state, Date.now())) throw new Error('모의거래 입력 기록의 근거를 확인하지 못했습니다.');
   const resolvedAction = await resolvePaperTradingActionMarket(state, action);
   signal?.throwIfAborted();
   const response = await authorizedFetch('/api/paper-trading/evaluate', {
@@ -144,7 +146,8 @@ export async function evaluatePaperTrading(state: PaperTradingState, action: Pap
   if (!body || body.mode !== 'paper-only' || body.orderSubmitted !== false || body.exchangeRequestSent !== false) {
     throw new Error('모의거래 안전 계약을 확인하지 못했습니다.');
   }
-  if (!response.ok || !body.ok || !body.result) throw new Error(body.message ?? body.code ?? '모의거래 계산을 처리하지 못했습니다.');
+  if (!response.ok || body.ok !== true || !body.result) throw new Error(body.message ?? body.code ?? '모의거래 계산을 처리하지 못했습니다.');
+  if (!validPaperActionResult(body.result, state, action.eventId, Date.now())) throw new Error('모의거래 결과의 기록·식별자·수치 근거를 확인하지 못했습니다.');
   const paperStateTransport = normalizePaperStateTransport(body.paperStateTransport);
   const transportNotice = paperStateTransportNotice(paperStateTransport);
   return {

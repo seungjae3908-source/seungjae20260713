@@ -26,7 +26,8 @@ async function execute(input: PaperTradingState, action: PaperTradingAction): Pr
   const state = clone(input);
   if (state.processedEventIds.includes(action.eventId)) return result(state, { duplicateEvent: true, warnings: ['이미 처리된 이벤트입니다.'] });
   state.processedEventIds.push(action.eventId);
-  state.updatedAt = NOW;
+  state.updatedAt = new Date().toISOString();
+  state.account.updatedAt = state.updatedAt;
 
   if (action.type === 'place_order') {
     const id = `order-${state.orders.length + 1}`;
@@ -41,7 +42,12 @@ async function execute(input: PaperTradingState, action: PaperTradingAction): Pr
       cancelledAt: null, rejectionCodes: [], warnings: [], mode: 'paper-only', orderSubmitted: false,
       exchangeRequestSent: false, riskResult: { allowed: true, blockCodes: [], warnings: [], maximumRiskAmount: 50,
         recommendedQuantity: quantity, notionalValue: quantity * 100_010, requiredMargin: quantity * 100_010 / action.request.leverage,
-        estimatedMaximumLoss: 50, riskReward1: 2, estimatedLiquidationPrice: 50_000 } as any,
+        estimatedMaximumLoss: 50, riskReward1: 2, estimatedLiquidationPrice: 50_000,
+        stopDistance: null, stopDistancePercent: null, rawQuantity: null, estimatedEntryFee: null,
+        estimatedExitFeeAtStop: null, estimatedSlippageCost: null, estimatedFundingCost: null,
+        actualRiskPercent: null, estimatedProfit1: null, estimatedProfit2: null, riskReward2: null,
+        breakEvenPrice: null, stopToLiquidationDistancePercent: null, effectiveQuantityStep: null,
+        appMaximumLeverage: null, exchangeMaximumLeverage: null, calculatedAt: NOW },
     };
     state.orders.push(order);
     if (pending) return result(state, { order });
@@ -125,6 +131,11 @@ export default function Phase6PaperTradingE2EPage() {
       await new Promise<void>((resolve) => window.addEventListener('phase6-release-execution', () => resolve(), { once: true }));
       return execute(state, action);
     }
-    : execute;
+    : mode === 'invalid-number' || mode === 'wrong-account' ? async (state: PaperTradingState, action: PaperTradingAction) => {
+      const response = await execute(state, action);
+      if (mode === 'invalid-number') response.state.account.equity = Number.NaN;
+      else response.state.account.id = 'different-member-account';
+      return response;
+    } : execute;
   return <PaperTradingPanel compact execute={fixtureExecute} loadMarket={async () => snapshot} loadRules={async () => rules} loadCandle={async () => candle} />;
 }

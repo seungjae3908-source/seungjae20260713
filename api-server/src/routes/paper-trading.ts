@@ -61,6 +61,7 @@ export function createPaperTradingRouter(
   const clock = dependencies.clock ?? (() => new Date());
 
   router.post('/paper-trading/evaluate', async (req: AuthenticatedRequest, res) => {
+    res.setHeader('Cache-Control', 'private, no-store');
     const declaredLength = Number(req.header('content-length') ?? 0);
     if (Number.isFinite(declaredLength) && declaredLength > MAX_REQUEST_BYTES) {
       return res.status(413).json(safeEnvelope({
