@@ -34,6 +34,7 @@ import {
 
 const SOURCE_MAIN_SHA = String(process.env.EXPECTED_SHA
   ?? execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()).toLowerCase();
+const REPO_ROOT = resolve(new URL('../..', import.meta.url).pathname);
 const REPOSITORY = 'seungjae3908-source/seungjae20260713';
 const ARTIFACT_DIGEST = 'b'.repeat(64);
 assert.match(SOURCE_MAIN_SHA, /^[a-f0-9]{40}$/u);
@@ -171,7 +172,7 @@ function artifactReceipt(capture, artifactId, overrides = {}) {
 async function ingest(stateRoot, rawBatch, capture, artifact, artifactId) {
   return ingestPublicForwardLiquidityV3Capture({
     stateRoot,
-    researchRepoRoot: resolve('.'),
+    researchRepoRoot: REPO_ROOT,
     expectedMainSha: SOURCE_MAIN_SHA,
     expectedRepository: REPOSITORY,
     expectedArtifactId: String(artifactId),
