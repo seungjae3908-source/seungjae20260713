@@ -11,7 +11,7 @@ export type InvestmentToolEnvelope<T> = {
 export type CopilotHolding = { ticker: string; name: string; market: string; normalizedKRW: number | null };
 export type CopilotPortfolioSnapshot = {
   status: string; asOf: string;
-  totalAssets: { normalizedKRW: number | null; knownNormalizedKRW: number };
+  totalAssets: { normalizedKRW: number | null; knownNormalizedKRW: number | null };
   cash: { totalKRW: number | null };
   valuationPnl: { normalizedKRW: number | null; returnPercent: number | null };
   top5Concentration: { percent: number | null };

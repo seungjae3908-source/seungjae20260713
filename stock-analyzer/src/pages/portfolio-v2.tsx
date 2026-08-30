@@ -1,12 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useLocation } from 'wouter';
 import { BrainCircuit, RefreshCw, ShieldAlert, WalletCards } from 'lucide-react';
 import PortfolioPage from '@/pages/portfolio';
 import { BottomNav } from '@/components/bottom-nav';
 import { PortfolioAiDiagnosis } from '@/components/portfolio-ai-diagnosis';
-import { apiGet } from '@/lib/api';
 import { authorizedFetch } from '@/lib/auth-fetch';
+import { useAuth } from '@/lib/auth';
+import { parsePortfolioIntelligence, parseMonthlyPlan, parseAdditionalBuy } from '@/lib/portfolio-intelligence-evidence';
 import { cn } from '@/lib/utils';
 
 type IntelligenceHolding = {
@@ -20,19 +21,21 @@ type IntelligenceHolding = {
   currentPrice: number;
   nativeValue: number;
   normalizedKRW: number | null;
+  asOf: string;
+  source: string;
 };
 
-type Intelligence = {
+export type Intelligence = {
   status: 'READY' | 'PARTIAL' | 'UNAVAILABLE';
   asOf: string;
-  totalAssets: { status: string; normalizedKRW: number | null; knownNormalizedKRW: number };
-  investmentPrincipal: { status: string; normalizedKRW: number | null; knownNormalizedKRW: number };
+  totalAssets: { status: string; normalizedKRW: number | null; knownNormalizedKRW: number | null };
+  investmentPrincipal: { status: string; normalizedKRW: number | null; knownNormalizedKRW: number | null };
   valuationPnl: { status: string; normalizedKRW: number | null; returnPercent: number | null };
   cash: { status: string; totalKRW: number | null };
   minimumCashBuffer: { status: string; normalizedKRW: number | null };
   investableCash: { status: string; normalizedKRW: number | null };
   assets: { krStocks: number | null; usStocks: number | null; cryptoSpot: number | null; cryptoFuturesEquity: number | null; cash: number | null };
-  allocation: { status: string; knownTotalKRW: number; buckets: Record<string, number | null> };
+  allocation: { status: string; knownTotalKRW: number | null; buckets: Record<string, number | null> };
   holdings: IntelligenceHolding[];
   topHoldings: IntelligenceHolding[];
   top5Concentration: { status: string; percent: number | null };
@@ -44,9 +47,8 @@ type Intelligence = {
   missingSources: string[];
 };
 
-type ResponseShape = { ok: boolean; portfolio: Intelligence };
-
-type AdditionalBuyResponse = {
+export type AdditionalBuyResponse = {
+  asOf: string;
   ok: boolean;
   status: string;
   priceBasis: 'NORMALIZED_KRW';
@@ -75,12 +77,13 @@ type AdditionalBuyResponse = {
   evidence: { stopLoss: string; targets: string; source: string | null };
 };
 
-type MonthlyResponse = {
+export type MonthlyResponse = {
+  asOf: string;
   ok: boolean;
   status: string;
   assumption: 'NO_VALIDATED_RETURN_ASSUMPTION';
   allocationBasis: 'CURRENT_KNOWN_ALLOCATION';
-  allocationKnownTotalKRW: number;
+  allocationKnownTotalKRW: number | null;
   profileForPolicyComparison: string;
   profileUsedForAllocation: false;
   unavailableOutputs: string[];
@@ -141,30 +144,39 @@ function Metric({ label, value, state, testId }: { label: string; value: string;
 }
 
 function MonthlySimulator({ intelligence, profile }: { intelligence: Intelligence; profile: string }) {
-  const [amount, setAmount] = useState(300_000);
-  const [months, setMonths] = useState(12);
-  const [result, setResult] = useState<MonthlyResponse | null>(null);
+  const [amountText, setAmountText] = useState('300000');
+  const amount = amountText.trim() === '' ? Number.NaN : Number(amountText);
+  const [monthsText, setMonthsText] = useState('12');
+  const months = monthsText.trim() === '' ? Number.NaN : Number(monthsText);
+  const [reply, setReply] = useState<{ key: string; value: MonthlyResponse } | null>(null);
+  const inputKey = JSON.stringify([amount, months, profile, intelligence.asOf]);
+  const result = reply?.key === inputKey ? reply.value : null;
+  const requestLock = useRef(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    setResult(null);
+    setReply(null);
   }, [profile]);
 
   async function calculate() {
+    if (requestLock.current) return;
+    requestLock.current = true;
     setBusy(true);
     setError('');
     try {
-      setResult(await postJson<MonthlyResponse>('/portfolio/intelligence/monthly-contribution', {
+      const input = {
         monthlyAmountKRW: amount,
         months,
         profile,
-      }));
+      };
+      const value = parseMonthlyPlan(await postJson<unknown>('/portfolio/intelligence/monthly-contribution', input), input);
+      setReply({ key: inputKey, value });
     } catch (cause) {
-      setResult(null);
+      setReply(null);
       setError(cause instanceof Error ? cause.message : '월 적립 시뮬레이션에 실패했습니다.');
     } finally {
-      setBusy(false);
+      requestLock.current = false; setBusy(false);
     }
   }
 
@@ -172,11 +184,11 @@ function MonthlySimulator({ intelligence, profile }: { intelligence: Intelligenc
     <h3 className="font-black">월 적립 시뮬레이터</h3>
     <p className="mt-1 text-[11px] font-bold leading-5 text-muted-foreground">미래 수익을 예측하는 계산이 아니라, 현재 확인된 자산비중으로 납입금을 나누는 read-only 계획입니다.</p>
     <div className="mt-3 grid grid-cols-2 gap-2">
-      <label className="text-xs font-bold text-muted-foreground">월 적립액<input aria-label="월 적립액" className="mt-1 h-11 w-full rounded-xl border border-border bg-background px-3 text-foreground" type="number" min="1" value={amount} onChange={(event) => setAmount(Number(event.target.value) || 0)} /></label>
-      <label className="text-xs font-bold text-muted-foreground">기간(개월)<input aria-label="적립 기간" className="mt-1 h-11 w-full rounded-xl border border-border bg-background px-3 text-foreground" type="number" min="1" max="120" value={months} onChange={(event) => setMonths(Number(event.target.value) || 1)} /></label>
+      <label className="text-xs font-bold text-muted-foreground">월 적립액<input aria-label="월 적립액" className="mt-1 h-11 w-full rounded-xl border border-border bg-background px-3 text-foreground" type="number" min="1" value={amountText} onChange={(event) => setAmountText(event.target.value)} /></label>
+      <label className="text-xs font-bold text-muted-foreground">기간(개월)<input aria-label="적립 기간" className="mt-1 h-11 w-full rounded-xl border border-border bg-background px-3 text-foreground" type="number" min="1" max="120" value={monthsText} onChange={(event) => setMonthsText(event.target.value)} /></label>
     </div>
-    <div className="mt-2 grid grid-cols-3 gap-2">{[12, 24, 36].map((value) => <button key={value} type="button" onClick={() => setMonths(value)} className={cn('rounded-xl border border-border px-2 py-2 text-xs font-black', months === value && 'bg-primary/10 text-primary')}>{value}개월</button>)}</div>
-    <button type="button" disabled={busy || amount <= 0 || months <= 0} onClick={() => void calculate()} className="mt-3 w-full rounded-xl bg-primary px-3 py-2.5 text-sm font-black text-primary-foreground disabled:opacity-50">{busy ? '계산 중...' : '적립 시뮬레이션 계산'}</button>
+    <div className="mt-2 grid grid-cols-3 gap-2">{[12, 24, 36].map((value) => <button key={value} type="button" onClick={() => setMonthsText(String(value))} className={cn('rounded-xl border border-border px-2 py-2 text-xs font-black', months === value && 'bg-primary/10 text-primary')}>{value}개월</button>)}</div>
+    <button type="button" disabled={busy || !Number.isFinite(amount) || amount <= 0 || !Number.isInteger(months) || months <= 0 || months > 120} onClick={() => void calculate()} className="mt-3 w-full rounded-xl bg-primary px-3 py-2.5 text-sm font-black text-primary-foreground disabled:opacity-50">{busy ? '계산 중...' : '적립 시뮬레이션 계산'}</button>
     {error ? <p role="alert" className="mt-2 text-xs font-bold text-destructive">{error}</p> : null}
     {result?.plan ? <>
       <p className="mt-3 text-sm font-black">누적 납입금 {money(result.plan.cumulativeInvestmentKRW)}</p>
@@ -195,28 +207,35 @@ function MonthlySimulator({ intelligence, profile }: { intelligence: Intelligenc
 function AdditionalBuySimulator({ intelligence }: { intelligence: Intelligence }) {
   const [ticker, setTicker] = useState(intelligence.holdings[0]?.ticker ?? '');
   const [mode, setMode] = useState<'amount' | 'quantity'>('amount');
-  const [amount, setAmount] = useState(0);
-  const [quantity, setQuantity] = useState(0);
-  const [result, setResult] = useState<AdditionalBuyResponse | null>(null);
+  const [amountText, setAmountText] = useState('');
+  const amount = amountText.trim() === '' ? Number.NaN : Number(amountText);
+  const [quantityText, setQuantityText] = useState('');
+  const quantity = quantityText.trim() === '' ? Number.NaN : Number(quantityText);
+  const [reply, setReply] = useState<{ key: string; value: AdditionalBuyResponse } | null>(null);
+  const inputKey = JSON.stringify([ticker, mode, amount, quantity, intelligence.asOf]);
+  const result = reply?.key === inputKey ? reply.value : null;
+  const requestLock = useRef(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const holding = intelligence.holdings.find((row) => row.ticker === ticker) ?? intelligence.holdings[0];
 
   async function calculate() {
-    if (!holding) return;
+    if (!holding || requestLock.current) return;
+    requestLock.current = true;
     setBusy(true);
     setError('');
     try {
-      setResult(await postJson<AdditionalBuyResponse>('/portfolio/intelligence/additional-buy', {
+      const response = await postJson<unknown>('/portfolio/intelligence/additional-buy', {
         ticker: holding.ticker,
         additionalAmountKRW: mode === 'amount' ? amount : undefined,
         additionalQuantity: mode === 'quantity' ? quantity : undefined,
-      }));
+      });
+      setReply({ key: inputKey, value: parseAdditionalBuy(response, holding) });
     } catch (cause) {
-      setResult(null);
+      setReply(null);
       setError(cause instanceof Error ? cause.message : '추가매수 시뮬레이션에 실패했습니다.');
     } finally {
-      setBusy(false);
+      requestLock.current = false; setBusy(false);
     }
   }
 
@@ -234,11 +253,11 @@ function AdditionalBuySimulator({ intelligence }: { intelligence: Intelligence }
     <p className="mt-1 text-[11px] font-bold leading-5 text-muted-foreground">현재 보유수량·평단·공개 시세·환율로만 계산합니다. Stop/Target 근거가 없으면 손실·목표수익을 만들지 않습니다.</p>
     {intelligence.holdings.length ? <>
       <div className="mt-3 grid grid-cols-2 gap-2">
-        <label className="text-xs font-bold text-muted-foreground">보유자산<select aria-label="추가매수 보유자산" className="mt-1 h-11 w-full rounded-xl border border-border bg-background px-2 text-foreground" value={holding?.ticker ?? ''} onChange={(event) => { setTicker(event.target.value); setResult(null); }}>{intelligence.holdings.map((row) => <option value={row.ticker} key={row.id}>{row.name} ({row.ticker})</option>)}</select></label>
-        <label className="text-xs font-bold text-muted-foreground">입력 기준<select aria-label="추가매수 입력 기준" className="mt-1 h-11 w-full rounded-xl border border-border bg-background px-2 text-foreground" value={mode} onChange={(event) => { setMode(event.target.value === 'quantity' ? 'quantity' : 'amount'); setResult(null); }}><option value="amount">추가 금액(KRW)</option><option value="quantity">추가 수량</option></select></label>
+        <label className="text-xs font-bold text-muted-foreground">보유자산<select aria-label="추가매수 보유자산" className="mt-1 h-11 w-full rounded-xl border border-border bg-background px-2 text-foreground" value={holding?.ticker ?? ''} onChange={(event) => { setTicker(event.target.value); setReply(null); }}>{intelligence.holdings.map((row) => <option value={row.ticker} key={row.id}>{row.name} ({row.ticker})</option>)}</select></label>
+        <label className="text-xs font-bold text-muted-foreground">입력 기준<select aria-label="추가매수 입력 기준" className="mt-1 h-11 w-full rounded-xl border border-border bg-background px-2 text-foreground" value={mode} onChange={(event) => { setMode(event.target.value === 'quantity' ? 'quantity' : 'amount'); setReply(null); }}><option value="amount">추가 금액(KRW)</option><option value="quantity">추가 수량</option></select></label>
       </div>
-      {mode === 'amount' ? <label className="mt-2 block text-xs font-bold text-muted-foreground">추가 투자 금액<input aria-label="추가 투자 금액" className="mt-1 h-11 w-full rounded-xl border border-border bg-background px-3 text-foreground" type="number" min="0" value={amount} onChange={(event) => setAmount(Number(event.target.value) || 0)} /></label> : <label className="mt-2 block text-xs font-bold text-muted-foreground">추가 수량<input aria-label="추가 수량" className="mt-1 h-11 w-full rounded-xl border border-border bg-background px-3 text-foreground" type="number" min="0" step="any" value={quantity} onChange={(event) => setQuantity(Number(event.target.value) || 0)} /></label>}
-      <button type="button" disabled={busy || (mode === 'amount' ? amount <= 0 : quantity <= 0)} onClick={() => void calculate()} className="mt-3 w-full rounded-xl bg-primary px-3 py-2.5 text-sm font-black text-primary-foreground disabled:opacity-50">{busy ? '계산 중...' : '추가매수 계산'}</button>
+      {mode === 'amount' ? <label className="mt-2 block text-xs font-bold text-muted-foreground">추가 투자 금액<input aria-label="추가 투자 금액" className="mt-1 h-11 w-full rounded-xl border border-border bg-background px-3 text-foreground" type="number" min="0" value={amountText} onChange={(event) => setAmountText(event.target.value)} /></label> : <label className="mt-2 block text-xs font-bold text-muted-foreground">추가 수량<input aria-label="추가 수량" className="mt-1 h-11 w-full rounded-xl border border-border bg-background px-3 text-foreground" type="number" min="0" step="any" value={quantityText} onChange={(event) => setQuantityText(event.target.value)} /></label>}
+      <button type="button" disabled={busy || (mode === 'amount' ? !Number.isFinite(amount) || amount <= 0 : !Number.isFinite(quantity) || quantity <= 0)} onClick={() => void calculate()} className="mt-3 w-full rounded-xl bg-primary px-3 py-2.5 text-sm font-black text-primary-foreground disabled:opacity-50">{busy ? '계산 중...' : '추가매수 계산'}</button>
       {error ? <p role="alert" className="mt-2 text-xs font-bold text-destructive">{error}</p> : null}
       {holding ? <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
         <Metric label="현재 평균단가(원통화)" value={`${holding.averagePrice.toLocaleString()} ${holding.currency}`} />
@@ -263,18 +282,29 @@ function AdditionalBuySimulator({ intelligence }: { intelligence: Intelligence }
 }
 
 function IntelligenceDashboard() {
+  const auth = useAuth();
   const [location] = useLocation();
   const [profile, setProfile] = useState('BALANCED');
   const query = useQuery({
-    queryKey: ['portfolio-intelligence-v2', profile],
-    queryFn: () => apiGet<ResponseShape>(`/portfolio/intelligence?profile=${encodeURIComponent(profile)}`),
+    queryKey: ['portfolio-intelligence-v2', auth.user?.id ?? null, profile],
+    queryFn: async ({ signal }) => {
+      const response = await authorizedFetch(`/api/portfolio/intelligence?profile=${encodeURIComponent(profile)}`, { signal, cache: 'no-store' });
+      if (!response.ok) throw new Error(`PORTFOLIO_HTTP_${response.status}`);
+      return parsePortfolioIntelligence(await response.json());
+    },
+    enabled: !auth.loading && !!auth.user && auth.can('canAccessBasicInfo'),
     staleTime: 30_000,
     refetchInterval: () => typeof document !== 'undefined' && document.hidden ? false : 60_000,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
     retry: 1,
   });
-  const intelligence = query.data?.portfolio;
+  const [displayTime, setDisplayTime] = useState(() => Date.now());
+  useEffect(() => { const timer = window.setInterval(() => setDisplayTime(Date.now()), 30_000); return () => window.clearInterval(timer); }, []);
+  const currentTime = Math.max(displayTime, Date.now());
+  const stale = query.data && (currentTime - Date.parse(query.data.asOf) > 120_000
+    || query.data.holdings.some((holding) => currentTime - Date.parse(holding.asOf) > 300_000));
+  const intelligence = !query.isError && !stale ? query.data : undefined;
 
   useEffect(() => {
     const locationQuery = location.includes('?') ? location.slice(location.indexOf('?') + 1) : '';
@@ -297,6 +327,8 @@ function IntelligenceDashboard() {
 
       <PortfolioAiDiagnosis />
       {query.isLoading ? <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">{Array.from({ length: 8 }, (_, index) => <div key={index} className="h-24 animate-pulse rounded-2xl bg-muted/40" />)}</div> : null}
+      {!auth.loading && (!auth.user || !auth.can('canAccessBasicInfo')) ? <p role="status" className="rounded-2xl border border-border p-4 text-sm">로그인 및 포트폴리오 조회 권한이 필요합니다.</p> : null}
+      {stale ? <p role="alert" className="rounded-2xl border border-warning/30 p-4 text-sm">STALE · 오래된 포트폴리오 평가입니다. 새로고침 후 확인해 주세요.</p> : null}
       {query.isError ? <div className="rounded-2xl border border-destructive/30 bg-destructive/10 p-4 text-sm font-bold text-destructive">Portfolio Intelligence API를 불러오지 못했습니다. 실제 서버 오류를 숨기지 않습니다.</div> : null}
 
       {intelligence ? <>
