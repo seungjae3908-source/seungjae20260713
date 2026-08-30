@@ -31,7 +31,7 @@ export type ForwardGrossEdgeEvidence = Readonly<{
   reasons: readonly string[];
   identity: ForwardObservationIdentity | null;
   identityKey: string | null;
-  sampleSize: number;
+  sampleSize: number | null;
   counts: Readonly<{ tp: number; sl: number; expire: number; conservativeConflicts: number }> | null;
   probabilities: Readonly<{ tp: number; sl: number; expire: number }> | null;
   returns: Readonly<{ target: number; stop: number; expire: number }> | null;
@@ -86,6 +86,10 @@ function nonNegativeInteger(value: unknown): value is number {
   return Number.isInteger(value) && Number(value) >= 0;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
 function round(value: number, digits = 6): number {
   const factor = 10 ** digits;
   return Math.round(value * factor) / factor;
@@ -109,8 +113,21 @@ function immutable<T>(value: T): T {
   return value;
 }
 
-function validIdentity(identity: ForwardObservationIdentity | null): identity is ForwardObservationIdentity {
-  if (!identity) return false;
+function identityStructureValid(identity: unknown): identity is ForwardObservationIdentity {
+  return isRecord(identity)
+    && typeof identity.strategyId === 'string'
+    && typeof identity.strategyVersion === 'string'
+    && typeof identity.parameterHash === 'string'
+    && typeof identity.researchCodeSha === 'string'
+    && typeof identity.market === 'string'
+    && typeof identity.symbol === 'string'
+    && typeof identity.timeframe === 'string'
+    && typeof identity.horizon === 'number'
+    && typeof identity.direction === 'string';
+}
+
+function validIdentity(identity: unknown): identity is ForwardObservationIdentity {
+  if (!identityStructureValid(identity)) return false;
   if (!nonEmpty(identity.strategyId)
     || !nonEmpty(identity.strategyVersion)
     || !nonEmpty(identity.parameterHash)
@@ -123,6 +140,21 @@ function validIdentity(identity: ForwardObservationIdentity | null): identity is
     return identity.direction === 'BUY';
   }
   return false;
+}
+
+function calibrationStructureValid(value: unknown): value is ForwardObservationProfitCalibration {
+  if (!isRecord(value)
+    || !isRecord(value.calibration)
+    || !isRecord(value.counts)
+    || !isRecord(value.probabilities)
+    || !isRecord(value.returns)) return false;
+  return value.identity == null || identityStructureValid(value.identity);
+}
+
+function observationStructureValid(value: unknown): value is ForwardRecommendationObservation {
+  if (!isRecord(value) || !identityStructureValid(value.identity) || !isRecord(value.snapshot)) return false;
+  if (!Array.isArray(value.snapshot.timeframes) || !Array.isArray(value.snapshot.dataProvenance)) return false;
+  return value.outcome == null || isRecord(value.outcome);
 }
 
 function classifyObservation(row: ForwardRecommendationObservation): 'TP' | 'SL' | 'EXPIRE' | null {
@@ -334,25 +366,40 @@ export function buildForwardCalibrationGrossEdgeEvidence(input: {
   observations: readonly ForwardRecommendationObservation[];
   asOf: string;
 }): ForwardGrossEdgeEvidence {
-  const { calibration, observations } = input;
   const reasons: string[] = [];
   const asOfMs = parseTime(input.asOf);
-  const identity = calibration.identity ?? null;
-  const sampleSize = calibration.calibration?.sampleSize ?? 0;
+  const calibrationOk = calibrationStructureValid(input.calibration);
+  const observationsOk = Array.isArray(input.observations) && input.observations.every(observationStructureValid);
+  const calibration = calibrationOk ? input.calibration : null;
+  const observations = observationsOk ? input.observations : [];
+  const identity = calibration?.identity ?? null;
+  const declaredSampleSize = calibration?.calibration.sampleSize;
+  const sampleSize = Number.isInteger(declaredSampleSize) ? Number(declaredSampleSize) : null;
 
-  validateAggregateCalibration(calibration, reasons);
+  if (!calibrationOk) reasons.push('FORWARD_CALIBRATION_STRUCTURE_INVALID');
+  if (!observationsOk) reasons.push('FORWARD_OBSERVATION_STRUCTURE_INVALID');
+  if (calibration && sampleSize == null) reasons.push('FORWARD_CALIBRATION_SAMPLE_SIZE_INVALID_OR_MISSING');
+  if (calibration) validateAggregateCalibration(calibration, reasons);
   if (asOfMs == null) reasons.push('FORWARD_CALIBRATION_AS_OF_INVALID');
-  const provenance = validateObservationSet({ observations, identity, sampleSize, asOfMs, reasons });
+  const provenance = calibration && observationsOk && sampleSize != null
+    ? validateObservationSet({ observations, identity, sampleSize, asOfMs, reasons })
+    : null;
 
   let rebuilt: ForwardObservationProfitCalibration | null = null;
-  const canRebuild = reasons.every((reason) => ![
-    'FORWARD_OBSERVATION_SCHEMA_UNSUPPORTED',
-    'FORWARD_OBSERVATION_SOURCE_MISMATCH',
-    'FORWARD_OBSERVATION_NOT_SETTLED',
-    'FORWARD_OBSERVATION_IDENTITY_MISMATCH',
-    'FORWARD_OBSERVATION_LINEAGE_MISMATCH',
-    'FORWARD_OBSERVATION_OUTCOME_UNCLASSIFIED',
-  ].includes(reason));
+  const canRebuild = calibration !== null
+    && observationsOk
+    && sampleSize != null
+    && reasons.every((reason) => ![
+      'FORWARD_OBSERVATION_SCHEMA_UNSUPPORTED',
+      'FORWARD_OBSERVATION_SOURCE_MISMATCH',
+      'FORWARD_OBSERVATION_NOT_SETTLED',
+      'FORWARD_OBSERVATION_IDENTITY_MISMATCH',
+      'FORWARD_OBSERVATION_LINEAGE_MISMATCH',
+      'FORWARD_OBSERVATION_OUTCOME_UNCLASSIFIED',
+      'FORWARD_CALIBRATION_STRUCTURE_INVALID',
+      'FORWARD_OBSERVATION_STRUCTURE_INVALID',
+      'FORWARD_CALIBRATION_SAMPLE_SIZE_INVALID_OR_MISSING',
+    ].includes(reason));
   if (canRebuild) {
     rebuilt = buildForwardObservationProfitCalibration(observations, FORWARD_OBSERVATION_MINIMUM_SAMPLE_SIZE);
     compareCanonicalCalibration(calibration, rebuilt, reasons);
