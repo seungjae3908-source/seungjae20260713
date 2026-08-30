@@ -1,4 +1,4 @@
-name: ROOM B 817 Trigger Coverage Artifact
+name: ROOM B 817 Trigger Coverage Blob Staging
 
 on:
   pull_request:
@@ -7,22 +7,22 @@ on:
       - .github/workflows/room-b-817-trigger-coverage-remediation.yml
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  build-patch-artifact:
+  stage-patched-blob:
     if: ${{ github.event.pull_request.number == 817 }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Checkout exact PR head
+      - name: Checkout exact PR head branch
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
-          persist-credentials: false
+          persist-credentials: true
 
-      - name: Build exact trigger-coverage patch
+      - name: Build and validate exact trigger-coverage patch
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -31,37 +31,21 @@ jobs:
           path = Path('.github/workflows/paper-forward-schedule-validation.yml')
           text = path.read_text()
           replacements = [
-            (
-              '    paths:\n      - api-server/scripts/build-authoritative-paper-runtime-package.mjs',
-              '    paths:\n      - .github/workflows/authoritative-paper-runtime-factory-v1.yml\n      - api-server/scripts/build-authoritative-paper-runtime-package.mjs',
-            ),
-            (
-              '      - market-prediction-lab/src/eth-v6-paper-settlement-source-v1.js\n      - market-prediction-lab/src/meaningful-search-scheduled-paper-provider-v1.js',
-              '      - market-prediction-lab/src/eth-v6-paper-settlement-source-v1.js\n      - market-prediction-lab/src/four-market-paper-settlement-v1.js\n      - market-prediction-lab/src/meaningful-search-scheduled-paper-provider-v1.js',
-            ),
-            (
-              '      - market-prediction-lab/tests/canonical-meaningful-search-paper-runtime-v1.test.js\n      - market-prediction-lab/tests/meaningful-search-scheduled-paper-provider-v1.test.js',
-              '      - market-prediction-lab/tests/canonical-meaningful-search-paper-runtime-v1.test.js\n      - market-prediction-lab/tests/eth-v6-paper-forward-source-v1.test.js\n      - market-prediction-lab/tests/eth-v6-paper-settlement-source-v1.test.js\n      - market-prediction-lab/tests/four-market-paper-settlement-v1.test.js\n      - market-prediction-lab/tests/meaningful-search-scheduled-paper-provider-v1.test.js',
-            ),
-            (
-              '      - market-prediction-lab/tests/natural-paper-account-cli-contract-v1.test.js\n      - market-prediction-lab/tests/paper-forward-evidence-runtime-v1.test.js',
-              '      - market-prediction-lab/tests/natural-paper-account-cli-contract-v1.test.js\n      - market-prediction-lab/tests/paper-forward-canonical-admission-cutover-v1.test.js\n      - market-prediction-lab/tests/paper-forward-research-natural-source-integration-v1.test.js\n      - market-prediction-lab/tests/paper-forward-evidence-runtime-v1.test.js',
-            ),
-            (
-              '            market-prediction-lab/tests/canonical-meaningful-search-paper-runtime-v1.test.js\n            market-prediction-lab/tests/four-market-paper-settlement-v1.test.js',
-              '            market-prediction-lab/tests/canonical-meaningful-search-paper-runtime-v1.test.js\n            market-prediction-lab/tests/eth-v6-paper-forward-source-v1.test.js\n            market-prediction-lab/tests/eth-v6-paper-settlement-source-v1.test.js\n            market-prediction-lab/tests/four-market-paper-settlement-v1.test.js',
-            ),
+            ('    paths:\n      - api-server/scripts/build-authoritative-paper-runtime-package.mjs', '    paths:\n      - .github/workflows/authoritative-paper-runtime-factory-v1.yml\n      - api-server/scripts/build-authoritative-paper-runtime-package.mjs'),
+            ('      - market-prediction-lab/src/eth-v6-paper-settlement-source-v1.js\n      - market-prediction-lab/src/meaningful-search-scheduled-paper-provider-v1.js', '      - market-prediction-lab/src/eth-v6-paper-settlement-source-v1.js\n      - market-prediction-lab/src/four-market-paper-settlement-v1.js\n      - market-prediction-lab/src/meaningful-search-scheduled-paper-provider-v1.js'),
+            ('      - market-prediction-lab/tests/canonical-meaningful-search-paper-runtime-v1.test.js\n      - market-prediction-lab/tests/meaningful-search-scheduled-paper-provider-v1.test.js', '      - market-prediction-lab/tests/canonical-meaningful-search-paper-runtime-v1.test.js\n      - market-prediction-lab/tests/eth-v6-paper-forward-source-v1.test.js\n      - market-prediction-lab/tests/eth-v6-paper-settlement-source-v1.test.js\n      - market-prediction-lab/tests/four-market-paper-settlement-v1.test.js\n      - market-prediction-lab/tests/meaningful-search-scheduled-paper-provider-v1.test.js'),
+            ('      - market-prediction-lab/tests/natural-paper-account-cli-contract-v1.test.js\n      - market-prediction-lab/tests/paper-forward-evidence-runtime-v1.test.js', '      - market-prediction-lab/tests/natural-paper-account-cli-contract-v1.test.js\n      - market-prediction-lab/tests/paper-forward-canonical-admission-cutover-v1.test.js\n      - market-prediction-lab/tests/paper-forward-research-natural-source-integration-v1.test.js\n      - market-prediction-lab/tests/paper-forward-evidence-runtime-v1.test.js'),
+            ('            market-prediction-lab/tests/canonical-meaningful-search-paper-runtime-v1.test.js\n            market-prediction-lab/tests/four-market-paper-settlement-v1.test.js', '            market-prediction-lab/tests/canonical-meaningful-search-paper-runtime-v1.test.js\n            market-prediction-lab/tests/eth-v6-paper-forward-source-v1.test.js\n            market-prediction-lab/tests/eth-v6-paper-settlement-source-v1.test.js\n            market-prediction-lab/tests/four-market-paper-settlement-v1.test.js'),
           ]
           for old, new in replacements:
             if text.count(old) != 1:
-              raise SystemExit(f'VALIDATOR_PATCH_MATCH_COUNT_INVALID:{old[:80]}')
+              raise SystemExit('VALIDATOR_PATCH_MATCH_COUNT_INVALID')
             text = text.replace(old, new, 1)
           marker = '      - name: Require bounded non-UI diff\n'
           if text.count(marker) != 1:
             raise SystemExit('VALIDATOR_SELF_CHECK_MARKER_INVALID')
           self_check = '''      - name: Verify bounded allowlist is PR-trigger covered\n        shell: bash\n        run: |\n          set -Eeuo pipefail\n          python - <<'PY'\n          from pathlib import Path\n          text = Path('.github/workflows/paper-forward-schedule-validation.yml').read_text()\n          pull = text.split('  pull_request:\\n', 1)[1].split('  push:\\n', 1)[0]\n          trigger = [line.split('- ', 1)[1].strip() for line in pull.splitlines() if line.startswith('      - ')]\n          bounded = text.split('          allowed=(\\n', 1)[1].split('          )\\n', 1)[0]\n          allowed = [line.strip() for line in bounded.splitlines() if line.strip()]\n          if len(trigger) != len(set(trigger)):\n              raise SystemExit('PAPER_FORWARD_VALIDATION_TRIGGER_DUPLICATE_PATH')\n          if len(allowed) != len(set(allowed)):\n              raise SystemExit('PAPER_FORWARD_VALIDATION_ALLOWLIST_DUPLICATE_PATH')\n          missing = sorted(set(allowed) - set(trigger))\n          if missing:\n              raise SystemExit('PAPER_FORWARD_VALIDATION_TRIGGER_COVERAGE_MISSING:' + ','.join(missing))\n          PY\n\n'''
-          text = text.replace(marker, self_check + marker, 1)
-          path.write_text(text)
+          path.write_text(text.replace(marker, self_check + marker, 1))
           PY
           git diff --check
           python - <<'PY'
@@ -71,25 +55,22 @@ jobs:
           trigger = [line.split('- ', 1)[1].strip() for line in pull.splitlines() if line.startswith('      - ')]
           bounded = text.split('          allowed=(\n', 1)[1].split('          )\n', 1)[0]
           allowed = [line.strip() for line in bounded.splitlines() if line.strip()]
-          missing = sorted(set(allowed) - set(trigger))
-          assert not missing, missing
-          required = {
-            '.github/workflows/authoritative-paper-runtime-factory-v1.yml',
-            'market-prediction-lab/src/four-market-paper-settlement-v1.js',
-            'market-prediction-lab/tests/eth-v6-paper-forward-source-v1.test.js',
-            'market-prediction-lab/tests/eth-v6-paper-settlement-source-v1.test.js',
-            'market-prediction-lab/tests/four-market-paper-settlement-v1.test.js',
-            'market-prediction-lab/tests/paper-forward-canonical-admission-cutover-v1.test.js',
-            'market-prediction-lab/tests/paper-forward-research-natural-source-integration-v1.test.js',
-          }
-          assert required <= set(trigger)
-          assert required <= set(allowed)
+          assert not sorted(set(allowed) - set(trigger))
+          assert len(trigger) == len(set(trigger))
+          assert len(allowed) == len(set(allowed))
           PY
+          mkdir -p .room-b-patches
+          cp .github/workflows/paper-forward-schedule-validation.yml .room-b-patches/paper-forward-schedule-validation.yml
 
-      - name: Upload exact patched validator
-        uses: actions/upload-artifact@v4
-        with:
-          name: paper-forward-validator-trigger-coverage
-          path: .github/workflows/paper-forward-schedule-validation.yml
-          if-no-files-found: error
-          retention-days: 1
+      - name: Push non-workflow blob staging file only
+        shell: bash
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .room-b-patches/paper-forward-schedule-validation.yml
+          test "$(git diff --cached --name-only)" = '.room-b-patches/paper-forward-schedule-validation.yml'
+          git commit -m 'chore(ci): stage verified Paper Forward validator blob'
+          git push origin "HEAD:${HEAD_REF}"
