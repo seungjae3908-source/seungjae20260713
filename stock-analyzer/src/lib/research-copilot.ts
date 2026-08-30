@@ -15,16 +15,28 @@ function validBundle(value: unknown): boolean {
     ['MISSING_EVIDENCE', 'BLOCKED_DATA', 'READBACK_VERIFIED'].includes(String(b.publicationStatus)) &&
     (b.resultArtifactDigest === null || typeof b.resultArtifactDigest === 'string' && /^[a-f0-9]{64}$/.test(b.resultArtifactDigest)) &&
     (b.receipt === null || validReceipt(b)) &&
+    ['dslDigest', 'bundleDigest', 'strategyIdentityDigest', 'modelIdentityDigest', 'featureOrderDigest'].every(k => b[k] === null || typeof b[k] === 'string' && /^[a-f0-9]{64}$/.test(String(b[k]))) &&
+    (b.preprocessingVersion === null || typeof b.preprocessingVersion === 'string' && b.preprocessingVersion.trim().length > 0) &&
+    (!b.researchBundleReady || ['dslDigest', 'bundleDigest', 'strategyIdentityDigest', 'modelIdentityDigest', 'featureOrderDigest', 'preprocessingVersion'].every(k => typeof b[k] === 'string')) &&
+    (!b.backtestSubmitted || validReceipt(b)) &&
+    (!b.backtestCompleted || b.backtestSubmitted === true && b.backtestStatus === 'COMPLETED' && b.resultArtifactDigest !== null) &&
     (b.publicationStatus !== 'READBACK_VERIFIED' || b.backtestCompleted === true && b.backtestStatus === 'COMPLETED' && b.resultArtifactDigest !== null && validReceipt(b)) &&
     ['dslValid', 'researchBundleReady', 'backtestExecutable', 'backtestSubmitted', 'backtestCompleted'].every(k => typeof b[k] === 'boolean') &&
     (!b.backtestExecutable || b.researchBundleReady === true && b.dslValid === true && typeof b.bundleDigest === 'string' && typeof b.strategyIdentityDigest === 'string') &&
     count(b.backtesterCalls) && strings(b.blockers) && Array.isArray(b.components) && b.components.every(c =>
       fields(c, ['key', 'status']) && ['READY', 'MISSING_EVIDENCE', 'BLOCKED_DATA'].includes(String(record(c).status)) && strings(record(c).blockers));
 }
+function matchesBundle(value: unknown, expected: ResearchBundleResolution): boolean {
+  const actual = record(value);
+  return ['bundleDigest', 'strategyIdentityDigest', 'dslDigest', 'modelIdentityDigest', 'featureOrderDigest', 'preprocessingVersion']
+    .every(key => actual[key] === record(expected)[key]);
+}
 function validReceipt(bundle: Record<string, unknown>): boolean {
   const r = record(bundle.receipt);
   return r.bundleDigest === bundle.bundleDigest && r.strategyIdentityDigest === bundle.strategyIdentityDigest && r.dslDigest === bundle.dslDigest &&
-    ['requestDigest', 'strategyIdentityDigest', 'dslDigest', 'bundleDigest', 'datasetDigest', 'splitReceiptDigest'].every(k => typeof r[k] === 'string' && /^[a-f0-9]{64}$/.test(String(r[k]))) &&
+    r.modelIdentityDigest === bundle.modelIdentityDigest && r.featureOrderDigest === bundle.featureOrderDigest && r.preprocessingVersion === bundle.preprocessingVersion &&
+    ['requestDigest', 'strategyIdentityDigest', 'modelIdentityDigest', 'featureOrderDigest', 'dslDigest', 'bundleDigest', 'datasetDigest', 'splitReceiptDigest'].every(k => typeof r[k] === 'string' && /^[a-f0-9]{64}$/.test(String(r[k]))) &&
+    fields(r, ['preprocessingVersion']) &&
     fields(r, ['datasetIdentity', 'riskPolicyId', 'riskPolicyVersion', 'costPolicyIdentity', 'researchCodeSha']) &&
     /^[a-f0-9]{40}$/.test(String(r.researchCodeSha)) && typeof r.submittedAt === 'number' && Number.isSafeInteger(r.submittedAt) && r.submittedAt > 0 && r.submittedAt <= 8.64e15;
 }
@@ -32,13 +44,13 @@ export function readResearchBacktest(dsl: unknown, bundle: ResearchBundleResolut
   return request('/read-backtest', { method: 'POST', signal, headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ dsl, bundleDigest: bundle.bundleDigest, strategyIdentityDigest: bundle.strategyIdentityDigest, resultArtifactDigest: bundle.resultArtifactDigest }) },
   value => validBundle(value) && (record(value).publicationStatus !== 'READBACK_VERIFIED' ||
-    record(value).bundleDigest === bundle.bundleDigest && record(value).strategyIdentityDigest === bundle.strategyIdentityDigest && record(value).dslDigest === bundle.dslDigest &&
+    matchesBundle(value, bundle) &&
     (bundle.resultArtifactDigest === null || record(value).resultArtifactDigest === bundle.resultArtifactDigest)));
 }
 export function submitResearchBacktest(dsl: unknown, bundle: ResearchBundleResolution, signal?: AbortSignal): Promise<ResearchBundleResolution> {
   return request('/submit-backtest', { method: 'POST', signal, headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ dsl, bundleDigest: bundle.bundleDigest, strategyIdentityDigest: bundle.strategyIdentityDigest }) },
-    value => validBundle(value) && (!record(value).backtestCompleted || validReceipt(record(value)) && record(value).bundleDigest === bundle.bundleDigest && record(value).strategyIdentityDigest === bundle.strategyIdentityDigest));
+    value => validBundle(value) && (!record(value).backtestCompleted || validReceipt(record(value)) && matchesBundle(value, bundle)));
 }
 
 async function request<T>(path: string, init: RequestInit, validate: (value: unknown) => boolean): Promise<T> {

@@ -4,8 +4,13 @@ import { createResearchCopilotService, validateCopilotDsl, type ResearchCopilotS
 import { ResearchDualFreeAiError } from '../services/research-dual-free-ai.service';
 import type { CopilotTask } from '../services/research-copilot.contract';
 import { ResearchBundleService } from '../services/research-bundle.service';
+import { createResearchBundleFileStore } from '../services/research-bundle-file-store.service';
 
-export function createResearchCopilotRouter(service: ResearchCopilotService = createResearchCopilotService(), bundles = new ResearchBundleService()): IRouter {
+export function configuredResearchBundleService(stateRoot = process.env.RESEARCH_BUNDLE_STATE_ROOT): ResearchBundleService {
+  return new ResearchBundleService(stateRoot ? createResearchBundleFileStore(stateRoot) : {});
+}
+
+export function createResearchCopilotRouter(service: ResearchCopilotService = createResearchCopilotService(), bundles = configuredResearchBundleService()): IRouter {
   const router: IRouter = Router();
   router.use(requireAuthenticated, requireAdmin);
   router.use((_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });

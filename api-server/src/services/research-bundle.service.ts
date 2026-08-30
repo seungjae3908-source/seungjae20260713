@@ -6,6 +6,7 @@ import { runOnePassCandidateBacktestV1 } from '../../../market-prediction-lab/sr
 import { createAuthoritativePaperGenericRiskPolicyProducer } from './authoritative-paper-generic-risk-policy-producer.service';
 import { buildAuthoritativePaperRiskSizingEvidence, type AuthoritativePaperRiskSizingInput, type AuthoritativePaperRiskSizingMarket } from './authoritative-paper-risk-sizing-source.service';
 import type { ResearchBundleResolution, ResearchSubmissionStore } from './research-bundle.contract';
+import { researchBundleModelIdentity } from './research-bundle-model-identity.service';
 
 type Row = Record<string, unknown>;
 const COST_KEYS = ['commission', 'tax', 'spread', 'slippage', 'funding', 'latency', 'liquidityImpact', 'partialFillImpact'] as const;
@@ -28,7 +29,8 @@ function sealed(v: unknown): Row | null {
 }
 function blank(): ResearchBundleResolution {
   return { schemaVersion: 'research-bundle-resolution-v1', dslValid: false, dslDigest: null, bundleDigest: null,
-    strategyIdentityDigest: null, researchBundleReady: false, backtestExecutable: false,
+    strategyIdentityDigest: null, modelIdentityDigest: null, featureOrderDigest: null, preprocessingVersion: null,
+    researchBundleReady: false, backtestExecutable: false,
     backtestSubmitted: false, backtestCompleted: false, backtestStatus: 'BLOCKED_DATA', backtesterCalls: 0,
     resultArtifactDigest: null, publicationStatus: 'MISSING_EVIDENCE',
     components: [], blockers: [], wfStatus: 'NOT_EVALUATED', oosStatus: 'NOT_EVALUATED', holdoutStatus: 'NOT_EVALUATED',
@@ -54,6 +56,7 @@ function submissionMaterial(source: Row, result: ResearchBundleResolution) {
   const strategyIdentity = resolveCanonicalStrategyIdentity(row(source.strategy)).identity!;
   const dataset = row(source.dataset), risk = row(source.riskPolicy);
   return { strategyIdentity, strategyIdentityDigest: result.strategyIdentityDigest!, dslDigest: result.dslDigest!,
+    modelIdentityDigest: result.modelIdentityDigest!, featureOrderDigest: result.featureOrderDigest!, preprocessingVersion: result.preprocessingVersion!,
     bundleDigest: result.bundleDigest!, datasetIdentity: String(dataset.id), datasetDigest: String(row(dataset.identity).datasetDigest),
     splitReceiptDigest: String(row(source.splitReceipt).digest), riskPolicyId: String(risk.policyId),
     riskPolicyVersion: String(risk.policyVersion), costPolicyIdentity: String(row(source.costPolicy).id),
@@ -146,6 +149,12 @@ export class ResearchBundleService {
       } catch { strategyErrors.push('CANONICAL_FORMULA_BINDING_INVALID'); }
       result.strategyIdentityDigest = canonicalIdentity.strategyIdentityDigest;
       add('strategy', source.strategy ? strategyErrors : ['STRATEGY_IDENTITY_MISSING_OR_INVALID', 'CANONICAL_BUNDLE_SOURCE_MISSING'], !source.strategy);
+      const model = researchBundleModelIdentity(source, now, this.deps.allowTestEvidence === true);
+      result.modelIdentityDigest = model.modelIdentityDigest;
+      result.featureOrderDigest = model.featureOrderDigest;
+      result.preprocessingVersion = model.preprocessingVersion;
+      add('model', model.modelBlockers, !source.modelReference);
+      add('feature', model.featureBlockers, !source.modelReference);
       const scope: Row = { datasetId: dataset.id, datasetDigest: identity.datasetDigest, market: dsl.market,
         symbol: identity.symbol, timeframe: dsl.timeframe, researchCodeSha: strategy.researchCodeSha };
       const dataErrors: string[] = [], candles = rows(dataset.rows);

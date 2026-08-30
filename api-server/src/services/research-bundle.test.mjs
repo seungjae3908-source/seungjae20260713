@@ -1,5 +1,7 @@
 import test from 'node:test';
+import './research-bundle-file-store.test.mjs';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { ResearchBundleService } from './research-bundle.service.ts';
 import { researchBundleFixture as fixture, AUTHORITATIVE_NOW_MS as NOW } from './research-bundle.test-fixtures.mjs';
 import { sha256Canonical as hash } from '../../../market-prediction-lab/src/research-cache-provenance.js';
@@ -29,6 +31,16 @@ test('A TEST_ONLY canonical aligned receipts resolve without economic or holdout
   assert.equal(result.holdoutStatus, 'LOCKED'); assert.equal(result.evidenceCredit, 0);
 });
 const cases = [
+  ['missing frozen model reference', b => b.modelReference = null, 'MODEL_REFERENCE_MISSING'],
+  ['changed exact model bytes', b => b.modelReference.exactModelJson += ' ', 'EXACT_MODEL_BYTES_SHA_MISMATCH'],
+  ['model wrong strategy', b => b.modelReference.producerManifest.strategyIdentity.strategyId = 'other', 'STRATEGY_IDENTITY_DIGEST_MISMATCH'],
+  ['model wrong dataset', b => b.modelReference.producerManifest.datasetDigest = 'f'.repeat(64), 'PRODUCER_STRATEGY_PROVENANCE_MISMATCH'],
+  ['model feature order mismatch', b => b.modelReference.producerManifest.featureOrderDigest = 'f'.repeat(64), 'FEATURE_ORDER_DIGEST_MISMATCH'],
+  ['model missing preprocessing', b => delete b.modelReference.producerManifest.preprocessingVersion, 'PREPROCESSING_VERSION_MISSING'],
+  ['model expired receipt', b => b.modelReference.producerManifest.artifactReceipt.expiresAt = new Date(NOW).toISOString(), 'MODEL_REFERENCE_STALE_OR_TIME_INVALID'],
+  ['model unknown expiry', b => delete b.modelReference.producerManifest.artifactReceipt.expiresAt, 'MODEL_REFERENCE_STALE_OR_TIME_INVALID'],
+  ['model future measurement', b => b.modelReference.producerManifest.measuredAt = new Date(NOW + 1).toISOString(), 'MODEL_REFERENCE_STALE_OR_TIME_INVALID'],
+  ['model holdout contamination', b => b.modelReference.producerManifest.sourceAttestation.finalHoldoutIncluded = true, 'MODEL_REFERENCE_PROVENANCE_INVALID'],
   ['B missing dataset', b => b.dataset = null, 'DATASET_IDENTITY_MISSING'],
   ['C wrong market', b => b.dataset.identity.market = 'CRYPTO_SPOT', 'DATASET_SCOPE_MISMATCH'],
   ['D wrong timeframe', b => b.dataset.identity.timeframe = '1h', 'DATASET_TIMEFRAME_MISMATCH'],
@@ -59,6 +71,19 @@ for (const [name, mutate, blocker] of cases) test(name, async () => {
   assert.equal(result.researchBundleReady, false); assert(result.blockers.includes(blocker), JSON.stringify(result.blockers));
   const submitted = await h.service.submit('admin', await request(h.service, f.dsl));
   assert.equal(submitted.backtestStatus, 'BLOCKED_DATA'); assert.equal(h.calls(), 0);
+});
+for (const [name, mutate, blocker] of [
+  ['duplicate feature names', model => { model.featureOrder.push(model.featureOrder[0]); model.normalization.mean.push(0); model.normalization.scale.push(1); }, 'MODEL_FEATURE_ORDER_INVALID'],
+  ['zero normalization scale', model => { model.normalization.scale[0] = 0; }, 'MODEL_NORMALIZATION_INVALID'],
+  ['missing normalization mean', model => { delete model.normalization.mean; }, 'MODEL_NORMALIZATION_INVALID'],
+]) test('rehashed model cannot admit ' + name, async () => {
+  const f = fixture(), reference = f.bundle.modelReference, model = JSON.parse(reference.exactModelJson);
+  mutate(model); reference.exactModelJson = JSON.stringify(model);
+  reference.producerManifest.modelSha = createHash('sha256').update(reference.exactModelJson).digest('hex');
+  reference.producerManifest.modelArtifactCanonicalDigest = hash(model);
+  reference.producerManifest.featureOrderDigest = hash(model.featureOrder);
+  const h = harness(f.bundle), result = await h.service.resolve(f.dsl);
+  assert.equal(result.researchBundleReady, false); assert(result.blockers.includes(blocker)); assert.equal(h.calls(), 0);
 });
 test('N forged expected digest and changed canonical readback never submit', async () => {
   const f = fixture(), h = harness(f.bundle), input = await request(h.service, f.dsl);
@@ -183,6 +208,11 @@ test('real #690 one-pass executor receives TRAIN only and preserves later eviden
   assert.equal(result.backtesterCalls, 1);
   assert.equal(result.wfStatus, 'NOT_EVALUATED'); assert.equal(result.oosStatus, 'NOT_EVALUATED');
   assert.equal(result.holdoutStatus, 'LOCKED'); assert.equal(result.profitabilityProven, false);
+  assert.match(result.receipt.modelIdentityDigest, /^[a-f0-9]{64}$/);
+  assert.equal(result.receipt.modelIdentityDigest, result.modelIdentityDigest);
+  assert.equal(result.receipt.featureOrderDigest, result.featureOrderDigest);
+  assert.equal(result.receipt.preprocessingVersion, 'TEST_ONLY_PREPROCESSING');
+  assert.equal(JSON.stringify(result).includes('exactModelJson'), false);
 });
 for (const target of ['TRAIN', 'VALIDATION', 'OOS']) test('holdout overlap with ' + target + ' is blocked', async () => {
   const f = fixture(); f.bundle.holdoutPolicy.payload.assignments[0] = f.bundle.splitReceipt.payload.assignments[target][0];
