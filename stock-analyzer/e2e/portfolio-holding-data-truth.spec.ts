@@ -69,11 +69,19 @@ test('portfolio holding truth rejects guessed market or currency identity', () =
   });
 });
 
-test('Supabase boundary guards only portfolio holding reads and exposes fail-closed response', () => {
+test('Supabase boundary validates only canonical full-row portfolio reads', () => {
   const source = readFileSync(resolve(process.cwd(), 'src/lib/supabase.ts'), 'utf8');
   expect(source).toContain("method !== 'GET'");
   expect(source).toContain("'/rest/v1/portfolio_holdings'");
+  expect(source).toContain("parsed.searchParams.get('select') === '*'");
   expect(source).toContain('validatePortfolioHoldingRows(payload)');
   expect(source).toContain('PORTFOLIO_HOLDING_DATA_INVALID');
   expect(source).toContain('status: 422');
+});
+
+test('partial portfolio selects remain outside the full-row truth guard', () => {
+  const source = readFileSync(resolve(process.cwd(), 'src/lib/supabase.ts'), 'utf8');
+  expect(source).toContain("if (parsed?.pathname.replace(/\\/+$/u, '') !== '/rest/v1/portfolio_holdings') return false;");
+  expect(source).toContain("return parsed.searchParams.get('select') === '*';");
+  expect(source).not.toContain("return parsed?.pathname.replace(/\\/+$/u, '') === '/rest/v1/portfolio_holdings';");
 });
