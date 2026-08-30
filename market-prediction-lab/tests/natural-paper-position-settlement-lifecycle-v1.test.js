@@ -827,3 +827,35 @@ for (const missing of ["commission", "tax"]) {
     assert.equal(h.getSettlementMutations(), 0);
   });
 }
+
+test("Natural frozen exit trigger hashes scheduler identity lineage without Settlement credit", async () => {
+  const { h, state } = await naturalFixture();
+  const now = T0 + FOUR_HOURS;
+  const cycleId = "trigger-binding-cycle";
+  const row = boundNaturalObservation(state, cycleId, "trigger-binding-observation", now,
+    { open: 100, high: 106, low: 99, close: 105 });
+  row.settlementCostEvidence = null;
+  const result = await run(h, { state, cycle: cycle(cycleId, now), positionObservations: [row] });
+  assert.equal(result.state.settlements.length, 0);
+  assert.equal(h.getSettlementMutations(), 0);
+  assert.equal(result.state.positions.length, 1);
+  const trigger = result.state.positions[0].lifecycle.pendingExit;
+  assert.ok(trigger);
+  assert.equal(trigger.reason, "TAKE_PROFIT");
+  assert.equal(trigger.triggerObservationId, row.observationId);
+  assert.equal(trigger.triggeredAtMs, now);
+  assert.equal(trigger.positionId, state.positions[0].positionId);
+  assert.equal(trigger.entryId, state.positions[0].paperSampleId);
+  assert.equal(trigger.cycleId, cycleId);
+  assert.equal(trigger.accountIdSha256, sha256(state.ledger.accountBinding.accountId));
+  assert.equal(trigger.strategyId, state.positions[0].strategyId);
+  assert.equal(trigger.costPolicyId, state.positions[0].costPolicyVersion);
+  assert.equal(trigger.riskPolicyId, RISK_POLICY_IDENTITY.policyId);
+  assert.equal(trigger.cycleIdentityDigest, row.cycleIdentityDigest);
+  assert.equal(trigger.accountIdentityDigest, row.accountIdentityDigest);
+  assert.equal(trigger.entryEvidenceDigest, row.entryEvidenceDigest);
+  assert.equal(trigger.riskPolicyIdentityDigest, row.riskPolicyIdentityDigest);
+  assert.equal(trigger.schedulerHandoffDigest, sha256(stableJson(row.schedulerHandoff)));
+  const { exitTriggerId, ...payload } = trigger;
+  assert.equal(exitTriggerId, sha256(stableJson(payload)));
+});
