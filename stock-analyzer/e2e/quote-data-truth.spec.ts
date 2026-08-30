@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { formatPrice, formatPercent, formatCompact, formatVolume } from '../src/lib/format';
 import { quoteRating } from '../src/lib/quote-row-evidence';
 import { quoteFreshness } from '../src/lib/market-freshness';
+import { financialDisplayEvidence } from '../src/lib/financial-display-evidence';
 import { expect, test, type Page, type Route } from '@playwright/test';
 
 // Auth and market fixtures stay in the isolated localhost browser only.
@@ -10,7 +11,7 @@ const NOW = '2026-08-30T12:00:00.000Z';
 const sizes = [[1440, 900], [1024, 768], [320, 740], [360, 800], [390, 844], [412, 915], [430, 932]] as const;
 const fulfill = (route: Route, body: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 
-async function installRuntime(page: Page) {
+async function installRuntime(page: Page, financialScenario?: 'legacy' | 'current' | 'provider-shape') {
   await page.addInitScript(({ userId, now }) => {
     const encode = (value: Record<string, unknown>) => btoa(JSON.stringify(value)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
     const exp = 4102444800;
@@ -35,6 +36,22 @@ async function installRuntime(page: Page) {
   ];
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (financialScenario) {
+      if (path === '/api/stocks/AAPL/quote') return fulfill(route, { ticker: 'AAPL', name: 'Apple fixture', price: 100, changePercent: 0, currency: 'USD', updatedAt: NOW });
+      if (path === '/api/stocks/AAPL/profile') return fulfill(route, { ticker: 'AAPL', name: 'Apple fixture', currency: 'USD', marketCap: 1000 });
+      // The default AI subtab mounts before the user selects financials. These
+      // isolated legacy-contract fixtures exercise navigation only, not AI proof.
+      if (path === '/api/stocks/AAPL/overview') return fulfill(route, { quote: { price: 100 }, profile: { name: 'Apple fixture', currency: 'USD' } });
+      if (path === '/api/stocks/AAPL/analysis') return fulfill(route, { opinion: 'HOLD', confidence: 0, targetPrice: 106, stopLossPrice: 94, buyReasons: [], sellReasons: [], shortTerm: 'fixture', midTerm: 'fixture', longTerm: 'fixture', conclusion: 'fixture' });
+      if (path === '/api/stocks/AAPL/financials' && financialScenario === 'provider-shape') return fulfill(route, {
+        source: 'SEC_COMPANYFACTS', annual: [{ period: '2025', revenue: 1000, operatingIncome: -20, netIncome: -10, cash: 50, liabilities: 100, equity: 200 }], quarterly: [], ratios: { debtRatio: 50 }, updatedAt: NOW,
+      });
+      if (path === '/api/stocks/AAPL/financials') return fulfill(route, {
+        source: 'live', annual: [], quarterly: [], ratios: { eps: 0, per: 0, pbr: 0, roe: 0, debtRatio: 0 }, growth: { revenue: [], profit: [] },
+        cashBurn: { cashBalance: 0, quarterlyBurn: financialScenario === 'legacy' ? 1000 : null, survivalQuarters: null, status: 'MISSING_EVIDENCE' },
+        health: financialScenario === 'legacy' ? { level: 'STRONG', confidence: 95 } : { level: 'AVERAGE', confidence: null, score: 65, method: 'FINANCIAL_RULES_V1' },
+      });
+    }
     if (path === '/api/market/movers') return fulfill(route, { market: 'US', dataStatus: 'complete', popular: rows, volume: rows, gainers: [], losers: [], recommended: [], recommendationStatus: 'MISSING_EVIDENCE' });
     if (path === '/api/quotes') return fulfill(route, { quotes: [], dataStatus: 'partial' });
     if (path === '/api/watchlist') return fulfill(route, { ok: true, items: [] });
@@ -121,4 +138,41 @@ test('financial display preserves real zero and quote currency while rejecting a
   }
   assert.equal(quoteFreshness({}, now).timestamp, null);
   assert.equal(quoteFreshness({ updatedAt: '2026-08-28T15:30:00+09:00' }, now).timestamp, '2026-08-28T06:30:00.000Z');
+});
+
+for (const [width, height] of sizes) {
+  test(`financial evidence cannot turn missing cash flow into profit/runway at ${width}x${height}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height });
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
+    page.on('response', (response) => { if (response.status() >= 400) errors.push(`HTTP ${response.status()} ${new URL(response.url()).pathname}`); });
+    const scenario = width === 1440 ? 'legacy' : width === 1024 ? 'provider-shape' : 'current';
+    const unexpected = await installRuntime(page, scenario);
+    await page.goto('/stock-info/analysis?asset=stock&market=US&ticker=AAPL&tab=analysis');
+    await page.getByRole('tab', { name: '재무제표', exact: true }).click();
+    const panel = page.getByTestId('stock-detail-analysis-financials');
+    await expect(panel.getByText('현금 소진 분석', { exact: true })).toBeVisible();
+    await expect(panel).toContainText('검증된 현금흐름표가 없습니다.');
+    await expect(panel).toContainText('산정 불가');
+    await expect(panel).not.toContainText('흑자 지속');
+    await expect(panel).not.toContainText('신뢰도 95%');
+    if (scenario !== 'provider-shape') await expect(panel).toContainText('EPS는 $0.00입니다.');
+    if (scenario !== 'current') await expect(panel).toContainText('재무 평가 근거 부족');
+    else await expect(panel).toContainText('규칙 점수 65/100');
+    if (scenario !== 'provider-shape') await expect(panel.getByText('0%', { exact: true })).toHaveCount(2);
+    else await expect(panel).toContainText('성장률 근거 부족');
+    const layout = await page.evaluate(() => ({ width: innerWidth, body: document.body.scrollWidth, root: document.documentElement.scrollWidth }));
+    expect(layout.body).toBeLessThanOrEqual(width);
+    expect(layout.root).toBeLessThanOrEqual(width);
+    expect(unexpected).toEqual([]);
+    expect(errors).toEqual([]);
+    await testInfo.attach('financial-runtime-proof.json', { body: JSON.stringify({ viewport: { width, height }, scenario, fixture: true, layout, errors: errors.length, unexpectedRequests: unexpected.length }), contentType: 'application/json' });
+  });
+}
+
+test('financial display never reuses legacy confidence or net income as cash-flow evidence', () => {
+  assert.deepEqual(financialDisplayEvidence({ cashBurn: { cashBalance: 0, quarterlyBurn: 100, survivalQuarters: null }, health: { level: 'STRONG', confidence: 95 } }), { cashBalance: 0, healthScore: null, healthLevel: null, sample: false });
+  assert.equal(financialDisplayEvidence({ source: 'sample' }).sample, true);
+  assert.equal(financialDisplayEvidence({ health: { method: 'FINANCIAL_RULES_V1', score: NaN, level: 'STRONG' } }).healthLevel, null);
 });

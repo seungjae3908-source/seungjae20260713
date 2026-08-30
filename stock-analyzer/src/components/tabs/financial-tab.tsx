@@ -12,7 +12,8 @@ import {
 import { Panel, Stat, Bar as ProgressBar } from '@/components/ui-bits';
 import { LoadingState, ErrorState } from '@/components/data-state';
 import { useFinancials } from '@/hooks/use-stock-data';
-import { formatCompact } from '@/lib/format';
+import { formatCompact, formatPrice } from '@/lib/format';
+import { financialDisplayEvidence } from '@/lib/financial-display-evidence';
 import { HEALTH_KO, healthTone, toneBadge, toneText } from '@/lib/labels';
 import { cn } from '@/lib/utils';
 import { ApiError, type Currency, type FinancialRow, type Financials } from '@/lib/api';
@@ -37,21 +38,17 @@ type RatioKey = 'per' | 'pbr' | 'roe' | 'debtRatio';
 
 type Ratios = Financials['ratios'];
 
-// A ratio value <= 0 (or non-finite) is treated as missing / not meaningful and
-// shown as 데이터 부족 rather than a fake number (live-data rule). ROE can be
-// legitimately negative (적자), so it is handled separately below.
+// A measured zero is still evidence; absent/non-finite ratios remain unknown.
 function hasValue(v: number): boolean {
-  return Number.isFinite(v) && v !== 0;
+  return Number.isFinite(v);
 }
 
 function formatRatio(key: RatioKey, ratios: Ratios): string {
   const v = ratios[key];
   if (!Number.isFinite(v)) return '데이터 부족';
 
-  if (key === 'per') return v > 0 ? `${v}배` : '적자';
-  if (key === 'pbr') return v > 0 ? `${v}배` : '데이터 부족';
-  if (key === 'roe') return hasValue(v) ? `${v}%` : v === 0 ? '데이터 부족' : `${v}%`;
-  return hasValue(v) ? `${v}%` : '데이터 부족';
+  if (key === 'per' || key === 'pbr') return `${v}배`;
+  return `${v}%`;
 }
 
 function ratioTone(key: RatioKey, ratios: Ratios): 'positive' | 'warning' | 'destructive' | undefined {
@@ -70,7 +67,8 @@ function ratioInterpretation(key: RatioKey, ratios: Ratios): string {
   const v = ratios[key];
 
   if (key === 'per') {
-    if (!Number.isFinite(v) || v < 0) return '적자/산정불가';
+    if (!Number.isFinite(v)) return '데이터 부족';
+    if (v <= 0) return '해석 제한';
     if (v < 10) return '낮은 편';
     if (v < 25) return '보통';
     if (v < 40) return '높은 편';
@@ -78,7 +76,8 @@ function ratioInterpretation(key: RatioKey, ratios: Ratios): string {
   }
 
   if (key === 'pbr') {
-    if (!Number.isFinite(v) || v < 0) return '산정불가';
+    if (!Number.isFinite(v)) return '데이터 부족';
+    if (v <= 0) return '해석 제한';
     if (v < 1) return '낮은 편';
     if (v < 3) return '보통';
     if (v < 7) return '높은 편';
@@ -105,22 +104,24 @@ function ratioReading(key: RatioKey, ratios: Ratios): string {
   const v = ratios[key];
 
   if (key === 'per') {
-    if (!Number.isFinite(v) || v === 0) return '이 종목의 PER 데이터가 부족합니다.';
+    if (!Number.isFinite(v)) return '이 종목의 PER 데이터가 부족합니다.';
+    if (v === 0) return '제공된 PER은 0배입니다. 이 값만으로 저평가나 적자를 판정할 수 없습니다.';
     if (v < 0) return '순이익이 적자라 PER로는 밸류에이션을 판단하기 어렵습니다.';
     if (v < 10) return `이 종목의 PER은 ${v}배로, 이익 대비 주가가 낮은 편입니다.`;
-    if (v < 25) return `이 종목의 PER은 ${v}배로, 시장 평균 수준입니다.`;
+    if (v < 25) return `이 종목의 PER은 ${v}배입니다. 고정 분류 기준의 중간 구간이며 실제 시장·업종 평균과 비교한 값은 아닙니다.`;
     return `이 종목의 PER은 ${v}배로, 이익 대비 주가가 높은 편이라 성장 기대가 반영된 상태입니다.`;
   }
 
   if (key === 'pbr') {
-    if (!Number.isFinite(v) || v <= 0) return '이 종목의 PBR 데이터가 부족합니다.';
+    if (!Number.isFinite(v)) return '이 종목의 PBR 데이터가 부족합니다.';
+    if (v <= 0) return `제공된 PBR은 ${v}배입니다. 이 값만으로 자산가치 대비 저평가를 판정할 수 없습니다.`;
     if (v < 1) return `이 종목의 PBR은 ${v}배로, 자산가치보다 주가가 낮게 평가되어 있습니다.`;
     if (v < 3) return `이 종목의 PBR은 ${v}배로, 무난한 수준입니다.`;
     return `이 종목의 PBR은 ${v}배로, 자산가치 대비 주가가 높은 편입니다.`;
   }
 
   if (key === 'roe') {
-    if (!Number.isFinite(v) || v === 0) return '이 종목의 ROE 데이터가 부족합니다.';
+    if (!Number.isFinite(v)) return '이 종목의 ROE 데이터가 부족합니다.';
     if (v < 0) return `이 종목의 ROE는 ${v}%로, 자기자본에서 손실이 발생하고 있습니다.`;
     if (v < 8) return `이 종목의 ROE는 ${v}%로, 수익성이 다소 낮은 편입니다.`;
     if (v < 15) return `이 종목의 ROE는 ${v}%로, 양호한 수익성입니다.`;
@@ -128,7 +129,7 @@ function ratioReading(key: RatioKey, ratios: Ratios): string {
   }
 
   // debtRatio
-  if (!Number.isFinite(v) || v === 0) return '이 종목의 부채비율 데이터가 부족합니다.';
+  if (!Number.isFinite(v)) return '이 종목의 부채비율 데이터가 부족합니다.';
   if (v < 100) return `이 종목의 부채비율은 ${v}%로, 재무 안정성이 양호합니다.`;
   if (v < 200) return `이 종목의 부채비율은 ${v}%로, 보통 수준입니다.`;
   return `이 종목의 부채비율은 ${v}%로 높은 편이라, 재무 부담을 확인할 필요가 있습니다.`;
@@ -290,6 +291,7 @@ function FinCards({ rows, currency }: { rows: FinancialRow[]; currency: Currency
 }
 
 function GrowthChart({ labels, values }: { labels: string[]; values: number[] }) {
+  if (!values.length) return <p className="text-sm text-muted-foreground">성장률 근거 부족</p>;
   const data = values.map((v, i) => ({ name: labels[i] ?? '', value: v }));
   return (
     <ResponsiveContainer width="100%" height={140}>
@@ -312,17 +314,19 @@ export function FinancialTab({ ticker, currency, active }: { ticker: string; cur
   const [openMetric, setOpenMetric] = useState<RatioKey | null>(null);
 
   if (isLoading) return <LoadingState />;
-  if (isError || !data)
+  if (isError || !data || !Array.isArray(data.annual) || !Array.isArray(data.quarterly) || !data.ratios || ('available' in data && data.available === false) || ('ok' in data && data.ok === false))
     return <ErrorState code={error instanceof ApiError ? error.code : undefined} onRetry={() => refetch()} />;
 
   const growthLabels = data.annual.slice(1).map((a) => a.period);
-  const burn = data.cashBurn;
+  const revenueGrowth = Array.isArray(data.growth?.revenue) ? data.growth.revenue : [];
+  const profitGrowth = Array.isArray(data.growth?.profit) ? data.growth.profit : [];
+  const evidence = financialDisplayEvidence(data);
+  if (evidence.sample) return <p className="text-sm text-destructive">샘플 재무제표는 투자 판단 근거로 표시하지 않습니다.</p>;
 
-  // Display rows latest-first (most recent period at the top). The source
-  // arrays are oldest -> newest, and growth series depend on that ascending
-  // order, so we reverse copies rather than mutating the originals.
-  const annualRows = [...data.annual].reverse();
-  const quarterlyRows = [...data.quarterly].reverse();
+  // The current statement route and the service use opposite array orders.
+  // Sort explicit period labels without mutating either provider response.
+  const annualRows = [...data.annual].sort((a, b) => String(b.period).localeCompare(String(a.period)));
+  const quarterlyRows = [...data.quarterly].sort((a, b) => String(b.period).localeCompare(String(a.period)));
 
   return (
     <div className="space-y-3">
@@ -340,8 +344,8 @@ export function FinancialTab({ ticker, currency, active }: { ticker: string; cur
         </div>
         <p className="mt-2 break-keep text-[11px] leading-relaxed text-muted-foreground">
           각 지표를 눌러 뜻과 이 종목의 해석을 확인하세요.
-          {Number.isFinite(data.ratios.eps) && data.ratios.eps !== 0 && (
-            <> EPS는 {data.ratios.eps.toLocaleString()}원입니다.</>
+          {Number.isFinite(data.ratios.eps) && (
+            <> EPS는 {formatPrice(data.ratios.eps, currency)}입니다.</>
           )}
         </p>
       </Panel>
@@ -355,35 +359,37 @@ export function FinancialTab({ ticker, currency, active }: { ticker: string; cur
       </Panel>
 
       <Panel title="매출 성장률 (YoY)">
-        <GrowthChart labels={growthLabels} values={data.growth.revenue} />
+        <GrowthChart labels={growthLabels} values={revenueGrowth} />
       </Panel>
       <Panel title="이익 성장률 (YoY)">
-        <GrowthChart labels={growthLabels} values={data.growth.profit} />
+        <GrowthChart labels={growthLabels} values={profitGrowth} />
       </Panel>
 
       <Panel title="현금 소진 분석">
         <div className="grid grid-cols-3 gap-4">
-          <Stat label="보유 현금" value={formatCompact(burn.cashBalance, currency)} />
+          <Stat label="보유 현금" value={formatCompact(evidence.cashBalance, currency)} />
           <Stat
             label="분기 현금흐름"
-            value={formatCompact(burn.quarterlyBurn, currency)}
-            tone={burn.quarterlyBurn >= 0 ? 'positive' : 'destructive'}
+            value="근거 부족"
           />
           <Stat
             label="예상 존속"
-            value={burn.survivalQuarters === null ? '흑자 지속' : `${burn.survivalQuarters}분기`}
-            tone={burn.survivalQuarters === null ? 'positive' : burn.survivalQuarters <= 4 ? 'destructive' : 'warning'}
+            value="산정 불가"
           />
         </div>
+        <p className="mt-2 text-xs text-muted-foreground">검증된 현금흐름표가 없습니다. 순이익을 현금흐름으로 대체하거나 현금 소진 기간을 추정하지 않습니다.</p>
       </Panel>
 
-      <Panel title="재무 건전성" right={<span className={cn('rounded-full border px-2.5 py-1 text-xs font-semibold', toneBadge(healthTone(data.health.level)))}>{HEALTH_KO[data.health.level]}</span>}>
+      <Panel title="재무 건전성" right={evidence.healthLevel ? <span className={cn('rounded-full border px-2.5 py-1 text-xs font-semibold', toneBadge(healthTone(evidence.healthLevel)))}>{HEALTH_KO[evidence.healthLevel]}</span> : undefined}>
+        {evidence.healthScore !== null && evidence.healthLevel ? <>
         <div className="flex items-center gap-3">
           <div className="flex-1">
-            <ProgressBar value={data.health.confidence} tone={healthTone(data.health.level)} />
+            <ProgressBar value={evidence.healthScore} tone={healthTone(evidence.healthLevel)} />
           </div>
-          <span className={cn('text-xs font-medium', toneText(healthTone(data.health.level)))}>신뢰도 {data.health.confidence}%</span>
+          <span className="text-xs font-medium">규칙 점수 {evidence.healthScore}/100</span>
         </div>
+        <p className="mt-2 text-xs text-muted-foreground">ROE·부채비율·PER의 고정 규칙 평가입니다. 성공확률이나 검증된 신뢰도가 아닙니다.</p>
+        </> : <p className="text-sm text-muted-foreground">재무 평가 근거 부족</p>}
       </Panel>
 
       {openMetric && (
