@@ -316,3 +316,83 @@ test('invalid calculation timestamp never fabricates a replacement timestamp or 
   assert.equal(result.netAlphaInput.asOf, null);
   assert.ok(result.reasons.includes('FORWARD_CALIBRATION_AS_OF_INVALID'));
 });
+
+test('malformed aggregate structure fails closed without fabricating measured sample zero', () => {
+  const rows = observations();
+  const canonical = buildForwardObservationProfitCalibration(rows);
+  const malformed = [
+    { ...canonical, calibration: undefined },
+    { ...canonical, counts: undefined },
+    { ...canonical, probabilities: undefined },
+    { ...canonical, returns: undefined },
+  ];
+
+  for (const value of malformed) {
+    let result: ReturnType<typeof buildForwardCalibrationGrossEdgeEvidence> | null = null;
+    assert.doesNotThrow(() => {
+      result = buildForwardCalibrationGrossEdgeEvidence({
+        observations: rows,
+        calibration: value as unknown as ForwardObservationProfitCalibration,
+        asOf: iso(6 * 60 * 60 * 1000),
+      });
+    });
+    assert.ok(result);
+    assert.equal(result.status, 'NOT_AVAILABLE');
+    assert.equal(result.sampleSize, null);
+    assert.equal(result.expectedGrossEdgeBps, null);
+    assert.equal(result.netAlphaInput.evidenceReady, false);
+    assert.ok(result.reasons.includes('FORWARD_CALIBRATION_STRUCTURE_INVALID'));
+    assert.equal(result.executionAuthority, 'NONE');
+    assert.equal(result.costAdjusted, false);
+    assert.equal(result.profitabilityClaimAllowed, false);
+  }
+});
+
+test('explicit measured N=0 remains zero while missing sample size remains unavailable', () => {
+  const measuredZero = evidenceFrom([], buildForwardObservationProfitCalibration([]));
+  assert.equal(measuredZero.status, 'NOT_AVAILABLE');
+  assert.equal(measuredZero.sampleSize, 0);
+
+  const rows = observations();
+  const canonical = buildForwardObservationProfitCalibration(rows);
+  const missingSample = Object.freeze({
+    ...canonical,
+    calibration: Object.freeze({ status: 'READY', tpFirstCount: canonical.calibration.tpFirstCount }),
+  }) as unknown as ForwardObservationProfitCalibration;
+  const result = buildForwardCalibrationGrossEdgeEvidence({
+    observations: rows,
+    calibration: missingSample,
+    asOf: iso(6 * 60 * 60 * 1000),
+  });
+  assert.equal(result.status, 'NOT_AVAILABLE');
+  assert.equal(result.sampleSize, null);
+  assert.ok(result.reasons.includes('FORWARD_CALIBRATION_SAMPLE_SIZE_INVALID_OR_MISSING'));
+  assert.equal(result.expectedGrossEdgeBps, null);
+});
+
+test('malformed observation identity or snapshot fails closed instead of throwing', () => {
+  const rows = observations();
+  const calibration = buildForwardObservationProfitCalibration(rows);
+  const malformedIdentity = [...rows];
+  malformedIdentity[0] = Object.freeze({ ...malformedIdentity[0]!, identity: {} }) as unknown as ForwardRecommendationObservation;
+  const malformedSnapshot = [...rows];
+  malformedSnapshot[0] = Object.freeze({ ...malformedSnapshot[0]!, snapshot: undefined }) as unknown as ForwardRecommendationObservation;
+
+  for (const malformedRows of [malformedIdentity, malformedSnapshot]) {
+    let result: ReturnType<typeof buildForwardCalibrationGrossEdgeEvidence> | null = null;
+    assert.doesNotThrow(() => {
+      result = buildForwardCalibrationGrossEdgeEvidence({
+        observations: malformedRows,
+        calibration,
+        asOf: iso(6 * 60 * 60 * 1000),
+      });
+    });
+    assert.ok(result);
+    assert.equal(result.status, 'NOT_AVAILABLE');
+    assert.equal(result.sampleSize, 30);
+    assert.ok(result.reasons.includes('FORWARD_OBSERVATION_STRUCTURE_INVALID'));
+    assert.equal(result.expectedGrossEdgeBps, null);
+    assert.equal(result.netAlphaInput.evidenceReady, false);
+    assert.equal(result.executionAuthority, 'NONE');
+  }
+});
