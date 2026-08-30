@@ -85,3 +85,13 @@ test('partial portfolio selects remain outside the full-row truth guard', () => 
   expect(source).toContain("return parsed.searchParams.get('select') === '*';");
   expect(source).not.toContain("return parsed?.pathname.replace(/\\/+$/u, '') === '/rest/v1/portfolio_holdings';");
 });
+
+test('portfolio holdings UI never presents load failure as zero-valued portfolio facts', () => {
+  const source = readFileSync(resolve(process.cwd(), 'src/pages/portfolio.tsx'), 'utf8');
+  expect(source).toContain('holdingLoadFailed');
+  expect(source).toContain('setHoldingLoadFailed(true)');
+  expect(source).toContain('data-testid="portfolio-holdings-summary"');
+  expect(source).toContain('!loading &&');
+  expect(source).toContain('!holdingLoadFailed &&');
+  expect(source).toContain('disabled={loading || holdingLoadFailed}');
+});
