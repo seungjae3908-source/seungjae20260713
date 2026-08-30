@@ -22,7 +22,7 @@ interface RecoRow {
   category: Category;
   categoryLabel: string;
   price: number;
-  changePercent: number;
+  changePercent: number | null;
   reasons: string[];
   usedData: string[];
   missingData: string[];
@@ -262,10 +262,14 @@ function RecoCard({ row, onOpen }: { row: RecoRow; onOpen: () => void }) {
           <p
             className={cn(
               "text-[10px] font-black",
-              row.changePercent >= 0 ? "text-positive" : "text-destructive",
+              row.changePercent == null
+                ? "text-muted-foreground"
+                : row.changePercent >= 0
+                  ? "text-positive"
+                  : "text-destructive",
             )}
           >
-            {formatAppPercent(row.changePercent)}
+            {row.changePercent == null ? "—" : formatAppPercent(row.changePercent)}
           </p>
         </div>
       </button>
