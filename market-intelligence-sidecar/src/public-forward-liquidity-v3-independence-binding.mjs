@@ -18,28 +18,26 @@ function object(value, code) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(code);
   return value;
 }
-
 function text(value, code) {
   if (typeof value !== 'string' || value.trim().length === 0) throw new Error(code);
   return value.trim();
 }
-
 function digest(value, code) {
   const normalized = text(value, code).replace(/^sha256:/u, '').toLowerCase();
   if (!SHA256.test(normalized)) throw new Error(code);
   return normalized;
 }
-
 function integer(value, code) {
   if (!Number.isInteger(value) || value < 0) throw new Error(code);
   return value;
 }
-
 function exactArray(value, code) {
   if (!Array.isArray(value)) throw new Error(code);
   return value;
 }
-
+function lineageKey(sourceIdentity, observationId) {
+  return `${text(sourceIdentity, 'V3_SOURCE_IDENTITY_INVALID')}\u0000${text(observationId, 'V3_OBSERVATION_ID_INVALID')}`;
+}
 function addCount(counts, split, side) {
   counts[split] += 1;
   counts[`${split}_${side}`] += 1;
@@ -142,6 +140,7 @@ export function buildPublicForwardLiquidityV3IndependentSplitIndex({
 
   for (const source of sourceInventory.sources) {
     object(source, 'V3_SOURCE_INVALID');
+    const sourceIdentity = text(source.sourceIdentity, 'V3_SOURCE_IDENTITY_INVALID');
     const paths = exactArray(source.ingestReceiptRelativePaths, 'V3_SOURCE_RECEIPT_PATHS_INVALID');
     const digests = exactArray(source.ingestReceiptDigests, 'V3_SOURCE_RECEIPT_DIGESTS_INVALID');
     const slots = exactArray(source.v3SlotIndexes, 'V3_SOURCE_SLOT_INDEXES_INVALID');
@@ -164,12 +163,13 @@ export function buildPublicForwardLiquidityV3IndependentSplitIndex({
       creditedReceiptN += 1;
       for (const observationId of receipt.receipt.batchObservationIds) {
         const id = text(observationId, 'V3_OBSERVATION_ID_INVALID');
-        if (lineageByObservation.has(id)) {
+        const key = lineageKey(sourceIdentity, id);
+        if (lineageByObservation.has(key)) {
           duplicateObservationLineageN += 1;
           continue;
         }
-        lineageByObservation.set(id, Object.freeze({
-          sourceIdentity: source.sourceIdentity,
+        lineageByObservation.set(key, Object.freeze({
+          sourceIdentity,
           collectorCodeSha: source.collectorCodeSha,
           datasetDigest: source.datasetDigest,
           ingestReceiptRelativePath: receipt.path,
@@ -210,7 +210,8 @@ export function buildPublicForwardLiquidityV3IndependentSplitIndex({
   };
   const observations = independent.map((item) => {
     const observationId = text(item?.observationId, 'INDEPENDENT_OBSERVATION_ID_INVALID');
-    const lineage = lineageByObservation.get(observationId);
+    const sourceIdentity = text(item?.sourceIdentity, 'INDEPENDENT_SOURCE_IDENTITY_INVALID');
+    const lineage = lineageByObservation.get(lineageKey(sourceIdentity, observationId));
     if (!lineage) throw new Error('INDEPENDENT_OBSERVATION_V3_LINEAGE_MISSING');
     const side = text(item?.observation?.aggressiveSide, 'INDEPENDENT_OBSERVATION_SIDE_INVALID');
     if (!SIDES.has(side)) throw new Error('INDEPENDENT_OBSERVATION_SIDE_INVALID');
@@ -218,7 +219,7 @@ export function buildPublicForwardLiquidityV3IndependentSplitIndex({
     return Object.freeze({
       observationId,
       sourceObservationId: item.sourceObservationId ?? null,
-      sourceIdentity: item.sourceIdentity,
+      sourceIdentity,
       eventIdentity: item.eventIdentity,
       sourceFrameIdentity: item.sourceFrameIdentity,
       eventTimestampMs: item.observation?.eventTimestampMs ?? null,
