@@ -4,10 +4,10 @@ import path from 'node:path';
 const root = path.basename(process.cwd()) === 'api-server'
   ? path.resolve(process.cwd(), '..')
   : path.resolve(process.cwd());
-const spec = await readFile(
+const spec = (await readFile(
   path.join(root, 'stock-analyzer/e2e/phase10-staging-readiness.spec.ts'),
   'utf8',
-);
+)).replace(/\r\n/g, '\n');
 const navigation = await readFile(
   path.join(root, 'stock-analyzer/src/lib/asset-navigation.ts'),
   'utf8',

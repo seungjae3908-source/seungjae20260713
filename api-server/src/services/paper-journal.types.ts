@@ -204,7 +204,9 @@ export type AnalysisOnlyResult<T> = {
 
 export interface PaperJournalRepository {
   getRecord(userId: string, kind: PaperJournalRecordKind, id: string): Promise<StoredPaperJournalRecord | null>;
-  upsertRecord(userId: string, record: PaperJournalSyncRecord, serverTime: string): Promise<StoredPaperJournalRecord>;
+  // Omitted/null expects a new row; an existing row requires an atomic version match.
+  upsertRecord(userId: string, record: PaperJournalSyncRecord, serverTime: string, expectedVersion?: number | null): Promise<StoredPaperJournalRecord>;
+  claimSyncRequest?(userId: string, idempotencyKey: string, fingerprint: string, serverTime: string): Promise<PaperJournalSyncResult | null>;
   listSnapshot(userId: string): Promise<StoredPaperJournalRecord[]>;
   getIdempotentResponse(userId: string, idempotencyKey: string): Promise<PaperJournalSyncResult | null>;
   saveIdempotentResponse(userId: string, idempotencyKey: string, result: PaperJournalSyncResult, serverTime: string): Promise<void>;

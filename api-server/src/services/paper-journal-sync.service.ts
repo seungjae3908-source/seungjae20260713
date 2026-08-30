@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { validPaperRecord, validPaperTimestamp } from '../../../packages/api-zod/src/paper-state-evidence.js';
+import { PAPER_RESEARCH_PERSISTED_LEDGER_ID, validResearchLedgerPayload } from './paper-research-ledger-evidence';
 import {
   CLOCK_SKEW_WARNING_MS,
   DELETE_ALL_CONFIRMATION,
@@ -26,6 +27,7 @@ const unsafeObjectKey = /^(?:__proto__|prototype|constructor)$/i;
 const idPattern = /^[A-Za-z0-9._:-]{1,160}$/;
 const idempotencyPattern = /^[A-Za-z0-9._:-]{8,160}$/;
 const inFlightSync = new Map<string, { fingerprint: string; promise: Promise<PaperJournalSyncResult> }>();
+type SyncScope = 'manual' | 'currency-ledger';
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -62,7 +64,7 @@ function parseTimestamp(value: unknown, code: string, latest = Infinity) {
   return new Date(value).toISOString();
 }
 
-function validateRecord(value: unknown, latest: number): PaperJournalSyncRecord {
+function validateRecord(value: unknown, latest: number, scope: SyncScope = 'manual'): PaperJournalSyncRecord {
   if (!isObject(value)) throw new PaperJournalError('INVALID_SYNC_RECORD', '동기화 레코드 형식을 확인하세요.');
   if (!PAPER_JOURNAL_RECORD_KINDS.includes(value.kind as PaperJournalRecordKind)) throw new PaperJournalError('INVALID_RECORD_KIND', '지원하지 않는 동기화 레코드 종류입니다.');
   if (typeof value.id !== 'string' || !idPattern.test(value.id)) throw new PaperJournalError('INVALID_RECORD_ID', '동기화 레코드 ID를 확인하세요.');
@@ -72,13 +74,16 @@ function validateRecord(value: unknown, latest: number): PaperJournalSyncRecord 
   if (!isObject(value.payload)) throw new PaperJournalError('INVALID_RECORD_PAYLOAD', '동기화 payload를 확인하세요.');
   const forbidden = scanForbidden(value.payload);
   if (forbidden) throw new PaperJournalError(forbidden.code, '사용자 식별자, Secret 또는 안전하지 않은 객체 키는 payload에 포함할 수 없습니다.');
-  if (deletedAt === null ? value.payload.id !== value.id || !validPaperRecord(value.kind, value.payload, latest) : Object.keys(value.payload).length !== 0) {
+  const validPayload = scope === 'currency-ledger'
+    ? value.kind === 'account' && value.id === PAPER_RESEARCH_PERSISTED_LEDGER_ID && deletedAt === null && validResearchLedgerPayload(value.payload, latest)
+    : value.id !== PAPER_RESEARCH_PERSISTED_LEDGER_ID && (deletedAt === null ? value.payload.id === value.id && validPaperRecord(value.kind, value.payload, latest) : Object.keys(value.payload).length === 0);
+  if (!validPayload) {
     throw new PaperJournalError('INVALID_RECORD_EVIDENCE', '동기화 기록의 식별자·시각·수치 근거를 확인하세요.');
   }
   return { kind: value.kind as PaperJournalRecordKind, id: value.id, version: Number(value.version), updatedAt, deletedAt, payload: structuredClone(value.payload) };
 }
 
-export function validatePaperJournalSyncRequest(value: unknown, now = new Date()): PaperJournalSyncRequest {
+export function validatePaperJournalSyncRequest(value: unknown, now = new Date(), scope: SyncScope = 'manual'): PaperJournalSyncRequest {
   if (!Number.isFinite(now.getTime())) throw new PaperJournalError('INVALID_SERVER_TIME', '서버 시각을 확인하지 못했습니다.');
   if (!isObject(value)) throw new PaperJournalError('INVALID_SYNC_REQUEST', '동기화 요청 형식을 확인하세요.');
   if ('user_id' in value || 'userId' in value) throw new PaperJournalError('CLIENT_USER_ID_FORBIDDEN', '사용자 ID는 로그인 세션에서만 결정됩니다.');
@@ -86,7 +91,7 @@ export function validatePaperJournalSyncRequest(value: unknown, now = new Date()
   const clientTime = parseTimestamp(value.clientTime, 'INVALID_CLIENT_TIME');
   if (!Array.isArray(value.records)) throw new PaperJournalError('INVALID_SYNC_RECORDS', '동기화 records 배열이 필요합니다.');
   if (value.records.length > MAX_SYNC_RECORDS) throw new PaperJournalError('TOO_MANY_SYNC_RECORDS', `한 번에 최대 ${MAX_SYNC_RECORDS}개 레코드만 동기화할 수 있습니다.`, 413);
-  const records = value.records.map((record) => validateRecord(record, now.getTime()));
+  const records = value.records.map((record) => validateRecord(record, now.getTime(), scope));
   const unique = new Set<string>();
   for (const record of records) {
     const key = `${record.kind}:${record.id}`;
@@ -96,15 +101,15 @@ export function validatePaperJournalSyncRequest(value: unknown, now = new Date()
   return { idempotencyKey: value.idempotencyKey, clientTime, records };
 }
 
-function validatedStored(record: StoredPaperJournalRecord, now: Date): StoredPaperJournalRecord {
-  validateRecord(record, now.getTime());
+function validatedStored(record: StoredPaperJournalRecord, now: Date, scope: SyncScope = 'manual'): StoredPaperJournalRecord {
+  validateRecord(record, now.getTime(), scope);
   if (!validPaperTimestamp(record.createdAt, now.getTime()) || !validPaperTimestamp(record.serverUpdatedAt, now.getTime())
     || Date.parse(record.createdAt) > Date.parse(record.serverUpdatedAt)) throw new PaperJournalError('INVALID_STORED_RECORD', '저장된 거래일지 시각을 확인하지 못했습니다.');
   return record;
 }
 
-function validatedAcknowledgement(stored: StoredPaperJournalRecord, expected: PaperJournalSyncRecord, now: Date) {
-  validatedStored(stored, now);
+function validatedAcknowledgement(stored: StoredPaperJournalRecord, expected: PaperJournalSyncRecord, now: Date, scope: SyncScope = 'manual') {
+  validatedStored(stored, now, scope);
   if (stored.kind !== expected.kind || stored.id !== expected.id || !sameRecord(stored, expected)) throw new PaperJournalError('INVALID_RECORD_ACKNOWLEDGEMENT', '저장 응답이 요청한 거래 기록과 일치하지 않습니다.');
   return stored;
 }
@@ -124,8 +129,8 @@ function differenceSummary(server: StoredPaperJournalRecord, device: PaperJourna
   return differences.length ? differences : ['같은 version이지만 내용 해시가 다릅니다.'];
 }
 
-function conflictId(record: PaperJournalSyncRecord) {
-  const digest = createHash('sha256').update(`${record.kind}:${record.id}:${record.version}:${canonical(record.payload)}:${record.deletedAt ?? ''}`).digest('hex').slice(0, 24);
+function conflictId(record: PaperJournalSyncRecord, server: StoredPaperJournalRecord) {
+  const digest = createHash('sha256').update(canonical({ record, server })).digest('hex').slice(0, 24);
   return `conflict:${digest}`;
 }
 
@@ -138,14 +143,14 @@ function requestFingerprint(request: PaperJournalSyncRequest) {
   return createHash('sha256').update(canonical(request.records)).digest('hex');
 }
 
-function validateCachedResponse(cached: PaperJournalSyncResult, request: PaperJournalSyncRequest, now: Date) {
+function validateCachedResponse(cached: PaperJournalSyncResult, request: PaperJournalSyncRequest, now: Date, scope: SyncScope) {
   if (cached.requestFingerprint !== requestFingerprint(request)) throw new PaperJournalError('IDEMPOTENCY_CONTEXT_MISMATCH', '같은 동기화 키의 요청 내용이 다르거나 이전 응답의 요청 근거를 확인할 수 없습니다.', 409);
   if (cached.ok !== true || cached.mode !== JOURNAL_SYNC_MODE || cached.orderSubmitted !== false || cached.exchangeRequestSent !== false
     || cached.idempotencyKey !== request.idempotencyKey || !validPaperTimestamp(cached.serverTime, now.getTime())
     || ![cached.uploaded, cached.downloaded, cached.conflicts, cached.unchanged, cached.failed, cached.warnings].every(Array.isArray)
     || !Number.isFinite(cached.clockSkewMs)) throw new PaperJournalError('INVALID_CACHED_RESPONSE', '이전 동기화 응답을 검증하지 못했습니다.');
-  for (const record of [...cached.uploaded, ...cached.downloaded]) validatedStored(record, now);
-  for (const conflict of cached.conflicts) { validatedStored(conflict.serverRecord, now); validateRecord(conflict.deviceRecord, now.getTime()); }
+  for (const record of [...cached.uploaded, ...cached.downloaded]) validatedStored(record, now, scope);
+  for (const conflict of cached.conflicts) { validatedStored(conflict.serverRecord, now, scope); validateRecord(conflict.deviceRecord, now.getTime(), scope); }
   return cached;
 }
 
@@ -154,11 +159,15 @@ async function executeSync(
   userId: string,
   request: PaperJournalSyncRequest,
   now: Date,
+  scope: SyncScope,
 ): Promise<PaperJournalSyncResult> {
   const cached = await repository.getIdempotentResponse(userId, request.idempotencyKey);
-  if (cached) return validateCachedResponse(cached, request, now);
+  if (cached) return validateCachedResponse(cached, request, now, scope);
 
   const serverTime = now.toISOString();
+  if (!repository.claimSyncRequest) throw new PaperJournalError('ATOMIC_SYNC_UNAVAILABLE', '저장소의 동시 요청 보호 기능을 확인하지 못했습니다.', 503);
+  const claimedResponse = await repository.claimSyncRequest(userId, request.idempotencyKey, requestFingerprint(request), serverTime);
+  if (claimedResponse) return validateCachedResponse(claimedResponse, request, now, scope);
   const clockSkewMs = Date.parse(request.clientTime) - now.getTime();
   const warnings = Math.abs(clockSkewMs) > CLOCK_SKEW_WARNING_MS
     ? ['기기 시각과 서버 시각 차이가 큽니다. version을 우선하고 서버 시각을 기록했습니다.'] : [];
@@ -171,16 +180,16 @@ async function executeSync(
   for (const record of request.records) {
     try {
       const server = await repository.getRecord(userId, record.kind, record.id);
-      if (server) validatedStored(server, now);
+      if (server) validatedStored(server, now, scope);
       if (!server || record.version > server.version) {
-        uploaded.push(validatedAcknowledgement(await repository.upsertRecord(userId, record, serverTime), record, now));
+        uploaded.push(validatedAcknowledgement(await repository.upsertRecord(userId, record, serverTime, server?.version ?? null), record, now, scope));
       } else if (record.version < server.version) {
         downloaded.push(server);
       } else if (sameRecord(server, record)) {
         unchanged.push({ kind: record.kind, id: record.id, version: record.version });
       } else {
         const conflict: PaperJournalConflict = {
-          id: conflictId(record), kind: record.kind, recordId: record.id, version: record.version,
+          id: conflictId(record, server), kind: record.kind, recordId: record.id, version: record.version,
           serverRecord: server, deviceRecord: record,
           differenceSummary: differenceSummary(server, record), createdAt: serverTime, status: 'open',
         };
@@ -199,9 +208,10 @@ async function executeSync(
   return result;
 }
 
-export async function syncPaperJournal(repository: PaperJournalRepository, userId: string, input: unknown, now = new Date()) {
+// Scope is selected by trusted server code; the HTTP route never reads it from request data.
+export async function syncPaperJournal(repository: PaperJournalRepository, userId: string, input: unknown, now = new Date(), scope: SyncScope = 'manual') {
   if (!userId) throw new PaperJournalError('LOGIN_REQUIRED', '로그인이 필요합니다.', 401);
-  const request = validatePaperJournalSyncRequest(input, now);
+  const request = validatePaperJournalSyncRequest(input, now, scope);
   const key = `${userId}:${request.idempotencyKey}`;
   const fingerprint = requestFingerprint(request);
   const existing = inFlightSync.get(key);
@@ -209,7 +219,7 @@ export async function syncPaperJournal(repository: PaperJournalRepository, userI
     if (existing.fingerprint !== fingerprint) throw new PaperJournalError('IDEMPOTENCY_CONTEXT_MISMATCH', '진행 중인 동기화 키를 다른 내용으로 재사용할 수 없습니다.', 409);
     return existing.promise;
   }
-  const task = executeSync(repository, userId, request, now).finally(() => {
+  const task = executeSync(repository, userId, request, now, scope).finally(() => {
     if (inFlightSync.get(key)?.promise === task) inFlightSync.delete(key);
   });
   inFlightSync.set(key, { fingerprint, promise: task });
@@ -278,14 +288,14 @@ export async function resolvePaperJournalConflict(repository: PaperJournalReposi
   if (choice === 'server') records.push(conflict.serverRecord);
   else if (choice === 'device') {
     const next = cloneWithVersion(conflict.deviceRecord, Math.max(conflict.serverRecord.version, conflict.deviceRecord.version) + 1, serverTime);
-    records.push(validatedAcknowledgement(await repository.upsertRecord(userId, next, serverTime), next, now));
+    records.push(validatedAcknowledgement(await repository.upsertRecord(userId, next, serverTime, current.version), next, now));
   }
   else {
     records.push(conflict.serverRecord);
-    const suffix = createHash('sha256').update(`${conflict.id}:${serverTime}`).digest('hex').slice(0, 10);
+    const suffix = createHash('sha256').update(conflict.id).digest('hex').slice(0, 10);
     const copyId = `${conflict.deviceRecord.id.slice(0, 144)}-copy-${suffix}`;
     const next = cloneWithVersion(conflict.deviceRecord, 1, serverTime, copyId);
-    records.push(validatedAcknowledgement(await repository.upsertRecord(userId, next, serverTime), next, now));
+    records.push(validatedAcknowledgement(await repository.upsertRecord(userId, next, serverTime, null), next, now));
   }
   for (const record of records) validatedStored(record, now);
   await repository.markConflictResolved(userId, conflict.id, serverTime);

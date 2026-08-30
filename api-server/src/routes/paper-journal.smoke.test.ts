@@ -15,6 +15,7 @@ function createRepository(): PaperJournalRepository {
   const records = new Map();
   const requests = new Map();
   const conflicts = new Map();
+  const claims = new Set<string>();
   const journalPayloads = Array.from({ length: 10 }, (_, index) => ({
     id: `trade-${index}`, tradeId: `trade-${index}`, status: 'closed', side: index % 2 ? 'short' : 'long', symbol: 'BTCUSDT',
     strategyName: 'manual', filledAt: new Date(NOW.getTime() - (index + 1) * 60_000).toISOString(),
@@ -25,8 +26,15 @@ function createRepository(): PaperJournalRepository {
     fundingCost: 0.1, warnings: [], ruleViolation: false, note: 'private note', email: 'private@example.com',
   }));
   return {
+    async claimSyncRequest(user, key) {
+      const id = `${user}:${key}`;
+      if (claims.has(id)) throw new Error('request already claimed');
+      claims.add(id);
+      return null;
+    },
     async getRecord(user, kind, id) { return structuredClone(records.get(`${user}:${kind}:${id}`) ?? null); },
-    async upsertRecord(user, record, serverTime) {
+    async upsertRecord(user, record, serverTime, expectedVersion) {
+      if ((records.get(`${user}:${record.kind}:${record.id}`)?.version ?? null) !== expectedVersion) throw new Error('version changed');
       const stored = { ...structuredClone(record), createdAt: serverTime, serverUpdatedAt: serverTime };
       records.set(`${user}:${record.kind}:${record.id}`, stored); return structuredClone(stored);
     },
