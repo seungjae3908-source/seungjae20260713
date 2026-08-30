@@ -138,6 +138,21 @@ test('public futures routes are registered and return safe schemas', async () =>
     assert.equal((candlesBody.data as unknown[]).length, 100);
     assert.ok(Array.isArray(candlesBody.warnings));
 
+    const mismatchedStrategyResponse = await nativeFetch(`${baseUrl}/api/crypto/futures/scanner/directional?timeframe=15m&strategy=swing`);
+    assert.equal(mismatchedStrategyResponse.status, 400);
+    const mismatchedStrategyBody = await readJson(mismatchedStrategyResponse);
+    assert.equal(mismatchedStrategyBody.error, 'FUTURES_DIRECTIONAL_STRATEGY_TIMEFRAME_MISMATCH');
+
+    const canonicalScalpingResponse = await nativeFetch(`${baseUrl}/api/crypto/futures/scanner/directional?timeframe=15m&strategy=scalping`);
+    assert.equal(canonicalScalpingResponse.status, 401);
+    const canonicalScalpingBody = await readJson(canonicalScalpingResponse);
+    assert.equal(canonicalScalpingBody.error, 'LOGIN_REQUIRED');
+
+    const canonicalSwingResponse = await nativeFetch(`${baseUrl}/api/crypto/futures/scanner/directional?timeframe=60m&strategy=swing`);
+    assert.equal(canonicalSwingResponse.status, 401);
+    const canonicalSwingBody = await readJson(canonicalSwingResponse);
+    assert.equal(canonicalSwingBody.error, 'LOGIN_REQUIRED');
+
     const badSymbolResponse = await nativeFetch(`${baseUrl}/api/crypto/futures/FAKEUSDT/snapshot`);
     assert.equal(badSymbolResponse.status, 400);
     const badSymbolBody = await readJson(badSymbolResponse);
