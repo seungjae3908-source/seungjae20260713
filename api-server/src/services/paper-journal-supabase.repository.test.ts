@@ -116,7 +116,7 @@ test('service does not acknowledge an update that lost its version race', async 
     current.payload.note = 'another-device';
     f.onWrite(undefined);
   });
-  const result = await syncPaperJournal(f.repository, USER, { idempotencyKey: 'version-race-test', clientTime: stamp, records: [record('lost', 2)] }, NOW);
+  const result = await syncPaperJournal(f.repository, USER, { idempotencyKey: 'version-race-test', clientTime: stamp, records: [{ ...record('lost', 2), baseVersion: 1 }] }, NOW);
   assert.equal(result.uploaded.length, 0);
   assert.equal(result.failed[0]?.code, 'JOURNAL_VERSION_CHANGED');
   assert.equal((await f.repository.getRecord(USER, 'journal', 'trade-1'))?.payload.note, 'another-device');

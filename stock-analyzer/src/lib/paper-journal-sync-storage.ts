@@ -27,6 +27,8 @@ export type SyncMetadataRecord = {
   kind: JournalRecordKind;
   id: string;
   version: number;
+  /** Explicit server acknowledgement only; never derived from the local edit counter. */
+  baseVersion?: number | null;
   hash: string;
   updatedAt: string;
   deletedAt: string | null;
@@ -231,19 +233,20 @@ export function prepareJournalSync(storage: StorageLike, userId: string, state: 
       kind: item.kind,
       id: item.id,
       version: previous ? previous.version + (changed ? 1 : 0) : 1,
+      baseVersion: previous ? previous.baseVersion : null,
       hash,
       updatedAt: changed ? at : previous.updatedAt,
       deletedAt: null,
     };
     metadata.records[key] = next;
-    records.push({ kind: item.kind, id: item.id, version: next.version, updatedAt: next.updatedAt, deletedAt: null, payload: structuredClone(item.payload) });
+    records.push({ kind: item.kind, id: item.id, version: next.version, baseVersion: next.baseVersion, updatedAt: next.updatedAt, deletedAt: null, payload: structuredClone(item.payload) });
   }
 
   for (const [key, previous] of Object.entries(metadata.records)) {
     if (currentKeys.has(key)) continue;
     const next = previous.deletedAt ? previous : { ...previous, version: previous.version + 1, hash: '{}', updatedAt: at, deletedAt: at };
     metadata.records[key] = next;
-    records.push({ kind: next.kind, id: next.id, version: next.version, updatedAt: next.updatedAt, deletedAt: next.deletedAt, payload: {} });
+    records.push({ kind: next.kind, id: next.id, version: next.version, baseVersion: next.baseVersion, updatedAt: next.updatedAt, deletedAt: next.deletedAt, payload: {} });
   }
 
   metadata.status = 'pending';
@@ -318,6 +321,7 @@ function assertMetadata(metadata: JournalSyncMetadata, userId: string) {
   for (const [key, row] of Object.entries(metadata.records)) {
     if (!row || !['account', 'order', 'position', 'fill', 'journal'].includes(row.kind) || typeof row.id !== 'string'
       || key !== recordKey(row.kind, row.id) || typeof row.hash !== 'string' || !Number.isSafeInteger(row.version) || row.version < 1
+      || (row.baseVersion !== undefined && row.baseVersion !== null && (!Number.isSafeInteger(row.baseVersion) || row.baseVersion < 1 || row.baseVersion > row.version))
       || !validPaperTimestamp(row.updatedAt, Date.now()) || (row.deletedAt !== null && !validPaperTimestamp(row.deletedAt, Date.now()))) throw new Error('동기화 버전 기록을 확인하지 못했습니다.');
   }
 }
@@ -341,15 +345,20 @@ export function applyServerRecords(state: PaperTradingState, records: readonly S
   return next;
 }
 
-function updateMetadataRecords(metadata: JournalSyncMetadata, records: readonly StoredJournalSyncRecord[]) {
+function updateMetadataRecords(metadata: JournalSyncMetadata, records: readonly StoredJournalSyncRecord[], explicitlyResolvedKey?: string) {
   for (const record of records) {
     const previous = metadata.records[recordKey(record.kind, record.id)];
-    if (previous && (record.version < previous.version || record.version === previous.version &&
+    const explicitlyResolved = explicitlyResolvedKey === recordKey(record.kind, record.id);
+    if (previous && !explicitlyResolved && (record.version < previous.version || record.version === previous.version &&
       (previous.hash !== stable(record.payload) || previous.deletedAt !== record.deletedAt))) throw new Error('오래되거나 충돌한 서버 버전으로 로컬 기록을 덮어쓸 수 없습니다.');
+    if (previous && !explicitlyResolved && record.version > previous.version && previous.baseVersion !== previous.version) {
+      throw new Error('서버에서 확인하지 않은 로컬 변경이 있습니다. 서버 버전이 높아도 자동으로 덮어쓰지 않습니다.');
+    }
     metadata.records[recordKey(record.kind, record.id)] = {
       kind: record.kind,
       id: record.id,
       version: record.version,
+      baseVersion: record.version,
       hash: stable(record.payload),
       updatedAt: record.updatedAt,
       deletedAt: record.deletedAt,
@@ -360,7 +369,7 @@ function updateMetadataRecords(metadata: JournalSyncMetadata, records: readonly 
 export function applyJournalSyncResult(storage: StorageLike, userId: string, state: PaperTradingState, result: JournalSyncResult) {
   assertSyncResponse(result);
   if (!Array.isArray(result.uploaded) || !Array.isArray(result.downloaded) || !Array.isArray(result.failed)
-    || !Array.isArray(result.conflicts) || !Array.isArray(result.warnings) || !result.warnings.every((warning) => typeof warning === 'string')) {
+    || !Array.isArray(result.conflicts) || !Array.isArray(result.unchanged) || !Array.isArray(result.warnings) || !result.warnings.every((warning) => typeof warning === 'string')) {
     throw new Error('거래일지 동기화 결과 목록을 확인하지 못했습니다.');
   }
   assertConflicts(result.conflicts);
@@ -368,6 +377,11 @@ export function applyJournalSyncResult(storage: StorageLike, userId: string, sta
   const next = applyServerRecords(state, applied);
   const metadata = structuredClone(loadJournalSyncMetadata(storage, userId).metadata);
   updateMetadataRecords(metadata, applied);
+  for (const record of result.unchanged) {
+    const known = record && metadata.records[recordKey(record.kind, record.id)];
+    if (!known || !Number.isSafeInteger(record.version) || record.version !== known.version) throw new Error('서버의 변경 없음 응답이 로컬 버전과 일치하지 않습니다.');
+    known.baseVersion = record.version;
+  }
   metadata.lastSyncAt = result.serverTime;
   metadata.uploadedCount += result.uploaded.length;
   metadata.downloadedCount += result.downloaded.length;
@@ -399,9 +413,22 @@ export function applyJournalSnapshot(storage: StorageLike, userId: string, state
 
 export function applyConflictResolution(storage: StorageLike, userId: string, state: PaperTradingState, result: ConflictResolutionResult) {
   assertSyncResponse(result);
-  const next = applyServerRecords(state, result.records);
   const metadata = structuredClone(loadJournalSyncMetadata(storage, userId).metadata);
-  updateMetadataRecords(metadata, result.records);
+  const conflict = metadata.conflicts.find((row) => row.id === result.conflictId);
+  if (!conflict || !['server', 'device', 'preserve_both'].includes(result.choice)) throw new Error('선택한 충돌 해결 응답을 확인하지 못했습니다.');
+  const resolvedKey = recordKey(conflict.kind, conflict.recordId);
+  const local = metadata.records[resolvedKey];
+  if (local && (local.version !== conflict.deviceRecord.version || local.hash !== stable(conflict.deviceRecord.payload)
+    || local.deletedAt !== conflict.deviceRecord.deletedAt)) throw new Error('충돌 표시 후 로컬 기록이 바뀌었습니다. 다시 동기화하세요.');
+  const original = result.records.find((row) => recordKey(row.kind, row.id) === resolvedKey);
+  if (!original || result.records.length !== (result.choice === 'preserve_both' ? 2 : 1)) throw new Error('충돌 해결 레코드가 누락되거나 중복됐습니다.');
+  const selected = result.choice === 'device' ? conflict.deviceRecord : conflict.serverRecord;
+  const expectedVersion = result.choice === 'device' ? Math.max(conflict.deviceRecord.version, conflict.serverRecord.version) + 1 : conflict.serverRecord.version;
+  if (original.version !== expectedVersion || original.deletedAt !== selected.deletedAt || stable(original.payload) !== stable(selected.payload)) throw new Error('충돌 해결 내용이 선택한 기록과 일치하지 않습니다.');
+  if (result.records.some((row) => row !== original && (row.kind !== 'journal' || row.payload.conflictCopyOf !== conflict.recordId
+    || row.payload.researchEvidenceEligible !== false || metadata.records[recordKey(row.kind, row.id)]))) throw new Error('충돌 보존 사본을 확인하지 못했습니다.');
+  const next = applyServerRecords(state, result.records);
+  updateMetadataRecords(metadata, result.records, resolvedKey);
   metadata.conflicts = metadata.conflicts.filter((conflict) => conflict.id !== result.conflictId);
   metadata.status = metadata.conflicts.length ? 'conflict' : metadata.failedCount ? 'failed' : 'completed';
   metadata.lastSyncAt = result.serverTime;

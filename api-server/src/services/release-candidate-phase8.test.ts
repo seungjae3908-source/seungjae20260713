@@ -190,10 +190,10 @@ test('tombstone and edit at same version creates a conflict', async () => {
   assert.match(result.conflicts[0]?.differenceSummary.join(' ') ?? '', /삭제/);
 });
 
-test('higher version wins over lower version independent of client time', async () => {
+test('unchanged acknowledged device version receives newer server content independent of client time', async () => {
   const repository = new MemoryRepository();
   await syncPaperJournal(repository, USER_A, request([syncRecord(1, { version: 3, payload: { value: 'new' } })], 'phase8-version-new'), NOW);
-  const result = await syncPaperJournal(repository, USER_A, { ...request([syncRecord(1, { version: 2, payload: { value: 'old' } })], 'phase8-version-old'), clientTime: new Date(NOW.getTime() + 3_600_000).toISOString() }, NOW);
+  const result = await syncPaperJournal(repository, USER_A, { ...request([syncRecord(1, { version: 2, baseVersion: 2, payload: { value: 'old' } })], 'phase8-version-old'), clientTime: new Date(NOW.getTime() + 3_600_000).toISOString() }, NOW);
   assert.equal(result.downloaded[0]?.version, 3);
   assert.equal(result.warnings.length, 1);
 });
