@@ -48,7 +48,7 @@ jobs:
           echo '53009271bdd232954696d76cb86cbdc60b0a9c417821f4c8505f2e3aadf00365  /tmp/v3-hardening/test-new.mjs' | sha256sum -c -
           echo 'b7938a0c6a9687309a59fb60a5a1069c5bfe3d488e54d02be6cead4f2d96cedf  /tmp/v3-hardening/contract-new.json' | sha256sum -c -
 
-      - name: Apply only existing Room A owner files
+      - name: Validate complete final file set in working tree
         shell: bash
         run: |
           set -euo pipefail
@@ -56,13 +56,6 @@ jobs:
           cp /tmp/v3-hardening/workflow-new.yml .github/workflows/public-forward-liquidity-calibration-scheduled-v3.yml
           cp /tmp/v3-hardening/test-new.mjs market-intelligence-sidecar/tests/public-forward-liquidity-capture-seam-v3.test.mjs
           cp /tmp/v3-hardening/contract-new.json market-intelligence-sidecar/config/public-forward-liquidity-v3-activation-contract.json
-          rm -f .room-a/v3-hardening.tgz.b64 .github/workflows/room-a-v3-hardening-apply.yml
-          rmdir .room-a 2>/dev/null || true
-
-      - name: Validate hardened seam before branch commit
-        shell: bash
-        run: |
-          set -euo pipefail
           node --check market-intelligence-sidecar/scripts/run-public-forward-liquidity-capture-seam-v3.mjs
           node --check market-intelligence-sidecar/tests/public-forward-liquidity-capture-seam-v3.test.mjs
           node --test market-intelligence-sidecar/tests/public-forward-liquidity-capture-seam-v3.test.mjs
@@ -71,19 +64,26 @@ jobs:
           test "$(git hash-object market-intelligence-sidecar/tests/public-forward-liquidity-capture-seam-v3.test.mjs)" = '44221f34526cd5a9ef047b7373219ba26901ba28'
           test "$(git hash-object market-intelligence-sidecar/config/public-forward-liquidity-v3-activation-contract.json)" = '3f3be099a7f7a66a7cbda8a42e5aea0435e86606'
 
-      - name: Commit without force and remove apply helper
+      - name: Stage non-workflow hardening files and exact future workflow blob
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p .room-a
+          cp /tmp/v3-hardening/workflow-new.yml .room-a/public-forward-liquidity-calibration-scheduled-v3.final.yml
+          git checkout -- .github/workflows/public-forward-liquidity-calibration-scheduled-v3.yml
+          rm -f .room-a/v3-hardening.tgz.b64
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A -- \
-            .github/workflows/public-forward-liquidity-calibration-scheduled-v3.yml \
             market-intelligence-sidecar/config/public-forward-liquidity-v3-activation-contract.json \
             market-intelligence-sidecar/scripts/run-public-forward-liquidity-capture-seam-v3.mjs \
             market-intelligence-sidecar/tests/public-forward-liquidity-capture-seam-v3.test.mjs \
             .room-a/v3-hardening.tgz.b64 \
-            .github/workflows/room-a-v3-hardening-apply.yml
+            .room-a/public-forward-liquidity-calibration-scheduled-v3.final.yml
           git diff --cached --check
-          git commit -m 'fix(full-cost): close V3 slot completion and window audit gaps'
+          if git diff --cached --name-only | grep -q '^\.github/workflows/'; then
+            echo 'Workflow path must not be pushed by GITHUB_TOKEN.' >&2
+            exit 1
+          fi
+          git commit -m 'fix(full-cost): stage V3 slot completion and window audit hardening'
           git push origin HEAD:refs/heads/feat/room-a-v3-scheduled-capture-seam-20260830
