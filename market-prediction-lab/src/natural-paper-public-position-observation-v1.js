@@ -299,6 +299,9 @@ function selectNewFrames({ position, frames, lane, market, nowMs }) {
     return Object.freeze({ status: STATUS.MISSING, blocker: "POSITION_OBSERVATION_SEQUENCE_ANCHOR_MISSING", frames: null });
   }
   const selected = frames.filter((frame) => frame.sourceObservedAtMs > cursor);
+  if (selected.length > 0 && selected[0].timestamp < cursor) {
+    return Object.freeze({ status: STATUS.MISSING, blocker: "POSITION_OBSERVATION_PARTIAL_FRAME_AT_CURSOR", frames: null });
+  }
   if (selected.length === 0) {
     const latest = frames.at(-1);
     if (nowMs - latest.sourceObservedAtMs > lane.maxAgeMs) {
