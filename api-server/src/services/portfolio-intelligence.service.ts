@@ -2,6 +2,7 @@ import { getUserSupabase } from '../lib/supabase.ts';
 import { MarketDataService } from './market-data.service.ts';
 import { loadFreePublicFxQuotes } from './public-fx.service.ts';
 import { marketNumber, quoteTimeEvidence } from '../providers/market-evidence';
+import { runBoundedWorkPool } from '../lib/bounded-work-pool';
 import {
   aggregatePortfolioProviderSnapshots,
   calculateAlignedCorrelation,
@@ -30,6 +31,7 @@ type HoldingRow = {
 
 type KnownHolding = {
   id: string;
+  sourceHoldingIds: string[];
   ticker: string;
   name: string;
   market: 'KR' | 'US';
@@ -59,6 +61,7 @@ function cleanHolding(value: unknown): HoldingRow | null {
   const quantity = finiteNonNegative(row.quantity);
   const averagePrice = finiteNonNegative(row.average_price);
   if (typeof row.id !== 'string' || !row.id.trim() || !ticker || !name || !['KR', 'US'].includes(market)
+    || !(market === 'KR' ? /^\d{6}$/.test(ticker) : /^[A-Z][A-Z0-9.-]{0,14}$/.test(ticker))
     || currency !== (market === 'US' ? 'USD' : 'KRW') || quantity == null || quantity <= 0
     || averagePrice == null || averagePrice <= 0 || !Number.isFinite(quantity * averagePrice)) return null;
   return {
@@ -66,6 +69,26 @@ function cleanHolding(value: unknown): HoldingRow | null {
     purchase_date: row.purchase_date == null ? null : String(row.purchase_date),
     created_at: row.created_at == null ? null : String(row.created_at),
   };
+}
+
+/** Lots remain auditable, but position risk and averages are per market/currency/asset. */
+function aggregateHoldingLots(rows: HoldingRow[]): Array<HoldingRow & { sourceHoldingIds: string[] }> {
+  const groups = new Map<string, HoldingRow[]>();
+  for (const row of rows) {
+    const key = `${row.market}:${row.currency}:${row.ticker}`;
+    const lots = groups.get(key) ?? [];
+    lots.push(row);
+    groups.set(key, lots);
+  }
+  return Array.from(groups, ([key, lots]) => {
+    const quantity = lots.reduce((sum, row) => sum + row.quantity, 0);
+    const cost = lots.reduce((sum, row) => sum + row.quantity * row.average_price, 0);
+    if (!Number.isFinite(quantity) || !Number.isFinite(cost) || quantity <= 0 || cost <= 0) {
+      throw new Error('PORTFOLIO_HOLDINGS_READ_FAILED:AGGREGATE_OVERFLOW');
+    }
+    return { ...lots[0], id: lots.length === 1 ? lots[0].id : `asset:${key}`,
+      sourceHoldingIds: lots.map((row) => row.id).sort(), quantity, average_price: cost / quantity };
+  });
 }
 
 function bucketFor(market: KnownHolding['market']): PortfolioAssetBucket {
@@ -121,17 +144,23 @@ export async function buildPortfolioIntelligence(input: {
   const parsedRows = rawRows.map(cleanHolding);
   const identityCounts = new Map<string, number>();
   for (const row of parsedRows) if (row) identityCounts.set(row.id, (identityCounts.get(row.id) ?? 0) + 1);
-  const holdings = parsedRows.filter((row): row is HoldingRow => row !== null
+  const validRows = parsedRows.filter((row): row is HoldingRow => row !== null
     && identityCounts.get(row.id) === 1);
-  const invalidRowCount = rawRows.length - holdings.length;
-  const quoteResults = await Promise.allSettled(holdings.map((holding) => (input.loadQuote ?? MarketDataService.getQuoteRow.bind(MarketDataService))(holding.ticker)));
+  const invalidRowCount = rawRows.length - validRows.length;
+  const holdings = aggregateHoldingLots(validRows);
+  const [quoteBatch, fx] = await Promise.all([
+    runBoundedWorkPool(holdings, (holding) => (input.loadQuote ?? MarketDataService.getQuoteRow.bind(MarketDataService))(holding.ticker),
+      { concurrency: 4, deadlineMs: 4_000, itemTimeoutMs: 3_500 }),
+    loadFreePublicFxQuotes(input.fetchImpl ?? fetch, now),
+  ]);
+  const quoteResults = new Map(quoteBatch.outcomes.map((outcome) => [outcome.index, outcome]));
   now = input.now ?? new Date();
   const knownHoldings: KnownHolding[] = [];
   const missingSources: string[] = [];
 
-  quoteResults.forEach((result, index) => {
-    const holding = holdings[index];
-    if (result.status === 'rejected' || result.value === null) {
+  holdings.forEach((holding, index) => {
+    const result = quoteResults.get(index);
+    if (!result || result.status !== 'fulfilled' || !result.value) {
       missingSources.push(`QUOTE:${holding.ticker}:UNAVAILABLE`);
       return;
     }
@@ -152,6 +181,7 @@ export async function buildPortfolioIntelligence(input: {
     }
     knownHoldings.push({
       id: holding.id,
+      sourceHoldingIds: holding.sourceHoldingIds,
       ticker: holding.ticker,
       name: holding.name,
       market: holding.market as 'KR' | 'US',
@@ -169,7 +199,7 @@ export async function buildPortfolioIntelligence(input: {
 
   if (invalidRowCount > 0) missingSources.push(`PORTFOLIO_HOLDINGS:INVALID_ROWS:${invalidRowCount}`);
 
-  const { quotes: fxQuotes, missing: fxMissing } = await loadFreePublicFxQuotes(input.fetchImpl ?? fetch, now);
+  const { quotes: fxQuotes, missing: fxMissing } = fx;
   missingSources.push(...fxMissing);
 
   const snapshots: PortfolioProviderSnapshot[] = [];
@@ -259,15 +289,15 @@ export async function buildPortfolioIntelligence(input: {
   }
 
   const knownCost = normalizedHoldings.reduce((sum, holding) => sum + (holding.normalizedCostKRW ?? 0), 0);
-  const costComplete = invalidRowCount === 0 && normalizedHoldings.every((holding) => holding.normalizedCostKRW != null) && holdings.length === knownHoldings.length;
+  const costComplete = Number.isFinite(knownCost) && invalidRowCount === 0 && normalizedHoldings.every((holding) => holding.normalizedCostKRW != null) && holdings.length === knownHoldings.length;
   const knownValue = normalizedHoldings.reduce((sum, holding) => sum + (holding.normalizedKRW ?? 0), 0);
-  const valueComplete = invalidRowCount === 0 && normalizedHoldings.every((holding) => holding.normalizedKRW != null) && holdings.length === knownHoldings.length;
-  const noValuationEvidence = rawRows.length > 0 && knownHoldings.length === 0;
+  const valueComplete = Number.isFinite(knownValue) && invalidRowCount === 0 && normalizedHoldings.every((holding) => holding.normalizedKRW != null) && holdings.length === knownHoldings.length;
+  const noValuationEvidence = rawRows.length > 0 && !normalizedHoldings.some((holding) => holding.normalizedKRW != null);
   const nativeBalance = (currency: 'KRW' | 'USD') => {
     const rows = knownHoldings.filter((row) => row.currency === currency);
     const missing = invalidRowCount > 0 || holdings.some((row) => row.currency === currency && !knownHoldings.some((known) => known.id === row.id));
     const amount = rows.reduce((sum, row) => sum + row.nativeValue, 0);
-    return { amount: missing || !Number.isFinite(amount) ? null : amount, status: missing ? 'UNAVAILABLE' : 'READY', source: 'known-stock-valuation-only' };
+    return { amount: missing || !Number.isFinite(amount) ? null : amount, status: missing || !Number.isFinite(amount) ? 'UNAVAILABLE' : 'READY', source: 'known-stock-valuation-only' };
   };
 
   return {
@@ -326,8 +356,11 @@ export async function buildPortfolioIntelligence(input: {
       providerCount: aggregate.provenance.providerCount,
       includedProviderCount: aggregate.provenance.includedProviderCount,
       invalidHoldingRows: invalidRowCount,
-      requestedHoldingCount: invalidRowCount > 0 ? null : holdings.length,
-      knownHoldingCount: knownHoldings.length,
+      requestedHoldingCount: invalidRowCount > 0 ? null : validRows.length,
+      knownHoldingCount: knownHoldings.reduce((sum, row) => sum + row.sourceHoldingIds.length, 0),
+      aggregatedAssetCount: knownHoldings.length,
+      quoteWork: { requestedAssets: holdings.length, startedAssets: quoteBatch.startedCount, maxConcurrency: quoteBatch.maxConcurrency,
+        deadlineReached: quoteBatch.deadlineReached, timedOutAssets: quoteBatch.timedOutCount },
     },
     missingSources: [...new Set([...aggregate.missing, ...missingSources])],
     safety: {
