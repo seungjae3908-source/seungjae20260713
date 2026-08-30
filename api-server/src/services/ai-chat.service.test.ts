@@ -1,4 +1,5 @@
 import test from 'node:test';
+import './financial-evidence.test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { request } from 'node:http';
