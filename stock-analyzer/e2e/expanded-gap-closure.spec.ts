@@ -316,12 +316,26 @@ async function installApprovedLegacyRuntime(page: Page) {
 
 test('legacy /stock/005930 finishes at the KR stock-info canonical identity', async ({ page }) => {
   await installApprovedLegacyRuntime(page);
+  const pageErrors: string[] = [];
+  const unexpectedHttp: number[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  page.on('response', (response) => { if (response.status() >= 400 && response.status() !== 503) unexpectedHttp.push(response.status()); });
+  await page.route('**/api/**', (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === '/api/watchlist') return fulfill(route, { items: [] });
+    if (path === '/api/backup/latest') return fulfill(route, { ok: true, exists: false });
+    if (path === '/api/notifications/price-alerts') return fulfill(route, { alerts: [] });
+    // Canonical navigation must also work during an explicit provider outage.
+    return fulfill(route, { ok: false, error: 'FIXTURE_PROVIDER_UNAVAILABLE' }, 503);
+  });
   await page.goto('/stock/005930');
   await expect.poll(() => new URL(page.url()).pathname).toBe('/stock-info');
   const url = new URL(page.url());
   expect(url.searchParams.get('asset')).toBe('stock');
   expect(url.searchParams.get('market')).toBe('KR');
   expect(url.searchParams.get('ticker')).toBe('005930');
+  expect(pageErrors).toEqual([]);
+  expect(unexpectedHttp).toEqual([]);
 });
 
 function cryptoAsset(symbol: string, overrides: Partial<MarketInformationAssetRow> = {}): MarketInformationAssetRow {

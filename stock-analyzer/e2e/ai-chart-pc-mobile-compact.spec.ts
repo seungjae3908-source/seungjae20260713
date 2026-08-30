@@ -33,10 +33,25 @@ function selectionFixture() {
 }
 
 async function primeSelection(page: Page) {
+  // This layout test has no API server. An explicit empty candle fixture must
+  // settle the actual chart request rather than leaking to Vite's dead proxy.
+  await page.route('**/api/stocks/005930/candles**', (route) => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify({ candles: [], provider: 'layout-fixture', ticker: '005930', timeframe: '5m' }),
+  }));
   await page.addInitScript((selection) => {
     window.localStorage.setItem('sa-analysis-selection-v1', JSON.stringify(selection));
   }, selectionFixture());
 }
+
+const runtimeErrors = new WeakMap<Page, string[]>();
+test.beforeEach(({ page }) => {
+  const errors: string[] = [];
+  runtimeErrors.set(page, errors);
+  page.on('pageerror', (error) => errors.push(error.message));
+  page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
+  page.on('response', (response) => { if (response.status() >= 400) errors.push(`HTTP ${response.status()} ${new URL(response.url()).pathname}`); });
+});
+test.afterEach(({ page }) => { expect(runtimeErrors.get(page)).toEqual([]); });
 
 test('AI Chart source keeps desktop dense and mobile summary-first', () => {
   const pageSource = source('src/pages/ai-chart.tsx');
