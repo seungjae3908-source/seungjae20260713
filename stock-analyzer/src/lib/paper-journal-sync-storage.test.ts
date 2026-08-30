@@ -283,6 +283,73 @@ test('clear user namespace does not clear another account', () => {
   assert.notEqual(storage.getItem(syncMetadataStorageKey(USER_B)), null);
 });
 
+test('explicit conflict choice can replace diverged versions while later local edits remain protected', () => {
+  for (const choice of ['server', 'device'] as const) {
+    const storage = new MemoryStorage();
+    const state = createLocalPaperState(10000, NOW);
+    state.journal = [paperJournalFixture('journal-1', NOW.toISOString(), { note: 'offline edits' })];
+    const prepared = prepareJournalSync(storage, USER_A, state, NOW);
+    const device = { ...prepared.records.find(row => row.kind === 'journal')!, version: 7, baseVersion: 1 };
+    const server = stored({ version: 3, payload: { ...device.payload, note: 'other device' } });
+    const conflict: JournalConflict = { id: 'conflict:ancestry', kind: 'journal', recordId: device.id, version: 7,
+      serverRecord: server, deviceRecord: device, differenceSummary: ['note'], status: 'open', createdAt: NOW.toISOString() };
+    prepared.metadata.records['journal:journal-1'].version = 7;
+    prepared.metadata.records['journal:journal-1'].baseVersion = 1;
+    prepared.metadata.conflicts = [conflict];
+    saveJournalSyncMetadata(storage, USER_A, prepared.metadata);
+    const selected = choice === 'server' ? server : { ...server, payload: device.payload, version: 8 };
+    const response: ConflictResolutionResult = { ok: true, mode: 'journal-sync-only', orderSubmitted: false, exchangeRequestSent: false,
+      conflictId: conflict.id, choice, records: [selected], serverTime: NOW.toISOString() };
+    const resolved = applyConflictResolution(storage, USER_A, state, response);
+    assert.equal(resolved.state.journal[0].note, selected.payload.note);
+    assert.equal(resolved.metadata.records['journal:journal-1'].baseVersion, selected.version);
+    assert.equal(resolved.metadata.conflicts.length, 0);
+    prepared.metadata.records['journal:journal-1'].version = 8;
+    saveJournalSyncMetadata(storage, USER_A, prepared.metadata);
+    assert.throws(() => applyConflictResolution(storage, USER_A, state, response), /로컬 기록이 바뀌었습니다/);
+  }
+});
+
+test('offline edits retain the last acknowledged base version across retries and reloads', () => {
+  const storage = new MemoryStorage();
+  const state = createLocalPaperState(10_000, NOW);
+  const initial = prepareJournalSync(storage, USER_A, state, NOW);
+  assert.equal(initial.records[0].baseVersion, null);
+  const acknowledged = applyJournalSyncResult(storage, USER_A, state, syncResult({
+    uploaded: initial.records.map(row => ({ ...row, createdAt: NOW.toISOString(), serverUpdatedAt: NOW.toISOString() })),
+  }));
+  saveJournalSyncMetadata(storage, USER_A, acknowledged.metadata);
+  for (let edit = 1; edit <= 4; edit++) {
+    state.account.cashBalance = 10000 - edit * 100;
+    const prepared = prepareJournalSync(storage, USER_A, state, new Date(NOW.getTime() + edit * 1000));
+    assert.equal(prepared.records[0].version, edit + 1);
+    assert.equal(prepared.records[0].baseVersion, 1);
+    assert.equal(loadJournalSyncMetadata(storage, USER_A).metadata.records[`account:${state.account.id}`].baseVersion, 1);
+  }
+  const final = prepareJournalSync(storage, USER_A, state, new Date(NOW.getTime() + 6000));
+  const unchanged = applyJournalSyncResult(storage, USER_A, state, syncResult({
+    unchanged: final.records.map(({ kind, id, version }) => ({ kind, id, version })),
+  }));
+  assert.equal(unchanged.metadata.records[`account:${state.account.id}`].baseVersion, 5);
+});
+
+test('legacy metadata does not invent a server base and a newer server snapshot cannot overwrite dirty local content', () => {
+  const storage = new MemoryStorage();
+  const state = createLocalPaperState(10_000, NOW);
+  const initial = prepareJournalSync(storage, USER_A, state, NOW);
+  const key = `account:${state.account.id}`;
+  delete initial.metadata.records[key].baseVersion;
+  saveJournalSyncMetadata(storage, USER_A, initial.metadata);
+  const prepared = prepareJournalSync(storage, USER_A, state, NOW);
+  assert.equal(prepared.records[0].baseVersion, undefined);
+  const before = storage.getItem(syncMetadataStorageKey(USER_A));
+  const newer = { ...prepared.records[0], version: 9, payload: { ...prepared.records[0].payload, cashBalance: 1 },
+    createdAt: NOW.toISOString(), serverUpdatedAt: NOW.toISOString() };
+  assert.throws(() => applyJournalSyncResult(storage, USER_A, state, syncResult({ downloaded: [newer] })), /로컬 변경/);
+  assert.equal(storage.getItem(syncMetadataStorageKey(USER_A)), before);
+  assert.equal(state.account.cashBalance, 10000);
+});
+
 test('invalid server records cannot mutate the local state or synchronization acknowledgement', () => {
   const storage = new MemoryStorage();
   const state = createLocalPaperState(10_000, NOW);
