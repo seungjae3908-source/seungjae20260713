@@ -103,6 +103,91 @@ test('verified structured AI output can only reference caller-supplied fact inde
   assert.ok(prompt.length <= 1_950);
 });
 
+test('AI free text rejects invented URLs and unsupported numeric factual claims', async () => {
+  const inventedUrl = new MarketIntelligenceAiAnalyzer({
+    answerAiChatImpl: async () => aiResult(analysisAnswer({ summaryShort: '공식 공시는 https://fake.example 에서 확인된다.' })),
+  });
+  const inventedUrlResult = await inventedUrl.analyze(input({ analysisKey: 'e'.repeat(64) }));
+  assert.equal(inventedUrlResult.status, 'AI_ANALYSIS_UNAVAILABLE');
+  assert.equal(inventedUrlResult.reason, 'AI_STRUCTURED_RESPONSE_INVALID');
+
+  const inventedAmount = new MarketIntelligenceAiAnalyzer({
+    answerAiChatImpl: async () => aiResult(analysisAnswer({ summaryShort: '계약 금액은 999억원이다.' })),
+  });
+  const inventedAmountResult = await inventedAmount.analyze(input({ analysisKey: 'f'.repeat(64) }));
+  assert.equal(inventedAmountResult.status, 'AI_ANALYSIS_UNAVAILABLE');
+  assert.equal(inventedAmountResult.reason, 'AI_STRUCTURED_RESPONSE_INVALID');
+});
+
+test('numeric fact copied from public evidence remains allowed without becoming scanner authority', async () => {
+  const analyzer = new MarketIntelligenceAiAnalyzer({
+    answerAiChatImpl: async () => aiResult(analysisAnswer({ summaryShort: '공식 공시의 계약 금액은 120억원이며 추가 검증이 필요하다.', factEvidenceRefs: [1] })),
+  });
+  const result = await analyzer.analyze(input({
+    analysisKey: '1'.repeat(64),
+    sourceText: '공식 공시의 계약 금액은 120억원이다.',
+    evidenceFacts: ['공급계약 체결 사실', '계약 금액은 120억원'],
+  }));
+  assert.equal(result.status, 'ANALYZED');
+  assert.equal(result.analysis?.summaryShort, '공식 공시의 계약 금액은 120억원이며 추가 검증이 필요하다.');
+  assert.deepEqual(result.analysis?.factEvidenceRefs, [1]);
+  assert.equal(result.safety.executionAuthority, 'NONE');
+  assert.equal(result.safety.generatedFactsAllowed, false);
+});
+
+test('numeric grounding rejects substrings of larger facts and publication timestamps', async () => {
+  for (const summaryShort of ['확인된 수치는 75이다.', '확인된 수치는 26이다.']) {
+    const analyzer = new MarketIntelligenceAiAnalyzer({
+      answerAiChatImpl: async () => aiResult(analysisAnswer({ summaryShort })),
+    });
+    const result = await analyzer.analyze(input({
+      sourceText: '확인된 수치는 750이다.',
+      evidenceFacts: ['확인된 수치는 750이다.'],
+    }));
+    assert.equal(result.status, 'AI_ANALYSIS_UNAVAILABLE', summaryShort);
+    assert.equal(result.reason, 'AI_STRUCTURED_RESPONSE_INVALID');
+    assert.equal(result.analysis, null);
+    assert.equal(result.safety.orderAllowed, false);
+  }
+});
+
+test('numeric factual claims require a supporting cited fact, not an uncited corpus match', async () => {
+  for (const factEvidenceRefs of [[], [0]]) {
+    const analyzer = new MarketIntelligenceAiAnalyzer({
+      answerAiChatImpl: async () => aiResult(analysisAnswer({
+        summaryShort: '계약 금액은 120억원이다.', factEvidenceRefs,
+      })),
+    });
+    const result = await analyzer.analyze(input({
+      sourceText: '계약 금액은 120억원이다.',
+      evidenceFacts: ['공급계약 체결 사실', '계약 금액은 120억원이다.'],
+    }));
+    assert.equal(result.status, 'AI_ANALYSIS_UNAVAILABLE');
+    assert.equal(result.reason, 'AI_STRUCTURED_RESPONSE_INVALID');
+    assert.equal(result.analysis, null);
+  }
+});
+
+test('numeric grounding preserves exact values, currency and scale with harmless grouping differences', async () => {
+  const analyzer = new MarketIntelligenceAiAnalyzer({
+    answerAiChatImpl: async () => aiResult(analysisAnswer({
+      summaryShort: '공시 금액은 $1200.50이다.', factEvidenceRefs: [0],
+    })),
+  });
+  const result = await analyzer.analyze(input({ evidenceFacts: ['공시 금액은 $1,200.50이다.'] }));
+  assert.equal(result.status, 'ANALYZED');
+  assert.equal(result.safety.executionAuthority, 'NONE');
+
+  for (const summaryShort of ['공시 금액은 $1,200이다.', '공시 금액은 1200.50원이다.', '공시 금액은 1200.50억원이다.']) {
+    const invalid = new MarketIntelligenceAiAnalyzer({
+      answerAiChatImpl: async () => aiResult(analysisAnswer({ summaryShort, factEvidenceRefs: [0] })),
+    });
+    const rejected = await invalid.analyze(input({ evidenceFacts: ['공시 금액은 $1,200.50이다.'] }));
+    assert.equal(rejected.status, 'AI_ANALYSIS_UNAVAILABLE', summaryShort);
+    assert.equal(rejected.analysis, null);
+  }
+});
+
 test('malformed or out-of-range structured responses fail closed', async () => {
   const malformed = new MarketIntelligenceAiAnalyzer({ answerAiChatImpl: async () => aiResult('not-json') });
   const malformedResult = await malformed.analyze(input());

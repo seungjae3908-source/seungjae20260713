@@ -108,6 +108,33 @@ test('missing vault credentials fail closed before any provider call', async () 
   assert.equal(providerCalls, 0);
 });
 
+test('caller abort during credential lookup blocks private provider invocation', async () => {
+  let providerCalls = 0;
+  const controller = new AbortController();
+  const readers = createVaultBackedAccountReaders({
+    repositoryFactory: () => ({
+      get: async () => {
+        controller.abort(new Error('client disconnected'));
+        return record('upbit');
+      },
+      save: async () => { throw new Error('runtime reader must never mutate credential storage'); },
+    }),
+    decryptCredentials: () => ({ accessKey: 'UPBIT_ACCESS_RUNTIME_TEST_ONLY', secretKey: 'UPBIT_SECRET_RUNTIME_TEST_ONLY' }),
+    fetchImpl: async () => {
+      providerCalls += 1;
+      return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+    },
+  });
+
+  await assert.rejects(
+    () => readers.upbit!(SCOPE, controller.signal),
+    (error: unknown) => error instanceof AccountReadonlyError
+      && error.code === 'PROVIDER_TIMEOUT'
+      && error.retryable === true,
+  );
+  assert.equal(providerCalls, 0);
+});
+
 test('stalled private account provider is aborted by the bounded server deadline', async () => {
   let providerCalls = 0;
   const readers = createVaultBackedAccountReaders({

@@ -6,6 +6,18 @@ import {
   TRADING_RISK_POLICY,
   type RiskEngineInput,
 } from './trading-risk-engine.service';
+import { createPaperTradingState } from './paper-trading-core.service';
+import { createImmutablePaperTradingStateSnapshot } from './paper-trading-state-snapshot.service';
+import {
+  buildAuthoritativePaperRiskSizingEvidence,
+  type AuthoritativePaperRiskSizingInput,
+  type AuthoritativePaperRiskSizingMarket,
+} from './authoritative-paper-risk-sizing-source.service';
+import {
+  buildAuthoritativePaperRiskSizingFromGenericRiskPolicySource,
+  createAuthoritativePaperGenericRiskPolicyProducer,
+  type AuthoritativePaperGenericRiskPolicyRecordV1,
+} from './authoritative-paper-generic-risk-policy-producer.service';
 
 const baseInput = (patch: Partial<RiskEngineInput> = {}): RiskEngineInput => ({
   market: 'crypto-futures',
@@ -328,4 +340,472 @@ test('missing exchange quantity rules do not fabricate values', () => {
   }));
   assert.ok((result.recommendedQuantity ?? 0) > 0);
   assert.ok(result.warnings.includes('거래소 최소 주문 규칙을 확인할 수 없습니다.'));
+});
+
+const AUTHORITATIVE_NOW_MS = Date.parse('2026-08-28T04:30:00.000Z');
+const AUTHORITATIVE_RESEARCH_SHA = 'a'.repeat(40);
+const AUTHORITATIVE_PAPER_SHA = 'b'.repeat(40);
+const AUTHORITATIVE_ACCOUNT_BINDING = 'c'.repeat(64);
+
+function authoritativeSnapshot(
+  market: AuthoritativePaperRiskSizingMarket,
+  observedAtMs = AUTHORITATIVE_NOW_MS - 1_000,
+  maximumAgeMs = 30_000,
+) {
+  const state = createPaperTradingState(10_000, new Date(observedAtMs));
+  return createImmutablePaperTradingStateSnapshot({
+    state,
+    sourceOwner: 'authoritative-paper-risk-sizing-test',
+    sourceSha: AUTHORITATIVE_PAPER_SHA,
+    market,
+    currency: market === 'US_STOCK' ? 'USD' : market === 'CRYPTO_FUTURES' ? 'USDT' : 'KRW',
+    provenance: ['TEST_AUTHORITATIVE_PAPER_STATE'],
+    publisherAccountIdSha256: AUTHORITATIVE_ACCOUNT_BINDING,
+    observedAtMs,
+    maximumAgeMs,
+  });
+}
+
+function authoritativeSizingInput(
+  market: AuthoritativePaperRiskSizingMarket = 'CRYPTO_FUTURES',
+  symbol = 'BTCUSDT',
+): AuthoritativePaperRiskSizingInput {
+  const observedAtMs = AUTHORITATIVE_NOW_MS - 1_000;
+  const snapshot = authoritativeSnapshot(market, observedAtMs);
+  const isFutures = market === 'CRYPTO_FUTURES';
+  const isStock = market === 'KR_STOCK' || market === 'US_STOCK';
+  const quantityStep = isStock ? 1 : 0.001;
+  const quantityPrecision = isStock ? 0 : 3;
+  return {
+    market,
+    symbol,
+    strategyScope: 'swing',
+    side: 'LONG',
+    researchCodeSha: AUTHORITATIVE_RESEARCH_SHA,
+    paperStateSourceSha: AUTHORITATIVE_PAPER_SHA,
+    paperAccountId: snapshot.accountId,
+    riskPolicy: {
+      schemaVersion: 'authoritative-paper-generic-risk-policy-evidence-v1',
+      policyId: 'TEST_EXPLICIT_POLICY',
+      policyVersion: 'v1',
+      source: 'TEST_EXPLICIT_RISK_POLICY_SOURCE',
+      provenance: ['TEST_POLICY_PROVENANCE'],
+      observedAtMs,
+      maximumAgeMs: 30_000,
+      researchCodeSha: AUTHORITATIVE_RESEARCH_SHA,
+      marketScopes: [market],
+      strategyScopes: ['swing'],
+      symbolScopes: [symbol],
+      riskPercent: 0.5,
+      requestedLeverage: isFutures ? 2 : 1,
+      maximumLeverage: isFutures ? 5 : null,
+      marginMode: isFutures ? 'isolated' : 'cash',
+    },
+    paperStateSnapshot: snapshot,
+    contractRulesEvidence: {
+      schemaVersion: 'authoritative-paper-contract-rules-evidence-v1',
+      ruleVersion: 'TEST_RULES_V1',
+      market,
+      symbol,
+      source: 'TEST_CANONICAL_CONTRACT_RULES',
+      provenance: ['TEST_CONTRACT_RULES_PROVENANCE'],
+      observedAtMs,
+      maximumAgeMs: 30_000,
+      rules: {
+        symbol,
+        quantityStep,
+        quantityPrecision,
+        minimumQuantity: quantityStep,
+        minimumNotional: 1,
+        maximumLeverage: isFutures ? 50 : null,
+        maintenanceMarginRate: isFutures ? 0.005 : null,
+        status: 'live',
+        updatedAt: new Date(observedAtMs).toISOString(),
+        warnings: [],
+      },
+    },
+    marketEvidence: {
+      schemaVersion: 'authoritative-paper-market-risk-evidence-v1',
+      market,
+      symbol,
+      entryPrice: 100,
+      stopLossPrice: 99,
+      source: 'TEST_PUBLIC_MARKET_EVIDENCE',
+      provenance: ['TEST_MARKET_PROVENANCE'],
+      observedAtMs,
+      maximumAgeMs: 30_000,
+      status: 'live',
+    },
+    costEvidence: {
+      schemaVersion: 'authoritative-paper-risk-cost-evidence-v1',
+      market,
+      symbol,
+      source: 'TEST_EXECUTION_COST_EVIDENCE',
+      provenance: ['TEST_COST_PROVENANCE'],
+      observedAtMs,
+      maximumAgeMs: 30_000,
+      entryFeeRate: 0.0006,
+      exitFeeRate: 0.0006,
+      slippageRate: 0.0005,
+      estimatedFundingRate: isFutures ? 0.0001 : 0,
+    },
+  };
+}
+
+test('authoritative Paper risk sizing builds target quantity only from fresh explicit evidence', () => {
+  const result = buildAuthoritativePaperRiskSizingEvidence(authoritativeSizingInput(), AUTHORITATIVE_NOW_MS);
+  assert.equal(result.status, 'PRESENT');
+  assert.equal(result.valid, true);
+  assert.equal(result.eligible, true);
+  assert.ok((result.targetQuantity ?? 0) > 0);
+  assert.equal(result.targetQuantity, result.roundedQuantity);
+  assert.equal(result.equity, 10_000);
+  assert.equal(result.riskPercent, 0.5);
+  assert.equal(result.requestedLeverage, 2);
+  assert.equal(result.effectiveLeverage, 2);
+  assert.equal(result.executionAuthority, 'NONE');
+  assert.equal(result.liveTrading, false);
+  assert.equal(result.privateApiAllowed, false);
+  assert.equal(result.privateProviderCallCount, 0);
+  assert.equal(result.realOrderSideEffectCount, 0);
+});
+
+test('authoritative Paper risk sizing supports all four markets without generic policy defaults', () => {
+  const cases: Array<[AuthoritativePaperRiskSizingMarket, string]> = [
+    ['KR_STOCK', '005930'],
+    ['US_STOCK', 'AAPL'],
+    ['CRYPTO_SPOT', 'KRW-BTC'],
+    ['CRYPTO_FUTURES', 'BTCUSDT'],
+  ];
+  for (const [market, symbol] of cases) {
+    const result = buildAuthoritativePaperRiskSizingEvidence(
+      authoritativeSizingInput(market, symbol),
+      AUTHORITATIVE_NOW_MS,
+    );
+    assert.equal(result.status, 'PRESENT', `${market} should be evidence-complete`);
+    assert.ok((result.targetQuantity ?? 0) > 0, `${market} should have a target quantity`);
+  }
+});
+
+test('authoritative Paper risk sizing blocks missing and stale risk policy', () => {
+  const missing = authoritativeSizingInput();
+  const missingResult = buildAuthoritativePaperRiskSizingEvidence(
+    { ...missing, riskPolicy: null },
+    AUTHORITATIVE_NOW_MS,
+  );
+  assert.equal(missingResult.status, 'BLOCKED_DATA');
+  assert.equal(missingResult.targetQuantity, null);
+  assert.ok(missingResult.blockers.includes('RISK_POLICY_MISSING'));
+
+  const stale = authoritativeSizingInput();
+  const staleResult = buildAuthoritativePaperRiskSizingEvidence({
+    ...stale,
+    riskPolicy: {
+      ...(stale.riskPolicy as Record<string, unknown>),
+      observedAtMs: AUTHORITATIVE_NOW_MS - 60_000,
+      maximumAgeMs: 30_000,
+    },
+  }, AUTHORITATIVE_NOW_MS);
+  assert.equal(staleResult.status, 'BLOCKED_DATA');
+  assert.equal(staleResult.targetQuantity, null);
+  assert.ok(staleResult.blockers.includes('RISK_POLICY_STALE_OR_INVALID'));
+});
+
+test('authoritative Paper risk sizing rejects invalid risk percent and missing leverage without inventing values', () => {
+  for (const riskPercent of [Number.NaN, Number.POSITIVE_INFINITY, 0, -1]) {
+    const input = authoritativeSizingInput();
+    const result = buildAuthoritativePaperRiskSizingEvidence({
+      ...input,
+      riskPolicy: { ...(input.riskPolicy as Record<string, unknown>), riskPercent },
+    }, AUTHORITATIVE_NOW_MS);
+    assert.equal(result.status, 'BLOCKED_DATA');
+    assert.equal(result.targetQuantity, null);
+    assert.ok(result.blockers.includes('RISK_POLICY_RISK_PERCENT_INVALID'));
+  }
+
+  const input = authoritativeSizingInput();
+  const result = buildAuthoritativePaperRiskSizingEvidence({
+    ...input,
+    riskPolicy: { ...(input.riskPolicy as Record<string, unknown>), requestedLeverage: null },
+  }, AUTHORITATIVE_NOW_MS);
+  assert.equal(result.status, 'BLOCKED_DATA');
+  assert.equal(result.requestedLeverage, null);
+  assert.equal(result.targetQuantity, null);
+  assert.ok(result.blockers.includes('RISK_POLICY_REQUESTED_LEVERAGE_MISSING_OR_INVALID'));
+});
+
+test('authoritative Paper risk sizing blocks wrong market and strategy policy scopes', () => {
+  const marketInput = authoritativeSizingInput();
+  const wrongMarket = buildAuthoritativePaperRiskSizingEvidence({
+    ...marketInput,
+    riskPolicy: { ...(marketInput.riskPolicy as Record<string, unknown>), marketScopes: ['US_STOCK'] },
+  }, AUTHORITATIVE_NOW_MS);
+  assert.equal(wrongMarket.status, 'BLOCKED_DATA');
+  assert.ok(wrongMarket.blockers.includes('RISK_POLICY_WRONG_MARKET_SCOPE'));
+
+  const strategyInput = authoritativeSizingInput();
+  const wrongStrategy = buildAuthoritativePaperRiskSizingEvidence({
+    ...strategyInput,
+    riskPolicy: { ...(strategyInput.riskPolicy as Record<string, unknown>), strategyScopes: ['scalping'] },
+  }, AUTHORITATIVE_NOW_MS);
+  assert.equal(wrongStrategy.status, 'BLOCKED_DATA');
+  assert.ok(wrongStrategy.blockers.includes('RISK_POLICY_WRONG_STRATEGY_SCOPE'));
+});
+
+test('authoritative Paper risk sizing blocks missing stale and wrong-account Paper state', () => {
+  const missingInput = authoritativeSizingInput();
+  const missing = buildAuthoritativePaperRiskSizingEvidence(
+    { ...missingInput, paperStateSnapshot: null },
+    AUTHORITATIVE_NOW_MS,
+  );
+  assert.equal(missing.status, 'BLOCKED_DATA');
+  assert.equal(missing.targetQuantity, null);
+  assert.ok(missing.blockers.includes('PAPER_STATE_MISSING_OR_INVALID'));
+
+  const staleInput = authoritativeSizingInput();
+  const staleSnapshot = authoritativeSnapshot('CRYPTO_FUTURES', AUTHORITATIVE_NOW_MS - 60_000, 30_000);
+  const stale = buildAuthoritativePaperRiskSizingEvidence({
+    ...staleInput,
+    paperStateSnapshot: staleSnapshot,
+    paperAccountId: staleSnapshot.accountId,
+  }, AUTHORITATIVE_NOW_MS);
+  assert.equal(stale.status, 'BLOCKED_DATA');
+  assert.equal(stale.targetQuantity, null);
+  assert.ok(stale.blockers.includes('PAPER_STATE_STALE'));
+
+  const wrongAccountInput = authoritativeSizingInput();
+  const wrongAccount = buildAuthoritativePaperRiskSizingEvidence({
+    ...wrongAccountInput,
+    paperAccountId: 'different-paper-account',
+  }, AUTHORITATIVE_NOW_MS);
+  assert.equal(wrongAccount.status, 'BLOCKED_DATA');
+  assert.equal(wrongAccount.targetQuantity, null);
+  assert.ok(wrongAccount.blockers.includes('PAPER_STATE_WRONG_ACCOUNT'));
+});
+
+test('authoritative Paper risk sizing blocks unavailable contract rules and does not fabricate minimum quantity', () => {
+  const missingInput = authoritativeSizingInput();
+  const missing = buildAuthoritativePaperRiskSizingEvidence(
+    { ...missingInput, contractRulesEvidence: null },
+    AUTHORITATIVE_NOW_MS,
+  );
+  assert.equal(missing.status, 'BLOCKED_DATA');
+  assert.equal(missing.targetQuantity, null);
+  assert.ok(missing.blockers.includes('CONTRACT_RULES_MISSING'));
+
+  const minimumInput = authoritativeSizingInput();
+  const contract = minimumInput.contractRulesEvidence as Record<string, unknown>;
+  const rules = contract.rules as Record<string, unknown>;
+  const minimumBlocked = buildAuthoritativePaperRiskSizingEvidence({
+    ...minimumInput,
+    contractRulesEvidence: {
+      ...contract,
+      rules: { ...rules, minimumQuantity: 1_000 },
+    },
+  }, AUTHORITATIVE_NOW_MS);
+  assert.equal(minimumBlocked.status, 'NO_TRADE');
+  assert.equal(minimumBlocked.targetQuantity, null);
+  assert.ok(minimumBlocked.blockers.includes('RISK_ENGINE_MINIMUM_QUANTITY'));
+});
+
+test('authoritative Paper risk sizing rejects non-finite zero and negative market inputs', () => {
+  for (const entryPrice of [Number.NaN, Number.POSITIVE_INFINITY, 0, -1]) {
+    const input = authoritativeSizingInput();
+    const result = buildAuthoritativePaperRiskSizingEvidence({
+      ...input,
+      marketEvidence: { ...(input.marketEvidence as Record<string, unknown>), entryPrice },
+    }, AUTHORITATIVE_NOW_MS);
+    assert.equal(result.status, 'BLOCKED_DATA');
+    assert.equal(result.targetQuantity, null);
+    assert.ok(result.blockers.includes('MARKET_ENTRY_PRICE_INVALID'));
+  }
+});
+
+test('authoritative Paper risk sizing blocks unsupported markets and non-futures short side', () => {
+  const unsupportedInput = authoritativeSizingInput();
+  const unsupported = buildAuthoritativePaperRiskSizingEvidence({
+    ...unsupportedInput,
+    market: 'FOREX' as AuthoritativePaperRiskSizingMarket,
+  }, AUTHORITATIVE_NOW_MS);
+  assert.equal(unsupported.status, 'BLOCKED_DATA');
+  assert.equal(unsupported.targetQuantity, null);
+  assert.ok(unsupported.blockers.includes('UNSUPPORTED_MARKET'));
+
+  const stockInput = authoritativeSizingInput('US_STOCK', 'AAPL');
+  const unsupportedSide = buildAuthoritativePaperRiskSizingEvidence({
+    ...stockInput,
+    side: 'SHORT',
+  }, AUTHORITATIVE_NOW_MS);
+  assert.equal(unsupportedSide.status, 'BLOCKED_DATA');
+  assert.equal(unsupportedSide.targetQuantity, null);
+  assert.ok(unsupportedSide.blockers.includes('UNSUPPORTED_SIDE'));
+});
+
+function canonicalRiskPolicyRecord(
+  patch: Partial<AuthoritativePaperGenericRiskPolicyRecordV1> = {},
+): AuthoritativePaperGenericRiskPolicyRecordV1 {
+  return {
+    schemaVersion: 'authoritative-paper-generic-risk-policy-record-v1',
+    recordId: 'paper-risk-policy-record:test-explicit-v1',
+    recordVersion: 'record-v1',
+    policyId: 'TEST_EXPLICIT_POLICY',
+    policyVersion: 'v1',
+    source: 'TEST_CANONICAL_RISK_POLICY_RECORD',
+    provenance: ['TEST_SIGNED_POLICY_RECORD'],
+    observedAtMs: AUTHORITATIVE_NOW_MS - 1_000,
+    maximumAgeMs: 30_000,
+    researchCodeSha: AUTHORITATIVE_RESEARCH_SHA,
+    marketScopes: ['CRYPTO_FUTURES'],
+    strategyScopes: ['swing'],
+    symbolScopes: ['BTCUSDT'],
+    riskPercent: 0.5,
+    requestedLeverage: 2,
+    maximumLeverage: 5,
+    marginMode: 'isolated',
+    ...patch,
+  };
+}
+
+function authoritativeSizingCallerInput() {
+  const input = authoritativeSizingInput();
+  const { riskPolicy, ...callerInput } = input;
+  void riskPolicy;
+  return callerInput;
+}
+
+test('canonical Paper risk policy producer blocks a missing record before sizing', async () => {
+  const producer = createAuthoritativePaperGenericRiskPolicyProducer({
+    readCanonicalRecord: async () => null,
+    now: () => AUTHORITATIVE_NOW_MS,
+  });
+  const result = await buildAuthoritativePaperRiskSizingFromGenericRiskPolicySource(
+    authoritativeSizingCallerInput(),
+    producer,
+    AUTHORITATIVE_NOW_MS,
+  );
+
+  assert.equal(result.policySource.status, 'BLOCKED_DATA');
+  assert.ok(result.policySource.blockers.includes('RISK_POLICY_CANONICAL_RECORD_MISSING'));
+  assert.equal(result.policySource.policyEvidence, null);
+  assert.equal(result.sizingEvidence.status, 'BLOCKED_DATA');
+  assert.equal(result.sizingEvidence.targetQuantity, null);
+});
+
+test('canonical Paper risk policy producer blocks stale and wrong-research records', async () => {
+  const cases: Array<[string, Partial<AuthoritativePaperGenericRiskPolicyRecordV1>, string]> = [
+    ['stale', {
+      observedAtMs: AUTHORITATIVE_NOW_MS - 60_000,
+      maximumAgeMs: 30_000,
+    }, 'RISK_POLICY_CANONICAL_RECORD_STALE_OR_INVALID'],
+    ['wrong research SHA', {
+      researchCodeSha: 'd'.repeat(40),
+    }, 'RISK_POLICY_CANONICAL_RECORD_RESEARCH_SHA_MISMATCH'],
+  ];
+
+  for (const [label, patch, blocker] of cases) {
+    const producer = createAuthoritativePaperGenericRiskPolicyProducer({
+      readCanonicalRecord: () => canonicalRiskPolicyRecord(patch),
+      now: () => AUTHORITATIVE_NOW_MS,
+    });
+    const result = await buildAuthoritativePaperRiskSizingFromGenericRiskPolicySource(
+      authoritativeSizingCallerInput(),
+      producer,
+      AUTHORITATIVE_NOW_MS,
+    );
+    assert.equal(result.policySource.status, 'BLOCKED_DATA', label);
+    assert.ok(result.policySource.blockers.includes(blocker), label);
+    assert.equal(result.sizingEvidence.status, 'BLOCKED_DATA', label);
+    assert.equal(result.sizingEvidence.targetQuantity, null, label);
+  }
+});
+
+test('canonical Paper risk policy producer blocks wrong market strategy and symbol scopes', async () => {
+  const cases: Array<[string, Partial<AuthoritativePaperGenericRiskPolicyRecordV1>, string]> = [
+    ['market', { marketScopes: ['US_STOCK'] }, 'RISK_POLICY_CANONICAL_RECORD_WRONG_MARKET_SCOPE'],
+    ['strategy', { strategyScopes: ['scalping'] }, 'RISK_POLICY_CANONICAL_RECORD_WRONG_STRATEGY_SCOPE'],
+    ['symbol', { symbolScopes: ['ETHUSDT'] }, 'RISK_POLICY_CANONICAL_RECORD_WRONG_SYMBOL_SCOPE'],
+  ];
+
+  for (const [label, patch, blocker] of cases) {
+    const producer = createAuthoritativePaperGenericRiskPolicyProducer({
+      readCanonicalRecord: () => canonicalRiskPolicyRecord(patch),
+      now: () => AUTHORITATIVE_NOW_MS,
+    });
+    const result = await buildAuthoritativePaperRiskSizingFromGenericRiskPolicySource(
+      authoritativeSizingCallerInput(),
+      producer,
+      AUTHORITATIVE_NOW_MS,
+    );
+    assert.equal(result.policySource.status, 'BLOCKED_DATA', label);
+    assert.ok(result.policySource.blockers.includes(blocker), label);
+    assert.equal(result.sizingEvidence.status, 'BLOCKED_DATA', label);
+    assert.equal(result.sizingEvidence.targetQuantity, null, label);
+  }
+});
+
+test('canonical Paper risk policy producer blocks invalid explicit risk and leverage values', async () => {
+  const cases: Array<[string, Record<string, unknown>, string]> = [
+    ['risk percent', { riskPercent: 0 }, 'RISK_POLICY_CANONICAL_RECORD_RISK_PERCENT_INVALID'],
+    ['requested leverage', { requestedLeverage: 0 }, 'RISK_POLICY_CANONICAL_RECORD_REQUESTED_LEVERAGE_INVALID'],
+    ['maximum leverage', { maximumLeverage: 0 }, 'RISK_POLICY_CANONICAL_RECORD_MAXIMUM_LEVERAGE_INVALID'],
+    ['leverage ordering', {
+      requestedLeverage: 6,
+      maximumLeverage: 5,
+    }, 'RISK_POLICY_CANONICAL_RECORD_REQUESTED_LEVERAGE_EXCEEDS_MAXIMUM'],
+    ['margin mode', { marginMode: 'portfolio' }, 'RISK_POLICY_CANONICAL_RECORD_MARGIN_MODE_INVALID'],
+  ];
+
+  for (const [label, patch, blocker] of cases) {
+    const producer = createAuthoritativePaperGenericRiskPolicyProducer({
+      readCanonicalRecord: () => ({ ...canonicalRiskPolicyRecord(), ...patch }),
+      now: () => AUTHORITATIVE_NOW_MS,
+    });
+    const result = await buildAuthoritativePaperRiskSizingFromGenericRiskPolicySource(
+      authoritativeSizingCallerInput(),
+      producer,
+      AUTHORITATIVE_NOW_MS,
+    );
+    assert.equal(result.policySource.status, 'BLOCKED_DATA', label);
+    assert.ok(result.policySource.blockers.includes(blocker), label);
+    assert.equal(result.sizingEvidence.status, 'BLOCKED_DATA', label);
+    assert.equal(result.sizingEvidence.targetQuantity, null, label);
+  }
+});
+
+test('canonical record flows through #772 producer into #769 sizing only when complete', async () => {
+  let sourceCalls = 0;
+  const producer = createAuthoritativePaperGenericRiskPolicyProducer({
+    readCanonicalRecord: async (request) => {
+      sourceCalls += 1;
+      assert.deepEqual(request, {
+        market: 'CRYPTO_FUTURES',
+        symbol: 'BTCUSDT',
+        strategyScope: 'swing',
+        researchCodeSha: AUTHORITATIVE_RESEARCH_SHA,
+      });
+      return canonicalRiskPolicyRecord();
+    },
+    now: () => AUTHORITATIVE_NOW_MS,
+  });
+  const result = await buildAuthoritativePaperRiskSizingFromGenericRiskPolicySource(
+    authoritativeSizingCallerInput(),
+    producer,
+    AUTHORITATIVE_NOW_MS,
+  );
+
+  assert.equal(sourceCalls, 1);
+  assert.equal(result.policySource.status, 'PRESENT');
+  assert.equal(result.policySource.policyEvidence?.policyId, 'TEST_EXPLICIT_POLICY');
+  assert.equal(result.policySource.policyEvidence?.riskPercent, 0.5);
+  assert.equal(result.policySource.policyEvidence?.requestedLeverage, 2);
+  assert.equal(result.policySource.policyEvidence?.marginMode, 'isolated');
+  assert.equal(result.sizingEvidence.status, 'PRESENT');
+  assert.ok((result.sizingEvidence.targetQuantity ?? 0) > 0);
+  assert.equal(result.executionAuthority, 'NONE');
+  assert.equal(result.privateApiAllowed, false);
+  assert.equal(result.liveTrading, false);
+  assert.equal(result.realOrderAllowed, false);
+  assert.equal(result.financialMutationAllowed, false);
+  assert.equal(result.sizingEvidence.privateProviderCallCount, 0);
+  assert.equal(result.sizingEvidence.realOrderSideEffectCount, 0);
 });
