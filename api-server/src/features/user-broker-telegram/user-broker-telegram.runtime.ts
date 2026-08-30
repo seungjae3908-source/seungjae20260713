@@ -146,7 +146,7 @@ export async function queueManualPortfolioNotifications(
   userId: string,
   uploaded: StoredPaperJournalRecord[],
   service: UserBrokerTelegramService,
-  membership: MemberTier = 'admin',
+  membership: MemberTier = 'pending',
 ) {
   let queued = 0;
   for (const record of uploaded) {
