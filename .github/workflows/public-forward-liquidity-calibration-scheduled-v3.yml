@@ -210,11 +210,27 @@ jobs:
             node market-intelligence-sidecar/scripts/run-public-forward-liquidity-capture-seam-v3.mjs mark-stale-main
           fi
 
+      - name: Choose immutable attempt artifact name
+        id: attempt_name
+        shell: bash
+        env:
+          CANONICAL_NAME: ${{ steps.slot.outputs.raw_artifact_name }}
+          PREFLIGHT_ELIGIBLE: ${{ steps.slot.outputs.preflight_eligible }}
+          DUPLICATE: ${{ steps.duplicate.outputs.duplicate }}
+        run: |
+          set -euo pipefail
+          if [[ "$PREFLIGHT_ELIGIBLE" == 'true' && "$DUPLICATE" != 'true' && "$GITHUB_RUN_ATTEMPT" == '1' ]]; then
+            NAME="$CANONICAL_NAME"
+          else
+            NAME="$CANONICAL_NAME-diagnostic-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          fi
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+
       - name: Upload immutable slot attempt artifact
         id: capture_upload
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.slot.outputs.raw_artifact_name }}
+          name: ${{ steps.attempt_name.outputs.name }}
           path: public-forward-liquidity-capture
           if-no-files-found: error
           retention-days: 90
@@ -224,7 +240,7 @@ jobs:
           OUTPUT_DIR: public-forward-liquidity-capture
           ARTIFACT_ID: ${{ steps.capture_upload.outputs.artifact-id }}
           ARTIFACT_DIGEST: ${{ steps.capture_upload.outputs.artifact-digest }}
-          ARTIFACT_NAME: ${{ steps.slot.outputs.raw_artifact_name }}
+          ARTIFACT_NAME: ${{ steps.attempt_name.outputs.name }}
         run: node market-intelligence-sidecar/scripts/run-public-forward-liquidity-capture-seam-v3.mjs bind-artifact
 
       - name: Upload finalized scheduled receipt
@@ -232,6 +248,69 @@ jobs:
         with:
           name: public-forward-liquidity-v3-slot-receipt-${{ steps.slot.outputs.slot_index }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: public-forward-liquidity-capture/artifact-receipt.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Download prior immutable V3 scheduled receipt artifacts
+        uses: actions/github-script@v7
+        env:
+          CURRENT_RECEIPT_NAME: public-forward-liquidity-v3-slot-receipt-${{ steps.slot.outputs.slot_index }}-${{ github.run_id }}-${{ github.run_attempt }}
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const target = 'public-forward-liquidity-v3-attempt-receipt-zips';
+            fs.mkdirSync(target, { recursive: true });
+            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+            const currentName = process.env.CURRENT_RECEIPT_NAME;
+            const candidates = artifacts
+              .filter((artifact) => !artifact.expired)
+              .filter((artifact) => /^public-forward-liquidity-v3-slot-receipt-\d+-\d+-\d+$/.test(artifact.name))
+              .filter((artifact) => artifact.name !== currentName)
+              .sort((left, right) => left.id - right.id);
+            for (const artifact of candidates) {
+              const response = await github.rest.actions.downloadArtifact({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                artifact_id: artifact.id,
+                archive_format: 'zip',
+              });
+              fs.writeFileSync(path.join(target, `${artifact.id}.zip`), Buffer.from(response.data));
+            }
+            core.info(`downloaded ${candidates.length} prior V3 receipt artifacts`);
+
+      - name: Unpack prior receipts and add current receipt exactly once
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p public-forward-liquidity-v3-attempt-receipts/current
+          shopt -s nullglob
+          for archive in public-forward-liquidity-v3-attempt-receipt-zips/*.zip; do
+            base="$(basename "$archive" .zip)"
+            mkdir -p "public-forward-liquidity-v3-attempt-receipts/$base"
+            unzip -q "$archive" -d "public-forward-liquidity-v3-attempt-receipts/$base"
+          done
+          cp public-forward-liquidity-capture/artifact-receipt.json             public-forward-liquidity-v3-attempt-receipts/current/artifact-receipt.json
+
+      - name: Build immutable V3 complete-window attempt log
+        shell: bash
+        env:
+          ATTEMPT_RECEIPT_ROOT: public-forward-liquidity-v3-attempt-receipts
+          OUTPUT_DIR: public-forward-liquidity-v3-complete-window
+        run: |
+          set -euo pipefail
+          export ATTEMPT_LOG_AS_OF_MS="$(date +%s%3N)"
+          node market-intelligence-sidecar/scripts/run-public-forward-liquidity-capture-seam-v3.mjs complete-window
+
+      - name: Upload immutable V3 complete-window attempt log
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-forward-liquidity-v3-complete-window-${{ github.run_id }}-${{ github.run_attempt }}
+          path: public-forward-liquidity-v3-complete-window
           if-no-files-found: error
           retention-days: 90
 
