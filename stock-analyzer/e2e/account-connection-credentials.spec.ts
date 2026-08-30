@@ -1,8 +1,26 @@
 import { test, expect, type Page, type Route } from '@playwright/test';
+import { accountSnapshotForDisplay, parseReadonlyAccount } from '../src/lib/readonly-account-evidence';
 
 const NOW = '2026-08-17T08:30:00.000Z';
 const USER_ID = '88888888-8888-4888-8888-888888888888';
 const AUTH_STORAGE_KEY = 'sb-127-auth-token';
+
+test('canonical account evidence rejects unsafe or malformed snapshots and expires old reads', () => {
+  const time = Date.parse(NOW);
+  const good = emptySnapshot('upbit', { connected: true, status: 'CONNECTED', lastGoodAt: NOW, errorCode: null, balances: [{ currency: 'KRW', available: 0, locked: 0, total: 0, estimatedKrwValue: null }] });
+  expect(parseReadonlyAccount(good, 'upbit', time)).toEqual(good);
+  for (const invalid of [
+    {}, { ...good, provider: 'bitget' }, { ...good, connected: 'true' }, { ...good, connected: false },
+    { ...good, orderRequests: 1 }, { ...good, credentialsReturned: true }, { ...good, liveTradingEnabled: true },
+    { ...good, checkedAt: null }, { ...good, checkedAt: '2026-02-30T00:00:00Z' },
+    { ...good, balances: {} }, { ...good, balances: [{ currency: 'KRW', total: true }] },
+    { ...good, balances: [{ total: 0 }] }, { ...good, positions: [{ market: 'UPBIT', quantity: 1 }] },
+  ]) expect(() => parseReadonlyAccount(invalid, 'upbit', time)).toThrow();
+  const parsed = parseReadonlyAccount(good, 'upbit', time);
+  expect(accountSnapshotForDisplay(parsed, time + 60_001)).toMatchObject({ stale: true, status: 'STALE' });
+  expect(accountSnapshotForDisplay(parsed, time)).toMatchObject({ stale: false, status: 'CONNECTED' });
+  expect(accountSnapshotForDisplay({ ...parsed, lastGoodAt: null }, time)).toMatchObject({ stale: true, status: 'STALE' });
+});
 
 function fulfill(route: Route, body: unknown, status = 200) {
   return route.fulfill({ status, contentType: 'application/json; charset=utf-8', body: JSON.stringify(body) });
@@ -34,13 +52,14 @@ async function installRegular(page: Page) {
   page.on('request', (request) => {
     const path = new URL(request.url()).pathname;
     if (/\/(?:order|orders|cancel|transfer|withdraw|deposit)(?:\/|$)/i.test(path) && request.method() !== 'GET') diagnostics.forbiddenTradeMutations.push(`${request.method()} ${path}`);
-    if (path.startsWith('/api/trade-automation/connections/')) diagnostics.legacyConnectionCalls.push(`${request.method()} ${path}`);
+    if (path.startsWith('/api/trade-automation/connections/') || /^\/api\/crypto\/(?:spot\/accounts|futures\/(?:account|positions))$/.test(path)) diagnostics.legacyConnectionCalls.push(`${request.method()} ${path}`);
   });
 
   await page.route('**/__e2e-supabase/**', async (route) => {
     const pathname = new URL(route.request().url()).pathname;
     if (pathname.endsWith('/rest/v1/profiles')) return fulfill(route, { id: USER_ID, login_name: 'account-link-regular', display_name: '계좌연동 사용자', role: 'regular', status: 'approved', membership_level: 'regular', is_active: true, permissions_updated_at: NOW, updated_at: NOW });
     if (pathname.endsWith('/auth/v1/user')) return fulfill(route, { id: USER_ID, aud: 'authenticated', role: 'authenticated', email: 'account-link@accounts.invalid', app_metadata: { provider: 'email', providers: ['email'] }, user_metadata: { display_name: '계좌연동 사용자' }, identities: [], created_at: NOW });
+    if (pathname.endsWith('/rest/v1/portfolio_holdings')) return fulfill(route, []);
     return fulfill(route, { ok: true });
   });
 
@@ -130,11 +149,14 @@ test('Toss credential form is read-only, Account Seq is optional, and mobile dia
 
 test('account metrics distinguish real zero from missing, stale, and unavailable evidence', async ({ page }) => {
   const { assertClean } = await installRegular(page);
+  const observedAt = new Date().toISOString();
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === '/api/accounts/read-only/toss') return fulfill(route, emptySnapshot('toss', {
       connected: true,
       status: 'CONNECTED',
+      checkedAt: observedAt,
+      lastGoodAt: observedAt,
       errorCode: null,
       accounts: [],
       positions: [{ market: 'KR', symbol: '005930', quantity: 1, availableQuantity: 1, averageEntryPrice: null, currentPrice: null, marketValue: null, unrealizedPnl: 0, unrealizedPnlPercent: 0, leverage: null, liquidationPrice: null, marginMode: null, side: null }],
@@ -173,5 +195,74 @@ test('account metrics distinguish real zero from missing, stale, and unavailable
   await expect(bitget).toContainText('사용 불가');
 
   await expect(page.locator('body')).not.toContainText('Kiwoom');
+  assertClean();
+});
+
+const accountViewports = [
+  { width: 1440, height: 900 }, { width: 1024, height: 768 }, { width: 320, height: 740 },
+  { width: 360, height: 800 }, { width: 390, height: 844 }, { width: 412, height: 915 }, { width: 430, height: 932 },
+];
+for (const viewport of accountViewports) {
+  test(`coin portfolio uses member readonly evidence, clears failed refresh and never calls legacy private routes ${viewport.width}`, async ({ page }) => {
+    const { assertClean } = await installRegular(page);
+    await page.setViewportSize(viewport);
+    await page.addInitScript(() => localStorage.setItem('knowledge-info-asset-mode-v1', JSON.stringify({ asset: 'coin', stockMarket: 'KR', coinMarket: 'spot' })));
+    let malformed = false;
+    const reads: string[] = [];
+    await page.route('**/api/**', (route) => {
+      const pathname = new URL(route.request().url()).pathname;
+      if (pathname === '/api/accounts/read-only/upbit') {
+        reads.push(pathname);
+        const time = new Date().toISOString();
+        return fulfill(route, malformed ? { provider: 'upbit', connected: true, status: 'CONNECTED' } : emptySnapshot('upbit', {
+          connected: true, status: 'CONNECTED', checkedAt: time, lastGoodAt: time, errorCode: null,
+          balances: [{ currency: 'KRW', available: 0, locked: 0, total: 0, estimatedKrwValue: null }],
+        }));
+      }
+      if (pathname === '/api/accounts/read-only/toss') return fulfill(route, emptySnapshot('toss'));
+      if (pathname === '/api/accounts/read-only/bitget') throw new Error('spot portfolio must not load futures credentials');
+      if (pathname === '/api/backup/latest') return fulfill(route, { ok: true, exists: false });
+      return fulfill(route, { ok: true, items: [], rows: [], results: [] });
+    });
+    await page.goto('/portfolio?tab=holdings');
+    const portfolio = page.getByTestId('portfolio-coin-readonly');
+    await expect(portfolio).toBeVisible();
+    const upbit = page.getByTestId('connection-upbit');
+    await expect(upbit).toContainText('연결됨');
+    await expect(upbit).toContainText('보유 자산 0개');
+    await expect(page.getByTestId('connection-bitget')).toHaveCount(0);
+    malformed = true;
+    await portfolio.getByRole('button', { name: '새로고침', exact: true }).click();
+    await expect(upbit).toContainText('조회 불가');
+    await expect(upbit).not.toContainText('연결됨');
+    await expect(upbit).not.toContainText('보유 자산 0개');
+    await expect(portfolio.getByRole('alert')).toContainText('ACCOUNT_RESPONSE_INVALID');
+    expect(reads.length).toBe(2);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width + 1);
+    assertClean();
+  });
+}
+
+test('account display stops presenting an old successful read as current', async ({ page }) => {
+  const { assertClean } = await installRegular(page);
+  const time = new Date();
+  await page.clock.install({ time });
+  await page.route('**/api/**', (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname === '/api/accounts/read-only/upbit') return fulfill(route, emptySnapshot('upbit', {
+      connected: true, status: 'CONNECTED', checkedAt: time.toISOString(), lastGoodAt: time.toISOString(), errorCode: null, balances: [],
+    }));
+    if (pathname === '/api/accounts/read-only/toss') return fulfill(route, emptySnapshot('toss'));
+    if (pathname === '/api/accounts/read-only/bitget') return fulfill(route, emptySnapshot('bitget'));
+    if (pathname === '/api/backup/latest') return fulfill(route, { ok: true, exists: false });
+    return fulfill(route, { ok: true, items: [], rows: [], results: [] });
+  });
+  await page.goto('/account');
+  const upbit = page.getByTestId('connection-upbit');
+  await expect(upbit).toContainText('연결됨');
+  await page.clock.fastForward(91_000);
+  await expect(upbit).toContainText('이전 정상값');
+  await expect(upbit).toContainText('보유 자산 오래된 데이터');
+  await expect(upbit).not.toContainText('보유 자산 0개');
   assertClean();
 });
