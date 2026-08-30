@@ -19,6 +19,7 @@ import { getKrUniverse } from '../providers/krx';
 import { providerStatus } from '../lib/config';
 import { getKiwoomChartCandles } from '../kiwoom-chart';
 import { cached, TTL } from '../lib/cache';
+import { marketNumber, requireMarketNumber, quoteTimeEvidence, type QuoteTimeEvidence } from '../providers/market-evidence';
 import type {
   Candle,
   CompanyProfile,
@@ -51,7 +52,10 @@ export interface QuoteRow {
   low?: number;
   open?: number;
   previousClose?: number;
-  updatedAt: string;
+  updatedAt: string | null;
+  freshness?: QuoteTimeEvidence['freshness'];
+  source?: string;
+  tradingValueSource?: 'PROVIDER_REPORTED' | 'LAST_PRICE_X_VOLUME_ESTIMATE';
   rating: RatingResult | null;
   ratingStatus?: 'MISSING_EVIDENCE';
   reason?: string;
@@ -86,7 +90,8 @@ type LooseQuote = Partial<Quote> & {
   low?: number;
   previousClose?: number;
   prevClose?: number;
-  updatedAt?: string;
+  updatedAt?: string | null;
+  tradingValueSource?: 'PROVIDER_REPORTED' | 'LAST_PRICE_X_VOLUME_ESTIMATE';
 };
 
 interface CandleDiskCache {
@@ -617,110 +622,31 @@ function resolveEntry(ticker: string): CatalogEntry {
 }
 
 function quotePrice(q: LooseQuote): number {
-  return safeNumber(
-    q.price ??
-      q.currentPrice ??
-      q.regularMarketPrice ??
-      q.close ??
-      q.previousClose ??
-      q.prevClose,
-    0,
-  );
+  return requireMarketNumber(q.price ?? q.currentPrice ?? q.regularMarketPrice ?? q.close, 'quote.price', Number.MIN_VALUE);
 }
 
-function quotePreviousClose(q: LooseQuote, price: number): number {
-  return safeNumber(q.previousClose ?? q.prevClose, price);
-}
-
-function quoteChangeAmount(
-  q: LooseQuote,
-  price: number,
-  previousClose: number,
-) {
-  const direct = safeNumber(q.changeAmount ?? q.change, Number.NaN);
-
-  if (Number.isFinite(direct)) return direct;
-
-  return price - previousClose;
-}
-
-function quoteChangePercent(
-  q: LooseQuote,
-  price: number,
-  previousClose: number,
-  changeAmount: number,
-) {
-  const direct = safeNumber(
-    q.changePercent ??
-      q.regularMarketChangePercent ??
-      q.percent,
-    Number.NaN,
-  );
-
-  if (Number.isFinite(direct)) return direct;
-
-  if (previousClose === 0) return 0;
-
-  return (changeAmount / previousClose) * 100;
-}
-
-function toQuoteRow(
-  entry: CatalogEntry,
-  quote: LooseQuote,
-): QuoteRow {
-  const ticker = cleanTicker((entry as any).ticker);
-  const marketValue = normalizeMarketValue(
-    (entry as any).market,
-    ticker,
-  );
-  const currency = normalizeCurrencyValue(
-    (entry as any).currency,
-    marketValue,
-  );
+export function normalizeQuoteRow(entry: CatalogEntry, quote: LooseQuote): QuoteRow {
+  const ticker = cleanTicker(entry.ticker);
+  const marketValue = normalizeMarketValue(entry.market, ticker);
+  const currency = normalizeCurrencyValue(entry.currency, marketValue);
   const price = quotePrice(quote);
-  const previousClose = quotePreviousClose(quote, price);
-  const changeAmount = quoteChangeAmount(
-    quote,
-    price,
-    previousClose,
-  );
-  const changePercent = quoteChangePercent(
-    quote,
-    price,
-    previousClose,
-    changeAmount,
-  );
-  const volume = safeNumber(quote.volume, 0);
-  const tradingValue =
-    safeNumber(quote.tradingValue, 0) ||
-    Math.max(price * volume, 0);
-
+  const previousClose = marketNumber(quote.previousClose ?? quote.prevClose);
+  if (previousClose !== null && previousClose <= 0) throw new Error('MARKET_EVIDENCE_INVALID:quote.previousClose');
+  const changeAmount = requireMarketNumber(quote.changeAmount ?? quote.change ?? (previousClose !== null ? price - previousClose : undefined), 'quote.changeAmount');
+  const changePercent = requireMarketNumber(quote.changePercent ?? quote.regularMarketChangePercent ?? quote.percent ?? (previousClose !== null ? changeAmount / previousClose * 100 : undefined), 'quote.changePercent');
+  const volume = requireMarketNumber(quote.volume, 'quote.volume', 0);
+  const tradingValue = requireMarketNumber(quote.tradingValue ?? price * volume, 'quote.tradingValue', 0);
+  const optionalPrice = (value: unknown): number | undefined => value == null ? undefined : requireMarketNumber(value, 'quote.ohlc', Number.MIN_VALUE);
   return {
-    ticker,
-    name: String(
-      (entry as any).name ??
-        quote.name ??
-        ticker,
-    ),
-    market: String(marketValue),
-    currency: String(currency),
-    assetType: classifyAssetType(String((entry as any).name ?? ticker), marketValue as Market, String((entry as any).assetType ?? "")),
-    price,
-    changeAmount,
-    changePercent,
-    volume,
-    tradingValue,
-    high: safeNumber(quote.high, 0),
-    low: safeNumber(quote.low, 0),
-    open: safeNumber(quote.open, 0),
-    previousClose,
-    updatedAt: String(
-      quote.updatedAt ??
-        new Date().toISOString(),
-    ),
-    // A price quote supplies no validated strategy grade or confidence.
-    rating: null,
-    ratingStatus: 'MISSING_EVIDENCE',
+    ticker, name: entry.name ?? quote.name ?? ticker,
+    market: String(marketValue), currency: String(currency),
+    assetType: classifyAssetType(entry.name ?? ticker, marketValue as Market, 'assetType' in entry ? String(entry.assetType) : ''),
+    price, changeAmount, changePercent, volume, tradingValue,
+    tradingValueSource: quote.tradingValueSource ?? (quote.tradingValue != null ? 'PROVIDER_REPORTED' : 'LAST_PRICE_X_VOLUME_ESTIMATE'),
+    high: optionalPrice(quote.high), low: optionalPrice(quote.low), open: optionalPrice(quote.open),
+    previousClose: previousClose ?? undefined,
+    ...quoteTimeEvidence(quote.updatedAt), source: quote.source,
+    rating: null, ratingStatus: 'MISSING_EVIDENCE',
   };
 }
 
@@ -749,7 +675,7 @@ async function tryQuoteProvider(
       if (!result || typeof result !== 'object') continue;
       const quote = result as LooseQuote;
       const price = quotePrice(quote);
-      if (price > 0 || quote.changePercent != null || quote.volume != null) {
+      if (price > 0) {
         return quote;
       }
     } catch {
@@ -1054,7 +980,7 @@ export class MarketDataService {
       );
 
     return cached(
-      `quote:${cleanTicker(ticker)}`,
+      `quote:v2:${cleanTicker(ticker)}`,
 
       TTL.quote,
 
@@ -1101,7 +1027,7 @@ export class MarketDataService {
           ticker,
         );
 
-      return toQuoteRow(
+      return normalizeQuoteRow(
         entry,
         quote as LooseQuote,
       );

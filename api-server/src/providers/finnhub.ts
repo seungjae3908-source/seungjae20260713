@@ -6,10 +6,12 @@ import { fetchJson } from '../lib/http';
 import { cached, TTL } from '../lib/cache';
 import type { CatalogEntry } from '../data/catalog';
 import { requireFinancialNumber } from './financial-evidence';
+import { quoteTimeEvidence, requireMarketNumber, type QuoteTimeEvidence } from './market-evidence';
 
 const BASE = 'https://finnhub.io/api/v1';
 
-export interface Quote {
+export interface Quote extends QuoteTimeEvidence {
+  source: 'finnhub';
   price: number;
   changeAmount: number;
   changePercent: number;
@@ -55,7 +57,7 @@ interface FinnhubQuote {
 export async function getQuote(entry: CatalogEntry): Promise<Quote> {
   const key = getFinnhubKey();
   const symbol = toFinnhubSymbol(entry);
-  return cached(`finnhub:quote:${symbol}`, TTL.quote, async () => {
+  return cached(`finnhub:quote:v2:${symbol}`, TTL.quote, async () => {
     const data = await fetchJson<FinnhubQuote>(
       `${BASE}/quote?symbol=${encodeURIComponent(symbol)}&token=${key}`,
       { provider: 'finnhub' },
@@ -69,13 +71,17 @@ export async function getQuote(entry: CatalogEntry): Promise<Quote> {
       );
     }
     return {
-      price: data.c,
-      changeAmount: data.d ?? 0,
-      changePercent: data.dp ?? 0,
-      high: data.h,
-      low: data.l,
-      open: data.o,
-      previousClose: data.pc,
+      price: requireMarketNumber(data.c, 'finnhub.price', Number.MIN_VALUE),
+      changeAmount: requireMarketNumber(data.d, 'finnhub.changeAmount'),
+      changePercent: requireMarketNumber(data.dp, 'finnhub.changePercent'),
+      high: requireMarketNumber(data.h, 'finnhub.high', Number.MIN_VALUE),
+      low: requireMarketNumber(data.l, 'finnhub.low', Number.MIN_VALUE),
+      open: requireMarketNumber(data.o, 'finnhub.open', Number.MIN_VALUE),
+      previousClose: requireMarketNumber(data.pc, 'finnhub.previousClose', Number.MIN_VALUE),
+      // The verified SDK quote contract has no source time; retrieval time is
+      // not a substitute. This fallback cannot claim FRESH or LIVE status.
+      ...quoteTimeEvidence(null),
+      source: 'finnhub',
     };
   });
 }
