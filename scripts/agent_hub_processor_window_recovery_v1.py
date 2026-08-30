@@ -109,6 +109,31 @@ def assert_manual_invocation(*, source_issue: int, confirmation: str, environ: M
         raise ProcessorWindowRecoveryError("processor overflow recovery is workflow_dispatch-only in GitHub Actions")
 
 
+def _comment_id(comment: Mapping[str, Any]) -> int:
+    cid = comment.get("id")
+    if type(cid) is not int or cid <= 0:
+        raise ProcessorWindowRecoveryError("recovery comment has no valid comment id")
+    return cid
+
+
+def _validated_comment_page(batch: Any, *, expected_count: int, scope: str) -> list[Mapping[str, Any]]:
+    if not isinstance(batch, list):
+        raise ProcessorWindowRecoveryError(f"{scope} comments response was not a list")
+    if len(batch) != expected_count:
+        raise ProcessorWindowRecoveryError(
+            f"{scope} pagination count mismatch: expected {expected_count}, got {len(batch)}"
+        )
+    previous_id = 0
+    for item in batch:
+        if not isinstance(item, dict) or not isinstance(item.get("body"), str):
+            raise ProcessorWindowRecoveryError(f"{scope} comments response contained malformed entries")
+        cid = _comment_id(item)
+        if cid <= previous_id:
+            raise ProcessorWindowRecoveryError(f"{scope} pagination ids are duplicated or out of order")
+        previous_id = cid
+    return batch
+
+
 def read_bounded_comment_window(github: Any, issue_number: int, total_count: int, processor_window: int) -> BoundedCommentWindow:
     if total_count <= processor_window:
         raise ProcessorWindowRecoveryError(
@@ -123,16 +148,19 @@ def read_bounded_comment_window(github: Any, issue_number: int, total_count: int
     comments: list[Mapping[str, Any]] = []
     for page in range(first_page, page_count + 1):
         query = urlencode({"per_page": per_page, "page": page})
-        batch = github.request("GET", f"/repos/{github.repository}/issues/{issue_number}/comments?{query}")
-        if not isinstance(batch, list):
-            raise ProcessorWindowRecoveryError("issue comments response was not a list")
-        comments.extend(item for item in batch if isinstance(item, dict))
+        batch = _validated_comment_page(
+            github.request("GET", f"/repos/{github.repository}/issues/{issue_number}/comments?{query}"),
+            expected_count=min(per_page, total_count - (page - 1) * per_page),
+            scope="processor tail",
+        )
+        if comments and _comment_id(batch[0]) <= _comment_id(comments[-1]):
+            raise ProcessorWindowRecoveryError("processor tail pagination pages overlap or are out of order")
+        comments.extend(batch)
     if len(comments) < processor_window:
         raise ProcessorWindowRecoveryError(
             f"bounded recovery tail under-fetched comments: expected at least {processor_window}, got {len(comments)}"
         )
     comments = comments[-processor_window:]
-    comments.sort(key=lambda item: int(item.get("id") or 0))
     return BoundedCommentWindow(tuple(comments), total_count, len(comments), processor_window)
 
 
@@ -185,7 +213,7 @@ def latest_complete_ledger(comments: Sequence[Mapping[str, Any]]) -> tuple[int, 
     if latest is None:
         raise ProcessorWindowRecoveryError("bounded recovery window is missing PERSISTENT_TASK_LEDGER")
     block = _normalized_ledger_block(str(latest.get("body") or ""))
-    return int(latest.get("id") or 0), block
+    return _comment_id(latest), block
 
 
 def resolve_complete_ledger_anchor(
@@ -204,8 +232,8 @@ def resolve_complete_ledger_anchor(
     older_count = max(0, window.source_total_comments - window.comments_examined)
     if older_count <= 0:
         raise ProcessorWindowRecoveryError("bounded recovery window is missing PERSISTENT_TASK_LEDGER")
-    if max_lookback_comments <= 0:
-        raise ProcessorWindowRecoveryError("ledger anchor lookback budget must be positive")
+    if type(max_lookback_comments) is not int or not 0 < max_lookback_comments <= MAX_LEDGER_ANCHOR_LOOKBACK_COMMENTS:
+        raise ProcessorWindowRecoveryError("ledger anchor lookback budget must be positive and at most 1500")
     if older_count > max_lookback_comments:
         raise ProcessorWindowRecoveryError(
             "PERSISTENT_TASK_LEDGER anchor is outside bounded lookback budget: "
@@ -214,19 +242,24 @@ def resolve_complete_ledger_anchor(
     per_page = 100
     page_count = max(1, math.ceil(older_count / per_page))
     comments_examined = 0
+    upper_bound_id = _comment_id(window.comments[0])
     for page in range(page_count, 0, -1):
         query = urlencode({"per_page": per_page, "page": page})
-        batch = github.request("GET", f"/repos/{github.repository}/issues/{issue_number}/comments?{query}")
-        if not isinstance(batch, list):
-            raise ProcessorWindowRecoveryError("ledger anchor lookup comments response was not a list")
-        if any(not isinstance(item, dict) for item in batch):
-            raise ProcessorWindowRecoveryError("ledger anchor lookup comments response contained malformed entries")
+        batch = _validated_comment_page(
+            github.request("GET", f"/repos/{github.repository}/issues/{issue_number}/comments?{query}"),
+            expected_count=per_page,
+            scope="ledger anchor lookup",
+        )
         take = older_count - ((page_count - 1) * per_page) if page == page_count else per_page
-        if len(batch) < take:
-            raise ProcessorWindowRecoveryError(
-                f"ledger anchor lookup under-fetched page {page}: expected at least {take}, got {len(batch)}"
-            )
+        if take < per_page:
+            overlap_ids = [_comment_id(item) for item in batch[take:]]
+            tail_ids = [_comment_id(item) for item in window.comments[:per_page - take]]
+            if overlap_ids != tail_ids:
+                raise ProcessorWindowRecoveryError("ledger anchor lookup pagination disagrees with processor tail boundary")
         selected = batch[:take]
+        if _comment_id(selected[-1]) >= upper_bound_id:
+            raise ProcessorWindowRecoveryError("ledger anchor lookup pagination pages overlap or are out of order")
+        upper_bound_id = _comment_id(selected[0])
         comments_examined += len(selected)
         for comment in reversed(selected):
             if LEDGER_START not in str(comment.get("body") or ""):
@@ -247,14 +280,12 @@ def validate_continuity_anchors(window: BoundedCommentWindow, *, ledger_id: int 
         comment = _latest_comment_with_marker(window.comments, marker)
         if comment is None:
             raise ProcessorWindowRecoveryError(f"bounded recovery window is missing continuity anchor {marker}")
-        cid = int(comment.get("id") or 0)
-        if cid <= 0:
-            raise ProcessorWindowRecoveryError(f"continuity anchor {marker} has no valid comment id")
+        cid = _comment_id(comment)
         anchors[marker] = cid
     resolved_ledger_id = ledger_id
     if resolved_ledger_id is None:
         resolved_ledger_id, _ = latest_complete_ledger(window.comments)
-    if resolved_ledger_id <= 0:
+    if type(resolved_ledger_id) is not int or resolved_ledger_id <= 0:
         raise ProcessorWindowRecoveryError("PERSISTENT_TASK_LEDGER anchor has no valid comment id")
     anchors[LEDGER_START] = resolved_ledger_id
     return anchors
@@ -262,6 +293,14 @@ def validate_continuity_anchors(window: BoundedCommentWindow, *, ledger_id: int 
 
 def sanitize_ledger_block(block: str, sanitizer: Callable[[str], str]) -> str:
     return "\n".join(sanitizer(line) for line in block.splitlines()).strip()
+
+
+def _comment_range_provenance(window: BoundedCommentWindow, lookup_count: int) -> dict[str, list[int]]:
+    older_count = window.source_total_comments - window.comments_examined
+    return {
+        "processor_tail_comment_range": [older_count + 1, window.source_total_comments],
+        "ledger_anchor_lookup_comment_range": [older_count - lookup_count + 1, older_count] if lookup_count else [],
+    }
 
 
 def augment_successor_body(
@@ -287,6 +326,9 @@ def augment_successor_body(
         f"- processor_window_limit: `{window.processor_window}`",
         f"- ledger_anchor_lookup_comments_examined: `{ledger_anchor_lookup_comments_examined}`",
         f"- ledger_anchor_lookup_limit: `{ledger_anchor_lookup_limit}`",
+        *[f"- {name}: `{json.dumps(value)}`" for name, value in _comment_range_provenance(window, ledger_anchor_lookup_comments_examined).items()],
+        "- comment_range_basis: one-based ordinal positions in the validated source comment count",
+        f"- ledger_source_comment_id: `{anchors[LEDGER_START]}`",
         "- ledger_anchor_lookup_scope: continuity-only older-prefix lookup when the ledger is absent from the processor tail; excluded from pending control-work validation",
         "- ledger_source_termination: explicit close marker or next canonical top-level section marker; normalized with explicit close in successor",
         "- recovery_scope: executable pending-control validation remains the latest bounded processor-visible tail only; no claim of full-history validation",
@@ -357,6 +399,8 @@ def perform_recovery(github: Any, source_issue: int, *, apply: bool) -> dict[str
         "source_total_comments": window.source_total_comments,
         "comments_examined": window.comments_examined,
         "ledger_anchor_lookup_comments_examined": plan["ledger_anchor_lookup_comments_examined"],
+        **_comment_range_provenance(window, plan["ledger_anchor_lookup_comments_examined"]),
+        "ledger_source_comment_id": plan["anchors"][LEDGER_START],
         "main_sha": plan["main_sha"], "continuity_anchors": plan["anchors"], "apply": apply,
     }
     if not apply:
@@ -384,6 +428,8 @@ def perform_recovery(github: Any, source_issue: int, *, apply: bool) -> dict[str
             f"main_sha: {plan['main_sha']}", f"source_total_comments: {window.source_total_comments}",
             f"comments_examined: {window.comments_examined}",
             f"ledger_anchor_lookup_comments_examined: {plan['ledger_anchor_lookup_comments_examined']}",
+            *[f"{name}: {json.dumps(value)}" for name, value in _comment_range_provenance(window, plan["ledger_anchor_lookup_comments_examined"]).items()],
+            f"ledger_source_comment_id: {plan['anchors'][LEDGER_START]}",
             f"history_validation_mode: {RECOVERY_MODE}", "full_history_validated: false",
             "production_deploy: 0", "db_mutation: 0", "secret_mutation: 0",
             "private_api: 0", "live_trading: 0", "real_orders: 0",
