@@ -4961,14 +4961,7 @@ function freezeProfile(profile) {
   Object.freeze(profile.scannerConditions);
   return Object.freeze(profile);
 }
-function freezeEvidenceContract(contract) {
-  Object.freeze(contract.requiredEvidence);
-  Object.freeze(contract.requiredCostComponents);
-  return Object.freeze(contract);
-}
 var VERSION = "signal-profile-v1";
-var EVIDENCE_CONTRACT_VERSION = "scanner-profile-evidence-v1";
-var CALIBRATION_POLICY = "OOS_CALIBRATION_REQUIRED";
 var BASE = {
   SCALP: {
     indicators: ["EMA12", "EMA26", "VWAP", "RSI14", "MACD", "ATR14", "REL_VOLUME_20"],
@@ -5097,54 +5090,6 @@ function getScannerStrategyProfile(market, horizon) {
 }
 function listScannerStrategyProfiles() {
   return Object.freeze([...PROFILES.values()]);
-}
-function requiredEvidenceFor(market, horizon) {
-  const weekly = horizon === "POSITION" ? ["weekly_candles"] : [];
-  if (market === "KR_STOCK" || market === "US_STOCK") {
-    return ["candles", "quote", "freshness", "liquidity", "session", "listing_status", ...weekly];
-  }
-  if (market === "CRYPTO_FUTURES") {
-    return [
-      "candles",
-      "mark_price",
-      "index_price",
-      "freshness",
-      "liquidity",
-      "funding_rate",
-      "open_interest",
-      "basis",
-      "liquidation_risk",
-      ...weekly
-    ];
-  }
-  return ["candles", "quote", "freshness", "liquidity", "spot_market_status", ...weekly];
-}
-function requiredCostsFor(market) {
-  const executionCosts = ["commission", "spread", "slippage", "latency", "liquidity_impact", "partial_fill_impact"];
-  if (market === "KR_STOCK" || market === "US_STOCK") return [...executionCosts, "tax"];
-  if (market === "CRYPTO_FUTURES") return [...executionCosts, "funding"];
-  return executionCosts;
-}
-function buildEvidenceContract(market, horizon) {
-  const strategyProfile = getScannerStrategyProfile(market, horizon);
-  return freezeEvidenceContract({
-    id: `${market}_${horizon}_EVIDENCE_V1`,
-    version: EVIDENCE_CONTRACT_VERSION,
-    strategyProfileId: strategyProfile.id,
-    market,
-    horizon,
-    requiredEvidence: requiredEvidenceFor(market, horizon),
-    requiredCostComponents: requiredCostsFor(market),
-    directionPolicy: market === "CRYPTO_FUTURES" ? "LONG_SHORT" : "LONG_ONLY",
-    calibrationPolicy: CALIBRATION_POLICY,
-    executionAuthority: "NONE"
-  });
-}
-var EVIDENCE_CONTRACTS = /* @__PURE__ */ new Map();
-for (const market of MARKETS2) {
-  for (const horizon of HORIZONS) {
-    EVIDENCE_CONTRACTS.set(`${market}:${horizon}`, buildEvidenceContract(market, horizon));
-  }
 }
 function scannerModeToHorizon(mode) {
   if (mode === "scalping") return "SCALP";
