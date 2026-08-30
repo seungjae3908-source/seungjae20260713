@@ -190,18 +190,24 @@ const ROUTES = [
   '/recommendations', '/backtests', '/paper-trading', '/auto-trading',
 ] as const;
 
-for (const width of [320, 360, 390, 412, 430, 1023, 1024, 1440]) {
-  test(`all primary routes stay inside viewport at ${width}px`, async ({ page }) => {
+for (const [width, height] of [[320, 740], [360, 800], [390, 844], [412, 915], [430, 932], [1023, 844], [1024, 768], [1440, 900]]) {
+  test(`all primary routes stay inside viewport at ${width}px`, async ({ page }, testInfo) => {
     const assertClean = await installAdminRuntime(page);
-    await page.setViewportSize({ width, height: width >= 1024 ? 900 : 844 });
+    const measurements: { route: string; layoutReadyMs: number }[] = [];
+    await page.setViewportSize({ width, height });
     for (const route of ROUTES) {
+      const started = performance.now();
       await page.goto(route);
       await page.waitForLoadState('domcontentloaded');
       await page.waitForTimeout(40);
       await assertNoHorizontalOverflow(page, `${width}px ${route}`);
       await assertFiniteLoadingAndNoNavOcclusion(page, `${width}px ${route}`);
+      measurements.push({ route, layoutReadyMs: Math.round(performance.now() - started) });
     }
     assertClean();
+    await testInfo.attach('local-route-layout-timings', { contentType: 'application/json', body: JSON.stringify({
+      viewport: { width, height }, environment: 'LOCAL_WITH_API_FIXTURES', providerLatencyMeasured: false, measurements,
+    }) });
   });
 }
 
@@ -216,7 +222,8 @@ test('admin account panel shows Toss Upbit Bitget only and remains read-only', a
   await expect(page.getByTestId('connection-bitget')).toContainText('Bitget');
   await expect(page.getByTestId('connection-kiwoom')).toHaveCount(0);
   await expect(panel).toContainText('READ-ONLY');
-  await expect(panel).toContainText('실주문/취소/이체/출금 0건');
+  await expect(panel).toContainText('주문/취소/이체/출금 기능 없음');
+  await expect(panel).not.toContainText('실주문/취소/이체/출금 0건');
   await assertNoHorizontalOverflow(page, 'account panel mobile');
   await page.setViewportSize({ width: 1440, height: 900 });
   await assertNoHorizontalOverflow(page, 'account panel desktop');

@@ -162,6 +162,7 @@ router.post(
 );
 
 router.get('/notifications/history', async (req: AuthenticatedRequest, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
   const limit = Math.max(
     1,
     Math.min(200, Number(req.query.limit ?? 100) || 100),
@@ -178,12 +179,14 @@ router.get('/notifications/history', async (req: AuthenticatedRequest, res) => {
     return res.status(500).json({ error: 'NOTIFICATION_HISTORY_READ_FAILED' });
   }
 
-  return res.json({ notifications: data ?? [], count: data?.length ?? 0 });
+  if (!Array.isArray(data)) return res.status(502).json({ error: 'NOTIFICATION_HISTORY_INVALID' });
+  return res.json({ notifications: data, count: data.length });
 });
 
 router.patch(
   '/notifications/history/:id/read',
   async (req: AuthenticatedRequest, res) => {
+    res.setHeader('Cache-Control', 'private, no-store');
     const { data, error } = await db(req)
       .from('notification_history')
       .update({ read_at: new Date().toISOString() })
@@ -198,6 +201,7 @@ router.patch(
         .json({ error: 'NOTIFICATION_HISTORY_UPDATE_FAILED' });
     }
 
+    if (!data) return res.status(404).json({ error: 'NOTIFICATION_NOT_FOUND' });
     return res.json({ notification: data });
   },
 );
