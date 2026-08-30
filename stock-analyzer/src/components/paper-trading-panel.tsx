@@ -3,6 +3,7 @@ import { AlertTriangle, Download, Loader2, RotateCcw, Upload, X } from 'lucide-r
 import { getFuturesContractRules, getFuturesMarketSnapshot, type FuturesContractRules, type FuturesMarketSnapshot } from '@/lib/futures-market-data';
 import type { RiskEngineInput } from '@/lib/trading-risk';
 import { evidenceNumber } from '@/lib/server-evidence';
+import { validPaperActionResult } from '../../../packages/api-zod/src/paper-state-evidence.js';
 import {
   calculatePaperStatistics,
   clearPaperState,
@@ -178,8 +179,10 @@ export function PaperTradingPanel({
     try {
       const resolvedAction = typeof action === 'function' ? await action() : action;
       if (generation !== actionGeneration.current || controller.signal.aborted) return;
-      const result = await execute(stateRef.current, resolvedAction, controller.signal);
+      const previous = stateRef.current;
+      const result = await execute(previous, resolvedAction, controller.signal);
       if (generation !== actionGeneration.current || controller.signal.aborted) return;
+      if (!validPaperActionResult(result, previous, resolvedAction.eventId, Date.now())) throw new Error('모의거래 결과의 기록·식별자·수치 근거를 확인하지 못했습니다.');
       stateRef.current = result.state;
       setState(result.state);
       setNotice(result.duplicateEvent ? '중복 이벤트를 무시했습니다.' : result.warnings.join(' '));
