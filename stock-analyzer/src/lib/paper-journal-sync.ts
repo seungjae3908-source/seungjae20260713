@@ -3,7 +3,7 @@ import { createJournalSyncBatches } from './paper-journal-batching';
 export { createBatchIdempotencyKey, JOURNAL_SYNC_BATCH_SIZE, MAX_IDEMPOTENCY_KEY_LENGTH } from './paper-journal-batching';
 
 export type JournalRecordKind = 'account' | 'order' | 'position' | 'fill' | 'journal';
-export type JournalSyncRecord = { kind: JournalRecordKind; id: string; version: number; updatedAt: string; deletedAt: string | null; payload: Record<string, unknown> };
+export type JournalSyncRecord = { kind: JournalRecordKind; id: string; version: number; baseVersion?: number | null; updatedAt: string; deletedAt: string | null; payload: Record<string, unknown> };
 export type StoredJournalSyncRecord = JournalSyncRecord & { createdAt: string; serverUpdatedAt: string };
 export type JournalConflict = {
   id: string; kind: JournalRecordKind; recordId: string; version: number;
