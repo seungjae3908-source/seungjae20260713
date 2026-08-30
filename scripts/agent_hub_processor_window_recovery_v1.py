@@ -45,6 +45,69 @@ def _rollover_module():
     return rollover
 
 
+def _contract_module():
+    try:
+        import agent_hub_contract_v2 as contract  # type: ignore
+    except ModuleNotFoundError:
+        from scripts import agent_hub_contract_v2 as contract  # type: ignore
+    return contract
+
+
+def coordinator_actionable_control_comments(
+    comments: Sequence[Mapping[str, Any]],
+    repository: str,
+) -> tuple[Mapping[str, Any], ...]:
+    """Keep control-work reports aligned with the canonical schema-v2 worker registry.
+
+    Overflow recovery preserves every historical comment in predecessor/successor
+    continuity evidence. The only compatibility exception is a trusted OWNER report that
+    declares schema v2 but uses a worker label the canonical Coordinator rejects as
+    `unregistered worker`. Such a report can never receive an attested Hub command, so it
+    is continuity evidence rather than executable pending work. Every other validation
+    failure remains in the control-work set and therefore continues to fail closed.
+    """
+    rollover = _rollover_module()
+    contract = _contract_module()
+    retained: list[Mapping[str, Any]] = []
+
+    for comment in comments:
+        if not rollover.trusted_report_comment(comment):
+            retained.append(comment)
+            continue
+
+        body = str(comment.get("body") or "")
+        fields = rollover.parse_fields(body)
+        if fields.get("schema_version") != "2":
+            retained.append(comment)
+            continue
+
+        try:
+            comment_id = int(comment.get("id") or 0)
+        except (TypeError, ValueError):
+            comment_id = 0
+        author = str((comment.get("user") or {}).get("login") or "unknown")
+
+        try:
+            contract.validate_report(
+                body,
+                comment_id=comment_id,
+                author=author,
+                expected_repository=repository,
+                allowed_workers=contract.WORKER_IDS,
+            )
+        except contract.ContractError as exc:
+            if str(exc) == "unregistered worker":
+                # Preserve the report in audit/ledger continuity, but do not represent an
+                # impossible Coordinator input as executable pending control work.
+                continue
+            retained.append(comment)
+            continue
+
+        retained.append(comment)
+
+    return tuple(retained)
+
+
 def expected_confirmation(source_issue: int) -> str:
     return f"RECOVER_ISSUE_{source_issue}_PROCESSOR_OVERFLOW"
 
@@ -186,7 +249,8 @@ def build_recovery_plan(github: Any, source_issue: int) -> dict[str, Any]:
 
     window = read_bounded_comment_window(github, source_issue, total_count, rollover.PROCESSOR_COMMENT_WINDOW)
     anchors = validate_continuity_anchors(window)
-    pending = rollover.unresolved_control_work(window.comments)
+    actionable_comments = coordinator_actionable_control_comments(window.comments, github.repository)
+    pending = rollover.unresolved_control_work(actionable_comments)
     if pending:
         raise ProcessorWindowRecoveryError("bounded continuity window contains unresolved control work: " + ",".join(pending[:8]))
 
