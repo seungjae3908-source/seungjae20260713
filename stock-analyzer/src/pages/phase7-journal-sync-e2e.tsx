@@ -14,7 +14,7 @@ import { paperJournalFixture } from '@/lib/paper-journal-test-fixture';
 
 const NOW = '2026-08-02T07:00:00.000Z';
 const USERS = ['phase7-user-a', 'phase7-user-b'];
-type Mode = 'success'|'failure'|'conflict'|'insufficient';
+type Mode = 'success'|'failure'|'conflict'|'insufficient'|'deferred'|'malformed'|'endless';
 
 const conflict: JournalConflict = {
   id: 'conflict:phase7', kind: 'journal', recordId: 'journal-1', version: 2,
@@ -93,15 +93,27 @@ export default function Phase7JournalSyncE2EPage() {
 
   const fakeSync = async (): Promise<JournalSyncResult> => {
     if (mode === 'failure') throw new Error('테스트 동기화 실패');
+    if (mode === 'deferred') {
+      await new Promise<void>((resolve) => window.addEventListener('phase7-release-sync', () => resolve(), { once: true }));
+      document.documentElement.dataset.phase7SyncReturned = 'true';
+    }
+    if (mode === 'malformed') return {
+      ok: true, mode: 'journal-sync-only', orderSubmitted: false, exchangeRequestSent: false, idempotencyKey: 'phase7-invalid', serverTime: NOW,
+      uploaded: [], downloaded: [{ ...conflict.serverRecord, payload: { ...paperJournalFixture('journal-1', NOW), netPnl: Number.NaN } }],
+      unchanged: [], conflicts: [], failed: [], warnings: [], clockSkewMs: 0,
+    };
     return { ok: true, mode: 'journal-sync-only', orderSubmitted: false, exchangeRequestSent: false, idempotencyKey: 'phase7-e2e-sync', serverTime: NOW, uploaded: [], downloaded: [], unchanged: [], conflicts: mode === 'conflict' ? [conflict] : [], failed: [], warnings: [], clockSkewMs: 0 };
   };
-  const fakeSnapshot = async (): Promise<JournalSnapshotResult> => ({ ok: true, mode: 'journal-sync-only', orderSubmitted: false, exchangeRequestSent: false, records: [], nextCursor: null, serverTime: NOW });
+  const fakeSnapshot = async (): Promise<JournalSnapshotResult> => {
+    document.documentElement.dataset.phase7SnapshotCalls = String(Number(document.documentElement.dataset.phase7SnapshotCalls ?? 0) + 1);
+    return { ok: true, mode: 'journal-sync-only', orderSubmitted: false, exchangeRequestSent: false, records: [], nextCursor: mode === 'endless' ? 'more-pages' : null, serverTime: NOW };
+  };
   const fakeResolve = async (_id: string, choice: 'server'|'device'|'preserve_both'): Promise<ConflictResolutionResult> => ({ ok: true, mode: 'journal-sync-only', orderSubmitted: false, exchangeRequestSent: false, conflictId: conflict.id, choice, records: choice === 'server' ? [conflict.serverRecord] : [], serverTime: NOW });
 
   return <main className="h-[100dvh] overflow-y-auto bg-background p-4" data-testid="phase7-e2e-page">
     <div className="mx-auto max-w-5xl space-y-3">
       <div className="flex flex-wrap gap-2 rounded-xl border border-border bg-card p-3">
-        <label className="text-xs">시나리오<select aria-label="시나리오" className="ml-2 h-10 rounded border border-border bg-background px-2" value={mode} onChange={(event) => setMode(event.target.value as Mode)}><option value="success">success</option><option value="failure">failure</option><option value="conflict">conflict</option><option value="insufficient">insufficient</option></select></label>
+        <label className="text-xs">시나리오<select aria-label="시나리오" className="ml-2 h-10 rounded border border-border bg-background px-2" value={mode} onChange={(event) => setMode(event.target.value as Mode)}><option value="success">success</option><option value="failure">failure</option><option value="conflict">conflict</option><option value="insufficient">insufficient</option><option value="deferred">deferred</option><option value="malformed">malformed</option><option value="endless">endless</option></select></label>
         <button type="button" className="min-h-10 rounded border border-border px-3 text-sm" onClick={() => setUserIndex((value) => value ? 0 : 1)} data-testid="switch-account">계정 전환</button>
         <span data-testid="active-account" className="self-center text-xs">{userId}</span>
       </div>

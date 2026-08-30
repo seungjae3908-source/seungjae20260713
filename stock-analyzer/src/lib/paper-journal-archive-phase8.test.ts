@@ -9,6 +9,9 @@ import {
   exportPaperArchive,
   loadPaperArchive,
   loadPaperState,
+  savePaperArchive,
+  exportPaperState,
+  importPaperState,
   savePaperState,
   type StorageLike,
 } from './paper-trading-storage';
@@ -92,14 +95,33 @@ test('archive retry does not increment unchanged versions', () => {
   assert.equal(firstArchive?.version, secondArchive?.version);
 });
 
-test('corrupt archive is backed up before recovery', () => {
+test('corrupt archive remains untouched and blocks sync or overwrite', () => {
   const root = new MemoryStorage();
   const storage = createUserPaperStorage(root, USER_A, NOW);
   storage.setItem(PAPER_ARCHIVE_KEY, '{bad json');
   const result = loadPaperArchive(storage);
-  assert.equal(result.recovered, true);
+  assert.equal(result.recovered, false);
+  assert.equal(result.blocked, true);
   assert.equal(result.journal.length, 0);
-  assert.equal([...root.map.keys()].some((key) => key.includes('.corrupt:')), true);
+  assert.equal(storage.getItem(PAPER_ARCHIVE_KEY), '{bad json');
+  assert.throws(() => savePaperArchive(storage, []), /덮어쓰지/);
+  assert.throws(() => prepareJournalSync(root, USER_A, stateWithJournal(0), NOW), /검증/);
+  assert.equal(storage.getItem(PAPER_ARCHIVE_KEY), '{bad json');
+});
+
+test('malformed archive rows and duplicate IDs never become a successful empty archive', () => {
+  for (const journal of [[{ id: 'incomplete' }], [paperJournalFixture('duplicate', NOW.toISOString()), paperJournalFixture('duplicate', NOW.toISOString())]]) {
+    const storage = new MemoryStorage();
+    const raw = JSON.stringify({ schemaVersion: 1, journal });
+    storage.setItem(PAPER_ARCHIVE_KEY, raw);
+    assert.equal(loadPaperArchive(storage).blocked, true);
+    assert.equal(storage.getItem(PAPER_ARCHIVE_KEY), raw);
+  }
+});
+
+test('export and import preserve all journal records before explicit archival on save', () => {
+  const state = stateWithJournal(550);
+  assert.equal(importPaperState(exportPaperState(state)).journal.length, 550);
 });
 
 test('archive export is explicit and marks archive candidate', () => {

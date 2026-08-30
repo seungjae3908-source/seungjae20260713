@@ -31,6 +31,8 @@ function period(start, end, latest, nullableEnd = false) {
   return instant(start, latest) && (nullableEnd && end === null || instant(end, latest) && Date.parse(start) <= Date.parse(end));
 }
 
+export function validPaperTimestamp(value, latest = Infinity) { return instant(value, latest); }
+
 function safeTree(value, depth = 0, seen = new Set()) {
   if (depth > 30 || typeof value === 'number' && !finite(value)) return false;
   if (value === null || typeof value !== 'object') return true;
@@ -77,6 +79,18 @@ function fill(value, latest) {
   return record(value) && fields(value, 'id orderId positionId', text) && side(value.side) && fillReason(value.fillReason)
     && fields(value, 'price quantity grossValue referencePrice', positive) && fields(value, 'fee slippageCost', nonnegative)
     && fields(value, 'fundingCost grossPnl netPnl', finite) && instant(value.filledAt, latest);
+}
+
+export function validPaperRecord(kind, value, latest = Infinity) {
+  if (!record(value) || !safeTree(value)) return false;
+  if (kind === 'account') return text(value.id) && positive(value.initialBalance)
+    && fields(value, 'cashBalance realizedPnl unrealizedPnl equity usedMargin availableMargin', finite)
+    && nonnegative(value.usedMargin) && period(value.createdAt, value.updatedAt, latest);
+  if (kind === 'order') return order(value, latest);
+  if (kind === 'position') return position(value, latest);
+  if (kind === 'fill') return fill(value, latest);
+  if (kind === 'journal') return validPaperJournal(value, latest);
+  return false;
 }
 
 export function validPaperJournal(value, latest = Infinity) {
