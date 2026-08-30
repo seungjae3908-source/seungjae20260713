@@ -149,6 +149,63 @@ test('news/disclosure router rejects unsafe sidecar authority instead of returni
   );
 });
 
+test('news/disclosure router rejects malformed safety and route enums instead of laundering them', async () => {
+  const cases: Array<{ name: string; mutate: (payload: any) => void; pattern: RegExp }> = [
+    {
+      name: 'route sentiment authority',
+      mutate: (payload) => { payload.result.safety.sentimentIsPriceDirection = true; },
+      pattern: /MARKET_INTELLIGENCE_NEWS_ROUTE_UNSAFE_AUTHORITY/,
+    },
+    {
+      name: 'envelope execution authority',
+      mutate: (payload) => { payload.safety.executionAuthority = 'BROKER'; },
+      pattern: /MARKET_INTELLIGENCE_NEWS_ROUTE_UNSAFE_AUTHORITY/,
+    },
+    {
+      name: 'freshness state',
+      mutate: (payload) => { payload.result.freshness.state = 'FRESHISH'; },
+      pattern: /MARKET_INTELLIGENCE_NEWS_ROUTE_FRESHNESS_INVALID/,
+    },
+    {
+      name: 'model tier',
+      mutate: (payload) => { payload.result.ai.modelTier = 'ULTRA'; },
+      pattern: /MARKET_INTELLIGENCE_NEWS_ROUTE_MODEL_TIER_INVALID/,
+    },
+    {
+      name: 'realtime class',
+      mutate: (payload) => { payload.result.ai.realtimeClass = 'DEFERRED'; },
+      pattern: /MARKET_INTELLIGENCE_NEWS_ROUTE_REALTIME_CLASS_INVALID/,
+    },
+    {
+      name: 'output class',
+      mutate: (payload) => { payload.result.ai.maxOutputClass = 'FREE_FORM'; },
+      pattern: /MARKET_INTELLIGENCE_NEWS_ROUTE_OUTPUT_CLASS_INVALID/,
+    },
+    {
+      name: 'ai level',
+      mutate: (payload) => { payload.result.ai.level = 99; },
+      pattern: /MARKET_INTELLIGENCE_NEWS_ROUTE_AI_LEVEL_INVALID/,
+    },
+    {
+      name: 'cache flags',
+      mutate: (payload) => { payload.result.ai.cacheEligible = 'yes'; },
+      pattern: /MARKET_INTELLIGENCE_NEWS_ROUTE_CACHE_FLAGS_INVALID/,
+    },
+  ];
+
+  for (const row of cases) {
+    const payload: any = newsRoutePayload();
+    row.mutate(payload);
+    await assert.rejects(
+      routeNewsDisclosureMarketIntelligence({ event: { market: 'US_STOCK', symbol: 'AAPL', headline: 'x' } }, {
+        fetchImpl: async () => response(payload),
+      }),
+      row.pattern,
+      row.name,
+    );
+  }
+});
+
 test('news/disclosure router also rejects non-loopback configuration', async () => {
   await assert.rejects(
     routeNewsDisclosureMarketIntelligence({ event: { market: 'US_STOCK', symbol: 'AAPL', headline: 'x' } }, {
