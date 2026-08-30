@@ -30,6 +30,9 @@ function runtimePackage(snapshot) {
     financialMutationAllowed: false,
     createPaperAdmissionEvidenceProducer: () => async () => Object.freeze({ status: "BLOCKED" }),
     createAuthoritativePaperEvidenceSourceWiring: () => Object.freeze({}),
+    createAuthoritativePaperNaturalCycleEvidenceSourceWiring: () => Object.freeze({
+      naturalCycleSourceGraph: Object.freeze({ executionAuthority: "NONE" }),
+    }),
     validateImmutablePaperTradingStateSnapshot: (value) => {
       assert.equal(value.sourceSha, snapshot.sourceSha);
       return value;

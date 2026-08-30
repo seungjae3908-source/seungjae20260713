@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import process from 'node:process';
 
 const PRODUCTION_PROJECT_REF = 'bawcbkoyovbeajkrnduq';
+const PRODUCTION_SESSION_POOLER_HOST = 'aws-1-ap-south-1.pooler.supabase.com';
 const POSTGRES_URI_PATTERN = /^postgres(?:ql)?:\/\//i;
 const ARTIFACT_KEYS = new Set([
   'status', 'classification', 'production_sha', 'pm2_online',
@@ -75,6 +76,23 @@ function psqlExistsOutsidePath() {
   return candidates.some(isExecutable);
 }
 
+function classifyPsqlFailure(stderrText) {
+  const stderr = String(stderrText ?? '').toLowerCase();
+  if (/circuit breaker open|failed to retrieve database credentials after multiple attempts|too many failed attempts to connect to the database|too many authentication failures/.test(stderr)) return 'production_database_supavisor_circuit_breaker';
+  if (/worker_not_found|worker not found|tenant or user not found|necessary information to route the connection/.test(stderr)) return 'production_database_supavisor_tenant_unresolved';
+  if (/connection closed when state was authentication/.test(stderr)) return 'production_database_supavisor_auth_connection_closed';
+  if (/password authentication failed|authentication failed/.test(stderr)) return 'production_database_auth_failed';
+  if (/could not translate host name|name or service not known|temporary failure in name resolution/.test(stderr)) return 'production_database_dns_failed';
+  if (/network is unreachable|no route to host/.test(stderr)) return 'production_database_network_unreachable';
+  if (/connection timed out|timeout expired/.test(stderr)) return 'production_database_connection_timed_out';
+  if (/connection refused/.test(stderr)) return 'production_database_connection_refused';
+  if (/server closed the connection/.test(stderr)) return 'production_database_server_closed_connection';
+  if (/could not connect|connection to server .* failed/.test(stderr)) return 'production_database_connection_failed';
+  if (/permission denied/.test(stderr)) return 'production_database_readonly_permission_failed';
+  if (/statement timeout|lock timeout|canceling statement/.test(stderr)) return 'production_database_readonly_timeout';
+  return 'production_database_readonly_query_failed';
+}
+
 const expectedProductionSha = String(process.env.EXPECTED_PRODUCTION_SHA ?? '').trim().toLowerCase();
 const transientDatabaseUrl = String(process.env.PROD_DATABASE_URL ?? '').trim();
 const base = {
@@ -134,10 +152,22 @@ try {
   const parsed = new URL(transientDatabaseUrl);
   const hostname = parsed.hostname.toLowerCase();
   const username = decodeURIComponent(parsed.username);
-  const direct = hostname === `db.${projectRef}.supabase.co` && username.toLowerCase() === 'postgres';
-  const pooler = /(^|\.)pooler\.supabase\.com$/i.test(hostname) && username.toLowerCase() === `postgres.${projectRef}`;
   const databaseName = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
   const port = parsed.port || '5432';
+  const direct = hostname === `db.${projectRef}.supabase.co` && username.toLowerCase() === 'postgres';
+  const poolerDomain = /(^|\.)pooler\.supabase\.com$/i.test(hostname);
+  const poolerUser = username.toLowerCase() === `postgres.${projectRef}`;
+  if (poolerDomain && poolerUser && hostname !== PRODUCTION_SESSION_POOLER_HOST
+    && parsed.password && databaseName === 'postgres' && port === '5432') {
+    blocked('production_database_pooler_host_mismatch', {
+      ...identity,
+      postgres_connection_count: 1,
+      postgres_endpoint_type: 'pooler',
+      postgres_port: '5432',
+      database_secret_source: 'github_protected_secret',
+    });
+  }
+  const pooler = hostname === PRODUCTION_SESSION_POOLER_HOST && poolerUser;
   if ((!direct && !pooler) || !parsed.password || databaseName !== 'postgres' || port !== '5432') throw new Error('bad target');
   database = { hostname, username, password: decodeURIComponent(parsed.password), database: databaseName, port, endpointType: direct ? 'direct' : 'pooler' };
 } catch {
@@ -187,13 +217,7 @@ if (result.error?.code === 'ENOENT') {
   blocked('psql_not_installed', connected);
 }
 if (result.error || result.status !== 0) {
-  const stderr = String(result.stderr ?? '').toLowerCase();
-  let classification = 'production_database_readonly_query_failed';
-  if (/password authentication failed|authentication failed/.test(stderr)) classification = 'production_database_auth_failed';
-  else if (/could not translate host name|could not connect|connection refused|connection timed out|server closed the connection|network is unreachable/.test(stderr)) classification = 'production_database_connection_failed';
-  else if (/permission denied/.test(stderr)) classification = 'production_database_readonly_permission_failed';
-  else if (/statement timeout|lock timeout|canceling statement/.test(stderr)) classification = 'production_database_readonly_timeout';
-  blocked(classification, connected);
+  blocked(classifyPsqlFailure(result.stderr), connected);
 }
 let catalog;
 try {
