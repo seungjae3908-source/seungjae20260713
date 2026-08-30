@@ -91,6 +91,19 @@ test('normal scan completes with bounded concurrency and separated diagnostics',
   assert.ok(result.maxConcurrency <= 2);
 });
 
+test('bounded runtime keeps source time separate and does not invent breakout probability', async () => {
+  const quoteObservedAt = new Date(Date.now() - 120_000).toISOString();
+  const service = createBoundedScannerService(deps([item(1)], {
+    getQuote: async () => ({ ...quoteRow(), updatedAt: quoteObservedAt, source: 'fixture-provider' }),
+  }));
+  const result = await service.scan('KR', ['PER 낮음'], {}, { deadlineMs: 2000, itemTimeoutMs: 1000 });
+  assert.equal(result.cards.length, 1);
+  assert.equal(result.cards[0].quoteObservedAt, quoteObservedAt);
+  assert.equal(result.cards[0].quoteSource, 'fixture-provider');
+  assert.equal(result.cards[0].breakoutProbability, null);
+  assert.notEqual(result.cards[0].analyzedAt, quoteObservedAt);
+});
+
 test('healthy optional context queues behind the cap instead of becoming a false partial', async () => {
   let active = 0;
   let maximum = 0;

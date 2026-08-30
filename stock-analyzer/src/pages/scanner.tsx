@@ -22,6 +22,8 @@ import {
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { formatPrice as formatAppPrice, formatPercent as formatAppPercent } from "@/lib/format";
+import { quoteFreshness } from "@/lib/market-freshness";
 import { BottomNav } from "@/components/bottom-nav";
 import {
   ChartBroadcastPanel,
@@ -36,8 +38,6 @@ import {
 } from "@/lib/stock-classifier";
 import {
   displayStockName,
-  formatAppPercent,
-  formatAppPrice,
   normalizePlanText,
   toggleWatchlistItem,
 } from "@/lib/stock-display";
@@ -381,7 +381,9 @@ function toNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
 
   if (typeof value === "string") {
-    const parsed = Number(value.replace(/,/g, "").replace(/%/g, ""));
+    const text = value.trim();
+    if (!/^[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?%?$/.test(text)) return null;
+    const parsed = Number(text.replace(/,/g, "").replace(/%$/, ""));
 
     if (Number.isFinite(parsed)) return parsed;
   }
@@ -412,7 +414,7 @@ function scoreOf(card: AnyObj): number {
     toNumber(card.score) ??
     toNumber(card.aiScore) ??
     toNumber((card.rating as AnyObj | undefined)?.score) ??
-    50
+    -1 // Internal sorting sentinel; never displayed as a measured score.
   );
 }
 
@@ -784,7 +786,9 @@ export default function ScannerPage({ embedded = false }: { embedded?: boolean }
 		exchange: cardMarket(card) === "US" ? cardExchange(card) : null,
         rank: 0,
         score,
-		probability: Math.max(0, Math.min(100, assessment.probability + chartAdjustment)),
+		probability: null,
+		ruleScore: assessment.ruleScore == null ? null : Math.max(0, Math.min(100, assessment.ruleScore + chartAdjustment)),
+		ruleMethod: assessment.ruleMethod,
 		riskScore: assessment.riskScore,
 		dataCompleteness: assessment.dataCompleteness,
 		price,
@@ -810,7 +814,7 @@ export default function ScannerPage({ embedded = false }: { embedded?: boolean }
       .filter((candidate) => candidate.ticker)
       .sort(
         (a, b) =>
-          b.probability - a.probability ||
+          (b.ruleScore ?? -1) - (a.ruleScore ?? -1) ||
           b.score - a.score ||
           a.ticker.localeCompare(b.ticker),
       )
@@ -819,7 +823,7 @@ export default function ScannerPage({ embedded = false }: { embedded?: boolean }
   }, [chartTradeSignal, scan.data, selectedKey]);
 
   const autoCandidatesKey = autoCandidates
-    .map((candidate) => `${candidate.ticker}:${candidate.probability}`)
+    .map((candidate) => `${candidate.market}:${candidate.ticker}:${candidate.ruleScore}`)
     .join("|");
 
   const tradeJournal = useQuery({
@@ -1651,12 +1655,12 @@ export default function ScannerPage({ embedded = false }: { embedded?: boolean }
                         {candidate.reasons.join(" · ") || "AI 점수 기준"}
                       </p>
 					  <p className="mt-1 truncate text-[10px] font-bold text-muted-foreground">
-						위험 {candidate.riskScore}점 · 데이터 {candidate.dataCompleteness}%
+						위험 {candidate.riskScore == null ? "근거 부족" : `${candidate.riskScore}점`} · 데이터 {candidate.dataCompleteness}%
 					  </p>
                     </div>
                     <div className="shrink-0 text-right">
                       <p className="text-sm font-black text-primary">
-                        {candidate.probability}점
+                        {candidate.ruleScore == null ? "근거 부족" : `${candidate.ruleScore}점`}
                       </p>
                       <p className="mt-1 text-[10px] font-bold text-muted-foreground">
 						모델점수
@@ -1820,7 +1824,7 @@ export default function ScannerPage({ embedded = false }: { embedded?: boolean }
 						</p>
                       </div>
                       <p className="shrink-0 text-sm font-black text-primary">
-                        {candidate.probability}점
+                        {candidate.ruleScore == null ? "근거 부족" : `${candidate.ruleScore}점`}
                       </p>
                     </button>
                   ))}
@@ -2278,8 +2282,9 @@ function ScannerCard({
     String(card.name ?? card.ticker),
     market,
   );
-  const changePercent = toNumber(card.changePercent) ?? 0;
-  const positive = changePercent >= 0;
+  const changePercent = toNumber(card.changePercent);
+  const positive = changePercent != null && changePercent >= 0;
+  const freshness = quoteFreshness({ updatedAt: card.quoteObservedAt });
   const aiScore = scoreOf(card);
   const scoreBreakdown = Object.entries((card.scoreBreakdown as Record<string, { score?: unknown; status?: unknown; reasons?: unknown }> | undefined) ?? {});
 
@@ -2328,10 +2333,10 @@ function ScannerCard({
           {expanded && (
             <div className="rounded-full bg-primary/10 px-2.5 py-1 text-center">
               <span className="block text-[10px] font-bold text-primary">
-                AI 점수
+                규칙 점수
               </span>
               <span className="block text-sm font-extrabold text-primary">
-                {aiScore}
+                {aiScore < 0 ? "근거 부족" : aiScore}
               </span>
             </div>
           )}
@@ -2356,9 +2361,9 @@ function ScannerCard({
             <InfoBox
               label="등락률"
               value={formatAppPercent(toNumber(card.changePercent))}
-              tone={positive ? "positive" : "negative"}
+              tone={changePercent == null ? undefined : positive ? "positive" : "negative"}
               icon={
-                positive ? (
+                changePercent == null ? undefined : positive ? (
                   <TrendingUp className="h-3 w-3" />
                 ) : (
                   <TrendingDown className="h-3 w-3" />
@@ -2368,15 +2373,19 @@ function ScannerCard({
 
             <InfoBox
               label="돌파확률"
-              value={`${toNumber(card.breakoutProbability) ?? 0}%`}
+              value="검증 근거 부족"
             />
           </div>
 
           <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
-            <InfoBox label="신뢰도" value={`${toNumber(card.confidence) ?? "-"}${toNumber(card.confidence) == null ? "" : "%"}`} />
+            <InfoBox label="조건 근거 점수" value={`${toNumber(card.confidence) ?? "-"}${toNumber(card.confidence) == null ? "" : "점"}`} />
             <InfoBox label="위험도" value={String(card.riskLevel ?? "-")} />
             <InfoBox label="데이터" value={String(card.dataState ?? "unavailable")} />
           </div>
+          <p className="mt-2 break-words text-xs leading-5 text-muted-foreground">
+            {freshness.label} · 출처 {typeof card.quoteSource === "string" ? card.quoteSource : "확인 불가"}
+            {freshness.timestamp && ` · ${new Date(freshness.timestamp).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })} KST`}
+          </p>
 
           <div
             className={cn(

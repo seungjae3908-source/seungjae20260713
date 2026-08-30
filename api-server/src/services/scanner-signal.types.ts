@@ -175,8 +175,8 @@ export interface ScannerSignalCard {
   pricePlan: ScannerPricePlan;
   dataState: ScannerDataState;
   dataSources: string[];
-  observedAt: string;
-  expiresAt: string;
+  observedAt: string | null;
+  expiresAt: string | null;
   strongSignalEligible: boolean;
   warnings: string[];
   strategyMode?: ScannerStrategyMode;
@@ -214,8 +214,8 @@ export interface ScannerDiscoveryCard {
   unverified: string[];
   dataState: ScannerDataState;
   dataSources: string[];
-  observedAt: string;
-  expiresAt: string;
+  observedAt: string | null;
+  expiresAt: string | null;
   strategyMode?: ScannerStrategyMode;
   warnings: string[];
   discoveryOnly: true;

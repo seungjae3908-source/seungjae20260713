@@ -118,6 +118,7 @@ function canonicalHorizonBars(card: ScannerSignalCard, timeframe: string): {
   ttlMs: number;
   bars: number;
 } | null {
+  if (card.observedAt == null || card.expiresAt == null) return null;
   const timestampMs = Date.parse(card.observedAt);
   const expiresAtMs = Date.parse(card.expiresAt);
   const barMs = timeframeMs(timeframe);

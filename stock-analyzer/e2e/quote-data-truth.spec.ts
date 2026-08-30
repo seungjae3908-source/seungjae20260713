@@ -4,6 +4,7 @@ import { quoteRating } from '../src/lib/quote-row-evidence';
 import { quoteFreshness } from '../src/lib/market-freshness';
 import { financialDisplayEvidence } from '../src/lib/financial-display-evidence';
 import { classifyStock } from '../src/lib/stock-classifier';
+import { assessAutoTradeCandidate, estimateAutoTradeProbability } from '../src/lib/auto-trade-research-rules';
 import { expect, test, type Page, type Route } from '@playwright/test';
 
 // Auth and market fixtures stay in the isolated localhost browser only.
@@ -12,7 +13,42 @@ const NOW = '2026-08-30T12:00:00.000Z';
 const sizes = [[1440, 900], [1024, 768], [320, 740], [360, 800], [390, 844], [412, 915], [430, 932]] as const;
 const fulfill = (route: Route, body: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 
-async function installRuntime(page: Page, financialScenario?: 'legacy' | 'current' | 'provider-shape' | 'summary-missing' | 'summary-wrong') {
+function scannerSourceFixture() {
+  return {
+    ok: true, requestId: 'source-missing', assetClass: 'stock', market: 'KR', timeframe: '5m',
+    cards: [{
+      signalId: 'source-missing', assetClass: 'stock', market: 'KR', exchange: 'KRX', symbol: '005930', name: '시각 누락 검증 종목',
+      currency: 'KRW', assetType: 'STOCK', listingStatus: 'LISTED', price: 1000, changePercent: null,
+      direction: 'LONG', action: 'BUY', signalState: 'INVALIDATED', score: 59, confidence: 59, dataCompleteness: 70,
+      riskScore: null, riskLevel: 'UNAVAILABLE', liquidity: null, volume: null, tradingValue: null, spreadPercent: null, volatilityPercent: null,
+      matched: [], notMatched: [], unverified: ['시세 시각'], evidence: [],
+      pricePlan: { entryZone: null, invalidation: null, stopLoss: null, targets: [], riskReward: null },
+      dataState: 'untrusted', dataSources: ['fixture-only'], observedAt: null, expiresAt: null, strongSignalEligible: false,
+      warnings: ['SOURCE_TIME_UNVERIFIED'], dataQuality: { state: 'DATA_UNTRUSTED', score: 0, strongSignalAllowed: false, issues: [] },
+    }],
+    alerts: [], failures: [], execution: {
+      requestedCount: 1, startedCount: 1, completedCount: 1, excludedCount: 0, providerErrorCount: 0, timeoutCount: 0,
+      partial: true, timedOut: false, cancelled: false, duplicate: false, elapsedMs: 1, deadlineMs: 8500, itemTimeoutMs: 4000,
+      maxConcurrency: 1, providerAcceptedCount: 1, dataSuccessCount: 1, insufficientDataCount: 1, filteredByStrategyCount: 0, finalDisplayedCount: 1,
+    },
+    universe: { totalCount: 1, cursor: 0, nextCursor: null, source: 'fixture-only', partial: false, stale: false, listingStatusCoverage: 'listed-or-unknown' },
+    dataState: 'untrusted', outcome: 'DATA_QUALITY_REJECT', message: '원본 시세 시각 근거 부족',
+    generatedAt: NOW, orderSubmitted: false, exchangeRequestSent: false,
+  };
+}
+
+test('local research rules never synthesize a probability or authorize an order', () => {
+  const complete = { score: 90, matchedCount: 2, selectedCount: 2, changePercent: 1, price: 100,
+    volume: 100, tradingValue: 10000, marketCap: 100000, confidence: 80, newsScore: 70, disclosureScore: 70, financialScore: 70, riskLevel: 'LOW' };
+  const result = assessAutoTradeCandidate(complete);
+  expect(result.probability).toBeNull();
+  expect(result.ruleScore).not.toBeNull();
+  expect(estimateAutoTradeProbability({ ...complete, breakoutProbability: 99 })).toBeNull();
+  expect(assessAutoTradeCandidate({ score: 90, matchedCount: 1, selectedCount: 1 }).ruleScore).toBeNull();
+  expect(assessAutoTradeCandidate({ ...complete, riskLevel: 'UNAVAILABLE' }).riskScore).toBeNull();
+});
+
+async function installRuntime(page: Page, financialScenario?: 'legacy' | 'current' | 'provider-shape' | 'summary-missing' | 'summary-wrong' | 'scanner-missing') {
   await page.addInitScript(({ userId, now }) => {
     const encode = (value: Record<string, unknown>) => btoa(JSON.stringify(value)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
     const exp = 4102444800;
@@ -23,9 +59,10 @@ async function installRuntime(page: Page, financialScenario?: 'legacy' | 'curren
     }));
   }, { userId: USER_ID, now: NOW });
   const unexpected: string[] = [];
+  const profileRole = financialScenario === 'scanner-missing' ? 'associate' : 'admin';
   await page.route('**/__e2e-supabase/**', async (route) => {
     const path = new URL(route.request().url()).pathname;
-    if (path.endsWith('/rest/v1/profiles')) return fulfill(route, { id: USER_ID, login_name: 'quote-fixture', display_name: '검증 사용자', role: 'admin', status: 'approved', membership_level: 'admin', is_active: true, permissions_updated_at: NOW, updated_at: NOW });
+    if (path.endsWith('/rest/v1/profiles')) return fulfill(route, { id: USER_ID, login_name: 'quote-fixture', display_name: '검증 사용자', role: profileRole, status: 'approved', membership_level: profileRole, is_active: true, permissions_updated_at: NOW, updated_at: NOW });
     if (path.endsWith('/auth/v1/user')) return fulfill(route, { id: USER_ID, aud: 'authenticated', role: 'authenticated', email: 'quote-fixture@accounts.invalid', app_metadata: { provider: 'email' }, user_metadata: {}, identities: [], created_at: NOW });
     unexpected.push(path);
     return fulfill(route, { error: 'UNEXPECTED_FIXTURE_AUTH_REQUEST' }, 400);
@@ -37,6 +74,7 @@ async function installRuntime(page: Page, financialScenario?: 'legacy' | 'curren
   ];
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (financialScenario === 'scanner-missing' && path === '/api/market/scan') return fulfill(route, scannerSourceFixture());
     if (financialScenario) {
       if (path === '/api/stocks/AAPL/quote' && financialScenario === 'summary-missing') return fulfill(route, { ticker: 'AAPL', currency: 'USD', price: null, changePercent: null, updatedAt: NOW });
       if (path === '/api/stocks/AAPL/quote' && financialScenario === 'summary-wrong') return fulfill(route, { ticker: 'MSFT', currency: 'KRW', price: 123, changePercent: 9, updatedAt: NOW });
@@ -223,5 +261,38 @@ for (const [width, height] of sizes) {
     expect(unexpected).toEqual([]);
     expect(errors).toEqual([]);
     await testInfo.attach('summary-runtime-proof.json', { body: JSON.stringify({ viewport: { width, height }, scenario, fixture: true, layout, errors: errors.length, unexpectedRequests: unexpected.length }), contentType: 'application/json' });
+  });
+}
+for (const [width, height] of sizes) {
+  test(`actual scanner missing source time stays non-actionable at ${width}x${height}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height });
+    const errors: string[] = [];
+    const forbidden: string[] = [];
+    await page.exposeFunction('reportScannerUnhandled', (reason: string) => errors.push(reason));
+    await page.addInitScript(() => addEventListener('unhandledrejection', (event) => {
+      void (window as unknown as { reportScannerUnhandled: (reason: string) => Promise<void> }).reportScannerUnhandled(String(event.reason));
+    }));
+    page.on('pageerror', (error) => errors.push(error.message));
+    page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
+    page.on('response', (response) => { if (response.status() >= 400) errors.push(`HTTP ${response.status()} ${new URL(response.url()).pathname}`); });
+    page.on('request', (request) => { if (request.method() !== 'GET' && new URL(request.url()).pathname.startsWith('/api/')) forbidden.push(request.url()); });
+    const unexpected = await installRuntime(page, 'scanner-missing');
+    const started = performance.now();
+    await page.goto('/scanner');
+    await page.getByRole('button', { name: '시각 누락 검증 종목 005930 · KR · STOCK', exact: true }).click();
+    const detail = page.locator('[data-testid="signal-detail"]:visible');
+    await expect(detail).toHaveCount(1);
+    await expect(detail.getByTestId('scanner-source-time')).toContainText('시세 시각 확인 불가');
+    await expect(detail.getByTestId('scanner-ttl-badge')).toHaveText('TTL 미확인');
+    await expect(detail.getByTestId('scanner-signal-state')).toContainText('INVALIDATED');
+    await expect(detail).not.toContainText('1970');
+    await expect(detail).not.toContainText('Invalid Date');
+    const layout = await page.evaluate(() => ({ body: document.body.scrollWidth, root: document.documentElement.scrollWidth, width: innerWidth }));
+    expect(layout.body).toBeLessThanOrEqual(width);
+    expect(layout.root).toBeLessThanOrEqual(width);
+    expect(unexpected).toEqual([]);
+    expect(errors).toEqual([]);
+    expect(forbidden).toEqual([]);
+    await testInfo.attach('scanner-source-runtime-proof.json', { body: JSON.stringify({ viewport: { width, height }, fixture: true, route: '/scanner', elapsedMs: performance.now() - started, layout, errors, forbidden, unexpected }), contentType: 'application/json' });
   });
 }
