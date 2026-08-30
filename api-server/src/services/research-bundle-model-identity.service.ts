@@ -52,5 +52,6 @@ export function researchBundleModelIdentity(source: Row, now: number, allowTestE
     modelBlockers.push('MODEL_REFERENCE_INVALID');
   }
   if (!featureOrderDigest && !featureBlockers.length) featureBlockers.push('FEATURE_IDENTITY_UNVERIFIED');
+  if (!modelIdentityDigest && !modelBlockers.length) modelBlockers.push('MODEL_IDENTITY_UNVERIFIED');
   return { modelIdentityDigest, featureOrderDigest, preprocessingVersion, modelBlockers, featureBlockers };
 }
