@@ -43,50 +43,50 @@ jobs:
 
           source_path = Path('market-intelligence-sidecar/src/public-forward-liquidity-capture-seam-v3.mjs')
           source = source_path.read_text()
-          old = """  const body = {\n    schemaVersion: 'public-forward-liquidity-capture-artifact-receipt-v3',\n    ...captureReceipt,\n    artifactId: normalizedArtifactId,\n"""
-          new = """  const body = {\n    ...captureReceipt,\n    schemaVersion: 'public-forward-liquidity-capture-artifact-receipt-v3',\n    artifactId: normalizedArtifactId,\n"""
+          old = "  const body = {\n    schemaVersion: 'public-forward-liquidity-capture-artifact-receipt-v3',\n    ...captureReceipt,\n    artifactId: normalizedArtifactId,\n"
+          new = "  const body = {\n    ...captureReceipt,\n    schemaVersion: 'public-forward-liquidity-capture-artifact-receipt-v3',\n    artifactId: normalizedArtifactId,\n"
           if source.count(old) != 1:
               raise SystemExit('EXPECTED_ARTIFACT_SCHEMA_SPREAD_PATTERN_NOT_FOUND_EXACTLY_ONCE')
           source_path.write_text(source.replace(old, new, 1))
 
           test_path = Path('market-intelligence-sidecar/tests/public-forward-liquidity-capture-seam-v3.test.mjs')
           text = test_path.read_text()
-          import_old = """  executeCaptureSeam,\n  resolveScheduledAuthority,\n"""
-          import_new = """  executeCaptureSeam,\n  finalizeArtifactReceipt,\n  resolveScheduledAuthority,\n"""
+          import_old = "  executeCaptureSeam,\n  resolveScheduledAuthority,\n"
+          import_new = "  executeCaptureSeam,\n  finalizeArtifactReceipt,\n  resolveScheduledAuthority,\n"
           if text.count(import_old) != 1:
               raise SystemExit('EXPECTED_TEST_IMPORT_PATTERN_NOT_FOUND_EXACTLY_ONCE')
           text = text.replace(import_old, import_new, 1)
           marker = "test('scheduled artifact receipt retains explicit artifact-v3 schema after capture receipt spread', () => {"
           if marker not in text:
-              text += """
-
-test('scheduled artifact receipt retains explicit artifact-v3 schema after capture receipt spread', () => {
-  const captureReceipt = Object.freeze({
-    schemaVersion: 'public-forward-liquidity-capture-receipt-v3',
-    triggerSource: SCHEDULED_TRIGGER_SOURCE,
-    captureStatus: 'PRESENT',
-    prospectiveSlotCredit: 1,
-    executionAuthority: 'NONE',
-    privateApiUsed: false,
-    liveTrading: false,
-    orderSubmitted: false,
-  });
-  const receipt = finalizeArtifactReceipt({
-    captureReceipt,
-    artifactId: '123456',
-    artifactDigest: 'b'.repeat(64),
-    artifactName: 'public-forward-liquidity-v3-slot-test',
-  });
-  assert.equal(receipt.schemaVersion, 'public-forward-liquidity-capture-artifact-receipt-v3');
-  assert.equal(receipt.triggerSource, SCHEDULED_TRIGGER_SOURCE);
-  assert.equal(receipt.prospectiveSlotCredit, 1);
-  assert.equal(receipt.executionAuthority, 'NONE');
-  assert.equal(receipt.privateApiUsed, false);
-  assert.equal(receipt.liveTrading, false);
-  assert.equal(receipt.orderSubmitted, false);
-  assert.match(receipt.receiptDigest, /^[a-f0-9]{64}$/u);
-});
-"""
+              test_block = (
+                  "\n\ntest('scheduled artifact receipt retains explicit artifact-v3 schema after capture receipt spread', () => {\n"
+                  "  const captureReceipt = Object.freeze({\n"
+                  "    schemaVersion: 'public-forward-liquidity-capture-receipt-v3',\n"
+                  "    triggerSource: SCHEDULED_TRIGGER_SOURCE,\n"
+                  "    captureStatus: 'PRESENT',\n"
+                  "    prospectiveSlotCredit: 1,\n"
+                  "    executionAuthority: 'NONE',\n"
+                  "    privateApiUsed: false,\n"
+                  "    liveTrading: false,\n"
+                  "    orderSubmitted: false,\n"
+                  "  });\n"
+                  "  const receipt = finalizeArtifactReceipt({\n"
+                  "    captureReceipt,\n"
+                  "    artifactId: '123456',\n"
+                  "    artifactDigest: 'b'.repeat(64),\n"
+                  "    artifactName: 'public-forward-liquidity-v3-slot-test',\n"
+                  "  });\n"
+                  "  assert.equal(receipt.schemaVersion, 'public-forward-liquidity-capture-artifact-receipt-v3');\n"
+                  "  assert.equal(receipt.triggerSource, SCHEDULED_TRIGGER_SOURCE);\n"
+                  "  assert.equal(receipt.prospectiveSlotCredit, 1);\n"
+                  "  assert.equal(receipt.executionAuthority, 'NONE');\n"
+                  "  assert.equal(receipt.privateApiUsed, false);\n"
+                  "  assert.equal(receipt.liveTrading, false);\n"
+                  "  assert.equal(receipt.orderSubmitted, false);\n"
+                  "  assert.match(receipt.receiptDigest, /^[a-f0-9]{64}$/u);\n"
+                  "});\n"
+              )
+              text += test_block
           test_path.write_text(text)
           PY
 
@@ -124,8 +124,7 @@ test('scheduled artifact receipt retains explicit artifact-v3 schema after captu
           node --check market-intelligence-sidecar/src/public-forward-liquidity-capture-seam-v3.mjs
           node --check market-intelligence-sidecar/tests/public-forward-liquidity-capture-seam-v3.test.mjs
           node --test market-intelligence-sidecar/tests/public-forward-liquidity-capture-seam-v3.test.mjs
-          OUTPUT_DIR=/tmp/v3-activation-verify \
-            node market-intelligence-sidecar/scripts/run-public-forward-liquidity-capture-seam-v3.mjs verify-activation
+          OUTPUT_DIR=/tmp/v3-activation-verify node market-intelligence-sidecar/scripts/run-public-forward-liquidity-capture-seam-v3.mjs verify-activation
           node --input-type=module <<'NODE'
           import { readFile } from 'node:fs/promises';
           const report = JSON.parse(await readFile('/tmp/v3-activation-verify/activation-contract-verification.json', 'utf8'));
