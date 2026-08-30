@@ -41,10 +41,14 @@ for (const token of [
   'production_ssh_read_credential_used: true',
   'production_host_mutation: false',
   'encrypted_bundle_read_from_production_host: true',
+  'encrypted_bundle_copied_to_ephemeral_runner: true',
+  'github_artifact_uploaded: false',
+  'runner_backup_material_deleted_before_receipt: true',
+  'runner_ssh_material_deleted_before_receipt: true',
+  'plaintext_backup_file_created: false',
   'provider_pitr_restore_verified: false',
   'storage_object_restore_verified: false',
   'offsite_restore_verified: false',
-  'backup_material_uploaded_to_github: false',
   'schedule_activated: false',
   'production_deploy_executed: false',
   'private_trading_api: false',
@@ -75,8 +79,9 @@ for (const prohibited of [
   'REAL_ORDER',
   'AUTO_TRADING=true',
   'LIVE_TRADING=true',
+  'backup_material_uploaded_to_github: false',
 ]) {
-  assert.ok(!workflow.includes(prohibited), `restore workflow contains prohibited authority: ${prohibited}`);
+  assert.ok(!workflow.includes(prohibited), `restore workflow contains prohibited or ambiguous authority/evidence: ${prohibited}`);
 }
 
 assert.ok(!/^\s*schedule\s*:/m.test(workflow), 'restore drill must never be scheduled');
@@ -99,11 +104,20 @@ assert.ok(
 );
 assert.ok(
   workflow.includes("rm -rf -- \"$LOCAL_RESTORE_DIR\""),
-  'runner backup material must be removed',
+  'runner encrypted backup material must be removed before receipt publication',
 );
 assert.ok(
-  workflow.includes("rm -f -- ~/.ssh/id_ed25519"),
-  'ephemeral SSH key material must be removed',
+  workflow.includes("rm -f -- ~/.ssh/id_ed25519 ~/.ssh/known_hosts"),
+  'ephemeral SSH material must be removed before receipt publication',
+);
+assert.ok(
+  workflow.indexOf('Remove ephemeral runner backup and SSH material before publishing evidence')
+    < workflow.indexOf('Record sanitized logical-restore evidence on release control and canonical hub'),
+  'cleanup must complete before the success receipt can be published',
+);
+assert.ok(
+  workflow.includes("printf 'RESTORE_DRILL_DATABASE_URL=\\n' >> \"$GITHUB_ENV\""),
+  'next-step restore URL exposure must be cleared before receipt publication',
 );
 assert.ok(!/rm\s+-rf\s+--?\s+\/(?:opt|srv|var)\b/.test(workflow), 'workflow must not recursively delete Production/system paths');
 
