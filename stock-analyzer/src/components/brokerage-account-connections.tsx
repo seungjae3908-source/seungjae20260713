@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { KeyRound, RefreshCw, ShieldCheck, WalletCards, X } from 'lucide-react';
 import { authorizedFetch } from '@/lib/auth-fetch';
+import { useAuth } from '@/lib/auth';
 import { resolveEvidenceDisplay } from '@/lib/evidence-display';
+import { accountSnapshotForDisplay, parseReadonlyAccount } from '@/lib/readonly-account-evidence';
 
 type Provider = 'toss' | 'upbit' | 'bitget';
 type CredentialProvider = Provider;
@@ -10,7 +12,7 @@ type AccountReadStatus = 'CONNECTED' | 'CONFIGURED_UNVERIFIED' | 'NOT_CONFIGURED
 type CanonicalBalance = { currency: string; available: number | null; locked: number | null; total: number | null; estimatedKrwValue: number | null };
 type CanonicalPosition = { market: string; symbol: string; quantity: number | null; availableQuantity: number | null; averageEntryPrice: number | null; currentPrice: number | null; marketValue: number | null; unrealizedPnl: number | null; unrealizedPnlPercent: number | null; leverage: number | null; liquidationPrice: number | null; marginMode: string | null; side: string | null };
 type CanonicalAccount = { market: 'KR' | 'US' | 'UPBIT' | 'BITGET'; accountRef: string | null; currency: string | null; buyingPower: number | null };
-type CanonicalAccountSnapshot = {
+export type CanonicalAccountSnapshot = {
   provider: Provider; readOnly: true; connected: boolean; status: AccountReadStatus;
   accounts?: CanonicalAccount[] | null; balances?: CanonicalBalance[] | null; positions?: CanonicalPosition[] | null; openOrders?: Array<unknown> | null;
   checkedAt: string; lastGoodAt: string | null; stale: boolean; errorCode: string | null;
@@ -80,8 +82,17 @@ async function jsonRequest<T>(path: string, init?: RequestInit): Promise<T> {
   return payload;
 }
 
-export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFutures = true }: Props) {
+export function BrokerageAccountConnections(props: Props) {
+  const auth = useAuth();
+  if (auth.loading || !auth.user || !auth.can('canAccessBasicInfo')) return null;
+  const spot = props.canAccessSpot !== false && auth.can('canAccessSpot');
+  const futures = props.canAccessFutures !== false && auth.can('canAccessFutures');
+  return <MemberReadonlyAccounts key={`${auth.user.id}:${spot}:${futures}`} canAccessSpot={spot} canAccessFutures={futures} />;
+}
+
+function MemberReadonlyAccounts({ canAccessSpot = true, canAccessFutures = true }: Props) {
   const [snapshots, setSnapshots] = useState<Partial<Record<Provider, CanonicalAccountSnapshot>>>({});
+  const [now, setNow] = useState(() => Date.now());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [editing, setEditing] = useState<CredentialProvider | null>(null);
@@ -90,6 +101,7 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
   const [saveMessage, setSaveMessage] = useState('');
   const requestSequence = useRef(0);
   const controllerRef = useRef<AbortController | null>(null);
+  const saveLock = useRef(false);
 
   const enabledProviders = useCallback((): Provider[] => [
     'toss',
@@ -105,7 +117,7 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
     setLoading(true); setError('');
     const results = await Promise.all(enabledProviders().map(async (provider) => {
       try {
-        const value = await jsonRequest<CanonicalAccountSnapshot>(`/api/accounts/read-only/${provider}`, { signal: controller.signal });
+        const value = parseReadonlyAccount(await jsonRequest<unknown>(`/api/accounts/read-only/${provider}`, { signal: controller.signal }), provider);
         return { provider, value, error: null as string | null };
       } catch (cause) {
         if (controller.signal.aborted) return { provider, value: null, error: null };
@@ -113,10 +125,25 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
       }
     }));
     if (controller.signal.aborted || sequence !== requestSequence.current) return;
-    setSnapshots((current) => { const next = { ...current }; for (const result of results) if (result.value) next[result.provider] = result.value; return next; });
+    setSnapshots((current) => {
+      const next = { ...current };
+      for (const result of results) {
+        if (result.value) next[result.provider] = result.value;
+        else if (result.error && next[result.provider]) {
+          next[result.provider] = { ...next[result.provider]!, connected: false, status: 'UNAVAILABLE', stale: true,
+            accounts: null, balances: null, positions: null, openOrders: null, errorCode: result.error };
+        }
+      }
+      return next;
+    });
     setError(results.filter((result) => result.error).map((result) => `${result.provider.toUpperCase()}: ${result.error}`).join(' · '));
     setLoading(false);
   }, [enabledProviders]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     void refresh();
@@ -134,6 +161,7 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
   function openSetup(provider: CredentialProvider) { setEditing(provider); setCredentials(EMPTY_CREDENTIALS); setSaveMessage(''); }
 
   async function saveConnection() {
+    if (saveLock.current) return;
     if (!editing || !credentials.first.trim() || !credentials.second.trim() || (editing === 'bitget' && !credentials.third.trim())) {
       setSaveMessage('필수 조회 키를 모두 입력해 주세요.'); return;
     }
@@ -142,6 +170,7 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
       : editing === 'upbit'
         ? { accessKey: credentials.first.trim(), secretKey: credentials.second.trim() }
         : { apiKey: credentials.first.trim(), secretKey: credentials.second.trim(), passphrase: credentials.third.trim() };
+    saveLock.current = true;
     setSaving(true); setSaveMessage('');
     try {
       const result = await jsonRequest<{ configured: boolean; credentialsReturned: false }>(`/api/accounts/read-only/credentials/${editing}`, { method: 'PUT', body: JSON.stringify({ purpose: 'read_only', permissions: ['read'], credentials: payload }) });
@@ -149,10 +178,12 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
       const providerLabel = editing === 'toss' ? 'Toss' : editing === 'upbit' ? 'Upbit' : 'Bitget';
       setCredentials(EMPTY_CREDENTIALS); setEditing(null); setSaveMessage(`${providerLabel} 조회 전용 키를 암호화 저장했습니다.`); await refresh();
     } catch (cause) { setSaveMessage(cause instanceof Error ? cause.message : '조회 키를 저장하지 못했습니다.'); }
-    finally { setSaving(false); }
+    finally { saveLock.current = false; setSaving(false); }
   }
 
-  const toss = snapshots.toss; const upbit = snapshots.upbit; const bitget = snapshots.bitget;
+  const toss = accountSnapshotForDisplay(snapshots.toss, now);
+  const upbit = accountSnapshotForDisplay(snapshots.upbit, now);
+  const bitget = accountSnapshotForDisplay(snapshots.bitget, now);
   const tossPositions = Array.isArray(toss?.positions) ? toss.positions : [];
   const upbitBalances = Array.isArray(upbit?.balances) ? upbit.balances : [];
   const bitgetPositions = Array.isArray(bitget?.positions) ? bitget.positions : [];
@@ -163,7 +194,7 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
   return <section data-testid="brokerage-account-connections" className="mt-4 min-w-0 rounded-3xl border border-card-border bg-card p-4 text-left shadow-sm">
     <div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><div className="flex items-center gap-2"><WalletCards className="h-5 w-5 shrink-0 text-primary" /><h2 className="text-sm font-extrabold">내 실계좌 · 조회 전용 연결</h2></div><p className="mt-1 break-keep text-xs leading-relaxed text-muted-foreground">Toss · Upbit · Bitget 3개만 연결합니다. 내 계정의 암호화 Vault로 잔고·보유·포지션만 조회하며 주문·취소·이체·출금은 실행하지 않습니다.</p></div>
       <button type="button" disabled={loading} onClick={() => void refresh()} className="flex min-h-10 shrink-0 items-center gap-2 rounded-xl border border-card-border px-3 py-2 text-xs font-extrabold disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />{loading ? '확인 중' : '새로고침'}</button></div>
-    <div className="mt-3 flex items-center gap-2 rounded-2xl bg-positive/10 p-3 text-xs font-bold text-positive"><ShieldCheck className="h-4 w-4 shrink-0" /><span className="min-w-0 break-words">READ-ONLY · 실주문/취소/이체/출금 0건 · Secret 원문 응답 0건</span></div>
+    <div className="mt-3 flex items-center gap-2 rounded-2xl bg-positive/10 p-3 text-xs font-bold text-positive"><ShieldCheck className="h-4 w-4 shrink-0" /><span className="min-w-0 break-words">READ-ONLY · 주문/취소/이체/출금 기능 없음 · Secret 원문 응답 금지</span></div>
     {error ? <p role="alert" className="mt-3 break-words rounded-2xl bg-destructive/10 p-3 text-xs font-bold text-destructive">{error}</p> : null}
     {saveMessage ? <p role="status" className="mt-3 break-words rounded-2xl bg-secondary p-3 text-xs font-bold">{saveMessage}</p> : null}
 
@@ -179,7 +210,7 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
       {canAccessFutures ? <article className="min-w-0 rounded-2xl border border-card-border p-3" data-testid="connection-bitget"><div className="flex min-w-0 items-center justify-between gap-2"><div className="min-w-0"><p className="truncate text-sm font-extrabold">Bitget · 코인 선물</p><p className="mt-0.5 text-[11px] text-muted-foreground">내 Vault + allowlisted GET 2종</p></div><Status snapshot={bitget} /></div><div className="mt-3 grid grid-cols-2 gap-2 text-xs"><Metric label="선물 계정" value={countMetric(bitget, Array.isArray(bitget?.accounts) ? bitget.accounts.length : null, '개')} /><Metric label="열린 포지션" value={countMetric(bitget, Array.isArray(bitget?.positions) ? knownNonZeroCount(bitgetPositions, (row) => row.quantity) : null, '개')} /></div><div className="mt-2 max-h-44 space-y-1 overflow-y-auto overscroll-contain">{visibleBitgetPositions.slice(0, 8).map((row, index) => <div key={`${row.symbol}-${row.side}-${index}`} className="rounded-xl bg-secondary/60 px-3 py-2 text-xs"><div className="flex min-w-0 items-center justify-between gap-3"><span className="min-w-0 truncate font-extrabold">{row.symbol} · {accountEvidence(bitget, row.side)}</span><span className="shrink-0">{amount(bitget, row.quantity)}</span></div><p className="mt-1 break-words text-[11px] text-muted-foreground">레버리지 {amount(bitget, row.leverage, null, 'x')} · 미실현 {amount(bitget, row.unrealizedPnl)}</p></div>)}</div><SetupButton label="Bitget 조회 연결 설정" onClick={() => openSetup('bitget')} /><ErrorLine value={bitget?.errorCode} /></article> : null}
     </div>
 
-    <p className="mt-3 text-[11px] text-muted-foreground">최근 확인 {latestCheckedAt(enabledProviders().map((provider) => snapshots[provider]))}</p>
+    <p className="mt-3 text-[11px] text-muted-foreground">최근 조회 확인 {latestCheckedAt(enabledProviders().map((provider) => snapshots[provider]))} · 공급자 원본 시각/실시간 여부 미확인</p>
     {editing ? <div className="fixed inset-0 z-50 flex items-end bg-black/55 p-3 sm:items-center sm:justify-center" role="presentation"><div role="dialog" aria-modal="true" aria-label={`${providerLabel(editing)} 조회 연결 설정`} className="max-h-[calc(100dvh-1.5rem)] w-full max-w-md overflow-y-auto rounded-3xl border border-card-border bg-card p-4 shadow-2xl"><div className="flex items-center justify-between gap-3"><div className="min-w-0"><h3 className="truncate text-base font-extrabold">{providerLabel(editing)} 조회 전용 연결</h3><p className="mt-1 text-xs text-muted-foreground">API 권한은 조회 전용으로 발급하고 거래·출금 권한은 켜지 마세요.</p></div><button type="button" aria-label="연결 설정 닫기" onClick={() => setEditing(null)} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-card-border"><X className="h-4 w-4" /></button></div><div className="mt-4 space-y-3">
       <CredentialField testId={`${editing}-credential-primary`} label={editing === 'toss' ? 'Client ID' : editing === 'upbit' ? 'Access Key' : 'API Key'} value={credentials.first} onChange={(value) => setCredentials((current) => ({ ...current, first: value }))} />
       <CredentialField testId={`${editing}-credential-secret`} label={editing === 'toss' ? 'Client Secret' : 'Secret Key'} value={credentials.second} onChange={(value) => setCredentials((current) => ({ ...current, second: value }))} />

@@ -1,3 +1,5 @@
+import { marketNumber } from '../../providers/market-evidence';
+
 export type AccountProvider = 'toss' | 'upbit' | 'bitget';
 export type AccountReadStatus = 'CONNECTED' | 'CONFIGURED_UNVERIFIED' | 'NOT_CONFIGURED' | 'STALE' | 'AUTH_FAILED' | 'RATE_LIMITED' | 'UNAVAILABLE';
 
@@ -19,9 +21,7 @@ export function emptySnapshot(provider: AccountProvider, status: AccountReadStat
 }
 
 export function nullableNumber(value: unknown): number | null {
-  if (value === null || value === undefined || value === '') return null;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
+  return marketNumber(value);
 }
 
 export function maskAccountRef(value: unknown): string | null {

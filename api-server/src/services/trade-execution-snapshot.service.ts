@@ -1,4 +1,5 @@
 import type { PreparedExchangeRequest } from './trade-exchange-adapters.service';
+import { marketNumber } from '../providers/market-evidence';
 import type {
   TradingMarketSnapshot,
   TradingPlan,
@@ -18,9 +19,18 @@ function isRecord(value: unknown): value is JsonObject {
 }
 
 function finite(value: unknown): number | null {
-  if (value == null || value === '') return null;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
+  return marketNumber(value);
+}
+
+function nonNegative(value: unknown, field: string): number {
+  const parsed = finite(value);
+  if (parsed == null || parsed < 0) throw new Error(`EXECUTION_EVIDENCE_INVALID:${field}`);
+  return parsed;
+}
+
+function identity(value: unknown): string {
+  if (typeof value !== 'string' || !value.trim()) throw new Error('EXECUTION_IDENTITY_UNAVAILABLE');
+  return value.trim().toUpperCase();
 }
 
 function positive(value: unknown): number | null {
@@ -34,9 +44,20 @@ function absolute(value: unknown): number | null {
 }
 
 function rows(value: unknown): JsonObject[] {
-  if (Array.isArray(value)) return value.filter(isRecord);
+  if (Array.isArray(value) && value.every(isRecord)) return value;
   if (isRecord(value)) return [value];
-  return [];
+  throw new Error('EXECUTION_RESPONSE_INVALID');
+}
+
+function list(value: unknown): JsonObject[] {
+  if (!Array.isArray(value) || !value.every(isRecord)) throw new Error('EXECUTION_LIST_INVALID');
+  return value;
+}
+
+function matchingRow(value: unknown, key: string, expected: string): JsonObject {
+  const matches = rows(value).filter((row) => identity(row[key]) === expected);
+  if (matches.length !== 1) throw new Error('EXECUTION_IDENTITY_MISMATCH');
+  return matches[0];
 }
 
 function levelRows(value: unknown, descending: boolean): Level[] {
@@ -93,11 +114,12 @@ function kiwoomLevels(value: JsonObject): { bids: Level[]; asks: Level[] } {
 }
 
 function timestampMs(values: unknown[]) {
-  const timestamps = values
-    .map(finite)
-    .filter((value): value is number => value != null && value > 0)
-    .map((value) => value < 100_000_000_000 ? value * 1000 : value);
-  return timestamps.length ? Math.min(...timestamps) : null;
+  const timestamps = values.map(finite);
+  // These exchange endpoints document milliseconds. Missing components cannot
+  // borrow another provider component's fresh clock, and seconds are not guessed.
+  if (!timestamps.length || timestamps.some((value) => value == null
+    || !Number.isSafeInteger(value) || value < 1_000_000_000_000 || value > Date.now())) return null;
+  return Math.min(...timestamps as number[]);
 }
 
 function isoTimestamp(value: number | null) {
@@ -270,10 +292,16 @@ export function buildBitgetExecutionSnapshot(input: {
   contract: JsonObject;
   signal: SignalSnapshot;
 }): TradingMarketSnapshot {
-  const accountRows = rows(input.accounts);
-  const account = accountRows.find((row) => String(row.marginCoin ?? '').toUpperCase() === 'USDT') ?? accountRows[0];
-  const positionRows = rows(input.positions).filter((row) => String(row.symbol ?? '').toUpperCase() === input.plan.symbol.toUpperCase());
-  const tickerRow = rows(input.ticker).find((row) => String(row.symbol ?? '').toUpperCase() === input.plan.symbol.toUpperCase()) ?? rows(input.ticker)[0];
+  const account = matchingRow(list(input.accounts), 'marginCoin', 'USDT');
+  const allPositions = list(input.positions);
+  for (const row of allPositions) {
+    identity(row.symbol);
+    const quantity = nonNegative(row.total, 'position.total');
+    if (quantity > 0 && !['LONG', 'SHORT'].includes(identity(row.holdSide))) throw new Error('EXECUTION_POSITION_SIDE_INVALID');
+  }
+  const positionRows = allPositions.filter((row) => identity(row.symbol) === input.plan.symbol.toUpperCase());
+  const tickerRow = matchingRow(input.ticker, 'symbol', input.plan.symbol.toUpperCase());
+  if (identity(input.contract.symbol) !== input.plan.symbol.toUpperCase()) throw new Error('EXECUTION_CONTRACT_IDENTITY_MISMATCH');
   const depthRow = rows(input.depth)[0];
   const bids = levelRows(depthRow?.bids, true);
   const asks = levelRows(depthRow?.asks, false);
@@ -282,18 +310,21 @@ export function buildBitgetExecutionSnapshot(input: {
   const leverage = Math.max(1, Number(input.plan.leverage ?? 1));
   const requestedQuantity = Number(input.plan.quantity ?? 0);
   const requiredMargin = currentPrice != null ? currentPrice * requestedQuantity / leverage : 0;
-  const available = positive(account?.available) ?? 0;
+  const available = nonNegative(account.available, 'account.available');
   const availableBalance = requiredMargin > 0
     ? input.plan.estimatedKrw / leverage * (available / requiredMargin)
     : 0;
   const equity = positive(account?.accountEquity ?? account?.usdtEquity ?? account?.equity);
+  if (equity == null) throw new Error('EXECUTION_ACCOUNT_EQUITY_UNAVAILABLE');
   const exposureNotional = positionRows.reduce((sum, row) => {
-    const quantity = absolute(row.total ?? row.available ?? row.size) ?? 0;
-    const markPrice = positive(row.markPrice) ?? currentPrice ?? 0;
+    const quantity = nonNegative(row.total, 'position.total');
+    if (quantity === 0) return sum;
+    const markPrice = positive(row.markPrice) ?? currentPrice;
+    if (markPrice == null) throw new Error('EXECUTION_POSITION_MARK_UNAVAILABLE');
     return sum + quantity * markPrice;
   }, 0);
-  const assetExposurePercent = equity != null && equity > 0 ? exposureNotional / equity * 100 : input.plan.marketSnapshot.assetExposurePercent;
-  const currentPosition = positionRows.find((row) => (absolute(row.total ?? row.available ?? row.size) ?? 0) > 0);
+  const assetExposurePercent = exposureNotional / equity * 100;
+  const currentPosition = positionRows.find((row) => nonNegative(row.total, 'position.total') > 0);
   const existingPositionSide = currentPosition
     ? String(currentPosition.holdSide ?? '').toLowerCase() === 'short' ? 'short' : 'long'
     : null;
@@ -314,7 +345,7 @@ export function buildBitgetExecutionSnapshot(input: {
     asks,
     availableBalance,
     assetExposurePercent,
-    openPositionCount: positionRows.filter((row) => (absolute(row.total ?? row.available ?? row.size) ?? 0) > 0).length,
+    openPositionCount: allPositions.filter((row) => nonNegative(row.total, 'position.total') > 0).length,
     existingPositionSide,
     liquidationDistancePercent: liquidationDistances.length ? Math.min(...liquidationDistances) : null,
     estimatedFeePercent: feeRate == null ? null : feeRate * 100,
@@ -330,27 +361,39 @@ export function buildUpbitExecutionSnapshot(input: {
   orderbook: unknown;
   signal: SignalSnapshot;
 }): TradingMarketSnapshot {
-  const accountRows = rows(isRecord(input.accounts) && Array.isArray(input.accounts.data) ? input.accounts.data : input.accounts);
-  const krw = accountRows.find((row) => String(row.currency ?? '').toUpperCase() === 'KRW');
+  const accountRows = list(isRecord(input.accounts) ? input.accounts.data : input.accounts);
+  const currencies = new Set<string>();
+  for (const row of accountRows) {
+    const currency = identity(row.currency);
+    if (currencies.has(currency)) throw new Error('EXECUTION_ACCOUNT_IDENTITY_DUPLICATE');
+    currencies.add(currency);
+    nonNegative(row.balance, 'account.balance');
+    nonNegative(row.locked, 'account.locked');
+  }
+  const krw = accountRows.find((row) => identity(row.currency) === 'KRW');
   const baseCurrency = input.plan.symbol.toUpperCase().replace(/^KRW-/, '');
   const asset = accountRows.find((row) => String(row.currency ?? '').toUpperCase() === baseCurrency);
   const tickerRows = rows(isRecord(input.ticker) && Array.isArray(input.ticker.data) ? input.ticker.data : input.ticker);
-  const tickerRow = tickerRows[0];
+  const expectedMarket = `KRW-${baseCurrency}`;
+  const tickerRow = matchingRow(tickerRows, 'market', expectedMarket);
   const orderbookRows = isRecord(input.orderbook) && Array.isArray(input.orderbook.data)
     ? input.orderbook.data : input.orderbook;
-  const book = objectLevels(orderbookRows);
+  const book = objectLevels(matchingRow(orderbookRows, 'market', expectedMarket));
   const currentPrice = positive(tickerRow?.trade_price);
-  const observedAtMs = timestampMs([tickerRow?.timestamp, tickerRow?.trade_timestamp, book.timestamp]);
+  const observedAtMs = timestampMs([tickerRow.timestamp ?? tickerRow.trade_timestamp, book.timestamp]);
   const availableBalance = input.plan.side === 'sell'
-    ? (positive(asset?.balance) ?? 0) * (currentPrice ?? 0)
-    : positive(krw?.balance) ?? 0;
-  const accountValue = positive(input.plan.marketSnapshot.accountValueKrw) ?? 0;
-  const assetValue = (positive(asset?.balance) ?? 0) * (currentPrice ?? 0);
-  const assetExposurePercent = accountValue > 0 ? assetValue / accountValue * 100 : input.plan.marketSnapshot.assetExposurePercent;
+    ? (asset ? nonNegative(asset.balance, 'asset.balance') : 0) * (currentPrice ?? 0)
+    : krw ? nonNegative(krw.balance, 'krw.balance') : 0;
+  const accountValue = positive(input.plan.marketSnapshot.accountValueKrw);
+  if (accountValue == null) throw new Error('EXECUTION_ACCOUNT_EQUITY_UNAVAILABLE');
+  const assetQuantity = asset ? nonNegative(asset.balance, 'asset.balance') + nonNegative(asset.locked, 'asset.locked') : 0;
+  if (assetQuantity > 0 && currentPrice == null) throw new Error('EXECUTION_POSITION_MARK_UNAVAILABLE');
+  const assetValue = assetQuantity * (currentPrice ?? 0);
+  const assetExposurePercent = assetValue / accountValue * 100;
   const feeRate = absolute(input.plan.side === 'buy'
     ? input.chance.bid_fee ?? (isRecord(input.chance.bid) ? input.chance.bid.fee : null)
     : input.chance.ask_fee ?? (isRecord(input.chance.ask) ? input.chance.ask.fee : null));
-  const marketState = isRecord(input.chance.market) ? String(input.chance.market.state ?? 'active') : 'active';
+  const marketState = isRecord(input.chance.market) && typeof input.chance.market.state === 'string' ? input.chance.market.state : null;
   return baseSnapshot({
     plan: input.plan,
     source: 'upbit-private-account+public-market',
@@ -361,7 +404,9 @@ export function buildUpbitExecutionSnapshot(input: {
     availableBalance,
     assetExposurePercent,
     estimatedFeePercent: feeRate == null ? null : feeRate * 100,
-    marketStatus: marketState === 'active' ? 'OPEN' : 'HALTED',
+    openPositionCount: accountRows.filter((row) => identity(row.currency) !== 'KRW'
+      && nonNegative(row.balance, 'account.balance') + nonNegative(row.locked, 'account.locked') > 0).length,
+    marketStatus: marketState == null ? 'UNKNOWN' : marketState === 'active' ? 'OPEN' : 'HALTED',
     signal: input.signal,
   });
 }
