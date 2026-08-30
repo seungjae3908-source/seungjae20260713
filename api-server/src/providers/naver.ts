@@ -3,6 +3,8 @@ import type { Candle, Quote } from '../sample/types';
 import { parseFinancialAmount } from './financial-evidence';
 import { requireMarketNumber, requireSourceTime } from './market-evidence';
 
+const NAVER_REQUEST_TIMEOUT_MS = 1_650;
+
 type NaverChartItem = {
   localDate?: string;
   closePrice?: number | string;
@@ -50,6 +52,7 @@ function dateToIso(localDate: string) {
 
 async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(url, {
+    signal: AbortSignal.timeout(NAVER_REQUEST_TIMEOUT_MS),
     headers: {
       accept: 'application/json,text/plain,*/*',
       'accept-language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
@@ -68,6 +71,7 @@ async function fetchJson<T>(url: string): Promise<T> {
 
 async function fetchText(url: string): Promise<string> {
   const res = await fetch(url, {
+    signal: AbortSignal.timeout(NAVER_REQUEST_TIMEOUT_MS),
     headers: {
       accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       'accept-language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
@@ -163,20 +167,29 @@ export async function getCandles(
   const data = await fetchJson<any>(url);
   const rows: NaverChartItem[] = Array.isArray(data) ? data : data?.data ?? [];
 
+  return normalizeNaverCandles(rows);
+}
+
+export function normalizeNaverCandles(rows: NaverChartItem[]): Candle[] {
+  const seen = new Set<string>();
   return rows
     .map((row) => {
       const time = dateToIso(String(row.localDate ?? ''));
+      if (seen.has(time)) throw new Error('NAVER_CANDLE_DUPLICATE');
+      seen.add(time);
 
-      return {
+      const candle = {
         time,
         open: requireMarketNumber(row.openPrice, 'naver.candle.open', Number.MIN_VALUE),
         high: requireMarketNumber(row.highPrice, 'naver.candle.high', Number.MIN_VALUE),
         low: requireMarketNumber(row.lowPrice, 'naver.candle.low', Number.MIN_VALUE),
         close: requireMarketNumber(row.closePrice, 'naver.candle.close', Number.MIN_VALUE),
         volume: requireMarketNumber(row.accumulatedTradingVolume, 'naver.candle.volume', 0),
-      } as Candle;
+      };
+      if (candle.low > Math.min(candle.open, candle.close) || candle.high < Math.max(candle.open, candle.close) || candle.high < candle.low) throw new Error('NAVER_CANDLE_OHLC_INVALID');
+      return candle;
     })
-    .filter((candle) => candle.close > 0);
+    .sort((a, b) => a.time.localeCompare(b.time));
 }
 
 export const candles = getCandles;

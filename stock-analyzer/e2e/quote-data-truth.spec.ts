@@ -3,6 +3,7 @@ import { formatPrice, formatPercent, formatCompact, formatVolume } from '../src/
 import { quoteRating } from '../src/lib/quote-row-evidence';
 import { quoteFreshness } from '../src/lib/market-freshness';
 import { financialDisplayEvidence } from '../src/lib/financial-display-evidence';
+import { classifyStock } from '../src/lib/stock-classifier';
 import { expect, test, type Page, type Route } from '@playwright/test';
 
 // Auth and market fixtures stay in the isolated localhost browser only.
@@ -11,7 +12,7 @@ const NOW = '2026-08-30T12:00:00.000Z';
 const sizes = [[1440, 900], [1024, 768], [320, 740], [360, 800], [390, 844], [412, 915], [430, 932]] as const;
 const fulfill = (route: Route, body: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 
-async function installRuntime(page: Page, financialScenario?: 'legacy' | 'current' | 'provider-shape') {
+async function installRuntime(page: Page, financialScenario?: 'legacy' | 'current' | 'provider-shape' | 'summary-missing' | 'summary-wrong') {
   await page.addInitScript(({ userId, now }) => {
     const encode = (value: Record<string, unknown>) => btoa(JSON.stringify(value)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
     const exp = 4102444800;
@@ -37,6 +38,8 @@ async function installRuntime(page: Page, financialScenario?: 'legacy' | 'curren
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (financialScenario) {
+      if (path === '/api/stocks/AAPL/quote' && financialScenario === 'summary-missing') return fulfill(route, { ticker: 'AAPL', currency: 'USD', price: null, changePercent: null, updatedAt: NOW });
+      if (path === '/api/stocks/AAPL/quote' && financialScenario === 'summary-wrong') return fulfill(route, { ticker: 'MSFT', currency: 'KRW', price: 123, changePercent: 9, updatedAt: NOW });
       if (path === '/api/stocks/AAPL/quote') return fulfill(route, { ticker: 'AAPL', name: 'Apple fixture', price: 100, changePercent: 0, currency: 'USD', updatedAt: NOW });
       if (path === '/api/stocks/AAPL/profile') return fulfill(route, { ticker: 'AAPL', name: 'Apple fixture', currency: 'USD', marketCap: 1000 });
       // The default AI subtab mounts before the user selects financials. These
@@ -176,3 +179,49 @@ test('financial display never reuses legacy confidence or net income as cash-flo
   assert.equal(financialDisplayEvidence({ source: 'sample' }).sample, true);
   assert.equal(financialDisplayEvidence({ health: { method: 'FINANCIAL_RULES_V1', score: NaN, level: 'STRONG' } }).healthLevel, null);
 });
+
+test('classification needs actual inputs and large companies are not exempt from serious risk', () => {
+  for (const ticker of ['AAPL', '005930', 'UNKNOWN']) {
+    const result = classifyStock({ ticker });
+    assert.equal(result.label, '평가 근거 부족');
+    assert.equal(result.score, null);
+    assert.equal(result.marketCapGrade, '시총확인필요');
+  }
+  const complete = { ticker: 'AAPL', currency: 'USD', score: 70, changePercent: 0, marketCap: 300_000_000_000, per: 20, pbr: 2, roe: 10, debtRatio: 50, operatingIncome: 10, netIncome: 10, equity: 100 };
+  assert.equal(classifyStock(complete).marketCapGrade, '초대형');
+  assert.equal(classifyStock({ ...complete, marketCap: 1_000_000 }).marketCapGrade, '초소형');
+  assert.equal(classifyStock({ ...complete, score: undefined, aiScore: 99 }).label, '평가 근거 부족');
+  assert.equal(classifyStock({ ...complete, score: 101 }).label, '평가 근거 부족');
+  assert.equal(classifyStock({ ...complete, currency: undefined }).label, '평가 근거 부족');
+  const risk = classifyStock({ ...complete, risks: ['상장폐지 결정'] });
+  assert.equal(risk.label, '잡주');
+  assert.equal(risk.delistingWarning, true);
+  assert.ok(risk.score !== null && risk.score <= 44);
+});
+
+for (const [width, height] of sizes) {
+  test(`stock summary does not relabel missing or wrong-identity data at ${width}x${height}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height });
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
+    page.on('response', (response) => { if (response.status() >= 400) errors.push(`HTTP ${response.status()}`); });
+    const scenario = width === 1440 ? 'summary-wrong' : 'summary-missing';
+    const unexpected = await installRuntime(page, scenario);
+    await page.goto('/stock-info/analysis?asset=stock&market=US&ticker=AAPL&tab=summary');
+    const summary = page.getByTestId('stock-detail-summary');
+    await expect(summary.getByText('미확인', { exact: true })).toBeVisible();
+    await expect(summary).toContainText('등락 미확인');
+    await expect(summary).toContainText('시세 시각 확인 불가');
+    await expect(summary).not.toContainText('$0.00');
+    await expect(summary).not.toContainText('+0.00%');
+    await expect(summary).not.toContainText('정상');
+    if (scenario === 'summary-wrong') await expect(summary.getByRole('alert')).toContainText('일치하지 않아');
+    const layout = await page.evaluate(() => ({ width: innerWidth, body: document.body.scrollWidth, root: document.documentElement.scrollWidth }));
+    expect(layout.body).toBeLessThanOrEqual(width);
+    expect(layout.root).toBeLessThanOrEqual(width);
+    expect(unexpected).toEqual([]);
+    expect(errors).toEqual([]);
+    await testInfo.attach('summary-runtime-proof.json', { body: JSON.stringify({ viewport: { width, height }, scenario, fixture: true, layout, errors: errors.length, unexpectedRequests: unexpected.length }), contentType: 'application/json' });
+  });
+}
