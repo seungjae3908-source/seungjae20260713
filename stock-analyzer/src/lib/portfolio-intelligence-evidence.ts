@@ -29,7 +29,11 @@ export function parsePortfolioIntelligence(value: unknown, now = Date.now()): In
   if (!Array.isArray(data.holdings) || !data.holdings.every(validateHolding) || !Array.isArray(data.topHoldings) || !data.topHoldings.every(validateHolding)) throw new Error('PORTFOLIO_HOLDINGS_INVALID');
   const holdings = data.holdings as Array<Record<string, unknown>>;
   if (new Set(holdings.map((row) => row.id)).size !== holdings.length
-    || !(data.topHoldings as Array<Record<string, unknown>>).every((row) => holdings.some((known) => known.id === row.id && known.ticker === row.ticker && known.normalizedKRW === row.normalizedKRW))) throw new Error('PORTFOLIO_IDENTITY_INVALID');
+    || new Set(holdings.map((row) => JSON.stringify([row.market, row.currency, row.ticker]))).size !== holdings.length
+    || holdings.some((row) => row.sourceHoldingIds !== undefined && (!Array.isArray(row.sourceHoldingIds)
+      || !row.sourceHoldingIds.length || !row.sourceHoldingIds.every(text) || new Set(row.sourceHoldingIds).size !== row.sourceHoldingIds.length))
+    || !(data.topHoldings as Array<Record<string, unknown>>).every((row) => holdings.some((known) => known.id === row.id
+      && ['ticker', 'market', 'currency', 'quantity', 'averagePrice', 'currentPrice', 'nativeValue', 'normalizedKRW', 'asOf', 'source'].every((key) => known[key] === row[key])))) throw new Error('PORTFOLIO_IDENTITY_INVALID');
   const quality = data.dataQuality;
   if (!evidenceRecord(quality) || !text(quality.status) || !['providerCount', 'includedProviderCount', 'invalidHoldingRows'].every((key) => evidenceNumber(quality[key]) && Number.isInteger(quality[key]) && quality[key] >= 0)
     || Number(quality.includedProviderCount) > Number(quality.providerCount)) throw new Error('PORTFOLIO_DATA_QUALITY_INVALID');
@@ -75,19 +79,40 @@ export function parseMonthlyPlan(value: unknown, input: { monthlyAmountKRW: numb
   return value as unknown as MonthlyResponse;
 }
 
-export function parseAdditionalBuy(value: unknown, holding: { ticker: string; market: string; currency: string }): AdditionalBuyResponse {
+export function parseAdditionalBuy(value: unknown, holding: { id: string; ticker: string; market: string; currency: string },
+  input: { additionalAmountKRW?: number; additionalQuantity?: number }): AdditionalBuyResponse {
   simulationEnvelope(value);
   const facts = value.holding;
   const result = value.result;
   const evidence = value.evidence;
   if (value.priceBasis !== 'NORMALIZED_KRW' || !evidenceRecord(facts) || facts.ticker !== holding.ticker
+    || facts.id !== holding.id || !evidenceNumber(facts.quantity) || facts.quantity <= 0
     || facts.market !== holding.market || facts.nativeCurrency !== holding.currency
     || !['currentAveragePriceNative', 'currentPriceNative'].every((key) => evidenceNumber(facts[key]) && facts[key] > 0)
-    || !nullableNumber(facts.currentPositionValueKRW) || !evidenceRecord(result)
+    || !nullableNumber(facts.currentPositionValueKRW) || !evidenceRecord(result) || value.status !== result.status
+    || !['READY', 'UNAVAILABLE'].includes(String(result.status)) || typeof result.status !== 'string'
     || !['additionalQuantity', 'additionalInvestmentKRW', 'newAveragePrice', 'currentWeightPercent', 'projectedWeightPercent'].every((key) => nullableNumber(result[key]))
     || result.stopLoss !== null || result.estimatedMaxLossKRW !== null || !Array.isArray(result.targets) || result.targets.length !== 0
     || !Array.isArray(result.targetProfitsKRW) || result.targetProfitsKRW.length !== 0
     || !Array.isArray(result.missing) || !result.missing.every(text)
     || !evidenceRecord(evidence) || evidence.stopLoss !== 'UNAVAILABLE' || evidence.targets !== 'UNAVAILABLE' || evidence.source !== null) throw new Error('SIMULATION_EVIDENCE_INVALID');
+  const values = ['additionalQuantity', 'additionalInvestmentKRW', 'newAveragePrice', 'currentWeightPercent', 'projectedWeightPercent'];
+  if (result.status === 'UNAVAILABLE') {
+    if (values.some((key) => result[key] !== null)) throw new Error('SIMULATION_UNAVAILABLE_METRICS');
+  } else {
+    if (!values.every((key) => evidenceNumber(result[key]) && result[key] >= 0)
+      || !evidenceNumber(facts.currentPositionValueKRW) || facts.currentPositionValueKRW <= 0
+      || Number(result.additionalQuantity) <= 0 || Number(result.additionalInvestmentKRW) <= 0 || Number(result.newAveragePrice) <= 0
+      || Number(result.currentWeightPercent) > 100 || Number(result.projectedWeightPercent) > 100) throw new Error('SIMULATION_METRICS_INVALID');
+    const close = (left: unknown, right: number) => evidenceNumber(left) && Number.isFinite(right)
+      && Math.abs(left - right) <= Math.max(1e-6, Math.abs(right) * 1e-9);
+    const priceKRW = facts.currentPositionValueKRW / facts.quantity;
+    const quantity = input.additionalQuantity ?? (input.additionalAmountKRW !== undefined ? input.additionalAmountKRW / priceKRW : NaN);
+    const amount = quantity * priceKRW;
+    const fxRate = priceKRW / Number(facts.currentPriceNative);
+    const average = (facts.quantity * Number(facts.currentAveragePriceNative) * fxRate + amount) / (facts.quantity + quantity);
+    if (!close(result.additionalQuantity, quantity) || !close(result.additionalInvestmentKRW, amount)
+      || !close(result.newAveragePrice, average)) throw new Error('SIMULATION_ARITHMETIC_MISMATCH');
+  }
   return value as unknown as AdditionalBuyResponse;
 }
