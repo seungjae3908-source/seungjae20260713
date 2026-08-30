@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { InMemoryTradingRepository } from './trade-automation.repository';
 import { TradeAutomationService } from './trade-automation.service';
 import { TradeExecutionService } from './trade-execution.service';
+import { buildBitgetExecutionSnapshot, buildUpbitExecutionSnapshot } from './trade-execution-snapshot.service';
 import { encryptTradingCredentials } from './trade-credential-vault.service';
 import {
   marketIntelligenceNotAvailable,
@@ -24,6 +25,64 @@ import {
 const USER_ID = '11111111-1111-1111-1111-111111111111';
 const MASTER_KEY = Buffer.alloc(32, 7).toString('base64');
 const nativeFetch = globalThis.fetch;
+
+test('execution snapshot rejects wrong identity and malformed positions instead of assuming an empty account', async () => {
+  const { approved } = await setup();
+  const now = Date.now();
+  const input = {
+    plan: { ...approved, exchange: 'bitget' as const, symbol: 'BTCUSDT', leverage: 2 },
+    accounts: [{ marginCoin: 'USDT', available: '10000', accountEquity: '100000' }],
+    positions: [] as Record<string, unknown>[],
+    ticker: [{ symbol: 'BTCUSDT', markPrice: '100000', ts: now }],
+    depth: { bids: [[99999, 10], [99998, 10]], asks: [[100001, 10], [100002, 10]], ts: now },
+    contract: { symbol: 'BTCUSDT', takerFeeRate: '0.0005' },
+    signal: null,
+  };
+  assert.equal(buildBitgetExecutionSnapshot(input).openPositionCount, 0);
+  assert.equal(buildBitgetExecutionSnapshot({ ...input, positions: [
+    { symbol: 'ETHUSDT', total: '1', holdSide: 'long' },
+    { symbol: 'SOLUSDT', total: '2', holdSide: 'short' },
+  ] }).openPositionCount, 2);
+  for (const positions of [undefined, null, {}, [null], [{ symbol: 'BTCUSDT', total: true }], [{ symbol: 'BTCUSDT', total: '-1' }]]) {
+    assert.throws(() => buildBitgetExecutionSnapshot({ ...input, positions }), /EXECUTION_/);
+  }
+  assert.throws(() => buildBitgetExecutionSnapshot({ ...input, ticker: [{ symbol: 'ETHUSDT', markPrice: '100000', ts: now }] }), /IDENTITY/);
+  assert.throws(() => buildBitgetExecutionSnapshot({ ...input, accounts: [{ marginCoin: 'USDC', available: '10000' }] }), /IDENTITY/);
+  assert.throws(() => buildBitgetExecutionSnapshot({ ...input, accounts: [{ marginCoin: 'USDT', available: true, accountEquity: '100000' }] }), /EVIDENCE/);
+  assert.throws(() => buildBitgetExecutionSnapshot({ ...input, accounts: [{ marginCoin: 'USDT', available: '10000' }] }), /EQUITY/);
+  assert.throws(() => buildBitgetExecutionSnapshot({ ...input, contract: { symbol: 'ETHUSDT' } }), /IDENTITY/);
+  for (const ts of [null, undefined, true, Math.floor(now / 1000), now + 60_000]) {
+    const result = buildBitgetExecutionSnapshot({ ...input, depth: { ...input.depth, ts } });
+    assert.equal(result.observedAt, '');
+    assert.equal(result.dataDelayMs, Infinity);
+  }
+});
+
+test('Upbit snapshot keeps locked holdings in exposure and validates both quote and orderbook identity', async () => {
+  const { approved } = await setup();
+  const now = Date.now();
+  const input = {
+    plan: approved,
+    accounts: { data: [{ currency: 'KRW', balance: '1000000', locked: '0' }, { currency: 'BTC', balance: '0', locked: '1' }] },
+    chance: { market: { state: 'active' }, bid_fee: '0.0005' },
+    ticker: { data: [{ market: 'KRW-BTC', trade_price: 100_000, timestamp: now }] },
+    orderbook: { data: [{ market: 'KRW-BTC', timestamp: now, orderbook_units: [
+      { bid_price: 99999, bid_size: 10, ask_price: 100001, ask_size: 10 },
+      { bid_price: 99998, bid_size: 10, ask_price: 100002, ask_size: 10 },
+    ] }] },
+    signal: null,
+  };
+  const snapshot = buildUpbitExecutionSnapshot(input);
+  assert.equal(snapshot.openPositionCount, 1);
+  assert.equal(snapshot.assetExposurePercent, 2);
+  assert.equal(buildUpbitExecutionSnapshot({ ...input, chance: {} }).marketStatus, 'UNKNOWN');
+  assert.throws(() => buildUpbitExecutionSnapshot({ ...input, ticker: { data: [{ market: 'KRW-ETH', trade_price: 100_000, timestamp: now }] } }), /IDENTITY/);
+  assert.throws(() => buildUpbitExecutionSnapshot({ ...input, orderbook: { data: [{ ...input.orderbook.data[0], market: 'KRW-ETH' }] } }), /IDENTITY/);
+  for (const accounts of [{}, { data: [null] }, { data: [{ currency: 'KRW', balance: true, locked: '0' }] }]) {
+    assert.throws(() => buildUpbitExecutionSnapshot({ ...input, accounts }), /EXECUTION_/);
+  }
+  assert.equal(buildUpbitExecutionSnapshot({ ...input, ticker: { data: [{ market: 'KRW-BTC', trade_price: 100_000 }] } }).observedAt, '');
+});
 
 function marketSnapshot(now: Date): TradingMarketSnapshot {
   return {
