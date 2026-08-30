@@ -135,6 +135,16 @@ class ProcessorWindowRecoveryTests(unittest.TestCase):
             ["pending_report:11:demo-task"],
         )
 
+    def test_malformed_registered_schema_v2_report_still_blocks_rollover(self) -> None:
+        malformed = worker_report(12, "ai-chart")
+        malformed["body"] = str(malformed["body"]).replace("checks: focused checks pending\n", "")
+        filtered = coordinator_actionable_control_comments((malformed,), "owner/repo")
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(
+            rollover.unresolved_control_work(filtered),
+            ["pending_report:12:demo-task"],
+        )
+
     def test_missing_required_anchor_fails_closed(self) -> None:
         window = BoundedCommentWindow(
             comments=(
