@@ -1,4 +1,6 @@
 import { buildResearchDatasetIdentity, sha256Canonical as hash } from '../../../market-prediction-lab/src/research-cache-provenance.js';
+import { createHash } from 'node:crypto';
+import { resolveCanonicalStrategyIdentity } from '../../../market-prediction-lab/src/canonical-strategy-identity-v1.js';
 // TEST_ONLY #769 sizing fixture. No Paper orders; economic credit: 0.
 import { compiledMomentumFormula } from '../../../market-prediction-lab/tests/research-bundle-formula-fixture.js';
 import { createPaperTradingState } from './paper-trading-core.service.ts';
@@ -144,7 +146,7 @@ function fixture() {
   const components = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, {
     ...scope, value, source: 'TEST_ONLY', provenance: ['TEST_ONLY_OBSERVED_VALUE'], bucket: 'TEST_ONLY_BUCKET',
     observedAtMs: NOW - 1000, maximumAgeMs: 30_000 }]));
-  return { dsl, bundle: { schemaVersion: 'research-bundle-source-v1', evidenceClass: 'TEST_ONLY', dsl,
+  const bundle = { schemaVersion: 'research-bundle-source-v1', evidenceClass: 'TEST_ONLY', dsl,
     formulaCandidate: formula, generatedCandidate: generated,
     strategy: { strategyId: 'swing', strategyFamily: formula.strategyFamily, strategyVersion: 'v1',
       market: scope.market, direction: 'LONG', timeframe: scope.timeframe, formulaHash: formula.formulaHash,
@@ -164,7 +166,22 @@ function fixture() {
       datasetId: 'TEST_ONLY_LOCKED_HOLDOUT', assignments: [START + 40 * STEP, START + 41 * STEP],
       startTime: START + 40 * STEP, endTime: START + 41 * STEP, locked: true }),
     backtest: { initialCapital: 10000, maximumCapitalFraction: 1, quantityStep: 1 },
+  };
+  const exactModelJson = JSON.stringify({ modelSchemaVersion: 'TEST_ONLY_MODEL', featureOrder: ['TEST_ONLY_momentum'],
+    normalization: { mean: [0], scale: [1] } });
+  const strategy = resolveCanonicalStrategyIdentity(bundle.strategy);
+  bundle.modelReference = { exactModelJson, producerManifest: {
+    status: 'VALID', referenceProvenanceStatus: 'VALID',
+    strategyIdentity: strategy.identity, strategyIdentityDigest: strategy.strategyIdentityDigest,
+    datasetId: scope.datasetId, datasetDigest: scope.datasetDigest, researchCodeSha: scope.researchCodeSha,
+    modelSha: createHash('sha256').update(exactModelJson).digest('hex'),
+    modelArtifactCanonicalDigest: hash(JSON.parse(exactModelJson)), featureOrderDigest: hash(['TEST_ONLY_momentum']),
+    preprocessingVersion: 'TEST_ONLY_PREPROCESSING', rawArtifactDigest: hash('TEST_ONLY_RAW'), trainingCodeSha: scope.researchCodeSha,
+    measuredAt: new Date(NOW - 1000).toISOString(), artifactReceipt: { artifactId: 'TEST_ONLY', artifactReference: 'TEST_ONLY',
+      outerArtifactDigest: hash('TEST_ONLY_OUTER'), expiresAt: new Date(NOW + 30_000).toISOString() },
+    sourceAttestation: { sourceKind: 'TEST_ONLY', reconstructed: false, synthetic: true, shadowDerived: false, finalHoldoutIncluded: false },
   } };
+  return { dsl, bundle };
 }
 
 export { fixture as researchBundleFixture };

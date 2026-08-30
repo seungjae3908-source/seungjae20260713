@@ -24,6 +24,15 @@ Server integration contract:
   generated parameters to exact StrategyIdentity, research SHA, dataset identity,
   OHLCV content digest, immutable receipt, observation interval, PIT and leakage
   checks. Dataset observations and provenance timestamps are never synthesized.
+- `modelReference` carries the owner's `producerManifest` and unmodified
+  `exactModelJson`. The existing Shadow producer/model identity resolvers verify
+  the same strategy and dataset, exact-byte SHA, canonical model digest, feature
+  order, preprocessing version and training artifact identity. Expired/unknown
+  expiry, future measurement, holdout contamination, malformed normalization
+  and duplicate feature names block admission. The receipt preserves the model
+  identity digest, feature-order digest and preprocessing version. This is an
+  identity contract: formula-only #690 execution is not model inference or proof
+  that Shadow/Forward consumed the model. Those downstream gates remain missing.
 - Split policy and receipt carry independently digest-verified payloads, exact
   TRAIN/VALIDATION/OOS assignments, freeze and first-outcome observation times.
   Assignment sets must cover the exact dataset without overlap. No default split
@@ -48,13 +57,36 @@ Server integration contract:
   The key is shared across administrators so duplicates cannot create new tasks.
   Reservations must survive restarts; uncertain/failed completion never releases
   the key for automatic retry. Source bytes/freshness are reread after reservation
-  and before execution. No new queue or disk/DB persistence is activated here.
+  and before execution. No queue, DB or runtime storage is activated by this PR.
 
 The current canonical dashboard publishes cycle summaries, not a generic DSL
-bundle catalog or durable submission store. The default router therefore has no
-source/store adapter and reports explicit missing evidence with executor calls 0.
-Connecting an actual owner-published catalog/store is a dependency, not permission
-to build synthetic records or to enable runtime schedules. A complete structural
+bundle catalog. The router can now use the filesystem adapter when an operator
+explicitly configures `RESEARCH_BUNDLE_STATE_ROOT` to a preexisting durable volume.
+No value is configured by this change; absent configuration still reports
+missing evidence with executor calls 0. This is not permission to mutate runtime
+environment, publish invented records or enable schedules.
+
+The existing owner must publish `catalog/<dslDigest>.json` with
+`schemaVersion: research-bundle-catalog-entry-v1`, `dslDigest`, `bundleDigest`
+(the canonical hash of `bundle`) and the genuine canonical `bundle`. The adapter
+only reads this namespace: there is no HTTP catalog writer or producer. It rejects
+TEST_ONLY catalogs, relative paths, symlink directories/files, malformed data,
+wrong identity and oversized files. It does not read any Paper or Shadow store.
+
+Submission keys live in `submissions/<requestDigest>/`. Exclusive directory
+creation is the permanent reservation. A synced reservation and a single atomic
+completion link retain the original #690 artifact with its receipt. Completion
+cannot overwrite a previous result. A writer crash, incomplete file or missing
+receipt leaves the key blocked, never eligible for automatic execution again.
+Fresh service instances read disk independently, verify the reservation and
+artifact hashes, then the service revalidates canonical source identity/freshness.
+The host filesystem must support exclusive mkdir and same-volume hard links;
+unsupported filesystems fail closed. Windows file data is synced but directory
+fsync is not exposed by Node; power-loss guarantees require host-volume review.
+An ephemeral server disk is not a durable deployment configuration.
+
+Actual owner publication, volume provisioning and runtime activation remain
+dependencies and require the applicable approval. A complete structural
 TEST_ONLY bundle is accepted only in an explicitly injected test harness;
 runtime defaults reject TEST_ONLY. Test fixtures carry zero economic evidence
 credit. No environment flag is used to enable test evidence.
