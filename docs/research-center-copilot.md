@@ -47,6 +47,13 @@ Available canonical PASS receipts require matching code identity, provenance,
 verified data quality, valid source timing and relevant dataset/sample evidence.
 Receipt availability never grants promotion or trading authority.
 
+The review digest binds canonical receipt quality, provenance and validation
+timestamps, excluding only generated registry poll timestamps. Corrections or
+revocations invalidate cached explanations. Evidence and provider policy are
+checked again after AI completion, including every concurrent duplicate waiter.
+The UI scopes its cache to the authenticated administrator and hides old review
+text after a failed or changed source refresh.
+
 Strategy comparisons currently expose canonical identities and stage metadata,
 without performance ranking. Missing source timestamps stay missing, future
 timestamps are blocked, and the dashboard freshness window is one day. This

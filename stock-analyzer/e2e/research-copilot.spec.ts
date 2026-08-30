@@ -14,7 +14,7 @@ const fixture = {
 function fulfill(route: Route, body: unknown, status = 200) {
   return route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 }
-async function setup(page: Page, options: { available?: boolean; regular?: boolean; failure?: boolean; malformed?: boolean } = {}) {
+async function setup(page: Page, options: { available?: boolean; regular?: boolean; failure?: boolean; malformed?: boolean; changedAfterReview?: boolean; numericReview?: boolean } = {}) {
   const snapshot = buildCopilotSnapshot(fixture, NOW);
   snapshot.ai.available = options.available === true;
   snapshot.ai.reason = options.available ? 'TEST_ONLY' : 'FREE_TIER_NOT_CONFIRMED';
@@ -48,7 +48,12 @@ async function setup(page: Page, options: { available?: boolean; regular?: boole
     calls.push(`${request.method()} ${path}`);
     if (path === '/api/admin/research/overview') return fulfill(route, fixture);
     if (path === '/api/strategy-promotion') return fulfill(route, { items: [], counts: {}, evidenceSources: [], promotionCandidates: 0, executionAuthority: 'NONE' });
-    if (path === '/api/admin/research/copilot') return fulfill(route, options.failure ? { error: 'RESEARCH_SOURCE_UNAVAILABLE' } : options.malformed ? { ...snapshot, stages: [null] } : snapshot, options.failure ? 503 : 200);
+    if (path === '/api/admin/research/copilot') {
+      const current = options.changedAfterReview && reviewRequests > 0
+        ? buildCopilotSnapshot({ ...fixture, state: { present: true, latestCycleAt: NOW - 1_000 } }, NOW)
+        : snapshot;
+      return fulfill(route, options.failure ? { error: 'RESEARCH_SOURCE_UNAVAILABLE' } : options.malformed ? { ...current, stages: [null] } : current, options.failure ? 503 : 200);
+    }
     if (path.endsWith('/copilot/validate-dsl')) return fulfill(route, validateCopilotDsl(request.postDataJSON()));
     if (path.endsWith('/copilot/review')) {
       reviewRequests += 1;
@@ -56,7 +61,7 @@ async function setup(page: Page, options: { available?: boolean; regular?: boole
       return fulfill(route, {
         status: 'needs_context', task: request.postDataJSON().task, market: null, symbol: null, timestamp: NOW,
         data_sources: snapshot.data_sources, freshness: 'FRESH', evidenceDigest: snapshot.evidenceDigest,
-        signal: null, confidence: null, evidence: [], risks: [], entry_zone: null, invalidation: null, stop_loss: null, targets: [], risk_reward: null,
+        signal: null, confidence: options.numericReview ? 0.9 : null, evidence: [], risks: [], entry_zone: null, invalidation: null, stop_loss: null, targets: [], risk_reward: null,
         missing_data: snapshot.missing_data, next_action: snapshot.next_action, approval_required: false, cacheHit: false, authority: COPILOT_AUTHORITY,
         review: { provider: 'groq', model: 'openai/gpt-oss-20b', summary: '새로운 미래 증거에서 구조적 가설을 검토하세요.', findings: ['학습과 검증 구간 분리를 확인하세요.'], hypotheses: [], risks: [] },
       });
@@ -102,6 +107,25 @@ test('manual AI review disables duplicate submission and remains advisory', asyn
   await expect(page.getByRole('region', { name: 'AI 연구 제안' })).toContainText('검증 전 연구 제안');
   expect(diagnostics.reviewRequests()).toBe(1);
   await expect(page.getByText('신뢰 확률·성과 수치: 미생성.', { exact: false })).toBeVisible();
+  diagnostics.clean();
+});
+test('changed source after AI completion cannot display the previous explanation', async ({ page }) => {
+  const diagnostics = await setup(page, { available: true, changedAfterReview: true });
+  await page.goto('/research-center');
+  await page.getByRole('button', { name: 'AI Research Copilot', exact: true }).click();
+  await page.getByRole('button', { name: '후보 가설 제안' }).click();
+  await expect(page.getByText('원본 기준 시각:', { exact: false })).toContainText(new Date(NOW - 1_000).toISOString());
+  await expect(page.getByRole('region', { name: 'AI 연구 제안' })).toHaveCount(0);
+  expect(diagnostics.reviewRequests()).toBe(1);
+  diagnostics.clean();
+});
+test('numeric AI authority in a nominally successful response is blocked by the UI contract', async ({ page }) => {
+  const diagnostics = await setup(page, { available: true, numericReview: true });
+  await page.goto('/research-center');
+  await page.getByRole('button', { name: 'AI Research Copilot', exact: true }).click();
+  await page.getByRole('button', { name: '후보 가설 제안' }).click();
+  await expect(page.getByRole('alert')).toContainText('연구 응답 계약을 확인할 수 없습니다.');
+  await expect(page.getByRole('region', { name: 'AI 연구 제안' })).toHaveCount(0);
   diagnostics.clean();
 });
 for (const state of ['failure', 'malformed'] as const) {
