@@ -13,8 +13,6 @@ import {
 import { getUsUniverse } from '../providers/us-universe';
 import { getKrUniverse } from '../providers/krx';
 import * as yahoo from '../providers/yahoo';
-import { computeScores } from '../sample/scores';
-import { scoreToRating } from '../sample/rating';
 import { cached, TTL } from '../lib/cache';
 import type { Rating, Candle } from '../sample/types';
 import { MarketDataService, type QuoteRow } from './market-data.service';
@@ -22,6 +20,7 @@ import { FinancialService } from './financial.service';
 import { NewsService } from './news.service';
 import { RiskAnalysisService } from './risk-analysis.service';
 import { SECTOR_MAP } from '../data/sectors';
+import { hasQuoteRating } from './quote-rating-evidence';
 import {
   collectMarketListingWork,
   type MarketListingWorkDiagnostics,
@@ -107,6 +106,7 @@ export interface MarketListingDiagnostics {
   recommendationWork: MarketListingWorkDiagnostics;
   usableQuoteCount: number;
   usableRecommendationCount: number;
+  recommendationStatus?: 'AVAILABLE' | 'MISSING_EVIDENCE';
 }
 
 export interface MarketListings {
@@ -425,7 +425,6 @@ async function toRow(
     const volume = Number(quote.volume ?? 0);
     const tradingValue = Number((quote as any).tradingValue ?? price * volume);
     const assetType = assetTypeOf(entry);
-    const { overall } = computeScores(entry.ticker);
 
     return {
       ticker: entry.ticker,
@@ -443,7 +442,8 @@ async function toRow(
       open: Number((quote as any).open ?? 0) || undefined,
       previousClose: Number((quote as any).previousClose ?? 0) || undefined,
       updatedAt: String((quote as any).updatedAt ?? new Date().toISOString()),
-      rating: scoreToRating(overall),
+      rating: null,
+      ratingStatus: 'MISSING_EVIDENCE',
       exchange: String((entry as any).exchange ?? ''),
     };
   } catch {
@@ -572,18 +572,20 @@ function targetStopRates(rating: Rating, assetType: AssetType) {
 
 function levels(
   price: number,
-  rating: Rating,
+  rating: Rating | null,
   currency: string,
   assetType: AssetType,
   candles: Candle[] = [],
 ) {
+  if (!rating || candles.length < 15) return null;
   const a = atr(candles);
+  if (a == null || !Number.isFinite(a) || a <= 0) return null;
   const sr = supportResistance(candles, price);
   const { maxTargetRate, maxStopRate } = targetStopRates(rating, assetType);
 
-  const atrTake1 = a ? price + a * 1.2 : price * (1 + maxTargetRate * 0.45);
-  const atrTake2 = a ? price + a * 2.0 : price * (1 + maxTargetRate);
-  const atrStop = a ? price - a * 1.1 : price * (1 - maxStopRate);
+  const atrTake1 = price + a * 1.2;
+  const atrTake2 = price + a * 2.0;
+  const atrStop = price - a * 1.1;
 
   const rawTake1 = sr.resistance ?? atrTake1;
   const rawTake2 =
@@ -617,7 +619,6 @@ function riskOf(
 function reasonFor(row: QuoteRow): string {
   if (row.signals?.length) return row.signals.slice(0, 3).join(' · ');
 
-  const label = RATING_LABEL[row.rating.rating];
   const parts: string[] = [];
 
   if (isEtf(row.assetType)) {
@@ -632,7 +633,9 @@ function reasonFor(row: QuoteRow): string {
   else if (row.changePercent < 0) parts.push('약세 흐름');
   else parts.push('보합권');
 
-  parts.push(`AI ${row.rating.score}점 · ${label}`);
+  parts.push(hasQuoteRating(row)
+    ? `규칙 점수 ${row.rating.score}점 · ${RATING_LABEL[row.rating.rating]}`
+    : '평가 근거 부족');
 
   return parts.join(' · ');
 }
@@ -650,7 +653,7 @@ async function enrichRecommended(row: QuoteRow): Promise<QuoteRow> {
 
   const lv = levels(
     row.price,
-    row.rating.rating,
+    row.rating?.rating ?? null,
     row.currency,
     row.assetType,
     candles,
@@ -669,7 +672,7 @@ async function enrichRecommended(row: QuoteRow): Promise<QuoteRow> {
 }
 
 async function getMarketListings(market: MarketKey): Promise<MarketListings> {
-  return cached(`listing:v6:${market}`, TTL.quote, async () => {
+  return cached(`listing:v7:${market}`, TTL.quote, async () => {
     const candidates = await buildCandidates(market);
     const quoteWork = await collectMarketListingWork(
       candidates,
@@ -704,6 +707,7 @@ async function getMarketListings(market: MarketKey): Promise<MarketListings> {
       .map((r) => ({ ...r, reason: reasonFor(r) }));
 
     const topByScore = [...rows]
+      .filter(hasQuoteRating)
       .sort((a, b) => b.rating.score - a.rating.score)
       .slice(0, 12);
 
@@ -741,6 +745,7 @@ async function getMarketListings(market: MarketKey): Promise<MarketListings> {
         recommendationWork: recommendationWork.diagnostics,
         usableQuoteCount: rows.length,
         usableRecommendationCount: recommended.length,
+        recommendationStatus: recommended.length ? 'AVAILABLE' : 'MISSING_EVIDENCE',
       },
     };
   });
@@ -903,11 +908,13 @@ async function undervaluedCard(entry: CatalogEntry): Promise<UndervaluedCard | n
 
   const lv = levels(
     quoteRow.price,
-    quoteRow.rating.rating,
+    quoteRow.rating?.rating ?? null,
     quoteRow.currency,
     quoteRow.assetType,
     candles,
   );
+
+  if (!lv) return null;
 
   return {
     ticker: entry.ticker,
@@ -1086,6 +1093,7 @@ async function getBriefing(): Promise<Briefing> {
     const weakSectors = sectors.filter((s) => s.changePercent < 0).reverse().slice(0, 4);
 
     const picksRows = [...kr.recommended, ...us.recommended]
+      .filter(hasQuoteRating)
       .sort((a, b) => b.rating.score - a.rating.score)
       .slice(0, 4);
 

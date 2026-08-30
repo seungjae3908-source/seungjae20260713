@@ -12,8 +12,6 @@ import {
   type Currency,
 } from '../data/catalog';
 import { classifyAssetType, type AssetType } from '../data/asset-type';
-import { computeScores } from '../sample/scores';
-import { scoreToRating } from '../sample/rating';
 import * as yahoo from '../providers/yahoo';
 import * as naver from '../providers/naver';
 import * as finnhub from '../providers/finnhub';
@@ -54,7 +52,8 @@ export interface QuoteRow {
   open?: number;
   previousClose?: number;
   updatedAt: string;
-  rating: RatingResult;
+  rating: RatingResult | null;
+  ratingStatus?: 'MISSING_EVIDENCE';
   reason?: string;
   rank?: number;
   exchange?: string;
@@ -665,38 +664,6 @@ function quoteChangePercent(
   return (changeAmount / previousClose) * 100;
 }
 
-function defaultRating(): RatingResult {
-  return scoreToRating(50);
-}
-
-function ratingFromQuote(
-  quote: LooseQuote,
-  entry: CatalogEntry,
-): RatingResult {
-  try {
-    const scores = computeScores({
-      quote,
-      entry,
-    } as any);
-
-    if (typeof scores === 'number') {
-      return scoreToRating(scores);
-    }
-
-    if (typeof (scores as any)?.total === 'number') {
-      return scoreToRating((scores as any).total);
-    }
-
-    if (typeof (scores as any)?.score === 'number') {
-      return scoreToRating((scores as any).score);
-    }
-
-    return defaultRating();
-  } catch {
-    return defaultRating();
-  }
-}
-
 function toQuoteRow(
   entry: CatalogEntry,
   quote: LooseQuote,
@@ -751,7 +718,9 @@ function toQuoteRow(
       quote.updatedAt ??
         new Date().toISOString(),
     ),
-    rating: ratingFromQuote(quote, entry),
+    // A price quote supplies no validated strategy grade or confidence.
+    rating: null,
+    ratingStatus: 'MISSING_EVIDENCE',
   };
 }
 
@@ -1279,7 +1248,7 @@ export class MarketDataService {
 
   static async getRating(
     ticker: string,
-  ): Promise<RatingResult> {
+  ): Promise<RatingResult | null> {
     const quote =
       await this.getQuoteRow(
         ticker,
@@ -1287,7 +1256,7 @@ export class MarketDataService {
 
     return (
       quote?.rating ??
-      defaultRating()
+      null
     );
   }
 
