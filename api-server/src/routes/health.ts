@@ -38,6 +38,7 @@ router.get("/healthz/data-plane", async (req, res) => {
       row.ticker === "005930" &&
       Number.isFinite(row.price) &&
       row.price > 0 &&
+      typeof row.updatedAt === 'string' &&
       Number.isFinite(Date.parse(row.updatedAt)),
     );
 

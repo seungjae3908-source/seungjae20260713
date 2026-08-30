@@ -10,6 +10,7 @@ import {
   displayStockName,
 } from "@/lib/stock-display";
 import { formatPercent as formatAppPercent, formatPrice as formatAppPrice } from '@/lib/format';
+import { quoteFreshness } from '@/lib/market-freshness';
 import { classifyStock, stockClassBadgeClass } from "@/lib/stock-classifier";
 import { readWatchlistItems, WATCHLIST_CHANGE_EVENT } from "@/lib/stock-display";
 import { cn } from "@/lib/utils";
@@ -298,6 +299,7 @@ function normalizeStockRow(
   const market = marketFromRow(row, fallbackMarket);
 
   const currency: Currency = market === "KR" ? "KRW" : "USD";
+  if (row.currency != null && row.currency !== currency) return null;
 
   const score = scoreOf(row);
 
@@ -435,11 +437,11 @@ function normalizeRows(rows: AnyObj[], market: Market): StockRow[] {
   rows.forEach((row, index) => {
     const normalized = normalizeStockRow(row, market, index + 1);
 
-    if (!normalized || seen.has(normalized.ticker)) {
+    if (!normalized || seen.has(`${normalized.market}:${normalized.ticker}`)) {
       return;
     }
 
-    seen.add(normalized.ticker);
+    seen.add(`${normalized.market}:${normalized.ticker}`);
 
     result.push(normalized);
   });
@@ -498,20 +500,21 @@ async function enrichRowsWithQuotes(
         rows[0]?.market ?? "KR",
         index + 1,
       );
-      if (normalized) quoteMap.set(normalized.ticker, normalized);
+      if (normalized) quoteMap.set(`${normalized.market}:${normalized.ticker}`, normalized);
     });
     return rows.map((row) => {
-      const quote = quoteMap.get(row.ticker);
+      const quote = quoteMap.get(`${row.market}:${row.ticker}`);
       if (!quote) return row;
       return {
         ...row,
         name: quote.name || row.name,
-        price: quote.price ?? row.price,
-        changePercent: quote.changePercent ?? row.changePercent,
-        volume: quote.volume ?? row.volume,
-        tradingValue: quote.tradingValue ?? row.tradingValue,
+        provider: quote.provider,
+        price: quote.price,
+        changePercent: quote.changePercent,
+        volume: quote.volume,
+        tradingValue: quote.tradingValue,
         marketCap: quote.marketCap ?? row.marketCap,
-        raw: { ...(row.raw ?? {}), ...(quote.raw ?? {}) },
+        raw: { ...(row.raw ?? {}), ...(quote.raw ?? {}), updatedAt: quote.raw?.updatedAt ?? null, freshness: quote.raw?.freshness, tradingValueSource: quote.raw?.tradingValueSource },
       };
     });
   } catch (error) {
@@ -823,7 +826,8 @@ async function fetchMoverRows(
     }
   }
   const enriched = await enrichRowsWithQuotes(rows, signal);
-  const sorted = [...enriched];
+  const sortField = rank === 'volume' ? 'volume' : rank === 'tradingValue' ? 'tradingValue' : rank === 'marketCap' ? 'marketCap' : 'changePercent';
+  const sorted = rank === 'recommended' ? [...enriched] : enriched.filter((row) => row[sortField] !== null);
   if (rank === "volume")
     sorted.sort((a, b) => (b.volume ?? 0) - (a.volume ?? 0));
   if (rank === "tradingValue")
@@ -927,14 +931,14 @@ function rowDescription(row: StockRow, rank: RankType): string {
     return `거래량 ${formatLargeNumber(
       row.volume,
       row.market,
-    )} · 키움증권 거래량 상위 종목입니다.`;
+    )} · 거래량 기준 상위 종목입니다.`;
   }
 
   if (rank === "tradingValue") {
     return `거래대금 ${formatLargeNumber(
       row.tradingValue,
       row.market,
-    )} · 키움증권 거래대금 상위 종목입니다.`;
+    )} · 거래대금 기준 상위 종목입니다. 추정 여부는 아래에 표시됩니다.`;
   }
 
   if (rank === "marketCap") {
@@ -946,13 +950,13 @@ function rowDescription(row: StockRow, rank: RankType): string {
   }
 
   return rank === "gainers"
-    ? "키움증권 등락률 기준 급상승 종목입니다."
-    : "키움증권 등락률 기준 급하락 종목입니다.";
+    ? "등락률 기준 급상승 종목입니다."
+    : "등락률 기준 급하락 종목입니다.";
 }
 
 function rankTitle(rank: RankType): string {
   if (rank === "recommended") {
-    return "AI 추천 종목";
+    return "규칙 평가 종목";
   }
 
   if (rank === "volume") {
@@ -1288,6 +1292,7 @@ export default function SearchPage() {
             );
 
             const positive = row.changePercent != null && row.changePercent >= 0;
+            const freshness = quoteFreshness(row.raw);
 
             return (
               <button
@@ -1346,6 +1351,10 @@ export default function SearchPage() {
                   </div>
                 </div>
 
+                <p className="mt-2 break-words text-[10px] leading-relaxed text-muted-foreground">
+                  {row.provider || '출처 확인 필요'} · {freshness.label}
+                  {freshness.timestamp ? <time className="ml-1" dateTime={freshness.timestamp}>기준 {new Date(freshness.timestamp).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', hour12: false })} KST</time> : null}
+                </p>
                 <div className="mt-3 rounded-2xl bg-secondary/60 px-3 py-2.5">
                   <p className="break-keep text-[11px] font-bold leading-relaxed text-muted-foreground">
                     {rowDescription(row, rank)}
@@ -1363,7 +1372,7 @@ export default function SearchPage() {
                   </div>
                   <div className="rounded-xl bg-secondary/40 px-2 py-2">
                     <p className="text-[9px] font-bold text-muted-foreground">
-                      거래대금
+                      {row.raw?.tradingValueSource === 'LAST_PRICE_X_VOLUME_ESTIMATE' ? '거래대금 추정 (현재가×거래량)' : '거래대금'}
                     </p>
                     <p className="mt-1 text-xs font-extrabold">
                       {formatLargeNumber(row.tradingValue, row.market)}

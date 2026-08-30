@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { formatPrice, formatPercent, formatCompact, formatVolume } from '../src/lib/format';
 import { quoteRating } from '../src/lib/quote-row-evidence';
+import { quoteFreshness } from '../src/lib/market-freshness';
 import { expect, test, type Page, type Route } from '@playwright/test';
 
 // Auth and market fixtures stay in the isolated localhost browser only.
@@ -29,7 +30,8 @@ async function installRuntime(page: Page) {
   });
   const rows = [
     { ticker: 'FIXTURE', name: '숫자와 평가 근거가 없는 테스트 종목', market: 'US', currency: 'USD', price: null, changePercent: null, volume: null, tradingValue: null, marketCap: 200000000000, rating: null, ratingStatus: 'MISSING_EVIDENCE' },
-    { ticker: 'LARGE', name: '매우 긴 이름과 큰 숫자를 가진 표시 검증 종목', market: 'US', currency: 'USD', price: 1234567890123.45, changePercent: -5.12, volume: 0, tradingValue: 0, marketCap: 100000000000, rating: null, ratingStatus: 'MISSING_EVIDENCE' },
+    { ticker: 'LARGE', name: '매우 긴 이름과 큰 숫자를 가진 표시 검증 종목', market: 'US', currency: 'USD', price: 1234567890123.45, changePercent: -5.12, volume: 0, tradingValue: 0, marketCap: 100000000000, rating: null, ratingStatus: 'MISSING_EVIDENCE', source: 'fixture-only', updatedAt: '2020-01-01T00:00:00Z', tradingValueSource: 'LAST_PRICE_X_VOLUME_ESTIMATE' },
+    { ticker: 'FUTURE', name: '미래 시각 검증 종목', market: 'US', currency: 'USD', price: 100, changePercent: 0, volume: 0, marketCap: 10000, rating: null, updatedAt: '2099-01-01T00:00:00Z' },
   ];
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname;
@@ -47,6 +49,14 @@ for (const [width, height] of sizes) {
   test(`quote data truth remains visible at ${width}x${height}`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height });
     const errors: string[] = [];
+    const unhandled: string[] = [];
+    await page.exposeFunction('reportUnhandledQuoteFixture', (reason: string) => { unhandled.push(reason); });
+    await page.addInitScript(() => {
+      addEventListener('unhandledrejection', (event) => {
+        const reporter = (window as unknown as { reportUnhandledQuoteFixture: (reason: string) => Promise<void> }).reportUnhandledQuoteFixture;
+        void reporter(String(event.reason));
+      });
+    });
     const failedHttp: string[] = [];
     page.on('pageerror', (error) => errors.push(error.message));
     page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
@@ -65,6 +75,13 @@ for (const [width, height] of sizes) {
     await expect(card).not.toContainText('$0.00');
     await expect(card).not.toContainText('+0.00%');
     await expect(card.getByText('—', { exact: true }).first()).toBeVisible();
+    await expect(card).toContainText('시세 시각 확인 불가');
+    const stale = page.getByRole('button').filter({ has: page.getByText('티커 LARGE', { exact: true }) });
+    await expect(stale).toContainText('5분 이상 지난 시세');
+    await expect(stale).toContainText('거래대금 추정');
+    const future = page.getByRole('button').filter({ has: page.getByText('티커 FUTURE', { exact: true }) });
+    await expect(future).toContainText('시세 시각 오류');
+    await expect(future).not.toContainText('방금');
     const layout = await page.evaluate(() => ({ width: innerWidth, body: document.body.scrollWidth, root: document.documentElement.scrollWidth }));
     expect(layout.body).toBeLessThanOrEqual(width);
     expect(layout.root).toBeLessThanOrEqual(width);
@@ -75,7 +92,8 @@ for (const [width, height] of sizes) {
     expect(unexpected).toEqual([]);
     expect(errors).toEqual([]);
     expect(failedHttp).toEqual([]);
-    await testInfo.attach('runtime-proof.json', { body: JSON.stringify({ viewport: { width, height }, fixture: true, routeLoadAndInteractionMs: loadMs, layout, consolePageErrors: errors.length, unexpectedHttpErrors: failedHttp.length, unexpectedRequests: unexpected.length }), contentType: 'application/json' });
+    expect(unhandled).toEqual([]);
+    await testInfo.attach('runtime-proof.json', { body: JSON.stringify({ viewport: { width, height }, fixture: true, routeLoadAndInteractionMs: loadMs, layout, consolePageErrors: errors.length, unhandledRejections: unhandled.length, unexpectedHttpErrors: failedHttp.length, unexpectedRequests: unexpected.length }), contentType: 'application/json' });
   });
 }
 
@@ -97,4 +115,10 @@ test('financial display preserves real zero and quote currency while rejecting a
   assert.equal(quoteRating(row), null);
   assert.equal(quoteRating({ ...row, rating: { rating: 'HOLD', confidence: 50, score: NaN } }), null);
   assert.equal(quoteRating({ ...row, ratingStatus: 'MISSING_EVIDENCE', rating: { rating: 'HOLD', confidence: 50, score: 50 } }), null);
+  const now = Date.parse('2026-08-30T15:00:00Z');
+  for (const updatedAt of ['2026-02-30T00:00:00Z', '2026-08-30T15:00:00', '2026-08-30T16:00:00Z', '2026-08-30T00:00:00+15:00']) {
+    assert.equal(quoteFreshness({ updatedAt }, now).label, '시세 시각 오류');
+  }
+  assert.equal(quoteFreshness({}, now).timestamp, null);
+  assert.equal(quoteFreshness({ updatedAt: '2026-08-28T15:30:00+09:00' }, now).timestamp, '2026-08-28T06:30:00.000Z');
 });

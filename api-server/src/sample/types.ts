@@ -2,6 +2,7 @@
 // These are the API-ready contracts. Live provider services can return
 // the same shapes from Yahoo, Naver, DART, SEC, Finnhub, AlphaVantage.
 import type { Market, Currency } from '../data/catalog';
+import type { QuoteTimeEvidence } from '../providers/market-evidence';
 
 export type Timeframe =
 	| '1m'
@@ -61,6 +62,9 @@ export interface CompanyProfile {
 }
 
 export interface Quote {
+	updatedAt?: string | null;
+	freshness?: QuoteTimeEvidence['freshness'];
+	source?: string;
 	price: number;
 	changeAmount: number;
 	changePercent: number;
