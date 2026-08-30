@@ -1,5 +1,6 @@
 import type { CatalogEntry } from '../data/catalog';
 import type { Candle, Quote } from '../sample/types';
+import { parseFinancialAmount } from './financial-evidence';
 
 type NaverPollItem = {
   cd?: string;
@@ -380,7 +381,20 @@ export interface NaverRatios {
   eps: number;
   per: number;
   pbr: number;
-  bps: number;
+  bps: number | null;
+}
+
+export function parseNaverRatios(html: string): NaverRatios {
+  const value = (key: 'eps' | 'per' | 'pbr' | 'bps'): number => {
+    const matches = [...html.matchAll(new RegExp(`<em\\b[^>]*\\bid=["']_${key}["'][^>]*>([^<]*)</em>`, 'gi'))];
+    // Only the exact provider field is evidence. Nearby dates, links and other
+    // ratio values must never become a substitute for a missing field.
+    return parseFinancialAmount(matches.length === 1 ? matches[0][1] : undefined, 'naver', key);
+  };
+  return {
+    eps: value('eps'), per: value('per'), pbr: value('pbr'),
+    bps: /\bid=["']_bps["']/.test(html) ? value('bps') : null,
+  };
 }
 
 export async function getRatios(
@@ -394,14 +408,5 @@ export async function getRatios(
   }
 
   const html = await fetchText(`https://finance.naver.com/item/main.naver?code=${code}`);
-  const eps = parseNumberNear('EPS', html);
-  const per = parseNumberNear('PER', html);
-  const pbr = parseNumberNear('PBR', html);
-  const bps = parseNumberNear('BPS', html);
-
-  if (![eps, per, pbr, bps].some((value) => Number.isFinite(value) && value !== 0)) {
-    throw new Error(`NAVER_RATIO_PARSE_FAILED:${code}`);
-  }
-
-  return { eps, per, pbr, bps };
+  return parseNaverRatios(html);
 }
