@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   createSupabaseTelegramAlertPolicyRepository,
   type TelegramAlertPolicyRepository,
@@ -6,16 +7,25 @@ import {
   createSupabaseUserBrokerTelegramRepository,
   type UserBrokerTelegramRepository,
 } from '../features/user-broker-telegram/user-broker-telegram.repository';
+import type { StoredPersonalTelegramAlert } from '../features/user-broker-telegram/user-broker-telegram.types';
 import {
+  TELEGRAM_POLICY_SAFETY,
   deliverTelegramAlertWithPolicy,
+  evaluateTelegramAlertPolicy,
   type TelegramPolicyDeliveryResult,
   type TelegramPolicyEvent,
 } from './telegram-alert-policy.service';
 import type { TelegramAlertInput, TelegramAlertResult } from './telegram-notification.service';
 
 type ConnectionReader = Pick<UserBrokerTelegramRepository, 'getTelegramConnection'>;
+type OutboxRepository = Pick<
+  UserBrokerTelegramRepository,
+  'enqueueDelivery' | 'listPersonalAlertHistory'
+>;
 type PolicyReader = Pick<TelegramAlertPolicyRepository, 'getPolicy'>;
 type Sender = (input: TelegramAlertInput) => Promise<TelegramAlertResult>;
+
+const POLICY_HISTORY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 export type PersonalTelegramAlertDispatchResult =
   | {
@@ -27,13 +37,31 @@ export type PersonalTelegramAlertDispatchResult =
       status: 'POLICY';
       reason: null;
       policy: TelegramPolicyDeliveryResult;
+      deliveryQueued?: boolean;
+      deliveryId?: string | null;
     };
 
 export type PersonalTelegramAlertDependencies = {
   connectionRepository?: ConnectionReader;
   policyRepository?: PolicyReader;
+  outboxRepository?: OutboxRepository;
+  /** Test seam: an injected sender keeps the historical direct-delivery contract. */
   sender?: Sender;
 };
+
+function storedAlert(input: TelegramAlertInput): StoredPersonalTelegramAlert {
+  const {
+    destinationChatId: _destinationChatId,
+    photo,
+    ...safe
+  } = input;
+  return {
+    ...safe,
+    photo: typeof photo?.url === 'string' && photo.url.trim()
+      ? { url: photo.url.trim() }
+      : undefined,
+  };
+}
 
 export async function deliverPersonalTelegramAlert(
   input: {
@@ -49,8 +77,8 @@ export async function deliverPersonalTelegramAlert(
     return { status: 'SKIPPED', reason: 'INVALID_USER', policy: null };
   }
 
-  const connectionRepository = dependencies.connectionRepository
-    ?? createSupabaseUserBrokerTelegramRepository();
+  const runtimeRepository = createSupabaseUserBrokerTelegramRepository();
+  const connectionRepository = dependencies.connectionRepository ?? runtimeRepository;
   const policyRepository = dependencies.policyRepository
     ?? createSupabaseTelegramAlertPolicyRepository();
 
@@ -63,17 +91,65 @@ export async function deliverPersonalTelegramAlert(
       return { status: 'SKIPPED', reason: 'TELEGRAM_DISCONNECTED', policy: null };
     }
 
-    const policy = await deliverTelegramAlertWithPolicy({
-      policy: policyState.policy,
-      event: input.event,
-      alert: {
-        ...input.alert,
-        destinationChatId: connection.telegramChatId,
+    // Preserve deterministic unit/contract tests and explicit injected transports.
+    // Runtime callers do not inject a sender and therefore use the durable outbox below.
+    if (dependencies.sender) {
+      const policy = await deliverTelegramAlertWithPolicy({
+        policy: policyState.policy,
+        event: input.event,
+        alert: {
+          ...input.alert,
+          destinationChatId: connection.telegramChatId,
+        },
+        now: input.now,
+        sender: dependencies.sender,
+      });
+      return { status: 'POLICY', reason: null, policy, deliveryQueued: false, deliveryId: null };
+    }
+
+    const now = input.now ?? new Date();
+    if (!Number.isFinite(now.getTime())) {
+      return { status: 'SKIPPED', reason: 'STORAGE_UNAVAILABLE', policy: null };
+    }
+    const outboxRepository = dependencies.outboxRepository ?? runtimeRepository;
+    const since = new Date(now.getTime() - POLICY_HISTORY_WINDOW_MS).toISOString();
+    const history = await outboxRepository.listPersonalAlertHistory(userId, since, 256);
+    const decision = evaluateTelegramAlertPolicy(policyState.policy, input.event, history, now);
+    const policy: TelegramPolicyDeliveryResult = {
+      decision,
+      transport: null,
+      safety: TELEGRAM_POLICY_SAFETY,
+    };
+    if (decision.action !== 'IMMEDIATE') {
+      return { status: 'POLICY', reason: null, policy, deliveryQueued: false, deliveryId: null };
+    }
+
+    const timestamp = now.toISOString();
+    const deliveryId = randomUUID();
+    const deliveryQueued = await outboxRepository.enqueueDelivery({
+      id: deliveryId,
+      userId,
+      eventId: null,
+      dedupeKey: `personal-alert:${input.event.eventId}`,
+      state: 'PENDING',
+      attempts: 0,
+      nextRetryAt: null,
+      lastErrorCode: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      kind: 'PERSONAL_ALERT',
+      payload: {
+        event: structuredClone(input.event),
+        alert: storedAlert(input.alert),
       },
-      now: input.now,
-      sender: dependencies.sender,
     });
-    return { status: 'POLICY', reason: null, policy };
+    return {
+      status: 'POLICY',
+      reason: null,
+      policy,
+      deliveryQueued,
+      deliveryId: deliveryQueued ? deliveryId : null,
+    };
   } catch {
     return { status: 'SKIPPED', reason: 'STORAGE_UNAVAILABLE', policy: null };
   }
