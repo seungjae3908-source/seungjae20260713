@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'wouter';
 import { BottomNav } from './bottom-nav';
+import { useAuth } from '@/lib/auth';
 import { fetchCopilotSnapshot, reviewCopilot, validateResearchDsl, type CopilotReview, type CopilotTask, type DslValidation } from '@/lib/research-copilot';
 
 const ACTIONS: Array<[CopilotTask, string]> = [
@@ -11,7 +12,8 @@ const ACTIONS: Array<[CopilotTask, string]> = [
 const button = 'min-h-11 rounded-xl border border-border px-4 py-2 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-50';
 
 export function ResearchCopilotPanel() {
-  const snapshot = useQuery({ queryKey: ['admin', 'research-copilot'], queryFn: ({ signal }) => fetchCopilotSnapshot(signal), staleTime: 30_000, retry: false });
+  const { profile, isAdmin } = useAuth();
+  const snapshot = useQuery({ queryKey: ['admin', profile?.id, 'research-copilot'], queryFn: ({ signal }) => fetchCopilotSnapshot(signal), enabled: isAdmin && Boolean(profile?.id), staleTime: 30_000, retry: false });
   const [review, setReview] = useState<CopilotReview | null>(null);
   const [dsl, setDsl] = useState('');
   const [validation, setValidation] = useState<DslValidation | null>(null);
@@ -21,7 +23,7 @@ export function ResearchCopilotPanel() {
   const sequence = useRef(0);
   const data = snapshot.data;
   useEffect(() => () => { sequence.current += 1; pending.current?.abort(); }, []);
-  const visibleReview = review?.evidenceDigest === data?.evidenceDigest && data?.freshness === 'FRESH' ? review : null;
+  const visibleReview = !snapshot.isError && review?.evidenceDigest === data?.evidenceDigest && data?.freshness === 'FRESH' ? review : null;
 
   async function run(operation: (signal: AbortSignal) => Promise<void>) {
     pending.current?.abort();
@@ -38,7 +40,10 @@ export function ResearchCopilotPanel() {
     setReview(null);
     void run(async signal => {
       const result = await reviewCopilot(task, data.evidenceDigest, signal);
-      if (!signal.aborted) setReview(result);
+      if (!signal.aborted) {
+        const refreshed = await snapshot.refetch();
+        if (!signal.aborted && !refreshed.isError && refreshed.data?.evidenceDigest === result.evidenceDigest) setReview(result);
+      }
     });
   }
   function validate() {
@@ -67,7 +72,7 @@ export function ResearchCopilotPanel() {
           <p className="mt-2 break-all text-xs text-muted-foreground">출처: {data.data_sources.join(' / ')} · SHA-256: {data.evidenceDigest}</p>
           <p className="mt-2 text-sm">AI 요청 {data.ai.calls}회 · 캐시 적중 {data.ai.cacheHits}회 · 토큰 사용량/무료 잔여 한도: 미확인</p>
           <p className="mt-2 text-sm">{data.ai.available ? '명시 요청에만 AI를 호출합니다.' : `AI 사용 불가: ${data.ai.reason}`}</p>
-          <div className="mt-4 flex flex-wrap gap-2">{ACTIONS.map(([task, label]) => <button key={task} className={button} disabled={busy || !data.ai.available} onClick={() => ask(task)}>{label}</button>)}</div>
+          <div className="mt-4 flex flex-wrap gap-2">{ACTIONS.map(([task, label]) => <button key={task} className={button} disabled={busy || snapshot.isError || snapshot.isFetching || !data.ai.available} onClick={() => ask(task)}>{label}</button>)}</div>
         </section>
         {busy ? <p role="status">연구 요청을 검증하는 중…</p> : null}
         {error ? <p role="alert" className="rounded-xl border border-destructive p-4">{error}</p> : null}
