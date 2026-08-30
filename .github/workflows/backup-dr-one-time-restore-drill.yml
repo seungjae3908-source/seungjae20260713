@@ -384,6 +384,17 @@ jobs:
           NODE
           rm -f -- "$receipt"
 
+      - name: Remove ephemeral runner backup and SSH material before publishing evidence
+        if: always()
+        run: |
+          set -Eeuo pipefail
+          rm -rf -- "$LOCAL_RESTORE_DIR"
+          rm -f -- ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+          printf 'RESTORE_DRILL_DATABASE_URL=\n' >> "$GITHUB_ENV"
+          test ! -e "$LOCAL_RESTORE_DIR"
+          test ! -e ~/.ssh/id_ed25519
+          test ! -e ~/.ssh/known_hosts
+
       - name: Record sanitized logical-restore evidence on release control and canonical hub
         env:
           ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
@@ -417,11 +428,15 @@ jobs:
               'production_ssh_read_credential_used: true',
               'production_host_mutation: false',
               'encrypted_bundle_read_from_production_host: true',
+              'encrypted_bundle_copied_to_ephemeral_runner: true',
+              'github_artifact_uploaded: false',
+              'runner_backup_material_deleted_before_receipt: true',
+              'runner_ssh_material_deleted_before_receipt: true',
+              'plaintext_backup_file_created: false',
               'destructive_clean_used: false',
               'provider_pitr_restore_verified: false',
               'storage_object_restore_verified: false',
               'offsite_restore_verified: false',
-              'backup_material_uploaded_to_github: false',
               'schedule_activated: false',
               'production_deploy_executed: false',
               'private_trading_api: false',
@@ -437,10 +452,3 @@ jobs:
                 body,
               });
             }
-
-      - name: Remove ephemeral runner restore material
-        if: always()
-        run: |
-          set -Eeuo pipefail
-          rm -rf -- "$LOCAL_RESTORE_DIR"
-          rm -f -- ~/.ssh/id_ed25519
