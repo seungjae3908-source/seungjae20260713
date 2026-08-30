@@ -164,6 +164,29 @@ test('quote/search/alert provider outages cannot become successful empty market 
   assert.equal(emptyRequest.body.dataStatus, 'complete');
 });
 
+test('market alert HTTP never invents upward zero movement or source time from incomplete quotes', async (t) => {
+  const good = { ticker: 'AAPL', name: 'Apple', market: 'US', currency: 'USD', assetType: 'STOCK', price: 100,
+    changePercent: 2, updatedAt: '2026-01-01T00:00:00Z', source: 'fixture-public-source' };
+  let rows: unknown[] = [good];
+  t.mock.method(MarketListingService, 'getMarketListings', async () => ({ popular: rows, gainers: [], losers: [], recommended: [], diagnostics: { status: 'complete' } }));
+  const supported = await getRoute('/api/market/alerts?market=US');
+  assert.equal(supported.status, 200);
+  assert.deepEqual((supported.body.positive as Record<string, unknown>[]).map((row) => ({ time: row.time, source: row.source })), [{ time: good.updatedAt, source: good.source }]);
+  for (const change of [{ changePercent: null }, { changePercent: '' }, { changePercent: false }, { updatedAt: null },
+    { updatedAt: '2099-01-01T00:00:00Z' }, { source: '' }, { currency: 'KRW' }]) {
+    rows = [{ ...good, ...change }];
+    const invalid = await getRoute('/api/market/alerts?market=US');
+    assert.equal(invalid.status, 503);
+    assert.equal(invalid.body.error, 'ALERT_EVIDENCE_UNAVAILABLE');
+    assert.deepEqual(invalid.body.positive, []);
+  }
+  rows = [{ ...good, changePercent: 0 }];
+  const flat = await getRoute('/api/market/alerts?market=US');
+  assert.equal(flat.status, 200);
+  assert.deepEqual(flat.body.positive, []);
+  assert.deepEqual(flat.body.negative, []);
+});
+
 test('market summary provider outage retains null values and explicit unavailable time evidence', async (t) => {
   t.mock.method(globalThis, 'fetch', async () => new Response('{}', { status: 503 }));
   const rows = await MarketListingService.getMarketSummary();
