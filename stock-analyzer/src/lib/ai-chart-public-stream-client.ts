@@ -68,6 +68,9 @@ export function createAiChartPublicStreamClient(
   options: AiChartPublicStreamClientOptions,
 ): AiChartPublicStreamClient {
   const subscription = buildAiChartPublicStreamSubscription({ market: options.market, symbol: options.symbol });
+  const expectedSymbol = options.market === 'UPBIT'
+    ? options.symbol.trim().toUpperCase().replace(/^KRW[-_:]?/, '')
+    : options.symbol.trim().toUpperCase().replace(/[-_/]/g, '');
   const now = options.now ?? (() => Date.now());
   const setTimeoutFn = options.setTimeoutFn ?? ((callback, delayMs) => setTimeout(callback, delayMs));
   const clearTimeoutFn = options.clearTimeoutFn ?? ((handle) => clearTimeout(handle));
@@ -82,6 +85,7 @@ export function createAiChartPublicStreamClient(
   let reconnectTimer: TimerHandle | null = null;
   let heartbeatTimer: TimerHandle | null = null;
   let watchdogTimer: TimerHandle | null = null;
+  let connectTimer: TimerHandle | null = null;
 
   const snapshot = (): AiChartStreamDiagnostic => ({
     status,
@@ -101,10 +105,12 @@ export function createAiChartPublicStreamClient(
   };
   const clearTimer = (handle: TimerHandle | null) => { if (handle != null) clearTimeoutFn(handle); };
   const clearRuntimeTimers = () => {
+    clearTimer(connectTimer);
     clearTimer(heartbeatTimer);
     clearTimer(watchdogTimer);
     heartbeatTimer = null;
     watchdogTimer = null;
+    connectTimer = null;
   };
   const forceFallback = (reason: string) => {
     clearRuntimeTimers();
@@ -166,9 +172,16 @@ export function createAiChartPublicStreamClient(
     catch { forceFallback('WEBSOCKET_UNAVAILABLE'); return; }
     if ('binaryType' in nextSocket) nextSocket.binaryType = 'arraybuffer';
     socket = nextSocket;
+    connectTimer = setTimeoutFn(() => {
+      connectTimer = null;
+      if (stopped || socket !== nextSocket || connectedAtMs != null) return;
+      forceFallback('CONNECT_TIMEOUT');
+    }, subscription.staleAfterMs);
 
     nextSocket.onopen = () => {
       if (stopped || socket !== nextSocket) return;
+      clearTimer(connectTimer);
+      connectTimer = null;
       try { nextSocket.send(subscription.subscribePayload); }
       catch { forceFallback('SUBSCRIBE_SEND_FAILED'); return; }
       connectedAtMs = now();
@@ -184,7 +197,8 @@ export function createAiChartPublicStreamClient(
         options.onDiagnostic?.({ ...snapshot(), reason: 'UNSUPPORTED_MESSAGE_PAYLOAD' });
         return;
       }
-      const events = parseAiChartPublicStreamMessage(options.market, raw, now());
+      const events = parseAiChartPublicStreamMessage(options.market, raw, now())
+        .filter((event) => event.market === options.market && event.symbol === expectedSymbol);
       if (!events.length) return;
       lastEventAtMs = Math.max(lastEventAtMs ?? 0, ...events.map((event) => event.eventTimeMs));
       reconnectAttempts = 0;
@@ -197,7 +211,8 @@ export function createAiChartPublicStreamClient(
       options.onDiagnostic?.({ ...snapshot(), reason: 'SOCKET_ERROR' });
     };
     nextSocket.onclose = () => {
-      if (socket === nextSocket) socket = null;
+      if (stopped || socket !== nextSocket) return;
+      socket = null;
       clearRuntimeTimers();
       connectedAtMs = null;
       if (stopped || status === 'FALLBACK_POLLING') return;
