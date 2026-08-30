@@ -10,6 +10,7 @@ import type {
 } from '@/lib/paper-journal-sync';
 import { createUserPaperStorage, loadJournalSyncMetadata, saveJournalSyncMetadata } from '@/lib/paper-journal-sync-storage';
 import { createLocalPaperState, savePaperState } from '@/lib/paper-trading';
+import { paperJournalFixture } from '@/lib/paper-journal-test-fixture';
 
 const NOW = '2026-08-02T07:00:00.000Z';
 const USERS = ['phase7-user-a', 'phase7-user-b'];
@@ -17,8 +18,8 @@ type Mode = 'success'|'failure'|'conflict'|'insufficient';
 
 const conflict: JournalConflict = {
   id: 'conflict:phase7', kind: 'journal', recordId: 'journal-1', version: 2,
-  serverRecord: { kind: 'journal', id: 'journal-1', version: 2, updatedAt: NOW, deletedAt: null, payload: { id: 'journal-1', note: 'server' }, createdAt: NOW, serverUpdatedAt: NOW },
-  deviceRecord: { kind: 'journal', id: 'journal-1', version: 2, updatedAt: NOW, deletedAt: null, payload: { id: 'journal-1', note: 'device' } },
+  serverRecord: { kind: 'journal', id: 'journal-1', version: 2, updatedAt: NOW, deletedAt: null, payload: { ...paperJournalFixture('journal-1', NOW, { note: 'server' }) }, createdAt: NOW, serverUpdatedAt: NOW },
+  deviceRecord: { kind: 'journal', id: 'journal-1', version: 2, updatedAt: NOW, deletedAt: null, payload: { ...paperJournalFixture('journal-1', NOW, { note: 'device' }) } },
   differenceSummary: ['note 값이 다릅니다.'], createdAt: NOW, status: 'open',
 };
 
@@ -79,7 +80,7 @@ export default function Phase7JournalSyncE2EPage() {
     const loaded = adapter.getItem('seungjae.paper-trading.v1');
     if (!loaded) {
       const state = createLocalPaperState(userIndex ? 20_000 : 10_000, new Date(NOW));
-      state.journal = Array.from({ length: mode === 'insufficient' ? 3 : 12 }, (_, index) => ({ id: `journal-${userIndex}-${index}` } as never));
+      state.journal = Array.from({ length: mode === 'insufficient' ? 3 : 12 }, (_, index) => paperJournalFixture(`journal-${userIndex}-${index}`, NOW));
       savePaperState(adapter, state);
     }
     if (mode === 'conflict') {
@@ -109,9 +110,9 @@ export default function Phase7JournalSyncE2EPage() {
         userId={userId}
         rootStorage={window.localStorage}
         paperStorage={paperStorage}
-        syncApi={fakeSync as never}
-        snapshotApi={fakeSnapshot as never}
-        resolveApi={fakeResolve as never}
+        syncApi={fakeSync}
+        snapshotApi={fakeSnapshot}
+        resolveApi={fakeResolve}
         analyticsApi={async () => analytics(mode === 'insufficient')}
         reviewApi={async () => reviewDataset()}
         unifiedLedgerApi={async () => unifiedJournal() as never}
