@@ -6,6 +6,7 @@ const root = process.cwd();
 const workflow = readFileSync(path.join(root, '.github/workflows/telegram-production-release.yml'), 'utf8');
 const migrator = readFileSync(path.join(root, 'ops/apply-production-personal-telegram-storage.mjs'), 'utf8');
 const cleanup = readFileSync(path.join(root, 'api-server/supabase/migrations/2026081502_personal_telegram_policy_cleanup.sql'), 'utf8');
+const genericOutbox = readFileSync(path.join(root, 'api-server/supabase/migrations/2026082701_personal_telegram_generic_outbox.sql'), 'utf8');
 
 function fail(message) {
   console.error(`[production-personal-telegram-storage-contract] ${message}`);
@@ -56,7 +57,15 @@ function verifyStatic() {
     'pg_advisory_xact_lock',
     '2026081501_personal_telegram_storage.sql',
     '2026081502_personal_telegram_policy_cleanup.sql',
+    '2026082701_personal_telegram_generic_outbox.sql',
     "array['member_id', 'enabled_types']",
+    "array['delivery_kind', 'payload']",
+    "column_name = 'event_id'",
+    "event_id_nullable is distinct from 'YES'",
+    'notification_deliveries_kind_check',
+    'notification_deliveries_payload_contract_check',
+    "'migrations_applied', 3",
+    "'generic_outbox_verified', true",
     "qual <> 'false'",
     "with_check <> 'false'",
     "privilege.grantee in ('PUBLIC', 'anon', 'authenticated')",
@@ -67,6 +76,20 @@ function verifyStatic() {
     'live_trading_authority',
   ]) assert(migrator.includes(marker), `migrator is missing ${marker}`);
 
+  for (const marker of [
+    'alter table public.notification_deliveries',
+    'add column if not exists delivery_kind text',
+    'alter column event_id drop not null',
+    'add column if not exists payload jsonb',
+    "delivery_kind in ('EXECUTION_EVENT', 'PERSONAL_ALERT')",
+    'notification_deliveries_payload_contract_check',
+    'alter table public.notification_deliveries enable row level security',
+    'revoke all privileges on table public.notification_deliveries from public, anon, authenticated',
+    'grant all privileges on table public.notification_deliveries to service_role',
+  ]) assert(genericOutbox.includes(marker), `generic outbox migration is missing ${marker}`);
+
+  assert(!/\bcreate\s+table\s+(?:if\s+not\s+exists\s+)?public\.(?:telegram_)?(?:alert_)?(?:outbox|delivery_queue)\b/i.test(genericOutbox),
+    'generic outbox migration must reuse notification_deliveries instead of creating a competing queue');
   assert(!/\beval\s*\(/.test(migrator), 'migrator must not eval server env files');
   assert(!/(^|\n)\s*(?:source|\.)\s+[^\n]+\.env/m.test(migrator), 'migrator must not source server env files');
   assert(!migrator.includes('console.log(postgresUris'), 'migrator must not print database URLs');
@@ -85,8 +108,9 @@ function verifyArtifact(file, expectedTargetSha, expectedActiveSha) {
     && value?.expected_active_sha === expectedActiveSha
     && value?.production_project_match === true
     && value?.atomic_transaction === true
-    && value?.migrations_applied === 2
+    && value?.migrations_applied === 3
     && value?.tables_verified === 4
+    && value?.generic_outbox_verified === true
     && value?.canonical_preferences_verified === true
     && value?.api_roles_revoked === true
     && value?.policies_fail_closed === true
