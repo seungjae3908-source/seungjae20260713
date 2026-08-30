@@ -399,8 +399,8 @@ export function finalizeArtifactReceipt({ captureReceipt, artifactId, artifactDi
   if (!/^[0-9]+$/u.test(normalizedArtifactId)) throw new Error('ARTIFACT_ID_INVALID');
   const normalizedArtifactDigest = exactDigest(artifactDigest, 'ARTIFACT_DIGEST_INVALID');
   const body = {
-    schemaVersion: 'public-forward-liquidity-capture-artifact-receipt-v3',
     ...captureReceipt,
+    schemaVersion: 'public-forward-liquidity-capture-artifact-receipt-v3',
     artifactId: normalizedArtifactId,
     artifactName: String(artifactName ?? '').trim(),
     artifactDigest: normalizedArtifactDigest,
