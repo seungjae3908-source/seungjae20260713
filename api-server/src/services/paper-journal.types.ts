@@ -83,6 +83,8 @@ export type PaperJournalSnapshotResult = {
   records: StoredPaperJournalRecord[];
   nextCursor: string | null;
   serverTime: string;
+  scope: 'manual-paper-trading';
+  excludedNamespaces: Array<{ namespace: 'currency-research' | 'signal-performance' | 'broker-execution'; count: number }>;
 };
 
 export type ConflictResolutionChoice = 'server' | 'device' | 'preserve_both';

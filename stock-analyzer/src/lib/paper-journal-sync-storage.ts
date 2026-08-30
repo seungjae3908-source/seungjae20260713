@@ -380,6 +380,11 @@ export function applyJournalSyncResult(storage: StorageLike, userId: string, sta
 
 export function applyJournalSnapshot(storage: StorageLike, userId: string, state: PaperTradingState, snapshot: JournalSnapshotResult, priorMetadata?: JournalSyncMetadata) {
   assertSyncResponse(snapshot);
+  if (snapshot.scope !== undefined && snapshot.scope !== 'manual-paper-trading'
+    || snapshot.excludedNamespaces !== undefined && (!Array.isArray(snapshot.excludedNamespaces)
+      || snapshot.scope !== 'manual-paper-trading' || snapshot.excludedNamespaces.length > 3
+      || snapshot.excludedNamespaces.some((item) => !item || !['currency-research', 'signal-performance', 'broker-execution'].includes(item.namespace)
+        || !Number.isSafeInteger(item.count) || item.count < 1))) throw new Error('서버 원장의 복원 범위를 확인하지 못했습니다.');
   if (snapshot.nextCursor !== null && (typeof snapshot.nextCursor !== 'string' || !snapshot.nextCursor || snapshot.nextCursor.length > 2000)) throw new Error('거래일지 페이지 커서를 확인하지 못했습니다.');
   const next = applyServerRecords(state, snapshot.records);
   const metadata = structuredClone(priorMetadata ?? loadJournalSyncMetadata(storage, userId).metadata);
@@ -387,6 +392,7 @@ export function applyJournalSnapshot(storage: StorageLike, userId: string, state
   updateMetadataRecords(metadata, snapshot.records);
   metadata.lastSyncAt = snapshot.serverTime;
   metadata.downloadedCount += snapshot.records.length;
+  if (snapshot.excludedNamespaces?.length) metadata.warning = '일반 모의거래 원장만 동기화했습니다. 연구 성과·다중 통화·브로커 기록은 별도 원장에 보존되며 합산하지 않습니다.';
   metadata.status = metadata.conflicts.length ? 'conflict' : metadata.failedCount ? 'failed' : 'completed';
   return { state: next, metadata };
 }
