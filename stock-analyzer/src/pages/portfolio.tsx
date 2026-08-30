@@ -1050,7 +1050,7 @@ export default function PortfolioPage() {
 
 					setInitialized(true);
 				} catch (cause) {
-					console.error(
+					console.warn(
 						'portfolio load error:',
 						cause,
 					);
@@ -1682,16 +1682,6 @@ export default function PortfolioPage() {
 											/>
 										</label>
 									</div>
-
-									<label className="block">
-										<span className="text-xs font-extrabold text-muted-foreground">매수일</span>
-										<input
-											type="date"
-											value={purchaseDate}
-											onChange={(event) => setPurchaseDate(event.target.value)}
-											className="mt-2 h-12 w-full rounded-2xl border border-card-border bg-background px-3 text-sm font-bold outline-none focus:border-primary"
-										/>
-									</label>
 
 									<button
 										type="submit"
