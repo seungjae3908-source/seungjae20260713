@@ -69,9 +69,20 @@ def coordinator_actionable_control_comments(
             retained.append(comment)
             continue
         body = str(comment.get("body") or "")
+        marker_lines = {line.strip() for line in body.splitlines() if line.strip().startswith("[")}
+        if contract.REPORT_MARKER not in marker_lines:
+            # Historical human-readable summaries used [WORKER_REPORT][...]. They were
+            # never canonical coordinator inputs and must not strand rollover continuity.
+            continue
         fields = rollover.parse_fields(body)
         if fields.get("schema_version") != "2":
             retained.append(comment)
+            continue
+        worker = str(fields.get("worker") or "").strip()
+        if worker and (worker not in contract.WORKER_IDS or not contract.WORKER_RE.fullmatch(worker)):
+            # Explicitly non-canonical human worker ids are continuity evidence only.
+            # Check this before full validation because unsupported/missing legacy fields
+            # can otherwise mask the more fundamental worker-registry incompatibility.
             continue
         try:
             comment_id = int(comment.get("id") or 0)
