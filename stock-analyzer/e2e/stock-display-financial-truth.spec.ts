@@ -1,23 +1,25 @@
 import { expect, test } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { formatAppPercent, formatAppPrice } from '../src/lib/stock-display';
 
 function source() {
   return readFileSync(resolve(process.cwd(), 'src/lib/stock-display.ts'), 'utf8');
 }
 
 test('missing or invalid percent is never fabricated as zero', () => {
-  const text = source();
-  expect(text).toContain("if (n == null || !Number.isFinite(n)) return '데이터 없음';");
-  expect(text).not.toContain("if (!Number.isFinite(n)) return '0.00%';");
-  expect(text).not.toContain("        : 0;\n\n  if (!Number.isFinite(n))");
+  expect(formatAppPercent(null)).toBe('데이터 없음');
+  expect(formatAppPercent(undefined)).toBe('데이터 없음');
+  expect(formatAppPercent('')).toBe('데이터 없음');
+  expect(formatAppPercent('not-a-number')).toBe('데이터 없음');
+  expect(formatAppPercent(0)).toBe('0.00%');
+  expect(formatAppPercent('1.25%')).toBe('+1.25%');
 });
 
 test('USDT prices preserve their native currency instead of falling through to KRW', () => {
-  const text = source();
-  expect(text).toContain("if (currencyCode === 'USDT')");
-  expect(text).toContain('} USDT`');
-  expect(text).toContain("if (currencyCode === 'KRW')");
+  expect(formatAppPrice(1234.5678, 'USDT')).toBe('1,234.57 USDT');
+  expect(formatAppPrice(null, 'USDT')).toBe('데이터 없음');
+  expect(formatAppPrice(undefined, 'USDT')).toBe('데이터 없음');
 });
 
 test('cross-currency display does not invent a hard-coded FX rate', () => {
@@ -28,7 +30,6 @@ test('cross-currency display does not invent a hard-coded FX rate', () => {
 });
 
 test('unknown currency labels remain explicit instead of being formatted as won', () => {
-  const text = source();
-  expect(text).toContain("const label = currencyCode || '통화 미확인';");
-  expect(text).toContain('return `${n.toLocaleString(undefined, { maximumFractionDigits: 6 })} ${label}`;');
+  expect(formatAppPrice(42.25, 'EUR')).toBe('42.25 EUR');
+  expect(formatAppPrice(42.25, '')).toBe('42.25 통화 미확인');
 });
