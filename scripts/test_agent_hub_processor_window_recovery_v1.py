@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from typing import Any
+from unittest.mock import patch
 
 from scripts import agent_hub_rollover_v2 as rollover
 from scripts.agent_hub_processor_window_recovery_v1 import (
@@ -10,6 +11,7 @@ from scripts.agent_hub_processor_window_recovery_v1 import (
     ProcessorWindowRecoveryError,
     augment_successor_body,
     assert_manual_invocation,
+    build_recovery_plan,
     coordinator_actionable_control_comments,
     expected_confirmation,
     latest_complete_ledger,
@@ -40,6 +42,13 @@ class FakeGitHub:
 
 def comment(cid: int, body: str) -> dict[str, Any]:
     return {"id": cid, "body": body}
+
+
+def overflow_window(older_count: int = 100) -> BoundedCommentWindow:
+    return BoundedCommentWindow(
+        comments=tuple(comment(cid, "tail") for cid in range(older_count + 1, older_count + 1001)),
+        source_total_comments=older_count + 1000, comments_examined=1000, processor_window=1000,
+    )
 
 
 def worker_report(cid: int, worker: str) -> dict[str, Any]:
@@ -83,6 +92,7 @@ class ProcessorWindowRecoveryTests(unittest.TestCase):
 
     def test_overflow_reads_only_last_processor_window(self) -> None:
         pages = {page: [comment(page * 100 + idx, "x") for idx in range(100)] for page in range(1, 12)}
+        pages[11] = pages[11][:94]
         window = read_bounded_comment_window(FakeGitHub(pages), 660, 1094, 1000)
         self.assertEqual(window.source_total_comments, 1094)
         self.assertEqual(window.comments_examined, 1000)
@@ -228,6 +238,104 @@ class ProcessorWindowRecoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(ProcessorWindowRecoveryError, "not a list"):
             resolve_complete_ledger_anchor(github, 660, window)
 
+    def test_reordered_older_page_cannot_hide_newest_incomplete_ledger(self) -> None:
+        older = [comment(cid, "x") for cid in range(1, 101)]
+        older[79] = comment(90, "[PERSISTENT_TASK_LEDGER]\nnewest-incomplete")
+        older[89] = comment(80, "[PERSISTENT_TASK_LEDGER]\nolder-complete\n[/PERSISTENT_TASK_LEDGER]")
+        with self.assertRaises(ProcessorWindowRecoveryError):
+            resolve_complete_ledger_anchor(FakeGitHub({1: older}), 660, overflow_window())
+
+    def test_lookup_rejects_underfetch_oversize_duplicates_and_malformed_entries(self) -> None:
+        valid = [comment(cid, "x") for cid in range(1, 101)]
+        valid[94] = comment(95, "[PERSISTENT_TASK_LEDGER]\nvalid\n[/PERSISTENT_TASK_LEDGER]")
+        cases = {
+            "underfetch": valid[:-1],
+            "oversize": valid + [comment(101, "extra")],
+            "duplicate": [valid[0], *valid[:-1]],
+            "malformed entry": [None, *valid[1:]],
+            "unavailable body": [comment(1, None), *valid[1:]],
+        }
+        for name, page in cases.items():
+            with self.subTest(name=name), self.assertRaises(ProcessorWindowRecoveryError):
+                resolve_complete_ledger_anchor(FakeGitHub({1: page}), 660, overflow_window())
+
+    def test_lookup_rejects_invalid_ledger_ids(self) -> None:
+        for cid in (0, -1, True, "95", "invalid", 95.5):
+            page = [comment(i, "x") for i in range(1, 101)]
+            page[94] = comment(cid, "[PERSISTENT_TASK_LEDGER]\nvalid\n[/PERSISTENT_TASK_LEDGER]")
+            with self.subTest(cid=cid), self.assertRaises(ProcessorWindowRecoveryError):
+                resolve_complete_ledger_anchor(FakeGitHub({1: page}), 660, overflow_window())
+
+    def test_lookup_rejects_tail_boundary_pagination_drift(self) -> None:
+        page = [comment(cid, "x") for cid in range(101, 201)]
+        page[6] = comment(107, "[PERSISTENT_TASK_LEDGER]\nvalid\n[/PERSISTENT_TASK_LEDGER]")
+        page[-1] = comment(201, "drifted boundary")
+        with self.assertRaises(ProcessorWindowRecoveryError):
+            resolve_complete_ledger_anchor(FakeGitHub({2: page}), 660, overflow_window(107))
+
+    def test_partial_older_prefix_matches_tail_boundary_without_executing_overlap(self) -> None:
+        page = [comment(cid, "x") for cid in range(101, 201)]
+        page[6] = comment(107, "[PERSISTENT_TASK_LEDGER]\nvalid\n[/PERSISTENT_TASK_LEDGER]")
+        github = FakeGitHub({2: page})
+        ledger_id, _, examined = resolve_complete_ledger_anchor(github, 660, overflow_window(107))
+        self.assertEqual((ledger_id, examined), (107, 7))
+        self.assertEqual(len(github.requests), 1)
+
+    def test_lookup_rejects_repeated_page_before_accepting_older_ledger(self) -> None:
+        page2 = [comment(cid, "x") for cid in range(101, 201)]
+        repeated = [dict(row) for row in page2]
+        repeated[94] = comment(195, "[PERSISTENT_TASK_LEDGER]\ninvalid-page\n[/PERSISTENT_TASK_LEDGER]")
+        with self.assertRaises(ProcessorWindowRecoveryError):
+            resolve_complete_ledger_anchor(FakeGitHub({2: page2, 1: repeated}), 660, overflow_window(200))
+
+    def test_lookup_limit_cannot_override_hard_cap(self) -> None:
+        github = FakeGitHub({})
+        with self.assertRaises(ProcessorWindowRecoveryError):
+            resolve_complete_ledger_anchor(github, 660, overflow_window(), max_lookback_comments=1501)
+        self.assertEqual(github.requests, [])
+
+    def test_oversized_ledger_block_fails_closed(self) -> None:
+        page = [comment(cid, "x") for cid in range(1, 101)]
+        page[94] = comment(95, "[PERSISTENT_TASK_LEDGER]\n" + "x" * 18000 + "\n[/PERSISTENT_TASK_LEDGER]")
+        with self.assertRaisesRegex(ProcessorWindowRecoveryError, "budget"):
+            resolve_complete_ledger_anchor(FakeGitHub({1: page}), 660, overflow_window())
+
+    def test_tail_rejects_pagination_inconsistency_instead_of_silently_trimming(self) -> None:
+        for mode in ("underfetch", "oversize", "duplicate", "reordered", "malformed"):
+            pages = {p: [comment(cid, "x") for cid in range((p - 1) * 100 + 1, p * 100 + 1)] for p in range(2, 12)}
+            if mode == "underfetch":
+                pages[2].pop()
+            elif mode == "oversize":
+                pages[2].append(comment(201, "extra"))
+            elif mode == "duplicate":
+                pages[2][1] = dict(pages[2][0])
+            elif mode == "reordered":
+                pages[2][0], pages[2][1] = pages[2][1], pages[2][0]
+            else:
+                pages[2][0] = None
+            with self.subTest(mode=mode), self.assertRaises(ProcessorWindowRecoveryError):
+                read_bounded_comment_window(FakeGitHub(pages), 660, 1100, 1000)
+
+    def test_recovery_plan_never_passes_older_executable_reports_to_control_validation(self) -> None:
+        pages = {p: [comment(cid, "x") for cid in range((p - 1) * 100 + 1, p * 100 + 1)] for p in range(1, 12)}
+        pages[1][94] = comment(95, "[PERSISTENT_TASK_LEDGER]\nvalid\n[/PERSISTENT_TASK_LEDGER]")
+        pages[1][95] = worker_report(96, "ai-chart")
+        pages[11][-3:] = [comment(1098, "[PIPELINE_SNAPSHOT]"), comment(1099, "[LEASE]"), comment(1100, "[WATCH_EVENT]")]
+        github = FakeGitHub(pages)
+        github.issue = lambda number: {"comments": 1100, "body": "source", "labels": []}
+        github.branch_sha = lambda branch: "a" * 40
+        github.commit_status = lambda sha: {name: "success" for name in rollover.REQUIRED_STATUS_CONTEXTS}
+        github.open_pulls = lambda: []
+        with patch.object(rollover, "resolve_active_issue", return_value=660), \
+             patch.object(rollover, "_append_successor_marker"), \
+             patch.object(rollover, "build_successor_body", return_value="standard"), \
+             patch.object(rollover, "unresolved_control_work", wraps=rollover.unresolved_control_work) as pending:
+            plan = build_recovery_plan(github, 660)
+        self.assertEqual(plan["anchors"]["[PERSISTENT_TASK_LEDGER]"], 95)
+        self.assertEqual(plan["ledger_anchor_lookup_comments_examined"], 100)
+        self.assertEqual([row["id"] for row in pending.call_args.args[0]], list(range(101, 1101)))
+        self.assertIn("full_history_validated: `false`", plan["successor_body"])
+
     def test_resolved_older_ledger_id_does_not_expand_tail_control_set(self) -> None:
         window = BoundedCommentWindow(
             comments=(comment(101, "[PIPELINE_SNAPSHOT]"), comment(102, "[LEASE]"), comment(103, "[WATCH_EVENT]")),
@@ -264,6 +372,9 @@ class ProcessorWindowRecoveryTests(unittest.TestCase):
         self.assertIn("source_total_comments: `1094`", body)
         self.assertIn("processor_window_comments_examined: `994`", body)
         self.assertIn("ledger_anchor_lookup_comments_examined: `94`", body)
+        self.assertIn("processor_tail_comment_range: `[101, 1094]`", body)
+        self.assertIn("ledger_anchor_lookup_comment_range: `[7, 100]`", body)
+        self.assertIn("ledger_source_comment_id: `13`", body)
         self.assertIn("continuity-only older-prefix lookup", body)
         self.assertIn("explicit close marker or next canonical top-level section marker", body)
         self.assertIn("executable pending-control validation remains", body)
