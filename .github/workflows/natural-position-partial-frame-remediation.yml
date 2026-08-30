@@ -22,7 +22,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Patch partial-frame fail-closed guard and regression
+      - name: Patch partial-frame fail-closed guard and regressions
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -31,6 +31,7 @@ jobs:
 
           source_path = Path('market-prediction-lab/src/natural-paper-public-position-observation-v1.js')
           test_path = Path('market-prediction-lab/tests/natural-paper-public-position-observation-v1.test.js')
+          runtime_test_path = Path('market-prediction-lab/tests/natural-paper-public-position-observation-runtime-v1.test.js')
 
           source = source_path.read_text()
           old = '''  const selected = frames.filter((frame) => frame.sourceObservedAtMs > cursor);\n  if (selected.length === 0) {'''
@@ -51,6 +52,13 @@ jobs:
           if 'POSITION_OBSERVATION_PARTIAL_FRAME_AT_CURSOR' in tests:
               raise SystemExit('PARTIAL_FRAME_REGRESSION_ALREADY_PRESENT')
           test_path.write_text(tests.rstrip() + regression + '\n')
+
+          runtime_tests = runtime_test_path.read_text()
+          runtime_fixture_old = '    entryTimestampMs: NOW_MS - (2 * FOUR_HOURS_MS) + 1_000,\n'
+          runtime_fixture_new = '    entryTimestampMs: NOW_MS - (2 * FOUR_HOURS_MS),\n'
+          if runtime_fixture_old not in runtime_tests:
+              raise SystemExit('PARTIAL_FRAME_RUNTIME_FIXTURE_ANCHOR_NOT_FOUND')
+          runtime_test_path.write_text(runtime_tests.replace(runtime_fixture_old, runtime_fixture_new, 1))
           PY
 
       - name: Verify focused source and runtime regressions
@@ -59,6 +67,7 @@ jobs:
           set -Eeuo pipefail
           node --check market-prediction-lab/src/natural-paper-public-position-observation-v1.js
           node --check market-prediction-lab/tests/natural-paper-public-position-observation-v1.test.js
+          node --check market-prediction-lab/tests/natural-paper-public-position-observation-runtime-v1.test.js
           node --test \
             market-prediction-lab/tests/natural-paper-public-position-observation-v1.test.js \
             market-prediction-lab/tests/natural-paper-public-position-observation-runtime-v1.test.js
@@ -67,12 +76,16 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          test -z "$(git diff --name-only -- . ':(exclude)market-prediction-lab/src/natural-paper-public-position-observation-v1.js' ':(exclude)market-prediction-lab/tests/natural-paper-public-position-observation-v1.test.js')"
+          test -z "$(git diff --name-only -- . \
+            ':(exclude)market-prediction-lab/src/natural-paper-public-position-observation-v1.js' \
+            ':(exclude)market-prediction-lab/tests/natural-paper-public-position-observation-v1.test.js' \
+            ':(exclude)market-prediction-lab/tests/natural-paper-public-position-observation-runtime-v1.test.js')"
           git diff --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add \
             market-prediction-lab/src/natural-paper-public-position-observation-v1.js \
-            market-prediction-lab/tests/natural-paper-public-position-observation-v1.test.js
+            market-prediction-lab/tests/natural-paper-public-position-observation-v1.test.js \
+            market-prediction-lab/tests/natural-paper-public-position-observation-runtime-v1.test.js
           git commit -m 'fix(paper): reject pre-entry partial candle observations'
           git push origin HEAD:${{ github.event.pull_request.head.ref }}
