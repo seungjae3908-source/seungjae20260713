@@ -567,6 +567,16 @@ test('invalid mark price is rejected', () => {
   assert.throws(() => applyPaperTradingAction(opened.state, { type: 'mark_price', eventId: 'bad-mark', symbol: 'BTCUSDT', price: 0 }, NOW), /현재가/);
 });
 
+test('finite mark inputs whose position arithmetic overflows cannot become a zero valuation', () => {
+  const opened = place();
+  assert.ok(opened.position && opened.position.remainingQuantity > 1);
+  const before = structuredClone(opened.state);
+  assert.throws(() => applyPaperTradingAction(opened.state,
+    { type: 'mark_price', eventId: 'overflow-mark', symbol: 'BTCUSDT', price: Number.MAX_VALUE, at: NOW_ISO }, NOW),
+    (error: Error & { code?: string }) => error.code === 'NON_FINITE_CALCULATION');
+  assert.deepEqual(opened.state, before, 'a rejected calculation must not corrupt the source ledger');
+});
+
 test('manual close requires live data', () => {
   const opened = place();
   assert.throws(() => applyPaperTradingAction(opened.state, { type: 'close_position', eventId: 'bad-close-data', positionId: opened.position!.id, percentage: 100, market: market({status:'delayed'}) }, NOW), /실시간 시장 데이터/);

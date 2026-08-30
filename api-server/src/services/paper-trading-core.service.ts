@@ -22,7 +22,10 @@ export const unique = <T>(values: T[]) => [...new Set(values)];
 export const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 export const positive = (value: unknown): value is number => finite(value) && value > 0;
 export const nonNegative = (value: unknown): value is number => finite(value) && value >= 0;
-export const safeNumber = (value: number) => Number.isFinite(value) ? value : 0;
+export const safeNumber = (value: number) => {
+  if (!Number.isFinite(value)) throw new PaperTradingError('NON_FINITE_CALCULATION', '모의거래 계산값이 유한수가 아닙니다.', 500);
+  return value;
+};
 
 export function cloneState(state: PaperTradingState): PaperTradingState {
   return JSON.parse(JSON.stringify(state)) as PaperTradingState;
