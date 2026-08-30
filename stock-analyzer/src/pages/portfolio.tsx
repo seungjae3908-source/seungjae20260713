@@ -138,12 +138,21 @@ function signedPercent(
 function supabaseErrorMessage(
 	cause: unknown,
 ): string {
+	const objectMessage =
+		cause &&
+		typeof cause === 'object' &&
+		'message' in cause
+			? (cause as { message?: unknown }).message
+			: undefined;
+
 	const raw =
 		cause instanceof Error
 			? cause.message
-			: String(
-					cause ?? '',
-				);
+			: typeof objectMessage === 'string'
+				? objectMessage
+				: String(
+						cause ?? '',
+					);
 
 	const lower =
 		raw.toLowerCase();
@@ -1041,7 +1050,7 @@ export default function PortfolioPage() {
 
 					setInitialized(true);
 				} catch (cause) {
-					console.error(
+					console.warn(
 						'portfolio load error:',
 						cause,
 					);
@@ -1438,87 +1447,89 @@ export default function PortfolioPage() {
 					!auth.loading &&
 					auth.user && (
 						<div className="space-y-4">
-							<section className="rounded-3xl border border-card-border bg-card p-5 shadow-sm">
-								<div className="flex items-center justify-between gap-3">
-									<div className="flex min-w-0 items-center gap-2">
-										<WalletCards className="h-5 w-5 shrink-0 text-primary" />
+							{!loading && initialized && !error && (
+								<section data-testid="portfolio-holdings-summary" className="rounded-3xl border border-card-border bg-card p-5 shadow-sm">
+									<div className="flex items-center justify-between gap-3">
+										<div className="flex min-w-0 items-center gap-2">
+											<WalletCards className="h-5 w-5 shrink-0 text-primary" />
 
-										<div className="min-w-0">
-											<h2 className="font-extrabold">
-												전체 평가
-											</h2>
+											<div className="min-w-0">
+												<h2 className="font-extrabold">
+													전체 평가
+												</h2>
 
-											<p className="mt-0.5 truncate text-[11px] font-bold text-muted-foreground">
-												{auth.displayName ??
-													'사용자'}님의 포트폴리오
-											</p>
+												<p className="mt-0.5 truncate text-[11px] font-bold text-muted-foreground">
+													{auth.displayName ??
+														'사용자'}님의 포트폴리오
+												</p>
+											</div>
 										</div>
+
+										<button
+											type="button"
+											onClick={() =>
+												void load()
+											}
+											disabled={
+												loading
+											}
+											className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl active:bg-muted disabled:opacity-50"
+											aria-label="새로고침"
+										>
+											<RefreshCw
+												className={cn(
+													'h-4 w-4',
+
+													loading &&
+														'animate-spin',
+												)}
+											/>
+										</button>
 									</div>
 
-									<button
-										type="button"
-										onClick={() =>
-											void load()
-										}
-										disabled={
-											loading
-										}
-										className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl active:bg-muted disabled:opacity-50"
-										aria-label="새로고침"
-									>
-										<RefreshCw
-											className={cn(
-												'h-4 w-4',
+									<p className="mt-4 text-2xl font-black">
+										{Math.round(
+											summary.value,
+										).toLocaleString()}
+									</p>
 
-												loading &&
-													'animate-spin',
-											)}
+									<div className="mt-3 grid grid-cols-2 gap-3">
+										<SummaryBox
+											label="평가손익"
+											value={
+												summary.profit >=
+												0
+													? `+${Math.round(
+															summary.profit,
+														).toLocaleString()}`
+													: Math.round(
+															summary.profit,
+														).toLocaleString()
+											}
+											positive={
+												summary.profit >=
+												0
+											}
 										/>
-									</button>
-								</div>
 
-								<p className="mt-4 text-2xl font-black">
-									{Math.round(
-										summary.value,
-									).toLocaleString()}
-								</p>
+										<SummaryBox
+											label="수익률"
+											value={signedPercent(
+												summary.rate,
+											)}
+											positive={
+												summary.rate >=
+												0
+											}
+										/>
+									</div>
 
-								<div className="mt-3 grid grid-cols-2 gap-3">
-									<SummaryBox
-										label="평가손익"
-										value={
-											summary.profit >=
-											0
-												? `+${Math.round(
-														summary.profit,
-													).toLocaleString()}`
-												: Math.round(
-														summary.profit,
-													).toLocaleString()
-										}
-										positive={
-											summary.profit >=
-											0
-										}
-									/>
-
-									<SummaryBox
-										label="수익률"
-										value={signedPercent(
-											summary.rate,
-										)}
-										positive={
-											summary.rate >=
-											0
-										}
-									/>
-								</div>
-
-								<p className="mt-3 break-keep text-[11px] font-semibold leading-5 text-muted-foreground">
-									국내 원화와 미국 달러 보유분을 단순 합산한 값입니다.
-									환율 환산은 다음 단계에서 연결합니다.
-								</p>
-							</section>
+									<p className="mt-3 break-keep text-[11px] font-semibold leading-5 text-muted-foreground">
+										국내 원화와 미국 달러 보유분을 단순 합산한 값입니다.
+										환율 환산은 다음 단계에서 연결합니다.
+									</p>
+								</section>
+							)}
 
 							<button
 								type="button"
@@ -1530,7 +1541,8 @@ export default function PortfolioPage() {
 
 									setError('');
 								}}
-								className="flex w-full items-center justify-center gap-2 rounded-2xl bg-primary px-4 py-3.5 text-sm font-extrabold text-primary-foreground"
+								disabled={loading || Boolean(error)}
+								className="flex w-full items-center justify-center gap-2 rounded-2xl bg-primary px-4 py-3.5 text-sm font-extrabold text-primary-foreground disabled:opacity-50"
 							>
 								<Plus className="h-4 w-4" />
 
