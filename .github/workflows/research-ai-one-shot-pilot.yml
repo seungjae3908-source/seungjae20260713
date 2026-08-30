@@ -101,8 +101,14 @@ jobs:
       - name: Backend typecheck
         run: pnpm --dir api-server run typecheck
 
+      - name: Bundle isolated dual-free-ai contract tests
+        run: >-
+          pnpm --dir api-server exec esbuild src/services/research-dual-free-ai.service.test.ts
+          --bundle --platform=node --format=esm --packages=external
+          --outfile=/tmp/research-dual-free-ai.service.test.mjs
+
       - name: Run isolated dual-free-ai contract tests
-        run: pnpm --dir api-server exec tsx --test src/services/research-dual-free-ai.service.test.ts
+        run: node --test /tmp/research-dual-free-ai.service.test.mjs
 
       - name: Compile provider-isolated runner without executing providers
         run: >-
