@@ -99,16 +99,22 @@ function currencyFor(value: string): PortfolioCurrency {
   return value === 'USD' ? 'USD' : 'KRW';
 }
 
-function closeReturns(candles: Array<{ time: string | number; close: number }>): ReturnPoint[] {
-  const sorted = candles
-    .filter((item) => Number.isFinite(item.close) && item.close > 0)
-    .map((item) => ({ timestamp: String(item.time), close: item.close }));
+function closeReturns(candles: Array<{ time: string | number; close: number }>, now: number): ReturnPoint[] {
+  const values = candles.map((item) => ({ close: item.close,
+    timestamp: quoteTimeEvidence(item.time, typeof item.time === 'number' ? 'unix-seconds' : 'iso', now).updatedAt,
+  }));
+  if (values.some((item) => !item.timestamp || !Number.isFinite(item.close) || item.close <= 0)
+    || new Set(values.map((item) => item.timestamp)).size !== values.length) return [];
+  const sorted = values.map((item) => ({ ...item, timestamp: item.timestamp! }))
+    .sort((left, right) => left.timestamp.localeCompare(right.timestamp));
   const result: ReturnPoint[] = [];
   for (let index = 1; index < sorted.length; index += 1) {
     const previous = sorted[index - 1];
     const current = sorted[index];
     if (!(previous.close > 0)) continue;
-    result.push({ timestamp: current.timestamp, value: (current.close / previous.close) - 1 });
+    const value = (current.close / previous.close) - 1;
+    if (!Number.isFinite(value)) return [];
+    result.push({ timestamp: current.timestamp, startTimestamp: previous.timestamp, value });
   }
   return result;
 }
@@ -250,14 +256,16 @@ export async function buildPortfolioIntelligence(input: {
   for (const bucket of ['KR_STOCKS', 'US_STOCKS'] as const) {
     const values = normalizedHoldings.filter((holding) => bucketFor(holding.market) === bucket).map((holding) => holding.normalizedKRW);
     const incomplete = invalidRowCount > 0 || holdings.some((row) => bucketFor(row.market as KnownHolding['market']) === bucket && !knownHoldings.some((known) => known.id === row.id));
-    bucketValues.set(bucket, incomplete || values.some((value) => value == null) ? null : values.reduce<number>((sum, value) => sum + (value ?? 0), 0));
+    const total = values.reduce<number>((sum, value) => sum + (value ?? 0), 0);
+    bucketValues.set(bucket, incomplete || values.some((value) => value == null) || !Number.isFinite(total) ? null : total);
   }
   bucketValues.set('CASH', null);
   bucketValues.set('CRYPTO', null);
-  const knownBucketTotal = [...bucketValues.values()].reduce<number>((sum, value) => sum + (value ?? 0), 0);
+  const bucketSubtotal = [...bucketValues.values()].reduce<number>((sum, value) => sum + (value ?? 0), 0);
+  const knownBucketTotal = [...bucketValues.values()].some((value) => value !== null) && Number.isFinite(bucketSubtotal) ? bucketSubtotal : null;
   const bucketPercent = (key: string) => {
     const value = bucketValues.get(key);
-    return value == null || knownBucketTotal <= 0 ? null : (value / knownBucketTotal) * 100;
+    return value == null || knownBucketTotal == null || knownBucketTotal <= 0 ? null : (value / knownBucketTotal) * 100;
   };
   const allocationPolicy = comparePortfolioAllocation(profileOrDefault(input.profile), {
     CASH: null,
@@ -276,11 +284,16 @@ export async function buildPortfolioIntelligence(input: {
   };
   if (topHoldings.length >= 2) {
     const pair = topHoldings.slice(0, 2);
-    const histories = await Promise.allSettled(pair.map((holding) => (input.loadCandles ?? MarketDataService.getCandles.bind(MarketDataService))(holding.ticker, '1D')));
-    if (histories.every((result) => result.status === 'fulfilled')) {
-      const left = histories[0].status === 'fulfilled' ? closeReturns(histories[0].value) : [];
-      const right = histories[1].status === 'fulfilled' ? closeReturns(histories[1].value) : [];
-      const value = calculateAlignedCorrelation(left, right, 30);
+    const batch = await runBoundedWorkPool(pair, (holding) => (input.loadCandles ?? MarketDataService.getCandles.bind(MarketDataService))(holding.ticker, '1D'),
+      { concurrency: 2, deadlineMs: 4_000, itemTimeoutMs: 3_500 });
+    const histories = new Map(batch.outcomes.map((outcome) => [outcome.index, outcome]));
+    const leftResult = histories.get(0);
+    const rightResult = histories.get(1);
+    if (leftResult?.status === 'fulfilled' && rightResult?.status === 'fulfilled'
+      && Array.isArray(leftResult.value) && Array.isArray(rightResult.value)) {
+      const left = closeReturns(leftResult.value, now.getTime());
+      const right = closeReturns(rightResult.value, now.getTime());
+      const value = calculateAlignedCorrelation(left, right, 30, now.getTime());
       correlation = { ...value, pair: pair.map((holding) => holding.ticker) };
     } else {
       correlation = { status: 'PARTIAL_MARKET_DATA', sampleSize: 0, correlation: null, pair: pair.map((holding) => holding.ticker) };
@@ -292,7 +305,12 @@ export async function buildPortfolioIntelligence(input: {
   const costComplete = Number.isFinite(knownCost) && invalidRowCount === 0 && normalizedHoldings.every((holding) => holding.normalizedCostKRW != null) && holdings.length === knownHoldings.length;
   const knownValue = normalizedHoldings.reduce((sum, holding) => sum + (holding.normalizedKRW ?? 0), 0);
   const valueComplete = Number.isFinite(knownValue) && invalidRowCount === 0 && normalizedHoldings.every((holding) => holding.normalizedKRW != null) && holdings.length === knownHoldings.length;
-  const noValuationEvidence = rawRows.length > 0 && !normalizedHoldings.some((holding) => holding.normalizedKRW != null);
+  const pnl = costComplete && valueComplete ? knownValue - knownCost : null;
+  const rawReturnPercent = pnl != null && knownCost > 0 ? (pnl / knownCost) * 100 : null;
+  const returnPercent = rawReturnPercent != null && Number.isFinite(rawReturnPercent) ? rawReturnPercent : null;
+  if (![knownCost, knownValue, bucketSubtotal].every(Number.isFinite)) missingSources.push('PORTFOLIO_AGGREGATE_OVERFLOW');
+  if (rawReturnPercent != null && returnPercent == null) missingSources.push('PORTFOLIO_RETURN_OVERFLOW');
+  const noValuationEvidence = !Number.isFinite(knownValue) || (rawRows.length > 0 && !normalizedHoldings.some((holding) => holding.normalizedKRW != null));
   const nativeBalance = (currency: 'KRW' | 'USD') => {
     const rows = knownHoldings.filter((row) => row.currency === currency);
     const missing = invalidRowCount > 0 || holdings.some((row) => row.currency === currency && !knownHoldings.some((known) => known.id === row.id));
@@ -308,11 +326,11 @@ export async function buildPortfolioIntelligence(input: {
       normalizedKRW: aggregate.assets.totalNormalizedKRWAmount,
       knownNormalizedKRW: noValuationEvidence ? null : aggregate.assets.knownNormalizedKRWAmount,
     },
-    investmentPrincipal: { status: costComplete ? 'READY' : 'PARTIAL', normalizedKRW: costComplete ? knownCost : null, knownNormalizedKRW: noValuationEvidence ? null : knownCost },
+    investmentPrincipal: { status: costComplete ? 'READY' : 'PARTIAL', normalizedKRW: costComplete ? knownCost : null, knownNormalizedKRW: noValuationEvidence || !Number.isFinite(knownCost) ? null : knownCost },
     valuationPnl: {
-      status: costComplete && valueComplete ? 'READY' : 'PARTIAL',
-      normalizedKRW: costComplete && valueComplete ? knownValue - knownCost : null,
-      returnPercent: costComplete && valueComplete && knownCost > 0 ? ((knownValue - knownCost) / knownCost) * 100 : null,
+      status: costComplete && valueComplete && (rawReturnPercent == null || returnPercent != null) ? 'READY' : 'PARTIAL',
+      normalizedKRW: pnl,
+      returnPercent,
     },
     nativeBalances: {
       KRW: nativeBalance('KRW'),
