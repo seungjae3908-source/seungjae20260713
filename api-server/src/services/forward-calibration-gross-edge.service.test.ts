@@ -328,15 +328,13 @@ test('malformed aggregate structure fails closed without fabricating measured sa
   ];
 
   for (const value of malformed) {
-    let result: ReturnType<typeof buildForwardCalibrationGrossEdgeEvidence> | null = null;
-    assert.doesNotThrow(() => {
-      result = buildForwardCalibrationGrossEdgeEvidence({
-        observations: rows,
-        calibration: value as unknown as ForwardObservationProfitCalibration,
-        asOf: iso(6 * 60 * 60 * 1000),
-      });
+    const build = () => buildForwardCalibrationGrossEdgeEvidence({
+      observations: rows,
+      calibration: value as unknown as ForwardObservationProfitCalibration,
+      asOf: iso(6 * 60 * 60 * 1000),
     });
-    assert.ok(result);
+    assert.doesNotThrow(build);
+    const result = build();
     assert.equal(result.status, 'NOT_AVAILABLE');
     assert.equal(result.sampleSize, null);
     assert.equal(result.expectedGrossEdgeBps, null);
@@ -379,15 +377,13 @@ test('malformed observation identity or snapshot fails closed instead of throwin
   malformedSnapshot[0] = Object.freeze({ ...malformedSnapshot[0]!, snapshot: undefined }) as unknown as ForwardRecommendationObservation;
 
   for (const malformedRows of [malformedIdentity, malformedSnapshot]) {
-    let result: ReturnType<typeof buildForwardCalibrationGrossEdgeEvidence> | null = null;
-    assert.doesNotThrow(() => {
-      result = buildForwardCalibrationGrossEdgeEvidence({
-        observations: malformedRows,
-        calibration,
-        asOf: iso(6 * 60 * 60 * 1000),
-      });
+    const build = () => buildForwardCalibrationGrossEdgeEvidence({
+      observations: malformedRows,
+      calibration,
+      asOf: iso(6 * 60 * 60 * 1000),
     });
-    assert.ok(result);
+    assert.doesNotThrow(build);
+    const result = build();
     assert.equal(result.status, 'NOT_AVAILABLE');
     assert.equal(result.sampleSize, 30);
     assert.ok(result.reasons.includes('FORWARD_OBSERVATION_STRUCTURE_INVALID'));
