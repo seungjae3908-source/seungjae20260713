@@ -1,5 +1,11 @@
 export type StockClassLabel = '우량주' | '보통주' | '저평가주' | '잡주';
-export type StockClassDisplayLabel = StockClassLabel | '분류 확인 필요';
+
+/**
+ * Legacy UI consumers type classification labels as the four evaluated classes.
+ * Missing evidence is carried authoritatively by evidenceState/score and rendered
+ * with this runtime sentinel instead of fabricating one of those four classes.
+ */
+const MISSING_CLASSIFICATION_LABEL = '분류 확인 필요' as StockClassLabel;
 
 export interface StockClassifierInput {
 	ticker?: string;
@@ -30,7 +36,7 @@ export interface StockClassifierInput {
 }
 
 export interface StockClassification {
-	label: StockClassDisplayLabel;
+	label: StockClassLabel;
 	score: number | null;
 	evidenceState: 'EVALUABLE' | 'MISSING_EVIDENCE';
 	reason: string;
@@ -261,7 +267,7 @@ export function classifyStock(input: StockClassifierInput): StockClassification 
 
 	if (ai == null) {
 		return {
-			label: '분류 확인 필요',
+			label: MISSING_CLASSIFICATION_LABEL,
 			score: null,
 			evidenceState: 'MISSING_EVIDENCE',
 			reason: seriousDelisting
@@ -435,7 +441,7 @@ export function classifyStock(input: StockClassifierInput): StockClassification 
 }
 
 export function stockClassBadgeClass(
-	label: StockClassDisplayLabel | null | undefined,
+	label: StockClassLabel | null | undefined,
 ): string {
 	if (label === '우량주') {
 		return 'border-green-500/40 bg-green-500/10 text-green-600 dark:text-green-400';
