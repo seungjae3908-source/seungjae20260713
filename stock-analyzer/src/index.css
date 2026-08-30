@@ -427,3 +427,14 @@ input[type='search']::-webkit-search-results-decoration {
     word-break: break-all !important;
   }
 }
+
+/*
+ * Scanner detail is an elevated mobile sheet, not a translucent dashboard card.
+ * Keep the global 72% card treatment for ordinary cards, but use the raw theme
+ * colors here so the underlying scanner list cannot bleed through the detail UI.
+ */
+[data-testid='scanner-mobile-sheet'] {
+  background-color: hsl(var(--card));
+  border-color: hsl(var(--card-border));
+  color: hsl(var(--card-foreground));
+}
