@@ -88,10 +88,9 @@ test('partial portfolio selects remain outside the full-row truth guard', () => 
 
 test('portfolio holdings UI never presents load failure as zero-valued portfolio facts', () => {
   const source = readFileSync(resolve(process.cwd(), 'src/pages/portfolio.tsx'), 'utf8');
-  expect(source).toContain('holdingLoadFailed');
-  expect(source).toContain('setHoldingLoadFailed(true)');
   expect(source).toContain('data-testid="portfolio-holdings-summary"');
   expect(source).toContain('!loading &&');
-  expect(source).toContain('!holdingLoadFailed &&');
-  expect(source).toContain('disabled={loading || holdingLoadFailed}');
+  expect(source).toContain('initialized &&');
+  expect(source).toContain('!error &&');
+  expect(source).toContain('disabled={loading || Boolean(error)}');
 });
