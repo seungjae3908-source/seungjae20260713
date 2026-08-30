@@ -75,7 +75,9 @@ export class ResearchBundleService {
       const strategyErrors: string[] = [];
       if (canonicalIdentity.status !== 'IDENTITY_COMPLETE') strategyErrors.push('STRATEGY_IDENTITY_MISSING_OR_INVALID');
       if (source.schemaVersion !== 'research-bundle-source-v1') strategyErrors.push('CANONICAL_BUNDLE_SOURCE_MISSING');
-      if (source.evidenceClass !== 'CANONICAL' && !(source.evidenceClass === 'TEST_ONLY' && this.deps.allowTestEvidence === true)) strategyErrors.push('NON_CANONICAL_EVIDENCE_CLASS');
+      if ((source.evidenceClass !== 'CANONICAL' && !(source.evidenceClass === 'TEST_ONLY' && this.deps.allowTestEvidence === true)) ||
+        (this.deps.allowTestEvidence !== true && /TEST_ONLY|FIXTURE|SYNTHETIC/i.test(String(identity.sourceType))))
+        strategyErrors.push('NON_CANONICAL_EVIDENCE_CLASS');
       try {
         const canonicalDsl = createSafeStrategyDslV1(source.dsl);
         assertFormulaCandidateV1(formula);
@@ -114,7 +116,7 @@ export class ResearchBundleService {
         ({ m: 60_000, h: 3_600_000, d: 86_400_000 }[dsl.timeframe.slice(-1)] ?? NaN))
         dataErrors.push('DATASET_TIMEFRAME_MISMATCH');
       if (!candles.length || candles.length > 250_000 || candles.some((c, i) =>
-        !positive(c.timestamp) || c.timestamp > now || (i > 0 && Number(c.timestamp) <= Number(candles[i - 1].timestamp)) ||
+        !positive(c.timestamp) || !Number.isSafeInteger(c.timestamp) || c.timestamp > now || (i > 0 && Number(c.timestamp) <= Number(candles[i - 1].timestamp)) ||
         !['open', 'high', 'low', 'close'].every(k => positive(c[k])) || !nonnegative(c.volume) ||
         Number(c.high) < Math.max(Number(c.open), Number(c.close), Number(c.low)) ||
         Number(c.low) > Math.min(Number(c.open), Number(c.close)))) dataErrors.push('DATASET_RECEIPT_INVALID');
@@ -139,6 +141,7 @@ export class ResearchBundleService {
       if (!positive(splitPolicy?.frozenAtMs) || !positive(splitPolicy?.firstOutcomeObservedAtMs) ||
         !positive(split?.observedAtMs) || Number(splitPolicy?.frozenAtMs) >= Number(splitPolicy?.firstOutcomeObservedAtMs) ||
         Number(splitPolicy?.frozenAtMs) >= Number(split?.observedAtMs) || Number(split?.observedAtMs) > now ||
+        Number(splitPolicy?.firstOutcomeObservedAtMs) > Number(split?.observedAtMs) ||
         Number(splitPolicy?.frozenAtMs) >= Number(dataset.observedAtMs)) splitErrors.push('SPLIT_RETROSPECTIVE');
       const splitMissing = !source.splitPolicy || !source.splitReceipt;
       add('split', splitMissing ? splitErrors.filter(code => code.endsWith('_MISSING')) : splitErrors, splitMissing);
@@ -252,9 +255,23 @@ export class ResearchBundleService {
     let reservation: Awaited<ReturnType<ResearchSubmissionStore['reserve']>>;
     try { reservation = await store.reserve(requestDigest, structuredClone(running)); }
     catch { return block(result, 'SUBMISSION_PERSISTENCE_UNAVAILABLE'); }
+    if (!reservation || typeof reservation.acquired !== 'boolean') return block(result, 'SUBMISSION_RECEIPT_MISMATCH');
     if (!reservation.acquired) {
-      if (reservation.receipt.receipt?.requestDigest !== requestDigest) return block(result, 'SUBMISSION_RECEIPT_MISMATCH');
-      return structuredClone(reservation.receipt);
+      const prior = row(reservation.receipt), saved = row(prior.receipt), { submittedAt, ...savedMaterial } = saved;
+      const safetyKeys = ['executionAuthority', 'promotionEligible', 'profitabilityProven', 'champion', 'evidenceCredit',
+        'wfEvidencePresent', 'oosEvidencePresent', 'holdoutEvidencePresent', 'statisticalFirewallPass', 'statisticalFirewallStatus', 'wfStatus', 'oosStatus'] as const;
+      if (!same(savedMaterial, { ...material, requestDigest }) || !positive(submittedAt) || submittedAt > (this.deps.now ?? Date.now)() ||
+        !safetyKeys.every(k => prior[k] === result[k]) || prior.holdoutStatus !== result.holdoutStatus ||
+        !['RUNNING', 'COMPLETED', 'FAILED', 'BLOCKED_DATA'].includes(String(prior.backtestStatus)) ||
+        ![0, 1].includes(Number(prior.backtesterCalls)) || prior.backtestSubmitted !== true ||
+        prior.backtestCompleted !== (prior.backtestStatus === 'COMPLETED') ||
+        (prior.backtestCompleted && prior.backtesterCalls !== 1))
+        return block(result, 'SUBMISSION_RECEIPT_MISMATCH');
+      // Rebuild the safe projection, never forward a persisted authority field wholesale.
+      return { ...result, backtestSubmitted: true, backtestCompleted: prior.backtestCompleted as boolean,
+        backtestStatus: prior.backtestStatus as ResearchBundleResolution['backtestStatus'],
+        backtesterCalls: Number(prior.backtesterCalls), receipt: { ...material, requestDigest, submittedAt },
+        blockers: prior.backtestStatus === 'FAILED' || prior.backtestStatus === 'BLOCKED_DATA' ? ['PRIOR_SUBMISSION_BLOCKED_OR_FAILED'] : [] };
     }
     let completed: ResearchBundleResolution, calls = 0;
     try {
