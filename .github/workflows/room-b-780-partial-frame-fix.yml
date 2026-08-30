@@ -1,14 +1,84 @@
-name: ROOM B 780 Partial Frame Probe
+name: ROOM B 780 Partial Frame Fix
 
 on:
   push:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  probe:
+  remediate:
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - name: Verify workflow registration
-        run: echo "ROOM_B_780_WORKFLOW_REGISTERED"
+      - name: Checkout exact branch
+        uses: actions/checkout@v4
+        with:
+          ref: feat/p0-natural-entry-blocker-provenance-20260828
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Verify bounded branch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$GITHUB_REF_NAME" = "feat/p0-natural-entry-blocker-provenance-20260828"
+
+      - name: Apply fail-closed guard and regressions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          source_path = Path('market-prediction-lab/src/natural-paper-public-position-observation-v1.js')
+          unit_path = Path('market-prediction-lab/tests/natural-paper-public-position-observation-v1.test.js')
+          runtime_path = Path('market-prediction-lab/tests/natural-paper-public-position-observation-runtime-v1.test.js')
+
+          source = source_path.read_text()
+          old_source = "  const selected = frames.filter((frame) => frame.sourceObservedAtMs > cursor);\n  if (selected.length === 0) {"
+          new_source = "  const selected = frames.filter((frame) => frame.sourceObservedAtMs > cursor);\n  if (selected.length > 0 && selected[0].timestamp < cursor) {\n    return Object.freeze({ status: STATUS.MISSING, blocker: \"POSITION_OBSERVATION_PARTIAL_FRAME_AT_CURSOR\", frames: null });\n  }\n  if (selected.length === 0) {"
+          if old_source not in source:
+              raise SystemExit('PARTIAL_FRAME_SOURCE_ANCHOR_NOT_FOUND')
+          source_path.write_text(source.replace(old_source, new_source, 1))
+
+          unit = unit_path.read_text()
+          old_fixture = "    entryTimestampMs: firstClose + 1_000,\n"
+          if old_fixture not in unit:
+              raise SystemExit('PARTIAL_FRAME_FIXTURE_ANCHOR_NOT_FOUND')
+          unit = unit.replace(old_fixture, "    entryTimestampMs: firstClose,\n", 1)
+          if 'POSITION_OBSERVATION_PARTIAL_FRAME_AT_CURSOR' in unit:
+              raise SystemExit('PARTIAL_FRAME_REGRESSION_ALREADY_PRESENT')
+          regression = '''\n\ntest("first post-cursor candle that opened before Entry fails closed instead of contaminating MAE/MFE with pre-Entry OHLC", async () => {\n  const firstOpen = NOW_MS - (3 * INTERVAL_MS);\n  const entryTimestampMs = firstOpen + INTERVAL_MS + 1_000;\n  const observed = await collect({ openPositions: [position({ entryTimestampMs })] });\n  assert.equal(observed.status, "MISSING");\n  assert.equal(observed.blocker, "POSITION_OBSERVATION_PARTIAL_FRAME_AT_CURSOR");\n  assert.equal(observed.observations, null);\n});\n'''
+          unit_path.write_text(unit.rstrip() + regression)
+
+          runtime = runtime_path.read_text()
+          old_runtime = "    entryTimestampMs: NOW_MS - (2 * FOUR_HOURS_MS) + 1_000,\n"
+          if old_runtime not in runtime:
+              raise SystemExit('PARTIAL_FRAME_RUNTIME_FIXTURE_ANCHOR_NOT_FOUND')
+          runtime_path.write_text(runtime.replace(old_runtime, "    entryTimestampMs: NOW_MS - (2 * FOUR_HOURS_MS),\n", 1))
+          PY
+
+      - name: Verify focused regressions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check market-prediction-lab/src/natural-paper-public-position-observation-v1.js
+          node --check market-prediction-lab/tests/natural-paper-public-position-observation-v1.test.js
+          node --check market-prediction-lab/tests/natural-paper-public-position-observation-runtime-v1.test.js
+          node --test market-prediction-lab/tests/natural-paper-public-position-observation-v1.test.js market-prediction-lab/tests/natural-paper-public-position-observation-runtime-v1.test.js
+          git diff --check
+          git diff --name-only
+
+      - name: Persist bounded remediation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add market-prediction-lab/src/natural-paper-public-position-observation-v1.js
+          git add market-prediction-lab/tests/natural-paper-public-position-observation-v1.test.js
+          git add market-prediction-lab/tests/natural-paper-public-position-observation-runtime-v1.test.js
+          test "$(git diff --cached --name-only | wc -l)" -eq 3
+          git commit -m 'fix(paper): reject pre-entry partial candle observations'
+          git push origin HEAD:feat/p0-natural-entry-blocker-provenance-20260828
