@@ -1,4 +1,4 @@
-import { Panel, Stat, ReasonList } from '@/components/ui-bits';
+import { Panel, ReasonList } from '@/components/ui-bits';
 import { RatingBadge } from '@/components/rating-badge';
 import { ScoreRing } from '@/components/score-ring';
 import { LoadingState, ErrorState } from '@/components/data-state';
@@ -7,6 +7,45 @@ import { useAnalysis } from '@/hooks/use-stock-data';
 import { formatPrice } from '@/lib/format';
 import { ratingTone } from '@/lib/labels';
 import { ApiError, type Currency } from '@/lib/api';
+
+const ANALYSIS_RATINGS = new Set([
+  'STRONG_BUY',
+  'BUY',
+  'HOLD',
+  'SELL',
+  'STRONG_SELL',
+]);
+
+function validText(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function validReasonList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => validText(item));
+}
+
+function validAnalysisPayload(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+
+  const record = value as Record<string, unknown>;
+  const confidence = record.confidence;
+
+  return (
+    typeof record.opinion === 'string' &&
+    ANALYSIS_RATINGS.has(record.opinion) &&
+    typeof record.opinionReason === 'string' &&
+    typeof confidence === 'number' &&
+    Number.isFinite(confidence) &&
+    confidence >= 0 &&
+    confidence <= 100 &&
+    validReasonList(record.buyReasons) &&
+    validReasonList(record.sellReasons) &&
+    validText(record.shortTerm) &&
+    validText(record.midTerm) &&
+    validText(record.longTerm) &&
+    validText(record.conclusion)
+  );
+}
 
 function validStrategyLeg(leg: { price: number; reason: string } | null | undefined): boolean {
   return Boolean(leg && Number.isFinite(leg.price) && leg.price > 0 && leg.reason.trim().length > 0);
@@ -17,6 +56,8 @@ export function AiTab({ ticker, currency, active }: { ticker: string; currency: 
   if (isLoading) return <LoadingState label="AI 분석 생성 중..." />;
   if (isError || !data)
     return <ErrorState code={error instanceof ApiError ? error.code : undefined} onRetry={() => refetch()} />;
+  if (!validAnalysisPayload(data))
+    return <ErrorState code="AI_ANALYSIS_CONTRACT_INVALID" onRetry={() => refetch()} />;
 
   const strategy = data.strategy;
   const strategyHasEvidence = Boolean(
