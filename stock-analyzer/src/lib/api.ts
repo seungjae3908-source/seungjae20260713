@@ -645,72 +645,6 @@ function normalizeFrame(tf: ChartFrameInput): Timeframe {
   return tf;
 }
 
-function clampAnalysisPrice(analysis: AiAnalysis, overview: Overview): AiAnalysis {
-  const price = overview.quote.price;
-  const currency = overview.profile.currency;
-  const name = overview.profile.name.toLowerCase();
-
-  const isEtf =
-    name.includes('etf') ||
-    name.includes('etn') ||
-    name.includes('tiger') ||
-    name.includes('kodex') ||
-    name.includes('ace') ||
-    name.includes('sol') ||
-    name.includes('hanaro') ||
-    name.includes('arirang') ||
-    name.includes('soxl') ||
-    name.includes('soxs') ||
-    name.includes('tqqq') ||
-    name.includes('sqqq');
-
-  const maxTargetRate = isEtf
-    ? 0.08
-    : analysis.opinion === 'STRONG_BUY'
-      ? 0.15
-      : analysis.opinion === 'BUY'
-        ? 0.1
-        : analysis.opinion === 'HOLD'
-          ? 0.06
-          : 0.04;
-
-  const maxStopRate = isEtf
-    ? 0.05
-    : analysis.opinion === 'STRONG_BUY' || analysis.opinion === 'BUY'
-      ? 0.08
-      : analysis.opinion === 'HOLD'
-        ? 0.06
-        : 0.04;
-
-  let targetPrice = analysis.targetPrice;
-  let stopLossPrice = analysis.stopLossPrice;
-
-  if (
-    !Number.isFinite(targetPrice) ||
-    targetPrice <= price ||
-    targetPrice > price * (1 + maxTargetRate)
-  ) {
-    targetPrice = price * (1 + maxTargetRate);
-  }
-
-  if (
-    !Number.isFinite(stopLossPrice) ||
-    stopLossPrice >= price ||
-    stopLossPrice < price * (1 - maxStopRate)
-  ) {
-    stopLossPrice = price * (1 - maxStopRate);
-  }
-
-  const round = (value: number) =>
-    currency === 'KRW' ? Math.round(value) : Math.round(value * 100) / 100;
-
-  return {
-    ...analysis,
-    targetPrice: round(targetPrice),
-    stopLossPrice: round(stopLossPrice),
-  };
-}
-
 export const api = {
   config: () => apiGet<AppConfig>('/config'),
 
@@ -761,14 +695,8 @@ export const api = {
   news: (ticker: string) =>
     apiGet<NewsData>(`/stocks/${enc(ticker)}/news`),
 
-  analysis: async (ticker: string) => {
-    const [analysis, overview] = await Promise.all([
-      apiGet<AiAnalysis>(`/stocks/${enc(ticker)}/analysis`),
-      apiGet<Overview>(`/stocks/${enc(ticker)}/overview`),
-    ]);
-
-    return clampAnalysisPrice(analysis, overview);
-  },
+  analysis: (ticker: string) =>
+    apiGet<AiAnalysis>(`/stocks/${enc(ticker)}/analysis`),
 
   signals: (ticker: string) =>
     apiGet<SignalReport>(`/stocks/${enc(ticker)}/signals`),
