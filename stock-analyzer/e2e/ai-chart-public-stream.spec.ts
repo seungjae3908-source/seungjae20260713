@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { normalizeChartCandles } from '../src/lib/chart-candle-normalizer';
 import {
   AI_CHART_PUBLIC_STREAM_ENDPOINTS,
   aiChartStreamFreshness,
@@ -204,4 +205,16 @@ test('future and invalid event clocks never become fresh public evidence', () =>
   for (const clock of [NaN, Infinity, 100_001]) {
     expect(aiChartStreamFreshness({ status: 'LIVE_STREAM', lastEventAtMs: clock, nowMs: 100_000 })).toBe('UNAVAILABLE');
   }
+});
+
+test('REST bootstrap excludes unknown volume but preserves explicitly observed zero', () => {
+  const candle = { time: '2026-08-27T00:00:00.000Z', open: 100, high: 101, low: 99, close: 100 };
+  for (const volume of [undefined, null, '', '   ', NaN]) {
+    const result = normalizeChartCandles([{ ...candle, volume }], '1m');
+    expect(result.candles).toEqual([]);
+    expect(result.droppedRows).toBe(1);
+    expect(result.warnings).toContain('사용 가능한 실제 캔들이 없음');
+  }
+  expect(normalizeChartCandles([{ ...candle, volume: 0 }], '1m').candles[0].volume).toBe(0);
+  expect(normalizeChartCandles([{ ...candle, volume: '0' }], '1m').candles[0].volume).toBe(0);
 });
