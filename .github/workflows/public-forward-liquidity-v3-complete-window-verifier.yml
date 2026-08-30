@@ -1,0 +1,195 @@
+name: Public Forward Liquidity V3 Complete Window Verifier
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/public-forward-liquidity-v3-complete-window-verifier.yml'
+      - '.github/workflows/public-forward-liquidity-calibration-scheduled-v3.yml'
+      - 'market-intelligence-sidecar/scripts/verify-public-forward-liquidity-v3-complete-window.mjs'
+      - 'market-intelligence-sidecar/scripts/run-public-forward-liquidity-capture-seam-v3.mjs'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-capture-seam-v3.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-v3-complete-window-verifier.test.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-capture-seam-v3.test.mjs'
+      - 'market-intelligence-sidecar/config/public-forward-liquidity-v3-activation-contract.json'
+  workflow_run:
+    workflows:
+      - Public Forward Liquidity Calibration Scheduled V3
+    types:
+      - completed
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  verify-contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact PR head without credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Run strict complete-window verifier contract tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.event.pull_request.head.sha }}'
+          node --check market-intelligence-sidecar/scripts/verify-public-forward-liquidity-v3-complete-window.mjs
+          node --check market-intelligence-sidecar/tests/public-forward-liquidity-v3-complete-window-verifier.test.mjs
+          node --test \
+            market-intelligence-sidecar/tests/public-forward-liquidity-capture-seam-v3.test.mjs \
+            market-intelligence-sidecar/tests/public-forward-liquidity-v3-complete-window-verifier.test.mjs
+          node market-intelligence-sidecar/scripts/verify-public-forward-liquidity-v3-complete-window.mjs verify-binding
+
+  verify-runtime:
+    if: >-
+      github.event_name == 'workflow_run'
+      && github.event.workflow_run.event == 'schedule'
+      && github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact scheduled source SHA without credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Verify immutable strict-verifier binding
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '${{ github.event.workflow_run.head_sha }}'
+          node market-intelligence-sidecar/scripts/verify-public-forward-liquidity-v3-complete-window.mjs verify-binding
+
+      - name: Download source complete-window artifact if present
+        uses: actions/github-script@v7
+        env:
+          SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+          SOURCE_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+        with:
+          script: |
+            const fs = require('fs');
+            const runId = Number(process.env.SOURCE_RUN_ID);
+            const runAttempt = Number(process.env.SOURCE_RUN_ATTEMPT || 1);
+            const expectedName = `public-forward-liquidity-v3-complete-window-${runId}-${runAttempt}`;
+            fs.mkdirSync('public-forward-liquidity-v3-produced-window-zip', { recursive: true });
+            const response = await github.rest.actions.listWorkflowRunArtifacts({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId,
+              per_page: 100,
+            });
+            const matches = response.data.artifacts.filter((artifact) => !artifact.expired && artifact.name === expectedName);
+            if (matches.length !== 1) {
+              core.warning(`expected exactly one source complete-window artifact ${expectedName}, found ${matches.length}`);
+              return;
+            }
+            const download = await github.rest.actions.downloadArtifact({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              artifact_id: matches[0].id,
+              archive_format: 'zip',
+            });
+            fs.writeFileSync('public-forward-liquidity-v3-produced-window-zip/source.zip', Buffer.from(download.data));
+
+      - name: Unpack source complete-window artifact when available
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p public-forward-liquidity-v3-produced-window
+          if [[ -f public-forward-liquidity-v3-produced-window-zip/source.zip ]]; then
+            unzip -q public-forward-liquidity-v3-produced-window-zip/source.zip -d public-forward-liquidity-v3-produced-window
+          fi
+
+      - name: Download immutable finalized V3 receipt artifacts with GitHub provenance
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const root = 'public-forward-liquidity-v3-verifier-receipts';
+            fs.mkdirSync(root, { recursive: true });
+            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+            const candidates = artifacts
+              .filter((artifact) => !artifact.expired)
+              .filter((artifact) => /^public-forward-liquidity-v3-slot-receipt-\d+-\d+-\d+$/.test(artifact.name))
+              .sort((left, right) => left.id - right.id);
+            for (const artifact of candidates) {
+              const workflowRunId = Number(artifact.workflow_run?.id || 0);
+              if (!workflowRunId) continue;
+              const { data: run } = await github.rest.actions.getWorkflowRun({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: workflowRunId,
+              });
+              if (run.name !== 'Public Forward Liquidity Calibration Scheduled V3' || run.event !== 'schedule') continue;
+              const dir = path.join(root, String(artifact.id));
+              fs.mkdirSync(dir, { recursive: true });
+              const download = await github.rest.actions.downloadArtifact({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                artifact_id: artifact.id,
+                archive_format: 'zip',
+              });
+              fs.writeFileSync(path.join(dir, 'receipt.zip'), Buffer.from(download.data));
+              fs.writeFileSync(path.join(dir, 'receipt-artifact-metadata.json'), JSON.stringify({
+                receiptArtifactId: String(artifact.id),
+                receiptArtifactName: artifact.name,
+                receiptArtifactDigest: String(artifact.digest || ''),
+                receiptArtifactCreatedAtMs: Date.parse(artifact.created_at),
+                expired: Boolean(artifact.expired),
+                workflowRunId: String(run.id),
+                workflowRunHeadBranch: String(run.head_branch || ''),
+                workflowRunHeadSha: String(run.head_sha || '').toLowerCase(),
+              }, null, 2));
+            }
+            core.info(`materialized ${candidates.length} finalized receipt artifact candidates`);
+
+      - name: Unpack finalized V3 receipt artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for archive in public-forward-liquidity-v3-verifier-receipts/*/receipt.zip; do
+            dir="$(dirname "$archive")"
+            unzip -q "$archive" -d "$dir"
+          done
+
+      - name: Strictly reverify complete-window evidence
+        id: strict_verify
+        shell: bash
+        env:
+          RECEIPT_ROOT: public-forward-liquidity-v3-verifier-receipts
+          PRODUCED_WINDOW_ROOT: public-forward-liquidity-v3-produced-window
+          OUTPUT_DIR: public-forward-liquidity-v3-complete-window-verification
+          SOURCE_WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}
+          SOURCE_WORKFLOW_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: node market-intelligence-sidecar/scripts/verify-public-forward-liquidity-v3-complete-window.mjs verify-runtime
+
+      - name: Upload immutable strict-verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-forward-liquidity-v3-complete-window-verification-${{ github.event.workflow_run.id }}-${{ github.run_id }}
+          path: public-forward-liquidity-v3-complete-window-verification
+          if-no-files-found: warn
+          retention-days: 90
