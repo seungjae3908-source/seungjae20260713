@@ -1,0 +1,464 @@
+name: Public Forward Liquidity V3 Canonical Ingest
+
+on:
+  pull_request:
+    paths:
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-v3-capture-ingest.mjs'
+      - 'market-intelligence-sidecar/scripts/run-public-forward-liquidity-v3-capture-ingest.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-v3-capture-ingest.test.mjs'
+      - '.github/workflows/public-forward-liquidity-v3-capture-ingest.yml'
+  workflow_run:
+    workflows: ['Public Forward Liquidity Calibration Scheduled V3']
+    types: [completed]
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: >-
+    public-forward-liquidity-v3-ingest-${{
+      github.event_name == 'workflow_run' && github.event.workflow_run.id ||
+      github.event_name == 'issue_comment' && github.event.comment.id ||
+      github.event.pull_request.number || github.run_id
+    }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Require exact PR HEAD
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+
+      - name: Syntax check V3 ingest path
+        run: |
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-v3-capture-ingest.mjs
+          node --check market-intelligence-sidecar/scripts/run-public-forward-liquidity-v3-capture-ingest.mjs
+          node --check market-intelligence-sidecar/tests/public-forward-liquidity-v3-capture-ingest.test.mjs
+
+      - name: Verify V3 runner help is inert
+        run: |
+          node market-intelligence-sidecar/scripts/run-public-forward-liquidity-v3-capture-ingest.mjs --help > /tmp/v3-ingest-help.txt
+          grep -Fq 'No network request or persistent Research mutation' /tmp/v3-ingest-help.txt
+
+      - name: Run scheduled V3 ingest tests and legacy regression
+        run: >-
+          node --test
+          market-intelligence-sidecar/tests/public-forward-liquidity-v3-capture-ingest.test.mjs
+          market-intelligence-sidecar/tests/public-forward-liquidity-capture-ingest.test.mjs
+
+      - name: Verify fail-closed V3 authority boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          SERVICE='market-intelligence-sidecar/src/public-forward-liquidity-v3-capture-ingest.mjs'
+          RUNNER='market-intelligence-sidecar/scripts/run-public-forward-liquidity-v3-capture-ingest.mjs'
+          grep -Fq "triggerSource !== SCHEDULED_TRIGGER_SOURCE" "$SERVICE"
+          grep -Fq "capture.prospectiveSlotCredit !== 1" "$SERVICE"
+          grep -Fq "capture.manualCredit !== 0" "$SERVICE"
+          grep -Fq "capture.replayCredit !== 0" "$SERVICE"
+          grep -Fq "capture.backfillCredit !== 0" "$SERVICE"
+          grep -Fq "capture.operatorSelectedCredit !== 0" "$SERVICE"
+          grep -Fq 'PUBLIC_FORWARD_LIQUIDITY_V3_ACTIVATION_CONTRACT_DIGEST' "$SERVICE"
+          grep -Fq 'buildV3SlotDescriptor' "$SERVICE"
+          grep -Fq 'V3_SLOT_CHRONOLOGY_INVALID' "$SERVICE"
+          grep -Fq 'COLLECTOR_IMPLEMENTATION_FROZEN_BLOB_MISMATCH' "$SERVICE"
+          grep -Fq 'sourceV3Lineage' "$SERVICE"
+          grep -Fq 'effectiveIndependentCalibrationN: null' "$SERVICE"
+          grep -Fq 'fullCostReady: false' "$SERVICE"
+          grep -Fq "executionAuthority: 'NONE'" "$SERVICE"
+          grep -Fq 'RECEIPT_OUTPUT_OUTSIDE_STATE_ROOT' "$RUNNER"
+          if grep -Eq 'PRIVATE_API|ORDER_SUBMIT|LIVE_TRADING=true|AUTO_TRADING=true' "$SERVICE" "$RUNNER"; then
+            echo 'V3 ingest path contains forbidden execution authority.' >&2
+            exit 1
+          fi
+
+  produce-cumulative-v3-ingest:
+    if: >-
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.name == 'Public Forward Liquidity Calibration Scheduled V3' &&
+       github.event.workflow_run.event == 'schedule' &&
+       github.event.workflow_run.status == 'completed' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.run_attempt == 1) ||
+      (github.event_name == 'issue_comment' &&
+       github.event.action == 'created' &&
+       github.event.issue.number == 838 &&
+       !github.event.issue.pull_request &&
+       github.event.comment.user.login == github.repository_owner &&
+       github.event.comment.author_association == 'OWNER' &&
+       startsWith(github.event.comment.body, '/run-v3-liquidity-ingest '))
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_ROOT: ${{ runner.temp }}/v3-liquidity-source-runs
+      STATE_ROOT: ${{ runner.temp }}/v3-authoritative-liquidity-ingest-state
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Resolve exact triggering or owner-selected source run
+        id: source
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id || '' }}
+          COMMENT_BODY: ${{ github.event.comment.body || '' }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == 'workflow_run' ]]; then
+            source_run_id="$WORKFLOW_RUN_ID"
+          else
+            source_run_id="$(node - <<'NODE'
+          const body = String(process.env.COMMENT_BODY ?? '').trim();
+          const match = /^\/run-v3-liquidity-ingest ([0-9]{6,20})$/.exec(body);
+          if (!match) process.exit(2);
+          process.stdout.write(match[1]);
+          NODE
+            )"
+          fi
+          [[ "$source_run_id" =~ ^[0-9]+$ ]]
+          echo "source_run_id=$source_run_id" >> "$GITHUB_OUTPUT"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${source_run_id}" > "$RUNNER_TEMP/source-run.json"
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const run = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/source-run.json', 'utf8'));
+          const ok = run.name === 'Public Forward Liquidity Calibration Scheduled V3'
+            && run.event === 'schedule'
+            && run.status === 'completed'
+            && run.conclusion === 'success'
+            && run.head_branch === 'main'
+            && Number(run.run_attempt) === 1
+            && /^[0-9a-f]{40}$/u.test(String(run.head_sha ?? ''));
+          if (!ok) throw new Error('SOURCE_RUN_NOT_GENUINE_V3_SCHEDULE_SUCCESS');
+          NODE
+
+      - name: Discover successful genuine scheduled V3 runs through selected source time
+        id: discover
+        env:
+          SOURCE_RUN_ID: ${{ steps.source.outputs.source_run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$SOURCE_ROOT" "$STATE_ROOT"
+          workflow_id="$(node -p "JSON.parse(require('fs').readFileSync(process.env.RUNNER_TEMP + '/source-run.json','utf8')).workflow_id")"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_id}/runs?event=schedule&branch=main&per_page=100" > "$RUNNER_TEMP/v3-runs.json"
+          node - <<'NODE' > "$RUNNER_TEMP/candidate-runs.txt"
+          const fs = require('node:fs');
+          const source = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/source-run.json', 'utf8'));
+          const listing = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/v3-runs.json', 'utf8'));
+          const limit = Date.parse(source.run_started_at ?? source.created_at);
+          if (!Number.isFinite(limit)) throw new Error('SOURCE_RUN_TIME_INVALID');
+          const runs = (listing.workflow_runs ?? [])
+            .filter((run) => run.name === source.name
+              && run.event === 'schedule'
+              && run.status === 'completed'
+              && run.conclusion === 'success'
+              && run.head_branch === 'main'
+              && Number(run.run_attempt) === 1
+              && Date.parse(run.run_started_at ?? run.created_at) <= limit)
+            .sort((a, b) => Date.parse(a.run_started_at ?? a.created_at) - Date.parse(b.run_started_at ?? b.created_at)
+              || Number(a.id) - Number(b.id));
+          if (!runs.some((run) => String(run.id) === String(source.id))) throw new Error('SOURCE_RUN_NOT_IN_CANONICAL_V3_HISTORY');
+          for (const run of runs) process.stdout.write(`${run.id}\n`);
+          NODE
+          test -s "$RUNNER_TEMP/candidate-runs.txt"
+          echo "candidate_run_n=$(wc -l < "$RUNNER_TEMP/candidate-runs.txt" | tr -d ' ')" >> "$GITHUB_OUTPUT"
+
+      - name: Download immutable V3 raw-slot and finalized-receipt artifacts
+        run: |
+          set -euo pipefail
+          while IFS= read -r run_id; do
+            run_dir="$SOURCE_ROOT/$run_id"
+            mkdir -p "$run_dir/raw" "$run_dir/receipt"
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" > "$run_dir/artifacts.json"
+            node - "$run_dir/artifacts.json" "$run_dir/source-meta.json" <<'NODE'
+          const fs = require('node:fs');
+          const [input, output] = process.argv.slice(2);
+          const data = JSON.parse(fs.readFileSync(input, 'utf8'));
+          const active = (data.artifacts ?? []).filter((artifact) => artifact.expired !== true);
+          const raw = active.filter((artifact) => /^public-forward-liquidity-v3-slot-[0-9]+-[a-f0-9]{64}$/u.test(artifact.name));
+          const receipt = active.filter((artifact) => /^public-forward-liquidity-v3-slot-receipt-[0-9]+-[0-9]+-[0-9]+$/u.test(artifact.name));
+          if (raw.length !== 1 || receipt.length !== 1) throw new Error('V3_SOURCE_ARTIFACT_CARDINALITY_INVALID');
+          if (!/^[0-9]+$/u.test(String(raw[0].id)) || !/^sha256:[a-f0-9]{64}$/u.test(String(raw[0].digest ?? ''))) {
+            throw new Error('V3_RAW_ARTIFACT_METADATA_INVALID');
+          }
+          fs.writeFileSync(output, JSON.stringify({
+            rawArtifactId: String(raw[0].id),
+            rawArtifactName: raw[0].name,
+            rawArtifactDigest: String(raw[0].digest).replace(/^sha256:/u, ''),
+            receiptArtifactName: receipt[0].name,
+          }));
+          NODE
+            raw_name="$(node -p "JSON.parse(require('fs').readFileSync('$run_dir/source-meta.json','utf8')).rawArtifactName")"
+            receipt_name="$(node -p "JSON.parse(require('fs').readFileSync('$run_dir/source-meta.json','utf8')).receiptArtifactName")"
+            gh run download "$run_id" --repo "$GITHUB_REPOSITORY" -n "$raw_name" -D "$run_dir/raw"
+            gh run download "$run_id" --repo "$GITHUB_REPOSITORY" -n "$receipt_name" -D "$run_dir/receipt"
+            test -f "$run_dir/raw/capture-receipt.json"
+            test -f "$run_dir/receipt/artifact-receipt.json"
+          done < "$RUNNER_TEMP/candidate-runs.txt"
+
+      - name: Build ordered credited V3 source manifest
+        id: manifest
+        env:
+          SOURCE_RUN_ID: ${{ steps.source.outputs.source_run_id }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { readFile, readdir, writeFile } from 'node:fs/promises';
+          import { join } from 'node:path';
+          const root = process.env.SOURCE_ROOT;
+          const selectedRunId = String(process.env.SOURCE_RUN_ID);
+          const dirs = (await readdir(root, { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+          const all = [];
+          for (const runId of dirs) {
+            const capture = JSON.parse(await readFile(join(root, runId, 'raw', 'capture-receipt.json'), 'utf8'));
+            const artifact = JSON.parse(await readFile(join(root, runId, 'receipt', 'artifact-receipt.json'), 'utf8'));
+            const meta = JSON.parse(await readFile(join(root, runId, 'source-meta.json'), 'utf8'));
+            all.push({ runId, capture, artifact, meta });
+          }
+          const selected = all.find((entry) => entry.runId === selectedRunId);
+          if (!selected || !Number.isInteger(selected.capture?.slotIndex)) throw new Error('SELECTED_V3_SLOT_UNRESOLVED');
+          const targetSlotIndex = selected.capture.slotIndex;
+          const credited = all
+            .filter((entry) => entry.capture?.triggerSource === 'GITHUB_ACTIONS_SCHEDULED_CANONICAL_PUBLIC_CAPTURE'
+              && entry.capture?.captureStatus === 'PRESENT'
+              && entry.capture?.prospectiveSlotCredit === 1
+              && entry.capture?.ATTEMPTED === true
+              && entry.capture?.collectorInvoked === true
+              && String(entry.capture?.runAttempt) === '1'
+              && Number.isInteger(entry.capture?.slotIndex)
+              && entry.capture.slotIndex <= targetSlotIndex)
+            .sort((a, b) => a.capture.slotIndex - b.capture.slotIndex || Number(a.runId) - Number(b.runId));
+          const slots = new Set();
+          const entries = [];
+          for (const entry of credited) {
+            if (slots.has(entry.capture.slotIndex)) throw new Error('DUPLICATE_CREDITED_V3_SLOT');
+            slots.add(entry.capture.slotIndex);
+            const rawBatchPath = join(root, entry.runId, 'raw', 'raw-batch.json');
+            await readFile(rawBatchPath, 'utf8');
+            entries.push({
+              runId: entry.runId,
+              slotIndex: entry.capture.slotIndex,
+              split: entry.capture.split,
+              collectorCodeSha: entry.capture.collectorCodeSha,
+              exactMainSha: entry.capture.exactMainSha,
+              rawArtifactId: entry.meta.rawArtifactId,
+              rawArtifactDigest: entry.meta.rawArtifactDigest,
+              rawBatchPath,
+              captureReceiptPath: join(root, entry.runId, 'raw', 'capture-receipt.json'),
+              artifactReceiptPath: join(root, entry.runId, 'receipt', 'artifact-receipt.json'),
+            });
+          }
+          const manifest = { targetSlotIndex, selectedRunId, creditedSlotN: entries.length, entries };
+          await writeFile(join(root, 'credited-manifest.json'), JSON.stringify(manifest));
+          const out = process.env.GITHUB_OUTPUT;
+          await import('node:fs').then(({ appendFileSync }) => appendFileSync(out, `target_slot_index=${targetSlotIndex}\ncredited_slot_n=${entries.length}\n`));
+          NODE
+
+      - name: Rebuild cumulative canonical ingest state from genuine V3 source artifacts
+        run: |
+          set -euo pipefail
+          RUNNER='market-intelligence-sidecar/scripts/run-public-forward-liquidity-v3-capture-ingest.mjs'
+          node - <<'NODE' > "$RUNNER_TEMP/v3-ingest-entries.tsv"
+          const fs = require('node:fs');
+          const manifest = JSON.parse(fs.readFileSync(process.env.SOURCE_ROOT + '/credited-manifest.json', 'utf8'));
+          for (const entry of manifest.entries) {
+            process.stdout.write([
+              entry.exactMainSha,
+              entry.rawArtifactId,
+              entry.rawArtifactDigest,
+              entry.rawBatchPath,
+              entry.captureReceiptPath,
+              entry.artifactReceiptPath,
+              entry.collectorCodeSha,
+              entry.slotIndex,
+              entry.runId,
+            ].join('\t') + '\n');
+          }
+          NODE
+          while IFS=$'\t' read -r source_sha artifact_id artifact_digest raw_batch capture_receipt artifact_receipt collector slot_index run_id; do
+            [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]
+            [[ "$collector" = "$source_sha" ]]
+            receipt_output="$STATE_ROOT/ingest-receipts/$collector/$(printf '%02d' "$slot_index")-$run_id.json"
+            node "$RUNNER" \
+              --state-root "$STATE_ROOT" \
+              --research-repo-root "$GITHUB_WORKSPACE" \
+              --expected-main-sha "$source_sha" \
+              --expected-repository "$GITHUB_REPOSITORY" \
+              --expected-artifact-id "$artifact_id" \
+              --expected-artifact-digest "$artifact_digest" \
+              --raw-batch "$raw_batch" \
+              --capture-receipt "$capture_receipt" \
+              --artifact-receipt "$artifact_receipt" \
+              --receipt-output "$receipt_output"
+          done < "$RUNNER_TEMP/v3-ingest-entries.tsv"
+
+      - name: Build portable cumulative V3 ingest evidence inventory
+        env:
+          PRODUCER_SHA: ${{ github.sha }}
+          TARGET_SLOT_INDEX: ${{ steps.manifest.outputs.target_slot_index }}
+          CREDITED_SLOT_N: ${{ steps.manifest.outputs.credited_slot_n }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { createHash } from 'node:crypto';
+          import { readFile, readdir, writeFile } from 'node:fs/promises';
+          import { join, relative } from 'node:path';
+          const stateRoot = process.env.STATE_ROOT;
+          const sourceRoot = process.env.SOURCE_ROOT;
+          const manifest = JSON.parse(await readFile(join(sourceRoot, 'credited-manifest.json'), 'utf8'));
+          const canonicalize = (value) => Array.isArray(value)
+            ? value.map(canonicalize)
+            : (value && typeof value === 'object'
+              ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]))
+              : value);
+          const canonicalJson = (value) => JSON.stringify(canonicalize(value));
+          const digest = (value) => createHash('sha256').update(canonicalJson(value)).digest('hex');
+          const groups = new Map();
+          for (const entry of manifest.entries) {
+            if (!groups.has(entry.collectorCodeSha)) groups.set(entry.collectorCodeSha, []);
+            groups.get(entry.collectorCodeSha).push(entry);
+          }
+          const sources = [];
+          let accepted = 0;
+          let dropped = 0;
+          let buy = 0;
+          let sell = 0;
+          for (const [collector, entries] of [...groups.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+            entries.sort((a, b) => a.slotIndex - b.slotIndex);
+            const datasetRelativePath = `forward/liquidity-calibration-v1/forward_natural_sample/${collector}/dataset.json`;
+            const dataset = JSON.parse(await readFile(join(stateRoot, datasetRelativePath), 'utf8'));
+            accepted += dataset.observations.length;
+            dropped += dataset.batchProvenance.reduce((sum, item) => sum + Number(item.droppedCount ?? 0), 0);
+            for (const observation of dataset.observations) {
+              if (observation.aggressiveSide === 'BUY') buy += 1;
+              else if (observation.aggressiveSide === 'SELL') sell += 1;
+              else throw new Error('V3_INGEST_SIDE_INVALID');
+            }
+            const receiptDir = join(stateRoot, 'ingest-receipts', collector);
+            const receiptFiles = (await readdir(receiptDir)).filter((name) => name.endsWith('.json')).sort();
+            if (receiptFiles.length !== entries.length) throw new Error('V3_INGEST_RECEIPT_COUNT_MISMATCH');
+            const receipts = [];
+            for (const file of receiptFiles) receipts.push(JSON.parse(await readFile(join(receiptDir, file), 'utf8')));
+            let predecessor = null;
+            for (let index = 0; index < receipts.length; index += 1) {
+              const receipt = receipts[index];
+              if (receipt.predecessorDatasetDigest !== predecessor) throw new Error('V3_INGEST_PREDECESSOR_CHAIN_MISMATCH');
+              if (receipt.sourceV3Lineage?.slotIndex !== entries[index].slotIndex
+                || receipt.sourceV3Lineage?.prospectiveSlotCredit !== 1
+                || receipt.sourceV3Lineage?.manualCredit !== 0
+                || receipt.sourceV3Lineage?.replayCredit !== 0
+                || receipt.sourceV3Lineage?.backfillCredit !== 0) {
+                throw new Error('V3_INGEST_SOURCE_LINEAGE_MISMATCH');
+              }
+              predecessor = receipt.datasetDigest;
+            }
+            if (predecessor !== dataset.datasetDigest) throw new Error('V3_INGEST_FINAL_DATASET_DIGEST_MISMATCH');
+            const receiptPaths = receiptFiles.map((file) => relative(stateRoot, join(receiptDir, file)));
+            sources.push({
+              sourceIdentity: `v3-cohort:${entries[0].collectorCodeSha}`,
+              collectorCodeSha: collector,
+              collectorImplementationPath: receipts[0].collectorImplementationPath,
+              collectorImplementationBlobSha: receipts[0].collectorImplementationBlobSha,
+              datasetRelativePath,
+              datasetDigest: dataset.datasetDigest,
+              ingestReceiptRelativePaths: receiptPaths,
+              ingestReceiptDigest: receipts.at(-1).receiptDigest,
+              ingestReceiptDigests: receipts.map((receipt) => receipt.receiptDigest),
+              captureRunIds: entries.map((entry) => entry.runId),
+              captureArtifactIds: entries.map((entry) => entry.rawArtifactId),
+              captureArtifactDigests: entries.map((entry) => entry.rawArtifactDigest),
+              v3SlotIndexes: entries.map((entry) => entry.slotIndex),
+              v3Splits: receipts.map((receipt) => receipt.sourceV3Lineage.split),
+              v3PolicyDigest: receipts[0].sourceV3Lineage.policyDigest,
+              v3CohortDigest: receipts[0].sourceV3Lineage.cohortDigest,
+              insertedObservationCount: receipts.reduce((sum, receipt) => sum + receipt.insertedObservationCount, 0),
+              duplicateObservationCount: receipts.reduce((sum, receipt) => sum + receipt.duplicateObservationCount, 0),
+              predecessorDatasetDigest: receipts[0].predecessorDatasetDigest,
+            });
+          }
+          const rawN = accepted + dropped;
+          const inventoryBody = {
+            schemaVersion: 'public-forward-liquidity-authoritative-ingest-inventory-v1',
+            kind: 'PUBLIC_FORWARD_LIQUIDITY_RECEIPT_BOUND_INGEST_EVIDENCE',
+            producerHeadSha: process.env.PRODUCER_SHA,
+            executionMode: 'GITHUB_HOSTED_EPHEMERAL_STATE_ROOT',
+            evidenceGeneration: 'V3_SCHEDULED_CUMULATIVE_REBUILD',
+            persistentResearchStateMutation: false,
+            productionMutation: false,
+            targetSlotIndex: Number(process.env.TARGET_SLOT_INDEX),
+            genuineScheduledSlotN: Number(process.env.CREDITED_SLOT_N),
+            rawN,
+            acceptedN: accepted,
+            droppedN: dropped,
+            buyN: buy,
+            sellN: sell,
+            independentSampleCredit: 0,
+            sources,
+            fullCostReady: false,
+            evidenceComplete: 0,
+            executionAuthority: 'NONE',
+            privateApiUsed: false,
+            liveTrading: false,
+            realOrders: 0,
+          };
+          const inventory = { ...inventoryBody, inventoryDigest: digest(inventoryBody) };
+          await writeFile(join(stateRoot, 'portable-source-inventory.json'), `${canonicalJson(inventory)}\n`);
+          const reportBody = {
+            schemaVersion: 'public-forward-liquidity-authoritative-ingest-report-v1',
+            realIngestExecuted: true,
+            realIngestAuthority: 'IMMUTABLE_GITHUB_ARTIFACT_EPHEMERAL_CANONICAL_STORE',
+            producerHeadSha: process.env.PRODUCER_SHA,
+            sourceInventoryDigest: inventory.inventoryDigest,
+            sourceCount: sources.length,
+            genuineScheduledSlotN: inventory.genuineScheduledSlotN,
+            targetSlotIndex: inventory.targetSlotIndex,
+            canonicalDatasetDigests: sources.map((source) => source.datasetDigest),
+            ingestReceiptDigests: sources.flatMap((source) => source.ingestReceiptDigests),
+            collectorImplementationBlobShas: sources.map((source) => source.collectorImplementationBlobSha),
+            rawN,
+            acceptedN: accepted,
+            droppedN: dropped,
+            buyN: buy,
+            sellN: sell,
+            effectiveIndependentN: null,
+            buyCoverageProven: false,
+            fullCostReady: false,
+            evidenceComplete: 0,
+            persistentResearchStateMutation: false,
+            executionAuthority: 'NONE',
+          };
+          const report = { ...reportBody, reportDigest: digest(reportBody) };
+          await writeFile(join(stateRoot, 'ingest-evidence-report.json'), `${canonicalJson(report)}\n`);
+          NODE
+
+      - name: Upload immutable cumulative V3 receipt-bound ingest evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-forward-liquidity-v3-authoritative-ingest-slot-${{ steps.manifest.outputs.target_slot_index }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.STATE_ROOT }}
+          if-no-files-found: error
+          retention-days: 90
