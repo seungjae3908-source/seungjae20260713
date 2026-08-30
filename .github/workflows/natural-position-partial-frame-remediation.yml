@@ -1,0 +1,78 @@
+name: Natural Position Partial-Frame Remediation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/natural-position-partial-frame-remediation.yml
+
+permissions:
+  contents: write
+
+jobs:
+  remediate:
+    if: github.event.pull_request.number == 780
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Patch partial-frame fail-closed guard and regression
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          source_path = Path('market-prediction-lab/src/natural-paper-public-position-observation-v1.js')
+          test_path = Path('market-prediction-lab/tests/natural-paper-public-position-observation-v1.test.js')
+
+          source = source_path.read_text()
+          old = '''  const selected = frames.filter((frame) => frame.sourceObservedAtMs > cursor);\n  if (selected.length === 0) {'''
+          new = '''  const selected = frames.filter((frame) => frame.sourceObservedAtMs > cursor);\n  if (selected.length > 0 && selected[0].timestamp < cursor) {\n    return Object.freeze({ status: STATUS.MISSING, blocker: "POSITION_OBSERVATION_PARTIAL_FRAME_AT_CURSOR", frames: null });\n  }\n  if (selected.length === 0) {'''
+          if old not in source:
+              raise SystemExit('PARTIAL_FRAME_SOURCE_ANCHOR_NOT_FOUND')
+          source = source.replace(old, new, 1)
+          source_path.write_text(source)
+
+          tests = test_path.read_text()
+          fixture_old = '    entryTimestampMs: firstClose + 1_000,\n'
+          fixture_new = '    entryTimestampMs: firstClose,\n'
+          if fixture_old not in tests:
+              raise SystemExit('PARTIAL_FRAME_FIXTURE_ANCHOR_NOT_FOUND')
+          tests = tests.replace(fixture_old, fixture_new, 1)
+
+          regression = '''\n\ntest("first post-cursor candle that opened before Entry fails closed instead of contaminating MAE/MFE with pre-Entry OHLC", async () => {\n  const firstOpen = NOW_MS - (3 * INTERVAL_MS);\n  const entryTimestampMs = firstOpen + INTERVAL_MS + 1_000;\n  const observed = await collect({ openPositions: [position({ entryTimestampMs })] });\n  assert.equal(observed.status, "MISSING");\n  assert.equal(observed.blocker, "POSITION_OBSERVATION_PARTIAL_FRAME_AT_CURSOR");\n  assert.equal(observed.observations, null);\n});\n'''
+          if 'POSITION_OBSERVATION_PARTIAL_FRAME_AT_CURSOR' in tests:
+              raise SystemExit('PARTIAL_FRAME_REGRESSION_ALREADY_PRESENT')
+          test_path.write_text(tests.rstrip() + regression + '\n')
+          PY
+
+      - name: Verify focused source and runtime regressions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --check market-prediction-lab/src/natural-paper-public-position-observation-v1.js
+          node --check market-prediction-lab/tests/natural-paper-public-position-observation-v1.test.js
+          node --test \
+            market-prediction-lab/tests/natural-paper-public-position-observation-v1.test.js \
+            market-prediction-lab/tests/natural-paper-public-position-observation-runtime-v1.test.js
+
+      - name: Persist bounded remediation on PR branch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -z "$(git diff --name-only -- . ':(exclude)market-prediction-lab/src/natural-paper-public-position-observation-v1.js' ':(exclude)market-prediction-lab/tests/natural-paper-public-position-observation-v1.test.js')"
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            market-prediction-lab/src/natural-paper-public-position-observation-v1.js \
+            market-prediction-lab/tests/natural-paper-public-position-observation-v1.test.js
+          git commit -m 'fix(paper): reject pre-entry partial candle observations'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
