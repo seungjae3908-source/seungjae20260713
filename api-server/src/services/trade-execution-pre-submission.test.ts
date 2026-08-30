@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { InMemoryTradingRepository } from './trade-automation.repository';
 import { TradeAutomationService } from './trade-automation.service';
 import { TradeExecutionService } from './trade-execution.service';
-import { buildBitgetExecutionSnapshot, buildUpbitExecutionSnapshot } from './trade-execution-snapshot.service';
+import { buildBitgetExecutionSnapshot, buildKiwoomExecutionSnapshot, buildUpbitExecutionSnapshot } from './trade-execution-snapshot.service';
 import { encryptTradingCredentials } from './trade-credential-vault.service';
 import {
   marketIntelligenceNotAvailable,
@@ -104,6 +104,46 @@ test('Upbit snapshot keeps locked holdings in exposure and validates both quote 
   assert.equal(buildUpbitExecutionSnapshot({ ...input, ticker: { data: [{ market: 'KRW-BTC', trade_price: 100_000 }] } }).observedAt, '');
 });
 
+test('Kiwoom positions and equity come from explicit account rows, not unfilled-order counts or approval fallbacks', async () => {
+  const { approved } = await setup();
+  const now = Date.now();
+  const input = {
+    plan: { ...approved, exchange: 'kiwoom' as const, market: 'KR', symbol: '005930', quantity: 1 },
+    account: { prsm_dpst_aset_amt: '1000000', acnt_evlt_remn_indv_tot: [
+      { stk_cd: 'A005930', rmnd_qty: '2', trde_able_qty: '1', evlt_amt: '20000' },
+      { stk_cd: '000660', rmnd_qty: '1', trde_able_qty: '1', evlt_amt: '30000' },
+    ] },
+    orderable: { ord_alowa: '50000' },
+    unfilled: { oso: [] as Record<string, unknown>[] },
+    orderbook: { sel_fpr_bid: '+10000', sel_fpr_req: '100', buy_fpr_bid: '-9999', buy_fpr_req: '100',
+      sel_2th_pre_bid: '10001', sel_2th_pre_req: '100', buy_2th_pre_bid: '9998', buy_2th_pre_req: '100', timestamp: now },
+    signal: null,
+  };
+  const snapshot = buildKiwoomExecutionSnapshot(input);
+  assert.equal(snapshot.availableBalance, 50000);
+  assert.equal(snapshot.accountValueKrw, 1000000);
+  assert.equal(snapshot.assetExposurePercent, 2);
+  assert.equal(snapshot.accountExposureKrw, 50000);
+  assert.equal(snapshot.openPositionCount, 2);
+  assert.equal(snapshot.currentPrice, 10000);
+  const pending = { oso: Array.from({ length: 4 }, (_, i) => ({ ord_no: String(i), oso_qty: '1', ord_pric: '10000' })) };
+  const withPending = buildKiwoomExecutionSnapshot({ ...input, unfilled: pending });
+  assert.equal(withPending.openPositionCount, 2);
+  assert.equal(withPending.openOrderExposureKrw, 40000);
+  assert.equal(buildKiwoomExecutionSnapshot({ ...input, orderable: { ord_alowa: '0' } }).availableBalance, 0);
+  for (const orderable of [{}, { cash: '50000' }, { ord_alowa: true }, { ord_alowa: '-1' }]) {
+    assert.throws(() => buildKiwoomExecutionSnapshot({ ...input, orderable }), /EXECUTION_EVIDENCE_INVALID/);
+  }
+  assert.throws(() => buildKiwoomExecutionSnapshot({ ...input, account: {} }), /EQUITY_UNAVAILABLE/);
+  assert.throws(() => buildKiwoomExecutionSnapshot({ ...input, account: { ...input.account, acnt_evlt_remn_indv_tot: null } }), /LIST_INVALID/);
+  assert.throws(() => buildKiwoomExecutionSnapshot({ ...input, account: { ...input.account, acnt_evlt_remn_indv_tot: [input.account.acnt_evlt_remn_indv_tot[0], input.account.acnt_evlt_remn_indv_tot[0]] } }), /IDENTITY_DUPLICATE/);
+  assert.throws(() => buildKiwoomExecutionSnapshot({ ...input, plan: { ...input.plan, side: 'sell', quantity: 2 } }), /INSUFFICIENT_ASSET_BALANCE/);
+  assert.throws(() => buildKiwoomExecutionSnapshot({ ...input, unfilled: {} }), /LIST_INVALID/);
+  const undated = buildKiwoomExecutionSnapshot({ ...input, orderbook: { ...input.orderbook, timestamp: undefined, bid_req_base_tm: '090001' } });
+  assert.equal(undated.observedAt, '');
+  assert.equal(undated.dataDelayMs, Infinity);
+});
+
 function marketSnapshot(now: Date): TradingMarketSnapshot {
   return {
     observedAt: now.toISOString(),
@@ -197,6 +237,10 @@ async function setup(overrides: Partial<TradingPlanInput> = {}) {
   process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
   process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
   process.env.BITGET_LIVE_ORDER_ENABLED = 'true';
+  if (overrides.exchange === 'kiwoom') {
+    process.env.KIWOOM_MOCK_ORDER_ENABLED = 'true';
+    process.env.KIWOOM_ALLOW_OFF_HOURS = 'true';
+  }
   setTradingPlanMarketIntelligenceRunnerForTests(eligibleMarketIntelligence);
   setTradeProfitabilityAttestationRunnerForTests(allowServerProfitabilityAttestationForTests);
   const repository = new InMemoryTradingRepository();
@@ -208,11 +252,12 @@ async function setup(overrides: Partial<TradingPlanInput> = {}) {
   await repository.saveConnection({
     userId: USER_ID,
     exchange: input.exchange,
-    accountMode: 'live',
+    accountMode: input.accountMode,
     configured: true,
     encryptedCredentials: encryptTradingCredentials(input.exchange === 'bitget'
       ? { apiKey: 'isolated-fixture', secretKey: 'isolated-fixture', passphrase: 'isolated-fixture' }
-      : { accessKey: 'access', secretKey: 'secret' }),
+      : input.exchange === 'kiwoom' ? { appKey: 'isolated-kiwoom', secretKey: 'isolated-kiwoom-secret' }
+        : { accessKey: 'access', secretKey: 'secret' }),
     lastVerifiedAt: new Date().toISOString(),
     lastErrorCode: null,
     updatedAt: new Date().toISOString(),
@@ -220,7 +265,7 @@ async function setup(overrides: Partial<TradingPlanInput> = {}) {
   const automation = new TradeAutomationService(repository);
   const policy = await repository.getPolicy(USER_ID);
   const created = await automation.createPlan(USER_ID, input, policy, false);
-  assert.ok(created.plan);
+  assert.ok(created.plan, JSON.stringify(created.decision));
   const approved = await automation.approvePlan(USER_ID, created.plan.id);
   const orderResult = await automation.createOrder(USER_ID, approved);
   return { repository, approved, order: orderResult.order };
@@ -304,9 +349,69 @@ function resetEnvironment() {
   delete process.env.LIVE_TRADING_ACTIVATION_APPROVED;
   delete process.env.UPBIT_LIVE_ORDER_ENABLED;
   delete process.env.BITGET_LIVE_ORDER_ENABLED;
+  delete process.env.KIWOOM_MOCK_ORDER_ENABLED;
+  delete process.env.KIWOOM_ALLOW_OFF_HOURS;
 }
 
 test.afterEach(resetEnvironment);
+
+test('Kiwoom drains account continuation and uses required orderable arguments, but an undated quote still cannot submit', async () => {
+  for (const scenario of ['complete', 'repeated-cursor', 'wrong-tr', 'missing-list', 'changed-summary'] as const) {
+    const now = new Date();
+    const { repository, approved, order } = await setup({ exchange: 'kiwoom', accountMode: 'mock', market: 'KR', symbol: '005930', side: 'buy',
+      quantity: 1, quoteAmount: null, estimatedKrw: 10000, stopPrice: 9500, targetPrices: [11000],
+      marketSnapshot: { ...marketSnapshot(now), currentPrice: 10000, plannedPrice: 10000 } });
+    let accountPages = 0, orderPosts = 0, orderableReads = 0;
+    globalThis.fetch = async (request, init) => {
+      const url = new URL(String(request));
+      assert.equal(url.hostname, 'mockapi.kiwoom.com');
+      const headers = new Headers(init?.headers);
+      const apiId = headers.get('api-id');
+      const json = (body: unknown, extraHeaders: Record<string, string> = {}) => new Response(JSON.stringify(body), {
+        headers: { ...(apiId ? { 'api-id': apiId } : {}), ...extraHeaders },
+      });
+      if (url.pathname === '/oauth2/token') return json({ return_code: 0, token: 'isolated-token' });
+      if (url.pathname === '/api/dostk/ordr') { orderPosts++; throw new Error('UNEXPECTED_ORDER'); }
+      const body = JSON.parse(String(init?.body));
+      if (apiId === 'kt00018') {
+        accountPages++;
+        assert.deepEqual(body, { qry_tp: '1', dmst_stex_tp: 'KRX' });
+        if (accountPages > 1) assert.equal(headers.get('next-key'), 'account-page-2');
+        const rows = accountPages === 1 ? [{ stk_cd: 'A005930', rmnd_qty: '1', trde_able_qty: '1', evlt_amt: '10000' }]
+          : [{ stk_cd: '000660', rmnd_qty: '1', trde_able_qty: '1', evlt_amt: '10000' }];
+        return json({ return_code: 0, prsm_dpst_aset_amt: scenario === 'changed-summary' && accountPages > 1 ? '99999' : '1000000',
+          ...(scenario !== 'missing-list' ? { acnt_evlt_remn_indv_tot: rows } : {}) },
+        { 'api-id': scenario === 'wrong-tr' ? 'kt00004' : 'kt00018',
+          ...(accountPages === 1 || scenario === 'repeated-cursor' ? { 'cont-yn': 'Y', 'next-key': 'account-page-2' } : { 'cont-yn': 'N' }) });
+      }
+      if (apiId === 'ka10075') {
+        assert.deepEqual(body, { all_stk_tp: '0', trde_tp: '0', stex_tp: '1' });
+        return json({ return_code: 0, oso: [] });
+      }
+      if (apiId === 'kt00010') {
+        orderableReads++;
+        assert.deepEqual(body, { stk_cd: '005930', trde_tp: '2', uv: '10000', trde_qty: '1' });
+        return json({ return_code: 0, ord_alowa: '50000' });
+      }
+      if (apiId === 'ka10004') return json({ return_code: 0, bid_req_base_tm: '090001', sel_fpr_bid: '+10000', sel_fpr_req: '100',
+        buy_fpr_bid: '-9999', buy_fpr_req: '100', sel_2th_pre_bid: '10001', sel_2th_pre_req: '100', buy_2th_pre_bid: '9998', buy_2th_pre_req: '100' });
+      throw new Error(`Unexpected isolated TR ${apiId}`);
+    };
+    const result = await new TradeExecutionService(repository).execute(USER_ID, approved, order);
+    assert.equal(result.state, 'REJECTED');
+    assert.equal(orderPosts, 0);
+    assert.equal(result.submissionStartedAt ?? null, null);
+    if (scenario === 'complete') {
+      assert.equal(accountPages, 2, result.lastErrorCode ?? 'Account continuation was not drained');
+      assert.equal(orderableReads, 1);
+      assert.equal(result.preSubmissionSnapshot?.openPositionCount, 2);
+      assert.ok(result.preSubmissionDecision?.blockCodes.includes('MARKET_DATA_TIMESTAMP_UNAVAILABLE'));
+    } else {
+      assert.equal(orderableReads, 0);
+      assert.match(result.lastErrorCode ?? '', /KIWOOM_(ACCOUNT_SCAN_INCOMPLETE|RESPONSE_TR_MISMATCH|ACCOUNT_LIST_UNAVAILABLE|ACCOUNT_CHANGED_DURING_SCAN)/);
+    }
+  }
+});
 
 test('Bitget execution obtains server FX and rejects unavailable or stale conversion before any exchange mutation', async () => {
   for (const fxState of ['unavailable', 'stale'] as const) {
