@@ -336,6 +336,16 @@ test("missing public observation timestamp fails closed", async () => {
   assert.equal(observed.blocker, "POSITION_OBSERVATION_PUBLIC_FRAME_INVALID");
 });
 
+test("missing closed-frame anchor fails closed instead of crediting truncated or partial Position history", async () => {
+  const firstOpen = NOW_MS - (3 * INTERVAL_MS);
+  for (const entryTimestampMs of [firstOpen - 1_000, firstOpen + 1_000]) {
+    const observed = await collect({ openPositions: [position({ entryTimestampMs })] });
+    assert.equal(observed.status, "MISSING");
+    assert.equal(observed.blocker, "POSITION_OBSERVATION_SEQUENCE_ANCHOR_MISSING");
+    assert.equal(observed.observations, null);
+  }
+});
+
 test("stale next frame is not converted into a current price", async () => {
   const staleNow = NOW_MS + (12 * 60 * 60 * 1000);
   const observed = await collect({ source: producer({ nowMs: staleNow }) });

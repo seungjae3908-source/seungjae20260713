@@ -295,7 +295,7 @@ function selectNewFrames({ position, frames, lane, market, nowMs }) {
     return Object.freeze({ status: STATUS.MISSING, blocker: "POSITION_OBSERVATION_PUBLIC_FRAME_MISSING", frames: null });
   }
   const anchorIndex = frames.findLastIndex((frame) => frame.sourceObservedAtMs <= cursor);
-  if (anchorIndex < 0 && cursor > frames[0].sourceObservedAtMs) {
+  if (anchorIndex < 0) {
     return Object.freeze({ status: STATUS.MISSING, blocker: "POSITION_OBSERVATION_SEQUENCE_ANCHOR_MISSING", frames: null });
   }
   const selected = frames.filter((frame) => frame.sourceObservedAtMs > cursor);
