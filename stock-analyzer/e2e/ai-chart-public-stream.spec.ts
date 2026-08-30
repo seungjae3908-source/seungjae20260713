@@ -183,3 +183,25 @@ test('freshness and reconnect logic fail closed into polling fallback', () => {
   expect(shouldFallbackToPolling({ status: 'RECOVERING', lastEventAtMs: 10_000, nowMs: 40_001, staleAfterMs: 15_000, reconnectAttempts: 2 })).toBe(true);
   expect(shouldFallbackToPolling({ status: 'RECOVERING', lastEventAtMs: 39_000, nowMs: 40_000, staleAfterMs: 15_000, reconnectAttempts: 5 })).toBe(true);
 });
+
+test('public trade parsers never coerce missing volume or timestamp to zero', () => {
+  for (const missing of [undefined, null, '', '   ', [], {}, false]) {
+    const upbit = { type: 'trade', code: 'KRW-BTC', trade_price: 100, trade_volume: 1, trade_timestamp: 10_000 };
+    expect(parseUpbitPublicTradeMessage({ ...upbit, trade_volume: missing }, 10_100)).toEqual([]);
+    expect(parseUpbitPublicTradeMessage({ ...upbit, trade_timestamp: missing }, 10_100)).toEqual([]);
+    const arg = { instType: 'USDT-FUTURES', channel: 'trade', instId: 'BTCUSDT' };
+    const trade = { ts: '10000', price: '100', size: '1', tradeId: 'known' };
+    expect(parseBitgetPublicTradeMessage({ arg, data: [{ ...trade, size: missing }] }, 10_100)).toEqual([]);
+    expect(parseBitgetPublicTradeMessage({ arg, data: [{ ...trade, ts: missing }] }, 10_100)).toEqual([]);
+  }
+});
+
+test('future and invalid event clocks never become fresh public evidence', () => {
+  for (const clock of [-1, 0, Infinity, NaN, 100_001]) {
+    expect(parseUpbitPublicTradeMessage({ type: 'trade', code: 'KRW-BTC', trade_price: 100, trade_volume: 1, trade_timestamp: clock }, 100_000)).toEqual([]);
+    expect(parseBitgetPublicTradeMessage({ arg: { instType: 'USDT-FUTURES', channel: 'trade', instId: 'BTCUSDT' }, data: [{ ts: clock, price: '100', size: '1', tradeId: 'known' }] }, 100_000)).toEqual([]);
+  }
+  for (const clock of [NaN, Infinity, 100_001]) {
+    expect(aiChartStreamFreshness({ status: 'LIVE_STREAM', lastEventAtMs: clock, nowMs: 100_000 })).toBe('UNAVAILABLE');
+  }
+});

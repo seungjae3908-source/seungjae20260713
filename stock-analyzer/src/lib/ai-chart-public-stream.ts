@@ -55,8 +55,14 @@ const HEARTBEAT_INTERVAL_MS = 30_000;
 const STALE_AFTER_MS = 45_000;
 
 function finite(value: unknown): number | null {
-  const parsed = typeof value === 'number' ? value : Number(String(value ?? '').trim());
+  if (typeof value !== 'number' && (typeof value !== 'string' || !value.trim())) return null;
+  const parsed = typeof value === 'number' ? value : Number(value.trim());
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function validEventClock(eventTimeMs: number | null, receivedAtMs: number): eventTimeMs is number {
+  return eventTimeMs != null && Number.isSafeInteger(eventTimeMs) && eventTimeMs > 0
+    && Number.isFinite(receivedAtMs) && eventTimeMs <= receivedAtMs;
 }
 
 function positive(value: unknown): number | null {
@@ -125,7 +131,7 @@ export function parseUpbitPublicTradeMessage(
   const eventTimeMs = finite(row.trade_timestamp ?? row.timestamp);
   const price = positive(row.trade_price ?? row.price);
   const volume = nonNegative(row.trade_volume ?? row.volume);
-  if (!code || eventTimeMs == null || price == null || volume == null) return [];
+  if (!/^KRW-[A-Z0-9]+$/.test(code) || !validEventClock(eventTimeMs, receivedAtMs) || price == null || volume == null) return [];
   // Upbit documents sequential_id as a unique trade identifier, not an ordering guarantee.
   // Keep it only inside eventId for deduplication; never treat it as a monotonic sequence.
   const providerUniqueId = String(row.sequential_id ?? `${eventTimeMs}:${price}:${volume}`).trim();
@@ -164,7 +170,7 @@ export function parseBitgetPublicTradeMessage(
     const price = positive(row.price);
     const volume = nonNegative(row.size);
     const tradeId = String(row.tradeId ?? '').trim();
-    if (eventTimeMs == null || price == null || volume == null || !tradeId) continue;
+    if (!validEventClock(eventTimeMs, receivedAtMs) || price == null || volume == null || !tradeId) continue;
     const side = String(row.side ?? '').toLowerCase();
     events.push({
       provider: 'BITGET_PUBLIC',
@@ -314,8 +320,9 @@ export function aiChartStreamFreshness(input: {
   staleAfterMs?: number;
 }): 'FRESH' | 'DELAYED' | 'STALE' | 'UNAVAILABLE' {
   if (input.status === 'DISCONNECTED' || input.status === 'FALLBACK_POLLING') return 'UNAVAILABLE';
-  if (input.lastEventAtMs == null) return 'UNAVAILABLE';
-  const age = Math.max(0, (input.nowMs ?? Date.now()) - input.lastEventAtMs);
+  const nowMs = input.nowMs ?? Date.now();
+  if (!validEventClock(input.lastEventAtMs, nowMs)) return 'UNAVAILABLE';
+  const age = nowMs - input.lastEventAtMs;
   const staleAfterMs = input.staleAfterMs ?? STALE_AFTER_MS;
   if (age > staleAfterMs * 2) return 'STALE';
   if (age > staleAfterMs) return 'DELAYED';
