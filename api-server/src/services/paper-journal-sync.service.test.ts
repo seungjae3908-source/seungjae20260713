@@ -4,6 +4,8 @@ import './signal-performance-persistence.service.test';
 import './paper-journal-supabase.repository.test';
 import { paperJournalFixture } from './paper-journal-test-fixture';
 import { createPaperTradingState } from './paper-trading-engine.service';
+import { buildPaperResearchCurrencyLedger, PAPER_RESEARCH_LEDGER_MARKETS } from './paper-research-currency-ledger.service';
+import { buildPaperResearchLedgerSyncRecord } from './paper-research-persistent-ledger.service';
 import {
   deleteAllPaperJournalData,
   getPaperJournalSnapshot,
@@ -120,6 +122,37 @@ class MemoryRepository implements PaperJournalRepository {
     return counts;
   }
 }
+
+test('manual snapshot discloses separate research and broker domains without restoring their rows', async () => {
+  const repository = new MemoryRepository();
+  await seed(repository, USER_A, record());
+  const ledger = buildPaperResearchCurrencyLedger({ initialCapitalKrw: 1_000_000, markets: PAPER_RESEARCH_LEDGER_MARKETS, fxEvidence: [],
+    entries: [{ id: 'cash', bucket: 'CASH', nativeAmount: 1000, quoteCurrency: 'KRW', observedAtMs: NOW.getTime(), source: 'synthetic-paper', provenance: 'fixture', version: 'v1', quality: 'DELAYED' }],
+  }, NOW.getTime());
+  await seed(repository, USER_A, buildPaperResearchLedgerSyncRecord(ledger, { version: 1, updatedAt: NOW.toISOString() }));
+  await seed(repository, USER_A, { ...record(), id: 'signal-performance:event:signal-a', payload: { schemaVersion: 'signal-performance-event-v1', ownerId: USER_A, signalId: 'signal-a' } });
+  await seed(repository, USER_A, { ...record(), id: `broker-exec-${'a'.repeat(32)}`, payload: { schemaVersion: 1, recordType: 'unified_trade_order' } });
+  const result = await getPaperJournalSnapshot(repository, USER_A, null, 100, NOW);
+  assert.equal(result.scope, 'manual-paper-trading');
+  assert.deepEqual(result.records.map((r) => r.id), ['trade-1']);
+  assert.deepEqual(result.excludedNamespaces, [
+    { namespace: 'broker-execution', count: 1 }, { namespace: 'currency-research', count: 1 }, { namespace: 'signal-performance', count: 1 },
+  ]);
+  assert.equal((await repository.listSnapshot(USER_A)).length, 4, 'excluded records remain untouched in their owning ledger');
+});
+
+test('reserved research namespaces cannot be written through the manual sync endpoint', () => {
+  for (const item of [record({ id: 'signal-performance:event:fake' }), record({ id: `broker-exec-${'a'.repeat(32)}` }),
+    record({ payload: { schemaVersion: 'signal-performance-event-v1' } })]) {
+    assert.throws(() => validatePaperJournalSyncRequest(request([item]), NOW), (error: unknown) => error instanceof PaperJournalError && error.code === 'INVALID_RECORD_EVIDENCE');
+  }
+});
+
+test('namespace mismatch cannot silently hide an invalid manual record', async () => {
+  const repository = new MemoryRepository();
+  await seed(repository, USER_A, record({ payload: { schemaVersion: 'signal-performance-event-v1', ownerId: USER_A, signalId: 'signal-a' } }));
+  await assert.rejects(getPaperJournalSnapshot(repository, USER_A, null, 100, NOW), (error: unknown) => error instanceof PaperJournalError && error.code === 'INVALID_RECORD_NAMESPACE');
+});
 
 async function seed(repository: MemoryRepository, userId: string, next: PaperJournalSyncRecord, serverTime = NOW.toISOString()) {
   return repository.upsertRecord(userId, next, serverTime);

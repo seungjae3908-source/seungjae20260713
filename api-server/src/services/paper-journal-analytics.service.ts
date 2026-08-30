@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { validPaperTimestamp } from '../../../packages/api-zod/src/paper-state-evidence.js';
+import { otherPaperPayloadNamespace } from './paper-journal-domain';
 import {
   BASIC_ANALYTICS_MIN_SAMPLE,
   BEHAVIOR_ANALYTICS_MIN_SAMPLE,
@@ -49,13 +50,18 @@ function assertFiniteEvidence(value: unknown): void {
 }
 
 function normalizeTrade(payload: Record<string, unknown>): NormalizedTrade | null {
-  if (payload.conflictCopyOf) return null;
+  if (payload.conflictCopyOf || otherPaperPayloadNamespace(payload)) return null;
   const status = text(payload.status);
   if (status === 'open' || status === 'partially_closed') return null;
   const filledAt = validDate(payload.filledAt);
   const closedAt = validDate(payload.closedAt);
   const side = payload.side === 'long' || payload.side === 'short' ? payload.side : null;
+  const invalidOptional = ['notionalValue', 'leverage', 'stopLossPrice', 'takeProfitPrice1', 'takeProfitPrice2'].some((key) =>
+    payload[key] != null && (!finite(payload[key]) || payload[key] <= 0))
+    || payload.rMultiple != null && !finite(payload.rMultiple)
+    || payload.riskPercent != null && (!finite(payload.riskPercent) || payload.riskPercent < 0 || payload.riskPercent > 100);
   if (status !== 'closed' || !filledAt || !closedAt || Date.parse(closedAt) < Date.parse(filledAt) || !side || !finite(payload.netPnl)
+    || invalidOptional
     || !text(payload.tradeId, text(payload.id)).trim() || !text(payload.symbol).trim()
     || !finite(payload.grossPnl) || !finite(payload.entryFee) || payload.entryFee < 0 || !finite(payload.exitFee) || payload.exitFee < 0
     || !finite(payload.slippageCost) || payload.slippageCost < 0 || !finite(payload.fundingCost)) {
@@ -261,7 +267,7 @@ export function calculatePaperJournalAnalytics(payloads: readonly Record<string,
     maximumConsecutiveLosses: maximumConsecutiveLosses(trades),
     totalCosts,
     costRatioPercent: enough && grossMovement > 0 ? totalCosts / grossMovement * 100 : null,
-    stopAdherenceRate: enough && stopDefined.length > 0 ? (stopDefined.length - stopViolation.length) / stopDefined.length * 100 : null,
+    stopAdherenceRate: enough && stopDefined.length === total ? (total - stopViolation.length) / total * 100 : null,
     targetAdherenceRate: enough && targetPlanned.length > 0 ? targetExit.length / targetPlanned.length * 100 : null,
     ruleViolationRate: enough ? violations.length / total * 100 : null,
     bySide: grouped(trades, (trade) => trade.side),
@@ -280,7 +286,12 @@ export function calculatePaperJournalAnalytics(payloads: readonly Record<string,
       `확정: 손절가 없이 기록된 거래 ${missingStop}건`,
       `확정: ruleViolation=true 거래 ${violations.length}건`,
     ],
-    warnings: enough ? [] : [`기본 통계 확정에는 최소 ${BASIC_ANALYTICS_MIN_SAMPLE}건이 필요합니다.`],
+    warnings: [
+      ...(enough ? [] : [`기본 통계 확정에는 최소 ${BASIC_ANALYTICS_MIN_SAMPLE}건이 필요합니다.`]),
+      ...(missingStop ? ['손절 기준이 없는 거래가 있어 손절 준수율을 확정하지 않았습니다.'] : []),
+      ...(payloads.some((payload) => otherPaperPayloadNamespace(payload))
+        ? ['일반 모의거래 일지만 분석했습니다. 연구 성과·다중 통화·브로커 원장은 별도 화면에서 확인하세요.'] : []),
+    ],
   };
   assertFiniteEvidence(result);
   return result;

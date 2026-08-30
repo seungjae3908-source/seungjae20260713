@@ -151,7 +151,7 @@ export function PaperJournalSyncAnalyticsPanel({
         ? `충돌 ${result.conflicts.length}건을 확인하세요.`
         : result.failed.length
           ? `일부 실패 ${result.failed.length}건이 남았습니다. 로컬 기록은 유지됩니다.`
-          : `업로드 ${result.uploaded.length}건, 다운로드 ${applied.metadata.downloadedCount}건을 동기화했습니다.`);
+          : `업로드 ${result.uploaded.length}건, 다운로드 ${applied.metadata.downloadedCount}건을 동기화했습니다. ${applied.metadata.warning}`);
       onLocalStateChanged?.();
     } catch (cause) {
       if (!current(controller)) return;

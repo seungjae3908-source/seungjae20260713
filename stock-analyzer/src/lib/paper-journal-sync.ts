@@ -20,6 +20,8 @@ export type JournalSyncResult = {
 export type JournalSnapshotResult = {
   ok: true; mode: 'journal-sync-only'; orderSubmitted: false; exchangeRequestSent: false;
   records: StoredJournalSyncRecord[]; nextCursor: string | null; serverTime: string;
+  scope?: 'manual-paper-trading';
+  excludedNamespaces?: Array<{ namespace: 'currency-research' | 'signal-performance' | 'broker-execution'; count: number }>;
 };
 export type ConflictChoice = 'server'|'device'|'preserve_both';
 export type ConflictResolutionResult = {
