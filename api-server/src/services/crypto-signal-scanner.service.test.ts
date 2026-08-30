@@ -154,6 +154,8 @@ test('scanner expiry is derived from the authoritative observed timestamp withou
 
   assert.equal(result.cards.length, 1);
   const card = result.cards[0]!;
+  assert.ok(card.observedAt);
+  assert.ok(card.expiresAt);
   assert.equal(Date.parse(card.observedAt), observedAtMs);
   assert.equal(Date.parse(card.expiresAt) - Date.parse(card.observedAt), 3 * 60 * 60_000);
 

@@ -90,6 +90,38 @@ test('scanner lifecycle reaches approval pending once and never submits an order
   assert.equal(getScannerSignalLifecycleSnapshot('member-1', repeated.cards[0].signalId)?.state, 'READY_FOR_APPROVAL');
 });
 
+test('malformed clocks never pass lifecycle validation and expired evidence cannot be reactivated', () => {
+  const now = Date.parse('2026-08-05T01:00:00Z');
+  for (const override of [
+    { observedAt: null }, { observedAt: '' }, { observedAt: new Date(now + 1).toISOString() },
+    { expiresAt: null }, { expiresAt: 'invalid' }, { expiresAt: '2026-02-30T01:00:00Z' },
+  ]) {
+    clearScannerSignalLifecycleForTests();
+    for (let n = 0; n < 6; n++) {
+      const result = applyScannerSignalLifecycle('malformed', [card(override)], now);
+      assert.equal(result.cards[0].signalState, 'INVALIDATED');
+      assert.equal(result.alerts.length, 0);
+    }
+  }
+  clearScannerSignalLifecycleForTests();
+  const expired = card({ expiresAt: new Date(now - 1).toISOString() });
+  assert.equal(applyScannerSignalLifecycle('expired', [expired], now).cards[0].signalState, 'EXPIRED');
+  // Re-analysis/TTL extension of the same source observation is not new evidence.
+  const replay = applyScannerSignalLifecycle('expired', [card()], now + 1);
+  assert.equal(replay.cards[0].signalState, 'EXPIRED');
+  assert.equal(replay.alerts.length, 0);
+});
+
+test('expired or invalid scanner evidence does not erase an already filled position state', () => {
+  clearScannerSignalLifecycleForTests();
+  const now = Date.parse('2026-08-05T01:00:00Z');
+  const current = applyScannerSignalLifecycle('filled', [card()], now).cards[0];
+  assert.equal(setScannerExternalLifecycleState('filled', current.signalId, 'FILLED', now + 1), true);
+  const result = applyScannerSignalLifecycle('filled', [card({ observedAt: null, expiresAt: null, dataState: 'untrusted', strongSignalEligible: false })], now + 2);
+  assert.equal(result.cards[0].signalState, 'FILLED');
+  assert.equal(result.alerts.length, 0);
+});
+
 test('DATA_UNTRUSTED invalidates before ARMED, ENTRY_ZONE or approval can continue', () => {
   clearScannerSignalLifecycleForTests();
   const now = Date.parse('2026-08-05T01:00:00.000Z');
@@ -126,7 +158,10 @@ test('untrusted or weakened signal invalidates and re-entry starts a new cycle',
   );
   assert.equal(invalidated.cards[0].signalState, 'INVALIDATED');
 
-  const reentry = applyScannerSignalLifecycle('member-1', [card()], now + 2_000);
+  const replay = applyScannerSignalLifecycle('member-1', [card()], now + 2_000);
+  assert.equal(replay.cards[0].signalState, 'INVALIDATED');
+  assert.equal(replay.alerts.length, 0);
+  const reentry = applyScannerSignalLifecycle('member-1', [card({ observedAt: new Date(now + 2_000).toISOString() })], now + 2_000);
   assert.match(reentry.cards[0].signalId, /:cycle:2$/);
   assert.equal(reentry.cards[0].signalState, 'CANDIDATE');
 });

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'wouter';
 import { useAssetMode } from '@/lib/asset-mode';
+import { quoteFreshness } from '@/lib/market-freshness';
 import { ScannerApprovalComposer } from '@/components/scanner-approval-composer';
 import {
   selectionQuery,
@@ -202,7 +203,7 @@ const OUTCOME_COPY: Record<ScannerOutcomeCode, { title: string; description: str
 
 function formatObservedAt(value: string | null | undefined): string {
   if (!value || !Number.isFinite(Date.parse(value))) return '미확인';
-  return new Date(value).toLocaleString('ko-KR');
+  return new Date(value).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' }) + ' KST';
 }
 
 function remainingValidityLabel(value: string | null | undefined): string {
@@ -472,10 +473,13 @@ function SignalDetailPanel({
       <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
         <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">현재가</p><p className="mt-1 break-words text-sm font-black">{formatNumber(card.price, card.currency === 'KRW' ? 0 : 6)} {card.currency}</p></div>
         <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">신호점수</p><p className="mt-1 text-sm font-black">{formatNumber(card.score, 1)}점</p></div>
-        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">신뢰도</p><p className="mt-1 text-sm font-black">{formatNumber(card.confidence, 1)}</p></div>
+        <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">조건 근거 점수</p><p className="mt-1 text-sm font-black">{formatNumber(card.confidence, 1)}</p></div>
         <div className="rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">위험</p><p className="mt-1 text-sm font-black">{formatNumber(card.riskScore, 1)} · {card.riskLevel}</p></div>
       </div>
 
+      <p data-testid="scanner-source-time" className="mt-2 break-words text-xs leading-5 text-muted-foreground">
+        {quoteFreshness({ updatedAt: card.observedAt }).label} · 관측 {formatObservedAt(card.observedAt)}
+      </p>
       {mobile ? (
         <>
           <div role="tablist" aria-label="Signal Detail 모바일 탭" data-testid="scanner-mobile-detail-tabs" className="mt-3 flex gap-1 overflow-x-auto overscroll-x-contain pb-1">

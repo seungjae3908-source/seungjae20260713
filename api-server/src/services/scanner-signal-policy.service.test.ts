@@ -56,6 +56,7 @@ function card(overrides: Partial<ScanCard> = {}): ScanCard {
     marketCap: 500_000_000_000,
     dataState: 'ok',
     analyzedAt: new Date().toISOString(),
+    quoteObservedAt: new Date().toISOString(),
     scoreBreakdown: {
       trend: factor(100),
       volume: factor(100),
@@ -116,4 +117,49 @@ test('complete verified evidence remains eligible without fabricated factors', (
   assert.deepEqual(result.matched, ['거래량 증가']);
   assert.deepEqual(result.unverified, []);
   assert.ok((result.pricePlan.riskReward ?? 0) >= 1.5);
+});
+
+test('stock policy preserves provider time and never renews expiry at analysis time', () => {
+  const now = Date.now();
+  const quoteObservedAt = new Date(now - 120_000).toISOString();
+  const result = applyStockSignalPolicy({
+    memberId: 'time-test', card: card({ quoteObservedAt, analyzedAt: new Date(now).toISOString() }),
+    universeEntry: universe, candles: candles(), selected: ['거래량 증가'], timeframe: '5m', now,
+  });
+  assert.equal(result.observedAt, quoteObservedAt);
+  assert.equal(result.expiresAt, new Date(now - 120_000 + 15 * 60_000).toISOString());
+  assert.equal(result.strongSignalEligible, true);
+});
+
+test('missing, invalid, future and stale quote time cannot become a fresh strong signal', () => {
+  const now = Date.now();
+  for (const quoteObservedAt of [undefined, null, '', 'bad-time', '2026-02-30T00:00:00Z', new Date(now + 1_000).toISOString(), new Date(now - 600_000).toISOString()]) {
+    const result = applyStockSignalPolicy({
+      memberId: 'invalid-time', card: card({ quoteObservedAt, analyzedAt: new Date(now).toISOString() }),
+      universeEntry: universe, candles: candles(), selected: ['거래량 증가'], timeframe: '5m', now,
+    });
+    assert.equal(result.strongSignalEligible, false);
+    assert.equal(result.signalState, 'INVALIDATED');
+    assert.equal(result.pricePlan.entryZone, null);
+    assert.equal(result.pricePlan.riskReward, null);
+    assert.deepEqual(result.matched, []);
+    assert.equal(result.evidence[0].status, 'unverified');
+    if (result.dataState !== 'stale') {
+      assert.equal(result.observedAt, null);
+      assert.equal(result.expiresAt, null);
+    }
+  }
+});
+
+test('invalid analysis clock does not create a usable price plan from otherwise valid source data', () => {
+  const now = Date.now();
+  for (const analyzedAt of ['', 'invalid', new Date(now + 1000).toISOString()]) {
+    const result = applyStockSignalPolicy({
+      memberId: 'invalid-analysis', card: card({ analyzedAt, quoteObservedAt: new Date(now).toISOString() }),
+      universeEntry: universe, candles: candles(), selected: ['거래량 증가'], timeframe: '5m', now,
+    });
+    assert.equal(result.strongSignalEligible, false);
+    assert.equal(result.dataState, 'untrusted');
+    assert.equal(result.pricePlan.stopLoss, null);
+  }
 });

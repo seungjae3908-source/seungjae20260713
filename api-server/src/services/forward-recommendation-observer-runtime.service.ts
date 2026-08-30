@@ -338,6 +338,7 @@ export function validateForwardObserverRuntimeState(state: ForwardObserverRuntim
 }
 
 export function latestCardEvidenceTimestamp(card: ScannerSignalCard): string | null {
+  if (card.observedAt == null) return null;
   const signalAt = Date.parse(card.observedAt);
   if (!Number.isFinite(signalAt)) return null;
   const matched = card.evidence.filter((item) => item.status === 'matched');

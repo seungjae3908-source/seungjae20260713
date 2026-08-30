@@ -34,6 +34,18 @@ function freshCandles(): Candle[] {
   });
 }
 
+test('quant layer cannot restore a plan or strong eligibility from stale or missing source evidence', () => {
+  for (const state of ['stale', 'untrusted'] as const) {
+    const result = applyScannerQuantHardening({
+      card: { ...candidate(), dataState: state, observedAt: null, expiresAt: null },
+      candles: freshCandles(), timeframe: '5m', now: NOW,
+    });
+    assert.equal(result.strongSignalEligible, false);
+    assert.equal(result.pricePlan.entryZone, null);
+    assert.equal(result.pricePlan.riskReward, null);
+  }
+});
+
 function candidate(): ScannerSignalCard {
   const observedAt = new Date(NOW - 60 * 60_000).toISOString();
   return {
