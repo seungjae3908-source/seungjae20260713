@@ -71,7 +71,7 @@ export type PaperResearchCurrencyLedger = Readonly<{
   initialCapitalKrw: 1_000_000;
   baseCurrency: 'KRW';
   components: readonly PaperResearchCurrencyLedgerComponent[];
-  knownEquityKrw: number;
+  knownEquityKrw: number | null;
   totalEquityKrw: number | null;
   currencyAwareLedgerIntegrated: true;
   persistentLedgerIntegrated: false;
