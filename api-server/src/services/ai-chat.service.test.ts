@@ -4,7 +4,22 @@ import { once } from 'node:events';
 import { request } from 'node:http';
 import express from 'express';
 import aiChatRouter from '../routes/ai-chat';
+import { FinancialService } from './financial.service';
 import { AiChatError, actionRefusal, answerAiChat, validateChatMessage } from './ai-chat.service';
+
+test('financial context never replaces provider failures with generated sample financials', async (t) => {
+  for (const status of [401, 403, 404, 429, 500, 503]) {
+    const fetchMock = t.mock.method(globalThis, 'fetch', async () => new Response('{}', { status }));
+    try {
+      await assert.rejects(FinancialService.getFinancials('AAPL'), { name: 'ProviderError' });
+    } finally { fetchMock.mock.restore(); }
+  }
+  for (const body of ['not-json', 'null', '{}']) {
+    const fetchMock = t.mock.method(globalThis, 'fetch', async () => new Response(body));
+    try { await assert.rejects(FinancialService.getFinancials('AAPL')); }
+    finally { fetchMock.mock.restore(); }
+  }
+});
 
 const aiEnvironmentKeys = [
   'AI_CHAT_PROVIDER',
