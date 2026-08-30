@@ -5,6 +5,23 @@ import { parseNaverRatios } from '../providers/naver';
 import { getFinancials } from '../providers/sec-edgar';
 import { parseFinancialAmount, requireFinancialNumber } from '../providers/financial-evidence';
 import { ProviderError } from '../lib/errors';
+import { assembleFinancialEvidence } from './financial.service';
+
+test('live financial assembly cannot infer cash flow, runway or confidence from accounting profit and heuristic rules', () => {
+  const ratios = { eps: 0, per: 12, pbr: 1, roe: 0, debtRatio: 0 };
+  for (const netIncome of [-100, 0, 100]) {
+    const row = { period: '2026-Q2', revenue: 1000, operatingIncome: netIncome, netIncome, cash: 500, debt: 0 };
+    const raw = { annual: [], quarterly: [row], latest: { cash: 500, equity: 1000, liabilities: 0, netIncome } };
+    const result = assembleFinancialEvidence(raw, ratios);
+    assert.equal(result.quarterly[0].netIncome, netIncome);
+    assert.deepEqual(result.cashBurn, { cashBalance: 500, quarterlyBurn: null, survivalQuarters: null, status: 'MISSING_EVIDENCE', reason: 'CASH_FLOW_STATEMENT_NOT_AVAILABLE' });
+    assert.equal(result.health.confidence, null);
+    assert.equal(result.health.method, 'FINANCIAL_RULES_V1');
+    assert.equal(typeof result.health.score, 'number');
+    assert.throws(() => assembleFinancialEvidence(raw, { ...ratios, roe: Infinity }), ProviderError);
+    assert.throws(() => assembleFinancialEvidence({ ...raw, latest: { ...raw.latest, cash: -1 } }, ratios), ProviderError);
+  }
+});
 
 test('financial evidence rejects unknown values and preserves genuine signed/zero amounts', () => {
   for (const value of [undefined, null, '', ' ', '-', 'N/A', 'abc123', '1,23', '--2', '(2', false, {}, []]) {

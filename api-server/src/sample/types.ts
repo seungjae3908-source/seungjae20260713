@@ -108,8 +108,10 @@ export interface FinancialRatios {
 
 export interface CashBurn {
 	cashBalance: number;
-	quarterlyBurn: number;
+	quarterlyBurn: number | null;
 	survivalQuarters: number | null;
+	status?: 'MISSING_EVIDENCE';
+	reason?: 'CASH_FLOW_STATEMENT_NOT_AVAILABLE';
 }
 
 export type HealthLevel = 'STRONG' | 'AVERAGE' | 'WEAK';
@@ -128,7 +130,9 @@ export interface Financials {
 	cashBurn: CashBurn;
 	health: {
 		level: HealthLevel;
-		confidence: number;
+		confidence: number | null;
+		score?: number;
+		method?: 'FINANCIAL_RULES_V1';
 	};
 }
 

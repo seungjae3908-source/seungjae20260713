@@ -33,21 +33,15 @@ function yoy(
   return out;
 }
 
-function buildCashBurn(raw: FinancialsRaw) {
-  const cashBalance = raw.latest.cash;
-  const q = raw.quarterly;
-  const quarterlyBurn = requireFinancialNumber(q.at(-1)?.netIncome, 'financials', 'quarterlyNetIncome');
-  const survivalQuarters =
-    quarterlyBurn >= 0
-      ? null
-      : Math.max(0, Math.round(cashBalance / Math.abs(quarterlyBurn)));
-  return { cashBalance, quarterlyBurn, survivalQuarters };
+function buildCashBurn(raw: FinancialsRaw): Financials['cashBurn'] {
+  const cashBalance = requireFinancialNumber(raw.latest.cash, 'financials', 'cashBalance');
+  if (cashBalance < 0) throw new ProviderError('UNAVAILABLE', 'financials', 'INVALID_CASH_BALANCE');
+  // Net income is not cash flow. The current providers do not supply a
+  // verified cash-flow statement, so neither burn nor runway is calculable.
+  return { cashBalance, quarterlyBurn: null, survivalQuarters: null, status: 'MISSING_EVIDENCE', reason: 'CASH_FLOW_STATEMENT_NOT_AVAILABLE' };
 }
 
-function buildHealth(r: FinancialRatios): {
-  level: HealthLevel;
-  confidence: number;
-} {
+function buildHealth(r: FinancialRatios): Financials['health'] {
   let score = 50;
   if (r.roe >= 15) score += 20;
   else if (r.roe >= 5) score += 8;
@@ -58,13 +52,15 @@ function buildHealth(r: FinancialRatios): {
 
   if (r.per > 0 && r.per < 30) score += 5;
 
-  const confidence = Math.max(10, Math.min(95, score));
+  score = Math.max(10, Math.min(95, score));
   const level: HealthLevel =
-    confidence >= 66 ? 'STRONG' : confidence >= 40 ? 'AVERAGE' : 'WEAK';
-  return { level, confidence };
+    score >= 66 ? 'STRONG' : score >= 40 ? 'AVERAGE' : 'WEAK';
+  return { level, confidence: null, score, method: 'FINANCIAL_RULES_V1' };
 }
 
-function assemble(raw: FinancialsRaw, ratios: FinancialRatios): Financials {
+export function assembleFinancialEvidence(raw: FinancialsRaw, ratios: FinancialRatios): Financials {
+  for (const [field, value] of Object.entries(ratios)) requireFinancialNumber(value, 'financials', field);
+  if (ratios.debtRatio < 0) throw new ProviderError('UNAVAILABLE', 'financials', 'DEBT_RATIO_NOT_EVALUABLE');
   return {
     source: 'live',
     quarterly: raw.quarterly,
@@ -100,7 +96,7 @@ async function getLive(entry: CatalogEntry): Promise<Financials> {
       roe: Math.round((raw.latest.netIncome / equity) * 1000) / 10,
       debtRatio: Math.round((raw.latest.liabilities / equity) * 1000) / 10,
     };
-    return assemble(raw, ratios);
+    return assembleFinancialEvidence(raw, ratios);
   }
 
   const [raw, us] = await Promise.all([
@@ -110,7 +106,7 @@ async function getLive(entry: CatalogEntry): Promise<Financials> {
 
   // Preserve measured zeroes; a ratio-provider failure cannot be replaced by
   // zeroes or ratios from a different reporting period.
-  return assemble(raw, us);
+  return assembleFinancialEvidence(raw, us);
 }
 
 async function getFinancials(ticker: string): Promise<Financials | null> {
