@@ -30,6 +30,7 @@ function blank(): ResearchBundleResolution {
   return { schemaVersion: 'research-bundle-resolution-v1', dslValid: false, dslDigest: null, bundleDigest: null,
     strategyIdentityDigest: null, researchBundleReady: false, backtestExecutable: false,
     backtestSubmitted: false, backtestCompleted: false, backtestStatus: 'BLOCKED_DATA', backtesterCalls: 0,
+    resultArtifactDigest: null, publicationStatus: 'MISSING_EVIDENCE',
     components: [], blockers: [], wfStatus: 'NOT_EVALUATED', oosStatus: 'NOT_EVALUATED', holdoutStatus: 'NOT_EVALUATED',
     wfEvidencePresent: false, oosEvidencePresent: false, holdoutEvidencePresent: false, statisticalFirewallPass: false,
     statisticalFirewallStatus: 'MISSING_EVIDENCE', promotionEligible: false, profitabilityProven: false,
@@ -49,9 +50,61 @@ interface Dependencies {
   allowTestEvidence?: boolean;
 }
 interface Admission { result: ResearchBundleResolution; source: Row; backtestInput: Row | null; }
+function submissionMaterial(source: Row, result: ResearchBundleResolution) {
+  const strategyIdentity = resolveCanonicalStrategyIdentity(row(source.strategy)).identity!;
+  const dataset = row(source.dataset), risk = row(source.riskPolicy);
+  return { strategyIdentity, strategyIdentityDigest: result.strategyIdentityDigest!, dslDigest: result.dslDigest!,
+    bundleDigest: result.bundleDigest!, datasetIdentity: String(dataset.id), datasetDigest: String(row(dataset.identity).datasetDigest),
+    splitReceiptDigest: String(row(source.splitReceipt).digest), riskPolicyId: String(risk.policyId),
+    riskPolicyVersion: String(risk.policyVersion), costPolicyIdentity: String(row(source.costPolicy).id),
+    researchCodeSha: String(strategyIdentity.researchCodeSha) };
+}
+function resultMatches(raw: Row, source: Row): boolean {
+  const formula = row(source.formulaCandidate), generated = row(source.generatedCandidate);
+  const training = times(row(row(row(source.splitReceipt).payload).assignments).TRAIN);
+  const safety = row(raw.safety), period = row(raw.period);
+  return raw.status === 'PASS' && raw.canonicalBacktestOwner === '#690' && raw.executionEquivalent === true &&
+    raw.executionEngine === 'runIndependentSignalBacktest' && raw.formulaCandidateId === formula.candidateId &&
+    raw.strategyHash === formula.formulaHash && raw.parameterIdentity === generated.parameterIdentity &&
+    raw.datasetIdentity === row(source.dataset).id && training.length > 0 &&
+    period.startTime === minimum(training) && period.endTime === maximum(training) && period.includeFinalHoldout === false &&
+    safety.executionAuthority === 'NONE' && ['LIVE_TRADING', 'AUTO_TRADING', 'REAL_ORDER_ENABLED',
+      'PRIVATE_TRADING_API_ALLOWED', 'finalHoldoutPreAccessAllowed', 'profitabilityClaimAllowed', 'championPromotionAllowed',
+      'orderSubmitted', 'orderCancelled', 'orderModified', 'transferSubmitted', 'withdrawalSubmitted'].every(key => safety[key] === false);
+}
 export class ResearchBundleService {
   constructor(private readonly deps: Dependencies = {}) {}
   async resolve(dsl: unknown): Promise<ResearchBundleResolution> { return (await this.admit(dsl)).result; }
+
+  async readback(request: unknown): Promise<ResearchBundleResolution> {
+    const input = row(request);
+    if (Object.keys(input).sort().join(',') !== 'bundleDigest,dsl,strategyIdentityDigest') return block(blank(), 'INVALID_RESEARCH_READBACK');
+    const { result, source } = await this.admit(input.dsl);
+    if (!result.researchBundleReady) return result;
+    const reject = (code: string) => ({ ...block(result, code), publicationStatus: 'BLOCKED_DATA' as const });
+    if (input.bundleDigest !== result.bundleDigest || input.strategyIdentityDigest !== result.strategyIdentityDigest) return reject('CANONICAL_READBACK_MISMATCH');
+    if (!this.deps.submissions?.read) return { ...result, blockers: ['DURABLE_RESULT_READER_UNAVAILABLE'] };
+    const material = submissionMaterial(source, result), requestDigest = hash(material);
+    try {
+      const publication = await this.deps.submissions.read(requestDigest);
+      if (!publication) return { ...result, blockers: ['BACKTEST_ARTIFACT_NOT_DURABLY_PUBLISHED'] };
+      const saved = row(publication.receipt), receipt = row(saved.receipt), { submittedAt, ...savedMaterial } = receipt;
+      if (!same(savedMaterial, { ...material, requestDigest }) || !positive(submittedAt) || submittedAt > (this.deps.now ?? Date.now)() ||
+        saved.backtestStatus !== 'COMPLETED' || saved.backtestCompleted !== true || saved.backtestSubmitted !== true || saved.backtesterCalls !== 1 ||
+        saved.executionAuthority !== 'NONE' || saved.profitabilityProven !== false || saved.promotionEligible !== false || saved.champion !== null || saved.evidenceCredit !== 0 ||
+        saved.wfStatus !== result.wfStatus || saved.oosStatus !== result.oosStatus || saved.holdoutStatus !== result.holdoutStatus ||
+        saved.wfEvidencePresent !== false || saved.oosEvidencePresent !== false || saved.holdoutEvidencePresent !== false ||
+        saved.statisticalFirewallPass !== false || saved.statisticalFirewallStatus !== 'MISSING_EVIDENCE' ||
+        typeof saved.resultArtifactDigest !== 'string' || !/^[a-f0-9]{64}$/.test(saved.resultArtifactDigest) ||
+        saved.resultArtifactDigest !== hash(publication.artifact) || !resultMatches(row(publication.artifact), source)) return reject('DURABLE_RESULT_READBACK_MISMATCH');
+      // Revalidate source after storage IO; stale or changed policies cannot be relabeled current.
+      const current = await this.admit(input.dsl);
+      if (!current.result.researchBundleReady || current.result.bundleDigest !== result.bundleDigest) return reject('CANONICAL_READBACK_MISMATCH');
+      return { ...result, backtestSubmitted: true, backtestCompleted: true, backtestStatus: 'COMPLETED', backtesterCalls: 0,
+        resultArtifactDigest: saved.resultArtifactDigest, publicationStatus: 'READBACK_VERIFIED',
+        receipt: { ...material, requestDigest, submittedAt } };
+    } catch { return reject('DURABLE_RESULT_READBACK_UNAVAILABLE'); }
+  }
 
   private async admit(rawDsl: unknown): Promise<Admission> {
     const result = blank();
@@ -242,13 +295,7 @@ export class ResearchBundleService {
     if (!result.backtestExecutable || !backtestInput) return result;
     if (input.bundleDigest !== result.bundleDigest || input.strategyIdentityDigest !== result.strategyIdentityDigest)
       return block(result, 'CANONICAL_READBACK_MISMATCH');
-    const strategyIdentity = resolveCanonicalStrategyIdentity(row(source.strategy)).identity!;
-    const dataset = row(source.dataset), risk = row(source.riskPolicy);
-    const material = { strategyIdentity, strategyIdentityDigest: result.strategyIdentityDigest!, dslDigest: result.dslDigest!,
-      bundleDigest: result.bundleDigest!, datasetIdentity: String(dataset.id), datasetDigest: String(row(dataset.identity).datasetDigest),
-      splitReceiptDigest: String(row(source.splitReceipt).digest), riskPolicyId: String(risk.policyId),
-      riskPolicyVersion: String(risk.policyVersion), costPolicyIdentity: String(row(source.costPolicy).id),
-      researchCodeSha: String(strategyIdentity.researchCodeSha) };
+    const material = submissionMaterial(source, result), { strategyIdentity } = material, dataset = row(source.dataset);
     const requestDigest = hash(material), store = this.deps.submissions!;
     const running: ResearchBundleResolution = { ...result, backtestSubmitted: true, backtestStatus: 'RUNNING',
       receipt: { ...material, requestDigest, submittedAt: (this.deps.now ?? Date.now)() } };
@@ -265,15 +312,16 @@ export class ResearchBundleService {
         !['RUNNING', 'COMPLETED', 'FAILED', 'BLOCKED_DATA'].includes(String(prior.backtestStatus)) ||
         ![0, 1].includes(Number(prior.backtesterCalls)) || prior.backtestSubmitted !== true ||
         prior.backtestCompleted !== (prior.backtestStatus === 'COMPLETED') ||
-        (prior.backtestCompleted && prior.backtesterCalls !== 1))
+        (prior.backtestCompleted && (prior.backtesterCalls !== 1 || !/^[a-f0-9]{64}$/.test(String(prior.resultArtifactDigest)))))
         return block(result, 'SUBMISSION_RECEIPT_MISMATCH');
       // Rebuild the safe projection, never forward a persisted authority field wholesale.
       return { ...result, backtestSubmitted: true, backtestCompleted: prior.backtestCompleted as boolean,
         backtestStatus: prior.backtestStatus as ResearchBundleResolution['backtestStatus'],
         backtesterCalls: Number(prior.backtesterCalls), receipt: { ...material, requestDigest, submittedAt },
+        resultArtifactDigest: prior.backtestCompleted ? String(prior.resultArtifactDigest) : null,
         blockers: prior.backtestStatus === 'FAILED' || prior.backtestStatus === 'BLOCKED_DATA' ? ['PRIOR_SUBMISSION_BLOCKED_OR_FAILED'] : [] };
     }
-    let completed: ResearchBundleResolution, calls = 0;
+    let completed: ResearchBundleResolution, calls = 0, artifact: Row | undefined;
     try {
       const rechecked = await this.admit(input.dsl); // Recheck after reservation IO.
       if (!rechecked.result.backtestExecutable || rechecked.result.bundleDigest !== result.bundleDigest) {
@@ -291,14 +339,16 @@ export class ResearchBundleService {
         finalHoldout: false, liquidityImpactEvidence: row(row(row(source.costPolicy).payload).components).liquidityImpact,
         strategyIdentity, researchBundleIdentity: result.bundleDigest, dslDigest: result.dslDigest,
       }));
-      const success = raw.status === 'PASS' && raw.canonicalBacktestOwner === '#690' && raw.executionEquivalent === true;
+      const success = resultMatches(raw, source);
+      if (success) artifact = structuredClone(raw);
       completed = { ...running, backtesterCalls: 1, backtestCompleted: success, backtestStatus: success ? 'COMPLETED' : 'FAILED',
-        blockers: success ? [] : ['CANONICAL_BACKTEST_FAILED'] };
+        resultArtifactDigest: success ? hash(raw) : null,
+        blockers: success ? [] : [raw.status === 'PASS' ? 'BACKTEST_RESULT_IDENTITY_MISMATCH' : 'CANONICAL_BACKTEST_FAILED'] };
       // Historical completion has no WF/OOS/holdout/firewall/promotion authority.
     } catch {
       completed = { ...running, backtesterCalls: calls, backtestStatus: 'FAILED', blockers: ['CANONICAL_BACKTEST_FAILED'] };
     }
-    try { await store.complete(requestDigest, structuredClone(completed)); }
+    try { await store.complete(requestDigest, structuredClone(completed), artifact); }
     catch { return { ...completed, backtestStatus: 'FAILED', backtestCompleted: false, blockers: ['SUBMISSION_COMPLETION_UNCONFIRMED'] }; }
     return completed;
   }

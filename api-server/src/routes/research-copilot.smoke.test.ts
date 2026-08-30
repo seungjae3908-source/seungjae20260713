@@ -20,6 +20,7 @@ test('HTTP admin boundary rejects other members, blocks injected instructions an
   class TracedBundles extends ResearchBundleService {
     override async resolve(dsl: unknown) { bundleCalls += 1; return super.resolve(dsl); }
     override async submit(userId: string, input: unknown) { bundleCalls += 1; return super.submit(userId, input); }
+    override async readback(input: unknown) { bundleCalls += 1; return super.readback(input); }
   }
   const service = new ResearchCopilotService({
     loadOverview: async () => { reads += 1; return {}; }, promotions: () => createDefaultStrategyPromotionService().list(), now: Date.now,
@@ -50,7 +51,7 @@ test('HTTP admin boundary rejects other members, blocks injected instructions an
     const invalid = await fetch(url + '/validate-dsl', { method: 'POST', headers, body: JSON.stringify({ code: 'process.exit()' }) });
     assert.equal((await invalid.json()).status, 'blocked'); assert.equal(calls, 0);
     assert.equal((await fetch(url + '/validate-dsl', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 403);
-    for (const path of ['/resolve-bundle', '/submit-backtest']) {
+    for (const path of ['/resolve-bundle', '/submit-backtest', '/read-backtest']) {
       const before = bundleCalls;
       assert.equal((await fetch(url + path, { method: 'POST', headers: { 'x-test-role': 'anonymous', 'Content-Type': 'application/json' }, body: '{}' })).status, 401);
       assert.equal((await fetch(url + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 403);
@@ -71,6 +72,7 @@ test('HTTP admin boundary rejects other members, blocks injected instructions an
 
 test('admin HTTP validates canonical TEST_ONLY bundle and submits exactly once to the real #690 executor', async () => {
   const fixture = researchBundleFixture(), receipts = new Map<string, ResearchBundleResolution>();
+  const artifacts = new Map<string, unknown>();
   let calls = 0;
   const bundles = new ResearchBundleService({ readCanonicalBundle: async () => fixture.bundle,
     allowTestEvidence: true, now: () => AUTHORITATIVE_NOW_MS,
@@ -80,7 +82,8 @@ test('admin HTTP validates canonical TEST_ONLY bundle and submits exactly once t
         if (previous) return { acquired: false, receipt: previous };
         receipts.set(key, receipt); return { acquired: true, receipt };
       },
-      complete: async (key, receipt) => { receipts.set(key, receipt); },
+      complete: async (key, receipt, artifact) => { receipts.set(key, receipt); artifacts.set(key, artifact); },
+      read: async key => { const receipt = receipts.get(key); return receipt ? { receipt, artifact: artifacts.get(key) } : null; },
     },
     runBacktest: input => { calls += 1; return runOnePassCandidateBacktestV1(input); },
   });
@@ -109,5 +112,12 @@ test('admin HTTP validates canonical TEST_ONLY bundle and submits exactly once t
       assert.equal(result.evidenceCredit, 0);
     }
     assert.equal(calls, 1);
+    const read = await fetch(url + '/read-backtest', { method: 'POST', headers, body });
+    assert.equal(read.status, 200);
+    const publication = await read.json();
+    assert.equal(publication.publicationStatus, 'READBACK_VERIFIED');
+    assert.equal(publication.backtesterCalls, 0); assert.equal(calls, 1);
+    assert.equal(publication.receipt.strategyIdentityDigest, validated.bundle.strategyIdentityDigest);
+    assert.equal(publication.receipt.bundleDigest, validated.bundle.bundleDigest);
   } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 });

@@ -30,6 +30,10 @@ export function createResearchCopilotRouter(service: ResearchCopilotService = cr
     if (JSON.stringify(req.body ?? null).length > 33_000) return res.status(413).json({ error: 'RESEARCH_SUBMISSION_TOO_LARGE' });
     return res.json(await bundles.submit(req.member.id, req.body));
   });
+  router.post('/read-backtest', async (req, res) => {
+    if (JSON.stringify(req.body ?? null).length > 33_000) return res.status(413).json({ error: 'RESEARCH_READBACK_TOO_LARGE' });
+    return res.json(await bundles.readback(req.body));
+  });
   router.post('/review', async (req: AuthenticatedRequest, res) => {
     const body: unknown = req.body;
     if (!body || typeof body !== 'object' || Array.isArray(body)) return res.status(400).json({ error: 'INVALID_RESEARCH_INPUT' });
