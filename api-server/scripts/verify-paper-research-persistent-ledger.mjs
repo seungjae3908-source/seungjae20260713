@@ -17,6 +17,14 @@ class MemoryRepository {
   idempotent = new Map();
   conflicts = new Map();
   writeCount = 0;
+  claims = new Set();
+
+  async claimSyncRequest(userId, key) {
+    const id = `${userId}:${key}`;
+    assert.equal(this.claims.has(id), false);
+    this.claims.add(id);
+    return null;
+  }
 
   key(userId, kind, id) { return `${userId}:${kind}:${id}`; }
 
@@ -24,10 +32,11 @@ class MemoryRepository {
     return structuredClone(this.records.get(this.key(userId, kind, id)) ?? null);
   }
 
-  async upsertRecord(userId, record, serverTime) {
+  async upsertRecord(userId, record, serverTime, expectedVersion) {
     this.writeCount += 1;
     const key = this.key(userId, record.kind, record.id);
     const previous = this.records.get(key);
+    assert.equal(previous?.version ?? null, expectedVersion);
     const stored = {
       ...structuredClone(record),
       createdAt: previous?.createdAt ?? serverTime,
@@ -88,6 +97,7 @@ try {
   await writeFile(entry, `
     export * from ${JSON.stringify(path.join(root, 'src/services/paper-research-currency-ledger.service.ts'))};
     export * from ${JSON.stringify(path.join(root, 'src/services/paper-research-persistent-ledger.service.ts'))};
+    export { validatePaperJournalSyncRequest } from ${JSON.stringify(path.join(root, 'src/services/paper-journal-sync.service.ts'))};
   `);
   await build({
     entryPoints: [entry],
@@ -107,6 +117,7 @@ try {
     buildPaperResearchLedgerSyncRecord,
     loadPaperResearchCurrencyLedger,
     persistPaperResearchCurrencyLedger,
+    validatePaperJournalSyncRequest,
   } = module;
 
   const buildLedger = (usAmount = 100, extra = {}) => buildPaperResearchCurrencyLedger({
@@ -133,6 +144,9 @@ try {
   assert.equal(record.payload.orderSubmitted, false);
   assert.equal(record.payload.exchangeRequestSent, false);
   assert.equal(record.payload.profitabilityClaimAllowed, false);
+  assert.throws(() => validatePaperJournalSyncRequest({
+    idempotencyKey: 'client-cannot-select-scope', clientTime: NOW_ISO, scope: 'currency-ledger', records: [record],
+  }, new Date(NOW)), /동기화 기록/);
 
   const repository = new MemoryRepository();
   const first = await persistPaperResearchCurrencyLedger(repository, 'user-a', canonical, {
@@ -147,7 +161,7 @@ try {
   assert.equal(first.failed, 0);
   assert.equal(repository.writeCount, 1);
 
-  const loaded = await loadPaperResearchCurrencyLedger(repository, 'user-a');
+  const loaded = await loadPaperResearchCurrencyLedger(repository, 'user-a', new Date(NOW));
   assert.equal(loaded.found, true);
   assert.equal(loaded.persistentLedgerIntegrated, true);
   assert.equal(loaded.recordVersion, 1);
@@ -163,8 +177,13 @@ try {
   }, new Date(NOW));
   assert.equal(repeated.persistentLedgerIntegrated, true);
   assert.equal(repository.writeCount, 1, 'idempotent retry must not create another write');
+  const delayedRetry = await persistPaperResearchCurrencyLedger(repository, 'user-a', canonical, {
+    version: 1, idempotencyKey: 'paper-ledger-0001', clientTime: NOW_ISO,
+  }, new Date(NOW + 60_000));
+  assert.equal(delayedRetry.persistentLedgerIntegrated, true);
+  assert.equal(repository.writeCount, 1, 'later observation must not change request identity');
 
-  const otherUser = await loadPaperResearchCurrencyLedger(repository, 'user-b');
+  const otherUser = await loadPaperResearchCurrencyLedger(repository, 'user-b', new Date(NOW));
   assert.equal(otherUser.found, false);
   assert.equal(otherUser.persistentLedgerIntegrated, false);
 
@@ -188,7 +207,7 @@ try {
   assert.equal(nextVersion.persistentLedgerIntegrated, true);
   assert.equal(nextVersion.uploaded, 1);
   assert.equal(repository.writeCount, 2);
-  const loadedV2 = await loadPaperResearchCurrencyLedger(repository, 'user-a');
+  const loadedV2 = await loadPaperResearchCurrencyLedger(repository, 'user-a', new Date(NOW + 1_000));
   assert.equal(loadedV2.recordVersion, 2);
   assert.equal(loadedV2.payload.ledger.components.find((row) => row.id === 'us').nativeAmount, 101);
 
@@ -204,6 +223,28 @@ try {
 
   assert.throws(() => buildPaperResearchLedgerSyncRecord(canonical, { version: 0, updatedAt: NOW_ISO }), /PAPER_LEDGER_VERSION_INVALID/);
   assert.throws(() => buildPaperResearchLedgerSyncRecord(canonical, { version: 1, updatedAt: 'not-a-time' }), /PAPER_LEDGER_TIMESTAMP_INVALID/);
+  assert.throws(() => buildPaperResearchLedgerSyncRecord(canonical, { version: 1, updatedAt: '2026-02-30T00:00:00Z' }), /PAPER_LEDGER_TIMESTAMP_INVALID/);
+  for (const tamper of [
+    (ledger) => { ledger.knownEquityKrw += 1; },
+    (ledger) => { ledger.totalEquityKrw += 1; },
+    (ledger) => { ledger.components[0].nativeAmount = '400000'; },
+    (ledger) => { ledger.components[0].normalizedKrwAmount = Number.POSITIVE_INFINITY; },
+    (ledger) => { ledger.components[2].fxRate = 1; },
+    (ledger) => { ledger.components[2].fxObservedAtMs = NOW + 1; },
+    (ledger) => { ledger.components[0].source = ''; },
+    (ledger) => { ledger.components[1].id = ledger.components[0].id; },
+    (ledger) => { ledger.schedulerIntegrated = true; },
+  ]) {
+    const mutated = structuredClone(canonical);
+    tamper(mutated);
+    assert.throws(() => buildPaperResearchLedgerSyncRecord(mutated, { version: 1, updatedAt: NOW_ISO }), /PAPER_LEDGER_EVIDENCE_INVALID/);
+  }
+  const storedKey = repository.key('user-a', 'account', PAPER_RESEARCH_PERSISTED_LEDGER_ID);
+  const previousStored = structuredClone(repository.records.get(storedKey));
+  repository.records.get(storedKey).payload.ledger.totalEquityKrw += 10;
+  await assert.rejects(loadPaperResearchCurrencyLedger(repository, 'user-a', new Date(NOW + 1_000)), /PAPER_LEDGER_EVIDENCE_INVALID/);
+  repository.records.set(storedKey, previousStored);
+  await assert.rejects(loadPaperResearchCurrencyLedger(repository, 'user-a', new Date(NOW)), /PAPER_LEDGER_EVIDENCE_INVALID/);
 
   const serialized = JSON.stringify(record);
   for (const forbidden of ['apiKey', 'secret', 'accessToken', 'refreshToken', 'privateKey', 'userId', 'user_id']) {

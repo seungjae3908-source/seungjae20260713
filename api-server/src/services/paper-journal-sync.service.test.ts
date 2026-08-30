@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import './signal-performance-persistence.service.test';
+import './paper-journal-supabase.repository.test';
 import { paperJournalFixture } from './paper-journal-test-fixture';
 import { createPaperTradingState } from './paper-trading-engine.service';
 import {
@@ -51,14 +52,23 @@ class MemoryRepository implements PaperJournalRepository {
   conflicts = new Map<string, PaperJournalConflict>();
   failIds = new Set<string>();
   journalPayloads: Record<string, unknown>[] = [];
+  claims = new Map<string, string>();
+
+  async claimSyncRequest(user: string, key: string, fingerprint: string) {
+    const id = `${user}:${key}`;
+    if (this.claims.has(id)) throw new PaperJournalError('SYNC_REQUEST_IN_PROGRESS', 'pending', 409);
+    this.claims.set(id, fingerprint);
+    return null;
+  }
 
   async getRecord(userId: string, kind: PaperJournalRecordKind, id: string) {
     return structuredClone(this.records.get(keyOf(userId, kind, id)) ?? null);
   }
 
-  async upsertRecord(userId: string, next: PaperJournalSyncRecord, serverTime: string) {
+  async upsertRecord(userId: string, next: PaperJournalSyncRecord, serverTime: string, expectedVersion?: number | null) {
     if (this.failIds.has(next.id)) throw new Error('database secret detail');
     const existing = this.records.get(keyOf(userId, next.kind, next.id));
+    if (expectedVersion !== undefined && (existing?.version ?? null) !== expectedVersion) throw new PaperJournalError('JOURNAL_VERSION_CHANGED', 'changed', 409);
     const stored: StoredPaperJournalRecord = {
       ...structuredClone(next),
       createdAt: existing?.createdAt ?? serverTime,
@@ -342,8 +352,8 @@ test('concurrent different content cannot reuse an in-flight sync key', async ()
 
 test('stored acknowledgement must match the requested financial record', async () => {
   class WrongAcknowledgementRepository extends MemoryRepository {
-    override async upsertRecord(userId: string, next: PaperJournalSyncRecord, serverTime: string) {
-      const written = await super.upsertRecord(userId, next, serverTime);
+    override async upsertRecord(userId: string, next: PaperJournalSyncRecord, serverTime: string, expectedVersion?: number | null) {
+      const written = await super.upsertRecord(userId, next, serverTime, expectedVersion);
       return { ...written, payload: { ...written.payload, netPnl: 999 } };
     }
   }

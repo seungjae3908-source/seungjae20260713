@@ -60,14 +60,22 @@ class MemoryRepository implements PaperJournalRepository {
   failIds = new Set<string>();
   upsertCount = 0;
   idempotencyDelayMs = 0;
+  claims = new Set<string>();
+  async claimSyncRequest(user: string, key: string) {
+    const id = `${user}:${key}`;
+    if (this.claims.has(id)) throw new PaperJournalError('SYNC_REQUEST_IN_PROGRESS', 'pending', 409);
+    this.claims.add(id);
+    return null;
+  }
 
   async getRecord(userId: string, kind: PaperJournalRecordKind, id: string) {
     return structuredClone(this.records.get(keyOf(userId, kind, id)) ?? null);
   }
-  async upsertRecord(userId: string, record: PaperJournalSyncRecord, serverTime: string) {
+  async upsertRecord(userId: string, record: PaperJournalSyncRecord, serverTime: string, expectedVersion?: number | null) {
     if (this.failIds.has(record.id)) throw new Error('database connection secret');
     this.upsertCount += 1;
     const existing = this.records.get(keyOf(userId, record.kind, record.id));
+    if (expectedVersion !== undefined && (existing?.version ?? null) !== expectedVersion) throw new PaperJournalError('JOURNAL_VERSION_CHANGED', 'changed', 409);
     const stored: StoredPaperJournalRecord = { ...structuredClone(record), createdAt: existing?.createdAt ?? serverTime, serverUpdatedAt: serverTime };
     this.records.set(keyOf(userId, record.kind, record.id), stored);
     return structuredClone(stored);
