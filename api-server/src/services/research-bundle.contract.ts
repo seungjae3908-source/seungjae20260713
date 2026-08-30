@@ -5,6 +5,9 @@ export interface ResearchBundleResolution {
   dslDigest: string | null;
   bundleDigest: string | null;
   strategyIdentityDigest: string | null;
+  modelIdentityDigest: string | null;
+  featureOrderDigest: string | null;
+  preprocessingVersion: string | null;
   researchBundleReady: boolean;
   backtestExecutable: boolean;
   backtestSubmitted: boolean;
@@ -32,6 +35,9 @@ export interface ResearchBundleResolution {
     requestDigest: string;
     strategyIdentity: Record<string, unknown>;
     strategyIdentityDigest: string;
+    modelIdentityDigest: string;
+    featureOrderDigest: string;
+    preprocessingVersion: string;
     dslDigest: string;
     bundleDigest: string;
     datasetIdentity: string;

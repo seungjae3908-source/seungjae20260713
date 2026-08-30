@@ -7,7 +7,10 @@ import { createResearchCopilotRouter } from './research-copilot';
 import { ResearchCopilotService } from '../services/research-copilot.service';
 import { createDefaultStrategyPromotionService } from '../services/strategy-promotion.service';
 import { ResearchBundleService } from '../services/research-bundle.service';
-import type { ResearchBundleResolution } from '../services/research-bundle.contract';
+import { createResearchBundleFileStore } from '../services/research-bundle-file-store.service';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { researchBundleFixture, AUTHORITATIVE_NOW_MS } from '../services/research-bundle.test-fixtures.mjs';
 import { runOnePassCandidateBacktestV1 } from '../../../market-prediction-lab/src/research-tournament-engine-v1.js';
 
@@ -70,21 +73,12 @@ test('HTTP admin boundary rejects other members, blocks injected instructions an
   }
 });
 
-test('admin HTTP validates canonical TEST_ONLY bundle and submits exactly once to the real #690 executor', async () => {
-  const fixture = researchBundleFixture(), receipts = new Map<string, ResearchBundleResolution>();
-  const artifacts = new Map<string, unknown>();
+test('admin HTTP validates TEST_ONLY bundle and durably submits exactly once to the real #690 executor', async () => {
+  const fixture = researchBundleFixture(), root = await mkdtemp(join(tmpdir(), 'research-http-test-'));
   let calls = 0;
   const bundles = new ResearchBundleService({ readCanonicalBundle: async () => fixture.bundle,
     allowTestEvidence: true, now: () => AUTHORITATIVE_NOW_MS,
-    submissions: {
-      reserve: async (key, receipt) => {
-        const previous = receipts.get(key);
-        if (previous) return { acquired: false, receipt: previous };
-        receipts.set(key, receipt); return { acquired: true, receipt };
-      },
-      complete: async (key, receipt, artifact) => { receipts.set(key, receipt); artifacts.set(key, artifact); },
-      read: async key => { const receipt = receipts.get(key); return receipt ? { receipt, artifact: artifacts.get(key) } : null; },
-    },
+    submissions: createResearchBundleFileStore(root).submissions,
     runBacktest: input => { calls += 1; return runOnePassCandidateBacktestV1(input); },
   });
   const app = express(); app.use(express.json());
@@ -119,5 +113,8 @@ test('admin HTTP validates canonical TEST_ONLY bundle and submits exactly once t
     assert.equal(publication.backtesterCalls, 0); assert.equal(calls, 1);
     assert.equal(publication.receipt.strategyIdentityDigest, validated.bundle.strategyIdentityDigest);
     assert.equal(publication.receipt.bundleDigest, validated.bundle.bundleDigest);
-  } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
 });

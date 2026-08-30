@@ -10,7 +10,7 @@ const ACTIONS: Array<[CopilotTask, string]> = [
   ['compare_strategies', '비교 시 필요한 증거'], ['explain_health', 'Health 부족 증거 설명'],
 ];
 const button = 'min-h-11 rounded-xl border border-border px-4 py-2 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-50';
-const bundleLabels: Record<string, string> = { strategy: 'Strategy Identity', dataset: 'Dataset', split: 'Frozen Split',
+const bundleLabels: Record<string, string> = { strategy: 'Strategy Identity', model: 'Model Identity', feature: 'Feature Identity', dataset: 'Dataset', split: 'Frozen Split',
   risk: 'Risk Policy', fullCost: 'Full Cost (8 components)', oos: 'OOS Horizon', wf: 'Walk-forward Policy', holdout: 'Final Holdout' };
 
 export function ResearchCopilotPanel() {
@@ -148,12 +148,13 @@ export function ResearchCopilotPanel() {
               <h3 className="font-bold">이 후보의 다음 단절 지점</h3>
               <p className="mt-2">{!validation.bundle.researchBundleReady ? 'BLOCKED_DATA · 실행 가능한 canonical Bundle 부족' : !validation.bundle.backtestCompleted ? `Backtest · ${validation.bundle.backtestStatus}` : validation.bundle.publicationStatus !== 'READBACK_VERIFIED' ? 'MISSING_EVIDENCE · 영구 결과 재조회 미확인' : 'NOT_EVALUABLE · 동일 후보의 OOS/WF/Holdout 평가 증거 부족'}</p>
               <p className="mt-2">Shadow · MISSING_EVIDENCE / Forward · MISSING_EVIDENCE</p>
-              <p className="mt-2">Feature·Model·Trial·Observation 연결과 genuine 독립 표본 수: 확인 불가. 전체 운영 집계를 이 후보의 표본으로 사용하지 않습니다.</p>
+              <p className="mt-2">Feature·Model identity는 아래 계약 검증과 별개로 Shadow/Forward의 실제 소비가 필요합니다. Trial·Observation 연결과 genuine 독립 표본 수: 확인 불가. 전체 운영 집계를 이 후보의 표본으로 사용하지 않습니다.</p>
               <p className="mt-2">Full Cost / Health / Promotion 판정: NOT_EVALUABLE. 수익성 입증 없음 · 검증 Champion 없음.</p>
               <details className="mt-3">
                 <summary className="min-h-11 cursor-pointer py-3 font-bold">이 후보의 식별자와 출처 자세히</summary>
                 <dl className="space-y-2 break-all text-xs">
                   {Object.entries({ DSL: validation.bundle.dslDigest, Strategy: validation.bundle.strategyIdentityDigest, Bundle: validation.bundle.bundleDigest,
+                    Model: validation.bundle.modelIdentityDigest, 'Feature order': validation.bundle.featureOrderDigest, Preprocessing: validation.bundle.preprocessingVersion,
                     Dataset: validation.bundle.receipt?.datasetIdentity, 'Dataset SHA-256': validation.bundle.receipt?.datasetDigest,
                     Split: validation.bundle.receipt?.splitReceiptDigest, Risk: validation.bundle.receipt?.riskPolicyId,
                     Cost: validation.bundle.receipt?.costPolicyIdentity, 'Research SHA': validation.bundle.receipt?.researchCodeSha,
