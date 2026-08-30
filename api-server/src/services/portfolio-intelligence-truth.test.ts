@@ -76,6 +76,55 @@ test('portfolio position calculations combine lots once and preserve original ho
   assert.equal(result.dataQuality.aggregatedAssetCount, 1);
 });
 
+test('portfolio aggregate overflow preserves individual evidence but cannot become zero or Infinity totals', async () => {
+  const result = await buildPortfolioIntelligence({ accessToken: 'fixture', now, fetchImpl: noFx,
+    loadHoldings: async () => [holding, { ...holding, id: 'second-asset', ticker: '000660' }].map((row) => ({ ...row, quantity: 1, average_price: 1e308 })),
+    loadQuote: async (ticker) => ({ ...quote, ticker, price: 1e308 }), loadCandles: async () => [],
+  });
+  assert.equal(result.holdings.length, 2);
+  assert.equal(result.totalAssets.knownNormalizedKRW, null);
+  assert.equal(result.investmentPrincipal.knownNormalizedKRW, null);
+  assert.equal(result.allocation.knownTotalKRW, null);
+  assert.equal(result.top5Concentration.percent, null);
+  assert.equal(result.nativeBalances.KRW.amount, null);
+  assert.equal(result.assets.krStocks, null);
+  assert.equal(result.valuationPnl.normalizedKRW, null);
+  assert.ok(result.missingSources.includes('PORTFOLIO_AGGREGATE_OVERFLOW'));
+});
+
+test('portfolio correlation normalizes historical candle time and refuses duplicate or different return periods', async () => {
+  const base = { accessToken: 'fixture', now, fetchImpl: noFx,
+    loadHoldings: async () => [holding, { ...holding, id: 'second-asset', ticker: '000660' }],
+    loadQuote: async (ticker: string) => ({ ...quote, ticker }),
+  };
+  const candles = Array.from({ length: 31 }, (_, index) => ({ time: Date.UTC(2026, 6, index + 1) / 1000,
+    open: 100 + index ** 2, high: 100 + index ** 2, low: 100 + index ** 2, close: 100 + index ** 2, volume: 1 }));
+  const valid = await buildPortfolioIntelligence({ ...base, loadCandles: async () => [...candles].reverse() });
+  assert.equal(valid.correlation.status, 'READY');
+  assert.equal(valid.correlation.sampleSize, 30);
+  assert.ok(valid.correlation.correlation !== null && Math.abs(valid.correlation.correlation - 1) < 1e-12);
+  for (const invalid of [[...candles, candles[0]], candles.map((row) => ({ ...row, time: Date.UTC(2099, 0, 1) / 1000 })),
+    candles.map((row, index) => index === 0 ? { ...row, time: row.time - 60 } : row)]) {
+    const result = await buildPortfolioIntelligence({ ...base, loadCandles: async (ticker) => ticker === '000660' ? invalid : candles });
+    assert.equal(result.correlation.correlation, null);
+    assert.notEqual(result.correlation.status, 'READY');
+    assert.ok(result.correlation.sampleSize < 30);
+  }
+});
+
+test('portfolio still returns useful holdings when a candle provider never resolves', async () => {
+  const started = performance.now();
+  const result = await buildPortfolioIntelligence({ accessToken: 'fixture', now, fetchImpl: noFx,
+    loadHoldings: async () => [holding, { ...holding, id: 'second-asset', ticker: '000660' }],
+    loadQuote: async (ticker) => ({ ...quote, ticker }), loadCandles: async () => new Promise(() => {}),
+  });
+  assert.ok(performance.now() - started < 5000);
+  assert.equal(result.holdings.length, 2);
+  assert.equal(result.correlation.status, 'PARTIAL_MARKET_DATA');
+  assert.equal(result.correlation.correlation, null);
+  assert.ok(result.missingSources.includes('CORRELATION:HISTORY_UNAVAILABLE'));
+});
+
 test('additional-buy HTTP binds explicit market/currency and calculates the entire authenticated asset position', async (t) => {
   const savedUrl = process.env.SUPABASE_URL;
   const savedKey = process.env.SUPABASE_ANON_KEY;
