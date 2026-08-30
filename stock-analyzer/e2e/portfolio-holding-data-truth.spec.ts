@@ -36,7 +36,7 @@ test('portfolio valuation requires identified fresh source quotes and keeps nati
 });
 
 for (const [width, height] of [[1440, 900], [1024, 768], [320, 740], [360, 800], [390, 844], [412, 915], [430, 932]]) {
-  test(`actual stock holdings show currency-separated facts and missing or stale quotes never become breakeven ${width}`, async ({ page }) => {
+  test(`actual stock holdings show currency-separated facts and missing or stale quotes never become breakeven ${width}`, async ({ page }, testInfo) => {
     const holdings = [
       { ...VALID_ROW, name: '삼성전자 검증', user_id: E2E_USER_ID, created_at: E2E_NOW },
       { ...VALID_ROW, id: 'holding-us', ticker: 'AAPL', name: 'Apple 검증', market: 'US', currency: 'USD', quantity: 2, average_price: 100, user_id: E2E_USER_ID, created_at: E2E_NOW },
@@ -66,6 +66,9 @@ for (const [width, height] of [[1440, 900], [1024, 768], [320, 740], [360, 800],
     await expect(us).toContainText('$220');
     await expect(us).toContainText('+10.00%');
     await expect(page.getByTestId('portfolio-holdings-summary')).not.toContainText('780,220');
+    if (width === 1440 || width === 320) {
+      await testInfo.attach('native-currency-holdings', { body: await page.screenshot({ fullPage: true }), contentType: 'image/png' });
+    }
     scenario = 'missing';
     await page.getByTestId('portfolio-holdings-summary').getByRole('button', { name: '새로고침' }).click();
     await expect(kr).toContainText('데이터 부족');

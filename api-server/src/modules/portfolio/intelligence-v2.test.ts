@@ -1,4 +1,5 @@
 import test from 'node:test';
+import '../../services/portfolio-intelligence-truth.test.ts';
 import assert from 'node:assert/strict';
 import {
   aggregatePortfolioProviderSnapshots,
@@ -41,11 +42,11 @@ test('free public FX collector preserves source and partial failure', async () =
   const mockFetch = (async (url: string | URL | Request) => {
     const text = String(url);
     if (text.includes('finance.yahoo.com')) {
-      return new Response(JSON.stringify({ chart: { result: [{ meta: { regularMarketPrice: 1402.5, regularMarketTime: 1786596900 } }] } }), { status: 200 });
+      return new Response(JSON.stringify({ chart: { result: [{ meta: { symbol: 'KRW=X', currency: 'KRW', regularMarketPrice: 1402.5, regularMarketTime: now.getTime() / 1000 - 60 } }] } }), { status: 200 });
     }
     return new Response('upstream unavailable', { status: 503 });
   }) as typeof fetch;
-  const result = await loadFreePublicFxQuotes(mockFetch);
+  const result = await loadFreePublicFxQuotes(mockFetch, now);
   assert.equal(result.quotes.length, 1);
   assert.equal(result.quotes[0].currency, 'USD');
   assert.equal(result.quotes[0].krwRate, 1402.5);

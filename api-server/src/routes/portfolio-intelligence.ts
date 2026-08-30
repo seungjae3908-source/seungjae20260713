@@ -5,6 +5,7 @@ import {
   simulateAdditionalInvestment,
 } from '../modules/portfolio/index.ts';
 import { buildPortfolioIntelligence } from '../services/portfolio-intelligence.service.ts';
+import { marketNumber } from '../providers/market-evidence';
 
 const router: IRouter = Router();
 
@@ -15,8 +16,8 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 function positiveNumber(value: unknown): number | null {
-  const number = typeof value === 'number' ? value : Number(value);
-  return Number.isFinite(number) && number > 0 ? number : null;
+  const number = marketNumber(value);
+  return number !== null && number > 0 ? number : null;
 }
 
 function portfolioFailure(cause: unknown, res: Parameters<Parameters<IRouter['get']>[1]>[1]) {
@@ -38,7 +39,7 @@ router.get('/portfolio/intelligence', async (req: AuthenticatedRequest, res) => 
       accessToken: req.accessToken,
       profile: req.query.profile,
     });
-    res.setHeader('Cache-Control', 'private, max-age=10, stale-while-revalidate=20');
+    res.setHeader('Cache-Control', 'private, no-store');
     return res.json({ ok: true, portfolio });
   } catch (cause) {
     return portfolioFailure(cause, res);
@@ -72,7 +73,7 @@ router.post('/portfolio/intelligence/additional-buy', async (req: AuthenticatedR
       currentAveragePrice: currentAveragePriceKRW,
       currentPrice: currentPriceKRW,
       currentPositionValueKRW: currentPositionValueKRW ?? Number.NaN,
-      portfolioValueKRW,
+      portfolioValueKRW: portfolioValueKRW ?? Number.NaN,
       additionalAmountKRW: additionalAmountKRW ?? undefined,
       additionalQuantity: additionalQuantity ?? undefined,
       stopLoss: null,
@@ -92,6 +93,7 @@ router.post('/portfolio/intelligence/additional-buy', async (req: AuthenticatedR
         currentPositionValueKRW,
       },
       priceBasis: 'NORMALIZED_KRW',
+      asOf: portfolio.asOf,
       result,
       evidence: {
         stopLoss: 'UNAVAILABLE',
@@ -110,7 +112,7 @@ router.post('/portfolio/intelligence/monthly-contribution', async (req: Authenti
   const body = asRecord(req.body);
   const monthlyAmountKRW = positiveNumber(body.monthlyAmountKRW);
   const monthsValue = positiveNumber(body.months);
-  const months = monthsValue == null ? null : Math.floor(monthsValue);
+  const months = monthsValue == null || !Number.isInteger(monthsValue) ? null : monthsValue;
   if (monthlyAmountKRW == null || months == null || months <= 0 || months > 120) {
     return res.status(400).json({ ok: false, error: 'INVALID_MONTHLY_PLAN_INPUT' });
   }
@@ -134,6 +136,7 @@ router.post('/portfolio/intelligence/monthly-contribution', async (req: Authenti
       profileForPolicyComparison: portfolio.allocationPolicy.profile,
       profileUsedForAllocation: false,
       assumption: 'NO_VALIDATED_RETURN_ASSUMPTION',
+      asOf: portfolio.asOf,
       unavailableOutputs: ['FUTURE_RETURN', 'FUTURE_ASSET_VALUE', 'EXPECTED_CAGR'],
       safety: portfolio.safety,
     });
