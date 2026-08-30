@@ -272,7 +272,7 @@ function RecoCard({ row, onOpen }: { row: RecoRow; onOpen: () => void }) {
 
       <div className="mt-2 flex flex-wrap gap-1">
         <Badge tone={row.score >= 70 ? "positive" : "muted"}>
-          상승 가능성 {row.score}점
+          규칙 점수 {row.score}점
         </Badge>
         <Badge tone={row.opinion === "매수" ? "positive" : "muted"}>
           {row.opinion}
