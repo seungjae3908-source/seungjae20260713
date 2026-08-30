@@ -46,6 +46,7 @@ let installed = false;
 let authSubscription: AuthSubscription | null = null;
 let activeMemberId: string | null = null;
 let identityGeneration = 0;
+let requestedIdentityVersion = 0;
 let identityAbort: AbortController | null = null;
 let identityHydrated = false;
 let transitionChain: Promise<void> = Promise.resolve();
@@ -379,10 +380,30 @@ async function transitionIdentity(nextValue: string | null): Promise<void> {
   if (activeMemberId === nextMemberId && generation === identityGeneration) identityHydrated = true;
 }
 
-function queueIdentity(next: string | null): void {
+function queueIdentity(nextValue: string | null): void {
+  const nextMemberId = cleanMemberId(nextValue);
+  const requestVersion = ++requestedIdentityVersion;
+
+  // Do not wait for a slow previous transition to complete before invalidating
+  // its transport. A logout/member switch makes every prior GET/POST obsolete
+  // at the moment the new identity event is observed.
+  if (nextMemberId !== activeMemberId) {
+    identityGeneration += 1;
+    identityAbort?.abort(new DOMException('Watchlist member identity superseded.', 'AbortError'));
+    identityAbort = null;
+    if (pushTimer !== null) clearTimeout(pushTimer);
+    pushTimer = null;
+    pushInFlight = false;
+    pushPending = false;
+    identityHydrated = false;
+  }
+
   transitionChain = transitionChain
     .catch(() => undefined)
-    .then(() => transitionIdentity(next));
+    .then(async () => {
+      if (requestVersion !== requestedIdentityVersion) return;
+      await transitionIdentity(nextMemberId);
+    });
 }
 
 function installOnce(): void {
@@ -430,6 +451,8 @@ export function ensureWatchlistSync(memberIdOverride?: string | null): void {
 
 // Kept reachable for deterministic module cleanup in browser tests/dev HMR.
 export function stopWatchlistSync(): void {
+  requestedIdentityVersion += 1;
+  identityGeneration += 1;
   identityAbort?.abort(new DOMException('Watchlist sync stopped.', 'AbortError'));
   identityAbort = null;
   authSubscription?.unsubscribe();
