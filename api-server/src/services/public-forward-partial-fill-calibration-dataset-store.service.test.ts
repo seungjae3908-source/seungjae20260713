@@ -13,6 +13,7 @@ import {
   PUBLIC_FORWARD_PARTIAL_FILL_CALIBRATION_DATASET_SAFETY,
   PUBLIC_FORWARD_PARTIAL_FILL_CALIBRATION_STORE_CONTRACT,
   persistPublicForwardPartialFillCalibrationDataset,
+  readPublicForwardPartialFillCalibrationDataset,
   verifyPublicForwardPartialFillCalibrationDataset,
 } from './public-forward-partial-fill-calibration-dataset-store.service';
 
@@ -111,6 +112,76 @@ test('persists one forward observation into an integrity-checked dataset without
     assert.equal(result.dataset.fullCostReady, false);
     assert.equal(verifyPublicForwardPartialFillCalibrationDataset(result.dataset).valid, true);
     assert.match(result.datasetRelativePath, /^forward\/partial-fill-calibration-v1\/forward_natural_sample\/a{40}\/dataset\.json$/u);
+  });
+});
+
+test('read-only reader binds the canonical path to the expected identity and digest without rewriting it', async () => {
+  await withStateRoot(async (root) => {
+    const persisted = await persistPublicForwardPartialFillCalibrationDataset({
+      stateRoot: root,
+      storeContract: PUBLIC_FORWARD_PARTIAL_FILL_CALIBRATION_STORE_CONTRACT,
+      sampleClass: 'FORWARD_NATURAL_SAMPLE',
+      collectorCodeSha,
+      observations: [observation('obs-1')],
+      nowMs: 4_000,
+    });
+    const path = resolve(root, persisted.datasetRelativePath);
+    const before = await readFile(path, 'utf8');
+    const read = await readPublicForwardPartialFillCalibrationDataset({
+      stateRoot: root,
+      storeContract: PUBLIC_FORWARD_PARTIAL_FILL_CALIBRATION_STORE_CONTRACT,
+      sampleClass: 'FORWARD_NATURAL_SAMPLE',
+      collectorCodeSha,
+      expectedDatasetIdentity: persisted.dataset.datasetIdentity,
+      expectedDatasetDigest: persisted.dataset.datasetDigest,
+    });
+    const after = await readFile(path, 'utf8');
+    assert.equal(read.readOnly, true);
+    assert.equal(read.datasetRelativePath, persisted.datasetRelativePath);
+    assert.equal(read.dataset.observationCount, 1);
+    assert.equal(read.dataset.partialFillCostPresent, false);
+    assert.equal(read.dataset.fullCostReady, false);
+    assert.equal(Object.isFrozen(read.dataset), true);
+    assert.equal(Object.isFrozen(read.dataset.observations), true);
+    assert.equal(after, before);
+  });
+});
+
+test('read-only reader fails closed on missing data or ingest-receipt identity and digest mismatch', async () => {
+  await withStateRoot(async (root) => {
+    await assert.rejects(readPublicForwardPartialFillCalibrationDataset({
+      stateRoot: root,
+      storeContract: PUBLIC_FORWARD_PARTIAL_FILL_CALIBRATION_STORE_CONTRACT,
+      sampleClass: 'FORWARD_NATURAL_SAMPLE',
+      collectorCodeSha,
+      expectedDatasetIdentity: `partial-fill-forward-dataset:FORWARD_NATURAL_SAMPLE:${collectorCodeSha}`,
+      expectedDatasetDigest: hex('f'),
+    }), /CANONICAL_PARTIAL_FILL_DATASET_MISSING/u);
+
+    const persisted = await persistPublicForwardPartialFillCalibrationDataset({
+      stateRoot: root,
+      storeContract: PUBLIC_FORWARD_PARTIAL_FILL_CALIBRATION_STORE_CONTRACT,
+      sampleClass: 'FORWARD_NATURAL_SAMPLE',
+      collectorCodeSha,
+      observations: [observation('obs-1')],
+      nowMs: 4_000,
+    });
+    await assert.rejects(readPublicForwardPartialFillCalibrationDataset({
+      stateRoot: root,
+      storeContract: PUBLIC_FORWARD_PARTIAL_FILL_CALIBRATION_STORE_CONTRACT,
+      sampleClass: 'FORWARD_NATURAL_SAMPLE',
+      collectorCodeSha,
+      expectedDatasetIdentity: `${persisted.dataset.datasetIdentity}:wrong`,
+      expectedDatasetDigest: persisted.dataset.datasetDigest,
+    }), /DATASET_IDENTITY_MISMATCH/u);
+    await assert.rejects(readPublicForwardPartialFillCalibrationDataset({
+      stateRoot: root,
+      storeContract: PUBLIC_FORWARD_PARTIAL_FILL_CALIBRATION_STORE_CONTRACT,
+      sampleClass: 'FORWARD_NATURAL_SAMPLE',
+      collectorCodeSha,
+      expectedDatasetIdentity: persisted.dataset.datasetIdentity,
+      expectedDatasetDigest: hex('f'),
+    }), /DATASET_DIGEST_MISMATCH/u);
   });
 });
 
