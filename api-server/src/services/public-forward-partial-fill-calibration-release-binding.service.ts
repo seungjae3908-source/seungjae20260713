@@ -1,8 +1,10 @@
-import { createHash } from 'node:crypto';
-import { isAbsolute } from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
+import { link, lstat, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute, relative, resolve } from 'node:path';
 
 import { PUBLIC_FORWARD_PARTIAL_FILL_CALIBRATION_STORE_CONTRACT } from './public-forward-partial-fill-calibration-dataset-store.service';
 import {
+  readPublicForwardPartialFillCalibrationDatasetPointer,
   type PublicForwardPartialFillCalibrationDatasetPointer,
   verifyPublicForwardPartialFillCalibrationDatasetPointer,
 } from './public-forward-partial-fill-calibration-dataset-pointer.service';
@@ -52,12 +54,29 @@ export type PublicForwardPartialFillCalibrationReleaseBinding = Readonly<{
   publicationAuthority: 'ISSUE_23_OWNER_AUTHORIZED_CONTROL_PLANE';
   publicationProvenance: PublicForwardPartialFillReleaseBindingPublicationProvenance;
   releaseBindingIdentity: string;
+  approvedMainSha?: string;
+  approvedBy?: string;
+  approvedAt?: string;
   releaseBindingDigest: string;
 }>;
+
+export type PublicForwardPartialFillAuthoritativeReleaseBinding =
+  PublicForwardPartialFillCalibrationReleaseBinding
+  & Readonly<{
+    approvedMainSha: string;
+    approvedBy: string;
+    approvedAt: string;
+  }>;
 
 export type PublicForwardPartialFillReleaseBindingVerification = Readonly<{
   valid: boolean;
   blockers: readonly string[];
+}>;
+
+export type PublicForwardPartialFillReleaseBindingPublicationResult = Readonly<{
+  binding: PublicForwardPartialFillAuthoritativeReleaseBinding;
+  releaseBindingRelativePath: string;
+  created: boolean;
 }>;
 
 const SHA256 = /^[a-f0-9]{64}$/u;
@@ -97,6 +116,23 @@ function safeRelativeRef(value: unknown): value is string {
   return value.split('/').every((part) => part.length > 0 && part !== '.' && part !== '..');
 }
 
+function validApprovedAt(value: unknown): value is string {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/u.test(value)) return false;
+  return Number.isFinite(Date.parse(value));
+}
+
+function pathInside(parent: string, child: string): boolean {
+  const rel = relative(resolve(parent), resolve(child));
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+function resolveRelativeInside(root: string, locator: string, code: string): string {
+  if (!safeRelativeRef(locator)) throw new Error(code);
+  const resolved = resolve(root, locator);
+  if (!pathInside(root, resolved) || resolved === resolve(root)) throw new Error(code);
+  return resolved;
+}
+
 function bodyWithoutDigest(
   value: PublicForwardPartialFillCalibrationReleaseBinding,
 ): Omit<PublicForwardPartialFillCalibrationReleaseBinding, 'releaseBindingDigest'> {
@@ -126,9 +162,15 @@ function validPublicationProvenance(
     && releaseControlReference === `https://github.com/${value!.repository}/issues/23`;
 }
 
+export function publicForwardPartialFillReleaseBindingRelativePath(releaseBindingDigest: string): string {
+  if (!exactDigest(releaseBindingDigest)) throw new Error('RELEASE_BINDING_DIGEST_MISMATCH');
+  return `forward/partial-fill-calibration-v1/release-bindings/${releaseBindingDigest}.json`;
+}
+
 export function verifyPublicForwardPartialFillCalibrationReleaseBinding(
   binding: unknown,
   expectedPointer?: PublicForwardPartialFillCalibrationDatasetPointer,
+  options: Readonly<{ requirePublicationRecord?: boolean }> = {},
 ): PublicForwardPartialFillReleaseBindingVerification {
   const blockers: string[] = [];
   const add = (code: string) => {
@@ -150,6 +192,19 @@ export function verifyPublicForwardPartialFillCalibrationReleaseBinding(
     add('RELEASE_BINDING_AUTHORITY_INVALID');
   }
   if (!nonEmpty(candidate.releaseBindingIdentity)) add('RELEASE_BINDING_SCHEMA_INVALID');
+
+  if (options.requirePublicationRecord) {
+    if (!exactSha(candidate.approvedMainSha)
+      || candidate.approvedMainSha !== candidate.publicationProvenance?.exactMainSha) {
+      add('RELEASE_BINDING_AUTHORITY_INVALID');
+    }
+    if (!nonEmpty(candidate.approvedBy)
+      || candidate.approvedBy !== candidate.publicationProvenance?.approvedBy) {
+      add('RELEASE_BINDING_AUTHORITY_INVALID');
+    }
+    if (!validApprovedAt(candidate.approvedAt)) add('RELEASE_BINDING_AUTHORITY_INVALID');
+  }
+
   if (!exactDigest(candidate.releaseBindingDigest)) add('RELEASE_BINDING_DIGEST_MISMATCH');
   if (exactDigest(candidate.releaseBindingDigest)) {
     try {
@@ -176,12 +231,16 @@ export function buildPublicForwardPartialFillCalibrationReleaseBinding(input: Re
   releaseBindingIdentity: string;
   releaseControlReference: string;
   publicationProvenance: PublicForwardPartialFillReleaseBindingPublicationProvenance;
+  approvedAt?: string;
 }>): PublicForwardPartialFillCalibrationReleaseBinding {
   const pointerVerification = verifyPublicForwardPartialFillCalibrationDatasetPointer(input.pointer);
   if (!pointerVerification.valid) throw new Error(`RELEASE_BINDING_POINTER_MISMATCH:${pointerVerification.blockers.join(',')}`);
   if (!nonEmpty(input.releaseBindingIdentity)) throw new Error('RELEASE_BINDING_SCHEMA_INVALID');
   if (!nonEmpty(input.releaseControlReference)
     || !validPublicationProvenance(input.publicationProvenance, input.releaseControlReference)) {
+    throw new Error('RELEASE_BINDING_AUTHORITY_INVALID');
+  }
+  if (input.approvedAt !== undefined && !validApprovedAt(input.approvedAt)) {
     throw new Error('RELEASE_BINDING_AUTHORITY_INVALID');
   }
 
@@ -196,12 +255,21 @@ export function buildPublicForwardPartialFillCalibrationReleaseBinding(input: Re
     publicationAuthority: 'ISSUE_23_OWNER_AUTHORIZED_CONTROL_PLANE' as const,
     publicationProvenance: Object.freeze({ ...input.publicationProvenance }),
     releaseBindingIdentity: input.releaseBindingIdentity,
-  });
+    ...(input.approvedAt === undefined ? {} : {
+      approvedMainSha: input.publicationProvenance.exactMainSha,
+      approvedBy: input.publicationProvenance.approvedBy,
+      approvedAt: input.approvedAt,
+    }),
+  }) as Omit<PublicForwardPartialFillCalibrationReleaseBinding, 'releaseBindingDigest'>;
   const binding = Object.freeze({
     ...body,
     releaseBindingDigest: computePublicForwardPartialFillReleaseBindingDigest(body),
   });
-  const verification = verifyPublicForwardPartialFillCalibrationReleaseBinding(binding, input.pointer);
+  const verification = verifyPublicForwardPartialFillCalibrationReleaseBinding(
+    binding,
+    input.pointer,
+    { requirePublicationRecord: input.approvedAt !== undefined },
+  );
   if (!verification.valid) throw new Error(`RELEASE_BINDING_SCHEMA_INVALID:${verification.blockers.join(',')}`);
   return binding;
 }
@@ -221,4 +289,80 @@ export function assertPublicForwardPartialFillReleaseBindingCompatible(
     || JSON.stringify(canonicalize(existing)) !== JSON.stringify(canonicalize(candidate))) {
     throw new Error('RELEASE_BINDING_CONFLICT');
   }
+}
+
+async function atomicCreateOnly(targetPath: string, bytes: Buffer): Promise<boolean> {
+  const temporaryPath = `${targetPath}.tmp-${process.pid}-${randomUUID()}`;
+  await writeFile(temporaryPath, bytes, { flag: 'wx' });
+  try {
+    try {
+      await link(temporaryPath, targetPath);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      const existing = await readFile(targetPath);
+      if (!existing.equals(bytes)) throw new Error('RELEASE_BINDING_CONFLICT');
+      return false;
+    }
+  } finally {
+    await rm(temporaryPath, { force: true }).catch(() => undefined);
+  }
+}
+
+export async function publishPublicForwardPartialFillCalibrationReleaseBinding(input: Readonly<{
+  stateRoot: string;
+  researchRepoRoot: string;
+  pointerRelativePath: string;
+  expectedPointerDigest: string;
+  releaseBindingIdentity: string;
+  releaseControlReference: string;
+  publicationProvenance: PublicForwardPartialFillReleaseBindingPublicationProvenance;
+  approvedAt: string;
+}>): Promise<PublicForwardPartialFillReleaseBindingPublicationResult> {
+  if (!isAbsolute(input.stateRoot)) throw new Error('STATE_ROOT_AUTHORITY_MISSING');
+  if (!validApprovedAt(input.approvedAt)) throw new Error('RELEASE_BINDING_AUTHORITY_INVALID');
+  if (!exactDigest(input.expectedPointerDigest)) throw new Error('RELEASE_BINDING_POINTER_MISMATCH');
+
+  const { pointer } = await readPublicForwardPartialFillCalibrationDatasetPointer({
+    stateRoot: input.stateRoot,
+    researchRepoRoot: input.researchRepoRoot,
+    pointerRelativePath: input.pointerRelativePath,
+    expectedPointerDigest: input.expectedPointerDigest,
+  });
+  const built = buildPublicForwardPartialFillCalibrationReleaseBinding({
+    pointer,
+    releaseBindingIdentity: input.releaseBindingIdentity,
+    releaseControlReference: input.releaseControlReference,
+    publicationProvenance: input.publicationProvenance,
+    approvedAt: input.approvedAt,
+  });
+  const binding = built as PublicForwardPartialFillAuthoritativeReleaseBinding;
+  const verification = verifyPublicForwardPartialFillCalibrationReleaseBinding(
+    binding,
+    pointer,
+    { requirePublicationRecord: true },
+  );
+  if (!verification.valid) throw new Error(`RELEASE_BINDING_SCHEMA_INVALID:${verification.blockers.join(',')}`);
+
+  const root = await realpath(resolve(input.stateRoot)).catch((error) => {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('STATE_ROOT_NOT_AVAILABLE');
+    throw error;
+  });
+  const releaseBindingRelativePath = publicForwardPartialFillReleaseBindingRelativePath(binding.releaseBindingDigest);
+  const bindingPath = resolveRelativeInside(root, releaseBindingRelativePath, 'RELEASE_BINDING_REF_MISSING');
+  await mkdir(dirname(bindingPath), { recursive: true });
+  const canonicalParent = await realpath(dirname(bindingPath));
+  if (!pathInside(root, canonicalParent)) throw new Error('RELEASE_BINDING_REF_MISSING');
+
+  const bytes = Buffer.from(`${JSON.stringify(binding, null, 2)}\n`, 'utf8');
+  const created = await atomicCreateOnly(bindingPath, bytes);
+  const meta = await lstat(bindingPath);
+  if (meta.isSymbolicLink() || !meta.isFile()) throw new Error('RELEASE_BINDING_REF_MISSING');
+  if (!(await readFile(bindingPath)).equals(bytes)) throw new Error('RELEASE_BINDING_CONFLICT');
+
+  return Object.freeze({
+    binding,
+    releaseBindingRelativePath,
+    created,
+  });
 }
