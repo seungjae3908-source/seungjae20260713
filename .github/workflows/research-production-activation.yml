@@ -41,11 +41,11 @@ jobs:
           grep -Fq "startsWith(github.event.comment.body, '/activate-research-production ')" .github/workflows/research-production-activation.yml
           grep -Fq 'github.event.issue.number == 838' .github/workflows/research-production-activation.yml
           test "$(grep -Fc 'issue_number: 838' .github/workflows/research-production-activation.yml)" -eq 2
-          if grep -Fq 'github.event.issue.number == 660' .github/workflows/research-production-activation.yml; then
+          if grep -Eq 'github[.]event[.]issue[.]number == 6[6]0' .github/workflows/research-production-activation.yml; then
             echo 'Activation command routing regressed to archived Hub #660.' >&2
             exit 1
           fi
-          if grep -Fq 'issue_number: 660' .github/workflows/research-production-activation.yml; then
+          if grep -Eq 'issue_number: 6[6]0' .github/workflows/research-production-activation.yml; then
             echo 'Activation result reporting regressed to archived Hub #660.' >&2
             exit 1
           fi
