@@ -11,8 +11,10 @@ import {
   PUBLIC_FORWARD_PARTIAL_FILL_PRODUCTION_POLICY_MANIFEST_SAFETY,
   buildPublicForwardPartialFillProductionPolicyManifestCandidate,
   computePublicForwardPartialFillProductionPolicyManifestDigest,
+  computePublicForwardPartialFillScopeUniverseDigest,
   type PublicForwardPartialFillPolicyComponents,
   type PublicForwardPartialFillProductionPolicyManifestInput,
+  type PublicForwardPartialFillScopeUniverse,
 } from './public-forward-partial-fill-production-policy-manifest.service';
 
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -32,6 +34,38 @@ function components(): PublicForwardPartialFillPolicyComponents {
 
 function input(overrides: Partial<PublicForwardPartialFillProductionPolicyManifestInput> = {}) {
   const refs = components();
+  const scopeUniverseBody: Omit<PublicForwardPartialFillScopeUniverse, 'digest'> = {
+    identity: refs.scopeUniverse.identity,
+    version: refs.scopeUniverse.version,
+    frozenAtMs: refs.scopeUniverse.frozenAtMs,
+    effectiveCohortStartMs: 2_000,
+    entries: [{
+      market: 'CRYPTO_FUTURES',
+      sourceIdentity: 'TEST_ONLY_PUBLIC_VENUE',
+      symbol: 'BTCUSDT',
+      side: 'LONG',
+      quantityNotionalBucketIdentity: 'TEST_ONLY_BUCKET',
+      volatilityRegimeIdentity: 'TEST_ONLY_VOLATILITY_REGIME',
+      liquidityRegimeIdentity: 'TEST_ONLY_LIQUIDITY_REGIME',
+    }],
+    crossSideExtrapolationAllowed: false,
+    crossSymbolExtrapolationAllowed: false,
+    crossVenueExtrapolationAllowed: false,
+    crossBucketExtrapolationAllowed: false,
+    missingRegimeBehavior: 'BLOCKED_UNKNOWN',
+    observedScopeSelectionAllowed: false,
+    changeRequiresNewVersion: true,
+    changeRequiresNewDigest: true,
+    changeRequiresNewCohort: true,
+  };
+  const scopeUniverse: PublicForwardPartialFillScopeUniverse = {
+    ...scopeUniverseBody,
+    digest: computePublicForwardPartialFillScopeUniverseDigest(scopeUniverseBody),
+  };
+  (refs as unknown as Record<string, unknown>).scopeUniverse = {
+    ...refs.scopeUniverse,
+    digest: scopeUniverse.digest,
+  };
   const value: PublicForwardPartialFillProductionPolicyManifestInput = {
     policyIdentity,
     policyVersion,
@@ -44,6 +78,7 @@ function input(overrides: Partial<PublicForwardPartialFillProductionPolicyManife
     datasetStoreContract: PUBLIC_FORWARD_PARTIAL_FILL_CALIBRATION_STORE_CONTRACT,
     collectorCodeSha: 'a'.repeat(40),
     components: refs,
+    scopeUniverse,
     regimeOwnerIdentity: 'TEST_ONLY_REGIME_OWNER',
     splitPolicy: {
       policyIdentity,
@@ -61,6 +96,7 @@ function input(overrides: Partial<PublicForwardPartialFillProductionPolicyManife
       overallMinimums: { train: 1, validation: 1, oos: 1 },
       scopeMinimums: [{
         market: 'CRYPTO_FUTURES',
+        sourceIdentity: 'TEST_ONLY_PUBLIC_VENUE',
         symbol: 'BTCUSDT',
         side: 'LONG',
         quantityNotionalBucketIdentity: 'TEST_ONLY_BUCKET',
@@ -101,9 +137,10 @@ test('builds only a digest-bound non-authoritative candidate from fully frozen T
 });
 
 test('digest is canonical across object insertion order and changes with semantic content', () => {
-  const first = buildPublicForwardPartialFillProductionPolicyManifestCandidate(input());
+  const base = input();
+  const first = buildPublicForwardPartialFillProductionPolicyManifestCandidate(base);
   const reordered = input({ components: Object.fromEntries(
-    Object.entries(components()).reverse(),
+    Object.entries(base.components).reverse(),
   ) as unknown as PublicForwardPartialFillPolicyComponents });
   const second = buildPublicForwardPartialFillProductionPolicyManifestCandidate(reordered);
   assert.equal(first.manifest?.manifestDigest, second.manifest?.manifestDigest);
@@ -197,6 +234,75 @@ test('overlapping windows, duplicate scopes and empty consumers fail closed', ()
   assert.ok(result.blockers.includes('SPLIT_WINDOWS_OVERLAP'));
   assert.ok(result.blockers.includes('DUPLICATE_SCOPE_MINIMUM'));
   assert.ok(result.blockers.includes('CONSUMER_IDENTITIES_REQUIRED'));
+});
+
+test('scope universe binds every production dimension and exact split scope', () => {
+  const base = input();
+  const changedEntries = base.scopeUniverse.entries.map((entry) => ({
+    ...entry,
+    sourceIdentity: 'TEST_ONLY_OTHER_VENUE',
+  }));
+  const changedBody = { ...base.scopeUniverse, entries: changedEntries };
+  const changedUniverse = {
+    ...changedBody,
+    digest: computePublicForwardPartialFillScopeUniverseDigest(changedBody),
+  };
+  const changedComponents = {
+    ...base.components,
+    scopeUniverse: { ...base.components.scopeUniverse, digest: changedUniverse.digest },
+  };
+  const result = buildPublicForwardPartialFillProductionPolicyManifestCandidate({
+    ...base,
+    components: changedComponents,
+    scopeUniverse: changedUniverse,
+  });
+  assert.equal(result.status, 'BLOCKED_POLICY');
+  assert.ok(result.blockers.includes('SPLIT_SCOPE_UNIVERSE_MISMATCH'));
+});
+
+test('missing scope universe fails closed without a runtime fallback', () => {
+  const result = buildPublicForwardPartialFillProductionPolicyManifestCandidate({
+    ...input(),
+    scopeUniverse: undefined,
+  } as unknown as PublicForwardPartialFillProductionPolicyManifestInput);
+  assert.equal(result.status, 'BLOCKED_POLICY');
+  assert.ok(result.blockers.includes('SCOPE_UNIVERSE_REQUIRED'));
+});
+
+test('scope extrapolation, observed-scope selection and missing-regime defaults fail closed', () => {
+  const base = input();
+  const unsafe = {
+    ...base.scopeUniverse,
+    crossSideExtrapolationAllowed: true,
+    crossSymbolExtrapolationAllowed: true,
+    crossVenueExtrapolationAllowed: true,
+    crossBucketExtrapolationAllowed: true,
+    missingRegimeBehavior: 'NORMAL',
+    observedScopeSelectionAllowed: true,
+  } as unknown as PublicForwardPartialFillScopeUniverse;
+  const result = buildPublicForwardPartialFillProductionPolicyManifestCandidate({
+    ...base,
+    scopeUniverse: unsafe,
+  });
+  assert.ok(result.blockers.includes('CROSS_SIDE_EXTRAPOLATION_FORBIDDEN'));
+  assert.ok(result.blockers.includes('CROSS_SYMBOL_EXTRAPOLATION_FORBIDDEN'));
+  assert.ok(result.blockers.includes('CROSS_VENUE_EXTRAPOLATION_FORBIDDEN'));
+  assert.ok(result.blockers.includes('CROSS_BUCKET_EXTRAPOLATION_FORBIDDEN'));
+  assert.ok(result.blockers.includes('MISSING_REGIME_MUST_BLOCK_UNKNOWN'));
+  assert.ok(result.blockers.includes('OBSERVED_SCOPE_SELECTION_FORBIDDEN'));
+});
+
+test('scope universe changes require new version, digest and prospective cohort', () => {
+  const base = input();
+  const unsafe = {
+    ...base.scopeUniverse,
+    changeRequiresNewVersion: false,
+    changeRequiresNewDigest: false,
+    changeRequiresNewCohort: false,
+  } as unknown as PublicForwardPartialFillScopeUniverse;
+  const result = buildPublicForwardPartialFillProductionPolicyManifestCandidate({ ...base, scopeUniverse: unsafe });
+  assert.ok(result.blockers.includes('SCOPE_UNIVERSE_SUPERSESSION_RULE_INVALID'));
+  assert.ok(result.blockers.includes('SCOPE_UNIVERSE_DIGEST_MISMATCH'));
 });
 
 test('safety contract forbids authority, economic credit, execution and threshold invention', () => {
