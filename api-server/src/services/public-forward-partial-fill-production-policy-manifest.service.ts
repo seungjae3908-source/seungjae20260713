@@ -211,10 +211,10 @@ function finitePositiveInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) > 0;
 }
 
-function positiveMinimums(value: PublicForwardPartialFillSplitPolicy['overallMinimums']): boolean {
-  return finitePositiveInteger(value.train)
-    && finitePositiveInteger(value.validation)
-    && finitePositiveInteger(value.oos);
+function positiveMinimums(value: PublicForwardPartialFillSplitPolicy['overallMinimums'] | undefined): boolean {
+  return Boolean(value) && finitePositiveInteger(value!.train)
+    && finitePositiveInteger(value!.validation)
+    && finitePositiveInteger(value!.oos);
 }
 
 function blocked(...codes: string[]): PublicForwardPartialFillProductionPolicyManifestResult {
