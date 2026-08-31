@@ -1,0 +1,22 @@
+name: Temporary PR 850 Ready Transition
+
+on:
+  push:
+    branches:
+      - fix/agent-hub-manual-report-autoloop-20260831
+    paths:
+      - .github/workflows/pr-850-ready-temporary.yml
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  ready:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Mark PR 850 ready only
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr ready 850 --repo seungjae3908-source/seungjae20260713
