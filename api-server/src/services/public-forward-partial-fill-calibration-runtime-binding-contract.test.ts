@@ -377,11 +377,13 @@ test('T16 release binding never chooses lexicographically latest pointer filenam
 test('T17 same immutable pointer identity with different payload is a hard conflict', async () => {
   await withStateRoot(async (root) => {
     const { published } = await publishFirst(root);
-    const otherReceipt = ingestDigest('e');
     const conflicting = redigestPointer(published.pointer, {
-      sourceIngestReceiptDigest: otherReceipt,
-      sourceIngestReceiptRef: `ingest-receipt:sha256:${otherReceipt}`,
+      publicationProvenance: {
+        ...published.pointer.publicationProvenance,
+        artifactId: '201',
+      },
     });
+    assert.equal(conflicting.pointerIdentity, published.pointer.pointerIdentity);
     assert.throws(
       () => assertPublicForwardPartialFillDatasetPointerCompatible(published.pointer, conflicting),
       /POINTER_IDENTITY_CONFLICT/u,
