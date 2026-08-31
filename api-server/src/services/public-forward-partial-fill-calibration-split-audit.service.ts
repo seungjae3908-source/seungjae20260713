@@ -4,7 +4,6 @@ import {
   PUBLIC_FORWARD_PARTIAL_FILL_CALIBRATION_DATASET_VERSION,
   PUBLIC_FORWARD_PARTIAL_FILL_CALIBRATION_STORE_CONTRACT,
   type PublicForwardPartialFillCalibrationDataset,
-  readPublicForwardPartialFillCalibrationDataset,
   verifyPublicForwardPartialFillCalibrationDataset,
 } from './public-forward-partial-fill-calibration-dataset-store.service';
 
@@ -160,21 +159,6 @@ export type PublicForwardPartialFillSplitAuditResult = Readonly<{
   status: 'PRESENT' | 'BLOCKED_DATA';
   blockers: readonly string[];
   audit: PublicForwardPartialFillSplitAuditManifest | null;
-}>;
-
-export type PublicForwardPartialFillDatasetReaderAuditResult = Readonly<{
-  status: 'PRESENT' | 'BLOCKED_DATA';
-  blockers: readonly string[];
-  datasetIdentity: string | null;
-  datasetDigest: string | null;
-  datasetRelativePath: string | null;
-  observationCount: number | null;
-  audit: PublicForwardPartialFillSplitAuditManifest | null;
-  calibrationArtifactProduced: false;
-  partialFillCostPresent: false;
-  fullCostReady: false;
-  evidenceCompleteCredit: 0;
-  executionAuthority: 'NONE';
 }>;
 
 const SHA256 = /^[a-f0-9]{64}$/u;
@@ -520,57 +504,5 @@ export function auditPublicForwardPartialFillCalibrationSplits(input: Readonly<{
     status: 'PRESENT',
     blockers: Object.freeze([]),
     audit,
-  });
-}
-
-export async function readAndAuditPublicForwardPartialFillCalibrationDataset(input: Readonly<{
-  stateRoot: string;
-  storeContract: string;
-  sampleClass: 'FORWARD_NATURAL_SAMPLE';
-  collectorCodeSha: string;
-  expectedDatasetIdentity: string;
-  expectedDatasetDigest: string;
-  regimeBindings: readonly PublicForwardPartialFillRegimeBinding[];
-  policy: PublicForwardPartialFillSplitPolicy;
-}>): Promise<PublicForwardPartialFillDatasetReaderAuditResult> {
-  let read;
-  try {
-    read = await readPublicForwardPartialFillCalibrationDataset(input);
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : 'UNKNOWN';
-    return Object.freeze({
-      status: 'BLOCKED_DATA' as const,
-      blockers: Object.freeze([`CANONICAL_PARTIAL_FILL_DATASET_READ_FAILED:${reason}`]),
-      datasetIdentity: null,
-      datasetDigest: null,
-      datasetRelativePath: null,
-      observationCount: null,
-      audit: null,
-      calibrationArtifactProduced: false as const,
-      partialFillCostPresent: false as const,
-      fullCostReady: false as const,
-      evidenceCompleteCredit: 0 as const,
-      executionAuthority: 'NONE' as const,
-    });
-  }
-
-  const audited = auditPublicForwardPartialFillCalibrationSplits({
-    dataset: read.dataset,
-    regimeBindings: input.regimeBindings,
-    policy: input.policy,
-  });
-  return Object.freeze({
-    status: audited.status,
-    blockers: audited.blockers,
-    datasetIdentity: read.dataset.datasetIdentity,
-    datasetDigest: read.dataset.datasetDigest,
-    datasetRelativePath: read.datasetRelativePath,
-    observationCount: read.dataset.observationCount,
-    audit: audited.audit,
-    calibrationArtifactProduced: false as const,
-    partialFillCostPresent: false as const,
-    fullCostReady: false as const,
-    evidenceCompleteCredit: 0 as const,
-    executionAuthority: 'NONE' as const,
   });
 }
