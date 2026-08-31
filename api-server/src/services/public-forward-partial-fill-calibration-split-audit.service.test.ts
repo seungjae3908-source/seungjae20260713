@@ -18,6 +18,7 @@ import {
 import {
   PUBLIC_FORWARD_PARTIAL_FILL_SPLIT_AUDIT_SAFETY,
   auditPublicForwardPartialFillCalibrationSplits,
+  readAndAuditPublicForwardPartialFillCalibrationDataset,
   type PublicForwardPartialFillRegimeBinding,
   type PublicForwardPartialFillSplitPolicy,
 } from './public-forward-partial-fill-calibration-split-audit.service';
@@ -188,6 +189,71 @@ test('audits a caller-policy-frozen chronological TRAIN/VALIDATION/OOS split wit
       'TRAIN', 'TRAIN', 'VALIDATION', 'VALIDATION', 'OOS', 'OOS',
     ]);
   });
+});
+
+test('read-only canonical reader feeds the split audit while N=1 remains explicit BLOCKED_DATA cost truth', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'partial-fill-reader-audit-'));
+  try {
+    const current = observation('train-1', 1_500);
+    const persisted = await persistPublicForwardPartialFillCalibrationDataset({
+      stateRoot: root,
+      storeContract: PUBLIC_FORWARD_PARTIAL_FILL_CALIBRATION_STORE_CONTRACT,
+      sampleClass: 'FORWARD_NATURAL_SAMPLE',
+      collectorCodeSha,
+      observations: [current],
+      nowMs: 11_000,
+    });
+    const result = await readAndAuditPublicForwardPartialFillCalibrationDataset({
+      stateRoot: root,
+      storeContract: PUBLIC_FORWARD_PARTIAL_FILL_CALIBRATION_STORE_CONTRACT,
+      sampleClass: 'FORWARD_NATURAL_SAMPLE',
+      collectorCodeSha,
+      expectedDatasetIdentity: persisted.dataset.datasetIdentity,
+      expectedDatasetDigest: persisted.dataset.datasetDigest,
+      regimeBindings: [binding(current)],
+      policy: policy(),
+    });
+    assert.equal(result.status, 'PRESENT');
+    assert.equal(result.datasetIdentity, persisted.dataset.datasetIdentity);
+    assert.equal(result.datasetDigest, persisted.dataset.datasetDigest);
+    assert.equal(result.datasetRelativePath, persisted.datasetRelativePath);
+    assert.equal(result.observationCount, 1);
+    assert.ok(result.audit);
+    assert.deepEqual(result.audit.counts, { train: 1, validation: 0, oos: 0 });
+    assert.equal(result.audit.calibrationSampleSufficient, false);
+    assert.ok(result.audit.sampleDeficits.includes('OVERALL_TRAIN:1/2'));
+    assert.equal(result.calibrationArtifactProduced, false);
+    assert.equal(result.partialFillCostPresent, false);
+    assert.equal(result.fullCostReady, false);
+    assert.equal(result.evidenceCompleteCredit, 0);
+    assert.equal(result.executionAuthority, 'NONE');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('reader-to-audit seam exposes a fail-closed blocker instead of substituting missing canonical data', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'partial-fill-reader-missing-'));
+  try {
+    const result = await readAndAuditPublicForwardPartialFillCalibrationDataset({
+      stateRoot: root,
+      storeContract: PUBLIC_FORWARD_PARTIAL_FILL_CALIBRATION_STORE_CONTRACT,
+      sampleClass: 'FORWARD_NATURAL_SAMPLE',
+      collectorCodeSha,
+      expectedDatasetIdentity: `partial-fill-forward-dataset:FORWARD_NATURAL_SAMPLE:${collectorCodeSha}`,
+      expectedDatasetDigest: digest('missing-dataset'),
+      regimeBindings: [],
+      policy: policy(),
+    });
+    assert.equal(result.status, 'BLOCKED_DATA');
+    assert.match(result.blockers[0], /CANONICAL_PARTIAL_FILL_DATASET_MISSING/u);
+    assert.equal(result.audit, null);
+    assert.equal(result.partialFillCostPresent, false);
+    assert.equal(result.fullCostReady, false);
+    assert.equal(result.evidenceCompleteCredit, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test('reports explicit policy deficits without inventing a lower default sample threshold', async () => {
