@@ -93,6 +93,7 @@ jobs:
           grep -Fq 'publishPublicForwardPartialFillCalibrationReleaseBinding' "$BINDING"
           grep -Fq 'rollbackByNewBindingRequired: true' "$BINDING"
           grep -Fq "cat > \"\$ENTRY\" <<'TS'" "$WORKFLOW"
+          grep -Fq 'sudo -n -u investment-research env' "$WORKFLOW"
 
           if grep -Eq '\b(readdir|opendir)\b' "$RESOLVER"; then
             echo 'Directory scanning is forbidden in the runtime resolver.' >&2
@@ -356,16 +357,29 @@ jobs:
 
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" \
-            "test -d '$STATE_ROOT' && test -d '$RESEARCH_REPO_ROOT'"
+            "test -d '$STATE_ROOT' && test -d '$RESEARCH_REPO_ROOT' && id investment-research >/dev/null"
 
           REMOTE_ENV="$(printf \
             'STATE_ROOT=%q RESEARCH_REPO_ROOT=%q POINTER_REF=%q POINTER_DIGEST=%q RELEASE_BINDING_IDENTITY=%q RELEASE_CONTROL_REFERENCE=%q REPOSITORY=%q TARGET_SHA=%q APPROVAL_REFERENCE=%q APPROVED_BY=%q APPROVED_AT=%q' \
             "$STATE_ROOT" "$RESEARCH_REPO_ROOT" "$POINTER_REF" "$POINTER_DIGEST" "$RELEASE_BINDING_IDENTITY" \
             "$RELEASE_CONTROL_REFERENCE" "$GITHUB_REPOSITORY" "$TARGET_SHA" "$COMMENT_URL" "$COMMENT_AUTHOR" "$COMMENT_CREATED_AT")"
 
+          REMOTE_UID="$(
+            ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+              "$SSH_USER@$SSH_HOST" 'id -u'
+          )"
+          if [[ "$REMOTE_UID" == '0' ]]; then
+            REMOTE_EXEC="$REMOTE_ENV node -"
+          else
+            ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+              "$SSH_USER@$SSH_HOST" \
+              "sudo -n -u investment-research test -w '$STATE_ROOT' && sudo -n -u investment-research test -r '$RESEARCH_REPO_ROOT'"
+            REMOTE_EXEC="sudo -n -u investment-research env $REMOTE_ENV node -"
+          fi
+
           PUBLICATION_RESULT="$(
             ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
-              "$SSH_USER@$SSH_HOST" "$REMOTE_ENV node -" \
+              "$SSH_USER@$SSH_HOST" "$REMOTE_EXEC" \
               < "$RUNNER_TEMP/publish-partial-fill-release-binding.cjs"
           )"
 
