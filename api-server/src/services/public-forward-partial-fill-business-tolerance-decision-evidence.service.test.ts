@@ -91,6 +91,24 @@ function completeMultiApproverInput(): PublicForwardPartialFillBusinessTolerance
   return input;
 }
 
+function setSoleOwnerIdentity(
+  input: PublicForwardPartialFillBusinessToleranceHumanInput,
+  identity: string,
+): void {
+  input.ownerIdentity = identity;
+  input.releaseApprover = identity;
+  input.riskApprover = identity;
+  input.settlementReviewer = identity;
+}
+
+function expectPlaceholderIdentityFailure(identity: string): void {
+  const input = completeSoleOwnerInput();
+  setSoleOwnerIdentity(input, identity);
+  const result = buildPublicForwardPartialFillBusinessToleranceDecisionEvidence(context, input);
+  assert.equal(result.validationStatus, 'INCOMPLETE');
+  assert.ok(result.validationErrors.includes('PLACEHOLDER_APPROVER_FORBIDDEN'));
+}
+
 test('blank human form remains fail-closed without numeric or governance defaults', () => {
   const result = buildPublicForwardPartialFillBusinessToleranceDecisionEvidence(context, blankInput());
   assert.equal(result.evidenceVersion, PUBLIC_FORWARD_PARTIAL_FILL_BUSINESS_TOLERANCE_DECISION_EVIDENCE_VERSION);
@@ -234,4 +252,128 @@ test('safety contract explicitly scopes same-person approval to sole-owner gover
   assert.equal(PUBLIC_FORWARD_PARTIAL_FILL_BUSINESS_TOLERANCE_DECISION_SAFETY.fullCostReady, false);
   assert.equal(PUBLIC_FORWARD_PARTIAL_FILL_BUSINESS_TOLERANCE_DECISION_SAFETY.evidenceComplete, 0);
   assert.equal(PUBLIC_FORWARD_PARTIAL_FILL_BUSINESS_TOLERANCE_DECISION_SAFETY.executionAuthority, 'NONE');
+});
+
+test('approved additional generic, automation, and template identity forms fail closed', () => {
+  for (const identity of [
+    'TODO', 'UNSET', 'N/A', 'NA', 'TEST', 'TESTUSER', 'DUMMY_USER', 'SAMPLE', 'SAMPLE_USER',
+    'EXAMPLE', 'EXAMPLE_USER', 'OPENAI', 'ASSISTANT', 'AUTOMATION', 'AI_REVIEWER', 'BOT-REVIEWER',
+    'SYSTEM REVIEWER', '{OWNER}', '{APPROVER}', '{NAME}', '{USER}', '${OWNER}', '${APPROVER}',
+  ]) {
+    expectPlaceholderIdentityFailure(identity);
+  }
+});
+
+test('T01 valid sole-owner 이승재 triple-role PASS', () => {
+  const input = completeSoleOwnerInput();
+  setSoleOwnerIdentity(input, '이승재');
+  const result = buildPublicForwardPartialFillBusinessToleranceDecisionEvidence(context, input);
+  assert.equal(result.validationStatus, 'COMPLETE_AWAITING_FREEZE');
+  assert.deepEqual(result.validationErrors, []);
+});
+
+test('T02 valid distinct multi-approver identities PASS', () => {
+  const input = completeMultiApproverInput();
+  input.ownerIdentity = 'Minseo Park';
+  input.releaseApprover = 'Jisoo Han';
+  input.riskApprover = 'Daniel Kim';
+  input.settlementReviewer = 'Sora Lee';
+  const result = buildPublicForwardPartialFillBusinessToleranceDecisionEvidence(context, input);
+  assert.equal(result.validationStatus, 'COMPLETE_AWAITING_FREEZE');
+  assert.deepEqual(result.validationErrors, []);
+});
+
+test('T03 owner empty FAIL', () => {
+  const input = completeSoleOwnerInput();
+  input.ownerIdentity = '';
+  const result = buildPublicForwardPartialFillBusinessToleranceDecisionEvidence(context, input);
+  assert.ok(result.validationErrors.includes('OWNER_IDENTITY_REQUIRED'));
+  assert.equal(result.validationStatus, 'INCOMPLETE');
+});
+
+test('T04 release empty FAIL', () => {
+  const input = completeSoleOwnerInput();
+  input.releaseApprover = '';
+  const result = buildPublicForwardPartialFillBusinessToleranceDecisionEvidence(context, input);
+  assert.ok(result.validationErrors.includes('RELEASE_APPROVER_MISSING'));
+  assert.equal(result.validationStatus, 'INCOMPLETE');
+});
+
+test('T05 risk whitespace-only FAIL', () => {
+  const input = completeSoleOwnerInput();
+  input.riskApprover = '   ';
+  const result = buildPublicForwardPartialFillBusinessToleranceDecisionEvidence(context, input);
+  assert.ok(result.validationErrors.includes('RISK_APPROVER_MISSING'));
+  assert.equal(result.validationStatus, 'INCOMPLETE');
+});
+
+test('T06 settlement missing FAIL', () => {
+  const input = completeSoleOwnerInput();
+  input.settlementReviewer = null;
+  const result = buildPublicForwardPartialFillBusinessToleranceDecisionEvidence(context, input);
+  assert.ok(result.validationErrors.includes('SETTLEMENT_REVIEWER_MISSING'));
+  assert.equal(result.validationStatus, 'INCOMPLETE');
+});
+
+test('T07 PLACEHOLDER FAIL', () => expectPlaceholderIdentityFailure('PLACEHOLDER'));
+test('T08 placeholder FAIL', () => expectPlaceholderIdentityFailure('placeholder'));
+test('T09 TEST_USER FAIL', () => expectPlaceholderIdentityFailure('TEST_USER'));
+test('T10 TBD FAIL', () => expectPlaceholderIdentityFailure('TBD'));
+test('T11 UNKNOWN FAIL', () => expectPlaceholderIdentityFailure('UNKNOWN'));
+test('T12 DUMMY FAIL', () => expectPlaceholderIdentityFailure('DUMMY'));
+test('T13 AI FAIL', () => expectPlaceholderIdentityFailure('AI'));
+test('T14 BOT FAIL', () => expectPlaceholderIdentityFailure('BOT'));
+test('T15 ChatGPT FAIL', () => expectPlaceholderIdentityFailure('ChatGPT'));
+test('T16 SYSTEM FAIL', () => expectPlaceholderIdentityFailure('SYSTEM'));
+test('T17 <OWNER> FAIL', () => expectPlaceholderIdentityFailure('<OWNER>'));
+test('T18 <APPROVER> FAIL', () => expectPlaceholderIdentityFailure('<APPROVER>'));
+test('T19 이승재1 FAIL', () => expectPlaceholderIdentityFailure('이승재1'));
+test('T20 이승재2 FAIL', () => expectPlaceholderIdentityFailure('이승재2'));
+
+test('T21 legitimate human Latin-name fixture PASS', () => {
+  const input = completeSoleOwnerInput();
+  setSoleOwnerIdentity(input, 'Aiko Botkin');
+  const result = buildPublicForwardPartialFillBusinessToleranceDecisionEvidence(context, input);
+  assert.equal(result.validationStatus, 'COMPLETE_AWAITING_FREEZE');
+  assert.deepEqual(result.validationErrors, []);
+});
+
+test('T22 legitimate human Korean-name fixture PASS', () => {
+  const input = completeSoleOwnerInput();
+  setSoleOwnerIdentity(input, '김민수');
+  const result = buildPublicForwardPartialFillBusinessToleranceDecisionEvidence(context, input);
+  assert.equal(result.validationStatus, 'COMPLETE_AWAITING_FREEZE');
+  assert.deepEqual(result.validationErrors, []);
+});
+
+test('T23 case and whitespace normalization preserves valid sole-owner equality PASS', () => {
+  const input = completeSoleOwnerInput();
+  input.ownerIdentity = '  Alice Smith  ';
+  input.releaseApprover = 'alice smith';
+  input.riskApprover = 'ALICE   SMITH';
+  input.settlementReviewer = 'Alice Smith ';
+  const result = buildPublicForwardPartialFillBusinessToleranceDecisionEvidence(context, input);
+  assert.equal(result.validationStatus, 'COMPLETE_AWAITING_FREEZE');
+  assert.deepEqual(result.validationErrors, []);
+});
+
+test('T24 distinct identities with one TEST_USER FAIL', () => {
+  const input = completeMultiApproverInput();
+  input.ownerIdentity = 'Owner Person';
+  input.releaseApprover = 'Release Person';
+  input.riskApprover = 'TEST_USER';
+  input.settlementReviewer = 'Settlement Person';
+  const result = buildPublicForwardPartialFillBusinessToleranceDecisionEvidence(context, input);
+  assert.ok(result.validationErrors.includes('PLACEHOLDER_APPROVER_FORBIDDEN'));
+  assert.equal(result.validationStatus, 'INCOMPLETE');
+});
+
+test('T25 two valid but identical humans FAIL multi-approver distinctness', () => {
+  const input = completeMultiApproverInput();
+  input.releaseApprover = 'Jordan Lee';
+  input.riskApprover = '  jordan   lee  ';
+  const result = buildPublicForwardPartialFillBusinessToleranceDecisionEvidence(context, input);
+  assert.ok(result.validationErrors.includes('MULTI_APPROVER_DISTINCTNESS_REQUIRED'));
+  assert.ok(result.validationErrors.includes('SINGLE_APPROVER_SELF_AUTHORIZATION_FORBIDDEN'));
+  assert.equal(result.validationStatus, 'INCOMPLETE');
 });

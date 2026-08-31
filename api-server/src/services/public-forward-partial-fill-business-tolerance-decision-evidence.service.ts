@@ -124,6 +124,28 @@ const GOVERNANCE_ERROR_CODES = new Set([
   'SINGLE_APPROVER_SELF_AUTHORIZATION_FORBIDDEN',
 ]);
 
+const FORBIDDEN_EXACT_IDENTITY_TOKENS = new Set([
+  'PLACEHOLDER',
+  'TBD',
+  'TODO',
+  'UNKNOWN',
+  'UNSET',
+  'NONE',
+  'N/A',
+  'NA',
+  'TEST',
+  'TEST_USER',
+  'TESTUSER',
+  'DUMMY',
+  'DUMMY_USER',
+  'SAMPLE',
+  'SAMPLE_USER',
+  'EXAMPLE',
+  'EXAMPLE_USER',
+]);
+
+const KNOWN_INVALID_HUMAN_IDENTITIES = new Set(['이승재1', '이승재2']);
+
 function assertNonEmpty(value: string, field: string): void {
   if (value.trim().length === 0) throw new Error(`${field}_MISSING`);
 }
@@ -147,11 +169,26 @@ function normalizeIdentity(value: string | null | undefined): string | null {
   return normalized ? normalized : null;
 }
 
+function identityComparisonKey(value: string | null | undefined): string | null {
+  const normalized = normalizeIdentity(value);
+  return normalized ? normalized.replace(/\s+/g, ' ').toLowerCase() : null;
+}
+
+function normalizedIdentityToken(value: string): string {
+  return value.toUpperCase().replace(/[\s-]+/g, '_');
+}
+
 function isForbiddenHumanIdentity(value: string | null | undefined): boolean {
   const normalized = normalizeIdentity(value);
   if (!normalized) return false;
-  if (/^<[^>]+>$/.test(normalized)) return true;
-  return /^(?:AI(?:[_ -].*)?|BOT(?:[_ -].*)?|CHATGPT(?:[_ -].*)?|SYSTEM(?:[_ -].*)?|COMMAND(?:[_ -]?\d+)?|PENDING(?:[_ -].*)?|TBD|UNKNOWN|NONE)$/i.test(normalized);
+  if (KNOWN_INVALID_HUMAN_IDENTITIES.has(normalized)) return true;
+  if (/^(?:<[^<>]+>|\{[^{}]+\}|\$\{[^{}]+\})$/.test(normalized)) return true;
+
+  const token = normalizedIdentityToken(normalized);
+  if (FORBIDDEN_EXACT_IDENTITY_TOKENS.has(token)) return true;
+
+  return /^(?:AI|BOT|CHATGPT|OPENAI|ASSISTANT|SYSTEM|AUTOMATION)(?:_.+)?$/i.test(token)
+    || /^(?:COMMAND(?:_?\d+)?|PENDING(?:_.+)?)$/i.test(token);
 }
 
 function pushUnique(errors: string[], error: string): void {
@@ -185,10 +222,10 @@ function validateGovernance(
   validateHumanIdentity(input.ownerIdentity, 'OWNER_IDENTITY_REQUIRED', errors);
   if (input.humanFinalAuthority !== true) pushUnique(errors, 'HUMAN_FINAL_AUTHORITY_REQUIRED');
 
-  const ownerIdentity = normalizeIdentity(input.ownerIdentity);
-  const releaseApprover = normalizeIdentity(input.releaseApprover);
-  const riskApprover = normalizeIdentity(input.riskApprover);
-  const settlementReviewer = normalizeIdentity(input.settlementReviewer);
+  const ownerIdentity = identityComparisonKey(input.ownerIdentity);
+  const releaseApprover = identityComparisonKey(input.releaseApprover);
+  const riskApprover = identityComparisonKey(input.riskApprover);
+  const settlementReviewer = identityComparisonKey(input.settlementReviewer);
 
   if (governanceModel === 'SOLE_OWNER_SELF_APPROVAL') {
     if (input.soleOwnerSelfApproval !== true) pushUnique(errors, 'SOLE_OWNER_ATTESTATION_REQUIRED');
