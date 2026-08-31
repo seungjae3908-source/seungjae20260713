@@ -1,17 +1,29 @@
 import { createHash } from 'node:crypto';
 
 export const PUBLIC_FORWARD_PARTIAL_FILL_BUSINESS_TOLERANCE_DECISION_EVIDENCE_VERSION =
-  'public-forward-partial-fill-business-tolerance-decision-evidence-v1' as const;
+  'public-forward-partial-fill-business-tolerance-decision-evidence-v2' as const;
 
 export const PUBLIC_FORWARD_PARTIAL_FILL_BUSINESS_TOLERANCE_IDENTITY =
   'PUBLIC_FORWARD_PARTIAL_FILL_BUSINESS_TOLERANCE_V1' as const;
+
+export const PUBLIC_FORWARD_PARTIAL_FILL_BUSINESS_TOLERANCE_GOVERNANCE_MODELS = Object.freeze([
+  'INDEPENDENT_MULTI_APPROVER',
+  'SOLE_OWNER_SELF_APPROVAL',
+] as const);
+
+export type PublicForwardPartialFillBusinessToleranceGovernanceModel =
+  (typeof PUBLIC_FORWARD_PARTIAL_FILL_BUSINESS_TOLERANCE_GOVERNANCE_MODELS)[number];
 
 export const PUBLIC_FORWARD_PARTIAL_FILL_BUSINESS_TOLERANCE_DECISION_SAFETY = Object.freeze({
   designEvidenceOnly: true,
   numericDefaultsAllowed: false,
   aiNumericAuthority: 'NONE' as const,
   humanApprovalRequired: true,
-  singleApproverSelfAuthorizationAllowed: false,
+  governanceModelRequired: true,
+  soleOwnerSelfApprovalSupported: true,
+  independentMultiApproverSupported: true,
+  singleApproverSelfAuthorizationAllowed: true,
+  singleApproverSelfAuthorizationRequiresExplicitSoleOwnerGovernance: true,
   profitabilityOutcomeConsultedAllowed: false,
   currentSampleUsedToSelectValuesAllowed: false,
   prospectiveOnlyRequired: true,
@@ -51,9 +63,15 @@ export interface PublicForwardPartialFillBusinessToleranceHumanInput {
   tolerances: Record<PublicForwardPartialFillToleranceKey, HumanNumericDecision>;
   tailQuantile: HumanNumericDecision;
   meaningfulFailureEffectSize: HumanNumericDecision;
+  governanceModel?: PublicForwardPartialFillBusinessToleranceGovernanceModel | string | null;
+  ownerIdentity?: string | null;
   releaseApprover: string | null;
   riskApprover: string | null;
   settlementReviewer: string | null;
+  soleOwnerSelfApproval?: boolean | null;
+  independentReview?: boolean | null;
+  independentReviewRequired?: boolean | null;
+  humanFinalAuthority?: boolean | null;
   decisionBasisReference: string | null;
   approvalTimestamp: string | null;
   declarations: {
@@ -82,8 +100,8 @@ export interface PublicForwardPartialFillBusinessToleranceDecisionEvidence {
   context: PublicForwardPartialFillBusinessToleranceDecisionContext;
   humanInput: PublicForwardPartialFillBusinessToleranceHumanInput;
   validationStatus: 'COMPLETE_AWAITING_FREEZE' | 'INCOMPLETE';
-  firstZero: null | 'BUSINESS_TOLERANCE_VALUES_NOT_APPROVED';
-  rootCauseClass: null | 'HUMAN_RISK_NUMERIC_DECISION_MISSING';
+  firstZero: null | 'BUSINESS_TOLERANCE_VALUES_NOT_APPROVED' | 'BUSINESS_TOLERANCE_GOVERNANCE_NOT_APPROVED';
+  rootCauseClass: null | 'HUMAN_RISK_NUMERIC_DECISION_MISSING' | 'HUMAN_GOVERNANCE_DECISION_INVALID';
   validationErrors: readonly string[];
   numericValuesFrozen: false;
   frozenBusinessToleranceArtifactProduced: false;
@@ -91,6 +109,20 @@ export interface PublicForwardPartialFillBusinessToleranceDecisionEvidence {
   productionAuthority: false;
   digest: string;
 }
+
+const GOVERNANCE_ERROR_CODES = new Set([
+  'GOVERNANCE_MODEL_REQUIRED',
+  'GOVERNANCE_MODEL_INVALID',
+  'OWNER_IDENTITY_REQUIRED',
+  'SOLE_OWNER_ATTESTATION_REQUIRED',
+  'SOLE_OWNER_APPROVER_IDENTITY_MISMATCH',
+  'SOLE_OWNER_INDEPENDENT_REVIEW_CONTRADICTION',
+  'MULTI_APPROVER_DISTINCTNESS_REQUIRED',
+  'GOVERNANCE_MODEL_CONTRADICTION',
+  'HUMAN_FINAL_AUTHORITY_REQUIRED',
+  'PLACEHOLDER_APPROVER_FORBIDDEN',
+  'SINGLE_APPROVER_SELF_AUTHORIZATION_FORBIDDEN',
+]);
 
 function assertNonEmpty(value: string, field: string): void {
   if (value.trim().length === 0) throw new Error(`${field}_MISSING`);
@@ -108,6 +140,77 @@ function canonicalize(value: unknown): unknown {
       .map(([key, entry]) => [key, canonicalize(entry)]));
   }
   return value;
+}
+
+function normalizeIdentity(value: string | null | undefined): string | null {
+  const normalized = value?.trim();
+  return normalized ? normalized : null;
+}
+
+function isForbiddenHumanIdentity(value: string | null | undefined): boolean {
+  const normalized = normalizeIdentity(value);
+  if (!normalized) return false;
+  if (/^<[^>]+>$/.test(normalized)) return true;
+  return /^(?:AI(?:[_ -].*)?|BOT(?:[_ -].*)?|CHATGPT(?:[_ -].*)?|SYSTEM(?:[_ -].*)?|COMMAND(?:[_ -]?\d+)?|PENDING(?:[_ -].*)?|TBD|UNKNOWN|NONE)$/i.test(normalized);
+}
+
+function pushUnique(errors: string[], error: string): void {
+  if (!errors.includes(error)) errors.push(error);
+}
+
+function validateHumanIdentity(value: string | null | undefined, missingError: string, errors: string[]): void {
+  if (!normalizeIdentity(value)) {
+    pushUnique(errors, missingError);
+    return;
+  }
+  if (isForbiddenHumanIdentity(value)) pushUnique(errors, 'PLACEHOLDER_APPROVER_FORBIDDEN');
+}
+
+function validateGovernance(
+  input: PublicForwardPartialFillBusinessToleranceHumanInput,
+  errors: string[],
+): void {
+  const governanceModel = input.governanceModel?.trim();
+  if (!governanceModel) {
+    pushUnique(errors, 'GOVERNANCE_MODEL_REQUIRED');
+    return;
+  }
+  if (!PUBLIC_FORWARD_PARTIAL_FILL_BUSINESS_TOLERANCE_GOVERNANCE_MODELS.includes(
+    governanceModel as PublicForwardPartialFillBusinessToleranceGovernanceModel,
+  )) {
+    pushUnique(errors, 'GOVERNANCE_MODEL_INVALID');
+    return;
+  }
+
+  validateHumanIdentity(input.ownerIdentity, 'OWNER_IDENTITY_REQUIRED', errors);
+  if (input.humanFinalAuthority !== true) pushUnique(errors, 'HUMAN_FINAL_AUTHORITY_REQUIRED');
+
+  const ownerIdentity = normalizeIdentity(input.ownerIdentity);
+  const releaseApprover = normalizeIdentity(input.releaseApprover);
+  const riskApprover = normalizeIdentity(input.riskApprover);
+  const settlementReviewer = normalizeIdentity(input.settlementReviewer);
+
+  if (governanceModel === 'SOLE_OWNER_SELF_APPROVAL') {
+    if (input.soleOwnerSelfApproval !== true) pushUnique(errors, 'SOLE_OWNER_ATTESTATION_REQUIRED');
+    if (input.independentReview !== false || input.independentReviewRequired !== false) {
+      pushUnique(errors, 'SOLE_OWNER_INDEPENDENT_REVIEW_CONTRADICTION');
+    }
+    if (ownerIdentity && releaseApprover && riskApprover && settlementReviewer
+      && (releaseApprover !== ownerIdentity || riskApprover !== ownerIdentity || settlementReviewer !== ownerIdentity)) {
+      pushUnique(errors, 'SOLE_OWNER_APPROVER_IDENTITY_MISMATCH');
+    }
+    return;
+  }
+
+  if (input.soleOwnerSelfApproval !== false
+    || input.independentReview !== true
+    || input.independentReviewRequired !== true) {
+    pushUnique(errors, 'GOVERNANCE_MODEL_CONTRADICTION');
+  }
+  if (releaseApprover && riskApprover && releaseApprover === riskApprover) {
+    pushUnique(errors, 'MULTI_APPROVER_DISTINCTNESS_REQUIRED');
+    pushUnique(errors, 'SINGLE_APPROVER_SELF_AUTHORIZATION_FORBIDDEN');
+  }
 }
 
 export function computePublicForwardPartialFillBusinessToleranceDecisionEvidenceDigest(
@@ -132,13 +235,14 @@ export function validatePublicForwardPartialFillBusinessToleranceHumanInput(
     if (decision.value === null || !Number.isFinite(decision.value)) errors.push(`${key}_VALUE_MISSING_OR_INVALID`);
     if (!decision.unit?.trim()) errors.push(`${key}_UNIT_MISSING`);
   }
-  if (!input.releaseApprover?.trim()) errors.push('RELEASE_APPROVER_MISSING');
-  if (!input.riskApprover?.trim()) errors.push('RISK_APPROVER_MISSING');
-  if (!input.settlementReviewer?.trim()) errors.push('SETTLEMENT_REVIEWER_MISSING');
+
+  validateHumanIdentity(input.releaseApprover, 'RELEASE_APPROVER_MISSING', errors);
+  validateHumanIdentity(input.riskApprover, 'RISK_APPROVER_MISSING', errors);
+  validateHumanIdentity(input.settlementReviewer, 'SETTLEMENT_REVIEWER_MISSING', errors);
+  validateGovernance(input, errors);
+
   if (!input.decisionBasisReference?.trim()) errors.push('DECISION_BASIS_REFERENCE_MISSING');
   if (!input.approvalTimestamp?.trim() || Number.isNaN(Date.parse(input.approvalTimestamp))) errors.push('APPROVAL_TIMESTAMP_MISSING_OR_INVALID');
-  if (input.releaseApprover?.trim() && input.riskApprover?.trim()
-    && input.releaseApprover.trim() === input.riskApprover.trim()) errors.push('SINGLE_APPROVER_SELF_AUTHORIZATION_FORBIDDEN');
   if (input.declarations.profitabilityOutcomeConsulted !== false) errors.push('PROFITABILITY_OUTCOME_CONSULTED_FORBIDDEN');
   if (input.declarations.currentN1UsedToSelectValues !== false) errors.push('CURRENT_N1_VALUE_SELECTION_FORBIDDEN');
   if (input.declarations.aiNumericAuthority !== 'NONE') errors.push('AI_NUMERIC_AUTHORITY_FORBIDDEN');
@@ -169,13 +273,22 @@ export function buildPublicForwardPartialFillBusinessToleranceDecisionEvidence(
 
   const validationErrors = validatePublicForwardPartialFillBusinessToleranceHumanInput(humanInput);
   const complete = validationErrors.length === 0;
+  const governanceInvalid = validationErrors.some((error) => GOVERNANCE_ERROR_CODES.has(error));
   const body: Omit<PublicForwardPartialFillBusinessToleranceDecisionEvidence, 'digest'> = {
     evidenceVersion: PUBLIC_FORWARD_PARTIAL_FILL_BUSINESS_TOLERANCE_DECISION_EVIDENCE_VERSION,
     context,
     humanInput,
     validationStatus: complete ? 'COMPLETE_AWAITING_FREEZE' : 'INCOMPLETE',
-    firstZero: complete ? null : 'BUSINESS_TOLERANCE_VALUES_NOT_APPROVED',
-    rootCauseClass: complete ? null : 'HUMAN_RISK_NUMERIC_DECISION_MISSING',
+    firstZero: complete
+      ? null
+      : governanceInvalid
+        ? 'BUSINESS_TOLERANCE_GOVERNANCE_NOT_APPROVED'
+        : 'BUSINESS_TOLERANCE_VALUES_NOT_APPROVED',
+    rootCauseClass: complete
+      ? null
+      : governanceInvalid
+        ? 'HUMAN_GOVERNANCE_DECISION_INVALID'
+        : 'HUMAN_RISK_NUMERIC_DECISION_MISSING',
     validationErrors,
     numericValuesFrozen: false,
     frozenBusinessToleranceArtifactProduced: false,
