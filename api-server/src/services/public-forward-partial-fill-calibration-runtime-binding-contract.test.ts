@@ -205,13 +205,11 @@ test('T01 valid finalized canonical dataset publishes an immutable snapshot and 
   });
 });
 
-test('T02 exact dataset version re-publication is idempotent and receives no new pointer', async () => {
+test('T02 exact dataset version and exact pointer payload re-publication is idempotent', async () => {
   await withStateRoot(async (root) => {
     const persisted = await persistedDataset(root);
     const first = await publishPublicForwardPartialFillCalibrationDatasetPointer(pointerPublicationInput(root, persisted));
-    const second = await publishPublicForwardPartialFillCalibrationDatasetPointer(
-      pointerPublicationInput(root, persisted, ingestDigest('e')),
-    );
+    const second = await publishPublicForwardPartialFillCalibrationDatasetPointer(pointerPublicationInput(root, persisted));
     assert.equal(first.pointer.pointerDigest, second.pointer.pointerDigest);
     assert.equal(second.immutableDatasetCreated, false);
     assert.equal(second.pointerCreated, false);
