@@ -39,8 +39,8 @@ jobs:
           bash -n research-production/deploy/activate-server.sh
           grep -q '/activate-research-production' .github/workflows/research-production-activation.yml
           grep -Fq "startsWith(github.event.comment.body, '/activate-research-production ')" .github/workflows/research-production-activation.yml
-          grep -Fq 'github.event.issue.number == 838' .github/workflows/research-production-activation.yml
-          test "$(grep -Fc 'issue_number: 838' .github/workflows/research-production-activation.yml)" -eq 2
+          test "$(grep -Ec 'github[.]event[.]issue[.]number == 8[3]8' .github/workflows/research-production-activation.yml)" -eq 1
+          test "$(grep -Ec 'issue_number: 8[3]8' .github/workflows/research-production-activation.yml)" -eq 2
           if grep -Eq 'github[.]event[.]issue[.]number == 6[6]0' .github/workflows/research-production-activation.yml; then
             echo 'Activation command routing regressed to archived Hub #660.' >&2
             exit 1
