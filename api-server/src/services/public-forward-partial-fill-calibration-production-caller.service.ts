@@ -3,6 +3,9 @@ import {
   type PublicForwardPartialFillProductionReaderInput,
   type PublicForwardPartialFillProductionSplitAuditReadback,
 } from './public-forward-partial-fill-calibration-production-reader.service';
+import {
+  resolvePublicForwardPartialFillCalibrationRuntimeBinding,
+} from './public-forward-partial-fill-calibration-runtime-binding-resolver.service';
 
 export const PUBLIC_FORWARD_PARTIAL_FILL_PRODUCTION_CALLER_VERSION =
   'public-forward-partial-fill-calibration-production-caller-v1' as const;
@@ -41,6 +44,13 @@ const ENV_BINDINGS = Object.freeze({
   expectedDatasetDigest: 'PARTIAL_FILL_CANONICAL_DATASET_DIGEST',
 } as const);
 
+const AUTHORITATIVE_RUNTIME_BINDINGS = Object.freeze({
+  stateRoot: 'RESEARCH_STATE_ROOT',
+  releaseBindingRef: 'PARTIAL_FILL_RELEASE_BINDING_REF',
+  releaseBindingDigest: 'PARTIAL_FILL_RELEASE_BINDING_DIGEST',
+  runtimeReleaseSha: 'DEPLOY_SHA',
+} as const);
+
 type RuntimeEnvironment = Readonly<Record<string, string | undefined>>;
 
 type CallerSafetyEnvelope = Readonly<{
@@ -60,7 +70,10 @@ type CallerSafetyEnvelope = Readonly<{
 export type PublicForwardPartialFillProductionCallerBlocked = Readonly<{
   callerVersion: typeof PUBLIC_FORWARD_PARTIAL_FILL_PRODUCTION_CALLER_VERSION;
   status: 'BLOCKED';
-  blocker: 'NOT_EVALUABLE_RUNTIME_BINDING_MISSING' | 'CANONICAL_READER_BLOCKED';
+  blocker:
+    | 'NOT_EVALUABLE_RUNTIME_BINDING_MISSING'
+    | 'RUNTIME_BINDING_NOT_EVALUABLE'
+    | 'CANONICAL_READER_BLOCKED';
   missingBindings: readonly string[];
   readerError: string | null;
   productionCallerConnected: boolean;
@@ -105,6 +118,18 @@ function missingBindingResult(missingBindings: readonly string[]): PublicForward
   });
 }
 
+function runtimeBindingBlockedResult(error: unknown): PublicForwardPartialFillProductionCallerBlocked {
+  return Object.freeze({
+    callerVersion: PUBLIC_FORWARD_PARTIAL_FILL_PRODUCTION_CALLER_VERSION,
+    status: 'BLOCKED' as const,
+    blocker: 'RUNTIME_BINDING_NOT_EVALUABLE' as const,
+    missingBindings: Object.freeze([]),
+    readerError: error instanceof Error ? error.message : String(error),
+    productionCallerConnected: false,
+    ...safetyEnvelope(),
+  });
+}
+
 function readerBlockedResult(error: unknown): PublicForwardPartialFillProductionCallerBlocked {
   return Object.freeze({
     callerVersion: PUBLIC_FORWARD_PARTIAL_FILL_PRODUCTION_CALLER_VERSION,
@@ -113,6 +138,19 @@ function readerBlockedResult(error: unknown): PublicForwardPartialFillProduction
     missingBindings: Object.freeze([]),
     readerError: error instanceof Error ? error.message : String(error),
     productionCallerConnected: true,
+    ...safetyEnvelope(),
+  });
+}
+
+function connectedResult(
+  readerResult: PublicForwardPartialFillProductionSplitAuditReadback,
+): PublicForwardPartialFillProductionCallerConnected {
+  const { productionCallerConnected: _readerDoesNotOwnCallerConnection, ...readback } = readerResult;
+  return Object.freeze({
+    callerVersion: PUBLIC_FORWARD_PARTIAL_FILL_PRODUCTION_CALLER_VERSION,
+    status: 'READBACK' as const,
+    productionCallerConnected: true as const,
+    readback: Object.freeze(readback),
     ...safetyEnvelope(),
   });
 }
@@ -136,6 +174,10 @@ function resolveReaderInput(environment: RuntimeEnvironment):
   });
 }
 
+/**
+ * Compatibility readback retained for the merged #856 regression contract.
+ * The real startup entrypoint below does not use these duplicate dataset authorities.
+ */
 export async function callPublicForwardPartialFillCalibrationReaderFromProduction(
   environment: RuntimeEnvironment,
 ): Promise<PublicForwardPartialFillProductionCallerResult> {
@@ -148,14 +190,48 @@ export async function callPublicForwardPartialFillCalibrationReaderFromProductio
       productionPolicy: null,
       regimeBindings: null,
     });
-    const { productionCallerConnected: _readerDoesNotOwnCallerConnection, ...readback } = readerResult;
-    return Object.freeze({
-      callerVersion: PUBLIC_FORWARD_PARTIAL_FILL_PRODUCTION_CALLER_VERSION,
-      status: 'READBACK' as const,
-      productionCallerConnected: true as const,
-      readback: Object.freeze(readback),
-      ...safetyEnvelope(),
+    return connectedResult(readerResult);
+  } catch (error) {
+    return readerBlockedResult(error);
+  }
+}
+
+export async function callPublicForwardPartialFillCalibrationReaderFromAuthoritativeRuntimeBinding(
+  environment: RuntimeEnvironment,
+): Promise<PublicForwardPartialFillProductionCallerResult> {
+  const missingBindings = Object.values(AUTHORITATIVE_RUNTIME_BINDINGS)
+    .filter((name) => !environment[name]?.trim());
+  if (missingBindings.length > 0) return missingBindingResult(missingBindings);
+
+  let resolved;
+  try {
+    resolved = await resolvePublicForwardPartialFillCalibrationRuntimeBinding({
+      stateRoot: environment[AUTHORITATIVE_RUNTIME_BINDINGS.stateRoot]!.trim(),
+      releaseBindingRef: environment[AUTHORITATIVE_RUNTIME_BINDINGS.releaseBindingRef]!.trim(),
+      releaseBindingDigest: environment[AUTHORITATIVE_RUNTIME_BINDINGS.releaseBindingDigest]!.trim(),
+      runtimeReleaseSha: environment[AUTHORITATIVE_RUNTIME_BINDINGS.runtimeReleaseSha]!.trim(),
     });
+  } catch (error) {
+    return runtimeBindingBlockedResult(error);
+  }
+
+  try {
+    const readerResult = await readAndConnectPublicForwardPartialFillCalibrationSplitAudit({
+      reader: {
+        stateRoot: resolved.stateRoot,
+        storeContract: resolved.storeContract,
+        sampleClass: resolved.sampleClass,
+        collectorCodeSha: resolved.collectorCodeSha,
+        expectedDatasetIdentity: resolved.datasetIdentity,
+        expectedDatasetDigest: resolved.datasetDigest,
+        datasetRelativePath: resolved.datasetRelativePath,
+        expectedDatasetBytesDigest: resolved.datasetBytesDigest,
+        runtimeBindingSource: resolved.runtimeBindingSource,
+      },
+      productionPolicy: null,
+      regimeBindings: null,
+    });
+    return connectedResult(readerResult);
   } catch (error) {
     return readerBlockedResult(error);
   }
@@ -164,5 +240,5 @@ export async function callPublicForwardPartialFillCalibrationReaderFromProductio
 export function runPublicForwardPartialFillCalibrationProductionReadback(
   environment: RuntimeEnvironment = process.env,
 ): Promise<PublicForwardPartialFillProductionCallerResult> {
-  return callPublicForwardPartialFillCalibrationReaderFromProduction(environment);
+  return callPublicForwardPartialFillCalibrationReaderFromAuthoritativeRuntimeBinding(environment);
 }
