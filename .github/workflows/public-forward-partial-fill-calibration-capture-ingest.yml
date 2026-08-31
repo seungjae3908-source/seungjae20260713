@@ -1,0 +1,89 @@
+name: Public Forward Partial Fill Capture Dataset Ingest Validation
+
+on:
+  pull_request:
+    paths:
+      - 'api-server/src/services/public-forward-partial-fill-calibration-capture-ingest.service.ts'
+      - 'api-server/src/services/public-forward-partial-fill-calibration-capture-ingest.service.test.ts'
+      - 'api-server/src/scripts/ingest-public-forward-partial-fill-calibration-capture.ts'
+      - '.github/workflows/public-forward-partial-fill-calibration-capture-ingest.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck API server
+        run: pnpm --dir api-server run typecheck
+
+      - name: Bundle focused ingest tests
+        run: >-
+          pnpm --dir api-server exec esbuild
+          src/services/public-forward-partial-fill-calibration-capture-ingest.service.test.ts
+          --bundle --platform=node --format=cjs --target=node20
+          --outfile=/tmp/public-forward-partial-fill-calibration-capture-ingest.test.cjs
+
+      - name: Run focused ingest tests
+        run: node --test /tmp/public-forward-partial-fill-calibration-capture-ingest.test.cjs
+
+      - name: Bundle CLI contract
+        run: >-
+          pnpm --dir api-server exec esbuild
+          src/scripts/ingest-public-forward-partial-fill-calibration-capture.ts
+          --bundle --platform=node --format=cjs --target=node20
+          --outfile=/tmp/ingest-public-forward-partial-fill-calibration-capture.cjs
+
+      - name: Verify CLI is inert without explicit runtime inputs
+        run: node /tmp/ingest-public-forward-partial-fill-calibration-capture.cjs --help
+
+      - name: Verify fail-closed ingest invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          SERVICE='api-server/src/services/public-forward-partial-fill-calibration-capture-ingest.service.ts'
+          CLI='api-server/src/scripts/ingest-public-forward-partial-fill-calibration-capture.ts'
+          grep -Fq "capture.captureStatus !== 'PRESENT'" "$SERVICE"
+          grep -Fq "observation.sampleClass !== 'FORWARD_NATURAL_SAMPLE'" "$SERVICE"
+          grep -Fq 'persistPublicForwardPartialFillCalibrationDataset' "$SERVICE"
+          grep -Fq 'ARTIFACT_ID_EXPECTATION_MISMATCH' "$SERVICE"
+          grep -Fq 'ARTIFACT_DIGEST_EXPECTATION_MISMATCH' "$SERVICE"
+          grep -Fq 'STATE_ROOT_OVERLAPS_PROTECTED_APPLICATION_STORAGE' "$SERVICE"
+          grep -Fq 'STATE_ROOT_OVERLAPS_PROTECTED_RESEARCH_CHECKOUT' "$SERVICE"
+          grep -Fq "'/opt/stock-app-data'" "$SERVICE"
+          grep -Fq "'/srv/stock-app'" "$SERVICE"
+          grep -Fq "'/var/lib/stock-app'" "$SERVICE"
+          grep -Fq 'canonicalDatasetCreditApplied: persisted.insertedObservationCount === 1' "$SERVICE"
+          grep -Fq 'duplicateCreditEvaluated: true' "$SERVICE"
+          grep -Fq 'calibrationArtifactProduced: false' "$SERVICE"
+          grep -Fq 'partialFillCostPresent: false' "$SERVICE"
+          grep -Fq 'fullCostReady: false' "$SERVICE"
+          grep -Fq "executionAuthority: 'NONE'" "$SERVICE"
+          grep -Fq -- '--research-repo-root' "$CLI"
+          grep -Fq -- '--expected-artifact-id' "$CLI"
+          grep -Fq -- '--expected-artifact-digest' "$CLI"
+          grep -Fq 'if (!isAbsolute(stateRoot))' "$CLI"
+          grep -Fq 'if (!isAbsolute(researchRepoRoot))' "$CLI"
+          if grep -Eq 'fetch\(|axios|PRIVATE_API|ORDER_SUBMIT|orderSubmitted: true|LIVE_TRADING=true' "$CLI"; then
+            echo 'Ingest CLI contains forbidden network/private/live execution behavior.' >&2
+            exit 1
+          fi
