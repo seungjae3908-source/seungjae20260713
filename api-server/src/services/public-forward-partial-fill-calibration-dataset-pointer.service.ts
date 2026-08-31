@@ -168,16 +168,16 @@ function immutableDatasetRelativePath(datasetDigest: string): string {
   return `forward/partial-fill-calibration-v1/immutable-datasets/${datasetDigest}/dataset.json`;
 }
 
-function pointerRelativePath(datasetDigest: string): string {
-  return `forward/partial-fill-calibration-v1/dataset-pointers/${datasetDigest}.json`;
+function pointerRelativePath(datasetDigest: string, sourceIngestReceiptDigest: string): string {
+  return `forward/partial-fill-calibration-v1/dataset-pointers/${datasetDigest}/${sourceIngestReceiptDigest}.json`;
 }
 
 function expectedMutableDatasetRelativePath(dataset: PublicForwardPartialFillCalibrationDataset): string {
   return `forward/partial-fill-calibration-v1/${dataset.sampleClass.toLowerCase()}/${dataset.collectorCodeSha}/dataset.json`;
 }
 
-function expectedPointerIdentity(datasetDigest: string): string {
-  return `${PUBLIC_FORWARD_PARTIAL_FILL_CALIBRATION_DATASET_POINTER_VERSION}:${datasetDigest}`;
+function expectedPointerIdentity(datasetDigest: string, sourceIngestReceiptDigest: string): string {
+  return `${PUBLIC_FORWARD_PARTIAL_FILL_CALIBRATION_DATASET_POINTER_VERSION}:${datasetDigest}:${sourceIngestReceiptDigest}`;
 }
 
 async function atomicCreateOnly(targetPath: string, bytes: Buffer, conflictCode: string): Promise<boolean> {
@@ -252,8 +252,10 @@ export function verifyPublicForwardPartialFillCalibrationDatasetPointer(
 
   if (exactDigest(candidate.datasetDigest)) {
     if (candidate.datasetRelativePath !== immutableDatasetRelativePath(candidate.datasetDigest)) add('POINTER_LOCATOR_INVALID');
-    if (candidate.pointerRelativePath !== pointerRelativePath(candidate.datasetDigest)) add('POINTER_LOCATOR_INVALID');
-    if (candidate.pointerIdentity !== expectedPointerIdentity(candidate.datasetDigest)) add('POINTER_SCHEMA_INVALID');
+  }
+  if (exactDigest(candidate.datasetDigest) && exactDigest(candidate.sourceIngestReceiptDigest)) {
+    if (candidate.pointerRelativePath !== pointerRelativePath(candidate.datasetDigest, candidate.sourceIngestReceiptDigest)) add('POINTER_LOCATOR_INVALID');
+    if (candidate.pointerIdentity !== expectedPointerIdentity(candidate.datasetDigest, candidate.sourceIngestReceiptDigest)) add('POINTER_SCHEMA_INVALID');
   }
 
   if (exactDigest(candidate.pointerDigest)) {
@@ -367,7 +369,7 @@ export async function publishPublicForwardPartialFillCalibrationDatasetPointer(i
   if (immutableMeta.isSymbolicLink() || !immutableMeta.isFile()) throw new Error('POINTER_LOCATOR_INVALID');
   if (sha256Bytes(await readFile(immutablePath)) !== datasetBytesDigest) throw new Error('DATASET_BYTES_DIGEST_MISMATCH');
 
-  const pointerPathRelative = pointerRelativePath(input.dataset.datasetDigest);
+  const pointerPathRelative = pointerRelativePath(input.dataset.datasetDigest, input.sourceIngestReceiptDigest);
   const pointerPath = resolveRelativeInside(root, pointerPathRelative, 'POINTER_LOCATOR_INVALID');
   await mkdir(resolve(pointerPath, '..'), { recursive: true });
 
@@ -383,7 +385,7 @@ export async function publishPublicForwardPartialFillCalibrationDatasetPointer(i
     sourceIngestReceiptDigest: input.sourceIngestReceiptDigest,
     sourceIngestReceiptRef: input.sourceIngestReceiptRef,
     publicationProvenance: Object.freeze({ ...input.publicationProvenance }),
-    pointerIdentity: expectedPointerIdentity(input.dataset.datasetDigest),
+    pointerIdentity: expectedPointerIdentity(input.dataset.datasetDigest, input.sourceIngestReceiptDigest),
     pointerRelativePath: pointerPathRelative,
     ...(input.publishedAtMs === undefined ? {} : { publishedAtMs: input.publishedAtMs }),
   }) as Omit<PublicForwardPartialFillCalibrationDatasetPointer, 'pointerDigest'>;
