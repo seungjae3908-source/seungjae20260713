@@ -207,6 +207,10 @@ test('valid canonical dataset is read through a read-only identity/digest-bound 
     assert.equal(readback.dataset.datasetIdentity, persisted.dataset.datasetIdentity);
     assert.equal(readback.dataset.datasetDigest, persisted.dataset.datasetDigest);
     assert.equal(readback.dataset.observationCount, 1);
+    assert.equal(readback.dataset.observations[0].observation.actualFillObserved, false);
+    assert.equal(readback.dataset.observations[0].observation.actualFillFraction, null);
+    assert.equal(readback.dataset.observations[0].observation.queuePositionKnown, false);
+    assert.equal(readback.dataset.observations[0].observation.partialFillCostPercent, null);
     assert.equal(Object.isFrozen(readback.dataset), true);
     assert.equal(Object.isFrozen(readback.dataset.observations), true);
     assert.equal(afterBytes, beforeBytes);
@@ -279,6 +283,7 @@ test('schema, sampleClass, collector SHA, dataset identity and dataset digest mi
     expected: RegExp;
   }>[] = [
     { name: 'schema', mutate: (raw) => { raw.schemaVersion = 'wrong-schema'; }, expected: /DATASET_SCHEMA_INVALID/u },
+    { name: 'storeContract', mutate: (raw) => { raw.storeContract = 'wrong-store-contract'; }, expected: /DATASET_STORE_CONTRACT_INVALID/u },
     { name: 'sampleClass', mutate: (raw) => { raw.sampleClass = 'CALIBRATION_RESEARCH_SAMPLE'; }, expected: /DATASET_SAMPLE_CLASS_MISMATCH/u },
     { name: 'collector', mutate: (raw) => { raw.collectorCodeSha = 'b'.repeat(40); }, expected: /DATASET_COLLECTOR_SHA_MISMATCH/u },
     { name: 'identity', mutate: (raw) => { raw.datasetIdentity = 'wrong-identity'; }, expected: /DATASET_IDENTITY_MISMATCH/u },
@@ -295,6 +300,21 @@ test('schema, sampleClass, collector SHA, dataset identity and dataset digest mi
       );
     });
   }
+});
+
+test('corrupt persisted observation digest fails closed', async () => {
+  await withPersistedDataset(async (root, persisted, datasetPath) => {
+    const raw = await writeTamperedDataset(datasetPath, (candidate) => {
+      const rows = candidate.observations as Array<Record<string, unknown>>;
+      rows[0].observationDigest = 'f'.repeat(64);
+    }, true);
+    await assert.rejects(
+      readPublicForwardPartialFillCalibrationDatasetReadOnly(canonicalReaderInput(root, persisted.dataset, {
+        expectedDatasetDigest: String(raw.datasetDigest),
+      })),
+      /OBSERVATION_DIGEST/u,
+    );
+  });
 });
 
 test('invalid persisted structure fails closed', async () => {
