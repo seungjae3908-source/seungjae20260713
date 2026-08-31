@@ -400,6 +400,8 @@ function positionIdentityFor(position) {
     signalId: position?.signalId ?? sample.signalId,
     market: position?.market ?? sample.market,
     symbol: position?.symbol ?? sample.symbol,
+    signalTimeframe: sample.timeframe,
+    horizon: sample.horizon,
     direction: position?.direction ?? sample.executionDirection,
     strategyId: position?.strategyId ?? sample.strategyId,
     strategyVersion: position?.strategyVersion ?? sample.strategyVersion,
@@ -410,7 +412,8 @@ function positionIdentityFor(position) {
   if ([
     value.positionId, value.paperSampleId, value.signalId, value.market, value.symbol, value.direction,
     value.strategyId, value.strategyVersion, value.parameterHash, value.costPolicyVersion,
-  ].some((item) => !nonEmpty(item)) || !immutableSha(value.researchCodeSha)) return null;
+  ].some((item) => !nonEmpty(item)) || !immutableSha(value.researchCodeSha)
+    || !nonEmpty(value.signalTimeframe) || !positiveInteger(value.horizon)) return null;
   return Object.freeze({ ...value, researchCodeSha: value.researchCodeSha.toLowerCase() });
 }
 
@@ -628,7 +631,7 @@ function naturalObservationBlockers({ observation, binding, laneMarket, cycleIde
   if (!identity) return ["POSITION_OBSERVATION_OPEN_POSITION_IDENTITY_MISSING"];
   if (!nonEmpty(observation?.observationId)) blockers.push("POSITION_OBSERVATION_ID_REQUIRED");
   for (const key of [
-    "positionId", "paperSampleId", "signalId", "market", "symbol", "direction",
+    "positionId", "paperSampleId", "signalId", "market", "symbol", "direction", "signalTimeframe", "horizon",
     "strategyId", "strategyVersion", "parameterHash", "costPolicyVersion",
   ]) {
     if (observation?.[key] !== identity[key]) blockers.push(`POSITION_OBSERVATION_${key.toUpperCase()}_MISMATCH`);
@@ -932,6 +935,7 @@ export async function runScheduledPaperCycle({
       cycle: {
         cycleId: cycle.cycleId,
         evaluatedAtMs: evidenceEvaluatedAtMs,
+        identity: state.identity,
       },
       candidates: lanes.flatMap((lane) => lane.result.candidates),
       exits: lanes.flatMap((lane) => lane.result.exits),
