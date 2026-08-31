@@ -305,6 +305,72 @@ test('scope universe changes require new version, digest and prospective cohort'
   assert.ok(result.blockers.includes('SCOPE_UNIVERSE_DIGEST_MISMATCH'));
 });
 
+test('missing and undeclared venue, symbol, side, bucket and regimes fail closed', () => {
+  const mutations: Array<[string, Record<string, unknown>]> = [
+    ['missing venue', { sourceIdentity: '' }],
+    ['unknown venue', { sourceIdentity: 'TEST_ONLY_UNDECLARED_VENUE' }],
+    ['missing symbol', { symbol: '' }],
+    ['unsupported symbol', { symbol: 'TEST_ONLY_UNDECLARED_SYMBOL' }],
+    ['missing side', { side: '' }],
+    ['invalid side', { side: 'BUY' }],
+    ['opposite side', { side: 'SHORT' }],
+    ['missing bucket', { quantityNotionalBucketIdentity: '' }],
+    ['unknown bucket', { quantityNotionalBucketIdentity: 'TEST_ONLY_UNDECLARED_BUCKET' }],
+    ['missing volatility regime', { volatilityRegimeIdentity: '' }],
+    ['unknown volatility baseline', { volatilityRegimeIdentity: 'NORMAL' }],
+    ['missing liquidity regime', { liquidityRegimeIdentity: '' }],
+    ['unknown liquidity baseline', { liquidityRegimeIdentity: 'NORMAL' }],
+  ];
+  for (const [label, mutation] of mutations) {
+    const base = input();
+    const result = buildPublicForwardPartialFillProductionPolicyManifestCandidate({
+      ...base,
+      splitPolicy: {
+        ...base.splitPolicy,
+        scopeMinimums: [{ ...base.splitPolicy.scopeMinimums[0], ...mutation }],
+      },
+    } as PublicForwardPartialFillProductionPolicyManifestInput);
+    assert.equal(result.status, 'BLOCKED_POLICY', label);
+    assert.ok(result.blockers.includes('SCOPE_IDENTITY_INVALID')
+      || result.blockers.includes('SPLIT_SCOPE_UNIVERSE_MISMATCH'), label);
+  }
+});
+
+test('scope identity, version, digest and old-cohort reuse fail closed', () => {
+  const base = input();
+  const result = buildPublicForwardPartialFillProductionPolicyManifestCandidate({
+    ...base,
+    scopeUniverse: {
+      ...base.scopeUniverse,
+      identity: '',
+      version: 'wrong-version',
+      digest: sha256('wrong-scope-universe'),
+      effectiveCohortStartMs: base.effectiveCohortStartMs - 1,
+    },
+  });
+  assert.ok(result.blockers.includes('SCOPE_UNIVERSE_IDENTITY_MISMATCH'));
+  assert.ok(result.blockers.includes('SCOPE_UNIVERSE_VERSION_MISMATCH'));
+  assert.ok(result.blockers.includes('SCOPE_UNIVERSE_DIGEST_MISMATCH'));
+  assert.ok(result.blockers.includes('SCOPE_UNIVERSE_COHORT_MISMATCH'));
+  assert.equal(result.manifest, null);
+});
+
+test('absent numeric minimums receive no fallback or policy authority', () => {
+  const base = input();
+  const result = buildPublicForwardPartialFillProductionPolicyManifestCandidate({
+    ...base,
+    splitPolicy: {
+      ...base.splitPolicy,
+      overallMinimums: undefined,
+      scopeMinimums: [{ ...base.splitPolicy.scopeMinimums[0], minimums: undefined }],
+    },
+  } as unknown as PublicForwardPartialFillProductionPolicyManifestInput);
+  assert.equal(result.status, 'BLOCKED_POLICY');
+  assert.ok(result.blockers.includes('OVERALL_MINIMUMS_INVALID'));
+  assert.ok(result.blockers.includes('SCOPE_MINIMUMS_INVALID'));
+  assert.equal(result.manifest, null);
+});
+
 test('safety contract forbids authority, economic credit, execution and threshold invention', () => {
   assert.deepEqual(PUBLIC_FORWARD_PARTIAL_FILL_PRODUCTION_POLICY_MANIFEST_SAFETY, {
     candidateOnly: true,
