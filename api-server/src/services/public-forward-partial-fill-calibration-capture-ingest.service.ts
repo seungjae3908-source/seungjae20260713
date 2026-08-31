@@ -6,6 +6,7 @@ import {
   PUBLIC_FORWARD_PARTIAL_FILL_CALIBRATION_STORE_CONTRACT,
   persistPublicForwardPartialFillCalibrationDataset,
 } from './public-forward-partial-fill-calibration-dataset-store.service';
+import { publishPublicForwardPartialFillCalibrationDatasetPointer } from './public-forward-partial-fill-calibration-dataset-pointer.service';
 
 export const PUBLIC_FORWARD_PARTIAL_FILL_CAPTURE_RECEIPT_VERSION = 'public-forward-partial-fill-capture-receipt-v1' as const;
 export const PUBLIC_FORWARD_PARTIAL_FILL_CAPTURE_ARTIFACT_RECEIPT_VERSION = 'public-forward-partial-fill-capture-artifact-receipt-v1' as const;
@@ -248,5 +249,24 @@ export async function ingestPublicForwardPartialFillCalibrationCapture(input: Re
     liveTrading: false as const,
     orderSubmitted: false as const,
   });
-  return Object.freeze({ ...body, receiptDigest: computePublicForwardPartialFillReceiptDigest(body) });
+  const result = Object.freeze({ ...body, receiptDigest: computePublicForwardPartialFillReceiptDigest(body) });
+
+  await publishPublicForwardPartialFillCalibrationDatasetPointer({
+    stateRoot: safeStateRoot,
+    researchRepoRoot: input.researchRepoRoot,
+    dataset: persisted.dataset,
+    mutableDatasetRelativePath: persisted.datasetRelativePath,
+    sourceIngestReceiptDigest: result.receiptDigest,
+    sourceIngestReceiptRef: `ingest-receipt:sha256:${result.receiptDigest}`,
+    publicationProvenance: Object.freeze({
+      authority: 'CANONICAL_INGEST_PRODUCER' as const,
+      repository: expectedRepository,
+      exactMainSha: expectedMainSha,
+      captureRunId,
+      captureRunAttempt,
+      artifactId,
+    }),
+  });
+
+  return result;
 }
