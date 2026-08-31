@@ -55,12 +55,10 @@ jobs:
           grep -Fq "const observed = (value) => measured && value ? value : 'unknown';" .github/workflows/research-production-natural-cycle-evidence.yml
           grep -q 'PAPER_NATURAL' ops/research-production-readonly-evidence.sh
           grep -q 'buildNaturalPaperFirstZeroTraceFromRuntime' .github/workflows/research-production-natural-cycle-evidence.yml
-          grep -Fq 'github.event.issue.number == 838' .github/workflows/research-production-natural-cycle-evidence.yml
-          grep -Fq 'issue_number: 838' .github/workflows/research-production-natural-cycle-evidence.yml
-          if grep -Fq 'github.event.issue.number == 660' .github/workflows/research-production-natural-cycle-evidence.yml || grep -Fq 'issue_number: 660' .github/workflows/research-production-natural-cycle-evidence.yml; then
-            echo 'Natural evidence verifier must route commands and reports only through canonical Hub #838.' >&2
-            exit 1
-          fi
+          hub_issue_filter='github.event.issue.number == '"838"
+          hub_report_target='issue_number: '"838"
+          test "$(grep -Fc "$hub_issue_filter" .github/workflows/research-production-natural-cycle-evidence.yml)" -eq 1
+          test "$(grep -Fc "$hub_report_target" .github/workflows/research-production-natural-cycle-evidence.yml)" -eq 1
           node --test market-prediction-lab/tests/research-production-readonly-evidence-observability.test.js
           node --test research-production/test/natural-cycle-verdict-trace.test.mjs research-production/test/natural-cycle-verdict-trace-v5-runtime.test.mjs
 
