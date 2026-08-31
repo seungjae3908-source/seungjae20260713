@@ -92,6 +92,7 @@ jobs:
           grep -Fq 'runtimeBindingSource' "$READER"
           grep -Fq 'publishPublicForwardPartialFillCalibrationReleaseBinding' "$BINDING"
           grep -Fq 'rollbackByNewBindingRequired: true' "$BINDING"
+          grep -Fq "cat > \"\$ENTRY\" <<'TS'" "$WORKFLOW"
 
           if grep -Eq '\b(readdir|opendir)\b' "$RESOLVER"; then
             echo 'Directory scanning is forbidden in the runtime resolver.' >&2
@@ -252,9 +253,9 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          ENTRY="$RUNNER_TEMP/publish-partial-fill-release-binding.ts"
-          cat > "$ENTRY" <<TS
-          import { publishPublicForwardPartialFillCalibrationReleaseBinding } from '${GITHUB_WORKSPACE}/api-server/src/services/public-forward-partial-fill-calibration-release-binding.service.ts';
+          ENTRY="$GITHUB_WORKSPACE/api-server/.phase-c-publish-entry.ts"
+          cat > "$ENTRY" <<'TS'
+          import { publishPublicForwardPartialFillCalibrationReleaseBinding } from './src/services/public-forward-partial-fill-calibration-release-binding.service.ts';
 
           async function main() {
             const required = [
@@ -309,6 +310,7 @@ jobs:
           pnpm --dir api-server exec esbuild "$ENTRY" \
             --bundle --platform=node --format=cjs --target=node20 \
             --outfile="$RUNNER_TEMP/publish-partial-fill-release-binding.cjs"
+          rm -f "$ENTRY"
 
       - name: Configure SSH for immutable publication transport
         shell: bash
