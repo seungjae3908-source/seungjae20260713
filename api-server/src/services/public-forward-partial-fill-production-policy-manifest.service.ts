@@ -55,6 +55,42 @@ export type PublicForwardPartialFillPolicyComponents = Readonly<
   Record<PublicForwardPartialFillPolicyComponentKey, PublicForwardPartialFillFrozenComponentRef>
 >;
 
+export type PublicForwardPartialFillScopeUniverseEntry = Readonly<{
+  market: 'CRYPTO_FUTURES';
+  sourceIdentity: string;
+  symbol: string;
+  side: 'LONG' | 'SHORT';
+  quantityNotionalBucketIdentity: string;
+  volatilityRegimeIdentity: string;
+  liquidityRegimeIdentity: string;
+}>;
+
+export type PublicForwardPartialFillScopeUniverse = Readonly<{
+  identity: string;
+  version: string;
+  frozenAtMs: number;
+  effectiveCohortStartMs: number;
+  entries: readonly PublicForwardPartialFillScopeUniverseEntry[];
+  crossSideExtrapolationAllowed: false;
+  crossSymbolExtrapolationAllowed: false;
+  crossVenueExtrapolationAllowed: false;
+  crossBucketExtrapolationAllowed: false;
+  missingRegimeBehavior: 'BLOCKED_UNKNOWN';
+  observedScopeSelectionAllowed: false;
+  changeRequiresNewVersion: true;
+  changeRequiresNewDigest: true;
+  changeRequiresNewCohort: true;
+  digest: string;
+}>;
+
+type PublicForwardPartialFillManifestScopeMinimum =
+  PublicForwardPartialFillSplitPolicy['scopeMinimums'][number] & Readonly<{ sourceIdentity: string }>;
+
+export type PublicForwardPartialFillManifestSplitPolicy = Omit<
+  PublicForwardPartialFillSplitPolicy,
+  'scopeMinimums'
+> & Readonly<{ scopeMinimums: readonly PublicForwardPartialFillManifestScopeMinimum[] }>;
+
 export type PublicForwardPartialFillProductionPolicyManifest = Readonly<{
   schemaVersion: typeof PUBLIC_FORWARD_PARTIAL_FILL_PRODUCTION_POLICY_MANIFEST_VERSION;
   kind: 'IMMUTABLE_PROSPECTIVE_PARTIAL_FILL_POLICY_CANDIDATE';
@@ -69,8 +105,9 @@ export type PublicForwardPartialFillProductionPolicyManifest = Readonly<{
   datasetStoreContract: typeof PUBLIC_FORWARD_PARTIAL_FILL_CALIBRATION_STORE_CONTRACT;
   collectorCodeSha: string;
   components: PublicForwardPartialFillPolicyComponents;
+  scopeUniverse: PublicForwardPartialFillScopeUniverse;
   regimeOwnerIdentity: string;
-  splitPolicy: PublicForwardPartialFillSplitPolicy;
+  splitPolicy: PublicForwardPartialFillManifestSplitPolicy;
   consumerIdentities: readonly string[];
   candidateStatus: 'CANDIDATE_COMPONENTS_VALIDATED';
   productionAuthorityConnected: false;
@@ -163,6 +200,13 @@ function exactDigest(value: unknown): boolean {
   return SHA256.test(String(value ?? '').trim().toLowerCase());
 }
 
+export function computePublicForwardPartialFillScopeUniverseDigest(
+  value: Omit<PublicForwardPartialFillScopeUniverse, 'digest'> | PublicForwardPartialFillScopeUniverse,
+): string {
+  const body = Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'digest'));
+  return createHash('sha256').update(JSON.stringify(canonicalize(body))).digest('hex');
+}
+
 function finitePositiveInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) > 0;
 }
@@ -210,7 +254,7 @@ function validateComponents(
 }
 
 function validateSplitPolicy(
-  policy: PublicForwardPartialFillSplitPolicy,
+  policy: PublicForwardPartialFillManifestSplitPolicy,
   input: PublicForwardPartialFillProductionPolicyManifestInput,
 ): string[] {
   const blockers: string[] = [];
@@ -247,6 +291,7 @@ function validateSplitPolicy(
     for (const scope of policy.scopeMinimums) {
       const key = [
         scope.market,
+        scope.sourceIdentity,
         scope.symbol,
         scope.side,
         scope.quantityNotionalBucketIdentity,
@@ -256,6 +301,7 @@ function validateSplitPolicy(
       if (scopeKeys.has(key)) blockers.push('DUPLICATE_SCOPE_MINIMUM');
       scopeKeys.add(key);
       if (scope.market !== 'CRYPTO_FUTURES'
+        || !nonEmpty(scope.sourceIdentity)
         || !nonEmpty(scope.symbol)
         || !['LONG', 'SHORT'].includes(scope.side)
         || !nonEmpty(scope.quantityNotionalBucketIdentity)
@@ -264,6 +310,60 @@ function validateSplitPolicy(
       if (!positiveMinimums(scope.minimums)) blockers.push('SCOPE_MINIMUMS_INVALID');
     }
   }
+  return blockers;
+}
+
+function scopeKey(scope: PublicForwardPartialFillScopeUniverseEntry): string {
+  return [scope.market, scope.sourceIdentity, scope.symbol, scope.side,
+    scope.quantityNotionalBucketIdentity, scope.volatilityRegimeIdentity,
+    scope.liquidityRegimeIdentity].join('\u0000');
+}
+
+function validateScopeUniverse(
+  universe: PublicForwardPartialFillScopeUniverse,
+  input: PublicForwardPartialFillProductionPolicyManifestInput,
+): string[] {
+  const blockers: string[] = [];
+  const component = input.components.scopeUniverse;
+  if (!universe || typeof universe !== 'object') return ['SCOPE_UNIVERSE_REQUIRED'];
+  if (!component) return ['POLICY_COMPONENT_MISSING:scopeUniverse'];
+  if (universe.identity !== component.identity) blockers.push('SCOPE_UNIVERSE_IDENTITY_MISMATCH');
+  if (universe.version !== component.version) blockers.push('SCOPE_UNIVERSE_VERSION_MISMATCH');
+  if (universe.frozenAtMs !== component.frozenAtMs) blockers.push('SCOPE_UNIVERSE_FROZEN_AT_MISMATCH');
+  if (universe.effectiveCohortStartMs !== input.effectiveCohortStartMs) {
+    blockers.push('SCOPE_UNIVERSE_COHORT_MISMATCH');
+  }
+  if (!exactDigest(universe.digest)
+    || universe.digest !== computePublicForwardPartialFillScopeUniverseDigest(universe)
+    || universe.digest !== component.digest) blockers.push('SCOPE_UNIVERSE_DIGEST_MISMATCH');
+  if (universe.crossSideExtrapolationAllowed !== false) blockers.push('CROSS_SIDE_EXTRAPOLATION_FORBIDDEN');
+  if (universe.crossSymbolExtrapolationAllowed !== false) blockers.push('CROSS_SYMBOL_EXTRAPOLATION_FORBIDDEN');
+  if (universe.crossVenueExtrapolationAllowed !== false) blockers.push('CROSS_VENUE_EXTRAPOLATION_FORBIDDEN');
+  if (universe.crossBucketExtrapolationAllowed !== false) blockers.push('CROSS_BUCKET_EXTRAPOLATION_FORBIDDEN');
+  if (universe.missingRegimeBehavior !== 'BLOCKED_UNKNOWN') blockers.push('MISSING_REGIME_MUST_BLOCK_UNKNOWN');
+  if (universe.observedScopeSelectionAllowed !== false) blockers.push('OBSERVED_SCOPE_SELECTION_FORBIDDEN');
+  if (universe.changeRequiresNewVersion !== true
+    || universe.changeRequiresNewDigest !== true
+    || universe.changeRequiresNewCohort !== true) blockers.push('SCOPE_UNIVERSE_SUPERSESSION_RULE_INVALID');
+  if (!Array.isArray(universe.entries) || universe.entries.length === 0) {
+    blockers.push('SCOPE_UNIVERSE_ENTRIES_REQUIRED');
+    return blockers;
+  }
+  const universeKeys = new Set<string>();
+  for (const entry of universe.entries) {
+    if (entry.market !== 'CRYPTO_FUTURES' || !nonEmpty(entry.sourceIdentity)
+      || !nonEmpty(entry.symbol) || !['LONG', 'SHORT'].includes(entry.side)
+      || !nonEmpty(entry.quantityNotionalBucketIdentity)
+      || !nonEmpty(entry.volatilityRegimeIdentity) || !nonEmpty(entry.liquidityRegimeIdentity)) {
+      blockers.push('SCOPE_UNIVERSE_ENTRY_INVALID');
+    }
+    const key = scopeKey(entry);
+    if (universeKeys.has(key)) blockers.push('DUPLICATE_SCOPE_UNIVERSE_ENTRY');
+    universeKeys.add(key);
+  }
+  const splitKeys = new Set(input.splitPolicy.scopeMinimums.map(scopeKey));
+  if (universeKeys.size !== splitKeys.size
+    || [...universeKeys].some((key) => !splitKeys.has(key))) blockers.push('SPLIT_SCOPE_UNIVERSE_MISMATCH');
   return blockers;
 }
 
@@ -288,6 +388,7 @@ export function buildPublicForwardPartialFillProductionPolicyManifestCandidate(
   if (!COMMIT_SHA.test(String(input.collectorCodeSha ?? '').trim().toLowerCase())) blockers.push('COLLECTOR_CODE_SHA_INVALID');
   if (!nonEmpty(input.regimeOwnerIdentity)) blockers.push('REGIME_OWNER_IDENTITY_INVALID');
   blockers.push(...validateComponents(input.components, input.policyFrozenAtMs));
+  blockers.push(...validateScopeUniverse(input.scopeUniverse, input));
   blockers.push(...validateSplitPolicy(input.splitPolicy, input));
   if (!Array.isArray(input.consumerIdentities) || input.consumerIdentities.length === 0) {
     blockers.push('CONSUMER_IDENTITIES_REQUIRED');
