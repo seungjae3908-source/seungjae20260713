@@ -323,6 +323,28 @@ export async function publishPublicForwardPartialFillCalibrationReleaseBinding(i
   if (!validApprovedAt(input.approvedAt)) throw new Error('RELEASE_BINDING_AUTHORITY_INVALID');
   if (!exactDigest(input.expectedPointerDigest)) throw new Error('RELEASE_BINDING_POINTER_MISMATCH');
 
+  const lexicalRoot = resolve(input.stateRoot);
+  let rootMeta;
+  try {
+    rootMeta = await lstat(lexicalRoot);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('STATE_ROOT_NOT_AVAILABLE');
+    throw error;
+  }
+  if (rootMeta.isSymbolicLink() || !rootMeta.isDirectory()) throw new Error('STATE_ROOT_NOT_AVAILABLE');
+  const root = await realpath(lexicalRoot);
+
+  const pointerPath = resolveRelativeInside(root, input.pointerRelativePath, 'POINTER_LOCATOR_INVALID');
+  let pointerMeta;
+  try {
+    pointerMeta = await lstat(pointerPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('POINTER_NOT_FOUND');
+    throw error;
+  }
+  if (pointerMeta.isSymbolicLink() || !pointerMeta.isFile()) throw new Error('POINTER_LOCATOR_INVALID');
+  if (await realpath(pointerPath) !== pointerPath) throw new Error('POINTER_LOCATOR_INVALID');
+
   const { pointer } = await readPublicForwardPartialFillCalibrationDatasetPointer({
     stateRoot: input.stateRoot,
     researchRepoRoot: input.researchRepoRoot,
@@ -344,15 +366,40 @@ export async function publishPublicForwardPartialFillCalibrationReleaseBinding(i
   );
   if (!verification.valid) throw new Error(`RELEASE_BINDING_SCHEMA_INVALID:${verification.blockers.join(',')}`);
 
-  const root = await realpath(resolve(input.stateRoot)).catch((error) => {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('STATE_ROOT_NOT_AVAILABLE');
+  const datasetPath = resolveRelativeInside(root, pointer.datasetRelativePath, 'POINTER_LOCATOR_INVALID');
+  let datasetMeta;
+  try {
+    datasetMeta = await lstat(datasetPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('DATASET_NOT_FOUND');
     throw error;
-  });
+  }
+  if (datasetMeta.isSymbolicLink() || !datasetMeta.isFile()) throw new Error('POINTER_LOCATOR_INVALID');
+  if (await realpath(datasetPath) !== datasetPath) throw new Error('POINTER_LOCATOR_INVALID');
+
   const releaseBindingRelativePath = publicForwardPartialFillReleaseBindingRelativePath(binding.releaseBindingDigest);
   const bindingPath = resolveRelativeInside(root, releaseBindingRelativePath, 'RELEASE_BINDING_REF_MISSING');
-  await mkdir(dirname(bindingPath), { recursive: true });
-  const canonicalParent = await realpath(dirname(bindingPath));
-  if (!pathInside(root, canonicalParent)) throw new Error('RELEASE_BINDING_REF_MISSING');
+  const bindingBase = resolve(root, 'forward/partial-fill-calibration-v1');
+  let bindingBaseMeta;
+  try {
+    bindingBaseMeta = await lstat(bindingBase);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('RELEASE_BINDING_REF_MISSING');
+    throw error;
+  }
+  if (bindingBaseMeta.isSymbolicLink() || !bindingBaseMeta.isDirectory()) throw new Error('RELEASE_BINDING_REF_MISSING');
+  if (await realpath(bindingBase) !== bindingBase) throw new Error('RELEASE_BINDING_REF_MISSING');
+
+  const bindingDirectory = dirname(bindingPath);
+  try {
+    const meta = await lstat(bindingDirectory);
+    if (meta.isSymbolicLink() || !meta.isDirectory()) throw new Error('RELEASE_BINDING_REF_MISSING');
+    if (await realpath(bindingDirectory) !== bindingDirectory) throw new Error('RELEASE_BINDING_REF_MISSING');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    await mkdir(bindingDirectory);
+  }
+  if (await realpath(bindingDirectory) !== bindingDirectory) throw new Error('RELEASE_BINDING_REF_MISSING');
 
   const bytes = Buffer.from(`${JSON.stringify(binding, null, 2)}\n`, 'utf8');
   const created = await atomicCreateOnly(bindingPath, bytes);
