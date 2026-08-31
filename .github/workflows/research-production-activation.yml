@@ -39,6 +39,16 @@ jobs:
           bash -n research-production/deploy/activate-server.sh
           grep -q '/activate-research-production' .github/workflows/research-production-activation.yml
           grep -Fq "startsWith(github.event.comment.body, '/activate-research-production ')" .github/workflows/research-production-activation.yml
+          test "$(grep -Ec 'github[.]event[.]issue[.]number == 8[3]8' .github/workflows/research-production-activation.yml)" -eq 1
+          test "$(grep -Ec 'issue_number: 8[3]8' .github/workflows/research-production-activation.yml)" -eq 2
+          if grep -Eq 'github[.]event[.]issue[.]number == 6[6]0' .github/workflows/research-production-activation.yml; then
+            echo 'Activation command routing regressed to archived Hub #660.' >&2
+            exit 1
+          fi
+          if grep -Eq 'issue_number: 6[6]0' .github/workflows/research-production-activation.yml; then
+            echo 'Activation result reporting regressed to archived Hub #660.' >&2
+            exit 1
+          fi
           grep -q 'checkout-only lifecycle failure' .github/workflows/research-production-activation.yml
           grep -q 'SOURCE_MERGE_SHA' .github/workflows/research-production-activation.yml
           grep -q 'LIVE_TRADING=false' research-production/deploy/activate-server.sh
@@ -49,7 +59,7 @@ jobs:
   authorize:
     if: >-
       github.event_name == 'issue_comment' &&
-      github.event.issue.number == 660 &&
+      github.event.issue.number == 838 &&
       github.event.comment.user.login == github.repository_owner &&
       startsWith(github.event.comment.body, '/activate-research-production ')
     runs-on: ubuntu-latest
@@ -298,7 +308,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 660,
+              issue_number: 838,
               body: [
                 '[RESEARCH_PRODUCTION_ACTIVATION]',
                 'status: success',
@@ -326,7 +336,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 660,
+              issue_number: 838,
               body: [
                 '[RESEARCH_PRODUCTION_ACTIVATION]',
                 'status: failed_closed',
