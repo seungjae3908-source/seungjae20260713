@@ -371,20 +371,6 @@ export async function publishPublicForwardPartialFillCalibrationDatasetPointer(i
   const pointerPath = resolveRelativeInside(root, pointerPathRelative, 'POINTER_LOCATOR_INVALID');
   await mkdir(resolve(pointerPath, '..'), { recursive: true });
 
-  const existingPointer = await readPointerIfPresent(pointerPath);
-  if (existingPointer) {
-    const verification = verifyPublicForwardPartialFillCalibrationDatasetPointer(existingPointer, {
-      datasetIdentity: input.dataset.datasetIdentity,
-      datasetDigest: input.dataset.datasetDigest,
-      datasetBytesDigest,
-      sampleClass: input.dataset.sampleClass,
-      collectorCodeSha: input.dataset.collectorCodeSha,
-      storeContract: input.dataset.storeContract,
-    });
-    if (!verification.valid) throw new Error(`POINTER_IDENTITY_CONFLICT:${verification.blockers.join(',')}`);
-    return Object.freeze({ pointer: existingPointer, immutableDatasetCreated, pointerCreated: false });
-  }
-
   const body = Object.freeze({
     schemaVersion: PUBLIC_FORWARD_PARTIAL_FILL_CALIBRATION_DATASET_POINTER_VERSION,
     storeContract: PUBLIC_FORWARD_PARTIAL_FILL_CALIBRATION_STORE_CONTRACT,
@@ -415,6 +401,25 @@ export async function publishPublicForwardPartialFillCalibrationDatasetPointer(i
   });
   if (!verification.valid) throw new Error(`POINTER_SCHEMA_INVALID:${verification.blockers.join(',')}`);
 
+  const existingPointer = await readPointerIfPresent(pointerPath);
+  if (existingPointer) {
+    const existingVerification = verifyPublicForwardPartialFillCalibrationDatasetPointer(existingPointer, {
+      datasetIdentity: input.dataset.datasetIdentity,
+      datasetDigest: input.dataset.datasetDigest,
+      datasetBytesDigest,
+      sampleClass: input.dataset.sampleClass,
+      collectorCodeSha: input.dataset.collectorCodeSha,
+      storeContract: input.dataset.storeContract,
+    });
+    if (!existingVerification.valid) throw new Error(`POINTER_IDENTITY_CONFLICT:${existingVerification.blockers.join(',')}`);
+    try {
+      assertPublicForwardPartialFillDatasetPointerCompatible(existingPointer, pointer);
+    } catch {
+      throw new Error('POINTER_IDENTITY_CONFLICT');
+    }
+    return Object.freeze({ pointer: existingPointer, immutableDatasetCreated, pointerCreated: false });
+  }
+
   const pointerBytes = Buffer.from(`${JSON.stringify(pointer, null, 2)}\n`, 'utf8');
   let pointerCreated: boolean;
   try {
@@ -432,6 +437,11 @@ export async function publishPublicForwardPartialFillCalibrationDatasetPointer(i
       storeContract: input.dataset.storeContract,
     });
     if (!winnerVerification.valid) throw error;
+    try {
+      assertPublicForwardPartialFillDatasetPointerCompatible(winner, pointer);
+    } catch {
+      throw new Error('POINTER_IDENTITY_CONFLICT');
+    }
     return Object.freeze({ pointer: winner, immutableDatasetCreated, pointerCreated: false });
   }
   return Object.freeze({ pointer, immutableDatasetCreated, pointerCreated });
