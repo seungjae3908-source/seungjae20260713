@@ -308,8 +308,8 @@ function summarizeDataset(dataset: PublicForwardPartialFillCalibrationDataset) {
     observationIds.add(stored.observationId);
     if (stored.observation.side === 'LONG') longN += 1;
     if (stored.observation.side === 'SHORT') shortN += 1;
-    if (stored.observation.actualFillObserved === true) actualFillObservedN += 1;
-    if (stored.observation.queuePositionKnown === true) queuePositionKnownN += 1;
+    actualFillObservedN += Number(stored.observation.actualFillObserved);
+    queuePositionKnownN += Number(stored.observation.queuePositionKnown);
   }
   return Object.freeze({
     rawN: dataset.observationCount,
