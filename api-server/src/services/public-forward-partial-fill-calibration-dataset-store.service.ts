@@ -83,6 +83,12 @@ export type PublicForwardPartialFillDatasetPersistResult = Readonly<{
   changed: boolean;
 }>;
 
+export type PublicForwardPartialFillDatasetReadResult = Readonly<{
+  dataset: PublicForwardPartialFillCalibrationDataset;
+  datasetRelativePath: string;
+  readOnly: true;
+}>;
+
 const SHA256 = /^[a-f0-9]{64}$/u;
 const COMMIT_SHA = /^[a-f0-9]{40}$/u;
 
@@ -406,6 +412,59 @@ async function readExisting(path: string): Promise<PublicForwardPartialFillCalib
     if (error instanceof SyntaxError) throw new Error('DATASET_CORRUPT:INVALID_JSON');
     throw error;
   }
+}
+
+function freezeDataset<T>(value: T): T {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
+  for (const child of Object.values(value as Record<string, unknown>)) freezeDataset(child);
+  return Object.freeze(value);
+}
+
+export async function readPublicForwardPartialFillCalibrationDataset(input: Readonly<{
+  stateRoot: string;
+  storeContract: string;
+  sampleClass: PublicForwardPartialFillSampleClass;
+  collectorCodeSha: string;
+  expectedDatasetIdentity: string;
+  expectedDatasetDigest: string;
+}>): Promise<PublicForwardPartialFillDatasetReadResult> {
+  if (input.storeContract !== PUBLIC_FORWARD_PARTIAL_FILL_CALIBRATION_STORE_CONTRACT) {
+    throw new Error('BLOCKED_STORAGE:STORE_CONTRACT_MISMATCH');
+  }
+  if (!['FORWARD_NATURAL_SAMPLE', 'CALIBRATION_RESEARCH_SAMPLE'].includes(input.sampleClass)) {
+    throw new Error('BLOCKED_STORAGE:SAMPLE_CLASS_INVALID');
+  }
+  const collectorCodeSha = exactSha(input.collectorCodeSha);
+  if (!collectorCodeSha) throw new Error('BLOCKED_STORAGE:COLLECTOR_CODE_SHA_INVALID');
+  const expectedDatasetIdentity = nonEmpty(input.expectedDatasetIdentity);
+  if (!expectedDatasetIdentity) throw new Error('BLOCKED_STORAGE:EXPECTED_DATASET_IDENTITY_INVALID');
+  const expectedDatasetDigest = exactDigest(input.expectedDatasetDigest);
+  if (!expectedDatasetDigest) throw new Error('BLOCKED_STORAGE:EXPECTED_DATASET_DIGEST_INVALID');
+
+  const location = safeDatasetLocation(input.stateRoot, input.sampleClass, collectorCodeSha);
+  let rootStat;
+  try {
+    rootStat = await stat(location.root);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('BLOCKED_STORAGE:STATE_ROOT_MISSING');
+    throw error;
+  }
+  if (!rootStat.isDirectory()) throw new Error('BLOCKED_STORAGE:STATE_ROOT_NOT_DIRECTORY');
+
+  const dataset = await readExisting(location.datasetPath);
+  if (!dataset) throw new Error('BLOCKED_DATA:CANONICAL_PARTIAL_FILL_DATASET_MISSING');
+  const verification = verifyPublicForwardPartialFillCalibrationDataset(dataset);
+  if (!verification.valid) throw new Error(`DATASET_CORRUPT:${verification.blockers.join(',')}`);
+  if (dataset.sampleClass !== input.sampleClass) throw new Error('DATASET_SAMPLE_CLASS_MISMATCH');
+  if (dataset.collectorCodeSha !== collectorCodeSha) throw new Error('DATASET_COLLECTOR_SHA_MISMATCH');
+  if (dataset.datasetIdentity !== expectedDatasetIdentity) throw new Error('DATASET_IDENTITY_MISMATCH');
+  if (dataset.datasetDigest !== expectedDatasetDigest) throw new Error('DATASET_DIGEST_MISMATCH');
+
+  return Object.freeze({
+    dataset: freezeDataset(dataset),
+    datasetRelativePath: location.relativePath,
+    readOnly: true as const,
+  });
 }
 
 export async function persistPublicForwardPartialFillCalibrationDataset(input: Readonly<{
