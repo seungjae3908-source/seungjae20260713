@@ -310,7 +310,10 @@ function eligibleStart(input: PublicForwardPartialFillStatisticalCalibrationAdmi
   return Math.max(
     PUBLIC_FORWARD_PARTIAL_FILL_STATISTICAL_CALIBRATION_ADMISSION_BUSINESS_TOLERANCE_AUTHORITY.freezeEffectiveAtMs,
     input.admissionFrozenAtMs,
+    input.successor.cohort.frozenAtMs,
     input.successor.effectiveCohortStartMs,
+    input.successor.splitPolicy.frozenAtMs,
+    input.successor.scopeUniverse.frozenAtMs,
     input.statisticalMethodology.methodology.frozenAtMs,
     input.statisticalMethodology.numericMinimumArtifact.frozenAtMs,
   );
@@ -363,6 +366,12 @@ function validateEvidence(
     add('PRE_ADMISSION_EVIDENCE_FORBIDDEN');
   }
   if (finitePositive(evidence.observedAtMs) && evidence.observedAtMs < input.successor.effectiveCohortStartMs) {
+    add('PRE_COHORT_EVIDENCE_FORBIDDEN');
+  }
+  if (finitePositive(evidence.sourceTimestampMs) && evidence.sourceTimestampMs < eligibleEvidenceStartMs) {
+    add('PRE_ADMISSION_EVIDENCE_FORBIDDEN');
+  }
+  if (finitePositive(evidence.sourceTimestampMs) && evidence.sourceTimestampMs < input.successor.effectiveCohortStartMs) {
     add('PRE_COHORT_EVIDENCE_FORBIDDEN');
   }
   if (finitePositive(evidence.sourceTimestampMs) && finitePositive(evidence.observedAtMs)
