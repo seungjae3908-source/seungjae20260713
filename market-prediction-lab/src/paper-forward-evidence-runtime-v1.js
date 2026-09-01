@@ -5,6 +5,8 @@ import { BitgetPublicClient } from "./bitget-public-client.js";
 import { collectBitgetCandles } from "./bitget-candle-collector.js";
 import { RECURRING_PAPER_MARKETS } from "./recurring-paper-loop-v1.js";
 import { runScheduledPaperCycle } from "./paper-scheduler-driver-v1.js";
+import { PAPER_FORWARD_PROVIDER_AUTHORITY } from "./paper-public-provider-authority-v1.js";
+export { PAPER_FORWARD_PROVIDER_AUTHORITY } from "./paper-public-provider-authority-v1.js";
 import {
   createEthV6PaperForwardSource,
   wrapPaperForwardProviderWithEthV6Source,
@@ -18,13 +20,6 @@ import {
 const DAY_MS = 24 * 60 * 60 * 1000;
 const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
 const TRUTHY = new Set(["1", "true", "yes", "on", "enabled"]);
-
-export const PAPER_FORWARD_PROVIDER_AUTHORITY = Object.freeze({
-  KR_STOCK: Object.freeze({ provider: "yahoo-public-chart", symbol: "005930", timeframe: "1d", intervalMs: DAY_MS, closeOffsetMs: 6.5 * 60 * 60 * 1000, maxAgeMs: 4 * DAY_MS }),
-  US_STOCK: Object.freeze({ provider: "yahoo-public-chart", symbol: "SPY", timeframe: "1d", intervalMs: DAY_MS, closeOffsetMs: 6.5 * 60 * 60 * 1000, maxAgeMs: 4 * DAY_MS }),
-  CRYPTO_SPOT: Object.freeze({ provider: "upbit-public-candles", symbol: "BTC", timeframe: "4h", intervalMs: FOUR_HOURS_MS, maxAgeMs: 8 * 60 * 60 * 1000 }),
-  CRYPTO_FUTURES: Object.freeze({ provider: "bitget-public-v2", symbol: "BTCUSDT", timeframe: "4h", intervalMs: FOUR_HOURS_MS, maxAgeMs: 8 * 60 * 60 * 1000 }),
-});
 
 export const PAPER_FORWARD_RUNTIME_CONTRACT = Object.freeze({
   version: "paper-forward-evidence-runtime-v1",
