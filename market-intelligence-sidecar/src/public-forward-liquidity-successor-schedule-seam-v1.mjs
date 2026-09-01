@@ -25,6 +25,8 @@ const COHORT = POLICY.cohort;
 const TECHNICAL = POLICY.technicalIdentity;
 const CAPTURE_POLICY = TECHNICAL.captureParameterPolicy;
 const CREDIT_POLICY = POLICY.creditPolicy;
+const MAX_PROSPECTIVE_SLOT_CREDIT =
+  CREDIT_POLICY.prospectiveCreditPerEligiblePresentFirstAttempt;
 
 function exactSha(value, code) {
   const normalized = String(value ?? '').trim().toLowerCase();
@@ -71,6 +73,9 @@ function frozenContractVerdict() {
     !== sha256(canonicalJson(CAPTURE_POLICY))) {
     addUnique(blockers, 'SUCCESSOR_CAPTURE_PARAMETER_DIGEST_MISMATCH');
   }
+  if (MAX_PROSPECTIVE_SLOT_CREDIT !== 1) {
+    addUnique(blockers, 'SUCCESSOR_MAX_PROSPECTIVE_SLOT_CREDIT_INVALID');
+  }
   return Object.freeze({
     valid: blockers.length === 0,
     blockers: Object.freeze(blockers),
@@ -98,6 +103,8 @@ function zeroAuthorityResult({
     collectorInvoked,
     captureStatus: status,
     blocker,
+    creditEligibleIfPresent: false,
+    maximumProspectiveSlotCredit: MAX_PROSPECTIVE_SLOT_CREDIT,
     prospectiveSlotCredit: 0,
     slot,
   });
@@ -113,7 +120,6 @@ export function resolveSuccessorScheduledAuthority({
   scheduledRunCreatedAtMs,
   actualRunStartedAtMs,
   runAttempt = 1,
-  duplicateCanonicalArtifact = false,
 } = {}) {
   const frozen = frozenContractVerdict();
   if (!frozen.valid) {
@@ -236,22 +242,16 @@ export function resolveSuccessorScheduledAuthority({
       slot,
     });
   }
-  if (duplicateCanonicalArtifact === true) {
-    return zeroAuthorityResult({
-      attempted: true,
-      status: 'DIAGNOSTIC_ONLY',
-      blocker: 'SUCCESSOR_DUPLICATE_SLOT_ATTEMPT_ZERO_CREDIT',
-      slot,
-    });
-  }
 
   return Object.freeze({
     eligible: true,
     attempted: true,
-    collectorInvoked: true,
-    captureStatus: 'ELIGIBLE_TO_CAPTURE',
+    collectorInvoked: false,
+    captureStatus: 'ELIGIBLE_TO_ATTEMPT_CAPTURE',
     blocker: null,
-    prospectiveSlotCredit: CREDIT_POLICY.prospectiveCreditPerEligiblePresentFirstAttempt,
+    creditEligibleIfPresent: true,
+    maximumProspectiveSlotCredit: MAX_PROSPECTIVE_SLOT_CREDIT,
+    prospectiveSlotCredit: 0,
     slot,
   });
 }
@@ -367,6 +367,7 @@ function receiptBody({
   captureStatus,
   blockers,
   collectorInvoked,
+  priorCreditedSlotCheck,
   rawBatchDigest,
   rawEvidencePreserved,
   prospectiveObservationCount,
@@ -409,11 +410,13 @@ function receiptBody({
     captureParameterPolicyDigest: TECHNICAL.captureParameterPolicyDigest,
     captureStatus,
     blockers: [...blockers],
+    priorCreditedSlotCheck,
     prospectiveObservationCount,
     droppedObservationCount,
     rawBatchDigest,
     rawEvidencePreserved,
     completedAtMs,
+    maximumProspectiveSlotCredit: MAX_PROSPECTIVE_SLOT_CREDIT,
     prospectiveSlotCredit,
     manualCredit: 0,
     replayCredit: 0,
@@ -450,9 +453,9 @@ export async function executeSuccessorScheduledCaptureSeam({
   defaultBranchRef = 'refs/heads/main',
   actualRunStartedAtMs,
   runAttempt = 1,
-  duplicateCanonicalArtifact = false,
   runId = '',
   repository = '',
+  hasPriorCreditedSlot,
   getRemoteMainSha,
   clock = () => Date.now(),
   collector = collectBitgetForwardLiquidityObservationBatch,
@@ -460,9 +463,6 @@ export async function executeSuccessorScheduledCaptureSeam({
   const mainSha = exactSha(exactMainSha, 'SUCCESSOR_EXACT_MAIN_SHA_INVALID');
   if (defaultBranchRef !== 'refs/heads/main') {
     throw new Error('SUCCESSOR_DEFAULT_BRANCH_REF_INVALID');
-  }
-  if (typeof getRemoteMainSha !== 'function') {
-    throw new Error('SUCCESSOR_REMOTE_MAIN_RESOLVER_MISSING');
   }
   if (typeof clock !== 'function') throw new Error('SUCCESSOR_CLOCK_INVALID');
   if (typeof collector !== 'function') throw new Error('SUCCESSOR_COLLECTOR_INVALID');
@@ -482,7 +482,6 @@ export async function executeSuccessorScheduledCaptureSeam({
     scheduledRunCreatedAtMs: created,
     actualRunStartedAtMs: actual,
     runAttempt: attempt,
-    duplicateCanonicalArtifact,
   });
 
   let remoteMainShaBefore = null;
@@ -491,6 +490,7 @@ export async function executeSuccessorScheduledCaptureSeam({
   let collectorInvoked = false;
   let captureStatus = authority.captureStatus;
   let blockers = authority.blocker ? [authority.blocker] : [];
+  let priorCreditedSlotCheck = 'NOT_APPLICABLE';
   let rawBatchDigest = null;
   let prospectiveObservationCount = 0;
   let droppedObservationCount = 0;
@@ -498,14 +498,56 @@ export async function executeSuccessorScheduledCaptureSeam({
   let credit = 0;
 
   if (authority.eligible === true) {
-    try {
-      remoteMainShaBefore = exactSha(
-        await getRemoteMainSha(),
-        'SUCCESSOR_REMOTE_MAIN_SHA_BEFORE_INVALID',
-      );
-    } catch (error) {
-      captureStatus = 'REMOTE_MAIN_PRE_CAPTURE_UNVERIFIED';
-      blockers = [String(error?.message ?? 'SUCCESSOR_REMOTE_MAIN_PRE_CAPTURE_UNVERIFIED')];
+    if (typeof hasPriorCreditedSlot !== 'function') {
+      captureStatus = 'PRIOR_CREDIT_STATE_UNVERIFIED';
+      blockers = ['SUCCESSOR_PRIOR_CREDIT_LOOKUP_MISSING'];
+      priorCreditedSlotCheck = 'UNVERIFIED';
+    } else {
+      try {
+        const priorExists = await hasPriorCreditedSlot(Object.freeze({
+          cohortId: SUCCESSOR_PROSPECTIVE_CONTRACT.cohortId,
+          policyDigest: SUCCESSOR_PROSPECTIVE_CONTRACT.policyDigest,
+          cohortDigest: SUCCESSOR_PROSPECTIVE_CONTRACT.cohortDigest,
+          slotIndex: authority.slot.slotIndex,
+          split: authority.slot.split,
+          canonicalSlotKey: authority.slot.canonicalSlotKey,
+          canonicalSlotKeyDigest: sha256(canonicalJson(authority.slot.canonicalSlotKey)),
+        }));
+        if (priorExists === true) {
+          captureStatus = 'DIAGNOSTIC_ONLY';
+          blockers = ['SUCCESSOR_DUPLICATE_SLOT_ATTEMPT_ZERO_CREDIT'];
+          priorCreditedSlotCheck = 'PRESENT';
+        } else if (priorExists === false) {
+          priorCreditedSlotCheck = 'CLEAR';
+        } else {
+          captureStatus = 'PRIOR_CREDIT_STATE_UNVERIFIED';
+          blockers = ['SUCCESSOR_PRIOR_CREDIT_LOOKUP_RESULT_INVALID'];
+          priorCreditedSlotCheck = 'UNVERIFIED';
+        }
+      } catch (error) {
+        captureStatus = 'PRIOR_CREDIT_STATE_UNVERIFIED';
+        blockers = [
+          `SUCCESSOR_PRIOR_CREDIT_LOOKUP_FAILED:${String(error?.message ?? 'UNKNOWN')}`,
+        ];
+        priorCreditedSlotCheck = 'UNVERIFIED';
+      }
+    }
+
+    if (priorCreditedSlotCheck === 'CLEAR') {
+      if (typeof getRemoteMainSha !== 'function') {
+        captureStatus = 'REMOTE_MAIN_PRE_CAPTURE_UNVERIFIED';
+        blockers = ['SUCCESSOR_REMOTE_MAIN_RESOLVER_MISSING'];
+      } else {
+        try {
+          remoteMainShaBefore = exactSha(
+            await getRemoteMainSha(),
+            'SUCCESSOR_REMOTE_MAIN_SHA_BEFORE_INVALID',
+          );
+        } catch (error) {
+          captureStatus = 'REMOTE_MAIN_PRE_CAPTURE_UNVERIFIED';
+          blockers = [String(error?.message ?? 'SUCCESSOR_REMOTE_MAIN_PRE_CAPTURE_UNVERIFIED')];
+        }
+      }
     }
 
     if (remoteMainShaBefore && remoteMainShaBefore !== mainSha) {
@@ -513,7 +555,7 @@ export async function executeSuccessorScheduledCaptureSeam({
       blockers = ['SUCCESSOR_REMOTE_MAIN_CHANGED_BEFORE_CAPTURE'];
     }
 
-    if (remoteMainShaBefore === mainSha) {
+    if (priorCreditedSlotCheck === 'CLEAR' && remoteMainShaBefore === mainSha) {
       collectorInvoked = true;
       try {
         batch = await collector({
@@ -574,23 +616,27 @@ export async function executeSuccessorScheduledCaptureSeam({
         addUnique(blockers, 'SUCCESSOR_CAPTURE_COMPLETION_TIME_MISSING');
       }
 
-      try {
-        remoteMainShaAfter = exactSha(
-          await getRemoteMainSha(),
-          'SUCCESSOR_REMOTE_MAIN_SHA_AFTER_INVALID',
-        );
-        if (remoteMainShaAfter !== mainSha) {
-          addUnique(blockers, 'SUCCESSOR_REMOTE_MAIN_CHANGED_DURING_CAPTURE');
+      if (typeof getRemoteMainSha !== 'function') {
+        addUnique(blockers, 'SUCCESSOR_REMOTE_MAIN_POST_CAPTURE_RESOLVER_MISSING');
+      } else {
+        try {
+          remoteMainShaAfter = exactSha(
+            await getRemoteMainSha(),
+            'SUCCESSOR_REMOTE_MAIN_SHA_AFTER_INVALID',
+          );
+          if (remoteMainShaAfter !== mainSha) {
+            addUnique(blockers, 'SUCCESSOR_REMOTE_MAIN_CHANGED_DURING_CAPTURE');
+          }
+        } catch (error) {
+          addUnique(
+            blockers,
+            `SUCCESSOR_REMOTE_MAIN_POST_CAPTURE_UNVERIFIED:${String(error?.message ?? 'UNKNOWN')}`,
+          );
         }
-      } catch (error) {
-        addUnique(
-          blockers,
-          `SUCCESSOR_REMOTE_MAIN_POST_CAPTURE_UNVERIFIED:${String(error?.message ?? 'UNKNOWN')}`,
-        );
       }
 
       if (captureStatus === 'PRESENT' && blockers.length === 0) {
-        credit = CREDIT_POLICY.prospectiveCreditPerEligiblePresentFirstAttempt;
+        credit = MAX_PROSPECTIVE_SLOT_CREDIT;
       } else if (captureStatus === 'PRESENT') {
         captureStatus = 'PRESENT_ZERO_CREDIT';
       }
@@ -614,6 +660,7 @@ export async function executeSuccessorScheduledCaptureSeam({
     captureStatus,
     blockers,
     collectorInvoked,
+    priorCreditedSlotCheck,
     rawBatchDigest,
     rawEvidencePreserved: batch !== null,
     prospectiveObservationCount,
