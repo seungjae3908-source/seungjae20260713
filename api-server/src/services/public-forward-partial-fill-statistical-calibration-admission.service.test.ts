@@ -67,8 +67,8 @@ function validInput(): PublicForwardPartialFillStatisticalCalibrationAdmissionIn
         sourceReceiptDigest: D5,
         sourceArtifactIdentity: 'artifact-1',
         sourceArtifactDigest: D6,
-        sourceClass: 'SUCCESSOR_FORWARD_NATURAL_SAMPLE',
-        datasetIdentity: 'partial-fill-forward-dataset:SUCCESSOR_FORWARD_NATURAL_SAMPLE:v1',
+        sourceClass: 'FORWARD_NATURAL_SAMPLE',
+        datasetIdentity: 'partial-fill-forward-dataset:FORWARD_NATURAL_SAMPLE:v1',
         datasetDigest: D,
         datasetStoreContract: PUBLIC_FORWARD_PARTIAL_FILL_CALIBRATION_STORE_CONTRACT,
         effectiveIndependenceProven: true,
@@ -293,6 +293,12 @@ for (const flag of ['duplicate', 'replay', 'backfill', 'manual', 'synthetic'] as
 {
   const input = mutableInput();
   input.evidence[0].sourceClass = 'HISTORICAL_SAMPLE';
+  assert.ok(blockedCodes(input).includes('GENUINE_PROSPECTIVE_SOURCE_REQUIRED'));
+}
+
+{
+  const input = mutableInput();
+  input.evidence[0].sourceClass = 'SUCCESSOR_FORWARD_NATURAL_SAMPLE';
   assert.ok(blockedCodes(input).includes('GENUINE_PROSPECTIVE_SOURCE_REQUIRED'));
 }
 
