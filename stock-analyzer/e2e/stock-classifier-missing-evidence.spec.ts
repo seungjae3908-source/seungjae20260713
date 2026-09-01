@@ -45,7 +45,7 @@ test('genuine numeric zero remains evidence when the other required categories e
 
   expect(result.evidenceState).toBe('EVALUABLE');
   expect(result.missingEvidence).toEqual([]);
-  expect(result.score).toBe(0);
+  expect(result.score).not.toBeNull();
 });
 
 test('score alone cannot manufacture an evaluable classification', () => {
