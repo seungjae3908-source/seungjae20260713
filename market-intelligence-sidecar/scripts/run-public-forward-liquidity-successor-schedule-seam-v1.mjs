@@ -1,8 +1,10 @@
+import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 import { canonicalJson, sha256 } from '../src/public-forward-liquidity-calibration.mjs';
+import { SUCCESSOR_PROSPECTIVE_CONTRACT } from '../src/public-forward-liquidity-successor-prospective-cohort.mjs';
 import {
   executeSuccessorScheduledCaptureSeam,
   finalizeSuccessorArtifactReceipt,
@@ -13,6 +15,9 @@ const mode = String(process.argv[2] ?? '').trim();
 const outputDir = resolve(
   process.env.OUTPUT_DIR || 'public-forward-liquidity-successor-capture',
 );
+const COLLECTOR_PATH = 'market-intelligence-sidecar/src/public-forward-liquidity-calibration.mjs';
+const EXPECTED_COLLECTOR_BLOB_SHA =
+  SUCCESSOR_PROSPECTIVE_CONTRACT.policyCore.technicalIdentity.collectorImplementationBlobSha;
 
 function requiredString(value, code) {
   const normalized = String(value ?? '').trim();
@@ -44,6 +49,23 @@ function exactDigest(value, code) {
     .toLowerCase();
   if (!/^[a-f0-9]{64}$/u.test(normalized)) throw new Error(code);
   return normalized;
+}
+
+function gitBlobSha(path) {
+  return exactSha(
+    execFileSync('git', ['hash-object', path], { encoding: 'utf8' }).trim(),
+    'SUCCESSOR_COLLECTOR_ACTUAL_BLOB_SHA_INVALID',
+  );
+}
+
+function verifyFrozenCollectorBlob() {
+  const expected = exactSha(
+    EXPECTED_COLLECTOR_BLOB_SHA,
+    'SUCCESSOR_COLLECTOR_EXPECTED_BLOB_SHA_INVALID',
+  );
+  const actual = gitBlobSha(COLLECTOR_PATH);
+  if (actual !== expected) throw new Error('SUCCESSOR_FROZEN_COLLECTOR_BLOB_MISMATCH');
+  return Object.freeze({ path: COLLECTOR_PATH, expected, actual });
 }
 
 function parseRepository(value) {
@@ -222,6 +244,7 @@ async function runCapture() {
   if (process.env.GITHUB_REF !== 'refs/heads/main') {
     throw new Error('SUCCESSOR_RUNNER_REQUIRES_DEFAULT_MAIN_REF');
   }
+  const collectorBlob = verifyFrozenCollectorBlob();
 
   const repository = parseRepository(process.env.GITHUB_REPOSITORY);
   const token = githubToken();
@@ -259,6 +282,9 @@ async function runCapture() {
     getRemoteMainSha: async () => currentRemoteMainSha({ repository, token }),
   });
 
+  if (captureReceipt.collectorImplementationBlobSha !== collectorBlob.actual) {
+    throw new Error('SUCCESSOR_CAPTURE_RECEIPT_COLLECTOR_BLOB_MISMATCH');
+  }
   await persistCaptureResult({
     batch,
     captureReceipt,
@@ -362,12 +388,17 @@ async function runBindArtifact() {
 }
 
 async function runSelfCheck() {
+  const collectorBlob = verifyFrozenCollectorBlob();
   const source = await readFile(new URL('../src/public-forward-liquidity-successor-schedule-seam-v1.mjs', import.meta.url), 'utf8');
   const self = await readFile(new URL(import.meta.url), 'utf8');
   const identity = Object.freeze({
     schemaVersion: 'public-forward-liquidity-successor-schedule-runner-self-check-v1',
     seamSourceDigest: sha256(canonicalJson(source)),
     runnerSourceDigest: sha256(canonicalJson(self)),
+    collectorPath: collectorBlob.path,
+    expectedCollectorBlobSha: collectorBlob.expected,
+    actualCollectorBlobSha: collectorBlob.actual,
+    collectorBlobVerified: true,
     activationTriggerPresent: false,
     scheduleExecutionPerformed: false,
     collectorInvoked: false,
