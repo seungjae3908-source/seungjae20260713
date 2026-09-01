@@ -113,11 +113,12 @@ jobs:
             echo 'Directory scanning is forbidden in pointer recovery.' >&2
             exit 1
           fi
-          if grep -Eq 'issue_comment' "$WORKFLOW"; then
+          if grep -Eq '^[[:space:]]+issue_comment:' "$WORKFLOW"; then
             echo 'Pointer recovery must not create a new Issue #23 comment authority surface in this PR.' >&2
             exit 1
           fi
-          if grep -Eq 'production-deploy[.]yml|pm2 (restart|start|reload)|systemctl (enable|start|restart)|PARTIAL_FILL_RELEASE_BINDING_REF=|PARTIAL_FILL_RELEASE_BINDING_DIGEST=' "$WORKFLOW"; then
+          if grep -Ev 'grep -Eq' "$WORKFLOW" \
+            | grep -Eq 'production-deploy[.]yml|pm2 (restart|start|reload)|systemctl (enable|start|restart)|PARTIAL_FILL_RELEASE_BINDING_REF=|PARTIAL_FILL_RELEASE_BINDING_DIGEST='; then
             echo 'Pointer recovery must not deploy or activate runtime binding locators.' >&2
             exit 1
           fi
