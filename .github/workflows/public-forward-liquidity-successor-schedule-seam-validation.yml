@@ -18,6 +18,7 @@ jobs:
       - name: Checkout exact pull request head
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - name: Setup Node.js
