@@ -247,6 +247,39 @@ function blockedCodes(input: PublicForwardPartialFillStatisticalCalibrationAdmis
 
 {
   const input = mutableInput();
+  input.evidence[0].observedAtMs = ELIGIBLE_MS + 1_000;
+  input.evidence[0].sourceTimestampMs = ADMISSION_MS - 1;
+  const codes = blockedCodes(input);
+  assert.ok(codes.includes('PRE_ADMISSION_EVIDENCE_FORBIDDEN'));
+  assert.ok(codes.includes('PRE_COHORT_EVIDENCE_FORBIDDEN'));
+}
+
+{
+  const input = mutableInput();
+  input.successor.splitPolicy.frozenAtMs = ELIGIBLE_MS + 5_000;
+  input.evidence[0].observedAtMs = ELIGIBLE_MS + 1_000;
+  input.evidence[0].sourceTimestampMs = ELIGIBLE_MS + 500;
+  assert.ok(blockedCodes(input).includes('PRE_ADMISSION_EVIDENCE_FORBIDDEN'));
+}
+
+{
+  const input = mutableInput();
+  input.successor.scopeUniverse.frozenAtMs = ELIGIBLE_MS + 5_000;
+  input.evidence[0].observedAtMs = ELIGIBLE_MS + 1_000;
+  input.evidence[0].sourceTimestampMs = ELIGIBLE_MS + 500;
+  assert.ok(blockedCodes(input).includes('PRE_ADMISSION_EVIDENCE_FORBIDDEN'));
+}
+
+{
+  const input = mutableInput();
+  input.successor.cohort.frozenAtMs = ELIGIBLE_MS + 5_000;
+  input.evidence[0].observedAtMs = ELIGIBLE_MS + 1_000;
+  input.evidence[0].sourceTimestampMs = ELIGIBLE_MS + 500;
+  assert.ok(blockedCodes(input).includes('PRE_ADMISSION_EVIDENCE_FORBIDDEN'));
+}
+
+{
+  const input = mutableInput();
   input.evidence[0].effectiveIndependenceProven = false;
   assert.ok(blockedCodes(input).includes('EFFECTIVE_INDEPENDENCE_NOT_PROVEN'));
 }
