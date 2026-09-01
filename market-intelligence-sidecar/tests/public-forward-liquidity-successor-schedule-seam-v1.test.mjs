@@ -59,7 +59,7 @@ function validBatch({
       market: 'CRYPTO_FUTURES',
       symbol: 'BTCUSDT',
       publicDataSource: 'BITGET_PUBLIC_UTA_V3',
-      sourceDigest: String(index + 1).repeat(64).slice(0, 64),
+      sourceDigest: String((index % 9) + 1).repeat(64),
       calibrationSourceOnly: true,
       executionCostEligible: false,
       liquidityImpactCoefficient: null,
@@ -76,11 +76,18 @@ function sameMainResolver(...values) {
 }
 
 function eligibleArgs(overrides = {}) {
-  const slot = buildSuccessorSlotDescriptor(0);
+  const slot0 = buildSuccessorSlotDescriptor(0);
+  const actual = overrides.actualRunStartedAtMs ?? slot0.nominalScheduledAtMs;
+  let created = slot0.nominalScheduledAtMs;
+  if (actual >= COHORT.startInclusiveMs && actual < COHORT.endExclusiveMs) {
+    const index = Math.floor((actual - COHORT.startInclusiveMs) / COHORT.slotCadenceMs);
+    created = buildSuccessorSlotDescriptor(index).nominalScheduledAtMs;
+  }
   return {
     eventName: SUCCESSOR_SCHEDULE_EVENT_NAME,
     scheduleExpression: SUCCESSOR_SCHEDULE_CRON_UTC,
-    actualRunStartedAtMs: slot.nominalScheduledAtMs,
+    scheduledRunCreatedAtMs: overrides.scheduledRunCreatedAtMs ?? created,
+    actualRunStartedAtMs: actual,
     runAttempt: 1,
     duplicateCanonicalArtifact: false,
     ...overrides,
@@ -119,6 +126,19 @@ test('actual start deterministically resolves the immutable Successor slot and s
   }));
   assert.equal(oos.slot.slotIndex, 252);
   assert.equal(oos.slot.split, 'OOS');
+});
+
+test('queued old schedule event cannot cross an hour boundary and masquerade as the next slot', () => {
+  const slot0 = buildSuccessorSlotDescriptor(0);
+  const slot1 = buildSuccessorSlotDescriptor(1);
+  const delayed = resolveSuccessorScheduledAuthority(eligibleArgs({
+    scheduledRunCreatedAtMs: slot0.nominalScheduledAtMs,
+    actualRunStartedAtMs: slot1.nominalScheduledAtMs,
+  }));
+  assert.equal(delayed.eligible, false);
+  assert.equal(delayed.captureStatus, 'SCHEDULE_PROVENANCE_INVALID');
+  assert.equal(delayed.blocker, 'SUCCESSOR_SCHEDULE_QUEUE_CROSSED_SLOT_BOUNDARY');
+  assert.equal(delayed.prospectiveSlotCredit, 0);
 });
 
 test('the +20 minute start boundary is inclusive and one millisecond later is zero-credit MISSED_SLOT', () => {
@@ -180,6 +200,7 @@ test('eligible exact-main scheduled capture uses the canonical collector contrac
   assert.equal(result.captureReceipt.prospectiveSlotCredit, 1);
   assert.equal(result.captureReceipt.slotIndex, 0);
   assert.equal(result.captureReceipt.split, 'TRAIN');
+  assert.equal(result.captureReceipt.rawEvidencePreserved, true);
   assert.equal(result.captureReceipt.executionAuthority, 'NONE');
   assert.equal(result.captureReceipt.canonicalDatasetPersistencePerformed, false);
   assert.equal(result.captureReceipt.oosValidationComplete, false);
@@ -236,15 +257,35 @@ test('main moving during capture preserves raw evidence but gives zero prospecti
   assert.ok(result.captureReceipt.blockers.includes('SUCCESSOR_REMOTE_MAIN_CHANGED_DURING_CAPTURE'));
 });
 
-test('invalid or private batch fails closed and cannot receive prospective credit', async () => {
+test('invalid or private batch is preserved only as diagnostic raw evidence and cannot receive credit', async () => {
+  const batch = validBatch({ privateApiUsed: true });
   const result = await executeSuccessorScheduledCaptureSeam({
     ...eligibleArgs(),
     exactMainSha: EXACT_MAIN,
     getRemoteMainSha: sameMainResolver(EXACT_MAIN, EXACT_MAIN),
     clock: () => buildSuccessorSlotDescriptor(0).nominalScheduledAtMs + 5_000,
-    collector: async () => validBatch({ privateApiUsed: true }),
+    collector: async () => batch,
   });
+  assert.deepEqual(result.batch, batch);
+  assert.equal(result.captureReceipt.rawEvidencePreserved, true);
   assert.equal(result.captureReceipt.captureStatus, 'VALIDATION_FAILURE');
+  assert.equal(result.captureReceipt.prospectiveSlotCredit, 0);
+  assert.equal(result.captureReceipt.rawBatchDigest, sha256(canonicalJson(batch)));
+});
+
+test('provider failure preserves the attempted receipt but has no fabricated raw evidence', async () => {
+  const result = await executeSuccessorScheduledCaptureSeam({
+    ...eligibleArgs(),
+    exactMainSha: EXACT_MAIN,
+    getRemoteMainSha: sameMainResolver(EXACT_MAIN, EXACT_MAIN),
+    clock: () => buildSuccessorSlotDescriptor(0).nominalScheduledAtMs + 5_000,
+    collector: async () => { throw new Error('NETWORK_UNAVAILABLE'); },
+  });
+  assert.equal(result.batch, null);
+  assert.equal(result.captureReceipt.ATTEMPTED, true);
+  assert.equal(result.captureReceipt.rawEvidencePreserved, false);
+  assert.equal(result.captureReceipt.rawBatchDigest, null);
+  assert.equal(result.captureReceipt.captureStatus, 'PROVIDER_FAILURE');
   assert.equal(result.captureReceipt.prospectiveSlotCredit, 0);
 });
 
@@ -258,6 +299,23 @@ test('empty genuine collector result is BLOCKED_DATA, never measured zero succes
   });
   assert.equal(result.captureReceipt.captureStatus, 'BLOCKED_DATA');
   assert.equal(result.captureReceipt.prospectiveObservationCount, 0);
+  assert.equal(result.captureReceipt.prospectiveSlotCredit, 0);
+});
+
+test('wrong trigger remains visible as wrong trigger in its zero-credit attempt receipt', async () => {
+  let calls = 0;
+  const result = await executeSuccessorScheduledCaptureSeam({
+    ...eligibleArgs({ eventName: 'workflow_dispatch' }),
+    exactMainSha: EXACT_MAIN,
+    getRemoteMainSha: sameMainResolver(EXACT_MAIN),
+    collector: async () => {
+      calls += 1;
+      return validBatch();
+    },
+  });
+  assert.equal(calls, 0);
+  assert.equal(result.captureReceipt.eventName, 'workflow_dispatch');
+  assert.equal(result.captureReceipt.captureStatus, 'WRONG_EVENT');
   assert.equal(result.captureReceipt.prospectiveSlotCredit, 0);
 });
 
