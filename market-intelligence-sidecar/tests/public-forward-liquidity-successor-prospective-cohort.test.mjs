@@ -19,59 +19,77 @@ function gitBlobSha1(content) {
   ])).digest('hex');
 }
 
-test('successor policy/cohort digests are immutable and internally consistent', () => {
+test('successor V2 policy/cohort digests are immutable and internally consistent', () => {
   const verdict = verifySuccessorProspectiveContract();
   assert.deepEqual(verdict.blockers, []);
   assert.equal(verdict.valid, true);
-  assert.equal(verdict.policyDigest, '451b880a7efff4c3cbb8abe8bcda07bbf54a534f9f01baeb040547c339fa489a');
-  assert.equal(verdict.cohortDigest, '7c24f0f752c500bc7ea90df5e7975319a5c4813a23f8f0e375a1ffd0b99672bb');
+  assert.equal(verdict.policyDigest, '5d91ea09ac5a2982a26d00197433142455fa6634488fadc9201e4ddf1346ed6c');
+  assert.equal(verdict.cohortDigest, '9b2853a361e17dc429288cec4499fc972189b0bc2427a6d8bb2a999eff847454');
   assert.equal(
     SUCCESSOR_PROSPECTIVE_CONTRACT.cohortId,
-    'PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_PROSPECTIVE_COHORT_V1_20260903:451b880a7efff4c3cbb8abe8bcda07bbf54a534f9f01baeb040547c339fa489a',
+    'PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_PROSPECTIVE_COHORT_V2_20260903_CAP1024:5d91ea09ac5a2982a26d00197433142455fa6634488fadc9201e4ddf1346ed6c',
   );
 });
 
-test('human freeze predates first eligible successor slot', () => {
-  const { authority, cohort } = SUCCESSOR_PROSPECTIVE_CONTRACT.policyCore;
+test('owner numeric freeze predates first eligible successor slot and binds capacity 1024', () => {
+  const { authority, capacityRedesignBinding, cohort } = SUCCESSOR_PROSPECTIVE_CONTRACT.policyCore;
   assert.equal(authority.canonicalHubIssue, 838);
-  assert.equal(authority.humanApprovalCommentId, 5489737878);
-  assert.equal(authority.humanApprovalCreatedAt, '2026-09-01T06:16:26Z');
+  assert.equal(authority.humanApprovalCommentId, 5500894175);
+  assert.equal(authority.humanApprovalCreatedAt, '2026-09-01T21:49:01Z');
   assert.ok(authority.humanApprovalCreatedAtMs < cohort.startInclusiveMs);
+  assert.equal(capacityRedesignBinding.designCommentId, 5500824852);
+  assert.equal(capacityRedesignBinding.numericFreezeCommentId, 5500894175);
+  assert.equal(capacityRedesignBinding.finalTotalSlotN, 1024);
+  assert.equal(capacityRedesignBinding.finalHeadroomSlotN, 312);
+  assert.equal(capacityRedesignBinding.trainValidationOosRatio, '2:1:1');
+  assert.equal(capacityRedesignBinding.aiNumericAuthority, 'NONE');
   assert.equal(cohort.startInclusiveUtc, '2026-09-02T15:17:00.000Z');
   assert.equal(cohort.startInclusiveKst, '2026-09-03T00:17:00+09:00');
 });
 
-test('336 hourly slots cover exactly 14 days with 168/84/84 chronological splits', () => {
+test('1024 hourly slots cover exactly 42d16h with 512/256/256 chronological splits', () => {
   const { cohort } = SUCCESSOR_PROSPECTIVE_CONTRACT.policyCore;
-  assert.equal(cohort.totalSlotN, 336);
+  assert.equal(cohort.totalSlotN, 1024);
   assert.equal(cohort.slotCadenceMs, 3_600_000);
-  assert.equal(cohort.endExclusiveMs - cohort.startInclusiveMs, 14 * 24 * 60 * 60 * 1000);
+  assert.equal(cohort.endExclusiveMs - cohort.startInclusiveMs, 1024 * 60 * 60 * 1000);
+  assert.equal(cohort.endExclusiveUtc, '2026-10-15T07:17:00.000Z');
+  assert.equal(cohort.endExclusiveKst, '2026-10-15T16:17:00+09:00');
+
   const counts = { TRAIN: 0, VALIDATION: 0, OOS: 0 };
   for (let slotIndex = 0; slotIndex < cohort.totalSlotN; slotIndex += 1) {
     counts[splitForSuccessorSlotIndex(slotIndex)] += 1;
   }
-  assert.deepEqual(counts, { TRAIN: 168, VALIDATION: 84, OOS: 84 });
+  assert.deepEqual(counts, { TRAIN: 512, VALIDATION: 256, OOS: 256 });
   assert.equal(splitForSuccessorSlotIndex(0), 'TRAIN');
-  assert.equal(splitForSuccessorSlotIndex(167), 'TRAIN');
-  assert.equal(splitForSuccessorSlotIndex(168), 'VALIDATION');
-  assert.equal(splitForSuccessorSlotIndex(251), 'VALIDATION');
-  assert.equal(splitForSuccessorSlotIndex(252), 'OOS');
-  assert.equal(splitForSuccessorSlotIndex(335), 'OOS');
-  assert.throws(() => splitForSuccessorSlotIndex(336), /SUCCESSOR_SLOT_INDEX_INVALID/u);
+  assert.equal(splitForSuccessorSlotIndex(511), 'TRAIN');
+  assert.equal(splitForSuccessorSlotIndex(512), 'VALIDATION');
+  assert.equal(splitForSuccessorSlotIndex(767), 'VALIDATION');
+  assert.equal(splitForSuccessorSlotIndex(768), 'OOS');
+  assert.equal(splitForSuccessorSlotIndex(1023), 'OOS');
+  assert.throws(() => splitForSuccessorSlotIndex(1024), /SUCCESSOR_SLOT_INDEX_INVALID/u);
 });
 
-test('slot descriptors preserve minute-17 UTC cadence and the approved capture window', () => {
+test('slot descriptors preserve minute-17 UTC cadence and approved capture window through slot 1023', () => {
   const first = buildSuccessorSlotDescriptor(0);
   const second = buildSuccessorSlotDescriptor(1);
-  const last = buildSuccessorSlotDescriptor(335);
+  const last = buildSuccessorSlotDescriptor(1023);
   assert.equal(first.nominalScheduledAtMs, 1788362220000);
   assert.equal(first.allowedStartThroughMs, first.nominalScheduledAtMs + 20 * 60 * 1000);
   assert.equal(first.latestCompletionIfLatestEligibleStartMs, first.nominalScheduledAtMs + 30 * 60 * 1000);
   assert.ok(first.latestCompletionIfLatestEligibleStartMs < first.slotEndExclusiveMs);
   assert.equal(second.nominalScheduledAtMs - first.nominalScheduledAtMs, 60 * 60 * 1000);
-  assert.equal(last.nominalScheduledAtMs, 1789568220000);
-  assert.equal(last.slotEndExclusiveMs, 1789571820000);
+  assert.equal(last.nominalScheduledAtMs, 1792045020000);
+  assert.equal(last.slotEndExclusiveMs, 1792048620000);
   assert.equal(first.cronUtc, '17 * * * *');
+});
+
+test('V1 cohort remains predecessor-only and cannot be retroactively reclassified', () => {
+  const predecessor = SUCCESSOR_PROSPECTIVE_CONTRACT.policyCore.supersedes;
+  assert.equal(predecessor.contractVersion, 'public-forward-liquidity-successor-prospective-cohort-contract-v1');
+  assert.equal(predecessor.policyDigest, '451b880a7efff4c3cbb8abe8bcda07bbf54a534f9f01baeb040547c339fa489a');
+  assert.equal(predecessor.cohortDigest, '7c24f0f752c500bc7ea90df5e7975319a5c4813a23f8f0e375a1ffd0b99672bb');
+  assert.equal(predecessor.retroactiveReclassificationAllowed, false);
+  assert.equal(predecessor.redesignedCreditFromPriorCohort, 0);
 });
 
 test('all non-genuine or retrospective successor credit paths remain zero', () => {
@@ -95,7 +113,7 @@ test('all non-genuine or retrospective successor credit paths remain zero', () =
   assert.equal(integrity.successorGenuineRawNAtFreeze, 0);
 });
 
-test('successor contract reuses the canonical collector technical identity without inventing model policy', async () => {
+test('successor contract reuses canonical collector technical identity without inventing model policy', async () => {
   const collectorPath = new URL('../src/public-forward-liquidity-calibration.mjs', import.meta.url);
   const collectorBytes = await readFile(collectorPath);
   const technical = SUCCESSOR_PROSPECTIVE_CONTRACT.policyCore.technicalIdentity;
@@ -115,12 +133,28 @@ test('successor contract reuses the canonical collector technical identity witho
   assert.equal(technical.preprocessingIdentity.value, null);
 });
 
-test('OOS outcome horizon remains a separate pre-observation authority instead of inheriting V3 silently', () => {
+test('OOS outcome horizon remains separate pre-observation authority instead of capacity retuning', () => {
   const oos = SUCCESSOR_PROSPECTIVE_CONTRACT.policyCore.oosOutcomePolicy;
   assert.equal(oos.status, 'NOT_ASSIGNED_BY_THIS_APPROVAL');
   assert.equal(oos.numericOutcomeHorizonMs, null);
   assert.equal(oos.separatePreObservationFreezeRequired, true);
   assert.equal(oos.outcomeBasedSelectionAllowed, false);
+});
+
+test('capacity or split tampering fails closed', () => {
+  const tamperedCapacity = structuredClone(SUCCESSOR_PROSPECTIVE_CONTRACT);
+  tamperedCapacity.policyCore.cohort.totalSlotN = 712;
+  const capacityVerdict = verifySuccessorProspectiveContract(tamperedCapacity);
+  assert.equal(capacityVerdict.valid, false);
+  assert.ok(capacityVerdict.blockers.includes('SUCCESSOR_POLICY_DIGEST_MISMATCH'));
+  assert.ok(capacityVerdict.blockers.includes('SUCCESSOR_CADENCE_INVALID'));
+
+  const tamperedSplit = structuredClone(SUCCESSOR_PROSPECTIVE_CONTRACT);
+  tamperedSplit.policyCore.splits.OOS.startIndexInclusive = 767;
+  const splitVerdict = verifySuccessorProspectiveContract(tamperedSplit);
+  assert.equal(splitVerdict.valid, false);
+  assert.ok(splitVerdict.blockers.includes('SUCCESSOR_POLICY_DIGEST_MISMATCH'));
+  assert.ok(splitVerdict.blockers.includes('SUCCESSOR_OOS_SPLIT_INVALID'));
 });
 
 test('contract grants no schedule, merge, deploy, trading, or financial mutation authority', () => {
