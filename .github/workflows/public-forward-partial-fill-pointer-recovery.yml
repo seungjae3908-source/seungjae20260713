@@ -108,6 +108,7 @@ jobs:
           grep -Fq 'RECOVER_PARTIAL_FILL_POINTER_ONLY' "$WORKFLOW"
           grep -Fq "FROZEN_INGEST_ARTIFACT_ID: '9750941384'" "$WORKFLOW"
           grep -Fq "FROZEN_INGEST_RECEIPT_DIGEST: '0683cabaad4f43c46d81831d882353662a5cd7c6d0a691e0ced5a9ee1580ee24'" "$WORKFLOW"
+          test "$(grep -Ec '^[[:space:]]+RECEIPT="\$RUNNER_TEMP/partial-fill-ingest-evidence/\$FROZEN_INGEST_ARTIFACT_NAME/canonical-partial-fill-ingest-result[.]json"$' "$WORKFLOW")" -eq 2
 
           if grep -Eq '\b(readdir|opendir)\b' "$SERVICE"; then
             echo 'Directory scanning is forbidden in pointer recovery.' >&2
@@ -265,7 +266,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          RECEIPT="$RUNNER_TEMP/partial-fill-ingest-evidence/canonical-partial-fill-ingest-result.json"
+          RECEIPT="$RUNNER_TEMP/partial-fill-ingest-evidence/$FROZEN_INGEST_ARTIFACT_NAME/canonical-partial-fill-ingest-result.json"
           test -f "$RECEIPT"
           RECEIPT="$RECEIPT" node <<'NODE'
           const fs = require('node:fs');
@@ -345,7 +346,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           [[ -n "$SSH_USER" ]]
-          RECEIPT="$RUNNER_TEMP/partial-fill-ingest-evidence/canonical-partial-fill-ingest-result.json"
+          RECEIPT="$RUNNER_TEMP/partial-fill-ingest-evidence/$FROZEN_INGEST_ARTIFACT_NAME/canonical-partial-fill-ingest-result.json"
           REMOTE_SCRIPT="/tmp/partial-fill-pointer-recovery-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.cjs"
           REMOTE_RECEIPT="/tmp/partial-fill-pointer-recovery-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
           SSH=(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15)
