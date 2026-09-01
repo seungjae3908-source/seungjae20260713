@@ -72,6 +72,9 @@ function validInput(): PublicForwardPartialFillStatisticalCalibrationAdmissionIn
         datasetDigest: D,
         datasetStoreContract: PUBLIC_FORWARD_PARTIAL_FILL_CALIBRATION_STORE_CONTRACT,
         effectiveIndependenceProven: true,
+        independenceProofIdentity: 'independence-proof-fixture-v1',
+        independenceProofDigest: D5,
+        independenceMethodologyDigest: D6,
         split: 'TRAIN',
         splitPolicyDigest: D6,
         scopeUniverseDigest: D,
@@ -132,6 +135,9 @@ function blockedCodes(input: PublicForwardPartialFillStatisticalCalibrationAdmis
   assert.equal(result.artifact.evidenceComplete, 0);
   assert.equal(result.artifact.executionAuthority, 'NONE');
   assert.equal(result.artifact.liveTrading, false);
+  assert.equal(result.artifact.admittedEvidence[0]?.independenceProofIdentity, 'independence-proof-fixture-v1');
+  assert.equal(result.artifact.admittedEvidence[0]?.independenceProofDigest, D5);
+  assert.equal(result.artifact.admittedEvidence[0]?.independenceMethodologyDigest, D6);
   assert.equal(result.artifact.admittedEvidence[0]?.metricEvaluability.tol01OpportunityCalibration, true);
   assert.equal(result.artifact.admittedEvidence[0]?.metricEvaluability.tol06AdverseTailCostUnderestimation, false);
   assert.equal(result.artifact.admittedEvidence[0]?.metricEvaluability.tol09CalibrationFreshness, false);
@@ -143,6 +149,15 @@ function blockedCodes(input: PublicForwardPartialFillStatisticalCalibrationAdmis
   const a = buildPublicForwardPartialFillStatisticalCalibrationAdmission(validInput());
   const b = buildPublicForwardPartialFillStatisticalCalibrationAdmission(validInput());
   assert.equal(a.artifact?.digest, b.artifact?.digest, 'canonical digest must be deterministic');
+}
+
+{
+  const first = validInput();
+  const second = mutableInput();
+  second.evidence[0].independenceProofDigest = D2;
+  const a = buildPublicForwardPartialFillStatisticalCalibrationAdmission(first);
+  const b = buildPublicForwardPartialFillStatisticalCalibrationAdmission(second);
+  assert.notEqual(a.artifact?.digest, b.artifact?.digest, 'independence proof must be digest-bound');
 }
 
 {
@@ -312,6 +327,24 @@ function blockedCodes(input: PublicForwardPartialFillStatisticalCalibrationAdmis
 {
   const input = mutableInput();
   input.evidence[0].effectiveIndependenceProven = false;
+  assert.ok(blockedCodes(input).includes('EFFECTIVE_INDEPENDENCE_NOT_PROVEN'));
+}
+
+{
+  const input = mutableInput();
+  input.evidence[0].independenceProofIdentity = '';
+  assert.ok(blockedCodes(input).includes('EFFECTIVE_INDEPENDENCE_NOT_PROVEN'));
+}
+
+{
+  const input = mutableInput();
+  input.evidence[0].independenceProofDigest = 'bad';
+  assert.ok(blockedCodes(input).includes('EFFECTIVE_INDEPENDENCE_NOT_PROVEN'));
+}
+
+{
+  const input = mutableInput();
+  input.evidence[0].independenceMethodologyDigest = 'bad';
   assert.ok(blockedCodes(input).includes('EFFECTIVE_INDEPENDENCE_NOT_PROVEN'));
 }
 
