@@ -133,6 +133,7 @@ function blockedCodes(input: PublicForwardPartialFillStatisticalCalibrationAdmis
   assert.equal(result.artifact.executionAuthority, 'NONE');
   assert.equal(result.artifact.liveTrading, false);
   assert.equal(result.artifact.admittedEvidence[0]?.metricEvaluability.tol01OpportunityCalibration, true);
+  assert.equal(result.artifact.admittedEvidence[0]?.metricEvaluability.tol06AdverseTailCostUnderestimation, false);
   assert.equal(result.artifact.admittedEvidence[0]?.metricEvaluability.tol09CalibrationFreshness, false);
   assert.deepEqual(result.artifact.admittedEvidence[0]?.metricBlockers, []);
   assert.match(result.artifact.digest, /^[a-f0-9]{64}$/u);
@@ -142,6 +143,30 @@ function blockedCodes(input: PublicForwardPartialFillStatisticalCalibrationAdmis
   const a = buildPublicForwardPartialFillStatisticalCalibrationAdmission(validInput());
   const b = buildPublicForwardPartialFillStatisticalCalibrationAdmission(validInput());
   assert.equal(a.artifact?.digest, b.artifact?.digest, 'canonical digest must be deterministic');
+}
+
+{
+  const input = mutableInput();
+  const result = buildPublicForwardPartialFillStatisticalCalibrationAdmission(input);
+  assert.ok(result.artifact);
+  const originalDigest = result.artifact.digest;
+  const originalSemanticsDigest = result.artifact.businessTolerance.semanticsRegistryDigest;
+  const originalPolicyDigest = result.artifact.successor.policyDigest;
+  const originalMethodIdentity = result.artifact.statisticalMethodology.methodology.identity;
+
+  input.businessTolerance.semanticsRegistryDigest = D;
+  input.successor.policyDigest = D2;
+  input.statisticalMethodology.methodology.identity = 'MUTATED_AFTER_ADMISSION';
+
+  assert.equal(result.artifact.businessTolerance.semanticsRegistryDigest, originalSemanticsDigest);
+  assert.equal(result.artifact.successor.policyDigest, originalPolicyDigest);
+  assert.equal(result.artifact.statisticalMethodology.methodology.identity, originalMethodIdentity);
+  assert.equal(result.artifact.digest, originalDigest);
+  assert.equal(Object.isFrozen(result.artifact.businessTolerance), true);
+  assert.equal(Object.isFrozen(result.artifact.successor), true);
+  assert.equal(Object.isFrozen(result.artifact.successor.cohort), true);
+  assert.equal(Object.isFrozen(result.artifact.statisticalMethodology), true);
+  assert.equal(Object.isFrozen(result.artifact.statisticalMethodology.methodology), true);
 }
 
 {
@@ -203,6 +228,12 @@ function blockedCodes(input: PublicForwardPartialFillStatisticalCalibrationAdmis
 {
   const input = mutableInput();
   input.successor.policyDigest = '';
+  assert.ok(blockedCodes(input).includes('SUCCESSOR_POLICY_DIGEST_MISSING'));
+}
+
+{
+  const input = mutableInput();
+  input.successor.policyDigest = D5.toUpperCase();
   assert.ok(blockedCodes(input).includes('SUCCESSOR_POLICY_DIGEST_MISSING'));
 }
 
