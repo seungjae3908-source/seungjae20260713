@@ -99,6 +99,9 @@ export type CalibrationEvidenceBinding = Readonly<{
   datasetDigest: string;
   datasetStoreContract: string;
   effectiveIndependenceProven: boolean;
+  independenceProofIdentity: string;
+  independenceProofDigest: string;
+  independenceMethodologyDigest: string;
   split: 'TRAIN' | 'VALIDATION' | 'OOS';
   splitPolicyDigest: string;
   scopeUniverseDigest: string;
@@ -140,6 +143,9 @@ export type PublicForwardPartialFillStatisticalCalibrationAdmissionInput = Reado
 export type AdmittedCalibrationEvidence = Readonly<{
   observationId: string;
   sourceObservationLineageDigest: string;
+  independenceProofIdentity: string;
+  independenceProofDigest: string;
+  independenceMethodologyDigest: string;
   split: 'TRAIN' | 'VALIDATION' | 'OOS';
   scopeKey: string;
   observedAtMs: number;
@@ -357,7 +363,12 @@ function validateEvidence(
     || evidence.datasetStoreContract !== PUBLIC_FORWARD_PARTIAL_FILL_CALIBRATION_STORE_CONTRACT) {
     add('AUTHORITATIVE_DATASET_BINDING_REQUIRED');
   }
-  if (evidence.effectiveIndependenceProven !== true) add('EFFECTIVE_INDEPENDENCE_NOT_PROVEN');
+  if (evidence.effectiveIndependenceProven !== true
+    || !nonEmpty(evidence.independenceProofIdentity)
+    || !exactDigest(evidence.independenceProofDigest)
+    || !exactDigest(evidence.independenceMethodologyDigest)) {
+    add('EFFECTIVE_INDEPENDENCE_NOT_PROVEN');
+  }
   if (!['TRAIN', 'VALIDATION', 'OOS'].includes(evidence.split)
     || evidence.splitPolicyDigest !== input.successor.splitPolicy.digest) {
     add('SPLIT_POLICY_BINDING_MISSING');
@@ -444,6 +455,9 @@ export function buildPublicForwardPartialFillStatisticalCalibrationAdmission(
     admittedEvidence.push(Object.freeze({
       observationId: evidence.observationId,
       sourceObservationLineageDigest: evidence.sourceObservationLineageDigest,
+      independenceProofIdentity: evidence.independenceProofIdentity,
+      independenceProofDigest: evidence.independenceProofDigest,
+      independenceMethodologyDigest: evidence.independenceMethodologyDigest,
       split: evidence.split,
       scopeKey: scopeKey(evidence),
       observedAtMs: evidence.observedAtMs,
