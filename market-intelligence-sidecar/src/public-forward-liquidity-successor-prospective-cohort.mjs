@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { canonicalJson, sha256 } from './public-forward-liquidity-calibration.mjs';
 
 export const SUCCESSOR_PROSPECTIVE_CONTRACT_PATH = new URL(
-  '../config/public-forward-liquidity-successor-prospective-cohort-v1.json',
+  '../config/public-forward-liquidity-successor-prospective-cohort-v2.json',
   import.meta.url,
 );
 
@@ -32,7 +32,7 @@ function integer(value) {
 function expectedCohortIdentityCore(contract) {
   const policy = contract.policyCore;
   return {
-    schemaVersion: 'public-forward-liquidity-successor-prospective-cohort-identity-v1',
+    schemaVersion: 'public-forward-liquidity-successor-prospective-cohort-identity-v2',
     cohortId: contract.cohortId,
     policyDigest: contract.policyDigest,
     startInclusiveMs: policy.cohort.startInclusiveMs,
@@ -79,14 +79,14 @@ export function buildSuccessorSlotDescriptor(slotIndex, contract = SUCCESSOR_PRO
 
 export function verifySuccessorProspectiveContract(contract = SUCCESSOR_PROSPECTIVE_CONTRACT) {
   const blockers = [];
-  if (contract?.contractVersion !== 'public-forward-liquidity-successor-prospective-cohort-contract-v1') {
+  if (contract?.contractVersion !== 'public-forward-liquidity-successor-prospective-cohort-contract-v2') {
     add(blockers, 'SUCCESSOR_CONTRACT_VERSION_INVALID');
   }
   if (contract?.freezeStatus !== 'HUMAN_POLICY_VALUES_FROZEN_REPOSITORY_DRAFT_MATERIALIZATION') {
     add(blockers, 'SUCCESSOR_FREEZE_STATUS_INVALID');
   }
   const policy = contract?.policyCore;
-  if (!policy || policy.schemaVersion !== 'public-forward-liquidity-successor-prospective-cohort-policy-v1') {
+  if (!policy || policy.schemaVersion !== 'public-forward-liquidity-successor-prospective-cohort-policy-v2') {
     add(blockers, 'SUCCESSOR_POLICY_CORE_INVALID');
     return Object.freeze({ valid: false, blockers: Object.freeze(blockers) });
   }
@@ -98,7 +98,11 @@ export function verifySuccessorProspectiveContract(contract = SUCCESSOR_PROSPECT
   const expectedCohortId = `${policy.cohort.identitySeed}:${computedPolicyDigest}`;
   if (contract.cohortId !== expectedCohortId) add(blockers, 'SUCCESSOR_COHORT_ID_MISMATCH');
 
-  const expectedIdentity = expectedCohortIdentityCore({ ...contract, policyDigest: computedPolicyDigest, cohortId: expectedCohortId });
+  const expectedIdentity = expectedCohortIdentityCore({
+    ...contract,
+    policyDigest: computedPolicyDigest,
+    cohortId: expectedCohortId,
+  });
   if (canonicalJson(contract.cohortIdentityCore) !== canonicalJson(expectedIdentity)) {
     add(blockers, 'SUCCESSOR_COHORT_IDENTITY_CORE_MISMATCH');
   }
@@ -108,7 +112,12 @@ export function verifySuccessorProspectiveContract(contract = SUCCESSOR_PROSPECT
   }
 
   const authority = policy.authority;
-  if (authority?.canonicalHubIssue !== 838 || authority?.humanApprovalCommentId !== 5489737878) {
+  if (authority?.canonicalHubIssue !== 838
+    || authority?.humanApprovalCommentId !== 5500894175
+    || authority?.humanApprovalCreatedAt !== '2026-09-01T21:49:01Z'
+    || authority?.humanApprovalCreatedAtMs !== 1788299341000
+    || authority?.approvalScope !== 'SUCCESSOR_PROSPECTIVE_COHORT_CAPACITY_1024_DESIGN_AND_FREEZE_ONLY'
+    || authority?.sourceBaseMainSha !== '4715f33719238d764a3314eab952720663f2d296') {
     add(blockers, 'SUCCESSOR_HUMAN_APPROVAL_REFERENCE_INVALID');
   }
   if (!integer(authority?.humanApprovalCreatedAtMs)
@@ -117,14 +126,43 @@ export function verifySuccessorProspectiveContract(contract = SUCCESSOR_PROSPECT
   }
   if (!exactSha(authority?.sourceBaseMainSha)) add(blockers, 'SUCCESSOR_SOURCE_MAIN_SHA_INVALID');
 
+  const capacity = policy.capacityRedesignBinding ?? {};
+  if (capacity.designIdentity !== 'PUBLIC_FORWARD_PARTIAL_FILL_PROSPECTIVE_COHORT_CAPACITY_REDESIGN_DESIGN_V1'
+    || capacity.designCommentId !== 5500824852
+    || capacity.designDigest !== '2957c96c220c31067aa9deb319db6f83ab544f81ff8d41eec84c6de664be4660'
+    || capacity.numericFreezeIdentity !== 'PUBLIC_FORWARD_PARTIAL_FILL_PROSPECTIVE_COHORT_CAPACITY_NUMERIC_V1'
+    || capacity.numericFreezeCommentId !== 5500894175
+    || capacity.numericFreezeDigest !== '45b6e09909347e9d5ed41ed618b7874e2e528190838886eaa656997e22d4e947'
+    || capacity.mechanicalFloorTotalSlotN !== 712
+    || capacity.finalTotalSlotN !== 1024
+    || capacity.finalHeadroomSlotN !== 312
+    || capacity.priorTotalSlotN !== 336
+    || capacity.priorCohortExtensionSlotN !== 688
+    || capacity.trainValidationOosRatio !== '2:1:1'
+    || capacity.trainSlotN !== 512
+    || capacity.validationSlotN !== 256
+    || capacity.oosSlotN !== 256
+    || capacity.aiNumericAuthority !== 'NONE') {
+    add(blockers, 'SUCCESSOR_CAPACITY_REDESIGN_AUTHORITY_INVALID');
+  }
+
+  const supersedes = policy.supersedes ?? {};
+  if (supersedes.contractVersion !== 'public-forward-liquidity-successor-prospective-cohort-contract-v1'
+    || supersedes.policyDigest !== '451b880a7efff4c3cbb8abe8bcda07bbf54a534f9f01baeb040547c339fa489a'
+    || supersedes.cohortDigest !== '7c24f0f752c500bc7ea90df5e7975319a5c4813a23f8f0e375a1ffd0b99672bb'
+    || supersedes.retroactiveReclassificationAllowed !== false
+    || supersedes.redesignedCreditFromPriorCohort !== 0) {
+    add(blockers, 'SUCCESSOR_PREDECESSOR_RECLASSIFICATION_INVALID');
+  }
+
   const cohort = policy.cohort;
   if (cohort.canonicalTimezone !== 'UTC' || cohort.displayTimezone !== 'Asia/Seoul') {
     add(blockers, 'SUCCESSOR_TIMEZONE_INVALID');
   }
-  if (cohort.startInclusiveMs !== 1788362220000 || cohort.endExclusiveMs !== 1789571820000) {
+  if (cohort.startInclusiveMs !== 1788362220000 || cohort.endExclusiveMs !== 1792048620000) {
     add(blockers, 'SUCCESSOR_COHORT_WINDOW_INVALID');
   }
-  if (cohort.slotCadenceMs !== 3_600_000 || cohort.totalSlotN !== 336 || cohort.cronUtc !== '17 * * * *') {
+  if (cohort.slotCadenceMs !== 3_600_000 || cohort.totalSlotN !== 1024 || cohort.cronUtc !== '17 * * * *') {
     add(blockers, 'SUCCESSOR_CADENCE_INVALID');
   }
   if (cohort.endExclusiveMs - cohort.startInclusiveMs !== cohort.slotCadenceMs * cohort.totalSlotN) {
@@ -141,9 +179,9 @@ export function verifySuccessorProspectiveContract(contract = SUCCESSOR_PROSPECT
     add(blockers, 'SUCCESSOR_SPLIT_MODE_INVALID');
   }
   const expectedSplits = {
-    TRAIN: [0, 167, 168, 1788362220000, 1788967020000],
-    VALIDATION: [168, 251, 84, 1788967020000, 1789269420000],
-    OOS: [252, 335, 84, 1789269420000, 1789571820000],
+    TRAIN: [0, 511, 512, 1788362220000, 1790205420000],
+    VALIDATION: [512, 767, 256, 1790205420000, 1791127020000],
+    OOS: [768, 1023, 256, 1791127020000, 1792048620000],
   };
   for (const name of SPLIT_NAMES) {
     const split = policy.splits?.[name];

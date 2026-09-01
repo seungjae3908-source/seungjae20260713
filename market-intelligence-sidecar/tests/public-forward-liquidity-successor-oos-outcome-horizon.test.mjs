@@ -9,48 +9,52 @@ import {
   verifySuccessorOosOutcomeHorizonContract,
 } from '../src/public-forward-liquidity-successor-oos-outcome-horizon.mjs';
 
-test('5000ms successor OOS horizon contract is immutable and internally consistent', () => {
+test('5000ms successor OOS horizon V2 binding is immutable and internally consistent', () => {
   const verdict = verifySuccessorOosOutcomeHorizonContract();
   assert.deepEqual(verdict.blockers, []);
   assert.equal(verdict.valid, true);
-  assert.equal(
-    verdict.policyDigest,
-    'd082e51e37ac7847178b37ad332e4cd7283316686b1f24e1349a7bcae00da286',
-  );
-  assert.equal(
-    verdict.contractDigest,
-    '7dd8b27843a12a427a45cdd47d71c412643611d2566f9e5feaccc149e668a1a5',
-  );
-  assert.equal(
-    verdict.contractId,
-    'PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_OOS_HORIZON_V1_5000MS:d082e51e37ac7847178b37ad332e4cd7283316686b1f24e1349a7bcae00da286',
-  );
+  assert.equal(verdict.policyDigest, 'e20d2d05731ba720b93d51f706670b39fbd711c2ffed1ac41048d0f2bc126f3c');
+  assert.equal(verdict.contractDigest, '8559567aba09a2c71644b7ab5a239bf6a4d04cee7046a6c5ed09aa96f06df101');
+  assert.equal(verdict.contractId, 'PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_OOS_HORIZON_BINDING_V2_5000MS:e20d2d05731ba720b93d51f706670b39fbd711c2ffed1ac41048d0f2bc126f3c');
 });
 
-test('human 5000ms freeze predates both successor cohort start and first OOS slot', () => {
-  const { authority, successorCohortBinding } = SUCCESSOR_OOS_HORIZON_CONTRACT.policyCore;
+test('original human 5000ms freeze and capacity rebinding both predate cohort/OOS start', () => {
+  const {
+    authority,
+    capacityRebindingAuthority,
+    successorCohortBinding,
+  } = SUCCESSOR_OOS_HORIZON_CONTRACT.policyCore;
   assert.equal(authority.canonicalHubIssue, 838);
   assert.equal(authority.humanApprovalCommentId, 5490310342);
   assert.equal(authority.humanApprovalCreatedAt, '2026-09-01T07:15:31Z');
   assert.equal(authority.humanApprovalCreatedAtMs, 1788246931000);
+  assert.equal(capacityRebindingAuthority.capacityNumericFreezeCommentId, 5500894175);
+  assert.equal(capacityRebindingAuthority.capacityNumericFreezeCreatedAt, '2026-09-01T21:49:01Z');
+  assert.equal(capacityRebindingAuthority.outcomeHorizonRetuned, false);
   assert.ok(authority.humanApprovalCreatedAtMs < successorCohortBinding.firstEligibleSlotMs);
   assert.ok(authority.humanApprovalCreatedAtMs < successorCohortBinding.firstOosSlotMs);
+  assert.ok(capacityRebindingAuthority.capacityNumericFreezeCreatedAtMs < successorCohortBinding.firstEligibleSlotMs);
+  assert.ok(capacityRebindingAuthority.capacityNumericFreezeCreatedAtMs < successorCohortBinding.firstOosSlotMs);
 });
 
-test('separate OOS policy binds exactly to the frozen successor cohort without changing its identity', () => {
+test('separate OOS policy binds exactly to the 1024-slot successor cohort without retuning 5000ms', () => {
   const binding = SUCCESSOR_OOS_HORIZON_CONTRACT.policyCore.successorCohortBinding;
   assert.equal(binding.cohortId, SUCCESSOR_PROSPECTIVE_CONTRACT.cohortId);
   assert.equal(binding.policyDigest, SUCCESSOR_PROSPECTIVE_CONTRACT.policyDigest);
   assert.equal(binding.cohortDigest, SUCCESSOR_PROSPECTIVE_CONTRACT.cohortDigest);
   assert.equal(binding.firstEligibleSlotMs, SUCCESSOR_PROSPECTIVE_CONTRACT.policyCore.cohort.startInclusiveMs);
-  assert.equal(binding.firstOosSlotIndex, 252);
+  assert.equal(binding.firstOosSlotIndex, 768);
   assert.equal(binding.firstOosSlotMs, SUCCESSOR_PROSPECTIVE_CONTRACT.policyCore.splits.OOS.startInclusiveMs);
-  assert.equal(binding.oosExpectedSlotN, 84);
+  assert.equal(binding.oosExpectedSlotN, 256);
 
   const baseOos = SUCCESSOR_PROSPECTIVE_CONTRACT.policyCore.oosOutcomePolicy;
   assert.equal(baseOos.status, 'NOT_ASSIGNED_BY_THIS_APPROVAL');
   assert.equal(baseOos.numericOutcomeHorizonMs, null);
   assert.equal(baseOos.separatePreObservationFreezeRequired, true);
+
+  const outcome = SUCCESSOR_OOS_HORIZON_CONTRACT.policyCore.outcomePolicy;
+  assert.equal(outcome.outcomeHorizonIdentity, 'PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_OOS_HORIZON_V1_5000MS');
+  assert.equal(outcome.outcomeHorizonMs, 5_000);
 });
 
 test('5000ms is measured from assignment eventTimestampMs and uses existing first-at-or-after semantics', () => {
@@ -103,13 +107,29 @@ test('tampering 5000ms to V3 60000ms fails closed', () => {
   assert.ok(verdict.blockers.includes('SUCCESSOR_OOS_HORIZON_POLICY_INVALID'));
 });
 
+test('tampering capacity binding or rebinding authority fails closed', () => {
+  const wrongBinding = structuredClone(SUCCESSOR_OOS_HORIZON_CONTRACT);
+  wrongBinding.policyCore.successorCohortBinding.firstOosSlotIndex = 252;
+  const bindingVerdict = verifySuccessorOosOutcomeHorizonContract(wrongBinding);
+  assert.equal(bindingVerdict.valid, false);
+  assert.ok(bindingVerdict.blockers.includes('SUCCESSOR_OOS_HORIZON_POLICY_DIGEST_MISMATCH'));
+  assert.ok(bindingVerdict.blockers.includes('SUCCESSOR_OOS_HORIZON_COHORT_BINDING_MISMATCH'));
+
+  const retuned = structuredClone(SUCCESSOR_OOS_HORIZON_CONTRACT);
+  retuned.policyCore.capacityRebindingAuthority.outcomeHorizonRetuned = true;
+  const retunedVerdict = verifySuccessorOosOutcomeHorizonContract(retuned);
+  assert.equal(retunedVerdict.valid, false);
+  assert.ok(retunedVerdict.blockers.includes('SUCCESSOR_OOS_HORIZON_CAPACITY_REBIND_AUTHORITY_INVALID'));
+});
+
 test('post-observation freeze or authority escalation fails closed', () => {
   const late = structuredClone(SUCCESSOR_OOS_HORIZON_CONTRACT);
-  late.policyCore.authority.humanApprovalCreatedAtMs =
+  late.policyCore.capacityRebindingAuthority.capacityNumericFreezeCreatedAtMs =
     late.policyCore.successorCohortBinding.firstEligibleSlotMs;
   const lateVerdict = verifySuccessorOosOutcomeHorizonContract(late);
   assert.equal(lateVerdict.valid, false);
-  assert.ok(lateVerdict.blockers.includes('SUCCESSOR_OOS_HORIZON_NOT_FROZEN_PROSPECTIVELY'));
+  assert.ok(lateVerdict.blockers.includes('SUCCESSOR_OOS_HORIZON_POLICY_DIGEST_MISMATCH'));
+  assert.ok(lateVerdict.blockers.includes('SUCCESSOR_OOS_HORIZON_CAPACITY_REBIND_NOT_PROSPECTIVE'));
 
   const escalated = structuredClone(SUCCESSOR_OOS_HORIZON_CONTRACT);
   escalated.policyCore.approvalBoundaries.scheduleActivationApproved = true;
