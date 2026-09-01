@@ -21,6 +21,7 @@ import {
 
 const EXACT_MAIN = '9d01c7a80b5d33faf29a59990d75cc2292441f82';
 const COHORT = SUCCESSOR_PROSPECTIVE_CONTRACT.policyCore.cohort;
+const noPriorCredit = async () => false;
 
 function validBatch({
   exactMainSha = EXACT_MAIN,
@@ -89,7 +90,6 @@ function eligibleArgs(overrides = {}) {
     scheduledRunCreatedAtMs: overrides.scheduledRunCreatedAtMs ?? created,
     actualRunStartedAtMs: actual,
     runAttempt: 1,
-    duplicateCanonicalArtifact: false,
     ...overrides,
   };
 }
@@ -107,9 +107,13 @@ test('frozen Successor cohort and 5000ms OOS contracts are valid before seam use
   );
 });
 
-test('actual start deterministically resolves the immutable Successor slot and split', () => {
+test('resolver only grants attempt eligibility and never sample credit by itself', () => {
   const first = resolveSuccessorScheduledAuthority(eligibleArgs());
   assert.equal(first.eligible, true);
+  assert.equal(first.creditEligibleIfPresent, true);
+  assert.equal(first.maximumProspectiveSlotCredit, 1);
+  assert.equal(first.prospectiveSlotCredit, 0);
+  assert.equal(first.captureStatus, 'ELIGIBLE_TO_ATTEMPT_CAPTURE');
   assert.equal(first.slot.slotIndex, 0);
   assert.equal(first.slot.split, 'TRAIN');
   assert.equal(first.slot.canonicalSlotKey.policyDigest, SUCCESSOR_PROSPECTIVE_CONTRACT.policyDigest);
@@ -120,12 +124,14 @@ test('actual start deterministically resolves the immutable Successor slot and s
   }));
   assert.equal(validation.slot.slotIndex, 168);
   assert.equal(validation.slot.split, 'VALIDATION');
+  assert.equal(validation.prospectiveSlotCredit, 0);
 
   const oos = resolveSuccessorScheduledAuthority(eligibleArgs({
     actualRunStartedAtMs: buildSuccessorSlotDescriptor(252).nominalScheduledAtMs,
   }));
   assert.equal(oos.slot.slotIndex, 252);
   assert.equal(oos.slot.split, 'OOS');
+  assert.equal(oos.prospectiveSlotCredit, 0);
 });
 
 test('queued old schedule event cannot cross an hour boundary and masquerade as the next slot', () => {
@@ -147,7 +153,8 @@ test('the +20 minute start boundary is inclusive and one millisecond later is ze
     actualRunStartedAtMs: slot.allowedStartThroughMs,
   }));
   assert.equal(boundary.eligible, true);
-  assert.equal(boundary.prospectiveSlotCredit, 1);
+  assert.equal(boundary.creditEligibleIfPresent, true);
+  assert.equal(boundary.prospectiveSlotCredit, 0);
 
   const late = resolveSuccessorScheduledAuthority(eligibleArgs({
     actualRunStartedAtMs: slot.allowedStartThroughMs + 1,
@@ -157,29 +164,30 @@ test('the +20 minute start boundary is inclusive and one millisecond later is ze
   assert.equal(late.prospectiveSlotCredit, 0);
 });
 
-test('wrong event/cron, pre/post cohort, rerun, and duplicate never become eligible', () => {
+test('wrong event/cron, pre/post cohort, and rerun never become eligible', () => {
   const cases = [
     eligibleArgs({ eventName: 'workflow_dispatch' }),
     eligibleArgs({ scheduleExpression: '18 * * * *' }),
     eligibleArgs({ actualRunStartedAtMs: COHORT.startInclusiveMs - 1 }),
     eligibleArgs({ actualRunStartedAtMs: COHORT.endExclusiveMs }),
     eligibleArgs({ runAttempt: 2 }),
-    eligibleArgs({ duplicateCanonicalArtifact: true }),
   ];
   for (const candidate of cases) {
     const result = resolveSuccessorScheduledAuthority(candidate);
     assert.equal(result.eligible, false);
+    assert.equal(result.creditEligibleIfPresent, false);
     assert.equal(result.prospectiveSlotCredit, 0);
   }
 });
 
-test('eligible exact-main scheduled capture uses the canonical collector contract and earns only receipt credit', async () => {
+test('eligible exact-main scheduled capture uses the canonical collector contract and earns credit only in final receipt', async () => {
   const slot = buildSuccessorSlotDescriptor(0);
   let collectorCalls = 0;
   let received = null;
   const result = await executeSuccessorScheduledCaptureSeam({
     ...eligibleArgs(),
     exactMainSha: EXACT_MAIN,
+    hasPriorCreditedSlot: noPriorCredit,
     getRemoteMainSha: sameMainResolver(EXACT_MAIN, EXACT_MAIN),
     clock: () => slot.nominalScheduledAtMs + 5_000,
     runId: '12345',
@@ -197,6 +205,8 @@ test('eligible exact-main scheduled capture uses the canonical collector contrac
   assert.equal(received.maxPreEventBookAgeMs, 5_000);
   assert.equal(received.collectorCodeSha, EXACT_MAIN);
   assert.equal(result.captureReceipt.captureStatus, 'PRESENT');
+  assert.equal(result.captureReceipt.priorCreditedSlotCheck, 'CLEAR');
+  assert.equal(result.captureReceipt.maximumProspectiveSlotCredit, 1);
   assert.equal(result.captureReceipt.prospectiveSlotCredit, 1);
   assert.equal(result.captureReceipt.slotIndex, 0);
   assert.equal(result.captureReceipt.split, 'TRAIN');
@@ -208,11 +218,62 @@ test('eligible exact-main scheduled capture uses the canonical collector contrac
   assert.equal(result.captureReceipt.profitabilityProven, false);
 });
 
+test('prior credited slot lookup is mandatory and fail-closed before collector invocation', async () => {
+  let collectorCalls = 0;
+  const missingLookup = await executeSuccessorScheduledCaptureSeam({
+    ...eligibleArgs(),
+    exactMainSha: EXACT_MAIN,
+    getRemoteMainSha: sameMainResolver(EXACT_MAIN),
+    collector: async () => {
+      collectorCalls += 1;
+      return validBatch();
+    },
+  });
+  assert.equal(collectorCalls, 0);
+  assert.equal(missingLookup.captureReceipt.captureStatus, 'PRIOR_CREDIT_STATE_UNVERIFIED');
+  assert.equal(missingLookup.captureReceipt.priorCreditedSlotCheck, 'UNVERIFIED');
+  assert.equal(missingLookup.captureReceipt.prospectiveSlotCredit, 0);
+
+  const duplicate = await executeSuccessorScheduledCaptureSeam({
+    ...eligibleArgs(),
+    exactMainSha: EXACT_MAIN,
+    hasPriorCreditedSlot: async () => true,
+    getRemoteMainSha: sameMainResolver(EXACT_MAIN),
+    collector: async () => {
+      collectorCalls += 1;
+      return validBatch();
+    },
+  });
+  assert.equal(collectorCalls, 0);
+  assert.equal(duplicate.captureReceipt.captureStatus, 'DIAGNOSTIC_ONLY');
+  assert.equal(duplicate.captureReceipt.priorCreditedSlotCheck, 'PRESENT');
+  assert.equal(duplicate.captureReceipt.prospectiveSlotCredit, 0);
+});
+
+test('prior credited slot lookup failure cannot invoke collector or create credit', async () => {
+  let calls = 0;
+  const result = await executeSuccessorScheduledCaptureSeam({
+    ...eligibleArgs(),
+    exactMainSha: EXACT_MAIN,
+    hasPriorCreditedSlot: async () => { throw new Error('ARTIFACT_INDEX_UNAVAILABLE'); },
+    getRemoteMainSha: sameMainResolver(EXACT_MAIN),
+    collector: async () => {
+      calls += 1;
+      return validBatch();
+    },
+  });
+  assert.equal(calls, 0);
+  assert.equal(result.captureReceipt.priorCreditedSlotCheck, 'UNVERIFIED');
+  assert.equal(result.captureReceipt.captureStatus, 'PRIOR_CREDIT_STATE_UNVERIFIED');
+  assert.equal(result.captureReceipt.prospectiveSlotCredit, 0);
+});
+
 test('remote main mismatch before capture prevents collector invocation', async () => {
   let calls = 0;
   const result = await executeSuccessorScheduledCaptureSeam({
     ...eligibleArgs(),
     exactMainSha: EXACT_MAIN,
+    hasPriorCreditedSlot: noPriorCredit,
     getRemoteMainSha: sameMainResolver('0'.repeat(40)),
     collector: async () => {
       calls += 1;
@@ -231,6 +292,7 @@ test('completion after +10 minutes preserves raw evidence but gives zero prospec
   const result = await executeSuccessorScheduledCaptureSeam({
     ...eligibleArgs(),
     exactMainSha: EXACT_MAIN,
+    hasPriorCreditedSlot: noPriorCredit,
     getRemoteMainSha: sameMainResolver(EXACT_MAIN, EXACT_MAIN),
     clock: () => slot.nominalScheduledAtMs + COHORT.allowedCompletionDelayMs + 1,
     collector: async () => batch,
@@ -247,6 +309,7 @@ test('main moving during capture preserves raw evidence but gives zero prospecti
   const result = await executeSuccessorScheduledCaptureSeam({
     ...eligibleArgs(),
     exactMainSha: EXACT_MAIN,
+    hasPriorCreditedSlot: noPriorCredit,
     getRemoteMainSha: sameMainResolver(EXACT_MAIN, 'f'.repeat(40)),
     clock: () => buildSuccessorSlotDescriptor(0).nominalScheduledAtMs + 5_000,
     collector: async () => batch,
@@ -262,6 +325,7 @@ test('invalid or private batch is preserved only as diagnostic raw evidence and 
   const result = await executeSuccessorScheduledCaptureSeam({
     ...eligibleArgs(),
     exactMainSha: EXACT_MAIN,
+    hasPriorCreditedSlot: noPriorCredit,
     getRemoteMainSha: sameMainResolver(EXACT_MAIN, EXACT_MAIN),
     clock: () => buildSuccessorSlotDescriptor(0).nominalScheduledAtMs + 5_000,
     collector: async () => batch,
@@ -277,6 +341,7 @@ test('provider failure preserves the attempted receipt but has no fabricated raw
   const result = await executeSuccessorScheduledCaptureSeam({
     ...eligibleArgs(),
     exactMainSha: EXACT_MAIN,
+    hasPriorCreditedSlot: noPriorCredit,
     getRemoteMainSha: sameMainResolver(EXACT_MAIN, EXACT_MAIN),
     clock: () => buildSuccessorSlotDescriptor(0).nominalScheduledAtMs + 5_000,
     collector: async () => { throw new Error('NETWORK_UNAVAILABLE'); },
@@ -293,6 +358,7 @@ test('empty genuine collector result is BLOCKED_DATA, never measured zero succes
   const result = await executeSuccessorScheduledCaptureSeam({
     ...eligibleArgs(),
     exactMainSha: EXACT_MAIN,
+    hasPriorCreditedSlot: noPriorCredit,
     getRemoteMainSha: sameMainResolver(EXACT_MAIN, EXACT_MAIN),
     clock: () => buildSuccessorSlotDescriptor(0).nominalScheduledAtMs + 5_000,
     collector: async () => validBatch({ observations: 0 }),
@@ -307,6 +373,7 @@ test('wrong trigger remains visible as wrong trigger in its zero-credit attempt 
   const result = await executeSuccessorScheduledCaptureSeam({
     ...eligibleArgs({ eventName: 'workflow_dispatch' }),
     exactMainSha: EXACT_MAIN,
+    hasPriorCreditedSlot: noPriorCredit,
     getRemoteMainSha: sameMainResolver(EXACT_MAIN),
     collector: async () => {
       calls += 1;
@@ -324,6 +391,7 @@ test('artifact receipt binds immutable raw lineage without promoting downstream 
   const capture = await executeSuccessorScheduledCaptureSeam({
     ...eligibleArgs(),
     exactMainSha: EXACT_MAIN,
+    hasPriorCreditedSlot: noPriorCredit,
     getRemoteMainSha: sameMainResolver(EXACT_MAIN, EXACT_MAIN),
     clock: () => slot.nominalScheduledAtMs + 5_000,
     collector: async () => validBatch(),
