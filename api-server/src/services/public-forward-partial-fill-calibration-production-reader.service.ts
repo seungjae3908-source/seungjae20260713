@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { lstat, readFile, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
 
@@ -52,6 +53,9 @@ export type PublicForwardPartialFillProductionReaderInput = Readonly<{
   collectorCodeSha: string;
   expectedDatasetIdentity: string;
   expectedDatasetDigest: string;
+  datasetRelativePath?: string;
+  expectedDatasetBytesDigest?: string;
+  runtimeBindingSource?: 'IMMUTABLE_RELEASE_BINDING';
 }>;
 
 export type PublicForwardPartialFillProductionDatasetRead = Readonly<{
@@ -124,6 +128,13 @@ function normalizedPortablePath(value: string): string {
   return normalized.length > 1 ? normalized.replace(/\/+$/u, '') : normalized;
 }
 
+function safeRelativePath(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 512 || isAbsolute(value) || value.includes('\\')) {
+    return false;
+  }
+  return value.split('/').every((part) => part.length > 0 && part !== '.' && part !== '..');
+}
+
 function assertStateRootNotProtected(stateRoot: string): void {
   const normalized = normalizedPortablePath(stateRoot);
   if (PROTECTED_EXACT_OR_PREFIX_ROOTS.some((protectedRoot) => (
@@ -154,11 +165,16 @@ function canonicalDatasetRelativePath(
   ].join('/');
 }
 
+function immutableDatasetRelativePath(datasetDigest: string): string {
+  return `forward/partial-fill-calibration-v1/immutable-datasets/${datasetDigest}/dataset.json`;
+}
+
 function validateReaderInput(input: PublicForwardPartialFillProductionReaderInput): Readonly<{
   lexicalStateRoot: string;
   collectorCodeSha: string;
   expectedDatasetIdentity: string;
   expectedDatasetDigest: string;
+  expectedDatasetBytesDigest: string | null;
   datasetRelativePath: string;
 }> {
   if (input.storeContract !== PUBLIC_FORWARD_PARTIAL_FILL_CALIBRATION_STORE_CONTRACT) {
@@ -180,7 +196,26 @@ function validateReaderInput(input: PublicForwardPartialFillProductionReaderInpu
 
   const lexicalStateRoot = resolve(input.stateRoot);
   assertStateRootNotProtected(lexicalStateRoot);
-  const datasetRelativePath = canonicalDatasetRelativePath(input.sampleClass, collectorCodeSha);
+
+  let datasetRelativePath: string;
+  let expectedDatasetBytesDigest: string | null = null;
+  if (input.runtimeBindingSource === 'IMMUTABLE_RELEASE_BINDING') {
+    if (!safeRelativePath(input.datasetRelativePath)
+      || input.datasetRelativePath !== immutableDatasetRelativePath(expectedDatasetDigest)) {
+      throw new Error('BLOCKED_READER:IMMUTABLE_RUNTIME_LOCATOR_INVALID');
+    }
+    expectedDatasetBytesDigest = exactSha256(input.expectedDatasetBytesDigest);
+    if (!expectedDatasetBytesDigest) {
+      throw new Error('BLOCKED_READER:EXPECTED_DATASET_BYTES_DIGEST_INVALID');
+    }
+    datasetRelativePath = input.datasetRelativePath;
+  } else {
+    if (input.datasetRelativePath !== undefined || input.expectedDatasetBytesDigest !== undefined) {
+      throw new Error('BLOCKED_READER:IMMUTABLE_RUNTIME_LOCATOR_INVALID');
+    }
+    datasetRelativePath = canonicalDatasetRelativePath(input.sampleClass, collectorCodeSha);
+  }
+
   const datasetPath = resolve(lexicalStateRoot, datasetRelativePath);
   const lexicalRelative = relative(lexicalStateRoot, datasetPath);
   if (!lexicalRelative || lexicalRelative.startsWith('..') || isAbsolute(lexicalRelative)) {
@@ -195,6 +230,7 @@ function validateReaderInput(input: PublicForwardPartialFillProductionReaderInpu
     collectorCodeSha,
     expectedDatasetIdentity,
     expectedDatasetDigest,
+    expectedDatasetBytesDigest,
     datasetRelativePath,
   });
 }
@@ -257,10 +293,25 @@ export async function readPublicForwardPartialFillCalibrationDatasetReadOnly(
   if (!canonicalRelative || canonicalRelative.startsWith('..') || isAbsolute(canonicalRelative)) {
     throw new Error('BLOCKED_READER:DATASET_PATH_OUTSIDE_STATE_ROOT');
   }
+  if (normalizedPortablePath(canonicalRelative) !== validated.datasetRelativePath) {
+    throw new Error('BLOCKED_READER:UNEXPECTED_DATASET_PATH');
+  }
+
+  let datasetBytes: Buffer;
+  try {
+    datasetBytes = await readFile(canonicalDatasetPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('BLOCKED_READER:DATASET_MISSING');
+    throw error;
+  }
+  if (validated.expectedDatasetBytesDigest
+    && createHash('sha256').update(datasetBytes).digest('hex') !== validated.expectedDatasetBytesDigest) {
+    throw new Error('DATASET_CORRUPT:DATASET_BYTES_DIGEST_MISMATCH');
+  }
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(await readFile(canonicalDatasetPath, 'utf8')) as unknown;
+    parsed = JSON.parse(datasetBytes.toString('utf8')) as unknown;
   } catch (error) {
     if (error instanceof SyntaxError) throw new Error('DATASET_CORRUPT:INVALID_JSON');
     throw error;
