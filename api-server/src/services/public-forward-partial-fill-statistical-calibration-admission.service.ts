@@ -215,6 +215,17 @@ function digest(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(canonicalize(value))).digest('hex');
 }
 
+function deepFreezeCanonical<T>(value: T): T {
+  const copy = canonicalize(value) as T;
+  const freeze = (node: unknown): void => {
+    if (!node || typeof node !== 'object' || Object.isFrozen(node)) return;
+    for (const child of Object.values(node as Record<string, unknown>)) freeze(child);
+    Object.freeze(node);
+  };
+  freeze(copy);
+  return copy;
+}
+
 export function computePublicForwardPartialFillBusinessToleranceSemanticsDigest(): string {
   return digest(PUBLIC_FORWARD_PARTIAL_FILL_BUSINESS_TOLERANCE_DECISION_SEMANTICS);
 }
@@ -225,7 +236,7 @@ function nonEmpty(value: unknown): boolean {
 }
 
 function exactDigest(value: unknown): boolean {
-  return SHA256.test(String(value ?? '').trim().toLowerCase());
+  return SHA256.test(String(value ?? '').trim());
 }
 
 function finitePositive(value: unknown): value is number {
@@ -394,7 +405,7 @@ function metricEvaluability(evidence: CalibrationEvidenceBinding): AdmittedCalib
     tol03FillRatioSignedBias: fillPair,
     tol04AllInCostAbsoluteError: costPair,
     tol05AdverseCostUnderestimation: costPair,
-    tol06AdverseTailCostUnderestimation: costPair,
+    tol06AdverseTailCostUnderestimation: false,
     tol07PredictionIntervalCoverage: evidence.predictionIntervalPresent && evidence.realizedOpportunityOutcomePresent,
     tol08SettlementReconciliation: evidence.settlementEvidencePresent,
     tol09CalibrationFreshness: false,
@@ -453,9 +464,9 @@ export function buildPublicForwardPartialFillStatisticalCalibrationAdmission(
     consumerIdentity: input.consumerIdentity.trim(),
     datasetSchemaVersion: PUBLIC_FORWARD_PARTIAL_FILL_CALIBRATION_DATASET_VERSION,
     datasetStoreContract: PUBLIC_FORWARD_PARTIAL_FILL_CALIBRATION_STORE_CONTRACT,
-    businessTolerance: input.businessTolerance,
-    successor: input.successor,
-    statisticalMethodology: input.statisticalMethodology,
+    businessTolerance: deepFreezeCanonical(input.businessTolerance),
+    successor: deepFreezeCanonical(input.successor),
+    statisticalMethodology: deepFreezeCanonical(input.statisticalMethodology),
     admittedEvidence: Object.freeze(admittedEvidence),
     effectiveIndependentEligibleN: admittedEvidence.length,
     calibrationSampleSufficient: false as const,
