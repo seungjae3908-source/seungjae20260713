@@ -123,7 +123,7 @@ test('A05 #23 body registration is a mandatory precondition', () => {
   );
 });
 
-test('A06 authorization evidence freezes human authority but never merges, activates, captures, or grants credit', () => {
+test('A06 authority freezes an exact pre-merge transition without self-invalidating the authorized merge', () => {
   const evidence = buildSuccessorScheduleAuthorityEvidence(evidenceInput());
   assert.equal(evidence.action, 'AUTHORIZE');
   assert.equal(evidence.authorityStatus, 'HUMAN_AUTHORITY_FROZEN');
@@ -138,6 +138,15 @@ test('A06 authorization evidence freezes human authority but never merges, activ
   assert.equal(evidence.cohortPolicyDigest, POLICY_DIGEST);
   assert.equal(evidence.cohortDigest, COHORT_DIGEST);
   assert.equal(evidence.totalSlotN, FROZEN.totalSlotN);
+  assert.deepEqual(evidence.authorizedTransition, {
+    type: 'MERGE_EXACT_PR_871_CANDIDATE_ONTO_EXACT_BASE_MAIN_ONLY',
+    prNumber: 871,
+    baseMainSha: MAIN_SHA,
+    candidateHeadSha: CANDIDATE_SHA,
+  });
+  assert.equal(evidence.currentMainMustRemainExactUntilAuthorizedMerge, true);
+  assert.equal(evidence.authorityStaleOnUnexpectedMainMoveBeforeMerge, true);
+  assert.equal(evidence.authorityConsumedByExactAuthorizedMerge, true);
   assert.equal(evidence.mergeAuthorized, false);
   assert.equal(evidence.scheduleMutationApplied, false);
   assert.equal(evidence.scheduleActivated, false);
@@ -145,8 +154,6 @@ test('A06 authorization evidence freezes human authority but never merges, activ
   assert.equal(evidence.prospectiveSlotCredit, 0);
   assert.equal(evidence.technicalActivationAuthorizedByReceipt, false);
   assert.equal(evidence.executionAuthority, 'NONE');
-  assert.equal(evidence.currentMainMustRemainExactForActivationEligibility, true);
-  assert.equal(evidence.authorityBecomesStaleOnMainMove, true);
   assert.match(evidence.evidenceDigest, /^[0-9a-f]{64}$/);
 });
 
@@ -226,5 +233,6 @@ test('A09 authority workflow is issue-comment evidence only and tracks active Su
     /^\s*(?:pm2\s+(?:start|restart|reload)|systemctl\s+(?:enable|start|restart)|ssh\s+)/im,
   );
   assert.match(workflow, /SUCCESSOR_AUTHORIZE_COMMAND_NOT_REGISTERED_ON_RELEASE_CONTROL/);
-  assert.match(workflow, /authorityBecomesStaleOnMainMove/);
+  assert.match(workflow, /authorityStaleOnUnexpectedMainMoveBeforeMerge/);
+  assert.match(workflow, /authorityConsumedByExactAuthorizedMerge/);
 });
