@@ -325,8 +325,6 @@ export function buildSuccessorScheduleAuthorityEvidence({
     previousCreditedSamplesImmutable: true,
     creditOutsideCohort: 0,
     replayBackfillAfterRevocation: 0,
-    currentMainMustRemainExactForActivationEligibility: true,
-    authorityBecomesStaleOnMainMove: true,
     finalPreActivationAuditRequired: true,
   };
 
@@ -349,6 +347,15 @@ export function buildSuccessorScheduleAuthorityEvidence({
       authorizedWorkflowCandidateHeadSha: workflowCandidateHeadSha,
       authorizedWorkflowBlobSha: workflowBlobSha,
       exactCandidateRequiredCiRunId: Number(requiredCandidateCiRunId),
+      authorizedTransition: Object.freeze({
+        type: 'MERGE_EXACT_PR_871_CANDIDATE_ONTO_EXACT_BASE_MAIN_ONLY',
+        prNumber: SUCCESSOR_SCHEDULE_ACTIVATION_WORKFLOW.prNumber,
+        baseMainSha: currentMainSha,
+        candidateHeadSha: workflowCandidateHeadSha,
+      }),
+      currentMainMustRemainExactUntilAuthorizedMerge: true,
+      authorityStaleOnUnexpectedMainMoveBeforeMerge: true,
+      authorityConsumedByExactAuthorizedMerge: true,
       technicalActivationAuthorizedByReceipt: false,
       actualMergeApprovalStillRequired: true,
       downstreamCompatibilityStillSeparatelyRequired: true,
