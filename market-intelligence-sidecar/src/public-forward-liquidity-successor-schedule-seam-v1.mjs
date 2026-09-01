@@ -103,9 +103,14 @@ function zeroAuthorityResult({
   });
 }
 
+function slotIndexForTimestamp(timestampMs) {
+  return Math.floor((timestampMs - COHORT.startInclusiveMs) / COHORT.slotCadenceMs);
+}
+
 export function resolveSuccessorScheduledAuthority({
   eventName,
   scheduleExpression,
+  scheduledRunCreatedAtMs,
   actualRunStartedAtMs,
   runAttempt = 1,
   duplicateCanonicalArtifact = false,
@@ -134,7 +139,14 @@ export function resolveSuccessorScheduledAuthority({
     });
   }
 
-  const actual = nonNegativeInteger(actualRunStartedAtMs, 'SUCCESSOR_ACTUAL_RUN_STARTED_AT_MS_INVALID');
+  const created = nonNegativeInteger(
+    scheduledRunCreatedAtMs,
+    'SUCCESSOR_SCHEDULED_RUN_CREATED_AT_MS_INVALID',
+  );
+  const actual = nonNegativeInteger(
+    actualRunStartedAtMs,
+    'SUCCESSOR_ACTUAL_RUN_STARTED_AT_MS_INVALID',
+  );
   const attempt = positiveInteger(runAttempt, 'SUCCESSOR_RUN_ATTEMPT_INVALID');
 
   if (actual < COHORT.startInclusiveMs) {
@@ -151,8 +163,23 @@ export function resolveSuccessorScheduledAuthority({
       blocker: 'SUCCESSOR_ATTEMPT_AT_OR_AFTER_COHORT_END',
     });
   }
+  if (created < COHORT.startInclusiveMs || created >= COHORT.endExclusiveMs) {
+    return zeroAuthorityResult({
+      attempted: true,
+      status: 'SCHEDULE_PROVENANCE_INVALID',
+      blocker: 'SUCCESSOR_SCHEDULED_RUN_CREATED_OUTSIDE_COHORT',
+    });
+  }
+  if (created > actual) {
+    return zeroAuthorityResult({
+      attempted: true,
+      status: 'SCHEDULE_PROVENANCE_INVALID',
+      blocker: 'SUCCESSOR_SCHEDULED_RUN_CREATED_AFTER_ACTUAL_START',
+    });
+  }
 
-  const slotIndex = Math.floor((actual - COHORT.startInclusiveMs) / COHORT.slotCadenceMs);
+  const slotIndex = slotIndexForTimestamp(actual);
+  const createdSlotIndex = slotIndexForTimestamp(created);
   if (!Number.isInteger(slotIndex) || slotIndex < 0 || slotIndex >= COHORT.totalSlotN) {
     return zeroAuthorityResult({
       attempted: true,
@@ -160,13 +187,28 @@ export function resolveSuccessorScheduledAuthority({
       blocker: 'SUCCESSOR_COMPUTED_SLOT_INDEX_INVALID',
     });
   }
-
   const slot = buildSuccessorSlotDescriptor(slotIndex);
+  if (createdSlotIndex !== slotIndex) {
+    return zeroAuthorityResult({
+      attempted: true,
+      status: 'SCHEDULE_PROVENANCE_INVALID',
+      blocker: 'SUCCESSOR_SCHEDULE_QUEUE_CROSSED_SLOT_BOUNDARY',
+      slot,
+    });
+  }
   if (slot.cronUtc !== SUCCESSOR_SCHEDULE_CRON_UTC) {
     return zeroAuthorityResult({
       attempted: true,
       status: 'INVALID_SLOT',
       blocker: 'SUCCESSOR_SLOT_CRON_MISMATCH',
+      slot,
+    });
+  }
+  if (created < slot.nominalScheduledAtMs || created > slot.allowedStartThroughMs) {
+    return zeroAuthorityResult({
+      attempted: true,
+      status: 'SCHEDULE_PROVENANCE_INVALID',
+      blocker: 'SUCCESSOR_SCHEDULED_RUN_CREATED_OUTSIDE_ALLOWED_SLOT_WINDOW',
       slot,
     });
   }
@@ -247,9 +289,12 @@ function validateCapturedBatch(batch, { exactMainSha } = {}) {
     || batch?.readiness?.FULL_COST_READY !== false) {
     throw new Error('SUCCESSOR_CAPTURE_TRUTH_BOUNDARY_INVALID');
   }
+  if (!Array.isArray(batch?.observations)) {
+    throw new Error('SUCCESSOR_OBSERVATIONS_INVALID');
+  }
 
   const ids = new Set();
-  for (const observation of batch.observations ?? []) {
+  for (const observation of batch.observations) {
     if (ids.has(observation?.observationId)) {
       throw new Error('SUCCESSOR_CAPTURE_DUPLICATE_OBSERVATION_ID');
     }
@@ -284,7 +329,7 @@ function classifyCaptureError(error) {
   });
 }
 
-function slotReceiptFields(authority, actualRunStartedAtMs) {
+function slotReceiptFields(authority, scheduledRunCreatedAtMs, actualRunStartedAtMs) {
   if (!authority?.slot) return {};
   const slot = authority.slot;
   return {
@@ -297,6 +342,7 @@ function slotReceiptFields(authority, actualRunStartedAtMs) {
     nominalScheduledAtMs: slot.nominalScheduledAtMs,
     allowedStartThroughMs: slot.allowedStartThroughMs,
     slotEndExclusiveMs: slot.slotEndExclusiveMs,
+    scheduledRunCreatedAtMs,
     actualRunStartedAtMs,
     cronUtc: slot.cronUtc,
     canonicalSlotKey: slot.canonicalSlotKey,
@@ -306,10 +352,13 @@ function slotReceiptFields(authority, actualRunStartedAtMs) {
 
 function receiptBody({
   authority,
+  eventName,
+  scheduleExpression,
   exactMainSha,
   remoteMainShaBefore,
   remoteMainShaAfter,
   defaultBranchRef,
+  scheduledRunCreatedAtMs,
   actualRunStartedAtMs,
   completedAtMs,
   runId,
@@ -319,6 +368,7 @@ function receiptBody({
   blockers,
   collectorInvoked,
   rawBatchDigest,
+  rawEvidencePreserved,
   prospectiveObservationCount,
   droppedObservationCount,
   prospectiveSlotCredit,
@@ -333,8 +383,8 @@ function receiptBody({
     oosOutcomeHorizonMs: SUCCESSOR_OOS_HORIZON_CONTRACT.policyCore.outcomePolicy.outcomeHorizonMs,
     oosOutcomeSelectionPolicy:
       SUCCESSOR_OOS_HORIZON_CONTRACT.policyCore.outcomePolicy.outcomeSelectionPolicy,
-    eventName: SUCCESSOR_SCHEDULE_EVENT_NAME,
-    scheduleExpression: SUCCESSOR_SCHEDULE_CRON_UTC,
+    eventName: String(eventName ?? '').trim(),
+    scheduleExpression: String(scheduleExpression ?? '').trim(),
     ATTEMPTED: authority?.attempted === true,
     collectorInvoked,
     runId: String(runId ?? ''),
@@ -362,6 +412,7 @@ function receiptBody({
     prospectiveObservationCount,
     droppedObservationCount,
     rawBatchDigest,
+    rawEvidencePreserved,
     completedAtMs,
     prospectiveSlotCredit,
     manualCredit: 0,
@@ -387,13 +438,14 @@ function receiptBody({
     autoTrading: false,
     orderSubmitted: false,
     realOrders: 0,
-    ...slotReceiptFields(authority, actualRunStartedAtMs),
+    ...slotReceiptFields(authority, scheduledRunCreatedAtMs, actualRunStartedAtMs),
   };
 }
 
 export async function executeSuccessorScheduledCaptureSeam({
   eventName,
   scheduleExpression,
+  scheduledRunCreatedAtMs,
   exactMainSha,
   defaultBranchRef = 'refs/heads/main',
   actualRunStartedAtMs,
@@ -415,6 +467,10 @@ export async function executeSuccessorScheduledCaptureSeam({
   if (typeof clock !== 'function') throw new Error('SUCCESSOR_CLOCK_INVALID');
   if (typeof collector !== 'function') throw new Error('SUCCESSOR_COLLECTOR_INVALID');
 
+  const created = nonNegativeInteger(
+    scheduledRunCreatedAtMs,
+    'SUCCESSOR_SCHEDULED_RUN_CREATED_AT_MS_INVALID',
+  );
   const actual = nonNegativeInteger(
     actualRunStartedAtMs,
     'SUCCESSOR_ACTUAL_RUN_STARTED_AT_MS_INVALID',
@@ -423,6 +479,7 @@ export async function executeSuccessorScheduledCaptureSeam({
   const authority = resolveSuccessorScheduledAuthority({
     eventName,
     scheduleExpression,
+    scheduledRunCreatedAtMs: created,
     actualRunStartedAtMs: actual,
     runAttempt: attempt,
     duplicateCanonicalArtifact,
@@ -441,14 +498,22 @@ export async function executeSuccessorScheduledCaptureSeam({
   let credit = 0;
 
   if (authority.eligible === true) {
-    remoteMainShaBefore = exactSha(
-      await getRemoteMainSha(),
-      'SUCCESSOR_REMOTE_MAIN_SHA_BEFORE_INVALID',
-    );
-    if (remoteMainShaBefore !== mainSha) {
+    try {
+      remoteMainShaBefore = exactSha(
+        await getRemoteMainSha(),
+        'SUCCESSOR_REMOTE_MAIN_SHA_BEFORE_INVALID',
+      );
+    } catch (error) {
+      captureStatus = 'REMOTE_MAIN_PRE_CAPTURE_UNVERIFIED';
+      blockers = [String(error?.message ?? 'SUCCESSOR_REMOTE_MAIN_PRE_CAPTURE_UNVERIFIED')];
+    }
+
+    if (remoteMainShaBefore && remoteMainShaBefore !== mainSha) {
       captureStatus = 'STALE_MAIN_PRE_CAPTURE';
       blockers = ['SUCCESSOR_REMOTE_MAIN_CHANGED_BEFORE_CAPTURE'];
-    } else {
+    }
+
+    if (remoteMainShaBefore === mainSha) {
       collectorInvoked = true;
       try {
         batch = await collector({
@@ -459,30 +524,25 @@ export async function executeSuccessorScheduledCaptureSeam({
           postObservationDelaysMs: [...CAPTURE_POLICY.postObservationDelaysMs],
           maxPreEventBookAgeMs: CAPTURE_POLICY.maxPreEventBookAgeMs,
         });
-        validateCapturedBatch(batch, { exactMainSha: mainSha });
-        prospectiveObservationCount = batch.observations.length;
-        droppedObservationCount = batch.droppedEvents.length;
-        rawBatchDigest = sha256(canonicalJson(batch));
-        completedAtMs = nonNegativeInteger(clock(), 'SUCCESSOR_CAPTURE_COMPLETED_AT_MS_INVALID');
-        captureStatus = prospectiveObservationCount > 0 ? 'PRESENT' : 'BLOCKED_DATA';
-        blockers = prospectiveObservationCount > 0
-          ? []
-          : ['SUCCESSOR_FORWARD_OBSERVATIONS_EMPTY',
-            ...Object.keys(batch.datasetProvenance?.droppedReasons ?? {}).sort()];
-
-        remoteMainShaAfter = exactSha(
-          await getRemoteMainSha(),
-          'SUCCESSOR_REMOTE_MAIN_SHA_AFTER_INVALID',
+        completedAtMs = nonNegativeInteger(
+          clock(),
+          'SUCCESSOR_CAPTURE_COMPLETED_AT_MS_INVALID',
         );
-        if (prospectiveObservationCount > 0) {
-          if (completedAtMs > actual + COHORT.allowedCompletionDelayMs) {
-            addUnique(blockers, 'SUCCESSOR_CAPTURE_COMPLETED_AFTER_ALLOWED_DELAY');
-          }
-          if (remoteMainShaAfter !== mainSha) {
-            addUnique(blockers, 'SUCCESSOR_REMOTE_MAIN_CHANGED_DURING_CAPTURE');
-          }
-          if (blockers.length === 0) credit = 1;
-          else captureStatus = 'PRESENT_ZERO_CREDIT';
+
+        try {
+          rawBatchDigest = sha256(canonicalJson(batch));
+          validateCapturedBatch(batch, { exactMainSha: mainSha });
+          prospectiveObservationCount = batch.observations.length;
+          droppedObservationCount = batch.droppedEvents.length;
+          captureStatus = prospectiveObservationCount > 0 ? 'PRESENT' : 'BLOCKED_DATA';
+          blockers = prospectiveObservationCount > 0
+            ? []
+            : ['SUCCESSOR_FORWARD_OBSERVATIONS_EMPTY',
+              ...Object.keys(batch.datasetProvenance?.droppedReasons ?? {}).sort()];
+        } catch (error) {
+          const classified = classifyCaptureError(error);
+          captureStatus = classified.captureStatus;
+          blockers = [classified.blocker];
         }
       } catch (error) {
         const classified = classifyCaptureError(error);
@@ -492,18 +552,60 @@ export async function executeSuccessorScheduledCaptureSeam({
         rawBatchDigest = null;
         prospectiveObservationCount = 0;
         droppedObservationCount = 0;
-        completedAtMs = nonNegativeInteger(clock(), 'SUCCESSOR_CAPTURE_COMPLETED_AT_MS_INVALID');
-        credit = 0;
+        try {
+          completedAtMs = nonNegativeInteger(
+            clock(),
+            'SUCCESSOR_CAPTURE_COMPLETED_AT_MS_INVALID',
+          );
+        } catch {
+          completedAtMs = null;
+          addUnique(blockers, 'SUCCESSOR_CAPTURE_COMPLETION_CLOCK_UNAVAILABLE');
+        }
+      }
+
+      if (completedAtMs !== null) {
+        if (completedAtMs < actual) {
+          addUnique(blockers, 'SUCCESSOR_CAPTURE_COMPLETED_BEFORE_ACTUAL_START');
+        }
+        if (completedAtMs > actual + COHORT.allowedCompletionDelayMs) {
+          addUnique(blockers, 'SUCCESSOR_CAPTURE_COMPLETED_AFTER_ALLOWED_DELAY');
+        }
+      } else {
+        addUnique(blockers, 'SUCCESSOR_CAPTURE_COMPLETION_TIME_MISSING');
+      }
+
+      try {
+        remoteMainShaAfter = exactSha(
+          await getRemoteMainSha(),
+          'SUCCESSOR_REMOTE_MAIN_SHA_AFTER_INVALID',
+        );
+        if (remoteMainShaAfter !== mainSha) {
+          addUnique(blockers, 'SUCCESSOR_REMOTE_MAIN_CHANGED_DURING_CAPTURE');
+        }
+      } catch (error) {
+        addUnique(
+          blockers,
+          `SUCCESSOR_REMOTE_MAIN_POST_CAPTURE_UNVERIFIED:${String(error?.message ?? 'UNKNOWN')}`,
+        );
+      }
+
+      if (captureStatus === 'PRESENT' && blockers.length === 0) {
+        credit = CREDIT_POLICY.prospectiveCreditPerEligiblePresentFirstAttempt;
+      } else if (captureStatus === 'PRESENT') {
+        captureStatus = 'PRESENT_ZERO_CREDIT';
       }
     }
   }
 
   const body = receiptBody({
     authority,
+    eventName,
+    scheduleExpression,
     exactMainSha: mainSha,
     remoteMainShaBefore,
     remoteMainShaAfter,
     defaultBranchRef,
+    scheduledRunCreatedAtMs: created,
     actualRunStartedAtMs: actual,
     completedAtMs,
     runId,
@@ -513,6 +615,7 @@ export async function executeSuccessorScheduledCaptureSeam({
     blockers,
     collectorInvoked,
     rawBatchDigest,
+    rawEvidencePreserved: batch !== null,
     prospectiveObservationCount,
     droppedObservationCount,
     prospectiveSlotCredit: credit,
@@ -534,7 +637,7 @@ export function finalizeSuccessorArtifactReceipt({
   if (!captureReceipt || typeof captureReceipt !== 'object') {
     throw new Error('SUCCESSOR_CAPTURE_RECEIPT_MISSING');
   }
-  if (!captureReceipt.rawBatchDigest) {
+  if (!captureReceipt.rawBatchDigest || captureReceipt.rawEvidencePreserved !== true) {
     throw new Error('SUCCESSOR_RAW_BATCH_DIGEST_MISSING');
   }
   const normalizedArtifactId = String(artifactId ?? '').trim();
