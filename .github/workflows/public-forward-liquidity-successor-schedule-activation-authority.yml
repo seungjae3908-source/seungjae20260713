@@ -1,0 +1,512 @@
+name: Public Forward Liquidity Successor Schedule Activation Authority
+
+# This workflow records human Release-Control authority evidence only.
+# It never merges PR #871, never installs/changes a cron trigger, never captures market data,
+# and never grants prospective sample or trading authority.
+# A later main movement makes an authorization stale for activation eligibility.
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/public-forward-liquidity-successor-schedule-activation-authority.yml'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-activation-authority-v1.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-activation-authority-v1.test.mjs'
+      - 'market-intelligence-sidecar/config/public-forward-liquidity-successor-prospective-cohort-v1.json'
+      - 'market-intelligence-sidecar/config/public-forward-liquidity-successor-oos-outcome-horizon-v1.json'
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: >-
+    successor-schedule-authority-${{
+      github.event_name == 'issue_comment'
+      && github.event.issue.number == 23
+      && github.event.comment.id
+      || github.run_id
+    }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Validate non-activating Successor authority contract
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact PR head without credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Syntax check authority contract
+        run: node --check market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-activation-authority-v1.mjs
+
+      - name: Run authority fail-closed regression suite
+        run: node --test market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-activation-authority-v1.test.mjs
+
+      - name: Prove validation workflow cannot activate or deploy
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          workflow='.github/workflows/public-forward-liquidity-successor-schedule-activation-authority.yml'
+          test "$(grep -Ec '^[[:space:]]{2}issue_comment:[[:space:]]*$' "$workflow")" -eq 1
+          test "$(grep -Ec '^[[:space:]]{2}pull_request:[[:space:]]*$' "$workflow")" -eq 1
+          ! grep -Eq '^[[:space:]]{2}schedule:[[:space:]]*$' "$workflow"
+          ! grep -Eq '^[[:space:]]{2}workflow_dispatch:[[:space:]]*$' "$workflow"
+          ! grep -Eq '^[[:space:]]{2}repository_dispatch:[[:space:]]*$' "$workflow"
+          ! grep -Eq 'contents:[[:space:]]+write' "$workflow"
+          ! grep -Eq 'actions:[[:space:]]+write' "$workflow"
+          ! grep -Eq 'pull-requests:[[:space:]]+write' "$workflow"
+          ! grep -Eq 'deployments:[[:space:]]+write' "$workflow"
+          ! grep -Eq 'packages:[[:space:]]+write' "$workflow"
+          ! grep -Eq 'id-token:[[:space:]]+write' "$workflow"
+          if grep -Eiq 'pm2[[:space:]]+(start|restart|reload)|systemctl[[:space:]]+(enable|start|restart)|[[:space:]]ssh[[:space:]]'; then
+            echo 'Authority evidence workflow must not deploy or mutate runtime.' >&2
+            exit 1
+          fi
+
+  authority:
+    name: Validate and record #23 Successor human authority evidence
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.number == 23 &&
+      github.event.issue.title == 'Staging Readiness Control' &&
+      (startsWith(github.event.comment.body, '/authorize-successor-prospective-schedule-activation ') ||
+       startsWith(github.event.comment.body, '/revoke-successor-prospective-schedule-activation '))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+      statuses: read
+      actions: read
+      pull-requests: read
+    steps:
+      - name: Checkout exact current default branch without credentials
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Parse exact OWNER authority command
+        id: command
+        shell: bash
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$COMMENT_AUTHOR" == 'seungjae3908-source' ]] || {
+            echo 'SUCCESSOR_AUTHORITY_OWNER_REQUIRED' >&2
+            exit 1
+          }
+          [[ "$AUTHOR_ASSOCIATION" == 'OWNER' ]] || {
+            echo 'SUCCESSOR_AUTHORITY_OWNER_REQUIRED' >&2
+            exit 1
+          }
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from 'node:fs';
+          import { parseSuccessorScheduleAuthorityCommand } from './market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-activation-authority-v1.mjs';
+          const command = parseSuccessorScheduleAuthorityCommand(process.env.COMMENT_BODY);
+          appendFileSync(process.env.GITHUB_OUTPUT, `action=${command.action}\n`);
+          appendFileSync(process.env.GITHUB_OUTPUT, `main_sha=${command.currentMainSha}\n`);
+          appendFileSync(process.env.GITHUB_OUTPUT, `cohort_digest=${command.cohortDigest}\n`);
+          if (command.action === 'AUTHORIZE') {
+            appendFileSync(process.env.GITHUB_OUTPUT, `candidate_head_sha=${command.workflowCandidateHeadSha}\n`);
+            appendFileSync(process.env.GITHUB_OUTPUT, `policy_digest=${command.policyDigest}\n`);
+          }
+          NODE
+
+      - name: Require canonical command registration in Release Control #23 body
+        id: release_control
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = (await github.rest.issues.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+            })).data;
+            if (issue.state !== 'open' || issue.title !== 'Staging Readiness Control') {
+              core.setFailed('SUCCESSOR_AUTHORITY_RELEASE_CONTROL_NOT_OPEN');
+              return;
+            }
+            const body = String(issue.body ?? '');
+            const authorize = '/authorize-successor-prospective-schedule-activation <current-main-sha> <pr871-head-sha> <policy-digest> <cohort-digest>';
+            const revoke = '/revoke-successor-prospective-schedule-activation <current-main-sha> <cohort-digest>';
+            if (!body.includes(authorize)) {
+              core.setFailed('SUCCESSOR_AUTHORIZE_COMMAND_NOT_REGISTERED_ON_RELEASE_CONTROL');
+              return;
+            }
+            if (!body.includes(revoke)) {
+              core.setFailed('SUCCESSOR_REVOKE_COMMAND_NOT_REGISTERED_ON_RELEASE_CONTROL');
+              return;
+            }
+            core.setOutput('registered', 'true');
+
+      - name: Require exact command-bound current main SHA
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.main_sha }}
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags --depth=1 origin main
+          remote_main="$(git rev-parse FETCH_HEAD)"
+          checked_out="$(git rev-parse HEAD)"
+          [[ "$TARGET_SHA" == "$remote_main" ]] || {
+            echo "SUCCESSOR_AUTHORITY_MAIN_SHA_MISMATCH: target=$TARGET_SHA current=$remote_main" >&2
+            exit 1
+          }
+          [[ "$checked_out" == "$TARGET_SHA" ]] || {
+            echo "SUCCESSOR_AUTHORITY_MAIN_MOVED_DURING_VALIDATION: checkout=$checked_out target=$TARGET_SHA" >&2
+            exit 1
+          }
+
+      - name: Require coherent exact-main Required CI 6/6 SUCCESS
+        id: main_ci
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.main_sha }}
+        with:
+          script: |
+            const required = [
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            async function requireRequired6(targetSha, expectedBranch) {
+              const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: targetSha,
+                per_page: 100,
+              });
+              statuses.sort((left, right) => Number(right.id) - Number(left.id));
+              const latest = new Map();
+              for (const status of statuses) if (!latest.has(status.context)) latest.set(status.context, status);
+              const missing = required.filter((name) => latest.get(name)?.state !== 'success');
+              if (missing.length) throw new Error(`Required CI not 6/6 SUCCESS: ${missing.join(', ')}`);
+              const runIds = new Set();
+              for (const name of required) {
+                const match = String(latest.get(name)?.target_url ?? '').match(/\/actions\/runs\/(\d+)/);
+                if (!match) throw new Error(`Required status ${name} lacks authoritative run URL`);
+                runIds.add(Number(match[1]));
+              }
+              if (runIds.size !== 1) throw new Error(`Required CI is not coherent: ${[...runIds].join(', ')}`);
+              const runId = [...runIds][0];
+              const run = (await github.rest.actions.getWorkflowRun({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: runId,
+              })).data;
+              if (run.head_sha !== targetSha
+                || run.head_branch !== expectedBranch
+                || run.status !== 'completed'
+                || run.conclusion !== 'success'
+                || run.path !== '.github/workflows/futures-public-network-smoke.yml') {
+                throw new Error(`Required CI provenance rejected for run ${runId}`);
+              }
+              return runId;
+            }
+            try {
+              const runId = await requireRequired6(process.env.TARGET_SHA, 'main');
+              core.setOutput('run_id', String(runId));
+            } catch (error) {
+              core.setFailed(`SUCCESSOR_AUTHORITY_MAIN_REQUIRED_CI_REJECTED:${error.message}`);
+            }
+
+      - name: Verify exact #871 activation-workflow candidate and current-main alignment
+        id: candidate
+        if: steps.command.outputs.action == 'AUTHORIZE'
+        uses: actions/github-script@v7
+        env:
+          TARGET_MAIN_SHA: ${{ steps.command.outputs.main_sha }}
+          CANDIDATE_HEAD_SHA: ${{ steps.command.outputs.candidate_head_sha }}
+        with:
+          script: |
+            const expectedPath = '.github/workflows/public-forward-liquidity-successor-scheduled-capture.yml';
+            const expectedName = 'Public Forward Liquidity Successor Scheduled Capture';
+            const expectedCron = "17 * * * *";
+            const pr = (await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: 871,
+            })).data;
+            if (pr.state !== 'open' || pr.merged_at || pr.base.ref !== 'main') {
+              core.setFailed('SUCCESSOR_AUTHORITY_PR871_NOT_OPEN_UNMERGED_MAIN_TARGET');
+              return;
+            }
+            if (pr.head.sha !== process.env.CANDIDATE_HEAD_SHA) {
+              core.setFailed(`SUCCESSOR_AUTHORITY_PR871_HEAD_MISMATCH:${pr.head.sha}`);
+              return;
+            }
+            const comparison = (await github.rest.repos.compareCommitsWithBasehead({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              basehead: `${process.env.TARGET_MAIN_SHA}...${process.env.CANDIDATE_HEAD_SHA}`,
+            })).data;
+            if (comparison.behind_by !== 0 || comparison.merge_base_commit?.sha !== process.env.TARGET_MAIN_SHA) {
+              core.setFailed(`SUCCESSOR_AUTHORITY_PR871_NOT_CURRENT_MAIN_ALIGNED:ahead=${comparison.ahead_by}:behind=${comparison.behind_by}:mergeBase=${comparison.merge_base_commit?.sha}`);
+              return;
+            }
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: 871,
+              per_page: 100,
+            });
+            if (files.length !== 1 || files[0].filename !== expectedPath) {
+              core.setFailed(`SUCCESSOR_AUTHORITY_PR871_SCOPE_REJECTED:${files.map((file) => file.filename).join(',')}`);
+              return;
+            }
+            const content = (await github.rest.repos.getContent({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              path: expectedPath,
+              ref: process.env.CANDIDATE_HEAD_SHA,
+            })).data;
+            if (Array.isArray(content) || content.type !== 'file' || !content.content || !content.sha) {
+              core.setFailed('SUCCESSOR_AUTHORITY_PR871_WORKFLOW_FILE_MISSING');
+              return;
+            }
+            const text = Buffer.from(content.content, 'base64').toString('utf8');
+            if (!text.includes(`name: ${expectedName}`)) {
+              core.setFailed('SUCCESSOR_AUTHORITY_PR871_WORKFLOW_NAME_MISMATCH');
+              return;
+            }
+            const cronMatches = text.match(/- cron: '17 \* \* \* \*'/g) ?? [];
+            if (cronMatches.length !== 1 || !text.includes(`cron: '${expectedCron}'`)) {
+              core.setFailed('SUCCESSOR_AUTHORITY_PR871_CRON_MISMATCH');
+              return;
+            }
+            if (/^\s*workflow_dispatch:/m.test(text)
+              || /contents:\s*write/.test(text)
+              || /actions:\s*write/.test(text)
+              || /issues:\s*write/.test(text)
+              || /pull-requests:\s*write/.test(text)
+              || /deployments:\s*write/.test(text)
+              || /packages:\s*write/.test(text)
+              || /id-token:\s*write/.test(text)) {
+              core.setFailed('SUCCESSOR_AUTHORITY_PR871_PERMISSION_OR_DISPATCH_REJECTED');
+              return;
+            }
+            core.setOutput('workflow_blob_sha', content.sha);
+            core.setOutput('head_branch', pr.head.ref);
+
+      - name: Require coherent exact-candidate Required CI 6/6 SUCCESS
+        id: candidate_ci
+        if: steps.command.outputs.action == 'AUTHORIZE'
+        uses: actions/github-script@v7
+        env:
+          CANDIDATE_HEAD_SHA: ${{ steps.command.outputs.candidate_head_sha }}
+          CANDIDATE_BRANCH: ${{ steps.candidate.outputs.head_branch }}
+        with:
+          script: |
+            const required = [
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: process.env.CANDIDATE_HEAD_SHA,
+              per_page: 100,
+            });
+            statuses.sort((left, right) => Number(right.id) - Number(left.id));
+            const latest = new Map();
+            for (const status of statuses) if (!latest.has(status.context)) latest.set(status.context, status);
+            const missing = required.filter((name) => latest.get(name)?.state !== 'success');
+            if (missing.length) {
+              core.setFailed(`SUCCESSOR_AUTHORITY_CANDIDATE_REQUIRED_CI_NOT_6_OF_6:${missing.join(',')}`);
+              return;
+            }
+            const runIds = new Set();
+            for (const name of required) {
+              const match = String(latest.get(name)?.target_url ?? '').match(/\/actions\/runs\/(\d+)/);
+              if (!match) {
+                core.setFailed(`SUCCESSOR_AUTHORITY_CANDIDATE_STATUS_RUN_URL_MISSING:${name}`);
+                return;
+              }
+              runIds.add(Number(match[1]));
+            }
+            if (runIds.size !== 1) {
+              core.setFailed(`SUCCESSOR_AUTHORITY_CANDIDATE_REQUIRED_CI_NOT_COHERENT:${[...runIds].join(',')}`);
+              return;
+            }
+            const runId = [...runIds][0];
+            const run = (await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId,
+            })).data;
+            if (run.head_sha !== process.env.CANDIDATE_HEAD_SHA
+              || run.head_branch !== process.env.CANDIDATE_BRANCH
+              || run.status !== 'completed'
+              || run.conclusion !== 'success'
+              || run.path !== '.github/workflows/futures-public-network-smoke.yml') {
+              core.setFailed(`SUCCESSOR_AUTHORITY_CANDIDATE_CI_PROVENANCE_REJECTED:${runId}`);
+              return;
+            }
+            core.setOutput('run_id', String(runId));
+
+      - name: Validate frozen Successor cohort and 5000ms OOS contract
+        shell: bash
+        env:
+          ACTION: ${{ steps.command.outputs.action }}
+          COMMAND_POLICY_DIGEST: ${{ steps.command.outputs.policy_digest }}
+          COMMAND_COHORT_DIGEST: ${{ steps.command.outputs.cohort_digest }}
+        run: |
+          set -Eeuo pipefail
+          node --input-type=module <<'NODE'
+          import { loadFrozenSuccessorAuthorityContract } from './market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-activation-authority-v1.mjs';
+          const frozen = loadFrozenSuccessorAuthorityContract();
+          if (frozen.cohortDigest !== process.env.COMMAND_COHORT_DIGEST) {
+            throw new Error('SUCCESSOR_AUTHORITY_COHORT_DIGEST_MISMATCH');
+          }
+          if (process.env.ACTION === 'AUTHORIZE' && frozen.policyDigest !== process.env.COMMAND_POLICY_DIGEST) {
+            throw new Error('SUCCESSOR_AUTHORITY_POLICY_DIGEST_MISMATCH');
+          }
+          if (frozen.cron !== '17 * * * *' || frozen.outcomeHorizonMs !== 5000
+            || frozen.outcomeSelectionPolicy !== 'FIRST_PUBLIC_OBSERVATION_AT_OR_AFTER_HORIZON'
+            || frozen.oldV3OutcomeHorizonAuthorityInherited !== false) {
+            throw new Error('SUCCESSOR_AUTHORITY_FROZEN_POLICY_DRIFT');
+          }
+          NODE
+
+      - name: Build zero-activation immutable authority evidence
+        id: evidence
+        shell: bash
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          COMMENT_URL: ${{ github.event.comment.html_url }}
+          COMMENT_CREATED_AT: ${{ github.event.comment.created_at }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
+          TARGET_MAIN_SHA: ${{ steps.command.outputs.main_sha }}
+          CANDIDATE_HEAD_SHA: ${{ steps.command.outputs.candidate_head_sha }}
+          WORKFLOW_BLOB_SHA: ${{ steps.candidate.outputs.workflow_blob_sha }}
+          MAIN_CI_RUN_ID: ${{ steps.main_ci.outputs.run_id }}
+          CANDIDATE_CI_RUN_ID: ${{ steps.candidate_ci.outputs.run_id }}
+          COMMAND_REGISTERED: ${{ steps.release_control.outputs.registered }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p successor-schedule-authority-evidence
+          node --input-type=module <<'NODE'
+          import { appendFileSync, writeFileSync } from 'node:fs';
+          import {
+            buildSuccessorScheduleAuthorityEvidence,
+            parseSuccessorScheduleAuthorityCommand,
+          } from './market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-activation-authority-v1.mjs';
+
+          const command = parseSuccessorScheduleAuthorityCommand(process.env.COMMENT_BODY);
+          const evidence = buildSuccessorScheduleAuthorityEvidence({
+            command,
+            currentMainSha: process.env.TARGET_MAIN_SHA,
+            workflowCandidateHeadSha: process.env.CANDIDATE_HEAD_SHA || null,
+            workflowBlobSha: process.env.WORKFLOW_BLOB_SHA || null,
+            issueNumber: Number(process.env.GITHUB_EVENT_NAME === 'issue_comment' ? 23 : 0),
+            issueTitle: 'Staging Readiness Control',
+            commentId: Number(process.env.COMMENT_ID),
+            commentUrl: process.env.COMMENT_URL,
+            commandCreatedAt: process.env.COMMENT_CREATED_AT,
+            approvedBy: process.env.COMMENT_AUTHOR,
+            authorAssociation: process.env.AUTHOR_ASSOCIATION,
+            releaseControlCommandRegistered: process.env.COMMAND_REGISTERED === 'true',
+            requiredMainCiRunId: Number(process.env.MAIN_CI_RUN_ID),
+            requiredCandidateCiRunId: process.env.CANDIDATE_CI_RUN_ID
+              ? Number(process.env.CANDIDATE_CI_RUN_ID)
+              : null,
+          });
+          writeFileSync(
+            'successor-schedule-authority-evidence/evidence.json',
+            `${JSON.stringify(evidence, null, 2)}\n`,
+          );
+          appendFileSync(process.env.GITHUB_OUTPUT, `authority_status=${evidence.authorityStatus}\n`);
+          appendFileSync(process.env.GITHUB_OUTPUT, `evidence_digest=${evidence.evidenceDigest}\n`);
+          appendFileSync(process.env.GITHUB_OUTPUT, `action=${evidence.action}\n`);
+          NODE
+
+      - name: Upload immutable authority evidence artifact
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: successor-schedule-authority-${{ steps.evidence.outputs.action }}-${{ github.event.comment.id }}
+          path: successor-schedule-authority-evidence/evidence.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Append Release-Control verification receipt
+        uses: actions/github-script@v7
+        env:
+          AUTHORITY_STATUS: ${{ steps.evidence.outputs.authority_status }}
+          EVIDENCE_DIGEST: ${{ steps.evidence.outputs.evidence_digest }}
+          ACTION_KIND: ${{ steps.evidence.outputs.action }}
+          TARGET_MAIN_SHA: ${{ steps.command.outputs.main_sha }}
+          CANDIDATE_HEAD_SHA: ${{ steps.command.outputs.candidate_head_sha }}
+          MAIN_CI_RUN_ID: ${{ steps.main_ci.outputs.run_id }}
+          CANDIDATE_CI_RUN_ID: ${{ steps.candidate_ci.outputs.run_id }}
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        with:
+          script: |
+            const lines = [
+              '[SUCCESSOR_PROSPECTIVE_SCHEDULE_ACTIVATION_AUTHORITY_RECEIPT]',
+              `status=${process.env.AUTHORITY_STATUS}`,
+              `action=${process.env.ACTION_KIND}`,
+              `authorityIdentity=SUCCESSOR_PROSPECTIVE_SCHEDULE_ACTIVATION`,
+              `authorizedBaselineMainSha=${process.env.TARGET_MAIN_SHA}`,
+              `workflowCandidateHeadSha=${process.env.CANDIDATE_HEAD_SHA || 'N/A_REVOCATION'}`,
+              `mainRequiredCiRun=${process.env.MAIN_CI_RUN_ID}`,
+              `candidateRequiredCiRun=${process.env.CANDIDATE_CI_RUN_ID || 'N/A_REVOCATION'}`,
+              `evidenceDigest=${process.env.EVIDENCE_DIGEST}`,
+              `artifactId=${process.env.ARTIFACT_ID}`,
+              `artifactDigest=${process.env.ARTIFACT_DIGEST}`,
+              `workflowRunId=${context.runId}`,
+              'mergeAuthorized=false',
+              'scheduleMutationApplied=false',
+              'scheduleActivated=false',
+              'capturePerformed=false',
+              'prospectiveSlotCredit=0',
+              'technicalActivationAuthorizedByReceipt=false',
+              'authorityBecomesStaleOnMainMove=true',
+              'finalPreActivationAuditRequired=true',
+              'LIVE_TRADING=false',
+              'AUTO_TRADING=false',
+              'executionAuthority=NONE',
+              'replayBackfillSyntheticCredit=0',
+              '',
+              'This receipt validates human Release-Control authority/revocation evidence only. It does not merge #871 or technically activate/deactivate a schedule.',
+            ];
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+              body: lines.join('\n'),
+            });
