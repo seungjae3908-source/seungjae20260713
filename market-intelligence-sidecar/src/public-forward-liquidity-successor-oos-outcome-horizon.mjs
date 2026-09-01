@@ -7,7 +7,7 @@ import {
 } from './public-forward-liquidity-successor-prospective-cohort.mjs';
 
 export const SUCCESSOR_OOS_HORIZON_CONTRACT_PATH = new URL(
-  '../config/public-forward-liquidity-successor-oos-outcome-horizon-v1.json',
+  '../config/public-forward-liquidity-successor-oos-outcome-horizon-v2.json',
   import.meta.url,
 );
 
@@ -41,7 +41,7 @@ function sameArray(left, right) {
 function expectedIdentityCore(contract, computedPolicyDigest, expectedContractId) {
   const outcome = contract.policyCore.outcomePolicy;
   return {
-    schemaVersion: 'public-forward-liquidity-successor-oos-outcome-horizon-identity-v1',
+    schemaVersion: 'public-forward-liquidity-successor-oos-outcome-horizon-identity-v2',
     contractId: expectedContractId,
     policyDigest: computedPolicyDigest,
     successorCohortDigest: contract.policyCore.successorCohortBinding.cohortDigest,
@@ -68,7 +68,7 @@ export function verifySuccessorOosOutcomeHorizonContract(
 ) {
   const blockers = [];
 
-  if (contract?.contractVersion !== 'public-forward-liquidity-successor-oos-outcome-horizon-contract-v1') {
+  if (contract?.contractVersion !== 'public-forward-liquidity-successor-oos-outcome-horizon-contract-v2') {
     add(blockers, 'SUCCESSOR_OOS_HORIZON_CONTRACT_VERSION_INVALID');
   }
   if (contract?.freezeStatus !== 'HUMAN_POLICY_VALUES_FROZEN_REPOSITORY_DRAFT_MATERIALIZATION') {
@@ -76,7 +76,7 @@ export function verifySuccessorOosOutcomeHorizonContract(
   }
 
   const policy = contract?.policyCore;
-  if (!policy || policy.schemaVersion !== 'public-forward-liquidity-successor-oos-outcome-horizon-policy-v1') {
+  if (!policy || policy.schemaVersion !== 'public-forward-liquidity-successor-oos-outcome-horizon-policy-v2') {
     add(blockers, 'SUCCESSOR_OOS_HORIZON_POLICY_CORE_INVALID');
     return Object.freeze({ valid: false, blockers: Object.freeze(blockers) });
   }
@@ -86,7 +86,7 @@ export function verifySuccessorOosOutcomeHorizonContract(
     add(blockers, 'SUCCESSOR_OOS_HORIZON_POLICY_DIGEST_MISMATCH');
   }
   const expectedContractId =
-    `PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_OOS_HORIZON_V1_5000MS:${computedPolicyDigest}`;
+    `PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_OOS_HORIZON_BINDING_V2_5000MS:${computedPolicyDigest}`;
   if (contract.contractId !== expectedContractId) {
     add(blockers, 'SUCCESSOR_OOS_HORIZON_CONTRACT_ID_MISMATCH');
   }
@@ -116,6 +116,19 @@ export function verifySuccessorOosOutcomeHorizonContract(
     add(blockers, 'SUCCESSOR_OOS_HORIZON_HUMAN_AUTHORITY_INVALID');
   }
 
+  const rebinding = policy.capacityRebindingAuthority ?? {};
+  if (rebinding.canonicalHubIssue !== 838
+    || rebinding.capacityNumericFreezeCommentId !== 5500894175
+    || rebinding.capacityNumericFreezeCreatedAt !== '2026-09-01T21:49:01Z'
+    || rebinding.capacityNumericFreezeCreatedAtMs !== 1788299341000
+    || rebinding.capacityNumericFreezeDigest
+      !== '45b6e09909347e9d5ed41ed618b7874e2e528190838886eaa656997e22d4e947'
+    || rebinding.rebindingScope
+      !== 'COHORT_CAPACITY_BINDING_REMATERIALIZATION_ONLY_NO_HORIZON_RETUNE'
+    || rebinding.outcomeHorizonRetuned !== false) {
+    add(blockers, 'SUCCESSOR_OOS_HORIZON_CAPACITY_REBIND_AUTHORITY_INVALID');
+  }
+
   const binding = policy.successorCohortBinding ?? {};
   const basePolicy = successorContract?.policyCore;
   const baseOos = basePolicy?.splits?.OOS;
@@ -136,6 +149,11 @@ export function verifySuccessorOosOutcomeHorizonContract(
     || authority.humanApprovalCreatedAtMs >= binding.firstEligibleSlotMs
     || authority.humanApprovalCreatedAtMs >= binding.firstOosSlotMs) {
     add(blockers, 'SUCCESSOR_OOS_HORIZON_NOT_FROZEN_PROSPECTIVELY');
+  }
+  if (!integer(rebinding.capacityNumericFreezeCreatedAtMs)
+    || rebinding.capacityNumericFreezeCreatedAtMs >= binding.firstEligibleSlotMs
+    || rebinding.capacityNumericFreezeCreatedAtMs >= binding.firstOosSlotMs) {
+    add(blockers, 'SUCCESSOR_OOS_HORIZON_CAPACITY_REBIND_NOT_PROSPECTIVE');
   }
 
   const baseSeparatePolicy = basePolicy?.oosOutcomePolicy ?? {};
@@ -173,6 +191,8 @@ export function verifySuccessorOosOutcomeHorizonContract(
   const integrity = policy.prospectiveIntegrity ?? {};
   if (integrity.humanFreezePredatesCohortFirstEligible !== true
     || integrity.humanFreezePredatesFirstOosSlot !== true
+    || integrity.capacityRebindingPredatesCohortFirstEligible !== true
+    || integrity.capacityRebindingPredatesFirstOosSlot !== true
     || integrity.outcomeInspectionUsedForPolicySelection !== false
     || integrity.oldV3OutcomeHorizonMs !== 60_000
     || integrity.oldV3OutcomeHorizonAuthorityInherited !== false
