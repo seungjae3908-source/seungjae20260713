@@ -11,6 +11,10 @@ import {
   isAuthoritativeNaturalPaperLedger,
   validateAuthoritativeNaturalPaperLedger,
 } from "./authoritative-natural-paper-accounting-v1.js";
+import {
+  advanceNaturalPaperPositionLifecycle,
+  createNaturalPaperPositionLifecycle,
+} from "./natural-paper-position-settlement-lifecycle-v1.js";
 
 const MARKETS = Object.freeze(["KR_STOCK", "US_STOCK", "CRYPTO_SPOT", "CRYPTO_FUTURES"]);
 const MARKET_SET = new Set(MARKETS);
@@ -70,9 +74,12 @@ function directLoopStage(field, count, observationIds, provenance, observedAt) {
 function canonicalReasonForLoopCode(code) {
   if (typeof code !== "string" || code.length === 0) return "UNKNOWN";
   if (code === "STALE_DATA_FORBIDDEN") return "DATA_STALE";
+  if (code === "PAPER_POSITION_OBSERVATION_STALE") return "DATA_STALE";
   if (code === "DATA_TIMESTAMP_REQUIRED") return "DATA_MISSING";
   if (code === "RISK_EVIDENCE_NOT_APPROVED") return "RISK_GATE";
-  if (["STRATEGY_RESEARCH_SHA_MISMATCH", "STRATEGY_IDENTITY_REQUIRED", "PAPER_LOOP_EXIT_POSITION_NOT_FOUND"].includes(code)) {
+  if (code.includes("COST") || code.includes("FUNDING")) return "COST_GATE";
+  if (code.startsWith("PAPER_POSITION_OBSERVATION_")
+    || ["STRATEGY_RESEARCH_SHA_MISMATCH", "STRATEGY_IDENTITY_REQUIRED", "PAPER_LOOP_EXIT_POSITION_NOT_FOUND"].includes(code)) {
     return "IDENTITY_MISMATCH";
   }
   if (code.startsWith("PAPER_ACCOUNT_") || code.startsWith("PAPER_LEDGER_")) return "ACCOUNT_STATE_BLOCK";
@@ -300,11 +307,12 @@ function positionFromSample(sample, candidate) {
       parityFingerprint: sample.parityFingerprint,
     })
     : null;
-  return Object.freeze({
+  const position = {
     positionId: hash({ paperSampleId: sample.paperSampleId, entry: sample.identity.evaluatedAtMs }),
     paperSampleId: sample.paperSampleId,
     signalId: sample.identity.signalId,
     market: sample.identity.market,
+    symbol: sample.identity.symbol,
     direction: sample.identity.executionDirection,
     strategyId: sample.identity.strategyId,
     strategyVersion: sample.identity.strategyVersion,
@@ -318,6 +326,10 @@ function positionFromSample(sample, candidate) {
     lifecycleState: "OPEN",
     accountingEvidence,
     sample,
+  };
+  return Object.freeze({
+    ...position,
+    lifecycle: createNaturalPaperPositionLifecycle({ position, sample, candidate }),
   });
 }
 
@@ -389,6 +401,7 @@ export async function runRecurringPaperCycle({
   cycle,
   candidates = [],
   exits = [],
+  positionObservations = [],
   ledgerAdapter,
   learningAdapter,
   stateStore,
@@ -435,12 +448,82 @@ export async function runRecurringPaperCycle({
   const settlementIds = [];
   const directReasons = [];
 
-  for (const exit of exits) {
+  const lifecycleExits = [];
+  for (const observation of positionObservations) {
+    const positionIndex = positions.findIndex((row) => row.positionId === observation?.positionId);
+    if (positionIndex < 0) {
+      const duplicate = settlements.some((row) => row.positionId === observation?.positionId
+        || row.paperSampleId === observation?.paperSampleId);
+      directReasons.push(loopReasonObservation({
+        sourceStage: "POSITION",
+        sourceCode: duplicate ? "DUPLICATE_SETTLEMENT" : "PAPER_LOOP_EXIT_POSITION_NOT_FOUND",
+        provenance: "natural-paper-position-settlement-lifecycle-v1 open position lookup",
+        observedAt: cycle.evaluatedAtMs,
+        identity: cycle.identity,
+        observationId: observation?.observationId ?? observation?.positionId ?? null,
+      }));
+      continue;
+    }
+    const position = positions[positionIndex];
+    let decision;
+    try {
+      decision = advanceNaturalPaperPositionLifecycle({
+        position, observation, evaluatedAtMs: cycle.evaluatedAtMs, state: predecessor, cycle,
+      });
+    } catch (error) {
+      if (typeof error?.message !== "string" || !error.message.startsWith("PAPER_POSITION_")) throw error;
+      directReasons.push(loopReasonObservation({
+        sourceStage: "POSITION",
+        sourceCode: error.message,
+        provenance: "natural-paper-position-settlement-lifecycle-v1 fail-closed validation",
+        observedAt: cycle.evaluatedAtMs,
+        identity: cycle.identity,
+        observationId: observation?.observationId ?? null,
+      }));
+      continue;
+    }
+    if (decision.status === "DUPLICATE_OBSERVATION") {
+      directReasons.push(loopReasonObservation({
+        sourceStage: "POSITION",
+        sourceCode: decision.blocker,
+        provenance: "natural-paper-position-settlement-lifecycle-v1 observation identity guard",
+        observedAt: cycle.evaluatedAtMs,
+        identity: cycle.identity,
+        observationId: observation.observationId,
+      }));
+      continue;
+    }
+    positions[positionIndex] = decision.position;
+    if (decision.status === "BLOCKED_SETTLEMENT_EVIDENCE") {
+      for (const blocker of decision.blockers) {
+        directReasons.push(loopReasonObservation({
+          sourceStage: "EXIT_ELIGIBLE",
+          sourceCode: blocker,
+          provenance: "natural-paper-position-settlement-lifecycle-v1 settlement evidence gate",
+          observedAt: cycle.evaluatedAtMs,
+          identity: cycle.identity,
+          observationId: observation.observationId,
+        }));
+      }
+      continue;
+    }
+    if (decision.status === "EXIT_ELIGIBLE") {
+      lifecycleExits.push(Object.freeze({
+        positionId: position.positionId,
+        settlementInput: decision.settlementInput,
+        exitReason: decision.exitReason,
+        lifecycleEvidence: decision.evidence,
+      }));
+    }
+  }
+
+  for (const exit of [...lifecycleExits, ...exits]) {
     const position = positions.find((row) => row.positionId === exit.positionId);
     if (!position) {
+      const duplicate = settlements.some((row) => row.positionId === exit?.positionId);
       directReasons.push(loopReasonObservation({
         sourceStage: "EXIT_ELIGIBLE",
-        sourceCode: "PAPER_LOOP_EXIT_POSITION_NOT_FOUND",
+        sourceCode: duplicate ? "DUPLICATE_SETTLEMENT" : "PAPER_LOOP_EXIT_POSITION_NOT_FOUND",
         provenance: "recurring-paper-loop-v1 open position lookup",
         observedAt: cycle.evaluatedAtMs,
         identity: cycle.identity,
@@ -448,8 +531,33 @@ export async function runRecurringPaperCycle({
       }));
       continue;
     }
-    const settlement = settleFourMarketPaperSample({ sample: position.sample, ...exit.settlementInput, evaluatedAtMs: cycle.evaluatedAtMs });
-    if (settlement.status !== "SETTLED") continue;
+    if (position.lifecycle?.sampleEligibility?.provenanceClass === "NATURAL_FORWARD"
+      && !lifecycleExits.includes(exit)) {
+      directReasons.push(loopReasonObservation({
+        sourceStage: "EXIT_ELIGIBLE", sourceCode: "PAPER_POSITION_EXTERNAL_EXIT_IDENTITY_FORBIDDEN",
+        provenance: "recurring-paper-loop-v1 Natural lifecycle trust boundary",
+        observedAt: cycle.evaluatedAtMs, identity: cycle.identity, observationId: exit.positionId,
+      }));
+      continue;
+    }
+    const canonicalLifecycleEvidence = lifecycleExits.includes(exit) ? exit.lifecycleEvidence : null;
+    const settlement = settleFourMarketPaperSample({
+      sample: position.sample, ...exit.settlementInput,
+      evaluatedAtMs: canonicalLifecycleEvidence?.exitTriggerTimestampMs ?? cycle.evaluatedAtMs,
+    });
+    if (settlement.status !== "SETTLED") {
+      for (const blocker of settlement.blockers ?? ["PAPER_SETTLEMENT_NOT_READY"]) {
+        directReasons.push(loopReasonObservation({
+          sourceStage: "SETTLEMENT",
+          sourceCode: blocker,
+          provenance: "four-market-paper-settlement-v1 fail-closed result",
+          observedAt: cycle.evaluatedAtMs,
+          identity: cycle.identity,
+          observationId: exit?.lifecycleEvidence?.observationId ?? exit?.positionId ?? null,
+        }));
+      }
+      continue;
+    }
     const settlementId = hash({ positionId: position.positionId, paperSampleId: settlement.paperSampleId, settledAtMs: settlement.settledAtMs });
     if (settlements.some((row) => row.settlementId === settlementId || row.paperSampleId === settlement.paperSampleId)) {
       directReasons.push(loopReasonObservation({
@@ -462,16 +570,29 @@ export async function runRecurringPaperCycle({
       }));
       continue;
     }
+    const settlementRecord = Object.freeze({
+      ...settlement,
+      settlementId,
+      positionId: position.positionId,
+      exitReason: exit.exitReason ?? "CANONICAL_EXTERNAL_EXIT",
+      settlementRecordedAtMs: cycle.evaluatedAtMs,
+      positionLifecycle: position.lifecycle ?? null,
+      lifecycleEvidence: canonicalLifecycleEvidence,
+      naturalSampleCredit: canonicalLifecycleEvidence?.naturalSampleCredit ?? 0,
+      testOnlySampleCredit: 0,
+      executionAuthority: "NONE",
+      orderSubmitted: false,
+    });
     await learningAdapter.persistOutcome({
       cycle,
       identity: predecessor.identity,
       position,
-      settlement: Object.freeze({ ...settlement, settlementId }),
+      settlement: settlementRecord,
     });
-    const nextLedger = await ledgerAdapter.applySettlement({ ledger, position, settlement, settlementId, cycle });
+    const nextLedger = await ledgerAdapter.applySettlement({ ledger, position, settlement: settlementRecord, settlementId, cycle });
     validateLedgerSnapshot(nextLedger);
     ledger = structuredClone(nextLedger);
-    settlements.push(Object.freeze({ ...settlement, settlementId }));
+    settlements.push(settlementRecord);
     positions = positions.filter((row) => row.positionId !== position.positionId);
     settledCount += 1;
     settlementIds.push(settlementId);
