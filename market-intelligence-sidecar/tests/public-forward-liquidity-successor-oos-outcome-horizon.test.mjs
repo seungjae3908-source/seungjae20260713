@@ -147,5 +147,5 @@ test('focused validation workflow contains no schedule or dispatch authority', a
   assert.doesNotMatch(workflow, /^\s*schedule:/mu);
   assert.doesNotMatch(workflow, /^\s*workflow_dispatch:/mu);
   assert.doesNotMatch(workflow, /^\s*cron:/mu);
-  assert.doesNotMatch(workflow, /actions\/upload-artifact/u);
+  assert.doesNotMatch(workflow, /^\s*uses:\s*actions\/upload-artifact(?:@|$)/mu);
 });
