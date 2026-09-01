@@ -19,6 +19,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Setup Node.js
@@ -54,5 +55,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git diff --check
-          test "$(git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}" | sort | tr '\n' ' ')" = ".github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-seam-v1.mjs market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-seam-v1.test.mjs "
+          base='${{ github.event.pull_request.base.sha }}'
+          head='${{ github.event.pull_request.head.sha }}'
+          git diff --check "$base" "$head"
+          test "$(git diff --name-only "$base" "$head" | sort | tr '\n' ' ')" = ".github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-seam-v1.mjs market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-seam-v1.test.mjs "
