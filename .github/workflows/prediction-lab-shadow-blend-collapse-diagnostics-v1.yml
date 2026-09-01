@@ -34,6 +34,7 @@ jobs:
           node --check market-prediction-lab/src/shadow-blend-collapse-diagnostics-v1.js
           node --check market-prediction-lab/src/shadow-directional-rescue-v1.js
           node --check market-prediction-lab/scripts/run-shadow-blend-collapse-diagnostics-v1.js
+          node --check market-prediction-lab/tests/shadow-directional-rescue-v1.test.js
 
       - name: Run focused 15m blend-collapse and rescue tests
         working-directory: market-prediction-lab
@@ -71,6 +72,8 @@ jobs:
               core.setOutput('artifact_id', String(artifact.id));
               core.setOutput('artifact_digest', artifact.digest);
               core.setOutput('run_head_sha', String(run.head_sha ?? ''));
+              core.setOutput('created_at', String(artifact.created_at ?? ''));
+              core.setOutput('expires_at', String(artifact.expires_at ?? ''));
               core.info(`Using immutable Shadow artifact ${artifact.id} from run ${run.id}.`);
               return;
             }
@@ -124,6 +127,9 @@ jobs:
           ARTIFACT_ID: ${{ steps.shadow.outputs.artifact_id }}
           ARTIFACT_DIGEST: ${{ steps.shadow.outputs.artifact_digest }}
           MODEL_BLOB_SHA: ${{ steps.model.outputs.model_blob_sha }}
+          WORKFLOW_RUN_HEAD: ${{ steps.shadow.outputs.run_head_sha }}
+          ARTIFACT_CREATED_AT: ${{ steps.shadow.outputs.created_at }}
+          ARTIFACT_EXPIRES_AT: ${{ steps.shadow.outputs.expires_at }}
         run: |
           node market-prediction-lab/scripts/run-shadow-blend-collapse-diagnostics-v1.js \
             --artifact-dir "$SHADOW_DIR" \
@@ -132,6 +138,9 @@ jobs:
             --artifact-id "$ARTIFACT_ID" \
             --artifact-digest "$ARTIFACT_DIGEST" \
             --model-blob-sha "$MODEL_BLOB_SHA" \
+            --workflow-run-head "$WORKFLOW_RUN_HEAD" \
+            --artifact-created-at "$ARTIFACT_CREATED_AT" \
+            --artifact-expires-at "$ARTIFACT_EXPIRES_AT" \
             --output "$OUTPUT_FILE"
           node - "$OUTPUT_FILE" <<'NODE'
           const fs = require('fs');
@@ -156,9 +165,17 @@ jobs:
           if (value.authenticatedEvidence?.exactBlendParity !== true) process.exit(1);
           if (value.safety?.LIVE_TRADING !== false || value.safety?.executionAuthority !== 'NONE') process.exit(1);
           if (!rescue || rescue.promotionCredit !== 0 || rescue.profitabilityCredit !== 0) process.exit(1);
+          if (rescue.sourceArtifact?.authentication?.temporalStatus !== 'VALID') process.exit(1);
           if (rescue.policy?.historicalEvidenceUsedToSelectPolicy !== true) process.exit(1);
+          if (rescue.policy?.historicalDataUsedForPolicySelection !== true) process.exit(1);
+          if (rescue.policy?.historicalDataUsedForParameterSelection !== false) process.exit(1);
           if (rescue.policy?.prospectiveGenuineEvidenceRequired !== true) process.exit(1);
           if (rescue.prospectiveGate?.status !== 'REQUIRES_POLICY_FREEZE_AND_FUTURE_GENUINE_COHORT') process.exit(1);
+          if (rescue.futureEvidence?.counts?.['15m']?.TOTAL_N !== 0) process.exit(1);
+          if (rescue.futureEvidence?.counts?.['1h']?.TOTAL_N !== 0) process.exit(1);
+          if (rescue.futureEvidence?.counts?.SAME_CANDIDATE_MATCHED_N !== 0) process.exit(1);
+          if (rescue.futureEvidence?.genuineSampleCredit !== 0) process.exit(1);
+          if (rescue.futureEvidence?.psi !== null || rescue.futureEvidence?.ks !== null || rescue.futureEvidence?.jsd !== null) process.exit(1);
           const allRuleNeutral = value.mechanicalRootCause?.P1_1_MECHANICAL_ROOT_CAUSE_PROVEN === true
             && value.mechanicalRootCause?.ruleNeutralN === value.mechanicalRootCause?.ruleTotalN
             && Number.isInteger(value.mechanicalRootCause?.ruleTotalN)
@@ -168,8 +185,10 @@ jobs:
           if (rescue.status === 'READY_FOR_PROSPECTIVE_FREEZE') {
             if (rescue.historicalEvaluation?.promotionCredit !== 0) process.exit(1);
             if (rescue.prospectiveGate?.historicalSamplesEligible !== 0) process.exit(1);
+            if (rescue.prospectiveGate?.preFreezeSamplesEligible !== 0) process.exit(1);
             if (rescue.prospectiveGate?.replaySamplesEligible !== 0) process.exit(1);
             if (rescue.prospectiveGate?.syntheticSamplesEligible !== 0) process.exit(1);
+            if (rescue.prospectiveGate?.manualSamplesEligible !== 0) process.exit(1);
           }
           NODE
 
@@ -192,6 +211,11 @@ jobs:
           grep -q 'executionAuthority: "NONE"' market-prediction-lab/src/shadow-blend-collapse-diagnostics-v1.js
           grep -q 'blendWeightModified: false' market-prediction-lab/src/shadow-directional-rescue-v1.js
           grep -q 'historicalEvidenceUsedToSelectPolicy: true' market-prediction-lab/src/shadow-directional-rescue-v1.js
+          grep -q 'historicalDataUsedForPolicySelection: true' market-prediction-lab/src/shadow-directional-rescue-v1.js
+          grep -q 'historicalDataUsedForParameterSelection: false' market-prediction-lab/src/shadow-directional-rescue-v1.js
           grep -q 'historicalPromotionCredit: 0' market-prediction-lab/src/shadow-directional-rescue-v1.js
+          grep -q 'preFreezePromotionCredit: 0' market-prediction-lab/src/shadow-directional-rescue-v1.js
           grep -q 'prospectiveGenuineEvidenceRequired: true' market-prediction-lab/src/shadow-directional-rescue-v1.js
+          grep -q 'scheduleMutationAuthorized: false' market-prediction-lab/src/shadow-directional-rescue-v1.js
+          grep -q 'modelCutoverAuthorized: false' market-prediction-lab/src/shadow-directional-rescue-v1.js
           grep -q 'executionAuthority: "NONE"' market-prediction-lab/src/shadow-directional-rescue-v1.js

@@ -48,7 +48,12 @@ try {
     });
     const result = Object.freeze({
       ...authenticated,
-      directionalRescueCandidate: buildShadowDirectionalRescueCandidateV1(authenticated),
+      directionalRescueCandidate: buildShadowDirectionalRescueCandidateV1(authenticated, {
+        workflowRunHead: requireArg("--workflow-run-head"),
+        createdAt: requireArg("--artifact-created-at"),
+        expiresAt: requireArg("--artifact-expires-at"),
+        checkedAt: argValue("--checked-at") ?? new Date().toISOString(),
+      }),
     });
     writeResult(result, outputPath);
   } else if (inputPath) {
@@ -63,7 +68,7 @@ try {
     });
     writeResult(result, outputPath);
   } else {
-    throw new Error("usage: --artifact-dir <dir> --model-artifact <json> --workflow-run-id <id> --artifact-id <id> --artifact-digest <sha256:...> --model-blob-sha <sha> [--output <json>] OR --input <json>");
+    throw new Error("usage: --artifact-dir <dir> --model-artifact <json> --workflow-run-id <id> --artifact-id <id> --artifact-digest <sha256:...> --model-blob-sha <sha> --workflow-run-head <sha> --artifact-created-at <iso> --artifact-expires-at <iso> [--checked-at <iso>] [--output <json>] OR --input <json>");
   }
 } catch (error) {
   console.error(error?.stack ?? error?.message ?? String(error));
