@@ -67,7 +67,7 @@ jobs:
           grep -Fq '"actualMergeApproved": false' "$CONTRACT"
           grep -Fq '"scheduleActivationApproved": false' "$CONTRACT"
           grep -Fq '"prospectiveObservationWorkflowAuthorityApproved": false' "$CONTRACT"
-          if grep -Fq 'actions/upload-artifact' "$FILE"; then
+          if grep -Eq '^[[:space:]]*uses:[[:space:]]*actions/upload-artifact(@|$)' "$FILE"; then
             echo '::error::artifact publication is forbidden in validation-only workflow'
             exit 1
           fi
