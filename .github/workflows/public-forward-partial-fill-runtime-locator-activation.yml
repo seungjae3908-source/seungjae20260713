@@ -138,10 +138,14 @@ jobs:
           const deployWorkflow = ['production', 'deploy.yml'].join('-');
           const deployScript = ['deploy', 'production.sh'].join('-');
           const forbiddenPublisher = ['publishPublicForwardPartialFillCalibration', 'ReleaseBinding'].join('');
+          const copyCommands = [
+            ['git', 'clone'].join(' '),
+            ['r', 'sync'].join(''),
+          ];
           if (text.includes(issueCommentTrigger)) throw new Error('LOCATOR_WORKFLOW_MUST_NOT_ADD_COMMENT_AUTHORITY');
           if (text.includes(deployWorkflow) || text.includes(deployScript)) throw new Error('LOCATOR_WORKFLOW_MUST_NOT_DEPLOY_CODE');
           if (text.includes(forbiddenPublisher)) throw new Error('LOCATOR_WORKFLOW_MUST_NOT_PUBLISH_RELEASE_BINDING');
-          if (/\b(git clone|rsync)\b/u.test(text)) throw new Error('LOCATOR_WORKFLOW_MUST_NOT_COPY_RELEASE_TREE');
+          if (copyCommands.some((command) => text.includes(command))) throw new Error('LOCATOR_WORKFLOW_MUST_NOT_COPY_RELEASE_TREE');
           NODE
 
           if grep -Eq 'PRIVATE_API|ORDER_SUBMIT|orderSubmitted: true|LIVE_TRADING=true' "$CLI"; then
