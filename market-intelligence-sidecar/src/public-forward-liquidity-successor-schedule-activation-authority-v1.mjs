@@ -1,5 +1,13 @@
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+
+import {
+  SUCCESSOR_PROSPECTIVE_CONTRACT,
+  verifySuccessorProspectiveContract,
+} from './public-forward-liquidity-successor-prospective-cohort.mjs';
+import {
+  SUCCESSOR_OOS_HORIZON_CONTRACT,
+  verifySuccessorOosOutcomeHorizonContract,
+} from './public-forward-liquidity-successor-oos-outcome-horizon.mjs';
 
 export const SUCCESSOR_SCHEDULE_ACTIVATION_AUTHORITY_ID =
   'SUCCESSOR_PROSPECTIVE_SCHEDULE_ACTIVATION';
@@ -18,19 +26,7 @@ export const SUCCESSOR_SCHEDULE_AUTHORITY_COMMANDS = Object.freeze({
     '/revoke-successor-prospective-schedule-activation <current-main-sha> <cohort-digest>',
 });
 
-const EXPECTED = Object.freeze({
-  cohortId:
-    'PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_PROSPECTIVE_COHORT_V1_20260903:451b880a7efff4c3cbb8abe8bcda07bbf54a534f9f01baeb040547c339fa489a',
-  policyDigest: '451b880a7efff4c3cbb8abe8bcda07bbf54a534f9f01baeb040547c339fa489a',
-  cohortDigest: '7c24f0f752c500bc7ea90df5e7975319a5c4813a23f8f0e375a1ffd0b99672bb',
-  startInclusiveMs: 1788362220000,
-  endExclusiveMs: 1789571820000,
-  totalSlotN: 336,
-  allowedStartDelayMs: 1200000,
-  allowedCompletionDelayMs: 600000,
-  train: [0, 167, 168],
-  validation: [168, 251, 84],
-  oos: [252, 335, 84],
+const EXPECTED_TECHNICAL = Object.freeze({
   collectorImplementationBlobSha: '8044d5cb136eb30a531608392c73a45be601e5ba',
   captureParameterPolicyDigest: 'ab4193df073303568dd8b4c55caa5d6c5a2a88547857935d1db13dacb9e8154f',
   outcomeHorizonMs: 5000,
@@ -102,126 +98,134 @@ export function assertReleaseControlCommandSurfaceRegistered(issueBody) {
   return true;
 }
 
-export function validateFrozenSuccessorAuthorityInputs({ cohortContract, oosContract }) {
-  const cohort = cohortContract;
-  const oos = oosContract;
-  if (!cohort?.policyCore || !oos?.policyCore) fail('SUCCESSOR_FROZEN_CONTRACT_MISSING');
+export function validateFrozenSuccessorAuthorityInputs({
+  cohortContract = SUCCESSOR_PROSPECTIVE_CONTRACT,
+  oosContract = SUCCESSOR_OOS_HORIZON_CONTRACT,
+} = {}) {
+  if (!cohortContract?.policyCore || !oosContract?.policyCore) {
+    fail('SUCCESSOR_FROZEN_CONTRACT_MISSING');
+  }
 
-  assertEqual(cohort.cohortId, EXPECTED.cohortId, 'SUCCESSOR_COHORT_ID_DRIFT');
-  assertEqual(cohort.policyDigest, EXPECTED.policyDigest, 'SUCCESSOR_POLICY_DIGEST_DRIFT');
-  assertEqual(cohort.cohortDigest, EXPECTED.cohortDigest, 'SUCCESSOR_COHORT_DIGEST_DRIFT');
-  assertEqual(cohort.policyCore.cohort.cronUtc, SUCCESSOR_SCHEDULE_ACTIVATION_WORKFLOW.cron, 'SUCCESSOR_CRON_DRIFT');
-  assertEqual(cohort.policyCore.cohort.startInclusiveMs, EXPECTED.startInclusiveMs, 'SUCCESSOR_START_DRIFT');
-  assertEqual(cohort.policyCore.cohort.endExclusiveMs, EXPECTED.endExclusiveMs, 'SUCCESSOR_END_DRIFT');
-  assertEqual(cohort.policyCore.cohort.totalSlotN, EXPECTED.totalSlotN, 'SUCCESSOR_SLOT_COUNT_DRIFT');
-  assertEqual(
-    cohort.policyCore.cohort.allowedStartDelayMs,
-    EXPECTED.allowedStartDelayMs,
-    'SUCCESSOR_START_DELAY_DRIFT',
-  );
-  assertEqual(
-    cohort.policyCore.cohort.allowedCompletionDelayMs,
-    EXPECTED.allowedCompletionDelayMs,
-    'SUCCESSOR_COMPLETION_DELAY_DRIFT',
-  );
+  const cohortVerdict = verifySuccessorProspectiveContract(cohortContract);
+  if (!cohortVerdict.valid) {
+    fail('SUCCESSOR_ACTIVE_COHORT_CONTRACT_INVALID', cohortVerdict.blockers.join(','));
+  }
+  const oosVerdict = verifySuccessorOosOutcomeHorizonContract(oosContract, cohortContract);
+  if (!oosVerdict.valid) {
+    fail('SUCCESSOR_ACTIVE_OOS_CONTRACT_INVALID', oosVerdict.blockers.join(','));
+  }
 
-  for (const [name, expected] of [
-    ['TRAIN', EXPECTED.train],
-    ['VALIDATION', EXPECTED.validation],
-    ['OOS', EXPECTED.oos],
-  ]) {
-    const split = cohort.policyCore.splits[name];
-    assertEqual(split?.startIndexInclusive, expected[0], `SUCCESSOR_${name}_START_DRIFT`);
-    assertEqual(split?.endIndexInclusive, expected[1], `SUCCESSOR_${name}_END_DRIFT`);
-    assertEqual(split?.expectedSlotN, expected[2], `SUCCESSOR_${name}_COUNT_DRIFT`);
+  const policy = cohortContract.policyCore;
+  const cohort = policy.cohort;
+  const splits = policy.splits;
+  const technical = policy.technicalIdentity;
+  const outcome = oosContract.policyCore.outcomePolicy;
+  const integrity = oosContract.policyCore.prospectiveIntegrity;
+
+  assertHex(cohortContract.policyDigest, 64, 'SUCCESSOR_ACTIVE_POLICY_DIGEST_INVALID');
+  assertHex(cohortContract.cohortDigest, 64, 'SUCCESSOR_ACTIVE_COHORT_DIGEST_INVALID');
+  if (!String(cohortContract.cohortId ?? '').trim()) fail('SUCCESSOR_ACTIVE_COHORT_ID_MISSING');
+  assertEqual(cohort.cronUtc, SUCCESSOR_SCHEDULE_ACTIVATION_WORKFLOW.cron, 'SUCCESSOR_CRON_DRIFT');
+  if (!Number.isSafeInteger(cohort.startInclusiveMs)
+    || !Number.isSafeInteger(cohort.endExclusiveMs)
+    || cohort.endExclusiveMs <= cohort.startInclusiveMs) {
+    fail('SUCCESSOR_COHORT_WINDOW_INVALID');
+  }
+  if (!Number.isSafeInteger(cohort.totalSlotN) || cohort.totalSlotN <= 0) {
+    fail('SUCCESSOR_SLOT_COUNT_INVALID');
+  }
+  assertEqual(cohort.allowedStartDelayMs, 1_200_000, 'SUCCESSOR_START_DELAY_DRIFT');
+  assertEqual(cohort.allowedCompletionDelayMs, 600_000, 'SUCCESSOR_COMPLETION_DELAY_DRIFT');
+
+  for (const name of ['TRAIN', 'VALIDATION', 'OOS']) {
+    const split = splits?.[name];
+    if (!Number.isSafeInteger(split?.startIndexInclusive)
+      || !Number.isSafeInteger(split?.endIndexInclusive)
+      || !Number.isSafeInteger(split?.expectedSlotN)
+      || split.endIndexInclusive < split.startIndexInclusive
+      || split.expectedSlotN !== split.endIndexInclusive - split.startIndexInclusive + 1) {
+      fail(`SUCCESSOR_${name}_SPLIT_INVALID`);
+    }
+  }
+  if (splits.TRAIN.startIndexInclusive !== 0
+    || splits.TRAIN.endIndexInclusive + 1 !== splits.VALIDATION.startIndexInclusive
+    || splits.VALIDATION.endIndexInclusive + 1 !== splits.OOS.startIndexInclusive
+    || splits.OOS.endIndexInclusive !== cohort.totalSlotN - 1
+    || splits.TRAIN.expectedSlotN + splits.VALIDATION.expectedSlotN + splits.OOS.expectedSlotN !== cohort.totalSlotN) {
+    fail('SUCCESSOR_SPLIT_COVERAGE_INVALID');
   }
 
   assertEqual(
-    cohort.policyCore.technicalIdentity.collectorImplementationBlobSha,
-    EXPECTED.collectorImplementationBlobSha,
+    technical.collectorImplementationBlobSha,
+    EXPECTED_TECHNICAL.collectorImplementationBlobSha,
     'SUCCESSOR_COLLECTOR_BLOB_DRIFT',
   );
   assertEqual(
-    cohort.policyCore.technicalIdentity.captureParameterPolicyDigest,
-    EXPECTED.captureParameterPolicyDigest,
+    technical.captureParameterPolicyDigest,
+    EXPECTED_TECHNICAL.captureParameterPolicyDigest,
     'SUCCESSOR_CAPTURE_PARAMETER_DIGEST_DRIFT',
   );
-  assertEqual(
-    cohort.policyCore.creditPolicy.manualCredit,
-    0,
-    'SUCCESSOR_MANUAL_CREDIT_NOT_ZERO',
-  );
-  assertEqual(
-    cohort.policyCore.creditPolicy.replayCredit,
-    0,
-    'SUCCESSOR_REPLAY_CREDIT_NOT_ZERO',
-  );
-  assertEqual(
-    cohort.policyCore.creditPolicy.backfillCredit,
-    0,
-    'SUCCESSOR_BACKFILL_CREDIT_NOT_ZERO',
-  );
-  assertEqual(
-    cohort.policyCore.creditPolicy.syntheticCredit,
-    0,
-    'SUCCESSOR_SYNTHETIC_CREDIT_NOT_ZERO',
-  );
+  for (const field of ['manualCredit', 'replayCredit', 'backfillCredit', 'syntheticCredit']) {
+    assertEqual(policy.creditPolicy?.[field], 0, `SUCCESSOR_${field.toUpperCase()}_NOT_ZERO`);
+  }
 
   assertEqual(
-    oos.policyCore.successorCohortBinding.cohortDigest,
-    EXPECTED.cohortDigest,
+    oosContract.policyCore.successorCohortBinding.cohortDigest,
+    cohortContract.cohortDigest,
     'SUCCESSOR_OOS_COHORT_DIGEST_DRIFT',
   );
+  assertEqual(outcome.outcomeHorizonMs, EXPECTED_TECHNICAL.outcomeHorizonMs, 'SUCCESSOR_OOS_HORIZON_DRIFT');
   assertEqual(
-    oos.policyCore.outcomePolicy.outcomeHorizonMs,
-    EXPECTED.outcomeHorizonMs,
-    'SUCCESSOR_OOS_HORIZON_DRIFT',
-  );
-  assertEqual(
-    oos.policyCore.outcomePolicy.outcomeSelectionPolicy,
-    EXPECTED.outcomeSelectionPolicy,
+    outcome.outcomeSelectionPolicy,
+    EXPECTED_TECHNICAL.outcomeSelectionPolicy,
     'SUCCESSOR_OOS_SELECTION_DRIFT',
   );
   assertEqual(
-    oos.policyCore.prospectiveIntegrity.oldV3OutcomeHorizonAuthorityInherited,
+    integrity.oldV3OutcomeHorizonAuthorityInherited,
     false,
     'SUCCESSOR_OLD_V3_OOS_INHERITANCE_NOT_FALSE',
   );
 
   return Object.freeze({
     authorityIdentity: SUCCESSOR_SCHEDULE_ACTIVATION_AUTHORITY_ID,
-    cohortId: EXPECTED.cohortId,
-    policyDigest: EXPECTED.policyDigest,
-    cohortDigest: EXPECTED.cohortDigest,
-    firstEligibleMs: EXPECTED.startInclusiveMs,
-    endExclusiveMs: EXPECTED.endExclusiveMs,
-    cron: SUCCESSOR_SCHEDULE_ACTIVATION_WORKFLOW.cron,
-    totalSlotN: EXPECTED.totalSlotN,
-    splits: Object.freeze({ TRAIN: EXPECTED.train, VALIDATION: EXPECTED.validation, OOS: EXPECTED.oos }),
-    allowedStartDelayMs: EXPECTED.allowedStartDelayMs,
-    allowedCompletionDelayMs: EXPECTED.allowedCompletionDelayMs,
-    collectorImplementationBlobSha: EXPECTED.collectorImplementationBlobSha,
-    captureParameterPolicyDigest: EXPECTED.captureParameterPolicyDigest,
-    outcomeHorizonMs: EXPECTED.outcomeHorizonMs,
-    outcomeSelectionPolicy: EXPECTED.outcomeSelectionPolicy,
+    activeCohortContractVersion: cohortContract.contractVersion,
+    activeOosContractVersion: oosContract.contractVersion,
+    cohortId: cohortContract.cohortId,
+    policyDigest: cohortContract.policyDigest,
+    cohortDigest: cohortContract.cohortDigest,
+    firstEligibleMs: cohort.startInclusiveMs,
+    endExclusiveMs: cohort.endExclusiveMs,
+    cron: cohort.cronUtc,
+    totalSlotN: cohort.totalSlotN,
+    splits: Object.freeze({
+      TRAIN: Object.freeze([
+        splits.TRAIN.startIndexInclusive,
+        splits.TRAIN.endIndexInclusive,
+        splits.TRAIN.expectedSlotN,
+      ]),
+      VALIDATION: Object.freeze([
+        splits.VALIDATION.startIndexInclusive,
+        splits.VALIDATION.endIndexInclusive,
+        splits.VALIDATION.expectedSlotN,
+      ]),
+      OOS: Object.freeze([
+        splits.OOS.startIndexInclusive,
+        splits.OOS.endIndexInclusive,
+        splits.OOS.expectedSlotN,
+      ]),
+    }),
+    allowedStartDelayMs: cohort.allowedStartDelayMs,
+    allowedCompletionDelayMs: cohort.allowedCompletionDelayMs,
+    collectorImplementationBlobSha: technical.collectorImplementationBlobSha,
+    captureParameterPolicyDigest: technical.captureParameterPolicyDigest,
+    outcomeHorizonMs: outcome.outcomeHorizonMs,
+    outcomeSelectionPolicy: outcome.outcomeSelectionPolicy,
     oldV3OutcomeHorizonAuthorityInherited: false,
   });
 }
 
 export function loadFrozenSuccessorAuthorityContract() {
-  const cohortContract = JSON.parse(
-    readFileSync(
-      new URL('../config/public-forward-liquidity-successor-prospective-cohort-v1.json', import.meta.url),
-      'utf8',
-    ),
-  );
-  const oosContract = JSON.parse(
-    readFileSync(
-      new URL('../config/public-forward-liquidity-successor-oos-outcome-horizon-v1.json', import.meta.url),
-      'utf8',
-    ),
-  );
-  return validateFrozenSuccessorAuthorityInputs({ cohortContract, oosContract });
+  return validateFrozenSuccessorAuthorityInputs();
 }
 
 export function buildSuccessorScheduleAuthorityEvidence({
@@ -260,7 +264,9 @@ export function buildSuccessorScheduleAuthorityEvidence({
   if (!String(commentUrl ?? '').includes('/issues/23#issuecomment-')) {
     fail('SUCCESSOR_AUTHORITY_COMMENT_URL_INVALID');
   }
-  if (!String(commandCreatedAt ?? '').trim()) fail('SUCCESSOR_AUTHORITY_TIMESTAMP_MISSING');
+  if (!Number.isFinite(Date.parse(String(commandCreatedAt ?? '')))) {
+    fail('SUCCESSOR_AUTHORITY_TIMESTAMP_INVALID');
+  }
   if (!Number.isSafeInteger(Number(requiredMainCiRunId)) || Number(requiredMainCiRunId) <= 0) {
     fail('SUCCESSOR_AUTHORITY_MAIN_CI_RUN_INVALID');
   }
@@ -281,6 +287,8 @@ export function buildSuccessorScheduleAuthorityEvidence({
     authorAssociation,
     authorizedBaselineMainSha: currentMainSha,
     exactMainRequiredCiRunId: Number(requiredMainCiRunId),
+    activeCohortContractVersion: frozenContract.activeCohortContractVersion,
+    activeOosContractVersion: frozenContract.activeOosContractVersion,
     cohortId: frozenContract.cohortId,
     cohortPolicyDigest: frozenContract.policyDigest,
     cohortDigest: frozenContract.cohortDigest,
