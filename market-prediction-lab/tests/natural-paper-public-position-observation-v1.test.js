@@ -17,6 +17,18 @@ const RISK_DIGEST = "5".repeat(64);
 const COST_POLICY = "canonical-full-cost-v1";
 const POSITION_ID = "position-1";
 const SAMPLE_ID = "paper-sample-1";
+for (const kind of ["duplicate", "future", "negative-volume", "synthetic", "replay", "backfill"]) {
+  test(`public producer rejects ${kind} frames without evidence credit`, async () => {
+    const snapshot = structuredClone(publicSnapshot());
+    if (kind === "duplicate") snapshot.candles.push({ ...snapshot.candles[0] });
+    if (kind === "future") snapshot.candles.push({ ...snapshot.candles[0], timestamp: NOW_MS + INTERVAL_MS });
+    if (kind === "negative-volume") snapshot.candles[1].volume = -1;
+    if (["synthetic", "replay", "backfill"].includes(kind)) snapshot[kind] = true;
+    const result = await collect({ source: producer({ snapshot }) });
+    assert.equal(result.status, "INVALID");
+    assert.equal(result.observations, null);
+  });
+}
 const SIGNAL_ID = "signal-1";
 const SYMBOL = "BTCUSDT";
 
@@ -64,6 +76,8 @@ function identity(overrides = {}) {
     market: "CRYPTO_FUTURES",
     symbol: SYMBOL,
     direction: "LONG",
+    signalTimeframe: "4h",
+    horizon: 12,
     strategyId: "CANONICAL_STRATEGY",
     strategyVersion: "v1",
     parameterHash: "parameter-hash",
@@ -110,6 +124,8 @@ function position(overrides = {}) {
         market: "CRYPTO_FUTURES",
         symbol: SYMBOL,
         executionDirection: "LONG",
+        timeframe: "4h",
+        horizon: 12,
         strategyId: "CANONICAL_STRATEGY",
         strategyVersion: "v1",
         parameterHash: "parameter-hash",
@@ -233,6 +249,10 @@ test("one genuine OPEN Position emits fresh identity-bound public closed-frame o
   assert.equal(first.provider, "bitget-public-v2");
   assert.match(first.sourceDigest, /^[0-9a-f]{64}$/u);
   assert.equal(first.evidenceRef, `public-frame:${first.sourceDigest}`);
+  assert.equal(first.closedFrame.closeAtMs, first.observedAtMs);
+  assert.equal(first.closedFrame.openAtMs + INTERVAL_MS, first.closedFrame.closeAtMs);
+  assert.equal(first.closedFrame.sourceDigest, first.sourceDigest);
+  assert.equal(Object.isFrozen(first.closedFrame), true);
   assert.equal(first.naturalEvidence.provenanceClass, "NATURAL_FORWARD");
   assert.equal(first.naturalEvidence.synthetic, false);
   assert.equal(first.naturalEvidence.replay, false);
