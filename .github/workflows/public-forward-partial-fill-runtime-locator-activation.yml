@@ -1,0 +1,652 @@
+name: Public Forward Partial Fill Runtime Locator Activation
+
+on:
+  pull_request:
+    paths:
+      - 'api-server/src/services/public-forward-partial-fill-calibration-runtime-locator-activation.service.ts'
+      - 'api-server/src/services/public-forward-partial-fill-calibration-runtime-locator-activation.service.test.ts'
+      - 'api-server/src/scripts/prepare-public-forward-partial-fill-runtime-locator-activation.ts'
+      - 'api-server/src/services/public-forward-partial-fill-calibration-runtime-binding-resolver.service.ts'
+      - 'api-server/src/services/public-forward-partial-fill-calibration-release-binding.service.ts'
+      - 'api-server/src/services/public-forward-partial-fill-calibration-production-caller.service.ts'
+      - '.github/workflows/public-forward-partial-fill-runtime-locator-activation.yml'
+  workflow_dispatch:
+    inputs:
+      target_main_sha:
+        description: Exact current main SHA and already-running Production DEPLOY_SHA
+        required: true
+        type: string
+      release_binding_ref:
+        description: Exact immutable release-binding relative ref
+        required: true
+        type: string
+      release_binding_digest:
+        description: Exact immutable release-binding 64-hex digest
+        required: true
+        type: string
+      expected_current_release_binding_ref:
+        description: Current PM2 locator ref, or NONE when no locator is active
+        required: true
+        default: NONE
+        type: string
+      expected_current_release_binding_digest:
+        description: Current PM2 locator digest, or NONE when no locator is active
+        required: true
+        default: NONE
+        type: string
+      confirmation:
+        description: Must equal ACTIVATE_PARTIAL_FILL_RUNTIME_LOCATOR_ONLY
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  statuses: read
+
+concurrency:
+  group: partial-fill-runtime-locator-activation
+  cancel-in-progress: false
+
+env:
+  CANONICAL_STATE_ROOT: /var/lib/investment-research-production
+  PM2_NAME: stock-app
+  LIVE_PORT: '8080'
+
+jobs:
+  verify:
+    name: Validate locator-only activation seam and L01-L12
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --dir api-server run typecheck
+
+      - name: Bundle and run exact L01-L12 locator tests
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          FILE='api-server/src/services/public-forward-partial-fill-calibration-runtime-locator-activation.service.test.ts'
+          test "$(grep -Ec "^test\\('L(0[1-9]|1[0-2]) " "$FILE")" -eq 12
+          for n in $(seq -w 1 12); do
+            grep -Fq "test('L${n} " "$FILE"
+          done
+          pnpm --dir api-server exec esbuild \
+            src/services/public-forward-partial-fill-calibration-runtime-locator-activation.service.test.ts \
+            --bundle --platform=node --format=cjs --target=node20 \
+            --outfile=/tmp/public-forward-partial-fill-runtime-locator-activation.test.cjs
+          node --test /tmp/public-forward-partial-fill-runtime-locator-activation.test.cjs
+
+      - name: Bundle locator CLI and prove inert help path
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir api-server exec esbuild \
+            src/scripts/prepare-public-forward-partial-fill-runtime-locator-activation.ts \
+            --bundle --platform=node --format=cjs --target=node20 \
+            --outfile=/tmp/prepare-public-forward-partial-fill-runtime-locator-activation.cjs
+          node /tmp/prepare-public-forward-partial-fill-runtime-locator-activation.cjs --help >/dev/null
+
+      - name: Verify locator-only authority and side-effect boundaries
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          SERVICE='api-server/src/services/public-forward-partial-fill-calibration-runtime-locator-activation.service.ts'
+          CLI='api-server/src/scripts/prepare-public-forward-partial-fill-runtime-locator-activation.ts'
+          WORKFLOW='.github/workflows/public-forward-partial-fill-runtime-locator-activation.yml'
+
+          grep -Fq 'locatorOnly: true' "$SERVICE"
+          grep -Fq "authoritySource: 'IMMUTABLE_RELEASE_BINDING'" "$SERVICE"
+          grep -Fq 'deployShaMutationAllowed: false' "$SERVICE"
+          grep -Fq 'runtimeMutationPerformed: false' "$SERVICE"
+          grep -Fq "'RESEARCH_STATE_ROOT'" "$SERVICE"
+          grep -Fq "'PARTIAL_FILL_RELEASE_BINDING_REF'" "$SERVICE"
+          grep -Fq "'PARTIAL_FILL_RELEASE_BINDING_DIGEST'" "$SERVICE"
+          grep -Fq 'preparePublicForwardPartialFillRuntimeLocatorActivation' "$CLI"
+          grep -Fq 'ACTIVATE_PARTIAL_FILL_RUNTIME_LOCATOR_ONLY' "$WORKFLOW"
+          grep -Fq 'expected_current_release_binding_ref' "$WORKFLOW"
+          grep -Fq 'expected_current_release_binding_digest' "$WORKFLOW"
+          grep -Fq 'pm2 restart "$PM2_NAME" --update-env' "$WORKFLOW"
+          grep -Fq 'ROLLBACK_NEEDED=1' "$WORKFLOW"
+          grep -Fq 'productionDeployPerformed: false' "$WORKFLOW"
+          grep -Fq 'releaseBindingPublicationPerformed: false' "$WORKFLOW"
+
+          if grep -Eq '\b(readdir|opendir)\b' "$SERVICE"; then
+            echo 'Locator preflight service must not scan directories.' >&2
+            exit 1
+          fi
+
+          WORKFLOW="$WORKFLOW" node <<'NODE'
+          const fs = require('node:fs');
+          const text = fs.readFileSync(process.env.WORKFLOW, 'utf8');
+          const issueCommentTrigger = `  ${['issue', 'comment'].join('_')}:`;
+          const deployWorkflow = ['production', 'deploy.yml'].join('-');
+          const deployScript = ['deploy', 'production.sh'].join('-');
+          const forbiddenPublisher = ['publishPublicForwardPartialFillCalibration', 'ReleaseBinding'].join('');
+          const copyCommands = [
+            ['git', 'clone'].join(' '),
+            ['r', 'sync'].join(''),
+          ];
+          if (text.includes(issueCommentTrigger)) throw new Error('LOCATOR_WORKFLOW_MUST_NOT_ADD_COMMENT_AUTHORITY');
+          if (text.includes(deployWorkflow) || text.includes(deployScript)) throw new Error('LOCATOR_WORKFLOW_MUST_NOT_DEPLOY_CODE');
+          if (text.includes(forbiddenPublisher)) throw new Error('LOCATOR_WORKFLOW_MUST_NOT_PUBLISH_RELEASE_BINDING');
+          if (copyCommands.some((command) => text.includes(command))) throw new Error('LOCATOR_WORKFLOW_MUST_NOT_COPY_RELEASE_TREE');
+          NODE
+
+          if grep -Eq 'PRIVATE_API|ORDER_SUBMIT|orderSubmitted: true|LIVE_TRADING=true' "$CLI"; then
+            echo 'Locator CLI contains forbidden private/live behavior.' >&2
+            exit 1
+          fi
+
+  activate:
+    name: Activate verified Partial-Fill runtime locator only
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    steps:
+      - name: Require owner, main ref and exact locator-only confirmation
+        id: command
+        shell: bash
+        env:
+          ACTOR: ${{ github.actor }}
+          OWNER: ${{ github.repository_owner }}
+          REF_NAME: ${{ github.ref_name }}
+          TARGET_SHA: ${{ inputs.target_main_sha }}
+          TARGET_REF: ${{ inputs.release_binding_ref }}
+          TARGET_DIGEST: ${{ inputs.release_binding_digest }}
+          EXPECTED_REF: ${{ inputs.expected_current_release_binding_ref }}
+          EXPECTED_DIGEST: ${{ inputs.expected_current_release_binding_digest }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$ACTOR" == "$OWNER" ]] || { echo 'Only repository owner may activate the Partial-Fill runtime locator.' >&2; exit 1; }
+          [[ "$REF_NAME" == 'main' ]] || { echo 'Locator activation must be dispatched from main.' >&2; exit 1; }
+          [[ "$CONFIRMATION" == 'ACTIVATE_PARTIAL_FILL_RUNTIME_LOCATOR_ONLY' ]] || { echo 'Exact locator-only confirmation missing.' >&2; exit 1; }
+          [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]] || { echo 'Target SHA must be exact lowercase 40-hex.' >&2; exit 1; }
+          [[ "$TARGET_DIGEST" =~ ^[a-f0-9]{64}$ ]] || { echo 'Release-binding digest must be exact lowercase 64-hex.' >&2; exit 1; }
+
+          safe_ref() {
+            local value="$1"
+            [[ -n "$value" && "$value" != /* && "$value" != *'\\'* ]] || return 1
+            IFS='/' read -r -a parts <<< "$value"
+            local part
+            for part in "${parts[@]}"; do
+              [[ -n "$part" && "$part" != '.' && "$part" != '..' ]] || return 1
+            done
+          }
+          safe_ref "$TARGET_REF" || { echo 'Release-binding ref is not a safe relative locator.' >&2; exit 1; }
+          [[ "$TARGET_REF" == forward/partial-fill-calibration-v1/release-bindings/*.json ]] || {
+            echo 'Release-binding ref must be a digest-addressed immutable release binding.' >&2
+            exit 1
+          }
+
+          if [[ "$EXPECTED_REF" == 'NONE' || "$EXPECTED_DIGEST" == 'NONE' ]]; then
+            [[ "$EXPECTED_REF" == 'NONE' && "$EXPECTED_DIGEST" == 'NONE' ]] || {
+              echo 'Expected-current locator must use NONE/NONE together.' >&2
+              exit 1
+            }
+          else
+            safe_ref "$EXPECTED_REF" || { echo 'Expected-current release-binding ref is unsafe.' >&2; exit 1; }
+            [[ "$EXPECTED_REF" == forward/partial-fill-calibration-v1/release-bindings/*.json ]] || exit 1
+            [[ "$EXPECTED_DIGEST" =~ ^[a-f0-9]{64}$ ]] || { echo 'Expected-current digest must be exact 64-hex or NONE.' >&2; exit 1; }
+          fi
+
+          {
+            echo "target_sha=$TARGET_SHA"
+            echo "target_ref=$TARGET_REF"
+            echo "target_digest=$TARGET_DIGEST"
+            echo "expected_ref=$EXPECTED_REF"
+            echo "expected_digest=$EXPECTED_DIGEST"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Require exact unchanged current main
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main
+          MAIN_SHA="$(git rev-parse origin/main^{commit})"
+          [[ "$TARGET_SHA" == "$MAIN_SHA" ]] || { echo "main moved: target=$TARGET_SHA main=$MAIN_SHA" >&2; exit 1; }
+          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]] || { echo 'Checked out main differs from activation target.' >&2; exit 1; }
+
+      - name: Require coherent exact-main Required CI 6/6 SUCCESS
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        with:
+          script: |
+            const required = [
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            const targetSha = process.env.TARGET_SHA;
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: targetSha,
+              per_page: 100,
+            });
+            statuses.sort((left, right) => Number(right.id) - Number(left.id));
+            const latest = new Map();
+            for (const status of statuses) if (!latest.has(status.context)) latest.set(status.context, status);
+            const missing = required.filter((name) => latest.get(name)?.state !== 'success');
+            if (missing.length) {
+              core.setFailed(`Required CI not 6/6 SUCCESS: ${missing.join(', ')}`);
+              return;
+            }
+            const runIds = new Set();
+            for (const name of required) {
+              const match = String(latest.get(name)?.target_url ?? '').match(/\/actions\/runs\/(\d+)/);
+              if (!match) {
+                core.setFailed(`Required status ${name} lacks authoritative run URL.`);
+                return;
+              }
+              runIds.add(Number(match[1]));
+            }
+            if (runIds.size !== 1) {
+              core.setFailed(`Required statuses are not coherent: ${[...runIds].join(', ')}`);
+              return;
+            }
+            const runId = [...runIds][0];
+            const run = (await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId,
+            })).data;
+            if (run.head_sha !== targetSha
+              || run.head_branch !== 'main'
+              || run.status !== 'completed'
+              || run.conclusion !== 'success'
+              || run.path !== '.github/workflows/futures-public-network-smoke.yml') {
+              core.setFailed(`Required CI provenance rejected for run ${runId}.`);
+              return;
+            }
+            core.info(`Exact-main Required CI 6/6 accepted from run ${runId}.`);
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --dir api-server run typecheck
+
+      - name: Bundle read-only locator preflight CLI from exact main
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir api-server exec esbuild \
+            src/scripts/prepare-public-forward-partial-fill-runtime-locator-activation.ts \
+            --bundle --platform=node --format=cjs --target=node20 \
+            --outfile="$RUNNER_TEMP/prepare-partial-fill-runtime-locator.cjs"
+
+      - name: Configure SSH transport
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+          SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$SSH_HOST" ]]
+          [[ -n "$SSH_PRIVATE_KEY" ]]
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Verify deployed SHA and immutable binding chain before mutation
+        id: preflight
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+          TARGET_REF: ${{ steps.command.outputs.target_ref }}
+          TARGET_DIGEST: ${{ steps.command.outputs.target_digest }}
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$SSH_USER" ]]
+          SSH=(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15)
+          SCP=(scp -i ~/.ssh/id_ed25519 -P "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15)
+          REMOTE_CLI="/tmp/partial-fill-runtime-locator-preflight-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.cjs"
+          cleanup() { "${SSH[@]}" "$SSH_USER@$SSH_HOST" "rm -f '$REMOTE_CLI'" >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+
+          "${SCP[@]}" "$RUNNER_TEMP/prepare-partial-fill-runtime-locator.cjs" "$SSH_USER@$SSH_HOST:$REMOTE_CLI"
+          "${SSH[@]}" "$SSH_USER@$SSH_HOST" \
+            "test -s '/opt/stock-app/.deploy/current-sha' && test -d '$CANONICAL_STATE_ROOT' && command -v pm2 >/dev/null && id investment-research >/dev/null"
+
+          DEPLOYED_SHA="$("${SSH[@]}" "$SSH_USER@$SSH_HOST" "tr -d '[:space:]' < /opt/stock-app/.deploy/current-sha")"
+          [[ "$DEPLOYED_SHA" == "$TARGET_SHA" ]] || { echo "Production deployed SHA mismatch: deployed=$DEPLOYED_SHA target=$TARGET_SHA" >&2; exit 1; }
+
+          PLAN="$("${SSH[@]}" "$SSH_USER@$SSH_HOST" \
+            "sudo -n -u investment-research node '$REMOTE_CLI' --state-root '$CANONICAL_STATE_ROOT' --release-binding-ref '$TARGET_REF' --release-binding-digest '$TARGET_DIGEST' --runtime-release-sha '$TARGET_SHA'")"
+
+          PLAN="$PLAN" TARGET_SHA="$TARGET_SHA" TARGET_REF="$TARGET_REF" TARGET_DIGEST="$TARGET_DIGEST" node <<'NODE'
+          const fs = require('node:fs');
+          const value = JSON.parse(process.env.PLAN);
+          const keys = ['RESEARCH_STATE_ROOT', 'PARTIAL_FILL_RELEASE_BINDING_REF', 'PARTIAL_FILL_RELEASE_BINDING_DIGEST'];
+          if (value.status !== 'LOCATOR_ACTIVATION_PREFLIGHT_READY'
+            || value.requiredExistingDeploySha !== process.env.TARGET_SHA
+            || value.releaseBindingRef !== process.env.TARGET_REF
+            || value.releaseBindingDigest !== process.env.TARGET_DIGEST
+            || JSON.stringify(value.locatorKeys) !== JSON.stringify(keys)
+            || Object.prototype.hasOwnProperty.call(value.locatorValues, 'DEPLOY_SHA')
+            || value.runtimeMutationPerformed !== false
+            || value.runtimeActivationPerformed !== false
+            || value.productionDeployPerformed !== false
+            || value.releaseBindingPublicationPerformed !== false
+            || value.productionPolicyAuthorityConnected !== false
+            || value.fullCostReady !== false
+            || value.evidenceComplete !== 0
+            || value.profitabilityProven !== false
+            || value.executionAuthority !== 'NONE') {
+            throw new Error('INVALID_LOCATOR_ACTIVATION_PREFLIGHT');
+          }
+          fs.writeFileSync(`${process.env.RUNNER_TEMP}/partial-fill-runtime-locator-preflight.json`, `${JSON.stringify(value, null, 2)}\n`);
+          NODE
+
+      - name: Compare-and-swap locator values, restart only, verify and rollback on failure
+        id: activation
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+          TARGET_REF: ${{ steps.command.outputs.target_ref }}
+          TARGET_DIGEST: ${{ steps.command.outputs.target_digest }}
+          EXPECTED_REF: ${{ steps.command.outputs.expected_ref }}
+          EXPECTED_DIGEST: ${{ steps.command.outputs.expected_digest }}
+        run: |
+          set -Eeuo pipefail
+          SSH=(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15)
+          REMOTE_ENV="$(printf 'TARGET_SHA=%q TARGET_REF=%q TARGET_DIGEST=%q EXPECTED_REF=%q EXPECTED_DIGEST=%q STATE_ROOT=%q PM2_NAME=%q LIVE_PORT=%q' \
+            "$TARGET_SHA" "$TARGET_REF" "$TARGET_DIGEST" "$EXPECTED_REF" "$EXPECTED_DIGEST" "$CANONICAL_STATE_ROOT" "$PM2_NAME" "$LIVE_PORT")"
+
+          RESULT="$("${SSH[@]}" "$SSH_USER@$SSH_HOST" "$REMOTE_ENV bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          BEFORE_JSON="$(mktemp /tmp/partial-fill-locator-before.XXXXXX)"
+          AFTER_JSON="$(mktemp /tmp/partial-fill-locator-after.XXXXXX)"
+          ORIGINAL_ENV="$(mktemp /tmp/partial-fill-locator-original-env.XXXXXX)"
+          NEXT_ENV="$(mktemp /tmp/partial-fill-locator-next-env.XXXXXX)"
+          PROC_ENV="$(mktemp /tmp/partial-fill-locator-proc-env.XXXXXX)"
+          META_JSON="$(mktemp /tmp/partial-fill-locator-meta.XXXXXX)"
+          ROLLBACK_NEEDED=0
+          PM2_BIN="$(command -v pm2)"
+
+          cleanup_files() {
+            rm -f "$BEFORE_JSON" "$AFTER_JSON" "$ORIGINAL_ENV" "$NEXT_ENV" "$PROC_ENV" "$META_JSON"
+          }
+
+          apply_env_file() {
+            local env_file="$1"
+            env -i \
+              HOME="$HOME" \
+              PATH="$PATH" \
+              PM2_HOME="${PM2_HOME:-$HOME/.pm2}" \
+              ENV_FILE="$env_file" \
+              PM2_BIN="$PM2_BIN" \
+              PM2_NAME="$PM2_NAME" \
+              bash --noprofile --norc -c 'set -Eeuo pipefail; source "$ENV_FILE"; exec "$PM2_BIN" restart "$PM2_NAME" --update-env' >&2
+          }
+
+          rollback() {
+            local status=$?
+            if (( status != 0 )) && [[ "$ROLLBACK_NEEDED" == '1' ]]; then
+              echo 'Locator activation verification failed; restoring previous PM2 locator environment.' >&2
+              apply_env_file "$ORIGINAL_ENV" || true
+              pm2 save >&2 || true
+            fi
+            cleanup_files
+            return "$status"
+          }
+          trap rollback EXIT
+
+          [[ "$(tr -d '[:space:]' < /opt/stock-app/.deploy/current-sha)" == "$TARGET_SHA" ]] || {
+            echo 'Production deploy marker moved before locator activation.' >&2
+            exit 1
+          }
+
+          pm2 jlist > "$BEFORE_JSON"
+          BEFORE_JSON="$BEFORE_JSON" ORIGINAL_ENV="$ORIGINAL_ENV" NEXT_ENV="$NEXT_ENV" META_JSON="$META_JSON" \
+            PM2_NAME="$PM2_NAME" TARGET_SHA="$TARGET_SHA" TARGET_REF="$TARGET_REF" TARGET_DIGEST="$TARGET_DIGEST" \
+            EXPECTED_REF="$EXPECTED_REF" EXPECTED_DIGEST="$EXPECTED_DIGEST" STATE_ROOT="$STATE_ROOT" node <<'NODE'
+          const fs = require('node:fs');
+          const processes = JSON.parse(fs.readFileSync(process.env.BEFORE_JSON, 'utf8'));
+          const selected = processes.find((item) => item.name === process.env.PM2_NAME);
+          const env = selected?.pm2_env;
+          if (!env || env.status !== 'online') throw new Error('PM2_PROCESS_NOT_ONLINE');
+          if (String(env.DEPLOY_SHA ?? '').trim() !== process.env.TARGET_SHA) throw new Error('PM2_DEPLOY_SHA_MISMATCH');
+
+          const currentRef = String(env.PARTIAL_FILL_RELEASE_BINDING_REF ?? '').trim();
+          const currentDigest = String(env.PARTIAL_FILL_RELEASE_BINDING_DIGEST ?? '').trim();
+          const currentRoot = String(env.RESEARCH_STATE_ROOT ?? '').trim();
+          if (process.env.EXPECTED_REF === 'NONE') {
+            if (currentRef || currentDigest) throw new Error('CURRENT_LOCATOR_COMPARE_AND_SWAP_MISMATCH');
+          } else if (currentRef !== process.env.EXPECTED_REF || currentDigest !== process.env.EXPECTED_DIGEST) {
+            throw new Error('CURRENT_LOCATOR_COMPARE_AND_SWAP_MISMATCH');
+          }
+          if ((currentRef || currentDigest) && currentRoot !== process.env.STATE_ROOT) {
+            throw new Error('CURRENT_STATE_ROOT_AUTHORITY_MISMATCH');
+          }
+
+          const excluded = new Set([
+            'name', 'namespace', 'cwd', 'args', 'exec_interpreter', 'exec_mode',
+            'pm_exec_path', 'pm_cwd', 'pm_out_log_path', 'pm_err_log_path', 'pm_pid_path',
+            'status', 'NODE_APP_INSTANCE', 'pm_id', 'created_at', 'restart_time', 'unstable_restarts',
+          ]);
+          const base = {};
+          for (const [key, raw] of Object.entries(env)) {
+            if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+            if (excluded.has(key) || key.startsWith('pm_') || key.startsWith('axm_')) continue;
+            if (raw === null || raw === undefined || typeof raw === 'object') continue;
+            base[key] = String(raw);
+          }
+          base.RESEARCH_STATE_ROOT = currentRoot;
+          base.PARTIAL_FILL_RELEASE_BINDING_REF = currentRef;
+          base.PARTIAL_FILL_RELEASE_BINDING_DIGEST = currentDigest;
+          const next = {
+            ...base,
+            RESEARCH_STATE_ROOT: process.env.STATE_ROOT,
+            PARTIAL_FILL_RELEASE_BINDING_REF: process.env.TARGET_REF,
+            PARTIAL_FILL_RELEASE_BINDING_DIGEST: process.env.TARGET_DIGEST,
+          };
+          if (String(next.DEPLOY_SHA ?? '') !== process.env.TARGET_SHA) throw new Error('DEPLOY_SHA_MUTATION_FORBIDDEN');
+
+          const quote = (value) => `'${String(value).replace(/'/g, `'"'"'`)}'`;
+          const writeEnv = (path, values) => {
+            const lines = Object.entries(values)
+              .sort(([a], [b]) => a.localeCompare(b))
+              .map(([key, value]) => `export ${key}=${quote(value)}`);
+            fs.writeFileSync(path, `${lines.join('\n')}\n`, { mode: 0o600 });
+          };
+          writeEnv(process.env.ORIGINAL_ENV, base);
+          writeEnv(process.env.NEXT_ENV, next);
+          fs.writeFileSync(process.env.META_JSON, JSON.stringify({
+            currentRef: currentRef || 'NONE',
+            currentDigest: currentDigest || 'NONE',
+            alreadyTarget: currentRef === process.env.TARGET_REF
+              && currentDigest === process.env.TARGET_DIGEST
+              && currentRoot === process.env.STATE_ROOT,
+          }));
+          NODE
+
+          ALREADY_TARGET="$(META_JSON="$META_JSON" node -e "const fs=require('node:fs');const v=JSON.parse(fs.readFileSync(process.env.META_JSON,'utf8'));process.stdout.write(v.alreadyTarget?'true':'false')")"
+          if [[ "$ALREADY_TARGET" != 'true' ]]; then
+            apply_env_file "$NEXT_ENV"
+            ROLLBACK_NEEDED=1
+            pm2 save >&2
+          fi
+
+          pm2 jlist > "$AFTER_JSON"
+          PID="$(AFTER_JSON="$AFTER_JSON" PM2_NAME="$PM2_NAME" TARGET_SHA="$TARGET_SHA" TARGET_REF="$TARGET_REF" TARGET_DIGEST="$TARGET_DIGEST" STATE_ROOT="$STATE_ROOT" node <<'NODE'
+          const fs = require('node:fs');
+          const processes = JSON.parse(fs.readFileSync(process.env.AFTER_JSON, 'utf8'));
+          const selected = processes.find((item) => item.name === process.env.PM2_NAME);
+          const env = selected?.pm2_env;
+          if (!env || env.status !== 'online') throw new Error('PM2_PROCESS_NOT_ONLINE_AFTER_ACTIVATION');
+          if (String(env.DEPLOY_SHA ?? '').trim() !== process.env.TARGET_SHA) throw new Error('DEPLOY_SHA_CHANGED_DURING_LOCATOR_ACTIVATION');
+          if (String(env.RESEARCH_STATE_ROOT ?? '').trim() !== process.env.STATE_ROOT
+            || String(env.PARTIAL_FILL_RELEASE_BINDING_REF ?? '').trim() !== process.env.TARGET_REF
+            || String(env.PARTIAL_FILL_RELEASE_BINDING_DIGEST ?? '').trim() !== process.env.TARGET_DIGEST) {
+            throw new Error('PM2_LOCATOR_READBACK_MISMATCH');
+          }
+          const pid = Number(selected.pid);
+          if (!Number.isInteger(pid) || pid <= 0) throw new Error('PM2_PID_INVALID');
+          process.stdout.write(String(pid));
+          NODE
+          )"
+
+          if ! cat "/proc/$PID/environ" > "$PROC_ENV" 2>/dev/null; then
+            sudo -n cat "/proc/$PID/environ" > "$PROC_ENV"
+          fi
+          PROC_ENV="$PROC_ENV" TARGET_SHA="$TARGET_SHA" TARGET_REF="$TARGET_REF" TARGET_DIGEST="$TARGET_DIGEST" STATE_ROOT="$STATE_ROOT" node <<'NODE'
+          const fs = require('node:fs');
+          const values = new Map();
+          for (const entry of fs.readFileSync(process.env.PROC_ENV).toString('utf8').split('\0')) {
+            const index = entry.indexOf('=');
+            if (index > 0) values.set(entry.slice(0, index), entry.slice(index + 1));
+          }
+          if (values.get('DEPLOY_SHA') !== process.env.TARGET_SHA) throw new Error('PROCESS_DEPLOY_SHA_MISMATCH');
+          if (values.get('RESEARCH_STATE_ROOT') !== process.env.STATE_ROOT
+            || values.get('PARTIAL_FILL_RELEASE_BINDING_REF') !== process.env.TARGET_REF
+            || values.get('PARTIAL_FILL_RELEASE_BINDING_DIGEST') !== process.env.TARGET_DIGEST) {
+            throw new Error('PROCESS_LOCATOR_READBACK_MISMATCH');
+          }
+          NODE
+
+          HEALTH="$(curl --fail --silent --show-error --max-time 20 "http://127.0.0.1:${LIVE_PORT}/api/health")"
+          HEALTH="$HEALTH" TARGET_SHA="$TARGET_SHA" node <<'NODE'
+          const value = JSON.parse(process.env.HEALTH);
+          if (value?.ok !== true
+            || value?.deploySha !== process.env.TARGET_SHA
+            || value?.processDeploySha !== process.env.TARGET_SHA
+            || value?.identityMatch !== true) {
+            throw new Error('POST_ACTIVATION_HEALTH_IDENTITY_MISMATCH');
+          }
+          NODE
+
+          ROLLBACK_NEEDED=0
+          META_JSON="$META_JSON" TARGET_SHA="$TARGET_SHA" TARGET_REF="$TARGET_REF" TARGET_DIGEST="$TARGET_DIGEST" ALREADY_TARGET="$ALREADY_TARGET" node <<'NODE'
+          const fs = require('node:fs');
+          const meta = JSON.parse(fs.readFileSync(process.env.META_JSON, 'utf8'));
+          process.stdout.write(JSON.stringify({
+            schemaVersion: 'partial-fill-runtime-locator-activation-receipt-v1',
+            targetMainSha: process.env.TARGET_SHA,
+            previousReleaseBindingRef: meta.currentRef,
+            previousReleaseBindingDigest: meta.currentDigest,
+            releaseBindingRef: process.env.TARGET_REF,
+            releaseBindingDigest: process.env.TARGET_DIGEST,
+            locatorKeys: ['RESEARCH_STATE_ROOT', 'PARTIAL_FILL_RELEASE_BINDING_REF', 'PARTIAL_FILL_RELEASE_BINDING_DIGEST'],
+            deployShaMutationPerformed: false,
+            productionDeployPerformed: false,
+            releaseBindingPublicationPerformed: false,
+            pointerMutationPerformed: false,
+            datasetMutationPerformed: false,
+            runtimeActivationPerformed: process.env.ALREADY_TARGET !== 'true',
+            idempotentNoop: process.env.ALREADY_TARGET === 'true',
+            serviceRestartPerformed: process.env.ALREADY_TARGET !== 'true',
+            productionPolicyAuthorityConnected: false,
+            calibrationSampleSufficient: false,
+            partialFillCostPresent: false,
+            fullCostReady: false,
+            evidenceComplete: 0,
+            profitabilityProven: false,
+            currentValidatedChampion: 'NONE',
+            executionAuthority: 'NONE',
+            privateApiUsed: false,
+            liveTrading: false,
+            orderSubmitted: false,
+          }));
+          NODE
+          REMOTE
+          )"
+
+          RESULT="$RESULT" TARGET_SHA="$TARGET_SHA" TARGET_REF="$TARGET_REF" TARGET_DIGEST="$TARGET_DIGEST" node <<'NODE'
+          const fs = require('node:fs');
+          const value = JSON.parse(process.env.RESULT);
+          if (value.targetMainSha !== process.env.TARGET_SHA
+            || value.releaseBindingRef !== process.env.TARGET_REF
+            || value.releaseBindingDigest !== process.env.TARGET_DIGEST
+            || value.deployShaMutationPerformed !== false
+            || value.productionDeployPerformed !== false
+            || value.releaseBindingPublicationPerformed !== false
+            || value.pointerMutationPerformed !== false
+            || value.datasetMutationPerformed !== false
+            || value.productionPolicyAuthorityConnected !== false
+            || value.fullCostReady !== false
+            || value.evidenceComplete !== 0
+            || value.profitabilityProven !== false
+            || value.executionAuthority !== 'NONE') {
+            throw new Error('INVALID_LOCATOR_ACTIVATION_RESULT');
+          }
+          fs.writeFileSync(`${process.env.RUNNER_TEMP}/partial-fill-runtime-locator-activation-result.json`, `${JSON.stringify({
+            ...value,
+            workflowRunId: process.env.GITHUB_RUN_ID,
+            workflowRunAttempt: process.env.GITHUB_RUN_ATTEMPT,
+          }, null, 2)}\n`);
+          NODE
+
+      - name: Upload sanitized locator activation evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-forward-partial-fill-runtime-locator-activation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/partial-fill-runtime-locator-activation-result.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Record locator-only boundary
+        shell: bash
+        run: |
+          {
+            echo '## Partial-Fill runtime locator activation'
+            echo
+            echo "- Target main / existing DEPLOY_SHA: \`${{ steps.command.outputs.target_sha }}\`"
+            echo "- Release binding ref: \`${{ steps.command.outputs.target_ref }}\`"
+            echo "- Release binding digest: \`${{ steps.command.outputs.target_digest }}\`"
+            echo '- Locator mutation keys only: `RESEARCH_STATE_ROOT`, `PARTIAL_FILL_RELEASE_BINDING_REF`, `PARTIAL_FILL_RELEASE_BINDING_DIGEST`'
+            echo '- Production deploy: `false`'
+            echo '- DEPLOY_SHA mutation: `false`'
+            echo '- Release-binding publication: `false`'
+            echo '- DB / Secret / schedule mutation: `false`'
+            echo '- Policy / profitability / trading promotion: `false`'
+          } >> "$GITHUB_STEP_SUMMARY"
