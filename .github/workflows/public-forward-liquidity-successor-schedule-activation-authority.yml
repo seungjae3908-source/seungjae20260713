@@ -3,7 +3,8 @@ name: Public Forward Liquidity Successor Schedule Activation Authority
 # This workflow records human Release-Control authority evidence only.
 # It never merges PR #871, never installs/changes a cron trigger, never captures market data,
 # and never grants prospective sample or trading authority.
-# A later main movement makes an authorization stale for activation eligibility.
+# An unexpected main movement before the authorized merge makes authority stale;
+# the exact authorized PR #871 transition consumes the frozen authority instead of invalidating it.
 
 on:
   pull_request:
@@ -500,7 +501,9 @@ jobs:
               'capturePerformed=false',
               'prospectiveSlotCredit=0',
               'technicalActivationAuthorizedByReceipt=false',
-              'authorityBecomesStaleOnMainMove=true',
+              'currentMainMustRemainExactUntilAuthorizedMerge=true',
+              'authorityStaleOnUnexpectedMainMoveBeforeMerge=true',
+              'authorityConsumedByExactAuthorizedMerge=true',
               'finalPreActivationAuditRequired=true',
               'LIVE_TRADING=false',
               'AUTO_TRADING=false',
