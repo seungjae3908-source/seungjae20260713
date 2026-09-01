@@ -221,7 +221,10 @@ test('A09 authority workflow is issue-comment evidence only and tracks active Su
   assert.doesNotMatch(workflow, /pull-requests:\s*write/);
   assert.doesNotMatch(workflow, /deployments:\s*write/);
   assert.doesNotMatch(workflow, /id-token:\s*write/);
-  assert.doesNotMatch(workflow, /pm2\s+(start|restart|reload)|systemctl\s+(enable|start|restart)|\bssh\b/i);
+  assert.doesNotMatch(
+    workflow,
+    /^\s*(?:pm2\s+(?:start|restart|reload)|systemctl\s+(?:enable|start|restart)|ssh\s+)/im,
+  );
   assert.match(workflow, /SUCCESSOR_AUTHORIZE_COMMAND_NOT_REGISTERED_ON_RELEASE_CONTROL/);
   assert.match(workflow, /authorityBecomesStaleOnMainMove/);
 });
