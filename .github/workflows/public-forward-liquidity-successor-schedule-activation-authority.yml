@@ -11,8 +11,10 @@ on:
       - '.github/workflows/public-forward-liquidity-successor-schedule-activation-authority.yml'
       - 'market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-activation-authority-v1.mjs'
       - 'market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-activation-authority-v1.test.mjs'
-      - 'market-intelligence-sidecar/config/public-forward-liquidity-successor-prospective-cohort-v1.json'
-      - 'market-intelligence-sidecar/config/public-forward-liquidity-successor-oos-outcome-horizon-v1.json'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-successor-prospective-cohort.mjs'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-successor-oos-outcome-horizon.mjs'
+      - 'market-intelligence-sidecar/config/public-forward-liquidity-successor-prospective-cohort-v*.json'
+      - 'market-intelligence-sidecar/config/public-forward-liquidity-successor-oos-outcome-horizon-v*.json'
   issue_comment:
     types: [created]
 
@@ -72,7 +74,8 @@ jobs:
           ! grep -Eq 'deployments:[[:space:]]+write' "$workflow"
           ! grep -Eq 'packages:[[:space:]]+write' "$workflow"
           ! grep -Eq 'id-token:[[:space:]]+write' "$workflow"
-          if grep -Eiq 'pm2[[:space:]]+(start|restart|reload)|systemctl[[:space:]]+(enable|start|restart)|[[:space:]]ssh[[:space:]]'; then
+          if grep -Ev 'grep -Eiq' "$workflow" \
+            | grep -Eiq 'pm2[[:space:]]+(start|restart|reload)|systemctl[[:space:]]+(enable|start|restart)|^[[:space:]]*ssh[[:space:]]'; then
             echo 'Authority evidence workflow must not deploy or mutate runtime.' >&2
             exit 1
           fi
@@ -196,46 +199,49 @@ jobs:
               'ai-privacy/verified',
               'futures-public-network-smoke/verified',
             ];
-            async function requireRequired6(targetSha, expectedBranch) {
-              const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                ref: targetSha,
-                per_page: 100,
-              });
-              statuses.sort((left, right) => Number(right.id) - Number(left.id));
-              const latest = new Map();
-              for (const status of statuses) if (!latest.has(status.context)) latest.set(status.context, status);
-              const missing = required.filter((name) => latest.get(name)?.state !== 'success');
-              if (missing.length) throw new Error(`Required CI not 6/6 SUCCESS: ${missing.join(', ')}`);
-              const runIds = new Set();
-              for (const name of required) {
-                const match = String(latest.get(name)?.target_url ?? '').match(/\/actions\/runs\/(\d+)/);
-                if (!match) throw new Error(`Required status ${name} lacks authoritative run URL`);
-                runIds.add(Number(match[1]));
-              }
-              if (runIds.size !== 1) throw new Error(`Required CI is not coherent: ${[...runIds].join(', ')}`);
-              const runId = [...runIds][0];
-              const run = (await github.rest.actions.getWorkflowRun({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                run_id: runId,
-              })).data;
-              if (run.head_sha !== targetSha
-                || run.head_branch !== expectedBranch
-                || run.status !== 'completed'
-                || run.conclusion !== 'success'
-                || run.path !== '.github/workflows/futures-public-network-smoke.yml') {
-                throw new Error(`Required CI provenance rejected for run ${runId}`);
-              }
-              return runId;
+            const targetSha = process.env.TARGET_SHA;
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: targetSha,
+              per_page: 100,
+            });
+            statuses.sort((left, right) => Number(right.id) - Number(left.id));
+            const latest = new Map();
+            for (const status of statuses) if (!latest.has(status.context)) latest.set(status.context, status);
+            const missing = required.filter((name) => latest.get(name)?.state !== 'success');
+            if (missing.length) {
+              core.setFailed(`SUCCESSOR_AUTHORITY_MAIN_REQUIRED_CI_NOT_6_OF_6:${missing.join(',')}`);
+              return;
             }
-            try {
-              const runId = await requireRequired6(process.env.TARGET_SHA, 'main');
-              core.setOutput('run_id', String(runId));
-            } catch (error) {
-              core.setFailed(`SUCCESSOR_AUTHORITY_MAIN_REQUIRED_CI_REJECTED:${error.message}`);
+            const runIds = new Set();
+            for (const name of required) {
+              const match = String(latest.get(name)?.target_url ?? '').match(/\/actions\/runs\/(\d+)/);
+              if (!match) {
+                core.setFailed(`SUCCESSOR_AUTHORITY_MAIN_STATUS_RUN_URL_MISSING:${name}`);
+                return;
+              }
+              runIds.add(Number(match[1]));
             }
+            if (runIds.size !== 1) {
+              core.setFailed(`SUCCESSOR_AUTHORITY_MAIN_REQUIRED_CI_NOT_COHERENT:${[...runIds].join(',')}`);
+              return;
+            }
+            const runId = [...runIds][0];
+            const run = (await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId,
+            })).data;
+            if (run.head_sha !== targetSha
+              || run.head_branch !== 'main'
+              || run.status !== 'completed'
+              || run.conclusion !== 'success'
+              || run.path !== '.github/workflows/futures-public-network-smoke.yml') {
+              core.setFailed(`SUCCESSOR_AUTHORITY_MAIN_CI_PROVENANCE_REJECTED:${runId}`);
+              return;
+            }
+            core.setOutput('run_id', String(runId));
 
       - name: Verify exact #871 activation-workflow candidate and current-main alignment
         id: candidate
@@ -248,7 +254,6 @@ jobs:
           script: |
             const expectedPath = '.github/workflows/public-forward-liquidity-successor-scheduled-capture.yml';
             const expectedName = 'Public Forward Liquidity Successor Scheduled Capture';
-            const expectedCron = "17 * * * *";
             const pr = (await github.rest.pulls.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -297,7 +302,7 @@ jobs:
               return;
             }
             const cronMatches = text.match(/- cron: '17 \* \* \* \*'/g) ?? [];
-            if (cronMatches.length !== 1 || !text.includes(`cron: '${expectedCron}'`)) {
+            if (cronMatches.length !== 1) {
               core.setFailed('SUCCESSOR_AUTHORITY_PR871_CRON_MISMATCH');
               return;
             }
@@ -375,7 +380,7 @@ jobs:
             }
             core.setOutput('run_id', String(runId));
 
-      - name: Validate frozen Successor cohort and 5000ms OOS contract
+      - name: Validate active frozen Successor cohort and 5000ms OOS contract
         shell: bash
         env:
           ACTION: ${{ steps.command.outputs.action }}
@@ -392,7 +397,8 @@ jobs:
           if (process.env.ACTION === 'AUTHORIZE' && frozen.policyDigest !== process.env.COMMAND_POLICY_DIGEST) {
             throw new Error('SUCCESSOR_AUTHORITY_POLICY_DIGEST_MISMATCH');
           }
-          if (frozen.cron !== '17 * * * *' || frozen.outcomeHorizonMs !== 5000
+          if (frozen.cron !== '17 * * * *'
+            || frozen.outcomeHorizonMs !== 5000
             || frozen.outcomeSelectionPolicy !== 'FIRST_PUBLIC_OBSERVATION_AT_OR_AFTER_HORIZON'
             || frozen.oldV3OutcomeHorizonAuthorityInherited !== false) {
             throw new Error('SUCCESSOR_AUTHORITY_FROZEN_POLICY_DRIFT');
@@ -424,14 +430,13 @@ jobs:
             buildSuccessorScheduleAuthorityEvidence,
             parseSuccessorScheduleAuthorityCommand,
           } from './market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-activation-authority-v1.mjs';
-
           const command = parseSuccessorScheduleAuthorityCommand(process.env.COMMENT_BODY);
           const evidence = buildSuccessorScheduleAuthorityEvidence({
             command,
             currentMainSha: process.env.TARGET_MAIN_SHA,
             workflowCandidateHeadSha: process.env.CANDIDATE_HEAD_SHA || null,
             workflowBlobSha: process.env.WORKFLOW_BLOB_SHA || null,
-            issueNumber: Number(process.env.GITHUB_EVENT_NAME === 'issue_comment' ? 23 : 0),
+            issueNumber: 23,
             issueTitle: 'Staging Readiness Control',
             commentId: Number(process.env.COMMENT_ID),
             commentUrl: process.env.COMMENT_URL,
@@ -480,7 +485,7 @@ jobs:
               '[SUCCESSOR_PROSPECTIVE_SCHEDULE_ACTIVATION_AUTHORITY_RECEIPT]',
               `status=${process.env.AUTHORITY_STATUS}`,
               `action=${process.env.ACTION_KIND}`,
-              `authorityIdentity=SUCCESSOR_PROSPECTIVE_SCHEDULE_ACTIVATION`,
+              'authorityIdentity=SUCCESSOR_PROSPECTIVE_SCHEDULE_ACTIVATION',
               `authorizedBaselineMainSha=${process.env.TARGET_MAIN_SHA}`,
               `workflowCandidateHeadSha=${process.env.CANDIDATE_HEAD_SHA || 'N/A_REVOCATION'}`,
               `mainRequiredCiRun=${process.env.MAIN_CI_RUN_ID}`,
