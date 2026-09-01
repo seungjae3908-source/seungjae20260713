@@ -1,0 +1,402 @@
+import { createHash } from 'node:crypto';
+
+export const PUBLIC_FORWARD_PARTIAL_FILL_STATISTICAL_CALIBRATION_ADMISSION_VERSION =
+  'public-forward-partial-fill-statistical-calibration-admission-v1' as const;
+
+export const PUBLIC_FORWARD_PARTIAL_FILL_STATISTICAL_CALIBRATION_ADMISSION_IDENTITY =
+  'PUBLIC_FORWARD_PARTIAL_FILL_STATISTICAL_CALIBRATION_ADMISSION_V1' as const;
+
+export const PUBLIC_FORWARD_PARTIAL_FILL_STATISTICAL_CALIBRATION_ADMISSION_SAFETY = Object.freeze({
+  prospectiveOnly: true,
+  retrospectiveAdmissionAllowed: false,
+  preFreezeSampleCredit: 0,
+  preAdmissionSampleCredit: 0,
+  replayCredit: 0,
+  backfillCredit: 0,
+  manualCredit: 0,
+  syntheticCredit: 0,
+  duplicateCredit: 0,
+  resultConditionedRetuningAllowed: false,
+  observedSampleMaySelectPolicy: false,
+  defaultStatisticalMethodologyAllowed: false,
+  defaultNumericMinimumAllowed: false,
+  statisticalNumericizationStarted: false,
+  numericMinimumArtifactProduced: false,
+  calibrationSampleSufficient: false,
+  calibrationArtifactProduced: false,
+  partialFillCostProduced: false,
+  productionPolicyAuthorityConnected: false,
+  fullCostReady: false,
+  evidenceComplete: 0,
+  executionAuthority: 'NONE' as const,
+  privateApiAllowed: false,
+  liveTrading: false,
+  orderSubmissionAllowed: false,
+});
+
+export type FrozenRef = Readonly<{
+  identity: string;
+  version: string;
+  digest: string;
+  frozenAtMs: number;
+  status: 'FROZEN';
+}>;
+
+export type BusinessToleranceAdmissionBinding = Readonly<{
+  completeValidationReceiptUrl: string;
+  freezeArtifactUrl: string;
+  businessToleranceIdentity: 'PUBLIC_FORWARD_PARTIAL_FILL_BUSINESS_TOLERANCE_V1';
+  businessToleranceVersion: 'V1';
+  freezePayloadDigest: string;
+  freezeEffectiveAtMs: number;
+  semanticsRegistryIdentity: string;
+  semanticsRegistryDigest: string;
+}>;
+
+export type SuccessorProspectiveCohortBinding = Readonly<{
+  cohort: FrozenRef;
+  effectiveCohortStartMs: number;
+  policyDigest: string;
+  splitPolicy: FrozenRef;
+  scopeUniverse: FrozenRef;
+}>;
+
+export type StatisticalMethodologyBinding = Readonly<{
+  methodology: FrozenRef;
+  numericMinimumArtifact: FrozenRef;
+}>;
+
+export type CalibrationEvidenceBinding = Readonly<{
+  observationId: string;
+  sourceObservationLineageDigest: string;
+  sourceReceiptIdentity: string;
+  sourceReceiptDigest: string;
+  sourceArtifactIdentity: string;
+  sourceArtifactDigest: string;
+  sourceClass: string;
+  datasetIdentity: string;
+  datasetDigest: string;
+  datasetStoreContract: string;
+  effectiveIndependenceProven: boolean;
+  split: 'TRAIN' | 'VALIDATION' | 'OOS';
+  splitPolicyDigest: string;
+  market: 'CRYPTO_FUTURES';
+  sourceIdentity: string;
+  symbol: string;
+  side: 'LONG' | 'SHORT';
+  quantityNotionalBucketIdentity: string;
+  volatilityRegimeIdentity: string;
+  liquidityRegimeIdentity: string;
+  observedAtMs: number;
+  sourceTimestampMs: number;
+  duplicate: boolean;
+  replay: boolean;
+  backfill: boolean;
+  manual: boolean;
+  synthetic: boolean;
+  predictedOpportunityProbabilityPresent: boolean;
+  realizedOpportunityOutcomePresent: boolean;
+  predictedFillRatioPresent: boolean;
+  actualFillRatioPresent: boolean;
+  queuePositionEvidencePresent: boolean;
+  predictedAllInCostPresent: boolean;
+  actualAllInCostPresent: boolean;
+  predictionIntervalPresent: boolean;
+  settlementEvidencePresent: boolean;
+}>;
+
+export type PublicForwardPartialFillStatisticalCalibrationAdmissionInput = Readonly<{
+  admissionFrozenAtMs: number;
+  consumerIdentity: string;
+  datasetSchemaVersion: string;
+  businessTolerance: BusinessToleranceAdmissionBinding;
+  successor: SuccessorProspectiveCohortBinding;
+  statisticalMethodology: StatisticalMethodologyBinding;
+  evidence: readonly CalibrationEvidenceBinding[];
+}>;
+
+export type AdmittedCalibrationEvidence = Readonly<{
+  observationId: string;
+  sourceObservationLineageDigest: string;
+  split: 'TRAIN' | 'VALIDATION' | 'OOS';
+  scopeKey: string;
+  observedAtMs: number;
+  metricEvaluability: Readonly<{
+    tol01OpportunityCalibration: boolean;
+    tol02FillRatioAbsoluteError: boolean;
+    tol03FillRatioSignedBias: boolean;
+    tol04AllInCostAbsoluteError: boolean;
+    tol05AdverseCostUnderestimation: boolean;
+    tol06AdverseTailCostUnderestimation: boolean;
+    tol07PredictionIntervalCoverage: boolean;
+    tol08SettlementReconciliation: boolean;
+    tol09CalibrationFreshness: false;
+  }>;
+}>;
+
+export type PublicForwardPartialFillStatisticalCalibrationAdmissionArtifact = Readonly<{
+  schemaVersion: typeof PUBLIC_FORWARD_PARTIAL_FILL_STATISTICAL_CALIBRATION_ADMISSION_VERSION;
+  admissionIdentity: typeof PUBLIC_FORWARD_PARTIAL_FILL_STATISTICAL_CALIBRATION_ADMISSION_IDENTITY;
+  kind: 'IMMUTABLE_PROSPECTIVE_STATISTICAL_CALIBRATION_ADMISSION';
+  admissionStatus: 'ADMITTED_FOR_PROSPECTIVE_EVALUATION_ONLY';
+  admissionFrozenAtMs: number;
+  eligibleEvidenceStartMs: number;
+  consumerIdentity: string;
+  datasetSchemaVersion: string;
+  businessTolerance: BusinessToleranceAdmissionBinding;
+  successor: SuccessorProspectiveCohortBinding;
+  statisticalMethodology: StatisticalMethodologyBinding;
+  admittedEvidence: readonly AdmittedCalibrationEvidence[];
+  effectiveIndependentEligibleN: number;
+  calibrationSampleSufficient: false;
+  statisticalNumericizationStarted: false;
+  numericMinimumArtifactProduced: false;
+  calibrationArtifactProduced: false;
+  partialFillCostProduced: false;
+  productionPolicyAuthorityConnected: false;
+  fullCostReady: false;
+  evidenceComplete: 0;
+  executionAuthority: 'NONE';
+  privateApiAllowed: false;
+  liveTrading: false;
+  orderSubmissionAllowed: false;
+  digest: string;
+}>;
+
+export type PublicForwardPartialFillStatisticalCalibrationAdmissionResult = Readonly<{
+  status: 'ADMITTED' | 'BLOCKED_POLICY' | 'BLOCKED_DATA';
+  blockers: readonly string[];
+  artifact: PublicForwardPartialFillStatisticalCalibrationAdmissionArtifact | null;
+}>;
+
+const SHA256 = /^[a-f0-9]{64}$/u;
+const ISSUE_COMMENT_URL = /^https:\/\/github\.com\/seungjae3908-source\/seungjae20260713\/issues\/838#issuecomment-\d+$/u;
+
+function canonicalize(value: unknown): unknown {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new TypeError('NON_FINITE_NUMBER_NOT_CANONICAL');
+    return value;
+  }
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (!value || typeof value !== 'object') throw new TypeError('UNSUPPORTED_CANONICAL_VALUE');
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .filter(([, child]) => child !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, child]) => [key, canonicalize(child)]));
+}
+
+function digest(value: unknown): string {
+  return createHash('sha256').update(JSON.stringify(canonicalize(value))).digest('hex');
+}
+
+function nonEmpty(value: unknown): boolean {
+  const normalized = String(value ?? '').trim();
+  return normalized.length > 0 && normalized.length <= 320;
+}
+
+function exactDigest(value: unknown): boolean {
+  return SHA256.test(String(value ?? '').trim().toLowerCase());
+}
+
+function finitePositive(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+function validFrozenRef(ref: FrozenRef | null | undefined): boolean {
+  return Boolean(ref)
+    && ref!.status === 'FROZEN'
+    && nonEmpty(ref!.identity)
+    && nonEmpty(ref!.version)
+    && exactDigest(ref!.digest)
+    && finitePositive(ref!.frozenAtMs);
+}
+
+function blocked(
+  status: 'BLOCKED_POLICY' | 'BLOCKED_DATA',
+  blockers: readonly string[],
+): PublicForwardPartialFillStatisticalCalibrationAdmissionResult {
+  return Object.freeze({ status, blockers: Object.freeze([...new Set(blockers)]), artifact: null });
+}
+
+function scopeKey(evidence: CalibrationEvidenceBinding): string {
+  return [
+    evidence.market,
+    evidence.sourceIdentity,
+    evidence.symbol,
+    evidence.side,
+    evidence.quantityNotionalBucketIdentity,
+    evidence.volatilityRegimeIdentity,
+    evidence.liquidityRegimeIdentity,
+  ].join('|');
+}
+
+function validateAuthority(input: PublicForwardPartialFillStatisticalCalibrationAdmissionInput): string[] {
+  const blockers: string[] = [];
+  const add = (code: string) => { if (!blockers.includes(code)) blockers.push(code); };
+  const tolerance = input.businessTolerance;
+
+  if (!finitePositive(input.admissionFrozenAtMs)) add('STATISTICAL_CALIBRATION_ADMISSION_FREEZE_TIMESTAMP_INVALID');
+  if (!nonEmpty(input.consumerIdentity)) add('CALIBRATION_CONSUMER_IDENTITY_MISSING');
+  if (!nonEmpty(input.datasetSchemaVersion)) add('DATASET_SCHEMA_VERSION_MISSING');
+  if (!ISSUE_COMMENT_URL.test(tolerance.completeValidationReceiptUrl)) add('BUSINESS_TOLERANCE_COMPLETE_VALIDATION_RECEIPT_REQUIRED');
+  if (!ISSUE_COMMENT_URL.test(tolerance.freezeArtifactUrl)) add('BUSINESS_TOLERANCE_FREEZE_ARTIFACT_REQUIRED');
+  if (tolerance.businessToleranceIdentity !== 'PUBLIC_FORWARD_PARTIAL_FILL_BUSINESS_TOLERANCE_V1'
+    || tolerance.businessToleranceVersion !== 'V1') add('BUSINESS_TOLERANCE_SEMANTICS_BINDING_MISMATCH');
+  if (!exactDigest(tolerance.freezePayloadDigest)) add('BUSINESS_TOLERANCE_FREEZE_DIGEST_MISMATCH');
+  if (!finitePositive(tolerance.freezeEffectiveAtMs)) add('BUSINESS_TOLERANCE_FREEZE_TIMESTAMP_INVALID');
+  if (!nonEmpty(tolerance.semanticsRegistryIdentity) || !exactDigest(tolerance.semanticsRegistryDigest)) {
+    add('BUSINESS_TOLERANCE_SEMANTICS_BINDING_MISMATCH');
+  }
+
+  if (!validFrozenRef(input.successor.cohort)) add('SUCCESSOR_PROSPECTIVE_COHORT_NOT_FROZEN');
+  if (!finitePositive(input.successor.effectiveCohortStartMs)) add('SUCCESSOR_PROSPECTIVE_COHORT_NOT_FROZEN');
+  if (!exactDigest(input.successor.policyDigest)) add('SUCCESSOR_POLICY_DIGEST_MISSING');
+  if (!validFrozenRef(input.successor.splitPolicy)) add('SPLIT_POLICY_BINDING_MISSING');
+  if (!validFrozenRef(input.successor.scopeUniverse)) add('SCOPE_UNIVERSE_BINDING_MISSING');
+
+  if (!validFrozenRef(input.statisticalMethodology.methodology)) add('STATISTICAL_METHODOLOGY_NOT_FROZEN');
+  if (!validFrozenRef(input.statisticalMethodology.numericMinimumArtifact)) add('NUMERIC_MINIMUM_ARTIFACT_NOT_FROZEN');
+
+  return blockers;
+}
+
+function eligibleStart(input: PublicForwardPartialFillStatisticalCalibrationAdmissionInput): number {
+  return Math.max(
+    input.businessTolerance.freezeEffectiveAtMs,
+    input.admissionFrozenAtMs,
+    input.successor.effectiveCohortStartMs,
+    input.statisticalMethodology.methodology.frozenAtMs,
+    input.statisticalMethodology.numericMinimumArtifact.frozenAtMs,
+  );
+}
+
+function validateEvidence(
+  evidence: CalibrationEvidenceBinding,
+  input: PublicForwardPartialFillStatisticalCalibrationAdmissionInput,
+  eligibleEvidenceStartMs: number,
+  seenObservationIds: Set<string>,
+  seenLineages: Set<string>,
+): string[] {
+  const blockers: string[] = [];
+  const add = (code: string) => { if (!blockers.includes(code)) blockers.push(code); };
+
+  if (!nonEmpty(evidence.observationId) || seenObservationIds.has(evidence.observationId)) add('DUPLICATE_OBSERVATION_FORBIDDEN');
+  if (!exactDigest(evidence.sourceObservationLineageDigest) || seenLineages.has(evidence.sourceObservationLineageDigest)) {
+    add('DUPLICATE_LINEAGE_FORBIDDEN');
+  }
+  if (!nonEmpty(evidence.sourceReceiptIdentity) || !exactDigest(evidence.sourceReceiptDigest)
+    || !nonEmpty(evidence.sourceArtifactIdentity) || !exactDigest(evidence.sourceArtifactDigest)) {
+    add('IMMUTABLE_SOURCE_RECEIPT_REQUIRED');
+  }
+  if (!['FORWARD_NATURAL_SAMPLE', 'SUCCESSOR_FORWARD_NATURAL_SAMPLE'].includes(evidence.sourceClass)) {
+    add('GENUINE_PROSPECTIVE_SOURCE_REQUIRED');
+  }
+  if (!nonEmpty(evidence.datasetIdentity) || !exactDigest(evidence.datasetDigest) || !nonEmpty(evidence.datasetStoreContract)) {
+    add('AUTHORITATIVE_DATASET_BINDING_REQUIRED');
+  }
+  if (evidence.effectiveIndependenceProven !== true) add('EFFECTIVE_INDEPENDENCE_NOT_PROVEN');
+  if (!['TRAIN', 'VALIDATION', 'OOS'].includes(evidence.split)
+    || evidence.splitPolicyDigest !== input.successor.splitPolicy.digest) add('SPLIT_POLICY_BINDING_MISSING');
+  if (evidence.market !== 'CRYPTO_FUTURES' || !nonEmpty(evidence.sourceIdentity) || !nonEmpty(evidence.symbol)
+    || !['LONG', 'SHORT'].includes(evidence.side) || !nonEmpty(evidence.quantityNotionalBucketIdentity)
+    || !nonEmpty(evidence.volatilityRegimeIdentity) || !nonEmpty(evidence.liquidityRegimeIdentity)) {
+    add('REQUIRED_SCOPE_COVERAGE_INSUFFICIENT');
+  }
+  if (!finitePositive(evidence.observedAtMs) || !finitePositive(evidence.sourceTimestampMs)) add('EVIDENCE_TIMESTAMP_INVALID');
+  if (finitePositive(evidence.observedAtMs) && evidence.observedAtMs < eligibleEvidenceStartMs) add('PRE_ADMISSION_EVIDENCE_FORBIDDEN');
+  if (finitePositive(evidence.observedAtMs) && evidence.observedAtMs < input.successor.effectiveCohortStartMs) {
+    add('PRE_COHORT_EVIDENCE_FORBIDDEN');
+  }
+  if (finitePositive(evidence.sourceTimestampMs) && finitePositive(evidence.observedAtMs)
+    && evidence.sourceTimestampMs > evidence.observedAtMs) add('FUTURE_SOURCE_TIMESTAMP_FORBIDDEN');
+  if (evidence.duplicate || evidence.replay || evidence.backfill || evidence.manual || evidence.synthetic) {
+    add('NON_GENUINE_EVIDENCE_CREDIT_FORBIDDEN');
+  }
+
+  return blockers;
+}
+
+function metricEvaluability(evidence: CalibrationEvidenceBinding): AdmittedCalibrationEvidence['metricEvaluability'] {
+  const fillPair = evidence.predictedFillRatioPresent && evidence.actualFillRatioPresent;
+  const costPair = evidence.predictedAllInCostPresent && evidence.actualAllInCostPresent;
+  return Object.freeze({
+    tol01OpportunityCalibration: evidence.predictedOpportunityProbabilityPresent && evidence.realizedOpportunityOutcomePresent,
+    tol02FillRatioAbsoluteError: fillPair,
+    tol03FillRatioSignedBias: fillPair,
+    tol04AllInCostAbsoluteError: costPair,
+    tol05AdverseCostUnderestimation: costPair,
+    tol06AdverseTailCostUnderestimation: costPair,
+    tol07PredictionIntervalCoverage: evidence.predictionIntervalPresent && evidence.realizedOpportunityOutcomePresent,
+    tol08SettlementReconciliation: evidence.settlementEvidencePresent,
+    tol09CalibrationFreshness: false,
+  });
+}
+
+export function buildPublicForwardPartialFillStatisticalCalibrationAdmission(
+  input: PublicForwardPartialFillStatisticalCalibrationAdmissionInput,
+): PublicForwardPartialFillStatisticalCalibrationAdmissionResult {
+  const authorityBlockers = validateAuthority(input);
+  if (authorityBlockers.length > 0) return blocked('BLOCKED_POLICY', authorityBlockers);
+
+  const eligibleEvidenceStartMs = eligibleStart(input);
+  const seenObservationIds = new Set<string>();
+  const seenLineages = new Set<string>();
+  const admittedEvidence: AdmittedCalibrationEvidence[] = [];
+  const evidenceBlockers: string[] = [];
+
+  for (const evidence of input.evidence) {
+    const blockers = validateEvidence(evidence, input, eligibleEvidenceStartMs, seenObservationIds, seenLineages);
+    if (blockers.length > 0) {
+      evidenceBlockers.push(...blockers);
+      continue;
+    }
+    seenObservationIds.add(evidence.observationId);
+    seenLineages.add(evidence.sourceObservationLineageDigest);
+    admittedEvidence.push(Object.freeze({
+      observationId: evidence.observationId,
+      sourceObservationLineageDigest: evidence.sourceObservationLineageDigest,
+      split: evidence.split,
+      scopeKey: scopeKey(evidence),
+      observedAtMs: evidence.observedAtMs,
+      metricEvaluability: metricEvaluability(evidence),
+    }));
+  }
+
+  if (evidenceBlockers.length > 0) return blocked('BLOCKED_DATA', evidenceBlockers);
+
+  const artifactWithoutDigest = {
+    schemaVersion: PUBLIC_FORWARD_PARTIAL_FILL_STATISTICAL_CALIBRATION_ADMISSION_VERSION,
+    admissionIdentity: PUBLIC_FORWARD_PARTIAL_FILL_STATISTICAL_CALIBRATION_ADMISSION_IDENTITY,
+    kind: 'IMMUTABLE_PROSPECTIVE_STATISTICAL_CALIBRATION_ADMISSION' as const,
+    admissionStatus: 'ADMITTED_FOR_PROSPECTIVE_EVALUATION_ONLY' as const,
+    admissionFrozenAtMs: input.admissionFrozenAtMs,
+    eligibleEvidenceStartMs,
+    consumerIdentity: input.consumerIdentity.trim(),
+    datasetSchemaVersion: input.datasetSchemaVersion.trim(),
+    businessTolerance: input.businessTolerance,
+    successor: input.successor,
+    statisticalMethodology: input.statisticalMethodology,
+    admittedEvidence: Object.freeze(admittedEvidence),
+    effectiveIndependentEligibleN: admittedEvidence.length,
+    calibrationSampleSufficient: false as const,
+    statisticalNumericizationStarted: false as const,
+    numericMinimumArtifactProduced: false as const,
+    calibrationArtifactProduced: false as const,
+    partialFillCostProduced: false as const,
+    productionPolicyAuthorityConnected: false as const,
+    fullCostReady: false as const,
+    evidenceComplete: 0 as const,
+    executionAuthority: 'NONE' as const,
+    privateApiAllowed: false as const,
+    liveTrading: false as const,
+    orderSubmissionAllowed: false as const,
+  };
+
+  const artifact = Object.freeze({
+    ...artifactWithoutDigest,
+    digest: digest(artifactWithoutDigest),
+  });
+
+  return Object.freeze({ status: 'ADMITTED', blockers: Object.freeze([]), artifact });
+}
