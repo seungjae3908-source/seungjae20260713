@@ -1,0 +1,441 @@
+name: Public Forward Partial Fill Dataset Pointer Recovery
+
+on:
+  pull_request:
+    paths:
+      - 'api-server/src/services/public-forward-partial-fill-calibration-pointer-recovery.service.ts'
+      - 'api-server/src/services/public-forward-partial-fill-calibration-pointer-recovery.service.test.ts'
+      - 'api-server/src/scripts/recover-public-forward-partial-fill-calibration-pointer.ts'
+      - '.github/workflows/public-forward-partial-fill-pointer-recovery.yml'
+  workflow_dispatch:
+    inputs:
+      target_main_sha:
+        description: Exact current main SHA to authorize recovery against
+        required: true
+        type: string
+      confirmation:
+        description: Must equal RECOVER_PARTIAL_FILL_POINTER_ONLY
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  statuses: read
+
+concurrency:
+  group: partial-fill-pointer-recovery-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+env:
+  FROZEN_INGEST_RUN_ID: '33373397869'
+  FROZEN_INGEST_WORKFLOW_HEAD_SHA: '5cc61901c6ab7ca9f838f60497c59490cf082bbc'
+  FROZEN_INGEST_ARTIFACT_ID: '9750941384'
+  FROZEN_INGEST_ARTIFACT_NAME: public-forward-partial-fill-canonical-ingest-33373397869-1
+  FROZEN_INGEST_ARTIFACT_DIGEST: '31fe963af9449af22aa5085ade2e6c8c387f57206fe71ee566cf40f9a20b346f'
+  FROZEN_INGEST_RECEIPT_DIGEST: '0683cabaad4f43c46d81831d882353662a5cd7c6d0a691e0ced5a9ee1580ee24'
+  FROZEN_DATASET_IDENTITY: 'partial-fill-forward-dataset:FORWARD_NATURAL_SAMPLE:17fdbc8c868a21d7386752d136f7c698f0727694'
+  FROZEN_DATASET_DIGEST: '36057b6cbdb1691cd0c04af149aedcda520258faa15bc3691e0346cd81fd1517'
+  FROZEN_COLLECTOR_SHA: '17fdbc8c868a21d7386752d136f7c698f0727694'
+  FROZEN_CAPTURE_RUN_ID: '33356043075'
+  FROZEN_CAPTURE_RUN_ATTEMPT: '1'
+  FROZEN_RAW_ARTIFACT_ID: '9745163020'
+  CANONICAL_RESEARCH_ROOT: /opt/investment-research/current
+  CANONICAL_STATE_ROOT: /var/lib/investment-research-production
+
+jobs:
+  verify:
+    name: Validate pointer recovery contract
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --dir api-server run typecheck
+
+      - name: Bundle and run R01-R08 recovery tests
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          FILE='api-server/src/services/public-forward-partial-fill-calibration-pointer-recovery.service.test.ts'
+          test "$(grep -Ec "^test\\('R0[1-8] " "$FILE")" -eq 8
+          pnpm --dir api-server exec esbuild \
+            src/services/public-forward-partial-fill-calibration-pointer-recovery.service.test.ts \
+            --bundle --platform=node --format=cjs --target=node20 \
+            --outfile=/tmp/public-forward-partial-fill-pointer-recovery.test.cjs
+          node --test /tmp/public-forward-partial-fill-pointer-recovery.test.cjs
+
+      - name: Bundle recovery CLI and prove inert help path
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir api-server exec esbuild \
+            src/scripts/recover-public-forward-partial-fill-calibration-pointer.ts \
+            --bundle --platform=node --format=cjs --target=node20 \
+            --outfile=/tmp/recover-public-forward-partial-fill-pointer.cjs
+          node /tmp/recover-public-forward-partial-fill-pointer.cjs --help >/dev/null
+
+      - name: Verify recovery authority and side-effect boundaries
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          SERVICE='api-server/src/services/public-forward-partial-fill-calibration-pointer-recovery.service.ts'
+          CLI='api-server/src/scripts/recover-public-forward-partial-fill-calibration-pointer.ts'
+          WORKFLOW='.github/workflows/public-forward-partial-fill-pointer-recovery.yml'
+
+          grep -Fq "authoritySource: 'FINALIZED_CANONICAL_INGEST_RECEIPT'" "$SERVICE"
+          grep -Fq 'ingestReplayAllowed: false' "$SERVICE"
+          grep -Fq 'sampleCreditDelta: 0' "$SERVICE"
+          grep -Fq 'directoryScanAllowed: false' "$SERVICE"
+          grep -Fq 'latestSelectionAllowed: false' "$SERVICE"
+          grep -Fq 'runtimeActivationPerformed: false' "$SERVICE"
+          grep -Fq 'releaseBindingPublicationPerformed: false' "$SERVICE"
+          grep -Fq 'recoverPublicForwardPartialFillCalibrationDatasetPointer' "$CLI"
+          grep -Fq 'RECOVER_PARTIAL_FILL_POINTER_ONLY' "$WORKFLOW"
+          grep -Fq "FROZEN_INGEST_ARTIFACT_ID: '9750941384'" "$WORKFLOW"
+          grep -Fq "FROZEN_INGEST_RECEIPT_DIGEST: '0683cabaad4f43c46d81831d882353662a5cd7c6d0a691e0ced5a9ee1580ee24'" "$WORKFLOW"
+
+          if grep -Eq '\b(readdir|opendir)\b' "$SERVICE"; then
+            echo 'Directory scanning is forbidden in pointer recovery.' >&2
+            exit 1
+          fi
+          if grep -Eq '^[[:space:]]+issue_comment:' "$WORKFLOW"; then
+            echo 'Pointer recovery must not create a new Issue #23 comment authority surface in this PR.' >&2
+            exit 1
+          fi
+          if grep -Ev 'grep -Eq' "$WORKFLOW" \
+            | grep -Eq 'production-deploy[.]yml|pm2 (restart|start|reload)|systemctl (enable|start|restart)|PARTIAL_FILL_RELEASE_BINDING_REF=|PARTIAL_FILL_RELEASE_BINDING_DIGEST='; then
+            echo 'Pointer recovery must not deploy or activate runtime binding locators.' >&2
+            exit 1
+          fi
+          if grep -Eq 'fetch\(|axios|PRIVATE_API|ORDER_SUBMIT|orderSubmitted: true|LIVE_TRADING=true' "$CLI"; then
+            echo 'Recovery CLI contains forbidden network/private/live behavior.' >&2
+            exit 1
+          fi
+
+  recover:
+    name: Recover immutable pointer only
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Require repository owner and explicit recovery-only confirmation
+        shell: bash
+        env:
+          ACTOR: ${{ github.actor }}
+          OWNER: ${{ github.repository_owner }}
+          REF_NAME: ${{ github.ref_name }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$ACTOR" == "$OWNER" ]] || { echo 'Only repository owner may recover the pointer.' >&2; exit 1; }
+          [[ "$REF_NAME" == 'main' ]] || { echo 'Pointer recovery must be dispatched from main.' >&2; exit 1; }
+          [[ "$CONFIRMATION" == 'RECOVER_PARTIAL_FILL_POINTER_ONLY' ]] || { echo 'Exact recovery confirmation missing.' >&2; exit 1; }
+
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Require exact unchanged current main
+        shell: bash
+        env:
+          TARGET_SHA: ${{ inputs.target_main_sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]] || { echo 'Target SHA must be exact lowercase 40-hex.' >&2; exit 1; }
+          git fetch --no-tags origin main
+          MAIN_SHA="$(git rev-parse origin/main^{commit})"
+          [[ "$TARGET_SHA" == "$MAIN_SHA" ]] || { echo "main moved: target=$TARGET_SHA main=$MAIN_SHA" >&2; exit 1; }
+          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]] || { echo 'Checked out main differs from approved main.' >&2; exit 1; }
+
+      - name: Require coherent exact-main Required CI 6/6 SUCCESS
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ inputs.target_main_sha }}
+        with:
+          script: |
+            const required = [
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            const targetSha = process.env.TARGET_SHA;
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: targetSha,
+              per_page: 100,
+            });
+            statuses.sort((left, right) => Number(right.id) - Number(left.id));
+            const latest = new Map();
+            for (const status of statuses) if (!latest.has(status.context)) latest.set(status.context, status);
+            const missing = required.filter((name) => latest.get(name)?.state !== 'success');
+            if (missing.length) {
+              core.setFailed(`Required CI not 6/6 SUCCESS: ${missing.join(', ')}`);
+              return;
+            }
+            const runIds = new Set();
+            for (const name of required) {
+              const match = String(latest.get(name)?.target_url ?? '').match(/\/actions\/runs\/(\d+)/);
+              if (!match) {
+                core.setFailed(`Required status ${name} lacks authoritative run URL.`);
+                return;
+              }
+              runIds.add(Number(match[1]));
+            }
+            if (runIds.size !== 1) {
+              core.setFailed(`Required statuses are not coherent: ${[...runIds].join(', ')}`);
+              return;
+            }
+            const runId = [...runIds][0];
+            const run = (await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId,
+            })).data;
+            if (run.head_sha !== targetSha
+              || run.head_branch !== 'main'
+              || run.status !== 'completed'
+              || run.conclusion !== 'success'
+              || run.path !== '.github/workflows/futures-public-network-smoke.yml') {
+              core.setFailed(`Required CI provenance rejected for run ${runId}.`);
+              return;
+            }
+            core.info(`Exact-main Required CI 6/6 accepted from run ${runId}.`);
+
+      - name: Verify frozen finalized ingest artifact authority
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const run = (await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: Number(process.env.FROZEN_INGEST_RUN_ID),
+            })).data;
+            if (run.status !== 'completed'
+              || run.conclusion !== 'success'
+              || run.event !== 'issue_comment'
+              || run.head_branch !== 'main'
+              || run.head_sha !== process.env.FROZEN_INGEST_WORKFLOW_HEAD_SHA) {
+              core.setFailed('Frozen canonical ingest run authority mismatch.');
+              return;
+            }
+            const artifact = (await github.rest.actions.getArtifact({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              artifact_id: Number(process.env.FROZEN_INGEST_ARTIFACT_ID),
+            })).data;
+            const digest = String(artifact.digest ?? '').replace(/^sha256:/i, '').toLowerCase();
+            if (String(artifact.id) !== process.env.FROZEN_INGEST_ARTIFACT_ID
+              || artifact.name !== process.env.FROZEN_INGEST_ARTIFACT_NAME
+              || artifact.expired
+              || digest !== process.env.FROZEN_INGEST_ARTIFACT_DIGEST) {
+              core.setFailed('Frozen canonical ingest artifact authority mismatch.');
+            }
+
+      - name: Download exact finalized ingest receipt artifact
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ env.FROZEN_INGEST_ARTIFACT_ID }}
+          path: ${{ runner.temp }}/partial-fill-ingest-evidence
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ env.FROZEN_INGEST_RUN_ID }}
+
+      - name: Verify exact finalized ingest receipt fields
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          RECEIPT="$RUNNER_TEMP/partial-fill-ingest-evidence/canonical-partial-fill-ingest-result.json"
+          test -f "$RECEIPT"
+          RECEIPT="$RECEIPT" node <<'NODE'
+          const fs = require('node:fs');
+          const value = JSON.parse(fs.readFileSync(process.env.RECEIPT, 'utf8'));
+          const expected = {
+            receiptDigest: process.env.FROZEN_INGEST_RECEIPT_DIGEST,
+            datasetIdentity: process.env.FROZEN_DATASET_IDENTITY,
+            datasetDigest: process.env.FROZEN_DATASET_DIGEST,
+            exactMainSha: process.env.FROZEN_COLLECTOR_SHA,
+            captureRunId: process.env.FROZEN_CAPTURE_RUN_ID,
+            captureRunAttempt: process.env.FROZEN_CAPTURE_RUN_ATTEMPT,
+            artifactId: process.env.FROZEN_RAW_ARTIFACT_ID,
+          };
+          for (const [key, expectedValue] of Object.entries(expected)) {
+            if (String(value[key]) !== String(expectedValue)) throw new Error(`FROZEN_RECEIPT_${key}_MISMATCH`);
+          }
+          if (value.insertedObservationCount !== 1
+            || value.duplicateObservationCount !== 0
+            || value.canonicalDatasetCreditApplied !== true
+            || value.partialFillCostPresent !== false
+            || value.fullCostReady !== false
+            || value.evidenceCompleteCredit !== 0
+            || value.executionAuthority !== 'NONE') {
+            throw new Error('FROZEN_RECEIPT_TRUTH_BOUNDARY_MISMATCH');
+          }
+          NODE
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --dir api-server run typecheck
+
+      - name: Bundle recovery CLI from exact current main
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          pnpm --dir api-server exec esbuild \
+            src/scripts/recover-public-forward-partial-fill-calibration-pointer.ts \
+            --bundle --platform=node --format=cjs --target=node20 \
+            --outfile="$RUNNER_TEMP/recover-partial-fill-pointer.cjs"
+
+      - name: Configure SSH transport
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+          SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$SSH_HOST" ]]
+          [[ -n "$SSH_PRIVATE_KEY" ]]
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Recover immutable snapshot and pointer only
+        id: recovery
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+          TARGET_SHA: ${{ inputs.target_main_sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$SSH_USER" ]]
+          RECEIPT="$RUNNER_TEMP/partial-fill-ingest-evidence/canonical-partial-fill-ingest-result.json"
+          REMOTE_SCRIPT="/tmp/partial-fill-pointer-recovery-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.cjs"
+          REMOTE_RECEIPT="/tmp/partial-fill-pointer-recovery-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
+          SSH=(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15)
+          SCP=(scp -i ~/.ssh/id_ed25519 -P "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15)
+          cleanup() {
+            "${SSH[@]}" "$SSH_USER@$SSH_HOST" "rm -f '$REMOTE_SCRIPT' '$REMOTE_RECEIPT'" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          "${SSH[@]}" "$SSH_USER@$SSH_HOST" \
+            "test -d '$CANONICAL_STATE_ROOT' && test -d '$CANONICAL_RESEARCH_ROOT' && id investment-research >/dev/null"
+          "${SCP[@]}" "$RUNNER_TEMP/recover-partial-fill-pointer.cjs" "$SSH_USER@$SSH_HOST:$REMOTE_SCRIPT"
+          "${SCP[@]}" "$RECEIPT" "$SSH_USER@$SSH_HOST:$REMOTE_RECEIPT"
+          "${SSH[@]}" "$SSH_USER@$SSH_HOST" "chmod 0644 '$REMOTE_SCRIPT' '$REMOTE_RECEIPT'"
+          "${SSH[@]}" "$SSH_USER@$SSH_HOST" \
+            "sudo -n -u investment-research test -w '$CANONICAL_STATE_ROOT' && sudo -n -u investment-research test -r '$CANONICAL_RESEARCH_ROOT'"
+
+          RECOVERY_RESULT="$(
+            "${SSH[@]}" "$SSH_USER@$SSH_HOST" \
+              "sudo -n -u investment-research node '$REMOTE_SCRIPT' --state-root '$CANONICAL_STATE_ROOT' --research-repo-root '$CANONICAL_RESEARCH_ROOT' --ingest-receipt-file '$REMOTE_RECEIPT'"
+          )"
+
+          RECOVERY_RESULT="$RECOVERY_RESULT" TARGET_SHA="$TARGET_SHA" node <<'NODE'
+          const fs = require('node:fs');
+          const value = JSON.parse(process.env.RECOVERY_RESULT);
+          const digest = /^[a-f0-9]{64}$/;
+          if (!value.pointerRelativeRef?.startsWith('forward/partial-fill-calibration-v1/dataset-pointers/')
+            || !digest.test(value.pointerDigest)
+            || value.sourceIngestReceiptDigest !== process.env.FROZEN_INGEST_RECEIPT_DIGEST
+            || value.datasetIdentity !== process.env.FROZEN_DATASET_IDENTITY
+            || value.datasetDigest !== process.env.FROZEN_DATASET_DIGEST
+            || value.collectorCodeSha !== process.env.FROZEN_COLLECTOR_SHA
+            || value.observationInsertCount !== 0
+            || value.duplicateCreditCount !== 0
+            || value.sampleCreditDelta !== 0
+            || value.mutableDatasetChanged !== false
+            || value.releaseBindingPublicationPerformed !== false
+            || value.runtimeActivationPerformed !== false
+            || value.productionPolicyAuthorityConnected !== false
+            || value.partialFillCostPresent !== false
+            || value.fullCostReady !== false
+            || value.evidenceComplete !== 0
+            || value.profitabilityProven !== false
+            || value.executionAuthority !== 'NONE') {
+            throw new Error('INVALID_POINTER_RECOVERY_RESULT');
+          }
+          const receipt = {
+            schemaVersion: 'partial-fill-pointer-recovery-receipt-v1',
+            targetMainSha: process.env.TARGET_SHA,
+            workflowRunId: process.env.GITHUB_RUN_ID,
+            workflowRunAttempt: process.env.GITHUB_RUN_ATTEMPT,
+            sourceIngestArtifactId: process.env.FROZEN_INGEST_ARTIFACT_ID,
+            sourceIngestReceiptDigest: value.sourceIngestReceiptDigest,
+            pointerRelativeRef: value.pointerRelativeRef,
+            pointerIdentity: value.pointerIdentity,
+            pointerDigest: value.pointerDigest,
+            datasetIdentity: value.datasetIdentity,
+            datasetDigest: value.datasetDigest,
+            datasetBytesDigest: value.datasetBytesDigest,
+            datasetRelativePath: value.datasetRelativePath,
+            collectorCodeSha: value.collectorCodeSha,
+            sampleClass: value.sampleClass,
+            storeContract: value.storeContract,
+            captureRunId: value.captureRunId,
+            captureRunAttempt: value.captureRunAttempt,
+            artifactId: value.artifactId,
+            observationCount: value.observationCount,
+            forwardCalibrationSampleCreditCount: value.forwardCalibrationSampleCreditCount,
+            immutableDatasetCreated: value.immutableDatasetCreated,
+            pointerCreated: value.pointerCreated,
+            mutableDatasetChanged: false,
+            sampleCreditDelta: 0,
+            releaseBindingPublicationPerformed: false,
+            runtimeActivationPerformed: false,
+            productionPolicyAuthorityConnected: false,
+            partialFillCostPresent: false,
+            fullCostReady: false,
+            evidenceComplete: 0,
+            profitabilityProven: false,
+            executionAuthority: 'NONE',
+          };
+          fs.writeFileSync(`${process.env.RUNNER_TEMP}/partial-fill-pointer-recovery-result.json`, `${JSON.stringify(receipt, null, 2)}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `pointer_ref=${value.pointerRelativeRef}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `pointer_digest=${value.pointerDigest}\n`);
+          NODE
+
+      - name: Upload immutable recovery evidence receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-forward-partial-fill-pointer-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/partial-fill-pointer-recovery-result.json
+          if-no-files-found: error
+          retention-days: 90
