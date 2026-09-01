@@ -94,12 +94,12 @@ function eligibleArgs(overrides = {}) {
   };
 }
 
-test('frozen Successor cohort and 5000ms OOS contracts are valid before seam use', () => {
+test('frozen Successor 1024-slot cohort and 5000ms OOS contracts are valid before seam use', () => {
   const verdict = verifySuccessorScheduleSeamFrozenBindings();
   assert.equal(verdict.valid, true, verdict.blockers.join(','));
   assert.equal(SUCCESSOR_SCHEDULE_CRON_UTC, '17 * * * *');
   assert.equal(COHORT.slotCadenceMs, 3_600_000);
-  assert.equal(COHORT.totalSlotN, 336);
+  assert.equal(COHORT.totalSlotN, 1024);
   assert.equal(SUCCESSOR_OOS_HORIZON_CONTRACT.policyCore.outcomePolicy.outcomeHorizonMs, 5_000);
   assert.equal(
     SUCCESSOR_OOS_HORIZON_CONTRACT.policyCore.outcomePolicy.outcomeSelectionPolicy,
@@ -120,18 +120,36 @@ test('resolver only grants attempt eligibility and never sample credit by itself
   assert.equal(first.slot.canonicalSlotKey.cohortDigest, SUCCESSOR_PROSPECTIVE_CONTRACT.cohortDigest);
 
   const validation = resolveSuccessorScheduledAuthority(eligibleArgs({
-    actualRunStartedAtMs: buildSuccessorSlotDescriptor(168).nominalScheduledAtMs,
+    actualRunStartedAtMs: buildSuccessorSlotDescriptor(512).nominalScheduledAtMs,
   }));
-  assert.equal(validation.slot.slotIndex, 168);
+  assert.equal(validation.slot.slotIndex, 512);
   assert.equal(validation.slot.split, 'VALIDATION');
   assert.equal(validation.prospectiveSlotCredit, 0);
 
   const oos = resolveSuccessorScheduledAuthority(eligibleArgs({
-    actualRunStartedAtMs: buildSuccessorSlotDescriptor(252).nominalScheduledAtMs,
+    actualRunStartedAtMs: buildSuccessorSlotDescriptor(768).nominalScheduledAtMs,
   }));
-  assert.equal(oos.slot.slotIndex, 252);
+  assert.equal(oos.slot.slotIndex, 768);
   assert.equal(oos.slot.split, 'OOS');
   assert.equal(oos.prospectiveSlotCredit, 0);
+});
+
+test('last redesigned slot remains eligible while slot 1024 is post-cohort', () => {
+  const last = buildSuccessorSlotDescriptor(1023);
+  const eligible = resolveSuccessorScheduledAuthority(eligibleArgs({
+    actualRunStartedAtMs: last.nominalScheduledAtMs,
+  }));
+  assert.equal(eligible.eligible, true);
+  assert.equal(eligible.slot.slotIndex, 1023);
+  assert.equal(eligible.slot.split, 'OOS');
+
+  const post = resolveSuccessorScheduledAuthority(eligibleArgs({
+    scheduledRunCreatedAtMs: COHORT.endExclusiveMs,
+    actualRunStartedAtMs: COHORT.endExclusiveMs,
+  }));
+  assert.equal(post.eligible, false);
+  assert.equal(post.captureStatus, 'POST_COHORT_ATTEMPT');
+  assert.equal(post.prospectiveSlotCredit, 0);
 });
 
 test('queued old schedule event cannot cross an hour boundary and masquerade as the next slot', () => {
@@ -169,7 +187,10 @@ test('wrong event/cron, pre/post cohort, and rerun never become eligible', () =>
     eligibleArgs({ eventName: 'workflow_dispatch' }),
     eligibleArgs({ scheduleExpression: '18 * * * *' }),
     eligibleArgs({ actualRunStartedAtMs: COHORT.startInclusiveMs - 1 }),
-    eligibleArgs({ actualRunStartedAtMs: COHORT.endExclusiveMs }),
+    eligibleArgs({
+      scheduledRunCreatedAtMs: COHORT.endExclusiveMs,
+      actualRunStartedAtMs: COHORT.endExclusiveMs,
+    }),
     eligibleArgs({ runAttempt: 2 }),
   ];
   for (const candidate of cases) {
