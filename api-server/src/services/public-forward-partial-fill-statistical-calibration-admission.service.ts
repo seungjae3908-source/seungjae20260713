@@ -339,7 +339,7 @@ function validateEvidence(
     || !nonEmpty(evidence.sourceArtifactIdentity) || !exactDigest(evidence.sourceArtifactDigest)) {
     add('IMMUTABLE_SOURCE_RECEIPT_REQUIRED');
   }
-  if (!['FORWARD_NATURAL_SAMPLE', 'SUCCESSOR_FORWARD_NATURAL_SAMPLE'].includes(evidence.sourceClass)) {
+  if (evidence.sourceClass !== 'FORWARD_NATURAL_SAMPLE') {
     add('GENUINE_PROSPECTIVE_SOURCE_REQUIRED');
   }
   if (!nonEmpty(evidence.datasetIdentity) || !exactDigest(evidence.datasetDigest)
