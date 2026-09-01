@@ -123,6 +123,10 @@ jobs:
           grep -Fq 'expected_current_release_binding_digest' "$WORKFLOW"
           grep -Fq 'pm2 restart "$PM2_NAME" --update-env' "$WORKFLOW"
           grep -Fq 'ROLLBACK_NEEDED=1' "$WORKFLOW"
+          grep -Fq 'READINESS_ATTEMPTS=30' "$WORKFLOW"
+          grep -Fq 'health_identity_ready activation' "$WORKFLOW"
+          grep -Fq 'health_identity_ready rollback' "$WORKFLOW"
+          grep -Fq 'ROLLBACK_LOCATOR_READBACK_MISMATCH' "$WORKFLOW"
           grep -Fq 'productionDeployPerformed: false' "$WORKFLOW"
           grep -Fq 'releaseBindingPublicationPerformed: false' "$WORKFLOW"
 
@@ -411,6 +415,9 @@ jobs:
           PROC_ENV="$(mktemp /tmp/partial-fill-locator-proc-env.XXXXXX)"
           META_JSON="$(mktemp /tmp/partial-fill-locator-meta.XXXXXX)"
           ROLLBACK_NEEDED=0
+          READINESS_ATTEMPTS=30
+          READINESS_DELAY_SECONDS=1
+          READINESS_CURL_MAX_TIME=2
           PM2_BIN="$(command -v pm2)"
 
           cleanup_files() {
@@ -429,12 +436,75 @@ jobs:
               bash --noprofile --norc -c 'set -Eeuo pipefail; source "$ENV_FILE"; exec "$PM2_BIN" restart "$PM2_NAME" --update-env' >&2
           }
 
+          health_identity_ready() {
+            local phase="$1"
+            local attempt=1
+            local health=''
+            while (( attempt <= READINESS_ATTEMPTS )); do
+              if health="$(curl --fail --silent --show-error --max-time "$READINESS_CURL_MAX_TIME" "http://127.0.0.1:${LIVE_PORT}/api/health" 2>/dev/null)"; then
+                if HEALTH="$health" TARGET_SHA="$TARGET_SHA" node -e '
+                  const value = JSON.parse(process.env.HEALTH);
+                  const ok = value?.ok === true
+                    && value?.deploySha === process.env.TARGET_SHA
+                    && value?.processDeploySha === process.env.TARGET_SHA
+                    && value?.identityMatch === true;
+                  process.exit(ok ? 0 : 1);
+                ' 2>/dev/null; then
+                  echo "Health identity ready during ${phase} on attempt ${attempt}/${READINESS_ATTEMPTS}." >&2
+                  return 0
+                fi
+              fi
+              if (( attempt < READINESS_ATTEMPTS )); then
+                sleep "$READINESS_DELAY_SECONDS"
+              fi
+              ((attempt += 1))
+            done
+            echo "Health identity not ready during ${phase} after ${READINESS_ATTEMPTS} attempts." >&2
+            return 1
+          }
+
+          verify_rollback_locator_state() {
+            pm2 jlist > "$AFTER_JSON"
+            AFTER_JSON="$AFTER_JSON" META_JSON="$META_JSON" PM2_NAME="$PM2_NAME" TARGET_SHA="$TARGET_SHA" node <<'NODE'
+          const fs = require('node:fs');
+          const processes = JSON.parse(fs.readFileSync(process.env.AFTER_JSON, 'utf8'));
+          const meta = JSON.parse(fs.readFileSync(process.env.META_JSON, 'utf8'));
+          const selected = processes.find((item) => item.name === process.env.PM2_NAME);
+          const env = selected?.pm2_env;
+          const expectedRef = meta.currentRef === 'NONE' ? '' : meta.currentRef;
+          const expectedDigest = meta.currentDigest === 'NONE' ? '' : meta.currentDigest;
+          if (!env || env.status !== 'online') throw new Error('ROLLBACK_PM2_PROCESS_NOT_ONLINE');
+          if (String(env.DEPLOY_SHA ?? '').trim() !== process.env.TARGET_SHA) throw new Error('ROLLBACK_DEPLOY_SHA_MISMATCH');
+          if (String(env.RESEARCH_STATE_ROOT ?? '').trim() !== meta.currentRoot
+            || String(env.PARTIAL_FILL_RELEASE_BINDING_REF ?? '').trim() !== expectedRef
+            || String(env.PARTIAL_FILL_RELEASE_BINDING_DIGEST ?? '').trim() !== expectedDigest) {
+            throw new Error('ROLLBACK_LOCATOR_READBACK_MISMATCH');
+          }
+          NODE
+          }
+
           rollback() {
             local status=$?
+            local rollback_failed=0
             if (( status != 0 )) && [[ "$ROLLBACK_NEEDED" == '1' ]]; then
               echo 'Locator activation verification failed; restoring previous PM2 locator environment.' >&2
-              apply_env_file "$ORIGINAL_ENV" || true
-              pm2 save >&2 || true
+              if ! apply_env_file "$ORIGINAL_ENV"; then
+                rollback_failed=1
+              fi
+              if ! pm2 save >&2; then
+                rollback_failed=1
+              fi
+              if ! verify_rollback_locator_state; then
+                rollback_failed=1
+              fi
+              if ! health_identity_ready rollback; then
+                rollback_failed=1
+              fi
+              if (( rollback_failed != 0 )); then
+                echo 'Locator rollback completed with failed recovery verification.' >&2
+              else
+                echo 'Locator rollback verified: prior locator, DEPLOY_SHA and health identity restored.' >&2
+              fi
             fi
             cleanup_files
             return "$status"
@@ -504,6 +574,7 @@ jobs:
           fs.writeFileSync(process.env.META_JSON, JSON.stringify({
             currentRef: currentRef || 'NONE',
             currentDigest: currentDigest || 'NONE',
+            currentRoot,
             alreadyTarget: currentRef === process.env.TARGET_REF
               && currentDigest === process.env.TARGET_DIGEST
               && currentRoot === process.env.STATE_ROOT,
@@ -554,16 +625,10 @@ jobs:
           }
           NODE
 
-          HEALTH="$(curl --fail --silent --show-error --max-time 20 "http://127.0.0.1:${LIVE_PORT}/api/health")"
-          HEALTH="$HEALTH" TARGET_SHA="$TARGET_SHA" node <<'NODE'
-          const value = JSON.parse(process.env.HEALTH);
-          if (value?.ok !== true
-            || value?.deploySha !== process.env.TARGET_SHA
-            || value?.processDeploySha !== process.env.TARGET_SHA
-            || value?.identityMatch !== true) {
-            throw new Error('POST_ACTIVATION_HEALTH_IDENTITY_MISMATCH');
+          health_identity_ready activation || {
+            echo 'POST_ACTIVATION_HEALTH_IDENTITY_MISMATCH' >&2
+            exit 1
           }
-          NODE
 
           ROLLBACK_NEEDED=0
           META_JSON="$META_JSON" TARGET_SHA="$TARGET_SHA" TARGET_REF="$TARGET_REF" TARGET_DIGEST="$TARGET_DIGEST" ALREADY_TARGET="$ALREADY_TARGET" node <<'NODE'
