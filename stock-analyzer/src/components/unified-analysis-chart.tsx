@@ -818,7 +818,7 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
         </div>
       </section>
 
-      <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="ai-chart-v3-evidence-status">
+      <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="ai-chart-v3-evidence-status" data-realtime-provider={realtimeHealth.provider}>
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
             <p className="text-[11px] font-extrabold text-primary">AI Chart V3 Evidence Truth</p>
@@ -831,7 +831,7 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
           <Metric label="TRANSPORT" value={realtimeHealth.transportMode} />
           <Metric label="STREAM DATA" value={realtimeHealth.dataStatus} />
           <Metric label="DATA AGE" value={realtimeHealth.lastValidEventAt == null ? formatDataAge(chartQuery.data) : `${Math.max(0, Date.now() - realtimeHealth.lastValidEventAt)}ms`} />
-          <Metric label="PROVIDER" value={realtimeHealth.provider} />
+          <Metric label="PROVIDER" value={realtimeHealth.transportMode === 'STREAM' ? realtimeHealth.provider : 'REST SNAPSHOT'} />
           <Metric label="IDENTITY" value={`${realtimeHealth.symbol} · ${realtimeHealth.timeframe}`} />
           <Metric label="RECOVERY" value={realtimeHealth.recoveryState} />
           <Metric label="INTEGRITY" value={realtimeHealth.integrityIssues.length ? realtimeHealth.integrityIssues.join(', ') : 'NO_UNRESOLVED_ISSUE'} />
