@@ -6,6 +6,7 @@ const workflowPath = path.join(root, '.github/workflows/telegram-production-rele
 const deployPath = path.join(root, 'ops/deploy-production.sh');
 const source = fs.readFileSync(workflowPath, 'utf8');
 const deploySource = fs.readFileSync(deployPath, 'utf8');
+const appReleaseSource = fs.readFileSync(path.join(root, '.github/workflows/production-app-release-control.yml'), 'utf8');
 
 const requiredFragments = [
   'name: Telegram Production Release',
@@ -79,16 +80,16 @@ if (/PROD_DATABASE_URL=%q/.test(source)
 }
 
 const deployRequiredFragments = [
-  'telegram_runtime_activation_ready()',
-  'runtime identity or Telegram activation is stale',
+  'read_telegram_activation_state()',
+  'restart_application_preserving_telegram()',
+  'application_runtime_ready()',
+  'readonly TELEGRAM_PREDEPLOY_STATE',
+  'PRODUCTION_APP_APPROVAL_DOES_NOT_AUTHORIZE_TELEGRAM_ACTIVATION',
   'LIVE_TELEGRAM_ACTIVATION_APPROVED=false TELEGRAM_INTELLIGENCE_WORKER_ENABLED=false',
-  'LIVE_TELEGRAM_ACTIVATION_APPROVED=true',
-  'TELEGRAM_INTELLIGENCE_WORKER_ENABLED=true',
-  'telegram_runtime_activation_ready',
 ];
 const missingDeploy = deployRequiredFragments.filter((fragment) => !deploySource.includes(fragment));
 if (missingDeploy.length > 0) {
-  console.error(`[telegram-production-release-contract] missing deployment activation safeguards: ${missingDeploy.join(', ')}`);
+  console.error(`[telegram-production-release-contract] missing deployment non-elevation safeguards: ${missingDeploy.join(', ')}`);
   process.exit(1);
 }
 
@@ -113,10 +114,10 @@ if (sameTargetStart < 0 || sameTargetEnd <= sameTargetStart) {
   process.exit(1);
 }
 const sameTargetBlock = deploySource.slice(sameTargetStart, sameTargetEnd);
-if (!sameTargetBlock.includes('telegram_runtime_activation_ready')
-  || !sameTargetBlock.includes('LIVE_TELEGRAM_ACTIVATION_APPROVED=true')
-  || !sameTargetBlock.includes('TELEGRAM_INTELLIGENCE_WORKER_ENABLED=true')) {
-  console.error('[telegram-production-release-contract] same-target deployment must repair Telegram activation');
+if (!sameTargetBlock.includes('application_runtime_ready')
+  || !sameTargetBlock.includes('restart_application_preserving_telegram "$TARGET_SHA"')
+  || sameTargetBlock.includes('telegram_runtime_activation_ready')) {
+  console.error('[telegram-production-release-contract] same-target app health must be independent of Telegram activation');
   process.exit(1);
 }
 
@@ -127,12 +128,24 @@ if (promotionStart < 0 || promotionEnd <= promotionStart) {
   process.exit(1);
 }
 const promotionBlock = deploySource.slice(promotionStart, promotionEnd);
-if (!promotionBlock.includes('LIVE_TELEGRAM_ACTIVATION_APPROVED=true')
-  || !promotionBlock.includes('TELEGRAM_INTELLIGENCE_WORKER_ENABLED=true')
-  || !promotionBlock.includes('pm2 restart "$PM2_NAME" --update-env')
-  || !promotionBlock.includes('telegram_runtime_activation_ready')) {
-  console.error('[telegram-production-release-contract] exact production promotion must activate and verify Telegram runtime');
+if (!promotionBlock.includes('restart_application_preserving_telegram "$TARGET_SHA"')
+  || !promotionBlock.includes('application_runtime_ready')
+  || promotionBlock.includes('telegram_runtime_activation_ready')) {
+  console.error('[telegram-production-release-contract] exact production promotion must preserve, never activate Telegram');
   process.exit(1);
+}
+
+if (!appReleaseSource.includes('PRODUCTION_APP_APPROVAL_DOES_NOT_AUTHORIZE_TELEGRAM_ACTIVATION')
+  || !appReleaseSource.includes("'- Telegram activation authority granted: `false`'")) {
+  throw new Error('Generic Production app approval must explicitly exclude Telegram activation authority');
+}
+const activationIndex = source.indexOf('const activationChanged = activateApprovedTelegram(');
+if (activationIndex <= productionDispatchIndex
+  || activationIndex <= source.indexOf('if (markerSha !== targetSha)')
+  || !source.includes("runtime?.DEPLOY_SHA !== approvedSha")
+  || !source.includes("environment: production")
+  || !source.includes('api-server/scripts/verify-production-telegram-preservation.mjs')) {
+  throw new Error('Telegram activation must remain behind the existing owner/protected/exact-runtime gates');
 }
 
 const forbiddenPatterns = [
@@ -169,4 +182,5 @@ for (const name of secretNames) {
   }
 }
 
-console.log('[telegram-production-release-contract] owner gate, exact-main CI, staging evidence, stdin-only Production DB handoff, canary fail-closed behavior, production Telegram activation, runtime identity, worker startup, sanitized Telegram proof, and zero-trading-authority contracts verified');
+await import('./verify-production-telegram-preservation.mjs');
+console.log('[telegram-production-release-contract] owner gate, exact-main CI, staging evidence, stdin-only Production DB handoff, generic deployment non-elevation, canary OFF, Telegram-only activation, runtime identity, worker startup, sanitized Telegram proof, and zero-trading-authority contracts verified');
