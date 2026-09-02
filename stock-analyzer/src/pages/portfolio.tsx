@@ -1425,10 +1425,12 @@ export default function PortfolioPage() {
 					!auth.loading &&
 					auth.user && (
 						<div className="space-y-4">
-							<BrokerageAccountConnections
-								canAccessSpot={false}
-								canAccessFutures={false}
-							/>
+							{!loading && initialized && !error && (
+								<BrokerageAccountConnections
+									canAccessSpot={false}
+									canAccessFutures={false}
+								/>
+							)}
 							{!loading && initialized && !error && (
 								<section data-testid="portfolio-holdings-summary" className="rounded-3xl border border-card-border bg-card p-5 shadow-sm">
 									<div className="flex items-center justify-between gap-3">
