@@ -5,13 +5,23 @@ import { ResearchDualFreeAiError } from '../services/research-dual-free-ai.servi
 import type { CopilotTask } from '../services/research-copilot.contract';
 import { ResearchBundleService } from '../services/research-bundle.service';
 import { createResearchBundleFileStore } from '../services/research-bundle-file-store.service';
-import { validateResearchSameCandidatePrewire } from '../services/research-same-candidate-prewire.service';
+import {
+  readResearchSameCandidateRuntimeStages,
+  validateResearchSameCandidatePrewire,
+} from '../services/research-same-candidate-prewire.service';
+import type { ResearchBundleResolution } from '../services/research-bundle.contract';
+
+type SameCandidateRuntimeReader = (publication: ResearchBundleResolution) => Promise<unknown>;
 
 export function configuredResearchBundleService(stateRoot = process.env.RESEARCH_BUNDLE_STATE_ROOT): ResearchBundleService {
   return new ResearchBundleService(stateRoot ? createResearchBundleFileStore(stateRoot) : {});
 }
 
-export function createResearchCopilotRouter(service: ResearchCopilotService = createResearchCopilotService(), bundles = configuredResearchBundleService()): IRouter {
+export function createResearchCopilotRouter(
+  service: ResearchCopilotService = createResearchCopilotService(),
+  bundles = configuredResearchBundleService(),
+  sameCandidateRuntimeReader: SameCandidateRuntimeReader = readResearchSameCandidateRuntimeStages,
+): IRouter {
   const router: IRouter = Router();
   router.use(requireAuthenticated, requireAdmin);
   router.use((_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
@@ -41,13 +51,27 @@ export function createResearchCopilotRouter(service: ResearchCopilotService = cr
     return res.json(await bundles.readback(req.body));
   });
   router.post('/prewire-same-candidate', async (req, res) => {
-    if (JSON.stringify(req.body ?? null).length > 64_000) return res.status(413).json({ error: 'RESEARCH_PREWIRE_INPUT_TOO_LARGE' });
+    if (JSON.stringify(req.body ?? null).length > 33_000) return res.status(413).json({ error: 'RESEARCH_PREWIRE_INPUT_TOO_LARGE' });
     const body = req.body;
     if (!body || typeof body !== 'object' || Array.isArray(body)) return res.status(400).json({ error: 'INVALID_RESEARCH_PREWIRE_INPUT' });
     const input = body as Record<string, unknown>;
-    if (Object.keys(input).sort().join(',') !== 'researchReadback,stages') return res.status(400).json({ error: 'INVALID_RESEARCH_PREWIRE_INPUT' });
-    const publication = await bundles.readback(input.researchReadback);
-    return res.json(validateResearchSameCandidatePrewire(publication, input.stages));
+    if (Object.keys(input).length !== 1 || !Object.hasOwn(input, 'researchReadback')) {
+      return res.status(400).json({ error: 'INVALID_RESEARCH_PREWIRE_INPUT' });
+    }
+    try {
+      const publication = await bundles.readback(input.researchReadback);
+      const runtimeStages = await sameCandidateRuntimeReader(publication);
+      return res.json(validateResearchSameCandidatePrewire(publication, runtimeStages));
+    } catch {
+      return res.status(503).json({
+        status: 'BLOCKED_DATA',
+        error: 'RESEARCH_RUNTIME_READBACK_UNAVAILABLE',
+        evidenceCredit: 0,
+        profitabilityProven: false,
+        champion: null,
+        executionAuthority: 'NONE',
+      });
+    }
   });
   router.post('/review', async (req: AuthenticatedRequest, res) => {
     const body: unknown = req.body;
