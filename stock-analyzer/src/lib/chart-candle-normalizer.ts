@@ -34,6 +34,7 @@ export type ChartCandleNormalizationResult = {
   candles: NormalizedChartCandle[];
   droppedRows: number;
   duplicateRows: number;
+  futureRows: number;
   discontinuities: ChartCandleDiscontinuity[];
   warnings: string[];
 };
@@ -186,11 +187,17 @@ export function normalizeChartCandles(
 ): ChartCandleNormalizationResult {
   const accepted: Array<{ normalized: Omit<NormalizedChartCandle, 'isClosed' | 'closeStateSource'>; raw: RawCandle }> = [];
   let droppedRows = 0;
+  let futureRows = 0;
 
   for (const row of rows) {
     const normalized = normalizeRow(row);
     if (!normalized) {
       droppedRows += 1;
+      continue;
+    }
+    if (!Number.isFinite(nowSeconds) || normalized.time > nowSeconds) {
+      droppedRows += 1;
+      futureRows += 1;
       continue;
     }
     accepted.push({ normalized, raw: row });
@@ -232,8 +239,9 @@ export function normalizeChartCandles(
   const warnings: string[] = [];
   if (droppedRows) warnings.push(`유효하지 않은 캔들 ${droppedRows}개 제외`);
   if (duplicateRows) warnings.push(`중복 시각 캔들 ${duplicateRows}개 병합`);
+  if (futureRows) warnings.push(`미래 시각 캔들 ${futureRows}개 제외`);
   if (discontinuities.length) warnings.push(`시간 불연속 구간 ${discontinuities.length}개 감지`);
   if (!candles.length) warnings.push('사용 가능한 실제 캔들이 없음');
 
-  return { candles, droppedRows, duplicateRows, discontinuities, warnings };
+  return { candles, droppedRows, duplicateRows, futureRows, discontinuities, warnings };
 }
