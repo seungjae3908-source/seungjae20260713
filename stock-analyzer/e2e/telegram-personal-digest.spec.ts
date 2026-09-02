@@ -6,6 +6,7 @@ import {
   InMemoryPersonalTelegramDigestRepository,
   parsePersonalTelegramDigestAppendRow,
   parsePersonalTelegramDigestHistoryEvent,
+  sanitizePersonalTelegramDigestEvent,
 } from '../../api-server/src/services/personal-telegram-digest.repository';
 import { deliverPersonalTelegramAlert } from '../../api-server/src/services/personal-telegram-alert.service';
 import {
@@ -165,6 +166,30 @@ test('malformed durable digest facts fail closed instead of becoming valid histo
   });
 });
 
+test('digest event persistence keeps only canonical public signal fields', () => {
+  const unsafe = {
+    ...event('safe-copy', '2026-08-27T00:02:00.000Z'),
+    symbol: ' 005930 ',
+    accountNumber: 'must-not-persist',
+    telegramChatId: 'must-not-persist',
+    orderId: 'must-not-persist',
+  } as TelegramPolicyEvent & Record<string, unknown>;
+
+  const safe = sanitizePersonalTelegramDigestEvent(unsafe, USER_ID);
+  expect(safe).toEqual({
+    userId: USER_ID,
+    eventId: 'safe-copy',
+    market: 'KR',
+    signalType: 'BUY',
+    priority: 'IMPORTANT',
+    symbol: '005930',
+    occurredAt: '2026-08-27T00:02:00.000Z',
+  });
+  expect(safe).not.toHaveProperty('accountNumber');
+  expect(safe).not.toHaveProperty('telegramChatId');
+  expect(safe).not.toHaveProperty('orderId');
+});
+
 test('digest migration atomically reuses the personal outbox and stays service-role only', () => {
   const migration = fs.readFileSync(
     path.resolve(process.cwd(), '../api-server/supabase/migrations/2026082703_personal_telegram_digest_outbox.sql'),
@@ -180,6 +205,12 @@ test('digest migration atomically reuses the personal outbox and stays service-r
   expect(migration).toContain("'digestMode', 'BATCHED'");
   expect(migration).toContain("'PENDING', 0, p_window_end");
   expect(migration).toContain('security definer');
+  expect(migration).toContain('set search_path = public, pg_temp');
+  expect(migration).toContain('safe_event := jsonb_strip_nulls(jsonb_build_object(');
+  expect(migration).toContain("'event', safe_event");
+  expect(migration).toContain("'digestEvents', jsonb_build_array(safe_event)");
+  expect(migration).toContain('current_events || jsonb_build_array(safe_event)');
+  expect(migration).not.toContain('jsonb_build_array(p_event)');
   expect(migration).toContain('revoke all on function public.append_personal_telegram_digest_item');
   expect(migration).toContain('to service_role');
   expect(migration).not.toContain('telegram_chat_id');
