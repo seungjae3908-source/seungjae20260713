@@ -5,6 +5,7 @@ import {
   buildAuthenticatedShadowBlendCollapseDiagnostic,
   buildShadowBlendCollapseDiagnostic,
 } from "../src/shadow-blend-collapse-diagnostics-v1.js";
+import { buildShadowDirectionalRescueCandidateV1 } from "../src/shadow-directional-rescue-v1.js";
 
 function argValue(name) {
   const index = process.argv.indexOf(name);
@@ -31,7 +32,7 @@ try {
   if (artifactDir) {
     const root = path.resolve(artifactDir);
     const modelPath = path.resolve(requireArg("--model-artifact"));
-    const result = buildAuthenticatedShadowBlendCollapseDiagnostic({
+    const authenticated = buildAuthenticatedShadowBlendCollapseDiagnostic({
       manifestBytes: fs.readFileSync(path.join(root, "manifest.json")),
       stateBytes: fs.readFileSync(path.join(root, "shadow-state.json")),
       summaryBytes: fs.readFileSync(path.join(root, "shadow-summary.json")),
@@ -44,6 +45,15 @@ try {
       modelBlobSha: requireArg("--model-blob-sha"),
       minSettledN: Number(argValue("--min-settled-n") ?? 12),
       generatedAt: Date.now(),
+    });
+    const result = Object.freeze({
+      ...authenticated,
+      directionalRescueCandidate: buildShadowDirectionalRescueCandidateV1(authenticated, {
+        workflowRunHead: requireArg("--workflow-run-head"),
+        createdAt: requireArg("--artifact-created-at"),
+        expiresAt: requireArg("--artifact-expires-at"),
+        checkedAt: argValue("--checked-at") ?? new Date().toISOString(),
+      }),
     });
     writeResult(result, outputPath);
   } else if (inputPath) {
@@ -58,7 +68,7 @@ try {
     });
     writeResult(result, outputPath);
   } else {
-    throw new Error("usage: --artifact-dir <dir> --model-artifact <json> --workflow-run-id <id> --artifact-id <id> --artifact-digest <sha256:...> --model-blob-sha <sha> [--output <json>] OR --input <json>");
+    throw new Error("usage: --artifact-dir <dir> --model-artifact <json> --workflow-run-id <id> --artifact-id <id> --artifact-digest <sha256:...> --model-blob-sha <sha> --workflow-run-head <sha> --artifact-created-at <iso> --artifact-expires-at <iso> [--checked-at <iso>] [--output <json>] OR --input <json>");
   }
 } catch (error) {
   console.error(error?.stack ?? error?.message ?? String(error));
