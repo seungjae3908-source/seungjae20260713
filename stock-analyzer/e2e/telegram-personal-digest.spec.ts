@@ -125,6 +125,31 @@ test('same event cannot be appended twice to one digest and sent digest history 
   expect(history[0].deliveredAt).toBe('2026-08-27T00:15:01.000Z');
 });
 
+test('invalid sent checkpoint does not consume the pending digest window', async () => {
+  const repository = new InMemoryPersonalTelegramDigestRepository();
+  const first = await repository.append({
+    userId: USER_ID,
+    event: event('checkpoint-a', '2026-08-27T00:02:00.000Z'),
+    alert: { type: 'strong_buy', symbol: '005930', details: 'checkpoint A' },
+    now: new Date('2026-08-27T00:02:00.000Z'),
+    windowMs: 15 * 60_000,
+  });
+
+  expect(() => repository.markSent(USER_ID, first.dedupeKey, 'not-a-timestamp'))
+    .toThrow('USER_BROKER_TELEGRAM_STORAGE_UNAVAILABLE');
+
+  const retryable = await repository.append({
+    userId: USER_ID,
+    event: event('checkpoint-b', '2026-08-27T00:03:00.000Z'),
+    alert: { type: 'strong_buy', symbol: '005930', details: 'checkpoint B' },
+    now: new Date('2026-08-27T00:03:00.000Z'),
+    windowMs: 15 * 60_000,
+  });
+  expect(retryable.accepted).toBe(true);
+  expect(retryable.deliveryId).toBe(first.deliveryId);
+  expect(retryable.itemCount).toBe(2);
+});
+
 test('malformed durable digest facts fail closed instead of becoming valid history or zero counts', () => {
   const deliveredAt = '2026-08-27T00:15:01.000Z';
 
@@ -188,6 +213,11 @@ test('digest event persistence keeps only canonical public signal fields', () =>
   expect(safe).not.toHaveProperty('accountNumber');
   expect(safe).not.toHaveProperty('telegramChatId');
   expect(safe).not.toHaveProperty('orderId');
+
+  expect(() => sanitizePersonalTelegramDigestEvent({
+    ...event('bad-symbol', '2026-08-27T00:02:00.000Z'),
+    symbol: 1234,
+  } as unknown as TelegramPolicyEvent, USER_ID)).toThrow('USER_BROKER_TELEGRAM_STORAGE_UNAVAILABLE');
 });
 
 test('digest migration atomically reuses the personal outbox and stays service-role only', () => {
@@ -204,6 +234,7 @@ test('digest migration atomically reuses the personal outbox and stays service-r
   expect(migration).toContain("where value->>'eventId' = event_id");
   expect(migration).toContain("'digestMode', 'BATCHED'");
   expect(migration).toContain("'PENDING', 0, p_window_end");
+  expect(migration).toContain("p_window_end - p_created_at > interval '7 days'");
   expect(migration).toContain('security definer');
   expect(migration).toContain('set search_path = public, pg_temp');
   expect(migration).toContain('safe_event := jsonb_strip_nulls(jsonb_build_object(');
