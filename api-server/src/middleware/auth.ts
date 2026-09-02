@@ -25,17 +25,39 @@ export type AuthenticatedRequest = Request & {
   membershipLevel?: MemberTier;
 };
 
+type AuthDependencies = {
+  isSupabaseConfigured: typeof isSupabaseConfigured;
+  getSupabase: typeof getSupabase;
+  getUserSupabase: typeof getUserSupabase;
+};
+
+const defaultAuthDependencies: AuthDependencies = {
+  isSupabaseConfigured,
+  getSupabase,
+  getUserSupabase,
+};
+
 function bearerToken(req: Request): string | null {
   const value = req.header('authorization') ?? '';
   return value.toLowerCase().startsWith('bearer ') ? value.slice(7).trim() : null;
 }
 
-async function authenticate(req: AuthenticatedRequest, res: Response): Promise<boolean> {
+function isDisabledMemberSession(member: MemberProfile): boolean {
+  return member.status === 'suspended'
+    || member.status === 'withdrawn'
+    || (member.status === 'approved' && member.is_active === false);
+}
+
+async function authenticate(
+  req: AuthenticatedRequest,
+  res: Response,
+  dependencies: AuthDependencies = defaultAuthDependencies,
+): Promise<boolean> {
   if (req.member && req.accessToken) {
     req.membershipLevel = deriveMemberTier(req.member);
     return true;
   }
-  if (!isSupabaseConfigured()) {
+  if (!dependencies.isSupabaseConfigured()) {
     res.status(503).json({ error: 'AUTH_NOT_CONFIGURED' });
     return false;
   }
@@ -46,7 +68,7 @@ async function authenticate(req: AuthenticatedRequest, res: Response): Promise<b
     return false;
   }
 
-  const supabase = getSupabase();
+  const supabase = dependencies.getSupabase();
   const { data: auth, error: authError } = await supabase.auth.getUser(token);
   if (authError || !auth.user) {
     res.status(401).json({ error: 'INVALID_SESSION' });
@@ -55,7 +77,7 @@ async function authenticate(req: AuthenticatedRequest, res: Response): Promise<b
 
   // Always resolve authorization from the current database profile. Client role
   // claims and request bodies are never authoritative.
-  const { data: profile, error } = await getUserSupabase(token)
+  const { data: profile, error } = await dependencies.getUserSupabase(token)
     .from('profiles')
     .select('*')
     .eq('id', auth.user.id)
@@ -66,6 +88,11 @@ async function authenticate(req: AuthenticatedRequest, res: Response): Promise<b
   }
 
   const member = profile as unknown as MemberProfile;
+  if (isDisabledMemberSession(member)) {
+    res.status(403).json({ error: 'MEMBER_SESSION_DISABLED' });
+    return false;
+  }
+
   req.member = member;
   req.accessToken = token;
   req.membershipLevel = deriveMemberTier(member);
@@ -76,8 +103,9 @@ export async function requireAuthenticated(
   req: AuthenticatedRequest,
   res: Response,
   next: NextFunction,
+  dependencies: AuthDependencies = defaultAuthDependencies,
 ) {
-  if (!(await authenticate(req, res))) return;
+  if (!(await authenticate(req, res, dependencies))) return;
   return next();
 }
 
