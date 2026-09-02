@@ -599,6 +599,7 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
       onTrades: (events) => {
         if (
           streamGenerationRef.current !== generation
+          || recoveryRequested
           || identityKey !== aiChartStreamIdentityKey({ market: streamMarket, symbol, timeframe, generation })
         ) {
           return false;
@@ -634,7 +635,7 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
       if (streamGenerationRef.current === generation) streamGenerationRef.current += 1;
       client.stop();
     };
-  }, [chartQuery.data, chartQuery.refetch, live, market, selection.ticker, streamMarket, timeframe]);
+  }, [chartQuery.data, chartQuery.dataUpdatedAt, chartQuery.refetch, live, market, selection.ticker, streamMarket, timeframe]);
 
   const candles = chartQuery.data?.normalization.candles ?? EMPTY_CANDLES;
   const indicators = useMemo(() => computeChartIndicators(candles), [candles]);
