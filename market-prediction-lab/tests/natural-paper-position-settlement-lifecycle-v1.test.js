@@ -12,6 +12,10 @@ import { adaptNaturalPaperSettlementFullCost } from "../src/natural-paper-positi
 import { runScheduledPaperCycle } from "../src/paper-scheduler-driver-v1.js";
 import { createNaturalPaperPublicPositionObservationProducer } from "../src/natural-paper-public-position-observation-v1.js";
 import { PAPER_FORWARD_PROVIDER_AUTHORITY } from "../src/paper-public-provider-authority-v1.js";
+import {
+  AUTHORITATIVE_NATURAL_PAPER_TRIGGER_SETTLEMENT_EVIDENCE_VERSION,
+  createNaturalPaperTriggerBoundSettlementCostProducer,
+} from "../src/natural-paper-trigger-bound-settlement-cost-producer-v1.js";
 
 const T0 = 1_800_000_000_000;
 const SHA = "b".repeat(40);
@@ -473,6 +477,87 @@ function costEvidence(now) {
   };
 }
 
+function authoritativeTriggerSettlementEvidence(position, trigger, triggerObservation, evaluatedAtMs) {
+  const sourceIdentity = "CANONICAL_PUBLIC_SETTLEMENT_AGGREGATOR_V1";
+  const provenanceId = sha256(`settlement:${position.positionId}:${trigger.exitTriggerId}`);
+  const positionIdentity = {
+    positionId: position.positionId,
+    paperSampleId: position.paperSampleId,
+    signalId: position.signalId,
+    market: position.market,
+    symbol: position.symbol,
+    direction: position.direction,
+    strategyId: position.strategyId,
+    strategyVersion: position.strategyVersion,
+    parameterHash: position.parameterHash,
+    researchCodeSha: position.researchCodeSha,
+    costPolicyVersion: position.costPolicyVersion,
+  };
+  const exitExecutionIdentity = {
+    exitTriggerId: trigger.exitTriggerId,
+    triggerObservationId: trigger.triggerObservationId,
+    triggeredAtMs: trigger.triggeredAtMs,
+    positionId: position.positionId,
+    paperSampleId: position.paperSampleId,
+    market: position.market,
+    symbol: position.symbol,
+    direction: position.direction,
+    costPolicyVersion: position.costPolicyVersion,
+    sourceIdentity,
+    provenanceId,
+    exitExecutionDigest: sha256(stableJson(triggerObservation.settlementInput.exitExecution)),
+  };
+  const maximumAgeMs = 60_000;
+  const observedAtMs = evaluatedAtMs - 1;
+  const settlementCostEvidence = structuredClone(triggerObservation.settlementCostEvidence);
+  settlementCostEvidence.exitTriggerId = trigger.exitTriggerId;
+  settlementCostEvidence.sourceIdentity = sourceIdentity;
+  settlementCostEvidence.provenanceId = provenanceId;
+  settlementCostEvidence.positionIdentity = positionIdentity;
+  settlementCostEvidence.exitExecutionIdentity = exitExecutionIdentity;
+  settlementCostEvidence.projectedFundingRealized = false;
+  for (const [name, component] of Object.entries(settlementCostEvidence.components)) {
+    component.sourceIdentity = `CANONICAL_${name.toUpperCase()}_SOURCE_V1`;
+    component.provenanceId = sha256(`settlement:${name}:${trigger.exitTriggerId}`);
+    component.positionIdentity = positionIdentity;
+    component.exitExecutionIdentity = exitExecutionIdentity;
+    component.observedAtMs = observedAtMs;
+    component.freshness = { observedAtMs, maximumAgeMs };
+    if (name === "funding") {
+      component.realized = false;
+      component.projectedIsRealized = false;
+    }
+  }
+  return {
+    schemaVersion: AUTHORITATIVE_NATURAL_PAPER_TRIGGER_SETTLEMENT_EVIDENCE_VERSION,
+    status: "PRESENT",
+    fullCostReady: true,
+    sourceIdentity,
+    provenanceId,
+    positionIdentity,
+    exitExecutionIdentity,
+    freshness: { observedAtMs, maximumAgeMs },
+    settlementInput: {
+      ...structuredClone(triggerObservation.settlementInput),
+      exitTriggerId: trigger.exitTriggerId,
+    },
+    settlementCostEvidence,
+    unknownIsZero: false,
+    unavailableCostConvertedToZero: false,
+    synthetic: false,
+    replay: false,
+    backfill: false,
+    duplicate: false,
+    historical: false,
+    testOnly: false,
+    executionAuthority: "NONE",
+    liveOrderAllowed: false,
+    privateTradingApiAllowed: false,
+    orderSubmitted: false,
+    exchangeRequestSent: false,
+  };
+}
+
 function observation(position, id, now, bar, overrides = {}) {
   const base = {
     observationId: id,
@@ -667,6 +752,83 @@ test("missing authoritative cost evidence keeps an eligible exit OPEN", async ()
   assert.equal(h.getSettlementMutations(), 0);
 });
 
+test("pending exit with no settlementInput remains blocked instead of throwing", async () => {
+  const h = harness();
+  const opened = await open(h, "missing-settlement-input");
+  const first = observation(opened.state.positions[0], "missing-input-trigger", T0 + 1_000,
+    { open: 100, high: 106, low: 99, close: 105 });
+  delete first.settlementInput;
+  delete first.settlementCostEvidence;
+  const pending = await run(h, {
+    state: opened.state,
+    cycle: cycle("missing-input-trigger", T0 + 1_000),
+    positionObservations: [first],
+  });
+  assert.equal(pending.state.positions[0].lifecycle.pendingExit.reason, "TAKE_PROFIT");
+  const later = observation(pending.state.positions[0], "missing-input-later", T0 + 2_000,
+    { open: 100, high: 101, low: 99, close: 100 });
+  delete later.settlementInput;
+  delete later.settlementCostEvidence;
+  const blocked = await run(h, {
+    state: pending.state,
+    cycle: cycle("missing-input-later", T0 + 2_000),
+    positionObservations: [later],
+  });
+  assert.equal(blocked.state.settlements.length, 0);
+  assert.deepEqual(blocked.state.positions[0].lifecycle, pending.state.positions[0].lifecycle);
+  assert.equal(h.getSettlementMutations(), 0);
+});
+
+test("recurring caller freezes a new trigger before invoking the canonical cost producer", async () => {
+  const h = harness();
+  const opened = await open(h, "same-cycle-producer");
+  const position = opened.state.positions[0];
+  const complete = observation(position, "same-cycle-trigger", T0 + 1_000,
+    { open: 100, high: 106, low: 99, close: 105 });
+  const raw = structuredClone(complete);
+  raw.settlementCostEvidence = null;
+  let collectedTrigger = null;
+  const settlementCostProducer = createNaturalPaperTriggerBoundSettlementCostProducer({
+    async collectAuthoritativeEvidence({ position: pendingPosition, exitTrigger, evaluatedAtMs }) {
+      collectedTrigger = exitTrigger;
+      return authoritativeTriggerSettlementEvidence(pendingPosition, exitTrigger, complete, evaluatedAtMs);
+    },
+  });
+  const result = await run(h, {
+    state: opened.state,
+    cycle: cycle("same-cycle-trigger", T0 + 1_000),
+    positionObservations: [raw],
+    settlementCostProducer,
+  });
+  assert.equal(result.state.positions.length, 0);
+  assert.equal(result.state.settlements.length, 1);
+  assert.equal(result.state.settlements[0].exitReason, "TAKE_PROFIT");
+  assert.equal(result.state.settlements[0].settledAtMs, T0 + 1_000);
+  assert.equal(collectedTrigger.exitTriggerId, result.state.settlements[0].lifecycleEvidence.exitTriggerId);
+  assert.equal(h.getSettlementMutations(), 1);
+});
+
+test("malformed producer output cannot erase a newly frozen exit trigger", async () => {
+  const h = harness();
+  const opened = await open(h, "malformed-producer");
+  const raw = observation(opened.state.positions[0], "malformed-trigger", T0 + 1_000,
+    { open: 100, high: 106, low: 99, close: 105 });
+  raw.settlementCostEvidence = null;
+  const result = await run(h, {
+    state: opened.state,
+    cycle: cycle("malformed-trigger", T0 + 1_000),
+    positionObservations: [raw],
+    settlementCostProducer: async () => ({
+      status: "PRESENT",
+      observation: { ...raw, positionId: "wrong-position" },
+    }),
+  });
+  assert.equal(result.state.settlements.length, 0);
+  assert.equal(result.state.positions[0].lifecycle.pendingExit.reason, "TAKE_PROFIT");
+  assert.equal(result.state.positions[0].lifecycle.mark.observationCount, 1);
+  assert.equal(h.getSettlementMutations(), 0);
+});
+
 test("missing funding evidence is never converted into a zero cost", async () => {
   const h = harness();
   const opened = await open(h, "missing-funding");
@@ -799,13 +961,15 @@ for (const [reason, bar, options] of [
     const h = harness();
     const opened = await open(h, reason, options);
     const p = opened.state.positions[0];
-    const first = observation(p, "trigger", T0 + 1_000, bar, {
+    const completeTriggerObservation = observation(p, "trigger", T0 + 1_000, bar);
+    const first = {
+      ...structuredClone(completeTriggerObservation),
       settlementCostEvidence: null,
       ...(reason === "INVALIDATION" ? { invalidationEvidence: {
         status: "PRESENT", invalidated: true, policyId: "regime-v1", source: "fixture",
         provenance: "test-only", observedAtMs: T0 + 1_000,
       } } : {}),
-    });
+    };
     const pending = await run(h, { state: opened.state, cycle: cycle("trigger", T0 + 1_000), positionObservations: [first] });
     assert.equal(pending.state.positions[0].lifecycle.pendingExit.reason, reason);
     const later = observation(pending.state.positions[0], "later", T0 + 2_000, { open: 100, high: 200, low: 1, close: 150 });
@@ -813,6 +977,33 @@ for (const [reason, bar, options] of [
     assert.equal(result.state.settlements.length, 0);
     assert.deepEqual(result.state.positions[0].lifecycle, pending.state.positions[0].lifecycle);
     assert.equal(h.getSettlementMutations(), 0);
+
+    const trigger = result.state.positions[0].lifecycle.pendingExit;
+    const authoritativeEvidence = authoritativeTriggerSettlementEvidence(
+      result.state.positions[0],
+      trigger,
+      completeTriggerObservation,
+      T0 + 3_000,
+    );
+    const settlementCostProducer = createNaturalPaperTriggerBoundSettlementCostProducer({
+      async collectAuthoritativeEvidence() { return authoritativeEvidence; },
+    });
+    const evidenceObservation = observation(
+      result.state.positions[0],
+      "trigger-bound-cost",
+      T0 + 3_000,
+      { open: 100, high: 101, low: 99, close: 100 },
+    );
+    const settled = await run(h, {
+      state: result.state,
+      cycle: cycle("trigger-bound-cost", T0 + 3_000),
+      positionObservations: [evidenceObservation],
+      settlementCostProducer,
+    });
+    assert.equal(settled.state.settlements.length, 1);
+    assert.equal(settled.state.settlements[0].exitReason, reason);
+    assert.equal(settled.state.settlements[0].settledAtMs, T0 + 1_000);
+    assert.equal(h.getSettlementMutations(), 1);
   });
 }
 
@@ -858,4 +1049,76 @@ test("Natural frozen exit trigger hashes scheduler identity lineage without Sett
   assert.equal(trigger.schedulerHandoffDigest, sha256(stableJson(row.schedulerHandoff)));
   const { exitTriggerId, ...payload } = trigger;
   assert.equal(exitTriggerId, sha256(stableJson(payload)));
+});
+
+test("Natural settlement fields supplied directly cannot bypass the canonical trigger-bound producer", async () => {
+  const { h, state } = await naturalFixture();
+  const now = T0 + FOUR_HOURS;
+  const row = boundNaturalObservation(state, "direct-settlement-fields", "direct-settlement-fields", now,
+    { open: 100, high: 106, low: 99, close: 105 });
+  const result = await run(h, {
+    state,
+    cycle: cycle("direct-settlement-fields", now),
+    positionObservations: [row],
+  });
+  assert.equal(result.state.settlements.length, 0);
+  assert.equal(result.state.positions.length, 1);
+  assert.equal(result.state.positions[0].lifecycle.pendingExit.reason, "TAKE_PROFIT");
+  assert.equal(h.getSettlementMutations(), 0);
+  assert.equal(result.summary.canonicalNaturalStageEvidence.reasonObservations.some(
+    (reason) => reason.sourceCode === "PAPER_POSITION_TRIGGER_BOUND_SETTLEMENT_BINDING_MISSING",
+  ), true);
+});
+
+test("genuine Natural pending exit consumes only an exact later trigger-bound producer payload", async () => {
+  const { h, state } = await naturalFixture();
+  const triggerAtMs = T0 + FOUR_HOURS;
+  const completeTriggerObservation = boundNaturalObservation(
+    state,
+    "natural-trigger",
+    "natural-trigger-observation",
+    triggerAtMs,
+    { open: 100, high: 106, low: 99, close: 105 },
+  );
+  const triggerObservation = structuredClone(completeTriggerObservation);
+  triggerObservation.settlementCostEvidence = null;
+  const pending = await run(h, {
+    state,
+    cycle: cycle("natural-trigger", triggerAtMs),
+    positionObservations: [triggerObservation],
+  });
+  const position = pending.state.positions[0];
+  const trigger = position.lifecycle.pendingExit;
+  assert.equal(trigger.reason, "TAKE_PROFIT");
+
+  const evidenceAtMs = triggerAtMs + FOUR_HOURS;
+  const authoritativeEvidence = authoritativeTriggerSettlementEvidence(
+    position,
+    trigger,
+    completeTriggerObservation,
+    evidenceAtMs,
+  );
+  const settlementCostProducer = createNaturalPaperTriggerBoundSettlementCostProducer({
+    async collectAuthoritativeEvidence() { return authoritativeEvidence; },
+  });
+  const later = boundNaturalObservation(
+    pending.state,
+    "natural-trigger-cost",
+    "natural-trigger-cost-observation",
+    evidenceAtMs,
+    { open: 105, high: 106, low: 104, close: 105 },
+  );
+  const settled = await run(h, {
+    state: pending.state,
+    cycle: cycle("natural-trigger-cost", evidenceAtMs),
+    positionObservations: [later],
+    settlementCostProducer,
+  });
+  assert.equal(settled.state.positions.length, 0);
+  assert.equal(settled.state.settlements.length, 1);
+  assert.equal(settled.state.settlements[0].settledAtMs, triggerAtMs);
+  assert.equal(settled.state.settlements[0].lifecycleEvidence.exitTriggerId, trigger.exitTriggerId);
+  assert.equal(settled.state.settlements[0].lifecycleEvidence.naturalSampleCredit, 1);
+  assert.equal(settled.state.settlements[0].executionAuthority, "NONE");
+  assert.equal(h.getSettlementMutations(), 1);
 });
