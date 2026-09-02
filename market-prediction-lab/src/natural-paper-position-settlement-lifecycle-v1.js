@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { PAPER_FORWARD_PROVIDER_AUTHORITY } from "./paper-public-provider-authority-v1.js";
+import { validateNaturalPaperTriggerBoundSettlementEvidence } from "./natural-paper-trigger-bound-settlement-cost-producer-v1.js";
 
 export const NATURAL_PAPER_POSITION_SETTLEMENT_LIFECYCLE_VERSION =
   "natural-paper-position-settlement-lifecycle-v1";
@@ -403,6 +404,12 @@ export const NATURAL_SETTLEMENT_COST_COMPONENTS = Object.freeze([
 // Transport canonical PercentCostEvidence; never estimate or fill an absent cost.
 export function adaptNaturalPaperSettlementFullCost({ position, observation, trigger, evaluatedAtMs } = {}) {
   const blockers = [];
+  if (position?.lifecycle?.sampleEligibility?.provenanceClass === NATURAL_FORWARD) {
+    const binding = validateNaturalPaperTriggerBoundSettlementEvidence({
+      position, observation, trigger, evaluatedAtMs,
+    });
+    blockers.push(...binding.blockers);
+  }
   const cost = observation?.settlementCostEvidence;
   const maximumAgeMs = cost?.maximumAgeMs;
   const policy = observation?.settlementInput?.exitExecution?.costPolicy;
@@ -634,14 +641,21 @@ function finalizeExit(position, observation, evaluatedAtMs) {
     || trigger.positionLifecycleDigest !== lifecycle.immutableContractDigest) {
     throw new Error("PAPER_POSITION_EXIT_TRIGGER_IDENTITY_MISMATCH");
   }
-  const input = observation.settlementInput;
+  const input = observation?.settlementInput;
   const delayed = observation.observationId !== trigger.observationId || observation.observedAtMs !== trigger.triggeredAtMs;
+  const triggerBound = lifecycle.sampleEligibility.provenanceClass === NATURAL_FORWARD
+    ? validateNaturalPaperTriggerBoundSettlementEvidence({ position, observation, trigger, evaluatedAtMs })
+    : null;
+  const frozenMarketEvidencePresent = Object.values(trigger.marketEvidence ?? {}).some((value) => value != null);
+  const marketEvidenceMismatch = frozenMarketEvidencePresent
+    ? hash(exitMarketEvidence(input)) !== hash(trigger.marketEvidence)
+    : triggerBound?.status !== "PRESENT";
   const triggerMismatch = (delayed && (input?.exitTriggerId !== exitTriggerId
       || observation.settlementCostEvidence?.exitTriggerId !== exitTriggerId))
-    || hash(exitMarketEvidence(input)) !== hash(trigger.marketEvidence)
+    || marketEvidenceMismatch
     || input?.exitBar?.timestampMs !== trigger.triggeredAtMs
-    || input.exitBar.open !== trigger.bar.open || input.exitBar.high !== trigger.bar.high
-    || input.exitBar.low !== trigger.bar.low || input.exitBar.close !== trigger.bar.close;
+    || input?.exitBar?.open !== trigger.bar.open || input?.exitBar?.high !== trigger.bar.high
+    || input?.exitBar?.low !== trigger.bar.low || input?.exitBar?.close !== trigger.bar.close;
   const cost = adaptNaturalPaperSettlementFullCost({ position, observation, trigger, evaluatedAtMs });
   const blockers = [...cost.blockers];
   if (triggerMismatch) blockers.push("PAPER_POSITION_EXIT_TRIGGER_EVIDENCE_MISMATCH");
