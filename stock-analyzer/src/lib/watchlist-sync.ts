@@ -50,6 +50,7 @@ let requestedIdentityVersion = 0;
 let identityAbort: AbortController | null = null;
 let identityHydrated = false;
 let transitionChain: Promise<void> = Promise.resolve();
+let explicitIdentityOverrideActive = false;
 let serverDisabled = false;
 let warnedOnce = false;
 let pushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -414,6 +415,7 @@ function installOnce(): void {
   if (!isSupabaseConfigured) return;
   try {
     const { data } = getSupabase().auth.onAuthStateChange((_event, session) => {
+      if (explicitIdentityOverrideActive) return;
       queueIdentity(session?.user.id ?? null);
     });
     authSubscription = data.subscription as AuthSubscription;
@@ -441,12 +443,17 @@ async function authenticatedMemberId(): Promise<string | null> {
  */
 export function ensureWatchlistSync(memberIdOverride?: string | null): void {
   if (typeof window === 'undefined') return;
+  const hasExplicitOverride = memberIdOverride !== undefined;
+  if (hasExplicitOverride) explicitIdentityOverrideActive = true;
   installOnce();
-  if (memberIdOverride !== undefined) {
-    queueIdentity(memberIdOverride);
+  if (hasExplicitOverride) {
+    queueIdentity(memberIdOverride ?? null);
     return;
   }
-  void authenticatedMemberId().then(queueIdentity);
+  explicitIdentityOverrideActive = false;
+  void authenticatedMemberId().then((memberId) => {
+    if (!explicitIdentityOverrideActive) queueIdentity(memberId);
+  });
 }
 
 // Kept reachable for deterministic module cleanup in browser tests/dev HMR.
@@ -463,6 +470,7 @@ export function stopWatchlistSync(): void {
   installed = false;
   activeMemberId = null;
   identityHydrated = false;
+  explicitIdentityOverrideActive = false;
   pushInFlight = false;
   pushPending = false;
 }
