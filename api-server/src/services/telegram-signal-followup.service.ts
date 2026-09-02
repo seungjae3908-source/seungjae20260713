@@ -6,6 +6,7 @@ import type {
 } from './scanner-signal.types';
 import {
   createTelegramSignalFollowupRepository,
+  validateStoredTelegramSignalFollowupState,
   type StoredTelegramSignalFollowupState,
   type TelegramSignalFollowupRepository,
 } from './telegram-signal-followup.repository';
@@ -55,16 +56,17 @@ function cloneState(state: AnnouncedSignal): AnnouncedSignal {
 }
 
 function toStored(state: AnnouncedSignal): StoredTelegramSignalFollowupState {
-  return {
+  return validateStoredTelegramSignalFollowupState({
     ...state,
     reachedTargets: [...state.reachedTargets].sort((left, right) => left - right),
-  };
+  });
 }
 
 function fromStored(state: StoredTelegramSignalFollowupState): AnnouncedSignal {
+  const valid = validateStoredTelegramSignalFollowupState(state);
   return {
-    ...state,
-    reachedTargets: new Set(state.reachedTargets),
+    ...valid,
+    reachedTargets: new Set(valid.reachedTargets),
   };
 }
 
@@ -87,8 +89,9 @@ async function hydrateFromDurableLedger(
   await repository.pruneBefore(now - LEDGER_TTL_MS);
   const stored = await repository.list(missingIds);
   for (const state of stored) {
-    if (now - state.lastSeenAt > LEDGER_TTL_MS) continue;
-    announced.set(state.signalId, fromStored(state));
+    const restored = fromStored(state);
+    if (now - restored.lastSeenAt > LEDGER_TTL_MS) continue;
+    announced.set(restored.signalId, restored);
   }
 }
 
@@ -134,11 +137,8 @@ export async function markTelegramSignalAnnounced(
     announcedAt: now,
     lastSeenAt: now,
   };
-  // Keep the current-process path instant while making the durable write part of
-  // the caller-visible promise. Existing non-awaited test callers still observe
-  // the in-memory state synchronously; production delivery awaits persistence.
-  announced.set(alert.signalId, state);
   await repository.save([toStored(state)]);
+  announced.set(alert.signalId, state);
 }
 
 function crossedTarget(

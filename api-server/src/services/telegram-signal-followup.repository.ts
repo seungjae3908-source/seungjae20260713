@@ -18,10 +18,97 @@ export interface TelegramSignalFollowupRepository {
   pruneBefore(cutoffMs: number): Promise<number>;
 }
 
-function copyState(state: StoredTelegramSignalFollowupState): StoredTelegramSignalFollowupState {
+const scannerSignalStates = new Set<ScannerSignalState>([
+  'CANDIDATE',
+  'CONFIRMED',
+  'ARMED',
+  'ENTRY_ZONE',
+  'APPROVAL_PENDING',
+  'APPROVED',
+  'EXECUTING',
+  'PARTIALLY_FILLED',
+  'FILLED',
+  'MANAGING',
+  'CLOSED',
+  'INVALIDATED',
+  'EXPIRED',
+  'REJECTED',
+  'CANCELLED',
+  'DETECTED',
+  'WATCHING',
+  'READY_FOR_APPROVAL',
+  'WEAKENED',
+]);
+
+function storageError(): Error {
+  return new Error('TELEGRAM_SIGNAL_FOLLOWUP_STORAGE_UNAVAILABLE');
+}
+
+function requiredString(value: unknown): string {
+  if (typeof value !== 'string' || !value.trim()) throw storageError();
+  return value.trim();
+}
+
+function requiredTimestamp(value: unknown): number {
+  if (typeof value !== 'string' || !value.trim()) throw storageError();
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed) || parsed < 0) throw storageError();
+  return parsed;
+}
+
+function requiredState(value: unknown): ScannerSignalState {
+  const candidate = requiredString(value) as ScannerSignalState;
+  if (!scannerSignalStates.has(candidate)) throw storageError();
+  return candidate;
+}
+
+function requiredTargets(value: unknown): number[] {
+  if (!Array.isArray(value)) throw storageError();
+  const targets = value.map((target) => {
+    if (!Number.isInteger(target) || target < 0 || target > 16) throw storageError();
+    return target as number;
+  });
+  if (new Set(targets).size !== targets.length) throw storageError();
+  return [...targets].sort((left, right) => left - right);
+}
+
+function optionalPrice(value: unknown): number | null {
+  if (value == null) return null;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value >= 1e18) {
+    throw storageError();
+  }
+  return value;
+}
+
+export function validateStoredTelegramSignalFollowupState(
+  state: StoredTelegramSignalFollowupState,
+): StoredTelegramSignalFollowupState {
+  const signalId = requiredString(state.signalId);
+  const expiresAt = requiredString(state.expiresAt);
+  requiredTimestamp(expiresAt);
+  const lastState = requiredState(state.lastState);
+  const lastPrice = optionalPrice(state.lastPrice);
+  const reachedTargets = requiredTargets(state.reachedTargets);
+  if (typeof state.stopReached !== 'boolean') throw storageError();
+  if (!Number.isFinite(state.announcedAt) || state.announcedAt < 0) throw storageError();
+  if (!Number.isFinite(state.lastSeenAt) || state.lastSeenAt < state.announcedAt) throw storageError();
   return {
-    ...state,
-    reachedTargets: [...state.reachedTargets],
+    signalId,
+    expiresAt,
+    lastState,
+    lastPrice,
+    reachedTargets,
+    stopReached: state.stopReached,
+    announcedAt: state.announcedAt,
+    lastSeenAt: state.lastSeenAt,
+  };
+}
+
+function copyState(state: StoredTelegramSignalFollowupState): StoredTelegramSignalFollowupState {
+  const valid = validateStoredTelegramSignalFollowupState(state);
+  return {
+    ...valid,
+    reachedTargets: [...valid.reachedTargets],
   };
 }
 
@@ -36,10 +123,14 @@ export class InMemoryTelegramSignalFollowupRepository implements TelegramSignalF
   }
 
   async save(states: readonly StoredTelegramSignalFollowupState[]) {
-    for (const state of states) this.states.set(state.signalId, copyState(state));
+    for (const state of states) {
+      const valid = copyState(state);
+      this.states.set(valid.signalId, valid);
+    }
   }
 
   async pruneBefore(cutoffMs: number) {
+    if (!Number.isFinite(cutoffMs) || cutoffMs < 0) throw storageError();
     let deleted = 0;
     for (const [signalId, state] of this.states) {
       if (state.lastSeenAt < cutoffMs) {
@@ -51,47 +142,37 @@ export class InMemoryTelegramSignalFollowupRepository implements TelegramSignalF
   }
 }
 
-function storageError(): Error {
-  return new Error('TELEGRAM_SIGNAL_FOLLOWUP_STORAGE_UNAVAILABLE');
-}
-
 function safeIso(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) throw storageError();
   return new Date(ms).toISOString();
 }
 
 function fromRow(row: Record<string, unknown>): StoredTelegramSignalFollowupState {
-  const reachedTargets = Array.isArray(row.reached_targets)
-    ? row.reached_targets.filter((value): value is number => Number.isInteger(value) && value >= 0 && value <= 16)
-    : [];
-  const announcedAt = Date.parse(String(row.announced_at ?? ''));
-  const lastSeenAt = Date.parse(String(row.last_seen_at ?? ''));
-  const lastPrice = row.last_price == null ? null : Number(row.last_price);
-  if (!Number.isFinite(announcedAt) || !Number.isFinite(lastSeenAt) || (lastPrice != null && !Number.isFinite(lastPrice))) {
-    throw storageError();
-  }
-  return {
-    signalId: String(row.signal_id ?? ''),
-    expiresAt: String(row.expires_at ?? ''),
-    lastState: String(row.last_state ?? '') as ScannerSignalState,
-    lastPrice,
-    reachedTargets,
-    stopReached: row.stop_reached === true,
-    announcedAt,
-    lastSeenAt,
+  if (typeof row.stop_reached !== 'boolean') throw storageError();
+  const state: StoredTelegramSignalFollowupState = {
+    signalId: requiredString(row.signal_id),
+    expiresAt: requiredString(row.expires_at),
+    lastState: requiredState(row.last_state),
+    lastPrice: optionalPrice(row.last_price),
+    reachedTargets: requiredTargets(row.reached_targets),
+    stopReached: row.stop_reached,
+    announcedAt: requiredTimestamp(row.announced_at),
+    lastSeenAt: requiredTimestamp(row.last_seen_at),
   };
+  return validateStoredTelegramSignalFollowupState(state);
 }
 
 function toRow(state: StoredTelegramSignalFollowupState) {
+  const valid = validateStoredTelegramSignalFollowupState(state);
   return {
-    signal_id: state.signalId,
-    expires_at: state.expiresAt,
-    last_state: state.lastState,
-    last_price: state.lastPrice,
-    reached_targets: [...state.reachedTargets].sort((a, b) => a - b),
-    stop_reached: state.stopReached,
-    announced_at: safeIso(state.announcedAt),
-    last_seen_at: safeIso(state.lastSeenAt),
+    signal_id: valid.signalId,
+    expires_at: valid.expiresAt,
+    last_state: valid.lastState,
+    last_price: valid.lastPrice,
+    reached_targets: valid.reachedTargets,
+    stop_reached: valid.stopReached,
+    announced_at: safeIso(valid.announcedAt),
+    last_seen_at: safeIso(valid.lastSeenAt),
     updated_at: new Date().toISOString(),
   };
 }
