@@ -396,6 +396,33 @@ function cycleSummary({ cycleId, state, entries, blocked, noTrade, settled, repl
   });
 }
 
+async function produceTriggerBoundSettlementObservation({
+  settlementCostProducer,
+  position,
+  observation,
+  evaluatedAtMs,
+}) {
+  if (typeof settlementCostProducer !== "function") {
+    return Object.freeze({ observation, blockers: Object.freeze([]) });
+  }
+  let result;
+  try {
+    result = await settlementCostProducer({ position, observation, evaluatedAtMs });
+  } catch {
+    return Object.freeze({
+      observation,
+      blockers: Object.freeze(["PAPER_POSITION_TRIGGER_BOUND_SETTLEMENT_COST_PRODUCER_FAILED"]),
+    });
+  }
+  if (result?.status === "PRESENT" && result?.observation && typeof result.observation === "object") {
+    return Object.freeze({ observation: result.observation, blockers: Object.freeze([]) });
+  }
+  const blockers = Array.isArray(result?.blockers) && result.blockers.length > 0
+    ? result.blockers.filter(nonEmpty)
+    : ["PAPER_POSITION_TRIGGER_BOUND_SETTLEMENT_COST_EVIDENCE_MISSING"];
+  return Object.freeze({ observation, blockers: Object.freeze([...new Set(blockers)]) });
+}
+
 export async function runRecurringPaperCycle({
   state: predecessor,
   cycle,
@@ -405,6 +432,7 @@ export async function runRecurringPaperCycle({
   ledgerAdapter,
   learningAdapter,
   stateStore,
+  settlementCostProducer = null,
 } = {}) {
   validateState(predecessor);
   validateCycle(cycle, predecessor);
@@ -433,6 +461,9 @@ export async function runRecurringPaperCycle({
     throw new Error("PAPER_LOOP_LEARNING_ADAPTER_REQUIRED");
   }
   if (!stateStore || typeof stateStore.save !== "function") throw new Error("PAPER_LOOP_STATE_STORE_REQUIRED");
+  if (settlementCostProducer != null && typeof settlementCostProducer !== "function") {
+    throw new Error("PAPER_LOOP_SETTLEMENT_COST_PRODUCER_INVALID");
+  }
 
   const samples = [...predecessor.samples];
   let positions = [...predecessor.positions];
@@ -465,11 +496,51 @@ export async function runRecurringPaperCycle({
       continue;
     }
     const position = positions[positionIndex];
+    const hadPendingExit = Boolean(position.lifecycle?.pendingExit);
+    let effectiveObservation = observation;
+    let producerBlockers = [];
+    if (hadPendingExit) {
+      const produced = await produceTriggerBoundSettlementObservation({
+        settlementCostProducer,
+        position,
+        observation,
+        evaluatedAtMs: cycle.evaluatedAtMs,
+      });
+      effectiveObservation = produced.observation;
+      producerBlockers = [...produced.blockers];
+    }
     let decision;
     try {
       decision = advanceNaturalPaperPositionLifecycle({
-        position, observation, evaluatedAtMs: cycle.evaluatedAtMs, state: predecessor, cycle,
+        position, observation: effectiveObservation, evaluatedAtMs: cycle.evaluatedAtMs, state: predecessor, cycle,
       });
+      if (!hadPendingExit
+        && decision.status === "BLOCKED_SETTLEMENT_EVIDENCE"
+        && decision.position?.lifecycle?.pendingExit
+        && typeof settlementCostProducer === "function") {
+        const produced = await produceTriggerBoundSettlementObservation({
+          settlementCostProducer,
+          position: decision.position,
+          observation,
+          evaluatedAtMs: cycle.evaluatedAtMs,
+        });
+        producerBlockers = [...produced.blockers];
+        if (produced.blockers.length === 0) {
+          effectiveObservation = produced.observation;
+          try {
+            decision = advanceNaturalPaperPositionLifecycle({
+              position: decision.position,
+              observation: effectiveObservation,
+              evaluatedAtMs: cycle.evaluatedAtMs,
+              state: predecessor,
+              cycle,
+            });
+          } catch (error) {
+            if (typeof error?.message !== "string" || !error.message.startsWith("PAPER_POSITION_")) throw error;
+            producerBlockers.push(error.message);
+          }
+        }
+      }
     } catch (error) {
       if (typeof error?.message !== "string" || !error.message.startsWith("PAPER_POSITION_")) throw error;
       directReasons.push(loopReasonObservation({
@@ -495,7 +566,7 @@ export async function runRecurringPaperCycle({
     }
     positions[positionIndex] = decision.position;
     if (decision.status === "BLOCKED_SETTLEMENT_EVIDENCE") {
-      for (const blocker of decision.blockers) {
+      for (const blocker of [...new Set([...producerBlockers, ...decision.blockers])]) {
         directReasons.push(loopReasonObservation({
           sourceStage: "EXIT_ELIGIBLE",
           sourceCode: blocker,
