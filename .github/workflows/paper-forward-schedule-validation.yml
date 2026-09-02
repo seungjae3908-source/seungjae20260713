@@ -2,8 +2,9 @@ name: Paper Forward Schedule Activation Validation
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, fix/natural-position-observation-clean-transport-20260830]
     paths:
+      - market-prediction-lab/src/paper-public-provider-authority-v1.js
       - .github/workflows/authoritative-paper-runtime-factory-v1.yml
       - api-server/scripts/build-authoritative-paper-runtime-package.mjs
       - api-server/src/services/authoritative-paper-callback-owners.service.ts
@@ -21,6 +22,7 @@ on:
       - api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.test.ts
       - api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.ts
       - api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.test.ts
+      - api-server/src/services/scanner-paper-admission-evidence-bundle.service.ts
       - market-intelligence-sidecar/src/execution-quality.mjs
       - market-intelligence-sidecar/src/execution-quality.d.mts
       - market-intelligence-sidecar/tests/execution-quality.test.mjs
@@ -31,6 +33,7 @@ on:
       - market-prediction-lab/src/authoritative-paper-runtime-factory-v1.js
       - market-prediction-lab/src/authoritative-paper-runtime-package-v1.js
       - market-prediction-lab/src/authoritative-paper-natural-funnel-v1.js
+      - market-prediction-lab/src/canonical-paper-admission-bridge-v1.js
       - market-prediction-lab/src/canonical-paper-admission-bundle-injection-runtime-v1.js
       - market-prediction-lab/src/canonical-meaningful-search-paper-runtime-v1.js
       - market-prediction-lab/src/bitget-position-tier-v1.js
@@ -44,6 +47,7 @@ on:
       - market-prediction-lab/src/paper-scheduler-driver-v1.js
       - market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
       - market-prediction-lab/src/natural-paper-position-settlement-lifecycle-v1.js
+      - market-prediction-lab/src/natural-paper-trigger-bound-settlement-cost-producer-v1.js
       - market-prediction-lab/src/recurring-paper-loop-v1.js
       - market-prediction-lab/scripts/run-paper-forward-schedule.js
       - market-prediction-lab/tests/authoritative-natural-paper-accounting-v1.test.js
@@ -66,6 +70,7 @@ on:
       - market-prediction-lab/tests/paper-forward-schedule-authoritative-source-wiring-v1.test.js
       - market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
       - market-prediction-lab/tests/natural-paper-position-settlement-lifecycle-v1.test.js
+      - market-prediction-lab/tests/natural-paper-trigger-bound-settlement-cost-producer-v1.test.js
       - market-prediction-lab/tests/recurring-paper-loop-v1.test.js
       - market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
       - research-production/deploy/prepare-paper-state-readonly-transport.mjs
@@ -122,6 +127,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -179,6 +185,7 @@ jobs:
             api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.test.ts
             api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.ts
             api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.test.ts
+            api-server/src/services/scanner-paper-admission-evidence-bundle.service.ts
             market-intelligence-sidecar/src/execution-quality.mjs
             market-intelligence-sidecar/src/execution-quality.d.mts
             market-intelligence-sidecar/tests/execution-quality.test.mjs
@@ -189,6 +196,7 @@ jobs:
             market-prediction-lab/src/authoritative-paper-runtime-factory-v1.js
             market-prediction-lab/src/authoritative-paper-runtime-package-v1.js
             market-prediction-lab/src/authoritative-paper-natural-funnel-v1.js
+            market-prediction-lab/src/canonical-paper-admission-bridge-v1.js
             market-prediction-lab/src/canonical-paper-admission-bundle-injection-runtime-v1.js
             market-prediction-lab/src/canonical-meaningful-search-paper-runtime-v1.js
             market-prediction-lab/src/bitget-position-tier-v1.js
@@ -198,10 +206,12 @@ jobs:
             market-prediction-lab/src/meaningful-search-scheduled-paper-provider-v1.js
             market-prediction-lab/src/four-market-paper-settlement-v1.js
             market-prediction-lab/src/paper-forward-evidence-runtime-v1.js
+            market-prediction-lab/src/paper-public-provider-authority-v1.js
             market-prediction-lab/src/natural-paper-public-position-observation-v1.js
             market-prediction-lab/src/paper-scheduler-driver-v1.js
             market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
             market-prediction-lab/src/natural-paper-position-settlement-lifecycle-v1.js
+            market-prediction-lab/src/natural-paper-trigger-bound-settlement-cost-producer-v1.js
             market-prediction-lab/src/recurring-paper-loop-v1.js
             market-prediction-lab/scripts/run-paper-forward-schedule.js
             market-prediction-lab/tests/authoritative-natural-paper-accounting-v1.test.js
@@ -224,6 +234,7 @@ jobs:
             market-prediction-lab/tests/paper-forward-schedule-authoritative-source-wiring-v1.test.js
             market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
             market-prediction-lab/tests/natural-paper-position-settlement-lifecycle-v1.test.js
+            market-prediction-lab/tests/natural-paper-trigger-bound-settlement-cost-producer-v1.test.js
             market-prediction-lab/tests/recurring-paper-loop-v1.test.js
             market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
             research-production/deploy/prepare-paper-state-readonly-transport.mjs
