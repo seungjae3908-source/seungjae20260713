@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   InMemoryPersonalTelegramDigestRepository,
+  parsePersonalTelegramDigestAppendRow,
+  parsePersonalTelegramDigestHistoryEvent,
 } from '../../api-server/src/services/personal-telegram-digest.repository';
 import { deliverPersonalTelegramAlert } from '../../api-server/src/services/personal-telegram-alert.service';
 import {
@@ -120,6 +122,47 @@ test('same event cannot be appended twice to one digest and sent digest history 
   expect(history).toHaveLength(1);
   expect(history[0].eventId).toBe('same-event');
   expect(history[0].deliveredAt).toBe('2026-08-27T00:15:01.000Z');
+});
+
+test('malformed durable digest facts fail closed instead of becoming valid history or zero counts', () => {
+  const deliveredAt = '2026-08-27T00:15:01.000Z';
+
+  expect(() => parsePersonalTelegramDigestHistoryEvent({
+    ...event('bad-signal', '2026-08-27T00:02:00.000Z'),
+    signalType: 'NOT_A_SIGNAL',
+  }, USER_ID, deliveredAt)).toThrow('USER_BROKER_TELEGRAM_STORAGE_UNAVAILABLE');
+
+  expect(() => parsePersonalTelegramDigestHistoryEvent({
+    ...event('bad-priority', '2026-08-27T00:02:00.000Z'),
+    priority: 'URGENT',
+  }, USER_ID, deliveredAt)).toThrow('USER_BROKER_TELEGRAM_STORAGE_UNAVAILABLE');
+
+  expect(() => parsePersonalTelegramDigestHistoryEvent({
+    ...event('bad-market', '2026-08-27T00:02:00.000Z'),
+    market: 'UNKNOWN_MARKET',
+  }, USER_ID, deliveredAt)).toThrow('USER_BROKER_TELEGRAM_STORAGE_UNAVAILABLE');
+
+  expect(() => parsePersonalTelegramDigestAppendRow({
+    accepted: true,
+    delivery_id: '11111111-1111-4111-8111-111111111112',
+    item_count: null,
+  })).toThrow('USER_BROKER_TELEGRAM_STORAGE_UNAVAILABLE');
+
+  expect(() => parsePersonalTelegramDigestAppendRow({
+    accepted: true,
+    delivery_id: '11111111-1111-4111-8111-111111111112',
+    item_count: '2',
+  })).toThrow('USER_BROKER_TELEGRAM_STORAGE_UNAVAILABLE');
+
+  expect(parsePersonalTelegramDigestAppendRow({
+    accepted: false,
+    delivery_id: '11111111-1111-4111-8111-111111111112',
+    item_count: 1,
+  })).toEqual({
+    accepted: false,
+    deliveryId: '11111111-1111-4111-8111-111111111112',
+    itemCount: 1,
+  });
 });
 
 test('digest migration atomically reuses the personal outbox and stays service-role only', () => {
