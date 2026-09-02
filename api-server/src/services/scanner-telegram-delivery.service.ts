@@ -3,6 +3,7 @@ import {
   buildTelegramSignalIntelligenceInput,
   collectTelegramSignalIntelligence,
   type TelegramSignalDeliveryContext,
+  type TelegramSignalIntelligenceEvidence,
 } from './telegram-investment-intelligence.service';
 import {
   fanoutMemberHoldingScannerAlert,
@@ -15,6 +16,11 @@ import {
   type TelegramAlertInput,
   type TelegramAlertResult,
 } from './telegram-notification.service';
+import {
+  evaluateTelegramSignalFreshness,
+  formatTelegramAge,
+  type TelegramSignalFreshness,
+} from './telegram-signal-freshness.service';
 
 export type ScannerTelegramSender = (
   input: TelegramAlertInput,
@@ -126,24 +132,66 @@ function normalizeRichTradePlan(
   return { ...input, details: lines.join('\n') };
 }
 
+function freshnessWarning(freshness: TelegramSignalFreshness): string | null {
+  if (freshness.status === 'FRESH') return null;
+  if (freshness.status === 'PARTIAL') return '⚠️ 일부 Evidence 미확인 · 표시된 근거만 사용';
+  return '⛔ 재검증 전 실시간 신호로 사용 금지';
+}
+
+export function addTelegramSignalFreshness(
+  input: TelegramAlertInput,
+  alert: ScannerAlertCandidate,
+  context: TelegramSignalDeliveryContext,
+  evidence: TelegramSignalIntelligenceEvidence | null = null,
+  nowMs?: number,
+): TelegramAlertInput {
+  const freshness = evaluateTelegramSignalFreshness({
+    generatedAt: context.generatedAt,
+    expiresAt: alert.expiresAt,
+    chart: evidence?.chart ?? null,
+    warnings: evidence?.warnings ?? [],
+    nowMs,
+  });
+  const warning = freshnessWarning(freshness);
+  const lines = input.details ? input.details.split('\n') : [];
+
+  lines.push(
+    `Freshness: ${freshness.status} · 유효성 ${freshness.validity}`,
+    `신호 생성 ${freshness.signalGeneratedAt ?? 'N/A'} · 신호 나이 ${formatTelegramAge(freshness.signalAgeMs)}`,
+    `데이터 기준 ${freshness.dataAsOf ?? 'N/A'} · 데이터 나이 ${formatTelegramAge(freshness.dataAgeMs)}`,
+    `신호 만료 ${freshness.expiresAt ?? 'N/A'} · 남은 유효시간 ${formatTelegramAge(freshness.remainingMs)}`,
+  );
+  if (warning) lines.push(warning);
+  if (freshness.reasonCodes.length) lines.push(`Freshness 근거: ${freshness.reasonCodes.join(', ')}`);
+
+  return { ...input, details: lines.join('\n') };
+}
+
 async function richInput(
   base: TelegramAlertInput,
   alert: ScannerAlertCandidate,
   context: TelegramSignalDeliveryContext,
 ): Promise<TelegramAlertInput> {
-  if (process.env.TELEGRAM_SIGNAL_RICH_MEDIA_ENABLED !== 'true') return base;
+  if (process.env.TELEGRAM_SIGNAL_RICH_MEDIA_ENABLED !== 'true') {
+    return addTelegramSignalFreshness(base, alert, context);
+  }
   try {
     const evidence = await collectTelegramSignalIntelligence(alert, context);
-    return normalizeRichTradePlan(
-      buildTelegramSignalIntelligenceInput(base, alert, evidence, context),
+    return addTelegramSignalFreshness(
+      normalizeRichTradePlan(
+        buildTelegramSignalIntelligenceInput(base, alert, evidence, context),
+        alert,
+      ),
       alert,
+      context,
+      evidence,
     );
   } catch (error) {
     logger.warn(
       { signalId: alert.signalId, errorName: error instanceof Error ? error.name : 'UnknownError' },
       'scanner Telegram rich evidence unavailable; falling back to base alert',
     );
-    return base;
+    return addTelegramSignalFreshness(base, alert, context);
   }
 }
 
@@ -193,7 +241,9 @@ export async function deliverScannerTelegramAlerts(
       await memberEvaluation;
       return;
     }
-    const input = index < MAX_RICH_ALERTS_PER_BATCH ? await richInput(base, alert, context) : base;
+    const input = index < MAX_RICH_ALERTS_PER_BATCH
+      ? await richInput(base, alert, context)
+      : addTelegramSignalFreshness(base, alert, context);
     try {
       const result = await sender(input);
       if (result.ok || result.skipped === 'DUPLICATE') {
