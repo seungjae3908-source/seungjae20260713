@@ -20,10 +20,22 @@ import {
   TrendingUp,
   X,
 } from 'lucide-react';
-import { PatternAwareUnifiedChartCanvas } from '@/components/pattern-aware-unified-chart-canvas';
+import {
+  PatternAwareUnifiedChartCanvas,
+  type PatternAwareUnifiedChartCanvasHandle,
+} from '@/components/pattern-aware-unified-chart-canvas';
 import { SelectedCandleDetailPanel } from '@/components/selected-candle-detail';
 import { api } from '@/lib/api';
 import { authorizedFetch } from '@/lib/auth-fetch';
+import { createAiChartPublicStreamClient } from '@/lib/ai-chart-public-stream-client';
+import {
+  aiChartStreamIdentityKey,
+  createAiChartStreamReduction,
+  reconcileAiChartPublicTrades,
+  type AiChartPublicStreamMarket,
+  type AiChartPublicStreamStatus,
+  type AiChartStreamIntegrityIssue,
+} from '@/lib/ai-chart-public-stream';
 import {
   buildChartAnalysis,
   shouldAppendTimeline,
@@ -92,6 +104,18 @@ type Props = {
   selection: AnalysisSelection;
   onSelectionChange: (selection: AnalysisSelection) => void;
   onAnalysisChange?: (analysis: ChartAnalysis | null) => void;
+};
+
+type AiChartRealtimeHealth = {
+  transportMode: 'STREAM' | 'POLLING';
+  connectionState: AiChartPublicStreamStatus | 'REST_ONLY' | 'POLLING_PAUSED' | 'REST_BOOTSTRAP';
+  dataStatus: 'LIVE' | 'DEGRADED' | 'RECOVERING' | 'STALE' | 'UNAVAILABLE';
+  provider: string;
+  symbol: string;
+  timeframe: UnifiedChartTimeframe;
+  lastValidEventAt: number | null;
+  recoveryState: string;
+  integrityIssues: AiChartStreamIntegrityIssue[];
 };
 
 const EMPTY_CANDLES: NormalizedChartCandle[] = [];
@@ -394,6 +418,20 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
   const [inputError, setInputError] = useState('');
   const [selectedCandleTime, setSelectedCandleTime] = useState<number | null>(null);
+  const streamMarket: AiChartPublicStreamMarket | null = market === 'UPBIT' || market === 'BITGET' ? market : null;
+  const [realtimeHealth, setRealtimeHealth] = useState<AiChartRealtimeHealth>({
+    transportMode: 'POLLING',
+    connectionState: 'REST_BOOTSTRAP',
+    dataStatus: 'UNAVAILABLE',
+    provider: 'REST',
+    symbol: selection.ticker,
+    timeframe,
+    lastValidEventAt: null,
+    recoveryState: 'BOOTSTRAP_REQUIRED',
+    integrityIssues: [],
+  });
+  const streamGenerationRef = useRef(0);
+  const realtimeCanvasRef = useRef<PatternAwareUnifiedChartCanvasHandle | null>(null);
   const previousAnalysisRef = useRef<ChartAnalysis | null>(null);
 
   useEffect(() => {
@@ -413,11 +451,17 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
     staleTime: 30_000,
     retry: 1,
   });
+  const streamOwnsTransport = live && streamMarket != null && (
+    realtimeHealth.connectionState === 'CONNECTING'
+    || realtimeHealth.connectionState === 'WAITING_FIRST_EVENT'
+    || realtimeHealth.connectionState === 'LIVE_STREAM'
+    || realtimeHealth.connectionState === 'RECOVERING'
+  );
   const chartQuery = useQuery({
     queryKey: ['unified-chart-data', market, selection.ticker, timeframe],
     queryFn: ({ signal }) => fetchUnifiedChartData({ market, symbol: selection.ticker, timeframe, signal }),
     enabled: Boolean(selection.ticker),
-    refetchInterval: live ? (timeframe === '1D' ? 30_000 : 8_000) : false,
+    refetchInterval: live && !streamOwnsTransport ? (timeframe === '1D' ? 30_000 : 8_000) : false,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
@@ -427,6 +471,170 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
       return true;
     },
   });
+
+
+  useEffect(() => {
+    const generation = streamGenerationRef.current + 1;
+    streamGenerationRef.current = generation;
+    const symbol = normalizeUnifiedSymbol(market, selection.ticker);
+
+    if (!live) {
+      setRealtimeHealth({
+        transportMode: 'POLLING',
+        connectionState: 'POLLING_PAUSED',
+        dataStatus: 'UNAVAILABLE',
+        provider: 'REST',
+        symbol,
+        timeframe,
+        lastValidEventAt: null,
+        recoveryState: 'PAUSED_BY_USER',
+        integrityIssues: [],
+      });
+      return;
+    }
+
+    if (!streamMarket) {
+      setRealtimeHealth({
+        transportMode: 'POLLING',
+        connectionState: 'REST_ONLY',
+        dataStatus: chartQuery.data ? 'DEGRADED' : 'UNAVAILABLE',
+        provider: chartQuery.data?.provider ?? 'REST',
+        symbol,
+        timeframe,
+        lastValidEventAt: null,
+        recoveryState: 'PUBLIC_STREAM_NOT_SUPPORTED_FOR_MARKET',
+        integrityIssues: [],
+      });
+      return;
+    }
+
+    const bootstrap = chartQuery.data;
+    if (!bootstrap || bootstrap.normalization.candles.length < 2 || !symbol) {
+      setRealtimeHealth({
+        transportMode: 'POLLING',
+        connectionState: 'REST_BOOTSTRAP',
+        dataStatus: 'UNAVAILABLE',
+        provider: bootstrap?.provider ?? 'REST',
+        symbol,
+        timeframe,
+        lastValidEventAt: null,
+        recoveryState: 'VALID_BOOTSTRAP_REQUIRED',
+        integrityIssues: [],
+      });
+      return;
+    }
+
+    const identityKey = aiChartStreamIdentityKey({ market: streamMarket, symbol, timeframe, generation });
+    const bootstrapCutoffMs = Date.now();
+    let reduction = createAiChartStreamReduction(bootstrap.normalization.candles);
+    let lastValidEventAt: number | null = null;
+    let recoveryRequested = false;
+
+    const requestRecovery = (issues: AiChartStreamIntegrityIssue[], reason: string) => {
+      if (streamGenerationRef.current !== generation) return;
+      setRealtimeHealth({
+        transportMode: 'STREAM',
+        connectionState: 'RECOVERING',
+        dataStatus: 'RECOVERING',
+        provider: streamMarket === 'UPBIT' ? 'UPBIT_PUBLIC' : 'BITGET_PUBLIC',
+        symbol,
+        timeframe,
+        lastValidEventAt,
+        recoveryState: reason,
+        integrityIssues: issues,
+      });
+      if (recoveryRequested) return;
+      recoveryRequested = true;
+      void chartQuery.refetch();
+    };
+
+    const client = createAiChartPublicStreamClient({
+      market: streamMarket,
+      symbol,
+      onStatus: (status, reason) => {
+        if (streamGenerationRef.current !== generation) return;
+        if (status === 'RECOVERING') {
+          requestRecovery([], reason);
+          return;
+        }
+        setRealtimeHealth({
+          transportMode: status === 'FALLBACK_POLLING' || status === 'DISCONNECTED' ? 'POLLING' : 'STREAM',
+          connectionState: status,
+          dataStatus: status === 'LIVE_STREAM'
+            ? 'LIVE'
+            : status === 'FALLBACK_POLLING'
+              ? 'DEGRADED'
+              : 'UNAVAILABLE',
+          provider: streamMarket === 'UPBIT' ? 'UPBIT_PUBLIC' : 'BITGET_PUBLIC',
+          symbol,
+          timeframe,
+          lastValidEventAt,
+          recoveryState: reason,
+          integrityIssues: [],
+        });
+      },
+      onDiagnostic: (diagnostic) => {
+        if (streamGenerationRef.current !== generation) return;
+        if (diagnostic.reason === 'STREAM_DELAYED') {
+          setRealtimeHealth((current) => current.dataStatus === 'DEGRADED'
+            ? current
+            : {
+                ...current,
+                dataStatus: 'DEGRADED',
+                recoveryState: 'MARKET_EVENT_DELAYED',
+                lastValidEventAt: diagnostic.lastEventAtMs,
+              });
+        } else if (diagnostic.reason === 'PUBLIC_TRADE_BATCH') {
+          setRealtimeHealth((current) => current.dataStatus === 'LIVE'
+            ? current
+            : {
+                ...current,
+                dataStatus: 'LIVE',
+                recoveryState: 'INTEGRITY_REVALIDATED',
+                lastValidEventAt: diagnostic.lastEventAtMs,
+                integrityIssues: [],
+              });
+        }
+      },
+      onTrades: (events) => {
+        if (
+          streamGenerationRef.current !== generation
+          || identityKey !== aiChartStreamIdentityKey({ market: streamMarket, symbol, timeframe, generation })
+        ) {
+          return false;
+        }
+        const reconciled = reconcileAiChartPublicTrades({
+          previous: reduction,
+          events: [...events],
+          market: streamMarket,
+          symbol,
+          timeframe,
+          bootstrapCutoffMs,
+        });
+        if (reconciled.needsSnapshot) {
+          requestRecovery(reconciled.integrityIssues, 'REST_STREAM_RECONCILIATION_REQUIRED');
+          return false;
+        }
+        if (reconciled.acceptedEvents === 0 || !reconciled.latestCandle) return false;
+        if (!realtimeCanvasRef.current?.applyRealtimeCandle(reconciled.latestCandle)) {
+          requestRecovery(['INVALID_EVENT_VALUE'], 'INCREMENTAL_CHART_UPDATE_REJECTED');
+          return false;
+        }
+        reduction = reconciled.reduction;
+        lastValidEventAt = events.reduce(
+          (latest, event) => Math.max(latest, event.eventTimeMs),
+          lastValidEventAt ?? 0,
+        );
+        return true;
+      },
+    });
+
+    client.start();
+    return () => {
+      if (streamGenerationRef.current === generation) streamGenerationRef.current += 1;
+      client.stop();
+    };
+  }, [chartQuery.data, chartQuery.refetch, live, market, selection.ticker, streamMarket, timeframe]);
 
   const candles = chartQuery.data?.normalization.candles ?? EMPTY_CANDLES;
   const indicators = useMemo(() => computeChartIndicators(candles), [candles]);
@@ -605,7 +813,7 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
           {settingsOpen && <div className="mt-2 flex flex-wrap gap-2 rounded-2xl border border-card-border bg-background p-3">{OVERLAY_OPTIONS.map((item) => <button key={item.key} type="button" data-testid={`overlay-${item.key}`} onClick={() => toggleOverlay(item.key)} className={cn('rounded-full border px-3 py-1.5 text-[11px] font-extrabold', overlays[item.key] ? 'border-primary bg-primary/10 text-primary' : 'border-card-border bg-card text-muted-foreground')}>{overlays[item.key] ? '✓ ' : '+ '}{item.label}</button>)}</div>}
         </div>
         <div className="min-h-[390px] bg-background/30">
-          {chartQuery.isLoading ? <Centered tall><Loader2 className="h-5 w-5 animate-spin" /> 차트 불러오는 중</Centered> : chartQuery.isError ? <div className="flex h-[390px] flex-col items-center justify-center px-6 text-center" data-testid="chart-error-state"><AlertTriangle className="h-8 w-8 text-destructive" /><p className="mt-3 text-sm font-black">차트 데이터를 불러오지 못했습니다.</p><p role="alert" className="mt-1 break-keep text-xs font-bold leading-5 text-muted-foreground">{errorMessage}</p><button type="button" onClick={() => void chartQuery.refetch()} className="mt-4 rounded-full bg-primary px-4 py-2 text-xs font-black text-primary-foreground">다시 시도</button></div> : candles.length < 2 || !levels ? <div className="flex h-[390px] flex-col items-center justify-center px-6 text-center" data-testid="chart-empty-state"><BarChart3 className="h-8 w-8 text-muted-foreground" /><p className="mt-3 text-sm font-black">표시할 유효한 캔들이 없습니다.</p><p className="mt-1 break-keep text-xs font-bold leading-5 text-muted-foreground">잘못된 심볼, 데이터 없는 종목 또는 지원하지 않는 시간봉인지 확인하세요. 임시 캔들은 만들지 않습니다.</p></div> : <PatternAwareUnifiedChartCanvas candles={candles} indicators={indicators} levels={levels} analysis={analysis} pricePlan={pricePlan} overlays={overlays} timeframe={timeframe} resetKey={`${market}:${selection.ticker}:${timeframe}`} market={market} onCandleSelect={handleCandleSelect} />}
+          {chartQuery.isLoading ? <Centered tall><Loader2 className="h-5 w-5 animate-spin" /> 차트 불러오는 중</Centered> : chartQuery.isError ? <div className="flex h-[390px] flex-col items-center justify-center px-6 text-center" data-testid="chart-error-state"><AlertTriangle className="h-8 w-8 text-destructive" /><p className="mt-3 text-sm font-black">차트 데이터를 불러오지 못했습니다.</p><p role="alert" className="mt-1 break-keep text-xs font-bold leading-5 text-muted-foreground">{errorMessage}</p><button type="button" onClick={() => void chartQuery.refetch()} className="mt-4 rounded-full bg-primary px-4 py-2 text-xs font-black text-primary-foreground">다시 시도</button></div> : candles.length < 2 || !levels ? <div className="flex h-[390px] flex-col items-center justify-center px-6 text-center" data-testid="chart-empty-state"><BarChart3 className="h-8 w-8 text-muted-foreground" /><p className="mt-3 text-sm font-black">표시할 유효한 캔들이 없습니다.</p><p className="mt-1 break-keep text-xs font-bold leading-5 text-muted-foreground">잘못된 심볼, 데이터 없는 종목 또는 지원하지 않는 시간봉인지 확인하세요. 임시 캔들은 만들지 않습니다.</p></div> : <PatternAwareUnifiedChartCanvas ref={realtimeCanvasRef} candles={candles} indicators={indicators} levels={levels} analysis={analysis} pricePlan={pricePlan} overlays={overlays} timeframe={timeframe} resetKey={`${market}:${selection.ticker}:${timeframe}`} market={market} onCandleSelect={handleCandleSelect} />}
         </div>
       </section>
 
@@ -618,8 +826,14 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
           <span className={cn('rounded-full border px-3 py-1 text-[10px] font-black', dataStatusClass(dataStatus))}>{dataStatusLabel(dataStatus)}</span>
         </div>
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <Metric label="STREAM STATUS" value={live ? 'FALLBACK POLLING' : 'POLLING PAUSED'} />
-          <Metric label="DATA AGE" value={formatDataAge(chartQuery.data)} />
+          <Metric label="STREAM STATUS" value={realtimeHealth.connectionState} />
+          <Metric label="TRANSPORT" value={realtimeHealth.transportMode} />
+          <Metric label="STREAM DATA" value={realtimeHealth.dataStatus} />
+          <Metric label="DATA AGE" value={realtimeHealth.lastValidEventAt == null ? formatDataAge(chartQuery.data) : `${Math.max(0, Date.now() - realtimeHealth.lastValidEventAt)}ms`} />
+          <Metric label="PROVIDER" value={realtimeHealth.provider} />
+          <Metric label="IDENTITY" value={`${realtimeHealth.symbol} · ${realtimeHealth.timeframe}`} />
+          <Metric label="RECOVERY" value={realtimeHealth.recoveryState} />
+          <Metric label="INTEGRITY" value={realtimeHealth.integrityIssues.length ? realtimeHealth.integrityIssues.join(', ') : 'NO_UNRESOLVED_ISSUE'} />
           <Metric label="PROVENANCE" value={chartQuery.data?.provider ? '상단 출처 연결됨' : '미연결'} />
           <Metric label="TECHNICAL SCORE" value={analysis ? `${analysis.confidence}/100` : '계산 대기'} />
           <Metric label="CALIBRATED PROBABILITY" value="INSUFFICIENT_SAMPLE" />

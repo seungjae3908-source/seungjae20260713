@@ -8,6 +8,7 @@ export type AiChartPublicStreamMarket = 'UPBIT' | 'BITGET';
 export type AiChartPublicStreamStatus =
   | 'DISCONNECTED'
   | 'CONNECTING'
+  | 'WAITING_FIRST_EVENT'
   | 'LIVE_STREAM'
   | 'RECOVERING'
   | 'FALLBACK_POLLING';
@@ -45,12 +46,38 @@ export type AiChartPublicStreamSubscription = {
   staleAfterMs: number;
 };
 
+export type AiChartStreamRuntimeIdentity = {
+  market: AiChartPublicStreamMarket;
+  symbol: string;
+  timeframe: UnifiedChartTimeframe;
+  generation: number;
+};
+
+export type AiChartStreamIntegrityIssue =
+  | 'WRONG_PROVIDER_EVENT'
+  | 'WRONG_MARKET_EVENT'
+  | 'WRONG_SYMBOL_EVENT'
+  | 'INVALID_EVENT_VALUE'
+  | 'REST_STREAM_OVERLAP_REJECTED'
+  | 'DUPLICATE_EVENT_REJECTED'
+  | 'OUT_OF_ORDER_EVENT_REJECTED'
+  | 'BAR_COVERAGE_GAP';
+
+export type AiChartStreamBatchResult = {
+  reduction: AiChartStreamReduction;
+  acceptedEvents: number;
+  latestCandle: NormalizedChartCandle | null;
+  integrityIssues: AiChartStreamIntegrityIssue[];
+  needsSnapshot: boolean;
+};
+
 export const AI_CHART_PUBLIC_STREAM_ENDPOINTS = Object.freeze({
   UPBIT: 'wss://api.upbit.com/websocket/v1',
   BITGET: 'wss://ws.bitget.com/v2/ws/public',
 } as const);
 
 const MAX_SEEN_EVENT_IDS = 512;
+export const AI_CHART_MAX_PENDING_EVENTS = MAX_SEEN_EVENT_IDS;
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const STALE_AFTER_MS = 45_000;
 
@@ -311,6 +338,100 @@ export function createAiChartStreamReduction(
     lastSequence: null,
     seenEventIds: [],
   };
+}
+
+
+export function aiChartStreamIdentityKey(identity: AiChartStreamRuntimeIdentity): string {
+  const symbol = identity.market === 'UPBIT'
+    ? normalizeUpbitCode(identity.symbol).replace(/^KRW-/, '')
+    : normalizeBitgetSymbol(identity.symbol);
+  return [identity.market, symbol, identity.timeframe, Math.max(0, Math.trunc(identity.generation))].join(':');
+}
+
+export function reconcileAiChartPublicTrades(input: {
+  previous: AiChartStreamReduction;
+  events: AiChartPublicTradeEvent[];
+  market: AiChartPublicStreamMarket;
+  symbol: string;
+  timeframe: UnifiedChartTimeframe;
+  bootstrapCutoffMs: number;
+}): AiChartStreamBatchResult {
+  const expectedSymbol = input.market === 'UPBIT'
+    ? normalizeUpbitCode(input.symbol).replace(/^KRW-/, '')
+    : normalizeBitgetSymbol(input.symbol);
+  const expectedProvider = input.market === 'UPBIT' ? 'UPBIT_PUBLIC' : 'BITGET_PUBLIC';
+  const integrityIssues: AiChartStreamIntegrityIssue[] = [];
+  let reduction = input.previous;
+  let acceptedEvents = 0;
+  let latestCandle: NormalizedChartCandle | null = null;
+  let needsSnapshot = false;
+
+  const issue = (value: AiChartStreamIntegrityIssue) => {
+    if (!integrityIssues.includes(value)) integrityIssues.push(value);
+  };
+
+  for (const event of input.events) {
+    if (event.provider !== expectedProvider) {
+      issue('WRONG_PROVIDER_EVENT');
+      continue;
+    }
+    if (event.market !== input.market) {
+      issue('WRONG_MARKET_EVENT');
+      continue;
+    }
+    if (event.symbol !== expectedSymbol) {
+      issue('WRONG_SYMBOL_EVENT');
+      continue;
+    }
+    if (
+      !Number.isSafeInteger(event.eventTimeMs)
+      || !Number.isFinite(event.receivedAtMs)
+      || event.eventTimeMs <= 0
+      || event.eventTimeMs > event.receivedAtMs
+      || !Number.isFinite(event.price)
+      || event.price <= 0
+      || !Number.isFinite(event.volume)
+      || event.volume < 0
+    ) {
+      issue('INVALID_EVENT_VALUE');
+      continue;
+    }
+    if (!Number.isFinite(input.bootstrapCutoffMs) || event.eventTimeMs <= input.bootstrapCutoffMs) {
+      issue('REST_STREAM_OVERLAP_REJECTED');
+      continue;
+    }
+
+    const next = reduceAiChartPublicTrade(reduction, event, input.timeframe);
+    if (next.duplicate) {
+      issue('DUPLICATE_EVENT_REJECTED');
+      continue;
+    }
+    if (next.outOfOrder) {
+      issue('OUT_OF_ORDER_EVENT_REJECTED');
+      continue;
+    }
+    if (next.missingBars > 0) {
+      issue('BAR_COVERAGE_GAP');
+      needsSnapshot = true;
+      continue;
+    }
+
+    reduction = next;
+    acceptedEvents += 1;
+    latestCandle = next.candles.at(-1) ?? null;
+  }
+
+  if (needsSnapshot) {
+    return {
+      reduction: input.previous,
+      acceptedEvents: 0,
+      latestCandle: null,
+      integrityIssues,
+      needsSnapshot: true,
+    };
+  }
+
+  return { reduction, acceptedEvents, latestCandle, integrityIssues, needsSnapshot: false };
 }
 
 export function aiChartStreamFreshness(input: {
