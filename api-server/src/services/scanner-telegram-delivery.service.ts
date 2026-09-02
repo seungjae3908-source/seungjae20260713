@@ -244,11 +244,10 @@ export async function deliverScannerTelegramAlerts(
     const input = index < MAX_RICH_ALERTS_PER_BATCH
       ? await richInput(base, alert, context)
       : addTelegramSignalFreshness(base, alert, context);
+
+    let result: TelegramAlertResult;
     try {
-      const result = await sender(input);
-      if (result.ok || result.skipped === 'DUPLICATE') {
-        markTelegramSignalAnnounced(alert);
-      }
+      result = await sender(input);
     } catch (error) {
       logger.warn(
         {
@@ -257,6 +256,25 @@ export async function deliverScannerTelegramAlerts(
         },
         'scanner Telegram delivery failed open',
       );
+      await memberEvaluation;
+      return;
+    }
+
+    if (result.ok || result.skipped === 'DUPLICATE') {
+      try {
+        await markTelegramSignalAnnounced(alert);
+      } catch (error) {
+        logger.warn(
+          {
+            signalId: alert.signalId,
+            alertType: input.type,
+            errorName: error instanceof Error ? error.name : 'UnknownError',
+          },
+          'scanner Telegram initial alert lacks durable followup checkpoint; failing closed until persistence recovers',
+        );
+        await memberEvaluation;
+        throw error;
+      }
     }
     await memberEvaluation;
   }));
