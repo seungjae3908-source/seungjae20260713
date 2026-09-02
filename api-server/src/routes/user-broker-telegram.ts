@@ -184,7 +184,7 @@ userBrokerTelegramRouter.get('/', async (req, res) => {
   try {
     const authenticated = req as AuthenticatedRequest;
     const { userId, accessToken } = member(authenticated);
-    const canReadBrokerConnections = hasCapability(authenticated.member, 'canPlaceOrders');
+    const canReadBrokerConnections = hasCapability(authenticated.member, 'canAccessBasicInfo');
     const statePromise = service().getState(userId).then((state) => ({
       ...state,
       telegramStorageAvailable: true,
