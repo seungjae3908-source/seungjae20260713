@@ -70,6 +70,7 @@ export function sanitizePersonalTelegramDigestEvent(
   if (!isOneOf(event.signalType, TELEGRAM_POLICY_SIGNAL_TYPES)) throw storageError();
   if (!isOneOf(event.priority, TELEGRAM_POLICY_PRIORITIES)) throw storageError();
   if (event.market != null && !isOneOf(event.market, TELEGRAM_POLICY_MARKETS)) throw storageError();
+  if (event.symbol != null && typeof event.symbol !== 'string') throw storageError();
   const symbol = event.symbol == null
     ? undefined
     : requiredString(event.symbol.normalize('NFKC'), MAX_SYMBOL_LENGTH).toUpperCase();
@@ -255,8 +256,9 @@ export class InMemoryPersonalTelegramDigestRepository implements PersonalTelegra
   markSent(userId: string, dedupeKey: string, deliveredAt: string) {
     const row = this.rows.get(`${userId}:${dedupeKey}`);
     if (!row) return false;
+    const validDeliveredAt = validTimestamp(deliveredAt);
     row.state = 'SENT';
-    row.deliveredAt = validTimestamp(deliveredAt);
+    row.deliveredAt = validDeliveredAt;
     return true;
   }
 
