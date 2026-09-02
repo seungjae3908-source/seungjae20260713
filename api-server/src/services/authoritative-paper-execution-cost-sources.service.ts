@@ -147,6 +147,12 @@ export type AuthoritativePaperFundingPercentCostEvidence = PercentCostEvidence &
   signedCostPercent: number;
   creditPercent: number;
   projectedIsRealized: false;
+  riskPolicyIdentity: Readonly<{
+    policyId: string;
+    policyVersion: string;
+    source: string;
+    researchCodeSha: string;
+  }>;
 }>;
 
 export type AuthoritativePaperFundingHorizonCostResult = Readonly<{
@@ -619,6 +625,12 @@ export function buildAuthoritativePaperFundingHoldingHorizonCost(
       signedCostPercent,
       creditPercent,
       projectedIsRealized: false as const,
+      riskPolicyIdentity: freeze({
+        policyId: riskPolicyId,
+        policyVersion: riskPolicyVersion,
+        source: riskPolicySource,
+        researchCodeSha,
+      }),
     }) as AuthoritativePaperFundingPercentCostEvidence
     : null;
   const referenceBlockers = present
