@@ -34,7 +34,7 @@ begin
   if p_user_id is null or p_delivery_id is null or p_window_end is null or p_created_at is null then
     raise exception 'DIGEST_INVALID_ARGUMENT';
   end if;
-  if p_window_end <= p_created_at then
+  if p_window_end <= p_created_at or p_window_end - p_created_at > interval '7 days' then
     raise exception 'DIGEST_INVALID_WINDOW';
   end if;
   if p_dedupe_key is null or length(p_dedupe_key) < 8 or length(p_dedupe_key) > 240 then
