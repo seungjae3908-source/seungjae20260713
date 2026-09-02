@@ -77,7 +77,11 @@ function queryState(location: string) {
 }
 
 function finite(value: unknown): number | null {
-	const number = Number(value);
+	if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+	if (typeof value !== 'string') return null;
+	const normalized = value.trim();
+	if (!normalized) return null;
+	const number = Number(normalized);
 	return Number.isFinite(number) ? number : null;
 }
 
@@ -91,9 +95,22 @@ function metric(value: unknown, suffix = '') {
 	return number == null ? '데이터 없음' : `${number.toLocaleString(undefined, { maximumFractionDigits: 2 })}${suffix}`;
 }
 
-function money(value: unknown, currency: string) {
+function money(value: unknown, currency: unknown) {
 	const number = finite(value);
-	return number == null ? '데이터 없음' : formatAppPrice(number, currency);
+	if (number == null) return '데이터 없음';
+	const currencyCode = text(currency);
+	return currencyCode ? formatAppPrice(number, currencyCode) : '통화 미확인';
+}
+
+function changeTone(value: unknown): 'up' | 'down' | undefined {
+	const number = finite(value);
+	return number == null ? undefined : number >= 0 ? 'up' : 'down';
+}
+
+function warningLabel(value: unknown) {
+	if (value === true) return '유의 종목';
+	if (value === false) return '정상';
+	return '유의 상태 미확인';
 }
 
 // 재무 금액을 백만 단위로 표시 (국내: 백만원, 미국: USD million). 임의 환산 없음.
@@ -264,7 +281,7 @@ export default function StockInfoPage() {
 	});
 
 	const selectedName = displayStockName(ticker, text(quote.data?.name) ?? text(profile.data?.name) ?? ticker, market);
-	const currency = text(quote.data?.currency) ?? (market === 'KR' ? 'KRW' : 'USD');
+	const currency = text(quote.data?.currency);
 	const financeData = financials.data?.financials ?? financials.data ?? {};
 	const financeRows = (financialPeriod === 'annual'
 		? financeData.annual ?? financeData.yearly
@@ -358,13 +375,13 @@ export default function StockInfoPage() {
 												<p className="truncate text-xl font-black">{selectedName}</p>
 												<p className="mt-1 text-xs font-bold text-muted-foreground">{ticker} · {market === 'KR' ? '국내' : '해외'} · 기준 {formatDate(quote.data.updatedAt)}</p>
 											</div>
-											<button type="button" onClick={() => setWatchlisted(toggleWatchlistItem({ ticker, name: selectedName, market, currency }))} aria-label="관심종목" className={cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-full border', watchlisted ? 'border-warning bg-warning/10 text-warning' : 'border-card-border')}>
+											<button type="button" onClick={() => setWatchlisted(toggleWatchlistItem({ ticker, name: selectedName, market, currency: currency ?? 'UNKNOWN' }))} aria-label="관심종목" className={cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-full border', watchlisted ? 'border-warning bg-warning/10 text-warning' : 'border-card-border')}>
 												<Star className={cn('h-5 w-5', watchlisted && 'fill-current')} />
 											</button>
 										</div>
 										<div className="mt-3 grid grid-cols-2 gap-2">
 											<Metric label="현재가" value={money(quote.data.price, currency)} strong />
-											<Metric label="등락률" value={finite(quote.data.changePercent) == null ? '데이터 없음' : formatAppPercent(quote.data.changePercent)} tone={Number(quote.data.changePercent) >= 0 ? 'up' : 'down'} />
+											<Metric label="등락률" value={finite(quote.data.changePercent) == null ? '데이터 없음' : formatAppPercent(quote.data.changePercent)} tone={changeTone(quote.data.changePercent)} />
 										</div>
 										<button type="button" onClick={openDetailedAnalysis} className="mt-3 flex w-full items-center justify-center gap-1 rounded-2xl bg-primary px-4 py-3 text-sm font-black text-primary-foreground">상세 분석 <ChevronRight className="h-4 w-4" /></button>
 									</>
@@ -384,13 +401,13 @@ export default function StockInfoPage() {
 								)}
 							</Section>
 
-							<PriceAlertCard assetType="stock" market={market} symbol={ticker} currentPrice={finite(quote.data?.price)} currency={currency} />
+							<PriceAlertCard assetType="stock" market={market} symbol={ticker} currentPrice={finite(quote.data?.price)} currency={currency ?? 'UNKNOWN'} />
 
 							<Section title="기업·업종" state={queryStateText(profile)}>
 								{profile.data && <div className="grid grid-cols-2 gap-2"><Metric label="업종" value={text(profile.data.industry) ?? '데이터 없음'} /><Metric label="산업" value={text(profile.data.sector) ?? '데이터 없음'} /><Metric label="국가" value={text(profile.data.country) ?? '데이터 없음'} /><Metric label="시장상태" value={text(quote.data?.marketStatus) ?? '제공기관 미지원'} /></div>}
 							</Section>
 
-							<Section title="재무요약" state={queryStateText(financials)} action={<Toggle values={[['quarterly', '분기별'], ['annual', '연별']]} value={financialPeriod} onChange={(value) => setFinancialPeriod(value as FinancialPeriod)} />}>
+							<Section title="재무요약" state={queryStateText(financials)} action={<Toggle values={[["quarterly", "분기별"], ["annual", "연별"]]} value={financialPeriod} onChange={(value) => setFinancialPeriod(value as FinancialPeriod)} />}>
 								{financials.data && (
 									<>
 										<p className="mb-2 text-[10px] font-black text-muted-foreground">단위: {market === 'KR' ? '백만원' : 'USD million'}</p>
@@ -412,7 +429,7 @@ export default function StockInfoPage() {
 								)}
 							</Section>
 
-							<Section title="수급·공매도" state={queryStateText(flow)} action={<Toggle values={[['daily', '일별'], ['weekly', '주별'], ['monthly', '월별']]} value={flowPeriod} onChange={(value) => setFlowPeriod(value as FlowPeriod)} />}>
+							<Section title="수급·공매도" state={queryStateText(flow)} action={<Toggle values={[["daily", "일별"], ["weekly", "주별"], ["monthly", "월별"]]} value={flowPeriod} onChange={(value) => setFlowPeriod(value as FlowPeriod)} />}>
 								<div className="grid grid-cols-2 gap-2">
 									<Metric label="개인 순매매" value={flow.data?.available ? metric(flow.data?.totals?.individual) : flow.data?.message ?? '데이터 없음'} />
 									<Metric label="기관 순매매" value={flow.data?.available ? metric(flow.data?.totals?.institution) : flow.data?.message ?? '데이터 없음'} />
@@ -1048,7 +1065,7 @@ export function CoinInfo({ nowMs, basePath = '/stock-info' }: { nowMs: number; b
 						)}
 						<div className="mt-4 grid grid-cols-2 gap-2">
 							<Metric label="현재가" value={money(selected.price, currency)} strong />
-							<Metric label="24시간 등락률" value={finite(selected.changePercent ?? selected.changePercent24h) == null ? '데이터 없음' : formatAppPercent(selected.changePercent ?? selected.changePercent24h)} tone={Number(selected.changePercent ?? selected.changePercent24h) >= 0 ? 'up' : 'down'} />
+							<Metric label="24시간 등락률" value={finite(selected.changePercent ?? selected.changePercent24h) == null ? '데이터 없음' : formatAppPercent(selected.changePercent ?? selected.changePercent24h)} tone={changeTone(selected.changePercent ?? selected.changePercent24h)} />
 							<Metric label="24시간 고가" value={money(selected.high24h, currency)} />
 							<Metric label="24시간 저가" value={money(selected.low24h, currency)} />
 							<Metric label="24시간 거래량" value={metric(selected.volume24h)} />
@@ -1060,7 +1077,7 @@ export function CoinInfo({ nowMs, basePath = '/stock-info' }: { nowMs: number; b
 							{coinMarket === 'futures' && <Metric label="매수 / 매도호가" value={`${money(selected.bidPrice, currency)} / ${money(selected.askPrice, currency)}`} />}
 							<Metric label={coinMarket === 'spot' ? `${coinTf === '15m' ? '15분봉' : coinTf === '1D' ? '일봉' : coinTf === '1W' ? '주봉' : '월봉'} 최신 종가` : '15분봉 최신 종가'} value={money(latestCandle?.close, currency)} />
 							<Metric label="캔들 수" value={candles?.length ? `${candles.length}개` : '데이터 없음'} />
-							{coinMarket === 'spot' && <Metric label="유의 상태" value={selected.warning ? '유의 종목' : '정상'} tone={selected.warning ? 'down' : undefined} />}
+							{coinMarket === 'spot' && <Metric label="유의 상태" value={warningLabel(selected.warning)} tone={selected.warning === true ? 'down' : undefined} />}
 						</div>
 					</>
 				)}
