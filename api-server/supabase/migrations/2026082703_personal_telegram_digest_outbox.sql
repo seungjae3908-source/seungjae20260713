@@ -23,6 +23,12 @@ declare
   current_events jsonb;
   current_count integer;
   event_id text;
+  event_market text;
+  event_signal_type text;
+  event_priority text;
+  event_symbol text;
+  event_occurred_at text;
+  safe_event jsonb;
   safe_summary text;
 begin
   if p_user_id is null or p_delivery_id is null or p_window_end is null or p_created_at is null then
@@ -34,13 +40,74 @@ begin
   if p_dedupe_key is null or length(p_dedupe_key) < 8 or length(p_dedupe_key) > 240 then
     raise exception 'DIGEST_INVALID_KEY';
   end if;
-  if jsonb_typeof(p_event) <> 'object' then
+  if jsonb_typeof(p_event) is distinct from 'object' then
     raise exception 'DIGEST_INVALID_EVENT';
   end if;
+  if jsonb_typeof(p_event->'userId') is distinct from 'string'
+    or jsonb_typeof(p_event->'eventId') is distinct from 'string'
+    or jsonb_typeof(p_event->'signalType') is distinct from 'string'
+    or jsonb_typeof(p_event->'priority') is distinct from 'string'
+    or jsonb_typeof(p_event->'occurredAt') is distinct from 'string' then
+    raise exception 'DIGEST_INVALID_EVENT';
+  end if;
+  if p_event ? 'market' and coalesce(jsonb_typeof(p_event->'market'), 'null') not in ('string', 'null') then
+    raise exception 'DIGEST_INVALID_EVENT';
+  end if;
+  if p_event ? 'symbol' and coalesce(jsonb_typeof(p_event->'symbol'), 'null') not in ('string', 'null') then
+    raise exception 'DIGEST_INVALID_EVENT';
+  end if;
+
   event_id := nullif(btrim(p_event->>'eventId'), '');
-  if event_id is null or nullif(btrim(p_event->>'userId'), '') is distinct from p_user_id::text then
+  if event_id is null or length(event_id) > 160
+    or nullif(btrim(p_event->>'userId'), '') is distinct from p_user_id::text then
     raise exception 'DIGEST_EVENT_OWNER_MISMATCH';
   end if;
+
+  event_signal_type := nullif(btrim(p_event->>'signalType'), '');
+  event_priority := nullif(btrim(p_event->>'priority'), '');
+  event_market := nullif(btrim(p_event->>'market'), '');
+  event_symbol := nullif(btrim(p_event->>'symbol'), '');
+  event_occurred_at := nullif(btrim(p_event->>'occurredAt'), '');
+
+  if event_signal_type is null or event_signal_type not in (
+    'BUY', 'LONG', 'SHORT', 'NO_TRADE', 'PRICE_TARGET', 'STRATEGY_HEALTH',
+    'CHAMPION', 'RESEARCH', 'SETTLEMENT', 'PROVIDER_SERVER_ERROR'
+  ) then
+    raise exception 'DIGEST_INVALID_SIGNAL_TYPE';
+  end if;
+  if event_priority is null or event_priority not in ('CRITICAL', 'IMPORTANT', 'INFO') then
+    raise exception 'DIGEST_INVALID_PRIORITY';
+  end if;
+  if event_market is not null and event_market not in ('KR', 'US', 'CRYPTO_SPOT', 'CRYPTO_FUTURES') then
+    raise exception 'DIGEST_INVALID_MARKET';
+  end if;
+  if event_market is null and event_signal_type not in (
+    'STRATEGY_HEALTH', 'CHAMPION', 'RESEARCH', 'SETTLEMENT', 'PROVIDER_SERVER_ERROR'
+  ) then
+    raise exception 'DIGEST_MARKET_REQUIRED';
+  end if;
+  if event_symbol is not null and length(event_symbol) > 64 then
+    raise exception 'DIGEST_INVALID_SYMBOL';
+  end if;
+  if event_occurred_at is null then
+    raise exception 'DIGEST_INVALID_TIMESTAMP';
+  end if;
+  begin
+    perform event_occurred_at::timestamptz;
+  exception when others then
+    raise exception 'DIGEST_INVALID_TIMESTAMP';
+  end;
+
+  safe_event := jsonb_strip_nulls(jsonb_build_object(
+    'userId', p_user_id::text,
+    'eventId', event_id,
+    'market', event_market,
+    'signalType', event_signal_type,
+    'priority', event_priority,
+    'symbol', event_symbol,
+    'occurredAt', event_occurred_at
+  ));
+
   safe_summary := left(regexp_replace(coalesce(p_summary, ''), '[\r\n\t]+', ' ', 'g'), 180);
   if length(btrim(safe_summary)) = 0 then
     safe_summary := '알림 세부내용 N/A';
@@ -84,7 +151,7 @@ begin
             jsonb_set(
               current_row.payload,
               '{digestEvents}',
-              current_events || jsonb_build_array(p_event),
+              current_events || jsonb_build_array(safe_event),
               true
             ),
             '{alert,details}',
@@ -112,7 +179,7 @@ begin
         p_user_id, p_delivery_id, null, p_dedupe_key, 'PENDING', 0, p_window_end,
         null, p_created_at, p_created_at, 'PERSONAL_ALERT',
         jsonb_build_object(
-          'event', p_event,
+          'event', safe_event,
           'alert', jsonb_build_object(
             'type', 'intelligence_report',
             'details', '📬 Telegram 모아보기' || E'\n• ' || safe_summary,
@@ -122,7 +189,7 @@ begin
             'linkPreview', false
           ),
           'digestMode', 'BATCHED',
-          'digestEvents', jsonb_build_array(p_event)
+          'digestEvents', jsonb_build_array(safe_event)
         )
       );
       return query select p_delivery_id, true, 1;
