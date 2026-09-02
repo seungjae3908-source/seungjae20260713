@@ -47,6 +47,7 @@ on:
       - market-prediction-lab/src/paper-scheduler-driver-v1.js
       - market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
       - market-prediction-lab/src/natural-paper-position-settlement-lifecycle-v1.js
+      - market-prediction-lab/src/natural-paper-trigger-bound-settlement-cost-producer-v1.js
       - market-prediction-lab/src/recurring-paper-loop-v1.js
       - market-prediction-lab/scripts/run-paper-forward-schedule.js
       - market-prediction-lab/tests/authoritative-natural-paper-accounting-v1.test.js
@@ -69,6 +70,7 @@ on:
       - market-prediction-lab/tests/paper-forward-schedule-authoritative-source-wiring-v1.test.js
       - market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
       - market-prediction-lab/tests/natural-paper-position-settlement-lifecycle-v1.test.js
+      - market-prediction-lab/tests/natural-paper-trigger-bound-settlement-cost-producer-v1.test.js
       - market-prediction-lab/tests/recurring-paper-loop-v1.test.js
       - market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
       - research-production/deploy/prepare-paper-state-readonly-transport.mjs
@@ -209,6 +211,7 @@ jobs:
             market-prediction-lab/src/paper-scheduler-driver-v1.js
             market-prediction-lab/src/paper-forward-schedule-runtime-v1.js
             market-prediction-lab/src/natural-paper-position-settlement-lifecycle-v1.js
+            market-prediction-lab/src/natural-paper-trigger-bound-settlement-cost-producer-v1.js
             market-prediction-lab/src/recurring-paper-loop-v1.js
             market-prediction-lab/scripts/run-paper-forward-schedule.js
             market-prediction-lab/tests/authoritative-natural-paper-accounting-v1.test.js
@@ -231,6 +234,7 @@ jobs:
             market-prediction-lab/tests/paper-forward-schedule-authoritative-source-wiring-v1.test.js
             market-prediction-lab/tests/paper-forward-schedule-runtime-v1.test.js
             market-prediction-lab/tests/natural-paper-position-settlement-lifecycle-v1.test.js
+            market-prediction-lab/tests/natural-paper-trigger-bound-settlement-cost-producer-v1.test.js
             market-prediction-lab/tests/recurring-paper-loop-v1.test.js
             market-prediction-lab/tests/research-production-paper-forward-cutover.test.js
             research-production/deploy/prepare-paper-state-readonly-transport.mjs
