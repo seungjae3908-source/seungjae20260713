@@ -125,6 +125,8 @@ function normalizeRichTradePlan(
 ): TelegramAlertInput {
   if (!input.details) return input;
   const lines = input.details.split('\n');
+  // buildTelegramSignalIntelligenceInput puts its legacy compact price-plan on
+  // line 2. Replace only that canonical line so evidence/news/AI stay intact.
   if (lines.length >= 2) lines.splice(1, 1, ...tradePlanLines(alert));
   else lines.push(...tradePlanLines(alert));
   return { ...input, details: lines.join('\n') };
@@ -230,6 +232,8 @@ export async function deliverScannerTelegramAlerts(
   memberHoldingProducer: ScannerMemberHoldingProducer = fanoutMemberHoldingScannerAlert,
 ): Promise<void> {
   await Promise.all(alerts.map(async (alert, index) => {
+    // Start the independently default-off member path without serializing the
+    // existing public-room path behind member DB/quote/Telegram latency.
     const memberEvaluation = runMemberHoldingProducer(alert, memberHoldingProducer);
 
     const base = scannerTelegramInput(alert, resolveRoomChatId);
@@ -240,11 +244,10 @@ export async function deliverScannerTelegramAlerts(
     const input = index < MAX_RICH_ALERTS_PER_BATCH
       ? await richInput(base, alert, context)
       : addTelegramSignalFreshness(base, alert, context);
+
+    let result: TelegramAlertResult;
     try {
-      const result = await sender(input);
-      if (result.ok || result.skipped === 'DUPLICATE') {
-        await markTelegramSignalAnnounced(alert);
-      }
+      result = await sender(input);
     } catch (error) {
       logger.warn(
         {
@@ -253,6 +256,25 @@ export async function deliverScannerTelegramAlerts(
         },
         'scanner Telegram delivery failed open',
       );
+      await memberEvaluation;
+      return;
+    }
+
+    if (result.ok || result.skipped === 'DUPLICATE') {
+      try {
+        await markTelegramSignalAnnounced(alert);
+      } catch (error) {
+        logger.warn(
+          {
+            signalId: alert.signalId,
+            alertType: input.type,
+            errorName: error instanceof Error ? error.name : 'UnknownError',
+          },
+          'scanner Telegram initial alert lacks durable followup checkpoint; failing closed until persistence recovers',
+        );
+        await memberEvaluation;
+        throw error;
+      }
     }
     await memberEvaluation;
   }));
