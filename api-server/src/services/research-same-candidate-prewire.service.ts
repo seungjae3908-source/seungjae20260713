@@ -97,7 +97,7 @@ function resolveAnchor(research: ResearchBundleResolution): { anchor: Readonly<R
     || !sha40(receipt.researchCodeSha)) blockers.push('RESEARCH_RECEIPT_IDENTITY_INVALID');
   if (blockers.length) return { anchor: null, digest: null, blockers: unique(blockers) };
   const anchor = Object.freeze({
-    schemaVersion: 'research-same-candidate-identity-anchor-v1',
+    identityAnchorSchemaVersion: 'research-same-candidate-identity-anchor-v1',
     researchBundleDigest: receipt.bundleDigest,
     resultArtifactDigest: research.resultArtifactDigest,
     strategyIdentityDigest: receipt.strategyIdentityDigest,
