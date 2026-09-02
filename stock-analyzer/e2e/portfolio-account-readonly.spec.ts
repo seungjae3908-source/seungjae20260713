@@ -7,6 +7,7 @@ const ASSET_MODE_KEY = 'knowledge-info-asset-mode-v1';
 
 type Provider = 'toss' | 'upbit' | 'bitget';
 type CoinMarket = 'spot' | 'futures';
+type Asset = 'stock' | 'coin';
 
 function fulfill(route: Route, body: unknown, status = 200) {
   return route.fulfill({
@@ -42,8 +43,8 @@ function snapshot(provider: Provider, overrides: Record<string, unknown> = {}) {
   };
 }
 
-async function installRegular(page: Page, coinMarket: CoinMarket) {
-  await page.addInitScript(({ authStorageKey, assetModeKey, userId, now, market }) => {
+async function installRegular(page: Page, coinMarket: CoinMarket, asset: Asset = 'coin') {
+  await page.addInitScript(({ authStorageKey, assetModeKey, userId, now, market, selectedAsset }) => {
     const encode = (value: Record<string, unknown>) => window.btoa(JSON.stringify(value))
       .replaceAll('+', '-')
       .replaceAll('/', '_')
@@ -67,13 +68,14 @@ async function installRegular(page: Page, coinMarket: CoinMarket) {
         created_at: now,
       },
     }));
-    window.localStorage.setItem(assetModeKey, JSON.stringify({ asset: 'coin', stockMarket: 'KR', coinMarket: market }));
+    window.localStorage.setItem(assetModeKey, JSON.stringify({ asset: selectedAsset, stockMarket: 'KR', coinMarket: market }));
   }, {
     authStorageKey: AUTH_STORAGE_KEY,
     assetModeKey: ASSET_MODE_KEY,
     userId: USER_ID,
     now: NOW,
     market: coinMarket,
+    selectedAsset: asset,
   });
 
   const diagnostics = {
@@ -126,6 +128,9 @@ async function installRegular(page: Page, coinMarket: CoinMarket) {
         updated_at: NOW,
       });
     }
+    if (pathname.endsWith('/rest/v1/portfolio_holdings')) {
+      return fulfill(route, []);
+    }
     if (pathname.endsWith('/auth/v1/user')) {
       return fulfill(route, {
         id: USER_ID,
@@ -151,6 +156,14 @@ function assertNoLegacyOrMutation(diagnostics: Awaited<ReturnType<typeof install
   expect(diagnostics.forbiddenMutations, diagnostics.forbiddenMutations.join('\n')).toEqual([]);
   expect(diagnostics.consoleErrors, diagnostics.consoleErrors.join('\n')).toEqual([]);
   expect(diagnostics.pageErrors, diagnostics.pageErrors.join('\n')).toEqual([]);
+}
+
+function assertSecretsHidden(body: string) {
+  expect(body).not.toContain('clientSecret');
+  expect(body).not.toContain('secretKey');
+  expect(body).not.toContain('passphrase');
+  expect(body).not.toContain('encryptedCredentials');
+  expect(body).not.toContain('masterKey');
 }
 
 test('desktop Portfolio spot uses canonical Toss + Upbit only and preserves stale evidence', async ({ page }) => {
@@ -185,7 +198,7 @@ test('desktop Portfolio spot uses canonical Toss + Upbit only and preserves stal
   });
 
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto('/portfolio');
+  await page.goto('/portfolio?tab=holdings');
 
   await expect(page.getByTestId('portfolio-coin-readonly')).toBeVisible();
   await expect(page.getByTestId('brokerage-account-connections')).toBeVisible();
@@ -201,12 +214,43 @@ test('desktop Portfolio spot uses canonical Toss + Upbit only and preserves stal
   expect(diagnostics.canonical.bitget).toBe(0);
   assertNoLegacyOrMutation(diagnostics);
 
-  const body = await page.locator('body').innerText();
-  expect(body).not.toContain('clientSecret');
-  expect(body).not.toContain('secretKey');
-  expect(body).not.toContain('passphrase');
-  expect(body).not.toContain('encryptedCredentials');
-  expect(body).not.toContain('masterKey');
+  assertSecretsHidden(await page.locator('body').innerText());
+});
+
+test('desktop stock Portfolio exposes canonical Toss read-only without coin provider calls', async ({ page }) => {
+  const diagnostics = await installRegular(page, 'spot', 'stock');
+
+  await page.route('**/api/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === '/api/accounts/read-only/toss') {
+      return fulfill(route, snapshot('toss', {
+        connected: true,
+        status: 'CONNECTED',
+        errorCode: null,
+        accounts: [{ market: 'KR', accountRef: 'TOSS-READONLY', currency: 'KRW', buyingPower: null }],
+        balances: [],
+        positions: [],
+      }));
+    }
+    if (path === '/api/accounts/read-only/upbit') return fulfill(route, snapshot('upbit'));
+    if (path === '/api/accounts/read-only/bitget') return fulfill(route, snapshot('bitget'));
+    return fulfill(route, { ok: true, items: [], rows: [], results: [] });
+  });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/portfolio?tab=holdings');
+
+  await expect(page.getByTestId('brokerage-account-connections')).toBeVisible();
+  await expect(page.getByTestId('connection-toss')).toBeVisible();
+  await expect(page.getByTestId('connection-upbit')).toHaveCount(0);
+  await expect(page.getByTestId('connection-bitget')).toHaveCount(0);
+
+  await expect.poll(() => diagnostics.canonical.toss).toBe(1);
+  expect(diagnostics.canonical.upbit).toBe(0);
+  expect(diagnostics.canonical.bitget).toBe(0);
+  assertNoLegacyOrMutation(diagnostics);
+
+  assertSecretsHidden(await page.locator('body').innerText());
 });
 
 test('mobile Portfolio futures uses one canonical Toss + Bitget snapshot and no legacy futures calls', async ({ page }) => {
@@ -230,7 +274,7 @@ test('mobile Portfolio futures uses one canonical Toss + Bitget snapshot and no 
   });
 
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto('/portfolio');
+  await page.goto('/portfolio?tab=holdings');
 
   await expect(page.getByTestId('portfolio-coin-readonly')).toBeVisible();
   await expect(page.getByTestId('connection-toss')).toBeVisible();
@@ -244,10 +288,5 @@ test('mobile Portfolio futures uses one canonical Toss + Bitget snapshot and no 
   assertNoLegacyOrMutation(diagnostics);
 
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(391);
-  const body = await page.locator('body').innerText();
-  expect(body).not.toContain('clientSecret');
-  expect(body).not.toContain('secretKey');
-  expect(body).not.toContain('passphrase');
-  expect(body).not.toContain('encryptedCredentials');
-  expect(body).not.toContain('masterKey');
+  assertSecretsHidden(await page.locator('body').innerText());
 });
