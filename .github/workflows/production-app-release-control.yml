@@ -1,5 +1,9 @@
 name: Production App Release Control
 
+# PRODUCTION_APP_APPROVAL_DOES_NOT_AUTHORIZE_TELEGRAM_ACTIVATION.
+# /run-production-app authorizes application deployment only. Telegram activation
+# remains exclusive to /run-telegram-production and its protected release gates.
+
 on:
   issue_comment:
     types: [created]
@@ -232,6 +236,8 @@ jobs:
                 `- Production Deploy Run ID: \`${process.env.PRODUCTION_RUN_ID}\``,
                 '- Production environment protection bypassed: `false`',
                 '- Production DB mutation by this bridge: `false`',
+                '- Telegram activation authority granted: `false`',
+                '- Telegram activation policy: `PRESERVE_NEVER_ELEVATE`',
                 '- Trading authority granted: `false`',
                 `- Source command comment ID: \`${process.env.SOURCE_COMMENT_ID}\``,
               ].join('\n'),
