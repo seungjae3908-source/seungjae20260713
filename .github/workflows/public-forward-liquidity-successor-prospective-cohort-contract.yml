@@ -1,0 +1,64 @@
+name: Public Forward Liquidity Successor Prospective Cohort Contract
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/public-forward-liquidity-successor-prospective-cohort-contract.yml'
+      - 'market-intelligence-sidecar/config/public-forward-liquidity-successor-prospective-cohort-v1.json'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-successor-prospective-cohort.mjs'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-calibration.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-successor-prospective-cohort.test.mjs'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-forward-liquidity-successor-prospective-cohort-contract-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact PR head without credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Verify successor contract syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-successor-prospective-cohort.mjs
+          node --check market-intelligence-sidecar/tests/public-forward-liquidity-successor-prospective-cohort.test.mjs
+
+      - name: Run frozen successor prospective contract tests
+        run: node --test market-intelligence-sidecar/tests/public-forward-liquidity-successor-prospective-cohort.test.mjs
+
+      - name: Assert validation-only workflow has no observation authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE='.github/workflows/public-forward-liquidity-successor-prospective-cohort-contract.yml'
+          if grep -Eq '^[[:space:]]*schedule:' "$FILE"; then
+            echo '::error::schedule trigger is forbidden in successor contract validation workflow'
+            exit 1
+          fi
+          if grep -Eq '^[[:space:]]*workflow_dispatch:' "$FILE"; then
+            echo '::error::workflow_dispatch is forbidden in successor contract validation workflow'
+            exit 1
+          fi
+          if grep -Eq '^[[:space:]]*cron:' "$FILE"; then
+            echo '::error::cron activation is forbidden in successor contract validation workflow'
+            exit 1
+          fi
+          grep -Fq 'scheduleActivationApproved": false' market-intelligence-sidecar/config/public-forward-liquidity-successor-prospective-cohort-v1.json
+          grep -Fq 'prospectiveObservationWorkflowAuthorityApproved": false' market-intelligence-sidecar/config/public-forward-liquidity-successor-prospective-cohort-v1.json
+          grep -Fq 'actualMergeApproved": false' market-intelligence-sidecar/config/public-forward-liquidity-successor-prospective-cohort-v1.json
