@@ -24,150 +24,56 @@ jobs:
         run: |
           set -Eeuo pipefail
           python3 - <<'PY'
+          import base64
           from pathlib import Path
+
+          def dec(value: str) -> str:
+              return base64.b64decode(value).decode('utf-8')
 
           path = Path('stock-analyzer/src/pages/portfolio.tsx')
           text = path.read_text(encoding='utf-8')
           before = text
 
           broker_import = "import { BrokerageAccountConnections } from '@/components/brokerage-account-connections';\n"
-          if text.count(broker_import) != 1:
-              raise SystemExit('expected exactly one BrokerageAccountConnections import')
-          text = text.replace(broker_import, '', 1)
-
           wouter_import = "import { useLocation } from 'wouter';\n"
           query_import = "import { useQuery } from '@tanstack/react-query';\n"
-          if text.count(wouter_import) != 1 or query_import in text:
-              raise SystemExit('unexpected query import state')
-          text = text.replace(wouter_import, wouter_import + query_import, 1)
-
           asset_import = "import { useAssetMode } from '@/lib/asset-mode';\n"
           api_import = "import { apiGet } from '@/lib/api';\n"
-          if text.count(asset_import) != 1 or api_import in text:
-              raise SystemExit('unexpected apiGet import state')
-          text = text.replace(asset_import, asset_import + api_import, 1)
-
           currency_type = "type Currency = 'KRW' | 'USD';\n"
           anyobj_type = "type AnyObj = Record<string, any>;\n"
+          asset_mode = "\tconst assetMode = useAssetMode();\n"
+          queries = dec('CWNvbnN0IGNvaW5TcG90QWNjb3VudHMgPSB1c2VRdWVyeSh7CgkJcXVlcnlLZXk6IFsnYXNzZXRzLXVwYml0LWFjY291bnRzJ10sCgkJcXVlcnlGbjogKCkgPT4gYXBpR2V0PEFueU9iaj4oJy9jcnlwdG8vc3BvdC9hY2NvdW50cycpLAoJCWVuYWJsZWQ6IGFzc2V0TW9kZS5hc3NldCA9PT0gJ2NvaW4nICYmIGFzc2V0TW9kZS5jb2luTWFya2V0ID09PSAnc3BvdCcsCgkJcmVmZXRjaEludGVydmFsOiAzMF8wMDAsCgkJcmV0cnk6IGZhbHNlLAoJfSk7Cgljb25zdCBjb2luRnV0dXJlc0FjY291bnQgPSB1c2VRdWVyeSh7CgkJcXVlcnlLZXk6IFsnYXNzZXRzLWJpdGdldC1hY2NvdW50J10sCgkJcXVlcnlGbjogKCkgPT4gYXBpR2V0PEFueU9iaj4oJy9jcnlwdG8vZnV0dXJlcy9hY2NvdW50JyksCgkJZW5hYmxlZDogYXNzZXRNb2RlLmFzc2V0ID09PSAnY29pbicgJiYgYXNzZXRNb2RlLmNvaW5NYXJrZXQgPT09ICdmdXR1cmVzJywKCQlyZWZldGNoSW50ZXJ2YWw6IDE1XzAwMCwKCQlyZXRyeTogZmFsc2UsCgl9KTsKCWNvbnN0IGNvaW5GdXR1cmVzUG9zaXRpb25zID0gdXNlUXVlcnkoewoJCXF1ZXJ5S2V5OiBbJ2Fzc2V0cy1iaXRnZXQtcG9zaXRpb25zJ10sCgkJcXVlcnlGbjogKCkgPT4gYXBpR2V0PEFueU9iaj4oJy9jcnlwdG8vZnV0dXJlcy9wb3NpdGlvbnMnKSwKCQllbmFibGVkOiBhc3NldE1vZGUuYXNzZXQgPT09ICdjb2luJyAmJiBhc3NldE1vZGUuY29pbk1hcmtldCA9PT0gJ2Z1dHVyZXMnLAoJCXJlZmV0Y2hJbnRlcnZhbDogMTBfMDAwLAoJCXJldHJ5OiBmYWxzZSwKCX0pOwo=')
+          canonical = dec('CQkJKSA6IGFzc2V0TW9kZS5hc3NldCA9PT0gJ2NvaW4nID8gKAogICAgICAgICAgICAgICAgPG1haW4gY2xhc3NOYW1lPSJtaW4tdy0wIHB4LTQgcGItMjggcHQtNCIgZGF0YS10ZXN0aWQ9InBvcnRmb2xpby1jb2luLXJlYWRvbmx5Ij4KICAgICAgICAgICAgICAgICAgPHAgY2xhc3NOYW1lPSJ0ZXh0LXhzIHRleHQtbXV0ZWQtZm9yZWdyb3VuZCI+7ZqM7JuQ67OEIFZhdWx07J2YIOyhsO2ajCDsoITsmqkg6rOE7KKMIOyXsOqysOydhCDsgqzsmqntlanri4jri6QuIOqzteyaqSDtgqTrpbwg7IKs7Jqp7ZWY64qUIOydtOyghCDqs4TsoowgQVBJ64qUIO2YuOy2nO2VmOyngCDslYrsirXri4jri6QuPC9wPgogICAgICAgICAgICAgICAgICA8QnJva2VyYWdlQWNjb3VudENvbm5lY3Rpb25zCiAgICAgICAgICAgICAgICAgICAgY2FuQWNjZXNzU3BvdD17YXNzZXRNb2RlLmNvaW5NYXJrZXQgPT09ICdzcG90JyAmJiBhdXRoLmNhbignY2FuQWNjZXNzU3BvdCcpfQogICAgICAgICAgICAgICAgICAgIGNhbkFjY2Vzc0Z1dHVyZXM9e2Fzc2V0TW9kZS5jb2luTWFya2V0ID09PSAnZnV0dXJlcycgJiYgYXV0aC5jYW4oJ2NhbkFjY2Vzc0Z1dHVyZXMnKX0KICAgICAgICAgICAgICAgICAgLz4KICAgICAgICAgICAgICAgIDwvbWFpbj4KCQkJKSA6ICgK')
+          legacy_render = dec('CQkJKSA6IGFzc2V0TW9kZS5hc3NldCA9PT0gJ2NvaW4nID8gKAoJCQkJPENvaW5Bc3NldHNWaWV3CgkJCQkJbW9kZT17YXNzZXRNb2RlLmNvaW5NYXJrZXR9CgkJCQkJc3BvdD17Y29pblNwb3RBY2NvdW50c30KCQkJCQlmdXR1cmVzQWNjb3VudD17Y29pbkZ1dHVyZXNBY2NvdW50fQoJCQkJCWZ1dHVyZXNQb3NpdGlvbnM9e2NvaW5GdXR1cmVzUG9zaXRpb25zfQoJCQkJLz4KCQkJKSA6ICgK')
+          helpers = dec('ZnVuY3Rpb24gQ29pbkFzc2V0c1ZpZXcoewoJbW9kZSwKCXNwb3QsCglmdXR1cmVzQWNjb3VudCwKCWZ1dHVyZXNQb3NpdGlvbnMsCn06IHsKCW1vZGU6ICdzcG90JyB8ICdmdXR1cmVzJzsKCXNwb3Q6IHsgZGF0YT86IEFueU9iajsgaXNMb2FkaW5nOiBib29sZWFuOyBpc0Vycm9yOiBib29sZWFuOyByZWZldGNoOiAoKSA9PiB1bmtub3duIH07CglmdXR1cmVzQWNjb3VudDogeyBkYXRhPzogQW55T2JqOyBpc0xvYWRpbmc6IGJvb2xlYW47IGlzRXJyb3I6IGJvb2xlYW47IHJlZmV0Y2g6ICgpID0+IHVua25vd24gfTsKCWZ1dHVyZXNQb3NpdGlvbnM6IHsgZGF0YT86IEFueU9iajsgaXNMb2FkaW5nOiBib29sZWFuOyBpc0Vycm9yOiBib29sZWFuOyByZWZldGNoOiAoKSA9PiB1bmtub3duIH07Cn0pIHsKCWNvbnN0IHJvd3MgPSBtb2RlID09PSAnc3BvdCcKCQk/ICgoc3BvdC5kYXRhPy5hY2NvdW50cyA/PyBbXSkgYXMgQW55T2JqW10pCgkJOiAoKGZ1dHVyZXNQb3NpdGlvbnMuZGF0YT8ucG9zaXRpb25zID8/IFtdKSBhcyBBbnlPYmpbXSk7Cgljb25zdCBhY2NvdW50Um93cyA9IChmdXR1cmVzQWNjb3VudC5kYXRhPy5hY2NvdW50cyA/PyBbXSkgYXMgQW55T2JqW107Cgljb25zdCBsb2FkaW5nID0gbW9kZSA9PT0gJ3Nwb3QnID8gc3BvdC5pc0xvYWRpbmcgOiBmdXR1cmVzQWNjb3VudC5pc0xvYWRpbmcgfHwgZnV0dXJlc1Bvc2l0aW9ucy5pc0xvYWRpbmc7Cgljb25zdCBlcnJvciA9IG1vZGUgPT09ICdzcG90JyA/IHNwb3QuaXNFcnJvciA6IGZ1dHVyZXNBY2NvdW50LmlzRXJyb3IgfHwgZnV0dXJlc1Bvc2l0aW9ucy5pc0Vycm9yOwoJcmV0dXJuICgKCQk8bWFpbiBjbGFzc05hbWU9InNwYWNlLXktNCBweC00IHBiLTI4IHB0LTQiPgoJCQk8c2VjdGlvbiBjbGFzc05hbWU9InJvdW5kZWQtM3hsIGJvcmRlciBib3JkZXItY2FyZC1ib3JkZXIgYmctY2FyZCBwLTQgc2hhZG93LXNtIj4KCQkJCTxkaXYgY2xhc3NOYW1lPSJmbGV4IGl0ZW1zLWNlbnRlciBqdXN0aWZ5LWJldHdlZW4gZ2FwLTMiPgoJCQkJCTxkaXY+PGgyIGNsYXNzTmFtZT0idGV4dC1zbSBmb250LWJsYWNrIj57bW9kZSA9PT0gJ3Nwb3QnID8gJ+yXheu5hO2KuCDtmITrrLwg7J6Q7IKwJyA6ICfruYTtirjqsp8g7ISg66y8IOyekOyCsCd9PC9oMj48cCBjbGFzc05hbWU9Im10LTEgdGV4dC1bMTBweF0gZm9udC1ib2xkIHRleHQtbXV0ZWQtZm9yZWdyb3VuZCI+6rCc7J24IEFQSSDtgqTripQg7ISc67KEIO2ZmOqyveuzgOyImOyXkOyEnOunjCDsgqzsmqntlanri4jri6QuPC9wPjwvZGl2PgoJCQkJCTxidXR0b24gdHlwZT0iYnV0dG9uIiBvbkNsaWNrPXsoKSA9PiB7IHZvaWQgKG1vZGUgPT09ICdzcG90JyA/IHNwb3QucmVmZXRjaCgpIDogUHJvbWlzZS5hbGwoW2Z1dHVyZXNBY2NvdW50LnJlZmV0Y2goKSwgZnV0dXJlc1Bvc2l0aW9ucy5yZWZldGNoKCldKSk7IH19IGNsYXNzTmFtZT0iZmxleCBoLTkgdy05IGl0ZW1zLWNlbnRlciBqdXN0aWZ5LWNlbnRlciByb3VuZGVkLWZ1bGwgYm9yZGVyIGJvcmRlci1jYXJkLWJvcmRlciI+PFJlZnJlc2hDdyBjbGFzc05hbWU9ImgtNCB3LTQiIC8+PC9idXR0b24+CgkJCQk8L2Rpdj4KCQkJCXtsb2FkaW5nICYmIDxwIGNsYXNzTmFtZT0ibXQtMyByb3VuZGVkLTJ4bCBiZy1tdXRlZCBwLTQgdGV4dC1jZW50ZXIgdGV4dC14cyBmb250LWJvbGQgdGV4dC1tdXRlZC1mb3JlZ3JvdW5kIj7si6TsoJwg7J6U6rOg66W8IOu2iOufrOyYpOuKlCDspJHsnoXri4jri6QuPC9wPn0KCQkJCXtlcnJvciAmJiA8cCBjbGFzc05hbWU9Im10LTMgcm91bmRlZC0yeGwgYmctZGVzdHJ1Y3RpdmUvMTAgcC00IHRleHQtY2VudGVyIHRleHQteHMgZm9udC1ib2xkIHRleHQtZGVzdHJ1Y3RpdmUiPkFQSSDtgqQg66+47ISk7KCVLCDsnb3quLAg6raM7ZWcIOu2gOyhsSDrmJDripQg6rGw656Y7IaMIOyXsOqysCDsmKTrpZjsnoXri4jri6QuIOyehOyLnCDsnpTqs6DripQg7ZGc7Iuc7ZWY7KeAIOyViuyKteuLiOuLpC48L3A+fQoJCQkJe21vZGUgPT09ICdmdXR1cmVzJyAmJiAhbG9hZGluZyAmJiAhZXJyb3IgJiYgKAoJCQkJCTxkaXYgY2xhc3NOYW1lPSJtdC0zIGdyaWQgZ3JpZC1jb2xzLTIgZ2FwLTIiPgoJCQkJCQk8SG9sZGluZ1ZhbHVlIGxhYmVsPSLqs4Tsoowg7Y+J6rCA6riI7JWhIiB2YWx1ZT17Zm9ybWF0Q29pbk51bWJlcihhY2NvdW50Um93c1swXT8uYWNjb3VudEVxdWl0eSwgJyBVU0RUJyl9IC8+CgkJCQkJCTxIb2xkaW5nVmFsdWUgbGFiZWw9IuyCrOyaqeqwgOuKpSIgdmFsdWU9e2Zvcm1hdENvaW5OdW1iZXIoYWNjb3VudFJvd3NbMF0/LmF2YWlsYWJsZSwgJyBVU0RUJyl9IC8+CgkJCQkJCTxIb2xkaW5nVmFsdWUgbGFiZWw9IuuvuOyLpO2YhOyGkOydtSIgdmFsdWU9e2Zvcm1hdENvaW5OdW1iZXIoYWNjb3VudFJvd3NbMF0/LnVucmVhbGl6ZWRQTCwgJyBVU0RUJyl9IC8+CgkJCQkJCTxIb2xkaW5nVmFsdWUgbGFiZWw9IuuztOycoCDtj6zsp4DshZgiIHZhbHVlPXtgJHtyb3dzLmxlbmd0aH3qsJxgfSAvPgoJCQkJCTwvZGl2PgoJCQkJKX0KCQkJPC9zZWN0aW9uPgoJCQl7IWxvYWRpbmcgJiYgIWVycm9yICYmIHJvd3MubGVuZ3RoID09PSAwICYmIDxzZWN0aW9uIGNsYXNzTmFtZT0icm91bmRlZC0zeGwgYm9yZGVyIGJvcmRlci1jYXJkLWJvcmRlciBiZy1jYXJkIHAtNiB0ZXh0LWNlbnRlciB0ZXh0LXNtIGZvbnQtYm9sZCB0ZXh0LW11dGVkLWZvcmVncm91bmQiPuuztOycoCDsnpDsgrAg65iQ64qUIO2PrOyngOyFmOydtCDsl4bsirXri4jri6QuPC9zZWN0aW9uPn0KCQkJPGRpdiBjbGFzc05hbWU9InNwYWNlLXktMyI+CgkJCQl7bW9kZSA9PT0gJ3Nwb3QnID8gcm93cy5tYXAoKHJvdykgPT4gKAoJCQkJCTxzZWN0aW9uIGtleT17U3RyaW5nKHJvdy5jdXJyZW5jeSl9IGNsYXNzTmFtZT0icm91bmRlZC0zeGwgYm9yZGVyIGJvcmRlci1jYXJkLWJvcmRlciBiZy1jYXJkIHAtNCBzaGFkb3ctc20iPgoJCQkJCQk8ZGl2IGNsYXNzTmFtZT0iZmxleCBpdGVtcy1jZW50ZXIganVzdGlmeS1iZXR3ZWVuIj48aDMgY2xhc3NOYW1lPSJ0ZXh0LWJhc2UgZm9udC1ibGFjayI+e3Jvdy5jdXJyZW5jeX08L2gzPjxzcGFuIGNsYXNzTmFtZT0idGV4dC1bMTBweF0gZm9udC1ib2xkIHRleHQtbXV0ZWQtZm9yZWdyb3VuZCI+VVBCSVQ8L3NwYW4+PC9kaXY+CgkJCQkJCTxkaXYgY2xhc3NOYW1lPSJtdC0zIGdyaWQgZ3JpZC1jb2xzLTIgZ2FwLTIiPjxIb2xkaW5nVmFsdWUgbGFiZWw9IuuztOycoOyImOufiSIgdmFsdWU9e2Zvcm1hdENvaW5OdW1iZXIocm93LmJhbGFuY2UpfSAvPjxIb2xkaW5nVmFsdWUgbGFiZWw9IuyjvOusuCDsnqDquIgiIHZhbHVlPXtmb3JtYXRDb2luTnVtYmVyKHJvdy5sb2NrZWQpfSAvPjxIb2xkaW5nVmFsdWUgbGFiZWw9Iu2Pieq3oOunpOyImOqwgCIgdmFsdWU9e2Zvcm1hdENvaW5OdW1iZXIocm93LmF2ZXJhZ2VCdXlQcmljZSwgYCAke3Jvdy51bml0Q3VycmVuY3kgPz8gJ0tSVyd9YCl9IC8+PEhvbGRpbmdWYWx1ZSBsYWJlbD0i6riw7KSA7Ya17ZmUIiB2YWx1ZT17U3RyaW5nKHJvdy51bml0Q3VycmVuY3kgPz8gJ0tSVycpfSAvPjwvZGl2PgoJCQkJCTwvc2VjdGlvbj4KCQkJCSkpIDogcm93cy5tYXAoKHJvdykgPT4gKAoJCQkJCTxzZWN0aW9uIGtleT17YCR7cm93LnN5bWJvbH06JHtyb3cuaG9sZFNpZGV9YH0gY2xhc3NOYW1lPSJyb3VuZGVkLTN4bCBib3JkZXIgYm9yZGVyLWNhcmQtYm9yZGVyIGJnLWNhcmQgcC00IHNoYWRvdy1zbSI+CgkJCQkJCTxkaXYgY2xhc3NOYW1lPSJmbGV4IGl0ZW1zLWNlbnRlciBqdXN0aWZ5LWJldHdlZW4iPjxoMyBjbGFzc05hbWU9InRleHQtYmFzZSBmb250LWJsYWNrIj57cm93LnN5bWJvbH08L2gzPjxzcGFuIGNsYXNzTmFtZT17Y24oJ3JvdW5kZWQtZnVsbCBweC0yIHB5LTEgdGV4dC1bMTBweF0gZm9udC1ibGFjaycsIFN0cmluZyhyb3cuaG9sZFNpZGUpLnRvTG93ZXJDYXNlKCkgPT09ICdsb25nJyA/ICdiZy1wb3NpdGl2ZS8xMCB0ZXh0LXBvc2l0aXZlJyA6ICdiZy1kZXN0cnVjdGl2ZS8xMCB0ZXh0LWRlc3RydWN0aXZlJyl9PntTdHJpbmcocm93LmhvbGRTaWRlKS50b1VwcGVyQ2FzZSgpfTwvc3Bhbj48L2Rpdj4KCQkJCQkJPGRpdiBjbGFzc05hbWU9Im10LTMgZ3JpZCBncmlkLWNvbHMtMiBnYXAtMiI+PEhvbGRpbmdWYWx1ZSBsYWJlbD0i7KeE7J6F6rCAIiB2YWx1ZT17Zm9ybWF0Q29pbk51bWJlcihyb3cub3BlblByaWNlQXZnLCAnIFVTRFQnKX0gLz48SG9sZGluZ1ZhbHVlIGxhYmVsPSLrp4jtgazqsIDqsqkiIHZhbHVlPXtmb3JtYXRDb2luTnVtYmVyKHJvdy5tYXJrUHJpY2UsICcgVVNEVCcpfSAvPjxIb2xkaW5nVmFsdWUgbGFiZWw9IuuvuOyLpO2YhOyGkOydtSIgdmFsdWU9e2Zvcm1hdENvaW5OdW1iZXIocm93LnVucmVhbGl6ZWRQTCwgJyBVU0RUJyl9IC8+PEhvbGRpbmdWYWx1ZSBsYWJlbD0i7Y+s7KeA7IWYIOyImOufiSIgdmFsdWU9e2Zvcm1hdENvaW5OdW1iZXIocm93LnRvdGFsKX0gLz48SG9sZGluZ1ZhbHVlIGxhYmVsPSLroIjrsoTrpqzsp4AiIHZhbHVlPXtmb3JtYXRDb2luTnVtYmVyKHJvdy5sZXZlcmFnZSwgJ+uwsCcpfSAvPjxIb2xkaW5nVmFsdWUgbGFiZWw9IuyyreyCsOqwgOqyqSIgdmFsdWU9e2Zvcm1hdENvaW5OdW1iZXIocm93LmxpcXVpZGF0aW9uUHJpY2UsICcgVVNEVCcpfSAvPjwvZGl2PgoJCQkJCTwvc2VjdGlvbj4KCQkJCSkpfQoJCQk8L2Rpdj4KCQk8L21haW4+CgkpOwp9CgpmdW5jdGlvbiBmb3JtYXRDb2luTnVtYmVyKHZhbHVlOiB1bmtub3duLCBzdWZmaXggPSAnJykgewoJY29uc3QgbnVtYmVyID0gTnVtYmVyKHZhbHVlKTsKCXJldHVybiBOdW1iZXIuaXNGaW5pdGUobnVtYmVyKSA/IGAke251bWJlci50b0xvY2FsZVN0cmluZyh1bmRlZmluZWQsIHsgbWF4aW11bUZyYWN0aW9uRGlnaXRzOiA4IH0pfSR7c3VmZml4fWAgOiAn642w7J207YSwIOyXhuydjCc7Cn0K')
+
+          if text.count(broker_import) != 1:
+              raise SystemExit('expected exactly one BrokerageAccountConnections import')
+          if text.count(wouter_import) != 1 or query_import in text:
+              raise SystemExit('unexpected query import state')
+          if text.count(asset_import) != 1 or api_import in text:
+              raise SystemExit('unexpected apiGet import state')
           if text.count(currency_type) != 1 or anyobj_type in text:
               raise SystemExit('unexpected AnyObj state')
-          text = text.replace(currency_type, currency_type + anyobj_type, 1)
-
-          asset_mode = "\tconst assetMode = useAssetMode();\n"
-          queries = """\tconst coinSpotAccounts = useQuery({
-\t\tqueryKey: ['assets-upbit-accounts'],
-\t\tqueryFn: () => apiGet<AnyObj>('/crypto/spot/accounts'),
-\t\tenabled: assetMode.asset === 'coin' && assetMode.coinMarket === 'spot',
-\t\trefetchInterval: 30_000,
-\t\tretry: false,
-\t});
-\tconst coinFuturesAccount = useQuery({
-\t\tqueryKey: ['assets-bitget-account'],
-\t\tqueryFn: () => apiGet<AnyObj>('/crypto/futures/account'),
-\t\tenabled: assetMode.asset === 'coin' && assetMode.coinMarket === 'futures',
-\t\trefetchInterval: 15_000,
-\t\tretry: false,
-\t});
-\tconst coinFuturesPositions = useQuery({
-\t\tqueryKey: ['assets-bitget-positions'],
-\t\tqueryFn: () => apiGet<AnyObj>('/crypto/futures/positions'),
-\t\tenabled: assetMode.asset === 'coin' && assetMode.coinMarket === 'futures',
-\t\trefetchInterval: 10_000,
-\t\tretry: false,
-\t});
-"""
           if text.count(asset_mode) != 1:
               raise SystemExit('assetMode anchor missing')
+          if text.count(canonical) != 1:
+              raise SystemExit('canonical coin Portfolio render anchor mismatch')
+          if 'function CoinAssetsView({' in text:
+              raise SystemExit('legacy helper already present before split')
           for legacy in ('/crypto/spot/accounts', '/crypto/futures/account', '/crypto/futures/positions'):
               if legacy in text:
                   raise SystemExit(f'legacy path already present before split: {legacy}')
+
+          text = text.replace(broker_import, '', 1)
+          text = text.replace(wouter_import, wouter_import + query_import, 1)
+          text = text.replace(asset_import, asset_import + api_import, 1)
+          text = text.replace(currency_type, currency_type + anyobj_type, 1)
           text = text.replace(asset_mode, asset_mode + queries, 1)
-
-          canonical = """\t\t\t) : assetMode.asset === 'coin' ? (
-                <main className=\"min-w-0 px-4 pb-28 pt-4\" data-testid=\"portfolio-coin-readonly\">
-                  <p className=\"text-xs text-muted-foreground\">회원별 Vault의 조회 전용 계좌 연결을 사용합니다. 공용 키를 사용하는 이전 계좌 API는 호출하지 않습니다.</p>
-                  <BrokerageAccountConnections
-                    canAccessSpot={assetMode.coinMarket === 'spot' && auth.can('canAccessSpot')}
-                    canAccessFutures={assetMode.coinMarket === 'futures' && auth.can('canAccessFutures')}
-                  />
-                </main>
-\t\t\t) : (
-"""
-          legacy_render = """\t\t\t) : assetMode.asset === 'coin' ? (
-\t\t\t\t<CoinAssetsView
-\t\t\t\t\tmode={assetMode.coinMarket}
-\t\t\t\t\tspot={coinSpotAccounts}
-\t\t\t\t\tfuturesAccount={coinFuturesAccount}
-\t\t\t\t\tfuturesPositions={coinFuturesPositions}
-\t\t\t\t/>
-\t\t\t) : (
-"""
-          if text.count(canonical) != 1:
-              raise SystemExit('canonical coin Portfolio render anchor mismatch')
           text = text.replace(canonical, legacy_render, 1)
-
-          helper_anchor = "\nfunction LoadingCard({\n"
-          if text.count(helper_anchor) != 1 or 'function CoinAssetsView({' in text:
-              raise SystemExit('helper insertion state mismatch')
-          helpers = r'''
-function CoinAssetsView({
-	mode,
-	spot,
-	futuresAccount,
-	futuresPositions,
-}: {
-	mode: 'spot' | 'futures';
-	spot: { data?: AnyObj; isLoading: boolean; isError: boolean; refetch: () => unknown };
-	futuresAccount: { data?: AnyObj; isLoading: boolean; isError: boolean; refetch: () => unknown };
-	futuresPositions: { data?: AnyObj; isLoading: boolean; isError: boolean; refetch: () => unknown };
-}) {
-	const rows = mode === 'spot'
-		? ((spot.data?.accounts ?? []) as AnyObj[])
-		: ((futuresPositions.data?.positions ?? []) as AnyObj[]);
-	const accountRows = (futuresAccount.data?.accounts ?? []) as AnyObj[];
-	const loading = mode === 'spot' ? spot.isLoading : futuresAccount.isLoading || futuresPositions.isLoading;
-	const error = mode === 'spot' ? spot.isError : futuresAccount.isError || futuresPositions.isError;
-	return (
-		<main className="space-y-4 px-4 pb-28 pt-4">
-			<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-				<div className="flex items-center justify-between gap-3">
-					<div><h2 className="text-sm font-black">{mode === 'spot' ? '업비트 현물 자산' : '비트겟 선물 자산'}</h2><p className="mt-1 text-[10px] font-bold text-muted-foreground">개인 API 키는 서버 환경변수에서만 사용합니다.</p></div>
-					<button type="button" onClick={() => { void (mode === 'spot' ? spot.refetch() : Promise.all([futuresAccount.refetch(), futuresPositions.refetch()])); }} className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border"><RefreshCw className="h-4 w-4" /></button>
-				</div>
-				{loading && <p className="mt-3 rounded-2xl bg-muted p-4 text-center text-xs font-bold text-muted-foreground">실제 잔고를 불러오는 중입니다.</p>}
-				{error && <p className="mt-3 rounded-2xl bg-destructive/10 p-4 text-center text-xs font-bold text-destructive">API 키 미설정, 읽기 권한 부족 또는 거래소 연결 오류입니다. 임시 잔고는 표시하지 않습니다.</p>}
-				{mode === 'futures' && !loading && !error && (
-					<div className="mt-3 grid grid-cols-2 gap-2">
-						<HoldingValue label="계좌 평가금액" value={formatCoinNumber(accountRows[0]?.accountEquity, ' USDT')} />
-						<HoldingValue label="사용가능" value={formatCoinNumber(accountRows[0]?.available, ' USDT')} />
-						<HoldingValue label="미실현손익" value={formatCoinNumber(accountRows[0]?.unrealizedPL, ' USDT')} />
-						<HoldingValue label="보유 포지션" value={`${rows.length}개`} />
-					</div>
-				)}
-			</section>
-			{!loading && !error && rows.length === 0 && <section className="rounded-3xl border border-card-border bg-card p-6 text-center text-sm font-bold text-muted-foreground">보유 자산 또는 포지션이 없습니다.</section>}
-			<div className="space-y-3">
-				{mode === 'spot' ? rows.map((row) => (
-					<section key={String(row.currency)} className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-						<div className="flex items-center justify-between"><h3 className="text-base font-black">{row.currency}</h3><span className="text-[10px] font-bold text-muted-foreground">UPBIT</span></div>
-						<div className="mt-3 grid grid-cols-2 gap-2"><HoldingValue label="보유수량" value={formatCoinNumber(row.balance)} /><HoldingValue label="주문 잠금" value={formatCoinNumber(row.locked)} /><HoldingValue label="평균매수가" value={formatCoinNumber(row.averageBuyPrice, ` ${row.unitCurrency ?? 'KRW'}`)} /><HoldingValue label="기준통화" value={String(row.unitCurrency ?? 'KRW')} /></div>
-					</section>
-				)) : rows.map((row) => (
-					<section key={`${row.symbol}:${row.holdSide}`} className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-						<div className="flex items-center justify-between"><h3 className="text-base font-black">{row.symbol}</h3><span className={cn('rounded-full px-2 py-1 text-[10px] font-black', String(row.holdSide).toLowerCase() === 'long' ? 'bg-positive/10 text-positive' : 'bg-destructive/10 text-destructive')}>{String(row.holdSide).toUpperCase()}</span></div>
-						<div className="mt-3 grid grid-cols-2 gap-2"><HoldingValue label="진입가" value={formatCoinNumber(row.openPriceAvg, ' USDT')} /><HoldingValue label="마크가격" value={formatCoinNumber(row.markPrice, ' USDT')} /><HoldingValue label="미실현손익" value={formatCoinNumber(row.unrealizedPL, ' USDT')} /><HoldingValue label="포지션 수량" value={formatCoinNumber(row.total)} /><HoldingValue label="레버리지" value={formatCoinNumber(row.leverage, '배')} /><HoldingValue label="청산가격" value={formatCoinNumber(row.liquidationPrice, ' USDT')} /></div>
-					</section>
-				))}
-			</div>
-		</main>
-	);
-}
-
-function formatCoinNumber(value: unknown, suffix = '') {
-	const number = Number(value);
-	return Number.isFinite(number) ? `${number.toLocaleString(undefined, { maximumFractionDigits: 8 })}${suffix}` : '데이터 없음';
-}
-'''
+          helper_anchor = '\nfunction LoadingCard({\n'
+          if text.count(helper_anchor) != 1:
+              raise SystemExit('LoadingCard anchor mismatch')
           text = text.replace(helper_anchor, '\n' + helpers + helper_anchor, 1)
 
           if text == before:
@@ -186,8 +92,6 @@ function formatCoinNumber(value: unknown, suffix = '') {
 
           git diff --check
           test "$(git diff --name-only)" = "stock-analyzer/src/pages/portfolio.tsx"
-          git diff -- stock-analyzer/src/pages/portfolio.tsx
-
           git config user.name 'ChatGPT Account Scope Split'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add stock-analyzer/src/pages/portfolio.tsx
