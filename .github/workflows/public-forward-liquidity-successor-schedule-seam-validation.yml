@@ -3,16 +3,20 @@ name: Public Forward Liquidity Successor Schedule Seam Validation
 on:
   pull_request:
     paths:
+      - '.github/workflows/public-forward-liquidity-successor-scheduled-capture.yml'
+      - '.github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml'
       - 'market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-seam-v1.mjs'
       - 'market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs'
       - 'market-intelligence-sidecar/src/public-forward-liquidity-successor-prospective-cohort.mjs'
       - 'market-intelligence-sidecar/src/public-forward-liquidity-successor-oos-outcome-horizon.mjs'
       - 'market-intelligence-sidecar/config/public-forward-liquidity-successor-prospective-cohort-v2.json'
       - 'market-intelligence-sidecar/config/public-forward-liquidity-successor-oos-outcome-horizon-v2.json'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-reliability-v3.mjs'
+      - 'market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-v3.json'
       - 'market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-seam-v1.test.mjs'
       - 'market-intelligence-sidecar/tests/public-forward-liquidity-successor-prospective-cohort.test.mjs'
       - 'market-intelligence-sidecar/tests/public-forward-liquidity-successor-oos-outcome-horizon.test.mjs'
-      - '.github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-reliability-v3.test.mjs'
 
 permissions:
   contents: read
@@ -48,28 +52,30 @@ jobs:
             exit 1
           fi
           if grep -Eq '^[[:space:]]*-[[:space:]]*cron:' "$workflow"; then
-            echo 'Forbidden cron entry found' >&2
+            echo 'Forbidden cron entry found in validation workflow' >&2
             exit 1
           fi
 
-      - name: Syntax check Successor seam and frozen bindings
+      - name: Syntax check V2 bindings and V3 reliability contract
         run: |
           node --check market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-seam-v1.mjs
           node --check market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs
           node --check market-intelligence-sidecar/src/public-forward-liquidity-successor-prospective-cohort.mjs
           node --check market-intelligence-sidecar/src/public-forward-liquidity-successor-oos-outcome-horizon.mjs
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-reliability-v3.mjs
 
-      - name: Run focused fail-closed contract tests
+      - name: Run V2 preservation and V3 fail-closed contract tests
         run: >-
           node --test
           market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-seam-v1.test.mjs
           market-intelligence-sidecar/tests/public-forward-liquidity-successor-prospective-cohort.test.mjs
           market-intelligence-sidecar/tests/public-forward-liquidity-successor-oos-outcome-horizon.test.mjs
+          market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-reliability-v3.test.mjs
 
       - name: Run runner self-check without schedule or network authority
         run: node market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs self-check
 
-      - name: Verify bounded capacity implementation scope and no activation authority
+      - name: Verify exact V3 implementation scope and no activation authority
         shell: bash
         run: |
           set -euo pipefail
@@ -77,21 +83,33 @@ jobs:
           head='${{ github.event.pull_request.head.sha }}'
           git diff --check "$base" "$head"
           cat > /tmp/allowed-files <<'EOF'
-          .github/workflows/public-forward-liquidity-successor-oos-outcome-horizon-contract.yml
-          .github/workflows/public-forward-liquidity-successor-prospective-cohort-contract.yml
           .github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml
-          market-intelligence-sidecar/config/public-forward-liquidity-successor-oos-outcome-horizon-v2.json
-          market-intelligence-sidecar/config/public-forward-liquidity-successor-prospective-cohort-v2.json
-          market-intelligence-sidecar/src/public-forward-liquidity-successor-oos-outcome-horizon.mjs
-          market-intelligence-sidecar/src/public-forward-liquidity-successor-prospective-cohort.mjs
-          market-intelligence-sidecar/tests/public-forward-liquidity-successor-oos-outcome-horizon.test.mjs
-          market-intelligence-sidecar/tests/public-forward-liquidity-successor-prospective-cohort.test.mjs
-          market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-seam-v1.test.mjs
+          .github/workflows/public-forward-liquidity-successor-scheduled-capture.yml
+          market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-v3.json
+          market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs
+          market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-reliability-v3.mjs
+          market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-seam-v1.mjs
+          market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-reliability-v3.test.mjs
           EOF
           unexpected="$(git diff --name-only "$base" "$head" | grep -vxFf /tmp/allowed-files || true)"
           if [[ -n "$unexpected" ]]; then
-            echo "Unexpected file(s) outside approved capacity implementation scope:" >&2
+            echo "Unexpected file(s) outside approved V3 schedule-reliability implementation scope:" >&2
             printf '%s\n' "$unexpected" >&2
             exit 1
           fi
-          ! git diff --name-only "$base" "$head" | grep -Fqx '.github/workflows/public-forward-liquidity-successor-scheduled-capture.yml'
+          test ! -f market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json
+          test "$(git diff --name-only "$base" "$head" | wc -l | tr -d ' ')" -eq 7
+
+      - name: Verify scheduled workflow is V3 frozen but Draft PR cannot activate it
+        shell: bash
+        run: |
+          set -euo pipefail
+          workflow='.github/workflows/public-forward-liquidity-successor-scheduled-capture.yml'
+          test "$(grep -Ec "^[[:space:]]{4}- cron: '17 \\* \\* \\* \\*'[[:space:]]*$" "$workflow")" -eq 1
+          test "$(grep -Ec "^[[:space:]]{4}- cron: '27 \\* \\* \\* \\*'[[:space:]]*$" "$workflow")" -eq 1
+          test "$(grep -Ec "^[[:space:]]{4}- cron: '37 \\* \\* \\* \\*'[[:space:]]*$" "$workflow")" -eq 1
+          test "$(grep -Ec "^[[:space:]]{2}queue:[[:space:]]+max[[:space:]]*$" "$workflow")" -eq 1
+          test "$(grep -Ec "^[[:space:]]{2}cancel-in-progress:[[:space:]]+false[[:space:]]*$" "$workflow")" -eq 1
+          ! grep -Eq '^[[:space:]]{2}workflow_dispatch:[[:space:]]*$' "$workflow"
+          test "$GITHUB_EVENT_NAME" = 'pull_request'
+          test "$GITHUB_REF" != 'refs/heads/main'
