@@ -149,7 +149,7 @@ test('requireAuthenticated denies approved inactive member after valid Supabase 
   assert.equal(result.req.accessToken, undefined);
 });
 
-for (const status of ['suspended', 'withdrawn']) {
+for (const status of ['suspended', 'revoked', 'withdrawn', 'disabled', 'inactive']) {
   test(`requireAuthenticated denies ${status} member after valid Supabase identity and fresh profile reload`, async () => {
     const result = await runRequireAuthenticated({ profile: memberProfile({ status }) });
     assert.equal(result.nextCalls, 0);
