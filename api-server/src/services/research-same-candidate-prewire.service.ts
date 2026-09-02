@@ -284,12 +284,9 @@ async function readShadowProof(stateRoot: string, anchor: Readonly<Row>): Promis
     && value.modelIdentityDigest === anchor.modelIdentityDigest);
   const selected = exact ?? identified[0];
   const observations = Array.isArray(selected.observations) ? selected.observations : [];
-  const sampleCount = nonNegativeInteger(selected.currentRunObservationCount)
-    ? selected.currentRunObservationCount
-    : observations.length;
   return runtimeProof('SHADOW', path, {
     runtimeStatus: 'PRESENT',
-    sampleCount,
+    sampleCount: observations.length,
     strategyIdentityDigest: digest64(selected.strategyIdentityDigest) ? selected.strategyIdentityDigest : null,
     modelIdentityDigest: digest64(selected.modelIdentityDigest) ? selected.modelIdentityDigest : null,
     blockers: selected.runtimeStatus === 'IDENTITY_MISMATCH' ? ['SHADOW_RUNTIME_REPORTED_IDENTITY_MISMATCH'] : [],
@@ -348,13 +345,14 @@ function paperProof(
   if (!canonical || canonical.schemaVersion !== 'canonical-natural-paper-stage-evidence-v1') blockers.push(`${stage}_CANONICAL_NATURAL_STAGE_EVIDENCE_MISSING`);
   if (!identity) blockers.push(`${stage}_CANONICAL_NATURAL_IDENTITY_MISSING`);
   if (!measured) blockers.push(`${stage}_RUNTIME_STAGE_NOT_MEASURED`);
+  if (identity) blockers.push(`${stage}_RUNTIME_RESEARCH_DATASET_IDENTITY_UNAVAILABLE`);
   return runtimeProof(stage, source, {
     runtimeStatus: canonical && identity ? 'PRESENT' : 'MISSING_EVIDENCE',
     sampleCount,
     strategyIdentityDigest: digest64(identity?.strategyIdentityDigest) ? identity?.strategyIdentityDigest : null,
     modelIdentityDigest: digest64(identity?.modelIdentityDigest) ? identity?.modelIdentityDigest : null,
     researchCodeSha: sha40(identity?.runtimeSha) ? identity?.runtimeSha : (sha40(result.naturalRuntimeSha) ? result.naturalRuntimeSha : null),
-    datasetIdentity: text(identity?.datasetIdentity) ? identity?.datasetIdentity : (text(result.naturalDatasetIdentity) ? result.naturalDatasetIdentity : null),
+    datasetIdentity: null,
     blockers,
   });
 }
