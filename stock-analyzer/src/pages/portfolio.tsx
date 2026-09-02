@@ -431,7 +431,7 @@ function collectSearchCandidates(
 
 	if (
 		typeof value !==
-		'object'
+			'object'
 	) {
 		return;
 	}
@@ -1425,6 +1425,10 @@ export default function PortfolioPage() {
 					!auth.loading &&
 					auth.user && (
 						<div className="space-y-4">
+							<BrokerageAccountConnections
+								canAccessSpot={false}
+								canAccessFutures={false}
+							/>
 							{!loading && initialized && !error && (
 								<section data-testid="portfolio-holdings-summary" className="rounded-3xl border border-card-border bg-card p-5 shadow-sm">
 									<div className="flex items-center justify-between gap-3">
@@ -1500,6 +1504,7 @@ export default function PortfolioPage() {
 												0
 											}
 										/>
+
 									</div>
 
 									<p className="mt-3 break-keep text-[11px] font-semibold leading-5 text-muted-foreground">
