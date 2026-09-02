@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
-import { requireCapability } from '../middleware/auth';
+import { requireAuthenticated, requireCapability } from '../middleware/auth';
 import { MEMBER_CAPABILITIES, MEMBER_PERMISSION_MATRIX } from '../../../packages/member-access/src/index.js';
 import { classifyAdminReadFailure } from './admin';
 
@@ -38,6 +38,162 @@ async function startServer() {
   const address = server.address() as AddressInfo;
   return { server, baseUrl: `http://127.0.0.1:${address.port}` };
 }
+
+function memberProfile(overrides = {}) {
+  return {
+    id: 'member-1',
+    login_name: 'member-1',
+    display_name: 'Member One',
+    role: 'user',
+    status: 'approved',
+    membership_level: 'associate',
+    is_active: true,
+    ...overrides,
+  };
+}
+
+function authRuntime({ authUser = { id: 'member-1' }, authError = null, profile = memberProfile(), profileError = null } = {}) {
+  const calls = { getUser: 0, profile: 0 };
+  return {
+    calls,
+    dependencies: {
+      isSupabaseConfigured: () => true,
+      getSupabase: () => ({
+        auth: {
+          getUser: async (token) => {
+            calls.getUser += 1;
+            assert.equal(token, 'valid-token');
+            return { data: { user: authUser }, error: authError };
+          },
+        },
+      }),
+      getUserSupabase: (token) => {
+        assert.equal(token, 'valid-token');
+        return {
+          from: (table) => {
+            assert.equal(table, 'profiles');
+            return {
+              select: (columns) => {
+                assert.equal(columns, '*');
+                return {
+                  eq: (column, value) => {
+                    assert.equal(column, 'id');
+                    assert.equal(value, 'member-1');
+                    return {
+                      single: async () => {
+                        calls.profile += 1;
+                        return { data: profile, error: profileError };
+                      },
+                    };
+                  },
+                };
+              },
+            };
+          },
+        };
+      },
+    },
+  };
+}
+
+function authRequest() {
+  return {
+    header: (name) => name.toLowerCase() === 'authorization' ? 'Bearer valid-token' : undefined,
+  };
+}
+
+function responseRecorder() {
+  const state = { statusCode: 200, body: undefined };
+  const response = {
+    status(code) {
+      state.statusCode = code;
+      return response;
+    },
+    json(body) {
+      state.body = body;
+      return response;
+    },
+  };
+  return { response, state };
+}
+
+async function runRequireAuthenticated(runtimeOptions = {}) {
+  const req = authRequest();
+  const { response, state } = responseRecorder();
+  const { dependencies, calls } = authRuntime(runtimeOptions);
+  let nextCalls = 0;
+  await requireAuthenticated(req, response, () => {
+    nextCalls += 1;
+  }, dependencies);
+  return { req, state, calls, nextCalls };
+}
+
+test('requireAuthenticated accepts an approved active member after valid Supabase identity and fresh profile reload', async () => {
+  const result = await runRequireAuthenticated();
+  assert.equal(result.nextCalls, 1);
+  assert.equal(result.calls.getUser, 1);
+  assert.equal(result.calls.profile, 1);
+  assert.equal(result.req.member.status, 'approved');
+  assert.equal(result.req.member.is_active, true);
+  assert.equal(result.req.accessToken, 'valid-token');
+});
+
+test('requireAuthenticated denies approved inactive member after valid Supabase identity and fresh profile reload', async () => {
+  const result = await runRequireAuthenticated({ profile: memberProfile({ is_active: false }) });
+  assert.equal(result.nextCalls, 0);
+  assert.equal(result.calls.getUser, 1);
+  assert.equal(result.calls.profile, 1);
+  assert.equal(result.state.statusCode, 403);
+  assert.deepEqual(result.state.body, { error: 'MEMBER_SESSION_DISABLED' });
+  assert.equal(result.req.member, undefined);
+  assert.equal(result.req.accessToken, undefined);
+});
+
+for (const status of ['suspended', 'withdrawn']) {
+  test(`requireAuthenticated denies ${status} member after valid Supabase identity and fresh profile reload`, async () => {
+    const result = await runRequireAuthenticated({ profile: memberProfile({ status }) });
+    assert.equal(result.nextCalls, 0);
+    assert.equal(result.calls.getUser, 1);
+    assert.equal(result.calls.profile, 1);
+    assert.equal(result.state.statusCode, 403);
+    assert.deepEqual(result.state.body, { error: 'MEMBER_SESSION_DISABLED' });
+    assert.equal(result.req.member, undefined);
+    assert.equal(result.req.accessToken, undefined);
+  });
+}
+
+test('requireAuthenticated preserves INVALID_SESSION behavior and does not query profile', async () => {
+  const result = await runRequireAuthenticated({
+    authUser: null,
+    authError: { message: 'invalid token' },
+  });
+  assert.equal(result.nextCalls, 0);
+  assert.equal(result.calls.getUser, 1);
+  assert.equal(result.calls.profile, 0);
+  assert.equal(result.state.statusCode, 401);
+  assert.deepEqual(result.state.body, { error: 'INVALID_SESSION' });
+});
+
+test('requireAuthenticated preserves PROFILE_NOT_FOUND behavior after valid Supabase identity', async () => {
+  const result = await runRequireAuthenticated({ profile: null });
+  assert.equal(result.nextCalls, 0);
+  assert.equal(result.calls.getUser, 1);
+  assert.equal(result.calls.profile, 1);
+  assert.equal(result.state.statusCode, 403);
+  assert.deepEqual(result.state.body, { error: 'PROFILE_NOT_FOUND' });
+});
+
+test('requireAuthenticated does not broaden pending onboarding into disabled-session denial', async () => {
+  const result = await runRequireAuthenticated({
+    profile: memberProfile({ status: 'pending', membership_level: 'pending', is_active: false }),
+  });
+  assert.equal(result.nextCalls, 1);
+  assert.equal(result.calls.getUser, 1);
+  assert.equal(result.calls.profile, 1);
+  assert.equal(result.req.member.status, 'pending');
+  assert.equal(result.req.membershipLevel, 'pending');
+  assert.equal(result.req.accessToken, 'valid-token');
+});
 
 for (const tier of ['pending', 'associate', 'regular', 'admin']) {
   for (const capability of MEMBER_CAPABILITIES) {
