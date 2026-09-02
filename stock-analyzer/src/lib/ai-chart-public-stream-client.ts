@@ -1,4 +1,5 @@
 import {
+  AI_CHART_MAX_PENDING_EVENTS,
   aiChartStreamFreshness,
   buildAiChartPublicStreamSubscription,
   nextAiChartReconnectDelayMs,
@@ -10,6 +11,7 @@ import {
 } from './ai-chart-public-stream';
 
 type TimerHandle = ReturnType<typeof setTimeout>;
+type FrameHandle = number;
 
 type WebSocketLike = Pick<WebSocket, 'readyState' | 'send' | 'close'> & {
   binaryType?: BinaryType;
@@ -26,8 +28,12 @@ export type AiChartPublicStreamClientOptions = {
   now?: () => number;
   setTimeoutFn?: (callback: () => void, delayMs: number) => TimerHandle;
   clearTimeoutFn?: (handle: TimerHandle) => void;
+  requestAnimationFrameFn?: (callback: FrameRequestCallback) => FrameHandle;
+  cancelAnimationFrameFn?: (handle: FrameHandle) => void;
+  maxPendingEvents?: number;
   onStatus?: (status: AiChartPublicStreamStatus, reason: string) => void;
   onTrade?: (event: AiChartPublicTradeEvent) => void;
+  onTrades?: (events: readonly AiChartPublicTradeEvent[]) => boolean | void;
   onDiagnostic?: (diagnostic: AiChartStreamDiagnostic) => void;
 };
 
@@ -40,6 +46,9 @@ export type AiChartStreamDiagnostic = {
   connectedAtMs: number | null;
   lastEventAtMs: number | null;
   freshness: 'FRESH' | 'DELAYED' | 'STALE' | 'UNAVAILABLE';
+  pendingEvents: number;
+  maxPendingEvents: number;
+  pendingRenderWork: 0 | 1;
 };
 
 export type AiChartPublicStreamClient = {
@@ -75,6 +84,18 @@ export function createAiChartPublicStreamClient(
   const setTimeoutFn = options.setTimeoutFn ?? ((callback, delayMs) => setTimeout(callback, delayMs));
   const clearTimeoutFn = options.clearTimeoutFn ?? ((handle) => clearTimeout(handle));
   const socketFactory = options.socketFactory ?? defaultSocketFactory;
+  const maxPendingEvents = Math.max(1, Math.min(
+    AI_CHART_MAX_PENDING_EVENTS,
+    Math.trunc(options.maxPendingEvents ?? AI_CHART_MAX_PENDING_EVENTS),
+  ));
+  const requestFrame = options.requestAnimationFrameFn
+    ?? (typeof requestAnimationFrame === 'function'
+      ? (callback: FrameRequestCallback) => requestAnimationFrame(callback)
+      : (callback: FrameRequestCallback) => setTimeoutFn(() => callback(now()), 16) as unknown as FrameHandle);
+  const cancelFrame = options.cancelAnimationFrameFn
+    ?? (typeof cancelAnimationFrame === 'function'
+      ? (handle: FrameHandle) => cancelAnimationFrame(handle)
+      : (handle: FrameHandle) => clearTimeoutFn(handle as unknown as TimerHandle));
 
   let socket: WebSocketLike | null = null;
   let status: AiChartPublicStreamStatus = 'DISCONNECTED';
@@ -86,6 +107,8 @@ export function createAiChartPublicStreamClient(
   let heartbeatTimer: TimerHandle | null = null;
   let watchdogTimer: TimerHandle | null = null;
   let connectTimer: TimerHandle | null = null;
+  let pendingEvents: AiChartPublicTradeEvent[] = [];
+  let flushFrame: FrameHandle | null = null;
 
   const snapshot = (): AiChartStreamDiagnostic => ({
     status,
@@ -96,6 +119,9 @@ export function createAiChartPublicStreamClient(
     connectedAtMs,
     lastEventAtMs,
     freshness: aiChartStreamFreshness({ status, lastEventAtMs, nowMs: now(), staleAfterMs: subscription.staleAfterMs }),
+    pendingEvents: pendingEvents.length,
+    maxPendingEvents,
+    pendingRenderWork: flushFrame == null ? 0 : 1,
   });
 
   const publish = (nextStatus: AiChartPublicStreamStatus, reason: string) => {
@@ -112,8 +138,14 @@ export function createAiChartPublicStreamClient(
     watchdogTimer = null;
     connectTimer = null;
   };
+  const clearPendingWork = () => {
+    if (flushFrame != null) cancelFrame(flushFrame);
+    flushFrame = null;
+    pendingEvents = [];
+  };
   const forceFallback = (reason: string) => {
     clearRuntimeTimers();
+    clearPendingWork();
     clearTimer(reconnectTimer);
     reconnectTimer = null;
     connectedAtMs = null;
@@ -126,7 +158,13 @@ export function createAiChartPublicStreamClient(
     clearTimer(heartbeatTimer);
     heartbeatTimer = setTimeoutFn(() => {
       heartbeatTimer = null;
-      if (stopped || status !== 'LIVE_STREAM' || !socket) return;
+      if (
+        stopped
+        || !socket
+        || connectedAtMs == null
+        || status === 'DISCONNECTED'
+        || status === 'FALLBACK_POLLING'
+      ) return;
       try { socket.send(subscription.heartbeatPayload); }
       catch {
         try { socket.close(1011, 'heartbeat-send-failed'); }
@@ -140,7 +178,7 @@ export function createAiChartPublicStreamClient(
     const cadence = Math.max(1_000, Math.min(5_000, subscription.staleAfterMs));
     watchdogTimer = setTimeoutFn(() => {
       watchdogTimer = null;
-      if (stopped || status !== 'LIVE_STREAM') return;
+      if (stopped || (status !== 'WAITING_FIRST_EVENT' && status !== 'LIVE_STREAM')) return;
       const currentNow = now();
       const firstEventOverdue = lastEventAtMs == null
         && connectedAtMs != null
@@ -161,9 +199,41 @@ export function createAiChartPublicStreamClient(
     }, cadence);
   };
 
+
+  const scheduleFlush = (expectedSocket: WebSocketLike) => {
+    if (flushFrame != null) return;
+    flushFrame = requestFrame(() => {
+      flushFrame = null;
+      if (stopped || socket !== expectedSocket || pendingEvents.length === 0) {
+        pendingEvents = [];
+        return;
+      }
+
+      const batch = pendingEvents;
+      pendingEvents = [];
+      let accepted = false;
+      if (options.onTrades) {
+        accepted = options.onTrades(batch) !== false;
+      } else if (options.onTrade) {
+        for (const event of batch) options.onTrade(event);
+        accepted = true;
+      }
+      if (!accepted) {
+        options.onDiagnostic?.({ ...snapshot(), reason: 'STREAM_BATCH_REJECTED' });
+        return;
+      }
+
+      lastEventAtMs = Math.max(lastEventAtMs ?? 0, ...batch.map((event) => event.eventTimeMs));
+      reconnectAttempts = 0;
+      if (status !== 'LIVE_STREAM') publish('LIVE_STREAM', 'FIRST_VALID_EVENT_ACCEPTED');
+      else options.onDiagnostic?.({ ...snapshot(), reason: 'PUBLIC_TRADE_BATCH' });
+    });
+  };
+
   const connect = () => {
     if (stopped || status === 'FALLBACK_POLLING') return;
     clearRuntimeTimers();
+    clearPendingWork();
     connectedAtMs = null;
     publish(reconnectAttempts > 0 ? 'RECOVERING' : 'CONNECTING', reconnectAttempts > 0 ? 'RECONNECTING' : 'CONNECTING');
 
@@ -185,7 +255,7 @@ export function createAiChartPublicStreamClient(
       try { nextSocket.send(subscription.subscribePayload); }
       catch { forceFallback('SUBSCRIBE_SEND_FAILED'); return; }
       connectedAtMs = now();
-      publish('LIVE_STREAM', 'PUBLIC_STREAM_CONNECTED');
+      publish('WAITING_FIRST_EVENT', 'PUBLIC_STREAM_CONNECTED_WAITING_FOR_DATA');
       scheduleHeartbeat();
       scheduleWatchdog();
     };
@@ -200,10 +270,12 @@ export function createAiChartPublicStreamClient(
       const events = parseAiChartPublicStreamMessage(options.market, raw, now())
         .filter((event) => event.market === options.market && event.symbol === expectedSymbol);
       if (!events.length) return;
-      lastEventAtMs = Math.max(lastEventAtMs ?? 0, ...events.map((event) => event.eventTimeMs));
-      reconnectAttempts = 0;
-      for (const event of events) options.onTrade?.(event);
-      options.onDiagnostic?.({ ...snapshot(), reason: 'PUBLIC_TRADE_EVENT' });
+      if (pendingEvents.length + events.length > maxPendingEvents) {
+        forceFallback('STREAM_BUFFER_OVERFLOW');
+        return;
+      }
+      pendingEvents.push(...events);
+      scheduleFlush(nextSocket);
     };
 
     nextSocket.onerror = () => {
@@ -214,6 +286,7 @@ export function createAiChartPublicStreamClient(
       if (stopped || socket !== nextSocket) return;
       socket = null;
       clearRuntimeTimers();
+      clearPendingWork();
       connectedAtMs = null;
       if (stopped || status === 'FALLBACK_POLLING') return;
       reconnectAttempts += 1;
@@ -238,6 +311,7 @@ export function createAiChartPublicStreamClient(
       if (stopped) return;
       stopped = true;
       clearRuntimeTimers();
+      clearPendingWork();
       clearTimer(reconnectTimer);
       reconnectTimer = null;
       connectedAtMs = null;

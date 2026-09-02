@@ -114,7 +114,7 @@ test('REST overlap, duplicates, wrong identity and coverage gaps never mutate th
 
   const gap = reconcileAiChartPublicTrades({
     previous,
-    events: [trade({ eventId: 'gap', eventTimeMs: 1_787_789_040_000 })],
+    events: [trade({ eventId: 'gap', eventTimeMs: 1_787_789_040_000, receivedAtMs: 1_787_789_040_100 })],
     market: 'UPBIT',
     symbol: 'BTC',
     timeframe: '1m',
