@@ -1,4 +1,5 @@
 import './forward-calibration-gross-edge.service.test';
+import './forward-recommendation-observer-runtime.service.test';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
