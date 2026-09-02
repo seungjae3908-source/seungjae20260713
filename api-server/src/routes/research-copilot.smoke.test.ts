@@ -66,6 +66,11 @@ test('HTTP admin boundary rejects other members, blocks injected instructions an
       assert.equal(result.backtesterCalls, 0);
       assert.equal(result.backtestStatus, 'BLOCKED_DATA');
     }
+    const beforePrewire = bundleCalls;
+    assert.equal((await fetch(url + '/prewire-same-candidate', { method: 'POST', headers: { 'x-test-role': 'anonymous', 'Content-Type': 'application/json' }, body: '{}' })).status, 401);
+    assert.equal((await fetch(url + '/prewire-same-candidate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 403);
+    assert.equal(bundleCalls, beforePrewire);
+    assert.equal((await fetch(url + '/prewire-same-candidate', { method: 'POST', headers, body: '{}' })).status, 400);
   } finally {
     if (previousUrl === undefined) delete process.env.SUPABASE_URL; else process.env.SUPABASE_URL = previousUrl;
     if (previousKey === undefined) delete process.env.SUPABASE_ANON_KEY; else process.env.SUPABASE_ANON_KEY = previousKey;
@@ -73,7 +78,7 @@ test('HTTP admin boundary rejects other members, blocks injected instructions an
   }
 });
 
-test('admin HTTP validates TEST_ONLY bundle and durably submits exactly once to the real #690 executor', async () => {
+test('admin HTTP validates TEST_ONLY bundle, prewires exact same-candidate identity, and keeps genuine credit zero', async () => {
   const fixture = researchBundleFixture(), root = await mkdtemp(join(tmpdir(), 'research-http-test-'));
   let calls = 0;
   const bundles = new ResearchBundleService({ readCanonicalBundle: async () => fixture.bundle,
@@ -96,7 +101,8 @@ test('admin HTTP validates TEST_ONLY bundle and durably submits exactly once to 
     assert.equal(validation.status, 200);
     const validated = await validation.json();
     assert.equal(validated.bundle.researchBundleReady, true); assert.equal(calls, 0);
-    const body = JSON.stringify({ dsl: fixture.dsl, bundleDigest: validated.bundle.bundleDigest, strategyIdentityDigest: validated.bundle.strategyIdentityDigest });
+    const readbackRequest = { dsl: fixture.dsl, bundleDigest: validated.bundle.bundleDigest, strategyIdentityDigest: validated.bundle.strategyIdentityDigest };
+    const body = JSON.stringify(readbackRequest);
     for (let i = 0; i < 2; i += 1) {
       const response = await fetch(url + '/submit-backtest', { method: 'POST', headers, body });
       assert.equal(response.status, 200); const result = await response.json();
@@ -113,6 +119,52 @@ test('admin HTTP validates TEST_ONLY bundle and durably submits exactly once to 
     assert.equal(publication.backtesterCalls, 0); assert.equal(calls, 1);
     assert.equal(publication.receipt.strategyIdentityDigest, validated.bundle.strategyIdentityDigest);
     assert.equal(publication.receipt.bundleDigest, validated.bundle.bundleDigest);
+
+    const waitingResponse = await fetch(url + '/prewire-same-candidate', { method: 'POST', headers,
+      body: JSON.stringify({ researchReadback: readbackRequest, stages: {} }) });
+    assert.equal(waitingResponse.status, 200);
+    const waiting = await waitingResponse.json();
+    assert.equal(waiting.status, 'PREWIRED_WAITING_EVIDENCE');
+    assert.equal(waiting.evidenceCredit, 0);
+    assert.equal(waiting.executionAuthority, 'NONE');
+    assert.equal(waiting.allIdentityStagesMatched, false);
+    assert.match(waiting.identityAnchorDigest, /^[0-9a-f]{64}$/u);
+
+    const stage = (name: 'FORWARD' | 'SHADOW' | 'PAPER' | 'SETTLEMENT') => ({
+      schemaVersion: 'research-same-candidate-stage-identity-v1', stage: name,
+      identityAnchorDigest: waiting.identityAnchorDigest,
+      ...waiting.identityAnchor,
+      evidenceCredit: 0, synthetic: false, replay: false, backfill: false, duplicate: false, manual: false,
+      executionAuthority: 'NONE', liveTrading: false, privateTradingApiAllowed: false, orderSubmitted: false,
+    });
+    const stages = { forward: stage('FORWARD'), shadow: stage('SHADOW'), paper: stage('PAPER'), settlement: stage('SETTLEMENT') };
+    const matchedResponse = await fetch(url + '/prewire-same-candidate', { method: 'POST', headers,
+      body: JSON.stringify({ researchReadback: readbackRequest, stages }) });
+    const matched = await matchedResponse.json();
+    assert.equal(matched.status, 'PREWIRED_IDENTITY_MATCHED');
+    assert.equal(matched.allIdentityStagesMatched, true);
+    assert.equal(matched.evidenceCredit, 0);
+    assert.equal(matched.profitabilityProven, false);
+    assert.equal(matched.champion, null);
+
+    const mismatchedStages = structuredClone(stages);
+    mismatchedStages.shadow.datasetDigest = mismatchedStages.shadow.datasetDigest === 'a'.repeat(64) ? 'b'.repeat(64) : 'a'.repeat(64);
+    const mismatchResponse = await fetch(url + '/prewire-same-candidate', { method: 'POST', headers,
+      body: JSON.stringify({ researchReadback: readbackRequest, stages: mismatchedStages }) });
+    const mismatch = await mismatchResponse.json();
+    assert.equal(mismatch.status, 'IDENTITY_MISMATCH');
+    assert.equal(mismatch.stages.SHADOW.status, 'IDENTITY_MISMATCH');
+    assert.equal(mismatch.allIdentityStagesMatched, false);
+    assert.equal(mismatch.evidenceCredit, 0);
+
+    const creditClaimStages = structuredClone(stages);
+    creditClaimStages.forward.evidenceCredit = 1;
+    const creditResponse = await fetch(url + '/prewire-same-candidate', { method: 'POST', headers,
+      body: JSON.stringify({ researchReadback: readbackRequest, stages: creditClaimStages }) });
+    const credit = await creditResponse.json();
+    assert.equal(credit.status, 'BLOCKED_DATA');
+    assert.equal(credit.stages.FORWARD.status, 'BLOCKED_DATA');
+    assert.equal(credit.evidenceCredit, 0);
   } finally {
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     await rm(root, { recursive: true, force: true });

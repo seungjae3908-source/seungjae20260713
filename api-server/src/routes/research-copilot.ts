@@ -5,6 +5,7 @@ import { ResearchDualFreeAiError } from '../services/research-dual-free-ai.servi
 import type { CopilotTask } from '../services/research-copilot.contract';
 import { ResearchBundleService } from '../services/research-bundle.service';
 import { createResearchBundleFileStore } from '../services/research-bundle-file-store.service';
+import { validateResearchSameCandidatePrewire } from '../services/research-same-candidate-prewire.service';
 
 export function configuredResearchBundleService(stateRoot = process.env.RESEARCH_BUNDLE_STATE_ROOT): ResearchBundleService {
   return new ResearchBundleService(stateRoot ? createResearchBundleFileStore(stateRoot) : {});
@@ -38,6 +39,15 @@ export function createResearchCopilotRouter(service: ResearchCopilotService = cr
   router.post('/read-backtest', async (req, res) => {
     if (JSON.stringify(req.body ?? null).length > 33_000) return res.status(413).json({ error: 'RESEARCH_READBACK_TOO_LARGE' });
     return res.json(await bundles.readback(req.body));
+  });
+  router.post('/prewire-same-candidate', async (req, res) => {
+    if (JSON.stringify(req.body ?? null).length > 64_000) return res.status(413).json({ error: 'RESEARCH_PREWIRE_INPUT_TOO_LARGE' });
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return res.status(400).json({ error: 'INVALID_RESEARCH_PREWIRE_INPUT' });
+    const input = body as Record<string, unknown>;
+    if (Object.keys(input).sort().join(',') !== 'researchReadback,stages') return res.status(400).json({ error: 'INVALID_RESEARCH_PREWIRE_INPUT' });
+    const publication = await bundles.readback(input.researchReadback);
+    return res.json(validateResearchSameCandidatePrewire(publication, input.stages));
   });
   router.post('/review', async (req: AuthenticatedRequest, res) => {
     const body: unknown = req.body;
