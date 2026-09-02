@@ -8,11 +8,15 @@ import { ResearchCopilotService } from '../services/research-copilot.service';
 import { createDefaultStrategyPromotionService } from '../services/strategy-promotion.service';
 import { ResearchBundleService } from '../services/research-bundle.service';
 import { createResearchBundleFileStore } from '../services/research-bundle-file-store.service';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { researchBundleFixture, AUTHORITATIVE_NOW_MS } from '../services/research-bundle.test-fixtures.mjs';
 import { runOnePassCandidateBacktestV1 } from '../../../market-prediction-lab/src/research-tournament-engine-v1.js';
+import {
+  readResearchSameCandidateRuntimeStages,
+  validateResearchSameCandidatePrewire,
+} from '../services/research-same-candidate-prewire.service';
 
 test('HTTP admin boundary rejects other members, blocks injected instructions and never calls AI on GET', async () => {
   const previousUrl = process.env.SUPABASE_URL, previousKey = process.env.SUPABASE_ANON_KEY;
@@ -78,9 +82,10 @@ test('HTTP admin boundary rejects other members, blocks injected instructions an
   }
 });
 
-test('admin HTTP validates TEST_ONLY bundle, prewires exact same-candidate identity, and keeps genuine credit zero', async () => {
+test('admin HTTP validates TEST_ONLY bundle, takes same-candidate stages only from server runtime reader, and keeps genuine credit zero', async () => {
   const fixture = researchBundleFixture(), root = await mkdtemp(join(tmpdir(), 'research-http-test-'));
   let calls = 0;
+  let runtimeStages: unknown = {};
   const bundles = new ResearchBundleService({ readCanonicalBundle: async () => fixture.bundle,
     allowTestEvidence: true, now: () => AUTHORITATIVE_NOW_MS,
     submissions: createResearchBundleFileStore(root).submissions,
@@ -91,7 +96,7 @@ test('admin HTTP validates TEST_ONLY bundle, prewires exact same-candidate ident
     req.member = { id: 'TEST_ONLY_ADMIN', login_name: 'fixture', display_name: 'fixture', role: 'admin', membership_level: 'admin', status: 'approved', is_active: true };
     req.accessToken = 'TEST_ONLY'; next();
   });
-  app.use('/copilot', createResearchCopilotRouter(undefined, bundles));
+  app.use('/copilot', createResearchCopilotRouter(undefined, bundles, async () => runtimeStages));
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>(resolve => server.once('listening', resolve));
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/copilot`;
@@ -120,8 +125,12 @@ test('admin HTTP validates TEST_ONLY bundle, prewires exact same-candidate ident
     assert.equal(publication.receipt.strategyIdentityDigest, validated.bundle.strategyIdentityDigest);
     assert.equal(publication.receipt.bundleDigest, validated.bundle.bundleDigest);
 
-    const waitingResponse = await fetch(url + '/prewire-same-candidate', { method: 'POST', headers,
+    const rejectedCallerStages = await fetch(url + '/prewire-same-candidate', { method: 'POST', headers,
       body: JSON.stringify({ researchReadback: readbackRequest, stages: {} }) });
+    assert.equal(rejectedCallerStages.status, 400);
+
+    const prewireBody = JSON.stringify({ researchReadback: readbackRequest });
+    const waitingResponse = await fetch(url + '/prewire-same-candidate', { method: 'POST', headers, body: prewireBody });
     assert.equal(waitingResponse.status, 200);
     const waiting = await waitingResponse.json();
     assert.equal(waiting.status, 'PREWIRED_WAITING_EVIDENCE');
@@ -138,8 +147,8 @@ test('admin HTTP validates TEST_ONLY bundle, prewires exact same-candidate ident
       executionAuthority: 'NONE', liveTrading: false, privateTradingApiAllowed: false, orderSubmitted: false,
     });
     const stages = { forward: stage('FORWARD'), shadow: stage('SHADOW'), paper: stage('PAPER'), settlement: stage('SETTLEMENT') };
-    const matchedResponse = await fetch(url + '/prewire-same-candidate', { method: 'POST', headers,
-      body: JSON.stringify({ researchReadback: readbackRequest, stages }) });
+    runtimeStages = stages;
+    const matchedResponse = await fetch(url + '/prewire-same-candidate', { method: 'POST', headers, body: prewireBody });
     const matched = await matchedResponse.json();
     assert.equal(matched.status, 'PREWIRED_IDENTITY_MATCHED');
     assert.equal(matched.allIdentityStagesMatched, true);
@@ -149,8 +158,8 @@ test('admin HTTP validates TEST_ONLY bundle, prewires exact same-candidate ident
 
     const mismatchedStages = structuredClone(stages);
     mismatchedStages.shadow.datasetDigest = mismatchedStages.shadow.datasetDigest === 'a'.repeat(64) ? 'b'.repeat(64) : 'a'.repeat(64);
-    const mismatchResponse = await fetch(url + '/prewire-same-candidate', { method: 'POST', headers,
-      body: JSON.stringify({ researchReadback: readbackRequest, stages: mismatchedStages }) });
+    runtimeStages = mismatchedStages;
+    const mismatchResponse = await fetch(url + '/prewire-same-candidate', { method: 'POST', headers, body: prewireBody });
     const mismatch = await mismatchResponse.json();
     assert.equal(mismatch.status, 'IDENTITY_MISMATCH');
     assert.equal(mismatch.stages.SHADOW.status, 'IDENTITY_MISMATCH');
@@ -159,14 +168,106 @@ test('admin HTTP validates TEST_ONLY bundle, prewires exact same-candidate ident
 
     const creditClaimStages = structuredClone(stages);
     creditClaimStages.forward.evidenceCredit = 1;
-    const creditResponse = await fetch(url + '/prewire-same-candidate', { method: 'POST', headers,
-      body: JSON.stringify({ researchReadback: readbackRequest, stages: creditClaimStages }) });
+    runtimeStages = creditClaimStages;
+    const creditResponse = await fetch(url + '/prewire-same-candidate', { method: 'POST', headers, body: prewireBody });
     const credit = await creditResponse.json();
     assert.equal(credit.status, 'BLOCKED_DATA');
     assert.equal(credit.stages.FORWARD.status, 'BLOCKED_DATA');
     assert.equal(credit.evidenceCredit, 0);
   } finally {
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('same-candidate runtime reader consumes server-owned state and fail-closes incomplete Paper identity', async () => {
+  const fixture = researchBundleFixture();
+  const root = await mkdtemp(join(tmpdir(), 'research-runtime-reader-test-'));
+  const bundleRoot = join(root, 'bundles');
+  const runtimeRoot = join(root, 'runtime');
+  let calls = 0;
+  const bundles = new ResearchBundleService({
+    readCanonicalBundle: async () => fixture.bundle,
+    allowTestEvidence: true,
+    now: () => AUTHORITATIVE_NOW_MS,
+    submissions: createResearchBundleFileStore(bundleRoot).submissions,
+    runBacktest: input => { calls += 1; return runOnePassCandidateBacktestV1(input); },
+  });
+  try {
+    const resolved = await bundles.resolve(fixture.dsl);
+    const request = { dsl: fixture.dsl, bundleDigest: resolved.bundleDigest, strategyIdentityDigest: resolved.strategyIdentityDigest };
+    await bundles.submit('TEST_ONLY_ADMIN', request);
+    const publication = await bundles.readback(request);
+    assert.equal(publication.publicationStatus, 'READBACK_VERIFIED');
+    assert.equal(calls, 1);
+    assert.ok(publication.receipt);
+
+    await mkdir(join(runtimeRoot, 'forward'), { recursive: true });
+    await writeFile(join(runtimeRoot, 'forward', 'shadow-state.json'), `${JSON.stringify({
+      'crypto-futures-1h': {
+        canonicalEvidence: {
+          schemaVersion: 'prediction-lab-shadow-runtime-evidence-v1',
+          runtimeStatus: 'READY',
+          currentRunObservationCount: 1,
+          strategyIdentityDigest: publication.receipt?.strategyIdentityDigest,
+          modelIdentityDigest: publication.receipt?.modelIdentityDigest,
+          observations: [{ observationId: 'TEST_ONLY_SHADOW_OBSERVATION' }],
+          PROFITABILITY_PROVEN: false,
+          FORWARD_EVIDENCE_SUFFICIENT: false,
+        },
+      },
+    }, null, 2)}\n`);
+
+    const paperDir = join(runtimeRoot, 'runs', 'TEST_ONLY_CYCLE', 'paper-forward');
+    await mkdir(paperDir, { recursive: true });
+    const stdoutPath = join(paperDir, 'stdout.log');
+    const identity = {
+      cycleId: 'TEST_ONLY_CYCLE',
+      strategySha: publication.receipt?.researchCodeSha,
+      runtimeSha: publication.receipt?.researchCodeSha,
+      datasetIdentity: publication.receipt?.datasetIdentity,
+      triggerSource: 'cron',
+    };
+    const measured = (stage: string) => ({
+      stage, status: 'MEASURED', count: 1, identity, observationIds: [`TEST_ONLY_${stage}`],
+      naturalCredit: 1, replayCredit: 0, duplicateCredit: 0,
+    });
+    const cliResult = {
+      schemaVersion: 'paper-forward-schedule-cli-v5',
+      naturalRuntimeSha: publication.receipt?.researchCodeSha,
+      naturalDatasetIdentity: publication.receipt?.datasetIdentity,
+      canonicalNaturalStageEvidence: {
+        schemaVersion: 'canonical-natural-paper-stage-evidence-v1',
+        identity,
+        stageCounts: {
+          signalCandidate: measured('SIGNAL_CANDIDATE'),
+          entry: measured('ENTRY'),
+          settlement: measured('SETTLEMENT'),
+        },
+      },
+    };
+    await writeFile(stdoutPath, `${JSON.stringify(cliResult)}\n`);
+    await mkdir(join(runtimeRoot, 'latest'), { recursive: true });
+    await writeFile(join(runtimeRoot, 'latest', 'forward.json'), `${JSON.stringify({
+      schemaVersion: 'research-production-cycle-v1',
+      researchSha: publication.receipt?.researchCodeSha,
+      results: [{ id: 'paper-forward', stdoutPath }],
+    }, null, 2)}\n`);
+
+    const runtimeStages = await readResearchSameCandidateRuntimeStages(publication, { stateRoot: runtimeRoot });
+    const result = validateResearchSameCandidatePrewire(publication, runtimeStages);
+    assert.equal(result.stages.SHADOW.status, 'IDENTITY_MATCHED');
+    assert.equal(result.stages.FORWARD.status, 'BLOCKED_DATA');
+    assert.equal(result.stages.PAPER.status, 'BLOCKED_DATA');
+    assert.equal(result.stages.SETTLEMENT.status, 'BLOCKED_DATA');
+    assert.ok(result.stages.FORWARD.blockers.includes('FORWARD_RUNTIME_STRATEGY_IDENTITY_DIGEST_MISSING'));
+    assert.ok(result.stages.PAPER.blockers.includes('PAPER_RUNTIME_MODEL_IDENTITY_DIGEST_MISSING'));
+    assert.equal(result.status, 'BLOCKED_DATA');
+    assert.equal(result.evidenceCredit, 0);
+    assert.equal(result.profitabilityProven, false);
+    assert.equal(result.champion, null);
+    assert.equal(result.executionAuthority, 'NONE');
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
