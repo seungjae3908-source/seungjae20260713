@@ -11,6 +11,8 @@ import type { StoredPersonalTelegramAlert } from '../features/user-broker-telegr
 
 const MAX_DIGEST_HISTORY_ROWS = 256;
 const MAX_DIGEST_ITEMS = 20;
+const MAX_EVENT_ID_LENGTH = 160;
+const MAX_SYMBOL_LENGTH = 64;
 
 export type PersonalTelegramDigestAppendInput = {
   userId: string;
@@ -45,27 +47,41 @@ function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value
   return typeof value === 'string' && allowed.includes(value as T);
 }
 
-function requiredString(value: unknown): string {
+function requiredString(value: unknown, maxLength = Number.POSITIVE_INFINITY): string {
   if (typeof value !== 'string') throw storageError();
   const normalized = value.trim();
-  if (!normalized) throw storageError();
+  if (!normalized || normalized.length > maxLength) throw storageError();
   return normalized;
 }
 
 function validTimestamp(value: unknown): string {
-  const timestamp = requiredString(value);
+  const timestamp = requiredString(value, 64);
   if (!Number.isFinite(Date.parse(timestamp))) throw storageError();
   return timestamp;
 }
 
-function assertValidEvent(event: TelegramPolicyEvent, userId: string): void {
+export function sanitizePersonalTelegramDigestEvent(
+  event: TelegramPolicyEvent,
+  userId: string,
+): TelegramPolicyEvent {
   if (!event || typeof event !== 'object' || event.userId !== userId) throw storageError();
-  requiredString(event.eventId);
-  validTimestamp(event.occurredAt);
+  const eventId = requiredString(event.eventId, MAX_EVENT_ID_LENGTH);
+  const occurredAt = validTimestamp(event.occurredAt);
   if (!isOneOf(event.signalType, TELEGRAM_POLICY_SIGNAL_TYPES)) throw storageError();
   if (!isOneOf(event.priority, TELEGRAM_POLICY_PRIORITIES)) throw storageError();
   if (event.market != null && !isOneOf(event.market, TELEGRAM_POLICY_MARKETS)) throw storageError();
-  if (event.symbol != null && typeof event.symbol !== 'string') throw storageError();
+  const symbol = event.symbol == null
+    ? undefined
+    : requiredString(event.symbol.normalize('NFKC'), MAX_SYMBOL_LENGTH).toUpperCase();
+  return {
+    userId,
+    eventId,
+    market: event.market,
+    signalType: event.signalType,
+    priority: event.priority,
+    symbol,
+    occurredAt,
+  };
 }
 
 function normalizedSummary(event: TelegramPolicyEvent, alert: StoredPersonalTelegramAlert): string {
@@ -78,7 +94,7 @@ function normalizedSummary(event: TelegramPolicyEvent, alert: StoredPersonalTele
     `[${event.priority}]`,
     event.market ?? 'GLOBAL',
     event.signalType,
-    event.symbol?.normalize('NFKC').trim().toUpperCase().slice(0, 32) || '-',
+    event.symbol ?? '-',
     details || '세부내용 N/A',
   ].join(' · ').slice(0, 180);
 }
@@ -104,14 +120,14 @@ export function parsePersonalTelegramDigestHistoryEvent(
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw storageError();
   const event = value as Record<string, unknown>;
   if (requiredString(event.userId) !== userId) throw storageError();
-  const eventId = requiredString(event.eventId);
+  const eventId = requiredString(event.eventId, MAX_EVENT_ID_LENGTH);
   const signalType = event.signalType;
   const priority = event.priority;
   const market = event.market;
   if (!isOneOf(signalType, TELEGRAM_POLICY_SIGNAL_TYPES)) throw storageError();
   if (!isOneOf(priority, TELEGRAM_POLICY_PRIORITIES)) throw storageError();
   if (market != null && !isOneOf(market, TELEGRAM_POLICY_MARKETS)) throw storageError();
-  const symbol = event.symbol == null ? undefined : requiredString(event.symbol);
+  const symbol = event.symbol == null ? undefined : requiredString(event.symbol, MAX_SYMBOL_LENGTH);
   validTimestamp(event.occurredAt);
   return {
     userId,
@@ -132,7 +148,7 @@ export function parsePersonalTelegramDigestAppendRow(value: unknown): {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw storageError();
   const row = value as Record<string, unknown>;
   if (typeof row.accepted !== 'boolean') throw storageError();
-  const deliveryId = requiredString(row.delivery_id);
+  const deliveryId = requiredString(row.delivery_id, 64);
   const itemCount = row.item_count;
   if (typeof itemCount !== 'number' || !Number.isInteger(itemCount) || itemCount < 1 || itemCount > MAX_DIGEST_ITEMS) {
     throw storageError();
@@ -143,7 +159,7 @@ export function parsePersonalTelegramDigestAppendRow(value: unknown): {
 export class SupabasePersonalTelegramDigestRepository implements PersonalTelegramDigestRepository {
   async append(input: PersonalTelegramDigestAppendInput) {
     if (!hasSupabaseServerKey() || input.event.userId !== input.userId) throw storageError();
-    assertValidEvent(input.event, input.userId);
+    const safeEvent = sanitizePersonalTelegramDigestEvent(input.event, input.userId);
     const window = windowFor(input.now, input.windowMs);
     const deliveryId = randomUUID();
     const { data, error } = await getSupabase().rpc('append_personal_telegram_digest_item', {
@@ -151,8 +167,8 @@ export class SupabasePersonalTelegramDigestRepository implements PersonalTelegra
       p_delivery_id: deliveryId,
       p_dedupe_key: window.dedupeKey,
       p_window_end: window.dueAt,
-      p_event: structuredClone(input.event),
-      p_summary: normalizedSummary(input.event, input.alert),
+      p_event: safeEvent,
+      p_summary: normalizedSummary(safeEvent, input.alert),
       p_created_at: input.now.toISOString(),
     });
     if (error || !Array.isArray(data) || data.length !== 1) throw storageError();
@@ -213,7 +229,7 @@ export class InMemoryPersonalTelegramDigestRepository implements PersonalTelegra
 
   async append(input: PersonalTelegramDigestAppendInput) {
     if (input.event.userId !== input.userId) throw storageError();
-    assertValidEvent(input.event, input.userId);
+    const safeEvent = sanitizePersonalTelegramDigestEvent(input.event, input.userId);
     const window = windowFor(input.now, input.windowMs);
     const key = `${input.userId}:${window.dedupeKey}`;
     let row = this.rows.get(key);
@@ -228,11 +244,11 @@ export class InMemoryPersonalTelegramDigestRepository implements PersonalTelegra
       };
       this.rows.set(key, row);
     }
-    if (row.state !== 'PENDING' || row.events.some((event) => event.eventId === input.event.eventId) || row.events.length >= MAX_DIGEST_ITEMS) {
+    if (row.state !== 'PENDING' || row.events.some((event) => event.eventId === safeEvent.eventId) || row.events.length >= MAX_DIGEST_ITEMS) {
       return { accepted: false, deliveryId: row.deliveryId, itemCount: row.events.length, dueAt: row.dueAt, dedupeKey: window.dedupeKey };
     }
-    row.events.push(structuredClone(input.event));
-    row.summaries.push(normalizedSummary(input.event, input.alert));
+    row.events.push(safeEvent);
+    row.summaries.push(normalizedSummary(safeEvent, input.alert));
     return { accepted: true, deliveryId: row.deliveryId, itemCount: row.events.length, dueAt: row.dueAt, dedupeKey: window.dedupeKey };
   }
 
