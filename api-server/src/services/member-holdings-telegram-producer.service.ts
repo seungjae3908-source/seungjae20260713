@@ -1,3 +1,4 @@
+import { hasCapability } from '../../../packages/member-access/src/index.js';
 import { getSupabase, hasSupabaseServerKey } from '../lib/supabase';
 import { MarketDataService } from './market-data.service';
 import {
@@ -74,7 +75,10 @@ type PortfolioHoldingRow = {
 
 type ProfileRow = {
   id?: unknown;
-  status?: unknown;
+  status?: string | null;
+  membership_level?: string | null;
+  is_active?: boolean | null;
+  role?: string | null;
 };
 
 function emptySummary(status: MemberHoldingProducerStatus): MemberHoldingProducerSummary {
@@ -98,6 +102,15 @@ function finiteNumber(value: unknown): number | null {
 function canonicalStockMarket(value: unknown): CanonicalStockMarket | null {
   const market = cleanText(value, 16).toUpperCase();
   return market === 'KR' || market === 'US' ? market : null;
+}
+
+/**
+ * Canonical #804 member-access capability is the only authorization source for
+ * personal Telegram delivery. The database query may narrow candidates, but it
+ * must not re-implement or widen membership truth here.
+ */
+export function memberHoldingProfileEligibleForPersonalTelegram(profile: ProfileRow): boolean {
+  return hasCapability(profile, 'canConnectPersonalTelegram');
 }
 
 export function memberHoldingsTelegramProducerEnabled(
@@ -131,22 +144,22 @@ class SupabaseMemberHoldingProducerRepository implements MemberHoldingProducerRe
     if (!candidates.length) return [];
 
     const userIds = [...new Set(candidates.map((row) => row.userId))];
-    const approved = new Set<string>();
+    const eligible = new Set<string>();
     for (let index = 0; index < userIds.length; index += MAX_PROFILE_LOOKUP_BATCH) {
       const batch = userIds.slice(index, index + MAX_PROFILE_LOOKUP_BATCH);
       const { data: profiles, error: profileError } = await client
         .from('profiles')
-        .select('id,status')
+        .select('id,status,membership_level,is_active,role')
         .in('id', batch)
         .eq('status', 'approved');
       if (profileError) throw new Error('MEMBER_HOLDINGS_PRODUCER_STORAGE_UNAVAILABLE');
       for (const raw of Array.isArray(profiles) ? profiles : []) {
         const row = raw as ProfileRow;
         const id = cleanText(row.id, 128);
-        if (id && row.status === 'approved') approved.add(id);
+        if (id && memberHoldingProfileEligibleForPersonalTelegram(row)) eligible.add(id);
       }
     }
-    return candidates.filter((row) => approved.has(row.userId));
+    return candidates.filter((row) => eligible.has(row.userId));
   }
 }
 
