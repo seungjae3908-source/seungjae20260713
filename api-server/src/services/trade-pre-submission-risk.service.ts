@@ -2,7 +2,6 @@ import type { TradingRepository } from './trade-automation.repository';
 import { evaluateTradingPlan } from './trade-automation-risk.service';
 import { tripKillSwitchForRiskFailure } from './trade-kill-switch.service';
 import { evaluateRiskEnvelope } from './trade-risk-envelope.service';
-import { checkExecutionNotional } from './trade-order-notional.service';
 import type {
   TradingMarketSnapshot,
   TradingOrder,
@@ -231,11 +230,6 @@ export class TradePreSubmissionRiskService {
     }
 
     const liquidity = snapshot.availableLiquidityKrw;
-    if (currentPlan.accountMode !== 'paper') {
-      const notional = checkExecutionNotional(currentPlan, snapshot, now.getTime());
-      blockCodes.push(...notional.blockCodes);
-      if (notional.notionalKrw !== null && finite(liquidity) && liquidity < notional.notionalKrw) blockCodes.push('INSUFFICIENT_ORDERBOOK_LIQUIDITY');
-    }
     if (!finite(liquidity) || liquidity < 0) {
       if (currentPlan.accountMode !== 'paper') blockCodes.push('LIQUIDITY_UNAVAILABLE');
     } else if (liquidity < currentPlan.estimatedKrw) blockCodes.push('INSUFFICIENT_ORDERBOOK_LIQUIDITY');

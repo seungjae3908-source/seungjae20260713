@@ -2359,10 +2359,8 @@ function ChartTab({
     window.addEventListener("storage", refresh);
     window.addEventListener("sa-portfolio-overlay-updated", refresh);
     window.addEventListener("sa-auto-trade-updated", refresh);
-    const timer = window.setInterval(refresh, 30_000);
 
     return () => {
-      window.clearInterval(timer);
       window.removeEventListener("storage", refresh);
       window.removeEventListener("sa-portfolio-overlay-updated", refresh);
       window.removeEventListener("sa-auto-trade-updated", refresh);
@@ -2768,9 +2766,9 @@ function ChartTab({
       ? ((currentPrice - portfolioOverlay.averagePrice) / portfolioOverlay.averagePrice) * 100
       : portfolioOverlay?.rate ?? null;
   const purchaseTimestamp = portfolioOverlay ? Date.parse(portfolioOverlay.purchaseDate) : Number.NaN;
-  const portfolioCandles = portfolioOverlay && Number.isFinite(purchaseTimestamp) ? candles.filter((item) => {
+  const portfolioCandles = portfolioOverlay ? candles.filter((item) => {
     const time = Date.parse(item.date);
-    return Number.isFinite(time) && time >= purchaseTimestamp;
+    return Number.isNaN(purchaseTimestamp) || Number.isNaN(time) || time >= purchaseTimestamp;
   }) : [];
   const highestAfterPurchase = portfolioCandles.length ? Math.max(...portfolioCandles.map((item) => item.high)) : null;
   const highToCurrentRate = highestAfterPurchase && currentPrice != null ? ((currentPrice - highestAfterPurchase) / highestAfterPurchase) * 100 : null;
@@ -2818,7 +2816,7 @@ function ChartTab({
       {autoSignal && (
         <SectionCard
           title={autoSignal.label}
-          subtitle={`${autoSignal.candidate.rank}순위 · 연구 규칙 점수 ${autoSignal.candidate.ruleScore ?? '미수집'} · 성공확률 미제공`}
+          subtitle={`${autoSignal.candidate.rank}순위 · 조건 충족 확률 ${autoSignal.candidate.probability}%`}
         >
           <p className="break-keep text-sm font-semibold leading-6 text-muted-foreground">
             {autoSignal.candidate.reasons.join(" · ") || "선택 지표와 AI 점수 기준"} 조건으로 활성화되었습니다. 차트 최신 봉에 자동신호 위치와 손절·목표 기준선을 표시합니다.
@@ -4737,7 +4735,7 @@ function PriceChartCanvas({
         title: "내 평단",
       });
       const purchaseTime = Date.parse(portfolioOverlay.purchaseDate);
-      const sincePurchase = Number.isFinite(purchaseTime) ? rows.filter((row) => Number(row.time) * 1000 >= purchaseTime) : [];
+      const sincePurchase = rows.filter((row) => !Number.isFinite(purchaseTime) || Number(row.time) * 1000 >= purchaseTime);
       const highestSincePurchase = sincePurchase.length ? Math.max(...sincePurchase.map((row) => row.high)) : null;
       if (highestSincePurchase && highestSincePurchase > 0) {
         candleSeries.createPriceLine({

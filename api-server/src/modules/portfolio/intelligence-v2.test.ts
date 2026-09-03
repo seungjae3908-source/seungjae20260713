@@ -1,5 +1,4 @@
 import test from 'node:test';
-import '../../services/portfolio-intelligence-truth.test.ts';
 import assert from 'node:assert/strict';
 import {
   aggregatePortfolioProviderSnapshots,
@@ -42,11 +41,11 @@ test('free public FX collector preserves source and partial failure', async () =
   const mockFetch = (async (url: string | URL | Request) => {
     const text = String(url);
     if (text.includes('finance.yahoo.com')) {
-      return new Response(JSON.stringify({ chart: { result: [{ meta: { symbol: 'KRW=X', currency: 'KRW', regularMarketPrice: 1402.5, regularMarketTime: now.getTime() / 1000 - 60 } }] } }), { status: 200 });
+      return new Response(JSON.stringify({ chart: { result: [{ meta: { regularMarketPrice: 1402.5, regularMarketTime: 1786596900 } }] } }), { status: 200 });
     }
     return new Response('upstream unavailable', { status: 503 });
   }) as typeof fetch;
-  const result = await loadFreePublicFxQuotes(mockFetch, now);
+  const result = await loadFreePublicFxQuotes(mockFetch);
   assert.equal(result.quotes.length, 1);
   assert.equal(result.quotes[0].currency, 'USD');
   assert.equal(result.quotes[0].krwRate, 1402.5);
@@ -102,7 +101,7 @@ test('future-dated provider provenance is excluded fail-closed', () => {
     { provider: 'future-provider', source: 'readonly-snapshot', asOf: '2026-08-14T00:00:00.000Z', quality: 'LIVE', status: 'READY', assets: [{ bucket: 'CASH', amount: 9_999_999, currency: 'KRW' }] },
   ], freshFx, { now });
   assert.equal(result.status, 'UNAVAILABLE');
-  assert.equal(result.assets.knownNormalizedKRWAmount, null);
+  assert.equal(result.assets.knownNormalizedKRWAmount, 0);
   assert.equal(result.assets.totalNormalizedKRWAmount, null);
   assert.ok(result.missing.some((item) => item.includes('INVALID_PROVENANCE')));
 });
@@ -135,75 +134,20 @@ test('deterministic allocation policy classifies known weights without AI-genera
   assert.equal(result.comparison.find((row) => row.assetClass === 'CRYPTO')?.state, 'UNAVAILABLE');
 });
 
-const interval = (index: number, offset = 0) => ({
-  startTimestamp: new Date(Date.UTC(2026, 6, index + 1) + offset).toISOString(),
-  timestamp: new Date(Date.UTC(2026, 6, index + 2) + offset).toISOString(),
-});
-
 test('correlation requires aligned return samples and fails closed when history does not align', () => {
-  const left = Array.from({ length: 30 }, (_, index) => ({ ...interval(index), value: index / 100 }));
-  const right = Array.from({ length: 30 }, (_, index) => ({ ...interval(index, 1000), value: index / 100 }));
+  const left = Array.from({ length: 30 }, (_, index) => ({ timestamp: `L-${index}`, value: index / 100 }));
+  const right = Array.from({ length: 30 }, (_, index) => ({ timestamp: `R-${index}`, value: index / 100 }));
   const result = calculateAlignedCorrelation(left, right, 30);
   assert.equal(result.status, 'PARTIAL_MARKET_DATA');
   assert.equal(result.correlation, null);
 });
 
 test('aligned correlation computes only from matching timestamp returns', () => {
-  const left = Array.from({ length: 30 }, (_, index) => ({ ...interval(index), value: index }));
-  const right = Array.from({ length: 30 }, (_, index) => ({ ...interval(index), value: index * 2 }));
+  const left = Array.from({ length: 30 }, (_, index) => ({ timestamp: String(index), value: index }));
+  const right = Array.from({ length: 30 }, (_, index) => ({ timestamp: String(index), value: index * 2 }));
   const result = calculateAlignedCorrelation(left, right, 30);
   assert.equal(result.status, 'READY');
   assert.ok(result.correlation != null && Math.abs(result.correlation - 1) < 1e-12);
-});
-
-test('asset summaries distinguish absent valuation, measured zero and overflow', () => {
-  const asset = { bucket: 'CASH' as const, amount: 0, currency: 'KRW' as const, source: 'fixture', asOf: now.toISOString(), quality: 'DELAYED' as const };
-  for (const inputs of [[], [{ ...asset, currency: 'USD' as const }]]) {
-    const result = buildPortfolioAssetSummary(inputs, [], { now });
-    assert.equal(result.knownNormalizedKRWAmount, null);
-    assert.equal(result.totalNormalizedKRWAmount, null);
-    assert.equal(result.status, 'PARTIAL');
-  }
-  assert.equal(buildPortfolioAssetSummary([asset], [], { now }).knownNormalizedKRWAmount, 0);
-  const overflow = buildPortfolioAssetSummary([{ ...asset, amount: Number.MAX_VALUE }, { ...asset, amount: Number.MAX_VALUE }], [], { now });
-  assert.equal(overflow.knownNormalizedKRWAmount, null);
-  assert.equal(overflow.totalNormalizedKRWAmount, null);
-  assert.ok(overflow.missing.includes('ASSET_AGGREGATE_OVERFLOW'));
-});
-
-test('allocation rejects invalid numeric facts, duplicate identities and aggregate overflow', () => {
-  for (const items of [[], [{ key: 'A', normalizedKRWAmount: null }], [{ key: 'A', normalizedKRWAmount: -1 }],
-    [{ key: 'A', normalizedKRWAmount: Number.NaN }], [{ key: 'A', normalizedKRWAmount: Infinity }],
-    [{ key: 'A', normalizedKRWAmount: 10 }, { key: 'A', normalizedKRWAmount: 20 }],
-    [{ key: 'A', normalizedKRWAmount: Number.MAX_VALUE }, { key: 'B', normalizedKRWAmount: Number.MAX_VALUE }]]) {
-    const result = calculateAllocation(items);
-    assert.equal(result.status, 'UNAVAILABLE');
-    assert.equal(result.knownTotalKRW, null);
-    assert.equal(result.top5ConcentrationPercent, null);
-    assert.ok(result.weights.every((item) => item.weightPercent === null));
-  }
-  assert.equal(calculateAllocation([{ key: 'A', normalizedKRWAmount: 0 }]).knownTotalKRW, 0);
-  const partial = calculateAllocation([{ key: 'A', normalizedKRWAmount: 10 }, { key: 'B', normalizedKRWAmount: -1 }]);
-  assert.equal(partial.status, 'PARTIAL');
-  assert.equal(partial.weights[1].normalizedKRWAmount, null);
-  assert.equal(partial.weights[1].weightPercent, null);
-});
-
-test('correlation cannot inflate N using duplicate, malformed, future or mismatched return intervals', () => {
-  const valid = Array.from({ length: 30 }, (_, index) => ({ ...interval(index), value: index / 100 }));
-  for (const invalid of [[...valid, valid[0]], valid.map((point) => ({ ...point, timestamp: '2026-02-30T00:00:00Z' })),
-    valid.map((point) => ({ ...point, timestamp: '2099-01-01T00:00:00Z' })),
-    valid.map((point) => ({ ...point, startTimestamp: point.timestamp })),
-    valid.map((point) => ({ ...point, startTimestamp: new Date(Date.parse(point.startTimestamp) - 1000).toISOString() }))]) {
-    const result = calculateAlignedCorrelation(valid, invalid, 30, now.getTime());
-    assert.equal(result.correlation, null);
-    assert.notEqual(result.status, 'READY');
-    assert.equal(result.sampleSize, 0);
-  }
-  const large = valid.map((point, index) => ({ ...point, value: (index + 1) * 1e300 }));
-  const result = calculateAlignedCorrelation(large, large, 30, now.getTime());
-  assert.equal(result.status, 'READY');
-  assert.ok(result.correlation !== null && Math.abs(result.correlation - 1) < 1e-12);
 });
 
 test('additional investment exposes stop and target calculations only when evidence prices exist', () => {

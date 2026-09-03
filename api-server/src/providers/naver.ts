@@ -1,9 +1,19 @@
 import type { CatalogEntry } from '../data/catalog';
 import type { Candle, Quote } from '../sample/types';
-import { parseFinancialAmount } from './financial-evidence';
-import { requireMarketNumber, requireSourceTime } from './market-evidence';
 
-const NAVER_REQUEST_TIMEOUT_MS = 1_650;
+type NaverPollItem = {
+  cd?: string;
+  nm?: string;
+  nv?: number | string;
+  cv?: number | string;
+  cr?: number | string;
+  aq?: number | string;
+  aa?: number | string;
+  hv?: number | string;
+  lv?: number | string;
+  ov?: number | string;
+  pcv?: number | string;
+};
 
 type NaverChartItem = {
   localDate?: string;
@@ -20,6 +30,18 @@ function cleanTicker(value: unknown) {
 
 function onlyDigits(value: string) {
   return value.replace(/\D/g, '');
+}
+
+function safeNumber(value: unknown, fallback = 0) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+
+  if (typeof value === 'string') {
+    const parsed = Number(value.replace(/[,\s%원]/g, ''));
+
+    if (Number.isFinite(parsed)) return parsed;
+  }
+
+  return fallback;
 }
 
 function isKrTicker(ticker: string) {
@@ -39,20 +61,17 @@ function getNameFromEntry(entryOrTicker: CatalogEntry | string, fallback: string
 }
 
 function dateToIso(localDate: string) {
-  if (!/^\d{8}$/.test(localDate)) throw new Error('NAVER_CANDLE_DATE_INVALID');
+  if (!/^\d{8}$/.test(localDate)) return new Date().toISOString();
 
   const yyyy = localDate.slice(0, 4);
   const mm = localDate.slice(4, 6);
   const dd = localDate.slice(6, 8);
 
-  const time = requireSourceTime(`${yyyy}-${mm}-${dd}T00:00:00+09:00`);
-  if (!time.updatedAt) throw new Error('NAVER_CANDLE_DATE_MISSING');
-  return time.updatedAt;
+  return new Date(`${yyyy}-${mm}-${dd}T00:00:00+09:00`).toISOString();
 }
 
 async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(url, {
-    signal: AbortSignal.timeout(NAVER_REQUEST_TIMEOUT_MS),
     headers: {
       accept: 'application/json,text/plain,*/*',
       'accept-language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
@@ -71,7 +90,6 @@ async function fetchJson<T>(url: string): Promise<T> {
 
 async function fetchText(url: string): Promise<string> {
   const res = await fetch(url, {
-    signal: AbortSignal.timeout(NAVER_REQUEST_TIMEOUT_MS),
     headers: {
       accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       'accept-language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
@@ -88,60 +106,213 @@ async function fetchText(url: string): Promise<string> {
   return await res.text();
 }
 
-function record(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+function stripHtml(value: string) {
+  return value
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
-export function parseNaverPollQuote(input: unknown, code: string) {
-  const item = record(input);
-  const identity = item.itemCode ?? item.symbolCode;
-  if (identity !== code || (item.symbolCode != null && item.symbolCode !== code)
-    || (record(item.currencyType).code != null && record(item.currencyType).code !== 'KRW')) {
-    throw new Error('NAVER_IDENTITY_MISMATCH:' + code);
+function parseNumberNear(label: string, html: string) {
+  const index = html.indexOf(label);
+
+  if (index < 0) return 0;
+
+  const sliced = html.slice(index, index + 1500);
+  const match = sliced.match(/[-+]?\d[\d,]*(?:\.\d+)?%?/);
+
+  return safeNumber(match?.[0]);
+}
+
+function parseByClass(className: string, html: string) {
+  const regex = new RegExp(
+    `<[^>]+class=["'][^"']*${className}[^"']*["'][^>]*>([\\s\\S]*?)<\\/[^>]+>`,
+    'i',
+  );
+
+  const match = html.match(regex);
+
+  if (!match?.[1]) return '';
+
+  return stripHtml(match[1]);
+}
+
+function parseNameFromHtml(html: string, fallback: string) {
+  const nameByWrap = html.match(/<div\s+class=["']wrap_company["'][\s\S]*?<h2[^>]*>([\s\S]*?)<\/h2>/i);
+
+  if (nameByWrap?.[1]) {
+    const parsed = stripHtml(nameByWrap[1]);
+
+    if (parsed) return parsed;
   }
-  const price = requireMarketNumber(item.closePriceRaw ?? item.closePrice, 'naver.price', Number.MIN_VALUE);
-  const changeAmount = requireMarketNumber(item.compareToPreviousClosePriceRaw ?? item.compareToPreviousClosePrice, 'naver.changeAmount');
-  const changePercent = requireMarketNumber(item.fluctuationsRatioRaw ?? item.fluctuationsRatio, 'naver.changePercent');
-  const previousClose = requireMarketNumber(item.previousClosePrice ?? price - changeAmount, 'naver.previousClose', Number.MIN_VALUE);
-  return {
-    ticker: code, name: typeof item.stockName === 'string' ? item.stockName : code,
-    price, currentPrice: price, regularMarketPrice: price, close: price,
-    previousClose, prevClose: previousClose, change: changeAmount, changeAmount,
-    changePercent, regularMarketChangePercent: changePercent,
-    volume: requireMarketNumber(item.accumulatedTradingVolumeRaw ?? item.accumulatedTradingVolume, 'naver.volume', 0),
-    // The formatted field contains Korean magnitude units. Only the provider's
-    // raw KRW field proves turnover; do not replace it with last-price * volume.
-    tradingValue: requireMarketNumber(item.accumulatedTradingValueRaw, 'naver.tradingValue', 0),
-    tradingValueSource: 'PROVIDER_REPORTED' as const,
-    open: requireMarketNumber(item.openPriceRaw ?? item.openPrice, 'naver.open', Number.MIN_VALUE),
-    high: requireMarketNumber(item.highPriceRaw ?? item.highPrice, 'naver.high', Number.MIN_VALUE),
-    low: requireMarketNumber(item.lowPriceRaw ?? item.lowPrice, 'naver.low', Number.MIN_VALUE),
-    ...requireSourceTime(item.localTradedAt), source: 'naver' as const,
-  };
+
+  const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+
+  if (title?.[1]) {
+    const parsed = stripHtml(title[1])
+      .replace(/: 네이버페이 증권.*/g, '')
+      .replace(/종목분석.*/g, '')
+      .trim();
+
+    if (parsed) return parsed;
+  }
+
+  return fallback;
 }
 
-export async function getQuote(entryOrTicker: CatalogEntry | string): Promise<Partial<Quote>> {
-  const ticker = getTickerFromEntry(entryOrTicker);
-  const code = onlyDigits(ticker);
-  if (!isKrTicker(ticker)) throw new Error('NAVER_ONLY_SUPPORTS_KR_TICKER:' + ticker);
-  const urls = [
-    'https://polling.finance.naver.com/api/realtime/domestic/stock/' + code,
-    'https://api.stock.naver.com/stock/' + code + '/basic',
-  ];
-  const failures: string[] = [];
-  for (const url of urls) {
-    try {
-      const data = record(await fetchJson<unknown>(url));
-      const items = data.datas;
-      const item = Array.isArray(items) ? items[0] : data;
-      return parseNaverPollQuote(item, code);
-    } catch (error) {
-      failures.push(error instanceof Error ? error.message : 'NAVER_RESPONSE_INVALID');
+function parseNaverHtmlQuote(code: string, html: string, fallbackName: string): Partial<Quote> {
+  const noToday = parseByClass('no_today', html);
+  const price = safeNumber(noToday) || parseNumberNear('현재가', html);
+
+  const previousClose = parseNumberNear('전일', html) || parseNumberNear('전일가', html);
+  const open = parseNumberNear('시가', html);
+  const high = parseNumberNear('고가', html);
+  const low = parseNumberNear('저가', html);
+  const volume = parseNumberNear('거래량', html);
+  const tradingValue = parseNumberNear('거래대금', html) * 1_000_000;
+
+  let changeAmount = 0;
+  let changePercent = 0;
+
+  const rateMatch =
+    html.match(/rate_info[\s\S]*?([-+]?\d+(?:\.\d+)?)\s*%/i) ??
+    html.match(/전일대비[\s\S]*?([-+]?\d+(?:\.\d+)?)\s*%/i);
+
+  if (rateMatch?.[1]) {
+    changePercent = safeNumber(rateMatch[1]);
+  }
+
+  if (previousClose > 0 && price > 0) {
+    changeAmount = price - previousClose;
+
+    if (!changePercent) {
+      changePercent = (changeAmount / previousClose) * 100;
     }
   }
-  // Yahoo remains the service-level fallback. Loose HTML number extraction can
-  // interpret dates/links as prices and therefore is not quote evidence.
-  throw new Error('NAVER_QUOTE_UNAVAILABLE:' + code + ':' + failures.join('|'));
+
+  return {
+    ticker: code,
+    name: parseNameFromHtml(html, fallbackName),
+    price,
+    currentPrice: price,
+    regularMarketPrice: price,
+    close: price,
+    previousClose: previousClose || price - changeAmount,
+    prevClose: previousClose || price - changeAmount,
+    change: changeAmount,
+    changeAmount,
+    changePercent,
+    regularMarketChangePercent: changePercent,
+    volume,
+    tradingValue: tradingValue || price * volume,
+    open,
+    high,
+    low,
+    updatedAt: new Date().toISOString(),
+  } as Partial<Quote>;
+}
+
+async function fetchNaverPoll(code: string): Promise<NaverPollItem | null> {
+  const cleanCode = onlyDigits(code);
+
+  if (!isKrTicker(cleanCode)) return null;
+
+  const urls = [
+    `https://polling.finance.naver.com/api/realtime/domestic/stock/${cleanCode}`,
+    `https://api.stock.naver.com/stock/${cleanCode}/basic`,
+  ];
+
+  for (const url of urls) {
+    try {
+      const data = await fetchJson<any>(url);
+
+      const item =
+        data?.datas?.[0] ??
+        data?.areas?.[0]?.datas?.[0] ??
+        data?.result?.areas?.[0]?.datas?.[0] ??
+        data?.result?.datas?.[0] ??
+        data;
+
+      if (!item) continue;
+
+      return {
+        cd: cleanCode,
+        nm: item.nm ?? item.stockName ?? item.name,
+        nv: item.nv ?? item.closePrice ?? item.nowPrice,
+        cv: item.cv ?? item.compareToPreviousClosePrice ?? item.changePrice,
+        cr: item.cr ?? item.fluctuationsRatio ?? item.changeRate,
+        aq: item.aq ?? item.accumulatedTradingVolume,
+        aa: item.aa ?? item.accumulatedTradingValue,
+        hv: item.hv ?? item.highPrice,
+        lv: item.lv ?? item.lowPrice,
+        ov: item.ov ?? item.openPrice,
+        pcv: item.pcv ?? item.previousClosePrice,
+      };
+    } catch {
+      // try next
+    }
+  }
+
+  return null;
+}
+
+export async function getQuote(
+  entryOrTicker: CatalogEntry | string,
+): Promise<Partial<Quote>> {
+  const ticker = getTickerFromEntry(entryOrTicker);
+  const code = onlyDigits(ticker);
+  const fallbackName = getNameFromEntry(entryOrTicker, code);
+
+  if (!isKrTicker(code)) {
+    throw new Error(`NAVER_ONLY_SUPPORTS_KR_TICKER:${ticker}`);
+  }
+
+  const item = await fetchNaverPoll(code);
+
+  if (item) {
+    const price = safeNumber(item.nv);
+
+    if (price > 0) {
+      const changeAmount = safeNumber(item.cv);
+      const changePercent = safeNumber(item.cr);
+      const previousClose =
+        safeNumber(item.pcv) || (changePercent === -100 ? price : price - changeAmount);
+      const volume = safeNumber(item.aq);
+      const tradingValue = safeNumber(item.aa) || price * volume;
+
+      return {
+        ticker: code,
+        name: String(item.nm ?? fallbackName),
+        price,
+        currentPrice: price,
+        regularMarketPrice: price,
+        close: price,
+        previousClose,
+        prevClose: previousClose,
+        change: changeAmount,
+        changeAmount,
+        changePercent,
+        regularMarketChangePercent: changePercent,
+        volume,
+        tradingValue,
+        open: safeNumber(item.ov),
+        high: safeNumber(item.hv),
+        low: safeNumber(item.lv),
+        updatedAt: new Date().toISOString(),
+      } as Partial<Quote>;
+    }
+  }
+
+  const html = await fetchText(`https://finance.naver.com/item/main.naver?code=${code}`);
+  const parsed = parseNaverHtmlQuote(code, html, fallbackName);
+
+  if (!safeNumber((parsed as any).price)) {
+    throw new Error(`NAVER_PRICE_PARSE_FAILED:${code}`);
+  }
+
+  return parsed;
 }
 
 export const quote = getQuote;
@@ -167,29 +338,20 @@ export async function getCandles(
   const data = await fetchJson<any>(url);
   const rows: NaverChartItem[] = Array.isArray(data) ? data : data?.data ?? [];
 
-  return normalizeNaverCandles(rows);
-}
-
-export function normalizeNaverCandles(rows: NaverChartItem[]): Candle[] {
-  const seen = new Set<string>();
   return rows
     .map((row) => {
       const time = dateToIso(String(row.localDate ?? ''));
-      if (seen.has(time)) throw new Error('NAVER_CANDLE_DUPLICATE');
-      seen.add(time);
 
-      const candle = {
+      return {
         time,
-        open: requireMarketNumber(row.openPrice, 'naver.candle.open', Number.MIN_VALUE),
-        high: requireMarketNumber(row.highPrice, 'naver.candle.high', Number.MIN_VALUE),
-        low: requireMarketNumber(row.lowPrice, 'naver.candle.low', Number.MIN_VALUE),
-        close: requireMarketNumber(row.closePrice, 'naver.candle.close', Number.MIN_VALUE),
-        volume: requireMarketNumber(row.accumulatedTradingVolume, 'naver.candle.volume', 0),
-      };
-      if (candle.low > Math.min(candle.open, candle.close) || candle.high < Math.max(candle.open, candle.close) || candle.high < candle.low) throw new Error('NAVER_CANDLE_OHLC_INVALID');
-      return candle;
+        open: safeNumber(row.openPrice),
+        high: safeNumber(row.highPrice),
+        low: safeNumber(row.lowPrice),
+        close: safeNumber(row.closePrice),
+        volume: safeNumber(row.accumulatedTradingVolume),
+      } as Candle;
     })
-    .sort((a, b) => a.time.localeCompare(b.time));
+    .filter((candle) => candle.close > 0);
 }
 
 export const candles = getCandles;
@@ -218,20 +380,7 @@ export interface NaverRatios {
   eps: number;
   per: number;
   pbr: number;
-  bps: number | null;
-}
-
-export function parseNaverRatios(html: string): NaverRatios {
-  const value = (key: 'eps' | 'per' | 'pbr' | 'bps'): number => {
-    const matches = [...html.matchAll(new RegExp(`<em\\b[^>]*\\bid=["']_${key}["'][^>]*>([^<]*)</em>`, 'gi'))];
-    // Only the exact provider field is evidence. Nearby dates, links and other
-    // ratio values must never become a substitute for a missing field.
-    return parseFinancialAmount(matches.length === 1 ? matches[0][1] : undefined, 'naver', key);
-  };
-  return {
-    eps: value('eps'), per: value('per'), pbr: value('pbr'),
-    bps: /\bid=["']_bps["']/.test(html) ? value('bps') : null,
-  };
+  bps: number;
 }
 
 export async function getRatios(
@@ -245,5 +394,14 @@ export async function getRatios(
   }
 
   const html = await fetchText(`https://finance.naver.com/item/main.naver?code=${code}`);
-  return parseNaverRatios(html);
+  const eps = parseNumberNear('EPS', html);
+  const per = parseNumberNear('PER', html);
+  const pbr = parseNumberNear('PBR', html);
+  const bps = parseNumberNear('BPS', html);
+
+  if (![eps, per, pbr, bps].some((value) => Number.isFinite(value) && value !== 0)) {
+    throw new Error(`NAVER_RATIO_PARSE_FAILED:${code}`);
+  }
+
+  return { eps, per, pbr, bps };
 }

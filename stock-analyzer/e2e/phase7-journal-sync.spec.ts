@@ -1,45 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
-import type { JournalSyncRecord } from '../src/lib/paper-journal-sync';
 
 const PATH = '/__phase7-journal-sync-e2e';
-
-test('scoped synchronization discloses preserved research and broker ledgers', async ({ page }) => {
-  const errors = captureErrors(page);
-  await page.goto(`${PATH}?mode=scoped`);
-  await page.getByTestId('journal-sync-button').click();
-  await expect(page.getByTestId('journal-sync-status')).toContainText('동기화 완료');
-  await expect(page.getByRole('status')).toContainText('별도 원장에 보존되며 합산하지 않습니다');
-  expect(errors).toEqual([]);
-});
-
-test('real browser sync transport respects the server byte budget for Korean journal notes', async ({ page }) => {
-  const errors = captureErrors(page);
-  const bodies: Array<{ bytes: number; key: string; ids: string[] }> = [];
-  await page.route('**/api/paper-journal/sync', async (route) => {
-    const body = route.request().postDataJSON() as { idempotencyKey: string; clientTime: string; records: JournalSyncRecord[] };
-    const bytes = route.request().postDataBuffer()?.byteLength ?? 0;
-    bodies.push({ bytes, key: body.idempotencyKey, ids: body.records.map((record) => `${record.kind}:${record.id}`) });
-    const now = new Date().toISOString();
-    await route.fulfill({ status: bytes <= 512 * 1024 ? 200 : 413, contentType: 'application/json', body: JSON.stringify({
-      ok: true, mode: 'journal-sync-only', orderSubmitted: false, exchangeRequestSent: false,
-      idempotencyKey: body.idempotencyKey, serverTime: now,
-      uploaded: body.records.map((record) => ({ ...record, createdAt: now, serverUpdatedAt: now })),
-      downloaded: [], unchanged: [], conflicts: [], failed: [], warnings: [], clockSkewMs: 0,
-    }) });
-  });
-  await page.goto(`${PATH}?mode=byte-batch`);
-  await page.getByTestId('journal-sync-button').click();
-  await expect(page.getByTestId('journal-sync-status')).toContainText('동기화 완료');
-  expect(bodies.length).toBeGreaterThan(1);
-  expect(bodies.every((body) => body.bytes > 0 && body.bytes <= 512 * 1024)).toBeTruthy();
-  expect(new Set(bodies.map((body) => body.key)).size).toBe(bodies.length);
-  const ids = bodies.flatMap((body) => body.ids);
-  expect(ids.length).toBe(201);
-  expect(new Set(ids).size).toBe(201);
-  await test.info().attach('journal-batch-byte-evidence', { contentType: 'application/json',
-    body: JSON.stringify({ source: 'local browser transport with mocked API response', records: ids.length, maxRequestBytes: 512 * 1024, requestBytes: bodies.map((body) => body.bytes) }) });
-  expect(errors).toEqual([]);
-});
 
 async function open(page: Page) {
   await page.goto(PATH);
@@ -160,42 +121,11 @@ test('account switch creates isolated namespaces without exposing UUID', async (
   await page.getByTestId('switch-account').click();
   const second = await page.getByTestId('active-account').textContent();
   expect(first).not.toBe(second);
-  const keys = await page.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith('seungjae.paper-trading.v3:')));
+  const keys = await page.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith('seungjae.paper-trading.v2:')));
   expect(keys.length).toBeGreaterThanOrEqual(2);
   expect(keys.join(' ')).not.toContain('phase7-user-a');
   expect(keys.join(' ')).not.toContain('phase7-user-b');
 });
-
-test('late account A sync cannot fetch pages or persist after switching to B', async ({ page }) => {
-  const errors = captureErrors(page);
-  await open(page);
-  await page.getByLabel('시나리오').selectOption('deferred');
-  await page.getByTestId('journal-sync-button').click();
-  await expect(page.getByTestId('journal-sync-button')).toBeDisabled();
-  await page.getByTestId('switch-account').click();
-  await expect(page.getByTestId('active-account')).toHaveText('phase7-user-b');
-  const before = await page.evaluate(() => JSON.stringify(Object.entries(localStorage).sort()));
-  await page.evaluate(() => window.dispatchEvent(new Event('phase7-release-sync')));
-  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.phase7SyncReturned)).toBe('true');
-  expect(await page.evaluate(() => document.documentElement.dataset.phase7SnapshotCalls ?? '0')).toBe('0');
-  expect(await page.evaluate(() => JSON.stringify(Object.entries(localStorage).sort()))).toBe(before);
-  await expect(page.getByTestId('journal-sync-button')).toBeEnabled();
-  expect(errors).toEqual([]);
-});
-
-for (const mode of ['malformed', 'endless']) {
-  test(`sync ${mode} preserves the original ledger and never reports completion`, async ({ page }) => {
-    const errors = captureErrors(page);
-    await open(page);
-    await page.getByLabel('시나리오').selectOption(mode);
-    const before = await page.evaluate(() => JSON.stringify(Object.entries(localStorage).filter(([key]) => key.startsWith('seungjae.paper-trading.v3:')).sort()));
-    await page.getByTestId('journal-sync-button').click();
-    await expect(page.getByRole('alert')).toContainText(mode === 'malformed' ? '수치 근거' : '페이지 한도');
-    expect(await page.evaluate(() => JSON.stringify(Object.entries(localStorage).filter(([key]) => key.startsWith('seungjae.paper-trading.v3:')).sort()))).toBe(before);
-    await expect(page.getByTestId('journal-sync-status')).not.toContainText('동기화 완료');
-    expect(errors).toEqual([]);
-  });
-}
 
 for (const viewport of [
   { name: 'mobile 390x844', width: 390, height: 844 },

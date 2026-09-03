@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto';
-import { quoteTimeEvidence } from '../providers/market-evidence';
 import type { CatalogEntry } from '../data/catalog';
 import type { AssetType } from '../data/asset-type';
 import { rsiSeries } from '../sample/indicators';
@@ -199,7 +198,7 @@ function atr(candles: Candle[], period = 14): number | null {
 function stockPriceTick(price: number, market: 'KR' | 'US', assetType: AssetType, observedAt: string): number | null {
   if (market === 'KR') return krxPriceTick(price, assetType);
   const at = Date.parse(observedAt);
-  return Number.isFinite(at) ? usNmsPriceTick(price, at) : null;
+  return usNmsPriceTick(price, Number.isFinite(at) ? at : Date.now());
 }
 
 function pricePlan(
@@ -278,9 +277,8 @@ function pricePlan(
   };
 }
 
-function expiry(timeframe: string, observedAt: string | null): string | null {
-  const base = observedAt == null ? NaN : Date.parse(observedAt);
-  if (!Number.isFinite(base)) return null;
+function expiry(timeframe: string, observedAt: string): string {
+  const base = Date.parse(observedAt);
   const ttl = timeframe === '5m'
     ? 15 * 60_000
     : timeframe === '15m'
@@ -290,7 +288,7 @@ function expiry(timeframe: string, observedAt: string | null): string | null {
         : timeframe === '4H'
           ? 12 * 60 * 60_000
           : 3 * 24 * 60 * 60_000;
-  return new Date(base + ttl).toISOString();
+  return new Date((Number.isFinite(base) ? base : Date.now()) + ttl).toISOString();
 }
 
 function signalId(
@@ -314,30 +312,20 @@ export interface StockSignalPolicyInput {
   candles: Candle[];
   selected: string[];
   timeframe: string;
-  now?: number;
 }
 
 export function applyStockSignalPolicy(input: StockSignalPolicyInput): ScannerSignalCard {
   const { card, universeEntry, candles, selected, timeframe } = input;
-  const now = input.now ?? Date.now();
-  const sourceTime = quoteTimeEvidence(card.quoteObservedAt, 'iso', now);
-  const analysisTime = quoteTimeEvidence(card.analyzedAt, 'iso', now);
-  const observedAt = sourceTime.updatedAt;
-  const timeValid = observedAt != null && analysisTime.updatedAt != null;
-  const quoteFresh = timeValid && sourceTime.freshness.status === 'FRESH';
   const factors = card.scoreBreakdown ?? {};
   let completenessTotal = 0;
   let fixedScore = 0;
   for (const [key, weight] of Object.entries(FACTOR_WEIGHTS)) {
     const factor = factors[key];
-    const scorePresent = typeof factor?.score === 'number' && Number.isFinite(factor.score) && factor.score >= 0 && factor.score <= 100;
-    if (scorePresent) {
-      completenessTotal += weight * (STATUS_COMPLETENESS[factor.status] ?? 0);
-      fixedScore += weight * factor.score! / 100;
-    }
+    completenessTotal += weight * (STATUS_COMPLETENESS[factor?.status ?? 'unavailable'] ?? 0);
+    fixedScore += weight * (typeof factor?.score === 'number' && Number.isFinite(factor.score) ? factor.score : 0) / 100;
   }
   const dataCompleteness = Math.round(clamp(completenessTotal));
-  const dataState = !timeValid ? 'untrusted' : !quoteFresh ? 'stale' : mapDataState(card.dataState);
+  const dataState = mapDataState(card.dataState);
   let scoreCap = 100;
   if (dataCompleteness < 50) scoreCap = 49;
   else if (dataCompleteness < 65) scoreCap = 59;
@@ -345,7 +333,7 @@ export function applyStockSignalPolicy(input: StockSignalPolicyInput): ScannerSi
   if (factors.risk?.status !== 'ok' || card.riskScore == null) scoreCap = Math.min(scoreCap, 64);
   if (universeEntry.listingStatus !== 'LISTED') scoreCap = Math.min(scoreCap, 64);
   if (dataState === 'partial') scoreCap = Math.min(scoreCap, 69);
-  if (['stale', 'insufficient', 'unavailable', 'untrusted'].includes(dataState)) scoreCap = Math.min(scoreCap, 59);
+  if (['stale', 'insufficient', 'unavailable'].includes(dataState)) scoreCap = Math.min(scoreCap, 59);
   const score = Math.round(clamp(Math.min(fixedScore, scoreCap)));
   const confidence = Math.round(clamp(Math.min(
     Number.isFinite(card.confidence) ? card.confidence : 0,
@@ -360,7 +348,7 @@ export function applyStockSignalPolicy(input: StockSignalPolicyInput): ScannerSi
     const factor = factors[factorKey];
     const semanticTruth = selectedConditionTruth(label, candles);
     const semanticReason = conditionTruthReason(label, semanticTruth);
-    const status = !quoteFresh || factor?.status !== 'ok'
+    const status = factor?.status !== 'ok'
       ? 'unverified'
       : semanticTruth === null
         ? 'unverified'
@@ -376,11 +364,8 @@ export function applyStockSignalPolicy(input: StockSignalPolicyInput): ScannerSi
       label,
       status,
       source: sourceForCondition(label),
-      // News/financial provider timestamps are not part of this contract.
-      observedAt: ['news', 'financial', 'risk', 'market'].includes(factorKey) ? null : observedAt,
-      reasons: !quoteFresh
-        ? ['시세 원본 시각이 없거나 오래되어 현재 조건을 확인하지 못했습니다.']
-        : factor?.status !== 'ok'
+      observedAt: card.analyzedAt ?? null,
+      reasons: factor?.status !== 'ok'
         ? factor?.reasons?.length
           ? factor.reasons
           : ['필수 데이터가 없어 조건을 확인하지 못했습니다.']
@@ -399,9 +384,8 @@ export function applyStockSignalPolicy(input: StockSignalPolicyInput): ScannerSi
   const unverified = evidence.filter((item) => item.status === 'unverified').map((item) => item.label);
   const allSelectedMatched = selected.length > 0 && evidence.every((item) => item.status === 'matched');
   const direction: ScannerSignalDirection = 'LONG';
-  const technicalPlan = quoteFresh && observedAt != null
-    ? pricePlan(card.price, candles, direction, card.market, universeEntry.assetType, observedAt)
-    : { plan: emptyPricePlan(), volatilityPercent: null };
+  const observedAt = card.analyzedAt || new Date().toISOString();
+  const technicalPlan = pricePlan(card.price, candles, direction, card.market, universeEntry.assetType, observedAt);
   const strongSignalEligible = allSelectedMatched
     && score >= 75
     && confidence >= 70
@@ -415,8 +399,6 @@ export function applyStockSignalPolicy(input: StockSignalPolicyInput): ScannerSi
     && technicalPlan.plan.riskReward >= 1.5
     && universeEntry.listingStatus === 'LISTED';
   const warnings: string[] = [];
-  if (!timeValid) warnings.push('SOURCE_TIME_UNVERIFIED: 시세 또는 분석 시각 확인 불가');
-  else if (!quoteFresh) warnings.push('SOURCE_TIME_STALE: 오래된 시세로 승인 단계에 진입할 수 없습니다.');
   if (unverified.length) warnings.push(`미확인 조건 ${unverified.length}개`);
   if (card.riskScore == null) warnings.push('위험 데이터 없음');
   if (dataState !== 'complete') warnings.push(`데이터 상태 ${dataState}`);
@@ -425,7 +407,7 @@ export function applyStockSignalPolicy(input: StockSignalPolicyInput): ScannerSi
 
   const volume = candles.at(-1)?.volume ?? null;
   const tradingValue = volume != null && Number.isFinite(volume) ? volume * card.price : card.liquidity;
-  const sources = new Set<string>([card.quoteSource || 'market-quote-source-unverified', 'market-candles']);
+  const sources = new Set<string>(['market-quote', 'market-candles']);
   for (const item of evidence) {
     if (item.status !== 'unverified') sources.add(item.source);
   }
@@ -443,7 +425,7 @@ export function applyStockSignalPolicy(input: StockSignalPolicyInput): ScannerSi
     price: card.price,
     changePercent: Number.isFinite(card.changePercent) ? card.changePercent : null,
     direction,
-    signalState: strongSignalEligible ? 'WATCHING' : ['unavailable', 'untrusted', 'stale'].includes(dataState) ? 'INVALIDATED' : 'DETECTED',
+    signalState: strongSignalEligible ? 'WATCHING' : dataState === 'unavailable' ? 'INVALIDATED' : 'DETECTED',
     score,
     confidence,
     dataCompleteness,

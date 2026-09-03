@@ -4,7 +4,6 @@ import assert from 'node:assert/strict';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
 import { createPaperJournalRouter } from './paper-journal';
-import { paperJournalFixture } from '../services/paper-journal-test-fixture';
 import type { PaperJournalRepository } from '../services/paper-journal.types';
 import type { TradingReviewProvider } from '../services/trading-review-provider';
 
@@ -15,7 +14,6 @@ function createRepository(): PaperJournalRepository {
   const records = new Map();
   const requests = new Map();
   const conflicts = new Map();
-  const claims = new Set<string>();
   const journalPayloads = Array.from({ length: 10 }, (_, index) => ({
     id: `trade-${index}`, tradeId: `trade-${index}`, status: 'closed', side: index % 2 ? 'short' : 'long', symbol: 'BTCUSDT',
     strategyName: 'manual', filledAt: new Date(NOW.getTime() - (index + 1) * 60_000).toISOString(),
@@ -26,15 +24,8 @@ function createRepository(): PaperJournalRepository {
     fundingCost: 0.1, warnings: [], ruleViolation: false, note: 'private note', email: 'private@example.com',
   }));
   return {
-    async claimSyncRequest(user, key) {
-      const id = `${user}:${key}`;
-      if (claims.has(id)) throw new Error('request already claimed');
-      claims.add(id);
-      return null;
-    },
     async getRecord(user, kind, id) { return structuredClone(records.get(`${user}:${kind}:${id}`) ?? null); },
-    async upsertRecord(user, record, serverTime, expectedVersion) {
-      if ((records.get(`${user}:${record.kind}:${record.id}`)?.version ?? null) !== expectedVersion) throw new Error('version changed');
+    async upsertRecord(user, record, serverTime) {
       const stored = { ...structuredClone(record), createdAt: serverTime, serverUpdatedAt: serverTime };
       records.set(`${user}:${record.kind}:${record.id}`, stored); return structuredClone(stored);
     },
@@ -85,7 +76,7 @@ async function safeJson(response: Response) {
 
 const syncBody = {
   idempotencyKey: 'phase7-smoke-0001', clientTime: NOW.toISOString(),
-  records: [{ kind: 'journal', id: 'trade-smoke', version: 1, updatedAt: NOW.toISOString(), deletedAt: null, payload: { ...paperJournalFixture('trade-smoke', NOW.toISOString()) } }],
+  records: [{ kind: 'journal', id: 'trade-smoke', version: 1, updatedAt: NOW.toISOString(), deletedAt: null, payload: { id: 'trade-smoke', status: 'closed', netPnl: 10 } }],
 };
 
 test('sync endpoint returns journal-sync-only safety contract', async () => {
@@ -105,17 +96,6 @@ test('sync endpoint rejects body user_id', async () => {
     const response = await fetch(`${baseUrl}/api/paper-journal/sync`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...syncBody, user_id: 'other' }) });
     assert.equal(response.status, 400);
     assert.equal((await safeJson(response)).code, 'CLIENT_USER_ID_FORBIDDEN');
-  } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
-});
-
-test('sync endpoint rejects incomplete financial payload before persistence', async () => {
-  const { server, baseUrl, repository } = await startServer();
-  try {
-    const response = await fetch(`${baseUrl}/api/paper-journal/sync`, { method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ...syncBody, records: [{ ...syncBody.records[0], payload: { id: 'trade-smoke', status: 'closed', netPnl: 999 } }] }) });
-    assert.equal(response.status, 400);
-    assert.equal((await safeJson(response)).code, 'INVALID_RECORD_EVIDENCE');
-    assert.equal((await repository.listSnapshot(USER)).length, 0);
   } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
 });
 

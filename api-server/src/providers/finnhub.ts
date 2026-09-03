@@ -5,13 +5,10 @@ import { ProviderError } from '../lib/errors';
 import { fetchJson } from '../lib/http';
 import { cached, TTL } from '../lib/cache';
 import type { CatalogEntry } from '../data/catalog';
-import { requireFinancialNumber } from './financial-evidence';
-import { quoteTimeEvidence, requireMarketNumber, type QuoteTimeEvidence } from './market-evidence';
 
 const BASE = 'https://finnhub.io/api/v1';
 
-export interface Quote extends QuoteTimeEvidence {
-  source: 'finnhub';
+export interface Quote {
   price: number;
   changeAmount: number;
   changePercent: number;
@@ -57,7 +54,7 @@ interface FinnhubQuote {
 export async function getQuote(entry: CatalogEntry): Promise<Quote> {
   const key = getFinnhubKey();
   const symbol = toFinnhubSymbol(entry);
-  return cached(`finnhub:quote:v2:${symbol}`, TTL.quote, async () => {
+  return cached(`finnhub:quote:${symbol}`, TTL.quote, async () => {
     const data = await fetchJson<FinnhubQuote>(
       `${BASE}/quote?symbol=${encodeURIComponent(symbol)}&token=${key}`,
       { provider: 'finnhub' },
@@ -71,17 +68,13 @@ export async function getQuote(entry: CatalogEntry): Promise<Quote> {
       );
     }
     return {
-      price: requireMarketNumber(data.c, 'finnhub.price', Number.MIN_VALUE),
-      changeAmount: requireMarketNumber(data.d, 'finnhub.changeAmount'),
-      changePercent: requireMarketNumber(data.dp, 'finnhub.changePercent'),
-      high: requireMarketNumber(data.h, 'finnhub.high', Number.MIN_VALUE),
-      low: requireMarketNumber(data.l, 'finnhub.low', Number.MIN_VALUE),
-      open: requireMarketNumber(data.o, 'finnhub.open', Number.MIN_VALUE),
-      previousClose: requireMarketNumber(data.pc, 'finnhub.previousClose', Number.MIN_VALUE),
-      // The verified SDK quote contract has no source time; retrieval time is
-      // not a substitute. This fallback cannot claim FRESH or LIVE status.
-      ...quoteTimeEvidence(null),
-      source: 'finnhub',
+      price: data.c,
+      changeAmount: data.d ?? 0,
+      changePercent: data.dp ?? 0,
+      high: data.h,
+      low: data.l,
+      open: data.o,
+      previousClose: data.pc,
     };
   });
 }
@@ -113,6 +106,10 @@ export async function getProfile(entry: CatalogEntry): Promise<Profile> {
   });
 }
 
+interface FinnhubMetricResponse {
+  metric?: Record<string, number | null>;
+}
+
 export interface Ratios {
   eps: number;
   per: number;
@@ -122,39 +119,34 @@ export interface Ratios {
 }
 
 function round2(n: number): number {
-  return requireFinancialNumber(Math.round(n * 100) / 100, 'finnhub', 'roundedRatio');
-}
-
-export function parseFinnhubRatios(input: unknown): Ratios {
-  const metric = input && typeof input === 'object' && !Array.isArray(input)
-    && 'metric' in input ? input.metric : null;
-  if (!metric || typeof metric !== 'object' || Array.isArray(metric)) {
-    throw new ProviderError('UNAVAILABLE', 'finnhub', 'INCOMPLETE_FINANCIAL_EVIDENCE:metric');
-  }
-  const values = metric as Record<string, unknown>;
-  const read = (...keys: string[]): number => {
-    const key = keys.find((candidate) => values[candidate] != null);
-    return requireFinancialNumber(key ? values[key] : undefined, 'finnhub', keys[0]);
-  };
-  return {
-    eps: round2(read('epsBasicExclExtraItemsTTM', 'epsInclExtraItemsTTM')),
-    per: round2(read('peBasicExclExtraTTM', 'peInclExtraTTM')),
-    pbr: round2(read('pbAnnual', 'pbQuarterly')),
-    roe: round2(read('roeTTM', 'roeRfy')),
-    debtRatio: round2(read('totalDebt/totalEquityAnnual', 'totalDebt/totalEquityQuarterly') * 100),
-  };
+  return Math.round(n * 100) / 100;
 }
 
 // Live valuation ratios from Finnhub's /stock/metric endpoint (US only).
 export async function getRatios(entry: CatalogEntry): Promise<Ratios> {
   const key = getFinnhubKey();
   const symbol = toFinnhubSymbol(entry);
-  return cached(`finnhub:metric:v2:${symbol}`, TTL.financials, async () => {
-    const data = await fetchJson<unknown>(
+  return cached(`finnhub:metric:${symbol}`, TTL.financials, async () => {
+    const data = await fetchJson<FinnhubMetricResponse>(
       `${BASE}/stock/metric?symbol=${encodeURIComponent(symbol)}&metric=all&token=${key}`,
       { provider: 'finnhub' },
     );
-    return parseFinnhubRatios(data);
+    const m = data.metric ?? {};
+    const num = (k: string): number => {
+      const v = m[k];
+      return typeof v === 'number' && Number.isFinite(v) ? v : 0;
+    };
+    const de =
+      num('totalDebt/totalEquityAnnual') || num('totalDebt/totalEquityQuarterly');
+    return {
+      eps: round2(
+        num('epsBasicExclExtraItemsTTM') || num('epsInclExtraItemsTTM'),
+      ),
+      per: round2(num('peBasicExclExtraTTM') || num('peInclExtraTTM')),
+      pbr: round2(num('pbAnnual') || num('pbQuarterly')),
+      roe: round2(num('roeTTM') || num('roeRfy')),
+      debtRatio: round2(de * 100),
+    };
   });
 }
 

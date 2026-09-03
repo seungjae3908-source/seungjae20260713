@@ -26,8 +26,7 @@ async function execute(input: PaperTradingState, action: PaperTradingAction): Pr
   const state = clone(input);
   if (state.processedEventIds.includes(action.eventId)) return result(state, { duplicateEvent: true, warnings: ['이미 처리된 이벤트입니다.'] });
   state.processedEventIds.push(action.eventId);
-  state.updatedAt = new Date().toISOString();
-  state.account.updatedAt = state.updatedAt;
+  state.updatedAt = NOW;
 
   if (action.type === 'place_order') {
     const id = `order-${state.orders.length + 1}`;
@@ -42,12 +41,7 @@ async function execute(input: PaperTradingState, action: PaperTradingAction): Pr
       cancelledAt: null, rejectionCodes: [], warnings: [], mode: 'paper-only', orderSubmitted: false,
       exchangeRequestSent: false, riskResult: { allowed: true, blockCodes: [], warnings: [], maximumRiskAmount: 50,
         recommendedQuantity: quantity, notionalValue: quantity * 100_010, requiredMargin: quantity * 100_010 / action.request.leverage,
-        estimatedMaximumLoss: 50, riskReward1: 2, estimatedLiquidationPrice: 50_000,
-        stopDistance: null, stopDistancePercent: null, rawQuantity: null, estimatedEntryFee: null,
-        estimatedExitFeeAtStop: null, estimatedSlippageCost: null, estimatedFundingCost: null,
-        actualRiskPercent: null, estimatedProfit1: null, estimatedProfit2: null, riskReward2: null,
-        breakEvenPrice: null, stopToLiquidationDistancePercent: null, effectiveQuantityStep: null,
-        appMaximumLeverage: null, exchangeMaximumLeverage: null, calculatedAt: NOW },
+        estimatedMaximumLoss: 50, riskReward1: 2, estimatedLiquidationPrice: 50_000 } as any,
     };
     state.orders.push(order);
     if (pending) return result(state, { order });
@@ -123,19 +117,9 @@ const candle: NormalizedCandle = { timestamp: Date.parse('2026-08-02T02:45:00Z')
   quoteVolume: 10_000_000, timeframe: '15m', symbol: 'BTCUSDT', market: 'crypto-futures', source: 'fixture', isClosed: true, isDelayed: false, updatedAt: NOW };
 
 export default function Phase6PaperTradingE2EPage() {
-  const mode = new URLSearchParams(window.location.search).get('mode');
-  const errorMode = mode === 'error';
+  const errorMode = new URLSearchParams(window.location.search).get('mode') === 'error';
   const fixtureExecute = errorMode
     ? async () => { await new Promise((resolve) => setTimeout(resolve, 120)); throw new Error('모의거래 fixture 오류입니다.'); }
-    : mode === 'deferred' ? async (state: PaperTradingState, action: PaperTradingAction) => {
-      await new Promise<void>((resolve) => window.addEventListener('phase6-release-execution', () => resolve(), { once: true }));
-      return execute(state, action);
-    }
-    : mode === 'invalid-number' || mode === 'wrong-account' ? async (state: PaperTradingState, action: PaperTradingAction) => {
-      const response = await execute(state, action);
-      if (mode === 'invalid-number') response.state.account.equity = Number.NaN;
-      else response.state.account.id = 'different-member-account';
-      return response;
-    } : execute;
+    : execute;
   return <PaperTradingPanel compact execute={fixtureExecute} loadMarket={async () => snapshot} loadRules={async () => rules} loadCandle={async () => candle} />;
 }

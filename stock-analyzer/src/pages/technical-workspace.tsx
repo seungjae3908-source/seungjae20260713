@@ -85,9 +85,7 @@ function PositionSummarySurface() {
     update();
     window.addEventListener('storage', update);
     window.addEventListener('sa-portfolio-overlay-updated', update);
-    const timer = window.setInterval(update, 30_000);
     return () => {
-      window.clearInterval(timer);
       window.removeEventListener('storage', update);
       window.removeEventListener('sa-portfolio-overlay-updated', update);
     };

@@ -206,8 +206,8 @@ viewport:
 
 - 동일 version·다른 payload는 양쪽 버전을 포함한 명시적 충돌
 - tombstone과 수정이 같은 version이면 충돌
-- 일반 모의거래는 `baseVersion`으로 마지막 서버 확인 버전을 보존하고 정확히 같은 기준에서 수정했을 때만 조건부 저장
-- 더 큰 로컬 수정 횟수나 기기 시각은 다른 기기의 기록을 덮어쓸 권한이 아님; 기준 불명·분기 수정은 명시적 충돌로 보존
+- 높은 version 우선
+- 서버 시각보다 version 우선
 - 사용자·idempotency key별 in-flight Promise 공유
 - 500개 초과 요청의 batch별 고유 idempotency key
 - 부분 실패는 성공·실패 항목 분리

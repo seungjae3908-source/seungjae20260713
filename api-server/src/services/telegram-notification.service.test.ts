@@ -1,9 +1,5 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import express from 'express';
-import type { AddressInfo } from 'node:net';
-import pushRouter from '../routes/push';
-import type { AuthenticatedRequest } from '../middleware/auth';
 
 import {
   clearTelegramAlertState,
@@ -31,65 +27,6 @@ import {
   type ScannerTelegramRoom,
 } from './scanner-telegram-delivery.service';
 import type { ScannerAlertCandidate } from './scanner-signal.types';
-
-test('notification history HTTP preserves member scope, rejects invalid storage and confirms read ownership', async () => {
-  const envKeys = ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SECRET_KEY', 'SUPABASE_SERVICE_ROLE_KEY'] as const;
-  const saved = new Map(envKeys.map((key) => [key, process.env[key]]));
-  const observed: { method: string; member: string | null; id: string | null; bearer: string | undefined }[] = [];
-  let storageBody: unknown = [];
-  const store = express();
-  store.use(express.json());
-  store.use((req, res) => {
-    const query = new URL(req.originalUrl, 'http://fixture.invalid').searchParams;
-    observed.push({ method: req.method, member: query.get('member_id'), id: query.get('id'), bearer: req.header('authorization') });
-    res.json(storageBody);
-  });
-  const storage = store.listen(0, '127.0.0.1');
-  const app = express();
-  app.use(express.json());
-  app.use((req: AuthenticatedRequest, _res, next) => {
-    req.member = { id: 'member-a', login_name: 'fixture', display_name: 'fixture', role: 'user', status: 'approved' };
-    req.accessToken = 'fixture-member-token';
-    next();
-  });
-  app.use(pushRouter);
-  const server = app.listen(0, '127.0.0.1');
-  try {
-    await Promise.all([storage, server].map((listener) => new Promise<void>((resolve, reject) => {
-      if (listener.listening) return resolve();
-      listener.once('listening', resolve); listener.once('error', reject);
-    })));
-    process.env.SUPABASE_URL = `http://127.0.0.1:${(storage.address() as AddressInfo).port}`;
-    process.env.SUPABASE_ANON_KEY = 'fixture-public-key';
-    delete process.env.SUPABASE_SECRET_KEY;
-    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
-    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    const empty = await originalFetch(`${base}/notifications/history?member_id=member-b`);
-    assert.equal(empty.status, 200);
-    assert.equal(empty.headers.get('cache-control'), 'private, no-store');
-    assert.deepEqual(await empty.json(), { notifications: [], count: 0 });
-    storageBody = null;
-    const invalid = await originalFetch(`${base}/notifications/history`);
-    assert.equal(invalid.status, 502);
-    assert.deepEqual(await invalid.json(), { error: 'NOTIFICATION_HISTORY_INVALID' });
-    storageBody = [];
-    const absent = await originalFetch(`${base}/notifications/history/foreign-id/read`, { method: 'PATCH' });
-    assert.equal(absent.status, 404);
-    assert.deepEqual(await absent.json(), { error: 'NOTIFICATION_NOT_FOUND' });
-    storageBody = [{ id: 'own-id', member_id: 'member-a', read_at: new Date().toISOString() }];
-    const own = await originalFetch(`${base}/notifications/history/own-id/read`, { method: 'PATCH' });
-    assert.equal(own.status, 200);
-    assert.equal((await own.json()).notification.id, 'own-id');
-    assert.ok(observed.every((item) => item.member === 'eq.member-a' && item.bearer === 'Bearer fixture-member-token'));
-    assert.deepEqual(observed.filter((item) => item.method === 'PATCH').map((item) => item.id), ['eq.foreign-id', 'eq.own-id']);
-  } finally {
-    for (const key of envKeys) {
-      const value = saved.get(key);
-      if (value === undefined) delete process.env[key]; else process.env[key] = value;
-    }
-    await Promise.all([storage, server].map((listener) => new Promise<void>((resolve, reject) => listener.close((error) => error ? reject(error) : resolve()))));
-  }
-});
 
 const originalFetch = globalThis.fetch;
 const originalEnv = {

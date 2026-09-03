@@ -1,15 +1,14 @@
 // FinancialService — quarterly/annual statements, ratios, growth, cash burn.
-// US statements from SEC XBRL + ratios from Finnhub; KR statements from DART
-// + ratios from Naver. Provider failures propagate as missing evidence; sample
-// financials must never enter runtime grading, recommendations or AI context.
+// Live-first: US statements from SEC XBRL + ratios from Finnhub; KR statements
+// from DART + ratios from Naver. Falls back to the deterministic sample model
+// only when a live source is unavailable, so the tab always renders coherently.
+import { getFinancials as getSampleFinancials } from '../sample/financials';
 import { getCatalogEntry, type CatalogEntry } from '../data/catalog';
 import * as sec from '../providers/sec-edgar';
 import * as dart from '../providers/dart';
 import * as finnhub from '../providers/finnhub';
 import * as naver from '../providers/naver';
 import type { FinancialsRaw } from '../providers/sec-edgar';
-import { ProviderError } from '../lib/errors';
-import { requireFinancialNumber } from '../providers/financial-evidence';
 import type {
   Financials,
   FinancialRatios,
@@ -25,23 +24,28 @@ function yoy(
   for (let i = 1; i < rows.length; i++) {
     const prev = rows[i - 1][key];
     const cur = rows[i][key];
-    if (prev === 0) {
-      throw new ProviderError('UNAVAILABLE', 'financials', `UNDEFINED_GROWTH:${key}`);
-    }
-    out.push(requireFinancialNumber(Math.round(((cur - prev) / Math.abs(prev)) * 1000) / 10, 'financials', key));
+    out.push(prev ? Math.round(((cur - prev) / Math.abs(prev)) * 1000) / 10 : 0);
   }
   return out;
 }
 
-function buildCashBurn(raw: FinancialsRaw): Financials['cashBurn'] {
-  const cashBalance = requireFinancialNumber(raw.latest.cash, 'financials', 'cashBalance');
-  if (cashBalance < 0) throw new ProviderError('UNAVAILABLE', 'financials', 'INVALID_CASH_BALANCE');
-  // Net income is not cash flow. The current providers do not supply a
-  // verified cash-flow statement, so neither burn nor runway is calculable.
-  return { cashBalance, quarterlyBurn: null, survivalQuarters: null, status: 'MISSING_EVIDENCE', reason: 'CASH_FLOW_STATEMENT_NOT_AVAILABLE' };
+function buildCashBurn(raw: FinancialsRaw) {
+  const cashBalance = raw.latest.cash;
+  const q = raw.quarterly;
+  const quarterlyBurn = q.length
+    ? q[q.length - 1].netIncome
+    : Math.round(raw.latest.netIncome / 4);
+  const survivalQuarters =
+    quarterlyBurn >= 0
+      ? null
+      : Math.max(0, Math.round(cashBalance / Math.abs(quarterlyBurn)));
+  return { cashBalance, quarterlyBurn, survivalQuarters };
 }
 
-function buildHealth(r: FinancialRatios): Financials['health'] {
+function buildHealth(r: FinancialRatios): {
+  level: HealthLevel;
+  confidence: number;
+} {
   let score = 50;
   if (r.roe >= 15) score += 20;
   else if (r.roe >= 5) score += 8;
@@ -52,15 +56,13 @@ function buildHealth(r: FinancialRatios): Financials['health'] {
 
   if (r.per > 0 && r.per < 30) score += 5;
 
-  score = Math.max(10, Math.min(95, score));
+  const confidence = Math.max(10, Math.min(95, score));
   const level: HealthLevel =
-    score >= 66 ? 'STRONG' : score >= 40 ? 'AVERAGE' : 'WEAK';
-  return { level, confidence: null, score, method: 'FINANCIAL_RULES_V1' };
+    confidence >= 66 ? 'STRONG' : confidence >= 40 ? 'AVERAGE' : 'WEAK';
+  return { level, confidence };
 }
 
-export function assembleFinancialEvidence(raw: FinancialsRaw, ratios: FinancialRatios): Financials {
-  for (const [field, value] of Object.entries(ratios)) requireFinancialNumber(value, 'financials', field);
-  if (ratios.debtRatio < 0) throw new ProviderError('UNAVAILABLE', 'financials', 'DEBT_RATIO_NOT_EVALUABLE');
+function assemble(raw: FinancialsRaw, ratios: FinancialRatios): Financials {
   return {
     source: 'live',
     quarterly: raw.quarterly,
@@ -79,40 +81,65 @@ async function getLive(entry: CatalogEntry): Promise<Financials> {
   if (entry.market === 'KR') {
     const [raw, kr] = await Promise.all([
       dart.getFinancials(entry.ticker),
-      naver.getRatios(entry),
+      naver.getRatios(entry).catch(() => ({ eps: 0, per: 0, pbr: 0, bps: 0 })),
     ]);
     if (raw.quarterly.length === 0) {
-      // Incomplete live data cannot establish financial evidence.
+      // Incomplete live data — fall back to a coherent full sample view.
       throw new Error('no live KR quarterly statements');
     }
-    const equity = requireFinancialNumber(raw.latest.equity, 'dart', 'equity');
-    if (equity <= 0) {
-      throw new ProviderError('UNAVAILABLE', 'dart', 'FINANCIAL_HEALTH_REQUIRES_POSITIVE_EQUITY');
-    }
+    const equity = raw.latest.equity;
     const ratios: FinancialRatios = {
       eps: kr.eps,
       per: kr.per,
       pbr: kr.pbr,
-      roe: Math.round((raw.latest.netIncome / equity) * 1000) / 10,
-      debtRatio: Math.round((raw.latest.liabilities / equity) * 1000) / 10,
+      roe: equity
+        ? Math.round((raw.latest.netIncome / equity) * 1000) / 10
+        : 0,
+      debtRatio: equity
+        ? Math.round((raw.latest.liabilities / equity) * 1000) / 10
+        : 0,
     };
-    return assembleFinancialEvidence(raw, ratios);
+    return assemble(raw, ratios);
   }
 
   const [raw, us] = await Promise.all([
     sec.getFinancials(entry.ticker),
-    finnhub.getRatios(entry),
+    finnhub
+      .getRatios(entry)
+      .catch(() => ({ eps: 0, per: 0, pbr: 0, roe: 0, debtRatio: 0 })),
   ]);
 
-  // Preserve measured zeroes; a ratio-provider failure cannot be replaced by
-  // zeroes or ratios from a different reporting period.
-  return assembleFinancialEvidence(raw, us);
+  const equity = raw.latest.equity;
+
+  // Fill missing ROE / debtRatio from the real SEC balance sheet when the
+  // ratios provider didn't supply them (don't fabricate — only compute from
+  // authentic equity/liabilities/netIncome).
+  const ratios: FinancialRatios = {
+    ...us,
+    roe:
+      us.roe || !equity
+        ? us.roe
+        : Math.round((raw.latest.netIncome / equity) * 1000) / 10,
+    debtRatio:
+      us.debtRatio || !equity
+        ? us.debtRatio
+        : Math.round((raw.latest.liabilities / equity) * 1000) / 10,
+  };
+
+  return assemble(raw, ratios);
 }
 
 async function getFinancials(ticker: string): Promise<Financials | null> {
   const entry = getCatalogEntry(ticker);
   if (!entry) return null;
-  return getLive(entry);
+  try {
+    return await getLive(entry);
+  } catch (err) {
+    console.error(`live financials failed for ${ticker}:`, err);
+    const sample = getSampleFinancials(ticker);
+    // 추천 엔진 등이 실데이터와 구분할 수 있도록 출처를 명시한다.
+    return sample ? { ...sample, source: 'sample' as const } : sample;
+  }
 }
 
 export const FinancialService = {

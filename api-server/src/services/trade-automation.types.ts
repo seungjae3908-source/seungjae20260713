@@ -187,14 +187,11 @@ export type TradingMarketSnapshot = {
   liquidationDistancePercent?: number | null;
   openOrderExposureKrw?: number;
   currentPrice?: number | null;
-  /** Server-observed orderbook VWAP for the complete requested quantity; never an actual fill. */
-  executionPrice?: number | null;
   plannedPrice?: number | null;
   marketStatus?: 'OPEN' | 'CLOSED' | 'HALTED' | 'UNKNOWN';
   providerTimeOffsetMs?: number;
   source?: string;
   availableLiquidityKrw?: number | null;
-  currencyConversion?: { pair: 'USDT/KRW'; krwRate: number; source: string; asOf: string } | null;
   estimatedSlippagePercent?: number | null;
   estimatedFeePercent?: number | null;
   correlatedExposurePercent?: number | null;

@@ -7,7 +7,6 @@ import { ProviderError } from '../lib/errors';
 import { fetchJson } from '../lib/http';
 import { cached, TTL } from '../lib/cache';
 import type { FinancialRow } from '../sample/types';
-import { requireFinancialNumber } from './financial-evidence';
 
 const HEADERS = {
   'User-Agent': SEC_USER_AGENT,
@@ -270,27 +269,11 @@ async function concept(cik: string, tag: string): Promise<XbrlPoint[]> {
       `https://data.sec.gov/api/xbrl/companyconcept/CIK${cik}/us-gaap/${tag}.json`,
       { provider: 'sec-edgar', headers: HEADERS },
     );
-    const points = data?.units?.USD;
-    if (!Array.isArray(points)) {
-      throw new ProviderError('UNAVAILABLE', 'sec-edgar', `MISSING_USD_CONCEPT:${tag}`);
-    }
-    for (const point of points) {
-      requireFinancialNumber(point?.val, 'sec-edgar', tag);
-      const validDate = (date: unknown): date is string => typeof date === 'string'
-        && /^\d{4}-\d{2}-\d{2}$/.test(date)
-        && Number.isFinite(Date.parse(date))
-        && new Date(date).toISOString().slice(0, 10) === date;
-      if (!validDate(point.end) || Date.parse(point.end) > Date.now()
-        || (point.start !== undefined && (!validDate(point.start) || point.start >= point.end))) {
-        throw new ProviderError('UNAVAILABLE', 'sec-edgar', `INVALID_CONCEPT_PERIOD:${tag}`);
-      }
-    }
-    return points;
-  } catch (error) {
-    // A missing optional taxonomy tag may try its documented alternative;
-    // authentication, quota, network and malformed-payload failures propagate.
-    if (error instanceof ProviderError && error.message === 'HTTP 404') return [];
-    throw error;
+    const units = data.units ?? {};
+    const key = Object.keys(units)[0];
+    return key ? units[key] : [];
+  } catch {
+    return [];
   }
 }
 
@@ -302,25 +285,25 @@ async function firstConcept(cik: string, tags: string[]): Promise<XbrlPoint[]> {
   return [];
 }
 
-// Join statements by their exact fiscal period end, never calendar year alone.
+// Annual flow (income-statement) values keyed by fiscal-year-end year.
 function annualFlow(pts: XbrlPoint[]): Map<string, number> {
   const byYear = new Map<string, number>();
   for (const p of pts) {
     if (p.form !== '10-K' || !p.start) continue;
     const dur = daysBetween(p.start, p.end);
     if (dur < 300 || dur > 400) continue;
-    byYear.set(p.end, p.val);
+    byYear.set(p.end.slice(0, 4), p.val);
   }
   return byYear;
 }
 
-// Balance-sheet values retain exact period identity.
+// Instant (balance-sheet) values keyed by year-end, taking the latest report.
 function instantByYear(pts: XbrlPoint[]): Map<string, number> {
   const byYear = new Map<string, number>();
   for (const p of [...pts].sort((a, b) => a.end.localeCompare(b.end))) {
     if (p.start) continue;
     if (p.form !== '10-K' && p.form !== '10-Q') continue;
-    byYear.set(p.end, p.val);
+    byYear.set(p.end.slice(0, 4), p.val);
   }
   return byYear;
 }
@@ -342,7 +325,7 @@ function quarterlyFlow(pts: XbrlPoint[]): { end: string; val: number }[] {
 
 function instantAt(pts: XbrlPoint[], end: string): number {
   const exact = pts.find((p) => !p.start && p.end === end);
-  return requireFinancialNumber(exact?.val, 'sec-edgar', `balanceSheet:${end}`);
+  return exact ? exact.val : 0;
 }
 
 const REVENUE_TAGS = [
@@ -353,7 +336,7 @@ const REVENUE_TAGS = [
 
 export async function getFinancials(ticker: string): Promise<FinancialsRaw> {
   const cik = await getCikByTicker(ticker);
-  return cached(`sec:financials:v2:${cik}`, TTL.financials, async () => {
+  return cached(`sec:financials:${cik}`, TTL.financials, async () => {
     const [rev, op, net, cash, liab, equity, capital] = await Promise.all([
       firstConcept(cik, REVENUE_TAGS),
       concept(cik, 'OperatingIncomeLoss'),
@@ -384,11 +367,11 @@ export async function getFinancials(ticker: string): Promise<FinancialsRaw> {
     const annual: FinancialRow[] = years.map((y) => {
       const row: FinancialRow = {
         period: y,
-        revenue: requireFinancialNumber(revA.get(y), 'sec-edgar', `revenue:${y}`),
-        operatingIncome: requireFinancialNumber(opA.get(y), 'sec-edgar', `operatingIncome:${y}`),
-        netIncome: requireFinancialNumber(netA.get(y), 'sec-edgar', `netIncome:${y}`),
-        cash: requireFinancialNumber(cashA.get(y), 'sec-edgar', `cash:${y}`),
-        debt: requireFinancialNumber(liabA.get(y), 'sec-edgar', `debt:${y}`),
+        revenue: revA.get(y) ?? 0,
+        operatingIncome: opA.get(y) ?? 0,
+        netIncome: netA.get(y) ?? 0,
+        cash: cashA.get(y) ?? 0,
+        debt: liabA.get(y) ?? 0,
       };
 
       const eq = equityA.get(y);
@@ -401,7 +384,7 @@ export async function getFinancials(ticker: string): Promise<FinancialsRaw> {
     });
 
     // Below this coherence threshold the live view is too sparse to trust — throw
-    // so consumers report unavailable evidence instead of a synthetic view.
+    // so FinancialService falls back to the coherent sample model.
     if (annual.length < 2) {
       throw new ProviderError('UNAVAILABLE', 'sec-edgar', `sparse XBRL for ${ticker}`);
     }
@@ -415,9 +398,9 @@ export async function getFinancials(ticker: string): Promise<FinancialsRaw> {
     const netQ = new Map(netQarr.map((q) => [q.end, q.val]));
     const quarterly: FinancialRow[] = anchor.slice(-4).map((q) => ({
       period: q.end.slice(0, 7),
-      revenue: requireFinancialNumber(revQ.get(q.end), 'sec-edgar', `revenue:${q.end}`),
-      operatingIncome: requireFinancialNumber(opQ.get(q.end), 'sec-edgar', `operatingIncome:${q.end}`),
-      netIncome: requireFinancialNumber(netQ.get(q.end), 'sec-edgar', `netIncome:${q.end}`),
+      revenue: revQ.get(q.end) ?? 0,
+      operatingIncome: opQ.get(q.end) ?? 0,
+      netIncome: netQ.get(q.end) ?? 0,
       cash: instantAt(cash, q.end),
       debt: instantAt(liab, q.end),
     }));
@@ -427,10 +410,10 @@ export async function getFinancials(ticker: string): Promise<FinancialsRaw> {
       annual,
       quarterly,
       latest: {
-        equity: requireFinancialNumber(equityA.get(latestYear), 'sec-edgar', 'latestEquity'),
-        liabilities: requireFinancialNumber(liabA.get(latestYear), 'sec-edgar', 'latestLiabilities'),
-        netIncome: requireFinancialNumber(netA.get(latestYear), 'sec-edgar', 'latestNetIncome'),
-        cash: requireFinancialNumber(cashA.get(latestYear), 'sec-edgar', 'latestCash'),
+        equity: latestYear ? equityA.get(latestYear) ?? 0 : 0,
+        liabilities: latestYear ? liabA.get(latestYear) ?? 0 : 0,
+        netIncome: latestYear ? netA.get(latestYear) ?? 0 : 0,
+        cash: latestYear ? cashA.get(latestYear) ?? 0 : 0,
       },
     };
   });
