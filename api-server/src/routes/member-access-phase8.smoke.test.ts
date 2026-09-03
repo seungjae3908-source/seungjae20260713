@@ -162,17 +162,21 @@ for (const status of ['suspended', 'revoked', 'withdrawn', 'disabled', 'inactive
   });
 }
 
-test('requireAuthenticated preserves INVALID_SESSION behavior and does not query profile', async () => {
-  const result = await runRequireAuthenticated({
-    authUser: null,
-    authError: { message: 'invalid token' },
+for (const [sessionCase, authError] of [
+  ['invalid token', { message: 'invalid token' }],
+  ['expired session', { message: 'JWT expired' }],
+]) {
+  test(`requireAuthenticated denies ${sessionCase} without querying profile`, async () => {
+    const result = await runRequireAuthenticated({ authUser: null, authError });
+    assert.equal(result.nextCalls, 0);
+    assert.equal(result.calls.getUser, 1);
+    assert.equal(result.calls.profile, 0);
+    assert.equal(result.state.statusCode, 401);
+    assert.deepEqual(result.state.body, { error: 'INVALID_SESSION' });
+    assert.equal(result.req.member, undefined);
+    assert.equal(result.req.accessToken, undefined);
   });
-  assert.equal(result.nextCalls, 0);
-  assert.equal(result.calls.getUser, 1);
-  assert.equal(result.calls.profile, 0);
-  assert.equal(result.state.statusCode, 401);
-  assert.deepEqual(result.state.body, { error: 'INVALID_SESSION' });
-});
+}
 
 test('requireAuthenticated preserves PROFILE_NOT_FOUND behavior after valid Supabase identity', async () => {
   const result = await runRequireAuthenticated({ profile: null });
