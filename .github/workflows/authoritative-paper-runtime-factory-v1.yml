@@ -2,7 +2,7 @@ name: Authoritative Paper Runtime Factory
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, fix/natural-position-observation-clean-transport-20260830]
     paths:
       - .github/workflows/authoritative-paper-runtime-factory-v1.yml
       - api-server/scripts/build-authoritative-paper-runtime-package.mjs
@@ -55,6 +55,11 @@ on:
       - market-prediction-lab/src/canonical-meaningful-search-paper-runtime-v1.js
       - market-prediction-lab/src/meaningful-search-scheduled-paper-provider-v1.js
       - market-prediction-lab/src/paper-forward-evidence-runtime-v1.js
+      - market-prediction-lab/src/paper-public-provider-authority-v1.js
+      - market-prediction-lab/src/natural-paper-public-position-observation-v1.js
+      - market-prediction-lab/src/natural-paper-position-settlement-lifecycle-v1.js
+      - market-prediction-lab/src/recurring-paper-loop-v1.js
+      - market-prediction-lab/tests/natural-paper-position-settlement-lifecycle-v1.test.js
       - market-prediction-lab/src/bitget-position-tier-v1.js
       - market-prediction-lab/src/bitget-position-tier-v1.d.ts
       - market-prediction-lab/src/eth-v6-paper-forward-source-v1.js
@@ -166,3 +171,10 @@ jobs:
           node --test
           market-prediction-lab/tests/authoritative-paper-runtime-factory-v1.test.js
           market-prediction-lab/tests/authoritative-paper-runtime-package-v1.test.js
+
+      - name: Verify Natural lifecycle trust and full-cost boundaries
+        run: >-
+          node --test
+          market-prediction-lab/tests/natural-paper-position-settlement-lifecycle-v1.test.js
+          market-prediction-lab/tests/natural-paper-public-position-observation-v1.test.js
+          market-prediction-lab/tests/natural-paper-public-position-observation-runtime-v1.test.js
