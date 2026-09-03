@@ -92,6 +92,23 @@ function verifyReceipt(receipt, source, expectedPath, expectedDigest, expectedSl
     throw new Error('V3_INGEST_RECEIPT_DIGEST_MISMATCH');
   }
   const lineage = object(value.sourceV3Lineage, 'V3_SOURCE_LINEAGE_REQUIRED');
+  const legacyLineage = lineage.sourceContractFamily == null
+    || lineage.sourceContractFamily === 'CALIBRATION_V3';
+  const successorLineage = lineage.sourceContractFamily === 'SUCCESSOR_SCHEDULE_RELIABILITY_V3';
+  if ((legacyLineage
+      && lineage.triggerSource !== 'GITHUB_ACTIONS_SCHEDULED_CANONICAL_PUBLIC_CAPTURE')
+    || (successorLineage
+      && (lineage.triggerSource !== 'schedule'
+        || lineage.producerWorkflowName !== 'Public Forward Liquidity Successor Scheduled Capture'
+        || lineage.producerWorkflowId !== 347888347
+        || lineage.scheduleReliabilityContractVersion
+          !== 'public-forward-liquidity-successor-schedule-reliability-contract-v3'
+        || !SHA256.test(String(lineage.scheduleReliabilityNumericFreezeSha256 ?? ''))
+        || !SHA256.test(String(lineage.oosHorizonPolicyDigest ?? ''))
+        || !SHA256.test(String(lineage.oosHorizonContractDigest ?? ''))))
+    || (!legacyLineage && !successorLineage)) {
+    throw new Error('V3_SOURCE_LINEAGE_PRODUCER_INVALID');
+  }
   if (lineage.slotIndex !== expectedSlot
     || lineage.split !== expectedSplit
     || !SPLITS.has(lineage.split)
@@ -99,8 +116,7 @@ function verifyReceipt(receipt, source, expectedPath, expectedDigest, expectedSl
     || lineage.manualCredit !== 0
     || lineage.replayCredit !== 0
     || lineage.backfillCredit !== 0
-    || lineage.operatorSelectedCredit !== 0
-    || lineage.triggerSource !== 'GITHUB_ACTIONS_SCHEDULED_CANONICAL_PUBLIC_CAPTURE') {
+    || lineage.operatorSelectedCredit !== 0) {
     throw new Error('V3_SOURCE_LINEAGE_INVALID');
   }
   if (lineage.policyDigest !== source.v3PolicyDigest || lineage.cohortDigest !== source.v3CohortDigest) {
