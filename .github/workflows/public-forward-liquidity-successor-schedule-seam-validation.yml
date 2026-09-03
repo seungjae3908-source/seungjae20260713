@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/workflows/public-forward-liquidity-successor-scheduled-capture.yml'
       - '.github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml'
+      - '.github/workflows/market-intelligence-sidecar-validation.yml'
       - 'market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-seam-v1.mjs'
       - 'market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs'
       - 'market-intelligence-sidecar/src/public-forward-liquidity-successor-prospective-cohort.mjs'
@@ -13,6 +14,7 @@ on:
       - 'market-intelligence-sidecar/config/public-forward-liquidity-successor-oos-outcome-horizon-v2.json'
       - 'market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-reliability-v3.mjs'
       - 'market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-v3.json'
+      - 'market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json'
       - 'market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-seam-v1.test.mjs'
       - 'market-intelligence-sidecar/tests/public-forward-liquidity-successor-prospective-cohort.test.mjs'
       - 'market-intelligence-sidecar/tests/public-forward-liquidity-successor-oos-outcome-horizon.test.mjs'
@@ -64,6 +66,18 @@ jobs:
           node --check market-intelligence-sidecar/src/public-forward-liquidity-successor-oos-outcome-horizon.mjs
           node --check market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-reliability-v3.mjs
 
+      - name: Stash activation binding for preserved inactive regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          activation='market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json'
+          if [[ -f "$activation" ]]; then
+            mv "$activation" "$RUNNER_TEMP/successor-v3-activation.json"
+            echo 'SUCCESSOR_V3_ACTIVATION_STASHED=true' >> "$GITHUB_ENV"
+          else
+            echo 'SUCCESSOR_V3_ACTIVATION_STASHED=false' >> "$GITHUB_ENV"
+          fi
+
       - name: Run V2 preservation and V3 fail-closed contract tests
         run: >-
           node --test
@@ -75,14 +89,54 @@ jobs:
       - name: Run runner self-check without schedule or network authority
         run: node market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs self-check
 
-      - name: Verify exact V3 implementation scope and no activation authority
+      - name: Restore and validate V3 activation binding candidate
+        if: env.SUCCESSOR_V3_ACTIVATION_STASHED == 'true'
+        shell: bash
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          activation='market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json'
+          mv "$RUNNER_TEMP/successor-v3-activation.json" "$activation"
+          node --input-type=module <<'NODE'
+          import {
+            SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT,
+            verifySuccessorScheduleReliabilityV3Contract,
+          } from './market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-reliability-v3.mjs';
+
+          const contract = SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT;
+          const verdict = verifySuccessorScheduleReliabilityV3Contract(contract);
+          if (!verdict.valid || !verdict.activationBound) {
+            console.error('Invalid V3 activation binding:', verdict.blockers.join(','));
+            process.exit(1);
+          }
+          if (contract.policyCore.activationBinding.authorizedCurrentMainSha !== process.env.PR_BASE_SHA) {
+            console.error('V3 activation binding is not bound to the exact PR base main');
+            process.exit(1);
+          }
+          NODE
+
+      - name: Verify exact V3 implementation or activation-admission scope
         shell: bash
         run: |
           set -euo pipefail
           base='${{ github.event.pull_request.base.sha }}'
           head='${{ github.event.pull_request.head.sha }}'
+          activation='market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json'
           git diff --check "$base" "$head"
-          cat > /tmp/allowed-files <<'EOF'
+          changed="$(git diff --name-only "$base" "$head")"
+
+          if printf '%s\n' "$changed" | grep -Fqx "$activation"; then
+            cat > /tmp/allowed-files <<'EOF'
+          .github/workflows/market-intelligence-sidecar-validation.yml
+          .github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml
+          .github/workflows/public-forward-liquidity-successor-scheduled-capture.yml
+          market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json
+          EOF
+            expected_count=4
+            scope_name='V3 activation-admission'
+          else
+            cat > /tmp/allowed-files <<'EOF'
           .github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml
           .github/workflows/public-forward-liquidity-successor-scheduled-capture.yml
           market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-v3.json
@@ -91,14 +145,17 @@ jobs:
           market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-seam-v1.mjs
           market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-reliability-v3.test.mjs
           EOF
-          unexpected="$(git diff --name-only "$base" "$head" | grep -vxFf /tmp/allowed-files || true)"
+            expected_count=7
+            scope_name='V3 reliability implementation'
+          fi
+
+          unexpected="$(printf '%s\n' "$changed" | grep -vxFf /tmp/allowed-files || true)"
           if [[ -n "$unexpected" ]]; then
-            echo "Unexpected file(s) outside approved V3 schedule-reliability implementation scope:" >&2
+            echo "Unexpected file(s) outside approved $scope_name scope:" >&2
             printf '%s\n' "$unexpected" >&2
             exit 1
           fi
-          test ! -f market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json
-          test "$(git diff --name-only "$base" "$head" | wc -l | tr -d ' ')" -eq 7
+          test "$(printf '%s\n' "$changed" | sed '/^$/d' | wc -l | tr -d ' ')" -eq "$expected_count"
 
       - name: Verify scheduled workflow is V3 frozen but Draft PR cannot activate it
         shell: bash
