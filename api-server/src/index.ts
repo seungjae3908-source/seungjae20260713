@@ -17,6 +17,7 @@ import {
   FRONTEND_REVALIDATE_CACHE_CONTROL,
   setFrontendStaticCacheHeaders,
 } from './lib/frontend-static-cache';
+import { runPublicForwardPartialFillCalibrationProductionReadback } from './services/public-forward-partial-fill-calibration-production-caller.service';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -233,6 +234,22 @@ app.listen(
     console.log(
       '[api-server] Kiwoom routes enabled at /api/kiwoom',
     );
+
+    void runPublicForwardPartialFillCalibrationProductionReadback().then((result) => {
+      const report = {
+        status: result.status,
+        productionCallerConnected: result.productionCallerConnected,
+        productionPolicyAuthorityConnected: result.productionPolicyAuthorityConnected,
+        calibrationSampleSufficient: result.calibrationSampleSufficient,
+        blocker: result.status === 'BLOCKED' ? result.blocker : null,
+        readerError: result.status === 'BLOCKED' ? result.readerError : null,
+      };
+      if (result.status === 'BLOCKED') {
+        console.warn('[api-server] partial-fill production readback blocked', report);
+      } else {
+        console.log('[api-server] partial-fill production readback complete', report);
+      }
+    });
 
     if (readonlyCredentialRuntime) {
       console.log('[api-server] staging read-only credential runtime: background workers disabled');
