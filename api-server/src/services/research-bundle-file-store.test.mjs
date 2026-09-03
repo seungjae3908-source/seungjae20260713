@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, writeFile, rm, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createResearchBundleFileStore } from './research-bundle-file-store.service.ts';
+import { createResearchBundleFileStore, publishResearchCanonicalBundleSource } from './research-bundle-file-store.service.ts';
 import { ResearchBundleService } from './research-bundle.service.ts';
 import { researchBundleFixture as fixture, AUTHORITATIVE_NOW_MS as NOW } from './research-bundle.test-fixtures.mjs';
-import { sha256Canonical as hash } from '../../../market-prediction-lab/src/research-cache-provenance.js';
+import { buildResearchDatasetIdentity, sha256Canonical as hash } from '../../../market-prediction-lab/src/research-cache-provenance.js';
+import { resolveCanonicalStrategyIdentity } from '../../../market-prediction-lab/src/canonical-strategy-identity-v1.js';
 import { runOnePassCandidateBacktestV1 } from '../../../market-prediction-lab/src/research-tournament-engine-v1.js';
 
 async function withStore(run) {
@@ -20,6 +21,39 @@ async function withStore(run) {
     const request = { dsl: f.dsl, bundleDigest: resolved.bundleDigest, strategyIdentityDigest: resolved.strategyIdentityDigest };
     await run({ root, fresh, request, calls: () => calls, f });
   } finally { await rm(root, { recursive: true, force: true }); }
+}
+
+function canonicalFixture() {
+  const f = fixture(), bundle = structuredClone(f.bundle), dataset = bundle.dataset;
+  const oldIdentity = dataset.identity;
+  dataset.identity = buildResearchDatasetIdentity({ ...oldIdentity, rows: dataset.rows,
+    provider: 'OWNER_PUBLISHED', providerVersion: 'v1', sourceType: 'OWNER_PUBLISHED' });
+  const scope = { datasetId: dataset.id, datasetDigest: dataset.identity.datasetDigest,
+    market: bundle.strategy.market, symbol: dataset.identity.symbol, timeframe: bundle.strategy.timeframe,
+    researchCodeSha: bundle.strategy.researchCodeSha };
+  const seal = (id, payload) => ({ id, payload, digest: hash(payload) });
+  bundle.evidenceClass = 'CANONICAL';
+  bundle.strategy.datasetDigest = scope.datasetDigest;
+  dataset.receipt = seal('OWNER_DATASET_RECEIPT', { ...scope,
+    datasetIdentityId: dataset.identity.datasetIdentityId, rowCount: dataset.rows.length });
+  bundle.splitPolicy = seal('OWNER_SPLIT', { ...bundle.splitPolicy.payload, ...scope });
+  bundle.splitReceipt = seal('OWNER_SPLIT_RECEIPT', { ...bundle.splitReceipt.payload, ...scope,
+    policyDigest: bundle.splitPolicy.digest });
+  const cost = bundle.costPolicy.payload;
+  bundle.costPolicy = seal(bundle.costPolicy.id, { ...cost, ...scope,
+    components: Object.fromEntries(Object.entries(cost.components).map(([key, value]) =>
+      [key, { ...value, ...scope, source: 'OWNER_OBSERVED', provenance: ['OWNER_OBSERVED'] }])) });
+  bundle.oosPolicy = seal('OWNER_OOS', { ...bundle.oosPolicy.payload, ...scope,
+    splitReceiptDigest: bundle.splitReceipt.digest });
+  bundle.wfPolicy = seal('OWNER_WF', { ...bundle.wfPolicy.payload, ...scope });
+  bundle.holdoutPolicy = seal('OWNER_HOLDOUT', { ...bundle.holdoutPolicy.payload,
+    market: scope.market, symbol: scope.symbol, timeframe: scope.timeframe, researchCodeSha: scope.researchCodeSha });
+  const strategy = resolveCanonicalStrategyIdentity(bundle.strategy);
+  Object.assign(bundle.modelReference.producerManifest, { strategyIdentity: strategy.identity,
+    strategyIdentityDigest: strategy.strategyIdentityDigest, datasetDigest: scope.datasetDigest,
+    sourceAttestation: { sourceKind: 'GENUINE_MARKET_DATA', reconstructed: false, synthetic: false,
+      shadowDerived: false, finalHoldoutIncluded: false } });
+  return { ...f, bundle };
 }
 
 test('file publication survives fresh service/store instances and concurrent duplicate admins execute once', async () => withStore(async h => {
@@ -81,3 +115,42 @@ test('catalog is read only and missing, malformed, wrong-key, TEST_ONLY entries 
   assert(result.blockers.includes('CANONICAL_BUNDLE_SOURCE_UNAVAILABLE'));
   await assert.rejects(createResearchBundleFileStore('relative').readCanonicalBundle(dslDigest), /ROOT_MUST_BE_ABSOLUTE/);
 }));
+
+test('offline publisher validates, atomically publishes once, and verifies the existing reader', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'research-catalog-publisher-test-'));
+  try {
+    await mkdir(join(root, 'catalog'));
+    const f = canonicalFixture();
+    const publication = await publishResearchCanonicalBundleSource({ stateRoot: root, dsl: f.dsl,
+      bundle: f.bundle, now: () => NOW });
+    assert.equal(publication.publicationStatus, 'READBACK_VERIFIED');
+    assert.equal(publication.bundleDigest, hash(f.bundle));
+    assert.equal(publication.evidenceCredit, 0);
+    assert.equal(publication.profitabilityProven, false);
+    assert.equal(publication.executionAuthority, 'NONE');
+    const envelope = JSON.parse(await readFile(join(root, 'catalog', publication.dslDigest + '.json'), 'utf8'));
+    assert.equal(envelope.schemaVersion, 'research-bundle-catalog-entry-v1');
+    assert.equal(envelope.dslDigest, publication.dslDigest);
+    assert.equal(envelope.bundleDigest, publication.bundleDigest);
+    assert.deepEqual(await createResearchBundleFileStore(root).readCanonicalBundle(publication.dslDigest), f.bundle);
+    await assert.rejects(publishResearchCanonicalBundleSource({ stateRoot: root, dsl: f.dsl,
+      bundle: f.bundle, now: () => NOW }), /CATALOG_ENTRY_EXISTS/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('offline publisher fails closed for missing roots, non-canonical sources and changed identity', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'research-catalog-publisher-reject-test-'));
+  try {
+    const f = canonicalFixture();
+    await assert.rejects(publishResearchCanonicalBundleSource({ stateRoot: root, dsl: f.dsl,
+      bundle: f.bundle, now: () => NOW }), /ENOENT/);
+    await mkdir(join(root, 'catalog'));
+    const testOnly = fixture();
+    await assert.rejects(publishResearchCanonicalBundleSource({ stateRoot: root, dsl: testOnly.dsl,
+      bundle: testOnly.bundle, now: () => NOW }), /CATALOG_SOURCE_INVALID/);
+    const changed = structuredClone(f.bundle); changed.strategy.strategyId = 'different';
+    await assert.rejects(publishResearchCanonicalBundleSource({ stateRoot: root, dsl: f.dsl,
+      bundle: changed, now: () => NOW }), /CATALOG_SOURCE_INVALID/);
+    assert.deepEqual(await readdir(join(root, 'catalog')), []);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
