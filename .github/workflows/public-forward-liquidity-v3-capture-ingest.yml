@@ -8,7 +8,9 @@ on:
       - 'market-intelligence-sidecar/tests/public-forward-liquidity-v3-capture-ingest.test.mjs'
       - '.github/workflows/public-forward-liquidity-v3-capture-ingest.yml'
   workflow_run:
-    workflows: ['Public Forward Liquidity Calibration Scheduled V3']
+    workflows:
+      - 'Public Forward Liquidity Calibration Scheduled V3'
+      - 'Public Forward Liquidity Successor Scheduled Capture'
     types: [completed]
   issue_comment:
     types: [created]
@@ -91,7 +93,8 @@ jobs:
   produce-cumulative-v3-ingest:
     if: >-
       (github.event_name == 'workflow_run' &&
-       github.event.workflow_run.name == 'Public Forward Liquidity Calibration Scheduled V3' &&
+       (github.event.workflow_run.name == 'Public Forward Liquidity Calibration Scheduled V3' ||
+        github.event.workflow_run.name == 'Public Forward Liquidity Successor Scheduled Capture') &&
        github.event.workflow_run.event == 'schedule' &&
        github.event.workflow_run.status == 'completed' &&
        github.event.workflow_run.conclusion == 'success' &&
@@ -146,7 +149,10 @@ jobs:
           node - <<'NODE'
           const fs = require('node:fs');
           const run = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/source-run.json', 'utf8'));
-          const ok = run.name === 'Public Forward Liquidity Calibration Scheduled V3'
+          const supportedProducer = run.name === 'Public Forward Liquidity Calibration Scheduled V3'
+            || (run.name === 'Public Forward Liquidity Successor Scheduled Capture'
+              && Number(run.workflow_id) === 347888347);
+          const ok = supportedProducer
             && run.event === 'schedule'
             && run.status === 'completed'
             && run.conclusion === 'success'
@@ -199,8 +205,16 @@ jobs:
           const [input, output] = process.argv.slice(2);
           const data = JSON.parse(fs.readFileSync(input, 'utf8'));
           const active = (data.artifacts ?? []).filter((artifact) => artifact.expired !== true);
-          const raw = active.filter((artifact) => /^public-forward-liquidity-v3-slot-[0-9]+-[a-f0-9]{64}$/u.test(artifact.name));
-          const receipt = active.filter((artifact) => /^public-forward-liquidity-v3-slot-receipt-[0-9]+-[0-9]+-[0-9]+$/u.test(artifact.name));
+          const successor = active.some((artifact) =>
+            /^public-forward-liquidity-successor-v3-slot-receipt-/u.test(artifact.name));
+          const rawPattern = successor
+            ? /^public-forward-liquidity-successor-slot-[0-9]+-[a-f0-9]{64}$/u
+            : /^public-forward-liquidity-v3-slot-[0-9]+-[a-f0-9]{64}$/u;
+          const receiptPattern = successor
+            ? /^public-forward-liquidity-successor-v3-slot-receipt-[0-9]+-[0-9]+-[0-9]+$/u
+            : /^public-forward-liquidity-v3-slot-receipt-[0-9]+-[0-9]+-[0-9]+$/u;
+          const raw = active.filter((artifact) => rawPattern.test(artifact.name));
+          const receipt = active.filter((artifact) => receiptPattern.test(artifact.name));
           if (raw.length !== 1 || receipt.length !== 1) throw new Error('V3_SOURCE_ARTIFACT_CARDINALITY_INVALID');
           if (!/^[0-9]+$/u.test(String(raw[0].id)) || !/^sha256:[a-f0-9]{64}$/u.test(String(raw[0].digest ?? ''))) {
             throw new Error('V3_RAW_ARTIFACT_METADATA_INVALID');
@@ -217,6 +231,7 @@ jobs:
             gh run download "$run_id" --repo "$GITHUB_REPOSITORY" -n "$raw_name" -D "$run_dir/raw"
             gh run download "$run_id" --repo "$GITHUB_REPOSITORY" -n "$receipt_name" -D "$run_dir/receipt"
             test -f "$run_dir/raw/capture-receipt.json"
+            test -f "$run_dir/raw/raw-batch.json"
             test -f "$run_dir/receipt/artifact-receipt.json"
           done < "$RUNNER_TEMP/candidate-runs.txt"
 
@@ -243,7 +258,10 @@ jobs:
           if (!selected || !Number.isInteger(selected.capture?.slotIndex)) throw new Error('SELECTED_V3_SLOT_UNRESOLVED');
           const targetSlotIndex = selected.capture.slotIndex;
           const credited = all
-            .filter((entry) => entry.capture?.triggerSource === 'GITHUB_ACTIONS_SCHEDULED_CANONICAL_PUBLIC_CAPTURE'
+            .filter((entry) => (entry.capture?.triggerSource === 'GITHUB_ACTIONS_SCHEDULED_CANONICAL_PUBLIC_CAPTURE'
+                || (entry.capture?.schemaVersion === 'public-forward-liquidity-successor-scheduled-capture-receipt-v3'
+                  && entry.capture?.eventName === 'schedule'
+                  && entry.capture?.priorCreditedSlotCheck === 'CLEAR'))
               && entry.capture?.captureStatus === 'PRESENT'
               && entry.capture?.prospectiveSlotCredit === 1
               && entry.capture?.ATTEMPTED === true
