@@ -79,7 +79,6 @@ function futuresPriceObservations(
   const latest = qualityCandles.at(-1);
   if (
     !latest
-    || input.card.observedAt == null
     || !Number.isFinite(input.card.price)
     || input.card.price <= 0
     || !Number.isFinite(latest.close)
@@ -149,9 +148,7 @@ export function applyScannerQuantHardening(input: ScannerQuantHardeningInput): S
   });
   const dataCompleteness = completenessFromMarketData(input.card, qualityCandles.length, quality.score);
   const directionChanged = quant.direction !== input.card.direction;
-  const dataTrustedForPlan = quality.state !== 'DATA_UNTRUSTED' && quality.strongSignalAllowed
-    && input.card.dataState !== 'untrusted' && input.card.dataState !== 'stale'
-    && input.card.observedAt != null && input.card.expiresAt != null;
+  const dataTrustedForPlan = quality.state !== 'DATA_UNTRUSTED' && quality.strongSignalAllowed;
   const pricePlan = directionChanged || !dataTrustedForPlan ? EMPTY_PRICE_PLAN : input.card.pricePlan;
   const planEligible = dataTrustedForPlan
     && !directionChanged

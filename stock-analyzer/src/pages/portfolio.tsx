@@ -1,15 +1,13 @@
 import { authorizedFetch } from '@/lib/auth-fetch';
-import { portfolioQuote, portfolioTotals } from '@/lib/portfolio-valuation';
 import {
 	useCallback,
 	useEffect,
 	useMemo,
-	useRef,
 	useState,
 	type FormEvent,
 } from 'react';
 import { useLocation } from 'wouter';
-import { useQuery } from '@tanstack/react-query';
+import { BrokerageAccountConnections } from '@/components/brokerage-account-connections';
 import {
 	AlertTriangle,
 	Bell,
@@ -23,7 +21,6 @@ import {
 import { BottomNav } from '@/components/bottom-nav';
 import { AssetSwitch } from '@/components/asset-switch';
 import { useAssetMode } from '@/lib/asset-mode';
-import { apiGet } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { getSupabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
@@ -36,10 +33,8 @@ import {
 
 type Market = 'KR' | 'US';
 type Currency = 'KRW' | 'USD';
-type AnyObj = Record<string, any>;
 
 interface Holding {
-	quote: unknown;
 	id: string;
 	ticker: string;
 	name: string;
@@ -51,6 +46,13 @@ interface Holding {
 	created_at: string;
 	currentPrice: number | null;
 	changePercent: number | null;
+}
+
+interface PortfolioSummary {
+	cost: number;
+	value: number;
+	profit: number;
+	rate: number;
 }
 
 interface ResolvedStock {
@@ -81,7 +83,7 @@ function money(
 		value == null ||
 		!Number.isFinite(value)
 	) {
-		return '데이터 부족';
+		return '-';
 	}
 
 	if (currency === 'USD') {
@@ -100,10 +102,9 @@ function money(
 }
 
 function signedMoney(
-	value: number | null,
+	value: number,
 	currency: Currency,
 ): string {
-	if (value === null) return '데이터 부족';
 	const prefix =
 		value > 0
 			? '+'
@@ -116,10 +117,10 @@ function signedMoney(
 }
 
 function signedPercent(
-	value: number | null,
+	value: number,
 ): string {
-	if (value === null || !Number.isFinite(value)) {
-		return '데이터 부족';
+	if (!Number.isFinite(value)) {
+		return '-';
 	}
 
 	const prefix =
@@ -236,7 +237,6 @@ function normalizeHolding(
 	const ticker = String(item.ticker ?? '').trim().toUpperCase();
 
 	return {
-		quote: undefined,
 		id:
 			String(
 				item.id ?? '',
@@ -272,7 +272,8 @@ function normalizeHolding(
 
 		purchase_date:
 			String(item.purchase_date ?? '').slice(0, 10) ||
-			getRememberedPurchaseDate(ticker),
+			getRememberedPurchaseDate(ticker) ||
+			String(item.created_at ?? '').slice(0, 10),
 
 		created_at:
 			String(
@@ -430,7 +431,7 @@ function collectSearchCandidates(
 
 	if (
 		typeof value !==
-		'object'
+			'object'
 	) {
 		return;
 	}
@@ -742,11 +743,6 @@ function portfolioSectionFromLocation(location: string): 'holdings' | 'journal' 
 }
 
 export default function PortfolioPage() {
-	const auth = useAuth();
-	return <MemberPortfolioPage key={auth.user?.id ?? 'anonymous'} />;
-}
-
-function MemberPortfolioPage() {
 	const [location, navigate] =
 		useLocation();
 	const [portfolioSection, setPortfolioSection] = useState<'holdings' | 'journal'>(() => portfolioSectionFromLocation(location));
@@ -770,34 +766,6 @@ function MemberPortfolioPage() {
 	const auth =
 		useAuth();
 	const assetMode = useAssetMode();
-	const coinSpotAccounts = useQuery({
-		queryKey: ['assets-upbit-accounts'],
-		queryFn: () => apiGet<AnyObj>('/crypto/spot/accounts'),
-		enabled: assetMode.asset === 'coin' && assetMode.coinMarket === 'spot',
-		refetchInterval: 30_000,
-		retry: false,
-	});
-	const coinFuturesAccount = useQuery({
-		queryKey: ['assets-bitget-account'],
-		queryFn: () => apiGet<AnyObj>('/crypto/futures/account'),
-		enabled: assetMode.asset === 'coin' && assetMode.coinMarket === 'futures',
-		refetchInterval: 15_000,
-		retry: false,
-	});
-	const coinFuturesPositions = useQuery({
-		queryKey: ['assets-bitget-positions'],
-		queryFn: () => apiGet<AnyObj>('/crypto/futures/positions'),
-		enabled: assetMode.asset === 'coin' && assetMode.coinMarket === 'futures',
-		refetchInterval: 10_000,
-		retry: false,
-	});
-	const loadVersion = useRef(0);
-	useEffect(() => () => { loadVersion.current += 1; }, []);
-	const [valuationTime, setValuationTime] = useState(() => Date.now());
-	useEffect(() => {
-		const timer = window.setInterval(() => setValuationTime(Date.now()), 30_000);
-		return () => window.clearInterval(timer);
-	}, []);
 
 	const [
 		rows,
@@ -884,7 +852,6 @@ function MemberPortfolioPage() {
 
 				setLoading(true);
 				setError('');
-				const version = ++loadVersion.current;
 
 				try {
 					const supabase =
@@ -912,7 +879,6 @@ function MemberPortfolioPage() {
 								},
 							);
 
-					if (version !== loadVersion.current) return;
 					if (selectError) {
 						throw selectError;
 					}
@@ -1011,19 +977,56 @@ function MemberPortfolioPage() {
 						}
 					}
 
-					if (version !== loadVersion.current) return;
-					const enrichedRows = baseRows.map((row) => {
-						const quote = quoteMap.get(row.ticker);
-						return { ...row, quote, ...portfolioQuote(quote, row) };
-					});
+					const enrichedRows = baseRows.map(
+						(row) => {
+							const quote =
+								quoteMap.get(
+									row.ticker,
+								);
 
-					setValuationTime(Date.now());
+							const quotePrice =
+								toSafeNumber(
+									quote?.price ??
+										quote?.currentPrice ??
+										quote?.cur_prc,
+									Number.NaN,
+								);
+
+							const quoteChange =
+								toSafeNumber(
+									quote?.changePercent ??
+										quote?.change_rate ??
+										quote?.flu_rt,
+									Number.NaN,
+								);
+
+							return {
+								...row,
+
+								currentPrice:
+									Number.isFinite(
+										quotePrice,
+									)
+										? Math.abs(
+												quotePrice,
+											)
+										: null,
+
+								changePercent:
+									Number.isFinite(
+										quoteChange,
+									)
+										? quoteChange
+										: null,
+							};
+						},
+					);
+
 					setRows(enrichedRows);
 					syncPortfolioChartOverlays(enrichedRows);
 
 					setInitialized(true);
 				} catch (cause) {
-					if (version !== loadVersion.current) return;
 					console.warn(
 						'portfolio load error:',
 						cause,
@@ -1039,7 +1042,7 @@ function MemberPortfolioPage() {
 
 					setInitialized(true);
 				} finally {
-					if (version === loadVersion.current) setLoading(false);
+					setLoading(false);
 				}
 			},
 			[
@@ -1053,9 +1056,59 @@ function MemberPortfolioPage() {
 		void load();
 	}, [load]);
 
-	const valuedRows = useMemo(() => rows.map((row) => ({ ...row, ...portfolioQuote(row.quote, row, valuationTime) })), [rows, valuationTime]);
-	const summaries = useMemo(() => portfolioTotals(valuedRows), [valuedRows]);
-	useEffect(() => { syncPortfolioChartOverlays(valuedRows); }, [valuedRows]);
+	const summary =
+		useMemo<PortfolioSummary>(
+			() => {
+				let cost = 0;
+				let value = 0;
+
+				for (
+					const row of
+					rows
+				) {
+					const rowCost =
+						row.average_price *
+						row.quantity;
+
+					const current =
+						row.currentPrice ??
+						row.average_price;
+
+					const rowValue =
+						current *
+						row.quantity;
+
+					cost +=
+						rowCost;
+
+					value +=
+						rowValue;
+				}
+
+				const profit =
+					value -
+					cost;
+
+				const rate =
+					cost > 0
+						? (
+								profit /
+								cost
+							) *
+							100
+						: 0;
+
+				return {
+					cost,
+					value,
+					profit,
+					rate,
+				};
+			},
+			[
+				rows,
+			],
+		);
 
 	async function addHolding(
 		event:
@@ -1318,12 +1371,13 @@ function MemberPortfolioPage() {
 					<UnifiedTradeJournalPanel />
 				</main>
 			) : assetMode.asset === 'coin' ? (
-				<CoinAssetsView
-					mode={assetMode.coinMarket}
-					spot={coinSpotAccounts}
-					futuresAccount={coinFuturesAccount}
-					futuresPositions={coinFuturesPositions}
-				/>
+				<main className="min-w-0 px-4 pb-28 pt-4" data-testid="portfolio-coin-readonly">
+					<p className="text-xs text-muted-foreground">회원별 Vault의 조회 전용 계좌 연결을 사용합니다. 공용 키를 사용하는 이전 계좌 API는 호출하지 않습니다.</p>
+					<BrokerageAccountConnections
+						canAccessSpot={assetMode.coinMarket === 'spot' && auth.can('canAccessSpot')}
+						canAccessFutures={assetMode.coinMarket === 'futures' && auth.can('canAccessFutures')}
+					/>
+				</main>
 			) : (
 			<main className="flex-none px-4 pb-28 pt-4">
 				{!auth.configured && (
@@ -1372,6 +1426,12 @@ function MemberPortfolioPage() {
 					auth.user && (
 						<div className="space-y-4">
 							{!loading && initialized && !error && (
+								<BrokerageAccountConnections
+									canAccessSpot={false}
+									canAccessFutures={false}
+								/>
+							)}
+							{!loading && initialized && !error && (
 								<section data-testid="portfolio-holdings-summary" className="rounded-3xl border border-card-border bg-card p-5 shadow-sm">
 									<div className="flex items-center justify-between gap-3">
 										<div className="flex min-w-0 items-center gap-2">
@@ -1411,17 +1471,48 @@ function MemberPortfolioPage() {
 										</button>
 									</div>
 
+									<p className="mt-4 text-2xl font-black">
+										{Math.round(
+											summary.value,
+										).toLocaleString()}
+									</p>
 
-                                    <p className="mt-3 text-xs text-muted-foreground">통화별 평가 · 환율 환산 미제공 · 수수료/세금 미포함</p>
-                                    {summaries.length === 0 ? <p className="mt-3 text-sm">등록된 보유 종목 0개 · 수익률 산출 불가</p> : summaries.map((summary) => <div key={summary.currency} data-testid={'portfolio-summary-' + summary.currency} className="mt-4 rounded-2xl border border-card-border p-3">
-                                        <p className="text-xs font-bold">{summary.currency} · {summary.count}종목</p>
-                                        <p className="mt-2 break-all text-xl font-black">{money(summary.value, summary.currency)}</p>
-                                        <div className="mt-3 grid grid-cols-2 gap-3">
-                                            <SummaryBox label="평가손익" value={signedMoney(summary.profit, summary.currency)} positive={summary.profit === null ? null : summary.profit >= 0} />
-                                            <SummaryBox label="수익률" value={signedPercent(summary.rate)} positive={summary.rate === null ? null : summary.rate >= 0} />
-                                        </div>
-                                    </div>)}
-                                    <p className="mt-3 text-[11px] leading-5 text-muted-foreground">현재가·출처·시장·통화·5분 이내 원본 시각을 확인한 항목만 평가합니다. 미수집·오래된 시세를 평단이나 0으로 대체하지 않습니다.</p>
+									<div className="mt-3 grid grid-cols-2 gap-3">
+										<SummaryBox
+											label="평가손익"
+											value={
+												summary.profit >=
+												0
+													? `+${Math.round(
+															summary.profit,
+														).toLocaleString()}`
+													: Math.round(
+															summary.profit,
+														).toLocaleString()
+											}
+											positive={
+												summary.profit >=
+												0
+											}
+										/>
+
+										<SummaryBox
+											label="수익률"
+											value={signedPercent(
+												summary.rate,
+											)}
+											positive={
+												summary.rate >=
+												0
+											}
+										/>
+
+									</div>
+
+									<p className="mt-3 break-keep text-[11px] font-semibold leading-5 text-muted-foreground">
+										국내 원화와 미국 달러 보유분을 단순 합산한 값입니다.
+										환율 환산은 다음 단계에서 연결합니다.
+									</p>
 								</section>
 							)}
 
@@ -1640,12 +1731,31 @@ function MemberPortfolioPage() {
 								)}
 
 							<div className="space-y-3">
-								{valuedRows.map(
+								{rows.map(
 									(row) => {
-										const current = row.currentPrice;
-										const value = current === null ? null : current * row.quantity;
-										const profit = current === null ? null : (current - row.average_price) * row.quantity;
-										const rate = current === null ? null : (current - row.average_price) / row.average_price * 100;
+										const current =
+											row.currentPrice ??
+											row.average_price;
+
+										const profit =
+											(
+												current -
+												row.average_price
+											) *
+											row.quantity;
+
+										const rate =
+											row.average_price >
+											0
+												? (
+														(
+															current -
+															row.average_price
+														) /
+														row.average_price
+													) *
+													100
+												: 0;
 
 										const manual =
 											isManualTicker(
@@ -1709,7 +1819,6 @@ function MemberPortfolioPage() {
 													</button>
 												</div>
 
-												<p className="mt-3 break-words text-[11px] text-muted-foreground">시세 {row.quoteStatus} · {row.source ?? '출처 미수집'} · {row.updatedAt ? new Date(row.updatedAt).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' }) + ' KST' : '기준 시각 미수집'}</p>
 												<div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3">
 													<HoldingValue
 														label="현재가"
@@ -1735,7 +1844,8 @@ function MemberPortfolioPage() {
 													<HoldingValue
 														label="평가금액"
 														value={money(
-															value,
+															current *
+																row.quantity,
 															row.currency,
 														)}
 													/>
@@ -1749,7 +1859,7 @@ function MemberPortfolioPage() {
 															className={cn(
 																'mt-1 text-sm font-extrabold',
 
-																profit === null ? 'text-muted-foreground' : profit >= 0
+																profit >= 0
 																	? 'text-positive'
 																	: 'text-destructive',
 															)}
@@ -1780,64 +1890,6 @@ function MemberPortfolioPage() {
 	);
 }
 
-function CoinAssetsView({
-	mode,
-	spot,
-	futuresAccount,
-	futuresPositions,
-}: {
-	mode: 'spot' | 'futures';
-	spot: { data?: AnyObj; isLoading: boolean; isError: boolean; refetch: () => unknown };
-	futuresAccount: { data?: AnyObj; isLoading: boolean; isError: boolean; refetch: () => unknown };
-	futuresPositions: { data?: AnyObj; isLoading: boolean; isError: boolean; refetch: () => unknown };
-}) {
-	const rows = mode === 'spot'
-		? ((spot.data?.accounts ?? []) as AnyObj[])
-		: ((futuresPositions.data?.positions ?? []) as AnyObj[]);
-	const accountRows = (futuresAccount.data?.accounts ?? []) as AnyObj[];
-	const loading = mode === 'spot' ? spot.isLoading : futuresAccount.isLoading || futuresPositions.isLoading;
-	const error = mode === 'spot' ? spot.isError : futuresAccount.isError || futuresPositions.isError;
-	return (
-		<main className="space-y-4 px-4 pb-28 pt-4">
-			<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-				<div className="flex items-center justify-between gap-3">
-					<div><h2 className="text-sm font-black">{mode === 'spot' ? '업비트 현물 자산' : '비트겟 선물 자산'}</h2><p className="mt-1 text-[10px] font-bold text-muted-foreground">개인 API 키는 서버 환경변수에서만 사용합니다.</p></div>
-					<button type="button" onClick={() => { void (mode === 'spot' ? spot.refetch() : Promise.all([futuresAccount.refetch(), futuresPositions.refetch()])); }} className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border"><RefreshCw className="h-4 w-4" /></button>
-				</div>
-				{loading && <p className="mt-3 rounded-2xl bg-muted p-4 text-center text-xs font-bold text-muted-foreground">실제 잔고를 불러오는 중입니다.</p>}
-				{error && <p className="mt-3 rounded-2xl bg-destructive/10 p-4 text-center text-xs font-bold text-destructive">API 키 미설정, 읽기 권한 부족 또는 거래소 연결 오류입니다. 임시 잔고는 표시하지 않습니다.</p>}
-				{mode === 'futures' && !loading && !error && (
-					<div className="mt-3 grid grid-cols-2 gap-2">
-						<HoldingValue label="계좌 평가금액" value={formatCoinNumber(accountRows[0]?.accountEquity, ' USDT')} />
-						<HoldingValue label="사용가능" value={formatCoinNumber(accountRows[0]?.available, ' USDT')} />
-						<HoldingValue label="미실현손익" value={formatCoinNumber(accountRows[0]?.unrealizedPL, ' USDT')} />
-						<HoldingValue label="보유 포지션" value={`${rows.length}개`} />
-					</div>
-				)}
-			</section>
-			{!loading && !error && rows.length === 0 && <section className="rounded-3xl border border-card-border bg-card p-6 text-center text-sm font-bold text-muted-foreground">보유 자산 또는 포지션이 없습니다.</section>}
-			<div className="space-y-3">
-				{mode === 'spot' ? rows.map((row) => (
-					<section key={String(row.currency)} className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-						<div className="flex items-center justify-between"><h3 className="text-base font-black">{row.currency}</h3><span className="text-[10px] font-bold text-muted-foreground">UPBIT</span></div>
-						<div className="mt-3 grid grid-cols-2 gap-2"><HoldingValue label="보유수량" value={formatCoinNumber(row.balance)} /><HoldingValue label="주문 잠금" value={formatCoinNumber(row.locked)} /><HoldingValue label="평균매수가" value={formatCoinNumber(row.averageBuyPrice, ` ${row.unitCurrency ?? 'KRW'}`)} /><HoldingValue label="기준통화" value={String(row.unitCurrency ?? 'KRW')} /></div>
-					</section>
-				)) : rows.map((row) => (
-					<section key={`${row.symbol}:${row.holdSide}`} className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-						<div className="flex items-center justify-between"><h3 className="text-base font-black">{row.symbol}</h3><span className={cn('rounded-full px-2 py-1 text-[10px] font-black', String(row.holdSide).toLowerCase() === 'long' ? 'bg-positive/10 text-positive' : 'bg-destructive/10 text-destructive')}>{String(row.holdSide).toUpperCase()}</span></div>
-						<div className="mt-3 grid grid-cols-2 gap-2"><HoldingValue label="진입가" value={formatCoinNumber(row.openPriceAvg, ' USDT')} /><HoldingValue label="마크가격" value={formatCoinNumber(row.markPrice, ' USDT')} /><HoldingValue label="미실현손익" value={formatCoinNumber(row.unrealizedPL, ' USDT')} /><HoldingValue label="포지션 수량" value={formatCoinNumber(row.total)} /><HoldingValue label="레버리지" value={formatCoinNumber(row.leverage, '배')} /><HoldingValue label="청산가격" value={formatCoinNumber(row.liquidationPrice, ' USDT')} /></div>
-					</section>
-				))}
-			</div>
-		</main>
-	);
-}
-
-function formatCoinNumber(value: unknown, suffix = '') {
-	const number = Number(value);
-	return Number.isFinite(number) ? `${number.toLocaleString(undefined, { maximumFractionDigits: 8 })}${suffix}` : '데이터 없음';
-}
-
 function LoadingCard({
 	text,
 }: {
@@ -1861,7 +1913,7 @@ function SummaryBox({
 }: {
 	label: string;
 	value: string;
-	positive: boolean | null;
+	positive: boolean;
 }) {
 	return (
 		<div className="rounded-2xl bg-muted/60 p-3">
@@ -1873,7 +1925,7 @@ function SummaryBox({
 				className={cn(
 					'mt-1 font-extrabold',
 
-					positive === null ? 'text-muted-foreground' : positive
+					positive
 						? 'text-positive'
 						: 'text-destructive',
 				)}

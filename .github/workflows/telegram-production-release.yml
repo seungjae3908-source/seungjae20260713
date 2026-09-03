@@ -7,6 +7,9 @@ on:
     paths:
       - .github/workflows/telegram-production-release.yml
       - api-server/scripts/verify-telegram-production-release-contract.mjs
+      - api-server/scripts/verify-production-telegram-preservation.mjs
+      - ops/deploy-production.sh
+      - .github/workflows/production-app-release-control.yml
       - api-server/supabase/migrations/2026081501_personal_telegram_storage.sql
       - api-server/supabase/migrations/2026081502_personal_telegram_policy_cleanup.sql
       - ops/apply-production-personal-telegram-storage.mjs
@@ -539,7 +542,7 @@ jobs:
             }
             core.setFailed(`Production Deploy Run ID ${runId} did not complete inside the bounded wait.`);
 
-      - name: Verify exact Production runtime and send one sanitized Telegram proof message
+      - name: Activate approved Telegram runtime, verify exact identity, and send one sanitized proof
         id: smoke
         env:
           TARGET_SHA: ${{ steps.command.outputs.sha }}
@@ -569,8 +572,9 @@ jobs:
             if (!/^[0-9a-f]{40}$/.test(targetSha)) process.exit(2);
 
             const processes = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8' }));
-            const selected = processes.find((item) => item.name === 'stock-app');
-            const env = selected?.pm2_env;
+            const selectedProcesses = Array.isArray(processes) ? processes.filter((item) => item?.name === 'stock-app') : [];
+            const selected = selectedProcesses.length === 1 ? selectedProcesses[0] : null;
+            let env = selected?.pm2_env;
             if (!env || env.status !== 'online') {
               console.error('Production PM2 process is not online.');
               process.exit(3);
@@ -594,15 +598,66 @@ jobs:
               process.exit(6);
             }
 
+            // TELEGRAM_SPECIFIC_ACTIVATION: this step is reachable only after the
+            // exact owner command, protected production gate, CI/Auth/Staging and
+            // successful exact-SHA generic app deployment. No generic deploy input
+            // or /run-production-app command grants this authority.
+            function activateApprovedTelegram(runtime, approvedSha, marker, commentId) {
+              if (!/^[0-9a-f]{40}$/.test(approvedSha) || !/^[1-9][0-9]*$/.test(commentId)
+                || marker !== approvedSha || runtime?.DEPLOY_SHA !== approvedSha || runtime.status !== 'online') {
+                throw new Error('Telegram activation requires exact approved runtime identity');
+              }
+              const flag = value => {
+                if (value === undefined || value === false || value === 'false') return false;
+                if (value === true || value === 'true') return true;
+                throw new Error('Malformed Telegram activation state');
+              };
+              const approved = flag(runtime.LIVE_TELEGRAM_ACTIVATION_APPROVED);
+              const worker = flag(runtime.TELEGRAM_INTELLIGENCE_WORKER_ENABLED);
+              if (approved !== worker) throw new Error('Mixed Telegram activation state');
+              if (!String(runtime.TELEGRAM_BOT_TOKEN ?? '').trim() || !String(runtime.TELEGRAM_CHAT_ID ?? '').trim()) {
+                throw new Error('Telegram runtime configuration is incomplete');
+              }
+              if (approved && worker) return false;
+              execFileSync('pm2', ['restart', 'stock-app', '--update-env'], {
+                env: { ...process.env, DEPLOY_SHA: approvedSha,
+                  LIVE_TELEGRAM_ACTIVATION_APPROVED: 'true', TELEGRAM_INTELLIGENCE_WORKER_ENABLED: 'true',
+                  LIVE_TRADING: 'false', AUTO_TRADING: 'false', REAL_ORDER_ENABLED: 'false',
+                  PRIVATE_TRADING_API_ALLOWED: 'false', executionAuthority: 'NONE' },
+                stdio: ['ignore', 'ignore', 'pipe'],
+              });
+              execFileSync('pm2', ['save'], { stdio: ['ignore', 'ignore', 'pipe'] });
+              return true;
+            }
+            const activationChanged = activateApprovedTelegram(env, targetSha, markerSha, sourceCommentId);
+            if (activationChanged) {
+              const current = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8' }));
+              const matches = current.filter(item => item?.name === 'stock-app');
+              env = matches.length === 1 ? matches[0].pm2_env : null;
+              if (!env || env.status !== 'online' || env.DEPLOY_SHA !== targetSha) {
+                throw new Error('Telegram activation changed application identity');
+              }
+            }
+
             const healthTargets = [
               'http://127.0.0.1:8080/api/health',
               `${publicBaseUrl}/api/health`,
             ];
             for (const url of healthTargets) {
               let response;
-              try {
-                response = await fetch(url, { signal: AbortSignal.timeout(15000) });
-              } catch {
+              // A newly restarted process may not yet listen. Bound transport-only
+              // startup polling to the existing deploy health budget (10 x 3s).
+              // HTTP/JSON/identity failures below are never retried or suppressed.
+              const attempts = activationChanged ? 10 : 1;
+              for (let attempt = 0; attempt < attempts; attempt += 1) {
+                try {
+                  response = await fetch(url, { signal: AbortSignal.timeout(15000) });
+                  break;
+                } catch {
+                  if (attempt + 1 < attempts) await new Promise(resolve => setTimeout(resolve, 3000));
+                }
+              }
+              if (!response) {
                 console.error('Production health request failed.');
                 process.exit(7);
               }
@@ -633,8 +688,8 @@ jobs:
               console.error('LIVE_TELEGRAM_ACTIVATION_APPROVED is not enabled.');
               process.exit(11);
             }
-            if (String(env.TELEGRAM_INTELLIGENCE_WORKER_ENABLED ?? 'true') === 'false') {
-              console.error('Telegram intelligence worker is explicitly disabled.');
+            if (String(env.TELEGRAM_INTELLIGENCE_WORKER_ENABLED ?? '') !== 'true') {
+              console.error('Telegram intelligence worker is not explicitly enabled.');
               process.exit(12);
             }
             const botToken = String(env.TELEGRAM_BOT_TOKEN ?? '').trim();

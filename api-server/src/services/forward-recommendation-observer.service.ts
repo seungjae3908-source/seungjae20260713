@@ -297,7 +297,7 @@ export function prepareForwardRecommendationObservation(input: {
     && !priceStructureValid(entry, stop, target1, positive(target2) ? target2 : null, direction)) {
     blockers.push('PRICE_PLAN_DIRECTION_MISMATCH');
   }
-  if (blockers.length > 0 || card.observedAt == null || card.expiresAt == null || !market || !direction || !performanceHorizon || !positive(entry) || !positive(stop) || !positive(target1)) {
+  if (blockers.length > 0 || !market || !direction || !performanceHorizon || !positive(entry) || !positive(stop) || !positive(target1)) {
     return decision('BLOCKED', blockers);
   }
 

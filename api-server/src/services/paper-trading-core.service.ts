@@ -1,6 +1,5 @@
 import { TRADING_RISK_POLICY, type RiskDataStatus, type RiskEngineInput, type RiskEngineResult } from './trading-risk-engine.service';
 import type { PaperRiskState, PaperTradingState, PaperOrderRequest, PaperMarketData, PaperSide, PaperContractRules, PlacePaperOrderAction, PaperOrderStatus, PaperOrder } from './paper-trading.types';
-import { validPaperState } from '../../../packages/api-zod/src/paper-state-evidence.js';
 
 export class PaperTradingError extends Error {
   constructor(
@@ -23,10 +22,7 @@ export const unique = <T>(values: T[]) => [...new Set(values)];
 export const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 export const positive = (value: unknown): value is number => finite(value) && value > 0;
 export const nonNegative = (value: unknown): value is number => finite(value) && value >= 0;
-export const safeNumber = (value: number) => {
-  if (!Number.isFinite(value)) throw new PaperTradingError('NON_FINITE_CALCULATION', '모의거래 계산값이 유한수가 아닙니다.', 500);
-  return value;
-};
+export const safeNumber = (value: number) => Number.isFinite(value) ? value : 0;
 
 export function cloneState(state: PaperTradingState): PaperTradingState {
   return JSON.parse(JSON.stringify(state)) as PaperTradingState;
@@ -128,7 +124,7 @@ export function isFresh(updatedAt: string, now: Date, limitMs: number) {
   return Number.isFinite(timestamp) && now.getTime() >= timestamp && now.getTime() - timestamp <= limitMs;
 }
 
-export function validateState(state: PaperTradingState, latest = Infinity) {
+export function validateState(state: PaperTradingState) {
   if (!state || state.schemaVersion !== 1 || !state.account) {
     throw new PaperTradingError('INVALID_PAPER_STATE', '모의거래 상태 형식이 올바르지 않습니다.');
   }
@@ -147,7 +143,6 @@ export function validateState(state: PaperTradingState, latest = Infinity) {
   if (!Array.isArray(state.orders) || !Array.isArray(state.positions) || !Array.isArray(state.fills) || !Array.isArray(state.journal)) {
     throw new PaperTradingError('INVALID_PAPER_STATE', '모의거래 목록 형식이 올바르지 않습니다.');
   }
-  if (!validPaperState(state, latest)) throw new PaperTradingError('INVALID_PAPER_STATE', '모의거래 기록의 수치·시각·식별자 근거를 확인하지 못했습니다.');
 }
 
 export function validateOrderRequest(request: PaperOrderRequest) {

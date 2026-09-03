@@ -168,8 +168,6 @@ export type PaperJournalEntry = {
   ruleViolation: boolean;
   status: PaperPositionStatus;
   note: string;
-  conflictCopyOf?: string;
-  researchEvidenceEligible?: false;
 };
 
 export type PaperRiskState = {

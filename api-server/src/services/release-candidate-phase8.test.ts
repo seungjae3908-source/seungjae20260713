@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { paperJournalFixture } from './paper-journal-test-fixture';
 import { performance } from 'node:perf_hooks';
 import {
   getPaperJournalSnapshot,
@@ -28,8 +27,8 @@ const keyOf = (user: string, kind: string, id: string) => `${user}:${kind}:${id}
 function syncRecord(index: number, overrides: Partial<PaperJournalSyncRecord> = {}): PaperJournalSyncRecord {
   return {
     kind: 'journal', id: `trade-${index}`, version: 1, updatedAt: NOW.toISOString(), deletedAt: null,
+    payload: { id: `trade-${index}`, tradeId: `trade-${index}`, status: 'closed', netPnl: index % 3 ? 10 : -5 },
     ...overrides,
-    payload: overrides.deletedAt ? {} : { ...paperJournalFixture(overrides.id ?? `trade-${index}`, NOW.toISOString()), netPnl: index % 3 ? 10 : -5, ...overrides.payload },
   };
 }
 
@@ -60,22 +59,14 @@ class MemoryRepository implements PaperJournalRepository {
   failIds = new Set<string>();
   upsertCount = 0;
   idempotencyDelayMs = 0;
-  claims = new Set<string>();
-  async claimSyncRequest(user: string, key: string) {
-    const id = `${user}:${key}`;
-    if (this.claims.has(id)) throw new PaperJournalError('SYNC_REQUEST_IN_PROGRESS', 'pending', 409);
-    this.claims.add(id);
-    return null;
-  }
 
   async getRecord(userId: string, kind: PaperJournalRecordKind, id: string) {
     return structuredClone(this.records.get(keyOf(userId, kind, id)) ?? null);
   }
-  async upsertRecord(userId: string, record: PaperJournalSyncRecord, serverTime: string, expectedVersion?: number | null) {
+  async upsertRecord(userId: string, record: PaperJournalSyncRecord, serverTime: string) {
     if (this.failIds.has(record.id)) throw new Error('database connection secret');
     this.upsertCount += 1;
     const existing = this.records.get(keyOf(userId, record.kind, record.id));
-    if (expectedVersion !== undefined && (existing?.version ?? null) !== expectedVersion) throw new PaperJournalError('JOURNAL_VERSION_CHANGED', 'changed', 409);
     const stored: StoredPaperJournalRecord = { ...structuredClone(record), createdAt: existing?.createdAt ?? serverTime, serverUpdatedAt: serverTime };
     this.records.set(keyOf(userId, record.kind, record.id), stored);
     return structuredClone(stored);
@@ -190,10 +181,10 @@ test('tombstone and edit at same version creates a conflict', async () => {
   assert.match(result.conflicts[0]?.differenceSummary.join(' ') ?? '', /삭제/);
 });
 
-test('unchanged acknowledged device version receives newer server content independent of client time', async () => {
+test('higher version wins over lower version independent of client time', async () => {
   const repository = new MemoryRepository();
   await syncPaperJournal(repository, USER_A, request([syncRecord(1, { version: 3, payload: { value: 'new' } })], 'phase8-version-new'), NOW);
-  const result = await syncPaperJournal(repository, USER_A, { ...request([syncRecord(1, { version: 2, baseVersion: 2, payload: { value: 'old' } })], 'phase8-version-old'), clientTime: new Date(NOW.getTime() + 3_600_000).toISOString() }, NOW);
+  const result = await syncPaperJournal(repository, USER_A, { ...request([syncRecord(1, { version: 2, payload: { value: 'old' } })], 'phase8-version-old'), clientTime: new Date(NOW.getTime() + 3_600_000).toISOString() }, NOW);
   assert.equal(result.downloaded[0]?.version, 3);
   assert.equal(result.warnings.length, 1);
 });

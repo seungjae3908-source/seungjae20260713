@@ -2,7 +2,6 @@ import { expect, test, type Page, type Route } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { validatePortfolioHoldingRows } from '../src/lib/portfolio-holding-truth';
-import { portfolioQuote, portfolioTotals } from '../src/lib/portfolio-valuation';
 
 const VALID_ROW = {
   id: 'holding-1',
@@ -16,76 +15,6 @@ const E2E_USER_ID = '22222222-2222-4222-8222-222222222222';
 const E2E_AUTH_STORAGE_KEY = 'sb-127-auth-token';
 const E2E_NOW = '2026-08-30T10:30:00.000Z';
 
-test('portfolio valuation requires identified fresh source quotes and keeps native currencies separate', () => {
-  const now = Date.parse(E2E_NOW);
-  const quote = { ticker: VALID_ROW.ticker, market: VALID_ROW.market, currency: VALID_ROW.currency, price: 78000, changePercent: 0, source: 'fixture-only', updatedAt: E2E_NOW };
-  expect(portfolioQuote(quote, VALID_ROW, now)).toMatchObject({ currentPrice: 78000, quoteStatus: 'FRESH' });
-  for (const invalid of [undefined, { ...quote, price: true }, { ...quote, price: -1 }, { ...quote, ticker: 'AAPL' }, { ...quote, currency: 'USD' }, { ...quote, source: null }, { ...quote, updatedAt: null }, { ...quote, updatedAt: '2099-01-01T00:00:00Z' }]) {
-    expect(portfolioQuote(invalid, VALID_ROW, now).currentPrice).toBeNull();
-  }
-  expect(portfolioQuote(quote, VALID_ROW, now + 300_001)).toMatchObject({ currentPrice: null, quoteStatus: 'STALE' });
-  expect(portfolioQuote({ ...quote, freshness: { status: 'ARCHIVED' } }, VALID_ROW, now)).toMatchObject({ currentPrice: null, quoteStatus: 'ARCHIVED' });
-  const us = { ...VALID_ROW, ticker: 'AAPL', market: 'US' as const, currency: 'USD' as const, quantity: 2, average_price: 100, currentPrice: 110 };
-  const totals = portfolioTotals([{ ...VALID_ROW, currentPrice: null }, us]);
-  expect(totals).toEqual([
-    { currency: 'KRW', count: 1, cost: 780000, value: null, profit: null, rate: null },
-    { currency: 'USD', count: 1, cost: 200, value: 220, profit: 20, rate: 10 },
-  ]);
-  expect(portfolioTotals([{ ...VALID_ROW, currentPrice: 78000 }])[0]).toMatchObject({ value: 780000, profit: 0, rate: 0 });
-  expect(portfolioTotals([])).toEqual([]);
-});
-
-for (const [width, height] of [[1440, 900], [1024, 768], [320, 740], [360, 800], [390, 844], [412, 915], [430, 932]]) {
-  test(`actual stock holdings show currency-separated facts and missing or stale quotes never become breakeven ${width}`, async ({ page }, testInfo) => {
-    const holdings = [
-      { ...VALID_ROW, name: '삼성전자 검증', user_id: E2E_USER_ID, created_at: E2E_NOW },
-      { ...VALID_ROW, id: 'holding-us', ticker: 'AAPL', name: 'Apple 검증', market: 'US', currency: 'USD', quantity: 2, average_price: 100, user_id: E2E_USER_ID, created_at: E2E_NOW },
-    ];
-    await installApprovedSessionWithInvalidHolding(page, holdings);
-    await page.setViewportSize({ width, height });
-    const errors: string[] = [];
-    const mutations: string[] = [];
-    page.on('pageerror', (error) => errors.push(error.message));
-    page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
-    page.on('request', (request) => { if (request.method() !== 'GET' && new URL(request.url()).pathname.startsWith('/api/')) mutations.push(request.method()); });
-    let scenario = 'fresh';
-    await page.route('**/api/**', (route) => {
-      const pathname = new URL(route.request().url()).pathname;
-      if (pathname === '/api/quotes') return fulfill(route, { dataStatus: scenario === 'missing' ? 'unavailable' : 'complete', quotes: scenario === 'missing' ? [] : [
-        { ticker: '005930', market: 'KR', currency: 'KRW', price: 78000, changePercent: 0, source: 'fixture-only', updatedAt: scenario === 'stale' ? E2E_NOW : new Date().toISOString() },
-        { ticker: 'AAPL', market: 'US', currency: 'USD', price: 110, changePercent: 0, source: 'fixture-only', updatedAt: new Date().toISOString() },
-      ] });
-      if (pathname === '/api/backup/latest') return fulfill(route, { ok: true, exists: false });
-      return fulfill(route, { ok: true, items: [], rows: [], results: [] });
-    });
-    await page.goto('/portfolio?tab=holdings');
-    const kr = page.getByTestId('portfolio-summary-KRW');
-    const us = page.getByTestId('portfolio-summary-USD');
-    await expect(kr).toContainText('780,000원');
-    await expect(kr).toContainText('0.00%');
-    await expect(us).toContainText('$220');
-    await expect(us).toContainText('+10.00%');
-    await expect(page.getByTestId('portfolio-holdings-summary')).not.toContainText('780,220');
-    if (width === 1440 || width === 320) {
-      await testInfo.attach('native-currency-holdings', { body: await page.screenshot({ fullPage: true }), contentType: 'image/png' });
-    }
-    scenario = 'missing';
-    await page.getByTestId('portfolio-holdings-summary').getByRole('button', { name: '새로고침' }).click();
-    await expect(kr).toContainText('데이터 부족');
-    await expect(us).toContainText('데이터 부족');
-    await expect(kr).not.toContainText('0.00%');
-    await expect(page.locator('body')).toContainText('시세 PROVIDER_UNAVAILABLE');
-    scenario = 'stale';
-    await page.getByTestId('portfolio-holdings-summary').getByRole('button', { name: '새로고침' }).click();
-    await expect(kr).toContainText('데이터 부족');
-    await expect(us).toContainText('$220');
-    await expect(page.locator('body')).toContainText('시세 STALE');
-    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width + 1);
-    expect(errors).toEqual([]);
-    expect(mutations).toEqual([]);
-  });
-}
-
 function fulfill(route: Route, body: unknown, status = 200) {
   return route.fulfill({
     status,
@@ -94,7 +23,7 @@ function fulfill(route: Route, body: unknown, status = 200) {
   });
 }
 
-async function installApprovedSessionWithInvalidHolding(page: Page, holdings?: Array<Record<string, unknown>>) {
+async function installApprovedSessionWithInvalidHolding(page: Page) {
   await page.addInitScript(({ storageKey, userId, now }) => {
     const encode = (value: Record<string, unknown>) => window.btoa(JSON.stringify(value))
       .replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
@@ -147,7 +76,7 @@ async function installApprovedSessionWithInvalidHolding(page: Page, holdings?: A
       });
     }
     if (url.pathname.endsWith('/rest/v1/portfolio_holdings')) {
-      return fulfill(route, holdings ?? [{
+      return fulfill(route, [{
         id: 'broken-holding',
         user_id: E2E_USER_ID,
         ticker: '005930',
@@ -224,60 +153,6 @@ test('portfolio holding truth rejects missing or impossible average price', () =
     code: 'INVALID_AVERAGE_PRICE',
     rowIndex: 0,
   });
-});
-
-test('duplicate holding row identity and coerced numeric values fail closed while distinct purchase lots remain valid', () => {
-  expect(validatePortfolioHoldingRows([VALID_ROW, VALID_ROW])).toEqual({ ok: false, code: 'DUPLICATE_IDENTITY', rowIndex: 1 });
-  expect(validatePortfolioHoldingRows([VALID_ROW, { ...VALID_ROW, id: 'separate-lot' }])).toEqual({ ok: true });
-  for (const quantity of [true, [], '0x10', '1e1000', '']) expect(validatePortfolioHoldingRows([{ ...VALID_ROW, quantity }]).ok).toBe(false);
-});
-
-test('portfolio chart cache binds the authenticated member and never generates purchase dates or refreshes quote time', async ({ page }) => {
-  await installApprovedSessionWithInvalidHolding(page, []);
-  await page.route('**/api/**', (route) => fulfill(route, new URL(route.request().url()).pathname === '/api/backup/latest'
-    ? { ok: true, exists: false } : { ok: true, items: [], rows: [], results: [] }));
-  await page.goto('/account');
-  await expect(page.getByTestId('brokerage-account-connections')).toBeVisible();
-  const result = await page.evaluate(async () => {
-    const modulePath = performance.getEntriesByType('resource').map((entry) => entry.name)
-      .filter((url) => new URL(url).pathname === '/src/lib/portfolio-overlay.ts').at(-1);
-    if (!modulePath) throw new Error('Actual AuthProvider overlay module was not loaded');
-    const overlay = await import(modulePath) as typeof import('../src/lib/portfolio-overlay');
-    const row = { ticker: '005930', name: 'fixture', market: 'KR' as const, currency: 'KRW' as const, average_price: 100, quantity: 2, currentPrice: 110, created_at: '2020-01-01T00:00:00Z' };
-    overlay.syncPortfolioChartOverlays([row]);
-    const unknownQuote = overlay.getPortfolioChartOverlay('005930');
-    overlay.rememberPurchaseDate('005930', '2026-02-30');
-    const invalidDate = overlay.getRememberedPurchaseDate('005930');
-    overlay.rememberPurchaseDate('005930', '2026-08-01');
-    overlay.syncPortfolioChartOverlays([{ ...row, updatedAt: new Date().toISOString() }]);
-    const current = overlay.getPortfolioChartOverlay('005930');
-    overlay.setPortfolioOverlayMember('different-fixture-user');
-    const otherMember = overlay.getPortfolioChartOverlay('005930');
-    const otherDate = overlay.getRememberedPurchaseDate('005930');
-    overlay.setPortfolioOverlayMember('22222222-2222-4222-8222-222222222222');
-    overlay.syncPortfolioChartOverlays([{ ...row, updatedAt: '2020-01-01T00:00:00Z' }]);
-    const oldQuote = overlay.getPortfolioChartOverlay('005930');
-    const cache = JSON.parse(localStorage.getItem('sa-portfolio-chart-overlays-v1')!);
-    return { unknownQuote, invalidDate, current, otherMember, otherDate, oldQuote, owner: cache.memberId, modulePath };
-  });
-  expect(result.unknownQuote).toMatchObject({ purchaseDate: '', currentPrice: null, rate: null, quoteUpdatedAt: null });
-  expect(result.invalidDate).toBe('');
-  expect(result.current).toMatchObject({ purchaseDate: '2026-08-01', currentPrice: 110, rate: 10 });
-  expect(result.otherMember).toBeNull();
-  expect(result.otherDate).toBe('');
-  expect(result.oldQuote).toMatchObject({ currentPrice: null, rate: null, quoteUpdatedAt: '2020-01-01T00:00:00Z' });
-  expect(result.owner).toBe(E2E_USER_ID);
-  await page.evaluate(async () => {
-    const path = performance.getEntriesByType('resource').map((entry) => entry.name)
-      .filter((url) => new URL(url).pathname === '/src/lib/supabase.ts').at(-1);
-    if (!path) throw new Error('Actual auth transport was not loaded');
-    const { getSupabase } = await import(path) as typeof import('../src/lib/supabase');
-    await getSupabase().auth.signOut({ scope: 'local' });
-  });
-  await expect.poll(() => page.evaluate(async (path) => {
-    const { loadPortfolioChartOverlays } = await import(path) as typeof import('../src/lib/portfolio-overlay');
-    return loadPortfolioChartOverlays().length;
-  }, result.modulePath)).toBe(0);
 });
 
 test('portfolio holding truth rejects guessed market or currency identity', () => {

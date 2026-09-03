@@ -1,6 +1,4 @@
 import type { PreparedExchangeRequest } from './trade-exchange-adapters.service';
-import { marketNumber, quoteTimeEvidence } from '../providers/market-evidence';
-import type { FxQuote } from '../modules/portfolio/intelligence-v2';
 import type {
   TradingMarketSnapshot,
   TradingPlan,
@@ -20,18 +18,9 @@ function isRecord(value: unknown): value is JsonObject {
 }
 
 function finite(value: unknown): number | null {
-  return marketNumber(value);
-}
-
-function nonNegative(value: unknown, field: string): number {
-  const parsed = finite(value);
-  if (parsed == null || parsed < 0) throw new Error(`EXECUTION_EVIDENCE_INVALID:${field}`);
-  return parsed;
-}
-
-function identity(value: unknown): string {
-  if (typeof value !== 'string' || !value.trim()) throw new Error('EXECUTION_IDENTITY_UNAVAILABLE');
-  return value.trim().toUpperCase();
+  if (value == null || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function positive(value: unknown): number | null {
@@ -45,20 +34,9 @@ function absolute(value: unknown): number | null {
 }
 
 function rows(value: unknown): JsonObject[] {
-  if (Array.isArray(value) && value.every(isRecord)) return value;
+  if (Array.isArray(value)) return value.filter(isRecord);
   if (isRecord(value)) return [value];
-  throw new Error('EXECUTION_RESPONSE_INVALID');
-}
-
-function list(value: unknown): JsonObject[] {
-  if (!Array.isArray(value) || !value.every(isRecord)) throw new Error('EXECUTION_LIST_INVALID');
-  return value;
-}
-
-function matchingRow(value: unknown, key: string, expected: string): JsonObject {
-  const matches = rows(value).filter((row) => identity(row[key]) === expected);
-  if (matches.length !== 1) throw new Error('EXECUTION_IDENTITY_MISMATCH');
-  return matches[0];
+  return [];
 }
 
 function levelRows(value: unknown, descending: boolean): Level[] {
@@ -94,18 +72,16 @@ function objectLevels(value: unknown): { bids: Level[]; asks: Level[]; timestamp
 function kiwoomLevels(value: JsonObject): { bids: Level[]; asks: Level[] } {
   const asks: Level[] = [];
   const bids: Level[] = [];
-  // Kiwoom documents directional signs on prices; they are not negative cash balances.
-  const price = (input: unknown) => { const amount = absolute(input); return amount !== null && amount > 0 ? amount : null; };
-  const bestAsk = price(value.sel_fpr_bid);
+  const bestAsk = positive(value.sel_fpr_bid);
   const bestAskSize = positive(value.sel_fpr_req);
-  const bestBid = price(value.buy_fpr_bid);
+  const bestBid = positive(value.buy_fpr_bid);
   const bestBidSize = positive(value.buy_fpr_req);
   if (bestAsk != null && bestAskSize != null) asks.push({ price: bestAsk, size: bestAskSize });
   if (bestBid != null && bestBidSize != null) bids.push({ price: bestBid, size: bestBidSize });
   for (let index = 2; index <= 10; index += 1) {
-    const askPrice = price(value[`sel_${index}th_pre_bid`]);
+    const askPrice = positive(value[`sel_${index}th_pre_bid`]);
     const askSize = positive(value[`sel_${index}th_pre_req`]);
-    const bidPrice = price(value[`buy_${index}th_pre_bid`]);
+    const bidPrice = positive(value[`buy_${index}th_pre_bid`]);
     const bidSize = positive(value[`buy_${index}th_pre_req`]);
     if (askPrice != null && askSize != null) asks.push({ price: askPrice, size: askSize });
     if (bidPrice != null && bidSize != null) bids.push({ price: bidPrice, size: bidSize });
@@ -117,12 +93,11 @@ function kiwoomLevels(value: JsonObject): { bids: Level[]; asks: Level[] } {
 }
 
 function timestampMs(values: unknown[]) {
-  const timestamps = values.map(finite);
-  // These exchange endpoints document milliseconds. Missing components cannot
-  // borrow another provider component's fresh clock, and seconds are not guessed.
-  if (!timestamps.length || timestamps.some((value) => value == null
-    || !Number.isSafeInteger(value) || value < 1_000_000_000_000 || value > Date.now())) return null;
-  return Math.min(...timestamps as number[]);
+  const timestamps = values
+    .map(finite)
+    .filter((value): value is number => value != null && value > 0)
+    .map((value) => value < 100_000_000_000 ? value * 1000 : value);
+  return timestamps.length ? Math.min(...timestamps) : null;
 }
 
 function isoTimestamp(value: number | null) {
@@ -143,7 +118,7 @@ function plannedReferencePrice(plan: TradingPlan) {
   return values.find((value): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0) ?? null;
 }
 
-function bookMetrics(plan: TradingPlan, bids: Level[], asks: Level[], currentPrice: number | null, quoteToKrwRate: number) {
+function bookMetrics(plan: TradingPlan, bids: Level[], asks: Level[], currentPrice: number | null) {
   const bestBid = bids[0]?.price ?? null;
   const bestAsk = asks[0]?.price ?? null;
   const midpoint = bestBid != null && bestAsk != null ? (bestBid + bestAsk) / 2 : currentPrice;
@@ -156,17 +131,19 @@ function bookMetrics(plan: TradingPlan, bids: Level[], asks: Level[], currentPri
       Math.abs(level.price - executionLevels[index].price) / midpoint * 100
     )))
     : Number.POSITIVE_INFINITY;
-  const requiredQuantity = plan.exchange === 'upbit' && plan.side === 'buy' && plan.orderType === 'market'
-    ? plan.quoteAmount != null && plan.quoteAmount > 0 && currentPrice != null && currentPrice > 0 ? plan.quoteAmount / currentPrice : null
-    : plan.quantity != null && plan.quantity > 0
+  const requiredQuantity = plan.quantity != null && plan.quantity > 0
     ? plan.quantity
     : plan.quoteAmount != null && currentPrice != null && currentPrice > 0
       ? plan.quoteAmount / currentPrice
       : null;
   const availableNotional = executionLevels.slice(0, 10)
     .reduce((sum, level) => sum + level.price * level.size, 0);
-  const liquidityKrw = availableNotional * quoteToKrwRate;
-  const availableLiquidityKrw = executionLevels.length > 0 && Number.isFinite(liquidityKrw) ? liquidityKrw : null;
+  const requiredNotional = requiredQuantity != null && currentPrice != null
+    ? requiredQuantity * currentPrice
+    : null;
+  const availableLiquidityKrw = requiredNotional != null && requiredNotional > 0
+    ? plan.estimatedKrw * (availableNotional / requiredNotional)
+    : 0;
 
   let remaining = requiredQuantity ?? Number.POSITIVE_INFINITY;
   let filled = 0;
@@ -178,7 +155,7 @@ function bookMetrics(plan: TradingPlan, bids: Level[], asks: Level[], currentPri
     cost += quantity * level.price;
     remaining -= quantity;
   }
-  const vwap = filled > 0 && remaining === 0 && Number.isFinite(cost) ? cost / filled : null;
+  const vwap = filled > 0 && remaining <= 1e-12 ? cost / filled : null;
   const estimatedSlippagePercent = vwap != null && currentPrice != null && currentPrice > 0
     ? Math.abs(vwap - currentPrice) / currentPrice * 100
     : Number.POSITIVE_INFINITY;
@@ -189,7 +166,6 @@ function bookMetrics(plan: TradingPlan, bids: Level[], asks: Level[], currentPri
     orderbookGapPercent: gapPercent,
     availableLiquidityKrw,
     estimatedSlippagePercent,
-    executionPrice: vwap,
   };
 }
 
@@ -201,8 +177,6 @@ function baseSnapshot(input: {
   bids: Level[];
   asks: Level[];
   availableBalance: number;
-  quoteToKrwRate: number;
-  currencyConversion?: TradingMarketSnapshot['currencyConversion'];
   accountValueKrw?: number;
   assetExposurePercent?: number;
   openPositionCount?: number;
@@ -214,7 +188,7 @@ function baseSnapshot(input: {
 }): TradingMarketSnapshot {
   const now = Date.now();
   const plannedPrice = plannedReferencePrice(input.plan);
-  const metrics = bookMetrics(input.plan, input.bids, input.asks, input.currentPrice, input.quoteToKrwRate);
+  const metrics = bookMetrics(input.plan, input.bids, input.asks, input.currentPrice);
   const oneMinuteMovePercent = input.currentPrice != null && plannedPrice != null
     ? (input.currentPrice - plannedPrice) / plannedPrice * 100
     : input.plan.marketSnapshot.oneMinuteMovePercent;
@@ -226,13 +200,11 @@ function baseSnapshot(input: {
     providerTimeOffsetMs: input.observedAtMs == null ? Number.POSITIVE_INFINITY : now - input.observedAtMs,
     source: input.source,
     currentPrice: input.currentPrice,
-    executionPrice: metrics.executionPrice,
     plannedPrice,
     oneMinuteMovePercent,
     spreadPercent: metrics.spreadPercent,
     orderbookGapPercent: metrics.orderbookGapPercent,
     availableLiquidityKrw: metrics.availableLiquidityKrw,
-    currencyConversion: input.currencyConversion ?? null,
     estimatedSlippagePercent: metrics.estimatedSlippagePercent,
     estimatedFeePercent: input.estimatedFeePercent ?? null,
     availableBalance: input.availableBalance,
@@ -296,47 +268,32 @@ export function buildBitgetExecutionSnapshot(input: {
   ticker: unknown;
   depth: unknown;
   contract: JsonObject;
-  fxQuote?: FxQuote;
   signal: SignalSnapshot;
 }): TradingMarketSnapshot {
-  if (input.plan.exchange !== 'bitget' || input.plan.market !== 'USDT-FUTURES') throw new Error('EXECUTION_QUOTE_CURRENCY_MISMATCH');
-  const account = matchingRow(list(input.accounts), 'marginCoin', 'USDT');
-  const allPositions = list(input.positions);
-  for (const row of allPositions) {
-    identity(row.symbol);
-    const quantity = nonNegative(row.total, 'position.total');
-    if (quantity > 0 && !['LONG', 'SHORT'].includes(identity(row.holdSide))) throw new Error('EXECUTION_POSITION_SIDE_INVALID');
-  }
-  const positionRows = allPositions.filter((row) => identity(row.symbol) === input.plan.symbol.toUpperCase());
-  const tickerRow = matchingRow(input.ticker, 'symbol', input.plan.symbol.toUpperCase());
-  if (identity(input.contract.symbol) !== input.plan.symbol.toUpperCase()) throw new Error('EXECUTION_CONTRACT_IDENTITY_MISMATCH');
+  const accountRows = rows(input.accounts);
+  const account = accountRows.find((row) => String(row.marginCoin ?? '').toUpperCase() === 'USDT') ?? accountRows[0];
+  const positionRows = rows(input.positions).filter((row) => String(row.symbol ?? '').toUpperCase() === input.plan.symbol.toUpperCase());
+  const tickerRow = rows(input.ticker).find((row) => String(row.symbol ?? '').toUpperCase() === input.plan.symbol.toUpperCase()) ?? rows(input.ticker)[0];
   const depthRow = rows(input.depth)[0];
   const bids = levelRows(depthRow?.bids, true);
   const asks = levelRows(depthRow?.asks, false);
   const currentPrice = positive(tickerRow?.markPrice ?? tickerRow?.lastPr ?? tickerRow?.price);
   const observedAtMs = timestampMs([tickerRow?.ts, depthRow?.ts]);
-  const fx = input.fxQuote;
-  const fxTime = quoteTimeEvidence(fx?.asOf);
-  if (!fx || fx.currency !== 'USDT' || !positive(fx.krwRate) || typeof fx.source !== 'string' || !fx.source.trim()
-    || !['LIVE', 'DELAYED'].includes(fx.quality) || fxTime.freshness.status !== 'FRESH' || !fxTime.updatedAt) {
-    throw new Error('EXECUTION_USDT_KRW_FX_UNAVAILABLE');
-  }
-  const available = nonNegative(account.available, 'account.available');
-  const availableBalance = available * fx.krwRate;
+  const leverage = Math.max(1, Number(input.plan.leverage ?? 1));
+  const requestedQuantity = Number(input.plan.quantity ?? 0);
+  const requiredMargin = currentPrice != null ? currentPrice * requestedQuantity / leverage : 0;
+  const available = positive(account?.available) ?? 0;
+  const availableBalance = requiredMargin > 0
+    ? input.plan.estimatedKrw / leverage * (available / requiredMargin)
+    : 0;
   const equity = positive(account?.accountEquity ?? account?.usdtEquity ?? account?.equity);
-  if (equity == null) throw new Error('EXECUTION_ACCOUNT_EQUITY_UNAVAILABLE');
-  const accountValueKrw = equity * fx.krwRate;
-  if (!Number.isFinite(availableBalance) || !Number.isFinite(accountValueKrw)) throw new Error('EXECUTION_FX_AMOUNT_OVERFLOW');
   const exposureNotional = positionRows.reduce((sum, row) => {
-    const quantity = nonNegative(row.total, 'position.total');
-    if (quantity === 0) return sum;
-    const markPrice = positive(row.markPrice) ?? currentPrice;
-    if (markPrice == null) throw new Error('EXECUTION_POSITION_MARK_UNAVAILABLE');
+    const quantity = absolute(row.total ?? row.available ?? row.size) ?? 0;
+    const markPrice = positive(row.markPrice) ?? currentPrice ?? 0;
     return sum + quantity * markPrice;
   }, 0);
-  const assetExposurePercent = exposureNotional / equity * 100;
-  if (!Number.isFinite(assetExposurePercent)) throw new Error('EXECUTION_EXPOSURE_OVERFLOW');
-  const currentPosition = positionRows.find((row) => nonNegative(row.total, 'position.total') > 0);
+  const assetExposurePercent = equity != null && equity > 0 ? exposureNotional / equity * 100 : input.plan.marketSnapshot.assetExposurePercent;
+  const currentPosition = positionRows.find((row) => (absolute(row.total ?? row.available ?? row.size) ?? 0) > 0);
   const existingPositionSide = currentPosition
     ? String(currentPosition.holdSide ?? '').toLowerCase() === 'short' ? 'short' : 'long'
     : null;
@@ -356,11 +313,8 @@ export function buildBitgetExecutionSnapshot(input: {
     bids,
     asks,
     availableBalance,
-    accountValueKrw,
-    quoteToKrwRate: fx.krwRate,
-    currencyConversion: { pair: 'USDT/KRW', krwRate: fx.krwRate, source: fx.source, asOf: fxTime.updatedAt },
     assetExposurePercent,
-    openPositionCount: allPositions.filter((row) => nonNegative(row.total, 'position.total') > 0).length,
+    openPositionCount: positionRows.filter((row) => (absolute(row.total ?? row.available ?? row.size) ?? 0) > 0).length,
     existingPositionSide,
     liquidationDistancePercent: liquidationDistances.length ? Math.min(...liquidationDistances) : null,
     estimatedFeePercent: feeRate == null ? null : feeRate * 100,
@@ -376,40 +330,27 @@ export function buildUpbitExecutionSnapshot(input: {
   orderbook: unknown;
   signal: SignalSnapshot;
 }): TradingMarketSnapshot {
-  if (input.plan.exchange !== 'upbit' || input.plan.market !== 'KRW') throw new Error('EXECUTION_QUOTE_CURRENCY_MISMATCH');
-  const accountRows = list(isRecord(input.accounts) ? input.accounts.data : input.accounts);
-  const currencies = new Set<string>();
-  for (const row of accountRows) {
-    const currency = identity(row.currency);
-    if (currencies.has(currency)) throw new Error('EXECUTION_ACCOUNT_IDENTITY_DUPLICATE');
-    currencies.add(currency);
-    nonNegative(row.balance, 'account.balance');
-    nonNegative(row.locked, 'account.locked');
-  }
-  const krw = accountRows.find((row) => identity(row.currency) === 'KRW');
+  const accountRows = rows(isRecord(input.accounts) && Array.isArray(input.accounts.data) ? input.accounts.data : input.accounts);
+  const krw = accountRows.find((row) => String(row.currency ?? '').toUpperCase() === 'KRW');
   const baseCurrency = input.plan.symbol.toUpperCase().replace(/^KRW-/, '');
   const asset = accountRows.find((row) => String(row.currency ?? '').toUpperCase() === baseCurrency);
   const tickerRows = rows(isRecord(input.ticker) && Array.isArray(input.ticker.data) ? input.ticker.data : input.ticker);
-  const expectedMarket = `KRW-${baseCurrency}`;
-  const tickerRow = matchingRow(tickerRows, 'market', expectedMarket);
+  const tickerRow = tickerRows[0];
   const orderbookRows = isRecord(input.orderbook) && Array.isArray(input.orderbook.data)
     ? input.orderbook.data : input.orderbook;
-  const book = objectLevels(matchingRow(orderbookRows, 'market', expectedMarket));
+  const book = objectLevels(orderbookRows);
   const currentPrice = positive(tickerRow?.trade_price);
-  const observedAtMs = timestampMs([tickerRow.timestamp ?? tickerRow.trade_timestamp, book.timestamp]);
+  const observedAtMs = timestampMs([tickerRow?.timestamp, tickerRow?.trade_timestamp, book.timestamp]);
   const availableBalance = input.plan.side === 'sell'
-    ? (asset ? nonNegative(asset.balance, 'asset.balance') : 0) * (currentPrice ?? 0)
-    : krw ? nonNegative(krw.balance, 'krw.balance') : 0;
-  const accountValue = positive(input.plan.marketSnapshot.accountValueKrw);
-  if (accountValue == null) throw new Error('EXECUTION_ACCOUNT_EQUITY_UNAVAILABLE');
-  const assetQuantity = asset ? nonNegative(asset.balance, 'asset.balance') + nonNegative(asset.locked, 'asset.locked') : 0;
-  if (assetQuantity > 0 && currentPrice == null) throw new Error('EXECUTION_POSITION_MARK_UNAVAILABLE');
-  const assetValue = assetQuantity * (currentPrice ?? 0);
-  const assetExposurePercent = assetValue / accountValue * 100;
+    ? (positive(asset?.balance) ?? 0) * (currentPrice ?? 0)
+    : positive(krw?.balance) ?? 0;
+  const accountValue = positive(input.plan.marketSnapshot.accountValueKrw) ?? 0;
+  const assetValue = (positive(asset?.balance) ?? 0) * (currentPrice ?? 0);
+  const assetExposurePercent = accountValue > 0 ? assetValue / accountValue * 100 : input.plan.marketSnapshot.assetExposurePercent;
   const feeRate = absolute(input.plan.side === 'buy'
     ? input.chance.bid_fee ?? (isRecord(input.chance.bid) ? input.chance.bid.fee : null)
     : input.chance.ask_fee ?? (isRecord(input.chance.ask) ? input.chance.ask.fee : null));
-  const marketState = isRecord(input.chance.market) && typeof input.chance.market.state === 'string' ? input.chance.market.state : null;
+  const marketState = isRecord(input.chance.market) ? String(input.chance.market.state ?? 'active') : 'active';
   return baseSnapshot({
     plan: input.plan,
     source: 'upbit-private-account+public-market',
@@ -418,93 +359,42 @@ export function buildUpbitExecutionSnapshot(input: {
     bids: book.bids,
     asks: book.asks,
     availableBalance,
-    quoteToKrwRate: 1,
     assetExposurePercent,
     estimatedFeePercent: feeRate == null ? null : feeRate * 100,
-    openPositionCount: accountRows.filter((row) => identity(row.currency) !== 'KRW'
-      && nonNegative(row.balance, 'account.balance') + nonNegative(row.locked, 'account.locked') > 0).length,
-    marketStatus: marketState == null ? 'UNKNOWN' : marketState === 'active' ? 'OPEN' : 'HALTED',
+    marketStatus: marketState === 'active' ? 'OPEN' : 'HALTED',
     signal: input.signal,
   });
 }
 
 export function buildKiwoomExecutionSnapshot(input: {
   plan: TradingPlan;
-  account: JsonObject;
   orderable: JsonObject;
   unfilled: JsonObject;
   orderbook: JsonObject;
   signal: SignalSnapshot;
 }): TradingMarketSnapshot {
-  if (input.plan.exchange !== 'kiwoom' || input.plan.market !== 'KR') throw new Error('EXECUTION_QUOTE_CURRENCY_MISMATCH');
   const book = kiwoomLevels(input.orderbook);
   const currentPrice = input.plan.side === 'buy' ? book.asks[0]?.price ?? null : book.bids[0]?.price ?? null;
   const providerTimestamp = finite(input.orderbook.timestamp ?? input.orderbook.ts);
   const observedAtMs = timestampMs([providerTimestamp]);
-  const accountValueKrw = positive(input.account.prsm_dpst_aset_amt);
-  if (accountValueKrw === null) throw new Error('EXECUTION_ACCOUNT_EQUITY_UNAVAILABLE');
-  const holdings = list(input.account.acnt_evlt_remn_indv_tot);
-  const symbols = new Set<string>();
-  let instrumentValue = 0, tradableQuantity = 0, accountExposureKrw = 0, openPositionCount = 0;
-  for (const holding of holdings) {
-    const rawSymbol = typeof holding.stk_cd === 'string' ? holding.stk_cd.trim() : '';
-    if (!/^A?\d{6}$/.test(rawSymbol)) throw new Error('EXECUTION_POSITION_IDENTITY_INVALID');
-    const symbol = rawSymbol.replace(/^A/, '');
-    if (symbols.has(symbol)) throw new Error('EXECUTION_POSITION_IDENTITY_DUPLICATE');
-    symbols.add(symbol);
-    const quantity = nonNegative(holding.rmnd_qty, 'holding.rmnd_qty');
-    const tradable = nonNegative(holding.trde_able_qty, 'holding.trde_able_qty');
-    const value = nonNegative(holding.evlt_amt, 'holding.evlt_amt');
-    if (!Number.isSafeInteger(quantity) || !Number.isSafeInteger(tradable) || tradable > quantity
-      || quantity === 0 && value !== 0) throw new Error('EXECUTION_POSITION_EVIDENCE_INVALID');
-    if (quantity > 0) openPositionCount++;
-    accountExposureKrw += value;
-    if (symbol === input.plan.symbol) { instrumentValue = value; tradableQuantity = tradable; }
-  }
-  const pending = list(input.unfilled.oso);
-  const pendingIds = new Set<string>();
-  let openOrderExposureKrw = 0;
-  for (const row of pending) {
-    const id = identity(row.ord_no);
-    if (pendingIds.has(id)) throw new Error('EXECUTION_PENDING_ORDER_DUPLICATE');
-    pendingIds.add(id);
-    const remaining = nonNegative(row.oso_qty, 'pending.oso_qty');
-    if (!Number.isSafeInteger(remaining)) throw new Error('EXECUTION_PENDING_ORDER_QUANTITY_INVALID');
-    if (remaining > 0) {
-      const price = positive(row.ord_pric);
-      if (price === null) throw new Error('EXECUTION_PENDING_ORDER_PRICE_UNAVAILABLE');
-      openOrderExposureKrw += remaining * price;
-    }
-  }
-  const orderableCash = nonNegative(input.orderable.ord_alowa, 'orderable.ord_alowa');
-  if (input.plan.side === 'sell' && (!Number.isSafeInteger(input.plan.quantity) || Number(input.plan.quantity) > tradableQuantity)) throw new Error('KIWOOM_INSUFFICIENT_ASSET_BALANCE');
-  const availableBalance = input.plan.side === 'sell'
-    ? currentPrice === null ? NaN : tradableQuantity * currentPrice
-    : orderableCash;
-  const assetExposurePercent = instrumentValue / accountValueKrw * 100;
-  if (![availableBalance, accountExposureKrw, openOrderExposureKrw, assetExposurePercent].every(Number.isFinite)) throw new Error('EXECUTION_ACCOUNT_EVIDENCE_OVERFLOW');
+  const availableBalance = positive(
+    input.orderable.ord_alow_amt
+      ?? input.orderable.ord_psbl_cash
+      ?? input.orderable.ord_psbl_amt
+      ?? input.orderable.cash,
+  ) ?? 0;
   const feePercent = absolute(input.plan.marketSnapshot.estimatedFeePercent);
-  return { ...baseSnapshot({
+  return baseSnapshot({
     plan: input.plan,
-    source: 'kiwoom-kt00018+kt00010+ka10075+ka10004',
+    source: 'kiwoom-private-account+orderbook',
     observedAtMs,
     currentPrice,
     bids: book.bids,
     asks: book.asks,
     availableBalance,
-    accountValueKrw,
-    assetExposurePercent,
-    quoteToKrwRate: 1,
-    openPositionCount,
+    openPositionCount: rows(input.unfilled).length,
     estimatedFeePercent: feePercent,
     marketStatus: 'OPEN',
     signal: input.signal,
-  }), accountExposureKrw, instrumentExposureKrw: instrumentValue, openOrderExposureKrw };
-}
-
-export function kiwoomOrderableReferencePrice(plan: TradingPlan, orderbook: JsonObject): number {
-  const book = kiwoomLevels(orderbook);
-  const price = plan.orderType === 'limit' ? positive(plan.limitPrice) : plan.side === 'buy' ? book.asks[0]?.price : book.bids[0]?.price;
-  if (price == null) throw new Error('KIWOOM_ORDERABLE_PRICE_UNAVAILABLE');
-  return price;
+  });
 }

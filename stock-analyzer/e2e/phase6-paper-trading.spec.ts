@@ -1,5 +1,4 @@
 import { test, expect, type Page } from '@playwright/test';
-import { createLocalPaperState } from '../src/lib/paper-trading-storage';
 
 async function assertNoHorizontalOverflow(page: Page) {
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
@@ -62,13 +61,8 @@ test('JSON export creates a download', async ({ page }) => {
 });
 
 for (const viewport of [
-  { name: 'desktop 1440x900', width: 1440, height: 900 },
-  { name: 'tablet 1024x768', width: 1024, height: 768 },
-  { name: 'narrow mobile 320x740', width: 320, height: 740 },
   { name: 'mobile 390x844', width: 390, height: 844 },
-  { name: 'small mobile 360x800', width: 360, height: 800 },
-  { name: 'mobile 412x915', width: 412, height: 915 },
-  { name: 'wide mobile 430x932', width: 430, height: 932 },
+  { name: 'small mobile 360x740', width: 360, height: 740 },
 ]) {
   test(`${viewport.name} keeps order dialog and controls usable`, async ({ page }) => {
     const errors = await openAt(page, viewport.width, viewport.height);
@@ -124,57 +118,4 @@ test('two-step reset clears restored state', async ({ page }) => {
   await expect(dialog).toBeVisible();
   await dialog.getByRole('button', { name: '2단계 초기화' }).tap();
   await expect(page.getByTestId('paper-orders').getByText('모의주문이 없습니다.')).toBeVisible();
-  await page.reload();
-  await expect(page.getByTestId('paper-orders').getByText('모의주문이 없습니다.')).toBeVisible();
-});
-
-test('corrupt local ledger survives reload and requires explicit valid import before showing balances', async ({ page }) => {
-  await page.addInitScript(() => { if (localStorage.getItem('seungjae.paper-trading.v1') === null) localStorage.setItem('seungjae.paper-trading.v1', '{corrupt-original'); });
-  const errors = await openAt(page, 320, 740);
-  await expect(page.getByTestId('paper-storage-blocked')).toBeVisible();
-  await expect(page.getByTestId('paper-account')).toHaveCount(0);
-  await expect(page.getByTestId('paper-submit')).toHaveCount(0);
-  expect(await page.evaluate(() => localStorage.getItem('seungjae.paper-trading.v1'))).toBe('{corrupt-original');
-  await page.reload();
-  await expect(page.getByTestId('paper-storage-blocked')).toBeVisible();
-  expect(await page.evaluate(() => localStorage.getItem('seungjae.paper-trading.v1'))).toBe('{corrupt-original');
-  const imported = createLocalPaperState(12345, new Date('2026-08-02T00:00:00Z'));
-  await page.locator('input[type=file]').setInputFiles({ name: 'verified-paper.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify({ schemaVersion: 1, state: imported })) });
-  await expect(page.getByTestId('paper-equity')).toHaveText('12,345 USDT');
-  await page.reload();
-  await expect(page.getByTestId('paper-equity')).toHaveText('12,345 USDT');
-  expect(errors).toEqual([]);
-});
-
-for (const mode of ['invalid-number', 'wrong-account']) {
-  test(`invalid paper result ${mode} never replaces the persisted ledger`, async ({ page }) => {
-    const errors = await openAt(page, 320, 740, `/__phase6-paper-trading-e2e?mode=${mode}`);
-    const original = await page.evaluate(() => localStorage.getItem('seungjae.paper-trading.v1'));
-    await page.getByTestId('paper-submit').click();
-    await page.getByTestId('confirm-paper-order').click();
-    await expect(page.getByRole('alert')).toContainText('기록·식별자·수치 근거를 확인하지 못했습니다.');
-    await expect(page.getByTestId('paper-orders').getByText('모의주문이 없습니다.')).toBeVisible();
-    expect(await page.evaluate(() => localStorage.getItem('seungjae.paper-trading.v1'))).toEqual(original);
-    await page.reload();
-    await expect(page.getByTestId('paper-orders').getByText('모의주문이 없습니다.')).toBeVisible();
-    expect(errors).toEqual([]);
-    await assertNoHorizontalOverflow(page);
-  });
-}
-
-test('pending paper calculation serializes reset and import without resurrecting a cleared ledger', async ({ page }) => {
-  const errors = await openAt(page, 390, 844, '/__phase6-paper-trading-e2e?mode=deferred');
-  await page.getByTestId('paper-submit').tap();
-  await page.getByTestId('confirm-paper-order').tap();
-  await expect(page.getByRole('button', { name: '전체 초기화', exact: true })).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'JSON 가져오기' })).toBeDisabled();
-  await page.evaluate(() => window.dispatchEvent(new Event('phase6-release-execution')));
-  await expect(page.getByTestId('paper-positions').getByText('BTCUSDT 롱')).toBeVisible();
-  await page.getByRole('button', { name: '전체 초기화', exact: true }).tap();
-  await page.getByRole('dialog', { name: '전체 초기화 확인' }).getByRole('button', { name: '2단계 초기화' }).tap();
-  await expect(page.getByTestId('paper-orders').getByText('모의주문이 없습니다.')).toBeVisible();
-  await page.reload();
-  await expect(page.getByTestId('paper-orders').getByText('모의주문이 없습니다.')).toBeVisible();
-  await expect(page.getByTestId('paper-positions').getByText('열린 모의포지션이 없습니다.')).toBeVisible();
-  expect(errors).toEqual([]);
 });

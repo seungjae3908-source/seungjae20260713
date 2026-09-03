@@ -113,8 +113,8 @@ export interface ScannerSignalCard {
   pricePlan: ScannerPricePlan;
   dataState: ScannerDataState;
   dataSources: string[];
-  observedAt: string | null;
-  expiresAt: string | null;
+  observedAt: string;
+  expiresAt: string;
   strongSignalEligible: boolean;
   warnings: string[];
   strategyMode?: ScannerStrategyMode;
