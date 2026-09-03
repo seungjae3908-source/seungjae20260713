@@ -20,7 +20,8 @@ const SPLIT_SOURCE = '6'.repeat(64);
 const PRODUCER = '7'.repeat(40);
 const SOURCE = 'v3-cohort:test';
 
-function receipt({ predecessorDatasetDigest, datasetDigest, observationIds, slotIndex, split, captureSeed }) {
+function receipt({ predecessorDatasetDigest, datasetDigest, observationIds, slotIndex, split, captureSeed,
+  successor = false }) {
   const body = {
     schemaVersion: PUBLIC_FORWARD_LIQUIDITY_CAPTURE_INGEST_RECEIPT_VERSION,
     collectorCodeSha: PRODUCER,
@@ -38,7 +39,17 @@ function receipt({ predecessorDatasetDigest, datasetDigest, observationIds, slot
     liveTrading: false,
     realOrders: 0,
     sourceV3Lineage: {
-      triggerSource: 'GITHUB_ACTIONS_SCHEDULED_CANONICAL_PUBLIC_CAPTURE',
+      ...(successor ? {
+        sourceContractFamily: 'SUCCESSOR_SCHEDULE_RELIABILITY_V3',
+        producerWorkflowName: 'Public Forward Liquidity Successor Scheduled Capture',
+        producerWorkflowId: 347888347,
+        triggerSource: 'schedule',
+        scheduleReliabilityContractVersion:
+          'public-forward-liquidity-successor-schedule-reliability-contract-v3',
+        scheduleReliabilityNumericFreezeSha256: 'a'.repeat(64),
+        oosHorizonPolicyDigest: 'b'.repeat(64),
+        oosHorizonContractDigest: 'c'.repeat(64),
+      } : { triggerSource: 'GITHUB_ACTIONS_SCHEDULED_CANONICAL_PUBLIC_CAPTURE' }),
       prospectiveSlotCredit: 1,
       manualCredit: 0,
       replayCredit: 0,
@@ -122,6 +133,26 @@ function fixture() {
   };
 }
 
+function successorFixture() {
+  const first = receipt({ predecessorDatasetDigest: null, datasetDigest: DATASET0,
+    observationIds: ['obs-a', 'obs-b'], slotIndex: 20, split: 'TRAIN', captureSeed: 8,
+    successor: true });
+  const source = {
+    sourceIdentity: SOURCE, collectorCodeSha: PRODUCER, datasetDigest: DATASET0,
+    ingestReceiptRelativePaths: ['receipts/20.json'],
+    ingestReceiptDigests: [first.receiptDigest],
+    v3SlotIndexes: [20], v3Splits: ['TRAIN'],
+    v3PolicyDigest: POLICY, v3CohortDigest: COHORT,
+  };
+  const sourceInventory = inventory(source);
+  const inventoryBody = { ...sourceInventory, targetSlotIndex: 20, genuineScheduledSlotN: 1 };
+  delete inventoryBody.inventoryDigest;
+  return {
+    inventory: { ...inventoryBody, inventoryDigest: sha256(canonicalJson(inventoryBody)) },
+    receiptEntries: [{ relativePath: 'receipts/20.json', receipt: first }],
+  };
+}
+
 test('propagates first genuine V3 frozen slot lineage to each effective-independent observation', () => {
   const value = fixture();
   const result = buildPublicForwardLiquidityV3IndependentSplitIndex({ ...value, independenceResult: independence(), producerCodeSha: PRODUCER });
@@ -168,4 +199,43 @@ test('fails closed on tampered ingest receipt digest or split vector', () => {
   const body = Object.fromEntries(Object.entries(other.inventory).filter(([key]) => key !== 'inventoryDigest'));
   other.inventory.inventoryDigest = sha256(canonicalJson(body));
   assert.throws(() => buildPublicForwardLiquidityV3IndependentSplitIndex({ ...other, independenceResult: independence(), producerCodeSha: PRODUCER }), /V3_SOURCE_LINEAGE_INVALID/);
+});
+
+test('admits #36-shaped native Successor lineage without creating additional credit', () => {
+  const result = buildPublicForwardLiquidityV3IndependentSplitIndex({
+    ...successorFixture(), independenceResult: independence(), producerCodeSha: PRODUCER,
+  });
+  assert.equal(result.genuineScheduledSlotN, 1);
+  assert.equal(result.creditedReceiptN, 1);
+  assert.equal(result.effectiveIndependentN, 2);
+  assert.equal(result.counts.TRAIN, 2);
+  assert.equal(result.counts.OOS, 0);
+  assert.equal(result.additionalIndependentSampleCredit, 0);
+  assert.equal(result.oosOutcomeCredit, 0);
+  assert.equal(result.calibrationArtifactProduced, false);
+  assert.equal(result.fullCostReady, false);
+  assert.equal(result.executionAuthority, 'NONE');
+});
+
+test('fails closed on forged Successor producer identity or generic schedule lineage', () => {
+  for (const mutate of [
+    (lineage) => { lineage.producerWorkflowName = 'Public Forward Liquidity Calibration Scheduled V3'; },
+    (lineage) => { lineage.producerWorkflowId = 1; },
+    (lineage) => { lineage.triggerSource = 'workflow_dispatch'; },
+    (lineage) => { lineage.sourceContractFamily = 'UNKNOWN'; },
+  ]) {
+    const value = successorFixture();
+    mutate(value.receiptEntries[0].receipt.sourceV3Lineage);
+    const receiptBody = { ...value.receiptEntries[0].receipt };
+    delete receiptBody.receiptDigest;
+    value.receiptEntries[0].receipt.receiptDigest =
+      computePublicForwardLiquidityCaptureIngestReceiptDigest(receiptBody);
+    value.inventory.sources[0].ingestReceiptDigests[0] = value.receiptEntries[0].receipt.receiptDigest;
+    const inventoryBody = { ...value.inventory };
+    delete inventoryBody.inventoryDigest;
+    value.inventory.inventoryDigest = sha256(canonicalJson(inventoryBody));
+    assert.throws(() => buildPublicForwardLiquidityV3IndependentSplitIndex({
+      ...value, independenceResult: independence(), producerCodeSha: PRODUCER,
+    }), /V3_SOURCE_LINEAGE_PRODUCER_INVALID/);
+  }
 });
