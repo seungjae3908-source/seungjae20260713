@@ -189,5 +189,11 @@ jobs:
           test "$(grep -Ec "^[[:space:]]{2}queue:[[:space:]]+max[[:space:]]*$" "$workflow")" -eq 1
           test "$(grep -Ec "^[[:space:]]{2}cancel-in-progress:[[:space:]]+false[[:space:]]*$" "$workflow")" -eq 1
           ! grep -Eq '^[[:space:]]{2}workflow_dispatch:[[:space:]]*$' "$workflow"
+          test "$(grep -Ec 'CAPTURE_ATTEMPT_ARTIFACT_NAME: [$][{][{] steps[.]capture[.]outputs[.]attempt_artifact_name [}][}]' "$workflow")" -eq 1
+          test "$(grep -Fc 'artifact_name=${CAPTURE_ATTEMPT_ARTIFACT_NAME}' "$workflow")" -eq 1
+          test "$(grep -Ec 'name: [$][{][{] steps[.]attempt_name[.]outputs[.]artifact_name [}][}]' "$workflow")" -eq 1
+          test "$(grep -Ec 'ARTIFACT_NAME: [$][{][{] steps[.]attempt_name[.]outputs[.]artifact_name [}][}]' "$workflow")" -eq 1
+          ! grep -Fq 'steps.attempt_name.outputs.name' "$workflow"
+          ! grep -Eq '^[[:space:]]+RUNNER_NAME:' "$workflow"
           test "$GITHUB_EVENT_NAME" = 'pull_request'
           test "$GITHUB_REF" != 'refs/heads/main'
