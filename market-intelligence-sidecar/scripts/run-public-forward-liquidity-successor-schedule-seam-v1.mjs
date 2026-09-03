@@ -7,6 +7,7 @@ import { canonicalJson, sha256 } from '../src/public-forward-liquidity-calibrati
 import { SUCCESSOR_PROSPECTIVE_CONTRACT } from '../src/public-forward-liquidity-successor-prospective-cohort.mjs';
 import {
   executeSuccessorScheduledCaptureSeam,
+  executeSuccessorScheduledCaptureSeamV3,
   finalizeSuccessorArtifactReceipt,
 } from '../src/public-forward-liquidity-successor-schedule-seam-v1.mjs';
 
@@ -237,7 +238,7 @@ async function persistCaptureResult({ batch, captureReceipt, runId, runAttempt }
   console.log(JSON.stringify(terminal));
 }
 
-async function runCapture() {
+async function runCapture(executor = executeSuccessorScheduledCaptureSeam) {
   if (process.env.GITHUB_EVENT_NAME !== 'schedule') {
     throw new Error('SUCCESSOR_RUNNER_REQUIRES_GITHUB_SCHEDULE_EVENT');
   }
@@ -264,7 +265,7 @@ async function runCapture() {
   });
   const actualRunStartedAtMs = Date.now();
 
-  const { batch, captureReceipt } = await executeSuccessorScheduledCaptureSeam({
+  const { batch, captureReceipt } = await executor({
     eventName: process.env.GITHUB_EVENT_NAME,
     scheduleExpression,
     scheduledRunCreatedAtMs: runIdentity.createdAtMs,
@@ -389,7 +390,10 @@ async function runBindArtifact() {
 
 async function runSelfCheck() {
   const collectorBlob = verifyFrozenCollectorBlob();
-  const source = await readFile(new URL('../src/public-forward-liquidity-successor-schedule-seam-v1.mjs', import.meta.url), 'utf8');
+  const source = await readFile(
+    new URL('../src/public-forward-liquidity-successor-schedule-seam-v1.mjs', import.meta.url),
+    'utf8',
+  );
   const self = await readFile(new URL(import.meta.url), 'utf8');
   const identity = Object.freeze({
     schemaVersion: 'public-forward-liquidity-successor-schedule-runner-self-check-v1',
@@ -399,6 +403,7 @@ async function runSelfCheck() {
     expectedCollectorBlobSha: collectorBlob.expected,
     actualCollectorBlobSha: collectorBlob.actual,
     collectorBlobVerified: true,
+    v3CaptureModeAvailable: true,
     activationTriggerPresent: false,
     scheduleExecutionPerformed: false,
     collectorInvoked: false,
@@ -413,6 +418,7 @@ async function runSelfCheck() {
 }
 
 if (mode === 'self-check') await runSelfCheck();
-else if (mode === 'capture') await runCapture();
+else if (mode === 'capture') await runCapture(executeSuccessorScheduledCaptureSeam);
+else if (mode === 'capture-v3') await runCapture(executeSuccessorScheduledCaptureSeamV3);
 else if (mode === 'bind-artifact') await runBindArtifact();
 else throw new Error('SUCCESSOR_RUNNER_MODE_INVALID');
