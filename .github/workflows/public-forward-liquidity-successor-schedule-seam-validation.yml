@@ -89,11 +89,9 @@ jobs:
       - name: Run runner self-check without schedule or network authority
         run: node market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs self-check
 
-      - name: Restore and validate V3 activation binding candidate
+      - name: Restore and validate V3 activation binding
         if: env.SUCCESSOR_V3_ACTIVATION_STASHED == 'true'
         shell: bash
-        env:
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           activation='market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json'
@@ -110,19 +108,35 @@ jobs:
             console.error('Invalid V3 activation binding:', verdict.blockers.join(','));
             process.exit(1);
           }
-          if (contract.policyCore.activationBinding.authorizedCurrentMainSha !== process.env.PR_BASE_SHA) {
-            console.error('V3 activation binding is not bound to the exact PR base main');
-            process.exit(1);
-          }
           NODE
 
-      - name: Verify exact V3 implementation or activation-admission scope
+      - name: Verify activation candidate exact base only when binding changes
+        if: env.SUCCESSOR_V3_ACTIVATION_STASHED == 'true'
+        shell: bash
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          activation='market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json'
+          if git diff --name-only "$PR_BASE_SHA" "$PR_HEAD_SHA" | grep -Fqx "$activation"; then
+            authorized_main="$(node --input-type=module <<'NODE'
+          import { SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT } from './market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-reliability-v3.mjs';
+          process.stdout.write(SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.policyCore.activationBinding.authorizedCurrentMainSha);
+          NODE
+            )"
+            test "$authorized_main" = "$PR_BASE_SHA"
+          fi
+
+      - name: Verify exact V3 implementation, activation admission, or scheduled-runtime fix scope
         shell: bash
         run: |
           set -euo pipefail
           base='${{ github.event.pull_request.base.sha }}'
           head='${{ github.event.pull_request.head.sha }}'
           activation='market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json'
+          runtime_workflow='.github/workflows/public-forward-liquidity-successor-scheduled-capture.yml'
+          validation_workflow='.github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml'
           git diff --check "$base" "$head"
           changed="$(git diff --name-only "$base" "$head")"
 
@@ -135,6 +149,13 @@ jobs:
           EOF
             expected_count=4
             scope_name='V3 activation-admission'
+          elif [[ "$(printf '%s\n' "$changed" | grep -v -F -e "$runtime_workflow" -e "$validation_workflow" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 0 ]]; then
+            cat > /tmp/allowed-files <<'EOF'
+          .github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml
+          .github/workflows/public-forward-liquidity-successor-scheduled-capture.yml
+          EOF
+            expected_count=2
+            scope_name='V3 scheduled-runtime-validation-fix'
           else
             cat > /tmp/allowed-files <<'EOF'
           .github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml
