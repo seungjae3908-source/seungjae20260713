@@ -2,10 +2,10 @@ name: Public Forward Liquidity Successor Scheduled Capture
 
 # IMPORTANT GOVERNANCE BOUNDARY:
 # - V2 history and already-failed V2 slots remain immutable and receive zero V3 credit.
-# - This V3 implementation stays inert while it exists only on a non-default Draft PR branch.
-# - Merging this workflow would change the default-branch scheduled trigger surface and therefore
-#   requires separate exact PR Merge approval plus separate V3 schedule-activation authority.
-# - No activation binding is materialized by this implementation approval.
+# - A V3 activation binding may be validated on a non-default Draft PR, but PR events can never capture.
+# - Merging an activation binding to the default branch is the activation event and therefore
+#   requires separate exact PR Merge approval plus V3 schedule-activation authority.
+# - No replay/backfill/manual/synthetic sample credit is granted by validation.
 
 on:
   pull_request:
@@ -73,6 +73,19 @@ jobs:
           node --check market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs
           node --check market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-reliability-v3.mjs
 
+      - name: Stash activation binding for preserved inactive regressions
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          activation='market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json'
+          if [[ -f "$activation" ]]; then
+            mv "$activation" "$RUNNER_TEMP/successor-v3-activation.json"
+            echo 'SUCCESSOR_V3_ACTIVATION_STASHED=true' >> "$GITHUB_ENV"
+          else
+            echo 'SUCCESSOR_V3_ACTIVATION_STASHED=false' >> "$GITHUB_ENV"
+          fi
+
       - name: Run V2 preservation and V3 fail-closed regression suites
         run: >-
           node --test
@@ -82,6 +95,33 @@ jobs:
       - name: Run zero-network zero-capture runner self-check
         run: node market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs self-check
 
+      - name: Restore and validate V3 activation binding candidate
+        if: github.event_name == 'pull_request' && env.SUCCESSOR_V3_ACTIVATION_STASHED == 'true'
+        shell: bash
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          activation='market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json'
+          mv "$RUNNER_TEMP/successor-v3-activation.json" "$activation"
+          node --input-type=module <<'NODE'
+          import {
+            SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT,
+            verifySuccessorScheduleReliabilityV3Contract,
+          } from './market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-reliability-v3.mjs';
+
+          const contract = SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT;
+          const verdict = verifySuccessorScheduleReliabilityV3Contract(contract);
+          if (!verdict.valid || !verdict.activationBound) {
+            console.error('Invalid V3 activation binding:', verdict.blockers.join(','));
+            process.exit(1);
+          }
+          if (contract.policyCore.activationBinding.authorizedCurrentMainSha !== process.env.PR_BASE_SHA) {
+            console.error('V3 activation binding is not bound to the exact PR base main');
+            process.exit(1);
+          }
+          NODE
+
       - name: Prove pull requests cannot invoke V2 or V3 capture
         if: github.event_name == 'pull_request'
         shell: bash
@@ -89,7 +129,6 @@ jobs:
           set -euo pipefail
           test "$GITHUB_EVENT_NAME" = 'pull_request'
           test "$GITHUB_REF" != 'refs/heads/main'
-          test ! -f market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json
           echo 'PR validation only: V2/V3 collector/capture/bind-artifact invocation = 0'
 
   capture:
