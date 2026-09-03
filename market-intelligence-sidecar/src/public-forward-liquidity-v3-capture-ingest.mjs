@@ -23,6 +23,20 @@ import {
   V3_POLICY_BINDING,
   buildV3SlotDescriptor,
 } from './public-forward-liquidity-capture-seam-v3.mjs';
+import {
+  SUCCESSOR_V3_ARTIFACT_RECEIPT_SCHEMA,
+  SUCCESSOR_V3_CAPTURE_RECEIPT_SCHEMA,
+  SUCCESSOR_V3_SCHEDULE_CRONS_UTC,
+} from './public-forward-liquidity-successor-schedule-seam-v1.mjs';
+import {
+  SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT,
+  buildSuccessorScheduleReliabilityV3SlotDescriptor,
+  verifySuccessorScheduleReliabilityV3Contract,
+} from './public-forward-liquidity-successor-schedule-reliability-v3.mjs';
+import {
+  SUCCESSOR_OOS_HORIZON_CONTRACT,
+  verifySuccessorOosOutcomeHorizonContract,
+} from './public-forward-liquidity-successor-oos-outcome-horizon.mjs';
 
 export const PUBLIC_FORWARD_LIQUIDITY_V3_CAPTURE_RECEIPT_VERSION =
   'public-forward-liquidity-capture-receipt-v3';
@@ -143,6 +157,9 @@ async function proveCollectorImplementationBlobSha({ researchRepoRoot, exactMain
 }
 
 function verifyScheduledIdentity(capture) {
+  if (capture.schemaVersion === SUCCESSOR_V3_CAPTURE_RECEIPT_SCHEMA) {
+    return verifySuccessorScheduledIdentity(capture);
+  }
   if (capture.schemaVersion !== PUBLIC_FORWARD_LIQUIDITY_V3_CAPTURE_RECEIPT_VERSION
     || capture.evidenceClass !== PUBLIC_FORWARD_LIQUIDITY_V3_CAPTURE_EVIDENCE_CLASS
     || capture.triggerSource !== SCHEDULED_TRIGGER_SOURCE) {
@@ -212,7 +229,111 @@ function verifyScheduledIdentity(capture) {
   if (capture.sampleClass !== FORWARD_NATURAL_SAMPLE) throw new Error('V3_SAMPLE_CLASS_INVALID');
   assertCommonNoAuthorityBoundary(capture, { duplicateCreditEvaluated: true });
   verifyCanonicalDigest(capture, 'captureReceiptDigest', 'V3_CAPTURE_RECEIPT_DIGEST_INVALID');
-  return slot;
+  return { slot, sourceContractFamily: 'CALIBRATION_V3' };
+}
+
+function verifySuccessorScheduledIdentity(capture) {
+  const contract = SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT;
+  const contractVerdict = verifySuccessorScheduleReliabilityV3Contract(contract);
+  const oosVerdict = verifySuccessorOosOutcomeHorizonContract();
+  if (!contractVerdict.valid || contract.activationBound !== true || !oosVerdict.valid) {
+    throw new Error('SUCCESSOR_V3_NATIVE_CONTRACT_INVALID');
+  }
+  if (capture.evidenceClass
+      !== 'PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_SCHEDULE_RELIABILITY_V3_CAPTURE_ATTEMPT_RECEIPT'
+    || capture.eventName !== 'schedule'
+    || !SUCCESSOR_V3_SCHEDULE_CRONS_UTC.includes(capture.scheduleExpression)
+    || capture.defaultBranchRef !== 'refs/heads/main') {
+    throw new Error('SUCCESSOR_V3_CAPTURE_RECEIPT_CONTRACT_INVALID');
+  }
+  if (capture.ATTEMPTED !== true || capture.collectorInvoked !== true
+    || capture.captureStatus !== 'PRESENT'
+    || !Array.isArray(capture.blockers) || capture.blockers.length !== 0
+    || capture.priorCreditedSlotCheck !== 'CLEAR'
+    || capture.rawEvidencePreserved !== true
+    || capture.prospectiveSlotCredit !== 1
+    || capture.maximumProspectiveSlotCredit !== 1
+    || capture.manualCredit !== 0 || capture.replayCredit !== 0
+    || capture.backfillCredit !== 0 || capture.operatorSelectedCredit !== 0
+    || capture.duplicateOrRerunCredit !== 0 || capture.missedSlotCredit !== 0
+    || capture.syntheticCredit !== 0) {
+    throw new Error('SUCCESSOR_V3_CAPTURE_CREDIT_BOUNDARY_INVALID');
+  }
+  const expectedPairs = [
+    ['scheduleReliabilityContractVersion', contract.contractVersion],
+    ['scheduleReliabilityNumericFreezeSha256', contract.numericFreezeSha256],
+    ['cohortContractVersion', contract.contractVersion],
+    ['cohortId', contract.cohortId],
+    ['policyDigest', contract.policyDigest],
+    ['cohortDigest', contract.cohortDigest],
+    ['activationBound', true],
+    ['oosHorizonContractVersion', SUCCESSOR_OOS_HORIZON_CONTRACT.contractVersion],
+    ['oosHorizonPolicyDigest', SUCCESSOR_OOS_HORIZON_CONTRACT.policyDigest],
+    ['oosHorizonContractDigest', SUCCESSOR_OOS_HORIZON_CONTRACT.contractDigest],
+    ['oosOutcomeHorizonMs', SUCCESSOR_OOS_HORIZON_CONTRACT.policyCore.outcomePolicy.outcomeHorizonMs],
+    ['oosOutcomeHorizonRetuned', false],
+    ['oosOutcomeSelectionPolicy', SUCCESSOR_OOS_HORIZON_CONTRACT.policyCore.outcomePolicy.outcomeSelectionPolicy],
+  ];
+  for (const [key, expected] of expectedPairs) {
+    if (capture[key] !== expected) throw new Error(`SUCCESSOR_V3_${String(key).toUpperCase()}_MISMATCH`);
+  }
+  const policy = contract.policyCore;
+  const technical = policy.technicalIdentity;
+  const parameterPolicy = technical.captureParameterPolicy;
+  if (canonicalJson(capture.triggerMinutesUtc) !== canonicalJson(policy.cohort.triggerMinutesUtc)
+    || capture.scheduledAttemptNPerSlot !== policy.cohort.scheduledAttemptNPerSlot
+    || capture.allowedStartDelayMs !== policy.cohort.allowedStartDelayMs
+    || capture.allowedCompletionDelayMs !== policy.cohort.allowedCompletionDelayMs
+    || capture.hardSafetyGapMs !== policy.cohort.hardSafetyGapMs
+    || capture.slotCadenceMs !== policy.cohort.slotCadenceMs
+    || capture.market !== technical.market || capture.symbol !== technical.symbol
+    || capture.captureParameterPolicyDigest !== technical.captureParameterPolicyDigest
+    || capture.eventObservationDelayMs !== parameterPolicy.eventObservationDelayMs
+    || canonicalJson(capture.postObservationDelaysMs) !== canonicalJson(parameterPolicy.postObservationDelaysMs)
+    || capture.maxPreEventBookAgeMs !== parameterPolicy.maxPreEventBookAgeMs) {
+    throw new Error('SUCCESSOR_V3_FROZEN_POLICY_MISMATCH');
+  }
+  const slot = buildSuccessorScheduleReliabilityV3SlotDescriptor(
+    integer(capture.slotIndex, 'SUCCESSOR_V3_SLOT_INDEX_INVALID'), contract,
+  );
+  const expectedSlotValues = {
+    split: slot.split,
+    nominalScheduledAtMs: slot.nominalScheduledAtMs,
+    allowedStartThroughMs: slot.allowedStartThroughMs,
+    slotEndExclusiveMs: slot.slotEndExclusiveMs,
+    canonicalSlotKeyDigest: sha256(canonicalJson(slot.canonicalSlotKey)),
+  };
+  for (const [key, expected] of Object.entries(expectedSlotValues)) {
+    if (capture[key] !== expected) throw new Error(`SUCCESSOR_V3_SLOT_${key.toUpperCase()}_MISMATCH`);
+  }
+  if (canonicalJson(capture.canonicalSlotKey) !== canonicalJson(slot.canonicalSlotKey)
+    || canonicalJson(capture.scheduleExpressionsUtc) !== canonicalJson(slot.scheduleExpressionsUtc)
+    || capture.cronUtc !== capture.scheduleExpression) {
+    throw new Error('SUCCESSOR_V3_SLOT_IDENTITY_MISMATCH');
+  }
+  const startedAt = integer(capture.actualRunStartedAtMs, 'SUCCESSOR_V3_ACTUAL_START_INVALID');
+  const completedAt = integer(capture.completedAtMs, 'SUCCESSOR_V3_COMPLETED_AT_INVALID');
+  if (integer(capture.scheduledRunCreatedAtMs, 'SUCCESSOR_V3_CREATED_AT_INVALID') < slot.nominalScheduledAtMs
+    || startedAt < slot.nominalScheduledAtMs || startedAt > slot.allowedStartThroughMs
+    || completedAt < startedAt || completedAt > startedAt + policy.cohort.allowedCompletionDelayMs
+    || completedAt >= slot.slotEndExclusiveMs) {
+    throw new Error('SUCCESSOR_V3_SLOT_CHRONOLOGY_INVALID');
+  }
+  if (capture.runAttempt !== '1') throw new Error('SUCCESSOR_V3_RERUN_CREDIT_FORBIDDEN');
+  if (capture.sampleClass !== FORWARD_NATURAL_SAMPLE) throw new Error('SUCCESSOR_V3_SAMPLE_CLASS_INVALID');
+  if (capture.canonicalDatasetPersistencePerformed !== false
+    || capture.canonicalDatasetCreditApplied !== false
+    || capture.splitAssignmentPerformed !== false || capture.oosValidationComplete !== false
+    || capture.calibrationArtifactProduced !== false || capture.liquidityImpactPresent !== false
+    || capture.fullCostReady !== false || capture.evidenceCompleteCredit !== 0
+    || capture.profitabilityProven !== false || capture.currentValidatedChampion !== 'NONE'
+    || capture.executionAuthority !== 'NONE' || capture.privateApiUsed !== false
+    || capture.liveTrading !== false || capture.autoTrading !== false
+    || capture.orderSubmitted !== false || capture.realOrders !== 0) {
+    throw new Error('SUCCESSOR_V3_CAPTURE_TRUTH_BOUNDARY_INVALID');
+  }
+  verifyCanonicalDigest(capture, 'captureReceiptDigest', 'SUCCESSOR_V3_CAPTURE_RECEIPT_DIGEST_INVALID');
+  return { slot, sourceContractFamily: 'SUCCESSOR_SCHEDULE_RELIABILITY_V3' };
 }
 
 function validateRawBatch(rawBatch, expectedMainSha, capture) {
@@ -282,13 +403,17 @@ function validateRawBatch(rawBatch, expectedMainSha, capture) {
   return { batch, rawBatchDigest };
 }
 
-function validateArtifactReceipt(artifactReceipt, capture, slot, {
+function validateArtifactReceipt(artifactReceipt, capture, slot, sourceContractFamily, {
   expectedArtifactId,
   expectedArtifactDigest,
   expectedRepository,
 }) {
   const artifact = object(artifactReceipt, 'V3_ARTIFACT_RECEIPT_INVALID');
-  if (artifact.schemaVersion !== PUBLIC_FORWARD_LIQUIDITY_V3_CAPTURE_ARTIFACT_RECEIPT_VERSION) {
+  const successor = sourceContractFamily === 'SUCCESSOR_SCHEDULE_RELIABILITY_V3';
+  const expectedSchema = successor
+    ? SUCCESSOR_V3_ARTIFACT_RECEIPT_SCHEMA
+    : PUBLIC_FORWARD_LIQUIDITY_V3_CAPTURE_ARTIFACT_RECEIPT_VERSION;
+  if (artifact.schemaVersion !== expectedSchema) {
     throw new Error('V3_ARTIFACT_RECEIPT_VERSION_INVALID');
   }
   const {
@@ -312,7 +437,10 @@ function validateArtifactReceipt(artifactReceipt, capture, slot, {
   if (digest !== exactDigest(expectedArtifactDigest, 'EXPECTED_ARTIFACT_DIGEST_INVALID')) {
     throw new Error('ARTIFACT_DIGEST_EXPECTATION_MISMATCH');
   }
-  const expectedName = `public-forward-liquidity-v3-slot-${slot.slotIndex}-${slot.canonicalSlotKeyDigest}`;
+  const slotDigest = capture.canonicalSlotKeyDigest;
+  const expectedName = successor
+    ? `public-forward-liquidity-successor-slot-${slot.slotIndex}-${slotDigest}`
+    : `public-forward-liquidity-v3-slot-${slot.slotIndex}-${slotDigest}`;
   const expectedReference = `https://github.com/${expectedRepository}/actions/runs/${capture.runId}/artifacts/${id}`;
   if (artifactName !== expectedName) throw new Error('V3_ARTIFACT_NAME_MISMATCH');
   if (artifactReference !== expectedReference) throw new Error('V3_ARTIFACT_REFERENCE_MISMATCH');
@@ -340,7 +468,7 @@ export async function ingestPublicForwardLiquidityV3Capture({
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repository)) throw new Error('EXPECTED_REPOSITORY_INVALID');
 
   const capture = object(captureReceipt, 'V3_CAPTURE_RECEIPT_INVALID');
-  const slot = verifyScheduledIdentity(capture);
+  const { slot, sourceContractFamily } = verifyScheduledIdentity(capture);
   if (capture.repository !== repository) throw new Error('CAPTURE_REPOSITORY_MISMATCH');
   const captureRunId = decimalId(capture.runId, 'CAPTURE_RUN_ID_INVALID');
   const captureRunAttempt = decimalId(capture.runAttempt, 'CAPTURE_RUN_ATTEMPT_INVALID');
@@ -353,11 +481,14 @@ export async function ingestPublicForwardLiquidityV3Capture({
     researchRepoRoot,
     exactMainSha: mainSha,
   });
-  if (collectorImplementationBlobSha !== CAPTURE_PARAMETER_POLICY.collectorImplementationBlobSha) {
+  if (collectorImplementationBlobSha !== exactSha(
+    capture.collectorImplementationBlobSha,
+    'V3_COLLECTOR_IMPLEMENTATION_BLOB_INVALID',
+  )) {
     throw new Error('COLLECTOR_IMPLEMENTATION_FROZEN_BLOB_MISMATCH');
   }
   const { batch, rawBatchDigest } = validateRawBatch(rawBatch, mainSha, capture);
-  const artifact = validateArtifactReceipt(artifactReceipt, capture, slot, {
+  const artifact = validateArtifactReceipt(artifactReceipt, capture, slot, sourceContractFamily, {
     expectedArtifactId,
     expectedArtifactDigest,
     expectedRepository: repository,
@@ -377,28 +508,43 @@ export async function ingestPublicForwardLiquidityV3Capture({
     (left, right) => left.observationId.localeCompare(right.observationId),
   );
   const sourceV3Lineage = Object.freeze({
+    sourceContractFamily,
+    producerWorkflowName: sourceContractFamily === 'SUCCESSOR_SCHEDULE_RELIABILITY_V3'
+      ? 'Public Forward Liquidity Successor Scheduled Capture'
+      : 'Public Forward Liquidity Calibration Scheduled V3',
+    producerWorkflowId: sourceContractFamily === 'SUCCESSOR_SCHEDULE_RELIABILITY_V3' ? 347888347 : null,
     captureReceiptVersion: capture.schemaVersion,
     captureReceiptDigest: capture.captureReceiptDigest,
-    artifactReceiptVersion: PUBLIC_FORWARD_LIQUIDITY_V3_CAPTURE_ARTIFACT_RECEIPT_VERSION,
+    artifactReceiptVersion: artifactReceipt.schemaVersion,
     artifactReceiptDigest: artifact.artifactReceiptDigest,
-    triggerSource: capture.triggerSource,
-    policyVersion: capture.policyVersion,
+    triggerSource: capture.triggerSource ?? capture.eventName,
+    policyVersion: capture.policyVersion ?? capture.scheduleReliabilityContractVersion,
     policyDigest: capture.policyDigest,
-    policyArtifactId: capture.policyArtifactId,
-    policyArtifactDigest: capture.policyArtifactDigest,
-    policyInternalArtifactDigest: capture.policyInternalArtifactDigest,
+    ...(sourceContractFamily === 'CALIBRATION_V3' ? {
+      policyArtifactId: capture.policyArtifactId,
+      policyArtifactDigest: capture.policyArtifactDigest,
+      policyInternalArtifactDigest: capture.policyInternalArtifactDigest,
+    } : {
+      scheduleReliabilityContractVersion: capture.scheduleReliabilityContractVersion,
+      scheduleReliabilityNumericFreezeSha256: capture.scheduleReliabilityNumericFreezeSha256,
+      oosHorizonContractVersion: capture.oosHorizonContractVersion,
+      oosHorizonPolicyDigest: capture.oosHorizonPolicyDigest,
+      oosHorizonContractDigest: capture.oosHorizonContractDigest,
+    }),
     cohortId: capture.cohortId,
     cohortDigest: capture.cohortDigest,
-    captureSelectionPolicyDigest: capture.captureSelectionPolicyDigest,
-    slotIntervalMs: capture.slotIntervalMs,
+    ...(sourceContractFamily === 'CALIBRATION_V3' ? {
+      captureSelectionPolicyDigest: capture.captureSelectionPolicyDigest,
+      slotIntervalMs: capture.slotIntervalMs,
+    } : { slotCadenceMs: capture.slotCadenceMs }),
     slotIndex: slot.slotIndex,
     split: slot.split,
-    slotStartMs: slot.slotStartMs,
-    slotEndMs: slot.slotEndMs,
+    slotStartMs: slot.slotStartMs ?? slot.nominalScheduledAtMs,
+    slotEndMs: slot.slotEndMs ?? slot.slotEndExclusiveMs,
     nominalScheduledAtMs: slot.nominalScheduledAtMs,
     actualRunStartedAtMs: capture.actualRunStartedAtMs,
-    actualRunCompletedAtMs: capture.actualRunCompletedAtMs,
-    cronUtc: slot.cronUtc,
+    actualRunCompletedAtMs: capture.actualRunCompletedAtMs ?? capture.completedAtMs,
+    cronUtc: slot.cronUtc ?? capture.cronUtc,
     canonicalSlotKey: slot.canonicalSlotKey,
     canonicalSlotKeyDigest: slot.canonicalSlotKeyDigest,
     prospectiveSlotCredit: 1,
