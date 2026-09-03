@@ -66,6 +66,12 @@ jobs:
           ! grep -Eq 'deployments:[[:space:]]+write' "$workflow"
           ! grep -Eq 'packages:[[:space:]]+write' "$workflow"
           ! grep -Eq 'id-token:[[:space:]]+write' "$workflow"
+          test "$(grep -Ec 'CAPTURE_ATTEMPT_ARTIFACT_NAME: [$][{][{] steps[.]capture[.]outputs[.]attempt_artifact_name [}][}]' "$workflow")" -eq 1
+          test "$(grep -Fc 'artifact_name=${CAPTURE_ATTEMPT_ARTIFACT_NAME}' "$workflow")" -eq 1
+          test "$(grep -Ec 'name: [$][{][{] steps[.]attempt_name[.]outputs[.]artifact_name [}][}]' "$workflow")" -eq 1
+          test "$(grep -Ec 'ARTIFACT_NAME: [$][{][{] steps[.]attempt_name[.]outputs[.]artifact_name [}][}]' "$workflow")" -eq 1
+          ! grep -Fq 'steps.attempt_name.outputs.name' "$workflow"
+          ! grep -Eq '^[[:space:]]+RUNNER_NAME:' "$workflow"
 
       - name: Syntax check existing seam, runner, and V3 reliability contract
         run: |
@@ -173,23 +179,23 @@ jobs:
         id: attempt_name
         shell: bash
         env:
-          RUNNER_NAME: ${{ steps.capture.outputs.attempt_artifact_name }}
+          CAPTURE_ATTEMPT_ARTIFACT_NAME: ${{ steps.capture.outputs.attempt_artifact_name }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          if [[ -n "$RUNNER_NAME" ]]; then
-            name="$RUNNER_NAME"
+          if [[ -n "$CAPTURE_ATTEMPT_ARTIFACT_NAME" ]]; then
+            attempt_artifact_name="$CAPTURE_ATTEMPT_ARTIFACT_NAME"
           else
-            name="public-forward-liquidity-successor-v3-diagnostic-$RUN_ID-$RUN_ATTEMPT"
+            attempt_artifact_name="public-forward-liquidity-successor-v3-diagnostic-$RUN_ID-$RUN_ATTEMPT"
           fi
-          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=${attempt_artifact_name}" >> "$GITHUB_OUTPUT"
 
       - name: Upload immutable Successor V3 attempt artifact
         id: attempt_upload
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.attempt_name.outputs.name }}
+          name: ${{ steps.attempt_name.outputs.artifact_name }}
           path: public-forward-liquidity-successor-capture
           if-no-files-found: error
           retention-days: 90
@@ -202,7 +208,7 @@ jobs:
           OUTPUT_DIR: public-forward-liquidity-successor-capture
           ARTIFACT_ID: ${{ steps.attempt_upload.outputs.artifact-id }}
           ARTIFACT_DIGEST: ${{ steps.attempt_upload.outputs.artifact-digest }}
-          ARTIFACT_NAME: ${{ steps.attempt_name.outputs.name }}
+          ARTIFACT_NAME: ${{ steps.attempt_name.outputs.artifact_name }}
         run: node market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs bind-artifact
 
       - name: Upload finalized immutable Successor V3 receipt
