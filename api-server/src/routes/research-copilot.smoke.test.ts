@@ -185,6 +185,7 @@ test('same-candidate runtime reader consumes server-owned state and fail-closes 
   const root = await mkdtemp(join(tmpdir(), 'research-runtime-reader-test-'));
   const bundleRoot = join(root, 'bundles');
   const runtimeRoot = join(root, 'runtime');
+  await mkdir(bundleRoot, { recursive: true });
   let calls = 0;
   const bundles = new ResearchBundleService({
     readCanonicalBundle: async () => fixture.bundle,
