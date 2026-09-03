@@ -8,6 +8,10 @@ import {
   type ForwardObservationProfitCalibration,
   type ForwardRecommendationObservation,
 } from './forward-recommendation-observer.service';
+import {
+  buildForwardCalibrationGrossEdgeEvidence,
+  type ForwardGrossEdgeEvidence,
+} from './forward-calibration-gross-edge.service';
 import type { ScannerResponse, ScannerSignalCard } from './scanner-signal.types';
 import type { SignalOutcomeBar } from './signal-performance-learning.service';
 
@@ -83,6 +87,7 @@ export type ForwardObserverRuntimeSummary = {
   };
   lanes: ForwardObserverLaneSummary[];
   calibrations: ForwardObservationProfitCalibration[];
+  grossEdgeEvidence: ForwardGrossEdgeEvidence[];
   settlementErrors: Array<{ observationId: string; code: string }>;
   safety: ForwardObserverRuntimeState['safety'];
 };
@@ -338,7 +343,6 @@ export function validateForwardObserverRuntimeState(state: ForwardObserverRuntim
 }
 
 export function latestCardEvidenceTimestamp(card: ScannerSignalCard): string | null {
-  if (card.observedAt == null) return null;
   const signalAt = Date.parse(card.observedAt);
   if (!Number.isFinite(signalAt)) return null;
   const matched = card.evidence.filter((item) => item.status === 'matched');
@@ -381,7 +385,9 @@ function scannerResponseBlockers(response: ScannerResponse): string[] {
   return [...new Set(blockers)];
 }
 
-function calibrationGroups(observations: ForwardRecommendationObservation[]): ForwardObservationProfitCalibration[] {
+function settledObservationGroups(
+  observations: readonly ForwardRecommendationObservation[],
+): ForwardRecommendationObservation[][] {
   const groups = new Map<string, ForwardRecommendationObservation[]>();
   for (const observation of observations) {
     if (observation.status !== 'SETTLED') continue;
@@ -390,7 +396,22 @@ function calibrationGroups(observations: ForwardRecommendationObservation[]): Fo
     rows.push(observation);
     groups.set(key, rows);
   }
-  return [...groups.values()].map((rows) => buildForwardObservationProfitCalibration(rows));
+  return [...groups.values()];
+}
+
+function calibrationGroups(observations: readonly ForwardRecommendationObservation[]): ForwardObservationProfitCalibration[] {
+  return settledObservationGroups(observations)
+    .map((rows) => buildForwardObservationProfitCalibration(rows));
+}
+
+export function buildForwardObserverRuntimeGrossEdgeEvidence(
+  observations: readonly ForwardRecommendationObservation[],
+  asOf: string,
+): ForwardGrossEdgeEvidence[] {
+  return settledObservationGroups(observations).map((rows) => {
+    const calibration = buildForwardObservationProfitCalibration(rows);
+    return buildForwardCalibrationGrossEdgeEvidence({ observations: rows, calibration, asOf });
+  });
 }
 
 function futureOnlyBars(observation: ForwardRecommendationObservation, bars: SignalOutcomeBar[]): SignalOutcomeBar[] {
@@ -575,6 +596,7 @@ export async function runForwardRecommendationObserverCycle(input: {
     },
     lanes,
     calibrations: calibrationGroups(observations),
+    grossEdgeEvidence: buildForwardObserverRuntimeGrossEdgeEvidence(observations, evaluatedAt),
     settlementErrors,
     safety: { ...SAFETY },
   };

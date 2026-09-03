@@ -1,5 +1,4 @@
 import type { TradingRepository } from './trade-automation.repository';
-import { marketNumber, quoteTimeEvidence } from '../providers/market-evidence';
 import { TradeAutomationService } from './trade-automation.service';
 import { decryptTradingCredentials } from './trade-credential-vault.service';
 import {
@@ -30,23 +29,23 @@ function isRecord(value: unknown): value is ExchangePayload {
 }
 
 function finiteNumber(value: unknown): number | null {
-  return marketNumber(value);
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function text(value: unknown): string | null {
-  const parsed = typeof value === 'string' ? value.trim() : '';
+  const parsed = String(value ?? '').trim();
   return parsed ? parsed : null;
 }
 
 function timestamp(value: unknown): string | null {
   if (value === null || value === undefined || value === '') return null;
-  const numeric = finiteNumber(value);
-  // Bitget cTime/uTime are milliseconds. Do not guess seconds or use the clock.
-  const iso = numeric != null && Number.isSafeInteger(numeric) && numeric >= 1_000_000_000_000 && numeric <= 8.64e15
-    ? new Date(numeric).toISOString() : value;
-  const result = quoteTimeEvidence(iso).updatedAt;
-  if (result == null) throw new Error('RECONCILIATION_TIMESTAMP_INVALID');
-  return result;
+  const numeric = Number(value);
+  const date = Number.isFinite(numeric) && numeric > 0
+    ? new Date(numeric < 10_000_000_000 ? numeric * 1_000 : numeric)
+    : new Date(String(value));
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
 }
 
 function invalidResponseCode(baseUrl: string) {
@@ -121,34 +120,18 @@ function stateFromUpbit(status: string, filledQuantity: number): TradingExchange
   return null;
 }
 
-function fillFromRow(row: ExchangePayload): TradingFill {
+function fillFromRow(row: ExchangePayload, fallbackId: string, fallbackTime: string | null): TradingFill | null {
   const price = finiteNumber(row.price ?? row.fillPrice ?? row.trade_price);
   const quantity = finiteNumber(row.quantity ?? row.size ?? row.volume ?? row.fillQuantity ?? row.fillSz);
-  if (price === null || price <= 0 || quantity === null || quantity <= 0) throw new Error('RECONCILIATION_FILL_VALUE_INVALID');
-  const id = text(row.id ?? row.tradeId ?? row.uuid);
-  const filledAt = timestamp(row.filledAt ?? row.trade_time_utc ?? row.created_at ?? row.cTime);
-  if (id == null) throw new Error('RECONCILIATION_FILL_ID_MISSING');
-  if (filledAt == null) throw new Error('RECONCILIATION_FILL_TIME_MISSING');
+  if (price === null || price <= 0 || quantity === null || quantity <= 0) return null;
   return {
-    id,
+    id: text(row.id ?? row.tradeId ?? row.uuid) ?? fallbackId,
     price,
     quantity,
     feeAmount: finiteNumber(row.feeAmount ?? row.fee ?? row.paid_fee),
     feeCurrency: text(row.feeCurrency ?? row.feeCcy ?? row.fee_currency),
-    filledAt,
+    filledAt: timestamp(row.filledAt ?? row.trade_time_utc ?? row.created_at ?? row.uTime) ?? fallbackTime ?? new Date(0).toISOString(),
   };
-}
-
-function parseFills(value: unknown): TradingFill[] {
-  if (value == null) return [];
-  if (!Array.isArray(value) || value.some((row) => !isRecord(row))) throw new Error('RECONCILIATION_FILL_SHAPE_INVALID');
-  return value.map((row) => fillFromRow(row));
-}
-
-function requiredFilledQuantity(value: unknown): number {
-  const quantity = finiteNumber(value);
-  if (quantity == null || quantity < 0) throw new Error('RECONCILIATION_FILLED_QUANTITY_MISSING_OR_INVALID');
-  return quantity;
 }
 
 function bitgetSnapshot(payload: ExchangePayload, plan: TradingPlan, order: TradingOrder): TradingExchangeOrderSnapshot {
@@ -158,21 +141,20 @@ function bitgetSnapshot(payload: ExchangePayload, plan: TradingPlan, order: Trad
   }
   const providerStatusCode = String(row.status ?? row.state ?? '').toLowerCase();
   const requestedQuantity = finiteNumber(row.size ?? row.quantity ?? row.qty) ?? order.requestedQuantity;
-  const filledQuantity = requiredFilledQuantity(row.baseVolume ?? row.filledQty ?? row.filledQuantity ?? row.accBaseVolume);
+  const filledQuantity = finiteNumber(row.baseVolume ?? row.filledQty ?? row.filledQuantity ?? row.accBaseVolume) ?? 0;
   const remainingQuantity = requestedQuantity === null ? null : Math.max(0, requestedQuantity - filledQuantity);
   const state = stateFromBitget(providerStatusCode, filledQuantity);
   if (!state) throw new Error('BITGET_ORDER_STATUS_UNKNOWN');
   const updatedAt = timestamp(row.uTime ?? row.updatedTime ?? row.updated_at);
-  const fills = parseFills(row.fills);
-  const average = finiteNumber(row.priceAvg ?? row.averagePrice ?? row.avgPrice);
-  if (filledQuantity > 0 && average != null && average <= 0) throw new Error('RECONCILIATION_FILL_PRICE_INVALID');
+  const rawFills = Array.isArray(row.fills) ? row.fills.filter(isRecord) : [];
+  const fills = rawFills.map((fill, index) => fillFromRow(fill, `bitget-${order.id}-${index}`, updatedAt)).filter((fill): fill is TradingFill => fill !== null);
   return {
     exchangeOrderId: text(row.orderId ?? row.order_id) ?? order.exchangeOrderId,
     state,
     requestedQuantity,
     filledQuantity,
     remainingQuantity,
-    averageFillPrice: filledQuantity > 0 ? average : null,
+    averageFillPrice: finiteNumber(row.priceAvg ?? row.averagePrice ?? row.avgPrice),
     fills,
     feeAmount: finiteNumber(row.feeAmount ?? row.fee),
     feeCurrency: text(row.feeCurrency ?? row.feeCcy),
@@ -189,13 +171,14 @@ function upbitSnapshot(payload: ExchangePayload, plan: TradingPlan, order: Tradi
   if (text(row.market)?.toUpperCase() !== expectedMarket) throw new Error('UPBIT_ORDER_IDENTITY_MISMATCH');
   const providerStatusCode = String(row.state ?? '').toLowerCase();
   const requestedQuantity = finiteNumber(row.volume) ?? order.requestedQuantity;
-  const filledQuantity = requiredFilledQuantity(row.executed_volume);
+  const filledQuantity = finiteNumber(row.executed_volume) ?? 0;
   const remainingQuantity = finiteNumber(row.remaining_volume)
     ?? (requestedQuantity === null ? null : Math.max(0, requestedQuantity - filledQuantity));
   const state = stateFromUpbit(providerStatusCode, filledQuantity);
   if (!state) throw new Error('UPBIT_ORDER_STATUS_UNKNOWN');
+  const rawFills = Array.isArray(row.trades) ? row.trades.filter(isRecord) : [];
   const createdAt = timestamp(row.created_at);
-  const fills = parseFills(row.trades);
+  const fills = rawFills.map((fill, index) => fillFromRow(fill, `upbit-${order.id}-${index}`, createdAt)).filter((fill): fill is TradingFill => fill !== null);
   const weightedValue = fills.reduce((sum, fill) => sum + fill.price * fill.quantity, 0);
   const weightedQuantity = fills.reduce((sum, fill) => sum + fill.quantity, 0);
   return {
@@ -204,13 +187,12 @@ function upbitSnapshot(payload: ExchangePayload, plan: TradingPlan, order: Tradi
     requestedQuantity,
     filledQuantity,
     remainingQuantity,
-    // Upbit order.price is an order parameter, not an executed trade price.
-    averageFillPrice: weightedQuantity > 0 && quantitiesMatch(weightedQuantity, filledQuantity) && Number.isFinite(weightedValue) ? weightedValue / weightedQuantity : null,
+    averageFillPrice: weightedQuantity > 0 ? weightedValue / weightedQuantity : finiteNumber(row.price),
     fills,
     feeAmount: finiteNumber(row.paid_fee),
     feeCurrency: 'KRW',
     exchangeCreatedAt: createdAt,
-    exchangeUpdatedAt: fills.length > 0 ? fills.map((fill) => fill.filledAt).sort().at(-1)! : null,
+    exchangeUpdatedAt: fills.length > 0 ? fills[fills.length - 1].filledAt : createdAt,
     cancelable: state === 'ACCEPTED' || state === 'PARTIALLY_FILLED',
     providerStatusCode,
   };
@@ -236,13 +218,6 @@ function mergeFills(order: TradingOrder, snapshot: TradingExchangeOrderSnapshot)
 }
 
 function validateSnapshot(order: TradingOrder, snapshot: TradingExchangeOrderSnapshot): TradingExchangeOrderSnapshot {
-  if (snapshot.requestedQuantity != null && (!Number.isFinite(snapshot.requestedQuantity) || snapshot.requestedQuantity < 0)
-    || snapshot.remainingQuantity != null && (!Number.isFinite(snapshot.remainingQuantity) || snapshot.remainingQuantity < 0)) {
-    throw new Error('RECONCILIATION_QUANTITY_INVALID');
-  }
-  if (['FILLED', 'PARTIALLY_FILLED'].includes(snapshot.state) && snapshot.filledQuantity <= 0) throw new Error('RECONCILIATION_TERMINAL_STATE_MISMATCH');
-  const fillQuantity = snapshot.fills.reduce((total, fill) => total + fill.quantity, 0);
-  if (!Number.isFinite(fillQuantity) || fillQuantity > snapshot.filledQuantity + QUANTITY_EPSILON) throw new Error('RECONCILIATION_FILL_TOTAL_MISMATCH');
   if (order.exchangeOrderId && snapshot.exchangeOrderId && order.exchangeOrderId !== snapshot.exchangeOrderId) {
     throw new Error('RECONCILIATION_ORDER_ID_MISMATCH');
   }
@@ -286,10 +261,10 @@ function validateSnapshot(order: TradingOrder, snapshot: TradingExchangeOrderSna
     exchangeOrderId: snapshot.exchangeOrderId ?? order.exchangeOrderId,
     requestedQuantity,
     remainingQuantity: snapshot.remainingQuantity ?? expectedRemaining,
-    averageFillPrice: snapshot.averageFillPrice ?? (snapshot.filledQuantity === order.filledQuantity ? order.averageFillPrice : null),
+    averageFillPrice: snapshot.averageFillPrice ?? order.averageFillPrice,
     fills: mergeFills(order, snapshot),
-    feeAmount: snapshot.feeAmount ?? (snapshot.filledQuantity === order.filledQuantity ? order.feeAmount : null) ?? null,
-    feeCurrency: snapshot.feeCurrency ?? (snapshot.filledQuantity === order.filledQuantity ? order.feeCurrency : null) ?? null,
+    feeAmount: snapshot.feeAmount ?? order.feeAmount ?? null,
+    feeCurrency: snapshot.feeCurrency ?? order.feeCurrency ?? null,
     exchangeCreatedAt: order.exchangeCreatedAt ?? snapshot.exchangeCreatedAt,
     exchangeUpdatedAt: snapshot.exchangeUpdatedAt ?? order.exchangeUpdatedAt ?? null,
   };

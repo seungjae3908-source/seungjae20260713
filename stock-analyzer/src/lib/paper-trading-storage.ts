@@ -4,7 +4,6 @@ export const PAPER_STORAGE_SCHEMA_VERSION = 1;
 export const PAPER_STORAGE_LIMITS = Object.freeze({ orders: 500, positions: 200, fills: 1_000, journal: 500, events: 500 });
 
 import type { PaperTradingState } from './paper-trading';
-import { validPaperJournal, validPaperState } from '../../../packages/api-zod/src/paper-state-evidence.js';
 
 export type StorageLike = Pick<Storage, 'getItem'|'setItem'|'removeItem'>;
 export type PaperStorageEnvelope = { schemaVersion: 1; savedAt: string; state: PaperTradingState };
@@ -36,34 +35,46 @@ export function createLocalPaperState(initialBalance = 10_000, now = new Date())
 }
 
 export function validatePaperState(value: unknown): value is PaperTradingState {
-  return validPaperState(value, Date.now());
+  if (!value || typeof value !== 'object' || containsSecretKey(value)) return false;
+  const state = value as Partial<PaperTradingState>;
+  if (state.schemaVersion !== 1 || !state.account || !Array.isArray(state.orders) || !Array.isArray(state.positions) || !Array.isArray(state.fills) || !Array.isArray(state.journal) || !Array.isArray(state.processedEventIds)) return false;
+  const numbers = [state.account.initialBalance, state.account.cashBalance, state.account.realizedPnl, state.account.unrealizedPnl, state.account.equity, state.account.usedMargin, state.account.availableMargin];
+  return numbers.every(finite) && (state.account.initialBalance ?? 0) > 0;
 }
 
-function validArchiveRows(value: unknown): value is PaperTradingState['journal'] {
-  return Array.isArray(value) && value.length <= 10000 && value.every((entry) => validPaperJournal(entry, Date.now()))
-    && new Set(value.map((entry) => entry.id)).size === value.length;
+function safeJournalEntry(entry: PaperTradingState['journal'][number]) {
+  return { ...entry, note: String(entry.note ?? '').slice(0, 2_000) };
 }
 
 export function loadPaperArchive(storage: StorageLike) {
-  let raw: string | null = null;
+  const raw = storage.getItem(PAPER_ARCHIVE_KEY);
+  if (!raw) return { journal: [] as PaperTradingState['journal'], recovered: false, warning: '' };
   try {
-    raw = storage.getItem(PAPER_ARCHIVE_KEY);
-    if (raw === null) return { journal: [] as PaperTradingState['journal'], recovered: false, blocked: false, warning: '' };
     const parsed = JSON.parse(raw) as Partial<PaperArchiveEnvelope>;
-    if (!parsed || parsed.schemaVersion !== 1 || !validArchiveRows(parsed.journal)) throw new Error('invalid');
-    const journal = parsed.journal;
-    return { journal, recovered: false, blocked: false, warning: journal.length ? `보존된 과거 거래일지 ${journal.length}건이 있습니다.` : '' };
+    if (parsed.schemaVersion !== 1 || !Array.isArray(parsed.journal) || containsSecretKey(parsed.journal)) throw new Error('invalid');
+    const seen = new Set<string>();
+    const journal = parsed.journal.filter((entry): entry is PaperTradingState['journal'][number] => {
+      if (!entry || typeof entry !== 'object' || typeof (entry as { id?: unknown }).id !== 'string') return false;
+      const id = (entry as { id: string }).id;
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    }).map(safeJournalEntry);
+    return { journal, recovered: false, warning: journal.length ? `보존된 과거 거래일지 ${journal.length}건이 있습니다.` : '' };
   } catch {
-    return { journal: [] as PaperTradingState['journal'], recovered: false, blocked: true, warning: '과거 거래일지를 검증하지 못했습니다. 원본을 유지하고 archive 저장·동기화를 차단합니다.' };
+    const backupKey = `${PAPER_ARCHIVE_KEY}.corrupt:${new Date().toISOString().replace(/[:.]/g, '-')}`;
+    storage.setItem(backupKey, raw);
+    storage.removeItem(PAPER_ARCHIVE_KEY);
+    return { journal: [] as PaperTradingState['journal'], recovered: true, warning: '손상된 거래일지 archive를 백업하고 빈 archive로 복구했습니다.' };
   }
 }
 
 export function savePaperArchive(storage: StorageLike, journal: PaperTradingState['journal']) {
-  if (loadPaperArchive(storage).blocked) throw new Error('기존 archive를 검증하지 못해 덮어쓰지 않았습니다.');
-  if (containsSecretKey(journal) || !journal.every((entry) => validPaperJournal(entry, Date.now()))) throw new Error('archive 기록 또는 Secret 유사 필드를 확인하세요.');
+  if (containsSecretKey(journal)) throw new Error('archive에 Secret 유사 필드를 저장할 수 없습니다.');
   const byId = new Map<string, PaperTradingState['journal'][number]>();
-  for (const entry of journal) byId.set(entry.id, entry);
-  if (!validArchiveRows([...byId.values()])) throw new Error('archive 크기 또는 기록을 확인하세요. 자동 삭제하지 않았습니다.');
+  for (const entry of journal) {
+    if (entry && typeof entry.id === 'string') byId.set(entry.id, safeJournalEntry(entry));
+  }
   const envelope: PaperArchiveEnvelope = {
     schemaVersion: 1,
     savedAt: new Date().toISOString(),
@@ -77,28 +88,20 @@ export function repairPaperState(state: PaperTradingState): PaperTradingState {
   return {
     ...state,
     schemaVersion: 1,
-    // Journal overflow is archived by savePaperState before this compaction.
-    // Pending orders, open positions, fills, notes and idempotency evidence must not be trimmed here.
-    journal: state.journal.slice(-PAPER_STORAGE_LIMITS.journal),
+    orders: state.orders.slice(-PAPER_STORAGE_LIMITS.orders),
+    positions: state.positions.slice(-PAPER_STORAGE_LIMITS.positions),
+    fills: state.fills.slice(-PAPER_STORAGE_LIMITS.fills),
+    journal: state.journal.slice(-PAPER_STORAGE_LIMITS.journal).map(safeJournalEntry),
+    processedEventIds: state.processedEventIds.slice(-PAPER_STORAGE_LIMITS.events),
   };
 }
 
-export function savePaperState(storage: StorageLike, state: PaperTradingState, options: { replaceCorrupt?: boolean } = {}) {
+export function savePaperState(storage: StorageLike, state: PaperTradingState) {
   if (!validatePaperState(state)) throw new Error('저장할 모의거래 상태가 올바르지 않습니다.');
-  if (!options.replaceCorrupt) {
-    const raw = storage.getItem(PAPER_STORAGE_KEY);
-    if (raw !== null) {
-      try {
-        const existing = JSON.parse(raw) as Partial<PaperStorageEnvelope>;
-        if (!existing || existing.schemaVersion !== 1 || !validatePaperState(existing.state)) throw new Error('invalid');
-      } catch { throw new Error('기존 모의거래 원본을 검증하지 못해 덮어쓰지 않았습니다. 명시적으로 가져오거나 초기화하세요.'); }
-    }
-  }
   const overflowCount = Math.max(0, state.journal.length - PAPER_STORAGE_LIMITS.journal);
   if (overflowCount > 0) {
-    const existing = loadPaperArchive(storage);
-    if (existing.blocked) throw new Error(existing.warning);
-    savePaperArchive(storage, [...existing.journal, ...state.journal.slice(0, overflowCount)]);
+    const existing = loadPaperArchive(storage).journal;
+    savePaperArchive(storage, [...existing, ...state.journal.slice(0, overflowCount)]);
   }
   const envelope: PaperStorageEnvelope = { schemaVersion: 1, savedAt: new Date().toISOString(), state: repairPaperState(state) };
   storage.setItem(PAPER_STORAGE_KEY, JSON.stringify(envelope));
@@ -106,42 +109,41 @@ export function savePaperState(storage: StorageLike, state: PaperTradingState, o
 }
 
 export function loadPaperState(storage: StorageLike, initialBalance = 10_000) {
+  const raw = storage.getItem(PAPER_STORAGE_KEY);
   const archive = loadPaperArchive(storage);
-  let raw: string | null = null;
+  if (!raw) return { state: createLocalPaperState(initialBalance), recovered: archive.recovered, warning: archive.warning };
   try {
-    raw = storage.getItem(PAPER_STORAGE_KEY);
-    if (raw === null) return { state: createLocalPaperState(initialBalance), recovered: false, blocked: false, rawExport: null, warning: archive.warning };
     const envelope = JSON.parse(raw) as Partial<PaperStorageEnvelope>;
-    if (!envelope || envelope.schemaVersion !== 1 || !validatePaperState(envelope.state)) throw new Error('invalid');
-    return { state: envelope.state, recovered: false, blocked: false, rawExport: null, warning: archive.warning };
+    if (envelope.schemaVersion !== 1 || !validatePaperState(envelope.state)) throw new Error('invalid');
+    return { state: repairPaperState(envelope.state), recovered: archive.recovered, warning: archive.warning };
   } catch {
-    // Placeholder only: consumers must hide this state and block actions while blocked.
-    return { state: createLocalPaperState(initialBalance), recovered: false, blocked: true, rawExport: raw, warning: '모의거래 저장 기록을 검증하지 못했습니다. 원본을 변경하지 않았으며 잔액·성과를 표시하거나 거래하지 않습니다.' };
+    const backupKey = `${PAPER_STORAGE_KEY}.corrupt:${new Date().toISOString().replace(/[:.]/g, '-')}`;
+    storage.setItem(backupKey, raw);
+    storage.removeItem(PAPER_STORAGE_KEY);
+    return { state: createLocalPaperState(initialBalance), recovered: true, warning: '손상된 모의거래 저장 데이터를 백업하고 초기 상태로 복구했습니다.' };
   }
 }
 
 export function exportPaperState(state: PaperTradingState) {
   if (!validatePaperState(state)) throw new Error('내보낼 모의거래 상태가 올바르지 않습니다.');
-  return JSON.stringify({ schemaVersion: 1, exportedAt: new Date().toISOString(), state }, null, 2);
+  return JSON.stringify({ schemaVersion: 1, exportedAt: new Date().toISOString(), state: repairPaperState(state) }, null, 2);
 }
 
 export function exportPaperArchive(storage: StorageLike) {
   const archive = loadPaperArchive(storage);
-  if (archive.blocked) throw new Error(archive.warning);
   return JSON.stringify({ schemaVersion: 1, exportedAt: new Date().toISOString(), archiveCandidate: true, journal: archive.journal }, null, 2);
 }
 
 export function importPaperState(text: string) {
   if (text.length > 2_000_000) throw new Error('가져오기 파일이 너무 큽니다.');
   const payload = JSON.parse(text) as { schemaVersion?: unknown; state?: unknown };
-  if (!payload || payload.schemaVersion !== 1 || !validatePaperState(payload.state)) throw new Error('올바른 모의거래 JSON 파일이 아닙니다.');
-  return payload.state;
+  if (payload.schemaVersion !== 1 || !validatePaperState(payload.state)) throw new Error('올바른 모의거래 JSON 파일이 아닙니다.');
+  return repairPaperState(payload.state);
 }
 
 export function clearPaperState(storage: StorageLike, initialBalance = 10_000) {
   // The archive is intentionally preserved. Historical journal deletion requires
   // a separate explicit user action/export flow and is never automatic.
-  const next = createLocalPaperState(initialBalance);
   storage.removeItem(PAPER_STORAGE_KEY);
-  return next;
+  return createLocalPaperState(initialBalance);
 }

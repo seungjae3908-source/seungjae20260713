@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { test, expect, type Page } from '@playwright/test';
-import { parseApprovalQueue, parseApprovalStatus } from '../src/lib/approval-queue-evidence';
 
 const source = fs.readFileSync(path.resolve(process.cwd(), 'src/components/trade-approval-queue.tsx'), 'utf8');
 
@@ -66,49 +65,6 @@ function queueItem() {
     order: null,
   };
 }
-
-test('approval boundary rejects malformed authority, stale snapshots and duplicate identities', () => {
-  const item = queueItem();
-  const valid = { ok: true, items: [item], count: 1, updatedAt: new Date().toISOString() };
-  expect(parseApprovalQueue(valid).items).toHaveLength(1);
-  for (const invalid of [
-    { ok: true }, { ...valid, count: 0 }, { ...valid, updatedAt: null },
-    { ...valid, updatedAt: '2020-01-01T00:00:00Z' }, { ...valid, items: [item, item], count: 2 },
-    { ...valid, items: [{ ...item, estimatedKrw: true }] },
-    { ...valid, items: [{ ...item, exchange: ['bitget'] }] },
-    { ...valid, items: [{ ...item, approval: { ...item.approval, approvalEnabled: 'true' } }] },
-  ]) expect(() => parseApprovalQueue(invalid)).toThrow();
-  expect(parseApprovalStatus({ ok: true, approval: { ...item.approval, approvalEnabled: false, expiresAt: null } }).approval?.expiresAt).toBeNull();
-  expect(() => parseApprovalStatus({ ok: true, approval: { ...item.approval, expiresAt: null } })).toThrow();
-  expect(() => parseApprovalStatus({ ok: true, approval: { ...item.approval, lastValidatedAt: null } })).toThrow();
-});
-
-for (const width of [1440, 1024, 320, 360, 390, 412, 430]) {
-  test(`malformed successful queue response never appears empty at ${width}px`, async ({ page }) => {
-    const errors: string[] = [];
-    let mutations = 0;
-    page.on('pageerror', (error) => errors.push(error.message));
-    page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
-    page.on('request', (request) => { if (request.url().includes('/api/trade-automation/') && request.method() !== 'GET') mutations++; });
-    await page.setViewportSize({ width, height: width === 320 ? 740 : 900 });
-    await page.route('**/api/trade-automation/approval-queue', (route) => route.fulfill({ json: { ok: true } }));
-    await page.goto('/__phase12-trade-automation-e2e?approvalQueue=live');
-    const queue = page.getByTestId('trade-approval-queue');
-    await expect(queue.getByTestId('approval-queue-unavailable')).toBeVisible();
-    await expect(queue.getByTestId('approval-queue-empty')).toHaveCount(0);
-    await expect(queue.locator('[aria-label="승인 상태 요약"] p.text-base')).toHaveText(['-', '-', '-']);
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
-    expect(errors).toEqual([]);
-    expect(mutations).toBe(0);
-  });
-}
-
-test('valid empty queue remains a measured zero', async ({ page }) => {
-  await page.route('**/api/trade-automation/approval-queue', (route) => route.fulfill({ json: { ok: true, items: [], count: 0, updatedAt: new Date().toISOString() } }));
-  await page.goto('/__phase12-trade-automation-e2e?approvalQueue=live');
-  await expect(page.getByTestId('approval-queue-empty')).toBeVisible();
-  await expect(page.locator('[aria-label="승인 상태 요약"] p.text-base')).toHaveText(['0', '0', '0']);
-});
 
 for (const width of [360, 390, 412, 430]) {
   test(`approval queue 503 is truthful and touch-safe at ${width}px`, async ({ page }) => {

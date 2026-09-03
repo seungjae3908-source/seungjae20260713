@@ -1,7 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
-import { setPortfolioOverlayMember } from '@/lib/portfolio-overlay';
 import { ProfileRequestCoordinator } from '@/lib/profile-request-coordinator';
 import { userIntegrationsRequestLifecycle } from '@/lib/user-integrations-request-lifecycle';
 import {
@@ -129,7 +128,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   function applySession(next: Session | null) {
-    setPortfolioOverlayMember(next?.user.id ?? null);
     sessionRef.current = next;
     setSession(next);
     const requestKey = profileRequestKey(next);

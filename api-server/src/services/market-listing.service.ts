@@ -13,16 +13,15 @@ import {
 import { getUsUniverse } from '../providers/us-universe';
 import { getKrUniverse } from '../providers/krx';
 import * as yahoo from '../providers/yahoo';
+import { computeScores } from '../sample/scores';
+import { scoreToRating } from '../sample/rating';
 import { cached, TTL } from '../lib/cache';
 import type { Rating, Candle } from '../sample/types';
 import { MarketDataService, type QuoteRow } from './market-data.service';
-import { normalizeQuoteRow } from './market-data.base.service';
-import { quoteTimeEvidence, type QuoteTimeEvidence } from '../providers/market-evidence';
 import { FinancialService } from './financial.service';
 import { NewsService } from './news.service';
 import { RiskAnalysisService } from './risk-analysis.service';
 import { SECTOR_MAP } from '../data/sectors';
-import { hasQuoteRating } from './quote-rating-evidence';
 import {
   collectMarketListingWork,
   type MarketListingWorkDiagnostics,
@@ -30,15 +29,15 @@ import {
 
 // ---- Market summary ---------------------------------------------------------
 
-export type SummaryItem = {
+export interface SummaryItem {
   key: string;
   label: string;
+  price: number;
+  changePercent: number;
   spark: number[];
   unit: 'index' | 'krw' | 'usd';
-  updatedAt?: string | null;
-  freshness?: QuoteTimeEvidence['freshness'];
-  source?: string;
-} & ({ ok: true; price: number; changePercent: number } | { ok: false; price: null; changePercent: null });
+  ok: boolean;
+}
 
 const SUMMARY_DEFS: {
   key: string;
@@ -61,7 +60,7 @@ const SUMMARY_DEFS: {
 
 async function getMarketSummary(): Promise<SummaryItem[]> {
   return Promise.all(
-    SUMMARY_DEFS.map(async (d): Promise<SummaryItem> => {
+    SUMMARY_DEFS.map(async (d) => {
       try {
         const q = await yahoo.getIndexQuote(d.symbol);
         return {
@@ -72,22 +71,16 @@ async function getMarketSummary(): Promise<SummaryItem[]> {
           spark: q.spark,
           unit: d.unit,
           ok: true,
-          updatedAt: q.updatedAt,
-          freshness: q.freshness,
-          source: q.source,
         };
       } catch {
         return {
           key: d.key,
           label: d.label,
-          price: null,
-          changePercent: null,
+          price: 0,
+          changePercent: 0,
           spark: [],
           unit: d.unit,
           ok: false,
-          updatedAt: null,
-          freshness: { ...quoteTimeEvidence(null).freshness, status: 'PROVIDER_UNAVAILABLE', reason: 'PROVIDER_ERROR' },
-          source: 'yahoo',
         };
       }
     }),
@@ -114,7 +107,6 @@ export interface MarketListingDiagnostics {
   recommendationWork: MarketListingWorkDiagnostics;
   usableQuoteCount: number;
   usableRecommendationCount: number;
-  recommendationStatus?: 'AVAILABLE' | 'MISSING_EVIDENCE';
 }
 
 export interface MarketListings {
@@ -425,7 +417,35 @@ async function toRow(
 
     if (signal?.aborted || !quote) return null;
 
-    return { ...normalizeQuoteRow(entry, quote), exchange: 'exchange' in entry ? String(entry.exchange) : '' };
+    const price = Number(quote.price ?? 0);
+    if (!Number.isFinite(price) || price <= 0) return null;
+
+    const changeAmount = Number(quote.changeAmount ?? 0);
+    const changePercent = Number(quote.changePercent ?? 0);
+    const volume = Number(quote.volume ?? 0);
+    const tradingValue = Number((quote as any).tradingValue ?? price * volume);
+    const assetType = assetTypeOf(entry);
+    const { overall } = computeScores(entry.ticker);
+
+    return {
+      ticker: entry.ticker,
+      name: entry.name,
+      market: entry.market,
+      currency: entry.currency,
+      assetType,
+      price,
+      changeAmount: Number.isFinite(changeAmount) ? changeAmount : 0,
+      changePercent: Number.isFinite(changePercent) ? changePercent : 0,
+      volume: Number.isFinite(volume) ? volume : 0,
+      tradingValue: Number.isFinite(tradingValue) ? tradingValue : 0,
+      high: Number((quote as any).high ?? 0) || undefined,
+      low: Number((quote as any).low ?? 0) || undefined,
+      open: Number((quote as any).open ?? 0) || undefined,
+      previousClose: Number((quote as any).previousClose ?? 0) || undefined,
+      updatedAt: String((quote as any).updatedAt ?? new Date().toISOString()),
+      rating: scoreToRating(overall),
+      exchange: String((entry as any).exchange ?? ''),
+    };
   } catch {
     return null;
   }
@@ -552,20 +572,18 @@ function targetStopRates(rating: Rating, assetType: AssetType) {
 
 function levels(
   price: number,
-  rating: Rating | null,
+  rating: Rating,
   currency: string,
   assetType: AssetType,
   candles: Candle[] = [],
 ) {
-  if (!rating || candles.length < 15) return null;
   const a = atr(candles);
-  if (a == null || !Number.isFinite(a) || a <= 0) return null;
   const sr = supportResistance(candles, price);
   const { maxTargetRate, maxStopRate } = targetStopRates(rating, assetType);
 
-  const atrTake1 = price + a * 1.2;
-  const atrTake2 = price + a * 2.0;
-  const atrStop = price - a * 1.1;
+  const atrTake1 = a ? price + a * 1.2 : price * (1 + maxTargetRate * 0.45);
+  const atrTake2 = a ? price + a * 2.0 : price * (1 + maxTargetRate);
+  const atrStop = a ? price - a * 1.1 : price * (1 - maxStopRate);
 
   const rawTake1 = sr.resistance ?? atrTake1;
   const rawTake2 =
@@ -599,6 +617,7 @@ function riskOf(
 function reasonFor(row: QuoteRow): string {
   if (row.signals?.length) return row.signals.slice(0, 3).join(' · ');
 
+  const label = RATING_LABEL[row.rating.rating];
   const parts: string[] = [];
 
   if (isEtf(row.assetType)) {
@@ -613,9 +632,7 @@ function reasonFor(row: QuoteRow): string {
   else if (row.changePercent < 0) parts.push('약세 흐름');
   else parts.push('보합권');
 
-  parts.push(hasQuoteRating(row)
-    ? `규칙 점수 ${row.rating.score}점 · ${RATING_LABEL[row.rating.rating]}`
-    : '평가 근거 부족');
+  parts.push(`AI ${row.rating.score}점 · ${label}`);
 
   return parts.join(' · ');
 }
@@ -633,7 +650,7 @@ async function enrichRecommended(row: QuoteRow): Promise<QuoteRow> {
 
   const lv = levels(
     row.price,
-    row.rating?.rating ?? null,
+    row.rating.rating,
     row.currency,
     row.assetType,
     candles,
@@ -652,7 +669,7 @@ async function enrichRecommended(row: QuoteRow): Promise<QuoteRow> {
 }
 
 async function getMarketListings(market: MarketKey): Promise<MarketListings> {
-  return cached(`listing:v8:${market}`, TTL.quote, async () => {
+  return cached(`listing:v6:${market}`, TTL.quote, async () => {
     const candidates = await buildCandidates(market);
     const quoteWork = await collectMarketListingWork(
       candidates,
@@ -687,7 +704,6 @@ async function getMarketListings(market: MarketKey): Promise<MarketListings> {
       .map((r) => ({ ...r, reason: reasonFor(r) }));
 
     const topByScore = [...rows]
-      .filter(hasQuoteRating)
       .sort((a, b) => b.rating.score - a.rating.score)
       .slice(0, 12);
 
@@ -725,7 +741,6 @@ async function getMarketListings(market: MarketKey): Promise<MarketListings> {
         recommendationWork: recommendationWork.diagnostics,
         usableQuoteCount: rows.length,
         usableRecommendationCount: recommended.length,
-        recommendationStatus: recommended.length ? 'AVAILABLE' : 'MISSING_EVIDENCE',
       },
     };
   });
@@ -888,13 +903,11 @@ async function undervaluedCard(entry: CatalogEntry): Promise<UndervaluedCard | n
 
   const lv = levels(
     quoteRow.price,
-    quoteRow.rating?.rating ?? null,
+    quoteRow.rating.rating,
     quoteRow.currency,
     quoteRow.assetType,
     candles,
   );
-
-  if (!lv) return null;
 
   return {
     ticker: entry.ticker,
@@ -1015,11 +1028,12 @@ async function getBriefing(): Promise<Briefing> {
     const sp = byKey('sp500');
 
     const changes = [kospi, nasdaq, sp]
-      .filter((s): s is SummaryItem & { ok: true } => !!s && s.ok)
+      .filter((s): s is SummaryItem => !!s && s.ok)
       .map((s) => s.changePercent);
 
-    if (!changes.length) throw new Error('MARKET_BRIEFING_BASELINE_UNAVAILABLE');
-    const avg = changes.reduce((a, b) => a + b, 0) / changes.length;
+    const avg = changes.length
+      ? changes.reduce((a, b) => a + b, 0) / changes.length
+      : 0;
 
     const mood = moodOf(avg);
 
@@ -1072,7 +1086,6 @@ async function getBriefing(): Promise<Briefing> {
     const weakSectors = sectors.filter((s) => s.changePercent < 0).reverse().slice(0, 4);
 
     const picksRows = [...kr.recommended, ...us.recommended]
-      .filter(hasQuoteRating)
       .sort((a, b) => b.rating.score - a.rating.score)
       .slice(0, 4);
 

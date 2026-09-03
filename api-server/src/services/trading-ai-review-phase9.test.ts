@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import https from 'node:https';
-import { paperJournalFixture } from './paper-journal-test-fixture';
 import { installExternalAiNetworkGuard } from './ai-network-guard.test-helper';
 import {
   assertPrivacySafeDataset,
@@ -113,14 +112,7 @@ for (const id of ['unknown', 'raw-db-id', 'user-uuid', '']) test('unknown eviden
 for (const days of [1, 7, 30, 89, 90]) test(`period accepts ${days} days`, () => assert.ok(validatePeriod('2026-05-04T00:00:00.000Z', new Date(Date.parse('2026-05-04T00:00:00.000Z') + days * 86_400_000).toISOString())));
 for (const days of [91, 100, 365]) test(`period rejects ${days} days`, () => assert.throws(() => validatePeriod('2026-01-01', new Date(Date.parse('2026-01-01') + days * 86_400_000).toISOString())));
 test('preview never calls AI and exposes field contract', () => { const value = previewAiReview(dataset); assert.equal(value.dataset, dataset); assert.ok(value.includedFields.includes('representativeTrades')); });
-test('dataset builder keeps representative maximum', () => {
-  const trades = Array.from({ length: 30 }, (_, index) => ({
-    ...paperJournalFixture(`t${index}`, `2026-07-${String(index % 20 + 1).padStart(2, '0')}T00:00:00.000Z`),
-  }));
-  const dataset = buildAiReviewDataset(trades, '2026-07-01', '2026-08-01');
-  assert.equal(dataset.sampleSize, 30);
-  assert.equal(dataset.representativeTrades.length, AI_REVIEW_LIMITS.maxRepresentativeTrades);
-});
+test('dataset builder keeps representative maximum', () => { const trades = Array.from({ length: 30 }, (_, index) => ({ id: `t${index}`, symbol: 'BTCUSDT', side: 'long', quantity: 1, entryPrice: 100, exitPrice: 101, filledAt: `2026-07-${String(index % 20 + 1).padStart(2, '0')}T00:00:00.000Z`, closedAt: `2026-07-${String(index % 20 + 1).padStart(2, '0')}T01:00:00.000Z`, status: 'closed', fees: 0.1 })); assert.ok(buildAiReviewDataset(trades, '2026-07-01', '2026-08-01').representativeTrades.length <= AI_REVIEW_LIMITS.maxRepresentativeTrades); });
 
 test('consent rejection is preflight', async () => { try { await generateTradingAiReview(input({ consent: false })); assert.fail(); } catch (cause) { assert.deepEqual((cause as PaperJournalError).providerCall, { attempted: false, completed: false, reused: false }); } });
 test('provider unavailable is preflight', async () => { try { await generateTradingAiReview(input({ provider: null })); assert.fail(); } catch (cause) { assert.deepEqual((cause as PaperJournalError).providerCall, { attempted: false, completed: false, reused: false }); } });

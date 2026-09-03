@@ -326,10 +326,12 @@ test.describe('production auth session and AI chart route', () => {
   test.beforeAll(async () => {
     const port = await findFreePort();
     isolatedBaseURL = `http://127.0.0.1:${port}`;
+    const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
     isolatedVite = spawn(
-      process.execPath,
+      pnpm,
       [
-        path.join(analyzerDirectory(), 'node_modules/vite/bin/vite.js'),
+        'exec',
+        'vite',
         '--config',
         'vite.config.ts',
         '--host',

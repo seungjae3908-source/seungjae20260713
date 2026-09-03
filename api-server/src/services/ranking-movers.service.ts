@@ -1,5 +1,6 @@
 import { cached, TTL } from '../lib/cache';
-import { hasQuoteRating } from './quote-rating-evidence';
+import { computeScores } from '../sample/scores';
+import { scoreToRating } from '../sample/rating';
 import { classifyAssetType, type AssetType } from '../data/asset-type';
 import { getKiwoomRankings, isKiwoomConfigured, type KiwoomRankingRow } from '../providers/kiwoom';
 import type {
@@ -85,6 +86,12 @@ function num(value: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+function ratingFor(ticker: string) {
+  const { overall } = computeScores(ticker);
+
+  return scoreToRating(overall);
+}
+
 function reasonFor(
   row: QuoteRow,
   kind: 'popular' | 'gainer' | 'loser' | 'reco',
@@ -104,9 +111,7 @@ function reasonFor(
 
   if (kind === 'gainer') return `${move} · 키움/시장 랭킹 기반`;
   if (kind === 'loser') return `${move} · 키움/시장 랭킹 기반`;
-  if (kind === 'reco') return hasQuoteRating(row)
-    ? `${move} · 규칙 점수 ${row.rating.score}점`
-    : `${move} · 평가 근거 부족`;
+  if (kind === 'reco') return `${move} · AI 점수 ${row.rating.score}점`;
 
   return `${move} · 변동성 상위`;
 }
@@ -167,7 +172,6 @@ function buildListings(market: MarketKey, rows: QuoteRow[]): RankingMarketListin
     .slice(0, MAX);
 
   const recommendedBase = [...unique]
-    .filter(hasQuoteRating)
     .sort((a, b) => b.rating.score - a.rating.score)
     .slice(0, MAX);
 
@@ -215,8 +219,7 @@ function naverRowToQuote(row: NaverStockRow, exchange: string): QuoteRow | null 
     changeAmount: 0,
     changePercent,
     updatedAt: new Date().toISOString(),
-    rating: null,
-    ratingStatus: 'MISSING_EVIDENCE',
+    rating: ratingFor(ticker),
     exchange,
     volume,
     tradingValue,
@@ -355,8 +358,7 @@ function yahooRowToQuote(row: YahooQuoteRow): QuoteRow | null {
     changeAmount: 0,
     changePercent,
     updatedAt: new Date().toISOString(),
-    rating: null,
-    ratingStatus: 'MISSING_EVIDENCE',
+    rating: ratingFor(ticker),
     exchange: normalizeYahooExchange(row.exchange),
     volume,
     tradingValue,
@@ -498,8 +500,7 @@ function kiwoomRowsToQuotes(rows: KiwoomRankingRow[]): QuoteRow[] {
       volume: Number(row.volume ?? 0),
       tradingValue: Number(row.tradingValue ?? 0),
       updatedAt: new Date().toISOString(),
-      rating: null,
-      ratingStatus: 'MISSING_EVIDENCE',
+      rating: ratingFor(row.ticker),
       reason: row.reason,
       rank: row.rank,
     }));

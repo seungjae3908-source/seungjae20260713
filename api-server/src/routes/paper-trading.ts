@@ -17,7 +17,6 @@ const MAX_REQUEST_BYTES = 128 * 1024;
 type PaperTradingDependencies = {
   evaluate: typeof applyPaperTradingAction;
   publishState: typeof publishAuthenticatedPaperTradingState;
-  clock: () => Date;
 };
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -58,10 +57,8 @@ export function createPaperTradingRouter(
   const router: IRouter = Router();
   const evaluate = dependencies.evaluate ?? applyPaperTradingAction;
   const publishState = dependencies.publishState ?? publishAuthenticatedPaperTradingState;
-  const clock = dependencies.clock ?? (() => new Date());
 
   router.post('/paper-trading/evaluate', async (req: AuthenticatedRequest, res) => {
-    res.setHeader('Cache-Control', 'private, no-store');
     const declaredLength = Number(req.header('content-length') ?? 0);
     if (Number.isFinite(declaredLength) && declaredLength > MAX_REQUEST_BYTES) {
       return res.status(413).json(safeEnvelope({
@@ -93,12 +90,11 @@ export function createPaperTradingRouter(
       }));
     }
 
-    const serverNow = clock();
     const nowValue = req.body.now;
     const now = typeof nowValue === 'string' || typeof nowValue === 'number'
       ? new Date(nowValue)
-      : serverNow;
-    if (!Number.isFinite(serverNow.getTime()) || !Number.isFinite(now.getTime()) || now.getTime() > serverNow.getTime()) {
+      : new Date();
+    if (!Number.isFinite(now.getTime())) {
       return res.status(400).json(safeEnvelope({
         ok: false,
         code: 'INVALID_TIMESTAMP',
@@ -118,14 +114,12 @@ export function createPaperTradingRouter(
           state: result.state,
           authenticatedPublisherAccountId: req.member?.id ?? '',
           sourceSha: String(process.env.DEPLOY_SHA ?? '').trim().toLowerCase(),
-          // A caller's historical simulation clock cannot create a future or renewed immutable observation.
-          observedAtMs: serverNow.getTime(),
+          observedAtMs: now.getTime(),
         });
       } catch {
         paperStateTransport = blockedTransport('PAPER_STATE_PUBLISHER_UNAVAILABLE');
       }
-      return res.json(safeEnvelope({ ok: true, result, paperStateTransport,
-        observedAt: serverNow.toISOString(), calculationClockSource: nowValue == null ? 'SERVER' : 'CLIENT_SIMULATION' }));
+      return res.json(safeEnvelope({ ok: true, result, paperStateTransport }));
     } catch (error) {
       if (error instanceof PaperTradingError) {
         return res.status(error.statusCode).json(safeEnvelope({

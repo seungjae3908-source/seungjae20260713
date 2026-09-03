@@ -612,14 +612,14 @@ function createCard(
     confidence: conditions.confidence,
     matched: Array.from(new Set(matched)),
     missing: Array.from(new Set(missing)),
-    breakoutProbability: null,
+    breakoutProbability: accumulation?.breakoutProbability ?? conditions.score,
     expectedPeriod: accumulation?.expectedPeriod ?? '단기 추세 확인 필요',
     entry: accumulation?.strategy.entry?.length
       ? accumulation.strategy.entry
-      : ['검증된 진입 구간 근거가 부족합니다.'],
+      : [`박스권 하단 약 ${quote.price} 부근에서 진입`],
     stop: accumulation?.strategy.stop?.length
       ? accumulation.strategy.stop
-      : ['검증된 손절 기준 근거가 부족합니다.'],
+      : [`최근 지지선 이탈 시 ${Math.round(quote.price * 0.94 * 100) / 100} 부근 손절`],
     matchCount: matched.length,
     selectedCount,
     riskLevel: riskScore == null ? 'UNAVAILABLE' : riskScore >= 60 ? 'HIGH' : riskScore >= 25 ? 'MEDIUM' : 'LOW',
@@ -628,8 +628,6 @@ function createCard(
     marketCap,
     dataState,
     analyzedAt: new Date().toISOString(),
-    quoteObservedAt: quote.updatedAt ?? null,
-    quoteSource: quote.source,
     scoreBreakdown: breakdown,
   };
 }

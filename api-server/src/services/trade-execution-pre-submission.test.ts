@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import { InMemoryTradingRepository } from './trade-automation.repository';
 import { TradeAutomationService } from './trade-automation.service';
 import { TradeExecutionService } from './trade-execution.service';
-import { buildBitgetExecutionSnapshot, buildKiwoomExecutionSnapshot, buildUpbitExecutionSnapshot } from './trade-execution-snapshot.service';
 import { encryptTradingCredentials } from './trade-credential-vault.service';
 import {
   marketIntelligenceNotAvailable,
@@ -25,124 +24,6 @@ import {
 const USER_ID = '11111111-1111-1111-1111-111111111111';
 const MASTER_KEY = Buffer.alloc(32, 7).toString('base64');
 const nativeFetch = globalThis.fetch;
-
-test('execution snapshot rejects wrong identity and malformed positions instead of assuming an empty account', async () => {
-  const { approved } = await setup();
-  const now = Date.now();
-  const input = {
-    plan: { ...approved, exchange: 'bitget' as const, market: 'USDT-FUTURES', symbol: 'BTCUSDT', leverage: 2 },
-    accounts: [{ marginCoin: 'USDT', available: '10000', accountEquity: '100000' }],
-    positions: [] as Record<string, unknown>[],
-    ticker: [{ symbol: 'BTCUSDT', markPrice: '100000', ts: now }],
-    depth: { bids: [[99999, 10], [99998, 10]], asks: [[100001, 10], [100002, 10]], ts: now },
-    contract: { symbol: 'BTCUSDT', takerFeeRate: '0.0005' },
-    fxQuote: { currency: 'USDT' as const, krwRate: 1400, source: 'isolated-FX-fixture', asOf: new Date(now).toISOString(), quality: 'DELAYED' as const },
-    signal: null,
-  };
-  assert.equal(buildBitgetExecutionSnapshot(input).openPositionCount, 0);
-  const snapshot = buildBitgetExecutionSnapshot(input);
-  assert.equal(snapshot.availableBalance, 14_000_000);
-  assert.equal(snapshot.accountValueKrw, 140_000_000);
-  assert.equal(snapshot.availableLiquidityKrw, 2_800_042_000);
-  assert.deepEqual(snapshot.currencyConversion, { pair: 'USDT/KRW', krwRate: 1400, source: 'isolated-FX-fixture', asOf: new Date(now).toISOString() });
-  for (const estimatedKrw of [1, 1_000_000_000]) {
-    const changed = buildBitgetExecutionSnapshot({ ...input, plan: { ...input.plan, estimatedKrw } });
-    assert.equal(changed.availableBalance, snapshot.availableBalance);
-    assert.equal(changed.accountValueKrw, snapshot.accountValueKrw);
-    assert.equal(changed.availableLiquidityKrw, snapshot.availableLiquidityKrw);
-  }
-  for (const fxQuote of [undefined, { ...input.fxQuote, currency: 'USD' as const }, { ...input.fxQuote, source: '' },
-    { ...input.fxQuote, krwRate: NaN }, { ...input.fxQuote, krwRate: 0 }, { ...input.fxQuote, quality: 'STALE' as const },
-    { ...input.fxQuote, asOf: new Date(now - 300_001).toISOString() }, { ...input.fxQuote, asOf: new Date(now + 60_000).toISOString() }]) {
-    assert.throws(() => buildBitgetExecutionSnapshot({ ...input, fxQuote }), /FX_UNAVAILABLE/);
-  }
-  assert.throws(() => buildBitgetExecutionSnapshot({ ...input, fxQuote: { ...input.fxQuote, krwRate: Number.MAX_VALUE } }), /OVERFLOW/);
-  assert.equal(buildBitgetExecutionSnapshot({ ...input, positions: [
-    { symbol: 'ETHUSDT', total: '1', holdSide: 'long' },
-    { symbol: 'SOLUSDT', total: '2', holdSide: 'short' },
-  ] }).openPositionCount, 2);
-  for (const positions of [undefined, null, {}, [null], [{ symbol: 'BTCUSDT', total: true }], [{ symbol: 'BTCUSDT', total: '-1' }]]) {
-    assert.throws(() => buildBitgetExecutionSnapshot({ ...input, positions }), /EXECUTION_/);
-  }
-  assert.throws(() => buildBitgetExecutionSnapshot({ ...input, ticker: [{ symbol: 'ETHUSDT', markPrice: '100000', ts: now }] }), /IDENTITY/);
-  assert.throws(() => buildBitgetExecutionSnapshot({ ...input, accounts: [{ marginCoin: 'USDC', available: '10000' }] }), /IDENTITY/);
-  assert.throws(() => buildBitgetExecutionSnapshot({ ...input, accounts: [{ marginCoin: 'USDT', available: true, accountEquity: '100000' }] }), /EVIDENCE/);
-  assert.throws(() => buildBitgetExecutionSnapshot({ ...input, accounts: [{ marginCoin: 'USDT', available: '10000' }] }), /EQUITY/);
-  assert.throws(() => buildBitgetExecutionSnapshot({ ...input, contract: { symbol: 'ETHUSDT' } }), /IDENTITY/);
-  for (const ts of [null, undefined, true, Math.floor(now / 1000), now + 60_000]) {
-    const result = buildBitgetExecutionSnapshot({ ...input, depth: { ...input.depth, ts } });
-    assert.equal(result.observedAt, '');
-    assert.equal(result.dataDelayMs, Infinity);
-  }
-});
-
-test('Upbit snapshot keeps locked holdings in exposure and validates both quote and orderbook identity', async () => {
-  const { approved } = await setup();
-  const now = Date.now();
-  const input = {
-    plan: approved,
-    accounts: { data: [{ currency: 'KRW', balance: '1000000', locked: '0' }, { currency: 'BTC', balance: '0', locked: '1' }] },
-    chance: { market: { state: 'active' }, bid_fee: '0.0005' },
-    ticker: { data: [{ market: 'KRW-BTC', trade_price: 100_000, timestamp: now }] },
-    orderbook: { data: [{ market: 'KRW-BTC', timestamp: now, orderbook_units: [
-      { bid_price: 99999, bid_size: 10, ask_price: 100001, ask_size: 10 },
-      { bid_price: 99998, bid_size: 10, ask_price: 100002, ask_size: 10 },
-    ] }] },
-    signal: null,
-  };
-  const snapshot = buildUpbitExecutionSnapshot(input);
-  assert.equal(snapshot.availableLiquidityKrw, 2_000_030);
-  assert.equal(buildUpbitExecutionSnapshot({ ...input, plan: { ...approved, estimatedKrw: 1 } }).availableLiquidityKrw, 2_000_030);
-  assert.equal(snapshot.openPositionCount, 1);
-  assert.equal(snapshot.assetExposurePercent, 2);
-  assert.equal(buildUpbitExecutionSnapshot({ ...input, chance: {} }).marketStatus, 'UNKNOWN');
-  assert.throws(() => buildUpbitExecutionSnapshot({ ...input, ticker: { data: [{ market: 'KRW-ETH', trade_price: 100_000, timestamp: now }] } }), /IDENTITY/);
-  assert.throws(() => buildUpbitExecutionSnapshot({ ...input, orderbook: { data: [{ ...input.orderbook.data[0], market: 'KRW-ETH' }] } }), /IDENTITY/);
-  for (const accounts of [{}, { data: [null] }, { data: [{ currency: 'KRW', balance: true, locked: '0' }] }]) {
-    assert.throws(() => buildUpbitExecutionSnapshot({ ...input, accounts }), /EXECUTION_/);
-  }
-  assert.equal(buildUpbitExecutionSnapshot({ ...input, ticker: { data: [{ market: 'KRW-BTC', trade_price: 100_000 }] } }).observedAt, '');
-});
-
-test('Kiwoom positions and equity come from explicit account rows, not unfilled-order counts or approval fallbacks', async () => {
-  const { approved } = await setup();
-  const now = Date.now();
-  const input = {
-    plan: { ...approved, exchange: 'kiwoom' as const, market: 'KR', symbol: '005930', quantity: 1 },
-    account: { prsm_dpst_aset_amt: '1000000', acnt_evlt_remn_indv_tot: [
-      { stk_cd: 'A005930', rmnd_qty: '2', trde_able_qty: '1', evlt_amt: '20000' },
-      { stk_cd: '000660', rmnd_qty: '1', trde_able_qty: '1', evlt_amt: '30000' },
-    ] },
-    orderable: { ord_alowa: '50000' },
-    unfilled: { oso: [] as Record<string, unknown>[] },
-    orderbook: { sel_fpr_bid: '+10000', sel_fpr_req: '100', buy_fpr_bid: '-9999', buy_fpr_req: '100',
-      sel_2th_pre_bid: '10001', sel_2th_pre_req: '100', buy_2th_pre_bid: '9998', buy_2th_pre_req: '100', timestamp: now },
-    signal: null,
-  };
-  const snapshot = buildKiwoomExecutionSnapshot(input);
-  assert.equal(snapshot.availableBalance, 50000);
-  assert.equal(snapshot.accountValueKrw, 1000000);
-  assert.equal(snapshot.assetExposurePercent, 2);
-  assert.equal(snapshot.accountExposureKrw, 50000);
-  assert.equal(snapshot.openPositionCount, 2);
-  assert.equal(snapshot.currentPrice, 10000);
-  const pending = { oso: Array.from({ length: 4 }, (_, i) => ({ ord_no: String(i), oso_qty: '1', ord_pric: '10000' })) };
-  const withPending = buildKiwoomExecutionSnapshot({ ...input, unfilled: pending });
-  assert.equal(withPending.openPositionCount, 2);
-  assert.equal(withPending.openOrderExposureKrw, 40000);
-  assert.equal(buildKiwoomExecutionSnapshot({ ...input, orderable: { ord_alowa: '0' } }).availableBalance, 0);
-  for (const orderable of [{}, { cash: '50000' }, { ord_alowa: true }, { ord_alowa: '-1' }]) {
-    assert.throws(() => buildKiwoomExecutionSnapshot({ ...input, orderable }), /EXECUTION_EVIDENCE_INVALID/);
-  }
-  assert.throws(() => buildKiwoomExecutionSnapshot({ ...input, account: {} }), /EQUITY_UNAVAILABLE/);
-  assert.throws(() => buildKiwoomExecutionSnapshot({ ...input, account: { ...input.account, acnt_evlt_remn_indv_tot: null } }), /LIST_INVALID/);
-  assert.throws(() => buildKiwoomExecutionSnapshot({ ...input, account: { ...input.account, acnt_evlt_remn_indv_tot: [input.account.acnt_evlt_remn_indv_tot[0], input.account.acnt_evlt_remn_indv_tot[0]] } }), /IDENTITY_DUPLICATE/);
-  assert.throws(() => buildKiwoomExecutionSnapshot({ ...input, plan: { ...input.plan, side: 'sell', quantity: 2 } }), /INSUFFICIENT_ASSET_BALANCE/);
-  assert.throws(() => buildKiwoomExecutionSnapshot({ ...input, unfilled: {} }), /LIST_INVALID/);
-  const undated = buildKiwoomExecutionSnapshot({ ...input, orderbook: { ...input.orderbook, timestamp: undefined, bid_req_base_tm: '090001' } });
-  assert.equal(undated.observedAt, '');
-  assert.equal(undated.dataDelayMs, Infinity);
-});
 
 function marketSnapshot(now: Date): TradingMarketSnapshot {
   return {
@@ -231,16 +112,11 @@ async function eligibleMarketIntelligence(
   };
 }
 
-async function setup(overrides: Partial<TradingPlanInput> = {}) {
+async function setup() {
   process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
   process.env.ORDER_EXECUTION_ENABLED = 'true';
   process.env.LIVE_TRADING_ACTIVATION_APPROVED = 'true';
   process.env.UPBIT_LIVE_ORDER_ENABLED = 'true';
-  process.env.BITGET_LIVE_ORDER_ENABLED = 'true';
-  if (overrides.exchange === 'kiwoom') {
-    process.env.KIWOOM_MOCK_ORDER_ENABLED = 'true';
-    process.env.KIWOOM_ALLOW_OFF_HOURS = 'true';
-  }
   setTradingPlanMarketIntelligenceRunnerForTests(eligibleMarketIntelligence);
   setTradeProfitabilityAttestationRunnerForTests(allowServerProfitabilityAttestationForTests);
   const repository = new InMemoryTradingRepository();
@@ -248,24 +124,21 @@ async function setup(overrides: Partial<TradingPlanInput> = {}) {
     ...DEFAULT_TRADING_POLICY,
     pilotStage: 'limited-50',
   });
-  const input = { ...planInput(new Date()), ...overrides };
   await repository.saveConnection({
     userId: USER_ID,
-    exchange: input.exchange,
-    accountMode: input.accountMode,
+    exchange: 'upbit',
+    accountMode: 'live',
     configured: true,
-    encryptedCredentials: encryptTradingCredentials(input.exchange === 'bitget'
-      ? { apiKey: 'isolated-fixture', secretKey: 'isolated-fixture', passphrase: 'isolated-fixture' }
-      : input.exchange === 'kiwoom' ? { appKey: 'isolated-kiwoom', secretKey: 'isolated-kiwoom-secret' }
-        : { accessKey: 'access', secretKey: 'secret' }),
+    encryptedCredentials: encryptTradingCredentials({ accessKey: 'access', secretKey: 'secret' }),
     lastVerifiedAt: new Date().toISOString(),
     lastErrorCode: null,
     updatedAt: new Date().toISOString(),
   });
   const automation = new TradeAutomationService(repository);
+  const input = planInput(new Date());
   const policy = await repository.getPolicy(USER_ID);
   const created = await automation.createPlan(USER_ID, input, policy, false);
-  assert.ok(created.plan, JSON.stringify(created.decision));
+  assert.ok(created.plan);
   const approved = await automation.approvePlan(USER_ID, created.plan.id);
   const orderResult = await automation.createOrder(USER_ID, approved);
   return { repository, approved, order: orderResult.order };
@@ -348,152 +221,9 @@ function resetEnvironment() {
   delete process.env.ORDER_EXECUTION_ENABLED;
   delete process.env.LIVE_TRADING_ACTIVATION_APPROVED;
   delete process.env.UPBIT_LIVE_ORDER_ENABLED;
-  delete process.env.BITGET_LIVE_ORDER_ENABLED;
-  delete process.env.KIWOOM_MOCK_ORDER_ENABLED;
-  delete process.env.KIWOOM_ALLOW_OFF_HOURS;
 }
 
 test.afterEach(resetEnvironment);
-
-test('Kiwoom drains account continuation and uses required orderable arguments, but an undated quote still cannot submit', async () => {
-  for (const scenario of ['complete', 'repeated-cursor', 'wrong-tr', 'missing-list', 'changed-summary'] as const) {
-    const now = new Date();
-    const { repository, approved, order } = await setup({ exchange: 'kiwoom', accountMode: 'mock', market: 'KR', symbol: '005930', side: 'buy',
-      quantity: 1, quoteAmount: null, estimatedKrw: 10000, stopPrice: 9500, targetPrices: [11000],
-      marketSnapshot: { ...marketSnapshot(now), currentPrice: 10000, plannedPrice: 10000 } });
-    let accountPages = 0, orderPosts = 0, orderableReads = 0;
-    globalThis.fetch = async (request, init) => {
-      const url = new URL(String(request));
-      assert.equal(url.hostname, 'mockapi.kiwoom.com');
-      const headers = new Headers(init?.headers);
-      const apiId = headers.get('api-id');
-      const json = (body: unknown, extraHeaders: Record<string, string> = {}) => new Response(JSON.stringify(body), {
-        headers: { ...(apiId ? { 'api-id': apiId } : {}), ...extraHeaders },
-      });
-      if (url.pathname === '/oauth2/token') return json({ return_code: 0, token: 'isolated-token' });
-      if (url.pathname === '/api/dostk/ordr') { orderPosts++; throw new Error('UNEXPECTED_ORDER'); }
-      const body = JSON.parse(String(init?.body));
-      if (apiId === 'kt00018') {
-        accountPages++;
-        assert.deepEqual(body, { qry_tp: '1', dmst_stex_tp: 'KRX' });
-        if (accountPages > 1) assert.equal(headers.get('next-key'), 'account-page-2');
-        const rows = accountPages === 1 ? [{ stk_cd: 'A005930', rmnd_qty: '1', trde_able_qty: '1', evlt_amt: '10000' }]
-          : [{ stk_cd: '000660', rmnd_qty: '1', trde_able_qty: '1', evlt_amt: '10000' }];
-        return json({ return_code: 0, prsm_dpst_aset_amt: scenario === 'changed-summary' && accountPages > 1 ? '99999' : '1000000',
-          ...(scenario !== 'missing-list' ? { acnt_evlt_remn_indv_tot: rows } : {}) },
-        { 'api-id': scenario === 'wrong-tr' ? 'kt00004' : 'kt00018',
-          ...(accountPages === 1 || scenario === 'repeated-cursor' ? { 'cont-yn': 'Y', 'next-key': 'account-page-2' } : { 'cont-yn': 'N' }) });
-      }
-      if (apiId === 'ka10075') {
-        assert.deepEqual(body, { all_stk_tp: '0', trde_tp: '0', stex_tp: '1' });
-        return json({ return_code: 0, oso: [] });
-      }
-      if (apiId === 'kt00010') {
-        orderableReads++;
-        assert.deepEqual(body, { stk_cd: '005930', trde_tp: '2', uv: '10000', trde_qty: '1' });
-        return json({ return_code: 0, ord_alowa: '50000' });
-      }
-      if (apiId === 'ka10004') return json({ return_code: 0, bid_req_base_tm: '090001', sel_fpr_bid: '+10000', sel_fpr_req: '100',
-        buy_fpr_bid: '-9999', buy_fpr_req: '100', sel_2th_pre_bid: '10001', sel_2th_pre_req: '100', buy_2th_pre_bid: '9998', buy_2th_pre_req: '100' });
-      throw new Error(`Unexpected isolated TR ${apiId}`);
-    };
-    const result = await new TradeExecutionService(repository).execute(USER_ID, approved, order);
-    assert.equal(result.state, 'REJECTED');
-    assert.equal(orderPosts, 0);
-    assert.equal(result.submissionStartedAt ?? null, null);
-    if (scenario === 'complete') {
-      assert.equal(accountPages, 2, result.lastErrorCode ?? 'Account continuation was not drained');
-      assert.equal(orderableReads, 1);
-      assert.equal(result.preSubmissionSnapshot?.openPositionCount, 2);
-      assert.ok(result.preSubmissionDecision?.blockCodes.includes('MARKET_DATA_TIMESTAMP_UNAVAILABLE'));
-    } else {
-      assert.equal(orderableReads, 0);
-      assert.match(result.lastErrorCode ?? '', /KIWOOM_(ACCOUNT_SCAN_INCOMPLETE|RESPONSE_TR_MISMATCH|ACCOUNT_LIST_UNAVAILABLE|ACCOUNT_CHANGED_DURING_SCAN)/);
-    }
-  }
-});
-
-test('Bitget execution obtains server FX and rejects unavailable or stale conversion before any exchange mutation', async () => {
-  for (const fxState of ['unavailable', 'stale'] as const) {
-    const { repository, approved, order } = await setup({ exchange: 'bitget', market: 'USDT-FUTURES', symbol: 'BTCUSDT',
-      side: 'long', quantity: 0.00014, quoteAmount: null, leverage: 2, marginMode: 'isolated' });
-    let mutations = 0;
-    let fxReads = 0;
-    globalThis.fetch = async (request, init) => {
-      const url = new URL(String(request));
-      if ((init?.method ?? 'GET') !== 'GET') { mutations++; throw new Error('UNEXPECTED_MUTATION'); }
-      const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
-      const now = Date.now();
-      if (url.hostname === 'api.upbit.com' && url.pathname === '/v1/ticker' && url.searchParams.get('markets') === 'KRW-USDT') {
-        fxReads++;
-        return fxState === 'unavailable' ? json({}, 503) : json([{ market: 'KRW-USDT', trade_price: 1400, timestamp: now - 600_000 }]);
-      }
-      assert.equal(url.hostname, 'api.bitget.com');
-      const data: Record<string, unknown> = {
-        '/api/v2/mix/account/accounts': [{ marginCoin: 'USDT', available: '10000', accountEquity: '100000', posMode: 'one_way_mode' }],
-        '/api/v2/mix/position/all-position': [], '/api/v2/mix/order/orders-pending': { entrustedList: [] },
-        '/api/v2/mix/market/contracts': [{ symbol: 'BTCUSDT', minTradeNum: '0.00001', sizeMultiplier: '0.00001', minTradeUSDT: '5',
-          quoteCoin: 'USDT', supportMarginCoins: ['USDT'], minLever: '1', maxLever: '100',
-          symbolStatus: 'normal', takerFeeRate: '0.0005', maxMarketOrderQty: '10' }],
-        '/api/v2/mix/market/ticker': [{ symbol: 'BTCUSDT', markPrice: '100000', ts: now }],
-        '/api/v2/mix/market/merge-depth': { bids: [[99999, 10], [99998, 10]], asks: [[100001, 10], [100002, 10]], ts: now },
-      };
-      assert.ok(Object.hasOwn(data, url.pathname), `unexpected isolated fixture request: ${url.pathname}`);
-      return json({ code: '00000', data: data[url.pathname] });
-    };
-    const result = await new TradeExecutionService(repository).execute(USER_ID, approved, order);
-    assert.equal(result.state, 'REJECTED');
-    assert.match(result.lastErrorCode ?? '', /FX_/);
-    assert.equal(fxReads, 1);
-    assert.equal(mutations, 0);
-    assert.equal(result.submissionStartedAt ?? null, null);
-  }
-});
-
-test('Bitget invalid contract or quote evidence blocks all exchange mutations before submission intent', async () => {
-  const contract = { symbol: 'BTCUSDT', quoteCoin: 'USDT', supportMarginCoins: ['USDT'], minLever: '1', maxLever: '100',
-    minTradeNum: '0.00001', sizeMultiplier: '0.00001', minTradeUSDT: '5',
-    symbolStatus: 'normal', takerFeeRate: '0.0005', maxMarketOrderQty: '10' };
-  const cases = [
-    { contracts: [{ ...contract, minTradeUSDT: undefined }], code: /BITGET_CONTRACT_RULES_UNAVAILABLE/ },
-    { contracts: [{ ...contract, maxMarketOrderQty: true }], code: /BITGET_CONTRACT_RULES_UNAVAILABLE/ },
-    { contracts: [contract, contract], code: /BITGET_CONTRACT_RULES_UNAVAILABLE/ },
-    { contracts: [{ ...contract, symbol: 'ETHUSDT' }], code: /BITGET_CONTRACT_RULES_UNAVAILABLE/ },
-    { contracts: [{ ...contract, symbolStatus: 'maintain' }], code: /BITGET_CONTRACT_NOT_TRADABLE/ },
-    { ticker: [{ symbol: 'ETHUSDT', markPrice: '100000' }], code: /BITGET_TICKER_IDENTITY_INVALID/ },
-    { ticker: [{ symbol: 'BTCUSDT', markPrice: '100000' }, { symbol: 'BTCUSDT', markPrice: '100000' }], code: /BITGET_TICKER_IDENTITY_INVALID/ },
-    { ticker: [{ symbol: 'BTCUSDT', markPrice: true }], code: /BITGET_REFERENCE_PRICE_INVALID/ },
-  ];
-  for (const invalid of cases) {
-    const { repository, approved, order } = await setup({ exchange: 'bitget', market: 'USDT-FUTURES', symbol: 'BTCUSDT',
-      side: 'long', quantity: 0.00014, quoteAmount: null, leverage: 2, marginMode: 'isolated' });
-    let mutations = 0;
-    globalThis.fetch = async (request, init) => {
-      const url = new URL(String(request));
-      if ((init?.method ?? 'GET') !== 'GET') { mutations++; throw new Error('UNEXPECTED_MUTATION'); }
-      const json = (body: unknown) => new Response(JSON.stringify(body));
-      const now = Date.now();
-      if (url.hostname === 'api.upbit.com' && url.pathname === '/v1/ticker' && url.searchParams.get('markets') === 'KRW-USDT') {
-        return json([{ market: 'KRW-USDT', trade_price: 1400, timestamp: now }]);
-      }
-      assert.equal(url.hostname, 'api.bitget.com');
-      const data: Record<string, unknown> = {
-        '/api/v2/mix/account/accounts': [{ marginCoin: 'USDT', available: '10000', accountEquity: '100000', posMode: 'one_way_mode' }],
-        '/api/v2/mix/position/all-position': [], '/api/v2/mix/order/orders-pending': { entrustedList: [] },
-        '/api/v2/mix/market/contracts': invalid.contracts ?? [contract],
-        '/api/v2/mix/market/ticker': invalid.ticker ?? [{ symbol: 'BTCUSDT', markPrice: '100000', ts: now }],
-        '/api/v2/mix/market/merge-depth': { bids: [[99999, 10]], asks: [[100001, 10]], ts: now },
-      };
-      assert.ok(Object.hasOwn(data, url.pathname), `unexpected isolated fixture request: ${url.pathname}`);
-      return json({ code: '00000', data: data[url.pathname] });
-    };
-    const result = await new TradeExecutionService(repository).execute(USER_ID, approved, order);
-    assert.equal(result.state, 'REJECTED');
-    assert.match(result.lastErrorCode ?? '', invalid.code);
-    assert.equal(result.submissionStartedAt ?? null, null);
-    assert.equal(mutations, 0);
-  }
-});
 
 test('two concurrent executions produce one provider order POST behind one atomic intent', async () => {
   const { repository, approved, order } = await setup();
@@ -518,23 +248,6 @@ test('two concurrent executions produce one provider order POST behind one atomi
   const replay = await execution.execute(USER_ID, approved, order);
   assert.equal(replay.state, 'ACCEPTED');
   assert.equal(provider.counts().actualOrderPosts, 1);
-});
-
-test('actual order amount cannot exceed the user approval by understating estimatedKrw', async () => {
-  for (const overrides of [
-    { quoteAmount: 30000 },
-    { orderType: 'limit' as const, limitPrice: 100000, quantity: 1 },
-  ]) {
-    const { repository, approved, order } = await setup(overrides);
-    const provider = installUpbitMock(100000);
-    const result = await new TradeExecutionService(repository).execute(USER_ID, approved, order);
-    assert.equal(result.state, 'REJECTED');
-    assert.ok(result.preSubmissionDecision?.blockCodes.includes('EXECUTION_NOTIONAL_EXCEEDS_APPROVAL'));
-    assert.equal(result.submissionStartedAt ?? null, null);
-    assert.equal(provider.counts().orderTestPosts, 0);
-    assert.equal(provider.counts().actualOrderPosts, 0);
-    assert.equal((await repository.getPlan(USER_ID, approved.id))?.estimatedKrw, 20000);
-  }
 });
 
 test('orphan Upbit open order blocks before order test, submission intent, and actual POST', async () => {

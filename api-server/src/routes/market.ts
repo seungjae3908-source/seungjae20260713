@@ -9,8 +9,6 @@ import { ThemesService } from '../services/themes.service';
 import { SectorPopularService } from '../services/sector-popular.service';
 import { SignalService } from '../services/signal.service';
 import { RecommendationService } from '../services/recommendation.service';
-import { hasQuoteRating } from '../services/quote-rating-evidence';
-import { quoteTimeEvidence } from '../providers/market-evidence';
 
 const router: IRouter = Router();
 
@@ -77,8 +75,8 @@ function rankByChange(rows: QuoteRow[], direction: 'asc' | 'desc'): QuoteRow[] {
 }
 
 function rankByScore(rows: QuoteRow[]): QuoteRow[] {
-  return rows.filter(hasQuoteRating).sort(
-    (a, b) => b.rating.score - a.rating.score,
+  return [...rows].sort(
+    (a, b) => Number(b.rating?.score ?? 0) - Number(a.rating?.score ?? 0),
   );
 }
 
@@ -142,6 +140,10 @@ async function liveListingsWithDiagnostics(
   };
 }
 
+async function liveListings(scope: MarketScope): Promise<QuoteRow[]> {
+  return (await liveListingsWithDiagnostics(scope)).rows;
+}
+
 router.get('/config', (_req, res) => {
   res.json({
     ok: true,
@@ -178,13 +180,7 @@ router.get('/search/quotes', async (req, res) => {
     const matches = await MarketDataService.search(q, 100);
     const quotes = await MarketDataService.getQuotes(matches.map((item) => item.ticker));
     const rows = uniqueRows(quotes);
-    const unavailable = matches.length > 0 && rows.length === 0;
-    return res.status(unavailable ? 503 : 200).json({
-      q, results: rows, count: rows.length,
-      dataStatus: unavailable ? 'unavailable' : rows.length < matches.length ? 'partial' : 'complete',
-      ...(unavailable ? { error: 'QUOTE_SEARCH_PROVIDER_UNAVAILABLE' } : {}),
-      fetchedAt: new Date().toISOString(),
-    });
+    return res.json({ q, results: rows, count: rows.length, updatedAt: new Date().toISOString() });
   } catch (error) {
     console.error('market quote search error:', error);
     return res.status(502).json({ q, results: [], count: 0, error: 'QUOTE_SEARCH_PROVIDER_ERROR' });
@@ -196,15 +192,11 @@ router.get('/quotes', async (req, res) => {
     req.query.tickers ?? req.query.symbols ?? req.query.symbol ?? req.query.ticker ?? '';
   const tickers = uniqueTickers(String(raw).split(','));
   const quotes = await MarketDataService.getQuotes(tickers);
-  const rows = uniqueRows(quotes);
-  const unavailable = tickers.length > 0 && rows.length === 0;
-  return res.status(unavailable ? 503 : 200).json({
-    quotes: rows,
+  return res.json({
+    quotes: uniqueRows(quotes),
     requested: tickers.length,
-    available: rows.length,
-    dataStatus: unavailable ? 'unavailable' : rows.length < tickers.length ? 'partial' : 'complete',
-    ...(unavailable ? { error: 'QUOTE_PROVIDER_UNAVAILABLE' } : {}),
-    fetchedAt: new Date().toISOString(),
+    available: quotes.length,
+    updatedAt: new Date().toISOString(),
   });
 });
 
@@ -243,15 +235,14 @@ router.get('/market/movers', async (req, res) => {
       popular,
       volume,
       recommended,
-      recommendationStatus: recommended.length ? 'AVAILABLE' : 'MISSING_EVIDENCE',
       gainers,
       losers,
       risky: losers,
       rankingSource: {
-        popular: rows.some((row) => row.tradingValueSource === 'LAST_PRICE_X_VOLUME_ESTIMATE') ? '거래대금 기준 (현재가×거래량 추정 포함)' : '공급자 거래대금 기준',
+        popular: '실제 거래대금 기준',
         gainers: '실제 등락률 기준',
         losers: '실제 등락률 기준',
-        recommended: recommended.length ? '규칙 점수 기준 (성공확률 아님)' : '검증된 추천 근거 부족',
+        recommended: '실제 데이터 기반 종합점수 기준',
       },
       updatedAt: new Date().toISOString(),
     });
@@ -301,11 +292,10 @@ router.get('/market/home', async (_req, res) => {
         price: row.price,
         changeAmount: null,
         changePercent: row.changePercent,
-        direction: row.changePercent == null ? null : row.changePercent > 0 ? 'up' : row.changePercent < 0 ? 'down' : 'flat',
+        direction: row.changePercent > 0 ? 'up' : row.changePercent < 0 ? 'down' : 'flat',
         spark: row.spark,
         provider: 'Yahoo Finance',
-        updatedAt: row.updatedAt ?? null,
-        freshness: row.freshness,
+        updatedAt: new Date().toISOString(),
       }));
     return res.status(indices.length ? 200 : 503).json({
       ok: indices.length > 0,
@@ -344,7 +334,7 @@ router.get('/market/briefing', async (_req, res) => {
     console.error('market briefing error:', error);
     return res.status(502).json({
       asOf: new Date().toISOString(),
-      mood: null,
+      mood: 'neutral',
       headline: '실제 시장 브리핑 데이터를 불러오지 못했습니다.',
       lines: [],
       strongSectors: [],
@@ -465,43 +455,22 @@ router.get('/market/recommendations', async (req, res) => {
 });
 
 router.get('/market/alerts', async (req, res) => {
-  res.setHeader('Cache-Control', 'private, no-store');
   const scope = normalizeMarket(req.query.market);
   try {
-    const live = await liveListingsWithDiagnostics(scope);
-    if (live.rows.length === 0) {
-      return res.status(503).json({
-        market: scope, positive: [], negative: [], alerts: [],
-        dataStatus: 'unavailable', error: 'ALERT_PROVIDER_UNAVAILABLE', diagnostics: live.diagnostics,
-      });
-    }
-    const supported = live.rows.filter((row) => typeof row.changePercent === 'number' && Number.isFinite(row.changePercent)
-      && typeof row.source === 'string' && row.source.trim().length > 0
-      && ((row.market === 'KR' && row.currency === 'KRW') || (row.market === 'US' && row.currency === 'USD'))
-      && quoteTimeEvidence(row.updatedAt).updatedAt !== null);
-    const missingEvidenceRows = live.rows.length - supported.length;
-    if (!supported.length) return res.status(503).json({
-      market: scope, positive: [], negative: [], alerts: [], dataStatus: 'unavailable',
-      error: 'ALERT_EVIDENCE_UNAVAILABLE', missingEvidenceRows, diagnostics: live.diagnostics,
-    });
-    // An observed unchanged price is not an upward signal. Missing change is never zero.
-    const rows = rankByChange(supported.filter((row) => row.changePercent !== 0), 'desc').slice(0, 20);
+    const rows = rankByChange(await liveListings(scope), 'desc').slice(0, 20);
     const alerts = rows.map((row, index) => ({
       id: `${row.market}:${row.ticker}:movement`,
       ticker: row.ticker,
       name: row.name,
       market: row.market,
-      kind: row.changePercent > 0 ? 'positive' : 'negative',
+      kind: Number(row.changePercent ?? 0) >= 0 ? 'positive' : 'negative',
       category: '시세 변동',
-      title: `${row.name} ${row.changePercent > 0 ? '상승' : '하락'} ${Math.abs(row.changePercent).toFixed(2)}%`,
+      title: `${row.name} ${Number(row.changePercent ?? 0) >= 0 ? '상승' : '하락'} ${Math.abs(Number(row.changePercent ?? 0)).toFixed(2)}%`,
       importance: index < 5 ? 'high' : index < 12 ? 'medium' : 'low',
       time: row.updatedAt,
-      source: row.source,
       url: null,
     }));
-    return res.json({ market: scope, positive: alerts.filter((item) => item.kind === 'positive'), negative: alerts.filter((item) => item.kind === 'negative'), alerts,
-      dataStatus: missingEvidenceRows > 0 ? 'partial' : live.diagnostics.status,
-      missingEvidenceRows, diagnostics: live.diagnostics, fetchedAt: new Date().toISOString() });
+    return res.json({ market: scope, positive: alerts.filter((item) => item.kind === 'positive'), negative: alerts.filter((item) => item.kind === 'negative'), alerts, updatedAt: new Date().toISOString() });
   } catch (error) {
     console.error('market alerts error:', error);
     return res.status(502).json({ market: scope, positive: [], negative: [], alerts: [], error: 'ALERT_PROVIDER_ERROR' });

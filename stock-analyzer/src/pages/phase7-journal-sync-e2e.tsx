@@ -10,17 +10,15 @@ import type {
 } from '@/lib/paper-journal-sync';
 import { createUserPaperStorage, loadJournalSyncMetadata, saveJournalSyncMetadata } from '@/lib/paper-journal-sync-storage';
 import { createLocalPaperState, savePaperState } from '@/lib/paper-trading';
-import { paperJournalFixture } from '@/lib/paper-journal-test-fixture';
-import { syncJournalRecords } from '@/lib/paper-journal-sync';
 
 const NOW = '2026-08-02T07:00:00.000Z';
 const USERS = ['phase7-user-a', 'phase7-user-b'];
-type Mode = 'success'|'failure'|'conflict'|'insufficient'|'deferred'|'malformed'|'endless'|'byte-batch'|'scoped';
+type Mode = 'success'|'failure'|'conflict'|'insufficient';
 
 const conflict: JournalConflict = {
   id: 'conflict:phase7', kind: 'journal', recordId: 'journal-1', version: 2,
-  serverRecord: { kind: 'journal', id: 'journal-1', version: 2, updatedAt: NOW, deletedAt: null, payload: { ...paperJournalFixture('journal-1', NOW, { note: 'server' }) }, createdAt: NOW, serverUpdatedAt: NOW },
-  deviceRecord: { kind: 'journal', id: 'journal-1', version: 2, updatedAt: NOW, deletedAt: null, payload: { ...paperJournalFixture('journal-1', NOW, { note: 'device' }) } },
+  serverRecord: { kind: 'journal', id: 'journal-1', version: 2, updatedAt: NOW, deletedAt: null, payload: { id: 'journal-1', note: 'server' }, createdAt: NOW, serverUpdatedAt: NOW },
+  deviceRecord: { kind: 'journal', id: 'journal-1', version: 2, updatedAt: NOW, deletedAt: null, payload: { id: 'journal-1', note: 'device' } },
   differenceSummary: ['note 값이 다릅니다.'], createdAt: NOW, status: 'open',
 };
 
@@ -74,17 +72,14 @@ function unifiedJournal() {
 
 export default function Phase7JournalSyncE2EPage() {
   const [userIndex, setUserIndex] = useState(0);
-  const [mode, setMode] = useState<Mode>(() => {
-    const requested = new URLSearchParams(window.location.search).get('mode');
-    return requested === 'byte-batch' || requested === 'scoped' ? requested : 'success';
-  });
+  const [mode, setMode] = useState<Mode>('success');
   const userId = USERS[userIndex];
   const paperStorage = useMemo(() => {
     const adapter = createUserPaperStorage(window.localStorage, userId, new Date(NOW));
     const loaded = adapter.getItem('seungjae.paper-trading.v1');
     if (!loaded) {
       const state = createLocalPaperState(userIndex ? 20_000 : 10_000, new Date(NOW));
-      state.journal = Array.from({ length: mode === 'byte-batch' ? 200 : mode === 'insufficient' ? 3 : 12 }, (_, index) => paperJournalFixture(`journal-${userIndex}-${index}`, NOW, { note: mode === 'byte-batch' ? '한'.repeat(1000) : '' }));
+      state.journal = Array.from({ length: mode === 'insufficient' ? 3 : 12 }, (_, index) => ({ id: `journal-${userIndex}-${index}` } as never));
       savePaperState(adapter, state);
     }
     if (mode === 'conflict') {
@@ -97,29 +92,15 @@ export default function Phase7JournalSyncE2EPage() {
 
   const fakeSync = async (): Promise<JournalSyncResult> => {
     if (mode === 'failure') throw new Error('테스트 동기화 실패');
-    if (mode === 'deferred') {
-      await new Promise<void>((resolve) => window.addEventListener('phase7-release-sync', () => resolve(), { once: true }));
-      document.documentElement.dataset.phase7SyncReturned = 'true';
-    }
-    if (mode === 'malformed') return {
-      ok: true, mode: 'journal-sync-only', orderSubmitted: false, exchangeRequestSent: false, idempotencyKey: 'phase7-invalid', serverTime: NOW,
-      uploaded: [], downloaded: [{ ...conflict.serverRecord, payload: { ...paperJournalFixture('journal-1', NOW), netPnl: Number.NaN } }],
-      unchanged: [], conflicts: [], failed: [], warnings: [], clockSkewMs: 0,
-    };
     return { ok: true, mode: 'journal-sync-only', orderSubmitted: false, exchangeRequestSent: false, idempotencyKey: 'phase7-e2e-sync', serverTime: NOW, uploaded: [], downloaded: [], unchanged: [], conflicts: mode === 'conflict' ? [conflict] : [], failed: [], warnings: [], clockSkewMs: 0 };
   };
-  const fakeSnapshot = async (): Promise<JournalSnapshotResult> => {
-    document.documentElement.dataset.phase7SnapshotCalls = String(Number(document.documentElement.dataset.phase7SnapshotCalls ?? 0) + 1);
-    return { ok: true, mode: 'journal-sync-only', orderSubmitted: false, exchangeRequestSent: false, records: [], nextCursor: mode === 'endless' ? 'more-pages' : null, serverTime: mode === 'byte-batch' ? new Date().toISOString() : NOW,
-      ...(mode === 'scoped' ? { scope: 'manual-paper-trading' as const, excludedNamespaces: [{ namespace: 'currency-research' as const, count: 1 }] } : {}),
-    };
-  };
+  const fakeSnapshot = async (): Promise<JournalSnapshotResult> => ({ ok: true, mode: 'journal-sync-only', orderSubmitted: false, exchangeRequestSent: false, records: [], nextCursor: null, serverTime: NOW });
   const fakeResolve = async (_id: string, choice: 'server'|'device'|'preserve_both'): Promise<ConflictResolutionResult> => ({ ok: true, mode: 'journal-sync-only', orderSubmitted: false, exchangeRequestSent: false, conflictId: conflict.id, choice, records: choice === 'server' ? [conflict.serverRecord] : [], serverTime: NOW });
 
   return <main className="h-[100dvh] overflow-y-auto bg-background p-4" data-testid="phase7-e2e-page">
     <div className="mx-auto max-w-5xl space-y-3">
       <div className="flex flex-wrap gap-2 rounded-xl border border-border bg-card p-3">
-        <label className="text-xs">시나리오<select aria-label="시나리오" className="ml-2 h-10 rounded border border-border bg-background px-2" value={mode} onChange={(event) => setMode(event.target.value as Mode)}><option value="success">success</option><option value="failure">failure</option><option value="conflict">conflict</option><option value="insufficient">insufficient</option><option value="deferred">deferred</option><option value="malformed">malformed</option><option value="endless">endless</option></select></label>
+        <label className="text-xs">시나리오<select aria-label="시나리오" className="ml-2 h-10 rounded border border-border bg-background px-2" value={mode} onChange={(event) => setMode(event.target.value as Mode)}><option value="success">success</option><option value="failure">failure</option><option value="conflict">conflict</option><option value="insufficient">insufficient</option></select></label>
         <button type="button" className="min-h-10 rounded border border-border px-3 text-sm" onClick={() => setUserIndex((value) => value ? 0 : 1)} data-testid="switch-account">계정 전환</button>
         <span data-testid="active-account" className="self-center text-xs">{userId}</span>
       </div>
@@ -128,9 +109,9 @@ export default function Phase7JournalSyncE2EPage() {
         userId={userId}
         rootStorage={window.localStorage}
         paperStorage={paperStorage}
-        syncApi={mode === 'byte-batch' ? syncJournalRecords : fakeSync}
-        snapshotApi={fakeSnapshot}
-        resolveApi={fakeResolve}
+        syncApi={fakeSync as never}
+        snapshotApi={fakeSnapshot as never}
+        resolveApi={fakeResolve as never}
         analyticsApi={async () => analytics(mode === 'insufficient')}
         reviewApi={async () => reviewDataset()}
         unifiedLedgerApi={async () => unifiedJournal() as never}

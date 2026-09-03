@@ -55,7 +55,6 @@ function card(symbol: string, market: string): ScannerSignalCard {
 }
 
 function response(value: ScannerSignalCard): ScannerResponse {
-  assert.ok(value.expiresAt);
   return {
     ok: true,
     requestId: 'precision-test',

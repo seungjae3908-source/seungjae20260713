@@ -14,8 +14,6 @@ const ALLOWED_KEYS = new Set([
   'seungjae_watchlist_v1',
   'scanner.threshold.v1',
   'scanner-market',
-  'sa-saved-searches-v1',
-  'sa-analysis-selection-v1',
   'sa-auto-trade-settings-v1',
   'sa-portfolio-chart-overlays-v1',
   'sa-portfolio-purchase-dates-v1',

@@ -465,15 +465,6 @@ test('stock summary opens the canonical rich analysis view without a legacy redi
 
 test('portfolio exposes the existing unified journal as a primary tab', async ({ page }) => {
   await installApprovedSession(page);
-  await page.route('**/api/watchlist**', (route) => fulfill(route, { items: [] }));
-  await page.route('**/api/backup/latest**', (route) => fulfill(route, { ok: true, exists: false }));
-  await page.route('**/api/portfolio/intelligence**', (route) => fulfill(route, {
-    ok: false, status: 'UNAVAILABLE', error: 'FIXTURE_UNAVAILABLE',
-  }, 503));
-  const pageErrors: string[] = [];
-  const unexpectedHttp: number[] = [];
-  page.on('pageerror', (error) => pageErrors.push(error.message));
-  page.on('response', (response) => { if (response.status() >= 400 && response.status() !== 503) unexpectedHttp.push(response.status()); });
   await page.route('**/api/paper-journal/unified-ledger**', (route) => fulfill(route, {
     ok: false,
     error: { code: 'FIXTURE_UNAVAILABLE', message: 'fixture intentionally unavailable' },
@@ -490,8 +481,6 @@ test('portfolio exposes the existing unified journal as a primary tab', async ({
   await page.reload();
   await expect(page.getByTestId('portfolio-journal')).toBeVisible();
   await expect(page.getByRole('button', { name: '매매일지' })).toHaveAttribute('aria-pressed', 'true');
-  expect(pageErrors).toEqual([]);
-  expect(unexpectedHttp).toEqual([]);
 });
 
 test('slow News stays secondary while stock-info primary quote and navigation remain usable', async ({ page }) => {

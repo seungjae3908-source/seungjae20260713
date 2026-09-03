@@ -12,7 +12,6 @@ import { fetchJson, fetchBuffer } from '../lib/http';
 import { cached, TTL } from '../lib/cache';
 import type { FinancialRow } from '../sample/types';
 import type { FinancialsRaw } from './sec-edgar';
-import { parseFinancialAmount } from './financial-evidence';
 
 const BASE = 'https://opendart.fss.or.kr/api';
 
@@ -216,7 +215,11 @@ interface DartAcntResponse {
 
 // "-1,234" / "△1,234" / "(1,234)" -> -1234 ; "5,678" -> 5678.
 function parseAmt(v?: string): number {
-  return parseFinancialAmount(v, 'dart', 'statementAmount');
+  if (!v) return 0;
+  const neg = /[-△()]/.test(v);
+  const n = Number(v.replace(/[^\d]/g, ''));
+  if (!Number.isFinite(n)) return 0;
+  return neg ? -n : n;
 }
 
 function selectRows(list: DartAcntRow[]): DartAcntRow[] {
@@ -261,14 +264,13 @@ async function fetchAcnt(
   );
   if (data.status === '000' && data.list && data.list.length) return data.list;
   if (data.status === '020') throw new ProviderError('RATE_LIMITED', 'dart');
-  if (data.status === '013') return null;
-  throw new ProviderError('UPSTREAM_ERROR', 'dart', 'FINANCIAL_STATEMENT_RESPONSE_INVALID');
+  return null; // 013 = no data for the period
 }
 
 export async function getFinancials(stockCode: string): Promise<FinancialsRaw> {
   const key = getDartKey();
   const corp = await getCorpCode(stockCode);
-  return cached(`dart:fin:v2:${corp}`, TTL.financials, async () => {
+  return cached(`dart:fin:${corp}`, TTL.financials, async () => {
     const now = new Date();
     // Latest fully-filed annual report: try last year, then the year before.
     let annualList: DartAcntRow[] | null = null;
@@ -304,13 +306,14 @@ export async function getFinancials(stockCode: string): Promise<FinancialsRaw> {
         };
 
         const eq = pickAmt(annualRows, ACC.equity, field);
-        row.equity = eq;
+        if (eq !== 0) row.equity = eq;
 
         const cap = pickAmt(annualRows, ACC.capital, field);
-        row.capital = cap;
+        if (cap !== 0) row.capital = cap;
 
         return row;
-      });
+      })
+      .filter((r, i) => i === fields.length - 1 || r.revenue !== 0 || r.netIncome !== 0);
 
     if (annual.length < 2) {
       throw new ProviderError('UNAVAILABLE', 'dart', `sparse financials for ${stockCode}`);
@@ -324,60 +327,63 @@ export async function getFinancials(stockCode: string): Promise<FinancialsRaw> {
     // So Q1..Q3 come straight from `thstrm_amount`; Q4 = annual(12M) − 9M cum.
     // Balance-sheet items (cash/liabilities) are point-in-time `thstrm_amount`.
     let quarterly: FinancialRow[] = [];
-    const [q1l, q2l, q3l] = await Promise.all([
-      fetchAcnt(key, corp, baseYear, '11013'),
-      fetchAcnt(key, corp, baseYear, '11012'),
-      fetchAcnt(key, corp, baseYear, '11014'),
-    ]);
+    try {
+      const [q1l, q2l, q3l] = await Promise.all([
+        fetchAcnt(key, corp, baseYear, '11013'),
+        fetchAcnt(key, corp, baseYear, '11012'),
+        fetchAcnt(key, corp, baseYear, '11014'),
+      ]);
 
-    const quarterRow = (
-      list: DartAcntRow[] | null,
-      period: string,
-    ): FinancialRow | null => {
-      if (!list) return null;
-      const rows = selectRows(list);
-      return {
-        period,
-        revenue: pickAmt(rows, ACC.revenue, 'thstrm_amount'),
-        operatingIncome: pickAmt(rows, ACC.operating, 'thstrm_amount'),
-        netIncome: pickAmt(rows, ACC.net, 'thstrm_amount'),
-        cash: pickAmt(rows, ACC.cash, 'thstrm_amount'),
-        debt: pickAmt(rows, ACC.liabilities, 'thstrm_amount'),
+      const quarterRow = (
+        list: DartAcntRow[] | null,
+        period: string,
+      ): FinancialRow | null => {
+        if (!list) return null;
+        const rows = selectRows(list);
+        return {
+          period,
+          revenue: pickAmt(rows, ACC.revenue, 'thstrm_amount'),
+          operatingIncome: pickAmt(rows, ACC.operating, 'thstrm_amount'),
+          netIncome: pickAmt(rows, ACC.net, 'thstrm_amount'),
+          cash: pickAmt(rows, ACC.cash, 'thstrm_amount'),
+          debt: pickAmt(rows, ACC.liabilities, 'thstrm_amount'),
+        };
       };
-    };
 
-    const built: (FinancialRow | null)[] = [
-      quarterRow(q1l, `${baseYear}Q1`),
-      quarterRow(q2l, `${baseYear}Q2`),
-      quarterRow(q3l, `${baseYear}Q3`),
-    ];
+      const built: (FinancialRow | null)[] = [
+        quarterRow(q1l, `${baseYear}Q1`),
+        quarterRow(q2l, `${baseYear}Q2`),
+        quarterRow(q3l, `${baseYear}Q3`),
+      ];
 
-    // Q4 = annual (12M) − 9M cumulative (from the 3분기 report's 누적 column).
-    if (q3l) {
-      const q3rows = selectRows(q3l);
-      const cum9Rev = pickAmt(q3rows, ACC.revenue, 'thstrm_add_amount');
-      if (cum9Rev > 0) {
-        built.push({
-          period: `${baseYear}Q4`,
-          revenue: pickAmt(annualRows, ACC.revenue, 'thstrm_amount') - cum9Rev,
-          operatingIncome:
-            pickAmt(annualRows, ACC.operating, 'thstrm_amount') -
-            pickAmt(q3rows, ACC.operating, 'thstrm_add_amount'),
-          netIncome:
-            pickAmt(annualRows, ACC.net, 'thstrm_amount') -
-            pickAmt(q3rows, ACC.net, 'thstrm_add_amount'),
-          cash: pickAmt(annualRows, ACC.cash, 'thstrm_amount'),
-          debt: pickAmt(annualRows, ACC.liabilities, 'thstrm_amount'),
-        });
+      // Q4 = annual (12M) − 9M cumulative (from the 3분기 report's 누적 column).
+      if (q3l) {
+        const q3rows = selectRows(q3l);
+        const cum9Rev = pickAmt(q3rows, ACC.revenue, 'thstrm_add_amount');
+        if (cum9Rev > 0) {
+          built.push({
+            period: `${baseYear}Q4`,
+            revenue: pickAmt(annualRows, ACC.revenue, 'thstrm_amount') - cum9Rev,
+            operatingIncome:
+              pickAmt(annualRows, ACC.operating, 'thstrm_amount') -
+              pickAmt(q3rows, ACC.operating, 'thstrm_add_amount'),
+            netIncome:
+              pickAmt(annualRows, ACC.net, 'thstrm_amount') -
+              pickAmt(q3rows, ACC.net, 'thstrm_add_amount'),
+            cash: pickAmt(annualRows, ACC.cash, 'thstrm_amount'),
+            debt: pickAmt(annualRows, ACC.liabilities, 'thstrm_amount'),
+          });
+        }
       }
-    }
 
-    quarterly = built.filter((r): r is FinancialRow => r !== null);
-    // Coherence guard: negative revenue means the report layout didn't match
-    // the standard 3-month/누적 convention — drop quarterly so the service
-    // rejects the malformed evidence instead of showing a synthetic view.
-    if (quarterly.some((q) => q.revenue < 0)) {
-      throw new ProviderError('UNAVAILABLE', 'dart', 'INCOHERENT_QUARTERLY_REVENUE');
+      quarterly = built.filter((r): r is FinancialRow => r !== null);
+      // Coherence guard: negative revenue means the report layout didn't match
+      // the standard 3-month/누적 convention — drop quarterly so the service
+      // falls back to a coherent sample view instead of showing garbage.
+      if (quarterly.some((q) => q.revenue < 0)) quarterly = [];
+    } catch (err) {
+      if (err instanceof ProviderError && err.code === 'RATE_LIMITED') throw err;
+      quarterly = [];
     }
 
     return {

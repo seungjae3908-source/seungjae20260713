@@ -1,9 +1,6 @@
 import {
   syncPaperJournal,
 } from './paper-journal-sync.service.ts';
-import { validPaperTimestamp } from '../../../packages/api-zod/src/paper-state-evidence.js';
-import { PAPER_RESEARCH_PERSISTED_LEDGER_ID, PAPER_RESEARCH_PERSISTED_LEDGER_SCHEMA, validResearchCurrencyLedger, validResearchLedgerPayload } from './paper-research-ledger-evidence';
-export { PAPER_RESEARCH_PERSISTED_LEDGER_ID, PAPER_RESEARCH_PERSISTED_LEDGER_SCHEMA } from './paper-research-ledger-evidence';
 import type {
   PaperJournalRepository,
   PaperJournalSyncRecord,
@@ -12,6 +9,9 @@ import type {
 import type {
   PaperResearchCurrencyLedger,
 } from './paper-research-currency-ledger.service.ts';
+
+export const PAPER_RESEARCH_PERSISTED_LEDGER_ID = 'paper-research-currency-ledger-v1' as const;
+export const PAPER_RESEARCH_PERSISTED_LEDGER_SCHEMA = 'paper-research-persisted-ledger-v1' as const;
 
 export type PaperResearchPersistedLedgerPayload = Readonly<{
   schemaVersion: typeof PAPER_RESEARCH_PERSISTED_LEDGER_SCHEMA;
@@ -49,7 +49,7 @@ function finitePositiveSafeInteger(value: unknown): value is number {
 }
 
 function validIsoTimestamp(value: unknown): value is string {
-  return validPaperTimestamp(value);
+  return typeof value === 'string' && Number.isFinite(Date.parse(value));
 }
 
 function assertPersistableLedger(ledger: PaperResearchCurrencyLedger) {
@@ -82,7 +82,6 @@ export function buildPaperResearchLedgerSyncRecord(
   if (!finitePositiveSafeInteger(input.version)) throw new Error('PAPER_LEDGER_VERSION_INVALID');
   if (!validIsoTimestamp(input.updatedAt)) throw new Error('PAPER_LEDGER_TIMESTAMP_INVALID');
   const persistedAt = new Date(input.updatedAt).toISOString();
-  if (!validResearchCurrencyLedger(ledger, Date.parse(persistedAt))) throw new Error('PAPER_LEDGER_EVIDENCE_INVALID');
 
   const payload: PaperResearchPersistedLedgerPayload = Object.freeze({
     schemaVersion: PAPER_RESEARCH_PERSISTED_LEDGER_SCHEMA,
@@ -155,7 +154,7 @@ export async function persistPaperResearchCurrencyLedger(
     idempotencyKey: input.idempotencyKey,
     clientTime: input.clientTime,
     records: [record],
-  }, now, 'currency-ledger');
+  }, now);
 
   return resultShape(input.version, {
     uploaded: result.uploaded.length,
@@ -170,15 +169,12 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function parsePersistedPayload(record: StoredPaperJournalRecord, now: Date): PaperResearchPersistedLedgerPayload {
+function parsePersistedPayload(record: StoredPaperJournalRecord): PaperResearchPersistedLedgerPayload {
   if (record.kind !== 'account' || record.id !== PAPER_RESEARCH_PERSISTED_LEDGER_ID) {
     throw new Error('PAPER_LEDGER_RECORD_IDENTITY_INVALID');
   }
   if (!isObject(record.payload)) throw new Error('PAPER_LEDGER_PAYLOAD_INVALID');
   const payload = record.payload as Record<string, unknown>;
-  if (!finitePositiveSafeInteger(record.version) || !validPaperTimestamp(record.createdAt, now.getTime()) || !validPaperTimestamp(record.serverUpdatedAt, now.getTime())
-    || !validPaperTimestamp(record.updatedAt, now.getTime()) || Date.parse(record.createdAt) > Date.parse(record.serverUpdatedAt)
-    || !validResearchLedgerPayload(payload, Date.parse(record.serverUpdatedAt))) throw new Error('PAPER_LEDGER_EVIDENCE_INVALID');
   if (payload.schemaVersion !== PAPER_RESEARCH_PERSISTED_LEDGER_SCHEMA) {
     throw new Error('PAPER_LEDGER_PERSISTED_SCHEMA_UNSUPPORTED');
   }
@@ -204,7 +200,6 @@ function parsePersistedPayload(record: StoredPaperJournalRecord, now: Date): Pap
 export async function loadPaperResearchCurrencyLedger(
   repository: PaperJournalRepository,
   userId: string,
-  now = new Date(),
 ): Promise<Readonly<{
   found: boolean;
   recordVersion: number | null;
@@ -232,7 +227,7 @@ export async function loadPaperResearchCurrencyLedger(
       profitabilityClaimAllowed: false,
     });
   }
-  const payload = parsePersistedPayload(record, now);
+  const payload = parsePersistedPayload(record);
   return Object.freeze({
     found: true,
     recordVersion: record.version,

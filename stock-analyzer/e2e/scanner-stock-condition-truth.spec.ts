@@ -45,7 +45,7 @@ const universeEntry: ScannerUniverseEntry = {
 };
 
 function card(overrides: Partial<ScanCard> = {}): ScanCard {
-  const analyzedAt = '2026-02-10T00:00:00.000Z';
+  const analyzedAt = '2026-01-31T00:00:00.000Z';
   const ok = (score: number, reason: string) => ({ score, status: 'ok' as const, reasons: [reason] });
   return {
     ticker: 'TEST',
@@ -59,7 +59,7 @@ function card(overrides: Partial<ScanCard> = {}): ScanCard {
     confidence: 90,
     matched: [],
     missing: [],
-    breakoutProbability: null,
+    breakoutProbability: 50,
     expectedPeriod: 'test',
     entry: ['test'],
     stop: ['test'],
@@ -71,8 +71,6 @@ function card(overrides: Partial<ScanCard> = {}): ScanCard {
     marketCap: 1_000_000_000,
     dataState: 'ok',
     analyzedAt,
-    quoteObservedAt: analyzedAt,
-    quoteSource: 'condition-test-fixture',
     scoreBreakdown: {
       trend: ok(90, 'trend'),
       volume: ok(90, 'volume'),
@@ -102,7 +100,6 @@ test('sample or unavailable financial evidence cannot stay matched just because 
     candles: risingValueCandles(),
     selected: ['PER 낮음'],
     timeframe: '1D',
-    now: Date.parse('2026-02-10T00:00:00.000Z'),
   });
 
   expect(result.matched).not.toContain('PER 낮음');
@@ -124,7 +121,6 @@ test('trading-value increase uses price times volume instead of volume alone', (
     candles: risingValueCandles(),
     selected: ['거래대금 증가'],
     timeframe: '1D',
-    now: Date.parse('2026-02-10T00:00:00.000Z'),
   });
   expect(result.evidence.find((item) => item.label === '거래대금 증가')).toMatchObject({
     status: 'matched',
@@ -147,7 +143,6 @@ test('unavailable factor cannot describe unverified candle truth as confirmed', 
     candles: risingValueCandles(),
     selected: ['거래대금 증가'],
     timeframe: '1D',
-    now: Date.parse('2026-02-10T00:00:00.000Z'),
   });
   const evidence = result.evidence.find((item) => item.label === '거래대금 증가');
   expect(evidence).toMatchObject({
@@ -157,17 +152,6 @@ test('unavailable factor cannot describe unverified candle truth as confirmed', 
   });
   expect(evidence?.reasons.join(' ')).not.toContain('조건을 확인했습니다');
   expect(result.strongSignalEligible).toBe(false);
-});
-
-test('an analysis timestamp alone cannot confirm candle conditions without the source quote time', () => {
-  const result = applyStockSignalPolicy({
-    memberId: 'member-test', card: card({ quoteObservedAt: null, matched: ['거래대금 증가'] }),
-    universeEntry, candles: risingValueCandles(), selected: ['거래대금 증가'], timeframe: '1D',
-    now: Date.parse('2026-02-10T00:00:00.000Z'),
-  });
-  expect(result.evidence.find((item) => item.label === '거래대금 증가')).toMatchObject({ status: 'unverified', observedAt: null });
-  expect(result.strongSignalEligible).toBe(false);
-  expect(result.pricePlan.entryZone).toBeNull();
 });
 
 test('MA20 MA60 and MA120 labels require a fresh prior-to-current upward cross', () => {

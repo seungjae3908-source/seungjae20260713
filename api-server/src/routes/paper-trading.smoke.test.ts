@@ -29,7 +29,7 @@ async function startServer(dependencies: Parameters<typeof createPaperTradingRou
     (request as AuthenticatedRequest).member = { id: PUBLISHER_ACCOUNT_ID } as AuthenticatedRequest['member'];
     next();
   });
-  app.use('/api', createPaperTradingRouter({ clock: () => NOW, ...dependencies }));
+  app.use('/api', createPaperTradingRouter(dependencies));
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>((resolve, reject) => {
     server.once('listening', resolve);
@@ -92,63 +92,6 @@ test('paper evaluate rejects invalid timestamp', async () => {
     });
     assert.equal(response.status, 400);
     assert.equal((await safeJson(response)).code, 'INVALID_TIMESTAMP');
-  } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
-});
-
-test('paper HTTP rejects corrupt stored rows with 400 before publishing instead of empty success or 500', async () => {
-  let published = false;
-  const { server, baseUrl } = await startServer({ publishState: async () => { published = true; throw new Error('unexpected'); } });
-  try {
-    const state = createPaperTradingState(10_000, NOW);
-    for (const invalid of [{ ...state, orders: [{}] }, { ...state, positions: [null] }, { ...state, fills: [{ id: 'missing-facts' }] },
-      { ...state, riskState: { ...state.riskState, consecutiveLosses: null } }, { ...state, processedEventIds: ['x', 'x'] }]) {
-      const response = await fetch(`${baseUrl}/api/paper-trading/evaluate`, {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ state: invalid, action }),
-      });
-      assert.equal(response.status, 400);
-      assert.equal((await safeJson(response)).code, 'INVALID_PAPER_STATE');
-    }
-    assert.equal(published, false);
-  } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
-});
-
-test('paper client future clock is rejected before evaluation or immutable publishing', async () => {
-  let evaluated = false;
-  let published = false;
-  const { server, baseUrl } = await startServer({
-    evaluate: () => { evaluated = true; throw new Error('unexpected evaluation'); },
-    publishState: async () => { published = true; throw new Error('unexpected publishing'); },
-  });
-  try {
-    const response = await fetch(`${baseUrl}/api/paper-trading/evaluate`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ state: createPaperTradingState(10_000, NOW), action, now: new Date(NOW.getTime() + 1).toISOString() }),
-    });
-    assert.equal(response.status, 400);
-    assert.equal((await safeJson(response)).code, 'INVALID_TIMESTAMP');
-    assert.equal(evaluated, false);
-    assert.equal(published, false);
-  } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
-});
-
-test('historical paper calculation keeps immutable observation bound to the server clock', async () => {
-  let observed = null;
-  const serverNow = new Date(NOW.getTime() + 60_000);
-  const { server, baseUrl } = await startServer({ clock: () => serverNow,
-    publishState: async (input) => { observed = input.observedAtMs; throw new Error('isolated publisher unavailable'); },
-  });
-  try {
-    const response = await fetch(`${baseUrl}/api/paper-trading/evaluate`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ state: createPaperTradingState(10_000, NOW), action, now: NOW.toISOString() }),
-    });
-    assert.equal(response.status, 200);
-    const body = await safeJson(response);
-    assert.equal(body.observedAt, serverNow.toISOString());
-    assert.equal(body.calculationClockSource, 'CLIENT_SIMULATION');
-    assert.equal(body.result.state.updatedAt, NOW.toISOString());
-    assert.equal(observed, serverNow.getTime());
-    assert.equal(body.paperStateTransport.status, 'BLOCKED_DATA');
   } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
 });
 

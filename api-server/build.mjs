@@ -37,7 +37,7 @@ await build({
 	bundle: true,
 	platform: 'node',
 	format: 'esm',
-	target: 'node22',
+	target: 'node20',
 	sourcemap: true,
 	minify: false,
 	packages: 'external',

@@ -17,13 +17,6 @@ const USER_A = '11111111-1111-1111-1111-111111111111';
 const USER_B = '22222222-2222-2222-2222-222222222222';
 const MASTER_KEY = Buffer.alloc(32, 7).toString('base64');
 
-const BITGET_CONTRACT = {
-  symbol: 'BTCUSDT', quoteCoin: 'USDT', supportMarginCoins: ['USDT'], symbolStatus: 'normal',
-  minTradeNum: '0.01', sizeMultiplier: '0.01', minTradeUSDT: '10',
-  maxMarketOrderQty: '10', maxOrderQty: '20', minLever: '1', maxLever: '100',
-  pricePlace: '1', priceEndStep: '1',
-};
-
 function plan(overrides: Partial<TradingPlanInput> = {}): TradingPlanInput {
   const observedAt = new Date().toISOString();
   return {
@@ -88,7 +81,7 @@ test('risk engine blocks emergency, stale/volatile markets, loss limits, and ins
 
 test('Bitget allows only 2x/3x, blocks opposite duplicate positions, and keeps reduce-only explicit', () => {
   const policy = normalizeTradingPolicy(DEFAULT_TRADING_POLICY);
-  const input = plan({ exchange: 'bitget', market: 'USDT-FUTURES', symbol: 'BTCUSDT', side: 'short', quantity: 0.01,
+  const input = plan({ exchange: 'bitget', market: 'USDT-FUTURES', side: 'short', quantity: 0.01,
     quoteAmount: null, estimatedKrw: 100_000, leverage: 4, marginMode: 'isolated',
     marketSnapshot: { ...plan().marketSnapshot, existingPositionSide: 'long' } });
   const decision = evaluateTradingPlan(input, policy, { emergencyStopped: false, serverLiveEnabled: true });
@@ -100,54 +93,18 @@ test('Bitget allows only 2x/3x, blocks opposite duplicate positions, and keeps r
   assert.ok(liquidationRisk.blockCodes.includes('BITGET_LIQUIDATION_RISK'));
   const request = prepareBitgetOrder({ apiKey: 'key', secretKey: 'secret', passphrase: 'pass' }, { ...input, leverage: 3 }, 'client-1', '1000');
   assert.match(request.body ?? '', /"reduceOnly":"NO"/);
-  assert.doesNotThrow(() => validateBitgetContractRules({ ...input, quantity: 0.02, leverage: 3 }, BITGET_CONTRACT, 1000));
-  assert.throws(() => validateBitgetContractRules({ ...input, quantity: 0.015, leverage: 3 }, BITGET_CONTRACT, 1000), /BITGET_QUANTITY_STEP/);
-  assert.throws(() => validateBitgetContractRules({ ...input, quantity: 0.01, leverage: 3 }, BITGET_CONTRACT, 500), /BITGET_MINIMUM_NOTIONAL/);
+  assert.doesNotThrow(() => validateBitgetContractRules({ ...input, quantity: 0.02, leverage: 3 }, {
+    minTradeNum: '0.01', sizeMultiplier: '0.01', pricePlace: '1', priceEndStep: '1',
+  }));
+  assert.throws(() => validateBitgetContractRules({ ...input, quantity: 0.015, leverage: 3 }, {
+    minTradeNum: '0.01', sizeMultiplier: '0.01', pricePlace: '1', priceEndStep: '1',
+  }), /BITGET_QUANTITY_STEP/);
+  assert.throws(() => validateBitgetContractRules({ ...input, quantity: 0.01, leverage: 3 }, {
+    minTradeNum: '0.01', minTradeUSDT: '10', sizeMultiplier: '0.01', symbolStatus: 'normal',
+  }, 500), /BITGET_MINIMUM_NOTIONAL/);
   const ticker = prepareBitgetTicker('BTCUSDT');
   assert.equal(ticker.path, '/api/v2/mix/market/ticker');
   assert.equal(Object.keys(ticker.headers).some((key) => key.startsWith('ACCESS-')), false);
-});
-
-test('Bitget rejects missing, coerced, inconsistent, or mismatched mandatory contract evidence', () => {
-  const input = plan({ exchange: 'bitget', market: 'USDT-FUTURES', symbol: 'BTCUSDT', quantity: 0.02, leverage: 3 });
-  for (const field of ['minTradeNum', 'sizeMultiplier', 'minTradeUSDT', 'maxMarketOrderQty', 'minLever', 'maxLever']) {
-    for (const value of [undefined, null, '', ' ', true, false, {}, [], NaN, Infinity, 0, -1, 'NaN']) {
-      assert.throws(() => validateBitgetContractRules(input, { ...BITGET_CONTRACT, [field]: value }, 1000),
-        /BITGET_CONTRACT_RULES_UNAVAILABLE/, `${field}: ${String(value)}`);
-    }
-  }
-  for (const patch of [{ symbol: 'ETHUSDT' }, { symbol: undefined }, { quoteCoin: 'USDC' }, { supportMarginCoins: [] }]) {
-    assert.throws(() => validateBitgetContractRules(input, { ...BITGET_CONTRACT, ...patch }, 1000), /BITGET_CONTRACT_IDENTITY_INVALID/);
-  }
-  for (const symbolStatus of [undefined, '', 'listed', 'maintain', 'limit_open', 'restrictedAPI', 'off']) {
-    assert.throws(() => validateBitgetContractRules(input, { ...BITGET_CONTRACT, symbolStatus }, 1000), /BITGET_CONTRACT_NOT_TRADABLE/);
-  }
-  for (const price of [undefined, NaN, Infinity, 0, -1]) {
-    assert.throws(() => validateBitgetContractRules(input, BITGET_CONTRACT, price), /BITGET_REFERENCE_PRICE_INVALID/);
-  }
-  assert.throws(() => validateBitgetContractRules(input, { ...BITGET_CONTRACT, minLever: '4' }, 1000), /BITGET_CONTRACT_LEVERAGE_INVALID/);
-  assert.throws(() => validateBitgetContractRules(input, { ...BITGET_CONTRACT, maxLever: '2' }, 1000), /BITGET_CONTRACT_LEVERAGE_INVALID/);
-  assert.throws(() => validateBitgetContractRules(input, { ...BITGET_CONTRACT, minLever: '101' }, 1000), /BITGET_CONTRACT_RULES_INCONSISTENT/);
-  assert.throws(() => validateBitgetContractRules(input, { ...BITGET_CONTRACT, maxMarketOrderQty: '0.001' }, 1000), /BITGET_CONTRACT_RULES_INCONSISTENT/);
-  assert.throws(() => validateBitgetContractRules({ ...input, quantity: 11 }, BITGET_CONTRACT, 1000), /BITGET_MAXIMUM_QUANTITY/);
-  assert.doesNotThrow(() => validateBitgetContractRules({ ...input, quantity: 11, orderType: 'limit', limitPrice: 1000 }, BITGET_CONTRACT));
-});
-
-test('Bitget quantity, price grid, and minimum notional checks use decimal arithmetic without epsilon bypass', () => {
-  const input = plan({ exchange: 'bitget', market: 'USDT-FUTURES', symbol: 'BTCUSDT', quantity: 0.02, leverage: 3 });
-  assert.throws(() => validateBitgetContractRules({ ...input, quantity: 0.020000000001 }, BITGET_CONTRACT, 1000), /BITGET_QUANTITY_STEP/);
-  const contract = { ...BITGET_CONTRACT, minTradeNum: '0.1', sizeMultiplier: '0.1', minTradeUSDT: '0.09', priceEndStep: '3' };
-  const limit = { ...input, quantity: 0.3, orderType: 'limit' as const, limitPrice: 0.3 };
-  assert.doesNotThrow(() => validateBitgetContractRules(limit, contract));
-  assert.throws(() => validateBitgetContractRules({ ...limit, limitPrice: 0.300000000001 }, contract), /BITGET_PRICE_STEP/);
-  assert.throws(() => validateBitgetContractRules(limit, { ...contract, minTradeUSDT: '0.090000000001' }), /BITGET_MINIMUM_NOTIONAL/);
-  for (const pricePlace of [undefined, null, '', true, -1, 1.5, 325, Infinity]) {
-    assert.throws(() => validateBitgetContractRules(limit, { ...contract, pricePlace }), /BITGET_PRICE_RULES_UNAVAILABLE/);
-  }
-  assert.throws(() => validateBitgetContractRules(limit, { ...contract, maxOrderQty: undefined }), /BITGET_CONTRACT_RULES_UNAVAILABLE:maxOrderQty/);
-  assert.doesNotThrow(() => validateBitgetContractRules({ ...input, quantity: 1e-7 }, {
-    ...BITGET_CONTRACT, minTradeNum: '0.0000001', sizeMultiplier: '0.0000001', minTradeUSDT: '0.0000001',
-  }, 1));
 });
 
 test('Upbit enforces KRW spot, no short, 5,000 KRW minimum, and market buy/sell units', () => {

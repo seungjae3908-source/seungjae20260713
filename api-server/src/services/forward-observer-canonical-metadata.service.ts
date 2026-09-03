@@ -60,7 +60,6 @@ function actionDirection(card: ScannerSignalCard, lane: ForwardCanonicalMetadata
 }
 
 function signalHorizonHours(card: ScannerSignalCard): number | null {
-  if (card.observedAt == null || card.expiresAt == null) return null;
   const observedAt = Date.parse(card.observedAt);
   const expiresAt = Date.parse(card.expiresAt);
   if (!Number.isFinite(observedAt) || !Number.isFinite(expiresAt) || expiresAt <= observedAt) return null;

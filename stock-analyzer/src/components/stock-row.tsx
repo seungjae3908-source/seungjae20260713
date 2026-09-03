@@ -5,8 +5,7 @@ import { useWatchlist } from '@/hooks/use-watchlist';
 import { formatPrice, formatPercent } from '@/lib/format';
 import { changeTone, toneText } from '@/lib/labels';
 import { cn } from '@/lib/utils';
-import type { AssetType, SearchResult } from '@/lib/api';
-import { quoteRating, type QuoteEvidenceRow } from '@/lib/quote-row-evidence';
+import type { AssetType, QuoteRow, SearchResult } from '@/lib/api';
 
 const ASSET_TYPE_LABEL: Record<AssetType, string> = {
 	STOCK: '',
@@ -20,11 +19,10 @@ const ASSET_TYPE_LABEL: Record<AssetType, string> = {
 	ADR: 'ADR',
 };
 
-export function StockRow({ stock, rank }: { stock: QuoteEvidenceRow; rank?: number }) {
+export function StockRow({ stock, rank }: { stock: QuoteRow; rank?: number }) {
 	const { isWatchlisted, toggle } = useWatchlist();
 	const watched = isWatchlisted(stock.ticker);
 	const tone = changeTone(stock.changePercent);
-	const rating = quoteRating(stock);
 	return (
 		<Link
 			href={`/stock/${stock.ticker}`}
@@ -67,7 +65,7 @@ export function StockRow({ stock, rank }: { stock: QuoteEvidenceRow; rank?: numb
 					{formatPercent(stock.changePercent)}
 				</div>
 			</div>
-			{rating ? <RatingBadge rating={rating.rating} /> : <span className="text-xs text-muted-foreground">평가 근거 부족</span>}
+			<RatingBadge rating={stock.rating.rating} />
 		</Link>
 	);
 }

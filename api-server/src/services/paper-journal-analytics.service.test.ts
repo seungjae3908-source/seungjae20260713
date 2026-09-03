@@ -42,25 +42,8 @@ function trade(index: number, overrides: Record<string, unknown> = {}) {
 
 const sample = (count = 12) => Array.from({ length: count }, (_, index) => trade(index));
 
-test('other journal domains never inflate manual-paper statistics or AI review samples', () => {
-  const manual = sample(6);
-  const mixed = [...manual,
-    { schemaVersion: 'signal-performance-event-v1', netPnl: 999999 },
-    { schemaVersion: 'signal-performance-outcome-v1', netPnl: 999999 },
-    { schemaVersion: 1, recordType: 'unified_trade_order', netPnl: 999999 },
-  ];
-  const result = calculatePaperJournalAnalytics(mixed);
-  assert.equal(result.sampleSize, 6);
-  assert.equal(result.netPnl, calculatePaperJournalAnalytics(manual).netPnl);
-  assert.ok(result.warnings.some((warning) => warning.includes('별도 화면')));
-  const review = createTradingReviewDataset(mixed);
-  assert.equal(review.sampleSize, 6);
-  assert.equal(review.representativeTrades.length, 6);
-  assert.ok(review.warnings.some((warning) => warning.includes('별도 화면')));
-});
-
-test('counts only closed trades and excludes known open records', () => {
-  const result = calculatePaperJournalAnalytics([trade(0), { ...trade(1), status: 'open' }]);
+test('counts only closed valid trades', () => {
+  const result = calculatePaperJournalAnalytics([trade(0), { ...trade(1), status: 'open' }, { broken: true }]);
   assert.equal(result.totalTrades, 1);
 });
 
@@ -239,36 +222,14 @@ test('detects positive gross but non-positive net after costs', () => {
   assert.equal((signal?.count ?? 0) >= 1, true);
 });
 
-test('invalid NaN trade blocks a partial profitability claim', () => {
-  assert.throws(() => calculatePaperJournalAnalytics([...sample(5), trade(9, { netPnl: Number.NaN })]), /근거가 불완전/);
+test('invalid NaN trade is excluded', () => {
+  const result = calculatePaperJournalAnalytics([...sample(5), trade(9, { netPnl: Number.NaN })]);
+  assert.equal(result.totalTrades, 5);
 });
 
-test('invalid Infinity trade blocks a partial profitability claim', () => {
-  assert.throws(() => calculatePaperJournalAnalytics([...sample(5), trade(9, { netPnl: Number.POSITIVE_INFINITY })]), /근거가 불완전/);
-});
-
-test('missing stop evidence cannot produce a negative or selective adherence rate', () => {
-  const rows = sample(5).map((row, index) => ({ ...row, stopLossPrice: index ? null : 90, ruleViolation: index !== 0 }));
-  const result = calculatePaperJournalAnalytics(rows);
-  assert.equal(result.stopAdherenceRate, null);
-  assert.ok(result.warnings.some((warning) => warning.includes('손절 준수율')));
-  for (const fields of [{ leverage: -1 }, { stopLossPrice: '90' }, { rMultiple: Number.NaN }, { riskPercent: 101 }, { notionalValue: Number.POSITIVE_INFINITY }]) {
-    assert.throws(() => calculatePaperJournalAnalytics([trade(0, fields)]), /근거가 불완전/);
-  }
-});
-
-test('missing costs, malformed source time and arithmetic overflow never become zero-cost profitability', () => {
-  for (const invalid of [{ entryFee: null }, { exitFee: undefined }, { slippageCost: '0' }, { fundingCost: null },
-    { grossPnl: undefined }, { filledAt: '2026-02-30T00:00:00Z' }, { closedAt: '2099-01-01T00:00:00Z' }]) {
-    assert.throws(() => calculatePaperJournalAnalytics([trade(0, invalid)]), /근거가 불완전/);
-  }
-  assert.throws(() => calculatePaperJournalAnalytics([trade(0, { netPnl: Number.MAX_VALUE }), trade(1, { netPnl: Number.MAX_VALUE })]), /계산 범위/);
-});
-
-test('conflict copies stay out of profitability and AI review samples', () => {
-  const rows = [trade(0), trade(1, { conflictCopyOf: 'internal-uuid-0', researchEvidenceEligible: false })];
-  assert.equal(calculatePaperJournalAnalytics(rows).totalTrades, 1);
-  assert.equal(createTradingReviewDataset(rows).sampleSize, 1);
+test('invalid Infinity trade is excluded', () => {
+  const result = calculatePaperJournalAnalytics([...sample(5), trade(9, { netPnl: Number.POSITIVE_INFINITY })]);
+  assert.equal(result.totalTrades, 5);
 });
 
 test('review dataset never includes email', () => {

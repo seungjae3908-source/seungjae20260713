@@ -5,7 +5,6 @@ import {
   simulateAdditionalInvestment,
 } from '../modules/portfolio/index.ts';
 import { buildPortfolioIntelligence } from '../services/portfolio-intelligence.service.ts';
-import { marketNumber } from '../providers/market-evidence';
 
 const router: IRouter = Router();
 
@@ -16,8 +15,8 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 function positiveNumber(value: unknown): number | null {
-  const number = marketNumber(value);
-  return number !== null && number > 0 ? number : null;
+  const number = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(number) && number > 0 ? number : null;
 }
 
 function portfolioFailure(cause: unknown, res: Parameters<Parameters<IRouter['get']>[1]>[1]) {
@@ -39,7 +38,7 @@ router.get('/portfolio/intelligence', async (req: AuthenticatedRequest, res) => 
       accessToken: req.accessToken,
       profile: req.query.profile,
     });
-    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('Cache-Control', 'private, max-age=10, stale-while-revalidate=20');
     return res.json({ ok: true, portfolio });
   } catch (cause) {
     return portfolioFailure(cause, res);
@@ -49,19 +48,16 @@ router.get('/portfolio/intelligence', async (req: AuthenticatedRequest, res) => 
 router.post('/portfolio/intelligence/additional-buy', async (req: AuthenticatedRequest, res) => {
   if (!req.accessToken) return res.status(401).json({ ok: false, error: 'LOGIN_REQUIRED' });
   const body = asRecord(req.body);
-  const ticker = typeof body.ticker === 'string' ? body.ticker.trim().toUpperCase() : '';
+  const ticker = String(body.ticker ?? '').trim().toUpperCase();
   const additionalAmountKRW = positiveNumber(body.additionalAmountKRW);
   const additionalQuantity = positiveNumber(body.additionalQuantity);
-  if (!ticker || !['KR', 'US'].includes(String(body.market)) || typeof body.market !== 'string'
-    || body.currency !== (body.market === 'KR' ? 'KRW' : 'USD')
-    || (body.additionalAmountKRW !== undefined && body.additionalQuantity !== undefined)
-    || (additionalAmountKRW == null) === (additionalQuantity == null)) {
+  if (!ticker || (additionalAmountKRW == null) === (additionalQuantity == null)) {
     return res.status(400).json({ ok: false, error: 'INVALID_SIMULATION_INPUT', message: '종목과 추가 금액 또는 추가 수량 중 하나만 입력해 주세요.' });
   }
 
   try {
     const portfolio = await buildPortfolioIntelligence({ accessToken: req.accessToken });
-    const holding = portfolio.holdings.find((row) => row.ticker === ticker && row.market === body.market && row.currency === body.currency);
+    const holding = portfolio.holdings.find((row) => row.ticker === ticker);
     if (!holding) return res.status(404).json({ ok: false, error: 'HOLDING_NOT_FOUND' });
 
     const quantity = holding.quantity;
@@ -76,7 +72,7 @@ router.post('/portfolio/intelligence/additional-buy', async (req: AuthenticatedR
       currentAveragePrice: currentAveragePriceKRW,
       currentPrice: currentPriceKRW,
       currentPositionValueKRW: currentPositionValueKRW ?? Number.NaN,
-      portfolioValueKRW: portfolioValueKRW ?? Number.NaN,
+      portfolioValueKRW,
       additionalAmountKRW: additionalAmountKRW ?? undefined,
       additionalQuantity: additionalQuantity ?? undefined,
       stopLoss: null,
@@ -87,9 +83,6 @@ router.post('/portfolio/intelligence/additional-buy', async (req: AuthenticatedR
       ok: true,
       status: result.status,
       holding: {
-        id: holding.id,
-        sourceHoldingIds: holding.sourceHoldingIds,
-        quantity: holding.quantity,
         ticker: holding.ticker,
         name: holding.name,
         market: holding.market,
@@ -99,7 +92,6 @@ router.post('/portfolio/intelligence/additional-buy', async (req: AuthenticatedR
         currentPositionValueKRW,
       },
       priceBasis: 'NORMALIZED_KRW',
-      asOf: portfolio.asOf,
       result,
       evidence: {
         stopLoss: 'UNAVAILABLE',
@@ -118,7 +110,7 @@ router.post('/portfolio/intelligence/monthly-contribution', async (req: Authenti
   const body = asRecord(req.body);
   const monthlyAmountKRW = positiveNumber(body.monthlyAmountKRW);
   const monthsValue = positiveNumber(body.months);
-  const months = monthsValue == null || !Number.isInteger(monthsValue) ? null : monthsValue;
+  const months = monthsValue == null ? null : Math.floor(monthsValue);
   if (monthlyAmountKRW == null || months == null || months <= 0 || months > 120) {
     return res.status(400).json({ ok: false, error: 'INVALID_MONTHLY_PLAN_INPUT' });
   }
@@ -142,7 +134,6 @@ router.post('/portfolio/intelligence/monthly-contribution', async (req: Authenti
       profileForPolicyComparison: portfolio.allocationPolicy.profile,
       profileUsedForAllocation: false,
       assumption: 'NO_VALIDATED_RETURN_ASSUMPTION',
-      asOf: portfolio.asOf,
       unavailableOutputs: ['FUTURE_RETURN', 'FUTURE_ASSET_VALUE', 'EXPECTED_CAGR'],
       safety: portfolio.safety,
     });
