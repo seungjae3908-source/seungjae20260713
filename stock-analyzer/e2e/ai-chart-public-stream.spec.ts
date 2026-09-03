@@ -218,3 +218,33 @@ test('REST bootstrap excludes unknown volume but preserves explicitly observed z
   expect(normalizeChartCandles([{ ...candle, volume: 0 }], '1m').candles[0].volume).toBe(0);
   expect(normalizeChartCandles([{ ...candle, volume: '0' }], '1m').candles[0].volume).toBe(0);
 });
+
+test('Upbit REST UTC and KST candle clocks are normalized explicitly and preserve raw OHLCV truth', () => {
+  const nowSeconds = Math.floor(Date.parse('2026-08-27T00:01:00.000Z') / 1_000);
+  const common = {
+    opening_price: 100,
+    high_price: 101,
+    low_price: 99,
+    trade_price: 100.5,
+    candle_acc_trade_volume: 12.25,
+  };
+
+  const utc = normalizeChartCandles([{ ...common, candle_date_time_utc: '2026-08-27T00:00:00' }], '1m', nowSeconds);
+  const kst = normalizeChartCandles([{ ...common, candle_date_time_kst: '2026-08-27T09:00:00' }], '1m', nowSeconds);
+
+  expect(utc.candles).toHaveLength(1);
+  expect(kst.candles).toHaveLength(1);
+  expect(utc.candles[0]).toMatchObject({
+    time: Math.floor(Date.parse('2026-08-27T00:00:00Z') / 1_000),
+    sourceTime: '2026-08-27T00:00:00Z',
+    open: 100,
+    high: 101,
+    low: 99,
+    close: 100.5,
+    volume: 12.25,
+  });
+  expect(kst.candles[0]).toMatchObject({
+    time: Math.floor(Date.parse('2026-08-27T09:00:00+09:00') / 1_000),
+    sourceTime: '2026-08-27T09:00:00+09:00',
+  });
+});

@@ -132,6 +132,36 @@ test('stream identity includes timeframe and generation', () => {
   expect(aiChartStreamIdentityKey(base)).not.toBe(aiChartStreamIdentityKey({ ...base, generation: 2 }));
 });
 
+test('scanner evidence retention is bound to the exact market symbol and timeframe identity', () => {
+  const unified = readFileSync(new URL('../src/components/unified-analysis-chart.tsx', import.meta.url), 'utf8');
+
+  expect(unified).toContain('const sameScannerIdentity = selection.market === candidate.market');
+  expect(unified).toContain('selection.ticker === symbol');
+  expect(unified).toContain('selection.timeframe === nextTimeframe');
+  expect(unified).toContain('pricePlan: sameScannerIdentity ? selection.pricePlan : undefined');
+  expect(unified).not.toContain('const sameScannerAsset =');
+  expect(unified).not.toContain('같은 종목에서는 차트 시간봉을 바꿔도 Scanner에서 전달된 계획을 유지합니다.');
+});
+
+test('REST freshness and visible data age are derived from authoritative candle source time', () => {
+  const unified = readFileSync(new URL('../src/components/unified-analysis-chart.tsx', import.meta.url), 'utf8');
+
+  expect(unified).toContain('function latestCandleSourceTimeMs');
+  expect(unified).toContain('latest.time * 1_000');
+  expect(unified).toContain('function sourceAwareChartDataStatus');
+  expect(unified).toContain('const dataStatus = sourceAwareChartDataStatus(chartQuery.data, chartQuery.isError);');
+  expect(unified).not.toContain('const value = data?.updatedAt ?? data?.fetchedAt;');
+});
+
+test('visible transport status follows the validated public stream state rather than a fixed LIVE label', () => {
+  const unified = readFileSync(new URL('../src/components/unified-analysis-chart.tsx', import.meta.url), 'utf8');
+
+  expect(unified).toContain("const realtimeStatusLabel = live ? realtimeHealth.connectionState : 'POLLING_PAUSED';");
+  expect(unified).toContain('{realtimeStatusLabel}');
+  expect(unified).toContain('공개 read-only ${streamMarket} WebSocket');
+  expect(unified).not.toContain("{live ? 'FALLBACK POLLING' : 'POLLING PAUSED'}");
+});
+
 test('runtime wiring uses bounded client reconciliation and imperative incremental chart updates', () => {
   const unified = readFileSync(new URL('../src/components/unified-analysis-chart.tsx', import.meta.url), 'utf8');
   const canvas = readFileSync(new URL('../src/components/pattern-aware-unified-chart-canvas.tsx', import.meta.url), 'utf8');
