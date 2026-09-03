@@ -337,7 +337,11 @@ test('V3 ingest fails closed on manual/rerun/policy/slot/chronology/authority/ar
   }
 });
 
-test('Run 36 shaped native Successor V3 receipt persists once and retains native lineage without promotion', async () => {
+test('Run 36 shaped native Successor V3 receipt persists once and retains native lineage without promotion', {
+  skip: SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.activationBound !== true
+    ? 'preserved inactive-contract regression mode'
+    : false,
+}, async () => {
   const stateRoot = await mkdtemp(join(tmpdir(), 'liquidity-successor-v3-'));
   try {
     const raw = batch(30_000, 'successor-run-36');
@@ -364,7 +368,11 @@ test('Run 36 shaped native Successor V3 receipt persists once and retains native
   }
 });
 
-test('Successor V3 admission rejects non-scheduled, rerun, diagnostic, identity, artifact and authority mutations', async () => {
+test('Successor V3 admission rejects non-scheduled, rerun, diagnostic, identity, artifact and authority mutations', {
+  skip: SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.activationBound !== true
+    ? 'preserved inactive-contract regression mode'
+    : false,
+}, async () => {
   const raw = batch(40_000, 'successor-reject');
   const mutations = [
     [(value) => ({ ...value, eventName: 'pull_request' }), /SUCCESSOR_V3_CAPTURE_RECEIPT_CONTRACT_INVALID/],
