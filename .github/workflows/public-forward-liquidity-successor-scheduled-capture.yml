@@ -74,7 +74,6 @@ jobs:
           node --check market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-reliability-v3.mjs
 
       - name: Stash activation binding for preserved inactive regressions
-        if: github.event_name == 'pull_request'
         shell: bash
         run: |
           set -euo pipefail
@@ -95,11 +94,9 @@ jobs:
       - name: Run zero-network zero-capture runner self-check
         run: node market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs self-check
 
-      - name: Restore and validate V3 activation binding candidate
-        if: github.event_name == 'pull_request' && env.SUCCESSOR_V3_ACTIVATION_STASHED == 'true'
+      - name: Restore and validate V3 activation binding
+        if: env.SUCCESSOR_V3_ACTIVATION_STASHED == 'true'
         shell: bash
-        env:
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           activation='market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json'
@@ -116,6 +113,29 @@ jobs:
             console.error('Invalid V3 activation binding:', verdict.blockers.join(','));
             process.exit(1);
           }
+          NODE
+
+      - name: Require active V3 binding for scheduled validation
+        if: github.event_name == 'schedule'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${SUCCESSOR_V3_ACTIVATION_STASHED:-false}" = 'true'
+          test "$GITHUB_REF" = 'refs/heads/main'
+
+      - name: Verify pull-request activation binding exact base
+        if: github.event_name == 'pull_request' && env.SUCCESSOR_V3_ACTIVATION_STASHED == 'true'
+        shell: bash
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import {
+            SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT,
+          } from './market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-reliability-v3.mjs';
+
+          const contract = SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT;
           if (contract.policyCore.activationBinding.authorizedCurrentMainSha !== process.env.PR_BASE_SHA) {
             console.error('V3 activation binding is not bound to the exact PR base main');
             process.exit(1);
