@@ -2,7 +2,6 @@ import { authorizedFetch } from '@/lib/auth-fetch';
 import { apiGet } from '@/lib/api';
 import { getFuturesMarketSnapshot, type DataStatus, type FuturesContractRules, type FuturesMarketSnapshot, type NormalizedCandle } from '@/lib/futures-market-data';
 import type { RiskEngineInput, RiskEngineResult } from '@/lib/trading-risk';
-import { validPaperActionResult, validPaperState } from '../../../packages/api-zod/src/paper-state-evidence.js';
 
 export type PaperSide = 'long' | 'short';
 export type PaperOrderType = 'market' | 'limit' | 'stop_market';
@@ -46,7 +45,6 @@ export type PaperJournalEntry = {
   fundingCost: number; grossPnl: number; netPnl: number; rMultiple: number | null; exitReason: PaperFillReason | null;
   dataStatusAtEntry: DataStatus; marketRegimeAtEntry: string; riskBlocked: boolean; warnings: string[];
   ruleViolation: boolean; status: PaperPositionStatus; note: string;
-  conflictCopyOf?: string; researchEvidenceEligible?: false;
 };
 
 export type PaperTradingState = {
@@ -137,9 +135,7 @@ export function paperStateTransportNotice(transport: PaperStateTransport | null)
 }
 
 export async function evaluatePaperTrading(state: PaperTradingState, action: PaperTradingAction, signal?: AbortSignal) {
-  if (!validPaperState(state, Date.now())) throw new Error('모의거래 입력 기록의 근거를 확인하지 못했습니다.');
   const resolvedAction = await resolvePaperTradingActionMarket(state, action);
-  signal?.throwIfAborted();
   const response = await authorizedFetch('/api/paper-trading/evaluate', {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ state, action: resolvedAction }), signal,
   });
@@ -147,8 +143,7 @@ export async function evaluatePaperTrading(state: PaperTradingState, action: Pap
   if (!body || body.mode !== 'paper-only' || body.orderSubmitted !== false || body.exchangeRequestSent !== false) {
     throw new Error('모의거래 안전 계약을 확인하지 못했습니다.');
   }
-  if (!response.ok || body.ok !== true || !body.result) throw new Error(body.message ?? body.code ?? '모의거래 계산을 처리하지 못했습니다.');
-  if (!validPaperActionResult(body.result, state, action.eventId, Date.now())) throw new Error('모의거래 결과의 기록·식별자·수치 근거를 확인하지 못했습니다.');
+  if (!response.ok || !body.ok || !body.result) throw new Error(body.message ?? body.code ?? '모의거래 계산을 처리하지 못했습니다.');
   const paperStateTransport = normalizePaperStateTransport(body.paperStateTransport);
   const transportNotice = paperStateTransportNotice(paperStateTransport);
   return {
@@ -171,4 +166,33 @@ export {
   type StorageLike, type PaperStorageEnvelope,
 } from './paper-trading-storage';
 
-export { calculatePaperStatistics, type PaperStatistics } from './paper-statistics';
+export type PaperStatistics = {
+  totalTrades: number; wins: number; losses: number; winRate: number; averageProfit: number; averageLoss: number;
+  expectancy: number; averageR: number; profitFactor: number | null; maximumConsecutiveWins: number;
+  maximumConsecutiveLosses: number; cumulativeNetPnl: number; totalFees: number; totalSlippage: number; totalFunding: number;
+};
+
+export function calculatePaperStatistics(journal: readonly PaperJournalEntry[]): PaperStatistics {
+  const entries = journal.filter((item) => item.status === 'closed');
+  const profits = entries.filter((item) => item.netPnl > 0);
+  const losses = entries.filter((item) => item.netPnl < 0);
+  const grossProfit = profits.reduce((sum, item) => sum + item.netPnl, 0);
+  const grossLoss = Math.abs(losses.reduce((sum, item) => sum + item.netPnl, 0));
+  let wins = 0; let lossCount = 0; let maxWins = 0; let maxLosses = 0;
+  for (const item of [...entries].sort((a, b) => Date.parse(a.closedAt ?? a.filledAt) - Date.parse(b.closedAt ?? b.filledAt))) {
+    if (item.netPnl > 0) { wins += 1; lossCount = 0; }
+    else if (item.netPnl < 0) { lossCount += 1; wins = 0; }
+    else { wins = 0; lossCount = 0; }
+    maxWins = Math.max(maxWins, wins); maxLosses = Math.max(maxLosses, lossCount);
+  }
+  const total = entries.length;
+  const net = entries.reduce((sum, item) => sum + item.netPnl, 0);
+  return {
+    totalTrades: total, wins: profits.length, losses: losses.length, winRate: total ? profits.length / total * 100 : 0,
+    averageProfit: profits.length ? grossProfit / profits.length : 0, averageLoss: losses.length ? -grossLoss / losses.length : 0,
+    expectancy: total ? net / total : 0, averageR: total ? entries.reduce((sum, item) => sum + (item.rMultiple ?? 0), 0) / total : 0,
+    profitFactor: grossLoss > 0 ? grossProfit / grossLoss : null, maximumConsecutiveWins: maxWins, maximumConsecutiveLosses: maxLosses,
+    cumulativeNetPnl: net, totalFees: entries.reduce((sum, item) => sum + item.entryFee + item.exitFee, 0),
+    totalSlippage: entries.reduce((sum, item) => sum + item.slippageCost, 0), totalFunding: entries.reduce((sum, item) => sum + item.fundingCost, 0),
+  };
+}

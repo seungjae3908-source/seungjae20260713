@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, Cloud, CloudOff, Database, Loader2, RefreshCw, ShieldCheck } from 'lucide-react';
 import {
   buildTradingReviewDataset,
@@ -20,11 +20,9 @@ import {
   markJournalSyncFailed,
   markJournalSyncOffline,
   prepareJournalSync,
-  saveJournalSyncMetadata,
   type JournalSyncMetadata,
 } from '@/lib/paper-journal-sync-storage';
 import { loadPaperState, savePaperState, type StorageLike } from '@/lib/paper-trading';
-import { PAPER_STORAGE_KEY } from '@/lib/paper-trading-storage';
 import { TradingAiReviewPanel } from './trading-ai-review-panel';
 import { UnifiedTradeJournalPanel } from './unified-trade-journal-panel';
 
@@ -82,30 +80,6 @@ export function PaperJournalSyncAnalyticsPanel({
   const [periodEnd, setPeriodEnd] = useState('');
   const [analytics, setAnalytics] = useState<JournalAnalytics | null>(null);
   const [review, setReview] = useState<TradingReviewDataset | null>(null);
-  const operation = useRef<AbortController | null>(null);
-  useEffect(() => () => { operation.current?.abort(); operation.current = null; }, [userId]);
-
-  function beginOperation() {
-    if (operation.current) return null;
-    const controller = new AbortController();
-    operation.current = controller;
-    setBusy(true); setError(''); setNotice('');
-    return controller;
-  }
-  function current(controller: AbortController) { return operation.current === controller && !controller.signal.aborted; }
-  function finish(controller: AbortController) {
-    if (current(controller)) { operation.current = null; setBusy(false); }
-  }
-  function readLocal() {
-    const loaded = loadPaperState(paperStorage);
-    if (loaded.blocked) throw new Error(loaded.warning);
-    return { state: loaded.state, raw: paperStorage.getItem(PAPER_STORAGE_KEY) };
-  }
-  function persist(applied: ReturnType<typeof applyJournalSyncResult>, original: string | null) {
-    if (paperStorage.getItem(PAPER_STORAGE_KEY) !== original) throw new Error('동기화 중 로컬 기록이 변경되었습니다. 원본을 덮어쓰지 않았습니다. 다시 동기화하세요.');
-    savePaperState(paperStorage, applied.state);
-    saveJournalSyncMetadata(rootStorage, userId, applied.metadata);
-  }
 
   useEffect(() => {
     const update = () => setOnline(navigator.onLine);
@@ -115,99 +89,85 @@ export function PaperJournalSyncAnalyticsPanel({
   }, []);
 
   async function synchronize() {
-    if (operation.current) return;
+    if (busy) return;
     if (!online) {
-      try {
-        const next = markJournalSyncOffline(rootStorage, userId);
-        setMetadata(next); setNotice(next.warning);
-      } catch { setError('오프라인 상태이며 동기화 상태를 저장하지 못했습니다. 원본을 변경하지 않았습니다.'); }
+      const next = markJournalSyncOffline(rootStorage, userId);
+      setMetadata(next);
+      setNotice(next.warning);
       return;
     }
-    const controller = beginOperation();
-    if (!controller) return;
+    setBusy(true); setError(''); setNotice('');
     try {
-      const local = readLocal();
-      const prepared = prepareJournalSync(rootStorage, userId, local.state);
+      const local = loadPaperState(paperStorage).state;
+      const prepared = prepareJournalSync(rootStorage, userId, local);
       setMetadata({ ...prepared.metadata, status: 'syncing' });
       const idempotencyKey = `journal-sync:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
-      const result = await syncApi({ idempotencyKey, clientTime: new Date().toISOString(), records: prepared.records }, controller.signal);
-      if (!current(controller)) return;
-      let applied = applyJournalSyncResult(rootStorage, userId, local.state, result);
+      const result = await syncApi({ idempotencyKey, clientTime: new Date().toISOString(), records: prepared.records });
+      let applied = applyJournalSyncResult(rootStorage, userId, local, result);
 
       let cursor: string | null = null;
       let pages = 0;
       do {
-        const snapshot = await snapshotApi(cursor, 100, controller.signal);
-        if (!current(controller)) return;
-        applied = applyJournalSnapshot(rootStorage, userId, applied.state, snapshot, applied.metadata);
+        const snapshot = await snapshotApi(cursor, 100);
+        applied = applyJournalSnapshot(rootStorage, userId, applied.state, snapshot);
         cursor = snapshot.nextCursor;
         pages += 1;
       } while (cursor && pages < 10);
-      if (cursor) throw new Error('동기화 페이지 한도에 도달했습니다. 전체 기록을 확인하지 못해 완료 처리하지 않았습니다.');
 
-      persist(applied, local.raw);
+      savePaperState(paperStorage, applied.state);
       setMetadata(applied.metadata);
       setNotice(result.conflicts.length
         ? `충돌 ${result.conflicts.length}건을 확인하세요.`
         : result.failed.length
           ? `일부 실패 ${result.failed.length}건이 남았습니다. 로컬 기록은 유지됩니다.`
-          : `업로드 ${result.uploaded.length}건, 다운로드 ${applied.metadata.downloadedCount}건을 동기화했습니다. ${applied.metadata.warning}`);
+          : `업로드 ${result.uploaded.length}건, 다운로드 ${applied.metadata.downloadedCount}건을 동기화했습니다.`);
       onLocalStateChanged?.();
     } catch (cause) {
-      if (!current(controller)) return;
       const message = cause instanceof Error ? cause.message : '거래일지를 동기화하지 못했습니다.';
-      try {
-        const next = online ? markJournalSyncFailed(rootStorage, userId, message) : markJournalSyncOffline(rootStorage, userId);
-        setMetadata(next);
-      } catch { setMetadata((previous) => ({ ...previous, status: 'failed' })); }
+      const next = online
+        ? markJournalSyncFailed(rootStorage, userId, message)
+        : markJournalSyncOffline(rootStorage, userId);
+      setMetadata(next);
       setError(message);
     } finally {
-      finish(controller);
+      setBusy(false);
     }
   }
 
   async function resolve(conflict: JournalConflict, choice: ConflictChoice) {
-    const controller = beginOperation();
-    if (!controller) return;
+    if (busy) return;
+    setBusy(true); setError('');
     try {
-      const local = readLocal();
-      const response = await resolveApi(conflict.id, choice, controller.signal);
-      if (!current(controller)) return;
-      const applied = applyConflictResolution(rootStorage, userId, local.state, response);
-      persist(applied, local.raw);
+      const local = loadPaperState(paperStorage).state;
+      const response = await resolveApi(conflict.id, choice);
+      const applied = applyConflictResolution(rootStorage, userId, local, response);
+      savePaperState(paperStorage, applied.state);
       setMetadata(applied.metadata);
       setNotice('충돌 해결 결과를 로컬 기록에 반영했습니다.');
       onLocalStateChanged?.();
     } catch (cause) {
-      if (!current(controller)) return;
       setError(cause instanceof Error ? cause.message : '충돌을 해결하지 못했습니다.');
-    } finally { finish(controller); }
+    } finally { setBusy(false); }
   }
 
   async function loadAnalytics() {
-    const controller = beginOperation();
-    if (!controller) return;
-    setAnalytics(null);
+    if (busy) return;
+    setBusy(true); setError('');
     try {
-      const next = await analyticsApi(periodStart || undefined, periodEnd || undefined, controller.signal);
-      if (!current(controller)) return;
-      setAnalytics(next);
+      setAnalytics(await analyticsApi(periodStart || undefined, periodEnd || undefined));
       setNotice('서버에 동기화된 거래기록으로 분석했습니다.');
-    } catch (cause) { if (current(controller)) setError(cause instanceof Error ? cause.message : '거래 분석을 불러오지 못했습니다.'); }
-    finally { finish(controller); }
+    } catch (cause) { setError(cause instanceof Error ? cause.message : '거래 분석을 불러오지 못했습니다.'); }
+    finally { setBusy(false); }
   }
 
   async function prepareReview() {
-    const controller = beginOperation();
-    if (!controller) return;
-    setReview(null);
+    if (busy) return;
+    setBusy(true); setError('');
     try {
-      const next = await reviewApi(periodStart || undefined, periodEnd || undefined, controller.signal);
-      if (!current(controller)) return;
-      setReview(next);
+      setReview(await reviewApi(periodStart || undefined, periodEnd || undefined));
       setNotice('개인정보를 제외한 복기용 구조화 데이터를 준비했습니다. 외부 전송은 없습니다.');
-    } catch (cause) { if (current(controller)) setError(cause instanceof Error ? cause.message : '복기 데이터를 준비하지 못했습니다.'); }
-    finally { finish(controller); }
+    } catch (cause) { setError(cause instanceof Error ? cause.message : '복기 데이터를 준비하지 못했습니다.'); }
+    finally { setBusy(false); }
   }
 
   return <section className="space-y-4" data-testid="journal-sync-analytics">
@@ -241,9 +201,8 @@ export function PaperJournalSyncAnalyticsPanel({
         <div className="mt-3 grid gap-2 sm:grid-cols-3">
           <button className={buttonClass} type="button" disabled={busy} onClick={() => void resolve(conflict, 'server')}>서버 버전 유지</button>
           <button className={buttonClass} type="button" disabled={busy} onClick={() => void resolve(conflict, 'device')}>이 기기 버전 유지</button>
-          <button className={buttonClass} type="button" disabled={busy || conflict.kind !== 'journal'} onClick={() => void resolve(conflict, 'preserve_both')}>둘 다 사본으로 보존</button>
+          <button className={buttonClass} type="button" disabled={busy} onClick={() => void resolve(conflict, 'preserve_both')}>둘 다 사본으로 보존</button>
         </div>
-        <p className="mt-2 text-xs text-muted-foreground">{conflict.kind === 'journal' ? '보존 사본은 별도 체결이나 거래 성과로 집계하지 않습니다.' : '주문·포지션·체결·계좌는 실행 원장에 복제할 수 없습니다.'}</p>
       </article>)}</div>
     </div> : null}
 

@@ -2,7 +2,6 @@
 // These are the API-ready contracts. Live provider services can return
 // the same shapes from Yahoo, Naver, DART, SEC, Finnhub, AlphaVantage.
 import type { Market, Currency } from '../data/catalog';
-import type { QuoteTimeEvidence } from '../providers/market-evidence';
 
 export type Timeframe =
 	| '1m'
@@ -62,9 +61,6 @@ export interface CompanyProfile {
 }
 
 export interface Quote {
-	updatedAt?: string | null;
-	freshness?: QuoteTimeEvidence['freshness'];
-	source?: string;
 	price: number;
 	changeAmount: number;
 	changePercent: number;
@@ -108,10 +104,8 @@ export interface FinancialRatios {
 
 export interface CashBurn {
 	cashBalance: number;
-	quarterlyBurn: number | null;
+	quarterlyBurn: number;
 	survivalQuarters: number | null;
-	status?: 'MISSING_EVIDENCE';
-	reason?: 'CASH_FLOW_STATEMENT_NOT_AVAILABLE';
 }
 
 export type HealthLevel = 'STRONG' | 'AVERAGE' | 'WEAK';
@@ -130,9 +124,7 @@ export interface Financials {
 	cashBurn: CashBurn;
 	health: {
 		level: HealthLevel;
-		confidence: number | null;
-		score?: number;
-		method?: 'FINANCIAL_RULES_V1';
+		confidence: number;
 	};
 }
 

@@ -23,8 +23,6 @@ export type PaperJournalSyncRecord = {
   kind: PaperJournalRecordKind;
   id: string;
   version: number;
-  /** Last server-acknowledged version. null = new record; absent = legacy/unknown ancestry. */
-  baseVersion?: number | null;
   updatedAt: string;
   deletedAt: string | null;
   payload: Record<string, unknown>;
@@ -66,7 +64,6 @@ export type PaperJournalSyncResult = {
   orderSubmitted: false;
   exchangeRequestSent: false;
   idempotencyKey: string;
-  requestFingerprint?: string;
   serverTime: string;
   uploaded: StoredPaperJournalRecord[];
   downloaded: StoredPaperJournalRecord[];
@@ -85,8 +82,6 @@ export type PaperJournalSnapshotResult = {
   records: StoredPaperJournalRecord[];
   nextCursor: string | null;
   serverTime: string;
-  scope: 'manual-paper-trading';
-  excludedNamespaces: Array<{ namespace: 'currency-research' | 'signal-performance' | 'broker-execution'; count: number }>;
 };
 
 export type ConflictResolutionChoice = 'server' | 'device' | 'preserve_both';
@@ -208,9 +203,7 @@ export type AnalysisOnlyResult<T> = {
 
 export interface PaperJournalRepository {
   getRecord(userId: string, kind: PaperJournalRecordKind, id: string): Promise<StoredPaperJournalRecord | null>;
-  // Omitted/null expects a new row; an existing row requires an atomic version match.
-  upsertRecord(userId: string, record: PaperJournalSyncRecord, serverTime: string, expectedVersion?: number | null): Promise<StoredPaperJournalRecord>;
-  claimSyncRequest?(userId: string, idempotencyKey: string, fingerprint: string, serverTime: string): Promise<PaperJournalSyncResult | null>;
+  upsertRecord(userId: string, record: PaperJournalSyncRecord, serverTime: string): Promise<StoredPaperJournalRecord>;
   listSnapshot(userId: string): Promise<StoredPaperJournalRecord[]>;
   getIdempotentResponse(userId: string, idempotencyKey: string): Promise<PaperJournalSyncResult | null>;
   saveIdempotentResponse(userId: string, idempotencyKey: string, result: PaperJournalSyncResult, serverTime: string): Promise<void>;

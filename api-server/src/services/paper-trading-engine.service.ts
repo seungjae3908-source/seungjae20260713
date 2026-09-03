@@ -11,7 +11,7 @@ export function applyPaperTradingAction(
   action: PaperTradingAction,
   now = new Date(),
 ): PaperTradingActionResult {
-  validateState(inputState, now.getTime());
+  validateState(inputState);
   validateEventId(action.eventId);
   const state = cloneState(inputState);
   state.riskState = normalizedRiskState(state.riskState, now);
@@ -40,7 +40,6 @@ export function applyPaperTradingAction(
   markEvent(result.state, action.eventId);
   result.state.updatedAt = now.toISOString();
   assertFinitePaperState(result.state);
-  validateState(result.state, now.getTime());
   return result;
 }
 

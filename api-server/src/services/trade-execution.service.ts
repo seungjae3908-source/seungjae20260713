@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { marketNumber } from '../providers/market-evidence';
 import type { TradingRepository } from './trade-automation.repository';
 import { TradeAutomationService, liveExecutionEnabled } from './trade-automation.service';
 import { TradeCancelReconciliationService } from './trade-cancel-reconciliation.service';
@@ -16,7 +15,6 @@ import {
   prepareBitgetPositions,
   prepareBitgetTicker,
   prepareKiwoomOrder,
-  prepareKiwoomDomesticAccount,
   prepareKiwoomOrderable,
   prepareKiwoomToken,
   prepareKiwoomUnfilled,
@@ -38,7 +36,6 @@ import {
   buildKiwoomExecutionSnapshot,
   buildPaperExecutionSnapshot,
   buildUpbitExecutionSnapshot,
-  kiwoomOrderableReferencePrice,
   prepareBitgetExecutionDepth,
   prepareKiwoomExecutionOrderbook,
   prepareUpbitExecutionOrderbook,
@@ -50,7 +47,6 @@ import {
   type PreSubmissionRiskResult,
 } from './trade-pre-submission-risk.service';
 import { getScannerSignalLifecycleSnapshot } from './scanner-signal-lifecycle.service';
-import { loadUsdtKrw } from './public-fx.service';
 import type {
   TradingOrder,
   TradingPlan,
@@ -103,7 +99,6 @@ async function fetchExchangeJson(
   baseUrl: string,
   request: PreparedExchangeRequest,
   timeoutMs = ORDER_TIMEOUT_MS,
-  inspectHeaders?: (headers: Headers) => void,
 ): Promise<unknown> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -116,7 +111,6 @@ async function fetchExchangeJson(
       signal: controller.signal,
     });
     if (!response.ok) throw new Error(`EXCHANGE_HTTP_${response.status}`);
-    inspectHeaders?.(response.headers);
     const raw = await response.text();
     if (!raw.trim()) throw new Error(invalidResponseCode(baseUrl));
     try {
@@ -212,44 +206,6 @@ function assertKiwoomSuccess(payload: ExchangePayload) {
   return payload;
 }
 
-/** Account pages are transport-bound to their TR and drained before any risk decision. */
-async function sendKiwoomAccountRead(baseUrl: string, request: PreparedExchangeRequest, listKey?: 'oso' | 'acnt_evlt_remn_indv_tot') {
-  let nextKey = '';
-  let first: ExchangePayload | null = null;
-  const collected: ExchangePayload[] = [];
-  const cursors = new Set<string>();
-  for (let page = 0; page < 10; page++) {
-    const pageHeaders: { continuation: string | null; responseKey: string | null } = { continuation: null, responseKey: null };
-    const raw = await fetchExchangeJson(baseUrl, {
-      ...request, headers: { ...request.headers, ...(page ? { 'cont-yn': 'Y', 'next-key': nextKey } : {}) },
-    }, PREFLIGHT_TIMEOUT_MS, (headers) => {
-      if (headers.get('api-id') !== request.headers['api-id']) throw new Error('KIWOOM_RESPONSE_TR_MISMATCH');
-      pageHeaders.continuation = headers.get('cont-yn');
-      pageHeaders.responseKey = headers.get('next-key');
-    });
-    const { continuation, responseKey } = pageHeaders;
-    if (!isRecord(raw)) throw new Error('KIWOOM_INVALID_RESPONSE');
-    const payload = assertKiwoomSuccess(raw);
-    if (continuation !== null && continuation !== '' && continuation !== 'N' && continuation !== 'Y') throw new Error('KIWOOM_CONTINUATION_INVALID');
-    if (listKey) {
-      const rows = payload[listKey];
-      if (!Array.isArray(rows) || !rows.every(isRecord)) throw new Error('KIWOOM_ACCOUNT_LIST_UNAVAILABLE');
-      collected.push(...rows);
-      if (collected.length > 10000) throw new Error('KIWOOM_ACCOUNT_SCAN_LIMIT');
-      if (first && listKey === 'acnt_evlt_remn_indv_tot' && payload.prsm_dpst_aset_amt !== first.prsm_dpst_aset_amt) throw new Error('KIWOOM_ACCOUNT_CHANGED_DURING_SCAN');
-    }
-    first ??= payload;
-    if (continuation !== 'Y') {
-      if (responseKey) throw new Error('KIWOOM_CONTINUATION_INVALID');
-      return listKey ? { ...first, [listKey]: collected } : first;
-    }
-    if (!listKey || typeof responseKey !== 'string' || !responseKey || responseKey.length > 200 || cursors.has(responseKey)) throw new Error('KIWOOM_ACCOUNT_SCAN_INCOMPLETE');
-    cursors.add(responseKey);
-    nextKey = responseKey;
-  }
-  throw new Error('KIWOOM_ACCOUNT_SCAN_LIMIT');
-}
-
 function assertKiwoomOrderAccepted(payload: ExchangePayload) {
   const row = assertKiwoomSuccess(payload);
   const orderId = text(row.ord_no ?? row.order_no);
@@ -259,7 +215,7 @@ function assertKiwoomOrderAccepted(payload: ExchangePayload) {
 
 function kiwoomLookupContainsOrder(payload: ExchangePayload, orderId: string) {
   const row = assertKiwoomSuccess(payload);
-  const candidates = [row.oso];
+  const candidates = [row.data, row.output, row.orders, row.ord_list, row.unfilled];
   for (const candidate of candidates) {
     const rows = Array.isArray(candidate)
       ? candidate.filter(isRecord)
@@ -538,24 +494,21 @@ export class TradeExecutionService {
     order: TradingOrder,
     credentials: BitgetCredentials,
   ) {
-    const [accounts, positions, pending, contracts, ticker, depth, fxQuote] = await Promise.all([
+    const [accounts, positions, pending, contracts, ticker, depth] = await Promise.all([
       sendExchangeRequest(BASE_URLS.bitget, prepareBitgetAccount(credentials), PREFLIGHT_TIMEOUT_MS).then(assertBitgetSuccess),
       sendExchangeRequest(BASE_URLS.bitget, prepareBitgetPositions(credentials), PREFLIGHT_TIMEOUT_MS).then(assertBitgetSuccess),
       sendExchangeRequest(BASE_URLS.bitget, prepareBitgetPendingOrders(credentials, plan.symbol), PREFLIGHT_TIMEOUT_MS).then(assertBitgetSuccess),
       sendExchangeRequest(BASE_URLS.bitget, prepareBitgetContractConfig(plan.symbol), PREFLIGHT_TIMEOUT_MS).then(assertBitgetSuccess),
       sendExchangeRequest(BASE_URLS.bitget, prepareBitgetTicker(plan.symbol), PREFLIGHT_TIMEOUT_MS).then(assertBitgetSuccess),
       sendExchangeRequest(BASE_URLS.bitget, prepareBitgetExecutionDepth(plan.symbol), PREFLIGHT_TIMEOUT_MS).then(assertBitgetSuccess),
-      loadUsdtKrw(),
     ]);
     const contractRows = Array.isArray(contracts) ? contracts.filter(isRecord) : [];
-    const matchingContracts = contractRows.filter((row) => row.symbol === plan.symbol.toUpperCase());
-    if (matchingContracts.length !== 1) throw new Error('BITGET_CONTRACT_RULES_UNAVAILABLE');
-    const contract = matchingContracts[0];
+    const contract = contractRows.find((row) => String(row.symbol ?? '').toUpperCase() === plan.symbol.toUpperCase());
+    if (!contract) throw new Error('BITGET_CONTRACT_RULES_UNAVAILABLE');
     const tickerRows = Array.isArray(ticker) ? ticker.filter(isRecord) : [];
-    const matchingTickers = tickerRows.filter((row) => row.symbol === plan.symbol.toUpperCase());
-    if (matchingTickers.length !== 1) throw new Error('BITGET_TICKER_IDENTITY_INVALID');
-    const tickerRow = matchingTickers[0];
-    validateBitgetContractRules(plan, contract, marketNumber(tickerRow.markPrice ?? tickerRow.lastPr) ?? undefined);
+    const tickerRow = tickerRows.find((row) => String(row.symbol ?? '').toUpperCase() === plan.symbol.toUpperCase())
+      ?? tickerRows[0];
+    validateBitgetContractRules(plan, contract, Number(tickerRow?.markPrice ?? tickerRow?.lastPr ?? 0));
     const canChangeMarginMode = bitgetPreflight([accounts, positions, pending, ticker], plan, order.clientOrderId);
     assertNoOrphanExchangeOrders('bitget', bitgetPendingRefs(pending), await this.repository.listOrders(userId));
     const risk = await this.riskService.evaluate({
@@ -563,7 +516,7 @@ export class TradeExecutionService {
       expectedPlan: plan,
       order,
       snapshot: buildBitgetExecutionSnapshot({
-        plan, accounts, positions, ticker, depth, contract, fxQuote,
+        plan, accounts, positions, ticker, depth, contract,
         signal: this.signalSnapshot(userId, plan),
       }),
       serverLiveEnabled: liveExecutionEnabled('bitget'),
@@ -658,26 +611,17 @@ export class TradeExecutionService {
     const token = String(tokenPayload.token ?? (isRecord(tokenPayload.data) ? tokenPayload.data.token : '') ?? '');
     if (!token) throw new Error('KIWOOM_TOKEN_MISSING');
     const authenticated = { ...credentials, accessToken: token };
-    const [account, unfilled, orderbook] = await Promise.all([
-      sendKiwoomAccountRead(baseUrl, prepareKiwoomDomesticAccount(authenticated), 'acnt_evlt_remn_indv_tot'),
-      sendKiwoomAccountRead(baseUrl, prepareKiwoomUnfilled(authenticated), 'oso'),
+    const [orderable, unfilled, orderbook] = await Promise.all([
+      sendExchangeRequest(baseUrl, prepareKiwoomOrderable(authenticated), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess),
+      sendExchangeRequest(baseUrl, prepareKiwoomUnfilled(authenticated), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess),
       sendExchangeRequest(baseUrl, prepareKiwoomExecutionOrderbook(token, plan.symbol), PREFLIGHT_TIMEOUT_MS).then(assertKiwoomSuccess),
     ]);
-    const orderable = await sendKiwoomAccountRead(baseUrl,
-      prepareKiwoomOrderable(authenticated, plan, kiwoomOrderableReferencePrice(plan, orderbook)));
-    const pendingRows = unfilled.oso as ExchangePayload[];
-    const pendingRefs = pendingRows.flatMap((row) => {
-      const quantity = marketNumber(row.oso_qty);
-      if (quantity === null || !Number.isSafeInteger(quantity) || quantity < 0) throw new Error('KIWOOM_PENDING_QUANTITY_INVALID');
-      return quantity > 0 ? [{ clientOrderId: null, exchangeOrderId: typeof row.ord_no === 'string' ? row.ord_no : null }] : [];
-    });
-    assertNoOrphanExchangeOrders('kiwoom', pendingRefs, await this.repository.listOrders(userId));
     const risk = await this.riskService.evaluate({
       userId,
       expectedPlan: plan,
       order,
       snapshot: buildKiwoomExecutionSnapshot({
-        plan, account, orderable, unfilled, orderbook,
+        plan, orderable, unfilled, orderbook,
         signal: this.signalSnapshot(userId, plan),
       }),
       serverLiveEnabled: mock || liveExecutionEnabled('kiwoom'),
@@ -689,7 +633,7 @@ export class TradeExecutionService {
       baseUrl, prepareKiwoomOrder(authenticated, risk.plan), ORDER_TIMEOUT_MS));
     let reconciliationRequired = false;
     try {
-      const lookup = await sendKiwoomAccountRead(baseUrl, prepareKiwoomUnfilled(authenticated), 'oso');
+      const lookup = await sendExchangeRequest(baseUrl, prepareKiwoomUnfilled(authenticated), PREFLIGHT_TIMEOUT_MS);
       reconciliationRequired = !kiwoomLookupContainsOrder(lookup, orderId);
     } catch { reconciliationRequired = true; }
     return { orderId, reconciliationRequired, risk };

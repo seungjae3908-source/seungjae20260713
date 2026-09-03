@@ -1,5 +1,3 @@
-import { quoteTimeEvidence } from '../../providers/market-evidence';
-
 export type PortfolioCurrency = 'KRW' | 'USD' | 'USDT';
 export type PortfolioDataQuality = 'LIVE' | 'DELAYED' | 'STALE' | 'PARTIAL' | 'UNAVAILABLE';
 export type PortfolioAssetBucket = 'CASH' | 'KR_STOCKS' | 'US_STOCKS' | 'CRYPTO_SPOT' | 'CRYPTO_FUTURES_EQUITY';
@@ -35,7 +33,7 @@ export type PortfolioAssetInput = NativeMoney & {
 export type PortfolioAssetSummary = {
   status: 'READY' | 'PARTIAL';
   components: Array<PortfolioAssetInput & NormalizedMoney>;
-  knownNormalizedKRWAmount: number | null;
+  knownNormalizedKRWAmount: number;
   totalNormalizedKRWAmount: number | null;
   missing: string[];
 };
@@ -49,8 +47,7 @@ function timestampMs(value: string): number | null {
 }
 
 function isFresh(asOf: string, now: Date, maxAgeMs: number): boolean {
-  const instant = quoteTimeEvidence(asOf, 'iso', now.getTime()).updatedAt;
-  const parsed = instant === null ? null : Date.parse(instant);
+  const parsed = timestampMs(asOf);
   return parsed != null && parsed <= now.getTime() && now.getTime() - parsed <= maxAgeMs;
 }
 
@@ -61,29 +58,26 @@ export function normalizeMoneyToKRW(
 ): NormalizedMoney {
   const now = options.now ?? new Date();
   const maxFxAgeMs = options.maxFxAgeMs ?? 6 * 60 * 60 * 1000;
-  if (!finiteNonNegative(money.amount) || !quoteTimeEvidence(money.asOf, 'iso', now.getTime()).updatedAt
-    || typeof money.source !== 'string' || !money.source.trim() || money.quality === 'STALE' || money.quality === 'UNAVAILABLE') {
+  if (!finiteNonNegative(money.amount)) {
     return { ...money, normalizedKRWAmount: null, fxRate: null, fxSource: null, fxAsOf: null, status: 'FX_UNAVAILABLE' };
   }
   if (money.currency === 'KRW') {
     return {
       ...money,
-      normalizedKRWAmount: money.amount,
+      normalizedKRWAmount: money.quality === 'UNAVAILABLE' ? null : money.amount,
       fxRate: 1,
       fxSource: 'native-krw',
       fxAsOf: money.asOf,
-      status: 'READY',
+      status: money.quality === 'UNAVAILABLE' ? 'FX_UNAVAILABLE' : 'READY',
     };
   }
-  const matching = fxQuotes.filter((candidate) => candidate.currency === money.currency);
-  const quote = matching.length === 1 ? matching[0] : null;
+  const quote = fxQuotes.find((candidate) => candidate.currency === money.currency);
   const quoteUsable = quote
     && finitePositive(quote.krwRate)
     && quote.quality !== 'STALE'
     && quote.quality !== 'UNAVAILABLE'
-    && typeof quote.source === 'string' && quote.source.trim().length > 0
     && isFresh(quote.asOf, now, maxFxAgeMs);
-  if (!quoteUsable || !Number.isFinite(money.amount * quote.krwRate)) {
+  if (!quoteUsable || money.quality === 'UNAVAILABLE') {
     return { ...money, normalizedKRWAmount: null, fxRate: quote?.krwRate ?? null, fxSource: quote?.source ?? null, fxAsOf: quote?.asOf ?? null, status: 'FX_UNAVAILABLE' };
   }
   return {
@@ -106,18 +100,13 @@ export function buildPortfolioAssetSummary(
     ...normalizeMoneyToKRW(input, fxQuotes, options),
   }));
   const unavailable = components.filter((component) => component.normalizedKRWAmount == null);
-  const known = components.flatMap((component) => component.normalizedKRWAmount == null ? [] : [component.normalizedKRWAmount]);
-  const sum = known.reduce((total, amount) => total + amount, 0);
-  const knownNormalizedKRWAmount = known.length > 0 && Number.isFinite(sum) ? sum : null;
-  const missing = unavailable.map((component) => `${component.bucket}:${component.currency}:FX_UNAVAILABLE`);
-  if (components.length === 0) missing.push('NO_ASSET_EVIDENCE');
-  if (!Number.isFinite(sum)) missing.push('ASSET_AGGREGATE_OVERFLOW');
+  const knownNormalizedKRWAmount = components.reduce((sum, component) => sum + (component.normalizedKRWAmount ?? 0), 0);
   return {
-    status: unavailable.length > 0 || knownNormalizedKRWAmount == null ? 'PARTIAL' : 'READY',
+    status: unavailable.length > 0 ? 'PARTIAL' : 'READY',
     components,
     knownNormalizedKRWAmount,
     totalNormalizedKRWAmount: unavailable.length > 0 ? null : knownNormalizedKRWAmount,
-    missing,
+    missing: unavailable.map((component) => `${component.bucket}:${component.currency}:FX_UNAVAILABLE`),
   };
 }
 
@@ -160,31 +149,23 @@ export type AllocationItem = {
 
 export type AllocationSummary = {
   status: 'READY' | 'PARTIAL' | 'UNAVAILABLE';
-  knownTotalKRW: number | null;
+  knownTotalKRW: number;
   weights: Array<{ key: string; normalizedKRWAmount: number | null; weightPercent: number | null }>;
   top5ConcentrationPercent: number | null;
 };
 
 export function calculateAllocation(items: readonly AllocationItem[]): AllocationSummary {
-  const keys = new Set(items.map((item) => item.key));
-  const identityValid = keys.size === items.length && items.every((item) => typeof item.key === 'string' && item.key.trim().length > 0);
-  const normalized = items.map((item) => ({ ...item,
-    normalizedKRWAmount: identityValid && item.normalizedKRWAmount != null && finiteNonNegative(item.normalizedKRWAmount)
-      ? item.normalizedKRWAmount : null,
-  }));
-  const known = normalized.flatMap((item) => item.normalizedKRWAmount == null ? [] : [item.normalizedKRWAmount]);
-  const sum = known.reduce((total, amount) => total + amount, 0);
-  const knownTotalKRW = known.length > 0 && Number.isFinite(sum) ? sum : null;
-  if (knownTotalKRW == null || knownTotalKRW <= 0) {
+  const knownTotalKRW = items.reduce((sum, item) => sum + (finiteNonNegative(item.normalizedKRWAmount ?? Number.NaN) ? item.normalizedKRWAmount! : 0), 0);
+  if (knownTotalKRW <= 0) {
     return {
-      status: 'UNAVAILABLE',
-      knownTotalKRW,
-      weights: normalized.map((item) => ({ ...item, weightPercent: null })),
+      status: items.some((item) => item.normalizedKRWAmount == null) ? 'PARTIAL' : 'UNAVAILABLE',
+      knownTotalKRW: 0,
+      weights: items.map((item) => ({ ...item, weightPercent: null })),
       top5ConcentrationPercent: null,
     };
   }
-  const partial = normalized.some((item) => item.normalizedKRWAmount == null);
-  const weights = normalized.map((item) => ({
+  const partial = items.some((item) => item.normalizedKRWAmount == null);
+  const weights = items.map((item) => ({
     ...item,
     weightPercent: item.normalizedKRWAmount == null ? null : (item.normalizedKRWAmount / knownTotalKRW) * 100,
   }));
@@ -197,7 +178,7 @@ export function calculateAllocation(items: readonly AllocationItem[]): Allocatio
   return { status: partial ? 'PARTIAL' : 'READY', knownTotalKRW, weights, top5ConcentrationPercent };
 }
 
-export type ReturnPoint = { timestamp: string; startTimestamp: string; value: number };
+export type ReturnPoint = { timestamp: string; value: number };
 export type CorrelationResult = {
   status: 'READY' | 'INSUFFICIENT_SAMPLE' | 'PARTIAL_MARKET_DATA';
   sampleSize: number;
@@ -208,43 +189,21 @@ export function calculateAlignedCorrelation(
   left: readonly ReturnPoint[],
   right: readonly ReturnPoint[],
   minSampleSize = 30,
-  now = Date.now(),
 ): CorrelationResult {
-  // A sample is an interval, not just an end date. Duplicate/invalid intervals cannot count toward N.
-  const normalize = (points: readonly ReturnPoint[]) => {
-    const result = new Map<string, number>();
-    const ends = new Set<string>();
-    for (const point of points) {
-      const end = quoteTimeEvidence(point.timestamp, 'iso', now).updatedAt;
-      const start = quoteTimeEvidence(point.startTimestamp, 'iso', now).updatedAt;
-      if (!end || !start || start >= end || ends.has(end) || !Number.isFinite(point.value)) return null;
-      ends.add(end);
-      result.set(`${start}/${end}`, point.value);
-    }
-    return result;
-  };
-  if (!Number.isInteger(minSampleSize) || minSampleSize < 2 || !Number.isFinite(now) || now <= 0) {
-    return { status: 'PARTIAL_MARKET_DATA', sampleSize: 0, correlation: null };
-  }
-  const leftValues = normalize(left);
-  const rightValues = normalize(right);
-  if (!leftValues || !rightValues) return { status: 'PARTIAL_MARKET_DATA', sampleSize: 0, correlation: null };
-  const aligned = [...leftValues].flatMap(([key, value]) => rightValues.has(key) ? [[value, rightValues.get(key)!] as const] : []);
+  const rightByTimestamp = new Map(right.filter((point) => Number.isFinite(point.value)).map((point) => [point.timestamp, point.value]));
+  const aligned = left
+    .filter((point) => Number.isFinite(point.value) && rightByTimestamp.has(point.timestamp))
+    .map((point) => [point.value, rightByTimestamp.get(point.timestamp)!] as const);
   if (aligned.length < minSampleSize) {
     const hasEnoughRaw = left.length >= minSampleSize && right.length >= minSampleSize;
     return { status: hasEnoughRaw ? 'PARTIAL_MARKET_DATA' : 'INSUFFICIENT_SAMPLE', sampleSize: aligned.length, correlation: null };
   }
-  // Scale first so valid large inputs do not overflow the variance products.
-  const leftScale = aligned.reduce((maximum, point) => Math.max(maximum, Math.abs(point[0])), 0);
-  const rightScale = aligned.reduce((maximum, point) => Math.max(maximum, Math.abs(point[1])), 0);
-  if (!(leftScale > 0) || !(rightScale > 0)) return { status: 'PARTIAL_MARKET_DATA', sampleSize: aligned.length, correlation: null };
-  const scaled = aligned.map(([leftValue, rightValue]) => [leftValue / leftScale, rightValue / rightScale] as const);
-  const leftMean = scaled.reduce((sum, point) => sum + point[0], 0) / scaled.length;
-  const rightMean = scaled.reduce((sum, point) => sum + point[1], 0) / scaled.length;
+  const leftMean = aligned.reduce((sum, point) => sum + point[0], 0) / aligned.length;
+  const rightMean = aligned.reduce((sum, point) => sum + point[1], 0) / aligned.length;
   let covariance = 0;
   let leftVariance = 0;
   let rightVariance = 0;
-  for (const [leftValue, rightValue] of scaled) {
+  for (const [leftValue, rightValue] of aligned) {
     const leftDelta = leftValue - leftMean;
     const rightDelta = rightValue - rightMean;
     covariance += leftDelta * rightDelta;
@@ -252,7 +211,7 @@ export function calculateAlignedCorrelation(
     rightVariance += rightDelta * rightDelta;
   }
   const denominator = Math.sqrt(leftVariance * rightVariance);
-  if (!(denominator > 0) || !Number.isFinite(covariance / denominator)) return { status: 'PARTIAL_MARKET_DATA', sampleSize: aligned.length, correlation: null };
+  if (!(denominator > 0)) return { status: 'PARTIAL_MARKET_DATA', sampleSize: aligned.length, correlation: null };
   return { status: 'READY', sampleSize: aligned.length, correlation: Math.max(-1, Math.min(1, covariance / denominator)) };
 }
 
@@ -302,14 +261,6 @@ export function simulateAdditionalInvestment(input: {
     : null;
   const projectedPortfolio = input.portfolioValueKRW + additionalInvestmentKRW;
   const projectedPosition = input.currentPositionValueKRW + additionalInvestmentKRW;
-  if (![quantity, additionalInvestmentKRW, totalQuantity, newAveragePrice, projectedPortfolio, projectedPosition]
-    .every((value) => typeof value === 'number' && Number.isFinite(value) && value > 0)) {
-    return {
-      status: 'UNAVAILABLE', additionalQuantity: null, additionalInvestmentKRW: null, newAveragePrice: null,
-      currentWeightPercent: null, projectedWeightPercent: null, stopLoss: null, targets: [], estimatedMaxLossKRW: null,
-      targetProfitsKRW: [], missing: ['SIMULATION_NUMERIC_OVERFLOW'],
-    };
-  }
   const stopLoss = finitePositive(input.stopLoss ?? Number.NaN) ? input.stopLoss! : null;
   const targets = (input.targets ?? []).filter(finitePositive);
   return {
@@ -349,7 +300,6 @@ export function buildMonthlyInvestmentPlan(input: {
   const weightTotal = input.allocation.reduce((sum, item) => sum + item.weight, 0);
   if (Math.abs(weightTotal - 1) > 1e-9) return null;
   const cumulativeInvestmentKRW = input.monthlyAmountKRW * input.months;
-  if (!Number.isFinite(cumulativeInvestmentKRW)) return null;
   return {
     monthlyAmountKRW: input.monthlyAmountKRW,
     months: input.months,
