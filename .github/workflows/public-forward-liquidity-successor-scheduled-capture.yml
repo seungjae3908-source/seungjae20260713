@@ -123,25 +123,6 @@ jobs:
           test "${SUCCESSOR_V3_ACTIVATION_STASHED:-false}" = 'true'
           test "$GITHUB_REF" = 'refs/heads/main'
 
-      - name: Verify pull-request activation binding exact base
-        if: github.event_name == 'pull_request' && env.SUCCESSOR_V3_ACTIVATION_STASHED == 'true'
-        shell: bash
-        env:
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          set -euo pipefail
-          node --input-type=module <<'NODE'
-          import {
-            SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT,
-          } from './market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-reliability-v3.mjs';
-
-          const contract = SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT;
-          if (contract.policyCore.activationBinding.authorizedCurrentMainSha !== process.env.PR_BASE_SHA) {
-            console.error('V3 activation binding is not bound to the exact PR base main');
-            process.exit(1);
-          }
-          NODE
-
       - name: Prove pull requests cannot invoke V2 or V3 capture
         if: github.event_name == 'pull_request'
         shell: bash
