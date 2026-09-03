@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
+import { MEMBER_PERMISSION_MATRIX } from '../../../packages/member-access/src/index.js';
 import { buildBrokerCommonState, legacySnapshot } from './account-connections';
 import {
   decryptTradingCredentials,
@@ -183,6 +184,28 @@ test('account connection route requires approved-member capability and stays GET
   ]) {
     assert.equal(indexSource.includes(privatePath), true, `missing private-path fail-closed guard: ${privatePath}`);
   }
+});
+
+test('approved read-only members can inspect sanitized integration metadata without order authority', () => {
+  for (const tier of ['associate', 'regular'] as const) {
+    assert.equal(MEMBER_PERMISSION_MATRIX[tier].canAccessBasicInfo, true);
+    assert.equal(MEMBER_PERMISSION_MATRIX[tier].canPlaceOrders, false);
+  }
+
+  const routeSource = source('api-server/src/routes/user-broker-telegram.ts');
+  assert.match(
+    routeSource,
+    /const canReadBrokerConnections = hasCapability\(authenticated\.member, 'canAccessBasicInfo'\);/,
+  );
+  assert.doesNotMatch(
+    routeSource,
+    /const canReadBrokerConnections = hasCapability\(authenticated\.member, 'canPlaceOrders'\);/,
+  );
+  assert.match(routeSource, /brokerConnections: safeConnections\(connections\)/);
+  assert.match(routeSource, /privateApiRequests:\s*0/);
+  assert.match(routeSource, /ordersSubmitted:\s*0/);
+  assert.match(routeSource, /ordersCancelled:\s*0/);
+  assert.doesNotMatch(routeSource, /prepare(?:Kiwoom|Upbit|Bitget).*(?:Order|Cancel|Amend|Transfer|Withdraw)/);
 });
 
 test('user integrations GET degrades only broker metadata storage outage and preserves trading fail-closed safety', () => {
