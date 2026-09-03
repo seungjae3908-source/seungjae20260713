@@ -131,16 +131,30 @@ function explicitClosed(row: RawCandle): boolean | null {
   return null;
 }
 
+function providerClock(value: unknown, defaultOffset: 'Z' | '+09:00'): string | null {
+  const text = String(value ?? '').trim();
+  if (!text) return null;
+  if (/(?:Z|[+-]\d{2}:?\d{2})$/i.test(text)) return text;
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?$/.test(text)) {
+    return `${text}${defaultOffset}`;
+  }
+  return text;
+}
+
 function rawTimestamp(row: RawCandle): unknown {
+  const upbitUtc = providerClock(row.candle_date_time_utc, 'Z');
+  if (upbitUtc) return upbitUtc;
+  const upbitKst = providerClock(row.candle_date_time_kst, '+09:00');
+  if (upbitKst) return upbitKst;
   return row.time ?? row.date ?? row.datetime ?? row.timestamp ?? row.dt;
 }
 
 function normalizeRow(row: RawCandle): Omit<NormalizedChartCandle, 'isClosed' | 'closeStateSource'> | null {
-  const close = finite(row.close ?? row.closePrice ?? row.cur_prc ?? row.currentPrice ?? row.price);
-  const open = finite(row.open ?? row.openPrice ?? row.open_prc);
-  const high = finite(row.high ?? row.highPrice ?? row.high_prc);
-  const low = finite(row.low ?? row.lowPrice ?? row.low_prc);
-  const volume = finite(row.volume ?? row.acc_trde_qty ?? row.tradeVolume ?? row.tradingVolume);
+  const close = finite(row.close ?? row.closePrice ?? row.cur_prc ?? row.currentPrice ?? row.price ?? row.trade_price);
+  const open = finite(row.open ?? row.openPrice ?? row.open_prc ?? row.opening_price);
+  const high = finite(row.high ?? row.highPrice ?? row.high_prc ?? row.high_price);
+  const low = finite(row.low ?? row.lowPrice ?? row.low_prc ?? row.low_price);
+  const volume = finite(row.volume ?? row.acc_trde_qty ?? row.tradeVolume ?? row.tradingVolume ?? row.candle_acc_trade_volume);
   const sourceTime = String(rawTimestamp(row) ?? '').trim();
   const time = parseChartCandleTime(sourceTime);
 
