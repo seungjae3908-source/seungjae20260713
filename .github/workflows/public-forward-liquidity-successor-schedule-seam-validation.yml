@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/workflows/public-forward-liquidity-successor-scheduled-capture.yml'
       - '.github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml'
+      - '.github/workflows/market-intelligence-sidecar-validation.yml'
       - 'market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-seam-v1.mjs'
       - 'market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs'
       - 'market-intelligence-sidecar/src/public-forward-liquidity-successor-prospective-cohort.mjs'
@@ -127,11 +128,12 @@ jobs:
 
           if printf '%s\n' "$changed" | grep -Fqx "$activation"; then
             cat > /tmp/allowed-files <<'EOF'
+          .github/workflows/market-intelligence-sidecar-validation.yml
           .github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml
           .github/workflows/public-forward-liquidity-successor-scheduled-capture.yml
           market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json
           EOF
-            expected_count=3
+            expected_count=4
             scope_name='V3 activation-admission'
           else
             cat > /tmp/allowed-files <<'EOF'
