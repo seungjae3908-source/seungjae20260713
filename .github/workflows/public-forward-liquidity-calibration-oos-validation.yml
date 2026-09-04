@@ -4,7 +4,12 @@ on:
   pull_request:
     paths:
       - 'market-intelligence-sidecar/src/public-forward-liquidity-calibration-oos-outcome-validator.mjs'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-oos-outcome-producer.mjs'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-multi-source-split-audit.mjs'
+      - 'market-intelligence-sidecar/scripts/run-public-forward-liquidity-oos-outcome-producer.mjs'
       - 'market-intelligence-sidecar/tests/public-forward-liquidity-calibration-oos-outcome-validator.test.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-oos-outcome-producer.test.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-multi-source-split-audit.test.mjs'
       - '.github/workflows/public-forward-liquidity-calibration-oos-validation.yml'
   workflow_dispatch:
 
@@ -27,38 +32,100 @@ jobs:
       - name: Syntax check
         run: >-
           node --check market-intelligence-sidecar/src/public-forward-liquidity-calibration-oos-outcome-validator.mjs
+          && node --check market-intelligence-sidecar/src/public-forward-liquidity-oos-outcome-producer.mjs
+          && node --check market-intelligence-sidecar/scripts/run-public-forward-liquidity-oos-outcome-producer.mjs
           && node --check market-intelligence-sidecar/tests/public-forward-liquidity-calibration-oos-outcome-validator.test.mjs
+          && node --check market-intelligence-sidecar/tests/public-forward-liquidity-oos-outcome-producer.test.mjs
 
-      - name: Run focused held-out OOS outcome validator tests
-        run: node --test market-intelligence-sidecar/tests/public-forward-liquidity-calibration-oos-outcome-validator.test.mjs
+      - name: Verify runner help is inert
+        run: |
+          set -euo pipefail
+          node market-intelligence-sidecar/scripts/run-public-forward-liquidity-oos-outcome-producer.mjs --help > /tmp/oos-producer-help.txt
+          grep -Fq -- '--split-receipt' /tmp/oos-producer-help.txt
+          grep -Fq -- '--v3-split-index' /tmp/oos-producer-help.txt
+          grep -Fq 'performs no network request' /tmp/oos-producer-help.txt
 
-      - name: Verify fail-closed OOS and safety invariants
+      - name: Run focused held-out OOS validator and producer tests
+        run: >-
+          node --test
+          market-intelligence-sidecar/tests/public-forward-liquidity-calibration-oos-outcome-validator.test.mjs
+          market-intelligence-sidecar/tests/public-forward-liquidity-oos-outcome-producer.test.mjs
+
+      - name: Verify fail-closed OOS, lineage, producer, and safety invariants
         shell: bash
         run: |
           set -euo pipefail
-          FILE='market-intelligence-sidecar/src/public-forward-liquidity-calibration-oos-outcome-validator.mjs'
-          grep -Fq 'verifiedFrozenSplitAuditRequired: true' "$FILE"
-          grep -Fq 'exactOosCoverageRequired: true' "$FILE"
-          grep -Fq 'genuinePublicForwardMarketDataRequired: true' "$FILE"
-          grep -Fq 'methodologyFrozenBeforeOosRequired: true' "$FILE"
-          grep -Fq 'oosDataAccessBeforeFreezeAllowed: false' "$FILE"
-          grep -Fq 'historicalBackfillCreditAllowed: false' "$FILE"
-          grep -Fq 'testFixtureRuntimeCreditAllowed: false' "$FILE"
-          grep -Fq 'causalMarketImpactClaimAllowed: false' "$FILE"
-          grep -Fq 'outcomeExecutionCostEligible: false' "$FILE"
-          grep -Fq 'calibrationArtifactProduced: false' "$FILE"
-          grep -Fq 'liquidityImpactProduced: false' "$FILE"
-          grep -Fq 'naturalEntryCredit: 0' "$FILE"
-          grep -Fq 'runtimeCostCredit: 0' "$FILE"
-          grep -Fq "executionAuthority: 'NONE'" "$FILE"
-          grep -Fq 'privateApiAllowed: false' "$FILE"
-          grep -Fq 'liveTrading: false' "$FILE"
-          grep -Fq 'orderSubmissionAllowed: false' "$FILE"
-          grep -Fq 'fullCostReady: false' "$FILE"
-          grep -Fq "sourceType !== 'PUBLIC_FORWARD_MARKET_DATA'" "$FILE"
-          grep -Fq 'OOS_METHODOLOGY_NOT_FROZEN_BEFORE_OOS' "$FILE"
-          grep -Fq 'OOS_PRE_FREEZE_DATA_ACCESS_FORBIDDEN' "$FILE"
-          grep -Fq 'OOS_EXACT_COVERAGE_MISMATCH' "$FILE"
-          grep -Fq 'OOS_CAUSAL_MARKET_IMPACT_CLAIM_FORBIDDEN' "$FILE"
-          grep -Fq 'OOS_EXECUTION_COST_CREDIT_FORBIDDEN' "$FILE"
-          grep -Fq 'OOS_LIQUIDITY_COEFFICIENT_FORBIDDEN' "$FILE"
+          VALIDATOR='market-intelligence-sidecar/src/public-forward-liquidity-calibration-oos-outcome-validator.mjs'
+          PRODUCER='market-intelligence-sidecar/src/public-forward-liquidity-oos-outcome-producer.mjs'
+          RUNNER='market-intelligence-sidecar/scripts/run-public-forward-liquidity-oos-outcome-producer.mjs'
+
+          grep -Fq 'verifiedFrozenSplitAuditRequired: true' "$VALIDATOR"
+          grep -Fq 'multiSourceLineageRequired: true' "$VALIDATOR"
+          grep -Fq 'syntheticAggregateDatasetAllowed: false' "$VALIDATOR"
+          grep -Fq 'syntheticSingleCollectorAllowed: false' "$VALIDATOR"
+          grep -Fq 'PUBLIC_FORWARD_LIQUIDITY_MULTI_SOURCE_SPLIT_AUDIT_VERSION' "$VALIDATOR"
+          grep -Fq 'PUBLIC_FORWARD_LIQUIDITY_MULTI_SOURCE_OOS_VALIDATION_VERSION' "$VALIDATOR"
+          grep -Fq 'PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_V3_OOS_VALIDATION_VERSION' "$VALIDATOR"
+          grep -Fq 'PUBLIC_FORWARD_LIQUIDITY_V3_INDEPENDENT_SPLIT_INDEX_VERSION' "$VALIDATOR"
+          grep -Fq 'SUCCESSOR_V3_NATIVE_POLICY_LINEAGE_MISMATCH' "$VALIDATOR"
+          grep -Fq 'SUCCESSOR_V3_INDEX_ASSIGNMENT_FROZEN_SPLIT_MISMATCH' "$VALIDATOR"
+          grep -Fq 'SUCCESSOR_V3_OOS_ASSIGNMENTS_MISSING' "$VALIDATOR"
+          grep -Fq 'upstreamLineageDigest' "$VALIDATOR"
+          grep -Fq 'datasetDigests' "$VALIDATOR"
+          grep -Fq 'receiptDigests' "$VALIDATOR"
+          grep -Fq 'collectorCodeShas' "$VALIDATOR"
+          grep -Fq 'sourceReceiptChainDigest' "$VALIDATOR"
+          grep -Fq 'sourceReceiptCount' "$VALIDATOR"
+          grep -Fq 'OOS_SYNTHETIC_AGGREGATE_DATASET_FORBIDDEN' "$VALIDATOR"
+          grep -Fq 'OOS_ASSIGNMENT_SOURCE_LINEAGE_MISMATCH' "$VALIDATOR"
+          grep -Fq 'exactOosCoverageRequired: true' "$VALIDATOR"
+          grep -Fq 'genuinePublicForwardMarketDataRequired: true' "$VALIDATOR"
+          grep -Fq 'methodologyFrozenBeforeOosRequired: true' "$VALIDATOR"
+          grep -Fq 'oosDataAccessBeforeFreezeAllowed: false' "$VALIDATOR"
+          grep -Fq 'historicalBackfillCreditAllowed: false' "$VALIDATOR"
+          grep -Fq 'testFixtureRuntimeCreditAllowed: false' "$VALIDATOR"
+          grep -Fq 'causalMarketImpactClaimAllowed: false' "$VALIDATOR"
+          grep -Fq 'outcomeExecutionCostEligible: false' "$VALIDATOR"
+          grep -Fq 'calibrationArtifactProduced: false' "$VALIDATOR"
+          grep -Fq 'liquidityImpactProduced: false' "$VALIDATOR"
+          grep -Fq 'naturalEntryCredit: 0' "$VALIDATOR"
+          grep -Fq 'runtimeCostCredit: 0' "$VALIDATOR"
+          grep -Fq "executionAuthority: 'NONE'" "$VALIDATOR"
+          grep -Fq 'privateApiAllowed: false' "$VALIDATOR"
+          grep -Fq 'liveTrading: false' "$VALIDATOR"
+          grep -Fq 'orderSubmissionAllowed: false' "$VALIDATOR"
+          grep -Fq 'fullCostReady: false' "$VALIDATOR"
+          grep -Fq "sourceType !== 'PUBLIC_FORWARD_MARKET_DATA'" "$VALIDATOR"
+          grep -Fq 'OOS_METHODOLOGY_NOT_FROZEN_BEFORE_OOS' "$VALIDATOR"
+          grep -Fq 'OOS_PRE_FREEZE_DATA_ACCESS_FORBIDDEN' "$VALIDATOR"
+          grep -Fq 'OOS_EXACT_COVERAGE_MISMATCH' "$VALIDATOR"
+          grep -Fq 'OOS_CAUSAL_MARKET_IMPACT_CLAIM_FORBIDDEN' "$VALIDATOR"
+          grep -Fq 'OOS_EXECUTION_COST_CREDIT_FORBIDDEN' "$VALIDATOR"
+          grep -Fq 'OOS_LIQUIDITY_COEFFICIENT_FORBIDDEN' "$VALIDATOR"
+
+          grep -Fq 'verifyPublicForwardLiquidityIngestReceiptChain' "$PRODUCER"
+          grep -Fq 'validatePublicForwardLiquidityOosOutcomes' "$PRODUCER"
+          grep -Fq 'validatePublicForwardLiquiditySuccessorV3OosOutcomes' "$PRODUCER"
+          grep -Fq 'SUCCESSOR_OOS_HORIZON_CONTRACT' "$PRODUCER"
+          grep -Fq 'genuineV3OosSlotN' "$PRODUCER"
+          grep -Fq 'genuineOosOutcomeN' "$PRODUCER"
+          grep -Fq "FIRST_PUBLIC_OBSERVATION_AT_OR_AFTER_HORIZON" "$PRODUCER"
+          grep -Fq "OOS_HORIZON_POLICY_MISSING" "$PRODUCER"
+          grep -Fq "AMBIGUOUS_DUPLICATE_OUTCOME" "$PRODUCER"
+          grep -Fq "OOS_PUBLIC_FRAME_REUSED" "$PRODUCER"
+          grep -Fq "sourceType: 'PUBLIC_FORWARD_MARKET_DATA'" "$PRODUCER"
+          grep -Fq 'effectiveIndependentN: null' "$PRODUCER"
+          grep -Fq 'buyCoverageProven: false' "$PRODUCER"
+          grep -Fq 'calibrationArtifactProduced: false' "$PRODUCER"
+          grep -Fq 'liquidityImpactProduced: false' "$PRODUCER"
+          grep -Fq 'fullCostReady: false' "$PRODUCER"
+          grep -Fq 'evidenceCompleteCredit: 0' "$PRODUCER"
+          grep -Fq "executionAuthority: 'NONE'" "$PRODUCER"
+          grep -Fq 'privateApiUsed: false' "$PRODUCER"
+          grep -Fq 'liveTrading: false' "$PRODUCER"
+          grep -Fq 'orderSubmitted: false' "$PRODUCER"
+
+          if grep -Eq 'schedule:|cron:' "$RUNNER" "$PRODUCER"; then
+            echo 'Producer must not define a schedule' >&2
+            exit 1
+          fi
