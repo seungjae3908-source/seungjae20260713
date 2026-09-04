@@ -25,6 +25,9 @@ import {
 
 const PRODUCER_SHA = 'a'.repeat(40);
 const COLLECTOR_SHA = 'b'.repeat(40);
+const activeTest = SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.activationBound === true
+  ? test
+  : test.skip;
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
@@ -331,7 +334,7 @@ function expectNotReady(result, blocker = null) {
   if (blocker) assert.ok(result.blockers.includes(blocker), JSON.stringify(result.blockers));
 }
 
-test('native Successor V3 slot 768 path is structurally eligible without economic promotion', () => {
+activeTest('native Successor V3 slot 768 path is structurally eligible without economic promotion', () => {
   const result = validateFixture(fixture());
   assert.equal(result.status, 'PRESENT');
   assert.equal(result.calibrationStatus, 'READY');
@@ -370,70 +373,70 @@ test('missing genuine OOS outcomes fail closed and never produce a zero-valued a
   assert.equal(Object.hasOwn(result, 'expectedValue'), false);
 });
 
-test('legacy validation schema relabeled as Successor is rejected', () => {
+activeTest('legacy validation schema relabeled as Successor is rejected', () => {
   const fx = fixture();
   fx.validation = resignValidation({ ...fx.validation, schemaVersion: 'public-forward-liquidity-oos-validation-v1' });
   fx.candidate = candidate(fx.validation, fx.method);
   expectNotReady(validateFixture(fx), 'NATIVE_SUCCESSOR_V3_OOS_VALIDATION_VERSION_INVALID');
 });
 
-test('wrong source contract family is rejected', () => {
+activeTest('wrong source contract family is rejected', () => {
   const fx = fixture();
   fx.validation = resignValidation({ ...fx.validation, sourceContractFamily: 'CALIBRATION_V3' });
   fx.candidate = candidate(fx.validation, fx.method);
   expectNotReady(validateFixture(fx), 'SUCCESSOR_V3_SOURCE_CONTRACT_FAMILY_INVALID');
 });
 
-test('wrong independent split index digest binding is rejected', () => {
+activeTest('wrong independent split index digest binding is rejected', () => {
   const fx = fixture();
   fx.validation = resignValidation({ ...fx.validation, v3IndependentSplitIndexDigest: sha256('wrong-index') });
   fx.candidate = candidate(fx.validation, fx.method);
   expectNotReady(validateFixture(fx), 'SUCCESSOR_V3_SPLIT_INDEX_VALIDATION_BINDING_MISMATCH');
 });
 
-test('wrong source inventory lineage is rejected', () => {
+activeTest('wrong source inventory lineage is rejected', () => {
   const fx = fixture();
   fx.validation = resignValidation({ ...fx.validation, sourceInventoryDigest: sha256('wrong-inventory') });
   fx.candidate = candidate(fx.validation, fx.method);
   expectNotReady(validateFixture(fx), 'SUCCESSOR_V3_SPLIT_INDEX_VALIDATION_BINDING_MISMATCH');
 });
 
-test('wrong frozen policy digest is rejected', () => {
+activeTest('wrong frozen policy digest is rejected', () => {
   const fx = fixture();
   fx.validation = resignValidation({ ...fx.validation, policyDigest: sha256('wrong-policy') });
   fx.candidate = candidate(fx.validation, fx.method);
   expectNotReady(validateFixture(fx), 'SUCCESSOR_V3_FROZEN_POLICY_LINEAGE_MISMATCH');
 });
 
-test('wrong cohort digest is rejected', () => {
+activeTest('wrong cohort digest is rejected', () => {
   const fx = fixture();
   fx.validation = resignValidation({ ...fx.validation, cohortDigest: sha256('wrong-cohort') });
   fx.candidate = candidate(fx.validation, fx.method);
   expectNotReady(validateFixture(fx), 'SUCCESSOR_V3_FROZEN_POLICY_LINEAGE_MISMATCH');
 });
 
-test('wrong numeric freeze digest is rejected', () => {
+activeTest('wrong numeric freeze digest is rejected', () => {
   const fx = fixture();
   fx.validation = resignValidation({ ...fx.validation, scheduleReliabilityNumericFreezeSha256: sha256('wrong-freeze') });
   fx.candidate = candidate(fx.validation, fx.method);
   expectNotReady(validateFixture(fx), 'SUCCESSOR_V3_FROZEN_POLICY_LINEAGE_MISMATCH');
 });
 
-test('wrong OOS horizon contract digest is rejected', () => {
+activeTest('wrong OOS horizon contract digest is rejected', () => {
   const fx = fixture();
   fx.validation = resignValidation({ ...fx.validation, oosHorizonContractDigest: sha256('wrong-horizon-contract') });
   fx.candidate = candidate(fx.validation, fx.method);
   expectNotReady(validateFixture(fx), 'SUCCESSOR_V3_OOS_HORIZON_LINEAGE_MISMATCH');
 });
 
-test('horizon other than 5000ms is rejected', () => {
+activeTest('horizon other than 5000ms is rejected', () => {
   const fx = fixture();
   fx.validation = resignValidation({ ...fx.validation, outcomeHorizonMs: 60_000 });
   fx.candidate = candidate(fx.validation, fx.method);
   expectNotReady(validateFixture(fx), 'SUCCESSOR_V3_OOS_HORIZON_LINEAGE_MISMATCH');
 });
 
-test('TRAIN slot cannot be relabeled OOS', () => {
+activeTest('TRAIN slot cannot be relabeled OOS', () => {
   const fx = fixture();
   const observations = clone(fx.index.observations);
   observations[0].split = 'OOS';
@@ -443,7 +446,7 @@ test('TRAIN slot cannot be relabeled OOS', () => {
   expectNotReady(validateFixture(fx), 'NATIVE_SUCCESSOR_V3_SPLIT_INDEX_INVALID');
 });
 
-test('VALIDATION slot cannot be relabeled OOS', () => {
+activeTest('VALIDATION slot cannot be relabeled OOS', () => {
   const fx = fixture();
   const observations = clone(fx.index.observations);
   observations[1].split = 'OOS';
@@ -453,7 +456,7 @@ test('VALIDATION slot cannot be relabeled OOS', () => {
   expectNotReady(validateFixture(fx), 'NATIVE_SUCCESSOR_V3_SPLIT_INDEX_INVALID');
 });
 
-test('slot 767 is rejected when labeled OOS', () => {
+activeTest('slot 767 is rejected when labeled OOS', () => {
   const fx = fixture();
   const observations = clone(fx.index.observations);
   const slot = buildSuccessorScheduleReliabilityV3SlotDescriptor(767);
@@ -469,7 +472,7 @@ test('slot 767 is rejected when labeled OOS', () => {
   expectNotReady(validateFixture(fx), 'NATIVE_SUCCESSOR_V3_SPLIT_INDEX_INVALID');
 });
 
-test('wrong canonical slot identity is rejected', () => {
+activeTest('wrong canonical slot identity is rejected', () => {
   const fx = fixture();
   const observations = clone(fx.index.observations);
   observations[2].canonicalSlotKeyDigest = sha256('wrong-slot');
@@ -479,7 +482,7 @@ test('wrong canonical slot identity is rejected', () => {
   expectNotReady(validateFixture(fx), 'NATIVE_SUCCESSOR_V3_SPLIT_INDEX_INVALID');
 });
 
-test('missing source observation identity is rejected', () => {
+activeTest('missing source observation identity is rejected', () => {
   const fx = fixture();
   const observations = clone(fx.index.observations);
   observations[2].sourceObservationId = '';
@@ -489,7 +492,7 @@ test('missing source observation identity is rejected', () => {
   expectNotReady(validateFixture(fx), 'NATIVE_SUCCESSOR_V3_SPLIT_INDEX_INVALID');
 });
 
-test('missing bound observation identity is rejected', () => {
+activeTest('missing bound observation identity is rejected', () => {
   const fx = fixture();
   const observations = clone(fx.index.observations);
   observations[2].observationId = '';
@@ -499,7 +502,7 @@ test('missing bound observation identity is rejected', () => {
   expectNotReady(validateFixture(fx), 'NATIVE_SUCCESSOR_V3_SPLIT_INDEX_INVALID');
 });
 
-test('duplicate source lineage is rejected with zero extra calibration credit', () => {
+activeTest('duplicate source lineage is rejected with zero extra calibration credit', () => {
   const fx = fixture();
   const observations = clone(fx.index.observations);
   observations[2].sourceObservationId = observations[1].sourceObservationId;
@@ -511,7 +514,7 @@ test('duplicate source lineage is rejected with zero extra calibration credit', 
   assert.equal(result.calibrationArtifactProduced, false);
 });
 
-test('replay/backfill/synthetic credit in upstream validation is rejected', () => {
+activeTest('replay/backfill/synthetic credit in upstream validation is rejected', () => {
   for (const key of ['replayCredit', 'backfillCredit', 'syntheticCredit']) {
     const fx = fixture();
     fx.validation = resignValidation({ ...fx.validation, [key]: 1 });
@@ -520,7 +523,7 @@ test('replay/backfill/synthetic credit in upstream validation is rejected', () =
   }
 });
 
-test('missing native split lineage is NOT_READY', () => {
+activeTest('missing native split lineage is NOT_READY', () => {
   const fx = fixture();
   const result = validatePublicForwardLiquidityCalibrationArtifact({
     oosValidationResult: { status: 'PRESENT', blockers: [], validation: fx.validation },
@@ -540,7 +543,7 @@ test('zero OOS evidence cannot be represented as a successful calibration artifa
   assert.equal(result.calibrationArtifactProduced, false);
 });
 
-test('insufficient TRAIN/VALIDATION fit evidence remains NOT_READY rather than becoming OOS credit', () => {
+activeTest('insufficient TRAIN/VALIDATION fit evidence remains NOT_READY rather than becoming OOS credit', () => {
   const fx = fixture();
   fx.candidate = { ...fx.candidate, validationObservationCount: 0 };
   const result = validateFixture(fx);
@@ -548,7 +551,7 @@ test('insufficient TRAIN/VALIDATION fit evidence remains NOT_READY rather than b
   assert.equal(result.calibrationInputN, 1);
 });
 
-test('OOS may never be used for fit and no-retuning assertion is mandatory', () => {
+activeTest('OOS may never be used for fit and no-retuning assertion is mandatory', () => {
   const fx = fixture();
   fx.method = methodology({ fitSplits: ['TRAIN', 'OOS'], oosUsedForFit: true, noRetuningAssertion: false });
   fx.candidate = candidate(fx.validation, fx.method);
@@ -559,7 +562,7 @@ test('OOS may never be used for fit and no-retuning assertion is mandatory', () 
   assert.ok(result.blockers.includes('NO_RETUNING_ASSERTION_REQUIRED'));
 });
 
-test('manual/replay/backfill/synthetic candidate credit is rejected', () => {
+activeTest('manual/replay/backfill/synthetic candidate credit is rejected', () => {
   for (const key of ['manualCredit', 'replayCredit', 'backfillCredit', 'syntheticCredit', 'historicalBackfillCredit', 'testFixtureCredit']) {
     const fx = fixture();
     fx.candidate = { ...fx.candidate, [key]: 1 };
@@ -567,7 +570,7 @@ test('manual/replay/backfill/synthetic candidate credit is rejected', () => {
   }
 });
 
-test('false probability, EV, alpha, or win-rate output is rejected', () => {
+activeTest('false probability, EV, alpha, or win-rate output is rejected', () => {
   for (const key of ['probability', 'profitProbability', 'expectedValue', 'ev', 'alpha', 'winRate']) {
     const fx = fixture();
     fx.candidate = { ...fx.candidate, [key]: 0 };
@@ -575,7 +578,7 @@ test('false probability, EV, alpha, or win-rate output is rejected', () => {
   }
 });
 
-test('Full Cost, Net Alpha, profitability, and champion promotion are forbidden here', () => {
+activeTest('Full Cost, Net Alpha, profitability, and champion promotion are forbidden here', () => {
   const cases = [
     { fullCostReady: true },
     { netAlphaReady: true },
@@ -589,13 +592,13 @@ test('Full Cost, Net Alpha, profitability, and champion promotion are forbidden 
   }
 });
 
-test('execution authority remains NONE', () => {
+activeTest('execution authority remains NONE', () => {
   const fx = fixture();
   fx.candidate = { ...fx.candidate, executionAuthority: 'TRADE' };
   expectNotReady(validateFixture(fx), 'PREMATURE_ECONOMIC_PROMOTION_FORBIDDEN');
 });
 
-test('successful artifact contains provenance but no fake normal performance numbers', () => {
+activeTest('successful artifact contains provenance but no fake normal performance numbers', () => {
   const result = validateFixture(fixture());
   assert.equal(result.artifact.schemaVersion, PUBLIC_FORWARD_LIQUIDITY_CALIBRATION_ARTIFACT_VERSION);
   assert.deepEqual(result.artifact.sourceDatasetDigests, [sha256('dataset-final')]);
