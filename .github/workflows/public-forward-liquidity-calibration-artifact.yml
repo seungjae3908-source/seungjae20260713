@@ -11,24 +11,38 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: public-forward-liquidity-calibration-artifact-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
 jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
-      - name: Checkout repository
+      - name: Checkout exact revision
         uses: actions/checkout@v4
         with:
+          ref: ${{ env.EXPECTED_SHA }}
           persist-credentials: false
 
-      - name: Verify exact checkout
+      - name: Verify exact revision
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
       - name: Syntax check
+        shell: bash
         run: |
+          set -euo pipefail
           node --check market-intelligence-sidecar/src/public-forward-liquidity-calibration-artifact.mjs
           node --check market-intelligence-sidecar/tests/public-forward-liquidity-calibration-artifact.test.mjs
 
@@ -52,20 +66,46 @@ jobs:
           "$RUNNER_TEMP/actionlint" -version
           "$RUNNER_TEMP/actionlint" .github/workflows/public-forward-liquidity-calibration-artifact.yml
 
-      - name: Run focused native Successor V3 contract tests
-        run: node --test market-intelligence-sidecar/tests/public-forward-liquidity-calibration-artifact.test.mjs
-
-      - name: Verify fail-closed native OOS safety boundary
+      - name: Run focused Native Successor V3 OOS calibration tests
         shell: bash
         run: |
           set -euo pipefail
-          file='market-intelligence-sidecar/src/public-forward-liquidity-calibration-artifact.mjs'
-          grep -F "nativeSuccessorV3OosOnly: true" "$file"
-          grep -F "GENUINE_SUCCESSOR_V3_OOS_EVIDENCE_MISSING" "$file"
-          grep -F "runtimeCostProduced: false" "$file"
-          grep -F "statisticalResultInventedByThisContract: false" "$file"
-          grep -F "executionAuthority: 'NONE'" "$file"
-          grep -F "fullCostReady: false" "$file"
-          grep -F "netAlphaReady: false" "$file"
-          grep -F "profitabilityProven: false" "$file"
-          grep -F "RUNTIME_LIQUIDITY_COST_FORBIDDEN" "$file"
+          node --test \
+            market-intelligence-sidecar/tests/public-forward-liquidity-calibration-artifact.test.mjs \
+            market-intelligence-sidecar/tests/public-forward-liquidity-oos-outcome-producer.test.mjs \
+            market-intelligence-sidecar/tests/public-forward-liquidity-calibration-oos-outcome-validator.test.mjs \
+            market-intelligence-sidecar/tests/public-forward-liquidity-v3-independence-binding.test.mjs \
+            market-intelligence-sidecar/tests/public-forward-liquidity-successor-oos-outcome-horizon.test.mjs \
+            market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-reliability-v3.test.mjs
+
+      - name: Verify fail-closed Native OOS safety boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import {
+            PUBLIC_FORWARD_LIQUIDITY_CALIBRATION_ARTIFACT_SAFETY,
+          } from './market-intelligence-sidecar/src/public-forward-liquidity-calibration-artifact.mjs';
+
+          const safety = PUBLIC_FORWARD_LIQUIDITY_CALIBRATION_ARTIFACT_SAFETY;
+          if (safety.sourceContractFamily !== 'SUCCESSOR_SCHEDULE_RELIABILITY_V3'
+            || safety.oosFitAllowed !== false
+            || safety.historicalOosAllowed !== false
+            || safety.replayAllowed !== false
+            || safety.backfillAllowed !== false
+            || safety.syntheticEconomicCreditAllowed !== false
+            || safety.rawNAsIndependentNAllowed !== false
+            || safety.ciAsEconomicCreditAllowed !== false
+            || safety.missingAsZeroAllowed !== false
+            || safety.fullCostReady !== false
+            || safety.netAlphaReady !== false
+            || safety.profitabilityProven !== false
+            || safety.currentValidatedChampion !== 'NONE'
+            || safety.executionAuthority !== 'NONE'
+            || safety.privateApiAllowed !== false
+            || safety.liveTrading !== false
+            || safety.orderSubmissionAllowed !== false) {
+            console.error('CALIBRATION_ARTIFACT_SAFETY_CONTRACT_INVALID');
+            process.exit(1);
+          }
+          NODE
