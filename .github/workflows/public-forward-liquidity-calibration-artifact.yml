@@ -32,16 +32,20 @@ jobs:
           node --check market-intelligence-sidecar/src/public-forward-liquidity-calibration-artifact.mjs
           node --check market-intelligence-sidecar/tests/public-forward-liquidity-calibration-artifact.test.mjs
 
-      - name: Run focused contract tests
+      - name: Run focused native Successor V3 contract tests
         run: node --test market-intelligence-sidecar/tests/public-forward-liquidity-calibration-artifact.test.mjs
 
-      - name: Verify fail-closed safety boundary
+      - name: Verify fail-closed native OOS safety boundary
         shell: bash
         run: |
           set -euo pipefail
           file='market-intelligence-sidecar/src/public-forward-liquidity-calibration-artifact.mjs'
+          grep -F "nativeSuccessorV3OosOnly: true" "$file"
+          grep -F "GENUINE_SUCCESSOR_V3_OOS_EVIDENCE_MISSING" "$file"
           grep -F "runtimeCostProduced: false" "$file"
-          grep -F "liquidityImpactPresent: false" "$file"
+          grep -F "statisticalResultInventedByThisContract: false" "$file"
           grep -F "executionAuthority: 'NONE'" "$file"
           grep -F "fullCostReady: false" "$file"
+          grep -F "netAlphaReady: false" "$file"
+          grep -F "profitabilityProven: false" "$file"
           grep -F "RUNTIME_LIQUIDITY_COST_FORBIDDEN" "$file"
