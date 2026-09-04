@@ -24,6 +24,15 @@ const FORBIDDEN_PERMISSION_PATTERN = /(trade|order|write|withdraw|transfer|ë§¤ë§
 type CredentialRepositoryFactory = (userId: string) => AccountReadonlyCredentialRepository;
 let credentialRepositoryFactoryForTests: CredentialRepositoryFactory | null = null;
 
+type DisconnectEventSource = {
+  once(event: string, listener: () => void): unknown;
+  removeListener(event: string, listener: () => void): unknown;
+};
+
+type DisconnectResponse = DisconnectEventSource & {
+  writableEnded: boolean;
+};
+
 export function setAccountReadonlyCredentialRepositoryFactoryForTests(factory: CredentialRepositoryFactory | null) {
   credentialRepositoryFactoryForTests = factory;
 }
@@ -137,6 +146,22 @@ function credentialErrorStatus(errorCode: string) {
   return 400;
 }
 
+export function bindAccountReadonlyDisconnectAbort(
+  request: DisconnectEventSource,
+  response: DisconnectResponse,
+  controller: AbortController,
+) {
+  const abortIfUnfinished = () => {
+    if (!response.writableEnded) controller.abort();
+  };
+  request.once('aborted', abortIfUnfinished);
+  response.once('close', abortIfUnfinished);
+  return () => {
+    request.removeListener('aborted', abortIfUnfinished);
+    response.removeListener('close', abortIfUnfinished);
+  };
+}
+
 export function createAccountReadonlyRouter(service: AccountReadonlyService): IRouter {
   const router: IRouter = Router();
 
@@ -200,13 +225,12 @@ export function createAccountReadonlyRouter(service: AccountReadonlyService): IR
     if (!userId || !accessToken) return res.status(401).json(deniedResponse('LOGIN_REQUIRED'));
 
     const controller = new AbortController();
-    const abort = () => controller.abort();
-    req.once('aborted', abort);
+    const cleanupDisconnectAbort = bindAccountReadonlyDisconnectAbort(req, res, controller);
     try {
       const snapshot = await service.read({ userId, accessToken }, provider, controller.signal);
       if (!res.writableEnded) return res.json(snapshot);
     } finally {
-      req.removeListener('aborted', abort);
+      cleanupDisconnectAbort();
     }
   });
   return router;
