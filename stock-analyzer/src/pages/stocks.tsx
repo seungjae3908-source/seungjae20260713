@@ -147,10 +147,14 @@ export default function StocksPage() {
       <header className="border-b border-card-border px-4 pb-3 pt-4">
         <h1 className="text-xl font-black text-center">종목</h1>
 
-        {/* 1) 주식은 canonical search, 코인은 기존 실제 티커 검색 */}
+        {/* 1) [주식][코인]  2) [국내][해외] / [현물][선물] — 검색 popup 위에 두어 항상 클릭 가능하게 유지 */}
+        <AssetSwitch className="mt-3" />
+
+        {/* 3) 주식은 canonical search, 코인은 기존 실제 티커 검색 */}
         {mode.asset === 'stock' ? (
-          <div className="mt-1.5">
+          <div className="mt-3">
             <UnifiedAssetSearch
+              key={`stock:${mode.stockMarket}`}
               asset="stock"
               market={mode.stockMarket}
               allowedMarkets={[mode.stockMarket]}
@@ -159,7 +163,7 @@ export default function StocksPage() {
             />
           </div>
         ) : (
-          <label className="mt-1.5 flex h-11 items-center gap-2 rounded-2xl border border-card-border bg-card px-3">
+          <label className="mt-3 flex h-11 items-center gap-2 rounded-2xl border border-card-border bg-card px-3">
             <Search className="h-4 w-4 text-muted-foreground" />
             <input
               value={query}
@@ -169,9 +173,6 @@ export default function StocksPage() {
             />
           </label>
         )}
-
-        {/* 2) [주식][코인]  3) [국내][해외] / [현물][선물] */}
-        <AssetSwitch className="mt-3" />
 
         {/* 4) 분류 버튼 6개 */}
         <div className="mt-3 grid grid-cols-3 gap-2">
