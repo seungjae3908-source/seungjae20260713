@@ -68,6 +68,7 @@ export function configureUnifiedChartFetch(fetcher: UnifiedChartFetch | null): v
 
 const DEFAULT_TIMEOUT_MS = 12_000;
 const PRIMARY_STOCK_ENDPOINT_TIMEOUT_MS = 2_500;
+const KR_PRIMARY_STOCK_ENDPOINT_TIMEOUT_MS = 3_500;
 
 export const UNIFIED_CHART_TIMEFRAMES: Array<{
   key: UnifiedChartTimeframe;
@@ -247,6 +248,20 @@ function createLinkedSignal(external: AbortSignal | undefined, timeoutMs: number
   };
 }
 
+function primaryStockEndpointTimeoutMs(market: AnalysisMarket, totalTimeoutMs: number): number {
+  /*
+   * The app-facing KR candle backend already has a 2s hard terminal after the
+   * request reaches the API. Authentication/session lookup and transport happen
+   * before that server budget, so the former 2.5s browser cutoff could abort a
+   * healthy bounded request. Keep the 5s release gate unchanged while allowing
+   * only a 1.5s auth/transport margin for KR; US keeps its existing 2.5s budget.
+   */
+  const endpointBudgetMs = market === 'KR'
+    ? KR_PRIMARY_STOCK_ENDPOINT_TIMEOUT_MS
+    : PRIMARY_STOCK_ENDPOINT_TIMEOUT_MS;
+  return Math.min(endpointBudgetMs, Math.max(250, Math.floor(totalTimeoutMs / 2)));
+}
+
 function canTryAlternateEndpoint(error: UnifiedChartDataError): boolean {
   return error.kind === 'timeout' || error.status === 404 || error.status === 405;
 }
@@ -278,7 +293,7 @@ export async function fetchUnifiedChartData(input: {
     for (const [index, url] of urls.entries()) {
       const alternateAvailable = index < urls.length - 1;
       const attempt = alternateAvailable
-        ? createLinkedSignal(linked.signal, Math.min(PRIMARY_STOCK_ENDPOINT_TIMEOUT_MS, Math.max(250, Math.floor(totalTimeoutMs / 2))))
+        ? createLinkedSignal(linked.signal, primaryStockEndpointTimeoutMs(input.market, totalTimeoutMs))
         : null;
       const attemptSignal = attempt?.signal ?? linked.signal;
 
