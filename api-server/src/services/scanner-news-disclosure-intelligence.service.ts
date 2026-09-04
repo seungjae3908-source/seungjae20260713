@@ -103,6 +103,15 @@ function timeoutSummary(): ScannerNewsDisclosureEvidenceSummary {
   };
 }
 
+function notAvailableSummary(reason: string): ScannerNewsDisclosureEvidenceSummary {
+  return {
+    contract: 'ScannerNewsDisclosureEvidenceV1', status: 'NOT_AVAILABLE', reason,
+    eventCount: 0, analyzedCount: 0, aiDeferredCount: 0,
+    sourceStatus: { news: 'NOT_RUN', filings: 'NOT_RUN' },
+    officialRiskEvents: [], events: [], warnings: [reason], safety,
+  };
+}
+
 function summary(result: StockNewsDisclosureIntelligenceResult): ScannerNewsDisclosureEvidenceSummary {
   const events: ScannerNewsDisclosureEventView[] = result.events.slice(0, 4).map((event) => {
     const analysis = event.ai?.analysis ?? null;
@@ -180,19 +189,23 @@ export async function enrichStockScannerCardsWithNewsDisclosureIntelligence(
   const selected = cards.slice(0, maxCandidates);
   const selectedResults = await Promise.all(selected.map(async (card) => {
     const strongCandidate = card.strongSignalEligible && (card.signalGrade === 'S' || card.signalGrade === 'A');
-    const result = await withBudget(collector({
-      ticker: card.symbol,
-      market: options.market,
-      companyName: card.name,
-      analysisScope: 'SCANNER',
-      context: {
-        scannerCandidate: strongCandidate,
-        abnormalPriceMove: typeof card.changePercent === 'number' && Math.abs(card.changePercent) >= 5,
-      },
-      maxEvents: 3,
-      maxAiEvents: strongCandidate ? 1 : 0,
-    }, { timeoutMs: Math.min(1_000, budgetMs) }), budgetMs);
-    return result ? summary(result) : timeoutSummary();
+    try {
+      const result = await withBudget(collector({
+        ticker: card.symbol,
+        market: options.market,
+        companyName: card.name,
+        analysisScope: 'SCANNER',
+        context: {
+          scannerCandidate: strongCandidate,
+          abnormalPriceMove: typeof card.changePercent === 'number' && Math.abs(card.changePercent) >= 5,
+        },
+        maxEvents: 3,
+        maxAiEvents: strongCandidate ? 1 : 0,
+      }, { timeoutMs: Math.min(1_000, budgetMs) }), budgetMs);
+      return result ? summary(result) : timeoutSummary();
+    } catch {
+      return notAvailableSummary('SCANNER_NEWS_DISCLOSURE_COLLECTOR_FAILED');
+    }
   }));
 
   return cards.map((card, index) => {
@@ -204,7 +217,9 @@ export async function enrichStockScannerCardsWithNewsDisclosureIntelligence(
       ? ['MI_NEWS_DISCLOSURE_PARTIAL']
       : intelligence.status === 'TIMEOUT'
         ? ['MI_NEWS_DISCLOSURE_TIMEOUT']
-        : [];
+        : intelligence.status === 'NOT_AVAILABLE'
+          ? ['MI_NEWS_DISCLOSURE_NOT_AVAILABLE']
+          : [];
     return Object.assign({
       ...card,
       warnings: [...new Set([...card.warnings, ...riskWarnings, ...statusWarnings])],
