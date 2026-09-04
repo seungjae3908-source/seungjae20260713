@@ -58,14 +58,19 @@ function newsData(count = 3): NewsData {
 }
 
 let identity = 0;
-function routeFor(input: MarketIntelligenceNewsDisclosureRouteInput, mode: MarketIntelligenceNewsDisclosureRoute['ai']['mode'] = 'CHEAP_AI'): MarketIntelligenceNewsDisclosureRoute {
+function routeFor(
+  input: MarketIntelligenceNewsDisclosureRouteInput,
+  mode: MarketIntelligenceNewsDisclosureRoute['ai']['mode'] = 'CHEAP_AI',
+  status: MarketIntelligenceNewsDisclosureRoute['status'] = 'READY',
+): MarketIntelligenceNewsDisclosureRoute {
   identity += 1;
   const hex = identity.toString(16).padStart(64, '0');
   const facts = input.event.evidence?.facts ?? [];
+  const level = mode === 'NO_AI' ? 0 : mode === 'CHEAP_AI' ? 1 : mode === 'DEEP_AI' ? 2 : 3;
   return {
     contract: 'MarketIntelAiRouteV1',
     serviceSha: 'sidecar-sha',
-    status: 'READY',
+    status,
     event: {
       rawHash: hex,
       sourceId: input.event.sourceId ?? null,
@@ -89,17 +94,17 @@ function routeFor(input: MarketIntelligenceNewsDisclosureRouteInput, mode: Marke
     },
     freshness: { state: 'FRESH', ageMs: 1_000, reason: null },
     ai: {
-      level: mode === 'NO_AI' ? 0 : 1,
+      level,
       mode,
-      modelTier: mode === 'NO_AI' ? 'NONE' : 'CHEAP',
+      modelTier: level >= 2 ? 'DEEP' : level === 1 ? 'CHEAP' : 'NONE',
       realtimeClass: mode === 'NO_AI' ? 'NONE' : 'REALTIME',
       analysisKey: hex,
-      cacheEligible: mode !== 'NO_AI',
+      cacheEligible: status !== 'NO_EVIDENCE' && status !== 'INVALID_EVIDENCE',
       cacheReuse: mode === 'NO_AI',
       batchEligible: false,
-      maxOutputClass: mode === 'NO_AI' ? 'NONE' : 'COMPACT_STRUCTURED',
+      maxOutputClass: level >= 2 ? 'DETAILED_STRUCTURED' : level === 1 ? 'COMPACT_STRUCTURED' : 'NONE',
     },
-    reasons: mode === 'NO_AI' ? ['EXACT_DUPLICATE'] : ['STANDARD_EVENT_CLASSIFICATION'],
+    reasons: mode === 'NO_AI' ? ['AI_BLOCKED_BY_EVIDENCE'] : ['STANDARD_EVENT_CLASSIFICATION'],
     safety: {
       executionAuthority: 'NONE', orderAllowed: false, candidateDeletionAllowed: false,
       sentimentIsPriceDirection: false, fabricatedEvidenceAllowed: false,
@@ -148,21 +153,60 @@ test('official filings are routed before news and realtime AI calls are capped a
   assert.equal(result.safety.orderAllowed, false);
 });
 
-test('NO_AI routing causes zero provider analysis calls', async () => {
+test('NO_AI routing with READY evidence causes zero provider analysis calls without degrading evidence truth', async () => {
   identity = 0;
   let analyzeCalls = 0;
   const result = await collectStockNewsDisclosureIntelligence({ ticker: '005930', market: 'KR', maxEvents: 1, maxAiEvents: 2 }, {
     dependencies: {
       getNews: async () => newsData(1),
       getFilings: async () => ({ market: 'KR', filings: [], disclosures: [] }),
-      route: async (input) => routeFor(input, 'NO_AI'),
+      route: async (input) => routeFor(input, 'NO_AI', 'READY'),
       analyze: async (input) => { analyzeCalls += 1; return analyzed(input.analysisKey); },
       now: () => Date.parse('2026-08-27T02:00:00.000Z'),
     },
   });
   assert.equal(analyzeCalls, 0);
+  assert.equal(result.status, 'READY');
   assert.equal(result.events[0]?.state, 'ROUTED_NO_AI');
   assert.equal(result.budget.aiAttemptedEvents, 0);
+});
+
+test('degraded route evidence cannot be promoted to aggregate READY', async () => {
+  for (const status of ['PARTIAL_EVIDENCE', 'CONFLICTING_EVIDENCE'] as const) {
+    identity = 0;
+    const result = await collectStockNewsDisclosureIntelligence({ ticker: '005930', market: 'KR', maxEvents: 1, maxAiEvents: 1 }, {
+      dependencies: {
+        getNews: async () => newsData(1),
+        getFilings: async () => ({ market: 'KR', filings: [], disclosures: [] }),
+        route: async (input) => routeFor(input, 'CHEAP_AI', status),
+        analyze: async (input) => analyzed(input.analysisKey),
+        now: () => Date.parse('2026-08-27T02:00:00.000Z'),
+      },
+    });
+    assert.equal(result.status, 'PARTIAL', status);
+    assert.ok(result.warnings.includes(`MARKET_INTELLIGENCE_ROUTE_${status}`), status);
+    assert.equal(result.events[0]?.route?.status, status);
+  }
+});
+
+test('no or invalid route evidence becomes NOT_AVAILABLE instead of aggregate READY', async () => {
+  for (const status of ['NO_EVIDENCE', 'INVALID_EVIDENCE'] as const) {
+    identity = 0;
+    let analyzeCalls = 0;
+    const result = await collectStockNewsDisclosureIntelligence({ ticker: '005930', market: 'KR', maxEvents: 1, maxAiEvents: 2 }, {
+      dependencies: {
+        getNews: async () => newsData(1),
+        getFilings: async () => ({ market: 'KR', filings: [], disclosures: [] }),
+        route: async (input) => routeFor(input, 'NO_AI', status),
+        analyze: async (input) => { analyzeCalls += 1; return analyzed(input.analysisKey); },
+        now: () => Date.parse('2026-08-27T02:00:00.000Z'),
+      },
+    });
+    assert.equal(analyzeCalls, 0, status);
+    assert.equal(result.status, 'NOT_AVAILABLE', status);
+    assert.ok(result.warnings.includes(`MARKET_INTELLIGENCE_ROUTE_${status}`), status);
+    assert.equal(result.events[0]?.state, 'ROUTED_NO_AI');
+  }
 });
 
 test('one provider failure remains explicit while verified evidence from the other provider is preserved', async () => {
