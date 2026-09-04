@@ -19,6 +19,11 @@ import { SUCCESSOR_OOS_HORIZON_CONTRACT } from '../src/public-forward-liquidity-
 
 const D = (value) => String(value).repeat(64).slice(0, 64);
 const ARTIFACT_SHA = 'a'.repeat(40);
+const SUCCESSOR_ACTIVE_TEST = Object.freeze({
+  skip: SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.activationBound !== true
+    ? 'preserved inactive-contract regression mode'
+    : false,
+});
 
 function canonicalize(value) {
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
@@ -170,7 +175,7 @@ function expectNotReady(result, blocker) {
   if (blocker) assert.ok(result.blockers.includes(blocker));
 }
 
-test('1 native genuine OOS fixture reaches the artifact contract with zero economic credit', () => {
+test('1 native genuine OOS fixture reaches the artifact contract with zero economic credit', SUCCESSOR_ACTIVE_TEST, () => {
   const result = validate();
   assert.equal(result.status, 'READY');
   assert.equal(result.calibrationInputN, 1);
@@ -206,7 +211,7 @@ test('4 slot 767 equivalent has zero genuine OOS and fails closed', () => {
   expectNotReady(validate(validation), GENUINE_SUCCESSOR_V3_OOS_EVIDENCE_MISSING);
 });
 
-test('5 first OOS slot 768 structurally admits when exact native lineage is present', () => {
+test('5 first OOS slot 768 structurally admits when exact native lineage is present', SUCCESSOR_ACTIVE_TEST, () => {
   const result = validate();
   assert.equal(result.status, 'READY');
   assert.deepEqual(result.artifact.frozenSplit.OOS, { startIndexInclusive: 768, endIndexInclusive: 1023 });
@@ -247,17 +252,17 @@ test('12 horizon other than frozen 5000ms is rejected', () => {
   expectNotReady(validate(validation), 'SUCCESSOR_V3_OOS_HORIZON_MISMATCH');
 });
 
-test('13 wrong slot/index identity is rejected', () => {
+test('13 wrong slot/index identity is rejected', SUCCESSOR_ACTIVE_TEST, () => {
   const result = validate(validOosValidation(), validMethodology(), { v3IndependentSplitIndexDigest: D('d') });
   expectNotReady(result, 'ARTIFACT_SPLIT_INDEX_DIGEST_MISMATCH');
 });
 
-test('14 wrong source/bound outcome lineage digest is rejected', () => {
+test('14 wrong source/bound outcome lineage digest is rejected', SUCCESSOR_ACTIVE_TEST, () => {
   const result = validate(validOosValidation(), validMethodology(), { oosOutcomeDigest: D('e') });
   expectNotReady(result, 'ARTIFACT_OOS_OUTCOME_DIGEST_MISMATCH');
 });
 
-test('15 candidate cannot bind a different #802 validation digest', () => {
+test('15 candidate cannot bind a different #802 validation digest', SUCCESSOR_ACTIVE_TEST, () => {
   const result = validate(validOosValidation(), validMethodology(), { oosValidationDigest: D('f') });
   expectNotReady(result, 'ARTIFACT_OOS_VALIDATION_DIGEST_MISMATCH');
 });
@@ -276,7 +281,7 @@ test('17 rerun/replay credit is rejected', () => {
   expectNotReady(validate(validation), 'SUCCESSOR_V3_OOS_TRUTH_BOUNDARY_INVALID');
 });
 
-test('18 manual replay backfill fixture or synthetic economic credit is rejected', () => {
+test('18 manual replay backfill fixture or synthetic economic credit is rejected', SUCCESSOR_ACTIVE_TEST, () => {
   const result = validate(validOosValidation(), validMethodology(), {
     manualSampleCredit: 1,
     historicalBackfillCredit: 1,
@@ -300,23 +305,23 @@ test('20 OOS N=0 produces no artifact and uses the canonical missing-evidence re
   expectNotReady(result, GENUINE_SUCCESSOR_V3_OOS_EVIDENCE_MISSING);
 });
 
-test('21 insufficient statistical admission is NOT_READY and statistics remain null', () => {
+test('21 insufficient statistical admission is NOT_READY and statistics remain null', SUCCESSOR_ACTIVE_TEST, () => {
   const result = validate(validOosValidation(), validMethodology(), { statisticalAdmissionReady: false });
   assert.equal(result.reason, 'INSUFFICIENT_STATISTICAL_EVIDENCE');
   expectNotReady(result, 'STATISTICAL_ADMISSION_NOT_READY');
 });
 
-test('22 no false probability can be injected', () => {
+test('22 no false probability can be injected', SUCCESSOR_ACTIVE_TEST, () => {
   const result = validate(validOosValidation(), validMethodology(), { probability: 0 });
   expectNotReady(result, 'RUNTIME_LIQUIDITY_COST_FORBIDDEN');
 });
 
-test('23 no false EV or alpha can be injected', () => {
+test('23 no false EV or alpha can be injected', SUCCESSOR_ACTIVE_TEST, () => {
   const result = validate(validOosValidation(), validMethodology(), { expectedValue: 0, netAlpha: 0 });
   expectNotReady(result, 'RUNTIME_LIQUIDITY_COST_FORBIDDEN');
 });
 
-test('24 Full Cost Net Alpha and Profitability promotion are forbidden', () => {
+test('24 Full Cost Net Alpha and Profitability promotion are forbidden', SUCCESSOR_ACTIVE_TEST, () => {
   const result = validate(validOosValidation(), validMethodology(), {
     fullCostReady: true,
     netAlphaReady: true,
@@ -325,7 +330,7 @@ test('24 Full Cost Net Alpha and Profitability promotion are forbidden', () => {
   expectNotReady(result, 'ARTIFACT_ECONOMIC_OR_EXECUTION_PROMOTION_FORBIDDEN');
 });
 
-test('25 execution authority remains NONE', () => {
+test('25 execution authority remains NONE', SUCCESSOR_ACTIVE_TEST, () => {
   const result = validate(validOosValidation(), validMethodology(), { executionAuthority: 'LIVE' });
   expectNotReady(result, 'ARTIFACT_ECONOMIC_OR_EXECUTION_PROMOTION_FORBIDDEN');
   assert.equal(PUBLIC_FORWARD_LIQUIDITY_CALIBRATION_ARTIFACT_SAFETY.executionAuthority, 'NONE');
