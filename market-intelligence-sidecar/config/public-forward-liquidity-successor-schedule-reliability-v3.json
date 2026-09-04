@@ -1,0 +1,93 @@
+{
+  "contractVersion": "public-forward-liquidity-successor-schedule-reliability-contract-v3",
+  "freezeStatus": "HUMAN_NUMERIC_FREEZE_APPROVED_IMPLEMENTATION_INACTIVE",
+  "authority": {
+    "canonicalHubIssue": 838,
+    "releaseControlIssue": 23,
+    "humanApprovalCommentId": 5517324618,
+    "humanApprovalCreatedAt": "2026-09-02T22:28:47Z",
+    "humanApprovalCreatedAtMs": 1788388127000,
+    "approvalScope": "V3_SUCCESSOR_SCHEDULE_RELIABILITY_NUMERIC_FREEZE",
+    "sourceMainSha": "e77f077be73ebcd37fa0e725212f566c45c6a7e4",
+    "canonicalNumericFreezeSha256": "10b157de8e1902865f9b386a02439bb56d67b5c2fcd20dd48870d851bdb97ff1",
+    "marketOutcomeConsulted": false,
+    "profitabilityOutcomeConsulted": false,
+    "aiNumericAuthority": "NONE",
+    "humanFinalNumericAuthority": true
+  },
+  "supersedes": {
+    "contractVersion": "public-forward-liquidity-successor-prospective-cohort-contract-v2",
+    "policyDigest": "5d91ea09ac5a2982a26d00197433142455fa6634488fadc9201e4ddf1346ed6c",
+    "cohortDigest": "9b2853a361e17dc429288cec4499fc972189b0bc2427a6d8bb2a999eff847454",
+    "v2MutationAllowed": false,
+    "retroactiveReclassificationAllowed": false,
+    "priorV2CreditImported": 0,
+    "priorV2MissedSlotRecovery": 0,
+    "priorV2DiagnosticArtifactCredit": 0
+  },
+  "policyCore": {
+    "schemaVersion": "public-forward-liquidity-successor-schedule-reliability-policy-v3",
+    "cohortTemplate": {
+      "identitySeed": "PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_SCHEDULE_RELIABILITY_V3",
+      "canonicalTimezone": "UTC",
+      "displayTimezone": "Asia/Seoul",
+      "slotCadenceMs": 3600000,
+      "triggerMinutesUtc": [17, 27, 37],
+      "scheduleExpressionsUtc": ["17 * * * *", "27 * * * *", "37 * * * *"],
+      "scheduledAttemptNPerSlot": 3,
+      "allowedStartDelayMs": 2700000,
+      "allowedCompletionDelayMs": 600000,
+      "hardSafetyGapMs": 300000,
+      "totalSlotN": 1024,
+      "minActivationLeadSlots": 1,
+      "activationBindingStatus": "PENDING_SEPARATE_AUTHORITY",
+      "startInclusiveMs": null,
+      "endExclusiveMs": null
+    },
+    "splits": {
+      "mode": "CHRONOLOGICAL_IMMUTABLE_SLOT_RANGE",
+      "TRAIN": {"startIndexInclusive": 0, "endIndexInclusive": 511, "expectedSlotN": 512},
+      "VALIDATION": {"startIndexInclusive": 512, "endIndexInclusive": 767, "expectedSlotN": 256},
+      "OOS": {"startIndexInclusive": 768, "endIndexInclusive": 1023, "expectedSlotN": 256}
+    },
+    "creditPolicy": {
+      "prospectiveCreditPerEligiblePresentFirstAttempt": 1,
+      "manualCredit": 0,
+      "replayCredit": 0,
+      "backfillCredit": 0,
+      "syntheticCredit": 0,
+      "operatorSelectedCredit": 0,
+      "duplicateOrRerunCredit": 0,
+      "missedSlotCredit": 0,
+      "priorV2CreditImported": 0
+    },
+    "prospectiveIntegrity": {
+      "slotAuthorityTimestamp": "actualRunStartedAtMs",
+      "scheduledCreatedAndActualStartSameSlotRequired": true,
+      "nominalBackwardReassignmentAllowed": false,
+      "queueCrossingSlotBoundaryCredit": 0,
+      "maxProspectiveSlotCreditPerSlot": 1,
+      "laterFallbackAfterCreditedSlotCredit": 0,
+      "laterFallbackCollectorInvocationAllowedAfterCreditedSlot": false,
+      "strictlyFutureCutoverRequired": true,
+      "minActivationLeadSlots": 1,
+      "outcomeInspectionUsedForPolicySelection": false
+    },
+    "oosBinding": {"outcomeHorizonMs": 5000, "outcomeHorizonRetuned": false, "outcomeSelectionPolicy": "FIRST_PUBLIC_OBSERVATION_AT_OR_AFTER_HORIZON"},
+    "workflowConcurrency": {"queue": "max", "cancelInProgress": false},
+    "safety": {
+      "publicDataOnly": true,
+      "executionAuthority": "NONE",
+      "privateTradingApiAllowed": false,
+      "liveTradingAllowed": false,
+      "autoTradingAllowed": false,
+      "realOrderAllowed": false,
+      "financialMutationAllowed": false,
+      "replitAgentAllowed": false,
+      "fullCostReady": false,
+      "evidenceComplete": 0,
+      "profitabilityProven": false,
+      "currentValidatedChampion": "NONE"
+    }
+  }
+}

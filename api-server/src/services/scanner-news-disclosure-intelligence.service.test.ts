@@ -123,3 +123,21 @@ test('budget timeout is fail-soft and preserves the original scanner card', asyn
   assert.equal(augmented.newsDisclosureIntelligence.status, 'TIMEOUT');
   assert.ok(augmented.warnings.includes('MI_NEWS_DISCLOSURE_TIMEOUT'));
 });
+
+test('collector rejection is isolated as NOT_AVAILABLE and preserves the core scanner card', async () => {
+  const original = card('005930', { score: 79, confidence: 67, direction: 'LONG' });
+  const [output] = await enrichStockScannerCardsWithNewsDisclosureIntelligence([original], {
+    market: 'KR', maxCandidates: 1, budgetMs: 500,
+    collector: async () => { throw new Error('provider failed'); },
+  });
+  assert.equal(output.score, 79);
+  assert.equal(output.confidence, 67);
+  assert.equal(output.direction, 'LONG');
+  assert.equal(output.strongSignalEligible, original.strongSignalEligible);
+  assert.deepEqual(output.pricePlan, original.pricePlan);
+  assert.equal(output.newsDisclosureIntelligence.status, 'NOT_AVAILABLE');
+  assert.equal(output.newsDisclosureIntelligence.reason, 'SCANNER_NEWS_DISCLOSURE_COLLECTOR_FAILED');
+  assert.equal(output.newsDisclosureIntelligence.safety.executionAuthority, 'NONE');
+  assert.equal(output.newsDisclosureIntelligence.safety.orderAllowed, false);
+  assert.ok(output.warnings.includes('MI_NEWS_DISCLOSURE_NOT_AVAILABLE'));
+});
