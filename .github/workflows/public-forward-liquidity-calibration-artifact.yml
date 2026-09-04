@@ -66,7 +66,7 @@ jobs:
           "$RUNNER_TEMP/actionlint" -version
           "$RUNNER_TEMP/actionlint" .github/workflows/public-forward-liquidity-calibration-artifact.yml
 
-      - name: Run focused Native Successor V3 OOS calibration tests
+      - name: Run focused active Native Successor V3 OOS calibration tests
         shell: bash
         run: |
           set -euo pipefail
@@ -75,8 +75,24 @@ jobs:
             market-intelligence-sidecar/tests/public-forward-liquidity-oos-outcome-producer.test.mjs \
             market-intelligence-sidecar/tests/public-forward-liquidity-calibration-oos-outcome-validator.test.mjs \
             market-intelligence-sidecar/tests/public-forward-liquidity-v3-independence-binding.test.mjs \
-            market-intelligence-sidecar/tests/public-forward-liquidity-successor-oos-outcome-horizon.test.mjs \
-            market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-reliability-v3.test.mjs
+            market-intelligence-sidecar/tests/public-forward-liquidity-successor-oos-outcome-horizon.test.mjs
+
+      - name: Run preserved inactive schedule contract regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          activation='market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json'
+          backup="$RUNNER_TEMP/successor-v3-activation-dedicated.json"
+          restore_activation() {
+            if [[ -f "$backup" ]]; then
+              mv "$backup" "$activation"
+            fi
+          }
+          trap restore_activation EXIT
+          if [[ -f "$activation" ]]; then
+            mv "$activation" "$backup"
+          fi
+          node --test market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-reliability-v3.test.mjs
 
       - name: Verify fail-closed Native OOS safety boundary
         shell: bash
