@@ -1,6 +1,8 @@
 import {
+  forwardRef,
   useCallback,
   useEffect,
+  useImperativeHandle,
   useMemo,
   useRef,
   useState,
@@ -101,6 +103,10 @@ type PlanLineRow = {
   style: LineStyle;
   width: 1 | 2;
   priority: number;
+};
+
+export type PatternAwareUnifiedChartCanvasHandle = {
+  applyRealtimeCandle: (candle: NormalizedChartCandle) => boolean;
 };
 
 type Props = {
@@ -223,7 +229,7 @@ function chartSymbolFromResetKey(
   return resetKey.slice(prefix.length, resetKey.length - suffix.length).trim();
 }
 
-export function PatternAwareUnifiedChartCanvas({
+export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChartCanvasHandle, Props>(function PatternAwareUnifiedChartCanvas({
   candles,
   indicators,
   levels,
@@ -234,7 +240,7 @@ export function PatternAwareUnifiedChartCanvas({
   resetKey,
   market,
   onCandleSelect,
-}: Props) {
+}: Props, ref) {
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const instanceRef = useRef<ChartInstance | null>(null);
@@ -247,6 +253,43 @@ export function PatternAwareUnifiedChartCanvas({
     [market, resetKey, timeframe],
   );
   const latestChartPrice = candles.at(-1)?.close ?? null;
+
+  useImperativeHandle(ref, () => ({
+    applyRealtimeCandle: (candle) => {
+      const instance = instanceRef.current;
+      if (
+        !instance
+        || !Number.isFinite(candle.time)
+        || !Number.isFinite(candle.open)
+        || !Number.isFinite(candle.high)
+        || !Number.isFinite(candle.low)
+        || !Number.isFinite(candle.close)
+        || !Number.isFinite(candle.volume)
+        || candle.open <= 0
+        || candle.high <= 0
+        || candle.low <= 0
+        || candle.close <= 0
+        || candle.volume < 0
+        || candle.high < Math.max(candle.open, candle.close)
+        || candle.low > Math.min(candle.open, candle.close)
+      ) {
+        return false;
+      }
+      instance.candle.update({
+        time: candle.time as UTCTimestamp,
+        open: candle.open,
+        high: candle.high,
+        low: candle.low,
+        close: candle.close,
+      });
+      instance.volume.update({
+        time: candle.time as UTCTimestamp,
+        value: candle.volume,
+        color: candle.close >= candle.open ? 'rgba(239,68,68,0.42)' : 'rgba(59,130,246,0.42)',
+      });
+      return true;
+    },
+  }), [resetKey]);
 
   const activePattern = useMemo(() => {
     return analyzeChartStructure(candles).patterns
@@ -622,7 +665,7 @@ export function PatternAwareUnifiedChartCanvas({
       </div>
     </div>
   );
-}
+});
 
 function ChartControl({ label, testId, onClick, children }: {
   label: string;
