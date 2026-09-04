@@ -708,7 +708,7 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
           </div>
           <div className="rounded-2xl bg-background p-3">
             <span className="text-muted-foreground">Historical Performance</span>
-            <strong className="mt-1 block">NOT AVAILABLE</strong>
+            <strong className="mt-1 block">UNAVAILABLE</strong>
           </div>
           <div className="rounded-2xl bg-background p-3">
             <span className="text-muted-foreground">현재 Data Quality</span>
