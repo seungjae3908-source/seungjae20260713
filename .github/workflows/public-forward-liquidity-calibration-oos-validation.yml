@@ -42,6 +42,7 @@ jobs:
           set -euo pipefail
           node market-intelligence-sidecar/scripts/run-public-forward-liquidity-oos-outcome-producer.mjs --help > /tmp/oos-producer-help.txt
           grep -Fq -- '--split-receipt' /tmp/oos-producer-help.txt
+          grep -Fq -- '--v3-split-index' /tmp/oos-producer-help.txt
           grep -Fq 'performs no network request' /tmp/oos-producer-help.txt
 
       - name: Run focused held-out OOS validator and producer tests
@@ -64,6 +65,11 @@ jobs:
           grep -Fq 'syntheticSingleCollectorAllowed: false' "$VALIDATOR"
           grep -Fq 'PUBLIC_FORWARD_LIQUIDITY_MULTI_SOURCE_SPLIT_AUDIT_VERSION' "$VALIDATOR"
           grep -Fq 'PUBLIC_FORWARD_LIQUIDITY_MULTI_SOURCE_OOS_VALIDATION_VERSION' "$VALIDATOR"
+          grep -Fq 'PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_V3_OOS_VALIDATION_VERSION' "$VALIDATOR"
+          grep -Fq 'PUBLIC_FORWARD_LIQUIDITY_V3_INDEPENDENT_SPLIT_INDEX_VERSION' "$VALIDATOR"
+          grep -Fq 'SUCCESSOR_V3_NATIVE_POLICY_LINEAGE_MISMATCH' "$VALIDATOR"
+          grep -Fq 'SUCCESSOR_V3_INDEX_ASSIGNMENT_FROZEN_SPLIT_MISMATCH' "$VALIDATOR"
+          grep -Fq 'SUCCESSOR_V3_OOS_ASSIGNMENTS_MISSING' "$VALIDATOR"
           grep -Fq 'upstreamLineageDigest' "$VALIDATOR"
           grep -Fq 'datasetDigests' "$VALIDATOR"
           grep -Fq 'receiptDigests' "$VALIDATOR"
@@ -99,6 +105,10 @@ jobs:
 
           grep -Fq 'verifyPublicForwardLiquidityIngestReceiptChain' "$PRODUCER"
           grep -Fq 'validatePublicForwardLiquidityOosOutcomes' "$PRODUCER"
+          grep -Fq 'validatePublicForwardLiquiditySuccessorV3OosOutcomes' "$PRODUCER"
+          grep -Fq 'SUCCESSOR_OOS_HORIZON_CONTRACT' "$PRODUCER"
+          grep -Fq 'genuineV3OosSlotN' "$PRODUCER"
+          grep -Fq 'genuineOosOutcomeN' "$PRODUCER"
           grep -Fq "FIRST_PUBLIC_OBSERVATION_AT_OR_AFTER_HORIZON" "$PRODUCER"
           grep -Fq "OOS_HORIZON_POLICY_MISSING" "$PRODUCER"
           grep -Fq "AMBIGUOUS_DUPLICATE_OUTCOME" "$PRODUCER"

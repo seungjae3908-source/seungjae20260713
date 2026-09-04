@@ -10,11 +10,22 @@ import {
 } from './public-forward-liquidity-ingest-receipt-chain.mjs';
 import {
   PUBLIC_FORWARD_LIQUIDITY_MULTI_SOURCE_SPLIT_RECEIPT_VERSION,
+  SUCCESSOR_V3_SOURCE_CONTRACT_FAMILY,
   validatePublicForwardLiquidityOosOutcomes,
+  validatePublicForwardLiquiditySuccessorV3OosOutcomes,
+  validatePublicForwardLiquiditySuccessorV3SplitIndex,
 } from './public-forward-liquidity-calibration-oos-outcome-validator.mjs';
+import {
+  SUCCESSOR_OOS_HORIZON_CONTRACT,
+} from './public-forward-liquidity-successor-oos-outcome-horizon.mjs';
+import {
+  SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT,
+} from './public-forward-liquidity-successor-schedule-reliability-v3.mjs';
 
 export const PUBLIC_FORWARD_LIQUIDITY_OOS_OUTCOME_ARTIFACT_VERSION =
   'public-forward-liquidity-held-out-oos-outcome-artifact-v1';
+export const PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_V3_OOS_OUTCOME_ARTIFACT_VERSION =
+  'public-forward-liquidity-successor-v3-held-out-oos-outcome-artifact-v1';
 export const PUBLIC_FORWARD_LIQUIDITY_OOS_SELECTION_POLICY =
   'FIRST_PUBLIC_OBSERVATION_AT_OR_AFTER_HORIZON';
 
@@ -563,6 +574,409 @@ export function producePublicForwardLiquidityHeldOutOosArtifact({
     effectiveIndependentN: null,
     buyCoverageProven: false,
     representativenessProven: false,
+    calibrationArtifactProduced: false,
+    liquidityImpactProduced: false,
+    fullCostReady: false,
+    evidenceCompleteCredit: 0,
+    replayCredit: 0,
+    backfillCredit: 0,
+    syntheticCredit: 0,
+    naturalEntryCredit: 0,
+    runtimeCostCredit: 0,
+    executionAuthority: 'NONE',
+    privateApiUsed: false,
+    liveTrading: false,
+    orderSubmitted: false,
+    safety: PUBLIC_FORWARD_LIQUIDITY_OOS_PRODUCER_SAFETY,
+  };
+  return Object.freeze({ ...body, outcomeArtifactDigest: sha256(canonicalJson(body)) });
+}
+
+function blockedSuccessorV3Artifact({ v3SplitIndex, outcomeProducerCodeSha, createdAtMs, blockers }) {
+  const policy = SUCCESSOR_OOS_HORIZON_CONTRACT.policyCore.outcomePolicy;
+  const body = {
+    schemaVersion: PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_V3_OOS_OUTCOME_ARTIFACT_VERSION,
+    kind: 'public-forward-liquidity-successor-v3-held-out-oos-outcome-artifact',
+    status: 'BLOCKED_DATA',
+    blockers: Object.freeze([...new Set(blockers)]),
+    producerCodeSha: exactCommitSha(outcomeProducerCodeSha) ?? null,
+    createdAtMs: positiveFinite(createdAtMs) ? createdAtMs : null,
+    sourceContractFamily: v3SplitIndex?.sourceContractFamily ?? null,
+    v3IndependentSplitIndexDigest: v3SplitIndex?.indexDigest ?? null,
+    sourceInventoryDigest: v3SplitIndex?.sourceInventoryDigest ?? null,
+    independenceAuditDigest: v3SplitIndex?.independenceAuditDigest ?? null,
+    independentSplitSourceDigest: v3SplitIndex?.independentSplitSourceDigest ?? null,
+    policyDigest: v3SplitIndex?.policyDigest ?? null,
+    cohortDigest: v3SplitIndex?.cohortDigest ?? null,
+    oosHorizonContractVersion: SUCCESSOR_OOS_HORIZON_CONTRACT.contractVersion,
+    oosHorizonPolicyDigest: SUCCESSOR_OOS_HORIZON_CONTRACT.policyDigest,
+    oosHorizonContractDigest: SUCCESSOR_OOS_HORIZON_CONTRACT.contractDigest,
+    outcomeHorizonIdentity: policy.outcomeHorizonIdentity,
+    outcomeHorizonMs: policy.outcomeHorizonMs,
+    outcomeSelectionPolicy: policy.outcomeSelectionPolicy,
+    assignmentCount: 0,
+    eligibleAssignmentCount: 0,
+    matureAssignmentCount: 0,
+    settledOutcomeCount: 0,
+    missingOutcomeCount: 0,
+    rejectedOutcomeCount: 0,
+    buyOosCount: 0,
+    sellOosCount: 0,
+    exactOosCoverage: false,
+    oosPolicyPass: false,
+    oosStatus: 'MISSING_EVIDENCE',
+    assignmentOutcomes: Object.freeze([]),
+    outcomes: Object.freeze([]),
+    validationDigest: null,
+    genuineV3OosSlotN: 0,
+    genuineOosOutcomeN: 0,
+    calibrationArtifactProduced: false,
+    liquidityImpactProduced: false,
+    fullCostReady: false,
+    evidenceCompleteCredit: 0,
+    replayCredit: 0,
+    backfillCredit: 0,
+    syntheticCredit: 0,
+    naturalEntryCredit: 0,
+    runtimeCostCredit: 0,
+    executionAuthority: 'NONE',
+    privateApiUsed: false,
+    liveTrading: false,
+    orderSubmitted: false,
+    safety: PUBLIC_FORWARD_LIQUIDITY_OOS_PRODUCER_SAFETY,
+  };
+  return Object.freeze({ ...body, outcomeArtifactDigest: sha256(canonicalJson(body)) });
+}
+
+function validateSuccessorV3BoundSource({ source, assignment }) {
+  const blockers = [];
+  if (!object(source)
+    || !object(source.dataset)
+    || !Array.isArray(source.ingestReceipts)
+    || !Array.isArray(source.ingestReceiptRelativePaths)
+    || source.ingestReceipts.length !== source.ingestReceiptRelativePaths.length) {
+    add(blockers, 'SUCCESSOR_V3_OOS_SOURCE_EVIDENCE_REQUIRED');
+    return { blockers, observation: null };
+  }
+  if (source.sourceIdentity !== assignment.ingestSourceIdentity) {
+    add(blockers, 'SUCCESSOR_V3_OOS_SOURCE_IDENTITY_MISMATCH');
+  }
+  if (source.dataset.datasetDigest !== assignment.datasetDigest
+    || source.dataset.collectorCodeSha !== assignment.collectorCodeSha) {
+    add(blockers, 'SUCCESSOR_V3_OOS_SOURCE_DATASET_LINEAGE_MISMATCH');
+  }
+  const receiptIndex = source.ingestReceiptRelativePaths.indexOf(assignment.ingestReceiptRelativePath);
+  const receipt = receiptIndex >= 0 ? source.ingestReceipts[receiptIndex] : null;
+  if (!receipt
+    || receipt.receiptDigest !== assignment.ingestReceiptDigest
+    || receipt.collectorCodeSha !== assignment.collectorCodeSha
+    || !Array.isArray(receipt.batchObservationIds)
+    || !receipt.batchObservationIds.includes(assignment.sourceObservationId)) {
+    add(blockers, 'SUCCESSOR_V3_OOS_INGEST_RECEIPT_BINDING_MISMATCH');
+  }
+  const lineage = receipt?.sourceV3Lineage;
+  if (!object(lineage)
+    || lineage.sourceContractFamily !== SUCCESSOR_V3_SOURCE_CONTRACT_FAMILY
+    || lineage.producerWorkflowName !== 'Public Forward Liquidity Successor Scheduled Capture'
+    || lineage.producerWorkflowId !== 347888347
+    || lineage.triggerSource !== 'schedule'
+    || lineage.scheduleReliabilityContractVersion
+      !== SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.contractVersion
+    || lineage.scheduleReliabilityNumericFreezeSha256
+      !== SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.numericFreezeSha256
+    || lineage.oosHorizonContractVersion !== SUCCESSOR_OOS_HORIZON_CONTRACT.contractVersion
+    || lineage.oosHorizonPolicyDigest !== SUCCESSOR_OOS_HORIZON_CONTRACT.policyDigest
+    || lineage.oosHorizonContractDigest !== SUCCESSOR_OOS_HORIZON_CONTRACT.contractDigest
+    || lineage.prospectiveSlotCredit !== 1
+    || lineage.manualCredit !== 0
+    || lineage.replayCredit !== 0
+    || lineage.backfillCredit !== 0
+    || lineage.operatorSelectedCredit !== 0
+    || lineage.slotIndex !== assignment.slotIndex
+    || lineage.split !== 'OOS'
+    || lineage.policyDigest !== assignment.policyDigest
+    || lineage.cohortDigest !== assignment.cohortDigest
+    || lineage.captureReceiptDigest !== assignment.captureReceiptDigest
+    || lineage.artifactReceiptDigest !== assignment.artifactReceiptDigest
+    || sha256(canonicalJson(lineage.canonicalSlotKey)) !== assignment.canonicalSlotKeyDigest
+    || (lineage.canonicalSlotKeyDigest != null
+      && lineage.canonicalSlotKeyDigest !== assignment.canonicalSlotKeyDigest)) {
+    add(blockers, 'SUCCESSOR_V3_OOS_CAPTURE_RECEIPT_LINEAGE_MISMATCH');
+  }
+  if (receipt?.captureRunAttempt !== '1'
+    || receipt?.canonicalDatasetPersistencePerformed !== true
+    || receipt?.canonicalDatasetCreditApplied !== false
+    || receipt?.independenceEvaluated !== false
+    || receipt?.effectiveIndependentCalibrationN !== null
+    || receipt?.fullCostReady !== false
+    || receipt?.evidenceCompleteCredit !== 0
+    || receipt?.executionAuthority !== 'NONE'
+    || receipt?.privateApiUsed !== false
+    || receipt?.liveTrading !== false
+    || receipt?.realOrders !== 0) {
+    add(blockers, 'SUCCESSOR_V3_OOS_INGEST_RECEIPT_AUTHORITY_INVALID');
+  }
+  try {
+    const chain = verifyPublicForwardLiquidityIngestReceiptChain({
+      dataset: source.dataset,
+      ingestReceipts: source.ingestReceipts,
+      datasetRelativePath: source.datasetRelativePath,
+      collectorImplementationPath: source.ingestReceipts.at(-1)?.collectorImplementationPath,
+    });
+    if (chain.finalDatasetDigest !== assignment.datasetDigest
+      || !chain.receiptDigests.includes(assignment.ingestReceiptDigest)) {
+      add(blockers, 'SUCCESSOR_V3_OOS_SOURCE_RECEIPT_CHAIN_MISMATCH');
+    }
+  } catch (error) {
+    add(blockers, `SUCCESSOR_V3_OOS_SOURCE_RECEIPT_CHAIN_INVALID:${String(error?.message ?? error)}`);
+  }
+  const matches = source.dataset.observations?.filter(
+    (observation) => observation?.observationId === assignment.sourceObservationId,
+  ) ?? [];
+  if (matches.length !== 1) {
+    add(blockers, matches.length === 0
+      ? 'SUCCESSOR_V3_OOS_SOURCE_OBSERVATION_MISSING'
+      : 'SUCCESSOR_V3_OOS_SOURCE_OBSERVATION_DUPLICATE');
+    return { blockers, observation: null };
+  }
+  const observation = matches[0];
+  try {
+    validatePublicForwardLiquidityObservationIdentity(observation);
+  } catch (error) {
+    add(blockers, `SUCCESSOR_V3_OOS_SOURCE_OBSERVATION_INVALID:${String(error?.message ?? error)}`);
+  }
+  if (observation.eventTimestampMs !== assignment.eventTimestampMs
+    || observation.aggressiveSide !== assignment.aggressiveSide
+    || observation.sampleClass !== 'FORWARD_NATURAL_SAMPLE'
+    || observation.forwardCalibrationSampleCredit !== 1
+    || observation.historicalBackfillForwardCredit !== 0
+    || observation.publicDataSource !== 'BITGET_PUBLIC_UTA_V3'
+    || observation.calibrationSourceOnly !== true
+    || observation.executionCostEligible !== false
+    || observation.liquidityImpactCoefficient !== null
+    || observation.causalMarketImpactClaim !== false
+    || observation.paperOrderSourceAllowed !== false) {
+    add(blockers, 'SUCCESSOR_V3_OOS_NON_GENUINE_FORWARD_SOURCE');
+  }
+  return { blockers, observation };
+}
+
+export function producePublicForwardLiquiditySuccessorV3HeldOutOosArtifact({
+  v3SplitIndex,
+  sources = [],
+  outcomeProducerCodeSha,
+  createdAtMs = Date.now(),
+} = {}) {
+  const indexVerdict = validatePublicForwardLiquiditySuccessorV3SplitIndex(v3SplitIndex);
+  if (!indexVerdict.valid || !exactCommitSha(outcomeProducerCodeSha) || !positiveFinite(createdAtMs)) {
+    const blockers = [...indexVerdict.blockers];
+    if (!exactCommitSha(outcomeProducerCodeSha)) add(blockers, 'OOS_OUTCOME_PRODUCER_SHA_INVALID');
+    if (!positiveFinite(createdAtMs)) add(blockers, 'OOS_ARTIFACT_CREATED_AT_INVALID');
+    return blockedSuccessorV3Artifact({ v3SplitIndex, outcomeProducerCodeSha, createdAtMs, blockers });
+  }
+  const preflight = validatePublicForwardLiquiditySuccessorV3OosOutcomes({
+    v3SplitIndex,
+    outcomes: [],
+    expectedOutcomeProducerCodeSha: outcomeProducerCodeSha,
+  });
+  if (preflight.status !== 'BLOCKED_DATA'
+    || preflight.blockers.length !== 1
+    || preflight.blockers[0] !== 'SUCCESSOR_V3_OOS_OUTCOMES_MISSING') {
+    return blockedSuccessorV3Artifact({
+      v3SplitIndex,
+      outcomeProducerCodeSha,
+      createdAtMs,
+      blockers: preflight.blockers,
+    });
+  }
+
+  const policy = SUCCESSOR_OOS_HORIZON_CONTRACT.policyCore.outcomePolicy;
+  const sourceByIdentity = new Map();
+  for (const source of sources) {
+    if (!text(source?.sourceIdentity) || sourceByIdentity.has(source.sourceIdentity)) {
+      return blockedSuccessorV3Artifact({
+        v3SplitIndex,
+        outcomeProducerCodeSha,
+        createdAtMs,
+        blockers: ['SUCCESSOR_V3_OOS_SOURCE_IDENTITY_CARDINALITY_INVALID'],
+      });
+    }
+    sourceByIdentity.set(source.sourceIdentity, source);
+  }
+  const usedOutcomeSourceDigests = new Set();
+  const usedOutcomeSourceIdentities = new Set();
+  const assignmentOutcomes = [];
+  const outcomes = [];
+  let eligibleAssignmentCount = 0;
+  let matureAssignmentCount = 0;
+  let pendingOutcomeCount = 0;
+  let rejectedOutcomeCount = 0;
+
+  for (const assignment of indexVerdict.oosAssignments) {
+    const rowBlockers = [];
+    const source = sourceByIdentity.get(assignment.ingestSourceIdentity) ?? null;
+    if (!source) add(rowBlockers, 'SUCCESSOR_V3_OOS_SOURCE_EVIDENCE_REQUIRED');
+    let sourceObservation = null;
+    if (source) {
+      const verdict = validateSuccessorV3BoundSource({ source, assignment });
+      verdict.blockers.forEach((code) => add(rowBlockers, code));
+      sourceObservation = verdict.observation;
+    }
+    const targetObservedAtMs = assignment.eventTimestampMs + policy.outcomeHorizonMs;
+    let selected = null;
+    let rowStatus = 'REJECTED';
+    let rejectionReason = null;
+    if (rowBlockers.length === 0) {
+      eligibleAssignmentCount += 1;
+      const driftVerdict = validateDrifts(sourceObservation, assignment);
+      driftVerdict.blockers.forEach((code) => add(rowBlockers, code));
+      if (rowBlockers.length === 0) {
+        const candidates = driftVerdict.drifts.filter((drift) => drift.marketTimestampMs >= targetObservedAtMs);
+        if (candidates.length === 0) {
+          rowStatus = 'PENDING_DATA';
+          pendingOutcomeCount += 1;
+          rejectionReason = 'NO_PUBLIC_FORWARD_OBSERVATION_AT_SUCCESSOR_V3_HORIZON';
+        } else {
+          matureAssignmentCount += 1;
+          const earliestTimestamp = candidates[0].marketTimestampMs;
+          const earliest = candidates.filter((drift) => drift.marketTimestampMs === earliestTimestamp);
+          if (earliest.length !== 1) add(rowBlockers, 'AMBIGUOUS_DUPLICATE_OUTCOME');
+          else {
+            selected = earliest[0];
+            if (usedOutcomeSourceDigests.has(selected.rawSourceDigest)
+              || usedOutcomeSourceIdentities.has(selected.identity)) {
+              add(rowBlockers, 'OOS_PUBLIC_FRAME_REUSED');
+            }
+          }
+        }
+      }
+    }
+    if (rowBlockers.length > 0) {
+      rowStatus = 'REJECTED';
+      rejectedOutcomeCount += 1;
+      rejectionReason = rowBlockers[0];
+      selected = null;
+    }
+    let outcome = null;
+    if (selected) {
+      usedOutcomeSourceDigests.add(selected.rawSourceDigest);
+      usedOutcomeSourceIdentities.add(selected.identity);
+      const identity = {
+        v3IndependentSplitIndexDigest: v3SplitIndex.indexDigest,
+        observationId: assignment.observationId,
+        outcomeSourceDigest: selected.rawSourceDigest,
+        oosHorizonContractDigest: SUCCESSOR_OOS_HORIZON_CONTRACT.contractDigest,
+      };
+      outcome = Object.freeze({
+        outcomeId: `liquidity-successor-v3-oos-outcome:${sha256(canonicalJson(identity))}`,
+        v3IndependentSplitIndexDigest: v3SplitIndex.indexDigest,
+        observationId: assignment.observationId,
+        sourceObservationId: assignment.sourceObservationId,
+        sourceIdentity: assignment.sourceIdentity,
+        ingestSourceIdentity: assignment.ingestSourceIdentity,
+        aggressiveSide: assignment.aggressiveSide,
+        slotIndex: assignment.slotIndex,
+        split: 'OOS',
+        canonicalSlotKeyDigest: assignment.canonicalSlotKeyDigest,
+        collectorCodeSha: assignment.collectorCodeSha,
+        datasetDigest: assignment.datasetDigest,
+        ingestReceiptDigest: assignment.ingestReceiptDigest,
+        captureReceiptDigest: assignment.captureReceiptDigest,
+        artifactReceiptDigest: assignment.artifactReceiptDigest,
+        policyDigest: assignment.policyDigest,
+        cohortDigest: assignment.cohortDigest,
+        referenceEventTimestampMs: assignment.eventTimestampMs,
+        observedAtMs: selected.marketTimestampMs,
+        sourceType: 'PUBLIC_FORWARD_MARKET_DATA',
+        publicDataSource: sourceObservation.publicDataSource,
+        outcomeSourceIdentity: selected.identity,
+        outcomeSourceDigest: selected.rawSourceDigest,
+        outcomeProducerCodeSha,
+        observedPublicMidPrice: selected.mid,
+        oosHorizonContractVersion: SUCCESSOR_OOS_HORIZON_CONTRACT.contractVersion,
+        oosHorizonPolicyDigest: SUCCESSOR_OOS_HORIZON_CONTRACT.policyDigest,
+        oosHorizonContractDigest: SUCCESSOR_OOS_HORIZON_CONTRACT.contractDigest,
+        outcomeHorizonIdentity: policy.outcomeHorizonIdentity,
+        outcomeHorizonMs: policy.outcomeHorizonMs,
+        outcomeSelectionPolicy: policy.outcomeSelectionPolicy,
+        heldOut: true,
+        contaminationFree: true,
+        causalMarketImpactClaim: false,
+        executionCostEligible: false,
+        liquidityImpactCoefficient: null,
+        historicalBackfillCredit: 0,
+        replayCredit: 0,
+        syntheticCredit: 0,
+        testFixtureCredit: 0,
+        naturalEntryCredit: 0,
+        runtimeCostCredit: 0,
+        executionAuthority: 'NONE',
+      });
+      outcomes.push(outcome);
+      rowStatus = 'SETTLED';
+      rejectionReason = null;
+    }
+    assignmentOutcomes.push(Object.freeze({
+      assignmentId: assignment.observationId,
+      observationId: assignment.observationId,
+      sourceObservationId: assignment.sourceObservationId,
+      slotIndex: assignment.slotIndex,
+      split: assignment.split,
+      referenceEventTimestampMs: assignment.eventTimestampMs,
+      targetObservedAtMs,
+      outcomeObservationId: outcome?.outcomeId ?? null,
+      outcomeObservedAtMs: outcome?.observedAtMs ?? null,
+      outcomeStatus: rowStatus,
+      rejectionReason,
+    }));
+  }
+
+  const validationResult = validatePublicForwardLiquiditySuccessorV3OosOutcomes({
+    v3SplitIndex,
+    outcomes,
+    expectedOutcomeProducerCodeSha: outcomeProducerCodeSha,
+  });
+  const exactOosCoverage = validationResult.status === 'PRESENT';
+  const finalBlockers = exactOosCoverage ? [] : [...validationResult.blockers];
+  if (!exactOosCoverage && matureAssignmentCount === 0) add(finalBlockers, 'NO_MATURE_FROZEN_ASSIGNMENTS');
+  if (!exactOosCoverage && pendingOutcomeCount > 0) add(finalBlockers, 'NO_POST_FREEZE_PUBLIC_FORWARD_OBSERVATIONS');
+  if (!exactOosCoverage && rejectedOutcomeCount > 0) add(finalBlockers, 'OOS_OUTCOME_REJECTED');
+  const body = {
+    schemaVersion: PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_V3_OOS_OUTCOME_ARTIFACT_VERSION,
+    kind: 'public-forward-liquidity-successor-v3-held-out-oos-outcome-artifact',
+    status: exactOosCoverage ? 'PRESENT' : 'BLOCKED_DATA',
+    blockers: Object.freeze(finalBlockers),
+    producerCodeSha: outcomeProducerCodeSha,
+    createdAtMs,
+    sourceContractFamily: SUCCESSOR_V3_SOURCE_CONTRACT_FAMILY,
+    v3IndependentSplitIndexDigest: v3SplitIndex.indexDigest,
+    sourceInventoryDigest: v3SplitIndex.sourceInventoryDigest,
+    independenceAuditDigest: v3SplitIndex.independenceAuditDigest,
+    independentSplitSourceDigest: v3SplitIndex.independentSplitSourceDigest,
+    policyDigest: v3SplitIndex.policyDigest,
+    cohortDigest: v3SplitIndex.cohortDigest,
+    oosHorizonContractVersion: SUCCESSOR_OOS_HORIZON_CONTRACT.contractVersion,
+    oosHorizonPolicyDigest: SUCCESSOR_OOS_HORIZON_CONTRACT.policyDigest,
+    oosHorizonContractDigest: SUCCESSOR_OOS_HORIZON_CONTRACT.contractDigest,
+    outcomeHorizonIdentity: policy.outcomeHorizonIdentity,
+    outcomeHorizonMs: policy.outcomeHorizonMs,
+    outcomeSelectionPolicy: policy.outcomeSelectionPolicy,
+    assignmentCount: indexVerdict.oosAssignments.length,
+    eligibleAssignmentCount,
+    matureAssignmentCount,
+    settledOutcomeCount: outcomes.length,
+    missingOutcomeCount: pendingOutcomeCount,
+    rejectedOutcomeCount,
+    buyOosCount: outcomes.filter((outcome) => outcome.aggressiveSide === 'BUY').length,
+    sellOosCount: outcomes.filter((outcome) => outcome.aggressiveSide === 'SELL').length,
+    exactOosCoverage,
+    oosPolicyPass: exactOosCoverage,
+    oosStatus: exactOosCoverage ? 'PRESENT' : 'MISSING_EVIDENCE',
+    assignmentOutcomes: Object.freeze(assignmentOutcomes),
+    outcomes: Object.freeze(outcomes),
+    validationDigest: validationResult.validation?.validationDigest ?? null,
+    genuineV3OosSlotN: new Set(indexVerdict.oosAssignments.map((assignment) => assignment.slotIndex)).size,
+    genuineOosOutcomeN: outcomes.length,
     calibrationArtifactProduced: false,
     liquidityImpactProduced: false,
     fullCostReady: false,
