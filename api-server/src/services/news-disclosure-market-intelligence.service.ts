@@ -326,6 +326,14 @@ function defaultDependencies(): Dependencies {
   };
 }
 
+function routeTruthWarning(status: MarketIntelligenceNewsDisclosureRoute['status']): string | null {
+  return status === 'READY' ? null : `MARKET_INTELLIGENCE_ROUTE_${status}`;
+}
+
+function usableRouteStatus(status: MarketIntelligenceNewsDisclosureRoute['status']): boolean {
+  return status === 'READY' || status === 'PARTIAL_EVIDENCE' || status === 'CONFLICTING_EVIDENCE';
+}
+
 export async function collectStockNewsDisclosureIntelligence(
   input: StockNewsDisclosureIntelligenceInput,
   options: StockNewsDisclosureIntelligenceOptions = {},
@@ -399,6 +407,8 @@ export async function collectStockNewsDisclosureIntelligence(
         seenRawHashes,
       }, options);
       seenRawHashes.push(route.event.rawHash);
+      const routeWarning = routeTruthWarning(route.status);
+      if (routeWarning) warnings.push(routeWarning);
     } catch (cause) {
       warnings.push('MARKET_INTELLIGENCE_ROUTE_FAILED');
       events.push({
@@ -446,9 +456,14 @@ export async function collectStockNewsDisclosureIntelligence(
     if (ai.status !== 'ANALYZED' && ai.status !== 'SKIPPED') warnings.push('AI_ANALYSIS_PARTIAL');
   }
 
-  const status: StockNewsDisclosureIntelligenceStatus = warnings.length || events.some((event) => event.state === 'ROUTE_UNAVAILABLE')
-    ? 'PARTIAL'
-    : 'READY';
+  const routedEvents = events.filter((event) => event.route !== null);
+  const hasRoutedButNoUsableEvidence = routedEvents.length > 0
+    && !routedEvents.some((event) => event.route && usableRouteStatus(event.route.status));
+  const status: StockNewsDisclosureIntelligenceStatus = hasRoutedButNoUsableEvidence
+    ? 'NOT_AVAILABLE'
+    : warnings.length || events.some((event) => event.state === 'ROUTE_UNAVAILABLE')
+      ? 'PARTIAL'
+      : 'READY';
   return {
     contract: 'StockNewsDisclosureIntelligenceV1',
     status,
@@ -460,7 +475,7 @@ export async function collectStockNewsDisclosureIntelligence(
     budget: {
       maxEvents,
       maxAiEvents,
-      routedEvents: events.filter((event) => event.route !== null).length,
+      routedEvents: routedEvents.length,
       aiEligibleEvents,
       aiAttemptedEvents,
       aiDeferredEvents,
