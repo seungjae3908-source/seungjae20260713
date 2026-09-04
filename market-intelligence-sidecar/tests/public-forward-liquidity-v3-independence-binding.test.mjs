@@ -7,30 +7,62 @@ import {
   computePublicForwardLiquidityCaptureIngestReceiptDigest,
 } from '../src/public-forward-liquidity-capture-ingest.mjs';
 import {
+  V3_POLICY_BINDING,
+  buildV3SlotDescriptor,
+} from '../src/public-forward-liquidity-capture-seam-v3.mjs';
+import {
+  SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT,
+  buildSuccessorScheduleReliabilityV3SlotDescriptor,
+} from '../src/public-forward-liquidity-successor-schedule-reliability-v3.mjs';
+import {
+  SUCCESSOR_OOS_HORIZON_CONTRACT,
+} from '../src/public-forward-liquidity-successor-oos-outcome-horizon.mjs';
+import {
   PUBLIC_FORWARD_LIQUIDITY_V3_INDEPENDENT_SPLIT_INDEX_VERSION,
   buildPublicForwardLiquidityV3IndependentSplitIndex,
 } from '../src/public-forward-liquidity-v3-independence-binding.mjs';
 
-const POLICY = '1'.repeat(64);
-const COHORT = '2'.repeat(64);
+const POLICY = V3_POLICY_BINDING.policyDigest;
+const COHORT = V3_POLICY_BINDING.cohortDigest;
 const DATASET0 = '3'.repeat(64);
 const DATASET1 = '4'.repeat(64);
 const AUDIT = '5'.repeat(64);
 const SPLIT_SOURCE = '6'.repeat(64);
 const PRODUCER = '7'.repeat(40);
 const SOURCE = 'v3-cohort:test';
+const RUN_36 = Object.freeze({
+  runId: '33809694015',
+  exactMainSha: 'f248f948ffea74cccc2062e058ad6a806003c4c3',
+  artifactId: '9914306478',
+  artifactDigest: 'd0bb78556c74bd49155e5de3f3ce9af3b4240953308c89cab82e4dbc58d19325',
+  captureReceiptDigest: '181f997cf04872bb612e69945a9621e56fd2709c9c8b51097f522354120fc024',
+  artifactReceiptDigest: 'a08a00043232ed96b66eb4adf28a2a6c9d5127c2fe3fc041e34975725e13641b',
+});
 
 function receipt({ predecessorDatasetDigest, datasetDigest, observationIds, slotIndex, split, captureSeed,
   successor = false }) {
-  const captureRunId = String(33809694015 + slotIndex);
-  const artifactId = String(9914306478 + slotIndex);
-  const artifactDigest = String(Number(captureSeed) + 3).repeat(64).slice(0, 64);
-  const artifactReceiptDigest = String(Number(captureSeed) + 2).repeat(64).slice(0, 64);
-  const canonicalSlotKey = { policyDigest: POLICY, cohortDigest: COHORT, slotIndex };
+  const run36 = successor && slotIndex === 20;
+  const captureRunId = run36 ? RUN_36.runId : String(33809694015 + slotIndex);
+  const artifactId = run36 ? RUN_36.artifactId : String(9914306478 + slotIndex);
+  const artifactDigest = run36
+    ? RUN_36.artifactDigest
+    : String(Number(captureSeed) + 3).repeat(64).slice(0, 64);
+  const artifactReceiptDigest = run36
+    ? RUN_36.artifactReceiptDigest
+    : String(Number(captureSeed) + 2).repeat(64).slice(0, 64);
+  const nativeSlot = successor
+    ? buildSuccessorScheduleReliabilityV3SlotDescriptor(
+      slotIndex,
+      SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT,
+    )
+    : buildV3SlotDescriptor(slotIndex);
+  const policyDigest = successor ? SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.policyDigest : POLICY;
+  const cohortDigest = successor ? SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.cohortDigest : COHORT;
+  const canonicalSlotKey = nativeSlot.canonicalSlotKey;
   const body = {
     schemaVersion: PUBLIC_FORWARD_LIQUIDITY_CAPTURE_INGEST_RECEIPT_VERSION,
-    exactMainSha: PRODUCER,
-    collectorCodeSha: PRODUCER,
+    exactMainSha: run36 ? RUN_36.exactMainSha : PRODUCER,
+    collectorCodeSha: run36 ? RUN_36.exactMainSha : PRODUCER,
     captureRunId,
     captureRunAttempt: '1',
     artifactId,
@@ -56,11 +88,22 @@ function receipt({ predecessorDatasetDigest, datasetDigest, observationIds, slot
         producerWorkflowId: 347888347,
         triggerSource: 'schedule',
         scheduleReliabilityContractVersion:
-          'public-forward-liquidity-successor-schedule-reliability-contract-v3',
-        scheduleReliabilityNumericFreezeSha256: 'a'.repeat(64),
-        oosHorizonPolicyDigest: 'b'.repeat(64),
-        oosHorizonContractDigest: 'c'.repeat(64),
-      } : { triggerSource: 'GITHUB_ACTIONS_SCHEDULED_CANONICAL_PUBLIC_CAPTURE' }),
+          SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.contractVersion,
+        scheduleReliabilityNumericFreezeSha256:
+          SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.numericFreezeSha256,
+        oosHorizonContractVersion: SUCCESSOR_OOS_HORIZON_CONTRACT.contractVersion,
+        oosHorizonPolicyDigest: SUCCESSOR_OOS_HORIZON_CONTRACT.policyDigest,
+        oosHorizonContractDigest: SUCCESSOR_OOS_HORIZON_CONTRACT.contractDigest,
+        cohortId: SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.cohortId,
+      } : {
+        triggerSource: 'GITHUB_ACTIONS_SCHEDULED_CANONICAL_PUBLIC_CAPTURE',
+        policyArtifactId: V3_POLICY_BINDING.policyArtifactId,
+        policyArtifactDigest: V3_POLICY_BINDING.policyArtifactDigest,
+        policyInternalArtifactDigest: V3_POLICY_BINDING.policyInternalArtifactDigest,
+        cohortId: V3_POLICY_BINDING.cohortId,
+        captureSelectionPolicyDigest: V3_POLICY_BINDING.captureSelectionPolicyDigest,
+        slotIntervalMs: V3_POLICY_BINDING.slotIntervalMs,
+      }),
       prospectiveSlotCredit: 1,
       manualCredit: 0,
       replayCredit: 0,
@@ -68,11 +111,13 @@ function receipt({ predecessorDatasetDigest, datasetDigest, observationIds, slot
       operatorSelectedCredit: 0,
       slotIndex,
       split,
-      policyDigest: POLICY,
-      cohortDigest: COHORT,
+      policyDigest,
+      cohortDigest,
       canonicalSlotKey,
       canonicalSlotKeyDigest: sha256(canonicalJson(canonicalSlotKey)),
-      captureReceiptDigest: String(Number(captureSeed) + 1).repeat(64).slice(0, 64),
+      captureReceiptDigest: run36
+        ? RUN_36.captureReceiptDigest
+        : String(Number(captureSeed) + 1).repeat(64).slice(0, 64),
       artifactReceiptDigest,
     },
   };
@@ -148,9 +193,9 @@ function fixture() {
   };
 }
 
-function successorFixture() {
+function successorFixture({ slotIndex = 20, split = 'TRAIN' } = {}) {
   const first = receipt({ predecessorDatasetDigest: null, datasetDigest: DATASET0,
-    observationIds: ['obs-a', 'obs-b'], slotIndex: 20, split: 'TRAIN', captureSeed: 8,
+    observationIds: ['obs-a', 'obs-b'], slotIndex, split, captureSeed: 8,
     successor: true });
   // The genuine #36 #811 receipt carries canonicalSlotKey but omits the redundant digest.
   delete first.sourceV3Lineage.canonicalSlotKeyDigest;
@@ -158,22 +203,38 @@ function successorFixture() {
   delete firstBody.receiptDigest;
   first.receiptDigest = computePublicForwardLiquidityCaptureIngestReceiptDigest(firstBody);
   const source = {
-    sourceIdentity: SOURCE, collectorCodeSha: PRODUCER, datasetDigest: DATASET0,
-    ingestReceiptRelativePaths: ['receipts/20.json'],
+    sourceIdentity: SOURCE, collectorCodeSha: first.collectorCodeSha, datasetDigest: DATASET0,
+    ingestReceiptRelativePaths: [`receipts/${slotIndex}.json`],
     ingestReceiptDigests: [first.receiptDigest],
     captureRunIds: [first.captureRunId],
     captureArtifactIds: [first.artifactId],
     captureArtifactDigests: [first.artifactDigest],
-    v3SlotIndexes: [20], v3Splits: ['TRAIN'],
-    v3PolicyDigest: POLICY, v3CohortDigest: COHORT,
+    v3SlotIndexes: [slotIndex], v3Splits: [split],
+    v3PolicyDigest: SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.policyDigest,
+    v3CohortDigest: SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.cohortDigest,
   };
   const sourceInventory = inventory(source);
-  const inventoryBody = { ...sourceInventory, targetSlotIndex: 20, genuineScheduledSlotN: 1 };
+  const inventoryBody = { ...sourceInventory, targetSlotIndex: slotIndex, genuineScheduledSlotN: 1 };
   delete inventoryBody.inventoryDigest;
   return {
     inventory: { ...inventoryBody, inventoryDigest: sha256(canonicalJson(inventoryBody)) },
-    receiptEntries: [{ relativePath: 'receipts/20.json', receipt: first }],
+    receiptEntries: [{ relativePath: `receipts/${slotIndex}.json`, receipt: first }],
   };
+}
+
+function resignFixture(value) {
+  for (const entry of value.receiptEntries) {
+    const receiptBody = { ...entry.receipt };
+    delete receiptBody.receiptDigest;
+    entry.receipt.receiptDigest = computePublicForwardLiquidityCaptureIngestReceiptDigest(receiptBody);
+  }
+  value.inventory.sources[0].ingestReceiptDigests = value.receiptEntries.map(
+    (entry) => entry.receipt.receiptDigest,
+  );
+  const inventoryBody = { ...value.inventory };
+  delete inventoryBody.inventoryDigest;
+  value.inventory.inventoryDigest = sha256(canonicalJson(inventoryBody));
+  return value;
 }
 
 test('propagates first genuine V3 frozen slot lineage to each effective-independent observation', () => {
@@ -221,7 +282,7 @@ test('fails closed on tampered ingest receipt digest or split vector', () => {
   other.inventory.sources[0].v3Splits[0] = 'OOS';
   const body = Object.fromEntries(Object.entries(other.inventory).filter(([key]) => key !== 'inventoryDigest'));
   other.inventory.inventoryDigest = sha256(canonicalJson(body));
-  assert.throws(() => buildPublicForwardLiquidityV3IndependentSplitIndex({ ...other, independenceResult: independence(), producerCodeSha: PRODUCER }), /V3_SOURCE_LINEAGE_INVALID/);
+  assert.throws(() => buildPublicForwardLiquidityV3IndependentSplitIndex({ ...other, independenceResult: independence(), producerCodeSha: PRODUCER }), /CALIBRATION_V3_FROZEN_SPLIT_MISMATCH/);
 });
 
 test('admits #36-shaped native Successor lineage without creating additional credit', () => {
@@ -230,6 +291,17 @@ test('admits #36-shaped native Successor lineage without creating additional cre
   });
   assert.equal(result.genuineScheduledSlotN, 1);
   assert.equal(result.creditedReceiptN, 1);
+  assert.equal(result.sourceContractFamily, 'SUCCESSOR_SCHEDULE_RELIABILITY_V3');
+  assert.equal(
+    result.successorNativePolicy.scheduleReliabilityNumericFreezeSha256,
+    SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.numericFreezeSha256,
+  );
+  assert.deepEqual(result.successorNativePolicy.splits, {
+    TRAIN: { startIndexInclusive: 0, endIndexInclusive: 511, expectedSlotN: 512 },
+    VALIDATION: { startIndexInclusive: 512, endIndexInclusive: 767, expectedSlotN: 256 },
+    OOS: { startIndexInclusive: 768, endIndexInclusive: 1023, expectedSlotN: 256 },
+  });
+  assert.equal(result.successorNativePolicy.oosOutcomeHorizonMs, 5_000);
   assert.equal(result.effectiveIndependentN, 2);
   assert.equal(result.counts.TRAIN, 2);
   assert.equal(result.counts.OOS, 0);
@@ -238,6 +310,65 @@ test('admits #36-shaped native Successor lineage without creating additional cre
   assert.equal(result.calibrationArtifactProduced, false);
   assert.equal(result.fullCostReady, false);
   assert.equal(result.executionAuthority, 'NONE');
+});
+
+test('uses the native Successor split boundary instead of legacy 24/12/12 slots', () => {
+  const validation = buildPublicForwardLiquidityV3IndependentSplitIndex({
+    ...successorFixture({ slotIndex: 512, split: 'VALIDATION' }),
+    independenceResult: independence(),
+    producerCodeSha: PRODUCER,
+  });
+  assert.equal(validation.counts.TRAIN, 0);
+  assert.equal(validation.counts.VALIDATION, 2);
+  assert.equal(validation.counts.OOS, 0);
+
+  const oos = buildPublicForwardLiquidityV3IndependentSplitIndex({
+    ...successorFixture({ slotIndex: 768, split: 'OOS' }),
+    independenceResult: independence(),
+    producerCodeSha: PRODUCER,
+  });
+  assert.equal(oos.counts.TRAIN, 0);
+  assert.equal(oos.counts.VALIDATION, 0);
+  assert.equal(oos.counts.OOS, 2);
+  assert.equal(oos.oosOutcomeCredit, 0);
+
+  const wrong = successorFixture({ slotIndex: 512, split: 'TRAIN' });
+  assert.throws(() => buildPublicForwardLiquidityV3IndependentSplitIndex({
+    ...wrong, independenceResult: independence(), producerCodeSha: PRODUCER,
+  }), /SUCCESSOR_V3_NATIVE_SPLIT_MISMATCH/);
+});
+
+test('fails closed on native freeze, OOS horizon, or source-family reinterpretation', () => {
+  for (const [mutate, expected] of [
+    [
+      (value) => { value.receiptEntries[0].receipt.sourceV3Lineage.scheduleReliabilityNumericFreezeSha256 = 'e'.repeat(64); },
+      /SUCCESSOR_V3_NATIVE_POLICY_LINEAGE_MISMATCH/,
+    ],
+    [
+      (value) => { value.receiptEntries[0].receipt.sourceV3Lineage.oosHorizonContractDigest = 'e'.repeat(64); },
+      /SUCCESSOR_V3_NATIVE_POLICY_LINEAGE_MISMATCH/,
+    ],
+    [
+      (value) => {
+        const lineage = value.receiptEntries[0].receipt.sourceV3Lineage;
+        lineage.sourceContractFamily = 'CALIBRATION_V3';
+        lineage.triggerSource = 'GITHUB_ACTIONS_SCHEDULED_CANONICAL_PUBLIC_CAPTURE';
+        lineage.policyArtifactId = V3_POLICY_BINDING.policyArtifactId;
+        lineage.policyArtifactDigest = V3_POLICY_BINDING.policyArtifactDigest;
+        lineage.policyInternalArtifactDigest = V3_POLICY_BINDING.policyInternalArtifactDigest;
+        lineage.captureSelectionPolicyDigest = V3_POLICY_BINDING.captureSelectionPolicyDigest;
+        lineage.slotIntervalMs = V3_POLICY_BINDING.slotIntervalMs;
+      },
+      /CALIBRATION_V3_POLICY_LINEAGE_MISMATCH/,
+    ],
+  ]) {
+    const value = resignFixture(successorFixture());
+    mutate(value);
+    resignFixture(value);
+    assert.throws(() => buildPublicForwardLiquidityV3IndependentSplitIndex({
+      ...value, independenceResult: independence(), producerCodeSha: PRODUCER,
+    }), expected);
+  }
 });
 
 test('fails closed on forged Successor producer identity or generic schedule lineage', () => {
