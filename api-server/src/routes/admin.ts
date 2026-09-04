@@ -14,6 +14,7 @@ import {
   type MemberChangeRequest,
 } from '../services/member-administration.service';
 import { bindCanonicalStrategyHealth } from '../services/strategy-health-research-adapter.service';
+import { sanitizeResearchCenterOverview } from '../services/research-center-readonly-contract.service';
 
 const router = Router();
 router.use(requireAuthenticated, requireAdmin);
@@ -116,19 +117,6 @@ function atomicMemberChangePayload(value: unknown): AtomicMemberChangePayload | 
     member: member as unknown as AdminProfileRow,
     audit: audit as unknown as AtomicMemberChangePayload['audit'],
   };
-}
-
-function isReadOnlyResearchOverview(value: unknown): value is Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const payload = value as Record<string, unknown>;
-  if (payload.schemaVersion !== 'research-dashboard-overview-v1') return false;
-  const safety = payload.safety;
-  if (!safety || typeof safety !== 'object' || Array.isArray(safety)) return false;
-  const contract = safety as Record<string, unknown>;
-  return contract.readOnlyDashboard === true
-    && contract.liveTrading === false
-    && contract.privateApi === false
-    && contract.orderAuthority === false;
 }
 
 async function applyMemberChange(
@@ -258,8 +246,9 @@ router.get('/research/overview', async (_req: AuthenticatedRequest, res) => {
         message: 'Research Production 상태를 불러오지 못했습니다.',
       });
     }
-    const payload = await upstream.json() as unknown;
-    if (!isReadOnlyResearchOverview(payload)) {
+    const upstreamPayload = await upstream.json() as unknown;
+    const payload = sanitizeResearchCenterOverview(upstreamPayload);
+    if (!payload) {
       return res.status(503).json({
         error: 'RESEARCH_DASHBOARD_SAFETY_CONTRACT_INVALID',
         message: 'Research Dashboard 안전 계약을 확인할 수 없습니다.',
@@ -267,7 +256,7 @@ router.get('/research/overview', async (_req: AuthenticatedRequest, res) => {
     }
     return res.json({
       ...payload,
-      strategyHealth: bindCanonicalStrategyHealth(payload),
+      strategyHealth: bindCanonicalStrategyHealth(upstreamPayload),
     });
   } catch {
     return res.status(503).json({

@@ -278,3 +278,41 @@ test('invalid analysis key and missing public evidence fail before provider invo
   assert.equal(missing.reason, 'PUBLIC_EVIDENCE_MISSING');
   assert.equal(calls, 0);
 });
+
+test('long prompt grounding cannot cite facts omitted from the actual model prompt', async () => {
+  let prompt = '';
+  const analyzer = new MarketIntelligenceAiAnalyzer({
+    answerAiChatImpl: async ({ message }) => {
+      prompt = String(message);
+      return aiResult(analysisAnswer({
+        summaryShort: '공시 금액은 999억원이다.',
+        factEvidenceRefs: [4],
+      }));
+    },
+  });
+  const result = await analyzer.analyze(input({
+    analysisKey: '9'.repeat(64),
+    headline: `긴 공시 ${'H'.repeat(320)}`,
+    sourceText: `긴 원문 ${'S'.repeat(600)}`,
+    evidenceFacts: [
+      `사실0 ${'A'.repeat(250)}`,
+      `사실1 ${'B'.repeat(250)}`,
+      `사실2 ${'C'.repeat(250)}`,
+      `사실3 ${'D'.repeat(250)}`,
+      `공시 금액은 999억원이다. ${'E'.repeat(220)}`,
+    ],
+  }));
+  assert.ok(prompt.length <= 1_950);
+  const marker = '\nDATA=';
+  const offset = prompt.indexOf(marker);
+  assert.ok(offset >= 0);
+  const payload = JSON.parse(prompt.slice(offset + marker.length)) as { evidenceFacts?: string[] };
+  assert.ok(Array.isArray(payload.evidenceFacts));
+  assert.ok((payload.evidenceFacts?.length ?? 0) < 5);
+  assert.equal(payload.evidenceFacts?.some((fact) => fact.includes('999억원')), false);
+  assert.equal(result.status, 'AI_ANALYSIS_UNAVAILABLE');
+  assert.equal(result.reason, 'AI_STRUCTURED_RESPONSE_INVALID');
+  assert.equal(result.analysis, null);
+  assert.equal(result.safety.executionAuthority, 'NONE');
+  assert.equal(result.safety.orderAllowed, false);
+});
