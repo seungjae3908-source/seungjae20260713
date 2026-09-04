@@ -58,7 +58,7 @@ test('vault-backed Bitget reader emits only the two allowlisted signed GET reads
     decryptCredentials: () => ({ apiKey: 'BITGET_KEY_RUNTIME_TEST_ONLY', secretKey: 'BITGET_SECRET_RUNTIME_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_RUNTIME_TEST_ONLY' }),
     fetchImpl: async (input, init) => {
       const url = new URL(String(input)); assert.equal(url.origin, 'https://api.bitget.com'); paths.push(url.pathname); methods.push(String(init?.method));
-      const body = url.pathname.includes('/position/') ? { data: [{ symbol: 'BTCUSDT', total: '0.1', available: '0.1', leverage: '2' }] } : { data: [{ marginCoin: 'USDT', accountEquity: '100', available: '90' }] };
+      const body = url.pathname.includes('/position/') ? { code: '00000', data: [{ symbol: 'BTCUSDT', total: '0.1', available: '0.1', leverage: '2' }] } : { code: '00000', data: [{ marginCoin: 'USDT', accountEquity: '100', available: '90' }] };
       return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
     },
   });
