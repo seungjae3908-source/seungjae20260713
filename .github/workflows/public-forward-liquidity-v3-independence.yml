@@ -1,0 +1,357 @@
+name: Public Forward Liquidity V3 Independence Consume
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/public-forward-liquidity-v3-independence.yml'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-v3-independence-binding.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-v3-independence-binding.test.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-v3-independence-workflow.test.mjs'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-independence-audit.mjs'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-ingest-receipt-chain.mjs'
+      - 'market-intelligence-sidecar/scripts/run-public-forward-liquidity-independence-audit.mjs'
+  workflow_run:
+    workflows: ['Public Forward Liquidity V3 Canonical Ingest']
+    types: [completed]
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: >-
+    public-forward-liquidity-v3-independence-${{
+      github.event_name == 'workflow_run' && github.event.workflow_run.id ||
+      github.event_name == 'issue_comment' && github.event.comment.id ||
+      github.event.pull_request.number || github.run_id
+    }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Require exact PR HEAD
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+      - name: Syntax and focused V3 independence validation
+        run: |
+          set -euo pipefail
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-v3-independence-binding.mjs
+          node --check market-intelligence-sidecar/tests/public-forward-liquidity-v3-independence-binding.test.mjs
+          node --check market-intelligence-sidecar/tests/public-forward-liquidity-v3-independence-workflow.test.mjs
+          node --test \
+            market-intelligence-sidecar/tests/public-forward-liquidity-v3-independence-binding.test.mjs \
+            market-intelligence-sidecar/tests/public-forward-liquidity-v3-independence-workflow.test.mjs \
+            market-intelligence-sidecar/tests/public-forward-liquidity-ingest-receipt-chain.test.mjs \
+            market-intelligence-sidecar/tests/public-forward-liquidity-independence-audit.test.mjs
+
+  consume-v3-ingest:
+    if: >-
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.name == 'Public Forward Liquidity V3 Canonical Ingest' &&
+       github.event.workflow_run.status == 'completed' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.run_attempt == 1) ||
+      (github.event_name == 'issue_comment' &&
+       github.event.action == 'created' &&
+       github.event.issue.number == 838 &&
+       !github.event.issue.pull_request &&
+       github.event.issue.state == 'open' &&
+       github.event.comment.user.login == github.repository_owner &&
+       github.event.comment.author_association == 'OWNER' &&
+       startsWith(github.event.comment.body, '/run-v3-liquidity-independence '))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      STATE_ROOT: /tmp/v3-authoritative-liquidity-ingest-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Resolve exact upstream V3 ingest run
+        id: source
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id || '' }}
+          COMMENT_BODY: ${{ github.event.comment.body || '' }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == 'workflow_run' ]]; then
+            source_run_id="$WORKFLOW_RUN_ID"
+          else
+            source_run_id="$(node - <<'NODE'
+          const body = String(process.env.COMMENT_BODY ?? '').trim();
+          const match = /^\/run-v3-liquidity-independence ([0-9]{6,20})$/.exec(body);
+          if (!match) process.exit(2);
+          process.stdout.write(match[1]);
+          NODE
+            )"
+          fi
+          [[ "$source_run_id" =~ ^[0-9]+$ ]]
+          echo "source_run_id=$source_run_id" >> "$GITHUB_OUTPUT"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${source_run_id}" > "$RUNNER_TEMP/source-run.json"
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const run = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/source-run.json', 'utf8'));
+          const ok = run.name === 'Public Forward Liquidity V3 Canonical Ingest'
+            && ['workflow_run', 'issue_comment'].includes(run.event)
+            && run.status === 'completed'
+            && run.conclusion === 'success'
+            && run.head_branch === 'main'
+            && Number(run.run_attempt) === 1
+            && /^[0-9a-f]{40}$/u.test(String(run.head_sha ?? ''));
+          if (!ok) throw new Error('UPSTREAM_V3_INGEST_RUN_INVALID');
+          NODE
+
+      - name: Bind exact immutable V3 ingest artifact
+        id: artifact
+        env:
+          SOURCE_RUN_ID: ${{ steps.source.outputs.source_run_id }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}/artifacts?per_page=100" > "$RUNNER_TEMP/source-artifacts.json"
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const source = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/source-run.json', 'utf8'));
+          const data = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/source-artifacts.json', 'utf8'));
+          const pattern = new RegExp(`^public-forward-liquidity-v3-authoritative-ingest-slot-([0-9]+)-${source.id}-${source.run_attempt}$`);
+          const matches = (data.artifacts ?? []).filter((artifact) => artifact.expired !== true && pattern.test(artifact.name));
+          if (matches.length !== 1) throw new Error(`UPSTREAM_V3_INGEST_ARTIFACT_CARDINALITY_INVALID:${matches.length}`);
+          const artifact = matches[0];
+          const slot = Number(pattern.exec(artifact.name)[1]);
+          if (!Number.isInteger(slot) || slot < 0
+              || !/^[0-9]+$/u.test(String(artifact.id))
+              || !/^sha256:[a-f0-9]{64}$/u.test(String(artifact.digest ?? ''))) {
+            throw new Error('UPSTREAM_V3_INGEST_ARTIFACT_METADATA_INVALID');
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, [
+            `artifact_id=${artifact.id}`,
+            `artifact_name=${artifact.name}`,
+            `artifact_digest=${String(artifact.digest).replace(/^sha256:/u, '')}`,
+            `target_slot_index=${slot}`,
+            '',
+          ].join('\n'));
+          NODE
+
+      - name: Download exact V3 cumulative ingest evidence
+        env:
+          SOURCE_RUN_ID: ${{ steps.source.outputs.source_run_id }}
+          ARTIFACT_NAME: ${{ steps.artifact.outputs.artifact_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$STATE_ROOT"
+          gh run download "$SOURCE_RUN_ID" --repo "$GITHUB_REPOSITORY" -n "$ARTIFACT_NAME" -D "$STATE_ROOT"
+          test -f "$STATE_ROOT/portable-source-inventory.json"
+          test -f "$STATE_ROOT/ingest-evidence-report.json"
+
+      - name: Validate V3 inventory provenance and build source manifest
+        env:
+          SOURCE_RUN_ID: ${{ steps.source.outputs.source_run_id }}
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact_id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact_digest }}
+          TARGET_SLOT_INDEX: ${{ steps.artifact.outputs.target_slot_index }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { createHash } from 'node:crypto';
+          import { readFile, writeFile } from 'node:fs/promises';
+          import { join } from 'node:path';
+          const root = process.env.STATE_ROOT;
+          const sourceRun = JSON.parse(await readFile(process.env.RUNNER_TEMP + '/source-run.json', 'utf8'));
+          const inventory = JSON.parse(await readFile(join(root, 'portable-source-inventory.json'), 'utf8'));
+          const report = JSON.parse(await readFile(join(root, 'ingest-evidence-report.json'), 'utf8'));
+          const canonicalize = (value) => Array.isArray(value)
+            ? value.map(canonicalize)
+            : (value && typeof value === 'object'
+              ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]))
+              : value);
+          const digest = (value) => createHash('sha256').update(JSON.stringify(canonicalize(value))).digest('hex');
+          const inventoryBody = Object.fromEntries(Object.entries(inventory).filter(([key]) => key !== 'inventoryDigest'));
+          if (inventory.schemaVersion !== 'public-forward-liquidity-authoritative-ingest-inventory-v1'
+              || inventory.kind !== 'PUBLIC_FORWARD_LIQUIDITY_RECEIPT_BOUND_INGEST_EVIDENCE'
+              || inventory.evidenceGeneration !== 'V3_SCHEDULED_CUMULATIVE_REBUILD'
+              || inventory.inventoryDigest !== digest(inventoryBody)
+              || inventory.producerHeadSha !== sourceRun.head_sha
+              || inventory.targetSlotIndex !== Number(process.env.TARGET_SLOT_INDEX)
+              || !Number.isInteger(inventory.genuineScheduledSlotN)
+              || inventory.genuineScheduledSlotN <= 0
+              || inventory.persistentResearchStateMutation !== false
+              || inventory.productionMutation !== false
+              || inventory.independentSampleCredit !== 0
+              || inventory.fullCostReady !== false
+              || inventory.evidenceComplete !== 0
+              || inventory.executionAuthority !== 'NONE'
+              || inventory.privateApiUsed !== false
+              || inventory.liveTrading !== false
+              || inventory.realOrders !== 0
+              || !Array.isArray(inventory.sources)
+              || inventory.sources.length === 0) {
+            throw new Error('UPSTREAM_V3_INGEST_INVENTORY_INVALID');
+          }
+          if (report.schemaVersion !== 'public-forward-liquidity-authoritative-ingest-report-v1'
+              || report.sourceInventoryDigest !== inventory.inventoryDigest
+              || report.targetSlotIndex !== inventory.targetSlotIndex
+              || report.genuineScheduledSlotN !== inventory.genuineScheduledSlotN
+              || report.persistentResearchStateMutation !== false
+              || report.fullCostReady !== false
+              || report.evidenceComplete !== 0
+              || report.executionAuthority !== 'NONE') {
+            throw new Error('UPSTREAM_V3_INGEST_REPORT_INVALID');
+          }
+          for (const source of inventory.sources) {
+            if (!Array.isArray(source.ingestReceiptRelativePaths) || source.ingestReceiptRelativePaths.length === 0) {
+              throw new Error('UPSTREAM_V3_SOURCE_RECEIPTS_MISSING');
+            }
+            await readFile(join(root, source.datasetRelativePath), 'utf8');
+            for (const path of source.ingestReceiptRelativePaths) await readFile(join(root, path), 'utf8');
+          }
+          const manifest = {
+            schemaVersion: 'public-forward-liquidity-bound-source-manifest-v1',
+            stateRoot: root,
+            researchRepoRoot: process.env.GITHUB_WORKSPACE,
+            sources: inventory.sources.map((source) => ({
+              sourceIdentity: source.sourceIdentity,
+              datasetPath: join(root, source.datasetRelativePath),
+              ingestReceiptPaths: source.ingestReceiptRelativePaths.map((path) => join(root, path)),
+            })),
+          };
+          await writeFile(join(root, 'source-manifest.json'), `${JSON.stringify(canonicalize(manifest))}\n`);
+          await writeFile(join(root, 'v3-upstream-binding.json'), `${JSON.stringify({
+            schemaVersion: 'public-forward-liquidity-v3-upstream-binding-v1',
+            upstreamIngestRunId: process.env.SOURCE_RUN_ID,
+            upstreamIngestArtifactId: process.env.ARTIFACT_ID,
+            upstreamIngestArtifactDigest: process.env.ARTIFACT_DIGEST,
+            sourceInventoryDigest: inventory.inventoryDigest,
+            targetSlotIndex: inventory.targetSlotIndex,
+            genuineScheduledSlotN: inventory.genuineScheduledSlotN,
+          })}\n`);
+          NODE
+
+      - name: Execute receipt-bound effective-independence audit
+        env:
+          PRODUCER_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          node market-intelligence-sidecar/scripts/run-public-forward-liquidity-independence-audit.mjs \
+            --source-manifest "$STATE_ROOT/source-manifest.json" \
+            --producer-sha "$PRODUCER_SHA" \
+            --output "$STATE_ROOT/independence-report.json"
+
+      - name: Propagate immutable V3 frozen slot split to effective-independent observations
+        env:
+          PRODUCER_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { readFile, writeFile } from 'node:fs/promises';
+          import { join } from 'node:path';
+          import { buildPublicForwardLiquidityV3IndependentSplitIndex } from './market-intelligence-sidecar/src/public-forward-liquidity-v3-independence-binding.mjs';
+          const root = process.env.STATE_ROOT;
+          const inventory = JSON.parse(await readFile(join(root, 'portable-source-inventory.json'), 'utf8'));
+          const independenceResult = JSON.parse(await readFile(join(root, 'independence-report.json'), 'utf8'));
+          const receiptEntries = [];
+          for (const source of inventory.sources) {
+            for (const relativePath of source.ingestReceiptRelativePaths) {
+              receiptEntries.push({ relativePath, receipt: JSON.parse(await readFile(join(root, relativePath), 'utf8')) });
+            }
+          }
+          const index = buildPublicForwardLiquidityV3IndependentSplitIndex({
+            inventory, receiptEntries, independenceResult, producerCodeSha: process.env.PRODUCER_SHA,
+          });
+          await writeFile(join(root, 'v3-independent-split-index.json'), `${JSON.stringify(index)}\n`);
+          NODE
+
+      - name: Assert V3 independence truth boundary and write immutable summary
+        env:
+          SOURCE_RUN_ID: ${{ steps.source.outputs.source_run_id }}
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact_id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact_digest }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { createHash } from 'node:crypto';
+          import { readFile, writeFile } from 'node:fs/promises';
+          import { join } from 'node:path';
+          const root = process.env.STATE_ROOT;
+          const inventory = JSON.parse(await readFile(join(root, 'portable-source-inventory.json'), 'utf8'));
+          const result = JSON.parse(await readFile(join(root, 'independence-report.json'), 'utf8'));
+          const index = JSON.parse(await readFile(join(root, 'v3-independent-split-index.json'), 'utf8'));
+          if (result.status !== 'PRESENT' || !result.audit || !result.splitSource
+              || result.audit.counts.RAW_ACCEPTED_N !== inventory.acceptedN
+              || result.audit.counts.INDEPENDENT_N !== index.effectiveIndependentN
+              || result.splitSource.splitAssignmentPerformed !== false
+              || result.splitSource.oosValidationComplete !== false
+              || result.splitSource.calibrationArtifactProduced !== false
+              || result.splitSource.liquidityImpactStatus !== 'BLOCKED_DATA'
+              || result.splitSource.fullCostReady !== false
+              || result.splitSource.evidenceCompleteCredit !== 0
+              || result.splitSource.executionAuthority !== 'NONE'
+              || index.retrospectiveSplitSelection !== false
+              || index.syntheticSplitAssignment !== false
+              || index.additionalIndependentSampleCredit !== 0
+              || index.oosOutcomeCredit !== 0
+              || index.fullCostReady !== false) {
+            throw new Error('V3_INDEPENDENCE_AUTHORITY_ESCALATION');
+          }
+          const body = {
+            schemaVersion: 'public-forward-liquidity-v3-authoritative-independence-summary-v1',
+            producerSha: process.env.GITHUB_SHA,
+            upstreamIngestRunId: process.env.SOURCE_RUN_ID,
+            upstreamIngestArtifactId: process.env.ARTIFACT_ID,
+            upstreamIngestArtifactDigest: process.env.ARTIFACT_DIGEST,
+            sourceInventoryDigest: inventory.inventoryDigest,
+            targetSlotIndex: inventory.targetSlotIndex,
+            genuineScheduledSlotN: inventory.genuineScheduledSlotN,
+            rawAcceptedN: result.audit.counts.RAW_ACCEPTED_N,
+            effectiveIndependentN: result.audit.counts.INDEPENDENT_N,
+            independentBuyN: result.audit.counts.INDEPENDENT_BUY_N,
+            independentSellN: result.audit.counts.INDEPENDENT_SELL_N,
+            independenceAuditDigest: result.audit.auditDigest,
+            independentSplitSourceDigest: result.splitSource.splitSourceDigest,
+            v3IndependentSplitIndexDigest: index.indexDigest,
+            frozenSplitCounts: index.counts,
+            frozenV3SplitIndexPresent: true,
+            v2SplitReceiptPresent: false,
+            oosOutcomeCredit: 0,
+            calibrationArtifactProduced: false,
+            liquidityImpactStatus: 'BLOCKED_DATA',
+            fullCostReady: false,
+            evidenceComplete: 0,
+            executionAuthority: 'NONE',
+          };
+          const canonicalize = (value) => Array.isArray(value)
+            ? value.map(canonicalize)
+            : (value && typeof value === 'object'
+              ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]))
+              : value);
+          const reportDigest = createHash('sha256').update(JSON.stringify(canonicalize(body))).digest('hex');
+          await writeFile(join(root, 'v3-authoritative-independence-summary.json'), `${JSON.stringify({ ...body, reportDigest })}\n`);
+          NODE
+
+      - name: Upload immutable V3 independence evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-forward-liquidity-v3-authoritative-independence-slot-${{ steps.artifact.outputs.target_slot_index }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.STATE_ROOT }}
+          if-no-files-found: error
+          retention-days: 90
