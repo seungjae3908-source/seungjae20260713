@@ -27,13 +27,29 @@ import {
 } from '../src/public-forward-liquidity-multi-source-split-audit.mjs';
 import {
   PUBLIC_FORWARD_LIQUIDITY_MULTI_SOURCE_SPLIT_RECEIPT_VERSION,
+  PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_V3_OOS_VALIDATION_VERSION,
+  SUCCESSOR_V3_SOURCE_CONTRACT_FAMILY,
   computePublicForwardLiquidityOosMethodologyDigest,
+  validatePublicForwardLiquiditySuccessorV3OosOutcomes,
+  validatePublicForwardLiquiditySuccessorV3SplitIndex,
 } from '../src/public-forward-liquidity-calibration-oos-outcome-validator.mjs';
 import {
   PUBLIC_FORWARD_LIQUIDITY_OOS_OUTCOME_ARTIFACT_VERSION,
   PUBLIC_FORWARD_LIQUIDITY_OOS_SELECTION_POLICY,
+  PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_V3_OOS_OUTCOME_ARTIFACT_VERSION,
   producePublicForwardLiquidityHeldOutOosArtifact,
+  producePublicForwardLiquiditySuccessorV3HeldOutOosArtifact,
 } from '../src/public-forward-liquidity-oos-outcome-producer.mjs';
+import {
+  SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT,
+  buildSuccessorScheduleReliabilityV3SlotDescriptor,
+} from '../src/public-forward-liquidity-successor-schedule-reliability-v3.mjs';
+import {
+  SUCCESSOR_OOS_HORIZON_CONTRACT,
+} from '../src/public-forward-liquidity-successor-oos-outcome-horizon.mjs';
+import {
+  PUBLIC_FORWARD_LIQUIDITY_V3_INDEPENDENT_SPLIT_INDEX_VERSION,
+} from '../src/public-forward-liquidity-v3-independence-binding.mjs';
 
 const COLLECTOR_SHA = 'a'.repeat(40);
 const COLLECTOR_BLOB = 'b'.repeat(40);
@@ -83,8 +99,8 @@ function tradeFrame(events) {
   });
 }
 
-function canonicalBatch({ duplicatePostFrame = false } = {}) {
-  const post = bookFrame({ marketTimestampMs: 6_000, seed: 9 });
+function canonicalBatch({ duplicatePostFrame = false, postEventMs = 6_000 } = {}) {
+  const post = bookFrame({ marketTimestampMs: postEventMs, seed: 9 });
   return buildPublicLiquidityObservationBatch({
     preEventBook: bookFrame({ marketTimestampMs: 1_000, seed: 1 }),
     tradeFrame: tradeFrame([
@@ -163,8 +179,9 @@ function scopeKey(observation, side = observation.aggressiveSide) {
   return [observation.market, observation.symbol, side, 'bucket-1', 'VOL_NORMAL', 'LIQ_NORMAL'].join('|');
 }
 
-function buildFixture({ duplicatePostFrame = false, splitLabels = ['TRAIN', 'VALIDATION', 'OOS'] } = {}) {
-  const batch = canonicalBatch({ duplicatePostFrame });
+function buildFixture({ duplicatePostFrame = false, postEventMs = 6_000,
+  splitLabels = ['TRAIN', 'VALIDATION', 'OOS'] } = {}) {
+  const batch = canonicalBatch({ duplicatePostFrame, postEventMs });
   const dataset = mergeLiquidityCalibrationBatch(null, batch).dataset;
   const ingestReceipt = receiptForDataset(dataset);
   const chain = verifyPublicForwardLiquidityIngestReceiptChain({
@@ -315,6 +332,152 @@ function buildFixture({ duplicatePostFrame = false, splitLabels = ['TRAIN', 'VAL
     splitReceipt,
     methodology,
     sources: [{ dataset, ingestReceipts: [ingestReceipt], datasetRelativePath: DATASET_PATH }],
+  };
+}
+
+function successorNativePolicy() {
+  const contract = SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT;
+  const outcome = SUCCESSOR_OOS_HORIZON_CONTRACT.policyCore.outcomePolicy;
+  return {
+    sourceContractFamily: SUCCESSOR_V3_SOURCE_CONTRACT_FAMILY,
+    scheduleReliabilityContractVersion: contract.contractVersion,
+    scheduleReliabilityNumericFreezeSha256: contract.numericFreezeSha256,
+    policyDigest: contract.policyDigest,
+    cohortDigest: contract.cohortDigest,
+    splitMode: contract.policyCore.splits.mode,
+    splits: Object.fromEntries(['TRAIN', 'VALIDATION', 'OOS'].map((name) => [name, {
+      startIndexInclusive: contract.policyCore.splits[name].startIndexInclusive,
+      endIndexInclusive: contract.policyCore.splits[name].endIndexInclusive,
+      expectedSlotN: contract.policyCore.splits[name].expectedSlotN,
+    }])),
+    oosHorizonContractVersion: SUCCESSOR_OOS_HORIZON_CONTRACT.contractVersion,
+    oosHorizonPolicyDigest: SUCCESSOR_OOS_HORIZON_CONTRACT.policyDigest,
+    oosHorizonContractDigest: SUCCESSOR_OOS_HORIZON_CONTRACT.contractDigest,
+    oosOutcomeHorizonMs: outcome.outcomeHorizonMs,
+    oosOutcomeSelectionPolicy: outcome.outcomeSelectionPolicy,
+  };
+}
+
+function nativeSuccessorFixture({ slotIndex = 768, postEventMs = 9_000 } = {}) {
+  const fixture = buildFixture({ postEventMs });
+  const sourceObservation = [...fixture.dataset.observations]
+    .sort((left, right) => left.eventTimestampMs - right.eventTimestampMs)
+    .at(-1);
+  const slot = buildSuccessorScheduleReliabilityV3SlotDescriptor(slotIndex);
+  const canonicalSlotKeyDigest = sha256(canonicalJson(slot.canonicalSlotKey));
+  const captureReceiptDigest = sha256('successor-capture-receipt');
+  const artifactReceiptDigest = sha256('successor-artifact-receipt');
+  const receiptBody = {
+    ...fixture.ingestReceipt,
+    captureArtifactReceiptDigest: artifactReceiptDigest,
+    sourceV3Lineage: {
+      sourceContractFamily: SUCCESSOR_V3_SOURCE_CONTRACT_FAMILY,
+      producerWorkflowName: 'Public Forward Liquidity Successor Scheduled Capture',
+      producerWorkflowId: 347888347,
+      triggerSource: 'schedule',
+      scheduleReliabilityContractVersion: SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.contractVersion,
+      scheduleReliabilityNumericFreezeSha256: SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.numericFreezeSha256,
+      oosHorizonContractVersion: SUCCESSOR_OOS_HORIZON_CONTRACT.contractVersion,
+      oosHorizonPolicyDigest: SUCCESSOR_OOS_HORIZON_CONTRACT.policyDigest,
+      oosHorizonContractDigest: SUCCESSOR_OOS_HORIZON_CONTRACT.contractDigest,
+      cohortId: SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.cohortId,
+      prospectiveSlotCredit: 1,
+      manualCredit: 0,
+      replayCredit: 0,
+      backfillCredit: 0,
+      operatorSelectedCredit: 0,
+      slotIndex,
+      split: slot.split,
+      policyDigest: SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.policyDigest,
+      cohortDigest: SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.cohortDigest,
+      canonicalSlotKey: slot.canonicalSlotKey,
+      canonicalSlotKeyDigest,
+      captureReceiptDigest,
+      artifactReceiptDigest,
+    },
+  };
+  delete receiptBody.receiptDigest;
+  const ingestReceipt = {
+    ...receiptBody,
+    receiptDigest: computePublicForwardLiquidityCaptureIngestReceiptDigest(receiptBody),
+  };
+  const observation = {
+    observationId: `bound-${sourceObservation.observationId}`,
+    sourceObservationId: sourceObservation.observationId,
+    sourceIdentity: 'bound-source:successor-v3',
+    ingestSourceIdentity: 'v3-cohort:test',
+    eventIdentity: `public-event:${sourceObservation.observationId}`,
+    sourceFrameIdentity: 'source-frame:successor-v3',
+    eventTimestampMs: sourceObservation.eventTimestampMs,
+    aggressiveSide: sourceObservation.aggressiveSide,
+    split: slot.split,
+    slotIndex,
+    canonicalSlotKeyDigest,
+    collectorCodeSha: COLLECTOR_SHA,
+    datasetDigest: fixture.dataset.datasetDigest,
+    ingestReceiptRelativePath: `receipts/${slotIndex}.json`,
+    ingestReceiptDigest: ingestReceipt.receiptDigest,
+    captureReceiptDigest,
+    artifactReceiptDigest,
+    policyDigest: SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.policyDigest,
+    cohortDigest: SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.cohortDigest,
+  };
+  const counts = {
+    TRAIN: slot.split === 'TRAIN' ? 1 : 0,
+    TRAIN_BUY: slot.split === 'TRAIN' && observation.aggressiveSide === 'BUY' ? 1 : 0,
+    TRAIN_SELL: slot.split === 'TRAIN' && observation.aggressiveSide === 'SELL' ? 1 : 0,
+    VALIDATION: slot.split === 'VALIDATION' ? 1 : 0,
+    VALIDATION_BUY: slot.split === 'VALIDATION' && observation.aggressiveSide === 'BUY' ? 1 : 0,
+    VALIDATION_SELL: slot.split === 'VALIDATION' && observation.aggressiveSide === 'SELL' ? 1 : 0,
+    OOS: slot.split === 'OOS' ? 1 : 0,
+    OOS_BUY: slot.split === 'OOS' && observation.aggressiveSide === 'BUY' ? 1 : 0,
+    OOS_SELL: slot.split === 'OOS' && observation.aggressiveSide === 'SELL' ? 1 : 0,
+  };
+  const indexBody = {
+    schemaVersion: PUBLIC_FORWARD_LIQUIDITY_V3_INDEPENDENT_SPLIT_INDEX_VERSION,
+    kind: 'PUBLIC_FORWARD_LIQUIDITY_V3_FROZEN_SPLIT_PROPAGATION',
+    producerCodeSha: SPLIT_PRODUCER_SHA,
+    sourceInventoryDigest: sha256('source-inventory'),
+    sourceContractFamily: SUCCESSOR_V3_SOURCE_CONTRACT_FAMILY,
+    successorNativePolicy: successorNativePolicy(),
+    independenceAuditDigest: sha256('v3-independence-audit'),
+    independentSplitSourceDigest: sha256('v3-independent-split-source'),
+    policyDigest: SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.policyDigest,
+    cohortDigest: SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.cohortDigest,
+    targetSlotIndex: slotIndex,
+    genuineScheduledSlotN: 1,
+    creditedReceiptN: 1,
+    sourceDatasetDigests: [fixture.dataset.datasetDigest],
+    effectiveIndependentN: 1,
+    counts,
+    observations: [observation],
+    duplicateObservationLineageN: 0,
+    frozenSplitSource: 'V3_SCHEDULED_SLOT_RECEIPT_ONLY',
+    retrospectiveSplitSelection: false,
+    syntheticSplitAssignment: false,
+    additionalIndependentSampleCredit: 0,
+    oosOutcomeCredit: 0,
+    calibrationArtifactProduced: false,
+    liquidityImpactStatus: 'BLOCKED_DATA',
+    fullCostReady: false,
+    evidenceCompleteCredit: 0,
+    executionAuthority: 'NONE',
+    privateApiUsed: false,
+    liveTrading: false,
+    realOrders: 0,
+  };
+  const v3SplitIndex = { ...indexBody, indexDigest: sha256(canonicalJson(indexBody)) };
+  return {
+    ...fixture,
+    ingestReceipt,
+    v3SplitIndex,
+    sources: [{
+      sourceIdentity: observation.ingestSourceIdentity,
+      dataset: fixture.dataset,
+      ingestReceipts: [ingestReceipt],
+      ingestReceiptRelativePaths: [observation.ingestReceiptRelativePath],
+      datasetRelativePath: DATASET_PATH,
+    }],
   };
 }
 
@@ -540,4 +703,108 @@ test('producer never creates independent-N, cost, calibration, profitability or 
   assert.equal(result.privateApiUsed, false);
   assert.equal(result.liveTrading, false);
   assert.equal(result.orderSubmitted, false);
+});
+
+function produceNative(fixture, overrides = {}) {
+  return producePublicForwardLiquiditySuccessorV3HeldOutOosArtifact({
+    v3SplitIndex: fixture.v3SplitIndex,
+    sources: fixture.sources,
+    outcomeProducerCodeSha: OUTCOME_PRODUCER_SHA,
+    createdAtMs: 10_000,
+    ...overrides,
+  });
+}
+
+function resignNativeIndex(index, mutate) {
+  const value = structuredClone(index);
+  mutate(value);
+  delete value.indexDigest;
+  return { ...value, indexDigest: sha256(canonicalJson(value)) };
+}
+
+test('native Successor V3 OOS index selects the exact frozen 5000ms public outcome', () => {
+  const fixture = nativeSuccessorFixture();
+  const indexVerdict = validatePublicForwardLiquiditySuccessorV3SplitIndex(fixture.v3SplitIndex);
+  assert.equal(indexVerdict.valid, true);
+  const result = produceNative(fixture);
+  assert.equal(result.schemaVersion, PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_V3_OOS_OUTCOME_ARTIFACT_VERSION);
+  assert.equal(result.status, 'PRESENT');
+  assert.equal(result.sourceContractFamily, SUCCESSOR_V3_SOURCE_CONTRACT_FAMILY);
+  assert.equal(result.outcomeHorizonMs, 5_000);
+  assert.equal(result.assignmentCount, 1);
+  assert.equal(result.genuineV3OosSlotN, 1);
+  assert.equal(result.genuineOosOutcomeN, 1);
+  assert.equal(result.outcomes[0].slotIndex, 768);
+  assert.equal(result.outcomes[0].observedAtMs, 9_000);
+  assert.equal(result.outcomes[0].v3IndependentSplitIndexDigest, fixture.v3SplitIndex.indexDigest);
+  const validation = validatePublicForwardLiquiditySuccessorV3OosOutcomes({
+    v3SplitIndex: fixture.v3SplitIndex,
+    outcomes: result.outcomes,
+    expectedOutcomeProducerCodeSha: OUTCOME_PRODUCER_SHA,
+  });
+  assert.equal(validation.status, 'PRESENT');
+  assert.equal(validation.validation.schemaVersion, PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_V3_OOS_VALIDATION_VERSION);
+  assert.equal(validation.validation.genuineOosOutcomeN, 1);
+  assert.equal(validation.validation.calibrationArtifactProduced, false);
+  assert.equal(validation.validation.fullCostReady, false);
+  assert.equal(validation.validation.executionAuthority, 'NONE');
+  const inverted = structuredClone(result.outcomes);
+  inverted[0].aggressiveSide = inverted[0].aggressiveSide === 'BUY' ? 'SELL' : 'BUY';
+  assert.ok(validatePublicForwardLiquiditySuccessorV3OosOutcomes({
+    v3SplitIndex: fixture.v3SplitIndex,
+    outcomes: inverted,
+    expectedOutcomeProducerCodeSha: OUTCOME_PRODUCER_SHA,
+  }).blockers.includes('SUCCESSOR_V3_OOS_OUTCOME_LINEAGE_MISMATCH'));
+});
+
+test('current genuine TRAIN lineage remains missing OOS evidence instead of becoming zero-valued proof', () => {
+  const fixture = nativeSuccessorFixture({ slotIndex: 20 });
+  const result = produceNative(fixture);
+  assert.equal(result.status, 'BLOCKED_DATA');
+  assert.deepEqual(result.blockers, ['SUCCESSOR_V3_OOS_ASSIGNMENTS_MISSING']);
+  assert.equal(result.genuineV3OosSlotN, 0);
+  assert.equal(result.genuineOosOutcomeN, 0);
+  assert.equal(result.oosStatus, 'MISSING_EVIDENCE');
+  assert.equal(result.fullCostReady, false);
+  assert.equal(result.executionAuthority, 'NONE');
+});
+
+test('native Successor V3 index rejects legacy-family relabel, horizon drift, and split drift', () => {
+  const fixture = nativeSuccessorFixture();
+  const wrongFamily = resignNativeIndex(fixture.v3SplitIndex, (index) => {
+    index.sourceContractFamily = 'CALIBRATION_V3';
+  });
+  assert.ok(validatePublicForwardLiquiditySuccessorV3SplitIndex(wrongFamily).blockers
+    .includes('SUCCESSOR_V3_SOURCE_CONTRACT_FAMILY_INVALID'));
+
+  const wrongHorizon = resignNativeIndex(fixture.v3SplitIndex, (index) => {
+    index.successorNativePolicy.oosOutcomeHorizonMs = 60_000;
+  });
+  assert.ok(validatePublicForwardLiquiditySuccessorV3SplitIndex(wrongHorizon).blockers
+    .includes('SUCCESSOR_V3_NATIVE_POLICY_LINEAGE_MISMATCH'));
+
+  const wrongSplit = resignNativeIndex(fixture.v3SplitIndex, (index) => {
+    index.observations[0].split = 'TRAIN';
+    index.counts = {
+      TRAIN: 1, TRAIN_BUY: 1, TRAIN_SELL: 0,
+      VALIDATION: 0, VALIDATION_BUY: 0, VALIDATION_SELL: 0,
+      OOS: 0, OOS_BUY: 0, OOS_SELL: 0,
+    };
+  });
+  assert.ok(validatePublicForwardLiquiditySuccessorV3SplitIndex(wrongSplit).blockers
+    .includes('SUCCESSOR_V3_INDEX_ASSIGNMENT_FROZEN_SPLIT_MISMATCH'));
+});
+
+test('native Successor V3 producer rejects tampered receipt lineage and never promotes economics', () => {
+  const fixture = nativeSuccessorFixture();
+  fixture.sources[0].ingestReceipts[0].sourceV3Lineage.artifactReceiptDigest = sha256('forged');
+  const result = produceNative(fixture);
+  assert.equal(result.status, 'BLOCKED_DATA');
+  assert.ok(result.blockers.includes('SUCCESSOR_V3_OOS_OUTCOMES_MISSING'));
+  assert.ok(result.blockers.includes('OOS_OUTCOME_REJECTED'));
+  assert.equal(result.genuineOosOutcomeN, 0);
+  assert.equal(result.calibrationArtifactProduced, false);
+  assert.equal(result.fullCostReady, false);
+  assert.equal(result.evidenceCompleteCredit, 0);
+  assert.equal(result.executionAuthority, 'NONE');
 });

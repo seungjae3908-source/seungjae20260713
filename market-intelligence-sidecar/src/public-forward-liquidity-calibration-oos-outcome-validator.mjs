@@ -9,6 +9,18 @@ import { PUBLIC_FORWARD_LIQUIDITY_SPLIT_AUDIT_VERSION } from './public-forward-l
 import {
   PUBLIC_FORWARD_LIQUIDITY_MULTI_SOURCE_SPLIT_AUDIT_VERSION,
 } from './public-forward-liquidity-multi-source-split-audit.mjs';
+import {
+  PUBLIC_FORWARD_LIQUIDITY_V3_INDEPENDENT_SPLIT_INDEX_VERSION,
+} from './public-forward-liquidity-v3-independence-binding.mjs';
+import {
+  SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT,
+  buildSuccessorScheduleReliabilityV3SlotDescriptor,
+  verifySuccessorScheduleReliabilityV3Contract,
+} from './public-forward-liquidity-successor-schedule-reliability-v3.mjs';
+import {
+  SUCCESSOR_OOS_HORIZON_CONTRACT,
+  verifySuccessorOosOutcomeHorizonContract,
+} from './public-forward-liquidity-successor-oos-outcome-horizon.mjs';
 
 export const PUBLIC_FORWARD_LIQUIDITY_OOS_VALIDATION_VERSION =
   'public-forward-liquidity-calibration-oos-validation-v1';
@@ -16,6 +28,10 @@ export const PUBLIC_FORWARD_LIQUIDITY_MULTI_SOURCE_OOS_VALIDATION_VERSION =
   'public-forward-liquidity-calibration-oos-validation-v2';
 export const PUBLIC_FORWARD_LIQUIDITY_MULTI_SOURCE_SPLIT_RECEIPT_VERSION =
   'public-forward-liquidity-multi-source-split-receipt-v1';
+export const PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_V3_OOS_VALIDATION_VERSION =
+  'public-forward-liquidity-successor-v3-oos-validation-v1';
+
+export const SUCCESSOR_V3_SOURCE_CONTRACT_FAMILY = 'SUCCESSOR_SCHEDULE_RELIABILITY_V3';
 
 export const PUBLIC_FORWARD_LIQUIDITY_OOS_VALIDATION_SAFETY = Object.freeze({
   verifiedFrozenSplitAuditRequired: true,
@@ -536,6 +552,327 @@ export function validatePublicForwardLiquidityOosOutcomes({
     orderSubmitted: false,
   };
   const validation = Object.freeze({ ...validationBody, validationDigest: sha256(validationBody) });
+  return Object.freeze({
+    status: 'PRESENT',
+    blockers: Object.freeze([]),
+    validation,
+    safety: PUBLIC_FORWARD_LIQUIDITY_OOS_VALIDATION_SAFETY,
+  });
+}
+
+function successorV3ExpectedNativePolicy() {
+  const contract = SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT;
+  const outcome = SUCCESSOR_OOS_HORIZON_CONTRACT.policyCore.outcomePolicy;
+  const splits = Object.fromEntries(['TRAIN', 'VALIDATION', 'OOS'].map((name) => {
+    const split = contract.policyCore.splits[name];
+    return [name, {
+      startIndexInclusive: split.startIndexInclusive,
+      endIndexInclusive: split.endIndexInclusive,
+      expectedSlotN: split.expectedSlotN,
+    }];
+  }));
+  return {
+    sourceContractFamily: SUCCESSOR_V3_SOURCE_CONTRACT_FAMILY,
+    scheduleReliabilityContractVersion: contract.contractVersion,
+    scheduleReliabilityNumericFreezeSha256: contract.numericFreezeSha256,
+    policyDigest: contract.policyDigest,
+    cohortDigest: contract.cohortDigest,
+    splitMode: contract.policyCore.splits.mode,
+    splits,
+    oosHorizonContractVersion: SUCCESSOR_OOS_HORIZON_CONTRACT.contractVersion,
+    oosHorizonPolicyDigest: SUCCESSOR_OOS_HORIZON_CONTRACT.policyDigest,
+    oosHorizonContractDigest: SUCCESSOR_OOS_HORIZON_CONTRACT.contractDigest,
+    oosOutcomeHorizonMs: outcome.outcomeHorizonMs,
+    oosOutcomeSelectionPolicy: outcome.outcomeSelectionPolicy,
+  };
+}
+
+export function validatePublicForwardLiquiditySuccessorV3SplitIndex(index) {
+  const blockers = [];
+  if (!object(index)) return Object.freeze({ valid: false, blockers: Object.freeze(['SUCCESSOR_V3_SPLIT_INDEX_REQUIRED']), oosAssignments: Object.freeze([]) });
+  if (index.schemaVersion !== PUBLIC_FORWARD_LIQUIDITY_V3_INDEPENDENT_SPLIT_INDEX_VERSION
+    || index.kind !== 'PUBLIC_FORWARD_LIQUIDITY_V3_FROZEN_SPLIT_PROPAGATION') {
+    add(blockers, 'SUCCESSOR_V3_SPLIT_INDEX_VERSION_INVALID');
+  }
+  if (!exactDigest(index.indexDigest)) add(blockers, 'SUCCESSOR_V3_SPLIT_INDEX_DIGEST_INVALID');
+  else if (index.indexDigest !== sha256(withoutKey(index, 'indexDigest'))) {
+    add(blockers, 'SUCCESSOR_V3_SPLIT_INDEX_DIGEST_MISMATCH');
+  }
+  if (index.sourceContractFamily !== SUCCESSOR_V3_SOURCE_CONTRACT_FAMILY) {
+    add(blockers, 'SUCCESSOR_V3_SOURCE_CONTRACT_FAMILY_INVALID');
+  }
+  const contractVerdict = verifySuccessorScheduleReliabilityV3Contract();
+  const horizonVerdict = verifySuccessorOosOutcomeHorizonContract();
+  if (!contractVerdict.valid || SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.activationBound !== true) {
+    add(blockers, 'SUCCESSOR_V3_SCHEDULE_RELIABILITY_CONTRACT_INVALID');
+  }
+  if (!horizonVerdict.valid) add(blockers, 'SUCCESSOR_V3_OOS_HORIZON_CONTRACT_INVALID');
+  const expectedPolicy = successorV3ExpectedNativePolicy();
+  if (canonicalJsonValue(index.successorNativePolicy) !== canonicalJsonValue(expectedPolicy)) {
+    add(blockers, 'SUCCESSOR_V3_NATIVE_POLICY_LINEAGE_MISMATCH');
+  }
+  if (index.policyDigest !== expectedPolicy.policyDigest || index.cohortDigest !== expectedPolicy.cohortDigest) {
+    add(blockers, 'SUCCESSOR_V3_INDEX_POLICY_COHORT_MISMATCH');
+  }
+  if (!exactCommitSha(index.producerCodeSha)) add(blockers, 'SUCCESSOR_V3_INDEX_PRODUCER_SHA_INVALID');
+  if (!exactDigest(index.sourceInventoryDigest)
+    || !exactDigest(index.independenceAuditDigest)
+    || !exactDigest(index.independentSplitSourceDigest)) {
+    add(blockers, 'SUCCESSOR_V3_INDEX_UPSTREAM_DIGEST_INVALID');
+  }
+  if (!positiveInteger(index.genuineScheduledSlotN)
+    || !positiveInteger(index.creditedReceiptN)
+    || index.creditedReceiptN !== index.genuineScheduledSlotN) {
+    add(blockers, 'SUCCESSOR_V3_INDEX_GENUINE_SLOT_COUNT_INVALID');
+  }
+  if (!Number.isInteger(index.targetSlotIndex) || index.targetSlotIndex < 0) {
+    add(blockers, 'SUCCESSOR_V3_INDEX_TARGET_SLOT_INVALID');
+  } else {
+    try {
+      buildSuccessorScheduleReliabilityV3SlotDescriptor(index.targetSlotIndex);
+    } catch {
+      add(blockers, 'SUCCESSOR_V3_INDEX_TARGET_SLOT_INVALID');
+    }
+  }
+  if (!Array.isArray(index.sourceDatasetDigests)
+    || index.sourceDatasetDigests.length === 0
+    || index.sourceDatasetDigests.some((value) => !exactDigest(value))
+    || new Set(index.sourceDatasetDigests).size !== index.sourceDatasetDigests.length) {
+    add(blockers, 'SUCCESSOR_V3_INDEX_SOURCE_DATASETS_INVALID');
+  }
+  if (!Array.isArray(index.observations)) add(blockers, 'SUCCESSOR_V3_INDEX_OBSERVATIONS_INVALID');
+  const observations = Array.isArray(index.observations) ? index.observations : [];
+  if (!Number.isInteger(index.effectiveIndependentN)
+    || index.effectiveIndependentN < 0
+    || index.effectiveIndependentN !== observations.length) {
+    add(blockers, 'SUCCESSOR_V3_INDEX_INDEPENDENT_N_MISMATCH');
+  }
+  if (!Number.isInteger(index.duplicateObservationLineageN) || index.duplicateObservationLineageN < 0
+    || index.frozenSplitSource !== 'V3_SCHEDULED_SLOT_RECEIPT_ONLY'
+    || index.retrospectiveSplitSelection !== false
+    || index.syntheticSplitAssignment !== false
+    || index.additionalIndependentSampleCredit !== 0
+    || index.oosOutcomeCredit !== 0
+    || index.calibrationArtifactProduced !== false
+    || index.liquidityImpactStatus !== 'BLOCKED_DATA'
+    || index.fullCostReady !== false
+    || index.evidenceCompleteCredit !== 0
+    || index.executionAuthority !== 'NONE'
+    || index.privateApiUsed !== false
+    || index.liveTrading !== false
+    || index.realOrders !== 0) {
+    add(blockers, 'SUCCESSOR_V3_INDEX_TRUTH_BOUNDARY_INVALID');
+  }
+
+  const counts = {
+    TRAIN: 0, TRAIN_BUY: 0, TRAIN_SELL: 0,
+    VALIDATION: 0, VALIDATION_BUY: 0, VALIDATION_SELL: 0,
+    OOS: 0, OOS_BUY: 0, OOS_SELL: 0,
+  };
+  const observationIds = new Set();
+  const sourceLineages = new Set();
+  const slotLineages = new Map();
+  for (const assignment of observations) {
+    if (!object(assignment)) {
+      add(blockers, 'SUCCESSOR_V3_INDEX_ASSIGNMENT_INVALID');
+      continue;
+    }
+    if (!text(assignment.observationId) || observationIds.has(assignment.observationId)) {
+      add(blockers, 'SUCCESSOR_V3_INDEX_OBSERVATION_ID_INVALID');
+    } else observationIds.add(assignment.observationId);
+    const sourceLineage = `${assignment.ingestSourceIdentity}\u0000${assignment.sourceObservationId}`;
+    if (!text(assignment.sourceObservationId)
+      || !text(assignment.sourceIdentity)
+      || !text(assignment.ingestSourceIdentity)
+      || sourceLineages.has(sourceLineage)) {
+      add(blockers, 'SUCCESSOR_V3_INDEX_SOURCE_LINEAGE_INVALID');
+    } else sourceLineages.add(sourceLineage);
+    if (!text(assignment.eventIdentity)
+      || !text(assignment.sourceFrameIdentity)
+      || !positiveInteger(assignment.eventTimestampMs)
+      || !['BUY', 'SELL'].includes(assignment.aggressiveSide)
+      || !['TRAIN', 'VALIDATION', 'OOS'].includes(assignment.split)
+      || !Number.isInteger(assignment.slotIndex)
+      || assignment.slotIndex < 0) {
+      add(blockers, 'SUCCESSOR_V3_INDEX_ASSIGNMENT_IDENTITY_INVALID');
+      continue;
+    }
+    let slot = null;
+    try {
+      slot = buildSuccessorScheduleReliabilityV3SlotDescriptor(assignment.slotIndex);
+    } catch {
+      add(blockers, 'SUCCESSOR_V3_INDEX_ASSIGNMENT_SLOT_INVALID');
+    }
+    if (slot && (slot.split !== assignment.split
+      || sha256(slot.canonicalSlotKey) !== assignment.canonicalSlotKeyDigest)) {
+      add(blockers, 'SUCCESSOR_V3_INDEX_ASSIGNMENT_FROZEN_SPLIT_MISMATCH');
+    }
+    const priorSlotDigest = slotLineages.get(assignment.slotIndex);
+    if (priorSlotDigest && priorSlotDigest !== assignment.canonicalSlotKeyDigest) {
+      add(blockers, 'SUCCESSOR_V3_INDEX_SLOT_LINEAGE_AMBIGUOUS');
+    } else slotLineages.set(assignment.slotIndex, assignment.canonicalSlotKeyDigest);
+    if (!exactDigest(assignment.canonicalSlotKeyDigest)
+      || !exactCommitSha(assignment.collectorCodeSha)
+      || !exactDigest(assignment.datasetDigest)
+      || !text(assignment.ingestReceiptRelativePath)
+      || !exactDigest(assignment.ingestReceiptDigest)
+      || !exactDigest(assignment.captureReceiptDigest)
+      || !exactDigest(assignment.artifactReceiptDigest)
+      || assignment.policyDigest !== expectedPolicy.policyDigest
+      || assignment.cohortDigest !== expectedPolicy.cohortDigest) {
+      add(blockers, 'SUCCESSOR_V3_INDEX_ASSIGNMENT_LINEAGE_MISMATCH');
+    }
+    counts[assignment.split] += 1;
+    counts[`${assignment.split}_${assignment.aggressiveSide}`] += 1;
+  }
+  if (!object(index.counts)
+    || Object.entries(counts).some(([key, value]) => index.counts[key] !== value)) {
+    add(blockers, 'SUCCESSOR_V3_INDEX_COUNTS_MISMATCH');
+  }
+  return Object.freeze({
+    valid: blockers.length === 0,
+    blockers: Object.freeze(blockers),
+    oosAssignments: Object.freeze(observations.filter((assignment) => assignment?.split === 'OOS')),
+    expectedPolicy: Object.freeze(expectedPolicy),
+  });
+}
+
+function canonicalJsonValue(value) {
+  try {
+    return JSON.stringify(canonicalize(value));
+  } catch {
+    return null;
+  }
+}
+
+function validateSuccessorV3Outcome(outcome, assignment, index, expectedProducerCodeSha, blockers) {
+  if (!object(outcome)) {
+    add(blockers, 'SUCCESSOR_V3_OOS_OUTCOME_INVALID');
+    return;
+  }
+  const horizon = SUCCESSOR_OOS_HORIZON_CONTRACT.policyCore.outcomePolicy;
+  if (!text(outcome.outcomeId)
+    || outcome.v3IndependentSplitIndexDigest !== index.indexDigest
+    || outcome.observationId !== assignment.observationId
+    || outcome.sourceObservationId !== assignment.sourceObservationId
+    || outcome.sourceIdentity !== assignment.sourceIdentity
+    || outcome.ingestSourceIdentity !== assignment.ingestSourceIdentity
+    || outcome.aggressiveSide !== assignment.aggressiveSide
+    || outcome.slotIndex !== assignment.slotIndex
+    || outcome.split !== 'OOS'
+    || outcome.canonicalSlotKeyDigest !== assignment.canonicalSlotKeyDigest
+    || outcome.collectorCodeSha !== assignment.collectorCodeSha
+    || outcome.datasetDigest !== assignment.datasetDigest
+    || outcome.ingestReceiptDigest !== assignment.ingestReceiptDigest
+    || outcome.captureReceiptDigest !== assignment.captureReceiptDigest
+    || outcome.artifactReceiptDigest !== assignment.artifactReceiptDigest
+    || outcome.policyDigest !== assignment.policyDigest
+    || outcome.cohortDigest !== assignment.cohortDigest) {
+    add(blockers, 'SUCCESSOR_V3_OOS_OUTCOME_LINEAGE_MISMATCH');
+  }
+  if (outcome.referenceEventTimestampMs !== assignment.eventTimestampMs
+    || !positiveInteger(outcome.observedAtMs)
+    || outcome.observedAtMs < assignment.eventTimestampMs + horizon.outcomeHorizonMs
+    || outcome.outcomeHorizonIdentity !== horizon.outcomeHorizonIdentity
+    || outcome.outcomeHorizonMs !== horizon.outcomeHorizonMs
+    || outcome.outcomeSelectionPolicy !== horizon.outcomeSelectionPolicy
+    || outcome.oosHorizonContractVersion !== SUCCESSOR_OOS_HORIZON_CONTRACT.contractVersion
+    || outcome.oosHorizonPolicyDigest !== SUCCESSOR_OOS_HORIZON_CONTRACT.policyDigest
+    || outcome.oosHorizonContractDigest !== SUCCESSOR_OOS_HORIZON_CONTRACT.contractDigest) {
+    add(blockers, 'SUCCESSOR_V3_OOS_OUTCOME_HORIZON_MISMATCH');
+  }
+  if (outcome.sourceType !== 'PUBLIC_FORWARD_MARKET_DATA'
+    || outcome.publicDataSource !== 'BITGET_PUBLIC_UTA_V3'
+    || !text(outcome.outcomeSourceIdentity)
+    || !exactDigest(outcome.outcomeSourceDigest)
+    || outcome.outcomeProducerCodeSha !== expectedProducerCodeSha
+    || !positiveFinite(outcome.observedPublicMidPrice)
+    || outcome.heldOut !== true
+    || outcome.contaminationFree !== true
+    || outcome.causalMarketImpactClaim !== false
+    || outcome.executionCostEligible !== false
+    || outcome.liquidityImpactCoefficient !== null
+    || outcome.historicalBackfillCredit !== 0
+    || outcome.replayCredit !== 0
+    || outcome.syntheticCredit !== 0
+    || outcome.testFixtureCredit !== 0
+    || outcome.naturalEntryCredit !== 0
+    || outcome.runtimeCostCredit !== 0
+    || outcome.executionAuthority !== 'NONE') {
+    add(blockers, 'SUCCESSOR_V3_OOS_OUTCOME_TRUTH_BOUNDARY_INVALID');
+  }
+}
+
+export function validatePublicForwardLiquiditySuccessorV3OosOutcomes({
+  v3SplitIndex,
+  outcomes = [],
+  expectedOutcomeProducerCodeSha,
+} = {}) {
+  const indexVerdict = validatePublicForwardLiquiditySuccessorV3SplitIndex(v3SplitIndex);
+  if (!indexVerdict.valid) return blocked(indexVerdict.blockers);
+  if (!exactCommitSha(expectedOutcomeProducerCodeSha)) return blocked(['OOS_OUTCOME_PRODUCER_SHA_INVALID']);
+  const assignments = indexVerdict.oosAssignments;
+  if (assignments.length === 0) return blocked(['SUCCESSOR_V3_OOS_ASSIGNMENTS_MISSING']);
+  if (!Array.isArray(outcomes) || outcomes.length === 0) return blocked(['SUCCESSOR_V3_OOS_OUTCOMES_MISSING']);
+  const blockers = [];
+  const byObservation = new Map();
+  const outcomeIds = new Set();
+  const outcomeSourceDigests = new Set();
+  for (const outcome of outcomes) {
+    if (outcomeIds.has(outcome?.outcomeId)) add(blockers, 'SUCCESSOR_V3_OOS_OUTCOME_ID_DUPLICATE');
+    else outcomeIds.add(outcome?.outcomeId);
+    if (byObservation.has(outcome?.observationId)) add(blockers, 'SUCCESSOR_V3_OOS_OUTCOME_OBSERVATION_DUPLICATE');
+    else byObservation.set(outcome?.observationId, outcome);
+    if (outcomeSourceDigests.has(outcome?.outcomeSourceDigest)) add(blockers, 'SUCCESSOR_V3_OOS_OUTCOME_SOURCE_REUSED');
+    else outcomeSourceDigests.add(outcome?.outcomeSourceDigest);
+    const assignment = assignments.find((item) => item.observationId === outcome?.observationId);
+    if (!assignment) add(blockers, 'SUCCESSOR_V3_OOS_OUTCOME_ORPHAN');
+    else validateSuccessorV3Outcome(outcome, assignment, v3SplitIndex, expectedOutcomeProducerCodeSha, blockers);
+  }
+  for (const assignment of assignments) {
+    if (!byObservation.has(assignment.observationId)) add(blockers, 'SUCCESSOR_V3_OOS_OUTCOME_MISSING');
+  }
+  if (outcomes.length !== assignments.length) add(blockers, 'SUCCESSOR_V3_OOS_EXACT_COVERAGE_MISMATCH');
+  if (blockers.length > 0) return blocked(blockers);
+  const orderedOutcomes = [...outcomes].sort((left, right) => left.observationId.localeCompare(right.observationId));
+  const body = {
+    schemaVersion: PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_V3_OOS_VALIDATION_VERSION,
+    sourceContractFamily: SUCCESSOR_V3_SOURCE_CONTRACT_FAMILY,
+    v3IndependentSplitIndexDigest: v3SplitIndex.indexDigest,
+    sourceInventoryDigest: v3SplitIndex.sourceInventoryDigest,
+    independenceAuditDigest: v3SplitIndex.independenceAuditDigest,
+    independentSplitSourceDigest: v3SplitIndex.independentSplitSourceDigest,
+    scheduleReliabilityContractVersion: v3SplitIndex.successorNativePolicy.scheduleReliabilityContractVersion,
+    scheduleReliabilityNumericFreezeSha256: v3SplitIndex.successorNativePolicy.scheduleReliabilityNumericFreezeSha256,
+    policyDigest: v3SplitIndex.policyDigest,
+    cohortDigest: v3SplitIndex.cohortDigest,
+    oosHorizonContractVersion: SUCCESSOR_OOS_HORIZON_CONTRACT.contractVersion,
+    oosHorizonPolicyDigest: SUCCESSOR_OOS_HORIZON_CONTRACT.policyDigest,
+    oosHorizonContractDigest: SUCCESSOR_OOS_HORIZON_CONTRACT.contractDigest,
+    outcomeHorizonMs: SUCCESSOR_OOS_HORIZON_CONTRACT.policyCore.outcomePolicy.outcomeHorizonMs,
+    genuineScheduledSlotN: v3SplitIndex.genuineScheduledSlotN,
+    effectiveIndependentN: v3SplitIndex.effectiveIndependentN,
+    genuineV3OosSlotN: new Set(assignments.map((assignment) => assignment.slotIndex)).size,
+    genuineOosOutcomeN: orderedOutcomes.length,
+    buyOosOutcomeN: orderedOutcomes.filter((outcome) => outcome.aggressiveSide === 'BUY').length,
+    sellOosOutcomeN: orderedOutcomes.filter((outcome) => outcome.aggressiveSide === 'SELL').length,
+    outcomeIds: Object.freeze(orderedOutcomes.map((outcome) => outcome.outcomeId)),
+    outcomeDigest: sha256(orderedOutcomes),
+    exactOosCoverage: true,
+    heldOut: true,
+    contaminationFree: true,
+    retrospectiveSplitSelection: false,
+    replayCredit: 0,
+    backfillCredit: 0,
+    syntheticCredit: 0,
+    calibrationArtifactProduced: false,
+    liquidityImpactPresent: false,
+    liquidityImpactStatus: 'BLOCKED_DATA',
+    fullCostReady: false,
+    evidenceCompleteCredit: 0,
+    executionAuthority: 'NONE',
+  };
+  const validation = Object.freeze({ ...body, validationDigest: sha256(body) });
   return Object.freeze({
     status: 'PRESENT',
     blockers: Object.freeze([]),
