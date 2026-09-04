@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { NewsService, NewsProviderError } from "../services/news.service";
+import marketIntelligenceNewsDisclosureRouter from './market-intelligence-news-disclosure';
 
 const router = Router();
 
@@ -29,5 +30,7 @@ router.get("/news/:ticker", async (req, res) => {
     return res.status(500).json({ ok: false, error: "NEWS_ROUTE_ERROR" });
   }
 });
+
+router.use(marketIntelligenceNewsDisclosureRouter);
 
 export default router;
