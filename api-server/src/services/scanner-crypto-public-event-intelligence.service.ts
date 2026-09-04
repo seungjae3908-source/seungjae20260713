@@ -109,8 +109,8 @@ function canonicalSymbol(market: 'spot' | 'futures', value: string): string {
 }
 
 function normalTradingStatus(market: 'spot' | 'futures', value: string | null): boolean {
-  if (!value) return true;
-  const normalized = value.trim().toLowerCase();
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (!normalized) return false;
   return market === 'spot'
     ? ['active', 'normal', 'trading'].includes(normalized)
     : ['normal', 'active', 'trading'].includes(normalized);
@@ -179,6 +179,19 @@ function contextForCard(
   }
 
   const rankings = response.sections.rankings;
+  if (rankings.status === 'error' || rankings.status === 'unavailable') {
+    const unavailable = emptyContext(market, symbol, 'NOT_AVAILABLE', 'CRYPTO_PUBLIC_RANKINGS_UNAVAILABLE');
+    unavailable.verifiedCoinNews = {
+      connected: newsConnected(response),
+      sectionStatus: response.sections.news.status,
+      provider: response.sections.news.meta.provider,
+      source: response.sections.news.meta.source,
+      errorCode: response.sections.news.meta.errorCode,
+    };
+    unavailable.sources = unique([rankings.meta.provider, rankings.meta.source]);
+    return unavailable;
+  }
+
   const row = rankings.data.find((item) => canonicalSymbol(market, item.symbol) === symbol) ?? null;
   if (!row) {
     const missing = emptyContext(market, symbol, 'NOT_AVAILABLE', 'CRYPTO_PUBLIC_EVENT_SYMBOL_NOT_FOUND');
@@ -191,6 +204,17 @@ function contextForCard(
     };
     missing.sources = unique([rankings.meta.provider, rankings.meta.source]);
     return missing;
+  }
+
+  const sources: Array<string | null | undefined> = [rankings.meta.provider, rankings.meta.source];
+  const warnings: string[] = [];
+  let relevantSectionPartial = ['partial', 'stale'].includes(rankings.status)
+    || rankings.meta.isDelayed
+    || rankings.meta.isStale;
+  const tradingStatusMissing = !String(row.tradingStatus ?? '').trim();
+  if (tradingStatusMissing) {
+    relevantSectionPartial = true;
+    warnings.push('CRYPTO_PUBLIC_TRADING_STATUS_UNKNOWN');
   }
 
   const events: ScannerCryptoPublicEvent[] = [];
@@ -207,7 +231,7 @@ function contextForCard(
       reasons: ['거래소 공식 공개 응답의 warning=true'],
     });
   }
-  if (!normalTradingStatus(market, row.tradingStatus)) {
+  if (!tradingStatusMissing && !normalTradingStatus(market, row.tradingStatus)) {
     events.push({
       kind: 'TRADING_STATUS',
       provider: rankings.meta.provider ?? (market === 'spot' ? 'Upbit' : 'Bitget'),
@@ -222,12 +246,6 @@ function contextForCard(
   }
 
   let derivatives: ScannerCryptoPublicEventContext['derivatives'] = null;
-  const sources: Array<string | null | undefined> = [rankings.meta.provider, rankings.meta.source];
-  const warnings: string[] = [];
-  let relevantSectionPartial = ['partial', 'stale'].includes(rankings.status)
-    || rankings.meta.isDelayed
-    || rankings.meta.isStale;
-
   if (market === 'futures') {
     const section = response.sections.derivatives;
     const data = section.data;
@@ -299,21 +317,26 @@ async function loadRoomWithBudget(
   const loader = options.loader ?? MarketInformationService.getRoom.bind(MarketInformationService);
   const controller = new AbortController();
   let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   const abortFromParent = () => controller.abort(options.signal?.reason ?? new Error('SCANNER_REQUEST_ABORTED'));
   if (options.signal?.aborted) abortFromParent();
   else options.signal?.addEventListener('abort', abortFromParent, { once: true });
-  const timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort(new Error('SCANNER_CRYPTO_PUBLIC_EVENT_TIMEOUT'));
-  }, budgetMs);
   try {
     const room: MarketInformationRoomId = options.market === 'spot' ? 'coins-spot' : 'coins-futures';
-    return { response: await loader(room, controller.signal), status: 'OK' };
+    const timeout = new Promise<MarketInformationResponse>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        timedOut = true;
+        const error = new Error('SCANNER_CRYPTO_PUBLIC_EVENT_TIMEOUT');
+        if (!controller.signal.aborted) controller.abort(error);
+        reject(error);
+      }, budgetMs);
+    });
+    return { response: await Promise.race([loader(room, controller.signal), timeout]), status: 'OK' };
   } catch {
     if (options.signal?.aborted) return { response: null, status: 'ABORTED' };
     return { response: null, status: timedOut ? 'TIMEOUT' : 'FAILED' };
   } finally {
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
     options.signal?.removeEventListener('abort', abortFromParent);
   }
 }
