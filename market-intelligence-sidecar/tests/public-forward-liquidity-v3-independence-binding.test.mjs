@@ -22,9 +22,20 @@ const SOURCE = 'v3-cohort:test';
 
 function receipt({ predecessorDatasetDigest, datasetDigest, observationIds, slotIndex, split, captureSeed,
   successor = false }) {
+  const captureRunId = String(33809694015 + slotIndex);
+  const artifactId = String(9914306478 + slotIndex);
+  const artifactDigest = String(Number(captureSeed) + 3).repeat(64).slice(0, 64);
+  const artifactReceiptDigest = String(Number(captureSeed) + 2).repeat(64).slice(0, 64);
+  const canonicalSlotKey = { policyDigest: POLICY, cohortDigest: COHORT, slotIndex };
   const body = {
     schemaVersion: PUBLIC_FORWARD_LIQUIDITY_CAPTURE_INGEST_RECEIPT_VERSION,
+    exactMainSha: PRODUCER,
     collectorCodeSha: PRODUCER,
+    captureRunId,
+    captureRunAttempt: '1',
+    artifactId,
+    artifactDigest,
+    captureArtifactReceiptDigest: artifactReceiptDigest,
     predecessorDatasetDigest,
     datasetDigest,
     batchObservationIds: observationIds,
@@ -59,9 +70,10 @@ function receipt({ predecessorDatasetDigest, datasetDigest, observationIds, slot
       split,
       policyDigest: POLICY,
       cohortDigest: COHORT,
-      canonicalSlotKeyDigest: String(captureSeed).repeat(64).slice(0, 64),
+      canonicalSlotKey,
+      canonicalSlotKeyDigest: sha256(canonicalJson(canonicalSlotKey)),
       captureReceiptDigest: String(Number(captureSeed) + 1).repeat(64).slice(0, 64),
-      artifactReceiptDigest: String(Number(captureSeed) + 2).repeat(64).slice(0, 64),
+      artifactReceiptDigest,
     },
   };
   return { ...body, receiptDigest: computePublicForwardLiquidityCaptureIngestReceiptDigest(body) };
@@ -121,6 +133,9 @@ function fixture() {
     sourceIdentity: SOURCE, collectorCodeSha: PRODUCER, datasetDigest: DATASET1,
     ingestReceiptRelativePaths: ['receipts/00.json', 'receipts/24.json'],
     ingestReceiptDigests: [first.receiptDigest, second.receiptDigest],
+    captureRunIds: [first.captureRunId, second.captureRunId],
+    captureArtifactIds: [first.artifactId, second.artifactId],
+    captureArtifactDigests: [first.artifactDigest, second.artifactDigest],
     v3SlotIndexes: [0, 24], v3Splits: ['TRAIN', 'VALIDATION'],
     v3PolicyDigest: POLICY, v3CohortDigest: COHORT,
   };
@@ -137,10 +152,18 @@ function successorFixture() {
   const first = receipt({ predecessorDatasetDigest: null, datasetDigest: DATASET0,
     observationIds: ['obs-a', 'obs-b'], slotIndex: 20, split: 'TRAIN', captureSeed: 8,
     successor: true });
+  // The genuine #36 #811 receipt carries canonicalSlotKey but omits the redundant digest.
+  delete first.sourceV3Lineage.canonicalSlotKeyDigest;
+  const firstBody = { ...first };
+  delete firstBody.receiptDigest;
+  first.receiptDigest = computePublicForwardLiquidityCaptureIngestReceiptDigest(firstBody);
   const source = {
     sourceIdentity: SOURCE, collectorCodeSha: PRODUCER, datasetDigest: DATASET0,
     ingestReceiptRelativePaths: ['receipts/20.json'],
     ingestReceiptDigests: [first.receiptDigest],
+    captureRunIds: [first.captureRunId],
+    captureArtifactIds: [first.artifactId],
+    captureArtifactDigests: [first.artifactDigest],
     v3SlotIndexes: [20], v3Splits: ['TRAIN'],
     v3PolicyDigest: POLICY, v3CohortDigest: COHORT,
   };
@@ -186,7 +209,7 @@ test('fails closed when source identity differs even if observation id matches',
   result.splitSource.observations[0].sourceIdentity = 'different-source';
   assert.throws(() => buildPublicForwardLiquidityV3IndependentSplitIndex({
     ...value, independenceResult: result, producerCodeSha: PRODUCER,
-  }), /INDEPENDENT_OBSERVATION_V3_LINEAGE_MISSING/);
+  }), /INDEPENDENT_SOURCE_LINEAGE_MISSING/);
 });
 
 test('fails closed on tampered ingest receipt digest or split vector', () => {
@@ -238,4 +261,56 @@ test('fails closed on forged Successor producer identity or generic schedule lin
       ...value, independenceResult: independence(), producerCodeSha: PRODUCER,
     }), /V3_SOURCE_LINEAGE_PRODUCER_INVALID/);
   }
+});
+
+test('fails closed on wrong exact-main, rerun, raw artifact identity, or incomplete vectors', () => {
+  for (const [mutate, expected] of [
+    [
+      (value) => { value.receiptEntries[0].receipt.exactMainSha = 'e'.repeat(40); },
+      /V3_RECEIPT_EXACT_MAIN_SHA_MISMATCH/,
+    ],
+    [
+      (value) => { value.receiptEntries[0].receipt.captureRunAttempt = '2'; },
+      /V3_CAPTURE_RUN_IDENTITY_MISMATCH/,
+    ],
+    [
+      (value) => { value.receiptEntries[0].receipt.artifactDigest = 'e'.repeat(64); },
+      /V3_CAPTURE_ARTIFACT_IDENTITY_MISMATCH/,
+    ],
+    [
+      (value) => { value.inventory.sources[0].captureArtifactIds = []; },
+      /V3_SOURCE_RECEIPT_VECTOR_LENGTH_MISMATCH/,
+    ],
+  ]) {
+    const value = successorFixture();
+    mutate(value);
+    const receiptBody = { ...value.receiptEntries[0].receipt };
+    delete receiptBody.receiptDigest;
+    value.receiptEntries[0].receipt.receiptDigest =
+      computePublicForwardLiquidityCaptureIngestReceiptDigest(receiptBody);
+    value.inventory.sources[0].ingestReceiptDigests[0] = value.receiptEntries[0].receipt.receiptDigest;
+    const inventoryBody = { ...value.inventory };
+    delete inventoryBody.inventoryDigest;
+    value.inventory.inventoryDigest = sha256(canonicalJson(inventoryBody));
+    assert.throws(() => buildPublicForwardLiquidityV3IndependentSplitIndex({
+      ...value, independenceResult: independence(), producerCodeSha: PRODUCER,
+    }), expected);
+  }
+});
+
+test('fails closed on an incomplete receipt chain or duplicate credited V3 slot', () => {
+  const missing = successorFixture();
+  missing.receiptEntries = [];
+  assert.throws(() => buildPublicForwardLiquidityV3IndependentSplitIndex({
+    ...missing, independenceResult: independence(), producerCodeSha: PRODUCER,
+  }), /V3_INGEST_RECEIPT_REQUIRED/);
+
+  const duplicate = fixture();
+  duplicate.inventory.sources[0].v3SlotIndexes[1] = 0;
+  const duplicateInventoryBody = { ...duplicate.inventory };
+  delete duplicateInventoryBody.inventoryDigest;
+  duplicate.inventory.inventoryDigest = sha256(canonicalJson(duplicateInventoryBody));
+  assert.throws(() => buildPublicForwardLiquidityV3IndependentSplitIndex({
+    ...duplicate, independenceResult: independence(), producerCodeSha: PRODUCER,
+  }), /V3_DUPLICATE_SLOT_CREDIT_FORBIDDEN/);
 });
