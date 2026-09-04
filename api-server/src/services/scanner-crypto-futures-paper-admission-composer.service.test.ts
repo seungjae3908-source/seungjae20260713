@@ -247,13 +247,15 @@ function observedPercent(valuePercent: number, source: string, observedAtMs = MA
 }
 
 function supplemental(overrides: Partial<SupplementalExecutionCostEvidence> = {}): SupplementalExecutionCostEvidence {
+  const canonicalFunding = fundingCost().fundingCostEvidence;
+  if (!canonicalFunding) throw new Error('TEST_CANONICAL_FUNDING_EVIDENCE_REQUIRED');
   return Object.freeze({
     costPolicyId: COST_POLICY,
     observedAtMs: MARKET_AT,
     latency: observedPercent(0.01, 'runtime-latency-observer'),
     liquidityImpact: observedPercent(0.02, 'bitget-depth-impact-observer'),
     partialFillImpact: observedPercent(0.01, 'paper-fill-impact-observer'),
-    funding: observedPercent(0.01, 'bitget-current-funding'),
+    funding: canonicalFunding,
     ...overrides,
   });
 }
@@ -317,6 +319,12 @@ test('P0-4A emits an explicit zero only when the canonical holding horizon ends 
   assert.equal(result.components[0]?.componentClass, 'KNOWN_COMPONENT');
   assert.equal(result.fundingCostEvidence?.valuePercent, 0);
   assert.equal(result.fundingCostEvidence?.evidenceClass, 'KNOWN_COMPONENT');
+  assert.deepEqual(result.fundingCostEvidence?.riskPolicyIdentity, {
+    policyId: 'canonical-paper-risk-v1',
+    policyVersion: 'canonical-paper-risk-policy-v1',
+    source: 'canonical-paper-risk-policy-record',
+    researchCodeSha: funding.signal.strategyIdentity.researchCodeSha,
+  });
   assert.equal(result.currentRateReplicatedAcrossFutureIntervals, false);
   assert.equal(result.unknownIsZero, false);
 });
@@ -410,6 +418,10 @@ test('P0-4A projected funding is accepted only through the existing canonical ES
   });
   assert.equal(admission.status, 'READY');
   assert.equal(admission.admissionResult?.status, 'READY');
+  assert.deepEqual(
+    admission.admissionResult?.bundle?.riskEvidence.policyIdentity,
+    result.fundingCostEvidence?.riskPolicyIdentity,
+  );
   assert.equal(
     admission.admissionResult?.bundle?.executionEvidence.costPolicy.fundingRate,
     result.fundingCostEvidence!.valuePercent / 100,
@@ -484,6 +496,12 @@ test('P0-C5 composes a READY crypto-futures admission bundle only from authorita
   assert.equal(result.paperEvidence?.minimumOrderQuantity, 0.001);
   assert.equal(result.admissionResult?.status, 'READY');
   assert.ok(result.admissionResult?.bundle?.evidenceDigest);
+  assert.deepEqual(result.admissionResult?.bundle?.riskEvidence.policyIdentity, {
+    policyId: 'canonical-paper-risk-v1',
+    policyVersion: 'canonical-paper-risk-policy-v1',
+    source: 'canonical-paper-risk-policy-record',
+    researchCodeSha: candidate().signal.strategyIdentity.researchCodeSha,
+  });
   assert.equal(result.executionDataEvidence?.executionMode, 'SIMULATED_EXECUTION_ONLY');
   assert.equal(result.executionDataEvidence?.publicL2Only, true);
   assert.equal(result.executionDataEvidence?.realFillClaim, false);
@@ -494,6 +512,17 @@ test('P0-C5 composes a READY crypto-futures admission bundle only from authorita
   assert.equal(result.orderSubmitted, false);
   assert.equal(result.exchangeRequestSent, false);
   assert.equal(result.productionMutationAllowed, false);
+});
+
+test('P0-C5 rejects funding cost evidence without canonical risk-policy identity', () => {
+  const result = compose({
+    supplementalCostEvidence: supplemental({
+      funding: observedPercent(0.01, 'unbound-funding-cost'),
+    }),
+  });
+  assert.equal(result.status, 'BLOCKED');
+  assert.ok(result.blockers.includes('P0_C5_RISK_POLICY_IDENTITY_REQUIRED'));
+  assert.equal(result.admissionResult, null);
 });
 
 test('P0-C5 refuses to replace missing Paper equity with a synthetic default', () => {
