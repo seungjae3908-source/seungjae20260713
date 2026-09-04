@@ -131,6 +131,10 @@ export type MarketIntelligenceTradeDecision = {
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
 const DEFAULT_BASE_URL = 'http://127.0.0.1:8791';
 const DEFAULT_TIMEOUT_MS = 1_500;
+const NEWS_ROUTE_FRESHNESS_STATES = new Set(['FRESH', 'AGING', 'STALE', 'EXPIRED', 'UNKNOWN']);
+const NEWS_ROUTE_MODEL_TIERS = new Set(['NONE', 'CHEAP', 'DEEP']);
+const NEWS_ROUTE_REALTIME_CLASSES = new Set(['NONE', 'REALTIME', 'BATCH']);
+const NEWS_ROUTE_OUTPUT_CLASSES = new Set(['NONE', 'COMPACT_STRUCTURED', 'DETAILED_STRUCTURED']);
 
 function asObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -258,7 +262,9 @@ function parseNewsDisclosureRoute(payload: unknown): MarketIntelligenceNewsDiscl
     routeSafety.executionAuthority !== 'NONE'
     || routeSafety.orderAllowed !== false
     || routeSafety.candidateDeletionAllowed !== false
+    || routeSafety.sentimentIsPriceDirection !== false
     || routeSafety.fabricatedEvidenceAllowed !== false
+    || envelopeSafety.executionAuthority !== 'NONE'
     || envelopeSafety.realOrderAllowed !== false
     || envelopeSafety.orderSubmissionAllowed !== false
     || envelopeSafety.privateTradingApiAllowed !== false
@@ -267,6 +273,19 @@ function parseNewsDisclosureRoute(payload: unknown): MarketIntelligenceNewsDiscl
   }
   const mode = String(ai.mode ?? '') as MarketIntelligenceNewsDisclosureAiMode;
   if (!['NO_AI', 'CHEAP_AI', 'DEEP_AI', 'MULTI_EVIDENCE'].includes(mode)) throw new Error('MARKET_INTELLIGENCE_NEWS_ROUTE_MODE_INVALID');
+  const freshnessState = String(freshness.state ?? '');
+  const modelTier = String(ai.modelTier ?? '');
+  const realtimeClass = String(ai.realtimeClass ?? '');
+  const maxOutputClass = String(ai.maxOutputClass ?? '');
+  const aiLevel = finite(ai.level);
+  if (!NEWS_ROUTE_FRESHNESS_STATES.has(freshnessState)) throw new Error('MARKET_INTELLIGENCE_NEWS_ROUTE_FRESHNESS_INVALID');
+  if (!NEWS_ROUTE_MODEL_TIERS.has(modelTier)) throw new Error('MARKET_INTELLIGENCE_NEWS_ROUTE_MODEL_TIER_INVALID');
+  if (!NEWS_ROUTE_REALTIME_CLASSES.has(realtimeClass)) throw new Error('MARKET_INTELLIGENCE_NEWS_ROUTE_REALTIME_CLASS_INVALID');
+  if (!NEWS_ROUTE_OUTPUT_CLASSES.has(maxOutputClass)) throw new Error('MARKET_INTELLIGENCE_NEWS_ROUTE_OUTPUT_CLASS_INVALID');
+  if (aiLevel == null || !Number.isInteger(aiLevel) || aiLevel < 0 || aiLevel > 3) throw new Error('MARKET_INTELLIGENCE_NEWS_ROUTE_AI_LEVEL_INVALID');
+  if (typeof ai.cacheEligible !== 'boolean' || typeof ai.cacheReuse !== 'boolean' || typeof ai.batchEligible !== 'boolean') {
+    throw new Error('MARKET_INTELLIGENCE_NEWS_ROUTE_CACHE_FLAGS_INVALID');
+  }
   const analysisKey = String(ai.analysisKey ?? '');
   const rawHash = String(event.rawHash ?? '');
   if (!/^[a-f0-9]{64}$/i.test(analysisKey) || !/^[a-f0-9]{64}$/i.test(rawHash)) {
@@ -301,20 +320,20 @@ function parseNewsDisclosureRoute(payload: unknown): MarketIntelligenceNewsDiscl
       },
     },
     freshness: {
-      state: String(freshness.state ?? 'UNKNOWN') as MarketIntelligenceNewsDisclosureRoute['freshness']['state'],
+      state: freshnessState as MarketIntelligenceNewsDisclosureRoute['freshness']['state'],
       ageMs: finite(freshness.ageMs),
       reason: text(freshness.reason),
     },
     ai: {
-      level: finite(ai.level) ?? 0,
+      level: aiLevel,
       mode,
-      modelTier: String(ai.modelTier ?? 'NONE') as MarketIntelligenceNewsDisclosureRoute['ai']['modelTier'],
-      realtimeClass: String(ai.realtimeClass ?? 'NONE') as MarketIntelligenceNewsDisclosureRoute['ai']['realtimeClass'],
+      modelTier: modelTier as MarketIntelligenceNewsDisclosureRoute['ai']['modelTier'],
+      realtimeClass: realtimeClass as MarketIntelligenceNewsDisclosureRoute['ai']['realtimeClass'],
       analysisKey,
-      cacheEligible: bool(ai.cacheEligible),
-      cacheReuse: bool(ai.cacheReuse),
-      batchEligible: bool(ai.batchEligible),
-      maxOutputClass: String(ai.maxOutputClass ?? 'NONE'),
+      cacheEligible: ai.cacheEligible,
+      cacheReuse: ai.cacheReuse,
+      batchEligible: ai.batchEligible,
+      maxOutputClass,
     },
     reasons: stringArray(result.reasons),
     safety: {

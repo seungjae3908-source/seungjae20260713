@@ -18,6 +18,7 @@ const CRITICAL_EVENT_TYPES = new Set([
 ]);
 const SIGNAL_DIRECTION_SET = new Set(['POSITIVE', 'NEGATIVE', 'NEUTRAL', 'MIXED', 'UNKNOWN']);
 const ANALYSIS_SCOPE_SET = new Set(['CORE', 'SCANNER', 'CHART', 'PORTFOLIO', 'ASSISTANT', 'BACKTEST', 'SHADOW', 'PAPER']);
+const AI_MODE_SET = new Set(['NO_AI', 'CHEAP_AI', 'DEEP_AI', 'MULTI_EVIDENCE']);
 
 function cleanText(value, max = 4_000) {
   return typeof value === 'string' ? value.trim().slice(0, max) : '';
@@ -188,7 +189,9 @@ export function buildAnalysisKey(event, options = {}) {
   const promptVersion = cleanText(options.promptVersion, 120) || 'market-intel-v1';
   const requestedScope = cleanText(options.analysisScope, 40).toUpperCase();
   const analysisScope = ANALYSIS_SCOPE_SET.has(requestedScope) ? requestedScope : 'CORE';
-  return sha256(stableJson({ schema: 'MarketIntelAnalysisKeyV1', rawHash: event.rawHash, promptVersion, analysisScope }));
+  const requestedAiMode = cleanText(options.aiMode, 40).toUpperCase();
+  const aiMode = AI_MODE_SET.has(requestedAiMode) ? requestedAiMode : 'CHEAP_AI';
+  return sha256(stableJson({ schema: 'MarketIntelAnalysisKeyV2', rawHash: event.rawHash, promptVersion, analysisScope, aiMode }));
 }
 
 function evidenceStatus(event, freshness) {
@@ -235,39 +238,13 @@ function deepReason(event, context) {
   return reasons;
 }
 
-export function routeMarketIntelAi(input = {}) {
-  const event = canonicalizeMarketIntelEvent(input.event ?? input);
-  const context = input.context && typeof input.context === 'object' ? input.context : {};
-  const freshness = evaluateFreshness(event, {
-    nowMs: input.nowMs,
-    freshnessPolicyMs: input.freshnessPolicyMs,
-  });
-  const evidence = evidenceStatus(event, freshness);
-  const analysisKey = buildAnalysisKey(event, {
-    promptVersion: input.promptVersion,
-    analysisScope: input.analysisScope,
-  });
-  const seenRawHashes = new Set(Array.isArray(input.seenRawHashes) ? input.seenRawHashes.map(String) : []);
-  const cachedAnalysisKeys = new Set(Array.isArray(input.cachedAnalysisKeys) ? input.cachedAnalysisKeys.map(String) : []);
-  const exactDuplicate = seenRawHashes.has(event.rawHash);
-  const cacheHit = cachedAnalysisKeys.has(analysisKey);
-  const clusterEvents = Array.isArray(input.clusterEvents)
-    ? input.clusterEvents.map((entry) => canonicalizeMarketIntelEvent(entry))
-    : [];
-  const conflict = detectEvidenceConflict([event, ...clusterEvents]);
+function plannedAiRoute(event, context, evidence, freshness, conflict, clusterEvents) {
   const reasons = [...evidence.reasons];
   let aiLevel = 1;
   let aiMode = 'CHEAP_AI';
   let realtimeClass = 'REALTIME';
-  let cacheReuse = false;
 
-  if (exactDuplicate || cacheHit) {
-    aiLevel = 0;
-    aiMode = 'NO_AI';
-    realtimeClass = 'NONE';
-    cacheReuse = true;
-    reasons.push(exactDuplicate ? 'EXACT_DUPLICATE' : 'ANALYSIS_CACHE_HIT');
-  } else if (evidence.status === 'NO_EVIDENCE' || evidence.status === 'INVALID_EVIDENCE') {
+  if (evidence.status === 'NO_EVIDENCE' || evidence.status === 'INVALID_EVIDENCE') {
     aiLevel = 0;
     aiMode = 'NO_AI';
     realtimeClass = 'NONE';
@@ -290,6 +267,44 @@ export function routeMarketIntelAi(input = {}) {
     } else {
       reasons.push('STANDARD_EVENT_CLASSIFICATION');
     }
+  }
+  return { aiLevel, aiMode, realtimeClass, reasons };
+}
+
+export function routeMarketIntelAi(input = {}) {
+  const event = canonicalizeMarketIntelEvent(input.event ?? input);
+  const context = input.context && typeof input.context === 'object' ? input.context : {};
+  const freshness = evaluateFreshness(event, {
+    nowMs: input.nowMs,
+    freshnessPolicyMs: input.freshnessPolicyMs,
+  });
+  const evidence = evidenceStatus(event, freshness);
+  const seenRawHashes = new Set(Array.isArray(input.seenRawHashes) ? input.seenRawHashes.map(String) : []);
+  const cachedAnalysisKeys = new Set(Array.isArray(input.cachedAnalysisKeys) ? input.cachedAnalysisKeys.map(String) : []);
+  const exactDuplicate = seenRawHashes.has(event.rawHash);
+  const clusterEvents = Array.isArray(input.clusterEvents)
+    ? input.clusterEvents.map((entry) => canonicalizeMarketIntelEvent(entry))
+    : [];
+  const conflict = detectEvidenceConflict([event, ...clusterEvents]);
+  const planned = plannedAiRoute(event, context, evidence, freshness, conflict, clusterEvents);
+  const analysisKey = buildAnalysisKey(event, {
+    promptVersion: input.promptVersion,
+    analysisScope: input.analysisScope,
+    aiMode: planned.aiMode,
+  });
+  const cacheHit = cachedAnalysisKeys.has(analysisKey);
+  const reasons = [...planned.reasons];
+  let aiLevel = planned.aiLevel;
+  let aiMode = planned.aiMode;
+  let realtimeClass = planned.realtimeClass;
+  let cacheReuse = false;
+
+  if (exactDuplicate || cacheHit) {
+    aiLevel = 0;
+    aiMode = 'NO_AI';
+    realtimeClass = 'NONE';
+    cacheReuse = true;
+    reasons.push(exactDuplicate ? 'EXACT_DUPLICATE' : 'ANALYSIS_CACHE_HIT');
   }
 
   const status = conflict.conflictDetected
