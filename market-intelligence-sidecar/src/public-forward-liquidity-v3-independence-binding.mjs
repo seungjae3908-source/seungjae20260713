@@ -6,6 +6,19 @@ import {
   PUBLIC_FORWARD_LIQUIDITY_CAPTURE_INGEST_RECEIPT_VERSION,
   computePublicForwardLiquidityCaptureIngestReceiptDigest,
 } from './public-forward-liquidity-capture-ingest.mjs';
+import {
+  V3_POLICY_BINDING,
+  buildV3SlotDescriptor,
+} from './public-forward-liquidity-capture-seam-v3.mjs';
+import {
+  SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT,
+  buildSuccessorScheduleReliabilityV3SlotDescriptor,
+  verifySuccessorScheduleReliabilityV3Contract,
+} from './public-forward-liquidity-successor-schedule-reliability-v3.mjs';
+import {
+  SUCCESSOR_OOS_HORIZON_CONTRACT,
+  verifySuccessorOosOutcomeHorizonContract,
+} from './public-forward-liquidity-successor-oos-outcome-horizon.mjs';
 
 export const PUBLIC_FORWARD_LIQUIDITY_V3_INDEPENDENT_SPLIT_INDEX_VERSION =
   'public-forward-liquidity-v3-independent-split-index-v1';
@@ -15,6 +28,8 @@ const SHA40 = /^[a-f0-9]{40}$/u;
 const DECIMAL_ID = /^[1-9][0-9]*$/u;
 const SPLITS = new Set(['TRAIN', 'VALIDATION', 'OOS']);
 const SIDES = new Set(['BUY', 'SELL']);
+const CALIBRATION_V3 = 'CALIBRATION_V3';
+const SUCCESSOR_SCHEDULE_RELIABILITY_V3 = 'SUCCESSOR_SCHEDULE_RELIABILITY_V3';
 
 function object(value, code) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(code);
@@ -48,6 +63,85 @@ function lineageKey(sourceIdentity, observationId) {
 function addCount(counts, split, side) {
   counts[split] += 1;
   counts[`${split}_${side}`] += 1;
+}
+
+function immutableSplitRanges(splits) {
+  return Object.freeze(Object.fromEntries(
+    ['TRAIN', 'VALIDATION', 'OOS'].map((name) => {
+      const split = object(splits?.[name], 'SUCCESSOR_V3_NATIVE_SPLIT_CONTRACT_INVALID');
+      return [name, Object.freeze({
+        startIndexInclusive: integer(
+          split.startIndexInclusive,
+          'SUCCESSOR_V3_NATIVE_SPLIT_CONTRACT_INVALID',
+        ),
+        endIndexInclusive: integer(
+          split.endIndexInclusive,
+          'SUCCESSOR_V3_NATIVE_SPLIT_CONTRACT_INVALID',
+        ),
+        expectedSlotN: integer(
+          split.expectedSlotN,
+          'SUCCESSOR_V3_NATIVE_SPLIT_CONTRACT_INVALID',
+        ),
+      })];
+    }),
+  ));
+}
+
+function verifyCalibrationV3PolicyLineage(lineage, expectedSlot, expectedSplit) {
+  const expected = {
+    policyArtifactId: V3_POLICY_BINDING.policyArtifactId,
+    policyArtifactDigest: V3_POLICY_BINDING.policyArtifactDigest,
+    policyInternalArtifactDigest: V3_POLICY_BINDING.policyInternalArtifactDigest,
+    policyDigest: V3_POLICY_BINDING.policyDigest,
+    cohortId: V3_POLICY_BINDING.cohortId,
+    cohortDigest: V3_POLICY_BINDING.cohortDigest,
+    captureSelectionPolicyDigest: V3_POLICY_BINDING.captureSelectionPolicyDigest,
+    slotIntervalMs: V3_POLICY_BINDING.slotIntervalMs,
+  };
+  if (Object.entries(expected).some(([key, value]) => lineage[key] !== value)) {
+    throw new Error('CALIBRATION_V3_POLICY_LINEAGE_MISMATCH');
+  }
+  const slot = buildV3SlotDescriptor(expectedSlot);
+  if (slot.split !== expectedSplit) throw new Error('CALIBRATION_V3_FROZEN_SPLIT_MISMATCH');
+  return slot;
+}
+
+function verifySuccessorNativePolicyLineage(lineage, expectedSlot, expectedSplit) {
+  const contract = SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT;
+  const contractVerdict = verifySuccessorScheduleReliabilityV3Contract(contract);
+  const oosVerdict = verifySuccessorOosOutcomeHorizonContract();
+  if (!contractVerdict.valid || contract.activationBound !== true || !oosVerdict.valid) {
+    throw new Error('SUCCESSOR_V3_NATIVE_POLICY_CONTRACT_INVALID');
+  }
+  const expected = {
+    scheduleReliabilityContractVersion: contract.contractVersion,
+    scheduleReliabilityNumericFreezeSha256: contract.numericFreezeSha256,
+    policyDigest: contract.policyDigest,
+    cohortDigest: contract.cohortDigest,
+    oosHorizonContractVersion: SUCCESSOR_OOS_HORIZON_CONTRACT.contractVersion,
+    oosHorizonPolicyDigest: SUCCESSOR_OOS_HORIZON_CONTRACT.policyDigest,
+    oosHorizonContractDigest: SUCCESSOR_OOS_HORIZON_CONTRACT.contractDigest,
+  };
+  if (Object.entries(expected).some(([key, value]) => lineage[key] !== value)) {
+    throw new Error('SUCCESSOR_V3_NATIVE_POLICY_LINEAGE_MISMATCH');
+  }
+  const slot = buildSuccessorScheduleReliabilityV3SlotDescriptor(expectedSlot, contract);
+  if (slot.split !== expectedSplit) throw new Error('SUCCESSOR_V3_NATIVE_SPLIT_MISMATCH');
+  const oosPolicy = SUCCESSOR_OOS_HORIZON_CONTRACT.policyCore.outcomePolicy;
+  return Object.freeze({
+    sourceContractFamily: SUCCESSOR_SCHEDULE_RELIABILITY_V3,
+    scheduleReliabilityContractVersion: contract.contractVersion,
+    scheduleReliabilityNumericFreezeSha256: contract.numericFreezeSha256,
+    policyDigest: contract.policyDigest,
+    cohortDigest: contract.cohortDigest,
+    splitMode: contract.policyCore.splits.mode,
+    splits: immutableSplitRanges(contract.policyCore.splits),
+    oosHorizonContractVersion: SUCCESSOR_OOS_HORIZON_CONTRACT.contractVersion,
+    oosHorizonPolicyDigest: SUCCESSOR_OOS_HORIZON_CONTRACT.policyDigest,
+    oosHorizonContractDigest: SUCCESSOR_OOS_HORIZON_CONTRACT.contractDigest,
+    oosOutcomeHorizonMs: oosPolicy.outcomeHorizonMs,
+    oosOutcomeSelectionPolicy: oosPolicy.outcomeSelectionPolicy,
+  });
 }
 
 function verifyInventory(inventory) {
@@ -115,8 +209,8 @@ function verifyReceipt(receipt, source, expectedPath, expectedDigest, expectedSl
   }
   const lineage = object(value.sourceV3Lineage, 'V3_SOURCE_LINEAGE_REQUIRED');
   const legacyLineage = lineage.sourceContractFamily == null
-    || lineage.sourceContractFamily === 'CALIBRATION_V3';
-  const successorLineage = lineage.sourceContractFamily === 'SUCCESSOR_SCHEDULE_RELIABILITY_V3';
+    || lineage.sourceContractFamily === CALIBRATION_V3;
+  const successorLineage = lineage.sourceContractFamily === SUCCESSOR_SCHEDULE_RELIABILITY_V3;
   if ((legacyLineage
       && lineage.triggerSource !== 'GITHUB_ACTIONS_SCHEDULED_CANONICAL_PUBLIC_CAPTURE')
     || (successorLineage
@@ -131,6 +225,12 @@ function verifyReceipt(receipt, source, expectedPath, expectedDigest, expectedSl
     || (!legacyLineage && !successorLineage)) {
     throw new Error('V3_SOURCE_LINEAGE_PRODUCER_INVALID');
   }
+  const successorNativePolicy = successorLineage
+    ? verifySuccessorNativePolicyLineage(lineage, expectedSlot, expectedSplit)
+    : null;
+  const calibrationSlot = legacyLineage
+    ? verifyCalibrationV3PolicyLineage(lineage, expectedSlot, expectedSplit)
+    : null;
   if (lineage.slotIndex !== expectedSlot
     || lineage.split !== expectedSplit
     || !SPLITS.has(lineage.split)
@@ -165,6 +265,17 @@ function verifyReceipt(receipt, source, expectedPath, expectedDigest, expectedSl
       !== derivedSlotKeyDigest) {
     throw new Error('V3_SOURCE_SLOT_KEY_DIGEST_MISMATCH');
   }
+  if (successorLineage) {
+    const nativeSlot = buildSuccessorScheduleReliabilityV3SlotDescriptor(
+      expectedSlot,
+      SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT,
+    );
+    if (canonicalJson(canonicalSlotKey) !== canonicalJson(nativeSlot.canonicalSlotKey)) {
+      throw new Error('SUCCESSOR_V3_NATIVE_SLOT_KEY_MISMATCH');
+    }
+  } else if (canonicalJson(canonicalSlotKey) !== canonicalJson(calibrationSlot.canonicalSlotKey)) {
+    throw new Error('CALIBRATION_V3_FROZEN_SLOT_KEY_MISMATCH');
+  }
   if (!Array.isArray(value.batchObservationIds) || value.batchObservationIds.length === 0) {
     throw new Error('V3_BATCH_OBSERVATION_IDS_REQUIRED');
   }
@@ -172,6 +283,10 @@ function verifyReceipt(receipt, source, expectedPath, expectedDigest, expectedSl
     path: expectedPath,
     receipt: value,
     lineage,
+    sourceContractFamily: successorLineage
+      ? SUCCESSOR_SCHEDULE_RELIABILITY_V3
+      : CALIBRATION_V3,
+    successorNativePolicy,
     canonicalSlotKeyDigest: derivedSlotKeyDigest,
   });
 }
@@ -198,6 +313,8 @@ export function buildPublicForwardLiquidityV3IndependentSplitIndex({
   let duplicateObservationLineageN = 0;
   const policyDigests = new Set();
   const cohortDigests = new Set();
+  const sourceContractFamilies = new Set();
+  const successorNativePolicies = new Map();
   const creditedSlotKeys = new Set();
   const inventorySourceBindings = new Map();
 
@@ -239,6 +356,13 @@ export function buildPublicForwardLiquidityV3IndependentSplitIndex({
         expectedArtifactId,
         expectedArtifactDigest,
       });
+      sourceContractFamilies.add(receipt.sourceContractFamily);
+      if (receipt.successorNativePolicy) {
+        successorNativePolicies.set(
+          canonicalJson(receipt.successorNativePolicy),
+          receipt.successorNativePolicy,
+        );
+      }
       if (receipt.receipt.predecessorDatasetDigest !== predecessor) throw new Error('V3_SOURCE_PREDECESSOR_CHAIN_MISMATCH');
       predecessor = receipt.receipt.datasetDigest;
       creditedReceiptN += 1;
@@ -274,6 +398,13 @@ export function buildPublicForwardLiquidityV3IndependentSplitIndex({
     sourceFinalDigests.add(sourceDatasetDigest);
   }
   if (policyDigests.size !== 1 || cohortDigests.size !== 1) throw new Error('V3_MULTI_POLICY_OR_COHORT_FORBIDDEN');
+  if (sourceContractFamilies.size !== 1) throw new Error('V3_MIXED_SOURCE_CONTRACT_FAMILY_FORBIDDEN');
+  const sourceContractFamily = [...sourceContractFamilies][0];
+  if ((sourceContractFamily === SUCCESSOR_SCHEDULE_RELIABILITY_V3
+      && successorNativePolicies.size !== 1)
+    || (sourceContractFamily === CALIBRATION_V3 && successorNativePolicies.size !== 0)) {
+    throw new Error('V3_SOURCE_POLICY_FAMILY_BINDING_INVALID');
+  }
 
   const result = object(independenceResult, 'INDEPENDENCE_RESULT_REQUIRED');
   if (result.status !== 'PRESENT' || !result.audit || !result.splitSource
@@ -360,6 +491,10 @@ export function buildPublicForwardLiquidityV3IndependentSplitIndex({
     kind: 'PUBLIC_FORWARD_LIQUIDITY_V3_FROZEN_SPLIT_PROPAGATION',
     producerCodeSha: text(producerCodeSha, 'PRODUCER_CODE_SHA_REQUIRED'),
     sourceInventoryDigest: sourceInventory.inventoryDigest,
+    sourceContractFamily,
+    successorNativePolicy: sourceContractFamily === SUCCESSOR_SCHEDULE_RELIABILITY_V3
+      ? [...successorNativePolicies.values()][0]
+      : null,
     independenceAuditDigest: digest(result.audit.auditDigest, 'INDEPENDENCE_AUDIT_DIGEST_INVALID'),
     independentSplitSourceDigest: digest(result.splitSource.splitSourceDigest, 'INDEPENDENT_SPLIT_SOURCE_DIGEST_INVALID'),
     policyDigest: [...policyDigests][0],
