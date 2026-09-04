@@ -195,6 +195,47 @@ test('Bitget public liquidation prints and raw ratio are attached without conver
   assert.equal(result.cryptoPublicEventContext.safety.pricePlanImpact, 0);
 });
 
+test('explicit ACTIVE and normal trading statuses remain READY controls', async () => {
+  for (const market of ['spot', 'futures'] as const) {
+    const symbol = market === 'spot' ? 'BTC' : 'BTCUSDT';
+    const [result] = await enrichCryptoScannerCardsWithPublicEventContext([card(symbol, market)], {
+      market,
+      loader: async () => response(market),
+      budgetMs: 500,
+    });
+    assert.equal(result.cryptoPublicEventContext.status, 'READY');
+    assert.equal(result.cryptoPublicEventContext.events.some((event) => event.kind === 'TRADING_STATUS'), false);
+  }
+});
+
+test('missing or blank tradingStatus remains PARTIAL and never becomes READY-normal', async () => {
+  for (const tradingStatus of [null, ''] as const) {
+    const payload = response('spot');
+    payload.sections.rankings.data[0]!.tradingStatus = tradingStatus;
+    const [result] = await enrichCryptoScannerCardsWithPublicEventContext([card('BTC', 'spot')], {
+      market: 'spot', loader: async () => payload, budgetMs: 500,
+    });
+    assert.equal(result.cryptoPublicEventContext.status, 'PARTIAL');
+    assert.equal(result.cryptoPublicEventContext.tradingStatus, tradingStatus);
+    assert.ok(result.cryptoPublicEventContext.warnings.includes('CRYPTO_PUBLIC_TRADING_STATUS_UNKNOWN'));
+    assert.equal(result.cryptoPublicEventContext.events.some((event) => event.kind === 'TRADING_STATUS'), false);
+  }
+});
+
+test('rankings error or unavailable fails closed even when an inconsistent row exists', async () => {
+  for (const sectionStatus of ['error', 'unavailable'] as const) {
+    const payload = response('futures');
+    payload.sections.rankings.status = sectionStatus;
+    const [result] = await enrichCryptoScannerCardsWithPublicEventContext([card('BTCUSDT', 'futures')], {
+      market: 'futures', loader: async () => payload, budgetMs: 500,
+    });
+    assert.equal(result.cryptoPublicEventContext.status, 'NOT_AVAILABLE');
+    assert.equal(result.cryptoPublicEventContext.reason, 'CRYPTO_PUBLIC_RANKINGS_UNAVAILABLE');
+    assert.equal(result.cryptoPublicEventContext.events.length, 0);
+    assert.equal(result.cryptoPublicEventContext.safety.executionAuthority, 'NONE');
+  }
+});
+
 test('only final bounded candidates receive public event context and one room load is reused', async () => {
   let calls = 0;
   const rows = [card('BTC', 'spot'), card('ETH', 'spot'), card('XRP', 'spot')];
@@ -235,4 +276,16 @@ test('provider timeout/unavailable is explicit and never fabricates an event', a
   assert.equal(result.cryptoPublicEventContext.status, 'TIMEOUT');
   assert.equal(result.cryptoPublicEventContext.events.length, 0);
   assert.equal(result.cryptoPublicEventContext.marketWarning, null);
+});
+
+test('hard budget returns TIMEOUT even when loader ignores AbortSignal forever', async () => {
+  const startedAt = Date.now();
+  const [result] = await enrichCryptoScannerCardsWithPublicEventContext([card('BTC', 'spot')], {
+    market: 'spot',
+    budgetMs: 40,
+    loader: async () => await new Promise<MarketInformationResponse>(() => {}),
+  });
+  assert.equal(result.cryptoPublicEventContext.status, 'TIMEOUT');
+  assert.equal(result.cryptoPublicEventContext.reason, 'SCANNER_CRYPTO_PUBLIC_EVENT_TIMEOUT');
+  assert.ok(Date.now() - startedAt < 1_000);
 });

@@ -5,22 +5,21 @@ import { BitgetPublicClient } from "./bitget-public-client.js";
 import { collectBitgetCandles } from "./bitget-candle-collector.js";
 import { RECURRING_PAPER_MARKETS } from "./recurring-paper-loop-v1.js";
 import { runScheduledPaperCycle } from "./paper-scheduler-driver-v1.js";
+import { PAPER_FORWARD_PROVIDER_AUTHORITY } from "./paper-public-provider-authority-v1.js";
+export { PAPER_FORWARD_PROVIDER_AUTHORITY } from "./paper-public-provider-authority-v1.js";
 import {
   createEthV6PaperForwardSource,
   wrapPaperForwardProviderWithEthV6Source,
 } from "./eth-v6-paper-forward-source-v1.js";
 import { wrapPaperForwardProviderWithMeaningfulSearch } from "./meaningful-search-scheduled-paper-provider-v1.js";
+import {
+  createNaturalPaperPublicPositionObservationProducer,
+  wrapPaperForwardProviderWithNaturalPositionObservations,
+} from "./natural-paper-public-position-observation-v1.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
 const TRUTHY = new Set(["1", "true", "yes", "on", "enabled"]);
-
-export const PAPER_FORWARD_PROVIDER_AUTHORITY = Object.freeze({
-  KR_STOCK: Object.freeze({ provider: "yahoo-public-chart", symbol: "005930", timeframe: "1d", intervalMs: DAY_MS, closeOffsetMs: 6.5 * 60 * 60 * 1000, maxAgeMs: 4 * DAY_MS }),
-  US_STOCK: Object.freeze({ provider: "yahoo-public-chart", symbol: "SPY", timeframe: "1d", intervalMs: DAY_MS, closeOffsetMs: 6.5 * 60 * 60 * 1000, maxAgeMs: 4 * DAY_MS }),
-  CRYPTO_SPOT: Object.freeze({ provider: "upbit-public-candles", symbol: "BTC", timeframe: "4h", intervalMs: FOUR_HOURS_MS, maxAgeMs: 8 * 60 * 60 * 1000 }),
-  CRYPTO_FUTURES: Object.freeze({ provider: "bitget-public-v2", symbol: "BTCUSDT", timeframe: "4h", intervalMs: FOUR_HOURS_MS, maxAgeMs: 8 * 60 * 60 * 1000 }),
-});
 
 export const PAPER_FORWARD_RUNTIME_CONTRACT = Object.freeze({
   version: "paper-forward-evidence-runtime-v1",
@@ -242,6 +241,29 @@ function maybeAttachCanonicalAdmissionCutover({ provider, env, paperRuntimeForMa
   });
 }
 
+function maybeAttachNaturalPositionObservationProducer({
+  provider,
+  env,
+  authority,
+  collectYahoo,
+  collectUpbit,
+  collectBitget,
+  bitgetClient,
+  clock,
+  positionObservationProducerFactory,
+}) {
+  if (!truthy(env?.RESEARCH_PRODUCTION)) return provider;
+  const producer = positionObservationProducerFactory({
+    authority,
+    collectYahoo,
+    collectUpbit,
+    collectBitget,
+    bitgetClient,
+    clock,
+  });
+  return wrapPaperForwardProviderWithNaturalPositionObservations({ provider, producer });
+}
+
 export function createCanonicalPaperForwardEvidenceProvider({
   collectYahoo = collectYahooStockHistory,
   collectUpbit = collectUpbitSpotHistory,
@@ -253,6 +275,7 @@ export function createCanonicalPaperForwardEvidenceProvider({
   sleep = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
   env = process.env,
   naturalSourceFactory = createEthV6PaperForwardSource,
+  positionObservationProducerFactory = createNaturalPaperPublicPositionObservationProducer,
   paperRuntimeForMarket,
 } = {}) {
   if (!Number.isInteger(providerRetry?.maxAttempts) || providerRetry.maxAttempts < 1 || providerRetry.maxAttempts > 5
@@ -260,6 +283,7 @@ export function createCanonicalPaperForwardEvidenceProvider({
     throw new TypeError("bounded providerRetry configuration is required");
   }
   if (typeof naturalSourceFactory !== "function") throw new TypeError("naturalSourceFactory must be a function");
+  if (typeof positionObservationProducerFactory !== "function") throw new TypeError("positionObservationProducerFactory must be a function");
   const provider = Object.freeze({
     async collectPublicEvidence({ market, signal }) {
       const lane = authority[market];
@@ -295,7 +319,18 @@ export function createCanonicalPaperForwardEvidenceProvider({
     },
   });
   const naturalProvider = maybeAttachResearchNaturalSource({ provider, env, clock, bitgetClient, naturalSourceFactory });
-  return maybeAttachCanonicalAdmissionCutover({ provider: naturalProvider, env, paperRuntimeForMarket });
+  const canonicalProvider = maybeAttachCanonicalAdmissionCutover({ provider: naturalProvider, env, paperRuntimeForMarket });
+  return maybeAttachNaturalPositionObservationProducer({
+    provider: canonicalProvider,
+    env,
+    authority,
+    collectYahoo,
+    collectUpbit,
+    collectBitget,
+    bitgetClient,
+    clock,
+    positionObservationProducerFactory,
+  });
 }
 
 function sanitizeLane(market, evidence) {
