@@ -38,6 +38,16 @@ const RUN_36 = Object.freeze({
   captureReceiptDigest: '181f997cf04872bb612e69945a9621e56fd2709c9c8b51097f522354120fc024',
   artifactReceiptDigest: 'a08a00043232ed96b66eb4adf28a2a6c9d5127c2fe3fc041e34975725e13641b',
 });
+const SUCCESSOR_ACTIVE_TEST = Object.freeze({
+  skip: SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.activationBound !== true
+    ? 'preserved inactive-contract regression mode'
+    : false,
+});
+const SUCCESSOR_INACTIVE_TEST = Object.freeze({
+  skip: SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.activationBound === true
+    ? 'active exact-head validation mode'
+    : false,
+});
 
 function receipt({ predecessorDatasetDigest, datasetDigest, observationIds, slotIndex, split, captureSeed,
   successor = false }) {
@@ -237,6 +247,10 @@ function resignFixture(value) {
   return value;
 }
 
+test('native Successor fixture fails closed without an activation binding', SUCCESSOR_INACTIVE_TEST, () => {
+  assert.throws(() => successorFixture(), /SUCCESSOR_V3_ACTIVATION_BINDING_MISSING/);
+});
+
 test('propagates first genuine V3 frozen slot lineage to each effective-independent observation', () => {
   const value = fixture();
   const result = buildPublicForwardLiquidityV3IndependentSplitIndex({ ...value, independenceResult: independence(), producerCodeSha: PRODUCER });
@@ -285,7 +299,7 @@ test('fails closed on tampered ingest receipt digest or split vector', () => {
   assert.throws(() => buildPublicForwardLiquidityV3IndependentSplitIndex({ ...other, independenceResult: independence(), producerCodeSha: PRODUCER }), /CALIBRATION_V3_FROZEN_SPLIT_MISMATCH/);
 });
 
-test('admits #36-shaped native Successor lineage without creating additional credit', () => {
+test('admits #36-shaped native Successor lineage without creating additional credit', SUCCESSOR_ACTIVE_TEST, () => {
   const result = buildPublicForwardLiquidityV3IndependentSplitIndex({
     ...successorFixture(), independenceResult: independence(), producerCodeSha: PRODUCER,
   });
@@ -312,7 +326,7 @@ test('admits #36-shaped native Successor lineage without creating additional cre
   assert.equal(result.executionAuthority, 'NONE');
 });
 
-test('uses the native Successor split boundary instead of legacy 24/12/12 slots', () => {
+test('uses the native Successor split boundary instead of legacy 24/12/12 slots', SUCCESSOR_ACTIVE_TEST, () => {
   const validation = buildPublicForwardLiquidityV3IndependentSplitIndex({
     ...successorFixture({ slotIndex: 512, split: 'VALIDATION' }),
     independenceResult: independence(),
@@ -338,7 +352,7 @@ test('uses the native Successor split boundary instead of legacy 24/12/12 slots'
   }), /SUCCESSOR_V3_NATIVE_SPLIT_MISMATCH/);
 });
 
-test('fails closed on native freeze, OOS horizon, or source-family reinterpretation', () => {
+test('fails closed on native freeze, OOS horizon, or source-family reinterpretation', SUCCESSOR_ACTIVE_TEST, () => {
   for (const [mutate, expected] of [
     [
       (value) => { value.receiptEntries[0].receipt.sourceV3Lineage.scheduleReliabilityNumericFreezeSha256 = 'e'.repeat(64); },
@@ -371,7 +385,7 @@ test('fails closed on native freeze, OOS horizon, or source-family reinterpretat
   }
 });
 
-test('fails closed on forged Successor producer identity or generic schedule lineage', () => {
+test('fails closed on forged Successor producer identity or generic schedule lineage', SUCCESSOR_ACTIVE_TEST, () => {
   for (const mutate of [
     (lineage) => { lineage.producerWorkflowName = 'Public Forward Liquidity Calibration Scheduled V3'; },
     (lineage) => { lineage.producerWorkflowId = 1; },
@@ -394,7 +408,7 @@ test('fails closed on forged Successor producer identity or generic schedule lin
   }
 });
 
-test('fails closed on wrong exact-main, rerun, raw artifact identity, or incomplete vectors', () => {
+test('fails closed on wrong exact-main, rerun, raw artifact identity, or incomplete vectors', SUCCESSOR_ACTIVE_TEST, () => {
   for (const [mutate, expected] of [
     [
       (value) => { value.receiptEntries[0].receipt.exactMainSha = 'e'.repeat(40); },
@@ -429,13 +443,15 @@ test('fails closed on wrong exact-main, rerun, raw artifact identity, or incompl
   }
 });
 
-test('fails closed on an incomplete receipt chain or duplicate credited V3 slot', () => {
+test('fails closed on an incomplete Successor receipt chain', SUCCESSOR_ACTIVE_TEST, () => {
   const missing = successorFixture();
   missing.receiptEntries = [];
   assert.throws(() => buildPublicForwardLiquidityV3IndependentSplitIndex({
     ...missing, independenceResult: independence(), producerCodeSha: PRODUCER,
   }), /V3_INGEST_RECEIPT_REQUIRED/);
+});
 
+test('fails closed on a duplicate credited legacy V3 slot', () => {
   const duplicate = fixture();
   duplicate.inventory.sources[0].v3SlotIndexes[1] = 0;
   const duplicateInventoryBody = { ...duplicate.inventory };
