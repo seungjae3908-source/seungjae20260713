@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   validate:
@@ -66,6 +67,263 @@ jobs:
           grep -Fq 'receiptHandle.sync()' "$RUNNER"
           grep -Fq 'canonicalJson(result)' "$RUNNER"
           if grep -Eq '^[[:space:]]+workflow_dispatch:' .github/workflows/public-forward-liquidity-capture-ingest.yml; then
-            echo 'Validation workflow must not mutate Research state.' >&2
+            echo 'Validation workflow must not mutate persistent Research state.' >&2
             exit 1
           fi
+
+  produce-authoritative-ingest-evidence:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout full repository history without credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Re-verify exact immutable capture artifact metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          verify_artifact() {
+            local id="$1"
+            local expected_name="$2"
+            local expected_digest="$3"
+            local actual_name actual_digest expired
+            actual_name="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}" --jq '.name')"
+            actual_digest="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}" --jq '.digest')"
+            expired="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}" --jq '.expired')"
+            test "$actual_name" = "$expected_name"
+            test "$actual_digest" = "sha256:${expected_digest}"
+            test "$expired" = "false"
+          }
+          verify_artifact 9706574622 public-forward-liquidity-capture-33225113204-1 7862a7889a1087ae152111e10353df41ba52c79828914751b4ea1713b42d5b41
+          verify_artifact 9706574799 public-forward-liquidity-capture-receipt-33225113204-1 01f949a0be852845da7a7676c134fee04a981a70995e87dbd5f0e95713afed9e
+          verify_artifact 9707806920 public-forward-liquidity-capture-33228872134-1 c046753315640ecd86bbde555f2520160b8cc72a47b889ab652c69cd565a307c
+          verify_artifact 9707807109 public-forward-liquidity-capture-receipt-33228872134-1 100afa58d1253d21a5ebf91be356cf4165be6f32f658a9835f89de6e49fb85a7
+          verify_artifact 9709093510 public-forward-liquidity-capture-33233044741-1 2cbc629924a0f8d42295170ad8512f12b24d2f681581b7498abab1327b3e494b
+          verify_artifact 9709093657 public-forward-liquidity-capture-receipt-33233044741-1 33f3bbfbbaeaf96277633e8d76ddf091e8148a8becea7699856228974f6e6387
+
+      - name: Download capture 33225113204
+        uses: actions/download-artifact@v4
+        with:
+          name: public-forward-liquidity-capture-33225113204-1
+          path: ${{ runner.temp }}/capture-33225113204
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: 33225113204
+
+      - name: Download capture receipt 33225113204
+        uses: actions/download-artifact@v4
+        with:
+          name: public-forward-liquidity-capture-receipt-33225113204-1
+          path: ${{ runner.temp }}/receipt-33225113204
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: 33225113204
+
+      - name: Download capture 33228872134
+        uses: actions/download-artifact@v4
+        with:
+          name: public-forward-liquidity-capture-33228872134-1
+          path: ${{ runner.temp }}/capture-33228872134
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: 33228872134
+
+      - name: Download capture receipt 33228872134
+        uses: actions/download-artifact@v4
+        with:
+          name: public-forward-liquidity-capture-receipt-33228872134-1
+          path: ${{ runner.temp }}/receipt-33228872134
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: 33228872134
+
+      - name: Download capture 33233044741
+        uses: actions/download-artifact@v4
+        with:
+          name: public-forward-liquidity-capture-33233044741-1
+          path: ${{ runner.temp }}/capture-33233044741
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: 33233044741
+
+      - name: Download capture receipt 33233044741
+        uses: actions/download-artifact@v4
+        with:
+          name: public-forward-liquidity-capture-receipt-33233044741-1
+          path: ${{ runner.temp }}/receipt-33233044741
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: 33233044741
+
+      - name: Execute real bounded ingest only in ephemeral runner state
+        shell: bash
+        run: |
+          set -euo pipefail
+          STATE_ROOT="${RUNNER_TEMP}/authoritative-liquidity-ingest-state"
+          export STATE_ROOT
+          mkdir -p "${STATE_ROOT}"
+          RUNNER='market-intelligence-sidecar/scripts/run-public-forward-liquidity-capture-ingest.mjs'
+
+          node "$RUNNER" \
+            --state-root "${STATE_ROOT}" \
+            --research-repo-root "${GITHUB_WORKSPACE}" \
+            --expected-main-sha c38ef90e258c8efac1243f90c762f567372aa126 \
+            --expected-repository "${GITHUB_REPOSITORY}" \
+            --expected-artifact-id 9706574622 \
+            --expected-artifact-digest 7862a7889a1087ae152111e10353df41ba52c79828914751b4ea1713b42d5b41 \
+            --raw-batch "${RUNNER_TEMP}/capture-33225113204/raw-batch.json" \
+            --capture-receipt "${RUNNER_TEMP}/capture-33225113204/capture-receipt.json" \
+            --artifact-receipt "${RUNNER_TEMP}/receipt-33225113204/artifact-receipt.json" \
+            --receipt-output "${STATE_ROOT}/ingest-receipts/c38ef90e258c8efac1243f90c762f567372aa126/ingest-receipt.json"
+
+          node "$RUNNER" \
+            --state-root "${STATE_ROOT}" \
+            --research-repo-root "${GITHUB_WORKSPACE}" \
+            --expected-main-sha 0a14ba9a813b2f16bb3c89a1aafa8b44ccf96577 \
+            --expected-repository "${GITHUB_REPOSITORY}" \
+            --expected-artifact-id 9707806920 \
+            --expected-artifact-digest c046753315640ecd86bbde555f2520160b8cc72a47b889ab652c69cd565a307c \
+            --raw-batch "${RUNNER_TEMP}/capture-33228872134/raw-batch.json" \
+            --capture-receipt "${RUNNER_TEMP}/capture-33228872134/capture-receipt.json" \
+            --artifact-receipt "${RUNNER_TEMP}/receipt-33228872134/artifact-receipt.json" \
+            --receipt-output "${STATE_ROOT}/ingest-receipts/0a14ba9a813b2f16bb3c89a1aafa8b44ccf96577/ingest-receipt.json"
+
+          node "$RUNNER" \
+            --state-root "${STATE_ROOT}" \
+            --research-repo-root "${GITHUB_WORKSPACE}" \
+            --expected-main-sha 24f73c547fabb7046fe7e181bfb86ec53b6964ee \
+            --expected-repository "${GITHUB_REPOSITORY}" \
+            --expected-artifact-id 9709093510 \
+            --expected-artifact-digest 2cbc629924a0f8d42295170ad8512f12b24d2f681581b7498abab1327b3e494b \
+            --raw-batch "${RUNNER_TEMP}/capture-33233044741/raw-batch.json" \
+            --capture-receipt "${RUNNER_TEMP}/capture-33233044741/capture-receipt.json" \
+            --artifact-receipt "${RUNNER_TEMP}/receipt-33233044741/artifact-receipt.json" \
+            --receipt-output "${STATE_ROOT}/ingest-receipts/24f73c547fabb7046fe7e181bfb86ec53b6964ee/ingest-receipt.json"
+
+      - name: Build portable immutable ingest evidence inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          export STATE_ROOT="${RUNNER_TEMP}/authoritative-liquidity-ingest-state"
+          node --input-type=module <<'NODE'
+          import { createHash } from 'node:crypto';
+          import { readFile, writeFile } from 'node:fs/promises';
+          import { join } from 'node:path';
+
+          const root = process.env.STATE_ROOT;
+          const headSha = process.env.HEAD_SHA;
+          const collectors = [
+            ['c38ef90e258c8efac1243f90c762f567372aa126', '33225113204', '9706574622', '7862a7889a1087ae152111e10353df41ba52c79828914751b4ea1713b42d5b41'],
+            ['0a14ba9a813b2f16bb3c89a1aafa8b44ccf96577', '33228872134', '9707806920', 'c046753315640ecd86bbde555f2520160b8cc72a47b889ab652c69cd565a307c'],
+            ['24f73c547fabb7046fe7e181bfb86ec53b6964ee', '33233044741', '9709093510', '2cbc629924a0f8d42295170ad8512f12b24d2f681581b7498abab1327b3e494b'],
+          ];
+          const canonicalize = (value) => {
+            if (Array.isArray(value)) return value.map(canonicalize);
+            if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]));
+            return value;
+          };
+          const canonicalJson = (value) => JSON.stringify(canonicalize(value));
+          const digest = (value) => createHash('sha256').update(canonicalJson(value)).digest('hex');
+          const sources = [];
+          let accepted = 0;
+          let buy = 0;
+          let sell = 0;
+          for (const [collector, runId, artifactId, artifactDigest] of collectors) {
+            const datasetRelativePath = `forward/liquidity-calibration-v1/forward_natural_sample/${collector}/dataset.json`;
+            const receiptRelativePath = `ingest-receipts/${collector}/ingest-receipt.json`;
+            const dataset = JSON.parse(await readFile(join(root, datasetRelativePath), 'utf8'));
+            const receipt = JSON.parse(await readFile(join(root, receiptRelativePath), 'utf8'));
+            accepted += dataset.observations.length;
+            for (const observation of dataset.observations) {
+              if (observation.aggressiveSide === 'BUY') buy += 1;
+              else if (observation.aggressiveSide === 'SELL') sell += 1;
+            }
+            if (receipt.datasetDigest !== dataset.datasetDigest || receipt.insertedObservationCount !== dataset.observations.length || receipt.duplicateObservationCount !== 0 || receipt.predecessorDatasetDigest !== null) {
+              throw new Error(`INGEST_EVIDENCE_INVARIANT_FAILED:${collector}`);
+            }
+            sources.push({
+              sourceIdentity: `capture-run:${runId}`,
+              captureRunId: runId,
+              captureArtifactId: artifactId,
+              captureArtifactDigest: artifactDigest,
+              collectorCodeSha: collector,
+              collectorImplementationPath: receipt.collectorImplementationPath,
+              collectorImplementationBlobSha: receipt.collectorImplementationBlobSha,
+              datasetRelativePath,
+              datasetDigest: dataset.datasetDigest,
+              ingestReceiptRelativePaths: [receiptRelativePath],
+              ingestReceiptDigest: receipt.receiptDigest,
+              rawBatchDigest: receipt.rawBatchDigest,
+              insertedObservationCount: receipt.insertedObservationCount,
+              duplicateObservationCount: receipt.duplicateObservationCount,
+              predecessorDatasetDigest: receipt.predecessorDatasetDigest,
+            });
+          }
+          if (accepted !== 116 || buy !== 0 || sell !== 116) throw new Error('RAW_ACCEPTED_TRUTH_MISMATCH');
+          const inventoryBody = {
+            schemaVersion: 'public-forward-liquidity-authoritative-ingest-inventory-v1',
+            kind: 'PUBLIC_FORWARD_LIQUIDITY_RECEIPT_BOUND_INGEST_EVIDENCE',
+            producerHeadSha: headSha,
+            executionMode: 'GITHUB_HOSTED_EPHEMERAL_STATE_ROOT',
+            persistentResearchStateMutation: false,
+            productionMutation: false,
+            rawN: 300,
+            acceptedN: accepted,
+            droppedN: 184,
+            buyN: buy,
+            sellN: sell,
+            independentSampleCredit: 0,
+            sources,
+            fullCostReady: false,
+            evidenceComplete: 0,
+            executionAuthority: 'NONE',
+            privateApiUsed: false,
+            liveTrading: false,
+            realOrders: 0,
+          };
+          const inventory = { ...inventoryBody, inventoryDigest: digest(inventoryBody) };
+          await writeFile(join(root, 'portable-source-inventory.json'), `${canonicalJson(inventory)}\n`, 'utf8');
+          const reportBody = {
+            schemaVersion: 'public-forward-liquidity-authoritative-ingest-report-v1',
+            realIngestExecuted: true,
+            realIngestAuthority: 'IMMUTABLE_GITHUB_ARTIFACT_EPHEMERAL_CANONICAL_STORE',
+            producerHeadSha: headSha,
+            sourceInventoryDigest: inventory.inventoryDigest,
+            sourceCount: sources.length,
+            canonicalDatasetDigests: sources.map((source) => source.datasetDigest),
+            ingestReceiptDigests: sources.map((source) => source.ingestReceiptDigest),
+            collectorImplementationBlobShas: sources.map((source) => source.collectorImplementationBlobSha),
+            rawN: 300,
+            acceptedN: accepted,
+            droppedN: 184,
+            buyN: buy,
+            sellN: sell,
+            effectiveIndependentN: null,
+            buyCoverageProven: false,
+            fullCostReady: false,
+            evidenceComplete: 0,
+            persistentResearchStateMutation: false,
+            executionAuthority: 'NONE',
+          };
+          const report = { ...reportBody, reportDigest: digest(reportBody) };
+          await writeFile(join(root, 'ingest-evidence-report.json'), `${canonicalJson(report)}\n`, 'utf8');
+          NODE
+
+      - name: Upload immutable receipt-bound ingest evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-forward-liquidity-authoritative-ingest-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/authoritative-liquidity-ingest-state
+          if-no-files-found: error
+          retention-days: 90
