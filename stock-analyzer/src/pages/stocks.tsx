@@ -149,14 +149,15 @@ export default function StocksPage() {
 
         {/* 1) 주식은 canonical search, 코인은 기존 실제 티커 검색 */}
         {mode.asset === 'stock' ? (
-          <UnifiedAssetSearch
-            asset="stock"
-            market={mode.stockMarket}
-            allowedMarkets={[mode.stockMarket]}
-            placeholder="종목명·코드·영문명 검색"
-            className="mt-1.5"
-            onSelect={(item) => navigate(unifiedAssetDetailPath(item, '/market-browser'))}
-          />
+          <div className="mt-1.5">
+            <UnifiedAssetSearch
+              asset="stock"
+              market={mode.stockMarket}
+              allowedMarkets={[mode.stockMarket]}
+              placeholder="종목명·코드·영문명 검색"
+              onSelect={(item) => navigate(unifiedAssetDetailPath(item, '/market-browser'))}
+            />
+          </div>
         ) : (
           <label className="mt-1.5 flex h-11 items-center gap-2 rounded-2xl border border-card-border bg-card px-3">
             <Search className="h-4 w-4 text-muted-foreground" />
