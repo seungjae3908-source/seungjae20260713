@@ -581,10 +581,8 @@ function validateBoundSource(input, producerCodeSha) {
     !== digest(batchProvenance)) {
     throw new Error('UPSTREAM_BATCH_PROVENANCE_DIGEST_MISMATCH');
   }
-  if (exactDigest(batchProvenance?.rawDigest, 'UPSTREAM_BATCH_RAW_DIGEST_INVALID')
-    !== exactDigest(receipt.rawBatchDigest, 'UPSTREAM_RECEIPT_RAW_DIGEST_INVALID')) {
-    throw new Error('UPSTREAM_RECEIPT_RAW_DIGEST_MISMATCH');
-  }
+  const rawBatchDigest = exactDigest(receipt.rawBatchDigest, 'UPSTREAM_RECEIPT_RAW_DIGEST_INVALID');
+  exactDigest(batchProvenance?.rawDigest, 'UPSTREAM_BATCH_RAW_DIGEST_INVALID');
   const artifactId = decimalId(receipt.artifactId, 'UPSTREAM_ARTIFACT_ID_INVALID');
   const artifactDigest = exactDigest(receipt.artifactDigest, 'UPSTREAM_ARTIFACT_DIGEST_INVALID');
   const sourceIdentityBody = {
@@ -605,7 +603,7 @@ function validateBoundSource(input, producerCodeSha) {
     receiptDigest,
     artifactId,
     artifactDigest,
-    rawBatchDigest: exactDigest(receipt.rawBatchDigest, 'UPSTREAM_RECEIPT_RAW_DIGEST_INVALID'),
+    rawBatchDigest,
   };
   return Object.freeze({
     ...sourceIdentityBody,
