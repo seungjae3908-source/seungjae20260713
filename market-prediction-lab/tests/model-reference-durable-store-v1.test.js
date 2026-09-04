@@ -209,11 +209,16 @@ test("only VALID genuine future manifests can enter the durable receipt", () => 
 
 test("durable publisher workflow is main-only, immutability-gated, digest-bound, and preserves the #693 package layout", async () => {
   const workflow = await readFile(new URL("../../.github/workflows/prediction-lab-52d-validation.yml", import.meta.url), "utf8");
+  const policyWorkflow = await readFile(new URL("../../.github/workflows/prediction-lab-model-reference-durable-policy.yml", import.meta.url), "utf8");
   assert.match(workflow, /publish-durable-reference:/u);
   assert.match(workflow, /github\.event_name == 'workflow_dispatch'/u);
   assert.match(workflow, /contents:\s*write/u);
-  assert.match(workflow, /\/immutable-releases/u);
-  assert.match(workflow, /immutable[^\n]+true/u);
+  assert.match(workflow, /durable-policy-preflight:/u);
+  assert.match(policyWorkflow, /workflow_call:/u);
+  assert.match(policyWorkflow, /\/immutable-releases/u);
+  assert.match(policyWorkflow, /PREDICTION_LAB_IMMUTABLE_RELEASE_POLICY_TOKEN/u);
+  assert.match(policyWorkflow, /Administration:read/u);
+  assert.match(policyWorkflow, /immutable[^\n]+true/u);
   assert.match(workflow, /createRelease/u);
   assert.match(workflow, /draft:\s*true/u);
   assert.match(workflow, /uploadReleaseAsset/u);
@@ -230,6 +235,7 @@ test("durable publisher workflow is main-only, immutability-gated, digest-bound,
   assert.match(workflow, /DURABLE_REFERENCE_STORE_NOT_READY/u);
   assert.match(workflow, /LONG_TERM_REFERENCE_PROVEN=true/u);
   assert.doesNotMatch(workflow, /Final Holdout/iu);
+  assert.doesNotMatch(policyWorkflow, /createRelease|uploadReleaseAsset|updateRelease/u);
 });
 
 test("durable receipt keeps all trading safety invariants locked", () => {

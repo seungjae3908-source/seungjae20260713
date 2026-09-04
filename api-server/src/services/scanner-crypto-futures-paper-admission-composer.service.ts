@@ -14,6 +14,7 @@ import type { ScannerCanonicalPaperCandidate } from './scanner-canonical-paper-i
 import {
   buildScannerCanonicalPaperAdmissionEvidence,
   type CanonicalPaperAdmissionEvidenceResult,
+  type CanonicalPaperRiskPolicyIdentity,
 } from './scanner-paper-admission-evidence-bundle.service';
 import type {
   PercentCostEvidence,
@@ -106,6 +107,11 @@ export type ScannerCryptoFuturesPaperAdmissionComposition = Readonly<{
   productionMutationAllowed: false;
 }>;
 
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
 function finite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
@@ -117,6 +123,9 @@ function nonNegative(value: unknown): value is number {
 }
 function nonEmpty(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
+}
+function exactSha(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{40}$/u.test(value);
 }
 function add(blockers: string[], code: string, condition = true) {
   if (condition && !blockers.includes(code)) blockers.push(code);
@@ -191,6 +200,27 @@ function validSupplementalCost(
     && (value?.quality === 'OBSERVED' || value?.quality === 'ESTIMATED' || value?.quality === 'DOCUMENTED')
     && nonEmpty(value?.source)
     && fresh(value?.observedAtMs, nowMs, maxEvidenceAgeMs);
+}
+
+function riskPolicyIdentityFromFunding(
+  funding: unknown,
+  expectedResearchCodeSha: unknown,
+): CanonicalPaperRiskPolicyIdentity | null {
+  const fundingRecord = record(funding);
+  const identity = record(fundingRecord?.riskPolicyIdentity);
+  if (!identity
+    || !nonEmpty(identity.policyId)
+    || !nonEmpty(identity.policyVersion)
+    || !nonEmpty(identity.source)
+    || !exactSha(identity.researchCodeSha)
+    || !exactSha(expectedResearchCodeSha)
+    || identity.researchCodeSha !== expectedResearchCodeSha) return null;
+  return Object.freeze({
+    policyId: identity.policyId.trim(),
+    policyVersion: identity.policyVersion.trim(),
+    source: identity.source.trim(),
+    researchCodeSha: identity.researchCodeSha,
+  });
 }
 
 export function composeScannerCryptoFuturesPaperAdmission(
@@ -277,6 +307,11 @@ export function composeScannerCryptoFuturesPaperAdmission(
     !validSupplementalCost(input.supplementalCostEvidence?.partialFillImpact, nowMs, maxEvidenceAgeMs));
   add(blockers, 'P0_C5_FUNDING_COST_EVIDENCE_REQUIRED',
     !validSupplementalCost(input.supplementalCostEvidence?.funding, nowMs, maxEvidenceAgeMs));
+  const riskPolicyIdentity = riskPolicyIdentityFromFunding(
+    input.supplementalCostEvidence?.funding,
+    signal?.strategyIdentity?.researchCodeSha,
+  );
+  add(blockers, 'P0_C5_RISK_POLICY_IDENTITY_REQUIRED', riskPolicyIdentity == null);
 
   const entryPrice = input.learningSnapshot?.entryPrice;
   const stopLoss = input.learningSnapshot?.stopLoss;
@@ -288,7 +323,7 @@ export function composeScannerCryptoFuturesPaperAdmission(
   const spread = spreadPercent(publicEvidence?.bidPrice, publicEvidence?.askPrice);
   add(blockers, 'P0_C5_SPREAD_EVIDENCE_INVALID', spread == null);
   if (blockers.length > 0 || !signal || !side || !positive(entryPrice) || !positive(stopLoss)
-    || spread == null || !input.supplementalCostEvidence?.funding) {
+    || spread == null || !input.supplementalCostEvidence?.funding || !riskPolicyIdentity) {
     return blocked(blockers);
   }
   const supplemental = input.supplementalCostEvidence;
@@ -438,6 +473,7 @@ export function composeScannerCryptoFuturesPaperAdmission(
     learningSnapshot: input.learningSnapshot,
     riskInput,
     riskResult,
+    riskPolicyIdentity,
     paperEvidence,
     supplementalCostEvidence: input.supplementalCostEvidence,
     executionDataEvidence,
