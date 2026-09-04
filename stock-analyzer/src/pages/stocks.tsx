@@ -5,9 +5,11 @@ import { Search, Star } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import { AssetSwitch } from '@/components/asset-switch';
 import { ErrorState, LoadingState } from '@/components/data-state';
+import { UnifiedAssetSearch } from '@/components/unified-asset-search';
 import { api, apiGet } from '@/lib/api';
 import { useAssetMode } from '@/lib/asset-mode';
 import { displayCoinName, displayStockName, formatAppPercent, formatAppPrice } from '@/lib/stock-display';
+import { unifiedAssetDetailPath } from '@/lib/unified-asset-search';
 import { cn } from '@/lib/utils';
 
 type AnyObj = Record<string, any>;
@@ -51,15 +53,9 @@ export default function StocksPage() {
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<CategoryKey>('ai');
   const trimmed = query.trim();
-  const searching = trimmed.length > 0;
+  const searching = mode.asset === 'coin' && trimmed.length > 0;
 
-  // ── 검색용 데이터 (기존 체계 유지) ──────────────────────────────
-  const stockRows = useQuery({
-    queryKey: ['stocks-directory', mode.stockMarket, trimmed],
-    queryFn: () => api.searchRows(trimmed),
-    enabled: mode.asset === 'stock' && searching,
-    staleTime: 30_000,
-  });
+  // ── 코인 검색용 데이터 (주식 검색은 canonical UnifiedAssetSearch 재사용) ──
   const spotMarkets = useQuery({
     queryKey: ['stocks-crypto-spot-markets'],
     queryFn: () => apiGet<AnyObj>('/crypto/spot/markets'),
@@ -127,14 +123,7 @@ export default function StocksPage() {
     return rows.slice(0, 100);
   }, [category, coinCategorySupported, coinSource, mode.asset]);
 
-  // ── 검색 결과 (현재 선택 자산·시장 우선) ────────────────────────
-  const searchStocks = useMemo(() => {
-    if (mode.asset !== 'stock' || !searching) return [] as AnyObj[];
-    const rows = (stockRows.data?.results ?? []) as AnyObj[];
-    return [...rows]
-      .sort((a, b) => (a.market === mode.stockMarket ? -1 : 0) - (b.market === mode.stockMarket ? -1 : 0))
-      .slice(0, 100);
-  }, [mode.asset, mode.stockMarket, searching, stockRows.data]);
+  // ── 코인 검색 결과 ──────────────────────────────────────────────
   const searchCoins = useMemo(() => {
     if (mode.asset !== 'coin' || !searching) return [] as AnyObj[];
     const needle = trimmed.toLowerCase();
@@ -158,16 +147,27 @@ export default function StocksPage() {
       <header className="border-b border-card-border px-4 pb-3 pt-4">
         <h1 className="text-xl font-black text-center">종목</h1>
 
-        {/* 1) 종목 검색창 — 제목 바로 아래에 붙여 하나의 상단 영역처럼 보이게(작은 간격). 입력 텍스트 왼쪽 정렬 유지 */}
-        <label className="mt-1.5 flex h-11 items-center gap-2 rounded-2xl border border-card-border bg-card px-3">
-          <Search className="h-4 w-4 text-muted-foreground" />
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder={mode.asset === 'stock' ? '종목명·코드·영문명 검색' : '코인명·심볼 검색'}
-            className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none"
+        {/* 1) 주식은 canonical search, 코인은 기존 실제 티커 검색 */}
+        {mode.asset === 'stock' ? (
+          <UnifiedAssetSearch
+            asset="stock"
+            market={mode.stockMarket}
+            allowedMarkets={[mode.stockMarket]}
+            placeholder="종목명·코드·영문명 검색"
+            className="mt-1.5"
+            onSelect={(item) => navigate(unifiedAssetDetailPath(item, '/market-browser'))}
           />
-        </label>
+        ) : (
+          <label className="mt-1.5 flex h-11 items-center gap-2 rounded-2xl border border-card-border bg-card px-3">
+            <Search className="h-4 w-4 text-muted-foreground" />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="코인명·심볼 검색"
+              className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none"
+            />
+          </label>
+        )}
 
         {/* 2) [주식][코인]  3) [국내][해외] / [현물][선물] */}
         <AssetSwitch className="mt-3" />
@@ -191,44 +191,23 @@ export default function StocksPage() {
       </header>
 
       <main className="space-y-4 px-4 pb-6 pt-4">
-        {/* 검색 중이면 검색 결과가 분류 목록 위 */}
-        {searching && (
+        {/* 코인 검색 중이면 검색 결과가 분류 목록 위. 주식 결과는 UnifiedAssetSearch가 소유한다. */}
+        {mode.asset === 'coin' && searching && (
           <section>
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-sm font-black">검색 결과</h2>
-              <span className="text-[11px] font-bold text-muted-foreground">
-                {mode.asset === 'stock'
-                  ? (stockRows.data ? `${searchStocks.length}개` : '조회 중')
-                  : `${searchCoins.length}개`}
-              </span>
+              <span className="text-[11px] font-bold text-muted-foreground">{searchCoins.length}개</span>
             </div>
-            {mode.asset === 'stock' ? (
-              <>
-                {stockRows.isLoading && <LoadingState label="실제 종목을 검색하는 중입니다." />}
-                {stockRows.isError && <ErrorState onRetry={() => { void stockRows.refetch(); }} />}
-                {!stockRows.isLoading && !stockRows.isError && searchStocks.length === 0 && (
-                  <EmptyBox>검색어와 일치하는 실제 종목 데이터가 없습니다.</EmptyBox>
-                )}
-                <div className="space-y-2">
-                  {searchStocks.map((stock) => (
-                    <StockRow key={`${stock.market}:${stock.ticker}`} stock={stock} onClick={() => openStock(String(stock.ticker))} />
-                  ))}
-                </div>
-              </>
-            ) : (
-              <>
-                {coinTickerQuery.isLoading && <LoadingState label="실제 코인 시세를 불러오는 중입니다." />}
-                {coinTickerQuery.isError && <ErrorState onRetry={() => { void coinTickerQuery.refetch(); }} />}
-                {!coinTickerQuery.isLoading && !coinTickerQuery.isError && searchCoins.length === 0 && (
-                  <EmptyBox>검색어와 일치하는 실제 코인 데이터가 없습니다.</EmptyBox>
-                )}
-                <div className="space-y-2">
-                  {searchCoins.map((row) => (
-                    <CoinRow key={String(row.symbol)} row={row} coinMarket={mode.coinMarket} onClick={() => openCoin(String(row.symbol))} />
-                  ))}
-                </div>
-              </>
+            {coinTickerQuery.isLoading && <LoadingState label="실제 코인 시세를 불러오는 중입니다." />}
+            {coinTickerQuery.isError && <ErrorState onRetry={() => { void coinTickerQuery.refetch(); }} />}
+            {!coinTickerQuery.isLoading && !coinTickerQuery.isError && searchCoins.length === 0 && (
+              <EmptyBox>검색어와 일치하는 실제 코인 데이터가 없습니다.</EmptyBox>
             )}
+            <div className="space-y-2">
+              {searchCoins.map((row) => (
+                <CoinRow key={String(row.symbol)} row={row} coinMarket={mode.coinMarket} onClick={() => openCoin(String(row.symbol))} />
+              ))}
+            </div>
           </section>
         )}
 
