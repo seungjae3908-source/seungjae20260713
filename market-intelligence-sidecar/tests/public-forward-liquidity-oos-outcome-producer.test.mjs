@@ -57,6 +57,16 @@ const SPLIT_PRODUCER_SHA = 'c'.repeat(40);
 const OUTCOME_PRODUCER_SHA = 'd'.repeat(40);
 const COLLECTOR_PATH = 'market-intelligence-sidecar/src/public-forward-liquidity-calibration.mjs';
 const DATASET_PATH = `forward/liquidity-calibration-v1/forward_natural_sample/${COLLECTOR_SHA}/dataset.json`;
+const SUCCESSOR_ACTIVE_TEST = Object.freeze({
+  skip: SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.activationBound !== true
+    ? 'preserved inactive-contract regression mode'
+    : false,
+});
+const SUCCESSOR_INACTIVE_TEST = Object.freeze({
+  skip: SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.activationBound === true
+    ? 'active exact-head validation mode'
+    : false,
+});
 
 function bookFrame({ marketTimestampMs, seed }) {
   return normalizeBitgetPublicOrderBookFrame({
@@ -722,7 +732,7 @@ function resignNativeIndex(index, mutate) {
   return { ...value, indexDigest: sha256(canonicalJson(value)) };
 }
 
-test('native Successor V3 OOS index selects the exact frozen 5000ms public outcome', () => {
+test('native Successor V3 OOS index selects the exact frozen 5000ms public outcome', SUCCESSOR_ACTIVE_TEST, () => {
   const fixture = nativeSuccessorFixture();
   const indexVerdict = validatePublicForwardLiquiditySuccessorV3SplitIndex(fixture.v3SplitIndex);
   assert.equal(indexVerdict.valid, true);
@@ -757,7 +767,7 @@ test('native Successor V3 OOS index selects the exact frozen 5000ms public outco
   }).blockers.includes('SUCCESSOR_V3_OOS_OUTCOME_LINEAGE_MISMATCH'));
 });
 
-test('current genuine TRAIN lineage remains missing OOS evidence instead of becoming zero-valued proof', () => {
+test('current genuine TRAIN lineage remains missing OOS evidence instead of becoming zero-valued proof', SUCCESSOR_ACTIVE_TEST, () => {
   const fixture = nativeSuccessorFixture({ slotIndex: 20 });
   const result = produceNative(fixture);
   assert.equal(result.status, 'BLOCKED_DATA');
@@ -769,7 +779,7 @@ test('current genuine TRAIN lineage remains missing OOS evidence instead of beco
   assert.equal(result.executionAuthority, 'NONE');
 });
 
-test('native Successor V3 index rejects legacy-family relabel, horizon drift, and split drift', () => {
+test('native Successor V3 index rejects legacy-family relabel, horizon drift, and split drift', SUCCESSOR_ACTIVE_TEST, () => {
   const fixture = nativeSuccessorFixture();
   const wrongFamily = resignNativeIndex(fixture.v3SplitIndex, (index) => {
     index.sourceContractFamily = 'CALIBRATION_V3';
@@ -795,7 +805,7 @@ test('native Successor V3 index rejects legacy-family relabel, horizon drift, an
     .includes('SUCCESSOR_V3_INDEX_ASSIGNMENT_FROZEN_SPLIT_MISMATCH'));
 });
 
-test('native Successor V3 producer rejects tampered receipt lineage and never promotes economics', () => {
+test('native Successor V3 producer rejects tampered receipt lineage and never promotes economics', SUCCESSOR_ACTIVE_TEST, () => {
   const fixture = nativeSuccessorFixture();
   fixture.sources[0].ingestReceipts[0].sourceV3Lineage.artifactReceiptDigest = sha256('forged');
   const result = produceNative(fixture);
@@ -807,4 +817,13 @@ test('native Successor V3 producer rejects tampered receipt lineage and never pr
   assert.equal(result.fullCostReady, false);
   assert.equal(result.evidenceCompleteCredit, 0);
   assert.equal(result.executionAuthority, 'NONE');
+});
+
+test('native Successor V3 OOS admission fails closed while activation binding is absent', SUCCESSOR_INACTIVE_TEST, () => {
+  const verdict = validatePublicForwardLiquiditySuccessorV3SplitIndex({
+    schemaVersion: PUBLIC_FORWARD_LIQUIDITY_V3_INDEPENDENT_SPLIT_INDEX_VERSION,
+    kind: 'PUBLIC_FORWARD_LIQUIDITY_V3_FROZEN_SPLIT_PROPAGATION',
+  });
+  assert.equal(verdict.valid, false);
+  assert.ok(verdict.blockers.includes('SUCCESSOR_V3_SCHEDULE_RELIABILITY_CONTRACT_INVALID'));
 });
