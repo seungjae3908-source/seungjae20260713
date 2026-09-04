@@ -35,6 +35,7 @@ const required = [
   'frozenV3SplitIndexPresent: true',
   'v2SplitReceiptPresent: false',
   'Upload immutable V3 independence evidence',
+  'STATE_ROOT: /tmp/v3-authoritative-liquidity-ingest-${{ github.run_id }}-${{ github.run_attempt }}',
 ];
 for (const token of required) {
   assert.ok(workflow.includes(token), `V3 independence workflow missing contract token: ${token}`);
@@ -55,6 +56,7 @@ for (const forbidden of [
   'AUTO_TRADING=true',
   'ORDER_SUBMIT',
   'workflow_dispatch:',
+  'STATE_ROOT: ${{ runner.temp }}',
 ]) {
   assert.ok(!workflow.includes(forbidden), `V3 independence workflow contains forbidden legacy/authority token: ${forbidden}`);
 }
