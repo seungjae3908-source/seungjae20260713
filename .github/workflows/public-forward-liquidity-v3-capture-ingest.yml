@@ -111,8 +111,6 @@ jobs:
     timeout-minutes: 25
     env:
       GH_TOKEN: ${{ github.token }}
-      SOURCE_ROOT: ${{ runner.temp }}/v3-liquidity-source-runs
-      STATE_ROOT: ${{ runner.temp }}/v3-authoritative-liquidity-ingest-state
     steps:
       - uses: actions/checkout@v4
         with:
@@ -123,6 +121,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+
+      - name: Initialize ephemeral runner paths
+        env:
+          SOURCE_ROOT: ${{ runner.temp }}/v3-liquidity-source-runs
+          STATE_ROOT: ${{ runner.temp }}/v3-authoritative-liquidity-ingest-state
+        run: |
+          printf 'SOURCE_ROOT=%s\n' "$SOURCE_ROOT" >> "$GITHUB_ENV"
+          printf 'STATE_ROOT=%s\n' "$STATE_ROOT" >> "$GITHUB_ENV"
 
       - name: Resolve exact triggering or owner-selected source run
         id: source
