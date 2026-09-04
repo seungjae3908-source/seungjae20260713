@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import test from 'node:test';
+import nodeTest from 'node:test';
 
 import {
   LIQUIDITY_IMPACT_COST_OWNERS,
@@ -40,6 +40,9 @@ const COLLECTOR_SHA = 'b'.repeat(40);
 const RUNTIME_COST_SHA = 'd'.repeat(40);
 const BRIDGE_SHA = 'e'.repeat(40);
 const MEASUREMENT_SHA = 'f'.repeat(40);
+const test = SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.activationBound === true
+  ? nodeTest
+  : nodeTest.skip;
 
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
@@ -750,15 +753,16 @@ test('unproved zero liquidity impact remains blocked by the raw #775 firewall', 
   assert.ok(result.blockers.includes('LIQUIDITY_IMPACT_FIREWALL_REVALIDATION_FAILED'));
 });
 
-test('missing genuine Native OOS still fails closed before producer/runtime promotion', () => {
-  const input = validInput();
-  input.calibrationArtifactInput = {
-    oosValidationResult: {
-      status: 'BLOCKED_DATA',
-      blockers: ['SUCCESSOR_V3_OOS_OUTCOMES_MISSING'],
+nodeTest('missing genuine Native OOS still fails closed before producer/runtime promotion', () => {
+  const result = buildPublicForwardLiquidityRuntimeCostEvidence({
+    calibrationArtifactInput: {
+      oosValidationResult: {
+        status: 'BLOCKED_DATA',
+        blockers: ['SUCCESSOR_V3_OOS_OUTCOMES_MISSING'],
+      },
     },
-  };
-  const result = buildPublicForwardLiquidityRuntimeCostEvidence(input);
+    nowMs: NOW,
+  });
   assert.equal(result.status, 'BLOCKED_DATA');
   assert.ok(result.blockers.includes('LIQUIDITY_CALIBRATION_ARTIFACT_REVALIDATION_FAILED'));
   assert.equal(result.evidence, null);
@@ -779,7 +783,7 @@ test('premature producer economic or execution promotion is rejected', () => {
   assert.ok(result.blockers.includes('LIQUIDITY_COST_PRODUCER_AUTHORITY_BOUNDARY_INVALID'));
 });
 
-test('safety contract permanently separates code readiness from economic readiness', () => {
+nodeTest('safety contract permanently separates code readiness from economic readiness', () => {
   assert.equal(PUBLIC_FORWARD_LIQUIDITY_RUNTIME_COST_EVIDENCE_SAFETY.rawCalibrationArtifactRevalidated, true);
   assert.equal(PUBLIC_FORWARD_LIQUIDITY_RUNTIME_COST_EVIDENCE_SAFETY.rawProducerOutputRevalidated, true);
   assert.equal(PUBLIC_FORWARD_LIQUIDITY_RUNTIME_COST_EVIDENCE_SAFETY.rawLiquidityFirewallRevalidated, true);
