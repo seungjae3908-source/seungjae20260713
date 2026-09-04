@@ -31,7 +31,7 @@ export interface RecommendationRow {
   category: RecoCategory;
   categoryLabel: string;
   price: number;
-  changePercent: number;
+  changePercent: number | null;
   reasons: string[];        // 선정 근거 (실제 수치 포함)
   usedData: string[];       // 사용한 실제 데이터 항목
   missingData: string[];    // 데이터 부족(미반영) 항목
@@ -47,7 +47,7 @@ export interface RecommendationRow {
   targetBasis: string;          // 목표가 산출 근거
   stopLoss: number | null;      // null = 산출 불가
   stopBasis: string;
-  score: number;                // 상승 가능성 점수 0-100
+  score: number;                // 규칙 점수 0-100 (확률/승률 아님)
   generatedAt: string;
   dataUpdatedAt: string;        // 마지막 캔들/시세 기준 시각
   providers: string[];          // 실제 데이터 공급자
@@ -159,6 +159,12 @@ function roundPrice(v: number, currency: 'KRW' | 'USD'): number {
   return currency === 'KRW' ? Math.round(v) : round2(v);
 }
 
+export function normalizeRecommendationChangePercent(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const numeric = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
 const DELIST_PATTERN = /관리종목|상장폐지|거래정지|투자주의|투자경고|투자위험/;
 const OFFERING_PATTERN = /유상증자|CB|BW|전환사채|신주인수권|ATM|오퍼링|증자/i;
 
@@ -166,7 +172,7 @@ interface Analyzed {
   entry: CatalogEntry;
   candles: Candle[];
   price: number;
-  changePercent: number;
+  changePercent: number | null;
   dataUpdatedAt: string;
   providers: string[];
   ctx: SignalContext;
@@ -270,7 +276,9 @@ async function analyze(entry: CatalogEntry): Promise<{ a: Analyzed | null; exclu
       entry,
       candles,
       price: quote.price,
-      changePercent: Number(quote.changePercent ?? 0),
+      changePercent: normalizeRecommendationChangePercent(
+        (quote as { changePercent?: unknown }).changePercent,
+      ),
       dataUpdatedAt: String((quote as any).updatedAt ?? lastDate?.toISOString() ?? new Date().toISOString()),
       providers: Array.from(
         new Set([meta?.provider ?? 'unknown', entry.market === 'KR' ? 'naver/dart' : 'yahoo/sec-edgar', 'google-news']),
@@ -329,7 +337,7 @@ function financialStability(a: Analyzed): RecommendationRow['financialStability'
 }
 
 function buildUndervalued(a: Analyzed): RecommendationRow | null {
-  const used: string[] = ['일봉(캔들)', '현재가/등락률', '거래량·거래대금'];
+  const used: string[] = ['일봉(캔들)', '현재가', '거래량·거래대금'];
   const missing: string[] = [];
   const reasons: string[] = [];
 
@@ -441,7 +449,7 @@ function buildUndervalued(a: Analyzed): RecommendationRow | null {
 }
 
 function buildBreakout(a: Analyzed): RecommendationRow | null {
-  const used: string[] = ['일봉(캔들)', '현재가/등락률', '거래량·거래대금', 'RSI', 'MACD', '이동평균선'];
+  const used: string[] = ['일봉(캔들)', '현재가', '거래량·거래대금', 'RSI', 'MACD', '이동평균선'];
   const missing: string[] = [];
   const reasons: string[] = [];
 
@@ -477,7 +485,6 @@ function buildBreakout(a: Analyzed): RecommendationRow | null {
     if (a.rsi >= 72) return null;
     reasons.push(`RSI ${round2(a.rsi)} (과열 아님)`);
   } else missing.push('RSI');
-
   if (a.macdHist != null) {
     if (a.macdHist > 0) reasons.push('MACD 히스토그램 양전환');
   } else missing.push('MACD');
