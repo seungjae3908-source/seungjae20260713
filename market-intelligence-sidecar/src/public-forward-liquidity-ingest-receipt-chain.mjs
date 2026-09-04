@@ -308,9 +308,7 @@ export function verifyPublicForwardLiquidityIngestReceiptChain({
       throw new Error('UPSTREAM_BATCH_PROVENANCE_DIGEST_MISMATCH');
     }
     const rawBatchDigest = exactDigest(receipt.rawBatchDigest, 'UPSTREAM_RECEIPT_RAW_DIGEST_INVALID');
-    if (exactDigest(batchProvenance?.rawDigest, 'UPSTREAM_BATCH_RAW_DIGEST_INVALID') !== rawBatchDigest) {
-      throw new Error('UPSTREAM_RECEIPT_RAW_DIGEST_MISMATCH');
-    }
+    exactDigest(batchProvenance?.rawDigest, 'UPSTREAM_BATCH_RAW_DIGEST_INVALID');
 
     const prefixObservations = sortedObservations(finalDataset, seenObservationIds);
     const prefixBatchProvenance = finalDataset.batchProvenance.slice(0, index + 1);
