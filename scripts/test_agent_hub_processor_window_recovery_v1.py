@@ -116,6 +116,40 @@ class ProcessorWindowRecoveryTests(unittest.TestCase):
         self.assertEqual(filtered, ())
         self.assertEqual(rollover.unresolved_control_work(filtered), [])
 
+    def test_unregistered_owner_report_with_extra_fields_is_continuity_only(self) -> None:
+        report = worker_report(13, "ChatGPT Direct Work")
+        report["body"] = str(report["body"]) + "\ncanonical_hub: 660"
+        filtered = coordinator_actionable_control_comments((report,), "owner/repo")
+        self.assertEqual(filtered, ())
+        self.assertEqual(rollover.unresolved_control_work(filtered), [])
+
+    def test_bracket_suffixed_legacy_worker_report_is_continuity_only(self) -> None:
+        legacy = {
+            "id": 14,
+            "body": "\n".join([
+                "[WORKER_REPORT][PAPER_PROFITABILITY_SETTLEMENT]",
+                "schema_version: 2",
+                "status: BLOCKED_DATA / WAIT_AUTHORITATIVE_EVIDENCE",
+                "canonical_hub: 660",
+            ]),
+            "user": {"login": "owner"},
+            "author_association": "OWNER",
+        }
+        filtered = coordinator_actionable_control_comments((legacy,), "owner/repo")
+        self.assertEqual(filtered, ())
+        self.assertEqual(rollover.unresolved_control_work(filtered), [])
+
+    def test_exact_marker_missing_worker_still_blocks_rollover(self) -> None:
+        malformed = {
+            "id": 15,
+            "body": "[WORKER_REPORT]\nschema_version: 2\nstatus: partial",
+            "user": {"login": "owner"},
+            "author_association": "OWNER",
+        }
+        filtered = coordinator_actionable_control_comments((malformed,), "owner/repo")
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(rollover.unresolved_control_work(filtered), ["pending_report:15:unknown"])
+
     def test_registered_schema_v2_owner_report_still_blocks_rollover(self) -> None:
         filtered = coordinator_actionable_control_comments((worker_report(11, "ai-chart"),), "owner/repo")
         self.assertEqual(len(filtered), 1)
