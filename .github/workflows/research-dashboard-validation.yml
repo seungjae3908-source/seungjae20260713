@@ -1,0 +1,161 @@
+name: Research Dashboard Validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'research-dashboard/**'
+      - '.github/workflows/research-dashboard-validation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Syntax and unit tests
+        working-directory: research-dashboard
+        run: |
+          npm run check
+          npm test
+          python3 -m py_compile server.py
+          python3 test/test_server.py
+      - name: Validate exact Python server startup and read-only aggregation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          tmp="$(mktemp -d)"
+          pid=''
+          cleanup() {
+            if [[ -n "$pid" ]]; then kill "$pid" >/dev/null 2>&1 || true; fi
+            rm -rf "$tmp"
+          }
+          trap cleanup EXIT
+
+          state="$tmp/state"
+          mkdir -p "$state/latest" "$state/forward/paper/status" "$state/forward/paper/state"
+          cat >"$state/latest/forward.json" <<'JSON'
+          {
+            "status": "complete",
+            "cycleId": "fixture-forward",
+            "researchSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "generatedAt": 1787010000000,
+            "taskCount": 2,
+            "successCount": 2,
+            "blockedDataCount": 0,
+            "failedCount": 0,
+            "results": [
+              {"id":"paper-forward","status":"success","durationMs":1200},
+              {"id":"shadow-forward","status":"success","durationMs":800}
+            ]
+          }
+          JSON
+          cat >"$state/forward/paper/status/runtime-status.json" <<'JSON'
+          {
+            "status":"COMPLETED",
+            "cycleId":"fixture-paper",
+            "scheduleActive":true,
+            "allProvidersReady":true,
+            "publicForwardEvidenceAccumulating":true,
+            "paperTradeOutcomeAccumulating":true,
+            "privateRequestCount":0,
+            "financialMutationCount":0,
+            "orderCount":0,
+            "liveTrading":false,
+            "orderAuthority":false,
+            "lanes":[{"market":"KR","status":"READY"},{"market":"US","status":"READY"}]
+          }
+          JSON
+          cat >"$state/forward/paper/state/recurring-paper-loop.json" <<'JSON'
+          {"cycles":[{"id":"1"}],"samples":[],"positions":[{"id":"p1"},{"id":"p2"}],"settlements":[{"id":"s1"}]}
+          JSON
+          cat >"$state/forward/shadow-state.json" <<'JSON'
+          {"groups":{"fixture":{"records":[{"status":"settled"},{"status":"pending"}]}}}
+          JSON
+
+          RESEARCH_DASHBOARD_HOST=127.0.0.1 \
+          RESEARCH_DASHBOARD_PORT=18091 \
+          RESEARCH_STATE_ROOT="$state" \
+            python3 research-dashboard/server.py >"$tmp/server.log" 2>&1 &
+          pid=$!
+          ready=false
+          for _ in $(seq 1 20); do
+            if curl --fail --silent --show-error --max-time 2 http://127.0.0.1:18091/api/health >"$tmp/health.json"; then
+              ready=true
+              break
+            fi
+            if ! kill -0 "$pid" >/dev/null 2>&1; then
+              cat "$tmp/server.log" >&2
+              exit 1
+            fi
+            sleep 0.25
+          done
+          [[ "$ready" == true ]]
+          curl --fail --silent --show-error --max-time 3 http://127.0.0.1:18091/api/research/overview >"$tmp/overview.json"
+          python3 - "$tmp/health.json" "$tmp/overview.json" <<'PY'
+          import json, sys
+          health = json.load(open(sys.argv[1], encoding='utf-8'))
+          overview = json.load(open(sys.argv[2], encoding='utf-8'))
+          assert health['ok'] is True
+          assert health['service'] == 'investment-research-dashboard'
+          assert health['readOnly'] is True
+          assert health['liveTrading'] is False
+          assert health['privateApi'] is False
+          assert health['orderAuthority'] is False
+          assert overview['schemaVersion'] == 'research-dashboard-overview-v1'
+          assert overview['safety']['readOnlyDashboard'] is True
+          assert overview['safety']['forbiddenAuthorityObserved'] is False
+          assert overview['paper']['ledger']['cycleCount'] == 1
+          assert overview['paper']['ledger']['sampleCount'] == 0
+          assert overview['paper']['ledger']['positionCount'] == 2
+          assert overview['paper']['ledger']['settlementCount'] == 1
+          assert overview['shadow']['records']['totalRecords'] == 2
+          assert overview['shadow']['records']['settledRecords'] == 1
+          assert overview['shadow']['records']['pendingRecords'] == 1
+          assert overview['profitability']['proven'] is False
+          PY
+          code="$(curl --silent --output /dev/null --write-out '%{http_code}' -X POST http://127.0.0.1:18091/api/research/overview)"
+          [[ "$code" == 405 ]]
+      - name: Validate systemd sandbox and fail-closed diagnostics contract
+        run: |
+          set -Eeuo pipefail
+          unit='research-dashboard/deploy/research-dashboard.service'
+          activate='research-dashboard/deploy/activate-server.sh'
+
+          grep -q 'User=investment-research' "$unit"
+          grep -q 'RESEARCH_DASHBOARD_HOST=127.0.0.1' "$unit"
+          grep -q 'WorkingDirectory=/opt/investment-research-dashboard/current/research-dashboard' "$unit"
+          grep -Fq 'ExecStart=/usr/bin/env python3 /opt/investment-research-dashboard/current/research-dashboard/server.py' "$unit"
+          grep -q 'ProtectSystem=strict' "$unit"
+          grep -q '^CapabilityBoundingSet=$' "$unit"
+          grep -q '^AmbientCapabilities=$' "$unit"
+          grep -q '^UMask=0077$' "$unit"
+          grep -q '^ReadWritePaths=/tmp$' "$unit"
+          ! grep -q '^MemoryDenyWriteExecute=true$' "$unit"
+          ! grep -q -- '--jitless' "$unit"
+          ! grep -Eq '^ReadWritePaths=.*(/var/lib/investment-research-production|/opt/stock-app|/opt/investment-research/)' "$unit"
+
+          bash -n "$activate"
+          grep -q 'SERVICE_PYTHON_RUNTIME=PASS' "$activate"
+          grep -q 'python3' "$activate"
+          grep -q 'RESEARCH_DASHBOARD_SERVICE_DIAGNOSTICS_BEGIN' "$activate"
+          grep -q 'ExecMainStatus' "$activate"
+          grep -q 'journalctl -u' "$activate"
+          grep -q "'CADDY_MUTATION=0'" "$activate"
+          grep -q "'DATABASE_MUTATION=0'" "$activate"
+          grep -q "'PRODUCTION_PM2_MUTATION=0'" "$activate"
+          grep -q "'LIVE_TRADING=false'" "$activate"
+          grep -q "'PRIVATE_API=false'" "$activate"
+          grep -q "'ORDER_AUTHORITY=false'" "$activate"
+
+          ! grep -R -E 'ORDER_SUBMISSION_ENABLED=true|PRIVATE_API_ENABLED=true|LIVE_TRADING=true|REAL_ORDER_ENABLED=true' research-dashboard

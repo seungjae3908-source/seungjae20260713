@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import '../features/device-trust/device-trust.service.test';
 import {
   MEMBER_CAPABILITIES,
   MEMBER_PERMISSION_MATRIX,
@@ -13,11 +14,11 @@ import {
 
 const expected: Record<MemberTier, MemberCapability[]> = {
   pending: [],
-  associate: ['canAccessBasicInfo', 'canAccessSpot'],
+  associate: ['canAccessBasicInfo', 'canAccessSpot', 'canConnectPersonalTelegram'],
   regular: [
     'canAccessBasicInfo', 'canAccessSpot', 'canAccessFutures',
     'canAccessRiskPreview', 'canAccessBacktests', 'canAccessPaperTrading',
-    'canAccessJournalSync', 'canAccessTradingAnalytics', 'canAccessAiTradingReview',
+    'canConnectPersonalTelegram', 'canAccessJournalSync', 'canAccessTradingAnalytics', 'canAccessAiTradingReview',
   ],
   admin: [...MEMBER_CAPABILITIES],
 };

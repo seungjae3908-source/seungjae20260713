@@ -331,7 +331,8 @@ export function getTossStatus() {
   };
 }
 
-export async function getTossAccessToken(): Promise<string> {
+export async function getTossAccessToken(signal?: AbortSignal): Promise<string> {
+  if (signal?.aborted) throw new ProviderError('UPSTREAM_ERROR', 'toss', 'toss: token request aborted');
   if (tokenCache && Date.now() < tokenCache.expiresAt - TOKEN_REFRESH_SKEW_MS) {
     return tokenCache.token;
   }

@@ -8,6 +8,11 @@ import router, {
   setTradeSplitOrderRepositoryFactoryForTests,
 } from './trade-automation';
 import { InMemoryTradingRepository } from '../services/trade-automation.repository';
+import { marketIntelligenceNotAvailable, tradingMarket } from '../services/market-intelligence-client.service';
+import {
+  marketIntelligenceSymbolForTradingPlan,
+  setTradingPlanMarketIntelligenceRunnerForTests,
+} from '../services/trade-market-intelligence.service';
 import type {
   CancelSplitChildrenInput,
   CreateSplitOrdersInput,
@@ -18,6 +23,14 @@ import type { TradingOrderEvent } from '../services/trade-automation.types';
 
 const USER = '11111111-1111-1111-1111-111111111111';
 const MASTER_KEY = Buffer.alloc(32, 7).toString('base64');
+
+async function unavailableMarketIntelligence(input) {
+  return marketIntelligenceNotAvailable(
+    tradingMarket(input),
+    marketIntelligenceSymbolForTradingPlan(input),
+    'TEST_MARKET_INTELLIGENCE_UNAVAILABLE',
+  );
+}
 
 class SharedSplitRepository implements SplitOrderRepository {
   private createInFlight: Promise<SplitTradingOrder[]> | null = null;
@@ -122,6 +135,7 @@ test('concurrent paper split approval stays idempotent, revalidates next leg, an
   const splitRepository = new SharedSplitRepository(repository);
   setTradeAutomationRepositoryFactoryForTests(() => repository);
   setTradeSplitOrderRepositoryFactoryForTests(() => splitRepository);
+  setTradingPlanMarketIntelligenceRunnerForTests(unavailableMarketIntelligence);
   process.env.TRADING_CREDENTIAL_MASTER_KEY = MASTER_KEY;
   await repository.setGlobalEmergencyStop(false, USER);
 
@@ -251,6 +265,7 @@ test('concurrent paper split approval stays idempotent, revalidates next leg, an
     await close(server);
     setTradeAutomationRepositoryFactoryForTests(null);
     setTradeSplitOrderRepositoryFactoryForTests(null);
+    setTradingPlanMarketIntelligenceRunnerForTests(null);
     delete process.env.TRADING_CREDENTIAL_MASTER_KEY;
   }
 });

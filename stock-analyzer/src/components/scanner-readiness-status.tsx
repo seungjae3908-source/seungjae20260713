@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { AlertTriangle, CheckCircle2, Loader2, RefreshCw } from 'lucide-react';
 
 type ScannerResult = {
   cards?: unknown[];
@@ -16,6 +17,10 @@ type ScannerResult = {
 
 function isScannerQuery(queryKey: readonly unknown[]): boolean {
   return queryKey[0] === 'scan';
+}
+
+function countText(visibleCount: number, requestedCount: number) {
+  return requestedCount > 0 ? `${visibleCount}/${requestedCount}` : `${visibleCount}개`;
 }
 
 export function ScannerReadinessStatus() {
@@ -53,6 +58,12 @@ export function ScannerReadinessStatus() {
   const cards = Array.isArray(data?.cards) ? data.cards : [];
   const empty = query?.state.status === 'success' && !partial && cards.length === 0;
   const success = query?.state.status === 'success' && !partial && cards.length > 0;
+  const requestedCount = Number(data?.requestedCount ?? 0);
+  const completedCount = Number(data?.completedCount ?? cards.length);
+  const providerErrorCount = Number(data?.providerErrorCount ?? 0);
+  const updatedAt = query?.state.dataUpdatedAt
+    ? new Date(query.state.dataUpdatedAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })
+    : null;
 
   const retry = () => queryClient.refetchQueries({
     queryKey: ['scan'],
@@ -60,41 +71,55 @@ export function ScannerReadinessStatus() {
   });
 
   return (
-    <div
-      data-testid="scanner-readiness-status"
-      className="pointer-events-none absolute right-3 top-3 z-50 max-w-[min(92vw,360px)]"
-    >
-      {loading && (
-        <div data-testid="scanner-loading" className="rounded-2xl border border-card-border bg-card/95 px-3 py-2 text-xs font-extrabold shadow-lg backdrop-blur">
-          조건검색 데이터 확인 중
+    <div data-testid="scanner-readiness-status" className="shrink-0 border-b border-card-border bg-background px-3 py-2 sm:px-4">
+      {loading ? (
+        <div data-testid="scanner-loading" className="flex min-h-11 items-center gap-2 rounded-xl border border-card-border bg-card px-3 text-xs font-extrabold">
+          <Loader2 className="h-4 w-4 animate-spin text-primary" />
+          최신 검색 결과를 준비하고 있습니다.
         </div>
-      )}
-      {providerError && (
-        <div data-testid="scanner-provider-error" className="pointer-events-auto rounded-2xl border border-destructive/40 bg-card/95 p-3 shadow-lg backdrop-blur">
-          <p className="text-xs font-extrabold text-destructive">데이터 공급자 오류</p>
-          <p className="mt-1 break-keep text-[11px] leading-4 text-muted-foreground">빈 결과로 처리하지 않았습니다. 공급자 상태를 확인한 뒤 다시 시도하세요.</p>
-          <button type="button" onClick={() => void retry()} className="mt-2 rounded-full bg-primary px-3 py-1.5 text-[11px] font-extrabold text-primary-foreground">다시 시도</button>
+      ) : null}
+
+      {providerError ? (
+        <div data-testid="scanner-provider-error" className="flex min-h-11 items-center gap-2 rounded-xl border border-destructive/40 bg-destructive/10 px-3 py-2">
+          <AlertTriangle className="h-4 w-4 shrink-0 text-destructive" />
+          <p className="min-w-0 flex-1 truncate text-xs font-extrabold text-destructive">데이터 공급자 연결을 확인해 주세요.</p>
+          <button type="button" onClick={() => void retry()} className="inline-flex min-h-9 shrink-0 items-center gap-1 rounded-lg border border-destructive/30 px-2.5 text-[11px] font-black">
+            <RefreshCw className="h-3.5 w-3.5" />다시 시도
+          </button>
         </div>
-      )}
-      {partial && (
-        <div data-testid="scanner-partial" className="rounded-2xl border border-amber-500/50 bg-card/95 p-3 shadow-lg backdrop-blur">
-          <p className="text-xs font-extrabold text-amber-700">일부 데이터 지연 · 부분 결과</p>
-          <p className="mt-1 break-keep text-[11px] leading-4 text-muted-foreground">{data?.message || '제한시간 안에 완료된 신뢰 가능한 결과만 표시합니다.'}</p>
-          <p className="mt-1 text-[10px] font-bold text-muted-foreground">
-            완료 {Number(data?.completedCount ?? 0)}/{Number(data?.requestedCount ?? 0)} · timeout {Number(data?.timeoutCount ?? 0)} · 공급자 오류 {Number(data?.providerErrorCount ?? 0)} · {Number(data?.elapsedMs ?? 0)}ms
-          </p>
+      ) : null}
+
+      {partial ? (
+        <details data-testid="scanner-partial" className="group rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2">
+          <summary className="flex min-h-7 cursor-pointer list-none items-center gap-2 [&::-webkit-details-marker]:hidden">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
+            <span className="min-w-0 flex-1 truncate text-xs font-black text-amber-500">부분 결과 {countText(cards.length, requestedCount)}</span>
+            <button
+              type="button"
+              onClick={(event) => { event.preventDefault(); void retry(); }}
+              className="inline-flex min-h-9 shrink-0 items-center gap-1 rounded-lg border border-amber-500/30 px-2.5 text-[11px] font-black text-foreground"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />재시도
+            </button>
+          </summary>
+          <div className="mt-2 border-t border-amber-500/20 pt-2 text-[11px] font-medium leading-5 text-muted-foreground">
+            <p>{data?.message || '확인된 신뢰 가능한 후보를 먼저 표시하고 있습니다.'}</p>
+            <p className="mt-1">확인 {completedCount || cards.length} · 표시 {cards.length}{providerErrorCount > 0 ? ` · 공급자 오류 ${providerErrorCount}` : ''}{updatedAt ? ` · 갱신 ${updatedAt}` : ''}</p>
+          </div>
+        </details>
+      ) : null}
+
+      {empty ? (
+        <div data-testid="scanner-empty" className="flex min-h-11 items-center gap-2 rounded-xl border border-card-border bg-card px-3 text-xs font-extrabold">
+          <CheckCircle2 className="h-4 w-4 text-muted-foreground" />정상 완료 · 현재 조건과 일치하는 종목이 없습니다.
         </div>
-      )}
-      {empty && (
-        <div data-testid="scanner-empty" className="rounded-2xl border border-card-border bg-card/95 px-3 py-2 text-xs font-extrabold shadow-lg backdrop-blur">
-          정상 완료 · 조건 일치 종목 0개
+      ) : null}
+
+      {success ? (
+        <div data-testid="scanner-success" className="flex min-h-11 items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 text-xs font-extrabold">
+          <CheckCircle2 className="h-4 w-4 text-emerald-500" />검색 완료 · {cards.length}개 후보
         </div>
-      )}
-      {success && (
-        <div data-testid="scanner-success" className="rounded-2xl border border-card-border bg-card/95 px-3 py-2 text-xs font-extrabold shadow-lg backdrop-blur">
-          검색 완료 · {cards.length}개 종목
-        </div>
-      )}
+      ) : null}
     </div>
   );
 }
