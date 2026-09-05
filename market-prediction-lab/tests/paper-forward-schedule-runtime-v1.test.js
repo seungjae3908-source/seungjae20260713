@@ -81,6 +81,55 @@ test("natural cron invocation persists one canonical 4h cycle and active status"
   }
 });
 
+test("natural provider observations carry the exact immutable Paper identity", async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), "paper-forward-provider-identity-"));
+  const root = join(sandbox, "persistent-state");
+  const nowMs = 1_800_000_000_000;
+  const observedCycles = [];
+  const provider = Object.freeze({
+    async collectPublicEvidence({ market, cycle }) {
+      observedCycles.push(cycle);
+      return Object.freeze({
+        status: "READY",
+        publicOnly: true,
+        market,
+        provider: `test-public-${market.toLowerCase()}`,
+        provenance: Object.freeze({ provider: "test", market }),
+        observedAtMs: nowMs - 1_000,
+        dataAsOfMs: nowMs - 1_000,
+        maxAgeMs: 60_000,
+        candidates: Object.freeze([]),
+        exits: Object.freeze([]),
+        blocker: null,
+      });
+    },
+  });
+
+  try {
+    const result = await runPaperForwardScheduledInvocation({
+      rootDirectory: root,
+      researchCodeSha: RESEARCH_SHA,
+      triggerSource: "cron",
+      activationAtMs: nowMs - 10_000,
+      ownerId: "test-owner:provider-identity",
+      clock: () => nowMs,
+      publicEvidenceProvider: provider,
+    });
+
+    assert.equal(result.status, "COMPLETED");
+    assert.equal(observedCycles.length, MARKETS.length);
+    for (const cycle of observedCycles) {
+      assert.equal(cycle.identity.researchCodeSha, RESEARCH_SHA);
+      assert.equal(cycle.identity.strategyId, "paper-forward-public-evidence-v1");
+      assert.match(cycle.identity.parameterHash, /^[0-9a-f]{64}$/u);
+      assert.equal(Object.isFrozen(cycle.identity), true);
+      assert.equal(Object.isFrozen(cycle), true);
+    }
+  } finally {
+    await rm(sandbox, { recursive: true, force: true });
+  }
+});
+
 test("same 4h cycle replays without provider calls or duplicate mutation", async () => {
   const sandbox = await mkdtemp(join(tmpdir(), "paper-forward-replay-"));
   const root = join(sandbox, "persistent-state");

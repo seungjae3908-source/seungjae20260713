@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { AccountReadonlyError } from '../account-readonly.errors';
 import type { ReadonlyCredentialProvider } from '../account-readonly.repository';
 import { createVaultBackedAccountReaders } from '../account-readonly.runtime';
 
@@ -57,7 +58,7 @@ test('vault-backed Bitget reader emits only the two allowlisted signed GET reads
     decryptCredentials: () => ({ apiKey: 'BITGET_KEY_RUNTIME_TEST_ONLY', secretKey: 'BITGET_SECRET_RUNTIME_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_RUNTIME_TEST_ONLY' }),
     fetchImpl: async (input, init) => {
       const url = new URL(String(input)); assert.equal(url.origin, 'https://api.bitget.com'); paths.push(url.pathname); methods.push(String(init?.method));
-      const body = url.pathname.includes('/position/') ? { data: [{ symbol: 'BTCUSDT', total: '0.1', available: '0.1', leverage: '2' }] } : { data: [{ marginCoin: 'USDT', accountEquity: '100', available: '90' }] };
+      const body = url.pathname.includes('/position/') ? { code: '00000', data: [{ symbol: 'BTCUSDT', total: '0.1', available: '0.1', leverage: '2' }] } : { code: '00000', data: [{ marginCoin: 'USDT', accountEquity: '100', available: '90' }] };
       return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
     },
   });
@@ -90,7 +91,7 @@ test('vault-backed Toss reader performs OAuth then account-list and holdings GET
     'GET https://openapi.tossinvest.com/api/v1/holdings',
   ]);
   assert.equal(seen[1]?.accountHeader, null); assert.equal(seen[2]?.accountHeader, '12345678');
-  assert.equal(result.connected, true); assert.equal(result.positions[0]?.symbol, '005930'); assert.equal(result.positions[0]?.market, 'KR'); assert.equal(result.positions[0]?.marketValue, 213000);
+  assert.equal(result.connected, true); assert.equal(result.positions?.[0]?.symbol, '005930'); assert.equal(result.positions?.[0]?.market, 'KR'); assert.equal(result.positions?.[0]?.marketValue, 213000);
   assert.equal(result.orderRequests, 0); assert.equal(result.cancelRequests, 0); assert.equal(result.transferRequests, 0); assert.equal(result.withdrawalRequests, 0);
   const serialized = JSON.stringify(result);
   assert.equal(serialized.includes('TOSS_CLIENT_RUNTIME_TEST_ONLY'), false); assert.equal(serialized.includes('TOSS_SECRET_RUNTIME_TEST_ONLY'), false); assert.equal(serialized.includes('TOSS_TOKEN_RUNTIME_TEST_ONLY'), false);
@@ -104,5 +105,77 @@ test('missing vault credentials fail closed before any provider call', async () 
     fetchImpl: async () => { providerCalls += 1; return new Response('{}', { status: 200 }); },
   });
   await assert.rejects(() => readers.upbit!(SCOPE), /ACCOUNT_NOT_CONFIGURED/);
+  assert.equal(providerCalls, 0);
+});
+
+test('caller abort during credential lookup blocks private provider invocation', async () => {
+  let providerCalls = 0;
+  const controller = new AbortController();
+  const readers = createVaultBackedAccountReaders({
+    repositoryFactory: () => ({
+      get: async () => {
+        controller.abort(new Error('client disconnected'));
+        return record('upbit');
+      },
+      save: async () => { throw new Error('runtime reader must never mutate credential storage'); },
+    }),
+    decryptCredentials: () => ({ accessKey: 'UPBIT_ACCESS_RUNTIME_TEST_ONLY', secretKey: 'UPBIT_SECRET_RUNTIME_TEST_ONLY' }),
+    fetchImpl: async () => {
+      providerCalls += 1;
+      return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+    },
+  });
+
+  await assert.rejects(
+    () => readers.upbit!(SCOPE, controller.signal),
+    (error: unknown) => error instanceof AccountReadonlyError
+      && error.code === 'PROVIDER_TIMEOUT'
+      && error.retryable === true,
+  );
+  assert.equal(providerCalls, 0);
+});
+
+test('stalled private account provider is aborted by the bounded server deadline', async () => {
+  let providerCalls = 0;
+  const readers = createVaultBackedAccountReaders({
+    providerTimeoutMs: 25,
+    repositoryFactory: () => repositoryFor('upbit'),
+    decryptCredentials: () => ({ accessKey: 'UPBIT_ACCESS_RUNTIME_TEST_ONLY', secretKey: 'UPBIT_SECRET_RUNTIME_TEST_ONLY' }),
+    fetchImpl: async (_input, init) => {
+      providerCalls += 1;
+      const signal = init?.signal;
+      assert.ok(signal);
+      return new Promise<Response>((_resolve, reject) => {
+        const rejectOnAbort = () => reject(new Error('upstream request aborted'));
+        if (signal.aborted) rejectOnAbort();
+        else signal.addEventListener('abort', rejectOnAbort, { once: true });
+      });
+    },
+  });
+
+  const startedAt = Date.now();
+  await assert.rejects(
+    () => readers.upbit!(SCOPE),
+    (error: unknown) => error instanceof AccountReadonlyError
+      && error.code === 'PROVIDER_TIMEOUT'
+      && error.retryable === true,
+  );
+  assert.equal(providerCalls, 1);
+  assert.ok(Date.now() - startedAt < 1_000, 'provider read must terminate instead of hanging');
+});
+
+test('invalid provider timeout configuration fails closed before private provider access', () => {
+  let providerCalls = 0;
+  assert.throws(
+    () => createVaultBackedAccountReaders({
+      providerTimeoutMs: 0,
+      fetchImpl: async () => {
+        providerCalls += 1;
+        return new Response('{}', { status: 200 });
+      },
+    }),
+    (error: unknown) => error instanceof AccountReadonlyError
+      && error.code === 'ACCOUNT_READONLY_PROVIDER_TIMEOUT_INVALID',
+  );
   assert.equal(providerCalls, 0);
 });

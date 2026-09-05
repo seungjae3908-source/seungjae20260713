@@ -10,6 +10,7 @@ import {
   YAxis,
 } from 'recharts';
 import { CenteredPageHeader } from '@/components/centered-page-header';
+import { resolveEvidenceDisplay } from '@/lib/evidence-display';
 import {
   runBacktest,
   type BacktestFormValues,
@@ -57,9 +58,73 @@ type FieldProps = {
 const inputClass = 'h-11 min-w-0 rounded-xl border border-border bg-background px-3 text-sm font-bold text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring';
 const numberFormatter = new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 2 });
 const money = (value: number) => `${numberFormatter.format(value)} USDT`;
-const percent = (value: number | null) => value == null ? '-' : `${numberFormatter.format(value)}%`;
-const ratio = (value: number | null) => value == null ? '-' : numberFormatter.format(value);
+const percent = (value: number | null) => resolveEvidenceDisplay({
+  value,
+  formatter: (observed) => `${numberFormatter.format(Number(observed))}%`,
+}).display;
+const ratio = (value: number | null) => resolveEvidenceDisplay({
+  value,
+  formatter: (observed) => numberFormatter.format(Number(observed)),
+}).display;
 const dateTime = (value: number) => new Date(value).toLocaleString('ko-KR', { timeZone: 'UTC' });
+
+function normalizedCode(value: string): string {
+  return value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+function displayCode(value: string, labels: Record<string, string>): string {
+  if (!value.trim()) return '미확인';
+  const key = normalizedCode(value);
+  const translated = labels[key];
+  if (translated) return translated;
+  return /[ㄱ-ㅎㅏ-ㅣ가-힣]/.test(value) ? value : '기타';
+}
+
+function sideLabel(value: string): string {
+  return displayCode(value, { long: '롱', short: '숏', both: '롱·숏' });
+}
+
+function validationLabel(value: string): string {
+  return displayCode(value, { training: '학습', validation: '검증', test: '테스트' });
+}
+
+function exitReasonLabel(value: string): string {
+  return displayCode(value, {
+    stop_loss: '손절',
+    take_profit: '목표가',
+    trailing_stop: '트레일링 스톱',
+    signal_exit: '신호 종료',
+    strategy_exit: '전략 종료',
+    opposite_signal: '반대 신호',
+    time_exit: '시간 종료',
+    market_close: '장 종료',
+    end_of_data: '데이터 종료',
+    liquidation: '강제청산',
+    breakeven: '본전 종료',
+    manual: '수동 종료',
+  });
+}
+
+function regimeLabel(value: string): string {
+  return displayCode(value, {
+    bull: '상승장',
+    bullish: '상승장',
+    uptrend: '상승장',
+    trending_up: '상승장',
+    bear: '하락장',
+    bearish: '하락장',
+    downtrend: '하락장',
+    trending_down: '하락장',
+    sideways: '횡보장',
+    range: '횡보장',
+    ranging: '횡보장',
+    neutral: '횡보장',
+    volatile: '고변동성',
+    high_volatility: '고변동성',
+    low_volatility: '저변동성',
+    unknown: '미확인',
+  });
+}
 
 function initialValuesFromUrl() {
   if (typeof window === 'undefined') return DEFAULT_VALUES;
@@ -334,12 +399,12 @@ export function BacktestResearchPanel({ execute = runBacktest, initialResult = n
                 <Metric label="거래 수" value={`${result.totalTrades}회`} testId="total-trades" />
                 <Metric label="승률" value={percent(result.winRate)} />
                 <Metric label="기대값" value={money(result.expectancy)} />
-                <Metric label="Profit Factor" value={ratio(result.profitFactor)} />
+                <Metric label="손익비(PF)" value={ratio(result.profitFactor)} />
                 <Metric label="최대 낙폭" value={`${money(result.maximumDrawdown)} · ${percent(result.maximumDrawdownPercent)}`} />
                 <Metric label="평균 R" value={ratio(result.averageRMultiple)} />
-                <Metric label="Sharpe" value={ratio(result.sharpeRatio)} />
-                <Metric label="Sortino" value={ratio(result.sortinoRatio)} />
-                <Metric label="Calmar" value={ratio(result.calmarRatio)} />
+                <Metric label="샤프지수" value={ratio(result.sharpeRatio)} />
+                <Metric label="소르티노지수" value={ratio(result.sortinoRatio)} />
+                <Metric label="칼마지수" value={ratio(result.calmarRatio)} />
                 <Metric label="비용 합계" value={money(result.totalFees + result.totalSlippage + result.totalFunding)} />
               </div>
             </section>
@@ -352,7 +417,7 @@ export function BacktestResearchPanel({ execute = runBacktest, initialResult = n
               <div className="grid gap-2 sm:grid-cols-3">
                 {result.validationPerformance.map((item) => (
                   <div key={item.name} className="rounded-xl border border-border p-3 text-xs">
-                    <div className="font-semibold uppercase">{item.name}</div>
+                    <div className="font-semibold">{validationLabel(item.name)}</div>
                     <div className="mt-2 grid gap-1 text-muted-foreground">
                       <span>거래 {item.trades}회</span><span>순손익 {money(item.netPnl)}</span><span>낙폭 {percent(item.maximumDrawdownPercent)}</span>
                     </div>
@@ -401,7 +466,7 @@ export function BacktestResearchPanel({ execute = runBacktest, initialResult = n
                 <div className="overflow-x-auto rounded-xl border border-border">
                   <table className="w-full min-w-[360px] text-left text-xs">
                     <thead className="bg-muted"><tr><th className="p-2">시장 상태</th><th className="p-2">거래</th><th className="p-2">순손익</th><th className="p-2">승률</th></tr></thead>
-                    <tbody>{result.regimePerformance.map((item) => <tr key={item.regime} className="border-t border-border"><td className="p-2">{item.regime}</td><td className="p-2">{item.trades}</td><td className="p-2">{money(item.netPnl)}</td><td className="p-2">{percent(item.winRate)}</td></tr>)}</tbody>
+                    <tbody>{result.regimePerformance.map((item) => <tr key={item.regime} className="border-t border-border"><td className="p-2">{regimeLabel(item.regime)}</td><td className="p-2">{item.trades}</td><td className="p-2">{money(item.netPnl)}</td><td className="p-2">{percent(item.winRate)}</td></tr>)}</tbody>
                   </table>
                 </div>
               </div>
@@ -415,7 +480,7 @@ export function BacktestResearchPanel({ execute = runBacktest, initialResult = n
                   <tbody>
                     {result.trades.length ? result.trades.map((trade) => (
                       <tr key={trade.id} className="border-t border-border">
-                        <td className="whitespace-nowrap p-2">{dateTime(trade.entryTime)}</td><td className="p-2">{trade.side}</td><td className="p-2">{numberFormatter.format(trade.entryPrice)}</td><td className="p-2">{numberFormatter.format(trade.exitPrice)}</td><td className="p-2">{money(trade.netPnl)}</td><td className="p-2">{numberFormatter.format(trade.rMultiple)}</td><td className="p-2">{trade.exitReason}</td><td className="p-2">{trade.marketRegime}</td>
+                        <td className="whitespace-nowrap p-2">{dateTime(trade.entryTime)}</td><td className="p-2">{sideLabel(trade.side)}</td><td className="p-2">{numberFormatter.format(trade.entryPrice)}</td><td className="p-2">{numberFormatter.format(trade.exitPrice)}</td><td className="p-2">{money(trade.netPnl)}</td><td className="p-2">{numberFormatter.format(trade.rMultiple)}</td><td className="p-2">{exitReasonLabel(trade.exitReason)}</td><td className="p-2">{regimeLabel(trade.marketRegime)}</td>
                       </tr>
                     )) : <tr><td colSpan={8} className="p-6 text-center text-muted-foreground">조건에 맞는 거래가 없습니다.</td></tr>}
                   </tbody>

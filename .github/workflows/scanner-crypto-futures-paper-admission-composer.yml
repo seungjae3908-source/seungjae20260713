@@ -1,0 +1,52 @@
+name: Scanner Crypto Futures Paper Admission Composer
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/scanner-crypto-futures-paper-admission-composer.yml
+      - api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.ts
+      - api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.test.ts
+      - api-server/src/services/scanner-paper-admission-evidence-bundle.service.ts
+      - api-server/src/services/scanner-profit-cost-evidence-adapter.service.ts
+      - api-server/src/services/trade-paper-market-contract.service.ts
+      - api-server/src/services/paper-trading-core.service.ts
+      - api-server/src/services/paper-trading.types.ts
+      - api-server/src/services/trading-risk-engine.service.ts
+      - api-server/src/services/bitget-futures-public-evidence.service.ts
+
+permissions:
+  contents: read
+
+jobs:
+  crypto-futures-paper-admission-composer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact PR HEAD
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Verify exact HEAD
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - name: Set up Node 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck API server
+        run: pnpm --dir api-server run typecheck
+      - name: Bundle exact-head P0-C5 tests
+        run: >-
+          pnpm --dir api-server exec esbuild
+          src/services/scanner-crypto-futures-paper-admission-composer.service.test.ts
+          --bundle --platform=node --format=esm
+          --outfile=/tmp/scanner-crypto-futures-paper-admission-composer.test.mjs
+      - name: Run exact-head P0-C5 tests
+        run: node --test /tmp/scanner-crypto-futures-paper-admission-composer.test.mjs

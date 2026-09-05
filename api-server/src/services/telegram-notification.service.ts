@@ -7,6 +7,8 @@ const MAX_RETRIES = 1;
 const MAX_RETRY_DELAY_MS = 2_000;
 const DEFAULT_DUPLICATE_WINDOW_MS = 5 * 60 * 1000;
 const DEFAULT_COOLDOWN_MS = 60 * 1000;
+const TELEGRAM_TEXT_LIMIT = 4_096;
+const TELEGRAM_CAPTION_LIMIT = 1_024;
 
 export const TELEGRAM_ALERT_TYPES = [
   'strong_buy',
@@ -22,6 +24,17 @@ export const TELEGRAM_ALERT_TYPES = [
 
 export type TelegramAlertType = (typeof TELEGRAM_ALERT_TYPES)[number];
 
+export type TelegramUrlButton = {
+  text: string;
+  url: string;
+};
+
+export type TelegramPhotoAttachment = {
+  bytes?: Uint8Array;
+  url?: string;
+  filename?: string;
+};
+
 export interface TelegramAlertInput {
   type: TelegramAlertType;
   symbol?: string;
@@ -35,6 +48,9 @@ export interface TelegramAlertInput {
   cooldownMs?: number;
   duplicateWindowMs?: number;
   destinationChatId?: string;
+  linkPreview?: boolean;
+  buttons?: TelegramUrlButton[][];
+  photo?: TelegramPhotoAttachment;
 }
 
 export type TelegramAlertResult =
@@ -124,7 +140,34 @@ export function renderTelegramAlert(input: TelegramAlertInput): string {
   if (input.details) lines.push(`내용: ${escapeTelegramHtml(input.details)}`);
   if (input.timestamp) lines.push(`시각: ${escapeTelegramHtml(input.timestamp)}`);
   lines.push('실주문 실행 기능은 포함되지 않습니다.');
-  return lines.join('\n');
+  return lines.join('\n').slice(0, TELEGRAM_TEXT_LIMIT);
+}
+
+export function normalizeTelegramHttpUrl(value: unknown): string | null {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  try {
+    const url = new URL(value.trim());
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+    url.username = '';
+    url.password = '';
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+export function telegramInlineKeyboard(buttons: TelegramAlertInput['buttons']): { inline_keyboard: TelegramUrlButton[][] } | null {
+  if (!Array.isArray(buttons)) return null;
+  const rows = buttons.slice(0, 8).flatMap((row) => {
+    if (!Array.isArray(row)) return [];
+    const safe = row.slice(0, 3).flatMap((button) => {
+      const text = String(button?.text ?? '').normalize('NFKC').trim().slice(0, 64);
+      const url = normalizeTelegramHttpUrl(button?.url);
+      return text && url ? [{ text, url }] : [];
+    });
+    return safe.length ? [safe] : [];
+  });
+  return rows.length ? { inline_keyboard: rows } : null;
 }
 
 function normalizeWindow(value: number | undefined, fallback: number): number {
@@ -169,31 +212,67 @@ function retryDelay(response: Response, attempt: number): number {
   return Math.min(MAX_RETRY_DELAY_MS, 300 * (attempt + 1));
 }
 
+function safePhoto(input: TelegramPhotoAttachment | undefined): TelegramPhotoAttachment | null {
+  if (!input) return null;
+  if (input.bytes instanceof Uint8Array && input.bytes.byteLength > 0 && input.bytes.byteLength <= 10 * 1024 * 1024) {
+    return { bytes: input.bytes, filename: input.filename?.trim().slice(0, 80) || 'signal-evidence.png' };
+  }
+  const url = normalizeTelegramHttpUrl(input.url);
+  return url ? { url } : null;
+}
+
 async function sendOnce(
   botToken: string,
   destination: string,
   text: string,
+  input: TelegramAlertInput,
   attempt: number,
 ): Promise<{ delivered: boolean; attempts: number }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
+    const keyboard = telegramInlineKeyboard(input.buttons);
+    const photo = safePhoto(input.photo);
+    const endpoint = photo ? 'sendPhoto' : 'sendMessage';
+    let body: BodyInit;
+    let headers: HeadersInit;
+
+    if (photo?.bytes) {
+      const form = new FormData();
+      form.append('chat_id', destination);
+      form.append('caption', text.slice(0, TELEGRAM_CAPTION_LIMIT));
+      form.append('parse_mode', 'HTML');
+      form.append('protect_content', 'true');
+      if (keyboard) form.append('reply_markup', JSON.stringify(keyboard));
+      const bytes = Buffer.from(photo.bytes);
+      const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+      form.append('photo', new Blob([arrayBuffer], { type: 'image/png' }), photo.filename || 'signal-evidence.png');
+      body = form;
+      headers = { Accept: 'application/json' };
+    } else {
+      const payload: Record<string, unknown> = photo?.url
+        ? {
+            chat_id: destination,
+            photo: photo.url,
+            caption: text.slice(0, TELEGRAM_CAPTION_LIMIT),
+            parse_mode: 'HTML',
+            protect_content: true,
+          }
+        : {
+            chat_id: destination,
+            text,
+            parse_mode: 'HTML',
+            protect_content: true,
+            link_preview_options: { is_disabled: input.linkPreview !== true },
+          };
+      if (keyboard) payload.reply_markup = keyboard;
+      body = JSON.stringify(payload);
+      headers = { Accept: 'application/json', 'Content-Type': 'application/json' };
+    }
+
     const response = await fetch(
-      `${TELEGRAM_API_BASE_URL}/bot${encodeURIComponent(botToken)}/sendMessage`,
-      {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          chat_id: destination,
-          text,
-          parse_mode: 'HTML',
-          disable_web_page_preview: true,
-        }),
-        signal: controller.signal,
-      },
+      `${TELEGRAM_API_BASE_URL}/bot${encodeURIComponent(botToken)}/${endpoint}`,
+      { method: 'POST', headers, body, signal: controller.signal },
     );
 
     const retryable = response.status === 429 || response.status >= 500;
@@ -201,7 +280,7 @@ async function sendOnce(
       const delay = retryDelay(response, attempt);
       clearTimeout(timeout);
       await sleep(delay);
-      return sendOnce(botToken, destination, text, attempt + 1);
+      return sendOnce(botToken, destination, text, input, attempt + 1);
     }
     if (!response.ok) return { delivered: false, attempts: attempt + 1 };
 
@@ -216,7 +295,7 @@ async function sendOnce(
     if (attempt < MAX_RETRIES) {
       clearTimeout(timeout);
       await sleep(300 * (attempt + 1));
-      return sendOnce(botToken, destination, text, attempt + 1);
+      return sendOnce(botToken, destination, text, input, attempt + 1);
     }
     return { delivered: false, attempts: attempt + 1 };
   } finally {
@@ -259,7 +338,7 @@ export async function sendTelegramAlert(
 
   inFlightHashes.add(hash);
   try {
-    const result = await sendOnce(botToken, destination, rendered, 0);
+    const result = await sendOnce(botToken, destination, rendered, input, 0);
     if (!result.delivered) {
       logger.warn(
         { alertType: input.type, attempts: result.attempts },
