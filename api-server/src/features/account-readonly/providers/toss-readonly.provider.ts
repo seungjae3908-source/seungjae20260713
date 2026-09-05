@@ -20,7 +20,7 @@ export type ReadonlyTransport = (request: {
 
 const PRIVATE_GETS = new Set(['/api/v1/accounts', '/api/v1/holdings']);
 const TOSS_API_ORIGIN = 'https://openapi.tossinvest.com';
-const TOSS_OAUTH_ORIGIN = 'https://oauth2.tossinvest.com';
+const TOSS_OAUTH_ORIGIN = TOSS_API_ORIGIN;
 
 function credentialKey(credentials: TossCredentials) {
   return createHash('sha256')
