@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import {
   Activity,
   ArrowLeft,
@@ -13,9 +13,7 @@ import {
 } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { AiChartPositionPanel } from '@/components/ai-chart-position-panel';
-import { AiChartV2IntelligencePanel } from '@/components/ai-chart-v2-intelligence-panel';
 import { BottomNav } from '@/components/bottom-nav';
-import { FuturesPublicContextPanel } from '@/components/futures-public-context-panel';
 import { ResponsiveTabs } from '@/components/responsive-tabs';
 import { UnifiedAnalysisChart } from '@/components/unified-analysis-chart';
 import {
@@ -69,6 +67,17 @@ import { cn } from '@/lib/utils';
 
 const CURRENT_TIMEFRAMES = new Set(UNIFIED_CHART_TIMEFRAMES.map((item) => item.key));
 const AI_CHART_MODE_STORAGE_KEY = 'ai-chart-v2-strategy-mode.v1';
+
+const LazyAiChartV2IntelligencePanel = lazy(() =>
+  import('@/components/ai-chart-v2-intelligence-panel').then(({ AiChartV2IntelligencePanel }) => ({
+    default: AiChartV2IntelligencePanel,
+  })),
+);
+const LazyFuturesPublicContextPanel = lazy(() =>
+  import('@/components/futures-public-context-panel').then(({ FuturesPublicContextPanel }) => ({
+    default: FuturesPublicContextPanel,
+  })),
+);
 
 type MobileChartTab = 'summary' | 'chart' | 'position' | 'details';
 
@@ -699,18 +708,22 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   );
 
   const intelligencePanel = (
-    <AiChartV2IntelligencePanel
-      selection={selection}
-      analysis={analysis}
-      mode={strategyMode}
-      onModeChange={updateStrategyModeAndTimeframe}
-    />
+    <Suspense fallback={<p role="status" aria-label="AI 분석 근거 불러오는 중" className="rounded-2xl border border-card-border bg-card p-4 text-sm text-muted-foreground">AI 분석 근거를 불러오는 중입니다. 차트는 계속 사용할 수 있습니다.</p>}>
+      <LazyAiChartV2IntelligencePanel
+        selection={selection}
+        analysis={analysis}
+        mode={strategyMode}
+        onModeChange={updateStrategyModeAndTimeframe}
+      />
+    </Suspense>
   );
 
   const details = (
     <div className="space-y-4">
       {intelligencePanel}
-      <FuturesPublicContextPanel selection={selection} />
+      <Suspense fallback={<p role="status" aria-label="공개 시장 근거 불러오는 중" className="rounded-2xl border border-card-border bg-card p-4 text-sm text-muted-foreground">공개 시장 근거를 불러오는 중입니다.</p>}>
+        <LazyFuturesPublicContextPanel selection={selection} />
+      </Suspense>
       <ContextCard selection={selection} analysis={analysis} />
       <DecisionCard analysis={analysis} />
       <SafetyNote />
