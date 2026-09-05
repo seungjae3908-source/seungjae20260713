@@ -95,11 +95,11 @@ async function attachEvidence(testInfo: TestInfo, evidence: FullProductEvidence)
 }
 
 export const test = base.extend<{ fullProductEvidence: FullProductEvidence }>({
-  fullProductEvidence: async ({ page }, use, testInfo) => {
+  fullProductEvidence: [async ({ page }, use, testInfo) => {
     const evidence = installEvidence(page);
     await use(evidence);
     await attachEvidence(testInfo, evidence);
-  },
+  }, { auto: true }],
 });
 
 export { expect };
