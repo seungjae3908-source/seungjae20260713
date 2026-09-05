@@ -134,8 +134,9 @@ test('real user path stays coherent from login through session expiry', async ({
   fixtures.expireSession();
   await ageBrowserSession(page);
   await page.reload();
-  await expect(page).toHaveURL(/\/login$/u);
   await expect(page.getByLabel('아이디')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '내 포트폴리오', exact: true })).toHaveCount(0);
+  await expect(page.getByTestId('portfolio-data-quality')).toHaveCount(0);
 });
 
 test('search fault matrix fails closed and latest response wins without leaking across navigation', async ({ page }, testInfo) => {
