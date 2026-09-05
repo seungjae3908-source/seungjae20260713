@@ -17,7 +17,11 @@ const MOBILE_TABS: Array<{ key: OverviewTab; label: string }> = [
 ];
 
 function finite(value: unknown): number | null {
-  const number = Number(value);
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().replace(/,/g, '').replace(/%$/u, '');
+  if (!normalized) return null;
+  const number = Number(normalized);
   return Number.isFinite(number) ? number : null;
 }
 
