@@ -1,0 +1,477 @@
+name: Backup DR One-Time Encrypted Create
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/backup-dr-one-time-create.yml'
+      - 'ops/backup-dr/one-time-create-contract.test.mjs'
+      - 'ops/backup-dr/create-encrypted-postgres-backup.mjs'
+      - 'ops/backup-dr/policy.json'
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  statuses: read
+
+concurrency:
+  group: backup-dr-one-time-${{ github.event_name == 'issue_comment' && github.event.comment.id || github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    name: Validate one-time encrypted backup runtime contract
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Require exact PR HEAD and validate contract
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          node --check ops/backup-dr/one-time-create-contract.test.mjs
+          node ops/backup-dr/one-time-create-contract.test.mjs
+
+  create-backup:
+    name: Owner-approved one-time encrypted Production DB backup
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 23 &&
+      !github.event.issue.pull_request &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control' &&
+      github.event.comment.user.login == github.repository_owner &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/run-encrypted-db-backup ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment: production
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+      C_PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+      C_PRODUCTION_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+      C_POSTGRES_URL_NON_POOLING: ${{ secrets.POSTGRES_URL_NON_POOLING }}
+      C_PROD_SUPABASE_DB_URL: ${{ secrets.PROD_SUPABASE_DB_URL }}
+      C_SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      C_POSTGRES_URL: ${{ secrets.POSTGRES_URL }}
+      C_DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      C_BACKUP_AGE_RECIPIENT_SECRET: ${{ secrets.BACKUP_AGE_RECIPIENT }}
+      C_BACKUP_AGE_RECIPIENT_VAR: ${{ vars.BACKUP_AGE_RECIPIENT }}
+
+    steps:
+      - name: Initialize ephemeral runner backup path
+        run: |
+          set -Eeuo pipefail
+          printf 'LOCAL_BACKUP_DIR=%s\n' "$RUNNER_TEMP/backup-dr-one-time-create" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Parse exact owner command
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const body = String(process.env.COMMENT_BODY ?? '').trim();
+          const match = /^\/run-encrypted-db-backup ([0-9a-fA-F]{40}) ([0-9a-fA-F]{40})(?: (age1[0-9a-z]{20,}))?$/.exec(body);
+          if (!match) {
+            console.error('Expected /run-encrypted-db-backup <active-production-sha> <exact-current-main-sha> [age1-public-recipient]');
+            process.exit(1);
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, [
+            `active_sha=${match[1].toLowerCase()}`,
+            `source_sha=${match[2].toLowerCase()}`,
+            `command_recipient=${match[3] ?? ''}`,
+            '',
+          ].join('\n'));
+          NODE
+
+      - name: Require exact current main and coherent Required CI 6/6
+        id: ci
+        uses: actions/github-script@v7
+        env:
+          SOURCE_SHA: ${{ steps.command.outputs.source_sha }}
+        with:
+          script: |
+            const target = process.env.SOURCE_SHA;
+            const main = await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: 'main',
+            });
+            if (main.data.commit.sha !== target) {
+              core.setFailed(`Backup source SHA is stale: target=${target} main=${main.data.commit.sha}`);
+              return;
+            }
+            const required = [
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: target,
+              per_page: 100,
+            });
+            const latest = new Map();
+            for (const status of statuses) {
+              if (!latest.has(status.context)) latest.set(status.context, status);
+            }
+            const evidence = required.map((name) => latest.get(name));
+            if (evidence.some((status) => status?.state !== 'success')) {
+              core.setFailed('Exact current main does not have all six successful Required statuses.');
+              return;
+            }
+            const runIds = new Set(evidence.map((status) => {
+              const m = /\/actions\/runs\/(\d+)/.exec(String(status.target_url ?? ''));
+              return m?.[1] ?? null;
+            }));
+            if (runIds.size !== 1 || runIds.has(null)) {
+              core.setFailed('Required statuses do not share one exact Application CI provenance run.');
+              return;
+            }
+            const runId = Number([...runIds][0]);
+            const run = await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId,
+            });
+            if (run.data.head_sha !== target || run.data.status !== 'completed' || run.data.conclusion !== 'success') {
+              core.setFailed('Required CI provenance is not an exact successful current-main run.');
+              return;
+            }
+            core.setOutput('run_id', String(runId));
+
+      - name: Require latest successful Production deployment provenance
+        uses: actions/github-script@v7
+        env:
+          ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
+        with:
+          script: |
+            const active = process.env.ACTIVE_SHA;
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'production-deploy.yml',
+              event: 'workflow_dispatch',
+              per_page: 100,
+            });
+            const latest = runs
+              .filter((run) => run.status === 'completed' && run.conclusion === 'success')
+              .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+            if (!latest || String(latest.head_sha).toLowerCase() !== active) {
+              core.setFailed('Active Production SHA does not match the latest successful Production Deploy.');
+              return;
+            }
+            core.info(`Production provenance accepted from Run ${latest.id}.`);
+
+      - name: Require exact checked-out source and Backup DR contracts
+        env:
+          SOURCE_SHA: ${{ steps.command.outputs.source_sha }}
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main
+          test "$(git rev-parse origin/main^{commit})" = "$SOURCE_SHA"
+          git checkout --detach "$SOURCE_SHA"
+          node --check ops/backup-dr/create-encrypted-postgres-backup.mjs
+          node ops/backup-dr/contract.test.mjs
+          node ops/backup-dr/one-time-create-contract.test.mjs
+
+      - name: Configure Production SSH without exposing credentials
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          umask 077
+          mkdir -p ~/.ssh "$LOCAL_BACKUP_DIR"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts 2>/dev/null
+          fi
+
+      - name: Verify deployed Production identity and derive public project identity
+        id: production
+        env:
+          ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
+        run: |
+          set -Eeuo pipefail
+          out="$RUNNER_TEMP/production-public-identity.json"
+          quoted_sha="$(printf '%q' "$ACTIVE_SHA")"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "ACTIVE_SHA=$quoted_sha node -" > "$out" <<'NODE'
+          const fs = require('node:fs');
+          const { execFileSync } = require('node:child_process');
+          const active = String(process.env.ACTIVE_SHA ?? '').toLowerCase();
+          if (!/^[0-9a-f]{40}$/.test(active)) process.exit(2);
+          const marker = '/opt/stock-app/.deploy/current-sha';
+          if (!fs.existsSync(marker) || fs.readFileSync(marker, 'utf8').trim().toLowerCase() !== active) process.exit(3);
+          const processes = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8' }));
+          const app = processes.find((item) => item.name === 'stock-app');
+          if (app?.pm2_env?.status !== 'online') process.exit(4);
+          if (String(app.pm2_env.DEPLOY_SHA ?? '').toLowerCase() !== active) process.exit(5);
+
+          const urlKeys = ['NEXT_PUBLIC_SUPABASE_URL','PUBLIC_SUPABASE_URL','SUPABASE_URL','VITE_SUPABASE_URL'];
+          const candidates = [];
+          for (const key of urlKeys) {
+            const value = String(app.pm2_env?.[key] ?? '').trim();
+            if (value) candidates.push(value);
+          }
+          const files = ['/opt/stock-app/.env','/opt/stock-app/.env.production','/opt/stock-app/api-server/.env','/opt/stock-app/api-server/.env.production'];
+          for (const file of files) {
+            try {
+              const stat = fs.lstatSync(file);
+              if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o022) !== 0) continue;
+              const text = fs.readFileSync(file, 'utf8');
+              for (const line of text.split(/\r?\n/)) {
+                const m = /^\s*(?:export\s+)?(NEXT_PUBLIC_SUPABASE_URL|PUBLIC_SUPABASE_URL|SUPABASE_URL|VITE_SUPABASE_URL)\s*=\s*['"]?([^'"\s#]+)['"]?/.exec(line);
+                if (m?.[2]) candidates.push(m[2]);
+              }
+            } catch {}
+          }
+          let projectRef = '';
+          for (const value of candidates) {
+            try {
+              const url = new URL(value);
+              const host = url.hostname.toLowerCase();
+              const m = /^([a-z0-9-]{6,64})\.supabase\.(?:co|com)$/.exec(host);
+              if (m) { projectRef = m[1]; break; }
+            } catch {}
+          }
+          if (!projectRef) process.exit(6);
+          process.stdout.write(JSON.stringify({ activeSha: active, pm2Online: true, projectRef }));
+          NODE
+          node - "$out" <<'NODE'
+          const fs = require('node:fs');
+          const value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (!/^[a-z0-9-]{6,64}$/.test(value?.projectRef ?? '')) process.exit(1);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `project_ref=${value.projectRef}\n`);
+          NODE
+          rm -f "$out"
+
+      - name: Select bounded DB credential and age public recipient without logging values
+        id: credentials
+        env:
+          COMMAND_RECIPIENT: ${{ steps.command.outputs.command_recipient }}
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const candidates = [
+            ['PROD_DATABASE_URL', process.env.C_PROD_DATABASE_URL],
+            ['PRODUCTION_DATABASE_URL', process.env.C_PRODUCTION_DATABASE_URL],
+            ['POSTGRES_URL_NON_POOLING', process.env.C_POSTGRES_URL_NON_POOLING],
+            ['PROD_SUPABASE_DB_URL', process.env.C_PROD_SUPABASE_DB_URL],
+            ['SUPABASE_DB_URL', process.env.C_SUPABASE_DB_URL],
+            ['POSTGRES_URL', process.env.C_POSTGRES_URL],
+            ['DATABASE_URL', process.env.C_DATABASE_URL],
+          ];
+          let selected = null;
+          for (const [name, raw] of candidates) {
+            const value = String(raw ?? '').trim();
+            if (!value || /[\r\n]/.test(value)) continue;
+            try {
+              const u = new URL(value);
+              const database = decodeURIComponent(u.pathname.replace(/^\/+/, ''));
+              if (!['postgres:', 'postgresql:'].includes(u.protocol) || !u.hostname || !u.username || !u.password || !database) continue;
+              selected = { name, value };
+              break;
+            } catch {}
+          }
+          if (!selected) {
+            console.error('No bounded Production PostgreSQL URL credential is configured.');
+            process.exit(2);
+          }
+          const recipient = String(process.env.COMMAND_RECIPIENT || process.env.C_BACKUP_AGE_RECIPIENT_SECRET || process.env.C_BACKUP_AGE_RECIPIENT_VAR || '').trim();
+          if (!/^age1[0-9a-z]{20,}$/.test(recipient)) {
+            console.error('No valid age X25519 public recipient is configured or supplied.');
+            process.exit(3);
+          }
+          process.stdout.write(`::add-mask::${selected.value}\n`);
+          process.stdout.write(`::add-mask::${recipient}\n`);
+          fs.appendFileSync(process.env.GITHUB_ENV, `BACKUP_DATABASE_URL=${selected.value}\nBACKUP_AGE_RECIPIENT=${recipient}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `db_source=${selected.name}\n`);
+          NODE
+
+      - name: Install ephemeral backup tools on runner only
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq age postgresql-client >/dev/null
+          age --version >/dev/null
+          pg_dump --version >/dev/null
+
+      - name: Create exactly one encrypted logical backup on ephemeral runner
+        id: backup
+        env:
+          BACKUP_EXECUTION_APPROVED: CREATE_ENCRYPTED_BACKUP
+          BACKUP_EXPECTED_PROJECT_REF: ${{ steps.production.outputs.project_ref }}
+          BACKUP_OUTPUT_DIR: ${{ env.LOCAL_BACKUP_DIR }}
+          BACKUP_SOURCE_LABEL: production
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          output="$RUNNER_TEMP/backup-create-output.txt"
+          node ops/backup-dr/create-encrypted-postgres-backup.mjs > "$output"
+          node - "$LOCAL_BACKUP_DIR" "$GITHUB_OUTPUT" <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const crypto = require('node:crypto');
+          const [dir, output] = process.argv.slice(2);
+          const files = fs.readdirSync(dir);
+          const payloads = files.filter((name) => name.endsWith('.dump.age'));
+          if (payloads.length !== 1) process.exit(1);
+          const payload = payloads[0];
+          const full = path.join(dir, payload);
+          const checksumPath = `${full}.sha256`;
+          const manifestPath = `${full}.json`;
+          if (!fs.existsSync(checksumPath) || !fs.existsSync(manifestPath)) process.exit(1);
+          const bytes = fs.statSync(full).size;
+          if (bytes <= 0) process.exit(1);
+          const sha256 = crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex');
+          const expected = fs.readFileSync(checksumPath, 'utf8').trim().split(/\s+/)[0];
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+          if (sha256 !== expected || manifest?.sha256 !== sha256 || manifest?.encrypted !== true || manifest?.plaintextAtRest !== false) process.exit(1);
+          const backupId = String(manifest.backupId ?? '').trim();
+          if (!/^postgres-production-[A-Za-z0-9_-]{8,100}$/.test(backupId)) process.exit(1);
+          fs.appendFileSync(output, [
+            `payload=${payload}`,
+            `backup_id=${backupId}`,
+            `sha256=${sha256}`,
+            `bytes=${bytes}`,
+            '',
+          ].join('\n'));
+          NODE
+          rm -f "$output"
+
+      - name: Persist encrypted bundle to bounded Production host backup directory
+        id: persist
+        env:
+          PAYLOAD: ${{ steps.backup.outputs.payload }}
+          BACKUP_ID: ${{ steps.backup.outputs.backup_id }}
+          EXPECTED_SHA256: ${{ steps.backup.outputs.sha256 }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$BACKUP_ID" =~ ^postgres-production-[A-Za-z0-9_-]{8,100}$ ]]
+          [[ "$PAYLOAD" == "$BACKUP_ID.dump.age" ]]
+          PARTIAL=".local/share/investment-platform/backups/postgres/.partial-${GITHUB_RUN_ID}"
+          FINAL=".local/share/investment-platform/backups/postgres/${BACKUP_ID}"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "PARTIAL='$PARTIAL' FINAL='$FINAL' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          umask 077
+          case "$PARTIAL" in .local/share/investment-platform/backups/postgres/.partial-*) ;; *) exit 10;; esac
+          case "$FINAL" in .local/share/investment-platform/backups/postgres/postgres-production-*) ;; *) exit 11;; esac
+          test ! -e "$FINAL"
+          mkdir -p .local/share/investment-platform/backups/postgres
+          mkdir "$PARTIAL"
+          REMOTE
+          printf 'remote_partial=%s\nremote_final=%s\n' "$PARTIAL" "$FINAL" >> "$GITHUB_OUTPUT"
+          scp -i ~/.ssh/id_ed25519 -P "$SSH_PORT" -o BatchMode=yes \
+            "$LOCAL_BACKUP_DIR/$PAYLOAD" "$LOCAL_BACKUP_DIR/$PAYLOAD.sha256" "$LOCAL_BACKUP_DIR/$PAYLOAD.json" \
+            "$SSH_USER@$SSH_HOST:$PARTIAL/"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "PARTIAL='$PARTIAL' FINAL='$FINAL' PAYLOAD='$PAYLOAD' EXPECTED_SHA256='$EXPECTED_SHA256' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          case "$PARTIAL" in .local/share/investment-platform/backups/postgres/.partial-*) ;; *) exit 20;; esac
+          case "$FINAL" in .local/share/investment-platform/backups/postgres/postgres-production-*) ;; *) exit 21;; esac
+          test "$(find "$PARTIAL" -maxdepth 1 -type f | wc -l | tr -d ' ')" = 3
+          test -s "$PARTIAL/$PAYLOAD"
+          test -s "$PARTIAL/$PAYLOAD.sha256"
+          test -s "$PARTIAL/$PAYLOAD.json"
+          actual="$(sha256sum "$PARTIAL/$PAYLOAD" | awk '{print $1}')"
+          test "$actual" = "$EXPECTED_SHA256"
+          test "$(awk '{print $1}' "$PARTIAL/$PAYLOAD.sha256")" = "$EXPECTED_SHA256"
+          chmod 600 "$PARTIAL"/*
+          mv "$PARTIAL" "$FINAL"
+          test -d "$FINAL"
+          REMOTE
+
+      - name: Record sanitized success on release control
+        env:
+          ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
+          SOURCE_SHA: ${{ steps.command.outputs.source_sha }}
+          BACKUP_ID: ${{ steps.backup.outputs.backup_id }}
+          SHA256: ${{ steps.backup.outputs.sha256 }}
+          BYTES: ${{ steps.backup.outputs.bytes }}
+          DB_SOURCE: ${{ steps.credentials.outputs.db_source }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+              body: [
+                '[BACKUP_DR_ONE_TIME_RESULT]',
+                `source_sha: ${process.env.SOURCE_SHA}`,
+                `active_production_sha: ${process.env.ACTIVE_SHA}`,
+                `workflow_run: ${context.runId}`,
+                'outcome: success',
+                `backup_id: ${process.env.BACKUP_ID}`,
+                'encrypted: true',
+                'plaintext_at_rest: false',
+                `sha256: ${process.env.SHA256}`,
+                `bytes: ${process.env.BYTES}`,
+                `db_credential_source_name: ${process.env.DB_SOURCE}`,
+                'server_scope: HOME_LOCAL_ENCRYPTED_ONLY',
+                'github_backup_artifact_uploaded: false',
+                'offsite_copy_executed: false',
+                'restore_drill_executed: false',
+                'schedule_activated: false',
+                'production_deploy_executed: false',
+                'database_mutation: false',
+                'live_trading: false',
+                'private_trading_api: false',
+                'real_order_count: 0',
+              ].join('\n'),
+            });
+
+      - name: Remove bounded remote partial directory on failure only
+        if: failure() && steps.persist.outputs.remote_partial != ''
+        env:
+          PARTIAL: ${{ steps.persist.outputs.remote_partial }}
+        run: |
+          set -Eeuo pipefail
+          case "$PARTIAL" in .local/share/investment-platform/backups/postgres/.partial-*) ;; *) exit 1;; esac
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "PARTIAL='$PARTIAL' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          case "$PARTIAL" in .local/share/investment-platform/backups/postgres/.partial-*) ;; *) exit 2;; esac
+          rm -rf -- "$PARTIAL"
+          REMOTE
+
+      - name: Remove ephemeral runner backup material
+        if: always()
+        run: |
+          set -Eeuo pipefail
+          rm -rf -- "$LOCAL_BACKUP_DIR"
+          rm -f -- ~/.ssh/id_ed25519

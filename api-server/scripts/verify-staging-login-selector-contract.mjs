@@ -4,22 +4,23 @@ import path from 'node:path';
 const root = path.basename(process.cwd()) === 'api-server'
   ? path.resolve(process.cwd(), '..')
   : path.resolve(process.cwd());
-const spec = await readFile(
+const normalizeNewlines = (value) => value.replace(/\r\n?/g, '\n');
+const spec = normalizeNewlines(await readFile(
   path.join(root, 'stock-analyzer/e2e/phase10-staging-readiness.spec.ts'),
   'utf8',
-);
-const app = await readFile(
+));
+const app = normalizeNewlines(await readFile(
   path.join(root, 'stock-analyzer/src/App.tsx'),
   'utf8',
-);
-const auth = await readFile(
+));
+const auth = normalizeNewlines(await readFile(
   path.join(root, 'stock-analyzer/src/lib/auth.tsx'),
   'utf8',
-);
-const routes = await readFile(
+));
+const routes = normalizeNewlines(await readFile(
   path.join(root, 'api-server/src/routes/index.ts'),
   'utf8',
-);
+));
 const assert = (condition, message) => {
   if (!condition) throw new Error(`[staging-login-selector-contract] ${message}`);
 };
@@ -42,8 +43,10 @@ assert(
 );
 
 assert(spec.includes('expected_logout_aborts: Diagnostic[]'), 'expected logout abort diagnostics bucket is missing');
-assert(spec.includes('type LogoutObservation = { candidates: Diagnostic[] }'), 'logout aborts must remain pending until post-logout checks pass');
+assert(spec.includes('type LogoutObservation = {'), 'logout observation contract is missing');
+assert(spec.includes('logoutScopedReads: Set<Request>'), 'logout observation must retain exact logout-scoped read request identities');
 assert(spec.includes('const activeLogoutObservations = new WeakMap<Page, LogoutObservation>()'), 'logout observation must be scoped to the active page');
+assert(spec.includes('const confirmedLogoutAbortRequests = new WeakMap<Request, string>()'), 'confirmed delayed aborts must remain scoped to exact request identities');
 assert(spec.includes("request.method() === 'POST'"), 'only POST logout requests may be considered expected');
 assert(spec.includes("parsed.pathname === '/auth/v1/logout'"), 'logout path must match exactly');
 assert(spec.includes('query.length === 1'), 'logout request must contain no query parameter other than scope');
@@ -51,11 +54,32 @@ assert(spec.includes("query[0]?.[0] === 'scope'"), 'logout query key must be sco
 assert(spec.includes("query[0]?.[1] === 'global'"), 'logout scope must be global');
 assert(spec.includes("request.failure()?.errorText === 'net::ERR_ABORTED'"), 'only the exact Chromium abort reason may be expected');
 
+const scopedReadPaths = [
+  '/api/user-integrations',
+  '/api/accounts/read-only/toss',
+  '/api/accounts/read-only/upbit',
+  '/api/accounts/read-only/bitget',
+];
+assert(spec.includes('const logoutScopedReadPaths = new Set(['), 'logout-scoped read path allowlist is missing');
+for (const route of scopedReadPaths) {
+  assert(spec.includes(`  '${route}',`), `logout-scoped read path is missing: ${route}`);
+}
+assert(!spec.includes("  '/api/accounts/read-only/kiwoom',"), 'Kiwoom must remain excluded from the logout-scoped read allowlist');
+assert(spec.includes('function isLogoutScopedReadIdentity('), 'logout-scoped read identity matcher is missing');
+assert(spec.includes("return method === 'GET'"), 'logout-scoped reads must remain GET-only');
+assert(spec.includes('logoutScopedReadPaths.has(parsed.pathname)'), 'logout-scoped reads must match an exact enumerated pathname');
+assert(spec.includes('parsed.searchParams.size === 0'), 'logout-scoped read exception must reject query-bearing requests');
+assert(spec.includes('parsed.origin === expectedOrigin'), 'logout-scoped read exception must remain on the origin captured before logout');
+
 const visibleIndex = spec.indexOf('await expect(logoutButton).toBeVisible();');
 const observationIndex = spec.indexOf('activeLogoutObservations.set(page, observation);');
 const clickIndex = spec.indexOf('await logoutButton.click();');
 assert(visibleIndex >= 0 && observationIndex > visibleIndex && clickIndex > observationIndex, 'expected window must open only around an explicit visible logout-button click');
 assert(spec.includes('logoutObservation.candidates.push(diagnostic);'), 'matching logout aborts must be held as candidates first');
+assert(spec.includes('return isLogoutScopedRead(request, expectedOrigin);'), 'read-only integration drain must reuse the exact enumerated same-origin GET classifier');
+assert(spec.includes('logoutObservation.logoutScopedReads.add(request);'), 'only an exact logout-scoped request observed during the explicit logout window may become a delayed candidate');
+assert(spec.includes('observation.logoutScopedReads.has(request)'), 'active abort classification must require exact request identity');
+assert(spec.includes('confirmedLogoutAbortRequests.get(request)'), 'delayed abort classification must require an exact confirmed request identity');
 assert(spec.includes('routeObservation.candidates.push(diagnostic);'), 'matching route-transition aborts must be held as candidates first');
 assert(
   spec.indexOf('diagnostics.expected_logout_aborts.push(...observation.candidates);')
@@ -66,10 +90,217 @@ assert(spec.includes('await page.reload();'), 'logout validation must refresh th
 assert(spec.includes("await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toHaveCount(0);"), 'logout session must not return after refresh');
 assert(spec.includes("page.request.get('/api/paper-journal/snapshot')"), 'logout validation must probe a protected API');
 assert(spec.includes('[401, 403]'), 'protected API must be denied with 401 or 403 after logout');
+assert(
+  spec.indexOf('confirmedLogoutAbortRequests.set(request, observation.origin);')
+    > spec.indexOf("expect(\n      [401, 403],"),
+  'delayed request identities may be confirmed only after protected API denial succeeds',
+);
 assert(spec.includes('unconfirmed logout abort:'), 'unconfirmed candidates must return to unexpected HTTP errors');
 assert(spec.includes('diagnostics.unexpected_http_errors.push(diagnostic);'), 'all non-matching failed requests must remain unexpected');
 assert(spec.includes('if (response.status() < 400) return;'), 'all browser 4xx and 5xx responses must remain unexpected');
-assert(!spec.includes("'/rest/v1/profiles'"), 'profile request aborts must be eliminated in the app, never allowlisted in staging diagnostics');
+
+const responsiveLogoutStart = spec.indexOf("test(`${name}: login, refresh session retention, responsive layout, and logout`");
+const responsiveReloadIndex = spec.indexOf('await page.reload();', responsiveLogoutStart);
+const responsivePostReloadSettleIndex = spec.indexOf('await settle(page);', responsiveReloadIndex);
+const responsivePostReloadIntegrationDrainIndex = spec.indexOf(
+  'await waitForPendingPersonalIntegrationReads(page);',
+  responsivePostReloadSettleIndex,
+);
+const responsiveLogoutIndex = spec.indexOf('await logout(page);', responsivePostReloadSettleIndex);
+assert(
+  responsiveLogoutStart >= 0
+    && responsiveReloadIndex > responsiveLogoutStart
+    && responsivePostReloadSettleIndex > responsiveReloadIndex
+    && responsivePostReloadIntegrationDrainIndex > responsivePostReloadSettleIndex
+    && responsivePostReloadIntegrationDrainIndex < responsiveLogoutIndex,
+  'the reload-created personal integration GET must settle before the verifier starts logout',
+);
+
+const profileMatcherStart = spec.indexOf('function isProfileRequest(request: Request)');
+const profileMatcherEnd = spec.indexOf('\nfunction isExpectedAuthFault(', profileMatcherStart);
+assert(
+  profileMatcherStart >= 0 && profileMatcherEnd > profileMatcherStart,
+  'profile request matcher boundaries are missing',
+);
+const profileMatcherBlock = spec.slice(profileMatcherStart, profileMatcherEnd);
+assert(profileMatcherBlock.includes("request.method() === 'GET'"), 'profile fault injection must match only GET requests');
+assert(profileMatcherBlock.includes("parsed.pathname === '/rest/v1/profiles'"), 'profile fault injection must match the exact Supabase profile pathname');
+assert(!profileMatcherBlock.includes('.includes('), 'profile request identification must not use a broad substring matcher');
+assert(!profileMatcherBlock.includes('.startsWith('), 'profile request identification must not broaden to a pathname prefix');
+
+const authFaultMatcherStart = spec.indexOf('function isExpectedAuthFault(request: Request, observation: AuthFaultObservation)');
+const authFaultMatcherEnd = spec.indexOf('\nfunction isExpectedRouteTransitionAbort(', authFaultMatcherStart);
+assert(
+  authFaultMatcherStart >= 0 && authFaultMatcherEnd > authFaultMatcherStart,
+  'auth fault matcher boundaries are missing',
+);
+const authFaultMatcherBlock = spec.slice(authFaultMatcherStart, authFaultMatcherEnd);
+assert(authFaultMatcherBlock.includes('observation.requests.has(request)'), 'auth fault candidates must belong to the active observation request set');
+assert(authFaultMatcherBlock.includes('isProfileRequest(request)'), 'auth fault candidates must also satisfy the exact profile request matcher');
+assert(
+  authFaultMatcherBlock.includes('observation.requests.has(request) && isProfileRequest(request)'),
+  'auth fault classification must require both observation identity and exact profile matching',
+);
+assert(
+  (spec.match(/observation\.requests\.add\(request\);/g) ?? []).length >= 3,
+  'each deterministic profile fault fixture must register the exact intercepted request before classification',
+);
+
+const finishAuthFaultStart = spec.indexOf('async function finishAuthFault(');
+const finishAuthFaultEnd = spec.indexOf('\nasync function expectBootstrapTerminalError(', finishAuthFaultStart);
+assert(
+  finishAuthFaultStart >= 0 && finishAuthFaultEnd > finishAuthFaultStart,
+  'auth fault finalization boundaries are missing',
+);
+const finishAuthFaultBlock = spec.slice(finishAuthFaultStart, finishAuthFaultEnd);
+assert(finishAuthFaultBlock.includes('activeAuthFaultObservations.delete(page);'), 'auth fault observation must close before candidate finalization');
+assert(finishAuthFaultBlock.includes('diagnostics.expected_auth_faults.push(...observation.candidates);'), 'only confirmed auth fault candidates may be recorded as expected');
+assert(finishAuthFaultBlock.includes('diagnostics.unexpected_http_errors.push(...observation.candidates.map((item) => ({'), 'unconfirmed auth fault candidates must return to unexpected HTTP errors');
+assert(finishAuthFaultBlock.includes('unconfirmed auth fault:'), 'unconfirmed auth fault fallback must remain explicit in diagnostics');
+
+const requestFailedStart = spec.indexOf("page.on('requestfailed', (request) => {");
+const requestFailedFallback = spec.indexOf('diagnostics.unexpected_http_errors.push(diagnostic);', requestFailedStart);
+const authFaultRequestCheck = spec.indexOf("authFault && authFault.kind === 'timeout' && isExpectedAuthFault(request, authFault)", requestFailedStart);
+const routeTransitionRequestCheck = spec.indexOf('routeObservation && isExpectedRouteTransitionAbort(request, routeObservation)', requestFailedStart);
+assert(requestFailedStart >= 0, 'requestfailed diagnostics handler is missing');
+assert(
+  authFaultRequestCheck > requestFailedStart
+    && routeTransitionRequestCheck > authFaultRequestCheck
+    && requestFailedFallback > routeTransitionRequestCheck,
+  'unmatched request failures must fall through every scoped exemption into unexpected HTTP errors',
+);
+assert(!spec.includes('function isExpectedProfileAbort('), 'blanket profile abort classification is forbidden');
+assert(!spec.includes('function isExpectedScannerAbort('), 'blanket scanner abort classification is forbidden');
+assert(!spec.includes('expected_profile_aborts'), 'profile aborts must not have a blanket expected diagnostics bucket');
+assert(!spec.includes('diagnostics.expected_scanner_aborts.push('), 'scanner request failures must never be promoted into a blanket expected-abort bucket');
+assert(
+  spec.includes("expect(diagnostics.expected_scanner_aborts, 'scanner net::ERR_ABORTED must remain zero').toEqual([]);"),
+  'scanner net::ERR_ABORTED must remain a zero-tolerance staging contract',
+);
+assert(!spec.includes("behavior: 'ignoreErrors'"), 'route callback teardown must not suppress in-flight failures');
+
+const scannerReadinessTestStart = spec.indexOf("test('scanner readiness:");
+const scannerReadinessTestEnd = spec.indexOf("\n  test('pending:", scannerReadinessTestStart);
+assert(
+  scannerReadinessTestStart >= 0 && scannerReadinessTestEnd > scannerReadinessTestStart,
+  'scanner readiness fixture boundaries are missing',
+);
+const scannerReadinessTestBlock = spec.slice(scannerReadinessTestStart, scannerReadinessTestEnd);
+assert(
+  scannerReadinessTestBlock.includes("let fixtureState: 'complete' | 'partial' | 'unavailable' = 'complete';"),
+  'scanner readiness must keep one mutable three-state fixture on a single page entry',
+);
+assert(
+  scannerReadinessTestBlock.split("await page.route('**/api/market/scan**'").length - 1 === 1,
+  'scanner readiness must install exactly one scan fixture route',
+);
+assert(
+  scannerReadinessTestBlock.split('const complete = await expectHealthyScannerRoute(page);').length - 1 === 1,
+  'scanner readiness must perform exactly one initial scanner page navigation',
+);
+assert(
+  scannerReadinessTestBlock.split('expectHealthyScannerRoute(page, { open: refreshScanner })').length - 1 === 2,
+  'partial and unavailable states must refresh the mounted scanner instead of navigating again',
+);
+assert(
+  scannerReadinessTestBlock.includes("fixtureState = 'partial';") && scannerReadinessTestBlock.includes("fixtureState = 'unavailable';"),
+  'scanner readiness must exercise partial then unavailable state on the mounted scanner',
+);
+assert(
+  scannerReadinessTestBlock.includes("page.getByRole('heading', { name: 'AI 신호검색기', exact: true })"),
+  'scanner refresh must be scoped to the exact scanner heading',
+);
+assert(
+  scannerReadinessTestBlock.includes("getByRole('button', { name: '새로고침', exact: true }).click();"),
+  'scanner refresh must use the exact scanner refresh button',
+);
+assert(
+  !scannerReadinessTestBlock.includes("for (const state of ['complete', 'partial', 'unavailable'] as const)"),
+  'scanner readiness must not repeat full scanner navigation in a three-state loop',
+);
+assert(
+  scannerReadinessTestBlock.split('.orderCapableRequests).toEqual([]);').length - 1 === 3,
+  'every scanner state must prove zero order-capable requests',
+);
+assert(
+  scannerReadinessTestBlock.includes("expect(diagnostics.expected_scanner_aborts, 'scanner net::ERR_ABORTED must remain zero').toEqual([]);"),
+  'scanner single-entry fixture must preserve the zero-abort contract',
+);
+
+const rejectedProfileBootstrapTestStart = spec.indexOf("test('bootstrap finite-state:");
+const rejectedProfileBootstrapTestEnd = spec.indexOf("\n  test('profile timeout abort:", rejectedProfileBootstrapTestStart);
+assert(
+  rejectedProfileBootstrapTestStart >= 0 && rejectedProfileBootstrapTestEnd > rejectedProfileBootstrapTestStart,
+  'rejected profile bootstrap fixture boundaries are missing',
+);
+const rejectedProfileBootstrapTestBlock = spec.slice(
+  rejectedProfileBootstrapTestStart,
+  rejectedProfileBootstrapTestEnd,
+);
+assert(
+  rejectedProfileBootstrapTestBlock.includes(
+    "expect(requestCount, 'initial bootstrap must issue one profile request').toBe(1);",
+  ),
+  'rejected profile bootstrap must prove exactly one initial profile request',
+);
+
+const retryRecoveryTestStart = spec.indexOf("test('retry recovery:");
+const retryRecoveryTestEnd = spec.indexOf("\n  test('scanner readiness:", retryRecoveryTestStart);
+assert(
+  retryRecoveryTestStart >= 0 && retryRecoveryTestEnd > retryRecoveryTestStart,
+  'retry recovery fixture boundaries are missing',
+);
+const retryRecoveryTestBlock = spec.slice(retryRecoveryTestStart, retryRecoveryTestEnd);
+assert(
+  (retryRecoveryTestBlock.match(/await expectHealthyRoute\(page, '\/account'\);/g) ?? []).length === 1,
+  'retry recovery must bootstrap and recover on the quiet authenticated account route exactly once',
+);
+assert(
+  !retryRecoveryTestBlock.includes("await expectHealthyRoute(page, '/');"),
+  'retry recovery must not use the polling-heavy home route as its bootstrap fixture',
+);
+assert(
+  retryRecoveryTestBlock.includes("await page.getByRole('button', { name: '다시 시도', exact: true }).click();"),
+  'retry recovery must exercise the explicit retry action',
+);
+assert(
+  retryRecoveryTestBlock.includes("expect(requestCount, 'retry must create exactly one fresh profile request after the first failure').toBe(2);"),
+  'retry recovery must prove exactly one fresh profile request',
+);
+assert(
+  retryRecoveryTestBlock.includes("expect(observation.candidates, 'semantic first-attempt rejection must not create a network-error exemption').toHaveLength(0);"),
+  'semantic retry failure must not create a network-error exemption',
+);
+assert(
+  retryRecoveryTestBlock.includes("await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toBeVisible();"),
+  'retry recovery must finish on authenticated account UI',
+);
+
+const profileTimeoutTestStart = spec.indexOf("test('profile timeout abort:");
+const profileTimeoutTestEnd = spec.indexOf("\n  test('retry recovery:", profileTimeoutTestStart);
+assert(
+  profileTimeoutTestStart >= 0 && profileTimeoutTestEnd > profileTimeoutTestStart,
+  'profile timeout fixture boundaries are missing',
+);
+const profileTimeoutTestBlock = spec.slice(profileTimeoutTestStart, profileTimeoutTestEnd);
+assert(
+  profileTimeoutTestBlock.includes('let timeoutRouteSettled = Promise.resolve();'),
+  'profile timeout fixture must track the in-flight route callback',
+);
+assert(
+  profileTimeoutTestBlock.includes('timeoutRouteSettled = (async () => {'),
+  'profile timeout route callback must expose its completion promise',
+);
+const timeoutRouteDrainIndex = profileTimeoutTestBlock.lastIndexOf('await timeoutRouteSettled;');
+const timeoutUnrouteIndex = profileTimeoutTestBlock.indexOf(
+  "await page.unroute('**/rest/v1/profiles*');",
+  timeoutRouteDrainIndex,
+);
+assert(
+  timeoutRouteDrainIndex >= 0 && timeoutUnrouteIndex > timeoutRouteDrainIndex,
+  'profile timeout fixture must await the in-flight route callback before removing the route',
+);
+
 
 assert(spec.includes("return parsed.pathname || '/';"), 'diagnostic URLs must omit hosts and arbitrary query strings');
 assert(spec.includes("'[redacted-url]'"), 'absolute URLs must be redacted from diagnostic details');
@@ -243,7 +474,7 @@ assert(
   auth.includes('if (!signingOutRef.current && sessionRef.current?.user.id === user.id)'),
   'late profile responses must not restore profile state after logout or a user change',
 );
-assert(auth.includes('if (active && !signingOutRef.current) void loadProfile(session.user);'), 'timer, focus, and visibility refreshes must stop during logout');
+assert(auth.includes('if (active && !signingOutRef.current) void loadProfile(session.user).catch(() => undefined);'), 'timer, focus, and visibility refreshes must stop during logout');
 
 const authSignOutIndex = auth.indexOf('async signOut() {');
 const logoutBarrierIndex = auth.indexOf('signingOutRef.current = true;', authSignOutIndex);
@@ -261,4 +492,4 @@ assert(
 assert(clearSessionIndex > globalLogoutIndex, 'successful global logout must synchronously invalidate session identity');
 assert(releaseBarrierIndex > clearSessionIndex, 'logout barrier must remain active until session identity and profile cleanup finish');
 
-console.log('[staging-login-selector-contract] logout and route-transition candidate classification, current-session profile guard, diagnostic redaction, optional provider degradation, and polling-safe presentation stability are locked down');
+console.log('[staging-login-selector-contract] exact logout-scoped read classification, route-transition candidate classification, scoped profile fault classification, current-session profile guard, diagnostic redaction, optional provider degradation, and polling-safe presentation stability are locked down');

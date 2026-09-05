@@ -25,8 +25,10 @@ function records(count = 120) {
   return Array.from({ length: count }, (_, index) => {
     const x = ((index % 20) - 10) / 5;
     const direction = x > 0.3 ? "bullish" : x < -0.3 ? "bearish" : "neutral";
+    const ruleScore = direction === "bullish" ? 45 : direction === "bearish" ? -45 : 0;
     return Object.freeze({
       features: Object.freeze({ x }),
+      ruleScore,
       label: Object.freeze({ direction }),
     });
   });
@@ -48,7 +50,7 @@ test("ensemble prediction is normalized and deterministic", () => {
   assert.equal(first.modelId, "ensemble-v1");
 });
 
-test("validation-only selector returns a bounded reproducible blend", () => {
+test("validation-only selector returns a bounded reproducible deployed-path blend", () => {
   const first = selectProbabilityEnsemble(records(), {
     id: "selected-ensemble",
     referenceModel: reference,
@@ -71,6 +73,15 @@ test("validation-only selector returns a bounded reproducible blend", () => {
   assert.ok(first.selection.alternateWeight >= 0 && first.selection.alternateWeight <= 1);
   assert.ok(first.selection.temperature >= 0.5 && first.selection.temperature <= 2);
   assert.equal(first.model.modelType, "probability-ensemble");
+});
+
+test("ensemble validation fails closed when deployed rule provenance is missing", () => {
+  const withoutRuleScore = records().map(({ ruleScore: _ruleScore, ...record }) => record);
+  assert.throws(() => selectProbabilityEnsemble(withoutRuleScore, {
+    id: "missing-rule-score",
+    referenceModel: reference,
+    alternateModel: alternate,
+  }), /ruleScore is required/);
 });
 
 test("ensemble rejects invalid or recursively deep definitions", () => {

@@ -133,13 +133,19 @@ function lastIndexAtOrBefore(records, timestamp) {
 export function createTemporalDerivativesProvider({
   fundingHistory = [],
   openInterestSnapshots = [],
+  openInterestTrainingParityConfirmed = false,
   fundingMaxAgeMs = 12 * 60 * 60 * 1000,
   openInterestMaxAgeMs = 2 * 60 * 60 * 1000,
 } = {}) {
+  if (typeof openInterestTrainingParityConfirmed !== "boolean") {
+    throw new TypeError("openInterestTrainingParityConfirmed must be boolean");
+  }
   if (!Number.isInteger(fundingMaxAgeMs) || fundingMaxAgeMs <= 0) throw new TypeError("fundingMaxAgeMs must be positive");
   if (!Number.isInteger(openInterestMaxAgeMs) || openInterestMaxAgeMs <= 0) throw new TypeError("openInterestMaxAgeMs must be positive");
   const funding = uniqueSorted(fundingHistory.map(normalizeFundingRateRecord), "rateRaw");
-  const oi = uniqueSorted(openInterestSnapshots.map(normalizeOpenInterestSnapshot), "valueRaw");
+  const oi = openInterestTrainingParityConfirmed
+    ? uniqueSorted(openInterestSnapshots.map(normalizeOpenInterestSnapshot), "valueRaw")
+    : [];
 
   return ({ anchorTimestamp }) => {
     const anchor = positiveTimestamp(anchorTimestamp, "anchorTimestamp");

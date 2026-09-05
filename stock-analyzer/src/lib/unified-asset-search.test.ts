@@ -3,7 +3,12 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { prioritizeUnifiedAssetSuggestions } from './unified-asset-search-priority';
-import { unifiedAssetDetailPath, type UnifiedAssetSuggestion } from './unified-asset-search';
+import {
+  deriveUnifiedSearchOutcome,
+  unifiedAssetDetailPath,
+  type UnifiedAssetSuggestion,
+  type UnifiedAssetSuggestResponse,
+} from './unified-asset-search';
 
 const now = '2026-08-04T07:00:00.000Z';
 
@@ -34,6 +39,23 @@ function detailParams(item: UnifiedAssetSuggestion, backPath?: string) {
   const [pathname, query = ''] = value.split('?');
   return { pathname, params: new URLSearchParams(query) };
 }
+
+function searchResponse(overrides: Partial<UnifiedAssetSuggestResponse> = {}): UnifiedAssetSuggestResponse {
+  return {
+    ok: true, state: 'EMPTY', q: 'none', asset: 'all', market: null,
+    results: [], count: 0, dataAsOf: now, stale: false, partial: false,
+    providers: [], hiddenMatches: [],
+    ...overrides,
+  };
+}
+
+test('search distinguishes no match, provider unavailable, and data unavailable', () => {
+  assert.equal(deriveUnifiedSearchOutcome(searchResponse()), 'NO_MATCH');
+  assert.equal(deriveUnifiedSearchOutcome(searchResponse({ state: 'DEGRADED', partial: true })), 'PROVIDER_UNAVAILABLE');
+  assert.equal(deriveUnifiedSearchOutcome(searchResponse({ providers: [{ provider: 'upbit', status: 'error', count: 0, dataAsOf: null }] })), 'PROVIDER_UNAVAILABLE');
+  assert.equal(deriveUnifiedSearchOutcome(searchResponse({ ok: false, state: 'ERROR' })), 'DATA_UNAVAILABLE');
+  assert.equal(deriveUnifiedSearchOutcome(searchResponse({ state: 'FULL', results: [suggestion({ id: 'kr', market: 'KR', productCode: '005930', ticker: '005930', displayName: '삼성전자', matchType: 'code_exact' })], count: 1 })), 'RESULTS_AVAILABLE');
+});
 
 test('never lets preference priority cross strict match categories', () => {
   const exact = suggestion({ id: 'exact', market: 'US', productCode: 'TSLA', ticker: 'TSLA', displayName: 'Tesla', matchType: 'code_exact' });
@@ -104,7 +126,7 @@ test('keeps Upbit spot and Bitget futures detail identities separate', () => {
 test('application routes keep unified search capability-gated and separate from legacy lists', () => {
   const appSource = readFileSync(path.join(process.cwd(), 'stock-analyzer/src/App.tsx'), 'utf8');
 
-  assert.match(appSource, /function UnifiedAssetSearchAccess\(\) \{ return gated\('canAccessBasicInfo', <UnifiedAssetSearchPage \/>\); \}/);
+  assert.match(appSource, /function UnifiedAssetSearchAccess\(\) \{ return gated\('canAccessBasicInfo', builder\('ASSET_SEARCH', <UnifiedAssetSearchPage \/>\)\); \}/);
   assert.match(appSource, /<Route path="\/stocks" component=\{UnifiedAssetSearchAccess\} \/>/);
   assert.match(appSource, /<Route path="\/search" component=\{UnifiedAssetSearchAccess\} \/>/);
   assert.match(appSource, /<Route path="\/market-rankings" component=\{SearchPage\} \/>/);
@@ -118,3 +140,4 @@ test('keeps Production main global console contract intact', () => {
   assert.doesNotMatch(mainSource, /configureRecoverableSearchDiagnostics/);
   assert.doesNotMatch(mainSource, /console\.error\s*=/);
 });
+

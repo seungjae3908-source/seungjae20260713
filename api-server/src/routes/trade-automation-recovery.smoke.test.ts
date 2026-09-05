@@ -93,7 +93,7 @@ test('recovery scan marks open order, queries provider once, and submits no exch
     assert.match(url, /\/v1\/order\?identifier=route-recovery-client/);
     assert.equal(method, 'GET');
     return new Response(JSON.stringify({
-      uuid: 'route-upbit-order', identifier: 'route-recovery-client', state: 'done',
+      uuid: 'route-upbit-order', identifier: 'route-recovery-client', market: 'KRW-BTC', state: 'done',
       volume: '0.001', remaining_volume: '0', executed_volume: '0.001', paid_fee: '25',
       created_at: '2026-08-05T03:35:00.000Z',
       trades: [{ uuid: 'route-fill', price: '100000000', volume: '0.001', created_at: '2026-08-05T03:35:01.000Z' }],

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { Candle } from '../sample/types';
+import { ScannerUniverseService, clearScannerUniverseCacheForTests } from './scanner-universe.service';
 import { aggregateUsSessionCandles } from './stock-signal-scanner.service';
 
 function row(
@@ -17,6 +18,50 @@ function row(
 function simple(time: string, value: number): Candle {
   return row(time, value, value + 2, value - 2, value + 1, value * 10);
 }
+
+test('KR scanner universe deadline aborts live provider work and returns explicit stale fallback', async () => {
+  clearScannerUniverseCacheForTests();
+  const originalFetch = globalThis.fetch;
+  const savedEnvironment = {
+    SUPABASE_URL: process.env.SUPABASE_URL,
+    SUPABASE_SECRET_KEY: process.env.SUPABASE_SECRET_KEY,
+    SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
+  };
+  delete process.env.SUPABASE_URL;
+  delete process.env.SUPABASE_SECRET_KEY;
+  delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+  let abortedRequests = 0;
+
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => (
+    await new Promise<Response>((_resolve, reject) => {
+      const signal = init?.signal;
+      assert.ok(signal, 'KRX universe request must carry an abort signal');
+      const onAbort = () => {
+        abortedRequests += 1;
+        reject(signal.reason ?? new Error('aborted'));
+      };
+      if (signal.aborted) onAbort();
+      else signal.addEventListener('abort', onAbort, { once: true });
+    })
+  )) as typeof fetch;
+
+  try {
+    const result = await ScannerUniverseService.get('KR', undefined, 25);
+    assert.equal(result.source, 'curated-fallback');
+    assert.equal(result.partial, true);
+    assert.equal(result.stale, true);
+    assert.equal(result.providerErrorCount, 1);
+    assert.ok(result.entries.length > 0);
+    assert.equal(abortedRequests, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+    for (const [key, value] of Object.entries(savedEnvironment)) {
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+    clearScannerUniverseCacheForTests();
+  }
+});
 
 test('US 3m aggregation sorts lower bars and preserves exact OHLCV', () => {
   const result = aggregateUsSessionCandles([

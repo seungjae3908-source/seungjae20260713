@@ -1,7 +1,10 @@
 import { authorizedFetch } from '@/lib/auth-fetch';
+import { resolveAssetDetailPath, type CanonicalAssetIdentity } from '@/lib/asset-navigation';
 
 export type UnifiedAssetFilter = 'all' | 'stock' | 'coin';
 export type UnifiedMarketFilter = 'KR' | 'US' | 'spot' | 'futures';
+export type UnifiedSearchState = 'FULL' | 'PARTIAL' | 'DEGRADED' | 'EMPTY' | 'ERROR';
+export type UnifiedSearchOutcomeCode = 'RESULTS_AVAILABLE' | 'NO_MATCH' | 'PROVIDER_UNAVAILABLE' | 'DATA_UNAVAILABLE';
 
 export interface UnifiedAssetSuggestion {
   id: string;
@@ -33,6 +36,7 @@ export interface UnifiedSearchProviderStatus {
 
 export interface UnifiedAssetSuggestResponse {
   ok: boolean;
+  state: UnifiedSearchState;
   q: string;
   asset: UnifiedAssetFilter;
   market: UnifiedMarketFilter | null;
@@ -54,6 +58,18 @@ export interface UnifiedSearchWatchlistPreference {
 
 export { prioritizeUnifiedAssetSuggestions } from './unified-asset-search-priority';
 
+const SEARCH_CLIENT_TERMINAL_MS = 4_500;
+
+export function deriveUnifiedSearchOutcome(response: UnifiedAssetSuggestResponse): UnifiedSearchOutcomeCode {
+  if (!response.ok || response.state === 'ERROR') return 'DATA_UNAVAILABLE';
+  if (response.results.length > 0) return 'RESULTS_AVAILABLE';
+  if (response.partial || response.stale || response.state === 'PARTIAL' || response.state === 'DEGRADED'
+    || response.providers.some((provider) => provider.status === 'error')) {
+    return 'PROVIDER_UNAVAILABLE';
+  }
+  return 'NO_MATCH';
+}
+
 export async function fetchUnifiedAssetSuggestions(input: {
   q: string;
   asset?: UnifiedAssetFilter;
@@ -67,32 +83,80 @@ export async function fetchUnifiedAssetSuggestions(input: {
     limit: String(Math.max(1, Math.min(50, input.limit ?? 25))),
   });
   if (input.market) params.set('market', input.market);
-  const response = await authorizedFetch(`/api/search/suggest?${params.toString()}`, {
-    cache: 'no-store',
-    signal: input.signal,
-  });
-  const payload = await response.json().catch(() => ({})) as Partial<UnifiedAssetSuggestResponse>;
-  if (!response.ok) {
-    const error = new Error(payload.message ?? payload.error ?? `HTTP_${response.status}`);
-    error.name = payload.error ?? 'UNIFIED_SEARCH_ERROR';
+
+  const terminalController = new AbortController();
+  let terminalTimedOut = false;
+  const abortFromCaller = () => terminalController.abort(input.signal?.reason);
+  if (input.signal?.aborted) abortFromCaller();
+  else input.signal?.addEventListener('abort', abortFromCaller, { once: true });
+  const terminalTimer = setTimeout(() => {
+    terminalTimedOut = true;
+    terminalController.abort();
+  }, SEARCH_CLIENT_TERMINAL_MS);
+
+  try {
+    const response = await authorizedFetch(`/api/search/suggest?${params.toString()}`, {
+      cache: 'no-store',
+      signal: terminalController.signal,
+    });
+    const payload = await response.json().catch(() => ({})) as Partial<UnifiedAssetSuggestResponse>;
+    if (!response.ok) {
+      const error = new Error(payload.message ?? payload.error ?? `HTTP_${response.status}`);
+      error.name = payload.error ?? 'UNIFIED_SEARCH_ERROR';
+      throw error;
+    }
+    return payload as UnifiedAssetSuggestResponse;
+  } catch (error) {
+    if (terminalTimedOut && !input.signal?.aborted) {
+      const timeoutError = new Error('검색 응답이 지연되어 제한 시간 안에 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.');
+      timeoutError.name = 'UNIFIED_SEARCH_TIMEOUT';
+      throw timeoutError;
+    }
     throw error;
+  } finally {
+    clearTimeout(terminalTimer);
+    input.signal?.removeEventListener('abort', abortFromCaller);
   }
-  return payload as UnifiedAssetSuggestResponse;
+}
+
+export function unifiedSuggestionIdentity(item: UnifiedAssetSuggestion, backPath = '/search'): CanonicalAssetIdentity {
+  if (item.assetType === 'stock') {
+    const market = item.market === 'US' ? 'US' : 'KR';
+    const symbol = (item.ticker ?? item.productCode).trim().toUpperCase();
+    return {
+      assetClass: market === 'US' ? 'US_STOCK' : 'KR_STOCK',
+      market,
+      symbol,
+      canonicalSymbol: symbol,
+      backPath,
+    };
+  }
+
+  if (item.market === 'futures') {
+    const symbol = (item.productCode || item.symbol || item.baseSymbol).trim().toUpperCase();
+    return {
+      assetClass: 'CRYPTO_FUTURES',
+      market: 'BITGET',
+      symbol,
+      canonicalSymbol: symbol,
+      backPath,
+    };
+  }
+
+  const rawSymbol = (item.symbol || item.productCode || item.baseSymbol).trim().toUpperCase();
+  const baseSymbol = (item.baseSymbol || rawSymbol.replace(/^(?:KRW|BTC|USDT)-/, '')).trim().toUpperCase();
+  return {
+    assetClass: 'CRYPTO_SPOT',
+    market: 'UPBIT',
+    symbol: rawSymbol,
+    canonicalSymbol: baseSymbol,
+    backPath,
+  };
 }
 
 export function unifiedAssetDetailPath(item: UnifiedAssetSuggestion, backPath = '/search') {
-  const params = new URLSearchParams({ back: backPath });
-  if (item.assetType === 'stock') {
-    params.set('asset', 'stock');
-    params.set('market', item.market);
-    params.set('ticker', item.ticker ?? item.productCode);
-    return `/stock-info?${params.toString()}`;
-  }
-  const symbol = item.market === 'futures'
-    ? item.productCode
-    : item.baseSymbol || item.symbol || item.productCode;
-  params.set('asset', 'coin');
-  params.set('coinMarket', item.market);
-  params.set('symbol', symbol);
-  return `/stock-info?${params.toString()}`;
+  const resolved = resolveAssetDetailPath(unifiedSuggestionIdentity(item, backPath));
+  return item.assetType === 'stock'
+    ? resolved.replace('/stock-info?', '/stock-info/analysis?')
+    : resolved;
 }
