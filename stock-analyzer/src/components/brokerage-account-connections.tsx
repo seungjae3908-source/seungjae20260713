@@ -134,6 +134,7 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
     document.addEventListener('visibilitychange', onVisibility); window.addEventListener('online', onOnline);
     return () => {
       requestSequence.current += 1;
+      controllerRef.current?.abort();
       controllerRef.current = null;
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('online', onOnline);
