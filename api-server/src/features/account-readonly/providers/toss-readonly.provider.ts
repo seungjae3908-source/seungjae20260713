@@ -126,12 +126,35 @@ function records(value: unknown, preferredKey?: string): Record<string, unknown>
   return single ? [single] : [];
 }
 
+function requiredRecord(value: unknown, code: string): Record<string, unknown> {
+  const row = record(value);
+  if (!row) throw new AccountReadonlyError(code);
+  return row;
+}
+
+function requiredRecords(value: unknown, code: string): Record<string, unknown>[] {
+  if (!Array.isArray(value) || !value.every((row) => record(row) !== null)) {
+    throw new AccountReadonlyError(code);
+  }
+  return value as Record<string, unknown>[];
+}
+
+function requiredNumber(value: unknown, code: string) {
+  const parsed = nullableNumber(value);
+  if (parsed === null) throw new AccountReadonlyError(code);
+  return parsed;
+}
+
+function officialHoldingsItems(value: unknown) {
+  const root = requiredRecord(value, 'TOSS_HOLDINGS_RESPONSE_INVALID');
+  const result = requiredRecord(root.result, 'TOSS_HOLDINGS_RESPONSE_INVALID');
+  return requiredRecords(result.items, 'TOSS_HOLDINGS_RESPONSE_INVALID');
+}
+
 function normalizeTossMarket(row: Record<string, unknown>) {
-  const currency = String(row.currency ?? '').toUpperCase();
-  const exchange = String(row.exchangeCode ?? row.exchange ?? '').toUpperCase();
-  if (currency === 'KRW' || /KRX|KOSPI|KOSDAQ/.test(exchange)) return 'KR';
-  if (currency === 'USD' || /NASDAQ|NYSE|AMEX|NASD/.test(exchange)) return 'US';
-  return exchange || 'UNKNOWN';
+  const marketCountry = String(row.marketCountry ?? '').trim().toUpperCase();
+  if (marketCountry === 'KR' || marketCountry === 'US') return marketCountry;
+  throw new AccountReadonlyError('TOSS_HOLDING_MARKET_INVALID');
 }
 
 function selectAccountSeq(accountRows: Record<string, unknown>[], requested?: string) {
@@ -183,23 +206,34 @@ export class TossReadonlyProvider {
     const accountRows = records(accountsRaw, 'accounts');
     const accountSeq = selectAccountSeq(accountRows, credentials.accountSeq);
     const holdingsRaw = await this.request('/api/v1/holdings', credentials, signal, accountSeq);
-    const products = records(holdingsRaw, 'products');
+    const items = officialHoldingsItems(holdingsRaw);
 
-    const positions: CanonicalPosition[] = products.map((row) => ({
-      market: normalizeTossMarket(row),
-      symbol: String(row.productCode ?? row.symbol ?? '').trim(),
-      quantity: nullableNumber(row.quantity),
-      availableQuantity: nullableNumber(row.tradableQuantity ?? row.availableQuantity),
-      averageEntryPrice: nullableNumber(row.averagePurchasePrice),
-      currentPrice: nullableNumber(row.currentPrice),
-      marketValue: nullableNumber(row.evaluationAmount ?? row.marketValue),
-      unrealizedPnl: nullableNumber(row.evaluationProfitLoss ?? row.profitLoss),
-      unrealizedPnlPercent: nullableNumber(row.yield ?? row.profitLossRate),
-      leverage: null,
-      liquidationPrice: null,
-      marginMode: null,
-      side: null,
-    })).filter((row) => row.symbol.length > 0);
+    const positions: CanonicalPosition[] = items.map((row) => {
+      const symbol = String(row.symbol ?? '').trim();
+      if (!symbol) throw new AccountReadonlyError('TOSS_HOLDING_IDENTITY_INVALID');
+      const marketValue = requiredRecord(row.marketValue, 'TOSS_HOLDINGS_RESPONSE_INVALID');
+      const profitLoss = requiredRecord(row.profitLoss, 'TOSS_HOLDINGS_RESPONSE_INVALID');
+      const profitLossRate = requiredNumber(profitLoss.rate, 'TOSS_HOLDINGS_RESPONSE_INVALID');
+      return {
+        market: normalizeTossMarket(row),
+        symbol,
+        quantity: requiredNumber(row.quantity, 'TOSS_HOLDINGS_RESPONSE_INVALID'),
+        availableQuantity: null,
+        averageEntryPrice: requiredNumber(row.averagePurchasePrice, 'TOSS_HOLDINGS_RESPONSE_INVALID'),
+        currentPrice: requiredNumber(row.lastPrice, 'TOSS_HOLDINGS_RESPONSE_INVALID'),
+        marketValue: requiredNumber(marketValue.amount, 'TOSS_HOLDINGS_RESPONSE_INVALID'),
+        unrealizedPnl: requiredNumber(profitLoss.amount, 'TOSS_HOLDINGS_RESPONSE_INVALID'),
+        unrealizedPnlPercent: profitLossRate * 100,
+        leverage: null,
+        liquidationPrice: null,
+        marginMode: null,
+        side: null,
+      };
+    });
+
+    if (new Set(positions.map((row) => `${row.market}:${row.symbol}`)).size !== positions.length) {
+      throw new AccountReadonlyError('TOSS_HOLDING_IDENTITY_DUPLICATE');
+    }
 
     const detectedMarkets = new Set(positions.map((row) => row.market).filter((market) => market === 'KR' || market === 'US'));
     const accounts: CanonicalAccount[] = [...detectedMarkets].map((market) => ({
