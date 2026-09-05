@@ -13,9 +13,11 @@ async function openMenuItem(page: Page, group: string, item: string) {
 
 async function loginThroughUi(page: Page) {
   await page.goto('/login');
-  await expect(page.locator('#login-name')).toBeVisible();
-  await page.locator('#login-name').fill('full-product-e2e');
-  await page.locator('#login-password').fill('Browser-E2E-911!');
+  const loginName = page.getByLabel('아이디');
+  const loginPassword = page.getByLabel('비밀번호');
+  await expect(loginName).toBeVisible();
+  await loginName.fill('full-product-e2e');
+  await loginPassword.fill('Browser-E2E-911!');
   await page.locator('form').getByRole('button', { name: '로그인', exact: true }).click();
   await expect(page).toHaveURL(/\/$/u);
   await expect(page.getByRole('navigation', { name: '주요 메뉴' })).toBeVisible();
@@ -132,7 +134,7 @@ test('real user path stays coherent from login through session expiry', async ({
   await ageBrowserSession(page);
   await page.reload();
   await expect(page).toHaveURL(/\/login$/u);
-  await expect(page.locator('#login-name')).toBeVisible();
+  await expect(page.getByLabel('아이디')).toBeVisible();
 });
 
 test('search fault matrix fails closed and latest response wins without leaking across navigation', async ({ page }, testInfo) => {
