@@ -8,7 +8,11 @@ import { ensureWatchlistSync } from '@/lib/watchlist-sync';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { AppBackground } from '@/components/app-background';
 import { AssetModeProvider, useAssetMode } from '@/lib/asset-mode';
-import { AnalysisSelectionProvider } from '@/lib/analysis-selection';
+import {
+  AnalysisSelectionProvider,
+  normalizeAnalysisSelection,
+  selectionFromSearch,
+} from '@/lib/analysis-selection';
 import { AssetRouteNotResolved, resolveAssetDetailPath, resolveLegacyCryptoDetailPath } from '@/lib/asset-navigation';
 import { OfflineBanner } from '@/components/offline-banner';
 import { ScannerReadinessStatus } from '@/components/scanner-readiness-status';
@@ -18,7 +22,7 @@ import { AutoBackupSync } from '@/lib/backup-sync';
 import { CapabilityGate } from '@/components/capability-gate';
 import { UiBuilderRuntimeBoundary } from '@/components/ui-builder-runtime-boundary';
 import { withActiveQuerySignal } from '@/lib/query-abort-signal';
-import { fetchUnifiedChartData } from '@/lib/unified-chart-data';
+import { fetchUnifiedChartData, UNIFIED_CHART_TIMEFRAMES } from '@/lib/unified-chart-data';
 import type { UiBuilderPageId } from '@/lib/ui-builder-full-layout';
 import type { MemberCapability } from '../../packages/member-access/src/index.js';
 import HomePage from '@/pages/home';
@@ -58,12 +62,24 @@ const Phase7JournalSyncE2EPage = lazy(() => import('@/pages/phase7-journal-sync-
 const Phase8ReleaseCandidateE2EPage = lazy(() => import('@/pages/phase8-release-candidate-e2e'));
 const Phase9AiReviewE2EPage = lazy(() => import('@/pages/phase9-ai-review-e2e'));
 const directAiChartColdRoute = typeof window !== 'undefined' && window.location.pathname.endsWith('/ai-chart');
-const prewarmDefaultAiChartData = (() => {
-  if (!directAiChartColdRoute || window.location.search !== '') return false;
+const directAiChartPrewarmSelection = (() => {
+  if (!directAiChartColdRoute) return null;
   try {
-    return !window.localStorage.getItem('sa-analysis-selection-v1');
+    const routeSelection = selectionFromSearch(window.location.search);
+    const storedSelection = normalizeAnalysisSelection(
+      JSON.parse(window.localStorage.getItem('sa-analysis-selection-v1') ?? 'null'),
+    );
+    const prewarmSelection = routeSelection ?? storedSelection;
+    if (!prewarmSelection) return null;
+    const timeframe = UNIFIED_CHART_TIMEFRAMES.find((item) => item.key === prewarmSelection.timeframe)?.key;
+    if (!timeframe) return null;
+    return {
+      market: prewarmSelection.market,
+      ticker: prewarmSelection.ticker,
+      timeframe,
+    };
   } catch {
-    return false;
+    return null;
   }
 })();
 const loadAiChartPage = () => import('@/pages/ai-chart');
@@ -88,11 +104,12 @@ const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: true, refetchOnReconnect: true, staleTime: 0, gcTime: 30 * 60 * 1000, retry: 2 } },
 });
 
-if (prewarmDefaultAiChartData) {
+if (directAiChartPrewarmSelection) {
+  const { market, ticker, timeframe } = directAiChartPrewarmSelection;
   queueMicrotask(() => {
     void queryClient.prefetchQuery({
-      queryKey: ['unified-chart-data', 'KR', '005930', '5m'],
-      queryFn: () => fetchUnifiedChartData({ market: 'KR', symbol: '005930', timeframe: '5m' }),
+      queryKey: ['unified-chart-data', market, ticker, timeframe],
+      queryFn: () => fetchUnifiedChartData({ market, symbol: ticker, timeframe }),
       retry: false,
     });
   });
@@ -223,7 +240,6 @@ function PaperTradingRouteFallback() {
     </main>
   );
 }
-
 function PaperTradingAccess() {
   return gated(
     'canAccessPaperTrading',
