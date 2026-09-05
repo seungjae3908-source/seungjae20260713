@@ -736,7 +736,12 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
           data-direction=""
           role="group"
           aria-label="크로스헤어 OHLCV"
-          className="pointer-events-none absolute left-2 right-2 top-[3.75rem] z-[9] rounded-lg border border-card-border bg-background/88 px-2 py-1 text-left text-[10px] font-bold leading-4 text-foreground shadow-sm backdrop-blur-sm sm:left-auto sm:top-2 sm:max-w-[28rem] sm:text-right sm:text-[11px]"
+          className={cn(
+            'pointer-events-none z-[9] rounded-lg border border-card-border bg-background/88 px-2 py-1 text-left text-[10px] font-bold leading-4 text-foreground shadow-sm backdrop-blur-sm sm:text-right sm:text-[11px]',
+            fullscreen
+              ? 'absolute left-2 right-2 top-[3.75rem] sm:left-auto sm:right-2 sm:top-2 sm:max-w-[28rem]'
+              : 'relative mx-2 mb-1 mt-[3.75rem] sm:absolute sm:left-auto sm:right-2 sm:top-2 sm:mx-0 sm:mb-0 sm:mt-0 sm:max-w-[28rem]',
+          )}
         />
         <div ref={containerRef} data-testid="unified-chart-canvas" className={cn('h-[390px] w-full touch-pan-y', fullscreen && 'h-[100dvh]')} />
       </div>
