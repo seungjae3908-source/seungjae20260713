@@ -94,11 +94,9 @@ test('real user path stays coherent from login through session expiry', async ({
 
   await openMenuItem(page, '기술', 'AI 차트');
   await expect(page).toHaveURL(/\/ai-chart/u);
-  const chartTab = page.getByRole('tab', { name: '차트', exact: true });
-  if (await chartTab.isVisible().catch(() => false)) {
-    await chartTab.click();
-  }
-  await expect(page.getByTestId('unified-chart-canvas')).toBeVisible();
+  await expect(page.getByTestId('ai-chart-empty-selection')).toBeVisible();
+  await expect(page.getByTestId('ai-chart-empty-selection')).toContainText('분석할 종목이 선택되지 않았습니다.');
+  await expect(page.getByTestId('unified-chart-canvas')).toHaveCount(0);
 
   await openMenuItem(page, '설정', '계정');
   await expect(page).toHaveURL(/\/account$/u);
