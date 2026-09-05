@@ -1,5 +1,6 @@
 import './market-intelligence-ai-analysis.service.test';
 import './news-disclosure-market-intelligence.service.test';
+import '../routes/market-intelligence-news-disclosure.test';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
