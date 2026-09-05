@@ -3,6 +3,7 @@ import { expect, test } from '@playwright/test';
 
 const source = readFileSync(new URL('../src/pages/ai-chart.tsx', import.meta.url), 'utf8');
 const appSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+const unifiedChartSource = readFileSync(new URL('../src/components/unified-analysis-chart.tsx', import.meta.url), 'utf8');
 
 test('AI Chart does not fabricate a Samsung selection when no asset is selected', () => {
   expect(source).toContain('function emptySelection(): AnalysisSelection');
@@ -30,4 +31,16 @@ test('direct AI Chart cold prewarm reuses only explicit route or stored selectio
   expect(appSource).toContain('retryOnMount: true');
   expect(appSource).not.toContain("queryKey: ['unified-chart-data', 'KR', '005930', '5m']");
   expect(appSource).not.toContain('prewarmDefaultAiChartData');
+});
+
+test('AI Chart search keeps missing financial evidence distinct from genuine zero', () => {
+  expect(unifiedChartSource).toContain('if (value == null) return null;');
+  expect(unifiedChartSource).toContain("if (typeof value === 'string' && value.trim() === '') return null;");
+  expect(unifiedChartSource).toContain("const parsed = typeof value === 'number' ? value : Number(value);");
+  expect(unifiedChartSource).toContain('return Number.isFinite(parsed) ? parsed : null;');
+  expect(unifiedChartSource).toContain('price: finite(row.price)');
+  expect(unifiedChartSource).toContain('changePercent: finite(row.changePercent)');
+  expect(unifiedChartSource).toContain('price: finite(row.markPrice ?? row.price)');
+  expect(unifiedChartSource).toContain('changePercent: finite(row.changePercent24h ?? row.changePercent)');
+  expect(unifiedChartSource).toContain("if (value == null || !Number.isFinite(value)) return '-';");
 });
