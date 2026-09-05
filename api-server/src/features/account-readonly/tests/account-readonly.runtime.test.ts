@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { AccountReadonlyError } from '../account-readonly.errors';
 import type { ReadonlyCredentialProvider } from '../account-readonly.repository';
@@ -95,6 +96,17 @@ test('vault-backed Toss reader performs OAuth then account-list and holdings GET
   assert.equal(result.orderRequests, 0); assert.equal(result.cancelRequests, 0); assert.equal(result.transferRequests, 0); assert.equal(result.withdrawalRequests, 0);
   const serialized = JSON.stringify(result);
   assert.equal(serialized.includes('TOSS_CLIENT_RUNTIME_TEST_ONLY'), false); assert.equal(serialized.includes('TOSS_SECRET_RUNTIME_TEST_ONLY'), false); assert.equal(serialized.includes('TOSS_TOKEN_RUNTIME_TEST_ONLY'), false);
+});
+
+test('staging no-DB evidence accepts the same canonical Toss OAuth origin as the provider', () => {
+  const source = readFileSync(
+    'api-server/src/features/account-readonly/staging-account-readonly-no-db-evidence.ts',
+    'utf8',
+  );
+  assert.match(source, /const TOSS_API_ORIGIN = 'https:\/\/openapi\.tossinvest\.com';/);
+  assert.match(source, /const TOSS_OAUTH_ORIGIN = TOSS_API_ORIGIN;/);
+  assert.match(source, /url\.origin === TOSS_OAUTH_ORIGIN && url\.pathname === '\/oauth2\/token' && method === 'POST'/);
+  assert.equal(source.includes('https://oauth2.tossinvest.com'), false);
 });
 
 test('missing vault credentials fail closed before any provider call', async () => {
