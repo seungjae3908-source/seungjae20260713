@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import type { IncomingHttpHeaders } from 'node:http';
 import https from 'node:https';
 import path from 'node:path';
 import type { CanonicalAccountSnapshot } from './account-readonly.contract';
@@ -108,7 +109,7 @@ function requestBody(value: BodyInit | null | undefined): Buffer | string | unde
   throw new Error('EVIDENCE_TUNNEL_BODY_UNSUPPORTED');
 }
 
-function responseHeaders(headers: https.IncomingHttpHeaders) {
+function responseHeaders(headers: IncomingHttpHeaders) {
   const result = new Headers();
   for (const [name, value] of Object.entries(headers)) {
     if (Array.isArray(value)) {
@@ -145,7 +146,7 @@ function createTunneledProviderFetch(): typeof fetch {
         method,
         path: `${url.pathname}${url.search}`,
         headers: Object.fromEntries(headers.entries()),
-        signal: init?.signal,
+        signal: init?.signal ?? undefined,
         rejectUnauthorized: true,
       }, (response) => {
         const status = response.statusCode ?? 500;
