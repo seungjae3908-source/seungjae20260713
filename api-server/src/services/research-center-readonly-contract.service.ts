@@ -1,7 +1,22 @@
 const RESEARCH_OVERVIEW_SCHEMA = 'research-dashboard-overview-v1';
+const V3_INDEPENDENCE_SUMMARY_SCHEMA = 'public-forward-liquidity-v3-authoritative-independence-summary-v1';
 const PROFILE_SET = new Set(['forward', 'fast-historical', 'long-history']);
+const V3_INDEPENDENCE_STATUS_SET = new Set(['MISSING', 'INVALID', 'PRESENT']);
 const SHA_PATTERN = /^[0-9a-f]{40}$/i;
+const DIGEST_PATTERN = /^[0-9a-f]{64}$/i;
+const DECIMAL_ID_PATTERN = /^[0-9]{6,20}$/;
 const PRIVATE_TEXT_PATTERN = /(?:^[a-z]:[\\/]|\/(?:var|home|root|etc|opt|srv|users)\/|-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(?:ghp|github_pat|sk_live|sk_test)_[a-z0-9_-]+)/i;
+const V3_SPLIT_COUNT_KEYS = Object.freeze([
+  'TRAIN',
+  'TRAIN_BUY',
+  'TRAIN_SELL',
+  'VALIDATION',
+  'VALIDATION_BUY',
+  'VALIDATION_SELL',
+  'OOS',
+  'OOS_BUY',
+  'OOS_SELL',
+]);
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -31,6 +46,128 @@ function safeTextOrNull(value: unknown, maximum = 240): string | null | undefine
   const text = value.trim();
   if (text.length === 0 || text.length > maximum || PRIVATE_TEXT_PATTERN.test(text)) return undefined;
   return text;
+}
+
+function emptyLiquidityIndependence(status: 'MISSING' | 'INVALID', present: boolean) {
+  return {
+    present,
+    status,
+    schemaVersion: null,
+    producerSha: null,
+    upstreamIngestRunId: null,
+    upstreamIngestArtifactId: null,
+    upstreamIngestArtifactDigest: null,
+    sourceInventoryDigest: null,
+    targetSlotIndex: null,
+    genuineScheduledSlotN: null,
+    rawAcceptedN: null,
+    effectiveIndependentN: null,
+    independentBuyN: null,
+    independentSellN: null,
+    independenceAuditDigest: null,
+    independentSplitSourceDigest: null,
+    v3IndependentSplitIndexDigest: null,
+    frozenSplitCounts: Object.fromEntries(V3_SPLIT_COUNT_KEYS.map((key) => [key, null])),
+    oosOutcomeCredit: null,
+    calibrationArtifactProduced: null,
+    liquidityImpactStatus: null,
+    fullCostReady: null,
+    evidenceComplete: null,
+    executionAuthority: null,
+    reportDigest: null,
+  };
+}
+
+function sanitizeLiquidityIndependence(value: unknown) {
+  if (value === undefined || value === null) return emptyLiquidityIndependence('MISSING', false);
+  const input = record(value);
+  if (!input || typeof input.present !== 'boolean') return null;
+  const status = safeTextOrNull(input.status, 16);
+  if (!status || !V3_INDEPENDENCE_STATUS_SET.has(status)) return null;
+  if (status === 'MISSING') {
+    if (input.present !== false) return null;
+    return emptyLiquidityIndependence('MISSING', false);
+  }
+  if (status === 'INVALID') {
+    if (input.present !== true) return null;
+    return emptyLiquidityIndependence('INVALID', true);
+  }
+  if (input.present !== true || input.schemaVersion !== V3_INDEPENDENCE_SUMMARY_SCHEMA) return null;
+  const producerSha = safeTextOrNull(input.producerSha, 40);
+  const upstreamIngestRunId = safeTextOrNull(input.upstreamIngestRunId, 20);
+  const upstreamIngestArtifactId = safeTextOrNull(input.upstreamIngestArtifactId, 20);
+  const upstreamIngestArtifactDigest = safeTextOrNull(input.upstreamIngestArtifactDigest, 64);
+  const sourceInventoryDigest = safeTextOrNull(input.sourceInventoryDigest, 64);
+  const independenceAuditDigest = safeTextOrNull(input.independenceAuditDigest, 64);
+  const independentSplitSourceDigest = safeTextOrNull(input.independentSplitSourceDigest, 64);
+  const v3IndependentSplitIndexDigest = safeTextOrNull(input.v3IndependentSplitIndexDigest, 64);
+  const reportDigest = safeTextOrNull(input.reportDigest, 64);
+  const targetSlotIndex = countOrNull(input.targetSlotIndex);
+  const genuineScheduledSlotN = countOrNull(input.genuineScheduledSlotN);
+  const rawAcceptedN = countOrNull(input.rawAcceptedN);
+  const effectiveIndependentN = countOrNull(input.effectiveIndependentN);
+  const independentBuyN = countOrNull(input.independentBuyN);
+  const independentSellN = countOrNull(input.independentSellN);
+  const oosOutcomeCredit = countOrNull(input.oosOutcomeCredit);
+  const evidenceComplete = countOrNull(input.evidenceComplete);
+  const calibrationArtifactProduced = booleanOrNull(input.calibrationArtifactProduced);
+  const fullCostReady = booleanOrNull(input.fullCostReady);
+  const executionAuthority = safeTextOrNull(input.executionAuthority, 16);
+  const liquidityImpactStatus = safeTextOrNull(input.liquidityImpactStatus, 40);
+  const splitInput = record(input.frozenSplitCounts);
+  const frozenSplitCounts = splitInput
+    ? Object.fromEntries(V3_SPLIT_COUNT_KEYS.map((key) => [key, countOrNull(splitInput[key])]))
+    : null;
+  if (!producerSha || !SHA_PATTERN.test(producerSha)
+    || !upstreamIngestRunId || !DECIMAL_ID_PATTERN.test(upstreamIngestRunId)
+    || !upstreamIngestArtifactId || !DECIMAL_ID_PATTERN.test(upstreamIngestArtifactId)
+    || !upstreamIngestArtifactDigest || !DIGEST_PATTERN.test(upstreamIngestArtifactDigest)
+    || !sourceInventoryDigest || !DIGEST_PATTERN.test(sourceInventoryDigest)
+    || !independenceAuditDigest || !DIGEST_PATTERN.test(independenceAuditDigest)
+    || !independentSplitSourceDigest || !DIGEST_PATTERN.test(independentSplitSourceDigest)
+    || !v3IndependentSplitIndexDigest || !DIGEST_PATTERN.test(v3IndependentSplitIndexDigest)
+    || !reportDigest || !DIGEST_PATTERN.test(reportDigest)
+    || targetSlotIndex === null || targetSlotIndex === undefined
+    || genuineScheduledSlotN === null || genuineScheduledSlotN === undefined
+    || rawAcceptedN === null || rawAcceptedN === undefined
+    || effectiveIndependentN === null || effectiveIndependentN === undefined
+    || independentBuyN === null || independentBuyN === undefined
+    || independentSellN === null || independentSellN === undefined
+    || oosOutcomeCredit !== 0
+    || evidenceComplete !== 0
+    || calibrationArtifactProduced !== false
+    || fullCostReady !== false
+    || executionAuthority !== 'NONE'
+    || liquidityImpactStatus !== 'BLOCKED_DATA'
+    || !frozenSplitCounts
+    || Object.values(frozenSplitCounts).some((count) => count === undefined || count === null)) return null;
+  return {
+    present: true,
+    status: 'PRESENT',
+    schemaVersion: V3_INDEPENDENCE_SUMMARY_SCHEMA,
+    producerSha,
+    upstreamIngestRunId,
+    upstreamIngestArtifactId,
+    upstreamIngestArtifactDigest,
+    sourceInventoryDigest,
+    targetSlotIndex,
+    genuineScheduledSlotN,
+    rawAcceptedN,
+    effectiveIndependentN,
+    independentBuyN,
+    independentSellN,
+    independenceAuditDigest,
+    independentSplitSourceDigest,
+    v3IndependentSplitIndexDigest,
+    frozenSplitCounts,
+    oosOutcomeCredit: 0,
+    calibrationArtifactProduced: false,
+    liquidityImpactStatus: 'BLOCKED_DATA',
+    fullCostReady: false,
+    evidenceComplete: 0,
+    executionAuthority: 'NONE',
+    reportDigest,
+  };
 }
 
 function sanitizeTask(value: unknown) {
@@ -165,8 +302,9 @@ export function sanitizeResearchCenterOverview(value: unknown): UnknownRecord | 
   const runtime = sanitizePaperRuntime(paper?.runtime);
   const ledger = sanitizePaperLedger(paper?.ledger);
   const records = record(shadow?.records);
+  const liquidityIndependence = sanitizeLiquidityIndependence(research?.liquidityIndependence);
   if (!payload || payload.schemaVersion !== RESEARCH_OVERVIEW_SCHEMA || !state || !safety || !research
-    || !paper || !shadow || !profitability || !runtime || !ledger || !records) return null;
+    || !paper || !shadow || !profitability || !runtime || !ledger || !records || !liquidityIndependence) return null;
   if (safety.readOnlyDashboard !== true || safety.liveTrading !== false || safety.privateApi !== false || safety.orderAuthority !== false
     || typeof safety.authorityEvidenceComplete !== 'boolean' || typeof safety.forbiddenAuthorityObserved !== 'boolean') return null;
   const generatedAt = finiteOrNull(payload.generatedAt);
@@ -198,7 +336,7 @@ export function sanitizeResearchCenterOverview(value: unknown): UnknownRecord | 
       authorityEvidenceComplete: safety.authorityEvidenceComplete,
       forbiddenAuthorityObserved: safety.forbiddenAuthorityObserved,
     },
-    research: { status: researchStatus, failedTasks, blockedDataTasks, cycles },
+    research: { status: researchStatus, failedTasks, blockedDataTasks, cycles, liquidityIndependence },
     paper: { runtime, ledger },
     shadow: { groups, records: { present: records.present, totalRecords, settledRecords, pendingRecords } },
     profitability: { proven: profitability.proven, status: profitabilityStatus, note: profitabilityNote },
