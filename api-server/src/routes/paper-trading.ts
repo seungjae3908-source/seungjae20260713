@@ -1,15 +1,22 @@
 import { Router, type IRouter } from 'express';
+import type { AuthenticatedRequest } from '../middleware/auth';
 import {
   applyPaperTradingAction,
   PaperTradingError,
   type PaperTradingAction,
   type PaperTradingState,
 } from '../services/paper-trading-engine.service';
+import {
+  PAPER_STATE_TRANSPORT_PUBLISH_RESULT_VERSION,
+  publishAuthenticatedPaperTradingState,
+  type PaperStateTransportPublishResult,
+} from '../services/paper-trading-state-publisher.service';
 
 const MAX_REQUEST_BYTES = 128 * 1024;
 
 type PaperTradingDependencies = {
   evaluate: typeof applyPaperTradingAction;
+  publishState: typeof publishAuthenticatedPaperTradingState;
 };
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -25,13 +32,33 @@ function safeEnvelope(payload: Record<string, unknown> = {}) {
   };
 }
 
+function blockedTransport(reason: string): PaperStateTransportPublishResult {
+  return Object.freeze({
+    schemaVersion: PAPER_STATE_TRANSPORT_PUBLISH_RESULT_VERSION,
+    status: 'BLOCKED_DATA',
+    invoked: false,
+    callbackEligible: false,
+    reason,
+    snapshotSchemaVersion: null,
+    publisherAccountBound: false,
+    stateDigestSha256: null,
+    observedAtMs: null,
+    executionAuthority: 'NONE',
+    privateApiAllowed: false,
+    liveTrading: false,
+    financialMutationAllowed: false,
+    unknownIsZero: false,
+  });
+}
+
 export function createPaperTradingRouter(
   dependencies: Partial<PaperTradingDependencies> = {},
 ): IRouter {
   const router: IRouter = Router();
   const evaluate = dependencies.evaluate ?? applyPaperTradingAction;
+  const publishState = dependencies.publishState ?? publishAuthenticatedPaperTradingState;
 
-  router.post('/paper-trading/evaluate', (req, res) => {
+  router.post('/paper-trading/evaluate', async (req: AuthenticatedRequest, res) => {
     const declaredLength = Number(req.header('content-length') ?? 0);
     if (Number.isFinite(declaredLength) && declaredLength > MAX_REQUEST_BYTES) {
       return res.status(413).json(safeEnvelope({
@@ -81,7 +108,18 @@ export function createPaperTradingRouter(
         req.body.action as PaperTradingAction,
         now,
       );
-      return res.json(safeEnvelope({ ok: true, result }));
+      let paperStateTransport: PaperStateTransportPublishResult;
+      try {
+        paperStateTransport = await publishState({
+          state: result.state,
+          authenticatedPublisherAccountId: req.member?.id ?? '',
+          sourceSha: String(process.env.DEPLOY_SHA ?? '').trim().toLowerCase(),
+          observedAtMs: now.getTime(),
+        });
+      } catch {
+        paperStateTransport = blockedTransport('PAPER_STATE_PUBLISHER_UNAVAILABLE');
+      }
+      return res.json(safeEnvelope({ ok: true, result, paperStateTransport }));
     } catch (error) {
       if (error instanceof PaperTradingError) {
         return res.status(error.statusCode).json(safeEnvelope({

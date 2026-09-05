@@ -13,6 +13,7 @@ if (stagingMode && !baseURL) {
 
 export default defineConfig({
   testDir: './e2e',
+  testIgnore: /production-readonly-smoke\.spec\.ts/,
   globalSetup: stagingMode ? './e2e/support/staging-bootstrap-global-setup.ts' : undefined,
   outputDir: stagingMode ? path.join(artifactDir, 'playwright-test-results') : './test-results',
   timeout: stagingMode ? 120_000 : 60_000,
@@ -31,6 +32,7 @@ export default defineConfig({
   use: {
     baseURL,
     browserName: 'chromium',
+    launchOptions: stagingMode ? undefined : { args: ['--disable-remote-fonts'] },
     hasTouch: true,
     actionTimeout: 20_000,
     navigationTimeout: 30_000,

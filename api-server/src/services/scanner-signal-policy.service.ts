@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto';
 import type { CatalogEntry } from '../data/catalog';
+import type { AssetType } from '../data/asset-type';
+import { rsiSeries } from '../sample/indicators';
 import type { Candle } from '../sample/types';
+import { krxPriceTick, roundPriceToTick, usNmsPriceTick } from './market-price-precision.service';
 import type { ScanCard } from './signal.service';
 import type { ScannerUniverseEntry } from './scanner-universe.service';
 import type {
@@ -39,12 +42,16 @@ function round(value: number, digits = 2): number {
   return Math.round(value * factor) / factor;
 }
 
+function emptyPricePlan(): ScannerPricePlan {
+  return { entryZone: null, invalidation: null, stopLoss: null, targets: [], riskReward: null };
+}
+
 function sourceForCondition(label: string): string {
   if (label.includes('뉴스')) return 'news-provider';
   if (label.includes('공시') || label.includes('기관') || label.includes('외국인')) return 'disclosure-risk-provider';
   if (label.includes('PER') || label.includes('PBR') || label.includes('ROE') || label.includes('저평가')) return 'financial-provider';
-  if (label.includes('거래량')) return 'market-candles-volume';
-  if (label.includes('거래대금') || label === '시총') return 'market-quote';
+  if (label.includes('거래량') || label.includes('거래대금')) return 'market-candles-volume';
+  if (label === '시총') return 'market-quote';
   return 'market-candles-technical';
 }
 
@@ -65,6 +72,111 @@ function mapDataState(value: ScanCard['dataState']): ScannerDataState {
   return 'partial';
 }
 
+function average(values: number[]): number | null {
+  if (!values.length || values.some((value) => !Number.isFinite(value))) return null;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function upwardCloseMaCross(candles: Candle[], period: number): boolean | null {
+  if (candles.length < period + 1) return null;
+  const closes = candles.map((candle) => candle.close);
+  const currentClose = closes.at(-1);
+  const previousClose = closes.at(-2);
+  const currentMa = average(closes.slice(-period));
+  const previousMa = average(closes.slice(-(period + 1), -1));
+  if (
+    currentClose == null
+    || previousClose == null
+    || currentMa == null
+    || previousMa == null
+    || !Number.isFinite(currentClose)
+    || !Number.isFinite(previousClose)
+    || currentClose <= 0
+    || previousClose <= 0
+    || currentMa <= 0
+    || previousMa <= 0
+  ) return null;
+  return previousClose <= previousMa && currentClose > currentMa;
+}
+
+function tradingValueIncrease(candles: Candle[]): boolean | null {
+  if (candles.length < 40) return null;
+  const previous = candles.slice(-40, -20).map((candle) => candle.close * candle.volume);
+  const recent = candles.slice(-20).map((candle) => candle.close * candle.volume);
+  if (
+    [...previous, ...recent].some((value) => !Number.isFinite(value) || value < 0)
+  ) return null;
+  const previousAverage = average(previous);
+  const recentAverage = average(recent);
+  if (previousAverage == null || recentAverage == null || previousAverage <= 0) return null;
+  return recentAverage >= previousAverage * 1.25;
+}
+
+function rsiOverheat(candles: Candle[]): boolean | null {
+  const closes = candles.map((candle) => candle.close);
+  const value = rsiSeries(closes, 14).at(-1);
+  if (value == null || !Number.isFinite(value)) return null;
+  return value >= 70;
+}
+
+function priorResistanceBreakout(candles: Candle[], lookback = 60): boolean | null {
+  if (candles.length < lookback + 1) return null;
+  const currentClose = candles.at(-1)?.close;
+  const priorHighs = candles.slice(-(lookback + 1), -1).map((candle) => candle.high);
+  if (
+    currentClose == null
+    || !Number.isFinite(currentClose)
+    || currentClose <= 0
+    || priorHighs.length !== lookback
+    || priorHighs.some((value) => !Number.isFinite(value) || value <= 0)
+  ) return null;
+  return currentClose > Math.max(...priorHighs);
+}
+
+/**
+ * Re-verifies labels whose legacy ScanCard match semantics are weaker than
+ * their displayed meaning. undefined means the label has no override here;
+ * null means the required evidence is missing and must stay unverified.
+ */
+export function selectedConditionTruth(label: string, candles: Candle[]): boolean | null | undefined {
+  switch (label) {
+    case '거래대금 증가':
+      return tradingValueIncrease(candles);
+    case '이평선 돌파':
+    case '20일선 회복':
+      return upwardCloseMaCross(candles, 20);
+    case '60일선 돌파':
+      return upwardCloseMaCross(candles, 60);
+    case '120일선 돌파':
+      return upwardCloseMaCross(candles, 120);
+    case 'RSI 과열':
+      return rsiOverheat(candles);
+    case '박스권 상단 돌파':
+    case '저항선 돌파':
+      return priorResistanceBreakout(candles, 60);
+    case 'ROE 개선':
+      // Current ROE level is not historical improvement evidence. Until the
+      // canonical financial context supplies a verified ROE series, fail closed.
+      return null;
+    default:
+      return undefined;
+  }
+}
+
+function conditionTruthReason(label: string, truth: boolean | null | undefined): string | null {
+  if (truth === undefined) return null;
+  if (label === 'ROE 개선') return '현재 ROE 수치만으로 개선 추세를 만들지 않습니다. 검증된 과거 ROE 시계열이 필요합니다.';
+  const evidence = label === '거래대금 증가'
+    ? '최근 20봉과 직전 20봉의 가격×거래량 평균'
+    : label === 'RSI 과열'
+      ? '실제 종가로 계산한 RSI(14) 70 이상'
+      : label.includes('박스권') || label.includes('저항선')
+        ? '현재 봉을 제외한 직전 60봉 최고가와 현재 종가'
+        : '직전 종가·직전 이동평균과 현재 종가·현재 이동평균의 상향 교차';
+  if (truth === null) return `${evidence} 근거가 부족해 조건을 확인하지 못했습니다.`;
+  return truth ? `${evidence}로 조건을 확인했습니다.` : `${evidence}가 조건을 충족하지 않았습니다.`;
+}
+
 function atr(candles: Candle[], period = 14): number | null {
   if (candles.length < 2) return null;
   const rows = candles.slice(-Math.min(candles.length, period + 1));
@@ -83,16 +195,25 @@ function atr(candles: Candle[], period = 14): number | null {
     : null;
 }
 
+function stockPriceTick(price: number, market: 'KR' | 'US', assetType: AssetType, observedAt: string): number | null {
+  if (market === 'KR') return krxPriceTick(price, assetType);
+  const at = Date.parse(observedAt);
+  return usNmsPriceTick(price, Number.isFinite(at) ? at : Date.now());
+}
+
 function pricePlan(
   price: number,
   candles: Candle[],
   direction: ScannerSignalDirection,
-  currency: string,
+  market: 'KR' | 'US',
+  assetType: AssetType,
+  observedAt: string,
 ): { plan: ScannerPricePlan; volatilityPercent: number | null } {
   const currentAtr = atr(candles);
-  if (!(price > 0) || currentAtr == null || !(currentAtr > 0) || candles.length < 20 || direction === 'NEUTRAL') {
+  const tick = stockPriceTick(price, market, assetType, observedAt);
+  if (!(price > 0) || currentAtr == null || !(currentAtr > 0) || candles.length < 20 || direction === 'NEUTRAL' || tick == null) {
     return {
-      plan: { entryZone: null, invalidation: null, stopLoss: null, targets: [], riskReward: null },
+      plan: emptyPricePlan(),
       volatilityPercent: currentAtr != null && price > 0 ? round(currentAtr / price * 100) : null,
     };
   }
@@ -100,25 +221,29 @@ function pricePlan(
   const recent = candles.slice(-20);
   const support = Math.min(...recent.map((row) => row.low));
   const resistance = Math.max(...recent.map((row) => row.high));
-  const digits = currency === 'KRW' ? 0 : price >= 1 ? 4 : 8;
-  const format = (value: number) => round(Math.max(0, value), digits);
+  const format = (value: number): number | null => roundPriceToTick(Math.max(0, value), tick);
   if (direction === 'LONG') {
     const stop = Math.min(support - currentAtr * 0.1, price - Math.max(currentAtr * 1.25, price * 0.01));
     const risk = price - stop;
     if (!(risk > 0)) {
-      return {
-        plan: { entryZone: null, invalidation: null, stopLoss: null, targets: [], riskReward: null },
-        volatilityPercent: round(currentAtr / price * 100),
-      };
+      return { plan: emptyPricePlan(), volatilityPercent: round(currentAtr / price * 100) };
     }
     const target1 = Math.max(resistance, price + risk * 1.5);
     const target2 = price + risk * 2.2;
+    const entryFrom = format(Math.max(support, price - currentAtr * 0.35));
+    const entryTo = format(price);
+    const stopPrice = format(stop);
+    const targetPrice1 = format(target1);
+    const targetPrice2 = format(target2);
+    if ([entryFrom, entryTo, stopPrice, targetPrice1, targetPrice2].some((value) => value == null)) {
+      return { plan: emptyPricePlan(), volatilityPercent: round(currentAtr / price * 100) };
+    }
     return {
       plan: {
-        entryZone: { from: format(Math.max(support, price - currentAtr * 0.35)), to: format(price) },
-        invalidation: format(stop),
-        stopLoss: format(stop),
-        targets: [format(target1), format(target2)],
+        entryZone: { from: entryFrom!, to: entryTo! },
+        invalidation: stopPrice!,
+        stopLoss: stopPrice!,
+        targets: [targetPrice1!, targetPrice2!],
         riskReward: round((target1 - price) / risk),
       },
       volatilityPercent: round(currentAtr / price * 100),
@@ -128,19 +253,24 @@ function pricePlan(
   const stop = Math.max(resistance + currentAtr * 0.1, price + Math.max(currentAtr * 1.25, price * 0.01));
   const risk = stop - price;
   if (!(risk > 0)) {
-    return {
-      plan: { entryZone: null, invalidation: null, stopLoss: null, targets: [], riskReward: null },
-      volatilityPercent: round(currentAtr / price * 100),
-    };
+    return { plan: emptyPricePlan(), volatilityPercent: round(currentAtr / price * 100) };
   }
   const target1 = Math.min(support, price - risk * 1.5);
   const target2 = Math.max(0, price - risk * 2.2);
+  const entryFrom = format(price);
+  const entryTo = format(Math.min(resistance, price + currentAtr * 0.35));
+  const stopPrice = format(stop);
+  const targetPrice1 = format(target1);
+  const targetPrice2 = format(target2);
+  if ([entryFrom, entryTo, stopPrice, targetPrice1, targetPrice2].some((value) => value == null)) {
+    return { plan: emptyPricePlan(), volatilityPercent: round(currentAtr / price * 100) };
+  }
   return {
     plan: {
-      entryZone: { from: format(price), to: format(Math.min(resistance, price + currentAtr * 0.35)) },
-      invalidation: format(stop),
-      stopLoss: format(stop),
-      targets: [format(target1), format(target2)],
+      entryZone: { from: entryFrom!, to: entryTo! },
+      invalidation: stopPrice!,
+      stopLoss: stopPrice!,
+      targets: [targetPrice1!, targetPrice2!],
       riskReward: round((price - target1) / risk),
     },
     volatilityPercent: round(currentAtr / price * 100),
@@ -216,24 +346,38 @@ export function applyStockSignalPolicy(input: StockSignalPolicyInput): ScannerSi
   const evidence: ScannerEvidence[] = selected.map((label) => {
     const factorKey = factorForCondition(label);
     const factor = factors[factorKey];
-    const status = matchedSet.has(label)
-      ? 'matched'
-      : factor?.status !== 'ok'
+    const semanticTruth = selectedConditionTruth(label, candles);
+    const semanticReason = conditionTruthReason(label, semanticTruth);
+    const status = factor?.status !== 'ok'
+      ? 'unverified'
+      : semanticTruth === null
         ? 'unverified'
-        : 'not_matched';
+        : semanticTruth === true
+          ? 'matched'
+          : semanticTruth === false
+            ? 'not_matched'
+            : matchedSet.has(label)
+              ? 'matched'
+              : 'not_matched';
     return {
       key: label,
       label,
       status,
       source: sourceForCondition(label),
       observedAt: card.analyzedAt ?? null,
-      reasons: factor?.reasons?.length
-        ? factor.reasons
-        : status === 'unverified'
-          ? ['필수 데이터가 없어 조건을 확인하지 못했습니다.']
-          : status === 'not_matched' || missingSet.has(label)
-            ? ['실제 데이터가 선택 조건을 충족하지 않았습니다.']
-            : ['백엔드가 실제 데이터로 조건을 확인했습니다.'],
+      reasons: factor?.status !== 'ok'
+        ? factor?.reasons?.length
+          ? factor.reasons
+          : ['필수 데이터가 없어 조건을 확인하지 못했습니다.']
+        : semanticReason
+          ? [semanticReason]
+          : factor?.reasons?.length
+            ? factor.reasons
+            : status === 'unverified'
+              ? ['필수 데이터가 없어 조건을 확인하지 못했습니다.']
+              : status === 'not_matched' || missingSet.has(label)
+                ? ['실제 데이터가 선택 조건을 충족하지 않았습니다.']
+                : ['백엔드가 실제 데이터로 조건을 확인했습니다.'],
     };
   });
   const notMatched = evidence.filter((item) => item.status === 'not_matched').map((item) => item.label);
@@ -241,7 +385,7 @@ export function applyStockSignalPolicy(input: StockSignalPolicyInput): ScannerSi
   const allSelectedMatched = selected.length > 0 && evidence.every((item) => item.status === 'matched');
   const direction: ScannerSignalDirection = 'LONG';
   const observedAt = card.analyzedAt || new Date().toISOString();
-  const technicalPlan = pricePlan(card.price, candles, direction, card.currency);
+  const technicalPlan = pricePlan(card.price, candles, direction, card.market, universeEntry.assetType, observedAt);
   const strongSignalEligible = allSelectedMatched
     && score >= 75
     && confidence >= 70
@@ -259,6 +403,7 @@ export function applyStockSignalPolicy(input: StockSignalPolicyInput): ScannerSi
   if (card.riskScore == null) warnings.push('위험 데이터 없음');
   if (dataState !== 'complete') warnings.push(`데이터 상태 ${dataState}`);
   if (universeEntry.listingStatus !== 'LISTED') warnings.push('상장 상태 미확인');
+  if (technicalPlan.plan.riskReward == null) warnings.push('시장 가격 단위 또는 변동성 데이터 부족');
 
   const volume = candles.at(-1)?.volume ?? null;
   const tradingValue = volume != null && Number.isFinite(volume) ? volume * card.price : card.liquidity;

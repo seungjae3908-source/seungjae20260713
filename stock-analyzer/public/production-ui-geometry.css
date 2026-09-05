@@ -1,0 +1,247 @@
+:root {
+  --app-bottom-nav-reserve: calc(4rem + env(safe-area-inset-bottom));
+  --app-safe-inline-start: max(0.25rem, env(safe-area-inset-left));
+  --app-safe-inline-end: max(0.25rem, env(safe-area-inset-right));
+  --app-adaptive-gutter: clamp(0.75rem, 2.2vw, 1.5rem);
+}
+
+/*
+ * BottomNav is fixed to the viewport, while route pages live inside the
+ * AppShell's second child. When a BottomNav is actually rendered, reserve its
+ * viewport band at the AppShell level so page controls cannot sit underneath
+ * the fixed navigation. Login/admin/install screens do not render BottomNav,
+ * so they keep the full viewport height automatically.
+ */
+#root:has(nav[aria-label="주요 메뉴"]) > div > div:nth-child(2)[class*="max-w-screen"] {
+  height: calc(100dvh - var(--app-bottom-nav-reserve));
+  min-height: calc(100svh - var(--app-bottom-nav-reserve));
+}
+
+/* Keep notches, rounded corners and fold/tablet edge gestures away from nav controls. */
+nav[aria-label="주요 메뉴"] {
+  padding-left: var(--app-safe-inline-start);
+  padding-right: var(--app-safe-inline-end);
+}
+
+nav[aria-label="주요 메뉴"] > div:last-child {
+  width: 100%;
+  min-width: 0;
+}
+
+/* Menus must remain reachable on narrow cover screens and short landscape viewports. */
+nav[aria-label="주요 메뉴"] [role="menu"] {
+  max-width: calc(100vw - var(--app-safe-inline-start) - var(--app-safe-inline-end) - 0.5rem) !important;
+  max-height: min(70dvh, 32rem) !important;
+  overscroll-behavior: contain;
+}
+
+/* UI Builder pages become size-aware containers without changing feature semantics. */
+[data-builder-page-id] {
+  container-type: inline-size;
+  max-width: 100%;
+  min-width: 0;
+}
+
+[data-builder-page-id] :where(input, select, textarea, button) {
+  max-width: 100%;
+}
+
+/* Production QA found exactly two undersized AI Chart controls. */
+button[aria-label="심볼 지우기"] {
+  display: inline-flex;
+  min-width: 2rem;
+  min-height: 2rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+}
+
+button[data-testid="load-multi-timeframe"] {
+  min-height: 2rem;
+}
+
+/*
+ * Chart controls are a toolbar, not plot data. Keep them in normal flow above
+ * the canvas so they cannot cover candles, the right price scale, or signal
+ * overlays at any zoom level. Component touch targets remain 44px.
+ */
+[data-testid="chart-floating-controls"] {
+  position: relative !important;
+  inset: auto !important;
+  z-index: 10;
+  width: max-content;
+  margin: 0.25rem 0.5rem 0.25rem auto;
+  opacity: 1 !important;
+}
+
+/* Compact/phone signal overlay defaults to the requested one-line chip. */
+@media (max-width: 599px) {
+  [data-testid="ai-chart-v2-signal-overlay"] {
+    width: max-content;
+    max-width: calc(100% - 1.5rem) !important;
+    padding: 0.375rem 0.625rem !important;
+    border-radius: 9999px !important;
+  }
+
+  [data-testid="ai-chart-v2-signal-overlay"] > p {
+    display: none;
+  }
+}
+
+/* Compact cover displays: preserve tap targets but reduce menu density. */
+@media (max-width: 359px) {
+  nav[aria-label="주요 메뉴"] > div:last-child {
+    gap: 0 !important;
+  }
+
+  nav[aria-label="주요 메뉴"] > div:last-child > div > button,
+  nav[aria-label="주요 메뉴"] > div:last-child > button {
+    padding-left: 0.125rem !important;
+    padding-right: 0.125rem !important;
+  }
+
+  nav[aria-label="주요 메뉴"] [role="menu"] {
+    width: min(13rem, calc(100vw - 0.75rem)) !important;
+  }
+}
+
+/*
+ * Phone, fold-open and tablet widths use the touch workspace through 1199px.
+ * This replaces the old binary 1024px split that made 1024-class tablets jump
+ * into dense desktop geometry.
+ */
+@media (max-width: 1199px) {
+  /* AppShell already reserves the navigation band for this workspace. */
+  [data-testid="technical-workspace"] {
+    padding-bottom: 0;
+  }
+
+  /* Give the touch tabpanel a definite flex height so its scanner can scroll. */
+  [data-testid="technical-workspace"] > div:has(> [role="tabpanel"]) {
+    display: flex;
+    flex-direction: column;
+  }
+
+  button[aria-label="읽기 전용 호가창 열기"] {
+    bottom: calc(
+      var(--app-bottom-nav-reserve)
+      + 4.5rem
+      + env(safe-area-inset-bottom)
+    );
+  }
+
+  [data-builder-page-id] {
+    padding-inline: min(var(--app-adaptive-gutter), 2.5vw);
+  }
+}
+
+/* Fold-open / small-tablet geometry: use the extra width instead of a long phone column. */
+@media (min-width: 600px) and (max-width: 899px) {
+  nav[aria-label="주요 메뉴"] > div:last-child {
+    max-width: 42rem !important;
+    gap: 0.25rem !important;
+  }
+
+  nav[aria-label="주요 메뉴"] [role="menu"] {
+    width: min(18rem, calc(100vw - 1.5rem)) !important;
+  }
+
+  [data-testid="ai-chart-mobile-summary"] > div.grid.grid-cols-2 {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+/* Tablet geometry stays touch-first but can use broader menus and denser summaries. */
+@media (min-width: 900px) and (max-width: 1199px) {
+  nav[aria-label="주요 메뉴"] > div:last-child {
+    max-width: 48rem !important;
+    gap: 0.375rem !important;
+  }
+
+  nav[aria-label="주요 메뉴"] [role="menu"] {
+    width: min(20rem, calc(100vw - 2rem)) !important;
+  }
+
+  [data-testid="ai-chart-mobile-summary"] > div.grid.grid-cols-2 {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+/* Short landscape screens (Fold/phone rotated) keep menus inside the space above BottomNav. */
+@media (orientation: landscape) and (max-height: 600px) and (max-width: 1199px) {
+  nav[aria-label="주요 메뉴"] [role="menu"] {
+    max-height: calc(100dvh - var(--app-bottom-nav-reserve) - 4rem) !important;
+    overflow-y: auto !important;
+  }
+
+  button[aria-label="읽기 전용 호가창 열기"] {
+    bottom: calc(var(--app-bottom-nav-reserve) + 3.75rem);
+  }
+}
+
+/*
+ * MarketInformationPage still returns `main + BottomNav` as siblings and the
+ * main carries `min-h-screen`. Make only that legacy sibling pair obey the
+ * current page-shell contract without rewriting market/provider logic.
+ */
+#root div:has(> main[class~="min-h-screen"][class~="max-w-6xl"] + nav[aria-label="주요 메뉴"]) {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#root div:has(> main[class~="min-h-screen"][class~="max-w-6xl"] + nav[aria-label="주요 메뉴"]) > main[class~="min-h-screen"][class~="max-w-6xl"] {
+  min-height: 0 !important;
+  flex: 1 1 0%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: 1.5rem !important;
+}
+
+/*
+ * Several older user-visible routes still make the whole page (including
+ * BottomNav) the vertical scroll owner. Target only the canonical route titles
+ * exposed by BottomNav so unrelated modern workspaces are untouched.
+ */
+#root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="지수·시황"]),
+#root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="시장 순위"]),
+#root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="관심종목"]),
+#root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="가격 알림"]),
+#root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="종목 정보"]),
+#root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="연구센터"]),
+#root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="포트폴리오"]),
+#root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="계정"]) {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden !important;
+  padding-bottom: 0 !important;
+}
+
+/* Normal legacy pages expose their body as a direct main sibling of BottomNav. */
+#root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="지수·시황"]) > main,
+#root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="시장 순위"]) > main,
+#root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="관심종목"]) > main,
+#root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="가격 알림"]) > main,
+#root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="종목 정보"]) > main,
+#root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="포트폴리오"]) > main,
+#root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="계정"]) > main {
+  min-height: 0;
+  flex: 1 1 0%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: 1rem !important;
+}
+
+/* Research Center and Portfolio Intelligence render a content div + BottomNav. */
+#root main:has(> nav[aria-label="주요 메뉴"][data-route-title="연구센터"]) > div:first-child,
+#root div:has(> nav[aria-label="주요 메뉴"][data-route-title="포트폴리오"]) > div.mx-auto.w-full.max-w-6xl {
+  min-height: 0;
+  flex: 1 1 0%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}

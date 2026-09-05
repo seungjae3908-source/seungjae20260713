@@ -1,658 +1,309 @@
+import { useLocation, useSearch } from 'wouter';
 import {
-	useEffect,
-	useRef,
-	useState,
-	type ChangeEvent,
-	type ReactNode,
-} from "react";
-import { useLocation } from "wouter";
-import {
-	Bell,
-	Download,
-	Moon,
-	Palette,
-	ShieldCheck,
-	Smartphone,
-	Sun,
-	TrendingDown,
-	TrendingUp,
-	Upload,
-	UserRound,
-	WalletCards,
-} from "lucide-react";
-import { BottomNav } from "@/components/bottom-nav";
-import { api } from "@/lib/api";
-import { useAuth } from "@/lib/auth";
-import {
-	restoreRemoteBackup,
-	saveBackupNow,
-	useBackupStatus,
-} from "@/lib/backup-sync";
-import { useSettings } from "@/lib/settings";
-import { WATCHLIST_ALERT_TYPES } from "@/lib/settings";
-import {
-	getPermissionLabel,
-	getVapidPublicKey,
-	isPushSupported,
-	requestNotificationPermission,
-	showLocalNotification,
-	subscribeToPush,
-} from "@/lib/notifications";
-import { ACCENT_COLOR_KEY } from "@/lib/stock-display";
-import { cn } from "@/lib/utils";
-import { TradeAutomationSettings } from "@/components/trade-automation-settings";
+  ArrowLeft,
+  BarChart3,
+  BrainCircuit,
+  ChevronRight,
+  Database,
+  Gauge,
+  MessageCircle,
+  RotateCcw,
+  Search,
+  Settings2,
+  ShieldCheck,
+  UserRound,
+  type LucideIcon,
+} from 'lucide-react';
+import { BottomNav } from '@/components/bottom-nav';
+import { CenteredPageHeader } from '@/components/centered-page-header';
+import { useSettings, type AiVerbosity, type ScannerMode, type ThemeMode } from '@/lib/settings';
+import { cn } from '@/lib/utils';
 
-const ALERT_ICONS: Record<string, ReactNode> = {
-	news: <Bell className="h-4 w-4" />,
-	disclosure: <ShieldCheck className="h-4 w-4" />,
-	move: <TrendingUp className="h-4 w-4" />,
-	target: <TrendingUp className="h-4 w-4" />,
-	stop: <TrendingDown className="h-4 w-4" />,
+type SettingsSectionId =
+  | 'account'
+  | 'market'
+  | 'risk'
+  | 'scanner'
+  | 'telegram'
+  | 'ai'
+  | 'display'
+  | 'provider'
+  | 'advanced';
+
+type SettingsSection = {
+  id: SettingsSectionId;
+  title: string;
+  icon: LucideIcon;
+  status?: string;
 };
 
-const ACCENT_COLORS = [
-	{
-		key: "blue",
-		label: "블루",
-		hsl: "221 83% 53%",
-		className: "bg-blue-500",
-	},
-	{
-		key: "green",
-		label: "그린",
-		hsl: "142 71% 45%",
-		className: "bg-green-500",
-	},
-	{
-		key: "purple",
-		label: "퍼플",
-		hsl: "262 83% 58%",
-		className: "bg-purple-500",
-	},
-	{
-		key: "red",
-		label: "레드",
-		hsl: "0 84% 60%",
-		className: "bg-red-500",
-	},
-	{
-		key: "orange",
-		label: "오렌지",
-		hsl: "24 95% 53%",
-		className: "bg-orange-500",
-	},
-	{
-		key: "pink",
-		label: "핑크",
-		hsl: "330 81% 60%",
-		className: "bg-pink-500",
-	},
+const SECTIONS: SettingsSection[] = [
+  { id: 'account', title: '계정·권한', icon: UserRound },
+  { id: 'market', title: '시장·거래', icon: BarChart3 },
+  { id: 'risk', title: '위험관리', icon: ShieldCheck },
+  { id: 'scanner', title: '검색기', icon: Search },
+  { id: 'telegram', title: '텔레그램', icon: MessageCircle, status: '미연결' },
+  { id: 'ai', title: 'AI', icon: BrainCircuit },
+  { id: 'display', title: '화면', icon: Gauge },
+  { id: 'provider', title: '데이터 연결', icon: Database },
+  { id: 'advanced', title: '고급설정', icon: Settings2 },
 ];
 
-const BACKUP_PREFIXES = [
-	"watchlist",
-	"alerts",
-	"settings",
-	"seungjae",
-	"stock-analyzer",
-	"sa-settings",
-	"sa-saved-searches",
-	"sa-analysis-selection",
-];
-
-function readBackupData() {
-	const data: Record<string, string> = {};
-
-	for (let i = 0; i < window.localStorage.length; i += 1) {
-		const key = window.localStorage.key(i);
-
-		if (!key) continue;
-
-		const keep = BACKUP_PREFIXES.some((prefix) =>
-			key.toLowerCase().includes(prefix.toLowerCase()),
-		);
-
-		if (keep) {
-			data[key] = window.localStorage.getItem(key) ?? "";
-		}
-	}
-
-	return data;
+function parseSection(search: string): SettingsSectionId | null {
+  const value = new URLSearchParams(search.replace(/^\?/, '')).get('section');
+  return SECTIONS.some((section) => section.id === value) ? value as SettingsSectionId : null;
 }
 
-export function applyAccentColor(key: string) {
-	const found =
-		ACCENT_COLORS.find((color) => color.key === key) ?? ACCENT_COLORS[0];
+function SettingsCard({ section, onOpen }: { section: SettingsSection; onOpen: () => void }) {
+  const Icon = section.icon;
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="flex min-h-16 w-full min-w-0 items-center gap-2 rounded-2xl border border-card-border bg-card/80 p-3 text-left shadow-sm transition hover:bg-muted/60 active:scale-[0.99] sm:gap-3 sm:p-4"
+    >
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary sm:h-11 sm:w-11">
+        <Icon className="h-5 w-5" aria-hidden="true" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+          <span className="break-keep text-xs font-black text-foreground sm:text-sm">{section.title}</span>
+          {section.status ? (
+            <span className="shrink-0 whitespace-nowrap rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-bold text-amber-500 sm:px-2 sm:text-[10px]">
+              {section.status}
+            </span>
+          ) : null}
+        </span>
+      </span>
+      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+    </button>
+  );
+}
 
-	document.documentElement.style.setProperty("--primary", found.hsl);
-	document.documentElement.style.setProperty("--ring", found.hsl);
+function LinkButton({ label, href, navigate }: { label: string; href: string; navigate: (href: string) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => navigate(href)}
+      className="flex min-h-11 w-full items-center justify-center rounded-xl bg-primary px-4 text-sm font-black text-primary-foreground"
+    >
+      {label}
+    </button>
+  );
+}
+
+function Choice<T extends string>({
+  value,
+  options,
+  onChange,
+}: {
+  value: T;
+  options: Array<{ value: T; label: string }>;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          aria-pressed={value === option.value}
+          onClick={() => onChange(option.value)}
+          className={cn(
+            'min-h-11 rounded-xl border px-3 text-xs font-black transition',
+            value === option.value
+              ? 'border-primary bg-primary/10 text-primary'
+              : 'border-card-border bg-background/70 text-foreground hover:bg-muted',
+          )}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function SectionHeader({ section }: { section: SettingsSection }) {
+  const Icon = section.icon;
+  return (
+    <div className="rounded-2xl border border-card-border bg-card/80 p-3 sm:p-4">
+      <div className="flex items-center gap-3">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+          <Icon className="h-5 w-5" aria-hidden="true" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="break-keep text-base font-black sm:text-lg">{section.title}</h2>
+            {section.status ? (
+              <span className="whitespace-nowrap rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold text-amber-500">
+                {section.status}
+              </span>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DetailPanel({ section, navigate }: { section: SettingsSection; navigate: (href: string) => void }) {
+  const { settings, update, reset } = useSettings();
+
+  return (
+    <div className="space-y-3 sm:space-y-4">
+      <SectionHeader section={section} />
+
+      {section.id === 'account' ? (
+        <div className="space-y-3 rounded-2xl border border-card-border bg-card/70 p-4">
+          <p className="text-xs font-bold text-muted-foreground">연결과 권한은 계정 화면에서 관리합니다.</p>
+          <LinkButton label="계정 열기" href="/account" navigate={navigate} />
+        </div>
+      ) : null}
+
+      {section.id === 'market' ? (
+        <div className="space-y-3 rounded-2xl border border-card-border bg-card/70 p-4">
+          <p className="text-xs font-bold text-muted-foreground">국내·미국·코인을 한 검색에서 찾습니다.</p>
+          <LinkButton label="종목 검색" href="/stocks" navigate={navigate} />
+        </div>
+      ) : null}
+
+      {section.id === 'risk' ? (
+        <div className="space-y-3 rounded-2xl border border-card-border bg-card/70 p-4">
+          <p className="text-xs font-bold text-muted-foreground">위험·승인 한도는 서버 정책을 따릅니다.</p>
+          <LinkButton label="위험 근거" href="/scanner" navigate={navigate} />
+        </div>
+      ) : null}
+
+      {section.id === 'scanner' ? (
+        <div className="space-y-4 rounded-2xl border border-card-border bg-card/70 p-4">
+          <div>
+            <div className="mb-2 text-xs font-black text-muted-foreground">기본 검색기</div>
+            <Choice<ScannerMode>
+              value={settings.defaultScanner}
+              options={[{ value: 'daytrade', label: '단타' }, { value: 'swing', label: '스윙' }]}
+              onChange={(defaultScanner) => update({ defaultScanner })}
+            />
+          </div>
+          <LinkButton label="검색기 열기" href="/scanner" navigate={navigate} />
+        </div>
+      ) : null}
+
+      {section.id === 'telegram' ? (
+        <div role="status" className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-xs font-bold leading-5 text-amber-100">
+          텔레그램 미연결 · 연결 전까지 앱 내부 상태만 표시합니다.
+        </div>
+      ) : null}
+
+      {section.id === 'ai' ? (
+        <div className="space-y-4 rounded-2xl border border-card-border bg-card/70 p-4">
+          <div>
+            <div className="mb-2 text-xs font-black text-muted-foreground">답변 길이</div>
+            <Choice<AiVerbosity>
+              value={settings.aiVerbosity}
+              options={[
+                { value: 'short', label: '간단히' },
+                { value: 'medium', label: '기본' },
+                { value: 'long', label: '자세히' },
+              ]}
+              onChange={(aiVerbosity) => update({ aiVerbosity })}
+            />
+          </div>
+          <p className="text-xs font-bold text-muted-foreground">공개 시장데이터만 사용합니다.</p>
+          <LinkButton label="AI 분석" href="/ai-chat" navigate={navigate} />
+        </div>
+      ) : null}
+
+      {section.id === 'display' ? (
+        <div className="space-y-5 rounded-2xl border border-card-border bg-card/70 p-4">
+          <div>
+            <div className="mb-2 text-xs font-black text-muted-foreground">테마</div>
+            <Choice<ThemeMode>
+              value={settings.theme}
+              options={[{ value: 'dark', label: '어둡게' }, { value: 'light', label: '밝게' }]}
+              onChange={(theme) => update({ theme })}
+            />
+          </div>
+          <label className="block">
+            <span className="mb-2 block text-xs font-black text-muted-foreground">글자 크기 {Math.round(settings.fontScale * 100)}%</span>
+            <input
+              aria-label="글자 크기"
+              type="range"
+              min="0.9"
+              max="1.25"
+              step="0.05"
+              value={settings.fontScale}
+              onChange={(event) => update({ fontScale: Number(event.target.value) })}
+              className="w-full accent-primary"
+            />
+          </label>
+          <LinkButton label="AI 차트" href="/ai-chart" navigate={navigate} />
+        </div>
+      ) : null}
+
+      {section.id === 'provider' ? (
+        <div role="status" className="space-y-1 rounded-2xl border border-card-border bg-card/70 p-4 text-xs font-bold leading-5 text-muted-foreground">
+          <p className="text-foreground">데이터·AI 연결은 서버에서 관리합니다.</p>
+          <p>인증정보는 화면에 표시하지 않습니다.</p>
+        </div>
+      ) : null}
+
+      {section.id === 'advanced' ? (
+        <div className="space-y-3 rounded-2xl border border-card-border bg-card/70 p-4">
+          <p className="text-xs font-bold leading-5 text-muted-foreground">이 브라우저의 화면 설정만 초기화합니다.</p>
+          <button
+            type="button"
+            onClick={reset}
+            className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-card-border bg-background/70 px-4 text-sm font-black text-foreground hover:bg-muted"
+          >
+            <RotateCcw className="h-4 w-4" aria-hidden="true" />
+            화면 설정 초기화
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 export default function MorePage() {
-	const [, navigate] = useLocation();
-	const inputRef = useRef<HTMLInputElement | null>(null);
-	const { settings, update } = useSettings();
-	const auth = useAuth();
-	const remoteBackupStatus = useBackupStatus();
-	const memberId = auth.isApproved ? (auth.user?.id ?? null) : null;
-
-	const [enabledAlerts, setEnabledAlerts] = useState<string[]>(() =>
-		WATCHLIST_ALERT_TYPES.map((type) => type.key),
-	);
-
-	const [accentColor, setAccentColor] = useState(() => {
-		if (typeof window === "undefined") return "blue";
-
-		return window.localStorage.getItem(ACCENT_COLOR_KEY) || "blue";
-	});
-
-	const [noticeStatus, setNoticeStatus] = useState<string>(() =>
-		getPermissionLabel(),
-	);
-
-	const [backupStatus, setBackupStatus] = useState("파일 백업 대기 중");
-	const [remoteBackupBusy, setRemoteBackupBusy] = useState(false);
-
-	const isDark = settings.theme === "dark";
-	const pushSupported = isPushSupported();
-	const hasVapidKey = Boolean(getVapidPublicKey());
-
-	useEffect(() => {
-		applyAccentColor(accentColor);
-	}, [accentColor]);
-
-	const toggleAlert = (key: string) => {
-		setEnabledAlerts((current) =>
-			current.includes(key)
-				? current.filter((item) => item !== key)
-				: [...current, key],
-		);
-	};
-
-	const toggleTheme = () => {
-		update({ theme: isDark ? "light" : "dark" });
-	};
-
-	const changeAccentColor = (key: string) => {
-		setAccentColor(key);
-		window.localStorage.setItem(ACCENT_COLOR_KEY, key);
-		applyAccentColor(key);
-	};
-
-	const requestPermission = async () => {
-		const result = await requestNotificationPermission();
-		setNoticeStatus(result.message);
-
-		if (result.ok) {
-			showLocalNotification(
-				"승재주식 알림 설정 완료",
-				"관심종목 알림을 받을 준비가 되었습니다.",
-			);
-		}
-	};
-
-	const enablePush = async () => {
-		if (!hasVapidKey) {
-			setNoticeStatus(
-				"서버 푸시 키 설정 필요 — 브라우저 알림 권한만 사용할 수 있습니다.",
-			);
-			return;
-		}
-
-		const result = await subscribeToPush((subscription) =>
-			api.pushSubscribe(subscription),
-		);
-
-		setNoticeStatus(result.message);
-
-		if (result.ok) {
-			showLocalNotification(
-				"푸시 알림 연결 완료",
-				"관심종목 뉴스·공시·등락률 알림을 받을 수 있습니다.",
-			);
-
-			try {
-				await api.pushTest();
-			} catch {
-				// 테스트 발송 실패는 UI에 영향을 주지 않습니다.
-			}
-		}
-	};
-
-	const saveServerBackup = async () => {
-		if (!memberId) {
-			setBackupStatus(
-				"승인된 계정으로 로그인해야 서버 백업을 사용할 수 있습니다.",
-			);
-			return;
-		}
-
-		setRemoteBackupBusy(true);
-
-		try {
-			await saveBackupNow(memberId);
-			setBackupStatus("현재 기기 설정을 서버 최신 백업으로 저장했습니다.");
-		} catch (cause) {
-			setBackupStatus(
-				cause instanceof Error
-					? `서버 백업 저장 실패: ${cause.message}`
-					: "서버 백업 저장에 실패했습니다.",
-			);
-		} finally {
-			setRemoteBackupBusy(false);
-		}
-	};
-
-	const restoreServerBackup = async () => {
-		if (!memberId) {
-			setBackupStatus(
-				"승인된 계정으로 로그인해야 서버 백업을 사용할 수 있습니다.",
-			);
-			return;
-		}
-
-		const confirmed = window.confirm(
-			"서버에 저장된 최신 설정으로 현재 기기 설정을 바꿉니다. 계속할까요?",
-		);
-
-		if (!confirmed) return;
-
-		setRemoteBackupBusy(true);
-
-		try {
-			const count = await restoreRemoteBackup(memberId);
-			setBackupStatus(
-				`서버 백업 ${count}개 항목을 복원했습니다. 화면을 새로고침합니다.`,
-			);
-
-			window.setTimeout(() => {
-				window.location.reload();
-			}, 300);
-		} catch (cause) {
-			setBackupStatus(
-				cause instanceof Error
-					? `서버 백업 복원 실패: ${cause.message}`
-					: "서버 백업 복원에 실패했습니다.",
-			);
-			setRemoteBackupBusy(false);
-		}
-	};
-
-	const exportBackup = () => {
-		const backup = {
-			app: "seungjae-stock",
-			version: 1,
-			exportedAt: new Date().toISOString(),
-			localStorage: readBackupData(),
-		};
-
-		const blob = new Blob([JSON.stringify(backup, null, 2)], {
-			type: "application/json",
-		});
-
-		const url = window.URL.createObjectURL(blob);
-		const anchor = document.createElement("a");
-
-		anchor.href = url;
-		anchor.download = `seungjae-stock-backup-${new Date()
-			.toISOString()
-			.slice(0, 10)}.json`;
-		anchor.click();
-
-		window.URL.revokeObjectURL(url);
-		setBackupStatus("백업 파일을 저장했습니다.");
-	};
-
-	const importBackup = async (event: ChangeEvent<HTMLInputElement>) => {
-		const file = event.target.files?.[0];
-
-		if (!file) return;
-
-		try {
-			const text = await file.text();
-			const parsed = JSON.parse(text) as {
-				localStorage?: Record<string, string>;
-			};
-
-			if (!parsed.localStorage || typeof parsed.localStorage !== "object") {
-				setBackupStatus("백업 파일 형식이 맞지 않습니다.");
-				return;
-			}
-
-			Object.entries(parsed.localStorage).forEach(([key, value]) => {
-				window.localStorage.setItem(key, value);
-			});
-
-			setBackupStatus("백업을 복원했습니다. 새로고침하면 반영됩니다.");
-		} catch {
-			setBackupStatus("백업 복원에 실패했습니다.");
-		} finally {
-			event.target.value = "";
-		}
-	};
-
-	return (
-		<div className="flex h-full min-h-0 flex-col overflow-hidden bg-background text-center">
-			<header className="border-b border-card-border bg-background/90 px-4 pb-4 pt-5 glass">
-				<h1 className="text-xl font-extrabold">설정</h1>
-			</header>
-
-			<main className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain p-4 pb-24">
-				<TradeAutomationSettings />
-				<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-					<h2 className="mb-3 text-sm font-extrabold">계정 · 자산</h2>
-
-					<button
-						type="button"
-						onClick={() => navigate("/account")}
-						className="flex w-full items-center gap-3 border-b border-card-border py-3 text-left"
-					>
-						<span className="flex h-9 w-9 items-center justify-center rounded-xl bg-secondary text-primary">
-							<UserRound className="h-4 w-4" />
-						</span>
-						<div className="min-w-0 flex-1">
-							<p className="text-sm font-extrabold">로그인 · 회원가입</p>
-							<p className="mt-0.5 text-xs text-muted-foreground">
-								관심종목, 알림, 포트폴리오를 계정에 저장합니다.
-							</p>
-						</div>
-					</button>
-
-					<button
-						type="button"
-						onClick={() => navigate("/portfolio")}
-						className="flex w-full items-center gap-3 py-3 text-left"
-					>
-						<span className="flex h-9 w-9 items-center justify-center rounded-xl bg-secondary text-primary">
-							<WalletCards className="h-4 w-4" />
-						</span>
-						<div className="min-w-0 flex-1">
-							<p className="text-sm font-extrabold">내 포트폴리오</p>
-							<p className="mt-0.5 text-xs text-muted-foreground">
-								매수가, 수량, 평가손익과 수익률을 확인합니다.
-							</p>
-						</div>
-					</button>
-				</section>
-
-				<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-					<h2 className="mb-3 text-sm font-extrabold">화면 설정</h2>
-
-					<button
-						type="button"
-						onClick={toggleTheme}
-						className="flex w-full items-center gap-3 border-b border-card-border py-3 text-left last:border-b-0"
-					>
-						<span className="flex h-9 w-9 items-center justify-center rounded-xl bg-secondary text-primary">
-							{isDark ? (
-								<Moon className="h-4 w-4" />
-							) : (
-								<Sun className="h-4 w-4" />
-							)}
-						</span>
-
-						<div className="min-w-0 flex-1">
-							<p className="break-keep text-sm font-extrabold leading-relaxed">
-								다크모드
-							</p>
-
-							<p className="mt-0.5 break-keep text-xs leading-relaxed text-muted-foreground">
-								{isDark ? "어두운 화면 사용 중" : "밝은 화면 사용 중"}
-							</p>
-						</div>
-
-						<span
-							className={cn(
-								"h-5 w-9 shrink-0 rounded-full p-0.5 transition-colors",
-								isDark ? "bg-primary" : "bg-muted",
-							)}
-						>
-							<span
-								className={cn(
-									"block h-4 w-4 rounded-full bg-background transition-transform",
-									isDark && "translate-x-4",
-								)}
-							/>
-						</span>
-					</button>
-
-					<div className="py-3 last:border-b-0">
-						<div className="mb-3 flex items-center gap-3 text-left">
-							<span className="flex h-9 w-9 items-center justify-center rounded-xl bg-secondary text-primary">
-								<Palette className="h-4 w-4" />
-							</span>
-
-							<div className="min-w-0 flex-1">
-								<p className="text-sm font-extrabold">강조 색상</p>
-
-								<p className="mt-0.5 break-keep text-xs leading-relaxed text-muted-foreground">
-									앱의 포인트 색상을 즉시 바꿉니다.
-								</p>
-							</div>
-						</div>
-
-						<div className="grid grid-cols-3 gap-2">
-							{ACCENT_COLORS.map((color) => (
-								<button
-									key={color.key}
-									type="button"
-									onClick={() => changeAccentColor(color.key)}
-									className={cn(
-										"flex items-center justify-center gap-1.5 rounded-2xl border px-2 py-2 text-xs font-extrabold",
-										accentColor === color.key
-											? "border-primary bg-primary/10 text-primary"
-											: "border-card-border bg-background text-muted-foreground",
-									)}
-								>
-									<span
-										className={cn("h-3 w-3 rounded-full", color.className)}
-									/>
-									{color.label}
-								</button>
-							))}
-						</div>
-					</div>
-				</section>
-
-				<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-					<div className="mb-3">
-						<h2 className="text-sm font-extrabold">휴대폰 알림</h2>
-
-						<p className="mt-1 break-keep text-xs leading-relaxed text-muted-foreground">
-							관심종목 뉴스, 공시, 등락률, 목표가/손절가 접근 알림을 받을 수
-							있게 연결합니다.
-						</p>
-					</div>
-
-					<div className="grid grid-cols-1 gap-2">
-						<button
-							type="button"
-							onClick={() => void requestPermission()}
-							className="flex w-full items-center justify-center gap-2 rounded-2xl border border-primary/40 bg-primary/10 p-3 text-sm font-extrabold text-primary"
-						>
-							<Smartphone className="h-4 w-4" />
-							브라우저 알림 권한 켜기
-						</button>
-
-						<button
-							type="button"
-							onClick={() => void enablePush()}
-							disabled={!pushSupported}
-							className={cn(
-								"flex w-full items-center justify-center gap-2 rounded-2xl border p-3 text-sm font-extrabold",
-								pushSupported
-									? "border-positive/40 bg-positive/10 text-positive"
-									: "border-card-border bg-background text-muted-foreground opacity-60",
-							)}
-						>
-							<Bell className="h-4 w-4" />
-							푸시 알림 구독하기
-						</button>
-					</div>
-
-					{!hasVapidKey && (
-						<p className="mt-2 break-keep text-xs font-bold leading-relaxed text-warning">
-							서버 푸시 키 설정 필요 — 브라우저 알림 권한은 지금도 사용할 수
-							있습니다.
-						</p>
-					)}
-
-					<p className="mt-2 break-keep text-xs font-bold leading-relaxed text-muted-foreground">
-						현재 상태: {noticeStatus}
-					</p>
-				</section>
-
-				<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-					<div className="mb-3">
-						<h2 className="text-sm font-extrabold">관심종목 알림 종류</h2>
-
-						<p className="mt-1 break-keep text-xs leading-relaxed text-muted-foreground">
-							필요한 알림만 켜서 관리합니다.
-						</p>
-					</div>
-
-					<div className="space-y-2">
-						{WATCHLIST_ALERT_TYPES.map((item) => {
-							const active = enabledAlerts.includes(item.key);
-
-							return (
-								<button
-									key={item.key}
-									type="button"
-									onClick={() => toggleAlert(item.key)}
-									className={cn(
-										"flex w-full items-center gap-3 rounded-2xl border p-3 text-left transition-colors",
-										active
-											? "border-primary/40 bg-primary/10"
-											: "border-card-border bg-background",
-									)}
-								>
-									<span
-										className={cn(
-											"flex h-9 w-9 shrink-0 items-center justify-center rounded-xl",
-											active
-												? "bg-primary text-primary-foreground"
-												: "bg-secondary text-muted-foreground",
-										)}
-									>
-										{ALERT_ICONS[item.key]}
-									</span>
-
-									<span className="min-w-0 flex-1">
-										<span className="block break-keep text-sm font-extrabold leading-relaxed">
-											{item.title}
-										</span>
-
-										<span className="mt-0.5 block break-keep text-xs leading-relaxed text-muted-foreground">
-											{item.desc}
-										</span>
-									</span>
-
-									<span
-										className={cn(
-											"h-5 w-9 shrink-0 rounded-full p-0.5 transition-colors",
-											active ? "bg-primary" : "bg-muted",
-										)}
-									>
-										<span
-											className={cn(
-												"block h-4 w-4 rounded-full bg-background transition-transform",
-												active && "translate-x-4",
-											)}
-										/>
-									</span>
-								</button>
-							);
-						})}
-					</div>
-				</section>
-
-				<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-					<div className="mb-3">
-						<h2 className="text-sm font-extrabold">서버 자동백업 / 복원</h2>
-
-						<p className="mt-1 break-keep text-xs leading-relaxed text-muted-foreground">
-							승인된 회원 계정에 화면, 검색기, 자동매매, 차트 설정을 최신 1개로
-							저장합니다.
-						</p>
-					</div>
-
-					<div className="grid grid-cols-2 gap-2">
-						<button
-							type="button"
-							onClick={() => void saveServerBackup()}
-							disabled={!memberId || remoteBackupBusy}
-							className="flex items-center justify-center gap-1.5 rounded-2xl border border-primary/40 bg-primary/10 px-3 py-3 text-sm font-extrabold text-primary disabled:cursor-not-allowed disabled:opacity-50"
-						>
-							<Download className="h-4 w-4" />
-							서버에 저장
-						</button>
-
-						<button
-							type="button"
-							onClick={() => void restoreServerBackup()}
-							disabled={!memberId || remoteBackupBusy}
-							className="flex items-center justify-center gap-1.5 rounded-2xl border border-positive/40 bg-positive/10 px-3 py-3 text-sm font-extrabold text-positive disabled:cursor-not-allowed disabled:opacity-50"
-						>
-							<Upload className="h-4 w-4" />
-							서버 백업 복원
-						</button>
-					</div>
-
-					<p className="mt-2 break-keep text-xs font-bold leading-relaxed text-muted-foreground">
-						자동백업 상태: {remoteBackupStatus.message}
-					</p>
-				</section>
-
-				<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
-					<div className="mb-3">
-						<h2 className="text-sm font-extrabold">파일 백업 / 복원</h2>
-
-						<p className="mt-1 break-keep text-xs leading-relaxed text-muted-foreground">
-							설정 데이터를 JSON 파일로 내려받거나 저장된 파일을 다시
-							불러옵니다.
-						</p>
-					</div>
-
-					<div className="grid grid-cols-2 gap-2">
-						<button
-							type="button"
-							onClick={exportBackup}
-							className="flex items-center justify-center gap-1.5 rounded-2xl border border-primary/40 bg-primary/10 px-3 py-3 text-sm font-extrabold text-primary"
-						>
-							<Download className="h-4 w-4" />
-							파일 저장
-						</button>
-
-						<button
-							type="button"
-							onClick={() => inputRef.current?.click()}
-							className="flex items-center justify-center gap-1.5 rounded-2xl border border-card-border bg-background px-3 py-3 text-sm font-extrabold"
-						>
-							<Upload className="h-4 w-4" />
-							파일 불러오기
-						</button>
-					</div>
-
-					<input
-						ref={inputRef}
-						type="file"
-						accept="application/json"
-						onChange={(event) => void importBackup(event)}
-						className="hidden"
-					/>
-
-					<p className="mt-2 break-keep text-xs font-bold leading-relaxed text-muted-foreground">
-						{backupStatus}
-					</p>
-				</section>
-
-				<p className="pb-4 pt-2 text-center text-xs font-bold text-muted-foreground">
-					By. Seung Jae Lee
-				</p>
-			</main>
-
-			<BottomNav />
-		</div>
-	);
+  const [, navigate] = useLocation();
+  const search = useSearch();
+  const selectedId = parseSection(search);
+  const selected = selectedId ? SECTIONS.find((section) => section.id === selectedId) ?? null : null;
+
+  return (
+    <div className="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background">
+      <CenteredPageHeader
+        title="설정"
+        eyebrow={selected?.title}
+        leading={selected ? (
+          <button
+            type="button"
+            aria-label="설정 홈으로 돌아가기"
+            onClick={() => navigate('/more')}
+            className="flex h-11 w-11 items-center justify-center rounded-xl border border-card-border bg-card text-foreground hover:bg-muted"
+          >
+            <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+          </button>
+        ) : undefined}
+      />
+      <main className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-28 pt-4 sm:px-6 lg:px-8">
+        <div className={cn('mx-auto w-full', selected ? 'max-w-3xl' : 'max-w-5xl')}>
+          {selected ? (
+            <DetailPanel section={selected} navigate={navigate} />
+          ) : (
+            <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-3" data-testid="settings-compact-grid">
+              {SECTIONS.map((section) => (
+                <SettingsCard
+                  key={section.id}
+                  section={section}
+                  onOpen={() => navigate(`/more?section=${section.id}`)}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </main>
+      <BottomNav />
+    </div>
+  );
 }

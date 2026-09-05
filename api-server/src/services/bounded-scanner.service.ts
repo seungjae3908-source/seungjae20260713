@@ -22,6 +22,8 @@ export const SCAN_EXECUTION_LIMITS = Object.freeze({
   itemTimeoutMs: 4_000,
   concurrency: 6,
   marketContextTimeoutMs: 800,
+  optionalContextConcurrency: 2,
+  optionalContextDeadlineMs: 3_000,
 });
 
 const SCAN_CARD_LIMIT = 100;
@@ -137,8 +139,15 @@ export interface BoundedScanResult {
   scanned: number;
   requestedCount: number;
   completedCount: number;
+  providerAcceptedCount: number;
+  dataSuccessCount: number;
+  insufficientDataCount: number;
+  filteredByStrategyCount: number;
+  staleCount: number;
   providerErrorCount: number;
+  workerErrorCount: number;
   timeoutCount: number;
+  contextUnavailableCount: number;
   excludedCount: number;
   appliedFilters: {
     volumeThreshold: number | null;
@@ -160,8 +169,8 @@ export interface BoundedScanResult {
 
 export interface BoundedScannerDependencies {
   catalog: readonly CatalogEntry[];
-  getCandles: (ticker: string, timeframe: ScannerTimeframe) => Promise<CandleList>;
-  getQuote: (ticker: string) => Promise<Quote>;
+  getCandles: (ticker: string, timeframe: ScannerTimeframe, signal?: AbortSignal) => Promise<CandleList>;
+  getQuote: (ticker: string, signal?: AbortSignal) => Promise<Quote>;
   getContext: (entry: CatalogEntry) => Promise<SignalContext>;
   now: () => number;
 }
@@ -173,6 +182,16 @@ export class ScanProviderUnavailableError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'ScanProviderUnavailableError';
+  }
+}
+
+class ScanProviderWorkError extends Error {
+  readonly originalError: unknown;
+
+  constructor(readonly operation: 'candles' | 'quote', readonly ticker: string, error: unknown) {
+    super(`SCAN_PROVIDER_WORK_ERROR:${operation}:${ticker}`);
+    this.name = 'ScanProviderWorkError';
+    this.originalError = error;
   }
 }
 
@@ -190,6 +209,142 @@ const defaultDependencies: BoundedScannerDependencies = {
   getContext: (entry) => buildContext(entry),
   now: Date.now,
 };
+
+type OptionalContextWaiter = {
+  grant: () => void;
+};
+
+let activeOptionalContextLoads = 0;
+const optionalContextWaiters: OptionalContextWaiter[] = [];
+
+function minimalSignalContext(entry: CatalogEntry): SignalContext {
+  return { currency: entry.currency };
+}
+
+function abortReason(signal: AbortSignal): Error {
+  return signal.reason instanceof Error ? signal.reason : new ScanRequestAbortedError();
+}
+
+function wakeOptionalContextWaiters(): void {
+  while (
+    activeOptionalContextLoads < SCAN_EXECUTION_LIMITS.optionalContextConcurrency
+    && optionalContextWaiters.length > 0
+  ) {
+    optionalContextWaiters.shift()?.grant();
+  }
+}
+
+function releaseOptionalContextSlot(): void {
+  activeOptionalContextLoads = Math.max(0, activeOptionalContextLoads - 1);
+  wakeOptionalContextWaiters();
+}
+
+async function acquireOptionalContextSlot(
+  signal: AbortSignal,
+  deadlineAt: number,
+): Promise<boolean> {
+  if (signal.aborted) throw abortReason(signal);
+  if (activeOptionalContextLoads < SCAN_EXECUTION_LIMITS.optionalContextConcurrency) {
+    activeOptionalContextLoads += 1;
+    return true;
+  }
+
+  return new Promise<boolean>((resolve, reject) => {
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+    let waiter: OptionalContextWaiter;
+
+    const cleanup = () => {
+      if (timer) clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+      const index = optionalContextWaiters.indexOf(waiter);
+      if (index >= 0) optionalContextWaiters.splice(index, 1);
+    };
+    const finish = (value: boolean) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(value);
+    };
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const onAbort = () => {
+      fail(abortReason(signal));
+      wakeOptionalContextWaiters();
+    };
+
+    waiter = {
+      grant: () => {
+        if (settled) return;
+        if (signal.aborted) {
+          fail(abortReason(signal));
+          return;
+        }
+        if (Date.now() >= deadlineAt) {
+          finish(false);
+          return;
+        }
+        activeOptionalContextLoads += 1;
+        finish(true);
+      },
+    };
+
+    optionalContextWaiters.push(waiter);
+    timer = setTimeout(() => finish(false), Math.max(1, deadlineAt - Date.now()));
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+async function loadOptionalContext(
+  entry: CatalogEntry,
+  loader: BoundedScannerDependencies['getContext'],
+  signal: AbortSignal,
+  deadlineMs: number,
+): Promise<{ context: SignalContext; unavailable: boolean }> {
+  if (signal.aborted) throw abortReason(signal);
+
+  const deadlineAt = Date.now() + deadlineMs;
+  const acquired = await acquireOptionalContextSlot(signal, deadlineAt);
+  if (!acquired) return { context: minimalSignalContext(entry), unavailable: true };
+
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    releaseOptionalContextSlot();
+  };
+  const task = Promise.resolve().then(() => loader(entry));
+  void task.then(release, release);
+
+  let timer: NodeJS.Timeout | undefined;
+  let removeAbortListener: (() => void) | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new Error('SCANNER_OPTIONAL_CONTEXT_DEADLINE')),
+      Math.max(1, deadlineAt - Date.now()),
+    );
+  });
+  const aborted = new Promise<never>((_resolve, reject) => {
+    const onAbort = () => reject(abortReason(signal));
+    signal.addEventListener('abort', onAbort, { once: true });
+    removeAbortListener = () => signal.removeEventListener('abort', onAbort);
+  });
+
+  try {
+    const context = await Promise.race([task, deadline, aborted]);
+    return { context, unavailable: false };
+  } catch (error) {
+    if (signal.aborted) throw error;
+    return { context: minimalSignalContext(entry), unavailable: true };
+  } finally {
+    if (timer) clearTimeout(timer);
+    removeAbortListener?.();
+  }
+}
 
 function normalizeSelected(selected: string[]): ScanKey[] {
   const keys: ScanKey[] = [];
@@ -236,7 +391,9 @@ function positiveBound(value: number | undefined, fallback: number, maximum: num
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
-  if (signal?.aborted) throw new ScanRequestAbortedError();
+  if (!signal?.aborted) return;
+  if (signal.reason instanceof Error) throw signal.reason;
+  throw new ScanRequestAbortedError();
 }
 
 function candleDataState(candles: CandleList, timeframe: ScannerTimeframe): ScanCard['dataState'] {
@@ -488,6 +645,10 @@ export function createBoundedScannerService(dependencies: BoundedScannerDependen
       const itemTimeoutMs = positiveBound(execution.itemTimeoutMs, SCAN_EXECUTION_LIMITS.itemTimeoutMs, deadlineMs);
       const concurrency = positiveBound(execution.concurrency, SCAN_EXECUTION_LIMITS.concurrency, 16);
       const limit = positiveBound(execution.limit, SCAN_POOL_LIMIT, SCAN_POOL_LIMIT);
+      const optionalContextDeadlineMs = Math.min(
+        SCAN_EXECUTION_LIMITS.optionalContextDeadlineMs,
+        Math.max(1, Math.floor(itemTimeoutMs * 3 / 4)),
+      );
       throwIfAborted(execution.signal);
 
       const keys = normalizeSelected(selected);
@@ -524,7 +685,7 @@ export function createBoundedScannerService(dependencies: BoundedScannerDependen
         async (targetMarket, _index, signal) => {
           throwIfAborted(signal);
           try {
-            const quote = await dependencies.getQuote(targetMarket === 'KR' ? '^KS11' : '^GSPC');
+            const quote = await dependencies.getQuote(targetMarket === 'KR' ? '^KS11' : '^GSPC', signal);
             if (!signal.aborted && Number.isFinite(quote.changePercent)) {
               marketMoves.set(targetMarket, quote.changePercent);
             }
@@ -542,20 +703,52 @@ export function createBoundedScannerService(dependencies: BoundedScannerDependen
       );
       throwIfAborted(execution.signal);
 
+      let insufficientDataCount = 0;
+      let staleCount = 0;
+      let contextUnavailableCount = 0;
       const remainingMs = Math.max(1, deadlineMs - (dependencies.now() - startedAt));
       const work = await runBoundedWorkPool(
         pool,
         async (entry, _index, signal): Promise<ScanCard | null> => {
           throwIfAborted(signal);
-          const [candles, quote, context] = await Promise.all([
-            dependencies.getCandles(entry.ticker, timeframe),
-            dependencies.getQuote(entry.ticker),
-            dependencies.getContext(entry),
+          const providerCall = async <T>(
+            operation: 'candles' | 'quote',
+            task: () => Promise<T>,
+          ): Promise<T> => {
+            try {
+              return await task();
+            } catch (error) {
+              if (signal.aborted) throw abortReason(signal);
+              if (error instanceof ScanProviderWorkError) throw error;
+              throw new ScanProviderWorkError(operation, entry.ticker, error);
+            }
+          };
+          const optionalContextPromise = loadOptionalContext(
+            entry,
+            dependencies.getContext,
+            signal,
+            optionalContextDeadlineMs,
+          );
+          const [candles, quote, optionalContext] = await Promise.all([
+            providerCall('candles', () => dependencies.getCandles(entry.ticker, timeframe, signal)),
+            providerCall('quote', () => dependencies.getQuote(entry.ticker, signal)),
+            optionalContextPromise,
           ]);
           throwIfAborted(signal);
+          const context = optionalContext.context;
+          if (optionalContext.unavailable) contextUnavailableCount += 1;
+          const inputDataState = candleDataState(candles, timeframe);
+          if (inputDataState === 'unavailable' || inputDataState === 'insufficient') {
+            insufficientDataCount += 1;
+            return null;
+          }
           const indicators = computeIndicators(candles);
           const conditions = computeScanConditions(candles, indicators);
-          if (!conditions || !quote) return null;
+          if (!conditions || !quote) {
+            insufficientDataCount += 1;
+            return null;
+          }
+          if (inputDataState === 'stale') staleCount += 1;
 
           const latestVolume = candles.at(-1)?.volume ?? null;
           if (volumeThreshold != null) {
@@ -615,24 +808,35 @@ export function createBoundedScannerService(dependencies: BoundedScannerDependen
         .filter((outcome) => outcome.status === 'fulfilled')
         .map((outcome) => outcome.value ?? null);
       const completedCount = work.fulfilledCount;
-      const providerErrorCount = work.rejectedCount;
+      const providerAcceptedCount = completedCount;
+      const dataSuccessCount = Math.max(0, completedCount - insufficientDataCount);
+      const providerErrorCount = work.outcomes.filter(
+        (outcome) => outcome.status === 'rejected' && outcome.reason instanceof ScanProviderWorkError,
+      ).length;
+      const workerErrorCount = Math.max(0, work.rejectedCount - providerErrorCount);
       const timeoutCount = work.timedOutCount;
-      const failureCount = providerErrorCount + timeoutCount;
-      const unreliable = pool.length > 0 && (
+      const providerFailureCount = providerErrorCount + timeoutCount;
+      const unreliable = pool.length > 0 && providerFailureCount > 0 && (
         completedCount === 0
         || (
           work.startedCount > 0
-          && failureCount >= Math.max(3, Math.ceil(work.startedCount * 0.8))
+          && providerFailureCount >= Math.max(3, Math.ceil(work.startedCount * 0.8))
           && completedCount < Math.min(3, pool.length)
         )
       );
       if (unreliable) {
         throw new ScanProviderUnavailableError(
-          `SCAN_PROVIDER_ERROR: completed=${completedCount}, providerErrors=${providerErrorCount}, timeouts=${timeoutCount}, started=${work.startedCount}`,
+          `SCAN_PROVIDER_ERROR: completed=${completedCount}, providerErrors=${providerErrorCount}, workerErrors=${workerErrorCount}, timeouts=${timeoutCount}, started=${work.startedCount}`,
+        );
+      }
+      if (pool.length > 0 && completedCount === 0 && workerErrorCount > 0) {
+        throw new Error(
+          `SCAN_WORKER_ERROR: completed=${completedCount}, providerErrors=${providerErrorCount}, workerErrors=${workerErrorCount}, timeouts=${timeoutCount}, started=${work.startedCount}`,
         );
       }
 
       const matchedCards = completedCards.filter((card): card is ScanCard => card !== null);
+      const filteredByStrategyCount = Math.max(0, dataSuccessCount - matchedCards.length);
       const cards = matchedCards
         .sort((left, right) => right.score - left.score
           || right.confidence - left.confidence
@@ -645,13 +849,17 @@ export function createBoundedScannerService(dependencies: BoundedScannerDependen
       const partial = work.deadlineReached
         || work.startedCount < pool.length
         || providerErrorCount > 0
-        || timeoutCount > 0;
+        || workerErrorCount > 0
+        || timeoutCount > 0
+        || contextUnavailableCount > 0;
       const dataState: BoundedScanResult['dataState'] = partial ? 'partial' : 'complete';
       const message = partial
         ? `일부 데이터가 지연되어 ${completedCount}/${pool.length}종목 처리 결과를 반환했습니다.`
-        : cards.length === 0
-          ? '스캔은 정상 완료됐지만 조건에 맞는 종목이 없습니다.'
-          : `${completedCount}종목 스캔을 정상 완료했습니다.`;
+        : dataSuccessCount === 0 && insufficientDataCount > 0
+          ? `스캔은 완료됐지만 ${insufficientDataCount}종목의 분석 데이터가 부족해 조건 판정을 수행하지 않았습니다.`
+          : cards.length === 0
+            ? '스캔은 정상 완료됐지만 조건에 맞는 종목이 없습니다.'
+            : `${completedCount}종목 스캔을 정상 완료했습니다.`;
 
       return {
         cards,
@@ -660,8 +868,15 @@ export function createBoundedScannerService(dependencies: BoundedScannerDependen
         scanned: work.startedCount,
         requestedCount: pool.length,
         completedCount,
+        providerAcceptedCount,
+        dataSuccessCount,
+        insufficientDataCount,
+        filteredByStrategyCount,
+        staleCount,
         providerErrorCount,
+        workerErrorCount,
         timeoutCount,
+        contextUnavailableCount,
         excludedCount: Math.max(0, completedCount - matchedCards.length),
         appliedFilters: {
           volumeThreshold,

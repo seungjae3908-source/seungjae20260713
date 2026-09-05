@@ -168,8 +168,25 @@ assert(
 );
 assert(auth.includes('profileRequestsRef.current.finishLogout();'), 'successful logout must release the coordinator in a null identity');
 assert(auth.includes('profileRequestsRef.current.restoreAfterFailedLogout('), 'failed logout must restore the verified session identity');
-assert(!auth.includes('new AbortController'), 'profile lifecycle must not manufacture browser request aborts');
-assert(!auth.includes('.abort('), 'profile lifecycle must drain requests instead of aborting them');
+const finiteDeadlineStart = auth.indexOf('function loadProfileWithDeadline(');
+const finiteDeadlineEnd = auth.indexOf('function runInitialBootstrap()', finiteDeadlineStart);
+const finiteDeadlineSource = auth.slice(finiteDeadlineStart, finiteDeadlineEnd);
+assert(
+  finiteDeadlineStart >= 0 && finiteDeadlineEnd > finiteDeadlineStart,
+  'finite profile deadline helper must remain explicit',
+);
+assert(
+  (auth.match(/new AbortController\(\)/g) ?? []).length === 1
+    && finiteDeadlineSource.includes('const controller = new AbortController();'),
+  'only the finite profile deadline helper may create a browser request abort controller',
+);
+assert(
+  finiteDeadlineSource.includes('loadProfile(user, { ...options, signal: controller.signal })')
+    && finiteDeadlineSource.includes('AUTH_PROFILE_BOOTSTRAP_TIMEOUT_MS')
+    && finiteDeadlineSource.includes('(error) => controller.abort(error),')
+    && (auth.match(/\.abort\(/g) ?? []).length === 1,
+  'profile requests may abort only when the finite profile deadline expires',
+);
 
 assert(coordinator.includes('const sharedFlights = new Map<string, SharedFlight>();'), 'provider remounts must share an active session flight');
 assert(coordinator.includes('if (existing) return existing as Promise<T>;'), 'same-session profile calls must be single-flight');

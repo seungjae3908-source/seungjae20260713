@@ -138,11 +138,17 @@ async function assertCleanRuntime(runtime: RuntimeObservation) {
 }
 
 async function postChannelMessage(page: Page, payload: MessagePayload) {
-  await page.evaluate(async ({ channelName: name, message }) => {
-    const channel = new BroadcastChannel(name);
-    channel.postMessage(message);
-    await new Promise((resolve) => globalThis.setTimeout(resolve, 0));
-    channel.close();
+  await page.evaluate(({ channelName: name, message }) => {
+    const state = globalThis as typeof globalThis & {
+      __chartE2eSenderChannel?: BroadcastChannel;
+      __chartE2eSenderChannelName?: string;
+    };
+    if (!state.__chartE2eSenderChannel || state.__chartE2eSenderChannelName !== name) {
+      state.__chartE2eSenderChannel?.close();
+      state.__chartE2eSenderChannel = new BroadcastChannel(name);
+      state.__chartE2eSenderChannelName = name;
+    }
+    state.__chartE2eSenderChannel.postMessage(message);
   }, { channelName, message: payload });
 }
 
@@ -307,24 +313,13 @@ test('hidden state accepts only ordered snapshots and sends a fresh ready signal
     body: '<!doctype html><meta charset="utf-8"><title>sync-controller</title>',
   }));
   await page.goto(externalUrl);
+  await expect(page.getByRole('heading', { name: 'AI 차트 생중계', level: 1 })).toBeVisible();
+  await expect(page.getByText('외부 AI 차트', { exact: true })).toBeVisible();
   const origin = new URL(page.url()).origin;
-  const base = Date.now();
-  await postChannelMessage(page, mainMessage({ type: 'ready', sourceId: 'main-hidden', sequence: 1, sentAt: base + 10, origin }));
 
-  await setDocumentVisibility(page, 'hidden');
-  await postChannelMessage(page, mainMessage({
-    type: 'selection', sourceId: 'main-hidden', sequence: 2, sentAt: base + 100, origin,
-    selectionOverride: { timeframe: '5m' },
-  }));
-  await postChannelMessage(page, mainMessage({
-    type: 'selection', sourceId: 'main-hidden', sequence: 3, sentAt: base + 200, origin,
-    selectionOverride: { timeframe: '15m' },
-  }));
-  await postChannelMessage(page, mainMessage({
-    type: 'selection', sourceId: 'main-hidden', sequence: 2, sentAt: base + 150, origin,
-    selectionOverride: { timeframe: '30m' },
-  }));
-
+  // Use a separate visible document as the synthetic main window. Posting from
+  // the page whose visibility is forced to hidden also throttles the test-only
+  // sender in Chromium and does not model the real two-window topology.
   const controller = await context.newPage();
   await controller.goto(`${origin}/sync-controller`);
   await controller.evaluate((name) => {
@@ -341,6 +336,23 @@ test('hidden state accepts only ordered snapshots and sends a fresh ready signal
       if (message.type === 'ready' && message.sourceRole === 'external') state.__chartReadySeen = true;
     };
   }, channelName);
+
+  const base = Date.now();
+  await postChannelMessage(controller, mainMessage({ type: 'ready', sourceId: 'main-hidden', sequence: 1, sentAt: base + 10, origin }));
+
+  await setDocumentVisibility(page, 'hidden');
+  await postChannelMessage(controller, mainMessage({
+    type: 'selection', sourceId: 'main-hidden', sequence: 2, sentAt: base + 100, origin,
+    selectionOverride: { timeframe: '5m' },
+  }));
+  await postChannelMessage(controller, mainMessage({
+    type: 'selection', sourceId: 'main-hidden', sequence: 3, sentAt: base + 200, origin,
+    selectionOverride: { timeframe: '15m' },
+  }));
+  await postChannelMessage(controller, mainMessage({
+    type: 'selection', sourceId: 'main-hidden', sequence: 2, sentAt: base + 150, origin,
+    selectionOverride: { timeframe: '30m' },
+  }));
 
   await setDocumentVisibility(page, 'visible');
   await expect(page).toHaveURL(/timeframe=15m/);
@@ -421,4 +433,25 @@ test('invalid, duplicated, unsupported, and incomplete route inputs fail closed 
     await expect(page.getByTestId('open-external-ai-chart')).toHaveCount(0);
   }
   await assertCleanRuntime(runtime);
+});
+
+test('deferred intelligence reports loading while keeping the chart available', async ({ page, context }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockChartApis(context);
+  let releaseModule!: () => void;
+  const pendingModule = new Promise<void>((resolve) => { releaseModule = resolve; });
+  await context.route('**/src/components/ai-chart-v2-intelligence-panel.tsx*', async (route) => {
+    await pendingModule;
+    await route.continue();
+  });
+  try {
+    await page.goto(initialUrl);
+    await expect(page.getByRole('heading', { name: 'AI 차트 생중계', level: 1 })).toBeVisible();
+    await expect(page.getByRole('status', { name: 'AI 분석 근거 불러오는 중' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '15분', exact: true })).toBeEnabled();
+  } finally {
+    releaseModule();
+  }
+  await expect(page.getByRole('heading', { name: '분석 모드', exact: true })).toBeVisible();
+  await expect(page.getByRole('status', { name: 'AI 분석 근거 불러오는 중' })).toHaveCount(0);
 });

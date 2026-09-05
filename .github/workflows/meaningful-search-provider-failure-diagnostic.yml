@@ -1,0 +1,49 @@
+name: Meaningful Search Provider Failure Diagnostic
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/meaningful-search-provider-failure-diagnostic.yml
+      - market-prediction-lab/scripts/meaningful-search-provider-failure-diagnostic.js
+      - market-prediction-lab/src/yahoo-stock-history.js
+      - market-prediction-lab/src/upbit-spot-history.js
+      - market-prediction-lab/src/public-coverage-audit-v1.js
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Bundle diagnostic
+        run: |
+          pnpm --dir api-server exec esbuild \
+            ../market-prediction-lab/scripts/meaningful-search-provider-failure-diagnostic.js \
+            --bundle --platform=node --format=cjs --target=node22 \
+            --outfile=../meaningful-search-provider-failure-diagnostic.cjs
+      - name: Run public provider diagnostic
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          node meaningful-search-provider-failure-diagnostic.cjs > meaningful-search-provider-failure-diagnostic.json
+          cat meaningful-search-provider-failure-diagnostic.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: meaningful-search-provider-failure-diagnostic-${{ github.event.pull_request.head.sha }}
+          path: meaningful-search-provider-failure-diagnostic.json
+          if-no-files-found: warn
+          retention-days: 14

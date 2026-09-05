@@ -30,6 +30,10 @@ export function providerStatus() {
     finnhub: Boolean(process.env['FINNHUB_API_KEY']),
     alphavantage: Boolean(process.env['ALPHA_VANTAGE_API_KEY']),
     dart: Boolean(process.env['DART_API_KEY']),
+    toss: Boolean(
+      process.env['TOSS_CLIENT_ID']?.trim() &&
+        process.env['TOSS_CLIENT_SECRET']?.trim(),
+    ),
     secEdgar: true, // free, no key required
   };
 }
