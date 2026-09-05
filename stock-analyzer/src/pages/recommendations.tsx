@@ -22,7 +22,7 @@ interface RecoRow {
   category: Category;
   categoryLabel: string;
   price: number;
-  changePercent: number;
+  changePercent: number | null;
   reasons: string[];
   usedData: string[];
   missingData: string[];
@@ -87,8 +87,14 @@ export default function RecommendationsPage() {
   const rows = (data?.rows ?? []).filter((row) => row.category === category);
 
   return (
-    <div className="h-full overflow-y-auto overscroll-contain bg-background">
-      <div className="px-4 pb-28 pt-4">
+    <div
+      className="flex h-full min-h-0 flex-col overflow-hidden bg-background"
+      data-testid="recommendations-shell"
+    >
+      <div
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-6 pt-4"
+        data-testid="recommendations-scroll-content"
+      >
         <header className="mb-3 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <button
@@ -256,17 +262,21 @@ function RecoCard({ row, onOpen }: { row: RecoRow; onOpen: () => void }) {
           <p
             className={cn(
               "text-[10px] font-black",
-              row.changePercent >= 0 ? "text-positive" : "text-destructive",
+              row.changePercent == null
+                ? "text-muted-foreground"
+                : row.changePercent >= 0
+                  ? "text-positive"
+                  : "text-destructive",
             )}
           >
-            {formatAppPercent(row.changePercent)}
+            {row.changePercent == null ? "—" : formatAppPercent(row.changePercent)}
           </p>
         </div>
       </button>
 
       <div className="mt-2 flex flex-wrap gap-1">
         <Badge tone={row.score >= 70 ? "positive" : "muted"}>
-          상승 가능성 {row.score}점
+          규칙 점수 {row.score}점
         </Badge>
         <Badge tone={row.opinion === "매수" ? "positive" : "muted"}>
           {row.opinion}

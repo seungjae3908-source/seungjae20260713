@@ -253,6 +253,14 @@ test('two workers claim each order once, stay bounded, halt new orders, and neve
   assert.equal(source.globalEmergencyStopped, true);
   assert.equal(left.exchangeOrdersSubmitted, false);
   assert.equal(right.exchangeOrdersSubmitted, false);
+  assert.deepEqual(
+    [left.ordersSubmitted, left.ordersCancelled, left.privateMutationRequests],
+    [0, 0, 0],
+  );
+  assert.deepEqual(
+    [right.ordersSubmitted, right.ordersCancelled, right.privateMutationRequests],
+    [0, 0, 0],
+  );
 });
 
 test('an uncompleted lease is not stolen before expiry and is recoverable after expiry', async () => {
@@ -310,4 +318,8 @@ test('one item failure is recorded and does not stop the remaining recovery batc
   assert.equal(source.globalEmergencyStopped, true);
   assert.equal([...source.orders.values()].filter((item) => item.recoveryLeaseOwner !== null).length, 0);
   assert.equal(result.exchangeOrdersSubmitted, false);
+  assert.deepEqual(
+    [result.ordersSubmitted, result.ordersCancelled, result.privateMutationRequests],
+    [0, 0, 0],
+  );
 });

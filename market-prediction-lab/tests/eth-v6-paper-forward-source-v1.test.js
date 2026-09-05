@@ -1,0 +1,360 @@
+import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import test from "node:test";
+import {
+  ETH_V6_PAPER_FORWARD_SOURCE_CONTRACT,
+  createEthV6PaperForwardSource,
+  loadBitgetEthV6PaperContext,
+  wrapPaperForwardProviderWithEthV6Source,
+} from "../src/eth-v6-paper-forward-source-v1.js";
+import { FROZEN_CANDIDATE_MANIFEST_SHA256 } from "../src/final-holdout-evaluator.js";
+
+const SHA = "a".repeat(40);
+const ENTRY = Date.UTC(2026, 7, 19, 0, 0, 0);
+const NOW = ENTRY + 5 * 60 * 60 * 1000;
+const SHADOW_OBSERVED_AT = NOW - 10 * 60 * 1000;
+
+function trackingRecord(overrides = {}) {
+  return {
+    schemaVersion: 1,
+    id: "shadow-record-1",
+    status: "tracking",
+    signalId: "ETH-V6-1787097600000",
+    strategy: "v6_independent_breakout_retest",
+    asset: "ETHUSDT",
+    market: "CRYPTO_FUTURES",
+    timeframe: "1d",
+    timestamp: ENTRY - 24 * 60 * 60 * 1000,
+    dataTimestamp: ENTRY - 24 * 60 * 60 * 1000,
+    entryPlan: {
+      action: "LONG",
+      entryTime: ENTRY,
+      entryPrice: 4000,
+      quantity: 99,
+      leverage: 1,
+      source: "bitget-public-forward-paper",
+    },
+    stop: 3900,
+    targets: [4200],
+    feesSlippageModel: {},
+    subsequentMarketResult: null,
+    orderSubmitted: false,
+    privateAccountRequested: false,
+    ...overrides,
+  };
+}
+
+function shadowRoot(record = trackingRecord(), overrides = {}) {
+  return {
+    schemaVersion: 3,
+    forwardStrategies: {
+      "eth-futures-long-v6": {
+        schemaVersion: 1,
+        candidateId: "eth-futures-long-v6",
+        candidateManifestSha256: FROZEN_CANDIDATE_MANIFEST_SHA256,
+        startedAt: ENTRY - 24 * 60 * 60 * 1000,
+        updatedAt: SHADOW_OBSERVED_AT,
+        ledger: { version: 1, records: [record] },
+        safeguards: {
+          frozenCandidateOnly: true,
+          parametersRetunedAfterHoldout: false,
+          forwardSignalsOnly: true,
+          publicMarketDataOnly: true,
+          orderSubmitted: false,
+          liveOrderAllowed: false,
+        },
+        ...overrides,
+      },
+    },
+  };
+}
+
+function readyContext() {
+  return {
+    quantity: 0.07,
+    sizing: {
+      quantity: 0.07,
+      initialCapitalKrw: 1_000_000,
+      riskFraction: 0.01,
+      riskBudgetKrw: 10_000,
+      stopDistanceUsdt: 100,
+      entryNotionalUsdt: 280,
+      entryNotionalKrw: 378_000,
+      stopRiskKrw: 9_450,
+      krwPerUsdt: 1350,
+      leverage: 1,
+    },
+    fx: {
+      status: "READY",
+      krwPerUsdt: 1350,
+      asOfMs: NOW - 1000,
+      maxAgeMs: 900000,
+      source: "upbit-public-cross-krw-btc-usdt-btc",
+      markets: ["KRW-BTC", "USDT-BTC"],
+    },
+    dataEvidence: {
+      provider: "bitget",
+      publicOnly: true,
+      dataQuality: "READY",
+      provenance: "bitget-public-v2:test",
+      asOfMs: NOW - 1000,
+      maxAgeMs: 300000,
+      contractStatus: "TRADABLE",
+      tickSize: 0.01,
+      minQty: 0.01,
+      qtyStep: 0.01,
+      markPrice: 4001,
+      indexPrice: 4000,
+      fundingRate: 0.0001,
+      openInterest: 1000,
+      leverage: 1,
+      maxLeverage: 125,
+      marginMode: "ISOLATED",
+      liquidationDistancePct: 99,
+      barProxyRealtimeAllowed: true,
+    },
+  };
+}
+
+async function withShadowFile(value, run) {
+  const dir = await mkdtemp(join(tmpdir(), "eth-v6-paper-source-"));
+  const path = join(dir, "shadow-state.json");
+  try {
+    await writeFile(path, `${JSON.stringify(value, null, 2)}\n`);
+    await run(path);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+test("fresh natural frozen ETH V6 tracking signal becomes one low-sample Paper candidate without promotion claims", async () => {
+  await withShadowFile(shadowRoot(), async (shadowStatePath) => {
+    const source = createEthV6PaperForwardSource({
+      shadowStatePath,
+      researchCodeSha: SHA,
+      clock: () => NOW,
+      loadContext: async () => readyContext(),
+    });
+    const result = await source.collect();
+    assert.equal(result.status, "READY");
+    assert.equal(result.candidates.length, 1);
+    assert.equal(result.exits.length, 0);
+    const candidate = result.candidates[0];
+    assert.equal(candidate.signal.signalId, "ETH-V6-1787097600000");
+    assert.equal(candidate.signal.strategyIdentity.researchCodeSha, SHA);
+    assert.equal(candidate.profitGate.decision, "ELIGIBLE");
+    assert.equal(candidate.profitEvidence.sampleSize, 3);
+    assert.equal(candidate.profitEvidence.sampleClass, "low");
+    assert.equal(candidate.profitEvidence.promotionEvidence, false);
+    assert.equal(candidate.profitEvidence.profitabilityClaimAllowed, false);
+    assert.ok(candidate.profitEvidence.expectedNetEdge > 0);
+    assert.ok(candidate.profitEvidence.expectedNetReturn > 0);
+    assert.equal(candidate.order.quantity, 0.07);
+    assert.equal(candidate.order.direction, "LONG");
+    assert.equal(candidate.execution.executionPolicy.fillModel, "BAR_PROXY");
+    assert.equal(candidate.bar.nextOpen, 4000);
+    assert.equal(candidate.riskEvidence.riskBudgetKrw, 10_000);
+    assert.equal(candidate.riskEvidence.estimatedStopRiskKrw, 9_450);
+    assert.equal(candidate.riskEvidence.estimatedEntryNotionalKrw, 378_000);
+    assert.equal(candidate.retainedForwardEvidence.krwPerUsdt, 1350);
+    assert.equal(candidate.retainedForwardEvidence.observedAtMs, SHADOW_OBSERVED_AT);
+    assert.equal(candidate.retainedForwardEvidence.orderSubmitted, false);
+    assert.equal(candidate.retainedForwardEvidence.privateAccountRequested, false);
+    assert.equal(result.safety.maximumEntryLagMs, 6 * 60 * 60 * 1000);
+    assert.equal(result.safety.maximumSourceAgeMs, 45 * 60 * 1000);
+    assert.equal(result.safety.settlementBridgeReady, true);
+    assert.equal(result.safety.liveTrading, false);
+  });
+});
+
+test("Shadow evidence not consumed promptly is never backfilled into Paper", async () => {
+  await withShadowFile(shadowRoot(), async (shadowStatePath) => {
+    const lateNow = SHADOW_OBSERVED_AT + ETH_V6_PAPER_FORWARD_SOURCE_CONTRACT.maximumSourceAgeMs + 1;
+    const source = createEthV6PaperForwardSource({
+      shadowStatePath,
+      researchCodeSha: SHA,
+      clock: () => lateNow,
+      loadContext: async () => { throw new Error("context must not be loaded for stale source"); },
+    });
+    const result = await source.collect();
+    assert.equal(result.status, "NO_FRESH_TRACKING_OR_SETTLEMENT");
+    assert.equal(result.candidates.length, 0);
+  });
+});
+
+test("Shadow record that violated the original six-hour natural entry window fails closed", async () => {
+  const tooLateObservation = ENTRY + ETH_V6_PAPER_FORWARD_SOURCE_CONTRACT.maximumEntryLagMs + 1;
+  await withShadowFile(shadowRoot(trackingRecord(), { updatedAt: tooLateObservation }), async (shadowStatePath) => {
+    const source = createEthV6PaperForwardSource({
+      shadowStatePath,
+      researchCodeSha: SHA,
+      clock: () => tooLateObservation,
+      loadContext: async () => readyContext(),
+    });
+    await assert.rejects(source.collect(), /ORIGINAL_ENTRY_LAG_EXCEEDED/);
+  });
+});
+
+test("settled shadow records are not retrospectively opened as Paper positions", async () => {
+  await withShadowFile(shadowRoot(trackingRecord({ status: "settled" })), async (shadowStatePath) => {
+    const source = createEthV6PaperForwardSource({
+      shadowStatePath,
+      researchCodeSha: SHA,
+      clock: () => NOW,
+      loadContext: async () => { throw new Error("context must not be loaded for settled record"); },
+    });
+    const result = await source.collect();
+    assert.equal(result.status, "NO_FRESH_TRACKING_OR_SETTLEMENT");
+    assert.equal(result.candidates.length, 0);
+    assert.equal(result.exits.length, 0);
+  });
+});
+
+test("settled Shadow record closes only its exact matching canonical Paper position", async () => {
+  const settled = trackingRecord({
+    status: "settled",
+    subsequentMarketResult: { exitReason: "take_profit", exitPrice: 4200, exitTimestamp: ENTRY + 24 * 60 * 60 * 1000 },
+  });
+  await withShadowFile(shadowRoot(settled), async (shadowStatePath) => {
+    let settlementArgs = null;
+    const source = createEthV6PaperForwardSource({
+      shadowStatePath,
+      researchCodeSha: SHA,
+      clock: () => NOW + 2 * 24 * 60 * 60 * 1000,
+      loadContext: async () => { throw new Error("entry context must not be loaded for settled record"); },
+      loadSettlement: async (args) => {
+        settlementArgs = args;
+        return {
+          status: "READY",
+          settlementInput: { exitExecution: { test: true }, exitOrderType: "LIMIT", exitLimitPrice: 4200, fundingEvidence: { complete: true, payments: [] } },
+          evidence: { shadowExitPriceIgnored: true },
+        };
+      },
+    });
+    const position = {
+      positionId: "paper-position-1",
+      signalId: settled.signalId,
+      market: "CRYPTO_FUTURES",
+      direction: "LONG",
+      strategyId: "v6_independent_breakout_retest",
+      researchCodeSha: SHA,
+      lifecycleState: "OPEN",
+    };
+    const result = await source.collect({ openPositions: [position] });
+    assert.equal(result.status, "READY");
+    assert.equal(result.candidates.length, 0);
+    assert.equal(result.exits.length, 1);
+    assert.equal(result.exits[0].positionId, "paper-position-1");
+    assert.equal(result.exits[0].naturalSettlementEvidence.shadowExitPriceIgnored, true);
+    assert.equal(settlementArgs.position, position);
+    assert.equal(settlementArgs.record.signalId, settled.signalId);
+    assert.equal(settlementArgs.researchCodeSha, SHA);
+  });
+});
+
+test("multiple matching ETH V6 Paper positions fail closed instead of double-settling", async () => {
+  await withShadowFile(shadowRoot(trackingRecord({ status: "settled" })), async (shadowStatePath) => {
+    const source = createEthV6PaperForwardSource({ shadowStatePath, researchCodeSha: SHA, clock: () => NOW });
+    const base = {
+      signalId: "ETH-V6-1787097600000",
+      market: "CRYPTO_FUTURES",
+      direction: "LONG",
+      strategyId: "v6_independent_breakout_retest",
+      researchCodeSha: SHA,
+      lifecycleState: "OPEN",
+    };
+    await assert.rejects(source.collect({ openPositions: [{ ...base, positionId: "1" }, { ...base, positionId: "2" }] }), /MULTIPLE_OPEN_POSITIONS_FORBIDDEN/);
+  });
+});
+
+test("frozen candidate manifest mismatch fails closed", async () => {
+  await withShadowFile(shadowRoot(trackingRecord(), { candidateManifestSha256: "b".repeat(64) }), async (shadowStatePath) => {
+    const source = createEthV6PaperForwardSource({
+      shadowStatePath,
+      researchCodeSha: SHA,
+      clock: () => NOW,
+      loadContext: async () => readyContext(),
+    });
+    await assert.rejects(source.collect(), /FROZEN_IDENTITY_MISMATCH/);
+  });
+});
+
+test("Bitget public metadata plus public KRW/USDT FX size against the Paper one-percent risk budget instead of Shadow abstract quantity", async () => {
+  const calls = [];
+  const fakeClient = {
+    async get(path) {
+      calls.push(path);
+      if (path.endsWith("/contracts")) return { data: [{
+        symbol: "ETHUSDT", symbolStatus: "normal", minTradeNum: "0.01", sizeMultiplier: "0.01",
+        pricePlace: "2", priceEndStep: "1", minTradeUSDT: "5", maxMarketOrderQty: "10",
+        maxLever: "125", takerFeeRate: "0.0006",
+      }] };
+      if (path.endsWith("/query-position-lever")) return { data: [{ startUnit: "0", endUnit: "1000000", leverage: "125", keepMarginRate: "0.004" }] };
+      if (path.endsWith("/open-interest")) return { data: { openInterestList: [{ size: "1234.5" }], ts: String(NOW - 1000) } };
+      if (path.endsWith("/current-fund-rate")) return { data: [{ fundingRate: "0.0001" }] };
+      if (path.endsWith("/symbol-price")) return { data: [{ ts: String(NOW - 1000), markPrice: "4001", indexPrice: "4000", price: "4000.5" }] };
+      throw new Error(`unexpected path ${path}`);
+    },
+  };
+  const context = await loadBitgetEthV6PaperContext({
+    client: fakeClient,
+    record: trackingRecord(),
+    nowMs: NOW,
+    sourceObservedAtMs: SHADOW_OBSERVED_AT,
+    loadFx: async () => ({
+      status: "READY",
+      krwPerUsdt: 1350,
+      asOfMs: NOW - 1000,
+      maxAgeMs: 900000,
+      source: "upbit-public-cross-krw-btc-usdt-btc",
+      markets: ["KRW-BTC", "USDT-BTC"],
+    }),
+  });
+  assert.equal(context.quantity, 0.07);
+  assert.equal(context.sizing.riskBudgetKrw, 10_000);
+  assert.equal(context.sizing.stopRiskKrw, 9_450);
+  assert.equal(context.sizing.entryNotionalKrw, 378_000);
+  assert.equal(context.dataEvidence.tickSize, 0.01);
+  assert.equal(context.dataEvidence.qtyStep, 0.01);
+  assert.equal(context.dataEvidence.minQty, 0.01);
+  assert.equal(context.dataEvidence.contractStatus, "TRADABLE");
+  assert.equal(context.dataEvidence.maxLeverage, 125);
+  assert.equal(context.dataEvidence.marginMode, "ISOLATED");
+  assert.ok(context.dataEvidence.liquidationDistancePct > 99);
+  assert.equal(context.dataEvidence.provider, "bitget");
+  assert.equal(context.dataEvidence.fxEvidence.krwPerUsdt, 1350);
+  assert.equal(context.dataEvidence.retainedForwardObservedAtMs, SHADOW_OBSERVED_AT);
+  assert.equal(new Set(calls).size, 5);
+});
+
+test("provider wrapper injects natural candidates and exact Paper open positions only into a READY futures lane", async () => {
+  const baseProvider = {
+    async collectPublicEvidence({ market }) {
+      return {
+        status: "READY",
+        publicOnly: true,
+        market,
+        provider: "fixture-public",
+        observedAtMs: NOW - 1000,
+        dataAsOfMs: NOW - 1000,
+        maxAgeMs: 60000,
+        candidates: [],
+        exits: [],
+      };
+    },
+  };
+  let received = null;
+  const source = { async collect(input) { received = input; return { status: "READY", candidates: [{ signal: { signalId: "eth-v6" } }], exits: [], blocker: null }; } };
+  const wrapped = wrapPaperForwardProviderWithEthV6Source({ provider: baseProvider, source });
+  const spot = await wrapped.collectPublicEvidence({ market: "CRYPTO_SPOT", openPositions: [{ positionId: "spot" }] });
+  const paperPosition = { positionId: "futures" };
+  const futures = await wrapped.collectPublicEvidence({ market: "CRYPTO_FUTURES", openPositions: [paperPosition] });
+  assert.equal(spot.candidates.length, 0);
+  assert.equal(futures.candidates.length, 1);
+  assert.deepEqual(received.openPositions, [paperPosition]);
+  assert.equal(futures.naturalCandidateSource.candidateCount, 1);
+  assert.equal(futures.naturalCandidateSource.exitCount, 0);
+  assert.equal(futures.naturalCandidateSource.settlementBridgeReady, true);
+});

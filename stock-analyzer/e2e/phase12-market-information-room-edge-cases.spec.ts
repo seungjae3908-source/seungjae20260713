@@ -266,9 +266,9 @@ test('empty market sections stay explicit without console, page, rejection, HTTP
 
 test('authentication expiry, permission denial, and timeout render distinct retry-safe states', async ({ browser }) => {
   const cases: ErrorCase[] = [
-    { status: 401, code: 'AUTHENTICATION_REQUIRED', title: '인증이 만료되었습니다', retryable: false },
-    { status: 403, code: 'CAPABILITY_REQUIRED', title: '권한이 부족합니다', retryable: false },
-    { status: 504, code: 'UPSTREAM_TIMEOUT', title: '제공기관 응답이 지연되고 있습니다', retryable: true },
+    { status: 401, code: 'AUTHENTICATION_REQUIRED', title: '로그인 필요', retryable: false },
+    { status: 403, code: 'CAPABILITY_REQUIRED', title: '권한 없음', retryable: false },
+    { status: 504, code: 'UPSTREAM_TIMEOUT', title: '응답 지연', retryable: true },
   ];
 
   for (const item of cases) {
@@ -277,7 +277,7 @@ test('authentication expiry, permission denial, and timeout render distinct retr
     const diagnostics = await mockEnvironment(page, { error: item });
     await page.goto('/stocks/kr');
     await expect(page.getByRole('heading', { name: item.title })).toBeVisible();
-    await expect(page.getByRole('button', { name: '다시 시도' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '재시도' })).toBeVisible();
     await diagnostics.assertClean();
     await context.close();
   }

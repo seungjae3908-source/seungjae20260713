@@ -23,6 +23,7 @@ import {
   APP_NAVIGATION,
   cleanAppPath,
   navigationGroupMatches,
+  navigationMenuItemIsUserVisible,
   navigationMenuItemMatches,
   resolveAppRoutePresentation,
   type NavigationGroupId,
@@ -169,7 +170,7 @@ export function BottomNav() {
       aria-label="주요 메뉴"
       data-route-title={presentation?.title ?? undefined}
       data-breadcrumb={presentation?.breadcrumb.join(' / ') ?? undefined}
-      className="fixed inset-x-0 bottom-0 z-40 border-t border-card-border bg-background/90 px-1 pb-[env(safe-area-inset-bottom)] pt-1 backdrop-blur-xl"
+      className="relative z-40 w-full shrink-0 border-t border-card-border bg-background/90 px-1 pb-[env(safe-area-inset-bottom)] pt-1 backdrop-blur-xl"
     >
       {presentation?.breadcrumb.length ? (
         <ol aria-label="현재 위치" className="sr-only">
@@ -188,7 +189,8 @@ export function BottomNav() {
           const active = navigationGroupMatches(group, path);
           const Icon = ICONS[group.icon];
           const visibleMenuItems = (group.menu ?? []).filter(
-            (item) => !item.capability || auth.can(item.capability),
+            (item) => (!item.capability || auth.can(item.capability))
+              && navigationMenuItemIsUserVisible(item),
           );
           const hasMenu = visibleMenuItems.length > 0;
 
@@ -230,7 +232,7 @@ export function BottomNav() {
                           )}
                         >
                           <MenuIcon className="h-4 w-4 shrink-0" aria-hidden="true" />
-                          <span>{menuItem.label}</span>
+                          <span className="break-keep whitespace-nowrap">{menuItem.label}</span>
                         </button>
                       );
                     })}
@@ -257,7 +259,7 @@ export function BottomNav() {
                   )}
                 >
                   <Icon className={cn('mb-0.5 h-5 w-5', active || menuOpen ? 'text-primary' : 'text-muted-foreground')} aria-hidden="true" />
-                  <span className="truncate">{group.label}</span>
+                  <span className="max-w-full truncate whitespace-nowrap">{group.label}</span>
                 </button>
               </div>
             );
@@ -275,7 +277,7 @@ export function BottomNav() {
               )}
             >
               <Icon className={cn('mb-0.5 h-5 w-5', active ? 'text-primary' : 'text-muted-foreground')} aria-hidden="true" />
-              <span className="truncate">{group.label}</span>
+              <span className="max-w-full truncate whitespace-nowrap">{group.label}</span>
             </button>
           );
         })}

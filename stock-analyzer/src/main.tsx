@@ -28,11 +28,19 @@ function applyInitialAccent() {
 }
 
 function registerServiceWorker() {
+	if (!import.meta.env.PROD) return;
 	if (import.meta.env.VITE_PHASE4_E2E === 'true' || import.meta.env.VITE_PHASE11_E2E === 'false') return;
 	if (!('serviceWorker' in navigator)) return;
 
 	window.addEventListener('load', () => {
-		navigator.serviceWorker.register('/sw.js').catch(() => undefined);
+		navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).then((registration) => {
+			const checkForUpdate = () => registration.update().catch(() => undefined);
+
+			void checkForUpdate();
+			document.addEventListener('visibilitychange', checkForUpdate);
+			window.addEventListener('pageshow', checkForUpdate);
+			window.setInterval(checkForUpdate, 5 * 60 * 1000);
+		}).catch(() => undefined);
 	});
 }
 

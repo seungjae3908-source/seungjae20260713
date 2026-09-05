@@ -5,6 +5,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 import router from "./routes";
+import deviceTrustRouter from './features/device-trust/device-trust.route';
+import { deviceTrustAppGate } from './features/device-trust/device-trust.middleware';
 import { logger } from "./lib/logger";
 import { rejectPaperJournalQueryIdentity } from './middleware/paper-journal-query-identity';
 import { apiRateLimit, securityHeaders } from './middleware/security';
@@ -43,7 +45,7 @@ app.use(securityHeaders);
 app.use(cors({ origin(origin, callback) {
   if (!origin || process.env.NODE_ENV !== 'production' || allowedOrigins.includes(origin)) return callback(null, true);
   return callback(new Error('CORS origin rejected'));
-}, methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization', 'X-Auto-Trade-Key'] }));
+}, methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization', 'X-Auto-Trade-Key', 'X-Device-Session'] }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use('/api', apiRateLimit);
@@ -61,12 +63,41 @@ app.get("/api/healthz", (_req, res) => {
   res.json({ status: "ok" });
 });
 
+// Device-trust enrollment and proof endpoints must remain reachable when the
+// optional global enforcement gate is enabled. The gate itself is default-off
+// unless DEVICE_TRUST_ENFORCEMENT is exactly `required`.
+app.use('/api/device-trust', deviceTrustRouter);
+app.use('/api', deviceTrustAppGate);
 app.use("/api", router);
 
 if (existsSync(clientDist)) {
-  app.use(express.static(clientDist));
+  app.use(express.static(clientDist, {
+    setHeaders(res, filePath) {
+      const relative = path.relative(clientDist, filePath).split(path.sep).join('/');
+      const mustRevalidate = new Set([
+        'index.html',
+        'sw.js',
+        'registerSW.js',
+        'push-sw.js',
+        'manifest.webmanifest',
+      ]);
+
+      if (mustRevalidate.has(relative)) {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        return;
+      }
+
+      if (relative.startsWith('assets/') || /^workbox-[A-Za-z0-9_-]+\.js$/.test(relative)) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        return;
+      }
+
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+    },
+  }));
 
   app.get(/^(?!\/api).*/, (_req, res) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.sendFile(clientIndex);
   });
 }

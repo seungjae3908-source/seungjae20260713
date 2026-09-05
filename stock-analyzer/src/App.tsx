@@ -9,22 +9,27 @@ import { AuthProvider, useAuth } from '@/lib/auth';
 import { AppBackground } from '@/components/app-background';
 import { AssetModeProvider, useAssetMode } from '@/lib/asset-mode';
 import { AnalysisSelectionProvider } from '@/lib/analysis-selection';
+import { AssetRouteNotResolved, resolveAssetDetailPath, resolveLegacyCryptoDetailPath } from '@/lib/asset-navigation';
 import { OfflineBanner } from '@/components/offline-banner';
 import { ScannerReadinessStatus } from '@/components/scanner-readiness-status';
-import { PageFallback } from '@/components/data-state';
+import { OrderbookRouteDock } from '@/components/orderbook-route-dock';
+import { ErrorState, PageFallback } from '@/components/data-state';
 import { AutoBackupSync } from '@/lib/backup-sync';
 import { CapabilityGate } from '@/components/capability-gate';
+import { UiBuilderRuntimeBoundary } from '@/components/ui-builder-runtime-boundary';
 import { withActiveQuerySignal } from '@/lib/query-abort-signal';
+import { fetchUnifiedChartData } from '@/lib/unified-chart-data';
+import type { UiBuilderPageId } from '@/lib/ui-builder-full-layout';
 import type { MemberCapability } from '../../packages/member-access/src/index.js';
 import HomePage from '@/pages/home';
 import SearchPage from '@/pages/search';
 
-const DetailPage = lazy(() => import('@/pages/detail'));
 const WatchlistPage = lazy(() => import('@/pages/watchlist'));
 const AlertsPage = lazy(() => import('@/pages/alerts'));
 const ScannerPage = lazy(() => import('@/pages/scanner'));
 const SignalScannerPage = lazy(() => import('@/pages/signal-scanner'));
 const StockInfoPage = lazy(() => import('@/pages/stock-info'));
+const DetailPage = lazy(() => import('@/pages/detail'));
 const MarketInformationPage = lazy(() => import('@/pages/market-information'));
 const MarketOverviewPage = lazy(() => import('@/pages/market-overview'));
 const StocksPage = lazy(() => import('@/pages/stocks'));
@@ -33,13 +38,18 @@ const ThemesPage = lazy(() => import('@/pages/themes'));
 const LearnPage = lazy(() => import('@/pages/learn'));
 const MorePage = lazy(() => import('@/pages/more'));
 const PortfolioPage = lazy(() => import('@/pages/portfolio'));
+const PortfolioV2Page = lazy(() => import('@/pages/portfolio-v2'));
+const StrategyPromotionPage = lazy(() => import('@/pages/strategy-promotion'));
+const ResearchCenterPage = lazy(() => import('@/pages/research-center-workspace'));
 const AccountPage = lazy(() => import('@/pages/account'));
 const AdminPage = lazy(() => import('@/pages/admin'));
 const InstallPage = lazy(() => import('@/pages/install'));
 const RecommendationsPage = lazy(() => import('@/pages/recommendations'));
 const BacktestsPage = lazy(() => import('@/pages/backtests'));
-const PaperTradingPage = lazy(() => import('@/pages/paper-trading'));
+const loadPaperTradingPage = () => import('@/pages/paper-trading');
+const PaperTradingPage = lazy(loadPaperTradingPage);
 const AutoTradingPage = lazy(() => import('@/pages/auto-trading'));
+const UiBuilderLayoutControlPage = lazy(() => import('@/pages/ui-builder-layout-control'));
 const NotFound = lazy(() => import('@/pages/not-found'));
 const Phase4RiskE2EPage = lazy(() => import('@/pages/phase4-risk-e2e'));
 const Phase5BacktestE2EPage = lazy(() => import('@/pages/phase5-backtest-e2e'));
@@ -47,7 +57,20 @@ const Phase6PaperTradingE2EPage = lazy(() => import('@/pages/phase6-paper-tradin
 const Phase7JournalSyncE2EPage = lazy(() => import('@/pages/phase7-journal-sync-e2e'));
 const Phase8ReleaseCandidateE2EPage = lazy(() => import('@/pages/phase8-release-candidate-e2e'));
 const Phase9AiReviewE2EPage = lazy(() => import('@/pages/phase9-ai-review-e2e'));
-const AiChartPage = lazy(() => import('@/pages/ai-chart'));
+const directAiChartColdRoute = typeof window !== 'undefined' && window.location.pathname.endsWith('/ai-chart');
+const prewarmDefaultAiChartData = (() => {
+  if (!directAiChartColdRoute || window.location.search !== '') return false;
+  try {
+    return !window.localStorage.getItem('sa-analysis-selection-v1');
+  } catch {
+    return false;
+  }
+})();
+const loadAiChartPage = () => import('@/pages/ai-chart');
+if (directAiChartColdRoute) {
+  void loadAiChartPage();
+}
+const AiChartPage = lazy(loadAiChartPage);
 const AiChatPage = lazy(() => import('@/pages/ai-chat'));
 const TechnicalWorkspacePage = lazy(() => import('@/pages/technical-workspace'));
 const Phase12TradeAutomationE2EPage = lazy(() => import('@/pages/phase12-trade-automation-e2e'));
@@ -64,6 +87,16 @@ const phase12E2EEnabled = import.meta.env.VITE_PHASE12_E2E === 'true';
 const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: true, refetchOnReconnect: true, staleTime: 0, gcTime: 30 * 60 * 1000, retry: 2 } },
 });
+
+if (prewarmDefaultAiChartData) {
+  queueMicrotask(() => {
+    void queryClient.prefetchQuery({
+      queryKey: ['unified-chart-data', 'KR', '005930', '5m'],
+      queryFn: () => fetchUnifiedChartData({ market: 'KR', symbol: '005930', timeframe: '5m' }),
+      retry: false,
+    });
+  });
+}
 
 function installScannerAbortBridge(client: QueryClient) {
   const originalDefaultQueryOptions = client.defaultQueryOptions.bind(client);
@@ -99,80 +132,174 @@ function useCryptoRedirect(target: (symbol?: string) => string, symbol?: string)
 function CryptoHomeRedirect() { useCryptoRedirect(() => '/home'); return <PageFallback />; }
 function CryptoSearchRedirect() { useCryptoRedirect(() => '/stocks'); return <PageFallback />; }
 function CryptoDetailRedirect() {
+  const mode = useAssetMode();
+  const [location, navigate] = useLocation();
   const [, params] = useRoute('/crypto/:symbol') as [boolean, { symbol?: string } | null];
-  useCryptoRedirect((symbol) => `/stock-info?asset=coin&coinMarket=spot&symbol=${encodeURIComponent(String(symbol ?? 'BTC').toUpperCase())}`, params?.symbol);
-  return <PageFallback />;
+  const symbol = String(params?.symbol ?? '').trim().toUpperCase();
+  const query = location.includes('?') ? location.slice(location.indexOf('?') + 1) : window.location.search.slice(1);
+  const backPath = new URLSearchParams(query).get('back')?.trim() || '/stocks';
+  let target: string | null = null;
+  try {
+    target = resolveLegacyCryptoDetailPath(symbol, backPath);
+  } catch (error) {
+    if (!(error instanceof AssetRouteNotResolved)) throw error;
+  }
+  useEffect(() => {
+    if (!target) return;
+    mode.setAsset('coin');
+    navigate(target, { replace: true });
+  }, [mode, navigate, target]);
+  return target ? <PageFallback /> : <NotFound />;
+}
+
+function LegacyStockDetailRedirect() {
+  const [location, navigate] = useLocation();
+  const [, params] = useRoute('/stock/:ticker') as [boolean, { ticker?: string } | null];
+  const ticker = String(params?.ticker ?? '').trim().toUpperCase();
+  const query = location.includes('?') ? location.slice(location.indexOf('?') + 1) : '';
+  const backPath = new URLSearchParams(query).get('back')?.trim() || '/stocks';
+  let target: string | null = null;
+  if (/^\d{6}$/.test(ticker)) {
+    target = resolveAssetDetailPath({ assetClass: 'KR_STOCK', market: 'KR', symbol: ticker, canonicalSymbol: ticker, backPath });
+  } else if (/^[A-Z][A-Z0-9.-]{0,14}$/.test(ticker)) {
+    target = resolveAssetDetailPath({ assetClass: 'US_STOCK', market: 'US', symbol: ticker, canonicalSymbol: ticker, backPath });
+  }
+  useEffect(() => {
+    if (target) navigate(target, { replace: true });
+  }, [navigate, target]);
+  return target ? <PageFallback /> : <NotFound />;
 }
 
 function AppShell({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
-  const scannerRoute = location.startsWith('/scanner');
+  const legacyScannerE2E = phase11E2EEnabled && location.startsWith('/__phase11-ai-workspace-e2e');
+  const scannerRoute = location.startsWith('/scanner') || legacyScannerE2E;
   const wide = scannerRoute || location.startsWith('/ai-chart') || location.startsWith('/__phase11-technical-workspace-e2e');
-  return <div className="relative h-[100dvh] w-full overflow-hidden text-foreground"><AppBackground /><div data-testid={scannerRoute ? 'scanner-root' : undefined} className={`relative z-10 mx-auto flex h-[100dvh] min-h-0 flex-col overflow-hidden bg-background ${wide ? 'max-w-screen-2xl' : 'max-w-md'}`}><OfflineBanner />{scannerRoute ? <ScannerReadinessStatus /> : null}<div className="min-h-0 flex-1 overflow-hidden">{children}</div></div></div>;
+  return <div className="relative h-[100dvh] w-full overflow-hidden text-foreground"><AppBackground /><div data-testid={scannerRoute ? 'scanner-root' : undefined} className={`relative z-10 mx-auto flex h-[100dvh] min-h-0 w-full flex-col overflow-hidden bg-background ${wide ? 'max-w-screen-2xl' : 'max-w-screen-xl'}`}><OfflineBanner />{scannerRoute ? <ScannerReadinessStatus /> : null}<div className="min-h-0 flex-1 overflow-hidden">{children}</div></div><OrderbookRouteDock /></div>;
 }
 
 function gated(capability: MemberCapability, child: React.ReactNode) {
   return <CapabilityGate capability={capability}>{child}</CapabilityGate>;
 }
 
+function builder(pageId: UiBuilderPageId, child: React.ReactNode) {
+  return <UiBuilderRuntimeBoundary pageId={pageId}>{child}</UiBuilderRuntimeBoundary>;
+}
+
+function HomeAccess() { return builder('HOME', <HomePage />); }
 function ScannerAccess() {
-  const auth = useAuth();
-  return gated(
-    'canAccessBasicInfo',
-    auth.can('canAccessRiskPreview') ? <TechnicalWorkspacePage /> : <SignalScannerPage />,
+  return gated('canAccessBasicInfo', <TechnicalWorkspacePage />);
+}
+function AiChartAccess() { return gated('canAccessRiskPreview', builder('AI_CHART', <AiChartPage />)); }
+function AiChatAccess() { return gated('canAccessBasicInfo', builder('AI_CHAT', <AiChatPage />)); }
+function RecommendationsAccess() { return gated('canAccessRiskPreview', <RecommendationsPage />); }
+function PortfolioAccess() { return gated('canAccessPaperTrading', builder('PORTFOLIO', <PortfolioV2Page />)); }
+function PositionAccess() { return gated('canAccessPaperTrading', builder('POSITION', <PortfolioPage />)); }
+function StrategyPromotionAccess() { return gated('canAccessBacktests', <StrategyPromotionPage />); }
+function ResearchCenterAccess() { return gated('canManageMembers', <ResearchCenterPage />); }
+function BacktestsAccess() { return gated('canAccessBacktests', <BacktestsPage />); }
+function PaperTradingRouteFallback() {
+  return (
+    <main
+      aria-busy="true"
+      aria-label="모의매매 화면 준비 중"
+      className="h-full overflow-y-auto overscroll-contain pb-28"
+      data-testid="paper-trading-route-skeleton"
+    >
+      <div className="mx-auto w-full max-w-6xl space-y-4 px-4 py-5 sm:px-5">
+        <header className="rounded-2xl border border-border bg-card p-4">
+          <h1 className="text-lg font-bold">모의매매</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            계좌와 거래일지를 안전하게 준비하고 있습니다.
+          </p>
+        </header>
+        <section className="grid grid-cols-2 gap-3 sm:grid-cols-4" aria-hidden="true">
+          {Array.from({ length: 4 }, (_, index) => (
+            <div className="h-20 animate-pulse rounded-2xl bg-muted/40" key={index} />
+          ))}
+        </section>
+        <section className="h-48 animate-pulse rounded-2xl bg-muted/40" aria-hidden="true" />
+      </div>
+    </main>
   );
 }
-function AiChartAccess() { return gated('canAccessRiskPreview', <AiChartPage />); }
-function AiChatAccess() { return gated('canAccessBasicInfo', <AiChatPage />); }
-function RecommendationsAccess() { return gated('canAccessRiskPreview', <RecommendationsPage />); }
-function PortfolioAccess() { return gated('canAccessPaperTrading', <PortfolioPage />); }
-function BacktestsAccess() { return gated('canAccessBacktests', <BacktestsPage />); }
-function PaperTradingAccess() { return gated('canAccessPaperTrading', <PaperTradingPage />); }
-function AutoTradingAccess() { return gated('canPlaceOrders', <AutoTradingPage />); }
+
+function PaperTradingAccess() {
+  return gated(
+    'canAccessPaperTrading',
+    <Suspense fallback={<PaperTradingRouteFallback />}>
+      <PaperTradingPage />
+    </Suspense>,
+  );
+}
+function AutoTradingAccess() { return gated('canPlaceOrders', builder('AUTO_TRADING', <AutoTradingPage />)); }
 function AdminAccess() { return gated('canManageMembers', <AdminPage />); }
-function BasicMarketInformationAccess() { return gated('canAccessBasicInfo', <MarketInformationPage />); }
-function SpotMarketInformationAccess() { return gated('canAccessSpot', <MarketInformationPage />); }
-function FuturesMarketInformationAccess() { return gated('canAccessFutures', <MarketInformationPage />); }
-function UnifiedAssetSearchAccess() { return gated('canAccessBasicInfo', <UnifiedAssetSearchPage />); }
+function UiBuilderAdminAccess() { return gated('canManageMembers', <UiBuilderLayoutControlPage />); }
+function BasicMarketInformationAccess() { return gated('canAccessBasicInfo', builder('STOCK_MARKET', <MarketInformationPage />)); }
+function SpotMarketInformationAccess() { return gated('canAccessSpot', builder('CRYPTO_MARKET', <MarketInformationPage />)); }
+function FuturesMarketInformationAccess() { return gated('canAccessFutures', builder('CRYPTO_MARKET', <MarketInformationPage />)); }
+function UnifiedAssetSearchAccess() { return gated('canAccessBasicInfo', builder('ASSET_SEARCH', <UnifiedAssetSearchPage />)); }
+function SettingsAccess() { return builder('SETTINGS', <MorePage />); }
+function AccountConnectionAccess() { return builder('ACCOUNT_CONNECTION', <AccountPage />); }
+function NewsInformationAccess() { return gated('canAccessBasicInfo', builder('NEWS_INFORMATION', <ThemesPage />)); }
 function StockInfoAccess() {
   const [location] = useLocation();
   const query = location.includes('?') ? location.slice(location.indexOf('?') + 1) : window.location.search.slice(1);
   const params = new URLSearchParams(query);
+  const ticker = String(params.get('ticker') ?? params.get('symbol') ?? '').trim().toUpperCase();
+  const content = ticker
+    ? builder(
+        'ASSET_DETAIL',
+        location.split('?')[0] === '/stock-info/analysis' && params.get('asset') === 'stock'
+          ? <DetailPage />
+          : <StockInfoPage />,
+      )
+    : builder('ASSET_SEARCH', <UnifiedAssetSearchPage />);
   if (params.get('asset') === 'coin') {
-    return gated(params.get('coinMarket') === 'futures' ? 'canAccessFutures' : 'canAccessSpot', <StockInfoPage />);
+    return gated(params.get('coinMarket') === 'futures' ? 'canAccessFutures' : 'canAccessSpot', content);
   }
-  return gated('canAccessBasicInfo', <StockInfoPage />);
+  return gated('canAccessBasicInfo', content);
+}
+
+function Phase13OrderbookE2EPage() {
+  return <main data-testid="phase13-orderbook-e2e" className="h-full bg-background" aria-label="Orderbook E2E surface" />;
 }
 
 function ApprovedRouter() {
   return <Suspense fallback={<PageFallback />}><Switch>
-    <Route path="/" component={HomePage} />
-    <Route path="/home" component={HomePage} />
+    <Route path="/" component={HomeAccess} />
+    <Route path="/home" component={HomeAccess} />
     <Route path="/stocks/kr" component={BasicMarketInformationAccess} />
     <Route path="/stocks/us" component={BasicMarketInformationAccess} />
     <Route path="/coins/spot" component={SpotMarketInformationAccess} />
     <Route path="/coins/futures" component={FuturesMarketInformationAccess} />
     <Route path="/stocks" component={UnifiedAssetSearchAccess} />
     <Route path="/auto-trading" component={AutoTradingAccess} />
+    <Route path="/stock-info/analysis" component={StockInfoAccess} />
     <Route path="/stock-info" component={StockInfoAccess} />
     <Route path="/market-overview" component={MarketOverviewPage} />
     <Route path="/assets" component={PortfolioAccess} />
-    <Route path="/settings" component={MorePage} />
+    <Route path="/settings" component={SettingsAccess} />
     <Route path="/search" component={UnifiedAssetSearchAccess} />
     <Route path="/market-rankings" component={SearchPage} />
     <Route path="/market-browser" component={StocksPage} />
     <Route path="/scanner" component={ScannerAccess} />
     <Route path="/ai-chart" component={AiChartAccess} />
     <Route path="/ai-chat" component={AiChatAccess} />
-    <Route path="/themes" component={ThemesPage} />
+    <Route path="/research-center" component={ResearchCenterAccess} />
+    <Route path="/themes" component={NewsInformationAccess} />
+    <Route path="/news-information" component={NewsInformationAccess} />
     <Route path="/learn" component={LearnPage} />
     <Route path="/watchlist" component={WatchlistPage} />
     <Route path="/alerts" component={AlertsPage} />
     <Route path="/portfolio" component={PortfolioAccess} />
-    <Route path="/account" component={AccountPage} />
+    <Route path="/position" component={PositionAccess} />
+    <Route path="/strategy-promotion" component={StrategyPromotionAccess} />
+    <Route path="/account" component={AccountConnectionAccess} />
+    <Route path="/admin/ui-layouts" component={UiBuilderAdminAccess} />
     <Route path="/admin" component={AdminAccess} />
-    <Route path="/more" component={MorePage} />
-    <Route path="/stock/:ticker" component={DetailPage} />
+    <Route path="/more" component={SettingsAccess} />
+    <Route path="/stock/:ticker" component={LegacyStockDetailRedirect} />
     <Route path="/recommendations" component={RecommendationsAccess} />
     <Route path="/backtests" component={BacktestsAccess} />
     <Route path="/paper-trading" component={PaperTradingAccess} />
@@ -196,6 +323,7 @@ function RootRouter() {
     {phase11E2EEnabled ? <Route path="/__phase11-ai-chat-e2e" component={AiChatPage} /> : null}
     {phase11E2EEnabled ? <Route path="/__phase11-technical-workspace-e2e" component={TechnicalWorkspacePage} /> : null}
     {phase12E2EEnabled ? <Route path="/__phase12-trade-automation-e2e" component={Phase12TradeAutomationE2EPage} /> : null}
+    {phase12E2EEnabled ? <Route path="/__phase13-orderbook-e2e" component={Phase13OrderbookE2EPage} /> : null}
     {phase11E2EEnabled ? <Route path="/ai-chart" component={AiChartRoute} /> : null}
     <Route path="/login" component={AccountPage} />
     <Route path="/install" component={InstallPage} />
@@ -214,7 +342,13 @@ function AiChartRoute() {
 function AuthenticatedApp() {
   const auth = useAuth();
   useEffect(() => { if (auth.isApproved) ensureWatchlistSync(); }, [auth.isApproved]);
+  useEffect(() => {
+    if (auth.isApproved && auth.can('canAccessPaperTrading')) {
+      void loadPaperTradingPage();
+    }
+  }, [auth.isApproved, auth.membershipLevel]);
   if (auth.loading) return <PageFallback />;
+  if (auth.bootstrapError) return <ErrorState code="UPSTREAM_ERROR" onRetry={auth.retryBootstrap} />;
   if (!auth.configured || !auth.isApproved) return <Suspense fallback={<PageFallback />}><AccountPage /></Suspense>;
   return <><AutoBackupSync /><ApprovedRouter /></>;
 }

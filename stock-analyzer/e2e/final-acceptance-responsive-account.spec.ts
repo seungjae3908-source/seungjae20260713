@@ -131,6 +131,57 @@ async function assertNoHorizontalOverflow(page: Page, label: string) {
   expect(result.bodyWidth, `${label}: body horizontal overflow`).toBeLessThanOrEqual(result.viewportWidth + 1);
 }
 
+async function assertFiniteLoadingAndNoNavOcclusion(page: Page, label: string) {
+  await expect(page.getByTestId('page-fallback'), `${label}: route fallback exceeded 5s`)
+    .toHaveCount(0, { timeout: 5_000 });
+  await expect(page.locator('[aria-busy="true"]:visible'), `${label}: visible aria-busy exceeded 5s`)
+    .toHaveCount(0, { timeout: 5_000 });
+
+  const result = await page.evaluate(() => {
+    const scrollOwners = Array.from(document.querySelectorAll<HTMLElement>('main, [class*="overflow-y-auto"]'))
+      .filter((element) => {
+        const style = getComputedStyle(element);
+        return /(auto|scroll)/.test(style.overflowY) && element.scrollHeight > element.clientHeight + 2;
+      });
+    for (const owner of scrollOwners) owner.scrollTop = owner.scrollHeight;
+
+    const nav = document.querySelector<HTMLElement>('nav[aria-label="주요 메뉴"]');
+    if (!nav) return { overlaps: [] as string[] };
+    const navRect = nav.getBoundingClientRect();
+    const interactive = Array.from(document.querySelectorAll<HTMLElement>(
+      'button, a[href], input, select, textarea, [role="button"], [tabindex]:not([tabindex="-1"])',
+    ));
+    const overlaps = interactive.flatMap((element) => {
+      if (nav.contains(element) || element.closest('[aria-hidden="true"]')) return [];
+      const closedDetails = element.closest('details:not([open])');
+      if (closedDetails && element.closest('summary') !== closedDetails.querySelector('summary')) return [];
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0
+        || rect.width <= 0 || rect.height <= 0) return [];
+      const width = Math.max(0, Math.min(rect.right, navRect.right) - Math.max(rect.left, navRect.left));
+      const height = Math.max(0, Math.min(rect.bottom, navRect.bottom) - Math.max(rect.top, navRect.top));
+      const ratio = (width * height) / (rect.width * rect.height);
+      if (ratio < 0.35) return [];
+      const name = element.getAttribute('aria-label')
+        || element.getAttribute('placeholder')
+        || element.textContent?.trim()
+        || `${element.tagName}[type=${element.getAttribute('type') ?? 'n/a'}]`;
+      const scrollOwner = element.closest<HTMLElement>('main, [class*="overflow-y-auto"]');
+      const geometry = `control=${Math.round(rect.top)}-${Math.round(rect.bottom)}, nav=${Math.round(navRect.top)}-${Math.round(navRect.bottom)}`;
+      const scroll = scrollOwner
+        ? `scroll=${Math.round(scrollOwner.scrollTop)}/${Math.round(scrollOwner.scrollHeight - scrollOwner.clientHeight)}, paddingBottom=${getComputedStyle(scrollOwner).paddingBottom}`
+        : 'scroll=none';
+      const ownerRect = scrollOwner?.getBoundingClientRect();
+      const owner = ownerRect ? `owner=${Math.round(ownerRect.top)}-${Math.round(ownerRect.bottom)}` : 'owner=none';
+      return [`${name.slice(0, 80)} (${ratio.toFixed(2)}; ${geometry}; ${owner}; ${scroll})`];
+    });
+    return { overlaps };
+  });
+
+  expect(result.overlaps, `${label}: fixed navigation occludes interactive content`).toEqual([]);
+}
+
 const ROUTES = [
   '/home', '/stocks/kr', '/stocks/us', '/coins/spot', '/coins/futures', '/stocks',
   '/stock-info?asset=stock&market=KR&symbol=005930', '/market-overview', '/assets', '/settings',
@@ -139,7 +190,7 @@ const ROUTES = [
   '/recommendations', '/backtests', '/paper-trading', '/auto-trading',
 ] as const;
 
-for (const width of [360, 390, 430, 1023, 1024, 1440]) {
+for (const width of [320, 360, 390, 412, 430, 1023, 1024, 1440]) {
   test(`all primary routes stay inside viewport at ${width}px`, async ({ page }) => {
     const assertClean = await installAdminRuntime(page);
     await page.setViewportSize({ width, height: width >= 1024 ? 900 : 844 });
@@ -148,22 +199,24 @@ for (const width of [360, 390, 430, 1023, 1024, 1440]) {
       await page.waitForLoadState('domcontentloaded');
       await page.waitForTimeout(40);
       await assertNoHorizontalOverflow(page, `${width}px ${route}`);
+      await assertFiniteLoadingAndNoNavOcclusion(page, `${width}px ${route}`);
     }
     assertClean();
   });
 }
 
-test('admin account panel shows all four market account surfaces and remains read-only', async ({ page }) => {
+test('admin account panel shows Toss Upbit Bitget only and remains read-only', async ({ page }) => {
   const assertClean = await installAdminRuntime(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/account');
   const panel = page.getByTestId('brokerage-account-connections');
   await expect(panel).toBeVisible();
-  await expect(page.getByTestId('connection-kiwoom')).toContainText('Kiwoom');
+  await expect(page.getByTestId('connection-toss')).toContainText('Toss');
   await expect(page.getByTestId('connection-upbit')).toContainText('Upbit');
   await expect(page.getByTestId('connection-bitget')).toContainText('Bitget');
+  await expect(page.getByTestId('connection-kiwoom')).toHaveCount(0);
   await expect(panel).toContainText('READ-ONLY');
-  await expect(panel).toContainText('주문/취소/이체 mutation 0건');
+  await expect(panel).toContainText('실주문/취소/이체/출금 0건');
   await assertNoHorizontalOverflow(page, 'account panel mobile');
   await page.setViewportSize({ width: 1440, height: 900 });
   await assertNoHorizontalOverflow(page, 'account panel desktop');

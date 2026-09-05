@@ -1,8 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { CatalogEntry } from '../data/catalog';
+import { BoundedWorkTimeoutError } from '../lib/bounded-work-pool';
 import type { SignalContext } from '../sample/accumulation';
 import type { Candle, Quote } from '../sample/types';
+import { MarketDataService } from './market-data.service';
+import { ScannerProviderHealthTracker } from './scanner-provider-health.service';
 import {
   ScanProviderUnavailableError,
   ScanRequestAbortedError,
@@ -67,7 +70,7 @@ function deps(
   };
 }
 
-test('normal scan completes with bounded concurrency', async () => {
+test('normal scan completes with bounded concurrency and separated diagnostics', async () => {
   const service = createBoundedScannerService(deps([item(1), item(2), item(3)]));
   const result = await service.scan('KR', ['PER 낮음'], {}, {
     deadlineMs: 500,
@@ -76,11 +79,52 @@ test('normal scan completes with bounded concurrency', async () => {
   });
   assert.equal(result.partial, false);
   assert.equal(result.completedCount, 3);
+  assert.equal(result.providerAcceptedCount, 3);
+  assert.equal(result.dataSuccessCount, 3);
+  assert.equal(result.insufficientDataCount, 0);
+  assert.equal(result.filteredByStrategyCount, 0);
+  assert.equal(result.staleCount, 0);
+  assert.equal(result.providerErrorCount, 0);
+  assert.equal(result.workerErrorCount, 0);
+  assert.equal(result.contextUnavailableCount, 0);
   assert.equal(result.cards.length, 3);
   assert.ok(result.maxConcurrency <= 2);
 });
 
-test('zero matches is a complete empty result', async () => {
+test('healthy optional context queues behind the cap instead of becoming a false partial', async () => {
+  let active = 0;
+  let maximum = 0;
+  let calls = 0;
+  const catalog = Array.from({ length: 6 }, (_, index) => item(index + 1));
+  const service = createBoundedScannerService(deps(catalog, {
+    getContext: async () => {
+      calls += 1;
+      active += 1;
+      maximum = Math.max(maximum, active);
+      try {
+        await wait(10);
+        return signalContext();
+      } finally {
+        active -= 1;
+      }
+    },
+  }));
+
+  const result = await service.scan('KR', ['PER 낮음'], {}, {
+    deadlineMs: 500,
+    itemTimeoutMs: 200,
+    concurrency: 6,
+  });
+
+  assert.equal(calls, 6);
+  assert.ok(maximum <= 2, `optional context real concurrency exceeded 2: ${maximum}`);
+  assert.equal(result.contextUnavailableCount, 0);
+  assert.equal(result.partial, false);
+  assert.equal(result.completedCount, 6);
+  assert.equal(result.cards.length, 6);
+});
+
+test('zero matches is complete filtered data instead of a provider or insufficient-data failure', async () => {
   const service = createBoundedScannerService(deps(
     [item(1), item(2)],
     { getContext: async () => signalContext(30) },
@@ -92,7 +136,49 @@ test('zero matches is a complete empty result', async () => {
   });
   assert.equal(result.partial, false);
   assert.equal(result.dataState, 'complete');
+  assert.equal(result.providerAcceptedCount, 2);
+  assert.equal(result.dataSuccessCount, 2);
+  assert.equal(result.insufficientDataCount, 0);
+  assert.equal(result.filteredByStrategyCount, 2);
+  assert.equal(result.providerErrorCount, 0);
   assert.deepEqual(result.cards, []);
+});
+
+test('insufficient candles remain distinct from a normal empty strategy result', async () => {
+  const service = createBoundedScannerService(deps([item(1), item(2)], {
+    getCandles: async () => candleRows().slice(-10),
+  }));
+  const result = await service.scan('KR', ['PER 낮음'], {}, {
+    deadlineMs: 500,
+    itemTimeoutMs: 200,
+    concurrency: 2,
+  });
+  assert.equal(result.partial, false);
+  assert.equal(result.completedCount, 2);
+  assert.equal(result.providerAcceptedCount, 2);
+  assert.equal(result.dataSuccessCount, 0);
+  assert.equal(result.insufficientDataCount, 2);
+  assert.equal(result.filteredByStrategyCount, 0);
+  assert.equal(result.providerErrorCount, 0);
+  assert.deepEqual(result.cards, []);
+  assert.match(result.message, /분석 데이터가 부족/);
+});
+
+test('stale but usable data is counted separately without becoming provider failure', async () => {
+  const service = createBoundedScannerService(deps([item(1), item(2)], {
+    getCandles: async () => candleRows().map((candle) => ({ ...candle, time: Number(candle.time) - 10 * 86_400_000 })),
+  }));
+  const result = await service.scan('KR', ['PER 낮음'], {}, {
+    deadlineMs: 500,
+    itemTimeoutMs: 200,
+    concurrency: 2,
+  });
+  assert.equal(result.providerAcceptedCount, 2);
+  assert.equal(result.dataSuccessCount, 2);
+  assert.equal(result.staleCount, 2);
+  assert.equal(result.providerErrorCount, 0);
+  assert.equal(result.cards.length, 2);
+  assert.ok(result.cards.every((card) => card.dataState === 'stale'));
 });
 
 test('some item timeouts return explicit partial data', async () => {
@@ -111,8 +197,95 @@ test('some item timeouts return explicit partial data', async () => {
   assert.equal(result.partial, true);
   assert.equal(result.timedOut, true);
   assert.equal(result.completedCount, 1);
+  assert.equal(result.providerAcceptedCount, 1);
+  assert.equal(result.dataSuccessCount, 1);
+  assert.equal(result.providerErrorCount, 0);
+  assert.equal(result.workerErrorCount, 0);
   assert.equal(result.timeoutCount, 2);
   assert.equal(result.cards.length, 1);
+});
+
+test('per-item timeout signal reaches mandatory provider dependencies without becoming a provider rejection', async () => {
+  let candleSignal: AbortSignal | undefined;
+  let quoteSignal: AbortSignal | undefined;
+  const waitForAbort = (signal?: AbortSignal) => new Promise<never>((_resolve, reject) => {
+    assert.ok(signal, 'mandatory provider dependency must receive the per-item signal');
+    if (signal.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+  });
+  const service = createBoundedScannerService(deps([item(1)], {
+    getCandles: async (_ticker, _timeframe, signal) => {
+      candleSignal = signal;
+      return waitForAbort(signal);
+    },
+    getQuote: async (ticker, signal) => {
+      if (ticker === '^KS11') return quoteRow();
+      quoteSignal = signal;
+      return waitForAbort(signal);
+    },
+  }));
+
+  await assert.rejects(
+    service.scan('KR', ['PER 낮음'], {}, {
+      deadlineMs: 120,
+      itemTimeoutMs: 30,
+      concurrency: 1,
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof ScanProviderUnavailableError);
+      assert.match(error.message, /providerErrors=0/u);
+      assert.match(error.message, /workerErrors=0/u);
+      assert.match(error.message, /timeouts=1/u);
+      return true;
+    },
+  );
+  assert.equal(candleSignal?.aborted, true);
+  assert.equal(quoteSignal?.aborted, true);
+});
+
+test('actual mandatory provider rejection is counted as provider error', async () => {
+  const service = createBoundedScannerService(deps([item(1), item(2)], {
+    getCandles: async (ticker) => {
+      if (ticker === 'T002') throw new Error('provider unavailable');
+      return candleRows();
+    },
+  }));
+
+  const result = await service.scan('KR', ['PER 낮음'], {}, {
+    deadlineMs: 500,
+    itemTimeoutMs: 200,
+    concurrency: 2,
+  });
+  assert.equal(result.completedCount, 1);
+  assert.equal(result.providerErrorCount, 1);
+  assert.equal(result.workerErrorCount, 0);
+  assert.equal(result.timeoutCount, 0);
+  assert.equal(result.partial, true);
+});
+
+test('internal scanner worker rejection is not mislabeled as provider failure', async () => {
+  const service = createBoundedScannerService(deps([item(1)], {
+    getCandles: async () => null as unknown as Candle[],
+  }));
+
+  await assert.rejects(
+    service.scan('KR', ['PER 낮음'], {}, {
+      deadlineMs: 500,
+      itemTimeoutMs: 200,
+      concurrency: 1,
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.equal(error instanceof ScanProviderUnavailableError, false);
+      assert.match(error.message, /^SCAN_WORKER_ERROR:/u);
+      assert.match(error.message, /providerErrors=0/u);
+      assert.match(error.message, /workerErrors=1/u);
+      return true;
+    },
+  );
 });
 
 test('complete provider failure remains strict', async () => {
@@ -129,6 +302,63 @@ test('complete provider failure remains strict', async () => {
     }),
     ScanProviderUnavailableError,
   );
+});
+
+test('optional context failure is partial evidence instead of a mandatory provider failure', async () => {
+  const service = createBoundedScannerService(deps([item(1), item(2), item(3)], {
+    getContext: async () => {
+      throw new Error('optional context unavailable');
+    },
+  }));
+  const result = await service.scan('KR', ['AI 점수 상위'], {}, {
+    deadlineMs: 500,
+    itemTimeoutMs: 200,
+    concurrency: 3,
+  });
+  assert.equal(result.completedCount, 3);
+  assert.equal(result.providerAcceptedCount, 3);
+  assert.equal(result.providerErrorCount, 0);
+  assert.equal(result.timeoutCount, 0);
+  assert.equal(result.contextUnavailableCount, 3);
+  assert.equal(result.partial, true);
+  assert.equal(result.dataState, 'partial');
+});
+
+test('non-cooperative optional context is capped without retiring mandatory scanner lanes', async () => {
+  const releases: Array<() => void> = [];
+  let active = 0;
+  let maximum = 0;
+  let started = 0;
+  const catalog = Array.from({ length: 6 }, (_, index) => item(index + 1));
+  const service = createBoundedScannerService(deps(catalog, {
+    getContext: async () => {
+      started += 1;
+      active += 1;
+      maximum = Math.max(maximum, active);
+      await new Promise<void>((resolve) => releases.push(resolve));
+      active -= 1;
+      return signalContext();
+    },
+  }));
+
+  const result = await service.scan('KR', ['AI 점수 상위'], {}, {
+    deadlineMs: 250,
+    itemTimeoutMs: 80,
+    concurrency: 6,
+  });
+
+  assert.equal(result.completedCount, 6);
+  assert.equal(result.providerAcceptedCount, 6);
+  assert.equal(result.providerErrorCount, 0);
+  assert.equal(result.timeoutCount, 0);
+  assert.equal(result.contextUnavailableCount, 6);
+  assert.equal(result.partial, true);
+  assert.ok(maximum <= 2, `optional context real concurrency exceeded 2: ${maximum}`);
+  assert.ok(started <= 2, `timed-out optional context spawned replacement work: ${started}`);
+
+  for (const release of releases) release();
+  await wait(0);
+  assert.equal(active, 0);
 });
 
 test('deadline prevents the full catalog from starting', async () => {
@@ -183,6 +413,37 @@ test('matched cards reuse one candles and context lookup per symbol', async () =
   for (const entry of catalog) {
     assert.equal(candleCalls.get(entry.ticker), 1);
     assert.equal(contextCalls.get(entry.ticker), 1);
+  }
+});
+
+test('provider health remains timeout after logical cancellation even when raw work resolves later', async () => {
+  const marketData = MarketDataService as unknown as {
+    getQuote: (ticker: string) => Promise<Quote>;
+  };
+  const originalGetQuote = marketData.getQuote;
+  let resolveQuote: ((value: Quote) => void) | undefined;
+  marketData.getQuote = async () => new Promise<Quote>((resolve) => {
+    resolveQuote = resolve;
+  });
+
+  const tracker = new ScannerProviderHealthTracker();
+  const controller = new AbortController();
+  const pending = tracker.getQuote('KR', '005930', controller.signal);
+  const timeoutError = new BoundedWorkTimeoutError(25);
+
+  try {
+    controller.abort(timeoutError);
+    await assert.rejects(pending, (error: unknown) => error === timeoutError);
+    resolveQuote?.(quoteRow());
+    await wait(0);
+
+    const health = tracker.snapshot();
+    assert.equal(health.some((row) => row.state === 'READY'), false);
+    const quoteChain = health.find((row) => row.provider === 'stock-quote-chain');
+    assert.equal(quoteChain?.state, 'TIMEOUT');
+    assert.equal(quoteChain?.timeout, true);
+  } finally {
+    marketData.getQuote = originalGetQuote;
   }
 });
 

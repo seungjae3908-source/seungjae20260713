@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Router, type IRouter, type NextFunction, type Response } from 'express';
 import {
   requireAuthenticated,
@@ -13,7 +14,11 @@ import {
   StockSignalScannerService,
   type StockSignalScanRequest,
 } from '../services/stock-signal-scanner.service';
-import { ScanProviderUnavailableError, ScanRequestAbortedError } from '../services/bounded-scanner.service';
+import {
+  SCAN_EXECUTION_LIMITS,
+  ScanProviderUnavailableError,
+  ScanRequestAbortedError,
+} from '../services/bounded-scanner.service';
 import {
   scannerStrategyForTimeframe,
   scannerStrategyTimeframeAllowed,
@@ -24,6 +29,26 @@ import {
   filterScannerResponseForTier,
   parseScannerGradeQuery,
 } from '../services/scanner-access-control.service';
+import { withScannerCanonicalActions } from '../services/scanner-market-action.service';
+import { deliverScannerTelegramAlerts } from '../services/scanner-telegram-delivery.service';
+import { deliverScannerTelegramFollowups } from '../services/telegram-signal-followup.service';
+import {
+  createScannerProviderHealth,
+  type ScannerProviderHealth,
+  type ScannerProviderHealthState,
+} from '../services/scanner-provider-health.contract';
+import { withScannerOutcome } from '../services/scanner-signal.types';
+
+export const STOCK_SCANNER_ROUTE_DEADLINE_MS = 10_000;
+
+const PROVIDER_HEALTH_STATES = new Set<ScannerProviderHealthState>([
+  'READY',
+  'SEARCH_EMPTY',
+  'PROVIDER_FAILURE',
+  'DATA_STALE',
+  'RATE_LIMIT',
+  'TIMEOUT',
+]);
 
 export type StockScannerRunner = {
   scan(request: StockSignalScanRequest): ReturnType<typeof StockSignalScannerService.scan>;
@@ -32,6 +57,14 @@ export type StockScannerRunner = {
 export interface BoundedMarketScanRouteDependencies {
   scanner?: StockScannerRunner;
   guard?: ScannerRequestGuard;
+  deadlineMs?: number;
+}
+
+class ScanRouteDeadlineError extends Error {
+  constructor() {
+    super('SCAN_ROUTE_DEADLINE');
+    this.name = 'ScanRouteDeadlineError';
+  }
 }
 
 function requireScannerSession(req: AuthenticatedRequest, res: Response, next: NextFunction) {
@@ -55,7 +88,7 @@ function strategyValue(value: unknown, timeframe: string): ScannerStrategyMode |
   const raw = String(value ?? '').trim().toLowerCase();
   const strategy = raw === ''
     ? scannerStrategyForTimeframe(timeframe)
-    : raw === 'scalping' || raw === 'swing'
+    : raw === 'scalping' || raw === 'swing' || raw === 'position'
       ? raw
       : null;
   if (!strategy || !scannerStrategyTimeframeAllowed(strategy, timeframe)) return null;
@@ -68,6 +101,38 @@ function requestKey(req: AuthenticatedRequest): string {
     .map(([key, value]) => [key, Array.isArray(value) ? value.map(String).sort().join(',') : String(value ?? '')] as const)
     .sort(([left], [right]) => left.localeCompare(right));
   return entries.map(([key, value]) => `${key}=${value}`).join('&');
+}
+
+function providerHealthFrom(value: unknown): ScannerProviderHealth[] {
+  const rows = (value as { providerHealth?: unknown } | null)?.providerHealth;
+  if (!Array.isArray(rows)) return [];
+  return rows.flatMap((row) => {
+    if (!row || typeof row !== 'object') return [];
+    const candidate = row as Partial<ScannerProviderHealth>;
+    const provider = String(candidate.provider ?? '').trim().slice(0, 80);
+    const state = String(candidate.state ?? '') as ScannerProviderHealthState;
+    if (!provider || !PROVIDER_HEALTH_STATES.has(state)) return [];
+    return [createScannerProviderHealth({
+      provider,
+      state,
+      latencyMs: typeof candidate.latencyMs === 'number' && Number.isFinite(candidate.latencyMs)
+        ? Math.max(0, Math.round(candidate.latencyMs))
+        : null,
+      retryCount: typeof candidate.retryCount === 'number' && Number.isFinite(candidate.retryCount)
+        ? Math.max(0, Math.round(candidate.retryCount))
+        : 0,
+      timeout: candidate.timeout === true,
+      lastSuccessfulFetch: typeof candidate.lastSuccessfulFetch === 'string'
+        ? candidate.lastSuccessfulFetch.slice(0, 80)
+        : null,
+      freshness: candidate.freshness === 'FRESH' || candidate.freshness === 'STALE'
+        ? candidate.freshness
+        : 'UNKNOWN',
+      failureReason: typeof candidate.failureReason === 'string'
+        ? candidate.failureReason.slice(0, 240)
+        : null,
+    })];
+  });
 }
 
 function responseError(res: Response, error: unknown) {
@@ -90,7 +155,9 @@ function responseError(res: Response, error: unknown) {
       dataState: 'unavailable',
       cards: [],
       alerts: [],
+      providerHealth: providerHealthFrom(error),
       message: '조건검색 데이터 공급자 오류이며 정상적인 결과 0건이 아닙니다.',
+      outcome: 'PROVIDER_FAILURE',
       orderSubmitted: false,
       exchangeRequestSent: false,
     });
@@ -107,12 +174,76 @@ function responseError(res: Response, error: unknown) {
   });
 }
 
+function routeDeadlineResponse(input: {
+  market: 'KR' | 'US';
+  timeframe: string;
+  cursor: number;
+  deadlineMs: number;
+}) {
+  return {
+    ok: true as const,
+    requestId: randomUUID(),
+    assetClass: 'stock' as const,
+    market: input.market,
+    timeframe: input.timeframe,
+    cards: [],
+    alerts: [],
+    failures: [{
+      symbol: '*',
+      reason: 'timeout' as const,
+      message: 'Scanner response deadline reached before a verified result was available.',
+    }],
+    providerHealth: [createScannerProviderHealth({
+      provider: 'scanner-route',
+      state: 'TIMEOUT',
+      latencyMs: input.deadlineMs,
+      timeout: true,
+      freshness: 'UNKNOWN',
+      failureReason: 'SCAN_ROUTE_DEADLINE',
+    })],
+    execution: {
+      requestedCount: 0,
+      startedCount: 0,
+      completedCount: 0,
+      excludedCount: 0,
+      providerErrorCount: 0,
+      timeoutCount: 1,
+      partial: true,
+      timedOut: true,
+      cancelled: false,
+      duplicate: false,
+      elapsedMs: input.deadlineMs,
+      deadlineMs: input.deadlineMs,
+      itemTimeoutMs: SCAN_EXECUTION_LIMITS.itemTimeoutMs,
+      maxConcurrency: SCAN_EXECUTION_LIMITS.concurrency,
+    },
+    universe: {
+      totalCount: 0,
+      cursor: input.cursor,
+      nextCursor: null,
+      source: 'unavailable',
+      partial: true,
+      stale: true,
+      listingStatusCoverage: 'listed-or-unknown' as const,
+    },
+    dataState: 'unavailable' as const,
+    message: '스캐너 응답 한도에 도달해 검증되지 않은 결과는 표시하지 않습니다. 다시 시도해 주세요.',
+    generatedAt: new Date().toISOString(),
+    orderSubmitted: false as const,
+    exchangeRequestSent: false as const,
+  };
+}
+
 export function createBoundedMarketScanRouter(
   dependencies: BoundedMarketScanRouteDependencies = {},
 ): IRouter {
   const router: IRouter = Router();
   const scanner = dependencies.scanner ?? StockSignalScannerService;
   const guard = dependencies.guard ?? scannerRequestGuard;
+  const routeDeadlineMs = dependencies.deadlineMs ?? STOCK_SCANNER_ROUTE_DEADLINE_MS;
+  if (!Number.isFinite(routeDeadlineMs) || routeDeadlineMs <= 0) {
+    throw new Error(`invalid stock scanner route deadline: ${routeDeadlineMs}`);
+  }
 
   router.use(requireScannerSession);
   router.use(requireCapability('canAccessBasicInfo'));
@@ -151,10 +282,13 @@ export function createBoundedMarketScanRouter(
     req.once('aborted', abort);
     res.once('close', abort);
     let lease: ReturnType<ScannerRequestGuard['acquire']> | null = null;
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    let routeDeadlineExceeded = false;
+    const cursor = finite(req.query.cursor, 0, 1_000_000) ?? 0;
 
     try {
       lease = guard.acquire(req.member!.id, requestKey(req));
-      const result = await scanner.scan({
+      const scanPromise = scanner.scan({
         memberId: req.member!.id,
         market,
         indicators,
@@ -169,23 +303,46 @@ export function createBoundedMarketScanRouter(
           tradingValueLookbackDays: finite(req.query.tradingValueLookbackDays, 1, 60),
           timeframe,
         },
-        cursor: finite(req.query.cursor, 0, 1_000_000) ?? 0,
+        cursor,
         batchSize: finite(req.query.batchSize, 10, 200) ?? 120,
         signal: controller.signal,
       });
+      const routeDeadline = new Promise<never>((_resolve, reject) => {
+        deadlineTimer = setTimeout(() => {
+          routeDeadlineExceeded = true;
+          abort();
+          reject(new ScanRouteDeadlineError());
+        }, routeDeadlineMs);
+      });
+      const result = await Promise.race([scanPromise, routeDeadline]);
       if (controller.signal.aborted || res.writableEnded) return;
-      const visibleResult = filterScannerResponseForTier(result, membershipLevel, requestedGrade ?? undefined);
+      const canonicalResult = withScannerCanonicalActions(result);
+      const visibleResult = withScannerOutcome(filterScannerResponseForTier(canonicalResult, membershipLevel, requestedGrade ?? undefined));
+      void deliverScannerTelegramAlerts(
+        visibleResult.alerts,
+        undefined,
+        undefined,
+        { timeframe, generatedAt: visibleResult.generatedAt },
+      );
+      void deliverScannerTelegramFollowups(visibleResult.cards);
       res.setHeader('X-Scanner-Request-Id', result.requestId);
       return res.json({
         ...visibleResult,
+        providerHealth: providerHealthFrom(result),
         strategy: strategyMode,
         partial: result.execution.partial,
         elapsedMs: result.execution.elapsedMs,
       });
     } catch (error) {
+      if (routeDeadlineExceeded && error instanceof ScanRouteDeadlineError && !res.writableEnded) {
+        const fallback = withScannerOutcome(routeDeadlineResponse({ market, timeframe, cursor, deadlineMs: routeDeadlineMs }));
+        res.setHeader('X-Scanner-Request-Id', fallback.requestId);
+        return res.json({ ...fallback, strategy: strategyMode, partial: true, elapsedMs: routeDeadlineMs });
+      }
       if (controller.signal.aborted || error instanceof ScanRequestAbortedError || res.writableEnded) return;
       return responseError(res, error);
     } finally {
+      if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
       lease?.release();
       req.removeListener('aborted', abort);
       res.removeListener('close', abort);

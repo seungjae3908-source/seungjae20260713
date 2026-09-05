@@ -32,6 +32,9 @@ export type TradeRecoveryWorkerResult = {
   leaseLost: number;
   maxConcurrencyObserved: number;
   exchangeOrdersSubmitted: false;
+  ordersSubmitted: 0;
+  ordersCancelled: 0;
+  privateMutationRequests: 0;
 };
 
 export interface TradeRecoveryWorkerSource {
@@ -297,6 +300,9 @@ export class TradeRecoveryWorker {
       leaseLost: 0,
       maxConcurrencyObserved: 0,
       exchangeOrdersSubmitted: false,
+      ordersSubmitted: 0,
+      ordersCancelled: 0,
+      privateMutationRequests: 0,
     };
     if (this.running) return result;
     this.running = true;
@@ -396,6 +402,9 @@ export function startTradeRecoveryWorker(): TradeRecoveryWorkerControl | null {
           leaseLost: result.leaseLost,
           maxConcurrencyObserved: result.maxConcurrencyObserved,
           exchangeOrdersSubmitted: false,
+          ordersSubmitted: 0,
+          ordersCancelled: 0,
+          privateMutationRequests: 0,
         });
       }
     } catch (error) {

@@ -1,0 +1,62 @@
+name: Public Forward Partial Fill Calibration Runtime Binding Contract
+
+on:
+  pull_request:
+    paths:
+      - 'api-server/src/services/public-forward-partial-fill-calibration-capture-ingest.service.ts'
+      - 'api-server/src/services/public-forward-partial-fill-calibration-dataset-pointer.service.ts'
+      - 'api-server/src/services/public-forward-partial-fill-calibration-release-binding.service.ts'
+      - 'api-server/src/services/public-forward-partial-fill-calibration-runtime-binding-contract.test.ts'
+      - '.github/workflows/public-forward-partial-fill-calibration-runtime-binding-contract.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --dir api-server run typecheck
+      - name: Verify exact T01-T24 contract inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE='api-server/src/services/public-forward-partial-fill-calibration-runtime-binding-contract.test.ts'
+          test "$(grep -Ec "^test\\('T(0[1-9]|1[0-9]|2[0-4]) " "$FILE")" -eq 24
+          for n in $(seq -w 1 24); do
+            grep -Fq "test('T${n} " "$FILE"
+          done
+      - name: Bundle T01-T24 runtime binding contract tests
+        run: >-
+          pnpm --dir api-server exec esbuild
+          src/services/public-forward-partial-fill-calibration-runtime-binding-contract.test.ts
+          --bundle --platform=node --format=cjs --target=node24
+          --outfile=/tmp/public-forward-partial-fill-calibration-runtime-binding-contract.test.cjs
+      - name: Run T01-T24 runtime binding contract tests
+        run: node --test /tmp/public-forward-partial-fill-calibration-runtime-binding-contract.test.cjs
+      - name: Verify runtime authority remains inert
+        shell: bash
+        run: |
+          set -euo pipefail
+          POINTER='api-server/src/services/public-forward-partial-fill-calibration-dataset-pointer.service.ts'
+          BINDING='api-server/src/services/public-forward-partial-fill-calibration-release-binding.service.ts'
+          grep -Fq 'productionPolicyAuthorityConnected: false' "$POINTER"
+          grep -Fq "executionAuthority: 'NONE'" "$POINTER"
+          grep -Fq 'productionPolicyAuthorityConnected: false' "$BINDING"
+          grep -Fq 'runtimeResolverConnected: false' "$BINDING"
+          grep -Fq 'apiStartupBindingConnected: false' "$BINDING"
+          grep -Fq 'releaseControlPublicationConnected: false' "$BINDING"
+          grep -Fq 'fullCostReady: false' "$BINDING"
+          grep -Fq 'evidenceComplete: 0' "$BINDING"
+          grep -Fq 'profitabilityProven: false' "$BINDING"
+          grep -Fq "executionAuthority: 'NONE'" "$BINDING"
