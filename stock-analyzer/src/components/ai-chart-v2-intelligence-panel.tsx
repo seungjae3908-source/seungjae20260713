@@ -24,6 +24,12 @@ import {
   type AiChartStrategyMode,
   type AiChartTimeframeEvidence,
 } from '@/lib/ai-chart-v2-intelligence';
+import {
+  decideAiChartV3,
+  type AiChartV3Decision,
+  type AiChartV3Direction,
+  type AiChartV3EngineEvidence,
+} from '@/lib/ai-chart-v3-decision-engine';
 import type { AnalysisSelection, AnalysisTradeAction } from '@/lib/analysis-selection';
 import type { ChartAnalysis } from '@/lib/chart-analysis';
 import { computeChartIndicators } from '@/lib/chart-indicator-engine';
@@ -180,6 +186,50 @@ function currentContext(
   timeframe: string,
 ): AiChartTimeframeEvidence | null {
   return contexts.find((context) => context.timeframe === timeframe) ?? null;
+}
+
+function v3DirectionFromSide(side: AiChartSignalSide): AiChartV3Direction {
+  if (side === 'BUY' || side === 'LONG') return 'BULLISH';
+  if (side === 'SELL' || side === 'SHORT') return 'BEARISH';
+  return side === 'WAIT' ? 'WAIT' : 'NEUTRAL';
+}
+
+function v3DecisionSignalSide(decision: AiChartV3Decision): AiChartSignalSide {
+  if (decision === 'BUY') return 'BUY';
+  if (decision === 'LONG') return 'LONG';
+  if (decision === 'SHORT') return 'SHORT';
+  return 'WAIT';
+}
+
+function v3EvidenceFromContexts(
+  contexts: AiChartTimeframeEvidence[],
+  selectedTimeframe: UnifiedChartTimeframe,
+): AiChartV3EngineEvidence[] {
+  return contexts.map((context) => ({
+    engine: context.timeframe === selectedTimeframe ? 'TECHNICAL' : 'MTF',
+    direction: v3DirectionFromSide(context.side),
+    score: context.score,
+    weight: context.timeframe === selectedTimeframe ? 1 : 0.8,
+    available: context.state === 'READY'
+      && context.score != null
+      && context.quality !== 'STALE'
+      && context.quality !== 'PARTIAL'
+      && context.quality !== 'UNAVAILABLE',
+    reasons: [
+      ...context.positiveFactors,
+      ...context.negativeFactors,
+      ...context.riskFactors,
+      ...context.reasonCodes,
+    ].slice(0, 8),
+  }));
+}
+
+function formatDecisionProbability(value: number | null): string {
+  return value == null ? 'NOT AVAILABLE' : `${(value * 100).toFixed(1)}%`;
+}
+
+function formatDecisionEv(value: number | null): string {
+  return value == null ? 'NOT AVAILABLE' : `${value.toFixed(3)}%`;
 }
 
 function initialSignalOverlayVisible(): boolean {
@@ -365,6 +415,33 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
     [contexts, mode, selectedTimeframe],
   );
   const current = currentContext(contexts, selection.timeframe) ?? currentChartEvidence;
+  const v3Evidence = useMemo(
+    () => v3EvidenceFromContexts(contexts, selectedTimeframe),
+    [contexts, selectedTimeframe],
+  );
+  const v3Decision = useMemo(() => decideAiChartV3({
+    identity: {
+      market: selection.market,
+      symbol: selection.ticker,
+      timeframe: selection.timeframe,
+      strategyId: mode,
+    },
+    market: selection.market,
+    dataQuality: current.quality,
+    regime: 'INSUFFICIENT_DATA',
+    strategyHealth: 'UNKNOWN',
+    eventRisk: 'UNKNOWN',
+    higherTimeframeConflict: multiTimeframeRequested && aggregate.higherTimeframeConflict,
+    hasPosition: false,
+    evidence: v3Evidence,
+    calibration: null,
+  }), [aggregate.higherTimeframeConflict, current.quality, mode, multiTimeframeRequested, selection.market, selection.ticker, selection.timeframe, v3Evidence]);
+  const decisionSide = v3DecisionSignalSide(v3Decision.decision);
+  const decisionOverlayScore = decisionSide === 'BUY' || decisionSide === 'LONG'
+    ? v3Decision.longScore
+    : decisionSide === 'SHORT'
+      ? v3Decision.shortScore
+      : null;
   const plan = mapPricePlan(selection.pricePlan);
   const lifecycle = signalLifecycleFromAnalysis(analysis?.status);
   const invalidationText = analysis?.invalidationConditions?.[0]
@@ -386,8 +463,8 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
       <AiChartSignalOverlayPortal
         visible={signalOverlayVisible}
         selection={selection}
-        side={current.side}
-        score={current.score}
+        side={decisionSide}
+        score={decisionOverlayScore}
         lifecycle={lifecycle}
         mode={mode}
         signalId={signalId}
@@ -430,7 +507,7 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
           onClick={toggleSignalOverlay}
           className="mt-2 flex w-full items-center justify-between rounded-2xl border border-card-border bg-background px-3 py-2 text-left text-[10px] font-black"
         >
-          <span>AI Signals · BUY / SELL / LONG / SHORT / WAIT</span>
+          <span>AI Signals · BUY / LONG / SHORT / WAIT</span>
           <span>{signalOverlayVisible ? 'ON' : 'OFF'}</span>
         </button>
       </section>
@@ -498,15 +575,15 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
       <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="ai-evidence-panel">
         <div className="flex items-start justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2">
-            {isPositiveSide(current.side)
+            {isPositiveSide(decisionSide)
               ? <TrendingUp className="h-4 w-4 shrink-0 text-destructive" />
-              : current.side === 'SELL' || current.side === 'SHORT'
+              : decisionSide === 'SHORT'
                 ? <TrendingDown className="h-4 w-4 shrink-0 text-blue-500" />
                 : <BarChart3 className="h-4 w-4 shrink-0 text-muted-foreground" />}
             <div className="min-w-0">
-              <p className="text-[10px] font-bold text-muted-foreground">Current Decision</p>
-              <h2 className={cn('truncate text-base font-black', sideClass(current.side))}>
-                {current.side} {current.score == null ? '' : `· ${current.score}`}
+              <p className="text-[10px] font-bold text-muted-foreground">Current Decision · V3 Gate</p>
+              <h2 className={cn('truncate text-base font-black', sideClass(decisionSide))}>
+                {v3Decision.decision}
               </h2>
             </div>
           </div>
@@ -514,6 +591,46 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
             {current.quality}
           </span>
         </div>
+
+        <div className="mt-3 grid grid-cols-2 gap-2 text-[10px] font-bold" data-testid="ai-chart-v3-decision-gate">
+          <div className="rounded-2xl bg-background p-3">
+            <span className="text-muted-foreground">Technical Evidence</span>
+            <strong className="mt-1 block">{current.side} {current.score == null ? '· INSUFFICIENT' : `· ${current.score}`}</strong>
+          </div>
+          <div className="rounded-2xl bg-background p-3">
+            <span className="text-muted-foreground">LONG / Bullish Score</span>
+            <strong className="mt-1 block">{v3Decision.longScore ?? 'NOT AVAILABLE'}</strong>
+          </div>
+          <div className="rounded-2xl bg-background p-3">
+            <span className="text-muted-foreground">SHORT / Bearish Score</span>
+            <strong className="mt-1 block">{v3Decision.shortScore ?? 'NOT AVAILABLE'}</strong>
+          </div>
+          <div className="rounded-2xl bg-background p-3">
+            <span className="text-muted-foreground">Calibration State</span>
+            <strong className="mt-1 block">{v3Decision.calibrationState}</strong>
+          </div>
+          <div className="rounded-2xl bg-background p-3">
+            <span className="text-muted-foreground">Calibrated Probability</span>
+            <strong className="mt-1 block">{formatDecisionProbability(v3Decision.calibratedProbability)}</strong>
+          </div>
+          <div className="rounded-2xl bg-background p-3">
+            <span className="text-muted-foreground">Cost-adjusted EV</span>
+            <strong className="mt-1 block">{formatDecisionEv(v3Decision.costAdjustedEvPct)}</strong>
+          </div>
+        </div>
+
+        <div className="mt-3 rounded-2xl border border-card-border bg-background p-3" data-testid="ai-chart-v3-decision-reasons">
+          <p className="text-[10px] font-black">Decision Gate Reasons</p>
+          <ul className="mt-2 space-y-1 text-[10px] font-bold leading-4 text-muted-foreground">
+            {v3Decision.reasons.length
+              ? v3Decision.reasons.map((reason) => <li key={reason}>• {reason}</li>)
+              : <li>• NO_ENTRY_VETO</li>}
+          </ul>
+        </div>
+
+        <p className="mt-3 text-[10px] font-semibold leading-4 text-muted-foreground">
+          Technical Evidence 점수는 방향 근거 강도이지 수익확률이 아닙니다. canonical regime/strategy/event/calibration provenance가 연결되기 전에는 결정게이트가 WAIT/NO_TRADE로 fail-closed하며 probability/EV를 만들지 않습니다.
+        </p>
 
         {current.state === 'INSUFFICIENT_DATA' ? (
           <div className="mt-3 rounded-2xl border border-warning/30 bg-warning/5 p-3 text-xs font-bold text-muted-foreground" data-testid="insufficient-data-evidence">
@@ -597,12 +714,20 @@ export function AiChartV2IntelligencePanel({ selection, analysis, mode, onModeCh
             <span className="text-muted-foreground">현재 Data Quality</span>
             <strong className="mt-1 block">{current.quality}</strong>
           </div>
+          <div className="rounded-2xl bg-background p-3">
+            <span className="text-muted-foreground">Regime provenance</span>
+            <strong className="mt-1 block">NOT AVAILABLE</strong>
+          </div>
+          <div className="rounded-2xl bg-background p-3">
+            <span className="text-muted-foreground">Strategy/Event provenance</span>
+            <strong className="mt-1 block">NOT AVAILABLE</strong>
+          </div>
         </div>
         <p className="mt-3 text-[10px] font-semibold leading-4 text-muted-foreground">
           현재 차트 데이터는 기존 단일 owner를 재사용합니다. 보조 시간봉은 명시적 MTF 분석 요청에서만 기존 provider/cache 계약으로 읽고 별도 polling을 만들지 않습니다.
         </p>
         <p className="mt-2 text-[10px] font-semibold leading-4 text-muted-foreground">
-          Confidence는 현재 근거의 합성 강도이며 검증된 historical win probability가 아닙니다. 검증된 이력 소스가 없으므로 win rate, PF, expectancy, probability를 생성하지 않습니다.
+          Confidence는 현재 근거의 합성 강도이며 검증된 historical win probability가 아닙니다. canonical calibration/full-cost provenance가 없으므로 win rate, PF, expectancy, probability, cost-adjusted EV를 생성하지 않습니다.
         </p>
       </section>
     </section>

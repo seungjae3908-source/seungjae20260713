@@ -1,15 +1,68 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { buildResearchOverview, createResearchDashboardServer } from '../server.mjs';
+
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]));
+}
+
+function reportDigest(value) {
+  return createHash('sha256').update(JSON.stringify(canonicalize(value))).digest('hex');
+}
+
+function v3Summary(overrides = {}) {
+  const body = {
+    schemaVersion: 'public-forward-liquidity-v3-authoritative-independence-summary-v1',
+    producerSha: '1'.repeat(40),
+    upstreamIngestRunId: '33935833024',
+    upstreamIngestArtifactId: '9960130145',
+    upstreamIngestArtifactDigest: '2'.repeat(64),
+    sourceInventoryDigest: '3'.repeat(64),
+    targetSlotIndex: 48,
+    genuineScheduledSlotN: 15,
+    rawAcceptedN: 335,
+    effectiveIndependentN: 15,
+    independentBuyN: 10,
+    independentSellN: 5,
+    independenceAuditDigest: '4'.repeat(64),
+    independentSplitSourceDigest: '5'.repeat(64),
+    v3IndependentSplitIndexDigest: '6'.repeat(64),
+    frozenSplitCounts: {
+      TRAIN: 15,
+      TRAIN_BUY: 10,
+      TRAIN_SELL: 5,
+      VALIDATION: 0,
+      VALIDATION_BUY: 0,
+      VALIDATION_SELL: 0,
+      OOS: 0,
+      OOS_BUY: 0,
+      OOS_SELL: 0,
+    },
+    frozenV3SplitIndexPresent: true,
+    v2SplitReceiptPresent: false,
+    oosOutcomeCredit: 0,
+    calibrationArtifactProduced: false,
+    liquidityImpactStatus: 'BLOCKED_DATA',
+    fullCostReady: false,
+    evidenceComplete: 0,
+    executionAuthority: 'NONE',
+    ...overrides,
+  };
+  return { ...body, reportDigest: reportDigest(body) };
+}
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'research-dashboard-'));
   await mkdir(join(root, 'latest'), { recursive: true });
   await mkdir(join(root, 'forward', 'paper', 'status'), { recursive: true });
   await mkdir(join(root, 'forward', 'paper', 'state'), { recursive: true });
+  await mkdir(join(root, 'forward', 'liquidity'), { recursive: true });
   const now = Date.now();
   await writeFile(join(root, 'latest', 'forward.json'), JSON.stringify({
     status: 'complete', cycleId: 'cycle-1', researchSha: 'a'.repeat(40), generatedAt: now,
@@ -51,6 +104,10 @@ async function fixture() {
       },
     },
   }));
+  await writeFile(
+    join(root, 'forward', 'liquidity', 'v3-authoritative-independence-summary.json'),
+    JSON.stringify(v3Summary()),
+  );
   return root;
 }
 
@@ -69,6 +126,46 @@ test('overview exposes only summarized read-only research evidence', async () =>
   assert.equal(overview.shadow.canonicalHandoffs.length, 1);
   assert.equal(overview.shadow.canonicalHandoffs[0].group, 'crypto-futures-15m');
   assert.equal(overview.shadow.canonicalHandoffs[0].handoff.evidenceDigest, 'b'.repeat(64));
+  assert.equal(overview.research.liquidityIndependence.status, 'PRESENT');
+  assert.equal(overview.research.liquidityIndependence.effectiveIndependentN, 15);
+  assert.equal(overview.research.liquidityIndependence.independentBuyN, 10);
+  assert.equal(overview.research.liquidityIndependence.independentSellN, 5);
+  assert.equal(overview.research.liquidityIndependence.frozenSplitCounts.TRAIN, 15);
+  assert.equal(overview.research.liquidityIndependence.frozenSplitCounts.OOS, 0);
+  assert.equal(overview.profitability.proven, false);
+});
+
+test('missing V3 independence summary stays missing instead of becoming historical seven or zero', async () => {
+  const root = await fixture();
+  await rm(join(root, 'forward', 'liquidity', 'v3-authoritative-independence-summary.json'));
+  const overview = await buildResearchOverview({ stateRoot: root });
+  assert.equal(overview.research.liquidityIndependence.present, false);
+  assert.equal(overview.research.liquidityIndependence.status, 'MISSING');
+  assert.equal(overview.research.liquidityIndependence.effectiveIndependentN, null);
+  assert.equal(overview.research.liquidityIndependence.independentBuyN, null);
+  assert.equal(overview.research.liquidityIndependence.independentSellN, null);
+});
+
+test('tampered V3 independence summary is invalidated and cannot leak partial counts', async () => {
+  const root = await fixture();
+  const path = join(root, 'forward', 'liquidity', 'v3-authoritative-independence-summary.json');
+  const summary = JSON.parse(await readFile(path, 'utf8'));
+  summary.effectiveIndependentN = 7;
+  await writeFile(path, JSON.stringify(summary));
+  const overview = await buildResearchOverview({ stateRoot: root });
+  assert.equal(overview.research.status, 'attention');
+  assert.equal(overview.research.liquidityIndependence.present, true);
+  assert.equal(overview.research.liquidityIndependence.status, 'INVALID');
+  assert.equal(overview.research.liquidityIndependence.effectiveIndependentN, null);
+});
+
+test('digest-valid downstream authority escalation is still rejected', async () => {
+  const root = await fixture();
+  const path = join(root, 'forward', 'liquidity', 'v3-authoritative-independence-summary.json');
+  await writeFile(path, JSON.stringify(v3Summary({ fullCostReady: true })));
+  const overview = await buildResearchOverview({ stateRoot: root });
+  assert.equal(overview.research.liquidityIndependence.status, 'INVALID');
+  assert.equal(overview.research.liquidityIndependence.fullCostReady, null);
   assert.equal(overview.profitability.proven, false);
 });
 
