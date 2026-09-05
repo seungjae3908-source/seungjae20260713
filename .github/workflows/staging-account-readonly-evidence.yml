@@ -23,12 +23,15 @@ jobs:
       github.event.issue.number == 23 &&
       github.event.comment.user.login == github.repository_owner &&
       startsWith(github.event.comment.body, '/run-staging-account-readonly ')
-    runs-on: [self-hosted, linux, staging-account-egress]
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: staging
     env:
       STAGING_ARTIFACT_DIR: ${{ github.workspace }}/staging-account-readonly-artifacts
       EXPECTED_EGRESS_IP: ${{ vars.STAGING_ACCOUNT_EVIDENCE_EGRESS_IP }}
+      SSH_KEY_PATH: ${{ runner.temp }}/account-evidence-id_ed25519
+      SSH_KNOWN_HOSTS_PATH: ${{ runner.temp }}/account-evidence-known_hosts
+      SSH_CONTROL_SOCKET: ${{ runner.temp }}/account-evidence-ssh.sock
 
     steps:
       - uses: actions/checkout@v4
@@ -62,36 +65,101 @@ jobs:
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha=${match[1]}\n`);
           NODE
 
-      - name: Require fixed egress and exact current main
-        id: prerequisites
+      - name: Require exact current main
+        id: main_identity
         env:
           TARGET_SHA: ${{ steps.target.outputs.sha }}
-          RUNNER_ENVIRONMENT_VALUE: ${{ runner.environment }}
         run: |
           set -Eeuo pipefail
-          [[ "$RUNNER_ENVIRONMENT_VALUE" == 'self-hosted' ]] || {
-            echo 'Account evidence requires a self-hosted runner.' >&2
-            exit 1
-          }
-          [[ -n "$EXPECTED_EGRESS_IP" ]] || {
-            echo 'STAGING_ACCOUNT_EVIDENCE_EGRESS_IP is not configured.' >&2
-            exit 1
-          }
-          ACTUAL_EGRESS_IP="$(curl --fail --silent --show-error --max-time 10 https://api.ipify.org)"
-          [[ -n "$ACTUAL_EGRESS_IP" && "$ACTUAL_EGRESS_IP" == "$EXPECTED_EGRESS_IP" ]] || {
-            echo 'Fixed account-evidence egress IP does not match the configured provider allowlist IP.' >&2
-            exit 1
-          }
           git fetch --no-tags origin main "$TARGET_SHA"
           CURRENT_MAIN="$(git rev-parse origin/main^{commit})"
           [[ "$CURRENT_MAIN" == "$TARGET_SHA" ]] || {
             echo "Target is not current main. target=$TARGET_SHA current=$CURRENT_MAIN" >&2
             exit 1
           }
+          git checkout --detach "$TARGET_SHA"
+          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]
 
       - name: Install repository dependencies
         id: dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Configure isolated Staging SSH client
+        id: ssh_setup
+        env:
+          STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          STAGING_SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$STAGING_SSH_PRIVATE_KEY" && -n "$STAGING_SSH_KNOWN_HOSTS" ]] || {
+            echo 'Staging SSH key and pinned known_hosts are required.' >&2
+            exit 1
+          }
+          umask 077
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > "$SSH_KEY_PATH"
+          printf '%s\n' "$STAGING_SSH_KNOWN_HOSTS" > "$SSH_KNOWN_HOSTS_PATH"
+
+      - name: Require provider-allowlisted Staging egress IP
+        id: egress
+        env:
+          STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+          STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+          STAGING_SSH_PORT: ${{ secrets.STAGING_SSH_PORT || '22' }}
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$EXPECTED_EGRESS_IP" ]] || {
+            echo 'STAGING_ACCOUNT_EVIDENCE_EGRESS_IP is not configured.' >&2
+            exit 1
+          }
+          [[ -n "$STAGING_SSH_HOST" && -n "$STAGING_SSH_USER" ]] || {
+            echo 'Staging SSH host/user are required.' >&2
+            exit 1
+          }
+          ACTUAL_EGRESS_IP="$(ssh \
+            -i "$SSH_KEY_PATH" \
+            -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=15 \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$SSH_KNOWN_HOSTS_PATH" \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            'curl --fail --silent --show-error --max-time 10 https://api.ipify.org')"
+          [[ -n "$ACTUAL_EGRESS_IP" && "$ACTUAL_EGRESS_IP" == "$EXPECTED_EGRESS_IP" ]] || {
+            echo 'Staging egress IP does not match the configured provider allowlist IP.' >&2
+            exit 1
+          }
+          echo 'Provider-allowlisted Staging egress identity verified.'
+
+      - name: Open TLS-preserving provider egress tunnels
+        id: tunnels
+        env:
+          STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+          STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+          STAGING_SSH_PORT: ${{ secrets.STAGING_SSH_PORT || '22' }}
+        run: |
+          set -Eeuo pipefail
+          rm -f "$SSH_CONTROL_SOCKET"
+          ssh -fN -M -S "$SSH_CONTROL_SOCKET" \
+            -i "$SSH_KEY_PATH" \
+            -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=15 \
+            -o ExitOnForwardFailure=yes \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=3 \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$SSH_KNOWN_HOSTS_PATH" \
+            -L 127.0.0.1:18443:openapi.tossinvest.com:443 \
+            -L 127.0.0.1:18444:api.upbit.com:443 \
+            -L 127.0.0.1:18445:api.bitget.com:443 \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST"
+          ssh -S "$SSH_CONTROL_SOCKET" -O check \
+            -i "$SSH_KEY_PATH" \
+            -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$SSH_KNOWN_HOSTS_PATH" \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST"
 
       - name: Run canonical Toss Upbit Bitget no-DB read-only evidence
         id: account_evidence
@@ -230,7 +298,10 @@ jobs:
             echo
             echo "- Exact current main: \`$TARGET_SHA\`"
             echo '- Evidence mode: `CANONICAL_ACCOUNT_RUNTIME_NO_DB`'
-            echo '- Runner: `self-hosted / staging-account-egress`'
+            echo '- Execution runner: `GitHub-hosted ubuntu-latest`'
+            echo '- Provider network egress: `Staging SSH TCP tunnel`'
+            echo '- Provider TLS termination: `GitHub-hosted evidence process`'
+            echo '- Provider secrets sent to Staging host: `false`'
             echo '- Provider allowlist egress IP match: `true`'
             echo '- Database / Supabase credential storage required: `false`'
             echo '- Credential persistence rows created: `0`'
@@ -242,9 +313,25 @@ jobs:
             echo '- Kiwoom account linking: `hidden / not tested`'
             echo '- Order/cancel/amend/transfer/withdrawal requests: `0`'
             echo '- Credentials returned or recorded in artifacts: `false`'
-            echo '- Credential source: `staging Actions secrets in process memory only`'
+            echo '- Credential source: `staging Actions secrets in GitHub-hosted process memory only`'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Clean self-hosted evidence workspace
+      - name: Close provider egress tunnels and clean workspace
         if: always()
-        run: rm -rf "$STAGING_ARTIFACT_DIR"
+        env:
+          STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+          STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+          STAGING_SSH_PORT: ${{ secrets.STAGING_SSH_PORT || '22' }}
+        run: |
+          set +e
+          if [[ -e "$SSH_CONTROL_SOCKET" && -f "$SSH_KEY_PATH" && -f "$SSH_KNOWN_HOSTS_PATH" && -n "$STAGING_SSH_HOST" && -n "$STAGING_SSH_USER" ]]; then
+            ssh -S "$SSH_CONTROL_SOCKET" -O exit \
+              -i "$SSH_KEY_PATH" \
+              -p "$STAGING_SSH_PORT" \
+              -o BatchMode=yes \
+              -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$SSH_KNOWN_HOSTS_PATH" \
+              "$STAGING_SSH_USER@$STAGING_SSH_HOST"
+          fi
+          rm -rf "$STAGING_ARTIFACT_DIR"
+          rm -f "$SSH_CONTROL_SOCKET" "$SSH_KEY_PATH" "$SSH_KNOWN_HOSTS_PATH"
