@@ -22,7 +22,7 @@ import { AutoBackupSync } from '@/lib/backup-sync';
 import { CapabilityGate } from '@/components/capability-gate';
 import { UiBuilderRuntimeBoundary } from '@/components/ui-builder-runtime-boundary';
 import { withActiveQuerySignal } from '@/lib/query-abort-signal';
-import { fetchUnifiedChartData, UNIFIED_CHART_TIMEFRAMES } from '@/lib/unified-chart-data';
+import { fetchUnifiedChartData, UNIFIED_CHART_TIMEFRAMES, UnifiedChartDataError } from '@/lib/unified-chart-data';
 import type { UiBuilderPageId } from '@/lib/ui-builder-full-layout';
 import type { MemberCapability } from '../../packages/member-access/src/index.js';
 import HomePage from '@/pages/home';
@@ -62,8 +62,10 @@ const Phase7JournalSyncE2EPage = lazy(() => import('@/pages/phase7-journal-sync-
 const Phase8ReleaseCandidateE2EPage = lazy(() => import('@/pages/phase8-release-candidate-e2e'));
 const Phase9AiReviewE2EPage = lazy(() => import('@/pages/phase9-ai-review-e2e'));
 const directAiChartColdRoute = typeof window !== 'undefined' && window.location.pathname.endsWith('/ai-chart');
+const directAiChartDesktopPrewarm = directAiChartColdRoute
+  && window.matchMedia('(min-width: 1024px)').matches;
 const directAiChartPrewarmSelection = (() => {
-  if (!directAiChartColdRoute) return null;
+  if (!directAiChartDesktopPrewarm) return null;
   try {
     const routeSelection = selectionFromSearch(window.location.search);
     const storedSelection = normalizeAnalysisSelection(
@@ -99,6 +101,14 @@ const phase8E2EEnabled = import.meta.env.VITE_PHASE8_E2E === 'true';
 const phase9E2EEnabled = import.meta.env.VITE_PHASE9_E2E === 'true';
 const phase11E2EEnabled = import.meta.env.VITE_PHASE11_E2E === 'true';
 const phase12E2EEnabled = import.meta.env.VITE_PHASE12_E2E === 'true';
+const DIRECT_AI_CHART_PREWARM_STALE_MS = 8_000;
+const DIRECT_AI_CHART_PREWARM_DEFAULT_RESET_MS = 15_000;
+
+function retryUnifiedChartBootstrap(failureCount: number, error: unknown): boolean {
+  if (failureCount >= 1) return false;
+  if (error instanceof UnifiedChartDataError) return error.retryable && error.kind !== 'aborted';
+  return true;
+}
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: true, refetchOnReconnect: true, staleTime: 0, gcTime: 30 * 60 * 1000, retry: 2 } },
@@ -106,13 +116,24 @@ const queryClient = new QueryClient({
 
 if (directAiChartPrewarmSelection) {
   const { market, ticker, timeframe } = directAiChartPrewarmSelection;
+  const queryKey = ['unified-chart-data', market, ticker, timeframe] as const;
+  queryClient.setQueryDefaults(queryKey, {
+    staleTime: DIRECT_AI_CHART_PREWARM_STALE_MS,
+    retryOnMount: false,
+  });
   queueMicrotask(() => {
     void queryClient.prefetchQuery({
-      queryKey: ['unified-chart-data', market, ticker, timeframe],
-      queryFn: () => fetchUnifiedChartData({ market, symbol: ticker, timeframe }),
-      retry: false,
+      queryKey,
+      queryFn: ({ signal }) => fetchUnifiedChartData({ market, symbol: ticker, timeframe, signal }),
+      retry: retryUnifiedChartBootstrap,
     });
   });
+  window.setTimeout(() => {
+    queryClient.setQueryDefaults(queryKey, {
+      staleTime: 0,
+      retryOnMount: true,
+    });
+  }, DIRECT_AI_CHART_PREWARM_DEFAULT_RESET_MS);
 }
 
 function installScannerAbortBridge(client: QueryClient) {
