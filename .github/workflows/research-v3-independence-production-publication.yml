@@ -55,10 +55,19 @@ jobs:
           grep -Fq '/var/lib/investment-research-production' .github/workflows/research-v3-independence-production-publication.yml
           grep -Fq 'runuser -u investment-research' .github/workflows/research-v3-independence-production-publication.yml
           grep -Fq 'env -i' .github/workflows/research-v3-independence-production-publication.yml
-          if grep -Eq 'systemctl (enable|disable|start|stop|restart)|caddy|pm2' .github/workflows/research-v3-independence-production-publication.yml; then
-            echo 'Publication workflow must not mutate deploy/service routing.' >&2
-            exit 1
-          fi
+          for forbidden in \
+            'systemctl enable' \
+            'systemctl disable' \
+            'systemctl start' \
+            'systemctl stop' \
+            'systemctl restart' \
+            'caddy ' \
+            'pm2 '; do
+            if grep -Fq "$forbidden" .github/workflows/research-v3-independence-production-publication.yml; then
+              echo "Publication workflow contains forbidden deploy/service mutation token: $forbidden" >&2
+              exit 1
+            fi
+          done
 
   authorize:
     if: >-
