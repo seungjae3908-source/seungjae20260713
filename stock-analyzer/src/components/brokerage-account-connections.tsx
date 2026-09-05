@@ -156,7 +156,7 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
       const result = await jsonRequest<{ configured: boolean; credentialsReturned: false }>(`/api/accounts/read-only/credentials/${editing}`, { method: 'PUT', body: JSON.stringify({ purpose: 'read_only', permissions: ['read'], credentials: payload }) });
       if (result.configured !== true || result.credentialsReturned !== false) throw new Error('READONLY_CREDENTIAL_SAVE_FAILED');
       const providerLabel = editing === 'toss' ? 'Toss' : editing === 'upbit' ? 'Upbit' : 'Bitget';
-      setCredentials(EMPTY_CREDENTIALS); setEditing(null); setSaveMessage(`저장 완료 · ${providerLabel} 조회 전용 키를 암호화 저장했습니다.`); await refresh();
+      setCredentials(EMPTY_CREDENTIALS); setEditing(null); setSaveMessage(`저장 완료 · ${providerLabel} 조회 전용 키를 암호화 Vault에 저장했습니다.`); await refresh();
     } catch (cause) { setSaveMessage(cause instanceof Error ? cause.message : '조회 키를 저장하지 못했습니다.'); }
     finally { setSaving(false); }
   }
