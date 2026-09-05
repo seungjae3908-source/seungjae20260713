@@ -116,9 +116,11 @@ test('market price charts use the canonical AI Chart surface instead of legacy c
   expect(canonicalChartSource).toContain('AI Chart 2.0');
 });
 
-test('rich stock analysis preserves legacy information tabs but lazy-loads AI Chart 2.0', async () => {
-  expect(richDetailSource).toContain("lazy(() => import('@/pages/detail-legacy'))");
-  expect(richDetailSource).toContain("button.textContent?.trim() !== '차트'");
+test('rich stock analysis keeps focused information panels and lazy-loads AI Chart 2.0', async () => {
+  expect(richDetailSource).toContain("lazy(() => import('@/components/stock-detail-analysis-panel'))");
+  expect(richDetailSource).not.toContain("lazy(() => import('@/pages/detail-legacy'))");
+  expect(richDetailSource).not.toContain("button.textContent?.trim() !== '차트'");
+  expect(richDetailSource).toContain('<StockDetailAnalysisPanel ticker={ticker} market={market} />');
   expect(richDetailSource).toContain('<AiChartPage embedded />');
   expect(richDetailSource).toContain('canonical-rich-detail-chart');
   expect(richDetailSource).not.toContain('createChart(');
@@ -147,8 +149,22 @@ for (const viewport of [
     const tabs = page.getByTestId('technical-mobile-tabs');
     await expect(tabs).toBeVisible();
     await expect(tabs.getByRole('tab')).toHaveCount(4);
-    const tabHeights = await tabs.getByRole('tab').evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect().height));
-    expect(tabHeights.every((height) => height >= 44)).toBe(true);
+    const tabMetrics = await tabs.getByRole('tab').evaluateAll((nodes) => nodes.map((node) => {
+      const rect = node.getBoundingClientRect();
+      const style = getComputedStyle(node);
+      return {
+        height: rect.height,
+        fontSize: style.fontSize,
+        lineHeight: style.lineHeight,
+        fontWeight: style.fontWeight,
+        textAlign: style.textAlign,
+      };
+    }));
+    expect(tabMetrics.every((metric) => metric.height >= 44)).toBe(true);
+    expect(tabMetrics.every((metric) => metric.fontSize === '12px')).toBe(true);
+    expect(tabMetrics.every((metric) => metric.lineHeight === '16px')).toBe(true);
+    expect(tabMetrics.every((metric) => Number(metric.fontWeight) >= 900)).toBe(true);
+    expect(tabMetrics.every((metric) => metric.textAlign === 'center')).toBe(true);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
 
     const chartTab = tabs.getByRole('tab', { name: 'AI 차트 분석기' });
@@ -161,7 +177,7 @@ for (const viewport of [
 
     await tabs.getByRole('tab', { name: '자동매매' }).click();
     await expect(tabs.getByRole('tab', { name: '자동매매' })).toHaveAttribute('aria-selected', 'true');
-    await expect(page.getByRole('heading', { name: '현재 주문 안전 상태' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '주문 안전 상태' })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
   });
 }

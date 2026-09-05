@@ -52,6 +52,7 @@ function paperCandidate(signalId = "spot-a") {
       evaluatedAtMs: NOW,
     },
     execution: {
+      costPolicy: { version: "paper-cost-policy-v1" },
       dataEvidence: {
         dataQuality: "READY",
         asOfMs: NOW,
@@ -64,6 +65,18 @@ function paperCandidate(signalId = "spot-a") {
     privateTradingApiAllowed: false,
     orderSubmitted: false,
     exchangeRequestSent: false,
+  };
+}
+
+function exitPaperCandidate(signalId = "spot-exit") {
+  const value = paperCandidate(signalId);
+  return {
+    ...value,
+    signal: {
+      ...value.signal,
+      direction: "SELL",
+      positionSide: "LONG",
+    },
   };
 }
 
@@ -91,7 +104,7 @@ function profitableInput(overrides = {}) {
   };
 }
 
-test("Profit-First eligible candidate is retained and prepared for Paper without order authority", async () => {
+test("Profit-First eligible evidence without simulation authority fails closed before Paper entry", async () => {
   const result = await runCanonicalMeaningfulSearchPaperMarket({
     market: "CRYPTO_SPOT",
     scanBatch: async () => response({ cards: [card()] }),
@@ -100,12 +113,43 @@ test("Profit-First eligible candidate is retained and prepared for Paper without
 
   assert.equal(result.search.outcome, "TRADE_CANDIDATES");
   assert.equal(result.search.finalCandidates, 1);
+  assert.equal(result.evaluatedPaperCandidates, 1);
   assert.equal(result.capturedProfitGateCandidates, 1);
-  assert.equal(result.bridgeEligibleCandidates, 1);
-  assert.equal(result.paperBridge.candidates.length, 1);
-  assert.equal(result.paperBridge.candidates[0].signal.signalId, "spot-a");
-  assert.equal(result.paperBridge.candidates[0].profitEvidence.costPolicyId, "paper-cost-policy-v1");
-  assert.ok(result.paperBridge.candidates[0].profitEvidence.expectedNetEdge > 0);
+  assert.equal(result.bridgeEligibleCandidates, 0);
+  assert.equal(result.bridgeExitSignals, 0);
+  assert.equal(result.paperBridge.candidates.length, 0);
+  assert.equal(result.paperBridge.blocked, 1);
+  assert.ok(result.paperBridge.results[0].blockers.includes("PAPER_MARKET_ADAPTER_IDENTITY_REQUIRED"));
+  assert.ok(result.paperBridge.results[0].blockers.includes("PAPER_EXECUTION_POLICY_REQUIRED"));
+  assert.ok(result.paperBridge.results[0].blockers.includes("PAPER_SIMULATED_ORDER_REQUIRED"));
+  assert.equal(result.status, "PAPER_CANDIDATE_CONTRACT_BLOCKED");
+  assert.equal(result.orderSubmitted, false);
+  assert.equal(result.exchangeRequestSent, false);
+  assert.equal(result.privateTradingApiAllowed, false);
+  assert.equal(result.liveOrderAllowed, false);
+});
+
+test("canonical EXIT is preserved even when entry-only Profit-First evidence is unavailable", async () => {
+  const result = await runCanonicalMeaningfulSearchPaperMarket({
+    market: "CRYPTO_SPOT",
+    scanBatch: async () => response({ cards: [card("spot-exit", exitPaperCandidate("spot-exit"))] }),
+  });
+
+  assert.equal(result.search.outcome, "VALID_NO_TRADE");
+  assert.equal(result.search.finalCandidates, 0);
+  assert.equal(result.evaluatedPaperCandidates, 1);
+  assert.equal(result.capturedProfitGateCandidates, 0);
+  assert.equal(result.bridgeEligibleCandidates, 0);
+  assert.equal(result.bridgeExitSignals, 1);
+  assert.equal(result.exitConditionEvidence.status, "MEASURED");
+  assert.equal(result.exitConditionEvidence.exitEvaluationCount, 1);
+  assert.equal(result.exitConditionEvidence.observations[0].requirementsSatisfied, true);
+  assert.equal(result.exitConditionEvidence.observations[0].provenance.includes("deriveExecutionDecision"), true);
+  assert.equal(result.paperBridge.exitSignals.length, 1);
+  assert.equal(result.paperBridge.exitSignals[0].signal.signalId, "spot-exit");
+  assert.equal(result.paperBridge.exitSignals[0].executionIntent, "EXIT");
+  assert.equal(result.paperBridge.exitSignals[0].paperIdentity.costPolicyVersion, "paper-cost-policy-v1");
+  assert.equal(result.paperBridge.exitSignals[0].profitEvidence, undefined);
   assert.equal(result.status, "PAPER_CANDIDATES_READY");
   assert.equal(result.orderSubmitted, false);
   assert.equal(result.exchangeRequestSent, false);
@@ -144,7 +188,7 @@ test("missing explicit cost policy cannot cross the Paper bridge even when the P
   assert.equal(result.status, "PAPER_CANDIDATE_CONTRACT_BLOCKED");
 });
 
-test("VALID_NO_TRADE remains zero-candidate and does not fabricate Paper samples", async () => {
+test("VALID_NO_TRADE remains zero-entry and does not fabricate Paper samples", async () => {
   const result = await runCanonicalMeaningfulSearchPaperMarket({
     market: "CRYPTO_SPOT",
     scanBatch: async () => response({ cards: [card()] }),
@@ -154,5 +198,10 @@ test("VALID_NO_TRADE remains zero-candidate and does not fabricate Paper samples
   assert.equal(result.search.finalCandidates, 0);
   assert.equal(result.capturedProfitGateCandidates, 0);
   assert.equal(result.paperBridge.candidates.length, 0);
+  assert.equal(result.paperBridge.exitSignals.length, 0);
   assert.equal(result.status, "VALID_NO_TRADE");
+  assert.equal(result.exitConditionEvidence.status, "MEASURED");
+  assert.equal(result.exitConditionEvidence.exitEvaluationCount, 1);
+  assert.equal(result.exitConditionEvidence.observations[0].requirementsSatisfied, false);
+  assert.equal(result.exitConditionEvidence.observations[0].sourceCode, "EXIT_REQUIREMENTS_NOT_SATISFIED");
 });

@@ -3,6 +3,7 @@ import {
   normalizeSignalDirection,
   resolveSignalLifecycle,
 } from "./signal-direction-contract-v1.js";
+import { resolveLearningStrategyHorizon } from "./strategy-horizon-contract-v1.js";
 
 const SEARCH_OUTCOMES = new Set(["SEARCH_FAILURE", "VALID_NO_TRADE", "TRADE_CANDIDATES"]);
 const MARKETS = new Set(["KR_STOCK", "US_STOCK", "CRYPTO_SPOT", "CRYPTO_FUTURES"]);
@@ -10,6 +11,7 @@ const MARKETS = new Set(["KR_STOCK", "US_STOCK", "CRYPTO_SPOT", "CRYPTO_FUTURES"
 function freeze(value) { return Object.freeze(value); }
 function finite(value) { return typeof value === "number" && Number.isFinite(value); }
 function nonEmpty(value) { return typeof value === "string" && value.trim().length > 0; }
+function immutableSha(value) { return typeof value === "string" && /^[0-9a-f]{40}$/iu.test(value); }
 
 function result(status, blockers = [], candidate = null) {
   return freeze({
@@ -48,6 +50,71 @@ function validateProfitEvidence(profitEvidence, blockers) {
   validateSafetyEnvelope(profitEvidence, blockers, "PROFIT_EVIDENCE");
 }
 
+function resolvedRegime(signal) {
+  if (nonEmpty(signal?.regime)) return signal.regime.trim();
+  if (nonEmpty(signal?.learningSnapshot?.marketRegime)) return signal.learningSnapshot.marketRegime.trim();
+  return "UNKNOWN";
+}
+
+function validateStrategyIdentity(candidate, blockers) {
+  const signal = candidate?.signal;
+  const identity = signal?.strategyIdentity;
+  const executionIdentity = candidate?.execution?.strategyIdentity;
+  const learning = signal?.learningSnapshot;
+
+  if (!nonEmpty(identity?.strategyId)) blockers.push("STRATEGY_ID_REQUIRED");
+  if (!nonEmpty(identity?.strategyVersion)) blockers.push("STRATEGY_VERSION_REQUIRED");
+  if (!nonEmpty(identity?.parameterHash)) blockers.push("PARAMETER_HASH_REQUIRED");
+  if (!immutableSha(identity?.researchCodeSha)) blockers.push("RESEARCH_CODE_SHA_REQUIRED");
+  if (!nonEmpty(signal?.timeframe)) blockers.push("TIMEFRAME_REQUIRED");
+  if (!Number.isInteger(signal?.horizon) || signal.horizon <= 0) blockers.push("HORIZON_REQUIRED");
+
+  if (learning) {
+    if (learning.signalId !== signal?.signalId) blockers.push("LEARNING_SIGNAL_ID_MISMATCH");
+    if (nonEmpty(learning.market) && learning.market !== signal?.market) blockers.push("LEARNING_MARKET_MISMATCH");
+    if (nonEmpty(learning.symbol) && learning.symbol !== signal?.symbol) blockers.push("LEARNING_SYMBOL_MISMATCH");
+    if (nonEmpty(learning.strategyProfileVersion) && nonEmpty(identity?.strategyVersion)
+      && learning.strategyProfileVersion !== identity.strategyVersion) blockers.push("LEARNING_STRATEGY_VERSION_MISMATCH");
+    if (Array.isArray(learning.timeframes) && nonEmpty(signal?.timeframe)
+      && !learning.timeframes.includes(signal.timeframe)) blockers.push("LEARNING_TIMEFRAME_MISMATCH");
+    if (nonEmpty(learning.strategyHorizon) && nonEmpty(signal?.style)) {
+      try {
+        if (learning.strategyHorizon.trim().toUpperCase() !== resolveLearningStrategyHorizon(signal.style)) {
+          blockers.push("LEARNING_HORIZON_STYLE_MISMATCH");
+        }
+      } catch {
+        blockers.push("LEARNING_HORIZON_STYLE_MISMATCH");
+      }
+    }
+    if (nonEmpty(learning.direction)) {
+      const learningDirection = normalizeSignalDirection(learning.direction);
+      const signalDirection = normalizeSignalDirection(signal?.signalDirection ?? signal?.direction);
+      if (learningDirection !== signalDirection) blockers.push("LEARNING_DIRECTION_MISMATCH");
+    }
+    if (nonEmpty(signal?.regime) && nonEmpty(learning.marketRegime) && signal.regime !== learning.marketRegime) {
+      blockers.push("LEARNING_REGIME_MISMATCH");
+    }
+  }
+
+  if (executionIdentity && typeof executionIdentity === "object") {
+    if (nonEmpty(identity?.strategyId) && executionIdentity.strategyId !== identity.strategyId) blockers.push("EXECUTION_STRATEGY_ID_MISMATCH");
+    if (nonEmpty(identity?.strategyVersion) && executionIdentity.strategyVersion !== identity.strategyVersion) blockers.push("EXECUTION_STRATEGY_VERSION_MISMATCH");
+    if (nonEmpty(identity?.parameterHash) && executionIdentity.parameterHash !== identity.parameterHash) blockers.push("EXECUTION_PARAMETER_HASH_MISMATCH");
+    if (immutableSha(identity?.researchCodeSha)
+      && String(executionIdentity.researchCodeSha ?? "").toLowerCase() !== identity.researchCodeSha.toLowerCase()) {
+      blockers.push("EXECUTION_RESEARCH_SHA_MISMATCH");
+    }
+  }
+}
+
+function validateCostIdentity(candidate, profitEvidence, blockers) {
+  const evidenceVersion = profitEvidence?.costPolicyId;
+  const executionVersion = candidate?.execution?.costPolicy?.version;
+  if (nonEmpty(evidenceVersion) && nonEmpty(executionVersion) && evidenceVersion !== executionVersion) {
+    blockers.push("PAPER_COST_POLICY_VERSION_MISMATCH");
+  }
+}
+
 function validateCandidate(candidate, blockers) {
   const signal = candidate?.signal;
   if (!signal || !nonEmpty(signal.signalId)) blockers.push("SIGNAL_ID_REQUIRED");
@@ -57,7 +124,18 @@ function validateCandidate(candidate, blockers) {
   if (!signal?.learningSnapshot || signal.learningSnapshot.signalId !== signal.signalId) blockers.push("LEARNING_SNAPSHOT_REQUIRED");
   if (candidate?.riskEvidence?.status !== "APPROVED" || candidate?.riskEvidence?.simulatedOnly !== true) blockers.push("RISK_EVIDENCE_NOT_APPROVED");
   if (candidate?.execution?.dataEvidence?.dataQuality !== "READY") blockers.push("BLOCKED_DATA");
+  validateStrategyIdentity(candidate, blockers);
   validateSafetyEnvelope(candidate, blockers, "CANDIDATE");
+}
+
+function validatePaperEntrySimulation(candidate, blockers) {
+  if (!candidate?.execution?.marketAdapterIdentity || typeof candidate.execution.marketAdapterIdentity !== "object") {
+    blockers.push("PAPER_MARKET_ADAPTER_IDENTITY_REQUIRED");
+  }
+  if (!candidate?.execution?.executionPolicy || typeof candidate.execution.executionPolicy !== "object") {
+    blockers.push("PAPER_EXECUTION_POLICY_REQUIRED");
+  }
+  if (!candidate?.order || typeof candidate.order !== "object") blockers.push("PAPER_SIMULATED_ORDER_REQUIRED");
 }
 
 function directionPolicy(candidate) {
@@ -88,6 +166,26 @@ function directionPolicy(candidate) {
   return freeze({ signalDirection, lifecycle, ...execution });
 }
 
+function buildPaperIdentity(candidate, policy, profitEvidence = null) {
+  const signal = candidate?.signal ?? {};
+  const strategy = signal.strategyIdentity ?? {};
+  return freeze({
+    signalId: signal.signalId ?? null,
+    strategyId: strategy.strategyId ?? null,
+    strategyVersion: strategy.strategyVersion ?? null,
+    parameterHash: strategy.parameterHash ?? null,
+    market: signal.market ?? null,
+    symbol: signal.symbol ?? null,
+    timeframe: signal.timeframe ?? null,
+    horizon: signal.horizon ?? null,
+    direction: policy?.signalDirection ?? normalizeSignalDirection(signal.signalDirection ?? signal.direction),
+    regime: resolvedRegime(signal),
+    costPolicyVersion: profitEvidence?.costPolicyId ?? candidate?.execution?.costPolicy?.version ?? null,
+    researchCodeSha: immutableSha(strategy.researchCodeSha) ? strategy.researchCodeSha.toLowerCase() : null,
+    executionAuthority: "NONE",
+  });
+}
+
 function enrichCandidate(candidate, policy, profitGate = null, profitEvidence = null) {
   const signal = freeze({
     ...candidate.signal,
@@ -100,6 +198,7 @@ function enrichCandidate(candidate, policy, profitGate = null, profitEvidence = 
   const enriched = {
     ...candidate,
     signal,
+    paperIdentity: buildPaperIdentity(candidate, policy, profitEvidence),
     signalDirection: policy.signalDirection,
     signalLifecycle: policy.lifecycle,
     executionIntent: policy.executionIntent,
@@ -146,7 +245,9 @@ export function prepareMeaningfulSearchPaperCandidate({ searchOutcome, candidate
 
   const blockers = [];
   validateProfitEvidence(profitEvidence, blockers);
-  if (blockers.length) return result("BLOCKED", blockers, enrichCandidate(candidate, policy));
+  validateCostIdentity(candidate, profitEvidence, blockers);
+  validatePaperEntrySimulation(candidate, blockers);
+  if (blockers.length) return result("BLOCKED", blockers, enrichCandidate(candidate, policy, profitGate, profitEvidence));
 
   return result("PAPER_ELIGIBLE", [], enrichCandidate(candidate, policy, profitGate, profitEvidence));
 }

@@ -38,9 +38,23 @@ jobs:
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
           bash -n research-production/deploy/activate-server.sh
           grep -q '/activate-research-production' .github/workflows/research-production-activation.yml
+          grep -Fq "startsWith(github.event.comment.body, '/activate-research-production ')" .github/workflows/research-production-activation.yml
+          test "$(grep -Ec 'github[.]event[.]issue[.]number == 8[3]8' .github/workflows/research-production-activation.yml)" -eq 1
+          test "$(grep -Ec 'issue_number: 8[3]8' .github/workflows/research-production-activation.yml)" -eq 2
+          if grep -Eq 'github[.]event[.]issue[.]number == 6[6]0' .github/workflows/research-production-activation.yml; then
+            echo 'Activation command routing regressed to archived Hub #660.' >&2
+            exit 1
+          fi
+          if grep -Eq 'issue_number: 6[6]0' .github/workflows/research-production-activation.yml; then
+            echo 'Activation result reporting regressed to archived Hub #660.' >&2
+            exit 1
+          fi
+          grep -q 'successfulActivationReceipt' .github/workflows/research-production-activation.yml
+          grep -Fq 'github-actions[bot]' .github/workflows/research-production-activation.yml
+          grep -q 'DUPLICATE_TARGET_ACTIVATION_BLOCKED' .github/workflows/research-production-activation.yml
+          grep -Fq 'readlink -f /opt/investment-research/current' .github/workflows/research-production-activation.yml
           grep -q 'checkout-only lifecycle failure' .github/workflows/research-production-activation.yml
           grep -q 'SOURCE_MERGE_SHA' .github/workflows/research-production-activation.yml
-          grep -q 'Exact current main Required CI Run' .github/workflows/research-production-activation.yml
           grep -q 'LIVE_TRADING=false' research-production/deploy/activate-server.sh
           grep -q 'PRIVATE_API_ENABLED=false' research-production/deploy/activate-server.sh
           grep -q 'ORDER_AUTHORITY=false' research-production/deploy/activate-server.sh
@@ -49,7 +63,7 @@ jobs:
   authorize:
     if: >-
       github.event_name == 'issue_comment' &&
-      github.event.issue.number == 62 &&
+      github.event.issue.number == 838 &&
       github.event.comment.user.login == github.repository_owner &&
       startsWith(github.event.comment.body, '/activate-research-production ')
     runs-on: ubuntu-latest
@@ -59,7 +73,6 @@ jobs:
       research_head_sha: ${{ steps.gate.outputs.research_head_sha }}
       source_merge_sha: ${{ steps.gate.outputs.source_merge_sha }}
       application_run_id: ${{ steps.gate.outputs.application_run_id }}
-      target_application_run_id: ${{ steps.gate.outputs.target_application_run_id }}
     env:
       PR_NUMBER: 357
     steps:
@@ -80,6 +93,31 @@ jobs:
             });
             if (main.data.commit.sha.toLowerCase() !== targetSha) {
               core.setFailed(`Target is not exact current main: ${targetSha}`);
+              return;
+            }
+
+            const hubComments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+            });
+            const successfulActivationReceipt = hubComments.find((comment) => {
+              if (comment.user?.login !== 'github-actions[bot]' || comment.user?.type !== 'Bot') return false;
+              const lines = String(comment.body ?? '').trim().split(/\r?\n/).map((line) => line.trim());
+              return lines[0] === '[RESEARCH_PRODUCTION_ACTIVATION]'
+                && lines.includes('status: success')
+                && lines.includes(`target_sha: ${targetSha}`)
+                && lines.includes('exact_main_research_self_check: success')
+                && lines.includes('existing_app_deploy_mutation: 0')
+                && lines.includes('production_db_mutation: 0')
+                && lines.includes('live_trading: false')
+                && lines.includes('private_api: false')
+                && lines.includes('order_authority: false')
+                && lines.includes('real_order_count: 0');
+            });
+            if (successfulActivationReceipt) {
+              core.setFailed(`DUPLICATE_TARGET_ACTIVATION_BLOCKED: target ${targetSha} already has successful receipt ${successfulActivationReceipt.html_url ?? successfulActivationReceipt.id}`);
               return;
             }
 
@@ -172,7 +210,8 @@ jobs:
                 return;
               }
               const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
-                owner: context.repo.owner, repo: context.repo.repo,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
                 run_id: run.id,
                 per_page: 100,
               });
@@ -192,49 +231,11 @@ jobs:
               core.info(`Accepted newer run ${run.id} as checkout-only lifecycle failure after PR merge.`);
             }
 
-            const targetStatuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
-              owner: context.repo.owner, repo: context.repo.repo, ref: targetSha, per_page: 100,
-            });
-            const targetByRun = new Map();
-            for (const status of targetStatuses) {
-              const runMatch = String(status.target_url ?? '').match(/\/actions\/runs\/(\d+)/);
-              if (!runMatch) continue;
-              const runId = runMatch[1];
-              if (!targetByRun.has(runId)) targetByRun.set(runId, new Map());
-              const contexts = targetByRun.get(runId);
-              const previous = contexts.get(status.context);
-              if (!previous || Number(status.id) > Number(previous.id)) contexts.set(status.context, status);
-            }
-            const targetRuns = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              head_sha: targetSha,
-              event: 'push',
-              per_page: 100,
-            });
-            const targetApplicationRuns = targetRuns
-              .filter((run) => run.path === '.github/workflows/futures-public-network-smoke.yml')
-              .sort((a, b) => Number(b.id) - Number(a.id));
-            const targetAcceptedRun = targetApplicationRuns[0] ?? null;
-            if (!targetAcceptedRun
-              || targetAcceptedRun.status !== 'completed'
-              || targetAcceptedRun.conclusion !== 'success') {
-              core.setFailed('Latest exact current main Application CI push run is missing, non-terminal, or unsuccessful.');
-              return;
-            }
-            const targetContexts = targetByRun.get(String(targetAcceptedRun.id));
-            if (!targetContexts || !required.every((name) => targetContexts.get(name)?.state === 'success')) {
-              core.setFailed(`Latest exact current main Application CI Run ${targetAcceptedRun.id} does not have coherent Required CI 6/6 SUCCESS.`);
-              return;
-            }
-
-            core.info(`Accepted source exact-head Application CI Run ${acceptedRun.id} with Required 6/6 SUCCESS.`);
-            core.info(`Accepted Exact current main Required CI Run ${targetAcceptedRun.id} with Required 6/6 SUCCESS.`);
+            core.info(`Accepted exact-head Application CI Run ${acceptedRun.id} with Required 6/6 SUCCESS.`);
             core.setOutput('target_sha', targetSha);
             core.setOutput('research_head_sha', headSha);
             core.setOutput('source_merge_sha', sourceMergeSha);
             core.setOutput('application_run_id', String(acceptedRun.id));
-            core.setOutput('target_application_run_id', String(targetAcceptedRun.id));
 
       - uses: actions/checkout@v4
         with:
@@ -281,7 +282,6 @@ jobs:
       RESEARCH_HEAD_SHA: ${{ needs.authorize.outputs.research_head_sha }}
       SOURCE_MERGE_SHA: ${{ needs.authorize.outputs.source_merge_sha }}
       APPLICATION_RUN_ID: ${{ needs.authorize.outputs.application_run_id }}
-      TARGET_APPLICATION_RUN_ID: ${{ needs.authorize.outputs.target_application_run_id }}
       SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
       SSH_USER: ${{ secrets.PROD_SSH_USER }}
       SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
@@ -311,6 +311,21 @@ jobs:
             ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
           fi
 
+      - name: Reject already-current Research release before mutation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          current_release="$(
+            ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+              "$SSH_USER@$SSH_HOST" \
+              'readlink -f /opt/investment-research/current 2>/dev/null || true'
+          )"
+          if [[ "$current_release" == "/opt/investment-research/releases/$TARGET_SHA" ]]; then
+            echo 'DUPLICATE_TARGET_ACTIVATION_BLOCKED=true'
+            echo "Target Research release $TARGET_SHA is already current; refusing to reapply activation." >&2
+            exit 78
+          fi
+
       - name: Read-only server preflight
         shell: bash
         run: |
@@ -337,15 +352,14 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 62,
+              issue_number: 838,
               body: [
                 '[RESEARCH_PRODUCTION_ACTIVATION]',
                 'status: success',
                 `target_sha: ${process.env.TARGET_SHA}`,
                 `source_pr_head: ${process.env.RESEARCH_HEAD_SHA}`,
                 `source_merge_sha: ${process.env.SOURCE_MERGE_SHA}`,
-                `source_application_ci_run: ${process.env.APPLICATION_RUN_ID}`,
-                `target_application_ci_run: ${process.env.TARGET_APPLICATION_RUN_ID}`,
+                `application_ci_run: ${process.env.APPLICATION_RUN_ID}`,
                 'exact_main_research_self_check: success',
                 'timers: fast-historical=enabled; long-history=enabled; forward=enabled',
                 'existing_app_deploy_mutation: 0',
@@ -366,7 +380,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 62,
+              issue_number: 838,
               body: [
                 '[RESEARCH_PRODUCTION_ACTIVATION]',
                 'status: failed_closed',
@@ -376,6 +390,6 @@ jobs:
                 'private_api: false',
                 'order_authority: false',
                 'real_order_count: 0',
-                'next: inspect this exact run and fix the failure before retry',
+                'next: inspect this exact run and fix the failure before retry; duplicate-target guard failures must not be retried with the same target',
               ].join('\n'),
             });

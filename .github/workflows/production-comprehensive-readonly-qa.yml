@@ -8,8 +8,14 @@ on:
       - stock-analyzer/e2e/production-comprehensive-readonly-qa.spec.ts
       - stock-analyzer/e2e/production-mobile-scroll-readonly-qa.spec.ts
       - stock-analyzer/e2e/production-critical-http-readonly-qa.spec.ts
+      - stock-analyzer/e2e/production-performance-readonly-qa.spec.ts
       - stock-analyzer/e2e/support/production-readonly-policy.ts
   workflow_dispatch:
+    inputs:
+      sha:
+        description: Exact deployed Production SHA to verify
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -19,16 +25,57 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  static-contract:
+    name: Validate Production comprehensive QA target and approval gate
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify official target, dispatch-only browsing, and sanitized evidence retention
+        run: |
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const workflow = fs.readFileSync('.github/workflows/production-comprehensive-readonly-qa.yml', 'utf8');
+          const config = fs.readFileSync('stock-analyzer/playwright.production-comprehensive.config.ts', 'utf8');
+          const liveJob = workflow.split('\n  production-comprehensive-readonly:\n')[1] ?? '';
+          const uploadStep = liveJob.split('\n      - name: Upload comprehensive QA evidence\n')[1] ?? '';
+
+          if (!liveJob.includes("if: github.event_name == 'workflow_dispatch'")) {
+            throw new Error('Live comprehensive QA must remain explicit-dispatch only');
+          }
+          if (!liveJob.includes('environment: production')) {
+            throw new Error('Live comprehensive QA must remain protected by the production environment');
+          }
+          if (!liveJob.includes('PRODUCTION_BASE_URL: https://lsj119.com')) {
+            throw new Error('Live comprehensive QA must target the official Production hostname');
+          }
+          if (!config.includes("trace: 'off'")) {
+            throw new Error('Authenticated Production QA must not retain Playwright traces');
+          }
+          if (!config.includes("screenshot: 'off'")) {
+            throw new Error('Authenticated Production QA must not retain raw screenshots');
+          }
+          if (!uploadStep.includes('stock-analyzer/production-comprehensive-artifacts')) {
+            throw new Error('Structured Production QA evidence must remain uploaded');
+          }
+          if (uploadStep.includes('stock-analyzer/test-results')) {
+            throw new Error('Raw authenticated Playwright test-results must not be uploaded');
+          }
+          NODE
+
   production-comprehensive-readonly:
     name: Real Production PC/mobile comprehensive read-only QA
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 80
     environment: production
     env:
-      PRODUCTION_BASE_URL: https://lsj119.duckdns.org
+      PRODUCTION_BASE_URL: https://lsj119.com
       PRODUCTION_QA_LOGIN: ${{ secrets.PRODUCTION_QA_LOGIN }}
       PRODUCTION_QA_PASSWORD: ${{ secrets.PRODUCTION_QA_PASSWORD }}
       PRODUCTION_READONLY_E2E: "true"
+      EXPECTED_DEPLOY_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.sha || '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -53,15 +100,32 @@ jobs:
           const fs = require('node:fs');
           const health = JSON.parse(fs.readFileSync('/tmp/production-health.json', 'utf8'));
           if (health?.ok !== true) throw new Error('Production health is not OK');
-          console.log(`PRODUCTION_DEPLOY_SHA=${String(health.deploySha ?? 'unknown')}`);
+
+          const deploySha = String(health.deploySha ?? '').toLowerCase();
+          const expectedSha = String(process.env.EXPECTED_DEPLOY_SHA ?? '').trim().toLowerCase();
+          console.log(`PRODUCTION_DEPLOY_SHA=${deploySha || 'unknown'}`);
           console.log(`PRODUCTION_IDENTITY_MATCH=${String(health.identityMatch ?? false)}`);
+          console.log(`EXPECTED_DEPLOY_SHA=${expectedSha || 'not-required-for-pr-event'}`);
+
+          if (expectedSha) {
+            if (!/^[0-9a-f]{40}$/.test(expectedSha)) {
+              throw new Error(`Invalid expected Production SHA: ${expectedSha}`);
+            }
+            if (deploySha !== expectedSha) {
+              throw new Error(`Production deploy SHA mismatch: expected=${expectedSha} actual=${deploySha || 'unknown'}`);
+            }
+            if (health.identityMatch !== true) {
+              throw new Error('Production identityMatch is not true for exact-SHA workflow_dispatch QA');
+            }
+          }
           NODE
 
       - run: pnpm install --frozen-lockfile
 
       - name: Install Chromium
+        timeout-minutes: 10
         working-directory: stock-analyzer
-        run: pnpm exec playwright install --with-deps chromium
+        run: pnpm exec playwright install chromium
 
       - name: Run real Production comprehensive read-only QA
         working-directory: stock-analyzer
@@ -74,14 +138,17 @@ jobs:
             echo '## Production Comprehensive Read-Only QA'
             echo
             echo '- target: current deployed Production'
+            echo "- expected deploy SHA: ${EXPECTED_DEPLOY_SHA:-not-required-for-pr-event}"
             echo '- markets: KR / US / Upbit spot / Bitget futures'
             echo '- desktop search matrix: 20 symbols per market (80 total)'
             echo '- mobile search sample: 5 symbols per market (20 total)'
             echo '- chart matrix: 4 markets x 8 timeframes (32 actual UI transitions)'
-            echo '- route/layout sweep: desktop 1440/1024, mobile 320/360/390/412/430'
+            echo '- route/layout sweep: desktop 1920/1440/1024, Galaxy Fold-class 768, tablet 800, mobile 320/360/390/412/430'
+            echo '- performance evidence: TTFB / FCP / LCP / CLS plus same-origin API p50/p95/p99; evidence-only, no guessed budget'
             echo '- checks: finite loading, root/internal scroll, overlap, fixed-nav occlusion, horizontal overflow, safe tabs, console/page/request failures'
             echo '- authenticated same-origin GET 401/403/5xx: blocking failure on critical routes'
             echo '- latest-head only: superseded pending QA runs are cancelled by concurrency'
+            echo '- retained evidence: structured production-comprehensive-artifacts only; raw trace/screenshot/test-results retention disabled'
             echo '- Production DB/app mutations: blocked'
             echo '- private provider/account live requests: blocked or mocked disconnected'
             echo '- actual order/cancel/amend/transfer/withdrawal authority: 0'
@@ -92,8 +159,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: production-comprehensive-readonly-${{ github.run_id }}
-          path: |
-            stock-analyzer/production-comprehensive-artifacts
-            stock-analyzer/test-results
+          path: stock-analyzer/production-comprehensive-artifacts
           if-no-files-found: warn
           retention-days: 14
