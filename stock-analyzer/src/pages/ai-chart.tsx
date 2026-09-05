@@ -22,6 +22,7 @@ import {
   strategyModeTimeframes,
   type AiChartStrategyMode,
 } from '@/lib/ai-chart-v2-intelligence';
+import { formatAiChartScore } from '@/lib/ai-chart-display';
 import {
   useAnalysisSelection,
   type AnalysisSelection,
@@ -232,11 +233,11 @@ function MobileSummary({ selection, analysis }: { selection: AnalysisSelection; 
       <div className="grid grid-cols-3 gap-2 text-center">
         <div className="rounded-2xl bg-background p-2.5">
           <p className="text-[10px] text-muted-foreground">신호점수</p>
-          <strong className="mt-0.5 block text-sm tabular-nums">{selection.signalScore ?? '-'}</strong>
+          <strong className="mt-0.5 block text-sm tabular-nums">{formatAiChartScore(selection.signalScore)}</strong>
         </div>
         <div className="rounded-2xl bg-background p-2.5">
           <p className="text-[10px] text-muted-foreground">신뢰도</p>
-          <strong className="mt-0.5 block text-sm tabular-nums">{confidence ?? '-'}</strong>
+          <strong className="mt-0.5 block text-sm tabular-nums">{formatAiChartScore(confidence)}</strong>
         </div>
         <div className="rounded-2xl bg-background p-2.5">
           <p className="text-[10px] text-muted-foreground">위험</p>
@@ -299,7 +300,7 @@ function ContextCard({ selection, analysis }: { selection: AnalysisSelection; an
         </div>
         <div data-testid="analysis-signal-score" className="rounded-2xl bg-background p-2">
           <p className="text-[10px] text-muted-foreground">신뢰도</p>
-          <strong>{analysis?.confidence ?? selection.confidence ?? '-'}</strong>
+          <strong>{formatAiChartScore(analysis?.confidence ?? selection.confidence)}</strong>
         </div>
       </div>
     </section>
