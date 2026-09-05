@@ -42,32 +42,27 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          workflow=.github/workflows/research-v3-independence-production-publication.yml
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
           python3 scripts/agent_hub_rollover_v2.py self-test
           node --check research-production/bin/publish-v3-independence.mjs
           node --test \
             research-production/test/v3-liquidity-independence-state-publisher.test.mjs \
             research-production/test/v3-liquidity-independence-production-caller.test.mjs
-          grep -Fq '/publish-v3-independence ' .github/workflows/research-v3-independence-production-publication.yml
-          grep -Fq 'python3 scripts/agent_hub_rollover_v2.py resolve' .github/workflows/research-v3-independence-production-publication.yml
-          grep -Fq 'SOURCE_PR_NUMBER: 897' .github/workflows/research-v3-independence-production-publication.yml
-          grep -Fq '/opt/investment-research/releases/$TARGET_SHA' .github/workflows/research-v3-independence-production-publication.yml
-          grep -Fq '/var/lib/investment-research-production' .github/workflows/research-v3-independence-production-publication.yml
-          grep -Fq 'runuser -u investment-research' .github/workflows/research-v3-independence-production-publication.yml
-          grep -Fq 'env -i' .github/workflows/research-v3-independence-production-publication.yml
-          for forbidden in \
-            'systemctl enable' \
-            'systemctl disable' \
-            'systemctl start' \
-            'systemctl stop' \
-            'systemctl restart' \
-            'caddy ' \
-            'pm2 '; do
-            if grep -Fq "$forbidden" .github/workflows/research-v3-independence-production-publication.yml; then
-              echo "Publication workflow contains forbidden deploy/service mutation token: $forbidden" >&2
-              exit 1
-            fi
-          done
+          grep -Fq '/publish-v3-independence ' "$workflow"
+          grep -Fq 'python3 scripts/agent_hub_rollover_v2.py resolve' "$workflow"
+          grep -Fq 'SOURCE_PR_NUMBER: 897' "$workflow"
+          grep -Fq '/opt/investment-research/releases/$TARGET_SHA' "$workflow"
+          grep -Fq '/var/lib/investment-research-production' "$workflow"
+          grep -Fq 'runuser -u investment-research' "$workflow"
+          grep -Fq 'env -i' "$workflow"
+          # Scan only the runtime/control portion. The validation code itself contains
+          # the forbidden-token regex and must not be allowed to self-match.
+          awk 'BEGIN {copy=0} /^  authorize:$/ {copy=1} copy {print}' "$workflow" > "$RUNNER_TEMP/runtime-control.yml"
+          if grep -Eq 'systemctl[[:space:]]+(enable|disable|start|stop|restart)|(^|[[:space:]])(caddy|pm2)([[:space:]]|$)' "$RUNNER_TEMP/runtime-control.yml"; then
+            echo 'Publication runtime contains a forbidden deploy/service mutation command.' >&2
+            exit 1
+          fi
 
   authorize:
     if: >-
@@ -124,7 +119,7 @@ jobs:
             const sourceRunId = Number(match[2]);
             const activeIssue = Number(process.env.ACTIVE_ISSUE);
             if (!Number.isInteger(activeIssue) || activeIssue <= 0 || Number(context.issue.number) !== activeIssue) {
-              core.setFailed(`Command was not posted on the resolved canonical Hub: expected #${activeIssue}`);
+              core.setFailed(`Command was not posted on resolved canonical Hub #${activeIssue}`);
               return;
             }
 
@@ -145,10 +140,8 @@ jobs:
               return;
             }
             const ancestry = await github.rest.repos.compareCommits({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              base: String(sourcePr.merge_commit_sha),
-              head: targetSha,
+              owner: context.repo.owner, repo: context.repo.repo,
+              base: String(sourcePr.merge_commit_sha), head: targetSha,
             });
             if (!['ahead', 'identical'].includes(ancestry.data.status)) {
               core.setFailed(`Current main does not descend from publisher source PR #${sourcePrNumber}.`);
@@ -156,11 +149,8 @@ jobs:
             }
 
             const required = [
-              'application-ci/verified',
-              'browser-ui/verified',
-              'database-rls/verified',
-              'security-integration/verified',
-              'ai-privacy/verified',
+              'application-ci/verified', 'browser-ui/verified', 'database-rls/verified',
+              'security-integration/verified', 'ai-privacy/verified',
               'futures-public-network-smoke/verified',
             ];
             const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
@@ -182,19 +172,19 @@ jobs:
               return;
             }
             const applicationRunId = runIds[0];
-            const latestContexts = byRun.get(applicationRunId);
-            const missing = required.filter((name) => latestContexts.get(name)?.state !== 'success');
+            const contexts = byRun.get(applicationRunId);
+            const missing = required.filter((name) => contexts.get(name)?.state !== 'success');
             if (missing.length > 0) {
-              core.setFailed(`Exact current main Required CI is not 6/6 SUCCESS on latest run ${applicationRunId}: ${missing.join(',')}`);
+              core.setFailed(`Latest exact-main Required CI run ${applicationRunId} is not 6/6: ${missing.join(',')}`);
               return;
             }
             const applicationRun = (await github.rest.actions.getWorkflowRun({
               owner: context.repo.owner, repo: context.repo.repo, run_id: applicationRunId,
             })).data;
-            if (applicationRun.head_sha.toLowerCase() !== targetSha
+            if (String(applicationRun.head_sha).toLowerCase() !== targetSha
                 || applicationRun.status !== 'completed'
                 || applicationRun.conclusion !== 'success') {
-              core.setFailed(`Latest coherent Required CI run ${applicationRunId} is not terminal SUCCESS on target main.`);
+              core.setFailed(`Required CI run ${applicationRunId} is not terminal SUCCESS on target main.`);
               return;
             }
 
@@ -291,7 +281,6 @@ jobs:
           test -f "$summary"
           test "$(wc -c < "$summary")" -le 1048576
           printf '%s\n' "summary_file=$summary" >> "$GITHUB_OUTPUT"
-          printf '%s\n' "source_dir=$source_dir" >> "$GITHUB_OUTPUT"
       - name: Build immutable authenticated-source envelope
         id: envelope
         env:
@@ -311,9 +300,7 @@ jobs:
             workflowName: 'Public Forward Liquidity V3 Independence Consume',
             workflowRunId: Number(process.env.SOURCE_RUN_ID),
             runAttempt: 1,
-            event: 'workflow_run',
-            branch: 'main',
-            conclusion: 'success',
+            event: 'workflow_run', branch: 'main', conclusion: 'success',
             headSha: process.env.SOURCE_HEAD_SHA,
             artifactId: Number(process.env.ARTIFACT_ID),
             artifactName: process.env.ARTIFACT_NAME,
@@ -368,8 +355,7 @@ jobs:
           release="/opt/investment-research/releases/$TARGET_SHA"
           current="$(readlink -f /opt/investment-research/current 2>/dev/null || true)"
           test "$current" = "$release"
-          test -d "$release"
-          test ! -L "$release"
+          test -d "$release" && test ! -L "$release"
           test "$(git -c safe.directory="$release" -C "$release" rev-parse HEAD)" = "$TARGET_SHA"
           test -f "$release/research-production/bin/publish-v3-independence.mjs"
           test -d /var/lib/investment-research-production
@@ -387,13 +373,11 @@ jobs:
           remote_dir="$(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" 'umask 077; mktemp -d /tmp/research-v3-independence-publish.XXXXXX')"
           [[ "$remote_dir" == /tmp/research-v3-independence-publish.* ]]
-          scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT" "$SUMMARY_FILE" \
-            "$SSH_USER@$SSH_HOST:$remote_dir/summary.json"
-          scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT" "$SOURCE_FILE" \
-            "$SSH_USER@$SSH_HOST:$remote_dir/source.json"
+          scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT" "$SUMMARY_FILE" "$SSH_USER@$SSH_HOST:$remote_dir/summary.json"
+          scp -q -i ~/.ssh/id_ed25519 -P "$SSH_PORT" "$SOURCE_FILE" "$SSH_USER@$SSH_HOST:$remote_dir/source.json"
           remote_q="$(printf '%q' "$remote_dir")"
-          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes \
-            "$SSH_USER@$SSH_HOST" "chmod 0755 $remote_q && chmod 0644 $remote_q/summary.json $remote_q/source.json"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST" \
+            "chmod 0755 $remote_q && chmod 0644 $remote_q/summary.json $remote_q/source.json"
           printf '%s\n' "remote_dir=$remote_dir" >> "$GITHUB_OUTPUT"
       - name: Publish through existing fail-closed publisher
         id: publish
@@ -403,33 +387,19 @@ jobs:
         run: |
           set -Eeuo pipefail
           remote_env="$(printf 'TARGET_SHA=%q REMOTE_DIR=%q' "$TARGET_SHA" "$REMOTE_DIR")"
-          publication_json="$(
-            ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
-              "$SSH_USER@$SSH_HOST" "$remote_env bash -s" <<'REMOTE'
+          publication_json="$(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" "$remote_env bash -s" <<'REMOTE'
           set -Eeuo pipefail
           release="/opt/investment-research/releases/$TARGET_SHA"
           state=/var/lib/investment-research-production
           command=(
-            env -i
-            PATH=/usr/local/bin:/usr/bin:/bin
-            HOME=/nonexistent
-            LANG=C.UTF-8
-            TZ=UTC
-            LIVE_TRADING=false
-            LIVE_TRADING_ENABLED=false
-            REAL_ORDER_ENABLED=false
-            REAL_TRADING_ENABLED=false
-            PRIVATE_API_ENABLED=false
-            PRIVATE_ACCOUNT_ACCESS=false
-            PRIVATE_TRADING_API_ALLOWED=false
-            ORDER_AUTHORITY=false
-            ORDER_SUBMISSION_ENABLED=false
+            env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/nonexistent LANG=C.UTF-8 TZ=UTC
+            LIVE_TRADING=false LIVE_TRADING_ENABLED=false REAL_ORDER_ENABLED=false REAL_TRADING_ENABLED=false
+            PRIVATE_API_ENABLED=false PRIVATE_ACCOUNT_ACCESS=false PRIVATE_TRADING_API_ALLOWED=false
+            ORDER_AUTHORITY=false ORDER_SUBMISSION_ENABLED=false
             node "$release/research-production/bin/publish-v3-independence.mjs"
-            --state-root "$state"
-            --summary-file "$REMOTE_DIR/summary.json"
-            --source-file "$REMOTE_DIR/source.json"
-            --repo-root "$release"
-            --expected-code-sha "$TARGET_SHA"
+            --state-root "$state" --summary-file "$REMOTE_DIR/summary.json" --source-file "$REMOTE_DIR/source.json"
+            --repo-root "$release" --expected-code-sha "$TARGET_SHA"
           )
           if [[ "$(id -u)" -eq 0 ]]; then
             command -v runuser >/dev/null
@@ -446,12 +416,8 @@ jobs:
           if (!['PUBLISHED', 'UNCHANGED'].includes(result.status)
               || result.codeSha !== process.env.TARGET_SHA
               || result.executionAuthority !== 'NONE'
-              || result.liveTrading !== false
-              || result.privateApi !== false
-              || result.realOrders !== 0
-              || result.oosOutcomeCredit !== 0
-              || result.fullCostReady !== false
-              || result.evidenceComplete !== 0
+              || result.liveTrading !== false || result.privateApi !== false || result.realOrders !== 0
+              || result.oosOutcomeCredit !== 0 || result.fullCostReady !== false || result.evidenceComplete !== 0
               || !/^[0-9a-f]{64}$/u.test(String(result.fileDigest ?? ''))
               || !/^[0-9a-f]{64}$/u.test(String(result.reportDigest ?? ''))) {
             throw new Error('PRODUCTION_PUBLICATION_READBACK_INVALID');
@@ -483,8 +449,7 @@ jobs:
     permissions:
       issues: write
     steps:
-      - name: Record successful canonical publication evidence
-        uses: actions/github-script@v7
+      - uses: actions/github-script@v7
         env:
           ACTIVE_ISSUE: ${{ needs.authorize.outputs.active_issue }}
           TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
@@ -500,38 +465,21 @@ jobs:
           script: |
             const mutation = process.env.PUBLICATION_STATUS === 'PUBLISHED' ? 1 : 0;
             const body = [
-              '[RESEARCH_V3_INDEPENDENCE_PUBLICATION]',
-              'status: success',
+              '[RESEARCH_V3_INDEPENDENCE_PUBLICATION]', 'status: success',
               `publication_status: ${process.env.PUBLICATION_STATUS}`,
-              `canonical_hub: #${process.env.ACTIVE_ISSUE}`,
-              `target_sha: ${process.env.TARGET_SHA}`,
-              `required_ci_run: ${process.env.APPLICATION_RUN_ID}`,
-              `source_run_id: ${process.env.SOURCE_RUN_ID}`,
-              `source_artifact_id: ${process.env.ARTIFACT_ID}`,
-              `source_artifact_digest: ${process.env.ARTIFACT_DIGEST}`,
-              `target_slot_index: ${process.env.TARGET_SLOT_INDEX}`,
-              `report_digest: ${process.env.REPORT_DIGEST}`,
-              `published_file_digest: ${process.env.FILE_DIGEST}`,
-              `production_state_mutation: ${mutation}`,
+              `canonical_hub: #${process.env.ACTIVE_ISSUE}`, `target_sha: ${process.env.TARGET_SHA}`,
+              `required_ci_run: ${process.env.APPLICATION_RUN_ID}`, `source_run_id: ${process.env.SOURCE_RUN_ID}`,
+              `source_artifact_id: ${process.env.ARTIFACT_ID}`, `source_artifact_digest: ${process.env.ARTIFACT_DIGEST}`,
+              `target_slot_index: ${process.env.TARGET_SLOT_INDEX}`, `report_digest: ${process.env.REPORT_DIGEST}`,
+              `published_file_digest: ${process.env.FILE_DIGEST}`, `production_state_mutation: ${mutation}`,
               'target_path: /var/lib/investment-research-production/forward/liquidity/v3-authoritative-independence-summary.json',
-              'readback_verified: true',
-              'oos_outcome_credit: 0',
-              'full_cost_ready: false',
-              'evidence_complete: 0',
-              'profitability_proven: false',
-              'execution_authority: NONE',
-              'deployment: 0',
-              'db_mutation: 0',
-              'secret_mutation: 0',
-              'private_api: 0',
-              'live_trading: 0',
-              'real_orders: 0',
+              'readback_verified: true', 'oos_outcome_credit: 0', 'full_cost_ready: false',
+              'evidence_complete: 0', 'profitability_proven: false', 'execution_authority: NONE',
+              'deployment: 0', 'db_mutation: 0', 'secret_mutation: 0', 'private_api: 0', 'live_trading: 0', 'real_orders: 0',
             ].join('\n');
             await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: Number(process.env.ACTIVE_ISSUE),
-              body,
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: Number(process.env.ACTIVE_ISSUE), body,
             });
 
   report-failure:
@@ -542,8 +490,7 @@ jobs:
     permissions:
       issues: write
     steps:
-      - name: Record fail-closed publication failure without guessing state
-        uses: actions/github-script@v7
+      - uses: actions/github-script@v7
         env:
           ACTIVE_ISSUE: ${{ needs.authorize.outputs.active_issue }}
           TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
@@ -551,25 +498,14 @@ jobs:
         with:
           script: |
             const body = [
-              '[RESEARCH_V3_INDEPENDENCE_PUBLICATION]',
-              'status: failed_closed',
-              `canonical_hub: #${process.env.ACTIVE_ISSUE}`,
-              `target_sha: ${process.env.TARGET_SHA}`,
-              `source_run_id: ${process.env.SOURCE_RUN_ID}`,
-              `workflow_run: ${context.runId}`,
-              'production_state_mutation: UNKNOWN_AFTER_FAILURE',
-              'retry_without_evidence: false',
-              'deployment: 0',
-              'db_mutation: 0',
-              'secret_mutation: 0',
-              'private_api: 0',
-              'live_trading: 0',
-              'real_orders: 0',
-              'execution_authority: NONE',
+              '[RESEARCH_V3_INDEPENDENCE_PUBLICATION]', 'status: failed_closed',
+              `canonical_hub: #${process.env.ACTIVE_ISSUE}`, `target_sha: ${process.env.TARGET_SHA}`,
+              `source_run_id: ${process.env.SOURCE_RUN_ID}`, `workflow_run: ${context.runId}`,
+              'production_state_mutation: UNKNOWN_AFTER_FAILURE', 'retry_without_evidence: false',
+              'deployment: 0', 'db_mutation: 0', 'secret_mutation: 0', 'private_api: 0',
+              'live_trading: 0', 'real_orders: 0', 'execution_authority: NONE',
             ].join('\n');
             await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: Number(process.env.ACTIVE_ISSUE),
-              body,
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: Number(process.env.ACTIVE_ISSUE), body,
             });
