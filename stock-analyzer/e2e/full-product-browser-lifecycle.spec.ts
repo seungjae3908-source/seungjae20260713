@@ -360,9 +360,13 @@ test('full product browser keeps one authenticated session from login through re
 
   await page.goto('/research-center');
   await waitForFiniteRoute(page, '/research-center');
+  const researchWorkspace = page.getByRole('navigation', { name: '연구센터 작업 영역' });
+  await expect(researchWorkspace).toBeVisible();
+  await expect(page.locator('input[autocomplete="username"]')).toHaveCount(0);
   await page.reload();
   await waitForFiniteRoute(page, '/research-center');
-  await expect(page.getByTestId('membership-label')).toHaveCount(0);
+  await expect(researchWorkspace).toBeVisible();
+  await expect(page.locator('input[autocomplete="username"]')).toHaveCount(0);
 
   state.sessionExpired = true;
   await page.evaluate((storageKey) => {
@@ -374,6 +378,7 @@ test('full product browser keeps one authenticated session from login through re
     window.localStorage.setItem(storageKey, JSON.stringify(parsed));
   }, AUTH_STORAGE_KEY);
   await page.reload();
+  await expect(researchWorkspace).toHaveCount(0);
   await expect(page.locator('input[autocomplete="username"]')).toBeVisible({ timeout: 15_000 });
   await expect(page.locator('input[autocomplete="current-password"]')).toBeVisible();
 
@@ -402,6 +407,42 @@ test('full product browser keeps one authenticated session from login through re
     }, null, 2)),
     contentType: 'application/json',
   });
+});
+
+test('current deep product routes render their intended authenticated surfaces', async ({ page }) => {
+  installBrowserEvidence(page);
+  await seedAuthenticatedSession(page);
+  await installRuntime(page);
+
+  const routes: Array<{ path: string; assertSurface: () => Promise<void> }> = [
+    {
+      path: '/research-center',
+      assertSurface: async () => expect(page.getByRole('navigation', { name: '연구센터 작업 영역' })).toBeVisible(),
+    },
+    {
+      path: '/position',
+      assertSurface: async () => expect(page.locator('input[autocomplete="username"]')).toHaveCount(0),
+    },
+    {
+      path: '/strategy-promotion',
+      assertSurface: async () => expect(page.getByTestId('strategy-promotion-page')).toBeVisible(),
+    },
+    {
+      path: '/news-information',
+      assertSurface: async () => expect(page.getByRole('heading', { name: '테마', level: 1 })).toBeVisible(),
+    },
+    {
+      path: '/admin/ui-layouts',
+      assertSurface: async () => expect(page.getByTestId('ui-builder-layout-control')).toBeVisible(),
+    },
+  ];
+
+  for (const item of routes) {
+    await page.goto(item.path);
+    await waitForFiniteRoute(page, item.path);
+    await expect(page.locator('input[autocomplete="username"]'), `${item.path}: session unexpectedly fell back to login`).toHaveCount(0);
+    await item.assertSurface();
+  }
 });
 
 test('full product search fault matrix terminates safely across null timeout auth rate-limit server provider abort stale unmount and race cases', async ({ page }, testInfo) => {
