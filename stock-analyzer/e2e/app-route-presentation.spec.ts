@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { test, expect } from '@playwright/test';
 import {
   APP_NAVIGATION,
@@ -23,20 +24,36 @@ test('actual product routes keep the correct top-level navigation state', () => 
     APP_ROUTES.marketRankings,
     APP_ROUTES.marketBrowser,
     APP_ROUTES.recommendations,
+    APP_ROUTES.themes,
+    APP_ROUTES.newsInformation,
   ]) {
     expect(navigationGroupMatches(group('assets'), path), path).toBe(true);
   }
-  expect(navigationGroupMatches(group('technical'), APP_ROUTES.scanner)).toBe(true);
-  expect(navigationGroupMatches(group('technical'), APP_ROUTES.aiChart)).toBe(true);
-  expect(navigationGroupMatches(group('technical'), APP_ROUTES.autoTrading)).toBe(true);
-  expect(navigationGroupMatches(group('technical'), APP_ROUTES.backtests)).toBe(true);
-  expect(navigationGroupMatches(group('technical'), APP_ROUTES.paperTrading)).toBe(true);
-  expect(navigationGroupMatches(group('information'), APP_ROUTES.learn)).toBe(true);
-  expect(navigationGroupMatches(group('information'), APP_ROUTES.aiChat)).toBe(true);
-  expect(navigationGroupMatches(group('settings'), APP_ROUTES.admin)).toBe(true);
+  for (const path of [
+    APP_ROUTES.scanner,
+    APP_ROUTES.aiChart,
+    APP_ROUTES.autoTrading,
+    APP_ROUTES.backtests,
+    APP_ROUTES.paperTrading,
+    APP_ROUTES.strategyPromotion,
+  ]) {
+    expect(navigationGroupMatches(group('technical'), path), path).toBe(true);
+  }
+  for (const path of [
+    APP_ROUTES.learn,
+    APP_ROUTES.aiChat,
+    APP_ROUTES.researchCenter,
+    APP_ROUTES.portfolio,
+    APP_ROUTES.position,
+  ]) {
+    expect(navigationGroupMatches(group('information'), path), path).toBe(true);
+  }
+  for (const path of [APP_ROUTES.admin, APP_ROUTES.adminUiLayouts]) {
+    expect(navigationGroupMatches(group('settings'), path), path).toBe(true);
+  }
 });
 
-test('route presentation metadata follows final-main market ownership', () => {
+test('route presentation metadata follows final-main market and deep-route ownership', () => {
   const expectations = [
     [APP_ROUTES.stocksKr, '국내주식 정보', ['종목', '국내주식 정보']],
     [APP_ROUTES.stocksUs, '미국주식 정보', ['종목', '미국주식 정보']],
@@ -46,10 +63,28 @@ test('route presentation metadata follows final-main market ownership', () => {
     [APP_ROUTES.aiChart, 'AI 차트', ['기술', 'AI 차트']],
     [APP_ROUTES.autoTrading, '승인형 주문', ['기술', '승인형 주문']],
     [APP_ROUTES.marketOverview, '지수·시황', ['종목', '지수·시황']],
+    [APP_ROUTES.newsInformation, '테마', ['종목', '테마']],
+    [APP_ROUTES.strategyPromotion, 'Strategy Promotion Center', ['기술', 'Strategy Promotion Center']],
+    [APP_ROUTES.position, '포지션', ['정보', '포지션']],
+    [APP_ROUTES.adminUiLayouts, 'UI Builder Layout 통합', ['설정', 'UI Builder Layout 통합']],
   ] as const;
 
   for (const [path, title, breadcrumb] of expectations) {
     expect(resolveAppRoutePresentation(path), path).toMatchObject({ title, breadcrumb });
+  }
+});
+
+test('every static product Route in App.tsx has canonical presentation metadata', () => {
+  const appSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  const paths = [...appSource.matchAll(/<Route\s+path="(\/[^"?]+)"/g)]
+    .map((match) => match[1])
+    .filter((path): path is string => Boolean(path))
+    .filter((path) => !path.startsWith('/__'))
+    .filter((path) => !path.includes(':'));
+
+  expect(paths.length).toBeGreaterThan(20);
+  for (const path of paths) {
+    expect(resolveAppRoutePresentation(path), `missing route presentation: ${path}`).not.toBeNull();
   }
 });
 
