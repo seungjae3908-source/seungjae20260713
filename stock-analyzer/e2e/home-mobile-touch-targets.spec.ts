@@ -100,21 +100,50 @@ async function installApprovedRuntime(page: Page) {
   };
 }
 
+async function expectTouchTarget(
+  page: Page,
+  label: string,
+  width: number,
+  role: 'button' | 'tab' = 'button',
+) {
+  const control = page.getByRole(role, { name: label, exact: true });
+  await expect(control).toBeVisible();
+  const box = await control.boundingBox();
+  expect(box?.height ?? 0, `${width}px ${label}`).toBeGreaterThanOrEqual(44);
+  expect(box?.width ?? 0, `${width}px ${label}`).toBeGreaterThanOrEqual(28);
+}
+
 for (const width of [390, 1440]) {
   test(`home summary text actions keep 44px touch targets at ${width}px`, async ({ page }) => {
     const assertClean = await installApprovedRuntime(page);
     await page.setViewportSize({ width, height: width >= 1024 ? 900 : 844 });
     await page.goto('/home');
-    await expect(page.getByTestId('home-market-summary')).toBeVisible();
-    await expect(page.getByTestId('home-signal-summary')).toBeVisible();
-    await expect(page.getByTestId('home-watchlist-summary')).toBeVisible();
 
-    for (const label of ['시황 보기', 'Scanner 열기', '전체보기']) {
-      const button = page.getByRole('button', { name: label, exact: true });
-      await expect(button).toBeVisible();
-      const box = await button.boundingBox();
-      expect(box?.height ?? 0, `${width}px ${label}`).toBeGreaterThanOrEqual(44);
-      expect(box?.width ?? 0, `${width}px ${label}`).toBeGreaterThanOrEqual(28);
+    if (width < 1024) {
+      const tabs = page.getByTestId('home-mobile-tabs');
+      await expect(tabs).toBeVisible();
+      for (const label of ['시장', '신호', '관심', '자산']) {
+        await expectTouchTarget(page, label, width, 'tab');
+      }
+
+      await expect(page.getByTestId('home-market-summary')).toBeVisible();
+      await expectTouchTarget(page, '시황', width);
+
+      await page.getByRole('tab', { name: '신호', exact: true }).click();
+      await expect(page.getByTestId('home-signal-summary')).toBeVisible();
+      await expectTouchTarget(page, '검색기', width);
+
+      await page.getByRole('tab', { name: '관심', exact: true }).click();
+      await expect(page.getByTestId('home-watchlist-summary')).toBeVisible();
+      await expectTouchTarget(page, '전체', width);
+    } else {
+      await expect(page.getByTestId('home-mobile-tabs')).toHaveCount(0);
+      await expect(page.getByTestId('home-market-summary')).toBeVisible();
+      await expect(page.getByTestId('home-signal-summary')).toBeVisible();
+      await expect(page.getByTestId('home-watchlist-summary')).toBeVisible();
+      await expectTouchTarget(page, '시황', width);
+      await expectTouchTarget(page, '검색기', width);
+      await expectTouchTarget(page, '전체', width);
     }
 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);

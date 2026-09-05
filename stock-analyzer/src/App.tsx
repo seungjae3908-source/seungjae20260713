@@ -18,6 +18,7 @@ import { AutoBackupSync } from '@/lib/backup-sync';
 import { CapabilityGate } from '@/components/capability-gate';
 import { UiBuilderRuntimeBoundary } from '@/components/ui-builder-runtime-boundary';
 import { withActiveQuerySignal } from '@/lib/query-abort-signal';
+import { fetchUnifiedChartData } from '@/lib/unified-chart-data';
 import type { UiBuilderPageId } from '@/lib/ui-builder-full-layout';
 import type { MemberCapability } from '../../packages/member-access/src/index.js';
 import HomePage from '@/pages/home';
@@ -39,7 +40,7 @@ const MorePage = lazy(() => import('@/pages/more'));
 const PortfolioPage = lazy(() => import('@/pages/portfolio'));
 const PortfolioV2Page = lazy(() => import('@/pages/portfolio-v2'));
 const StrategyPromotionPage = lazy(() => import('@/pages/strategy-promotion'));
-const ResearchCenterPage = lazy(() => import('@/pages/research-center'));
+const ResearchCenterPage = lazy(() => import('@/pages/research-center-workspace'));
 const AccountPage = lazy(() => import('@/pages/account'));
 const AdminPage = lazy(() => import('@/pages/admin'));
 const InstallPage = lazy(() => import('@/pages/install'));
@@ -56,7 +57,20 @@ const Phase6PaperTradingE2EPage = lazy(() => import('@/pages/phase6-paper-tradin
 const Phase7JournalSyncE2EPage = lazy(() => import('@/pages/phase7-journal-sync-e2e'));
 const Phase8ReleaseCandidateE2EPage = lazy(() => import('@/pages/phase8-release-candidate-e2e'));
 const Phase9AiReviewE2EPage = lazy(() => import('@/pages/phase9-ai-review-e2e'));
-const AiChartPage = lazy(() => import('@/pages/ai-chart'));
+const directAiChartColdRoute = typeof window !== 'undefined' && window.location.pathname.endsWith('/ai-chart');
+const prewarmDefaultAiChartData = (() => {
+  if (!directAiChartColdRoute || window.location.search !== '') return false;
+  try {
+    return !window.localStorage.getItem('sa-analysis-selection-v1');
+  } catch {
+    return false;
+  }
+})();
+const loadAiChartPage = () => import('@/pages/ai-chart');
+if (directAiChartColdRoute) {
+  void loadAiChartPage();
+}
+const AiChartPage = lazy(loadAiChartPage);
 const AiChatPage = lazy(() => import('@/pages/ai-chat'));
 const TechnicalWorkspacePage = lazy(() => import('@/pages/technical-workspace'));
 const Phase12TradeAutomationE2EPage = lazy(() => import('@/pages/phase12-trade-automation-e2e'));
@@ -73,6 +87,16 @@ const phase12E2EEnabled = import.meta.env.VITE_PHASE12_E2E === 'true';
 const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: true, refetchOnReconnect: true, staleTime: 0, gcTime: 30 * 60 * 1000, retry: 2 } },
 });
+
+if (prewarmDefaultAiChartData) {
+  queueMicrotask(() => {
+    void queryClient.prefetchQuery({
+      queryKey: ['unified-chart-data', 'KR', '005930', '5m'],
+      queryFn: () => fetchUnifiedChartData({ market: 'KR', symbol: '005930', timeframe: '5m' }),
+      retry: false,
+    });
+  });
+}
 
 function installScannerAbortBridge(client: QueryClient) {
   const originalDefaultQueryOptions = client.defaultQueryOptions.bind(client);

@@ -135,6 +135,158 @@ emit_cycle forward
 emit_cycle fast-historical
 emit_cycle long-history
 
+forward_cycle="$STATE/latest/forward.json"
+paper_stdout_path=""
+if file_exists "$forward_cycle"; then
+  paper_stdout_path="$(read_file "$forward_cycle" | node -e '
+    const { isAbsolute, join, resolve, sep } = require("node:path");
+    let raw="";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", c => raw += c);
+    process.stdin.on("end", () => {
+      const stateRoot = resolve(process.argv[1]);
+      const runsRoot = `${join(stateRoot, "runs")}${sep}`;
+      const value = JSON.parse(raw);
+      const paper = (Array.isArray(value.results) ? value.results : [])
+        .find(row => row?.id === "paper-forward");
+      const candidate = String(paper?.stdoutPath ?? "");
+      if (!isAbsolute(candidate)) return;
+      const resolved = resolve(candidate);
+      if (!resolved.startsWith(runsRoot) || !resolved.endsWith(`${sep}paper-forward${sep}stdout.log`)) return;
+      process.stdout.write(resolved);
+    });
+  ' "$STATE")"
+fi
+
+if [[ -z "$paper_stdout_path" ]]; then
+  echo 'PAPER_NATURAL present=false blocker=PAPER_FORWARD_STDOUT_PATH_UNAVAILABLE'
+elif ! file_exists "$paper_stdout_path"; then
+  echo 'PAPER_NATURAL present=false blocker=PAPER_FORWARD_STDOUT_MISSING'
+else
+  read_file "$paper_stdout_path" | node -e '
+    const { createHash } = require("node:crypto");
+    let raw="";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", c => raw += c);
+    process.stdin.on("end", () => {
+      const lines = raw.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+      let value = null;
+      for (let index = lines.length - 1; index >= 0; index -= 1) {
+        try {
+          const candidate = JSON.parse(lines[index]);
+          if (candidate?.schemaVersion === "paper-forward-schedule-cli-v5") {
+            value = candidate;
+            break;
+          }
+        } catch {}
+      }
+      if (value == null) {
+        console.log("PAPER_NATURAL present=false blocker=PAPER_FORWARD_CLI_V5_RESULT_UNAVAILABLE");
+        return;
+      }
+      const clean = x => String(x ?? "null").replace(/[\t\r\n ]/g, "_").slice(0, 300);
+      const datasetIdentity = typeof value.naturalDatasetIdentity === "string"
+        && value.naturalDatasetIdentity.length <= 2048
+        ? value.naturalDatasetIdentity
+        : null;
+      const boundedObservationIds = input => {
+        if (!Array.isArray(input)) return undefined;
+        if (input.length > 10) return ["OBSERVATION_IDS_LIMIT_EXCEEDED", "OBSERVATION_IDS_LIMIT_EXCEEDED"];
+        return input.map(id => typeof id === "string" ? id.slice(0, 128) : id);
+      };
+      const boundedEvidence = evidence => ({
+        strategySha: evidence?.strategySha,
+        runtimeSha: evidence?.runtimeSha,
+        datasetIdentity: evidence?.datasetIdentity,
+        observationIds: boundedObservationIds(evidence?.observationIds),
+        synthetic: evidence?.synthetic,
+        testFixture: evidence?.testFixture,
+        historical: evidence?.historical,
+        replay: evidence?.replay,
+        duplicateReplay: evidence?.duplicateReplay,
+        manualExpiry: evidence?.manualExpiry,
+        futureTimeCompression: evidence?.futureTimeCompression,
+        clockAdvanced: evidence?.clockAdvanced,
+      });
+      const measurements = Array.isArray(value.naturalFunnelMeasurements)
+        ? value.naturalFunnelMeasurements.map(measurement => ({
+            stage: measurement?.stage,
+            name: measurement?.name,
+            instrumentationKey: measurement?.instrumentationKey,
+            field: measurement?.field,
+            status: measurement?.status,
+            count: measurement?.count,
+            ...boundedEvidence(measurement),
+          }))
+        : [];
+      const rawReasons = value.authoritativeFirstZeroReasonEvidenceByStage;
+      const reasons = rawReasons && typeof rawReasons === "object" && !Array.isArray(rawReasons)
+        ? Object.fromEntries(Object.entries(rawReasons).slice(0, 12).map(([stage, evidence]) => [stage, {
+            reasonCode: evidence?.reasonCode,
+            authoritative: evidence?.authoritative,
+            freshness: evidence?.freshness,
+            ...boundedEvidence(evidence),
+          }]))
+        : {};
+      const selected = {
+        schemaVersion: value.schemaVersion,
+        status: value.status ?? null,
+        cycleId: value.cycleId ?? null,
+        naturalScheduleInvocation: value.naturalScheduleInvocation === true,
+        naturalStrategySha: value.naturalStrategySha ?? null,
+        naturalRuntimeSha: value.naturalRuntimeSha ?? null,
+        naturalDatasetIdentity: datasetIdentity,
+        naturalFunnelMeasurements: measurements,
+        authoritativeFirstZeroReasonEvidenceByStage: reasons,
+        externalFinancialMutationAllowed: value.externalFinancialMutationAllowed,
+        privateRequestCount: value.privateRequestCount,
+        financialMutationCount: value.financialMutationCount,
+        orderCount: value.orderCount,
+        liveTrading: value.liveTrading,
+        orderAuthority: value.orderAuthority,
+      };
+      const serialized = JSON.stringify(selected);
+      if (Buffer.byteLength(serialized, "utf8") > 24 * 1024) {
+        console.log("PAPER_NATURAL present=false blocker=PAPER_FORWARD_CLI_V5_PAYLOAD_TOO_LARGE");
+        return;
+      }
+      const payload = Buffer.from(serialized, "utf8").toString("base64url");
+      const datasetIdentitySha256 = datasetIdentity == null
+        ? "null"
+        : createHash("sha256").update(datasetIdentity).digest("hex");
+      console.log([
+        "PAPER_NATURAL",
+        "present=true",
+        `schema_version=${clean(value.schemaVersion)}`,
+        `status=${clean(value.status)}`,
+        `cycle_id=${clean(value.cycleId)}`,
+        `natural_schedule_invocation=${clean(value.naturalScheduleInvocation === true)}`,
+        `strategy_sha=${clean(value.naturalStrategySha)}`,
+        `runtime_sha=${clean(value.naturalRuntimeSha)}`,
+        `dataset_identity_sha256=${clean(datasetIdentitySha256)}`,
+        `payload_base64=${payload}`,
+      ].join(" "));
+      for (const measurement of selected.naturalFunnelMeasurements) {
+        console.log([
+          "PAPER_NATURAL_STAGE",
+          `stage=${clean(measurement?.stage ?? measurement?.name)}`,
+          `status=${clean(measurement?.status)}`,
+          `count=${clean(measurement?.count)}`,
+        ].join(" "));
+      }
+      for (const [stage, evidence] of Object.entries(selected.authoritativeFirstZeroReasonEvidenceByStage)) {
+        console.log([
+          "PAPER_NATURAL_REASON",
+          `stage=${clean(stage)}`,
+          `reason_code=${clean(evidence?.reasonCode)}`,
+          `authoritative=${clean(evidence?.authoritative === true)}`,
+          `freshness=${clean(evidence?.freshness)}`,
+        ].join(" "));
+      }
+    });
+  '
+fi
+
 paper_status="$STATE/forward/paper/status/runtime-status.json"
 if file_exists "$paper_status"; then
   read_file "$paper_status" | node -e '

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { resolveCanonicalPaperSimulationAuthority } from "../src/canonical-paper-simulation-authority-v1.js";
 import {
   meaningfulSearchPaperCandidates,
   prepareMeaningfulSearchPaperCandidate,
@@ -7,6 +8,7 @@ import {
 
 const T0 = 1_800_000_000_000;
 const SHA = "d".repeat(40);
+const EVIDENCE_DIGEST = "a".repeat(64);
 const identity = Object.freeze({
   strategyId: "direction-contract-v1",
   strategyVersion: "v1",
@@ -16,17 +18,103 @@ const identity = Object.freeze({
   executionPolicyVersion: "execution-v1",
 });
 
-function candidate(market, direction, { positionSide = "FLAT", lifecycle = "ACTIVE", expiresAtMs, reduceOnly = false } = {}) {
+const SYMBOL_BY_MARKET = Object.freeze({
+  KR_STOCK: "005930",
+  US_STOCK: "AAPL",
+  CRYPTO_SPOT: "KRW-BTC",
+  CRYPTO_FUTURES: "BTCUSDT",
+});
+const PROVIDER_BY_MARKET = Object.freeze({
+  KR_STOCK: "toss",
+  US_STOCK: "toss",
+  CRYPTO_SPOT: "upbit",
+  CRYPTO_FUTURES: "bitget",
+});
+
+function costPolicy(market) {
+  return {
+    version: "cost-v1",
+    commissionRate: 0.0005,
+    taxRate: market === "KR_STOCK" || market === "US_STOCK" ? 0.001 : 0,
+    spreadRate: 0.0004,
+    slippageRate: 0.0005,
+    latencyRate: 0.0001,
+    liquidityImpactRate: 0.0002,
+    partialFillImpactRate: 0.0001,
+    fundingRate: market === "CRYPTO_FUTURES" ? 0.0001 : 0,
+  };
+}
+
+function dataEvidence(market) {
+  const common = {
+    provider: PROVIDER_BY_MARKET[market],
+    provenance: `${market}:public-direction-fixture`,
+    publicOnly: true,
+    dataQuality: "READY",
+    asOfMs: T0 - 1_000,
+    maxAgeMs: 5_000,
+    tickSize: market === "US_STOCK" ? 0.01 : market === "CRYPTO_FUTURES" ? 0.1 : 1,
+    barProxyRealtimeAllowed: false,
+    quoteEvidence: {
+      available: true,
+      bid: 99,
+      ask: 101,
+      asOfMs: T0 - 500,
+      maxAgeMs: 5_000,
+    },
+  };
+  if (market === "KR_STOCK") {
+    return {
+      ...common,
+      taxPolicyKnown: true,
+      session: { version: "kr-session-v1", status: "OPEN", kind: "REGULAR" },
+      volatilityInterruptionKnown: true,
+      volatilityInterruptionActive: false,
+    };
+  }
+  if (market === "US_STOCK") {
+    return {
+      ...common,
+      taxPolicyKnown: true,
+      session: { version: "us-session-v1", status: "OPEN", kind: "REGULAR" },
+    };
+  }
+  if (market === "CRYPTO_SPOT") {
+    return {
+      ...common,
+      marketStatus: "TRADABLE",
+      minOrderNotional: 5,
+    };
+  }
+  return {
+    ...common,
+    contractStatus: "TRADABLE",
+    minQty: 0.001,
+    qtyStep: 0.001,
+    markPrice: 100,
+    indexPrice: 100.2,
+    fundingRate: 0.0001,
+    openInterest: 1_000_000,
+    leverage: 3,
+    maxLeverage: 20,
+    marginMode: "ISOLATED",
+    liquidationDistancePct: 12,
+  };
+}
+
+function candidate(market, direction, { positionSide = "FLAT", lifecycle = "ACTIVE", expiresAtMs = T0 + 60_000, reduceOnly = false } = {}) {
   const signalId = `${market}:${direction}:${positionSide}`;
+  const symbol = SYMBOL_BY_MARKET[market] ?? `${market}:TEST`;
   const signal = {
     signalId,
     market,
-    symbol: `${market}:TEST`,
+    symbol,
     timestampMs: T0 - 10,
     style: "SWING",
     timeframe: "1h",
     horizon: 4,
     direction,
+    signalDirection: direction,
     positionSide,
     lifecycle,
     expiresAtMs,
@@ -36,7 +124,7 @@ function candidate(market, direction, { positionSide = "FLAT", lifecycle = "ACTI
       signalId,
       timestamp: new Date(T0 - 10).toISOString(),
       market,
-      symbol: `${market}:TEST`,
+      symbol,
       strategyHorizon: "SWING",
       direction,
       immutable: true,
@@ -46,15 +134,49 @@ function candidate(market, direction, { positionSide = "FLAT", lifecycle = "ACTI
   return {
     signal,
     positionSide,
-    riskEvidence: { status: "APPROVED", evaluatedAtMs: T0, simulatedOnly: true },
-    execution: { dataEvidence: { dataQuality: "READY", asOfMs: T0 - 1 } },
-    order: { type: "MARKET", quantity: 1, direction },
+    riskEvidence: {
+      status: "APPROVED",
+      source: "TRADING_RISK_ENGINE",
+      evaluatedAtMs: T0,
+      simulatedOnly: true,
+      allowed: true,
+      blockCodes: [],
+      recommendedQuantity: 1,
+      executionAuthority: "NONE",
+    },
+    execution: {
+      dataEvidence: dataEvidence(market),
+      costPolicy: costPolicy(market),
+      strategyIdentity: identity,
+    },
+    admissionEvidence: {
+      schemaVersion: "scanner-paper-admission-evidence-bundle-v1",
+      evidenceDigest: EVIDENCE_DIGEST,
+      crossRuntimeVerified: true,
+    },
     executionAuthority: "NONE",
     simulatedOnly: true,
     liveOrderAllowed: false,
     privateTradingApiAllowed: false,
     orderSubmitted: false,
     exchangeRequestSent: false,
+    productionMutationAllowed: false,
+  };
+}
+
+function withCanonicalSimulationAuthority(rawCandidate) {
+  const simulation = resolveCanonicalPaperSimulationAuthority({ candidate: rawCandidate, nowMs: T0 });
+  assert.equal(simulation.status, "READY", simulation.blockers?.join(",") ?? "simulation authority blocked");
+  assert.ok(simulation.execution);
+  assert.ok(simulation.order);
+  assert.ok(simulation.quote);
+  return {
+    ...rawCandidate,
+    execution: simulation.execution,
+    order: simulation.order,
+    quote: simulation.quote,
+    sampleExecutionReady: true,
+    sampleExecutionBlockers: [],
   };
 }
 
@@ -71,6 +193,11 @@ const profitEvidence = Object.freeze({
 
 function eligible(market, direction, options) {
   return { searchOutcome: "TRADE_CANDIDATES", candidate: candidate(market, direction, options), profitGate, profitEvidence };
+}
+
+function simulationEligible(market, direction, options) {
+  const row = eligible(market, direction, options);
+  return { ...row, candidate: withCanonicalSimulationAuthority(row.candidate) };
 }
 
 test("cash SELL while FLAT is display-only bearish signal and creates zero Paper entry", () => {
@@ -102,8 +229,8 @@ test("cash reduce-only SELL with LONG position remains REDUCE and never opens sh
   assert.equal(row.submitToPaper, false);
 });
 
-test("futures SHORT from FLAT remains a profit-gated Paper entry", () => {
-  const row = prepareMeaningfulSearchPaperCandidate(eligible("CRYPTO_FUTURES", "SHORT", { positionSide: "FLAT" }));
+test("futures SHORT from FLAT remains a profit-gated Paper entry with canonical simulation authority", () => {
+  const row = prepareMeaningfulSearchPaperCandidate(simulationEligible("CRYPTO_FUTURES", "SHORT", { positionSide: "FLAT" }));
   assert.equal(row.status, "PAPER_ELIGIBLE");
   assert.equal(row.submitToPaper, true);
   assert.equal(row.candidate.signalDirection, "SHORT");
@@ -139,10 +266,10 @@ test("expired signal is never eligible for a new Paper entry", () => {
 
 test("aggregation keeps entry candidates and exit signals in separate collections", () => {
   const rows = meaningfulSearchPaperCandidates([
-    eligible("KR_STOCK", "BUY", { positionSide: "FLAT" }),
+    simulationEligible("KR_STOCK", "BUY", { positionSide: "FLAT" }),
     eligible("US_STOCK", "SELL", { positionSide: "LONG" }),
     eligible("CRYPTO_SPOT", "SELL", { positionSide: "FLAT" }),
-    eligible("CRYPTO_FUTURES", "SHORT", { positionSide: "FLAT" }),
+    simulationEligible("CRYPTO_FUTURES", "SHORT", { positionSide: "FLAT" }),
   ]);
   assert.equal(rows.candidates.length, 2);
   assert.equal(rows.exitSignals.length, 1);
