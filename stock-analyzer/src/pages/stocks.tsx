@@ -34,7 +34,7 @@ interface RecoRow {
   category: 'undervalued' | 'breakout';
   categoryLabel: string;
   price: number;
-  changePercent: number;
+  changePercent: number | null;
   reasons: string[];
   score: number;
 }
@@ -45,6 +45,15 @@ interface RecoResponse {
   market: 'KR' | 'US';
   rows: RecoRow[];
   error?: string;
+}
+
+function finitePercent(value: unknown): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value !== 'string') return null;
+  const normalized = value.replace('%', '').replace(/,/g, '').trim();
+  if (!normalized) return null;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 export default function StocksPage() {
@@ -252,12 +261,12 @@ function EmptyBox({ children }: { children: React.ReactNode }) {
 
 // ── 공통 행 디자인 (기존 행 클래스 재사용) ──────────────────────────
 function StockRow({ stock, onClick }: { stock: AnyObj; onClick: () => void }) {
-  const change = Number(stock.changePercent);
+  const change = finitePercent(stock.changePercent);
   return (
     <button type="button" onClick={onClick} className="flex w-full items-center gap-3 rounded-2xl border border-card-border bg-card p-3 text-left shadow-sm">
       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10"><Star className="h-4 w-4 text-primary" /></div>
       <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="truncate text-sm font-black">{displayStockName(String(stock.ticker), String(stock.name ?? ''), String(stock.market))}</p><span className="rounded-full bg-secondary px-2 py-0.5 text-[9px] font-black text-muted-foreground">{stock.market}</span></div><p className="mt-0.5 text-[11px] font-bold text-muted-foreground">{stock.ticker}</p></div>
-      <div className="text-right"><p className="text-sm font-black">{formatAppPrice(stock.price, String(stock.currency))}</p><p className={cn('mt-0.5 text-[11px] font-black', change > 0 ? 'text-positive' : change < 0 ? 'text-destructive' : 'text-muted-foreground')}>{Number.isFinite(change) ? formatAppPercent(change) : '데이터 없음'}</p></div>
+      <div className="text-right"><p className="text-sm font-black">{formatAppPrice(stock.price, String(stock.currency))}</p><p className={cn('mt-0.5 text-[11px] font-black', change !== null && change > 0 ? 'text-positive' : change !== null && change < 0 ? 'text-destructive' : 'text-muted-foreground')}>{change === null ? '데이터 없음' : formatAppPercent(change)}</p></div>
     </button>
   );
 }
@@ -355,12 +364,12 @@ function StockCategoryResults({
 }
 
 function StockRankRow({ rank, stock, onClick }: { rank: number; stock: AnyObj; onClick: () => void }) {
-  const change = Number(stock.changePercent);
+  const change = finitePercent(stock.changePercent);
   return (
     <button type="button" onClick={onClick} className="flex w-full items-center gap-3 rounded-2xl border border-card-border bg-card p-3 text-left shadow-sm">
       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-sm font-black text-primary">{rank}</div>
       <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="truncate text-sm font-black">{displayStockName(String(stock.ticker), String(stock.name ?? ''), String(stock.market))}</p><span className="rounded-full bg-secondary px-2 py-0.5 text-[9px] font-black text-muted-foreground">{stock.market}</span></div><p className="mt-0.5 text-[11px] font-bold text-muted-foreground">{stock.ticker}</p></div>
-      <div className="text-right"><p className="text-sm font-black">{formatAppPrice(stock.price, String(stock.currency))}</p><p className={cn('mt-0.5 text-[11px] font-black', change > 0 ? 'text-positive' : change < 0 ? 'text-destructive' : 'text-muted-foreground')}>{Number.isFinite(change) ? formatAppPercent(change) : '데이터 없음'}</p></div>
+      <div className="text-right"><p className="text-sm font-black">{formatAppPrice(stock.price, String(stock.currency))}</p><p className={cn('mt-0.5 text-[11px] font-black', change !== null && change > 0 ? 'text-positive' : change !== null && change < 0 ? 'text-destructive' : 'text-muted-foreground')}>{change === null ? '데이터 없음' : formatAppPercent(change)}</p></div>
     </button>
   );
 }
@@ -371,14 +380,16 @@ function RecoGroup({ title, rows, onOpenStock }: { title: string; rows: RecoRow[
     <div className="space-y-2">
       <h3 className="px-1 text-sm font-black">{title}</h3>
       <div className="space-y-2">
-        {rows.map((row) => (
+        {rows.map((row) => {
+          const change = finitePercent(row.changePercent);
+          return (
           <button key={`${row.market}:${row.ticker}`} type="button" onClick={() => onOpenStock(row.ticker)} className="w-full rounded-2xl border border-card-border bg-card p-3 text-left shadow-sm">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2"><p className="truncate text-sm font-black">{displayStockName(row.ticker, row.name, row.market)}</p><span className="rounded-full bg-secondary px-2 py-0.5 text-[9px] font-black text-muted-foreground">{row.market}</span></div>
-                <p className="mt-0.5 text-[11px] font-bold text-muted-foreground">{row.ticker} · 상승 가능성 {row.score}점</p>
+                <p className="mt-0.5 text-[11px] font-bold text-muted-foreground">{row.ticker} · 규칙 점수 {row.score}점</p>
               </div>
-              <div className="shrink-0 text-right"><p className="text-sm font-black">{formatAppPrice(row.price, row.currency)}</p><p className={cn('mt-0.5 text-[11px] font-black', row.changePercent > 0 ? 'text-positive' : row.changePercent < 0 ? 'text-destructive' : 'text-muted-foreground')}>{formatAppPercent(row.changePercent)}</p></div>
+              <div className="shrink-0 text-right"><p className="text-sm font-black">{formatAppPrice(row.price, row.currency)}</p><p className={cn('mt-0.5 text-[11px] font-black', change !== null && change > 0 ? 'text-positive' : change !== null && change < 0 ? 'text-destructive' : 'text-muted-foreground')}>{change === null ? '데이터 없음' : formatAppPercent(change)}</p></div>
             </div>
             {row.reasons.length > 0 && (
               <ul className="mt-2 list-disc space-y-0.5 pl-4 text-[11px] font-bold text-foreground/90">
@@ -386,7 +397,8 @@ function RecoGroup({ title, rows, onOpenStock }: { title: string; rows: RecoRow[
               </ul>
             )}
           </button>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
