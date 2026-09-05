@@ -1,0 +1,33 @@
+[Unit]
+Description=Investment Research Production free AI review scan
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=investment-research
+Group=investment-research
+WorkingDirectory=/opt/investment-research/current
+EnvironmentFile=/etc/investment-research/research-production.env
+EnvironmentFile=-/etc/investment-research/research-ai.env
+ExecStart=/usr/bin/env node research-production/bin/research-ai-review.mjs run
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/investment-research-production
+RestrictSUIDSGID=true
+LockPersonality=true
+UMask=0077
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+TimeoutStartSec=5m
+
+[Install]
+WantedBy=multi-user.target
