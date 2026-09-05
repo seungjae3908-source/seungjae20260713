@@ -2,7 +2,8 @@ import type { Page, Route } from '@playwright/test';
 
 const USER_ID = '00000000-0000-4000-8000-000000000911';
 const NOW = '2026-09-05T10:00:00.000Z';
-const NOW_SECONDS = Math.floor(Date.parse(NOW) / 1000);
+const TEST_SESSION_EXPIRES_AT = 4_102_444_800;
+const TEST_ACCESS_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJhdXRoZW50aWNhdGVkIiwiZXhwIjo0MTAyNDQ0ODAwLCJyb2xlIjoiYXV0aGVudGljYXRlZCIsInN1YiI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDkxMSJ9.ZnVsbC1wcm9kdWN0LWUyZS1zaWduYXR1cmU';
 
 const USER = {
   id: USER_ID,
@@ -34,10 +35,10 @@ const PROFILE = {
 };
 
 const SESSION = {
-  access_token: 'FULL_PRODUCT_E2E_ACCESS_TOKEN',
+  access_token: TEST_ACCESS_TOKEN,
   token_type: 'bearer',
-  expires_in: 3600,
-  expires_at: NOW_SECONDS + 3600,
+  expires_in: 86_400,
+  expires_at: TEST_SESSION_EXPIRES_AT,
   refresh_token: 'FULL_PRODUCT_E2E_REFRESH_TOKEN',
   user: USER,
 };
@@ -175,7 +176,7 @@ export async function installFullProductFixtures(page: Page): Promise<FullProduc
     if (path.endsWith('/auth/v1/user')) {
       return sessionExpired
         ? json(route, { message: 'JWT expired' }, 401)
-        : json(route, { user: USER });
+        : json(route, USER);
     }
     if (path.endsWith('/rest/v1/profiles')) {
       return json(route, PROFILE, 200, { 'content-range': '0-0/1' });
