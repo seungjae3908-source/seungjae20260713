@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import https from 'node:https';
 import path from 'node:path';
 import type { CanonicalAccountSnapshot } from './account-readonly.contract';
 import type {
@@ -11,10 +12,17 @@ const EVIDENCE_USER_ID = 'staging-account-readonly-no-db-evidence';
 const EVIDENCE_ACCESS_TOKEN = 'NO_DB_EVIDENCE_SCOPE_ONLY';
 const TOSS_API_ORIGIN = 'https://openapi.tossinvest.com';
 const TOSS_OAUTH_ORIGIN = TOSS_API_ORIGIN;
+const UPBIT_API_ORIGIN = 'https://api.upbit.com';
+const BITGET_API_ORIGIN = 'https://api.bitget.com';
 const READONLY_PROVIDER_ORIGINS = new Set([
   TOSS_API_ORIGIN,
-  'https://api.upbit.com',
-  'https://api.bitget.com',
+  UPBIT_API_ORIGIN,
+  BITGET_API_ORIGIN,
+]);
+const PROVIDER_TUNNEL_PORTS = new Map<string, number>([
+  [TOSS_API_ORIGIN, 18443],
+  [UPBIT_API_ORIGIN, 18444],
+  [BITGET_API_ORIGIN, 18445],
 ]);
 
 type CredentialMap = Record<ReadonlyCredentialProvider, Record<string, string>>;
@@ -89,19 +97,94 @@ function createReadOnlyMemoryRepository(
   };
 }
 
+function requestBody(value: BodyInit | null | undefined): Buffer | string | undefined {
+  if (value == null) return undefined;
+  if (typeof value === 'string') return value;
+  if (value instanceof URLSearchParams) return value.toString();
+  if (value instanceof ArrayBuffer) return Buffer.from(value);
+  if (ArrayBuffer.isView(value)) {
+    return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+  }
+  throw new Error('EVIDENCE_TUNNEL_BODY_UNSUPPORTED');
+}
+
+function responseHeaders(headers: https.IncomingHttpHeaders) {
+  const result = new Headers();
+  for (const [name, value] of Object.entries(headers)) {
+    if (Array.isArray(value)) {
+      for (const child of value) result.append(name, child);
+    } else if (value != null) {
+      result.append(name, String(value));
+    }
+  }
+  return result;
+}
+
+function createTunneledProviderFetch(): typeof fetch {
+  return async (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    const tunnelPort = PROVIDER_TUNNEL_PORTS.get(url.origin);
+    if (!tunnelPort) throw new Error('EVIDENCE_TUNNEL_ORIGIN_REJECTED');
+    if (input instanceof Request && input.body !== null && init?.body == null) {
+      throw new Error('EVIDENCE_TUNNEL_REQUEST_BODY_UNSUPPORTED');
+    }
+
+    const method = String(init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
+    const headers = new Headers(input instanceof Request ? input.headers : undefined);
+    if (init?.headers) {
+      new Headers(init.headers).forEach((value, name) => headers.set(name, value));
+    }
+    headers.set('Host', url.host);
+    const body = requestBody(init?.body);
+
+    return await new Promise<Response>((resolve, reject) => {
+      const request = https.request({
+        hostname: '127.0.0.1',
+        port: tunnelPort,
+        servername: url.hostname,
+        method,
+        path: `${url.pathname}${url.search}`,
+        headers: Object.fromEntries(headers.entries()),
+        signal: init?.signal,
+        rejectUnauthorized: true,
+      }, (response) => {
+        const status = response.statusCode ?? 500;
+        if (status >= 300 && status < 400) {
+          response.resume();
+          reject(new Error('EVIDENCE_PROVIDER_REDIRECT_REJECTED'));
+          return;
+        }
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk: Buffer | string) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+        response.on('end', () => {
+          resolve(new Response(Buffer.concat(chunks), {
+            status,
+            headers: responseHeaders(response.headers),
+          }));
+        });
+        response.on('error', reject);
+      });
+      request.on('error', reject);
+      if (body !== undefined) request.write(body);
+      request.end();
+    });
+  };
+}
+
 function createAuditedFetch(audit: RequestAudit): typeof fetch {
+  const tunneledFetch = createTunneledProviderFetch();
   return async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     const method = String(init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
 
     if (url.origin === TOSS_OAUTH_ORIGIN && url.pathname === '/oauth2/token' && method === 'POST') {
       audit.oauthTokenPosts += 1;
-      return fetch(input, init);
+      return tunneledFetch(input, init);
     }
 
     if (READONLY_PROVIDER_ORIGINS.has(url.origin) && method === 'GET') {
       audit.readonlyGets += 1;
-      return fetch(input, init);
+      return tunneledFetch(input, init);
     }
 
     audit.rejectedRequests += 1;
@@ -185,6 +268,9 @@ async function main() {
     schemaVersion: 1,
     targetSha,
     mode: 'CANONICAL_ACCOUNT_RUNTIME_NO_DB',
+    providerTransport: 'STAGING_SSH_TCP_TUNNEL',
+    tlsTerminatedOnEvidenceRunner: true,
+    providerSecretsSentToStagingHost: false,
     databaseAccessRequired: false,
     credentialSource: 'ACTIONS_SECRET_MEMORY_ONLY',
     providerResults: [toss, upbit, bitget].map(sanitizedProviderSummary),
@@ -212,6 +298,7 @@ async function main() {
   console.log(JSON.stringify({
     targetSha,
     mode: evidence.mode,
+    providerTransport: evidence.providerTransport,
     providersConnected: 3,
     databaseAccessRequired: false,
     persistentRowsCreated: 0,
