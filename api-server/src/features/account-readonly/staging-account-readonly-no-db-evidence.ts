@@ -131,12 +131,15 @@ function createTunneledProviderFetch(): typeof fetch {
     }
 
     const method = String(init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
+    const body = requestBody(init?.body);
     const headers = new Headers(input instanceof Request ? input.headers : undefined);
     if (init?.headers) {
       new Headers(init.headers).forEach((value, name) => headers.set(name, value));
     }
     headers.set('Host', url.host);
-    const body = requestBody(init?.body);
+    if (body !== undefined && !headers.has('Content-Length') && !headers.has('Transfer-Encoding')) {
+      headers.set('Content-Length', String(Buffer.byteLength(body)));
+    }
 
     return await new Promise<Response>((resolve, reject) => {
       const request = https.request({
@@ -271,7 +274,8 @@ async function main() {
     mode: 'CANONICAL_ACCOUNT_RUNTIME_NO_DB',
     providerTransport: 'STAGING_SSH_TCP_TUNNEL',
     tlsTerminatedOnEvidenceRunner: true,
-    providerSecretsSentToStagingHost: false,
+    providerTlsPayloadTraversesStagingHost: true,
+    providerSecretPlaintextExposedToStagingHost: false,
     databaseAccessRequired: false,
     credentialSource: 'ACTIONS_SECRET_MEMORY_ONLY',
     providerResults: [toss, upbit, bitget].map(sanitizedProviderSummary),
