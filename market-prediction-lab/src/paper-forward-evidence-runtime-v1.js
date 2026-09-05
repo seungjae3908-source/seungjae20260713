@@ -5,26 +5,28 @@ import { BitgetPublicClient } from "./bitget-public-client.js";
 import { collectBitgetCandles } from "./bitget-candle-collector.js";
 import { RECURRING_PAPER_MARKETS } from "./recurring-paper-loop-v1.js";
 import { runScheduledPaperCycle } from "./paper-scheduler-driver-v1.js";
+import { PAPER_FORWARD_PROVIDER_AUTHORITY } from "./paper-public-provider-authority-v1.js";
+export { PAPER_FORWARD_PROVIDER_AUTHORITY } from "./paper-public-provider-authority-v1.js";
 import {
   createEthV6PaperForwardSource,
   wrapPaperForwardProviderWithEthV6Source,
 } from "./eth-v6-paper-forward-source-v1.js";
+import { wrapPaperForwardProviderWithMeaningfulSearch } from "./meaningful-search-scheduled-paper-provider-v1.js";
+import {
+  createNaturalPaperPublicPositionObservationProducer,
+  wrapPaperForwardProviderWithNaturalPositionObservations,
+} from "./natural-paper-public-position-observation-v1.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
 const TRUTHY = new Set(["1", "true", "yes", "on", "enabled"]);
 
-export const PAPER_FORWARD_PROVIDER_AUTHORITY = Object.freeze({
-  KR_STOCK: Object.freeze({ provider: "yahoo-public-chart", symbol: "005930", timeframe: "1d", intervalMs: DAY_MS, closeOffsetMs: 6.5 * 60 * 60 * 1000, maxAgeMs: 4 * DAY_MS }),
-  US_STOCK: Object.freeze({ provider: "yahoo-public-chart", symbol: "SPY", timeframe: "1d", intervalMs: DAY_MS, closeOffsetMs: 6.5 * 60 * 60 * 1000, maxAgeMs: 4 * DAY_MS }),
-  CRYPTO_SPOT: Object.freeze({ provider: "upbit-public-candles", symbol: "BTC", timeframe: "4h", intervalMs: FOUR_HOURS_MS, maxAgeMs: 8 * 60 * 60 * 1000 }),
-  CRYPTO_FUTURES: Object.freeze({ provider: "bitget-public-v2", symbol: "BTCUSDT", timeframe: "4h", intervalMs: FOUR_HOURS_MS, maxAgeMs: 8 * 60 * 60 * 1000 }),
-});
-
 export const PAPER_FORWARD_RUNTIME_CONTRACT = Object.freeze({
   version: "paper-forward-evidence-runtime-v1",
   publicDataOnly: true,
   canonicalPaperLoopOnly: true,
+  canonicalAdmissionCutover: true,
+  legacyDirectEntryAllowed: false,
   scheduleActive: false,
   privateAccountAccess: false,
   liveTrading: false,
@@ -137,6 +139,131 @@ function maybeAttachResearchNaturalSource({ provider, env, clock, bitgetClient, 
   return wrapPaperForwardProviderWithEthV6Source({ provider, source });
 }
 
+function stripLegacyDirectEntryCandidates(provider) {
+  if (!provider || typeof provider.collectPublicEvidence !== "function") throw new TypeError("base Paper provider is required");
+  return Object.freeze({
+    async collectPublicEvidence(input) {
+      const evidence = await provider.collectPublicEvidence(input);
+      if (evidence?.status !== "READY") return evidence;
+      const legacyCandidates = Array.isArray(evidence.candidates) ? evidence.candidates : [];
+      const exits = Array.isArray(evidence.exits) ? evidence.exits : [];
+      return Object.freeze({
+        ...evidence,
+        candidates: Object.freeze([]),
+        exits: Object.freeze([]),
+        legacyNaturalSettlementExits: Object.freeze(exits.map((row) => Object.freeze(structuredClone(row)))),
+        canonicalAdmissionCutover: Object.freeze({
+          version: "recurring-canonical-admission-cutover-v1",
+          status: legacyCandidates.length > 0 ? "LEGACY_ENTRY_BLOCKED" : "READY",
+          blockedLegacyEntryCount: legacyCandidates.length,
+          preservedExitCount: exits.length,
+          blocker: legacyCandidates.length > 0 ? "AUTHORITATIVE_ADMISSION_BUNDLE_REQUIRED" : null,
+          executionAuthority: "NONE",
+          simulatedOnly: true,
+          liveOrderAllowed: false,
+          privateTradingApiAllowed: false,
+          orderSubmitted: false,
+          exchangeRequestSent: false,
+        }),
+      });
+    },
+  });
+}
+
+function restoreLegacyNaturalSettlementExits(provider) {
+  if (!provider || typeof provider.collectPublicEvidence !== "function") throw new TypeError("canonical Paper provider is required");
+  return Object.freeze({
+    async collectPublicEvidence(input) {
+      const evidence = await provider.collectPublicEvidence(input);
+      if (evidence?.status !== "READY") return evidence;
+      const legacy = Array.isArray(evidence.legacyNaturalSettlementExits) ? evidence.legacyNaturalSettlementExits : [];
+      const canonical = Array.isArray(evidence.exits) ? evidence.exits : [];
+      const { legacyNaturalSettlementExits: _removed, ...rest } = evidence;
+      return Object.freeze({
+        ...rest,
+        exits: Object.freeze([
+          ...legacy.map((row) => Object.freeze(structuredClone(row))),
+          ...canonical.map((row) => Object.freeze(structuredClone(row))),
+        ]),
+      });
+    },
+  });
+}
+
+function createFailClosedPaperRuntimeForMarket(reason = "AUTHORITATIVE_ADMISSION_RUNTIME_UNAVAILABLE") {
+  return async function failClosedPaperRuntimeForMarket({ market } = {}) {
+    return Object.freeze({
+      schemaVersion: "recurring-canonical-admission-cutover-fail-closed-v1",
+      market,
+      status: reason,
+      search: Object.freeze({ outcome: "SEARCH_FAILURE", validNoTrade: false, searchFailure: true }),
+      admissionBlockers: Object.freeze([reason]),
+      simulationBlockers: Object.freeze([]),
+      paperBridge: Object.freeze({
+        candidates: Object.freeze([]),
+        exitSignals: Object.freeze([]),
+        blocked: 1,
+        noTrade: 0,
+        eligible: 0,
+        exits: 0,
+        executionAuthority: "NONE",
+        liveTrading: false,
+        realOrder: false,
+        privateApi: false,
+      }),
+      executionAuthority: "NONE",
+      simulatedOnly: true,
+      liveOrderAllowed: false,
+      privateTradingApiAllowed: false,
+      orderSubmitted: false,
+      exchangeRequestSent: false,
+      productionMutationAllowed: false,
+      profitabilityClaimAllowed: false,
+    });
+  };
+}
+
+function maybeAttachCanonicalAdmissionCutover({ provider, env, paperRuntimeForMarket }) {
+  if (!truthy(env?.RESEARCH_PRODUCTION)) return provider;
+  if (paperRuntimeForMarket != null && typeof paperRuntimeForMarket !== "function") {
+    throw new TypeError("paperRuntimeForMarket must be a function");
+  }
+  const runtime = paperRuntimeForMarket ?? createFailClosedPaperRuntimeForMarket();
+  const canonicalProvider = restoreLegacyNaturalSettlementExits(wrapPaperForwardProviderWithMeaningfulSearch({
+    provider: stripLegacyDirectEntryCandidates(provider),
+    paperRuntimeForMarket: runtime,
+  }));
+  return Object.freeze({
+    async collectPublicEvidence(input) {
+      if (input?.market !== "CRYPTO_FUTURES") return provider.collectPublicEvidence(input);
+      return canonicalProvider.collectPublicEvidence(input);
+    },
+  });
+}
+
+function maybeAttachNaturalPositionObservationProducer({
+  provider,
+  env,
+  authority,
+  collectYahoo,
+  collectUpbit,
+  collectBitget,
+  bitgetClient,
+  clock,
+  positionObservationProducerFactory,
+}) {
+  if (!truthy(env?.RESEARCH_PRODUCTION)) return provider;
+  const producer = positionObservationProducerFactory({
+    authority,
+    collectYahoo,
+    collectUpbit,
+    collectBitget,
+    bitgetClient,
+    clock,
+  });
+  return wrapPaperForwardProviderWithNaturalPositionObservations({ provider, producer });
+}
+
 export function createCanonicalPaperForwardEvidenceProvider({
   collectYahoo = collectYahooStockHistory,
   collectUpbit = collectUpbitSpotHistory,
@@ -148,12 +275,15 @@ export function createCanonicalPaperForwardEvidenceProvider({
   sleep = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
   env = process.env,
   naturalSourceFactory = createEthV6PaperForwardSource,
+  positionObservationProducerFactory = createNaturalPaperPublicPositionObservationProducer,
+  paperRuntimeForMarket,
 } = {}) {
   if (!Number.isInteger(providerRetry?.maxAttempts) || providerRetry.maxAttempts < 1 || providerRetry.maxAttempts > 5
     || !Number.isInteger(providerRetry?.baseBackoffMs) || providerRetry.baseBackoffMs < 1 || providerRetry.baseBackoffMs > 30_000) {
     throw new TypeError("bounded providerRetry configuration is required");
   }
   if (typeof naturalSourceFactory !== "function") throw new TypeError("naturalSourceFactory must be a function");
+  if (typeof positionObservationProducerFactory !== "function") throw new TypeError("positionObservationProducerFactory must be a function");
   const provider = Object.freeze({
     async collectPublicEvidence({ market, signal }) {
       const lane = authority[market];
@@ -188,7 +318,19 @@ export function createCanonicalPaperForwardEvidenceProvider({
       }
     },
   });
-  return maybeAttachResearchNaturalSource({ provider, env, clock, bitgetClient, naturalSourceFactory });
+  const naturalProvider = maybeAttachResearchNaturalSource({ provider, env, clock, bitgetClient, naturalSourceFactory });
+  const canonicalProvider = maybeAttachCanonicalAdmissionCutover({ provider: naturalProvider, env, paperRuntimeForMarket });
+  return maybeAttachNaturalPositionObservationProducer({
+    provider: canonicalProvider,
+    env,
+    authority,
+    collectYahoo,
+    collectUpbit,
+    collectBitget,
+    bitgetClient,
+    clock,
+    positionObservationProducerFactory,
+  });
 }
 
 function sanitizeLane(market, evidence) {

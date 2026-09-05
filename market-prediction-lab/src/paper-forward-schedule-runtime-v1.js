@@ -17,6 +17,13 @@ import {
   createSimulatedPaperLearningAdapter,
 } from "./paper-simulated-adapters-v1.js";
 import { createFilePaperSchedulerLeaseStore } from "./paper-scheduler-driver-v1.js";
+import {
+  authoritativeNaturalPaperAccountingSummary,
+  createAuthoritativeNaturalPaperLedgerAdapter,
+  createAuthoritativeNaturalPaperLedgerFromSnapshot,
+  isAuthoritativeNaturalPaperLedger,
+  validateAuthoritativeNaturalPaperLedger,
+} from "./authoritative-natural-paper-accounting-v1.js";
 
 const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
 const DEFAULT_LEASE_DURATION_MS = 10 * 60 * 1000;
@@ -52,6 +59,10 @@ function nonEmpty(value) {
 
 function finite(value) {
   return typeof value === "number" && Number.isFinite(value);
+}
+
+function digest(value) {
+  return typeof value === "string" && /^[0-9a-f]{64}$/u.test(value);
 }
 
 function immutableSha(value) {
@@ -127,28 +138,44 @@ async function disabledSentinelPresent(path) {
   }
 }
 
-function activationContract(outcomeAccumulationEnabled) {
+function activationContract(outcomeAccumulationEnabled, authoritativeAccountRequired = false) {
   if (!outcomeAccumulationEnabled) return PAPER_FORWARD_SCHEDULE_ACTIVATION_CONTRACT;
   return Object.freeze({
     ...PAPER_FORWARD_SCHEDULE_ACTIVATION_CONTRACT,
-    version: "paper-forward-schedule-simulated-outcome-v1",
+    version: authoritativeAccountRequired
+      ? "paper-forward-schedule-authoritative-account-v1"
+      : "paper-forward-schedule-simulated-outcome-v1",
     financialMutationAdaptersEnabled: true,
     simulatedFinancialAdaptersEnabled: true,
     externalFinancialMutationAllowed: false,
     paperTradeOutcomeAccumulationEnabled: true,
     paperTradeOutcomeAccumulating: false,
+    authoritativeAccountRequired,
+    accountCurrency: authoritativeAccountRequired ? "USDT" : "KRW",
   });
 }
 
-function buildIdentity(researchCodeSha, outcomeAccumulationEnabled = false) {
+function buildIdentity(researchCodeSha, outcomeAccumulationEnabled = false, authoritativeAccountRequired = false) {
   if (!immutableSha(researchCodeSha)) throw new TypeError("immutable Paper Forward research SHA is required");
+  if (authoritativeAccountRequired && !outcomeAccumulationEnabled) {
+    throw new Error("PAPER_FORWARD_AUTHORITATIVE_ACCOUNT_REQUIRES_OUTCOME_MODE");
+  }
   const parameterHash = sha256(stableSerialize(outcomeAccumulationEnabled
-    ? {
-      authority: "canonical-paper-forward-provider-v1",
-      cadence: PAPER_FORWARD_SCHEDULE_CADENCE,
-      financialMutationAdaptersEnabled: true,
-      simulatedOnly: true,
-    }
+    ? authoritativeAccountRequired
+      ? {
+        authority: "canonical-paper-forward-provider-v1",
+        cadence: PAPER_FORWARD_SCHEDULE_CADENCE,
+        financialMutationAdaptersEnabled: true,
+        authoritativeAccount: "authenticated-paper-state-v2",
+        accountCurrency: "USDT",
+        simulatedOnly: true,
+      }
+      : {
+        authority: "canonical-paper-forward-provider-v1",
+        cadence: PAPER_FORWARD_SCHEDULE_CADENCE,
+        financialMutationAdaptersEnabled: true,
+        simulatedOnly: true,
+      }
     : {
       authority: "canonical-paper-forward-provider-v1",
       cadence: PAPER_FORWARD_SCHEDULE_CADENCE,
@@ -156,17 +183,36 @@ function buildIdentity(researchCodeSha, outcomeAccumulationEnabled = false) {
     }));
   return Object.freeze({
     strategyId: outcomeAccumulationEnabled
-      ? "paper-forward-simulated-outcome-v1"
+      ? authoritativeAccountRequired
+        ? "paper-forward-authoritative-account-v1"
+        : "paper-forward-simulated-outcome-v1"
       : "paper-forward-public-evidence-v1",
     strategyVersion: "1.0.0",
     parameterHash,
     researchCodeSha,
     costPolicyVersion: outcomeAccumulationEnabled
-      ? "paper-forward-simulated-ledger-v1"
+      ? authoritativeAccountRequired
+        ? "paper-forward-authoritative-accounting-v1"
+        : "paper-forward-simulated-ledger-v1"
       : "paper-forward-observation-only-v1",
     executionPolicyVersion: outcomeAccumulationEnabled
       ? "public-evidence-simulated-paper-v1"
       : "public-evidence-no-financial-mutation-v1",
+  });
+}
+
+function bindIdentityToPublicEvidenceProvider(provider, identity) {
+  return Object.freeze({
+    collectPublicEvidence(input = {}) {
+      const cycle = input?.cycle;
+      if (!cycle || typeof cycle !== "object" || Array.isArray(cycle)) {
+        return provider.collectPublicEvidence(input);
+      }
+      return provider.collectPublicEvidence({
+        ...input,
+        cycle: Object.freeze({ ...cycle, identity }),
+      });
+    },
   });
 }
 
@@ -221,12 +267,43 @@ function statePaths(root) {
   });
 }
 
-async function loadOrCreateState(paths, identity, nowMs) {
+async function loadOrCreateState(paths, identity, nowMs, {
+  authoritativeAccountRequired = false,
+  authoritativeAccountSeedSnapshot = null,
+  expectedPublisherAccountIdSha256 = null,
+} = {}) {
   const existing = await readJsonOrNull(paths.state);
-  if (existing) return restoreRecurringPaperLoopState(existing, identity);
+  if (existing) {
+    const restored = restoreRecurringPaperLoopState(existing, identity);
+    if (authoritativeAccountRequired) {
+      validateAuthoritativeNaturalPaperLedger(restored.ledger, {
+        expectedPublisherAccountIdSha256,
+        expectedSourceSha: identity.researchCodeSha,
+      });
+    } else if (isAuthoritativeNaturalPaperLedger(restored.ledger)) {
+      throw new Error("PAPER_FORWARD_AUTHORITATIVE_ACCOUNT_MODE_REQUIRED");
+    }
+    return restored;
+  }
+  let ledger;
+  if (authoritativeAccountRequired) {
+    if (!authoritativeAccountSeedSnapshot || !digest(expectedPublisherAccountIdSha256)) {
+      throw Object.assign(new Error("PAPER_FORWARD_AUTHORITATIVE_ACCOUNT_SEED_REQUIRED"), {
+        code: "PAPER_FORWARD_AUTHORITATIVE_ACCOUNT_SEED_REQUIRED",
+      });
+    }
+    ledger = createAuthoritativeNaturalPaperLedgerFromSnapshot({
+      snapshot: authoritativeAccountSeedSnapshot,
+      expectedPublisherAccountIdSha256,
+      expectedSourceSha: identity.researchCodeSha,
+      nowMs,
+    });
+  } else {
+    ledger = initialLedger();
+  }
   const created = createRecurringPaperLoopState({
     identity,
-    ledger: initialLedger(),
+    ledger,
     createdAtMs: nowMs,
   });
   await atomicWriteJson(paths.state, created);
@@ -240,6 +317,9 @@ function createPersistentStateStore(paths) {
         throw new Error("Paper Forward state idempotency key mismatch");
       }
       const parsed = JSON.parse(state);
+      const authoritativeAccount = isAuthoritativeNaturalPaperLedger(parsed.ledger)
+        ? authoritativeNaturalPaperAccountingSummary(parsed.ledger)
+        : null;
       await atomicWriteText(paths.state, state);
       await atomicWriteJson(join(paths.cycleReceipts, `${sha256(cycleId)}.json`), {
         schemaVersion: "paper-forward-cycle-receipt-v1",
@@ -249,6 +329,15 @@ function createPersistentStateStore(paths) {
         stateCycleCount: parsed.cycles?.length ?? 0,
         positionCount: parsed.positions?.length ?? 0,
         settlementCount: parsed.settlements?.length ?? 0,
+        authoritativeAccount: authoritativeAccount == null ? null : {
+          schemaVersion: authoritativeAccount.schemaVersion,
+          currency: authoritativeAccount.currency,
+          currentEquity: authoritativeAccount.currentEquity,
+          usedMargin: authoritativeAccount.usedMargin,
+          availableMargin: authoritativeAccount.availableMargin,
+          openReservations: authoritativeAccount.openReservations,
+          accountBindingVerified: authoritativeAccount.accountBindingVerified,
+        },
         privateRequestCount: 0,
         financialMutationCount: 0,
       });
@@ -256,7 +345,13 @@ function createPersistentStateStore(paths) {
   });
 }
 
-function activeRuntimeStatus(value, previous, activationAtMs, outcomeAccumulationEnabled = false) {
+function activeRuntimeStatus(
+  value,
+  previous,
+  activationAtMs,
+  outcomeAccumulationEnabled = false,
+  authoritativeAccountRequired = false,
+) {
   const replayed = value?.status === "REPLAYED";
   const lanes = replayed && Array.isArray(previous?.lanes)
     ? previous.lanes
@@ -273,7 +368,7 @@ function activeRuntimeStatus(value, previous, activationAtMs, outcomeAccumulatio
     schemaVersion: "paper-forward-active-runtime-status-v1",
     preparedRuntimeContractScheduleActive: value?.scheduleActive === true,
     scheduleActive: true,
-    activationVersion: activationContract(outcomeAccumulationEnabled).version,
+    activationVersion: activationContract(outcomeAccumulationEnabled, authoritativeAccountRequired).version,
     activationAtMs,
     trigger: PAPER_FORWARD_SCHEDULE_ACTIVATION_CONTRACT.trigger,
     canonicalCycleIntervalMs: FOUR_HOURS_MS,
@@ -286,6 +381,8 @@ function activeRuntimeStatus(value, previous, activationAtMs, outcomeAccumulatio
     paperTradeOutcomeAccumulating: outcomeAccumulating,
     financialMutationAdaptersEnabled: outcomeAccumulationEnabled,
     simulatedFinancialAdaptersEnabled: outcomeAccumulationEnabled,
+    authoritativeAccountRequired,
+    accountCurrency: authoritativeAccountRequired ? "USDT" : "KRW",
     externalFinancialMutationAllowed: false,
     privateRequestCount: 0,
     orderCount: 0,
@@ -295,7 +392,12 @@ function activeRuntimeStatus(value, previous, activationAtMs, outcomeAccumulatio
   });
 }
 
-function createPersistentRuntimeStatusStore(paths, activationAtMs, outcomeAccumulationEnabled) {
+function createPersistentRuntimeStatusStore(
+  paths,
+  activationAtMs,
+  outcomeAccumulationEnabled,
+  authoritativeAccountRequired,
+) {
   return Object.freeze({
     load: () => readJsonOrNull(paths.runtimeStatus),
     async save(value) {
@@ -305,16 +407,24 @@ function createPersistentRuntimeStatusStore(paths, activationAtMs, outcomeAccumu
         previous,
         activationAtMs,
         outcomeAccumulationEnabled,
+        authoritativeAccountRequired,
       ));
     },
   });
 }
 
-function buildFinancialAdapters({ paths, outcomeAccumulationEnabled, accountingEvidenceForSettlement }) {
+function buildFinancialAdapters({
+  paths,
+  outcomeAccumulationEnabled,
+  accountingEvidenceForSettlement,
+  ledger,
+}) {
   if (!outcomeAccumulationEnabled) return failClosedFinancialAdapters();
   const learningStore = createFilePaperLearningStore({ directory: paths.learning });
   return Object.freeze({
-    ledgerAdapter: createSimulatedPaperLedgerAdapter({ accountingEvidenceForSettlement }),
+    ledgerAdapter: isAuthoritativeNaturalPaperLedger(ledger)
+      ? createAuthoritativeNaturalPaperLedgerAdapter({ accountingEvidenceForSettlement })
+      : createSimulatedPaperLedgerAdapter({ accountingEvidenceForSettlement }),
     learningAdapter: createSimulatedPaperLearningAdapter({ learningStore }),
   });
 }
@@ -331,6 +441,9 @@ export async function runPaperForwardScheduledInvocation({
   leaseDurationMs = DEFAULT_LEASE_DURATION_MS,
   outcomeAccumulationEnabled = false,
   accountingEvidenceForSettlement,
+  authoritativeAccountRequired = false,
+  authoritativeAccountSeedSnapshot = null,
+  expectedPublisherAccountIdSha256 = null,
 } = {}) {
   const root = assertRootDirectory(rootDirectory);
   if (!immutableSha(researchCodeSha)) throw new TypeError("immutable researchCodeSha is required");
@@ -340,8 +453,16 @@ export async function runPaperForwardScheduledInvocation({
   if (!finite(activationAtMs) || typeof clock !== "function") {
     throw new TypeError("finite activation time and clock are required");
   }
-  if (typeof outcomeAccumulationEnabled !== "boolean") {
-    throw new TypeError("outcomeAccumulationEnabled must be boolean");
+  if (typeof outcomeAccumulationEnabled !== "boolean" || typeof authoritativeAccountRequired !== "boolean") {
+    throw new TypeError("Paper Forward mode flags must be boolean");
+  }
+  if (authoritativeAccountRequired && !outcomeAccumulationEnabled) {
+    throw new Error("PAPER_FORWARD_AUTHORITATIVE_ACCOUNT_REQUIRES_OUTCOME_MODE");
+  }
+  if (authoritativeAccountRequired && !digest(expectedPublisherAccountIdSha256)) {
+    throw Object.assign(new Error("PAPER_FORWARD_AUTHORITATIVE_ACCOUNT_BINDING_REQUIRED"), {
+      code: "PAPER_FORWARD_AUTHORITATIVE_ACCOUNT_BINDING_REQUIRED",
+    });
   }
 
   const paths = statePaths(root);
@@ -354,19 +475,33 @@ export async function runPaperForwardScheduledInvocation({
   const nowMs = clock();
   if (!finite(nowMs)) throw new TypeError("clock must return a finite number");
 
-  const identity = buildIdentity(researchCodeSha, outcomeAccumulationEnabled);
-  const state = await loadOrCreateState(paths, identity, nowMs);
+  const identity = buildIdentity(researchCodeSha, outcomeAccumulationEnabled, authoritativeAccountRequired);
+  const state = await loadOrCreateState(paths, identity, nowMs, {
+    authoritativeAccountRequired,
+    authoritativeAccountSeedSnapshot,
+    expectedPublisherAccountIdSha256,
+  });
   const stateStore = createPersistentStateStore(paths);
-  const runtimeStatusStore = createPersistentRuntimeStatusStore(paths, activationAtMs, outcomeAccumulationEnabled);
+  const runtimeStatusStore = createPersistentRuntimeStatusStore(
+    paths,
+    activationAtMs,
+    outcomeAccumulationEnabled,
+    authoritativeAccountRequired,
+  );
   const { ledgerAdapter, learningAdapter } = buildFinancialAdapters({
     paths,
     outcomeAccumulationEnabled,
     accountingEvidenceForSettlement,
+    ledger: state.ledger,
   });
   const leaseStore = createFilePaperSchedulerLeaseStore({ directory: paths.leases });
+  const identityBoundPublicEvidenceProvider = bindIdentityToPublicEvidenceProvider(
+    publicEvidenceProvider,
+    identity,
+  );
 
   const result = await runRuntime({
-    publicEvidenceProvider,
+    publicEvidenceProvider: identityBoundPublicEvidenceProvider,
     runtimeStatusStore,
     runtimeClock: clock,
     state,
@@ -401,6 +536,9 @@ export async function runPaperForwardScheduledInvocation({
     && persistedStatus?.publicForwardEvidenceAccumulating === true;
   const paperTradeOutcomeAccumulating = triggerSource === "cron"
     && persistedStatus?.paperTradeOutcomeAccumulating === true;
+  const accountSummary = isAuthoritativeNaturalPaperLedger(result?.state?.ledger ?? state.ledger)
+    ? authoritativeNaturalPaperAccountingSummary(result?.state?.ledger ?? state.ledger)
+    : null;
   const record = Object.freeze({
     schemaVersion: "paper-forward-schedule-invocation-v1",
     invokedAtMs: nowMs,
@@ -417,6 +555,18 @@ export async function runPaperForwardScheduledInvocation({
     paperTradeOutcomeAccumulating,
     financialMutationAdaptersEnabled: outcomeAccumulationEnabled,
     simulatedFinancialAdaptersEnabled: outcomeAccumulationEnabled,
+    authoritativeAccountRequired,
+    authoritativeAccount: accountSummary == null ? null : {
+      schemaVersion: accountSummary.schemaVersion,
+      currency: accountSummary.currency,
+      currentEquity: accountSummary.currentEquity,
+      usedMargin: accountSummary.usedMargin,
+      availableMargin: accountSummary.availableMargin,
+      openReservations: accountSummary.openReservations,
+      settledReservations: accountSummary.settledReservations,
+      reportingKrwStatus: accountSummary.reportingKrwStatus,
+      accountBindingVerified: accountSummary.accountBindingVerified,
+    },
     externalFinancialMutationAllowed: false,
     providerLanes: Object.freeze((persistedStatus?.lanes ?? []).map((lane) => Object.freeze({
       market: lane.market,
@@ -434,7 +584,7 @@ export async function runPaperForwardScheduledInvocation({
   await appendJsonl(paths.invocations, record);
   return Object.freeze({
     ...result,
-    schedule: activationContract(outcomeAccumulationEnabled),
+    schedule: activationContract(outcomeAccumulationEnabled, authoritativeAccountRequired),
     persistedStatus,
     invocation: record,
     rootDirectory: root,
@@ -453,12 +603,16 @@ export async function readPaperForwardScheduleSnapshot(rootDirectory) {
   } catch (error) {
     if (error?.code !== "ENOENT") throw error;
   }
+  const authoritativeAccount = isAuthoritativeNaturalPaperLedger(state?.ledger)
+    ? authoritativeNaturalPaperAccountingSummary(state.ledger)
+    : null;
   return Object.freeze({
     schemaVersion: "paper-forward-schedule-snapshot-v1",
     scheduleActive: !(await disabledSentinelPresent(paths.disableSentinel)),
     stateCycleCount: state?.cycles?.length ?? 0,
     positionCount: state?.positions?.length ?? 0,
     settlementCount: state?.settlements?.length ?? 0,
+    authoritativeAccount,
     runtimeStatus,
     lastInvocation,
     privateRequestCount: 0,

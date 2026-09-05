@@ -1,5 +1,5 @@
-import { Router, type IRouter } from 'express';
-import type { AuthenticatedRequest } from '../../middleware/auth';
+import { Router, type IRouter, type NextFunction, type Response } from 'express';
+import { requireCapability, type AuthenticatedRequest } from '../../middleware/auth';
 import {
   credentialConfigurationStatus,
   encryptTradingCredentials,
@@ -23,6 +23,15 @@ const FORBIDDEN_PERMISSION_PATTERN = /(trade|order|write|withdraw|transfer|ë§¤ë§
 
 type CredentialRepositoryFactory = (userId: string) => AccountReadonlyCredentialRepository;
 let credentialRepositoryFactoryForTests: CredentialRepositoryFactory | null = null;
+
+type DisconnectEventSource = {
+  once(event: string, listener: () => void): unknown;
+  removeListener(event: string, listener: () => void): unknown;
+};
+
+type DisconnectResponse = DisconnectEventSource & {
+  writableEnded: boolean;
+};
 
 export function setAccountReadonlyCredentialRepositoryFactoryForTests(factory: CredentialRepositoryFactory | null) {
   credentialRepositoryFactoryForTests = factory;
@@ -61,6 +70,24 @@ function authScope(req: AuthenticatedRequest) {
 function credentialRepository(userId: string): AccountReadonlyCredentialRepository {
   return credentialRepositoryFactoryForTests?.(userId)
     ?? createAccountReadonlyCredentialRepository(userId);
+}
+
+export function readonlyProviderCapability(provider: unknown) {
+  const normalized = String(provider ?? '').trim().toLowerCase();
+  if (normalized === 'bitget') return 'canAccessFutures' as const;
+  if (normalized === 'upbit') return 'canAccessSpot' as const;
+  if (normalized === 'toss') return 'canAccessBasicInfo' as const;
+  return null;
+}
+
+function requireReadonlyProviderCapability(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction,
+) {
+  const capability = readonlyProviderCapability(req.params.provider);
+  if (!capability) return next();
+  return requireCapability(capability)(req, res, next);
 }
 
 export function parseReadonlyCredentialRequest(
@@ -119,6 +146,22 @@ function credentialErrorStatus(errorCode: string) {
   return 400;
 }
 
+export function bindAccountReadonlyDisconnectAbort(
+  request: DisconnectEventSource,
+  response: DisconnectResponse,
+  controller: AbortController,
+) {
+  const abortIfUnfinished = () => {
+    if (!response.writableEnded) controller.abort();
+  };
+  request.once('aborted', abortIfUnfinished);
+  response.once('close', abortIfUnfinished);
+  return () => {
+    request.removeListener('aborted', abortIfUnfinished);
+    response.removeListener('close', abortIfUnfinished);
+  };
+}
+
 export function createAccountReadonlyRouter(service: AccountReadonlyService): IRouter {
   const router: IRouter = Router();
 
@@ -137,7 +180,7 @@ export function createAccountReadonlyRouter(service: AccountReadonlyService): IR
     });
   });
 
-  router.put('/credentials/:provider', async (req: AuthenticatedRequest, res) => {
+  router.put('/credentials/:provider', requireReadonlyProviderCapability, async (req: AuthenticatedRequest, res) => {
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     const { userId, accessToken } = authScope(req);
     if (!userId || !accessToken) return res.status(401).json(deniedResponse('LOGIN_REQUIRED'));
@@ -171,7 +214,7 @@ export function createAccountReadonlyRouter(service: AccountReadonlyService): IR
     }
   });
 
-  router.get('/:provider', async (req: AuthenticatedRequest, res) => {
+  router.get('/:provider', requireReadonlyProviderCapability, async (req: AuthenticatedRequest, res) => {
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     const provider = String(req.params.provider ?? '').toLowerCase() as AccountProvider;
     if (!PROVIDERS.has(provider)) {
@@ -182,13 +225,12 @@ export function createAccountReadonlyRouter(service: AccountReadonlyService): IR
     if (!userId || !accessToken) return res.status(401).json(deniedResponse('LOGIN_REQUIRED'));
 
     const controller = new AbortController();
-    const abort = () => controller.abort();
-    req.once('aborted', abort);
+    const cleanupDisconnectAbort = bindAccountReadonlyDisconnectAbort(req, res, controller);
     try {
       const snapshot = await service.read({ userId, accessToken }, provider, controller.signal);
       if (!res.writableEnded) return res.json(snapshot);
     } finally {
-      req.removeListener('aborted', abort);
+      cleanupDisconnectAbort();
     }
   });
   return router;

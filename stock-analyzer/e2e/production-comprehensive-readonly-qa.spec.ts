@@ -178,12 +178,40 @@ async function auditLayout(page: Page) {
     ).filter(visible) as HTMLElement[];
     const rects = interactive.map((el) => ({ el, rect: el.getBoundingClientRect(), label: labelFor(el) }))
       .filter((item) => item.rect.width >= 20 && item.rect.height >= 20);
-    const overlap = (a: DOMRect, b: DOMRect) => {
+    const overlap = (
+      a: { left: number; right: number; top: number; bottom: number; width: number; height: number },
+      b: { left: number; right: number; top: number; bottom: number; width: number; height: number },
+    ) => {
       const x = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
       const y = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
       if (!x || !y) return 0;
       const minArea = Math.min(a.width * a.height, b.width * b.height);
       return minArea > 0 ? (x * y) / minArea : 0;
+    };
+    const clippedVisibleRect = (element: HTMLElement) => {
+      const raw = element.getBoundingClientRect();
+      let left = Math.max(0, raw.left);
+      let right = Math.min(window.innerWidth, raw.right);
+      let top = Math.max(0, raw.top);
+      let bottom = Math.min(window.innerHeight, raw.bottom);
+      let ancestor = element.parentElement;
+      while (ancestor) {
+        const style = getComputedStyle(ancestor);
+        const rect = ancestor.getBoundingClientRect();
+        if (/(hidden|clip|auto|scroll)/.test(style.overflowX)) {
+          left = Math.max(left, rect.left);
+          right = Math.min(right, rect.right);
+        }
+        if (/(hidden|clip|auto|scroll)/.test(style.overflowY)) {
+          top = Math.max(top, rect.top);
+          bottom = Math.min(bottom, rect.bottom);
+        }
+        if (right - left <= 1 || bottom - top <= 1) return null;
+        ancestor = ancestor.parentElement;
+      }
+      const width = right - left;
+      const height = bottom - top;
+      return width > 1 && height > 1 ? { left, right, top, bottom, width, height } : null;
     };
     const overlaps: OverlapWarning[] = [];
     for (let i = 0; i < rects.length; i += 1) {
@@ -195,14 +223,24 @@ async function auditLayout(page: Page) {
       }
     }
     const nav = document.querySelector('nav[aria-label="주요 메뉴"]');
-    const navRect = nav instanceof HTMLElement && visible(nav) ? nav.getBoundingClientRect() : null;
-    const navOcclusionWarnings = navRect
-      ? rects
-        .filter(({ el }) => !nav?.contains(el))
-        .map(({ rect, label }) => ({ a: '주요 메뉴', b: label, ratio: overlap(navRect, rect) }))
-        .filter((item) => item.ratio >= 0.25)
-        .map((item) => ({ ...item, ratio: Number(item.ratio.toFixed(2)) }))
-        .slice(0, 20)
+    const navRect = nav instanceof HTMLElement && visible(nav) ? clippedVisibleRect(nav) : null;
+    const navOcclusionWarnings = navRect && nav instanceof HTMLElement
+      ? rects.flatMap(({ el, label }) => {
+        if (nav.contains(el)) return [];
+        const rect = clippedVisibleRect(el);
+        if (!rect) return [];
+        const ratio = overlap(navRect, rect);
+        if (ratio < 0.25) return [];
+        const overlapLeft = Math.max(navRect.left, rect.left);
+        const overlapRight = Math.min(navRect.right, rect.right);
+        const overlapTop = Math.max(navRect.top, rect.top);
+        const overlapBottom = Math.min(navRect.bottom, rect.bottom);
+        const x = (overlapLeft + overlapRight) / 2;
+        const y = (overlapTop + overlapBottom) / 2;
+        const topElement = document.elementFromPoint(x, y);
+        if (!topElement || (topElement !== nav && !nav.contains(topElement))) return [];
+        return [{ a: '주요 메뉴', b: label, ratio: Number(ratio.toFixed(2)) }];
+      }).slice(0, 20)
       : [];
     const scrollables = Array.from(document.querySelectorAll('*')).filter((element) => {
       if (!(element instanceof HTMLElement) || !visible(element)) return false;
@@ -398,7 +436,7 @@ async function chartMatrix(page: Page, onProgress: (audits: ChartAudit[]) => voi
     waitUntil: 'domcontentloaded',
     timeout: 15_000,
   });
-  await expect(page.getByTestId('unified-chart-wrapper')).toBeVisible({ timeout: 12_000 });
+  await expect(page.getByTestId('unified-analysis-chart')).toBeVisible({ timeout: 12_000 });
   const audits: ChartAudit[] = [];
   for (const market of CHART_MARKETS) {
     await page.getByTestId(`market-${market}`).click({ timeout: 2_500 }).catch(() => undefined);
@@ -466,7 +504,7 @@ test.describe('Production comprehensive read-only QA', () => {
     expect(audits.filter((item) => item.busyAfter5s > 0), 'visible aria-busy remained after 5s').toEqual([]);
     expect(audits.filter((item) => item.horizontalOverflowPx > 2), 'horizontal overflow detected').toEqual([]);
     expect(audits.filter((item) => item.deadScrollContainers > 0), 'scroll container could not move').toEqual([]);
-    expect(audits.filter((item) => item.navOcclusionWarnings.length > 0), 'fixed navigation occludes interactive content').toEqual([]);
+    expect(audits.filter((item) => item.navOcclusionWarnings.length > 0), 'navigation occludes visible interactive content').toEqual([]);
     expect(tabFailures, 'safe role=tab click failed').toEqual([]);
     expect(diagnostics.filter((item) => item.kind === 'pageerror' || item.kind === 'requestfailed'), 'browser/runtime failures detected').toEqual([]);
   });

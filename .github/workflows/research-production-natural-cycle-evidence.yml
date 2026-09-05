@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/research-production-natural-cycle-evidence.yml'
       - 'ops/research-production-readonly-evidence.sh'
+      - 'market-prediction-lab/tests/research-production-readonly-evidence-observability.test.js'
   issue_comment:
     types: [created]
 
@@ -45,11 +46,26 @@ jobs:
             echo 'Read-only probe contains a prohibited mutation command.' >&2
             exit 1
           fi
+          if grep -Eq '^[[:space:]]{10}git fetch --no-tags origin main "\$RESEARCH_SHA"$' .github/workflows/research-production-natural-cycle-evidence.yml; then
+            echo 'Natural evidence verifier must not require an unauthenticated post-checkout fetch.' >&2
+            exit 1
+          fi
+          grep -q 'SOURCE_OUTCOME:' .github/workflows/research-production-natural-cycle-evidence.yml
+          grep -q "preflight_failed" .github/workflows/research-production-natural-cycle-evidence.yml
+          grep -Fq "const observed = (value) => measured && value ? value : 'unknown';" .github/workflows/research-production-natural-cycle-evidence.yml
+          grep -q 'PAPER_NATURAL' ops/research-production-readonly-evidence.sh
+          grep -q 'buildNaturalPaperFirstZeroTraceFromRuntime' .github/workflows/research-production-natural-cycle-evidence.yml
+          hub_issue_filter='github.event.issue.number == '"838"
+          hub_report_target='issue_number: '"838"
+          test "$(grep -Fc "$hub_issue_filter" .github/workflows/research-production-natural-cycle-evidence.yml)" -eq 1
+          test "$(grep -Fc "$hub_report_target" .github/workflows/research-production-natural-cycle-evidence.yml)" -eq 1
+          node --test market-prediction-lab/tests/research-production-readonly-evidence-observability.test.js
+          node --test research-production/test/natural-cycle-verdict-trace.test.mjs research-production/test/natural-cycle-verdict-trace-v5-runtime.test.mjs
 
   observe:
     if: >-
       github.event_name == 'issue_comment' &&
-      github.event.issue.number == 62 &&
+      github.event.issue.number == 838 &&
       github.event.comment.user.login == github.repository_owner &&
       github.event.comment.author_association == 'OWNER' &&
       startsWith(github.event.comment.body, '/verify-research-production ')
@@ -85,12 +101,15 @@ jobs:
           NODE
 
       - name: Verify requested Research release is in repository history
+        id: source
         env:
           RESEARCH_SHA: ${{ steps.command.outputs.research_sha }}
         shell: bash
         run: |
           set -Eeuo pipefail
-          git fetch --no-tags origin main "$RESEARCH_SHA"
+          # checkout uses fetch-depth: 0, so a requested release that is an ancestor
+          # of main must already be present locally. Keep credentials non-persistent and
+          # fail closed instead of performing an unauthenticated second fetch.
           git cat-file -e "$RESEARCH_SHA^{commit}"
           git merge-base --is-ancestor "$RESEARCH_SHA" origin/main
           git cat-file -e "$RESEARCH_SHA:research-production/bin/research-cycle.mjs"
@@ -142,8 +161,9 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          node <<'NODE'
-          const fs = require('node:fs');
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import { buildNaturalPaperFirstZeroTraceFromRuntime } from './research-production/src/natural-cycle-verdict-trace.mjs';
           const lines = fs.readFileSync(process.env.EVIDENCE_FILE, 'utf8').split(/\r?\n/).filter(Boolean);
           const find = (prefix) => lines.find((line) => line.startsWith(prefix));
           const all = (prefix) => lines.filter((line) => line.startsWith(prefix));
@@ -157,6 +177,7 @@ jobs:
           const tasks = all('TASK ').map((line) => fields(line));
           const paper = fields(find('PAPER_RUNTIME '));
           const ledger = fields(find('PAPER_LEDGER '));
+          const natural = fields(find('PAPER_NATURAL '));
           const timersHealthy = ['forward','fast-historical','long-history'].every((p) => timer[p]?.enabled === 'enabled' && timer[p]?.active === 'active');
           const forwardTasks = tasks.filter((row) => row.profile === 'forward');
           const forwardProven = timer.forward?.last_trigger && !/^n\/a|^null|^$/.test(timer.forward.last_trigger)
@@ -175,11 +196,37 @@ jobs:
             && cycle['fast-historical']?.research_sha === process.env.RESEARCH_SHA
             && cycle['fast-historical']?.failed_count === '0';
           const historicalRunning = service['fast-historical']?.active === 'active' || service['fast-historical']?.sub === 'running';
+          let naturalTrace = null;
+          let naturalTraceError = natural.blocker ?? 'PAPER_NATURAL_EVIDENCE_UNAVAILABLE';
+          if (natural.present === 'true' && natural.payload_base64) {
+            try {
+              const payload = JSON.parse(Buffer.from(natural.payload_base64, 'base64url').toString('utf8'));
+              const payloadSafe = payload.externalFinancialMutationAllowed === false
+                && payload.privateRequestCount === 0
+                && payload.financialMutationCount === 0
+                && payload.orderCount === 0
+                && payload.liveTrading === false
+                && payload.orderAuthority === false;
+              if (!payloadSafe) throw new Error('PAPER_NATURAL_RUNTIME_SAFETY_CONTRACT_FAILED');
+              const candidateTrace = buildNaturalPaperFirstZeroTraceFromRuntime(payload);
+              if (candidateTrace.identity.runtimeSha !== process.env.RESEARCH_SHA) {
+                throw new Error('PAPER_NATURAL_TARGET_RELEASE_IDENTITY_MISMATCH');
+              }
+              naturalTrace = candidateTrace;
+              naturalTraceError = 'none';
+            } catch (error) {
+              naturalTraceError = String(error?.message ?? error).replace(/[\r\n]/g, '_').slice(0, 200);
+            }
+          }
           let status = 'failed';
           if (timersHealthy && forwardProven && paperSafe && historicalComplete) status = 'passed';
           else if (timersHealthy && forwardProven && paperSafe && historicalRunning) status = 'forward_pass_historical_running';
           else if (timersHealthy && forwardProven && paperSafe) status = 'forward_pass_historical_unproven';
           const out = process.env.GITHUB_OUTPUT;
+          const writeOutput = (key, value) => {
+            const safe = String(value ?? 'unknown').replace(/[\r\n]/g, '_').slice(0, 2000);
+            fs.appendFileSync(out, `${key}=${safe}\n`);
+          };
           fs.appendFileSync(out, `status=${status}\n`);
           fs.appendFileSync(out, `timers_healthy=${timersHealthy}\n`);
           fs.appendFileSync(out, `forward_proven=${forwardProven}\n`);
@@ -188,6 +235,19 @@ jobs:
           fs.appendFileSync(out, `historical_running=${historicalRunning}\n`);
           fs.appendFileSync(out, `paper_positions=${ledger.position_count ?? 'unknown'}\n`);
           fs.appendFileSync(out, `paper_settlements=${ledger.settlement_count ?? 'unknown'}\n`);
+          writeOutput('natural_trace_status', naturalTrace?.status);
+          writeOutput('natural_trace_error', naturalTraceError);
+          writeOutput('natural_cycle_id', naturalTrace?.cycleId);
+          writeOutput('natural_strategy_sha', naturalTrace?.identity.strategySha);
+          writeOutput('natural_runtime_sha', naturalTrace?.identity.runtimeSha);
+          writeOutput('natural_dataset_identity_sha256', naturalTrace ? natural.dataset_identity_sha256 : null);
+          writeOutput('natural_identity_complete', naturalTrace?.identity.complete);
+          writeOutput('natural_first_zero_stage', naturalTrace?.firstZeroStageName);
+          writeOutput('natural_first_zero_reason', naturalTrace?.firstZeroReason);
+          writeOutput('natural_first_zero_reason_evidence_status', naturalTrace?.firstZeroReasonEvidenceStatus);
+          writeOutput('natural_measurement_source', naturalTrace?.runtimeAdapter.selectedMeasurementSource);
+          const stageTrace = naturalTrace?.stages.map(({ stage, count, status: stageStatus }) => ({ stage, count, status: stageStatus })) ?? null;
+          writeOutput('natural_stage_trace_base64', stageTrace == null ? null : Buffer.from(JSON.stringify(stageTrace), 'utf8').toString('base64url'));
           if (status === 'failed') process.exitCode = 1;
           NODE
         env:
@@ -207,6 +267,7 @@ jobs:
         uses: actions/github-script@v7
         env:
           RESEARCH_SHA: ${{ steps.command.outputs.research_sha }}
+          SOURCE_OUTCOME: ${{ steps.source.outcome }}
           EVIDENCE_OUTCOME: ${{ steps.evidence.outcome }}
           VERDICT_OUTCOME: ${{ steps.verdict.outcome }}
           VERDICT_STATUS: ${{ steps.verdict.outputs.status }}
@@ -217,22 +278,58 @@ jobs:
           HISTORICAL_RUNNING: ${{ steps.verdict.outputs.historical_running }}
           PAPER_POSITIONS: ${{ steps.verdict.outputs.paper_positions }}
           PAPER_SETTLEMENTS: ${{ steps.verdict.outputs.paper_settlements }}
+          NATURAL_TRACE_STATUS: ${{ steps.verdict.outputs.natural_trace_status }}
+          NATURAL_TRACE_ERROR: ${{ steps.verdict.outputs.natural_trace_error }}
+          NATURAL_CYCLE_ID: ${{ steps.verdict.outputs.natural_cycle_id }}
+          NATURAL_STRATEGY_SHA: ${{ steps.verdict.outputs.natural_strategy_sha }}
+          NATURAL_RUNTIME_SHA: ${{ steps.verdict.outputs.natural_runtime_sha }}
+          NATURAL_DATASET_IDENTITY_SHA256: ${{ steps.verdict.outputs.natural_dataset_identity_sha256 }}
+          NATURAL_IDENTITY_COMPLETE: ${{ steps.verdict.outputs.natural_identity_complete }}
+          NATURAL_FIRST_ZERO_STAGE: ${{ steps.verdict.outputs.natural_first_zero_stage }}
+          NATURAL_FIRST_ZERO_REASON: ${{ steps.verdict.outputs.natural_first_zero_reason }}
+          NATURAL_FIRST_ZERO_REASON_EVIDENCE_STATUS: ${{ steps.verdict.outputs.natural_first_zero_reason_evidence_status }}
+          NATURAL_MEASUREMENT_SOURCE: ${{ steps.verdict.outputs.natural_measurement_source }}
+          NATURAL_STAGE_TRACE_BASE64: ${{ steps.verdict.outputs.natural_stage_trace_base64 }}
         with:
           script: |
+            const measured = process.env.EVIDENCE_OUTCOME === 'success';
+            const status = process.env.VERDICT_STATUS
+              || (process.env.SOURCE_OUTCOME === 'success' ? 'evidence_unavailable' : 'preflight_failed');
+            const observed = (value) => measured && value ? value : 'unknown';
+            let naturalStageTrace = 'unknown';
+            if (measured && process.env.NATURAL_STAGE_TRACE_BASE64 && process.env.NATURAL_STAGE_TRACE_BASE64 !== 'unknown') {
+              try {
+                const stages = JSON.parse(Buffer.from(process.env.NATURAL_STAGE_TRACE_BASE64, 'base64url').toString('utf8'));
+                naturalStageTrace = stages.map((row) => `${row.stage}=${row.count ?? 'unknown'}(${row.status})`).join(',');
+              } catch {}
+            }
             const body = [
               '[RESEARCH_PRODUCTION_NATURAL_CYCLE_EVIDENCE]',
-              `status: ${process.env.VERDICT_STATUS || 'failed'}`,
+              `status: ${status}`,
               `research_sha: ${process.env.RESEARCH_SHA}`,
               `workflow_run: ${context.runId}`,
+              `source_outcome: ${process.env.SOURCE_OUTCOME}`,
               `evidence_outcome: ${process.env.EVIDENCE_OUTCOME}`,
               `verdict_outcome: ${process.env.VERDICT_OUTCOME}`,
-              `timers_healthy: ${process.env.TIMERS_HEALTHY || 'false'}`,
-              `first_natural_forward_proven: ${process.env.FORWARD_PROVEN || 'false'}`,
-              `paper_safety_proven: ${process.env.PAPER_SAFE || 'false'}`,
-              `fast_historical_complete: ${process.env.HISTORICAL_COMPLETE || 'false'}`,
-              `fast_historical_running: ${process.env.HISTORICAL_RUNNING || 'false'}`,
-              `paper_positions: ${process.env.PAPER_POSITIONS || 'unknown'}`,
-              `paper_settlements: ${process.env.PAPER_SETTLEMENTS || 'unknown'}`,
+              `timers_healthy: ${observed(process.env.TIMERS_HEALTHY)}`,
+              `first_natural_forward_proven: ${observed(process.env.FORWARD_PROVEN)}`,
+              `paper_safety_proven: ${observed(process.env.PAPER_SAFE)}`,
+              `fast_historical_complete: ${observed(process.env.HISTORICAL_COMPLETE)}`,
+              `fast_historical_running: ${observed(process.env.HISTORICAL_RUNNING)}`,
+              `paper_positions: ${observed(process.env.PAPER_POSITIONS)}`,
+              `paper_settlements: ${observed(process.env.PAPER_SETTLEMENTS)}`,
+              `natural_trace_status: ${observed(process.env.NATURAL_TRACE_STATUS)}`,
+              `natural_trace_error: ${observed(process.env.NATURAL_TRACE_ERROR)}`,
+              `natural_cycle_id: ${observed(process.env.NATURAL_CYCLE_ID)}`,
+              `natural_strategy_sha: ${observed(process.env.NATURAL_STRATEGY_SHA)}`,
+              `natural_runtime_sha: ${observed(process.env.NATURAL_RUNTIME_SHA)}`,
+              `natural_dataset_identity_sha256: ${observed(process.env.NATURAL_DATASET_IDENTITY_SHA256)}`,
+              `natural_identity_complete: ${observed(process.env.NATURAL_IDENTITY_COMPLETE)}`,
+              `natural_measurement_source: ${observed(process.env.NATURAL_MEASUREMENT_SOURCE)}`,
+              `natural_stage_trace: ${naturalStageTrace}`,
+              `FIRST_ZERO_STAGE: ${observed(process.env.NATURAL_FIRST_ZERO_STAGE)}`,
+              `FIRST_ZERO_REASON: ${observed(process.env.NATURAL_FIRST_ZERO_REASON)}`,
+              `FIRST_ZERO_REASON_EVIDENCE_STATUS: ${observed(process.env.NATURAL_FIRST_ZERO_REASON_EVIDENCE_STATUS)}`,
               'server_files_written: 0',
               'server_files_deleted: 0',
               'server_processes_restarted: 0',
@@ -246,6 +343,6 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: 62,
+              issue_number: 838,
               body,
             });
