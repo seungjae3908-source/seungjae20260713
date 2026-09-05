@@ -19,3 +19,13 @@ test('special feed never promotes malformed or future timestamps as fresh eviden
   expect(source).not.toContain("if (!Number.isFinite(timestamp)) return '방금 전';");
   expect(source).not.toContain('Math.max(0, Math.floor((nowMs - timestamp) / 60_000))');
 });
+
+test('history grouping uses deterministic fallback identity instead of random render keys', async () => {
+  const source = await readFile(pagePath, 'utf8');
+
+  expect(source).toContain('function deterministicHistoryKey(row: AnyObj, index: number): string');
+  expect(source).toContain('for (const [index, row] of sortedRows.entries())');
+  expect(source).toContain("return `row:${index}:${fingerprint || 'unidentified'}`;");
+  expect(source).toContain("const key = normalizedTitle ? `title:${normalizedTitle}` : deterministicHistoryKey(row, index);");
+  expect(source).not.toContain('Math.random()');
+});
