@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   classifyProductionRequest,
+  isIgnorableProductionRequestFailure,
   privateAccountDisconnectedFixture,
 } from './production-readonly-policy';
 
@@ -66,4 +67,96 @@ test('direct private broker provider traffic is blocked before transmission', ()
       { action: 'block', reason: 'PRIVATE_PROVIDER_NETWORK_BLOCKED' },
     );
   }
+});
+
+test('same-origin read requests cancelled by navigation remain ignored without masking other failures', () => {
+  assert.equal(
+    isIgnorableProductionRequestFailure(`${ORIGIN}/api/market/summary?market=KR`, 'GET', 'net::ERR_ABORTED', ORIGIN),
+    true,
+  );
+  assert.equal(
+    isIgnorableProductionRequestFailure(`${ORIGIN}/api/market/summary?market=KR`, 'HEAD', 'net::ERR_ABORTED', ORIGIN),
+    true,
+  );
+  assert.equal(
+    isIgnorableProductionRequestFailure(`${ORIGIN}/api/market/summary?market=KR`, 'GET', 'net::ERR_FAILED', ORIGIN),
+    false,
+  );
+  assert.equal(
+    isIgnorableProductionRequestFailure('https://cdn.example/asset.js', 'GET', 'net::ERR_ABORTED', ORIGIN),
+    false,
+  );
+  assert.equal(
+    isIgnorableProductionRequestFailure(`${ORIGIN}/api/watchlist`, 'POST', 'net::ERR_ABORTED', ORIGIN),
+    false,
+  );
+  assert.equal(
+    isIgnorableProductionRequestFailure('not-a-url', 'GET', 'net::ERR_ABORTED', ORIGIN),
+    false,
+  );
+});
+
+test('Cloudflare same-origin RUM POST navigation abort is ignored without masking other POST failures', () => {
+  assert.equal(
+    isIgnorableProductionRequestFailure(`${ORIGIN}/cdn-cgi/rum`, 'POST', 'net::ERR_ABORTED', ORIGIN),
+    true,
+  );
+  assert.equal(
+    isIgnorableProductionRequestFailure(`${ORIGIN}/cdn-cgi/rum?sample=1`, 'POST', 'net::ERR_ABORTED', ORIGIN),
+    true,
+  );
+  assert.equal(
+    isIgnorableProductionRequestFailure(`${ORIGIN}/cdn-cgi/rum`, 'POST', 'net::ERR_FAILED', ORIGIN),
+    false,
+  );
+  assert.equal(
+    isIgnorableProductionRequestFailure(`${ORIGIN}/cdn-cgi/rum`, 'PUT', 'net::ERR_ABORTED', ORIGIN),
+    false,
+  );
+  assert.equal(
+    isIgnorableProductionRequestFailure('https://telemetry.example/cdn-cgi/rum', 'POST', 'net::ERR_ABORTED', ORIGIN),
+    false,
+  );
+  assert.equal(
+    isIgnorableProductionRequestFailure(`${ORIGIN}/api/watchlist`, 'POST', 'net::ERR_ABORTED', ORIGIN),
+    false,
+  );
+});
+
+test('Supabase REST reads cancelled by route navigation are ignored without masking other failures', () => {
+  const holdingsUrl = 'https://example.supabase.co/rest/v1/portfolio_holdings?select=*';
+  assert.equal(
+    isIgnorableProductionRequestFailure(holdingsUrl, 'GET', 'net::ERR_ABORTED', ORIGIN),
+    true,
+  );
+  assert.equal(
+    isIgnorableProductionRequestFailure(holdingsUrl, 'HEAD', 'net::ERR_ABORTED', ORIGIN),
+    true,
+  );
+  assert.equal(
+    isIgnorableProductionRequestFailure(holdingsUrl, 'GET', 'net::ERR_FAILED', ORIGIN),
+    false,
+  );
+  assert.equal(
+    isIgnorableProductionRequestFailure(holdingsUrl, 'POST', 'net::ERR_ABORTED', ORIGIN),
+    false,
+  );
+  assert.equal(
+    isIgnorableProductionRequestFailure(
+      'https://example.supabase.co/auth/v1/token?grant_type=password',
+      'GET',
+      'net::ERR_ABORTED',
+      ORIGIN,
+    ),
+    false,
+  );
+  assert.equal(
+    isIgnorableProductionRequestFailure(
+      'https://example.supabase.co/storage/v1/object/file.json',
+      'GET',
+      'net::ERR_ABORTED',
+      ORIGIN,
+    ),
+    false,
+  );
 });

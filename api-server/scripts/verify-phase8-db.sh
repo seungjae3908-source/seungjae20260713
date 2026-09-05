@@ -71,6 +71,8 @@ if (value.auth_users_copied !== 0 || value.profile_rows_copied !== 0 || value.st
 }
 NODE
 
+run_sql "verify legacy personal Telegram policy cleanup" "api-server/supabase/test/personal_telegram_policy_cleanup_integration.sql"
+
 run_sql "verify Auth profile trigger and deletion cascade" "api-server/supabase/test/staging_bootstrap_trigger_integration.sql"
 run_sql "seed exact four-tier auth fixtures" "api-server/supabase/test/phase8_auth_harness.sql"
 
@@ -111,6 +113,9 @@ run_sql "verify final trade order atomicity and admin-only RLS" "api-server/supa
 run_sql "apply risk envelope and atomic pending-split cancellation" "api-server/supabase/migrations/2026080801_trade_risk_envelope_kill_switch.sql"
 run_sql "reapply risk envelope and atomic pending-split cancellation idempotently" "api-server/supabase/migrations/2026080801_trade_risk_envelope_kill_switch.sql"
 run_sql "verify risk envelope invariant and fast-move split cancellation" "api-server/supabase/test/trade_risk_envelope_kill_switch_integration.sql"
+run_sql "apply canonical member investment schema and RLS" "api-server/supabase/migrations/2026082705_member_investment_canonical.sql"
+run_sql "reapply canonical member investment schema idempotently" "api-server/supabase/migrations/2026082705_member_investment_canonical.sql"
+run_sql "verify member investment ownership, LIVE lock, vault isolation, and LONG/SHORT model" "api-server/supabase/test/member_investment_canonical_integration.sql"
 echo "[phase8-db] verify concurrent fast-move split cancellation race"
 bash "${ROOT_DIR}/api-server/scripts/verify-trade-split-cancel-concurrency.sh"
 
@@ -122,6 +127,8 @@ fi
 "${PSQL[@]}" --command "do \$\$ begin if to_regclass('public.phase8_partial_failure_probe') is not null then raise exception 'partial migration object remained'; end if; end \$\$;"
 
 run_sql "rollback risk envelope and atomic pending-split cancellation" "api-server/supabase/migrations/2026080801_trade_risk_envelope_kill_switch.down.sql"
+run_sql "rollback canonical member investment schema" "api-server/supabase/migrations/2026082705_member_investment_canonical.down.sql"
+run_sql "assert canonical member investment rollback cleanup" "api-server/supabase/test/member_investment_canonical_rollback_assert.sql"
 run_sql "assert risk envelope rollback cleanup" "api-server/supabase/test/trade_risk_envelope_kill_switch_rollback_assert.sql"
 run_sql "rollback final trade order atomicity and admin-only RLS" "api-server/supabase/migrations/2026080506_trade_order_atomicity_admin_rls.down.sql"
 run_sql "rollback authenticated audit privileges" "api-server/supabase/migrations/2026080502_member_permission_audit_authenticated_privileges.down.sql"
@@ -148,11 +155,13 @@ run_sql "reapply authenticated paper privileges" "api-server/supabase/migrations
 run_sql "reapply authenticated audit privileges" "api-server/supabase/migrations/2026080502_member_permission_audit_authenticated_privileges.sql"
 run_sql "reapply final trade order atomicity and admin-only RLS" "api-server/supabase/migrations/2026080506_trade_order_atomicity_admin_rls.sql"
 run_sql "reapply risk envelope and atomic pending-split cancellation" "api-server/supabase/migrations/2026080801_trade_risk_envelope_kill_switch.sql"
+run_sql "reapply canonical member investment schema" "api-server/supabase/migrations/2026082705_member_investment_canonical.sql"
 run_sql "assert reapply state" "api-server/supabase/test/phase8_reapply_assert.sql"
 run_sql "recheck explicit paper privileges after reapply" "api-server/supabase/test/paper_journal_privileges_integration.sql"
 run_sql "recheck audit privileges and administrator-only RLS after reapply" "api-server/supabase/test/member_permission_audit_privileges_integration.sql"
 run_sql "recheck final trade order atomicity and admin-only RLS after reapply" "api-server/supabase/test/trade_order_atomicity_admin_rls_integration.sql"
 run_sql "recheck risk envelope invariant and fast-move split cancellation after reapply" "api-server/supabase/test/trade_risk_envelope_kill_switch_integration.sql"
+run_sql "recheck canonical member investment storage and RLS after reapply" "api-server/supabase/test/member_investment_canonical_integration.sql"
 echo "[phase8-db] recheck concurrent fast-move split cancellation race after reapply"
 bash "${ROOT_DIR}/api-server/scripts/verify-trade-split-cancel-concurrency.sh"
 run_sql "recheck membership-tier RLS after reapply" "api-server/supabase/test/phase8_tier_rls_integration.sql"

@@ -15,6 +15,7 @@ export const MEMBER_CAPABILITIES = Object.freeze([
   'canAccessBacktests',
   'canAccessPaperTrading',
   'canPlaceOrders',
+  'canConnectPersonalTelegram',
   'canAccessJournalSync',
   'canAccessTradingAnalytics',
   'canAccessAiTradingReview',
@@ -26,6 +27,7 @@ const ASSOCIATE = Object.freeze({
   ...NONE,
   canAccessBasicInfo: true,
   canAccessSpot: true,
+  canConnectPersonalTelegram: true,
 });
 const REGULAR = Object.freeze({
   ...ASSOCIATE,
@@ -46,8 +48,6 @@ export const MEMBER_PERMISSION_MATRIX = Object.freeze({
   admin: ADMIN,
 });
 
-const inactiveStatuses = new Set(['rejected', 'suspended', 'withdrawn', 'disabled', 'inactive']);
-
 function asRecord(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
@@ -62,13 +62,15 @@ export function deriveMemberTier(profile) {
   const active = value.is_active !== false && value.isActive !== false;
   const status = typeof value.status === 'string' ? value.status : null;
 
-  if (!active || (status && inactiveStatuses.has(status))) return 'pending';
+  // Profile-object authorization is fail closed: only an explicitly approved,
+  // active database profile may receive member capabilities. Direct tier strings
+  // remain supported for the static permission-matrix API below.
+  if (!active || status !== 'approved') return 'pending';
   if (explicit && MEMBER_TIERS.includes(explicit)) return explicit;
-  if (value.role === 'admin') return status === 'pending' ? 'pending' : 'admin';
+  if (value.role === 'admin' || value.role === 'master') return 'admin';
   if (value.role === 'associate') return 'associate';
-  if (value.role === 'regular') return 'regular';
-  if (status === 'approved') return 'regular';
-  return 'pending';
+  if (value.role === 'regular' || value.role === 'full') return 'regular';
+  return 'regular';
 }
 
 export function permissionsFor(profileOrTier) {

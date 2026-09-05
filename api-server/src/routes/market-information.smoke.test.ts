@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
 import test from 'node:test';
 import express from 'express';
-import { createMarketInformationRouter } from './market-information';
+import {
+  createMarketInformationRouter,
+  type MarketInformationRouterOptions,
+} from './market-information';
 import {
   MarketInformationError,
   type MarketInformationMeta,
@@ -73,9 +76,12 @@ function fixture(room: MarketInformationRoomId): MarketInformationResponse {
   };
 }
 
-async function start(service: Parameters<typeof createMarketInformationRouter>[0]) {
+async function start(
+  service: Parameters<typeof createMarketInformationRouter>[0],
+  options?: MarketInformationRouterOptions,
+) {
   const app = express();
-  app.use('/api/market-information', createMarketInformationRouter(service));
+  app.use('/api/market-information', createMarketInformationRouter(service, options));
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>((resolve, reject) => {
     server.once('listening', resolve);
@@ -114,6 +120,93 @@ test('market information router serves all four rooms with public-only request p
       assert.equal(body.requestPolicy.aiRequests, 0);
     }
     assert.deepEqual(calls, ['stocks-kr', 'stocks-us', 'coins-spot', 'coins-futures']);
+  } finally {
+    await server.close();
+  }
+});
+
+test('slow stock room returns bounded partial first paint while allowing canonical source warmup to finish', async () => {
+  let providerAborted = false;
+  let warmed = false;
+  let calls = 0;
+  let finishWarmup!: (outcome: 'warmed' | 'aborted') => void;
+  const warmupFinished = new Promise<'warmed' | 'aborted'>((resolve) => {
+    finishWarmup = resolve;
+  });
+  const server = await start({
+    async getRoom(room, signal): Promise<MarketInformationResponse> {
+      assert.equal(room, 'stocks-us');
+      calls += 1;
+      if (warmed) return fixture(room);
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          warmed = true;
+          finishWarmup('warmed');
+          resolve();
+        }, 80);
+        const abort = () => {
+          providerAborted = true;
+          finishWarmup('aborted');
+          clearTimeout(timer);
+          const reason = signal?.reason;
+          reject(reason instanceof Error ? reason : new Error('aborted'));
+        };
+        if (signal?.aborted) {
+          abort();
+          return;
+        }
+        signal?.addEventListener('abort', abort, { once: true });
+      });
+      return fixture(room);
+    },
+  }, { stockFirstPaintTimeoutMs: 30 });
+
+  try {
+    const startedAt = Date.now();
+    const firstResponse = await fetch(`${server.baseUrl}/api/market-information/stocks-us`);
+    const firstElapsedMs = Date.now() - startedAt;
+    assert.equal(firstResponse.status, 200);
+    assert.ok(firstElapsedMs < 1_000, `first-paint fallback took ${firstElapsedMs}ms`);
+    assert.match(firstResponse.headers.get('cache-control') ?? '', /no-cache/);
+    const firstBody = await firstResponse.json() as MarketInformationResponse;
+    assert.equal(firstBody.room, 'stocks-us');
+    assert.equal(firstBody.partial, true);
+    for (const key of ['indices', 'rankings', 'sectors', 'news', 'disclosures'] as const) {
+      assert.equal(firstBody.sections[key].status, 'unavailable');
+      assert.equal(firstBody.sections[key].data.length, 0);
+      assert.equal(firstBody.sections[key].meta.errorCode, 'MARKET_INFORMATION_FIRST_PAINT_TIMEOUT');
+      assert.equal(firstBody.sections[key].meta.retryable, true);
+      assert.match(firstBody.sections[key].message ?? '', /임시 시세나 순위를 만들지 않았/);
+    }
+    assert.equal(firstBody.sections.derivatives.status, 'unsupported');
+    assert.equal(firstBody.requestPolicy.publicMarketDataOnly, true);
+    assert.equal(firstBody.requestPolicy.privateExchangeRequests, 0);
+    assert.equal(firstBody.requestPolicy.accountRequests, 0);
+    assert.equal(firstBody.requestPolicy.balanceRequests, 0);
+    assert.equal(firstBody.requestPolicy.positionRequests, 0);
+    assert.equal(firstBody.requestPolicy.orderRequests, 0);
+    assert.equal(firstBody.requestPolicy.cancelRequests, 0);
+    assert.equal(firstBody.requestPolicy.aiRequests, 0);
+    assert.equal(providerAborted, false);
+
+    const warmupOutcome = await Promise.race([
+      warmupFinished,
+      new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 2_000)),
+    ]);
+    assert.equal(warmupOutcome, 'warmed');
+    assert.equal(providerAborted, false);
+    assert.equal(warmed, true);
+
+    const secondStartedAt = Date.now();
+    const secondResponse = await fetch(`${server.baseUrl}/api/market-information/stocks-us`);
+    const secondElapsedMs = Date.now() - secondStartedAt;
+    assert.equal(secondResponse.status, 200);
+    assert.ok(secondElapsedMs < 1_000, `warmed response took ${secondElapsedMs}ms`);
+    const secondBody = await secondResponse.json() as MarketInformationResponse;
+    assert.equal(secondBody.room, 'stocks-us');
+    assert.equal(secondBody.partial, false);
+    assert.equal(secondBody.sections.rankings.status, 'ready');
+    assert.equal(calls, 2);
   } finally {
     await server.close();
   }

@@ -6,6 +6,7 @@ import express, { type RequestHandler } from 'express';
 import type { AddressInfo } from 'node:net';
 import type { AuthenticatedRequest, MemberProfile } from '../middleware/auth';
 import { ScanProviderUnavailableError } from '../services/bounded-scanner.service';
+import { createScannerProviderHealth } from '../services/scanner-provider-health.contract';
 import { ScannerRequestGuard } from '../services/scanner-request-guard.service';
 import type { ScannerResponse } from '../services/scanner-signal.types';
 import {
@@ -23,6 +24,16 @@ interface ScanResponseBody {
   cards?: unknown[];
   orderSubmitted?: boolean;
   exchangeRequestSent?: boolean;
+  providerHealth?: Array<{
+    provider?: string;
+    state?: string;
+    latencyMs?: number | null;
+    retryCount?: number;
+    timeout?: boolean;
+    lastSuccessfulFetch?: string | null;
+    freshness?: string;
+    failureReason?: string | null;
+  }>;
   execution?: {
     partial?: boolean;
     timedOut?: boolean;
@@ -147,9 +158,19 @@ test('stock scanner server response budget remains below the browser app API dea
   assert.ok(browserDeadlineMs - STOCK_SCANNER_ROUTE_DEADLINE_MS >= 1_000);
 });
 
-test('normal zero-match scan returns HTTP 200 empty', async () => {
+test('normal zero-match scan returns HTTP 200 empty with provider health', async () => {
   await withServer(
-    { scan: async () => completeResult() },
+    {
+      scan: async () => Object.assign(completeResult(), {
+        providerHealth: [createScannerProviderHealth({
+          provider: 'yahoo',
+          state: 'READY',
+          latencyMs: 73,
+          lastSuccessfulFetch: '2026-08-21T03:00:00.000Z',
+          freshness: 'FRESH',
+        })],
+      }),
+    },
     async (baseUrl) => {
       const response = await fetch(`${baseUrl}/api/market/scan?market=KR&indicators=PER%20낮음`);
       assert.equal(response.status, 200);
@@ -161,6 +182,10 @@ test('normal zero-match scan returns HTTP 200 empty', async () => {
       assert.equal(body.elapsedMs, body.execution?.elapsedMs);
       assert.equal(body.dataState, 'complete');
       assert.deepEqual(body.cards, []);
+      assert.equal(body.providerHealth?.[0]?.provider, 'yahoo');
+      assert.equal(body.providerHealth?.[0]?.state, 'READY');
+      assert.equal(body.providerHealth?.[0]?.latencyMs, 73);
+      assert.equal(body.providerHealth?.[0]?.freshness, 'FRESH');
     },
   );
 });
@@ -200,6 +225,32 @@ test('scalping 3m request reaches scanner with explicit separated strategy', asy
   );
   assert.equal(capturedStrategy, 'scalping');
   assert.equal(capturedTimeframe, '3m');
+});
+
+test('US swing 4H canonical mobile request reaches scanner instead of returning HTTP 400', async () => {
+  let capturedMarket = '';
+  let capturedStrategy = '';
+  let capturedTimeframe = '';
+  await withServer(
+    {
+      scan: async (request) => {
+        capturedMarket = request.market;
+        capturedStrategy = request.strategyMode ?? '';
+        capturedTimeframe = String(request.filters.timeframe ?? '');
+        return completeResult({ market: 'US', timeframe: '4H' });
+      },
+    },
+    async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/market/scan?market=US&strategy=swing&timeframe=4H`);
+      assert.equal(response.status, 200);
+      const body = await response.json() as ScanResponseBody;
+      assert.equal(body.ok, true);
+      assert.equal(body.error, undefined);
+    },
+  );
+  assert.equal(capturedMarket, 'US');
+  assert.equal(capturedStrategy, 'swing');
+  assert.equal(capturedTimeframe, '4H');
 });
 
 test('some item timeouts return explicit partial HTTP 200', async () => {
@@ -261,6 +312,10 @@ test('route deadline returns explicit unavailable partial HTTP 200 and aborts sc
       assert.equal(body.execution?.deadlineMs, 25);
       assert.equal(body.dataState, 'unavailable');
       assert.deepEqual(body.cards, []);
+      assert.equal(body.providerHealth?.[0]?.provider, 'scanner-route');
+      assert.equal(body.providerHealth?.[0]?.state, 'TIMEOUT');
+      assert.equal(body.providerHealth?.[0]?.timeout, true);
+      assert.equal(body.providerHealth?.[0]?.latencyMs, 25);
       assert.equal(body.orderSubmitted, false);
       assert.equal(body.exchangeRequestSent, false);
     },
@@ -269,11 +324,24 @@ test('route deadline returns explicit unavailable partial HTTP 200 and aborts sc
   assert.equal(scannerAborted, true);
 });
 
-test('unreliable provider scan remains strict HTTP 502', async () => {
+test('unreliable provider scan remains strict HTTP 502 and exposes provider health', async () => {
   await withServer(
     {
       scan: async () => {
-        throw new ScanProviderUnavailableError('provider unavailable');
+        const error = new ScanProviderUnavailableError('provider unavailable');
+        Object.assign(error, {
+          providerHealth: [createScannerProviderHealth({
+            provider: 'yahoo',
+            state: 'TIMEOUT',
+            latencyMs: 1_650,
+            retryCount: 1,
+            timeout: true,
+            lastSuccessfulFetch: '2026-08-21T02:55:00.000Z',
+            freshness: 'STALE',
+            failureReason: 'YAHOO_CHART_BUDGET_EXCEEDED',
+          })],
+        });
+        throw error;
       },
     },
     async (baseUrl) => {
@@ -284,6 +352,11 @@ test('unreliable provider scan remains strict HTTP 502', async () => {
       assert.equal(body.error, 'SCAN_PROVIDER_ERROR');
       assert.equal(body.dataState, 'unavailable');
       assert.deepEqual(body.cards, []);
+      assert.equal(body.providerHealth?.[0]?.provider, 'yahoo');
+      assert.equal(body.providerHealth?.[0]?.state, 'TIMEOUT');
+      assert.equal(body.providerHealth?.[0]?.timeout, true);
+      assert.equal(body.providerHealth?.[0]?.latencyMs, 1_650);
+      assert.equal(body.providerHealth?.[0]?.failureReason, 'YAHOO_CHART_BUDGET_EXCEEDED');
     },
   );
 });
@@ -293,7 +366,7 @@ test('scanner smoke path sends zero order-capable requests', async () => {
   await withServer(
     { scan: async () => completeResult({ market: 'US' }) },
     async (baseUrl) => {
-      const url = `${baseUrl}/api/market/scan?market=US&strategy=swing&timeframe=1D`;
+      const url = `${baseUrl}/api/market/scan?market=US&strategy=position&timeframe=1D`;
       requestedPaths.push(new URL(url).pathname);
       const response = await fetch(url);
       assert.equal(response.status, 200);

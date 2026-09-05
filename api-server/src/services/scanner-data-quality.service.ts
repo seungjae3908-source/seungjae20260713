@@ -70,6 +70,13 @@ const TIMEFRAME_MS: Record<string, number> = {
   '1W': 7 * 24 * 60 * 60_000,
 };
 
+// Stock scanners are session-aware. A Friday close observed during a weekend,
+// exchange holiday, or before the next completed daily bar is not equivalent
+// to an unexplained multi-day provider outage. We allow a bounded recent
+// closed-session window only as DEGRADED evidence. It can never authorize a
+// strong signal; the next layer still requires complete/fresh data for V3.
+const SESSION_AWARE_RECENT_STALE_MS = 4 * 24 * 60 * 60_000;
+
 function compactKoreaTimestamp(value: string): number | null {
   const digits = value.replace(/\D/g, '');
   if (digits.length !== 8 && digits.length !== 14) return null;
@@ -126,8 +133,9 @@ function shouldInspectGap(
   if (gap <= expectedIntervalMs * 1.8) return false;
   if (!sessionAware) return true;
   if (timeframe === '1D' || timeframe === '1W') return false;
-  // Overnight/weekend closures are expected in stock markets. Six hours is
-  // safely above an in-session interruption while below normal overnight gaps.
+  // Overnight/weekend/holiday closures are expected in stock markets. Six
+  // hours is safely above an ordinary in-session interruption while below a
+  // normal overnight gap in the markets currently supported here.
   if (gap >= 6 * 60 * 60_000) return false;
   return true;
 }
@@ -191,8 +199,19 @@ function inspectCandles(
   const last = ordered.at(-1)!;
   if (expectedIntervalMs != null) {
     const staleMultiplier = Math.max(1.5, input.staleMultiplier ?? 3);
-    if (now - last.at > expectedIntervalMs * staleMultiplier) {
-      pushIssue(issues, 'STALE_TIMESTAMP', 'blocking', '최신 캔들 timestamp가 허용 범위를 벗어났습니다.');
+    const age = now - last.at;
+    if (age > expectedIntervalMs * staleMultiplier) {
+      const recentClosedSession = input.sessionAware === true
+        && age >= 0
+        && age <= SESSION_AWARE_RECENT_STALE_MS;
+      pushIssue(
+        issues,
+        'STALE_TIMESTAMP',
+        recentClosedSession ? 'warning' : 'blocking',
+        recentClosedSession
+          ? '최근 거래세션 이후 주말·휴장·미완성 세션 가능성이 있어 최신성은 보수적으로 제한합니다.'
+          : '최신 캔들 timestamp가 허용 범위를 벗어났습니다.',
+      );
     }
   }
 
@@ -277,11 +296,12 @@ export function evaluateScannerDataQuality(input: ScannerDataQualityInput): Scan
     : warningCount > 0
       ? 'DEGRADED'
       : 'TRUSTED';
+  const freshnessRestricted = issues.some((issue) => issue.code === 'STALE_TIMESTAMP' || issue.code === 'MARKET_CLOSED');
 
   return {
     state,
     score,
-    strongSignalAllowed: state !== 'DATA_UNTRUSTED' && score >= 80,
+    strongSignalAllowed: state !== 'DATA_UNTRUSTED' && score >= 80 && !freshnessRestricted,
     issues,
     observedCandleCount: input.candles.length,
     expectedIntervalMs,

@@ -172,8 +172,8 @@ assert.equal(failedInspection.ok, false);
 assert.equal(failedInspection.reason, 'required_status_failed');
 
 assert(
-  applicationWorkflow.includes("APPLICATION_CHECKOUT_REF: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.target_sha || github.sha) || github.ref }}"),
-  'workflow_dispatch must bind checkout to target_sha or exact dispatch SHA',
+  applicationWorkflow.includes("APPLICATION_CHECKOUT_REF: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.target_sha || github.sha) || github.event.pull_request.head.sha || github.sha }}"),
+  'workflow_dispatch must bind checkout to target_sha or exact dispatch SHA, and pull_request must bind checkout to immutable head SHA',
 );
 assert(!applicationWorkflow.includes('APPLICATION_CHECKOUT_REF: ${{ github.event.inputs.checkout_ref || github.ref }}'), 'dispatch checkout must not be independently user-selectable');
 
