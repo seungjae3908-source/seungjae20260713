@@ -14,6 +14,7 @@ import {
   type CryptoPricePrecisionService as CryptoPricePrecisionServiceContract,
 } from '../services/scanner-crypto-price-precision.service';
 import { rankScannerCandidates } from '../services/scanner-candidate-ranking.service';
+import { buildScannerDiscoveryView } from '../services/scanner-discovery-view.service';
 import {
   scannerStrategyForTimeframe,
   scannerStrategyTimeframeAllowed,
@@ -26,20 +27,35 @@ import {
 } from '../services/scanner-access-control.service';
 import { withScannerCanonicalActions } from '../services/scanner-market-action.service';
 import { deliverScannerTelegramAlerts } from '../services/scanner-telegram-delivery.service';
+import { deliverScannerTelegramFollowups } from '../services/telegram-signal-followup.service';
 import {
   ScannerRequestGuardError,
   scannerRequestGuard,
   type ScannerRequestGuard,
 } from '../services/scanner-request-guard.service';
+import {
+  CryptoWilliamsAtrScannerOverlayService,
+  type CryptoWilliamsOverlayRunner,
+} from '../services/crypto-williams-atr-scanner-overlay.service';
+import { withScannerOutcome } from '../services/scanner-signal.types';
+import {
+  enrichScannerCardsWithMarketIntelligence,
+  type ScannerMarketIntelligenceRunner,
+} from '../services/scanner-market-intelligence.service';
+import { enrichCryptoScannerCardsWithPublicEventContext } from '../services/scanner-crypto-public-event-intelligence.service';
 
 export type CryptoScannerRunner = {
   scan(request: CryptoSignalScanRequest): ReturnType<typeof CryptoSignalScannerService.scan>;
 };
 
+type CryptoRouteCondition = CryptoSignalScanRequest['condition'] | 'williams';
+
 export interface CryptoSignalScanRouteDependencies {
   scanner?: CryptoScannerRunner;
   guard?: ScannerRequestGuard;
   precision?: CryptoPricePrecisionServiceContract;
+  williamsOverlay?: CryptoWilliamsOverlayRunner;
+  marketIntelligence?: ScannerMarketIntelligenceRunner;
 }
 
 function requireScannerSession(req: AuthenticatedRequest, res: Response, next: NextFunction) {
@@ -72,16 +88,16 @@ function strategy(value: unknown, selectedTimeframe: CryptoSignalScanRequest['ti
   const normalized = String(value ?? '').trim().toLowerCase();
   const selected = normalized === ''
     ? scannerStrategyForTimeframe(selectedTimeframe)
-    : normalized === 'scalping' || normalized === 'swing'
+    : normalized === 'scalping' || normalized === 'swing' || normalized === 'position'
       ? normalized
       : null;
   return selected && scannerStrategyTimeframeAllowed(selected, selectedTimeframe) ? selected : null;
 }
 
-function condition(value: unknown): CryptoSignalScanRequest['condition'] {
+function condition(value: unknown): CryptoRouteCondition {
   const normalized = String(value ?? 'trend');
-  return ['trend', 'volume', 'breakout', 'pullback'].includes(normalized)
-    ? normalized as CryptoSignalScanRequest['condition']
+  return ['trend', 'volume', 'breakout', 'pullback', 'williams'].includes(normalized)
+    ? normalized as CryptoRouteCondition
     : 'trend';
 }
 
@@ -97,7 +113,7 @@ function routeError(res: Response, error: unknown) {
     return res.status(502).json({
       ok: false, error: error.code, cards: [], alerts: [],
       failures: [{ symbol: '*', reason: 'provider_error', message: error.message }],
-      dataState: 'unavailable', orderSubmitted: false, exchangeRequestSent: false,
+      dataState: 'unavailable', outcome: 'PROVIDER_FAILURE', orderSubmitted: false, exchangeRequestSent: false,
     });
   }
   return res.status(500).json({
@@ -112,6 +128,7 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
   const scanner = dependencies.scanner ?? CryptoSignalScannerService;
   const guard = dependencies.guard ?? scannerRequestGuard;
   const precision = dependencies.precision ?? CryptoPricePrecisionService;
+  const williamsOverlay = dependencies.williamsOverlay ?? CryptoWilliamsAtrScannerOverlayService;
   router.use(requireScannerSession);
 
   const handler = (market: 'spot' | 'futures') => async (req: AuthenticatedRequest, res: Response) => {
@@ -124,6 +141,7 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
         timeframe: selectedTimeframe, strategy: String(req.query.strategy ?? ''),
       });
     }
+    const selectedCondition = condition(req.query.condition);
     const requestedGrade = parseScannerGradeQuery(req.query.grade);
     if (requestedGrade === null) return res.status(400).json({ ok: false, error: 'SCANNER_GRADE_UNSUPPORTED' });
     const membershipLevel = req.membershipLevel ?? 'pending';
@@ -145,7 +163,7 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
         market,
         strategyMode,
         timeframe: selectedTimeframe,
-        condition: condition(req.query.condition),
+        condition: selectedCondition === 'williams' ? 'breakout' : selectedCondition,
         cursor: number(req.query.cursor, 0, 1_000_000) ?? 0,
         batchSize: number(req.query.batchSize, 5, 40) ?? 24,
         minimumScore: undefined,
@@ -163,22 +181,82 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
         softMinimumScore,
         limit: 10,
       });
-      const rankedCards = ranking.cards.map((card) => card.signalGrade === 'B'
+      const baseRankedCards = ranking.cards.map((card) => card.signalGrade === 'B'
         ? { ...card, strongSignalEligible: false, signalState: 'CANDIDATE' as const }
         : card);
+      const overlay = selectedCondition === 'williams'
+        ? await williamsOverlay.apply({ market, cards: baseRankedCards, signal: controller.signal })
+        : { cards: baseRankedCards, matchedCount: 0, unavailableCount: 0 };
+      if (controller.signal.aborted || res.writableEnded) return;
+      const directionFilteredCards = overlay.cards.filter((card) => (
+        market === 'spot'
+          ? card.direction === 'LONG'
+          : card.direction === 'LONG' || card.direction === 'SHORT'
+      ));
+      const intelligenceCards = await enrichScannerCardsWithMarketIntelligence(
+        directionFilteredCards,
+        dependencies.marketIntelligence,
+      );
+      if (controller.signal.aborted || res.writableEnded) return;
+      const rankedCards = await enrichCryptoScannerCardsWithPublicEventContext(intelligenceCards, {
+        market,
+        maxCandidates: 2,
+        budgetMs: 800,
+        signal: controller.signal,
+      });
+      if (controller.signal.aborted || res.writableEnded) return;
+      const discovery = buildScannerDiscoveryView(result.cards, {
+        tradeReviewCount: rankedCards.length,
+        limit: 100,
+      });
+
       const actionableIds = new Set(rankedCards
-        .filter((card) => card.signalGrade === 'S' || card.signalGrade === 'A')
+        .filter((card) => (card.signalGrade === 'S' || card.signalGrade === 'A') && card.strongSignalEligible !== false)
         .map((card) => card.signalId));
-      const actionableCount = ranking.diagnostics.sGradeCount + ranking.diagnostics.aGradeCount;
+      const cardBySignalId = new Map(rankedCards.map((card) => [card.signalId, card]));
+      const sGradeCount = rankedCards.filter((card) => card.signalGrade === 'S').length;
+      const aGradeCount = rankedCards.filter((card) => card.signalGrade === 'A').length;
+      const bGradeCount = rankedCards.filter((card) => card.signalGrade === 'B').length;
+      const actionableCount = rankedCards.filter((card) => actionableIds.has(card.signalId)).length;
+      const intelligenceReadyCount = rankedCards.filter((card) => card.marketIntelligence.status === 'READY').length;
+      const intelligenceUnavailableCount = rankedCards.length - intelligenceReadyCount;
+      const intelligenceBlockedCount = rankedCards.filter((card) => card.marketIntelligence.autoTrading.mode === 'BLOCKED_RISK').length;
       const insufficientDataCount = result.failures.filter((failure) => failure.reason === 'invalid_data').length;
       const providerAcceptedCount = result.execution.completedCount;
       const dataSuccessCount = Math.max(0, providerAcceptedCount - insufficientDataCount);
       const preRankingFilteredCount = Math.max(0, dataSuccessCount - result.cards.length);
       const filteredByStrategyCount = preRankingFilteredCount + ranking.diagnostics.hardFilterRejectedCount;
+      const baseMessage = selectedCondition === 'williams'
+        ? overlay.unavailableCount > 0 && overlay.matchedCount === 0
+          ? `Williams+ATR 일봉 확인 실패/부족 ${overlay.unavailableCount}개 · 강한 신호 승격 없음`
+          : actionableCount === 0
+            ? `Williams+ATR 확인 신호 없음 · 일치 ${overlay.matchedCount}개 · B 관찰 ${bGradeCount}개`
+            : `Williams+ATR + Quant S/A 일치 ${actionableCount}개 · B 관찰 ${bGradeCount}개`
+        : dataSuccessCount === 0 && insufficientDataCount > 0
+          ? `현재 묶음에서 공급자 응답은 받았지만 ${insufficientDataCount}종목의 분석 데이터가 부족합니다.`
+          : rankedCards.length === 0
+            ? '현재 묶음에서 추천 정책을 통과한 후보가 없습니다.'
+            : actionableCount === 0
+              ? `현재 진입 가능한 강한 신호 없음 · 관찰 후보 ${bGradeCount}개`
+              : `S/A 진입 검토 ${actionableCount}개 · B 관찰 ${bGradeCount}개`;
       const rankedResult = {
         ...result,
         cards: rankedCards,
-        alerts: result.alerts.filter((alert) => actionableIds.has(alert.signalId)),
+        discovery,
+        alerts: result.alerts
+          .filter((alert) => actionableIds.has(alert.signalId))
+          .map((alert) => {
+            const card = cardBySignalId.get(alert.signalId);
+            return card
+              ? {
+                ...alert,
+                entryZone: card.pricePlan.entryZone,
+                stopLoss: card.pricePlan.stopLoss,
+                targets: card.pricePlan.targets,
+                evidence: card.matched,
+              }
+              : alert;
+          }),
         execution: {
           ...result.execution,
           providerAcceptedCount,
@@ -189,26 +267,39 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
           hardFilterPassCount: ranking.diagnostics.hardFilterPassCount,
           hardFilterRejectedCount: ranking.diagnostics.hardFilterRejectedCount,
           softCandidateCount: ranking.diagnostics.softCandidateCount,
-          finalDisplayedCount: ranking.diagnostics.finalDisplayedCount,
-          sGradeCount: ranking.diagnostics.sGradeCount,
-          aGradeCount: ranking.diagnostics.aGradeCount,
-          bGradeCount: ranking.diagnostics.bGradeCount,
+          finalDisplayedCount: rankedCards.length,
+          sGradeCount,
+          aGradeCount,
+          bGradeCount,
           backtestMissingCount: ranking.diagnostics.backtestMissingCount,
         },
-        message: dataSuccessCount === 0 && insufficientDataCount > 0
-          ? `현재 묶음에서 공급자 응답은 받았지만 ${insufficientDataCount}종목의 분석 데이터가 부족합니다.`
-          : rankedCards.length === 0
-            ? '현재 묶음에서 Hard Risk Filter를 통과한 후보가 없습니다.'
-            : actionableCount === 0
-              ? `현재 진입 가능한 강한 신호 없음 · 관찰 후보 ${ranking.diagnostics.bGradeCount}개`
-              : `S/A 진입 검토 ${actionableCount}개 · B 관찰 ${ranking.diagnostics.bGradeCount}개`,
+        message: `${baseMessage} · 검색 후보 ${discovery.candidateCount}개 · 매매 검토 ${rankedCards.length}개`,
       };
       const canonicalResult = withScannerCanonicalActions(rankedResult);
-      const visibleResult = filterScannerResponseForTier(canonicalResult, membershipLevel, requestedGrade ?? undefined);
-      void deliverScannerTelegramAlerts(visibleResult.alerts);
+      const visibleResult = withScannerOutcome(filterScannerResponseForTier(canonicalResult, membershipLevel, requestedGrade ?? undefined));
+      void deliverScannerTelegramAlerts(
+        visibleResult.alerts,
+        undefined,
+        undefined,
+        { timeframe: selectedTimeframe, generatedAt: visibleResult.generatedAt },
+      );
+      void deliverScannerTelegramFollowups(visibleResult.cards);
       res.setHeader('Cache-Control', 'no-store, max-age=0');
       res.setHeader('X-Scanner-Request-Id', result.requestId);
-      return res.json({ ...visibleResult, strategy: strategyMode });
+      return res.json({
+        ...visibleResult,
+        strategy: strategyMode,
+        condition: selectedCondition,
+        marketIntelligence: {
+          status: 'ACTIVE',
+          mode: 'SOFT_INTELLIGENCE_LAYER',
+          readyCount: intelligenceReadyCount,
+          unavailableCount: intelligenceUnavailableCount,
+          blockedRiskCount: intelligenceBlockedCount,
+          candidateDeletionAllowed: false,
+          orderSubmissionAllowed: false,
+        },
+      });
     } catch (error) {
       if (controller.signal.aborted || res.writableEnded) return;
       return routeError(res, error);

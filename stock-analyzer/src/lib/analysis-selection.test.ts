@@ -1,3 +1,4 @@
+import './decision-quality-view.test';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -66,6 +67,7 @@ test('analysis selection URL contains identity fields but not plan or free-form 
     searchRunId: 'scan:US:1D:1', action: 'BUY',
     pricePlan: { entryZone: { from: 120, to: 121 }, stopLoss: 115, targets: [130], riskReward: 1.8 },
     reasons: ['private-free-form'],
+    selectedAt: '2026-08-20T00:00:00.000Z',
   });
   assert.ok(selection);
   const query = selectionQuery(selection);
@@ -75,4 +77,33 @@ test('analysis selection URL contains identity fields but not plan or free-form 
   const restored = selectionFromSearch(query);
   assert.equal(restored?.ticker, 'NVDA');
   assert.equal(restored?.searchRunId, 'scan:US:1D:1');
+  assert.ok(restored?.selectedAt);
+});
+
+test('analysis selection rejects missing or invalid selectedAt instead of fabricating now', () => {
+  const base = {
+    assetType: 'stock',
+    market: 'KR',
+    ticker: '005930',
+    displayName: '삼성전자',
+    timeframe: '15m',
+  };
+
+  assert.equal(normalizeAnalysisSelection(base), null);
+  assert.equal(normalizeAnalysisSelection({ ...base, selectedAt: '' }), null);
+  assert.equal(normalizeAnalysisSelection({ ...base, selectedAt: 'not-a-time' }), null);
+});
+
+test('analysis selection rejects future freshness timestamps', () => {
+  const future = new Date(Date.now() + 60_000).toISOString();
+  const selection = normalizeAnalysisSelection({
+    assetType: 'stock',
+    market: 'US',
+    ticker: 'NVDA',
+    displayName: 'NVIDIA',
+    timeframe: '1D',
+    selectedAt: future,
+  });
+
+  assert.equal(selection, null);
 });

@@ -1,4 +1,4 @@
-import { useQuery, keepPreviousData } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { api, ApiError, type Timeframe, type MarketKey } from '@/lib/api';
 
 // Don't retry deterministic 404s (unknown ticker).
@@ -56,7 +56,6 @@ export function useSearch(query: string) {
 		queryFn: () => api.search(q),
 		enabled: q.length > 0,
 		staleTime: STALE.catalog,
-		placeholderData: keepPreviousData,
 		retry,
 	});
 }
@@ -67,10 +66,9 @@ export function useMovers(market?: MarketKey, autoRefresh = true) {
 		queryFn: () => api.movers(market),
 		staleTime: STALE.quote,
 		refetchInterval: autoRefresh ? 15 * 1000 : false,
-		refetchIntervalInBackground: true,
+		refetchIntervalInBackground: false,
 		refetchOnWindowFocus: true,
 		refetchOnReconnect: true,
-		placeholderData: keepPreviousData,
 		retry,
 	});
 }
@@ -81,7 +79,7 @@ export function useSummary() {
 		queryFn: api.summary,
 		staleTime: STALE.quote,
 		refetchInterval: 15 * 1000,
-		refetchIntervalInBackground: true,
+		refetchIntervalInBackground: false,
 		refetchOnWindowFocus: true,
 		refetchOnReconnect: true,
 		retry,
@@ -94,7 +92,7 @@ export function useBriefing() {
 		queryFn: api.briefing,
 		staleTime: STALE.quote,
 		refetchInterval: 60 * 1000,
-		refetchIntervalInBackground: true,
+		refetchIntervalInBackground: false,
 		refetchOnWindowFocus: true,
 		refetchOnReconnect: true,
 		retry,
@@ -111,16 +109,16 @@ export function useUndervalued(market: MarketKey, enabled = true) {
 	});
 }
 
-export function useAlertFeed(market: 'ALL' | 'KR' | 'US') {
+export function useAlertFeed(market: 'ALL' | 'KR' | 'US', enabled = true) {
 	return useQuery({
 		queryKey: ['alert-feed', market],
 		queryFn: () => api.alertFeed(market),
+		enabled,
 		staleTime: 0,
-		refetchInterval: 60 * 1000,
-		refetchIntervalInBackground: true,
+		refetchInterval: enabled ? 60 * 1000 : false,
+		refetchIntervalInBackground: false,
 		refetchOnWindowFocus: true,
 		refetchOnReconnect: true,
-		placeholderData: keepPreviousData,
 		retry,
 	});
 }
@@ -132,7 +130,7 @@ export function useQuotes(tickers: string[]) {
 		enabled: tickers.length > 0,
 		staleTime: STALE.quote,
 		refetchInterval: 15 * 1000,
-		refetchIntervalInBackground: true,
+		refetchIntervalInBackground: false,
 		refetchOnWindowFocus: true,
 		refetchOnReconnect: true,
 		retry,
@@ -158,10 +156,9 @@ export function useChart(ticker: string, tf: Timeframe, enabled: boolean) {
 		enabled: enabled && ticker.trim().length > 0,
 		staleTime: STALE.chart,
 		refetchInterval: enabled ? interval : false,
-		refetchIntervalInBackground: true,
+		refetchIntervalInBackground: false,
 		refetchOnWindowFocus: true,
 		refetchOnReconnect: true,
-		placeholderData: keepPreviousData,
 		retry,
 	});
 }
@@ -174,10 +171,9 @@ export function useFinancials(ticker: string, enabled: boolean) {
 		staleTime: STALE.financials,
 		gcTime: 10 * MIN,
 		refetchInterval: enabled ? 5 * MIN : false,
-		refetchIntervalInBackground: true,
+		refetchIntervalInBackground: false,
 		refetchOnWindowFocus: true,
 		refetchOnReconnect: true,
-		placeholderData: keepPreviousData,
 		retry,
 	});
 }
@@ -189,10 +185,9 @@ export function useRisk(ticker: string, enabled: boolean) {
 		enabled: enabled && ticker.trim().length > 0,
 		staleTime: STALE.risk,
 		refetchInterval: enabled ? 5 * MIN : false,
-		refetchIntervalInBackground: true,
+		refetchIntervalInBackground: false,
 		refetchOnWindowFocus: true,
 		refetchOnReconnect: true,
-		placeholderData: keepPreviousData,
 		retry,
 	});
 }
@@ -204,10 +199,9 @@ export function useDisclosures(ticker: string, enabled: boolean) {
 		enabled: enabled && ticker.trim().length > 0,
 		staleTime: STALE.disclosures,
 		refetchInterval: enabled ? 60 * 1000 : false,
-		refetchIntervalInBackground: true,
+		refetchIntervalInBackground: false,
 		refetchOnWindowFocus: true,
 		refetchOnReconnect: true,
-		placeholderData: keepPreviousData,
 		retry,
 	});
 }
@@ -219,10 +213,9 @@ export function useSignals(ticker: string, enabled: boolean) {
 		enabled: enabled && ticker.trim().length > 0,
 		staleTime: STALE.signals,
 		refetchInterval: enabled ? 60 * 1000 : false,
-		refetchIntervalInBackground: true,
+		refetchIntervalInBackground: false,
 		refetchOnWindowFocus: true,
 		refetchOnReconnect: true,
-		placeholderData: keepPreviousData,
 		retry,
 	});
 }
@@ -240,10 +233,9 @@ export function useScan(
 		enabled: market.trim().length > 0,
 		staleTime: STALE.quote,
 		refetchInterval: autoRefresh ? interval : false,
-		refetchIntervalInBackground: true,
+		refetchIntervalInBackground: false,
 		refetchOnWindowFocus: true,
 		refetchOnReconnect: true,
-		placeholderData: keepPreviousData,
 		retry,
 	});
 }
@@ -255,10 +247,9 @@ export function useNews(ticker: string, enabled: boolean) {
 		enabled: enabled && ticker.trim().length > 0,
 		staleTime: STALE.news,
 		refetchInterval: enabled ? 60 * 1000 : false,
-		refetchIntervalInBackground: true,
+		refetchIntervalInBackground: false,
 		refetchOnWindowFocus: true,
 		refetchOnReconnect: true,
-		placeholderData: keepPreviousData,
 		retry,
 	});
 }
@@ -270,10 +261,9 @@ export function useAnalysis(ticker: string, enabled: boolean) {
 		enabled: enabled && ticker.trim().length > 0,
 		staleTime: STALE.analysis,
 		refetchInterval: enabled ? 5 * MIN : false,
-		refetchIntervalInBackground: true,
+		refetchIntervalInBackground: false,
 		refetchOnWindowFocus: true,
 		refetchOnReconnect: true,
-		placeholderData: keepPreviousData,
 		retry,
 	});
 }

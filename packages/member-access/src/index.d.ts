@@ -8,6 +8,7 @@ export type MemberCapability =
   | 'canAccessBacktests'
   | 'canAccessPaperTrading'
   | 'canPlaceOrders'
+  | 'canConnectPersonalTelegram'
   | 'canAccessJournalSync'
   | 'canAccessTradingAnalytics'
   | 'canAccessAiTradingReview'

@@ -4,22 +4,23 @@ import path from 'node:path';
 const root = path.basename(process.cwd()) === 'api-server'
   ? path.resolve(process.cwd(), '..')
   : path.resolve(process.cwd());
-const spec = await readFile(
+const normalizeNewlines = (value) => value.replace(/\r\n?/g, '\n');
+const spec = normalizeNewlines(await readFile(
   path.join(root, 'stock-analyzer/e2e/phase10-staging-readiness.spec.ts'),
   'utf8',
-);
-const app = await readFile(
+));
+const app = normalizeNewlines(await readFile(
   path.join(root, 'stock-analyzer/src/App.tsx'),
   'utf8',
-);
-const auth = await readFile(
+));
+const auth = normalizeNewlines(await readFile(
   path.join(root, 'stock-analyzer/src/lib/auth.tsx'),
   'utf8',
-);
-const routes = await readFile(
+));
+const routes = normalizeNewlines(await readFile(
   path.join(root, 'api-server/src/routes/index.ts'),
   'utf8',
-);
+));
 const assert = (condition, message) => {
   if (!condition) throw new Error(`[staging-login-selector-contract] ${message}`);
 };
@@ -42,8 +43,10 @@ assert(
 );
 
 assert(spec.includes('expected_logout_aborts: Diagnostic[]'), 'expected logout abort diagnostics bucket is missing');
-assert(spec.includes('type LogoutObservation = { candidates: Diagnostic[] }'), 'logout aborts must remain pending until post-logout checks pass');
+assert(spec.includes('type LogoutObservation = {'), 'logout observation contract is missing');
+assert(spec.includes('logoutScopedReads: Set<Request>'), 'logout observation must retain exact logout-scoped read request identities');
 assert(spec.includes('const activeLogoutObservations = new WeakMap<Page, LogoutObservation>()'), 'logout observation must be scoped to the active page');
+assert(spec.includes('const confirmedLogoutAbortRequests = new WeakMap<Request, string>()'), 'confirmed delayed aborts must remain scoped to exact request identities');
 assert(spec.includes("request.method() === 'POST'"), 'only POST logout requests may be considered expected');
 assert(spec.includes("parsed.pathname === '/auth/v1/logout'"), 'logout path must match exactly');
 assert(spec.includes('query.length === 1'), 'logout request must contain no query parameter other than scope');
@@ -51,11 +54,32 @@ assert(spec.includes("query[0]?.[0] === 'scope'"), 'logout query key must be sco
 assert(spec.includes("query[0]?.[1] === 'global'"), 'logout scope must be global');
 assert(spec.includes("request.failure()?.errorText === 'net::ERR_ABORTED'"), 'only the exact Chromium abort reason may be expected');
 
+const scopedReadPaths = [
+  '/api/user-integrations',
+  '/api/accounts/read-only/toss',
+  '/api/accounts/read-only/upbit',
+  '/api/accounts/read-only/bitget',
+];
+assert(spec.includes('const logoutScopedReadPaths = new Set(['), 'logout-scoped read path allowlist is missing');
+for (const route of scopedReadPaths) {
+  assert(spec.includes(`  '${route}',`), `logout-scoped read path is missing: ${route}`);
+}
+assert(!spec.includes("  '/api/accounts/read-only/kiwoom',"), 'Kiwoom must remain excluded from the logout-scoped read allowlist');
+assert(spec.includes('function isLogoutScopedReadIdentity('), 'logout-scoped read identity matcher is missing');
+assert(spec.includes("return method === 'GET'"), 'logout-scoped reads must remain GET-only');
+assert(spec.includes('logoutScopedReadPaths.has(parsed.pathname)'), 'logout-scoped reads must match an exact enumerated pathname');
+assert(spec.includes('parsed.searchParams.size === 0'), 'logout-scoped read exception must reject query-bearing requests');
+assert(spec.includes('parsed.origin === expectedOrigin'), 'logout-scoped read exception must remain on the origin captured before logout');
+
 const visibleIndex = spec.indexOf('await expect(logoutButton).toBeVisible();');
 const observationIndex = spec.indexOf('activeLogoutObservations.set(page, observation);');
 const clickIndex = spec.indexOf('await logoutButton.click();');
 assert(visibleIndex >= 0 && observationIndex > visibleIndex && clickIndex > observationIndex, 'expected window must open only around an explicit visible logout-button click');
 assert(spec.includes('logoutObservation.candidates.push(diagnostic);'), 'matching logout aborts must be held as candidates first');
+assert(spec.includes('return isLogoutScopedRead(request, expectedOrigin);'), 'read-only integration drain must reuse the exact enumerated same-origin GET classifier');
+assert(spec.includes('logoutObservation.logoutScopedReads.add(request);'), 'only an exact logout-scoped request observed during the explicit logout window may become a delayed candidate');
+assert(spec.includes('observation.logoutScopedReads.has(request)'), 'active abort classification must require exact request identity');
+assert(spec.includes('confirmedLogoutAbortRequests.get(request)'), 'delayed abort classification must require an exact confirmed request identity');
 assert(spec.includes('routeObservation.candidates.push(diagnostic);'), 'matching route-transition aborts must be held as candidates first');
 assert(
   spec.indexOf('diagnostics.expected_logout_aborts.push(...observation.candidates);')
@@ -66,9 +90,31 @@ assert(spec.includes('await page.reload();'), 'logout validation must refresh th
 assert(spec.includes("await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toHaveCount(0);"), 'logout session must not return after refresh');
 assert(spec.includes("page.request.get('/api/paper-journal/snapshot')"), 'logout validation must probe a protected API');
 assert(spec.includes('[401, 403]'), 'protected API must be denied with 401 or 403 after logout');
+assert(
+  spec.indexOf('confirmedLogoutAbortRequests.set(request, observation.origin);')
+    > spec.indexOf("expect(\n      [401, 403],"),
+  'delayed request identities may be confirmed only after protected API denial succeeds',
+);
 assert(spec.includes('unconfirmed logout abort:'), 'unconfirmed candidates must return to unexpected HTTP errors');
 assert(spec.includes('diagnostics.unexpected_http_errors.push(diagnostic);'), 'all non-matching failed requests must remain unexpected');
 assert(spec.includes('if (response.status() < 400) return;'), 'all browser 4xx and 5xx responses must remain unexpected');
+
+const responsiveLogoutStart = spec.indexOf("test(`${name}: login, refresh session retention, responsive layout, and logout`");
+const responsiveReloadIndex = spec.indexOf('await page.reload();', responsiveLogoutStart);
+const responsivePostReloadSettleIndex = spec.indexOf('await settle(page);', responsiveReloadIndex);
+const responsivePostReloadIntegrationDrainIndex = spec.indexOf(
+  'await waitForPendingPersonalIntegrationReads(page);',
+  responsivePostReloadSettleIndex,
+);
+const responsiveLogoutIndex = spec.indexOf('await logout(page);', responsivePostReloadSettleIndex);
+assert(
+  responsiveLogoutStart >= 0
+    && responsiveReloadIndex > responsiveLogoutStart
+    && responsivePostReloadSettleIndex > responsiveReloadIndex
+    && responsivePostReloadIntegrationDrainIndex > responsivePostReloadSettleIndex
+    && responsivePostReloadIntegrationDrainIndex < responsiveLogoutIndex,
+  'the reload-created personal integration GET must settle before the verifier starts logout',
+);
 
 const profileMatcherStart = spec.indexOf('function isProfileRequest(request: Request)');
 const profileMatcherEnd = spec.indexOf('\nfunction isExpectedAuthFault(', profileMatcherStart);
@@ -179,6 +225,23 @@ assert(
 assert(
   scannerReadinessTestBlock.includes("expect(diagnostics.expected_scanner_aborts, 'scanner net::ERR_ABORTED must remain zero').toEqual([]);"),
   'scanner single-entry fixture must preserve the zero-abort contract',
+);
+
+const rejectedProfileBootstrapTestStart = spec.indexOf("test('bootstrap finite-state:");
+const rejectedProfileBootstrapTestEnd = spec.indexOf("\n  test('profile timeout abort:", rejectedProfileBootstrapTestStart);
+assert(
+  rejectedProfileBootstrapTestStart >= 0 && rejectedProfileBootstrapTestEnd > rejectedProfileBootstrapTestStart,
+  'rejected profile bootstrap fixture boundaries are missing',
+);
+const rejectedProfileBootstrapTestBlock = spec.slice(
+  rejectedProfileBootstrapTestStart,
+  rejectedProfileBootstrapTestEnd,
+);
+assert(
+  rejectedProfileBootstrapTestBlock.includes(
+    "expect(requestCount, 'initial bootstrap must issue one profile request').toBe(1);",
+  ),
+  'rejected profile bootstrap must prove exactly one initial profile request',
 );
 
 const retryRecoveryTestStart = spec.indexOf("test('retry recovery:");
@@ -429,4 +492,4 @@ assert(
 assert(clearSessionIndex > globalLogoutIndex, 'successful global logout must synchronously invalidate session identity');
 assert(releaseBarrierIndex > clearSessionIndex, 'logout barrier must remain active until session identity and profile cleanup finish');
 
-console.log('[staging-login-selector-contract] logout and route-transition candidate classification, scoped profile fault classification, current-session profile guard, diagnostic redaction, optional provider degradation, and polling-safe presentation stability are locked down');
+console.log('[staging-login-selector-contract] exact logout-scoped read classification, route-transition candidate classification, scoped profile fault classification, current-session profile guard, diagnostic redaction, optional provider degradation, and polling-safe presentation stability are locked down');
