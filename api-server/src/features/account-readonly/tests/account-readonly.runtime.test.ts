@@ -86,7 +86,7 @@ test('vault-backed Toss reader performs OAuth then account-list and holdings GET
   });
   const result = await readers.toss!(SCOPE);
   assert.deepEqual(seen.map((row) => `${row.method} ${row.origin}${row.path}`), [
-    'POST https://oauth2.tossinvest.com/oauth2/token',
+    'POST https://openapi.tossinvest.com/oauth2/token',
     'GET https://openapi.tossinvest.com/api/v1/accounts',
     'GET https://openapi.tossinvest.com/api/v1/holdings',
   ]);
