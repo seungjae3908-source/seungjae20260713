@@ -6,6 +6,7 @@ on:
       - .github/workflows/production-comprehensive-readonly-qa.yml
       - stock-analyzer/playwright.production-comprehensive.config.ts
       - stock-analyzer/e2e/production-comprehensive-readonly-qa.spec.ts
+      - stock-analyzer/e2e/production-full-product-readonly-qa.spec.ts
       - stock-analyzer/e2e/production-mobile-scroll-readonly-qa.spec.ts
       - stock-analyzer/e2e/production-critical-http-readonly-qa.spec.ts
       - stock-analyzer/e2e/production-performance-readonly-qa.spec.ts
@@ -143,12 +144,15 @@ jobs:
             echo '- desktop search matrix: 20 symbols per market (80 total)'
             echo '- mobile search sample: 5 symbols per market (20 total)'
             echo '- chart matrix: 4 markets x 8 timeframes (32 actual UI transitions)'
+            echo '- full-product journey: login -> search -> AI chart -> account -> portfolio -> Paper -> Research -> reload/navigation -> client session expiry'
+            echo '- resilience injection: 401 / 403 / 429 / 500 / provider unavailable / null / timeout / abort / stale response / race / unmount'
             echo '- route/layout sweep: desktop 1920/1440/1024, Galaxy Fold-class 768, tablet 800, mobile 320/360/390/412/430'
             echo '- performance evidence: TTFB / FCP / LCP / CLS plus same-origin API p50/p95/p99; evidence-only, no guessed budget'
             echo '- checks: finite loading, root/internal scroll, overlap, fixed-nav occlusion, horizontal overflow, safe tabs, console/page/request failures'
             echo '- authenticated same-origin GET 401/403/5xx: blocking failure on critical routes'
             echo '- latest-head only: superseded pending QA runs are cancelled by concurrency'
-            echo '- retained evidence: structured production-comprehensive-artifacts only; raw trace/screenshot/test-results retention disabled'
+            echo '- retained evidence: structured production-comprehensive-artifacts only; automatic raw trace/screenshot/test-results retention disabled'
+            echo '- generic failure-state element screenshots only; no full-page authenticated failure capture'
             echo '- Production DB/app mutations: blocked'
             echo '- private provider/account live requests: blocked or mocked disconnected'
             echo '- actual order/cancel/amend/transfer/withdrawal authority: 0'
