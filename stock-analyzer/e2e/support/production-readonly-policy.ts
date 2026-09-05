@@ -66,6 +66,41 @@ export function classifyProductionRequest(
   return { action: 'allow' };
 }
 
+export function isIgnorableProductionRequestFailure(
+  rawUrl: string,
+  method: string,
+  errorText: string,
+  productionOrigin: string,
+): boolean {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+
+  const normalizedMethod = method.toUpperCase();
+  const normalizedError = errorText.trim();
+  const cloudflareRumNavigationAbort = url.origin === productionOrigin
+    && url.pathname === '/cdn-cgi/rum'
+    && normalizedMethod === 'POST'
+    && normalizedError === 'net::ERR_ABORTED';
+  if (cloudflareRumNavigationAbort) return true;
+
+  const readOnlyAbort = (normalizedMethod === 'GET' || normalizedMethod === 'HEAD')
+    && normalizedError === 'net::ERR_ABORTED';
+  if (!readOnlyAbort) return false;
+
+  if (url.origin === productionOrigin) return true;
+
+  // A route transition intentionally cancels in-flight Supabase REST reads from
+  // the previous screen. Treat only exact read-only browser aborts as expected;
+  // timeouts, connection failures, writes, auth, storage, and other hosts remain
+  // blocking diagnostics.
+  return url.hostname.endsWith('.supabase.co')
+    && url.pathname.startsWith('/rest/v1/');
+}
+
 export function privateAccountDisconnectedFixture() {
   const provider = (name: string, code: string) => ({
     provider: name,

@@ -1,9 +1,12 @@
+import './forward-calibration-gross-edge.service.test';
+import './forward-recommendation-observer-runtime.service.test';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   passesMinimumBacktestQuality,
   rankScannerCandidates,
 } from './scanner-candidate-ranking.service';
+import { buildScannerDiscoveryView } from './scanner-discovery-view.service';
 import type { ScannerBacktestQualitySummary, ScannerSignalCard } from './scanner-signal.types';
 
 function card(symbol: string, score = 80): ScannerSignalCard {
@@ -150,4 +153,42 @@ test('top ten is a maximum and does not synthesize extra candidates', () => {
   const result = rankScannerCandidates({ cards, market: 'KR', strategy: 'swing', limit: 10 });
   assert.equal(result.cards.length, 10);
   assert.equal(result.diagnostics.finalDisplayedCount, 10);
+});
+
+test('discovery keeps broad safe candidates while trade review remains capped at ten', () => {
+  const cards = Array.from({ length: 14 }, (_, index) => card(`D${index}`, 60 + index));
+  const strict = rankScannerCandidates({ cards, market: 'KR', strategy: 'swing', limit: 10 });
+  const discovery = buildScannerDiscoveryView(cards, { tradeReviewCount: strict.cards.length, limit: 100 });
+  assert.equal(strict.cards.length, 10);
+  assert.equal(discovery.candidateCount, 14);
+  assert.equal(discovery.returnedCount, 14);
+  assert.equal(discovery.tradeReviewCount, 10);
+  assert.equal(discovery.truncated, false);
+  assert.equal(discovery.executionAuthority, 'NONE');
+  assert.ok(discovery.cards.every((item) => item.discoveryOnly && !item.paperEligible && !item.autoTradeEligible));
+  assert.ok(discovery.cards.every((item) => item.tradingBlockers.includes('PROFITABILITY_EVIDENCE_NOT_ATTESTED')));
+});
+
+test('discovery accepts futures shorts but rejects stock shorts neutral and stale data', () => {
+  const futuresShort = card('FUTURES_SHORT');
+  futuresShort.assetClass = 'coin_futures';
+  futuresShort.market = 'BITGET';
+  futuresShort.exchange = 'BITGET';
+  futuresShort.currency = 'USDT';
+  futuresShort.assetType = 'futures';
+  futuresShort.direction = 'SHORT';
+
+  const stockShort = card('STOCK_SHORT');
+  stockShort.direction = 'SHORT';
+  const neutral = card('NEUTRAL');
+  neutral.direction = 'NEUTRAL';
+  const stale = card('STALE');
+  stale.dataState = 'stale';
+
+  const discovery = buildScannerDiscoveryView(
+    [futuresShort, stockShort, neutral, stale],
+    { tradeReviewCount: 0, limit: 100 },
+  );
+  assert.deepEqual(discovery.cards.map((item) => item.symbol), ['FUTURES_SHORT']);
+  assert.equal(discovery.cards[0].direction, 'SHORT');
 });

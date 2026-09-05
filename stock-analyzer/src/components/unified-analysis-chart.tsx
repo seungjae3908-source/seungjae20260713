@@ -20,16 +20,31 @@ import {
   TrendingUp,
   X,
 } from 'lucide-react';
-import { PatternAwareUnifiedChartCanvas } from '@/components/pattern-aware-unified-chart-canvas';
+import {
+  PatternAwareUnifiedChartCanvas,
+  type PatternAwareUnifiedChartCanvasHandle,
+} from '@/components/pattern-aware-unified-chart-canvas';
 import { SelectedCandleDetailPanel } from '@/components/selected-candle-detail';
 import { api } from '@/lib/api';
 import { authorizedFetch } from '@/lib/auth-fetch';
+import { createAiChartPublicStreamClient } from '@/lib/ai-chart-public-stream-client';
+import {
+  aiChartStreamIdentityKey,
+  createAiChartStreamReduction,
+  reconcileAiChartPublicTrades,
+  type AiChartPublicStreamMarket,
+  type AiChartPublicStreamStatus,
+  type AiChartStreamIntegrityIssue,
+} from '@/lib/ai-chart-public-stream';
 import {
   buildChartAnalysis,
   shouldAppendTimeline,
   type ChartAnalysis,
 } from '@/lib/chart-analysis';
-import type { NormalizedChartCandle } from '@/lib/chart-candle-normalizer';
+import {
+  chartTimeframeSeconds,
+  type NormalizedChartCandle,
+} from '@/lib/chart-candle-normalizer';
 import {
   computeChartIndicators,
   type ChartIndicatorResult,
@@ -42,7 +57,6 @@ import {
   fetchUnifiedChartData,
   marketAssetType,
   normalizeUnifiedSymbol,
-  unifiedChartDataStatus,
   unifiedMarketLabel,
   type UnifiedChartData,
   type UnifiedChartTimeframe,
@@ -93,6 +107,20 @@ type Props = {
   onSelectionChange: (selection: AnalysisSelection) => void;
   onAnalysisChange?: (analysis: ChartAnalysis | null) => void;
 };
+
+type AiChartRealtimeHealth = {
+  transportMode: 'STREAM' | 'POLLING';
+  connectionState: AiChartPublicStreamStatus | 'REST_ONLY' | 'POLLING_PAUSED' | 'REST_BOOTSTRAP';
+  dataStatus: 'LIVE' | 'DEGRADED' | 'RECOVERING' | 'STALE' | 'UNAVAILABLE';
+  provider: string;
+  symbol: string;
+  timeframe: UnifiedChartTimeframe;
+  lastValidEventAt: number | null;
+  recoveryState: string;
+  integrityIssues: AiChartStreamIntegrityIssue[];
+};
+
+type AiChartDataStatus = 'ok' | 'delayed' | 'stale' | 'insufficient' | 'unavailable';
 
 const EMPTY_CANDLES: NormalizedChartCandle[] = [];
 const MARKET_OPTIONS: Array<{ key: AnalysisMarket; label: string }> = [
@@ -178,7 +206,54 @@ function formatPercent(value: number | null): string {
   return `${value > 0 ? '+' : ''}${value.toFixed(2)}%`;
 }
 
-function dataStatusLabel(status: ReturnType<typeof unifiedChartDataStatus>): string {
+function latestCandleSourceTimeMs(data: UnifiedChartData | undefined): number | null {
+  const latest = data?.normalization.candles.at(-1);
+  if (!latest || !Number.isSafeInteger(latest.time) || latest.time <= 0) return null;
+  return latest.time * 1_000;
+}
+
+function sourceAwareChartDataStatus(
+  data: UnifiedChartData | undefined,
+  failed: boolean,
+  now = Date.now(),
+): AiChartDataStatus {
+  if (failed) return 'unavailable';
+  if (!data || data.normalization.candles.length < 2) return 'insufficient';
+  const sourceTimeMs = latestCandleSourceTimeMs(data);
+  if (sourceTimeMs == null || !Number.isFinite(now) || sourceTimeMs > now) return 'delayed';
+  const interval = chartTimeframeSeconds(data.timeframe) * 1_000;
+  const delayedAfter = data.timeframe === '1D'
+    ? interval * 2
+    : Math.max(interval * 2, 10 * 60_000);
+  const staleAfter = data.timeframe === '1D'
+    ? interval * 5
+    : Math.max(interval * 3, 30 * 60_000);
+  const age = now - sourceTimeMs;
+  if (age > staleAfter) return 'stale';
+  if (age > delayedAfter) return 'delayed';
+  return 'ok';
+}
+
+function formatDataAge(data: UnifiedChartData | undefined): string {
+  const timestamp = latestCandleSourceTimeMs(data);
+  if (timestamp == null) return '미확인';
+  const ageMs = Math.max(0, Date.now() - timestamp);
+  if (ageMs < 1_000) return '<1초';
+  if (ageMs < 60_000) return `${Math.floor(ageMs / 1_000)}초`;
+  if (ageMs < 3_600_000) return `${Math.floor(ageMs / 60_000)}분`;
+  return `${(ageMs / 3_600_000).toFixed(1)}시간`;
+}
+
+function scannerActionLabel(action: AnalysisSelection['action']): string {
+  if (action === 'BUY') return '매수';
+  if (action === 'SELL') return '매도 참고';
+  if (action === 'LONG') return '롱';
+  if (action === 'SHORT') return '숏';
+  if (action === 'NO_TRADE' || action === 'NONE') return '거래 안 함';
+  return '미확인';
+}
+
+function dataStatusLabel(status: AiChartDataStatus): string {
   return {
     ok: '정상',
     delayed: '지연',
@@ -188,7 +263,7 @@ function dataStatusLabel(status: ReturnType<typeof unifiedChartDataStatus>): str
   }[status];
 }
 
-function dataStatusClass(status: ReturnType<typeof unifiedChartDataStatus>): string {
+function dataStatusClass(status: AiChartDataStatus): string {
   if (status === 'ok') return 'border-positive/30 bg-positive/10 text-positive';
   if (status === 'delayed' || status === 'stale') return 'border-warning/30 bg-warning/10 text-warning';
   return 'border-destructive/30 bg-destructive/10 text-destructive';
@@ -298,7 +373,8 @@ function buildCurrentAnalysis(input: {
   const volumeRatio = current?.volumeRatio20 ?? 1;
   const bullishMomentum = trend === '상승' && (current?.macdHistogram == null || current.macdHistogram >= 0);
   const bearishMomentum = trend === '하락' && (current?.macdHistogram == null || current.macdHistogram <= 0);
-  const signal = pattern?.status === 'candidate'
+  const dataStatus = sourceAwareChartDataStatus(input.data, false);
+  const directionalSignal = pattern?.status === 'candidate'
     ? 'WATCH'
     : pattern?.bias === 'bullish'
       ? 'HOLD'
@@ -309,7 +385,8 @@ function buildCurrentAnalysis(input: {
           : bearishMomentum
             ? 'EXIT'
             : 'WATCH';
-  const confidence = Math.max(20, Math.min(92, Math.round(
+  const signal = dataStatus === 'ok' ? directionalSignal : 'WATCH';
+  const technicalScore = Math.max(20, Math.min(92, Math.round(
     45 +
     (trend === '중립' ? 0 : 12) +
     (pattern ? 15 : 0) +
@@ -320,13 +397,15 @@ function buildCurrentAnalysis(input: {
     ? `${pattern.label} ${pattern.status === 'confirmed' ? '확정' : pattern.status === 'invalidated' ? '무효화' : '후보'}`
     : null;
   const title = patternText ?? (trend === '상승' ? '상승 구조 관찰' : trend === '하락' ? '하락 구조 관찰' : '방향 확인 중');
-  const summary = pattern
-    ? pattern.status === 'confirmed'
-      ? `${pattern.label}이 완료된 봉 기준으로 확인됐습니다. 넥라인과 무효화 기준을 함께 확인하세요.`
-      : pattern.status === 'invalidated'
-        ? `${pattern.label} 후보가 기준 가격을 벗어나 무효화됐습니다.`
-        : `${pattern.label} 후보가 감지됐지만 넥라인 확인 전이므로 확정으로 판단하지 않습니다.`
-    : `${input.selection.timeframe} 기준 ${trend} 구조입니다. 현재가 ${latest.close}, 지지 ${input.levels.support}, 저항 ${input.levels.resistance}를 기준으로 다음 완료봉을 확인합니다.`;
+  const summary = dataStatus !== 'ok'
+    ? `데이터 상태가 ${dataStatusLabel(dataStatus)}이므로 방향 신호를 강행하지 않고 WATCH로 제한합니다.`
+    : pattern
+      ? pattern.status === 'confirmed'
+        ? `${pattern.label}이 완료된 봉 기준으로 확인됐습니다. 넥라인과 무효화 기준을 함께 확인하세요.`
+        : pattern.status === 'invalidated'
+          ? `${pattern.label} 후보가 기준 가격을 벗어나 무효화됐습니다.`
+          : `${pattern.label} 후보가 감지됐지만 넥라인 확인 전이므로 확정으로 판단하지 않습니다.`
+      : `${input.selection.timeframe} 기준 ${trend} 구조입니다. 현재가 ${latest.close}, 지지 ${input.levels.support}, 저항 ${input.levels.resistance}를 기준으로 다음 완료봉을 확인합니다.`;
   const anchors = pattern?.anchorPivots ?? [];
 
   return buildChartAnalysis({
@@ -343,7 +422,7 @@ function buildCurrentAnalysis(input: {
     support: pattern?.type === 'double-top' ? pattern.neckline : pattern?.type === 'double-bottom' ? pattern.invalidationLevel : input.levels.support,
     resistance: pattern?.type === 'double-bottom' ? pattern.neckline : pattern?.type === 'double-top' ? pattern.invalidationLevel : input.levels.resistance,
     signal,
-    confidence,
+    confidence: technicalScore,
     title,
     summary,
     patterns: patternText ? [patternText] : [],
@@ -352,8 +431,8 @@ function buildCurrentAnalysis(input: {
     anchorTimes: anchors.map((pivot) => pivot.time),
     anchorPoints: anchors.map((pivot) => ({ time: pivot.time, price: pivot.price, role: pivot.kind })),
     previousAnalysis: input.previous,
-    dataStatus: unifiedChartDataStatus(input.data, false),
-    engineVersion: 'unified-chart-v1',
+    dataStatus,
+    engineVersion: 'unified-chart-v3-evidence-truth-v1',
   });
 }
 
@@ -369,6 +448,20 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
   const [inputError, setInputError] = useState('');
   const [selectedCandleTime, setSelectedCandleTime] = useState<number | null>(null);
+  const streamMarket: AiChartPublicStreamMarket | null = market === 'UPBIT' || market === 'BITGET' ? market : null;
+  const [realtimeHealth, setRealtimeHealth] = useState<AiChartRealtimeHealth>({
+    transportMode: 'POLLING',
+    connectionState: 'REST_BOOTSTRAP',
+    dataStatus: 'UNAVAILABLE',
+    provider: 'REST',
+    symbol: selection.ticker,
+    timeframe,
+    lastValidEventAt: null,
+    recoveryState: 'BOOTSTRAP_REQUIRED',
+    integrityIssues: [],
+  });
+  const streamGenerationRef = useRef(0);
+  const realtimeCanvasRef = useRef<PatternAwareUnifiedChartCanvasHandle | null>(null);
   const previousAnalysisRef = useRef<ChartAnalysis | null>(null);
 
   useEffect(() => {
@@ -388,12 +481,18 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
     staleTime: 30_000,
     retry: 1,
   });
+  const streamOwnsTransport = live && streamMarket != null && (
+    realtimeHealth.connectionState === 'CONNECTING'
+    || realtimeHealth.connectionState === 'WAITING_FIRST_EVENT'
+    || realtimeHealth.connectionState === 'LIVE_STREAM'
+    || realtimeHealth.connectionState === 'RECOVERING'
+  );
   const chartQuery = useQuery({
     queryKey: ['unified-chart-data', market, selection.ticker, timeframe],
     queryFn: ({ signal }) => fetchUnifiedChartData({ market, symbol: selection.ticker, timeframe, signal }),
     enabled: Boolean(selection.ticker),
-    refetchInterval: live ? (timeframe === '1D' ? 30_000 : 8_000) : false,
-    refetchIntervalInBackground: true,
+    refetchInterval: live && !streamOwnsTransport ? (timeframe === '1D' ? 30_000 : 8_000) : false,
+    refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
     retry: (failureCount, error) => {
@@ -402,6 +501,170 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
       return true;
     },
   });
+
+  useEffect(() => {
+    const generation = streamGenerationRef.current + 1;
+    streamGenerationRef.current = generation;
+    const symbol = normalizeUnifiedSymbol(market, selection.ticker);
+
+    if (!live) {
+      setRealtimeHealth({
+        transportMode: 'POLLING',
+        connectionState: 'POLLING_PAUSED',
+        dataStatus: 'UNAVAILABLE',
+        provider: 'REST',
+        symbol,
+        timeframe,
+        lastValidEventAt: null,
+        recoveryState: 'PAUSED_BY_USER',
+        integrityIssues: [],
+      });
+      return;
+    }
+
+    if (!streamMarket) {
+      setRealtimeHealth({
+        transportMode: 'POLLING',
+        connectionState: 'REST_ONLY',
+        dataStatus: chartQuery.data ? 'DEGRADED' : 'UNAVAILABLE',
+        provider: chartQuery.data?.provider ?? 'REST',
+        symbol,
+        timeframe,
+        lastValidEventAt: null,
+        recoveryState: 'PUBLIC_STREAM_NOT_SUPPORTED_FOR_MARKET',
+        integrityIssues: [],
+      });
+      return;
+    }
+
+    const bootstrap = chartQuery.data;
+    if (!bootstrap || bootstrap.normalization.candles.length < 2 || !symbol) {
+      setRealtimeHealth({
+        transportMode: 'POLLING',
+        connectionState: 'REST_BOOTSTRAP',
+        dataStatus: 'UNAVAILABLE',
+        provider: bootstrap?.provider ?? 'REST',
+        symbol,
+        timeframe,
+        lastValidEventAt: null,
+        recoveryState: 'VALID_BOOTSTRAP_REQUIRED',
+        integrityIssues: [],
+      });
+      return;
+    }
+
+    const identityKey = aiChartStreamIdentityKey({ market: streamMarket, symbol, timeframe, generation });
+    const bootstrapCutoffMs = Date.now();
+    let reduction = createAiChartStreamReduction(bootstrap.normalization.candles);
+    let lastValidEventAt: number | null = null;
+    let recoveryRequested = false;
+
+    const requestRecovery = (issues: AiChartStreamIntegrityIssue[], reason: string) => {
+      if (streamGenerationRef.current !== generation) return;
+      setRealtimeHealth({
+        transportMode: 'STREAM',
+        connectionState: 'RECOVERING',
+        dataStatus: 'RECOVERING',
+        provider: streamMarket === 'UPBIT' ? 'UPBIT_PUBLIC' : 'BITGET_PUBLIC',
+        symbol,
+        timeframe,
+        lastValidEventAt,
+        recoveryState: reason,
+        integrityIssues: issues,
+      });
+      if (recoveryRequested) return;
+      recoveryRequested = true;
+      void chartQuery.refetch();
+    };
+
+    const client = createAiChartPublicStreamClient({
+      market: streamMarket,
+      symbol,
+      onStatus: (status, reason) => {
+        if (streamGenerationRef.current !== generation) return;
+        if (status === 'RECOVERING') {
+          requestRecovery([], reason);
+          return;
+        }
+        setRealtimeHealth({
+          transportMode: status === 'FALLBACK_POLLING' || status === 'DISCONNECTED' ? 'POLLING' : 'STREAM',
+          connectionState: status,
+          dataStatus: status === 'LIVE_STREAM'
+            ? 'LIVE'
+            : status === 'FALLBACK_POLLING'
+              ? 'DEGRADED'
+              : 'UNAVAILABLE',
+          provider: streamMarket === 'UPBIT' ? 'UPBIT_PUBLIC' : 'BITGET_PUBLIC',
+          symbol,
+          timeframe,
+          lastValidEventAt,
+          recoveryState: reason,
+          integrityIssues: [],
+        });
+      },
+      onDiagnostic: (diagnostic) => {
+        if (streamGenerationRef.current !== generation) return;
+        if (diagnostic.reason === 'STREAM_DELAYED') {
+          setRealtimeHealth((current) => current.dataStatus === 'DEGRADED'
+            ? current
+            : {
+                ...current,
+                dataStatus: 'DEGRADED',
+                recoveryState: 'MARKET_EVENT_DELAYED',
+                lastValidEventAt: diagnostic.lastEventAtMs,
+              });
+        } else if (diagnostic.reason === 'PUBLIC_TRADE_BATCH') {
+          setRealtimeHealth((current) => current.dataStatus === 'LIVE'
+            ? current
+            : {
+                ...current,
+                dataStatus: 'LIVE',
+                recoveryState: 'INTEGRITY_REVALIDATED',
+                lastValidEventAt: diagnostic.lastEventAtMs,
+                integrityIssues: [],
+              });
+        }
+      },
+      onTrades: (events) => {
+        if (
+          streamGenerationRef.current !== generation
+          || recoveryRequested
+          || identityKey !== aiChartStreamIdentityKey({ market: streamMarket, symbol, timeframe, generation })
+        ) {
+          return false;
+        }
+        const reconciled = reconcileAiChartPublicTrades({
+          previous: reduction,
+          events: [...events],
+          market: streamMarket,
+          symbol,
+          timeframe,
+          bootstrapCutoffMs,
+        });
+        if (reconciled.needsSnapshot) {
+          requestRecovery(reconciled.integrityIssues, 'REST_STREAM_RECONCILIATION_REQUIRED');
+          return false;
+        }
+        if (reconciled.acceptedEvents === 0 || !reconciled.latestCandle) return false;
+        if (!realtimeCanvasRef.current?.applyRealtimeCandle(reconciled.latestCandle)) {
+          requestRecovery(['INVALID_EVENT_VALUE'], 'INCREMENTAL_CHART_UPDATE_REJECTED');
+          return false;
+        }
+        reduction = reconciled.reduction;
+        lastValidEventAt = events.reduce(
+          (latest, event) => Math.max(latest, event.eventTimeMs),
+          lastValidEventAt ?? 0,
+        );
+        return true;
+      },
+    });
+
+    client.start();
+    return () => {
+      if (streamGenerationRef.current === generation) streamGenerationRef.current += 1;
+      client.stop();
+    };
+  }, [chartQuery.data, chartQuery.dataUpdatedAt, chartQuery.refetch, live, market, selection.ticker, streamMarket, timeframe]);
 
   const candles = chartQuery.data?.normalization.candles ?? EMPTY_CANDLES;
   const indicators = useMemo(() => computeChartIndicators(candles), [candles]);
@@ -448,7 +711,7 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
       return;
     }
     const nextTimeframe = candidate.timeframe ?? timeframe;
-    const sameScannerContext = selection.market === candidate.market
+    const sameScannerIdentity = selection.market === candidate.market
       && selection.ticker === symbol
       && selection.timeframe === nextTimeframe;
     setInputError('');
@@ -460,16 +723,16 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
       ticker: symbol,
       displayName: candidate.name.trim() || symbol,
       timeframe: nextTimeframe,
-      searchRunId: sameScannerContext ? selection.searchRunId : undefined,
-      signalScore: sameScannerContext ? selection.signalScore : undefined,
-      signalRank: sameScannerContext ? selection.signalRank : undefined,
-      confidence: sameScannerContext ? selection.confidence : undefined,
-      riskLevel: sameScannerContext ? selection.riskLevel : undefined,
-      action: sameScannerContext ? selection.action : undefined,
-      pricePlan: sameScannerContext ? selection.pricePlan : undefined,
-      matchedSignals: sameScannerContext ? selection.matchedSignals : undefined,
-      reasons: sameScannerContext ? selection.reasons : undefined,
-      selectedAt: sameScannerContext ? selection.selectedAt : new Date().toISOString(),
+      searchRunId: sameScannerIdentity ? selection.searchRunId : undefined,
+      signalScore: sameScannerIdentity ? selection.signalScore : undefined,
+      signalRank: sameScannerIdentity ? selection.signalRank : undefined,
+      confidence: sameScannerIdentity ? selection.confidence : undefined,
+      riskLevel: sameScannerIdentity ? selection.riskLevel : undefined,
+      action: sameScannerIdentity ? selection.action : undefined,
+      pricePlan: sameScannerIdentity ? selection.pricePlan : undefined,
+      matchedSignals: sameScannerIdentity ? selection.matchedSignals : undefined,
+      reasons: sameScannerIdentity ? selection.reasons : undefined,
+      selectedAt: sameScannerIdentity ? selection.selectedAt : new Date().toISOString(),
     });
   }, [onSelectionChange, selection, timeframe]);
 
@@ -481,7 +744,13 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
     const fallback = defaultUnifiedSymbol(nextMarket);
     commitSelection({ market: nextMarket, symbol: fallback.symbol, name: fallback.displayName, timeframe });
   };
-  const submitDraft = () => commitSelection({ market, symbol: draft, name: draft, timeframe });
+  const submitDraft = () => {
+    const normalizedDraft = normalizeUnifiedSymbol(market, draft);
+    const displayName = normalizedDraft === selection.ticker ? selection.displayName : draft;
+    commitSelection({ market, symbol: draft, name: displayName, timeframe });
+    setQuery('');
+    setSearchOpen(false);
+  };
   const changeTimeframe = (nextTimeframe: UnifiedChartTimeframe) => commitSelection({
     market,
     symbol: selection.ticker,
@@ -490,7 +759,7 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
   });
   const toggleOverlay = (key: OverlayKey) => setOverlays((current) => persistOverlays({ ...current, [key]: !current[key] }));
 
-  const dataStatus = unifiedChartDataStatus(chartQuery.data, chartQuery.isError);
+  const dataStatus = sourceAwareChartDataStatus(chartQuery.data, chartQuery.isError);
   const latest = candles.at(-1);
   const currentIndicator = indicators.latest;
   const searchRows = searchQuery.data ?? [];
@@ -501,13 +770,29 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
     ? `${formatPlanPrice(pricePlan.entryZone.from, market)} ~ ${formatPlanPrice(pricePlan.entryZone.to, market)}`
     : '미확인';
 
+  const realtimeStatusLabel = live ? realtimeHealth.connectionState : 'POLLING_PAUSED';
+  const realtimeDescription = !live
+    ? '자동 갱신이 일시정지되었습니다.'
+    : streamMarket
+      ? `공개 read-only ${streamMarket} WebSocket을 우선 사용하고, 연결·첫 이벤트·freshness 검증이 실패하면 REST polling으로 fail-closed 전환합니다.`
+      : '이 시장은 공개 WebSocket owner 범위가 아니므로 REST polling으로 읽기 전용 갱신합니다.';
+
   return (
     <div className="space-y-4" data-testid="unified-analysis-chart">
       <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
         <div className="flex items-start justify-between gap-3">
           <div><p className="text-[11px] font-extrabold text-primary">시장·종목 선택</p><h2 className="mt-1 text-base font-black">실제 차트 데이터</h2></div>
-          <button type="button" onClick={() => setLive((current) => !current)} className={cn('rounded-full border px-3 py-1.5 text-xs font-extrabold', live ? 'border-positive/30 bg-positive/10 text-positive' : 'border-card-border bg-background text-muted-foreground')}>{live ? '자동 갱신 중' : '갱신 일시정지'}</button>
+          <button
+            type="button"
+            aria-label={live ? '자동 갱신 중' : '갱신 일시정지'}
+            data-testid="chart-stream-status"
+            onClick={() => setLive((current) => !current)}
+            className={cn('rounded-full border px-3 py-1.5 text-xs font-extrabold', live ? 'border-warning/30 bg-warning/10 text-warning' : 'border-card-border bg-background text-muted-foreground')}
+          >
+            {realtimeStatusLabel}
+          </button>
         </div>
+        <p className="mt-2 text-[10px] font-bold text-muted-foreground">{realtimeDescription}</p>
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
           {MARKET_OPTIONS.map((item) => (
             <button key={item.key} type="button" data-testid={`market-${item.key}`} onClick={() => changeMarket(item.key)} className={cn('rounded-xl border px-2 py-2 text-xs font-black', market === item.key ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-background text-muted-foreground')}>{item.label}</button>
@@ -516,23 +801,38 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
         <div className="mt-3 flex gap-2">
           <label className="flex min-w-0 flex-1 items-center gap-2 rounded-2xl border border-card-border bg-background px-3">
             <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
-            <input value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); submitDraft(); } }} aria-label="차트 종목 심볼" className="h-11 min-w-0 flex-1 bg-transparent text-sm font-bold outline-none" />
-            {draft && <button type="button" aria-label="심볼 지우기" onClick={() => setDraft('')}><X className="h-4 w-4 text-muted-foreground" /></button>}
+            <input
+              value={draft}
+              onChange={(event) => {
+                const value = event.target.value;
+                setDraft(value);
+                setQuery(value);
+                setSearchOpen(Boolean(value.trim()));
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  submitDraft();
+                }
+              }}
+              aria-label="차트 종목 심볼"
+              placeholder="종목명·심볼 검색"
+              className="h-11 min-w-0 flex-1 bg-transparent text-sm font-bold outline-none"
+            />
+            {draft && <button type="button" aria-label="심볼 지우기" onClick={() => { setDraft(''); setQuery(''); setSearchOpen(false); }}><X className="h-4 w-4 text-muted-foreground" /></button>}
           </label>
           <button type="button" data-testid="apply-chart-symbol" onClick={submitDraft} className="shrink-0 rounded-2xl bg-primary px-4 text-xs font-black text-primary-foreground">적용</button>
         </div>
         {inputError && <p role="alert" className="mt-2 text-xs font-bold text-destructive">{inputError}</p>}
-        <button type="button" onClick={() => setSearchOpen((current) => !current)} className="mt-2 flex w-full items-center justify-between rounded-2xl border border-card-border bg-background px-3 py-2.5 text-left"><span className="text-xs font-extrabold">종목명·심볼 검색</span>{searchOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}</button>
         {searchOpen && (
-          <div className="mt-2 rounded-2xl border border-card-border bg-background p-2">
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="검색어 입력" aria-label="차트 종목 검색" className="h-10 w-full rounded-xl border border-card-border bg-card px-3 text-sm font-bold outline-none focus:border-primary" />
-            <div className="mt-2 max-h-60 overflow-y-auto">
+          <div data-testid="chart-symbol-search-results" className="mt-2 rounded-2xl border border-card-border bg-background p-2">
+            <div className="max-h-60 overflow-y-auto">
               {searchQuery.isLoading ? <Centered><Loader2 className="h-4 w-4 animate-spin" /> 검색 중</Centered> : searchQuery.isError ? <p role="alert" className="p-4 text-center text-xs font-bold text-destructive">검색 데이터를 불러오지 못했습니다.</p> : searchRows.length ? searchRows.map((row) => (
                 <button key={`${row.market}:${row.symbol}`} type="button" onClick={() => { setDraft(row.symbol); setQuery(''); setSearchOpen(false); commitSelection({ market: row.market, symbol: row.symbol, name: row.name }); }} className="flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-secondary">
                   <div className="min-w-0"><p className="truncate text-sm font-black">{row.name}</p><p className="text-[10px] font-bold text-muted-foreground">{row.symbol}</p></div>
                   <div className="text-right text-[10px] font-bold"><p>{formatPrice(row.price, row.market)}</p><p>{formatPercent(row.changePercent)}</p></div>
                 </button>
-              )) : <p className="p-4 text-center text-xs font-bold text-muted-foreground">{query.trim() ? '검색 결과가 없습니다. 심볼을 직접 입력할 수 있습니다.' : '검색어를 입력하세요.'}</p>}
+              )) : <p className="p-4 text-center text-xs font-bold text-muted-foreground">검색 결과가 없습니다. 심볼을 직접 입력한 뒤 적용할 수 있습니다.</p>}
             </div>
           </div>
         )}
@@ -551,17 +851,45 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
           {settingsOpen && <div className="mt-2 flex flex-wrap gap-2 rounded-2xl border border-card-border bg-background p-3">{OVERLAY_OPTIONS.map((item) => <button key={item.key} type="button" data-testid={`overlay-${item.key}`} onClick={() => toggleOverlay(item.key)} className={cn('rounded-full border px-3 py-1.5 text-[11px] font-extrabold', overlays[item.key] ? 'border-primary bg-primary/10 text-primary' : 'border-card-border bg-card text-muted-foreground')}>{overlays[item.key] ? '✓ ' : '+ '}{item.label}</button>)}</div>}
         </div>
         <div className="min-h-[390px] bg-background/30">
-          {chartQuery.isLoading ? <Centered tall><Loader2 className="h-5 w-5 animate-spin" /> 차트 불러오는 중</Centered> : chartQuery.isError ? <div className="flex h-[390px] flex-col items-center justify-center px-6 text-center" data-testid="chart-error-state"><AlertTriangle className="h-8 w-8 text-destructive" /><p className="mt-3 text-sm font-black">차트 데이터를 불러오지 못했습니다.</p><p role="alert" className="mt-1 break-keep text-xs font-bold leading-5 text-muted-foreground">{errorMessage}</p><button type="button" onClick={() => void chartQuery.refetch()} className="mt-4 rounded-full bg-primary px-4 py-2 text-xs font-black text-primary-foreground">다시 시도</button></div> : candles.length < 2 || !levels ? <div className="flex h-[390px] flex-col items-center justify-center px-6 text-center" data-testid="chart-empty-state"><BarChart3 className="h-8 w-8 text-muted-foreground" /><p className="mt-3 text-sm font-black">표시할 유효한 캔들이 없습니다.</p><p className="mt-1 break-keep text-xs font-bold leading-5 text-muted-foreground">잘못된 심볼, 데이터 없는 종목 또는 지원하지 않는 시간봉인지 확인하세요. 임시 캔들은 만들지 않습니다.</p></div> : <PatternAwareUnifiedChartCanvas candles={candles} indicators={indicators} levels={levels} analysis={analysis} pricePlan={pricePlan} overlays={overlays} timeframe={timeframe} resetKey={`${market}:${selection.ticker}:${timeframe}`} market={market} onCandleSelect={handleCandleSelect} />}
+          {chartQuery.isLoading ? <Centered tall><Loader2 className="h-5 w-5 animate-spin" /> 차트 불러오는 중</Centered> : chartQuery.isError ? <div className="flex h-[390px] flex-col items-center justify-center px-6 text-center" data-testid="chart-error-state"><AlertTriangle className="h-8 w-8 text-destructive" /><p className="mt-3 text-sm font-black">차트 데이터를 불러오지 못했습니다.</p><p role="alert" className="mt-1 break-keep text-xs font-bold leading-5 text-muted-foreground">{errorMessage}</p><button type="button" onClick={() => void chartQuery.refetch()} className="mt-4 rounded-full bg-primary px-4 py-2 text-xs font-black text-primary-foreground">다시 시도</button></div> : candles.length < 2 || !levels ? <div className="flex h-[390px] flex-col items-center justify-center px-6 text-center" data-testid="chart-empty-state"><BarChart3 className="h-8 w-8 text-muted-foreground" /><p className="mt-3 text-sm font-black">표시할 유효한 캔들이 없습니다.</p><p className="mt-1 break-keep text-xs font-bold leading-5 text-muted-foreground">잘못된 심볼, 데이터 없는 종목 또는 지원하지 않는 시간봉인지 확인하세요. 임시 캔들은 만들지 않습니다.</p></div> : <PatternAwareUnifiedChartCanvas ref={realtimeCanvasRef} candles={candles} indicators={indicators} levels={levels} analysis={analysis} pricePlan={pricePlan} overlays={overlays} timeframe={timeframe} resetKey={`${market}:${selection.ticker}:${timeframe}`} market={market} onCandleSelect={handleCandleSelect} />}
         </div>
+      </section>
+
+      <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="ai-chart-v3-evidence-status" data-realtime-provider={realtimeHealth.provider}>
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <p className="text-[11px] font-extrabold text-primary">AI Chart V3 Evidence Truth</p>
+            <h2 className="mt-1 text-sm font-black">Transport · Provenance · Calibration</h2>
+          </div>
+          <span className={cn('rounded-full border px-3 py-1 text-[10px] font-black', dataStatusClass(dataStatus))}>{dataStatusLabel(dataStatus)}</span>
+        </div>
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <Metric label="STREAM STATUS" value={realtimeHealth.connectionState} />
+          <Metric label="TRANSPORT" value={realtimeHealth.transportMode} />
+          <Metric label="STREAM DATA" value={realtimeHealth.dataStatus} />
+          <Metric label="DATA AGE" value={realtimeHealth.lastValidEventAt == null ? formatDataAge(chartQuery.data) : `${Math.max(0, Date.now() - realtimeHealth.lastValidEventAt)}ms`} />
+          <Metric label="PROVIDER" value={realtimeHealth.transportMode === 'STREAM' ? realtimeHealth.provider : 'REST SNAPSHOT'} />
+          <Metric label="IDENTITY" value={`${realtimeHealth.symbol} · ${realtimeHealth.timeframe}`} />
+          <Metric label="RECOVERY" value={realtimeHealth.recoveryState} />
+          <Metric label="INTEGRITY" value={realtimeHealth.integrityIssues.length ? realtimeHealth.integrityIssues.join(', ') : 'NO_UNRESOLVED_ISSUE'} />
+          <Metric label="PROVENANCE" value={chartQuery.data?.provider ? '상단 출처 연결됨' : '미연결'} />
+          <Metric label="TECHNICAL SCORE" value={analysis ? `${analysis.confidence}/100` : '계산 대기'} />
+          <Metric label="CALIBRATED PROBABILITY" value="INSUFFICIENT_SAMPLE" />
+          <Metric label="SAMPLE N" value="0 (연결된 검증표본 없음)" />
+          <Metric label="EXPECTED VALUE" value="UNAVAILABLE" />
+          <Metric label="DATA QUALITY" value={dataStatusLabel(dataStatus)} />
+        </div>
+        <p className="mt-3 rounded-2xl bg-background p-3 text-[11px] font-bold leading-5 text-muted-foreground">TECHNICAL SCORE는 규칙 기반 차트 강도 점수이며 실제 승률이 아닙니다. Backtest/OOS/Walk-Forward/Shadow/Paper의 검증 표본이 이 차트와 정식으로 연결되기 전에는 확률·승률·EV를 생성하지 않습니다. 지연·오래된·불충분 데이터에서는 방향 신호를 강행하지 않고 WATCH로 제한합니다.</p>
       </section>
 
       <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="scanner-price-plan-chart">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
-            <p className="text-[11px] font-extrabold text-primary">Scanner Price Plan</p>
-            <h2 className="mt-1 break-keep text-sm font-black">Scanner와 동일한 진입·손절·목표 계획</h2>
+            <p className="text-[11px] font-extrabold text-primary">신호검색기 계획</p>
+            <h2 className="mt-1 break-keep text-sm font-black">진입 · 손절 · 목표가</h2>
+            <p className="mt-1 text-[10px] font-bold text-muted-foreground">Scanner 계획·점수·근거는 같은 시장·종목·시간봉 identity에서만 유지됩니다.</p>
           </div>
-          <span className="shrink-0 rounded-full border border-card-border bg-background px-3 py-1 text-xs font-black">{selection.action && selection.action !== 'NONE' ? selection.action : '미확인'}</span>
+          <span data-testid="scanner-price-plan-action" className="shrink-0 rounded-full border border-card-border bg-background px-3 py-1 text-xs font-black">{scannerActionLabel(selection.action)}</span>
         </div>
         {pricePlan ? (
           <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
@@ -573,7 +901,7 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
             <Metric label="R:R" value={pricePlan.riskReward != null && Number.isFinite(pricePlan.riskReward) && pricePlan.riskReward > 0 ? pricePlan.riskReward.toFixed(2) : '미확인'} />
           </div>
         ) : (
-          <p className="mt-3 rounded-2xl bg-background p-3 break-keep text-xs font-bold text-muted-foreground">Scanner에서 전달된 Price Plan이 없습니다. 차트가 임의의 진입가·손절가·목표가를 만들지 않습니다.</p>
+          <p className="mt-3 rounded-2xl bg-background p-3 break-keep text-xs font-bold text-muted-foreground">Scanner에서 전달된 Price Plan이 없습니다. 신호검색기 계획이 없는 경우 차트가 임의의 진입가·손절가·목표가를 만들지 않습니다.</p>
         )}
       </section>
 
@@ -591,7 +919,7 @@ export function UnifiedAnalysisChart({ selection, onSelectionChange, onAnalysisC
       {latest && levels && <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm"><div className="flex items-start justify-between gap-3"><div><p className="text-[11px] font-extrabold text-primary">기술지표·분석 참고선</p><h2 className="mt-1 text-lg font-black">{analysis?.title ?? '분석 준비 중'}</h2></div><div className="rounded-full border border-card-border bg-secondary px-3 py-1.5 text-xs font-black">{analysis?.bias === 'bullish' ? '상승 우세' : analysis?.bias === 'bearish' ? '하락 우세' : '중립'}</div></div><p className="mt-3 rounded-2xl bg-secondary/70 p-3 text-xs font-bold leading-5">{analysis?.summary ?? '유효한 완료봉과 지표가 준비되면 분석을 표시합니다.'}</p><div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4"><Metric label="현재가" value={formatPrice(latest.close, market)} icon={<BarChart3 className="h-4 w-4" />} /><Metric label="1차 지지" value={formatPrice(levels.support, market)} icon={<TrendingDown className="h-4 w-4" />} /><Metric label="1차 저항" value={formatPrice(levels.resistance, market)} icon={<TrendingUp className="h-4 w-4" />} /><Metric label="목표 참고" value={formatPrice(levels.targetReference, market)} icon={<TrendingUp className="h-4 w-4" />} />{overlays.rsi && <Metric label="RSI14" value={currentIndicator?.rsi14 == null ? '-' : currentIndicator.rsi14.toFixed(1)} />}{overlays.macd && <Metric label="MACD" value={currentIndicator?.macd == null ? '-' : currentIndicator.macd.toFixed(4)} />}{overlays.atr && <Metric label="ATR14" value={formatPrice(currentIndicator?.atr14, market)} />}<Metric label="거래량 비율" value={currentIndicator?.volumeRatio20 == null ? '-' : `${currentIndicator.volumeRatio20.toFixed(2)}배`} /></div></section>}
 
       <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm"><div className="flex items-center justify-between gap-2"><div><p className="text-[11px] font-extrabold text-primary">분석 상태 타임라인</p><h2 className="mt-1 text-sm font-black">형성 → 후보 → 확정·무효화</h2></div><span className="text-[10px] font-bold text-muted-foreground">최근 {timeline.length}건</span></div><div className="mt-3 max-h-72 space-y-2 overflow-y-auto">{timeline.length ? timeline.map((item) => <div key={item.key} className="rounded-2xl bg-background p-3 text-xs"><div className="flex items-center justify-between gap-2"><strong>{item.analysis.title}</strong><span className="text-[10px] font-black text-primary">{item.analysis.status}</span></div><p className="mt-1 break-keep font-bold leading-5 text-muted-foreground">{item.analysis.transitionReason}</p><p className="mt-1 text-[10px] font-semibold text-muted-foreground">{new Date(item.analysis.detectedAt).toLocaleString('ko-KR')}</p></div>) : <p className="rounded-2xl bg-background p-5 text-center text-xs font-bold text-muted-foreground">새 분석 상태를 기다리는 중입니다.</p>}</div></section>
-      <p className="px-1 text-[10px] font-semibold leading-4 text-muted-foreground">국내주식·미국주식·업비트 현물·비트겟 선물의 공개 시세를 읽기 전용으로 분석합니다. 주문 API와 연결하지 않으며 실제 주문을 실행하지 않습니다.</p>
+      <p className="px-1 text-[10px] font-semibold leading-4 text-muted-foreground">국내주식·미국주식·업비트 현물·비트겟 선물의 공개 시세를 읽기 전용으로 분석합니다. 업비트·비트겟은 검증된 공개 WebSocket을 우선 사용하고 이상 시 REST polling으로 fail-closed 전환합니다. 주문 API와 연결하지 않으며 실제 주문을 실행하지 않습니다.</p>
     </div>
   );
 }

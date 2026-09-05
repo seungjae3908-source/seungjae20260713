@@ -67,6 +67,8 @@ export function configureUnifiedChartFetch(fetcher: UnifiedChartFetch | null): v
 }
 
 const DEFAULT_TIMEOUT_MS = 12_000;
+const PRIMARY_STOCK_ENDPOINT_TIMEOUT_MS = 2_500;
+const KR_PRIMARY_STOCK_ENDPOINT_TIMEOUT_MS = 3_500;
 
 export const UNIFIED_CHART_TIMEFRAMES: Array<{
   key: UnifiedChartTimeframe;
@@ -132,10 +134,10 @@ export function buildUnifiedChartUrls(input: {
   const encodedSymbol = encodeURIComponent(symbol);
   const encodedFrame = encodeURIComponent(input.timeframe);
 
-  if (input.market === 'KR' || input.market === 'US') {
+  if (input.market === 'US' || input.market === 'KR') {
     return [
-      `/api/stocks/${encodedSymbol}/chart?tf=${encodedFrame}`,
       `/api/stocks/${encodedSymbol}/candles?tf=${encodedFrame}`,
+      `/api/stocks/${encodedSymbol}/chart?tf=${encodedFrame}`,
     ];
   }
 
@@ -246,6 +248,24 @@ function createLinkedSignal(external: AbortSignal | undefined, timeoutMs: number
   };
 }
 
+function primaryStockEndpointTimeoutMs(market: AnalysisMarket, totalTimeoutMs: number): number {
+  /*
+   * The app-facing KR candle backend already has a 2s hard terminal after the
+   * request reaches the API. Authentication/session lookup and transport happen
+   * before that server budget, so the former 2.5s browser cutoff could abort a
+   * healthy bounded request. Keep the 5s release gate unchanged while allowing
+   * only a 1.5s auth/transport margin for KR; US keeps its existing 2.5s budget.
+   */
+  const endpointBudgetMs = market === 'KR'
+    ? KR_PRIMARY_STOCK_ENDPOINT_TIMEOUT_MS
+    : PRIMARY_STOCK_ENDPOINT_TIMEOUT_MS;
+  return Math.min(endpointBudgetMs, Math.max(250, Math.floor(totalTimeoutMs / 2)));
+}
+
+function canTryAlternateEndpoint(error: UnifiedChartDataError): boolean {
+  return error.kind === 'timeout' || error.status === 404 || error.status === 405;
+}
+
 export async function fetchUnifiedChartData(input: {
   market: AnalysisMarket;
   symbol: string;
@@ -265,11 +285,18 @@ export async function fetchUnifiedChartData(input: {
     timeframe: input.timeframe,
   });
   const fetcher = input.fetcher ?? configuredUnifiedChartFetch ?? globalThis.fetch.bind(globalThis);
-  const linked = createLinkedSignal(input.signal, input.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const totalTimeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const linked = createLinkedSignal(input.signal, totalTimeoutMs);
   let lastError: UnifiedChartDataError | null = null;
 
   try {
     for (const [index, url] of urls.entries()) {
+      const alternateAvailable = index < urls.length - 1;
+      const attempt = alternateAvailable
+        ? createLinkedSignal(linked.signal, primaryStockEndpointTimeoutMs(input.market, totalTimeoutMs))
+        : null;
+      const attemptSignal = attempt?.signal ?? linked.signal;
+
       try {
         const response = await fetcher(url, {
           cache: 'no-store',
@@ -277,15 +304,12 @@ export async function fetchUnifiedChartData(input: {
             'Cache-Control': 'no-cache, no-store, max-age=0',
             Pragma: 'no-cache',
           },
-          signal: linked.signal,
+          signal: attemptSignal,
         });
         const payload = await parsePayload(response);
         if (!response.ok) {
           const error = httpError(response.status, payload);
-          const stockFallbackAvailable =
-            index < urls.length - 1 &&
-            (response.status === 404 || response.status === 405);
-          if (stockFallbackAvailable) {
+          if (alternateAvailable && canTryAlternateEndpoint(error)) {
             lastError = error;
             continue;
           }
@@ -313,9 +337,22 @@ export async function fetchUnifiedChartData(input: {
       } catch (error) {
         if (error instanceof UnifiedChartDataError) {
           lastError = error;
-          if (index < urls.length - 1 && error.kind === 'not-found') continue;
+          if (alternateAvailable && canTryAlternateEndpoint(error)) continue;
           throw error;
         }
+
+        if (attempt?.signal.aborted && attempt.timedOut() && !linked.signal.aborted) {
+          const timeoutError = new UnifiedChartDataError(
+            '기본 차트 데이터 경로가 지연되어 대체 경로를 확인합니다.',
+            'timeout',
+            null,
+            true,
+          );
+          lastError = timeoutError;
+          if (alternateAvailable) continue;
+          throw timeoutError;
+        }
+
         if (linked.signal.aborted) {
           if (linked.timedOut()) {
             throw new UnifiedChartDataError(
@@ -332,12 +369,18 @@ export async function fetchUnifiedChartData(input: {
             false,
           );
         }
-        throw new UnifiedChartDataError(
+
+        const networkError = new UnifiedChartDataError(
           error instanceof Error ? error.message : '차트 네트워크 요청에 실패했습니다.',
           'network',
           null,
           true,
         );
+        lastError = networkError;
+        if (alternateAvailable && canTryAlternateEndpoint(networkError)) continue;
+        throw networkError;
+      } finally {
+        attempt?.cleanup();
       }
     }
     throw lastError ?? new UnifiedChartDataError(

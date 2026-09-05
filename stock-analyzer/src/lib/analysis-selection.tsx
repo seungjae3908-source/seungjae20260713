@@ -9,7 +9,7 @@ import {
 
 export type AnalysisAssetType = 'stock' | 'coin_spot' | 'coin_futures';
 export type AnalysisMarket = 'KR' | 'US' | 'UPBIT' | 'BITGET';
-export type AnalysisTradeAction = 'BUY' | 'SELL' | 'LONG' | 'SHORT' | 'NONE';
+export type AnalysisTradeAction = 'BUY' | 'SELL' | 'LONG' | 'SHORT' | 'NO_TRADE' | 'UNKNOWN' | 'NONE';
 
 export type AnalysisPricePlan = {
   entryZone: { from: number; to: number } | null;
@@ -55,6 +55,14 @@ function cleanString(value: unknown, max = 120): string {
   return typeof value === 'string' ? value.trim().slice(0, max) : '';
 }
 
+function normalizeSelectedAt(value: unknown): string | null {
+  const raw = cleanString(value, 40);
+  if (!raw) return null;
+  const timestamp = Date.parse(raw);
+  if (!Number.isFinite(timestamp) || timestamp > Date.now()) return null;
+  return new Date(timestamp).toISOString();
+}
+
 function normalizePricePlan(value: unknown): AnalysisPricePlan | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const row = value as Record<string, unknown>;
@@ -89,11 +97,12 @@ export function normalizeAnalysisSelection(value: unknown): AnalysisSelection | 
     ? row.market as AnalysisMarket
     : null;
   const ticker = cleanString(row.ticker || row.symbol, 32).toUpperCase();
-  if (!market || !ticker) return null;
+  const selectedAt = normalizeSelectedAt(row.selectedAt);
+  if (!market || !ticker || !selectedAt) return null;
   const textList = (item: unknown) => Array.isArray(item)
     ? item.map((part) => cleanString(part, 160)).filter(Boolean).slice(0, 20)
     : undefined;
-  const action = ['BUY', 'SELL', 'LONG', 'SHORT', 'NONE'].includes(String(row.action))
+  const action = ['BUY', 'SELL', 'LONG', 'SHORT', 'NO_TRADE', 'UNKNOWN', 'NONE'].includes(String(row.action))
     ? row.action as AnalysisTradeAction
     : undefined;
   return {
@@ -112,7 +121,7 @@ export function normalizeAnalysisSelection(value: unknown): AnalysisSelection | 
     pricePlan: normalizePricePlan(row.pricePlan),
     matchedSignals: textList(row.matchedSignals),
     reasons: textList(row.reasons),
-    selectedAt: cleanString(row.selectedAt, 40) || new Date().toISOString(),
+    selectedAt,
   };
 }
 

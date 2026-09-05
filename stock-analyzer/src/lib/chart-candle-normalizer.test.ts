@@ -24,6 +24,25 @@ function candle(time: unknown, close: number, extra: Record<string, unknown> = {
   };
 }
 
+async function waitForAbortAwareDelay(ms: number, signal?: AbortSignal) {
+  await new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timeout);
+      signal?.removeEventListener('abort', onAbort);
+      reject(signal?.reason ?? new DOMException('Aborted', 'AbortError'));
+    };
+    const timeout = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 test('timestamps are parsed without inventing a current-time fallback', () => {
   assert.equal(parseChartCandleTime(1_700_000_000), 1_700_000_000);
   assert.equal(parseChartCandleTime(1_700_000_000_000), 1_700_000_000);
@@ -107,11 +126,11 @@ test('all supported timeframes normalize without changing their source timestamp
 test('multi-market request builder maps every required market and timeframe', () => {
   assert.deepEqual(
     buildUnifiedChartUrls({ market: 'KR', symbol: '005930', timeframe: '1m' }),
-    ['/api/stocks/005930/chart?tf=1m', '/api/stocks/005930/candles?tf=1m'],
+    ['/api/stocks/005930/candles?tf=1m', '/api/stocks/005930/chart?tf=1m'],
   );
   assert.deepEqual(
     buildUnifiedChartUrls({ market: 'US', symbol: 'aapl', timeframe: '4H' }),
-    ['/api/stocks/AAPL/chart?tf=4H', '/api/stocks/AAPL/candles?tf=4H'],
+    ['/api/stocks/AAPL/candles?tf=4H', '/api/stocks/AAPL/chart?tf=4H'],
   );
   assert.deepEqual(
     buildUnifiedChartUrls({ market: 'UPBIT', symbol: 'KRW-BTC', timeframe: '1H' }),
@@ -164,6 +183,32 @@ test('stock chart falls back only after a missing primary route and keeps strict
   assert.equal(result.normalization.candles.length, 2);
   assert.equal(result.normalization.droppedRows, 1);
   assert.equal(result.provider, 'test');
+});
+
+test('KR primary candle request survives the authenticated cold-start tail beyond the former 2.5s cutoff', async () => {
+  const calls: string[] = [];
+  const result = await fetchUnifiedChartData({
+    market: 'KR',
+    symbol: '005930',
+    timeframe: '5m',
+    fetcher: async (input, init) => {
+      calls.push(String(input));
+      if (calls.length > 1) throw new Error(`unexpected fallback request: ${String(input)}`);
+      await waitForAbortAwareDelay(2_700, init?.signal);
+      return new Response(JSON.stringify({
+        provider: 'test-primary',
+        fetchedAt: '2026-09-04T00:00:00.000Z',
+        candles: [
+          candle(1_700_000_000, 100),
+          candle(1_700_000_300, 101),
+        ],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    },
+  });
+  assert.deepEqual(calls, ['/api/stocks/005930/candles?tf=5m']);
+  assert.equal(result.sourceUrl, '/api/stocks/005930/candles?tf=5m');
+  assert.equal(result.provider, 'test-primary');
+  assert.equal(result.normalization.candles.length, 2);
 });
 
 test('HTTP 429 is classified as retryable rate limiting without using the fallback route', async () => {

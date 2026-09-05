@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import './signal-performance-persistence.service.test';
 import {
   deleteAllPaperJournalData,
   getPaperJournalSnapshot,

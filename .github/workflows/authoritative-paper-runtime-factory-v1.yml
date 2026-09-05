@@ -1,0 +1,180 @@
+name: Authoritative Paper Runtime Factory
+
+on:
+  pull_request:
+    branches: [main, fix/natural-position-observation-clean-transport-20260830]
+    paths:
+      - .github/workflows/authoritative-paper-runtime-factory-v1.yml
+      - api-server/scripts/build-authoritative-paper-runtime-package.mjs
+      - api-server/src/data/asset-type.ts
+      - api-server/src/lib/bounded-work-pool.ts
+      - api-server/src/lib/provider-admission-control.ts
+      - api-server/src/routes/paper-trading.ts
+      - api-server/src/routes/paper-trading.smoke.test.ts
+      - api-server/src/services/authoritative-paper-callback-owners.service.ts
+      - api-server/src/services/authoritative-paper-evidence-sources.service.ts
+      - api-server/src/services/authoritative-paper-execution-cost-sources.service.ts
+      - api-server/src/services/authoritative-paper-generic-risk-policy-producer.service.ts
+      - api-server/src/services/authoritative-paper-latency-cost-evidence.service.ts
+      - api-server/src/services/authoritative-paper-risk-sizing-source.service.ts
+      - api-server/src/services/authoritative-paper-runtime-package.entry.ts
+      - api-server/src/services/bitget-futures-public-evidence.service.ts
+      - api-server/src/services/crypto-signal-scanner.service.ts
+      - api-server/src/services/forward-recommendation-observer-runtime.service.ts
+      - api-server/src/services/forward-recommendation-observer.service.ts
+      - api-server/src/services/market-price-precision.service.ts
+      - api-server/src/services/paper-trading-core.service.ts
+      - api-server/src/services/paper-simulated-execution-evidence.service.ts
+      - api-server/src/services/paper-trading-state-publisher.service.ts
+      - api-server/src/services/paper-trading-state-snapshot.service.ts
+      - api-server/src/services/public-market-http.ts
+      - api-server/src/services/scanner-candidate-ranking.service.ts
+      - api-server/src/services/scanner-canonical-paper-identity.service.ts
+      - api-server/src/services/scanner-crypto-futures-paper-admission-composer.service.ts
+      - api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.ts
+      - api-server/src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.test.ts
+      - api-server/src/services/scanner-crypto-price-precision.service.ts
+      - api-server/src/services/scanner-data-quality.service.ts
+      - api-server/src/services/scanner-indicator-library.service.ts
+      - api-server/src/services/scanner-market-action.service.ts
+      - api-server/src/services/scanner-market-profile-overlay.service.ts
+      - api-server/src/services/scanner-paper-admission-evidence-bundle.service.ts
+      - api-server/src/services/scanner-profit-cost-evidence-adapter.service.ts
+      - api-server/src/services/scanner-quant-hardening.service.ts
+      - api-server/src/services/scanner-quant-strategy.service.ts
+      - api-server/src/services/scanner-signal-lifecycle.service.ts
+      - api-server/src/services/scanner-strategy-profile.service.ts
+      - api-server/src/services/signal-performance-learning.service.ts
+      - api-server/src/services/strategy-promotion.service.ts
+      - api-server/src/services/trade-paper-market-contract.service.ts
+      - api-server/src/services/trading-risk-engine.service.ts
+      - market-prediction-lab/src/authoritative-paper-runtime-factory-v1.js
+      - market-prediction-lab/src/authoritative-paper-runtime-package-v1.js
+      - market-prediction-lab/src/authoritative-paper-evidence-source-ownership-v1.js
+      - market-prediction-lab/src/canonical-paper-admission-bundle-injection-runtime-v1.js
+      - market-prediction-lab/src/canonical-meaningful-search-paper-runtime-v1.js
+      - market-prediction-lab/src/meaningful-search-scheduled-paper-provider-v1.js
+      - market-prediction-lab/src/paper-forward-evidence-runtime-v1.js
+      - market-prediction-lab/src/paper-public-provider-authority-v1.js
+      - market-prediction-lab/src/natural-paper-public-position-observation-v1.js
+      - market-prediction-lab/src/natural-paper-position-settlement-lifecycle-v1.js
+      - market-prediction-lab/src/recurring-paper-loop-v1.js
+      - market-prediction-lab/tests/natural-paper-position-settlement-lifecycle-v1.test.js
+      - market-prediction-lab/src/bitget-position-tier-v1.js
+      - market-prediction-lab/src/bitget-position-tier-v1.d.ts
+      - market-prediction-lab/src/eth-v6-paper-forward-source-v1.js
+      - market-prediction-lab/src/eth-v6-paper-settlement-source-v1.js
+      - market-prediction-lab/tests/authoritative-paper-runtime-factory-v1.test.js
+      - market-prediction-lab/tests/authoritative-paper-runtime-package-v1.test.js
+      - market-prediction-lab/runtime/authoritative-paper-runtime-v1/**
+      - market-intelligence-sidecar/src/execution-quality.mjs
+      - market-intelligence-sidecar/src/execution-quality.d.mts
+
+permissions:
+  contents: read
+
+jobs:
+  authoritative-paper-runtime-factory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact PR HEAD
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Verify exact HEAD
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify runtime input trigger coverage
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+
+          const buildSource = readFileSync(
+            'api-server/scripts/build-authoritative-paper-runtime-package.mjs',
+            'utf8',
+          );
+          const workflowSource = readFileSync(
+            '.github/workflows/authoritative-paper-runtime-factory-v1.yml',
+            'utf8',
+          );
+          const allowedInputsMatch = buildSource.match(
+            /const ALLOWED_INPUTS = Object\.freeze\(\[\n(?<body>[\s\S]*?)\n\]\.sort\(\)\);/u,
+          );
+          if (!allowedInputsMatch?.groups?.body) {
+            throw new Error('AUTHORITATIVE_PAPER_RUNTIME_ALLOWED_INPUTS_NOT_FOUND');
+          }
+          const inputs = [...allowedInputsMatch.groups.body.matchAll(/'([^']+)'/gu)].map(
+            ([, input]) => input,
+          );
+          const repositoryPaths = inputs.map((input) =>
+            input.startsWith('../') ? input.slice(3) : `api-server/${input}`,
+          );
+          const missing = repositoryPaths.filter(
+            (input) => !workflowSource.includes(`      - ${input}\n`),
+          );
+          if (missing.length > 0) {
+            console.error('AUTHORITATIVE_PAPER_RUNTIME_TRIGGER_COVERAGE_MISSING');
+            for (const input of missing) console.error(input);
+            process.exit(1);
+          }
+          console.log(`Authoritative Paper runtime trigger coverage: ${repositoryPaths.length}/${repositoryPaths.length}`);
+          NODE
+
+      - name: Typecheck API server
+        run: pnpm --dir api-server run typecheck
+
+      - name: Bundle exact-head P0-C9 producer tests
+        run: >-
+          pnpm --dir api-server exec esbuild
+          src/services/scanner-crypto-futures-paper-admission-evidence-producer.service.test.ts
+          --bundle --platform=node --format=esm
+          --outfile=/tmp/scanner-crypto-futures-paper-admission-evidence-producer.test.mjs
+
+      - name: Run exact-head P0-C9 producer tests
+        run: node --test /tmp/scanner-crypto-futures-paper-admission-evidence-producer.test.mjs
+
+      - name: Bundle authenticated Paper snapshot-v2 transport tests
+        run: >-
+          pnpm --dir api-server exec esbuild
+          src/routes/paper-trading.smoke.test.ts
+          --bundle --platform=node --format=cjs --target=node22
+          --outfile=/tmp/paper-trading-snapshot-transport.test.cjs
+
+      - name: Run authenticated Paper snapshot-v2 transport tests
+        run: node --test /tmp/paper-trading-snapshot-transport.test.cjs
+
+      - name: Rebuild and verify exact authoritative runtime package
+        run: |
+          node api-server/scripts/build-authoritative-paper-runtime-package.mjs
+          git diff --exit-code -- \
+            market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.mjs \
+            market-prediction-lab/runtime/authoritative-paper-runtime-v1/authoritative-paper-runtime-v1.manifest.json
+
+      - name: Run exact-head P0-C9 runtime factory tests
+        run: >-
+          node --test
+          market-prediction-lab/tests/authoritative-paper-runtime-factory-v1.test.js
+          market-prediction-lab/tests/authoritative-paper-runtime-package-v1.test.js
+
+      - name: Verify Natural lifecycle trust and full-cost boundaries
+        run: >-
+          node --test
+          market-prediction-lab/tests/natural-paper-position-settlement-lifecycle-v1.test.js
+          market-prediction-lab/tests/natural-paper-public-position-observation-v1.test.js
+          market-prediction-lab/tests/natural-paper-public-position-observation-runtime-v1.test.js
