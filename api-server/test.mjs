@@ -43,6 +43,8 @@ const groups = {
     path.join(repositoryRoot, 'stock-analyzer/src/lib/paper-journal-batching-phase8.test.ts'),
   ],
   phase9: [
+    path.join(root, 'src/services/research-copilot.service.test.ts'),
+    path.join(root, 'src/services/research-dual-free-ai.service.test.ts'),
     path.join(root, 'src/services/strategy-health-research-adapter.service.test.ts'),
     path.join(root, 'src/services/trading-ai-review-phase9.test.ts'),
     path.join(root, 'src/routes/paper-journal-ai-preview-privileges.test.ts'),
@@ -139,6 +141,7 @@ const groups = {
     path.join(root, 'src/routes/unified-search.smoke.test.ts'),
   ],
   smoke: [
+    path.join(root, 'src/routes/research-copilot.smoke.test.ts'),
     path.join(root, 'src/routes/futures-market-data.smoke.test.ts'),
     path.join(root, 'src/routes/trading-risk.smoke.test.ts'),
     path.join(root, 'src/routes/futures-contract-rules.smoke.test.ts'),
