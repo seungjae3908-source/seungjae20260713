@@ -12,7 +12,7 @@ export type MemberProfile = {
   login_name: string;
   display_name: string;
   role: string;
-  status: 'pending' | 'approved' | 'rejected' | 'suspended' | 'withdrawn';
+  status: 'pending' | 'approved' | 'rejected' | 'suspended' | 'revoked' | 'withdrawn' | 'disabled' | 'inactive';
   membership_level?: MemberTier | null;
   is_active?: boolean | null;
   permissions_updated_at?: string | null;
@@ -44,7 +44,10 @@ function bearerToken(req: Request): string | null {
 
 function isDisabledMemberSession(member: MemberProfile): boolean {
   return member.status === 'suspended'
+    || member.status === 'revoked'
     || member.status === 'withdrawn'
+    || member.status === 'disabled'
+    || member.status === 'inactive'
     || (member.status === 'approved' && member.is_active === false);
 }
 
