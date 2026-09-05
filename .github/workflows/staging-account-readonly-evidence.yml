@@ -205,6 +205,37 @@ jobs:
             --outfile="$runner"
           node "$runner"
 
+      - name: Re-prove current main and Staging egress unchanged
+        id: post_identity
+        if: always() && steps.account_evidence.outcome != 'skipped'
+        continue-on-error: true
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+          STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+          STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+          STAGING_SSH_PORT: ${{ secrets.STAGING_SSH_PORT || '22' }}
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main
+          CURRENT_MAIN="$(git rev-parse origin/main^{commit})"
+          [[ "$CURRENT_MAIN" == "$TARGET_SHA" ]] || {
+            echo "Main moved during account evidence. target=$TARGET_SHA current=$CURRENT_MAIN" >&2
+            exit 1
+          }
+          ACTUAL_EGRESS_IP="$(ssh \
+            -i "$SSH_KEY_PATH" \
+            -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=15 \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$SSH_KNOWN_HOSTS_PATH" \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            'curl --fail --silent --show-error --max-time 10 https://api.ipify.org')"
+          [[ -n "$ACTUAL_EGRESS_IP" && "$ACTUAL_EGRESS_IP" == "$EXPECTED_EGRESS_IP" ]] || {
+            echo 'Staging egress identity changed during account evidence.' >&2
+            exit 1
+          }
+
       - name: Sanitize and prove no account secret entered artifacts
         id: sanitize
         if: always() && steps.account_evidence.outcome != 'skipped'
@@ -259,7 +290,11 @@ jobs:
 
       - name: Upload secret-free immutable account evidence
         id: upload
-        if: always() && steps.account_evidence.outcome != 'skipped' && steps.sanitize.outcome == 'success'
+        if: >-
+          always() &&
+          steps.account_evidence.outcome != 'skipped' &&
+          steps.post_identity.outcome == 'success' &&
+          steps.sanitize.outcome == 'success'
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
@@ -272,6 +307,7 @@ jobs:
         if: always()
         env:
           EVIDENCE: ${{ steps.account_evidence.outcome }}
+          POST_IDENTITY: ${{ steps.post_identity.outcome }}
           SANITIZE: ${{ steps.sanitize.outcome }}
           UPLOAD: ${{ steps.upload.outcome }}
         run: |
@@ -285,6 +321,7 @@ jobs:
             fi
           }
           require_success account-evidence "$EVIDENCE"
+          require_success post-identity "$POST_IDENTITY"
           require_success artifact-sanitization "$SANITIZE"
           require_success artifact-upload "$UPLOAD"
 
@@ -301,8 +338,10 @@ jobs:
             echo '- Execution runner: `GitHub-hosted ubuntu-latest`'
             echo '- Provider network egress: `Staging SSH TCP tunnel`'
             echo '- Provider TLS termination: `GitHub-hosted evidence process`'
-            echo '- Provider secrets sent to Staging host: `false`'
-            echo '- Provider allowlist egress IP match: `true`'
+            echo '- Provider TLS payload traverses Staging host: `true`'
+            echo '- Provider Secret plaintext exposed to Staging host: `false`'
+            echo '- Provider allowlist egress IP match before/after reads: `true`'
+            echo '- Target remained exact current main after reads: `true`'
             echo '- Database / Supabase credential storage required: `false`'
             echo '- Credential persistence rows created: `0`'
             echo '- Application deployment mutated: `false`'
