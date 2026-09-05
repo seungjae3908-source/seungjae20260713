@@ -105,6 +105,18 @@ function publisherCode(code) {
   return (error) => error instanceof V3LiquidityIndependencePublisherError && error.code === code;
 }
 
+test('binds repoRoot identity to command-scoped git safe.directory without global mutation', async () => {
+  const callerSource = await readFile(
+    new URL('../bin/publish-v3-independence.mjs', import.meta.url),
+    'utf8',
+  );
+  assert.equal(
+    callerSource.includes("['-c', `safe.directory=${physicalRoot}`, '-C', physicalRoot, 'rev-parse', 'HEAD']"),
+    true,
+  );
+  assert.equal(callerSource.includes('git config --global'), false);
+});
+
 test('publishes authenticated #813 evidence through the production caller with zero authority', async () => {
   await withInputs(async ({ root, summary, summaryFile, sourceFile }) => {
     const result = await runV3IndependenceProductionPublication({
