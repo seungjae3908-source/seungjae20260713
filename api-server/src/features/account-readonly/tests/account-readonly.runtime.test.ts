@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { AccountReadonlyError } from '../account-readonly.errors';
 import type { ReadonlyCredentialProvider } from '../account-readonly.repository';
@@ -69,7 +70,7 @@ test('vault-backed Bitget reader emits only the two allowlisted signed GET reads
   assert.equal(serialized.includes('BITGET_KEY_RUNTIME_TEST_ONLY'), false); assert.equal(serialized.includes('BITGET_PASSPHRASE_RUNTIME_TEST_ONLY'), false);
 });
 
-test('vault-backed Toss reader performs OAuth then account-list and holdings GET only', async () => {
+test('vault-backed Toss reader parses the canonical OpenAPI accounts and holdings envelopes', async () => {
   const seen: Array<{ origin: string; path: string; method: string; accountHeader: string | null }> = [];
   const readers = createVaultBackedAccountReaders({
     repositoryFactory: () => repositoryFor('toss'),
@@ -79,22 +80,76 @@ test('vault-backed Toss reader performs OAuth then account-list and holdings GET
       const headers = new Headers(init?.headers);
       seen.push({ origin: url.origin, path: url.pathname, method: String(init?.method), accountHeader: headers.get('X-Tossinvest-Account') });
       if (url.pathname === '/oauth2/token') return new Response(JSON.stringify({ access_token: 'TOSS_TOKEN_RUNTIME_TEST_ONLY', expires_in: 3600 }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      if (url.pathname === '/api/v1/accounts') return new Response(JSON.stringify({ accounts: [{ accountSeq: '12345678', accountType: 'Brokerage', accountName: '투자계좌' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      if (url.pathname === '/api/v1/holdings') return new Response(JSON.stringify({ products: [{ productCode: '005930', productName: '삼성전자', exchangeCode: 'KRX', quantity: '3', tradableQuantity: '3', averagePurchasePrice: '70000', currentPrice: '71000', evaluationAmount: '213000', evaluationProfitLoss: '3000', yield: '1.42', currency: 'KRW' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.pathname === '/api/v1/accounts') return new Response(JSON.stringify({ result: [{ accountNo: '12345678901', accountSeq: 1, accountType: 'BROKERAGE' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.pathname === '/api/v1/holdings') return new Response(JSON.stringify({
+        result: {
+          totalPurchaseAmount: { krw: '210000', usd: null },
+          marketValue: { amount: { krw: '213000', usd: null }, amountAfterCost: { krw: '212500', usd: null } },
+          profitLoss: { amount: { krw: '3000', usd: null }, amountAfterCost: { krw: '2500', usd: null }, rate: '0.0142857143', rateAfterCost: '0.0119' },
+          dailyProfitLoss: { amount: { krw: '1000', usd: null }, rate: '0.0047' },
+          items: [{
+            symbol: '005930', name: '삼성전자', marketCountry: 'KR', currency: 'KRW', quantity: '3', lastPrice: '71000', averagePurchasePrice: '70000',
+            marketValue: { purchaseAmount: '210000', amount: '213000', amountAfterCost: '212500' },
+            profitLoss: { amount: '3000', amountAfterCost: '2500', rate: '0.0142857143', rateAfterCost: '0.0119' },
+            dailyProfitLoss: { amount: '1000', rate: '0.0047' },
+            cost: { commission: '100', tax: '400' },
+          }],
+        },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       return new Response('{}', { status: 404 });
     },
   });
   const result = await readers.toss!(SCOPE);
   assert.deepEqual(seen.map((row) => `${row.method} ${row.origin}${row.path}`), [
-    'POST https://oauth2.tossinvest.com/oauth2/token',
+    'POST https://openapi.tossinvest.com/oauth2/token',
     'GET https://openapi.tossinvest.com/api/v1/accounts',
     'GET https://openapi.tossinvest.com/api/v1/holdings',
   ]);
-  assert.equal(seen[1]?.accountHeader, null); assert.equal(seen[2]?.accountHeader, '12345678');
-  assert.equal(result.connected, true); assert.equal(result.positions?.[0]?.symbol, '005930'); assert.equal(result.positions?.[0]?.market, 'KR'); assert.equal(result.positions?.[0]?.marketValue, 213000);
+  assert.equal(seen[1]?.accountHeader, null); assert.equal(seen[2]?.accountHeader, '1');
+  assert.equal(result.connected, true);
+  assert.equal(result.positions?.[0]?.symbol, '005930');
+  assert.equal(result.positions?.[0]?.market, 'KR');
+  assert.equal(result.positions?.[0]?.quantity, 3);
+  assert.equal(result.positions?.[0]?.availableQuantity, null);
+  assert.equal(result.positions?.[0]?.averageEntryPrice, 70000);
+  assert.equal(result.positions?.[0]?.currentPrice, 71000);
+  assert.equal(result.positions?.[0]?.marketValue, 213000);
+  assert.equal(result.positions?.[0]?.unrealizedPnl, 3000);
+  assert.ok(Math.abs((result.positions?.[0]?.unrealizedPnlPercent ?? 0) - 1.42857143) < 1e-8);
   assert.equal(result.orderRequests, 0); assert.equal(result.cancelRequests, 0); assert.equal(result.transferRequests, 0); assert.equal(result.withdrawalRequests, 0);
   const serialized = JSON.stringify(result);
   assert.equal(serialized.includes('TOSS_CLIENT_RUNTIME_TEST_ONLY'), false); assert.equal(serialized.includes('TOSS_SECRET_RUNTIME_TEST_ONLY'), false); assert.equal(serialized.includes('TOSS_TOKEN_RUNTIME_TEST_ONLY'), false);
+});
+
+test('vault-backed Toss reader rejects legacy or malformed holdings instead of reporting connected empty', async () => {
+  const readers = createVaultBackedAccountReaders({
+    repositoryFactory: () => repositoryFor('toss'),
+    decryptCredentials: () => ({ clientId: 'TOSS_CLIENT_RUNTIME_TEST_ONLY', clientSecret: 'TOSS_SECRET_RUNTIME_TEST_ONLY' }),
+    fetchImpl: async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/oauth2/token') return new Response(JSON.stringify({ access_token: 'TOSS_TOKEN_RUNTIME_TEST_ONLY', expires_in: 3600 }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.pathname === '/api/v1/accounts') return new Response(JSON.stringify({ result: [{ accountNo: '12345678901', accountSeq: 1, accountType: 'BROKERAGE' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (url.pathname === '/api/v1/holdings') return new Response(JSON.stringify({ products: [{ productCode: '005930', quantity: '3' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return new Response('{}', { status: 404 });
+    },
+  });
+
+  await assert.rejects(
+    () => readers.toss!(SCOPE),
+    (error: unknown) => error instanceof AccountReadonlyError
+      && error.code === 'TOSS_HOLDINGS_RESPONSE_INVALID',
+  );
+});
+
+test('staging no-DB evidence accepts the same canonical Toss OAuth origin as the provider', () => {
+  const source = readFileSync(
+    'api-server/src/features/account-readonly/staging-account-readonly-no-db-evidence.ts',
+    'utf8',
+  );
+  assert.match(source, /const TOSS_API_ORIGIN = 'https:\/\/openapi\.tossinvest\.com';/);
+  assert.match(source, /const TOSS_OAUTH_ORIGIN = TOSS_API_ORIGIN;/);
+  assert.match(source, /url\.origin === TOSS_OAUTH_ORIGIN && url\.pathname === '\/oauth2\/token' && method === 'POST'/);
+  assert.equal(source.includes('https://oauth2.tossinvest.com'), false);
 });
 
 test('missing vault credentials fail closed before any provider call', async () => {
