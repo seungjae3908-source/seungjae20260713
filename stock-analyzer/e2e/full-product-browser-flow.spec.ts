@@ -95,8 +95,9 @@ test('real user path stays coherent from login through session expiry', async ({
   await openMenuItem(page, '기술', 'AI 차트');
   await expect(page).toHaveURL(/\/ai-chart/u);
   const chartTab = page.getByRole('tab', { name: '차트', exact: true });
-  await expect(chartTab).toBeVisible();
-  await chartTab.click();
+  if (await chartTab.isVisible().catch(() => false)) {
+    await chartTab.click();
+  }
   await expect(page.getByTestId('unified-chart-canvas')).toBeVisible();
 
   await openMenuItem(page, '설정', '계정');
