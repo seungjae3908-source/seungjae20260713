@@ -32,7 +32,8 @@ export type AuthorizedFetchOptions = {
   /**
    * Transport-level abort deadline. `undefined` preserves the normal app API
    * deadline; `null` deliberately leaves transport lifetime to the owning
-   * request lifecycle.
+   * request lifecycle. Authentication/session resolution has its own finite
+   * deadline and does not consume this transport budget.
    */
   timeoutMs?: number | null;
 };
@@ -62,17 +63,9 @@ export async function authorizedFetch(
 
   const controller = new AbortController();
   let timedOut = false;
+  let timeout: number | null = null;
   const handleParentAbort = () => controller.abort(signal ? abortReason(signal) : undefined);
   signal?.addEventListener('abort', handleParentAbort, { once: true });
-  const timeout = timeoutMs === null
-    ? null
-    : window.setTimeout(
-      () => {
-        timedOut = true;
-        controller.abort(new DOMException('App API request timed out.', 'TimeoutError'));
-      },
-      timeoutMs,
-    );
 
   try {
     if (isSupabaseConfigured && !headers.has('Authorization')) {
@@ -87,6 +80,16 @@ export async function authorizedFetch(
     }
 
     if (controller.signal.aborted) throw abortReason(controller.signal);
+    timeout = timeoutMs === null
+      ? null
+      : window.setTimeout(
+        () => {
+          timedOut = true;
+          controller.abort(new DOMException('App API request timed out.', 'TimeoutError'));
+        },
+        timeoutMs,
+      );
+
     try {
       return await fetch(input, { ...init, headers, signal: controller.signal });
     } catch (error) {
