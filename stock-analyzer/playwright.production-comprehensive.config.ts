@@ -8,7 +8,7 @@ if (process.env.PRODUCTION_READONLY_E2E !== 'true') {
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: /production-(?:comprehensive|mobile-scroll|critical-http|research-center|performance)-readonly-qa\.spec\.ts/,
+  testMatch: /production-(?:comprehensive|full-product|mobile-scroll|critical-http|research-center|performance)-readonly-qa\.spec\.ts/,
   fullyParallel: false,
   workers: 1,
   retries: 0,
