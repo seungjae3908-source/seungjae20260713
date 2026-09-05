@@ -89,13 +89,13 @@ const MOBILE_CHART_TABS = [
   { value: 'details', label: '상세' },
 ] as const;
 
-function fallbackSelection(): AnalysisSelection {
+function emptySelection(): AnalysisSelection {
   return {
     assetType: 'stock',
     market: 'KR',
-    symbol: '005930',
-    ticker: '005930',
-    displayName: '삼성전자',
+    symbol: '',
+    ticker: '',
+    displayName: '종목 미선택',
     timeframe: '5m',
     selectedAt: new Date().toISOString(),
   };
@@ -411,11 +411,12 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
     const storedSelection = supportedSelection(state.selection);
     return mergeChartRouteSelection(routeSelectionRef.current, storedSelection)
       ?? storedSelection
-      ?? fallbackSelection();
+      ?? emptySelection();
   })());
   const initialSelection = initialSelectionRef.current;
 
   const [selection, setSelection] = useState<AnalysisSelection>(initialSelection);
+  const hasSelection = Boolean(String(selection.symbol || selection.ticker || '').trim());
   const [analysis, setAnalysis] = useState<ChartAnalysis | null>(null);
   const [strategyMode, setStrategyMode] = useState<AiChartStrategyMode>(() => initialStrategyMode(initialSelection));
   const [mobileTab, setMobileTab] = useState<MobileChartTab>('summary');
@@ -424,7 +425,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
     if (routeModeRef.current === 'invalid') return '외부 차트 경로가 올바르지 않아 동기화를 시작하지 않았습니다.';
     if (externalMode && (!externalSyncId || !externalPairId)) return '외부 차트 세션 정보가 없거나 올바르지 않습니다.';
     if (hasChartRouteSelection(initialSearchRef.current) && !routeSelectionRef.current) {
-      return '시장·종목·시간봉 입력이 올바르지 않아 기존 정상 선택을 유지합니다.';
+      return '시장·종목·시간봉 입력이 올바르지 않아 자동 종목 선택을 하지 않습니다.';
     }
     return null;
   });
@@ -467,9 +468,9 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   }, []);
 
   useEffect(() => {
-    if (invalidRoute) return;
+    if (invalidRoute || !hasSelection) return;
     selectSelection(initialSelection);
-  }, [initialSelection, invalidRoute, selectSelection]);
+  }, [hasSelection, initialSelection, invalidRoute, selectSelection]);
 
   useEffect(() => {
     if (!embedded || !state.selection) return;
@@ -482,7 +483,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   }, [embedded, state.selection]);
 
   useEffect(() => {
-    if (embedded || externalMode || invalidRoute || typeof window === 'undefined') {
+    if (embedded || externalMode || invalidRoute || !hasSelection || typeof window === 'undefined') {
       setExternalControlAvailable(false);
       return;
     }
@@ -493,7 +494,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
     update();
     window.addEventListener('resize', update);
     return () => window.removeEventListener('resize', update);
-  }, [embedded, externalMode, invalidRoute]);
+  }, [embedded, externalMode, hasSelection, invalidRoute]);
 
   const postWindowMessage = useCallback((
     type: ChartWindowMessageType,
@@ -540,7 +541,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   }, [embedded, externalMode, navigate, publishSelection, selectSelection]);
 
   useEffect(() => {
-    if (embedded || invalidRoute || typeof window === 'undefined') return;
+    if (embedded || invalidRoute || !hasSelection || typeof window === 'undefined') return;
     if (typeof BroadcastChannel === 'undefined') {
       setExternalControlAvailable(false);
       if (externalMode) setExternalWindowStatus('이 브라우저는 외부 차트 동기화를 지원하지 않습니다.');
@@ -626,7 +627,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
         popupRef.current = null;
       }
     };
-  }, [applySelection, embedded, externalMode, invalidRoute, postWindowMessage, publishSelection, sourceRole, stopPopupTracking]);
+  }, [applySelection, embedded, externalMode, hasSelection, invalidRoute, postWindowMessage, publishSelection, sourceRole, stopPopupTracking]);
 
   const updateSelection = useCallback((next: AnalysisSelection) => {
     applySelection(next, true);
@@ -645,7 +646,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   }, [updateSelection, updateStrategyMode]);
 
   const openExternalWindow = useCallback(() => {
-    if (!externalControlAvailable || invalidRoute) return;
+    if (!hasSelection || !externalControlAvailable || invalidRoute) return;
     const currentPopup = popupRef.current;
     if (currentPopup && !currentPopup.closed) {
       safeFocus(currentPopup);
@@ -689,7 +690,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
         setExternalWindowStatus('외부 차트 창이 닫혔습니다.');
       },
     });
-  }, [externalControlAvailable, invalidRoute, publishSelection, stopPopupTracking]);
+  }, [externalControlAvailable, hasSelection, invalidRoute, publishSelection, stopPopupTracking]);
 
   const closeExternalWindow = useCallback(() => {
     postWindowMessage('closed');
@@ -700,15 +701,27 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
     setAnalysis(null);
   }, [selection.market, selection.ticker, selection.timeframe]);
 
-  const chart = (
+  const emptyState = (
+    <section data-testid="ai-chart-empty-selection" className="rounded-3xl border border-card-border bg-card p-6 text-center shadow-sm">
+      <p className="text-sm font-black">분석할 종목이 선택되지 않았습니다.</p>
+      <p className="mt-2 text-xs leading-5 text-muted-foreground">임의 종목을 자동으로 넣지 않습니다. 스캐너나 종목 화면에서 분석할 종목을 선택해 주세요.</p>
+      {!embedded && !externalMode ? (
+        <button type="button" onClick={() => navigate('/scanner')} className="mt-4 min-h-11 rounded-xl bg-primary px-4 text-sm font-black text-primary-foreground">
+          스캐너에서 종목 선택
+        </button>
+      ) : null}
+    </section>
+  );
+
+  const chart = hasSelection ? (
     <UnifiedAnalysisChart
       selection={selection}
       onSelectionChange={updateSelection}
       onAnalysisChange={setAnalysis}
     />
-  );
+  ) : emptyState;
 
-  const intelligencePanel = (
+  const intelligencePanel = hasSelection ? (
     <Suspense fallback={<p role="status" aria-label="AI 분석 근거 불러오는 중" className="rounded-2xl border border-card-border bg-card p-4 text-sm text-muted-foreground">AI 분석 근거를 불러오는 중입니다. 차트는 계속 사용할 수 있습니다.</p>}>
       <LazyAiChartV2IntelligencePanel
         selection={selection}
@@ -717,9 +730,9 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
         onModeChange={updateStrategyModeAndTimeframe}
       />
     </Suspense>
-  );
+  ) : null;
 
-  const details = (
+  const details = hasSelection ? (
     <div className="space-y-4">
       {intelligencePanel}
       <Suspense fallback={<p role="status" aria-label="공개 시장 근거 불러오는 중" className="rounded-2xl border border-card-border bg-card p-4 text-sm text-muted-foreground">공개 시장 근거를 불러오는 중입니다.</p>}>
@@ -729,7 +742,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
       <DecisionCard analysis={analysis} />
       <SafetyNote />
     </div>
-  );
+  ) : <div className="space-y-4"><SafetyNote /></div>;
 
   const mobile = !desktop && !externalMode && !embedded;
 
@@ -774,7 +787,7 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
             </button>
           )}
           <div className="shrink-0 text-right text-[10px] font-bold text-muted-foreground">
-            <p>{unifiedMarketLabel(selection.market)} · {selection.timeframe}</p>
+            <p>{hasSelection ? `${unifiedMarketLabel(selection.market)} · ${selection.timeframe}` : '종목 미선택'}</p>
             <p>{strategyModeLabel(strategyMode)} · 읽기 전용</p>
           </div>
         </div>
@@ -800,24 +813,24 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
             </div>
           </div>
           <main className="mx-auto w-full max-w-7xl p-3 sm:p-4">
-            {mobileTab === 'summary' ? <MobileSummary selection={selection} analysis={analysis} /> : null}
+            {mobileTab === 'summary' ? (hasSelection ? <MobileSummary selection={selection} analysis={analysis} /> : emptyState) : null}
             {mobileTab === 'chart' ? (
               <section data-testid="ai-chart-mobile-chart" className="min-w-0 [&_[data-testid=ai-chart-position-panel]]:hidden">
                 {chart}
-                <div className="hidden" aria-hidden="true" data-testid="ai-chart-mobile-overlay-controller">
-                  {intelligencePanel}
-                </div>
+                {hasSelection ? <div className="hidden" aria-hidden="true" data-testid="ai-chart-mobile-overlay-controller">{intelligencePanel}</div> : null}
               </section>
             ) : null}
             {mobileTab === 'position' ? (
               <section data-testid="ai-chart-mobile-position" className="min-w-0">
-                <AiChartPositionPanel
-                  market={selection.market}
-                  symbol={selection.symbol || selection.ticker}
-                  chartPrice={null}
-                  pricePlan={selection.pricePlan}
-                  onOverlayChange={ignorePositionOverlay}
-                />
+                {hasSelection ? (
+                  <AiChartPositionPanel
+                    market={selection.market}
+                    symbol={selection.symbol || selection.ticker}
+                    chartPrice={null}
+                    pricePlan={selection.pricePlan}
+                    onOverlayChange={ignorePositionOverlay}
+                  />
+                ) : emptyState}
               </section>
             ) : null}
             {mobileTab === 'details' ? <section data-testid="ai-chart-mobile-details">{details}</section> : null}
