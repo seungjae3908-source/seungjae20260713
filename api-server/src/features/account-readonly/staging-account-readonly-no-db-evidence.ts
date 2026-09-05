@@ -16,12 +16,8 @@ const READONLY_PROVIDER_ORIGINS = new Set([
   'https://api.upbit.com',
   'https://api.bitget.com',
 ]);
-const STDOUT_EVIDENCE_PREFIX = 'ACCOUNT_READONLY_EVIDENCE_B64=';
 
 type CredentialMap = Record<ReadonlyCredentialProvider, Record<string, string>>;
-type EvidenceGlobal = typeof globalThis & {
-  __STAGING_ACCOUNT_READONLY_CREDENTIALS__?: unknown;
-};
 
 type RequestAudit = {
   oauthTokenPosts: number;
@@ -35,45 +31,7 @@ function requiredEnv(name: string): string {
   return value;
 }
 
-function objectRecord(value: unknown, code: string): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(code);
-  return value as Record<string, unknown>;
-}
-
-function requiredInjectedString(row: Record<string, unknown>, key: string): string {
-  const value = typeof row[key] === 'string' ? row[key].trim() : '';
-  if (!value) throw new Error(`EVIDENCE_INJECTED_CREDENTIAL_INVALID:${key}`);
-  return value;
-}
-
-function injectedCredentialMap(value: unknown): CredentialMap {
-  const root = objectRecord(value, 'EVIDENCE_INJECTED_CREDENTIAL_MAP_INVALID');
-  const toss = objectRecord(root.toss, 'EVIDENCE_INJECTED_CREDENTIAL_MAP_INVALID:toss');
-  const upbit = objectRecord(root.upbit, 'EVIDENCE_INJECTED_CREDENTIAL_MAP_INVALID:upbit');
-  const bitget = objectRecord(root.bitget, 'EVIDENCE_INJECTED_CREDENTIAL_MAP_INVALID:bitget');
-  const tossAccountSeq = typeof toss.accountSeq === 'string' ? toss.accountSeq.trim() : '';
-  return {
-    toss: {
-      clientId: requiredInjectedString(toss, 'clientId'),
-      clientSecret: requiredInjectedString(toss, 'clientSecret'),
-      ...(tossAccountSeq ? { accountSeq: tossAccountSeq } : {}),
-    },
-    upbit: {
-      accessKey: requiredInjectedString(upbit, 'accessKey'),
-      secretKey: requiredInjectedString(upbit, 'secretKey'),
-    },
-    bitget: {
-      apiKey: requiredInjectedString(bitget, 'apiKey'),
-      secretKey: requiredInjectedString(bitget, 'secretKey'),
-      passphrase: requiredInjectedString(bitget, 'passphrase'),
-    },
-  };
-}
-
 function credentialMap(): CredentialMap {
-  const injected = (globalThis as EvidenceGlobal).__STAGING_ACCOUNT_READONLY_CREDENTIALS__;
-  if (injected !== undefined) return injectedCredentialMap(injected);
-
   const tossAccountSeq = String(process.env.STAGING_TOSS_ACCOUNT_SEQ ?? '').trim();
   return {
     toss: {
@@ -192,7 +150,7 @@ function sanitizedProviderSummary(snapshot: CanonicalAccountSnapshot) {
 
 async function main() {
   const targetSha = requiredEnv('STAGING_TARGET_SHA');
-  const stdoutOnly = process.env.STAGING_ACCOUNT_EVIDENCE_STDOUT === '1';
+  const artifactDir = requiredEnv('STAGING_ARTIFACT_DIR');
   const credentials = credentialMap();
   const storageAudit = { reads: 0, writeAttempts: 0 };
   const requestAudit: RequestAudit = { oauthTokenPosts: 0, readonlyGets: 0, rejectedRequests: 0 };
@@ -227,9 +185,8 @@ async function main() {
     schemaVersion: 1,
     targetSha,
     mode: 'CANONICAL_ACCOUNT_RUNTIME_NO_DB',
-    executionOrigin: stdoutOnly ? 'STANDARD_STAGING_HOST_MEMORY_ONLY' : 'LOCAL_PROCESS_MEMORY_ONLY',
     databaseAccessRequired: false,
-    credentialSource: stdoutOnly ? 'ACTIONS_SECRET_SSH_STDIN_MEMORY_ONLY' : 'ACTIONS_SECRET_MEMORY_ONLY',
+    credentialSource: 'ACTIONS_SECRET_MEMORY_ONLY',
     providerResults: [toss, upbit, bitget].map(sanitizedProviderSummary),
     storageAudit: {
       backend: 'READ_ONLY_MEMORY_REPOSITORY',
@@ -249,20 +206,12 @@ async function main() {
     },
   };
 
-  if (stdoutOnly) {
-    const encoded = Buffer.from(JSON.stringify(evidence), 'utf8').toString('base64url');
-    console.log(`${STDOUT_EVIDENCE_PREFIX}${encoded}`);
-  } else {
-    const artifactDir = requiredEnv('STAGING_ARTIFACT_DIR');
-    fs.mkdirSync(artifactDir, { recursive: true, mode: 0o700 });
-    const outputPath = path.join(artifactDir, 'account-readonly-no-db-evidence.json');
-    fs.writeFileSync(outputPath, `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o600 });
-  }
-
+  fs.mkdirSync(artifactDir, { recursive: true, mode: 0o700 });
+  const outputPath = path.join(artifactDir, 'account-readonly-no-db-evidence.json');
+  fs.writeFileSync(outputPath, `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o600 });
   console.log(JSON.stringify({
     targetSha,
     mode: evidence.mode,
-    executionOrigin: evidence.executionOrigin,
     providersConnected: 3,
     databaseAccessRequired: false,
     persistentRowsCreated: 0,
