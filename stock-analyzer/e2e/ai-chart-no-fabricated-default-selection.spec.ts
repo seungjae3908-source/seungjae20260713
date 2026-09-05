@@ -17,12 +17,17 @@ test('AI Chart does not fabricate a Samsung selection when no asset is selected'
 });
 
 test('direct AI Chart cold prewarm reuses only explicit route or stored selection', () => {
+  expect(appSource).toContain("window.matchMedia('(min-width: 1024px)').matches");
   expect(appSource).toContain('const routeSelection = selectionFromSearch(window.location.search);');
   expect(appSource).toContain("window.localStorage.getItem('sa-analysis-selection-v1')");
   expect(appSource).toContain('const prewarmSelection = routeSelection ?? storedSelection;');
   expect(appSource).toContain('if (!prewarmSelection) return null;');
-  expect(appSource).toContain("queryKey: ['unified-chart-data', market, ticker, timeframe]");
-  expect(appSource).toContain('queryFn: () => fetchUnifiedChartData({ market, symbol: ticker, timeframe })');
+  expect(appSource).toContain("const queryKey = ['unified-chart-data', market, ticker, timeframe] as const;");
+  expect(appSource).toContain('staleTime: DIRECT_AI_CHART_PREWARM_STALE_MS');
+  expect(appSource).toContain('retryOnMount: false');
+  expect(appSource).toContain('queryFn: ({ signal }) => fetchUnifiedChartData({ market, symbol: ticker, timeframe, signal })');
+  expect(appSource).toContain('retry: retryUnifiedChartBootstrap');
+  expect(appSource).toContain('retryOnMount: true');
   expect(appSource).not.toContain("queryKey: ['unified-chart-data', 'KR', '005930', '5m']");
   expect(appSource).not.toContain('prewarmDefaultAiChartData');
 });
