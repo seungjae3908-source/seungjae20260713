@@ -585,49 +585,255 @@ function SpecialFeedPanel({
 				</div>
 
 				<div className="mt-3 grid grid-cols-2 gap-2">
-					<button type="button" onClick={() => setView('latest')} className={cn('rounded-xl border px-3 py-2 text-xs font-black', view === 'latest' ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-background text-muted-foreground')}>최신정보</button>
-					<button type="button" onClick={() => setView('archive')} className={cn('inline-flex items-center justify-center gap-1 rounded-xl border px-3 py-2 text-xs font-black', view === 'archive' ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-background text-muted-foreground')}><Archive className="h-3.5 w-3.5" />보관·확인</button>
+					<button
+						type="button"
+						onClick={() => setView('latest')}
+						className={cn(
+							'rounded-xl border px-3 py-2 text-xs font-black',
+							view === 'latest'
+								? 'border-primary bg-primary text-primary-foreground'
+								: 'border-card-border bg-background text-muted-foreground',
+						)}
+					>
+						최신정보
+					</button>
+					<button
+						type="button"
+						onClick={() => setView('archive')}
+						className={cn(
+							'inline-flex items-center justify-center gap-1 rounded-xl border px-3 py-2 text-xs font-black',
+							view === 'archive'
+								? 'border-primary bg-primary text-primary-foreground'
+								: 'border-card-border bg-background text-muted-foreground',
+						)}
+					>
+						<Archive className="h-3.5 w-3.5" />
+						보관·확인
+					</button>
 				</div>
 
 				<label className="mt-3 flex h-11 items-center gap-2 rounded-2xl border border-card-border bg-background px-3">
 					<Search className="h-4 w-4 text-muted-foreground" />
-					<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="종목·코인·제목·내용 검색" className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none" />
-					{query && <button type="button" onClick={() => setQuery('')} aria-label="검색어 지우기"><X className="h-4 w-4 text-muted-foreground" /></button>}
+					<input
+						value={query}
+						onChange={(event) => setQuery(event.target.value)}
+						placeholder="종목·코인·제목·내용 검색"
+						className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none"
+					/>
+					{query && (
+						<button type="button" onClick={() => setQuery('')} aria-label="검색어 지우기">
+							<X className="h-4 w-4 text-muted-foreground" />
+						</button>
+					)}
 				</label>
 
 				<div className="mt-3 grid w-full grid-cols-5 gap-1">
-					{filters.map(([key, label]) => <button key={key} type="button" onClick={() => onFilter(key)} className={cn('min-w-0 whitespace-nowrap rounded-xl border px-1 py-2 text-[10px] font-black', filter === key ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-background text-muted-foreground')}>{label}</button>)}
+					{filters.map(([key, label]) => (
+						<button
+							key={key}
+							type="button"
+							onClick={() => onFilter(key)}
+							className={cn(
+								'min-w-0 whitespace-nowrap rounded-xl border px-1 py-2 text-[10px] font-black',
+								filter === key
+									? 'border-primary bg-primary text-primary-foreground'
+									: 'border-card-border bg-background text-muted-foreground',
+							)}
+						>
+							{label}
+						</button>
+					))}
 				</div>
 
 				<div className="mt-3 space-y-2">
 					{loading && <InlineState>{asset === 'stock' ? '종목' : '코인'}의 뉴스·호재·악재·차트신호를 확인하는 중입니다.</InlineState>}
-					{error && <div className="space-y-2"><InlineState tone="error">특이정보를 불러오지 못했습니다.</InlineState><button type="button" onClick={onRetry} className="w-full rounded-2xl border border-card-border bg-background px-4 py-3 text-xs font-black">다시 불러오기</button></div>}
-					{!loading && !error && filteredItems.length === 0 && <InlineState>{view === 'latest' ? '최근 1주일 이내' : '1주일이 지난 정보·시각 미확인'}에 해당 정보가 없습니다.</InlineState>}
-					{!loading && !error && visibleItems.map((item) => <SpecialFeedRow key={item.id} item={item} nowMs={nowMs} onOpenItem={() => onOpenItem(item)} />)}
-					{!loading && !error && filteredItems.length > 10 && <button type="button" onClick={() => { setPage(1); setMoreOpen(true); }} className="w-full rounded-2xl border border-card-border bg-background px-4 py-3 text-xs font-black text-primary">더보기 ({filteredItems.length}건)</button>}
+					{error && (
+						<div className="space-y-2">
+							<InlineState tone="error">특이정보를 불러오지 못했습니다.</InlineState>
+							<button
+								type="button"
+								onClick={onRetry}
+								className="w-full rounded-2xl border border-card-border bg-background px-4 py-3 text-xs font-black"
+							>
+								다시 불러오기
+							</button>
+						</div>
+					)}
+					{!loading && !error && filteredItems.length === 0 && (
+						<InlineState>
+							{view === 'latest' ? '최근 1주일 이내' : '1주일이 지난 정보·시각 미확인'}에 해당 정보가 없습니다.
+						</InlineState>
+					)}
+					{!loading && !error && visibleItems.map((item) => (
+						<SpecialFeedRow
+							key={item.id}
+							item={item}
+							nowMs={nowMs}
+							onOpenItem={() => onOpenItem(item)}
+						/>
+					))}
+					{!loading && !error && filteredItems.length > 10 && (
+						<button
+							type="button"
+							onClick={() => {
+								setPage(1);
+								setMoreOpen(true);
+							}}
+							className="w-full rounded-2xl border border-card-border bg-background px-4 py-3 text-xs font-black text-primary"
+						>
+							더보기 ({filteredItems.length}건)
+						</button>
+					)}
 				</div>
 			</section>
 
-			{moreOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onMouseDown={(event) => { if (event.currentTarget === event.target) setMoreOpen(false); }}>
-				<div className="flex max-h-[82vh] w-full max-w-md flex-col overflow-hidden rounded-3xl border border-card-border bg-card shadow-2xl">
-					<div className="flex items-center justify-between border-b border-card-border px-4 py-3"><div><p className="text-sm font-black">{view === 'latest' ? '최신정보' : '보관·확인'} 더보기</p><p className="mt-0.5 text-[10px] font-bold text-muted-foreground">페이지당 10개 · 전체 {filteredItems.length}건</p></div><button type="button" onClick={() => setMoreOpen(false)} aria-label="닫기" className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border"><X className="h-4 w-4" /></button></div>
-					<div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">{modalItems.map((item) => <SpecialFeedRow key={`modal:${item.id}`} item={item} nowMs={nowMs} onOpenItem={() => { setMoreOpen(false); onOpenItem(item); }} />)}</div>
-					<div className="flex items-center justify-between border-t border-card-border px-3 py-3"><button type="button" onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={page <= 1} className="inline-flex items-center gap-1 rounded-xl border border-card-border px-3 py-2 text-xs font-black disabled:opacity-40"><ChevronLeft className="h-4 w-4" />이전</button><span className="text-xs font-black">{page} / {pageCount}</span><button type="button" onClick={() => setPage((value) => Math.min(pageCount, value + 1))} disabled={page >= pageCount} className="inline-flex items-center gap-1 rounded-xl border border-card-border px-3 py-2 text-xs font-black disabled:opacity-40">다음<ChevronRight className="h-4 w-4" /></button></div>
+			{moreOpen && (
+				<div
+					className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+					onMouseDown={(event) => {
+						if (event.currentTarget === event.target) setMoreOpen(false);
+					}}
+				>
+					<div className="flex max-h-[82vh] w-full max-w-md flex-col overflow-hidden rounded-3xl border border-card-border bg-card shadow-2xl">
+						<div className="flex items-center justify-between border-b border-card-border px-4 py-3">
+							<div>
+								<p className="text-sm font-black">{view === 'latest' ? '최신정보' : '보관·확인'} 더보기</p>
+								<p className="mt-0.5 text-[10px] font-bold text-muted-foreground">페이지당 10개 · 전체 {filteredItems.length}건</p>
+							</div>
+							<button type="button" onClick={() => setMoreOpen(false)} aria-label="닫기" className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border">
+								<X className="h-4 w-4" />
+							</button>
+						</div>
+
+						<div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
+							{modalItems.map((item) => (
+								<SpecialFeedRow
+									key={`modal:${item.id}`}
+									item={item}
+									nowMs={nowMs}
+									onOpenItem={() => {
+										setMoreOpen(false);
+										onOpenItem(item);
+									}}
+								/>
+							))}
+						</div>
+
+						<div className="flex items-center justify-between border-t border-card-border px-3 py-3">
+							<button
+								type="button"
+								onClick={() => setPage((value) => Math.max(1, value - 1))}
+								disabled={page <= 1}
+								className="inline-flex items-center gap-1 rounded-xl border border-card-border px-3 py-2 text-xs font-black disabled:opacity-40"
+							>
+								<ChevronLeft className="h-4 w-4" />
+								이전
+							</button>
+							<span className="text-xs font-black">{page} / {pageCount}</span>
+							<button
+								type="button"
+								onClick={() => setPage((value) => Math.min(pageCount, value + 1))}
+								disabled={page >= pageCount}
+								className="inline-flex items-center gap-1 rounded-xl border border-card-border px-3 py-2 text-xs font-black disabled:opacity-40"
+							>
+								다음
+								<ChevronRight className="h-4 w-4" />
+							</button>
+						</div>
+					</div>
 				</div>
-			</div>}
+			)}
 		</>
 	);
 }
 
-function SpecialFeedRow({ item, nowMs, onOpenItem }: { item: SpecialFeedItem; nowMs: number; onOpenItem: () => void; }) {
+function SpecialFeedRow({
+	item,
+	nowMs,
+	onOpenItem,
+}: {
+	item: SpecialFeedItem;
+	nowMs: number;
+	onOpenItem: () => void;
+}) {
 	const freshness = specialFeedFreshness(item, nowMs);
 	const prefix = freshness === 'archive' ? '지난' : '최신';
-	const label = freshness === 'unknown' ? '시각 확인 필요' : item.kind === 'signal' ? `${prefix}차트` : item.kind === 'disclosure' ? `${prefix}공시` : item.tone === 'positive' ? `${prefix}호재` : item.tone === 'negative' ? `${prefix}악재` : `${prefix}뉴스`;
-	const badgeClass = freshness === 'unknown' ? 'bg-secondary text-muted-foreground' : item.tone === 'positive' ? 'bg-positive/10 text-positive' : item.tone === 'negative' ? 'bg-destructive/10 text-destructive' : 'bg-primary/10 text-primary';
-	const itemName = item.asset === 'coin' ? displayCoinName(item.ticker, item.name, item.name) : displayStockName(item.ticker, item.name, item.market === 'US' ? 'US' : 'KR');
-	const content = <div className="rounded-2xl border border-card-border bg-background p-3 text-left"><div className="flex items-start justify-between gap-2"><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-1.5"><span className={cn('rounded-full px-2 py-1 text-[10px] font-black', badgeClass)}>{label}</span><span className="truncate text-xs font-black">{itemName}</span><span className="text-[10px] font-bold text-muted-foreground">{item.ticker}</span></div><p className="mt-2 break-keep text-sm font-black leading-relaxed">{item.title}</p>{item.summary && <p className="mt-1 break-keep text-xs font-semibold leading-relaxed text-muted-foreground">{item.summary}</p>}</div>{item.url && <ExternalLink className="h-4 w-4 shrink-0 text-primary" />}</div>{item.price != null && <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] font-black"><span>{formatAppPrice(item.price, item.currency)}</span>{item.changePercent != null && <span className={item.changePercent >= 0 ? 'text-positive' : 'text-destructive'}>{formatAppPercent(item.changePercent)}</span>}{item.timeframe && <span className="text-primary">{item.timeframe}</span>}</div>}<div className="mt-2 flex flex-wrap items-center justify-between gap-1 text-[10px] font-bold text-muted-foreground"><span>{item.source} · {elapsedFeedText(item.sourceAt ?? item.detectedAt, nowMs)}</span><span>{freshness === 'latest' ? '1주일 이내' : freshness === 'archive' ? '보관함' : '시각 미확인'}</span></div></div>;
-	if (item.url) return <a href={item.url} target="_blank" rel="noreferrer">{content}</a>;
-	return <button type="button" onClick={onOpenItem} className="block w-full">{content}</button>;
+	const label = freshness === 'unknown' ? '시각 확인 필요' :
+		item.kind === 'signal'
+			? `${prefix}차트`
+			: item.kind === 'disclosure'
+				? `${prefix}공시`
+				: item.tone === 'positive'
+					? `${prefix}호재`
+					: item.tone === 'negative'
+						? `${prefix}악재`
+						: `${prefix}뉴스`;
+	const badgeClass =
+		freshness === 'unknown'
+			? 'bg-secondary text-muted-foreground'
+			: item.tone === 'positive'
+				? 'bg-positive/10 text-positive'
+				: item.tone === 'negative'
+					? 'bg-destructive/10 text-destructive'
+					: 'bg-primary/10 text-primary';
+	const itemName =
+		item.asset === 'coin'
+			? displayCoinName(item.ticker, item.name, item.name)
+			: displayStockName(item.ticker, item.name, item.market === 'US' ? 'US' : 'KR');
+
+	const content = (
+		<div className="rounded-2xl border border-card-border bg-background p-3 text-left">
+			<div className="flex items-start justify-between gap-2">
+				<div className="min-w-0 flex-1">
+					<div className="flex flex-wrap items-center gap-1.5">
+						<span className={cn('rounded-full px-2 py-1 text-[10px] font-black', badgeClass)}>
+							{label}
+						</span>
+						<span className="truncate text-xs font-black">{itemName}</span>
+						<span className="text-[10px] font-bold text-muted-foreground">{item.ticker}</span>
+					</div>
+					<p className="mt-2 break-keep text-sm font-black leading-relaxed">{item.title}</p>
+					{item.summary && (
+						<p className="mt-1 break-keep text-xs font-semibold leading-relaxed text-muted-foreground">
+							{item.summary}
+						</p>
+					)}
+				</div>
+				{item.url && <ExternalLink className="h-4 w-4 shrink-0 text-primary" />}
+			</div>
+
+			{item.price != null && (
+				<div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] font-black">
+					<span>{formatAppPrice(item.price, item.currency)}</span>
+					{item.changePercent != null && (
+						<span className={item.changePercent >= 0 ? 'text-positive' : 'text-destructive'}>
+							{formatAppPercent(item.changePercent)}
+						</span>
+					)}
+					{item.timeframe && <span className="text-primary">{item.timeframe}</span>}
+				</div>
+			)}
+
+			<div className="mt-2 flex flex-wrap items-center justify-between gap-1 text-[10px] font-bold text-muted-foreground">
+				<span>{item.source} · {elapsedFeedText(item.sourceAt ?? item.detectedAt, nowMs)}</span>
+				<span>{freshness === 'latest' ? '1주일 이내' : freshness === 'archive' ? '보관함' : '시각 미확인'}</span>
+			</div>
+		</div>
+	);
+
+	if (item.url) {
+		return (
+			<a href={item.url} target="_blank" rel="noreferrer">
+				{content}
+			</a>
+		);
+	}
+
+	return (
+		<button type="button" onClick={onOpenItem} className="block w-full">
+			{content}
+		</button>
+	);
 }
 
 function specialFeedFreshness(item: SpecialFeedItem, nowMs: number): SpecialFeedFreshness {
@@ -636,7 +842,9 @@ function specialFeedFreshness(item: SpecialFeedItem, nowMs: number): SpecialFeed
 	if (!Number.isFinite(detectedAt) || detectedAt > nowMs) return 'unknown';
 	if (!Number.isFinite(displayAt) || displayAt > nowMs) return 'unknown';
 	const archiveAt = Date.parse(item.archiveAt);
-	const effectiveArchiveAt = Number.isFinite(archiveAt) ? archiveAt : detectedAt + 7 * 24 * 60 * 60_000;
+	const effectiveArchiveAt = Number.isFinite(archiveAt)
+		? archiveAt
+		: detectedAt + 7 * 24 * 60 * 60_000;
 	if (!Number.isFinite(effectiveArchiveAt) || effectiveArchiveAt < detectedAt) return 'unknown';
 	return effectiveArchiveAt <= nowMs ? 'archive' : 'latest';
 }
@@ -659,7 +867,23 @@ function Tab({ active, onClick, children }: { active: boolean; onClick: () => vo
 
 function Section({ title, state, action, children }: { title: string; state?: string | null; action?: ReactNode; children: ReactNode }) {
 	const [open, setOpen] = useState(false);
-	return <section className="rounded-3xl border border-card-border bg-card shadow-sm"><button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="flex w-full items-center justify-between gap-2 p-4"><span className="flex-1 text-center"><span className="block text-sm font-black">{title}</span>{!open && <span className="mt-0.5 block text-[10px] font-bold text-muted-foreground">{state ?? '눌러서 펼치기'}</span>}</span><ChevronDown className={cn('h-4 w-4 shrink-0 text-muted-foreground transition-transform', open && 'rotate-180')} /></button>{open && <div className="px-4 pb-4">{action && <div className="mb-3 flex justify-center">{action}</div>}{state ? <InlineState tone={state.includes('못') ? 'error' : undefined}>{state}</InlineState> : children}</div>}</section>;
+	return (
+		<section className="rounded-3xl border border-card-border bg-card shadow-sm">
+			<button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="flex w-full items-center justify-between gap-2 p-4">
+				<span className="flex-1 text-center">
+					<span className="block text-sm font-black">{title}</span>
+					{!open && <span className="mt-0.5 block text-[10px] font-bold text-muted-foreground">{state ?? '눌러서 펼치기'}</span>}
+				</span>
+				<ChevronDown className={cn('h-4 w-4 shrink-0 text-muted-foreground transition-transform', open && 'rotate-180')} />
+			</button>
+			{open && (
+				<div className="px-4 pb-4">
+					{action && <div className="mb-3 flex justify-center">{action}</div>}
+					{state ? <InlineState tone={state.includes('못') ? 'error' : undefined}>{state}</InlineState> : children}
+				</div>
+			)}
+		</section>
+	);
 }
 
 function Metric({ label, value, strong, tone }: { label: string; value: string; strong?: boolean; tone?: 'up' | 'down' }) {
@@ -684,7 +908,16 @@ function Toggle({ values, value, onChange }: { values: [string, string][]; value
 function HistorySection({ title, rows, latestCount, loading, error, titleOf, subtitleOf }: { title: string; rows: AnyObj[]; latestCount: number; loading: boolean; error: boolean; titleOf: (row: AnyObj) => unknown; subtitleOf: (row: AnyObj) => string }) {
 	const latest = rows.slice(0, latestCount);
 	const [open, setOpen] = useState(false);
-	if (!open) return <section className="rounded-3xl border border-card-border bg-card shadow-sm"><button type="button" onClick={() => setOpen(true)} aria-expanded={false} className="flex w-full items-center justify-between gap-2 p-4"><span className="flex-1 text-center"><span className="block text-sm font-black">{title}</span><span className="mt-0.5 block text-[10px] font-bold text-muted-foreground">{loading ? '불러오는 중' : error ? '불러오기 실패' : `최신 고유 ${latest.length}건 / 전체 ${rows.length}건`}</span></span><ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" /></button></section>;
+	if (!open) {
+		return (
+			<section className="rounded-3xl border border-card-border bg-card shadow-sm">
+				<button type="button" onClick={() => setOpen(true)} aria-expanded={false} className="flex w-full items-center justify-between gap-2 p-4">
+					<span className="flex-1 text-center"><span className="block text-sm font-black">{title}</span><span className="mt-0.5 block text-[10px] font-bold text-muted-foreground">{loading ? '불러오는 중' : error ? '불러오기 실패' : `최신 고유 ${latest.length}건 / 전체 ${rows.length}건`}</span></span>
+					<ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+				</button>
+			</section>
+		);
+	}
 	return <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm"><button type="button" onClick={() => setOpen(false)} aria-expanded className="mb-3 flex w-full items-center justify-between gap-2"><span className="flex-1 text-center text-sm font-black">{title}</span><span className="text-[10px] font-bold text-muted-foreground">최신 고유 {latest.length}건 / 전체 {rows.length}건</span><ChevronDown className="h-4 w-4 rotate-180 text-muted-foreground" /></button>{loading && <InlineState>데이터를 불러오는 중입니다.</InlineState>}{error && <InlineState tone="error">데이터를 불러오지 못했습니다.</InlineState>}{!loading && !error && latest.length === 0 && <InlineState>제공된 데이터가 없습니다.</InlineState>}<div className="space-y-2">{latest.map((row, index) => <HistoryRow key={`${row.url ?? titleOf(row)}:${index}`} row={row} title={String(titleOf(row) || '제목 없음')} subtitle={subtitleOf(row)} />)}</div>{rows.length > latestCount && <details className="mt-3 rounded-2xl border border-card-border bg-background p-3"><summary className="cursor-pointer text-xs font-black">전체 과거 이력 보기 ({rows.length}건)</summary><div className="mt-3 max-h-96 space-y-2 overflow-y-auto">{rows.slice(latestCount).map((row, index) => <HistoryRow key={`history:${row.url ?? titleOf(row)}:${index}`} row={row} title={String(titleOf(row) || '제목 없음')} subtitle={subtitleOf(row)} />)}</div></details>}</section>;
 }
 
@@ -731,30 +964,170 @@ export function CoinInfo({ nowMs, basePath = '/stock-info' }: { nowMs: number; b
 		navigate(`${basePath}?${next.toString()}`, { replace: true });
 	};
 
-	const coinSpecialFeed = useQuery({ queryKey: ['coin-info-special-feed', coinMarket], queryFn: async ({ signal }) => { const response = await authorizedFetch(`/api/stocks/special-feed?asset=coin&market=${coinMarket}&limit=2000&_ts=${Date.now()}`, { cache: 'no-store', signal }); const payload = (await response.json().catch(() => ({}))) as SpecialFeedResponse & { error?: string; message?: string }; if (!response.ok) throw new Error(payload.error ?? payload.message ?? `HTTP_${response.status}`); return payload; }, refetchInterval: 30_000, refetchIntervalInBackground: false, refetchOnWindowFocus: true, retry: 1 });
+	const coinSpecialFeed = useQuery({
+		queryKey: ['coin-info-special-feed', coinMarket],
+		queryFn: async ({ signal }) => {
+			const response = await authorizedFetch(
+				`/api/stocks/special-feed?asset=coin&market=${coinMarket}&limit=2000&_ts=${Date.now()}`,
+				{ cache: 'no-store', signal },
+			);
+			const payload = (await response.json().catch(() => ({}))) as SpecialFeedResponse & { error?: string; message?: string };
+			if (!response.ok) throw new Error(payload.error ?? payload.message ?? `HTTP_${response.status}`);
+			return payload;
+		},
+		refetchInterval: 30_000,
+		refetchIntervalInBackground: false,
+		refetchOnWindowFocus: true,
+		retry: 1,
+	});
+
 	const status = useQuery({ queryKey: ['crypto-status'], queryFn: () => apiGet<AnyObj>('/crypto/status'), staleTime: 30_000 });
 	const spotMarkets = useQuery({ queryKey: ['crypto-spot-markets'], queryFn: () => apiGet<AnyObj>('/crypto/spot/markets'), enabled: coinMarket === 'spot', staleTime: 10 * 60_000 });
 	const spotTickers = useQuery({ queryKey: ['crypto-spot-tickers'], queryFn: () => apiGet<AnyObj>('/crypto/spot/tickers'), enabled: coinMarket === 'spot', refetchInterval: 15_000 });
 	const orderbook = useQuery({ queryKey: ['crypto-spot-orderbook', symbol], queryFn: () => apiGet<AnyObj>(`/crypto/spot/orderbook?symbol=${encodeURIComponent(symbol)}`), enabled: coinMarket === 'spot' && Boolean(symbol), refetchInterval: 5_000 });
 	const [coinTf, setCoinTf] = useState<'15m' | '1D' | '1W' | '1M'>('15m');
-	const spotCandles = useQuery({ queryKey: ['crypto-spot-candles', symbol, coinTf], queryFn: () => apiGet<AnyObj>(coinTf === '15m' ? `/crypto/spot/candles?symbol=${encodeURIComponent(symbol)}&unit=15&count=120` : `/crypto/spot/candles?symbol=${encodeURIComponent(symbol)}&tf=${coinTf}&count=200`), enabled: coinMarket === 'spot' && Boolean(symbol), refetchInterval: 30_000 });
+	const spotCandles = useQuery({
+		queryKey: ['crypto-spot-candles', symbol, coinTf],
+		queryFn: () => apiGet<AnyObj>(coinTf === '15m' ? `/crypto/spot/candles?symbol=${encodeURIComponent(symbol)}&unit=15&count=120` : `/crypto/spot/candles?symbol=${encodeURIComponent(symbol)}&tf=${coinTf}&count=200`),
+		enabled: coinMarket === 'spot' && Boolean(symbol),
+		refetchInterval: 30_000,
+	});
 	const futuresTickers = useQuery({ queryKey: ['crypto-futures-tickers'], queryFn: () => apiGet<AnyObj>('/crypto/futures/tickers'), enabled: coinMarket === 'futures', refetchInterval: 10_000 });
 	const futuresCandles = useQuery({ queryKey: ['crypto-futures-candles', symbol], queryFn: () => apiGet<AnyObj>(`/crypto/futures/candles?symbol=${encodeURIComponent(symbol)}&granularity=15m&limit=200`), enabled: coinMarket === 'futures' && Boolean(symbol), refetchInterval: 30_000 });
+
 	const marketNames = new Map<string, AnyObj>(((spotMarkets.data?.markets ?? []) as AnyObj[]).map((item) => [String(item.symbol), item]));
 	const spotRows = ((spotTickers.data?.tickers ?? []) as AnyObj[]).map((item) => ({ ...item, ...(marketNames.get(String(item.symbol)) ?? {}) }));
 	const futureRows = (futuresTickers.data?.tickers ?? []) as AnyObj[];
 	const rows = coinMarket === 'spot' ? spotRows : futureRows;
-	const filteredRows = rows.filter((item) => { const query = searchText.trim().toLowerCase(); if (!query) return true; return [item.symbol, item.koreanName, item.englishName].some((value) => String(value ?? '').toLowerCase().includes(query)); }).sort((a, b) => Number(b.tradingValue24h ?? 0) - Number(a.tradingValue24h ?? 0)).slice(0, 100);
+	const filteredRows = rows
+		.filter((item) => {
+			const query = searchText.trim().toLowerCase();
+			if (!query) return true;
+			return [item.symbol, item.koreanName, item.englishName].some((value) => String(value ?? '').toLowerCase().includes(query));
+		})
+		.sort((a, b) => Number(b.tradingValue24h ?? 0) - Number(a.tradingValue24h ?? 0))
+		.slice(0, 100);
 	const selected = rows.find((item) => String(item.symbol).toUpperCase() === symbol) ?? null;
 	const currency = coinMarket === 'spot' ? 'KRW' : 'USDT';
 	const candles = (coinMarket === 'spot' ? spotCandles.data?.candles : futuresCandles.data?.candles) as AnyObj[] | undefined;
 	const latestCandle = candles?.at(-1);
 	const connectionOk = coinMarket === 'spot' ? status.data?.upbit?.ok : status.data?.bitget?.ok;
 
-	return <main className="space-y-4 px-4 pb-28 pt-4"><SpecialFeedPanel asset="coin" market={coinMarket} filter={coinFeedFilter} onFilter={setCoinFeedFilter} items={coinSpecialFeed.data?.items ?? []} nowMs={nowMs} loading={coinSpecialFeed.isLoading} fetching={coinSpecialFeed.isFetching} error={coinSpecialFeed.isError || coinSpecialFeed.data?.ok === false} catalogSize={coinSpecialFeed.data?.catalogSize} onRetry={() => { void coinSpecialFeed.refetch(); }} onOpenItem={(item) => { const nextMarket: CoinMarketTab = item.market === 'futures' ? 'futures' : 'spot'; changeCoin(nextMarket, item.ticker); }} />
-		<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm"><div className="grid grid-cols-2 gap-2"><Tab active={coinMarket === 'spot'} onClick={() => changeCoin('spot')}>현물 · 업비트</Tab><Tab active={coinMarket === 'futures'} onClick={() => changeCoin('futures')}>선물 · 비트겟</Tab></div><div className={cn('mt-3 rounded-2xl px-3 py-2 text-xs font-black', connectionOk ? 'bg-positive/10 text-positive' : 'bg-destructive/10 text-destructive')}>{coinMarket === 'spot' ? '업비트' : '비트겟'} 공개 시세 · {status.isLoading ? '연결 확인 중' : connectionOk ? '정상' : '연결 오류'}</div><label className="mt-3 flex h-11 items-center gap-2 rounded-2xl border border-card-border bg-background px-3"><Search className="h-4 w-4 text-muted-foreground" /><input value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder={coinMarket === 'spot' ? '코인명·심볼 검색' : '선물 심볼 검색'} className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none" /></label>{searchText.trim().length > 0 && <div className="mt-3 max-h-52 space-y-1 overflow-y-auto">{(coinMarket === 'spot' ? spotTickers.isLoading : futuresTickers.isLoading) && <InlineState>코인 목록을 불러오는 중입니다.</InlineState>}{!(coinMarket === 'spot' ? spotTickers.isLoading : futuresTickers.isLoading) && filteredRows.length === 0 && <InlineState>검색 결과가 없습니다.</InlineState>}{filteredRows.map((item) => { const itemSymbol = String(item.symbol); return <button key={itemSymbol} type="button" onClick={() => { setSearchText(''); changeCoin(coinMarket, itemSymbol); }} className={cn('flex w-full items-center justify-between rounded-xl px-3 py-2 text-left', itemSymbol === symbol ? 'bg-primary/10 text-primary' : 'bg-secondary/60')}><span className="min-w-0 truncate text-sm font-black">{displayCoinName(String(itemSymbol), item.koreanName, item.englishName)}</span><span className="ml-2 shrink-0 text-[10px] font-bold text-muted-foreground">{itemSymbol}</span></button>; })}</div>}</section>
-		{!symbol && <InlineState>코인을 검색해 선택하면 실제 시세·호가·캔들 정보가 아래에 표시됩니다.</InlineState>}
-		{symbol && <><Section title={coinMarket === 'spot' ? '현물 기본정보' : '선물 기본정보'} state={selected ? null : '선택한 코인의 시세 데이터가 없습니다.'}>{selected && <><div className="flex items-start justify-between gap-3"><div><p className="text-xl font-black">{displayCoinName(String(selected.symbol), selected.koreanName, selected.englishName)}</p><p className="mt-1 text-xs font-bold text-muted-foreground">{selected.symbol} · {coinMarket === 'spot' ? '업비트 KRW' : '비트겟 USDT 선물'} · 기준 {formatDate(coinMarket === 'spot' ? spotTickers.data?.updatedAt : futuresTickers.data?.updatedAt)}</p></div><button type="button" onClick={() => { void (coinMarket === 'spot' ? spotTickers.refetch() : futuresTickers.refetch()); }} className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border"><RefreshCw className="h-4 w-4" /></button></div>{coinMarket === 'spot' && <div className="mt-3 grid grid-cols-4 gap-1">{(['15m', '1D', '1W', '1M'] as const).map((tf) => <button key={tf} type="button" onClick={() => setCoinTf(tf)} className={cn('rounded-xl border px-2 py-1.5 text-[11px] font-black', coinTf === tf ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-card text-muted-foreground')}>{tf === '15m' ? '15분' : tf === '1D' ? '일봉' : tf === '1W' ? '주봉' : '월봉'}</button>)}</div>}<div className="mt-4 grid grid-cols-2 gap-2"><Metric label="현재가" value={money(selected.price, currency)} strong /><Metric label="24시간 등락률" value={finite(selected.changePercent ?? selected.changePercent24h) == null ? '데이터 없음' : formatAppPercent(selected.changePercent ?? selected.changePercent24h)} tone={changeTone(selected.changePercent ?? selected.changePercent24h)} /><Metric label="24시간 고가" value={money(selected.high24h, currency)} /><Metric label="24시간 저가" value={money(selected.low24h, currency)} /><Metric label="24시간 거래량" value={metric(selected.volume24h)} /><Metric label="24시간 거래대금" value={money(selected.tradingValue24h, currency)} />{coinMarket === 'futures' && <Metric label="마크가격" value={money(selected.markPrice, currency)} />}{coinMarket === 'futures' && <Metric label="지수가격" value={money(selected.indexPrice, currency)} />}{coinMarket === 'futures' && <Metric label="펀딩비" value={metric(finite(selected.fundingRate) == null ? null : Number(selected.fundingRate) * 100, '%')} />}{coinMarket === 'futures' && <Metric label="미결제약정" value={metric(selected.openInterest)} />}{coinMarket === 'futures' && <Metric label="매수 / 매도호가" value={`${money(selected.bidPrice, currency)} / ${money(selected.askPrice, currency)}`} />}<Metric label={coinMarket === 'spot' ? `${coinTf === '15m' ? '15분봉' : coinTf === '1D' ? '일봉' : coinTf === '1W' ? '주봉' : '월봉'} 최신 종가` : '15분봉 최신 종가'} value={money(latestCandle?.close, currency)} /><Metric label="캔들 수" value={candles?.length ? `${candles.length}개` : '데이터 없음'} />{coinMarket === 'spot' && <Metric label="유의 상태" value={warningLabel(selected.warning)} tone={selected.warning === true ? 'down' : undefined} />}</div></>}</Section>{coinMarket === 'spot' && <Section title="호가" state={queryStateText(orderbook)}><div className="grid grid-cols-2 gap-2"><Metric label="총 매도잔량" value={metric(orderbook.data?.totalAskSize)} /><Metric label="총 매수잔량" value={metric(orderbook.data?.totalBidSize)} /></div><div className="mt-3 max-h-72 space-y-1 overflow-y-auto">{((orderbook.data?.units ?? []) as AnyObj[]).slice(0, 15).map((unit, index) => <div key={index} className="grid grid-cols-4 gap-1 rounded-xl bg-secondary/60 p-2 text-center text-[10px] font-bold"><span className="text-destructive">{money(unit.askPrice, 'KRW')}</span><span>{metric(unit.askSize)}</span><span>{metric(unit.bidSize)}</span><span className="text-positive">{money(unit.bidPrice, 'KRW')}</span></div>)}</div></Section>}<PriceAlertCard assetType={coinMarket === 'spot' ? 'coin_spot' : 'coin_futures'} market={coinMarket === 'spot' ? 'UPBIT' : 'BITGET'} symbol={symbol} currentPrice={finite(selected?.price)} currency={currency} /></>}
-		<section className="rounded-3xl border border-card-border bg-card p-4 text-xs font-bold leading-relaxed text-muted-foreground shadow-sm">코인 화면에는 PER·PBR·ROE·기관·외국인 수급을 표시하지 않습니다. 공개 시세와 실제 거래소 응답이 없으면 임시 가격을 만들지 않고 데이터 없음으로 표시합니다.</section>
-	</main>;
+	return (
+		<main className="space-y-4 px-4 pb-28 pt-4">
+			<SpecialFeedPanel
+				asset="coin"
+				market={coinMarket}
+				filter={coinFeedFilter}
+				onFilter={setCoinFeedFilter}
+				items={coinSpecialFeed.data?.items ?? []}
+				nowMs={nowMs}
+				loading={coinSpecialFeed.isLoading}
+				fetching={coinSpecialFeed.isFetching}
+				error={coinSpecialFeed.isError || coinSpecialFeed.data?.ok === false}
+				catalogSize={coinSpecialFeed.data?.catalogSize}
+				onRetry={() => { void coinSpecialFeed.refetch(); }}
+				onOpenItem={(item) => {
+					const nextMarket: CoinMarketTab = item.market === 'futures' ? 'futures' : 'spot';
+					changeCoin(nextMarket, item.ticker);
+				}}
+			/>
+
+			<section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm">
+				<div className="grid grid-cols-2 gap-2">
+					<Tab active={coinMarket === 'spot'} onClick={() => changeCoin('spot')}>현물 · 업비트</Tab>
+					<Tab active={coinMarket === 'futures'} onClick={() => changeCoin('futures')}>선물 · 비트겟</Tab>
+				</div>
+				<div className={cn('mt-3 rounded-2xl px-3 py-2 text-xs font-black', connectionOk ? 'bg-positive/10 text-positive' : 'bg-destructive/10 text-destructive')}>
+					{coinMarket === 'spot' ? '업비트' : '비트겟'} 공개 시세 · {status.isLoading ? '연결 확인 중' : connectionOk ? '정상' : '연결 오류'}
+				</div>
+				<label className="mt-3 flex h-11 items-center gap-2 rounded-2xl border border-card-border bg-background px-3">
+					<Search className="h-4 w-4 text-muted-foreground" />
+					<input value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder={coinMarket === 'spot' ? '코인명·심볼 검색' : '선물 심볼 검색'} className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none" />
+				</label>
+				{searchText.trim().length > 0 && (
+				<div className="mt-3 max-h-52 space-y-1 overflow-y-auto">
+					{(coinMarket === 'spot' ? spotTickers.isLoading : futuresTickers.isLoading) && <InlineState>코인 목록을 불러오는 중입니다.</InlineState>}
+					{!(coinMarket === 'spot' ? spotTickers.isLoading : futuresTickers.isLoading) && filteredRows.length === 0 && <InlineState>검색 결과가 없습니다.</InlineState>}
+					{filteredRows.map((item) => {
+						const itemSymbol = String(item.symbol);
+						return (
+							<button key={itemSymbol} type="button" onClick={() => { setSearchText(''); changeCoin(coinMarket, itemSymbol); }} className={cn('flex w-full items-center justify-between rounded-xl px-3 py-2 text-left', itemSymbol === symbol ? 'bg-primary/10 text-primary' : 'bg-secondary/60')}>
+								<span className="min-w-0 truncate text-sm font-black">{displayCoinName(String(itemSymbol), item.koreanName, item.englishName)}</span>
+								<span className="ml-2 shrink-0 text-[10px] font-bold text-muted-foreground">{itemSymbol}</span>
+							</button>
+						);
+					})}
+				</div>
+				)}
+			</section>
+
+			{!symbol && <InlineState>코인을 검색해 선택하면 실제 시세·호가·캔들 정보가 아래에 표시됩니다.</InlineState>}
+
+			{symbol && (
+			<>
+			<Section title={coinMarket === 'spot' ? '현물 기본정보' : '선물 기본정보'} state={selected ? null : '선택한 코인의 시세 데이터가 없습니다.'}>
+				{selected && (
+					<>
+						<div className="flex items-start justify-between gap-3">
+							<div>
+								<p className="text-xl font-black">{displayCoinName(String(selected.symbol), selected.koreanName, selected.englishName)}</p>
+								<p className="mt-1 text-xs font-bold text-muted-foreground">{selected.symbol} · {coinMarket === 'spot' ? '업비트 KRW' : '비트겟 USDT 선물'} · 기준 {formatDate(coinMarket === 'spot' ? spotTickers.data?.updatedAt : futuresTickers.data?.updatedAt)}</p>
+							</div>
+							<button type="button" onClick={() => { void (coinMarket === 'spot' ? spotTickers.refetch() : futuresTickers.refetch()); }} className="flex h-9 w-9 items-center justify-center rounded-full border border-card-border"><RefreshCw className="h-4 w-4" /></button>
+						</div>
+						{coinMarket === 'spot' && (
+							<div className="mt-3 grid grid-cols-4 gap-1">
+								{(['15m', '1D', '1W', '1M'] as const).map((tf) => (
+									<button key={tf} type="button" onClick={() => setCoinTf(tf)} className={cn('rounded-xl border px-2 py-1.5 text-[11px] font-black', coinTf === tf ? 'border-primary bg-primary text-primary-foreground' : 'border-card-border bg-card text-muted-foreground')}>
+										{tf === '15m' ? '15분' : tf === '1D' ? '일봉' : tf === '1W' ? '주봉' : '월봉'}
+									</button>
+								))}
+							</div>
+						)}
+						<div className="mt-4 grid grid-cols-2 gap-2">
+							<Metric label="현재가" value={money(selected.price, currency)} strong />
+							<Metric label="24시간 등락률" value={finite(selected.changePercent ?? selected.changePercent24h) == null ? '데이터 없음' : formatAppPercent(selected.changePercent ?? selected.changePercent24h)} tone={changeTone(selected.changePercent ?? selected.changePercent24h)} />
+							<Metric label="24시간 고가" value={money(selected.high24h, currency)} />
+							<Metric label="24시간 저가" value={money(selected.low24h, currency)} />
+							<Metric label="24시간 거래량" value={metric(selected.volume24h)} />
+							<Metric label="24시간 거래대금" value={money(selected.tradingValue24h, currency)} />
+							{coinMarket === 'futures' && <Metric label="마크가격" value={money(selected.markPrice, currency)} />}
+							{coinMarket === 'futures' && <Metric label="지수가격" value={money(selected.indexPrice, currency)} />}
+							{coinMarket === 'futures' && <Metric label="펀딩비" value={metric(finite(selected.fundingRate) == null ? null : Number(selected.fundingRate) * 100, '%')} />}
+							{coinMarket === 'futures' && <Metric label="미결제약정" value={metric(selected.openInterest)} />}
+							{coinMarket === 'futures' && <Metric label="매수 / 매도호가" value={`${money(selected.bidPrice, currency)} / ${money(selected.askPrice, currency)}`} />}
+							<Metric label={coinMarket === 'spot' ? `${coinTf === '15m' ? '15분봉' : coinTf === '1D' ? '일봉' : coinTf === '1W' ? '주봉' : '월봉'} 최신 종가` : '15분봉 최신 종가'} value={money(latestCandle?.close, currency)} />
+							<Metric label="캔들 수" value={candles?.length ? `${candles.length}개` : '데이터 없음'} />
+							{coinMarket === 'spot' && <Metric label="유의 상태" value={warningLabel(selected.warning)} tone={selected.warning === true ? 'down' : undefined} />}
+						</div>
+					</>
+				)}
+			</Section>
+
+			{coinMarket === 'spot' && (
+				<Section title="호가" state={queryStateText(orderbook)}>
+					<div className="grid grid-cols-2 gap-2">
+						<Metric label="총 매도잔량" value={metric(orderbook.data?.totalAskSize)} />
+						<Metric label="총 매수잔량" value={metric(orderbook.data?.totalBidSize)} />
+					</div>
+					<div className="mt-3 max-h-72 space-y-1 overflow-y-auto">
+						{((orderbook.data?.units ?? []) as AnyObj[]).slice(0, 15).map((unit, index) => (
+							<div key={index} className="grid grid-cols-4 gap-1 rounded-xl bg-secondary/60 p-2 text-center text-[10px] font-bold">
+								<span className="text-destructive">{money(unit.askPrice, 'KRW')}</span><span>{metric(unit.askSize)}</span><span>{metric(unit.bidSize)}</span><span className="text-positive">{money(unit.bidPrice, 'KRW')}</span>
+							</div>
+						))}
+					</div>
+				</Section>
+			)}
+
+			<PriceAlertCard assetType={coinMarket === 'spot' ? 'coin_spot' : 'coin_futures'} market={coinMarket === 'spot' ? 'UPBIT' : 'BITGET'} symbol={symbol} currentPrice={finite(selected?.price)} currency={currency} />
+			</>
+			)}
+
+			<section className="rounded-3xl border border-card-border bg-card p-4 text-xs font-bold leading-relaxed text-muted-foreground shadow-sm">
+				코인 화면에는 PER·PBR·ROE·기관·외국인 수급을 표시하지 않습니다. 공개 시세와 실제 거래소 응답이 없으면 임시 가격을 만들지 않고 데이터 없음으로 표시합니다.
+			</section>
+		</main>
+	);
 }
