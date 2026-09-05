@@ -107,7 +107,7 @@ function publisherCode(code) {
 
 test('binds repoRoot identity to command-scoped git safe.directory without global mutation', async () => {
   const callerSource = await readFile(
-    resolve(repoRoot, 'research-production/bin/publish-v3-independence.mjs'),
+    new URL('../bin/publish-v3-independence.mjs', import.meta.url),
     'utf8',
   );
   assert.equal(
