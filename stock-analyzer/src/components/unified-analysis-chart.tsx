@@ -164,7 +164,9 @@ const DEFAULT_OVERLAYS: Record<OverlayKey, boolean> = {
 const OVERLAY_STORAGE_KEY = 'unified-analysis-chart-overlays.v1';
 
 function finite(value: unknown): number | null {
-  const parsed = Number(value);
+  if (value == null) return null;
+  if (typeof value === 'string' && value.trim() === '') return null;
+  const parsed = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
