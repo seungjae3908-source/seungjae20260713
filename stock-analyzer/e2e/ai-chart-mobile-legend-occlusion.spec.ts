@@ -41,7 +41,8 @@ test('mobile OHLCV legend never covers the rendered chart canvas', async ({ page
   await page.goto(CHART_URL);
 
   const chartTab = page.getByRole('tab', { name: '차트', exact: true });
-  if (await chartTab.isVisible().catch(() => false)) await chartTab.click();
+  await expect(chartTab).toBeVisible();
+  await chartTab.click();
 
   const legend = page.getByTestId('chart-crosshair-legend');
   const canvas = page.getByTestId('unified-chart-canvas');
