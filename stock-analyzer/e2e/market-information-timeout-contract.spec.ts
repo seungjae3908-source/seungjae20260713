@@ -30,3 +30,15 @@ test('Market Information client timeout cannot preempt the server first-paint fa
   expect(serverSource).toContain('new MarketInformationFirstPaintTimeoutError(stockFirstPaintTimeoutMs)');
   expect(serverSource).toContain('return res.status(200).json(stockFirstPaintFallback(room));');
 });
+
+test('transport timeout starts after finite session lookup instead of consuming its budget', async () => {
+  const clientSource = await readFile(clientPath, 'utf8');
+  const sessionLookup = clientSource.indexOf('getSupabase().auth.getSession()');
+  const transportTimer = clientSource.indexOf('window.setTimeout(');
+
+  expect(sessionLookup).toBeGreaterThanOrEqual(0);
+  expect(transportTimer).toBeGreaterThan(sessionLookup);
+  expect(clientSource).toContain('Authentication/session resolution has its own finite');
+  expect(clientSource).toContain('let timeout: number | null = null;');
+  expect(clientSource).toContain('if (controller.signal.aborted) throw abortReason(controller.signal);');
+});
