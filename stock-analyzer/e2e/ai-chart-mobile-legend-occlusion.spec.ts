@@ -1,7 +1,10 @@
 import { expect, test, type Page } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 
 const CHART_URL = '/ai-chart?assetType=stock&market=KR&symbol=005930&ticker=005930&name=%EC%82%BC%EC%84%B1%EC%A0%84%EC%9E%90&timeframe=5m';
 const BASE_TIME = 1_775_000_000;
+const chartSourcePath = fileURLToPath(new URL('../src/components/pattern-aware-unified-chart-canvas.tsx', import.meta.url));
 
 function candles(count = 120) {
   return Array.from({ length: count }, (_, index) => ({
@@ -54,4 +57,18 @@ test('mobile OHLCV legend never covers the rendered chart canvas', async ({ page
   expect(canvasBox).not.toBeNull();
   expect(legendBox!.y + legendBox!.height).toBeLessThanOrEqual(canvasBox!.y + 1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
+});
+
+test('right-axis price label collision uses rendered pixel coordinates', async () => {
+  const source = await readFile(chartSourcePath, 'utf8');
+
+  expect(source).toContain('const PRICE_LABEL_MIN_GAP_PX = 18;');
+  expect(source).toContain('const coordinate = series.priceToCoordinate(price);');
+  expect(source).toContain('const candidateCoordinate = series.priceToCoordinate(candidate);');
+  expect(source).toContain('Math.abs(Number(coordinate) - Number(candidateCoordinate)) < PRICE_LABEL_MIN_GAP_PX');
+  expect(source).toContain('const claimedPlanLabelPrices: number[] = [];');
+  expect(source).toContain('const claimedReferenceLabelPrices = [...higherPriorityPrices];');
+  expect(source).toContain('const claimedAnalysisLabelPrices = [...higherPriorityPrices];');
+  expect(source).toContain('const claimedPositionLabelPrices = [...planPriorityPrices(pricePlan)];');
+  expect(source).not.toContain('function conflictsWithHigherPriority(price: number, higherPriorityPrices: number[])');
 });
