@@ -45,7 +45,11 @@ const MOBILE_HOME_TABS = [
 ] as const;
 
 function finite(value: unknown): number | null {
-  const parsed = Number(value);
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().replace(/,/g, '').replace(/%$/u, '');
+  if (!normalized) return null;
+  const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
@@ -134,6 +138,8 @@ export default function HomePage() {
 
   const indices = useMemo(() => marketSummaryRows(market.data?.items ?? []), [market.data?.items]);
   const btc = useMemo(() => (bitcoin.data?.tickers ?? []).find((row) => baseCoinSymbol(row.symbol) === 'BTC') ?? null, [bitcoin.data?.tickers]);
+  const btcPrice = btc ? finite(btc.price ?? btc.tradePrice) : null;
+  const btcChangePercent = btc ? finite(btc.changePercent ?? btc.changePercent24h) : null;
   const signalIsCurrent = isTodaySeoul(selection?.selectedAt);
   const marketWarning = market.isError
     ? '주식 시장 정보 확인 실패'
@@ -175,8 +181,8 @@ export default function HomePage() {
           : indices.map((item) => <MetricCard key={item.key} label={item.label} value={item.price.toLocaleString('ko-KR', { maximumFractionDigits: 2 })} sub={formatAppPercent(item.changePercent)} />)}
         <MetricCard
           label="비트코인 · 업비트"
-          value={btc ? formatAppPrice(finite(btc.price ?? btc.tradePrice), 'KRW') : bitcoin.isLoading ? '확인 중' : '미확인'}
-          sub={btc ? formatAppPercent(finite(btc.changePercent ?? btc.changePercent24h)) : bitcoin.isError ? '확인 필요' : '현물 시세'}
+          value={btc ? btcPrice == null ? '가격 미확인' : formatAppPrice(btcPrice, 'KRW') : bitcoin.isLoading ? '확인 중' : '미확인'}
+          sub={btc ? btcChangePercent == null ? '등락 미확인' : formatAppPercent(btcChangePercent) : bitcoin.isError ? '확인 필요' : '현물 시세'}
         />
       </div>
     </section>
@@ -211,18 +217,25 @@ export default function HomePage() {
       </div>
       <div className="mt-3 space-y-2">
         {watchlist.length
-          ? watchlist.slice(0, 5).map((item) => (
-            <div key={item.ticker} className="flex min-h-14 items-center justify-between gap-3 rounded-2xl bg-background px-3 py-2">
-              <div className="min-w-0">
-                <p className="truncate text-sm font-black">{item.name || item.ticker}</p>
-                <p className="truncate text-[10px] font-bold text-muted-foreground">{item.ticker} · {item.market ?? '시장 미확인'}</p>
+          ? watchlist.slice(0, 5).map((item) => {
+            const watchlistPrice = finite(item.price);
+            const watchlistChangePercent = finite(item.changePercent);
+            const watchlistCurrency = typeof item.currency === 'string' && item.currency.trim()
+              ? item.currency.trim().toUpperCase()
+              : null;
+            return (
+              <div key={item.ticker} className="flex min-h-14 items-center justify-between gap-3 rounded-2xl bg-background px-3 py-2">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-black">{item.name || item.ticker}</p>
+                  <p className="truncate text-[10px] font-bold text-muted-foreground">{item.ticker} · {item.market ?? '시장 미확인'}</p>
+                </div>
+                <div className="shrink-0 text-right text-xs font-black">
+                  <p>{watchlistPrice == null ? '가격 미확인' : watchlistCurrency == null ? '통화 미확인' : formatAppPrice(watchlistPrice, watchlistCurrency)}</p>
+                  <p className="text-[10px] text-muted-foreground">{watchlistChangePercent == null ? '등락 미확인' : formatAppPercent(watchlistChangePercent)}</p>
+                </div>
               </div>
-              <div className="shrink-0 text-right text-xs font-black">
-                <p>{item.price == null ? '가격 미확인' : formatAppPrice(item.price, item.currency ?? 'KRW')}</p>
-                <p className="text-[10px] text-muted-foreground">{item.changePercent == null ? '등락 미확인' : formatAppPercent(item.changePercent)}</p>
-              </div>
-            </div>
-          ))
+            );
+          })
           : <p className="rounded-2xl bg-background p-4 text-center text-xs font-bold text-muted-foreground">관심종목 없음</p>}
       </div>
     </section>
