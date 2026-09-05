@@ -58,7 +58,7 @@ test('vault-backed Bitget reader emits only the two allowlisted signed GET reads
     decryptCredentials: () => ({ apiKey: 'BITGET_KEY_RUNTIME_TEST_ONLY', secretKey: 'BITGET_SECRET_RUNTIME_TEST_ONLY', passphrase: 'BITGET_PASSPHRASE_RUNTIME_TEST_ONLY' }),
     fetchImpl: async (input, init) => {
       const url = new URL(String(input)); assert.equal(url.origin, 'https://api.bitget.com'); paths.push(url.pathname); methods.push(String(init?.method));
-      const body = url.pathname.includes('/position/') ? { data: [{ symbol: 'BTCUSDT', total: '0.1', available: '0.1', leverage: '2' }] } : { data: [{ marginCoin: 'USDT', accountEquity: '100', available: '90' }] };
+      const body = url.pathname.includes('/position/') ? { code: '00000', data: [{ symbol: 'BTCUSDT', total: '0.1', available: '0.1', leverage: '2' }] } : { code: '00000', data: [{ marginCoin: 'USDT', accountEquity: '100', available: '90' }] };
       return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
     },
   });
@@ -105,6 +105,33 @@ test('missing vault credentials fail closed before any provider call', async () 
     fetchImpl: async () => { providerCalls += 1; return new Response('{}', { status: 200 }); },
   });
   await assert.rejects(() => readers.upbit!(SCOPE), /ACCOUNT_NOT_CONFIGURED/);
+  assert.equal(providerCalls, 0);
+});
+
+test('caller abort during credential lookup blocks private provider invocation', async () => {
+  let providerCalls = 0;
+  const controller = new AbortController();
+  const readers = createVaultBackedAccountReaders({
+    repositoryFactory: () => ({
+      get: async () => {
+        controller.abort(new Error('client disconnected'));
+        return record('upbit');
+      },
+      save: async () => { throw new Error('runtime reader must never mutate credential storage'); },
+    }),
+    decryptCredentials: () => ({ accessKey: 'UPBIT_ACCESS_RUNTIME_TEST_ONLY', secretKey: 'UPBIT_SECRET_RUNTIME_TEST_ONLY' }),
+    fetchImpl: async () => {
+      providerCalls += 1;
+      return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+    },
+  });
+
+  await assert.rejects(
+    () => readers.upbit!(SCOPE, controller.signal),
+    (error: unknown) => error instanceof AccountReadonlyError
+      && error.code === 'PROVIDER_TIMEOUT'
+      && error.retryable === true,
+  );
   assert.equal(providerCalls, 0);
 });
 
