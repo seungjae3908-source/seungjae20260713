@@ -9,9 +9,10 @@ import { createVaultBackedAccountReaders } from './account-readonly.runtime';
 
 const EVIDENCE_USER_ID = 'staging-account-readonly-no-db-evidence';
 const EVIDENCE_ACCESS_TOKEN = 'NO_DB_EVIDENCE_SCOPE_ONLY';
-const TOSS_OAUTH_ORIGIN = 'https://oauth2.tossinvest.com';
+const TOSS_API_ORIGIN = 'https://openapi.tossinvest.com';
+const TOSS_OAUTH_ORIGIN = TOSS_API_ORIGIN;
 const READONLY_PROVIDER_ORIGINS = new Set([
-  'https://openapi.tossinvest.com',
+  TOSS_API_ORIGIN,
   'https://api.upbit.com',
   'https://api.bitget.com',
 ]);
