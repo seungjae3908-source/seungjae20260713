@@ -189,7 +189,7 @@ test('saved Bitget credentials show a masked saved state, typed values can be re
   await page.getByTestId('bitget-save-connection').click();
 
   await expect(page.getByRole('dialog', { name: 'Bitget 조회 연결 설정' })).toHaveCount(0);
-  await expect(page.getByRole('status')).toContainText('저장 완료 · Bitget 조회 전용 키를 암호화 Vault에 저장했습니다.');
+  await expect(page.getByRole('status')).toContainText('저장 완료 · Bitget 조회 전용 키를 암호화 저장했습니다.');
   expect(saveCalls).toBe(1);
   expect(savedBody).toEqual({
     purpose: 'read_only',
