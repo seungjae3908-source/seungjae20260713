@@ -254,8 +254,20 @@ function planPriorityPrices(pricePlan: AnalysisPricePlan | undefined): number[] 
   ].filter(validPlanPrice);
 }
 
-function conflictsWithHigherPriority(price: number, higherPriorityPrices: number[]): boolean {
-  return higherPriorityPrices.some((candidate) => sameVisiblePrice(price, candidate));
+const PRICE_LABEL_MIN_GAP_PX = 18;
+
+function conflictsWithHigherPriority(
+  series: ISeriesApi<'Candlestick'>,
+  price: number,
+  higherPriorityPrices: number[],
+): boolean {
+  const coordinate = series.priceToCoordinate(price);
+  return higherPriorityPrices.some((candidate) => {
+    if (sameVisiblePrice(price, candidate)) return true;
+    const candidateCoordinate = series.priceToCoordinate(candidate);
+    if (coordinate == null || candidateCoordinate == null) return false;
+    return Math.abs(Number(coordinate) - Number(candidateCoordinate)) < PRICE_LABEL_MIN_GAP_PX;
+  });
 }
 
 function chartSymbolFromResetKey(
@@ -569,14 +581,17 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
         { price: levels.targetReference, color: '#a855f7', title: '목표 참고', style: LineStyle.Dotted },
         { price: levels.invalidationReference, color: '#64748b', title: '무효 기준', style: LineStyle.Dotted },
       ];
+      const claimedReferenceLabelPrices = [...higherPriorityPrices];
       for (const row of referenceRows) {
         if (!Number.isFinite(row.price) || row.price <= 0) continue;
+        const axisLabelVisible = !conflictsWithHigherPriority(instance.candle, row.price, claimedReferenceLabelPrices);
+        if (axisLabelVisible) claimedReferenceLabelPrices.push(row.price);
         instance.referencePriceLines.push(instance.candle.createPriceLine({
           price: row.price,
           color: row.color,
           lineWidth: 1,
           lineStyle: row.style,
-          axisLabelVisible: !conflictsWithHigherPriority(row.price, higherPriorityPrices),
+          axisLabelVisible,
           title: row.title,
         }));
       }
@@ -598,14 +613,17 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
           priority: 3,
         })),
       ]);
+      const claimedPlanLabelPrices: number[] = [];
       for (const row of planRows) {
         if (!validPlanPrice(row.price)) continue;
+        const axisLabelVisible = !conflictsWithHigherPriority(instance.candle, row.price, claimedPlanLabelPrices);
+        if (axisLabelVisible) claimedPlanLabelPrices.push(row.price);
         instance.pricePlanLines.push(instance.candle.createPriceLine({
           price: row.price,
           color: row.color,
           lineWidth: row.width,
           lineStyle: row.style,
-          axisLabelVisible: true,
+          axisLabelVisible,
           title: row.title,
         }));
       }
@@ -624,20 +642,33 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
             text: `${anchor.role === 'high' ? '고점' : '저점'} ${anchor.order}`,
           });
         }
+        const claimedAnalysisLabelPrices = [...higherPriorityPrices];
+        const confirmationLabelVisible = !conflictsWithHigherPriority(
+          instance.candle,
+          patternOverlay.confirmationPrice,
+          claimedAnalysisLabelPrices,
+        );
+        if (confirmationLabelVisible) claimedAnalysisLabelPrices.push(patternOverlay.confirmationPrice);
         instance.analysisPriceLines.push(instance.candle.createPriceLine({
           price: patternOverlay.confirmationPrice,
           color: statusColor(patternOverlay.status),
           lineWidth: 2,
           lineStyle: LineStyle.Dashed,
-          axisLabelVisible: !conflictsWithHigherPriority(patternOverlay.confirmationPrice, higherPriorityPrices),
+          axisLabelVisible: confirmationLabelVisible,
           title: `패턴 확인선 · ${patternOverlay.status}`,
         }));
+        const invalidationLabelVisible = !conflictsWithHigherPriority(
+          instance.candle,
+          patternOverlay.invalidationPrice,
+          claimedAnalysisLabelPrices,
+        );
+        if (invalidationLabelVisible) claimedAnalysisLabelPrices.push(patternOverlay.invalidationPrice);
         instance.analysisPriceLines.push(instance.candle.createPriceLine({
           price: patternOverlay.invalidationPrice,
           color: '#dc2626',
           lineWidth: 2,
           lineStyle: LineStyle.Dotted,
-          axisLabelVisible: !conflictsWithHigherPriority(patternOverlay.invalidationPrice, higherPriorityPrices),
+          axisLabelVisible: invalidationLabelVisible,
           title: '패턴 무효화선',
         }));
       }
@@ -669,25 +700,34 @@ export const PatternAwareUnifiedChartCanvas = forwardRef<PatternAwareUnifiedChar
     removePriceLines(instance.candle, instance.positionPriceLines);
 
     if (positionOverlay) {
+      const claimedPositionLabelPrices = [...planPriorityPrices(pricePlan)];
       const average = positionOverlay.position.averageEntryPrice;
       if (validPlanPrice(average)) {
+        const averageLabelVisible = !conflictsWithHigherPriority(instance.candle, average, claimedPositionLabelPrices);
+        if (averageLabelVisible) claimedPositionLabelPrices.push(average);
         instance.positionPriceLines.push(instance.candle.createPriceLine({
           price: average,
           color: '#14b8a6',
           lineWidth: 2,
           lineStyle: LineStyle.Dashed,
-          axisLabelVisible: !conflictsWithHigherPriority(average, planPriorityPrices(pricePlan)),
+          axisLabelVisible: averageLabelVisible,
           title: positionOverlay.stale ? '내 평단 · 오래된 값' : '내 평단',
         }));
       }
       const liquidation = positionOverlay.position.liquidationPrice;
       if (market === 'BITGET' && validPlanPrice(liquidation)) {
+        const liquidationLabelVisible = !conflictsWithHigherPriority(
+          instance.candle,
+          liquidation,
+          claimedPositionLabelPrices,
+        );
+        if (liquidationLabelVisible) claimedPositionLabelPrices.push(liquidation);
         instance.positionPriceLines.push(instance.candle.createPriceLine({
           price: liquidation,
           color: '#e11d48',
           lineWidth: 2,
           lineStyle: LineStyle.Solid,
-          axisLabelVisible: true,
+          axisLabelVisible: liquidationLabelVisible,
           title: positionOverlay.stale ? '청산가 · 오래된 값' : '청산가',
         }));
       }
