@@ -783,6 +783,35 @@ function normalizedAssetSymbol(value: unknown) {
   return String(value ?? '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
 }
 
+async function selectVisibleUsAaplForAnalysis(page: Page) {
+  const option = page.getByRole('option').filter({ hasText: /AAPL/i }).first();
+  await expect(option).toBeVisible({ timeout: 5_000 });
+  await option.click();
+  await expect.poll(() => {
+    const url = new URL(page.url());
+    return `${url.pathname}|${url.searchParams.get('market')}|${url.searchParams.get('ticker')}`;
+  }, {
+    message: 'real AAPL selection must reach the canonical stock analysis route',
+    timeout: 5_000,
+    intervals: [100, 200, 400, 800],
+  }).toBe('/stock-info/analysis|US|AAPL');
+  await expect(page.getByTestId('canonical-stock-analysis')).toHaveAttribute('data-ticker', 'AAPL');
+  await expect.poll(async () => page.evaluate(() => {
+    try {
+      const raw = window.localStorage.getItem('sa-analysis-selection-v1');
+      if (!raw) return null;
+      const selection = JSON.parse(raw) as { market?: unknown; ticker?: unknown };
+      return `${String(selection.market ?? '')}:${String(selection.ticker ?? '')}`;
+    } catch {
+      return null;
+    }
+  }), {
+    message: 'real AAPL user selection must persist the exact AI Chart analysis identity',
+    timeout: 5_000,
+    intervals: [100, 200, 400, 800],
+  }).toBe('US:AAPL');
+}
+
 async function runAuthenticatedSearchCertification(page: Page) {
   const matrix = [
     { market: 'KR', label: '국내', query: '034730', acceptable: ['034730'] },
@@ -884,6 +913,32 @@ async function runAuthenticatedSearchCertification(page: Page) {
   expect(summary.p95Ms, `authenticated Search p95 evidence: ${JSON.stringify(summary)}`).toBeLessThanOrEqual(2_000);
   expect(summary.maxMs, `authenticated Search max evidence: ${JSON.stringify(summary)}`).toBeLessThan(5_000);
   expect(summary.overFiveSeconds).toBe(0);
+
+  const usTab = page.getByRole('button', { name: '미국', exact: true });
+  await usTab.click();
+  await expect(usTab).toHaveAttribute('aria-pressed', 'true');
+  await input.fill('');
+  const selectionResponsePromise = page.waitForResponse((response) => {
+    try {
+      const url = new URL(response.url());
+      return response.request().method() === 'GET'
+        && url.pathname === '/api/search/suggest'
+        && url.searchParams.get('market') === 'US'
+        && url.searchParams.get('q') === 'AAPL';
+    } catch {
+      return false;
+    }
+  }, { timeout: 5_000 });
+  await input.fill('AAPL');
+  const selectionResponse = await selectionResponsePromise;
+  expect(selectionResponse.status(), 'AI Chart analysis-selection search must return HTTP 200').toBe(200);
+  await expect.poll(async () => (await page.getByRole('option').allTextContents())
+    .map(normalizedAssetSymbol)
+    .some((text) => text.includes('AAPL')), {
+    timeout: 5_000,
+    intervals: [100, 200, 400, 800],
+  }).toBe(true);
+  await selectVisibleUsAaplForAnalysis(page);
 }
 
 async function waitForUsableAiChart(page: Page, startedAt: number) {
@@ -1576,6 +1631,7 @@ test.describe('real staging release readiness', () => {
       timeout: 5_000,
       intervals: [100, 200, 400, 800],
     }).toBe(true);
+    await selectVisibleUsAaplForAnalysis(page);
 
     await openMenuRoute('technical', 'AI 차트', '/ai-chart');
     await waitForUsableAiChart(page, Date.now());
