@@ -38,14 +38,35 @@ export type TelegramTestMessageDependencies = {
   connectionRepository?: ConnectionReader;
   sender?: Sender;
   now?: () => Date;
+  activationApproved?: () => boolean;
 };
 
 const TEST_MESSAGE = '[TEST] Telegram 연결 확인 메시지입니다. 투자 신호가 아니며 실제 주문/체결이 아닙니다.';
+
+export function isTelegramActivationApproved(
+  environment: Record<string, string | undefined> = process.env,
+): boolean {
+  return environment.LIVE_TELEGRAM_ACTIVATION_APPROVED === 'true';
+}
 
 export async function sendPersonalTelegramTestMessage(
   userId: string,
   dependencies: TelegramTestMessageDependencies = {},
 ): Promise<TelegramTestMessageResult> {
+  const activationApproved = dependencies.activationApproved?.()
+    ?? isTelegramActivationApproved();
+  if (!activationApproved) {
+    return {
+      ok: false,
+      httpStatus: 503,
+      error: 'TELEGRAM_ACTIVATION_REQUIRED',
+      attempts: 0,
+      privateApiRequests: 0,
+      ordersSubmitted: 0,
+      ordersCancelled: 0,
+    };
+  }
+
   const connectionRepository = dependencies.connectionRepository
     ?? createSupabaseUserBrokerTelegramRepository();
   const sender = dependencies.sender ?? sendTelegramAlert;

@@ -80,6 +80,7 @@ const groups = {
     path.join(root, 'src/providers/yahoo-timeframe.test.ts'),
     path.join(root, 'src/providers/toss.test.ts'),
     path.join(root, 'src/services/telegram-notification.service.test.ts'),
+    path.join(root, 'src/services/telegram-test-message.service.test.ts'),
     path.join(root, 'src/modules/portfolio/portfolio-core.test.ts'),
     path.join(root, 'src/modules/portfolio/canonical-journal-adapter.test.ts'),
     path.join(root, 'src/modules/portfolio/evidence-weighted-capital-allocation.test.ts'),
