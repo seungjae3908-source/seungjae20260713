@@ -9,7 +9,9 @@ import {
   canonicalShadowPublisherGateV1,
   canonicalShadowRuntimeRequestV1,
   canonicalShadowScheduleGateV1,
+  canonicalStrandedBootstrapRecoveryAllowedV1,
   parseCanonicalShadowActivationCommandV1,
+  parseCanonicalShadowRecoveryApprovalV1,
 } from "../src/canonical-shadow-runtime-activation-v1.js";
 
 test("activation command requires an exact lowercase 40-char SHA", () => {
@@ -17,6 +19,14 @@ test("activation command requires an exact lowercase 40-char SHA", () => {
   assert.deepEqual(parseCanonicalShadowActivationCommandV1(`/activate-canonical-shadow ${sha}`), { targetSha: sha });
   assert.equal(parseCanonicalShadowActivationCommandV1(`/activate-canonical-shadow ${"A".repeat(40)}`), null);
   assert.equal(parseCanonicalShadowActivationCommandV1(`/activate-canonical-shadow ${"a".repeat(39)}`), null);
+});
+
+test("stranded recovery approval requires an exact lowercase 40-char SHA", () => {
+  const sha = "c".repeat(40);
+  assert.deepEqual(parseCanonicalShadowRecoveryApprovalV1(`/approve-canonical-shadow-recovery ${sha}`), { targetSha: sha });
+  assert.equal(parseCanonicalShadowRecoveryApprovalV1(`/approve-canonical-shadow-recovery ${"C".repeat(40)}`), null);
+  assert.equal(parseCanonicalShadowRecoveryApprovalV1(`/approve-canonical-shadow-recovery ${"c".repeat(39)}`), null);
+  assert.equal(parseCanonicalShadowRecoveryApprovalV1(`/activate-canonical-shadow ${sha}`), null);
 });
 
 test("runtime request IDs distinguish activation from hourly schedule", () => {
@@ -47,6 +57,29 @@ test("bootstrap exception is exact and activation-only", () => {
   assert.equal(canonicalBootstrapSeedAllowedV1({ ...exact, requestId: "hourly-1" }), false);
   assert.equal(canonicalBootstrapSeedAllowedV1({ ...exact, predecessorRunId: "32933416613" }), false);
   assert.equal(canonicalBootstrapSeedAllowedV1({ ...exact, predecessorArtifactDigest: "0".repeat(64) }), false);
+});
+
+test("stranded bootstrap recovery is hourly, exact-main, legacy-disabled, zero-receipt, and explicitly approved", () => {
+  const targetSha = "d".repeat(40);
+  const exact = {
+    requestId: "hourly-34020000001",
+    recoveryApprovalCommentId: "5557999001",
+    recoveryApprovalTargetSha: targetSha,
+    targetSha,
+    legacyWorkflowState: "disabled_manually",
+    publishedReceiptCount: 0,
+    producerRunId: CANONICAL_SHADOW_BOOTSTRAP_SEED_V1.producerRunId,
+    predecessorRunId: CANONICAL_SHADOW_BOOTSTRAP_SEED_V1.predecessorRunId,
+    predecessorArtifactDigest: `sha256:${CANONICAL_SHADOW_BOOTSTRAP_SEED_V1.predecessorArtifactDigest}`,
+  };
+  assert.equal(canonicalStrandedBootstrapRecoveryAllowedV1(exact), true);
+  assert.equal(canonicalStrandedBootstrapRecoveryAllowedV1({ ...exact, requestId: "activate-1" }), false);
+  assert.equal(canonicalStrandedBootstrapRecoveryAllowedV1({ ...exact, recoveryApprovalCommentId: "" }), false);
+  assert.equal(canonicalStrandedBootstrapRecoveryAllowedV1({ ...exact, recoveryApprovalTargetSha: "e".repeat(40) }), false);
+  assert.equal(canonicalStrandedBootstrapRecoveryAllowedV1({ ...exact, legacyWorkflowState: "active" }), false);
+  assert.equal(canonicalStrandedBootstrapRecoveryAllowedV1({ ...exact, publishedReceiptCount: 1 }), false);
+  assert.equal(canonicalStrandedBootstrapRecoveryAllowedV1({ ...exact, predecessorRunId: "32933416613" }), false);
+  assert.equal(canonicalStrandedBootstrapRecoveryAllowedV1({ ...exact, predecessorArtifactDigest: "0".repeat(64) }), false);
 });
 
 test("publisher fails closed unless source run and runtime authorization agree", () => {
@@ -91,6 +124,20 @@ test("publisher workflow clean-skips artifactless source runs before mutation ga
   assert.doesNotMatch(classifier, /secrets\./);
   assert.match(publisher, /needs: classify-source-artifact/);
   assert.match(publisher, /needs\.classify-source-artifact\.outputs\.eligible == 'true'/);
+});
+
+test("stranded recovery workflow is approval-gated and refuses synthetic first publication", () => {
+  const workflow = fs.readFileSync(new URL("../../.github/workflows/prediction-lab-canonical-shadow-cycle.yml", import.meta.url), "utf8");
+  assert.match(workflow, /issue_number: 838/);
+  assert.match(workflow, /approve-canonical-shadow-recovery/);
+  assert.match(workflow, /github\.paginate\(github\.rest\.issues\.listComments/);
+  assert.match(workflow, /actions\/artifacts\?per_page=100/);
+  assert.match(workflow, /publication_receipt_count/);
+  assert.match(workflow, /Canonical publication receipt history exists but no valid predecessor/);
+  assert.match(workflow, /canonicalStrandedBootstrapRecoveryAllowedV1/);
+  assert.match(workflow, /canonicalRuntimeBootstrapRecovery/);
+  assert.match(workflow, /legacy_state/);
+  assert.doesNotMatch(workflow, /replay|backfill|synthetic credit/i);
 });
 
 test("binding shape rejects guessed or mutable identities", () => {
