@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - .github/workflows/research-dashboard-v3-state-root-diagnostics.yml
+      - .github/scripts/research-dashboard-v3-state-diagnostic.py
   issue_comment:
     types: [created]
 
@@ -36,17 +37,21 @@ jobs:
           set -Eeuo pipefail
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
           workflow=.github/workflows/research-dashboard-v3-state-root-diagnostics.yml
+          script=.github/scripts/research-dashboard-v3-state-diagnostic.py
+          python3 -m py_compile "$script"
           grep -Fq '/diagnose-research-dashboard-v3-state ' "$workflow"
-          grep -Fq 'v3-authoritative-independence-summary.json' "$workflow"
           grep -Fq 'systemctl show research-dashboard.service' "$workflow"
-          grep -Fq 'http://127.0.0.1:18090/api/research/overview' "$workflow"
+          grep -Fq 'research-dashboard-v3-state-diagnostic.py' "$workflow"
+          grep -Fq 'v3-authoritative-independence-summary.json' "$script"
+          grep -Fq 'http://127.0.0.1:18090/api/research/overview' "$script"
+          grep -Fq 'RESEARCH_DASHBOARD_PYTHON_RUNTIME_V3_CONSUMER_MISSING' "$script"
           grep -Fq 'production_server_write: 0' "$workflow"
           grep -Fq 'production_process_restart: 0' "$workflow"
           grep -Fq 'production_deploy: 0' "$workflow"
           grep -Fq 'production_db_mutation: 0' "$workflow"
           grep -Fq 'secret_env_mutation: 0' "$workflow"
-          if grep -Eiq '(systemctl[[:space:]]+(start|stop|restart|enable|disable|daemon-reload)|pm2[[:space:]]+(start|stop|restart|delete)|rsync[[:space:]]|scp[[:space:]]|psql[[:space:]]|kubectl[[:space:]]|docker[[:space:]]+(run|exec|compose)|curl[^\n]*(--request|-X)[[:space:]]*(POST|PUT|PATCH|DELETE))' "$workflow"; then
-            echo 'Diagnostic workflow contains a prohibited production mutation command.' >&2
+          if grep -Eiq '(systemctl[[:space:]]+(start|stop|restart|enable|disable|daemon-reload)|pm2[[:space:]]+(start|stop|restart|delete)|rsync[[:space:]]|scp[[:space:]]|psql[[:space:]]|kubectl[[:space:]]|docker[[:space:]]+(run|exec|compose)|curl[^\n]*(--request|-X)[[:space:]]*(POST|PUT|PATCH|DELETE))' "$workflow" "$script"; then
+            echo 'Diagnostic files contain a prohibited production mutation command.' >&2
             exit 1
           fi
           npm --prefix research-dashboard test
@@ -78,7 +83,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           python3 scripts/agent_hub_rollover_v2.py resolve
-      - name: Authorize exact current main and bind failed overview readback
+      - name: Authorize exact main and bind prior failed readback
         id: gate
         uses: actions/github-script@v7
         env:
@@ -134,7 +139,6 @@ jobs:
               issue_number: canonicalHub,
               per_page: 100,
             });
-
             let activatedSha = null;
             for (const comment of [...comments].reverse()) {
               const receipt = String(comment.body ?? '');
@@ -175,10 +179,9 @@ jobs:
               }
             }
             if (!failedReadbackRun) {
-              core.setFailed('No failed-closed Research Dashboard overview readback receipt is bound to exact current main.');
+              core.setFailed('No failed-closed overview readback receipt is bound to exact current main.');
               return;
             }
-
             core.setOutput('target_sha', targetSha);
             core.setOutput('activated_sha', activatedSha);
             core.setOutput('failed_readback_run', failedReadbackRun);
@@ -198,6 +201,11 @@ jobs:
       SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
       SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
       - name: Configure SSH on GitHub runner only
         shell: bash
         run: |
@@ -213,299 +221,29 @@ jobs:
           else
             ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
           fi
-
-      - name: Inspect effective state root, V3 file, and active runtime without server mutation
+      - name: Read effective root, V3 file, process command, and loopback overview only
         id: diagnostic
         shell: bash
         env:
           DIAGNOSTIC_PATH: ${{ runner.temp }}/research-dashboard-v3-state-diagnostic.json
         run: |
           set -Eeuo pipefail
+          script=.github/scripts/research-dashboard-v3-state-diagnostic.py
+          python3 -m py_compile "$script"
           ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
-            "$SSH_USER@$SSH_HOST" 'bash -s' > "$DIAGNOSTIC_PATH" <<'REMOTE'
-          set -Eeuo pipefail
-          main_pid="$(systemctl show research-dashboard.service --property=MainPID --value)"
-          unit_environment="$(systemctl show research-dashboard.service --property=Environment --value)"
-          unit_exec_start="$(systemctl show research-dashboard.service --property=ExecStart --value)"
-          test -n "$main_pid"
-          export RESEARCH_DIAG_MAIN_PID="$main_pid"
-          export RESEARCH_DIAG_UNIT_ENV="$unit_environment"
-          export RESEARCH_DIAG_EXEC_START="$unit_exec_start"
-          python3 - <<'PY'
-          import hashlib
-          import json
-          import os
-          import re
-          import urllib.request
-          from pathlib import Path
-
-          DEFAULT_ROOT = '/var/lib/investment-research-production'
-          RELATIVE = Path('forward/liquidity/v3-authoritative-independence-summary.json')
-          EXPECTED_SCHEMA = 'public-forward-liquidity-v3-authoritative-independence-summary-v1'
-          SHA = re.compile(r'^[0-9a-f]{40}$')
-          DIGEST = re.compile(r'^[0-9a-f]{64}$')
-          SPLIT_KEYS = (
-              'TRAIN', 'TRAIN_BUY', 'TRAIN_SELL',
-              'VALIDATION', 'VALIDATION_BUY', 'VALIDATION_SELL',
-              'OOS', 'OOS_BUY', 'OOS_SELL',
-          )
-
-          def parse_env(blob):
-              values = {}
-              for item in blob:
-                  if not item or b'=' not in item:
-                      continue
-                  key, value = item.split(b'=', 1)
-                  values[key.decode('utf-8', 'replace')] = value.decode('utf-8', 'replace')
-              return values
-
-          pid = int(os.environ['RESEARCH_DIAG_MAIN_PID'])
-          state_root = None
-          state_root_source = None
-          runtime_command = ''
-
-          try:
-              proc_env = parse_env(Path(f'/proc/{pid}/environ').read_bytes().split(b'\0'))
-              if proc_env.get('RESEARCH_STATE_ROOT'):
-                  state_root = proc_env['RESEARCH_STATE_ROOT']
-                  state_root_source = 'PROC_ENV'
-          except Exception:
-              pass
-
-          try:
-              runtime_command = ' '.join(
-                  part.decode('utf-8', 'replace')
-                  for part in Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
-                  if part
-              )
-          except Exception:
-              runtime_command = ''
-
-          unit_env = os.environ.get('RESEARCH_DIAG_UNIT_ENV', '')
-          if state_root is None:
-              match = re.search(r'(?:^|\s)RESEARCH_STATE_ROOT=([^\s]+)', unit_env)
-              if match:
-                  state_root = match.group(1).strip('"\'')
-                  state_root_source = 'SYSTEMD_ENV'
-
-          if state_root is None:
-              state_root = DEFAULT_ROOT
-              state_root_source = 'DEFAULT_FALLBACK'
-
-          exec_start = os.environ.get('RESEARCH_DIAG_EXEC_START', '')
-          command_evidence = runtime_command or exec_start
-          if 'server.py' in command_evidence:
-              runtime_kind = 'PYTHON_SERVER'
-          elif 'server.mjs' in command_evidence:
-              runtime_kind = 'NODE_SERVER'
-          else:
-              runtime_kind = 'UNKNOWN'
-
-          root = Path(state_root).resolve()
-          expected_path = root / RELATIVE
-          file_exists = expected_path.exists()
-          file_is_file = expected_path.is_file() if file_exists else False
-          file_size = expected_path.stat().st_size if file_is_file else None
-          file_readable = False
-          json_parse_ok = False
-          value = None
-          read_error_class = None
-
-          if file_is_file:
-              try:
-                  raw = expected_path.read_text(encoding='utf-8')
-                  file_readable = True
-                  value = json.loads(raw)
-                  json_parse_ok = True
-              except PermissionError:
-                  read_error_class = 'PERMISSION_DENIED'
-              except json.JSONDecodeError:
-                  file_readable = True
-                  read_error_class = 'JSON_PARSE_ERROR'
-              except Exception:
-                  read_error_class = 'READ_ERROR'
-
-          schema_valid = False
-          report_digest_valid = False
-          shape_valid = False
-          expected_truth_match = False
-          counts = {}
-          observed = {}
-
-          if isinstance(value, dict):
-              schema_valid = value.get('schemaVersion') == EXPECTED_SCHEMA
-              report_digest = value.get('reportDigest')
-              body = dict(value)
-              body.pop('reportDigest', None)
-              canonical = json.dumps(body, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
-              computed_digest = hashlib.sha256(canonical.encode('utf-8')).hexdigest()
-              report_digest_valid = bool(isinstance(report_digest, str) and DIGEST.fullmatch(report_digest) and computed_digest == report_digest)
-              frozen = value.get('frozenSplitCounts') if isinstance(value.get('frozenSplitCounts'), dict) else {}
-              counts = {key: frozen.get(key) for key in SPLIT_KEYS}
-
-              def nonnegative_int(item):
-                  return isinstance(item, int) and not isinstance(item, bool) and item >= 0
-
-              required_digests = (
-                  value.get('upstreamIngestArtifactDigest'),
-                  value.get('sourceInventoryDigest'),
-                  value.get('independenceAuditDigest'),
-                  value.get('independentSplitSourceDigest'),
-                  value.get('v3IndependentSplitIndexDigest'),
-                  value.get('reportDigest'),
-              )
-              numeric = {
-                  'targetSlotIndex': value.get('targetSlotIndex'),
-                  'genuineScheduledSlotN': value.get('genuineScheduledSlotN'),
-                  'rawAcceptedN': value.get('rawAcceptedN'),
-                  'effectiveIndependentN': value.get('effectiveIndependentN'),
-                  'independentBuyN': value.get('independentBuyN'),
-                  'independentSellN': value.get('independentSellN'),
-                  'oosOutcomeCredit': value.get('oosOutcomeCredit'),
-                  'evidenceComplete': value.get('evidenceComplete'),
-              }
-              shape_valid = (
-                  schema_valid
-                  and isinstance(value.get('producerSha'), str) and bool(SHA.fullmatch(value['producerSha']))
-                  and bool(re.fullmatch(r'[0-9]{6,20}', str(value.get('upstreamIngestRunId', ''))))
-                  and bool(re.fullmatch(r'[0-9]{6,20}', str(value.get('upstreamIngestArtifactId', ''))))
-                  and all(isinstance(item, str) and bool(DIGEST.fullmatch(item)) for item in required_digests)
-                  and all(nonnegative_int(item) for item in numeric.values())
-                  and all(nonnegative_int(counts.get(key)) for key in SPLIT_KEYS)
-                  and numeric['oosOutcomeCredit'] == 0
-                  and value.get('calibrationArtifactProduced') is False
-                  and value.get('liquidityImpactStatus') == 'BLOCKED_DATA'
-                  and value.get('fullCostReady') is False
-                  and numeric['evidenceComplete'] == 0
-                  and value.get('executionAuthority') == 'NONE'
-                  and value.get('frozenV3SplitIndexPresent') is True
-                  and value.get('v2SplitReceiptPresent') is False
-                  and numeric['rawAcceptedN'] >= numeric['effectiveIndependentN']
-                  and numeric['genuineScheduledSlotN'] >= numeric['effectiveIndependentN']
-                  and numeric['effectiveIndependentN'] == numeric['independentBuyN'] + numeric['independentSellN']
-                  and counts['TRAIN'] == counts['TRAIN_BUY'] + counts['TRAIN_SELL']
-                  and counts['VALIDATION'] == counts['VALIDATION_BUY'] + counts['VALIDATION_SELL']
-                  and counts['OOS'] == counts['OOS_BUY'] + counts['OOS_SELL']
-                  and numeric['effectiveIndependentN'] == counts['TRAIN'] + counts['VALIDATION'] + counts['OOS']
-                  and numeric['independentBuyN'] == counts['TRAIN_BUY'] + counts['VALIDATION_BUY'] + counts['OOS_BUY']
-                  and numeric['independentSellN'] == counts['TRAIN_SELL'] + counts['VALIDATION_SELL'] + counts['OOS_SELL']
-                  and report_digest_valid
-              )
-              observed = {
-                  'genuineScheduledSlotN': numeric['genuineScheduledSlotN'],
-                  'effectiveIndependentN': numeric['effectiveIndependentN'],
-                  'independentBuyN': numeric['independentBuyN'],
-                  'independentSellN': numeric['independentSellN'],
-                  'TRAIN': counts.get('TRAIN'),
-                  'TRAIN_BUY': counts.get('TRAIN_BUY'),
-                  'TRAIN_SELL': counts.get('TRAIN_SELL'),
-                  'VALIDATION': counts.get('VALIDATION'),
-                  'OOS': counts.get('OOS'),
-                  'oosOutcomeCredit': numeric['oosOutcomeCredit'],
-                  'fullCostReady': value.get('fullCostReady'),
-                  'evidenceComplete': numeric['evidenceComplete'],
-                  'executionAuthority': value.get('executionAuthority'),
-              }
-              expected_truth_match = observed == {
-                  'genuineScheduledSlotN': 15,
-                  'effectiveIndependentN': 15,
-                  'independentBuyN': 10,
-                  'independentSellN': 5,
-                  'TRAIN': 15,
-                  'TRAIN_BUY': 10,
-                  'TRAIN_SELL': 5,
-                  'VALIDATION': 0,
-                  'OOS': 0,
-                  'oosOutcomeCredit': 0,
-                  'fullCostReady': False,
-                  'evidenceComplete': 0,
-                  'executionAuthority': 'NONE',
-              }
-
-          if not file_exists:
-              file_classification = 'MISSING'
-          elif not file_is_file:
-              file_classification = 'NOT_REGULAR_FILE'
-          elif not file_readable:
-              file_classification = read_error_class or 'UNREADABLE'
-          elif not json_parse_ok:
-              file_classification = read_error_class or 'INVALID_JSON'
-          elif not shape_valid:
-              file_classification = 'INVALID'
-          elif not expected_truth_match:
-              file_classification = 'VALID_UNEXPECTED_TRUTH'
-          else:
-              file_classification = 'VALID_EXPECTED_TRUTH'
-
-          endpoint = None
-          endpoint_error = None
-          try:
-              with urllib.request.urlopen('http://127.0.0.1:18090/api/research/overview', timeout=8) as response:
-                  endpoint = json.loads(response.read().decode('utf-8'))
-          except Exception as error:
-              endpoint_error = type(error).__name__
-
-          liquidity = None
-          if isinstance(endpoint, dict):
-              research = endpoint.get('research')
-              if isinstance(research, dict):
-                  liquidity = research.get('liquidityIndependence')
-          endpoint_li_field_present = isinstance(liquidity, dict)
-          endpoint_li_present = liquidity.get('present') if isinstance(liquidity, dict) else None
-          endpoint_li_status = liquidity.get('status') if isinstance(liquidity, dict) else None
-          endpoint_schema = endpoint.get('schemaVersion') if isinstance(endpoint, dict) else None
-          endpoint_safety = endpoint.get('safety') if isinstance(endpoint, dict) and isinstance(endpoint.get('safety'), dict) else {}
-
-          if file_classification == 'MISSING':
-              root_cause = 'RESEARCH_OVERVIEW_LIVE_V3_SUMMARY_MISSING'
-          elif file_classification in ('NOT_REGULAR_FILE', 'PERMISSION_DENIED', 'UNREADABLE', 'INVALID_JSON', 'READ_ERROR', 'INVALID'):
-              root_cause = 'RESEARCH_OVERVIEW_LIVE_V3_SUMMARY_INVALID'
-          elif endpoint_error is not None:
-              root_cause = 'RESEARCH_OVERVIEW_ENDPOINT_READ_FAILED'
-          elif not endpoint_li_field_present and runtime_kind == 'PYTHON_SERVER':
-              root_cause = 'RESEARCH_DASHBOARD_PYTHON_RUNTIME_V3_CONSUMER_MISSING'
-          elif not endpoint_li_field_present:
-              root_cause = 'RESEARCH_DASHBOARD_RUNTIME_V3_CONSUMER_MISSING'
-          elif endpoint_li_present is not True or endpoint_li_status != 'PRESENT':
-              root_cause = 'RESEARCH_DASHBOARD_RUNTIME_V3_CONSUMER_REJECTED'
-          elif file_classification == 'VALID_UNEXPECTED_TRUTH':
-              root_cause = 'RESEARCH_OVERVIEW_LIVE_V3_SUMMARY_STALE_OR_UNEXPECTED'
-          else:
-              root_cause = 'NO_V3_STATE_ROOT_DEFECT_OBSERVED'
-
-          result = {
-              'stateRoot': str(root),
-              'stateRootSource': state_root_source,
-              'filePath': str(expected_path),
-              'fileExists': file_exists,
-              'fileIsFile': file_is_file,
-              'fileSize': file_size,
-              'fileReadable': file_readable,
-              'jsonParseOk': json_parse_ok,
-              'schemaValid': schema_valid,
-              'reportDigestValid': report_digest_valid,
-              'shapeValid': shape_valid,
-              'expectedTruthMatch': expected_truth_match,
-              'fileClassification': file_classification,
-              'runtimeKind': runtime_kind,
-              'endpointSchema': endpoint_schema,
-              'endpointLiquidityFieldPresent': endpoint_li_field_present,
-              'endpointLiquidityPresent': endpoint_li_present,
-              'endpointLiquidityStatus': endpoint_li_status,
-              'endpointReadErrorClass': endpoint_error,
-              'endpointReadOnly': endpoint_safety.get('readOnlyDashboard'),
-              'endpointLiveTrading': endpoint_safety.get('liveTrading'),
-              'endpointPrivateApi': endpoint_safety.get('privateApi'),
-              'endpointOrderAuthority': endpoint_safety.get('orderAuthority'),
-              'observed': observed,
-              'rootCause': root_cause,
-          }
-          print(json.dumps(result, sort_keys=True, separators=(',', ':')))
-          PY
-          REMOTE
+            "$SSH_USER@$SSH_HOST" \
+            'set -Eeuo pipefail
+             main_pid="$(systemctl show research-dashboard.service --property=MainPID --value)"
+             unit_environment="$(systemctl show research-dashboard.service --property=Environment --value)"
+             unit_exec_start="$(systemctl show research-dashboard.service --property=ExecStart --value)"
+             test -n "$main_pid"
+             export RESEARCH_DIAG_MAIN_PID="$main_pid"
+             export RESEARCH_DIAG_UNIT_ENV="$unit_environment"
+             export RESEARCH_DIAG_EXEC_START="$unit_exec_start"
+             python3 -' \
+            < "$script" > "$DIAGNOSTIC_PATH"
           test -s "$DIAGNOSTIC_PATH"
-
-      - name: Validate and summarize diagnostic result on GitHub runner
+      - name: Validate diagnostic result on GitHub runner
         id: result
         shell: bash
         env:
@@ -515,7 +253,7 @@ jobs:
           DIAGNOSTIC_PATH="$DIAGNOSTIC_PATH" node <<'NODE'
           const fs = require('node:fs');
           const d = JSON.parse(fs.readFileSync(process.env.DIAGNOSTIC_PATH, 'utf8'));
-          const allowedRootCauses = new Set([
+          const allowed = new Set([
             'RESEARCH_OVERVIEW_LIVE_V3_SUMMARY_MISSING',
             'RESEARCH_OVERVIEW_LIVE_V3_SUMMARY_INVALID',
             'RESEARCH_OVERVIEW_ENDPOINT_READ_FAILED',
@@ -525,7 +263,7 @@ jobs:
             'RESEARCH_OVERVIEW_LIVE_V3_SUMMARY_STALE_OR_UNEXPECTED',
             'NO_V3_STATE_ROOT_DEFECT_OBSERVED',
           ]);
-          if (!allowedRootCauses.has(d.rootCause)) throw new Error(`unexpected rootCause: ${d.rootCause}`);
+          if (!allowed.has(d.rootCause)) throw new Error(`unexpected rootCause: ${d.rootCause}`);
           if (d.endpointReadErrorClass == null) {
             if (d.endpointSchema !== 'research-dashboard-overview-v1') throw new Error('overview schema mismatch');
             if (d.endpointReadOnly !== true) throw new Error('dashboard read-only safety mismatch');
@@ -560,7 +298,6 @@ jobs:
             fs.appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${value}\n`);
           }
           NODE
-
       - name: Report read-only diagnosis to canonical Central Hub
         if: success()
         uses: actions/github-script@v7
@@ -637,7 +374,6 @@ jobs:
                 'real_orders: 0',
               ].join('\n'),
             });
-
       - name: Report fail-closed diagnostic execution
         if: failure()
         uses: actions/github-script@v7
