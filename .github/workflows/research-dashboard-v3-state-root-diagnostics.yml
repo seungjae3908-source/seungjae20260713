@@ -1,0 +1,424 @@
+name: Research Dashboard V3 State Root Read-only Diagnostics
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/research-dashboard-v3-state-root-diagnostics.yml
+      - .github/scripts/research-dashboard-v3-state-diagnostic.py
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: read
+  statuses: read
+
+concurrency:
+  group: research-dashboard-v3-state-root-diagnostics
+  cancel-in-progress: false
+
+jobs:
+  validate-workflow:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Validate diagnostic-only contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          workflow=.github/workflows/research-dashboard-v3-state-root-diagnostics.yml
+          script=.github/scripts/research-dashboard-v3-state-diagnostic.py
+          python3 -m py_compile "$script"
+          grep -Fq '/diagnose-research-dashboard-v3-state ' "$workflow"
+          grep -Fq 'systemctl show research-dashboard.service' "$workflow"
+          grep -Fq 'research-dashboard-v3-state-diagnostic.py' "$workflow"
+          grep -Fq 'v3-authoritative-independence-summary.json' "$script"
+          grep -Fq 'http://127.0.0.1:18090/api/research/overview' "$script"
+          grep -Fq 'RESEARCH_DASHBOARD_PYTHON_RUNTIME_V3_CONSUMER_MISSING' "$script"
+          grep -Fq 'source_failed_readback_target_sha' "$workflow"
+          grep -Fq 'production_server_write: 0' "$workflow"
+          grep -Fq 'production_process_restart: 0' "$workflow"
+          grep -Fq 'production_deploy: 0' "$workflow"
+          grep -Fq 'production_db_mutation: 0' "$workflow"
+          grep -Fq 'secret_env_mutation: 0' "$workflow"
+          if grep -Eiq '(systemctl[[:space:]]+(start|stop|restart|enable|disable|daemon-reload)|pm2[[:space:]]+(start|stop|restart|delete)|rsync[[:space:]]|scp[[:space:]]|psql[[:space:]]|kubectl[[:space:]]|docker[[:space:]]+(run|exec|compose)|curl[^\n]*(--request|-X)[[:space:]]*(POST|PUT|PATCH|DELETE))' "$workflow" "$script"; then
+            echo 'Diagnostic files contain a prohibited production mutation command.' >&2
+            exit 1
+          fi
+          npm --prefix research-dashboard test
+
+  authorize:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      !github.event.issue.pull_request &&
+      github.event.comment.user.login == github.repository_owner &&
+      startsWith(github.event.comment.body, '/diagnose-research-dashboard-v3-state ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    outputs:
+      target_sha: ${{ steps.gate.outputs.target_sha }}
+      activated_sha: ${{ steps.gate.outputs.activated_sha }}
+      failed_readback_run: ${{ steps.gate.outputs.failed_readback_run }}
+      failed_readback_target: ${{ steps.gate.outputs.failed_readback_target }}
+      hub_issue: ${{ steps.hub.outputs.active_issue }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Resolve canonical Central Hub
+        id: hub
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 scripts/agent_hub_rollover_v2.py resolve
+      - name: Authorize exact main and bind ancestor failed readback
+        id: gate
+        uses: actions/github-script@v7
+        env:
+          HUB_ISSUE_NUMBER: ${{ steps.hub.outputs.active_issue }}
+        with:
+          script: |
+            const body = String(context.payload.comment?.body ?? '').trim();
+            const match = body.match(/^\/diagnose-research-dashboard-v3-state ([0-9a-f]{40})$/i);
+            if (!match) {
+              core.setFailed('Expected /diagnose-research-dashboard-v3-state <40-char-main-sha>');
+              return;
+            }
+            const canonicalHub = Number(process.env.HUB_ISSUE_NUMBER ?? 0);
+            const eventIssue = Number(context.payload.issue?.number ?? 0);
+            if (!Number.isInteger(canonicalHub) || canonicalHub <= 0 || eventIssue !== canonicalHub) {
+              core.setFailed(`Diagnostic command must be posted on canonical Hub #${canonicalHub || 'UNKNOWN'}; got #${eventIssue || 'UNKNOWN'}.`);
+              return;
+            }
+            const targetSha = match[1].toLowerCase();
+            const main = await github.rest.repos.getBranch({ owner: context.repo.owner, repo: context.repo.repo, branch: 'main' });
+            if (String(main.data.commit.sha).toLowerCase() !== targetSha) {
+              core.setFailed(`Target is not exact current main: ${targetSha}`);
+              return;
+            }
+
+            const required = [
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: targetSha,
+              per_page: 100,
+            });
+            const latest = new Map();
+            for (const status of statuses.sort((a, b) => Number(b.id) - Number(a.id))) {
+              if (!latest.has(status.context)) latest.set(status.context, status);
+            }
+            const missing = required.filter((name) => latest.get(name)?.state !== 'success');
+            if (missing.length) {
+              core.setFailed(`Exact-main Required statuses are not 6/6 SUCCESS: ${missing.join(', ')}`);
+              return;
+            }
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: canonicalHub,
+              per_page: 100,
+            });
+
+            const isAncestor = async (candidate) => {
+              try {
+                const comparison = await github.rest.repos.compareCommits({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  base: candidate,
+                  head: targetSha,
+                });
+                return ['ahead', 'identical'].includes(comparison.data.status);
+              } catch {
+                return false;
+              }
+            };
+
+            let activatedSha = null;
+            for (const comment of [...comments].reverse()) {
+              const receipt = String(comment.body ?? '');
+              if (!receipt.includes('[RESEARCH_DASHBOARD_INTERNAL_ACTIVATION]') || !receipt.includes('status: success')) continue;
+              const activationMatch = receipt.match(/(?:^|\n)target_sha:\s*([0-9a-f]{40})(?:\n|$)/i);
+              if (!activationMatch) continue;
+              const candidate = activationMatch[1].toLowerCase();
+              if (await isAncestor(candidate)) {
+                activatedSha = candidate;
+                break;
+              }
+            }
+            if (!activatedSha) {
+              core.setFailed('No successful Research Dashboard activation receipt is an ancestor of exact current main.');
+              return;
+            }
+
+            let failedReadbackRun = null;
+            let failedReadbackTarget = null;
+            for (const comment of [...comments].reverse()) {
+              const receipt = String(comment.body ?? '');
+              if (!receipt.includes('[RESEARCH_DASHBOARD_OVERVIEW_READBACK]') || !receipt.includes('status: failed_closed')) continue;
+              const targetMatch = receipt.match(/(?:^|\n)target_main_sha:\s*([0-9a-f]{40})(?:\n|$)/i);
+              const runMatch = receipt.match(/(?:^|\n)workflow_run:\s*([0-9]{6,20})(?:\n|$)/i);
+              if (!targetMatch || !runMatch) continue;
+              const candidate = targetMatch[1].toLowerCase();
+              if (!(await isAncestor(candidate))) continue;
+              failedReadbackTarget = candidate;
+              failedReadbackRun = runMatch[1];
+              break;
+            }
+            if (!failedReadbackRun || !failedReadbackTarget) {
+              core.setFailed('No failed-closed overview readback receipt is an ancestor of exact current main.');
+              return;
+            }
+
+            core.setOutput('target_sha', targetSha);
+            core.setOutput('activated_sha', activatedSha);
+            core.setOutput('failed_readback_run', failedReadbackRun);
+            core.setOutput('failed_readback_target', failedReadbackTarget);
+
+  diagnose:
+    needs: authorize
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
+      ACTIVATED_SHA: ${{ needs.authorize.outputs.activated_sha }}
+      FAILED_READBACK_RUN: ${{ needs.authorize.outputs.failed_readback_run }}
+      FAILED_READBACK_TARGET: ${{ needs.authorize.outputs.failed_readback_target }}
+      HUB_ISSUE_NUMBER: ${{ needs.authorize.outputs.hub_issue }}
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Configure SSH on GitHub runner only
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+      - name: Read effective root, V3 file, process command, and loopback overview only
+        id: diagnostic
+        shell: bash
+        env:
+          DIAGNOSTIC_PATH: ${{ runner.temp }}/research-dashboard-v3-state-diagnostic.json
+        run: |
+          set -Eeuo pipefail
+          script=.github/scripts/research-dashboard-v3-state-diagnostic.py
+          python3 -m py_compile "$script"
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" \
+            'set -Eeuo pipefail
+             main_pid="$(systemctl show research-dashboard.service --property=MainPID --value)"
+             unit_environment="$(systemctl show research-dashboard.service --property=Environment --value)"
+             unit_exec_start="$(systemctl show research-dashboard.service --property=ExecStart --value)"
+             test -n "$main_pid"
+             export RESEARCH_DIAG_MAIN_PID="$main_pid"
+             export RESEARCH_DIAG_UNIT_ENV="$unit_environment"
+             export RESEARCH_DIAG_EXEC_START="$unit_exec_start"
+             python3 -' \
+            < "$script" > "$DIAGNOSTIC_PATH"
+          test -s "$DIAGNOSTIC_PATH"
+      - name: Validate diagnostic result on GitHub runner
+        id: result
+        shell: bash
+        env:
+          DIAGNOSTIC_PATH: ${{ runner.temp }}/research-dashboard-v3-state-diagnostic.json
+        run: |
+          set -Eeuo pipefail
+          DIAGNOSTIC_PATH="$DIAGNOSTIC_PATH" node <<'NODE'
+          const fs = require('node:fs');
+          const d = JSON.parse(fs.readFileSync(process.env.DIAGNOSTIC_PATH, 'utf8'));
+          const allowed = new Set([
+            'RESEARCH_OVERVIEW_LIVE_V3_SUMMARY_MISSING',
+            'RESEARCH_OVERVIEW_LIVE_V3_SUMMARY_INVALID',
+            'RESEARCH_OVERVIEW_ENDPOINT_READ_FAILED',
+            'RESEARCH_DASHBOARD_PYTHON_RUNTIME_V3_CONSUMER_MISSING',
+            'RESEARCH_DASHBOARD_RUNTIME_V3_CONSUMER_MISSING',
+            'RESEARCH_DASHBOARD_RUNTIME_V3_CONSUMER_REJECTED',
+            'RESEARCH_OVERVIEW_LIVE_V3_SUMMARY_STALE_OR_UNEXPECTED',
+            'NO_V3_STATE_ROOT_DEFECT_OBSERVED',
+          ]);
+          if (!allowed.has(d.rootCause)) throw new Error(`unexpected rootCause: ${d.rootCause}`);
+          if (d.endpointReadErrorClass == null) {
+            if (d.endpointSchema !== 'research-dashboard-overview-v1') throw new Error('overview schema mismatch');
+            if (d.endpointReadOnly !== true) throw new Error('dashboard read-only safety mismatch');
+            if (d.endpointLiveTrading !== false) throw new Error('live trading must remain false');
+            if (d.endpointPrivateApi !== false) throw new Error('private API must remain false');
+            if (d.endpointOrderAuthority !== false) throw new Error('order authority must remain false');
+          }
+          const outputs = {
+            root_cause: d.rootCause,
+            state_root: d.stateRoot,
+            state_root_source: d.stateRootSource,
+            file_classification: d.fileClassification,
+            file_exists: d.fileExists,
+            file_readable: d.fileReadable,
+            json_parse_ok: d.jsonParseOk,
+            schema_valid: d.schemaValid,
+            report_digest_valid: d.reportDigestValid,
+            shape_valid: d.shapeValid,
+            expected_truth_match: d.expectedTruthMatch,
+            runtime_kind: d.runtimeKind,
+            endpoint_li_field_present: d.endpointLiquidityFieldPresent,
+            endpoint_li_present: d.endpointLiquidityPresent ?? 'null',
+            endpoint_li_status: d.endpointLiquidityStatus ?? 'null',
+            effective_n: d.observed?.effectiveIndependentN ?? 'null',
+            buy_n: d.observed?.independentBuyN ?? 'null',
+            sell_n: d.observed?.independentSellN ?? 'null',
+            train_n: d.observed?.TRAIN ?? 'null',
+            validation_n: d.observed?.VALIDATION ?? 'null',
+            oos_n: d.observed?.OOS ?? 'null',
+          };
+          for (const [key, value] of Object.entries(outputs)) {
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${value}\n`);
+          }
+          NODE
+      - name: Report read-only diagnosis to canonical Central Hub
+        if: success()
+        uses: actions/github-script@v7
+        env:
+          ROOT_CAUSE: ${{ steps.result.outputs.root_cause }}
+          STATE_ROOT: ${{ steps.result.outputs.state_root }}
+          STATE_ROOT_SOURCE: ${{ steps.result.outputs.state_root_source }}
+          FILE_CLASSIFICATION: ${{ steps.result.outputs.file_classification }}
+          FILE_EXISTS: ${{ steps.result.outputs.file_exists }}
+          FILE_READABLE: ${{ steps.result.outputs.file_readable }}
+          JSON_PARSE_OK: ${{ steps.result.outputs.json_parse_ok }}
+          SCHEMA_VALID: ${{ steps.result.outputs.schema_valid }}
+          REPORT_DIGEST_VALID: ${{ steps.result.outputs.report_digest_valid }}
+          SHAPE_VALID: ${{ steps.result.outputs.shape_valid }}
+          EXPECTED_TRUTH_MATCH: ${{ steps.result.outputs.expected_truth_match }}
+          RUNTIME_KIND: ${{ steps.result.outputs.runtime_kind }}
+          ENDPOINT_LI_FIELD_PRESENT: ${{ steps.result.outputs.endpoint_li_field_present }}
+          ENDPOINT_LI_PRESENT: ${{ steps.result.outputs.endpoint_li_present }}
+          ENDPOINT_LI_STATUS: ${{ steps.result.outputs.endpoint_li_status }}
+          EFFECTIVE_N: ${{ steps.result.outputs.effective_n }}
+          BUY_N: ${{ steps.result.outputs.buy_n }}
+          SELL_N: ${{ steps.result.outputs.sell_n }}
+          TRAIN_N: ${{ steps.result.outputs.train_n }}
+          VALIDATION_N: ${{ steps.result.outputs.validation_n }}
+          OOS_N: ${{ steps.result.outputs.oos_n }}
+        with:
+          script: |
+            const issueNumber = Number(process.env.HUB_ISSUE_NUMBER ?? 0);
+            if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+              core.setFailed('Canonical Hub issue number is unavailable.');
+              return;
+            }
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body: [
+                '[RESEARCH_DASHBOARD_V3_STATE_ROOT_DIAGNOSTIC]',
+                'status: success',
+                `target_main_sha: ${process.env.TARGET_SHA}`,
+                `activated_dashboard_sha: ${process.env.ACTIVATED_SHA}`,
+                `source_failed_readback_target_sha: ${process.env.FAILED_READBACK_TARGET}`,
+                `source_failed_readback_run: ${process.env.FAILED_READBACK_RUN}`,
+                `workflow_run: ${context.runId}`,
+                `root_cause: ${process.env.ROOT_CAUSE}`,
+                `state_root: ${process.env.STATE_ROOT}`,
+                `state_root_source: ${process.env.STATE_ROOT_SOURCE}`,
+                `file_classification: ${process.env.FILE_CLASSIFICATION}`,
+                `file_exists: ${process.env.FILE_EXISTS}`,
+                `file_readable: ${process.env.FILE_READABLE}`,
+                `json_parse_ok: ${process.env.JSON_PARSE_OK}`,
+                `schema_valid: ${process.env.SCHEMA_VALID}`,
+                `report_digest_valid: ${process.env.REPORT_DIGEST_VALID}`,
+                `shape_valid: ${process.env.SHAPE_VALID}`,
+                `expected_truth_match: ${process.env.EXPECTED_TRUTH_MATCH}`,
+                `runtime_kind: ${process.env.RUNTIME_KIND}`,
+                `endpoint_liquidity_field_present: ${process.env.ENDPOINT_LI_FIELD_PRESENT}`,
+                `endpoint_liquidity_present: ${process.env.ENDPOINT_LI_PRESENT}`,
+                `endpoint_liquidity_status: ${process.env.ENDPOINT_LI_STATUS}`,
+                `effective_independent_n: ${process.env.EFFECTIVE_N}`,
+                `independent_buy_n: ${process.env.BUY_N}`,
+                `independent_sell_n: ${process.env.SELL_N}`,
+                `train_n: ${process.env.TRAIN_N}`,
+                `validation_n: ${process.env.VALIDATION_N}`,
+                `oos_n: ${process.env.OOS_N}`,
+                'evidence_credit: 0',
+                'profitability_proven: false',
+                'production_server_write: 0',
+                'production_process_restart: 0',
+                'production_deploy: 0',
+                'production_db_mutation: 0',
+                'secret_env_mutation: 0',
+                'private_trading_api: false',
+                'live_trading: false',
+                'real_orders: 0',
+              ].join('\n'),
+            });
+      - name: Report fail-closed diagnostic execution
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issueNumber = Number(process.env.HUB_ISSUE_NUMBER ?? 0);
+            if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+              core.setFailed('Canonical Hub issue number is unavailable.');
+              return;
+            }
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body: [
+                '[RESEARCH_DASHBOARD_V3_STATE_ROOT_DIAGNOSTIC]',
+                'status: failed_closed',
+                `target_main_sha: ${process.env.TARGET_SHA}`,
+                `activated_dashboard_sha: ${process.env.ACTIVATED_SHA}`,
+                `source_failed_readback_target_sha: ${process.env.FAILED_READBACK_TARGET}`,
+                `source_failed_readback_run: ${process.env.FAILED_READBACK_RUN}`,
+                `workflow_run: ${context.runId}`,
+                'root_cause: DIAGNOSTIC_EXECUTION_FAILED',
+                'evidence_credit: 0',
+                'profitability_proven: false',
+                'production_server_write: 0',
+                'production_process_restart: 0',
+                'production_deploy: 0',
+                'production_db_mutation: 0',
+                'secret_env_mutation: 0',
+                'private_trading_api: false',
+                'live_trading: false',
+                'real_orders: 0',
+              ].join('\n'),
+            });
