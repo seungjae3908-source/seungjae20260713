@@ -59,6 +59,7 @@ export function canonicalStrandedBootstrapRecoveryAllowedV1({
   targetSha,
   legacyWorkflowState,
   publishedReceiptCount,
+  recoveryApprovalClaimCount,
   producerRunId,
   predecessorRunId,
   predecessorArtifactDigest,
@@ -67,6 +68,7 @@ export function canonicalStrandedBootstrapRecoveryAllowedV1({
   const approvalSha = String(recoveryApprovalTargetSha ?? "");
   const exactTargetSha = String(targetSha ?? "");
   const receiptCount = Number(publishedReceiptCount);
+  const claimCount = Number(recoveryApprovalClaimCount);
   return request.kind === "HOURLY"
     && POSITIVE_INTEGER.test(String(recoveryApprovalCommentId ?? ""))
     && SHA40.test(approvalSha)
@@ -75,6 +77,8 @@ export function canonicalStrandedBootstrapRecoveryAllowedV1({
     && legacyWorkflowState === "disabled_manually"
     && Number.isInteger(receiptCount)
     && receiptCount === 0
+    && Number.isInteger(claimCount)
+    && claimCount === 0
     && exactBootstrapSeedV1({ producerRunId, predecessorRunId, predecessorArtifactDigest });
 }
 
