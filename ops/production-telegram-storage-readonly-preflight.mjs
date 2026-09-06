@@ -30,6 +30,7 @@ const TOP_LEVEL_KEYS = new Set([
   'database_changed',
   'notification_preferences',
   'telegram_tables',
+  'member_watchlist',
   'auth_users_exists',
   'profiles_exists',
   'service_role_exists',
@@ -63,6 +64,25 @@ const TELEGRAM_KEYS = new Set([
   'existing_schema_compatible',
 ]);
 
+const MEMBER_WATCHLIST_KEYS = new Set([
+  'table_exists',
+  'user_id',
+  'market',
+  'symbol',
+  'name',
+  'currency',
+  'target_price',
+  'created_at',
+  'updated_at',
+  'primary_key_identity',
+  'rls_enabled',
+  'rls_forced',
+  'select_own_policy',
+  'insert_own_policy',
+  'update_own_policy',
+  'delete_own_policy',
+]);
+
 function verifyAllowedObject(value, allowed, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error(`${label} must be an object`);
@@ -76,6 +96,7 @@ function verifyArtifact(value) {
   verifyAllowedObject(value, TOP_LEVEL_KEYS, 'artifact');
   verifyAllowedObject(value.notification_preferences, NOTIFICATION_KEYS, 'notification_preferences');
   verifyAllowedObject(value.telegram_tables, TELEGRAM_KEYS, 'telegram_tables');
+  verifyAllowedObject(value.member_watchlist, MEMBER_WATCHLIST_KEYS, 'member_watchlist');
 
   if (!['passed', 'blocked'].includes(value.status)) throw new Error('status invalid');
   if (typeof value.classification !== 'string' || !/^[a-z0-9_]+$/.test(value.classification)) {
@@ -121,6 +142,7 @@ function verifyArtifact(value) {
   for (const [label, nested] of [
     ['notification_preferences', value.notification_preferences],
     ['telegram_tables', value.telegram_tables],
+    ['member_watchlist', value.member_watchlist],
   ]) {
     for (const [key, item] of Object.entries(nested)) {
       if (typeof item !== 'boolean') throw new Error(`${label}.${key} must be boolean`);
@@ -181,6 +203,24 @@ const base = {
     notification_deliveries_exists: false,
     existing_schema_compatible: true,
   },
+  member_watchlist: {
+    table_exists: false,
+    user_id: false,
+    market: false,
+    symbol: false,
+    name: false,
+    currency: false,
+    target_price: false,
+    created_at: false,
+    updated_at: false,
+    primary_key_identity: false,
+    rls_enabled: false,
+    rls_forced: false,
+    select_own_policy: false,
+    insert_own_policy: false,
+    update_own_policy: false,
+    delete_own_policy: false,
+  },
   auth_users_exists: false,
   profiles_exists: false,
   service_role_exists: false,
@@ -205,6 +245,10 @@ function emit(overrides = {}) {
     telegram_tables: {
       ...base.telegram_tables,
       ...(overrides.telegram_tables ?? {}),
+    },
+    member_watchlist: {
+      ...base.member_watchlist,
+      ...(overrides.member_watchlist ?? {}),
     },
   };
   verifyArtifact(value);
@@ -450,6 +494,87 @@ notification_arbiter as (
       and key.ord = 1
       and att.attname = 'member_id'
   ) as value
+),
+member_watchlist_primary_key as (
+  select exists (
+    select 1
+    from pg_catalog.pg_constraint con
+    join pg_catalog.pg_class rel on rel.oid = con.conrelid
+    join pg_catalog.pg_namespace ns on ns.oid = rel.relnamespace
+    where ns.nspname = 'public'
+      and rel.relname = 'member_watchlist_items'
+      and con.contype = 'p'
+      and (
+        select array_agg(att.attname order by key.ord)::text[]
+        from unnest(con.conkey) with ordinality as key(attnum, ord)
+        join pg_catalog.pg_attribute att
+          on att.attrelid = rel.oid
+         and att.attnum = key.attnum
+      ) = array['user_id', 'market', 'symbol']::text[]
+  ) as value
+),
+member_watchlist_rls as (
+  select
+    coalesce(bool_or(rel.relrowsecurity), false) as enabled,
+    coalesce(bool_or(rel.relforcerowsecurity), false) as forced
+  from pg_catalog.pg_class rel
+  join pg_catalog.pg_namespace ns on ns.oid = rel.relnamespace
+  where ns.nspname = 'public'
+    and rel.relname = 'member_watchlist_items'
+),
+member_watchlist_policies as (
+  select
+    exists (
+      select 1
+      from pg_catalog.pg_policies policy
+      where policy.schemaname = 'public'
+        and policy.tablename = 'member_watchlist_items'
+        and policy.policyname = 'member_watchlist_select_own'
+        and policy.cmd = 'SELECT'
+        and 'authenticated' = any(policy.roles)
+        and position('auth.uid()' in coalesce(policy.qual, '')) > 0
+        and position('user_id' in coalesce(policy.qual, '')) > 0
+        and position('=' in coalesce(policy.qual, '')) > 0
+    ) as select_own,
+    exists (
+      select 1
+      from pg_catalog.pg_policies policy
+      where policy.schemaname = 'public'
+        and policy.tablename = 'member_watchlist_items'
+        and policy.policyname = 'member_watchlist_insert_own'
+        and policy.cmd = 'INSERT'
+        and 'authenticated' = any(policy.roles)
+        and position('auth.uid()' in coalesce(policy.with_check, '')) > 0
+        and position('user_id' in coalesce(policy.with_check, '')) > 0
+        and position('=' in coalesce(policy.with_check, '')) > 0
+    ) as insert_own,
+    exists (
+      select 1
+      from pg_catalog.pg_policies policy
+      where policy.schemaname = 'public'
+        and policy.tablename = 'member_watchlist_items'
+        and policy.policyname = 'member_watchlist_update_own'
+        and policy.cmd = 'UPDATE'
+        and 'authenticated' = any(policy.roles)
+        and position('auth.uid()' in coalesce(policy.qual, '')) > 0
+        and position('user_id' in coalesce(policy.qual, '')) > 0
+        and position('=' in coalesce(policy.qual, '')) > 0
+        and position('auth.uid()' in coalesce(policy.with_check, '')) > 0
+        and position('user_id' in coalesce(policy.with_check, '')) > 0
+        and position('=' in coalesce(policy.with_check, '')) > 0
+    ) as update_own,
+    exists (
+      select 1
+      from pg_catalog.pg_policies policy
+      where policy.schemaname = 'public'
+        and policy.tablename = 'member_watchlist_items'
+        and policy.policyname = 'member_watchlist_delete_own'
+        and policy.cmd = 'DELETE'
+        and 'authenticated' = any(policy.roles)
+        and position('auth.uid()' in coalesce(policy.qual, '')) > 0
+        and position('user_id' in coalesce(policy.qual, '')) > 0
+        and position('=' in coalesce(policy.qual, '')) > 0
+    ) as delete_own
 )
 select json_build_object(
   'auth_users_exists', to_regclass('auth.users') is not null,
@@ -494,6 +619,48 @@ select json_build_object(
     'user_execution_events_exists', to_regclass('public.user_execution_events') is not null,
     'notification_deliveries_exists', to_regclass('public.notification_deliveries') is not null,
     'existing_schema_compatible', not (select value from existing_telegram_incompatible)
+  ),
+  'member_watchlist', json_build_object(
+    'table_exists', to_regclass('public.member_watchlist_items') is not null,
+    'user_id', exists(
+      select 1 from information_schema.columns
+      where table_schema='public' and table_name='member_watchlist_items' and column_name='user_id'
+    ),
+    'market', exists(
+      select 1 from information_schema.columns
+      where table_schema='public' and table_name='member_watchlist_items' and column_name='market'
+    ),
+    'symbol', exists(
+      select 1 from information_schema.columns
+      where table_schema='public' and table_name='member_watchlist_items' and column_name='symbol'
+    ),
+    'name', exists(
+      select 1 from information_schema.columns
+      where table_schema='public' and table_name='member_watchlist_items' and column_name='name'
+    ),
+    'currency', exists(
+      select 1 from information_schema.columns
+      where table_schema='public' and table_name='member_watchlist_items' and column_name='currency'
+    ),
+    'target_price', exists(
+      select 1 from information_schema.columns
+      where table_schema='public' and table_name='member_watchlist_items' and column_name='target_price'
+    ),
+    'created_at', exists(
+      select 1 from information_schema.columns
+      where table_schema='public' and table_name='member_watchlist_items' and column_name='created_at'
+    ),
+    'updated_at', exists(
+      select 1 from information_schema.columns
+      where table_schema='public' and table_name='member_watchlist_items' and column_name='updated_at'
+    ),
+    'primary_key_identity', (select value from member_watchlist_primary_key),
+    'rls_enabled', (select enabled from member_watchlist_rls),
+    'rls_forced', (select forced from member_watchlist_rls),
+    'select_own_policy', (select select_own from member_watchlist_policies),
+    'insert_own_policy', (select insert_own from member_watchlist_policies),
+    'update_own_policy', (select update_own from member_watchlist_policies),
+    'delete_own_policy', (select delete_own from member_watchlist_policies)
   )
 )::text;
 
@@ -554,12 +721,29 @@ try {
 
 const notification = catalog.notification_preferences ?? {};
 const telegram = catalog.telegram_tables ?? {};
+const memberWatchlist = catalog.member_watchlist ?? {};
 const canonicalColumnsReady = [
   notification.member_id,
   notification.enabled_types,
   notification.app_enabled,
   notification.push_enabled,
   notification.updated_at,
+].every((value) => value === true);
+const memberWatchlistColumnsReady = [
+  memberWatchlist.user_id,
+  memberWatchlist.market,
+  memberWatchlist.symbol,
+  memberWatchlist.name,
+  memberWatchlist.currency,
+  memberWatchlist.target_price,
+  memberWatchlist.created_at,
+  memberWatchlist.updated_at,
+].every((value) => value === true);
+const memberWatchlistPoliciesReady = [
+  memberWatchlist.select_own_policy,
+  memberWatchlist.insert_own_policy,
+  memberWatchlist.update_own_policy,
+  memberWatchlist.delete_own_policy,
 ].every((value) => value === true);
 
 let classification = 'ready_for_atomic_storage_apply';
@@ -571,6 +755,11 @@ else if (notification.table_exists !== true) classification = 'canonical_notific
 else if (!canonicalColumnsReady) classification = 'canonical_notification_preferences_columns_missing';
 else if (notification.member_id_unique_arbiter !== true) classification = 'canonical_notification_preferences_arbiter_missing';
 else if (telegram.existing_schema_compatible !== true) classification = 'existing_telegram_storage_schema_incompatible';
+else if (memberWatchlist.table_exists !== true) classification = 'member_watchlist_table_missing';
+else if (!memberWatchlistColumnsReady) classification = 'member_watchlist_columns_missing';
+else if (memberWatchlist.primary_key_identity !== true) classification = 'member_watchlist_primary_key_missing';
+else if (memberWatchlist.rls_enabled !== true || memberWatchlist.rls_forced !== true) classification = 'member_watchlist_rls_not_enforced';
+else if (!memberWatchlistPoliciesReady) classification = 'member_watchlist_policy_contract_missing';
 
 emit({
   status: classification === 'ready_for_atomic_storage_apply' ? 'passed' : 'blocked',
@@ -594,6 +783,24 @@ emit({
     user_execution_events_exists: telegram.user_execution_events_exists === true,
     notification_deliveries_exists: telegram.notification_deliveries_exists === true,
     existing_schema_compatible: telegram.existing_schema_compatible === true,
+  },
+  member_watchlist: {
+    table_exists: memberWatchlist.table_exists === true,
+    user_id: memberWatchlist.user_id === true,
+    market: memberWatchlist.market === true,
+    symbol: memberWatchlist.symbol === true,
+    name: memberWatchlist.name === true,
+    currency: memberWatchlist.currency === true,
+    target_price: memberWatchlist.target_price === true,
+    created_at: memberWatchlist.created_at === true,
+    updated_at: memberWatchlist.updated_at === true,
+    primary_key_identity: memberWatchlist.primary_key_identity === true,
+    rls_enabled: memberWatchlist.rls_enabled === true,
+    rls_forced: memberWatchlist.rls_forced === true,
+    select_own_policy: memberWatchlist.select_own_policy === true,
+    insert_own_policy: memberWatchlist.insert_own_policy === true,
+    update_own_policy: memberWatchlist.update_own_policy === true,
+    delete_own_policy: memberWatchlist.delete_own_policy === true,
   },
   auth_users_exists: catalog.auth_users_exists === true,
   profiles_exists: catalog.profiles_exists === true,
