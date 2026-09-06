@@ -24,7 +24,7 @@ test('auto trading shell keeps the professional typography and safety summary wi
   const page = source('src/pages/auto-trading.tsx');
 
   expect(page).toContain('data-testid="auto-trading-safety-summary"');
-  expect(page).toContain('자동매매 안전 상태');
+  expect(page).toContain('주문 안전 상태');
   expect(page).toContain('실전 주문');
   expect(page).toContain('비활성');
   expect(page).toContain('사용자 승인');
