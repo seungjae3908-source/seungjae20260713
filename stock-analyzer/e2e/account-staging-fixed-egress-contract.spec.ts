@@ -31,7 +31,8 @@ test('private account evidence keeps GitHub-hosted isolation and uses Staging on
   expect(workflow).not.toContain('issue_comment:');
   expect(workflow).toContain("if: github.event_name == 'pull_request'");
   expect(workflow).toContain("github.event_name == 'workflow_dispatch'");
-  expect(workflow).toContain('github.actor == github.repository_owner');
+  expect(workflow).toContain("github.actor == 'github-actions[bot]'");
+  expect(workflow).not.toContain('github.actor == github.repository_owner');
   expect(workflow).toContain("github.ref == 'refs/heads/main'");
   expect(workflow).toContain('github.rest.issues.getComment');
   expect(workflow).toContain("comment.author_association === 'OWNER'");
