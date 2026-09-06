@@ -236,7 +236,7 @@ function FilterButton({
 }
 
 function Count({ n }: { n: number }) {
-  return <span className="shrink-0 rounded-full bg-secondary px-1.5 py-0.5 text-[11px] font-semibold text-muted-foreground tabular-nums">{n}</span>;
+  return <span className="shrink-0 rounded-full bg-secondary px-1.5 py-0.5 text-xs font-semibold text-muted-foreground tabular-nums">{n}</span>;
 }
 
 function AlertItem({ alert }: { alert: MarketAlert }) {
