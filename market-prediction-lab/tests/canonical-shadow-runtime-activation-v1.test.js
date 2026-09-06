@@ -158,3 +158,37 @@ test("binding shape rejects guessed or mutable identities", () => {
   assert.throws(() => assertCanonicalRuntimeBindingShapeV1({ producerRunId: "0", predecessorRunId: "1", researchSha }));
   assert.throws(() => assertCanonicalRuntimeBindingShapeV1({ producerRunId: "1", predecessorRunId: "1", researchSha: "main" }));
 });
+
+test("stranded recovery rejects missing and coercible zero-count evidence without throwing", () => {
+  const targetSha = "d".repeat(40);
+  const exact = {
+    requestId: "hourly-34020000001",
+    recoveryApprovalCommentId: "5557999001",
+    recoveryApprovalTargetSha: targetSha,
+    targetSha,
+    legacyWorkflowState: "disabled_manually",
+    publishedReceiptCount: 0,
+    recoveryApprovalClaimCount: 0,
+    ...CANONICAL_SHADOW_BOOTSTRAP_SEED_V1,
+  };
+  for (const publishedReceiptCount of [0, "0"]) {
+    for (const recoveryApprovalClaimCount of [0, "0"]) {
+      assert.equal(canonicalStrandedBootstrapRecoveryAllowedV1({ ...exact, publishedReceiptCount, recoveryApprovalClaimCount }), true);
+    }
+  }
+  const invalidCounts = [
+    undefined, null, "", " ", "\t\n", false, true, [], [0], ["0"], {},
+    { valueOf: () => 0 }, new Number(0), new String("0"),
+    "00", "0.0", "0e0", "+0", "-0", "0x0", " 0 ", "NaN",
+    NaN, Infinity, -Infinity, -1, 1, 0.5, "1", 0n, Symbol("0"),
+    { valueOf() { throw new Error("Count evidence must not be coerced"); } },
+  ];
+  for (const field of ["publishedReceiptCount", "recoveryApprovalClaimCount"]) {
+    for (const [index, value] of invalidCounts.entries()) {
+      assert.equal(canonicalStrandedBootstrapRecoveryAllowedV1({ ...exact, [field]: value }), false, `${field} invalid case ${index}`);
+    }
+    const missing = { ...exact };
+    delete missing[field];
+    assert.equal(canonicalStrandedBootstrapRecoveryAllowedV1(missing), false, `${field} must be present`);
+  }
+});
