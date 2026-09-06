@@ -32,7 +32,7 @@ export function CenteredPageHeader({
         <Info className="h-5 w-5" />
       </summary>
       <div className="absolute right-0 z-40 mt-2 w-[min(82vw,320px)] rounded-2xl border border-card-border bg-card p-4 text-left shadow-xl">
-        <p className="text-sm font-black text-foreground">{infoTitle}</p>
+        <p className="text-sm font-semibold text-foreground">{infoTitle}</p>
         <ul className="mt-2 space-y-1.5 text-xs font-medium leading-5 text-muted-foreground">
           {infoItems.map((item) => <li key={item}>• {item}</li>)}
         </ul>
@@ -43,13 +43,14 @@ export function CenteredPageHeader({
   return (
     <header
       data-testid={testId}
+      data-ui-role="page-header"
       className={cn('shrink-0 border-b border-card-border bg-background/95 px-3 py-3 backdrop-blur sm:px-4', className)}
     >
       <div className="grid grid-cols-[44px_minmax(0,1fr)_44px] items-center gap-2">
         <div className="flex min-w-0 justify-start">{leading ?? <span aria-hidden className="h-11 w-11" />}</div>
         <div className="min-w-0 text-center">
-          {eyebrow ? <p className="truncate text-[10px] font-black text-primary">{eyebrow}</p> : null}
-          <h1 className="truncate text-lg font-black sm:text-xl">{title}</h1>
+          {eyebrow ? <p data-ui-role="eyebrow" className="truncate text-xs font-semibold text-primary">{eyebrow}</p> : null}
+          <h1 data-ui-role="page-title" className="truncate text-xl font-bold sm:text-2xl">{title}</h1>
         </div>
         <div className="flex min-w-0 justify-end">{action ?? infoAction ?? <span aria-hidden className="h-11 w-11" />}</div>
       </div>
