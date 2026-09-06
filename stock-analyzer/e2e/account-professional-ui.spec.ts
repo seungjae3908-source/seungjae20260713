@@ -107,7 +107,7 @@ for (const width of [320, 390, 768, 1200]) {
     await expect(page.getByRole('heading', { name: '계정', exact: true })).toBeVisible();
     await expect(page.getByRole('heading', { name: '실계좌 조회 연결', exact: true })).toBeVisible();
     await expect(page.getByText('조회 전용 · 주문·취소·이체·출금 없음', { exact: true })).toBeVisible();
-    await expect(page.getByText('READ-ONLY', { exact: false })).toHaveCount(0);
+    await expect(page.getByText('READ-ONLY', { exact: false })).toBeHidden();
 
     const overflow = await page.evaluate(() => Math.max(
       document.documentElement.scrollWidth,
@@ -133,9 +133,9 @@ test('account keeps detailed read-only evidence behind an explicit disclosure', 
 
   const details = page.getByTestId('account-readonly-safety-details');
   await expect(details).toBeVisible();
-  await expect(page.getByText('실주문/취소/이체/출금 요청 0건', { exact: false })).toBeHidden();
+  await expect(page.getByText('실주문/취소/이체/출금 0건', { exact: false })).toBeHidden();
   await details.getByText('보안·권한 상세', { exact: true }).click();
-  await expect(page.getByText('실주문/취소/이체/출금 요청 0건', { exact: false })).toBeVisible();
+  await expect(page.getByText('실주문/취소/이체/출금 0건', { exact: false })).toBeVisible();
   await expect(page.getByText('Secret 원문 응답 0건', { exact: false })).toBeVisible();
 });
 
@@ -144,7 +144,7 @@ test('account connection dialog remains inside a compact mobile viewport', async
   await installRuntime(page);
   await page.goto('/account');
 
-  await page.getByRole('button', { name: 'Toss 연결 설정', exact: true }).click();
+  await page.getByRole('button', { name: 'Toss 조회 연결 설정', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Toss 조회 연결 설정' });
   await expect(dialog).toBeVisible();
   const box = await dialog.boundingBox();
