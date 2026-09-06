@@ -137,6 +137,9 @@ jobs:
           activation='market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json'
           runtime_workflow='.github/workflows/public-forward-liquidity-successor-scheduled-capture.yml'
           validation_workflow='.github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml'
+          runner='market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs'
+          reliability='market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-reliability-v3.mjs'
+          reliability_test='market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-reliability-v3.test.mjs'
           git diff --check "$base" "$head"
           changed="$(git diff --name-only "$base" "$head")"
 
@@ -149,6 +152,19 @@ jobs:
           EOF
             expected_count=4
             scope_name='V3 activation-admission'
+          elif [[ "$(printf '%s\n' "$changed" | grep -v -F -e "$validation_workflow" -e "$runner" -e "$reliability" -e "$reliability_test" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 0 ]] \
+            && printf '%s\n' "$changed" | grep -Fqx "$validation_workflow" \
+            && printf '%s\n' "$changed" | grep -Fqx "$runner" \
+            && printf '%s\n' "$changed" | grep -Fqx "$reliability" \
+            && printf '%s\n' "$changed" | grep -Fqx "$reliability_test"; then
+            cat > /tmp/allowed-files <<'EOF'
+          .github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml
+          market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs
+          market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-reliability-v3.mjs
+          market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-reliability-v3.test.mjs
+          EOF
+            expected_count=4
+            scope_name='V3 scheduled-runtime-metadata-repair'
           elif [[ "$(printf '%s\n' "$changed" | grep -v -F -e "$runtime_workflow" -e "$validation_workflow" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 0 ]]; then
             cat > /tmp/allowed-files <<'EOF'
           .github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml
