@@ -45,7 +45,7 @@ const SECTIONS: SettingsSection[] = [
   { id: 'ai', title: 'AI', icon: BrainCircuit },
   { id: 'display', title: '화면', icon: Gauge },
   { id: 'provider', title: '데이터 연결', icon: Database },
-  { id: 'advanced', title: '고급 설정', icon: Settings2 },
+  { id: 'advanced', title: '고급설정', icon: Settings2 },
 ];
 
 function parseSection(search: string): SettingsSectionId | null {
