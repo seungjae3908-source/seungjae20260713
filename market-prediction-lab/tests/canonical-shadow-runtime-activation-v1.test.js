@@ -126,11 +126,11 @@ test("publisher workflow clean-skips artifactless source runs before mutation ga
   assert.match(publisher, /needs\.classify-source-artifact\.outputs\.eligible == 'true'/);
 });
 
-test("stranded recovery workflow is approval-gated and refuses synthetic first publication", () => {
+test("stranded recovery workflow is approval-gated and refuses a second bootstrap lineage", () => {
   const workflow = fs.readFileSync(new URL("../../.github/workflows/prediction-lab-canonical-shadow-cycle.yml", import.meta.url), "utf8");
-  assert.match(workflow, /issue_number: 838/);
+  assert.match(workflow, /issues\/838\/comments\?per_page=100/);
+  assert.match(workflow, /--paginate --slurp/);
   assert.match(workflow, /approve-canonical-shadow-recovery/);
-  assert.match(workflow, /github\.paginate\(github\.rest\.issues\.listComments/);
   assert.match(workflow, /actions\/artifacts\?per_page=100/);
   assert.match(workflow, /publication_receipt_count/);
   assert.match(workflow, /Canonical publication receipt history exists but no valid predecessor/);
