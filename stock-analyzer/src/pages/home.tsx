@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, ArrowRight, BarChart3, BriefcaseBusiness, Radar, Star } from 'lucide-react';
 import { useLocation } from 'wouter';
@@ -141,6 +141,7 @@ export default function HomePage() {
   const btcPrice = btc ? finite(btc.price ?? btc.tradePrice) : null;
   const btcChangePercent = btc ? finite(btc.changePercent ?? btc.changePercent24h) : null;
   const signalIsCurrent = isTodaySeoul(selection?.selectedAt);
+  const currentSignal = Boolean(selection && signalIsCurrent && selection.signalScore != null);
   const marketWarning = market.isError
     ? '주식 시장 정보 확인 실패'
     : market.data?.dataState === 'provider_error'
@@ -157,6 +158,14 @@ export default function HomePage() {
     : market.isError || market.data?.dataState === 'provider_error'
       ? '확인 필요'
       : '데이터 없음';
+  const marketEvidenceAvailable = indices.length > 0 || btcPrice != null;
+  const dashboardMarketState = market.isLoading || bitcoin.isLoading
+    ? '확인 중'
+    : warnings.length > 0
+      ? '확인 필요'
+      : marketEvidenceAvailable
+        ? '시세 확인됨'
+        : '데이터 없음';
 
   const openAsset = (item: UnifiedAssetSuggestion) => {
     if (item.assetType === 'stock') {
@@ -168,6 +177,49 @@ export default function HomePage() {
     }
     navigate(unifiedAssetDetailPath(item, '/home'));
   };
+
+  const professionalOverview = (
+    <section
+      data-testid="home-professional-overview"
+      className="rounded-3xl border border-card-border bg-card p-4 shadow-sm sm:p-5"
+      aria-labelledby="home-professional-overview-title"
+    >
+      <div className="text-center">
+        <p className="text-xs font-semibold tracking-[0.12em] text-primary">투자 대시보드</p>
+        <h2 id="home-professional-overview-title" className="mt-1 text-lg font-bold sm:text-xl">오늘의 투자 상태</h2>
+      </div>
+      <div className="mt-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
+        <DashboardStatusCard
+          icon={<BarChart3 className="h-5 w-5" />}
+          label="시세"
+          value={dashboardMarketState}
+          detail="주식·코인 공개 시세"
+          onClick={() => navigate('/market-overview')}
+        />
+        <DashboardStatusCard
+          icon={<Radar className="h-5 w-5" />}
+          label="AI 신호"
+          value={currentSignal ? `${actionLabel(selection?.action)} · ${selection?.signalScore}점` : '오늘 신호 없음'}
+          detail={currentSignal ? selection?.displayName ?? selection?.ticker ?? '선택 신호' : '선택된 최신 신호 없음'}
+          onClick={() => navigate('/scanner')}
+        />
+        <DashboardStatusCard
+          icon={<Star className="h-5 w-5" />}
+          label="관심종목"
+          value={`${watchlist.length}개`}
+          detail={watchlist.length ? '관심 목록 확인' : '등록된 관심종목 없음'}
+          onClick={() => navigate('/watchlist')}
+        />
+        <DashboardStatusCard
+          icon={<BriefcaseBusiness className="h-5 w-5" />}
+          label="자산"
+          value="포트폴리오"
+          detail="보유·손익·위험 확인"
+          onClick={() => navigate('/portfolio')}
+        />
+      </div>
+    </section>
+  );
 
   const marketSection = (
     <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="home-market-summary">
@@ -264,6 +316,8 @@ export default function HomePage() {
             <UnifiedAssetSearch placeholder="종목·코인 검색" onSelect={openAsset} />
           </section>
 
+          {professionalOverview}
+
           {warnings.length > 0 && (
             <details role="alert" className="rounded-2xl border border-amber-500/40 bg-amber-500/10 px-3 py-2">
               <summary className="flex min-h-9 cursor-pointer list-none items-center gap-2 text-xs font-black text-amber-500 [&::-webkit-details-marker]:hidden">
@@ -275,11 +329,15 @@ export default function HomePage() {
 
           {desktop ? (
             <>
-              {marketSection}
-              {signalSection}
-              <div className="grid gap-4 lg:grid-cols-2">
-                {watchlistSection}
-                {portfolioSection}
+              <div className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(20rem,0.75fr)]" data-testid="home-desktop-workspace">
+                <div className="min-w-0 space-y-4">
+                  {marketSection}
+                  {signalSection}
+                </div>
+                <aside className="min-w-0 space-y-4">
+                  {portfolioSection}
+                  {watchlistSection}
+                </aside>
               </div>
               <section className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="빠른 이동">
                 <QuickLink label="국내" onClick={() => navigate('/stocks/kr')} />
@@ -300,6 +358,27 @@ export default function HomePage() {
       </main>
       <BottomNav />
     </div>
+  );
+}
+
+function DashboardStatusCard({ icon, label, value, detail, onClick }: {
+  icon: ReactNode;
+  label: string;
+  value: string;
+  detail: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex min-h-24 min-w-0 flex-col items-center justify-center rounded-2xl border border-card-border bg-background p-3 text-center transition hover:border-primary/40 hover:bg-secondary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+    >
+      <span className="text-primary" aria-hidden="true">{icon}</span>
+      <span className="mt-2 text-xs font-semibold text-muted-foreground">{label}</span>
+      <strong className="mt-1 max-w-full truncate text-sm font-bold">{value}</strong>
+      <span className="mt-1 max-w-full truncate text-xs font-medium text-muted-foreground">{detail}</span>
+    </button>
   );
 }
 
