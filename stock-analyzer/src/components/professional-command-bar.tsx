@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useIsFetching } from '@tanstack/react-query';
 import {
   BarChart3,
   Bell,
@@ -34,6 +35,7 @@ function editableTarget(target: EventTarget | null) {
 export function ProfessionalCommandBar() {
   const [location, navigate] = useLocation();
   const auth = useAuth();
+  const activeRequests = useIsFetching();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
@@ -151,9 +153,12 @@ export function ProfessionalCommandBar() {
         </button>
 
         <div className="flex shrink-0 items-center gap-2 text-xs">
-          <span className="inline-flex min-h-8 items-center gap-2 rounded-full border border-card-border px-3 font-medium">
+          <span className="inline-flex min-h-8 items-center gap-2 rounded-full border border-card-border px-3 font-medium" data-testid="professional-network-status">
             <span className={`h-2 w-2 rounded-full ${online ? 'bg-positive' : 'bg-destructive'}`} aria-hidden="true" />
             {online ? '온라인' : '오프라인'}
+          </span>
+          <span className="inline-flex min-h-8 items-center rounded-full border border-card-border px-3 font-medium" data-testid="professional-query-status">
+            {activeRequests > 0 ? `데이터 요청 중 · ${activeRequests}` : '데이터 요청 대기'}
           </span>
           <button type="button" onClick={() => navigate(APP_ROUTES.account)} className="min-h-8 max-w-40 truncate rounded-full border border-card-border px-3 font-semibold">
             {auth.displayName ?? '계정'}
