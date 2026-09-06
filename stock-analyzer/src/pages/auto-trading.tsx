@@ -34,10 +34,10 @@ export default function AutoTradingPage({ fixture, approvalFixture, embedded = f
   const [notificationOpen, setNotificationOpen] = useState(false);
 
   const safety = (
-    <section aria-label="자동매매 안전 상태" className="rounded-2xl border border-primary/25 bg-primary/5 p-4" data-testid="auto-trading-safety-summary">
+    <section aria-label="주문 안전 상태" className="rounded-2xl border border-primary/25 bg-primary/5 p-4" data-testid="auto-trading-safety-summary">
       <div className="flex items-center justify-center gap-2 text-center">
         <ShieldCheck className="h-5 w-5 text-primary" aria-hidden="true" />
-        <h2 className="text-base font-bold">자동매매 안전 상태</h2>
+        <h2 className="text-base font-bold">주문 안전 상태</h2>
       </div>
       <p className="mx-auto mt-2 max-w-xl break-keep text-center text-xs font-medium leading-5 text-muted-foreground">
         현재 실전 주문은 비활성 상태이며 자동매매 기능은 사용자 승인과 최종 위험검사를 거칩니다.
