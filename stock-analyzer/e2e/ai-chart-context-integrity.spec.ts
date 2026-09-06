@@ -160,7 +160,7 @@ test('explicit Scanner-to-AI-chart crypto route remains canonical', async ({ pag
   expect(persisted.timeframe).toBe('4H');
 });
 
-test('same futures asset keeps Scanner price plan across timeframe changes and exposes one symbol search field', async ({ page }) => {
+test('timeframe changes clear stale Scanner price plan and expose one symbol search field', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await installMocks(page, scannerHypeSelection);
   await page.goto('/ai-chart?assetType=coin_futures&market=BITGET&symbol=HYPEUSDT&ticker=HYPEUSDT&name=HYPEUSDT&timeframe=5m&searchRunId=scanner%3Ahype%3A20260826');
@@ -171,7 +171,7 @@ test('same futures asset keeps Scanner price plan across timeframe changes and e
   const chart = page.getByTestId('ai-chart-mobile-chart');
   await expect(chart.getByRole('textbox', { name: '차트 종목 심볼' })).toHaveCount(1);
   await expect(chart.getByPlaceholder('종목명·심볼 검색')).toHaveCount(1);
-  await expect(chart.getByTestId('chart-stream-status')).toHaveText('FALLBACK POLLING');
+  await expect(chart.getByTestId('chart-stream-status')).toHaveText('REST_BOOTSTRAP');
 
   const evidence = chart.getByTestId('ai-chart-v3-evidence-status');
   await expect(evidence).toContainText('TECHNICAL SCORE');
@@ -188,16 +188,16 @@ test('same futures asset keeps Scanner price plan across timeframe changes and e
 
   await chart.getByTestId('timeframe-1H').click();
   await expect(page.locator('header')).toContainText('1H');
-  await expect(plan.getByTestId('scanner-price-plan-action')).toHaveText('롱');
-  await expect(plan).toContainText('80.95');
-  await expect(plan).toContainText('85.3');
+  await expect(plan.getByTestId('scanner-price-plan-action')).toHaveText('미확인');
+  await expect(plan).toContainText('Scanner에서 전달된 Price Plan이 없습니다.');
+  await expect(plan).not.toContainText('80.95');
+  await expect(plan).not.toContainText('85.3');
 
   const persisted = await page.evaluate((key) => JSON.parse(window.localStorage.getItem(key) ?? 'null'), ANALYSIS_STORAGE_KEY);
   expect(persisted.market).toBe('BITGET');
   expect(persisted.ticker).toBe('HYPEUSDT');
   expect(persisted.timeframe).toBe('1H');
-  expect(persisted.searchRunId).toBe('scanner:hype:20260826');
-  expect(persisted.action).toBe('LONG');
-  expect(persisted.pricePlan?.stopLoss).toBe(80.95);
-  expect(persisted.pricePlan?.targets?.[0]).toBe(85.3);
+  expect(persisted.searchRunId).toBeUndefined();
+  expect(persisted.action).toBeUndefined();
+  expect(persisted.pricePlan).toBeUndefined();
 });

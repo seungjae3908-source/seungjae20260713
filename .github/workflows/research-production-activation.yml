@@ -55,6 +55,9 @@ jobs:
           grep -Fq 'readlink -f /opt/investment-research/current' .github/workflows/research-production-activation.yml
           grep -q 'checkout-only lifecycle failure' .github/workflows/research-production-activation.yml
           grep -q 'SOURCE_MERGE_SHA' .github/workflows/research-production-activation.yml
+          grep -q 'target_application_run_id' .github/workflows/research-production-activation.yml
+          grep -q 'Exact current main Required CI Run' .github/workflows/research-production-activation.yml
+          grep -q "run.event === 'workflow_dispatch'" .github/workflows/research-production-activation.yml
           grep -q 'LIVE_TRADING=false' research-production/deploy/activate-server.sh
           grep -q 'PRIVATE_API_ENABLED=false' research-production/deploy/activate-server.sh
           grep -q 'ORDER_AUTHORITY=false' research-production/deploy/activate-server.sh
@@ -72,7 +75,9 @@ jobs:
       target_sha: ${{ steps.gate.outputs.target_sha }}
       research_head_sha: ${{ steps.gate.outputs.research_head_sha }}
       source_merge_sha: ${{ steps.gate.outputs.source_merge_sha }}
+      source_application_run_id: ${{ steps.gate.outputs.source_application_run_id }}
       application_run_id: ${{ steps.gate.outputs.application_run_id }}
+      target_application_run_id: ${{ steps.gate.outputs.target_application_run_id }}
     env:
       PR_NUMBER: 357
     steps:
@@ -185,7 +190,7 @@ jobs:
               }
             }
             if (!acceptedRun) {
-              core.setFailed('No coherent exact-head Application CI run has all Required statuses 6/6 SUCCESS.');
+              core.setFailed('No coherent source exact-head Application CI run has all Required statuses 6/6 SUCCESS.');
               return;
             }
 
@@ -201,12 +206,12 @@ jobs:
               .sort((a, b) => Number(a.id) - Number(b.id));
             for (const run of newerRuns) {
               if (run.status !== 'completed') {
-                core.setFailed(`A newer exact-head Application CI run is not terminal: ${run.id}`);
+                core.setFailed(`A newer source exact-head Application CI run is not terminal: ${run.id}`);
                 return;
               }
               if (run.conclusion === 'success') continue;
               if (run.conclusion !== 'failure' || !pr.merged) {
-                core.setFailed(`A newer exact-head Application CI run is not acceptable: ${run.id} ${run.conclusion}`);
+                core.setFailed(`A newer source exact-head Application CI run is not acceptable: ${run.id} ${run.conclusion}`);
                 return;
               }
               const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
@@ -217,25 +222,77 @@ jobs:
               });
               const failedJobs = jobs.filter((job) => job.conclusion === 'failure');
               if (failedJobs.length === 0) {
-                core.setFailed(`Newer failed run ${run.id} has no inspectable failed jobs.`);
+                core.setFailed(`Newer source run ${run.id} has no inspectable failed jobs.`);
                 return;
               }
               for (const job of failedJobs) {
                 const failedSteps = (job.steps ?? []).filter((step) => step.conclusion === 'failure');
                 const checkoutOnly = failedSteps.length > 0 && failedSteps.every((step) => /checkout/i.test(step.name));
                 if (!checkoutOnly) {
-                  core.setFailed(`Newer run ${run.id} has a non-checkout failure in job ${job.name}.`);
+                  core.setFailed(`Newer source run ${run.id} has a non-checkout failure in job ${job.name}.`);
                   return;
                 }
               }
-              core.info(`Accepted newer run ${run.id} as checkout-only lifecycle failure after PR merge.`);
+              core.info(`Accepted newer source run ${run.id} as checkout-only lifecycle failure after PR merge.`);
             }
 
-            core.info(`Accepted exact-head Application CI Run ${acceptedRun.id} with Required 6/6 SUCCESS.`);
+            const targetStatuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner, repo: context.repo.repo, ref: targetSha, per_page: 100,
+            });
+            const targetByRun = new Map();
+            for (const status of targetStatuses) {
+              const runMatch = String(status.target_url ?? '').match(/\/actions\/runs\/(\d+)/);
+              if (!runMatch) continue;
+              const runId = runMatch[1];
+              if (!targetByRun.has(runId)) targetByRun.set(runId, new Map());
+              const contexts = targetByRun.get(runId);
+              const previous = contexts.get(status.context);
+              if (!previous || Number(status.id) > Number(previous.id)) contexts.set(status.context, status);
+            }
+
+            const targetRuns = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head_sha: targetSha,
+              per_page: 100,
+            });
+            const targetApplicationRuns = targetRuns
+              .filter((run) =>
+                run.head_sha.toLowerCase() === targetSha &&
+                run.path === '.github/workflows/futures-public-network-smoke.yml' &&
+                (run.event === 'push' || run.event === 'workflow_dispatch'))
+              .sort((a, b) => Number(b.id) - Number(a.id));
+            const targetAcceptedRun = targetApplicationRuns[0] ?? null;
+            if (!targetAcceptedRun) {
+              core.setFailed('No exact current main Application CI run exists for the activation target.');
+              return;
+            }
+            if (targetAcceptedRun.status !== 'completed' || targetAcceptedRun.conclusion !== 'success') {
+              core.setFailed(`Latest exact current main Application CI Run ${targetAcceptedRun.id} is not terminal SUCCESS: ${targetAcceptedRun.status}/${targetAcceptedRun.conclusion}`);
+              return;
+            }
+            const targetContexts = targetByRun.get(String(targetAcceptedRun.id));
+            if (!targetContexts || !required.every((name) => targetContexts.get(name)?.state === 'success')) {
+              core.setFailed(`Latest exact current main Application CI Run ${targetAcceptedRun.id} does not have coherent Required CI 6/6 SUCCESS.`);
+              return;
+            }
+
+            const mainAfterCi = await github.rest.repos.getBranch({
+              owner: context.repo.owner, repo: context.repo.repo, branch: 'main',
+            });
+            if (mainAfterCi.data.commit.sha.toLowerCase() !== targetSha) {
+              core.setFailed(`Current main moved during activation authorization: expected ${targetSha}, found ${mainAfterCi.data.commit.sha.toLowerCase()}`);
+              return;
+            }
+
+            core.info(`Accepted source exact-head Application CI Run ${acceptedRun.id} with Required 6/6 SUCCESS.`);
+            core.info(`Accepted Exact current main Required CI Run ${targetAcceptedRun.id} with Required 6/6 SUCCESS.`);
             core.setOutput('target_sha', targetSha);
             core.setOutput('research_head_sha', headSha);
             core.setOutput('source_merge_sha', sourceMergeSha);
-            core.setOutput('application_run_id', String(acceptedRun.id));
+            core.setOutput('source_application_run_id', String(acceptedRun.id));
+            core.setOutput('application_run_id', String(targetAcceptedRun.id));
+            core.setOutput('target_application_run_id', String(targetAcceptedRun.id));
 
       - uses: actions/checkout@v4
         with:
@@ -281,7 +338,9 @@ jobs:
       TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
       RESEARCH_HEAD_SHA: ${{ needs.authorize.outputs.research_head_sha }}
       SOURCE_MERGE_SHA: ${{ needs.authorize.outputs.source_merge_sha }}
+      SOURCE_APPLICATION_RUN_ID: ${{ needs.authorize.outputs.source_application_run_id }}
       APPLICATION_RUN_ID: ${{ needs.authorize.outputs.application_run_id }}
+      TARGET_APPLICATION_RUN_ID: ${{ needs.authorize.outputs.target_application_run_id }}
       SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
       SSH_USER: ${{ secrets.PROD_SSH_USER }}
       SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
@@ -359,7 +418,9 @@ jobs:
                 `target_sha: ${process.env.TARGET_SHA}`,
                 `source_pr_head: ${process.env.RESEARCH_HEAD_SHA}`,
                 `source_merge_sha: ${process.env.SOURCE_MERGE_SHA}`,
+                `source_application_ci_run: ${process.env.SOURCE_APPLICATION_RUN_ID}`,
                 `application_ci_run: ${process.env.APPLICATION_RUN_ID}`,
+                `target_application_ci_run: ${process.env.TARGET_APPLICATION_RUN_ID}`,
                 'exact_main_research_self_check: success',
                 'timers: fast-historical=enabled; long-history=enabled; forward=enabled',
                 'existing_app_deploy_mutation: 0',
