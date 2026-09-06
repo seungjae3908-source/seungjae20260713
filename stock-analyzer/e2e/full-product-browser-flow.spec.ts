@@ -108,7 +108,7 @@ test('real user path stays coherent from login through session expiry', async ({
 
   await openMenuItem(page, '정보', '포트폴리오');
   await expect(page).toHaveURL(/\/portfolio$/u);
-  await expect(page.getByRole('heading', { name: '내 포트폴리오', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '포트폴리오', exact: true })).toBeVisible();
   await expect(page.getByTestId('portfolio-data-quality')).toContainText('PARTIAL');
 
   await openMenuItem(page, '기술', '모의매매');
@@ -127,13 +127,13 @@ test('real user path stays coherent from login through session expiry', async ({
   await expect(page.getByTestId('research-overview-tab')).toBeVisible();
 
   await openMenuItem(page, '정보', '포트폴리오');
-  await expect(page.getByRole('heading', { name: '내 포트폴리오', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '포트폴리오', exact: true })).toBeVisible();
 
   fixtures.expireSession();
   await ageBrowserSession(page);
   await page.reload();
   await expect(page.getByLabel('아이디')).toBeVisible();
-  await expect(page.getByRole('heading', { name: '내 포트폴리오', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: '포트폴리오', exact: true })).toHaveCount(0);
   await expect(page.getByTestId('portfolio-data-quality')).toHaveCount(0);
 });
 
