@@ -1,0 +1,345 @@
+name: Research Dashboard Overview Read-only Diagnostics
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/research-dashboard-overview-readback.yml
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: read
+  statuses: read
+
+concurrency:
+  group: research-dashboard-overview-readback
+  cancel-in-progress: false
+
+jobs:
+  validate-workflow:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Validate read-only diagnostics contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          workflow=.github/workflows/research-dashboard-overview-readback.yml
+          grep -Fq '/readback-research-dashboard-overview ' "$workflow"
+          grep -Fq 'http://127.0.0.1:18090/api/research/overview' "$workflow"
+          grep -Fq 'effectiveIndependentN !== 15' "$workflow"
+          grep -Fq 'independentBuyN !== 10' "$workflow"
+          grep -Fq 'independentSellN !== 5' "$workflow"
+          grep -Fq "counts.TRAIN !== 15" "$workflow"
+          grep -Fq "counts.OOS !== 0" "$workflow"
+          grep -Fq "li.fullCostReady !== false" "$workflow"
+          grep -Fq "li.evidenceComplete !== 0" "$workflow"
+          grep -Fq "li.executionAuthority !== 'NONE'" "$workflow"
+          grep -Fq 'production_server_write: 0' "$workflow"
+          grep -Fq 'production_process_restart: 0' "$workflow"
+          grep -Fq 'production_deploy: 0' "$workflow"
+          grep -Fq 'production_db_mutation: 0' "$workflow"
+          grep -Fq 'secret_env_mutation: 0' "$workflow"
+          if grep -Eiq '(systemctl[[:space:]]+(start|stop|restart|enable|disable)|pm2[[:space:]]+(start|stop|restart|delete)|rsync[[:space:]]|scp[[:space:]]|psql[[:space:]]|kubectl[[:space:]]|docker[[:space:]]+(run|exec|compose)|curl[^\n]*(--request|-X)[[:space:]]*(POST|PUT|PATCH|DELETE))' "$workflow"; then
+            echo 'Read-only workflow contains a prohibited mutation command.' >&2
+            exit 1
+          fi
+          npm --prefix research-dashboard test
+
+  authorize:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      !github.event.issue.pull_request &&
+      github.event.comment.user.login == github.repository_owner &&
+      startsWith(github.event.comment.body, '/readback-research-dashboard-overview ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    outputs:
+      target_sha: ${{ steps.gate.outputs.target_sha }}
+      activated_sha: ${{ steps.gate.outputs.activated_sha }}
+      hub_issue: ${{ steps.hub.outputs.active_issue }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Resolve canonical Central Hub
+        id: hub
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 scripts/agent_hub_rollover_v2.py resolve
+      - name: Authorize exact current main, Required 6/6, and prior Dashboard activation
+        id: gate
+        uses: actions/github-script@v7
+        env:
+          HUB_ISSUE_NUMBER: ${{ steps.hub.outputs.active_issue }}
+        with:
+          script: |
+            const body = String(context.payload.comment?.body ?? '').trim();
+            const match = body.match(/^\/readback-research-dashboard-overview ([0-9a-f]{40})$/i);
+            if (!match) {
+              core.setFailed('Expected /readback-research-dashboard-overview <40-char-main-sha>');
+              return;
+            }
+            const canonicalHub = Number(process.env.HUB_ISSUE_NUMBER ?? 0);
+            const eventIssue = Number(context.payload.issue?.number ?? 0);
+            if (!Number.isInteger(canonicalHub) || canonicalHub <= 0 || eventIssue !== canonicalHub) {
+              core.setFailed(`Readback command must be posted on canonical Hub #${canonicalHub || 'UNKNOWN'}; got #${eventIssue || 'UNKNOWN'}.`);
+              return;
+            }
+            const targetSha = match[1].toLowerCase();
+            const main = await github.rest.repos.getBranch({ owner: context.repo.owner, repo: context.repo.repo, branch: 'main' });
+            if (String(main.data.commit.sha).toLowerCase() !== targetSha) {
+              core.setFailed(`Target is not exact current main: ${targetSha}`);
+              return;
+            }
+
+            const required = [
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: targetSha,
+              per_page: 100,
+            });
+            const latest = new Map();
+            for (const status of statuses.sort((a, b) => Number(b.id) - Number(a.id))) {
+              if (!latest.has(status.context)) latest.set(status.context, status);
+            }
+            const missing = required.filter((name) => latest.get(name)?.state !== 'success');
+            if (missing.length) {
+              core.setFailed(`Exact-main Required statuses are not 6/6 SUCCESS: ${missing.join(', ')}`);
+              return;
+            }
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: canonicalHub,
+              per_page: 100,
+            });
+            let activatedSha = null;
+            for (const comment of [...comments].reverse()) {
+              const receipt = String(comment.body ?? '');
+              if (!receipt.includes('[RESEARCH_DASHBOARD_INTERNAL_ACTIVATION]') || !receipt.includes('status: success')) continue;
+              const activationMatch = receipt.match(/(?:^|\n)target_sha:\s*([0-9a-f]{40})(?:\n|$)/i);
+              if (!activationMatch) continue;
+              const candidate = activationMatch[1].toLowerCase();
+              try {
+                const comparison = await github.rest.repos.compareCommits({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  base: candidate,
+                  head: targetSha,
+                });
+                if (['ahead', 'identical'].includes(comparison.data.status)) {
+                  activatedSha = candidate;
+                  break;
+                }
+              } catch {
+                // Keep searching older successful activation receipts.
+              }
+            }
+            if (!activatedSha) {
+              core.setFailed('No successful Research Dashboard activation receipt is an ancestor of exact current main.');
+              return;
+            }
+            core.setOutput('target_sha', targetSha);
+            core.setOutput('activated_sha', activatedSha);
+
+  readback:
+    needs: authorize
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
+      ACTIVATED_SHA: ${{ needs.authorize.outputs.activated_sha }}
+      HUB_ISSUE_NUMBER: ${{ needs.authorize.outputs.hub_issue }}
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+    steps:
+      - name: Configure SSH on GitHub runner only
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+      - name: GET Production Research Dashboard overview without server mutation
+        id: overview
+        shell: bash
+        env:
+          OVERVIEW_PATH: ${{ runner.temp }}/research-dashboard-overview.json
+        run: |
+          set -Eeuo pipefail
+          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" \
+            "curl --fail --silent --show-error --max-time 8 http://127.0.0.1:18090/api/research/overview" \
+            > "$OVERVIEW_PATH"
+          test -s "$OVERVIEW_PATH"
+          OVERVIEW_PATH="$OVERVIEW_PATH" node <<'NODE'
+          const fs = require('node:fs');
+          const path = process.env.OVERVIEW_PATH;
+          const v = JSON.parse(fs.readFileSync(path, 'utf8'));
+          const li = v?.research?.liquidityIndependence;
+          const counts = li?.frozenSplitCounts ?? {};
+          const fail = (message) => { throw new Error(message); };
+
+          if (v?.schemaVersion !== 'research-dashboard-overview-v1') fail('overview schema mismatch');
+          if (v?.safety?.readOnlyDashboard !== true) fail('dashboard read-only safety mismatch');
+          if (v?.safety?.liveTrading !== false) fail('live trading must remain false');
+          if (v?.safety?.privateApi !== false) fail('private API must remain false');
+          if (v?.safety?.orderAuthority !== false) fail('order authority must remain false');
+          if (v?.safety?.forbiddenAuthorityObserved !== false) fail('forbidden authority observed');
+          if (v?.profitability?.proven !== false) fail('profitability must remain unproven');
+          if (li?.present !== true || li?.status !== 'PRESENT') fail('V3 independence summary is not PRESENT');
+          if (li.genuineScheduledSlotN !== 15) fail(`genuineScheduledSlotN mismatch: ${li.genuineScheduledSlotN}`);
+          if (li.effectiveIndependentN !== 15) fail(`effectiveIndependentN mismatch: ${li.effectiveIndependentN}`);
+          if (li.independentBuyN !== 10) fail(`independentBuyN mismatch: ${li.independentBuyN}`);
+          if (li.independentSellN !== 5) fail(`independentSellN mismatch: ${li.independentSellN}`);
+          if (counts.TRAIN !== 15) fail(`TRAIN mismatch: ${counts.TRAIN}`);
+          if (counts.TRAIN_BUY !== 10) fail(`TRAIN_BUY mismatch: ${counts.TRAIN_BUY}`);
+          if (counts.TRAIN_SELL !== 5) fail(`TRAIN_SELL mismatch: ${counts.TRAIN_SELL}`);
+          if (counts.VALIDATION !== 0 || counts.VALIDATION_BUY !== 0 || counts.VALIDATION_SELL !== 0) fail('VALIDATION counts must remain zero');
+          if (counts.OOS !== 0) fail(`OOS mismatch: ${counts.OOS}`);
+          if (counts.OOS_BUY !== 0 || counts.OOS_SELL !== 0) fail('OOS side counts must remain zero');
+          if (li.oosOutcomeCredit !== 0) fail(`oosOutcomeCredit mismatch: ${li.oosOutcomeCredit}`);
+          if (li.calibrationArtifactProduced !== false) fail('calibrationArtifactProduced must remain false');
+          if (li.liquidityImpactStatus !== 'BLOCKED_DATA') fail(`liquidityImpactStatus mismatch: ${li.liquidityImpactStatus}`);
+          if (li.fullCostReady !== false) fail('fullCostReady must remain false');
+          if (li.evidenceComplete !== 0) fail(`evidenceComplete mismatch: ${li.evidenceComplete}`);
+          if (li.executionAuthority !== 'NONE') fail(`executionAuthority mismatch: ${li.executionAuthority}`);
+
+          const outputs = {
+            effective_n: li.effectiveIndependentN,
+            buy_n: li.independentBuyN,
+            sell_n: li.independentSellN,
+            train_n: counts.TRAIN,
+            validation_n: counts.VALIDATION,
+            oos_n: counts.OOS,
+            oos_outcome_credit: li.oosOutcomeCredit,
+            full_cost_ready: li.fullCostReady,
+            evidence_complete: li.evidenceComplete,
+            execution_authority: li.executionAuthority,
+          };
+          for (const [key, value] of Object.entries(outputs)) {
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${value}\n`);
+          }
+          NODE
+      - name: Report verified readback to canonical Central Hub
+        if: success()
+        uses: actions/github-script@v7
+        env:
+          EFFECTIVE_N: ${{ steps.overview.outputs.effective_n }}
+          BUY_N: ${{ steps.overview.outputs.buy_n }}
+          SELL_N: ${{ steps.overview.outputs.sell_n }}
+          TRAIN_N: ${{ steps.overview.outputs.train_n }}
+          VALIDATION_N: ${{ steps.overview.outputs.validation_n }}
+          OOS_N: ${{ steps.overview.outputs.oos_n }}
+          OOS_OUTCOME_CREDIT: ${{ steps.overview.outputs.oos_outcome_credit }}
+          FULL_COST_READY: ${{ steps.overview.outputs.full_cost_ready }}
+          EVIDENCE_COMPLETE: ${{ steps.overview.outputs.evidence_complete }}
+          EXECUTION_AUTHORITY: ${{ steps.overview.outputs.execution_authority }}
+        with:
+          script: |
+            const issueNumber = Number(process.env.HUB_ISSUE_NUMBER ?? 0);
+            if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+              core.setFailed('Canonical Hub issue number is unavailable.');
+              return;
+            }
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body: [
+                '[RESEARCH_DASHBOARD_OVERVIEW_READBACK]',
+                'status: success',
+                `target_main_sha: ${process.env.TARGET_SHA}`,
+                `activated_dashboard_sha: ${process.env.ACTIVATED_SHA}`,
+                `workflow_run: ${context.runId}`,
+                'endpoint: 127.0.0.1:18090/api/research/overview',
+                `effective_independent_n: ${process.env.EFFECTIVE_N}`,
+                `independent_buy_n: ${process.env.BUY_N}`,
+                `independent_sell_n: ${process.env.SELL_N}`,
+                `train_n: ${process.env.TRAIN_N}`,
+                `validation_n: ${process.env.VALIDATION_N}`,
+                `oos_n: ${process.env.OOS_N}`,
+                `oos_outcome_credit: ${process.env.OOS_OUTCOME_CREDIT}`,
+                `full_cost_ready: ${process.env.FULL_COST_READY}`,
+                `evidence_complete: ${process.env.EVIDENCE_COMPLETE}`,
+                `execution_authority: ${process.env.EXECUTION_AUTHORITY}`,
+                'profitability_proven: false',
+                'production_server_write: 0',
+                'production_process_restart: 0',
+                'production_deploy: 0',
+                'production_db_mutation: 0',
+                'secret_env_mutation: 0',
+                'private_trading_api: false',
+                'live_trading: false',
+                'real_orders: 0',
+              ].join('\n'),
+            });
+      - name: Report fail-closed readback to canonical Central Hub
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issueNumber = Number(process.env.HUB_ISSUE_NUMBER ?? 0);
+            if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+              core.setFailed('Canonical Hub issue number is unavailable.');
+              return;
+            }
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body: [
+                '[RESEARCH_DASHBOARD_OVERVIEW_READBACK]',
+                'status: failed_closed',
+                `target_main_sha: ${process.env.TARGET_SHA}`,
+                `activated_dashboard_sha: ${process.env.ACTIVATED_SHA}`,
+                `workflow_run: ${context.runId}`,
+                'evidence_credit: 0',
+                'profitability_proven: false',
+                'production_server_write: 0',
+                'production_process_restart: 0',
+                'production_deploy: 0',
+                'production_db_mutation: 0',
+                'secret_env_mutation: 0',
+                'private_trading_api: false',
+                'live_trading: false',
+                'real_orders: 0',
+              ].join('\n'),
+            });
