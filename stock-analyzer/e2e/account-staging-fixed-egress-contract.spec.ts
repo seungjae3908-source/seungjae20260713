@@ -16,6 +16,10 @@ test('private account evidence keeps GitHub-hosted isolation and uses Staging on
   expect(workflow).toContain('runs-on: ubuntu-latest');
   expect(workflow).not.toContain('runs-on: [self-hosted');
   expect(workflow).toContain('EXPECTED_EGRESS_IP: ${{ vars.STAGING_ACCOUNT_EVIDENCE_EGRESS_IP }}');
+  expect(workflow).not.toContain('${{ runner.temp }}');
+  expect(workflow).toContain('SSH_KEY_PATH: ${{ github.workspace }}/.account-evidence-id_ed25519');
+  expect(workflow).toContain('SSH_KNOWN_HOSTS_PATH: ${{ github.workspace }}/.account-evidence-known_hosts');
+  expect(workflow).toContain('SSH_CONTROL_SOCKET: ${{ github.workspace }}/.account-evidence-ssh.sock');
   expect(workflow).toContain('https://api.ipify.org');
   expect(workflow).toContain('"$ACTUAL_EGRESS_IP" == "$EXPECTED_EGRESS_IP"');
   expect(workflow).toContain('StrictHostKeyChecking=yes');
