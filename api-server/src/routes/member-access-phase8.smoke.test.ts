@@ -5,7 +5,7 @@ import express from 'express';
 import type { AddressInfo } from 'node:net';
 import { requireAuthenticated, requireCapability } from '../middleware/auth';
 import { MEMBER_CAPABILITIES, MEMBER_PERMISSION_MATRIX } from '../../../packages/member-access/src/index.js';
-import { classifyAdminReadFailure } from './admin';
+import { classifyAdminReadFailure, RESEARCH_OVERVIEW_TIMEOUT_MS } from './admin';
 
 async function startServer() {
   const app = express();
@@ -149,7 +149,7 @@ test('requireAuthenticated denies approved inactive member after valid Supabase 
   assert.equal(result.req.accessToken, undefined);
 });
 
-for (const status of ['suspended', 'withdrawn']) {
+for (const status of ['suspended', 'revoked', 'withdrawn', 'disabled', 'inactive']) {
   test(`requireAuthenticated denies ${status} member after valid Supabase identity and fresh profile reload`, async () => {
     const result = await runRequireAuthenticated({ profile: memberProfile({ status }) });
     assert.equal(result.nextCalls, 0);
@@ -162,17 +162,21 @@ for (const status of ['suspended', 'withdrawn']) {
   });
 }
 
-test('requireAuthenticated preserves INVALID_SESSION behavior and does not query profile', async () => {
-  const result = await runRequireAuthenticated({
-    authUser: null,
-    authError: { message: 'invalid token' },
+for (const [sessionCase, authError] of [
+  ['invalid token', { message: 'invalid token' }],
+  ['expired session', { message: 'JWT expired' }],
+]) {
+  test(`requireAuthenticated denies ${sessionCase} without querying profile`, async () => {
+    const result = await runRequireAuthenticated({ authUser: null, authError });
+    assert.equal(result.nextCalls, 0);
+    assert.equal(result.calls.getUser, 1);
+    assert.equal(result.calls.profile, 0);
+    assert.equal(result.state.statusCode, 401);
+    assert.deepEqual(result.state.body, { error: 'INVALID_SESSION' });
+    assert.equal(result.req.member, undefined);
+    assert.equal(result.req.accessToken, undefined);
   });
-  assert.equal(result.nextCalls, 0);
-  assert.equal(result.calls.getUser, 1);
-  assert.equal(result.calls.profile, 0);
-  assert.equal(result.state.statusCode, 401);
-  assert.deepEqual(result.state.body, { error: 'INVALID_SESSION' });
-});
+}
 
 test('requireAuthenticated preserves PROFILE_NOT_FOUND behavior after valid Supabase identity', async () => {
   const result = await runRequireAuthenticated({ profile: null });
@@ -245,4 +249,10 @@ test('admin audit read storage failure is unavailable, never an empty result or 
     error: 'ADMIN_AUDIT_STORAGE_UNAVAILABLE',
     message: '권한 변경 감사 저장소를 확인할 수 없습니다.',
   });
+});
+
+test('research dashboard overview proxy deadline covers the verified loopback readback and stays bounded', () => {
+  assert.equal(RESEARCH_OVERVIEW_TIMEOUT_MS, 10_000);
+  assert.ok(RESEARCH_OVERVIEW_TIMEOUT_MS > 8_000);
+  assert.ok(RESEARCH_OVERVIEW_TIMEOUT_MS <= 15_000);
 });
