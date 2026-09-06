@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { KeyRound, RefreshCw, ShieldCheck, WalletCards, X } from 'lucide-react';
+import { Eye, EyeOff, KeyRound, RefreshCw, ShieldCheck, WalletCards, X } from 'lucide-react';
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { resolveEvidenceDisplay } from '@/lib/evidence-display';
 
@@ -57,6 +57,15 @@ function knownNonZeroCount<T>(rows: T[], select: (row: T) => number | null) {
 
 function isKnownNonZero(value: number | null) {
   return typeof value === 'number' && Number.isFinite(value) && value !== 0;
+}
+
+function credentialKnownConfigured(snapshot?: CanonicalAccountSnapshot) {
+  if (!snapshot) return false;
+  return snapshot.connected === true
+    || snapshot.status === 'CONFIGURED_UNVERIFIED'
+    || snapshot.status === 'STALE'
+    || snapshot.status === 'AUTH_FAILED'
+    || snapshot.status === 'RATE_LIMITED';
 }
 
 function statusLabel(snapshot?: CanonicalAccountSnapshot) {
@@ -125,6 +134,7 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
     document.addEventListener('visibilitychange', onVisibility); window.addEventListener('online', onOnline);
     return () => {
       requestSequence.current += 1;
+      controllerRef.current?.abort();
       controllerRef.current = null;
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('online', onOnline);
@@ -147,7 +157,7 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
       const result = await jsonRequest<{ configured: boolean; credentialsReturned: false }>(`/api/accounts/read-only/credentials/${editing}`, { method: 'PUT', body: JSON.stringify({ purpose: 'read_only', permissions: ['read'], credentials: payload }) });
       if (result.configured !== true || result.credentialsReturned !== false) throw new Error('READONLY_CREDENTIAL_SAVE_FAILED');
       const providerLabel = editing === 'toss' ? 'Toss' : editing === 'upbit' ? 'Upbit' : 'Bitget';
-      setCredentials(EMPTY_CREDENTIALS); setEditing(null); setSaveMessage(`${providerLabel} 조회 전용 키를 암호화 저장했습니다.`); await refresh();
+      setCredentials(EMPTY_CREDENTIALS); setEditing(null); setSaveMessage(`저장 완료 · ${providerLabel} 조회 전용 키를 암호화 Vault에 저장했습니다.`); await refresh();
     } catch (cause) { setSaveMessage(cause instanceof Error ? cause.message : '조회 키를 저장하지 못했습니다.'); }
     finally { setSaving(false); }
   }
@@ -159,6 +169,7 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
   const visibleTossPositions = tossPositions.filter((row) => isKnownNonZero(row.quantity));
   const visibleUpbitBalances = upbitBalances.filter((row) => isKnownNonZero(row.total));
   const visibleBitgetPositions = bitgetPositions.filter((row) => isKnownNonZero(row.quantity));
+  const editingCredentialConfigured = editing ? credentialKnownConfigured(snapshots[editing]) : false;
 
   return <section data-testid="brokerage-account-connections" className="mt-4 min-w-0 rounded-3xl border border-card-border bg-card p-4 text-left shadow-sm">
     <div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><div className="flex items-center gap-2"><WalletCards className="h-5 w-5 shrink-0 text-primary" /><h2 className="text-sm font-extrabold">내 실계좌 · 조회 전용 연결</h2></div><p className="mt-1 break-keep text-xs leading-relaxed text-muted-foreground">Toss · Upbit · Bitget 3개만 연결합니다. 내 계정의 암호화 Vault로 잔고·보유·포지션만 조회하며 주문·취소·이체·출금은 실행하지 않습니다.</p></div>
@@ -181,11 +192,11 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
 
     <p className="mt-3 text-[11px] text-muted-foreground">최근 확인 {latestCheckedAt(enabledProviders().map((provider) => snapshots[provider]))}</p>
     {editing ? <div className="fixed inset-0 z-50 flex items-end bg-black/55 p-3 sm:items-center sm:justify-center" role="presentation"><div role="dialog" aria-modal="true" aria-label={`${providerLabel(editing)} 조회 연결 설정`} className="max-h-[calc(100dvh-1.5rem)] w-full max-w-md overflow-y-auto rounded-3xl border border-card-border bg-card p-4 shadow-2xl"><div className="flex items-center justify-between gap-3"><div className="min-w-0"><h3 className="truncate text-base font-extrabold">{providerLabel(editing)} 조회 전용 연결</h3><p className="mt-1 text-xs text-muted-foreground">API 권한은 조회 전용으로 발급하고 거래·출금 권한은 켜지 마세요.</p></div><button type="button" aria-label="연결 설정 닫기" onClick={() => setEditing(null)} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-card-border"><X className="h-4 w-4" /></button></div><div className="mt-4 space-y-3">
-      <CredentialField testId={`${editing}-credential-primary`} label={editing === 'toss' ? 'Client ID' : editing === 'upbit' ? 'Access Key' : 'API Key'} value={credentials.first} onChange={(value) => setCredentials((current) => ({ ...current, first: value }))} />
-      <CredentialField testId={`${editing}-credential-secret`} label={editing === 'toss' ? 'Client Secret' : 'Secret Key'} value={credentials.second} onChange={(value) => setCredentials((current) => ({ ...current, second: value }))} />
+      <CredentialField testId={`${editing}-credential-primary`} label={editing === 'toss' ? 'Client ID' : editing === 'upbit' ? 'Access Key' : 'API Key'} value={credentials.first} onChange={(value) => setCredentials((current) => ({ ...current, first: value }))} configured={editingCredentialConfigured} />
+      <CredentialField testId={`${editing}-credential-secret`} label={editing === 'toss' ? 'Client Secret' : 'Secret Key'} value={credentials.second} onChange={(value) => setCredentials((current) => ({ ...current, second: value }))} configured={editingCredentialConfigured} />
       {editing === 'toss' ? <CredentialField testId="toss-account-seq" label="Account Seq (계좌가 여러 개인 경우만)" value={credentials.third} onChange={(value) => setCredentials((current) => ({ ...current, third: value }))} optional /> : null}
-      {editing === 'bitget' ? <CredentialField testId="bitget-credential-passphrase" label="Passphrase" value={credentials.third} onChange={(value) => setCredentials((current) => ({ ...current, third: value }))} /> : null}
-    </div><div className="mt-4 flex items-center gap-2 rounded-2xl bg-secondary p-3 text-xs text-muted-foreground"><KeyRound className="h-4 w-4 shrink-0" /><span>입력값은 사용자별 계좌 조회 전용 암호화 Vault에 저장되며 화면/API 응답으로 다시 노출하지 않습니다.</span></div><button data-testid={`${editing}-save-connection`} type="button" disabled={saving} onClick={() => void saveConnection()} className="mt-4 min-h-12 w-full rounded-2xl bg-primary px-4 text-sm font-extrabold text-primary-foreground disabled:opacity-50">{saving ? '저장 중…' : '조회 전용으로 암호화 저장'}</button></div></div> : null}
+      {editing === 'bitget' ? <CredentialField testId="bitget-credential-passphrase" label="Passphrase" value={credentials.third} onChange={(value) => setCredentials((current) => ({ ...current, third: value }))} configured={editingCredentialConfigured} /> : null}
+    </div><div className="mt-4 flex items-center gap-2 rounded-2xl bg-secondary p-3 text-xs text-muted-foreground"><KeyRound className="h-4 w-4 shrink-0" /><span>저장된 키는 원문을 다시 불러오지 않고 저장 여부만 표시합니다. 새 값을 입력해 저장하면 기존 조회 전용 키를 안전하게 교체합니다.</span></div><button data-testid={`${editing}-save-connection`} type="button" aria-busy={saving} disabled={saving} onClick={() => void saveConnection()} className="mt-4 min-h-12 w-full rounded-2xl bg-primary px-4 text-sm font-extrabold text-primary-foreground disabled:opacity-50">{saving ? '저장 중…' : '조회 전용으로 암호화 저장'}</button></div></div> : null}
   </section>;
 }
 
@@ -194,4 +205,8 @@ function latestCheckedAt(values: Array<CanonicalAccountSnapshot | undefined>) { 
 function ErrorLine({ value }: { value?: string | null }) { if (!value || value === 'ACCOUNT_READ_DISABLED' || value === 'ACCOUNT_NOT_CONFIGURED') return null; return <p className="mt-2 break-words text-xs font-bold text-warning">{value}</p>; }
 function Metric({ label, value }: { label: string; value: string }) { return <div className="min-w-0 rounded-xl bg-secondary/60 p-2"><p className="truncate text-[10px] text-muted-foreground">{label}</p><p className="mt-1 truncate font-extrabold">{value}</p></div>; }
 function SetupButton({ label, onClick }: { label: string; onClick: () => void }) { return <button type="button" onClick={onClick} className="mt-3 min-h-11 w-full rounded-xl border border-card-border px-3 text-xs font-extrabold">{label}</button>; }
-function CredentialField({ testId, label, value, onChange, optional = false }: { testId: string; label: string; value: string; onChange: (value: string) => void; optional?: boolean }) { return <label className="block"><span className="text-xs font-extrabold text-muted-foreground">{label}{optional ? ' · 선택' : ''}</span><input data-testid={testId} type="password" autoComplete="off" value={value} onChange={(event) => onChange(event.currentTarget.value)} className="mt-2 h-12 w-full rounded-2xl border border-card-border bg-background px-4 text-sm font-bold outline-none focus:border-primary" /></label>; }
+function CredentialField({ testId, label, value, onChange, optional = false, configured = false }: { testId: string; label: string; value: string; onChange: (value: string) => void; optional?: boolean; configured?: boolean }) {
+  const [revealed, setRevealed] = useState(false);
+  const placeholder = configured ? '•••••••• 저장됨 · 변경 시 새 값 입력' : `${label} 입력`;
+  return <label className="block"><span className="text-xs font-extrabold text-muted-foreground">{label}{optional ? ' · 선택' : ''}</span><div className="relative mt-2"><input data-testid={testId} aria-label={label} type={revealed ? 'text' : 'password'} autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder={placeholder} value={value} onChange={(event) => onChange(event.currentTarget.value)} className="h-12 w-full rounded-2xl border border-card-border bg-background px-4 pr-12 text-sm font-bold outline-none placeholder:text-muted-foreground/70 focus:border-primary" /><button data-testid={`${testId}-visibility`} type="button" disabled={!value} aria-label={`${label} ${revealed ? '숨기기' : '보기'}`} onClick={() => setRevealed((current) => !current)} className="absolute inset-y-0 right-1 flex w-11 items-center justify-center rounded-xl text-muted-foreground disabled:opacity-35">{revealed ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button></div><span className="mt-1 block text-[11px] leading-relaxed text-muted-foreground">{value ? '입력됨 · 아직 저장 전입니다.' : configured ? '기존 키가 암호화 저장되어 있습니다. 원문은 보안을 위해 다시 표시하지 않습니다.' : '조회 전용 키를 입력해 주세요.'}</span></label>;
+}
