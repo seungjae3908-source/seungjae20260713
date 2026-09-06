@@ -1,28 +1,58 @@
 name: Staging Account Read-only Evidence
+run-name: Account read-only evidence ${{ inputs.sha || 'registration' }} source-comment-${{ inputs.source_comment_id || github.run_id }}
 
 on:
-  issue_comment:
-    types: [created]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Exact current main SHA approved by the owner command
+        required: true
+        type: string
+      source_comment_id:
+        description: Release Control #23 owner command comment ID
+        required: true
+        type: string
+  pull_request:
+    paths:
+      - '.github/workflows/staging-account-readonly-evidence-dispatch.yml'
+      - '.github/workflows/staging-dispatch-bridge.yml'
+      - 'stock-analyzer/e2e/account-staging-fixed-egress-contract.spec.ts'
 
 permissions:
   actions: read
   contents: read
+  issues: read
 
 concurrency:
   group: >-
-    ${{ github.event.issue.number == 23 &&
-        github.event.comment.user.login == github.repository_owner &&
-        startsWith(github.event.comment.body, '/run-staging-account-readonly ') &&
-        'staging-account-readonly-evidence' ||
-        format('staging-account-readonly-evidence-skip-{0}', github.run_id) }}
+    ${{ github.event_name == 'workflow_dispatch' &&
+        format('staging-account-readonly-evidence-{0}', inputs.sha) ||
+        format('staging-account-readonly-evidence-registration-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:
+  registration-contract:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Prove dispatch-target registration without private access
+        run: |
+          set -Eeuo pipefail
+          [[ "$GITHUB_EVENT_NAME" == pull_request ]]
+          test -f .github/workflows/staging-account-readonly-evidence-dispatch.yml
+          test -f .github/workflows/staging-dispatch-bridge.yml
+          echo 'Bridge-dispatched account evidence workflow registration accepted by GitHub Actions.'
+
   account-readonly-evidence:
     if: >-
-      github.event.issue.number == 23 &&
-      github.event.comment.user.login == github.repository_owner &&
-      startsWith(github.event.comment.body, '/run-staging-account-readonly ')
+      github.event_name == 'workflow_dispatch' &&
+      github.actor == 'github-actions[bot]' &&
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: staging
@@ -34,9 +64,48 @@ jobs:
       SSH_CONTROL_SOCKET: ${{ github.workspace }}/.account-evidence-ssh.sock
 
     steps:
+      - name: Re-prove trusted Release Control owner command
+        id: target
+        uses: actions/github-script@v9
+        env:
+          TARGET_SHA_INPUT: ${{ inputs.sha }}
+          SOURCE_COMMENT_ID: ${{ inputs.source_comment_id }}
+        with:
+          script: |
+            const targetSha = String(process.env.TARGET_SHA_INPUT ?? '').trim().toLowerCase();
+            const sourceCommentId = Number(process.env.SOURCE_COMMENT_ID);
+            if (!/^[0-9a-f]{40}$/.test(targetSha)) {
+              core.setFailed('Exact 40-character target SHA is required.');
+              return;
+            }
+            if (!Number.isSafeInteger(sourceCommentId) || sourceCommentId <= 0) {
+              core.setFailed('Valid Release Control source comment ID is required.');
+              return;
+            }
+            const response = await github.rest.issues.getComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: sourceCommentId,
+            });
+            const comment = response.data;
+            const issueNumber = Number(String(comment.issue_url ?? '').split('/').pop());
+            const expectedBody = `/run-staging-account-readonly ${targetSha} --providers=toss,upbit,bitget`;
+            const valid = issueNumber === 23
+              && comment.user?.login === context.repo.owner
+              && comment.author_association === 'OWNER'
+              && String(comment.body ?? '').trim() === expectedBody;
+            if (!valid) {
+              core.setFailed('Workflow dispatch is not bound to an exact owner-authored Release Control #23 command.');
+              return;
+            }
+            core.setOutput('sha', targetSha);
+            core.setOutput('source_comment_id', String(sourceCommentId));
+
       - uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
+          persist-credentials: false
 
       - uses: pnpm/action-setup@v4
         with:
@@ -48,22 +117,6 @@ jobs:
           node-version: '22'
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
-
-      - name: Parse exact owner command
-        id: target
-        env:
-          COMMENT_BODY: ${{ github.event.comment.body }}
-        run: |
-          node <<'NODE'
-          const fs = require('node:fs');
-          const body = String(process.env.COMMENT_BODY ?? '').trim();
-          const match = /^\/run-staging-account-readonly ([0-9a-f]{40}) --providers=toss,upbit,bitget$/.exec(body);
-          if (!match) {
-            console.error('Exact command required: /run-staging-account-readonly <40-char-sha> --providers=toss,upbit,bitget');
-            process.exit(1);
-          }
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha=${match[1]}\n`);
-          NODE
 
       - name: Require exact current main
         id: main_identity
@@ -329,12 +382,15 @@ jobs:
         if: success()
         env:
           TARGET_SHA: ${{ steps.target.outputs.sha }}
+          SOURCE_COMMENT_ID: ${{ steps.target.outputs.source_comment_id }}
         run: |
           {
             echo '## Staging Account Read-only Evidence'
             echo
             echo "- Exact current main: \`$TARGET_SHA\`"
+            echo "- Release Control source comment ID: \`$SOURCE_COMMENT_ID\`"
             echo '- Evidence mode: `CANONICAL_ACCOUNT_RUNTIME_NO_DB`'
+            echo '- Control-plane ingress: `Staging Dispatch Bridge -> workflow_dispatch`'
             echo '- Execution runner: `GitHub-hosted ubuntu-latest`'
             echo '- Provider network egress: `Staging SSH TCP tunnel`'
             echo '- Provider TLS termination: `GitHub-hosted evidence process`'
