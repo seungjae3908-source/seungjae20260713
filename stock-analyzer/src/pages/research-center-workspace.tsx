@@ -7,7 +7,7 @@ type ResearchWorkspaceView = 'overview' | 'copilot';
 
 const WORKSPACE_TABS = [
   { value: 'overview', label: '연구센터' },
-  { value: 'copilot', label: 'AI 연구 도우미' },
+  { value: 'copilot', label: 'AI Research Copilot' },
 ] as const;
 
 /** Compose the existing owner screen without changing its research semantics. */
