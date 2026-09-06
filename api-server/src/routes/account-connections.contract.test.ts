@@ -3,9 +3,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import path from 'node:path';
+import express from 'express';
+import cors from 'cors';
 
 import { MEMBER_PERMISSION_MATRIX } from '../../../packages/member-access/src/index.js';
-import app from '../app';
 import { buildBrokerCommonState, legacySnapshot } from './account-connections';
 import {
   decryptTradingCredentials,
@@ -21,6 +22,15 @@ const repositoryRoot = process.cwd();
 
 function source(relativePath: string) {
   return readFileSync(path.join(repositoryRoot, relativePath), 'utf8');
+}
+
+function configuredCorsMethods(): string[] {
+  const appSource = source('api-server/src/app.ts');
+  const configuredMethods = appSource.match(/methods:\s*\[([^\]]+)\]/)?.[1];
+  assert.ok(configuredMethods, 'application CORS methods must stay explicitly configured');
+  const methods = [...configuredMethods.matchAll(/['"]([A-Z]+)['"]/g)].map((match) => match[1]);
+  assert.ok(methods.length > 0, 'application CORS methods must contain at least one method');
+  return methods;
 }
 
 function connection(overrides: Partial<ExchangeConnection> = {}): ExchangeConnection {
@@ -251,7 +261,12 @@ test('account credential CORS contract admits PUT without widening the productio
 });
 
 test('account credential route answers a real PUT CORS preflight with PUT allowed', async () => {
-  const server = createServer(app);
+  const preflightApp = express();
+  preflightApp.use(cors({
+    methods: configuredCorsMethods(),
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Auto-Trade-Key', 'X-Device-Session'],
+  }));
+  const server = createServer(preflightApp);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
 
   try {
