@@ -1,8 +1,11 @@
 import { expect, test } from '@playwright/test';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const workflowPath = fileURLToPath(
+  new URL('../../.github/workflows/staging-account-readonly-evidence-v2.yml', import.meta.url),
+);
+const legacyWorkflowPath = fileURLToPath(
   new URL('../../.github/workflows/staging-account-readonly-evidence.yml', import.meta.url),
 );
 const evidenceSourcePath = fileURLToPath(
@@ -12,6 +15,14 @@ const evidenceSourcePath = fileURLToPath(
 test('private account evidence keeps GitHub-hosted isolation and uses Staging only as fixed egress', () => {
   const workflow = readFileSync(workflowPath, 'utf8');
   const evidenceSource = readFileSync(evidenceSourcePath, 'utf8');
+
+  expect(existsSync(legacyWorkflowPath)).toBe(false);
+  expect(workflow).toContain('issue_comment:');
+  expect(workflow).toContain('pull_request:');
+  expect(workflow).toContain("if: github.event_name == 'pull_request'");
+  expect(workflow).toContain("github.event_name == 'issue_comment'");
+  expect(workflow).toContain("github.event.comment.author_association == 'OWNER'");
+  expect(workflow).toContain('Prove workflow registration without private access');
 
   expect(workflow).toContain('runs-on: ubuntu-latest');
   expect(workflow).not.toContain('runs-on: [self-hosted');
