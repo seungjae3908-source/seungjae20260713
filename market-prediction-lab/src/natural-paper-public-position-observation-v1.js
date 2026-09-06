@@ -117,6 +117,8 @@ function positionIdentity(position) {
     signalId: position?.signalId ?? sample.signalId,
     market: position?.market ?? sample.market,
     symbol: position?.symbol ?? sample.symbol,
+    signalTimeframe: sample.timeframe,
+    horizon: sample.horizon,
     direction: position?.direction ?? sample.executionDirection,
     strategyId: position?.strategyId ?? sample.strategyId,
     strategyVersion: position?.strategyVersion ?? sample.strategyVersion,
@@ -135,7 +137,8 @@ function positionIdentity(position) {
     identity.strategyVersion,
     identity.parameterHash,
     identity.costPolicyVersion,
-  ].some((value) => !nonEmpty(value)) || !exactSha(identity.researchCodeSha)) return null;
+  ].some((value) => !nonEmpty(value)) || !exactSha(identity.researchCodeSha)
+    || !nonEmpty(identity.signalTimeframe) || !Number.isSafeInteger(identity.horizon) || identity.horizon <= 0) return null;
   return Object.freeze({
     ...identity,
     researchCodeSha: identity.researchCodeSha.toLowerCase(),
@@ -150,6 +153,8 @@ function sameIdentity(left, right) {
     "signalId",
     "market",
     "symbol",
+    "signalTimeframe",
+    "horizon",
     "direction",
     "strategyId",
     "strategyVersion",
@@ -225,9 +230,14 @@ function providerOf(snapshot) {
 
 function normalizedClosedFrames(snapshot, lane, nowMs) {
   if (!Array.isArray(snapshot?.candles)) return null;
+  const nonProspectiveFlags = ["synthetic", "replay", "testOnly", "backfill", "historical", "duplicate"];
+  if (nonProspectiveFlags.some((key) => snapshot[key] === true)) return null;
   const byTimestamp = new Map();
   for (const row of snapshot.candles) {
     if (!positiveInteger(row?.timestamp)
+      || row.timestamp > nowMs
+      || nonProspectiveFlags.some((key) => row[key] === true)
+      || (row.volume != null && (!finite(row.volume) || row.volume < 0))
       || !finite(row?.open)
       || !finite(row?.high)
       || !finite(row?.low)
@@ -247,7 +257,7 @@ function normalizedClosedFrames(snapshot, lane, nowMs) {
       low: row.low,
       close: row.close,
     });
-    if (existing && stableSerialize(existing) !== stableSerialize(comparable)) return null;
+    if (existing) return null;
     byTimestamp.set(row.timestamp, comparable);
   }
   return [...byTimestamp.values()]
@@ -390,6 +400,17 @@ function buildObservation({
     symbol: identity.symbol,
     timeframe: lane.timeframe,
     observedAt: frame.sourceObservedAtMs,
+    signalTimeframe: identity.signalTimeframe,
+    horizon: identity.horizon,
+    closedFrame: Object.freeze({
+      openAtMs: frame.timestamp,
+      closeAtMs: frame.sourceObservedAtMs,
+      intervalMs: lane.intervalMs,
+      closeOffsetMs: lane.closeOffsetMs,
+      provider,
+      timeframe: lane.timeframe,
+      sourceDigest,
+    }),
     observedAtMs: frame.sourceObservedAtMs,
     sourceObservedAt: frame.sourceObservedAtMs,
     sourceObservedAtMs: frame.sourceObservedAtMs,
