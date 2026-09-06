@@ -23,6 +23,7 @@
 		<meta name="apple-mobile-web-app-title" content="지식정보" />
 		<script type="module" async>
 			if (window.location.pathname.endsWith('/ai-chart')) {
+				void import('/src/App.tsx');
 				void import('/src/pages/ai-chart.tsx');
 			}
 		</script>
