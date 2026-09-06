@@ -1,3 +1,4 @@
+import hashlib
 import json
 import sys
 import tempfile
@@ -12,6 +13,54 @@ from server import build_research_overview  # noqa: E402
 def write_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value), encoding='utf-8')
+
+
+def canonical_digest(value):
+    body = dict(value)
+    body.pop('reportDigest', None)
+    canonical = json.dumps(body, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+
+
+def valid_v3_summary():
+    value = {
+        'schemaVersion': 'public-forward-liquidity-v3-authoritative-independence-summary-v1',
+        'producerSha': 'a' * 40,
+        'upstreamIngestRunId': 33935881010,
+        'upstreamIngestArtifactId': 9960137408,
+        'upstreamIngestArtifactDigest': 'b' * 64,
+        'sourceInventoryDigest': 'c' * 64,
+        'targetSlotIndex': 48,
+        'genuineScheduledSlotN': 15,
+        'rawAcceptedN': 120,
+        'effectiveIndependentN': 15,
+        'independentBuyN': 10,
+        'independentSellN': 5,
+        'independenceAuditDigest': 'd' * 64,
+        'independentSplitSourceDigest': 'e' * 64,
+        'v3IndependentSplitIndexDigest': 'f' * 64,
+        'frozenSplitCounts': {
+            'TRAIN': 15,
+            'TRAIN_BUY': 10,
+            'TRAIN_SELL': 5,
+            'VALIDATION': 0,
+            'VALIDATION_BUY': 0,
+            'VALIDATION_SELL': 0,
+            'OOS': 0,
+            'OOS_BUY': 0,
+            'OOS_SELL': 0,
+        },
+        'oosOutcomeCredit': 0,
+        'calibrationArtifactProduced': False,
+        'liquidityImpactStatus': 'BLOCKED_DATA',
+        'fullCostReady': False,
+        'evidenceComplete': 0,
+        'executionAuthority': 'NONE',
+        'frozenV3SplitIndexPresent': True,
+        'v2SplitReceiptPresent': False,
+    }
+    value['reportDigest'] = canonical_digest(value)
+    return value
 
 
 class ResearchDashboardPythonRuntimeTest(unittest.TestCase):
@@ -84,6 +133,65 @@ class ResearchDashboardPythonRuntimeTest(unittest.TestCase):
         self.assertIsNone(overview['paper']['ledger']['sampleCount'])
         self.assertIsNone(overview['paper']['ledger']['settlementCount'])
         self.assertIsNone(overview['shadow']['records']['totalRecords'])
+
+    def test_python_runtime_exposes_authenticated_v3_independence_without_economic_promotion(self):
+        root = self.fixture()
+        write_json(root / 'forward' / 'liquidity' / 'v3-authoritative-independence-summary.json', valid_v3_summary())
+        overview = build_research_overview(root)
+        liquidity = overview['research']['liquidityIndependence']
+        self.assertTrue(liquidity['present'])
+        self.assertEqual(liquidity['status'], 'PRESENT')
+        self.assertEqual(liquidity['effectiveIndependentN'], 15)
+        self.assertEqual(liquidity['independentBuyN'], 10)
+        self.assertEqual(liquidity['independentSellN'], 5)
+        self.assertEqual(liquidity['frozenSplitCounts']['TRAIN'], 15)
+        self.assertEqual(liquidity['frozenSplitCounts']['VALIDATION'], 0)
+        self.assertEqual(liquidity['frozenSplitCounts']['OOS'], 0)
+        self.assertEqual(liquidity['oosOutcomeCredit'], 0)
+        self.assertFalse(liquidity['calibrationArtifactProduced'])
+        self.assertEqual(liquidity['liquidityImpactStatus'], 'BLOCKED_DATA')
+        self.assertFalse(liquidity['fullCostReady'])
+        self.assertEqual(liquidity['evidenceComplete'], 0)
+        self.assertEqual(liquidity['executionAuthority'], 'NONE')
+        self.assertFalse(overview['profitability']['proven'])
+
+    def test_missing_v3_independence_is_missing_not_zero(self):
+        overview = build_research_overview(self.fixture())
+        liquidity = overview['research']['liquidityIndependence']
+        self.assertFalse(liquidity['present'])
+        self.assertEqual(liquidity['status'], 'MISSING')
+        self.assertIsNone(liquidity['effectiveIndependentN'])
+        self.assertIsNone(liquidity['frozenSplitCounts']['TRAIN'])
+        self.assertIsNone(liquidity['frozenSplitCounts']['OOS'])
+        self.assertFalse(overview['profitability']['proven'])
+
+    def test_v3_authority_escalation_fails_closed_and_hides_partial_counts(self):
+        root = self.fixture()
+        summary = valid_v3_summary()
+        summary['executionAuthority'] = 'LIVE'
+        summary['reportDigest'] = canonical_digest(summary)
+        write_json(root / 'forward' / 'liquidity' / 'v3-authoritative-independence-summary.json', summary)
+        overview = build_research_overview(root)
+        liquidity = overview['research']['liquidityIndependence']
+        self.assertTrue(liquidity['present'])
+        self.assertEqual(liquidity['status'], 'INVALID')
+        self.assertIsNone(liquidity['effectiveIndependentN'])
+        self.assertIsNone(liquidity['frozenSplitCounts']['TRAIN'])
+        self.assertEqual(overview['research']['status'], 'attention')
+        self.assertFalse(overview['profitability']['proven'])
+
+    def test_v3_read_error_fails_closed_without_fabricating_zero(self):
+        root = self.fixture()
+        path = root / 'forward' / 'liquidity' / 'v3-authoritative-independence-summary.json'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{not-json', encoding='utf-8')
+        overview = build_research_overview(root)
+        liquidity = overview['research']['liquidityIndependence']
+        self.assertTrue(liquidity['present'])
+        self.assertEqual(liquidity['status'], 'INVALID')
+        self.assertIsNone(liquidity['effectiveIndependentN'])
+        self.assertEqual(overview['research']['status'], 'attention')
+        self.assertFalse(overview['profitability']['proven'])
 
 
 if __name__ == '__main__':
