@@ -121,9 +121,14 @@ for (const [width, height] of [[320, 740], [390, 844], [768, 900], [1199, 900], 
     await page.goto('/research-center');
 
     await expect(page.getByRole('heading', { name: '연구센터', exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: '일반 보기', exact: true })).toHaveAttribute('aria-pressed', 'true');
-    await expect(page.getByRole('button', { name: '전문가 보기', exact: true })).toBeVisible();
+    const expertButton = page.getByRole('button', { name: '전문가 보기', exact: true });
+    const generalButton = page.getByRole('button', { name: '일반 보기', exact: true });
+    await expect(expertButton).toHaveAttribute('aria-pressed', 'true');
+    await expect(generalButton).toBeVisible();
     await expect(page.getByRole('button', { name: 'AI Research Copilot', exact: true })).toBeVisible();
+
+    await generalButton.click();
+    await expect(generalButton).toHaveAttribute('aria-pressed', 'true');
 
     const general = page.getByTestId('research-general-view');
     await expect(general).toContainText('근거 수집 중');
@@ -149,7 +154,7 @@ test('expert view preserves the canonical research evidence surface', async ({ p
   await installRuntime(page);
   await page.goto('/research-center');
 
-  await page.getByRole('button', { name: '전문가 보기', exact: true }).click();
+  await expect(page.getByRole('button', { name: '전문가 보기', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId('research-center-page')).toBeVisible();
   await expect(page.getByRole('heading', { name: '연구센터', exact: true })).toBeVisible();
   await expect(page.getByRole('tab', { name: '검증 리포트', exact: true })).toBeVisible();
