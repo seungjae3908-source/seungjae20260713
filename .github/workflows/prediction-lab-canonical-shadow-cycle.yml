@@ -61,6 +61,8 @@ jobs:
         run: |
           set -Eeuo pipefail
           grep -q 'LEGACY_ACTIVE_CANONICAL_DORMANT' market-prediction-lab/src/canonical-shadow-runtime-activation-v1.js
+          grep -q 'canonicalStrandedBootstrapRecoveryAllowedV1' market-prediction-lab/src/canonical-shadow-runtime-activation-v1.js
+          grep -q 'approve-canonical-shadow-recovery' .github/workflows/prediction-lab-canonical-shadow-cycle.yml
           grep -q 'canonicalRuntimeRequestId' .github/workflows/prediction-lab-canonical-shadow-cycle.yml
           grep -q 'workflow_run' .github/workflows/prediction-lab-canonical-shadow-publisher.yml
 
@@ -195,6 +197,12 @@ jobs:
         run: |
           set -Eeuo pipefail
           producer_run_id="$CANONICAL_PRODUCER_RUN_ID"
+          bootstrap_recovery='false'
+          publication_receipt_count=''
+          recovery_approval_id=''
+          recovery_approval_target_sha=''
+          legacy_state=''
+
           producer_run="$(gh api "repos/$REPOSITORY/actions/runs/$producer_run_id")"
           [[ "$(printf '%s' "$producer_run" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(String(JSON.parse(s).conclusion??"")))')" == 'success' ]]
           producer_artifacts="$(gh api "repos/$REPOSITORY/actions/runs/$producer_run_id/artifacts")"
@@ -216,6 +224,9 @@ jobs:
           })) process.exit(1);
           NODE
           else
+            legacy_state="$(gh api "repos/$REPOSITORY/actions/workflows/prediction-lab-shadow-hourly.yml" --jq '.state')"
+            [[ "$legacy_state" == 'disabled_manually' ]] || { echo "Canonical hourly binding rejected while legacy workflow state=$legacy_state" >&2; exit 1; }
+
             predecessor_run_id=''
             predecessor_digest=''
             mkdir -p "$RUNNER_TEMP/canonical-publication-receipts"
@@ -246,13 +257,79 @@ jobs:
               predecessor_run_id="$candidate_source_run"
               predecessor_digest="$current_digest"
               break
-            done < <(gh api "repos/$REPOSITORY/actions/workflows/prediction-lab-canonical-shadow-publisher.yml/runs?status=success&per_page=50" --jq '.workflow_runs[].id')
-            [[ "$predecessor_run_id" =~ ^[1-9][0-9]*$ ]] || { echo 'No successfully published canonical predecessor receipt found' >&2; exit 1; }
+            done < <(gh api "repos/$REPOSITORY/actions/workflows/prediction-lab-canonical-shadow-publisher.yml/runs?status=success&per_page=100" --jq '.workflow_runs[].id')
+
+            if [[ ! "$predecessor_run_id" =~ ^[1-9][0-9]*$ ]]; then
+              receipt_index="$RUNNER_TEMP/canonical-publication-receipt-index.tsv"
+              gh api --paginate "repos/$REPOSITORY/actions/artifacts?per_page=100" \
+                --jq '.artifacts[] | select(.name | startswith("canonical-shadow-publication-receipt-")) | [.id, .expired, .created_at, .workflow_run.id, .name] | @tsv' \
+                > "$receipt_index"
+              publication_receipt_count="$(wc -l < "$receipt_index" | tr -d '[:space:]')"
+              [[ "$publication_receipt_count" =~ ^[0-9]+$ ]]
+              if [[ "$publication_receipt_count" != '0' ]]; then
+                echo "Canonical publication receipt history exists but no valid predecessor is usable; fail closed instead of bootstrap recovery" >&2
+                exit 1
+              fi
+
+              comments_json="$(gh api --paginate --slurp "repos/$REPOSITORY/issues/838/comments?per_page=100")"
+              recovery_approval_id="$(printf '%s' "$comments_json" | RECOVERY_OWNER="${REPOSITORY%%/*}" RECOVERY_TARGET_SHA="$TARGET_SHA" node -e '
+                let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
+                  const pages=JSON.parse(s);const rows=pages.flat();
+                  const expected=`/approve-canonical-shadow-recovery ${process.env.RECOVERY_TARGET_SHA}`;
+                  const matches=rows.filter(x=>x?.user?.login===process.env.RECOVERY_OWNER&&String(x?.body??"").trim()===expected)
+                    .sort((a,b)=>Number(b.id)-Number(a.id));
+                  if(matches[0])process.stdout.write(String(matches[0].id));
+                });')"
+              [[ "$recovery_approval_id" =~ ^[1-9][0-9]*$ ]] || {
+                echo "No successfully published canonical predecessor receipt found; exact #838 approval /approve-canonical-shadow-recovery $TARGET_SHA is required" >&2
+                exit 1
+              }
+              recovery_approval_target_sha="$TARGET_SHA"
+
+              predecessor_run_id="$BOOTSTRAP_PREDECESSOR_RUN_ID"
+              predecessor_artifacts="$(gh api "repos/$REPOSITORY/actions/runs/$predecessor_run_id/artifacts")"
+              predecessor_digest="$(printf '%s' "$predecessor_artifacts" | PREDECESSOR_RUN_ID="$predecessor_run_id" node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);const r=process.env.PREDECESSOR_RUN_ID;const a=j.artifacts.find(x=>x.name===`prediction-lab-shadow-cycle-${r}`&&!x.expired);if(a)process.stdout.write(String(a.digest??""));})')"
+              [[ "${predecessor_digest#sha256:}" == "$BOOTSTRAP_PREDECESSOR_DIGEST" ]] || { echo 'Exact stranded-recovery bootstrap artifact digest mismatch' >&2; exit 1; }
+
+              if ! REQUEST_ID="$REQUEST_ID" \
+                RECOVERY_APPROVAL_ID="$recovery_approval_id" \
+                RECOVERY_APPROVAL_TARGET_SHA="$recovery_approval_target_sha" \
+                TARGET_SHA="$TARGET_SHA" \
+                LEGACY_STATE="$legacy_state" \
+                PUBLICATION_RECEIPT_COUNT="$publication_receipt_count" \
+                PRODUCER_RUN_ID="$producer_run_id" \
+                PREDECESSOR_RUN_ID="$predecessor_run_id" \
+                PREDECESSOR_DIGEST="$predecessor_digest" \
+                node --input-type=module <<'NODE'
+          import { canonicalStrandedBootstrapRecoveryAllowedV1 } from './market-prediction-lab/src/canonical-shadow-runtime-activation-v1.js';
+          if (!canonicalStrandedBootstrapRecoveryAllowedV1({
+            requestId: process.env.REQUEST_ID,
+            recoveryApprovalCommentId: process.env.RECOVERY_APPROVAL_ID,
+            recoveryApprovalTargetSha: process.env.RECOVERY_APPROVAL_TARGET_SHA,
+            targetSha: process.env.TARGET_SHA,
+            legacyWorkflowState: process.env.LEGACY_STATE,
+            publishedReceiptCount: process.env.PUBLICATION_RECEIPT_COUNT,
+            producerRunId: process.env.PRODUCER_RUN_ID,
+            predecessorRunId: process.env.PREDECESSOR_RUN_ID,
+            predecessorArtifactDigest: process.env.PREDECESSOR_DIGEST,
+          })) process.exit(1);
+          NODE
+              then
+                echo 'Stranded bootstrap recovery guard rejected the candidate' >&2
+                exit 1
+              fi
+              bootstrap_recovery='true'
+            fi
           fi
 
           echo "producer_run_id=$producer_run_id" >> "$GITHUB_OUTPUT"
           echo "predecessor_run_id=$predecessor_run_id" >> "$GITHUB_OUTPUT"
           echo "predecessor_digest=$predecessor_digest" >> "$GITHUB_OUTPUT"
+          echo "bootstrap_recovery=$bootstrap_recovery" >> "$GITHUB_OUTPUT"
+          echo "publication_receipt_count=$publication_receipt_count" >> "$GITHUB_OUTPUT"
+          echo "recovery_approval_id=$recovery_approval_id" >> "$GITHUB_OUTPUT"
+          echo "recovery_approval_target_sha=$recovery_approval_target_sha" >> "$GITHUB_OUTPUT"
+          echo "legacy_state=$legacy_state" >> "$GITHUB_OUTPUT"
       - name: Validate immutable binding shape
         env:
           PRODUCER_RUN_ID: ${{ steps.binding.outputs.producer_run_id }}
@@ -290,13 +367,21 @@ jobs:
           PRODUCER_RUN_ID: ${{ steps.binding.outputs.producer_run_id }}
           TARGET_SHA: ${{ needs.gate.outputs.target_sha }}
           REQUEST_ID: ${{ needs.gate.outputs.request_id }}
+          BOOTSTRAP_RECOVERY: ${{ steps.binding.outputs.bootstrap_recovery }}
+          PUBLICATION_RECEIPT_COUNT: ${{ steps.binding.outputs.publication_receipt_count }}
+          RECOVERY_APPROVAL_ID: ${{ steps.binding.outputs.recovery_approval_id }}
+          RECOVERY_APPROVAL_TARGET_SHA: ${{ steps.binding.outputs.recovery_approval_target_sha }}
+          LEGACY_STATE: ${{ steps.binding.outputs.legacy_state }}
           PREDECESSOR_DIR: ${{ runner.temp }}/predecessor-shadow
         run: |
           node --input-type=module <<'NODE'
           import { copyFileSync, readFileSync, readdirSync } from 'node:fs';
           import { basename, join } from 'node:path';
           import { execFileSync } from 'node:child_process';
-          import { canonicalBootstrapSeedAllowedV1 } from './market-prediction-lab/src/canonical-shadow-runtime-activation-v1.js';
+          import {
+            canonicalBootstrapSeedAllowedV1,
+            canonicalStrandedBootstrapRecoveryAllowedV1,
+          } from './market-prediction-lab/src/canonical-shadow-runtime-activation-v1.js';
           const files = [];
           const walk = (directory) => {
             for (const entry of readdirSync(directory, { withFileTypes: true })) {
@@ -315,16 +400,28 @@ jobs:
           if (String(provenance.runId) !== process.env.PREDECESSOR_RUN_ID) throw new Error('Predecessor run mismatch');
           if (String(provenance.producerRunId) !== process.env.PRODUCER_RUN_ID) throw new Error('Predecessor Producer mismatch');
           if (!/^[0-9a-f]{40}$/.test(String(provenance.researchCodeSha ?? ''))) throw new Error('Invalid predecessor research SHA');
-          if (provenance.researchCodeSha !== process.env.TARGET_SHA) {
-            const bootstrap = canonicalBootstrapSeedAllowedV1({
-              requestId: process.env.REQUEST_ID,
-              producerRunId: process.env.PRODUCER_RUN_ID,
-              predecessorRunId: process.env.PREDECESSOR_RUN_ID,
-              predecessorArtifactDigest: process.env.PREDECESSOR_DIGEST,
-            });
-            if (!bootstrap) {
-              execFileSync('git', ['merge-base', '--is-ancestor', provenance.researchCodeSha, process.env.TARGET_SHA], { stdio: 'inherit' });
-            }
+          const activationBootstrap = canonicalBootstrapSeedAllowedV1({
+            requestId: process.env.REQUEST_ID,
+            producerRunId: process.env.PRODUCER_RUN_ID,
+            predecessorRunId: process.env.PREDECESSOR_RUN_ID,
+            predecessorArtifactDigest: process.env.PREDECESSOR_DIGEST,
+          });
+          const recoveryBootstrap = canonicalStrandedBootstrapRecoveryAllowedV1({
+            requestId: process.env.REQUEST_ID,
+            recoveryApprovalCommentId: process.env.RECOVERY_APPROVAL_ID,
+            recoveryApprovalTargetSha: process.env.RECOVERY_APPROVAL_TARGET_SHA,
+            targetSha: process.env.TARGET_SHA,
+            legacyWorkflowState: process.env.LEGACY_STATE,
+            publishedReceiptCount: process.env.PUBLICATION_RECEIPT_COUNT,
+            producerRunId: process.env.PRODUCER_RUN_ID,
+            predecessorRunId: process.env.PREDECESSOR_RUN_ID,
+            predecessorArtifactDigest: process.env.PREDECESSOR_DIGEST,
+          });
+          if ((process.env.BOOTSTRAP_RECOVERY === 'true') !== recoveryBootstrap) {
+            throw new Error('Stranded recovery binding marker mismatch');
+          }
+          if (provenance.researchCodeSha !== process.env.TARGET_SHA && !activationBootstrap && !recoveryBootstrap) {
+            execFileSync('git', ['merge-base', '--is-ancestor', provenance.researchCodeSha, process.env.TARGET_SHA], { stdio: 'inherit' });
           }
           const state = JSON.parse(readFileSync(stateFile, 'utf8'));
           if (!state || state.schemaVersion !== 3 || !state.groups || typeof state.groups !== 'object') throw new Error('Invalid predecessor state');
@@ -359,17 +456,26 @@ jobs:
           MODE: ${{ needs.gate.outputs.mode }}
           PRODUCER_RUN_ID: ${{ steps.binding.outputs.producer_run_id }}
           PREDECESSOR_RUN_ID: ${{ steps.binding.outputs.predecessor_run_id }}
+          PREDECESSOR_DIGEST: ${{ steps.binding.outputs.predecessor_digest }}
+          BOOTSTRAP_RECOVERY: ${{ steps.binding.outputs.bootstrap_recovery }}
+          PUBLICATION_RECEIPT_COUNT: ${{ steps.binding.outputs.publication_receipt_count }}
+          RECOVERY_APPROVAL_ID: ${{ steps.binding.outputs.recovery_approval_id }}
         run: |
           node - <<'NODE'
           const fs = require('fs');
+          const bootstrapRecovery = process.env.BOOTSTRAP_RECOVERY === 'true';
           const value = {
             schemaVersion: 2,
             researchCodeSha: process.env.TARGET_SHA,
             runId: process.env.GITHUB_RUN_ID,
             producerRunId: process.env.PRODUCER_RUN_ID,
             predecessorShadowRunId: process.env.PREDECESSOR_RUN_ID,
+            predecessorShadowArtifactDigest: process.env.PREDECESSOR_DIGEST || null,
             canonicalRuntimeRequestId: process.env.REQUEST_ID,
             canonicalRuntimeMode: process.env.MODE,
+            canonicalRuntimeBootstrapRecovery: bootstrapRecovery,
+            canonicalRuntimeRecoveryApprovalCommentId: bootstrapRecovery ? process.env.RECOVERY_APPROVAL_ID : null,
+            canonicalRuntimePublishedReceiptCountAtRecoveryCheck: bootstrapRecovery ? Number(process.env.PUBLICATION_RECEIPT_COUNT) : null,
             branchWrite: false,
             liveOrderAllowed: false,
             privateAccountRequestAllowed: false,
