@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useIsFetching } from '@tanstack/react-query';
 import {
   BarChart3,
@@ -43,7 +43,7 @@ export function ProfessionalCommandBar() {
   const inputRef = useRef<HTMLInputElement>(null);
   const presentation = resolveAppRoutePresentation(location);
 
-  const actions = useMemo<CommandAction[]>(() => [
+  const actions: CommandAction[] = [
     { id: 'home', label: '홈', description: '투자 대시보드', href: APP_ROUTES.homeAlias, icon: Home, visible: true },
     { id: 'search', label: '통합검색', description: '종목·코인 찾기', href: APP_ROUTES.assets, icon: Search, visible: auth.can('canAccessBasicInfo') },
     { id: 'scanner', label: 'AI 신호검색기', description: '시장 신호 탐색', href: APP_ROUTES.scanner, icon: Radar, visible: auth.can('canAccessBasicInfo') },
@@ -52,14 +52,12 @@ export function ProfessionalCommandBar() {
     { id: 'alerts', label: '가격 알림', description: '알림 상태 확인', href: APP_ROUTES.alerts, icon: Bell, visible: true },
     { id: 'research', label: '연구센터', description: '검증 근거와 연구 상태', href: APP_ROUTES.researchCenter, icon: Sparkles, visible: auth.can('canManageMembers') },
     { id: 'settings', label: '앱 설정', description: '화면·계정 설정', href: APP_ROUTES.settings, icon: Settings, visible: true },
-  ], [auth.membershipLevel]);
-
-  const visibleActions = useMemo(() => actions.filter((item) => item.visible), [actions]);
-  const filteredActions = useMemo(() => {
-    const needle = query.trim().toLocaleLowerCase('ko-KR');
-    if (!needle) return visibleActions;
-    return visibleActions.filter((item) => `${item.label} ${item.description}`.toLocaleLowerCase('ko-KR').includes(needle));
-  }, [query, visibleActions]);
+  ];
+  const visibleActions = actions.filter((item) => item.visible);
+  const needle = query.trim().toLocaleLowerCase('ko-KR');
+  const filteredActions = needle
+    ? visibleActions.filter((item) => `${item.label} ${item.description}`.toLocaleLowerCase('ko-KR').includes(needle))
+    : visibleActions;
 
   useEffect(() => {
     const onOnline = () => setOnline(true);
