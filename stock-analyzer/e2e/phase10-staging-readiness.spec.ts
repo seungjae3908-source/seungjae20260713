@@ -197,14 +197,7 @@ function isLogoutScopedRead(request: Request, expectedOrigin: string) {
 }
 
 function isPersonalIntegrationLogoutRead(request: Request, expectedOrigin: string) {
-  let parsed: URL;
-  try {
-    parsed = new URL(request.url());
-  } catch {
-    return false;
-  }
-  return parsed.pathname === '/api/user-integrations'
-    && isLogoutScopedRead(request, expectedOrigin);
+  return isLogoutScopedRead(request, expectedOrigin);
 }
 
 function isExpectedLogoutAbort(request: Request, observation: LogoutObservation) {
@@ -246,10 +239,9 @@ function isExpectedAuthFault(request: Request, observation: AuthFaultObservation
   return observation.requests.has(request) && isProfileRequest(request);
 }
 
-function isExpectedLateAiChartCandleAbortIdentity(input: {
+function isAiChartTransitionCandleReadIdentity(input: {
   method: string;
   rawUrl: string;
-  errorText: string | undefined;
   frameRoute: string;
   observation: Pick<RouteTransitionObservation, 'fromRoute' | 'toRoute' | 'origin'>;
 }) {
@@ -261,11 +253,21 @@ function isExpectedLateAiChartCandleAbortIdentity(input: {
       && routeIdentity(input.frameRoute, input.observation.origin) === input.observation.toRoute
       && input.method === 'GET'
       && parsed.origin === input.observation.origin
-      && /^\/api\/stocks\/[^/]+\/candles$/.test(parsed.pathname)
-      && input.errorText === 'net::ERR_ABORTED';
+      && /^\/api\/stocks\/[^/]+\/candles$/.test(parsed.pathname);
   } catch {
     return false;
   }
+}
+
+function isExpectedLateAiChartCandleAbortIdentity(input: {
+  method: string;
+  rawUrl: string;
+  errorText: string | undefined;
+  frameRoute: string;
+  observation: Pick<RouteTransitionObservation, 'fromRoute' | 'toRoute' | 'origin'>;
+}) {
+  return isAiChartTransitionCandleReadIdentity(input)
+    && input.errorText === 'net::ERR_ABORTED';
 }
 
 function isExpectedRouteTransitionAbort(
@@ -352,7 +354,18 @@ function attachDiagnostics(page: Page, testInfo: TestInfo) {
     if (isSameOriginApiGet(request)) {
       apiGets.add(request);
       const routeObservation = activeRouteTransitionObservations.get(page);
-      if (routeObservation && routeIdentity(page.url()) === routeObservation.fromRoute) {
+      if (
+        routeObservation
+        && (
+          routeIdentity(page.url()) === routeObservation.fromRoute
+          || isAiChartTransitionCandleReadIdentity({
+            method: request.method(),
+            rawUrl: request.url(),
+            frameRoute: request.frame().url(),
+            observation: routeObservation,
+          })
+        )
+      ) {
         routeObservation.pendingGetRequests.add(request);
       }
     }
@@ -451,7 +464,7 @@ async function waitForPendingPersonalIntegrationReads(page: Page) {
         .length;
     },
     {
-      message: 'personal integration GET must settle before verifier-owned authenticated navigation',
+      message: 'read-only integration GETs must settle before verifier-owned authenticated navigation',
       timeout: 15_000,
       intervals: [100, 200, 300, 500],
     },
@@ -538,20 +551,28 @@ async function finishRouteTransition(
   observation: RouteTransitionObservation,
   confirmed: boolean,
 ) {
+  const fromPath = new URL(observation.fromRoute, observation.origin).pathname;
+  let quietSince: number | null = null;
   await expect.poll(
     () => {
       const pending = pendingApiGetRequests.get(page);
-      if (!pending) return 0;
-      return [...observation.pendingGetRequests]
-        .filter((request) => pending.has(request))
-        .length;
+      const pendingCount = pending
+        ? [...observation.pendingGetRequests].filter((request) => pending.has(request)).length
+        : 0;
+      if (pendingCount > 0) {
+        quietSince = null;
+        return 'pending';
+      }
+      if (fromPath !== '/ai-chart') return 'settled';
+      if (quietSince === null) quietSince = Date.now();
+      return Date.now() - quietSince >= 500 ? 'settled' : 'quiet';
     },
     {
-      message: 'pre-navigation GET requests must settle before route observation closes',
+      message: 'route-transition GET requests must settle before route observation closes',
       timeout: 15_000,
       intervals: [100, 200, 300, 500],
     },
-  ).toBe(0);
+  ).toBe('settled');
 
   activeRouteTransitionObservations.delete(page);
   if (confirmed) {
@@ -762,6 +783,35 @@ function normalizedAssetSymbol(value: unknown) {
   return String(value ?? '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
 }
 
+async function selectVisibleUsAaplForAnalysis(page: Page) {
+  const option = page.getByRole('option').filter({ hasText: /AAPL/i }).first();
+  await expect(option).toBeVisible({ timeout: 5_000 });
+  await option.click();
+  await expect.poll(() => {
+    const url = new URL(page.url());
+    return `${url.pathname}|${url.searchParams.get('market')}|${url.searchParams.get('ticker')}`;
+  }, {
+    message: 'real AAPL selection must reach the canonical stock analysis route',
+    timeout: 5_000,
+    intervals: [100, 200, 400, 800],
+  }).toBe('/stock-info/analysis|US|AAPL');
+  await expect(page.getByTestId('canonical-stock-analysis')).toHaveAttribute('data-ticker', 'AAPL');
+  await expect.poll(async () => page.evaluate(() => {
+    try {
+      const raw = window.localStorage.getItem('sa-analysis-selection-v1');
+      if (!raw) return null;
+      const selection = JSON.parse(raw) as { market?: unknown; ticker?: unknown };
+      return `${String(selection.market ?? '')}:${String(selection.ticker ?? '')}`;
+    } catch {
+      return null;
+    }
+  }), {
+    message: 'real AAPL user selection must persist the exact AI Chart analysis identity',
+    timeout: 5_000,
+    intervals: [100, 200, 400, 800],
+  }).toBe('US:AAPL');
+}
+
 async function runAuthenticatedSearchCertification(page: Page) {
   const matrix = [
     { market: 'KR', label: '국내', query: '034730', acceptable: ['034730'] },
@@ -863,6 +913,32 @@ async function runAuthenticatedSearchCertification(page: Page) {
   expect(summary.p95Ms, `authenticated Search p95 evidence: ${JSON.stringify(summary)}`).toBeLessThanOrEqual(2_000);
   expect(summary.maxMs, `authenticated Search max evidence: ${JSON.stringify(summary)}`).toBeLessThan(5_000);
   expect(summary.overFiveSeconds).toBe(0);
+
+  const usTab = page.getByRole('button', { name: '미국', exact: true });
+  await usTab.click();
+  await expect(usTab).toHaveAttribute('aria-pressed', 'true');
+  await input.fill('');
+  const selectionResponsePromise = page.waitForResponse((response) => {
+    try {
+      const url = new URL(response.url());
+      return response.request().method() === 'GET'
+        && url.pathname === '/api/search/suggest'
+        && url.searchParams.get('market') === 'US'
+        && url.searchParams.get('q') === 'AAPL';
+    } catch {
+      return false;
+    }
+  }, { timeout: 5_000 });
+  await input.fill('AAPL');
+  const selectionResponse = await selectionResponsePromise;
+  expect(selectionResponse.status(), 'AI Chart analysis-selection search must return HTTP 200').toBe(200);
+  await expect.poll(async () => (await page.getByRole('option').allTextContents())
+    .map(normalizedAssetSymbol)
+    .some((text) => text.includes('AAPL')), {
+    timeout: 5_000,
+    intervals: [100, 200, 400, 800],
+  }).toBe(true);
+  await selectVisibleUsAaplForAnalysis(page);
 }
 
 async function waitForUsableAiChart(page: Page, startedAt: number) {
@@ -1111,12 +1187,25 @@ test('logout abort proof keeps session-scoped account reads exact and query-free
   expect(isLogoutScopedReadIdentity('GET', 'https://other.example.test/api/accounts/read-only/toss', origin)).toBe(false);
 
   const observation = { fromRoute: '/ai-chart', toRoute: '/portfolio', origin };
-  const lateCandleAbort = {
+  const lateCandleRead = {
     method: 'GET',
     rawUrl: `${origin}/api/stocks/005930/candles?tf=1D`,
-    errorText: 'net::ERR_ABORTED',
     frameRoute: `${origin}/portfolio`,
     observation,
+  };
+  expect(isAiChartTransitionCandleReadIdentity(lateCandleRead)).toBe(true);
+  expect(isAiChartTransitionCandleReadIdentity({ ...lateCandleRead, method: 'POST' })).toBe(false);
+  expect(isAiChartTransitionCandleReadIdentity({ ...lateCandleRead, rawUrl: `${origin}/api/stocks/005930/chart` })).toBe(false);
+  expect(isAiChartTransitionCandleReadIdentity({ ...lateCandleRead, rawUrl: 'https://other.example.test/api/stocks/005930/candles' })).toBe(false);
+  expect(isAiChartTransitionCandleReadIdentity({ ...lateCandleRead, frameRoute: `${origin}/ai-chart` })).toBe(false);
+  expect(isAiChartTransitionCandleReadIdentity({
+    ...lateCandleRead,
+    observation: { ...observation, fromRoute: '/scanner' },
+  })).toBe(false);
+
+  const lateCandleAbort = {
+    ...lateCandleRead,
+    errorText: 'net::ERR_ABORTED',
   };
   expect(isExpectedLateAiChartCandleAbortIdentity(lateCandleAbort)).toBe(true);
   expect(isExpectedLateAiChartCandleAbortIdentity({ ...lateCandleAbort, method: 'POST' })).toBe(false);
@@ -1473,6 +1562,110 @@ test.describe('real staging release readiness', () => {
     await login(page, accounts.admin.loginName, accounts.admin.password);
     await expectMembership(page, /관리자/);
     await expectUiBuilderStagingReadiness(page, (route) => expectHealthyRoute(page, route));
+  });
+
+  test('admin: full product staging journey preserves navigation, reload, and strict session loss', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await login(page, accounts.admin.loginName, accounts.admin.password);
+    await expectMembership(page, /관리자/);
+    const nav = page.locator('nav');
+    await expect(nav).toBeVisible();
+
+    const openMenuRoute = async (
+      groupId: 'assets' | 'technical' | 'information' | 'settings',
+      label: string,
+      expectedRoute: string,
+    ) => {
+      const group = APP_NAVIGATION.find((candidate) => candidate.id === groupId);
+      const target = group?.menu?.find((item) => item.label === label);
+      if (!group || !target) throw new Error(`missing full-product navigation target: ${groupId}/${label}`);
+      expect(target.href, `unexpected route for ${groupId}/${label}`).toBe(expectedRoute);
+      await settle(page);
+      await nav.getByRole('button', { name: group.label, exact: true }).click();
+      const item = page.getByRole('menuitem', { name: label, exact: true });
+      await expect(item).toBeVisible();
+      await expectNavigationTransition(page, target.href, async () => {
+        await item.click();
+      });
+    };
+
+    // Real unified-search user path. This intentionally observes the live staging
+    // response instead of installing a route fixture.
+    await openMenuRoute('assets', '통합검색', '/stocks');
+    const searchInput = page.getByRole('combobox', { name: '통합 자산 검색' });
+    await expect(searchInput).toBeEditable();
+    const usTab = page.getByRole('button', { name: '미국', exact: true });
+    await expect(usTab).toBeVisible();
+    await usTab.click();
+    await expect(usTab).toHaveAttribute('aria-pressed', 'true');
+    await searchInput.fill('');
+    const searchResponsePromise = page.waitForResponse((response) => {
+      try {
+        const url = new URL(response.url());
+        return response.request().method() === 'GET'
+          && url.pathname === '/api/search/suggest'
+          && url.searchParams.get('market') === 'US'
+          && url.searchParams.get('q') === 'AAPL';
+      } catch {
+        return false;
+      }
+    }, { timeout: 5_000 });
+    await searchInput.fill('AAPL');
+    const searchResponse = await searchResponsePromise;
+    expect(searchResponse.status(), 'full-product unified search must return HTTP 200').toBe(200);
+    const searchPayload = await searchResponse.json().catch(() => ({})) as {
+      ok?: boolean;
+      results?: Array<Record<string, unknown>>;
+    };
+    expect(searchPayload.ok, 'full-product unified search must return an explicit successful envelope').toBe(true);
+    const searchResults = Array.isArray(searchPayload.results) ? searchPayload.results : [];
+    expect(
+      searchResults.some((result) => [result.productCode, result.ticker, result.symbol, result.baseSymbol]
+        .map(normalizedAssetSymbol)
+        .includes('AAPL')),
+      'full-product unified search must contain the exact AAPL identity',
+    ).toBe(true);
+    await expect.poll(async () => (await page.getByRole('option').allTextContents())
+      .map(normalizedAssetSymbol)
+      .some((text) => text.includes('AAPL')), {
+      timeout: 5_000,
+      intervals: [100, 200, 400, 800],
+    }).toBe(true);
+    await selectVisibleUsAaplForAnalysis(page);
+
+    await openMenuRoute('technical', 'AI 차트', '/ai-chart');
+    await waitForUsableAiChart(page, Date.now());
+
+    await openMenuRoute('settings', '계정', '/account');
+    await waitForPendingPersonalIntegrationReads(page);
+
+    await openMenuRoute('information', '포트폴리오', '/portfolio');
+
+    await openMenuRoute('technical', '모의매매', '/paper-trading');
+    await expect(page.locator('body')).toContainText(/모의|paper/i);
+
+    await openMenuRoute('information', '연구센터', '/research-center');
+    await expect(page.getByTestId('capability-denied')).toHaveCount(0);
+    await expect(page.locator('body')).not.toBeEmpty();
+
+    await page.reload();
+    await settle(page);
+    expect(routeIdentity(page.url())).toBe('/research-center');
+    await expectMembership(page, /관리자/);
+    await expect(page.getByTestId('capability-denied')).toHaveCount(0);
+    await expect(nav).toBeVisible();
+
+    await openMenuRoute('settings', '계정', '/account');
+    await waitForPendingPersonalIntegrationReads(page);
+    await openMenuRoute('information', '연구센터', '/research-center');
+
+    await logout(page);
+    await page.goto('/research-center', { waitUntil: 'domcontentloaded' });
+    await expect(loginSubmitButton(page)).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator('nav')).toHaveCount(0);
+    const protectedAfterSessionLoss = await page.request.get('/api/paper-journal/snapshot');
+    expect([401, 403], 'protected API must remain denied after strict full-product session loss')
+      .toContain(protectedAfterSessionLoss.status());
   });
 
   const certificationRoutes = [
