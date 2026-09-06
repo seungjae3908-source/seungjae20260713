@@ -73,6 +73,7 @@ export function ProfessionalCommandBarContent() {
   useEffect(() => {
     function handleGlobalShortcut(event: globalThis.KeyboardEvent) {
       if (editableTarget(event.target)) return;
+      if (!window.matchMedia('(min-width: 1200px)').matches) return;
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
         setOpen(true);
@@ -91,6 +92,13 @@ export function ProfessionalCommandBarContent() {
     }
     window.requestAnimationFrame(() => inputRef.current?.focus());
   }, [open]);
+
+  useEffect(() => {
+    const media = window.matchMedia('(min-width: 1200px)');
+    const closeBelowDesktop = () => { if (!media.matches) setOpen(false); };
+    media.addEventListener('change', closeBelowDesktop);
+    return () => media.removeEventListener('change', closeBelowDesktop);
+  }, []);
 
   useEffect(() => {
     if (activeIndex >= filteredActions.length) setActiveIndex(Math.max(0, filteredActions.length - 1));
@@ -123,7 +131,7 @@ export function ProfessionalCommandBarContent() {
     <>
       <header
         data-testid="professional-command-bar"
-        className="flex h-14 shrink-0 items-center gap-3 border-b border-card-border bg-background/95 px-4 backdrop-blur"
+        className="hidden min-[1200px]:flex h-14 shrink-0 items-center gap-3 border-b border-card-border bg-background/95 px-4 backdrop-blur"
         aria-label="프로페셔널 명령 바"
       >
         <button type="button" onClick={() => navigate(APP_ROUTES.homeAlias)} className="flex min-h-10 shrink-0 items-center gap-2 rounded-xl px-2 text-sm font-bold">
@@ -163,7 +171,7 @@ export function ProfessionalCommandBarContent() {
       </header>
 
       {open ? (
-        <div className="fixed inset-0 z-[100] flex items-start justify-center bg-black/55 px-6 pt-[12vh]" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) setOpen(false); }}>
+        <div className="fixed inset-0 z-[100] hidden min-[1200px]:flex items-start justify-center bg-black/55 px-6 pt-[12vh]" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) setOpen(false); }}>
           <section role="dialog" aria-modal="true" aria-label="빠른 실행" className="w-full max-w-2xl overflow-hidden rounded-2xl border border-card-border bg-card shadow-2xl" data-testid="professional-command-palette">
             <div className="flex items-center gap-3 border-b border-card-border px-4">
               <Command className="h-5 w-5 shrink-0 text-primary" />
