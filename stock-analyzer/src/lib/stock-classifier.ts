@@ -1,4 +1,12 @@
 export type StockClassLabel = '우량주' | '보통주' | '저평가주' | '잡주';
+export type StockClassificationMissingEvidence = 'score' | 'debt' | 'financial' | 'risk';
+
+/**
+ * Legacy UI consumers type classification labels as the four evaluated classes.
+ * Missing evidence is carried authoritatively by evidenceState/score and rendered
+ * with this runtime sentinel instead of fabricating one of those four classes.
+ */
+const MISSING_CLASSIFICATION_LABEL = '분류 확인 필요' as StockClassLabel;
 
 export interface StockClassifierInput {
 	ticker?: string;
@@ -26,11 +34,15 @@ export interface StockClassifierInput {
 	disclosures?: string[] | null;
 	riskFactors?: { label?: string; detail?: string; level?: string }[] | null;
 	financials?: unknown;
+	/** Explicit upstream proof that risk review completed, including a valid empty result. */
+	riskEvidenceComplete?: boolean | null;
 }
 
 export interface StockClassification {
 	label: StockClassLabel;
-	score: number;
+	score: number | null;
+	evidenceState: 'EVALUABLE' | 'MISSING_EVIDENCE';
+	missingEvidence: StockClassificationMissingEvidence[];
 	reason: string;
 	reasons: string[];
 	riskCaption: string;
@@ -42,40 +54,14 @@ export interface StockClassification {
 // Compact grade payload type shared with the API (list/search rows).
 export type { StockGrade } from '@workspace/stock-grade';
 
-const LARGE_US_TICKERS = new Set([
-	'AAPL',
-	'MSFT',
-	'NVDA',
-	'AMZN',
-	'GOOGL',
-	'GOOG',
-	'META',
-	'TSLA',
-	'AVGO',
-	'NFLX',
-	'JPM', 'V', 'MA', 'WMT', 'COST', 'LLY', 'UNH', 'XOM', 'ORCL', 'CRM', 'AMD', 'QCOM', 'ASML',
-]);
-
-const LARGE_KR_TICKERS = new Set([
-	'005930',
-	'000660',
-	'005380',
-	'035420',
-	'035720',
-	'373220',
-	'207940',
-	'068270',
-	'051910',
-	'006400',
-	'105560', '055550', '000270', '012330', '028260', '086790', '032830', '066570', '003670', '096770', '017670', '030200', '015760', '034730', '010130',
-]);
-
 function num(value: unknown): number | null {
 	if (typeof value === 'number' && Number.isFinite(value)) return value;
 
 	if (typeof value === 'string') {
-		const parsed = Number(value.replace(/,/g, '').replace(/%/g, ''));
+		const normalized = value.replace(/,/g, '').replace(/%/g, '').trim();
+		if (!normalized) return null;
 
+		const parsed = Number(normalized);
 		if (Number.isFinite(parsed)) return parsed;
 	}
 
@@ -128,14 +114,7 @@ function removeNegatedRiskText(text: string) {
 function getMarketCapGrade(
 	marketCap: number | null,
 	currency?: string | null,
-	ticker?: string,
 ): StockClassification['marketCapGrade'] {
-	const t = String(ticker ?? '').toUpperCase();
-
-	if (LARGE_US_TICKERS.has(t) || LARGE_KR_TICKERS.has(t)) {
-		return '초대형';
-	}
-
 	if (marketCap == null || !Number.isFinite(marketCap) || marketCap <= 0) {
 		return '시총확인필요';
 	}
@@ -146,6 +125,10 @@ function getMarketCapGrade(
 		if (marketCap >= 2_000_000_000) return '중형';
 		if (marketCap >= 300_000_000) return '소형';
 		return '초소형';
+	}
+
+	if (currency !== 'KRW') {
+		return '시총확인필요';
 	}
 
 	if (marketCap >= 50_0000_0000_0000) return '초대형';
@@ -164,13 +147,30 @@ function countMatches(text: string, words: string[]) {
 	}, 0);
 }
 
+function hasSubstantiveEvidence(value: unknown): boolean {
+	if (typeof value === 'string') return value.trim().length > 0;
+	if (typeof value === 'number') return Number.isFinite(value);
+	if (typeof value === 'boolean') return true;
+	if (Array.isArray(value)) return value.some(hasSubstantiveEvidence);
+	if (value && typeof value === 'object') {
+		return Object.values(value).some(hasSubstantiveEvidence);
+	}
+	return false;
+}
+
+function hasRiskEvidence(input: StockClassifierInput): boolean {
+	return input.riskEvidenceComplete === true ||
+		hasSubstantiveEvidence(input.risks) ||
+		hasSubstantiveEvidence(input.riskFactors);
+}
+
 function buildRiskCaption(
 	text: string,
 	label: StockClassLabel,
 	seriousDelisting: boolean,
 	dilutionScore: number,
 ) {
-	if (label === '우량주') return '안정성 우수';
+	if (label === '우량주') return '리스크 별도 확인';
 	if (label === '보통주') return '일반 위험';
 	if (label === '저평가주') return '재무 확인';
 
@@ -186,19 +186,17 @@ function buildRiskCaption(
 }
 
 export function classifyStock(input: StockClassifierInput): StockClassification {
-	const ticker = String(input.ticker ?? '').toUpperCase();
 	const rawText = flattenText(input);
 	const text = removeNegatedRiskText(rawText);
 
 	const ai =
 		num(input.aiScore) ??
 		num(input.score) ??
-		num(input.rating?.score) ??
-		50;
+		num(input.rating?.score);
 
-	const change = Math.abs(num(input.changePercent) ?? 0);
+	const change = num(input.changePercent);
 	const marketCap = num(input.marketCap);
-	const marketCapGrade = getMarketCapGrade(marketCap, input.currency, ticker);
+	const marketCapGrade = getMarketCapGrade(marketCap, input.currency);
 
 	const per = num(input.per);
 	const pbr = num(input.pbr);
@@ -211,10 +209,7 @@ export function classifyStock(input: StockClassifierInput): StockClassification 
 	const debt = num(input.debt);
 
 	const isProtectedLargeCap =
-		LARGE_US_TICKERS.has(ticker) ||
-		LARGE_KR_TICKERS.has(ticker) ||
-		marketCapGrade === '초대형' ||
-		marketCapGrade === '대형';
+		marketCapGrade === '초대형' || marketCapGrade === '대형';
 
 	const delistingWords = [
 		'상장폐지',
@@ -250,24 +245,70 @@ export function classifyStock(input: StockClassifierInput): StockClassification 
 		text.includes('delisting notice') ||
 		text.includes('nasdaq deficiency');
 
+	const hasDebtEvidence =
+		debtRatio != null || (debt != null && equity != null);
+	const hasFinancialEvidence = [
+		per,
+		pbr,
+		roe,
+		revenueGrowth,
+		operatingIncome,
+		netIncome,
+		equity,
+	].some((value) => value != null);
+	const riskEvidenceAvailable = hasRiskEvidence(input);
+	const missingEvidence: StockClassificationMissingEvidence[] = [];
+	if (ai == null) missingEvidence.push('score');
+	if (!hasDebtEvidence) missingEvidence.push('debt');
+	if (!hasFinancialEvidence) missingEvidence.push('financial');
+	if (!riskEvidenceAvailable) missingEvidence.push('risk');
+
+	if (missingEvidence.length > 0) {
+		const categoryText = missingEvidence
+			.map((category) => {
+				if (category === 'score') return '점수';
+				if (category === 'debt') return '부채';
+				if (category === 'financial') return '재무';
+				return '리스크';
+			})
+			.join('·');
+
+		return {
+			label: MISSING_CLASSIFICATION_LABEL,
+			score: null,
+			evidenceState: 'MISSING_EVIDENCE',
+			missingEvidence,
+			reason: seriousDelisting
+				? `${categoryText} 근거가 부족해 종목 등급을 보류하지만 상장 관련 중대 리스크 키워드는 확인됩니다.`
+				: `${categoryText} 근거가 부족해 종목 등급을 확정할 수 없습니다.`,
+			reasons: seriousDelisting
+				? ['상장 관련 중대 리스크 키워드가 확인됩니다.', '누락된 분류 근거를 확보한 뒤 다시 평가해야 합니다.']
+				: ['누락된 점수·부채·재무·리스크 근거를 확보한 뒤 분류해야 합니다.'],
+			riskCaption: seriousDelisting ? '상장 리스크 주의' : '리스크 확인 필요',
+			marketCapGrade,
+			delistingWarning: seriousDelisting,
+		};
+	}
+
+	const evaluatedAi = ai as number;
 	const reasons: string[] = [];
-	let score = ai;
+	let score = evaluatedAi;
 
 	if (marketCapGrade === '초대형') {
 		score += 22;
-		reasons.push('시가총액 초대형 종목으로 안정성 가중치를 반영했습니다.');
+		reasons.push('확인된 시가총액이 초대형 기준입니다.');
 	} else if (marketCapGrade === '대형') {
 		score += 16;
-		reasons.push('시가총액 대형 종목으로 안정성이 비교적 높습니다.');
+		reasons.push('확인된 시가총액이 대형 기준입니다.');
 	} else if (marketCapGrade === '중형') {
 		score += 5;
-		reasons.push('시가총액 중형 종목으로 보통주 기준에 가깝습니다.');
+		reasons.push('확인된 시가총액이 중형 기준입니다.');
 	} else if (marketCapGrade === '소형') {
 		score -= 6;
-		reasons.push('시가총액 소형 종목으로 변동성 확인이 필요합니다.');
+		reasons.push('확인된 시가총액이 소형 기준이라 변동성 확인이 필요합니다.');
 	} else if (marketCapGrade === '초소형') {
 		score -= 18;
-		reasons.push('시가총액 초소형 종목으로 급등락과 희석 리스크 확인이 필요합니다.');
+		reasons.push('확인된 시가총액이 초소형 기준이라 급등락과 희석 리스크 확인이 필요합니다.');
 	}
 
 	if (equity != null && equity <= 0) {
@@ -280,7 +321,7 @@ export function classifyStock(input: StockClassifierInput): StockClassification 
 		reasons.push('부채비율이 높아 재무 부담이 있습니다.');
 	} else if (debtRatio != null && debtRatio <= 100) {
 		score += 8;
-		reasons.push('부채 부담이 비교적 낮습니다.');
+		reasons.push('확인된 부채비율이 비교적 낮습니다.');
 	}
 
 	if (debt != null && equity != null && equity > 0 && debt / equity > 2.5) {
@@ -330,7 +371,7 @@ export function classifyStock(input: StockClassifierInput): StockClassification 
 		reasons.push('기타 고위험 키워드가 확인됩니다.');
 	}
 
-	if (change >= 15) {
+	if (change != null && Math.abs(change) >= 15) {
 		score -= 10;
 		reasons.push('단기 급등락 변동성이 큽니다.');
 	}
@@ -343,7 +384,7 @@ export function classifyStock(input: StockClassifierInput): StockClassification 
 
 	const trueJunk =
 		!isProtectedLargeCap &&
-		((ai < 42 && marketCapGrade === '초소형') ||
+		((evaluatedAi < 42 && marketCapGrade === '초소형') ||
 			seriousDelisting ||
 			dilutionScore >= 2 ||
 			otherRiskScore >= 2 ||
@@ -354,7 +395,9 @@ export function classifyStock(input: StockClassifierInput): StockClassification 
 		!trueJunk &&
 		isProtectedLargeCap &&
 		!seriousDelisting &&
-		(debtRatio == null || debtRatio <= 250);
+		debtRatio != null &&
+		debtRatio <= 250 &&
+		riskEvidenceAvailable;
 
 	let label: StockClassLabel;
 	let reason: string;
@@ -363,10 +406,10 @@ export function classifyStock(input: StockClassifierInput): StockClassification 
 		label = '잡주';
 		reason =
 			reasons[0] ??
-			'시총, 재무, 공시 리스크 기준으로 고위험 종목에 가깝습니다.';
+			'확인된 시총, 재무, 공시 리스크 기준으로 고위험 종목에 가깝습니다.';
 	} else if (bluechip) {
 		label = '우량주';
-		reason = '시장 대표성, 시가총액, 사업 안정성과 중대 위험 부재를 기준으로 우량주로 분류했습니다.';
+		reason = '확인된 시가총액·부채·재무·리스크 근거를 기준으로 우량주로 분류했습니다.';
 	} else if (undervalued && finalScore >= 45) {
 		label = '저평가주';
 
@@ -377,7 +420,7 @@ export function classifyStock(input: StockClassifierInput): StockClassification 
 	} else {
 		label = '보통주';
 		reason =
-			'시총, 재무, 차트, 공시 기준으로 우량/저평가/고위험에 강하게 치우치지 않습니다.';
+			'현재 확인된 점수와 시총·부채·재무·리스크 근거 기준으로 우량/저평가/고위험에 강하게 치우치지 않습니다.';
 	}
 
 	const riskCaption = buildRiskCaption(
@@ -395,6 +438,8 @@ export function classifyStock(input: StockClassifierInput): StockClassification 
 				: label === '우량주'
 					? Math.max(finalScore, 70)
 					: finalScore,
+		evidenceState: 'EVALUABLE',
+		missingEvidence: [],
 		reason,
 		reasons: reasons.length
 			? reasons.slice(0, 6)
@@ -405,7 +450,9 @@ export function classifyStock(input: StockClassifierInput): StockClassification 
 	};
 }
 
-export function stockClassBadgeClass(label: StockClassLabel): string {
+export function stockClassBadgeClass(
+	label: StockClassLabel | null | undefined,
+): string {
 	if (label === '우량주') {
 		return 'border-green-500/40 bg-green-500/10 text-green-600 dark:text-green-400';
 	}
@@ -418,5 +465,9 @@ export function stockClassBadgeClass(label: StockClassLabel): string {
 		return 'border-yellow-500/50 bg-yellow-400/20 text-yellow-700 dark:text-yellow-300';
 	}
 
-	return 'border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400';
+	if (label === '잡주') {
+		return 'border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400';
+	}
+
+	return 'border-card-border bg-secondary/70 text-muted-foreground';
 }
