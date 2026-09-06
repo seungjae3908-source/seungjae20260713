@@ -231,7 +231,8 @@ test('AI recommendations keeps short content flexible and anchors BottomNav afte
   expect(recommendationsSource).toContain('data-testid="recommendations-shell"');
   expect(recommendationsSource).toContain('flex h-full min-h-0 flex-col overflow-hidden bg-background');
   expect(recommendationsSource).toContain('data-testid="recommendations-scroll-content"');
-  expect(recommendationsSource).toContain('min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-6 pt-4');
+  expect(recommendationsSource).toContain('min-h-0 flex-1 overflow-y-auto overscroll-contain');
+  expect(recommendationsSource).toContain('mx-auto w-full max-w-6xl px-3 pb-24 pt-3');
   expect(recommendationsSource).not.toContain('pb-28');
   expect(recommendationsSource).toContain('<BottomNav />');
 });
