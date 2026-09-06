@@ -129,7 +129,7 @@ export function ProfessionalCommandBarContent() {
 
   return (
     <>
-      <header
+      <div
         data-testid="professional-command-bar"
         className="hidden min-[1200px]:flex h-14 shrink-0 items-center gap-3 border-b border-card-border bg-background/95 px-4 backdrop-blur"
         aria-label="프로페셔널 명령 바"
@@ -164,11 +164,11 @@ export function ProfessionalCommandBarContent() {
           <span className="inline-flex min-h-8 items-center rounded-full border border-card-border px-3 font-medium" data-testid="professional-query-status">
             {activeRequests > 0 ? `데이터 요청 중 · ${activeRequests}` : '데이터 요청 대기'}
           </span>
-          <button type="button" onClick={() => navigate(APP_ROUTES.account)} className="min-h-8 max-w-40 truncate rounded-full border border-card-border px-3 font-semibold">
+          <button type="button" aria-label="계정 열기" onClick={() => navigate(APP_ROUTES.account)} className="min-h-8 max-w-40 truncate rounded-full border border-card-border px-3 font-semibold">
             {auth.displayName ?? '계정'}
           </button>
         </div>
-      </header>
+      </div>
 
       {open ? (
         <div className="fixed inset-0 z-[100] hidden min-[1200px]:flex items-start justify-center bg-black/55 px-6 pt-[12vh]" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) setOpen(false); }}>
