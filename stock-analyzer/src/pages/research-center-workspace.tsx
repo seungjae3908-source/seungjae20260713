@@ -13,13 +13,12 @@ const WORKSPACE_TABS = [
 ] as const;
 
 /**
- * General users see a concise read-only summary first. The existing canonical
- * Research Center remains intact behind Expert View so evidence detail is not
- * removed or simplified away. Buttons intentionally preserve the established
- * Research Copilot browser contract while using a centered segmented layout.
+ * Preserve the canonical Research Center as the default evidence workspace.
+ * A concise read-only summary remains available as an explicit General View,
+ * while the established Copilot button contract is unchanged.
  */
 export default function ResearchCenterWorkspace() {
-  const [view, setView] = useState<ResearchWorkspaceView>('general');
+  const [view, setView] = useState<ResearchWorkspaceView>('expert');
   return (
     <div className="flex h-full min-h-0 flex-col bg-background" data-testid="research-center-workspace">
       <div className="shrink-0 border-b border-border bg-background px-3 py-2 sm:px-4">
