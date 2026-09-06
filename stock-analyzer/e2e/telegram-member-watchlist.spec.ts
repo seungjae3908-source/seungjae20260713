@@ -1,0 +1,277 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { expect, test } from '@playwright/test';
+import { TELEGRAM_POLICY_SAFETY } from '../../api-server/src/services/telegram-alert-policy.service';
+import type { PersonalTelegramAlertDispatchResult } from '../../api-server/src/services/personal-telegram-alert.service';
+import {
+  memberEligibleForPersonalTelegram,
+} from '../../api-server/src/services/member-watchlist.service';
+import { deliverMemberWatchlistTelegramForSignal } from '../../api-server/src/services/member-watchlist-telegram-producer.service';
+
+function repositoryRoot() {
+  return path.basename(process.cwd()) === 'stock-analyzer'
+    ? path.resolve(process.cwd(), '..')
+    : process.cwd();
+}
+
+const baseSignal = {
+  type: 'NEW_CANDIDATE' as const,
+  id: 'candidate-1',
+  serviceSha: 'a'.repeat(40),
+  market: 'US_STOCK' as const,
+  symbol: 'AAPL',
+  strategy: 'swing-v1',
+  timeframe: '1D',
+  direction: 'BUY' as const,
+  validationTier: 'RESEARCH_CANDIDATE' as const,
+  occurredAt: '2026-08-27T00:00:00.000Z',
+};
+
+function delivered(userId: string): PersonalTelegramAlertDispatchResult {
+  return {
+    status: 'POLICY',
+    reason: null,
+    policy: {
+      decision: {
+        action: 'IMMEDIATE',
+        reason: 'ALLOWED',
+        userId,
+        prioritySemantics: 'DELIVERY_URGENCY_ONLY',
+        digestKey: null,
+        digestWindowMs: null,
+        safety: TELEGRAM_POLICY_SAFETY,
+      },
+      transport: { ok: true, attempts: 1 },
+      safety: TELEGRAM_POLICY_SAFETY,
+    },
+  };
+}
+
+function durableQueued(userId: string): PersonalTelegramAlertDispatchResult {
+  return {
+    status: 'POLICY',
+    reason: null,
+    policy: {
+      decision: {
+        action: 'IMMEDIATE',
+        reason: 'ALLOWED',
+        userId,
+        prioritySemantics: 'DELIVERY_URGENCY_ONLY',
+        digestKey: null,
+        digestWindowMs: null,
+        safety: TELEGRAM_POLICY_SAFETY,
+      },
+      transport: null,
+      safety: TELEGRAM_POLICY_SAFETY,
+    },
+    deliveryQueued: true,
+    deliveryId: 'delivery-1',
+  } as PersonalTelegramAlertDispatchResult;
+}
+
+test('member watchlist Telegram producer is fail-closed OFF by default', async () => {
+  let searches = 0;
+  let sends = 0;
+  const result = await deliverMemberWatchlistTelegramForSignal(baseSignal, {
+    findSubscribers: async () => {
+      searches += 1;
+      return [{ userId: 'user-a' }];
+    },
+    deliver: async ({ userId }) => {
+      sends += 1;
+      return delivered(userId);
+    },
+  }, {});
+
+  expect(result.reason).toBe('DISABLED');
+  expect(searches).toBe(0);
+  expect(sends).toBe(0);
+});
+
+test('personal watchlist eligibility follows current member capability, not approved status alone', () => {
+  expect(memberEligibleForPersonalTelegram({
+    status: 'approved',
+    membership_level: 'associate',
+    is_active: true,
+  })).toBe(true);
+  expect(memberEligibleForPersonalTelegram({
+    status: 'approved',
+    membership_level: 'regular',
+    is_active: true,
+  })).toBe(true);
+  expect(memberEligibleForPersonalTelegram({
+    status: 'approved',
+    membership_level: 'pending',
+    is_active: true,
+  })).toBe(false);
+  expect(memberEligibleForPersonalTelegram({
+    status: 'approved',
+    membership_level: 'regular',
+    is_active: false,
+  })).toBe(false);
+  expect(memberEligibleForPersonalTelegram({
+    status: 'suspended',
+    membership_level: 'regular',
+    is_active: true,
+  })).toBe(false);
+});
+
+test('member watchlist signal goes only through the linked-user personal policy gateway', async () => {
+  const users: string[] = [];
+  const events: Array<{ userId: string; signalType: string; market?: string }> = [];
+  const alerts: Array<{ type: string; destinationChatId?: string; details?: string }> = [];
+
+  const result = await deliverMemberWatchlistTelegramForSignal(baseSignal, {
+    findSubscribers: async (market, symbol) => {
+      expect(market).toBe('US_STOCK');
+      expect(symbol).toBe('AAPL');
+      return [{ userId: 'user-a' }, { userId: 'user-b' }];
+    },
+    deliver: async (input) => {
+      users.push(input.userId);
+      events.push(input.event);
+      alerts.push(input.alert);
+      return delivered(input.userId);
+    },
+  }, { MEMBER_WATCHLIST_TELEGRAM_PRODUCER_ENABLED: 'true' });
+
+  expect(result).toMatchObject({ eligible: true, matched: 2, attempted: 2, delivered: 2, queued: 0, failed: 0 });
+  expect(users).toEqual(['user-a', 'user-b']);
+  expect(events.map((event) => event.userId)).toEqual(['user-a', 'user-b']);
+  expect(events.every((event) => event.signalType === 'BUY' && event.market === 'US')).toBe(true);
+  expect(alerts.every((alert) => alert.type === 'strong_buy')).toBe(true);
+  expect(alerts.every((alert) => alert.destinationChatId === undefined)).toBe(true);
+  expect(alerts.every((alert) => alert.details?.includes('실제 주문/체결 아님'))).toBe(true);
+});
+
+test('durable outbox queue acceptance is a successful handoff, not a transport failure', async () => {
+  const result = await deliverMemberWatchlistTelegramForSignal(baseSignal, {
+    findSubscribers: async () => [{ userId: 'user-a' }],
+    deliver: async (input) => durableQueued(input.userId),
+  }, { MEMBER_WATCHLIST_TELEGRAM_PRODUCER_ENABLED: 'true' });
+
+  expect(result).toMatchObject({
+    reason: 'COMPLETE',
+    attempted: 1,
+    delivered: 0,
+    queued: 1,
+    skipped: 0,
+    failed: 0,
+  });
+});
+
+test('member watchlist fanout is bounded and isolates a single delivery failure', async () => {
+  let active = 0;
+  let maxActive = 0;
+  const subscribers = Array.from({ length: 17 }, (_, index) => ({ userId: `user-${index}` }));
+
+  const result = await deliverMemberWatchlistTelegramForSignal(baseSignal, {
+    findSubscribers: async () => subscribers,
+    deliver: async (input) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active -= 1;
+      if (input.userId === 'user-9') throw new Error('isolated delivery failure');
+      return delivered(input.userId);
+    },
+  }, { MEMBER_WATCHLIST_TELEGRAM_PRODUCER_ENABLED: 'true' });
+
+  expect(result).toMatchObject({
+    reason: 'PARTIAL',
+    matched: 17,
+    attempted: 17,
+    delivered: 16,
+    queued: 0,
+    failed: 1,
+  });
+  expect(maxActive).toBeGreaterThan(1);
+  expect(maxActive).toBeLessThanOrEqual(8);
+});
+
+test('stock/spot SHORT is never promoted into a new-entry personal Telegram signal', async () => {
+  let searches = 0;
+  const findSubscribers = async () => {
+    searches += 1;
+    return [{ userId: 'user-a' }];
+  };
+  const enabled = { MEMBER_WATCHLIST_TELEGRAM_PRODUCER_ENABLED: 'true' };
+
+  const stock = await deliverMemberWatchlistTelegramForSignal({
+    ...baseSignal,
+    direction: 'SHORT',
+  }, { findSubscribers }, enabled);
+  const spot = await deliverMemberWatchlistTelegramForSignal({
+    ...baseSignal,
+    market: 'CRYPTO_SPOT',
+    symbol: 'KRW-BTC',
+    direction: 'SHORT',
+  }, { findSubscribers }, enabled);
+
+  expect(stock.reason).toBe('INELIGIBLE');
+  expect(spot.reason).toBe('INELIGIBLE');
+  expect(searches).toBe(0);
+});
+
+test('crypto futures LONG and SHORT remain independent eligible directions', async () => {
+  const signalTypes: string[] = [];
+
+  for (const direction of ['LONG', 'SHORT'] as const) {
+    const result = await deliverMemberWatchlistTelegramForSignal({
+      ...baseSignal,
+      market: 'CRYPTO_FUTURES',
+      symbol: 'BTCUSDT',
+      direction,
+    }, {
+      findSubscribers: async () => [{ userId: 'user-a' }],
+      deliver: async (input) => {
+        signalTypes.push(input.event.signalType);
+        return delivered(input.userId);
+      },
+    }, { MEMBER_WATCHLIST_TEGRAM_PRODUCER_ENABLED: 'true', MEMBER_WATCHLIST_TELEGRAM_PRODUCER_ENABLED: 'true' });
+    expect(result.delivered).toBe(1);
+  }
+
+  expect(signalTypes).toEqual(['LONG', 'SHORT']);
+});
+
+test('member ownership, canonical capability, durable handoff, and delivery boundaries are fail-closed', () => {
+  const root = repositoryRoot();
+  const route = fs.readFileSync(path.join(root, 'api-server/src/routes/member-watchlist.ts'), 'utf8');
+  const migration = fs.readFileSync(
+    path.join(root, 'api-server/supabase/migrations/2026082704_member_watchlist_items.sql'),
+    'utf8',
+  );
+  const service = fs.readFileSync(
+    path.join(root, 'api-server/src/services/member-watchlist.service.ts'),
+    'utf8',
+  );
+  const sync = fs.readFileSync(path.join(root, 'stock-analyzer/src/lib/watchlist-sync.ts'), 'utf8');
+  const producer = fs.readFileSync(
+    path.join(root, 'api-server/src/services/member-watchlist-telegram-producer.service.ts'),
+    'utf8',
+  );
+
+  expect(route).toContain('req.member?.id');
+  expect(route).toContain('IDENTITY_OVERRIDE_REJECTED');
+  expect(route).not.toContain('req.body.userId');
+  expect(migration).toContain('auth.uid() = user_id');
+  expect(migration).toContain("'UNRESOLVED'");
+  expect(service).toContain(".from('profiles')");
+  expect(service).toContain(".select('id,status,membership_level,is_active,role')");
+  expect(service).toContain(".eq('status', 'approved')");
+  expect(service).toContain("packages/member-access/src/index.js");
+  expect(service).toContain("hasCapability(profile, 'canConnectPersonalTelegram')");
+  expect(service).not.toContain("profile.membership_level !== 'pending'");
+  expect(service).not.toContain('profile.is_active !== false');
+  expect(service).toContain('MAX_PROFILE_LOOKUP_BATCH = 200');
+  expect(sync).toContain("request('/member-watchlist/sync'");
+  expect(sync).not.toContain('deviceId:');
+  expect(sync).not.toContain('userId:');
+  expect(producer).toContain("MEMBER_WATCHLIST_TELEGRAM_PRODUCER_ENABLED === 'true'");
+  expect(producer).toContain('MAX_MEMBER_WATCHLIST_DELIVERY_CONCURRENCY = 8');
+  expect(producer).toContain('Promise.allSettled');
+  expect(producer).toContain("hasOwnProperty.call(dispatch, 'deliveryQueued')");
+  expect(producer).toContain('deliverPersonalTelegramAlert');
+  expect(producer).not.toContain('sendTelegramAlert');
+});
