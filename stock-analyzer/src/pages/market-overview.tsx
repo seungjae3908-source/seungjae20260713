@@ -49,7 +49,7 @@ function StateMessage({ children, error = false }: { children: React.ReactNode; 
   return (
     <div
       className={cn(
-        'rounded-2xl border px-3 py-4 text-center text-xs font-bold',
+        'rounded-2xl border px-3 py-4 text-center text-sm font-medium',
         error
           ? 'border-destructive/20 bg-destructive/5 text-destructive'
           : 'border-card-border bg-muted/40 text-muted-foreground',
@@ -63,12 +63,12 @@ function StateMessage({ children, error = false }: { children: React.ReactNode; 
 function IndexCard({ item }: { item: SummaryItem }) {
   const change = finite(item.changePercent);
   return (
-    <div className="min-w-0 rounded-2xl border border-card-border bg-background/60 p-3">
-      <p className="truncate text-[11px] font-extrabold text-muted-foreground">{item.label}</p>
-      <p className="mt-1 truncate text-lg font-black tabular-nums">{formatNumber(item.price)}</p>
+    <div className="min-w-0 rounded-xl border border-card-border bg-background/60 p-3 text-center">
+      <p className="truncate text-xs font-medium text-muted-foreground">{item.label}</p>
+      <p className="mt-1 truncate text-lg font-bold tabular-nums">{formatNumber(item.price)}</p>
       <p
         className={cn(
-          'mt-1 text-xs font-black tabular-nums',
+          'mt-1 text-sm font-semibold tabular-nums',
           change == null
             ? 'text-muted-foreground'
             : change >= 0
@@ -137,27 +137,28 @@ export default function MarketOverviewPage() {
   }
 
   return (
-    <div className="h-full min-w-0 overflow-y-auto overscroll-contain bg-background">
-      <header className="sticky top-0 z-20 border-b border-card-border bg-background/95 px-3 pb-3 pt-3 backdrop-blur sm:px-4">
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background" data-testid="market-overview-page">
+      <header className="shrink-0 border-b border-card-border bg-background/95 px-3 py-3 backdrop-blur sm:px-4">
         <div className="mx-auto max-w-6xl">
-          <div className="flex items-center justify-between gap-3">
-            <h1 className="text-xl font-black">시황</h1>
+          <div className="grid grid-cols-[44px_minmax(0,1fr)_44px] items-center gap-2">
+            <span aria-hidden="true" />
+            <h1 className="truncate text-center text-xl font-bold sm:text-2xl">시황</h1>
             <button
               type="button"
               onClick={refresh}
               aria-label="시황 새로고침"
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-card-border bg-card"
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-card-border bg-card"
             >
-              <RefreshCw className={cn('h-4 w-4', refreshing && 'animate-spin')} />
+              <RefreshCw className={cn('h-4 w-4', refreshing && 'animate-spin')} aria-hidden="true" />
             </button>
           </div>
 
-          <div className="mt-2 grid grid-cols-2 rounded-2xl bg-muted p-1">
+          <div className="mt-3 grid grid-cols-2 rounded-2xl bg-muted p-1">
             <button
               type="button"
               onClick={() => selectMarket('KR')}
               className={cn(
-                'min-h-10 rounded-xl px-3 text-sm font-black transition',
+                'min-h-11 rounded-xl px-3 text-sm font-semibold transition',
                 market === 'KR' ? 'bg-card text-primary shadow-sm' : 'text-muted-foreground',
               )}
             >
@@ -167,7 +168,7 @@ export default function MarketOverviewPage() {
               type="button"
               onClick={() => selectMarket('US')}
               className={cn(
-                'min-h-10 rounded-xl px-3 text-sm font-black transition',
+                'min-h-11 rounded-xl px-3 text-sm font-semibold transition',
                 market === 'US' ? 'bg-card text-primary shadow-sm' : 'text-muted-foreground',
               )}
             >
@@ -175,14 +176,14 @@ export default function MarketOverviewPage() {
             </button>
           </div>
 
-          <div className="mt-2 grid grid-cols-3 gap-1 lg:hidden" data-testid="market-overview-mobile-tabs">
+          <div className="mt-2 grid grid-cols-3 gap-1.5 min-[1200px]:hidden" data-testid="market-overview-mobile-tabs">
             {MOBILE_TABS.map((item) => (
               <button
                 key={item.key}
                 type="button"
                 onClick={() => setMobileTab(item.key)}
                 className={cn(
-                  'min-h-10 rounded-xl border px-2 text-xs font-black',
+                  'min-h-11 rounded-xl border px-2 text-sm font-semibold',
                   mobileTab === item.key
                     ? 'border-primary bg-primary text-primary-foreground'
                     : 'border-card-border bg-card text-muted-foreground',
@@ -195,136 +196,138 @@ export default function MarketOverviewPage() {
         </div>
       </header>
 
-      <main className="mx-auto grid w-full max-w-6xl gap-4 px-3 pb-28 pt-3 sm:px-4 lg:grid-cols-3 lg:pt-4">
-        <section
-          data-testid="market-overview-indices"
-          className={cn(
-            'min-w-0 rounded-3xl border border-card-border bg-card p-4 shadow-sm',
-            mobileTab !== 'indices' && 'hidden lg:block',
-          )}
-        >
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="text-sm font-black">주요 지수</h2>
-            <span className="text-[10px] font-bold text-muted-foreground">{market === 'KR' ? '국내' : '미국'}</span>
-          </div>
-
-          {summary.isLoading && <div className="mt-3"><StateMessage>지수 확인 중</StateMessage></div>}
-          {summary.isError && <div className="mt-3"><StateMessage error>지수 확인 실패</StateMessage></div>}
-          {!summary.isLoading && !summary.isError && summaryProviderError && (
-            <div className="mt-3">
-              <StateMessage error>
-                <div className="space-y-2">
-                  <p>지수 제공처 응답 없음</p>
-                  <button
-                    type="button"
-                    onClick={() => void summary.refetch()}
-                    className="rounded-xl border border-destructive/30 px-3 py-2 text-xs font-black"
-                  >
-                    재시도
-                  </button>
-                </div>
-              </StateMessage>
+      <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+        <div className="mx-auto grid w-full max-w-6xl gap-4 px-3 pb-28 pt-3 sm:px-4 min-[1200px]:grid-cols-3 min-[1200px]:pt-4">
+          <section
+            data-testid="market-overview-indices"
+            className={cn(
+              'min-w-0 rounded-2xl border border-card-border bg-card p-4 shadow-sm',
+              mobileTab !== 'indices' && 'hidden min-[1200px]:block',
+            )}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-base font-bold">주요 지수</h2>
+              <span className="text-xs font-medium text-muted-foreground">{market === 'KR' ? '국내' : '미국'}</span>
             </div>
-          )}
-          {!summary.isLoading && !summary.isError && summaryPartial && (
-            <div className="mt-3"><StateMessage>일부 지수만 표시</StateMessage></div>
-          )}
 
-          {!summary.isLoading && !summary.isError && !summaryProviderError && (
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              {indices.map((item) => <IndexCard key={item.key} item={item} />)}
-              {indices.length === 0 && (
-                <div className="col-span-2"><StateMessage>지수 데이터 없음</StateMessage></div>
-              )}
-            </div>
-          )}
-        </section>
-
-        <section
-          data-testid="market-overview-sectors"
-          className={cn(
-            'min-w-0 rounded-3xl border border-card-border bg-card p-4 shadow-sm',
-            mobileTab !== 'sectors' && 'hidden lg:block',
-          )}
-        >
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="text-sm font-black">섹터 흐름</h2>
-            <button
-              type="button"
-              onClick={() => navigate('/stocks')}
-              className="flex items-center gap-1 text-xs font-black text-primary"
-            >
-              전체
-              <ChevronRight className="h-3.5 w-3.5" />
-            </button>
-          </div>
-
-          {sectors.isLoading && <div className="mt-3"><StateMessage>섹터 확인 중</StateMessage></div>}
-          {sectors.isError && <div className="mt-3"><StateMessage error>섹터 확인 실패</StateMessage></div>}
-
-          {!sectors.isLoading && !sectors.isError && (
-            <div className="mt-3 space-y-2">
-              {topSectors.map(({ sector, change }) => (
-                <div key={sector.key} className="min-w-0 rounded-2xl border border-card-border bg-background/60 p-3">
-                  <div className="flex min-w-0 items-center justify-between gap-3">
-                    <p className="min-w-0 truncate text-sm font-black">{sector.label}</p>
-                    <span
-                      className={cn(
-                        'shrink-0 text-xs font-black tabular-nums',
-                        change == null
-                          ? 'text-muted-foreground'
-                          : change >= 0
-                            ? 'text-red-500'
-                            : 'text-blue-500',
-                      )}
+            {summary.isLoading && <div className="mt-3"><StateMessage>지수 확인 중</StateMessage></div>}
+            {summary.isError && <div className="mt-3"><StateMessage error>지수 확인 실패</StateMessage></div>}
+            {!summary.isLoading && !summary.isError && summaryProviderError && (
+              <div className="mt-3">
+                <StateMessage error>
+                  <div className="space-y-2">
+                    <p>지수 제공처 응답 없음</p>
+                    <button
+                      type="button"
+                      onClick={() => void summary.refetch()}
+                      className="min-h-10 rounded-xl border border-destructive/30 px-3 text-sm font-semibold"
                     >
-                      {formatPercent(change)}
-                    </span>
+                      재시도
+                    </button>
                   </div>
-                  <div className="mt-2 flex min-w-0 flex-wrap gap-1.5">
-                    {sector.rows.slice(0, 3).map((row) => (
-                      <button
-                        key={`${row.market}:${row.ticker}`}
-                        type="button"
-                        onClick={() => navigate(`/stock/${encodeURIComponent(row.ticker)}`)}
-                        className="max-w-full truncate rounded-full bg-muted px-2.5 py-1 text-[10px] font-extrabold text-muted-foreground active:text-foreground"
-                      >
-                        {row.name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ))}
-              {topSectors.length === 0 && <StateMessage>섹터 데이터 없음</StateMessage>}
-            </div>
-          )}
-        </section>
-
-        <section
-          data-testid="market-overview-briefing"
-          className={cn(
-            'min-w-0 rounded-3xl border border-card-border bg-card p-4 shadow-sm',
-            mobileTab !== 'briefing' && 'hidden lg:block',
-          )}
-        >
-          <h2 className="text-sm font-black">시장 브리핑</h2>
-
-          {briefing.isLoading && <div className="mt-3"><StateMessage>브리핑 확인 중</StateMessage></div>}
-          {briefing.isError && <div className="mt-3"><StateMessage error>브리핑 확인 실패</StateMessage></div>}
-
-          {!briefing.isLoading && !briefing.isError && briefing.data && (
-            <div className="mt-3 rounded-2xl border border-card-border bg-background/60 p-3">
-              <p className="line-clamp-2 text-sm font-black leading-5">{briefing.data.headline}</p>
-              <div className="mt-2 space-y-1.5">
-                {briefing.data.lines.slice(0, 5).map((line, index) => (
-                  <p key={`${index}:${line}`} className="line-clamp-2 text-xs font-semibold leading-5 text-muted-foreground">
-                    {line}
-                  </p>
-                ))}
+                </StateMessage>
               </div>
+            )}
+            {!summary.isLoading && !summary.isError && summaryPartial && (
+              <div className="mt-3"><StateMessage>일부 지수만 표시</StateMessage></div>
+            )}
+
+            {!summary.isLoading && !summary.isError && !summaryProviderError && (
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                {indices.map((item) => <IndexCard key={item.key} item={item} />)}
+                {indices.length === 0 && (
+                  <div className="col-span-2"><StateMessage>지수 데이터 없음</StateMessage></div>
+                )}
+              </div>
+            )}
+          </section>
+
+          <section
+            data-testid="market-overview-sectors"
+            className={cn(
+              'min-w-0 rounded-2xl border border-card-border bg-card p-4 shadow-sm',
+              mobileTab !== 'sectors' && 'hidden min-[1200px]:block',
+            )}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-base font-bold">섹터 흐름</h2>
+              <button
+                type="button"
+                onClick={() => navigate('/stocks')}
+                className="flex min-h-9 items-center gap-1 text-sm font-semibold text-primary"
+              >
+                전체
+                <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
             </div>
-          )}
-        </section>
+
+            {sectors.isLoading && <div className="mt-3"><StateMessage>섹터 확인 중</StateMessage></div>}
+            {sectors.isError && <div className="mt-3"><StateMessage error>섹터 확인 실패</StateMessage></div>}
+
+            {!sectors.isLoading && !sectors.isError && (
+              <div className="mt-3 space-y-2">
+                {topSectors.map(({ sector, change }) => (
+                  <div key={sector.key} className="min-w-0 rounded-xl border border-card-border bg-background/60 p-3">
+                    <div className="flex min-w-0 items-center justify-between gap-3">
+                      <p className="min-w-0 truncate text-sm font-semibold">{sector.label}</p>
+                      <span
+                        className={cn(
+                          'shrink-0 text-sm font-semibold tabular-nums',
+                          change == null
+                            ? 'text-muted-foreground'
+                            : change >= 0
+                              ? 'text-red-500'
+                              : 'text-blue-500',
+                        )}
+                      >
+                        {formatPercent(change)}
+                      </span>
+                    </div>
+                    <div className="mt-2 flex min-w-0 flex-wrap gap-1.5">
+                      {sector.rows.slice(0, 3).map((row) => (
+                        <button
+                          key={`${row.market}:${row.ticker}`}
+                          type="button"
+                          onClick={() => navigate(`/stock/${encodeURIComponent(row.ticker)}`)}
+                          className="max-w-full truncate rounded-full bg-muted px-2.5 py-1.5 text-xs font-medium text-muted-foreground active:text-foreground"
+                        >
+                          {row.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                {topSectors.length === 0 && <StateMessage>섹터 데이터 없음</StateMessage>}
+              </div>
+            )}
+          </section>
+
+          <section
+            data-testid="market-overview-briefing"
+            className={cn(
+              'min-w-0 rounded-2xl border border-card-border bg-card p-4 shadow-sm',
+              mobileTab !== 'briefing' && 'hidden min-[1200px]:block',
+            )}
+          >
+            <h2 className="text-base font-bold">시장 브리핑</h2>
+
+            {briefing.isLoading && <div className="mt-3"><StateMessage>브리핑 확인 중</StateMessage></div>}
+            {briefing.isError && <div className="mt-3"><StateMessage error>브리핑 확인 실패</StateMessage></div>}
+
+            {!briefing.isLoading && !briefing.isError && briefing.data && (
+              <div className="mt-3 rounded-xl border border-card-border bg-background/60 p-3">
+                <p className="line-clamp-2 text-sm font-semibold leading-6">{briefing.data.headline}</p>
+                <div className="mt-2 space-y-1.5">
+                  {briefing.data.lines.slice(0, 5).map((line, index) => (
+                    <p key={`${index}:${line}`} className="line-clamp-2 text-sm font-normal leading-5 text-muted-foreground">
+                      {line}
+                    </p>
+                  ))}
+                </div>
+              </div>
+            )}
+          </section>
+        </div>
       </main>
 
       <BottomNav />
