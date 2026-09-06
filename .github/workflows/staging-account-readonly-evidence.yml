@@ -28,20 +28,10 @@ jobs:
     environment: staging
     env:
       STAGING_ARTIFACT_DIR: ${{ github.workspace }}/staging-account-readonly-artifacts
-      STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
-      STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
-      STAGING_SSH_PORT: ${{ secrets.STAGING_SSH_PORT || '22' }}
-      STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
-      STAGING_SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
-      STANDARD_STAGING_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
-      STAGING_TOSS_CLIENT_ID: ${{ secrets.STAGING_TOSS_CLIENT_ID || secrets.TOSS_CLIENT_ID }}
-      STAGING_TOSS_CLIENT_SECRET: ${{ secrets.STAGING_TOSS_CLIENT_SECRET || secrets.TOSS_CLIENT_SECRET_KEY }}
-      STAGING_TOSS_ACCOUNT_SEQ: ${{ secrets.STAGING_TOSS_ACCOUNT_SEQ }}
-      STAGING_UPBIT_ACCESS_KEY: ${{ secrets.STAGING_UPBIT_ACCESS_KEY || secrets.UPBIT_API_KEY }}
-      STAGING_UPBIT_SECRET_KEY: ${{ secrets.STAGING_UPBIT_SECRET_KEY || secrets.UPBIT_SECRET_KEY }}
-      STAGING_BITGET_API_KEY: ${{ secrets.STAGING_BITGET_API_KEY || secrets.BITGET_API_KEY }}
-      STAGING_BITGET_SECRET_KEY: ${{ secrets.STAGING_BITGET_SECRET_KEY || secrets.BITGET_SECRET_KEY }}
-      STAGING_BITGET_PASSPHRASE: ${{ secrets.STAGING_BITGET_PASSPHRASE || secrets.BITGET_PASSPHRASE }}
+      EXPECTED_EGRESS_IP: ${{ vars.STAGING_ACCOUNT_EVIDENCE_EGRESS_IP }}
+      SSH_KEY_PATH: ${{ runner.temp }}/account-evidence-id_ed25519
+      SSH_KNOWN_HOSTS_PATH: ${{ runner.temp }}/account-evidence-known_hosts
+      SSH_CONTROL_SOCKET: ${{ runner.temp }}/account-evidence-ssh.sock
 
     steps:
       - uses: actions/checkout@v4
@@ -75,9 +65,8 @@ jobs:
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha=${match[1]}\n`);
           NODE
 
-      - name: Require exact current main and provider read-only secrets
-        id: prerequisites
-        continue-on-error: true
+      - name: Require exact current main
+        id: main_identity
         env:
           TARGET_SHA: ${{ steps.target.outputs.sha }}
         run: |
@@ -88,12 +77,107 @@ jobs:
             echo "Target is not current main. target=$TARGET_SHA current=$CURRENT_MAIN" >&2
             exit 1
           }
+          git checkout --detach "$TARGET_SHA"
+          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]
+
+      - name: Install repository dependencies
+        id: dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Configure isolated Staging SSH client
+        id: ssh_setup
+        env:
+          STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          STAGING_SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$STAGING_SSH_PRIVATE_KEY" && -n "$STAGING_SSH_KNOWN_HOSTS" ]] || {
+            echo 'Staging SSH key and pinned known_hosts are required.' >&2
+            exit 1
+          }
+          umask 077
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > "$SSH_KEY_PATH"
+          printf '%s\n' "$STAGING_SSH_KNOWN_HOSTS" > "$SSH_KNOWN_HOSTS_PATH"
+
+      - name: Require provider-allowlisted Staging egress IP
+        id: egress
+        env:
+          STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+          STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+          STAGING_SSH_PORT: ${{ secrets.STAGING_SSH_PORT || '22' }}
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$EXPECTED_EGRESS_IP" ]] || {
+            echo 'STAGING_ACCOUNT_EVIDENCE_EGRESS_IP is not configured.' >&2
+            exit 1
+          }
+          [[ -n "$STAGING_SSH_HOST" && -n "$STAGING_SSH_USER" ]] || {
+            echo 'Staging SSH host/user are required.' >&2
+            exit 1
+          }
+          ACTUAL_EGRESS_IP="$(ssh \
+            -i "$SSH_KEY_PATH" \
+            -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=15 \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$SSH_KNOWN_HOSTS_PATH" \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            'curl --fail --silent --show-error --max-time 10 https://api.ipify.org')"
+          [[ -n "$ACTUAL_EGRESS_IP" && "$ACTUAL_EGRESS_IP" == "$EXPECTED_EGRESS_IP" ]] || {
+            echo 'Staging egress IP does not match the configured provider allowlist IP.' >&2
+            exit 1
+          }
+          echo 'Provider-allowlisted Staging egress identity verified.'
+
+      - name: Open TLS-preserving provider egress tunnels
+        id: tunnels
+        env:
+          STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+          STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+          STAGING_SSH_PORT: ${{ secrets.STAGING_SSH_PORT || '22' }}
+        run: |
+          set -Eeuo pipefail
+          rm -f "$SSH_CONTROL_SOCKET"
+          ssh -fN -M -S "$SSH_CONTROL_SOCKET" \
+            -i "$SSH_KEY_PATH" \
+            -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=15 \
+            -o ExitOnForwardFailure=yes \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=3 \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$SSH_KNOWN_HOSTS_PATH" \
+            -L 127.0.0.1:18443:openapi.tossinvest.com:443 \
+            -L 127.0.0.1:18444:api.upbit.com:443 \
+            -L 127.0.0.1:18445:api.bitget.com:443 \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST"
+          ssh -S "$SSH_CONTROL_SOCKET" -O check \
+            -i "$SSH_KEY_PATH" \
+            -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$SSH_KNOWN_HOSTS_PATH" \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST"
+
+      - name: Run canonical Toss Upbit Bitget no-DB read-only evidence
+        id: account_evidence
+        continue-on-error: true
+        env:
+          STAGING_TARGET_SHA: ${{ steps.target.outputs.sha }}
+          STAGING_TOSS_CLIENT_ID: ${{ secrets.STAGING_TOSS_CLIENT_ID || secrets.TOSS_CLIENT_ID }}
+          STAGING_TOSS_CLIENT_SECRET: ${{ secrets.STAGING_TOSS_CLIENT_SECRET || secrets.TOSS_CLIENT_SECRET_KEY }}
+          STAGING_TOSS_ACCOUNT_SEQ: ${{ secrets.STAGING_TOSS_ACCOUNT_SEQ }}
+          STAGING_UPBIT_ACCESS_KEY: ${{ secrets.STAGING_UPBIT_ACCESS_KEY || secrets.UPBIT_API_KEY }}
+          STAGING_UPBIT_SECRET_KEY: ${{ secrets.STAGING_UPBIT_SECRET_KEY || secrets.UPBIT_SECRET_KEY }}
+          STAGING_BITGET_API_KEY: ${{ secrets.STAGING_BITGET_API_KEY || secrets.BITGET_API_KEY }}
+          STAGING_BITGET_SECRET_KEY: ${{ secrets.STAGING_BITGET_SECRET_KEY || secrets.BITGET_SECRET_KEY }}
+          STAGING_BITGET_PASSPHRASE: ${{ secrets.STAGING_BITGET_PASSPHRASE || secrets.BITGET_PASSPHRASE }}
+        run: |
+          set -Eeuo pipefail
           node <<'NODE'
           const required = [
-            'STAGING_SSH_HOST',
-            'STAGING_SSH_USER',
-            'STAGING_SSH_PRIVATE_KEY',
-            'STANDARD_STAGING_BASE_URL',
             'STAGING_TOSS_CLIENT_ID',
             'STAGING_TOSS_CLIENT_SECRET',
             'STAGING_UPBIT_ACCESS_KEY',
@@ -108,58 +192,6 @@ jobs:
             process.exit(1);
           }
           NODE
-
-      - name: Install repository dependencies
-        id: dependencies
-        if: steps.prerequisites.outcome == 'success'
-        continue-on-error: true
-        run: pnpm install --frozen-lockfile
-
-      - name: Configure isolated staging SSH
-        id: ssh_setup
-        if: steps.dependencies.outcome == 'success'
-        continue-on-error: true
-        run: |
-          set -Eeuo pipefail
-          umask 077
-          mkdir -p ~/.ssh
-          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
-          if [[ -n "$STAGING_SSH_KNOWN_HOSTS" ]]; then
-            printf '%s\n' "$STAGING_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          else
-            ssh-keyscan -p "$STAGING_SSH_PORT" -H "$STAGING_SSH_HOST" > ~/.ssh/known_hosts
-          fi
-
-      - name: Require currently deployed standard Staging exact SHA
-        id: staging_identity
-        if: steps.ssh_setup.outcome == 'success'
-        continue-on-error: true
-        env:
-          TARGET_SHA: ${{ steps.target.outputs.sha }}
-        run: |
-          set -Eeuo pipefail
-          REMOTE_SHA="$(ssh -i ~/.ssh/id_ed25519 -p "$STAGING_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
-            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
-            "cat /srv/seungjae-staging/.deploy/current-sha")"
-          [[ "$REMOTE_SHA" == "$TARGET_SHA" ]] || {
-            echo "Staging is not on target SHA. deployed=$REMOTE_SHA target=$TARGET_SHA" >&2
-            exit 1
-          }
-          curl --fail --silent --show-error --max-time 20 "$STANDARD_STAGING_BASE_URL/api/health" \
-            | TARGET_SHA="$TARGET_SHA" node -e '
-              let raw=""; process.stdin.on("data", d => raw += d); process.stdin.on("end", () => {
-                const value=JSON.parse(raw); const sha=String(value.deploySha ?? value.sha ?? value.commitSha ?? "");
-                if (value.ok !== true || value.identityMatch !== true || sha !== process.env.TARGET_SHA) process.exit(1);
-              });'
-
-      - name: Run canonical Toss Upbit Bitget no-DB read-only evidence
-        id: account_evidence
-        if: steps.staging_identity.outcome == 'success'
-        continue-on-error: true
-        env:
-          STAGING_TARGET_SHA: ${{ steps.target.outputs.sha }}
-        run: |
-          set -Eeuo pipefail
           mkdir -p "$STAGING_ARTIFACT_DIR"
           runner="$(mktemp --suffix=.mjs)"
           cleanup_runner() { rm -f "$runner"; }
@@ -173,10 +205,50 @@ jobs:
             --outfile="$runner"
           node "$runner"
 
+      - name: Re-prove current main and Staging egress unchanged
+        id: post_identity
+        if: always() && steps.account_evidence.outcome != 'skipped'
+        continue-on-error: true
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+          STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+          STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+          STAGING_SSH_PORT: ${{ secrets.STAGING_SSH_PORT || '22' }}
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main
+          CURRENT_MAIN="$(git rev-parse origin/main^{commit})"
+          [[ "$CURRENT_MAIN" == "$TARGET_SHA" ]] || {
+            echo "Main moved during account evidence. target=$TARGET_SHA current=$CURRENT_MAIN" >&2
+            exit 1
+          }
+          ACTUAL_EGRESS_IP="$(ssh \
+            -i "$SSH_KEY_PATH" \
+            -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=15 \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$SSH_KNOWN_HOSTS_PATH" \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
+            'curl --fail --silent --show-error --max-time 10 https://api.ipify.org')"
+          [[ -n "$ACTUAL_EGRESS_IP" && "$ACTUAL_EGRESS_IP" == "$EXPECTED_EGRESS_IP" ]] || {
+            echo 'Staging egress identity changed during account evidence.' >&2
+            exit 1
+          }
+
       - name: Sanitize and prove no account secret entered artifacts
         id: sanitize
         if: always() && steps.account_evidence.outcome != 'skipped'
         continue-on-error: true
+        env:
+          STAGING_TOSS_CLIENT_ID: ${{ secrets.STAGING_TOSS_CLIENT_ID || secrets.TOSS_CLIENT_ID }}
+          STAGING_TOSS_CLIENT_SECRET: ${{ secrets.STAGING_TOSS_CLIENT_SECRET || secrets.TOSS_CLIENT_SECRET_KEY }}
+          STAGING_TOSS_ACCOUNT_SEQ: ${{ secrets.STAGING_TOSS_ACCOUNT_SEQ }}
+          STAGING_UPBIT_ACCESS_KEY: ${{ secrets.STAGING_UPBIT_ACCESS_KEY || secrets.UPBIT_API_KEY }}
+          STAGING_UPBIT_SECRET_KEY: ${{ secrets.STAGING_UPBIT_SECRET_KEY || secrets.UPBIT_SECRET_KEY }}
+          STAGING_BITGET_API_KEY: ${{ secrets.STAGING_BITGET_API_KEY || secrets.BITGET_API_KEY }}
+          STAGING_BITGET_SECRET_KEY: ${{ secrets.STAGING_BITGET_SECRET_KEY || secrets.BITGET_SECRET_KEY }}
+          STAGING_BITGET_PASSPHRASE: ${{ secrets.STAGING_BITGET_PASSPHRASE || secrets.BITGET_PASSPHRASE }}
         run: |
           set -Eeuo pipefail
           if [[ -d "$STAGING_ARTIFACT_DIR" ]]; then
@@ -218,7 +290,11 @@ jobs:
 
       - name: Upload secret-free immutable account evidence
         id: upload
-        if: always() && steps.account_evidence.outcome != 'skipped' && steps.sanitize.outcome == 'success'
+        if: >-
+          always() &&
+          steps.account_evidence.outcome != 'skipped' &&
+          steps.post_identity.outcome == 'success' &&
+          steps.sanitize.outcome == 'success'
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
@@ -227,43 +303,13 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Prove standard Staging unchanged
-        id: staging_unchanged
-        if: >-
-          always() &&
-          steps.ssh_setup.outcome == 'success' &&
-          steps.staging_identity.outcome == 'success' &&
-          steps.account_evidence.outcome != 'skipped'
-        continue-on-error: true
-        env:
-          TARGET_SHA: ${{ steps.target.outputs.sha }}
-        run: |
-          set -Eeuo pipefail
-          REMOTE_SHA="$(ssh -i ~/.ssh/id_ed25519 -p "$STAGING_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
-            "$STAGING_SSH_USER@$STAGING_SSH_HOST" \
-            "cat /srv/seungjae-staging/.deploy/current-sha")"
-          [[ "$REMOTE_SHA" == "$TARGET_SHA" ]] || {
-            echo "Standard Staging changed during evidence. deployed=$REMOTE_SHA target=$TARGET_SHA" >&2
-            exit 1
-          }
-          curl --fail --silent --show-error --max-time 20 "$STANDARD_STAGING_BASE_URL/api/health" \
-            | TARGET_SHA="$TARGET_SHA" node -e '
-              let raw=""; process.stdin.on("data", d => raw += d); process.stdin.on("end", () => {
-                const value=JSON.parse(raw); const sha=String(value.deploySha ?? value.sha ?? value.commitSha ?? "");
-                if (value.ok !== true || value.identityMatch !== true || sha !== process.env.TARGET_SHA) process.exit(1);
-              });'
-
       - name: Enforce account evidence verdict
         if: always()
         env:
-          PREREQUISITES: ${{ steps.prerequisites.outcome }}
-          DEPENDENCIES: ${{ steps.dependencies.outcome }}
-          SSH_SETUP: ${{ steps.ssh_setup.outcome }}
-          STAGING_IDENTITY: ${{ steps.staging_identity.outcome }}
           EVIDENCE: ${{ steps.account_evidence.outcome }}
+          POST_IDENTITY: ${{ steps.post_identity.outcome }}
           SANITIZE: ${{ steps.sanitize.outcome }}
           UPLOAD: ${{ steps.upload.outcome }}
-          STAGING_UNCHANGED: ${{ steps.staging_unchanged.outcome }}
         run: |
           set -Eeuo pipefail
           require_success() {
@@ -274,14 +320,10 @@ jobs:
               exit 1
             fi
           }
-          require_success prerequisites "$PREREQUISITES"
-          require_success dependencies "$DEPENDENCIES"
-          require_success ssh-setup "$SSH_SETUP"
-          require_success staging-identity "$STAGING_IDENTITY"
           require_success account-evidence "$EVIDENCE"
+          require_success post-identity "$POST_IDENTITY"
           require_success artifact-sanitization "$SANITIZE"
           require_success artifact-upload "$UPLOAD"
-          require_success staging-unchanged "$STAGING_UNCHANGED"
 
       - name: Write account evidence summary
         if: success()
@@ -293,10 +335,16 @@ jobs:
             echo
             echo "- Exact current main: \`$TARGET_SHA\`"
             echo '- Evidence mode: `CANONICAL_ACCOUNT_RUNTIME_NO_DB`'
+            echo '- Execution runner: `GitHub-hosted ubuntu-latest`'
+            echo '- Provider network egress: `Staging SSH TCP tunnel`'
+            echo '- Provider TLS termination: `GitHub-hosted evidence process`'
+            echo '- Provider TLS payload traverses Staging host: `true`'
+            echo '- Provider Secret plaintext exposed to Staging host: `false`'
+            echo '- Provider allowlist egress IP match before/after reads: `true`'
+            echo '- Target remained exact current main after reads: `true`'
             echo '- Database / Supabase credential storage required: `false`'
-            echo '- Ephemeral member rows created: `0`'
             echo '- Credential persistence rows created: `0`'
-            echo '- Standard Staging mutated: `false`'
+            echo '- Application deployment mutated: `false`'
             echo '- Production mutated: `false`'
             echo '- Toss private operation type: `OAuth token + GET account/holdings only`'
             echo '- Upbit private operation type: `GET only`'
@@ -304,5 +352,25 @@ jobs:
             echo '- Kiwoom account linking: `hidden / not tested`'
             echo '- Order/cancel/amend/transfer/withdrawal requests: `0`'
             echo '- Credentials returned or recorded in artifacts: `false`'
-            echo '- Credential source: `staging Actions secrets in process memory only`'
+            echo '- Credential source: `staging Actions secrets in GitHub-hosted process memory only`'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Close provider egress tunnels and clean workspace
+        if: always()
+        env:
+          STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+          STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+          STAGING_SSH_PORT: ${{ secrets.STAGING_SSH_PORT || '22' }}
+        run: |
+          set +e
+          if [[ -e "$SSH_CONTROL_SOCKET" && -f "$SSH_KEY_PATH" && -f "$SSH_KNOWN_HOSTS_PATH" && -n "$STAGING_SSH_HOST" && -n "$STAGING_SSH_USER" ]]; then
+            ssh -S "$SSH_CONTROL_SOCKET" -O exit \
+              -i "$SSH_KEY_PATH" \
+              -p "$STAGING_SSH_PORT" \
+              -o BatchMode=yes \
+              -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$SSH_KNOWN_HOSTS_PATH" \
+              "$STAGING_SSH_USER@$STAGING_SSH_HOST"
+          fi
+          rm -rf "$STAGING_ARTIFACT_DIR"
+          rm -f "$SSH_CONTROL_SOCKET" "$SSH_KEY_PATH" "$SSH_KNOWN_HOSTS_PATH"
