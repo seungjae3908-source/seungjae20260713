@@ -24,7 +24,7 @@ test('종목 화면은 하나의 통합 검색창과 하나의 시장 선택 흐
 
 test('기술 워크스페이스는 네 기능을 지연 로딩하고 모바일 종목 하단 메뉴를 유지한다', () => {
   const workspace = source('src/pages/technical-workspace.tsx');
-  for (const label of ['AI 검색기', 'AI 차트', '백테스트', '자동매매']) {
+  for (const label of ['AI 검색기', 'AI 차트', '백테스트', '승인형 주문']) {
     expect(workspace).toContain(`label: '${label}'`);
   }
   expect(workspace).toContain("lazy(() => import('@/pages/signal-scanner'))");
