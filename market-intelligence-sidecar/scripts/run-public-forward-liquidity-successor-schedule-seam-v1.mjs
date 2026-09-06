@@ -6,6 +6,10 @@ import { resolve } from 'node:path';
 import { canonicalJson, sha256 } from '../src/public-forward-liquidity-calibration.mjs';
 import { SUCCESSOR_PROSPECTIVE_CONTRACT } from '../src/public-forward-liquidity-successor-prospective-cohort.mjs';
 import {
+  bindSuccessorV3GithubScheduleMetadataReceipt,
+  normalizeSuccessorV3GithubScheduleCreatedAt,
+} from '../src/public-forward-liquidity-successor-schedule-reliability-v3.mjs';
+import {
   executeSuccessorScheduledCaptureSeam,
   executeSuccessorScheduledCaptureSeamV3,
   finalizeSuccessorArtifactReceipt,
@@ -264,11 +268,20 @@ async function runCapture(executor = executeSuccessorScheduledCaptureSeam) {
     exactMainSha,
   });
   const actualRunStartedAtMs = Date.now();
+  const v3ScheduleMetadata = executor === executeSuccessorScheduledCaptureSeamV3
+    ? normalizeSuccessorV3GithubScheduleCreatedAt({
+        scheduleExpression,
+        scheduledRunCreatedAtMs: runIdentity.createdAtMs,
+        actualRunStartedAtMs,
+      })
+    : null;
+  const authorityCreatedAtMs = v3ScheduleMetadata?.authorityCreatedAtMs
+    ?? runIdentity.createdAtMs;
 
-  const { batch, captureReceipt } = await executor({
+  let { batch, captureReceipt } = await executor({
     eventName: process.env.GITHUB_EVENT_NAME,
     scheduleExpression,
-    scheduledRunCreatedAtMs: runIdentity.createdAtMs,
+    scheduledRunCreatedAtMs: authorityCreatedAtMs,
     exactMainSha,
     defaultBranchRef: process.env.GITHUB_REF,
     actualRunStartedAtMs,
@@ -282,6 +295,13 @@ async function runCapture(executor = executeSuccessorScheduledCaptureSeam) {
     }),
     getRemoteMainSha: async () => currentRemoteMainSha({ repository, token }),
   });
+
+  if (v3ScheduleMetadata !== null) {
+    captureReceipt = bindSuccessorV3GithubScheduleMetadataReceipt({
+      captureReceipt,
+      scheduleMetadata: v3ScheduleMetadata,
+    });
+  }
 
   if (captureReceipt.collectorImplementationBlobSha !== collectorBlob.actual) {
     throw new Error('SUCCESSOR_CAPTURE_RECEIPT_COLLECTOR_BLOB_MISMATCH');
