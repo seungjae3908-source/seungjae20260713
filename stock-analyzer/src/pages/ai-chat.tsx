@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useLocation } from 'wouter';
 import { ArrowRight, Bot, Loader2, Send, Square, UserRound, WalletCards } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
-import { InvestmentExplanationButton } from '@/components/investment-explanation-sheet';
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { useAnalysisSelection } from '@/lib/analysis-selection';
 import { cn } from '@/lib/utils';
@@ -22,11 +21,7 @@ type ChatMessage = {
   at: string;
   kind?: 'answer' | 'refusal';
   data?: AiChatDataDisclosure;
-  cached?: boolean;
 };
-
-type CacheableReply = Pick<ChatMessage, 'content' | 'kind' | 'data'>;
-type CachedReply = { reply: CacheableReply; cachedAt: number };
 
 type AiChatPayload = {
   answer?: string;
@@ -41,15 +36,6 @@ const hubTabs: Array<{ value: HubTab; label: string }> = [
   { value: 'AI', label: 'AI 상담' },
   { value: 'Portfolio', label: '포트폴리오' },
 ];
-
-const QUICK_PROMPTS = [
-  '선택 종목을 현재 공개 데이터 기준으로 5줄만 요약해줘',
-  '좋은 근거 3개와 반대 근거 3개를 나눠서 설명해줘',
-  '뉴스·공시 중 가격에 중요할 수 있는 것만 쉽게 설명해줘',
-  '모르는 투자 용어를 초보자도 이해하게 설명해줘',
-] as const;
-
-const AI_CHAT_CACHE_TTL_MS = 60_000;
 
 function PortfolioShortcutPanel() {
   const [, navigate] = useLocation();
@@ -119,10 +105,6 @@ function errorMessage(payload: AiChatPayload | null): string {
   return payload?.message || 'AI 채팅 응답을 받지 못했습니다.';
 }
 
-function normalizeQuestion(value: string): string {
-  return value.trim().replace(/\s+/g, ' ').toLocaleLowerCase('ko-KR');
-}
-
 export default function AiChatPage() {
   const { selection } = useAnalysisSelection();
   const [messages, setMessages] = useState<ChatMessage[]>([{ id: 'welcome', role: 'assistant', content: '공개 금융정보, 투자 용어, 앱 사용법을 질문해 주세요. AI 채팅은 주문·자동매매·계좌·서버 작업을 실행하지 않습니다.', at: new Date().toISOString() }]);
@@ -132,44 +114,18 @@ export default function AiChatPage() {
   const [composing, setComposing] = useState(false);
   const [activeTab, setActiveTab] = useState<HubTab>('AI');
   const controllerRef = useRef<AbortController | null>(null);
-  const responseCacheRef = useRef<Map<string, CachedReply>>(new Map());
   const endRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }); }, [messages, busy]);
   useEffect(() => () => controllerRef.current?.abort(), []);
-  useEffect(() => {
-    const prompt = new URLSearchParams(window.location.search).get('prompt')?.trim();
-    if (prompt) setDraft(prompt.slice(0, 2_000));
-  }, []);
-
-  function cacheKey(message: string): string {
-    return [selection?.market ?? 'GENERAL', selection?.symbol ?? 'NONE', normalizeQuestion(message)].join('|');
-  }
 
   async function send() {
     const message = draft.trim();
     if (!message || busy || controllerRef.current) return;
-    const now = Date.now();
-    const userMessage: ChatMessage = { id: `user:${now}`, role: 'user', content: message, at: new Date(now).toISOString() };
-    const key = cacheKey(message);
-    const cached = responseCacheRef.current.get(key);
-    const cacheFresh = Boolean(cached && now - cached.cachedAt <= AI_CHAT_CACHE_TTL_MS);
+    const userMessage: ChatMessage = { id: `user:${Date.now()}`, role: 'user', content: message, at: new Date().toISOString() };
     setMessages((current) => [...current, userMessage]);
     setDraft('');
     setError('');
-
-    if (cached && cacheFresh) {
-      setMessages((current) => [...current, {
-        id: `assistant:cache:${now}`,
-        role: 'assistant',
-        ...cached.reply,
-        cached: true,
-        at: new Date().toISOString(),
-      }]);
-      return;
-    }
-    if (cached) responseCacheRef.current.delete(key);
-
     setBusy(true);
     const controller = new AbortController();
     controllerRef.current = controller;
@@ -183,12 +139,12 @@ export default function AiChatPage() {
       const payload = await response.json().catch(() => null) as AiChatPayload | null;
       const answer = payload?.answer;
       if (!response.ok || !answer) throw new Error(errorMessage(payload));
-      const reply: CacheableReply = { content: answer, kind: payload.kind, data: payload.data };
-      responseCacheRef.current.set(key, { reply, cachedAt: Date.now() });
       setMessages((current) => [...current, {
         id: `assistant:${Date.now()}`,
         role: 'assistant',
-        ...reply,
+        content: answer,
+        kind: payload.kind,
+        data: payload.data,
         at: new Date().toISOString(),
       }]);
     } catch (cause) {
@@ -225,36 +181,13 @@ export default function AiChatPage() {
       </nav>
       {activeTab === 'Portfolio' ? <PortfolioShortcutPanel /> : <>
       <main className="min-h-0 flex-1 overflow-y-auto px-4 py-4" aria-live="polite">
-        <section className="mb-4 rounded-2xl border border-primary/20 bg-primary/5 p-3" data-testid="ai-info-efficiency-guide">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <p className="text-[10px] font-black text-primary">무료 AI 효율 모드</p>
-              <p className="mt-1 text-xs font-black">질문할 때만 AI를 호출하고, 같은 종목의 같은 질문은 최근 1분 이내 답변만 재사용합니다.</p>
-            </div>
-            <InvestmentExplanationButton metric="dataQuality" compact />
-          </div>
-          <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
-            {QUICK_PROMPTS.map((prompt) => <button
-              type="button"
-              key={prompt}
-              onClick={() => setDraft(prompt)}
-              className="min-h-10 shrink-0 rounded-full border border-card-border bg-background px-3 text-[11px] font-bold"
-            >{prompt}</button>)}
-          </div>
-        </section>
-
         <div className="space-y-3">
           {messages.map((message) => <article key={message.id} className={cn('flex gap-2', message.role === 'user' && 'flex-row-reverse')}>
             <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">{message.role === 'user' ? <UserRound className="h-4 w-4" /> : <Bot className="h-4 w-4" />}</span>
             <div className={cn('max-w-[85%] rounded-2xl px-3 py-2.5 text-sm leading-6', message.role === 'user' ? 'bg-primary text-primary-foreground' : message.kind === 'refusal' ? 'border border-warning/30 bg-warning/5' : 'bg-card')}>
-              {message.cached ? <p className="mb-2 text-[10px] font-black text-emerald-700" data-testid="ai-info-cache-hit">캐시 재사용 · AI 호출 0</p> : null}
               <p className="whitespace-pre-wrap break-words">{message.content}</p>
               {message.role === 'assistant' && message.data && message.data.status !== 'not_requested' && <div className="mt-2 rounded-xl border border-card-border/70 bg-background/60 px-2.5 py-2 text-[11px] leading-4 text-muted-foreground">
-                <div className="flex flex-wrap items-center gap-2">
-                  <p className="font-extrabold text-foreground/80">{dataStatusLabel(message.data.status)}{message.data.asOf ? ` · 서버 수집 기준 ${formatBasisTime(message.data.asOf)}` : ''}</p>
-                  <InvestmentExplanationButton metric="dataQuality" value={dataStatusLabel(message.data.status)} compact />
-                  {message.data.asOf ? <InvestmentExplanationButton metric="freshness" value={formatBasisTime(message.data.asOf)} compact /> : null}
-                </div>
+                <p className="font-extrabold text-foreground/80">{dataStatusLabel(message.data.status)}{message.data.asOf ? ` · 서버 수집 기준 ${formatBasisTime(message.data.asOf)}` : ''}</p>
                 {message.data.sources.length > 0 && <p className="mt-1 break-words">출처: {message.data.sources.join(' · ')}</p>}
                 {message.data.missing.length > 0 && <p className="mt-1 break-words">부족: {message.data.missing.join(' · ')}</p>}
               </div>}

@@ -11,6 +11,7 @@ import watchlistRouter from './watchlist';
 import kiwoomRouter from './kiwoom.routes';
 import kiwoomRankingsSafeRouter from './kiwoom-rankings-safe';
 import adminRouter from './admin';
+import researchCopilotRouter from './research-copilot';
 import secRouter from './sec.routes';
 import cryptoRouter from './crypto';
 import futuresMarketDataRouter from './futures-market-data';
@@ -60,6 +61,7 @@ router.use('/telegram/webhook', telegramWebhookRouter);
 
 // Admin routes perform their own authenticated + admin capability checks.
 router.use('/admin', adminRouter);
+router.use('/admin/research/copilot', researchCopilotRouter);
 
 router.use(requireAuthenticated);
 

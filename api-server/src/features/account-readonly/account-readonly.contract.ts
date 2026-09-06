@@ -19,9 +19,12 @@ export function emptySnapshot(provider: AccountProvider, status: AccountReadStat
 }
 
 export function nullableNumber(value: unknown): number | null {
-  if (value === null || value === undefined || value === '') return null;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value !== 'string') return null;
+  const text = value.trim();
+  if (!/^[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?$/.test(text)) return null;
+  const number = Number(text.replace(/,/g, ''));
+  return Number.isFinite(number) ? number : null;
 }
 
 export function maskAccountRef(value: unknown): string | null {
