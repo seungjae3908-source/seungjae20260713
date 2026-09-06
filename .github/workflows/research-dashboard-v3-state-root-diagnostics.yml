@@ -45,6 +45,7 @@ jobs:
           grep -Fq 'v3-authoritative-independence-summary.json' "$script"
           grep -Fq 'http://127.0.0.1:18090/api/research/overview' "$script"
           grep -Fq 'RESEARCH_DASHBOARD_PYTHON_RUNTIME_V3_CONSUMER_MISSING' "$script"
+          grep -Fq 'source_failed_readback_target_sha' "$workflow"
           grep -Fq 'production_server_write: 0' "$workflow"
           grep -Fq 'production_process_restart: 0' "$workflow"
           grep -Fq 'production_deploy: 0' "$workflow"
@@ -68,6 +69,7 @@ jobs:
       target_sha: ${{ steps.gate.outputs.target_sha }}
       activated_sha: ${{ steps.gate.outputs.activated_sha }}
       failed_readback_run: ${{ steps.gate.outputs.failed_readback_run }}
+      failed_readback_target: ${{ steps.gate.outputs.failed_readback_target }}
       hub_issue: ${{ steps.hub.outputs.active_issue }}
     steps:
       - uses: actions/checkout@v4
@@ -83,7 +85,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           python3 scripts/agent_hub_rollover_v2.py resolve
-      - name: Authorize exact main and bind prior failed readback
+      - name: Authorize exact main and bind ancestor failed readback
         id: gate
         uses: actions/github-script@v7
         env:
@@ -139,13 +141,8 @@ jobs:
               issue_number: canonicalHub,
               per_page: 100,
             });
-            let activatedSha = null;
-            for (const comment of [...comments].reverse()) {
-              const receipt = String(comment.body ?? '');
-              if (!receipt.includes('[RESEARCH_DASHBOARD_INTERNAL_ACTIVATION]') || !receipt.includes('status: success')) continue;
-              const activationMatch = receipt.match(/(?:^|\n)target_sha:\s*([0-9a-f]{40})(?:\n|$)/i);
-              if (!activationMatch) continue;
-              const candidate = activationMatch[1].toLowerCase();
+
+            const isAncestor = async (candidate) => {
               try {
                 const comparison = await github.rest.repos.compareCommits({
                   owner: context.repo.owner,
@@ -153,12 +150,22 @@ jobs:
                   base: candidate,
                   head: targetSha,
                 });
-                if (['ahead', 'identical'].includes(comparison.data.status)) {
-                  activatedSha = candidate;
-                  break;
-                }
+                return ['ahead', 'identical'].includes(comparison.data.status);
               } catch {
-                // Keep searching older successful activation receipts.
+                return false;
+              }
+            };
+
+            let activatedSha = null;
+            for (const comment of [...comments].reverse()) {
+              const receipt = String(comment.body ?? '');
+              if (!receipt.includes('[RESEARCH_DASHBOARD_INTERNAL_ACTIVATION]') || !receipt.includes('status: success')) continue;
+              const activationMatch = receipt.match(/(?:^|\n)target_sha:\s*([0-9a-f]{40})(?:\n|$)/i);
+              if (!activationMatch) continue;
+              const candidate = activationMatch[1].toLowerCase();
+              if (await isAncestor(candidate)) {
+                activatedSha = candidate;
+                break;
               }
             }
             if (!activatedSha) {
@@ -167,24 +174,28 @@ jobs:
             }
 
             let failedReadbackRun = null;
+            let failedReadbackTarget = null;
             for (const comment of [...comments].reverse()) {
               const receipt = String(comment.body ?? '');
               if (!receipt.includes('[RESEARCH_DASHBOARD_OVERVIEW_READBACK]') || !receipt.includes('status: failed_closed')) continue;
               const targetMatch = receipt.match(/(?:^|\n)target_main_sha:\s*([0-9a-f]{40})(?:\n|$)/i);
-              if (!targetMatch || targetMatch[1].toLowerCase() !== targetSha) continue;
               const runMatch = receipt.match(/(?:^|\n)workflow_run:\s*([0-9]{6,20})(?:\n|$)/i);
-              if (runMatch) {
-                failedReadbackRun = runMatch[1];
-                break;
-              }
+              if (!targetMatch || !runMatch) continue;
+              const candidate = targetMatch[1].toLowerCase();
+              if (!(await isAncestor(candidate))) continue;
+              failedReadbackTarget = candidate;
+              failedReadbackRun = runMatch[1];
+              break;
             }
-            if (!failedReadbackRun) {
-              core.setFailed('No failed-closed overview readback receipt is bound to exact current main.');
+            if (!failedReadbackRun || !failedReadbackTarget) {
+              core.setFailed('No failed-closed overview readback receipt is an ancestor of exact current main.');
               return;
             }
+
             core.setOutput('target_sha', targetSha);
             core.setOutput('activated_sha', activatedSha);
             core.setOutput('failed_readback_run', failedReadbackRun);
+            core.setOutput('failed_readback_target', failedReadbackTarget);
 
   diagnose:
     needs: authorize
@@ -194,6 +205,7 @@ jobs:
       TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
       ACTIVATED_SHA: ${{ needs.authorize.outputs.activated_sha }}
       FAILED_READBACK_RUN: ${{ needs.authorize.outputs.failed_readback_run }}
+      FAILED_READBACK_TARGET: ${{ needs.authorize.outputs.failed_readback_target }}
       HUB_ISSUE_NUMBER: ${{ needs.authorize.outputs.hub_issue }}
       SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
       SSH_USER: ${{ secrets.PROD_SSH_USER }}
@@ -339,6 +351,7 @@ jobs:
                 'status: success',
                 `target_main_sha: ${process.env.TARGET_SHA}`,
                 `activated_dashboard_sha: ${process.env.ACTIVATED_SHA}`,
+                `source_failed_readback_target_sha: ${process.env.FAILED_READBACK_TARGET}`,
                 `source_failed_readback_run: ${process.env.FAILED_READBACK_RUN}`,
                 `workflow_run: ${context.runId}`,
                 `root_cause: ${process.env.ROOT_CAUSE}`,
@@ -393,6 +406,7 @@ jobs:
                 'status: failed_closed',
                 `target_main_sha: ${process.env.TARGET_SHA}`,
                 `activated_dashboard_sha: ${process.env.ACTIVATED_SHA}`,
+                `source_failed_readback_target_sha: ${process.env.FAILED_READBACK_TARGET}`,
                 `source_failed_readback_run: ${process.env.FAILED_READBACK_RUN}`,
                 `workflow_run: ${context.runId}`,
                 'root_cause: DIAGNOSTIC_EXECUTION_FAILED',
