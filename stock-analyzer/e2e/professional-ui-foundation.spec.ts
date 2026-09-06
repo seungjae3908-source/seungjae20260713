@@ -83,17 +83,19 @@ async function installApprovedRuntime(page: Page) {
   }));
 }
 
-test('professional UI stylesheet is loaded after the production geometry layers', () => {
+test('professional UI stylesheet is bundled after the existing source UI layers', () => {
+  const main = source('src/main.tsx');
   const html = source('index.html');
-  const css = source('public/professional-ui-foundation.css');
+  const css = source('src/professional-ui-foundation.css');
 
-  const geometry = html.indexOf('/production-ui-geometry.css');
-  const chartPane = html.indexOf('/ai-chart-pane-scroll.css');
-  const professional = html.indexOf('/professional-ui-foundation.css');
+  const base = main.indexOf("import './index.css';");
+  const chartTouch = main.indexOf("import './unified-analysis-chart-touch.css';");
+  const professional = main.indexOf("import './professional-ui-foundation.css';");
 
-  expect(geometry).toBeGreaterThan(-1);
-  expect(chartPane).toBeGreaterThan(geometry);
-  expect(professional).toBeGreaterThan(chartPane);
+  expect(base).toBeGreaterThan(-1);
+  expect(chartTouch).toBeGreaterThan(base);
+  expect(professional).toBeGreaterThan(chartTouch);
+  expect(html).not.toContain('/professional-ui-foundation.css');
   expect(css).toContain('--pro-ui-font-caption: 0.75rem;');
   expect(css).toContain('@media (min-width: 1024px) and (max-width: 1199px)');
   expect(css).toContain("button[aria-controls='bottom-nav-settings-menu']");
@@ -188,7 +190,7 @@ for (const width of [600, 768, 900, 1024, 1180]) {
         </div>
       </section>
     `);
-    await page.addStyleTag({ path: path.resolve(process.cwd(), 'public/professional-ui-foundation.css') });
+    await page.addStyleTag({ path: path.resolve(process.cwd(), 'src/professional-ui-foundation.css') });
 
     const result = await page.getByTestId('research-safety-flags').evaluate((grid) => {
       const style = getComputedStyle(grid);
