@@ -61,7 +61,7 @@ test('route presentation metadata follows final-main market and deep-route owner
     [APP_ROUTES.coinsFutures, '코인 선물 정보', ['종목', '코인 선물 정보']],
     [APP_ROUTES.scanner, 'AI 신호검색기', ['기술', 'AI 신호검색기']],
     [APP_ROUTES.aiChart, 'AI 차트', ['기술', 'AI 차트']],
-    [APP_ROUTES.autoTrading, '승인형 주문', ['기술', '승인형 주문']],
+    [APP_ROUTES.autoTrading, '자동매매', ['기술', '자동매매']],
     [APP_ROUTES.marketOverview, '지수·시황', ['종목', '지수·시황']],
     [APP_ROUTES.newsInformation, '테마', ['종목', '테마']],
     [APP_ROUTES.strategyPromotion, 'Strategy Promotion Center', ['기술', 'Strategy Promotion Center']],
