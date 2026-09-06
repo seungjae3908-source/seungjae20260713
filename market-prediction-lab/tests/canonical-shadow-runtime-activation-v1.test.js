@@ -59,7 +59,7 @@ test("bootstrap exception is exact and activation-only", () => {
   assert.equal(canonicalBootstrapSeedAllowedV1({ ...exact, predecessorArtifactDigest: "0".repeat(64) }), false);
 });
 
-test("stranded bootstrap recovery is hourly, exact-main, legacy-disabled, zero-receipt, and explicitly approved", () => {
+test("stranded bootstrap recovery is hourly, exact-main, legacy-disabled, zero-receipt, unclaimed, and explicitly approved", () => {
   const targetSha = "d".repeat(40);
   const exact = {
     requestId: "hourly-34020000001",
@@ -68,6 +68,7 @@ test("stranded bootstrap recovery is hourly, exact-main, legacy-disabled, zero-r
     targetSha,
     legacyWorkflowState: "disabled_manually",
     publishedReceiptCount: 0,
+    recoveryApprovalClaimCount: 0,
     producerRunId: CANONICAL_SHADOW_BOOTSTRAP_SEED_V1.producerRunId,
     predecessorRunId: CANONICAL_SHADOW_BOOTSTRAP_SEED_V1.predecessorRunId,
     predecessorArtifactDigest: `sha256:${CANONICAL_SHADOW_BOOTSTRAP_SEED_V1.predecessorArtifactDigest}`,
@@ -78,6 +79,7 @@ test("stranded bootstrap recovery is hourly, exact-main, legacy-disabled, zero-r
   assert.equal(canonicalStrandedBootstrapRecoveryAllowedV1({ ...exact, recoveryApprovalTargetSha: "e".repeat(40) }), false);
   assert.equal(canonicalStrandedBootstrapRecoveryAllowedV1({ ...exact, legacyWorkflowState: "active" }), false);
   assert.equal(canonicalStrandedBootstrapRecoveryAllowedV1({ ...exact, publishedReceiptCount: 1 }), false);
+  assert.equal(canonicalStrandedBootstrapRecoveryAllowedV1({ ...exact, recoveryApprovalClaimCount: 1 }), false);
   assert.equal(canonicalStrandedBootstrapRecoveryAllowedV1({ ...exact, predecessorRunId: "32933416613" }), false);
   assert.equal(canonicalStrandedBootstrapRecoveryAllowedV1({ ...exact, predecessorArtifactDigest: "0".repeat(64) }), false);
 });
@@ -126,17 +128,23 @@ test("publisher workflow clean-skips artifactless source runs before mutation ga
   assert.match(publisher, /needs\.classify-source-artifact\.outputs\.eligible == 'true'/);
 });
 
-test("stranded recovery workflow is approval-gated and refuses a second bootstrap lineage", () => {
+test("stranded recovery workflow is approval-gated, one-shot, and refuses a second bootstrap lineage", () => {
   const workflow = fs.readFileSync(new URL("../../.github/workflows/prediction-lab-canonical-shadow-cycle.yml", import.meta.url), "utf8");
   assert.match(workflow, /issues\/838\/comments\?per_page=100/);
   assert.match(workflow, /--paginate --slurp/);
   assert.match(workflow, /approve-canonical-shadow-recovery/);
   assert.match(workflow, /actions\/artifacts\?per_page=100/);
   assert.match(workflow, /publication_receipt_count/);
+  assert.match(workflow, /recovery_approval_claim_count/);
+  assert.match(workflow, /canonical-shadow-recovery-attempt-/);
+  assert.match(workflow, /Recovery approval comment .* already claimed/);
   assert.match(workflow, /Canonical publication receipt history exists but no valid predecessor/);
   assert.match(workflow, /canonicalStrandedBootstrapRecoveryAllowedV1/);
   assert.match(workflow, /canonicalRuntimeBootstrapRecovery/);
   assert.match(workflow, /legacy_state/);
+  const claimUpload = workflow.indexOf("- name: Upload one-time stranded recovery claim");
+  const predecessorDownload = workflow.indexOf("- name: Download exact predecessor evidence");
+  assert.ok(claimUpload >= 0 && predecessorDownload > claimUpload, "recovery approval must be durably claimed before bootstrap predecessor state is used");
   assert.doesNotMatch(workflow, /replay|backfill|synthetic credit/i);
 });
 
