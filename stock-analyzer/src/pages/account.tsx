@@ -68,7 +68,7 @@ export default function AccountPage() {
           <span data-testid="membership-label" className="mt-2 inline-flex rounded-full bg-secondary px-3 py-1 text-xs font-semibold">{MEMBER_TIER_LABELS[auth.membershipLevel]}</span>
         </div>
         {stateMessage && <div className="mt-4 flex items-center justify-center gap-2 rounded-2xl bg-warning/10 p-4 text-center text-sm font-semibold text-warning"><Clock3 className="h-5 w-5 shrink-0" /><span className="min-w-0 break-words">{stateMessage}</span></div>}
-        {auth.isApproved && <p className="mt-4 rounded-2xl bg-positive/10 p-4 text-center text-sm font-semibold text-positive">현재 등급에서 사용할 수 있는 기능이 활성화되어 있습니다.</p>}
+        {auth.isApproved && <p className="mt-4 rounded-2xl bg-positive/10 p-4 text-center text-sm font-semibold text-positive">현재 등급에 허용된 기능을 사용할 수 있습니다.</p>}
         {auth.isAdmin && <button type="button" onClick={() => navigate('/admin')} className="mt-4 min-h-11 w-full rounded-2xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground">회원 관리</button>}
         <button type="button" onClick={() => void auth.signOut()} className="mt-3 flex min-h-11 w-full items-center justify-center gap-2 rounded-2xl border border-card-border px-4 py-3 text-sm font-semibold"><LogOut className="h-4 w-4" />로그아웃</button>
       </Card> : !auth.loading && auth.configured && <Card>
