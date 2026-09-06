@@ -23,7 +23,12 @@ assert(source.includes("if (input.market === 'UPBIT')"), 'Upbit chart routing mu
 assert(source.includes('/api/crypto/spot/candles?'), 'Upbit public candle endpoint must remain unchanged');
 assert(source.includes('/api/crypto/futures/candles?'), 'Bitget futures public candle endpoint must remain unchanged');
 assert(source.includes('const DEFAULT_TIMEOUT_MS = 12_000;'), 'existing client timeout contract must remain unchanged');
-assert(source.includes('const PRIMARY_STOCK_ENDPOINT_TIMEOUT_MS = 2_500;'), 'bounded primary stock endpoint timeout must remain explicit');
+assert(source.includes('const US_PRIMARY_STOCK_ENDPOINT_TIMEOUT_MS = 3_500;'), 'bounded US primary stock endpoint timeout must remain explicit');
+assert(source.includes('const KR_PRIMARY_STOCK_ENDPOINT_TIMEOUT_MS = 3_500;'), 'bounded KR primary stock endpoint timeout must remain explicit');
+assert(
+  /const endpointBudgetMs = market === 'KR'\s*\? KR_PRIMARY_STOCK_ENDPOINT_TIMEOUT_MS\s*:\s*US_PRIMARY_STOCK_ENDPOINT_TIMEOUT_MS;/.test(source),
+  'US/KR primary endpoint budgets must remain market-explicit',
+);
 
 assert(
   /INSUFFICIENT_CANDLES\|차트 데이터가 부족/.test(marketDataSource),
@@ -40,6 +45,6 @@ assert(
 
 console.log('Production stock chart candle priority contract verified.');
 console.log('- US and KR stocks request the bounded candle endpoint before optional enriched chart fallback');
+console.log('- US/KR primary endpoint budgets stay explicit at 3.5s under the unchanged 12s total client timeout');
 console.log('- KR bounded fallback keeps insufficient-data classification and public hedge provenance');
 console.log('- Upbit/Bitget public candle routing is unchanged');
-console.log('- existing total client timeout and bounded primary stock endpoint timeout are preserved');
