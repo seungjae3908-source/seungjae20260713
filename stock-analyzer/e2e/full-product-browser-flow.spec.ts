@@ -109,7 +109,7 @@ test('real user path stays coherent from login through session expiry', async ({
   await openMenuItem(page, '정보', '포트폴리오');
   await expect(page).toHaveURL(/\/portfolio$/u);
   await expect(page.getByRole('heading', { name: '포트폴리오', exact: true })).toBeVisible();
-  await expect(page.getByTestId('portfolio-data-quality')).toContainText('PARTIAL');
+  await expect(page.getByTestId('portfolio-data-quality')).toContainText('일부 데이터');
 
   await openMenuItem(page, '기술', '모의매매');
   await expect(page).toHaveURL(/\/paper-trading$/u);
