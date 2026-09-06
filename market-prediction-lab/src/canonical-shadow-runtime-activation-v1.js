@@ -67,18 +67,15 @@ export function canonicalStrandedBootstrapRecoveryAllowedV1({
   const request = canonicalShadowRuntimeRequestV1(requestId);
   const approvalSha = String(recoveryApprovalTargetSha ?? "");
   const exactTargetSha = String(targetSha ?? "");
-  const receiptCount = Number(publishedReceiptCount);
-  const claimCount = Number(recoveryApprovalClaimCount);
+  // Missing or malformed evidence is not an observed zero.
   return request.kind === "HOURLY"
     && POSITIVE_INTEGER.test(String(recoveryApprovalCommentId ?? ""))
     && SHA40.test(approvalSha)
     && SHA40.test(exactTargetSha)
     && approvalSha === exactTargetSha
     && legacyWorkflowState === "disabled_manually"
-    && Number.isInteger(receiptCount)
-    && receiptCount === 0
-    && Number.isInteger(claimCount)
-    && claimCount === 0
+    && (publishedReceiptCount === 0 || publishedReceiptCount === "0")
+    && (recoveryApprovalClaimCount === 0 || recoveryApprovalClaimCount === "0")
     && exactBootstrapSeedV1({ producerRunId, predecessorRunId, predecessorArtifactDigest });
 }
 
