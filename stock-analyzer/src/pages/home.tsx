@@ -199,8 +199,8 @@ export default function HomePage() {
         <DashboardStatusCard
           icon={<Radar className="h-5 w-5" />}
           label="AI 신호"
-          value={currentSignal ? `${actionLabel(selection?.action)} · ${selection?.signalScore}점` : '오늘 신호 없음'}
-          detail={currentSignal ? selection?.displayName ?? selection?.ticker ?? '선택 신호' : '선택된 최신 신호 없음'}
+          value={currentSignal && selection ? `${actionLabel(selection.action)} · ${selection.signalScore}점` : '오늘 신호 없음'}
+          detail={currentSignal && selection ? selection.displayName ?? selection.ticker : '선택된 최신 신호 없음'}
           onClick={() => navigate('/scanner')}
         />
         <DashboardStatusCard
@@ -213,7 +213,7 @@ export default function HomePage() {
         <DashboardStatusCard
           icon={<BriefcaseBusiness className="h-5 w-5" />}
           label="자산"
-          value="포트폴리오"
+          value="자산 보기"
           detail="보유·손익·위험 확인"
           onClick={() => navigate('/portfolio')}
         />
@@ -223,10 +223,7 @@ export default function HomePage() {
 
   const marketSection = (
     <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="home-market-summary">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-base font-black">시장</h2>
-        <button type="button" onClick={() => navigate('/market-overview')} className="inline-flex min-h-11 shrink-0 items-center px-2 text-xs font-black text-primary">시황</button>
-      </div>
+      <HomeSectionHeader title="시장" actionLabel="시황" onAction={() => navigate('/market-overview')} />
       <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-5">
         {indices.length === 0
           ? <DashboardPlaceholder label={marketState} />
@@ -242,31 +239,25 @@ export default function HomePage() {
 
   const signalSection = (
     <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="home-signal-summary">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2"><Radar className="h-4 w-4 text-primary" /><h2 className="text-base font-black">최근 신호</h2></div>
-        <button type="button" onClick={() => navigate('/scanner')} className="inline-flex min-h-11 shrink-0 items-center px-2 text-xs font-black text-primary">검색기</button>
-      </div>
+      <HomeSectionHeader icon={<Radar className="h-4 w-4" />} title="최근 신호" actionLabel="검색기" onAction={() => navigate('/scanner')} />
       {selection && signalIsCurrent && selection.signalScore != null ? (
         <button type="button" onClick={() => navigate('/scanner')} className="mt-3 flex min-h-16 w-full min-w-0 items-center justify-between gap-3 rounded-2xl border border-card-border bg-background p-3 text-left">
           <div className="min-w-0">
-            <p className="truncate text-sm font-black">{selection.displayName}</p>
-            <p className="mt-1 truncate text-[11px] font-bold text-muted-foreground">{selection.ticker} · {selection.market} · {selection.timeframe}</p>
+            <p className="truncate text-sm font-bold">{selection.displayName}</p>
+            <p className="mt-1 truncate text-xs font-medium text-muted-foreground">{selection.ticker} · {selection.market} · {selection.timeframe}</p>
           </div>
           <div className="shrink-0 text-right">
-            <p className="text-sm font-black">{actionLabel(selection.action)}</p>
-            <p className="text-[10px] font-bold text-muted-foreground">점수 {selection.signalScore}</p>
+            <p className="text-sm font-bold">{actionLabel(selection.action)}</p>
+            <p className="text-xs font-medium text-muted-foreground">점수 {selection.signalScore}</p>
           </div>
         </button>
-      ) : <p className="mt-3 rounded-2xl bg-background p-4 text-center text-xs font-bold text-muted-foreground">오늘 선택한 신호 없음</p>}
+      ) : <p className="mt-3 rounded-2xl bg-background p-4 text-center text-xs font-medium text-muted-foreground">오늘 선택한 신호 없음</p>}
     </section>
   );
 
   const watchlistSection = (
     <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="home-watchlist-summary">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2"><Star className="h-4 w-4 text-primary" /><h2 className="text-sm font-black">관심종목</h2></div>
-        <button type="button" onClick={() => navigate('/watchlist')} className="inline-flex min-h-11 shrink-0 items-center px-2 text-xs font-black text-primary">전체</button>
-      </div>
+      <HomeSectionHeader icon={<Star className="h-4 w-4" />} title="관심종목" actionLabel="전체" onAction={() => navigate('/watchlist')} />
       <div className="mt-3 space-y-2">
         {watchlist.length
           ? watchlist.slice(0, 5).map((item) => {
@@ -278,25 +269,25 @@ export default function HomePage() {
             return (
               <div key={item.ticker} className="flex min-h-14 items-center justify-between gap-3 rounded-2xl bg-background px-3 py-2">
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-black">{item.name || item.ticker}</p>
-                  <p className="truncate text-[10px] font-bold text-muted-foreground">{item.ticker} · {item.market ?? '시장 미확인'}</p>
+                  <p className="truncate text-sm font-bold">{item.name || item.ticker}</p>
+                  <p className="truncate text-xs font-medium text-muted-foreground">{item.ticker} · {item.market ?? '시장 미확인'}</p>
                 </div>
-                <div className="shrink-0 text-right text-xs font-black">
+                <div className="shrink-0 text-right text-xs font-semibold">
                   <p>{watchlistPrice == null ? '가격 미확인' : watchlistCurrency == null ? '통화 미확인' : formatAppPrice(watchlistPrice, watchlistCurrency)}</p>
-                  <p className="text-[10px] text-muted-foreground">{watchlistChangePercent == null ? '등락 미확인' : formatAppPercent(watchlistChangePercent)}</p>
+                  <p className="text-xs font-medium text-muted-foreground">{watchlistChangePercent == null ? '등락 미확인' : formatAppPercent(watchlistChangePercent)}</p>
                 </div>
               </div>
             );
           })
-          : <p className="rounded-2xl bg-background p-4 text-center text-xs font-bold text-muted-foreground">관심종목 없음</p>}
+          : <p className="rounded-2xl bg-background p-4 text-center text-xs font-medium text-muted-foreground">관심종목 없음</p>}
       </div>
     </section>
   );
 
   const portfolioSection = (
     <section className="rounded-3xl border border-card-border bg-card p-4 shadow-sm" data-testid="home-portfolio-summary">
-      <div className="flex items-center gap-2"><BriefcaseBusiness className="h-4 w-4 text-primary" /><h2 className="text-sm font-black">포트폴리오</h2></div>
-      <button type="button" onClick={() => navigate('/portfolio')} className="mt-3 flex min-h-12 w-full items-center justify-between rounded-2xl border border-card-border bg-background px-4 text-sm font-black">
+      <HomeSectionHeader icon={<BriefcaseBusiness className="h-4 w-4" />} title="포트폴리오" />
+      <button type="button" onClick={() => navigate('/portfolio')} className="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl border border-card-border bg-background px-4 text-sm font-semibold">
         <span>자산·손익·위험</span><ArrowRight className="h-4 w-4" />
       </button>
     </section>
@@ -320,10 +311,10 @@ export default function HomePage() {
 
           {warnings.length > 0 && (
             <details role="alert" className="rounded-2xl border border-amber-500/40 bg-amber-500/10 px-3 py-2">
-              <summary className="flex min-h-9 cursor-pointer list-none items-center gap-2 text-xs font-black text-amber-500 [&::-webkit-details-marker]:hidden">
+              <summary className="flex min-h-9 cursor-pointer list-none items-center gap-2 text-xs font-semibold text-amber-500 [&::-webkit-details-marker]:hidden">
                 <AlertTriangle className="h-4 w-4 shrink-0" />데이터 확인 필요
               </summary>
-              <ul className="border-t border-amber-500/20 pt-2 text-xs font-bold leading-5 text-muted-foreground">{warnings.map((warning) => <li key={warning}>• {warning}</li>)}</ul>
+              <ul className="border-t border-amber-500/20 pt-2 text-xs font-medium leading-5 text-muted-foreground">{warnings.map((warning) => <li key={warning}>• {warning}</li>)}</ul>
             </details>
           )}
 
@@ -361,6 +352,23 @@ export default function HomePage() {
   );
 }
 
+function HomeSectionHeader({ icon, title, actionLabel, onAction }: {
+  icon?: ReactNode;
+  title: string;
+  actionLabel?: string;
+  onAction?: () => void;
+}) {
+  return (
+    <div className="grid grid-cols-[44px_minmax(0,1fr)_44px] items-center gap-2">
+      <span className="flex h-11 w-11 items-center justify-center text-primary" aria-hidden="true">{icon}</span>
+      <h2 className="text-center text-base font-bold">{title}</h2>
+      {actionLabel && onAction ? (
+        <button type="button" onClick={onAction} className="flex h-11 w-11 items-center justify-center text-xs font-semibold text-primary">{actionLabel}</button>
+      ) : <span aria-hidden="true" className="h-11 w-11" />}
+    </div>
+  );
+}
+
 function DashboardStatusCard({ icon, label, value, detail, onClick }: {
   icon: ReactNode;
   label: string;
@@ -383,13 +391,13 @@ function DashboardStatusCard({ icon, label, value, detail, onClick }: {
 }
 
 function MetricCard({ label, value, sub }: { label: string; value: string; sub: string }) {
-  return <div className="min-w-0 rounded-2xl bg-background p-3"><p className="truncate text-[10px] font-bold text-muted-foreground">{label}</p><p className="mt-1 truncate text-sm font-black">{value}</p><p className="mt-1 truncate text-[10px] font-bold text-muted-foreground">{sub}</p></div>;
+  return <div className="min-w-0 rounded-2xl bg-background p-3 text-center"><p className="truncate text-xs font-medium text-muted-foreground">{label}</p><p className="mt-1 truncate text-sm font-bold">{value}</p><p className="mt-1 truncate text-xs font-medium text-muted-foreground">{sub}</p></div>;
 }
 
 function DashboardPlaceholder({ label }: { label: string }) {
-  return <div className="col-span-2 flex min-h-20 items-center justify-center rounded-2xl bg-background px-3 text-center text-xs font-bold text-muted-foreground md:col-span-4">{label}</div>;
+  return <div className="col-span-2 flex min-h-20 items-center justify-center rounded-2xl bg-background px-3 text-center text-xs font-medium text-muted-foreground md:col-span-4">{label}</div>;
 }
 
 function QuickLink({ label, onClick }: { label: string; onClick: () => void }) {
-  return <button type="button" onClick={onClick} className="flex min-h-12 min-w-0 items-center justify-center gap-2 rounded-2xl border border-card-border bg-card px-2 text-sm font-black"><BarChart3 className="h-4 w-4 shrink-0 text-primary" /><span className="break-keep">{label}</span></button>;
+  return <button type="button" onClick={onClick} className="flex min-h-12 min-w-0 items-center justify-center gap-2 rounded-2xl border border-card-border bg-card px-2 text-sm font-semibold"><BarChart3 className="h-4 w-4 shrink-0 text-primary" /><span className="break-keep">{label}</span></button>;
 }
