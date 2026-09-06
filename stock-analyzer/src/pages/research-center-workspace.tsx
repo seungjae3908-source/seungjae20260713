@@ -1,15 +1,33 @@
 import { useState } from 'react';
 import ResearchCenterPage from './research-center';
 import { ResearchCopilotPanel } from '@/components/research-copilot-panel';
+import { ResponsiveTabs } from '@/components/responsive-tabs';
 
-/** Compose the existing owner screen without changing its leased implementation. */
+type ResearchWorkspaceView = 'overview' | 'copilot';
+
+const WORKSPACE_TABS = [
+  { value: 'overview', label: '연구센터' },
+  { value: 'copilot', label: 'AI 연구 도우미' },
+] as const;
+
+/** Compose the existing owner screen without changing its research semantics. */
 export default function ResearchCenterWorkspace() {
-  const [view, setView] = useState<'overview' | 'copilot'>('overview');
-  return <div className="flex h-full min-h-0 flex-col bg-background">
-    <nav aria-label="연구센터 작업 영역" className="flex shrink-0 gap-2 border-b border-border px-3 py-2">
-      <button type="button" aria-pressed={view === 'overview'} onClick={() => setView('overview')} className="min-h-11 rounded-xl border border-border px-4 text-sm font-bold">연구 현황</button>
-      <button type="button" aria-pressed={view === 'copilot'} onClick={() => setView('copilot')} className="min-h-11 rounded-xl border border-border px-4 text-sm font-bold">AI Research Copilot</button>
-    </nav>
-    <div className="min-h-0 flex-1">{view === 'overview' ? <ResearchCenterPage /> : <ResearchCopilotPanel />}</div>
-  </div>;
+  const [view, setView] = useState<ResearchWorkspaceView>('overview');
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-background">
+      <div className="shrink-0 border-b border-border bg-background px-3 py-2 sm:px-4">
+        <div className="mx-auto w-full max-w-md">
+          <ResponsiveTabs
+            value={view}
+            options={WORKSPACE_TABS}
+            onChange={setView}
+            ariaLabel="연구센터 작업 영역"
+            testId="research-workspace-tabs"
+            compact
+          />
+        </div>
+      </div>
+      <div className="min-h-0 flex-1">{view === 'overview' ? <ResearchCenterPage /> : <ResearchCopilotPanel />}</div>
+    </div>
+  );
 }
