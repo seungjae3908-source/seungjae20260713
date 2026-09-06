@@ -6,6 +6,7 @@ on:
     paths:
       - .github/workflows/research-dashboard-v3-state-root-diagnostics.yml
       - .github/scripts/research-dashboard-v3-state-diagnostic.py
+      - research-dashboard/test/test_v3_state_diagnostic.py
   issue_comment:
     types: [created]
 
@@ -55,6 +56,7 @@ jobs:
             echo 'Diagnostic files contain a prohibited production mutation command.' >&2
             exit 1
           fi
+          python3 -m unittest discover -s research-dashboard/test -p 'test_v3_state_diagnostic.py' -v
           npm --prefix research-dashboard test
 
   authorize:
