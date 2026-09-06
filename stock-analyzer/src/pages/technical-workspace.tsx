@@ -30,21 +30,19 @@ const WORKSPACE_TABS = [
   { value: 'signal', label: 'AI 검색기' },
   { value: 'chart', label: 'AI 차트' },
   { value: 'backtest', label: '백테스트' },
-  { value: 'trade', label: '자동매매' },
+  { value: 'trade', label: '승인형 주문' },
 ] as const;
 
 const WORKSPACE_TITLES: Record<Workspace, string> = {
   signal: 'AI 검색기',
   chart: 'AI 차트',
   backtest: '백테스트',
-  trade: '자동매매',
+  trade: '승인형 주문',
 };
 
 const TECHNICAL_INFO_ITEMS = [
-  '모바일은 AI 검색기·AI 차트·백테스트·자동매매를 각각 독립 화면으로 열어 긴 스크롤을 줄입니다.',
-  '권한이 없는 고급 기능은 화면 구조에서 사라지지 않고 잠금 상태로 표시되며 실행되지 않습니다.',
-  'PC는 권한이 있는 경우에만 검색기와 AI 차트를 함께 표시하고, 기본 권한에서는 검색기만 표시합니다.',
-  '실전 주문은 활성화하지 않으며 사용자 승인과 최종 위험 검증을 유지합니다.',
+  '검색·차트·백테스트는 읽기·분석 중심 화면이며 권한이 없는 기능은 잠금 상태로 유지됩니다.',
+  '주문 화면은 권한과 승인 절차가 있는 경우에만 열리며 실거래는 활성화하지 않습니다.',
 ] as const;
 
 function useDesktopWorkspace() {
@@ -65,13 +63,13 @@ function useDesktopWorkspace() {
 function WorkspaceFallback() {
   return (
     <div aria-busy="true" aria-label="기술 화면 준비 중" className="h-full overflow-hidden p-3">
-      <div className="mx-auto h-full max-w-6xl animate-pulse rounded-3xl border border-card-border bg-card/60" />
+      <div className="mx-auto h-full max-w-6xl animate-pulse rounded-2xl border border-card-border bg-card/60" />
     </div>
   );
 }
 
 function formatPositionNumber(value: number | null | undefined, digits = 2) {
-  if (value == null || !Number.isFinite(value)) return '-';
+  if (value == null || !Number.isFinite(value)) return '미확인';
   return new Intl.NumberFormat('ko-KR', { maximumFractionDigits: digits }).format(value);
 }
 
@@ -93,19 +91,19 @@ function PositionSummarySurface() {
 
   if (!selection) {
     return (
-      <section data-testid="ui-builder-position-summary-empty" className="min-w-0 rounded-3xl border border-card-border bg-card p-3 shadow-sm sm:p-4">
-        <h2 className="text-center text-sm font-black">내 포지션</h2>
-        <p className="mt-2 break-keep text-xs leading-5 text-muted-foreground">신호 종목을 선택하면 기존 포트폴리오의 보유 정보를 읽기 전용으로 표시합니다.</p>
+      <section data-testid="ui-builder-position-summary-empty" className="min-w-0 rounded-2xl border border-card-border bg-card p-3 text-center shadow-sm sm:p-4">
+        <h2 className="text-sm font-bold">내 포지션</h2>
+        <p className="mt-2 break-keep text-xs font-medium leading-5 text-muted-foreground">신호 종목을 선택하면 포트폴리오의 보유 정보를 읽기 전용으로 표시합니다.</p>
       </section>
     );
   }
 
   if (!overlay) {
     return (
-      <section data-testid="ui-builder-position-summary-none" className="min-w-0 rounded-3xl border border-card-border bg-card p-3 shadow-sm sm:p-4">
-        <h2 className="text-center text-sm font-black">내 포지션</h2>
-        <p className="mt-2 break-words text-xs font-bold">{selection.displayName} · {selection.ticker}</p>
-        <p className="mt-1 break-keep text-xs leading-5 text-muted-foreground">동기화된 보유 기록이 없습니다. 읽기 전용 상태만 표시합니다.</p>
+      <section data-testid="ui-builder-position-summary-none" className="min-w-0 rounded-2xl border border-card-border bg-card p-3 text-center shadow-sm sm:p-4">
+        <h2 className="text-sm font-bold">내 포지션</h2>
+        <p className="mt-2 break-words text-xs font-semibold">{selection.displayName} · {selection.ticker}</p>
+        <p className="mt-1 break-keep text-xs font-medium leading-5 text-muted-foreground">동기화된 보유 기록이 없습니다.</p>
       </section>
     );
   }
@@ -115,33 +113,35 @@ function PositionSummarySurface() {
   const pnl = marketValue == null ? null : marketValue - cost;
 
   return (
-    <section data-testid="ui-builder-position-summary" className="min-w-0 rounded-3xl border border-card-border bg-card p-3 shadow-sm sm:p-4">
-      <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h2 className="text-sm font-black">내 포지션</h2>
-          <p className="mt-1 truncate text-[11px] font-bold text-muted-foreground">{overlay.name} · {overlay.ticker}</p>
-        </div>
-        <span className="shrink-0 rounded-full border border-card-border px-2 py-1 text-[10px] font-black">읽기 전용</span>
+    <section data-testid="ui-builder-position-summary" className="min-w-0 rounded-2xl border border-card-border bg-card p-3 shadow-sm sm:p-4">
+      <div className="text-center">
+        <h2 className="text-sm font-bold">내 포지션</h2>
+        <p className="mt-1 truncate text-xs font-medium text-muted-foreground">{overlay.name} · {overlay.ticker}</p>
+        <span className="mt-2 inline-flex rounded-full border border-card-border px-2.5 py-1 text-xs font-semibold">읽기 전용</span>
       </div>
       <div className="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-3">
-        <div className="min-w-0 rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">평단</p><strong className="break-words tabular-nums">{formatPositionNumber(overlay.averagePrice)}</strong></div>
-        <div className="min-w-0 rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">현재가</p><strong className="break-words tabular-nums">{formatPositionNumber(overlay.currentPrice)}</strong></div>
-        <div className="min-w-0 rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">수량</p><strong className="break-words tabular-nums">{formatPositionNumber(overlay.quantity, 6)}</strong></div>
-        <div className="min-w-0 rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">평가액</p><strong className="break-words tabular-nums">{formatPositionNumber(marketValue)}</strong></div>
-        <div className="min-w-0 rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">손익</p><strong className="break-words tabular-nums">{formatPositionNumber(pnl)}</strong></div>
-        <div className="min-w-0 rounded-xl bg-background p-2"><p className="text-[10px] text-muted-foreground">수익률</p><strong className="break-words tabular-nums">{overlay.rate == null ? '-' : `${overlay.rate >= 0 ? '+' : ''}${formatPositionNumber(overlay.rate)}%`}</strong></div>
+        <PositionMetric label="평단" value={formatPositionNumber(overlay.averagePrice)} />
+        <PositionMetric label="현재가" value={formatPositionNumber(overlay.currentPrice)} />
+        <PositionMetric label="수량" value={formatPositionNumber(overlay.quantity, 6)} />
+        <PositionMetric label="평가액" value={formatPositionNumber(marketValue)} />
+        <PositionMetric label="손익" value={formatPositionNumber(pnl)} />
+        <PositionMetric label="수익률" value={overlay.rate == null ? '미확인' : `${overlay.rate >= 0 ? '+' : ''}${formatPositionNumber(overlay.rate)}%`} />
       </div>
     </section>
   );
+}
+
+function PositionMetric({ label, value }: { label: string; value: string }) {
+  return <div className="min-w-0 rounded-xl bg-background p-2 text-center"><p className="text-xs font-medium text-muted-foreground">{label}</p><strong className="mt-1 block break-words font-semibold tabular-nums">{value}</strong></div>;
 }
 
 function TradeReviewSurface() {
   const { selection } = useAnalysisSelection();
   if (!selection) {
     return (
-      <section data-testid="ui-builder-trade-review-empty" className="min-w-0 rounded-3xl border border-card-border bg-card p-3 shadow-sm sm:p-4">
-        <h2 className="text-center text-sm font-black">거래 검토</h2>
-        <p className="mt-2 break-keep text-xs leading-5 text-muted-foreground">검색 결과에서 종목을 선택하면 기존 승인형 Paper 검토 흐름을 사용할 수 있습니다.</p>
+      <section data-testid="ui-builder-trade-review-empty" className="min-w-0 rounded-2xl border border-card-border bg-card p-3 text-center shadow-sm sm:p-4">
+        <h2 className="text-sm font-bold">거래 검토</h2>
+        <p className="mt-2 break-keep text-xs font-medium leading-5 text-muted-foreground">검색 결과에서 종목을 선택하면 기존 승인형 Paper 검토 흐름을 사용할 수 있습니다.</p>
       </section>
     );
   }
@@ -281,13 +281,13 @@ export default function TechnicalWorkspacePage() {
           <details className="group relative shrink-0 sm:hidden">
             <summary
               aria-label="기술 기능 안내 보기"
-              className="flex h-9 w-9 cursor-pointer list-none items-center justify-center rounded-xl border border-card-border bg-background text-muted-foreground transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden"
+              className="flex h-11 w-11 cursor-pointer list-none items-center justify-center rounded-xl border border-card-border bg-background text-muted-foreground transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden"
               data-testid="technical-mobile-help"
             >
               <Info className="h-4 w-4" aria-hidden="true" />
             </summary>
             <div className="absolute right-0 z-50 mt-2 w-[min(82vw,320px)] rounded-2xl border border-card-border bg-background p-4 text-left shadow-xl">
-              <p className="text-sm font-black text-foreground">기술 기능 안내</p>
+              <p className="text-center text-sm font-semibold text-foreground">기술 기능 안내</p>
               <ul className="mt-2 space-y-1.5 text-xs font-medium leading-5 text-muted-foreground">
                 {TECHNICAL_INFO_ITEMS.map((item) => <li key={item}>• {item}</li>)}
               </ul>
