@@ -117,7 +117,7 @@ test('real user path stays coherent from login through session expiry', async ({
 
   await openMenuItem(page, '정보', '연구센터');
   await expect(page).toHaveURL(/\/research-center$/u);
-  await expect(page.getByRole('navigation', { name: '연구센터 작업 영역' })).toBeVisible();
+  await expect(page.getByRole('tablist', { name: '연구센터 핵심 화면' })).toBeVisible();
   await expect(page.getByTestId('research-overview-tab')).toBeVisible();
   await expect(page.getByText('수익성 검증', { exact: true })).toBeVisible();
   await expect(page.getByText('미검증', { exact: true })).toBeVisible();
