@@ -3,6 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
+import productionApp from '../app';
 import { requireAuthenticated, requireCapability } from '../middleware/auth';
 import { MEMBER_CAPABILITIES, MEMBER_PERMISSION_MATRIX } from '../../../packages/member-access/src/index.js';
 import { classifyAdminReadFailure, RESEARCH_OVERVIEW_TIMEOUT_MS } from './admin';
@@ -255,4 +256,29 @@ test('research dashboard overview proxy deadline covers the verified loopback re
   assert.equal(RESEARCH_OVERVIEW_TIMEOUT_MS, 10_000);
   assert.ok(RESEARCH_OVERVIEW_TIMEOUT_MS > 8_000);
   assert.ok(RESEARCH_OVERVIEW_TIMEOUT_MS <= 15_000);
+});
+
+test('account credential CORS preflight explicitly allows PUT without widening origin policy', async () => {
+  const server = productionApp.listen(0, '127.0.0.1');
+  await new Promise<void>((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+  const address = server.address() as AddressInfo;
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/accounts/read-only/credentials/toss`, {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'https://account-cors-contract.test',
+        'Access-Control-Request-Method': 'PUT',
+      },
+    });
+    assert.equal(response.status, 204);
+    const methods = (response.headers.get('access-control-allow-methods') ?? '')
+      .split(',')
+      .map((method) => method.trim().toUpperCase());
+    assert.ok(methods.includes('PUT'));
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });
