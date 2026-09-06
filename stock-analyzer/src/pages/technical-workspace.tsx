@@ -30,19 +30,19 @@ const WORKSPACE_TABS = [
   { value: 'signal', label: 'AI 검색기' },
   { value: 'chart', label: 'AI 차트' },
   { value: 'backtest', label: '백테스트' },
-  { value: 'trade', label: '승인형 주문' },
+  { value: 'trade', label: '자동매매' },
 ] as const;
 
 const WORKSPACE_TITLES: Record<Workspace, string> = {
   signal: 'AI 검색기',
   chart: 'AI 차트',
   backtest: '백테스트',
-  trade: '승인형 주문',
+  trade: '자동매매',
 };
 
 const TECHNICAL_INFO_ITEMS = [
   '검색·차트·백테스트는 읽기·분석 중심 화면이며 권한이 없는 기능은 잠금 상태로 유지됩니다.',
-  '주문 화면은 권한과 승인 절차가 있는 경우에만 열리며 실거래는 활성화하지 않습니다.',
+  '자동매매 화면은 권한과 승인 절차가 있는 경우에만 열리며 실거래는 활성화하지 않습니다.',
 ] as const;
 
 function useDesktopWorkspace() {
