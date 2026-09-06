@@ -258,6 +258,46 @@ test("state root cannot be relative or inside the live deploy tree", () => {
   );
 });
 
+test("scheduled cycle binding forwards only the schedule-owned settlement producer", async () => {
+  const identity = __paperForwardScheduleTestables.buildIdentity(RESEARCH_SHA, true, false);
+  const scheduleProducer = async () => ({ status: "BLOCKED_DATA" });
+  const callerProducer = async () => ({ status: "PRESENT" });
+  let captured = null;
+  const boundRunCycle = __paperForwardScheduleTestables.bindRecurringPaperCycle({
+    identity,
+    settlementCostProducer: scheduleProducer,
+    runCycle: async (input) => {
+      captured = input;
+      return input;
+    },
+  });
+
+  const result = await boundRunCycle({
+    cycle: Object.freeze({ cycleId: "cycle-1", identity: Object.freeze({ researchCodeSha: "b".repeat(40) }) }),
+    settlementCostProducer: callerProducer,
+    marker: "preserved",
+  });
+
+  assert.equal(captured, result);
+  assert.equal(result.settlementCostProducer, scheduleProducer);
+  assert.notEqual(result.settlementCostProducer, callerProducer);
+  assert.equal(result.marker, "preserved");
+  assert.equal(result.cycle.cycleId, "cycle-1");
+  assert.equal(result.cycle.identity, identity);
+  assert.equal(Object.isFrozen(result.cycle), true);
+});
+
+test("scheduled cycle binding rejects a non-function settlement producer", () => {
+  const identity = __paperForwardScheduleTestables.buildIdentity(RESEARCH_SHA, true, false);
+  assert.throws(
+    () => __paperForwardScheduleTestables.bindRecurringPaperCycle({
+      identity,
+      settlementCostProducer: Object.freeze({ status: "PRESENT" }),
+    }),
+    (error) => error?.code === "PAPER_FORWARD_SETTLEMENT_COST_PRODUCER_INVALID",
+  );
+});
+
 const SIM_T0 = 1_800_000_000_000;
 
 function simulatedSpotCandidate(nowMs) {
