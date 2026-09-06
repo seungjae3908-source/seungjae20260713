@@ -33,6 +33,10 @@ const EXPECTED_V2_COHORT_DIGEST =
 const ACTIVATION_SCHEMA =
   'public-forward-liquidity-successor-schedule-reliability-activation-binding-v3';
 
+export const SUCCESSOR_V3_GITHUB_PRIMARY_CRON_BOUNDARY_SKEW_MS = 60_000;
+export const SUCCESSOR_V3_GITHUB_PRIMARY_CRON_BOUNDARY_NORMALIZATION =
+  'GITHUB_PRIMARY_CRON_BOUNDARY_SKEW';
+
 function add(blockers, code) {
   if (!blockers.includes(code)) blockers.push(code);
 }
@@ -440,5 +444,84 @@ export function buildSuccessorScheduleReliabilityV3SlotDescriptor(
       cohortDigest: contract.cohortDigest,
       slotIndex,
     }),
+  });
+}
+
+export function normalizeSuccessorV3GithubScheduleCreatedAt({
+  scheduleExpression,
+  scheduledRunCreatedAtMs,
+  actualRunStartedAtMs,
+  contract = SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT,
+} = {}) {
+  const rawCreatedAtMs = Number(scheduledRunCreatedAtMs);
+  const actual = Number(actualRunStartedAtMs);
+  if (!Number.isInteger(rawCreatedAtMs) || rawCreatedAtMs < 0) {
+    throw new Error('SUCCESSOR_V3_GITHUB_CREATED_AT_INVALID');
+  }
+  if (!Number.isInteger(actual) || actual < 0) {
+    throw new Error('SUCCESSOR_V3_GITHUB_ACTUAL_START_INVALID');
+  }
+
+  const unchanged = () => Object.freeze({
+    rawCreatedAtMs,
+    authorityCreatedAtMs: rawCreatedAtMs,
+    boundaryNormalized: false,
+    normalization: null,
+  });
+  if (contract.activationBound !== true
+    || String(scheduleExpression ?? '').trim() !== exactUtcCron(17)) {
+    return unchanged();
+  }
+
+  const cohort = contract.policyCore.cohort;
+  if (actual < cohort.startInclusiveMs || actual >= cohort.endExclusiveMs) {
+    return unchanged();
+  }
+  const slotIndex = Math.floor(
+    (actual - cohort.startInclusiveMs) / cohort.slotCadenceMs,
+  );
+  if (!integer(slotIndex) || slotIndex < 0 || slotIndex >= cohort.totalSlotN) {
+    return unchanged();
+  }
+  const slot = buildSuccessorScheduleReliabilityV3SlotDescriptor(slotIndex, contract);
+  const earlyByMs = slot.nominalScheduledAtMs - rawCreatedAtMs;
+  if (rawCreatedAtMs > actual
+    || earlyByMs <= 0
+    || earlyByMs >= SUCCESSOR_V3_GITHUB_PRIMARY_CRON_BOUNDARY_SKEW_MS) {
+    return unchanged();
+  }
+
+  return Object.freeze({
+    rawCreatedAtMs,
+    authorityCreatedAtMs: slot.nominalScheduledAtMs,
+    boundaryNormalized: true,
+    normalization: SUCCESSOR_V3_GITHUB_PRIMARY_CRON_BOUNDARY_NORMALIZATION,
+  });
+}
+
+export function bindSuccessorV3GithubScheduleMetadataReceipt({
+  captureReceipt,
+  scheduleMetadata,
+} = {}) {
+  if (!captureReceipt || typeof captureReceipt !== 'object') {
+    throw new Error('SUCCESSOR_V3_CAPTURE_RECEIPT_MISSING');
+  }
+  if (!scheduleMetadata || typeof scheduleMetadata !== 'object') {
+    throw new Error('SUCCESSOR_V3_GITHUB_SCHEDULE_METADATA_MISSING');
+  }
+  if (scheduleMetadata.boundaryNormalized !== true) return captureReceipt;
+  if (captureReceipt.scheduledRunCreatedAtMs !== scheduleMetadata.authorityCreatedAtMs) {
+    throw new Error('SUCCESSOR_V3_GITHUB_AUTHORITY_CREATED_AT_MISMATCH');
+  }
+  const { captureReceiptDigest: _previousDigest, ...body } = captureReceipt;
+  const reboundBody = Object.freeze({
+    ...body,
+    scheduledRunCreatedAtRawMs: scheduleMetadata.rawCreatedAtMs,
+    scheduledRunCreatedAtBoundaryNormalized: true,
+    scheduledRunCreatedAtNormalization: scheduleMetadata.normalization,
+  });
+  return Object.freeze({
+    ...reboundBody,
+    captureReceiptDigest: sha256(canonicalJson(reboundBody)),
   });
 }
