@@ -16,7 +16,7 @@ function fulfill(route: Route, body: unknown, status = 200) {
 
 async function installRuntime(page: Page) {
   await page.addInitScript(({ authKey, user, now }) => {
-    const encode = (value: Record<string, unknown>) => btoa(JSON.stringify(value))
+    const encode = (value: Record<string, unknown>) => window.btoa(JSON.stringify(value))
       .replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
     const expiresAt = 4_102_444_800;
     const accessToken = `${encode({ alg: 'none', typ: 'JWT' })}.${encode({ sub: user, role: 'authenticated', exp: expiresAt })}.e2e`;
@@ -102,20 +102,24 @@ async function installRuntime(page: Page) {
   });
 }
 
-test('professional command surface is shell-owned, capability-aware and contains no order action', () => {
+test('professional command surface is shell-owned, desktop-idle split, capability-aware and contains no order action', () => {
   const app = source('src/App.tsx');
-  const command = source('src/components/professional-command-bar.tsx');
+  const loader = source('src/components/professional-command-bar.tsx');
+  const content = source('src/components/professional-command-bar-content.tsx');
 
   expect(app).toContain("import { ProfessionalCommandBar } from '@/components/professional-command-bar';");
   expect(app).toContain('<ProfessionalCommandBar />');
-  expect(command).toContain("window.matchMedia('(min-width: 1200px)').matches");
-  expect(command).toContain("auth.can('canAccessRiskPreview')");
-  expect(command).toContain("auth.can('canAccessPaperTrading')");
-  expect(command).toContain("auth.can('canManageMembers')");
-  expect(command).not.toContain('APP_ROUTES.autoTrading');
-  expect(command).not.toContain('주문 실행');
-  expect(command).not.toContain('매수');
-  expect(command).not.toContain('매도');
+  expect(app).not.toContain('professional-command-bar-content');
+  expect(loader).toContain("window.matchMedia('(min-width: 1200px)')");
+  expect(loader).toContain('requestIdleCallback');
+  expect(loader).toContain("import('@/components/professional-command-bar-content')");
+  expect(content).toContain("auth.can('canAccessRiskPreview')");
+  expect(content).toContain("auth.can('canAccessPaperTrading')");
+  expect(content).toContain("auth.can('canManageMembers')");
+  expect(content).not.toContain('APP_ROUTES.autoTrading');
+  expect(content).not.toContain('주문 실행');
+  expect(content).not.toContain('매수');
+  expect(content).not.toContain('매도');
 });
 
 test('desktop command bar opens with Ctrl+K and keyboard navigation reaches a read-only analysis screen', async ({ page }) => {
@@ -124,7 +128,7 @@ test('desktop command bar opens with Ctrl+K and keyboard navigation reaches a re
   await page.goto('/home');
 
   const bar = page.getByTestId('professional-command-bar');
-  await expect(bar).toBeVisible();
+  await expect(bar).toBeVisible({ timeout: 5_000 });
   await expect(bar).toContainText('홈');
   await expect(bar).toContainText('온라인');
 
@@ -140,12 +144,12 @@ test('desktop command bar opens with Ctrl+K and keyboard navigation reaches a re
   await expect(page).toHaveURL(/\/ai-chart(?:$|[?#])/);
 });
 
-test('touch/tablet widths keep the professional desktop command bar out of the layout and shortcut stays inert', async ({ page }) => {
+test('touch/tablet widths never request or render the professional desktop command surface', async ({ page }) => {
   await page.setViewportSize({ width: 1180, height: 820 });
   await installRuntime(page);
   await page.goto('/home');
 
-  await expect(page.getByTestId('professional-command-bar')).toBeHidden();
+  await expect(page.getByTestId('professional-command-bar')).toHaveCount(0);
   await page.keyboard.press('Control+K');
   await expect(page.getByTestId('professional-command-palette')).toHaveCount(0);
 
