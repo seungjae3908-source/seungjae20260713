@@ -3,6 +3,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { sha256Canonical as hash } from '../../../market-prediction-lab/src/research-cache-provenance.js';
 import type { ResearchBundleResolution, ResearchSubmissionStore } from './research-bundle.contract';
+import { ResearchBundleService } from './research-bundle.service.ts';
 
 type Row = Record<string, unknown>;
 const row = (value: unknown): Row => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Row : {};
@@ -134,4 +135,58 @@ export function createResearchBundleFileStore(stateRoot: string): {
       },
     },
   };
+}
+
+export interface ResearchCanonicalBundlePublication {
+  schemaVersion: 'research-canonical-bundle-publication-v1';
+  dslDigest: string;
+  bundleDigest: string;
+  publicationStatus: 'READBACK_VERIFIED';
+  evidenceCredit: 0;
+  profitabilityProven: false;
+  executionAuthority: 'NONE';
+}
+
+/** Offline, owner-controlled catalog publisher. This is intentionally not
+ * exposed by createResearchBundleFileStore(), so an HTTP/runtime consumer only
+ * receives the read and submission capabilities it already had. */
+export async function publishResearchCanonicalBundleSource(input: {
+  stateRoot: string;
+  dsl: unknown;
+  bundle: unknown;
+  /** Deterministic clock for the focused validation harness only. */
+  now?: () => number;
+}): Promise<ResearchCanonicalBundlePublication> {
+  const root = await directory(input.stateRoot), catalog = await directory(join(root, 'catalog'));
+  const bundle = structuredClone(input.bundle);
+  const storage = createResearchBundleFileStore(root);
+  const service = new ResearchBundleService({
+    readCanonicalBundle: async () => {
+      const candidate = row(bundle);
+      return candidate.schemaVersion === 'research-bundle-source-v1' && candidate.evidenceClass === 'CANONICAL'
+        ? structuredClone(candidate) : null;
+    },
+    submissions: storage.submissions,
+    now: input.now,
+  });
+  const resolution = await service.resolve(input.dsl);
+  if (!resolution.dslValid || !digest(resolution.dslDigest) || !digest(resolution.bundleDigest) ||
+    !resolution.researchBundleReady || !resolution.backtestExecutable || resolution.blockers.length !== 0 ||
+    resolution.components.some(component => component.status !== 'READY') ||
+    resolution.evidenceCredit !== 0 || resolution.profitabilityProven !== false ||
+    resolution.executionAuthority !== 'NONE') throw new Error('RESEARCH_CATALOG_SOURCE_INVALID');
+
+  const dslDigest = resolution.dslDigest, bundleDigest = hash(bundle);
+  if (bundleDigest !== resolution.bundleDigest) throw new Error('RESEARCH_CATALOG_SOURCE_CHANGED');
+  const envelope = { schemaVersion: 'research-bundle-catalog-entry-v1', dslDigest, bundleDigest,
+    bundle };
+  try { await publishOnce(catalog, dslDigest + '.json', envelope); }
+  catch (error) {
+    if (errno(error, 'EEXIST')) throw new Error('RESEARCH_CATALOG_ENTRY_EXISTS');
+    throw error;
+  }
+  const readback = await storage.readCanonicalBundle(dslDigest);
+  if (hash(readback) !== bundleDigest) throw new Error('RESEARCH_CATALOG_READBACK_MISMATCH');
+  return { schemaVersion: 'research-canonical-bundle-publication-v1', dslDigest, bundleDigest,
+    publicationStatus: 'READBACK_VERIFIED', evidenceCredit: 0, profitabilityProven: false, executionAuthority: 'NONE' };
 }
