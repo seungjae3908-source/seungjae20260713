@@ -1,0 +1,215 @@
+name: Public Forward Liquidity Successor Schedule Seam Validation
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/public-forward-liquidity-successor-scheduled-capture.yml'
+      - '.github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml'
+      - '.github/workflows/market-intelligence-sidecar-validation.yml'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-seam-v1.mjs'
+      - 'market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-successor-prospective-cohort.mjs'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-successor-oos-outcome-horizon.mjs'
+      - 'market-intelligence-sidecar/config/public-forward-liquidity-successor-prospective-cohort-v2.json'
+      - 'market-intelligence-sidecar/config/public-forward-liquidity-successor-oos-outcome-horizon-v2.json'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-reliability-v3.mjs'
+      - 'market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-v3.json'
+      - 'market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-seam-v1.test.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-successor-prospective-cohort.test.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-successor-oos-outcome-horizon.test.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-reliability-v3.test.mjs'
+
+permissions:
+  contents: read
+
+jobs:
+  validate-successor-schedule-seam:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact pull request head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Assert validation-only trigger boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          workflow='.github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml'
+          if grep -Eq '^[[:space:]]{2}schedule:[[:space:]]*$' "$workflow"; then
+            echo 'Forbidden activation trigger found' >&2
+            exit 1
+          fi
+          if grep -Eq '^[[:space:]]{2}workflow_dispatch:[[:space:]]*$' "$workflow"; then
+            echo 'Forbidden capture-capable manual trigger found' >&2
+            exit 1
+          fi
+          if grep -Eq '^[[:space:]]*-[[:space:]]*cron:' "$workflow"; then
+            echo 'Forbidden cron entry found in validation workflow' >&2
+            exit 1
+          fi
+
+      - name: Syntax check V2 bindings and V3 reliability contract
+        run: |
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-seam-v1.mjs
+          node --check market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-successor-prospective-cohort.mjs
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-successor-oos-outcome-horizon.mjs
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-reliability-v3.mjs
+
+      - name: Stash activation binding for preserved inactive regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          activation='market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json'
+          if [[ -f "$activation" ]]; then
+            mv "$activation" "$RUNNER_TEMP/successor-v3-activation.json"
+            echo 'SUCCESSOR_V3_ACTIVATION_STASHED=true' >> "$GITHUB_ENV"
+          else
+            echo 'SUCCESSOR_V3_ACTIVATION_STASHED=false' >> "$GITHUB_ENV"
+          fi
+
+      - name: Run V2 preservation and V3 fail-closed contract tests
+        run: >-
+          node --test
+          market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-seam-v1.test.mjs
+          market-intelligence-sidecar/tests/public-forward-liquidity-successor-prospective-cohort.test.mjs
+          market-intelligence-sidecar/tests/public-forward-liquidity-successor-oos-outcome-horizon.test.mjs
+          market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-reliability-v3.test.mjs
+
+      - name: Run runner self-check without schedule or network authority
+        run: node market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs self-check
+
+      - name: Restore and validate V3 activation binding
+        if: env.SUCCESSOR_V3_ACTIVATION_STASHED == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          activation='market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json'
+          mv "$RUNNER_TEMP/successor-v3-activation.json" "$activation"
+          node --input-type=module <<'NODE'
+          import {
+            SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT,
+            verifySuccessorScheduleReliabilityV3Contract,
+          } from './market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-reliability-v3.mjs';
+
+          const contract = SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT;
+          const verdict = verifySuccessorScheduleReliabilityV3Contract(contract);
+          if (!verdict.valid || !verdict.activationBound) {
+            console.error('Invalid V3 activation binding:', verdict.blockers.join(','));
+            process.exit(1);
+          }
+          NODE
+
+      - name: Verify activation candidate exact base only when binding changes
+        if: env.SUCCESSOR_V3_ACTIVATION_STASHED == 'true'
+        shell: bash
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          activation='market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json'
+          if git diff --name-only "$PR_BASE_SHA" "$PR_HEAD_SHA" | grep -Fqx "$activation"; then
+            authorized_main="$(node --input-type=module <<'NODE'
+          import { SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT } from './market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-reliability-v3.mjs';
+          process.stdout.write(SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.policyCore.activationBinding.authorizedCurrentMainSha);
+          NODE
+            )"
+            test "$authorized_main" = "$PR_BASE_SHA"
+          fi
+
+      - name: Verify exact V3 implementation, activation admission, or scheduled-runtime fix scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          base='${{ github.event.pull_request.base.sha }}'
+          head='${{ github.event.pull_request.head.sha }}'
+          activation='market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json'
+          runtime_workflow='.github/workflows/public-forward-liquidity-successor-scheduled-capture.yml'
+          validation_workflow='.github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml'
+          runner='market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs'
+          reliability='market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-reliability-v3.mjs'
+          reliability_test='market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-reliability-v3.test.mjs'
+          git diff --check "$base" "$head"
+          changed="$(git diff --name-only "$base" "$head")"
+
+          if printf '%s\n' "$changed" | grep -Fqx "$activation"; then
+            cat > /tmp/allowed-files <<'EOF'
+          .github/workflows/market-intelligence-sidecar-validation.yml
+          .github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml
+          .github/workflows/public-forward-liquidity-successor-scheduled-capture.yml
+          market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json
+          EOF
+            expected_count=4
+            scope_name='V3 activation-admission'
+          elif [[ "$(printf '%s\n' "$changed" | grep -v -F -e "$validation_workflow" -e "$runner" -e "$reliability" -e "$reliability_test" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 0 ]] \
+            && printf '%s\n' "$changed" | grep -Fqx "$validation_workflow" \
+            && printf '%s\n' "$changed" | grep -Fqx "$runner" \
+            && printf '%s\n' "$changed" | grep -Fqx "$reliability" \
+            && printf '%s\n' "$changed" | grep -Fqx "$reliability_test"; then
+            cat > /tmp/allowed-files <<'EOF'
+          .github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml
+          market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs
+          market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-reliability-v3.mjs
+          market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-reliability-v3.test.mjs
+          EOF
+            expected_count=4
+            scope_name='V3 scheduled-runtime-metadata-repair'
+          elif [[ "$(printf '%s\n' "$changed" | grep -v -F -e "$runtime_workflow" -e "$validation_workflow" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 0 ]]; then
+            cat > /tmp/allowed-files <<'EOF'
+          .github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml
+          .github/workflows/public-forward-liquidity-successor-scheduled-capture.yml
+          EOF
+            expected_count=2
+            scope_name='V3 scheduled-runtime-validation-fix'
+          else
+            cat > /tmp/allowed-files <<'EOF'
+          .github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml
+          .github/workflows/public-forward-liquidity-successor-scheduled-capture.yml
+          market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-v3.json
+          market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs
+          market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-reliability-v3.mjs
+          market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-seam-v1.mjs
+          market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-reliability-v3.test.mjs
+          EOF
+            expected_count=7
+            scope_name='V3 reliability implementation'
+          fi
+
+          unexpected="$(printf '%s\n' "$changed" | grep -vxFf /tmp/allowed-files || true)"
+          if [[ -n "$unexpected" ]]; then
+            echo "Unexpected file(s) outside approved $scope_name scope:" >&2
+            printf '%s\n' "$unexpected" >&2
+            exit 1
+          fi
+          test "$(printf '%s\n' "$changed" | sed '/^$/d' | wc -l | tr -d ' ')" -eq "$expected_count"
+
+      - name: Verify scheduled workflow is V3 frozen but Draft PR cannot activate it
+        shell: bash
+        run: |
+          set -euo pipefail
+          workflow='.github/workflows/public-forward-liquidity-successor-scheduled-capture.yml'
+          test "$(grep -Ec "^[[:space:]]{4}- cron: '17 \\* \\* \\* \\*'[[:space:]]*$" "$workflow")" -eq 1
+          test "$(grep -Ec "^[[:space:]]{4}- cron: '27 \\* \\* \\* \\*'[[:space:]]*$" "$workflow")" -eq 1
+          test "$(grep -Ec "^[[:space:]]{4}- cron: '37 \\* \\* \\* \\*'[[:space:]]*$" "$workflow")" -eq 1
+          test "$(grep -Ec "^[[:space:]]{2}queue:[[:space:]]+max[[:space:]]*$" "$workflow")" -eq 1
+          test "$(grep -Ec "^[[:space:]]{2}cancel-in-progress:[[:space:]]+false[[:space:]]*$" "$workflow")" -eq 1
+          ! grep -Eq '^[[:space:]]{2}workflow_dispatch:[[:space:]]*$' "$workflow"
+          test "$(grep -Ec 'CAPTURE_ATTEMPT_ARTIFACT_NAME: [$][{][{] steps[.]capture[.]outputs[.]attempt_artifact_name [}][}]' "$workflow")" -eq 1
+          test "$(grep -Fc 'artifact_name=${CAPTURE_ATTEMPT_ARTIFACT_NAME}' "$workflow")" -eq 1
+          test "$(grep -Ec 'name: [$][{][{] steps[.]attempt_name[.]outputs[.]artifact_name [}][}]' "$workflow")" -eq 1
+          test "$(grep -Ec 'ARTIFACT_NAME: [$][{][{] steps[.]attempt_name[.]outputs[.]artifact_name [}][}]' "$workflow")" -eq 1
+          ! grep -Fq 'steps.attempt_name.outputs.name' "$workflow"
+          ! grep -Eq '^[[:space:]]+RUNNER_NAME:' "$workflow"
+          test "$GITHUB_EVENT_NAME" = 'pull_request'
+          test "$GITHUB_REF" != 'refs/heads/main'
