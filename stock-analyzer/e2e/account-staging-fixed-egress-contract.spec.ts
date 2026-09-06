@@ -1,9 +1,18 @@
 import { expect, test } from '@playwright/test';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const workflowPath = fileURLToPath(
+  new URL('../../.github/workflows/staging-account-readonly-evidence-dispatch.yml', import.meta.url),
+);
+const retiredWorkflowPath = fileURLToPath(
+  new URL('../../.github/workflows/staging-account-readonly-evidence-v2.yml', import.meta.url),
+);
+const legacyWorkflowPath = fileURLToPath(
   new URL('../../.github/workflows/staging-account-readonly-evidence.yml', import.meta.url),
+);
+const bridgePath = fileURLToPath(
+  new URL('../../.github/workflows/staging-dispatch-bridge.yml', import.meta.url),
 );
 const evidenceSourcePath = fileURLToPath(
   new URL('../../api-server/src/features/account-readonly/staging-account-readonly-no-db-evidence.ts', import.meta.url),
@@ -11,7 +20,33 @@ const evidenceSourcePath = fileURLToPath(
 
 test('private account evidence keeps GitHub-hosted isolation and uses Staging only as fixed egress', () => {
   const workflow = readFileSync(workflowPath, 'utf8');
+  const bridge = readFileSync(bridgePath, 'utf8');
   const evidenceSource = readFileSync(evidenceSourcePath, 'utf8');
+
+  expect(existsSync(legacyWorkflowPath)).toBe(false);
+  expect(existsSync(retiredWorkflowPath)).toBe(false);
+  expect(workflow).toContain('workflow_dispatch:');
+  expect(workflow).toContain('source_comment_id:');
+  expect(workflow).toContain('pull_request:');
+  expect(workflow).not.toContain('issue_comment:');
+  expect(workflow).toContain("if: github.event_name == 'pull_request'");
+  expect(workflow).toContain("github.event_name == 'workflow_dispatch'");
+  expect(workflow).toContain("github.actor == 'github-actions[bot]'");
+  expect(workflow).not.toContain('github.actor == github.repository_owner');
+  expect(workflow).toContain("github.ref == 'refs/heads/main'");
+  expect(workflow).toContain('github.rest.issues.getComment');
+  expect(workflow).toContain("comment.author_association === 'OWNER'");
+  expect(workflow).toContain('Workflow dispatch is not bound to an exact owner-authored Release Control #23 command.');
+  expect(workflow).toContain('Prove dispatch-target registration without private access');
+
+  expect(bridge).toContain("startsWith(github.event.comment.body, '/run-staging-account-readonly ')");
+  expect(bridge).toContain("const workflowId = 'staging-account-readonly-evidence-dispatch.yml';");
+  expect(bridge).toContain("const workflowPath = '.github/workflows/staging-account-readonly-evidence-dispatch.yml';");
+  expect(bridge).toContain('source_comment_id: sourceCommentId');
+  expect(bridge).toContain('return_run_details: true');
+  expect(bridge).toContain('run.display_title === expectedTitle');
+  expect(bridge).toContain('Account read-only evidence dispatch was not replayed.');
+  expect(bridge).toContain('Account read-only evidence workflow run created.');
 
   expect(workflow).toContain('runs-on: ubuntu-latest');
   expect(workflow).not.toContain('runs-on: [self-hosted');
@@ -29,13 +64,15 @@ test('private account evidence keeps GitHub-hosted isolation and uses Staging on
   expect(workflow).toContain('-L 127.0.0.1:18444:api.upbit.com:443');
   expect(workflow).toContain('-L 127.0.0.1:18445:api.bitget.com:443');
 
+  const sourceCommandIndex = workflow.indexOf('- name: Re-prove trusted Release Control owner command');
   const egressIndex = workflow.indexOf('- name: Require provider-allowlisted Staging egress IP');
   const tunnelIndex = workflow.indexOf('- name: Open TLS-preserving provider egress tunnels');
   const evidenceIndex = workflow.indexOf('- name: Run canonical Toss Upbit Bitget no-DB read-only evidence');
   const postIdentityIndex = workflow.indexOf('- name: Re-prove current main and Staging egress unchanged');
   const firstProviderSecretIndex = workflow.indexOf('STAGING_TOSS_CLIENT_ID: ${{ secrets.');
 
-  expect(egressIndex).toBeGreaterThanOrEqual(0);
+  expect(sourceCommandIndex).toBeGreaterThanOrEqual(0);
+  expect(egressIndex).toBeGreaterThan(sourceCommandIndex);
   expect(tunnelIndex).toBeGreaterThan(egressIndex);
   expect(evidenceIndex).toBeGreaterThan(tunnelIndex);
   expect(firstProviderSecretIndex).toBeGreaterThan(evidenceIndex);
