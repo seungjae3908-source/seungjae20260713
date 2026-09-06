@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import path from 'node:path';
 
 import { MEMBER_PERMISSION_MATRIX } from '../../../packages/member-access/src/index.js';
+import app from '../app';
 import { buildBrokerCommonState, legacySnapshot } from './account-connections';
 import {
   decryptTradingCredentials,
@@ -246,4 +248,38 @@ test('account credential CORS contract admits PUT without widening the productio
     appSource.includes("callback(new Error('CORS origin rejected'))"),
     'disallowed production origins must remain fail-closed',
   );
+});
+
+test('account credential route answers a real PUT CORS preflight with PUT allowed', async () => {
+  const server = createServer(app);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+
+    const response = await fetch(
+      `http://127.0.0.1:${address.port}/api/account-readonly/toss/credentials`,
+      {
+        method: 'OPTIONS',
+        headers: {
+          Origin: 'http://localhost:5173',
+          'Access-Control-Request-Method': 'PUT',
+          'Access-Control-Request-Headers': 'content-type,authorization',
+        },
+      },
+    );
+
+    assert.equal(response.status, 204);
+    const methods = response.headers.get('access-control-allow-methods');
+    assert.ok(methods, 'preflight must expose Access-Control-Allow-Methods');
+    assert.equal(
+      methods.split(',').map((method) => method.trim().toUpperCase()).includes('PUT'),
+      true,
+    );
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
 });
