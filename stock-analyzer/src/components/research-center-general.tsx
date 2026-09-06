@@ -146,7 +146,7 @@ export function ResearchCenterGeneral() {
                     표본과 정산 근거가 충분해질수록 검증이 진행됩니다. 수익성은 근거가 충족되기 전까지 검증 중으로 유지합니다.
                   </p>
                   <p className="mx-auto mt-2 max-w-2xl break-keep text-xs font-medium leading-5 text-muted-foreground">
-                    Dataset · Source SHA · Evidence state · Canonical record 같은 기술 근거는 상단의 전문가 보기에서 확인할 수 있습니다.
+                    데이터 출처·원본 식별자·검증 근거 같은 기술 정보는 상단의 전문가 보기에서 확인할 수 있습니다.
                   </p>
                 </section>
               </>
