@@ -63,6 +63,7 @@ jobs:
           grep -q 'LEGACY_ACTIVE_CANONICAL_DORMANT' market-prediction-lab/src/canonical-shadow-runtime-activation-v1.js
           grep -q 'canonicalStrandedBootstrapRecoveryAllowedV1' market-prediction-lab/src/canonical-shadow-runtime-activation-v1.js
           grep -q 'approve-canonical-shadow-recovery' .github/workflows/prediction-lab-canonical-shadow-cycle.yml
+          grep -q 'canonical-shadow-recovery-attempt-' .github/workflows/prediction-lab-canonical-shadow-cycle.yml
           grep -q 'canonicalRuntimeRequestId' .github/workflows/prediction-lab-canonical-shadow-cycle.yml
           grep -q 'workflow_run' .github/workflows/prediction-lab-canonical-shadow-publisher.yml
 
@@ -201,6 +202,7 @@ jobs:
           publication_receipt_count=''
           recovery_approval_id=''
           recovery_approval_target_sha=''
+          recovery_approval_claim_count=''
           legacy_state=''
 
           producer_run="$(gh api "repos/$REPOSITORY/actions/runs/$producer_run_id")"
@@ -260,11 +262,11 @@ jobs:
             done < <(gh api "repos/$REPOSITORY/actions/workflows/prediction-lab-canonical-shadow-publisher.yml/runs?status=success&per_page=100" --jq '.workflow_runs[].id')
 
             if [[ ! "$predecessor_run_id" =~ ^[1-9][0-9]*$ ]]; then
-              receipt_index="$RUNNER_TEMP/canonical-publication-receipt-index.tsv"
+              artifact_index="$RUNNER_TEMP/canonical-shadow-artifact-index.tsv"
               gh api --paginate "repos/$REPOSITORY/actions/artifacts?per_page=100" \
-                --jq '.artifacts[] | select(.name | startswith("canonical-shadow-publication-receipt-")) | [.id, .expired, .created_at, .workflow_run.id, .name] | @tsv' \
-                > "$receipt_index"
-              publication_receipt_count="$(wc -l < "$receipt_index" | tr -d '[:space:]')"
+                --jq '.artifacts[] | [.id, .expired, .created_at, .workflow_run.id, .name] | @tsv' \
+                > "$artifact_index"
+              publication_receipt_count="$(awk -F '\t' '$5 ~ /^canonical-shadow-publication-receipt-/ { count++ } END { print count + 0 }' "$artifact_index")"
               [[ "$publication_receipt_count" =~ ^[0-9]+$ ]]
               if [[ "$publication_receipt_count" != '0' ]]; then
                 echo "Canonical publication receipt history exists but no valid predecessor is usable; fail closed instead of bootstrap recovery" >&2
@@ -285,6 +287,12 @@ jobs:
                 exit 1
               }
               recovery_approval_target_sha="$TARGET_SHA"
+              recovery_approval_claim_count="$(awk -F '\t' -v marker="canonical-shadow-recovery-attempt-$recovery_approval_id" '$5 == marker { count++ } END { print count + 0 }' "$artifact_index")"
+              [[ "$recovery_approval_claim_count" =~ ^[0-9]+$ ]]
+              if [[ "$recovery_approval_claim_count" != '0' ]]; then
+                echo "Recovery approval comment $recovery_approval_id already claimed; a new explicit #838 approval is required" >&2
+                exit 1
+              fi
 
               predecessor_run_id="$BOOTSTRAP_PREDECESSOR_RUN_ID"
               predecessor_artifacts="$(gh api "repos/$REPOSITORY/actions/runs/$predecessor_run_id/artifacts")"
@@ -297,6 +305,7 @@ jobs:
                 TARGET_SHA="$TARGET_SHA" \
                 LEGACY_STATE="$legacy_state" \
                 PUBLICATION_RECEIPT_COUNT="$publication_receipt_count" \
+                RECOVERY_APPROVAL_CLAIM_COUNT="$recovery_approval_claim_count" \
                 PRODUCER_RUN_ID="$producer_run_id" \
                 PREDECESSOR_RUN_ID="$predecessor_run_id" \
                 PREDECESSOR_DIGEST="$predecessor_digest" \
@@ -309,6 +318,7 @@ jobs:
             targetSha: process.env.TARGET_SHA,
             legacyWorkflowState: process.env.LEGACY_STATE,
             publishedReceiptCount: process.env.PUBLICATION_RECEIPT_COUNT,
+            recoveryApprovalClaimCount: process.env.RECOVERY_APPROVAL_CLAIM_COUNT,
             producerRunId: process.env.PRODUCER_RUN_ID,
             predecessorRunId: process.env.PREDECESSOR_RUN_ID,
             predecessorArtifactDigest: process.env.PREDECESSOR_DIGEST,
@@ -329,7 +339,50 @@ jobs:
           echo "publication_receipt_count=$publication_receipt_count" >> "$GITHUB_OUTPUT"
           echo "recovery_approval_id=$recovery_approval_id" >> "$GITHUB_OUTPUT"
           echo "recovery_approval_target_sha=$recovery_approval_target_sha" >> "$GITHUB_OUTPUT"
+          echo "recovery_approval_claim_count=$recovery_approval_claim_count" >> "$GITHUB_OUTPUT"
           echo "legacy_state=$legacy_state" >> "$GITHUB_OUTPUT"
+      - name: Build one-time stranded recovery claim
+        id: recovery_claim
+        if: steps.binding.outputs.bootstrap_recovery == 'true'
+        shell: bash
+        env:
+          TARGET_SHA: ${{ needs.gate.outputs.target_sha }}
+          REQUEST_ID: ${{ needs.gate.outputs.request_id }}
+          RECOVERY_APPROVAL_ID: ${{ steps.binding.outputs.recovery_approval_id }}
+          PUBLICATION_RECEIPT_COUNT: ${{ steps.binding.outputs.publication_receipt_count }}
+          RECOVERY_APPROVAL_CLAIM_COUNT: ${{ steps.binding.outputs.recovery_approval_claim_count }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$RECOVERY_APPROVAL_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$PUBLICATION_RECEIPT_COUNT" == '0' ]]
+          [[ "$RECOVERY_APPROVAL_CLAIM_COUNT" == '0' ]]
+          claim_root="$RUNNER_TEMP/canonical-shadow-recovery-claim"
+          mkdir -p "$claim_root"
+          claim="$claim_root/claim.json"
+          TARGET_SHA="$TARGET_SHA" REQUEST_ID="$REQUEST_ID" RECOVERY_APPROVAL_ID="$RECOVERY_APPROVAL_ID" node - <<'NODE' > "$claim"
+          const value = {
+            schemaVersion: 'canonical-shadow-stranded-recovery-claim-v1',
+            approvalCommentId: process.env.RECOVERY_APPROVAL_ID,
+            targetSha: process.env.TARGET_SHA,
+            sourceRunId: process.env.GITHUB_RUN_ID,
+            runtimeRequestId: process.env.REQUEST_ID,
+            priorPublishedReceiptCount: 0,
+            priorApprovalClaimCount: 0,
+            evidenceCredit: 0,
+            productionStateMutation: false,
+            createdAt: new Date().toISOString(),
+          };
+          process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+          NODE
+          echo "path=$claim" >> "$GITHUB_OUTPUT"
+      - name: Upload one-time stranded recovery claim
+        if: steps.binding.outputs.bootstrap_recovery == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: canonical-shadow-recovery-attempt-${{ steps.binding.outputs.recovery_approval_id }}
+          path: ${{ steps.recovery_claim.outputs.path }}
+          if-no-files-found: error
+          retention-days: 90
       - name: Validate immutable binding shape
         env:
           PRODUCER_RUN_ID: ${{ steps.binding.outputs.producer_run_id }}
@@ -371,6 +424,7 @@ jobs:
           PUBLICATION_RECEIPT_COUNT: ${{ steps.binding.outputs.publication_receipt_count }}
           RECOVERY_APPROVAL_ID: ${{ steps.binding.outputs.recovery_approval_id }}
           RECOVERY_APPROVAL_TARGET_SHA: ${{ steps.binding.outputs.recovery_approval_target_sha }}
+          RECOVERY_APPROVAL_CLAIM_COUNT: ${{ steps.binding.outputs.recovery_approval_claim_count }}
           LEGACY_STATE: ${{ steps.binding.outputs.legacy_state }}
           PREDECESSOR_DIR: ${{ runner.temp }}/predecessor-shadow
         run: |
@@ -413,6 +467,7 @@ jobs:
             targetSha: process.env.TARGET_SHA,
             legacyWorkflowState: process.env.LEGACY_STATE,
             publishedReceiptCount: process.env.PUBLICATION_RECEIPT_COUNT,
+            recoveryApprovalClaimCount: process.env.RECOVERY_APPROVAL_CLAIM_COUNT,
             producerRunId: process.env.PRODUCER_RUN_ID,
             predecessorRunId: process.env.PREDECESSOR_RUN_ID,
             predecessorArtifactDigest: process.env.PREDECESSOR_DIGEST,
@@ -460,6 +515,7 @@ jobs:
           BOOTSTRAP_RECOVERY: ${{ steps.binding.outputs.bootstrap_recovery }}
           PUBLICATION_RECEIPT_COUNT: ${{ steps.binding.outputs.publication_receipt_count }}
           RECOVERY_APPROVAL_ID: ${{ steps.binding.outputs.recovery_approval_id }}
+          RECOVERY_APPROVAL_CLAIM_COUNT: ${{ steps.binding.outputs.recovery_approval_claim_count }}
         run: |
           node - <<'NODE'
           const fs = require('fs');
@@ -476,6 +532,7 @@ jobs:
             canonicalRuntimeBootstrapRecovery: bootstrapRecovery,
             canonicalRuntimeRecoveryApprovalCommentId: bootstrapRecovery ? process.env.RECOVERY_APPROVAL_ID : null,
             canonicalRuntimePublishedReceiptCountAtRecoveryCheck: bootstrapRecovery ? Number(process.env.PUBLICATION_RECEIPT_COUNT) : null,
+            canonicalRuntimeRecoveryApprovalClaimCountBeforeAttempt: bootstrapRecovery ? Number(process.env.RECOVERY_APPROVAL_CLAIM_COUNT) : null,
             branchWrite: false,
             liveOrderAllowed: false,
             privateAccountRequestAllowed: false,
