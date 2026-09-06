@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
@@ -9,6 +10,25 @@ const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 18090;
 const MAX_JSON_BYTES = 12 * 1024 * 1024;
 const PROFILES = ['forward', 'fast-historical', 'long-history'];
+const V3_INDEPENDENCE_SUMMARY_RELATIVE_PATH = Object.freeze([
+  'forward',
+  'liquidity',
+  'v3-authoritative-independence-summary.json',
+]);
+const V3_INDEPENDENCE_SUMMARY_SCHEMA = 'public-forward-liquidity-v3-authoritative-independence-summary-v1';
+const SHA_PATTERN = /^[0-9a-f]{40}$/u;
+const DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
+const SPLIT_COUNT_KEYS = Object.freeze([
+  'TRAIN',
+  'TRAIN_BUY',
+  'TRAIN_SELL',
+  'VALIDATION',
+  'VALIDATION_BUY',
+  'VALIDATION_SELL',
+  'OOS',
+  'OOS_BUY',
+  'OOS_SELL',
+]);
 
 const CONTENT_TYPES = Object.freeze({
   '.html': 'text/html; charset=utf-8',
@@ -44,6 +64,137 @@ async function readJsonOptional(path) {
   } catch (error) {
     if (error?.code === 'ENOENT') return null;
     throw new Error(`unable to read research state ${path}: ${String(error?.message ?? error).slice(0, 240)}`);
+  }
+}
+
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]));
+}
+
+function sha256Canonical(value) {
+  return createHash('sha256').update(JSON.stringify(canonicalize(value))).digest('hex');
+}
+
+function emptyV3Independence(status, present) {
+  return Object.freeze({
+    present,
+    status,
+    schemaVersion: null,
+    producerSha: null,
+    upstreamIngestRunId: null,
+    upstreamIngestArtifactId: null,
+    upstreamIngestArtifactDigest: null,
+    sourceInventoryDigest: null,
+    targetSlotIndex: null,
+    genuineScheduledSlotN: null,
+    rawAcceptedN: null,
+    effectiveIndependentN: null,
+    independentBuyN: null,
+    independentSellN: null,
+    independenceAuditDigest: null,
+    independentSplitSourceDigest: null,
+    v3IndependentSplitIndexDigest: null,
+    frozenSplitCounts: Object.freeze(Object.fromEntries(SPLIT_COUNT_KEYS.map((key) => [key, null]))),
+    oosOutcomeCredit: null,
+    calibrationArtifactProduced: null,
+    liquidityImpactStatus: null,
+    fullCostReady: null,
+    evidenceComplete: null,
+    executionAuthority: null,
+    reportDigest: null,
+  });
+}
+
+function summarizeV3Independence(value, readFailed = false) {
+  if (readFailed) return emptyV3Independence('INVALID', true);
+  if (!value) return emptyV3Independence('MISSING', false);
+  if (typeof value !== 'object' || Array.isArray(value)) return emptyV3Independence('INVALID', true);
+  const body = { ...value };
+  delete body.reportDigest;
+  const splitCounts = value.frozenSplitCounts;
+  const counts = Object.fromEntries(SPLIT_COUNT_KEYS.map((key) => [key, optionalIntegerCount(splitCounts?.[key])]));
+  const requiredCountsPresent = Object.values(counts).every((item) => item !== null);
+  const targetSlotIndex = optionalIntegerCount(value.targetSlotIndex);
+  const genuineScheduledSlotN = optionalIntegerCount(value.genuineScheduledSlotN);
+  const rawAcceptedN = optionalIntegerCount(value.rawAcceptedN);
+  const effectiveIndependentN = optionalIntegerCount(value.effectiveIndependentN);
+  const independentBuyN = optionalIntegerCount(value.independentBuyN);
+  const independentSellN = optionalIntegerCount(value.independentSellN);
+  const oosOutcomeCredit = optionalIntegerCount(value.oosOutcomeCredit);
+  const evidenceComplete = optionalIntegerCount(value.evidenceComplete);
+  const shapeValid = value.schemaVersion === V3_INDEPENDENCE_SUMMARY_SCHEMA
+    && SHA_PATTERN.test(String(value.producerSha ?? ''))
+    && /^[0-9]{6,20}$/u.test(String(value.upstreamIngestRunId ?? ''))
+    && /^[0-9]{6,20}$/u.test(String(value.upstreamIngestArtifactId ?? ''))
+    && DIGEST_PATTERN.test(String(value.upstreamIngestArtifactDigest ?? ''))
+    && DIGEST_PATTERN.test(String(value.sourceInventoryDigest ?? ''))
+    && DIGEST_PATTERN.test(String(value.independenceAuditDigest ?? ''))
+    && DIGEST_PATTERN.test(String(value.independentSplitSourceDigest ?? ''))
+    && DIGEST_PATTERN.test(String(value.v3IndependentSplitIndexDigest ?? ''))
+    && DIGEST_PATTERN.test(String(value.reportDigest ?? ''))
+    && targetSlotIndex !== null
+    && genuineScheduledSlotN !== null
+    && rawAcceptedN !== null
+    && effectiveIndependentN !== null
+    && independentBuyN !== null
+    && independentSellN !== null
+    && requiredCountsPresent
+    && oosOutcomeCredit === 0
+    && value.calibrationArtifactProduced === false
+    && value.liquidityImpactStatus === 'BLOCKED_DATA'
+    && value.fullCostReady === false
+    && evidenceComplete === 0
+    && value.executionAuthority === 'NONE'
+    && value.frozenV3SplitIndexPresent === true
+    && value.v2SplitReceiptPresent === false
+    && rawAcceptedN >= effectiveIndependentN
+    && genuineScheduledSlotN >= effectiveIndependentN
+    && effectiveIndependentN === independentBuyN + independentSellN
+    && counts.TRAIN === counts.TRAIN_BUY + counts.TRAIN_SELL
+    && counts.VALIDATION === counts.VALIDATION_BUY + counts.VALIDATION_SELL
+    && counts.OOS === counts.OOS_BUY + counts.OOS_SELL
+    && effectiveIndependentN === counts.TRAIN + counts.VALIDATION + counts.OOS
+    && independentBuyN === counts.TRAIN_BUY + counts.VALIDATION_BUY + counts.OOS_BUY
+    && independentSellN === counts.TRAIN_SELL + counts.VALIDATION_SELL + counts.OOS_SELL
+    && sha256Canonical(body) === value.reportDigest;
+  if (!shapeValid) return emptyV3Independence('INVALID', true);
+  return Object.freeze({
+    present: true,
+    status: 'PRESENT',
+    schemaVersion: value.schemaVersion,
+    producerSha: value.producerSha,
+    upstreamIngestRunId: value.upstreamIngestRunId,
+    upstreamIngestArtifactId: value.upstreamIngestArtifactId,
+    upstreamIngestArtifactDigest: value.upstreamIngestArtifactDigest,
+    sourceInventoryDigest: value.sourceInventoryDigest,
+    targetSlotIndex,
+    genuineScheduledSlotN,
+    rawAcceptedN,
+    effectiveIndependentN,
+    independentBuyN,
+    independentSellN,
+    independenceAuditDigest: value.independenceAuditDigest,
+    independentSplitSourceDigest: value.independentSplitSourceDigest,
+    v3IndependentSplitIndexDigest: value.v3IndependentSplitIndexDigest,
+    frozenSplitCounts: Object.freeze(counts),
+    oosOutcomeCredit,
+    calibrationArtifactProduced: false,
+    liquidityImpactStatus: 'BLOCKED_DATA',
+    fullCostReady: false,
+    evidenceComplete: 0,
+    executionAuthority: 'NONE',
+    reportDigest: value.reportDigest,
+  });
+}
+
+async function readV3IndependenceSummary(root) {
+  const path = join(root, ...V3_INDEPENDENCE_SUMMARY_RELATIVE_PATH);
+  try {
+    return summarizeV3Independence(await readJsonOptional(path));
+  } catch {
+    return summarizeV3Independence(null, true);
   }
 }
 
@@ -261,11 +412,12 @@ export async function buildResearchOverview({ stateRoot = DEFAULT_STATE_ROOT } =
   const root = resolve(stateRoot);
   const cycleValues = await Promise.all(PROFILES.map((profile) => readJsonOptional(join(root, 'latest', `${profile}.json`))));
   const cycles = cycleValues.map((value, index) => summarizeCycle(PROFILES[index], value));
-  const [paperRuntimeRaw, paperLedgerRaw, shadowSummaryRaw, shadowStateRaw] = await Promise.all([
+  const [paperRuntimeRaw, paperLedgerRaw, shadowSummaryRaw, shadowStateRaw, liquidityIndependence] = await Promise.all([
     readJsonOptional(join(root, 'forward', 'paper', 'status', 'runtime-status.json')),
     readJsonOptional(join(root, 'forward', 'paper', 'state', 'recurring-paper-loop.json')),
     readJsonOptional(join(root, 'forward', 'shadow-summary.json')),
     readJsonOptional(join(root, 'forward', 'shadow-state.json')),
+    readV3IndependenceSummary(root),
   ]);
 
   const paperRuntime = summarizePaperRuntime(paperRuntimeRaw);
@@ -285,16 +437,18 @@ export async function buildResearchOverview({ stateRoot = DEFAULT_STATE_ROOT } =
     ? 'safety_block'
     : !authorityEvidenceComplete
       ? 'safety_evidence_incomplete'
-      : failedTasks === null || blockedDataTasks === null
-        ? 'evidence_incomplete'
-        : failedTasks > 0
-          ? 'attention'
-          : 'collecting';
+      : liquidityIndependence.status === 'INVALID'
+        ? 'attention'
+        : failedTasks === null || blockedDataTasks === null
+          ? 'evidence_incomplete'
+          : failedTasks > 0
+            ? 'attention'
+            : 'collecting';
   return Object.freeze({
     schemaVersion: 'research-dashboard-overview-v1',
     generatedAt: Date.now(),
     state: Object.freeze({
-      present: cycles.some((cycle) => cycle.present) || paperRuntime.present || paperLedger.present || shadowRecords.present,
+      present: cycles.some((cycle) => cycle.present) || paperRuntime.present || paperLedger.present || shadowRecords.present || liquidityIndependence.present,
       latestCycleAt: newestTimestamp(cycles),
     }),
     safety: Object.freeze({
@@ -310,6 +464,7 @@ export async function buildResearchOverview({ stateRoot = DEFAULT_STATE_ROOT } =
       failedTasks,
       blockedDataTasks,
       cycles,
+      liquidityIndependence,
     }),
     paper: Object.freeze({ runtime: paperRuntime, ledger: paperLedger }),
     shadow: Object.freeze({ groups: shadowGroups, records: shadowRecords, canonicalHandoffs: shadowCanonicalHandoffs }),
