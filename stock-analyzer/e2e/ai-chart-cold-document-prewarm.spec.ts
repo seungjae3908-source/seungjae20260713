@@ -2,24 +2,22 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
 
-test('direct AI Chart document keeps every module script async so prewarm is not downgraded to defer', () => {
+test('direct AI Chart document preloads the route without introducing async module script ordering', () => {
   const html = fs.readFileSync(path.resolve(process.cwd(), 'index.html'), 'utf8');
-  const prewarmScript = '<script type="module" async>';
-  const routeGuard = "if (window.location.pathname.endsWith('/ai-chart'))";
-  const routeImport = "void import('/src/pages/ai-chart.tsx');";
+  const routePreload = '<link rel="modulepreload" href="/src/pages/ai-chart.tsx" />';
   const headEnd = '</head>';
-  const appEntry = '<script type="module" async src="/src/main.tsx"></script>';
+  const root = '<div id="root"></div>';
+  const appEntryTag = '<script type="module" src="/src/main.tsx">';
   const moduleScripts = html.match(/<script\s+type="module"[^>]*>/g) ?? [];
 
-  expect(html).toContain(prewarmScript);
-  expect(html).toContain(routeGuard);
-  expect(html).toContain(routeImport);
-  expect(html).toContain(appEntry);
-  expect(html.match(/import\('\/src\/pages\/ai-chart\.tsx'\)/g)).toHaveLength(1);
-  expect(moduleScripts).toHaveLength(2);
-  expect(moduleScripts.every((script) => /\sasync(?:\s|>)/.test(script))).toBe(true);
-  expect(html.indexOf(prewarmScript)).toBeLessThan(html.indexOf(routeGuard));
-  expect(html.indexOf(routeGuard)).toBeLessThan(html.indexOf(routeImport));
-  expect(html.indexOf(routeImport)).toBeLessThan(html.indexOf(headEnd));
-  expect(html.indexOf(routeImport)).toBeLessThan(html.indexOf(appEntry));
+  expect(html).toContain(routePreload);
+  expect(html).toContain(`${appEntryTag}</script>`);
+  expect(html.match(/rel="modulepreload"\s+href="\/src\/pages\/ai-chart\.tsx"/g)).toHaveLength(1);
+  expect(html).not.toContain("import('/src/pages/ai-chart.tsx')");
+  expect(moduleScripts).toHaveLength(1);
+  expect(moduleScripts[0], 'canonical app entry must retain native module defer ordering for the React root mount').toBe(appEntryTag);
+  expect(moduleScripts[0]).not.toMatch(/\sasync(?:\s|>)/);
+  expect(html.indexOf(routePreload)).toBeLessThan(html.indexOf(headEnd));
+  expect(html.indexOf(routePreload)).toBeLessThan(html.indexOf(appEntryTag));
+  expect(html.indexOf(root)).toBeLessThan(html.indexOf(appEntryTag));
 });
