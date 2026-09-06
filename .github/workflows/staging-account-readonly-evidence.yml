@@ -29,9 +29,9 @@ jobs:
     env:
       STAGING_ARTIFACT_DIR: ${{ github.workspace }}/staging-account-readonly-artifacts
       EXPECTED_EGRESS_IP: ${{ vars.STAGING_ACCOUNT_EVIDENCE_EGRESS_IP }}
-      SSH_KEY_PATH: ${{ runner.temp }}/account-evidence-id_ed25519
-      SSH_KNOWN_HOSTS_PATH: ${{ runner.temp }}/account-evidence-known_hosts
-      SSH_CONTROL_SOCKET: ${{ runner.temp }}/account-evidence-ssh.sock
+      SSH_KEY_PATH: ${{ github.workspace }}/.account-evidence-id_ed25519
+      SSH_KNOWN_HOSTS_PATH: ${{ github.workspace }}/.account-evidence-known_hosts
+      SSH_CONTROL_SOCKET: ${{ github.workspace }}/.account-evidence-ssh.sock
 
     steps:
       - uses: actions/checkout@v4
