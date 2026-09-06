@@ -261,6 +261,19 @@ test('account credential CORS contract admits PUT without widening the productio
 });
 
 test('account credential route answers a real PUT CORS preflight with PUT allowed', async () => {
+  const indexSource = source('api-server/src/routes/index.ts');
+  const readonlyRouteSource = source('api-server/src/features/account-readonly/account-readonly.route.ts');
+  assert.match(
+    indexSource,
+    /router\.use\(\s*'\/accounts\/read-only'/,
+    'account read-only router must remain mounted at the canonical path',
+  );
+  assert.match(
+    readonlyRouteSource,
+    /router\.put\('\/credentials\/:provider'/,
+    'credential save must remain the canonical PUT /credentials/:provider route',
+  );
+
   const preflightApp = express();
   preflightApp.use(cors({
     methods: configuredCorsMethods(),
@@ -274,7 +287,7 @@ test('account credential route answers a real PUT CORS preflight with PUT allowe
     assert.ok(address && typeof address === 'object');
 
     const response = await fetch(
-      `http://127.0.0.1:${address.port}/api/account-readonly/toss/credentials`,
+      `http://127.0.0.1:${address.port}/api/accounts/read-only/credentials/toss`,
       {
         method: 'OPTIONS',
         headers: {
