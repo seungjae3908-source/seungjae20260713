@@ -5,9 +5,11 @@ import { Search, Star } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import { AssetSwitch } from '@/components/asset-switch';
 import { ErrorState, LoadingState } from '@/components/data-state';
+import { UnifiedAssetSearch } from '@/components/unified-asset-search';
 import { api, apiGet } from '@/lib/api';
 import { useAssetMode } from '@/lib/asset-mode';
 import { displayCoinName, displayStockName, formatAppPercent, formatAppPrice } from '@/lib/stock-display';
+import { unifiedAssetDetailPath } from '@/lib/unified-asset-search';
 import { cn } from '@/lib/utils';
 
 type AnyObj = Record<string, any>;
@@ -32,7 +34,7 @@ interface RecoRow {
   category: 'undervalued' | 'breakout';
   categoryLabel: string;
   price: number;
-  changePercent: number;
+  changePercent: number | null;
   reasons: string[];
   score: number;
 }
@@ -45,21 +47,24 @@ interface RecoResponse {
   error?: string;
 }
 
+function finitePercent(value: unknown): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value !== 'string') return null;
+  const normalized = value.replace('%', '').replace(/,/g, '').trim();
+  if (!normalized) return null;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 export default function StocksPage() {
   const [, navigate] = useLocation();
   const mode = useAssetMode();
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<CategoryKey>('ai');
   const trimmed = query.trim();
-  const searching = trimmed.length > 0;
+  const searching = mode.asset === 'coin' && trimmed.length > 0;
 
-  // ── 검색용 데이터 (기존 체계 유지) ──────────────────────────────
-  const stockRows = useQuery({
-    queryKey: ['stocks-directory', mode.stockMarket, trimmed],
-    queryFn: () => api.searchRows(trimmed),
-    enabled: mode.asset === 'stock' && searching,
-    staleTime: 30_000,
-  });
+  // ── 코인 검색용 데이터 (주식 검색은 canonical UnifiedAssetSearch 재사용) ──
   const spotMarkets = useQuery({
     queryKey: ['stocks-crypto-spot-markets'],
     queryFn: () => apiGet<AnyObj>('/crypto/spot/markets'),
@@ -127,14 +132,7 @@ export default function StocksPage() {
     return rows.slice(0, 100);
   }, [category, coinCategorySupported, coinSource, mode.asset]);
 
-  // ── 검색 결과 (현재 선택 자산·시장 우선) ────────────────────────
-  const searchStocks = useMemo(() => {
-    if (mode.asset !== 'stock' || !searching) return [] as AnyObj[];
-    const rows = (stockRows.data?.results ?? []) as AnyObj[];
-    return [...rows]
-      .sort((a, b) => (a.market === mode.stockMarket ? -1 : 0) - (b.market === mode.stockMarket ? -1 : 0))
-      .slice(0, 100);
-  }, [mode.asset, mode.stockMarket, searching, stockRows.data]);
+  // ── 코인 검색 결과 ──────────────────────────────────────────────
   const searchCoins = useMemo(() => {
     if (mode.asset !== 'coin' || !searching) return [] as AnyObj[];
     const needle = trimmed.toLowerCase();
@@ -158,19 +156,32 @@ export default function StocksPage() {
       <header className="border-b border-card-border px-4 pb-3 pt-4">
         <h1 className="text-xl font-black text-center">종목</h1>
 
-        {/* 1) 종목 검색창 — 제목 바로 아래에 붙여 하나의 상단 영역처럼 보이게(작은 간격). 입력 텍스트 왼쪽 정렬 유지 */}
-        <label className="mt-1.5 flex h-11 items-center gap-2 rounded-2xl border border-card-border bg-card px-3">
-          <Search className="h-4 w-4 text-muted-foreground" />
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder={mode.asset === 'stock' ? '종목명·코드·영문명 검색' : '코인명·심볼 검색'}
-            className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none"
-          />
-        </label>
-
-        {/* 2) [주식][코인]  3) [국내][해외] / [현물][선물] */}
+        {/* 1) [주식][코인]  2) [국내][해외] / [현물][선물] — 검색 popup 위에 두어 항상 클릭 가능하게 유지 */}
         <AssetSwitch className="mt-3" />
+
+        {/* 3) 주식은 canonical search, 코인은 기존 실제 티커 검색 */}
+        {mode.asset === 'stock' ? (
+          <div className="mt-3">
+            <UnifiedAssetSearch
+              key={`stock:${mode.stockMarket}`}
+              asset="stock"
+              market={mode.stockMarket}
+              allowedMarkets={[mode.stockMarket]}
+              placeholder="종목명·코드·영문명 검색"
+              onSelect={(item) => navigate(unifiedAssetDetailPath(item, '/market-browser'))}
+            />
+          </div>
+        ) : (
+          <label className="mt-3 flex h-11 items-center gap-2 rounded-2xl border border-card-border bg-card px-3">
+            <Search className="h-4 w-4 text-muted-foreground" />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="코인명·심볼 검색"
+              className="min-w-0 flex-1 bg-transparent text-sm font-bold outline-none"
+            />
+          </label>
+        )}
 
         {/* 4) 분류 버튼 6개 */}
         <div className="mt-3 grid grid-cols-3 gap-2">
@@ -191,44 +202,23 @@ export default function StocksPage() {
       </header>
 
       <main className="space-y-4 px-4 pb-6 pt-4">
-        {/* 검색 중이면 검색 결과가 분류 목록 위 */}
-        {searching && (
+        {/* 코인 검색 중이면 검색 결과가 분류 목록 위. 주식 결과는 UnifiedAssetSearch가 소유한다. */}
+        {mode.asset === 'coin' && searching && (
           <section>
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-sm font-black">검색 결과</h2>
-              <span className="text-[11px] font-bold text-muted-foreground">
-                {mode.asset === 'stock'
-                  ? (stockRows.data ? `${searchStocks.length}개` : '조회 중')
-                  : `${searchCoins.length}개`}
-              </span>
+              <span className="text-[11px] font-bold text-muted-foreground">{searchCoins.length}개</span>
             </div>
-            {mode.asset === 'stock' ? (
-              <>
-                {stockRows.isLoading && <LoadingState label="실제 종목을 검색하는 중입니다." />}
-                {stockRows.isError && <ErrorState onRetry={() => { void stockRows.refetch(); }} />}
-                {!stockRows.isLoading && !stockRows.isError && searchStocks.length === 0 && (
-                  <EmptyBox>검색어와 일치하는 실제 종목 데이터가 없습니다.</EmptyBox>
-                )}
-                <div className="space-y-2">
-                  {searchStocks.map((stock) => (
-                    <StockRow key={`${stock.market}:${stock.ticker}`} stock={stock} onClick={() => openStock(String(stock.ticker))} />
-                  ))}
-                </div>
-              </>
-            ) : (
-              <>
-                {coinTickerQuery.isLoading && <LoadingState label="실제 코인 시세를 불러오는 중입니다." />}
-                {coinTickerQuery.isError && <ErrorState onRetry={() => { void coinTickerQuery.refetch(); }} />}
-                {!coinTickerQuery.isLoading && !coinTickerQuery.isError && searchCoins.length === 0 && (
-                  <EmptyBox>검색어와 일치하는 실제 코인 데이터가 없습니다.</EmptyBox>
-                )}
-                <div className="space-y-2">
-                  {searchCoins.map((row) => (
-                    <CoinRow key={String(row.symbol)} row={row} coinMarket={mode.coinMarket} onClick={() => openCoin(String(row.symbol))} />
-                  ))}
-                </div>
-              </>
+            {coinTickerQuery.isLoading && <LoadingState label="실제 코인 시세를 불러오는 중입니다." />}
+            {coinTickerQuery.isError && <ErrorState onRetry={() => { void coinTickerQuery.refetch(); }} />}
+            {!coinTickerQuery.isLoading && !coinTickerQuery.isError && searchCoins.length === 0 && (
+              <EmptyBox>검색어와 일치하는 실제 코인 데이터가 없습니다.</EmptyBox>
             )}
+            <div className="space-y-2">
+              {searchCoins.map((row) => (
+                <CoinRow key={String(row.symbol)} row={row} coinMarket={mode.coinMarket} onClick={() => openCoin(String(row.symbol))} />
+              ))}
+            </div>
           </section>
         )}
 
@@ -271,12 +261,12 @@ function EmptyBox({ children }: { children: React.ReactNode }) {
 
 // ── 공통 행 디자인 (기존 행 클래스 재사용) ──────────────────────────
 function StockRow({ stock, onClick }: { stock: AnyObj; onClick: () => void }) {
-  const change = Number(stock.changePercent);
+  const change = finitePercent(stock.changePercent);
   return (
     <button type="button" onClick={onClick} className="flex w-full items-center gap-3 rounded-2xl border border-card-border bg-card p-3 text-left shadow-sm">
       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10"><Star className="h-4 w-4 text-primary" /></div>
       <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="truncate text-sm font-black">{displayStockName(String(stock.ticker), String(stock.name ?? ''), String(stock.market))}</p><span className="rounded-full bg-secondary px-2 py-0.5 text-[9px] font-black text-muted-foreground">{stock.market}</span></div><p className="mt-0.5 text-[11px] font-bold text-muted-foreground">{stock.ticker}</p></div>
-      <div className="text-right"><p className="text-sm font-black">{formatAppPrice(stock.price, String(stock.currency))}</p><p className={cn('mt-0.5 text-[11px] font-black', change > 0 ? 'text-positive' : change < 0 ? 'text-destructive' : 'text-muted-foreground')}>{Number.isFinite(change) ? formatAppPercent(change) : '데이터 없음'}</p></div>
+      <div className="text-right"><p className="text-sm font-black">{formatAppPrice(stock.price, String(stock.currency))}</p><p className={cn('mt-0.5 text-[11px] font-black', change !== null && change > 0 ? 'text-positive' : change !== null && change < 0 ? 'text-destructive' : 'text-muted-foreground')}>{change === null ? '데이터 없음' : formatAppPercent(change)}</p></div>
     </button>
   );
 }
@@ -374,12 +364,12 @@ function StockCategoryResults({
 }
 
 function StockRankRow({ rank, stock, onClick }: { rank: number; stock: AnyObj; onClick: () => void }) {
-  const change = Number(stock.changePercent);
+  const change = finitePercent(stock.changePercent);
   return (
     <button type="button" onClick={onClick} className="flex w-full items-center gap-3 rounded-2xl border border-card-border bg-card p-3 text-left shadow-sm">
       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-sm font-black text-primary">{rank}</div>
       <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="truncate text-sm font-black">{displayStockName(String(stock.ticker), String(stock.name ?? ''), String(stock.market))}</p><span className="rounded-full bg-secondary px-2 py-0.5 text-[9px] font-black text-muted-foreground">{stock.market}</span></div><p className="mt-0.5 text-[11px] font-bold text-muted-foreground">{stock.ticker}</p></div>
-      <div className="text-right"><p className="text-sm font-black">{formatAppPrice(stock.price, String(stock.currency))}</p><p className={cn('mt-0.5 text-[11px] font-black', change > 0 ? 'text-positive' : change < 0 ? 'text-destructive' : 'text-muted-foreground')}>{Number.isFinite(change) ? formatAppPercent(change) : '데이터 없음'}</p></div>
+      <div className="text-right"><p className="text-sm font-black">{formatAppPrice(stock.price, String(stock.currency))}</p><p className={cn('mt-0.5 text-[11px] font-black', change !== null && change > 0 ? 'text-positive' : change !== null && change < 0 ? 'text-destructive' : 'text-muted-foreground')}>{change === null ? '데이터 없음' : formatAppPercent(change)}</p></div>
     </button>
   );
 }
@@ -390,14 +380,16 @@ function RecoGroup({ title, rows, onOpenStock }: { title: string; rows: RecoRow[
     <div className="space-y-2">
       <h3 className="px-1 text-sm font-black">{title}</h3>
       <div className="space-y-2">
-        {rows.map((row) => (
+        {rows.map((row) => {
+          const change = finitePercent(row.changePercent);
+          return (
           <button key={`${row.market}:${row.ticker}`} type="button" onClick={() => onOpenStock(row.ticker)} className="w-full rounded-2xl border border-card-border bg-card p-3 text-left shadow-sm">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2"><p className="truncate text-sm font-black">{displayStockName(row.ticker, row.name, row.market)}</p><span className="rounded-full bg-secondary px-2 py-0.5 text-[9px] font-black text-muted-foreground">{row.market}</span></div>
-                <p className="mt-0.5 text-[11px] font-bold text-muted-foreground">{row.ticker} · 상승 가능성 {row.score}점</p>
+                <p className="mt-0.5 text-[11px] font-bold text-muted-foreground">{row.ticker} · 규칙 점수 {row.score}점</p>
               </div>
-              <div className="shrink-0 text-right"><p className="text-sm font-black">{formatAppPrice(row.price, row.currency)}</p><p className={cn('mt-0.5 text-[11px] font-black', row.changePercent > 0 ? 'text-positive' : row.changePercent < 0 ? 'text-destructive' : 'text-muted-foreground')}>{formatAppPercent(row.changePercent)}</p></div>
+              <div className="shrink-0 text-right"><p className="text-sm font-black">{formatAppPrice(row.price, row.currency)}</p><p className={cn('mt-0.5 text-[11px] font-black', change !== null && change > 0 ? 'text-positive' : change !== null && change < 0 ? 'text-destructive' : 'text-muted-foreground')}>{change === null ? '데이터 없음' : formatAppPercent(change)}</p></div>
             </div>
             {row.reasons.length > 0 && (
               <ul className="mt-2 list-disc space-y-0.5 pl-4 text-[11px] font-bold text-foreground/90">
@@ -405,7 +397,8 @@ function RecoGroup({ title, rows, onOpenStock }: { title: string; rows: RecoRow[
               </ul>
             )}
           </button>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
