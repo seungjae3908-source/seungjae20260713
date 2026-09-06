@@ -470,9 +470,9 @@ test('portfolio exposes the existing unified journal as a primary tab', async ({
     error: { code: 'FIXTURE_UNAVAILABLE', message: 'fixture intentionally unavailable' },
   }, 503));
   await page.goto('/portfolio');
-  await expect(page.getByRole('heading', { name: '내 포트폴리오', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '포트폴리오', level: 1 })).toBeVisible();
 
-  await page.getByRole('button', { name: '매매일지' }).click();
+  await page.getByRole('tab', { name: '매매일지' }).click();
   await expect(page).toHaveURL(/\/portfolio\?tab=journal$/);
   await expect(page.getByTestId('portfolio-journal')).toBeVisible();
   await expect(page.getByTestId('unified-trade-journal')).toBeVisible();
@@ -480,7 +480,7 @@ test('portfolio exposes the existing unified journal as a primary tab', async ({
 
   await page.reload();
   await expect(page.getByTestId('portfolio-journal')).toBeVisible();
-  await expect(page.getByRole('button', { name: '매매일지' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('tab', { name: '매매일지' })).toHaveAttribute('aria-selected', 'true');
 });
 
 test('slow News stays secondary while stock-info primary quote and navigation remain usable', async ({ page }) => {
