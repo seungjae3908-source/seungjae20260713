@@ -287,3 +287,196 @@ jobs:
                 `- Source command comment ID: \`${process.env.SOURCE_COMMENT_ID}\``,
               ].join('\n'),
             });
+
+  dispatch-account-readonly:
+    name: Dispatch owner-approved account read-only evidence
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.number == 23 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.issue.title == 'Staging Readiness Control' &&
+      github.event.comment.user.login == 'seungjae3908-source' &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/run-staging-account-readonly ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+      issues: write
+      statuses: read
+    steps:
+      - name: Verify exact main CI and dispatch account evidence
+        uses: actions/github-script@v9
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          SOURCE_COMMENT_ID: ${{ github.event.comment.id }}
+          CONTROL_ISSUE: ${{ github.event.issue.number }}
+        with:
+          script: |
+            const body = String(process.env.COMMENT_BODY ?? '').trim();
+            const match = /^\/run-staging-account-readonly ([0-9a-f]{40}) --providers=toss,upbit,bitget$/.exec(body);
+            if (!match) {
+              core.setFailed('Exact account evidence command required.');
+              return;
+            }
+            const targetSha = match[1];
+            const sourceCommentId = String(process.env.SOURCE_COMMENT_ID ?? '').trim();
+            const main = await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: 'main',
+            });
+            if (main.data.commit.sha !== targetSha) {
+              core.setFailed(`Account evidence dispatch requires exact current main: ${main.data.commit.sha}`);
+              return;
+            }
+
+            const required = [
+              'application-ci/verified',
+              'browser-ui/verified',
+              'database-rls/verified',
+              'security-integration/verified',
+              'ai-privacy/verified',
+              'futures-public-network-smoke/verified',
+            ];
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: targetSha,
+              per_page: 100,
+            });
+            statuses.sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
+            const latest = new Map();
+            for (const status of statuses) if (!latest.has(status.context)) latest.set(status.context, status.state);
+            const missing = required.filter((name) => latest.get(name) !== 'success');
+            if (missing.length) {
+              core.setFailed(`Required successful statuses missing: ${missing.join(', ')}`);
+              return;
+            }
+            const pushRuns = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head_sha: targetSha,
+              branch: 'main',
+              event: 'push',
+              status: 'completed',
+              per_page: 100,
+            });
+            const verifiedRun = pushRuns.find((run) =>
+              run.name === 'Application CI'
+              && run.head_sha === targetSha
+              && run.head_branch === 'main'
+              && run.event === 'push'
+              && run.status === 'completed'
+              && run.conclusion === 'success'
+            );
+            if (!verifiedRun) {
+              core.setFailed('No successful Application CI push run on main exists for the requested SHA.');
+              return;
+            }
+
+            const workflowId = 'staging-account-readonly-evidence-dispatch.yml';
+            const workflowPath = '.github/workflows/staging-account-readonly-evidence-dispatch.yml';
+            const expectedTitle = `Account read-only evidence ${targetSha} source-comment-${sourceCommentId}`;
+            const workflow = await github.rest.actions.getWorkflow({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflowId,
+            });
+            if (workflow.data.state !== 'active') {
+              core.setFailed(`Workflow ${workflowId} is not active.`);
+              return;
+            }
+
+            const priorRuns = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head_sha: targetSha,
+              branch: 'main',
+              event: 'workflow_dispatch',
+              per_page: 100,
+            });
+            const prior = priorRuns
+              .filter((run) => run.path === workflowPath && run.display_title === expectedTitle)
+              .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))[0];
+            const bridgeRunUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            if (prior) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: Number(process.env.CONTROL_ISSUE),
+                body: [
+                  'Account read-only evidence dispatch was not replayed.',
+                  '',
+                  `- Target SHA: \`${targetSha}\``,
+                  `- Source command comment ID: \`${sourceCommentId}\``,
+                  `- Existing Run ID: \`${prior.id}\``,
+                  `- Existing Run: [Open GitHub Actions run](${prior.html_url})`,
+                  `- Existing status: \`${prior.status}\``,
+                  `- Existing conclusion: \`${prior.conclusion ?? 'pending'}\``,
+                  `- Bridge Run: [Open bridge run](${bridgeRunUrl})`,
+                  '- Provider replay/backfill: `false`',
+                ].join('\n'),
+              });
+              return;
+            }
+
+            const dispatchResponse = await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: workflowId,
+              ref: 'main',
+              inputs: {
+                sha: targetSha,
+                source_comment_id: sourceCommentId,
+              },
+              return_run_details: true,
+              headers: {
+                accept: 'application/vnd.github+json',
+                'X-GitHub-Api-Version': '2026-03-10',
+              },
+            });
+            const runId = Number(dispatchResponse.data?.workflow_run_id);
+            if (dispatchResponse.status !== 200 || !Number.isSafeInteger(runId) || runId <= 0) {
+              core.setFailed(`Account evidence dispatch returned invalid Run ID with HTTP ${dispatchResponse.status}.`);
+              return;
+            }
+            const runResponse = await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId,
+            });
+            const run = runResponse.data;
+            const valid = run.event === 'workflow_dispatch'
+              && run.head_branch === 'main'
+              && run.head_sha === targetSha
+              && run.path === workflowPath
+              && run.display_title === expectedTitle;
+            if (!valid) {
+              core.setFailed('Returned account evidence run does not match the official workflow, main SHA, and source comment identity.');
+              return;
+            }
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(process.env.CONTROL_ISSUE),
+              body: [
+                'Account read-only evidence workflow run created.',
+                '',
+                `- Target SHA: \`${targetSha}\``,
+                `- Source command comment ID: \`${sourceCommentId}\``,
+                `- Run ID: \`${runId}\``,
+                `- Run: [Open GitHub Actions run](${run.html_url})`,
+                `- Status: \`${run.status}\``,
+                `- Bridge Run ID: \`${context.runId}\``,
+                `- Bridge Run: [Open bridge run](${bridgeRunUrl})`,
+                '- Workflow: `Staging Account Read-only Evidence`',
+                '- Ref: `main`',
+                '- Database / Supabase mutation: `false`',
+                '- Production deployment executed: `false`',
+                '- Live trading / order authority: `false`',
+              ].join('\n'),
+            });
