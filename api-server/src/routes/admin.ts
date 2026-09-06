@@ -26,7 +26,10 @@ const PROFILE_FIELDS = [
 ].join(',');
 
 const RESEARCH_OVERVIEW_URL = 'http://127.0.0.1:18090/api/research/overview';
-const RESEARCH_OVERVIEW_TIMEOUT_MS = 4_000;
+// The genuine loopback Dashboard readback can complete after the old 4s proxy
+// deadline while still succeeding inside the dedicated 8s diagnostic bound.
+// Keep the browser-facing proxy bounded, but leave enough room for that healthy path.
+export const RESEARCH_OVERVIEW_TIMEOUT_MS = 10_000;
 const MEMBER_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type AdminProfileRow = MemberAdministrationProfile & {
