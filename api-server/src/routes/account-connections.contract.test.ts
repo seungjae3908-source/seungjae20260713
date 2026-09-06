@@ -230,3 +230,20 @@ test('user integrations GET degrades only broker metadata storage outage and pre
   assert.match(routeSource, /userBrokerTelegramRouter\.patch\('\/notifications'/);
   assert.match(routeSource, /res\.status\(503\)\.json\(\{ ok: false, error: errorCode\(error\)/);
 });
+
+test('account credential CORS contract admits PUT without widening the production origin allowlist', () => {
+  const appSource = source('api-server/src/app.ts');
+
+  assert.ok(
+    appSource.includes("methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']"),
+    'CORS methods must explicitly admit the credential PUT route',
+  );
+  assert.ok(
+    appSource.includes("process.env.NODE_ENV !== 'production' || allowedOrigins.includes(origin)"),
+    'production CORS must remain restricted to the configured origin allowlist',
+  );
+  assert.ok(
+    appSource.includes("callback(new Error('CORS origin rejected'))"),
+    'disallowed production origins must remain fail-closed',
+  );
+});
