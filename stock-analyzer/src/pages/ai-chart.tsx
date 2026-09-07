@@ -15,7 +15,6 @@ import { useLocation } from 'wouter';
 import { AiChartPositionPanel } from '@/components/ai-chart-position-panel';
 import { BottomNav } from '@/components/bottom-nav';
 import { ResponsiveTabs } from '@/components/responsive-tabs';
-import { UnifiedAnalysisChart } from '@/components/unified-analysis-chart';
 import {
   defaultStrategyMode,
   normalizeStrategyMode,
@@ -77,6 +76,11 @@ const LazyAiChartV2IntelligencePanel = lazy(() =>
 const LazyFuturesPublicContextPanel = lazy(() =>
   import('@/components/futures-public-context-panel').then(({ FuturesPublicContextPanel }) => ({
     default: FuturesPublicContextPanel,
+  })),
+);
+const LazyUnifiedAnalysisChart = lazy(() =>
+  import('@/components/unified-analysis-chart').then(({ UnifiedAnalysisChart }) => ({
+    default: UnifiedAnalysisChart,
   })),
 );
 
@@ -714,11 +718,24 @@ export default function AiChartPage({ embedded = false }: { embedded?: boolean }
   );
 
   const chart = hasSelection ? (
-    <UnifiedAnalysisChart
-      selection={selection}
-      onSelectionChange={updateSelection}
-      onAnalysisChange={setAnalysis}
-    />
+    <Suspense
+      fallback={(
+        <section
+          role="status"
+          aria-label="AI 차트 렌더러 불러오는 중"
+          data-testid="ai-chart-renderer-loading"
+          className="rounded-3xl border border-card-border bg-card p-6 text-sm text-muted-foreground shadow-sm"
+        >
+          AI 차트 셸을 열었습니다. 차트 데이터와 렌더러를 준비하고 있습니다.
+        </section>
+      )}
+    >
+      <LazyUnifiedAnalysisChart
+        selection={selection}
+        onSelectionChange={updateSelection}
+        onAnalysisChange={setAnalysis}
+      />
+    </Suspense>
   ) : emptyState;
 
   const intelligencePanel = hasSelection ? (
