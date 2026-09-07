@@ -347,4 +347,3 @@ test('single polling owner issues one request per interval for the same key', as
   await page.waitForTimeout(400);
   expect(calls.length).toBe(2);
 });
-
