@@ -6,6 +6,8 @@ import {
   BriefcaseBusiness,
   Command,
   Home,
+  Maximize2,
+  Minimize2,
   Radar,
   Search,
   Settings,
@@ -16,6 +18,7 @@ import {
 import { useLocation } from 'wouter';
 import { useAuth } from '@/lib/auth';
 import { APP_ROUTES, resolveAppRoutePresentation } from '@/lib/app-navigation';
+import '@/professional-focus-mode.css';
 
 interface CommandAction {
   id: string;
@@ -30,10 +33,22 @@ type ProfessionalCommandBarContentProps = {
   initialOpen?: boolean;
 };
 
+const FOCUS_ROUTES = [
+  APP_ROUTES.aiChart,
+  APP_ROUTES.scanner,
+  APP_ROUTES.portfolio,
+  APP_ROUTES.researchCenter,
+] as const;
+
 function editableTarget(target: EventTarget | null) {
   const element = target instanceof HTMLElement ? target : null;
   if (!element) return false;
   return element.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(element.tagName);
+}
+
+function supportsFocusMode(location: string) {
+  const path = location.split(/[?#]/, 1)[0] || '/';
+  return FOCUS_ROUTES.some((route) => path === route || path.startsWith(`${route}/`));
 }
 
 export function ProfessionalCommandBarContent({ initialOpen = false }: ProfessionalCommandBarContentProps) {
@@ -43,9 +58,12 @@ export function ProfessionalCommandBarContent({ initialOpen = false }: Professio
   const [open, setOpen] = useState(initialOpen);
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
+  const [focusMode, setFocusMode] = useState(false);
   const [online, setOnline] = useState(() => typeof navigator === 'undefined' || navigator.onLine);
   const inputRef = useRef<HTMLInputElement>(null);
+  const shellRef = useRef<HTMLElement | null>(null);
   const presentation = resolveAppRoutePresentation(location);
+  const focusEligible = supportsFocusMode(location);
 
   const actions: CommandAction[] = [
     { id: 'home', label: '홈', description: '투자 대시보드', href: APP_ROUTES.homeAlias, icon: Home, visible: true },
@@ -80,13 +98,34 @@ export function ProfessionalCommandBarContent({ initialOpen = false }: Professio
       if (!window.matchMedia('(min-width: 1200px)').matches) return;
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
-        setOpen(true);
+        if (!focusMode) setOpen(true);
+        return;
       }
-      if (event.key === 'Escape') setOpen(false);
+      if (
+        event.key.toLowerCase() === 'f'
+        && focusEligible
+        && !event.metaKey
+        && !event.ctrlKey
+        && !event.altKey
+      ) {
+        event.preventDefault();
+        setOpen(false);
+        setFocusMode((current) => !current);
+        return;
+      }
+      if (event.key === 'Escape') {
+        if (open) {
+          setOpen(false);
+          return;
+        }
+        if (focusMode && !document.querySelector('[role="dialog"][aria-modal="true"]')) {
+          setFocusMode(false);
+        }
+      }
     }
     window.addEventListener('keydown', handleGlobalShortcut);
     return () => window.removeEventListener('keydown', handleGlobalShortcut);
-  }, []);
+  }, [focusEligible, focusMode, open]);
 
   useEffect(() => {
     if (!open) {
@@ -99,10 +138,42 @@ export function ProfessionalCommandBarContent({ initialOpen = false }: Professio
 
   useEffect(() => {
     const media = window.matchMedia('(min-width: 1200px)');
-    const closeBelowDesktop = () => { if (!media.matches) setOpen(false); };
-    media.addEventListener('change', closeBelowDesktop);
-    return () => media.removeEventListener('change', closeBelowDesktop);
+    const enforceDesktopBoundary = () => {
+      if (!media.matches) {
+        setOpen(false);
+        setFocusMode(false);
+      }
+    };
+    media.addEventListener('change', enforceDesktopBoundary);
+    return () => media.removeEventListener('change', enforceDesktopBoundary);
   }, []);
+
+  useEffect(() => {
+    if (!focusEligible && focusMode) setFocusMode(false);
+  }, [focusEligible, focusMode]);
+
+  useEffect(() => {
+    const anchor = document.querySelector<HTMLElement>(
+      focusMode ? '[data-testid="professional-focus-exit"]' : '[data-testid="professional-command-bar"]',
+    );
+    const shell = anchor?.parentElement ?? null;
+    if (shellRef.current && shellRef.current !== shell) {
+      delete shellRef.current.dataset.professionalFocusShell;
+    }
+    shellRef.current = shell;
+    if (shell) {
+      if (focusMode) shell.dataset.professionalFocusShell = 'true';
+      else delete shell.dataset.professionalFocusShell;
+    }
+    if (focusMode) document.documentElement.dataset.professionalFocus = 'true';
+    else delete document.documentElement.dataset.professionalFocus;
+
+    return () => {
+      if (!focusMode) return;
+      delete document.documentElement.dataset.professionalFocus;
+      if (shellRef.current) delete shellRef.current.dataset.professionalFocusShell;
+    };
+  }, [focusMode]);
 
   useEffect(() => {
     if (activeIndex >= filteredActions.length) setActiveIndex(Math.max(0, filteredActions.length - 1));
@@ -110,6 +181,7 @@ export function ProfessionalCommandBarContent({ initialOpen = false }: Professio
 
   function move(href: string) {
     setOpen(false);
+    setFocusMode(false);
     navigate(href);
   }
 
@@ -130,6 +202,22 @@ export function ProfessionalCommandBarContent({ initialOpen = false }: Professio
   }
 
   if (!auth.isApproved || location.startsWith('/__')) return null;
+
+  if (focusMode && focusEligible) {
+    return (
+      <button
+        type="button"
+        data-testid="professional-focus-exit"
+        aria-label="집중 모드 종료"
+        onClick={() => setFocusMode(false)}
+        className="fixed right-4 top-4 z-[110] hidden min-[1200px]:inline-flex min-h-10 items-center gap-2 rounded-xl border border-card-border bg-background/95 px-3 text-xs font-semibold shadow-xl backdrop-blur transition hover:border-primary/40 hover:text-primary"
+      >
+        <Minimize2 className="h-4 w-4" aria-hidden="true" />
+        <span>집중 모드 종료</span>
+        <kbd className="rounded-md border border-card-border bg-card px-1.5 py-0.5 text-xs">F</kbd>
+      </button>
+    );
+  }
 
   return (
     <>
@@ -161,6 +249,18 @@ export function ProfessionalCommandBarContent({ initialOpen = false }: Professio
         </button>
 
         <div className="flex shrink-0 items-center gap-2 text-xs">
+          {focusEligible ? (
+            <button
+              type="button"
+              data-testid="professional-focus-enter"
+              aria-label="집중 모드 시작"
+              title="집중 모드 시작 (F)"
+              onClick={() => { setOpen(false); setFocusMode(true); }}
+              className="flex h-10 w-10 items-center justify-center rounded-xl border border-card-border text-muted-foreground transition hover:border-primary/40 hover:text-primary"
+            >
+              <Maximize2 className="h-4 w-4" aria-hidden="true" />
+            </button>
+          ) : null}
           <span className="inline-flex min-h-8 items-center gap-2 rounded-full border border-card-border px-3 font-medium" data-testid="professional-network-status">
             <span className={`h-2 w-2 rounded-full ${online ? 'bg-positive' : 'bg-destructive'}`} aria-hidden="true" />
             {online ? '온라인' : '오프라인'}
