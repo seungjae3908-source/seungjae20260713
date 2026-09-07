@@ -66,7 +66,7 @@ def canonical_digest(value):
 
 def validate_v3(value):
     if not isinstance(value, dict):
-        return False, False, False, {}
+        return False, False, False, {}, False
 
     schema_valid = value.get('schemaVersion') == EXPECTED_SCHEMA
     report_digest = value.get('reportDigest')
