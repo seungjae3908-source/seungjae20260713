@@ -1,5 +1,11 @@
+import type { Locator, Page } from '@playwright/test';
+
 export const RESEARCH_CENTER_ROUTE = '/research-center';
 export const RESEARCH_OVERVIEW_PATH = '/api/admin/research/overview';
+
+export function getResearchReloadAppNavigation(page: Page): Locator {
+  return page.getByRole('navigation', { name: '주요 메뉴', exact: true });
+}
 
 export type ResearchReloadAbortCandidate = {
   method: string;
