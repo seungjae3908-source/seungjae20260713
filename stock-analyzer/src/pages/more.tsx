@@ -34,15 +34,14 @@ type SettingsSection = {
   id: SettingsSectionId;
   title: string;
   icon: LucideIcon;
-  status?: string;
 };
 
 const SECTIONS: SettingsSection[] = [
   { id: 'account', title: '계정·권한', icon: UserRound },
-  { id: 'market', title: '시장·거래', icon: BarChart3 },
+  { id: 'market', title: '시장·검색', icon: BarChart3 },
   { id: 'risk', title: '위험관리', icon: ShieldCheck },
   { id: 'scanner', title: '검색기', icon: Search },
-  { id: 'telegram', title: '텔레그램', icon: MessageCircle, status: '미연결' },
+  { id: 'telegram', title: '텔레그램', icon: MessageCircle },
   { id: 'ai', title: 'AI', icon: BrainCircuit },
   { id: 'display', title: '화면', icon: Gauge },
   { id: 'provider', title: '데이터 연결', icon: Database },
@@ -60,22 +59,13 @@ function SettingsCard({ section, onOpen }: { section: SettingsSection; onOpen: (
     <button
       type="button"
       onClick={onOpen}
-      className="flex min-h-16 w-full min-w-0 items-center gap-2 rounded-2xl border border-card-border bg-card/80 p-3 text-left shadow-sm transition hover:bg-muted/60 active:scale-[0.99] sm:gap-3 sm:p-4"
+      className="relative flex min-h-28 w-full min-w-0 flex-col items-center justify-center gap-2 rounded-2xl border border-card-border bg-card/80 p-3 text-center shadow-sm transition hover:border-primary/30 hover:bg-muted/50 active:scale-[0.99] sm:min-h-32 sm:p-4"
     >
-      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary sm:h-11 sm:w-11">
+      <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
         <Icon className="h-5 w-5" aria-hidden="true" />
       </span>
-      <span className="min-w-0 flex-1">
-        <span className="flex min-w-0 flex-wrap items-center gap-1.5">
-          <span className="break-keep text-xs font-black text-foreground sm:text-sm">{section.title}</span>
-          {section.status ? (
-            <span className="shrink-0 whitespace-nowrap rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-bold text-amber-500 sm:px-2 sm:text-[10px]">
-              {section.status}
-            </span>
-          ) : null}
-        </span>
-      </span>
-      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+      <span className="break-keep text-sm font-semibold text-foreground">{section.title}</span>
+      <ChevronRight className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/70" aria-hidden="true" />
     </button>
   );
 }
@@ -85,7 +75,7 @@ function LinkButton({ label, href, navigate }: { label: string; href: string; na
     <button
       type="button"
       onClick={() => navigate(href)}
-      className="flex min-h-11 w-full items-center justify-center rounded-xl bg-primary px-4 text-sm font-black text-primary-foreground"
+      className="flex min-h-11 w-full items-center justify-center rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground"
     >
       {label}
     </button>
@@ -110,7 +100,7 @@ function Choice<T extends string>({
           aria-pressed={value === option.value}
           onClick={() => onChange(option.value)}
           className={cn(
-            'min-h-11 rounded-xl border px-3 text-xs font-black transition',
+            'min-h-11 rounded-xl border px-3 text-xs font-semibold transition',
             value === option.value
               ? 'border-primary bg-primary/10 text-primary'
               : 'border-card-border bg-background/70 text-foreground hover:bg-muted',
@@ -126,21 +116,14 @@ function Choice<T extends string>({
 function SectionHeader({ section }: { section: SettingsSection }) {
   const Icon = section.icon;
   return (
-    <div className="rounded-2xl border border-card-border bg-card/80 p-3 sm:p-4">
-      <div className="flex items-center gap-3">
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
-          <Icon className="h-5 w-5" aria-hidden="true" />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="break-keep text-base font-black sm:text-lg">{section.title}</h2>
-            {section.status ? (
-              <span className="whitespace-nowrap rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold text-amber-500">
-                {section.status}
-              </span>
-            ) : null}
-          </div>
+    <div className="rounded-2xl border border-card-border bg-card/80 p-4">
+      <div className="grid grid-cols-[44px_minmax(0,1fr)_44px] items-center gap-2">
+        <span aria-hidden className="h-11 w-11" />
+        <div className="min-w-0 text-center">
+          <span className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary"><Icon className="h-5 w-5" aria-hidden="true" /></span>
+          <h2 className="mt-2 break-keep text-base font-bold sm:text-lg">{section.title}</h2>
         </div>
+        <span aria-hidden className="h-11 w-11" />
       </div>
     </div>
   );
@@ -154,30 +137,30 @@ function DetailPanel({ section, navigate }: { section: SettingsSection; navigate
       <SectionHeader section={section} />
 
       {section.id === 'account' ? (
-        <div className="space-y-3 rounded-2xl border border-card-border bg-card/70 p-4">
-          <p className="text-xs font-bold text-muted-foreground">연결과 권한은 계정 화면에서 관리합니다.</p>
+        <div className="space-y-3 rounded-2xl border border-card-border bg-card/70 p-4 text-center">
+          <p className="text-xs font-medium text-muted-foreground">로그인, 권한과 실계좌 조회 연결을 관리합니다.</p>
           <LinkButton label="계정 열기" href="/account" navigate={navigate} />
         </div>
       ) : null}
 
       {section.id === 'market' ? (
-        <div className="space-y-3 rounded-2xl border border-card-border bg-card/70 p-4">
-          <p className="text-xs font-bold text-muted-foreground">국내·미국·코인을 한 검색에서 찾습니다.</p>
+        <div className="space-y-3 rounded-2xl border border-card-border bg-card/70 p-4 text-center">
+          <p className="text-xs font-medium text-muted-foreground">국내·미국·코인을 하나의 검색에서 찾습니다.</p>
           <LinkButton label="종목 검색" href="/stocks" navigate={navigate} />
         </div>
       ) : null}
 
       {section.id === 'risk' ? (
-        <div className="space-y-3 rounded-2xl border border-card-border bg-card/70 p-4">
-          <p className="text-xs font-bold text-muted-foreground">위험·승인 한도는 서버 정책을 따릅니다.</p>
-          <LinkButton label="위험 근거" href="/scanner" navigate={navigate} />
+        <div className="space-y-3 rounded-2xl border border-card-border bg-card/70 p-4 text-center">
+          <p className="text-xs font-medium text-muted-foreground">위험과 승인 근거는 신호검색기에서 확인합니다.</p>
+          <LinkButton label="위험 근거 보기" href="/scanner" navigate={navigate} />
         </div>
       ) : null}
 
       {section.id === 'scanner' ? (
         <div className="space-y-4 rounded-2xl border border-card-border bg-card/70 p-4">
           <div>
-            <div className="mb-2 text-xs font-black text-muted-foreground">기본 검색기</div>
+            <div className="mb-2 text-center text-xs font-semibold text-muted-foreground">기본 검색기</div>
             <Choice<ScannerMode>
               value={settings.defaultScanner}
               options={[{ value: 'daytrade', label: '단타' }, { value: 'swing', label: '스윙' }]}
@@ -189,15 +172,16 @@ function DetailPanel({ section, navigate }: { section: SettingsSection; navigate
       ) : null}
 
       {section.id === 'telegram' ? (
-        <div role="status" className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-xs font-bold leading-5 text-amber-100">
-          텔레그램 미연결 · 연결 전까지 앱 내부 상태만 표시합니다.
+        <div className="space-y-3 rounded-2xl border border-card-border bg-card/70 p-4 text-center">
+          <p className="text-xs font-medium leading-5 text-muted-foreground">연결 상태는 사용자 계정의 실제 연동 정보를 기준으로 확인합니다.</p>
+          <LinkButton label="텔레그램 연결 확인" href="/account" navigate={navigate} />
         </div>
       ) : null}
 
       {section.id === 'ai' ? (
         <div className="space-y-4 rounded-2xl border border-card-border bg-card/70 p-4">
           <div>
-            <div className="mb-2 text-xs font-black text-muted-foreground">답변 길이</div>
+            <div className="mb-2 text-center text-xs font-semibold text-muted-foreground">답변 길이</div>
             <Choice<AiVerbosity>
               value={settings.aiVerbosity}
               options={[
@@ -208,7 +192,7 @@ function DetailPanel({ section, navigate }: { section: SettingsSection; navigate
               onChange={(aiVerbosity) => update({ aiVerbosity })}
             />
           </div>
-          <p className="text-xs font-bold text-muted-foreground">공개 시장데이터만 사용합니다.</p>
+          <p className="text-center text-xs font-medium text-muted-foreground">AI 화면의 기본 답변 길이를 선택합니다.</p>
           <LinkButton label="AI 분석" href="/ai-chat" navigate={navigate} />
         </div>
       ) : null}
@@ -216,7 +200,7 @@ function DetailPanel({ section, navigate }: { section: SettingsSection; navigate
       {section.id === 'display' ? (
         <div className="space-y-5 rounded-2xl border border-card-border bg-card/70 p-4">
           <div>
-            <div className="mb-2 text-xs font-black text-muted-foreground">테마</div>
+            <div className="mb-2 text-center text-xs font-semibold text-muted-foreground">테마</div>
             <Choice<ThemeMode>
               value={settings.theme}
               options={[{ value: 'dark', label: '어둡게' }, { value: 'light', label: '밝게' }]}
@@ -224,7 +208,7 @@ function DetailPanel({ section, navigate }: { section: SettingsSection; navigate
             />
           </div>
           <label className="block">
-            <span className="mb-2 block text-xs font-black text-muted-foreground">글자 크기 {Math.round(settings.fontScale * 100)}%</span>
+            <span className="mb-2 block text-center text-xs font-semibold text-muted-foreground">글자 크기 {Math.round(settings.fontScale * 100)}%</span>
             <input
               aria-label="글자 크기"
               type="range"
@@ -241,19 +225,19 @@ function DetailPanel({ section, navigate }: { section: SettingsSection; navigate
       ) : null}
 
       {section.id === 'provider' ? (
-        <div role="status" className="space-y-1 rounded-2xl border border-card-border bg-card/70 p-4 text-xs font-bold leading-5 text-muted-foreground">
-          <p className="text-foreground">데이터·AI 연결은 서버에서 관리합니다.</p>
-          <p>인증정보는 화면에 표시하지 않습니다.</p>
+        <div role="status" className="space-y-1 rounded-2xl border border-card-border bg-card/70 p-4 text-center text-xs font-medium leading-5 text-muted-foreground">
+          <p className="font-semibold text-foreground">데이터·AI 연결은 서버 설정을 따릅니다.</p>
+          <p>인증정보 원문은 이 화면에 표시하지 않습니다.</p>
         </div>
       ) : null}
 
       {section.id === 'advanced' ? (
-        <div className="space-y-3 rounded-2xl border border-card-border bg-card/70 p-4">
-          <p className="text-xs font-bold leading-5 text-muted-foreground">이 브라우저의 화면 설정만 초기화합니다.</p>
+        <div className="space-y-3 rounded-2xl border border-card-border bg-card/70 p-4 text-center">
+          <p className="text-xs font-medium leading-5 text-muted-foreground">이 브라우저의 화면 설정만 초기화합니다.</p>
           <button
             type="button"
             onClick={reset}
-            className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-card-border bg-background/70 px-4 text-sm font-black text-foreground hover:bg-muted"
+            className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-card-border bg-background/70 px-4 text-sm font-semibold text-foreground hover:bg-muted"
           >
             <RotateCcw className="h-4 w-4" aria-hidden="true" />
             화면 설정 초기화

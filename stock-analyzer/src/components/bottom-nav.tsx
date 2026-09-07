@@ -50,6 +50,12 @@ const ICONS: Record<NavigationIconId, LucideIcon> = {
   portfolio: BriefcaseBusiness,
 };
 
+function menuPlacement(groupId: NavigationGroupId) {
+  if (groupId === 'assets') return 'left-0 right-auto translate-x-0';
+  if (groupId === 'information' || groupId === 'settings') return 'left-auto right-0 translate-x-0';
+  return 'left-1/2 right-auto -translate-x-1/2';
+}
+
 export function BottomNav() {
   const [location, navigate] = useLocation();
   const auth = useAuth();
@@ -205,7 +211,10 @@ export function BottomNav() {
                     role="menu"
                     aria-label={`${group.label} 메뉴`}
                     aria-orientation="vertical"
-                    className="absolute bottom-full left-1/2 z-50 mb-3 max-h-[min(70dvh,32rem)] w-52 -translate-x-1/2 overflow-y-auto rounded-2xl border border-card-border bg-card p-2 shadow-2xl"
+                    className={cn(
+                      'absolute bottom-full z-50 mb-3 max-h-[min(70dvh,32rem)] w-52 max-w-[calc(100vw-0.75rem)] overflow-y-auto rounded-2xl border border-card-border bg-card p-2 shadow-2xl',
+                      menuPlacement(group.id),
+                    )}
                   >
                     {visibleMenuItems.map((menuItem: NavigationMenuItem, index) => {
                       const MenuIcon = ICONS[menuItem.icon];
@@ -225,7 +234,7 @@ export function BottomNav() {
                             group.id,
                           )}
                           className={cn(
-                            'flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm font-extrabold transition',
+                            'flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm font-semibold transition',
                             menuActive
                               ? 'bg-primary/10 text-primary'
                               : 'text-foreground hover:bg-muted active:bg-muted',
@@ -254,7 +263,7 @@ export function BottomNav() {
                   }}
                   onKeyDown={(event) => handleTriggerKeyDown(event, group.id, visibleMenuItems.length)}
                   className={cn(
-                    'flex min-h-11 w-full min-w-0 flex-col items-center justify-center rounded-2xl px-1 py-1 text-[10px] font-extrabold transition',
+                    'flex min-h-11 w-full min-w-0 flex-col items-center justify-center rounded-2xl px-1 py-1 text-xs font-semibold transition',
                     active || menuOpen ? 'text-primary' : 'text-muted-foreground active:text-foreground',
                   )}
                 >
@@ -272,7 +281,7 @@ export function BottomNav() {
               aria-current={active ? 'page' : undefined}
               onClick={() => moveTo(group.href)}
               className={cn(
-                'flex min-h-11 min-w-0 flex-col items-center justify-center rounded-2xl px-1 py-1 text-[10px] font-extrabold transition',
+                'flex min-h-11 min-w-0 flex-col items-center justify-center rounded-2xl px-1 py-1 text-xs font-semibold transition',
                 active ? 'text-primary' : 'text-muted-foreground active:text-foreground',
               )}
             >
