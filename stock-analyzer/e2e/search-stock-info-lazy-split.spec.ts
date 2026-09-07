@@ -17,7 +17,9 @@ test('search keeps StockInfo outside the static App bootstrap graph until coin m
   expect(searchSource).not.toContain('@/pages/stock-info');
 
   // The wrapper is intentionally the only seam that may load stock-info, and
-  // it must remain demand-loaded behind React.lazy + Suspense.
+  // it must remain demand-loaded behind React.lazy + Suspense while preserving
+  // the existing public CoinInfo component API consumed by SearchPage.
+  expect(wrapperSource).toContain('export function CoinInfo(props: CoinInfoProps)');
   expect(wrapperSource).toContain('const LazyCoinInfo = lazy(() =>');
   expect(wrapperSource).toContain(
     "import('@/pages/stock-info').then(({ CoinInfo }) => ({ default: CoinInfo }))",
