@@ -1855,6 +1855,8 @@ test.describe('real staging release readiness', () => {
     await waitForPendingPersonalIntegrationReads(page);
     await openMenuRoute('information', '연구센터', '/research-center');
 
+    await openMenuRoute('settings', '계정', '/account');
+    await waitForPendingPersonalIntegrationReads(page);
     await logout(page);
     await page.goto('/research-center', { waitUntil: 'domcontentloaded' });
     await expect(loginSubmitButton(page)).toBeVisible({ timeout: 20_000 });
