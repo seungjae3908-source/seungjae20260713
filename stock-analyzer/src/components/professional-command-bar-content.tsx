@@ -26,17 +26,21 @@ interface CommandAction {
   visible: boolean;
 }
 
+type ProfessionalCommandBarContentProps = {
+  initialOpen?: boolean;
+};
+
 function editableTarget(target: EventTarget | null) {
   const element = target instanceof HTMLElement ? target : null;
   if (!element) return false;
   return element.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(element.tagName);
 }
 
-export function ProfessionalCommandBarContent() {
+export function ProfessionalCommandBarContent({ initialOpen = false }: ProfessionalCommandBarContentProps) {
   const [location, navigate] = useLocation();
   const auth = useAuth();
   const activeRequests = useIsFetching();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(initialOpen);
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
   const [online, setOnline] = useState(() => typeof navigator === 'undefined' || navigator.onLine);
