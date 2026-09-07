@@ -219,7 +219,7 @@ test('rejects non-authoritative source metadata without publishing', async () =>
 
 test('publication workflow separates exact-main approval from verified Research runtime identity', async () => {
   const workflow = await readFile(
-    resolve(repoRoot, '..', '.github/workflows/research-v3-independence-production-publication.yml'),
+    new URL('../../.github/workflows/research-v3-independence-production-publication.yml', import.meta.url),
     'utf8',
   );
 
