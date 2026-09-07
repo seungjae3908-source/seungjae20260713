@@ -12,12 +12,19 @@ import {
 } from '../src/public-forward-liquidity-successor-prospective-cohort.mjs';
 
 function gitBlobSha1(content) {
-  const body = Buffer.isBuffer(content) ? content : Buffer.from(content);
+  const bytes = Buffer.isBuffer(content) ? content : Buffer.from(content);
+  const body = Buffer.from(bytes.toString('utf8').replace(/\r\n/gu, '\n'));
   return createHash('sha1').update(Buffer.concat([
     Buffer.from(`blob ${body.length}\0`),
     body,
   ])).digest('hex');
 }
+
+test('canonical Git text blob identity is stable across checkout line endings', () => {
+  const lf = Buffer.from('first line\nsecond line\n');
+  const crlf = Buffer.from('first line\r\nsecond line\r\n');
+  assert.equal(gitBlobSha1(crlf), gitBlobSha1(lf));
+});
 
 test('successor V2 policy/cohort digests are immutable and internally consistent', () => {
   const verdict = verifySuccessorProspectiveContract();
