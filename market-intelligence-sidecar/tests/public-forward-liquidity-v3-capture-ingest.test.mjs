@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import {
   normalizeBitgetPublicOrderBookFrame,
@@ -43,10 +44,19 @@ import {
 
 const SOURCE_MAIN_SHA = String(process.env.EXPECTED_SHA
   ?? execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()).toLowerCase();
-const REPO_ROOT = resolve(new URL('../..', import.meta.url).pathname);
+const REPO_ROOT = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const REPOSITORY = 'seungjae3908-source/seungjae20260713';
 const ARTIFACT_DIGEST = 'b'.repeat(64);
 assert.match(SOURCE_MAIN_SHA, /^[a-f0-9]{40}$/u);
+
+test('repository URL resolves to the native Git work tree used for blob proof', () => {
+  const gitRoot = execFileSync(
+    'git',
+    ['-C', REPO_ROOT, 'rev-parse', '--show-toplevel'],
+    { encoding: 'utf8' },
+  ).trim();
+  assert.equal(resolve(gitRoot), REPO_ROOT);
+});
 
 function bookFrame(offset = 0, { bids = [[100, 4], [99, 5]], asks = [[101, 3], [102, 6]] } = {}) {
   return normalizeBitgetPublicOrderBookFrame({
