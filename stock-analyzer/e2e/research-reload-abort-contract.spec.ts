@@ -1,6 +1,8 @@
+import fs from 'node:fs';
 import { expect, test } from '@playwright/test';
 import {
   canClassifyResearchReloadAbort,
+  getResearchReloadAppNavigation,
   isCompleteResearchReloadProof,
   isResearchReloadAbortCandidate,
   isResearchOverviewRequestIdentity,
@@ -8,6 +10,65 @@ import {
   type ResearchReloadAbortCandidate,
   type ResearchReloadAcceptanceProof,
 } from './support/research-reload-abort-contract';
+
+test('selects one app-shell navigation when the Research tablist coexists', async ({ page }) => {
+  await page.setContent(`
+    <nav role="tablist" aria-label="연구센터 핵심 화면">
+      <button role="tab">개요</button>
+    </nav>
+    <nav aria-label="주요 메뉴">
+      <button>정보</button>
+    </nav>
+  `);
+
+  const appNavigation = getResearchReloadAppNavigation(page);
+  await expect(appNavigation).toHaveCount(1);
+  await expect(appNavigation).toBeVisible();
+});
+
+test('does not accept a Research tablist or an absent app-shell navigation', async ({ page }) => {
+  await page.setContent(`
+    <nav role="tablist" aria-label="연구센터 핵심 화면">
+      <button role="tab">개요</button>
+    </nav>
+  `);
+  await expect(getResearchReloadAppNavigation(page)).toHaveCount(0);
+
+  await page.setContent('<main>연구센터</main>');
+  await expect(getResearchReloadAppNavigation(page)).toHaveCount(0);
+});
+
+test('keeps the admin journey semantic and preserves session and logout proof ordering', () => {
+  const source = fs.readFileSync(
+    new URL('./phase10-staging-readiness.spec.ts', import.meta.url),
+    'utf8',
+  );
+  const helperStart = source.indexOf('async function reloadResearchCenterWithAdminSessionProof');
+  const helperEnd = source.indexOf('async function finishRouteTransition', helperStart);
+  const helper = source.slice(helperStart, helperEnd);
+  const journeyStart = source.indexOf("test('admin: full product staging journey");
+  const journeyEnd = source.indexOf('const certificationRoutes', journeyStart);
+  const journey = source.slice(journeyStart, journeyEnd);
+
+  expect(helperStart).toBeGreaterThanOrEqual(0);
+  expect(helperEnd).toBeGreaterThan(helperStart);
+  expect(journeyStart).toBeGreaterThanOrEqual(0);
+  expect(journeyEnd).toBeGreaterThan(journeyStart);
+  expect(journey).toContain('const nav = getResearchReloadAppNavigation(page);');
+  expect(journey).not.toContain("const nav = page.locator('nav');");
+
+  const navigationProof = helper.indexOf('authenticated app-shell navigation must remain visible');
+  const protectedSessionProof = helper.indexOf('protected read must remain authenticated');
+  const adminCapabilityProof = helper.indexOf('admin Research read must retain canManageMembers');
+  expect(protectedSessionProof).toBeGreaterThan(navigationProof);
+  expect(adminCapabilityProof).toBeGreaterThan(protectedSessionProof);
+
+  const reloadProof = journey.indexOf('await reloadResearchCenterWithAdminSessionProof(page, nav);');
+  const logoutProof = journey.indexOf('await logout(page);');
+  const postLogoutProof = journey.indexOf('protected API must remain denied after strict full-product session loss');
+  expect(logoutProof).toBeGreaterThan(reloadProof);
+  expect(postLogoutProof).toBeGreaterThan(logoutProof);
+});
 
 const origin = 'https://staging.example.test';
 const candidate: ResearchReloadAbortCandidate = {

@@ -15,6 +15,7 @@ import {
 import { expectUiBuilderStagingReadiness } from './support/ui-builder-staging-readiness';
 import {
   canClassifyResearchReloadAbort,
+  getResearchReloadAppNavigation,
   isResearchOverviewRequestIdentity,
   isResearchReloadAbortCandidate,
   responseBelongsToActiveDocument,
@@ -659,7 +660,10 @@ async function reloadResearchCenterWithAdminSessionProof(page: Page, nav: Return
     await expect(loginSubmitButton(page)).toHaveCount(0);
     await expect(page.getByTestId('professional-command-bar')).toBeVisible();
     await expect(page.getByRole('button', { name: '계정 열기', exact: true })).toBeVisible();
-    await expect(nav).toBeVisible();
+    await expect(
+      nav,
+      'authenticated app-shell navigation must remain visible after Research reload',
+    ).toBeVisible();
 
     const protectedResponse = await requestWithBrowserSession(page, '/api/paper-journal/snapshot');
     expect(protectedResponse.status(), 'protected read must remain authenticated after Research reload').toBe(200);
@@ -1762,8 +1766,11 @@ test.describe('real staging release readiness', () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await login(page, accounts.admin.loginName, accounts.admin.password);
     await expectMembership(page, /관리자/);
-    const nav = page.locator('nav');
-    await expect(nav).toBeVisible();
+    const nav = getResearchReloadAppNavigation(page);
+    await expect(
+      nav,
+      'authenticated app-shell navigation must be visible for the full admin journey',
+    ).toBeVisible();
 
     const openMenuRoute = async (
       groupId: 'assets' | 'technical' | 'information' | 'settings',
