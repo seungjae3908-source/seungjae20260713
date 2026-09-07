@@ -29,6 +29,10 @@ interface CommandAction {
   visible: boolean;
 }
 
+type ProfessionalCommandBarContentProps = {
+  initialOpen?: boolean;
+};
+
 const FOCUS_ROUTES = [
   APP_ROUTES.aiChart,
   APP_ROUTES.scanner,
@@ -47,11 +51,11 @@ function supportsFocusMode(location: string) {
   return FOCUS_ROUTES.some((route) => path === route || path.startsWith(`${route}/`));
 }
 
-export function ProfessionalCommandBarContent() {
+export function ProfessionalCommandBarContent({ initialOpen = false }: ProfessionalCommandBarContentProps) {
   const [location, navigate] = useLocation();
   const auth = useAuth();
   const activeRequests = useIsFetching();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(initialOpen);
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
   const [focusMode, setFocusMode] = useState(false);

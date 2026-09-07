@@ -113,6 +113,13 @@ test('professional command surface is shell-owned, desktop-idle split, capabilit
   expect(loader).toContain("window.matchMedia('(min-width: 1200px)')");
   expect(loader).toContain('requestIdleCallback');
   expect(loader).toContain("import('@/components/professional-command-bar-content')");
+  expect(loader).toContain('AI_CHART_COLD_CRITICAL_WINDOW_MS = 5_500');
+  expect(loader).toContain("window.location.pathname.endsWith('/ai-chart')");
+  expect(loader).toContain('window.setTimeout(scheduleIdle, AI_CHART_COLD_CRITICAL_WINDOW_MS)');
+  expect(loader).toContain('openOnLoadRef.current = true');
+  expect(loader).toContain('<Content initialOpen={openOnLoadRef.current} />');
+  expect(content).toContain('initialOpen = false');
+  expect(content).toContain('useState(initialOpen)');
   expect(content).toContain("auth.can('canAccessRiskPreview')");
   expect(content).toContain("auth.can('canAccessPaperTrading')");
   expect(content).toContain("auth.can('canManageMembers')");
@@ -142,6 +149,17 @@ test('desktop command bar opens with Ctrl+K and keyboard navigation reaches a re
   await expect(chart).toBeVisible();
   await input.press('Enter');
   await expect(page).toHaveURL(/\/ai-chart(?:$|[?#])/);
+});
+
+test('direct AI chart cold bootstrap defers background command content but preserves the first Ctrl+K demand path', () => {
+  const loader = source('src/components/professional-command-bar.tsx');
+  const content = source('src/components/professional-command-bar-content.tsx');
+
+  expect(loader).toContain("const directAiChartColdDocument = window.location.pathname.endsWith('/ai-chart');");
+  expect(loader).toContain('timerId = window.setTimeout(scheduleIdle, AI_CHART_COLD_CRITICAL_WINDOW_MS);');
+  expect(loader).toContain("window.addEventListener('keydown', onShortcut)");
+  expect(loader).toContain('load(true);');
+  expect(content).toContain('const [open, setOpen] = useState(initialOpen);');
 });
 
 test('touch/tablet widths never request or render the professional desktop command surface', async ({ page }) => {
