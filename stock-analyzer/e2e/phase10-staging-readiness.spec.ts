@@ -548,25 +548,9 @@ async function login(page: Page, loginName: string, password: string) {
   await waitForPendingPersonalIntegrationReads(page);
 }
 
-async function resolveLogoutButton(page: Page) {
-  const logoutButton = page.getByRole('button', { name: /로그아웃|sign out/i });
-  if (await logoutButton.isVisible()) return logoutButton;
-
-  const accountTrigger = page.getByRole('button', { name: '계정 열기', exact: true });
-  await expect(
-    accountTrigger,
-    'authenticated route must expose the account trigger when logout is not inline',
-  ).toBeVisible();
-  await accountTrigger.click();
-  await expect(
-    logoutButton,
-    'account menu must reveal the existing logout action',
-  ).toBeVisible();
-  return logoutButton;
-}
-
 async function logout(page: Page) {
-  const logoutButton = await resolveLogoutButton(page);
+  const logoutButton = page.getByRole('button', { name: /로그아웃|sign out/i });
+  await expect(logoutButton).toBeVisible();
   const observation: LogoutObservation = {
     candidates: [],
     origin: new URL(page.url()).origin,
@@ -1383,28 +1367,6 @@ function errorsFor(testInfo: TestInfo) {
     http: diagnostics.unexpected_http_errors.filter((item) => item.test === testName),
   };
 }
-
-test('logout resolver preserves inline action and reveals account-menu action when hidden by route chrome', async ({ page }) => {
-  await page.setContent(`
-    <button type="button">로그아웃</button>
-    <button type="button" aria-label="계정 열기" onclick="this.setAttribute('data-opened','true')">계정</button>
-  `);
-  const directAccountTrigger = page.getByRole('button', { name: '계정 열기', exact: true });
-  await expect(await resolveLogoutButton(page)).toBeVisible();
-  await expect(directAccountTrigger).not.toHaveAttribute('data-opened', 'true');
-
-  await page.setContent(`
-    <button
-      type="button"
-      aria-label="계정 열기"
-      onclick="this.setAttribute('data-opened','true'); document.getElementById('account-menu').hidden=false"
-    >계정</button>
-    <div id="account-menu" hidden><button type="button">로그아웃</button></div>
-  `);
-  const menuAccountTrigger = page.getByRole('button', { name: '계정 열기', exact: true });
-  await expect(await resolveLogoutButton(page)).toBeVisible();
-  await expect(menuAccountTrigger).toHaveAttribute('data-opened', 'true');
-});
 
 test('logout abort proof keeps session-scoped account reads exact and query-free', () => {
   const origin = 'https://staging.example.test';
