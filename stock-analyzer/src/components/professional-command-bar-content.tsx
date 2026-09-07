@@ -210,7 +210,7 @@ export function ProfessionalCommandBarContent() {
       >
         <Minimize2 className="h-4 w-4" aria-hidden="true" />
         <span>집중 모드 종료</span>
-        <kbd className="rounded-md border border-card-border bg-card px-1.5 py-0.5 text-[11px]">F</kbd>
+        <kbd className="rounded-md border border-card-border bg-card px-1.5 py-0.5 text-xs">F</kbd>
       </button>
     );
   }
