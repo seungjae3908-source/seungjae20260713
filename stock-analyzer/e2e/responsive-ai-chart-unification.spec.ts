@@ -163,7 +163,7 @@ for (const viewport of [
     expect(tabMetrics.every((metric) => metric.height >= 44)).toBe(true);
     expect(tabMetrics.every((metric) => metric.fontSize === '12px')).toBe(true);
     expect(tabMetrics.every((metric) => metric.lineHeight === '16px')).toBe(true);
-    expect(tabMetrics.every((metric) => Number(metric.fontWeight) >= 900)).toBe(true);
+    expect(tabMetrics.every((metric) => Number(metric.fontWeight) === 600)).toBe(true);
     expect(tabMetrics.every((metric) => metric.textAlign === 'center')).toBe(true);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
 
