@@ -140,6 +140,7 @@ jobs:
           runner='market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs'
           reliability='market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-reliability-v3.mjs'
           reliability_test='market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-reliability-v3.test.mjs'
+          cohort_test='market-intelligence-sidecar/tests/public-forward-liquidity-successor-prospective-cohort.test.mjs'
           git diff --check "$base" "$head"
           changed="$(git diff --name-only "$base" "$head")"
 
@@ -165,6 +166,15 @@ jobs:
           EOF
             expected_count=4
             scope_name='V3 scheduled-runtime-metadata-repair'
+          elif [[ "$(printf '%s\n' "$changed" | grep -v -F -e "$validation_workflow" -e "$cohort_test" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 0 ]] \
+            && printf '%s\n' "$changed" | grep -Fqx "$validation_workflow" \
+            && printf '%s\n' "$changed" | grep -Fqx "$cohort_test"; then
+            cat > /tmp/allowed-files <<'EOF'
+          .github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml
+          market-intelligence-sidecar/tests/public-forward-liquidity-successor-prospective-cohort.test.mjs
+          EOF
+            expected_count=2
+            scope_name='successor prospective-cohort test-only maintenance'
           elif [[ "$(printf '%s\n' "$changed" | grep -v -F -e "$runtime_workflow" -e "$validation_workflow" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 0 ]]; then
             cat > /tmp/allowed-files <<'EOF'
           .github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml
