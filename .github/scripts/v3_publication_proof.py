@@ -5,6 +5,9 @@ The existing #897 publisher remains the only writer. This helper reads code,
 extracts ONE authenticated runner-local input, and verifies state/HTTP readback.
 Only the two reviewed, self-contained Node modules below are eligible for reuse.
 A future dependency/code change fails closed until this allowlist is reviewed.
+
+#953's immutable safe-caller lineage boundary is preserved here in addition to
+the byte-equivalence hardening added by #954.
 """
 import base64
 import hashlib
@@ -24,6 +27,8 @@ PINNED_BLOBS = {
     'research-production/src/v3-liquidity-independence-state-publisher.mjs':
         '260c8f60944e03f6f5cc44b9ee1e4ff5661fd5ab',
 }
+SAFE_CALLER_PR_NUMBER = 903
+SAFE_CALLER_MERGE_SHA = 'e8f922ba11b2e9cdfbfa9b7aa22eb39122f2a31b'
 RESEARCH_ROOT = Path('/opt/investment-research')
 STATE_ROOT = Path('/var/lib/investment-research-production')
 SUMMARY_PATH = 'forward/liquidity/v3-authoritative-independence-summary.json'
@@ -188,6 +193,15 @@ def verify_runtime(proof, research_root=RESEARCH_ROOT, state_root=STATE_ROOT):
             'codeEquivalent': True, 'files': files}
 
 
+def require_safe_caller_lineage(root, revision, error_code):
+    require(bool(SHA.fullmatch(str(revision))), error_code)
+    try:
+        git(root, 'merge-base', '--is-ancestor', SAFE_CALLER_MERGE_SHA, revision)
+    except subprocess.CalledProcessError as error:
+        raise ProofError(error_code) from error
+    return revision
+
+
 def check_ancestor(root, control_sha, runtime):
     local = build_code_proof(Path(root), control_sha)
     require(runtime.get('controlSha') == control_sha and
@@ -330,7 +344,12 @@ def main(argv):
     if command == 'runtime-proof' and len(args) == 1:
         result = verify_runtime(decode_proof(args[0]))
     elif command == 'check-ancestor' and len(args) == 3:
-        result = {'runtimeSha': check_ancestor(Path(args[0]), args[1], parse_json(Path(args[2]).read_bytes()))}
+        root = Path(args[0])
+        runtime = parse_json(Path(args[2]).read_bytes())
+        runtime_sha = check_ancestor(root, args[1], runtime)
+        require_safe_caller_lineage(root, runtime_sha,
+                                    'RUNTIME_NOT_DESCENDED_FROM_SAFE_CALLER')
+        result = {'runtimeSha': runtime_sha}
     elif command == 'extract-summary' and len(args) == 3:
         result = extract_summary(*args)
     elif command == 'snapshot' and len(args) == 2:
