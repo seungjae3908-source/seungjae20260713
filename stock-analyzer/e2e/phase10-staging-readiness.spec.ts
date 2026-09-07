@@ -101,6 +101,7 @@ type AiChartSessionTiming = {
   session: number;
   coldDocumentMs: number;
   coldChunkMs: number;
+  firstRouteChunkMs: number;
   firstShellMs: number;
   firstUsableChartMs: number;
   warmRouteMs: number;
@@ -1153,13 +1154,26 @@ async function runAuthenticatedAiChartCertification(
       const cold = await waitForUsableAiChart(page, coldStarted);
       const navigationTiming = await page.evaluate(() => {
         const navigation = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
-        const scriptEntries = performance.getEntriesByType('resource')
-          .filter((entry) => entry instanceof PerformanceResourceTiming && entry.initiatorType === 'script');
+        const resourceEntries = performance.getEntriesByType('resource')
+          .filter((entry): entry is PerformanceResourceTiming => entry instanceof PerformanceResourceTiming);
+        const scriptEntries = resourceEntries.filter((entry) => entry.initiatorType === 'script');
+        const routeChunkEntries = resourceEntries.filter((entry) => {
+          const pathname = new URL(entry.name).pathname;
+          return /\/assets\/ai-chart-[^/]+\.js$/.test(pathname)
+            || pathname.endsWith('/src/pages/ai-chart.tsx');
+        });
         return {
           documentMs: Math.round(navigation?.domContentLoadedEventEnd ?? 0),
           chunkMs: Math.round(scriptEntries.reduce((max, entry) => Math.max(max, entry.responseEnd), 0)),
+          firstRouteChunkMs: routeChunkEntries.length > 0
+            ? Math.round(routeChunkEntries.reduce((max, entry) => Math.max(max, entry.responseEnd), 0))
+            : null,
         };
       });
+      expect(
+        navigationTiming.firstRouteChunkMs,
+        'AI Chart route chunk timing must be present; missing timing is not zero',
+      ).not.toBeNull();
 
       await expectHealthyRoute(page, '/');
       const nav = page.locator('nav');
@@ -1183,6 +1197,7 @@ async function runAuthenticatedAiChartCertification(
         session,
         coldDocumentMs: navigationTiming.documentMs,
         coldChunkMs: navigationTiming.chunkMs,
+        firstRouteChunkMs: navigationTiming.firstRouteChunkMs!,
         firstShellMs: cold.firstShellMs,
         firstUsableChartMs: cold.usableMs,
         warmRouteMs,
@@ -1199,6 +1214,7 @@ async function runAuthenticatedAiChartCertification(
   const summary = {
     coldDocumentMs: performanceSummary(sessions.map((item) => item.coldDocumentMs)),
     coldChunkMs: performanceSummary(sessions.map((item) => item.coldChunkMs)),
+    firstRouteChunkMs: performanceSummary(sessions.map((item) => item.firstRouteChunkMs)),
     firstShellMs: performanceSummary(sessions.map((item) => item.firstShellMs)),
     firstUsableChartMs: performanceSummary(sessions.map((item) => item.firstUsableChartMs)),
     warmRouteMs: performanceSummary(sessions.map((item) => item.warmRouteMs)),
