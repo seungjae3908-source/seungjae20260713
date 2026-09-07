@@ -123,6 +123,8 @@ test('professional command surface is shell-owned, desktop-idle split, capabilit
   expect(content).toContain("auth.can('canAccessRiskPreview')");
   expect(content).toContain("auth.can('canAccessPaperTrading')");
   expect(content).toContain("auth.can('canManageMembers')");
+  expect(content).toContain('aria-label="로그아웃"');
+  expect(content).toContain('onClick={() => void auth.signOut()}');
   expect(content).not.toContain('APP_ROUTES.autoTrading');
   expect(content).not.toContain('주문 실행');
   expect(content).not.toContain('매수');
@@ -149,6 +151,17 @@ test('desktop command bar opens with Ctrl+K and keyboard navigation reaches a re
   await expect(chart).toBeVisible();
   await input.press('Enter');
   await expect(page).toHaveURL(/\/ai-chart(?:$|[?#])/);
+});
+
+test('protected desktop workspaces retain a visible global logout control', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await installRuntime(page);
+  await page.goto('/research-center');
+
+  const bar = page.getByTestId('professional-command-bar');
+  await expect(bar).toBeVisible({ timeout: 5_000 });
+  await expect(bar.getByRole('button', { name: '로그아웃', exact: true })).toBeVisible();
+  await expect(bar.getByRole('button', { name: '계정 열기', exact: true })).toBeVisible();
 });
 
 test('direct AI chart cold bootstrap defers background command content but preserves the first Ctrl+K demand path', () => {
