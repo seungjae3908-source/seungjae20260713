@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { Eye, EyeOff, KeyRound, RefreshCw, ShieldCheck, WalletCards, X } from 'lucide-react';
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { resolveEvidenceDisplay } from '@/lib/evidence-display';
@@ -127,7 +127,7 @@ export function BrokerageAccountConnections({ canAccessSpot = true, canAccessFut
     setLoading(false);
   }, [enabledProviders]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     void refresh();
     const onVisibility = () => { if (document.visibilityState === 'visible') void refresh(); };
     const onOnline = () => void refresh();
