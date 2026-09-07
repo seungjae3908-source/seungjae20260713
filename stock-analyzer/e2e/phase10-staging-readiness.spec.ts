@@ -535,6 +535,41 @@ function loginSubmitButton(page: Page) {
   return page.locator('form').getByRole('button', { name: /^로그인$|sign in|log in/i });
 }
 
+function logoutButtons(page: Page) {
+  return page.getByRole('button', { name: /로그아웃|sign out/i });
+}
+
+async function firstVisibleLogoutButton(page: Page) {
+  const commandBarLogout = page
+    .getByTestId('professional-command-bar')
+    .getByRole('button', { name: /^로그아웃$|^sign out$/i });
+  if (await commandBarLogout.count() === 1 && await commandBarLogout.isVisible()) {
+    return commandBarLogout;
+  }
+
+  const candidates = logoutButtons(page);
+  const count = await candidates.count();
+  for (let index = 0; index < count; index += 1) {
+    const candidate = candidates.nth(index);
+    if (await candidate.isVisible()) return candidate;
+  }
+  return null;
+}
+
+async function expectVisibleLogoutButton(page: Page, timeout = 30_000) {
+  await expect.poll(
+    async () => Boolean(await firstVisibleLogoutButton(page)),
+    {
+      message: 'authenticated UI must expose at least one visible logout action',
+      timeout,
+      intervals: [100, 200, 300, 500],
+    },
+  ).toBe(true);
+  const logoutButton = await firstVisibleLogoutButton(page);
+  if (!logoutButton) throw new Error('visible logout action disappeared after authenticated UI proof');
+  return logoutButton;
+}
+
 async function login(page: Page, loginName: string, password: string) {
   await page.goto('/login');
   const nameInput = page.locator('input[type="email"], input[name="email"], input[autocomplete="username"]').first();
@@ -543,14 +578,13 @@ async function login(page: Page, loginName: string, password: string) {
   await nameInput.fill(loginName);
   await passwordInput.fill(password);
   await loginSubmitButton(page).click();
-  await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toBeVisible({ timeout: 30_000 });
+  await expectVisibleLogoutButton(page, 30_000);
   await settle(page);
   await waitForPendingPersonalIntegrationReads(page);
 }
 
 async function logout(page: Page) {
-  const logoutButton = page.getByRole('button', { name: /로그아웃|sign out/i });
-  await expect(logoutButton).toBeVisible();
+  const logoutButton = await expectVisibleLogoutButton(page);
   const observation: LogoutObservation = {
     candidates: [],
     origin: new URL(page.url()).origin,
@@ -566,7 +600,7 @@ async function logout(page: Page) {
     await page.reload();
     await settle(page);
     await expect(loginSubmitButton(page)).toBeVisible({ timeout: 20_000 });
-    await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toHaveCount(0);
+    await expect(logoutButtons(page)).toHaveCount(0);
 
     const protectedResponse = await page.request.get('/api/paper-journal/snapshot');
     expect(
@@ -1368,6 +1402,25 @@ function errorsFor(testInfo: TestInfo) {
   };
 }
 
+test('logout selector remains deterministic with concurrent command-bar and route logout actions', async ({ page }) => {
+  await page.setContent(`
+    <div data-testid="professional-command-bar">
+      <button type="button" aria-label="로그아웃" data-owner="command-bar">global</button>
+    </div>
+    <section>
+      <button type="button" aria-label="로그아웃" data-owner="route">route</button>
+    </section>
+  `);
+  const commandBarLogout = await expectVisibleLogoutButton(page);
+  await expect(commandBarLogout).toHaveAttribute('data-owner', 'command-bar');
+
+  await page.getByTestId('professional-command-bar').evaluate((element) => {
+    (element as HTMLElement).style.display = 'none';
+  });
+  const routeLogout = await expectVisibleLogoutButton(page);
+  await expect(routeLogout).toHaveAttribute('data-owner', 'route');
+});
+
 test('logout abort proof keeps session-scoped account reads exact and query-free', () => {
   const origin = 'https://staging.example.test';
   for (const route of [
@@ -1485,7 +1538,7 @@ test.describe('real staging release readiness', () => {
       await page.reload();
       await settle(page);
       await waitForPendingPersonalIntegrationReads(page);
-      await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toBeVisible();
+      await expectVisibleLogoutButton(page);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
       await logout(page);
     });
@@ -1625,7 +1678,7 @@ test.describe('real staging release readiness', () => {
       await expect(page.getByTestId('page-fallback')).toHaveCount(0);
       expect(requestCount, 'retry must create exactly one fresh profile request after the first failure').toBe(2);
       expect(observation.candidates, 'semantic first-attempt rejection must not create a network-error exemption').toHaveLength(0);
-      await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toBeVisible();
+      await expectVisibleLogoutButton(page);
       confirmed = true;
     } finally {
       await page.unroute('**/rest/v1/profiles*');
