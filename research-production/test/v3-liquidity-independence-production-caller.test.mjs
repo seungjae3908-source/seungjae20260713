@@ -216,3 +216,19 @@ test('rejects non-authoritative source metadata without publishing', async () =>
     await assert.rejects(lstat(join(root, 'forward')), { code: 'ENOENT' });
   });
 });
+
+test('publication workflow separates exact-main approval from verified Research runtime identity', async () => {
+  const workflow = await readFile(
+    resolve(repoRoot, '.github/workflows/research-v3-independence-production-publication.yml'),
+    'utf8',
+  );
+
+  assert.equal(workflow.includes('test "$actual_main" = "$TARGET_SHA"'), true);
+  assert.equal(workflow.includes('release="/opt/investment-research/releases/$TARGET_SHA"'), false);
+  assert.equal(workflow.includes('release="/opt/investment-research/releases/$RUNTIME_SHA"'), true);
+  assert.equal(workflow.includes('EXPECTED_CALLER_SHA256'), true);
+  assert.equal(workflow.includes('EXPECTED_PUBLISHER_SHA256'), true);
+  assert.equal(workflow.includes('runtime_sha="$(git -c safe.directory="$release" -C "$release" rev-parse HEAD)"'), true);
+  assert.equal(workflow.includes('--expected-code-sha "$RUNTIME_SHA"'), true);
+  assert.equal(workflow.includes('result.codeSha !== process.env.RUNTIME_SHA'), true);
+});
