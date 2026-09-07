@@ -6,6 +6,7 @@ import {
   BriefcaseBusiness,
   Command,
   Home,
+  LogOut,
   Maximize2,
   Minimize2,
   Radar,
@@ -270,6 +271,15 @@ export function ProfessionalCommandBarContent({ initialOpen = false }: Professio
           </span>
           <button type="button" aria-label="계정 열기" onClick={() => navigate(APP_ROUTES.account)} className="min-h-8 max-w-40 truncate rounded-full border border-card-border px-3 font-semibold">
             {auth.displayName ?? '계정'}
+          </button>
+          <button
+            type="button"
+            aria-label="로그아웃"
+            title="로그아웃"
+            onClick={() => void auth.signOut()}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-card-border text-muted-foreground transition hover:border-destructive/40 hover:text-destructive"
+          >
+            <LogOut className="h-4 w-4" aria-hidden="true" />
           </button>
         </div>
       </div>
