@@ -52,7 +52,9 @@ jobs:
           grep -Fq '/publish-v3-independence ' "$workflow"
           grep -Fq 'python3 scripts/agent_hub_rollover_v2.py resolve' "$workflow"
           grep -Fq 'SOURCE_PR_NUMBER: 897' "$workflow"
-          grep -Fq '/opt/investment-research/releases/$TARGET_SHA' "$workflow"
+          grep -Fq '/opt/investment-research/releases/$RUNTIME_SHA' "$workflow"
+          grep -Fq 'EXPECTED_CALLER_SHA256' "$workflow"
+          grep -Fq 'EXPECTED_PUBLISHER_SHA256' "$workflow"
           grep -Fq '/var/lib/investment-research-production' "$workflow"
           grep -Fq 'runuser -u investment-research' "$workflow"
           grep -Fq 'env -i' "$workflow"
@@ -239,6 +241,7 @@ jobs:
       file_digest: ${{ steps.publish.outputs.file_digest }}
       report_digest: ${{ steps.publish.outputs.report_digest }}
       target_slot_index: ${{ steps.publish.outputs.target_slot_index }}
+      runtime_sha: ${{ steps.runtime.outputs.runtime_sha }}
     env:
       TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
       SOURCE_RUN_ID: ${{ needs.authorize.outputs.source_run_id }}
@@ -344,24 +347,39 @@ jobs:
           else
             ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
           fi
-      - name: Read-only Research server preflight
+      - name: Read-only Research server runtime identity preflight
+        id: runtime
         shell: bash
         run: |
           set -Eeuo pipefail
-          remote_env="$(printf 'TARGET_SHA=%q' "$TARGET_SHA")"
-          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+          expected_caller_sha256="$(sha256sum research-production/bin/publish-v3-independence.mjs | awk '{print $1}')"
+          expected_publisher_sha256="$(sha256sum research-production/src/v3-liquidity-independence-state-publisher.mjs | awk '{print $1}')"
+          [[ "$expected_caller_sha256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$expected_publisher_sha256" =~ ^[0-9a-f]{64}$ ]]
+          remote_env="$(printf 'EXPECTED_CALLER_SHA256=%q EXPECTED_PUBLISHER_SHA256=%q' "$expected_caller_sha256" "$expected_publisher_sha256")"
+          runtime_sha="$(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" "$remote_env bash -s" <<'REMOTE'
           set -Eeuo pipefail
-          release="/opt/investment-research/releases/$TARGET_SHA"
           current="$(readlink -f /opt/investment-research/current 2>/dev/null || true)"
-          test "$current" = "$release"
+          [[ "$current" =~ ^/opt/investment-research/releases/([0-9a-f]{40})$ ]]
+          RUNTIME_SHA="${BASH_REMATCH[1]}"
+          release="/opt/investment-research/releases/$RUNTIME_SHA"
           test -d "$release" && test ! -L "$release"
-          test "$(git -c safe.directory="$release" -C "$release" rev-parse HEAD)" = "$TARGET_SHA"
+          runtime_sha="$(git -c safe.directory="$release" -C "$release" rev-parse HEAD)"
+          test "$runtime_sha" = "$RUNTIME_SHA"
           test -f "$release/research-production/bin/publish-v3-independence.mjs"
+          test -f "$release/research-production/src/v3-liquidity-independence-state-publisher.mjs"
+          command -v sha256sum >/dev/null
+          test "$(sha256sum "$release/research-production/bin/publish-v3-independence.mjs" | awk '{print $1}')" = "$EXPECTED_CALLER_SHA256"
+          test "$(sha256sum "$release/research-production/src/v3-liquidity-independence-state-publisher.mjs" | awk '{print $1}')" = "$EXPECTED_PUBLISHER_SHA256"
           test -d /var/lib/investment-research-production
           test ! -L /var/lib/investment-research-production
           id investment-research >/dev/null 2>&1
+          printf '%s\n' "$RUNTIME_SHA"
           REMOTE
+          )"
+          [[ "$runtime_sha" =~ ^[0-9a-f]{40}$ ]]
+          printf '%s\n' "runtime_sha=$runtime_sha" >> "$GITHUB_OUTPUT"
       - name: Stage public evidence inputs on server
         id: stage
         env:
@@ -383,14 +401,16 @@ jobs:
         id: publish
         env:
           REMOTE_DIR: ${{ steps.stage.outputs.remote_dir }}
+          RUNTIME_SHA: ${{ steps.runtime.outputs.runtime_sha }}
         shell: bash
         run: |
           set -Eeuo pipefail
-          remote_env="$(printf 'TARGET_SHA=%q REMOTE_DIR=%q' "$TARGET_SHA" "$REMOTE_DIR")"
+          [[ "$RUNTIME_SHA" =~ ^[0-9a-f]{40}$ ]]
+          remote_env="$(printf 'RUNTIME_SHA=%q REMOTE_DIR=%q' "$RUNTIME_SHA" "$REMOTE_DIR")"
           publication_json="$(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" "$remote_env bash -s" <<'REMOTE'
           set -Eeuo pipefail
-          release="/opt/investment-research/releases/$TARGET_SHA"
+          release="/opt/investment-research/releases/$RUNTIME_SHA"
           state=/var/lib/investment-research-production
           command=(
             env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/nonexistent LANG=C.UTF-8 TZ=UTC
@@ -399,7 +419,7 @@ jobs:
             ORDER_AUTHORITY=false ORDER_SUBMISSION_ENABLED=false
             node "$release/research-production/bin/publish-v3-independence.mjs"
             --state-root "$state" --summary-file "$REMOTE_DIR/summary.json" --source-file "$REMOTE_DIR/source.json"
-            --repo-root "$release" --expected-code-sha "$TARGET_SHA"
+            --repo-root "$release" --expected-code-sha "$RUNTIME_SHA"
           )
           if [[ "$(id -u)" -eq 0 ]]; then
             command -v runuser >/dev/null
@@ -414,7 +434,7 @@ jobs:
           import { appendFileSync, readFileSync } from 'node:fs';
           const result = JSON.parse(readFileSync(process.env.RESULT_FILE, 'utf8'));
           if (!['PUBLISHED', 'UNCHANGED'].includes(result.status)
-              || result.codeSha !== process.env.TARGET_SHA
+              || result.codeSha !== process.env.RUNTIME_SHA
               || result.executionAuthority !== 'NONE'
               || result.liveTrading !== false || result.privateApi !== false || result.realOrders !== 0
               || result.oosOutcomeCredit !== 0 || result.fullCostReady !== false || result.evidenceComplete !== 0
@@ -461,6 +481,7 @@ jobs:
           FILE_DIGEST: ${{ needs.publish.outputs.file_digest }}
           REPORT_DIGEST: ${{ needs.publish.outputs.report_digest }}
           TARGET_SLOT_INDEX: ${{ needs.publish.outputs.target_slot_index }}
+          RUNTIME_SHA: ${{ needs.publish.outputs.runtime_sha }}
         with:
           script: |
             const mutation = process.env.PUBLICATION_STATUS === 'PUBLISHED' ? 1 : 0;
@@ -468,6 +489,7 @@ jobs:
               '[RESEARCH_V3_INDEPENDENCE_PUBLICATION]', 'status: success',
               `publication_status: ${process.env.PUBLICATION_STATUS}`,
               `canonical_hub: #${process.env.ACTIVE_ISSUE}`, `target_sha: ${process.env.TARGET_SHA}`,
+              `runtime_sha: ${process.env.RUNTIME_SHA}`,
               `required_ci_run: ${process.env.APPLICATION_RUN_ID}`, `source_run_id: ${process.env.SOURCE_RUN_ID}`,
               `source_artifact_id: ${process.env.ARTIFACT_ID}`, `source_artifact_digest: ${process.env.ARTIFACT_DIGEST}`,
               `target_slot_index: ${process.env.TARGET_SLOT_INDEX}`, `report_digest: ${process.env.REPORT_DIGEST}`,
