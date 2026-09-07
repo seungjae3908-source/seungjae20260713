@@ -52,13 +52,21 @@ jobs:
           grep -Fq '/publish-v3-independence ' "$workflow"
           grep -Fq 'python3 scripts/agent_hub_rollover_v2.py resolve' "$workflow"
           grep -Fq 'SOURCE_PR_NUMBER: 897' "$workflow"
-          grep -Fq '/opt/investment-research/releases/$TARGET_SHA' "$workflow"
+          grep -Fq 'SAFE_CALLER_PR_NUMBER: 903' "$workflow"
           grep -Fq '/var/lib/investment-research-production' "$workflow"
           grep -Fq 'runuser -u investment-research' "$workflow"
           grep -Fq 'env -i' "$workflow"
           # Scan only the runtime/control portion. The validation code itself contains
-          # the forbidden-token regex and must not be allowed to self-match.
+          # contract strings and must not be allowed to self-match.
           awk 'BEGIN {copy=0} /^  authorize:$/ {copy=1} copy {print}' "$workflow" > "$RUNNER_TEMP/runtime-control.yml"
+          grep -Fq '/opt/investment-research/releases/$PUBLISHER_SHA' "$RUNNER_TEMP/runtime-control.yml"
+          grep -Fq -- '--expected-code-sha "$PUBLISHER_SHA"' "$RUNNER_TEMP/runtime-control.yml"
+          grep -Fq 'compare/${SAFE_CALLER_BASE_SHA}...${PUBLISHER_SHA}' "$RUNNER_TEMP/runtime-control.yml"
+          grep -Fq 'compare/${PUBLISHER_SHA}...${TARGET_SHA}' "$RUNNER_TEMP/runtime-control.yml"
+          if grep -Fq '/opt/investment-research/releases/$TARGET_SHA' "$RUNNER_TEMP/runtime-control.yml"; then
+            echo 'Publication runtime still couples authorization SHA to server release identity.' >&2
+            exit 1
+          fi
           if grep -Eq 'systemctl[[:space:]]+(enable|disable|start|stop|restart)|(^|[[:space:]])(caddy|pm2)([[:space:]]|$)' "$RUNNER_TEMP/runtime-control.yml"; then
             echo 'Publication runtime contains a forbidden deploy/service mutation command.' >&2
             exit 1
@@ -85,8 +93,10 @@ jobs:
       artifact_digest: ${{ steps.gate.outputs.artifact_digest }}
       target_slot_index: ${{ steps.gate.outputs.target_slot_index }}
       application_run_id: ${{ steps.gate.outputs.application_run_id }}
+      safe_caller_base_sha: ${{ steps.gate.outputs.safe_caller_base_sha }}
     env:
       SOURCE_PR_NUMBER: 897
+      SAFE_CALLER_PR_NUMBER: 903
     steps:
       - uses: actions/checkout@v4
         with:
@@ -107,6 +117,7 @@ jobs:
         env:
           ACTIVE_ISSUE: ${{ steps.hub.outputs.active_issue }}
           SOURCE_PR_NUMBER: ${{ env.SOURCE_PR_NUMBER }}
+          SAFE_CALLER_PR_NUMBER: ${{ env.SAFE_CALLER_PR_NUMBER }}
         with:
           script: |
             const body = String(context.payload.comment?.body ?? '').trim();
@@ -139,12 +150,30 @@ jobs:
               core.setFailed(`Publisher source PR #${sourcePrNumber} is not merged.`);
               return;
             }
-            const ancestry = await github.rest.repos.compareCommits({
+            const sourceAncestry = await github.rest.repos.compareCommits({
               owner: context.repo.owner, repo: context.repo.repo,
               base: String(sourcePr.merge_commit_sha), head: targetSha,
             });
-            if (!['ahead', 'identical'].includes(ancestry.data.status)) {
+            if (!['ahead', 'identical'].includes(sourceAncestry.data.status)) {
               core.setFailed(`Current main does not descend from publisher source PR #${sourcePrNumber}.`);
+              return;
+            }
+
+            const safeCallerPrNumber = Number(process.env.SAFE_CALLER_PR_NUMBER);
+            const safeCallerPr = (await github.rest.pulls.get({
+              owner: context.repo.owner, repo: context.repo.repo, pull_number: safeCallerPrNumber,
+            })).data;
+            if (!safeCallerPr.merged || !safeCallerPr.merge_commit_sha) {
+              core.setFailed(`Safe caller PR #${safeCallerPrNumber} is not merged.`);
+              return;
+            }
+            const safeCallerBaseSha = String(safeCallerPr.merge_commit_sha).toLowerCase();
+            const safeCallerAncestry = await github.rest.repos.compareCommits({
+              owner: context.repo.owner, repo: context.repo.repo,
+              base: safeCallerBaseSha, head: targetSha,
+            });
+            if (!['ahead', 'identical'].includes(safeCallerAncestry.data.status)) {
+              core.setFailed(`Current main does not descend from safe caller PR #${safeCallerPrNumber}.`);
               return;
             }
 
@@ -229,6 +258,7 @@ jobs:
             core.setOutput('artifact_digest', String(artifact.digest));
             core.setOutput('target_slot_index', String(slot));
             core.setOutput('application_run_id', String(applicationRunId));
+            core.setOutput('safe_caller_base_sha', safeCallerBaseSha);
 
   publish:
     needs: authorize
@@ -239,6 +269,7 @@ jobs:
       file_digest: ${{ steps.publish.outputs.file_digest }}
       report_digest: ${{ steps.publish.outputs.report_digest }}
       target_slot_index: ${{ steps.publish.outputs.target_slot_index }}
+      publisher_sha: ${{ steps.server.outputs.publisher_sha }}
     env:
       TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
       SOURCE_RUN_ID: ${{ needs.authorize.outputs.source_run_id }}
@@ -247,6 +278,7 @@ jobs:
       ARTIFACT_NAME: ${{ needs.authorize.outputs.artifact_name }}
       ARTIFACT_DIGEST: ${{ needs.authorize.outputs.artifact_digest }}
       TARGET_SLOT_INDEX: ${{ needs.authorize.outputs.target_slot_index }}
+      SAFE_CALLER_BASE_SHA: ${{ needs.authorize.outputs.safe_caller_base_sha }}
       SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
       SSH_USER: ${{ secrets.PROD_SSH_USER }}
       SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
@@ -344,24 +376,42 @@ jobs:
           else
             ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
           fi
-      - name: Read-only Research server preflight
+      - name: Read-only Research server publisher identity preflight
+        id: server
         shell: bash
         run: |
           set -Eeuo pipefail
-          remote_env="$(printf 'TARGET_SHA=%q' "$TARGET_SHA")"
-          ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
-            "$SSH_USER@$SSH_HOST" "$remote_env bash -s" <<'REMOTE'
+          publisher_sha="$(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+            "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
           set -Eeuo pipefail
-          release="/opt/investment-research/releases/$TARGET_SHA"
           current="$(readlink -f /opt/investment-research/current 2>/dev/null || true)"
+          test -n "$current"
+          test -d "$current" && test ! -L "$current"
+          publisher_sha="$(git -c safe.directory="$current" -C "$current" rev-parse HEAD)"
+          [[ "$publisher_sha" =~ ^[0-9a-f]{40}$ ]]
+          release="/opt/investment-research/releases/$publisher_sha"
           test "$current" = "$release"
-          test -d "$release" && test ! -L "$release"
-          test "$(git -c safe.directory="$release" -C "$release" rev-parse HEAD)" = "$TARGET_SHA"
           test -f "$release/research-production/bin/publish-v3-independence.mjs"
           test -d /var/lib/investment-research-production
           test ! -L /var/lib/investment-research-production
           id investment-research >/dev/null 2>&1
+          printf '%s\n' "$publisher_sha"
           REMOTE
+          )"
+          [[ "$publisher_sha" =~ ^[0-9a-f]{40}$ ]]
+          printf '%s\n' "publisher_sha=$publisher_sha" >> "$GITHUB_OUTPUT"
+      - name: Validate server publisher lineage against safe caller and authorized main
+        env:
+          PUBLISHER_SHA: ${{ steps.server.outputs.publisher_sha }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          safe_status="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${SAFE_CALLER_BASE_SHA}...${PUBLISHER_SHA}" --jq '.status')"
+          [[ "$safe_status" == ahead || "$safe_status" == identical ]]
+          target_status="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${PUBLISHER_SHA}...${TARGET_SHA}" --jq '.status')"
+          [[ "$target_status" == ahead || "$target_status" == identical ]]
+          actual_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.commit.sha')"
+          test "$actual_main" = "$TARGET_SHA"
       - name: Stage public evidence inputs on server
         id: stage
         env:
@@ -383,14 +433,21 @@ jobs:
         id: publish
         env:
           REMOTE_DIR: ${{ steps.stage.outputs.remote_dir }}
+          PUBLISHER_SHA: ${{ steps.server.outputs.publisher_sha }}
         shell: bash
         run: |
           set -Eeuo pipefail
-          remote_env="$(printf 'TARGET_SHA=%q REMOTE_DIR=%q' "$TARGET_SHA" "$REMOTE_DIR")"
+          actual_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.commit.sha')"
+          test "$actual_main" = "$TARGET_SHA"
+          remote_env="$(printf 'PUBLISHER_SHA=%q REMOTE_DIR=%q' "$PUBLISHER_SHA" "$REMOTE_DIR")"
           publication_json="$(ssh -i ~/.ssh/id_ed25519 -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 \
             "$SSH_USER@$SSH_HOST" "$remote_env bash -s" <<'REMOTE'
           set -Eeuo pipefail
-          release="/opt/investment-research/releases/$TARGET_SHA"
+          [[ "$PUBLISHER_SHA" =~ ^[0-9a-f]{40}$ ]]
+          release="/opt/investment-research/releases/$PUBLISHER_SHA"
+          current="$(readlink -f /opt/investment-research/current 2>/dev/null || true)"
+          test "$current" = "$release"
+          test "$(git -c safe.directory="$release" -C "$release" rev-parse HEAD)" = "$PUBLISHER_SHA"
           state=/var/lib/investment-research-production
           command=(
             env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/nonexistent LANG=C.UTF-8 TZ=UTC
@@ -399,7 +456,7 @@ jobs:
             ORDER_AUTHORITY=false ORDER_SUBMISSION_ENABLED=false
             node "$release/research-production/bin/publish-v3-independence.mjs"
             --state-root "$state" --summary-file "$REMOTE_DIR/summary.json" --source-file "$REMOTE_DIR/source.json"
-            --repo-root "$release" --expected-code-sha "$TARGET_SHA"
+            --repo-root "$release" --expected-code-sha "$PUBLISHER_SHA"
           )
           if [[ "$(id -u)" -eq 0 ]]; then
             command -v runuser >/dev/null
@@ -414,7 +471,7 @@ jobs:
           import { appendFileSync, readFileSync } from 'node:fs';
           const result = JSON.parse(readFileSync(process.env.RESULT_FILE, 'utf8'));
           if (!['PUBLISHED', 'UNCHANGED'].includes(result.status)
-              || result.codeSha !== process.env.TARGET_SHA
+              || result.codeSha !== process.env.PUBLISHER_SHA
               || result.executionAuthority !== 'NONE'
               || result.liveTrading !== false || result.privateApi !== false || result.realOrders !== 0
               || result.oosOutcomeCredit !== 0 || result.fullCostReady !== false || result.evidenceComplete !== 0
@@ -453,6 +510,7 @@ jobs:
         env:
           ACTIVE_ISSUE: ${{ needs.authorize.outputs.active_issue }}
           TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
+          PUBLISHER_SHA: ${{ needs.publish.outputs.publisher_sha }}
           SOURCE_RUN_ID: ${{ needs.authorize.outputs.source_run_id }}
           ARTIFACT_ID: ${{ needs.authorize.outputs.artifact_id }}
           ARTIFACT_DIGEST: ${{ needs.authorize.outputs.artifact_digest }}
@@ -468,6 +526,7 @@ jobs:
               '[RESEARCH_V3_INDEPENDENCE_PUBLICATION]', 'status: success',
               `publication_status: ${process.env.PUBLICATION_STATUS}`,
               `canonical_hub: #${process.env.ACTIVE_ISSUE}`, `target_sha: ${process.env.TARGET_SHA}`,
+              `publisher_sha: ${process.env.PUBLISHER_SHA}`,
               `required_ci_run: ${process.env.APPLICATION_RUN_ID}`, `source_run_id: ${process.env.SOURCE_RUN_ID}`,
               `source_artifact_id: ${process.env.ARTIFACT_ID}`, `source_artifact_digest: ${process.env.ARTIFACT_DIGEST}`,
               `target_slot_index: ${process.env.TARGET_SLOT_INDEX}`, `report_digest: ${process.env.REPORT_DIGEST}`,
