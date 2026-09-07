@@ -267,7 +267,7 @@ test('late response from the previous symbol is rejected after an in-place symbo
 
   await page.setViewportSize({ width: 1366, height: 900 });
   await page.goto('/__phase13-orderbook-e2e?ticker=005930&market=KR&assetClass=stock');
-  await page.waitForTimeout(30);
+  await expect.poll(() => seen).toContain('005930');
   await page.evaluate(() => {
     const url = new URL(window.location.href);
     url.searchParams.set('ticker', '000660');
@@ -320,7 +320,7 @@ test('query-only market switch aborts the old owner and applies only the new can
 
   await page.setViewportSize({ width: 1366, height: 900 });
   await page.goto('/__phase13-orderbook-e2e?ticker=005930&market=KR&assetClass=stock');
-  await page.waitForTimeout(30);
+  await expect.poll(() => seen).toContain('stock:KR:005930');
   await page.evaluate(() => {
     const url = new URL(window.location.href);
     url.searchParams.set('ticker', 'BTC');
@@ -347,3 +347,4 @@ test('single polling owner issues one request per interval for the same key', as
   await page.waitForTimeout(400);
   expect(calls.length).toBe(2);
 });
+
