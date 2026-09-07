@@ -65,8 +65,25 @@ test('keeps the admin journey semantic and preserves session and logout proof or
 
   const reloadProof = journey.indexOf('await reloadResearchCenterWithAdminSessionProof(page, nav);');
   const logoutProof = journey.indexOf('await logout(page);');
+  const researchBeforeLogout = journey.lastIndexOf(
+    "await openMenuRoute('information', '연구센터', '/research-center');",
+    logoutProof,
+  );
+  const accountBeforeLogout = journey.lastIndexOf(
+    "await openMenuRoute('settings', '계정', '/account');",
+    logoutProof,
+  );
+  const pendingReadDrainBeforeLogout = journey.indexOf(
+    'await waitForPendingPersonalIntegrationReads(page);',
+    accountBeforeLogout,
+  );
   const postLogoutProof = journey.indexOf('protected API must remain denied after strict full-product session loss');
+
   expect(logoutProof).toBeGreaterThan(reloadProof);
+  expect(researchBeforeLogout).toBeGreaterThan(reloadProof);
+  expect(accountBeforeLogout).toBeGreaterThan(researchBeforeLogout);
+  expect(pendingReadDrainBeforeLogout).toBeGreaterThan(accountBeforeLogout);
+  expect(pendingReadDrainBeforeLogout).toBeLessThan(logoutProof);
   expect(postLogoutProof).toBeGreaterThan(logoutProof);
 });
 
