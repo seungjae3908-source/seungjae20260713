@@ -100,5 +100,5 @@ export function requireSpotCryptoTickerResponse(
   if (!payload.tickers.every(isSpotTickerRow)) {
     throw new Error('INVALID_SPOT_CRYPTO_TICKER_RESPONSE');
   }
-  return payload as SpotCryptoTickerResponse;
+  return payload as unknown as SpotCryptoTickerResponse;
 }
