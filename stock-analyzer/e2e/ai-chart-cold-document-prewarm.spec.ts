@@ -2,8 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
 
-test('direct AI Chart prewarm starts app, route, and renderer graphs after the root exists', () => {
-  const html = fs.readFileSync(path.resolve(process.cwd(), 'index.html'), 'utf8');
+test('direct AI Chart prewarm prioritizes the route before app and renderer graphs after the root exists', () => {
+  const html = fs
+    .readFileSync(path.resolve(process.cwd(), 'index.html'), 'utf8')
+    .replace(/\r\n?/g, '\n');
   const appEntryImport = "void import('/src/main.tsx');";
   const routePrewarmImport = "void import('/src/pages/ai-chart.tsx');";
   const rendererPrewarmImport = "void import('/src/components/unified-analysis-chart.tsx');";
@@ -23,9 +25,9 @@ test('direct AI Chart prewarm starts app, route, and renderer graphs after the r
   for (const script of moduleScripts) {
     expect(script, 'the canonical app entry must retain native module defer ordering').not.toMatch(/\sasync(?:\s|>)/);
   }
-  expect(html.indexOf(root)).toBeLessThan(html.indexOf(appEntryImport));
-  expect(html.indexOf(appEntryImport)).toBeLessThan(html.indexOf(routePrewarmImport));
-  expect(html.indexOf(routePrewarmImport)).toBeLessThan(html.indexOf(rendererPrewarmImport));
+  expect(html.indexOf(root)).toBeLessThan(html.indexOf(routePrewarmImport));
+  expect(html.indexOf(routePrewarmImport)).toBeLessThan(html.indexOf(appEntryImport));
+  expect(html.indexOf(appEntryImport)).toBeLessThan(html.indexOf(rendererPrewarmImport));
 });
 
 test('direct AI Chart shell does not statically wait for the chart renderer graph', () => {
