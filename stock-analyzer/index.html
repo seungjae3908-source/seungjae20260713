@@ -25,12 +25,13 @@
 	<body>
 		<div id="root"></div>
 		<script type="module">
-			if (window.location.pathname.endsWith('/ai-chart')) {
-				void import('/src/pages/ai-chart.tsx');
-			}
+			const directAiChartRoute = window.location.pathname.endsWith('/ai-chart');
+			const aiChartRoutePrewarm = directAiChartRoute
+				? import('/src/pages/ai-chart.tsx')
+				: null;
 			void import('/src/main.tsx');
-			if (window.location.pathname.endsWith('/ai-chart')) {
-				void import('/src/components/unified-analysis-chart.tsx');
+			if (aiChartRoutePrewarm) {
+				void aiChartRoutePrewarm.then(() => import('/src/components/unified-analysis-chart.tsx'));
 			}
 		</script>
 	</body>
