@@ -2,21 +2,24 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
 
-test('direct AI Chart prewarm prioritizes the route before app and renderer graphs after the root exists', () => {
+test('direct AI Chart prewarm prioritizes the route and defers renderer contention until the route graph is ready', () => {
   const html = fs
     .readFileSync(path.resolve(process.cwd(), 'index.html'), 'utf8')
     .replace(/\r\n?/g, '\n');
   const appEntryImport = "void import('/src/main.tsx');";
-  const routePrewarmImport = "void import('/src/pages/ai-chart.tsx');";
-  const rendererPrewarmImport = "void import('/src/components/unified-analysis-chart.tsx');";
-  const prewarmGuard = "window.location.pathname.endsWith('/ai-chart')";
+  const routePrewarmImport = "import('/src/pages/ai-chart.tsx')";
+  const rendererPrewarmImport = "import('/src/components/unified-analysis-chart.tsx')";
+  const prewarmGuard = "const directAiChartRoute = window.location.pathname.endsWith('/ai-chart');";
+  const routePromise = 'const aiChartRoutePrewarm = directAiChartRoute';
+  const rendererSequence = "void aiChartRoutePrewarm.then(() => import('/src/components/unified-analysis-chart.tsx'));";
   const root = '<div id="root"></div>';
   const moduleScripts = html.match(/<script\s+type="module"[^>]*>/g) ?? [];
 
   expect(html).toContain(prewarmGuard);
+  expect(html).toContain(routePromise);
   expect(html).toContain(appEntryImport);
   expect(html).toContain(routePrewarmImport);
-  expect(html).toContain(rendererPrewarmImport);
+  expect(html).toContain(rendererSequence);
   expect(html.match(/import\('\/src\/main\.tsx'\)/g)).toHaveLength(1);
   expect(html.match(/import\('\/src\/pages\/ai-chart\.tsx'\)/g)).toHaveLength(1);
   expect(html.match(/import\('\/src\/components\/unified-analysis-chart\.tsx'\)/g)).toHaveLength(1);
@@ -25,9 +28,11 @@ test('direct AI Chart prewarm prioritizes the route before app and renderer grap
   for (const script of moduleScripts) {
     expect(script, 'the canonical app entry must retain native module defer ordering').not.toMatch(/\sasync(?:\s|>)/);
   }
-  expect(html.indexOf(root)).toBeLessThan(html.indexOf(routePrewarmImport));
+  expect(html.indexOf(root)).toBeLessThan(html.indexOf(prewarmGuard));
+  expect(html.indexOf(prewarmGuard)).toBeLessThan(html.indexOf(routePrewarmImport));
   expect(html.indexOf(routePrewarmImport)).toBeLessThan(html.indexOf(appEntryImport));
-  expect(html.indexOf(appEntryImport)).toBeLessThan(html.indexOf(rendererPrewarmImport));
+  expect(html.indexOf(appEntryImport)).toBeLessThan(html.indexOf(rendererSequence));
+  expect(rendererPrewarmImport).toBeTruthy();
 });
 
 test('direct AI Chart shell does not statically wait for the chart renderer graph', () => {
