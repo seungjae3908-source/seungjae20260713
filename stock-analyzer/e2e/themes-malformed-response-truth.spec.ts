@@ -70,10 +70,16 @@ test('missing or cross-market investment facts fail closed before classification
   ).toThrow('INVALID_THEMES_RESPONSE');
 });
 
-test('themes page validates transport payload before legitimate empty-state rendering', () => {
-  const page = fs.readFileSync(path.resolve(process.cwd(), 'src/pages/themes.tsx'), 'utf8');
-  expect(page).toContain('requireThemesData(await api.themes(market), market)');
-  expect(page).toContain('themesQuery.isError');
-  expect(page).toContain('themesQuery.data && themes.length === 0');
-  expect(page).not.toContain('(stock.changePercent ?? 0) >= 0');
+test('every theme consumer validates transport payload before legitimate empty-state rendering', () => {
+  const themesPage = fs.readFileSync(path.resolve(process.cwd(), 'src/pages/themes.tsx'), 'utf8');
+  const stocksPage = fs.readFileSync(path.resolve(process.cwd(), 'src/pages/stocks.tsx'), 'utf8');
+
+  expect(themesPage).toContain('requireThemesData(await api.themes(market), market)');
+  expect(themesPage).toContain('themesQuery.isError');
+  expect(themesPage).toContain('themesQuery.data && themes.length === 0');
+  expect(themesPage).not.toContain('(stock.changePercent ?? 0) >= 0');
+
+  expect(stocksPage).toContain('requireThemesData(await api.themes(mode.stockMarket), mode.stockMarket)');
+  expect(stocksPage).toContain('if (themes.isError)');
+  expect(stocksPage).toContain('const groups = themes.data?.themes ?? []');
 });
