@@ -9,8 +9,10 @@ const emptySectors = {
   sectors: [],
 };
 
+const briefingAsOf = '2026-09-08T16:00:00.000Z';
+const briefingNowMs = Date.parse('2026-09-08T16:02:00.000Z');
 const briefing = {
-  asOf: '2026-09-08T16:00:00.000Z',
+  asOf: briefingAsOf,
   mood: 'neutral' as const,
   headline: '근거 확인 중',
   lines: [],
@@ -34,9 +36,24 @@ test('malformed sector HTTP 200 cannot become safe-looking empty sector state', 
 });
 
 test('malformed briefing HTTP 200 fails closed before headline/lines rendering', () => {
-  expect(requireBriefing(briefing)).toEqual(briefing);
-  expect(() => requireBriefing({ ...briefing, lines: undefined })).toThrow('INVALID_BRIEFING_RESPONSE');
-  expect(() => requireBriefing({ ...briefing, asOf: 'not-a-time' })).toThrow('INVALID_BRIEFING_RESPONSE');
+  expect(requireBriefing(briefing, briefingNowMs)).toEqual(briefing);
+  expect(() => requireBriefing({ ...briefing, lines: undefined }, briefingNowMs)).toThrow('INVALID_BRIEFING_RESPONSE');
+  expect(() => requireBriefing({ ...briefing, asOf: 'not-a-time' }, briefingNowMs)).toThrow('INVALID_BRIEFING_RESPONSE');
+});
+
+test('stale or future briefing HTTP 200 fails closed instead of looking current', () => {
+  expect(() =>
+    requireBriefing(
+      { ...briefing, asOf: new Date(briefingNowMs - 5 * 60 * 1000 - 1).toISOString() },
+      briefingNowMs,
+    ),
+  ).toThrow('INVALID_BRIEFING_RESPONSE');
+  expect(() =>
+    requireBriefing(
+      { ...briefing, asOf: new Date(briefingNowMs + 5 * 1000 + 1).toISOString() },
+      briefingNowMs,
+    ),
+  ).toThrow('INVALID_BRIEFING_RESPONSE');
 });
 
 test('market overview validates sector and briefing feeds before empty/content rendering', () => {
