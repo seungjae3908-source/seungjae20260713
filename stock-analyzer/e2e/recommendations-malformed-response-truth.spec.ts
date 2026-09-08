@@ -42,6 +42,17 @@ test('malformed HTTP 200 recommendation envelope fails closed instead of becomin
       'KR',
     ),
   ).toThrow('INVALID_RECOMMENDATION_RESPONSE');
+
+  expect(() =>
+    requireRecommendationResponse(
+      {
+        ...validEnvelope,
+        analysisMode: 'ai',
+        aiConfigured: true,
+      },
+      'KR',
+    ),
+  ).toThrow('INVALID_RECOMMENDATION_RESPONSE');
 });
 
 test('malformed recommendation rows fail closed before investment facts are rendered', () => {
@@ -56,7 +67,7 @@ test('malformed recommendation rows fail closed before investment facts are rend
             market: 'KR',
             currency: 'KRW',
             category: 'undervalued',
-            categoryLabel: '저평가',
+            categoryLabel: '저평가 후보',
             price: 'not-a-price',
             changePercent: null,
             reasons: ['근거'],
@@ -85,14 +96,31 @@ test('malformed recommendation rows fail closed before investment facts are rend
       'KR',
     ),
   ).toThrow('INVALID_RECOMMENDATION_RESPONSE');
+
+  expect(() =>
+    requireRecommendationResponse(
+      {
+        ...validEnvelope,
+        excludedCount: 1,
+        excludedBreakdown: {},
+      },
+      'KR',
+    ),
+  ).toThrow('INVALID_RECOMMENDATION_RESPONSE');
 });
 
-test('recommendation page validates unknown transport payload before empty-state rendering', () => {
-  const page = fs.readFileSync(path.resolve(process.cwd(), 'src/pages/recommendations.tsx'), 'utf8');
+test('every recommendation consumer validates unknown transport payload before empty-state rendering', () => {
+  const recommendationsPage = fs.readFileSync(path.resolve(process.cwd(), 'src/pages/recommendations.tsx'), 'utf8');
+  const stocksPage = fs.readFileSync(path.resolve(process.cwd(), 'src/pages/stocks.tsx'), 'utf8');
 
-  expect(page).toContain('await apiGet<unknown>(`/market/recommendations?market=${market}`)');
-  expect(page).toContain('requireRecommendationResponse<RecoResponse>');
-  expect(page).toContain('query.isError');
-  expect(page).toContain('!query.isLoading && !query.isError && rows.length === 0');
-  expect(page).toContain('조건 미달 종목으로 채우지 않습니다.');
+  expect(recommendationsPage).toContain('await apiGet<unknown>(`/market/recommendations?market=${market}`)');
+  expect(recommendationsPage).toContain('requireRecommendationResponse<RecoResponse>');
+  expect(recommendationsPage).toContain('query.isError');
+  expect(recommendationsPage).toContain('!query.isLoading && !query.isError && rows.length === 0');
+  expect(recommendationsPage).toContain('조건 미달 종목으로 채우지 않습니다.');
+
+  expect(stocksPage).toContain('await apiGet<unknown>(`/market/recommendations?market=${mode.stockMarket}`)');
+  expect(stocksPage).toContain('requireRecommendationResponse<RecoResponse>');
+  expect(stocksPage).toContain('if (recommendations.isError)');
+  expect(stocksPage).toContain('const rows = recommendations.data?.rows ?? []');
 });

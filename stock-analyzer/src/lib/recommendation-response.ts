@@ -1,7 +1,10 @@
 type RecommendationMarket = 'KR' | 'US';
 
 const CATEGORY_VALUES = new Set(['undervalued', 'breakout']);
-const CURRENCY_VALUES = new Set(['KRW', 'USD']);
+const CATEGORY_LABELS = {
+  undervalued: '저평가 후보',
+  breakout: '초기 추세돌파 후보',
+} as const;
 const RISK_VALUES = new Set(['LOW', 'MEDIUM', 'HIGH']);
 const DATA_QUALITY_VALUES = new Set(['sufficient', 'partial', 'insufficient', 'stale']);
 const FINANCIAL_STABILITY_VALUES = new Set(['안정', '보통', '불안정', '판단 불가']);
@@ -52,8 +55,12 @@ function isRecommendationRow(value: unknown, expectedMarket: RecommendationMarke
 
   if (!isNonEmptyString(value.ticker) || !isNonEmptyString(value.name)) return false;
   if (value.market !== expectedMarket) return false;
-  if (!CURRENCY_VALUES.has(String(value.currency))) return false;
-  if (!CATEGORY_VALUES.has(String(value.category)) || !isNonEmptyString(value.categoryLabel)) return false;
+  if (value.currency !== (expectedMarket === 'KR' ? 'KRW' : 'USD')) return false;
+  if (!CATEGORY_VALUES.has(String(value.category))) return false;
+  if (
+    value.categoryLabel
+      !== CATEGORY_LABELS[value.category as keyof typeof CATEGORY_LABELS]
+  ) return false;
   if (!isPositiveNumber(value.price) || !isNullableFiniteNumber(value.changePercent)) return false;
   if (!isStringArray(value.reasons) || value.reasons.length === 0) return false;
   if (!isStringArray(value.usedData) || !isStringArray(value.missingData) || !isStringArray(value.risks)) return false;
@@ -88,9 +95,9 @@ export function requireRecommendationResponse<T>(
   if (!isRecord(payload)) throw new Error('INVALID_RECOMMENDATION_RESPONSE');
   if (payload.ok !== true) throw new Error('INVALID_RECOMMENDATION_RESPONSE');
   if (payload.market !== expectedMarket) throw new Error('INVALID_RECOMMENDATION_RESPONSE');
-  if (!isNonEmptyString(payload.provider)) throw new Error('INVALID_RECOMMENDATION_RESPONSE');
-  if (!isNonEmptyString(payload.analysisMode)) throw new Error('INVALID_RECOMMENDATION_RESPONSE');
-  if (typeof payload.aiConfigured !== 'boolean') throw new Error('INVALID_RECOMMENDATION_RESPONSE');
+  if (payload.provider !== 'rule-based-engine') throw new Error('INVALID_RECOMMENDATION_RESPONSE');
+  if (payload.analysisMode !== 'rule-based') throw new Error('INVALID_RECOMMENDATION_RESPONSE');
+  if (payload.aiConfigured !== false) throw new Error('INVALID_RECOMMENDATION_RESPONSE');
   if (!isNonEmptyString(payload.analysisDescription)) throw new Error('INVALID_RECOMMENDATION_RESPONSE');
   if (!isTimestamp(payload.generatedAt)) throw new Error('INVALID_RECOMMENDATION_RESPONSE');
   if (!Array.isArray(payload.rows)) throw new Error('INVALID_RECOMMENDATION_RESPONSE');
@@ -98,6 +105,12 @@ export function requireRecommendationResponse<T>(
     throw new Error('INVALID_RECOMMENDATION_RESPONSE');
   }
   if (!isExcludedBreakdown(payload.excludedBreakdown)) throw new Error('INVALID_RECOMMENDATION_RESPONSE');
+  if (
+    Object.values(payload.excludedBreakdown).reduce((sum, count) => sum + count, 0)
+      !== payload.excludedCount
+  ) {
+    throw new Error('INVALID_RECOMMENDATION_RESPONSE');
+  }
   if (!isNonEmptyString(payload.dataQualityNote)) throw new Error('INVALID_RECOMMENDATION_RESPONSE');
   if (!payload.rows.every((row) => isRecommendationRow(row, expectedMarket))) {
     throw new Error('INVALID_RECOMMENDATION_RESPONSE');
