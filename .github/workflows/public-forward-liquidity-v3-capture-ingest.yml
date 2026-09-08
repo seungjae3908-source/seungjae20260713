@@ -64,6 +64,15 @@ jobs:
           market-intelligence-sidecar/tests/public-forward-liquidity-v3-capture-ingest.test.mjs
           market-intelligence-sidecar/tests/public-forward-liquidity-capture-ingest.test.mjs
 
+      - name: Verify cumulative V3 history pagination contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          WORKFLOW='.github/workflows/public-forward-liquidity-v3-capture-ingest.yml'
+          grep -Fq 'gh api --paginate --slurp' "$WORKFLOW"
+          grep -Fq "throw new Error('V3_RUN_HISTORY_PAGINATION_INVALID')" "$WORKFLOW"
+          grep -Fq 'pages.flatMap((page) => Array.isArray(page?.workflow_runs) ? page.workflow_runs : [])' "$WORKFLOW"
+
       - name: Verify fail-closed V3 authority boundary
         shell: bash
         run: |
@@ -176,14 +185,18 @@ jobs:
           set -euo pipefail
           mkdir -p "$SOURCE_ROOT" "$STATE_ROOT"
           workflow_id="$(node -p "JSON.parse(require('fs').readFileSync(process.env.RUNNER_TEMP + '/source-run.json','utf8')).workflow_id")"
-          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_id}/runs?event=schedule&branch=main&per_page=100" > "$RUNNER_TEMP/v3-runs.json"
+          gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_id}/runs?event=schedule&branch=main&per_page=100" \
+            > "$RUNNER_TEMP/v3-runs.json"
           node - <<'NODE' > "$RUNNER_TEMP/candidate-runs.txt"
           const fs = require('node:fs');
           const source = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/source-run.json', 'utf8'));
-          const listing = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/v3-runs.json', 'utf8'));
+          const pages = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/v3-runs.json', 'utf8'));
+          if (!Array.isArray(pages) || pages.length === 0) throw new Error('V3_RUN_HISTORY_PAGINATION_INVALID');
+          const listedRuns = pages.flatMap((page) => Array.isArray(page?.workflow_runs) ? page.workflow_runs : []);
           const limit = Date.parse(source.run_started_at ?? source.created_at);
           if (!Number.isFinite(limit)) throw new Error('SOURCE_RUN_TIME_INVALID');
-          const runs = (listing.workflow_runs ?? [])
+          const runs = listedRuns
             .filter((run) => run.name === source.name
               && run.event === 'schedule'
               && run.status === 'completed'
