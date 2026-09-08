@@ -132,7 +132,19 @@ async function installNonSearchApiMocks(page: Page) {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ ok: true, market, rows: [] }),
+      body: JSON.stringify({
+        ok: true,
+        provider: 'rule-based-engine',
+        analysisMode: 'rule-based',
+        aiConfigured: false,
+        analysisDescription: '검색 경로 검증 fixture',
+        market,
+        generatedAt: now,
+        rows: [],
+        excludedCount: 0,
+        excludedBreakdown: {},
+        dataQualityNote: '검증 fixture',
+      }),
     });
   });
 }
