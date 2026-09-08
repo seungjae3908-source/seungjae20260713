@@ -25,9 +25,11 @@
 	<body>
 		<div id="root"></div>
 		<script type="module">
-			void import('/src/main.tsx');
 			if (window.location.pathname.endsWith('/ai-chart')) {
 				void import('/src/pages/ai-chart.tsx');
+			}
+			void import('/src/main.tsx');
+			if (window.location.pathname.endsWith('/ai-chart')) {
 				void import('/src/components/unified-analysis-chart.tsx');
 			}
 		</script>
