@@ -2,26 +2,31 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
 
-test('direct AI Chart prewarm prioritizes the route and defers renderer contention until the route graph is ready', () => {
+test('direct AI Chart prewarm prioritizes the route and starts the renderer when its largest shared dependency is ready', () => {
   const html = fs
     .readFileSync(path.resolve(process.cwd(), 'index.html'), 'utf8')
     .replace(/\r\n?/g, '\n');
   const appEntryImport = "void import('/src/main.tsx');";
   const routePrewarmImport = "import('/src/pages/ai-chart.tsx')";
+  const sharedDataPrewarmImport = "import('/src/lib/unified-chart-data.ts')";
   const rendererPrewarmImport = "import('/src/components/unified-analysis-chart.tsx')";
   const prewarmGuard = "const directAiChartRoute = window.location.pathname.endsWith('/ai-chart');";
   const routePromise = 'const aiChartRoutePrewarm = directAiChartRoute';
-  const rendererSequence = "void aiChartRoutePrewarm.then(() => import('/src/components/unified-analysis-chart.tsx'));";
+  const sharedDataPromise = 'const aiChartSharedDataPrewarm = directAiChartRoute';
+  const rendererSequence = "void aiChartSharedDataPrewarm.then(() => import('/src/components/unified-analysis-chart.tsx'));";
   const root = '<div id="root"></div>';
   const moduleScripts = html.match(/<script\s+type="module"[^>]*>/g) ?? [];
 
   expect(html).toContain(prewarmGuard);
   expect(html).toContain(routePromise);
+  expect(html).toContain(sharedDataPromise);
   expect(html).toContain(appEntryImport);
   expect(html).toContain(routePrewarmImport);
+  expect(html).toContain(sharedDataPrewarmImport);
   expect(html).toContain(rendererSequence);
   expect(html.match(/import\('\/src\/main\.tsx'\)/g)).toHaveLength(1);
   expect(html.match(/import\('\/src\/pages\/ai-chart\.tsx'\)/g)).toHaveLength(1);
+  expect(html.match(/import\('\/src\/lib\/unified-chart-data\.tsx?'\)/g)).toHaveLength(1);
   expect(html.match(/import\('\/src\/components\/unified-analysis-chart\.tsx'\)/g)).toHaveLength(1);
   expect(html).not.toMatch(/rel="modulepreload"[^>]+href="[^"]+\.tsx(?:\?|\")/);
   expect(moduleScripts).toHaveLength(1);
@@ -30,7 +35,8 @@ test('direct AI Chart prewarm prioritizes the route and defers renderer contenti
   }
   expect(html.indexOf(root)).toBeLessThan(html.indexOf(prewarmGuard));
   expect(html.indexOf(prewarmGuard)).toBeLessThan(html.indexOf(routePrewarmImport));
-  expect(html.indexOf(routePrewarmImport)).toBeLessThan(html.indexOf(appEntryImport));
+  expect(html.indexOf(routePrewarmImport)).toBeLessThan(html.indexOf(sharedDataPrewarmImport));
+  expect(html.indexOf(sharedDataPrewarmImport)).toBeLessThan(html.indexOf(appEntryImport));
   expect(html.indexOf(appEntryImport)).toBeLessThan(html.indexOf(rendererSequence));
   expect(rendererPrewarmImport).toBeTruthy();
 });
