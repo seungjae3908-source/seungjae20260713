@@ -12,6 +12,8 @@ export interface PromotionStage {
   source: string;
   provider: string | null;
   sourceSha: string | null;
+  datasetId: string | null;
+  dataRange: { start: string; end: string } | null;
   sampleSize: number | null;
   sampleCount: number | null;
   tradeCount: number | null;
