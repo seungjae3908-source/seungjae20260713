@@ -4,6 +4,7 @@ import { useLocation } from 'wouter';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, RefreshCw, ShieldAlert, TrendingUp } from 'lucide-react';
 import { apiGet } from '@/lib/api';
+import { requireRecommendationResponse } from '@/lib/recommendation-response';
 import { cn } from '@/lib/utils';
 import { BottomNav } from '@/components/bottom-nav';
 import {
@@ -77,7 +78,11 @@ export default function RecommendationsPage() {
 
   const query = useQuery({
     queryKey: ['recommendations', market],
-    queryFn: () => apiGet<RecoResponse>(`/market/recommendations?market=${market}`),
+    queryFn: async () =>
+      requireRecommendationResponse<RecoResponse>(
+        await apiGet<unknown>(`/market/recommendations?market=${market}`),
+        market,
+      ),
     staleTime: 60_000,
     refetchInterval: 5 * 60_000,
   });
