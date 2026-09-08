@@ -5,6 +5,7 @@ import {
   APP_API_SESSION_TIMEOUT_MS,
   withFiniteDeadline,
 } from '@/lib/auth-bootstrap';
+import { requireSpotCryptoTickerResponse } from '@/lib/crypto-ticker-response';
 
 // The stock Market Information backend intentionally returns a bounded partial
 // first paint after 4 seconds. Keep the client transport guard outside that
@@ -25,6 +26,20 @@ function requestPath(input: RequestInfo | URL): string {
     return new URL(raw, window.location.origin).pathname;
   } catch {
     return '';
+  }
+}
+
+async function validateInvestmentResponse(
+  input: RequestInfo | URL,
+  response: Response,
+): Promise<Response> {
+  if (!response.ok || !requestPath(input).endsWith('/crypto/spot/tickers')) return response;
+
+  try {
+    requireSpotCryptoTickerResponse(await response.clone().json());
+    return response;
+  } catch {
+    throw new Error('INVALID_SPOT_CRYPTO_TICKER_RESPONSE');
   }
 }
 
@@ -91,7 +106,8 @@ export async function authorizedFetch(
       );
 
     try {
-      return await fetch(input, { ...init, headers, signal: controller.signal });
+      const response = await fetch(input, { ...init, headers, signal: controller.signal });
+      return await validateInvestmentResponse(input, response);
     } catch (error) {
       if (marketInformationRequest && timedOut && !signal?.aborted) {
         return new Response(JSON.stringify({
