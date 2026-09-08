@@ -26,7 +26,7 @@ function recommendationRow(index: number) {
     market: 'KR',
     currency: 'KRW',
     category: 'undervalued',
-    categoryLabel: '저평가',
+    categoryLabel: '저평가 후보',
     price: 75_000 + index,
     changePercent: 0.5,
     reasons: ['실데이터 기반 검증 fixture'],
@@ -34,7 +34,7 @@ function recommendationRow(index: number) {
     missingData: [],
     risks: [],
     overheated: false,
-    financialStability: '확인',
+    financialStability: '안정',
     newsRisk: '낮음',
     riskLevel: 'LOW',
     shortTermOutlook: '중립',
@@ -162,8 +162,8 @@ async function installApprovedRuntime(page: Page, recommendationCount = 0) {
     if (url.pathname === '/api/market/recommendations') {
       return fulfill(route, {
         ok: true,
-        provider: 'fixture',
-        analysisMode: 'rules',
+        provider: 'rule-based-engine',
+        analysisMode: 'rule-based',
         aiConfigured: false,
         analysisDescription: '레이아웃 검증 fixture',
         market: 'KR',

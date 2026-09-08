@@ -8,6 +8,7 @@ import { ErrorState, LoadingState } from '@/components/data-state';
 import { UnifiedAssetSearch } from '@/components/unified-asset-search';
 import { api, apiGet } from '@/lib/api';
 import { useAssetMode } from '@/lib/asset-mode';
+import { requireRecommendationResponse } from '@/lib/recommendation-response';
 import { displayCoinName, displayStockName, formatAppPercent, formatAppPrice } from '@/lib/stock-display';
 import { unifiedAssetDetailPath } from '@/lib/unified-asset-search';
 import { cn } from '@/lib/utils';
@@ -91,7 +92,11 @@ export default function StocksPage() {
 
   const recommendations = useQuery({
     queryKey: ['stocks-cat-reco', mode.stockMarket],
-    queryFn: () => apiGet<RecoResponse>(`/market/recommendations?market=${mode.stockMarket}`),
+    queryFn: async () =>
+      requireRecommendationResponse<RecoResponse>(
+        await apiGet<unknown>(`/market/recommendations?market=${mode.stockMarket}`),
+        mode.stockMarket,
+      ),
     enabled: isStock && category === 'ai' && !searching,
     staleTime: 60_000,
   });
