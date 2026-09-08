@@ -61,3 +61,15 @@ test("canonical Rule0 1h fingerprint includes prediction, collection and settlem
   for (const requiredPath of required) assert.equal(paths.has(requiredPath), true, `missing ${requiredPath}`);
   assert.match(result.fingerprint, /^[0-9a-f]{64}$/);
 });
+
+test("Rule0 shadow artifact namespace advances with the immutable chain contract", () => {
+  const workflowPath = path.join(repoRoot, ".github/workflows/prediction-lab-rule0-1h-shadow-sidecar.yml");
+  const workflow = fs.readFileSync(workflowPath, "utf8");
+  const artifactVersion = workflow.match(/ARTIFACT_NAME: prediction-lab-rule0-1h-shadow-state-v(\d+)/)?.[1];
+  const contractVersion = workflow.match(/CHAIN_CONTRACT: rule0-1h-artifact-chain-v(\d+)/)?.[1];
+  assert.ok(artifactVersion, "artifact chain version missing");
+  assert.equal(contractVersion, artifactVersion, "artifact and chain contract versions must match");
+  assert.ok(Number(artifactVersion) >= 5, "execution dependency drift must not reuse the v4 chain");
+  assert.match(workflow, /execution dependency changed; start a separately versioned chain/);
+  assert.match(workflow, /cron: "7 \*\/2 \* \* \*"/);
+});
