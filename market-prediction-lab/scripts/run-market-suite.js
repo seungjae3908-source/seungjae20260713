@@ -7,6 +7,7 @@ import { repairBitgetCandleGaps } from "../src/candle-gap-repair.js";
 import { verifyLiveCollection } from "../src/live-collection-verifier.js";
 import { normalizeCandleRows } from "../src/normalizers.js";
 import { buildTrainingRecords } from "../src/training-dataset.js";
+import { requiredInferenceEvidenceFeatures } from "../src/engine.js";
 import { walkForwardSplit } from "../src/walk-forward.js";
 import { exportWalkForwardDataset, materializeExactTrainValidationSplits } from "../src/dataset-export.js";
 import {
@@ -409,9 +410,57 @@ const reportPath = resolve(process.argv[3] ?? "docs/market-suite-result.json");
 const candidateRoot = resolve(process.argv[4] ?? "docs/candidate-models");
 const suiteEndTime = Date.now();
 const suiteStartedAt = Date.now();
-const client = new BitgetPublicClient({ minIntervalMs: 160, maxRetries: 4, timeoutMs: 12_000 });
-const datasets = [];
-const datasetResults = [];
+const evidenceByMarket = Object.fromEntries([...new Set(SUITE_SPECS.map((spec) => spec.market))]
+  .map((market) => [market, requiredInferenceEvidenceFeatures(market)]));
+const historicalEvidenceBlockers = [...new Set(Object.values(evidenceByMarket).flat())]
+  .map((featureName) => `MISSING_TEMPORAL_REQUIRED_FEATURE_EVIDENCE:${featureName}`)
+  .sort();
+
+if (historicalEvidenceBlockers.length > 0) {
+  const report = {
+    schemaVersion: 1,
+    status: "data_blocked",
+    stage: "required_inference_evidence_preflight",
+    verifiedAt: Date.now(),
+    durationMs: Date.now() - suiteStartedAt,
+    source: "github-actions-isolated-multi-market-suite",
+    suiteEndTime,
+    blockers: historicalEvidenceBlockers,
+    evidenceByMarket,
+    datasets: SUITE_SPECS.map((spec) => ({
+      id: spec.id,
+      status: "data_blocked",
+      market: spec.market,
+      symbol: spec.symbol,
+      timeframe: spec.timeframe,
+      requestedDays: spec.days,
+      missingRequiredFeatures: evidenceByMarket[spec.market],
+    })),
+    models: Object.fromEntries([...new Set(SUITE_SPECS.map((spec) => spec.group))]
+      .map((group) => [group, { status: "not_trained", reason: "required_temporal_inference_evidence_missing" }])),
+    inferenceEvaluation: {
+      status: "NOT_EVALUABLE",
+      modelObservationEligible: false,
+      policyCreditEligible: false,
+      economicCreditGranted: false,
+      syntheticImputationUsed: false,
+      zeroImputationUsed: false,
+    },
+    safety: {
+      externalRuntimeDependencies: 0,
+      usesPublicMarketDataOnly: true,
+      usesAccountOrOrderApi: false,
+      modifiesExistingAppApi: false,
+      modelDeployment: false,
+      trainingMode: "blocked-before-training",
+    },
+  };
+  await writeJsonAtomically(reportPath, report);
+  console.log(JSON.stringify(report, null, 2));
+} else {
+  const client = new BitgetPublicClient({ minIntervalMs: 160, maxRetries: 4, timeoutMs: 12_000 });
+  const datasets = [];
+  const datasetResults = [];
 
 for (const spec of SUITE_SPECS) {
   try {
@@ -499,6 +548,7 @@ const report = {
 };
 await writeJsonAtomically(reportPath, report);
 console.log(JSON.stringify(report, null, 2));
-if (report.status !== "pass") process.exitCode = 1;
+  if (report.status !== "pass") process.exitCode = 1;
+}
 
 export { SUITE_SPECS };
