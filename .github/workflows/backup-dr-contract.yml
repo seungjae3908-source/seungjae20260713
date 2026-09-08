@@ -5,6 +5,7 @@ on:
     paths:
       - 'ops/backup-dr/**'
       - '.github/workflows/backup-dr-contract.yml'
+      - '.github/workflows/backup-dr-one-time-restore-drill.yml'
 
 permissions:
   contents: read
@@ -40,6 +41,10 @@ jobs:
           node --check ops/backup-dr/copy-encrypted-backup-offsite.mjs
           node --check ops/backup-dr/restore-encrypted-postgres-backup-drill.mjs
           node --check ops/backup-dr/contract.test.mjs
+          node --check ops/backup-dr/one-time-restore-drill-contract.test.mjs
 
       - name: Validate fail-closed backup DR contract
-        run: node ops/backup-dr/contract.test.mjs
+        run: |
+          set -Eeuo pipefail
+          node ops/backup-dr/contract.test.mjs
+          node ops/backup-dr/one-time-restore-drill-contract.test.mjs
