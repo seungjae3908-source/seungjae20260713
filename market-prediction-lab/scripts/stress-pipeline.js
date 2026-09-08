@@ -16,7 +16,19 @@ for (const [market, symbol, timeframe, format] of cases) {
   const candles = generateCandles({ count: 1600, timeframe, drift: market.includes("STOCK") ? 0.00025 : 0.00005, volatility: market.includes("CRYPTO") ? 0.012 : 0.006 });
   const rows = format === "bitget-array" ? toBitgetRows(candles) : candles;
   const snapshot = normalizeCandleRows(rows, { market, symbol, timeframe, format, source: "stress" });
-  const records = buildTrainingRecords(snapshot, { lookback: 200, horizon: 10, stride: 3 });
+  const records = buildTrainingRecords(snapshot, {
+    lookback: 200,
+    horizon: 10,
+    stride: 3,
+    marketFeatures: {
+      sentimentScore: 0,
+      benchmarkReturn: 0,
+      ...(market.includes("STOCK") ? { foreignNetRatio: 0, institutionNetRatio: 0 } : {}),
+    },
+    derivativesFeatures: market === "CRYPTO_FUTURES"
+      ? { openInterestChange: 0, fundingRate: 0, longShortRatio: 1 }
+      : {},
+  });
   const split = walkForwardSplit(records);
   if (!(split.report.trainLastFutureTimestamp < split.report.validationFirstAnchorTimestamp)) throw new Error("train/validation leakage detected");
   if (!(split.report.validationLastFutureTimestamp < split.report.testFirstAnchorTimestamp)) throw new Error("validation/test leakage detected");
