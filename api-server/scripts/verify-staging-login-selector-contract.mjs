@@ -90,9 +90,13 @@ assert(logoutBlock.includes('.filter((request) => isLogoutScopedRead(request, or
 const inheritedReadIndex = logoutBlock.indexOf('[...(pendingApiGetRequests.get(page) ?? [])]');
 const observationOpenIndex = logoutBlock.indexOf('activeLogoutObservations.set(page, observation);');
 assert(inheritedReadIndex >= 0 && observationOpenIndex > inheritedReadIndex, 'pending request identities must be frozen before the active logout observation opens');
+assert(
+  !logoutBlock.slice(inheritedReadIndex, observationOpenIndex).includes('await '),
+  'pending-read snapshot and active logout observation must remain one synchronous run-to-completion handoff',
+);
 assert(spec.includes('logoutObservation.candidates.push(diagnostic);'), 'matching logout aborts must be held as candidates first');
 assert(spec.includes('return isLogoutScopedRead(request, expectedOrigin);'), 'read-only integration drain must reuse the exact enumerated same-origin GET classifier');
-assert(spec.includes('logoutObservation.logoutScopedReads.add(request);'), 'only an exact logout-scoped request observed during the explicit logout window may become a delayed candidate');
+assert(spec.includes('logoutObservation.logoutScopedReads.add(request);'), 'exact logout-scoped requests starting during the explicit window must join the same identity set as the pre-existing pending seed');
 assert(spec.includes('observation.logoutScopedReads.has(request)'), 'active abort classification must require exact request identity');
 assert(spec.includes('confirmedLogoutAbortRequests.get(request)'), 'delayed abort classification must require an exact confirmed request identity');
 assert(spec.includes('routeObservation.candidates.push(diagnostic);'), 'matching route-transition aborts must be held as candidates first');
