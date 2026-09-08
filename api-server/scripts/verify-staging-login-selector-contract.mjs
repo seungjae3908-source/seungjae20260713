@@ -81,6 +81,15 @@ const visibleIndex = spec.indexOf('const logoutButton = await expectVisibleLogou
 const observationIndex = spec.indexOf('activeLogoutObservations.set(page, observation);', logoutStart);
 const clickIndex = spec.indexOf('await logoutButton.click();', logoutStart);
 assert(logoutStart >= 0 && visibleIndex > logoutStart && observationIndex > visibleIndex && clickIndex > observationIndex, 'expected window must open only after a deterministic visible logout action is resolved and immediately around its explicit click');
+const logoutEnd = spec.indexOf('\nasync function expectMembership(', logoutStart);
+assert(logoutEnd > logoutStart, 'logout helper boundaries are missing');
+const logoutBlock = spec.slice(logoutStart, logoutEnd);
+assert(logoutBlock.includes('const origin = new URL(page.url()).origin;'), 'logout must freeze the same-origin identity before observing scoped reads');
+assert(logoutBlock.includes('[...(pendingApiGetRequests.get(page) ?? [])]'), 'logout observation must inherit exact GET request identities already pending before the click');
+assert(logoutBlock.includes('.filter((request) => isLogoutScopedRead(request, origin))'), 'pre-existing logout candidates must still pass the exact scoped-read identity matcher');
+const inheritedReadIndex = logoutBlock.indexOf('[...(pendingApiGetRequests.get(page) ?? [])]');
+const observationOpenIndex = logoutBlock.indexOf('activeLogoutObservations.set(page, observation);');
+assert(inheritedReadIndex >= 0 && observationOpenIndex > inheritedReadIndex, 'pending request identities must be frozen before the active logout observation opens');
 assert(spec.includes('logoutObservation.candidates.push(diagnostic);'), 'matching logout aborts must be held as candidates first');
 assert(spec.includes('return isLogoutScopedRead(request, expectedOrigin);'), 'read-only integration drain must reuse the exact enumerated same-origin GET classifier');
 assert(spec.includes('logoutObservation.logoutScopedReads.add(request);'), 'only an exact logout-scoped request observed during the explicit logout window may become a delayed candidate');
