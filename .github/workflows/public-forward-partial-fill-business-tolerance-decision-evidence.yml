@@ -1,0 +1,47 @@
+name: Public Forward Partial Fill Business Tolerance Decision Evidence
+
+on:
+  pull_request:
+    paths:
+      - 'api-server/src/services/public-forward-partial-fill-business-tolerance-decision-evidence.service.ts'
+      - 'api-server/src/services/public-forward-partial-fill-business-tolerance-decision-evidence.service.test.ts'
+      - '.github/workflows/public-forward-partial-fill-business-tolerance-decision-evidence.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --dir api-server run typecheck
+      - name: Bundle focused decision evidence tests
+        run: >-
+          pnpm --dir api-server exec esbuild
+          src/services/public-forward-partial-fill-business-tolerance-decision-evidence.service.test.ts
+          --bundle --platform=node --format=cjs --target=node24
+          --outfile=/tmp/public-forward-partial-fill-business-tolerance-decision-evidence.test.cjs
+      - run: node --test /tmp/public-forward-partial-fill-business-tolerance-decision-evidence.test.cjs
+      - name: Verify no numeric authority or production promotion
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE='api-server/src/services/public-forward-partial-fill-business-tolerance-decision-evidence.service.ts'
+          grep -Fq 'numericDefaultsAllowed: false' "$FILE"
+          grep -Fq "aiNumericAuthority: 'NONE'" "$FILE"
+          grep -Fq 'frozenArtifactProduced: false' "$FILE"
+          grep -Fq 'statisticalNumericizationAllowed: false' "$FILE"
+          grep -Fq 'productionPolicyAuthorityConnected: false' "$FILE"
+          grep -Fq 'fullCostReady: false' "$FILE"
+          grep -Fq 'evidenceComplete: 0' "$FILE"
+          grep -Fq "executionAuthority: 'NONE'" "$FILE"

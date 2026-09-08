@@ -21,7 +21,7 @@ const repositoryRoot = process.cwd();
 const source = (relativePath: string) => fs.readFileSync(
   path.join(repositoryRoot, relativePath),
   'utf8',
-);
+).replace(/\r\n/g, '\n'); // Keep the same source assertions on Windows checkouts.
 
 function installWindowTimerBridge(): void {
   if (typeof window !== 'undefined') return;

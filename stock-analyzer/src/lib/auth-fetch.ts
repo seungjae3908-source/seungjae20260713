@@ -6,7 +6,10 @@ import {
   withFiniteDeadline,
 } from '@/lib/auth-bootstrap';
 
-const MARKET_INFORMATION_REQUEST_TIMEOUT_MS = 2_500;
+// The stock Market Information backend intentionally returns a bounded partial
+// first paint after 4 seconds. Keep the client transport guard outside that
+// server budget so the browser cannot abort before the fail-closed fallback.
+const MARKET_INFORMATION_REQUEST_TIMEOUT_MS = 6_000;
 
 function abortReason(signal: AbortSignal): unknown {
   return signal.reason ?? new DOMException('The operation was aborted.', 'AbortError');
@@ -29,7 +32,8 @@ export type AuthorizedFetchOptions = {
   /**
    * Transport-level abort deadline. `undefined` preserves the normal app API
    * deadline; `null` deliberately leaves transport lifetime to the owning
-   * request lifecycle.
+   * request lifecycle. Authentication/session resolution has its own finite
+   * deadline and does not consume this transport budget.
    */
   timeoutMs?: number | null;
 };
@@ -59,17 +63,9 @@ export async function authorizedFetch(
 
   const controller = new AbortController();
   let timedOut = false;
+  let timeout: number | null = null;
   const handleParentAbort = () => controller.abort(signal ? abortReason(signal) : undefined);
   signal?.addEventListener('abort', handleParentAbort, { once: true });
-  const timeout = timeoutMs === null
-    ? null
-    : window.setTimeout(
-      () => {
-        timedOut = true;
-        controller.abort(new DOMException('App API request timed out.', 'TimeoutError'));
-      },
-      timeoutMs,
-    );
 
   try {
     if (isSupabaseConfigured && !headers.has('Authorization')) {
@@ -84,6 +80,16 @@ export async function authorizedFetch(
     }
 
     if (controller.signal.aborted) throw abortReason(controller.signal);
+    timeout = timeoutMs === null
+      ? null
+      : window.setTimeout(
+        () => {
+          timedOut = true;
+          controller.abort(new DOMException('App API request timed out.', 'TimeoutError'));
+        },
+        timeoutMs,
+      );
+
     try {
       return await fetch(input, { ...init, headers, signal: controller.signal });
     } catch (error) {
@@ -91,7 +97,7 @@ export async function authorizedFetch(
         return new Response(JSON.stringify({
           errorCode: 'MARKET_INFORMATION_TIMEOUT',
           retryable: false,
-          message: '시장정보 제공기관 응답이 2.5초 내 완료되지 않았습니다.',
+          message: '시장정보 요청이 6초 내 완료되지 않았습니다.',
         }), {
           status: 408,
           headers: { 'Content-Type': 'application/json; charset=utf-8' },

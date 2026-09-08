@@ -1,8 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import path from 'node:path';
+import express from 'express';
+import cors from 'cors';
 
+import { MEMBER_PERMISSION_MATRIX } from '../../../packages/member-access/src/index.js';
 import { buildBrokerCommonState, legacySnapshot } from './account-connections';
 import {
   decryptTradingCredentials,
@@ -18,6 +22,15 @@ const repositoryRoot = process.cwd();
 
 function source(relativePath: string) {
   return readFileSync(path.join(repositoryRoot, relativePath), 'utf8');
+}
+
+function configuredCorsMethods(): string[] {
+  const appSource = source('api-server/src/app.ts');
+  const configuredMethods = appSource.match(/methods:\s*\[([^\]]+)\]/)?.[1];
+  assert.ok(configuredMethods, 'application CORS methods must stay explicitly configured');
+  const methods = [...configuredMethods.matchAll(/['"]([A-Z]+)['"]/g)].map((match) => match[1]);
+  assert.ok(methods.length > 0, 'application CORS methods must contain at least one method');
+  return methods;
 }
 
 function connection(overrides: Partial<ExchangeConnection> = {}): ExchangeConnection {
@@ -185,6 +198,28 @@ test('account connection route requires approved-member capability and stays GET
   }
 });
 
+test('approved read-only members can inspect sanitized integration metadata without order authority', () => {
+  for (const tier of ['associate', 'regular'] as const) {
+    assert.equal(MEMBER_PERMISSION_MATRIX[tier].canAccessBasicInfo, true);
+    assert.equal(MEMBER_PERMISSION_MATRIX[tier].canPlaceOrders, false);
+  }
+
+  const routeSource = source('api-server/src/routes/user-broker-telegram.ts');
+  assert.match(
+    routeSource,
+    /const canReadBrokerConnections = hasCapability\(authenticated\.member, 'canAccessBasicInfo'\);/,
+  );
+  assert.doesNotMatch(
+    routeSource,
+    /const canReadBrokerConnections = hasCapability\(authenticated\.member, 'canPlaceOrders'\);/,
+  );
+  assert.match(routeSource, /brokerConnections: safeConnections\(connections\)/);
+  assert.match(routeSource, /privateApiRequests:\s*0/);
+  assert.match(routeSource, /ordersSubmitted:\s*0/);
+  assert.match(routeSource, /ordersCancelled:\s*0/);
+  assert.doesNotMatch(routeSource, /prepare(?:Kiwoom|Upbit|Bitget).*(?:Order|Cancel|Amend|Transfer|Withdraw)/);
+});
+
 test('user integrations GET degrades only broker metadata storage outage and preserves trading fail-closed safety', () => {
   const routeSource = source('api-server/src/routes/user-broker-telegram.ts');
 
@@ -206,4 +241,73 @@ test('user integrations GET degrades only broker metadata storage outage and pre
   assert.match(routeSource, /userBrokerTelegramRouter\.post\('\/telegram\/link'/);
   assert.match(routeSource, /userBrokerTelegramRouter\.patch\('\/notifications'/);
   assert.match(routeSource, /res\.status\(503\)\.json\(\{ ok: false, error: errorCode\(error\)/);
+});
+
+test('account credential CORS contract admits PUT without widening the production origin allowlist', () => {
+  const appSource = source('api-server/src/app.ts');
+
+  assert.ok(
+    appSource.includes("methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']"),
+    'CORS methods must explicitly admit the credential PUT route',
+  );
+  assert.ok(
+    appSource.includes("process.env.NODE_ENV !== 'production' || allowedOrigins.includes(origin)"),
+    'production CORS must remain restricted to the configured origin allowlist',
+  );
+  assert.ok(
+    appSource.includes("callback(new Error('CORS origin rejected'))"),
+    'disallowed production origins must remain fail-closed',
+  );
+});
+
+test('account credential route answers a real PUT CORS preflight with PUT allowed', async () => {
+  const indexSource = source('api-server/src/routes/index.ts');
+  const readonlyRouteSource = source('api-server/src/features/account-readonly/account-readonly.route.ts');
+  assert.match(
+    indexSource,
+    /router\.use\(\s*'\/accounts\/read-only'/,
+    'account read-only router must remain mounted at the canonical path',
+  );
+  assert.match(
+    readonlyRouteSource,
+    /router\.put\('\/credentials\/:provider'/,
+    'credential save must remain the canonical PUT /credentials/:provider route',
+  );
+
+  const preflightApp = express();
+  preflightApp.use(cors({
+    methods: configuredCorsMethods(),
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Auto-Trade-Key', 'X-Device-Session'],
+  }));
+  const server = createServer(preflightApp);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+
+    const response = await fetch(
+      `http://127.0.0.1:${address.port}/api/accounts/read-only/credentials/toss`,
+      {
+        method: 'OPTIONS',
+        headers: {
+          Origin: 'http://localhost:5173',
+          'Access-Control-Request-Method': 'PUT',
+          'Access-Control-Request-Headers': 'content-type,authorization',
+        },
+      },
+    );
+
+    assert.equal(response.status, 204);
+    const methods = response.headers.get('access-control-allow-methods');
+    assert.ok(methods, 'preflight must expose Access-Control-Allow-Methods');
+    assert.equal(
+      methods.split(',').map((method) => method.trim().toUpperCase()).includes('PUT'),
+      true,
+    );
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
 });

@@ -1,3 +1,4 @@
+import './forward-calibration-gross-edge.service.test';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { ScannerSignalCard } from './scanner-signal.types';
