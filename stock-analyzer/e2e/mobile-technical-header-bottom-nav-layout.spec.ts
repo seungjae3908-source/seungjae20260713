@@ -34,7 +34,7 @@ function recommendationRow(index: number) {
     missingData: [],
     risks: [],
     overheated: false,
-    financialStability: '확인',
+    financialStability: '안정',
     newsRisk: '낮음',
     riskLevel: 'LOW',
     shortTermOutlook: '중립',
