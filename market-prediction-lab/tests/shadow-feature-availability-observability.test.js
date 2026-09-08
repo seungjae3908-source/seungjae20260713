@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { analyzeMarket } from "../src/engine.js";
+import { analyzeMarket, requiredInferenceEvidenceFeatures } from "../src/engine.js";
 
 function buildCandles(count = 80) {
   const start = 1_700_000_000_000;
@@ -92,4 +92,30 @@ test("futures active-reference evidence blocks missing zero-imputed derivatives"
   assert.equal(result.inferenceEvaluation.status, "NOT_EVALUABLE");
   assert.equal(result.ruleScore, null);
   assert.equal(result.probabilities, null);
+});
+
+test("historical research preflight exposes the exact market-applicable evidence contract", () => {
+  assert.deepEqual(requiredInferenceEvidenceFeatures("CRYPTO_SPOT"), [
+    "benchmarkReturn",
+    "sentimentScore",
+  ]);
+  assert.deepEqual(requiredInferenceEvidenceFeatures("CRYPTO_FUTURES"), [
+    "benchmarkReturn",
+    "fundingRate",
+    "longShortBias",
+    "openInterestChange",
+    "sentimentScore",
+  ]);
+  assert.deepEqual(requiredInferenceEvidenceFeatures("KR_STOCK"), [
+    "benchmarkReturn",
+    "foreignNetRatio",
+    "institutionNetRatio",
+    "sentimentScore",
+  ]);
+  assert.deepEqual(requiredInferenceEvidenceFeatures("US_STOCK"), [
+    "benchmarkReturn",
+    "foreignNetRatio",
+    "institutionNetRatio",
+    "sentimentScore",
+  ]);
 });
