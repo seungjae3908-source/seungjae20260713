@@ -59,15 +59,17 @@ async function withProviderDeadline<T>(
   timeoutMs: number,
   operation: (signal: AbortSignal) => Promise<T>,
 ): Promise<T> {
+  // Credential lookup happens before this boundary. If the client disconnected
+  // while that storage read was in flight, do not invoke a private provider at all.
+  if (callerSignal?.aborted) {
+    throw new AccountReadonlyError('PROVIDER_TIMEOUT', true);
+  }
+
   const controller = new AbortController();
   let deadlineExpired = false;
   const abortFromCaller = () => controller.abort(callerSignal?.reason);
 
-  if (callerSignal?.aborted) {
-    controller.abort(callerSignal.reason);
-  } else {
-    callerSignal?.addEventListener('abort', abortFromCaller, { once: true });
-  }
+  callerSignal?.addEventListener('abort', abortFromCaller, { once: true });
 
   const timer = setTimeout(() => {
     deadlineExpired = true;
