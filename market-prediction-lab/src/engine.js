@@ -43,9 +43,21 @@ function deployedRuleFeatureNames(market) {
   return names;
 }
 
+export function requiredInferenceEvidenceFeatures(market, model = BASELINE_MODEL) {
+  return Object.freeze([...new Set([
+    ...deployedRuleFeatureNames(market),
+    ...modelFeatureNames(model),
+  ])]
+    .filter((featureName) => {
+      const requirement = EXTERNAL_FEATURE_EVIDENCE[featureName];
+      return requirement && evidenceApplies(market, requirement.markets);
+    })
+    .sort());
+}
+
 function evaluateInferenceEvidence(input, model, features) {
   const requiredFeatures = [...new Set([
-    ...deployedRuleFeatureNames(input.market),
+    ...requiredInferenceEvidenceFeatures(input.market, model),
     ...modelFeatureNames(model),
   ])];
   const missingRequiredFeatures = [];
