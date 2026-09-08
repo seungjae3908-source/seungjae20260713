@@ -51,10 +51,15 @@ test('direct AI Chart paints its H1 before a delayed prewarmed chart renderer be
     volume: 1_000 + index * 10,
     isClosed: index < 79,
   }));
+  const chartDataRequests: string[] = [];
   await page.route('**/api/**', (route) => {
-    const pathname = new URL(route.request().url()).pathname;
+    const url = new URL(route.request().url());
+    const pathname = url.pathname;
     const isChartRequest = /\/api\/stocks\/[^/]+\/chart$/.test(pathname);
     const isPrimaryCandlesRequest = /\/api\/stocks\/[^/]+\/candles$/.test(pathname);
+    if (isChartRequest || isPrimaryCandlesRequest) {
+      chartDataRequests.push(`${pathname}${url.search}`);
+    }
     return route.fulfill({
       status: isPrimaryCandlesRequest ? 404 : 200,
       contentType: 'application/json',
@@ -69,9 +74,11 @@ test('direct AI Chart paints its H1 before a delayed prewarmed chart renderer be
 
   let releaseRenderer = () => {};
   let markRendererRequested = () => {};
+  let rendererRequestCount = 0;
   const rendererRelease = new Promise<void>((resolve) => { releaseRenderer = resolve; });
   const rendererRequested = new Promise<void>((resolve) => { markRendererRequested = resolve; });
   await page.route('**/src/components/unified-analysis-chart.tsx*', async (route) => {
+    rendererRequestCount += 1;
     markRendererRequested();
     await rendererRelease;
     await route.continue();
@@ -98,7 +105,18 @@ test('direct AI Chart paints its H1 before a delayed prewarmed chart renderer be
     releaseRenderer();
     await expect(page.getByTestId('unified-chart-canvas')).toBeVisible({ timeout: 5_000 });
     const firstUsableChartMs = Date.now() - startedAt;
-    const timing = { firstShellMs, firstRouteChunkMs, firstUsableChartMs };
+    expect(rendererRequestCount, 'document prewarm and React.lazy must share one renderer request').toBe(1);
+    expect(chartDataRequests, 'cold prefetch and mounted query must share one exact data chain').toEqual([
+      '/api/stocks/005930/candles?tf=5m',
+      '/api/stocks/005930/chart?tf=5m',
+    ]);
+    const timing = {
+      firstShellMs,
+      firstRouteChunkMs,
+      firstUsableChartMs,
+      rendererRequestCount,
+      chartDataRequests,
+    };
     await testInfo.attach('ai-chart-cold-layer-timing.json', {
       body: Buffer.from(JSON.stringify(timing, null, 2)),
       contentType: 'application/json',
