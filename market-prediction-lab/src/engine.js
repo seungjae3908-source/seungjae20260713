@@ -3,7 +3,73 @@ import { calculateFeatures } from "./indicators.js";
 import { buildForecast } from "./forecast.js";
 import { evaluateRules } from "./rules.js";
 import { BASELINE_MODEL } from "./tiny-model.js";
-import { predictDeployedTinyModel } from "./deployment-inference.js";
+import { DEPLOYED_INFERENCE_CONTRACT, predictDeployedTinyModel } from "./deployment-inference.js";
+
+const STOCK_MARKETS = new Set(["KR_STOCK", "US_STOCK"]);
+const EXTERNAL_FEATURE_EVIDENCE = Object.freeze({
+  breadth: Object.freeze({ source: "marketFeatures", rawName: "breadth", markets: "all" }),
+  benchmarkReturn: Object.freeze({ source: "marketFeatures", rawName: "benchmarkReturn", markets: "all" }),
+  sentimentScore: Object.freeze({ source: "marketFeatures", rawName: "sentimentScore", markets: "all" }),
+  foreignNetRatio: Object.freeze({ source: "marketFeatures", rawName: "foreignNetRatio", markets: "stocks" }),
+  institutionNetRatio: Object.freeze({ source: "marketFeatures", rawName: "institutionNetRatio", markets: "stocks" }),
+  openInterestChange: Object.freeze({ source: "derivativesFeatures", rawName: "openInterestChange", markets: "futures" }),
+  fundingRate: Object.freeze({ source: "derivativesFeatures", rawName: "fundingRate", markets: "futures" }),
+  fundingRateChange: Object.freeze({ source: "derivativesFeatures", rawName: "fundingRateChange", markets: "futures" }),
+  fundingRateZScore: Object.freeze({ source: "derivativesFeatures", rawName: "fundingRateZScore", markets: "futures" }),
+  longShortBias: Object.freeze({ source: "derivativesFeatures", rawName: "longShortRatio", markets: "futures" }),
+  basisRate: Object.freeze({ source: "derivativesFeatures", rawName: "basisRate", markets: "futures" }),
+  markPremium: Object.freeze({ source: "derivativesFeatures", rawName: "markPremium", markets: "futures" }),
+  marketMarkSpread: Object.freeze({ source: "derivativesFeatures", rawName: "marketMarkSpread", markets: "futures" }),
+});
+
+function modelFeatureNames(model, depth = 0) {
+  if (!model || typeof model !== "object" || depth > 4) return [];
+  if (model.modelType === "probability-ensemble") {
+    return [...new Set((model.components ?? []).flatMap((component) => modelFeatureNames(component?.model, depth + 1)))];
+  }
+  return Array.isArray(model.featureOrder) ? [...new Set(model.featureOrder)] : [];
+}
+
+function evidenceApplies(market, markets) {
+  if (markets === "all") return true;
+  if (markets === "stocks") return STOCK_MARKETS.has(market);
+  return markets === "futures" && market === "CRYPTO_FUTURES";
+}
+
+function deployedRuleFeatureNames(market) {
+  const names = ["sentimentScore", "benchmarkReturn"];
+  if (STOCK_MARKETS.has(market)) names.push("foreignNetRatio", "institutionNetRatio");
+  if (market === "CRYPTO_FUTURES") names.push("openInterestChange", "fundingRate", "longShortBias");
+  return names;
+}
+
+function evaluateInferenceEvidence(input, model, features) {
+  const requiredFeatures = [...new Set([
+    ...deployedRuleFeatureNames(input.market),
+    ...modelFeatureNames(model),
+  ])];
+  const missingRequiredFeatures = [];
+  for (const featureName of requiredFeatures) {
+    const requirement = EXTERNAL_FEATURE_EVIDENCE[featureName];
+    if (requirement) {
+      if (evidenceApplies(input.market, requirement.markets)
+          && input[requirement.source][requirement.rawName] === undefined) {
+        missingRequiredFeatures.push(featureName);
+      }
+    } else if (!Object.hasOwn(features, featureName)) {
+      missingRequiredFeatures.push(featureName);
+    }
+  }
+  const missing = Object.freeze([...new Set(missingRequiredFeatures)].sort());
+  const evaluable = missing.length === 0;
+  return Object.freeze({
+    status: evaluable ? "EVALUABLE" : "NOT_EVALUABLE",
+    missingRequiredFeatures: missing,
+    blockers: Object.freeze(missing.map((name) => `MISSING_REQUIRED_FEATURE:${name}`)),
+    modelObservationEligible: evaluable,
+    policyCreditEligible: evaluable,
+  });
+}
 
 function stanceFromProbabilities(probabilities) {
   const entries = Object.entries(probabilities).sort((a, b) => b[1] - a[1]);
@@ -59,6 +125,50 @@ export function analyzeMarket(rawInput, options = {}) {
   const input = validatePredictionInput(rawInput);
   const model = options.model ?? BASELINE_MODEL;
   const featureBundle = calculateFeatures(input);
+  const health = dataHealth(input);
+  const inferenceEvaluation = evaluateInferenceEvidence(input, model, featureBundle.features);
+  const inputSummary = Object.freeze({
+    market: input.market,
+    symbol: input.symbol,
+    timeframe: input.timeframe,
+    horizon: input.horizon,
+    lastTimestamp: input.candles.at(-1).timestamp,
+    lastClose: input.candles.at(-1).close,
+    source: input.source,
+  });
+
+  if (inferenceEvaluation.status === "NOT_EVALUABLE") {
+    const warnings = [];
+    if (model.trained !== true) {
+      warnings.push("현재 초소형 모델은 데이터 수집용 기준 모델이며 학습 완료 모델이 아닙니다.");
+    }
+    if (health.status === "partial") {
+      warnings.push("일부 데이터가 없어 신뢰도가 제한됩니다.");
+    }
+    warnings.push("필수 모델 입력 근거가 없어 추론 및 정책 평가를 차단했습니다.");
+    return Object.freeze({
+      schemaVersion: 1,
+      generatedAt: Date.now(),
+      modelVersion: model.id,
+      modelTrained: model.trained === true,
+      inferenceContract: DEPLOYED_INFERENCE_CONTRACT,
+      inferenceEvaluation,
+      input: inputSummary,
+      stance: null,
+      confidence: null,
+      probabilities: null,
+      ruleScore: null,
+      indicators: featureBundle.indicators,
+      features: featureBundle.features,
+      reasons: Object.freeze([]),
+      warnings: Object.freeze([...new Set(warnings)].slice(0, 10)),
+      dataHealth: health,
+      scenarios: Object.freeze([]),
+      forecastCandles: Object.freeze([]),
+      uncertaintyBands: Object.freeze([]),
+    });
+  }
+
   const ruleResult = evaluateRules(input, featureBundle);
   const modelResult = predictDeployedTinyModel({
     features: featureBundle.features,
@@ -66,7 +176,6 @@ export function analyzeMarket(rawInput, options = {}) {
   }, model);
   const probabilities = modelResult.probabilities;
   const forecast = buildForecast(input, featureBundle.indicators, probabilities);
-  const health = dataHealth(input);
   const warnings = [...ruleResult.warnings];
   if (!modelResult.trained) {
     warnings.unshift("현재 초소형 모델은 데이터 수집용 기준 모델이며 학습 완료 모델이 아닙니다.");
@@ -81,15 +190,8 @@ export function analyzeMarket(rawInput, options = {}) {
     modelVersion: modelResult.modelId,
     modelTrained: modelResult.trained,
     inferenceContract: modelResult.inferenceContract,
-    input: Object.freeze({
-      market: input.market,
-      symbol: input.symbol,
-      timeframe: input.timeframe,
-      horizon: input.horizon,
-      lastTimestamp: input.candles.at(-1).timestamp,
-      lastClose: input.candles.at(-1).close,
-      source: input.source,
-    }),
+    inferenceEvaluation,
+    input: inputSummary,
     stance: stanceFromProbabilities(probabilities),
     confidence: calculateConfidence(input, probabilities, modelResult.trained),
     probabilities: Object.freeze({
