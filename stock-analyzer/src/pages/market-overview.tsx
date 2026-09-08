@@ -5,6 +5,7 @@ import { ChevronRight, RefreshCw } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import { api, type SectorPopularGroup, type SummaryItem } from '@/lib/api';
 import { getMarketSummary, validMarketSummaryItems } from '@/lib/market-summary';
+import { requireBriefing, requireSectorPopularData } from '@/lib/market-overview-response';
 import { useAssetMode } from '@/lib/asset-mode';
 import { cn } from '@/lib/utils';
 
@@ -98,13 +99,13 @@ export default function MarketOverviewPage() {
 
   const sectors = useQuery({
     queryKey: ['market-overview-sectors', market],
-    queryFn: () => api.sectorPopular(market),
+    queryFn: async () => requireSectorPopularData(await api.sectorPopular(market), market),
     refetchInterval: 30_000,
   });
 
   const briefing = useQuery({
     queryKey: ['market-overview-briefing'],
-    queryFn: () => api.briefing(),
+    queryFn: async () => requireBriefing(await api.briefing()),
     refetchInterval: 60_000,
   });
 
