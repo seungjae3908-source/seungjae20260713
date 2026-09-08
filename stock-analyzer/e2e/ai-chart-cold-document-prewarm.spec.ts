@@ -29,7 +29,9 @@ test('direct AI Chart prewarm starts app, route, and renderer graphs after the r
 });
 
 test('direct AI Chart shell does not statically wait for the chart renderer graph', () => {
-  const source = fs.readFileSync(path.resolve(process.cwd(), 'src/pages/ai-chart.tsx'), 'utf8');
+  const source = fs
+    .readFileSync(path.resolve(process.cwd(), 'src/pages/ai-chart.tsx'), 'utf8')
+    .replace(/\r\n?/g, '\n');
   const rendererImport = "import('@/components/unified-analysis-chart')";
 
   expect(source).not.toMatch(/import\s+\{\s*UnifiedAnalysisChart\s*\}\s+from\s+['"]@\/components\/unified-analysis-chart['"]/);
