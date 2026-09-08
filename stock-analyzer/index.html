@@ -29,9 +29,12 @@
 			const aiChartRoutePrewarm = directAiChartRoute
 				? import('/src/pages/ai-chart.tsx')
 				: null;
+			const aiChartSharedDataPrewarm = directAiChartRoute
+				? import('/src/lib/unified-chart-data.ts')
+				: null;
 			void import('/src/main.tsx');
-			if (aiChartRoutePrewarm) {
-				void aiChartRoutePrewarm.then(() => import('/src/components/unified-analysis-chart.tsx'));
+			if (aiChartRoutePrewarm && aiChartSharedDataPrewarm) {
+				void aiChartSharedDataPrewarm.then(() => import('/src/components/unified-analysis-chart.tsx'));
 			}
 		</script>
 	</body>
