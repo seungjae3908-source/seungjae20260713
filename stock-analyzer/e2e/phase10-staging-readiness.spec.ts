@@ -585,10 +585,14 @@ async function login(page: Page, loginName: string, password: string) {
 
 async function logout(page: Page) {
   const logoutButton = await expectVisibleLogoutButton(page);
+  const origin = new URL(page.url()).origin;
   const observation: LogoutObservation = {
     candidates: [],
-    origin: new URL(page.url()).origin,
-    logoutScopedReads: new Set<Request>(),
+    origin,
+    logoutScopedReads: new Set(
+      [...(pendingApiGetRequests.get(page) ?? [])]
+        .filter((request) => isLogoutScopedRead(request, origin)),
+    ),
   };
   activeLogoutObservations.set(page, observation);
   let confirmed = false;
