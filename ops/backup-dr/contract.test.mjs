@@ -5,7 +5,10 @@ const policy = JSON.parse(await readFile(new URL('./policy.json', import.meta.ur
 const createBackup = await readFile(new URL('./create-encrypted-postgres-backup.mjs', import.meta.url), 'utf8');
 const offsite = await readFile(new URL('./copy-encrypted-backup-offsite.mjs', import.meta.url), 'utf8');
 const restore = await readFile(new URL('./restore-encrypted-postgres-backup-drill.mjs', import.meta.url), 'utf8');
-const workflow = await readFile(new URL('../../.github/workflows/backup-dr-contract.yml', import.meta.url), 'utf8');
+const workflow = (await readFile(
+  new URL('../../.github/workflows/backup-dr-contract.yml', import.meta.url),
+  'utf8',
+)).replace(/\r\n?/g, '\n');
 
 assert.equal(policy.schemaVersion, 1);
 assert.equal(policy.state, 'PREPARED_NOT_ACTIVE');
