@@ -212,6 +212,7 @@ test("durable publisher workflow is main-only, immutability-gated, digest-bound,
   const policyWorkflow = await readFile(new URL("../../.github/workflows/prediction-lab-model-reference-durable-policy.yml", import.meta.url), "utf8");
   assert.match(workflow, /publish-durable-reference:/u);
   assert.match(workflow, /github\.event_name == 'workflow_dispatch'/u);
+  assert.match(workflow, /needs\.validate-and-train\.outputs\.research_ready == 'true'/u);
   assert.match(workflow, /contents:\s*write/u);
   assert.match(workflow, /durable-policy-preflight:/u);
   assert.match(policyWorkflow, /workflow_call:/u);
