@@ -9,6 +9,7 @@ import { UnifiedAssetSearch } from '@/components/unified-asset-search';
 import { api, apiGet } from '@/lib/api';
 import { useAssetMode } from '@/lib/asset-mode';
 import { requireRecommendationResponse } from '@/lib/recommendation-response';
+import { requireThemesData } from '@/lib/theme-response';
 import { displayCoinName, displayStockName, formatAppPercent, formatAppPrice } from '@/lib/stock-display';
 import { unifiedAssetDetailPath } from '@/lib/unified-asset-search';
 import { cn } from '@/lib/utils';
@@ -102,7 +103,7 @@ export default function StocksPage() {
   });
   const themes = useQuery({
     queryKey: ['stocks-cat-themes', mode.stockMarket],
-    queryFn: () => api.themes(mode.stockMarket),
+    queryFn: async () => requireThemesData(await api.themes(mode.stockMarket), mode.stockMarket),
     enabled: isStock && category === 'theme' && !searching,
     staleTime: 60_000,
   });
