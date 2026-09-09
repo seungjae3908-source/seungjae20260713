@@ -62,6 +62,7 @@ async function mockDetail(page: Page, requests: string[]) {
         body: JSON.stringify({
           ticker: '005930',
           name: '삼성전자',
+          market: 'KR',
           price: 74_500,
           changePercent: 1.2,
           currency: 'KRW',
@@ -89,12 +90,20 @@ async function mockDetail(page: Page, requests: string[]) {
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
+          ticker: '005930',
+          items: [{
+            title: '삼성전자 공개 시장 뉴스',
+            summary: '종목 상세 뉴스 탭의 지연 로딩 검증용 공개 데이터입니다.',
+            source: 'fixture',
+            publishedAt: NOW,
+          }],
           news: [{
             title: '삼성전자 공개 시장 뉴스',
             summary: '종목 상세 뉴스 탭의 지연 로딩 검증용 공개 데이터입니다.',
             source: 'fixture',
             publishedAt: NOW,
           }],
+          summary: '삼성전자 공개 시장 뉴스 1건',
         }),
       });
       return;
