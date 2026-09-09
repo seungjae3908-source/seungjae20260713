@@ -1,7 +1,7 @@
 import type { Page, Route } from '@playwright/test';
 
 const USER_ID = '00000000-0000-4000-8000-000000000911';
-const NOW = '2026-09-05T10:00:00.000Z';
+const NOW = new Date().toISOString();
 const TEST_SESSION_EXPIRES_AT = 4_102_444_800;
 const TEST_ACCESS_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJhdXRoZW50aWNhdGVkIiwiZXhwIjo0MTAyNDQ0ODAwLCJyb2xlIjoiYXV0aGVudGljYXRlZCIsInN1YiI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDkxMSJ9.ZnVsbC1wcm9kdWN0LWUyZS1zaWduYXR1cmU';
 
@@ -192,9 +192,15 @@ export async function installFullProductFixtures(page: Page): Promise<FullProduc
     if (path === '/api/search/suggest') {
       return json(route, {
         ok: true, state: 'FULL', q: url.searchParams.get('q') ?? '', asset: 'all', market: null,
-        results: [{ id: 'KR:005930', assetType: 'stock', market: 'KR', instrumentType: 'stock', exchange: 'KRX', ticker: '005930', productCode: '005930', koreanName: '삼성전자', englishName: 'Samsung Electronics', displayName: '삼성전자', baseSymbol: '005930', quoteCurrency: 'KRW', matchType: 'name', active: true, provider: 'e2e-fixture', dataAsOf: NOW }],
+        results: [{ id: 'KR:005930', assetType: 'stock', market: 'KR', instrumentType: 'stock', exchange: 'KRX', ticker: '005930', productCode: '005930', koreanName: '삼성전자', englishName: 'Samsung Electronics', displayName: '삼성전자', baseSymbol: '005930', quoteCurrency: 'KRW', matchType: 'name', active: true, provider: 'KRX', dataAsOf: NOW }],
         count: 1, dataAsOf: NOW, stale: false, partial: false,
-        providers: [{ provider: 'e2e-fixture', status: 'ok', count: 1, dataAsOf: NOW }], hiddenMatches: [],
+        providers: [
+          { provider: 'krx', status: 'ok', count: 1, dataAsOf: NOW },
+          { provider: 'finnhub', status: 'ok', count: 1, dataAsOf: NOW },
+          { provider: 'upbit', status: 'ok', count: 1, dataAsOf: NOW },
+          { provider: 'bitget', status: 'ok', count: 1, dataAsOf: NOW },
+        ],
+        hiddenMatches: [],
       });
     }
     if (/^\/api\/stocks\/005930\/candles$/u.test(path)) {
