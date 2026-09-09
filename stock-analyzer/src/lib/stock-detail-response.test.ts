@@ -16,6 +16,19 @@ const quoteFixture = {
   changePercent: -1.25,
 };
 
+const profileFixture = {
+  ticker: 'AAPL',
+  name: 'Apple Inc.',
+  market: 'US',
+  currency: 'USD',
+  description: '',
+  industry: '',
+  sector: 'Technology',
+  country: '',
+  mainBusiness: '',
+  competitors: [] as string[],
+};
+
 test('stock detail quote accepts truthful zero direction but rejects missing quote evidence', () => {
   const parsed = parseStockDetailQuote({ ...quoteFixture, changePercent: 0 }, '005930', 'KR');
   assert.equal(parsed.changePercent, 0);
@@ -41,14 +54,27 @@ test('stock detail quote fails closed on identity and currency drift', () => {
   );
 });
 
-test('stock detail profile requires canonical identity instead of accepting arbitrary HTTP 200', () => {
-  const parsed = parseStockDetailProfile({ ticker: 'AAPL', name: 'Apple Inc.', sector: 'Technology' }, 'AAPL', 'US');
+test('stock detail profile requires canonical producer evidence while preserving explicit empty strings', () => {
+  const parsed = parseStockDetailProfile(profileFixture, 'AAPL', 'US');
   assert.equal(parsed.sector, 'Technology');
+  assert.equal(parsed.description, '');
 
   assert.throws(() => parseStockDetailProfile({}, 'AAPL', 'US'), StockDetailContractError);
   assert.throws(
-    () => parseStockDetailProfile({ ticker: 'MSFT', name: 'Microsoft' }, 'AAPL', 'US'),
+    () => parseStockDetailProfile({ ...profileFixture, ticker: 'MSFT' }, 'AAPL', 'US'),
     /ticker mismatch/,
+  );
+  assert.throws(
+    () => parseStockDetailProfile({ ...profileFixture, currency: undefined }, 'AAPL', 'US'),
+    StockDetailContractError,
+  );
+  assert.throws(
+    () => parseStockDetailProfile({ ...profileFixture, competitors: undefined }, 'AAPL', 'US'),
+    /invalid competitors/,
+  );
+  assert.throws(
+    () => parseStockDetailProfile({ ...profileFixture, sector: undefined }, 'AAPL', 'US'),
+    StockDetailContractError,
   );
 });
 
