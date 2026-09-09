@@ -98,7 +98,15 @@ function unifiedSearchPayload(q: string, now: string) {
   };
 }
 
-async function installMocks(page: Page, options: { quoteMode: QuoteMode; holdings?: unknown[]; seenApiPaths?: string[] }) {
+async function installMocks(
+  page: Page,
+  options: {
+    quoteMode: QuoteMode;
+    holdings?: unknown[];
+    seenApiPaths?: string[];
+    postedHoldingBodies?: Array<Record<string, unknown>>;
+  },
+) {
   await installSession(page);
   const holdings = options.holdings ?? [holding()];
 
@@ -121,7 +129,15 @@ async function installMocks(page: Page, options: { quoteMode: QuoteMode; holding
     }
     if (path.endsWith('/rest/v1/portfolio_holdings')) {
       if (route.request().method() === 'GET') return fulfill(route, holdings);
-      if (route.request().method() === 'POST') return fulfill(route, [], 201);
+      if (route.request().method() === 'POST') {
+        const body = route.request().postDataJSON() as Record<string, unknown> | Array<Record<string, unknown>> | null;
+        if (Array.isArray(body)) {
+          options.postedHoldingBodies?.push(...body);
+        } else if (body && typeof body === 'object') {
+          options.postedHoldingBodies?.push(body);
+        }
+        return fulfill(route, [], 201);
+      }
       return fulfill(route, [], 204);
     }
     return fulfill(route, { ok: true });
@@ -173,16 +189,28 @@ test('canonical quote evidence renders the actual current valuation', async ({ p
   await expect(page.getByText('일부 보유 종목의 현재가 근거를 확인하지 못했습니다. 평가손익은 표시하지 않습니다.')).toHaveCount(0);
 });
 
-test('portfolio name resolution uses only the canonical unified search route', async ({ page }) => {
+test('portfolio write uses canonical search evidence and persists the selected purchase date', async ({ page }) => {
   const seenApiPaths: string[] = [];
-  await installMocks(page, { quoteMode: 'valid', holdings: [], seenApiPaths });
+  const postedHoldingBodies: Array<Record<string, unknown>> = [];
+  await installMocks(page, { quoteMode: 'valid', holdings: [], seenApiPaths, postedHoldingBodies });
   await openPosition(page);
   await page.getByRole('button', { name: '보유 종목 추가' }).click();
   await page.getByPlaceholder('예: 삼성전자').fill('삼성전자');
   await page.getByPlaceholder('수량').fill('1');
   await page.getByPlaceholder('매수가').fill('70000');
+  await page.getByLabel('매수일').fill('2026-08-31');
   await page.getByRole('button', { name: '보유 종목 저장' }).click();
   await expect.poll(() => seenApiPaths.filter((path) => path.includes('/api/search')).join(',')).toBe('/api/search/suggest');
+  await expect.poll(() => postedHoldingBodies.length).toBe(1);
+  expect(postedHoldingBodies[0]).toMatchObject({
+    ticker: '005930',
+    name: '삼성전자',
+    market: 'KR',
+    currency: 'KRW',
+    quantity: 1,
+    average_price: 70000,
+    purchase_date: '2026-08-31',
+  });
   expect(seenApiPaths).not.toContain('/api/search');
   expect(seenApiPaths).not.toContain('/api/stocks/search');
   expect(seenApiPaths).not.toContain('/api/stock/search');
