@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 
-const now = '2026-09-04T03:00:00.000Z';
+const now = new Date().toISOString();
 
 const krSamsung = {
   id: 'stock:KR:KOSPI:005930',
@@ -54,7 +54,12 @@ function successfulResponse(q: string, market: string | null, results: readonly 
     dataAsOf: now,
     stale: false,
     partial: false,
-    providers: [],
+    providers: [{
+      provider: market === 'US' ? 'finnhub' : 'krx',
+      status: 'ok',
+      count: results.length,
+      dataAsOf: now,
+    }],
     hiddenMatches: [],
   };
 }
