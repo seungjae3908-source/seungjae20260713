@@ -247,11 +247,31 @@ const SEARCH_FIXTURES: SearchFixture[] = [
 
 async function mockUnifiedSearch(page: Page) {
   await page.route('**/api/search/suggest**', async (route) => {
-    const q = (new URL(route.request().url()).searchParams.get('q') ?? '').toUpperCase().replace(/[\s/.-]/g, '');
+    const q = (new URL(route.request().url()).searchParams.get('q') ?? '').normalize('NFKC').trim();
+    const normalizedQuery = q.toUpperCase().replace(/[\s/.-]/g, '');
+    const dataAsOf = new Date().toISOString();
     const results = SEARCH_FIXTURES.filter((item) => [item.ticker, item.symbol, item.productCode, item.displayName, item.englishName]
       .filter(Boolean)
-      .some((value) => String(value).toUpperCase().replace(/[\s/.-]/g, '').includes(q)));
-    await fulfill(route, { ok: true, q, asset: 'all', market: null, results, count: results.length, dataAsOf: NOW, stale: false, partial: false, providers: [], hiddenMatches: [] });
+      .some((value) => String(value).toUpperCase().replace(/[\s/.-]/g, '').includes(normalizedQuery)))
+      .map((item) => ({ ...item, dataAsOf }));
+    await fulfill(route, {
+      ok: true,
+      q,
+      asset: 'all',
+      market: null,
+      results,
+      count: results.length,
+      dataAsOf,
+      stale: false,
+      partial: false,
+      providers: [
+        { provider: 'krx', status: 'ok', count: 1, dataAsOf },
+        { provider: 'finnhub', status: 'ok', count: 1, dataAsOf },
+        { provider: 'upbit', status: 'ok', count: 1, dataAsOf },
+        { provider: 'bitget', status: 'ok', count: 1, dataAsOf },
+      ],
+      hiddenMatches: [],
+    });
   });
 }
 
