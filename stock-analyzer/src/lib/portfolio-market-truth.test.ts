@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  assertPortfolioMarketEvidence,
   calculateHoldingMarketPerformance,
   calculatePortfolioMarketSummary,
   parsePortfolioQuoteSnapshot,
@@ -36,7 +37,7 @@ describe('parsePortfolioQuoteSnapshot', () => {
     expect(parsed.quotes.has('000660')).toBe(false);
   });
 
-  it('rejects malformed, stale, future, count-drift, duplicate and unrequested success evidence', () => {
+  it('rejects malformed, stale, future, count-drift and unrequested success evidence', () => {
     expect(() => parsePortfolioQuoteSnapshot({}, ['005930'], now)).toThrow('INVALID_PORTFOLIO_QUOTE_RESPONSE');
     expect(() => parsePortfolioQuoteSnapshot(envelope({ requested: 2 }), ['005930'], now)).toThrow('INVALID_PORTFOLIO_QUOTE_RESPONSE');
     expect(() => parsePortfolioQuoteSnapshot(envelope({ available: 0 }), ['005930'], now)).toThrow('INVALID_PORTFOLIO_QUOTE_RESPONSE');
@@ -48,6 +49,16 @@ describe('parsePortfolioQuoteSnapshot', () => {
 });
 
 describe('portfolio market calculations', () => {
+  it('fails closed before the existing portfolio UI can turn a missing quote into a fabricated zero return', () => {
+    expect(() => assertPortfolioMarketEvidence([
+      { ticker: '005930', quantity: 10, average_price: 70_000, currentPrice: null },
+    ])).toThrow('PORTFOLIO_MARKET_EVIDENCE_MISSING');
+
+    expect(() => assertPortfolioMarketEvidence([
+      { ticker: '005930', quantity: 10, average_price: 70_000, currentPrice: 72_000 },
+    ])).not.toThrow();
+  });
+
   it('never replaces a missing current quote with average price / fabricated zero return', () => {
     const rows = [
       { quantity: 10, average_price: 70_000, currentPrice: null },
