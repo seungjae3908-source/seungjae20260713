@@ -183,7 +183,7 @@ test('authorized fetch captures the active query signal before async session loo
   const authFetch = source('stock-analyzer/src/lib/auth-fetch.ts');
   assert.match(authFetch, /const signal = init\.signal \?\? getActiveQuerySignal\(\)/);
   assert.match(authFetch, /const response = await fetch\(input, \{ \.\.\.init, headers, signal: controller\.signal \}\)/);
-  assert.match(authFetch, /return await validateInvestmentResponse\(input, response\)/);
+  assert.match(authFetch, /return await validateInvestmentResponse\(input, init, response\)/);
   const signalCapture = authFetch.indexOf('const signal =');
   const sessionLookup = authFetch.indexOf('getSupabase().auth.getSession()');
   assert.ok(sessionLookup >= 0, 'Supabase auth session lookup must remain explicit');
