@@ -21,6 +21,10 @@ export interface PortfolioMarketRow {
   currentPrice: number | null;
 }
 
+export interface PortfolioEvidenceRow extends PortfolioMarketRow {
+  ticker: string;
+}
+
 export interface PortfolioMarketSummary {
   cost: number;
   value: number | null;
@@ -36,6 +40,7 @@ export interface PortfolioHoldingPerformance {
 }
 
 const INVALID_PORTFOLIO_QUOTES = 'INVALID_PORTFOLIO_QUOTE_RESPONSE';
+const MISSING_PORTFOLIO_MARKET_EVIDENCE = 'PORTFOLIO_MARKET_EVIDENCE_MISSING';
 const MAX_ENVELOPE_AGE_MS = 2 * 60_000;
 const MAX_FUTURE_SKEW_MS = 5_000;
 
@@ -98,6 +103,19 @@ export function parsePortfolioQuoteSnapshot(
     updatedAt: value.updatedAt,
     complete,
   };
+}
+
+export function assertPortfolioMarketEvidence(rows: PortfolioEvidenceRow[]): void {
+  const missing = rows
+    .filter((row) => !isFiniteNumber(row.currentPrice) || row.currentPrice <= 0)
+    .map((row) => row.ticker.trim().toUpperCase())
+    .filter(Boolean);
+
+  if (missing.length === 0) return;
+
+  throw new Error(
+    `${MISSING_PORTFOLIO_MARKET_EVIDENCE}: 현재 시세 근거를 확인하지 못했습니다 (${Array.from(new Set(missing)).join(', ')}).`,
+  );
 }
 
 export function calculatePortfolioMarketSummary(
