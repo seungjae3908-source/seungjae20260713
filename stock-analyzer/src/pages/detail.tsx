@@ -8,6 +8,7 @@ import { ResponsiveTabs } from '@/components/responsive-tabs';
 import { apiGet } from '@/lib/api';
 import { useAnalysisSelection, type AnalysisSelection } from '@/lib/analysis-selection';
 import { displayStockName, formatAppPrice } from '@/lib/stock-display';
+import { parseStockDetailNews, parseStockDetailProfile, parseStockDetailQuote } from '@/lib/stock-detail-response';
 import { UNIFIED_CHART_TIMEFRAMES } from '@/lib/unified-chart-data';
 
 const AiChartPage = lazy(() => import('@/pages/ai-chart'));
@@ -101,22 +102,34 @@ export default function DetailPage() {
   }, [location]);
 
   const quote = useQuery({
-    queryKey: ['clean-stock-detail-quote', ticker],
-    queryFn: () => apiGet<AnyObj>(`/stocks/${encodeURIComponent(ticker)}/quote`),
+    queryKey: ['clean-stock-detail-quote', market, ticker],
+    queryFn: async () => parseStockDetailQuote(
+      await apiGet<unknown>(`/stocks/${encodeURIComponent(ticker)}/quote`),
+      ticker,
+      market,
+    ),
     enabled: Boolean(ticker) && tab === 'summary',
     staleTime: 30_000,
     gcTime: 10 * 60_000,
   });
   const profile = useQuery({
-    queryKey: ['clean-stock-detail-profile', ticker],
-    queryFn: () => apiGet<AnyObj>(`/stocks/${encodeURIComponent(ticker)}/profile`),
+    queryKey: ['clean-stock-detail-profile', market, ticker],
+    queryFn: async () => parseStockDetailProfile(
+      await apiGet<unknown>(`/stocks/${encodeURIComponent(ticker)}/profile`),
+      ticker,
+      market,
+    ),
     enabled: Boolean(ticker) && tab === 'summary',
     staleTime: 5 * 60_000,
     gcTime: 30 * 60_000,
   });
   const news = useQuery({
-    queryKey: ['clean-stock-detail-news', ticker],
-    queryFn: () => apiGet<AnyObj>(`/stocks/${encodeURIComponent(ticker)}/news?all=1`),
+    queryKey: ['clean-stock-detail-news', market, ticker],
+    queryFn: async () => parseStockDetailNews(
+      await apiGet<unknown>(`/stocks/${encodeURIComponent(ticker)}/news?all=1`),
+      ticker,
+      market,
+    ),
     enabled: Boolean(ticker) && tab === 'news',
     staleTime: 60_000,
     gcTime: 15 * 60_000,
