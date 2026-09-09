@@ -10,7 +10,7 @@ import type {
   MarketInformationRoomId,
 } from '../../api-server/src/services/market-information.contract';
 
-const NOW = '2026-08-11T03:30:00.000Z';
+const NOW = new Date().toISOString();
 
 function analyzerRoot(): string {
   return path.basename(process.cwd()) === 'stock-analyzer'
@@ -256,6 +256,7 @@ async function mockUnifiedSearch(page: Page) {
       .map((item) => ({ ...item, dataAsOf }));
     await fulfill(route, {
       ok: true,
+      state: results.length ? 'FULL' : 'EMPTY',
       q,
       asset: 'all',
       market: null,

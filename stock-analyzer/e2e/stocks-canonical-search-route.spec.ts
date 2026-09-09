@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 
-const now = '2026-09-04T03:00:00.000Z';
+const now = new Date().toISOString();
 
 const krSamsung = {
   id: 'stock:KR:KOSPI:005930',
