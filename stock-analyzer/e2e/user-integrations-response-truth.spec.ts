@@ -27,11 +27,14 @@ test('user integrations validates canonical HTTP 200 truth before the UI can nor
   expect(response).toContain("telegram.status !== 'ACTIVE' || telegram.connectedAt === null");
   expect(response).toContain("policy.userId !== expectedUserId");
   expect(response).toContain("root.privateApiRequests !== 0");
+  expect(response).toContain('const expectedLinkingReady = runtime.deliveryReady === true');
+  expect(response).toContain('runtime.linkingReady !== expectedLinkingReady');
   expect(response).toContain("runtime.orderAuthority !== 'NONE'");
   expect(response).toContain('root.partial !== expectedPartial');
 
   expect(backend).toContain('ok: true,');
   expect(backend).toContain('telegramRuntime: telegramRuntimeState(),');
+  expect(backend).toContain('linkingReady: deliveryReady && webhookConfigured && botUsernameConfigured,');
   expect(backend).toContain("prioritySemantics: 'DELIVERY_URGENCY_ONLY'");
   expect(backend).toContain('privateApiRequests: 0,');
   expect(backend).toContain('ordersSubmitted: 0,');
