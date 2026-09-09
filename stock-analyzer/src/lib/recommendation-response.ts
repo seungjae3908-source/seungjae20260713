@@ -10,6 +10,8 @@ const DATA_QUALITY_VALUES = new Set(['sufficient', 'partial', 'insufficient', 's
 const FINANCIAL_STABILITY_VALUES = new Set(['안정', '보통', '불안정', '판단 불가']);
 const NEWS_RISK_VALUES = new Set(['낮음', '보통', '높음', '판단 불가']);
 const OPINION_VALUES = new Set(['매수', '관망', '매도']);
+const RECOMMENDATION_MAX_AGE_MS = 10 * 60_000;
+const RECOMMENDATION_FUTURE_TOLERANCE_MS = 60_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -43,6 +45,15 @@ function isTimestamp(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0 && Number.isFinite(Date.parse(value));
 }
 
+function isFreshRecommendationTimestamp(value: unknown, nowMs: number): value is string {
+  if (!isTimestamp(value)) return false;
+  const timestampMs = Date.parse(value);
+  return (
+    timestampMs >= nowMs - RECOMMENDATION_MAX_AGE_MS
+    && timestampMs <= nowMs + RECOMMENDATION_FUTURE_TOLERANCE_MS
+  );
+}
+
 function isExcludedBreakdown(value: unknown): value is Record<string, number> {
   if (!isRecord(value)) return false;
   return Object.values(value).every(
@@ -50,7 +61,11 @@ function isExcludedBreakdown(value: unknown): value is Record<string, number> {
   );
 }
 
-function isRecommendationRow(value: unknown, expectedMarket: RecommendationMarket): boolean {
+function isRecommendationRow(
+  value: unknown,
+  expectedMarket: RecommendationMarket,
+  nowMs: number,
+): boolean {
   if (!isRecord(value)) return false;
 
   if (!isNonEmptyString(value.ticker) || !isNonEmptyString(value.name)) return false;
@@ -73,7 +88,7 @@ function isRecommendationRow(value: unknown, expectedMarket: RecommendationMarke
   if (!isNullablePositiveNumber(value.targetPrice) || !isNonEmptyString(value.targetBasis)) return false;
   if (!isNullablePositiveNumber(value.stopLoss) || !isNonEmptyString(value.stopBasis)) return false;
   if (!isFiniteNumber(value.score) || value.score < 0 || value.score > 100) return false;
-  if (!isTimestamp(value.generatedAt) || !isTimestamp(value.dataUpdatedAt)) return false;
+  if (!isFreshRecommendationTimestamp(value.generatedAt, nowMs) || !isTimestamp(value.dataUpdatedAt)) return false;
   if (!isStringArray(value.providers) || value.providers.length === 0) return false;
   if (!DATA_QUALITY_VALUES.has(String(value.dataQuality))) return false;
 
@@ -85,13 +100,15 @@ function isRecommendationRow(value: unknown, expectedMarket: RecommendationMarke
 
 /**
  * HTTP 200 is transport success only. Recommendation data is investment-facing,
- * so a malformed or explicitly non-success envelope must fail closed instead of
- * becoming a legitimate-looking empty candidate list in the UI.
+ * so a malformed, stale, materially future-dated, or explicitly non-success envelope
+ * must fail closed instead of becoming a legitimate-looking current candidate list.
  */
 export function requireRecommendationResponse<T>(
   payload: unknown,
   expectedMarket: RecommendationMarket,
 ): T {
+  const nowMs = Date.now();
+
   if (!isRecord(payload)) throw new Error('INVALID_RECOMMENDATION_RESPONSE');
   if (payload.ok !== true) throw new Error('INVALID_RECOMMENDATION_RESPONSE');
   if (payload.market !== expectedMarket) throw new Error('INVALID_RECOMMENDATION_RESPONSE');
@@ -99,7 +116,9 @@ export function requireRecommendationResponse<T>(
   if (payload.analysisMode !== 'rule-based') throw new Error('INVALID_RECOMMENDATION_RESPONSE');
   if (payload.aiConfigured !== false) throw new Error('INVALID_RECOMMENDATION_RESPONSE');
   if (!isNonEmptyString(payload.analysisDescription)) throw new Error('INVALID_RECOMMENDATION_RESPONSE');
-  if (!isTimestamp(payload.generatedAt)) throw new Error('INVALID_RECOMMENDATION_RESPONSE');
+  if (!isFreshRecommendationTimestamp(payload.generatedAt, nowMs)) {
+    throw new Error('INVALID_RECOMMENDATION_RESPONSE');
+  }
   if (!Array.isArray(payload.rows)) throw new Error('INVALID_RECOMMENDATION_RESPONSE');
   if (!Number.isInteger(payload.excludedCount) || (payload.excludedCount as number) < 0) {
     throw new Error('INVALID_RECOMMENDATION_RESPONSE');
@@ -112,7 +131,7 @@ export function requireRecommendationResponse<T>(
     throw new Error('INVALID_RECOMMENDATION_RESPONSE');
   }
   if (!isNonEmptyString(payload.dataQualityNote)) throw new Error('INVALID_RECOMMENDATION_RESPONSE');
-  if (!payload.rows.every((row) => isRecommendationRow(row, expectedMarket))) {
+  if (!payload.rows.every((row) => isRecommendationRow(row, expectedMarket, nowMs))) {
     throw new Error('INVALID_RECOMMENDATION_RESPONSE');
   }
 
