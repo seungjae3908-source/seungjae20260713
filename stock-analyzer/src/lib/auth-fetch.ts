@@ -5,6 +5,11 @@ import {
   APP_API_SESSION_TIMEOUT_MS,
   withFiniteDeadline,
 } from '@/lib/auth-bootstrap';
+import {
+  INVALID_ACCOUNT_READONLY_RESPONSE,
+  isAccountReadonlySnapshotPath,
+  requireAccountReadonlySnapshotResponse,
+} from '@/lib/account-readonly-response';
 import { requireSpotCryptoTickerResponse } from '@/lib/crypto-ticker-response';
 import {
   INVALID_PRICE_ALERT_RESPONSE,
@@ -67,6 +72,14 @@ async function validateInvestmentResponse(
   }
 
   const method = requestMethod(input, init);
+  if (isAccountReadonlySnapshotPath(path, method)) {
+    try {
+      requireAccountReadonlySnapshotResponse(path, method, await response.clone().json());
+    } catch {
+      throw new Error(INVALID_ACCOUNT_READONLY_RESPONSE);
+    }
+  }
+
   if (isPriceAlertResponsePath(path, method)) {
     try {
       const payload = await response.clone().json();
