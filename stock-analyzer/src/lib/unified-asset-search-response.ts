@@ -45,8 +45,10 @@ function stringValue(value: unknown, label: string): string {
 }
 
 function safeCount(value: unknown, label: string, allowZero = true): number {
-  if (!Number.isSafeInteger(value) || Number(value) < (allowZero ? 0 : 1)) fail(`${label} must be a safe non-negative integer`);
-  return Number(value);
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < (allowZero ? 0 : 1)) {
+    fail(`${label} must be a safe non-negative integer`);
+  }
+  return value;
 }
 
 function timestamp(value: unknown, label: string, nowMs: number): string {
