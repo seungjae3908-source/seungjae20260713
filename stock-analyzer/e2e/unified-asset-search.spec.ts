@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 
-const now = '2026-08-04T06:00:00.000Z';
+const now = new Date().toISOString();
 const fixtures = [
   { id: 'stock:KR:KOSPI:005930', assetType: 'stock', market: 'KR', instrumentType: 'stock', exchange: 'KOSPI', ticker: '005930', productCode: '005930', koreanName: '삼성전자', englishName: 'Samsung Electronics', displayName: '삼성전자', baseSymbol: '005930', quoteCurrency: 'KRW', matchType: 'name_prefix', active: true, provider: 'KRX', dataAsOf: now },
   { id: 'stock:US:NASDAQ:AAPL', assetType: 'stock', market: 'US', instrumentType: 'stock', exchange: 'NASDAQ', ticker: 'AAPL', productCode: 'AAPL', koreanName: '애플', englishName: 'Apple', displayName: '애플', baseSymbol: 'AAPL', quoteCurrency: 'USD', matchType: 'code_exact', active: true, provider: 'FINNHUB', dataAsOf: now },
@@ -32,7 +32,7 @@ function responseFor(query: string, market: string | null, asset = 'all') {
     dataAsOf: now,
     stale: false,
     partial: false,
-    providers: [],
+    providers: [{ provider: 'e2e-fixture', status: 'ok', count: results.length, dataAsOf: now }],
     hiddenMatches: otherMarket ? [{ market: otherMarket, count: 1 }] : [],
   };
 }
@@ -160,7 +160,9 @@ test('search distinguishes NO_MATCH, PROVIDER_UNAVAILABLE, and DATA_UNAVAILABLE'
       dataAsOf: now,
       stale: providerDown,
       partial: providerDown,
-      providers: providerDown ? [{ provider: 'upbit', status: 'error', count: 0, dataAsOf: null }] : [],
+      providers: providerDown
+        ? [{ provider: 'upbit', status: 'error', count: 0, dataAsOf: null }]
+        : [{ provider: 'e2e-fixture', status: 'ok', count: 0, dataAsOf: now }],
       hiddenMatches: [],
     }) });
   });
