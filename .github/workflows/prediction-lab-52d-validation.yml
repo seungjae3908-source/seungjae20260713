@@ -34,6 +34,7 @@ jobs:
     timeout-minutes: 90
     outputs:
       research_sha: ${{ steps.sha.outputs.value }}
+      research_ready: ${{ steps.market_suite.outputs.research_ready }}
     steps:
       - name: Resolve immutable research ref
         id: research
@@ -113,25 +114,29 @@ jobs:
           RESEARCH_CODE_SHA: ${{ steps.sha.outputs.value }}
           TRAINING_CODE_SHA: ${{ steps.sha.outputs.value }}
           PRODUCER_SHA: ${{ steps.sha.outputs.value }}
-        run: node scripts/run-market-suite.js live-market-suite docs/market-suite-result.json docs/candidate-models
+        shell: bash
+        run: |
+          node scripts/run-market-suite.js live-market-suite docs/market-suite-result.json docs/candidate-models
+          status="$(node -p 'JSON.parse(require("fs").readFileSync("docs/market-suite-result.json", "utf8")).status')"
+          if [ "$status" = "pass" ]; then echo "research_ready=true" >> "$GITHUB_OUTPUT"; else echo "research_ready=false" >> "$GITHUB_OUTPUT"; fi
 
       - name: Audit frozen BTC and ETH futures models on unseen SOL
         id: futures_generalization_suite
-        if: steps.validate.outcome == 'success' && steps.market_suite.outcome == 'success'
+        if: steps.validate.outcome == 'success' && steps.market_suite.outputs.research_ready == 'true'
         continue-on-error: true
         working-directory: market-prediction-lab
         run: node scripts/run-futures-generalization-suite.js docs/futures-generalization-suite-result.json
 
       - name: Run cost funding spread and slippage aware futures PnL research
         id: futures_pnl_suite
-        if: steps.validate.outcome == 'success' && steps.market_suite.outcome == 'success' && steps.futures_generalization_suite.outcome == 'success'
+        if: steps.validate.outcome == 'success' && steps.market_suite.outputs.research_ready == 'true' && steps.futures_generalization_suite.outcome == 'success'
         continue-on-error: true
         working-directory: market-prediction-lab
         run: node scripts/run-futures-pnl-suite.js docs/futures-pnl-suite-result.json
 
       - name: Research fresh-asset futures trend volatility and funding regime gate
         id: futures_regime_suite
-        if: steps.validate.outcome == 'success' && steps.market_suite.outcome == 'success' && steps.futures_pnl_suite.outcome == 'success'
+        if: steps.validate.outcome == 'success' && steps.market_suite.outputs.research_ready == 'true' && steps.futures_pnl_suite.outcome == 'success'
         continue-on-error: true
         working-directory: market-prediction-lab
         run: node scripts/run-futures-regime-execution-suite.js docs/futures-regime-execution-suite-result.json
@@ -194,14 +199,14 @@ jobs:
 
       - name: Collect historical funding and compare temporal candidates
         id: derivatives_suite
-        if: steps.validate.outcome == 'success' && steps.market_suite.outcome == 'success'
+        if: steps.validate.outcome == 'success' && steps.market_suite.outputs.research_ready == 'true'
         continue-on-error: true
         working-directory: market-prediction-lab
         run: node scripts/run-derivatives-suite.js live-derivatives-suite docs/derivatives-suite-result.json docs/candidate-models-v2
 
       - name: Collect mark index and funding structure candidates
         id: structure_suite
-        if: steps.validate.outcome == 'success' && steps.market_suite.outcome == 'success' && steps.derivatives_suite.outcome == 'success'
+        if: steps.validate.outcome == 'success' && steps.market_suite.outputs.research_ready == 'true' && steps.derivatives_suite.outcome == 'success'
         continue-on-error: true
         working-directory: market-prediction-lab
         run: node scripts/run-market-structure-suite.js live-market-structure-suite docs/market-structure-suite-result.json docs/candidate-models-v3
@@ -218,7 +223,7 @@ jobs:
           JSON
 
       - name: Upload immutable raw model reference evidence
-        if: steps.market_suite.outcome == 'success'
+        if: steps.market_suite.outputs.research_ready == 'true'
         id: raw_reference_upload
         uses: actions/upload-artifact@v4
         with:
@@ -228,7 +233,7 @@ jobs:
           retention-days: 90
 
       - name: Resolve actual raw reference artifact metadata
-        if: steps.market_suite.outcome == 'success'
+        if: steps.market_suite.outputs.research_ready == 'true'
         id: raw_reference
         uses: actions/github-script@v7
         env:
@@ -265,7 +270,7 @@ jobs:
             core.setOutput('artifact_reference', `${process.env.GITHUB_SERVER_URL}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}/artifacts/${artifact.id}`);
 
       - name: Finalize #664 artifact receipt and reference provenance
-        if: steps.market_suite.outcome == 'success'
+        if: steps.market_suite.outputs.research_ready == 'true'
         working-directory: market-prediction-lab
         shell: bash
         env:
@@ -296,7 +301,7 @@ jobs:
           NODE
 
       - name: Upload finalized model reference evidence
-        if: steps.market_suite.outcome == 'success'
+        if: steps.market_suite.outputs.research_ready == 'true'
         id: reference_upload
         uses: actions/upload-artifact@v4
         with:
@@ -306,7 +311,7 @@ jobs:
           retention-days: 90
 
       - name: Record exact future reference evidence receipt
-        if: steps.market_suite.outcome == 'success'
+        if: steps.market_suite.outputs.research_ready == 'true'
         uses: actions/github-script@v7
         env:
           EXACT_HEAD_SHA: ${{ steps.sha.outputs.value }}
@@ -395,13 +400,13 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$RESEARCH_SHA"
 
       - name: Fail workflow when technical validation failed
-        if: always() && (steps.validate.outcome != 'success' || steps.market_suite.outcome != 'success' || steps.futures_generalization_suite.outcome != 'success' || steps.futures_pnl_suite.outcome != 'success' || steps.futures_regime_suite.outcome != 'success' || steps.upbit_spot_suite.outcome != 'success' || steps.upbit_spot_pnl_suite.outcome != 'success' || steps.upbit_spot_alternative_suite.outcome != 'success' || steps.stock_suite.outcome != 'success' || steps.stock_pnl_suite.outcome != 'success' || steps.stock_generalization_suite.outcome != 'success' || steps.us_pullback_suite.outcome != 'success' || steps.stock_regime_suite.outcome != 'success' || steps.derivatives_suite.outcome != 'success' || steps.structure_suite.outcome != 'success')
+        if: always() && (steps.validate.outcome == 'failure' || steps.market_suite.outcome == 'failure' || steps.futures_generalization_suite.outcome == 'failure' || steps.futures_pnl_suite.outcome == 'failure' || steps.futures_regime_suite.outcome == 'failure' || steps.upbit_spot_suite.outcome == 'failure' || steps.upbit_spot_pnl_suite.outcome == 'failure' || steps.upbit_spot_alternative_suite.outcome == 'failure' || steps.stock_suite.outcome == 'failure' || steps.stock_pnl_suite.outcome == 'failure' || steps.stock_generalization_suite.outcome == 'failure' || steps.us_pullback_suite.outcome == 'failure' || steps.stock_regime_suite.outcome == 'failure' || steps.derivatives_suite.outcome == 'failure' || steps.structure_suite.outcome == 'failure' || (github.event_name != 'pull_request' && steps.market_suite.outputs.research_ready != 'true'))
         run: exit 1
 
   durable-policy-preflight:
     name: Verify immutable release policy
     needs: validate-and-train
-    if: github.event_name == 'workflow_dispatch' && needs.validate-and-train.result == 'success'
+    if: github.event_name == 'workflow_dispatch' && needs.validate-and-train.result == 'success' && needs.validate-and-train.outputs.research_ready == 'true'
     uses: ./.github/workflows/prediction-lab-model-reference-durable-policy.yml
     with:
       expected_sha: ${{ needs.validate-and-train.outputs.research_sha }}
@@ -412,7 +417,7 @@ jobs:
     needs:
       - validate-and-train
       - durable-policy-preflight
-    if: github.event_name == 'workflow_dispatch' && needs.validate-and-train.result == 'success' && needs.durable-policy-preflight.result == 'success'
+    if: github.event_name == 'workflow_dispatch' && needs.validate-and-train.result == 'success' && needs.validate-and-train.outputs.research_ready == 'true' && needs.durable-policy-preflight.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

@@ -9,6 +9,7 @@ import { normalizeMissingEvidence } from './evidence-normalize.mjs';
 import { fetchBitgetFuturesEvidence, fetchUpbitSpotEvidence } from './public-data.mjs';
 import { buildSignalIntelligenceOverlay } from './signal-overlay.mjs';
 import { evaluateSpoofCandidate, SPOOF_CANDIDATE_CONTRACT } from './spoof-candidate.mjs';
+import { routeMarketIntelAi } from './news-disclosure-intelligence.mjs';
 
 const HOST = process.env.MARKET_INTELLIGENCE_HOST || '127.0.0.1';
 const PORT = Number(process.env.MARKET_INTELLIGENCE_PORT || 8791);
@@ -164,6 +165,13 @@ async function handler(req, res) {
         policy: DEFAULT_POLICY,
         scannerMode: 'SOFT_INTELLIGENCE_LAYER',
         autoTradingModes: ['PAPER_ONLY', 'BLOCKED_RISK', 'ELIGIBLE_FOR_PARENT_GATE'],
+        newsDisclosure: {
+          endpoint: '/v1/news-disclosure/route',
+          contract: 'MarketIntelAiRouteV1',
+          networkMode: 'LOOPBACK_ROUTING_ONLY',
+          generatedFactsAllowed: false,
+          orderAllowed: false,
+        },
         spoofCandidate: {
           contract: SPOOF_CANDIDATE_CONTRACT,
           mode: 'OBSERVE_ONLY',
@@ -202,6 +210,15 @@ async function handler(req, res) {
         intelligenceBaseUrl: `http://${HOST}:${PORT}`,
       });
       return json(res, 200, { serviceSha: SERVICE_SHA, ...overlay });
+    }
+
+    if (req.method === 'POST' && url.pathname === '/v1/news-disclosure/route') {
+      const body = await readJson(req);
+      const result = routeMarketIntelAi(body);
+      if (result.safety.executionAuthority !== 'NONE' || result.safety.orderAllowed !== false) {
+        throw new Error('NEWS_DISCLOSURE_ROUTE_UNSAFE_AUTHORITY');
+      }
+      return json(res, 200, { ok: true, serviceSha: SERVICE_SHA, result, safety: safety() });
     }
 
     if (req.method === 'POST' && url.pathname === '/v1/evaluate') {
