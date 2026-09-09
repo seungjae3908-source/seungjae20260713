@@ -11,6 +11,7 @@ import {
   requireAccountReadonlySnapshotResponse,
 } from '@/lib/account-readonly-response';
 import { requireSpotCryptoTickerResponse } from '@/lib/crypto-ticker-response';
+import { parsePortfolioQuoteSnapshot } from '@/lib/portfolio-market-truth';
 import {
   INVALID_PRICE_ALERT_RESPONSE,
   isPriceAlertResponsePath,
@@ -26,23 +27,42 @@ function abortReason(signal: AbortSignal): unknown {
   return signal.reason ?? new DOMException('The operation was aborted.', 'AbortError');
 }
 
-function requestPath(input: RequestInfo | URL): string {
+function requestUrl(input: RequestInfo | URL): URL | null {
   const raw = typeof input === 'string'
     ? input
     : input instanceof URL
       ? input.toString()
       : input.url;
   try {
-    return new URL(raw, window.location.origin).pathname;
+    return new URL(raw, window.location.origin);
   } catch {
-    return '';
+    return null;
   }
+}
+
+function requestPath(input: RequestInfo | URL): string {
+  return requestUrl(input)?.pathname ?? '';
 }
 
 function requestMethod(input: RequestInfo | URL, init: RequestInit): string {
   if (init.method) return init.method.toUpperCase();
   if (typeof Request !== 'undefined' && input instanceof Request) return input.method.toUpperCase();
   return 'GET';
+}
+
+function portfolioRequestedTickers(input: RequestInfo | URL): string[] {
+  const url = requestUrl(input);
+  if (!url) return [];
+  const raw = url.searchParams.get('tickers')
+    ?? url.searchParams.get('symbols')
+    ?? url.searchParams.get('symbol')
+    ?? url.searchParams.get('ticker')
+    ?? '';
+  return Array.from(new Set(
+    raw.split(',')
+      .map((ticker) => ticker.trim().toUpperCase().replace(/^(KR|US)[:.]/, ''))
+      .filter(Boolean),
+  ));
 }
 
 function jsonResponseFrom(response: Response, payload: unknown): Response {
@@ -77,6 +97,17 @@ async function validateInvestmentResponse(
       requireAccountReadonlySnapshotResponse(path, method, await response.clone().json());
     } catch {
       throw new Error(INVALID_ACCOUNT_READONLY_RESPONSE);
+    }
+  }
+
+  if (path === '/api/quotes' && method === 'GET') {
+    try {
+      parsePortfolioQuoteSnapshot(
+        await response.clone().json(),
+        portfolioRequestedTickers(input),
+      );
+    } catch {
+      throw new Error('INVALID_PORTFOLIO_QUOTE_RESPONSE');
     }
   }
 
