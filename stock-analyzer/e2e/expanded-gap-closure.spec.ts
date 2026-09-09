@@ -10,7 +10,7 @@ import type {
   MarketInformationRoomId,
 } from '../../api-server/src/services/market-information.contract';
 
-const NOW = '2026-08-11T03:30:00.000Z';
+const NOW = new Date().toISOString();
 
 function analyzerRoot(): string {
   return path.basename(process.cwd()) === 'stock-analyzer'
@@ -247,11 +247,25 @@ const SEARCH_FIXTURES: SearchFixture[] = [
 
 async function mockUnifiedSearch(page: Page) {
   await page.route('**/api/search/suggest**', async (route) => {
-    const q = (new URL(route.request().url()).searchParams.get('q') ?? '').toUpperCase().replace(/[\s/.-]/g, '');
+    const q = new URL(route.request().url()).searchParams.get('q') ?? '';
+    const lookup = q.toUpperCase().replace(/[\s/.-]/g, '');
     const results = SEARCH_FIXTURES.filter((item) => [item.ticker, item.symbol, item.productCode, item.displayName, item.englishName]
       .filter(Boolean)
-      .some((value) => String(value).toUpperCase().replace(/[\s/.-]/g, '').includes(q)));
-    await fulfill(route, { ok: true, q, asset: 'all', market: null, results, count: results.length, dataAsOf: NOW, stale: false, partial: false, providers: [], hiddenMatches: [] });
+      .some((value) => String(value).toUpperCase().replace(/[\s/.-]/g, '').includes(lookup)));
+    await fulfill(route, {
+      ok: true,
+      state: results.length ? 'FULL' : 'EMPTY',
+      q,
+      asset: 'all',
+      market: null,
+      results,
+      count: results.length,
+      dataAsOf: NOW,
+      stale: false,
+      partial: false,
+      providers: [{ provider: 'e2e-fixture', status: 'ok', count: results.length, dataAsOf: NOW }],
+      hiddenMatches: [],
+    });
   });
 }
 
