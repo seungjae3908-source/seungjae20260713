@@ -134,6 +134,24 @@ describe('requireUserIntegrationsResponse', () => {
     }));
   });
 
+  it('requires linking readiness to match its canonical delivery, webhook, and bot prerequisites', () => {
+    rejects(canonical({
+      telegramRuntime: {
+        ...(canonical().telegramRuntime as Record<string, unknown>),
+        linkingReady: true,
+      },
+    }));
+    expect(requireUserIntegrationsResponse(canonical({
+      telegramRuntime: {
+        ...(canonical().telegramRuntime as Record<string, unknown>),
+        deliveryReady: true,
+        webhookConfigured: true,
+        botUsernameConfigured: true,
+        linkingReady: true,
+      },
+    }), USER_ID, NOW)).toBeTruthy();
+  });
+
   it('rejects partial and availability contradictions', () => {
     rejects(canonical({ partial: true }));
     rejects(canonical({ telegramStorageAvailable: false, telegramStorageErrorCode: null, partial: true }));
