@@ -49,6 +49,71 @@ const canonicalNotConfigured = {
   errorCode: 'ACCOUNT_NOT_CONFIGURED',
 };
 
+function canonicalUserIntegrations() {
+  return {
+    ok: true,
+    brokerConnections: [],
+    brokerConnectionsAvailable: true,
+    brokerConnectionsErrorCode: null,
+    brokerMetadataRead: true,
+    telegram: { connected: false, status: 'DISCONNECTED', connectedAt: null },
+    preferences: {
+      ORDER_SUBMITTED: false,
+      ORDER_PARTIALLY_FILLED: false,
+      ORDER_FILLED: false,
+      ORDER_CANCELLED: false,
+      ORDER_REJECTED: false,
+      POSITION_OPENED: false,
+      POSITION_INCREASED: false,
+      POSITION_REDUCED: false,
+      POSITION_CLOSED: false,
+      TAKE_PROFIT_FILLED: false,
+      STOP_FILLED: false,
+      MANUAL_PORTFOLIO_ENTRY: false,
+    },
+    deliveries: [],
+    telegramStorageAvailable: true,
+    telegramStorageErrorCode: null,
+    alertPolicy: {
+      userId: accountUserId,
+      enabled: false,
+      markets: ['KR', 'US', 'CRYPTO_SPOT', 'CRYPTO_FUTURES'],
+      signalTypes: ['BUY', 'LONG', 'SHORT', 'NO_TRADE', 'PRICE_TARGET', 'STRATEGY_HEALTH', 'CHAMPION', 'RESEARCH', 'SETTLEMENT', 'PROVIDER_SERVER_ERROR'],
+      priorities: ['CRITICAL', 'IMPORTANT', 'INFO'],
+      quietHours: { enabled: false, start: '22:00', end: '07:00', timeZone: 'Asia/Seoul', criticalBypass: true },
+      cooldownMs: 300_000,
+      sameEventDedupeMs: 86_400_000,
+      sameSymbolWindowMs: 3_600_000,
+      sameSymbolRepeatLimit: 3,
+      deliveryMode: 'IMMEDIATE',
+      digest: { enabled: false, windowMs: 1_800_000 },
+    },
+    alertPolicySource: 'DEFAULT_MISSING',
+    alertPolicyStorageAvailable: true,
+    alertPolicyStorageErrorCode: null,
+    telegramRuntime: {
+      deliveryReady: false,
+      linkingReady: false,
+      webhookConfigured: false,
+      botUsernameConfigured: false,
+      stockRoomReady: false,
+      cryptoRoomReady: false,
+      richSignalEnabled: false,
+      aiExplanationEnabled: false,
+      signalFollowupEnabled: false,
+      memberHoldingsEnabled: false,
+      orderAuthority: 'NONE',
+      privateTradingApiAllowed: false,
+      realOrderAllowed: false,
+    },
+    prioritySemantics: 'DELIVERY_URGENCY_ONLY',
+    partial: false,
+    privateApiRequests: 0,
+    ordersSubmitted: 0,
+    ordersCancelled: 0,
+  };
+}
+
 function fulfill(route: Route, body: unknown) {
   return route.fulfill({
     status: 200,
@@ -133,11 +198,7 @@ async function installMalformedAccountSnapshot(page: Page) {
       return fulfill(route, { ...canonicalNotConfigured, provider: 'bitget' });
     }
     if (path === '/api/user-integrations') {
-      return fulfill(route, {
-        brokerConnections: [],
-        telegram: { connected: false, status: 'DISCONNECTED', connectedAt: null },
-        preferences: {},
-      });
+      return fulfill(route, canonicalUserIntegrations());
     }
     return fulfill(route, { ok: true, items: [], rows: [], results: [] });
   });
