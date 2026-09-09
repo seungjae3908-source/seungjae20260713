@@ -174,7 +174,21 @@ async function loadUniverse(market: 'KR' | 'US'): Promise<QuoteRow[]> {
       ...result.value.recommended,
     );
   }
-  return uniqueRows(rows);
+  const unique = uniqueRows(rows);
+  if (unique.length === 0) {
+    throw new Error(`SECTOR_POPULAR_PROVIDER_EVIDENCE_UNAVAILABLE:${market}`);
+  }
+  return unique;
+}
+
+function requireSectorEvidence(
+  market: 'KR' | 'US',
+  sectors: SectorPopularGroup[],
+): SectorPopularGroup[] {
+  if (!sectors.some((sector) => sector.rows.length > 0)) {
+    throw new Error(`SECTOR_POPULAR_CLASSIFICATION_EVIDENCE_UNAVAILABLE:${market}`);
+  }
+  return sectors;
 }
 
 async function buildKr(): Promise<SectorPopularResult> {
@@ -192,11 +206,11 @@ async function buildKr(): Promise<SectorPopularResult> {
     buckets.set(key, list);
   }
 
-  const sectors: SectorPopularGroup[] = KR_SECTORS.map((s) => ({
+  const sectors = requireSectorEvidence('KR', KR_SECTORS.map((s) => ({
     key: s.key,
     label: s.label,
     rows: (buckets.get(s.key) ?? []).map((row, i) => toRow(row, i + 1)),
-  }));
+  })));
 
   return {
     market: 'KR',
@@ -249,11 +263,11 @@ async function buildUs(): Promise<SectorPopularResult> {
     buckets.set(key, list);
   }
 
-  const sectors: SectorPopularGroup[] = US_SECTORS.map((s) => ({
+  const sectors = requireSectorEvidence('US', US_SECTORS.map((s) => ({
     key: s.key,
     label: s.label,
     rows: (buckets.get(s.key) ?? []).map((row, i) => toRow(row, i + 1)),
-  }));
+  })));
 
   return {
     market: 'US',
@@ -264,7 +278,7 @@ async function buildUs(): Promise<SectorPopularResult> {
 }
 
 async function getSectorPopular(market: 'KR' | 'US'): Promise<SectorPopularResult> {
-  return cached(`sector-popular:v1:${market}`, TTL.quote, async () =>
+  return cached(`sector-popular:v2:${market}`, TTL.quote, async () =>
     market === 'KR' ? buildKr() : buildUs(),
   );
 }
