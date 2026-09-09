@@ -1022,8 +1022,8 @@ export default function PortfolioPage() {
 						},
 					);
 
-					setRows(enrichedRows);
 					syncPortfolioChartOverlays(enrichedRows);
+					setRows(enrichedRows);
 
 					setInitialized(true);
 				} catch (cause) {
