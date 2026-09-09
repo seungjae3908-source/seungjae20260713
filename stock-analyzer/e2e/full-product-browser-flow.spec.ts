@@ -2,6 +2,8 @@ import type { Page, Route } from '@playwright/test';
 import { expect, test } from './support/full-product-evidence';
 import { ageBrowserSession, installFullProductFixtures } from './support/full-product-fixtures';
 
+const SEARCH_NOW = new Date().toISOString();
+
 async function openMenuItem(page: Page, group: string, item: string) {
   const trigger = page.getByRole('button', { name: group, exact: true });
   await expect(trigger).toBeVisible();
@@ -40,13 +42,13 @@ function searchResult(query: string) {
     quoteCurrency: apple ? 'USD' : 'KRW',
     matchType: 'exact',
     active: true,
-    provider: 'e2e-fixture',
-    dataAsOf: '2026-09-05T10:00:00.000Z',
+    provider: apple ? 'FINNHUB' : 'KRX',
+    dataAsOf: SEARCH_NOW,
   };
 }
 
 function searchEnvelope(query: string, results = [searchResult(query)]) {
-  const dataAsOf = '2026-09-05T10:00:00.000Z';
+  const dataAsOf = SEARCH_NOW;
   return {
     ok: true,
     state: results.length ? 'FULL' : 'EMPTY',
@@ -58,7 +60,12 @@ function searchEnvelope(query: string, results = [searchResult(query)]) {
     dataAsOf,
     stale: false,
     partial: false,
-    providers: [{ provider: 'e2e-fixture', status: 'ok', count: results.length, dataAsOf }],
+    providers: [
+      { provider: 'krx', status: 'ok', count: 1, dataAsOf },
+      { provider: 'finnhub', status: 'ok', count: 1, dataAsOf },
+      { provider: 'upbit', status: 'ok', count: 1, dataAsOf },
+      { provider: 'bitget', status: 'ok', count: 1, dataAsOf },
+    ],
     hiddenMatches: [],
   };
 }
@@ -168,11 +175,17 @@ test('search fault matrix fails closed and latest response wins without leaking 
       expected: /PROVIDER_UNAVAILABLE/u,
       handler: async (route) => {
         const query = new URL(route.request().url()).searchParams.get('q') ?? '';
+        const unavailable = searchEnvelope(query, []);
         return json(route, {
-          ...searchEnvelope(query, []),
+          ...unavailable,
           state: 'DEGRADED',
           partial: true,
-          providers: [{ provider: 'krx', status: 'error', count: 0, dataAsOf: null, message: 'provider unavailable' }],
+          providers: [
+            { provider: 'krx', status: 'error', count: 0, dataAsOf: null, message: 'provider unavailable' },
+            { provider: 'finnhub', status: 'ok', count: 1, dataAsOf: unavailable.dataAsOf },
+            { provider: 'upbit', status: 'ok', count: 1, dataAsOf: unavailable.dataAsOf },
+            { provider: 'bitget', status: 'ok', count: 1, dataAsOf: unavailable.dataAsOf },
+          ],
         });
       },
     },
