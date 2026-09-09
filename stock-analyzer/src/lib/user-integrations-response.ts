@@ -29,7 +29,12 @@ const POLICY_SIGNAL_TYPES = [
   'PROVIDER_SERVER_ERROR',
 ] as const;
 const POLICY_PRIORITIES = ['CRITICAL', 'IMPORTANT', 'INFO'] as const;
+const TELEGRAM_STATUSES = ['ACTIVE', 'REVOKED', 'DISCONNECTED', 'UNAVAILABLE'] as const;
+const ALERT_POLICY_SOURCES = ['STORED', 'DEFAULT_MISSING', 'DEFAULT_INVALID'] as const;
+const BROKER_EXCHANGES = ['bitget', 'upbit', 'kiwoom'] as const;
+const BROKER_ACCOUNT_MODES = ['paper', 'mock', 'live'] as const;
 const FUTURE_SKEW_MS = 5_000;
+const MAX_POLICY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 type RecordValue = Record<string, unknown>;
 
@@ -55,6 +60,31 @@ function nonNegativeFinite(value: unknown): boolean {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }
 
+function finitePolicyWindow(value: unknown): boolean {
+  return nonNegativeFinite(value) && (value as number) <= MAX_POLICY_WINDOW_MS;
+}
+
+function minuteOfDay(value: unknown): number | null {
+  if (typeof value !== 'string') return null;
+  const match = /^(\d{2}):(\d{2})$/u.exec(value);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) return null;
+  if (!Number.isInteger(minute) || minute < 0 || minute > 59) return null;
+  return hour * 60 + minute;
+}
+
+function validTimeZone(value: unknown): boolean {
+  if (!nonEmptyString(value)) return false;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value }).format(new Date(0));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function timestampOrNull(value: unknown, now: number): boolean {
   if (value === null) return true;
   if (!nonEmptyString(value)) return false;
@@ -73,16 +103,28 @@ function validAvailabilityError(available: unknown, code: unknown): boolean {
   return available ? code === null : nonEmptyString(code);
 }
 
-function validateBrokerConnections(value: unknown, availability: unknown, now: number): void {
+function validateBrokerConnections(
+  value: unknown,
+  availability: unknown,
+  expectedUserId: string,
+  now: number,
+): void {
   if (!Array.isArray(value)) fail();
   if (availability !== true && value.length !== 0) fail();
   const seen = new Set<string>();
   for (const item of value) {
     const connection = record(item);
     if (!connection) fail();
-    if (!nonEmptyString(connection.exchange) || !nonEmptyString(connection.accountMode)) fail();
+    if (connection.userId !== expectedUserId
+      || typeof connection.exchange !== 'string'
+      || !BROKER_EXCHANGES.includes(connection.exchange as (typeof BROKER_EXCHANGES)[number])
+      || typeof connection.accountMode !== 'string'
+      || !BROKER_ACCOUNT_MODES.includes(connection.accountMode as (typeof BROKER_ACCOUNT_MODES)[number])) fail();
     if (typeof connection.configured !== 'boolean') fail();
-    if (!timestampOrNull(connection.lastVerifiedAt, now) || !nullableString(connection.lastErrorCode)) fail();
+    if (!timestampOrNull(connection.lastVerifiedAt, now)
+      || !timestampOrNull(connection.updatedAt, now)
+      || connection.updatedAt === null
+      || !nullableString(connection.lastErrorCode)) fail();
     if (connection.credentialsExposed !== false) fail();
     const identity = connection.exchange.trim().toLowerCase();
     if (seen.has(identity)) fail();
@@ -106,24 +148,29 @@ function validateAlertPolicy(value: unknown, expectedUserId: string): void {
   if (!exactKnownArray(policy.priorities, POLICY_PRIORITIES)) fail();
 
   const quietHours = record(policy.quietHours);
+  const quietStart = minuteOfDay(quietHours?.start);
+  const quietEnd = minuteOfDay(quietHours?.end);
   if (!quietHours
     || typeof quietHours.enabled !== 'boolean'
-    || !nonEmptyString(quietHours.start)
-    || !/^\d{2}:\d{2}$/.test(quietHours.start)
-    || !nonEmptyString(quietHours.end)
-    || !/^\d{2}:\d{2}$/.test(quietHours.end)
-    || !nonEmptyString(quietHours.timeZone)
+    || quietStart === null
+    || quietEnd === null
+    || (quietHours.enabled && quietStart === quietEnd)
+    || !validTimeZone(quietHours.timeZone)
     || typeof quietHours.criticalBypass !== 'boolean') fail();
 
-  if (!nonNegativeFinite(policy.cooldownMs)
-    || !nonNegativeFinite(policy.sameEventDedupeMs)
-    || !nonNegativeFinite(policy.sameSymbolWindowMs)
+  if (!finitePolicyWindow(policy.cooldownMs)
+    || !finitePolicyWindow(policy.sameEventDedupeMs)
+    || !finitePolicyWindow(policy.sameSymbolWindowMs)
     || !nonNegativeFinite(policy.sameSymbolRepeatLimit)
-    || !Number.isInteger(policy.sameSymbolRepeatLimit)) fail();
+    || !Number.isInteger(policy.sameSymbolRepeatLimit)
+    || (policy.sameSymbolRepeatLimit as number) > 100) fail();
   if (policy.deliveryMode !== 'IMMEDIATE' && policy.deliveryMode !== 'BATCHED') fail();
 
   const digest = record(policy.digest);
-  if (!digest || typeof digest.enabled !== 'boolean' || !nonNegativeFinite(digest.windowMs)) fail();
+  if (!digest
+    || typeof digest.enabled !== 'boolean'
+    || !finitePolicyWindow(digest.windowMs)
+    || (policy.deliveryMode === 'BATCHED' && (!digest.enabled || digest.windowMs === 0))) fail();
 }
 
 function validateTelegramRuntime(value: unknown): void {
@@ -169,11 +216,13 @@ export function requireUserIntegrationsResponse(
   const telegram = record(root.telegram);
   if (!telegram
     || typeof telegram.connected !== 'boolean'
-    || !nonEmptyString(telegram.status)
+    || !TELEGRAM_STATUSES.includes(telegram.status as (typeof TELEGRAM_STATUSES)[number])
     || !timestampOrNull(telegram.connectedAt, now)) fail();
   if (telegram.connected === true) {
     if (telegram.status !== 'ACTIVE' || telegram.connectedAt === null) fail();
-  } else if (telegram.status === 'ACTIVE') {
+  } else if (telegram.status === 'ACTIVE'
+    || ((telegram.status === 'DISCONNECTED' || telegram.status === 'UNAVAILABLE')
+      && telegram.connectedAt !== null)) {
     fail();
   }
 
@@ -192,12 +241,12 @@ export function requireUserIntegrationsResponse(
     fail();
   }
 
-  validateBrokerConnections(root.brokerConnections, root.brokerConnectionsAvailable, now);
+  validateBrokerConnections(root.brokerConnections, root.brokerConnectionsAvailable, expectedUserId, now);
   if (typeof root.brokerMetadataRead !== 'boolean'
     || root.brokerMetadataRead !== (root.brokerConnectionsAvailable === true)) fail();
 
   validateAlertPolicy(root.alertPolicy, expectedUserId);
-  if (!nonEmptyString(root.alertPolicySource)) fail();
+  if (!ALERT_POLICY_SOURCES.includes(root.alertPolicySource as (typeof ALERT_POLICY_SOURCES)[number])) fail();
   validateTelegramRuntime(root.telegramRuntime);
 
   const expectedPartial = root.telegramStorageAvailable === false
