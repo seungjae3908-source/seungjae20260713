@@ -24,6 +24,7 @@ import { useAssetMode } from '@/lib/asset-mode';
 import { useAuth } from '@/lib/auth';
 import { getSupabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
+import { fetchUnifiedAssetSuggestions } from '@/lib/unified-asset-search';
 import { UnifiedTradeJournalPanel } from '@/components/unified-trade-journal-panel';
 import {
 	getRememberedPurchaseDate,
@@ -223,69 +224,44 @@ function supabaseErrorMessage(
 function normalizeHolding(
 	item: Record<string, unknown>,
 ): Holding {
-	const market: Market =
-		item.market === 'US'
-			? 'US'
-			: 'KR';
-
-	const currency: Currency =
-		item.currency === 'USD'
-			? 'USD'
-			: market === 'US'
-				? 'USD'
-				: 'KRW';
+	const id = String(item.id ?? '').trim();
 	const ticker = String(item.ticker ?? '').trim().toUpperCase();
+	const name = String(item.name ?? '').trim();
+	const market = item.market === 'KR' || item.market === 'US' ? item.market : null;
+	const currency = item.currency === 'KRW' || item.currency === 'USD' ? item.currency : null;
+	const quantity = toSafeNumber(item.quantity, Number.NaN);
+	const averagePrice = toSafeNumber(item.average_price, Number.NaN);
+
+	if (
+		!id ||
+		!ticker ||
+		!name ||
+		!market ||
+		!currency ||
+		(market === 'KR' ? currency !== 'KRW' : currency !== 'USD') ||
+		!Number.isFinite(quantity) ||
+		quantity <= 0 ||
+		!Number.isFinite(averagePrice) ||
+		averagePrice <= 0
+	) {
+		throw new Error('포트폴리오 저장 데이터의 근거를 확인하지 못했습니다. 잘못된 보유정보를 확인해 주세요.');
+	}
 
 	return {
-		id:
-			String(
-				item.id ?? '',
-			),
-
+		id,
 		ticker,
-
-		name:
-			String(
-				item.name ??
-					item.ticker ??
-					'',
-			).trim(),
-
+		name,
 		market,
 		currency,
-
-		quantity:
-			Math.max(
-				0,
-				toSafeNumber(
-					item.quantity,
-				),
-			),
-
-		average_price:
-			Math.max(
-				0,
-				toSafeNumber(
-					item.average_price,
-				),
-			),
-
+		quantity,
+		average_price: averagePrice,
 		purchase_date:
 			String(item.purchase_date ?? '').slice(0, 10) ||
 			getRememberedPurchaseDate(ticker) ||
 			String(item.created_at ?? '').slice(0, 10),
-
-		created_at:
-			String(
-				item.created_at ??
-					'',
-			),
-
-		currentPrice:
-			null,
-
-		changePercent:
-			null,
+		created_at: String(item.created_at ?? ''),
+		currentPrice: null,
+		changePercent: null,
 	};
 }
 
@@ -625,107 +601,24 @@ async function resolveStockByName(
 	name: string,
 	market: Market,
 ): Promise<ResolvedStock | null> {
-	const encodedName =
-		encodeURIComponent(
-			name,
-		);
-
-	const encodedMarket =
-		encodeURIComponent(
+	try {
+		const response = await fetchUnifiedAssetSuggestions({
+			q: name,
+			asset: 'stock',
 			market,
+			limit: 20,
+		});
+		const candidates: ResolvedStock[] = [];
+		collectSearchCandidates(response.results, candidates);
+		return chooseBestStock(candidates, name, market);
+	} catch (cause) {
+		console.debug(
+			'종목 자동 검색 실패:',
+			'/api/search/suggest',
+			cause,
 		);
-
-	const urls = [
-		`/api/search?q=${encodedName}&market=${encodedMarket}`,
-		`/api/search?query=${encodedName}&market=${encodedMarket}`,
-		`/api/stocks/search?q=${encodedName}&market=${encodedMarket}`,
-		`/api/stock/search?q=${encodedName}&market=${encodedMarket}`,
-		`/api/stocks?q=${encodedName}&market=${encodedMarket}`,
-	];
-
-	for (const url of urls) {
-		try {
-			const response =
-				await authorizedFetch(
-					url,
-					{
-						cache:
-							'no-store',
-					},
-				);
-
-			if (!response.ok) {
-				continue;
-			}
-
-			const data =
-				await response.json();
-
-			const candidates:
-				ResolvedStock[] =
-				[];
-
-			collectSearchCandidates(
-				data,
-				candidates,
-			);
-
-			const selected =
-				chooseBestStock(
-					candidates,
-					name,
-					market,
-				);
-
-			if (selected) {
-				return selected;
-			}
-		} catch (cause) {
-			console.debug(
-				'종목 자동 검색 실패:',
-				url,
-				cause,
-			);
-		}
+		return null;
 	}
-
-	return null;
-}
-
-function createManualTicker(
-	name: string,
-	market: Market,
-): string {
-	const source =
-		`${market}:${normalizeSearchText(
-			name,
-		)}`;
-
-	let hash =
-		2166136261;
-
-	for (
-		let index = 0;
-		index < source.length;
-		index += 1
-	) {
-		hash ^=
-			source.charCodeAt(
-				index,
-			);
-
-		hash =
-			Math.imul(
-				hash,
-				16777619,
-			);
-	}
-
-	return `MANUAL-${market}-${(
-		hash >>> 0
-	)
-		.toString(36)
-		.toUpperCase()}`;
 }
 
 function isManualTicker(
@@ -1006,7 +899,7 @@ export default function PortfolioPage() {
 								currentPrice:
 									Number.isFinite(
 										quotePrice,
-									)
+									) && quotePrice !== 0
 										? Math.abs(
 												quotePrice,
 											)
@@ -1024,6 +917,9 @@ export default function PortfolioPage() {
 
 					setRows(enrichedRows);
 					syncPortfolioChartOverlays(enrichedRows);
+					if (enrichedRows.some((row) => row.currentPrice == null)) {
+						setError('일부 보유 종목의 현재가 근거를 확인하지 못했습니다. 평가손익은 표시하지 않습니다.');
+					}
 
 					setInitialized(true);
 				} catch (cause) {
@@ -1072,7 +968,7 @@ export default function PortfolioPage() {
 
 					const current =
 						row.currentPrice ??
-						row.average_price;
+						Number.NaN;
 
 					const rowValue =
 						current *
@@ -1180,16 +1076,12 @@ export default function PortfolioPage() {
 					market,
 				);
 
-			const resolvedTicker =
-				resolvedStock?.ticker ??
-				createManualTicker(
-					cleanName,
-					market,
-				);
+			if (!resolvedStock) {
+				throw new Error('종목 검색 근거를 확인하지 못했습니다. 검색 결과를 확인한 뒤 다시 시도해 주세요.');
+			}
 
-			const resolvedName =
-				resolvedStock?.name ??
-				cleanName;
+			const resolvedTicker = resolvedStock.ticker;
+			const resolvedName = resolvedStock.name;
 
 			const supabase =
 				getSupabase();
@@ -1668,6 +1560,19 @@ export default function PortfolioPage() {
 										</label>
 									</div>
 
+									<label className="block">
+										<span className="text-xs font-extrabold text-muted-foreground">
+											매수일
+										</span>
+										<input
+											type="date"
+											value={purchaseDate}
+											onChange={(event) => setPurchaseDate(event.target.value)}
+											required
+											className="mt-2 h-12 w-full rounded-2xl border border-card-border bg-background px-3 text-sm font-bold outline-none focus:border-primary"
+										/>
+									</label>
+
 									<button
 										type="submit"
 										disabled={
@@ -1735,7 +1640,7 @@ export default function PortfolioPage() {
 									(row) => {
 										const current =
 											row.currentPrice ??
-											row.average_price;
+											Number.NaN;
 
 										const profit =
 											(
@@ -1755,7 +1660,7 @@ export default function PortfolioPage() {
 														row.average_price
 													) *
 													100
-												: 0;
+												: Number.NaN;
 
 										const manual =
 											isManualTicker(
