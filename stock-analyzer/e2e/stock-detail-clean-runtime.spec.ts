@@ -14,6 +14,21 @@ const candles = Array.from({ length: 40 }, (_, index) => ({
   isClosed: index < 39,
 }));
 
+const canonicalProfile = {
+  ticker: '005930',
+  name: '삼성전자',
+  market: 'KR',
+  currency: 'KRW',
+  description: '',
+  industry: '반도체',
+  sector: '반도체',
+  country: '대한민국',
+  mainBusiness: '',
+  competitors: [] as string[],
+  exchange: 'KOSPI',
+  marketCap: 450_000_000_000_000,
+};
+
 async function installApprovedSession(page: Page) {
   await page.addInitScript(({ storageKey, userId, now }) => {
     const encode = (value: Record<string, unknown>) => window.btoa(JSON.stringify(value)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
@@ -51,7 +66,11 @@ async function installApprovedSession(page: Page) {
   });
 }
 
-async function mockDetail(page: Page, requests: string[]) {
+async function mockDetail(
+  page: Page,
+  requests: string[],
+  options: { profileBody?: unknown } = {},
+) {
   await page.route('**/api/**', async (route) => {
     const url = new URL(route.request().url());
     requests.push(url.pathname);
@@ -75,13 +94,7 @@ async function mockDetail(page: Page, requests: string[]) {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({
-          ticker: '005930',
-          name: '삼성전자',
-          sector: '반도체',
-          exchange: 'KOSPI',
-          marketCap: 450_000_000_000_000,
-        }),
+        body: JSON.stringify(options.profileBody ?? canonicalProfile),
       });
       return;
     }
@@ -142,6 +155,7 @@ for (const viewport of [
     await expect(tabs.getByRole('tab')).toHaveCount(4);
     await expect(page.getByText('74,500원', { exact: true })).toBeVisible();
     await expect(page.getByText('반도체', { exact: true })).toBeVisible();
+    await expect(page.getByTestId('stock-detail-health-status')).toHaveText('정상');
     expect(requests).toContain('/api/stocks/005930/quote');
     expect(requests).toContain('/api/stocks/005930/profile');
     expect(requests).not.toContain('/api/stocks/005930/news');
@@ -170,3 +184,16 @@ for (const viewport of [
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
   });
 }
+
+test('malformed stock profile fails closed instead of reporting the summary as normal', async ({ page }) => {
+  const requests: string[] = [];
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installApprovedSession(page);
+  await mockDetail(page, requests, { profileBody: { ticker: '005930', name: '삼성전자' } });
+  await page.goto('/stock-info/analysis?back=%2Fstocks&asset=stock&market=KR&ticker=005930');
+
+  await expect(page.getByText('74,500원', { exact: true })).toBeVisible();
+  await expect(page.getByText('기업 정보 확인 실패', { exact: true })).toBeVisible();
+  await expect(page.getByTestId('stock-detail-health-status')).toHaveText('부분');
+  expect(requests).toContain('/api/stocks/005930/profile');
+});
