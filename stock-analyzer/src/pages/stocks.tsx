@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useLocation } from 'wouter';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, type UseQueryResult } from '@tanstack/react-query';
 import { Search, Star } from 'lucide-react';
 import { BottomNav } from '@/components/bottom-nav';
 import { AssetSwitch } from '@/components/asset-switch';
@@ -8,6 +8,7 @@ import { ErrorState, LoadingState } from '@/components/data-state';
 import { UnifiedAssetSearch } from '@/components/unified-asset-search';
 import { api, apiGet } from '@/lib/api';
 import { useAssetMode } from '@/lib/asset-mode';
+import { requireMarketMoversResponse, type MarketMoversResponse } from '@/lib/market-movers-response';
 import { requireRecommendationResponse } from '@/lib/recommendation-response';
 import { requireThemesData } from '@/lib/theme-response';
 import { displayCoinName, displayStockName, formatAppPercent, formatAppPrice } from '@/lib/stock-display';
@@ -109,7 +110,10 @@ export default function StocksPage() {
   });
   const movers = useQuery({
     queryKey: ['stocks-cat-movers', mode.stockMarket],
-    queryFn: () => apiGet<Awaited<ReturnType<typeof api.movers>>>(`/market/movers?market=${mode.stockMarket === 'US' ? 'US' : 'KR'}`),
+    queryFn: async () => requireMarketMoversResponse(
+      await apiGet<unknown>(`/market/movers?market=${mode.stockMarket}`),
+      mode.stockMarket,
+    ),
     enabled: useMovers && !searching,
     staleTime: 30_000,
     refetchInterval: 30_000,
@@ -301,7 +305,7 @@ function StockCategoryResults({
   category: CategoryKey;
   recommendations: ReturnType<typeof useQuery<RecoResponse>>;
   themes: ReturnType<typeof useQuery<Awaited<ReturnType<typeof api.themes>>>>;
-  movers: ReturnType<typeof useQuery<Awaited<ReturnType<typeof api.movers>>>>;
+  movers: UseQueryResult<MarketMoversResponse, Error>;
   stockMarket: 'KR' | 'US';
   onOpenStock: (ticker: string) => void;
 }) {
@@ -348,15 +352,14 @@ function StockCategoryResults({
   // tradingValue / volume / gainers / losers
   if (movers.isLoading) return <LoadingState label="실제 순위 데이터를 불러오는 중입니다." />;
   if (movers.isError) return <ErrorState onRetry={() => { void movers.refetch(); }} />;
-  const data = movers.data as unknown as AnyObj | undefined;
-  const list = category === 'tradingValue'
-    ? data?.popular
+  const data = movers.data;
+  const rows = category === 'tradingValue'
+    ? data?.popular ?? []
     : category === 'volume'
-      ? data?.volume
+      ? data?.volume ?? []
       : category === 'gainers'
-        ? data?.gainers
-        : data?.losers;
-  const rows = (list ?? []) as AnyObj[];
+        ? data?.gainers ?? []
+        : data?.losers ?? [];
   if (rows.length === 0) return <EmptyBox>현재 표시할 실제 종목 데이터가 없습니다.</EmptyBox>;
   return (
     <div className="space-y-2">
