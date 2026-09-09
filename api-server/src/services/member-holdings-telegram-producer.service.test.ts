@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   fanoutMemberHoldingScannerAlert,
+  memberHoldingProfileEligibleForPersonalTelegram,
   memberHoldingsTelegramProducerEnabled,
   type MemberHoldingProducerRepository,
   type MemberHoldingStockHolder,
@@ -77,6 +78,33 @@ test('member holdings producer is true-token opt-in and otherwise stays disabled
   assert.deepEqual(result, {
     status: 'DISABLED', matchedCount: 0, policyCount: 0, skippedCount: 0, errorCount: 0,
   });
+});
+
+test('holdings Telegram eligibility reuses the canonical #804 member capability contract', () => {
+  assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
+    status: 'approved', membership_level: 'associate', is_active: true,
+  }), true);
+  assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
+    status: 'approved', membership_level: 'regular', is_active: true,
+  }), true);
+  assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
+    status: 'approved', membership_level: 'admin', is_active: true,
+  }), true);
+  assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
+    status: 'approved', membership_level: null, role: 'full', is_active: true,
+  }), true);
+  assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
+    status: 'approved', membership_level: 'pending', role: 'admin', is_active: true,
+  }), false);
+  assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
+    status: 'approved', membership_level: 'regular', is_active: false,
+  }), false);
+  assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
+    status: 'suspended', membership_level: 'regular', is_active: true,
+  }), false);
+  assert.equal(memberHoldingProfileEligibleForPersonalTelegram({
+    status: 'rejected', membership_level: 'admin', role: 'admin', is_active: true,
+  }), false);
 });
 
 test('canonical stock holder fanout uses one public quote and never fabricates AI evidence', async () => {
