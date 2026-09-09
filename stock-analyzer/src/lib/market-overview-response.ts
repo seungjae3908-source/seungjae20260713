@@ -4,6 +4,8 @@ type Market = 'KR' | 'US';
 
 const BRIEFING_MAX_AGE_MS = 5 * 60 * 1000;
 const BRIEFING_FUTURE_SKEW_MS = 5 * 1000;
+const SECTOR_POPULAR_MAX_AGE_MS = 2 * 60 * 1000;
+const SECTOR_POPULAR_FUTURE_SKEW_MS = 5 * 1000;
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -34,9 +36,25 @@ function validSectorRow(value: unknown, market: Market): boolean {
   return true;
 }
 
-export function requireSectorPopularData(payload: unknown, market: Market): SectorPopularData {
+export function requireSectorPopularData(
+  payload: unknown,
+  market: Market,
+  nowMs = Date.now(),
+): SectorPopularData {
   if (!record(payload) || payload.market !== market) throw new Error('INVALID_SECTOR_POPULAR_RESPONSE');
-  if (!text(payload.sortBasis) || !Array.isArray(payload.sectors)) throw new Error('INVALID_SECTOR_POPULAR_RESPONSE');
+  if (!text(payload.sortBasis) || !Array.isArray(payload.sectors) || !text(payload.updatedAt)) {
+    throw new Error('INVALID_SECTOR_POPULAR_RESPONSE');
+  }
+  const updatedAtMs = Date.parse(payload.updatedAt);
+  if (!Number.isFinite(updatedAtMs) || !Number.isFinite(nowMs)) {
+    throw new Error('INVALID_SECTOR_POPULAR_RESPONSE');
+  }
+  if (
+    updatedAtMs > nowMs + SECTOR_POPULAR_FUTURE_SKEW_MS
+    || updatedAtMs < nowMs - SECTOR_POPULAR_MAX_AGE_MS
+  ) {
+    throw new Error('INVALID_SECTOR_POPULAR_RESPONSE');
+  }
   const valid = payload.sectors.every((sector) =>
     record(sector)
     && text(sector.key)
@@ -45,6 +63,10 @@ export function requireSectorPopularData(payload: unknown, market: Market): Sect
     && sector.rows.every((row) => validSectorRow(row, market)),
   );
   if (!valid) throw new Error('INVALID_SECTOR_POPULAR_RESPONSE');
+  const hasEvidence = payload.sectors.some(
+    (sector) => record(sector) && Array.isArray(sector.rows) && sector.rows.length > 0,
+  );
+  if (!hasEvidence) throw new Error('INVALID_SECTOR_POPULAR_RESPONSE');
   return payload as unknown as SectorPopularData;
 }
 
