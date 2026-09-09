@@ -110,8 +110,9 @@ const scannerPayload = {
     listingStatusCoverage: 'listed-or-unknown',
   },
   dataState: 'complete',
+  outcome: 'CANDIDATES_AVAILABLE',
   message: '1종목 공개 데이터 분석을 완료했습니다.',
-  generatedAt: '2026-08-03T00:00:00Z',
+  generatedAt: new Date().toISOString(),
   orderSubmitted: false,
   exchangeRequestSent: false,
 };
