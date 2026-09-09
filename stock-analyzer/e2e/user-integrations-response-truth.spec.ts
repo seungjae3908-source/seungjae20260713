@@ -19,9 +19,14 @@ test('user integrations validates canonical HTTP 200 truth before the UI can nor
   expect(panel).toContain("{state.telegram.connected ? '연결됨' : '연결 안 됨'}");
 
   expect(lifecycle).toContain("import { requireUserIntegrationsResponse } from '@/lib/user-integrations-response';");
-  expect(lifecycle).toContain('.then((value) => this.validate ? this.validate(value, identity) : value);');
+  const validationIndex = lifecycle.indexOf('.then((value) => this.validate ? this.validate(value, identity) : value);');
+  const transportSuccessIndex = lifecycle.indexOf(
+    "(value): UserIntegrationsTerminal<T> => ({ status: 'success', identity, requestKey, generation, value })",
+    validationIndex,
+  );
+  expect(validationIndex).toBeGreaterThanOrEqual(0);
+  expect(transportSuccessIndex).toBeGreaterThan(validationIndex);
   expect(lifecycle).toContain('(value, identity) => requireUserIntegrationsResponse(value, identity),');
-  expect(lifecycle.indexOf('this.validate(value, identity)')).toBeLessThan(lifecycle.indexOf("status: 'success'"));
 
   expect(response).toContain("root.ok !== true");
   expect(response).toContain("telegram.status !== 'ACTIVE' || telegram.connectedAt === null");
