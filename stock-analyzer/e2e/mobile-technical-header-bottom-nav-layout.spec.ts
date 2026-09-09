@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { expect, test, type Page, type Route } from '@playwright/test';
 
-const NOW = '2026-08-26T03:20:00.000Z';
+const NOW = new Date().toISOString();
 const E2E_USER_ID = '22222222-2222-4222-8222-222222222229';
 const E2E_AUTH_STORAGE_KEY = 'sb-127-auth-token';
 
