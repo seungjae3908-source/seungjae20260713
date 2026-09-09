@@ -102,7 +102,12 @@ async function installAdminRuntime(page: Page) {
       return fulfill(route, moversFixture(market));
     }
     if (path === '/api/quotes') {
-      const tickers = (url.searchParams.get('tickers') ?? '').split(',').filter(Boolean);
+      const tickers = Array.from(new Set(
+        (url.searchParams.get('tickers') ?? '')
+          .split(',')
+          .map((ticker) => ticker.trim().toUpperCase().replace(/^(KR|US)[:.]/, ''))
+          .filter(Boolean),
+      ));
       const quotes = tickers.map((ticker) => ticker === 'AAPL' ? stockFixture('US') : { ...stockFixture('KR'), ticker });
       return fulfill(route, {
         quotes,
