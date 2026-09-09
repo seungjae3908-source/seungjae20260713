@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - '.github/workflows/public-forward-liquidity-calibration-capture.yml'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-capture-seam-v3.mjs'
+      - 'market-intelligence-sidecar/scripts/run-public-forward-liquidity-capture-seam-v3.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-capture-seam-v3.test.mjs'
   workflow_dispatch:
     inputs:
       expected_sha:
@@ -39,7 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Checkout stacked collector revision
+      - name: Checkout capture revision
         uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -48,37 +51,28 @@ jobs:
         with:
           node-version: 20
 
-      - name: Syntax check capture workflow dependencies
-        run: >-
+      - name: Syntax and regression checks
+        shell: bash
+        run: |
+          set -euo pipefail
           node --check market-intelligence-sidecar/src/public-forward-liquidity-calibration.mjs
-          && node --check market-intelligence-sidecar/src/public-data.mjs
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-capture-seam-v3.mjs
+          node --check market-intelligence-sidecar/scripts/run-public-forward-liquidity-capture-seam-v3.mjs
+          node --test market-intelligence-sidecar/tests/public-forward-liquidity-calibration.test.mjs
+          node --test market-intelligence-sidecar/tests/public-forward-liquidity-capture-seam-v3.test.mjs
 
-      - name: Run existing #776 collector tests
-        run: node --test market-intelligence-sidecar/tests/public-forward-liquidity-calibration.test.mjs
-
-      - name: Verify fail-closed capture contract
+      - name: Verify manual fail-closed authority boundary
         shell: bash
         run: |
           set -euo pipefail
           FILE='.github/workflows/public-forward-liquidity-calibration-capture.yml'
           grep -Fq 'workflow_dispatch:' "$FILE"
           if grep -Eq '^[[:space:]]+schedule:' "$FILE"; then
-            echo 'Scheduled capture is forbidden.' >&2
+            echo 'Manual capture workflow must never define schedule.' >&2
             exit 1
           fi
-          grep -Fq 'collectBitgetForwardLiquidityObservationBatch' "$FILE"
-          grep -Fq "sampleClass: 'FORWARD_NATURAL_SAMPLE'" "$FILE"
-          grep -Fq 'canonicalDatasetPersistencePerformed: false' "$FILE"
-          grep -Fq 'canonicalDatasetCreditApplied: false' "$FILE"
-          grep -Fq 'splitAssignmentPerformed: false' "$FILE"
-          grep -Fq 'oosValidationComplete: false' "$FILE"
-          grep -Fq 'calibrationArtifactProduced: false' "$FILE"
-          grep -Fq 'liquidityImpactPresent: false' "$FILE"
-          grep -Fq 'fullCostReady: false' "$FILE"
-          grep -Fq "executionAuthority: 'NONE'" "$FILE"
-          grep -Fq 'privateApiUsed: false' "$FILE"
-          grep -Fq 'liveTrading: false' "$FILE"
-          grep -Fq 'orderSubmitted: false' "$FILE"
+          grep -Fq 'MANUAL_WORKFLOW_DISPATCH' "$FILE"
+          grep -Fq 'run-public-forward-liquidity-capture-seam-v3.mjs capture' "$FILE"
           FORBIDDEN_PERSIST_CALL="$(printf '%s%s' 'persistLiquidity' 'CalibrationBatch')"
           if grep -Fq "$FORBIDDEN_PERSIST_CALL" "$FILE"; then
             echo 'GitHub capture runner must not mutate canonical Research state.' >&2
@@ -134,155 +128,45 @@ jobs:
           fi
           node - "$EVENT_DELAY_MS" "$POST_DELAY_1_MS" "$POST_DELAY_2_MS" "$MAX_PRE_EVENT_BOOK_AGE_MS" <<'NODE'
           const values = process.argv.slice(2).map(Number);
-          if (values.length !== 4 || values.some((value) => !Number.isInteger(value) || value < 250 || value > 60_000)) {
-            process.exit(1);
-          }
+          if (values.length !== 4 || values.some((value) => !Number.isInteger(value) || value < 250 || value > 60_000)) process.exit(1);
           NODE
 
       - uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Capture one genuine prospective public-forward batch
+      - name: Record actual manual capture start
+        id: clock
         shell: bash
+        run: echo "actual_run_started_at_ms=$(date +%s%3N)" >> "$GITHUB_OUTPUT"
+
+      - name: Capture one manual public-forward batch through shared seam
         env:
+          CAPTURE_TRIGGER_SOURCE: MANUAL_WORKFLOW_DISPATCH
           EXPECTED_SHA: ${{ inputs.expected_sha }}
           SYMBOL: ${{ inputs.symbol }}
           EVENT_DELAY_MS: ${{ inputs.event_observation_delay_ms }}
           POST_DELAY_1_MS: ${{ inputs.post_observation_delay_1_ms }}
           POST_DELAY_2_MS: ${{ inputs.post_observation_delay_2_ms }}
           MAX_PRE_EVENT_BOOK_AGE_MS: ${{ inputs.max_pre_event_book_age_ms }}
-        run: |
-          set -euo pipefail
-          mkdir -p public-forward-liquidity-capture
-          node --input-type=module <<'NODE'
-          import { writeFile } from 'node:fs/promises';
-          import {
-            canonicalJson,
-            collectBitgetForwardLiquidityObservationBatch,
-            sha256,
-          } from './market-intelligence-sidecar/src/public-forward-liquidity-calibration.mjs';
+          ACTUAL_RUN_STARTED_AT_MS: ${{ steps.clock.outputs.actual_run_started_at_ms }}
+          OUTPUT_DIR: public-forward-liquidity-capture
+        run: node market-intelligence-sidecar/scripts/run-public-forward-liquidity-capture-seam-v3.mjs capture
 
-          const exactMainSha = String(process.env.EXPECTED_SHA ?? '').trim().toLowerCase();
-          const symbol = String(process.env.SYMBOL ?? '').trim().toUpperCase();
-          const eventObservationDelayMs = Number(process.env.EVENT_DELAY_MS);
-          const postObservationDelaysMs = [Number(process.env.POST_DELAY_1_MS), Number(process.env.POST_DELAY_2_MS)];
-          const maxPreEventBookAgeMs = Number(process.env.MAX_PRE_EVENT_BOOK_AGE_MS);
-
-          const batch = await collectBitgetForwardLiquidityObservationBatch({
-            symbol,
-            collectorCodeSha: exactMainSha,
-            sampleClass: 'FORWARD_NATURAL_SAMPLE',
-            eventObservationDelayMs,
-            postObservationDelaysMs,
-            maxPreEventBookAgeMs,
-          });
-
-          if (batch?.kind !== 'public-forward-liquidity-calibration-batch') throw new Error('CAPTURE_BATCH_KIND_INVALID');
-          if (batch?.sampleClass !== 'FORWARD_NATURAL_SAMPLE') throw new Error('CAPTURE_SAMPLE_CLASS_INVALID');
-          if (batch?.capability?.PUBLIC_CALIBRATION_DATA_CAPABLE !== true) throw new Error('PUBLIC_CALIBRATION_DATA_CAPABLE_FALSE');
-          if (batch?.datasetProvenance?.collectorCodeSha !== exactMainSha) throw new Error('COLLECTOR_SHA_MISMATCH');
-          if (batch?.datasetProvenance?.rawSource?.provider !== 'BITGET_PUBLIC_UTA_V3') throw new Error('PUBLIC_PROVIDER_INVALID');
-          if (batch?.datasetProvenance?.rawSource?.privateApiUsed !== false) throw new Error('PRIVATE_API_CLAIM_INVALID');
-          if (batch?.safety?.publicDataOnly !== true
-            || batch?.safety?.executionAuthority !== 'NONE'
-            || batch?.safety?.privateTradingApiAllowed !== false
-            || batch?.safety?.liveTradingAllowed !== false
-            || batch?.safety?.realOrderAllowed !== false
-            || batch?.safety?.financialMutationAllowed !== false) throw new Error('CAPTURE_SAFETY_INVALID');
-          if (batch?.readiness?.LIQUIDITY_IMPACT_PRESENT !== false
-            || batch?.readiness?.CALIBRATION_SAMPLE_SUFFICIENT !== false
-            || batch?.readiness?.LIQUIDITY_IMPACT_STATUS !== 'BLOCKED_DATA'
-            || batch?.readiness?.FULL_COST_READY !== false) throw new Error('CAPTURE_TRUTH_BOUNDARY_INVALID');
-
-          const ids = new Set();
-          for (const observation of batch.observations ?? []) {
-            if (ids.has(observation.observationId)) throw new Error('CAPTURE_DUPLICATE_OBSERVATION_ID');
-            ids.add(observation.observationId);
-            if (observation.sampleClass !== 'FORWARD_NATURAL_SAMPLE') throw new Error('OBSERVATION_SAMPLE_CLASS_INVALID');
-            if (observation.forwardCalibrationSampleCredit !== 1 || observation.historicalBackfillForwardCredit !== 0) {
-              throw new Error('OBSERVATION_FORWARD_CLASSIFICATION_INVALID');
-            }
-            if (observation.collectorCodeSha !== exactMainSha) throw new Error('OBSERVATION_COLLECTOR_SHA_MISMATCH');
-            if (observation.publicDataSource !== 'BITGET_PUBLIC_UTA_V3') throw new Error('OBSERVATION_PUBLIC_SOURCE_INVALID');
-            if (!/^[a-f0-9]{64}$/u.test(String(observation.sourceDigest ?? ''))) throw new Error('OBSERVATION_SOURCE_DIGEST_INVALID');
-            if (observation.calibrationSourceOnly !== true
-              || observation.executionCostEligible !== false
-              || observation.liquidityImpactCoefficient !== null
-              || observation.causalMarketImpactClaim !== false
-              || observation.paperOrderSourceAllowed !== false) throw new Error('OBSERVATION_AUTHORITY_ESCALATION');
-          }
-
-          const captureStatus = batch.observations.length > 0 ? 'PRESENT' : 'BLOCKED_DATA';
-          const blockers = batch.observations.length > 0
-            ? []
-            : ['FORWARD_OBSERVATIONS_EMPTY', ...Object.keys(batch.datasetProvenance?.droppedReasons ?? {}).sort()];
-          const rawBatchDigest = sha256(canonicalJson(batch));
-          const receipt = Object.freeze({
-            schemaVersion: 'public-forward-liquidity-capture-receipt-v1',
-            evidenceClass: 'PUBLIC_FORWARD_LIQUIDITY_CAPTURE_RECEIPT',
-            triggerSource: 'MANUAL_WORKFLOW_DISPATCH',
-            runId: String(process.env.GITHUB_RUN_ID ?? ''),
-            runAttempt: String(process.env.GITHUB_RUN_ATTEMPT ?? ''),
-            repository: String(process.env.GITHUB_REPOSITORY ?? ''),
-            exactMainSha,
-            collectorCodeSha: exactMainSha,
-            symbol,
-            sampleClass: 'FORWARD_NATURAL_SAMPLE',
-            eventObservationDelayMs,
-            postObservationDelaysMs,
-            maxPreEventBookAgeMs,
-            captureStatus,
-            blockers,
-            prospectiveObservationCount: batch.observations.length,
-            droppedObservationCount: batch.droppedEvents.length,
-            datasetProvenance: batch.datasetProvenance,
-            rawBatchDigest,
-            canonicalDatasetPersistencePerformed: false,
-            canonicalDatasetCreditApplied: false,
-            duplicateCreditEvaluated: false,
-            splitAssignmentPerformed: false,
-            oosValidationComplete: false,
-            calibrationArtifactProduced: false,
-            liquidityImpactPresent: false,
-            fullCostReady: false,
-            evidenceCompleteCredit: 0,
-            naturalEntryCredit: 0,
-            runtimeCostCredit: 0,
-            executionAuthority: 'NONE',
-            privateApiUsed: false,
-            liveTrading: false,
-            orderSubmitted: false,
-            realOrders: 0,
-          });
-          await writeFile('public-forward-liquidity-capture/raw-batch.json', `${JSON.stringify(batch, null, 2)}\n`, 'utf8');
-          await writeFile('public-forward-liquidity-capture/capture-receipt.json', `${JSON.stringify(receipt, null, 2)}\n`, 'utf8');
-          console.log(JSON.stringify({
-            captureStatus,
-            blockers,
-            prospectiveObservationCount: batch.observations.length,
-            droppedObservationCount: batch.droppedEvents.length,
-            rawBatchDigest,
-            canonicalDatasetCreditApplied: false,
-            liquidityImpactPresent: false,
-            fullCostReady: false,
-          }));
-          NODE
-
-      - name: Verify main remained exact through capture
+      - name: Recheck exact main and zero stale-main credit without hiding the receipt
         shell: bash
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
+          OUTPUT_DIR: public-forward-liquidity-capture
         run: |
           set -euo pipefail
           git fetch --no-tags --depth=1 origin main
           REMOTE_MAIN="$(git rev-parse FETCH_HEAD)"
           if [[ "$REMOTE_MAIN" != "$EXPECTED_SHA" ]]; then
-            echo 'main moved during capture; discard this run as stale.' >&2
-            exit 1
+            node market-intelligence-sidecar/scripts/run-public-forward-liquidity-capture-seam-v3.mjs mark-stale-main
           fi
 
-      - name: Upload immutable raw public-forward capture
+      - name: Upload immutable raw/manual attempt artifact
         id: capture_upload
         uses: actions/upload-artifact@v4
         with:
@@ -291,63 +175,23 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-      - name: Bind capture to immutable GitHub artifact identity
-        shell: bash
+      - name: Bind manual attempt to immutable GitHub artifact identity
         env:
+          OUTPUT_DIR: public-forward-liquidity-capture
           ARTIFACT_ID: ${{ steps.capture_upload.outputs.artifact-id }}
           ARTIFACT_DIGEST: ${{ steps.capture_upload.outputs.artifact-digest }}
           ARTIFACT_NAME: public-forward-liquidity-capture-${{ github.run_id }}-${{ github.run_attempt }}
-        run: |
-          set -euo pipefail
-          node --input-type=module <<'NODE'
-          import { createHash } from 'node:crypto';
-          import { readFile, writeFile } from 'node:fs/promises';
-          const canonicalize = (value) => {
-            if (Array.isArray(value)) return value.map(canonicalize);
-            if (value && typeof value === 'object') {
-              return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]));
-            }
-            return value;
-          };
-          const sha256 = (value) => createHash('sha256').update(JSON.stringify(canonicalize(value))).digest('hex');
-          const capture = JSON.parse(await readFile('public-forward-liquidity-capture/capture-receipt.json', 'utf8'));
-          const artifactId = String(process.env.ARTIFACT_ID ?? '').trim();
-          const artifactDigest = String(process.env.ARTIFACT_DIGEST ?? '').trim().replace(/^sha256:/u, '').toLowerCase();
-          if (!/^[0-9]+$/u.test(artifactId)) throw new Error('ARTIFACT_ID_INVALID');
-          if (!/^[a-f0-9]{64}$/u.test(artifactDigest)) throw new Error('ARTIFACT_DIGEST_INVALID');
-          const body = {
-            schemaVersion: 'public-forward-liquidity-capture-artifact-receipt-v1',
-            exactMainSha: capture.exactMainSha,
-            collectorCodeSha: capture.collectorCodeSha,
-            captureStatus: capture.captureStatus,
-            rawBatchDigest: capture.rawBatchDigest,
-            prospectiveObservationCount: capture.prospectiveObservationCount,
-            artifactId,
-            artifactName: process.env.ARTIFACT_NAME,
-            artifactDigest,
-            artifactReference: `https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}/artifacts/${artifactId}`,
-            canonicalDatasetPersistencePerformed: false,
-            canonicalDatasetCreditApplied: false,
-            splitAssignmentPerformed: false,
-            oosValidationComplete: false,
-            calibrationArtifactProduced: false,
-            liquidityImpactPresent: false,
-            fullCostReady: false,
-            naturalEntryCredit: 0,
-            runtimeCostCredit: 0,
-            executionAuthority: 'NONE',
-            privateApiUsed: false,
-            liveTrading: false,
-            orderSubmitted: false,
-          };
-          const receipt = { ...body, receiptDigest: sha256(body) };
-          await writeFile('public-forward-liquidity-capture/artifact-receipt.json', `${JSON.stringify(receipt, null, 2)}\n`, 'utf8');
-          NODE
+        run: node market-intelligence-sidecar/scripts/run-public-forward-liquidity-capture-seam-v3.mjs bind-artifact
 
-      - name: Upload finalized immutable artifact receipt
+      - name: Upload finalized immutable manual receipt
         uses: actions/upload-artifact@v4
         with:
           name: public-forward-liquidity-capture-receipt-${{ github.run_id }}-${{ github.run_attempt }}
           path: public-forward-liquidity-capture/artifact-receipt.json
           if-no-files-found: error
           retention-days: 90
+
+      - name: Fail closed unless the manual capture itself is PRESENT
+        env:
+          OUTPUT_DIR: public-forward-liquidity-capture
+        run: node market-intelligence-sidecar/scripts/run-public-forward-liquidity-capture-seam-v3.mjs assert-terminal

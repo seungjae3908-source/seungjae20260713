@@ -1,4 +1,4 @@
-import { useQuery, keepPreviousData } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { api, ApiError, type Timeframe, type MarketKey } from '@/lib/api';
 
 // Don't retry deterministic 404s (unknown ticker).
@@ -56,7 +56,6 @@ export function useSearch(query: string) {
 		queryFn: () => api.search(q),
 		enabled: q.length > 0,
 		staleTime: STALE.catalog,
-		placeholderData: keepPreviousData,
 		retry,
 	});
 }
@@ -70,7 +69,6 @@ export function useMovers(market?: MarketKey, autoRefresh = true) {
 		refetchIntervalInBackground: false,
 		refetchOnWindowFocus: true,
 		refetchOnReconnect: true,
-		placeholderData: keepPreviousData,
 		retry,
 	});
 }
@@ -121,7 +119,6 @@ export function useAlertFeed(market: 'ALL' | 'KR' | 'US', enabled = true) {
 		refetchIntervalInBackground: false,
 		refetchOnWindowFocus: true,
 		refetchOnReconnect: true,
-		placeholderData: keepPreviousData,
 		retry,
 	});
 }
@@ -162,7 +159,6 @@ export function useChart(ticker: string, tf: Timeframe, enabled: boolean) {
 		refetchIntervalInBackground: false,
 		refetchOnWindowFocus: true,
 		refetchOnReconnect: true,
-		placeholderData: keepPreviousData,
 		retry,
 	});
 }
@@ -178,7 +174,6 @@ export function useFinancials(ticker: string, enabled: boolean) {
 		refetchIntervalInBackground: false,
 		refetchOnWindowFocus: true,
 		refetchOnReconnect: true,
-		placeholderData: keepPreviousData,
 		retry,
 	});
 }
@@ -193,7 +188,6 @@ export function useRisk(ticker: string, enabled: boolean) {
 		refetchIntervalInBackground: false,
 		refetchOnWindowFocus: true,
 		refetchOnReconnect: true,
-		placeholderData: keepPreviousData,
 		retry,
 	});
 }
@@ -208,7 +202,6 @@ export function useDisclosures(ticker: string, enabled: boolean) {
 		refetchIntervalInBackground: false,
 		refetchOnWindowFocus: true,
 		refetchOnReconnect: true,
-		placeholderData: keepPreviousData,
 		retry,
 	});
 }
@@ -223,7 +216,6 @@ export function useSignals(ticker: string, enabled: boolean) {
 		refetchIntervalInBackground: false,
 		refetchOnWindowFocus: true,
 		refetchOnReconnect: true,
-		placeholderData: keepPreviousData,
 		retry,
 	});
 }
@@ -244,7 +236,6 @@ export function useScan(
 		refetchIntervalInBackground: false,
 		refetchOnWindowFocus: true,
 		refetchOnReconnect: true,
-		placeholderData: keepPreviousData,
 		retry,
 	});
 }
@@ -259,7 +250,6 @@ export function useNews(ticker: string, enabled: boolean) {
 		refetchIntervalInBackground: false,
 		refetchOnWindowFocus: true,
 		refetchOnReconnect: true,
-		placeholderData: keepPreviousData,
 		retry,
 	});
 }
@@ -274,7 +264,6 @@ export function useAnalysis(ticker: string, enabled: boolean) {
 		refetchIntervalInBackground: false,
 		refetchOnWindowFocus: true,
 		refetchOnReconnect: true,
-		placeholderData: keepPreviousData,
 		retry,
 	});
 }

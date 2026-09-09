@@ -23,9 +23,10 @@ test('stock detail removes long primary guidance and blocking skeleton UI', () =
 test('auto trading uses Korean-first compact copy and desktop two-column layout', () => {
   const auto = source('src/pages/auto-trading.tsx');
 
-  expect(auto).toContain('<CenteredPageHeader title="자동매매" eyebrow="승인형 주문" />');
+  expect(auto).toContain('<CenteredPageHeader title="자동매매" />');
+  expect(auto).not.toContain('eyebrow="승인형 주문"');
   expect(auto).toContain('label="위험검사" value="최종 확인"');
-  expect(auto).toContain('<h2 className="text-sm font-black sm:text-base">주문 안전 상태</h2>');
+  expect(auto).toContain('<h2 className="text-base font-bold">주문 안전 상태</h2>');
   expect(auto).toContain('min-[1200px]:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]');
   expect(auto).toContain('data-testid="auto-trading-settings-column"');
   expect(auto).toContain('<span>안전설정 · 거래소</span>');
