@@ -10,15 +10,94 @@ const validEnvelope = {
   aiConfigured: false,
   analysisDescription: '검증 가능한 규칙 기반 추천',
   market: 'KR' as const,
-  generatedAt: '2026-09-08T12:00:00.000Z',
+  generatedAt: new Date().toISOString(),
   rows: [],
   excludedCount: 0,
   excludedBreakdown: {},
   dataQualityNote: '조건 충족 후보만 표시',
 };
 
+function validRecommendationRow(generatedAt: string) {
+  return {
+    ticker: '005930',
+    name: '삼성전자',
+    market: 'KR',
+    currency: 'KRW',
+    category: 'undervalued',
+    categoryLabel: '저평가 후보',
+    price: 70_000,
+    changePercent: 0,
+    reasons: ['근거'],
+    usedData: ['현재가'],
+    missingData: [],
+    risks: [],
+    overheated: false,
+    financialStability: '보통',
+    newsRisk: '보통',
+    riskLevel: 'MEDIUM',
+    shortTermOutlook: '관망',
+    midTermOutlook: '관망',
+    opinion: '관망',
+    targetPrice: null,
+    targetBasis: '산출 불가',
+    stopLoss: null,
+    stopBasis: '산출 불가',
+    score: 50,
+    generatedAt,
+    dataUpdatedAt: new Date().toISOString(),
+    providers: ['provider'],
+    dataQuality: 'sufficient',
+  };
+}
+
 test('genuine zero-candidate recommendation response remains a valid success state', () => {
   expect(requireRecommendationResponse<typeof validEnvelope>(validEnvelope, 'KR')).toEqual(validEnvelope);
+});
+
+test('stale or materially future-dated HTTP 200 recommendation envelopes fail closed', () => {
+  expect(() =>
+    requireRecommendationResponse(
+      {
+        ...validEnvelope,
+        generatedAt: new Date(Date.now() - 11 * 60_000).toISOString(),
+      },
+      'KR',
+    ),
+  ).toThrow('INVALID_RECOMMENDATION_RESPONSE');
+
+  expect(() =>
+    requireRecommendationResponse(
+      {
+        ...validEnvelope,
+        generatedAt: new Date(Date.now() + 2 * 60_000).toISOString(),
+      },
+      'KR',
+    ),
+  ).toThrow('INVALID_RECOMMENDATION_RESPONSE');
+});
+
+test('stale or materially future-dated recommendation rows fail closed even under a fresh envelope', () => {
+  expect(() =>
+    requireRecommendationResponse(
+      {
+        ...validEnvelope,
+        generatedAt: new Date().toISOString(),
+        rows: [validRecommendationRow(new Date(Date.now() - 11 * 60_000).toISOString())],
+      },
+      'KR',
+    ),
+  ).toThrow('INVALID_RECOMMENDATION_RESPONSE');
+
+  expect(() =>
+    requireRecommendationResponse(
+      {
+        ...validEnvelope,
+        generatedAt: new Date().toISOString(),
+        rows: [validRecommendationRow(new Date(Date.now() + 2 * 60_000).toISOString())],
+      },
+      'KR',
+    ),
+  ).toThrow('INVALID_RECOMMENDATION_RESPONSE');
 });
 
 test('malformed HTTP 200 recommendation envelope fails closed instead of becoming empty success', () => {
@@ -62,34 +141,8 @@ test('malformed recommendation rows fail closed before investment facts are rend
         ...validEnvelope,
         rows: [
           {
-            ticker: '005930',
-            name: '삼성전자',
-            market: 'KR',
-            currency: 'KRW',
-            category: 'undervalued',
-            categoryLabel: '저평가 후보',
+            ...validRecommendationRow(new Date().toISOString()),
             price: 'not-a-price',
-            changePercent: null,
-            reasons: ['근거'],
-            usedData: ['현재가'],
-            missingData: [],
-            risks: [],
-            overheated: false,
-            financialStability: '보통',
-            newsRisk: '보통',
-            riskLevel: 'MEDIUM',
-            shortTermOutlook: '관망',
-            midTermOutlook: '관망',
-            opinion: '관망',
-            targetPrice: null,
-            targetBasis: '산출 불가',
-            stopLoss: null,
-            stopBasis: '산출 불가',
-            score: 50,
-            generatedAt: '2026-09-08T12:00:00.000Z',
-            dataUpdatedAt: '2026-09-08T11:59:00.000Z',
-            providers: ['provider'],
-            dataQuality: 'partial',
           },
         ],
       },
