@@ -158,7 +158,7 @@ export default function DetailPage() {
   const sector = text(profileData.sector, profileData.industry, profileData.category) ?? '-';
   const marketCap = compactNumber(profileData.marketCap ?? quoteData.marketCap, currency === 'KRW' ? '원' : ` ${currency}`);
   const newsRows = ((news.data?.news ?? news.data?.items ?? []) as AnyObj[]).slice(0, 40);
-  const summaryLoading = (quote.isLoading || profile.isLoading) && !quote.data && !profile.data;
+  const summaryLoading = quote.isLoading || profile.isLoading;
   const routeContextValid = validStockContext(ticker, market);
   const canonicalChartSelection = useMemo<AnalysisSelection>(() => ({
     assetType: 'stock',
@@ -202,6 +202,14 @@ export default function DetailPage() {
                 </div>
               </section>
             ) : null}
+            {profile.isError ? (
+              <section className="rounded-2xl border border-destructive/40 bg-destructive/10 p-4 text-sm" role="alert">
+                <div className="flex min-w-0 items-center justify-between gap-3">
+                  <p className="font-black text-destructive">기업 정보 확인 실패</p>
+                  <button type="button" onClick={() => void profile.refetch()} className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-xl border border-destructive/30 px-3 font-black"><RefreshCw className="h-4 w-4" />재시도</button>
+                </div>
+              </section>
+            ) : null}
 
             <section className="rounded-3xl border border-card-border bg-card p-4 sm:p-5">
               <div className="text-center">
@@ -217,7 +225,7 @@ export default function DetailPage() {
                 <div className="min-w-0 rounded-2xl bg-background p-3"><p className="text-[11px] font-bold text-muted-foreground">시장</p><p className="mt-1 truncate text-sm font-black">{exchange}</p></div>
                 <div className="min-w-0 rounded-2xl bg-background p-3"><p className="text-[11px] font-bold text-muted-foreground">업종</p><p className="mt-1 truncate text-sm font-black">{profile.isLoading && sector === '-' ? '확인 중' : sector}</p></div>
                 <div className="min-w-0 rounded-2xl bg-background p-3"><p className="text-[11px] font-bold text-muted-foreground">시가총액</p><p className="mt-1 truncate text-sm font-black">{profile.isLoading && marketCap === '-' ? '확인 중' : marketCap}</p></div>
-                <div className="min-w-0 rounded-2xl bg-background p-3"><p className="text-[11px] font-bold text-muted-foreground">상태</p><p className="mt-1 text-sm font-black">{quote.isError ? '오류' : summaryLoading ? '확인 중' : price == null ? '부분' : '정상'}</p></div>
+                <div className="min-w-0 rounded-2xl bg-background p-3"><p className="text-[11px] font-bold text-muted-foreground">상태</p><p data-testid="stock-detail-health-status" className="mt-1 text-sm font-black">{quote.isError ? '오류' : profile.isError ? '부분' : summaryLoading ? '확인 중' : price == null ? '부분' : '정상'}</p></div>
               </div>
             </section>
 
