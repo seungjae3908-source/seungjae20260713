@@ -45,6 +45,14 @@ function envelope(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function assertContractDetail(action: () => unknown, expectedDetail: RegExp) {
+  assert.throws(action, (error) => {
+    assert.ok(error instanceof UnifiedSearchResponseContractError);
+    assert.match(error.detail, expectedDetail);
+    return true;
+  });
+}
+
 test('unified search accepts canonical fresh success payload', () => {
   const parsed = parseUnifiedAssetSuggestResponse(envelope(), expected, NOW);
   assert.equal(parsed.state, 'FULL');
@@ -70,18 +78,18 @@ test('unified search rejects malformed HTTP 200 that would look like no match', 
     () => parseUnifiedAssetSuggestResponse(envelope({ results: undefined }), expected, NOW),
     UnifiedSearchResponseContractError,
   );
-  assert.throws(
+  assertContractDetail(
     () => parseUnifiedAssetSuggestResponse(envelope({ count: 0 }), expected, NOW),
     /count does not match/,
   );
 });
 
 test('unified search rejects request identity and provider truth drift', () => {
-  assert.throws(
+  assertContractDetail(
     () => parseUnifiedAssetSuggestResponse(envelope({ q: 'MSFT' }), expected, NOW),
     /does not match request/,
   );
-  assert.throws(
+  assertContractDetail(
     () => parseUnifiedAssetSuggestResponse(envelope({ partial: true, state: 'PARTIAL' }), expected, NOW),
     /partial is inconsistent/,
   );
@@ -102,11 +110,11 @@ test('unified search accepts degraded metadata fallback but rejects fake fresh t
   assert.equal(fallback.state, 'PARTIAL');
   assert.equal(fallback.dataAsOf, null);
 
-  assert.throws(
+  assertContractDetail(
     () => parseUnifiedAssetSuggestResponse(envelope({ dataAsOf: '2026-09-09T05:51:00.000Z' }), expected, NOW),
     /future/,
   );
-  assert.throws(
+  assertContractDetail(
     () => parseUnifiedAssetSuggestResponse(envelope({ dataAsOf: '2026-09-08T04:00:00.000Z' }), expected, NOW),
     /stale while stale=false/,
   );
@@ -114,7 +122,7 @@ test('unified search accepts degraded metadata fallback but rejects fake fresh t
 
 test('unified search rejects result identity that violates the requested market', () => {
   const wrongMarket = { ...stock, market: 'KR', exchange: 'KOSPI' };
-  assert.throws(
+  assertContractDetail(
     () => parseUnifiedAssetSuggestResponse(envelope({ results: [wrongMarket] }), expected, NOW),
     /requested market filter/,
   );

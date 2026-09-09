@@ -19,7 +19,10 @@ function matches(query: string) {
 }
 
 function responseFor(query: string, market: string | null, asset = 'all') {
-  const results = matches(query).filter((item) => !market || item.market === market);
+  const dataAsOf = new Date().toISOString();
+  const results = matches(query)
+    .filter((item) => !market || item.market === market)
+    .map((item) => ({ ...item, dataAsOf }));
   const otherMarket = market ? matches(query).find((item) => item.market !== market)?.market : undefined;
   return {
     ok: true,
@@ -29,10 +32,15 @@ function responseFor(query: string, market: string | null, asset = 'all') {
     market,
     results,
     count: results.length,
-    dataAsOf: now,
+    dataAsOf,
     stale: false,
     partial: false,
-    providers: [],
+    providers: [
+      { provider: 'krx', status: 'ok', count: 1, dataAsOf },
+      { provider: 'finnhub', status: 'ok', count: 3, dataAsOf },
+      { provider: 'upbit', status: 'ok', count: 1, dataAsOf },
+      { provider: 'bitget', status: 'ok', count: 1, dataAsOf },
+    ],
     hiddenMatches: otherMarket ? [{ market: otherMarket, count: 1 }] : [],
   };
 }
@@ -149,6 +157,7 @@ test('search distinguishes NO_MATCH, PROVIDER_UNAVAILABLE, and DATA_UNAVAILABLE'
       return;
     }
     const providerDown = q === 'provider-down';
+    const dataAsOf = new Date().toISOString();
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
       ok: true,
       state: providerDown ? 'DEGRADED' : 'EMPTY',
@@ -157,10 +166,22 @@ test('search distinguishes NO_MATCH, PROVIDER_UNAVAILABLE, and DATA_UNAVAILABLE'
       market: null,
       results: [],
       count: 0,
-      dataAsOf: now,
-      stale: providerDown,
+      dataAsOf,
+      stale: false,
       partial: providerDown,
-      providers: providerDown ? [{ provider: 'upbit', status: 'error', count: 0, dataAsOf: null }] : [],
+      providers: providerDown
+        ? [
+            { provider: 'krx', status: 'ok', count: 1, dataAsOf },
+            { provider: 'finnhub', status: 'ok', count: 3, dataAsOf },
+            { provider: 'upbit', status: 'error', count: 0, dataAsOf: null },
+            { provider: 'bitget', status: 'ok', count: 1, dataAsOf },
+          ]
+        : [
+            { provider: 'krx', status: 'ok', count: 1, dataAsOf },
+            { provider: 'finnhub', status: 'ok', count: 3, dataAsOf },
+            { provider: 'upbit', status: 'ok', count: 1, dataAsOf },
+            { provider: 'bitget', status: 'ok', count: 1, dataAsOf },
+          ],
       hiddenMatches: [],
     }) });
   });
