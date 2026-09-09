@@ -7,6 +7,7 @@ import { BottomNav } from '@/components/bottom-nav';
 import { ErrorState, LoadingState } from '@/components/data-state';
 import { apiGet, type MarketAlert } from '@/lib/api';
 import { authorizedFetch } from '@/lib/auth-fetch';
+import { parseNotificationHistory } from '@/lib/notification-history-response';
 import { classifyAlert, NOTIFICATION_LABELS } from '@/lib/notifications';
 import { cn } from '@/lib/utils';
 
@@ -74,7 +75,7 @@ export default function AlertsPage() {
   const feed = useAlertFeed('ALL', source === 'market');
   const history = useQuery({
     queryKey: ['notification-history'],
-    queryFn: () => apiGet<{ notifications: NotificationHistoryRow[] }>('/notifications/history?limit=200'),
+    queryFn: async () => parseNotificationHistory(await apiGet<unknown>('/notifications/history?limit=200')),
     refetchInterval: 30_000,
     retry: false,
   });
