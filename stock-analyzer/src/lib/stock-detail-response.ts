@@ -19,6 +19,13 @@ function requiredText(value: unknown, field: string): string {
   return text;
 }
 
+function requiredString(value: unknown, field: string): string {
+  if (typeof value !== 'string') {
+    throw new StockDetailContractError(`invalid ${field}`);
+  }
+  return value;
+}
+
 function requiredFinite(value: unknown, field: string): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     throw new StockDetailContractError(`invalid ${field}`);
@@ -73,9 +80,14 @@ export function parseStockDetailProfile(
   expectedMarket: 'KR' | 'US',
 ): StockDetailObject {
   if (!isRecord(value)) throw new StockDetailContractError('profile payload must be an object');
-  assertIdentity(value, expectedTicker, expectedMarket, { requireMarketCurrency: false });
+  assertIdentity(value, expectedTicker, expectedMarket, { requireMarketCurrency: true });
   requiredText(value.name ?? value.companyName, 'name');
-  if (value.competitors != null && (!Array.isArray(value.competitors) || value.competitors.some((item) => typeof item !== 'string'))) {
+  requiredString(value.description, 'description');
+  requiredString(value.industry, 'industry');
+  requiredString(value.sector, 'sector');
+  requiredString(value.country, 'country');
+  requiredString(value.mainBusiness, 'mainBusiness');
+  if (!Array.isArray(value.competitors) || value.competitors.some((item) => typeof item !== 'string')) {
     throw new StockDetailContractError('invalid competitors');
   }
   return value;
