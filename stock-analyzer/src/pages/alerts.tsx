@@ -7,6 +7,8 @@ import { BottomNav } from '@/components/bottom-nav';
 import { ErrorState, LoadingState } from '@/components/data-state';
 import { apiGet, type MarketAlert } from '@/lib/api';
 import { authorizedFetch } from '@/lib/auth-fetch';
+import { parseMarketAlertFeed } from '@/lib/market-alert-response';
+import { parseNotificationHistory } from '@/lib/notification-history-response';
 import { classifyAlert, NOTIFICATION_LABELS } from '@/lib/notifications';
 import { cn } from '@/lib/utils';
 
@@ -74,20 +76,30 @@ export default function AlertsPage() {
   const feed = useAlertFeed('ALL', source === 'market');
   const history = useQuery({
     queryKey: ['notification-history'],
-    queryFn: () => apiGet<{ notifications: NotificationHistoryRow[] }>('/notifications/history?limit=200'),
+    queryFn: async () => parseNotificationHistory(await apiGet<unknown>('/notifications/history?limit=200')),
     refetchInterval: 30_000,
     retry: false,
   });
 
-  const list = useMemo(() => getFilteredAlerts(feed.data, market, tone), [feed.data, market, tone]);
+  const feedTruth = useMemo((): { data?: ReturnType<typeof parseMarketAlertFeed>; error: boolean } => {
+    if (!feed.data) return { error: false };
+    try {
+      return { data: parseMarketAlertFeed(feed.data), error: false };
+    } catch {
+      return { error: true };
+    }
+  }, [feed.data]);
+  const marketFeedFailed = feed.isError || feedTruth.error;
+  const trustedFeed = marketFeedFailed ? undefined : feedTruth.data;
+  const list = useMemo(() => getFilteredAlerts(trustedFeed, market, tone), [trustedFeed, market, tone]);
   const counts = useMemo(() => {
-    const krAll = getFilteredAlerts(feed.data, 'KR', 'all').length;
-    const usAll = getFilteredAlerts(feed.data, 'US', 'all').length;
-    const all = getFilteredAlerts(feed.data, market, 'all').length;
-    const positive = getFilteredAlerts(feed.data, market, 'positive').length;
-    const negative = getFilteredAlerts(feed.data, market, 'negative').length;
+    const krAll = getFilteredAlerts(trustedFeed, 'KR', 'all').length;
+    const usAll = getFilteredAlerts(trustedFeed, 'US', 'all').length;
+    const all = getFilteredAlerts(trustedFeed, market, 'all').length;
+    const positive = getFilteredAlerts(trustedFeed, market, 'positive').length;
+    const negative = getFilteredAlerts(trustedFeed, market, 'negative').length;
     return { krAll, usAll, all, positive, negative };
-  }, [feed.data, market]);
+  }, [trustedFeed, market]);
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background" data-testid="alerts-page">
@@ -136,13 +148,15 @@ export default function AlertsPage() {
           ) : (
             <>
               {feed.isLoading && <LoadingState label="신호 확인 중" />}
-              {feed.isError && <ErrorState onRetry={() => { void feed.refetch(); }} />}
-              {feed.data && list.length === 0 && (
+              {marketFeedFailed && <ErrorState onRetry={() => { void feed.refetch(); }} />}
+              {trustedFeed && list.length === 0 && (
                 <p className="py-12 text-center text-sm font-medium text-muted-foreground">표시할 신호가 없습니다.</p>
               )}
-              <div className="grid gap-3 min-[900px]:grid-cols-2" data-testid="market-alert-list">
-                {list.map((alert) => <AlertItem key={alert.id} alert={alert} />)}
-              </div>
+              {!marketFeedFailed && (
+                <div className="grid gap-3 min-[900px]:grid-cols-2" data-testid="market-alert-list">
+                  {list.map((alert) => <AlertItem key={alert.id} alert={alert} />)}
+                </div>
+              )}
             </>
           )}
         </div>
