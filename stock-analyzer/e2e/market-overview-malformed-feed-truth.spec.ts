@@ -3,10 +3,33 @@ import path from 'node:path';
 import { expect, test } from '@playwright/test';
 import { requireBriefing, requireSectorPopularData } from '../src/lib/market-overview-response';
 
-const emptySectors = {
+const sectorNowMs = Date.parse('2026-09-08T16:02:00.000Z');
+const partialSectors = {
   market: 'KR' as const,
   sortBasis: '거래대금 기준',
-  sectors: [],
+  updatedAt: new Date(sectorNowMs).toISOString(),
+  sectors: [
+    { key: 'semiconductor', label: '반도체', rows: [] },
+    {
+      key: 'electronics',
+      label: '전자',
+      rows: [
+        {
+          rank: 1,
+          ticker: '005930',
+          name: '삼성전자',
+          market: 'KR' as const,
+          currency: 'KRW' as const,
+          price: 70000,
+          changePercent: 1.2,
+        },
+      ],
+    },
+  ],
+};
+const allEmptySectors = {
+  ...partialSectors,
+  sectors: partialSectors.sectors.map((sector) => ({ ...sector, rows: [] })),
 };
 
 const briefingAsOf = '2026-09-08T16:00:00.000Z';
@@ -26,13 +49,14 @@ const briefing = {
   picks: [],
 };
 
-test('genuine empty sector success remains valid', () => {
-  expect(requireSectorPopularData(emptySectors, 'KR')).toEqual(emptySectors);
+test('partial empty sector groups remain valid when at least one ranking row is evidenced', () => {
+  expect(requireSectorPopularData(partialSectors, 'KR', sectorNowMs)).toEqual(partialSectors);
 });
 
 test('malformed sector HTTP 200 cannot become safe-looking empty sector state', () => {
-  expect(() => requireSectorPopularData({ market: 'KR', sortBasis: '거래대금 기준' }, 'KR')).toThrow('INVALID_SECTOR_POPULAR_RESPONSE');
-  expect(() => requireSectorPopularData({ ...emptySectors, market: 'US' }, 'KR')).toThrow('INVALID_SECTOR_POPULAR_RESPONSE');
+  expect(() => requireSectorPopularData({ market: 'KR', sortBasis: '거래대금 기준' }, 'KR', sectorNowMs)).toThrow('INVALID_SECTOR_POPULAR_RESPONSE');
+  expect(() => requireSectorPopularData({ ...partialSectors, market: 'US' }, 'KR', sectorNowMs)).toThrow('INVALID_SECTOR_POPULAR_RESPONSE');
+  expect(() => requireSectorPopularData(allEmptySectors, 'KR', sectorNowMs)).toThrow('INVALID_SECTOR_POPULAR_RESPONSE');
 });
 
 test('malformed briefing HTTP 200 fails closed before headline/lines rendering', () => {
