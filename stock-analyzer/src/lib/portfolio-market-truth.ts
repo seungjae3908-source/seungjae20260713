@@ -1,6 +1,3 @@
-export type PortfolioMarket = 'KR' | 'US';
-export type PortfolioCurrency = 'KRW' | 'USD';
-
 export interface PortfolioQuoteEvidence {
   ticker: string;
   price: number;
@@ -15,28 +12,9 @@ export interface PortfolioQuoteSnapshot {
   complete: boolean;
 }
 
-export interface PortfolioMarketRow {
-  quantity: number;
-  average_price: number;
-  currentPrice: number | null;
-}
-
-export interface PortfolioEvidenceRow extends PortfolioMarketRow {
+export interface PortfolioEvidenceRow {
   ticker: string;
-}
-
-export interface PortfolioMarketSummary {
-  cost: number;
-  value: number | null;
-  profit: number | null;
-  rate: number | null;
-  evidenceComplete: boolean;
-}
-
-export interface PortfolioHoldingPerformance {
-  value: number | null;
-  profit: number | null;
-  rate: number | null;
+  currentPrice: number | null;
 }
 
 const INVALID_PORTFOLIO_QUOTES = 'INVALID_PORTFOLIO_QUOTE_RESPONSE';
@@ -116,59 +94,4 @@ export function assertPortfolioMarketEvidence(rows: PortfolioEvidenceRow[]): voi
   throw new Error(
     `${MISSING_PORTFOLIO_MARKET_EVIDENCE}: 현재 시세 근거를 확인하지 못했습니다 (${Array.from(new Set(missing)).join(', ')}).`,
   );
-}
-
-export function calculatePortfolioMarketSummary(
-  rows: PortfolioMarketRow[],
-): PortfolioMarketSummary {
-  let cost = 0;
-  let value = 0;
-  let evidenceComplete = true;
-
-  for (const row of rows) {
-    const rowCost = row.average_price * row.quantity;
-    cost += rowCost;
-
-    if (!isFiniteNumber(row.currentPrice) || row.currentPrice <= 0) {
-      evidenceComplete = false;
-      continue;
-    }
-
-    value += row.currentPrice * row.quantity;
-  }
-
-  if (!evidenceComplete) {
-    return {
-      cost,
-      value: null,
-      profit: null,
-      rate: null,
-      evidenceComplete: false,
-    };
-  }
-
-  const profit = value - cost;
-  return {
-    cost,
-    value,
-    profit,
-    rate: cost > 0 ? (profit / cost) * 100 : 0,
-    evidenceComplete: true,
-  };
-}
-
-export function calculateHoldingMarketPerformance(
-  row: PortfolioMarketRow,
-): PortfolioHoldingPerformance {
-  if (!isFiniteNumber(row.currentPrice) || row.currentPrice <= 0) {
-    return { value: null, profit: null, rate: null };
-  }
-
-  const value = row.currentPrice * row.quantity;
-  const profit = (row.currentPrice - row.average_price) * row.quantity;
-  const rate = row.average_price > 0
-    ? ((row.currentPrice - row.average_price) / row.average_price) * 100
-    : 0;
-
-  return { value, profit, rate };
 }
