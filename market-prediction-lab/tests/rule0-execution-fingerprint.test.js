@@ -69,7 +69,16 @@ test("Rule0 shadow artifact namespace advances with the immutable chain contract
   const contractVersion = workflow.match(/CHAIN_CONTRACT: rule0-1h-artifact-chain-v(\d+)/)?.[1];
   assert.ok(artifactVersion, "artifact chain version missing");
   assert.equal(contractVersion, artifactVersion, "artifact and chain contract versions must match");
-  assert.ok(Number(artifactVersion) >= 5, "execution dependency drift must not reuse the v4 chain");
+  assert.ok(Number(artifactVersion) >= 6, "non-evaluable inference handling must not reuse the v5 chain");
   assert.match(workflow, /execution dependency changed; start a separately versioned chain/);
   assert.match(workflow, /cron: "7 \*\/2 \* \* \*"/);
+});
+
+test("Rule0 sidecar preserves missing inference as blocked data instead of invoking the blend", () => {
+  const sidecarPath = path.join(repoRoot, "market-prediction-lab/scripts/run-rule-model-1h-shadow-sidecar.js");
+  const sidecar = fs.readFileSync(sidecarPath, "utf8");
+  assert.match(sidecar, /deployedAnalysis\.inferenceEvaluation\?\.status !== "EVALUABLE"/);
+  assert.match(sidecar, /inferenceBlockersBySymbol\[symbol\]/);
+  assert.match(sidecar, /status: Object\.keys\(inferenceBlockers\)\.length === 0 \? "pass" : "blocked_data"/);
+  assert.match(sidecar, /continue;/);
 });
