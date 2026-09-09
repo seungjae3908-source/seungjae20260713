@@ -2,6 +2,8 @@ import type { Page, Route } from '@playwright/test';
 import { expect, test } from './support/full-product-evidence';
 import { ageBrowserSession, installFullProductFixtures } from './support/full-product-fixtures';
 
+const SEARCH_NOW = new Date().toISOString();
+
 async function openMenuItem(page: Page, group: string, item: string) {
   const trigger = page.getByRole('button', { name: group, exact: true });
   await expect(trigger).toBeVisible();
@@ -41,12 +43,12 @@ function searchResult(query: string) {
     matchType: 'exact',
     active: true,
     provider: 'e2e-fixture',
-    dataAsOf: '2026-09-05T10:00:00.000Z',
+    dataAsOf: SEARCH_NOW,
   };
 }
 
 function searchEnvelope(query: string, results = [searchResult(query)]) {
-  const dataAsOf = '2026-09-05T10:00:00.000Z';
+  const dataAsOf = SEARCH_NOW;
   return {
     ok: true,
     state: results.length ? 'FULL' : 'EMPTY',
