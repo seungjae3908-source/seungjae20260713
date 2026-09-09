@@ -71,7 +71,26 @@ export function rememberPurchaseDate(ticker: string, date: string) {
   window.localStorage.setItem(PURCHASE_DATE_KEY, JSON.stringify(dates));
 }
 
+export function assertPortfolioQuoteEvidence(
+  rows: Array<{ ticker: string; currentPrice?: number | null }>,
+) {
+  const missing = rows
+    .filter((row) => {
+      const price = row.currentPrice;
+      return price == null || !Number.isFinite(Number(price)) || Number(price) <= 0;
+    })
+    .map((row) => row.ticker.trim().toUpperCase())
+    .filter(Boolean);
+
+  if (missing.length > 0) {
+    throw new Error(
+      `보유자산 현재가 근거를 확인하지 못했습니다 (${missing.join(", ")}). 매입단가를 현재가나 0% 수익률로 대체하지 않습니다.`,
+    );
+  }
+}
+
 export function syncPortfolioChartOverlays(rows: PortfolioOverlayInput[]) {
+  assertPortfolioQuoteEvidence(rows);
   if (!hasStorage()) return;
 
   const purchaseDates = readPurchaseDates();
