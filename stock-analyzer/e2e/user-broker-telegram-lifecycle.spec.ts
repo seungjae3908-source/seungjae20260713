@@ -262,6 +262,23 @@ test('actual API failure remains visible and is not converted to an empty or dis
   runtime.assertClean(['Failed to load resource: the server responded with a status of 503 (Service Unavailable)']);
 });
 
+test('malformed HTTP 200 fails closed before Account UI can show connected or empty truth', async ({ page }) => {
+  const runtime = await installRuntime(page, {
+    integration: (route) => fulfill(route, { ok: true, telegram: { connected: true } }),
+  });
+
+  await page.goto('/account');
+  const panel = page.getByTestId('user-broker-telegram-panel');
+  await expect(panel).toHaveAttribute('data-user-integrations-request-state', 'failure');
+  await expect(panel.getByRole('alert')).toContainText('INVALID_USER_INTEGRATIONS_RESPONSE');
+  await expect(panel).not.toContainText('등록된 Broker 연결이 없습니다.');
+  await expect(panel).not.toContainText('연결됨');
+  await expect(panel).not.toContainText('연결 안 됨');
+  expect(runtime.diagnostics.integrationRequests).toBe(1);
+  expect(runtime.diagnostics.integrationResponses).toBe(1);
+  runtime.assertClean();
+});
+
 test('immediate logout drains the initial read before auth invalidation with zero abort and zero post-logout GET', async ({ page }) => {
   const initial = deferred<void>();
   const runtime = await installRuntime(page, {
