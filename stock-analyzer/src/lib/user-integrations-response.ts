@@ -143,6 +143,10 @@ function validateTelegramRuntime(value: unknown): void {
   ] as const) {
     if (typeof runtime[key] !== 'boolean') fail();
   }
+  const expectedLinkingReady = runtime.deliveryReady === true
+    && runtime.webhookConfigured === true
+    && runtime.botUsernameConfigured === true;
+  if (runtime.linkingReady !== expectedLinkingReady) fail();
   if (runtime.orderAuthority !== 'NONE'
     || runtime.privateTradingApiAllowed !== false
     || runtime.realOrderAllowed !== false) fail();
