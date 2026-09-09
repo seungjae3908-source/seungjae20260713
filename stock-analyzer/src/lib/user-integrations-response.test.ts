@@ -128,7 +128,7 @@ describe('requireUserIntegrationsResponse', () => {
     rejects(canonical({ ordersSubmitted: 1 }));
     rejects(canonical({
       telegramRuntime: {
-        ...canonical().telegramRuntime as Record<string, unknown>,
+        ...(canonical().telegramRuntime as Record<string, unknown>),
         realOrderAllowed: true,
       },
     }));
