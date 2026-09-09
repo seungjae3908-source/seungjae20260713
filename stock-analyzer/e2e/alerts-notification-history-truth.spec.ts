@@ -41,11 +41,15 @@ async function installApprovedSession(page: Page) {
   });
 }
 
-async function mockHistory(page: Page, historyBody: unknown) {
+async function mockAlerts(page: Page, historyBody: unknown, marketBody?: unknown) {
   await page.route('**/api/**', async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname === '/api/notifications/history') {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(historyBody) });
+      return;
+    }
+    if (url.pathname === '/api/market/alerts' && marketBody !== undefined) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(marketBody) });
       return;
     }
     await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
@@ -54,7 +58,7 @@ async function mockHistory(page: Page, historyBody: unknown) {
 
 test('canonical empty notification history stays empty instead of becoming an error', async ({ page }) => {
   await installApprovedSession(page);
-  await mockHistory(page, { notifications: [], count: 0 });
+  await mockAlerts(page, { notifications: [], count: 0 });
   await page.goto('/alerts');
 
   await expect(page.getByTestId('alerts-page')).toBeVisible();
@@ -64,7 +68,7 @@ test('canonical empty notification history stays empty instead of becoming an er
 
 test('malformed notification history HTTP 200 fails closed instead of looking canonically empty', async ({ page }) => {
   await installApprovedSession(page);
-  await mockHistory(page, {});
+  await mockAlerts(page, {});
   await page.goto('/alerts');
 
   await expect(page.getByTestId('alerts-page')).toBeVisible();
@@ -75,7 +79,7 @@ test('malformed notification history HTTP 200 fails closed instead of looking ca
 
 test('future notification timestamp HTTP 200 fails closed instead of being displayed as recent', async ({ page }) => {
   await installApprovedSession(page);
-  await mockHistory(page, {
+  await mockAlerts(page, {
     notifications: [{
       id: '11111111-1111-4111-8111-111111111111',
       notification_type: 'price_alert',
@@ -92,5 +96,44 @@ test('future notification timestamp HTTP 200 fails closed instead of being displ
 
   await expect(page.getByTestId('error-state')).toBeVisible();
   await expect(page.getByText('지정가 도달', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('방금', { exact: true })).toHaveCount(0);
+});
+
+test('malformed market alert HTTP 200 fails closed instead of looking canonically empty', async ({ page }) => {
+  await installApprovedSession(page);
+  await mockAlerts(page, { notifications: [], count: 0 }, { positive: [], negative: [] });
+  await page.goto('/alerts');
+  await page.getByRole('button', { name: /시장 신호/ }).click();
+
+  await expect(page.getByTestId('error-state')).toBeVisible();
+  await expect(page.getByText('표시할 신호가 없습니다.', { exact: true })).toHaveCount(0);
+});
+
+test('future market alert timestamp HTTP 200 fails closed instead of being displayed as recent', async ({ page }) => {
+  await installApprovedSession(page);
+  const row = {
+    id: 'KR:005930:movement',
+    ticker: '005930',
+    name: '삼성전자',
+    market: 'KR',
+    kind: 'positive',
+    category: '시세 변동',
+    title: '삼성전자 상승 1.20%',
+    importance: 'high',
+    time: '2099-01-01T00:00:00.000Z',
+    url: null,
+  };
+  await mockAlerts(page, { notifications: [], count: 0 }, {
+    market: 'ALL',
+    positive: [row],
+    negative: [],
+    alerts: [row],
+    updatedAt: new Date().toISOString(),
+  });
+  await page.goto('/alerts');
+  await page.getByRole('button', { name: /시장 신호/ }).click();
+
+  await expect(page.getByTestId('error-state')).toBeVisible();
+  await expect(page.getByText('삼성전자 상승 1.20%', { exact: true })).toHaveCount(0);
   await expect(page.getByText('방금', { exact: true })).toHaveCount(0);
 });
