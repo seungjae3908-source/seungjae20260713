@@ -22,6 +22,10 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every(isNonEmptyString);
 }
 
+function isNonNegativeInteger(value: unknown): value is number {
+  return isFiniteNumber(value) && Number.isInteger(value) && value >= 0;
+}
+
 function isMetricRow(value: unknown): boolean {
   if (!isRecord(value) || !isNonEmptyString(value.label)) return false;
   return typeof value.value === 'string' || isFiniteNumber(value.value);
@@ -40,8 +44,7 @@ function isValidCard(value: unknown): boolean {
   if (!Array.isArray(value.entry) || !value.entry.every(isMetricRow)) return false;
   if (!Array.isArray(value.stop) || !value.stop.every(isMetricRow)) return false;
   if (!isNonEmptyString(value.expectedPeriod)) return false;
-  if (!Number.isInteger(value.matchCount) || (value.matchCount as number) < 0) return false;
-  if (!Number.isInteger(value.selectedCount) || (value.selectedCount as number) < 0) return false;
+  if (!isNonNegativeInteger(value.matchCount) || !isNonNegativeInteger(value.selectedCount)) return false;
   return true;
 }
 
