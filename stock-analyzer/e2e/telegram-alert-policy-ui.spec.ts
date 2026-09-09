@@ -22,6 +22,75 @@ function fulfill(routeHandler: Route, body: unknown, status = 200) {
   });
 }
 
+function userIntegrationsResponse(connected: boolean) {
+  return {
+    ok: true,
+    brokerConnections: [],
+    brokerConnectionsAvailable: true,
+    brokerConnectionsErrorCode: null,
+    brokerMetadataRead: true,
+    telegram: {
+      connected,
+      status: connected ? 'ACTIVE' : 'DISCONNECTED',
+      connectedAt: connected ? E2E_NOW : null,
+    },
+    preferences: {
+      ORDER_SUBMITTED: false,
+      ORDER_PARTIALLY_FILLED: false,
+      ORDER_FILLED: false,
+      ORDER_CANCELLED: false,
+      ORDER_REJECTED: false,
+      POSITION_OPENED: false,
+      POSITION_INCREASED: false,
+      POSITION_REDUCED: false,
+      POSITION_CLOSED: false,
+      TAKE_PROFIT_FILLED: false,
+      STOP_FILLED: false,
+      MANUAL_PORTFOLIO_ENTRY: false,
+    },
+    deliveries: [],
+    telegramStorageAvailable: true,
+    telegramStorageErrorCode: null,
+    alertPolicy: {
+      userId: E2E_USER_ID,
+      enabled: false,
+      markets: ['KR', 'US', 'CRYPTO_SPOT', 'CRYPTO_FUTURES'],
+      signalTypes: ['BUY', 'LONG', 'SHORT', 'NO_TRADE', 'PRICE_TARGET', 'STRATEGY_HEALTH', 'CHAMPION', 'RESEARCH', 'SETTLEMENT', 'PROVIDER_SERVER_ERROR'],
+      priorities: ['CRITICAL', 'IMPORTANT', 'INFO'],
+      quietHours: { enabled: false, start: '22:00', end: '07:00', timeZone: 'Asia/Seoul', criticalBypass: true },
+      cooldownMs: 300_000,
+      sameEventDedupeMs: 86_400_000,
+      sameSymbolWindowMs: 3_600_000,
+      sameSymbolRepeatLimit: 3,
+      deliveryMode: 'IMMEDIATE',
+      digest: { enabled: false, windowMs: 1_800_000 },
+    },
+    alertPolicySource: 'DEFAULT_MISSING',
+    alertPolicyStorageAvailable: true,
+    alertPolicyStorageErrorCode: null,
+    telegramRuntime: {
+      deliveryReady: true,
+      linkingReady: true,
+      webhookConfigured: true,
+      botUsernameConfigured: true,
+      stockRoomReady: false,
+      cryptoRoomReady: false,
+      richSignalEnabled: false,
+      aiExplanationEnabled: false,
+      signalFollowupEnabled: false,
+      memberHoldingsEnabled: false,
+      orderAuthority: 'NONE',
+      privateTradingApiAllowed: false,
+      realOrderAllowed: false,
+    },
+    prioritySemantics: 'DELIVERY_URGENCY_ONLY',
+    partial: false,
+    privateApiRequests: 0,
+    ordersSubmitted: 0,
+    ordersCancelled: 0,
+  };
+}
+
 async function installTelegramButtonRuntime(page: Page) {
   await page.addInitScript(({ storageKey, userId, now }) => {
     const encode = (value: Record<string, unknown>) => window.btoa(JSON.stringify(value))
@@ -92,37 +161,7 @@ async function installTelegramButtonRuntime(page: Page) {
 
     if (requestPath === '/api/user-integrations' && method === 'GET') {
       integrationReads += 1;
-      return fulfill(routeHandler, {
-        ok: true,
-        brokerConnections: [],
-        telegram: {
-          connected,
-          status: connected ? 'ACTIVE' : 'DISCONNECTED',
-          connectedAt: connected ? E2E_NOW : null,
-        },
-        preferences: {},
-        alertPolicy: { userId: E2E_USER_ID, enabled: false },
-        alertPolicySource: 'DEFAULT_MISSING',
-        alertPolicyStorageAvailable: true,
-        telegramRuntime: {
-          deliveryReady: true,
-          linkingReady: true,
-          webhookConfigured: true,
-          botUsernameConfigured: true,
-          stockRoomReady: false,
-          cryptoRoomReady: false,
-          richSignalEnabled: false,
-          aiExplanationEnabled: false,
-          signalFollowupEnabled: false,
-          memberHoldingsEnabled: false,
-          orderAuthority: 'NONE',
-          privateTradingApiAllowed: false,
-          realOrderAllowed: false,
-        },
-        privateApiRequests: 0,
-        ordersSubmitted: 0,
-        ordersCancelled: 0,
-      });
+      return fulfill(routeHandler, userIntegrationsResponse(connected));
     }
 
     if (requestPath === '/api/user-integrations/telegram/link' && method === 'POST') {
