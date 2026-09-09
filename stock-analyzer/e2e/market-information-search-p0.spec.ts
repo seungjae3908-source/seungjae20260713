@@ -1,6 +1,6 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
 
-const NOW = '2026-08-21T03:00:00.000Z';
+const NOW = new Date().toISOString();
 const E2E_USER_ID = '22222222-2222-4222-8222-222222222222';
 const E2E_AUTH_STORAGE_KEY = 'sb-127-auth-token';
 
