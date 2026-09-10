@@ -283,8 +283,9 @@ def classify_entry(
 
 
 def build_gate(ladder: dict, manifest, min_float_shares: float | None, reverse_split_lookback_days: int) -> dict:
-    entries = ladder.get("entries") if isinstance(ladder, dict) else None
-    entries = entries if isinstance(entries, list) else []
+    raw_entries = ladder.get("entries") if isinstance(ladder, dict) else None
+    entries_valid = isinstance(raw_entries, list)
+    entries = raw_entries if entries_valid else []
     rows = evidence_rows(manifest)
     integrity_blockers = manifest_integrity_blockers(manifest)
     decisions = [
@@ -297,7 +298,9 @@ def build_gate(ladder: dict, manifest, min_float_shares: float | None, reverse_s
         "blocked": sum(x["decision"] == "DATA_BLOCKED" for x in decisions),
     }
     upstream_status = str(ladder.get("status") or "") if isinstance(ladder, dict) else ""
-    if not decisions and upstream_status.startswith("DATA_UNAVAILABLE"):
+    if not entries_valid:
+        status = "DATA_BLOCKED_UPSTREAM_DIAGNOSTIC"
+    elif not decisions and upstream_status.startswith("DATA_UNAVAILABLE"):
         status = "DATA_BLOCKED_UPSTREAM_DIAGNOSTIC"
     elif not decisions:
         status = "NO_INTRADAY_ENTRIES"
@@ -479,6 +482,8 @@ def self_test() -> None:
 
     upstream_missing = build_gate({"status": "DATA_UNAVAILABLE_RECENT_DIAGNOSTIC", "entries": []}, None, None, 365)
     assert upstream_missing["status"] == "DATA_BLOCKED_UPSTREAM_DIAGNOSTIC"
+    malformed_upstream = build_gate({"status": "RECENT_EXTENDED_HOURS_DIAGNOSTIC_ONLY", "entries": {}}, manifest, None, 365)
+    assert malformed_upstream["status"] == "DATA_BLOCKED_UPSTREAM_DIAGNOSTIC"
 
     tampered = json.loads(json.dumps(manifest))
     tampered["entries"][1]["floatEvidence"]["shares"] = 99_000_000
