@@ -124,8 +124,15 @@ test("NO_TRADE creates no entry and same cycle replay is idempotent", async () =
   const first = await run(h, { state: h.state, cycle: cycle("c1"), candidates: [candidate("KR_STOCK", "s1", "NO_TRADE")] });
   assert.equal(first.summary.entries, 0);
   assert.equal(first.summary.noTrade, 1);
+  assert.equal(first.summary.canonicalNaturalStageEvidence.stageCounts.entryEligible.count, 0);
+  assert.equal(first.summary.canonicalNaturalStageEvidence.stageCounts.entry.count, 0);
+  assert.equal(first.summary.canonicalNaturalStageEvidence.stageCounts.position.count, 0);
   const replay = await run(h, { state: first.state, cycle: cycle("c1"), candidates: [candidate("KR_STOCK", "s1")] });
   assert.equal(replay.summary.replayed, true);
+  assert.equal(replay.summary.canonicalNaturalStageEvidence.stageCounts.entryEligible.status, "UNKNOWN");
+  assert.equal(replay.summary.canonicalNaturalStageEvidence.naturalCredit, 0);
+  assert.equal(replay.summary.canonicalNaturalStageEvidence.replayCredit, 0);
+  assert.equal(replay.summary.canonicalNaturalStageEvidence.reasonObservations[0].canonicalReason, "REPLAY_ONLY");
   assert.deepEqual(h.counts(), { entryMutations: 0, settlementMutations: 0, saves: 1, learnedSignals: 0, learnedOutcomes: 0 });
 });
 
@@ -134,6 +141,13 @@ test("four markets and futures SHORT enter once with canonical public evidence",
   const rows = [candidate("KR_STOCK", "kr"), candidate("US_STOCK", "us"), candidate("CRYPTO_SPOT", "spot"), candidate("CRYPTO_FUTURES", "long"), candidate("CRYPTO_FUTURES", "short", "ELIGIBLE", "SHORT")];
   const first = await run(h, { state: h.state, cycle: cycle("c1"), candidates: rows });
   assert.equal(first.summary.entries, 5);
+  assert.equal(first.summary.canonicalNaturalStageEvidence.stageCounts.entryEligible.count, 5);
+  assert.equal(first.summary.canonicalNaturalStageEvidence.stageCounts.entry.count, 5);
+  assert.equal(first.summary.canonicalNaturalStageEvidence.stageCounts.position.count, 5);
+  assert.notEqual(
+    first.summary.canonicalNaturalStageEvidence.stageCounts.entry.provenance,
+    first.summary.canonicalNaturalStageEvidence.stageCounts.position.provenance,
+  );
   const second = await run(h, { state: first.state, cycle: cycle("c2", T0 + 1), candidates: rows });
   assert.equal(second.summary.entries, 0);
   assert.equal(h.counts().entryMutations, 5);
@@ -149,6 +163,11 @@ test("future and stale market evidence fail closed", async () => {
   const result = await run(h, { state: h.state, cycle: cycle("c1"), candidates: [future, stale] });
   assert.equal(result.summary.blocked, 2);
   assert.equal(result.summary.entries, 0);
+  assert.equal(result.summary.canonicalNaturalStageEvidence.stageCounts.entryEligible.count, 0);
+  assert.equal(
+    result.summary.canonicalNaturalStageEvidence.reasonObservations.some((row) => row.canonicalReason === "DATA_STALE"),
+    true,
+  );
   assert.equal(h.counts().learnedSignals, 0);
   assert.equal(h.counts().learnedOutcomes, 0);
 });
@@ -161,6 +180,8 @@ test("valid future exit settles exactly once and replay cannot mutate ledger", a
   const exit = { positionId, settlementInput: { exitExecution, exitQuote: { bid: 105, ask: 106, bidSize: 10, askSize: 10, asOfMs: T0 + 9, maxAgeMs: 60_000 }, pathBars: [{ timestampMs: T0 + 5, high: 107, low: 98 }], fundingEvidence: { complete: true, payments: [] } } };
   const settled = await run(h, { state: opened.state, cycle: cycle("c2", T0 + 10), exits: [exit] });
   assert.equal(settled.summary.tradesSettled, 1);
+  assert.equal(settled.summary.canonicalNaturalStageEvidence.stageCounts.settlement.count, 1);
+  assert.equal(settled.summary.canonicalNaturalStageEvidence.stageCounts.settlement.observationIds.length, 1);
   assert.equal(settled.state.positions.length, 0);
   const replay = await run(h, { state: settled.state, cycle: cycle("c3", T0 + 11), exits: [exit] });
   assert.equal(replay.summary.tradesSettled, 0);

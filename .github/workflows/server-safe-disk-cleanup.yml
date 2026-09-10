@@ -1,0 +1,288 @@
+name: Safe Shared Server Disk Cleanup
+
+on:
+  pull_request:
+    paths:
+      - 'ops/server-safe-disk-cleanup.sh'
+      - '.github/workflows/server-safe-disk-cleanup.yml'
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: shared-server-safe-disk-cleanup
+  cancel-in-progress: false
+
+jobs:
+  validate-contract:
+    name: Validate safe server disk cleanup contract
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate shell syntax and destructive allowlist
+        run: |
+          set -Eeuo pipefail
+          bash -n ops/server-safe-disk-cleanup.sh
+          ! grep -Eq 'pm2[[:space:]]+(start|startOrReload|restart|reload|stop|delete|save)' ops/server-safe-disk-cleanup.sh
+          ! grep -Eq 'rm[[:space:]].*(/opt/stock-app|/srv/seungjae-staging([[:space:]]|$))' ops/server-safe-disk-cleanup.sh
+          grep -F 'KEEP_COUNT="${KEEP_COUNT:-4}"' ops/server-safe-disk-cleanup.sh >/dev/null
+          grep -F 'STAGING_LOCK_FILE="${STAGING_LOCK_FILE:-/var/lock/seungjae-staging-deploy.lock}"' ops/server-safe-disk-cleanup.sh >/dev/null
+          grep -F 'PRODUCTION_LOCK_FILE="${PRODUCTION_LOCK_FILE:-/var/lock/stock-app-deploy.lock}"' ops/server-safe-disk-cleanup.sh >/dev/null
+          grep -F 'server_processes_restarted=0' ops/server-safe-disk-cleanup.sh >/dev/null
+          grep -F 'staging_deployment_executed=false' ops/server-safe-disk-cleanup.sh >/dev/null
+          grep -F 'production_deployment_executed=false' ops/server-safe-disk-cleanup.sh >/dev/null
+          grep -F 'database_changes=0' ops/server-safe-disk-cleanup.sh >/dev/null
+          grep -F 'secret_values_collected=0' ops/server-safe-disk-cleanup.sh >/dev/null
+
+  cleanup:
+    name: Owner-approved fail-closed server disk cleanup
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.number == 23 &&
+      github.event.issue.title == 'Staging Readiness Control' &&
+      startsWith(github.event.comment.body, '/run-server-disk-cleanup ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: staging
+    env:
+      CLEANUP_DIR: ${{ github.workspace }}/server-cleanup-output
+      STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+      STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+      STAGING_SSH_PORT: ${{ secrets.STAGING_SSH_PORT || '22' }}
+      STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+      STAGING_SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Parse exact owner cleanup command
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$COMMENT_AUTHOR" == 'seungjae3908-source' ]] || { echo 'Only the repository owner may run server disk cleanup.' >&2; exit 1; }
+          [[ "$AUTHOR_ASSOCIATION" == 'OWNER' ]] || { echo 'Command author is not the repository owner.' >&2; exit 1; }
+          node <<'NODE'
+          const fs = require('node:fs');
+          const body = String(process.env.COMMENT_BODY ?? '').trim();
+          const match = /^\/run-server-disk-cleanup ([0-9a-f]{40}) apply$/.exec(body);
+          if (!match) {
+            console.error('Exact command required: /run-server-disk-cleanup <exact-40-character-current-main-sha> apply');
+            process.exit(1);
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha=${match[1]}\n`);
+          NODE
+
+      - name: Require exact current main SHA
+        env:
+          APPROVED_SHA: ${{ steps.command.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main
+          current_main="$(git rev-parse origin/main^{commit})"
+          checked_out="$(git rev-parse HEAD^{commit})"
+          [[ "$APPROVED_SHA" == "$current_main" ]] || { echo 'Cleanup approval SHA is no longer exact current main.' >&2; exit 1; }
+          [[ "$checked_out" == "$current_main" ]] || { echo 'Cleanup checkout is not exact current main.' >&2; exit 1; }
+
+      - name: Configure SSH without exposing credentials
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          mkdir -p ~/.ssh "$CLEANUP_DIR"
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$STAGING_SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$STAGING_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$STAGING_SSH_PORT" -H "$STAGING_SSH_HOST" > ~/.ssh/known_hosts
+          fi
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+
+      - name: Build fail-closed cleanup plan
+        id: plan
+        run: |
+          set -Eeuo pipefail
+          plan_file="$CLEANUP_DIR/cleanup-plan.txt"
+          ssh -i ~/.ssh/id_ed25519 -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes -o ConnectTimeout=15 \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" 'bash -s -- plan' \
+            < ops/server-safe-disk-cleanup.sh > "$plan_file"
+          grep -Fx 'SAFE_DISK_CLEANUP_PLAN_READY' "$plan_file" >/dev/null
+          grep -Fx 'server_files_deleted=0' "$plan_file" >/dev/null
+          grep -Fx 'server_processes_restarted=0' "$plan_file" >/dev/null
+          grep -Fx 'staging_deployment_executed=false' "$plan_file" >/dev/null
+          grep -Fx 'production_deployment_executed=false' "$plan_file" >/dev/null
+          grep -Fx 'database_changes=0' "$plan_file" >/dev/null
+          grep -Fx 'secret_values_collected=0' "$plan_file" >/dev/null
+
+      - name: Enforce cleanup output redaction contract
+        run: |
+          set -Eeuo pipefail
+          plan_file="$CLEANUP_DIR/cleanup-plan.txt"
+          if grep -Eiq -- \
+            '-----BEGIN (OPENSSH|RSA|EC) PRIVATE KEY-----|https?://|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|(authorization|apikey|api_key|password|token|secret)[=:][[:space:]]*(Bearer[[:space:]]+)?[^<[:space:]]|([?&](token|apikey|api_key|key|secret|password)=)[^&<[:space:]]+' \
+            "$plan_file"; then
+            echo 'Cleanup plan contains a prohibited sensitive pattern.' >&2
+            exit 1
+          fi
+          if grep -Eq -- '(^|[^A-Za-z0-9_])(STAGING|PRODUCTION)_[A-Z0-9_]+=' "$plan_file"; then
+            echo 'Cleanup plan contains a prohibited environment assignment.' >&2
+            exit 1
+          fi
+
+      - name: Apply approved cleanup without deployment or process restart
+        id: apply
+        run: |
+          set -Eeuo pipefail
+          result_file="$CLEANUP_DIR/cleanup-result.txt"
+          set +e
+          ssh -i ~/.ssh/id_ed25519 -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes -o ConnectTimeout=15 \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" 'bash -s -- apply' \
+            < ops/server-safe-disk-cleanup.sh > "$result_file" 2>"$CLEANUP_DIR/cleanup-error.txt"
+          rc=$?
+          set -e
+          printf 'rc=%s\n' "$rc" >> "$GITHUB_OUTPUT"
+
+      - name: Validate cleanup result and redaction
+        id: verify
+        if: always()
+        env:
+          APPLY_RC: ${{ steps.apply.outputs.rc }}
+        run: |
+          set -Eeuo pipefail
+          result_file="$CLEANUP_DIR/cleanup-result.txt"
+          error_file="$CLEANUP_DIR/cleanup-error.txt"
+          touch "$result_file" "$error_file"
+          for file in "$result_file" "$error_file"; do
+            if grep -Eiq -- \
+              '-----BEGIN (OPENSSH|RSA|EC) PRIVATE KEY-----|https?://|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|(authorization|apikey|api_key|password|token|secret)[=:][[:space:]]*(Bearer[[:space:]]+)?[^<[:space:]]|([?&](token|apikey|api_key|key|secret|password)=)[^&<[:space:]]+' \
+              "$file"; then
+              echo 'Cleanup output contains a prohibited sensitive pattern.' >&2
+              exit 1
+            fi
+          done
+          if [[ "$APPLY_RC" == '0' ]]; then
+            grep -Fx 'SAFE_DISK_CLEANUP_COMPLETE' "$result_file" >/dev/null
+            grep -Fx 'server_processes_restarted=0' "$result_file" >/dev/null
+            grep -Fx 'staging_deployment_executed=false' "$result_file" >/dev/null
+            grep -Fx 'production_deployment_executed=false' "$result_file" >/dev/null
+            grep -Fx 'database_changes=0' "$result_file" >/dev/null
+            grep -Fx 'secret_values_collected=0' "$result_file" >/dev/null
+            printf 'verified=true\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'verified=false\n' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Write quota-safe cleanup summary
+        if: always()
+        env:
+          APPLY_RC: ${{ steps.apply.outputs.rc }}
+          VERIFIED: ${{ steps.verify.outputs.verified }}
+        run: |
+          set -Eeuo pipefail
+          result_file="$CLEANUP_DIR/cleanup-result.txt"
+          plan_file="$CLEANUP_DIR/cleanup-plan.txt"
+          value() {
+            local key="$1" file="$2"
+            sed -n "s/^${key}=//p" "$file" | head -n 1
+          }
+          source_file="$plan_file"
+          [[ "$VERIFIED" == true ]] && source_file="$result_file"
+          freed_kb="$(value freed_kb "$result_file")"
+          before_use="$(value disk_before_use_percent "$source_file")"
+          after_use="$(value disk_after_use_percent "$result_file")"
+          {
+            echo '## Safe shared server disk cleanup'
+            echo
+            echo "- Apply exit code: \`${APPLY_RC:-not-run}\`"
+            echo "- Verified complete: \`${VERIFIED:-false}\`"
+            echo "- Disk use before: \`${before_use:-unknown}\`"
+            echo "- Disk use after: \`${after_use:-unknown}\`"
+            echo "- Freed KB: \`${freed_kb:-unknown}\`"
+            echo "- Backup directories removed: \`$(value backup_delete_count "$source_file")\`"
+            echo "- Release directories removed: \`$(value release_delete_count "$source_file")\`"
+            echo "- Stale tmp entries removed: \`$(value tmp_delete_count "$source_file")\`"
+            echo "- Protected process restarts: \`0\`"
+            echo "- Staging deployment executed: \`false\`"
+            echo "- Production deployment executed: \`false\`"
+            echo "- Database changes by cleanup: \`0\`"
+            echo '- Artifact upload intentionally skipped: `true`'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Record cleanup result on release control issue
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          APPLY_RC: ${{ steps.apply.outputs.rc }}
+          VERIFIED: ${{ steps.verify.outputs.verified }}
+          APPROVED_SHA: ${{ steps.command.outputs.sha }}
+          CLEANUP_DIR: ${{ env.CLEANUP_DIR }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const fs = require('node:fs');
+            const path = require('node:path');
+            const read = (name) => {
+              const file = path.join(process.env.CLEANUP_DIR, name);
+              return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+            };
+            const result = read('cleanup-result.txt');
+            const plan = read('cleanup-plan.txt');
+            const value = (text, key) => {
+              const line = text.split(/\r?\n/).find((entry) => entry.startsWith(`${key}=`));
+              return line ? line.slice(key.length + 1) : '';
+            };
+            const verified = process.env.VERIFIED === 'true' && process.env.APPLY_RC === '0';
+            const source = verified ? result : plan;
+            const freedKb = value(result, 'freed_kb');
+            const freedMb = /^-?\d+$/.test(freedKb) ? (Number(freedKb) / 1024).toFixed(1) : 'unknown';
+            const body = [
+              verified ? 'Safe shared server disk cleanup completed.' : 'Safe shared server disk cleanup stopped or failed closed.',
+              '',
+              `- Approved exact-main SHA: \`${process.env.APPROVED_SHA || 'unavailable'}\``,
+              `- Cleanup Run ID: \`${context.runId}\``,
+              `- Apply exit code: \`${process.env.APPLY_RC || 'not-run'}\``,
+              `- Verified complete: \`${verified}\``,
+              `- Disk use before: \`${value(source, 'disk_before_use_percent') || 'unknown'}\``,
+              `- Disk use after: \`${value(result, 'disk_after_use_percent') || 'unknown'}\``,
+              `- Freed: \`${freedMb} MB\``,
+              `- Backup directories removed/planned: \`${value(source, 'backup_delete_count') || 'unknown'}\``,
+              `- Release directories removed/planned: \`${value(source, 'release_delete_count') || 'unknown'}\``,
+              `- Stale tmp entries removed/planned: \`${value(source, 'tmp_delete_count') || 'unknown'}\``,
+              `- Playwright cache removed/planned: \`${value(source, 'playwright_cache_delete') || 'unknown'}\``,
+              '- Current release preserved: `true`',
+              '- Last rollback backup preserved: `true`',
+              '- Server processes restarted or stopped by cleanup: `0`',
+              '- Staging deployment executed: `false`',
+              '- Production deployment executed: `false`',
+              '- Production database changed by cleanup: `false`',
+              '- Secret values recorded: `false`',
+              '- Artifact upload: `skipped (quota-safe)`',
+              `- Source command comment ID: \`${context.payload.comment.id}\``,
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+              body,
+            });
+
+      - name: Fail workflow when cleanup was not verified
+        if: always()
+        env:
+          APPLY_RC: ${{ steps.apply.outputs.rc }}
+          VERIFIED: ${{ steps.verify.outputs.verified }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$APPLY_RC" == '0' && "$VERIFIED" == 'true' ]] || exit 1

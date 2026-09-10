@@ -1,0 +1,169 @@
+name: Prediction Lab V3 V4 One-Pass Benchmark
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/prediction-lab-v34-one-pass-benchmark.yml
+      - market-prediction-lab/scripts/v34-one-pass-benchmark.mjs
+      - market-prediction-lab/src/v3-market-filter-optimizer.js
+      - market-prediction-lab/src/v4-momentum-regime-optimizer.js
+      - market-prediction-lab/tests/v1-independent-engine-equivalence.test.js
+      - market-prediction-lab/tests/v34-one-pass-runtime-equivalence.test.js
+  workflow_dispatch:
+    inputs:
+      research_ref:
+        description: Exact immutable PR-head commit SHA
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prediction-lab-v34-one-pass-benchmark-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  futures-btc-long-v34:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      HISTORICAL_HARNESS_SHA: ba181123e6b03c880d9c70174b16ae6eb528700b
+      EXPECTED_CANDLE_COUNT: "210431"
+      EXPECTED_SOURCE_DIGEST: 475c63b21e726a6d156eb977ac3c5b035c04609d755475f734f5e85d14c965a6
+      EXPECTED_FUNDING_DIGEST: 2e538fba4f16d14499204f7d8b5ef7c156047491b3d604faff57d057c973e432
+      EXPECTED_V3_RESULT_DIGEST: 908ea8034d6bdb8062916a0001521c22f132c47dd1e3bcc6189197303b72a4a3
+      EXPECTED_V4_RESULT_DIGEST: b6f2376553e7445dbc4054b7aa29d333b0f48b3843505c1f339eae811023a994
+      BASELINE_V3_SECONDS: "17969.385"
+      BASELINE_V4_SECONDS: "16693.711"
+      BASELINE_V3_SUFFIX_V1_CALLS: "28914"
+      BASELINE_V4_SUFFIX_V1_CALLS: "26075"
+      BASELINE_V3_CANDLE_VISITS: "5380339461"
+      BASELINE_V4_CANDLE_VISITS: "4844386607"
+      EXPECTED_STAGE_COUNT: "54"
+    steps:
+      - name: Resolve immutable PR head
+        id: resolve
+        shell: bash
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          INPUT_SHA: ${{ inputs.research_ref }}
+        run: |
+          set -euo pipefail
+          sha="$PR_HEAD_SHA"
+          if [ -z "$sha" ]; then sha="$INPUT_SHA"; fi
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "research_ref must be an exact lowercase 40-character SHA" >&2
+            exit 1
+          }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact PR head with history
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.resolve.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Verify immutable checkout and execution dependencies
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.resolve.outputs.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          for path in \
+            market-prediction-lab/src/independent-strategy-backtest.js \
+            market-prediction-lab/src/multi-market-backtest-engine.js \
+            market-prediction-lab/src/research-validation-layer.js \
+            market-prediction-lab/src/research-governance.js; do
+            test "$(git rev-parse "$TARGET_SHA:$path")" = "$(git rev-parse "$HISTORICAL_HARNESS_SHA:$path")" || {
+              echo "execution dependency drift: $path" >&2
+              exit 1
+            }
+          done
+
+      - name: Build immutable historical harness with exact PR-head runtime
+        id: harness
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.resolve.outputs.sha }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/v34-one-pass-benchmark"
+          rm -rf "$root"
+          mkdir -p "$root"
+          git archive "$HISTORICAL_HARNESS_SHA" market-prediction-lab | tar -x -C "$root"
+          cp market-prediction-lab/src/v3-market-filter-optimizer.js "$root/market-prediction-lab/src/"
+          cp market-prediction-lab/src/v4-momentum-regime-optimizer.js "$root/market-prediction-lab/src/"
+          cp market-prediction-lab/scripts/v34-one-pass-benchmark.mjs "$root/market-prediction-lab/scripts/"
+          printf '%s\n' "$TARGET_SHA" > "$root/target-sha"
+          echo "root=$root" >> "$GITHUB_OUTPUT"
+
+      - name: Instrument ephemeral benchmark counters
+        working-directory: ${{ steps.harness.outputs.root }}/market-prediction-lab
+        run: node scripts/v34-one-pass-benchmark.mjs instrument
+
+      - name: Collect immutable public Binance USD-M 15m history
+        working-directory: ${{ steps.harness.outputs.root }}/market-prediction-lab
+        env:
+          RESEARCH_CODE_SHA: ${{ steps.resolve.outputs.sha }}
+        run: node scripts/collect-binance-scalping-history.js binance-scalping-cache
+
+      - name: Verify exact dataset identity and Final Holdout isolation
+        working-directory: ${{ steps.harness.outputs.root }}/market-prediction-lab
+        run: node scripts/v34-one-pass-benchmark.mjs verify-dataset binance-scalping-cache/BTCUSDT.json
+
+      - name: Run V3 and V4 same-dataset one-pass benchmarks
+        working-directory: ${{ steps.harness.outputs.root }}/market-prediction-lab
+        shell: bash
+        env:
+          RESEARCH_CODE_SHA: ${{ steps.resolve.outputs.sha }}
+          SCALPING_DATASET_KEY: futures-btc-long
+        run: |
+          set -euo pipefail
+          root=artifacts/v34-benchmark
+          mkdir -p "$root"
+          for version in V3 V4; do
+            start_ns="$(date +%s%N)"
+            SCALPING_FAMILY_VERSION="$version" \
+            BENCHMARK_STATS_PATH="$PWD/$root/$version.stats.json" \
+            NODE_OPTIONS=--import=./scripts/v34-benchmark-preload.js \
+              /usr/bin/time -v -o "$root/$version.time.txt" \
+              node scripts/run-scalping-family-research.js \
+                scalping-history-cache \
+                binance-scalping-cache \
+                "$root/$version.raw.json" \
+                "$root/$version.ranking.json"
+            end_ns="$(date +%s%N)"
+            node -e 'const fs=require("fs");const seconds=(Number(process.argv[1])-Number(process.argv[2]))/1e9;fs.writeFileSync(process.argv[3],JSON.stringify({wallClockSeconds:seconds},null,2)+"\n")' \
+              "$end_ns" "$start_ns" "$root/$version.wall.json"
+          done
+
+      - name: Require legacy identity and publish measured summary
+        working-directory: ${{ steps.harness.outputs.root }}/market-prediction-lab
+        env:
+          TARGET_SHA: ${{ steps.resolve.outputs.sha }}
+        run: node scripts/v34-one-pass-benchmark.mjs summarize artifacts/v34-benchmark
+
+      - name: Upload immutable benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prediction-lab-v34-one-pass-benchmark-${{ steps.resolve.outputs.sha }}
+          path: ${{ steps.harness.outputs.root }}/market-prediction-lab/artifacts/v34-benchmark
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Assert immutable checkout HEAD
+        if: always()
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.resolve.outputs.sha }}
+        run: test "$(git rev-parse HEAD)" = "$TARGET_SHA"

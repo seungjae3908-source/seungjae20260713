@@ -11,6 +11,7 @@ import watchlistRouter from './watchlist';
 import kiwoomRouter from './kiwoom.routes';
 import kiwoomRankingsSafeRouter from './kiwoom-rankings-safe';
 import adminRouter from './admin';
+import researchCopilotRouter from './research-copilot';
 import secRouter from './sec.routes';
 import cryptoRouter from './crypto';
 import futuresMarketDataRouter from './futures-market-data';
@@ -31,6 +32,7 @@ import accountConnectionsRouter from './account-connections';
 import { createAccountReadonlyRouter, accountReadFlags } from '../features/account-readonly/account-readonly.route';
 import { AccountReadonlyService } from '../features/account-readonly/account-readonly.service';
 import { createVaultBackedAccountReaders } from '../features/account-readonly/account-readonly.runtime';
+import { accountReadonlyCredentialConfigured } from '../features/account-readonly/account-readonly.repository';
 import {
   manualPortfolioNotificationBridge,
   telegramWebhookRouter,
@@ -59,6 +61,7 @@ router.use('/telegram/webhook', telegramWebhookRouter);
 
 // Admin routes perform their own authenticated + admin capability checks.
 router.use('/admin', adminRouter);
+router.use('/admin/research/copilot', researchCopilotRouter);
 
 router.use(requireAuthenticated);
 
@@ -74,7 +77,12 @@ router.use('/account-connections', accountConnectionsRouter);
 router.use(
   '/accounts/read-only',
   requireCapability('canAccessBasicInfo'),
-  createAccountReadonlyRouter(new AccountReadonlyService(createVaultBackedAccountReaders(), accountReadFlags())),
+  createAccountReadonlyRouter(new AccountReadonlyService(
+    createVaultBackedAccountReaders(),
+    accountReadFlags(),
+    () => new Date(),
+    accountReadonlyCredentialConfigured,
+  )),
 );
 
 // Canonical AI Scanner routes must be registered before the legacy market

@@ -140,7 +140,7 @@ async function installMocks(page: Page) {
 
 async function openChart(page: Page) {
   await page.goto('/ai-chart?assetType=stock&market=KR&symbol=005930&ticker=005930&name=%EC%82%BC%EC%84%B1%EC%A0%84%EC%9E%90&timeframe=5m');
-  await expect(page.getByRole('heading', { name: 'AI 차트 생중계', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /AI 차트 생중계/, level: 1 })).toBeVisible();
   await expect(page.getByText('context-reset-kr-5m', { exact: false })).toBeVisible();
   await page.getByRole('button', { name: '자동 갱신 중', exact: true }).click();
   await expect(page.getByRole('button', { name: '갱신 일시정지', exact: true })).toBeVisible();
@@ -163,7 +163,7 @@ function timeline(page: Page) {
 }
 
 function currentAnalysis(page: Page) {
-  return page.locator('section').filter({ hasText: '현재 생중계 판단' }).last();
+  return page.locator('section').filter({ hasText: '현재 판단' }).last();
 }
 
 async function expectLatestCandle(page: Page, expectedTime: number) {
@@ -207,7 +207,7 @@ test('timeframe, symbol, and market changes reset detail, overlay, and timeline 
   await expect(page.getByTestId('selected-candle-detail')).toHaveCount(0);
   await expect(page.getByTestId('chart-pattern-overlay')).toHaveCount(0);
   await expect(timeline(page)).toContainText('최근 0건');
-  await expect(currentAnalysis(page)).toContainText('실제 캔들이 준비되면');
+  await expect(currentAnalysis(page)).toContainText('차트 데이터 확인 후 표시됩니다.');
 
   await page.getByTestId('timeframe-15m').click();
   await expect(page).toHaveURL(/timeframe=15m/);
@@ -216,7 +216,7 @@ test('timeframe, symbol, and market changes reset detail, overlay, and timeline 
   await expect(page.getByTestId('chart-pattern-overlay')).toHaveCount(0);
   await expect(timeline(page)).toContainText('최근 1건');
   await expect(timeline(page)).not.toContainText('이중천장');
-  await expect(currentAnalysis(page)).not.toContainText('실제 캔들이 준비되면');
+  await expect(currentAnalysis(page)).not.toContainText('차트 데이터 확인 후 표시됩니다.');
   const currentPrice = page.getByText('현재가', { exact: true }).locator('xpath=../..');
   await expect(currentPrice).toContainText('20,023원');
 
@@ -254,7 +254,7 @@ test('timeframe, symbol, and market changes reset detail, overlay, and timeline 
   await expect(timeline(page)).toContainText('최근 1건');
   await expect(timeline(page)).not.toContainText('이중천장');
   await expect(page.getByText('현재가', { exact: true }).locator('xpath=../..')).toContainText('$523.00');
-  await expect(page.locator('section').filter({ hasText: '현재 차트 컨텍스트' }).last()).toContainText('AAPL · US · 15m');
+  await expect(page.locator('section').filter({ hasText: '현재 상태' }).last()).toContainText('AAPL · 미국주식 · 15m');
 
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   await expectNoBrowserErrors(page, evidence);

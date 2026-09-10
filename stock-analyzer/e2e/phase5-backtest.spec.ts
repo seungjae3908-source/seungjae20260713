@@ -51,11 +51,13 @@ for (const viewport of [
     await expect(page.getByTestId('total-trades')).toContainText('24');
     await expect(page.getByTestId('equity-chart')).toBeVisible();
     await expect(page.getByTestId('drawdownPercent-chart')).toBeVisible();
-    await expect(page.getByTestId('validation-results')).toContainText('training');
+    await expect(page.getByTestId('validation-results')).toContainText('학습');
+    await expect(page.getByTestId('validation-results')).not.toContainText('training');
     await expect(page.getByTestId('direction-results')).toContainText('롱');
     await expect(page.getByTestId('walk-forward-results')).toBeVisible();
     await expect(page.getByTestId('breakdown-results')).toBeVisible();
     await expect(page.getByTestId('trade-list')).toBeVisible();
+    await expect(page.getByTestId('trade-list')).toContainText(/롱|숏/);
     await expect(page.getByTestId('backtest-warnings')).toContainText('손절을 우선');
     await page.getByTestId('trade-list').evaluate((element) => {
       element.scrollTop = element.scrollHeight;

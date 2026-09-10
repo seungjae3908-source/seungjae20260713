@@ -190,11 +190,18 @@ test('AI Chart 2.0 remains usable with no horizontal overflow at 320/360/390/412
   for (const width of [320, 360, 390, 412, 430]) {
     await page.setViewportSize({ width, height: 844 });
     await page.goto(directSignalUrl);
+    await expect(page.getByTestId('ai-chart-mobile-summary')).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+
+    await page.getByRole('tab', { name: '차트', exact: true }).click();
     await expect(page.getByTestId('unified-analysis-chart')).toBeVisible();
-    await expect(page.getByTestId('ai-chart-v2-intelligence')).toBeVisible();
     await expect(page.getByTestId('ai-chart-v2-signal-overlay')).toBeVisible();
-    await expect(page.getByTestId('strategy-mode-SCALPING')).toBeVisible();
     await expect(page.getByRole('button', { name: '5분', exact: true })).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+
+    await page.getByRole('tab', { name: '상세', exact: true }).click();
+    await expect(page.getByTestId('ai-chart-v2-intelligence')).toBeVisible();
+    await expect(page.getByTestId('strategy-mode-SCALPING')).toBeVisible();
     await expect(page.getByTestId('load-multi-timeframe')).toBeVisible();
     await expectNoHorizontalOverflow(page);
   }

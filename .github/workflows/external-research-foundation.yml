@@ -1,0 +1,32 @@
+name: External Research Foundation
+
+on:
+  pull_request:
+    paths:
+      - packages/external-research/**
+      - .github/workflows/external-research-foundation.yml
+  push:
+    branches: [main]
+    paths:
+      - packages/external-research/**
+      - .github/workflows/external-research-foundation.yml
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: ResearchPaperV2 adapters and provenance
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Check module syntax
+        run: find packages/external-research/src -name '*.js' -print0 | xargs -0 -n1 node --check
+      - name: Run isolated unit tests
+        run: node --test packages/external-research/test/*.test.js

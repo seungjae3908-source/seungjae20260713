@@ -1,0 +1,210 @@
+name: Production Telegram Storage Release Diagnostic
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request:
+    paths:
+      - .github/workflows/production-telegram-storage-release-diagnostic.yml
+      - ops/production-telegram-storage-release-diagnostic.mjs
+      - ops/verify-production-telegram-storage-release-diagnostic.mjs
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+concurrency:
+  group: production-telegram-storage-release-diagnostic-${{ github.event_name == 'issue_comment' && github.event.issue.number == 23 && startsWith(github.event.comment.body, '/run-telegram-storage-release-diagnostic ') && 'command' || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate Production Telegram storage release diagnostic contract
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Validate Node syntax and immutable read-only contract
+        run: |
+          set -Eeuo pipefail
+          node --check ops/production-telegram-storage-release-diagnostic.mjs
+          node --check ops/verify-production-telegram-storage-release-diagnostic.mjs
+          node ops/verify-production-telegram-storage-release-diagnostic.mjs
+
+  diagnose:
+    name: Owner-approved read-only Telegram storage release diagnostic
+    if: >-
+      github.event_name == 'issue_comment' && github.event.action == 'created' &&
+      github.event.issue.number == 23 && github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' && github.event.issue.title == 'Staging Readiness Control' &&
+      github.event.comment.user.login == github.repository_owner && github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/run-telegram-storage-release-diagnostic ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    env:
+      SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+      SSH_USER: ${{ secrets.PROD_SSH_USER }}
+      SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+      SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.PROD_SSH_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Parse exact owner diagnostic command
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -Eeuo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const match = /^\/run-telegram-storage-release-diagnostic ([0-9a-fA-F]{40}) ([0-9a-fA-F]{40})$/.exec(String(process.env.COMMENT_BODY ?? '').trim());
+          if (!match) process.exit(1);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `active_sha=${match[1].toLowerCase()}\ntarget_sha=${match[2].toLowerCase()}\n`);
+          NODE
+      - name: Require exact current main SHA
+        env:
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main "$TARGET_SHA"
+          [[ "$TARGET_SHA" == "$(git rev-parse origin/main^{commit})" ]] || exit 1
+      - name: Prepare sanitized diagnostic path
+        run: printf 'DIAGNOSTIC_ARTIFACT=%s\n' "$RUNNER_TEMP/production-telegram-storage-release-diagnostic.json" >> "$GITHUB_ENV"
+      - name: Resolve and require active Production SHA provenance
+        id: provenance
+        continue-on-error: true
+        uses: actions/github-script@v7
+        env:
+          ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
+        with:
+          script: |
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {owner: context.repo.owner, repo: context.repo.repo, workflow_id: 'production-deploy.yml', event: 'workflow_dispatch', per_page: 100});
+            const latest = runs.filter((run) => run.status === 'completed' && run.conclusion === 'success').sort((a,b) => Date.parse(b.created_at)-Date.parse(a.created_at))[0];
+            const requested = String(process.env.ACTIVE_SHA || '').toLowerCase();
+            const latestSha = latest ? String(latest.head_sha || '').toLowerCase() : '';
+            core.setOutput('latest_sha', latestSha || 'unresolved');
+            core.setOutput('latest_run_id', latest ? String(latest.id) : 'unresolved');
+            if (!latest || !/^[0-9a-f]{40}$/.test(latestSha)) {
+              core.setFailed('No valid successful Production Deploy provenance is available.');
+              return;
+            }
+            if (latestSha !== requested) {
+              core.setFailed(`Active Production SHA provenance mismatch: requested=${requested}, latest=${latestSha}, run=${latest.id}.`);
+            }
+      - name: Configure canonical Production SSH
+        if: steps.provenance.outcome == 'success'
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$SSH_HOST" && -n "$SSH_USER" && -n "$SSH_PRIVATE_KEY" ]] || exit 1
+          umask 077; mkdir -p "$HOME/.ssh"; printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"; chmod 600 "$HOME/.ssh/id_ed25519"
+          if [[ -n "$SSH_KNOWN_HOSTS" ]]; then printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"; else ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > "$HOME/.ssh/known_hosts" 2>/dev/null; fi
+      - name: Run fixed read-only Production Telegram storage release diagnostic
+        id: diagnostic
+        if: steps.provenance.outcome == 'success'
+        continue-on-error: true
+        env:
+          ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
+          PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$PROD_DATABASE_URL" && "$PROD_DATABASE_URL" =~ ^postgres(ql)?:// ]] || exit 1
+          quoted_sha="$(printf '%q' "$ACTIVE_SHA")"; script_b64="$(base64 -w0 ops/production-telegram-storage-release-diagnostic.mjs)"; quoted_script="$(printf '%q' "$script_b64")"
+          remote_command="EXPECTED_PRODUCTION_SHA=$quoted_sha DIAGNOSTIC_SCRIPT_B64=$quoted_script bash -c 'IFS= read -r PROD_DATABASE_URL; export PROD_DATABASE_URL; printf \"%s\" \"\$DIAGNOSTIC_SCRIPT_B64\" | base64 -d | node --input-type=module -'"
+          if ! printf '%s\n' "$PROD_DATABASE_URL" | ssh -i "$HOME/.ssh/id_ed25519" -p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 "$SSH_USER@$SSH_HOST" "$remote_command" > "$DIAGNOSTIC_ARTIFACT" 2> "$RUNNER_TEMP/production-telegram-storage-release-diagnostic.stderr"; then
+            echo 'Read-only Telegram storage diagnostic transport failed; remote stderr is intentionally not printed.' >&2; exit 1
+          fi
+      - name: Verify sanitized diagnostic artifact
+        id: verify
+        if: steps.provenance.outcome == 'success' && steps.diagnostic.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -Eeuo pipefail
+          [[ -s "$DIAGNOSTIC_ARTIFACT" ]] || exit 1
+          node ops/production-telegram-storage-release-diagnostic.mjs --verify-artifact "$DIAGNOSTIC_ARTIFACT"
+      - name: Upload sanitized read-only diagnostic evidence
+        if: steps.provenance.outcome == 'success' && steps.diagnostic.outcome == 'success' && steps.verify.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-telegram-storage-release-diagnostic-${{ steps.command.outputs.active_sha }}-${{ steps.command.outputs.target_sha }}
+          path: ${{ runner.temp }}/production-telegram-storage-release-diagnostic.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Report sanitized diagnostic result
+        if: always() && steps.command.outcome == 'success'
+        uses: actions/github-script@v7
+        env:
+          REQUESTED_ACTIVE_SHA: ${{ steps.command.outputs.active_sha }}
+          TARGET_SHA: ${{ steps.command.outputs.target_sha }}
+          LATEST_ACTIVE_SHA: ${{ steps.provenance.outputs.latest_sha }}
+          LATEST_DEPLOY_RUN_ID: ${{ steps.provenance.outputs.latest_run_id }}
+          PROVENANCE_OUTCOME: ${{ steps.provenance.outcome }}
+          DIAGNOSTIC_ARTIFACT: ${{ env.DIAGNOSTIC_ARTIFACT }}
+          DIAGNOSTIC_OUTCOME: ${{ steps.diagnostic.outcome }}
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+          SOURCE_COMMENT_ID: ${{ github.event.comment.id }}
+        with:
+          script: |
+            const fs = require('node:fs');
+            const latestSha = process.env.LATEST_ACTIVE_SHA || 'unresolved';
+            const latestRun = process.env.LATEST_DEPLOY_RUN_ID || 'unresolved';
+            if (process.env.PROVENANCE_OUTCOME !== 'success') {
+              const classification = latestSha === 'unresolved' ? 'production_deploy_provenance_missing' : 'active_production_sha_provenance_mismatch';
+              await github.rest.issues.createComment({owner: context.repo.owner, repo: context.repo.repo, issue_number: 23, body: [
+                'Production Telegram storage release diagnostic stopped safely before SSH/DB inspection.','',
+                `- Classification: \`${classification}\``,`- Requested Production SHA: \`${process.env.REQUESTED_ACTIVE_SHA}\``,`- Latest successful Production SHA: \`${latestSha}\``,`- Latest Production Deploy Run ID: \`${latestRun}\``,`- Exact current main SHA: \`${process.env.TARGET_SHA}\``,
+                '- Database read executed: `false`','- Database changed: `false`','- Server mutation executed: `false`','- Production deployment executed: `false`','- Secret values recorded: `false`','- Actual orders: `0`','- Live trading authority: `false`',`- Diagnostic Run ID: \`${context.runId}\``,`- Source command comment ID: \`${process.env.SOURCE_COMMENT_ID}\``].join('\n')});
+              return;
+            }
+            if (process.env.DIAGNOSTIC_OUTCOME !== 'success') {
+              await github.rest.issues.createComment({owner: context.repo.owner, repo: context.repo.repo, issue_number: 23, body: [
+                'Production Telegram storage release diagnostic failed safely during read-only execution.','',
+                `- Active Production SHA: \`${process.env.REQUESTED_ACTIVE_SHA}\``,`- Exact current main SHA: \`${process.env.TARGET_SHA}\``,`- Latest Production Deploy Run ID: \`${latestRun}\``,
+                '- Database changed: `false`','- Production deployment executed: `false`','- Secret values recorded: `false`','- Actual orders: `0`','- Live trading authority: `false`',`- Diagnostic Run ID: \`${context.runId}\``].join('\n')});
+              return;
+            }
+            if (process.env.VERIFY_OUTCOME !== 'success' || !process.env.DIAGNOSTIC_ARTIFACT || !fs.existsSync(process.env.DIAGNOSTIC_ARTIFACT)) {
+              await github.rest.issues.createComment({owner: context.repo.owner, repo: context.repo.repo, issue_number: 23, body: [
+                'Production Telegram storage release diagnostic produced invalid or missing sanitized evidence.','',
+                `- Active Production SHA: \`${process.env.REQUESTED_ACTIVE_SHA}\``,`- Exact current main SHA: \`${process.env.TARGET_SHA}\``,
+                '- Database changed: `false`','- Production deployment executed: `false`','- Secret values recorded: `false`','- Actual orders: `0`','- Live trading authority: `false`',`- Diagnostic Run ID: \`${context.runId}\``].join('\n')});
+              return;
+            }
+            const v = JSON.parse(fs.readFileSync(process.env.DIAGNOSTIC_ARTIFACT, 'utf8'));
+            await github.rest.issues.createComment({owner: context.repo.owner, repo: context.repo.repo, issue_number: 23, body: [
+              'Production Telegram storage release diagnostic completed read-only.','',
+              `- Active Production SHA: \`${v.production_sha}\``,`- Exact current main SHA: \`${process.env.TARGET_SHA}\``,`- Classification: \`${v.classification}\``,`- Release preflight ready: \`${v.release_preflight_ready}\``,
+              `- PM2 online / exact SHA: \`${v.pm2_online}/${v.production_process_sha_match}\``,`- Production project match: \`${v.production_project_match}\``,`- PostgreSQL source / endpoint / port: \`${v.database_secret_source}/${v.postgres_endpoint_type}/${v.postgres_port}\``,`- Read-only DB probe: \`${v.read_only_probe}\``,
+              `- auth.users / required roles: \`${v.auth_users_exists}/${v.required_roles_exist}\``,`- notification_preferences ready: \`${v.notification_preferences_ready}\``,`- Existing Telegram schema compatible: \`${v.telegram_existing_schema_compatible}\``,`- Migration privileges create/references/ownership: \`${v.public_schema_create}/${v.auth_users_references}/${v.existing_telegram_owned_or_superuser}\``,`- Conflicting relation lock: \`${v.blocking_relation_lock_detected}\``,
+              '- Database changed: `false`','- Server files written: `0`','- Server processes restarted: `0`','- Production deployment executed: `false`','- Secret values recorded: `false`','- Actual orders: `0`','- Live trading authority: `false`',`- Diagnostic Run ID: \`${context.runId}\``,`- Source command comment ID: \`${process.env.SOURCE_COMMENT_ID}\``].join('\n')});
+      - name: Enforce diagnostic execution status
+        if: always() && steps.command.outcome == 'success'
+        env:
+          PROVENANCE_OUTCOME: ${{ steps.provenance.outcome }}
+          DIAGNOSTIC_OUTCOME: ${{ steps.diagnostic.outcome }}
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$PROVENANCE_OUTCOME" == 'success' ]] || { echo 'Production SHA provenance gate did not pass.' >&2; exit 1; }
+          [[ "$DIAGNOSTIC_OUTCOME" == 'success' ]] || { echo 'Read-only diagnostic execution did not pass.' >&2; exit 1; }
+          [[ "$VERIFY_OUTCOME" == 'success' ]] || { echo 'Sanitized diagnostic evidence verification did not pass.' >&2; exit 1; }
+      - name: Write immutable safety summary
+        if: always() && steps.command.outcome == 'success'
+        run: |
+          echo '## Production Telegram Storage Release Diagnostic' >> "$GITHUB_STEP_SUMMARY"
+          echo '- database read-only / server mutation 0 / deploy 0 / secret log 0 / orders 0 / live authority false' >> "$GITHUB_STEP_SUMMARY"
