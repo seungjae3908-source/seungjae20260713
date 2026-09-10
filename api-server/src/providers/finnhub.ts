@@ -4,6 +4,7 @@ import { getFinnhubKey } from '../lib/config';
 import { ProviderError } from '../lib/errors';
 import { fetchJson } from '../lib/http';
 import { cached, TTL } from '../lib/cache';
+import { normalizeUnixSecondsObservationTime } from '../lib/market-observation-time';
 import type { CatalogEntry } from '../data/catalog';
 
 const BASE = 'https://finnhub.io/api/v1';
@@ -16,6 +17,7 @@ export interface Quote {
   low: number;
   open: number;
   previousClose: number;
+  updatedAt: string;
 }
 
 export interface Profile {
@@ -49,6 +51,7 @@ interface FinnhubQuote {
   l: number;
   o: number;
   pc: number;
+  t?: number;
 }
 
 export async function getQuote(entry: CatalogEntry): Promise<Quote> {
@@ -67,6 +70,14 @@ export async function getQuote(entry: CatalogEntry): Promise<Quote> {
         `no quote for ${symbol}`,
       );
     }
+    const updatedAt = normalizeUnixSecondsObservationTime(data.t);
+    if (!updatedAt) {
+      throw new ProviderError(
+        'UNAVAILABLE',
+        'finnhub',
+        `invalid quote source time for ${symbol}`,
+      );
+    }
     return {
       price: data.c,
       changeAmount: data.d ?? 0,
@@ -75,6 +86,7 @@ export async function getQuote(entry: CatalogEntry): Promise<Quote> {
       low: data.l,
       open: data.o,
       previousClose: data.pc,
+      updatedAt,
     };
   });
 }
