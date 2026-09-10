@@ -97,7 +97,7 @@ test('regular user saves Upbit credentials only through canonical account-readon
   const accessKey = 'UPBIT_ACCESS_TEST_ONLY_123'; const secretKey = 'UPBIT_SECRET_TEST_ONLY_456';
   await page.getByTestId('upbit-credential-primary').fill(accessKey); await page.getByTestId('upbit-credential-secret').fill(secretKey); await page.getByTestId('upbit-save-connection').click();
   const upbit = page.getByTestId('connection-upbit');
-  await expect(page.getByRole('status')).toContainText('암호화 저장');
+  await expect(page.getByRole('status')).toContainText('저장 완료 · Upbit 조회 전용 키를 암호화 Vault에 저장했습니다.');
   await expect(upbit).toContainText('검증 필요');
   await expect(upbit).toContainText('보유 자산 미수집');
   await expect(upbit).not.toContainText('보유 자산 0개');

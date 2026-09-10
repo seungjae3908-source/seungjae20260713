@@ -7,6 +7,8 @@ import { BottomNav } from '@/components/bottom-nav';
 import { ErrorState, LoadingState } from '@/components/data-state';
 import { apiGet, type MarketAlert } from '@/lib/api';
 import { authorizedFetch } from '@/lib/auth-fetch';
+import { parseMarketAlertFeed } from '@/lib/market-alert-response';
+import { parseNotificationHistory } from '@/lib/notification-history-response';
 import { classifyAlert, NOTIFICATION_LABELS } from '@/lib/notifications';
 import { cn } from '@/lib/utils';
 
@@ -74,31 +76,41 @@ export default function AlertsPage() {
   const feed = useAlertFeed('ALL', source === 'market');
   const history = useQuery({
     queryKey: ['notification-history'],
-    queryFn: () => apiGet<{ notifications: NotificationHistoryRow[] }>('/notifications/history?limit=200'),
+    queryFn: async () => parseNotificationHistory(await apiGet<unknown>('/notifications/history?limit=200')),
     refetchInterval: 30_000,
     retry: false,
   });
 
-  const list = useMemo(() => getFilteredAlerts(feed.data, market, tone), [feed.data, market, tone]);
+  const feedTruth = useMemo((): { data?: ReturnType<typeof parseMarketAlertFeed>; error: boolean } => {
+    if (!feed.data) return { error: false };
+    try {
+      return { data: parseMarketAlertFeed(feed.data), error: false };
+    } catch {
+      return { error: true };
+    }
+  }, [feed.data]);
+  const marketFeedFailed = feed.isError || feedTruth.error;
+  const trustedFeed = marketFeedFailed ? undefined : feedTruth.data;
+  const list = useMemo(() => getFilteredAlerts(trustedFeed, market, tone), [trustedFeed, market, tone]);
   const counts = useMemo(() => {
-    const krAll = getFilteredAlerts(feed.data, 'KR', 'all').length;
-    const usAll = getFilteredAlerts(feed.data, 'US', 'all').length;
-    const all = getFilteredAlerts(feed.data, market, 'all').length;
-    const positive = getFilteredAlerts(feed.data, market, 'positive').length;
-    const negative = getFilteredAlerts(feed.data, market, 'negative').length;
+    const krAll = getFilteredAlerts(trustedFeed, 'KR', 'all').length;
+    const usAll = getFilteredAlerts(trustedFeed, 'US', 'all').length;
+    const all = getFilteredAlerts(trustedFeed, market, 'all').length;
+    const positive = getFilteredAlerts(trustedFeed, market, 'positive').length;
+    const negative = getFilteredAlerts(trustedFeed, market, 'negative').length;
     return { krAll, usAll, all, positive, negative };
-  }, [feed.data, market]);
+  }, [trustedFeed, market]);
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-y-auto overscroll-contain bg-background">
-      <header className="sticky top-0 z-20 border-b border-card-border bg-background/95 px-3 pb-2 pt-3 backdrop-blur sm:px-4">
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background" data-testid="alerts-page">
+      <header className="shrink-0 border-b border-card-border bg-background/95 px-3 py-3 backdrop-blur sm:px-4">
         <div className="mx-auto w-full max-w-6xl">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center justify-center gap-2 text-center">
             <Bell className="h-5 w-5 text-ai" aria-hidden="true" />
-            <h1 className="text-lg font-black sm:text-xl">알림</h1>
+            <h1 className="text-xl font-bold">알림</h1>
           </div>
 
-          <div className="mt-2 grid grid-cols-2 gap-2" data-testid="alert-source-tabs">
+          <div className="mt-3 grid grid-cols-2 gap-2" data-testid="alert-source-tabs">
             <FilterButton active={source === 'mine'} onClick={() => setSource('mine')}>
               내 알림 <Count n={history.data?.notifications?.length ?? 0} />
             </FilterButton>
@@ -108,7 +120,7 @@ export default function AlertsPage() {
           </div>
 
           {source === 'market' && (
-            <div className="mt-2 grid grid-cols-5 gap-1" data-testid="alert-market-filters">
+            <div className="mt-2 grid grid-cols-5 gap-1.5" data-testid="alert-market-filters">
               <FilterButton compact active={market === 'KR'} onClick={() => setMarket('KR')}>
                 국내 <Count n={counts.krAll} />
               </FilterButton>
@@ -129,21 +141,25 @@ export default function AlertsPage() {
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-6xl flex-none p-3 pb-20 sm:p-4 sm:pb-20">
-        {source === 'mine' ? (
-          <NotificationHistoryList query={history} />
-        ) : (
-          <>
-            {feed.isLoading && <LoadingState label="신호 확인 중" />}
-            {feed.isError && <ErrorState onRetry={() => { void feed.refetch(); }} />}
-            {feed.data && list.length === 0 && (
-              <p className="py-12 text-center text-sm font-bold text-muted-foreground">표시할 신호가 없습니다.</p>
-            )}
-            <div className="grid gap-2 lg:grid-cols-2" data-testid="market-alert-list">
-              {list.map((alert) => <AlertItem key={alert.id} alert={alert} />)}
-            </div>
-          </>
-        )}
+      <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+        <div className="mx-auto w-full max-w-6xl p-3 pb-24 sm:p-4 sm:pb-24">
+          {source === 'mine' ? (
+            <NotificationHistoryList query={history} />
+          ) : (
+            <>
+              {feed.isLoading && <LoadingState label="신호 확인 중" />}
+              {marketFeedFailed && <ErrorState onRetry={() => { void feed.refetch(); }} />}
+              {trustedFeed && list.length === 0 && (
+                <p className="py-12 text-center text-sm font-medium text-muted-foreground">표시할 신호가 없습니다.</p>
+              )}
+              {!marketFeedFailed && (
+                <div className="grid gap-3 min-[900px]:grid-cols-2" data-testid="market-alert-list">
+                  {list.map((alert) => <AlertItem key={alert.id} alert={alert} />)}
+                </div>
+              )}
+            </>
+          )}
+        </div>
       </main>
 
       <BottomNav />
@@ -162,7 +178,7 @@ function NotificationHistoryList({ query }: {
   if (query.isLoading) return <LoadingState label="알림 확인 중" />;
   if (query.isError) return <ErrorState onRetry={() => { void query.refetch(); }} />;
   const rows = query.data?.notifications ?? [];
-  if (!rows.length) return <p className="py-12 text-center text-sm font-bold text-muted-foreground">저장된 알림이 없습니다.</p>;
+  if (!rows.length) return <p className="py-12 text-center text-sm font-medium text-muted-foreground">저장된 알림이 없습니다.</p>;
 
   const markRead = async (row: NotificationHistoryRow) => {
     if (!row.read_at) {
@@ -173,25 +189,25 @@ function NotificationHistoryList({ query }: {
   };
 
   return (
-    <div className="grid gap-2 lg:grid-cols-2" data-testid="notification-history-list">
+    <div className="grid gap-3 min-[900px]:grid-cols-2" data-testid="notification-history-list">
       {rows.map((row) => (
         <button
           key={row.id}
           type="button"
           onClick={() => void markRead(row)}
           className={cn(
-            'min-w-0 w-full rounded-2xl border p-3 text-left',
+            'min-w-0 w-full rounded-2xl border p-4 text-left transition-colors',
             row.read_at ? 'border-card-border bg-card' : 'border-primary/40 bg-primary/5',
           )}
         >
           <div className="flex min-w-0 items-start gap-3">
-            <Bell className={cn('mt-0.5 h-4 w-4 shrink-0', row.read_at ? 'text-muted-foreground' : 'text-primary')} />
+            <Bell className={cn('mt-0.5 h-4 w-4 shrink-0', row.read_at ? 'text-muted-foreground' : 'text-primary')} aria-hidden="true" />
             <div className="min-w-0 flex-1">
-              <p className="line-clamp-1 break-keep text-sm font-black">{row.title}</p>
-              <p className="mt-1 line-clamp-2 break-keep text-xs font-bold leading-5 text-muted-foreground">{row.body || '내용 없음'}</p>
-              <p className="mt-1.5 text-[10px] font-bold text-muted-foreground">{relTime(row.created_at)}</p>
+              <p className="line-clamp-1 break-keep text-sm font-semibold">{row.title}</p>
+              <p className="mt-1 line-clamp-2 break-keep text-sm font-normal leading-5 text-muted-foreground">{row.body || '내용 없음'}</p>
+              <p className="mt-2 text-xs font-medium text-muted-foreground">{relTime(row.created_at)}</p>
             </div>
-            {row.url && <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />}
+            {row.url && <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
           </div>
         </button>
       ))}
@@ -223,8 +239,8 @@ function FilterButton({
       type="button"
       onClick={onClick}
       className={cn(
-        'min-w-0 items-center justify-center rounded-xl border font-bold transition-colors',
-        compact ? 'flex min-h-11 gap-0.5 px-1 text-[11px]' : 'flex min-h-11 gap-1 px-2 text-xs sm:text-sm',
+        'flex min-h-11 min-w-0 items-center justify-center rounded-xl border font-semibold transition-colors',
+        compact ? 'gap-0.5 px-1 text-xs' : 'gap-1 px-2 text-sm',
         active ? activeClass : 'border-card-border bg-card text-muted-foreground',
       )}
     >
@@ -234,7 +250,7 @@ function FilterButton({
 }
 
 function Count({ n }: { n: number }) {
-  return <span className="shrink-0 rounded-full bg-secondary px-1.5 py-0.5 text-[9px] font-bold text-muted-foreground">{n}</span>;
+  return <span className="shrink-0 rounded-full bg-secondary px-1.5 py-0.5 text-xs font-semibold text-muted-foreground tabular-nums">{n}</span>;
 }
 
 function AlertItem({ alert }: { alert: MarketAlert }) {
@@ -245,39 +261,39 @@ function AlertItem({ alert }: { alert: MarketAlert }) {
   const sourceLabel = NOTIFICATION_LABELS[classifyAlert(alert)];
 
   return (
-    <article className="min-w-0 rounded-2xl border border-card-border bg-card p-3 shadow-sm">
+    <article className="min-w-0 rounded-2xl border border-card-border bg-card p-4 shadow-sm">
       <div className="flex min-w-0 items-start gap-2">
         <Link href={`/stock/${alert.ticker}`} className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-1.5">
-            <span className="truncate text-sm font-black">{alert.name}</span>
-            <span className="shrink-0 text-[10px] font-bold text-muted-foreground">{alert.ticker}</span>
+            <span className="truncate text-sm font-semibold">{alert.name}</span>
+            <span className="shrink-0 text-xs font-medium text-muted-foreground">{alert.ticker}</span>
           </div>
-          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1">
-            <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-black', kindClass)}>
+          <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5">
+            <span className={cn('rounded-full border px-2 py-0.5 text-xs font-semibold', kindClass)}>
               {alert.kind === 'positive' ? '호재' : '악재'}
             </span>
-            <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-bold', importance.cls)}>
+            <span className={cn('rounded-full border px-2 py-0.5 text-xs font-medium', importance.cls)}>
               중요 {importance.label}
             </span>
-            <span className="max-w-[9rem] truncate rounded-full border border-card-border bg-secondary px-2 py-0.5 text-[10px] font-bold text-muted-foreground">
+            <span className="max-w-[11rem] truncate rounded-full border border-card-border bg-secondary px-2 py-0.5 text-xs font-medium text-muted-foreground">
               {sourceLabel}
             </span>
           </div>
         </Link>
       </div>
 
-      <p className="mt-2 line-clamp-2 break-keep text-sm font-bold leading-5">{alert.title}</p>
+      <p className="mt-3 line-clamp-2 break-keep text-sm font-medium leading-6">{alert.title}</p>
 
-      <div className="mt-2 flex min-w-0 items-center gap-2 text-[10px] font-bold text-muted-foreground">
+      <div className="mt-3 flex min-w-0 items-center gap-2 text-xs font-medium text-muted-foreground">
         <span className="shrink-0">{relTime(alert.time)}</span>
         <div className="ml-auto flex shrink-0 items-center gap-3">
           {alert.url ? (
-            <a href={alert.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-0.5 text-ai hover:underline">
-              원문 <ExternalLink className="h-3 w-3" />
+            <a href={alert.url} target="_blank" rel="noopener noreferrer" className="flex min-h-8 items-center gap-1 text-ai hover:underline">
+              원문 <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
             </a>
           ) : null}
-          <Link href={`/stock/${alert.ticker}`} className="flex items-center gap-0.5 hover:text-foreground">
-            상세 <ChevronRight className="h-3 w-3" />
+          <Link href={`/stock/${alert.ticker}`} className="flex min-h-8 items-center gap-1 hover:text-foreground">
+            상세 <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
           </Link>
         </div>
       </div>
