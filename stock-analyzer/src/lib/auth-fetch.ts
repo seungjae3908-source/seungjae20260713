@@ -10,6 +10,11 @@ import {
   isAccountReadonlySnapshotPath,
   requireAccountReadonlySnapshotResponse,
 } from '@/lib/account-readonly-response';
+import {
+  INVALID_BACKUP_RESPONSE,
+  isBackupSuccessResponsePath,
+  requireBackupSuccessResponse,
+} from '@/lib/backup-response-truth';
 import { requireSpotCryptoTickerResponse } from '@/lib/crypto-ticker-response';
 import {
   INVALID_LEGACY_STOCK_SEARCH_RESPONSE,
@@ -110,6 +115,14 @@ async function validateInvestmentResponse(
   }
 
   const method = requestMethod(input, init);
+  if (isBackupSuccessResponsePath(path, method)) {
+    try {
+      await requireBackupSuccessResponse(method, await response.clone().json(), init.body);
+    } catch {
+      throw new Error(INVALID_BACKUP_RESPONSE);
+    }
+  }
+
   if (isLegacyStockSearchResponsePath(path, method)) {
     try {
       const url = requestUrl(input);
