@@ -2,8 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  FORWARD_NATURAL_SAMPLE,
-  PUBLIC_LIQUIDITY_CALIBRATION_CONTRACT,
+  normalizeBitgetPublicOrderBookFrame,
+  normalizeBitgetPublicTradesFrame,
+} from '../src/public-data.mjs';
+import {
+  buildPublicLiquidityObservationBatch,
+  canonicalJson,
+  sha256,
 } from '../src/public-forward-liquidity-calibration.mjs';
 import {
   analyzePublicForwardLiquidityCrossCaptureStability,
@@ -11,123 +16,131 @@ import {
 } from '../src/public-forward-liquidity-cross-capture-stability-diagnostics.mjs';
 
 const collectorSha = 'a'.repeat(40);
-const digest = (char) => char.repeat(64);
 const canonicalEndpoints = ['/api/v3/market/orderbook', '/api/v3/market/fills'];
 
-function observation(id, {
-  side = 'SELL',
-  frame = '1',
-  timestamp = 1_700_000_000_000,
-} = {}) {
-  return {
-    contract: PUBLIC_LIQUIDITY_CALIBRATION_CONTRACT,
-    observationId: id,
-    sampleClass: FORWARD_NATURAL_SAMPLE,
-    forwardCalibrationSampleCredit: 1,
-    historicalBackfillForwardCredit: 0,
-    publicDataSource: 'BITGET_PUBLIC_UTA_V3',
-    collectorCodeSha: collectorSha,
-    sourceDigest: digest(id.charCodeAt(0).toString(16)[0] || 'f'),
-    aggressiveSide: side,
-    eventTimestampMs: timestamp,
-    calibrationSourceOnly: true,
-    executionCostEligible: false,
-    liquidityImpactCoefficient: null,
-    causalMarketImpactClaim: false,
-    paperOrderSourceAllowed: false,
-    rawSourceProvenance: {
-      preEventBook: {
-        rawPayloadDigest: digest(frame),
+function bookFrame({
+  marketTimestampMs,
+  requestStartedAtMs,
+  receiveTimestampMs,
+  bestBid,
+  bestAsk,
+}) {
+  return normalizeBitgetPublicOrderBookFrame({
+    symbol: 'BTCUSDT',
+    payload: {
+      code: '00000',
+      data: {
+        ts: String(marketTimestampMs),
+        b: [[bestBid, 100], [bestBid - 1, 100]],
+        a: [[bestAsk, 100], [bestAsk + 1, 100]],
       },
-      publicTrade: {
-        rawFrameDigest: digest(frame === 'f' ? 'e' : String.fromCharCode(frame.charCodeAt(0) + 1)),
-      },
-      postEventBooks: [{
-        rawPayloadDigest: digest(frame === 'e' ? 'd' : String.fromCharCode(frame.charCodeAt(0) + 2)),
-      }],
     },
-  };
+    requestStartedAtMs,
+    receiveTimestampMs,
+    maxFrameAgeMs: 10_000,
+    endpoint: canonicalEndpoints[0],
+    query: 'category=USDT-FUTURES&symbol=BTCUSDT&limit=50',
+  });
 }
 
-function reasonCounts(reasons) {
-  const counts = {};
-  for (const reason of reasons) counts[reason] = (counts[reason] ?? 0) + 1;
-  return counts;
+function tradesFrame({ trades, requestStartedAtMs, receiveTimestampMs }) {
+  return normalizeBitgetPublicTradesFrame({
+    symbol: 'BTCUSDT',
+    payload: {
+      code: '00000',
+      data: trades.map((trade) => ({
+        execId: trade.execId,
+        execLinkId: `${trade.execId}-link`,
+        price: String(trade.price),
+        size: '1',
+        side: trade.side,
+        ts: String(trade.timestamp),
+        isRPI: 'NO',
+      })),
+    },
+    requestStartedAtMs,
+    receiveTimestampMs,
+    endpoint: canonicalEndpoints[1],
+    query: 'category=USDT-FUTURES&symbol=BTCUSDT&limit=100',
+  });
 }
 
 function capture({
-  raw = 'b',
-  normalized = 'c',
-  observations = [],
-  reasons = [],
+  captureIndex = 1,
+  acceptedCount = 1,
+  droppedCount = 0,
+  side = 'SELL',
+  postShift = 0,
 } = {}) {
-  return {
-    schemaVersion: 1,
-    kind: 'public-forward-liquidity-calibration-batch',
-    contract: PUBLIC_LIQUIDITY_CALIBRATION_CONTRACT,
-    sampleClass: FORWARD_NATURAL_SAMPLE,
-    capability: { PUBLIC_CALIBRATION_DATA_CAPABLE: true },
-    observations,
-    droppedEvents: reasons.map((reason, index) => ({
-      publicExecutionId: `drop-${raw}-${index}`,
-      reason,
-    })),
-    datasetProvenance: {
-      rawSource: {
-        provider: 'BITGET_PUBLIC_UTA_V3',
-        endpoints: canonicalEndpoints,
-        privateApiUsed: false,
-      },
-      eventCount: observations.length,
-      droppedCount: reasons.length,
-      droppedReasons: reasonCounts(reasons),
-      rawDigest: digest(raw),
-      normalizedDigest: digest(normalized),
-      collectorCodeSha: collectorSha,
-    },
-    readiness: {
-      LIQUIDITY_IMPACT_PRESENT: false,
-      CALIBRATION_SAMPLE_SUFFICIENT: false,
-      LIQUIDITY_IMPACT_STATUS: 'BLOCKED_DATA',
-      FULL_COST_READY: false,
-    },
-    safety: {
-      publicDataOnly: true,
-      historicalBackfillForwardCredit: 0,
-      executionAuthority: 'NONE',
-      privateTradingApiAllowed: false,
-      liveTradingAllowed: false,
-      realOrderAllowed: false,
-      financialMutationAllowed: false,
-    },
-  };
+  const baseTimestampMs = 1_700_000_000_000 + (captureIndex * 10_000);
+  const bestBid = 100 + captureIndex;
+  const bestAsk = bestBid + 1;
+  const accepted = Array.from({ length: acceptedCount }, (_, index) => ({
+    execId: `capture-${captureIndex}-accepted-${index}`,
+    price: side === 'BUY' ? bestAsk : bestBid,
+    side: side.toLowerCase(),
+    timestamp: baseTimestampMs + 200 + index,
+  }));
+  const dropped = Array.from({ length: droppedCount }, (_, index) => ({
+    execId: `capture-${captureIndex}-dropped-${index}`,
+    price: side === 'BUY' ? bestAsk : bestBid,
+    side: side === 'BUY' ? 'sell' : 'buy',
+    timestamp: baseTimestampMs + 300 + index,
+  }));
+  const preEventBook = bookFrame({
+    marketTimestampMs: baseTimestampMs,
+    requestStartedAtMs: baseTimestampMs - 100,
+    receiveTimestampMs: baseTimestampMs + 100,
+    bestBid,
+    bestAsk,
+  });
+  return structuredClone(buildPublicLiquidityObservationBatch({
+    preEventBook,
+    tradeFrame: tradesFrame({
+      trades: [...accepted, ...dropped],
+      requestStartedAtMs: baseTimestampMs + 150,
+      receiveTimestampMs: baseTimestampMs + 500,
+    }),
+    postEventBooks: [bookFrame({
+      marketTimestampMs: baseTimestampMs + 1_000,
+      requestStartedAtMs: baseTimestampMs + 900,
+      receiveTimestampMs: baseTimestampMs + 1_050,
+      bestBid: bestBid + 1 + postShift,
+      bestAsk: bestAsk + 1 + postShift,
+    })],
+    collectorCodeSha: collectorSha,
+  }));
+}
+
+function replaceObservations(batch, observations) {
+  batch.observations = structuredClone(observations);
+  batch.datasetProvenance.eventCount = observations.length;
+  batch.datasetProvenance.firstObservedAtMs = observations.length
+    ? Math.min(...observations.map((item) => item.eventTimestampMs))
+    : null;
+  batch.datasetProvenance.lastObservedAtMs = observations.length
+    ? Math.max(...observations.map((item) => item.eventTimestampMs))
+    : null;
+  batch.datasetProvenance.normalizedDigest = sha256(canonicalJson(batch.observations));
+  return batch;
 }
 
 test('reports descriptive cross-capture variability without grading stability or independent N', () => {
   const reports = analyzePublicForwardLiquidityCrossCaptureStability([
     capture({
-      raw: '1',
-      normalized: '4',
-      observations: [
-        observation('a-1', { frame: '1', timestamp: 1_000 }),
-        observation('a-2', { frame: '1', timestamp: 1_001 }),
-      ],
-      reasons: Array(8).fill('EVENT_NOT_AFTER_PRE_EVENT_BOOK'),
+      captureIndex: 1,
+      acceptedCount: 2,
+      droppedCount: 8,
     }),
     capture({
-      raw: '2',
-      normalized: '5',
-      observations: Array.from({ length: 8 }, (_, index) => observation(
-        `b-${index}`,
-        { frame: '4', timestamp: 2_000 + index },
-      )),
-      reasons: Array(2).fill('AGGRESSIVE_SIDE_NOT_VERIFIED_AT_PRE_EVENT_BBO'),
+      captureIndex: 2,
+      acceptedCount: 8,
+      droppedCount: 2,
     }),
     capture({
-      raw: '3',
-      normalized: '6',
-      observations: [observation('c-1', { frame: '7', timestamp: 3_000 })],
-      reasons: Array(9).fill('EVENT_NOT_AFTER_PRE_EVENT_BOOK'),
+      captureIndex: 3,
+      acceptedCount: 1,
+      droppedCount: 9,
     }),
   ]);
 
@@ -149,50 +162,39 @@ test('reports descriptive cross-capture variability without grading stability or
 });
 
 test('surfaces cross-capture duplicate observation identities without converting them to sample credit', () => {
+  const first = capture({ captureIndex: 1 });
+  const second = capture({ captureIndex: 1, postShift: 1 });
   const report = analyzePublicForwardLiquidityCrossCaptureStability([
-    capture({
-      raw: '1',
-      normalized: '4',
-      observations: [observation('shared-id', { frame: '1' })],
-    }),
-    capture({
-      raw: '2',
-      normalized: '5',
-      observations: [observation('shared-id', { frame: '4', timestamp: 2_000 })],
-    }),
+    first,
+    second,
   ]);
 
   assert.equal(report.aggregate.crossCaptureDuplicateObservationIdCount, 1);
-  assert.deepEqual(report.aggregate.crossCaptureDuplicateObservationIds, ['shared-id']);
+  assert.deepEqual(
+    report.aggregate.crossCaptureDuplicateObservationIds,
+    [first.observations[0].observationId],
+  );
   assert.ok(report.empiricalGaps.includes('CROSS_CAPTURE_DUPLICATE_OBSERVATION_IDS_OBSERVED'));
   assert.equal(report.sourceFrameCoverage.effectiveIndependentSampleCount, null);
   assert.equal(report.authority.sampleSufficiencyCredit, false);
 });
 
-test('surfaces repeated raw source-frame groups across different captures without independence claims', () => {
-  const report = analyzePublicForwardLiquidityCrossCaptureStability([
-    capture({
-      raw: '1',
-      normalized: '4',
-      observations: [observation('a-1', { frame: '1' })],
-    }),
-    capture({
-      raw: '2',
-      normalized: '5',
-      observations: [observation('b-1', { frame: '1', timestamp: 2_000 })],
-    }),
-  ]);
+test('rejects forged repeated source-frame evidence before any independence claim', () => {
+  const first = capture({ captureIndex: 1 });
+  const forged = replaceObservations(
+    capture({ captureIndex: 2 }),
+    first.observations,
+  );
 
-  assert.equal(report.sourceFrameCoverage.uniqueCompositeSourceFrameGroupCount, 1);
-  assert.equal(report.sourceFrameCoverage.repeatedAcrossCapturesGroupCount, 1);
-  assert.equal(report.sourceFrameCoverage.repeatedAcrossCapturesGroups[0].captureCount, 2);
-  assert.ok(report.empiricalGaps.includes('CROSS_CAPTURE_SOURCE_FRAME_REUSE_OBSERVED'));
-  assert.equal(report.safety.sourceFrameIndependenceProven, false);
+  assert.throws(
+    () => analyzePublicForwardLiquidityCrossCaptureStability([first, forged]),
+    /CROSS_CAPTURE_RAW_DIGEST_MISMATCH/u,
+  );
 });
 
 test('rejects duplicate raw capture identity so the same immutable batch cannot inflate capture count', () => {
-  const first = capture({ raw: '1', normalized: '4' });
-  const second = capture({ raw: '1', normalized: '5' });
+  const first = capture({ captureIndex: 1 });
+  const second = structuredClone(first);
   assert.throws(
     () => analyzePublicForwardLiquidityCrossCaptureStability([first, second]),
     /CROSS_CAPTURE_DUPLICATE_RAW_DIGEST/u,
@@ -200,60 +202,52 @@ test('rejects duplicate raw capture identity so the same immutable batch cannot 
 });
 
 test('fails closed on private provenance, missing canonical endpoints, mutated safety, observation authority, and count mismatch', () => {
-  const privateCapture = capture({ raw: '1', normalized: '4' });
+  const privateCapture = capture({ captureIndex: 1 });
   privateCapture.datasetProvenance.rawSource.privateApiUsed = true;
   assert.throws(
     () => analyzePublicForwardLiquidityCrossCaptureStability([
       privateCapture,
-      capture({ raw: '2', normalized: '5' }),
+      capture({ captureIndex: 2 }),
     ]),
     /CROSS_CAPTURE_PUBLIC_PROVENANCE_INVALID/u,
   );
 
-  const missingEndpoint = capture({ raw: '1', normalized: '4' });
+  const missingEndpoint = capture({ captureIndex: 1 });
   missingEndpoint.datasetProvenance.rawSource.endpoints = ['/api/v3/market/orderbook'];
   assert.throws(
     () => analyzePublicForwardLiquidityCrossCaptureStability([
       missingEndpoint,
-      capture({ raw: '2', normalized: '5' }),
+      capture({ captureIndex: 2 }),
     ]),
     /CROSS_CAPTURE_PUBLIC_PROVENANCE_INVALID/u,
   );
 
-  const unsafe = capture({ raw: '1', normalized: '4' });
+  const unsafe = capture({ captureIndex: 1 });
   unsafe.safety.liveTradingAllowed = true;
   assert.throws(
     () => analyzePublicForwardLiquidityCrossCaptureStability([
       unsafe,
-      capture({ raw: '2', normalized: '5' }),
+      capture({ captureIndex: 2 }),
     ]),
     /CROSS_CAPTURE_SOURCE_SAFETY_INVALID/u,
   );
 
-  const escalatedObservation = capture({
-    raw: '1',
-    normalized: '4',
-    observations: [observation('a-1')],
-  });
+  const escalatedObservation = capture({ captureIndex: 1 });
   escalatedObservation.observations[0].executionCostEligible = true;
   assert.throws(
     () => analyzePublicForwardLiquidityCrossCaptureStability([
       escalatedObservation,
-      capture({ raw: '2', normalized: '5' }),
+      capture({ captureIndex: 2 }),
     ]),
     /CROSS_CAPTURE_OBSERVATION_AUTHORITY_INVALID/u,
   );
 
-  const mismatch = capture({
-    raw: '1',
-    normalized: '4',
-    observations: [observation('a-1')],
-  });
+  const mismatch = capture({ captureIndex: 1 });
   mismatch.datasetProvenance.eventCount = 2;
   assert.throws(
     () => analyzePublicForwardLiquidityCrossCaptureStability([
       mismatch,
-      capture({ raw: '2', normalized: '5' }),
+      capture({ captureIndex: 2 }),
     ]),
     /CROSS_CAPTURE_EVENT_COUNT_MISMATCH/u,
   );
@@ -262,10 +256,76 @@ test('fails closed on private provenance, missing canonical endpoints, mutated s
 test('requires at least two distinct captures', () => {
   assert.throws(
     () => analyzePublicForwardLiquidityCrossCaptureStability([
-      capture({ raw: '1', normalized: '4' }),
+      capture({ captureIndex: 1 }),
     ]),
     /CROSS_CAPTURE_AT_LEAST_TWO_CAPTURES_REQUIRED/u,
   );
+});
+
+test('fails closed on canonical observation drift even when the normalized digest is recomputed', () => {
+  const manipulated = capture({ captureIndex: 1 });
+  manipulated.observations[0].publicExecutionPrice += 1;
+  manipulated.observations[0].tradeFlowNotional =
+    manipulated.observations[0].tradeFlowQuantity * manipulated.observations[0].publicExecutionPrice;
+  manipulated.datasetProvenance.normalizedDigest = sha256(canonicalJson(manipulated.observations));
+
+  assert.throws(
+    () => analyzePublicForwardLiquidityCrossCaptureStability([
+      manipulated,
+      capture({ captureIndex: 2 }),
+    ]),
+    /COVERAGE_OBSERVATION_SOURCE_DIGEST_MISMATCH/u,
+  );
+});
+
+test('requires the exact canonical public endpoint set and strict producer timestamps', () => {
+  const extraEndpoint = capture({ captureIndex: 1 });
+  extraEndpoint.datasetProvenance.rawSource.endpoints.push('/api/private/account');
+  assert.throws(
+    () => analyzePublicForwardLiquidityCrossCaptureStability([
+      extraEndpoint,
+      capture({ captureIndex: 2 }),
+    ]),
+    /COVERAGE_PUBLIC_PROVENANCE_INVALID/u,
+  );
+
+  const coercedTimestamp = capture({ captureIndex: 1 });
+  coercedTimestamp.observations[0].eventTimestampMs =
+    String(coercedTimestamp.observations[0].eventTimestampMs);
+  assert.throws(
+    () => analyzePublicForwardLiquidityCrossCaptureStability([
+      coercedTimestamp,
+      capture({ captureIndex: 2 }),
+    ]),
+    /COVERAGE_EVENT_TIMESTAMP_INVALID/u,
+  );
+});
+
+test('rejects a forged raw digest label even when normalized observations are canonical', () => {
+  const first = capture({ captureIndex: 1 });
+  const second = replaceObservations(
+    capture({ captureIndex: 2 }),
+    first.observations,
+  );
+  assert.notEqual(second.datasetProvenance.rawDigest, first.datasetProvenance.rawDigest);
+  assert.equal(second.datasetProvenance.normalizedDigest, first.datasetProvenance.normalizedDigest);
+  assert.throws(
+    () => analyzePublicForwardLiquidityCrossCaptureStability([first, second]),
+    /CROSS_CAPTURE_RAW_DIGEST_MISMATCH/u,
+  );
+});
+
+test('keeps distinct zero-accepted captures truthful instead of treating missing evidence as duplicate credit', () => {
+  const report = analyzePublicForwardLiquidityCrossCaptureStability([
+    capture({ captureIndex: 1, acceptedCount: 0, droppedCount: 1 }),
+    capture({ captureIndex: 2, acceptedCount: 0, droppedCount: 1 }),
+  ]);
+
+  assert.equal(report.aggregate.acceptedEvents, 0);
+  assert.equal(report.aggregate.droppedEvents, 2);
+  assert.equal(report.aggregate.uniqueObservationIdCount, 0);
+  assert.ok(report.empiricalGaps.includes('NO_ACCEPTED_OBSERVATIONS'));
+  assert.equal(report.sourceFrameCoverage.effectiveIndependentSampleCount, null);
 });
 
 test('safety contract grants no stability, sufficiency, cost, Natural, Settlement, Promotion, Champion, or trading credit', () => {
