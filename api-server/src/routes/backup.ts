@@ -14,6 +14,8 @@ const ALLOWED_KEYS = new Set([
   'seungjae_watchlist_v1',
   'scanner.threshold.v1',
   'scanner-market',
+  'sa-saved-searches-v1',
+  'sa-analysis-selection-v1',
   'sa-auto-trade-settings-v1',
   'sa-portfolio-chart-overlays-v1',
   'sa-portfolio-purchase-dates-v1',
@@ -36,7 +38,9 @@ function normalizePayload(value: unknown): Record<string, string> {
   if (entries.length > MAX_ITEMS) throw new Error('BACKUP_ITEM_LIMIT_EXCEEDED');
 
   for (const [key, item] of entries) {
-    if (!ALLOWED_KEYS.has(key) || typeof item !== 'string') continue;
+    if (!ALLOWED_KEYS.has(key) || typeof item !== 'string') {
+      throw new Error('INVALID_BACKUP_ITEM');
+    }
     if (Buffer.byteLength(item, 'utf8') > MAX_VALUE_BYTES) {
       throw new Error('BACKUP_VALUE_TOO_LARGE');
     }
@@ -55,6 +59,23 @@ function checksum(payload: Record<string, string>): string {
   return createHash('sha256').update(JSON.stringify(sorted)).digest('hex');
 }
 
+function requireStoredBackupIntegrity(
+  payload: Record<string, string>,
+  itemCount: unknown,
+  storedChecksum: unknown,
+): void {
+  const count = Object.keys(payload).length;
+  if (!Number.isInteger(itemCount) || itemCount !== count) {
+    throw new Error('BACKUP_ITEM_COUNT_MISMATCH');
+  }
+  if (typeof storedChecksum !== 'string' || !/^[a-f0-9]{64}$/i.test(storedChecksum)) {
+    throw new Error('BACKUP_CHECKSUM_INVALID');
+  }
+  if (checksum(payload) !== storedChecksum) {
+    throw new Error('BACKUP_CHECKSUM_MISMATCH');
+  }
+}
+
 router.get('/latest', async (req: AuthenticatedRequest, res) => {
   if (!req.member || !req.accessToken) return res.status(401).json({ error: 'LOGIN_REQUIRED' });
 
@@ -69,11 +90,14 @@ router.get('/latest', async (req: AuthenticatedRequest, res) => {
     if (error) throw error;
     if (!data) return res.json({ ok: true, exists: false });
 
+    const payload = normalizePayload(data.payload);
+    requireStoredBackupIntegrity(payload, data.item_count, data.checksum);
+
     return res.json({
       ok: true,
       exists: true,
       schemaVersion: data.schema_version,
-      localStorage: normalizePayload(data.payload),
+      localStorage: payload,
       itemCount: data.item_count,
       checksum: data.checksum,
       clientUpdatedAt: data.client_updated_at,
