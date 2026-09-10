@@ -1,3 +1,5 @@
+import { assertPortfolioMarketEvidence } from './portfolio-market-truth';
+
 export interface PortfolioChartOverlay {
   ticker: string;
   name: string;
@@ -72,6 +74,18 @@ export function rememberPurchaseDate(ticker: string, date: string) {
 }
 
 export function syncPortfolioChartOverlays(rows: PortfolioOverlayInput[]) {
+  // PortfolioPage currently falls back from missing currentPrice to average_price
+  // when rendering value/PnL. Stop before that safe-looking projection can become
+  // visible: missing current-market evidence is an explicit failure, never 0%.
+  assertPortfolioMarketEvidence(
+    rows.map((row) => ({
+      ticker: row.ticker,
+      quantity: row.quantity,
+      average_price: row.average_price,
+      currentPrice: row.currentPrice ?? null,
+    })),
+  );
+
   if (!hasStorage()) return;
 
   const purchaseDates = readPurchaseDates();

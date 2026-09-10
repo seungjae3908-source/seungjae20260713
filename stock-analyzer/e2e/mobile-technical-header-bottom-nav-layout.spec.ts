@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { expect, test, type Page, type Route } from '@playwright/test';
 
-const NOW = '2026-08-26T03:20:00.000Z';
+const NOW = new Date().toISOString();
 const E2E_USER_ID = '22222222-2222-4222-8222-222222222229';
 const E2E_AUTH_STORAGE_KEY = 'sb-127-auth-token';
 
@@ -26,7 +26,7 @@ function recommendationRow(index: number) {
     market: 'KR',
     currency: 'KRW',
     category: 'undervalued',
-    categoryLabel: '저평가',
+    categoryLabel: '저평가 후보',
     price: 75_000 + index,
     changePercent: 0.5,
     reasons: ['실데이터 기반 검증 fixture'],
@@ -34,7 +34,7 @@ function recommendationRow(index: number) {
     missingData: [],
     risks: [],
     overheated: false,
-    financialStability: '확인',
+    financialStability: '안정',
     newsRisk: '낮음',
     riskLevel: 'LOW',
     shortTermOutlook: '중립',
@@ -162,8 +162,8 @@ async function installApprovedRuntime(page: Page, recommendationCount = 0) {
     if (url.pathname === '/api/market/recommendations') {
       return fulfill(route, {
         ok: true,
-        provider: 'fixture',
-        analysisMode: 'rules',
+        provider: 'rule-based-engine',
+        analysisMode: 'rule-based',
         aiConfigured: false,
         analysisDescription: '레이아웃 검증 fixture',
         market: 'KR',
@@ -231,7 +231,8 @@ test('AI recommendations keeps short content flexible and anchors BottomNav afte
   expect(recommendationsSource).toContain('data-testid="recommendations-shell"');
   expect(recommendationsSource).toContain('flex h-full min-h-0 flex-col overflow-hidden bg-background');
   expect(recommendationsSource).toContain('data-testid="recommendations-scroll-content"');
-  expect(recommendationsSource).toContain('min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-6 pt-4');
+  expect(recommendationsSource).toContain('min-h-0 flex-1 overflow-y-auto overscroll-contain');
+  expect(recommendationsSource).toContain('mx-auto w-full max-w-6xl px-3 pb-24 pt-3');
   expect(recommendationsSource).not.toContain('pb-28');
   expect(recommendationsSource).toContain('<BottomNav />');
 });
