@@ -104,6 +104,18 @@ async function installRankingSuccess(page: Page) {
       body: JSON.stringify(canonicalMoverPayload()),
     });
   });
+  await page.route('**/api/quotes**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        quotes: [{ ticker: '005930', price: 70000, changePercent: 0 }],
+        requested: 1,
+        available: 1,
+        updatedAt: new Date().toISOString(),
+      }),
+    });
+  });
 }
 
 async function openSearch(page: Page, installRanking = true) {
