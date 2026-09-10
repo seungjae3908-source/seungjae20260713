@@ -279,7 +279,9 @@ async function analyze(entry: CatalogEntry): Promise<{ a: Analyzed | null; exclu
       changePercent: normalizeRecommendationChangePercent(
         (quote as { changePercent?: unknown }).changePercent,
       ),
-      dataUpdatedAt: String((quote as any).updatedAt ?? lastDate?.toISOString() ?? new Date().toISOString()),
+      // Recommendation freshness must come from already-validated market evidence.
+      // Quote timestamps may be provider-absent upstream, so never turn that absence into "now" here.
+      dataUpdatedAt: lastDate!.toISOString(),
       providers: Array.from(
         new Set([meta?.provider ?? 'unknown', entry.market === 'KR' ? 'naver/dart' : 'yahoo/sec-edgar', 'google-news']),
       ),
