@@ -13,6 +13,7 @@ type NaverPollItem = {
   lv?: number | string;
   ov?: number | string;
   pcv?: number | string;
+  updatedAt?: string;
 };
 
 type NaverChartItem = {
@@ -23,6 +24,8 @@ type NaverChartItem = {
   lowPrice?: number | string;
   accumulatedTradingVolume?: number | string;
 };
+
+const NAVER_MAX_FUTURE_SKEW_MS = 5 * 60 * 1000;
 
 function cleanTicker(value: unknown) {
   return String(value ?? '').trim().toUpperCase();
@@ -60,14 +63,58 @@ function getNameFromEntry(entryOrTicker: CatalogEntry | string, fallback: string
   return String((entryOrTicker as any).name ?? fallback);
 }
 
+function providerTimestampToIso(value: unknown) {
+  const raw = String(value ?? '').trim();
+  let timestampMs = Number.NaN;
+
+  if (/^\d{14}$/.test(raw)) {
+    const yyyy = raw.slice(0, 4);
+    const mm = raw.slice(4, 6);
+    const dd = raw.slice(6, 8);
+    const hh = raw.slice(8, 10);
+    const min = raw.slice(10, 12);
+    const ss = raw.slice(12, 14);
+    timestampMs = Date.parse(`${yyyy}-${mm}-${dd}T${hh}:${min}:${ss}+09:00`);
+  } else if (/(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw)) {
+    timestampMs = Date.parse(raw);
+  }
+
+  if (
+    !Number.isFinite(timestampMs)
+    || timestampMs <= 0
+    || timestampMs > Date.now() + NAVER_MAX_FUTURE_SKEW_MS
+  ) {
+    throw new Error('NAVER_PROVIDER_TIMESTAMP_INVALID');
+  }
+
+  return new Date(timestampMs).toISOString();
+}
+
 function dateToIso(localDate: string) {
-  if (!/^\d{8}$/.test(localDate)) return new Date().toISOString();
+  if (!/^\d{8}$/.test(localDate)) {
+    throw new Error('NAVER_CANDLE_DATE_INVALID');
+  }
 
-  const yyyy = localDate.slice(0, 4);
-  const mm = localDate.slice(4, 6);
-  const dd = localDate.slice(6, 8);
+  const yyyy = Number(localDate.slice(0, 4));
+  const mm = Number(localDate.slice(4, 6));
+  const dd = Number(localDate.slice(6, 8));
+  const maxDay = mm >= 1 && mm <= 12
+    ? new Date(Date.UTC(yyyy, mm, 0)).getUTCDate()
+    : 0;
 
-  return new Date(`${yyyy}-${mm}-${dd}T00:00:00+09:00`).toISOString();
+  if (yyyy < 2000 || mm < 1 || mm > 12 || dd < 1 || dd > maxDay) {
+    throw new Error('NAVER_CANDLE_DATE_INVALID');
+  }
+
+  const month = String(mm).padStart(2, '0');
+  const day = String(dd).padStart(2, '0');
+  const parsed = Date.parse(`${yyyy}-${month}-${day}T00:00:00+09:00`);
+
+  if (!Number.isFinite(parsed)) {
+    throw new Error('NAVER_CANDLE_DATE_INVALID');
+  }
+
+  return new Date(parsed).toISOString();
 }
 
 async function fetchJson<T>(url: string): Promise<T> {
@@ -162,6 +209,25 @@ function parseNameFromHtml(html: string, fallback: string) {
   return fallback;
 }
 
+function parseNaverHtmlUpdatedAt(html: string) {
+  const text = stripHtml(html);
+  const match = text.match(
+    /(20\d{2})년\s*(\d{1,2})월\s*(\d{1,2})일\s*(\d{1,2})시\s*(\d{1,2})분\s*기준/,
+  );
+
+  if (!match) {
+    throw new Error('NAVER_PROVIDER_TIMESTAMP_INVALID');
+  }
+
+  const [, yyyy, month, day, hour, minute] = match;
+  const mm = String(Number(month)).padStart(2, '0');
+  const dd = String(Number(day)).padStart(2, '0');
+  const hh = String(Number(hour)).padStart(2, '0');
+  const min = String(Number(minute)).padStart(2, '0');
+
+  return providerTimestampToIso(`${yyyy}-${mm}-${dd}T${hh}:${min}:00+09:00`);
+}
+
 function parseNaverHtmlQuote(code: string, html: string, fallbackName: string): Partial<Quote> {
   const noToday = parseByClass('no_today', html);
   const price = safeNumber(noToday) || parseNumberNear('현재가', html);
@@ -210,7 +276,7 @@ function parseNaverHtmlQuote(code: string, html: string, fallbackName: string): 
     open,
     high,
     low,
-    updatedAt: new Date().toISOString(),
+    updatedAt: parseNaverHtmlUpdatedAt(html),
   } as Partial<Quote>;
 }
 
@@ -237,6 +303,8 @@ async function fetchNaverPoll(code: string): Promise<NaverPollItem | null> {
 
       if (!item) continue;
 
+      const updatedAt = providerTimestampToIso(item.localTradedAt);
+
       return {
         cd: cleanCode,
         nm: item.nm ?? item.stockName ?? item.name,
@@ -249,9 +317,10 @@ async function fetchNaverPoll(code: string): Promise<NaverPollItem | null> {
         lv: item.lv ?? item.lowPrice,
         ov: item.ov ?? item.openPrice,
         pcv: item.pcv ?? item.previousClosePrice,
+        updatedAt,
       };
     } catch {
-      // try next
+      // try next provider shape before the HTML fallback
     }
   }
 
@@ -300,7 +369,7 @@ export async function getQuote(
         open: safeNumber(item.ov),
         high: safeNumber(item.hv),
         low: safeNumber(item.lv),
-        updatedAt: new Date().toISOString(),
+        updatedAt: item.updatedAt,
       } as Partial<Quote>;
     }
   }
