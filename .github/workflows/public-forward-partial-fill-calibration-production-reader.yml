@@ -1,0 +1,72 @@
+name: Public Forward Partial Fill Calibration Production Reader
+
+on:
+  pull_request:
+    paths:
+      - 'api-server/src/services/public-forward-partial-fill-calibration-production-reader.service.ts'
+      - 'api-server/src/services/public-forward-partial-fill-calibration-production-reader.service.test.ts'
+      - '.github/workflows/public-forward-partial-fill-calibration-production-reader.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck API server
+        run: pnpm --dir api-server run typecheck
+
+      - name: Bundle focused production reader seam test
+        run: >-
+          pnpm --dir api-server exec esbuild
+          src/services/public-forward-partial-fill-calibration-production-reader.service.test.ts
+          --bundle --platform=node --format=cjs --target=node20
+          --outfile=/tmp/public-forward-partial-fill-calibration-production-reader.test.cjs
+
+      - name: Run focused production reader seam test
+        run: node --test /tmp/public-forward-partial-fill-calibration-production-reader.test.cjs
+
+      - name: Verify read-only and fail-closed production seam invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE='api-server/src/services/public-forward-partial-fill-calibration-production-reader.service.ts'
+          grep -Fq "import { lstat, readFile, realpath, stat } from 'node:fs/promises';" "$FILE"
+          grep -Fq 'readPublicForwardPartialFillCalibrationDatasetReadOnly' "$FILE"
+          grep -Fq 'auditPublicForwardPartialFillCalibrationSplits' "$FILE"
+          grep -Fq 'missingDatasetBecomesEmpty: false' "$FILE"
+          grep -Fq 'malformedDatasetBecomesEmpty: false' "$FILE"
+          grep -Fq 'duplicateTruthMaskingAllowed: false' "$FILE"
+          grep -Fq 'effectiveIndependentNProduced: false' "$FILE"
+          grep -Fq 'buySellSemanticRemapAllowed: false' "$FILE"
+          grep -Fq 'productionPolicyRequiredForSufficiency: true' "$FILE"
+          grep -Fq 'productionPolicyAuthorityConnected: false' "$FILE"
+          grep -Fq 'defaultSampleThresholdAllowed: false' "$FILE"
+          grep -Fq "'NOT_EVALUABLE_POLICY_MISSING'" "$FILE"
+          grep -Fq 'calibrationArtifactProduced: false' "$FILE"
+          grep -Fq 'partialFillCostProduced: false' "$FILE"
+          grep -Fq 'naturalEntryCredit: 0' "$FILE"
+          grep -Fq 'runtimeCostCredit: 0' "$FILE"
+          grep -Fq 'fullCostReady: false' "$FILE"
+          grep -Fq 'evidenceComplete: 0' "$FILE"
+          grep -Fq "executionAuthority: 'NONE'" "$FILE"
+          grep -Fq 'privateApiAllowed: false' "$FILE"
+          grep -Fq 'liveTrading: false' "$FILE"
+          grep -Fq 'orderSubmissionAllowed: false' "$FILE"
