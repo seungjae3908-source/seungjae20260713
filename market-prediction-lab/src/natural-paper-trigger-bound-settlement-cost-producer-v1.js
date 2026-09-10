@@ -97,6 +97,8 @@ function positionIdentity(position) {
     signalId: position?.signalId,
     market: position?.market,
     symbol: position?.symbol,
+    signalTimeframe: position?.sample?.identity?.timeframe,
+    horizon: position?.sample?.identity?.horizon,
     direction: position?.direction,
     candidateId: position?.candidateId,
     strategyFamily: position?.strategyFamily,
@@ -124,15 +126,19 @@ function frozenCandidateIdentityBlockers(position) {
   return blockers;
 }
 
-function exitExecutionIdentity(position, trigger, sourceIdentity, provenanceId, exitExecutionDigest) {
-  return {
+function exitExecutionIdentity(position, trigger, sourceIdentity, provenanceId, exitExecution) {
+  const payload = {
     exitTriggerId: trigger?.exitTriggerId,
     triggerObservationId: trigger?.triggerObservationId,
     triggeredAtMs: trigger?.triggeredAtMs,
     positionId: position?.positionId,
     paperSampleId: position?.paperSampleId,
+    entryId: position?.paperSampleId,
+    provider: exitExecution?.dataEvidence?.provider,
     market: position?.market,
     symbol: position?.symbol,
+    timeframe: position?.sample?.identity?.timeframe,
+    horizon: position?.sample?.identity?.horizon,
     direction: position?.direction,
     candidateId: position?.candidateId,
     strategyFamily: position?.strategyFamily,
@@ -145,8 +151,9 @@ function exitExecutionIdentity(position, trigger, sourceIdentity, provenanceId, 
     costPolicyVersion: position?.costPolicyVersion,
     sourceIdentity,
     provenanceId,
-    exitExecutionDigest,
+    exitExecutionDigest: hash(exitExecution),
   };
+  return { ...payload, exitExecutionId: hash(payload) };
 }
 
 function triggerIdentityValid(position, trigger) {
@@ -251,9 +258,10 @@ function bindingBlockers({ position, observation, trigger, evaluatedAtMs }) {
     trigger,
     binding?.sourceIdentity,
     binding?.provenanceId,
-    hash(input?.exitExecution),
+    input?.exitExecution,
   );
-  if (!digest(expectedExecution.exitExecutionDigest)) {
+  if (!digest(expectedExecution.exitExecutionDigest) || !digest(expectedExecution.exitExecutionId)
+    || !nonEmpty(expectedExecution.provider) || !nonEmpty(expectedExecution.timeframe)) {
     blockers.push("PAPER_POSITION_TRIGGER_BOUND_SETTLEMENT_EXIT_EXECUTION_IDENTITY_MISMATCH");
   }
   if (!same(binding?.positionIdentity, expectedPosition)) {
@@ -274,6 +282,11 @@ function bindingBlockers({ position, observation, trigger, evaluatedAtMs }) {
     || cost?.exitTriggerId !== trigger?.exitTriggerId) {
     blockers.push("PAPER_POSITION_TRIGGER_BOUND_SETTLEMENT_EXIT_TRIGGER_MISMATCH");
   }
+  if (binding?.exitExecutionId !== expectedExecution.exitExecutionId
+    || input?.exitExecutionId !== expectedExecution.exitExecutionId
+    || cost?.exitExecutionId !== expectedExecution.exitExecutionId) {
+    blockers.push("PAPER_POSITION_TRIGGER_BOUND_SETTLEMENT_EXIT_EXECUTION_ID_MISMATCH");
+  }
   const settlementInputDigest = hash(input);
   const settlementCostEvidenceDigest = hash(cost);
   if (!digest(settlementInputDigest) || !digest(settlementCostEvidenceDigest)
@@ -284,6 +297,7 @@ function bindingBlockers({ position, observation, trigger, evaluatedAtMs }) {
   const bindingPayload = {
     schemaVersion: binding?.schemaVersion,
     exitTriggerId: binding?.exitTriggerId,
+    exitExecutionId: binding?.exitExecutionId,
     sourceIdentity: binding?.sourceIdentity,
     provenanceId: binding?.provenanceId,
     positionIdentity: binding?.positionIdentity,
@@ -339,6 +353,7 @@ export function validateNaturalPaperTriggerBoundSettlementEvidence({
     schemaVersion: NATURAL_PAPER_TRIGGER_BOUND_SETTLEMENT_COST_PRODUCER_VERSION,
     status: blockers.length === 0 ? "PRESENT" : "BLOCKED_DATA",
     fullCostReady: blockers.length === 0,
+    exitExecutionId: blockers.length === 0 ? observation?.triggerBoundSettlementEvidence?.exitExecutionId : null,
     blockers,
     unknownIsZero: false,
     unavailableCostConvertedToZero: false,
@@ -384,9 +399,10 @@ export function bindNaturalPaperTriggerBoundSettlementEvidence({
     trigger,
     sourceIdentity,
     provenanceId,
-    hash(input?.exitExecution),
+    input?.exitExecution,
   );
-  if (!digest(expectedExecution.exitExecutionDigest)) {
+  if (!digest(expectedExecution.exitExecutionDigest) || !digest(expectedExecution.exitExecutionId)
+    || !nonEmpty(expectedExecution.provider) || !nonEmpty(expectedExecution.timeframe)) {
     blockers.push("PAPER_POSITION_TRIGGER_BOUND_SETTLEMENT_EXIT_EXECUTION_IDENTITY_MISMATCH");
   }
   if (!same(authoritativeEvidence?.positionIdentity, expectedPosition)) {
@@ -405,6 +421,11 @@ export function bindNaturalPaperTriggerBoundSettlementEvidence({
   if (input?.exitTriggerId !== trigger?.exitTriggerId
     || cost?.exitTriggerId !== trigger?.exitTriggerId) {
     blockers.push("PAPER_POSITION_TRIGGER_BOUND_SETTLEMENT_EXIT_TRIGGER_MISMATCH");
+  }
+  if (authoritativeEvidence?.exitExecutionId !== expectedExecution.exitExecutionId
+    || input?.exitExecutionId !== expectedExecution.exitExecutionId
+    || cost?.exitExecutionId !== expectedExecution.exitExecutionId) {
+    blockers.push("PAPER_POSITION_TRIGGER_BOUND_SETTLEMENT_EXIT_EXECUTION_ID_MISMATCH");
   }
   if (input?.exitBar?.timestampMs !== trigger?.triggeredAtMs
     || input?.exitBar?.open !== trigger?.bar?.open
@@ -428,6 +449,7 @@ export function bindNaturalPaperTriggerBoundSettlementEvidence({
   const bindingPayload = {
     schemaVersion: NATURAL_PAPER_TRIGGER_BOUND_SETTLEMENT_COST_PRODUCER_VERSION,
     exitTriggerId: trigger.exitTriggerId,
+    exitExecutionId: expectedExecution.exitExecutionId,
     sourceIdentity,
     provenanceId,
     positionIdentity: expectedPosition,
@@ -466,6 +488,7 @@ export function bindNaturalPaperTriggerBoundSettlementEvidence({
     fullCostReady: true,
     observation: boundObservation,
     exitTriggerId: trigger.exitTriggerId,
+    exitExecutionId: expectedExecution.exitExecutionId,
     evidenceDigest: triggerBoundSettlementEvidence.evidenceDigest,
     blockers: [],
     unknownIsZero: false,
