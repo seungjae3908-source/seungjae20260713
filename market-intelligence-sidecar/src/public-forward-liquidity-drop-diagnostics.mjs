@@ -1,5 +1,9 @@
 import {
+  CALIBRATION_RESEARCH_SAMPLE,
+  canonicalJson,
+  FORWARD_NATURAL_SAMPLE,
   PUBLIC_LIQUIDITY_CALIBRATION_CONTRACT,
+  sha256,
   verifyLiquidityCalibrationDataset,
 } from './public-forward-liquidity-calibration.mjs';
 
@@ -31,6 +35,16 @@ const DROP_CATEGORY_BY_REASON = new Map([
   ['DUPLICATE_OBSERVATION_ID', 'IDENTITY_DEDUP'],
 ]);
 
+const SAMPLE_CLASSES = new Set([
+  FORWARD_NATURAL_SAMPLE,
+  CALIBRATION_RESEARCH_SAMPLE,
+]);
+
+const PUBLIC_ENDPOINTS = new Set([
+  '/api/v3/market/orderbook',
+  '/api/v3/market/fills',
+]);
+
 const INVESTIGATION_TARGET_BY_CATEGORY = Object.freeze({
   CHRONOLOGY_TIMING:
     'INSPECT_PUBLIC_ACQUISITION_ORDERING_CLOCK_ALIGNMENT_AND_EVENT_TIMESTAMPS_WITHOUT_RELAXING_GATES',
@@ -47,7 +61,12 @@ function object(value) {
 }
 
 function nonNegativeInteger(value, code) {
-  if (!Number.isInteger(value) || value < 0) throw new Error(code);
+  if (!Number.isSafeInteger(value) || value < 0) throw new Error(code);
+  return value;
+}
+
+function positiveTimestamp(value, code) {
+  if (!Number.isSafeInteger(value) || value <= 0) throw new Error(code);
   return value;
 }
 
@@ -86,22 +105,64 @@ function increment(map, key, amount = 1) {
 
 function validatePublicProvenance(source, provenance) {
   const rawSource = object(provenance.rawSource);
+  const endpoints = Array.isArray(rawSource?.endpoints)
+    ? new Set(rawSource.endpoints)
+    : null;
   if (
     rawSource?.provider !== 'BITGET_PUBLIC_UTA_V3'
     || rawSource?.privateApiUsed !== false
     || !Array.isArray(rawSource?.endpoints)
-    || !rawSource.endpoints.includes('/api/v3/market/orderbook')
-    || !rawSource.endpoints.includes('/api/v3/market/fills')
+    || rawSource.endpoints.length !== PUBLIC_ENDPOINTS.size
+    || endpoints.size !== PUBLIC_ENDPOINTS.size
+    || [...PUBLIC_ENDPOINTS].some((endpoint) => !endpoints.has(endpoint))
+    || source?.safety?.publicDataOnly !== true
     || source?.safety?.executionAuthority !== 'NONE'
     || source?.safety?.privateTradingApiAllowed !== false
     || source?.safety?.liveTradingAllowed !== false
     || source?.safety?.realOrderAllowed !== false
+    || source?.safety?.financialMutationAllowed !== false
   ) {
     throw new Error('DROP_DIAGNOSTIC_PUBLIC_PROVENANCE_REQUIRED');
   }
   exactSha(provenance.collectorCodeSha, 'DROP_DIAGNOSTIC_COLLECTOR_SHA_INVALID');
   exactDigest(provenance.rawDigest, 'DROP_DIAGNOSTIC_RAW_DIGEST_INVALID');
   exactDigest(provenance.normalizedDigest, 'DROP_DIAGNOSTIC_NORMALIZED_DIGEST_INVALID');
+}
+
+function exactSampleClass(value) {
+  if (!SAMPLE_CLASSES.has(value)) throw new Error('DROP_DIAGNOSTIC_SAMPLE_CLASS_INVALID');
+  return value;
+}
+
+function validateObservationLineage(observations, { collectorCodeSha, sampleClass }) {
+  const ids = new Set();
+  for (const value of observations) {
+    const observation = object(value);
+    if (!observation) throw new Error('DROP_DIAGNOSTIC_OBSERVATION_INVALID');
+    const observationId = String(observation.observationId ?? '').trim();
+    if (!observationId.startsWith('liquidity-observation:')) {
+      throw new Error('DROP_DIAGNOSTIC_OBSERVATION_ID_INVALID');
+    }
+    if (ids.has(observationId)) throw new Error('DROP_DIAGNOSTIC_DUPLICATE_OBSERVATION');
+    ids.add(observationId);
+    if (
+      observation.contract !== PUBLIC_LIQUIDITY_CALIBRATION_CONTRACT
+      || observation.sampleClass !== sampleClass
+      || exactSha(
+        observation.collectorCodeSha,
+        'DROP_DIAGNOSTIC_OBSERVATION_COLLECTOR_SHA_INVALID',
+      ) !== collectorCodeSha
+      || observation.causalMarketImpactClaim !== false
+      || observation.executionCostEligible !== false
+    ) {
+      throw new Error('DROP_DIAGNOSTIC_OBSERVATION_IDENTITY_INVALID');
+    }
+    exactDigest(observation.sourceDigest, 'DROP_DIAGNOSTIC_OBSERVATION_SOURCE_DIGEST_INVALID');
+    positiveTimestamp(
+      observation.eventTimestampMs,
+      'DROP_DIAGNOSTIC_OBSERVATION_TIMESTAMP_INVALID',
+    );
+  }
 }
 
 function normalizeReasonRecord(value) {
@@ -155,7 +216,11 @@ function aggregateMissingFlags(observations) {
     if (flags == null) continue;
     if (!Array.isArray(flags)) throw new Error('DROP_DIAGNOSTIC_MISSING_FLAGS_INVALID');
     const unique = new Set();
-    for (const rawFlag of flags) unique.add(exactReason(rawFlag));
+    for (const rawFlag of flags) {
+      const flag = exactReason(rawFlag);
+      if (unique.has(flag)) throw new Error('DROP_DIAGNOSTIC_DUPLICATE_MISSING_FLAG');
+      unique.add(flag);
+    }
     for (const flag of unique) increment(counts, flag);
   }
   return counts;
@@ -170,6 +235,12 @@ function normalizeSource(input) {
   const provenance = object(source.datasetProvenance);
   if (!provenance) throw new Error('DROP_DIAGNOSTIC_PROVENANCE_REQUIRED');
   validatePublicProvenance(source, provenance);
+  const sampleClass = exactSampleClass(source.sampleClass);
+  const collectorCodeSha = exactSha(
+    provenance.collectorCodeSha,
+    'DROP_DIAGNOSTIC_COLLECTOR_SHA_INVALID',
+  );
+  validateObservationLineage(observations, { collectorCodeSha, sampleClass });
 
   const accepted = nonNegativeInteger(
     provenance.eventCount,
@@ -181,6 +252,9 @@ function normalizeSource(input) {
   );
   if (accepted !== observations.length) {
     throw new Error('DROP_DIAGNOSTIC_ACCEPTED_COUNT_MISMATCH');
+  }
+  if (provenance.normalizedDigest !== sha256(canonicalJson(observations))) {
+    throw new Error('DROP_DIAGNOSTIC_NORMALIZED_DIGEST_MISMATCH');
   }
 
   const provenanceReasons = normalizeReasonRecord(provenance.droppedReasons ?? {});
@@ -198,13 +272,22 @@ function normalizeSource(input) {
     if (source.droppedEvents.length !== dropped) {
       throw new Error('DROP_DIAGNOSTIC_DROPPED_COUNT_MISMATCH');
     }
+    for (const event of source.droppedEvents) {
+      if (!String(object(event)?.publicExecutionId ?? '').trim()) {
+        throw new Error('DROP_DIAGNOSTIC_DROPPED_EVENT_ID_INVALID');
+      }
+      positiveTimestamp(
+        object(event)?.eventTimestampMs,
+        'DROP_DIAGNOSTIC_DROPPED_EVENT_TIMESTAMP_INVALID',
+      );
+    }
     const eventReasons = reasonRecordFromDroppedEvents(source.droppedEvents);
     if (!sameCountMap(eventReasons, provenanceReasons)) {
       throw new Error('DROP_DIAGNOSTIC_DROP_REASON_COUNTS_MISMATCH');
     }
     return {
       sourceKind: source.kind,
-      sampleClass: String(source.sampleClass ?? ''),
+      sampleClass,
       observations,
       accepted,
       dropped,
@@ -218,9 +301,12 @@ function normalizeSource(input) {
     if (!verification.valid) {
       throw new Error(`DROP_DIAGNOSTIC_DATASET_INVALID:${verification.reason}`);
     }
+    if (source.collectorCodeSha !== collectorCodeSha) {
+      throw new Error('DROP_DIAGNOSTIC_DATASET_COLLECTOR_SHA_MISMATCH');
+    }
     return {
       sourceKind: source.kind,
-      sampleClass: String(source.sampleClass ?? ''),
+      sampleClass,
       observations,
       accepted,
       dropped,
@@ -295,6 +381,7 @@ function buildMissingFlagRows(observations) {
 export function analyzePublicForwardLiquidityDropQuality(input) {
   const source = normalizeSource(input);
   const totalEvents = source.accepted + source.dropped;
+  if (totalEvents === 0) throw new Error('DROP_DIAGNOSTIC_EVIDENCE_REQUIRED');
   const reasonRows = buildReasonRows(source.reasonCounts, source.dropped, totalEvents);
   const categoryRows = buildCategoryRows(reasonRows, source.dropped, totalEvents);
   const missingFlagRows = buildMissingFlagRows(source.observations);
