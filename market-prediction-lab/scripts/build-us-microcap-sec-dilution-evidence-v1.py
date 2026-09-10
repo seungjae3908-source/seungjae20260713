@@ -128,7 +128,13 @@ def build_evidence(snapshot, as_of, lookback_days):
         "withdrawalCount": len(withdrawals),
         "documentParseRequiredCount": len(context),
         "documentParseRequired": True,
+        "canonicalEvidenceEligible": False,
+        "canonicalSampleDelta": 0,
+        "profitabilityProven": False,
         "eligibleForProfitabilityPromotion": False,
+        "executionAuthority": "NONE",
+        "liveTradingAllowed": False,
+        "privateApiAllowed": False,
         "safeToTradeClaim": False,
         "reason": (
             "FORM_LEVEL_DILUTION_RISK_PRESENT"

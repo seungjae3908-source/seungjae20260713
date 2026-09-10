@@ -111,10 +111,10 @@ def forward_excursion(entry, bars, minutes: int) -> dict:
         lows.append(b.low)
         highs.append(b.high)
     if not lows:
-        return {"maePct": 0.0, "mfePct": 0.0}
+        return {"excursionAvailable": False, "maePct": None, "mfePct": None}
     mae = max(0.0, 1.0 - min(lows) / entry_px) * 100
     mfe = max(0.0, max(highs) / entry_px - 1.0) * 100
-    return {"maePct": round(mae, 4), "mfePct": round(mfe, 4)}
+    return {"excursionAvailable": True, "maePct": round(mae, 4), "mfePct": round(mfe, 4)}
 
 
 def simulate_policy(entry, bars, minutes: int, mode: str, policy: str):
@@ -305,16 +305,18 @@ def mae_mfe_diagnostics(trades: list[dict]) -> dict:
         key = (trade.get("symbol"), trade.get("date"), trade.get("session"), trade.get("entryTimestamp"))
         by_identity.setdefault(key, trade)
     rows = list(by_identity.values())
-    maes = [float(x.get("maePct") or 0.0) for x in rows]
-    mfes = [float(x.get("mfePct") or 0.0) for x in rows]
+    maes = [float(x["maePct"]) for x in rows if x.get("maePct") is not None]
+    mfes = [float(x["mfePct"]) for x in rows if x.get("mfePct") is not None]
     return {
         "trades": len(rows),
-        "maeMedianPct": round(statistics.median(maes), 3),
-        "maeQ80Pct": round(nearest_rank(maes, 0.80), 3),
-        "maeQ90Pct": round(nearest_rank(maes, 0.90), 3),
-        "mfeMedianPct": round(statistics.median(mfes), 3),
-        "mfeQ80Pct": round(nearest_rank(mfes, 0.80), 3),
-        "mfeQ90Pct": round(nearest_rank(mfes, 0.90), 3),
+        "excursionObservedTrades": min(len(maes), len(mfes)),
+        "excursionMissingTrades": len(rows) - min(len(maes), len(mfes)),
+        "maeMedianPct": round(statistics.median(maes), 3) if maes else None,
+        "maeQ80Pct": round(nearest_rank(maes, 0.80), 3) if maes else None,
+        "maeQ90Pct": round(nearest_rank(maes, 0.90), 3) if maes else None,
+        "mfeMedianPct": round(statistics.median(mfes), 3) if mfes else None,
+        "mfeQ80Pct": round(nearest_rank(mfes, 0.80), 3) if mfes else None,
+        "mfeQ90Pct": round(nearest_rank(mfes, 0.90), 3) if mfes else None,
         "sameRunStopSelectionAllowed": False,
         "interpretation": "OUTCOME_DIAGNOSTIC_ONLY_PREREGISTER_BEFORE_NEXT_INDEPENDENT_WINDOW",
     }
@@ -359,6 +361,9 @@ def stop_and_sizing_self_test() -> None:
     # 4%*25% and 8%*12.5% each risk about 1% of capital.
     if metrics["meanCapitalReturnPct"] != -1.0:
         raise AssertionError(f"risk normalization must equalize stop risk: {metrics}")
+    no_forward = forward_excursion(entry, bars[: entry.index + 1], 30)
+    if no_forward != {"excursionAvailable": False, "maePct": None, "mfePct": None}:
+        raise AssertionError(f"missing forward bars must remain missing: {no_forward}")
 
 
 def main():
@@ -379,11 +384,16 @@ def main():
     trades = defaultdict(list)
     entries = []
     failures = {}
+    successful_symbols = []
     stop_policies = tuple(f"FIXED_{int(cap * 100)}" for cap in RISK_CAPS) + DYNAMIC_STOP_POLICIES
 
     for symbol in symbols:
         try:
             rows, _meta = base.fetch_yahoo_1m(symbol)
+            if rows:
+                successful_symbols.append(symbol)
+            else:
+                failures[symbol] = "NO_USABLE_1M_BARS"
             days = base.group_days(rows)
             dates = list(days)
             for pos in range(1, len(dates)):
@@ -446,10 +456,21 @@ def main():
                 horizon_trades.extend(rows)
         mae_by_horizon[f"{minutes}m"] = mae_mfe_diagnostics(horizon_trades)
 
+    unavailable_symbols = sorted(set(symbols) - set(successful_symbols))
+    if not successful_symbols:
+        status = "DATA_UNAVAILABLE_RECENT_RISK_GRID"
+    elif unavailable_symbols:
+        status = "PARTIAL_RECENT_RISK_GRID_DIAGNOSTIC_ONLY"
+    else:
+        status = "RECENT_RISK_GRID_DIAGNOSTIC_ONLY"
+
     result = {
         "schemaVersion": 3,
-        "status": "RECENT_RISK_GRID_DIAGNOSTIC_ONLY",
+        "status": status,
         "source": "Yahoo public 1m range=7d includePrePost=true",
+        "successfulSymbols": sorted(successful_symbols),
+        "unavailableSymbols": unavailable_symbols,
+        "dataAvailable": bool(successful_symbols),
         "entries": entries,
         "fixedRiskCapsPct": [x * 100 for x in RISK_CAPS],
         "dynamicStopPolicies": list(DYNAMIC_STOP_POLICIES),
@@ -464,6 +485,13 @@ def main():
         "summaries": summaries,
         "bestBy1PctCostRiskNormalized": best,
         "failures": failures,
+        "canonicalEvidenceEligible": False,
+        "canonicalSampleDelta": 0,
+        "profitabilityProven": False,
+        "profitabilityPromotionAllowed": False,
+        "executionAuthority": "NONE",
+        "liveTradingAllowed": False,
+        "privateApiAllowed": False,
         "limitations": [
             "Recent 7d selected-symbol diagnostic only; not 10-year profitability evidence.",
             "Same-minute target/stop ambiguity is conservatively stop-first.",
@@ -484,7 +512,7 @@ def main():
     lines = [
         "# US Microcap Intraday Risk Grid V2",
         "",
-        "**Recent exploratory diagnostic only — NOT 10-year profitability evidence.**",
+        f"**{status} — NOT 10-year profitability evidence.**",
         "",
         f"- Entries: {len(entries)}",
         f"- Best after 1% cost with 1%-risk sizing: **{best or 'N/A'}**",

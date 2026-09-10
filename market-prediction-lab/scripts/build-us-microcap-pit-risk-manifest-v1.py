@@ -70,8 +70,16 @@ def validate_provenance(component: dict | None, name: str, blockers: list[str]) 
     if not source:
         blockers.append(f"{name}_SOURCE_MISSING")
     digest = str(component.get("provenanceDigest") or "").lower()
-    if digest and not SHA256_RE.fullmatch(digest):
+    if not digest:
+        blockers.append(f"{name}_PROVENANCE_DIGEST_MISSING")
+    elif not SHA256_RE.fullmatch(digest):
         blockers.append(f"{name}_PROVENANCE_DIGEST_INVALID")
+
+
+def accepted_provenance_digest(component: dict) -> str | None:
+    """Return only a caller-supplied source digest; never synthesize provenance."""
+    digest = str(component.get("provenanceDigest") or "").lower()
+    return digest if SHA256_RE.fullmatch(digest) else None
 
 
 def checked_as_of(component: dict | None, entry_as_of: date, name: str, blockers: list[str]) -> date | None:
@@ -112,7 +120,7 @@ def build_float_evidence(snapshot: dict | None, entry_as_of: date, blockers: lis
         "measure": "PUBLIC_FLOAT_SHARES",
         "unit": "shares",
         "source": str(snapshot.get("source") or ""),
-        "provenanceDigest": str(snapshot.get("provenanceDigest") or stable_digest(snapshot)),
+        "provenanceDigest": accepted_provenance_digest(snapshot),
     }
 
 
@@ -144,7 +152,7 @@ def build_dilution_evidence(snapshot: dict | None, entry_as_of: date, blockers: 
         "documentParsingComplete": document_complete,
         "dilutionRiskPresent": verdict if verdict in (True, False) else None,
         "source": str(snapshot.get("source") or ""),
-        "provenanceDigest": str(snapshot.get("provenanceDigest") or stable_digest(snapshot)),
+        "provenanceDigest": accepted_provenance_digest(snapshot),
         "formLevelRiskCount": snapshot.get("formLevelRiskCount"),
         "documentParseRequiredCount": snapshot.get("documentParseRequiredCount"),
     }
@@ -184,7 +192,7 @@ def build_corporate_action_evidence(snapshot: dict | None, entry_as_of: date, bl
         "coverageComplete": coverage_complete,
         "events": clean_events,
         "source": str(snapshot.get("source") or ""),
-        "provenanceDigest": str(snapshot.get("provenanceDigest") or stable_digest(snapshot)),
+        "provenanceDigest": accepted_provenance_digest(snapshot),
     }
 
 
@@ -204,7 +212,7 @@ def build_catalyst_evidence(snapshot: dict | None, entry_as_of: date, blockers: 
         "verified": verified if verified in (True, False) else None,
         "type": str(snapshot.get("type") or ""),
         "source": str(snapshot.get("source") or ""),
-        "provenanceDigest": str(snapshot.get("provenanceDigest") or stable_digest(snapshot)),
+        "provenanceDigest": accepted_provenance_digest(snapshot),
     }
 
 
@@ -261,7 +269,9 @@ def build_manifest(bundle: dict) -> dict:
         "pointInTime": True,
         "canonicalEvidenceEligible": False,
         "canonicalSampleDelta": 0,
+        "profitabilityProven": False,
         "profitabilityPromotionAllowed": False,
+        "executionAuthority": "NONE",
         "liveTradingAllowed": False,
         "privateApiAllowed": False,
         "sourceContract": (
@@ -330,6 +340,14 @@ def self_test() -> None:
     incomplete["dilutionSnapshot"]["dilutionRiskPresent"] = None
     incomplete_out = build_manifest({"entries": [incomplete]})
     assert "DILUTION_DOCUMENT_PARSE_INCOMPLETE" in incomplete_out["entries"][0]["blockers"]
+
+    missing_digest = json.loads(json.dumps(safe))
+    missing_digest["symbol"] = "NO_DIGEST"
+    del missing_digest["floatSnapshot"]["provenanceDigest"]
+    missing_digest_out = build_manifest({"entries": [missing_digest]})
+    assert missing_digest_out["status"] == "DATA_BLOCKED_PIT_MANIFEST"
+    assert "FLOAT_PROVENANCE_DIGEST_MISSING" in missing_digest_out["entries"][0]["blockers"]
+    assert missing_digest_out["entries"][0]["floatEvidence"]["provenanceDigest"] is None
 
     risk = json.loads(json.dumps(safe))
     risk["symbol"] = "OFFERING"
