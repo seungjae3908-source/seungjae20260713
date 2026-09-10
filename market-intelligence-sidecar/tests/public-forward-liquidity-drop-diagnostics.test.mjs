@@ -2,9 +2,16 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  normalizeBitgetPublicOrderBookFrame,
+  normalizeBitgetPublicTradesFrame,
+} from '../src/public-data.mjs';
+import {
+  buildPublicLiquidityObservationBatch,
+  canonicalJson,
   FORWARD_NATURAL_SAMPLE,
   PUBLIC_LIQUIDITY_CALIBRATION_CONTRACT,
   mergeLiquidityCalibrationBatch,
+  sha256,
 } from '../src/public-forward-liquidity-calibration.mjs';
 import {
   analyzePublicForwardLiquidityDropQuality,
@@ -25,7 +32,7 @@ function observation(id, missingDataFlags = []) {
     observationId: `liquidity-observation:${id}`,
     sampleClass: FORWARD_NATURAL_SAMPLE,
     collectorCodeSha: COLLECTOR_SHA,
-    sourceDigest: id.padEnd(64, 'a').slice(0, 64),
+    sourceDigest: sha256(id),
     eventTimestampMs: 1_700_000_000_000 + id.length,
     missingDataFlags,
     causalMarketImpactClaim: false,
@@ -34,7 +41,7 @@ function observation(id, missingDataFlags = []) {
 }
 
 function batch({ observations = [], reasons = [] } = {}) {
-  return {
+  const payload = {
     schemaVersion: 1,
     kind: 'public-forward-liquidity-calibration-batch',
     contract: PUBLIC_LIQUIDITY_CALIBRATION_CONTRACT,
@@ -60,21 +67,66 @@ function batch({ observations = [], reasons = [] } = {}) {
       droppedCount: reasons.length,
       droppedReasons: reasonCounts(reasons),
       rawDigest: '2'.repeat(64),
-      normalizedDigest: '3'.repeat(64),
+      normalizedDigest: sha256(canonicalJson(observations)),
       collectorCodeSha: COLLECTOR_SHA,
     },
     safety: {
+      publicDataOnly: true,
       executionAuthority: 'NONE',
       privateTradingApiAllowed: false,
       liveTradingAllowed: false,
       realOrderAllowed: false,
+      financialMutationAllowed: false,
     },
   };
+  return payload;
 }
 
 function persistedDataset(sourceBatch) {
   return mergeLiquidityCalibrationBatch(null, sourceBatch).dataset;
 }
+
+test('accepts the exact current canonical producer contract', () => {
+  const preEventBook = normalizeBitgetPublicOrderBookFrame({
+    symbol: 'BTCUSDT',
+    payload: { code: '00000', data: { ts: '1000', b: [[100, 4]], a: [[101, 3]] } },
+    requestStartedAtMs: 900,
+    receiveTimestampMs: 1_050,
+    maxFrameAgeMs: 10_000,
+    endpoint: '/api/v3/market/orderbook',
+    query: 'category=USDT-FUTURES&symbol=BTCUSDT&limit=50',
+  });
+  const tradeFrame = normalizeBitgetPublicTradesFrame({
+    symbol: 'BTCUSDT',
+    payload: {
+      code: '00000',
+      data: [{
+        execId: 'producer-contract-1',
+        execLinkId: 'producer-contract-1-link',
+        price: '101',
+        size: '2',
+        side: 'buy',
+        ts: '1200',
+        isRPI: 'NO',
+      }],
+    },
+    requestStartedAtMs: 1_100,
+    receiveTimestampMs: 1_300,
+    endpoint: '/api/v3/market/fills',
+    query: 'category=USDT-FUTURES&symbol=BTCUSDT&limit=100',
+  });
+  const source = buildPublicLiquidityObservationBatch({
+    preEventBook,
+    tradeFrame,
+    collectorCodeSha: COLLECTOR_SHA,
+  });
+
+  const report = analyzePublicForwardLiquidityDropQuality(source);
+  assert.equal(report.acceptedEvents, 1);
+  assert.equal(report.droppedEvents, 0);
+  assert.equal(report.sampleClass, FORWARD_NATURAL_SAMPLE);
+  assert.equal(report.safety.sampleCreditDelta, 0);
+});
 
 test('explains accepted and dropped public-forward quality without tuning authority', () => {
   const report = analyzePublicForwardLiquidityDropQuality(batch({
@@ -82,7 +134,6 @@ test('explains accepted and dropped public-forward quality without tuning author
       observation('one', ['POST_EVENT_PUBLIC_OBSERVATION_MISSING']),
       observation('two', [
         'VISIBLE_DEPTH_INSUFFICIENT_FOR_FLOW_QUANTITY',
-        'POST_EVENT_PUBLIC_OBSERVATION_MISSING',
         'POST_EVENT_PUBLIC_OBSERVATION_MISSING',
       ]),
     ],
@@ -192,6 +243,44 @@ test('rejects private or non-canonical source provenance', () => {
   assert.throws(
     () => analyzePublicForwardLiquidityDropQuality(missingFills),
     /DROP_DIAGNOSTIC_PUBLIC_PROVENANCE_REQUIRED/u,
+  );
+
+  const extraEndpoint = batch({ reasons: ['EVENT_NOT_AFTER_PRE_EVENT_BOOK'] });
+  extraEndpoint.datasetProvenance.rawSource.endpoints.push('/api/v5/account/wallet-balance');
+  assert.throws(
+    () => analyzePublicForwardLiquidityDropQuality(extraEndpoint),
+    /DROP_DIAGNOSTIC_PUBLIC_PROVENANCE_REQUIRED/u,
+  );
+});
+
+test('rejects duplicate, identity-mixed, or digest-unbound accepted evidence', () => {
+  const duplicate = observation('duplicate');
+  assert.throws(
+    () => analyzePublicForwardLiquidityDropQuality(batch({
+      observations: [duplicate, duplicate],
+    })),
+    /DROP_DIAGNOSTIC_DUPLICATE_OBSERVATION/u,
+  );
+
+  const identityMixed = observation('identity-mixed');
+  identityMixed.sampleClass = 'CALIBRATION_RESEARCH_SAMPLE';
+  assert.throws(
+    () => analyzePublicForwardLiquidityDropQuality(batch({ observations: [identityMixed] })),
+    /DROP_DIAGNOSTIC_OBSERVATION_IDENTITY_INVALID/u,
+  );
+
+  const digestUnbound = batch({ observations: [observation('digest-unbound')] });
+  digestUnbound.datasetProvenance.normalizedDigest = 'f'.repeat(64);
+  assert.throws(
+    () => analyzePublicForwardLiquidityDropQuality(digestUnbound),
+    /DROP_DIAGNOSTIC_NORMALIZED_DIGEST_MISMATCH/u,
+  );
+});
+
+test('rejects missing evidence instead of projecting safe-looking zero rates', () => {
+  assert.throws(
+    () => analyzePublicForwardLiquidityDropQuality(batch()),
+    /DROP_DIAGNOSTIC_EVIDENCE_REQUIRED/u,
   );
 });
 
