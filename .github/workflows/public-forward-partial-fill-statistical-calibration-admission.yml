@@ -1,0 +1,52 @@
+name: Public Forward Partial Fill Statistical Calibration Admission
+
+on:
+  pull_request:
+    paths:
+      - 'api-server/src/services/public-forward-partial-fill-statistical-calibration-admission.service.ts'
+      - 'api-server/src/services/public-forward-partial-fill-statistical-calibration-admission.service.test.ts'
+      - '.github/workflows/public-forward-partial-fill-statistical-calibration-admission.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --dir api-server run typecheck
+      - name: Bundle focused statistical calibration admission tests
+        run: >-
+          pnpm --dir api-server exec esbuild
+          src/services/public-forward-partial-fill-statistical-calibration-admission.service.test.ts
+          --bundle --platform=node --format=cjs --target=node24
+          --outfile=/tmp/public-forward-partial-fill-statistical-calibration-admission.test.cjs
+      - run: node --test /tmp/public-forward-partial-fill-statistical-calibration-admission.test.cjs
+      - name: Verify fail-closed authority boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE='api-server/src/services/public-forward-partial-fill-statistical-calibration-admission.service.ts'
+          grep -Fq '5489626816' "$FILE"
+          grep -Fq '5489589062' "$FILE"
+          grep -Fq 'adef3bbf8f6647f0314a35ca5b0d48eebefed614a0e66ab28e93f6d3dc2a0f7c' "$FILE"
+          grep -Fq 'defaultStatisticalMethodologyAllowed: false' "$FILE"
+          grep -Fq 'defaultNumericMinimumAllowed: false' "$FILE"
+          grep -Fq 'statisticalNumericizationStarted: false' "$FILE"
+          grep -Fq 'numericMinimumArtifactProduced: false' "$FILE"
+          grep -Fq 'calibrationSampleSufficient: false' "$FILE"
+          grep -Fq 'partialFillCostProduced: false' "$FILE"
+          grep -Fq 'productionPolicyAuthorityConnected: false' "$FILE"
+          grep -Fq 'fullCostReady: false' "$FILE"
+          grep -Fq 'evidenceComplete: 0' "$FILE"
+          grep -Fq "executionAuthority: 'NONE'" "$FILE"

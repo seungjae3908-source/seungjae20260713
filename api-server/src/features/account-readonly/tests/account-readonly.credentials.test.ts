@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import test from 'node:test';
 import { isStagingReadonlyCredentialRuntime, resolveApiBindHost } from '../../../lib/api-bind-host';
 import { decryptTradingCredentials } from '../../../services/trade-credential-vault.service';
 import { InMemoryAccountReadonlyCredentialRepository } from '../account-readonly.repository';
 import {
   parseReadonlyCredentialRequest,
+  readonlyProviderCapability,
   saveReadonlyCredentialConfiguration,
 } from '../account-readonly.route';
 
@@ -35,6 +38,31 @@ function privateReadRuntime() {
     WITHDRAWAL_ENABLED: 'false',
   };
 }
+
+test('read-only account routes require the same provider capabilities as the UI market boundaries', () => {
+  assert.equal(readonlyProviderCapability('toss'), 'canAccessBasicInfo');
+  assert.equal(readonlyProviderCapability('upbit'), 'canAccessSpot');
+  assert.equal(readonlyProviderCapability('bitget'), 'canAccessFutures');
+  assert.equal(readonlyProviderCapability('unknown'), null);
+
+  const apiServerRoot = path.basename(process.cwd()) === 'api-server'
+    ? process.cwd()
+    : path.join(process.cwd(), 'api-server');
+  const routeSource = readFileSync(
+    path.join(apiServerRoot, 'src/features/account-readonly/account-readonly.route.ts'),
+    'utf8',
+  );
+  assert.match(
+    routeSource,
+    /router\.put\('\/credentials\/:provider',\s*requireReadonlyProviderCapability/,
+  );
+  assert.match(
+    routeSource,
+    /router\.get\('\/:provider',\s*requireReadonlyProviderCapability/,
+  );
+  assert.match(routeSource, /normalized === 'bitget'.*'canAccessFutures'/s);
+  assert.match(routeSource, /normalized === 'upbit'.*'canAccessSpot'/s);
+});
 
 test('read-only credential parser accepts only Toss, Upbit and Bitget credential shapes', () => {
   assert.deepEqual(parseReadonlyCredentialRequest('toss', {

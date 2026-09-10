@@ -19,6 +19,7 @@ const POSTGRES_URI_PATTERN = /^postgres(?:ql)?:\/\//i;
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const expectedActiveSha = String(process.env.EXPECTED_ACTIVE_SHA ?? '').trim().toLowerCase();
 const approvedTargetSha = String(process.env.APPROVED_TARGET_SHA ?? '').trim().toLowerCase();
+const transientProductionDatabaseUrl = String(process.env.PROD_DATABASE_URL ?? '').trim();
 
 function fail(classification) {
   console.error(`[production-personal-telegram-storage] ${classification}`);
@@ -118,8 +119,8 @@ function productionDatabaseTarget(raw, projectRef) {
   };
 }
 
-function resolveProductionPostgresConnection(runtime, projectRef) {
-  const values = Object.values(runtime)
+function resolveProductionPostgresConnection(runtime, projectRef, transientDatabaseUrl) {
+  const values = [transientDatabaseUrl, ...Object.values(runtime)]
     .filter((value) => typeof value === 'string')
     .map((value) => value.trim())
     .filter((value) => POSTGRES_URI_PATTERN.test(value));
@@ -183,11 +184,12 @@ try {
 } catch {
   fail('production_project_mismatch');
 }
-const database = resolveProductionPostgresConnection(runtime, projectRef);
+const database = resolveProductionPostgresConnection(runtime, projectRef, transientProductionDatabaseUrl);
 
 const migrationPaths = [
   'api-server/supabase/migrations/2026081501_personal_telegram_storage.sql',
   'api-server/supabase/migrations/2026081502_personal_telegram_policy_cleanup.sql',
+  'api-server/supabase/migrations/2026082701_personal_telegram_generic_outbox.sql',
 ];
 let migrationBodies;
 try {
@@ -205,6 +207,7 @@ declare
   target_table text;
   expected_policy text;
   missing_column_count integer;
+  event_id_nullable text;
 begin
   if to_regclass('public.notification_preferences') is null then
     raise exception 'canonical notification preferences table is missing';
@@ -263,6 +266,39 @@ begin
       raise exception 'service role lacks personal Telegram storage access';
     end if;
   end loop;
+
+  select count(*) into missing_column_count
+  from unnest(array['delivery_kind', 'payload']) as required(column_name)
+  where not exists (
+    select 1 from information_schema.columns candidate
+    where candidate.table_schema = 'public'
+      and candidate.table_name = 'notification_deliveries'
+      and candidate.column_name = required.column_name
+  );
+  if missing_column_count <> 0 then
+    raise exception 'durable personal Telegram outbox columns are missing';
+  end if;
+
+  select is_nullable into event_id_nullable
+  from information_schema.columns
+  where table_schema = 'public'
+    and table_name = 'notification_deliveries'
+    and column_name = 'event_id';
+  if event_id_nullable is distinct from 'YES' then
+    raise exception 'notification delivery event_id must permit personal alert payloads';
+  end if;
+
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.notification_deliveries'::regclass
+      and conname = 'notification_deliveries_kind_check'
+  ) or not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.notification_deliveries'::regclass
+      and conname = 'notification_deliveries_payload_contract_check'
+  ) then
+    raise exception 'durable personal Telegram outbox constraints are missing';
+  end if;
 end
 $production_personal_telegram_storage_verify$;
 
@@ -272,8 +308,9 @@ select json_build_object(
   'approved_target_sha', current_setting('app.approved_target_sha'),
   'production_project_match', true,
   'atomic_transaction', true,
-  'migrations_applied', 2,
+  'migrations_applied', 3,
   'tables_verified', 4,
+  'generic_outbox_verified', true,
   'canonical_preferences_verified', true,
   'api_roles_revoked', true,
   'policies_fail_closed', true,
@@ -301,6 +338,7 @@ const sql = [
 
 const baseEnv = { ...process.env };
 for (const key of Object.keys(baseEnv)) if (key.startsWith('PG')) delete baseEnv[key];
+delete baseEnv.PROD_DATABASE_URL;
 const result = spawnSync('psql', [
   '-X',
   '--no-psqlrc',
@@ -338,7 +376,9 @@ if (artifact?.status !== 'passed'
   || artifact?.approved_target_sha !== approvedTargetSha
   || artifact?.production_project_match !== true
   || artifact?.atomic_transaction !== true
+  || artifact?.migrations_applied !== 3
   || artifact?.tables_verified !== 4
+  || artifact?.generic_outbox_verified !== true
   || artifact?.policies_fail_closed !== true
   || artifact?.database_changed !== true
   || artifact?.credentials_recorded !== false

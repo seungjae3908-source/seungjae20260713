@@ -3,6 +3,7 @@ import { collectBitgetDerivedCandles } from "./market-structure-history.js";
 import { collectFundingRateHistory } from "./derivatives-history.js";
 import { BITGET_ENDPOINTS, BitgetPublicClient } from "./bitget-public-client.js";
 import { BITGET_STANDARD_TAKER_RESEARCH_COSTS } from "./historical-backtest-data.js";
+import { selectBitgetPositionTier } from "./bitget-position-tier-v1.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const LOOKBACK_MS = 90 * DAY_MS;
@@ -65,17 +66,7 @@ function contractTickSize(contract) {
 }
 
 function maintenanceMarginRate(tiers, notional) {
-  if (!Array.isArray(tiers) || tiers.length === 0) throw new Error("ETH_V6_PAPER_SETTLEMENT_POSITION_TIER_MISSING");
-  const usable = tiers
-    .map((tier) => ({
-      start: asNumber(tier?.startUnit ?? 0, "ETH_V6_PAPER_SETTLEMENT_TIER_START_INVALID"),
-      rate: asNumber(tier?.keepMarginRate, "ETH_V6_PAPER_SETTLEMENT_TIER_MMR_INVALID"),
-    }))
-    .filter((tier) => tier.start <= notional)
-    .sort((left, right) => left.start - right.start);
-  const tier = usable.at(-1);
-  if (!tier || tier.rate < 0 || tier.rate >= 1) throw new Error("ETH_V6_PAPER_SETTLEMENT_POSITION_TIER_INVALID");
-  return tier.rate;
+  return selectBitgetPositionTier(tiers, notional).maintenanceMarginRate;
 }
 
 function validatePosition(position, record, researchCodeSha) {

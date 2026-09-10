@@ -56,7 +56,7 @@ class Entry:
     trigger_dollar_volume: float
 
 
-def safe_num(value, default=0.0):
+def safe_num(value, default=None):
     try:
         x = float(value)
         return x if math.isfinite(x) else default
@@ -118,10 +118,13 @@ def fetch_yahoo_1m(symbol: str) -> tuple[list[Bar], dict]:
             sess = session_of(dt)
             if sess is None:
                 continue
-            o, h, l, c, v = (safe_num(arrays[k][i]) if i < len(arrays[k]) else 0.0 for k in arrays)
-            if min(o, h, l, c) <= 0 or h < l:
+            values = [safe_num(arrays[k][i]) if i < len(arrays[k]) else None for k in arrays]
+            if any(value is None for value in values):
                 continue
-            rows.append(Bar(int(epoch), dt, sess, o, h, l, c, max(v, 0.0)))
+            o, h, l, c, v = values
+            if min(o, h, l, c) <= 0 or h < l or v < 0:
+                continue
+            rows.append(Bar(int(epoch), dt, sess, o, h, l, c, v))
         except Exception:
             continue
     rows.sort(key=lambda b: b.ts)
@@ -356,6 +359,8 @@ def fixture_self_test() -> None:
         raise AssertionError("fixture must reach TP1")
     if not math.isfinite(result["grossReturn"]):
         raise AssertionError("fixture return invalid")
+    if safe_num(None) is not None or safe_num(float("nan")) is not None:
+        raise AssertionError("missing/non-finite market fields must not be converted to zero")
 
 
 def main():
@@ -376,10 +381,15 @@ def main():
     entries = []
     failures = {}
     session_counts = defaultdict(int)
+    successful_symbols = []
 
     for symbol in symbols:
         try:
             rows, meta = fetch_yahoo_1m(symbol)
+            if rows:
+                successful_symbols.append(symbol)
+            else:
+                failures[symbol] = "NO_USABLE_1M_BARS"
             days = group_days(rows)
             dates = list(days)
             symbol_entries = 0
@@ -435,11 +445,22 @@ def main():
     )
     best = ranked[0][1] if ranked else None
 
+    unavailable_symbols = sorted(set(symbols) - set(successful_symbols))
+    if not successful_symbols:
+        status = "DATA_UNAVAILABLE_RECENT_DIAGNOSTIC"
+    elif unavailable_symbols:
+        status = "PARTIAL_RECENT_EXTENDED_HOURS_DIAGNOSTIC_ONLY"
+    else:
+        status = "RECENT_EXTENDED_HOURS_DIAGNOSTIC_ONLY"
+
     result = {
         "schemaVersion": 1,
-        "status": "RECENT_EXTENDED_HOURS_DIAGNOSTIC_ONLY",
+        "status": status,
         "source": "Yahoo public chart 1m range=7d includePrePost=true",
         "symbols": symbols,
+        "successfulSymbols": sorted(successful_symbols),
+        "unavailableSymbols": unavailable_symbols,
+        "dataAvailable": bool(successful_symbols),
         "entryModel": "10% discovery trigger + first 3-12% pullback + VWAP reclaim + 3-bar rebreak + >=1.1x recent volume",
         "exitModels": {
             "TP5_ALL": "+5% full exit; first-pullback structural invalidation; time/session stop",
@@ -453,6 +474,13 @@ def main():
         "bestRecentBy1PctCost": best,
         "diagnostics": diagnostics,
         "failures": failures,
+        "canonicalEvidenceEligible": False,
+        "canonicalSampleDelta": 0,
+        "profitabilityProven": False,
+        "profitabilityPromotionAllowed": False,
+        "executionAuthority": "NONE",
+        "liveTradingAllowed": False,
+        "privateApiAllowed": False,
         "validationState": {
             "extendedHoursBars": True,
             "vwap": True,
@@ -484,9 +512,10 @@ def main():
     lines = [
         "# US Microcap Extended-Hours Intraday Ladder V1",
         "",
-        "**Status: RECENT_EXTENDED_HOURS_DIAGNOSTIC_ONLY — not 10-year profitability evidence.**",
+        f"**Status: {status} — not 10-year profitability evidence.**",
         "",
         f"- Symbols: {', '.join(symbols)}",
+        f"- Successful/unavailable symbols: {len(successful_symbols)} / {len(unavailable_symbols)}",
         f"- Entries found: {len(entries)}",
         f"- Entry sessions: {dict(session_counts)}",
         f"- Best recent configuration after 1% cost stress: **{best or 'N/A'}**",

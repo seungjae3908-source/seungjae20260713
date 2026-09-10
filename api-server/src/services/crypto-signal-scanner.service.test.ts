@@ -11,6 +11,7 @@ import {
   evaluateCryptoWilliamsDailyCandles,
   type CryptoWilliamsDailyCandle,
 } from './crypto-williams-atr-scanner-overlay.service';
+import { resolveScannerCanonicalPaperIdentity } from './scanner-canonical-paper-identity.service';
 
 const now = () => Date.now();
 
@@ -31,8 +32,7 @@ function ticker(symbol: string): CryptoTicker {
   };
 }
 
-function candles(count = 40): CryptoCandle[] {
-  const current = Date.now();
+function candles(count = 40, current = Date.now()): CryptoCandle[] {
   return Array.from({ length: count }, (_, index) => {
     const close = 100 + index * 0.5;
     return {
@@ -133,6 +133,41 @@ test('Upbit spot scanner uses public data and never emits SHORT or order flags',
   assert.ok(result.cards.length > 0);
   assert.ok(result.cards.every((card) => card.direction !== 'SHORT'));
   assert.ok(result.cards.every((card) => card.warnings.includes('현물 Scanner에는 숏·레버리지를 적용하지 않습니다.')));
+});
+
+test('scanner expiry is derived from the authoritative observed timestamp without clock drift', async () => {
+  const observedAtMs = Date.parse('2026-08-27T07:30:00.000Z');
+  const evaluationAtMs = observedAtMs + 12_345;
+  const service = createCryptoSignalScannerService(providers({
+    getUniverse: async () => universe([
+      { ...ticker('BTCUSDT'), timestamp: observedAtMs },
+    ], 'bitget-public'),
+    getCandles: async () => candles(40, observedAtMs),
+    now: () => evaluationAtMs,
+  }));
+
+  const result = await service.scan({
+    ...request('futures'),
+    timeframe: '60m',
+    strategyMode: 'swing',
+  });
+
+  assert.equal(result.cards.length, 1);
+  const card = result.cards[0]!;
+  assert.equal(Date.parse(card.observedAt), observedAtMs);
+  assert.equal(Date.parse(card.expiresAt) - Date.parse(card.observedAt), 3 * 60 * 60_000);
+
+  const resolution = resolveScannerCanonicalPaperIdentity({
+    card: { ...card, direction: 'LONG', action: 'LONG' },
+    market: 'CRYPTO_FUTURES',
+    researchCodeSha: '19f4254661ff4b6b781d5c92fdb65c478220a7ea',
+  });
+  assert.deepEqual(resolution.blockers, []);
+  assert.equal(resolution.paperCandidate?.signal.signalId, card.signalId);
+  assert.equal(resolution.paperCandidate?.signal.timestampMs, observedAtMs);
+  assert.equal(resolution.paperCandidate?.signal.ttlMs, 3 * 60 * 60_000);
+  assert.equal(resolution.paperCandidate?.signal.timeframe, '60m');
+  assert.equal(resolution.paperCandidate?.signal.horizon, 3);
 });
 
 test('one slow crypto symbol is reported as timeout and partial instead of disappearing', async () => {

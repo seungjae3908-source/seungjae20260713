@@ -3,6 +3,7 @@ import { MarketDataService, type QuoteRow } from '../services/market-data.servic
 import {
   MarketListingService,
   type MarketKey,
+  type MarketListingDiagnostics,
 } from '../services/market-listing.service';
 import { ThemesService } from '../services/themes.service';
 import { SectorPopularService } from '../services/sector-popular.service';
@@ -12,6 +13,22 @@ import { RecommendationService } from '../services/recommendation.service';
 const router: IRouter = Router();
 
 type MarketScope = 'ALL' | 'KR' | 'US';
+
+interface LiveListingsDiagnostics {
+  status: 'complete' | 'partial';
+  requestedMarkets: MarketKey[];
+  completedMarkets: MarketKey[];
+  failedMarkets: MarketKey[];
+  listingDiagnostics: Array<{
+    market: MarketKey;
+    diagnostics: MarketListingDiagnostics | null;
+  }>;
+}
+
+interface LiveListingsResult {
+  rows: QuoteRow[];
+  diagnostics: LiveListingsDiagnostics;
+}
 
 function normalizeMarket(value: unknown): MarketScope {
   const raw = String(value ?? 'ALL').toUpperCase();
@@ -69,21 +86,62 @@ function marketKeys(scope: MarketScope): MarketKey[] {
   return ['KRX', 'NASDAQ', 'NYSE'];
 }
 
-async function liveListings(scope: MarketScope): Promise<QuoteRow[]> {
+async function liveListingsWithDiagnostics(
+  scope: MarketScope,
+): Promise<LiveListingsResult> {
+  const requestedMarkets = marketKeys(scope);
   const settled = await Promise.allSettled(
-    marketKeys(scope).map((market) => MarketListingService.getMarketListings(market)),
+    requestedMarkets.map(async (market) => ({
+      market,
+      listings: await MarketListingService.getMarketListings(market),
+    })),
   );
   const rows: QuoteRow[] = [];
-  for (const result of settled) {
-    if (result.status !== 'fulfilled') continue;
+  const completedMarkets: MarketKey[] = [];
+  const failedMarkets: MarketKey[] = [];
+  const listingDiagnostics: LiveListingsDiagnostics['listingDiagnostics'] = [];
+
+  settled.forEach((result, index) => {
+    const market = requestedMarkets[index];
+
+    if (result.status !== 'fulfilled') {
+      failedMarkets.push(market);
+      return;
+    }
+
+    completedMarkets.push(market);
+    listingDiagnostics.push({
+      market,
+      diagnostics: result.value.listings.diagnostics ?? null,
+    });
     rows.push(
-      ...result.value.popular,
-      ...result.value.gainers,
-      ...result.value.losers,
-      ...result.value.recommended,
+      ...result.value.listings.popular,
+      ...result.value.listings.gainers,
+      ...result.value.listings.losers,
+      ...result.value.listings.recommended,
     );
-  }
-  return uniqueRows(rows);
+  });
+
+  const status: LiveListingsDiagnostics['status'] =
+    failedMarkets.length > 0
+    || listingDiagnostics.some((item) => item.diagnostics?.status !== 'complete')
+      ? 'partial'
+      : 'complete';
+
+  return {
+    rows: uniqueRows(rows),
+    diagnostics: {
+      status,
+      requestedMarkets,
+      completedMarkets,
+      failedMarkets,
+      listingDiagnostics,
+    },
+  };
+}
+
+async function liveListings(scope: MarketScope): Promise<QuoteRow[]> {
+  return (await liveListingsWithDiagnostics(scope)).rows;
 }
 
 router.get('/config', (_req, res) => {
@@ -145,10 +203,13 @@ router.get('/quotes', async (req, res) => {
 router.get('/market/movers', async (req, res) => {
   const scope = normalizeMarket(req.query.market);
   try {
-    const rows = await liveListings(scope);
+    const live = await liveListingsWithDiagnostics(scope);
+    const rows = live.rows;
     if (!rows.length) {
       return res.status(503).json({
         market: scope,
+        dataStatus: 'unavailable',
+        diagnostics: live.diagnostics,
         popular: [],
         volume: [],
         recommended: [],
@@ -169,6 +230,8 @@ router.get('/market/movers', async (req, res) => {
     return res.json({
       market: scope,
       provider: 'live-market-providers',
+      dataStatus: live.diagnostics.status,
+      diagnostics: live.diagnostics,
       popular,
       volume,
       recommended,
@@ -187,6 +250,7 @@ router.get('/market/movers', async (req, res) => {
     console.error('market movers error:', error);
     return res.status(502).json({
       market: scope,
+      dataStatus: 'error',
       popular: [],
       volume: [],
       recommended: [],

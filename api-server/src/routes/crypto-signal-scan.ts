@@ -27,6 +27,7 @@ import {
 } from '../services/scanner-access-control.service';
 import { withScannerCanonicalActions } from '../services/scanner-market-action.service';
 import { deliverScannerTelegramAlerts } from '../services/scanner-telegram-delivery.service';
+import { deliverScannerTelegramFollowups } from '../services/telegram-signal-followup.service';
 import {
   ScannerRequestGuardError,
   scannerRequestGuard,
@@ -41,6 +42,7 @@ import {
   enrichScannerCardsWithMarketIntelligence,
   type ScannerMarketIntelligenceRunner,
 } from '../services/scanner-market-intelligence.service';
+import { enrichCryptoScannerCardsWithPublicEventContext } from '../services/scanner-crypto-public-event-intelligence.service';
 
 export type CryptoScannerRunner = {
   scan(request: CryptoSignalScanRequest): ReturnType<typeof CryptoSignalScannerService.scan>;
@@ -191,10 +193,17 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
           ? card.direction === 'LONG'
           : card.direction === 'LONG' || card.direction === 'SHORT'
       ));
-      const rankedCards = await enrichScannerCardsWithMarketIntelligence(
+      const intelligenceCards = await enrichScannerCardsWithMarketIntelligence(
         directionFilteredCards,
         dependencies.marketIntelligence,
       );
+      if (controller.signal.aborted || res.writableEnded) return;
+      const rankedCards = await enrichCryptoScannerCardsWithPublicEventContext(intelligenceCards, {
+        market,
+        maxCandidates: 2,
+        budgetMs: 800,
+        signal: controller.signal,
+      });
       if (controller.signal.aborted || res.writableEnded) return;
       const discovery = buildScannerDiscoveryView(result.cards, {
         tradeReviewCount: rankedCards.length,
@@ -268,7 +277,13 @@ export function createCryptoSignalScanRouter(dependencies: CryptoSignalScanRoute
       };
       const canonicalResult = withScannerCanonicalActions(rankedResult);
       const visibleResult = withScannerOutcome(filterScannerResponseForTier(canonicalResult, membershipLevel, requestedGrade ?? undefined));
-      void deliverScannerTelegramAlerts(visibleResult.alerts);
+      void deliverScannerTelegramAlerts(
+        visibleResult.alerts,
+        undefined,
+        undefined,
+        { timeframe: selectedTimeframe, generatedAt: visibleResult.generatedAt },
+      );
+      void deliverScannerTelegramFollowups(visibleResult.cards);
       res.setHeader('Cache-Control', 'no-store, max-age=0');
       res.setHeader('X-Scanner-Request-Id', result.requestId);
       return res.json({

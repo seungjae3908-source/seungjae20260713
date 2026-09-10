@@ -67,6 +67,48 @@ export async function runFiniteAuthBootstrap<TSession>(input: {
   );
 }
 
+export type InitialSessionReconcileState = {
+  event: string;
+  incomingUserId: string | null;
+  currentUserId: string | null;
+  hasProfile: boolean;
+};
+
+/**
+ * Supabase emits INITIAL_SESSION from its persisted browser session. A normal
+ * bootstrap may finish with a transient null/partial state before that event
+ * arrives, especially across rapid full-page navigations. Only a non-null
+ * restored identity is allowed to supersede the in-flight bootstrap.
+ */
+export function shouldReconcileInitialSession(state: InitialSessionReconcileState): boolean {
+  if (state.event !== 'INITIAL_SESSION' || !state.incomingUserId) return false;
+  return state.currentUserId !== state.incomingUserId || !state.hasProfile;
+}
+
+export function shouldRecoverDeferredInitialSession(input: {
+  incomingUserId: string | null;
+  initialBootstrapUserId: string | null | undefined;
+}): boolean {
+  if (!input.incomingUserId) return false;
+  return input.initialBootstrapUserId !== input.incomingUserId;
+}
+
+/**
+ * Re-read once when the first forced profile load still produces no profile.
+ * The second read only runs while the same restored identity is still current,
+ * keeping the recovery finite and fail-closed for real missing profiles.
+ */
+export async function reconcileInitialSessionProfile(input: {
+  loadProfile: () => Promise<void>;
+  hasProfile: () => boolean;
+  isSessionCurrent: () => boolean;
+}): Promise<void> {
+  await input.loadProfile();
+  if (!input.hasProfile() && input.isSessionCurrent()) {
+    await input.loadProfile();
+  }
+}
+
 export function authBootstrapErrorMessage(cause: unknown): string {
   const code = cause instanceof FiniteDeadlineError ? cause.code : '';
   if (code === 'AUTH_SESSION_TIMEOUT') {

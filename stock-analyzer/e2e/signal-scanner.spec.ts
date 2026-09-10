@@ -266,7 +266,7 @@ test('signal click explains why, preserves PricePlan, and exposes only safe cont
   await expect(detail).toContainText('왜 이 신호인가');
   await expect(detail).toContainText('실제 공개 캔들로 추세를 확인했습니다.');
   await expect(detail).toContainText('74,000~75,000');
-  await expect(detail).toContainText('NO SYNTHETIC PRICE');
+  await expect(detail).toContainText('서버 계획');
   await expect(detail).toContainText('public-candles');
   await detail.getByRole('button', { name: '주문 준비 열기' }).click();
   await expect(detail.getByTestId('order-preparation')).toContainText('실행 아님');
@@ -293,7 +293,7 @@ test('all four markets continue from canonical signal identity to AI Chart with 
     { market: /^국내주식/, card: /^삼성전자 005930/, url: /market=KR.*symbol=005930/ },
     { market: /^미국주식/, card: /^Apple AAPL/, url: /market=US.*symbol=AAPL/ },
     { market: /^코인 현물/, card: /^비트코인 BTC/, url: /market=UPBIT.*symbol=BTC/ },
-    { market: /^코인 선물/, card: /^BTCUSDT BTCUSDT/, url: /market=BITGET.*symbol=BTCUSDT/ },
+    { market: /^코인 선물/, card: /^BTCUSDT · 코인 선물 · BITGET$/, url: /market=BITGET.*symbol=BTCUSDT/ },
   ];
   for (const item of cases) {
     await page.setViewportSize({ width: 390, height: 844 });
@@ -558,26 +558,27 @@ test('scanner requestKey resets generatedAt freshness across real market and tim
   await page.route('**/api/market/scan**', async (route) => {
     const url = new URL(route.request().url());
     const market = url.searchParams.get('market') === 'US' ? 'US' : 'KR';
-    const timeframe = url.searchParams.get('timeframe') ?? '1D';
+    const timeframe = url.searchParams.get('timeframe') ?? '4H';
     if (market === 'KR') {
       await fulfill(route, scannerResponse({ market: 'KR', timeframe, symbol: 'KRNEW', name: 'KR 최신 기준', generatedAt: '2026-08-05T10:00:00.000Z' }));
       return;
     }
-    if (timeframe === '4H') {
-      await fulfill(route, scannerResponse({ market: 'US', timeframe, symbol: 'US4H', name: 'US 4시간 컨텍스트', generatedAt: '2026-08-05T08:00:00.000Z' }));
+    if (timeframe === '60m') {
+      await fulfill(route, scannerResponse({ market: 'US', timeframe, symbol: 'US60M', name: 'US 60분 컨텍스트', generatedAt: '2026-08-05T09:00:00.000Z' }));
       return;
     }
-    await fulfill(route, scannerResponse({ market: 'US', timeframe, symbol: 'US1D', name: 'US 일봉 컨텍스트', generatedAt: '2026-08-05T09:00:00.000Z' }));
+    await fulfill(route, scannerResponse({ market: 'US', timeframe, symbol: 'US4H', name: 'US 4시간 컨텍스트', generatedAt: '2026-08-05T08:00:00.000Z' }));
   });
 
   await page.goto('/__phase11-technical-workspace-e2e');
   await expect(page.getByText('KR 최신 기준', { exact: true })).toBeVisible();
   const marketSelector = page.getByRole('region', { name: '검색 시장' });
   await marketSelector.getByRole('button', { name: /^미국주식/ }).click();
-  await expect(page.getByText('US 일봉 컨텍스트', { exact: true })).toBeVisible();
-  await page.getByLabel('시간봉').selectOption('4H');
   await expect(page.getByText('US 4시간 컨텍스트', { exact: true })).toBeVisible();
   await expect(page.getByLabel('시간봉')).toHaveValue('4H');
+  await page.getByLabel('시간봉').selectOption('60m');
+  await expect(page.getByText('US 60분 컨텍스트', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('시간봉')).toHaveValue('60m');
   expect(unexpectedHttp).toEqual([]);
 });
 
@@ -588,14 +589,14 @@ test('scanner market and timeframe race keeps the newest context when an older r
   await page.route('**/api/market/scan**', async (route) => {
     const url = new URL(route.request().url());
     const market = url.searchParams.get('market') === 'US' ? 'US' : 'KR';
-    const timeframe = url.searchParams.get('timeframe') ?? '1D';
+    const timeframe = url.searchParams.get('timeframe') ?? '4H';
     requests.push(`${market}:${timeframe}`);
-    if (market === 'US' && timeframe === '1D') {
-      await fulfill(route, scannerResponse({ market, timeframe, symbol: 'LATEUS1D', name: '늦은 US 일봉', generatedAt: '2026-08-05T12:00:00.000Z' }), 700);
+    if (market === 'US' && timeframe === '4H') {
+      await fulfill(route, scannerResponse({ market, timeframe, symbol: 'LATEUS4H', name: '늦은 US 4시간', generatedAt: '2026-08-05T12:00:00.000Z' }), 700);
       return;
     }
-    if (market === 'US' && timeframe === '4H') {
-      await fulfill(route, scannerResponse({ market, timeframe, symbol: 'CURRENTUS4H', name: '현재 US 4시간', generatedAt: '2026-08-05T11:00:00.000Z' }), 10);
+    if (market === 'US' && timeframe === '60m') {
+      await fulfill(route, scannerResponse({ market, timeframe, symbol: 'CURRENTUS60M', name: '현재 US 60분', generatedAt: '2026-08-05T11:00:00.000Z' }), 10);
       return;
     }
     await fulfill(route, scannerResponse({ market: 'KR', timeframe, symbol: 'BASEKR', name: '기준 KR', generatedAt: '2026-08-05T10:00:00.000Z' }), 10);
@@ -605,13 +606,13 @@ test('scanner market and timeframe race keeps the newest context when an older r
   await expect(page.getByText('기준 KR', { exact: true })).toBeVisible();
   const marketSelector = page.getByRole('region', { name: '검색 시장' });
   await marketSelector.getByRole('button', { name: /^미국주식/ }).click();
-  await page.getByLabel('시간봉').selectOption('4H');
-  await expect(page.getByText('현재 US 4시간', { exact: true })).toBeVisible();
+  await page.getByLabel('시간봉').selectOption('60m');
+  await expect(page.getByText('현재 US 60분', { exact: true })).toBeVisible();
   await page.waitForTimeout(800);
-  await expect(page.getByText('늦은 US 일봉', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('늦은 US 4시간', { exact: true })).toHaveCount(0);
   await expect(marketSelector.getByRole('button', { name: /^미국주식/ })).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByLabel('시간봉')).toHaveValue('4H');
-  expect(requests).toContain('US:1D');
+  await expect(page.getByLabel('시간봉')).toHaveValue('60m');
   expect(requests).toContain('US:4H');
+  expect(requests).toContain('US:60m');
   expect(unexpectedHttp).toEqual([]);
 });

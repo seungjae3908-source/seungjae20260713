@@ -1,0 +1,205 @@
+name: Server Resilience Read-Only Diagnostics
+
+on:
+  pull_request:
+    paths:
+      - 'ops/server-resilience-readonly-diagnostics.sh'
+      - 'ops/verify-server-resilience-readonly-contract.mjs'
+      - '.github/workflows/server-resilience-readonly-diagnostics.yml'
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+concurrency:
+  group: server-resilience-readonly-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    name: Read-only resilience contract
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shell syntax
+        run: bash -n ops/server-resilience-readonly-diagnostics.sh
+      - name: Static no-mutation and truth contract
+        run: node ops/verify-server-resilience-readonly-contract.mjs
+
+  diagnose:
+    name: Read-only server resilience diagnostics
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.number == 23 &&
+      github.event.issue.title == 'Staging Readiness Control' &&
+      startsWith(github.event.comment.body, '/run-server-resilience-diagnostics ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment: staging
+    env:
+      DIAGNOSTIC_DIR: ${{ github.workspace }}/server-resilience-artifacts
+      STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+      STAGING_SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+      STAGING_SSH_PORT: ${{ secrets.STAGING_SSH_PORT || '22' }}
+      STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+      STAGING_SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Parse owner command and pin current main
+        id: command
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$COMMENT_AUTHOR" == "seungjae3908-source" ]] || { echo 'Only the repository owner may run diagnostics.' >&2; exit 1; }
+          [[ "$AUTHOR_ASSOCIATION" == "OWNER" ]] || { echo 'Command author is not repository owner.' >&2; exit 1; }
+          node <<'NODE'
+          const fs = require('node:fs');
+          const body = String(process.env.COMMENT_BODY ?? '').trim();
+          const m = /^\/run-server-resilience-diagnostics ([0-9a-fA-F]{40}) ([0-9a-fA-F]{40}) ([0-9a-fA-F]{40}) ((?:[0-9]{1,3}\.){3}[0-9]{1,3})$/.exec(body);
+          if (!m) {
+            console.error('Exact command required: /run-server-resilience-diagnostics <current-main-sha> <production-sha> <staging-sha> <expected-public-ip>');
+            process.exit(1);
+          }
+          const octets = m[4].split('.').map(Number);
+          if (octets.some((v) => !Number.isInteger(v) || v < 0 || v > 255)) process.exit(1);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `source_sha=${m[1].toLowerCase()}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `production_sha=${m[2].toLowerCase()}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `staging_sha=${m[3].toLowerCase()}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `public_ip=${m[4]}\n`);
+          NODE
+      - name: Require exact current-main source
+        env:
+          SOURCE_SHA: ${{ steps.command.outputs.source_sha }}
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin main
+          actual_main="$(git rev-parse origin/main)"
+          [[ "$SOURCE_SHA" == "$actual_main" ]] || {
+            echo "Diagnostics source SHA is stale; current main moved." >&2
+            exit 1
+          }
+          git checkout --detach "$SOURCE_SHA"
+          bash -n ops/server-resilience-readonly-diagnostics.sh
+          node ops/verify-server-resilience-readonly-contract.mjs
+
+      - name: Configure SSH without exposing credentials
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          mkdir -p ~/.ssh "$DIAGNOSTIC_DIR"
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [[ -n "$STAGING_SSH_KNOWN_HOSTS" ]]; then
+            printf '%s\n' "$STAGING_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "$STAGING_SSH_PORT" -H "$STAGING_SSH_HOST" > ~/.ssh/known_hosts
+          fi
+
+      - name: Run strictly read-only resilience diagnostics
+        id: diagnostics
+        env:
+          EXPECTED_PRODUCTION_SHA: ${{ steps.command.outputs.production_sha }}
+          EXPECTED_STAGING_SHA: ${{ steps.command.outputs.staging_sha }}
+          EXPECTED_PUBLIC_IP: ${{ steps.command.outputs.public_ip }}
+        run: |
+          set -Eeuo pipefail
+          artifact="$DIAGNOSTIC_DIR/server-resilience-diagnostics.txt"
+          remote_command="$(printf 'EXPECTED_PRODUCTION_SHA=%q EXPECTED_STAGING_SHA=%q EXPECTED_PUBLIC_IP=%q bash -s' \
+            "$EXPECTED_PRODUCTION_SHA" "$EXPECTED_STAGING_SHA" "$EXPECTED_PUBLIC_IP")"
+          ssh -i ~/.ssh/id_ed25519 -p "$STAGING_SSH_PORT" \
+            -o BatchMode=yes -o ConnectTimeout=15 \
+            "$STAGING_SSH_USER@$STAGING_SSH_HOST" "$remote_command" \
+            < ops/server-resilience-readonly-diagnostics.sh > "$artifact"
+          grep -Fx 'SERVER_RESILIENCE_READ_ONLY_DIAGNOSTICS_COMPLETE' "$artifact" >/dev/null
+
+      - name: Enforce artifact redaction and zero-mutation markers
+        if: steps.diagnostics.outcome == 'success'
+        run: |
+          set -Eeuo pipefail
+          artifact="$DIAGNOSTIC_DIR/server-resilience-diagnostics.txt"
+          if grep -Eiq -- \
+            '-----BEGIN (OPENSSH|RSA|EC) PRIVATE KEY-----|https?://|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|(authorization|apikey|api_key|password|token|secret)[=:][[:space:]]*(Bearer[[:space:]]+)?[^<[:space:]]' \
+            "$artifact"; then
+            echo 'Artifact contains a prohibited sensitive pattern.' >&2
+            exit 1
+          fi
+          grep -Fx 'server_files_written=0' "$artifact" >/dev/null
+          grep -Fx 'server_files_deleted=0' "$artifact" >/dev/null
+          grep -Fx 'server_processes_restarted=0' "$artifact" >/dev/null
+          grep -Fx 'server_processes_stopped=0' "$artifact" >/dev/null
+          grep -Fx 'deployment_executed=0' "$artifact" >/dev/null
+          grep -Fx 'database_changes=0' "$artifact" >/dev/null
+          grep -Fx 'secret_values_collected=0' "$artifact" >/dev/null
+          grep -F $'OFFSITE_BACKUP\tstatus=UNVERIFIED' "$artifact" >/dev/null
+          grep -F 'unknown_is_never_pass=true' "$artifact" >/dev/null
+
+      - name: Write non-sensitive metadata
+        if: always() && steps.command.outcome == 'success'
+        env:
+          SOURCE_SHA: ${{ steps.command.outputs.source_sha }}
+          DIAGNOSTIC_OUTCOME: ${{ steps.diagnostics.outcome }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          fs.mkdirSync(process.env.DIAGNOSTIC_DIR, { recursive: true });
+          fs.writeFileSync(path.join(process.env.DIAGNOSTIC_DIR, 'metadata.json'), JSON.stringify({
+            mode: 'read_only',
+            source_sha: process.env.SOURCE_SHA,
+            diagnostic_outcome: process.env.DIAGNOSTIC_OUTCOME || 'not_run',
+            server_files_written: 0,
+            server_files_deleted: 0,
+            server_processes_restarted: 0,
+            server_processes_stopped: 0,
+            deployment_executed: false,
+            database_changes: 0,
+            secret_values_recorded: false,
+            source_run_id: process.env.GITHUB_RUN_ID,
+          }, null, 2) + '\n');
+          NODE
+
+      - name: Upload sanitized diagnostics
+        if: always() && steps.command.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-resilience-readonly-${{ github.run_id }}
+          path: server-resilience-artifacts
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Record result on release control
+        if: always() && steps.command.outcome == 'success'
+        uses: actions/github-script@v7
+        env:
+          SOURCE_SHA: ${{ steps.command.outputs.source_sha }}
+          DIAGNOSTIC_OUTCOME: ${{ steps.diagnostics.outcome }}
+        with:
+          script: |
+            const ok = process.env.DIAGNOSTIC_OUTCOME === 'success';
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 23,
+              body: [
+                '[SERVER_RESILIENCE_READONLY_RESULT]',
+                `source_sha: ${process.env.SOURCE_SHA}`,
+                `workflow_run: ${context.runId}`,
+                `diagnostic_outcome: ${ok ? 'success' : 'failed'}`,
+                'server_mutation: 0',
+                'database_mutation: 0',
+                'process_restart: 0',
+                'cache_log_release_deletion: 0',
+                'offsite_and_restore_states: artifact_only / explicit UNVERIFIED unless evidence exists',
+              ].join('\n'),
+            });

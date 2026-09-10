@@ -1,5 +1,6 @@
 import { authorizedFetch } from '@/lib/auth-fetch';
 import { resolveAssetDetailPath, type CanonicalAssetIdentity } from '@/lib/asset-navigation';
+import { parseUnifiedAssetSuggestResponse } from './unified-asset-search-response';
 
 export type UnifiedAssetFilter = 'all' | 'stock' | 'coin';
 export type UnifiedMarketFilter = 'KR' | 'US' | 'spot' | 'futures';
@@ -58,6 +59,8 @@ export interface UnifiedSearchWatchlistPreference {
 
 export { prioritizeUnifiedAssetSuggestions } from './unified-asset-search-priority';
 
+const SEARCH_CLIENT_TERMINAL_MS = 4_500;
+
 export function deriveUnifiedSearchOutcome(response: UnifiedAssetSuggestResponse): UnifiedSearchOutcomeCode {
   if (!response.ok || response.state === 'ERROR') return 'DATA_UNAVAILABLE';
   if (response.results.length > 0) return 'RESULTS_AVAILABLE';
@@ -75,23 +78,48 @@ export async function fetchUnifiedAssetSuggestions(input: {
   limit?: number;
   signal?: AbortSignal;
 }): Promise<UnifiedAssetSuggestResponse> {
+  const asset = input.asset ?? 'all';
+  const market = input.market ?? null;
   const params = new URLSearchParams({
     q: input.q,
-    asset: input.asset ?? 'all',
+    asset,
     limit: String(Math.max(1, Math.min(50, input.limit ?? 25))),
   });
-  if (input.market) params.set('market', input.market);
-  const response = await authorizedFetch(`/api/search/suggest?${params.toString()}`, {
-    cache: 'no-store',
-    signal: input.signal,
-  });
-  const payload = await response.json().catch(() => ({})) as Partial<UnifiedAssetSuggestResponse>;
-  if (!response.ok) {
-    const error = new Error(payload.message ?? payload.error ?? `HTTP_${response.status}`);
-    error.name = payload.error ?? 'UNIFIED_SEARCH_ERROR';
+  if (market) params.set('market', market);
+
+  const terminalController = new AbortController();
+  let terminalTimedOut = false;
+  const abortFromCaller = () => terminalController.abort(input.signal?.reason);
+  if (input.signal?.aborted) abortFromCaller();
+  else input.signal?.addEventListener('abort', abortFromCaller, { once: true });
+  const terminalTimer = setTimeout(() => {
+    terminalTimedOut = true;
+    terminalController.abort();
+  }, SEARCH_CLIENT_TERMINAL_MS);
+
+  try {
+    const response = await authorizedFetch(`/api/search/suggest?${params.toString()}`, {
+      cache: 'no-store',
+      signal: terminalController.signal,
+    });
+    const payload = await response.json().catch(() => ({})) as Partial<UnifiedAssetSuggestResponse>;
+    if (!response.ok) {
+      const error = new Error(payload.message ?? payload.error ?? `HTTP_${response.status}`);
+      error.name = payload.error ?? 'UNIFIED_SEARCH_ERROR';
+      throw error;
+    }
+    return parseUnifiedAssetSuggestResponse(payload, { q: input.q, asset, market });
+  } catch (error) {
+    if (terminalTimedOut && !input.signal?.aborted) {
+      const timeoutError = new Error('검색 응답이 지연되어 제한 시간 안에 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.');
+      timeoutError.name = 'UNIFIED_SEARCH_TIMEOUT';
+      throw timeoutError;
+    }
     throw error;
+  } finally {
+    clearTimeout(terminalTimer);
+    input.signal?.removeEventListener('abort', abortFromCaller);
   }
-  return payload as UnifiedAssetSuggestResponse;
 }
 
 export function unifiedSuggestionIdentity(item: UnifiedAssetSuggestion, backPath = '/search'): CanonicalAssetIdentity {

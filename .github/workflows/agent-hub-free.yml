@@ -27,7 +27,9 @@ on:
       - scripts/agent_hub_coordinator_hardening_v2.py
       - scripts/agent_hub_executor_gate_hardening_v2.py
       - scripts/agent_hub_executor_report_hardening_v2.py
+      - scripts/agent_hub_manual_report_adapter_v2.py
       - scripts/agent_hub_legacy_migration_v2.py
+      - scripts/agent_hub_rollover_v2.py
       - scripts/test_agent_hub_v2.py
       - scripts/test_agent_hub_executor_v2.py
       - scripts/test_agent_hub_hardening_v2.py
@@ -57,7 +59,9 @@ on:
       - scripts/agent_hub_coordinator_hardening_v2.py
       - scripts/agent_hub_executor_gate_hardening_v2.py
       - scripts/agent_hub_executor_report_hardening_v2.py
+      - scripts/agent_hub_manual_report_adapter_v2.py
       - scripts/agent_hub_legacy_migration_v2.py
+      - scripts/agent_hub_rollover_v2.py
       - scripts/test_agent_hub_v2.py
       - scripts/test_agent_hub_executor_v2.py
       - scripts/test_agent_hub_hardening_v2.py
@@ -109,7 +113,9 @@ jobs:
             scripts/agent_hub_coordinator_hardening_v2.py \
             scripts/agent_hub_executor_gate_hardening_v2.py \
             scripts/agent_hub_executor_report_hardening_v2.py \
+            scripts/agent_hub_manual_report_adapter_v2.py \
             scripts/agent_hub_legacy_migration_v2.py \
+            scripts/agent_hub_rollover_v2.py \
             scripts/test_agent_hub_v2.py \
             scripts/test_agent_hub_executor_v2.py \
             scripts/test_agent_hub_hardening_v2.py
@@ -132,7 +138,9 @@ jobs:
           python3 scripts/agent_hub_coordinator_hardening_v2.py --self-test
           python3 scripts/agent_hub_executor_gate_hardening_v2.py --self-test
           python3 scripts/agent_hub_executor_report_hardening_v2.py --self-test
+          python3 scripts/agent_hub_manual_report_adapter_v2.py --self-test
           python3 scripts/agent_hub_legacy_migration_v2.py
+          python3 scripts/agent_hub_rollover_v2.py self-test
           python3 scripts/test_agent_hub_v2.py
           python3 scripts/test_agent_hub_executor_v2.py
           python3 scripts/test_agent_hub_hardening_v2.py
@@ -198,7 +206,6 @@ jobs:
       github.event_name == 'repository_dispatch' ||
       (
         github.event_name == 'issue_comment' &&
-        github.event.issue.number == 62 &&
         !github.event.issue.pull_request &&
         contains(github.event.comment.body, '[WORKER_REPORT]') &&
         contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
@@ -214,24 +221,123 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: main
+      - name: Resolve canonical Central Hub and proactively roll on the hourly cycle
+        id: routing
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ISSUE_NUMBER: ${{ github.event.issue.number || 0 }}
+        run: |
+          set -Eeuo pipefail
+          if [ "$EVENT_NAME" = schedule ]; then
+            python3 scripts/agent_hub_rollover_v2.py rollover
+          else
+            python3 scripts/agent_hub_rollover_v2.py resolve
+          fi
+          active="$(python3 scripts/agent_hub_rollover_v2.py resolve | python3 -c 'import json,sys; print(json.load(sys.stdin)["active_issue"])')"
+          echo "active_issue=$active" >> "$GITHUB_OUTPUT"
+          if [ "$EVENT_NAME" = issue_comment ] && [ "$EVENT_ISSUE_NUMBER" != "$active" ]; then
+            echo 'event_matches=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'event_matches=true' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Normalize trusted manual read-only handoff
+        if: steps.routing.outputs.event_matches == 'true'
+        id: handoff
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_COMMENT_BODY: ${{ github.event.comment.body || '' }}
+          EVENT_COMMENT_ID: ${{ github.event.comment.id || 0 }}
+          EVENT_COMMENT_AUTHOR: ${{ github.event.comment.user.login || '' }}
+          EVENT_COMMENT_ASSOCIATION: ${{ github.event.comment.author_association || '' }}
+          HUB_ISSUE_NUMBER: ${{ steps.routing.outputs.active_issue }}
+        run: |
+          set -Eeuo pipefail
+          if [ "$EVENT_NAME" != issue_comment ]; then
+            echo 'status=native' >> "$GITHUB_OUTPUT"
+            echo 'reason=non_issue_comment_event' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          current_main="$(git rev-parse HEAD)"
+          export CURRENT_MAIN_SHA="$current_main"
+          python3 scripts/agent_hub_manual_report_adapter_v2.py > /tmp/agent-hub-manual-handoff.json
+          status="$(python3 -c 'import json; print(json.load(open("/tmp/agent-hub-manual-handoff.json"))["status"])')"
+          reason="$(python3 -c 'import json; print(json.load(open("/tmp/agent-hub-manual-handoff.json")).get("reason", "unknown"))')"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+
+          if [ "$status" = native ]; then
+            exit 0
+          fi
+
+          if [ "$status" = normalized ]; then
+            marker="<!-- agent-hub-manual-source:${EVENT_COMMENT_ID} -->"
+            mapfile -t existing < <(
+              gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${HUB_ISSUE_NUMBER}/comments?per_page=100" \
+                --jq ".[] | select(.body | contains(\"${marker}\")) | .id"
+            )
+            if [ "${#existing[@]}" -eq 0 ]; then
+              python3 - <<'PY'
+          import json
+          source = json.load(open('/tmp/agent-hub-manual-handoff.json', encoding='utf-8'))
+          with open('/tmp/agent-hub-manual-comment.json', 'w', encoding='utf-8') as handle:
+              json.dump({'body': source['report']}, handle, ensure_ascii=False)
+          PY
+              gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${HUB_ISSUE_NUMBER}/comments" \
+                --input /tmp/agent-hub-manual-comment.json >/dev/null
+            fi
+            exit 0
+          fi
+
+          marker="<!-- agent-hub-error:${EVENT_COMMENT_ID} -->"
+          mapfile -t existing < <(
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${HUB_ISSUE_NUMBER}/comments?per_page=100" \
+              --jq ".[] | select(.body | contains(\"${marker}\")) | .id"
+          )
+          if [ "${#existing[@]}" -eq 0 ]; then
+            python3 - <<'PY'
+          import json, os
+          source = json.load(open('/tmp/agent-hub-manual-handoff.json', encoding='utf-8'))
+          details = source.get('details') or []
+          body = '\n'.join([
+              '[AUTO_LOOP_HANDOFF_BLOCKED]',
+              f"source_comment_id: {os.environ.get('EVENT_COMMENT_ID', '0')}",
+              f"reason: {source.get('reason', 'unknown')}",
+              'details: ' + json.dumps(details, ensure_ascii=False, separators=(',', ':')),
+              'action: NONE_FAIL_CLOSED',
+              f"<!-- agent-hub-error:{os.environ.get('EVENT_COMMENT_ID', '0')} -->",
+          ])
+          with open('/tmp/agent-hub-manual-blocked.json', 'w', encoding='utf-8') as handle:
+              json.dump({'body': body}, handle, ensure_ascii=False)
+          PY
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${HUB_ISSUE_NUMBER}/comments" \
+              --input /tmp/agent-hub-manual-blocked.json >/dev/null
+          fi
       - name: Coordinate next schema-v2 action with audit hardening
+        if: >-
+          steps.routing.outputs.event_matches == 'true' &&
+          steps.handoff.outputs.status != 'blocked'
         id: hub
         env:
           PYTHONPATH: scripts
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          HUB_ISSUE_NUMBER: '62'
+          HUB_ISSUE_NUMBER: ${{ steps.routing.outputs.active_issue }}
         run: python3 scripts/agent_hub_coordinator_hardening_v2.py
       - name: Wake controlled executor only for validated ready command
-        if: steps.hub.outputs.executor_ready == 'true'
+        if: steps.routing.outputs.event_matches == 'true' && steps.hub.outputs.executor_ready == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           COMMAND_ID: ${{ steps.hub.outputs.command_id }}
+          HUB_ISSUE_NUMBER: ${{ steps.routing.outputs.active_issue }}
         run: |
           set -Eeuo pipefail
           [[ "$COMMAND_ID" =~ ^hub-[0-9]+-[0-9a-f]{16}$ ]]
+          [[ "$HUB_ISSUE_NUMBER" =~ ^[0-9]+$ ]]
           mapfile -t command_comment_ids < <(
-            gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/62/comments?per_page=100" \
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${HUB_ISSUE_NUMBER}/comments?per_page=100" \
               --jq ".[] | select(.user.login == \"github-actions[bot]\") | select(.body | contains(\"<!-- agent-hub-command:${COMMAND_ID} -->\")) | .id"
           )
           test "${#command_comment_ids[@]}" -eq 1

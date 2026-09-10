@@ -142,6 +142,7 @@ verify_release() {
   local release="$1"
   [[ -d "$release" ]] || return 1
   "${SUDO[@]}" test -f "$release/research-dashboard/server.py" || return 1
+  "${SUDO[@]}" test -f "$release/research-dashboard/v3_independence.py" || return 1
   "${SUDO[@]}" test -f "$release/research-dashboard/deploy/research-dashboard.service" || return 1
   "${SUDO[@]}" test -f "$release/research-dashboard/public/index.html" || return 1
   local actual
@@ -149,11 +150,51 @@ verify_release() {
   [[ "$actual" == "$TARGET_SHA" ]]
 }
 
-probe_dashboard() {
+# Bind the response probe to a freshly started process in the exact release.
+# A changed current symlink or a new unit file alone is not runtime evidence.
+read_runtime_identity() {
+  local pid started cwd cmdline interpreter script
+  pid="$("${SUDO[@]}" systemctl show "$SERVICE" --property=MainPID --value)" || return 1
+  started="$("${SUDO[@]}" systemctl show "$SERVICE" --property=ExecMainStartTimestampMonotonic --value)" || return 1
+  [[ "$pid" =~ ^[1-9][0-9]*$ && "$started" =~ ^[1-9][0-9]*$ ]] || return 1
+  (( started > runtime_start_before )) || return 1
+  [[ "$(readlink -e "$CURRENT")" == "$RELEASES/$TARGET_SHA" ]] || return 1
+  cwd="$("${SUDO[@]}" readlink -e "/proc/$pid/cwd")" || return 1
+  [[ "$cwd" == "$RELEASES/$TARGET_SHA/research-dashboard" ]] || return 1
+  cmdline="$("${SUDO[@]}" cat "/proc/$pid/cmdline" | tr '\0' '\n')" || return 1
+  interpreter="${cmdline%%$'\n'*}"
+  script="${cmdline#*$'\n'}"
+  [[ "${interpreter##*/}" =~ ^python3([.][0-9]+)?$ ]] || return 1
+  [[ "$script" == "$CURRENT/research-dashboard/server.py" ]] || return 1
+  # Prove the loopback listener belongs to MainPID, not an old/foreign server.
+  if ! "${SUDO[@]}" python3 - "$pid" "$PORT" <<'PYTHON'
+import os
+import sys
+from pathlib import Path
+try:
+    proc = Path(f'/proc/{sys.argv[1]}')
+    sockets = {os.readlink(fd) for fd in (proc / 'fd').iterdir()}
+    address = f'0100007F:{int(sys.argv[2]):04X}'
+    rows = [row.split() for row in (proc / 'net/tcp').read_text().splitlines()[1:]]
+    listeners = [row[9] for row in rows if row[1] == address and row[3] == '0A']
+    valid = bool(listeners) and all(f'socket:[{inode}]' in sockets for inode in listeners)
+except (OSError, IndexError, ValueError):
+    valid = False
+raise SystemExit(0 if valid else 1)
+PYTHON
+  then
+    return 1
+  fi
+  [[ "$("${SUDO[@]}" systemctl show "$SERVICE" --property=MainPID --value)" == "$pid" ]] || return 1
+  [[ "$("${SUDO[@]}" systemctl show "$SERVICE" --property=ExecMainStartTimestampMonotonic --value)" == "$started" ]] || return 1
+  printf '%s:%s' "$pid" "$started"
+}
+
+probe_dashboard() (
   local health overview
   health="$(mktemp)"
   overview="$(mktemp)"
-  trap 'rm -f "$health" "$overview"' RETURN
+  trap 'rm -f "$health" "$overview"' EXIT
   local attempt ready=false
   for attempt in $(seq 1 20); do
     if curl --fail --silent --show-error --max-time 3 "http://127.0.0.1:$PORT/api/health" -o "$health"; then
@@ -178,6 +219,11 @@ NODE
     service_diagnostics
     return 1
   fi
+  local identity_before identity_after
+  identity_before="$(read_runtime_identity)" || {
+    echo 'Research Dashboard target runtime identity is not proven.' >&2
+    return 1
+  }
   if ! curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:$PORT/api/research/overview" -o "$overview"; then
     echo 'Research Dashboard overview endpoint request failed.' >&2
     service_diagnostics
@@ -190,17 +236,28 @@ if (v?.schemaVersion !== 'research-dashboard-overview-v1') process.exit(1);
 if (v?.safety?.readOnlyDashboard !== true) process.exit(1);
 if (v?.safety?.liveTrading !== false || v?.safety?.privateApi !== false || v?.safety?.orderAuthority !== false) process.exit(1);
 if (v?.profitability?.proven !== false) process.exit(1);
+// This is a consumer-contract check, not an economic readiness threshold.
+const li = v?.research?.liquidityIndependence;
+if (!li || typeof li !== 'object' || Array.isArray(li)) process.exit(1);
+if (!['PRESENT', 'MISSING', 'INVALID'].includes(li.status)) process.exit(1);
+if (li.present !== (li.status !== 'MISSING')) process.exit(1);
+console.log(`V3_CONSUMER_STATUS=${li.status}`);
 NODE
   then
     echo 'Research Dashboard overview contract validation failed.' >&2
     service_diagnostics
     return 1
   fi
-  rm -f "$health" "$overview"
-  trap - RETURN
-}
+  identity_after="$(read_runtime_identity)" || return 1
+  [[ "$identity_after" == "$identity_before" ]] || {
+    echo 'Research Dashboard process changed during the response probe.' >&2
+    return 1
+  }
+  printf 'RUNTIME_IDENTITY=%s\n' "$identity_after"
+)
 
-activate() {
+# Keep rollback locals alive for every failure, including explicit return 1.
+activate() (
   require_tools
   resource_check
   validate_state_access
@@ -211,12 +268,17 @@ activate() {
   local app_before research_before current_before unit_backup service_was_active service_was_enabled
   app_before="$(read_app_sha)"
   research_before="$(read_research_current)"
-  current_before="$(readlink -f "$CURRENT" 2>/dev/null || true)"
-  unit_backup="$(mktemp)"
+  current_before="$(readlink -e "$CURRENT" 2>/dev/null || true)"
   service_was_active=false
   service_was_enabled=false
   "${SUDO[@]}" systemctl is-active --quiet "$SERVICE" 2>/dev/null && service_was_active=true || true
   "${SUDO[@]}" systemctl is-enabled --quiet "$SERVICE" 2>/dev/null && service_was_enabled=true || true
+  local runtime_start_before=0
+  if [[ "$service_was_active" == true ]]; then
+    runtime_start_before="$("${SUDO[@]}" systemctl show "$SERVICE" --property=ExecMainStartTimestampMonotonic --value)"
+    [[ "$runtime_start_before" =~ ^[1-9][0-9]*$ ]] || return 1
+  fi
+  unit_backup="$(mktemp)"
   if "${SUDO[@]}" test -f "/etc/systemd/system/$SERVICE"; then
     "${SUDO[@]}" cat "/etc/systemd/system/$SERVICE" > "$unit_backup"
   else
@@ -252,6 +314,8 @@ activate() {
     fi
     if [[ "$service_was_enabled" == true ]]; then
       "${SUDO[@]}" systemctl enable "$SERVICE" >/dev/null 2>&1 || true
+    else
+      "${SUDO[@]}" systemctl disable "$SERVICE" >/dev/null 2>&1 || true
     fi
     rm -f "$unit_backup"
     return "$status"
@@ -279,7 +343,14 @@ activate() {
     "$CURRENT/research-dashboard/deploy/research-dashboard.service" \
     "/etc/systemd/system/$SERVICE"
   "${SUDO[@]}" systemctl daemon-reload
-  "${SUDO[@]}" systemctl enable --now "$SERVICE"
+  "${SUDO[@]}" systemctl enable "$SERVICE"
+  # start/enable --now is a no-op for an active service. Restart also starts an
+  # inactive unit and makes the target release effective before probing it.
+  if ! "${SUDO[@]}" systemctl restart "$SERVICE"; then
+    echo 'Research Dashboard target runtime restart failed.' >&2
+    service_diagnostics
+    return 1
+  fi
   if ! "${SUDO[@]}" systemctl is-active --quiet "$SERVICE"; then
     echo 'Research Dashboard service did not enter active state.' >&2
     service_diagnostics
@@ -311,6 +382,7 @@ activate() {
 
   printf '%s\n' \
     'RESEARCH_DASHBOARD_ACTIVATED=true' \
+    'RUNTIME_RELEASE_IDENTITY_VERIFIED=true' \
     "TARGET_SHA=$TARGET_SHA" \
     "CURRENT_RELEASE=$(readlink -f "$CURRENT")" \
     "APP_SHA_BEFORE=$app_before" \
@@ -325,7 +397,7 @@ activate() {
     'CADDY_MUTATION=0' \
     'DATABASE_MUTATION=0' \
     'PRODUCTION_PM2_MUTATION=0'
-}
+)
 
 case "$MODE" in
   preflight) preflight ;;
