@@ -159,7 +159,19 @@ function identityFingerprint(identity) {
   return hash({ ...identity, researchCodeSha: identity.researchCodeSha.toLowerCase() });
 }
 
-function candidateStrategyBlockers(strategyIdentity, runtimeIdentity) {
+function genuineNaturalForwardCandidate(candidate) {
+  const evidence = candidate?.naturalEvidence;
+  return candidate?.testOnly !== true
+    && evidence?.provenanceClass === "NATURAL_FORWARD"
+    && evidence.synthetic === false
+    && evidence.replay === false
+    && evidence.testOnly === false
+    && evidence.backfill === false
+    && evidence.historical === false
+    && evidence.duplicate === false;
+}
+
+function candidateStrategyBlockers(strategyIdentity, runtimeIdentity, requireFrozenCandidateIdentity) {
   if (!nonEmpty(strategyIdentity?.strategyId)
     || !nonEmpty(strategyIdentity?.strategyVersion)
     || !nonEmpty(strategyIdentity?.parameterHash)
@@ -169,7 +181,20 @@ function candidateStrategyBlockers(strategyIdentity, runtimeIdentity) {
   if (strategyIdentity.researchCodeSha.toLowerCase() !== runtimeIdentity.researchCodeSha.toLowerCase()) {
     return ["STRATEGY_RESEARCH_SHA_MISMATCH"];
   }
-  return [];
+  if (!requireFrozenCandidateIdentity) return [];
+  const blockers = [];
+  if (!/^paper-candidate-v1:[0-9a-f]{64}$/u.test(strategyIdentity?.candidateId ?? "")) {
+    blockers.push("PAPER_CANDIDATE_ID_REQUIRED");
+  } else if (strategyIdentity.candidateId !== requireFrozenCandidateIdentity.candidateId) {
+    blockers.push("PAPER_CANDIDATE_IDENTITY_MISMATCH");
+  }
+  if (!nonEmpty(strategyIdentity?.strategyFamily)) blockers.push("PAPER_STRATEGY_FAMILY_REQUIRED");
+  if (!nonEmpty(strategyIdentity?.parameterDigest)) blockers.push("PAPER_PARAMETER_DIGEST_REQUIRED");
+  else if (strategyIdentity.parameterDigest !== strategyIdentity.parameterHash) {
+    blockers.push("PAPER_PARAMETER_IDENTITY_MISMATCH");
+  }
+  if (strategyIdentity?.accountMode !== "PAPER") blockers.push("PAPER_ACCOUNT_MODE_REQUIRED");
+  return blockers;
 }
 
 function assertSafety(value, code) {
@@ -251,7 +276,11 @@ function evidenceBlockers(candidate, evaluatedAtMs, runtimeIdentity) {
   if (!nonEmpty(candidate?.signal?.symbol)) blockers.push("SYMBOL_REQUIRED");
   if (!finite(candidate?.signal?.timestampMs)) blockers.push("SIGNAL_TIMESTAMP_REQUIRED");
   else if (candidate.signal.timestampMs > evaluatedAtMs) blockers.push("FUTURE_SIGNAL_FORBIDDEN");
-  blockers.push(...candidateStrategyBlockers(candidate?.signal?.strategyIdentity, runtimeIdentity));
+  blockers.push(...candidateStrategyBlockers(
+    candidate?.signal?.strategyIdentity,
+    runtimeIdentity,
+    genuineNaturalForwardCandidate(candidate) ? candidate : false,
+  ));
   if (candidate?.profitGate?.decision === "ELIGIBLE") {
     if (!nonEmpty(candidate?.profitEvidence?.costPolicyId) || !nonEmpty(candidate?.execution?.costPolicy?.version)) {
       blockers.push("PAPER_COST_POLICY_VERSION_REQUIRED");
@@ -314,10 +343,14 @@ function positionFromSample(sample, candidate) {
     market: sample.identity.market,
     symbol: sample.identity.symbol,
     direction: sample.identity.executionDirection,
+    candidateId: sample.identity.candidateId,
+    strategyFamily: sample.identity.strategyFamily,
     strategyId: sample.identity.strategyId,
     strategyVersion: sample.identity.strategyVersion,
     parameterHash: sample.identity.parameterHash,
+    parameterDigest: sample.identity.parameterDigest,
     researchCodeSha: sample.identity.researchCodeSha,
+    accountMode: sample.identity.accountMode,
     costPolicyVersion: sample.profitEvidence.costPolicyId,
     parityFingerprint: sample.parityFingerprint,
     entryTimestampMs: sample.identity.evaluatedAtMs,

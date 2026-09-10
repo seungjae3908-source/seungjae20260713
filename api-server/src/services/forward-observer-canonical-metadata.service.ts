@@ -1,6 +1,7 @@
 import type { ScannerResponse, ScannerSignalCard, ScannerTradeAction } from './scanner-signal.types';
 import {
   StrategyPromotionService,
+  strategyCandidateId,
   type StrategyDirection,
   type StrategyPromotionRecord,
 } from './strategy-promotion.service';
@@ -11,6 +12,7 @@ export type ForwardCanonicalMetadataLane = Readonly<{
 }>;
 
 export type ForwardCanonicalPaperCandidate = Readonly<{
+  candidateId: string;
   signal: Readonly<{
     signalId: string;
     market: ForwardCanonicalMetadataLane['market'];
@@ -21,10 +23,14 @@ export type ForwardCanonicalPaperCandidate = Readonly<{
     signalDirection: StrategyDirection;
     style: 'SWING';
     strategyIdentity: Readonly<{
+      candidateId: string;
+      strategyFamily: string;
       strategyId: string;
       strategyVersion: string;
       parameterHash: string;
+      parameterDigest: string;
       researchCodeSha: string;
+      accountMode: 'PAPER';
     }>;
   }>;
   executionAuthority: 'NONE';
@@ -90,6 +96,7 @@ function exactPromotionIdentity(
   if (identity.strategyHorizon !== 'SWING') blockers.push('PROMOTION_HORIZON_MISMATCH');
   if (identity.timeframe !== lane.timeframe) blockers.push('PROMOTION_TIMEFRAME_MISMATCH');
   if (identity.direction !== direction) blockers.push('PROMOTION_DIRECTION_MISMATCH');
+  if (identity.strategyFamily !== 'CANONICAL_SCANNER_PROFILE') blockers.push('PROMOTION_STRATEGY_FAMILY_MISMATCH');
   if (!nonEmpty(identity.strategyId)) blockers.push('PROMOTION_STRATEGY_ID_REQUIRED');
   if (!nonEmpty(identity.strategyVersion)) blockers.push('PROMOTION_STRATEGY_VERSION_REQUIRED');
   if (!nonEmpty(identity.parameterHash)) blockers.push('PROMOTION_PARAMETER_HASH_REQUIRED');
@@ -127,7 +134,9 @@ export function resolveForwardObserverCanonicalMetadata(input: {
   }
 
   const identity = promotion.record.identity;
+  const candidateId = strategyCandidateId(identity);
   const paperCandidate: ForwardCanonicalPaperCandidate = Object.freeze({
+    candidateId,
     signal: Object.freeze({
       signalId: input.card.signalId,
       market: input.lane.market,
@@ -138,10 +147,14 @@ export function resolveForwardObserverCanonicalMetadata(input: {
       signalDirection: direction,
       style: 'SWING' as const,
       strategyIdentity: Object.freeze({
+        candidateId,
+        strategyFamily: identity.strategyFamily,
         strategyId: identity.strategyId,
         strategyVersion: identity.strategyVersion,
         parameterHash: identity.parameterHash,
+        parameterDigest: identity.parameterHash,
         researchCodeSha: identity.researchCodeSha,
+        accountMode: 'PAPER' as const,
       }),
     }),
     executionAuthority: 'NONE' as const,
