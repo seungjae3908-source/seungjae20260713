@@ -155,7 +155,7 @@ button[aria-label="종목 목록으로 돌아가기"] {
 #root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="통합검색"]) > main,
 #root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="테마"]) > main,
 #root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="투자 공부"]) > main,
-#root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="승인형 주문"]) > main,
+#root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="자동매매"]) > main,
 #root :is(div, main):has(> nav[aria-label="주요 메뉴"][data-route-title="앱 설정"]) > main {
   padding-bottom: 1rem !important;
 }
@@ -213,7 +213,7 @@ button[aria-label="종목 목록으로 돌아가기"] {
 
 /*
  * App-wide tab typography contract: every semantic tab uses one visual spec —
- * 12px / 900 weight / 16px line-height / 44px minimum hit target — and centers
+ * 12px / 600 weight / 16px line-height / 44px minimum hit target — and centers
  * its visible label on both axes. The aria/data selectors cover older tablists
  * that predate ResponsiveTabs without touching ordinary action buttons.
  */
@@ -226,7 +226,7 @@ button[aria-label="종목 목록으로 돌아가기"] {
   justify-content: center !important;
   font-size: 0.75rem !important;
   line-height: 1rem !important;
-  font-weight: 900 !important;
+  font-weight: 600 !important;
   text-align: center !important;
 }
 

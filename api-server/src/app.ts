@@ -45,7 +45,7 @@ app.use(securityHeaders);
 app.use(cors({ origin(origin, callback) {
   if (!origin || process.env.NODE_ENV !== 'production' || allowedOrigins.includes(origin)) return callback(null, true);
   return callback(new Error('CORS origin rejected'));
-}, methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization', 'X-Auto-Trade-Key', 'X-Device-Session'] }));
+}, methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization', 'X-Auto-Trade-Key', 'X-Device-Session'] }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use('/api', apiRateLimit);

@@ -1,0 +1,119 @@
+name: Authoritative Paper Liquidity Impact Cost Evidence
+
+on:
+  pull_request:
+    paths:
+      - 'api-server/src/services/authoritative-paper-liquidity-impact-cost-evidence.service.ts'
+      - 'api-server/src/services/authoritative-paper-liquidity-impact-cost-evidence.service.test.ts'
+      - '.github/workflows/authoritative-paper-liquidity-impact-cost-evidence.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: authoritative-paper-liquidity-impact-cost-evidence-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Checkout exact pull request head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          persist-credentials: false
+
+      - name: Verify exact pull request head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$EXPECTED_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Set up pnpm 9
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+
+      - name: Install workspace dependencies with frozen lockfile
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck API server
+        run: pnpm --dir api-server run typecheck
+
+      - name: Bundle and run focused producer tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          test_file="$RUNNER_TEMP/authoritative-paper-liquidity-impact-cost-evidence.test.cjs"
+          pnpm --dir api-server exec esbuild \
+            src/services/authoritative-paper-liquidity-impact-cost-evidence.service.test.ts \
+            --bundle \
+            --platform=node \
+            --format=cjs \
+            --target=node20 \
+            --outfile="$test_file"
+          node --test "$test_file"
+
+      - name: Run upstream Native calibration and liquidity firewall regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test \
+            market-intelligence-sidecar/tests/public-forward-liquidity-calibration-artifact.test.mjs \
+            market-intelligence-sidecar/tests/liquidity-impact-evidence-firewall.test.mjs
+
+      - name: Parse workflow YAML
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby -e "require 'yaml'; abort('YAML_PARSE_FAILED') unless YAML.parse_file(ARGV.fetch(0))" \
+            .github/workflows/authoritative-paper-liquidity-impact-cost-evidence.yml
+
+      - name: Run actionlint 1.7.12
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/actionlint_1.7.12_linux_amd64.tar.gz"
+          curl -fsSL \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
+            -o "$archive"
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $archive" | sha256sum -c -
+          tar -xzf "$archive" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -version
+          "$RUNNER_TEMP/actionlint" \
+            .github/workflows/authoritative-paper-liquidity-impact-cost-evidence.yml
+
+      - name: Verify fail-closed producer safety boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          file='api-server/src/services/authoritative-paper-liquidity-impact-cost-evidence.service.ts'
+          grep -Fq 'parameterFittingAllowed: false' "$file"
+          grep -Fq 'oosReuseForFitAllowed: false' "$file"
+          grep -Fq 'syntheticAggregateDatasetDigestAllowed: false' "$file"
+          grep -Fq 'sourceDatasetDigestOverloadAllowed: false' "$file"
+          grep -Fq 'unknownImpactAsZeroAllowed: false' "$file"
+          grep -Fq 'firewallRevalidationRequired: true' "$file"
+          grep -Fq 'runtimeEligibleBeforeFirewall: false' "$file"
+          grep -Fq 'fullCostReady: false' "$file"
+          grep -Fq "executionAuthority: 'NONE'" "$file"
+          if grep -Fq 'fullCostReady: true' "$file"; then
+            echo 'PREMATURE_FULL_COST_PROMOTION_FORBIDDEN' >&2
+            exit 1
+          fi
+          if grep -Fq 'profitabilityProven: true' "$file"; then
+            echo 'PREMATURE_PROFITABILITY_PROMOTION_FORBIDDEN' >&2
+            exit 1
+          fi

@@ -155,6 +155,12 @@ export const MARKET_INFORMATION_ROUTES: readonly MarketInformationRoute[] = [
   },
 ] as const;
 
+const SECTION_STATUSES: readonly MarketInformationStatus[] = [
+  'ready', 'empty', 'partial', 'stale', 'unsupported', 'unavailable', 'error',
+];
+const MARKET_STATUSES: readonly MarketInformationMeta['marketStatus'][] = ['OPEN', 'CLOSED', '24H', 'UNKNOWN'];
+const MAX_FUTURE_SKEW_MS = 5 * 60_000;
+
 export class MarketInformationContractError extends Error {
   constructor(readonly code: string, message: string) {
     super(message);
@@ -166,74 +172,213 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
 function validNullableNumber(value: unknown): boolean {
-  return value === null || (typeof value === 'number' && Number.isFinite(value));
+  return value === null || isFiniteNumber(value);
+}
+
+function validNullableNonNegativeNumber(value: unknown): boolean {
+  return value === null || (isFiniteNumber(value) && value >= 0);
+}
+
+function validNullablePositiveNumber(value: unknown): boolean {
+  return value === null || (isFiniteNumber(value) && value > 0);
 }
 
 function validNullableString(value: unknown): boolean {
   return value === null || typeof value === 'string';
 }
 
-function requireIso(value: unknown, field: string): void {
+function validNullableNonEmptyString(value: unknown): boolean {
+  return value === null || isNonEmptyString(value);
+}
+
+function requireIso(value: unknown, field: string, options: { rejectFuture?: boolean } = {}): void {
   if (typeof value !== 'string' || !Number.isFinite(Date.parse(value))) {
     throw new MarketInformationContractError('INVALID_TIMESTAMP', `${field} 시간이 올바르지 않습니다.`);
   }
+  if (options.rejectFuture === true && Date.parse(value) > Date.now() + MAX_FUTURE_SKEW_MS) {
+    throw new MarketInformationContractError('FUTURE_TIMESTAMP', `${field} 시간이 현재보다 지나치게 미래입니다.`);
+  }
+}
+
+function requireNullableIso(value: unknown, field: string, options: { rejectFuture?: boolean } = {}): void {
+  if (value === null) return;
+  requireIso(value, field, options);
+}
+
+function expectedAssetType(route: MarketInformationRoute): MarketInformationResponse['assetType'] {
+  if (route.asset === 'stock') return 'stock';
+  return route.market === 'spot' ? 'coin-spot' : 'coin-futures';
+}
+
+function expectedTimeZone(route: MarketInformationRoute): string {
+  if (route.market === 'KR' || route.market === 'spot') return 'Asia/Seoul';
+  if (route.market === 'US') return 'America/New_York';
+  return 'UTC';
 }
 
 function requireMeta(value: unknown, route: MarketInformationRoute): asserts value is MarketInformationMeta {
   if (!isObject(value)) throw new MarketInformationContractError('META_REQUIRED', '시장정보 메타데이터가 없습니다.');
-  if (value.market !== route.market || value.currency !== route.currency) {
-    throw new MarketInformationContractError('MARKET_CURRENCY_MISMATCH', '시장 또는 통화 메타데이터가 요청과 일치하지 않습니다.');
+  if (value.market !== route.market || value.currency !== route.currency || value.assetType !== expectedAssetType(route)) {
+    throw new MarketInformationContractError('MARKET_CURRENCY_MISMATCH', '시장·자산유형 또는 통화 메타데이터가 요청과 일치하지 않습니다.');
   }
-  if (!validNullableString(value.provider) || !validNullableString(value.source)) {
+  if (!validNullableNonEmptyString(value.provider) || !validNullableNonEmptyString(value.source)) {
     throw new MarketInformationContractError('INVALID_PROVIDER_META', 'provider 또는 source 형식이 올바르지 않습니다.');
   }
-  if (!validNullableString(value.providerUpdatedAt) || !validNullableString(value.observedAt)) {
-    throw new MarketInformationContractError('INVALID_PROVIDER_TIME', 'provider 기준시각 형식이 올바르지 않습니다.');
+  requireNullableIso(value.providerUpdatedAt, 'providerUpdatedAt', { rejectFuture: true });
+  requireNullableIso(value.observedAt, 'observedAt', { rejectFuture: true });
+  requireIso(value.fetchedAt, 'section.fetchedAt', { rejectFuture: true });
+  if (value.marketTimeZone !== expectedTimeZone(route) || !MARKET_STATUSES.includes(value.marketStatus as MarketInformationMeta['marketStatus'])) {
+    throw new MarketInformationContractError('INVALID_MARKET_CLOCK_META', '시장 시간대 또는 장 상태 메타데이터가 올바르지 않습니다.');
   }
-  if (value.providerUpdatedAt != null) requireIso(value.providerUpdatedAt, 'providerUpdatedAt');
-  if (value.observedAt != null) requireIso(value.observedAt, 'observedAt');
-  requireIso(value.fetchedAt, 'fetchedAt');
-  if (typeof value.marketTimeZone !== 'string' || typeof value.isDelayed !== 'boolean'
-    || typeof value.isStale !== 'boolean' || typeof value.partial !== 'boolean'
-    || typeof value.retryable !== 'boolean' || !Array.isArray(value.unavailableFields)) {
+  if (typeof value.isDelayed !== 'boolean' || typeof value.isStale !== 'boolean'
+    || typeof value.partial !== 'boolean' || typeof value.retryable !== 'boolean') {
     throw new MarketInformationContractError('INVALID_META_FIELDS', '시장정보 상태 메타데이터가 올바르지 않습니다.');
+  }
+  if (!Array.isArray(value.unavailableFields) || !value.unavailableFields.every(isNonEmptyString)) {
+    throw new MarketInformationContractError('INVALID_UNAVAILABLE_FIELDS', '누락 필드 메타데이터가 올바르지 않습니다.');
+  }
+  if (!validNullableNonEmptyString(value.errorCode)) {
+    throw new MarketInformationContractError('INVALID_ERROR_CODE', '시장정보 오류 코드 형식이 올바르지 않습니다.');
   }
 }
 
-function requireSection(value: unknown, route: MarketInformationRoute, dataKind: 'array' | 'object'): asserts value is MarketInformationSection<unknown> {
-  if (!isObject(value)) throw new MarketInformationContractError('SECTION_REQUIRED', '시장정보 section이 없습니다.');
-  if (!['ready', 'empty', 'partial', 'stale', 'unsupported', 'unavailable', 'error'].includes(String(value.status))) {
-    throw new MarketInformationContractError('INVALID_SECTION_STATUS', '시장정보 section 상태가 올바르지 않습니다.');
+function requireSection(
+  value: unknown,
+  route: MarketInformationRoute,
+  dataKind: 'array' | 'object',
+  name: string,
+): asserts value is MarketInformationSection<unknown> {
+  if (!isObject(value)) throw new MarketInformationContractError('SECTION_REQUIRED', `${name} section이 없습니다.`);
+  if (!SECTION_STATUSES.includes(value.status as MarketInformationStatus)) {
+    throw new MarketInformationContractError('INVALID_SECTION_STATUS', `${name} section 상태가 올바르지 않습니다.`);
   }
   if (dataKind === 'array' ? !Array.isArray(value.data) : !isObject(value.data)) {
-    throw new MarketInformationContractError('INVALID_SECTION_DATA', '시장정보 section 데이터 형식이 올바르지 않습니다.');
+    throw new MarketInformationContractError('INVALID_SECTION_DATA', `${name} section 데이터 형식이 올바르지 않습니다.`);
   }
   requireMeta(value.meta, route);
   if (!validNullableString(value.message)) {
-    throw new MarketInformationContractError('INVALID_SECTION_MESSAGE', '시장정보 section 메시지 형식이 올바르지 않습니다.');
+    throw new MarketInformationContractError('INVALID_SECTION_MESSAGE', `${name} section 메시지 형식이 올바르지 않습니다.`);
+  }
+
+  const status = value.status as MarketInformationStatus;
+  if (dataKind === 'array') {
+    const rows = value.data as unknown[];
+    if (status === 'ready' && rows.length === 0) {
+      throw new MarketInformationContractError('READY_SECTION_EMPTY', `${name} ready section에 근거 행이 없습니다.`);
+    }
+    if (status === 'empty' && rows.length !== 0) {
+      throw new MarketInformationContractError('EMPTY_SECTION_HAS_DATA', `${name} empty section에 데이터가 포함되어 있습니다.`);
+    }
+  }
+  if (status === 'stale' && (value.meta as MarketInformationMeta).isStale !== true) {
+    throw new MarketInformationContractError('STALE_STATUS_MISMATCH', `${name} stale 상태에 stale 근거가 없습니다.`);
+  }
+  if (status === 'partial' && (value.meta as MarketInformationMeta).partial !== true) {
+    throw new MarketInformationContractError('PARTIAL_STATUS_MISMATCH', `${name} partial 상태에 partial 근거가 없습니다.`);
+  }
+  if ((status === 'unsupported' || status === 'unavailable' || status === 'error')
+    && !isNonEmptyString((value.meta as MarketInformationMeta).errorCode)) {
+    throw new MarketInformationContractError('ERROR_STATUS_WITHOUT_CODE', `${name} 가용성 상태에 오류 코드가 없습니다.`);
+  }
+}
+
+function requireIndices(value: unknown): asserts value is MarketInformationIndexRow[] {
+  if (!Array.isArray(value)) throw new MarketInformationContractError('INDEX_ARRAY_REQUIRED', '지수 배열이 없습니다.');
+  for (const item of value) {
+    if (!isObject(item) || !isNonEmptyString(item.key) || !isNonEmptyString(item.label)
+      || !isFiniteNumber(item.value) || item.value <= 0 || !validNullableNumber(item.changePercent)) {
+      throw new MarketInformationContractError('INVALID_INDEX_ROW', '지수 근거 행이 올바르지 않습니다.');
+    }
   }
 }
 
 function requireAssets(value: unknown, route: MarketInformationRoute): asserts value is MarketInformationAssetRow[] {
   if (!Array.isArray(value)) throw new MarketInformationContractError('ASSET_ARRAY_REQUIRED', '종목 배열이 없습니다.');
   for (const item of value) {
-    if (!isObject(item) || typeof item.symbol !== 'string' || !item.symbol.trim()
-      || typeof item.name !== 'string' || typeof item.exchange !== 'string') {
+    if (!isObject(item) || !isNonEmptyString(item.symbol) || !isNonEmptyString(item.name) || !isNonEmptyString(item.exchange)) {
       throw new MarketInformationContractError('INVALID_ASSET_IDENTITY', '종목 식별 정보가 올바르지 않습니다.');
     }
     if (item.currency !== route.currency) {
       throw new MarketInformationContractError('ASSET_CURRENCY_MISMATCH', '종목 통화가 정보방 통화와 일치하지 않습니다.');
     }
-    for (const field of ['price', 'changePercent', 'high24h', 'low24h', 'volume24h', 'tradingValue24h', 'marketCap', 'fundingRatePercent', 'openInterest', 'rangeVolatility24hPercent']) {
-      if (!validNullableNumber(item[field])) {
-        throw new MarketInformationContractError('INVALID_ASSET_NUMBER', `${field} 값이 올바르지 않습니다.`);
-      }
+    if (!isFiniteNumber(item.price) || item.price <= 0 || !validNullableNumber(item.changePercent)
+      || !validNullablePositiveNumber(item.high24h) || !validNullablePositiveNumber(item.low24h)
+      || !validNullableNonNegativeNumber(item.volume24h) || !validNullableNonNegativeNumber(item.tradingValue24h)
+      || !validNullableNonNegativeNumber(item.marketCap) || !validNullableNumber(item.fundingRatePercent)
+      || !validNullableNonNegativeNumber(item.openInterest) || !validNullableNonNegativeNumber(item.rangeVolatility24hPercent)) {
+      throw new MarketInformationContractError('INVALID_ASSET_NUMBER', '종목 수치 근거가 올바르지 않습니다.');
     }
-    if (typeof item.warning !== 'boolean' || !validNullableString(item.tradingStatus)
+    if (typeof item.warning !== 'boolean' || !validNullableNonEmptyString(item.tradingStatus)
       || !validNullableString(item.nextFundingAt) || !validNullableString(item.providerUpdatedAt)) {
       throw new MarketInformationContractError('INVALID_ASSET_META', '종목 상태 정보가 올바르지 않습니다.');
     }
+    if (item.nextFundingAt != null) requireIso(item.nextFundingAt, 'nextFundingAt');
+    if (item.providerUpdatedAt != null) requireIso(item.providerUpdatedAt, 'asset.providerUpdatedAt', { rejectFuture: true });
+  }
+}
+
+function requireSectors(value: unknown): asserts value is MarketInformationSectorRow[] {
+  if (!Array.isArray(value)) throw new MarketInformationContractError('SECTOR_ARRAY_REQUIRED', '섹터 배열이 없습니다.');
+  for (const item of value) {
+    if (!isObject(item) || !isNonEmptyString(item.key) || !isNonEmptyString(item.label)
+      || !validNullableNonNegativeNumber(item.tradingValue)
+      || !isFiniteNumber(item.constituentCount) || !Number.isInteger(item.constituentCount) || item.constituentCount < 0
+      || !validNullableNumber(item.changePercent)) {
+      throw new MarketInformationContractError('INVALID_SECTOR_ROW', '섹터 근거 행이 올바르지 않습니다.');
+    }
+  }
+}
+
+function requireHttpUrl(value: unknown): void {
+  if (!isNonEmptyString(value)) throw new MarketInformationContractError('INVALID_NEWS_URL', '뉴스·공시 URL이 없습니다.');
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('unsupported protocol');
+  } catch {
+    throw new MarketInformationContractError('INVALID_NEWS_URL', '뉴스·공시 URL 형식이 올바르지 않습니다.');
+  }
+}
+
+function requireNewsRows(value: unknown, expectedKind: MarketInformationNewsRow['kind']): asserts value is MarketInformationNewsRow[] {
+  if (!Array.isArray(value)) throw new MarketInformationContractError('NEWS_ARRAY_REQUIRED', '뉴스·공시 배열이 없습니다.');
+  for (const item of value) {
+    if (!isObject(item) || !isNonEmptyString(item.id) || item.kind !== expectedKind
+      || !isNonEmptyString(item.symbol) || !isNonEmptyString(item.title)
+      || !validNullableString(item.summary) || !isNonEmptyString(item.provider) || !isNonEmptyString(item.source)) {
+      throw new MarketInformationContractError('INVALID_NEWS_ROW', '뉴스·공시 근거 행이 올바르지 않습니다.');
+    }
+    requireHttpUrl(item.url);
+    requireIso(item.publishedAt, `${expectedKind}.publishedAt`, { rejectFuture: true });
+  }
+}
+
+function requireDerivatives(value: unknown): asserts value is MarketInformationDerivativesData {
+  if (!isObject(value) || !isNonEmptyString(value.referenceSymbol)
+    || !validNullableNonNegativeNumber(value.longRatio)
+    || !validNullableNonNegativeNumber(value.shortRatio)
+    || !validNullableNonNegativeNumber(value.longShortRatio)
+    || !validNullableString(value.ratioObservedAt)
+    || !Array.isArray(value.liquidations)) {
+    throw new MarketInformationContractError('INVALID_DERIVATIVES', '선물 파생지표 근거가 올바르지 않습니다.');
+  }
+  if (value.ratioObservedAt != null) requireIso(value.ratioObservedAt, 'ratioObservedAt', { rejectFuture: true });
+  for (const item of value.liquidations) {
+    if (!isObject(item) || !isNonEmptyString(item.symbol)
+      || (item.side !== 'long' && item.side !== 'short' && item.side !== 'unknown')
+      || !validNullablePositiveNumber(item.price) || !validNullableNonNegativeNumber(item.amount)
+      || !validNullableString(item.occurredAt)) {
+      throw new MarketInformationContractError('INVALID_LIQUIDATION_ROW', '청산 근거 행이 올바르지 않습니다.');
+    }
+    if (item.occurredAt != null) requireIso(item.occurredAt, 'liquidation.occurredAt', { rejectFuture: true });
   }
 }
 
@@ -252,22 +397,38 @@ export function parseMarketInformationResponse(payload: unknown, route: MarketIn
   if (!isObject(payload) || Object.keys(payload).length === 0) {
     throw new MarketInformationContractError('EMPTY_RESPONSE_OBJECT', '시장정보 응답 객체가 비어 있습니다.');
   }
-  if (payload.ok !== true || payload.room !== route.id || payload.market !== route.market || payload.currency !== route.currency) {
+  if (payload.ok !== true || payload.room !== route.id || payload.market !== route.market
+    || payload.assetType !== expectedAssetType(route) || payload.currency !== route.currency) {
     throw new MarketInformationContractError('ROOM_CONTRACT_MISMATCH', '시장정보 응답이 요청한 정보방과 일치하지 않습니다.');
   }
-  requireIso(payload.fetchedAt, 'fetchedAt');
+  requireIso(payload.fetchedAt, 'fetchedAt', { rejectFuture: true });
   if (typeof payload.partial !== 'boolean' || !isObject(payload.sections)) {
     throw new MarketInformationContractError('INVALID_RESPONSE_META', '시장정보 응답 상태가 올바르지 않습니다.');
   }
+
   const sections = payload.sections;
-  requireSection(sections.indices, route, 'array');
-  requireSection(sections.rankings, route, 'array');
-  requireSection(sections.sectors, route, 'array');
-  requireSection(sections.news, route, 'array');
-  requireSection(sections.disclosures, route, 'array');
-  requireSection(sections.derivatives, route, 'object');
+  requireSection(sections.indices, route, 'array', 'indices');
+  requireSection(sections.rankings, route, 'array', 'rankings');
+  requireSection(sections.sectors, route, 'array', 'sectors');
+  requireSection(sections.news, route, 'array', 'news');
+  requireSection(sections.disclosures, route, 'array', 'disclosures');
+  requireSection(sections.derivatives, route, 'object', 'derivatives');
+
+  requireIndices((sections.indices as Record<string, unknown>).data);
   requireAssets((sections.rankings as Record<string, unknown>).data, route);
+  requireSectors((sections.sectors as Record<string, unknown>).data);
+  requireNewsRows((sections.news as Record<string, unknown>).data, 'news');
+  requireNewsRows((sections.disclosures as Record<string, unknown>).data, 'disclosure');
+  requireDerivatives((sections.derivatives as Record<string, unknown>).data);
   requireZeroOutboundPolicy(payload.requestPolicy);
+
+  const derivedPartial = Object.values(sections).some((item) => isObject(item) && (
+    item.status === 'partial' || item.status === 'stale' || item.status === 'unavailable' || item.status === 'error'
+  ));
+  if (payload.partial !== derivedPartial) {
+    throw new MarketInformationContractError('PARTIAL_RESPONSE_MISMATCH', '전체 partial 상태가 section 근거와 일치하지 않습니다.');
+  }
+
   return payload as MarketInformationResponse;
 }
 
