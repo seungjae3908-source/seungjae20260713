@@ -55,3 +55,6 @@ jobs:
           ! grep -qE 'contents:\s*write' .github/workflows/research-us-microcap-pit-manifest-contract.yml
           grep -q 'canonicalSampleDelta' market-prediction-lab/scripts/build-us-microcap-pit-risk-manifest-v1.py
           grep -q 'FLOAT_MEASURE_NOT_SHARE_COUNT' market-prediction-lab/scripts/build-us-microcap-pit-risk-manifest-v1.py
+          grep -q 'PROVENANCE_DIGEST_MISSING' market-prediction-lab/scripts/build-us-microcap-pit-risk-manifest-v1.py
+          grep -q 'MANIFEST_DIGEST_MISMATCH' market-prediction-lab/scripts/apply-us-microcap-pit-risk-gate-v1.py
+          grep -q 'CATALYST_NOT_VERIFIED' market-prediction-lab/scripts/apply-us-microcap-pit-risk-gate-v1.py
