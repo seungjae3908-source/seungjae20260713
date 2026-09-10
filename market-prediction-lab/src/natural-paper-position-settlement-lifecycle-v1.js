@@ -430,6 +430,9 @@ export const NATURAL_SETTLEMENT_COST_COMPONENTS = Object.freeze([
 // Transport canonical PercentCostEvidence; never estimate or fill an absent cost.
 export function adaptNaturalPaperSettlementFullCost({ position, observation, trigger, evaluatedAtMs } = {}) {
   const blockers = [];
+  const exitExecutionId = observation?.triggerBoundSettlementEvidence?.exitExecutionId
+    ?? observation?.settlementInput?.exitExecutionId
+    ?? null;
   if (position?.lifecycle?.sampleEligibility?.provenanceClass === NATURAL_FORWARD) {
     const binding = validateNaturalPaperTriggerBoundSettlementEvidence({
       position, observation, trigger, evaluatedAtMs,
@@ -514,7 +517,8 @@ export function adaptNaturalPaperSettlementFullCost({ position, observation, tri
     components,
     costPolicyIdentity: { version: position.costPolicyVersion },
     exitTriggerId: trigger.exitTriggerId,
-    evidenceDigest: hash({ components, exitTriggerId: trigger.exitTriggerId, policy }),
+    exitExecutionId,
+    evidenceDigest: hash({ components, exitTriggerId: trigger.exitTriggerId, exitExecutionId, policy }),
     blockers: [...new Set(blockers)],
     unknownIsZero: false,
     naturalSampleCredit: 0,
@@ -708,6 +712,7 @@ function finalizeExit(position, observation, evaluatedAtMs) {
     && trigger.naturalEvidence?.provenanceClass === NATURAL_FORWARD ? 1 : 0;
   const settlementInput = {
     ...structuredClone(input),
+    exitExecutionId: triggerBound?.status === "PRESENT" ? triggerBound.exitExecutionId : input?.exitExecutionId ?? null,
     exitOrderType: trigger.type,
     pathBars: lifecycle.sampleEligibility.provenanceClass === NATURAL_FORWARD
       ? structuredClone(lifecycle.pathBars)
@@ -721,8 +726,14 @@ function finalizeExit(position, observation, evaluatedAtMs) {
     evidence: deepFreeze({
       observationId: trigger.observationId,
       observedAtMs: trigger.triggeredAtMs,
+      candidateId: trigger.candidateId,
+      entryId: trigger.entryId,
+      positionId: trigger.positionId,
       exitTriggerId,
+      exitExecutionId: triggerBound?.status === "PRESENT" ? triggerBound.exitExecutionId : input?.exitExecutionId ?? null,
       exitTriggerTimestampMs: trigger.triggeredAtMs,
+      costPolicyVersion: position.costPolicyVersion,
+      exitExecutionIdentity: structuredClone(observation?.triggerBoundSettlementEvidence?.exitExecutionIdentity ?? null),
       triggerBinding: {
         triggerObservationId: trigger.triggerObservationId,
         positionId: trigger.positionId,
