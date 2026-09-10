@@ -10,7 +10,10 @@ import {
   getKiwoomToken,
   kiwoomRequest,
 } from './providers/kiwoom';
-import MarketDataService, { resolveKrInteractiveMaxPages } from './services/market-data.service';
+import MarketDataService, {
+  APP_KR_INTRADAY_DEADLINE_MS,
+  resolveKrInteractiveMaxPages,
+} from './services/market-data.service';
 
 const KIWOOM_TEST_ENV_KEYS = [
   'KIWOOM_MODE',
@@ -42,6 +45,28 @@ function chartRows(count: number, offset = 0): Array<Record<string, string>> {
     low_pric: '990',
     trde_qty: '100',
   }));
+}
+
+function yahooChartPayload(count = 6): Record<string, unknown> {
+  const base = Date.parse('2026-08-18T00:00:00.000Z') / 1000;
+  const timestamp = Array.from({ length: count }, (_, index) => base + index * 60);
+  const values = Array.from({ length: count }, (_, index) => 100 + index);
+  return {
+    chart: {
+      result: [{
+        timestamp,
+        indicators: {
+          quote: [{
+            open: values,
+            high: values.map((value) => value + 1),
+            low: values.map((value) => value - 1),
+            close: values,
+            volume: values.map(() => 1000),
+          }],
+        },
+      }],
+    },
+  };
 }
 
 async function withMockKiwoom<T>(
@@ -104,7 +129,7 @@ test('Kiwoom deep-history remains unbounded when no visible-window limit is requ
   assert.equal(resolveKiwoomRawTargetCandles(Number.NaN, 1), undefined);
 });
 
-test('KR intraday visible-window limit bounds raw Kiwoom continuation work', () => {
+test('KR visible-window limit bounds raw Kiwoom continuation work', () => {
   assert.equal(resolveKiwoomRawTargetCandles(300, 1), 300);
   assert.equal(resolveKiwoomRawTargetCandles(300, 4), 1_200);
 });
@@ -114,7 +139,7 @@ test('visible-window target is normalized without weakening minimum candle evide
   assert.equal(resolveKiwoomRawTargetCandles(300.9, 1), 300);
 });
 
-test('KR interactive page budgets are deterministic by intraday interval', () => {
+test('KR interactive page budgets are deterministic by interval', () => {
   assert.equal(resolveKrInteractiveMaxPages('1m'), 6);
   assert.equal(resolveKrInteractiveMaxPages('3m'), 6);
   assert.equal(resolveKrInteractiveMaxPages('5m'), 8);
@@ -122,6 +147,12 @@ test('KR interactive page budgets are deterministic by intraday interval', () =>
   assert.equal(resolveKrInteractiveMaxPages('30m'), 8);
   assert.equal(resolveKrInteractiveMaxPages('60m'), 10);
   assert.equal(resolveKrInteractiveMaxPages('4H'), 12);
+  assert.equal(resolveKrInteractiveMaxPages('1D'), 4);
+});
+
+test('KR interactive provider deadline remains below the browser primary endpoint budget', () => {
+  assert.ok(APP_KR_INTRADAY_DEADLINE_MS > 0);
+  assert.ok(APP_KR_INTRADAY_DEADLINE_MS < 2_500);
 });
 
 test('caller abort reaches Kiwoom token acquisition before credentials or network work', async () => {
@@ -230,7 +261,7 @@ test('page budget exhaustion returns partial provenance instead of complete hist
   });
 });
 
-test('app-facing KR 1m/3m routes use the bounded Kiwoom evidence contract', async () => {
+test('app-facing KR 1m/3m/1D routes use the bounded Kiwoom evidence contract', async () => {
   let chartCalls = 0;
   const mockFetch = mockTokenOrChartFetch(() => {
     chartCalls += 1;
@@ -241,7 +272,7 @@ test('app-facing KR 1m/3m routes use the bounded Kiwoom evidence contract', asyn
   });
 
   await withMockKiwoom(mockFetch, async () => {
-    for (const timeframe of ['1m', '3m'] as const) {
+    for (const timeframe of ['1m', '3m', '1D'] as const) {
       const result = await MarketDataService.getCandlesMeta('005930', timeframe);
       assert.equal(result.provider, 'kiwoom');
       assert.equal(result.candles.length, 300);
@@ -254,7 +285,166 @@ test('app-facing KR 1m/3m routes use the bounded Kiwoom evidence contract', asyn
     }
   });
 
-  assert.equal(chartCalls, 2);
+  assert.equal(chartCalls, 3);
+});
+
+test('KR interactive insufficient Kiwoom evidence never re-enters deep Kiwoom history', async () => {
+  let chartCalls = 0;
+  const mockFetch = mockTokenOrChartFetch(() => {
+    chartCalls += 1;
+    return jsonResponse({ return_code: 0, rows: chartRows(1) });
+  });
+
+  await withMockKiwoom(mockFetch, async () => {
+    const result = await MarketDataService.getCandlesMeta('005930', '1m');
+    assert.equal(result.provider, 'none');
+    assert.equal(result.candles.length, 0);
+    assert.equal(result.fallbackFrom?.provider, 'kiwoom');
+    assert.match(String(result.fallbackFrom?.reason), /INSUFFICIENT_CANDLES/);
+  });
+
+  assert.equal(chartCalls, 1);
+});
+
+test('KR 1D insufficient Kiwoom evidence never re-enters deep Kiwoom history', async () => {
+  let chartCalls = 0;
+  const mockFetch = mockTokenOrChartFetch(() => {
+    chartCalls += 1;
+    return jsonResponse({ return_code: 0, rows: chartRows(1) });
+  });
+
+  await withMockKiwoom(mockFetch, async () => {
+    const result = await MarketDataService.getCandlesMeta('005930', '1D');
+    assert.equal(result.provider, 'none');
+    assert.equal(result.candles.length, 0);
+    assert.equal(result.fallbackFrom?.provider, 'kiwoom');
+    assert.match(String(result.fallbackFrom?.reason), /INSUFFICIENT_CANDLES/);
+  });
+
+  assert.equal(chartCalls, 1);
+});
+
+test('KR interactive public Yahoo hedge can satisfy the chart without a second Kiwoom pass', async () => {
+  let chartCalls = 0;
+  let yahooCalls = 0;
+  const mockFetch = (async (input: string | URL | Request) => {
+    const url = typeof input === 'string'
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+
+    if (url.endsWith('/oauth2/token')) {
+      return jsonResponse({ return_code: 0, return_msg: 'OK', token: 'test-token' });
+    }
+    if (url.endsWith('/api/dostk/chart')) {
+      chartCalls += 1;
+      return jsonResponse({ return_code: 0, rows: chartRows(1) });
+    }
+    if (/query[12]\.finance\.yahoo\.com\/v8\/finance\/chart\/005930\.KS/.test(url)) {
+      yahooCalls += 1;
+      return jsonResponse(yahooChartPayload());
+    }
+    throw new Error(`unexpected chart fallback URL: ${url}`);
+  }) as typeof fetch;
+
+  // Kiwoom mock requests are paced by a module-global 260ms minimum interval.
+  // A preceding test can legitimately leave that throttle active, allowing the
+  // 100ms Yahoo hedge to win before the first Kiwoom fetch starts. Wait past the
+  // pacing window so this regression deterministically exercises exactly one
+  // insufficient Kiwoom pass followed by the public Yahoo hedge, while still
+  // proving that no second/deep Kiwoom pass occurs.
+  await new Promise((resolve) => setTimeout(resolve, 320));
+
+  await withMockKiwoom(mockFetch, async () => {
+    const result = await MarketDataService.getCandlesMeta('005930', '1m');
+    assert.equal(result.provider, 'yahoo');
+    assert.ok(result.candles.length >= 2);
+    assert.equal(result.fallbackFrom?.provider, 'kiwoom');
+  });
+
+  assert.equal(chartCalls, 1);
+  assert.ok(yahooCalls >= 1);
+});
+
+test('KR 1D public Yahoo hedge can satisfy the chart without a second Kiwoom pass', async () => {
+  let chartCalls = 0;
+  let yahooCalls = 0;
+  const mockFetch = (async (input: string | URL | Request) => {
+    const url = typeof input === 'string'
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+
+    if (url.endsWith('/oauth2/token')) {
+      return jsonResponse({ return_code: 0, return_msg: 'OK', token: 'test-token' });
+    }
+    if (url.endsWith('/api/dostk/chart')) {
+      chartCalls += 1;
+      return jsonResponse({ return_code: 0, rows: chartRows(1) });
+    }
+    if (/query[12]\.finance\.yahoo\.com\/v8\/finance\/chart\/005930\.KS/.test(url)) {
+      yahooCalls += 1;
+      return jsonResponse(yahooChartPayload(40));
+    }
+    throw new Error(`unexpected chart fallback URL: ${url}`);
+  }) as typeof fetch;
+
+  await new Promise((resolve) => setTimeout(resolve, 320));
+
+  await withMockKiwoom(mockFetch, async () => {
+    const result = await MarketDataService.getCandlesMeta('005930', '1D');
+    assert.equal(result.provider, 'yahoo');
+    assert.ok(result.candles.length >= 30);
+    assert.equal(result.fallbackFrom?.provider, 'kiwoom');
+  });
+
+  assert.equal(chartCalls, 1);
+  assert.ok(yahooCalls >= 1);
+});
+
+test('KR 1D whole provider hedge terminates at the existing interactive deadline', async () => {
+  let chartCalls = 0;
+  let yahooCalls = 0;
+  const neverSettles = new Promise<Response>(() => {});
+  const mockFetch = (async (input: string | URL | Request) => {
+    const url = typeof input === 'string'
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+
+    if (url.endsWith('/oauth2/token')) {
+      return jsonResponse({ return_code: 0, return_msg: 'OK', token: 'test-token' });
+    }
+    if (url.endsWith('/api/dostk/chart')) {
+      chartCalls += 1;
+      return jsonResponse({ return_code: 0, rows: chartRows(1) });
+    }
+    if (/query[12]\.finance\.yahoo\.com\/v8\/finance\/chart\/005930\.KS/.test(url)) {
+      yahooCalls += 1;
+      return neverSettles;
+    }
+    throw new Error(`unexpected chart hard-deadline URL: ${url}`);
+  }) as typeof fetch;
+
+  await new Promise((resolve) => setTimeout(resolve, 320));
+
+  await withMockKiwoom(mockFetch, async () => {
+    const startedAt = Date.now();
+    const result = await MarketDataService.getCandlesMeta('005930', '1D');
+    const elapsedMs = Date.now() - startedAt;
+
+    assert.equal(result.provider, 'none');
+    assert.equal(result.candles.length, 0);
+    assert.equal(result.fallbackFrom?.provider, 'kiwoom');
+    assert.equal(result.fallbackFrom?.reason, 'DEADLINE_REACHED');
+    assert.ok(elapsedMs < APP_KR_INTRADAY_DEADLINE_MS + 750);
+  });
+
+  assert.equal(chartCalls, 1);
+  assert.ok(yahooCalls >= 1);
 });
 
 test('interactive fallback classification keeps deadline/abort/upstream timeout distinct', async () => {
@@ -270,4 +460,10 @@ test('interactive fallback classification keeps deadline/abort/upstream timeout 
   assert.match(source, /시간이 초과되었습니다.*UPSTREAM_TIMEOUT/s);
   assert.match(source, /fallbackFrom:[\s\S]*provider: 'kiwoom'/);
   assert.doesNotMatch(source, /fallbackFrom:[\s\S]*reason:\s*'0'/);
+  assert.match(
+    source,
+    /if \(isBoundedKrInteractiveRequest\(ticker, timeframe\)\) \{\s*return getBoundedKrInteractiveCandlesMeta\(ticker, timeframe\);\s*\}/,
+  );
+  assert.match(source, /KR_INTERACTIVE_TIMEFRAMES[\s\S]*'1D'/);
+  assert.match(source, /Promise\.race\(\[\s*Promise\.any\(\[kiwoomAttempt, yahooAttempt\]\),\s*terminalDeadline,\s*\]\)/);
 });

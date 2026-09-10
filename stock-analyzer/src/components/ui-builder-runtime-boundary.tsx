@@ -5,6 +5,7 @@ import {
   type UiBuilderPageId,
 } from '@/lib/ui-builder-full-layout';
 import { safeRuntimeLayoutOrFallback } from '@/lib/ui-builder-runtime-safety';
+import { classifyAdaptiveViewport, uiBuilderDeviceForWidth } from '@/lib/adaptive-layout';
 
 type Props = {
   pageId: UiBuilderPageId;
@@ -12,23 +13,43 @@ type Props = {
   className?: string;
 };
 
-function useDeviceClass(): UiBuilderDeviceClass {
-  const query = '(min-width: 1024px)';
-  const [device, setDevice] = useState<UiBuilderDeviceClass>(() =>
-    typeof window !== 'undefined' && window.matchMedia(query).matches ? 'desktop' : 'mobile',
-  );
+function currentViewportWidth(): number {
+  return typeof window === 'undefined' ? 1200 : window.innerWidth;
+}
+
+function useDeviceClass(): { deviceClass: UiBuilderDeviceClass; viewportClass: ReturnType<typeof classifyAdaptiveViewport> } {
+  const read = () => {
+    const width = currentViewportWidth();
+    return {
+      deviceClass: uiBuilderDeviceForWidth(width) as UiBuilderDeviceClass,
+      viewportClass: classifyAdaptiveViewport(width),
+    };
+  };
+  const [state, setState] = useState(read);
+
   useEffect(() => {
-    const media = window.matchMedia(query);
-    const update = () => setDevice(media.matches ? 'desktop' : 'mobile');
+    const update = () => {
+      const next = read();
+      setState((previous) => (
+        previous.deviceClass === next.deviceClass && previous.viewportClass === next.viewportClass
+          ? previous
+          : next
+      ));
+    };
     update();
-    media.addEventListener('change', update);
-    return () => media.removeEventListener('change', update);
+    window.addEventListener('resize', update, { passive: true });
+    window.addEventListener('orientationchange', update, { passive: true });
+    return () => {
+      window.removeEventListener('resize', update);
+      window.removeEventListener('orientationchange', update);
+    };
   }, []);
-  return device;
+
+  return state;
 }
 
 export function UiBuilderRuntimeBoundary({ pageId, children, className }: Props) {
-  const deviceClass = useDeviceClass();
+  const { deviceClass, viewportClass } = useDeviceClass();
   const [revision, setRevision] = useState(0);
   useEffect(() => {
     const update = () => setRevision((value) => value + 1);
@@ -57,6 +78,7 @@ export function UiBuilderRuntimeBoundary({ pageId, children, className }: Props)
       data-testid={`ui-builder-runtime-${pageId.toLowerCase().replaceAll('_', '-')}`}
       data-builder-page-id={pageId}
       data-builder-device={deviceClass}
+      data-adaptive-viewport={viewportClass}
       data-builder-layout-source={loaded.source}
       data-builder-layout-id={loaded.layout.layoutId}
       data-builder-layout-version={loaded.layout.version}

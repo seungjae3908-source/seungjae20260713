@@ -264,7 +264,7 @@ export function scannerStrategyForTimeframe(timeframe: string): ScannerStrategyM
   return 'swing';
 }
 export function scannerStrategyTimeframeAllowed(mode: ScannerStrategyMode, timeframe: string): boolean {
-  if (mode === 'scalping') return ['1m', '3m', '5m'].includes(timeframe);
+  if (mode === 'scalping') return ['1m', '3m', '5m', '15m'].includes(timeframe);
   if (mode === 'position') return ['4H', '1D'].includes(timeframe);
-  return ['4H', '1D'].includes(timeframe);
+  return ['60m', '4H'].includes(timeframe);
 }

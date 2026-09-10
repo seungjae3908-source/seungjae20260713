@@ -19,12 +19,15 @@ fails closed as DATA_BLOCKED rather than being interpreted as safe.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
 SCHEMA_VERSION = 1
 DEFAULT_REVERSE_SPLIT_LOOKBACK_DAYS = 365
+SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 def parse_date(value) -> date:
@@ -37,6 +40,37 @@ def load_json(path: str | None):
     if not path:
         return None
     return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def stable_digest(value) -> str:
+    raw = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
+def manifest_integrity_blockers(manifest) -> list[str]:
+    if not isinstance(manifest, dict):
+        return ["POINT_IN_TIME_RISK_MANIFEST_MISSING"]
+    blockers = []
+    if manifest.get("schemaVersion") != SCHEMA_VERSION:
+        blockers.append("MANIFEST_SCHEMA_VERSION_INVALID")
+    if not isinstance(manifest.get("entries"), list):
+        blockers.append("MANIFEST_ENTRIES_INVALID")
+    digest = str(manifest.get("manifestDigest") or "").lower()
+    if not digest:
+        blockers.append("MANIFEST_DIGEST_MISSING")
+    elif not SHA256_RE.fullmatch(digest):
+        blockers.append("MANIFEST_DIGEST_INVALID")
+    elif digest != stable_digest({k: v for k, v in manifest.items() if k != "manifestDigest"}):
+        blockers.append("MANIFEST_DIGEST_MISMATCH")
+    if manifest.get("canonicalEvidenceEligible") is not False or manifest.get("canonicalSampleDelta") != 0:
+        blockers.append("MANIFEST_CANONICAL_CREDIT_FORBIDDEN")
+    if manifest.get("profitabilityPromotionAllowed") is not False:
+        blockers.append("MANIFEST_PROFITABILITY_PROMOTION_FORBIDDEN")
+    if manifest.get("executionAuthority") != "NONE":
+        blockers.append("MANIFEST_EXECUTION_AUTHORITY_FORBIDDEN")
+    if manifest.get("liveTradingAllowed") is not False or manifest.get("privateApiAllowed") is not False:
+        blockers.append("MANIFEST_EXECUTION_AUTHORITY_FORBIDDEN")
+    return sorted(set(blockers))
 
 
 def evidence_rows(manifest) -> list[dict]:
@@ -65,7 +99,13 @@ def select_point_in_time_row(rows: list[dict], symbol: str, entry_date: date) ->
     return candidates[-1][1]
 
 
-def checked_as_of(component: dict | None, entry_date: date, name: str, blockers: list[str]) -> date | None:
+def checked_as_of(
+    component: dict | None,
+    entry_date: date,
+    name: str,
+    blockers: list[str],
+    row_as_of: date | None = None,
+) -> date | None:
     if not isinstance(component, dict):
         blockers.append(f"{name}_EVIDENCE_MISSING")
         return None
@@ -77,13 +117,53 @@ def checked_as_of(component: dict | None, entry_date: date, name: str, blockers:
     if as_of > entry_date:
         blockers.append(f"{name}_LOOKAHEAD_BLOCKED")
         return None
+    if row_as_of is not None and as_of > row_as_of:
+        blockers.append(f"{name}_AFTER_MANIFEST_ASOF_BLOCKED")
+        return None
     return as_of
 
 
-def classify_entry(entry: dict, manifest_rows: list[dict], min_float_shares: float | None, reverse_split_lookback_days: int) -> dict:
+def check_component_provenance(component: dict | None, name: str, blockers: list[str]) -> None:
+    if not isinstance(component, dict):
+        return
+    if not str(component.get("source") or "").strip():
+        blockers.append(f"{name}_SOURCE_MISSING")
+    digest = str(component.get("provenanceDigest") or "").lower()
+    if not digest:
+        blockers.append(f"{name}_PROVENANCE_DIGEST_MISSING")
+    elif not SHA256_RE.fullmatch(digest):
+        blockers.append(f"{name}_PROVENANCE_DIGEST_INVALID")
+
+
+def blocked_entry(entry, blocker: str) -> dict:
+    row = entry if isinstance(entry, dict) else {}
+    return {
+        "symbol": str(row.get("symbol") or "").upper(),
+        "date": str(row.get("date") or ""),
+        "session": row.get("session"),
+        "decision": "DATA_BLOCKED",
+        "blockers": [blocker],
+        "rejectReasons": [],
+    }
+
+
+def classify_entry(
+    entry,
+    manifest_rows: list[dict],
+    min_float_shares: float | None,
+    reverse_split_lookback_days: int,
+    manifest_blockers: list[str] | None = None,
+) -> dict:
+    if not isinstance(entry, dict):
+        return blocked_entry(entry, "INTRADAY_ENTRY_INVALID")
     symbol = str(entry.get("symbol") or "").upper()
-    entry_date = parse_date(entry.get("date"))
-    blockers: list[str] = []
+    if not symbol:
+        return blocked_entry(entry, "INTRADAY_ENTRY_SYMBOL_MISSING")
+    try:
+        entry_date = parse_date(entry.get("date"))
+    except (TypeError, ValueError):
+        return blocked_entry(entry, "INTRADAY_ENTRY_DATE_INVALID")
+    blockers: list[str] = list(manifest_blockers or [])
     rejects: list[str] = []
 
     row = select_point_in_time_row(manifest_rows, symbol, entry_date)
@@ -93,12 +173,30 @@ def classify_entry(entry: dict, manifest_rows: list[dict], min_float_shares: flo
             "date": entry_date.isoformat(),
             "session": entry.get("session"),
             "decision": "DATA_BLOCKED",
-            "blockers": ["POINT_IN_TIME_RISK_MANIFEST_MISSING"],
+            "blockers": sorted(set(blockers + ["POINT_IN_TIME_RISK_MANIFEST_MISSING"])),
             "rejectReasons": [],
         }
 
+    try:
+        row_as_of = parse_date(row.get("asOf"))
+    except (TypeError, ValueError):
+        row_as_of = None
+        blockers.append("MANIFEST_ROW_ASOF_INVALID")
+    if row.get("status") != "MANIFEST_READY" or row.get("blockers") not in ([], None):
+        blockers.append("MANIFEST_ROW_NOT_READY")
+    row_digest = str(row.get("rowDigest") or "").lower()
+    if not row_digest:
+        blockers.append("MANIFEST_ROW_DIGEST_MISSING")
+    elif not SHA256_RE.fullmatch(row_digest):
+        blockers.append("MANIFEST_ROW_DIGEST_INVALID")
+    elif row_digest != stable_digest({k: v for k, v in row.items() if k != "rowDigest"}):
+        blockers.append("MANIFEST_ROW_DIGEST_MISMATCH")
+
     float_ev = row.get("floatEvidence")
-    if checked_as_of(float_ev, entry_date, "FLOAT", blockers) is not None:
+    check_component_provenance(float_ev, "FLOAT", blockers)
+    if checked_as_of(float_ev, entry_date, "FLOAT", blockers, row_as_of) is not None:
+        if str(float_ev.get("measure") or "").upper() != "PUBLIC_FLOAT_SHARES" or str(float_ev.get("unit") or "").lower() not in {"share", "shares"}:
+            blockers.append("FLOAT_MEASURE_NOT_SHARE_COUNT")
         try:
             shares = float(float_ev.get("shares"))
             if not (shares > 0):
@@ -112,7 +210,8 @@ def classify_entry(entry: dict, manifest_rows: list[dict], min_float_shares: flo
         shares = None
 
     dilution_ev = row.get("dilutionEvidence")
-    if checked_as_of(dilution_ev, entry_date, "DILUTION", blockers) is not None:
+    check_component_provenance(dilution_ev, "DILUTION", blockers)
+    if checked_as_of(dilution_ev, entry_date, "DILUTION", blockers, row_as_of) is not None:
         if dilution_ev.get("pointInTime") is not True:
             blockers.append("DILUTION_POINT_IN_TIME_UNPROVEN")
         status = str(dilution_ev.get("status") or "")
@@ -126,7 +225,8 @@ def classify_entry(entry: dict, manifest_rows: list[dict], min_float_shares: flo
             blockers.append("DILUTION_DOCUMENT_VERDICT_MISSING")
 
     corp_ev = row.get("corporateActionEvidence")
-    if checked_as_of(corp_ev, entry_date, "CORPORATE_ACTION", blockers) is not None:
+    check_component_provenance(corp_ev, "CORPORATE_ACTION", blockers)
+    if checked_as_of(corp_ev, entry_date, "CORPORATE_ACTION", blockers, row_as_of) is not None:
         if corp_ev.get("coverageComplete") is not True:
             blockers.append("CORPORATE_ACTION_COVERAGE_INCOMPLETE")
         events = corp_ev.get("events")
@@ -150,11 +250,16 @@ def classify_entry(entry: dict, manifest_rows: list[dict], min_float_shares: flo
                 rejects.append("RECENT_REVERSE_SPLIT")
 
     catalyst_ev = row.get("catalystEvidence")
-    if checked_as_of(catalyst_ev, entry_date, "CATALYST", blockers) is not None:
+    check_component_provenance(catalyst_ev, "CATALYST", blockers)
+    if checked_as_of(catalyst_ev, entry_date, "CATALYST", blockers, row_as_of) is not None:
         if catalyst_ev.get("archived") is not True:
             blockers.append("CATALYST_ARCHIVE_UNPROVEN")
         if catalyst_ev.get("verified") not in (True, False):
             blockers.append("CATALYST_VERDICT_MISSING")
+        elif catalyst_ev.get("verified") is False:
+            rejects.append("CATALYST_NOT_VERIFIED")
+        if not str(catalyst_ev.get("type") or "").strip():
+            blockers.append("CATALYST_TYPE_MISSING")
 
     blockers = sorted(set(blockers))
     rejects = sorted(set(rejects))
@@ -178,20 +283,26 @@ def classify_entry(entry: dict, manifest_rows: list[dict], min_float_shares: flo
 
 
 def build_gate(ladder: dict, manifest, min_float_shares: float | None, reverse_split_lookback_days: int) -> dict:
-    entries = ladder.get("entries") if isinstance(ladder, dict) else None
-    entries = entries if isinstance(entries, list) else []
+    raw_entries = ladder.get("entries") if isinstance(ladder, dict) else None
+    entries_valid = isinstance(raw_entries, list)
+    entries = raw_entries if entries_valid else []
     rows = evidence_rows(manifest)
+    integrity_blockers = manifest_integrity_blockers(manifest)
     decisions = [
-        classify_entry(entry, rows, min_float_shares, reverse_split_lookback_days)
+        classify_entry(entry, rows, min_float_shares, reverse_split_lookback_days, integrity_blockers)
         for entry in entries
-        if isinstance(entry, dict) and entry.get("symbol") and entry.get("date")
     ]
     counts = {
         "eligible": sum(x["decision"] == "ELIGIBLE_FOR_FILTERED_RESEARCH" for x in decisions),
         "rejected": sum(x["decision"] == "REJECT_RISK" for x in decisions),
         "blocked": sum(x["decision"] == "DATA_BLOCKED" for x in decisions),
     }
-    if not decisions:
+    upstream_status = str(ladder.get("status") or "") if isinstance(ladder, dict) else ""
+    if not entries_valid:
+        status = "DATA_BLOCKED_UPSTREAM_DIAGNOSTIC"
+    elif not decisions and upstream_status.startswith("DATA_UNAVAILABLE"):
+        status = "DATA_BLOCKED_UPSTREAM_DIAGNOSTIC"
+    elif not decisions:
         status = "NO_INTRADAY_ENTRIES"
     elif counts["blocked"]:
         status = "DATA_BLOCKED_PIT_RISK_EVIDENCE"
@@ -209,7 +320,9 @@ def build_gate(ladder: dict, manifest, min_float_shares: float | None, reverse_s
         "pointInTimeRiskGate": True,
         "canonicalEvidenceEligible": False,
         "canonicalSampleDelta": 0,
+        "profitabilityProven": False,
         "profitabilityPromotionAllowed": False,
+        "executionAuthority": "NONE",
         "liveTradingAllowed": False,
         "privateApiAllowed": False,
         "limitations": [
@@ -257,6 +370,33 @@ def write_outputs(result: dict, output_json: str | None, output_md: str | None) 
 
 
 def self_test() -> None:
+    def source_digest(seed: str) -> str:
+        return "sha256:" + hashlib.sha256(seed.encode("utf-8")).hexdigest()
+
+    def seal_manifest(value: dict) -> dict:
+        for row in value["entries"]:
+            row["status"] = "MANIFEST_READY"
+            row["blockers"] = []
+            for name in ("floatEvidence", "dilutionEvidence", "corporateActionEvidence", "catalystEvidence"):
+                component = row[name]
+                component.setdefault("source", f"fixture-{name}")
+                component.setdefault("provenanceDigest", source_digest(f"{row['symbol']}-{name}"))
+            row["floatEvidence"].update({"measure": "PUBLIC_FLOAT_SHARES", "unit": "shares"})
+            row["catalystEvidence"].setdefault("type", "EARNINGS")
+            row["rowDigest"] = stable_digest({k: v for k, v in row.items() if k != "rowDigest"})
+        value.update({
+            "schemaVersion": SCHEMA_VERSION,
+            "canonicalEvidenceEligible": False,
+            "canonicalSampleDelta": 0,
+            "profitabilityProven": False,
+            "profitabilityPromotionAllowed": False,
+            "executionAuthority": "NONE",
+            "liveTradingAllowed": False,
+            "privateApiAllowed": False,
+        })
+        value["manifestDigest"] = stable_digest({k: v for k, v in value.items() if k != "manifestDigest"})
+        return value
+
     ladder = {
         "entries": [
             {"symbol": "EHGO", "date": "2026-08-20", "session": "REG"},
@@ -299,6 +439,7 @@ def self_test() -> None:
             },
         ]
     }
+    manifest = seal_manifest(manifest)
     out = build_gate(ladder, manifest, 5_000_000, 365)
     assert out["status"] == "PIT_RISK_GATE_EVALUATED"
     assert out["counts"] == {"eligible": 1, "rejected": 1, "blocked": 0}
@@ -323,9 +464,33 @@ def self_test() -> None:
             "catalystEvidence": {"asOf": "2026-08-19", "archived": True, "verified": True},
         }]
     }
+    future_manifest = seal_manifest(future_manifest)
     future = build_gate({"entries": [ladder["entries"][1]]}, future_manifest, None, 365)
     assert future["status"] == "DATA_BLOCKED_PIT_RISK_EVIDENCE"
     assert "FLOAT_LOOKAHEAD_BLOCKED" in future["decisions"][0]["blockers"]
+
+    no_catalyst = json.loads(json.dumps(manifest))
+    no_catalyst["entries"][1]["catalystEvidence"]["verified"] = False
+    no_catalyst = seal_manifest(no_catalyst)
+    rejected = build_gate({"entries": [ladder["entries"][1]]}, no_catalyst, None, 365)
+    assert rejected["decisions"][0]["decision"] == "REJECT_RISK"
+    assert "CATALYST_NOT_VERIFIED" in rejected["decisions"][0]["rejectReasons"]
+
+    malformed = build_gate({"entries": [{"symbol": "SAFE"}]}, manifest, None, 365)
+    assert malformed["counts"]["blocked"] == 1
+    assert malformed["decisions"][0]["blockers"] == ["INTRADAY_ENTRY_DATE_INVALID"]
+
+    upstream_missing = build_gate({"status": "DATA_UNAVAILABLE_RECENT_DIAGNOSTIC", "entries": []}, None, None, 365)
+    assert upstream_missing["status"] == "DATA_BLOCKED_UPSTREAM_DIAGNOSTIC"
+    malformed_upstream = build_gate({"status": "RECENT_EXTENDED_HOURS_DIAGNOSTIC_ONLY", "entries": {}}, manifest, None, 365)
+    assert malformed_upstream["status"] == "DATA_BLOCKED_UPSTREAM_DIAGNOSTIC"
+
+    tampered = json.loads(json.dumps(manifest))
+    tampered["entries"][1]["floatEvidence"]["shares"] = 99_000_000
+    tampered_out = build_gate({"entries": [ladder["entries"][1]]}, tampered, None, 365)
+    assert tampered_out["decisions"][0]["decision"] == "DATA_BLOCKED"
+    assert "MANIFEST_DIGEST_MISMATCH" in tampered_out["decisions"][0]["blockers"]
+    assert "MANIFEST_ROW_DIGEST_MISMATCH" in tampered_out["decisions"][0]["blockers"]
     print("PIT_RISK_GATE_SELF_TEST_OK")
 
 

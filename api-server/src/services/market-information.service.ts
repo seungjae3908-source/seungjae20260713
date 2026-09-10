@@ -1,4 +1,8 @@
-import { runBoundedWorkPool } from '../lib/bounded-work-pool';
+import {
+  runBoundedWorkPool,
+  summarizeBoundedWorkAvailability,
+  type BoundedWorkAvailability,
+} from '../lib/bounded-work-pool';
 import { providerStatus } from '../lib/config';
 import type { QuoteRow } from './market-data.service';
 import { FilingService } from './filing.service';
@@ -66,6 +70,18 @@ const PRODUCT_TYPE = 'USDT-FUTURES';
 
 type CacheLoad<T> = { value: T; stale: boolean };
 type UpbitMarket = { market: string; symbol: string; name: string; warning: boolean };
+type ProviderRows<T> = { rows: T[]; availability: BoundedWorkAvailability };
+
+function providerRowsMessage(kind: '뉴스' | '공시', availability: BoundedWorkAvailability): string | null {
+  if (!availability.partial) return null;
+  if (availability.failureCode === 'CAPACITY_EXHAUSTED') {
+    return `${kind} 제공기관 처리 용량이 소진되어 확인된 일부 결과만 표시합니다.`;
+  }
+  if (availability.failureCode === 'CIRCUIT_OPEN') {
+    return `${kind} 제공기관 보호 회로가 열려 확인된 일부 결과만 표시합니다.`;
+  }
+  return `${kind} 제공기관 일부 요청이 완료되지 않아 확인된 결과만 표시합니다.`;
+}
 
 function status(stale: boolean, partial: boolean, count: number): MarketInformationSectionStatus {
   if (stale) return 'stale';
@@ -161,7 +177,14 @@ async function stockRankings(
     const pool = await runBoundedWorkPool(
       marketKeys,
       async (marketKey) => MarketListingService.getMarketListings(marketKey),
-      { concurrency: 2, deadlineMs: 20_000, itemTimeoutMs: 15_000, signal },
+      {
+        concurrency: 2,
+        deadlineMs: 20_000,
+        itemTimeoutMs: 15_000,
+        signal,
+        // getMarketListings owns the provider-level admission for its inner work.
+        admission: false,
+      },
     );
     const rows: MarketInformationAssetRow[] = [];
     for (const outcome of pool.outcomes) {
@@ -222,12 +245,24 @@ async function stockNews(
   room: 'stocks-kr' | 'stocks-us',
   candidates: MarketInformationAssetRow[],
   signal?: AbortSignal,
-): Promise<CacheLoad<MarketInformationNewsRow[]>> {
+): Promise<CacheLoad<ProviderRows<MarketInformationNewsRow>>> {
   return loadMarketInformationCache(`information:news:${room}`, 5 * 60_000, 60 * 60_000, async () => {
     const pool = await runBoundedWorkPool(
       candidates.slice(0, 6),
       async (target) => ({ target, data: await NewsService.getNews(target.symbol) }),
-      { concurrency: 3, deadlineMs: 20_000, itemTimeoutMs: 10_000, signal },
+      {
+        concurrency: 3,
+        deadlineMs: 20_000,
+        itemTimeoutMs: 10_000,
+        signal,
+        admission: {
+          identity: {
+            provider: 'market-news',
+            domain: room,
+            operationClass: 'headline-load',
+          },
+        },
+      },
     );
     const rows: MarketInformationNewsRow[] = [];
     for (const outcome of pool.outcomes) {
@@ -251,7 +286,10 @@ async function stockNews(
         });
       }
     }
-    return dedupeMarketNews(rows).slice(0, 40);
+    return {
+      rows: dedupeMarketNews(rows).slice(0, 40),
+      availability: summarizeBoundedWorkAvailability(pool, candidates.slice(0, 6).length),
+    };
   });
 }
 
@@ -259,12 +297,24 @@ async function stockDisclosures(
   room: 'stocks-kr' | 'stocks-us',
   candidates: MarketInformationAssetRow[],
   signal?: AbortSignal,
-): Promise<CacheLoad<MarketInformationNewsRow[]>> {
+): Promise<CacheLoad<ProviderRows<MarketInformationNewsRow>>> {
   return loadMarketInformationCache(`information:disclosures:${room}`, 10 * 60_000, 2 * 60 * 60_000, async () => {
     const pool = await runBoundedWorkPool(
       candidates.slice(0, 6),
       async (target) => ({ target, data: await FilingService.getFilings(target.symbol) }),
-      { concurrency: 3, deadlineMs: 20_000, itemTimeoutMs: 10_000, signal },
+      {
+        concurrency: 3,
+        deadlineMs: 20_000,
+        itemTimeoutMs: 10_000,
+        signal,
+        admission: {
+          identity: {
+            provider: 'market-filings',
+            domain: room,
+            operationClass: 'disclosure-load',
+          },
+        },
+      },
     );
     const rows: MarketInformationNewsRow[] = [];
     for (const outcome of pool.outcomes) {
@@ -302,7 +352,10 @@ async function stockDisclosures(
         });
       }
     }
-    return dedupeMarketNews(rows).slice(0, 40);
+    return {
+      rows: dedupeMarketNews(rows).slice(0, 40),
+      availability: summarizeBoundedWorkAvailability(pool, candidates.slice(0, 6).length),
+    };
   });
 }
 
@@ -362,27 +415,47 @@ async function buildStockRoom(
     }))
     : errorSection(room, [], sectorResult.reason);
 
+  const newsRows = newsResult.status === 'fulfilled' ? newsResult.value.value.rows : [];
   const news = newsResult.status === 'fulfilled'
-    ? section(status(newsResult.value.stale, false, newsResult.value.value.length), newsResult.value.value, makeMeta({
+    ? section(status(
+      newsResult.value.stale,
+      newsResult.value.value.availability.partial,
+      newsRows.length,
+    ), newsRows, makeMeta({
       room,
       provider: room === 'stocks-us' ? 'Finnhub/Google News RSS' : 'Google News RSS',
       source: '공개 기업 뉴스',
-      providerUpdatedAt: latestIso(newsResult.value.value.map((row) => row.publishedAt)),
+      providerUpdatedAt: latestIso(newsRows.map((row) => row.publishedAt)),
+      partial: newsResult.value.value.availability.partial,
+      errorCode: newsResult.value.value.availability.failureCode,
+      retryable: newsResult.value.value.availability.partial,
       staleAfterMs: 24 * 60 * 60_000,
       forceStale: newsResult.value.stale,
-    }), newsResult.value.value.length ? null : '표시 가능한 최신 기업 뉴스가 없습니다.')
+    }), providerRowsMessage('뉴스', newsResult.value.value.availability)
+      ?? (newsRows.length ? null : '표시 가능한 최신 기업 뉴스가 없습니다.'))
     : errorSection(room, [], newsResult.reason);
 
+  const disclosureRows = disclosureResult.status === 'fulfilled'
+    ? disclosureResult.value.value.rows
+    : [];
   const disclosures = disclosureResult.status === 'fulfilled'
-    ? section(status(disclosureResult.value.stale, false, disclosureResult.value.value.length), disclosureResult.value.value, makeMeta({
+    ? section(status(
+      disclosureResult.value.stale,
+      disclosureResult.value.value.availability.partial,
+      disclosureRows.length,
+    ), disclosureRows, makeMeta({
       room,
       provider: room === 'stocks-us' ? 'SEC EDGAR' : 'OpenDART',
       source: room === 'stocks-us' ? '미국 증권거래위원회 공시' : '금융감독원 전자공시',
-      providerUpdatedAt: latestIso(disclosureResult.value.value.map((row) => row.publishedAt)),
+      providerUpdatedAt: latestIso(disclosureRows.map((row) => row.publishedAt)),
+      partial: disclosureResult.value.value.availability.partial,
+      errorCode: disclosureResult.value.value.availability.failureCode,
+      retryable: disclosureResult.value.value.availability.partial,
       unavailableFields: ['companyIrMaterials'],
       staleAfterMs: 24 * 60 * 60_000,
       forceStale: disclosureResult.value.stale,
-    }), disclosureResult.value.value.length ? null : '표시 가능한 최신 공시가 없습니다.')
+    }), providerRowsMessage('공시', disclosureResult.value.value.availability)
+      ?? (disclosureRows.length ? null : '표시 가능한 최신 공시가 없습니다.'))
     : errorSection(room, [], disclosureResult.reason);
 
   return makeResponse(room, {
@@ -426,7 +499,19 @@ async function upbitTickers(markets: UpbitMarket[], signal?: AbortSignal) {
         `${UPBIT_BASE}/v1/ticker?markets=${encodeURIComponent(chunk.join(','))}`,
         { provider: 'Upbit', signal: itemSignal },
       ),
-      { concurrency: 2, deadlineMs: 16_000, itemTimeoutMs: 8_000, signal },
+      {
+        concurrency: 2,
+        deadlineMs: 16_000,
+        itemTimeoutMs: 8_000,
+        signal,
+        admission: {
+          identity: {
+            provider: 'upbit',
+            domain: 'api.upbit.com',
+            operationClass: 'ticker-chunk',
+          },
+        },
+      },
     );
     const names = new Map(markets.map((item) => [item.market, { name: item.name, warning: item.warning }]));
     const rows = pool.outcomes.flatMap((outcome) => (
