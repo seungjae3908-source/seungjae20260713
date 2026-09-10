@@ -13,6 +13,11 @@ import { startSignalIntelligenceTelegramSubscriber } from './services/signal-int
 import { startSignalIntelligenceAiWatch } from './services/signal-intelligence-ai-watch.service';
 import { isStagingReadonlyCredentialRuntime, resolveApiBindHost } from './lib/api-bind-host';
 import { readRuntimeDeploymentIdentity } from './lib/deployment-identity';
+import {
+  FRONTEND_REVALIDATE_CACHE_CONTROL,
+  setFrontendStaticCacheHeaders,
+} from './lib/frontend-static-cache';
+import { runPublicForwardPartialFillCalibrationProductionReadback } from './services/public-forward-partial-fill-calibration-production-caller.service';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -148,6 +153,11 @@ if (frontendDist) {
   app.use(
     express.static(
       frontendDist,
+      {
+        setHeaders(response, filePath) {
+          setFrontendStaticCacheHeaders(response, frontendDist, filePath);
+        },
+      },
     ),
   );
 }
@@ -189,6 +199,7 @@ app.use((req, res) => {
   }
 
   if (frontendDist) {
+    res.setHeader('Cache-Control', FRONTEND_REVALIDATE_CACHE_CONTROL);
     res.sendFile(
       path.join(
         frontendDist,
@@ -223,6 +234,22 @@ app.listen(
     console.log(
       '[api-server] Kiwoom routes enabled at /api/kiwoom',
     );
+
+    void runPublicForwardPartialFillCalibrationProductionReadback().then((result) => {
+      const report = {
+        status: result.status,
+        productionCallerConnected: result.productionCallerConnected,
+        productionPolicyAuthorityConnected: result.productionPolicyAuthorityConnected,
+        calibrationSampleSufficient: result.calibrationSampleSufficient,
+        blocker: result.status === 'BLOCKED' ? result.blocker : null,
+        readerError: result.status === 'BLOCKED' ? result.readerError : null,
+      };
+      if (result.status === 'BLOCKED') {
+        console.warn('[api-server] partial-fill production readback blocked', report);
+      } else {
+        console.log('[api-server] partial-fill production readback complete', report);
+      }
+    });
 
     if (readonlyCredentialRuntime) {
       console.log('[api-server] staging read-only credential runtime: background workers disabled');

@@ -160,6 +160,16 @@ function validateRisk(bundle, nowMs, maxEvidenceAgeMs, blockers) {
   if (!positive(risk.evaluatedAtMs)) add(blockers, "RISK_EVIDENCE_TIMESTAMP_INVALID");
   else if (risk.evaluatedAtMs > nowMs) add(blockers, "RISK_EVIDENCE_FROM_FUTURE");
   else if (nowMs - risk.evaluatedAtMs > maxEvidenceAgeMs) add(blockers, "RISK_EVIDENCE_STALE");
+
+  if (bundle?.paperCandidate?.signal?.market === "CRYPTO_FUTURES") {
+    const policy = risk.policyIdentity;
+    if (!policy || !nonEmpty(policy.policyId) || !nonEmpty(policy.policyVersion)
+      || !nonEmpty(policy.source) || !immutableSha(policy.researchCodeSha)) {
+      add(blockers, "RISK_POLICY_IDENTITY_REQUIRED");
+    } else if (policy.researchCodeSha !== bundle.paperCandidate.signal.strategyIdentity?.researchCodeSha) {
+      add(blockers, "RISK_POLICY_RESEARCH_SHA_MISMATCH");
+    }
+  }
 }
 
 function validateExecution(bundle, nowMs, maxEvidenceAgeMs, blockers) {

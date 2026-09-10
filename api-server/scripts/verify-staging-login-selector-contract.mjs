@@ -44,7 +44,7 @@ assert(
 
 assert(spec.includes('expected_logout_aborts: Diagnostic[]'), 'expected logout abort diagnostics bucket is missing');
 assert(spec.includes('type LogoutObservation = {'), 'logout observation contract is missing');
-assert(spec.includes('personalIntegrationReads: Set<Request>'), 'logout observation must retain exact personal integration request identities');
+assert(spec.includes('logoutScopedReads: Set<Request>'), 'logout observation must retain exact logout-scoped read request identities');
 assert(spec.includes('const activeLogoutObservations = new WeakMap<Page, LogoutObservation>()'), 'logout observation must be scoped to the active page');
 assert(spec.includes('const confirmedLogoutAbortRequests = new WeakMap<Request, string>()'), 'confirmed delayed aborts must remain scoped to exact request identities');
 assert(spec.includes("request.method() === 'POST'"), 'only POST logout requests may be considered expected');
@@ -54,16 +54,50 @@ assert(spec.includes("query[0]?.[0] === 'scope'"), 'logout query key must be sco
 assert(spec.includes("query[0]?.[1] === 'global'"), 'logout scope must be global');
 assert(spec.includes("request.failure()?.errorText === 'net::ERR_ABORTED'"), 'only the exact Chromium abort reason may be expected');
 
-const visibleIndex = spec.indexOf('await expect(logoutButton).toBeVisible();');
-const observationIndex = spec.indexOf('activeLogoutObservations.set(page, observation);');
-const clickIndex = spec.indexOf('await logoutButton.click();');
-assert(visibleIndex >= 0 && observationIndex > visibleIndex && clickIndex > observationIndex, 'expected window must open only around an explicit visible logout-button click');
+const scopedReadPaths = [
+  '/api/user-integrations',
+  '/api/accounts/read-only/toss',
+  '/api/accounts/read-only/upbit',
+  '/api/accounts/read-only/bitget',
+];
+assert(spec.includes('const logoutScopedReadPaths = new Set(['), 'logout-scoped read path allowlist is missing');
+for (const route of scopedReadPaths) {
+  assert(spec.includes(`  '${route}',`), `logout-scoped read path is missing: ${route}`);
+}
+assert(!spec.includes("  '/api/accounts/read-only/kiwoom',"), 'Kiwoom must remain excluded from the logout-scoped read allowlist');
+assert(spec.includes('function isLogoutScopedReadIdentity('), 'logout-scoped read identity matcher is missing');
+assert(spec.includes("return method === 'GET'"), 'logout-scoped reads must remain GET-only');
+assert(spec.includes('logoutScopedReadPaths.has(parsed.pathname)'), 'logout-scoped reads must match an exact enumerated pathname');
+assert(spec.includes('parsed.searchParams.size === 0'), 'logout-scoped read exception must reject query-bearing requests');
+assert(spec.includes('parsed.origin === expectedOrigin'), 'logout-scoped read exception must remain on the origin captured before logout');
+
+assert(spec.includes('function logoutButtons(page: Page)'), 'logout selector helper is missing');
+assert(spec.includes('async function firstVisibleLogoutButton(page: Page)'), 'visible logout resolver is missing');
+assert(spec.includes(".getByTestId('professional-command-bar')"), 'logout resolver must prefer the professional command bar deterministically');
+assert(spec.includes('if (await candidate.isVisible()) return candidate;'), 'logout resolver fallback must select only an actually visible existing action');
+assert(spec.includes("if (!logoutButton) throw new Error('visible logout action disappeared after authenticated UI proof');"), 'visible logout proof must fail closed if the resolved action disappears');
+const logoutStart = spec.indexOf('async function logout(page: Page)');
+const visibleIndex = spec.indexOf('const logoutButton = await expectVisibleLogoutButton(page);', logoutStart);
+const observationIndex = spec.indexOf('activeLogoutObservations.set(page, observation);', logoutStart);
+const clickIndex = spec.indexOf('await logoutButton.click();', logoutStart);
+assert(logoutStart >= 0 && visibleIndex > logoutStart && observationIndex > visibleIndex && clickIndex > observationIndex, 'expected window must open only after a deterministic visible logout action is resolved and immediately around its explicit click');
+const logoutEnd = spec.indexOf('\nasync function expectMembership(', logoutStart);
+assert(logoutEnd > logoutStart, 'logout helper boundaries are missing');
+const logoutBlock = spec.slice(logoutStart, logoutEnd);
+assert(logoutBlock.includes('const origin = new URL(page.url()).origin;'), 'logout must freeze the same-origin identity before observing scoped reads');
+assert(logoutBlock.includes('[...(pendingApiGetRequests.get(page) ?? [])]'), 'logout observation must inherit exact GET request identities already pending before the click');
+assert(logoutBlock.includes('.filter((request) => isLogoutScopedRead(request, origin))'), 'pre-existing logout candidates must still pass the exact scoped-read identity matcher');
+const inheritedReadIndex = logoutBlock.indexOf('[...(pendingApiGetRequests.get(page) ?? [])]');
+const observationOpenIndex = logoutBlock.indexOf('activeLogoutObservations.set(page, observation);');
+assert(inheritedReadIndex >= 0 && observationOpenIndex > inheritedReadIndex, 'pending request identities must be frozen before the active logout observation opens');
+assert(
+  !logoutBlock.slice(inheritedReadIndex, observationOpenIndex).includes('await '),
+  'pending-read snapshot and active logout observation must remain one synchronous run-to-completion handoff',
+);
 assert(spec.includes('logoutObservation.candidates.push(diagnostic);'), 'matching logout aborts must be held as candidates first');
-assert(spec.includes("parsed.pathname === '/api/user-integrations'"), 'the personal integration read may be classified only by its exact API path');
-assert(spec.includes('parsed.searchParams.size === 0'), 'the personal integration logout exception must reject query-bearing requests');
-assert(spec.includes('parsed.origin === expectedOrigin'), 'the personal integration logout exception must remain on the origin captured before logout');
-assert(spec.includes('logoutObservation.personalIntegrationReads.add(request);'), 'only an exact request observed during the explicit logout window may become a delayed candidate');
-assert(spec.includes('observation.personalIntegrationReads.has(request)'), 'active abort classification must require exact request identity');
+assert(spec.includes('return isLogoutScopedRead(request, expectedOrigin);'), 'read-only integration drain must reuse the exact enumerated same-origin GET classifier');
+assert(spec.includes('logoutObservation.logoutScopedReads.add(request);'), 'exact logout-scoped requests starting during the explicit window must join the same identity set as the pre-existing pending seed');
+assert(spec.includes('observation.logoutScopedReads.has(request)'), 'active abort classification must require exact request identity');
 assert(spec.includes('confirmedLogoutAbortRequests.get(request)'), 'delayed abort classification must require an exact confirmed request identity');
 assert(spec.includes('routeObservation.candidates.push(diagnostic);'), 'matching route-transition aborts must be held as candidates first');
 assert(
@@ -72,7 +106,7 @@ assert(
   'candidates may become expected only after protected API denial is confirmed',
 );
 assert(spec.includes('await page.reload();'), 'logout validation must refresh the page');
-assert(spec.includes("await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toHaveCount(0);"), 'logout session must not return after refresh');
+assert(spec.includes('await expect(logoutButtons(page)).toHaveCount(0);'), 'logout session must not return after refresh');
 assert(spec.includes("page.request.get('/api/paper-journal/snapshot')"), 'logout validation must probe a protected API');
 assert(spec.includes('[401, 403]'), 'protected API must be denied with 401 or 403 after logout');
 assert(
@@ -212,6 +246,23 @@ assert(
   'scanner single-entry fixture must preserve the zero-abort contract',
 );
 
+const rejectedProfileBootstrapTestStart = spec.indexOf("test('bootstrap finite-state:");
+const rejectedProfileBootstrapTestEnd = spec.indexOf("\n  test('profile timeout abort:", rejectedProfileBootstrapTestStart);
+assert(
+  rejectedProfileBootstrapTestStart >= 0 && rejectedProfileBootstrapTestEnd > rejectedProfileBootstrapTestStart,
+  'rejected profile bootstrap fixture boundaries are missing',
+);
+const rejectedProfileBootstrapTestBlock = spec.slice(
+  rejectedProfileBootstrapTestStart,
+  rejectedProfileBootstrapTestEnd,
+);
+assert(
+  rejectedProfileBootstrapTestBlock.includes(
+    "expect(requestCount, 'initial bootstrap must issue one profile request').toBe(1);",
+  ),
+  'rejected profile bootstrap must prove exactly one initial profile request',
+);
+
 const retryRecoveryTestStart = spec.indexOf("test('retry recovery:");
 const retryRecoveryTestEnd = spec.indexOf("\n  test('scanner readiness:", retryRecoveryTestStart);
 assert(
@@ -240,8 +291,8 @@ assert(
   'semantic retry failure must not create a network-error exemption',
 );
 assert(
-  retryRecoveryTestBlock.includes("await expect(page.getByRole('button', { name: /로그아웃|sign out/i })).toBeVisible();"),
-  'retry recovery must finish on authenticated account UI',
+  retryRecoveryTestBlock.includes('await expectVisibleLogoutButton(page);'),
+  'retry recovery must finish on authenticated UI with a deterministic visible logout action',
 );
 
 const profileTimeoutTestStart = spec.indexOf("test('profile timeout abort:");
@@ -460,4 +511,4 @@ assert(
 assert(clearSessionIndex > globalLogoutIndex, 'successful global logout must synchronously invalidate session identity');
 assert(releaseBarrierIndex > clearSessionIndex, 'logout barrier must remain active until session identity and profile cleanup finish');
 
-console.log('[staging-login-selector-contract] logout and route-transition candidate classification, scoped profile fault classification, current-session profile guard, diagnostic redaction, optional provider degradation, and polling-safe presentation stability are locked down');
+console.log('[staging-login-selector-contract] exact logout-scoped read classification, deterministic visible logout resolution, route-transition candidate classification, scoped profile fault classification, current-session profile guard, diagnostic redaction, optional provider degradation, and polling-safe presentation stability are locked down');

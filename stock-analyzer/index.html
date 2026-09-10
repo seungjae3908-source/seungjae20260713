@@ -16,6 +16,7 @@
 		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 		<link rel="manifest" href="/manifest.webmanifest" />
 		<link rel="stylesheet" href="/production-ui-geometry.css" />
+		<link rel="stylesheet" href="/ai-chart-pane-scroll.css" />
 		<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
 		<meta name="apple-mobile-web-app-capable" content="yes" />
 		<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -23,6 +24,18 @@
 	</head>
 	<body>
 		<div id="root"></div>
-		<script type="module" src="/src/main.tsx"></script>
+		<script type="module">
+			const directAiChartRoute = window.location.pathname.endsWith('/ai-chart');
+			const aiChartRoutePrewarm = directAiChartRoute
+				? import('/src/pages/ai-chart.tsx')
+				: null;
+			const aiChartSharedDataPrewarm = directAiChartRoute
+				? import('/src/lib/unified-chart-data.ts')
+				: null;
+			void import('/src/main.tsx');
+			if (aiChartRoutePrewarm && aiChartSharedDataPrewarm) {
+				void aiChartSharedDataPrewarm.then(() => import('/src/components/unified-analysis-chart.tsx'));
+			}
+		</script>
 	</body>
 </html>
