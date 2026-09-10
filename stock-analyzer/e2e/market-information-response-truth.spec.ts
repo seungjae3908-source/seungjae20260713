@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page, type Route } from '@playwright/test';
 import {
   MARKET_INFORMATION_ROUTES,
   MarketInformationContractError,
@@ -6,6 +6,8 @@ import {
 } from '../src/lib/market-information';
 
 const route = MARKET_INFORMATION_ROUTES.find((item) => item.id === 'stocks-kr')!;
+const E2E_USER_ID = '11111111-1111-4111-8111-111111111111';
+const E2E_AUTH_STORAGE_KEY = 'sb-127-auth-token';
 
 function iso(offsetMs = 0): string {
   return new Date(Date.now() + offsetMs).toISOString();
@@ -156,6 +158,42 @@ function expectContractError(payload: unknown, code?: string): void {
   }
 }
 
+function fulfill(route: Route, body: unknown): Promise<void> {
+  return route.fulfill({
+    status: 200,
+    contentType: 'application/json; charset=utf-8',
+    body: JSON.stringify(body),
+  });
+}
+
+async function installApprovedSession(page: Page): Promise<void> {
+  await page.addInitScript(({ storageKey, userId }) => {
+    const encode = (value: Record<string, unknown>) => window.btoa(JSON.stringify(value))
+      .replaceAll('+', '-')
+      .replaceAll('/', '_')
+      .replaceAll('=', '');
+    const expiresAt = 4_102_444_800;
+    const accessToken = `${encode({ alg: 'none', typ: 'JWT' })}.${encode({ sub: userId, role: 'authenticated', exp: expiresAt })}.e2e`;
+    window.localStorage.setItem(storageKey, JSON.stringify({
+      access_token: accessToken,
+      refresh_token: 'e2e-refresh-token',
+      expires_in: 3600,
+      expires_at: expiresAt,
+      token_type: 'bearer',
+      user: {
+        id: userId,
+        aud: 'authenticated',
+        role: 'authenticated',
+        email: 'market-information-truth@accounts.invalid',
+        app_metadata: { provider: 'email', providers: ['email'] },
+        user_metadata: { display_name: '시장정보 응답 검증' },
+        identities: [],
+        created_at: new Date().toISOString(),
+      },
+    }));
+  }, { storageKey: E2E_AUTH_STORAGE_KEY, userId: E2E_USER_ID });
+}
+
 test('canonical market information success envelope is accepted', () => {
   const response = canonicalResponse();
   expect(parseMarketInformationResponse(response, route)).toEqual(response);
@@ -176,6 +214,66 @@ test('malformed HTTP 200 section evidence fails closed instead of reaching norma
     item.mutate(value);
     expectContractError(value, item.code);
   }
+});
+
+test('actual room UI fails closed on malformed HTTP 200 without retrying or rendering evidence', async ({ page }) => {
+  await installApprovedSession(page);
+  const malformed = canonicalResponse();
+  malformed.sections.indices.data = [{} as never];
+  let marketRequests = 0;
+  const forbiddenRequests: string[] = [];
+
+  await page.route('**/__e2e-supabase/**', async (requestRoute) => {
+    const pathname = new URL(requestRoute.request().url()).pathname;
+    if (pathname.endsWith('/rest/v1/profiles')) {
+      return fulfill(requestRoute, {
+        id: E2E_USER_ID,
+        login_name: 'market-information-truth',
+        display_name: '시장정보 응답 검증',
+        role: 'admin',
+        status: 'approved',
+        membership_level: 'admin',
+        is_active: true,
+        permissions_updated_at: iso(),
+        updated_at: iso(),
+      });
+    }
+    if (pathname.endsWith('/auth/v1/user')) {
+      return fulfill(requestRoute, {
+        id: E2E_USER_ID,
+        aud: 'authenticated',
+        role: 'authenticated',
+        email: 'market-information-truth@accounts.invalid',
+        app_metadata: { provider: 'email', providers: ['email'] },
+        user_metadata: { display_name: '시장정보 응답 검증' },
+        identities: [],
+        created_at: iso(),
+      });
+    }
+    return fulfill(requestRoute, { ok: true });
+  });
+
+  await page.route('**/api/**', async (requestRoute) => {
+    const pathname = new URL(requestRoute.request().url()).pathname;
+    if (/\/(accounts?|balances?|positions?|orders?|cancel|trade-automation)(\/|$)|\/crypto\/futures\/auto/i.test(pathname)) {
+      forbiddenRequests.push(`${requestRoute.request().method()} ${pathname}`);
+    }
+    if (pathname === '/api/market-information/stocks-kr') {
+      marketRequests += 1;
+      return fulfill(requestRoute, malformed);
+    }
+    if (pathname === '/api/notifications/price-alerts') return fulfill(requestRoute, { alerts: [] });
+    if (pathname === '/api/watchlist/sync') return fulfill(requestRoute, { ok: true, items: [] });
+    return fulfill(requestRoute, { ok: true });
+  });
+
+  await page.goto('/stocks/kr');
+  await expect(page.getByRole('heading', { name: '시장정보 확인 실패' })).toBeVisible();
+  await expect(page.getByLabel('시장정보 오류')).toContainText('지수 근거 행이 올바르지 않습니다.');
+  await expect(page.getByTestId('market-room-overview')).toHaveCount(0);
+  await expect(page.getByText('삼성전자', { exact: true })).toHaveCount(0);
+  expect(marketRequests).toBe(1);
+  expect(forbiddenRequests).toEqual([]);
 });
 
 test('future-dated successful evidence is rejected rather than displayed as current', () => {
