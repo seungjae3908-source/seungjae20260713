@@ -234,6 +234,8 @@ function exitOrder({ type, quantity, direction, limitPrice, stopPrice }) {
 export function settleFourMarketPaperSample({
   sample,
   exitExecution,
+  exitTriggerId = null,
+  exitExecutionId = null,
   exitOrderType = "MARKET",
   exitLimitPrice = null,
   exitStopPrice = null,
@@ -309,6 +311,8 @@ export function settleFourMarketPaperSample({
   return Object.freeze({
     schemaVersion: 1,
     paperSampleId: sample.paperSampleId,
+    exitTriggerId,
+    exitExecutionId,
     market: sample.identity.market,
     symbol: sample.identity.symbol,
     style: sample.identity.style,
