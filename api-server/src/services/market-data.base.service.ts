@@ -19,7 +19,6 @@ import * as naver from '../providers/naver';
 import * as finnhub from '../providers/finnhub';
 import { getKrUniverse } from '../providers/krx';
 import { providerStatus } from '../lib/config';
-import { normalizeMarketObservationTime } from '../lib/market-observation-time';
 import { getKiwoomChartCandles } from '../kiwoom-chart';
 import { cached, TTL } from '../lib/cache';
 import type {
@@ -441,7 +440,7 @@ const FALLBACK_CATALOG: CatalogEntry[] = [
   createEntry('SMCI', 'Super Micro Computer', 'US', 'USD', []),
   createEntry('ARM', 'Arm Holdings', 'US', 'USD', []),
   createEntry('TSM', 'TSMC', 'US', 'USD', []),
-  createEntry('ASML', 'ASML', 'USD', 'USD', []),
+  createEntry('ASML', 'ASML', 'US', 'USD', []),
   createEntry('NVO', 'Novo Nordisk', 'US', 'USD', []),
   createEntry('MRNA', 'Moderna', 'US', 'USD', []),
   createEntry('PFE', 'Pfizer', 'US', 'USD', []),
@@ -748,7 +747,10 @@ function toQuoteRow(
     low: safeNumber(quote.low, 0),
     open: safeNumber(quote.open, 0),
     previousClose,
-    updatedAt: String(quote.updatedAt),
+    updatedAt: String(
+      quote.updatedAt ??
+        new Date().toISOString(),
+    ),
     rating: ratingFromQuote(quote, entry),
   };
 }
@@ -778,13 +780,8 @@ async function tryQuoteProvider(
       if (!result || typeof result !== 'object') continue;
       const quote = result as LooseQuote;
       const price = quotePrice(quote);
-      const updatedAt = normalizeMarketObservationTime(quote.updatedAt);
-      if (!updatedAt) continue;
       if (price > 0 || quote.changePercent != null || quote.volume != null) {
-        return {
-          ...quote,
-          updatedAt,
-        };
+        return quote;
       }
     } catch {
       // Try the next live provider.
