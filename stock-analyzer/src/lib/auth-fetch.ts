@@ -16,6 +16,7 @@ import {
   isLegacyStockSearchResponsePath,
   requireLegacyStockSearchResponse,
 } from '@/lib/legacy-stock-search-response';
+import { requireMarketMoversResponse } from '@/lib/market-movers-response';
 import { parsePortfolioQuoteSnapshot } from '@/lib/portfolio-market-truth';
 import {
   INVALID_PRICE_ALERT_RESPONSE,
@@ -58,6 +59,13 @@ function requestMethod(input: RequestInfo | URL, init: RequestInit): string {
   if (init.method) return init.method.toUpperCase();
   if (typeof Request !== 'undefined' && input instanceof Request) return input.method.toUpperCase();
   return 'GET';
+}
+
+function marketMoversRequestedMarket(input: RequestInfo | URL): 'KR' | 'US' | null {
+  const url = requestUrl(input);
+  if (!url) return null;
+  const market = (url.searchParams.get('market') ?? '').toUpperCase();
+  return market === 'KR' || market === 'US' ? market : null;
 }
 
 function portfolioRequestedTickers(input: RequestInfo | URL): string[] {
@@ -109,6 +117,17 @@ async function validateInvestmentResponse(
       requireLegacyStockSearchResponse(url.toString(), await response.clone().json());
     } catch {
       throw new Error(INVALID_LEGACY_STOCK_SEARCH_RESPONSE);
+    }
+  }
+
+  if (path === '/api/market/movers' && method === 'GET') {
+    const market = marketMoversRequestedMarket(input);
+    if (market) {
+      try {
+        requireMarketMoversResponse(await response.clone().json(), market);
+      } catch {
+        throw new Error('INVALID_MARKET_MOVERS_RESPONSE');
+      }
     }
   }
 
