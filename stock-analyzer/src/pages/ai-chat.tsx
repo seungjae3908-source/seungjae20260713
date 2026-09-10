@@ -40,38 +40,35 @@ const hubTabs: Array<{ value: HubTab; label: string }> = [
 function PortfolioShortcutPanel() {
   const [, navigate] = useLocation();
 
-  return <main className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-    <section className="rounded-2xl border border-card-border bg-card p-5" data-testid="information-portfolio-ai-shortcut">
-      <div className="flex items-start gap-3">
-        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-          <WalletCards className="h-5 w-5" />
-        </span>
-        <div className="min-w-0 flex-1">
-          <p className="text-xs font-extrabold text-primary">내 자산 AI</p>
-          <h2 className="mt-1 text-lg font-black">포트폴리오 AI 진단</h2>
-          <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            총자산·손익·비중·집중도·상관관계·위험 데이터를 포트폴리오 화면에서 확인하고, 서버가 계산한 사실만 AI가 설명합니다.
+  return (
+    <main className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-4">
+      <section className="mx-auto max-w-4xl rounded-2xl border border-card-border bg-card p-4 sm:p-5" data-testid="information-portfolio-ai-shortcut">
+        <div className="text-center">
+          <span className="mx-auto flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
+            <WalletCards className="h-5 w-5" aria-hidden="true" />
+          </span>
+          <p className="mt-3 text-xs font-semibold text-primary">내 자산 AI</p>
+          <h2 className="mt-1 text-lg font-bold">포트폴리오 AI 진단</h2>
+          <p className="mx-auto mt-2 max-w-2xl break-keep text-sm font-normal leading-6 text-muted-foreground">
+            서버가 확인한 자산·손익·비중·위험 데이터만 설명합니다.
           </p>
         </div>
-      </div>
-      <div className="mt-4 grid gap-2 text-xs font-bold text-muted-foreground sm:grid-cols-3">
-        <span className="rounded-xl bg-muted/50 px-3 py-2">검증된 서버 데이터만 설명</span>
-        <span className="rounded-xl bg-muted/50 px-3 py-2">읽기 전용 · 주문 권한 없음</span>
-        <span className="rounded-xl bg-muted/50 px-3 py-2">누락 데이터는 추정하지 않음</span>
-      </div>
-      <button
-        type="button"
-        onClick={() => navigate('/portfolio?focus=ai')}
-        className="mt-4 flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-black text-primary-foreground"
-      >
-        내 포트폴리오 분석 열기
-        <ArrowRight className="h-4 w-4" />
-      </button>
-      <p className="mt-3 text-[11px] font-bold leading-5 text-muted-foreground">
-        AI는 포트폴리오 화면에서 계산된 금액·수익률·위험만 설명하며, 없는 값을 새로 만들지 않습니다.
-      </p>
-    </section>
-  </main>;
+        <div className="mt-4 grid gap-2 text-xs font-medium text-muted-foreground sm:grid-cols-3">
+          <span className="rounded-xl bg-muted/50 px-3 py-2 text-center">검증된 서버 데이터만 설명</span>
+          <span className="rounded-xl bg-muted/50 px-3 py-2 text-center">읽기 전용 · 주문 권한 없음</span>
+          <span className="rounded-xl bg-muted/50 px-3 py-2 text-center">누락 데이터는 추정하지 않음</span>
+        </div>
+        <button
+          type="button"
+          onClick={() => navigate('/portfolio?focus=ai')}
+          className="mt-4 flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground"
+        >
+          내 포트폴리오 분석 열기
+          <ArrowRight className="h-4 w-4" aria-hidden="true" />
+        </button>
+      </section>
+    </main>
+  );
 }
 
 function dataStatusLabel(status: AiChatDataDisclosure['status']): string {
@@ -107,7 +104,12 @@ function errorMessage(payload: AiChatPayload | null): string {
 
 export default function AiChatPage() {
   const { selection } = useAnalysisSelection();
-  const [messages, setMessages] = useState<ChatMessage[]>([{ id: 'welcome', role: 'assistant', content: '공개 금융정보, 투자 용어, 앱 사용법을 질문해 주세요. AI 채팅은 주문·자동매매·계좌·서버 작업을 실행하지 않습니다.', at: new Date().toISOString() }]);
+  const [messages, setMessages] = useState<ChatMessage[]>([{
+    id: 'welcome',
+    role: 'assistant',
+    content: '공개 금융정보와 앱 사용법을 질문해 주세요. 주문·자동매매·계좌·서버 작업은 실행하지 않습니다.',
+    at: new Date().toISOString(),
+  }]);
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -163,50 +165,109 @@ export default function AiChatPage() {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background pb-[calc(5rem+env(safe-area-inset-bottom))]">
-      <header className="shrink-0 border-b border-card-border px-4 py-4 text-center">
-        <p className="text-[11px] font-extrabold text-primary">정보</p>
-        <h1 className="mt-1 text-xl font-black">AI 상담</h1>
-        <p className="mt-1 text-xs text-muted-foreground">공개 금융정보와 내 포트폴리오를 읽기 전용으로 확인합니다.</p>
-        {selection && <p className="mt-2 text-[11px] font-bold text-muted-foreground">선택 종목: {selection.displayName || selection.symbol} · {selection.market} · {selection.symbol}</p>}
+    <div className="flex h-full min-h-0 flex-col bg-background pb-[calc(5rem+env(safe-area-inset-bottom))]" data-testid="ai-information-page">
+      <header className="shrink-0 border-b border-card-border px-3 py-3 text-center sm:px-4">
+        <p className="text-xs font-semibold text-primary">정보</p>
+        <h1 className="mt-1 text-xl font-bold sm:text-2xl">AI 상담</h1>
+        <p className="mx-auto mt-1 max-w-2xl break-keep text-sm font-normal text-muted-foreground">공개 금융정보와 내 포트폴리오를 읽기 전용으로 확인합니다.</p>
+        {selection && (
+          <p className="mt-2 truncate text-xs font-medium text-muted-foreground">
+            선택 종목: {selection.displayName || selection.symbol} · {selection.market} · {selection.symbol}
+          </p>
+        )}
       </header>
-      <nav aria-label="AI 정보 탭" className="sticky top-0 z-20 grid shrink-0 grid-cols-2 gap-1 border-b border-card-border bg-background/95 p-2 backdrop-blur">
-        {hubTabs.map((tab) => <button
-          type="button"
-          key={tab.value}
-          aria-current={activeTab === tab.value ? 'page' : undefined}
-          onClick={() => setActiveTab(tab.value)}
-          className={cn('min-h-11 min-w-0 rounded-lg px-2 py-2 text-xs font-extrabold', activeTab === tab.value ? 'bg-primary text-primary-foreground' : 'bg-card text-muted-foreground')}
-        >{tab.label}</button>)}
+      <nav aria-label="AI 정보 탭" className="grid shrink-0 grid-cols-2 gap-1.5 border-b border-card-border bg-background/95 p-2 backdrop-blur">
+        {hubTabs.map((tab) => (
+          <button
+            type="button"
+            key={tab.value}
+            aria-current={activeTab === tab.value ? 'page' : undefined}
+            onClick={() => setActiveTab(tab.value)}
+            className={cn(
+              'min-h-11 min-w-0 rounded-xl px-2 py-2 text-sm font-semibold',
+              activeTab === tab.value ? 'bg-primary text-primary-foreground' : 'bg-card text-muted-foreground',
+            )}
+          >
+            {tab.label}
+          </button>
+        ))}
       </nav>
-      {activeTab === 'Portfolio' ? <PortfolioShortcutPanel /> : <>
-      <main className="min-h-0 flex-1 overflow-y-auto px-4 py-4" aria-live="polite">
-        <div className="space-y-3">
-          {messages.map((message) => <article key={message.id} className={cn('flex gap-2', message.role === 'user' && 'flex-row-reverse')}>
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">{message.role === 'user' ? <UserRound className="h-4 w-4" /> : <Bot className="h-4 w-4" />}</span>
-            <div className={cn('max-w-[85%] rounded-2xl px-3 py-2.5 text-sm leading-6', message.role === 'user' ? 'bg-primary text-primary-foreground' : message.kind === 'refusal' ? 'border border-warning/30 bg-warning/5' : 'bg-card')}>
-              <p className="whitespace-pre-wrap break-words">{message.content}</p>
-              {message.role === 'assistant' && message.data && message.data.status !== 'not_requested' && <div className="mt-2 rounded-xl border border-card-border/70 bg-background/60 px-2.5 py-2 text-[11px] leading-4 text-muted-foreground">
-                <p className="font-extrabold text-foreground/80">{dataStatusLabel(message.data.status)}{message.data.asOf ? ` · 서버 수집 기준 ${formatBasisTime(message.data.asOf)}` : ''}</p>
-                {message.data.sources.length > 0 && <p className="mt-1 break-words">출처: {message.data.sources.join(' · ')}</p>}
-                {message.data.missing.length > 0 && <p className="mt-1 break-words">부족: {message.data.missing.join(' · ')}</p>}
-              </div>}
-              <time className={cn('mt-1 block text-[10px]', message.role === 'user' ? 'text-primary-foreground/70' : 'text-muted-foreground')}>{new Date(message.at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}</time>
+      {activeTab === 'Portfolio' ? <PortfolioShortcutPanel /> : (
+        <>
+          <main className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-4" aria-live="polite">
+            <div className="mx-auto max-w-4xl space-y-3">
+              {messages.map((message) => (
+                <article key={message.id} className={cn('flex gap-2', message.role === 'user' && 'flex-row-reverse')}>
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary" aria-hidden="true">
+                    {message.role === 'user' ? <UserRound className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
+                  </span>
+                  <div className={cn(
+                    'max-w-[88%] rounded-2xl px-3 py-2.5 text-sm font-normal leading-6 sm:max-w-[78%]',
+                    message.role === 'user'
+                      ? 'bg-primary text-primary-foreground'
+                      : message.kind === 'refusal'
+                        ? 'border border-warning/30 bg-warning/5'
+                        : 'bg-card',
+                  )}>
+                    <p className="whitespace-pre-wrap break-words">{message.content}</p>
+                    {message.role === 'assistant' && message.data && message.data.status !== 'not_requested' && (
+                      <details className="mt-2 rounded-xl border border-card-border/70 bg-background/60">
+                        <summary className="cursor-pointer list-none px-2.5 py-2 text-xs font-semibold text-foreground/80 [&::-webkit-details-marker]:hidden">
+                          {dataStatusLabel(message.data.status)}{message.data.asOf ? ` · ${formatBasisTime(message.data.asOf)}` : ''}
+                        </summary>
+                        <div className="border-t border-card-border/70 px-2.5 py-2 text-xs font-normal leading-5 text-muted-foreground">
+                          {message.data.sources.length > 0 && <p className="break-words">출처: {message.data.sources.join(' · ')}</p>}
+                          {message.data.missing.length > 0 && <p className="mt-1 break-words">부족: {message.data.missing.join(' · ')}</p>}
+                        </div>
+                      </details>
+                    )}
+                    <time className={cn('mt-1 block text-xs', message.role === 'user' ? 'text-primary-foreground/70' : 'text-muted-foreground')}>
+                      {new Date(message.at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}
+                    </time>
+                  </div>
+                </article>
+              ))}
+              {busy && (
+                <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />답변을 준비하고 있습니다.
+                </div>
+              )}
+              {error && <p role="alert" className="rounded-2xl bg-destructive/10 p-3 text-sm font-medium text-destructive">{error}</p>}
+              <div ref={endRef} />
             </div>
-          </article>)}
-          {busy && <div className="flex items-center gap-2 text-xs font-bold text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />답변을 준비하고 있습니다.</div>}
-          {error && <p role="alert" className="rounded-2xl bg-destructive/10 p-3 text-xs font-bold text-destructive">{error}</p>}
-          <div ref={endRef} />
-        </div>
-      </main>
-      <footer className="shrink-0 border-t border-card-border bg-background px-3 py-3">
-        <div className="flex items-end gap-2">
-          <textarea value={draft} disabled={busy} rows={1} maxLength={2_000} onChange={(event) => setDraft(event.target.value)} onKeyDown={onKeyDown} onCompositionStart={() => setComposing(true)} onCompositionEnd={() => setComposing(false)} placeholder="질문 입력 · Shift+Enter 줄바꿈" className="max-h-32 min-h-11 flex-1 resize-none rounded-2xl border border-card-border bg-card px-3 py-2.5 text-sm leading-5 outline-none focus:border-primary" />
-          {busy ? <button type="button" aria-label="요청 취소" onClick={() => controllerRef.current?.abort()} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-destructive text-destructive"><Square className="h-4 w-4" /></button> : <button type="button" aria-label="메시지 전송" disabled={!draft.trim()} onClick={() => void send()} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground disabled:opacity-40"><Send className="h-4 w-4" /></button>}
-        </div>
-        <p className="mt-2 text-[10px] leading-4 text-muted-foreground">API 키·토큰·계좌번호 등 민감정보를 입력하지 마세요. 답변은 투자 조언이 아니며, 기준시각은 거래소 체결시각이 아니라 서버가 공개 데이터를 수집한 시각입니다.</p>
-      </footer>
-      </>}
+          </main>
+          <footer className="shrink-0 border-t border-card-border bg-background px-3 py-3 sm:px-4">
+            <div className="mx-auto max-w-4xl">
+              <div className="flex items-end gap-2">
+                <textarea
+                  value={draft}
+                  disabled={busy}
+                  rows={1}
+                  maxLength={2_000}
+                  onChange={(event) => setDraft(event.target.value)}
+                  onKeyDown={onKeyDown}
+                  onCompositionStart={() => setComposing(true)}
+                  onCompositionEnd={() => setComposing(false)}
+                  placeholder="질문 입력 · Shift+Enter 줄바꿈"
+                  className="max-h-32 min-h-11 flex-1 resize-none rounded-2xl border border-card-border bg-card px-3 py-2.5 text-sm leading-5 outline-none focus:border-primary"
+                />
+                {busy ? (
+                  <button type="button" aria-label="요청 취소" onClick={() => controllerRef.current?.abort()} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-destructive text-destructive">
+                    <Square className="h-4 w-4" aria-hidden="true" />
+                  </button>
+                ) : (
+                  <button type="button" aria-label="메시지 전송" disabled={!draft.trim()} onClick={() => void send()} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground disabled:opacity-40">
+                    <Send className="h-4 w-4" aria-hidden="true" />
+                  </button>
+                )}
+              </div>
+              <p className="mt-2 break-keep text-xs font-normal leading-5 text-muted-foreground">
+                민감정보 입력 금지 · 답변은 투자 조언이 아닙니다 · 데이터 시각은 서버 수집 기준입니다.
+              </p>
+            </div>
+          </footer>
+        </>
+      )}
       <BottomNav />
     </div>
   );

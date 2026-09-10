@@ -85,6 +85,7 @@ const client = new BitgetPublicClient({ minIntervalMs: 180, maxRetries: 4, timeo
 const candlesBySymbol = {};
 const fundingBySymbol = {};
 const contextBySymbol = {};
+const inferenceBlockersBySymbol = {};
 let openInterestSnapshots = [...(previous?.openInterestSnapshots ?? [])];
 
 for (const symbol of CONFIG.symbols) {
@@ -157,6 +158,13 @@ for (const symbol of CONFIG.symbols) {
     source: "bitget-public-rule-model-1h-shadow-sidecar",
   };
   const deployedAnalysis = analyzeMarket(input, { model });
+  if (deployedAnalysis.inferenceEvaluation?.status !== "EVALUABLE") {
+    const blockers = deployedAnalysis.inferenceEvaluation?.blockers;
+    inferenceBlockersBySymbol[symbol] = Array.isArray(blockers) && blockers.length > 0
+      ? [...blockers]
+      : ["NOT_EVALUABLE"];
+    continue;
+  }
   const pair = buildRuleModelShadowPair({
     features: deployedAnalysis.features,
     ruleScore: deployedAnalysis.ruleScore,
@@ -197,9 +205,13 @@ const modelId = `${model.id}:rule-0.00`;
 const referenceModelId = `${model.id}:rule-0.65`;
 const metrics = summarizeShadowState(state, { modelId, referenceModelId });
 const gate = evaluateRuleModelShadowChallenger(metrics);
+const inferenceBlockers = Object.freeze(Object.fromEntries(
+  Object.entries(inferenceBlockersBySymbol)
+    .map(([symbol, blockers]) => [symbol, Object.freeze([...blockers])]),
+));
 const summary = Object.freeze({
   schemaVersion: 1,
-  status: "pass",
+  status: Object.keys(inferenceBlockers).length === 0 ? "pass" : "blocked_data",
   generatedAt: cycleTime,
   modelGroup: RULE_MODEL_1H_CHALLENGER_GROUP,
   modelId,
@@ -214,6 +226,7 @@ const summary = Object.freeze({
   metrics,
   gate,
   contexts: contextBySymbol,
+  inferenceBlockers,
   safety: Object.freeze({
     forwardOnly: true,
     historicalBackfill: false,
@@ -231,8 +244,10 @@ await writeJsonAtomically(summaryPath, summary);
 console.log(JSON.stringify({
   statePath,
   summaryPath,
+  status: summary.status,
   total: metrics.total,
   settled: metrics.settled,
   pending: metrics.pending,
   gate: gate.status,
+  inferenceBlockedSymbols: Object.keys(inferenceBlockers),
 }));
