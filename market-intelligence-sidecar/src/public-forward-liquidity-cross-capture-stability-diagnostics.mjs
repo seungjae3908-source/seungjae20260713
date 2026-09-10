@@ -1,7 +1,10 @@
 import {
+  canonicalJson,
   FORWARD_NATURAL_SAMPLE,
   PUBLIC_LIQUIDITY_CALIBRATION_CONTRACT,
+  sha256,
 } from './public-forward-liquidity-calibration.mjs';
+import { analyzePublicForwardLiquiditySampleCoverage } from './public-forward-liquidity-sample-coverage-diagnostics.mjs';
 
 export const PUBLIC_FORWARD_LIQUIDITY_CROSS_CAPTURE_STABILITY_VERSION =
   'public-forward-liquidity-cross-capture-stability-diagnostics/v1';
@@ -335,6 +338,22 @@ function normalizeCapture(capture, index) {
     provenance.collectorCodeSha,
     localSeen,
   ));
+  analyzePublicForwardLiquiditySampleCoverage(source);
+  if (observations.length > 0) {
+    const sourceFrames = new Set(observations.map(({ sourceFrame }) => sourceFrame.composite));
+    if (sourceFrames.size !== 1) {
+      throw new Error('CROSS_CAPTURE_BATCH_SOURCE_FRAME_IDENTITY_INVALID');
+    }
+    const { sourceFrame } = observations[0];
+    const expectedRawDigest = sha256(canonicalJson({
+      rawBookDigest: sourceFrame.preEventBookDigest,
+      rawTradeFrameDigest: sourceFrame.publicTradeFrameDigest,
+      rawPostDigests: sourceFrame.postEventBookDigests,
+    }));
+    if (provenance.rawDigest !== expectedRawDigest) {
+      throw new Error('CROSS_CAPTURE_RAW_DIGEST_MISMATCH');
+    }
+  }
 
   const sideCounts = Object.freeze({
     BUY: observations.filter(({ aggressiveSide }) => aggressiveSide === 'BUY').length,
