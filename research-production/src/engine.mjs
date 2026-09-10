@@ -179,7 +179,13 @@ export async function preflightResearchProduction({ repoRoot, stateRoot, researc
   });
 }
 
-export function buildTaskPlan({ profile, stateRoot, researchSha, activationAtMs = null }) {
+export function buildTaskPlan({
+  profile,
+  stateRoot,
+  researchSha,
+  activationAtMs = null,
+  env: inheritedEnv = process.env,
+}) {
   const pinnedSha = assertPinnedSha(researchSha);
   const selected = profile === 'all'
     ? [...PROFILES['fast-historical'], ...PROFILES['long-history'], ...PROFILES.forward]
@@ -203,6 +209,15 @@ export function buildTaskPlan({ profile, stateRoot, researchSha, activationAtMs 
       env.PAPER_FORWARD_RESEARCH_SHA = pinnedSha;
       env.PAPER_FORWARD_ACTIVATION_AT_MS = String(Number.isFinite(activationAtMs) ? activationAtMs : Date.now());
       env.PAPER_FORWARD_TRIGGER_SOURCE = 'cron';
+      const runtimeDirectory = String(inheritedEnv?.RUNTIME_DIRECTORY ?? '').trim();
+      if (runtimeDirectory) {
+        if (!isAbsolute(runtimeDirectory)) {
+          throw new Error('Research Paper state runtime directory must be absolute');
+        }
+        const transportRoot = join(resolve(runtimeDirectory), 'paper-state');
+        env.PAPER_FORWARD_PUBLISHER_BINDING_PATH = join(transportRoot, 'publisher-binding.json');
+        env.PAPER_FORWARD_PAPER_STATE_SNAPSHOT_PATH = join(transportRoot, 'paper-state-v2.json');
+      }
     }
     if (task.kind === 'shadow') {
       args.push(join(stateRoot, 'forward', 'shadow-state.json'));
@@ -342,7 +357,13 @@ export async function runResearchCycle({ repoRoot, stateRoot, researchSha, profi
   const stableActivationAtMs = includesForward
     ? await resolveForwardActivationAtMs(preflight.stateRoot, activationAtMs)
     : (Number.isFinite(activationAtMs) ? Number(activationAtMs) : Date.now());
-  const plan = buildTaskPlan({ profile, stateRoot: preflight.stateRoot, researchSha: preflight.researchSha, activationAtMs: stableActivationAtMs });
+  const plan = buildTaskPlan({
+    profile,
+    stateRoot: preflight.stateRoot,
+    researchSha: preflight.researchSha,
+    activationAtMs: stableActivationAtMs,
+    env,
+  });
   const requestedConcurrency = Math.max(1, Math.min(Number(concurrency) || 1, 16, plan.length));
   const safeConcurrency = profile === 'forward' ? 1 : requestedConcurrency;
   const cycleId = `${new Date().toISOString().replace(/[:.]/g, '-')}-${profile}-${preflight.researchSha.slice(0, 12)}`;

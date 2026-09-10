@@ -10,11 +10,17 @@ function finite(value, fallback = null) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-async function fetchJson(url, { timeoutMs = 3_000, headers = {} } = {}) {
+async function fetchJsonFrame(url, {
+  timeoutMs = 3_000,
+  headers = {},
+  fetchImpl = fetch,
+  clock = Date.now,
+} = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error('PUBLIC_DATA_TIMEOUT')), timeoutMs);
+  const requestStartedAtMs = clock();
   try {
-    const response = await fetch(url, {
+    const response = await fetchImpl(url, {
       signal: controller.signal,
       headers: {
         accept: 'application/json',
@@ -23,10 +29,20 @@ async function fetchJson(url, { timeoutMs = 3_000, headers = {} } = {}) {
       },
     });
     if (!response.ok) throw new Error(`PUBLIC_HTTP_${response.status}:${url}`);
-    return await response.json();
+    const payload = await response.json();
+    return {
+      payload,
+      requestStartedAtMs,
+      receiveTimestampMs: clock(),
+      url,
+    };
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function fetchJson(url, options = {}) {
+  return (await fetchJsonFrame(url, options)).payload;
 }
 
 function assertBitget(payload, label) {
@@ -34,6 +50,139 @@ function assertBitget(payload, label) {
     throw new Error(`BITGET_${label}_FAILED:${String(payload?.code ?? 'NO_CODE')}:${String(payload?.msg ?? 'NO_MSG')}`);
   }
   return payload.data;
+}
+
+function positive(value, code) {
+  const parsed = finite(value);
+  if (!(parsed > 0)) throw new Error(code);
+  return parsed;
+}
+
+function timestamp(value, code) {
+  const parsed = positive(value, code);
+  return Math.trunc(parsed);
+}
+
+function normalizeBookLevels(rows, side) {
+  if (!Array.isArray(rows) || rows.length === 0) throw new Error(`BITGET_PUBLIC_BOOK_${side}_MISSING`);
+  const levels = rows.map((row) => {
+    if (!Array.isArray(row) || row.length < 2) throw new Error(`BITGET_PUBLIC_BOOK_${side}_ROW_INVALID`);
+    return Object.freeze({
+      price: positive(row[0], `BITGET_PUBLIC_BOOK_${side}_PRICE_INVALID`),
+      quantity: positive(row[1], `BITGET_PUBLIC_BOOK_${side}_QUANTITY_INVALID`),
+    });
+  });
+  for (let index = 1; index < levels.length; index += 1) {
+    const previous = levels[index - 1].price;
+    const current = levels[index].price;
+    if ((side === 'ASKS' && current < previous) || (side === 'BIDS' && current > previous)) {
+      throw new Error(`BITGET_PUBLIC_BOOK_${side}_ORDER_INVALID`);
+    }
+  }
+  return Object.freeze(levels);
+}
+
+export function normalizeBitgetPublicOrderBookFrame({
+  symbol,
+  payload,
+  requestStartedAtMs,
+  receiveTimestampMs,
+  endpoint = '/api/v3/market/orderbook',
+  query = '',
+  maxFrameAgeMs = 10_000,
+  maxFutureSkewMs = 5_000,
+}) {
+  const normalizedSymbol = cleanSymbol(symbol);
+  const data = assertBitget(payload, 'PUBLIC_ORDERBOOK');
+  const marketTimestampMs = timestamp(data?.ts, 'BITGET_PUBLIC_BOOK_TIMESTAMP_MISSING');
+  const receivedAt = timestamp(receiveTimestampMs, 'BITGET_PUBLIC_BOOK_RECEIVE_TIMESTAMP_MISSING');
+  const requestedAt = timestamp(requestStartedAtMs, 'BITGET_PUBLIC_BOOK_REQUEST_TIMESTAMP_MISSING');
+  if (requestedAt > receivedAt) throw new Error('BITGET_PUBLIC_BOOK_LOCAL_TIMESTAMP_ORDER_INVALID');
+  if (marketTimestampMs > receivedAt + maxFutureSkewMs) throw new Error('BITGET_PUBLIC_BOOK_FUTURE_TIMESTAMP');
+  if (receivedAt - marketTimestampMs > maxFrameAgeMs) throw new Error('BITGET_PUBLIC_BOOK_STALE');
+  const bids = normalizeBookLevels(data?.b, 'BIDS');
+  const asks = normalizeBookLevels(data?.a, 'ASKS');
+  if (bids[0].price >= asks[0].price) throw new Error('BITGET_PUBLIC_BOOK_CROSSED');
+  return Object.freeze({
+    provider: 'BITGET_PUBLIC_UTA_V3',
+    market: 'CRYPTO_FUTURES',
+    symbol: normalizedSymbol,
+    endpoint,
+    query,
+    requestStartedAtMs: requestedAt,
+    receiveTimestampMs: receivedAt,
+    marketTimestampMs,
+    bids,
+    asks,
+    rawPayload: payload,
+    privateApiUsed: false,
+  });
+}
+
+export function normalizeBitgetPublicTradesFrame({
+  symbol,
+  payload,
+  requestStartedAtMs,
+  receiveTimestampMs,
+  endpoint = '/api/v3/market/fills',
+  query = '',
+  maxFutureSkewMs = 5_000,
+}) {
+  const normalizedSymbol = cleanSymbol(symbol);
+  const data = assertBitget(payload, 'PUBLIC_FILLS');
+  if (!Array.isArray(data) || data.length === 0) throw new Error('BITGET_PUBLIC_FILLS_MISSING');
+  const receivedAt = timestamp(receiveTimestampMs, 'BITGET_PUBLIC_FILL_RECEIVE_TIMESTAMP_MISSING');
+  const requestedAt = timestamp(requestStartedAtMs, 'BITGET_PUBLIC_FILL_REQUEST_TIMESTAMP_MISSING');
+  if (requestedAt > receivedAt) throw new Error('BITGET_PUBLIC_FILL_LOCAL_TIMESTAMP_ORDER_INVALID');
+  const trades = data.map((row) => {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) throw new Error('BITGET_PUBLIC_FILL_ROW_INVALID');
+    const side = String(row.side ?? '').trim().toLowerCase();
+    if (!['buy', 'sell'].includes(side)) throw new Error('BITGET_PUBLIC_FILL_SIDE_INVALID');
+    const eventTimestampMs = timestamp(row.ts, 'BITGET_PUBLIC_FILL_TIMESTAMP_MISSING');
+    if (eventTimestampMs > receivedAt + maxFutureSkewMs) throw new Error('BITGET_PUBLIC_FILL_FUTURE_TIMESTAMP');
+    const execId = String(row.execId ?? '').trim();
+    if (!execId) throw new Error('BITGET_PUBLIC_FILL_ID_MISSING');
+    return Object.freeze({
+      execId,
+      execLinkId: String(row.execLinkId ?? '').trim() || null,
+      price: positive(row.price, 'BITGET_PUBLIC_FILL_PRICE_INVALID'),
+      quantity: positive(row.size, 'BITGET_PUBLIC_FILL_QUANTITY_INVALID'),
+      providerTradeSide: side,
+      eventTimestampMs,
+      isRpi: String(row.isRPI ?? '').trim().toUpperCase() || null,
+      raw: row,
+    });
+  });
+  return Object.freeze({
+    provider: 'BITGET_PUBLIC_UTA_V3',
+    market: 'CRYPTO_FUTURES',
+    symbol: normalizedSymbol,
+    endpoint,
+    query,
+    requestStartedAtMs: requestedAt,
+    receiveTimestampMs: receivedAt,
+    trades: Object.freeze(trades),
+    rawPayload: payload,
+    privateApiUsed: false,
+  });
+}
+
+export async function fetchBitgetPublicOrderBookFrame(symbolInput, options = {}) {
+  const symbol = cleanSymbol(symbolInput);
+  if (!/^[A-Z0-9]{4,30}$/u.test(symbol)) throw new Error('INVALID_BITGET_SYMBOL');
+  const endpoint = '/api/v3/market/orderbook';
+  const query = new URLSearchParams({ category: 'USDT-FUTURES', symbol, limit: String(options.limit ?? 50) }).toString();
+  const frame = await fetchJsonFrame(`${BITGET_BASE}${endpoint}?${query}`, options);
+  return normalizeBitgetPublicOrderBookFrame({ ...frame, symbol, endpoint, query, maxFrameAgeMs: options.maxFrameAgeMs });
+}
+
+export async function fetchBitgetPublicTradesFrame(symbolInput, options = {}) {
+  const symbol = cleanSymbol(symbolInput);
+  if (!/^[A-Z0-9]{4,30}$/u.test(symbol)) throw new Error('INVALID_BITGET_SYMBOL');
+  const endpoint = '/api/v3/market/fills';
+  const query = new URLSearchParams({ category: 'USDT-FUTURES', symbol, limit: String(options.limit ?? 100) }).toString();
+  const frame = await fetchJsonFrame(`${BITGET_BASE}${endpoint}?${query}`, options);
+  return normalizeBitgetPublicTradesFrame({ ...frame, symbol, endpoint, query });
 }
 
 export async function fetchBitgetFuturesEvidence(symbolInput) {

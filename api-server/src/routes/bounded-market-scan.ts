@@ -31,6 +31,7 @@ import {
 } from '../services/scanner-access-control.service';
 import { withScannerCanonicalActions } from '../services/scanner-market-action.service';
 import { deliverScannerTelegramAlerts } from '../services/scanner-telegram-delivery.service';
+import { deliverScannerTelegramFollowups } from '../services/telegram-signal-followup.service';
 import {
   createScannerProviderHealth,
   type ScannerProviderHealth,
@@ -317,7 +318,13 @@ export function createBoundedMarketScanRouter(
       if (controller.signal.aborted || res.writableEnded) return;
       const canonicalResult = withScannerCanonicalActions(result);
       const visibleResult = withScannerOutcome(filterScannerResponseForTier(canonicalResult, membershipLevel, requestedGrade ?? undefined));
-      void deliverScannerTelegramAlerts(visibleResult.alerts);
+      void deliverScannerTelegramAlerts(
+        visibleResult.alerts,
+        undefined,
+        undefined,
+        { timeframe, generatedAt: visibleResult.generatedAt },
+      );
+      void deliverScannerTelegramFollowups(visibleResult.cards);
       res.setHeader('X-Scanner-Request-Id', result.requestId);
       return res.json({
         ...visibleResult,

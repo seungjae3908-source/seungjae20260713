@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { AlertTriangle, Loader2, ShieldCheck, ShieldX, X } from 'lucide-react';
 import type { TradeApprovalQueueItem } from '@/components/trade-approval-queue';
+import { SOLID_MODAL_SURFACE_STYLE } from '@/components/ui/modal-surface';
 import {
   accountModeLabel,
   approvalCountdown,
@@ -152,7 +153,8 @@ export function TradeApprovalConfirmationDialog({
         aria-labelledby="trade-approval-dialog-title"
         aria-describedby="trade-approval-dialog-description"
         onKeyDown={onKeyDown}
-        className="relative z-10 flex max-h-[calc(100dvh-1.5rem)] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-card-border bg-card shadow-2xl sm:max-h-[min(90dvh,760px)]"
+        className="relative z-10 flex max-h-[calc(100dvh-1.5rem)] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-card-border shadow-2xl sm:max-h-[min(90dvh,760px)]"
+        style={SOLID_MODAL_SURFACE_STYLE}
       >
         <div className="flex shrink-0 items-start justify-between gap-3 border-b border-card-border p-4">
           <div className="min-w-0">
@@ -264,7 +266,7 @@ export function TradeApprovalConfirmationDialog({
           </details>
         </div>
 
-        <div className="grid shrink-0 grid-cols-2 gap-2 border-t border-card-border bg-card p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+        <div className="grid shrink-0 grid-cols-2 gap-2 border-t border-card-border p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
           <button
             ref={cancelButtonRef}
             type="button"
