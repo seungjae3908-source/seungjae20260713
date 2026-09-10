@@ -43,6 +43,10 @@ function immutableSha(value) {
   return typeof value === "string" && /^[0-9a-f]{40}$/iu.test(value);
 }
 
+function digest(value) {
+  return typeof value === "string" && /^[0-9a-f]{64}$/iu.test(value);
+}
+
 function safetyEnvelope() {
   return Object.freeze({
     simulatedOnly: true,
@@ -662,7 +666,56 @@ export async function runRecurringPaperCycle({
       }
       continue;
     }
-    const settlementId = hash({ positionId: position.positionId, paperSampleId: settlement.paperSampleId, settledAtMs: settlement.settledAtMs });
+    const naturalSettlement = position.lifecycle?.sampleEligibility?.provenanceClass === "NATURAL_FORWARD";
+    if (naturalSettlement && (!digest(canonicalLifecycleEvidence?.exitTriggerId)
+      || !digest(canonicalLifecycleEvidence?.exitExecutionId)
+      || settlement.exitTriggerId !== canonicalLifecycleEvidence.exitTriggerId
+      || settlement.exitExecutionId !== canonicalLifecycleEvidence.exitExecutionId
+      || canonicalLifecycleEvidence.candidateId !== settlement.candidateId
+      || canonicalLifecycleEvidence.entryId !== settlement.paperSampleId
+      || canonicalLifecycleEvidence.positionId !== position.positionId
+      || canonicalLifecycleEvidence.costPolicyVersion !== settlement.costPolicyVersion
+      || canonicalLifecycleEvidence.exitExecutionIdentity?.entryId !== settlement.paperSampleId
+      || canonicalLifecycleEvidence.exitExecutionIdentity?.provider !== settlement.exitEvidenceProvenance?.provider
+      || canonicalLifecycleEvidence.exitExecutionIdentity?.market !== settlement.market
+      || canonicalLifecycleEvidence.exitExecutionIdentity?.symbol !== settlement.symbol
+      || canonicalLifecycleEvidence.exitExecutionIdentity?.timeframe !== settlement.timeframe
+      || canonicalLifecycleEvidence.exitExecutionIdentity?.direction !== settlement.entryDirection
+      || canonicalLifecycleEvidence.costEvidence?.exitTriggerId !== settlement.exitTriggerId
+      || canonicalLifecycleEvidence.costEvidence?.exitExecutionId !== settlement.exitExecutionId)) {
+      directReasons.push(loopReasonObservation({
+        sourceStage: "SETTLEMENT",
+        sourceCode: "PAPER_SETTLEMENT_IMMUTABLE_IDENTITY_MISMATCH",
+        provenance: "recurring-paper-loop-v1 Natural Settlement identity guard",
+        observedAt: cycle.evaluatedAtMs,
+        identity: cycle.identity,
+        observationId: canonicalLifecycleEvidence?.exitExecutionId ?? canonicalLifecycleEvidence?.exitTriggerId ?? null,
+      }));
+      continue;
+    }
+    const settlementIdentity = Object.freeze({
+      candidateId: settlement.candidateId,
+      entryId: settlement.paperSampleId,
+      positionId: position.positionId,
+      exitTriggerId: settlement.exitTriggerId,
+      exitExecutionId: settlement.exitExecutionId,
+      provider: settlement.exitEvidenceProvenance?.provider ?? null,
+      market: settlement.market,
+      symbol: settlement.symbol,
+      timeframe: settlement.timeframe,
+      side: settlement.entryDirection,
+      strategyFamily: settlement.strategyFamily,
+      strategyVersion: settlement.strategyVersion,
+      parameterDigest: settlement.parameterDigest,
+      accountMode: settlement.accountMode,
+      costPolicyVersion: settlement.costPolicyVersion,
+      costEvidenceDigest: canonicalLifecycleEvidence?.costEvidence?.evidenceDigest ?? null,
+      exitEvidenceProvenanceDigest: hash(settlement.exitEvidenceProvenance),
+      settledAtMs: settlement.settledAtMs,
+      netPnl: settlement.netPnl,
+      netReturnPercent: settlement.netReturnPercent,
+    });
+    const settlementId = hash(settlementIdentity);
     if (settlements.some((row) => row.settlementId === settlementId || row.paperSampleId === settlement.paperSampleId)) {
       directReasons.push(loopReasonObservation({
         sourceStage: "SETTLEMENT",
@@ -677,6 +730,8 @@ export async function runRecurringPaperCycle({
     const settlementRecord = Object.freeze({
       ...settlement,
       settlementId,
+      settlementIdentity,
+      entryId: settlement.paperSampleId,
       positionId: position.positionId,
       exitReason: exit.exitReason ?? "CANONICAL_EXTERNAL_EXIT",
       settlementRecordedAtMs: cycle.evaluatedAtMs,
