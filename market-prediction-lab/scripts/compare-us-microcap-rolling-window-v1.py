@@ -119,6 +119,11 @@ def compare(previous: dict, current: dict) -> dict:
         "crossRunImprovementClaimAllowed": cross_run_improvement_claim_allowed,
         "canonicalEvidenceEligible": False,
         "canonicalSampleDelta": 0,
+        "profitabilityProven": False,
+        "profitabilityPromotionAllowed": False,
+        "executionAuthority": "NONE",
+        "liveTradingAllowed": False,
+        "privateApiAllowed": False,
         "notes": [
             "A bounded rolling Yahoo window can improve EV/PF merely because an older loser aged out.",
             "Dropped entries block an improvement claim even when current EV/PF is numerically higher.",

@@ -243,14 +243,14 @@ input[type='search']::-webkit-search-results-decoration {
  * Mobile and desktop navigation intentionally use different geometry.
  * Mobile keeps the edge-to-edge safe-area bar. Desktop becomes a bounded
  * floating dock so wide screens no longer look like a stretched phone UI.
- * Existing page bottom padding remains valid, so the dock does not cover content.
+ * Keep the desktop dock in normal flow so its visual box cannot cover the
+ * interactive content immediately above it.
  */
 @media (min-width: 1024px) {
   nav[aria-label='주요 메뉴'] {
     inset-inline: auto;
     left: 50%;
     right: auto;
-    bottom: 1rem;
     width: min(52rem, calc(100vw - 2rem));
     transform: translateX(-50%);
     border-right-width: 1px;
@@ -426,4 +426,15 @@ input[type='search']::-webkit-search-results-decoration {
     overflow-wrap: anywhere !important;
     word-break: break-all !important;
   }
+}
+
+/*
+ * Scanner detail is an elevated mobile sheet, not a translucent dashboard card.
+ * Keep the global 72% card treatment for ordinary cards, but use the raw theme
+ * colors here so the underlying scanner list cannot bleed through the detail UI.
+ */
+[data-testid='scanner-mobile-sheet'] {
+  background-color: hsl(var(--card));
+  border-color: hsl(var(--card-border));
+  color: hsl(var(--card-foreground));
 }

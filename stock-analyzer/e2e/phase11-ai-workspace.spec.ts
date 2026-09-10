@@ -110,8 +110,9 @@ const scannerPayload = {
     listingStatusCoverage: 'listed-or-unknown',
   },
   dataState: 'complete',
+  outcome: 'CANDIDATES_AVAILABLE',
   message: '1종목 공개 데이터 분석을 완료했습니다.',
-  generatedAt: '2026-08-03T00:00:00Z',
+  generatedAt: new Date().toISOString(),
   orderSubmitted: false,
   exchangeRequestSent: false,
 };
@@ -156,9 +157,11 @@ for (const [width, height] of [[360, 800], [390, 844], [430, 932]] as const) {
     await page.getByText('SK하이닉스', { exact: true }).last().click();
     await page.getByRole('button', { name: 'AI 차트 분석기에서 보기', exact: true }).click();
     await expect(page).toHaveURL(/\/ai-chart\?/);
-    await expect(page.getByRole('heading', { name: 'AI 차트 생중계', level: 1 })).toBeVisible();
-    await expect(page.getByRole('heading', { name: '현재 차트 컨텍스트' })).toBeVisible();
-    await expect(page.getByText('000660 · KR · 1D', { exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /AI 차트 생중계/, level: 1 })).toBeVisible();
+    await expect(page.getByTestId('ai-chart-mobile-summary')).toContainText('SK하이닉스');
+    await page.getByRole('tab', { name: '상세', exact: true }).click();
+    await expect(page.getByRole('heading', { name: '현재 상태' })).toBeVisible();
+    await expect(page.getByText('000660 · 국내주식 · 1D', { exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   });
 }
@@ -168,13 +171,13 @@ test('desktop technical workspace keeps AI signal scanner, chart broadcast, and 
   await mockWorkspace(page);
   await page.goto('/__phase11-technical-workspace-e2e');
   await expect(page.getByRole('heading', { name: 'AI 신호검색기' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'AI 차트 생중계', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /AI 차트 생중계/, level: 1 })).toBeVisible();
   const scanner = page.locator('aside').first();
   await expect(scanner.getByText('SK하이닉스', { exact: true })).toBeVisible();
   await scanner.getByRole('button', { name: 'AI 차트 분석기에서 보기', exact: true }).click();
   await expect(page).toHaveURL(/\/__phase11-technical-workspace-e2e$/);
-  await expect(page.getByRole('heading', { name: '현재 차트 컨텍스트' })).toBeVisible();
-  await expect(page.getByText('000660 · KR · 1D', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '현재 상태' })).toBeVisible();
+  await expect(page.getByText('000660 · 국내주식 · 1D', { exact: true })).toBeVisible();
 });
 
 test('legacy stock auto-trade controls remain fail closed with zero order mutations', async ({ page }) => {
