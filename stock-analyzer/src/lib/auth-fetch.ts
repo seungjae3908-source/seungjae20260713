@@ -11,6 +11,11 @@ import {
   requireAccountReadonlySnapshotResponse,
 } from '@/lib/account-readonly-response';
 import { requireSpotCryptoTickerResponse } from '@/lib/crypto-ticker-response';
+import {
+  INVALID_LEGACY_STOCK_SEARCH_RESPONSE,
+  isLegacyStockSearchResponsePath,
+  requireLegacyStockSearchResponse,
+} from '@/lib/legacy-stock-search-response';
 import { parsePortfolioQuoteSnapshot } from '@/lib/portfolio-market-truth';
 import {
   INVALID_PRICE_ALERT_RESPONSE,
@@ -97,6 +102,16 @@ async function validateInvestmentResponse(
   }
 
   const method = requestMethod(input, init);
+  if (isLegacyStockSearchResponsePath(path, method)) {
+    try {
+      const url = requestUrl(input);
+      if (!url) throw new Error('INVALID_LEGACY_STOCK_SEARCH_URL');
+      requireLegacyStockSearchResponse(url.toString(), await response.clone().json());
+    } catch {
+      throw new Error(INVALID_LEGACY_STOCK_SEARCH_RESPONSE);
+    }
+  }
+
   if (isAccountReadonlySnapshotPath(path, method)) {
     try {
       requireAccountReadonlySnapshotResponse(path, method, await response.clone().json());
