@@ -5,6 +5,7 @@ on:
     branches:
       - research/microcap-research-production-task-v1
     paths:
+      - '**'
       - research-production/src/microcap-task.mjs
       - research-production/test/microcap-task.test.mjs
       - research-production/bin/microcap-research.mjs
@@ -87,6 +88,7 @@ jobs:
           if grep -Eq '^[[:space:]]*schedule:' "$FILE"; then echo 'schedule forbidden'; exit 10; fi
           grep -Fq 'permissions:' "$FILE"
           grep -Fq 'contents: read' "$FILE"
+          grep -Fq -- "- '**'" "$FILE" || { echo 'every owner-branch head must be validated'; exit 13; }
           if grep -Eq '^[[:space:]]*(id-token|actions|issues|pull-requests|deployments|packages|statuses):[[:space:]]*write' "$FILE"; then
             echo 'write permission forbidden'; exit 11
           fi
