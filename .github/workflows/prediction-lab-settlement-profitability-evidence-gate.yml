@@ -29,47 +29,91 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Verify exact head and bounded four-file scope
+      - name: Verify exact head and semantic owner scope
+        id: scope
         shell: bash
         env:
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
         run: |
           set -euo pipefail
           actual_head="$(git rev-parse HEAD)"
           test "$actual_head" = "$EXPECTED_HEAD"
-          if [[ -n "$BASE_SHA" ]]; then
-            mapfile -t changed < <(git diff --name-only "$BASE_SHA...$actual_head")
-            test "${#changed[@]}" -eq 4
-            for path in "${changed[@]}"; do
-              case "$path" in
-                market-prediction-lab/src/settlement-profitability-evidence-gate-v1.js|\
-                market-prediction-lab/tests/settlement-profitability-evidence-gate-v1.test.js|\
-                market-prediction-lab/scripts/run-settlement-profitability-evidence-gate-v1.js|\
-                .github/workflows/prediction-lab-settlement-profitability-evidence-gate.yml)
-                  ;;
-                *)
-                  echo "unexpected changed path: $path" >&2
-                  exit 1
-                  ;;
-              esac
-            done
-            git diff --check "$BASE_SHA...$actual_head"
+
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "run_gate=true" >> "$GITHUB_OUTPUT"
+            echo "scope_mode=manual" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
+          test -n "$BASE_REF"
+          git fetch --no-tags origin "$BASE_REF:refs/remotes/origin/$BASE_REF"
+          current_base="$(git rev-parse "refs/remotes/origin/$BASE_REF^{commit}")"
+          semantic_base="$(git merge-base "$current_base" "$actual_head")"
+          mapfile -t changed < <(git diff --name-only "$semantic_base...$actual_head")
+
+          owner_count=0
+          non_owner_count=0
+          workflow_only=true
+          for path in "${changed[@]}"; do
+            case "$path" in
+              market-prediction-lab/src/settlement-profitability-evidence-gate-v1.js|\
+              market-prediction-lab/tests/settlement-profitability-evidence-gate-v1.test.js|\
+              market-prediction-lab/scripts/run-settlement-profitability-evidence-gate-v1.js|\
+              .github/workflows/prediction-lab-settlement-profitability-evidence-gate.yml)
+                owner_count=$((owner_count + 1))
+                ;;
+              *)
+                non_owner_count=$((non_owner_count + 1))
+                ;;
+            esac
+            if [[ "$path" != ".github/workflows/prediction-lab-settlement-profitability-evidence-gate.yml" ]]; then
+              workflow_only=false
+            fi
+          done
+
+          echo "current_base=$current_base semantic_base=$semantic_base changed=${#changed[@]} owner=$owner_count non_owner=$non_owner_count"
+          printf 'semantic_changed=%s\n' "${changed[*]:-NONE}"
+
+          if [[ "$owner_count" -eq 0 ]]; then
+            echo "Settlement owner files are absent from the current semantic PR diff; clean skip."
+            echo "run_gate=false" >> "$GITHUB_OUTPUT"
+            echo "scope_mode=clean_skip" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ "$workflow_only" == "true" && "${#changed[@]}" -eq 1 ]]; then
+            git diff --check "$semantic_base...$actual_head"
+            echo "run_gate=true" >> "$GITHUB_OUTPUT"
+            echo "scope_mode=workflow_maintenance" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          test "${#changed[@]}" -eq 4
+          test "$owner_count" -eq 4
+          test "$non_owner_count" -eq 0
+          git diff --check "$semantic_base...$actual_head"
+          echo "run_gate=true" >> "$GITHUB_OUTPUT"
+          echo "scope_mode=bounded_owner" >> "$GITHUB_OUTPUT"
+
       - name: Syntax check
+        if: steps.scope.outputs.run_gate == 'true'
         run: |
           node --check market-prediction-lab/src/settlement-profitability-evidence-gate-v1.js
           node --check market-prediction-lab/scripts/run-settlement-profitability-evidence-gate-v1.js
           node --check market-prediction-lab/tests/settlement-profitability-evidence-gate-v1.test.js
 
       - name: Focused evidence-gate tests
+        if: steps.scope.outputs.run_gate == 'true'
         run: node --test market-prediction-lab/tests/settlement-profitability-evidence-gate-v1.test.js
 
       - name: Canonical Settlement regression
+        if: steps.scope.outputs.run_gate == 'true'
         run: node --test market-prediction-lab/tests/four-market-paper-settlement-v1.test.js
 
       - name: Verify zero-evidence runner stays fail-closed
+        if: steps.scope.outputs.run_gate == 'true'
         shell: bash
         run: |
           set -euo pipefail

@@ -15,6 +15,11 @@ function baseConfig(overrides = {}) {
   return { market: "CRYPTO_FUTURES", symbol: "BTCUSDT", timeframe: "15m", source: "test", ...overrides };
 }
 
+const completeTrainingEvidence = Object.freeze({
+  marketFeatures: Object.freeze({ sentimentScore: 0, benchmarkReturn: 0 }),
+  derivativesFeatures: Object.freeze({ openInterestChange: 0, fundingRate: 0, longShortRatio: 1 }),
+});
+
 test("canonical rows normalize to unique ascending candles", () => {
   const rows = generateCandles({ count: 80 });
   rows.push({ ...rows[20], close: rows[20].close * 1.001, high: rows[20].high * 1.002 });
@@ -98,7 +103,7 @@ test("snapshot ingestion is idempotent for identical raw content", async () => {
 
 test("training records never include future candles in features", () => {
   const snapshot = normalizeCandleRows(generateCandles({ count: 420 }), baseConfig({ format: "canonical-object" }));
-  const records = buildTrainingRecords(snapshot, { lookback: 120, horizon: 5, stride: 7 });
+  const records = buildTrainingRecords(snapshot, { lookback: 120, horizon: 5, stride: 7, ...completeTrainingEvidence });
   assert.ok(records.length > 30);
   for (const record of records) {
     assert.ok(record.anchorTimestamp < record.futureStartTimestamp);
@@ -110,14 +115,14 @@ test("training records never include future candles in features", () => {
 
 test("training record generation is deterministic", () => {
   const snapshot = normalizeCandleRows(generateCandles({ count: 300 }), baseConfig({ format: "canonical-object" }));
-  const first = buildTrainingRecords(snapshot, { lookback: 100, horizon: 4, stride: 5 });
-  const second = buildTrainingRecords(snapshot, { lookback: 100, horizon: 4, stride: 5 });
+  const first = buildTrainingRecords(snapshot, { lookback: 100, horizon: 4, stride: 5, ...completeTrainingEvidence });
+  const second = buildTrainingRecords(snapshot, { lookback: 100, horizon: 4, stride: 5, ...completeTrainingEvidence });
   assert.deepEqual(first, second);
 });
 
 test("walk-forward split purges overlapping forecast horizons", () => {
   const snapshot = normalizeCandleRows(generateCandles({ count: 600 }), baseConfig({ format: "canonical-object" }));
-  const records = buildTrainingRecords(snapshot, { lookback: 120, horizon: 10, stride: 2 });
+  const records = buildTrainingRecords(snapshot, { lookback: 120, horizon: 10, stride: 2, ...completeTrainingEvidence });
   const split = walkForwardSplit(records);
   assert.ok(split.report.trainLastFutureTimestamp < split.report.validationFirstAnchorTimestamp);
   assert.ok(split.report.validationLastFutureTimestamp < split.report.testFirstAnchorTimestamp);
@@ -127,7 +132,12 @@ test("dataset export writes non-empty hash-addressed splits", async () => {
   const directory = await mkdtemp(join(tmpdir(), "dataset-test-"));
   try {
     const snapshot = normalizeCandleRows(generateCandles({ count: 500 }), baseConfig({ format: "canonical-object" }));
-    const split = walkForwardSplit(buildTrainingRecords(snapshot, { lookback: 100, horizon: 5, stride: 2 }));
+    const split = walkForwardSplit(buildTrainingRecords(snapshot, {
+      lookback: 100,
+      horizon: 5,
+      stride: 2,
+      ...completeTrainingEvidence,
+    }));
     const manifest = await exportWalkForwardDataset(directory, split, snapshot.metadata);
     for (const name of ["train", "validation", "test"]) {
       const content = await readFile(manifest.outputs[name].path, "utf8");

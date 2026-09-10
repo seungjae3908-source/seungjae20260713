@@ -1,0 +1,237 @@
+name: Public Forward Liquidity Successor Scheduled Capture
+
+# IMPORTANT GOVERNANCE BOUNDARY:
+# - V2 history and already-failed V2 slots remain immutable and receive zero V3 credit.
+# - A V3 activation binding may be validated on a non-default Draft PR, but PR events can never capture.
+# - Merging an activation binding to the default branch is the activation event and therefore
+#   requires separate exact PR Merge approval plus V3 schedule-activation authority.
+# - No replay/backfill/manual/synthetic sample credit is granted by validation.
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/public-forward-liquidity-successor-scheduled-capture.yml'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-seam-v1.mjs'
+      - 'market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-reliability-v3.mjs'
+      - 'market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-v3.json'
+      - 'market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-reliability-v3.test.mjs'
+  schedule:
+    - cron: '17 * * * *'
+    - cron: '27 * * * *'
+    - cron: '37 * * * *'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: public-forward-liquidity-successor-scheduled-capture
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  validate-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact workflow revision without credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Verify V3 trigger, queue, and minimal permission contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          workflow='.github/workflows/public-forward-liquidity-successor-scheduled-capture.yml'
+          test "$(grep -Ec "^[[:space:]]{4}- cron: '17 \\* \\* \\* \\*'[[:space:]]*$" "$workflow")" -eq 1
+          test "$(grep -Ec "^[[:space:]]{4}- cron: '27 \\* \\* \\* \\*'[[:space:]]*$" "$workflow")" -eq 1
+          test "$(grep -Ec "^[[:space:]]{4}- cron: '37 \\* \\* \\* \\*'[[:space:]]*$" "$workflow")" -eq 1
+          test "$(grep -Ec "^[[:space:]]{2}queue:[[:space:]]+max[[:space:]]*$" "$workflow")" -eq 1
+          test "$(grep -Ec "^[[:space:]]{2}cancel-in-progress:[[:space:]]+false[[:space:]]*$" "$workflow")" -eq 1
+          ! grep -Eq '^[[:space:]]{2}workflow_dispatch:[[:space:]]*$' "$workflow"
+          ! grep -Eq 'contents:[[:space:]]+write' "$workflow"
+          ! grep -Eq 'actions:[[:space:]]+write' "$workflow"
+          ! grep -Eq 'issues:[[:space:]]+write' "$workflow"
+          ! grep -Eq 'pull-requests:[[:space:]]+write' "$workflow"
+          ! grep -Eq 'deployments:[[:space:]]+write' "$workflow"
+          ! grep -Eq 'packages:[[:space:]]+write' "$workflow"
+          ! grep -Eq 'id-token:[[:space:]]+write' "$workflow"
+          test "$(grep -Ec 'CAPTURE_ATTEMPT_ARTIFACT_NAME: [$][{][{] steps[.]capture[.]outputs[.]attempt_artifact_name [}][}]' "$workflow")" -eq 1
+          test "$(grep -Fc 'artifact_name=${CAPTURE_ATTEMPT_ARTIFACT_NAME}' "$workflow")" -eq 1
+          test "$(grep -Ec 'name: [$][{][{] steps[.]attempt_name[.]outputs[.]artifact_name [}][}]' "$workflow")" -eq 1
+          test "$(grep -Ec 'ARTIFACT_NAME: [$][{][{] steps[.]attempt_name[.]outputs[.]artifact_name [}][}]' "$workflow")" -eq 1
+          ! grep -Fq 'steps.attempt_name.outputs.name' "$workflow"
+          ! grep -Eq '^[[:space:]]+RUNNER_NAME:' "$workflow"
+
+      - name: Syntax check existing seam, runner, and V3 reliability contract
+        run: |
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-seam-v1.mjs
+          node --check market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-reliability-v3.mjs
+
+      - name: Stash activation binding for preserved inactive regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          activation='market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json'
+          if [[ -f "$activation" ]]; then
+            mv "$activation" "$RUNNER_TEMP/successor-v3-activation.json"
+            echo 'SUCCESSOR_V3_ACTIVATION_STASHED=true' >> "$GITHUB_ENV"
+          else
+            echo 'SUCCESSOR_V3_ACTIVATION_STASHED=false' >> "$GITHUB_ENV"
+          fi
+
+      - name: Run V2 preservation and V3 fail-closed regression suites
+        run: >-
+          node --test
+          market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-seam-v1.test.mjs
+          market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-reliability-v3.test.mjs
+
+      - name: Run zero-network zero-capture runner self-check
+        run: node market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs self-check
+
+      - name: Restore and validate V3 activation binding
+        if: env.SUCCESSOR_V3_ACTIVATION_STASHED == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          activation='market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json'
+          mv "$RUNNER_TEMP/successor-v3-activation.json" "$activation"
+          node --input-type=module <<'NODE'
+          import {
+            SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT,
+            verifySuccessorScheduleReliabilityV3Contract,
+          } from './market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-reliability-v3.mjs';
+
+          const contract = SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT;
+          const verdict = verifySuccessorScheduleReliabilityV3Contract(contract);
+          if (!verdict.valid || !verdict.activationBound) {
+            console.error('Invalid V3 activation binding:', verdict.blockers.join(','));
+            process.exit(1);
+          }
+          NODE
+
+      - name: Require active V3 binding for scheduled validation
+        if: github.event_name == 'schedule'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${SUCCESSOR_V3_ACTIVATION_STASHED:-false}" = 'true'
+          test "$GITHUB_REF" = 'refs/heads/main'
+
+      - name: Prove pull requests cannot invoke V2 or V3 capture
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = 'pull_request'
+          test "$GITHUB_REF" != 'refs/heads/main'
+          echo 'PR validation only: V2/V3 collector/capture/bind-artifact invocation = 0'
+
+  capture:
+    if: github.event_name == 'schedule'
+    needs: validate-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact default-branch scheduled SHA without credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Verify default branch and exact current main before capture
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = 'schedule'
+          test "$GITHUB_REF" = 'refs/heads/main'
+          actual_sha="$(git rev-parse HEAD)"
+          test "$actual_sha" = "$GITHUB_SHA"
+          git fetch --no-tags --depth=1 origin main
+          remote_main="$(git rev-parse FETCH_HEAD)"
+          test "$remote_main" = "$GITHUB_SHA"
+
+      - name: Execute fail-closed Successor V3 scheduled capture seam
+        id: capture
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          OUTPUT_DIR: public-forward-liquidity-successor-capture
+        run: node market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs capture-v3
+
+      - name: Choose immutable attempt artifact name
+        id: attempt_name
+        shell: bash
+        env:
+          CAPTURE_ATTEMPT_ARTIFACT_NAME: ${{ steps.capture.outputs.attempt_artifact_name }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$CAPTURE_ATTEMPT_ARTIFACT_NAME" ]]; then
+            attempt_artifact_name="$CAPTURE_ATTEMPT_ARTIFACT_NAME"
+          else
+            attempt_artifact_name="public-forward-liquidity-successor-v3-diagnostic-$RUN_ID-$RUN_ATTEMPT"
+          fi
+          echo "artifact_name=${attempt_artifact_name}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload immutable Successor V3 attempt artifact
+        id: attempt_upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.attempt_name.outputs.artifact_name }}
+          path: public-forward-liquidity-successor-capture
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Bind raw evidence to immutable GitHub artifact identity
+        id: bind_artifact
+        if: steps.capture.outputs.raw_batch_present == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          OUTPUT_DIR: public-forward-liquidity-successor-capture
+          ARTIFACT_ID: ${{ steps.attempt_upload.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.attempt_upload.outputs.artifact-digest }}
+          ARTIFACT_NAME: ${{ steps.attempt_name.outputs.artifact_name }}
+        run: node market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs bind-artifact
+
+      - name: Upload finalized immutable Successor V3 receipt
+        if: steps.capture.outputs.raw_batch_present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-forward-liquidity-successor-v3-slot-receipt-${{ steps.capture.outputs.slot_index }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            public-forward-liquidity-successor-capture/artifact-receipt.json
+            public-forward-liquidity-successor-capture/artifact-identity.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Fail closed unless this is one eligible PRESENT first-attempt V3 slot sample
+        shell: bash
+        env:
+          CAPTURE_STATUS: ${{ steps.capture.outputs.capture_status }}
+          PROSPECTIVE_SLOT_CREDIT: ${{ steps.capture.outputs.prospective_slot_credit }}
+          RAW_BATCH_PRESENT: ${{ steps.capture.outputs.raw_batch_present }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          test "$RUN_ATTEMPT" = '1'
+          test "$CAPTURE_STATUS" = 'PRESENT'
+          test "$PROSPECTIVE_SLOT_CREDIT" = '1'
+          test "$RAW_BATCH_PRESENT" = 'true'
