@@ -21,9 +21,66 @@ function fulfill(route: Route, body: unknown, status = 200) {
 
 function emptyIntegrationState() {
   return {
+    ok: true,
     brokerConnections: [],
+    brokerConnectionsAvailable: true,
+    brokerConnectionsErrorCode: null,
+    brokerMetadataRead: true,
     telegram: { connected: false, status: 'DISCONNECTED', connectedAt: null },
-    preferences: {},
+    preferences: {
+      ORDER_SUBMITTED: false,
+      ORDER_PARTIALLY_FILLED: false,
+      ORDER_FILLED: false,
+      ORDER_CANCELLED: false,
+      ORDER_REJECTED: false,
+      POSITION_OPENED: false,
+      POSITION_INCREASED: false,
+      POSITION_REDUCED: false,
+      POSITION_CLOSED: false,
+      TAKE_PROFIT_FILLED: false,
+      STOP_FILLED: false,
+      MANUAL_PORTFOLIO_ENTRY: false,
+    },
+    deliveries: [],
+    telegramStorageAvailable: true,
+    telegramStorageErrorCode: null,
+    alertPolicy: {
+      userId: USER_ID,
+      enabled: false,
+      markets: ['KR', 'US', 'CRYPTO_SPOT', 'CRYPTO_FUTURES'],
+      signalTypes: ['BUY', 'LONG', 'SHORT', 'NO_TRADE', 'PRICE_TARGET', 'STRATEGY_HEALTH', 'CHAMPION', 'RESEARCH', 'SETTLEMENT', 'PROVIDER_SERVER_ERROR'],
+      priorities: ['CRITICAL', 'IMPORTANT', 'INFO'],
+      quietHours: { enabled: false, start: '22:00', end: '07:00', timeZone: 'Asia/Seoul', criticalBypass: true },
+      cooldownMs: 300_000,
+      sameEventDedupeMs: 86_400_000,
+      sameSymbolWindowMs: 3_600_000,
+      sameSymbolRepeatLimit: 3,
+      deliveryMode: 'IMMEDIATE',
+      digest: { enabled: false, windowMs: 1_800_000 },
+    },
+    alertPolicySource: 'DEFAULT_MISSING',
+    alertPolicyStorageAvailable: true,
+    alertPolicyStorageErrorCode: null,
+    telegramRuntime: {
+      deliveryReady: false,
+      linkingReady: false,
+      webhookConfigured: false,
+      botUsernameConfigured: false,
+      stockRoomReady: false,
+      cryptoRoomReady: false,
+      richSignalEnabled: false,
+      aiExplanationEnabled: false,
+      signalFollowupEnabled: false,
+      memberHoldingsEnabled: false,
+      orderAuthority: 'NONE',
+      privateTradingApiAllowed: false,
+      realOrderAllowed: false,
+    },
+    prioritySemantics: 'DELIVERY_URGENCY_ONLY',
+    partial: false,
+    privateApiRequests: 0,
+    ordersSubmitted: 0,
+    ordersCancelled: 0,
   };
 }
 
@@ -203,6 +260,23 @@ test('actual API failure remains visible and is not converted to an empty or dis
   expect(runtime.diagnostics.integrationRequests).toBe(1);
   expect(runtime.diagnostics.integrationResponses).toBe(1);
   runtime.assertClean(['Failed to load resource: the server responded with a status of 503 (Service Unavailable)']);
+});
+
+test('malformed HTTP 200 fails closed before Account UI can show connected or empty truth', async ({ page }) => {
+  const runtime = await installRuntime(page, {
+    integration: (route) => fulfill(route, { ok: true, telegram: { connected: true } }),
+  });
+
+  await page.goto('/account');
+  const panel = page.getByTestId('user-broker-telegram-panel');
+  await expect(panel).toHaveAttribute('data-user-integrations-request-state', 'failure');
+  await expect(panel.getByRole('alert')).toContainText('INVALID_USER_INTEGRATIONS_RESPONSE');
+  await expect(panel).not.toContainText('등록된 Broker 연결이 없습니다.');
+  await expect(panel).not.toContainText('연결됨');
+  await expect(panel).not.toContainText('연결 안 됨');
+  expect(runtime.diagnostics.integrationRequests).toBe(1);
+  expect(runtime.diagnostics.integrationResponses).toBe(1);
+  runtime.assertClean();
 });
 
 test('immediate logout drains the initial read before auth invalidation with zero abort and zero post-logout GET', async ({ page }) => {

@@ -105,8 +105,8 @@ test('상세분석 replaces the embedded legacy full page with focused AI financ
   expect(detailAnalysisSource).not.toContain("label: '뉴스'");
 });
 
-test('all shared and semantic tab labels use one centered 12px 900 weight 16px line-height spec', () => {
-  expect(responsiveTabsSource).toContain('inline-flex min-h-11 shrink-0 items-center justify-center rounded-xl text-center text-xs font-black leading-4');
+test('all shared and semantic tab labels use one centered 12px 600 weight 16px line-height spec', () => {
+  expect(responsiveTabsSource).toContain('inline-flex min-h-11 shrink-0 items-center justify-center rounded-xl text-center text-xs font-semibold leading-4');
   expect(responsiveTabsSource).toContain('<span className="block w-full text-center leading-4">');
   expect(touchCss).toContain('#root [role="tablist"] [role="tab"]');
   expect(touchCss).toContain('#root [aria-label$="탭"] > button');
@@ -116,7 +116,7 @@ test('all shared and semantic tab labels use one centered 12px 900 weight 16px l
   expect(touchCss).toContain('justify-content: center !important;');
   expect(touchCss).toContain('font-size: 0.75rem !important;');
   expect(touchCss).toContain('line-height: 1rem !important;');
-  expect(touchCss).toContain('font-weight: 900 !important;');
+  expect(touchCss).toContain('font-weight: 600 !important;');
   expect(touchCss).toContain('text-align: center !important;');
 });
 
@@ -131,8 +131,8 @@ test('compact copy policy removes attached helper prose but preserves runtime ev
   expect(touchCss).not.toContain('#root p {');
 });
 
-test('modern home search theme learn order and settings routes lose obsolete BottomNav tail spacers', () => {
-  for (const title of ['홈', '통합검색', '테마', '투자 공부', '승인형 주문', '앱 설정']) {
+test('modern home search theme learn auto-trading and settings routes lose obsolete BottomNav tail spacers', () => {
+  for (const title of ['홈', '통합검색', '테마', '투자 공부', '자동매매', '앱 설정']) {
     expect(touchCss).toContain(`data-route-title="${title}"`);
   }
   expect(touchCss).toContain('padding-bottom: 1rem !important;');
