@@ -258,7 +258,19 @@ def build_row(raw: dict) -> dict:
 def build_manifest(bundle: dict) -> dict:
     rows = bundle.get("entries") if isinstance(bundle, dict) else None
     rows = rows if isinstance(rows, list) else []
-    built = [build_row(row) for row in rows if isinstance(row, dict)]
+    built = []
+    for row in rows:
+        if isinstance(row, dict):
+            built.append(build_row(row))
+            continue
+        invalid = {
+            "symbol": "",
+            "asOf": None,
+            "status": "DATA_BLOCKED",
+            "blockers": ["MANIFEST_ENTRY_INVALID"],
+        }
+        invalid["rowDigest"] = stable_digest(invalid)
+        built.append(invalid)
     ready = sum(row.get("status") == "MANIFEST_READY" for row in built)
     blocked = len(built) - ready
     result = {
@@ -348,6 +360,11 @@ def self_test() -> None:
     assert missing_digest_out["status"] == "DATA_BLOCKED_PIT_MANIFEST"
     assert "FLOAT_PROVENANCE_DIGEST_MISSING" in missing_digest_out["entries"][0]["blockers"]
     assert missing_digest_out["entries"][0]["floatEvidence"]["provenanceDigest"] is None
+
+    malformed = build_manifest({"entries": [safe, None]})
+    assert malformed["status"] == "DATA_BLOCKED_PIT_MANIFEST"
+    assert malformed["counts"] == {"rows": 2, "ready": 1, "blocked": 1}
+    assert malformed["entries"][1]["blockers"] == ["MANIFEST_ENTRY_INVALID"]
 
     risk = json.loads(json.dumps(safe))
     risk["symbol"] = "OFFERING"
