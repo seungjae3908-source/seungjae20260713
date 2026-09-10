@@ -40,6 +40,7 @@ const EXPECTED_SOURCE_FILES = Object.freeze([
   "api-server/src/services/authoritative-paper-runtime-package.entry.ts",
   "api-server/src/services/bitget-futures-public-evidence.service.ts",
   "api-server/src/services/crypto-signal-scanner.service.ts",
+  "api-server/src/services/forward-calibration-gross-edge.service.ts",
   "api-server/src/services/forward-recommendation-observer-runtime.service.ts",
   "api-server/src/services/forward-recommendation-observer.service.ts",
   "api-server/src/services/market-price-precision.service.ts",

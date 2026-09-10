@@ -98,12 +98,30 @@ function positionIdentity(position) {
     market: position?.market,
     symbol: position?.symbol,
     direction: position?.direction,
+    candidateId: position?.candidateId,
+    strategyFamily: position?.strategyFamily,
     strategyId: position?.strategyId,
     strategyVersion: position?.strategyVersion,
     parameterHash: position?.parameterHash,
+    parameterDigest: position?.parameterDigest,
     researchCodeSha: position?.researchCodeSha,
     costPolicyVersion: position?.costPolicyVersion,
+    accountMode: position?.accountMode,
   };
+}
+
+function frozenCandidateIdentityBlockers(position) {
+  const blockers = [];
+  if (!/^paper-candidate-v1:[0-9a-f]{64}$/u.test(position?.candidateId ?? "")) {
+    blockers.push("PAPER_POSITION_CANDIDATE_ID_REQUIRED");
+  }
+  if (!nonEmpty(position?.strategyFamily)) blockers.push("PAPER_POSITION_STRATEGY_FAMILY_REQUIRED");
+  if (!nonEmpty(position?.parameterDigest)) blockers.push("PAPER_POSITION_PARAMETER_DIGEST_REQUIRED");
+  else if (position.parameterDigest !== position.parameterHash) {
+    blockers.push("PAPER_POSITION_PARAMETER_IDENTITY_MISMATCH");
+  }
+  if (position?.accountMode !== "PAPER") blockers.push("PAPER_POSITION_ACCOUNT_MODE_REQUIRED");
+  return blockers;
 }
 
 function exitExecutionIdentity(position, trigger, sourceIdentity, provenanceId, exitExecutionDigest) {
@@ -116,6 +134,14 @@ function exitExecutionIdentity(position, trigger, sourceIdentity, provenanceId, 
     market: position?.market,
     symbol: position?.symbol,
     direction: position?.direction,
+    candidateId: position?.candidateId,
+    strategyFamily: position?.strategyFamily,
+    strategyId: position?.strategyId,
+    strategyVersion: position?.strategyVersion,
+    parameterHash: position?.parameterHash,
+    parameterDigest: position?.parameterDigest,
+    researchCodeSha: position?.researchCodeSha,
+    accountMode: position?.accountMode,
     costPolicyVersion: position?.costPolicyVersion,
     sourceIdentity,
     provenanceId,
@@ -126,9 +152,23 @@ function exitExecutionIdentity(position, trigger, sourceIdentity, provenanceId, 
 function triggerIdentityValid(position, trigger) {
   if (!trigger || typeof trigger !== "object" || !digest(trigger.exitTriggerId)) return false;
   const { exitTriggerId, ...payload } = trigger;
+  const expectedStrategyIdentity = {
+    candidateId: position?.candidateId,
+    strategyFamily: position?.strategyFamily,
+    strategyId: position?.strategyId,
+    strategyVersion: position?.strategyVersion,
+    parameterHash: position?.parameterHash,
+    parameterDigest: position?.parameterDigest,
+    researchCodeSha: position?.researchCodeSha?.toLowerCase(),
+    accountMode: position?.accountMode,
+  };
   return exitTriggerId === hash(payload)
     && trigger.positionId === position?.positionId
     && trigger.paperSampleId === position?.paperSampleId
+    && trigger.candidateId === position?.candidateId
+    && trigger.strategyId === position?.strategyId
+    && trigger.researchCodeSha?.toLowerCase() === position?.researchCodeSha?.toLowerCase()
+    && same(trigger.strategyIdentity, expectedStrategyIdentity)
     && trigger.costPolicyVersion === position?.costPolicyVersion
     && trigger.positionLifecycleDigest === position?.lifecycle?.immutableContractDigest;
 }
@@ -180,6 +220,7 @@ function componentIdentityBlockers({ component, name, expectedPosition, expected
 
 function bindingBlockers({ position, observation, trigger, evaluatedAtMs }) {
   const blockers = [];
+  blockers.push(...frozenCandidateIdentityBlockers(position));
   const binding = observation?.triggerBoundSettlementEvidence;
   const input = observation?.settlementInput;
   const cost = observation?.settlementCostEvidence;
@@ -314,6 +355,7 @@ export function bindNaturalPaperTriggerBoundSettlementEvidence({
 } = {}) {
   const trigger = position?.lifecycle?.pendingExit;
   const blockers = [];
+  blockers.push(...frozenCandidateIdentityBlockers(position));
   if (!triggerIdentityValid(position, trigger)) blockers.push("PAPER_POSITION_EXIT_TRIGGER_IDENTITY_MISMATCH");
   if (!safeTime(evaluatedAtMs)) blockers.push("PAPER_POSITION_EVALUATED_AT_REQUIRED");
   if (authoritativeEvidence?.schemaVersion !== AUTHORITATIVE_NATURAL_PAPER_TRIGGER_SETTLEMENT_EVIDENCE_VERSION
@@ -439,7 +481,9 @@ export function createNaturalPaperTriggerBoundSettlementCostProducer({ collectAu
   }
   return async function produceTriggerBoundSettlementCost({ position, observation, evaluatedAtMs } = {}) {
     const trigger = position?.lifecycle?.pendingExit;
-    if (!triggerIdentityValid(position, trigger)) return blocked(["PAPER_POSITION_EXIT_TRIGGER_IDENTITY_MISMATCH"]);
+    const identityBlockers = frozenCandidateIdentityBlockers(position);
+    if (!triggerIdentityValid(position, trigger)) identityBlockers.push("PAPER_POSITION_EXIT_TRIGGER_IDENTITY_MISMATCH");
+    if (identityBlockers.length > 0) return blocked(unique(identityBlockers));
     let authoritativeEvidence;
     try {
       authoritativeEvidence = await collectAuthoritativeEvidence(deepFreeze({
