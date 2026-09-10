@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   assessMicrocapDiagnostic,
   assessMicrocapPitRiskGate,
+  buildMicrocapObservationFingerprint,
   buildMicrocapResearchTaskPlan,
 } from '../src/microcap-task.mjs';
 
@@ -10,8 +11,32 @@ const SHA = 'a'.repeat(40);
 
 function diagnostic(overrides = {}) {
   return {
+    schemaVersion: 1,
     status: 'RECENT_EXTENDED_HOURS_DIAGNOSTIC_ONLY',
     source: 'Yahoo public chart 1m range=7d includePrePost=true',
+    symbols: ['SAFE'],
+    successfulSymbols: ['SAFE'],
+    unavailableSymbols: [],
+    dataAvailable: true,
+    entries: [],
+    entryModel: 'fixture entry model',
+    summaries: {},
+    bestRecentBy1PctCost: null,
+    diagnostics: {
+      SAFE: {
+        bars: 1,
+        firstBar: '2026-01-02T09:30:00-05:00',
+        lastBar: '2026-01-02T09:30:00-05:00',
+      },
+    },
+    failures: {},
+    canonicalEvidenceEligible: false,
+    canonicalSampleDelta: 0,
+    profitabilityProven: false,
+    profitabilityPromotionAllowed: false,
+    executionAuthority: 'NONE',
+    liveTradingAllowed: false,
+    privateApiAllowed: false,
     validationState: {
       extendedHoursBars: true,
       vwap: true,
@@ -31,14 +56,27 @@ function diagnostic(overrides = {}) {
 }
 
 function pitGate(overrides = {}) {
-  return {
+  const result = {
+    schemaVersion: 1,
     status: 'DATA_BLOCKED_PIT_RISK_EVIDENCE',
     counts: { eligible: 0, rejected: 0, blocked: 8 },
     pointInTimeRiskGate: true,
     canonicalEvidenceEligible: false,
     canonicalSampleDelta: 0,
+    profitabilityProven: false,
+    profitabilityPromotionAllowed: false,
+    executionAuthority: 'NONE',
+    liveTradingAllowed: false,
+    privateApiAllowed: false,
     ...overrides,
   };
+  result.entryCount = overrides.entryCount ?? Object.values(result.counts).reduce((sum, value) => sum + value, 0);
+  result.decisions = overrides.decisions ?? [
+    ...Array.from({ length: Number.isInteger(result.counts.eligible) ? result.counts.eligible : 0 }, () => ({ decision: 'ELIGIBLE_FOR_FILTERED_RESEARCH' })),
+    ...Array.from({ length: Number.isInteger(result.counts.rejected) ? result.counts.rejected : 0 }, () => ({ decision: 'REJECT_RISK' })),
+    ...Array.from({ length: Number.isInteger(result.counts.blocked) ? result.counts.blocked : 0 }, () => ({ decision: 'DATA_BLOCKED' })),
+  ];
+  return result;
 }
 
 test('microcap task plan is research-only, requires PIT gate, and never grants canonical sample credit', () => {
@@ -53,6 +91,11 @@ test('microcap task plan is research-only, requires PIT gate, and never grants c
   ]);
   assert.equal(plan.canonicalEvidenceEligible, false);
   assert.equal(plan.canonicalSampleDelta, 0);
+  assert.equal(plan.profitabilityProven, false);
+  assert.equal(plan.profitabilityPromotionAllowed, false);
+  assert.equal(plan.executionAuthority, 'NONE');
+  assert.equal(plan.liveTradingAllowed, false);
+  assert.equal(plan.privateApiAllowed, false);
   assert.equal(plan.liveTrading, false);
   assert.equal(plan.privateApi, false);
   assert.equal(plan.orderAuthority, false);
@@ -76,6 +119,7 @@ test('recent Yahoo microcap diagnostic stays DATA_BLOCKED for promotion-quality 
 test('even complete prerequisite flags cannot relabel recent diagnostic as canonical profitability evidence', () => {
   const result = assessMicrocapDiagnostic(diagnostic({
     validationState: {
+      ...diagnostic().validationState,
       tenYearMinuteHistory: true,
       pointInTimeFloat: true,
       archivedFreshCatalyst: true,
@@ -89,6 +133,48 @@ test('even complete prerequisite flags cannot relabel recent diagnostic as canon
   assert.equal(result.canonicalSampleDelta, 0);
 });
 
+test('partial and unavailable diagnostics remain truthful DATA_BLOCKED observations', () => {
+  const partial = assessMicrocapDiagnostic(diagnostic({
+    status: 'PARTIAL_RECENT_EXTENDED_HOURS_DIAGNOSTIC_ONLY',
+    symbols: ['SAFE', 'MISS'],
+    unavailableSymbols: ['MISS'],
+    failures: { MISS: 'NO_USABLE_1M_BARS' },
+  }));
+  assert.equal(partial.status, 'DATA_BLOCKED');
+  assert.equal(partial.dataBlocked[0], 'RECENT_DIAGNOSTIC_PARTIAL');
+
+  const unavailable = assessMicrocapDiagnostic(diagnostic({
+    status: 'DATA_UNAVAILABLE_RECENT_DIAGNOSTIC',
+    successfulSymbols: [],
+    unavailableSymbols: ['SAFE'],
+    dataAvailable: false,
+    diagnostics: { SAFE: { bars: 0, firstBar: null, lastBar: null } },
+    failures: { SAFE: 'NO_USABLE_1M_BARS' },
+  }));
+  assert.equal(unavailable.status, 'DATA_BLOCKED');
+  assert.equal(unavailable.dataBlocked[0], 'RECENT_DIAGNOSTIC_DATA_UNAVAILABLE');
+  assert.equal(unavailable.entryCount, 0);
+});
+
+test('diagnostic safety, availability, entries, and source windows fail closed when malformed', () => {
+  assert.throws(() => assessMicrocapDiagnostic(diagnostic({ dataAvailable: false })), /dataAvailable contradicts status/);
+  assert.throws(() => assessMicrocapDiagnostic(diagnostic({ entries: undefined })), /entries missing/);
+  assert.throws(() => assessMicrocapDiagnostic(diagnostic({ summaries: undefined })), /result evidence missing/);
+  assert.throws(() => assessMicrocapDiagnostic(diagnostic({ executionAuthority: 'ORDER' })), /executionAuthority=NONE/);
+  assert.throws(() => assessMicrocapDiagnostic(diagnostic({
+    diagnostics: { SAFE: { bars: undefined, firstBar: null, lastBar: null } },
+  })), /bars for SAFE must be a non-negative integer/);
+  assert.throws(() => assessMicrocapDiagnostic(diagnostic({
+    status: 'DATA_UNAVAILABLE_RECENT_DIAGNOSTIC',
+    successfulSymbols: [],
+    unavailableSymbols: ['SAFE'],
+    dataAvailable: false,
+    entries: [{ symbol: 'SAFE' }],
+    diagnostics: { SAFE: { bars: 0, firstBar: null, lastBar: null } },
+    failures: { SAFE: 'NO_USABLE_1M_BARS' },
+  })), /cannot contain entries/);
+});
+
 test('PIT risk gate blocks missing point-in-time manifests without sample credit', () => {
   const result = assessMicrocapPitRiskGate(pitGate());
   assert.equal(result.status, 'DATA_BLOCKED_PIT_RISK_EVIDENCE');
@@ -98,6 +184,15 @@ test('PIT risk gate blocks missing point-in-time manifests without sample credit
   assert.equal(result.dataBlocked, true);
   assert.equal(result.canonicalEvidenceEligible, false);
   assert.equal(result.canonicalSampleDelta, 0);
+});
+
+test('upstream unavailable PIT result stays DATA_BLOCKED instead of becoming an exception or zero evidence', () => {
+  const result = assessMicrocapPitRiskGate(pitGate({
+    status: 'DATA_BLOCKED_UPSTREAM_DIAGNOSTIC',
+    counts: { eligible: 0, rejected: 0, blocked: 0 },
+  }));
+  assert.equal(result.entryCount, 0);
+  assert.equal(result.dataBlocked, true);
 });
 
 test('evaluated PIT risk gate remains research-only even when entries become eligible', () => {
@@ -120,6 +215,39 @@ test('PIT gate cannot grant canonical sample credit or use unknown status', () =
   assert.throws(
     () => assessMicrocapPitRiskGate(pitGate({ status: 'PROFITABILITY_PROVEN' })),
     /unexpected PIT risk-gate status/,
+  );
+});
+
+test('PIT counts and decisions reject missing, coerced, or unreconciled values', () => {
+  assert.throws(() => assessMicrocapPitRiskGate(pitGate({ schemaVersion: 2 })), /schemaVersion invalid/);
+  const missing = pitGate();
+  delete missing.counts.blocked;
+  assert.throws(() => assessMicrocapPitRiskGate(missing), /blocked count must be a non-negative integer/);
+  assert.throws(() => assessMicrocapPitRiskGate(pitGate({
+    counts: { eligible: '0', rejected: 0, blocked: 8 },
+  })), /eligible count must be a non-negative integer/);
+  assert.throws(() => assessMicrocapPitRiskGate(pitGate({ entryCount: 9 })), /counts do not reconcile/);
+  assert.throws(() => assessMicrocapPitRiskGate(pitGate({ decisions: [] })), /decisions do not reconcile/);
+  assert.throws(() => assessMicrocapPitRiskGate(pitGate({
+    counts: { eligible: 1, rejected: 0, blocked: 7 },
+    decisions: Array.from({ length: 8 }, () => ({ decision: 'DATA_BLOCKED' })),
+  })), /decisions contradict counts/);
+});
+
+test('observation fingerprint ignores code SHA but changes with PIT decisions', () => {
+  const first = diagnostic({ researchSha: 'a'.repeat(40) });
+  const second = diagnostic({ researchSha: 'b'.repeat(40) });
+  const gate = pitGate();
+  assert.equal(
+    buildMicrocapObservationFingerprint({ diagnostic: first, pitRiskGate: gate }),
+    buildMicrocapObservationFingerprint({ diagnostic: second, pitRiskGate: gate }),
+  );
+  assert.notEqual(
+    buildMicrocapObservationFingerprint({ diagnostic: first, pitRiskGate: gate }),
+    buildMicrocapObservationFingerprint({
+      diagnostic: first,
+      pitRiskGate: pitGate({ decisions: [{ decision: 'REJECT_RISK' }, ...gate.decisions.slice(1)] }),
+    }),
   );
 });
 

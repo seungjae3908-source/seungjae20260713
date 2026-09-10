@@ -41,7 +41,13 @@ try {
   console.error(JSON.stringify({
     status: 'failed_closed',
     error: String(error?.message ?? error),
+    canonicalEvidenceEligible: false,
     canonicalSampleDelta: 0,
+    profitabilityProven: false,
+    profitabilityPromotionAllowed: false,
+    executionAuthority: 'NONE',
+    liveTradingAllowed: false,
+    privateApiAllowed: false,
     liveTrading: false,
     privateApi: false,
     orderAuthority: false,

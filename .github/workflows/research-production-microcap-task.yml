@@ -75,6 +75,8 @@ jobs:
             if(x.liveTrading!==false||x.privateApi!==false||x.orderAuthority!==false) process.exit(4);
             if(x.steps?.length!==3) process.exit(5);
             if(!x.steps.some((s)=>s.id==="point-in-time-risk-gate")) process.exit(6);
+            if(x.profitabilityProven!==false||x.profitabilityPromotionAllowed!==false) process.exit(7);
+            if(x.executionAuthority!=="NONE"||x.liveTradingAllowed!==false||x.privateApiAllowed!==false) process.exit(8);
           ' "$OUT"
 
       - name: Verify CI workflow is unscheduled, read-only, and dependency-aware
