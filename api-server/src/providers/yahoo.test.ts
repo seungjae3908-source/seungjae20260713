@@ -13,6 +13,12 @@ function response(body: unknown): Response {
   });
 }
 
+function updatedAtOf(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object' || !('updatedAt' in value)) return undefined;
+  const updatedAt = (value as { updatedAt?: unknown }).updatedAt;
+  return typeof updatedAt === 'string' ? updatedAt : undefined;
+}
+
 function chartResult(options: {
   regularMarketTime?: number;
   timestamp?: number;
@@ -56,8 +62,8 @@ test('preserves Yahoo regularMarketTime instead of request wall clock', async ()
   globalThis.fetch = async () => response(chartResult({ regularMarketTime: providerTime }));
 
   const quote = await getQuote('AAPL');
-  assert.equal(quote.updatedAt, '2026-09-10T09:42:17.000Z');
-  assert.notEqual(quote.updatedAt, new Date(Date.now()).toISOString());
+  assert.equal(updatedAtOf(quote), '2026-09-10T09:42:17.000Z');
+  assert.notEqual(updatedAtOf(quote), new Date(Date.now()).toISOString());
 });
 
 test('uses the timestamp aligned with the last valid Yahoo candle when meta time is absent', async () => {
@@ -67,7 +73,7 @@ test('uses the timestamp aligned with the last valid Yahoo candle when meta time
 
   const quote = await getQuote('MSFT');
   const index = await getIndexQuote('^GSPC');
-  assert.equal(quote.updatedAt, '2026-09-10T09:31:00.000Z');
+  assert.equal(updatedAtOf(quote), '2026-09-10T09:31:00.000Z');
   assert.equal(index.updatedAt, '2026-09-10T09:31:00.000Z');
 });
 
