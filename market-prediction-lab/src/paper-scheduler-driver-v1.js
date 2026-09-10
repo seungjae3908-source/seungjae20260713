@@ -403,16 +403,23 @@ function positionIdentityFor(position) {
     signalTimeframe: sample.timeframe,
     horizon: sample.horizon,
     direction: position?.direction ?? sample.executionDirection,
+    candidateId: position?.candidateId ?? sample.candidateId,
+    strategyFamily: position?.strategyFamily ?? sample.strategyFamily,
     strategyId: position?.strategyId ?? sample.strategyId,
     strategyVersion: position?.strategyVersion ?? sample.strategyVersion,
     parameterHash: position?.parameterHash ?? sample.parameterHash,
+    parameterDigest: position?.parameterDigest ?? sample.parameterDigest,
     researchCodeSha: position?.researchCodeSha ?? sample.researchCodeSha,
     costPolicyVersion: position?.costPolicyVersion ?? position?.sample?.profitEvidence?.costPolicyId,
+    accountMode: position?.accountMode ?? sample.accountMode,
   };
   if ([
     value.positionId, value.paperSampleId, value.signalId, value.market, value.symbol, value.direction,
-    value.strategyId, value.strategyVersion, value.parameterHash, value.costPolicyVersion,
-  ].some((item) => !nonEmpty(item)) || !immutableSha(value.researchCodeSha)
+    value.candidateId, value.strategyFamily, value.strategyId, value.strategyVersion, value.parameterHash,
+    value.parameterDigest, value.costPolicyVersion, value.accountMode,
+  ].some((item) => !nonEmpty(item)) || value.parameterDigest !== value.parameterHash
+    || value.accountMode !== "PAPER" || !/^paper-candidate-v1:[0-9a-f]{64}$/u.test(value.candidateId)
+    || !immutableSha(value.researchCodeSha)
     || !nonEmpty(value.signalTimeframe) || !positiveInteger(value.horizon)) return null;
   return Object.freeze({ ...value, researchCodeSha: value.researchCodeSha.toLowerCase() });
 }
@@ -632,7 +639,8 @@ function naturalObservationBlockers({ observation, binding, laneMarket, cycleIde
   if (!nonEmpty(observation?.observationId)) blockers.push("POSITION_OBSERVATION_ID_REQUIRED");
   for (const key of [
     "positionId", "paperSampleId", "signalId", "market", "symbol", "direction", "signalTimeframe", "horizon",
-    "strategyId", "strategyVersion", "parameterHash", "costPolicyVersion",
+    "candidateId", "strategyFamily", "strategyId", "strategyVersion", "parameterHash", "parameterDigest",
+    "costPolicyVersion", "accountMode",
   ]) {
     if (observation?.[key] !== identity[key]) blockers.push(`POSITION_OBSERVATION_${key.toUpperCase()}_MISMATCH`);
   }

@@ -211,11 +211,15 @@ function positionIdentity(position) {
     signalTimeframe: position.sample?.identity?.timeframe,
     horizon: position.sample?.identity?.horizon,
     direction: position.direction,
+    candidateId: position.candidateId,
+    strategyFamily: position.strategyFamily,
     strategyId: position.strategyId,
     strategyVersion: position.strategyVersion,
     parameterHash: position.parameterHash,
+    parameterDigest: position.parameterDigest,
     researchCodeSha: position.researchCodeSha,
     costPolicyVersion: position.costPolicyVersion,
+    accountMode: position.accountMode,
   });
 }
 
@@ -230,6 +234,18 @@ function validatePositionIdentity(identity) {
   if (!positive(timeframeMs(identity.signalTimeframe)) || !Number.isSafeInteger(identity.horizon) || identity.horizon <= 0) {
     throw new Error("PAPER_POSITION_SIGNAL_HORIZON_REQUIRED");
   }
+}
+
+function validateFrozenCandidateIdentity(identity) {
+  if (!/^paper-candidate-v1:[0-9a-f]{64}$/u.test(identity?.candidateId ?? "")) {
+    throw new Error("PAPER_POSITION_CANDIDATE_ID_REQUIRED");
+  }
+  if (!nonEmpty(identity?.strategyFamily)) throw new Error("PAPER_POSITION_STRATEGY_FAMILY_REQUIRED");
+  if (!nonEmpty(identity?.parameterDigest)) throw new Error("PAPER_POSITION_PARAMETER_DIGEST_REQUIRED");
+  if (identity.parameterDigest !== identity.parameterHash) {
+    throw new Error("PAPER_POSITION_PARAMETER_IDENTITY_MISMATCH");
+  }
+  if (identity?.accountMode !== "PAPER") throw new Error("PAPER_POSITION_ACCOUNT_MODE_REQUIRED");
 }
 
 function immutableContractDigest(lifecycle) {
@@ -267,13 +283,18 @@ function assertLifecycle(position) {
   if (lifecycle.entry.timestampMs !== position.entryTimestampMs
     || lifecycle.entry.fillPrice !== position.entryFillPrice
     || lifecycle.entry.quantity !== position.quantity
+    || lifecycle.strategyIdentity.candidateId !== position.candidateId
+    || lifecycle.strategyIdentity.strategyFamily !== position.strategyFamily
     || lifecycle.strategyIdentity.strategyId !== position.strategyId
     || lifecycle.strategyIdentity.strategyVersion !== position.strategyVersion
     || lifecycle.strategyIdentity.parameterHash !== position.parameterHash
+    || lifecycle.strategyIdentity.parameterDigest !== position.parameterDigest
+    || lifecycle.strategyIdentity.accountMode !== position.accountMode
     || lifecycle.strategyIdentity.researchCodeSha !== position.researchCodeSha.toLowerCase()) {
     throw new Error("PAPER_POSITION_IMMUTABLE_LINEAGE_MISMATCH");
   }
   if (lifecycle.sampleEligibility?.provenanceClass === NATURAL_FORWARD) {
+    validateFrozenCandidateIdentity(identity);
     if (lifecycle.riskPolicyIdentityStatus !== "PRESENT"
       || !canonicalRiskPolicyIdentity({ riskPolicyIdentity: lifecycle.riskPolicyIdentity }, identity.researchCodeSha)) {
       throw new Error("PAPER_POSITION_RISK_POLICY_IDENTITY_REQUIRED");
@@ -330,6 +351,11 @@ function validateObservation(position, observation, evaluatedAtMs) {
     throw new Error("PAPER_POSITION_MARK_BAR_INVALID");
   }
   if (position?.lifecycle?.sampleEligibility?.provenanceClass === NATURAL_FORWARD) {
+    for (const key of ["candidateId", "strategyFamily", "parameterDigest", "accountMode"]) {
+      if (observation[key] !== identity[key]) {
+        throw new Error(`PAPER_POSITION_OBSERVATION_${key.toUpperCase()}_MISMATCH`);
+      }
+    }
     const expectedRiskPolicy = position.lifecycle.riskPolicyIdentity;
     const observedRiskPolicy = observation?.schedulerHandoff?.riskPolicyIdentity;
     if (!sameRiskPolicyIdentity(expectedRiskPolicy, observedRiskPolicy)) {
@@ -517,6 +543,12 @@ export function createNaturalPaperPositionLifecycle({ position, sample, candidat
   const sameBarPolicy = candidate?.execution?.executionPolicy?.sameBarPolicy;
   if (sameBarPolicy !== "STOP_FIRST") throw new Error("PAPER_POSITION_SAME_BAR_POLICY_UNSUPPORTED");
   const sampleClass = normalizeSampleClass(candidate);
+  if (sampleClass === NATURAL_FORWARD) {
+    validateFrozenCandidateIdentity(identity);
+    for (const key of ["candidateId", "strategyFamily", "parameterDigest", "accountMode"]) {
+      if (sample.identity?.[key] !== identity[key]) throw new Error("PAPER_POSITION_ENTRY_LINEAGE_MISMATCH");
+    }
+  }
   const riskPolicyIdentity = canonicalRiskPolicyIdentity(candidate, identity.researchCodeSha);
   if (sampleClass === NATURAL_FORWARD && !riskPolicyIdentity) {
     throw new Error("PAPER_POSITION_RISK_POLICY_IDENTITY_REQUIRED");
@@ -531,10 +563,14 @@ export function createNaturalPaperPositionLifecycle({ position, sample, candidat
     evidenceDigest: sample.entryEvidenceProvenance?.evidenceSnapshotDigest ?? null,
   });
   const strategyIdentity = Object.freeze({
+    candidateId: identity.candidateId,
+    strategyFamily: identity.strategyFamily,
     strategyId: identity.strategyId,
     strategyVersion: identity.strategyVersion,
     parameterHash: identity.parameterHash,
+    parameterDigest: identity.parameterDigest,
     researchCodeSha: identity.researchCodeSha.toLowerCase(),
+    accountMode: identity.accountMode,
   });
   const modelIdentity = candidate?.signal?.modelIdentity
     ? deepFreeze(structuredClone(candidate.signal.modelIdentity))
@@ -612,6 +648,7 @@ function freezeExitTrigger(position, lifecycle, observation, exit) {
     sourceDigest: observation.sourceDigest ?? null,
     pathEvidenceDigest: hash(lifecycle.pathBars),
     positionLifecycleDigest: lifecycle.immutableContractDigest,
+    candidateId: position.candidateId,
     strategyId: position.strategyId,
     strategyIdentity: lifecycle.strategyIdentity,
     researchCodeSha: position.researchCodeSha,
