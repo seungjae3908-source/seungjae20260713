@@ -19,8 +19,8 @@ function roomResponse(room: string) {
 
 function stockFixture(market: 'KR' | 'US') {
   return market === 'US'
-    ? { ticker: 'AAPL', name: 'Apple', market: 'US', price: 220, changePercent: 1.1, volume: 12_000_000, tradingValue: 2_640_000_000, marketCap: 3_300_000_000_000, rank: 1, provider: 'acceptance', rating: { score: 91, rating: 'BUY', confidence: 88 }, reason: '최종 수용검증 fixture' }
-    : { ticker: '005930', name: '삼성전자', market: 'KR', price: 75_000, changePercent: 1.2, volume: 10_000_000, tradingValue: 750_000_000_000, marketCap: 450_000_000_000_000, rank: 1, provider: 'acceptance', rating: { score: 92, rating: 'BUY', confidence: 89 }, reason: '최종 수용검증 fixture' };
+    ? { ticker: 'AAPL', name: 'Apple', market: 'US', currency: 'USD', price: 220, changePercent: 1.1, volume: 12_000_000, tradingValue: 2_640_000_000, marketCap: 3_300_000_000_000, rank: 1, provider: 'acceptance', rating: { score: 91, rating: 'BUY', confidence: 88 }, reason: '최종 수용검증 fixture' }
+    : { ticker: '005930', name: '삼성전자', market: 'KR', currency: 'KRW', price: 75_000, changePercent: 1.2, volume: 10_000_000, tradingValue: 750_000_000_000, marketCap: 450_000_000_000_000, rank: 1, provider: 'acceptance', rating: { score: 92, rating: 'BUY', confidence: 89 }, reason: '최종 수용검증 fixture' };
 }
 
 function moversFixture(market: 'KR' | 'US') {
@@ -28,6 +28,8 @@ function moversFixture(market: 'KR' | 'US') {
   return {
     ok: true,
     market,
+    provider: 'live-market-providers',
+    dataStatus: 'complete',
     recommended: [row],
     picks: [row],
     aiRecommended: [row],
@@ -36,8 +38,8 @@ function moversFixture(market: 'KR' | 'US') {
     tradingValue: [row],
     gainers: [row],
     losers: [row],
-    risky: [],
-    updatedAt: NOW,
+    risky: [row],
+    updatedAt: new Date().toISOString(),
   };
 }
 
