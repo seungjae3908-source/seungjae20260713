@@ -117,7 +117,7 @@ async function validateInvestmentResponse(
   const method = requestMethod(input, init);
   if (isBackupSuccessResponsePath(path, method)) {
     try {
-      requireBackupSuccessResponse(method, await response.clone().json(), init.body);
+      await requireBackupSuccessResponse(method, await response.clone().json(), init.body);
     } catch {
       throw new Error(INVALID_BACKUP_RESPONSE);
     }
