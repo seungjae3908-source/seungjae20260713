@@ -24,9 +24,11 @@ const ALLOWED_KEYS = new Set([
   'sa-chart-ma-v1',
 ]);
 
+const BACKUP_SCHEMA_VERSION = 1;
 const MAX_BACKUP_BYTES = 5 * 1024 * 1024;
 const MAX_ITEMS = 500;
 const MAX_VALUE_BYTES = 1024 * 1024;
+const MAX_FUTURE_SKEW_MS = 5 * 60 * 1000;
 
 function normalizePayload(value: unknown): Record<string, string> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -59,11 +61,28 @@ function checksum(payload: Record<string, string>): string {
   return createHash('sha256').update(JSON.stringify(sorted)).digest('hex');
 }
 
+function requireBackupTimestamp(value: unknown): string {
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new Error('INVALID_BACKUP_TIMESTAMP');
+  }
+  const time = Date.parse(value);
+  if (!Number.isFinite(time) || time > Date.now() + MAX_FUTURE_SKEW_MS) {
+    throw new Error('INVALID_BACKUP_TIMESTAMP');
+  }
+  return new Date(time).toISOString();
+}
+
 function requireStoredBackupIntegrity(
   payload: Record<string, string>,
+  schemaVersion: unknown,
   itemCount: unknown,
   storedChecksum: unknown,
+  clientUpdatedAt: unknown,
+  updatedAt: unknown,
 ): void {
+  if (schemaVersion !== BACKUP_SCHEMA_VERSION) {
+    throw new Error('BACKUP_SCHEMA_VERSION_UNSUPPORTED');
+  }
   const count = Object.keys(payload).length;
   if (
     typeof itemCount !== 'number'
@@ -78,6 +97,8 @@ function requireStoredBackupIntegrity(
   if (checksum(payload) !== storedChecksum) {
     throw new Error('BACKUP_CHECKSUM_MISMATCH');
   }
+  requireBackupTimestamp(clientUpdatedAt);
+  requireBackupTimestamp(updatedAt);
 }
 
 router.get('/latest', async (req: AuthenticatedRequest, res) => {
@@ -95,7 +116,14 @@ router.get('/latest', async (req: AuthenticatedRequest, res) => {
     if (!data) return res.json({ ok: true, exists: false });
 
     const payload = normalizePayload(data.payload);
-    requireStoredBackupIntegrity(payload, data.item_count, data.checksum);
+    requireStoredBackupIntegrity(
+      payload,
+      data.schema_version,
+      data.item_count,
+      data.checksum,
+      data.client_updated_at,
+      data.updated_at,
+    );
 
     return res.json({
       ok: true,
@@ -117,14 +145,14 @@ router.put('/latest', async (req: AuthenticatedRequest, res) => {
   if (!req.member || !req.accessToken) return res.status(401).json({ error: 'LOGIN_REQUIRED' });
 
   try {
-    const schemaVersion = Number(req.body?.schemaVersion ?? 1);
-    if (!Number.isInteger(schemaVersion) || schemaVersion < 1 || schemaVersion > 20) {
+    const schemaVersion = Number(req.body?.schemaVersion ?? BACKUP_SCHEMA_VERSION);
+    if (!Number.isInteger(schemaVersion) || schemaVersion !== BACKUP_SCHEMA_VERSION) {
       return res.status(400).json({ error: 'INVALID_BACKUP_VERSION' });
     }
 
     const payload = normalizePayload(req.body?.localStorage);
     const clientUpdatedAt = req.body?.clientUpdatedAt
-      ? new Date(String(req.body.clientUpdatedAt)).toISOString()
+      ? requireBackupTimestamp(req.body.clientUpdatedAt)
       : new Date().toISOString();
     const digest = checksum(payload);
     const supabase = getUserSupabase(req.accessToken);
@@ -146,6 +174,14 @@ router.put('/latest', async (req: AuthenticatedRequest, res) => {
       .single();
 
     if (error) throw error;
+    requireStoredBackupIntegrity(
+      payload,
+      data.schema_version,
+      data.item_count,
+      data.checksum,
+      data.client_updated_at,
+      data.updated_at,
+    );
     return res.json({
       ok: true,
       exists: true,
