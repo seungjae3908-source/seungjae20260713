@@ -47,9 +47,43 @@ jobs:
           node --check market-intelligence-sidecar/scripts/run-public-forward-liquidity-calibration.mjs
           node --check market-intelligence-sidecar/scripts/verify-contract.mjs
 
+      - name: Stash V3 activation binding for preserved inactive unit regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          activation='market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json'
+          if [[ -f "$activation" ]]; then
+            mv "$activation" "$RUNNER_TEMP/successor-v3-activation.json"
+            echo 'SUCCESSOR_V3_ACTIVATION_STASHED=true' >> "$GITHUB_ENV"
+          else
+            echo 'SUCCESSOR_V3_ACTIVATION_STASHED=false' >> "$GITHUB_ENV"
+          fi
+
       - name: Unit and service tests
         working-directory: market-intelligence-sidecar
         run: node --test tests/*.test.mjs
+
+      - name: Restore and validate V3 activation binding
+        if: env.SUCCESSOR_V3_ACTIVATION_STASHED == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          activation='market-intelligence-sidecar/config/public-forward-liquidity-successor-schedule-reliability-activation-v3.json'
+          mv "$RUNNER_TEMP/successor-v3-activation.json" "$activation"
+          node --input-type=module <<'NODE'
+          import {
+            SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT,
+            verifySuccessorScheduleReliabilityV3Contract,
+          } from './market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-reliability-v3.mjs';
+
+          const verdict = verifySuccessorScheduleReliabilityV3Contract(
+            SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT,
+          );
+          if (!verdict.valid || !verdict.activationBound) {
+            console.error('Invalid V3 activation binding:', verdict.blockers.join(','));
+            process.exit(1);
+          }
+          NODE
 
       - name: Verify safety contract
         run: node market-intelligence-sidecar/scripts/verify-contract.mjs

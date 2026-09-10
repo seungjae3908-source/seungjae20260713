@@ -1,6 +1,6 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
 
-const NOW = '2026-08-21T03:00:00.000Z';
+const NOW = new Date().toISOString();
 const E2E_USER_ID = '22222222-2222-4222-8222-222222222222';
 const E2E_AUTH_STORAGE_KEY = 'sb-127-auth-token';
 
@@ -145,7 +145,7 @@ function roomResponse(config: MarketCase) {
 
 function suggestion(config: MarketCase, sample: Sample) {
   const futures = config.market === 'futures';
-  const spot = config.market === 'spot';
+  const provider = config.market === 'KR' ? 'KRX' : config.market === 'US' ? 'FINNHUB' : config.market === 'spot' ? 'UPBIT' : 'BITGET';
   const productCode = config.asset === 'stock' ? sample.symbol : futures ? `${sample.symbol}USDT` : `KRW-${sample.symbol}`;
   return {
     id: `qa:${config.market}:${sample.symbol}`,
@@ -162,7 +162,7 @@ function suggestion(config: MarketCase, sample: Sample) {
     quoteCurrency: config.currency,
     matchType: 'exact',
     active: true,
-    provider: 'P0_PUBLIC_UNIVERSE_FIXTURE',
+    provider,
     dataAsOf: NOW,
   };
 }
@@ -228,7 +228,12 @@ async function installMocks(page: Page) {
         dataAsOf: NOW,
         stale: false,
         partial: false,
-        providers: [{ provider: 'P0_PUBLIC_UNIVERSE_FIXTURE', status: 'ok', count: results.length, dataAsOf: NOW }],
+        providers: [
+          { provider: 'krx', status: 'ok', count: KR.length, dataAsOf: NOW },
+          { provider: 'finnhub', status: 'ok', count: US.length, dataAsOf: NOW },
+          { provider: 'upbit', status: 'ok', count: COINS.length, dataAsOf: NOW },
+          { provider: 'bitget', status: 'ok', count: COINS.length, dataAsOf: NOW },
+        ],
         hiddenMatches: [],
       };
       const result = await fulfill(route, body);

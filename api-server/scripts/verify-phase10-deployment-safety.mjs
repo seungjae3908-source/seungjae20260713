@@ -235,7 +235,12 @@ try {
     'desktop: login, refresh session retention, responsive layout, and logout',
     'mobile: login, refresh session retention, responsive layout, and logout',
     'desktop: major screens, search/detail, domestic/overseas/coin, watchlist, alerts, and settings',
-    'mobile: major screens, search/detail, domestic/overseas/coin, watchlist, alerts, and settings',
+    'mobile 320x740: major screens',
+    'mobile 360x800: major screens',
+    'mobile 390x844: major screens',
+    'mobile 412x915: major screens',
+    'mobile 430x932: major screens',
+    'mobile: search/detail, domestic/overseas/coin, watchlist, alerts, and settings',
   ];
   await writeFile(path.join(temp, 'playwright-report.json'), JSON.stringify({
     suites: [{
@@ -291,6 +296,23 @@ try {
     env: { ...process.env, TARGET_SHA: sha },
   });
   assert(verified.status === 0, `release-ready verdict should verify: ${verified.stderr}`);
+  // The positive fixture must track the real viewport contract, not relax it.
+  const verdictFile = path.join(temp, 'staging-verdict.json');
+  const completeVerdict = JSON.parse(await readFile(verdictFile, 'utf8'));
+  for (const title of browserSpecTitles.filter((value) => value.startsWith('mobile '))) {
+    const checkName = `browser: ${title} []`;
+    assert(completeVerdict.checks.some((check) => check.name === checkName), `fixture is missing ${checkName}`);
+    const incomplete = { ...completeVerdict,
+      checks: completeVerdict.checks.filter((check) => check.name !== checkName),
+      total: completeVerdict.total - 1, passed: completeVerdict.passed - 1,
+    };
+    await writeFile(verdictFile, JSON.stringify(incomplete));
+    const rejected = spawnSync(process.execPath, [path.join(root, 'api-server/scripts/verify-staging-verdict.mjs'), verdictFile], {
+      cwd: root, encoding: 'utf8', env: { ...process.env, TARGET_SHA: sha },
+    });
+    assert(rejected.status !== 0 && rejected.stderr.includes(`required staging check is missing: ${checkName}`),
+      `omitted viewport must fail closed: ${title}: ${rejected.stderr}`);
+  }
 } finally {
   await rm(temp, { recursive: true, force: true });
 }
