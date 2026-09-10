@@ -44,13 +44,19 @@ function requireChecksum(value: unknown): string {
 }
 
 function requireSchemaVersion(value: unknown): number {
-  if (!Number.isInteger(value) || value !== 1) fail();
-  return value as number;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value !== 1) fail();
+  return value;
 }
 
 function requireItemCount(value: unknown, expected: number): number {
-  if (!Number.isInteger(value) || value !== expected || expected < 0 || expected > MAX_ITEMS) fail();
-  return value as number;
+  if (
+    typeof value !== 'number'
+    || !Number.isInteger(value)
+    || value !== expected
+    || expected < 0
+    || expected > MAX_ITEMS
+  ) fail();
+  return value;
 }
 
 export function requireBackupStorage(value: unknown): Record<string, string> {
