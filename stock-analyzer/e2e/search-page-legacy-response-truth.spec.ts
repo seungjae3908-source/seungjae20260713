@@ -121,7 +121,7 @@ async function installRankingSuccess(page: Page) {
 async function openSearch(page: Page, installRanking = true) {
   await installAuthenticatedUser(page);
   if (installRanking) await installRankingSuccess(page);
-  await page.goto('/search?asset=stock&market=KR&rank=marketCap');
+  await page.goto('/market-rankings?asset=stock&market=KR&rank=marketCap');
   await expect(page.getByPlaceholder('국내 종목명 또는 종목코드 검색')).toBeVisible();
 }
 
