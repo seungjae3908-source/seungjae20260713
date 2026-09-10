@@ -17,6 +17,11 @@ import {
   isPriceAlertResponsePath,
   normalizePriceAlertSuccessPayload,
 } from '@/lib/price-alert-response';
+import {
+  INVALID_STOCK_INFO_RESPONSE,
+  isStockInfoResponsePath,
+  requireStockInfoSuccessResponse,
+} from '@/lib/stock-detail-response';
 
 // The stock Market Information backend intentionally returns a bounded partial
 // first paint after 4 seconds. Keep the client transport guard outside that
@@ -108,6 +113,16 @@ async function validateInvestmentResponse(
       );
     } catch {
       throw new Error('INVALID_PORTFOLIO_QUOTE_RESPONSE');
+    }
+  }
+
+  if (method === 'GET' && isStockInfoResponsePath(path)) {
+    try {
+      const url = requestUrl(input);
+      if (!url) throw new Error('INVALID_STOCK_INFO_URL');
+      requireStockInfoSuccessResponse(url.toString(), await response.clone().json());
+    } catch {
+      throw new Error(INVALID_STOCK_INFO_RESPONSE);
     }
   }
 
