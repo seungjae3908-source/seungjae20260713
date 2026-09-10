@@ -1,4 +1,5 @@
 import type { CatalogEntry } from '../data/catalog';
+import { normalizeUnixSecondsObservationTime } from '../lib/market-observation-time';
 import type { Candle, Quote } from '../sample/types';
 
 type YahooChartQuote = {
@@ -14,6 +15,7 @@ type YahooChartResult = {
     symbol?: string;
     currency?: string;
     regularMarketPrice?: number;
+    regularMarketTime?: number;
     previousClose?: number;
     chartPreviousClose?: number;
   };
@@ -281,6 +283,13 @@ export async function getQuote(
     throw new Error(`YAHOO_PROVIDER_MARKER_20260711_NO_VALID_PRICE:${symbol}`);
   }
 
+  const observedAt = normalizeUnixSecondsObservationTime(
+    result.meta?.regularMarketTime ?? result.timestamp?.[index],
+  );
+  if (!observedAt) {
+    throw new Error(`YAHOO_PROVIDER_MARKER_20260711_INVALID_SOURCE_TIME:${symbol}`);
+  }
+
   const price =
     safeNumber(result.meta?.regularMarketPrice) ||
     safeNumber(quote.close[index]);
@@ -330,7 +339,7 @@ export async function getQuote(
     open: safeNumber(quote.open?.[index]),
     high: safeNumber(quote.high?.[index]),
     low: safeNumber(quote.low?.[index]),
-    updatedAt: new Date().toISOString(),
+    updatedAt: observedAt,
   } as Partial<Quote>;
 }
 
@@ -397,6 +406,13 @@ export async function getIndexQuote(symbol: string): Promise<YahooIndexQuote> {
     throw new Error(`YAHOO_INDEX_NO_VALID_PRICE:${clean}`);
   }
 
+  const observedAt = normalizeUnixSecondsObservationTime(
+    result.meta?.regularMarketTime ?? result.timestamp?.[index],
+  );
+  if (!observedAt) {
+    throw new Error(`YAHOO_INDEX_INVALID_SOURCE_TIME:${clean}`);
+  }
+
   const price =
     safeNumber(result.meta?.regularMarketPrice) || safeNumber(quote.close[index]);
   let previousClose =
@@ -425,7 +441,7 @@ export async function getIndexQuote(symbol: string): Promise<YahooIndexQuote> {
     spark: quote.close
       .map((value) => safeNumber(value))
       .filter((value) => value > 0),
-    updatedAt: new Date().toISOString(),
+    updatedAt: observedAt,
   };
 }
 
