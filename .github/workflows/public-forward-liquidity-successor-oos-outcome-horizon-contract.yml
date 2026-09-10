@@ -1,0 +1,73 @@
+name: Public Forward Liquidity Successor OOS Outcome Horizon Contract
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/public-forward-liquidity-successor-oos-outcome-horizon-contract.yml'
+      - 'market-intelligence-sidecar/config/public-forward-liquidity-successor-oos-outcome-horizon-v1.json'
+      - 'market-intelligence-sidecar/config/public-forward-liquidity-successor-prospective-cohort-v1.json'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-successor-oos-outcome-horizon.mjs'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-successor-prospective-cohort.mjs'
+      - 'market-intelligence-sidecar/src/public-forward-liquidity-calibration.mjs'
+      - 'market-intelligence-sidecar/tests/public-forward-liquidity-successor-oos-outcome-horizon.test.mjs'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-forward-liquidity-successor-oos-outcome-horizon-contract-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact PR head without credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Verify successor OOS horizon contract syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check market-intelligence-sidecar/src/public-forward-liquidity-successor-oos-outcome-horizon.mjs
+          node --check market-intelligence-sidecar/tests/public-forward-liquidity-successor-oos-outcome-horizon.test.mjs
+
+      - name: Run frozen successor OOS horizon contract tests
+        run: node --test market-intelligence-sidecar/tests/public-forward-liquidity-successor-oos-outcome-horizon.test.mjs
+
+      - name: Assert validation-only workflow and exact frozen horizon
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE='.github/workflows/public-forward-liquidity-successor-oos-outcome-horizon-contract.yml'
+          CONTRACT='market-intelligence-sidecar/config/public-forward-liquidity-successor-oos-outcome-horizon-v1.json'
+          if grep -Eq '^[[:space:]]*schedule:' "$FILE"; then
+            echo '::error::schedule trigger is forbidden in OOS horizon validation workflow'
+            exit 1
+          fi
+          if grep -Eq '^[[:space:]]*workflow_dispatch:' "$FILE"; then
+            echo '::error::workflow_dispatch is forbidden in OOS horizon validation workflow'
+            exit 1
+          fi
+          if grep -Eq '^[[:space:]]*cron:' "$FILE"; then
+            echo '::error::cron is forbidden in OOS horizon validation workflow'
+            exit 1
+          fi
+          grep -Fq '"outcomeHorizonMs": 5000' "$CONTRACT"
+          grep -Fq '"outcomeSelectionPolicy": "FIRST_PUBLIC_OBSERVATION_AT_OR_AFTER_HORIZON"' "$CONTRACT"
+          grep -Fq '"actualMergeApproved": false' "$CONTRACT"
+          grep -Fq '"scheduleActivationApproved": false' "$CONTRACT"
+          grep -Fq '"prospectiveObservationWorkflowAuthorityApproved": false' "$CONTRACT"
+          if grep -Eq '^[[:space:]]*uses:[[:space:]]*actions/upload-artifact(@|$)' "$FILE"; then
+            echo '::error::artifact publication is forbidden in validation-only workflow'
+            exit 1
+          fi

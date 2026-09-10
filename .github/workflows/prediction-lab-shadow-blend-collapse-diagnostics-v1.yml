@@ -4,7 +4,9 @@ on:
   pull_request:
     paths:
       - 'market-prediction-lab/src/shadow-blend-collapse-diagnostics-v1.js'
+      - 'market-prediction-lab/src/shadow-directional-rescue-v1.js'
       - 'market-prediction-lab/tests/shadow-blend-collapse-diagnostics-v1.test.js'
+      - 'market-prediction-lab/tests/shadow-directional-rescue-v1.test.js'
       - 'market-prediction-lab/scripts/run-shadow-blend-collapse-diagnostics-v1.js'
       - '.github/workflows/prediction-lab-shadow-blend-collapse-diagnostics-v1.yml'
   workflow_dispatch:
@@ -27,14 +29,16 @@ jobs:
         with:
           node-version: 20
 
-      - name: Syntax check diagnostic and runner
+      - name: Syntax check diagnostic runner and rescue policy
         run: |
           node --check market-prediction-lab/src/shadow-blend-collapse-diagnostics-v1.js
+          node --check market-prediction-lab/src/shadow-directional-rescue-v1.js
           node --check market-prediction-lab/scripts/run-shadow-blend-collapse-diagnostics-v1.js
+          node --check market-prediction-lab/tests/shadow-directional-rescue-v1.test.js
 
-      - name: Run focused 15m blend-collapse diagnostics tests
+      - name: Run focused 15m blend-collapse and rescue tests
         working-directory: market-prediction-lab
-        run: node --test tests/shadow-blend-collapse-diagnostics-v1.test.js
+        run: node --test tests/shadow-blend-collapse-diagnostics-v1.test.js tests/shadow-directional-rescue-v1.test.js
 
       - name: Locate latest successful immutable Shadow artifact
         id: shadow
@@ -68,6 +72,8 @@ jobs:
               core.setOutput('artifact_id', String(artifact.id));
               core.setOutput('artifact_digest', artifact.digest);
               core.setOutput('run_head_sha', String(run.head_sha ?? ''));
+              core.setOutput('created_at', String(artifact.created_at ?? ''));
+              core.setOutput('expires_at', String(artifact.expires_at ?? ''));
               core.info(`Using immutable Shadow artifact ${artifact.id} from run ${run.id}.`);
               return;
             }
@@ -112,7 +118,7 @@ jobs:
             core.setOutput('research_code_sha', researchCodeSha);
             core.setOutput('model_blob_sha', response.data.sha);
 
-      - name: Reconstruct and authenticate current 15m Rule Model Blend evidence
+      - name: Reconstruct authenticate and evaluate current 15m evidence
         env:
           SHADOW_DIR: ${{ runner.temp }}/shadow-state
           MODEL_FILE: ${{ runner.temp }}/crypto-futures-15m.json
@@ -121,6 +127,9 @@ jobs:
           ARTIFACT_ID: ${{ steps.shadow.outputs.artifact_id }}
           ARTIFACT_DIGEST: ${{ steps.shadow.outputs.artifact_digest }}
           MODEL_BLOB_SHA: ${{ steps.model.outputs.model_blob_sha }}
+          WORKFLOW_RUN_HEAD: ${{ steps.shadow.outputs.run_head_sha }}
+          ARTIFACT_CREATED_AT: ${{ steps.shadow.outputs.created_at }}
+          ARTIFACT_EXPIRES_AT: ${{ steps.shadow.outputs.expires_at }}
         run: |
           node market-prediction-lab/scripts/run-shadow-blend-collapse-diagnostics-v1.js \
             --artifact-dir "$SHADOW_DIR" \
@@ -129,10 +138,14 @@ jobs:
             --artifact-id "$ARTIFACT_ID" \
             --artifact-digest "$ARTIFACT_DIGEST" \
             --model-blob-sha "$MODEL_BLOB_SHA" \
+            --workflow-run-head "$WORKFLOW_RUN_HEAD" \
+            --artifact-created-at "$ARTIFACT_CREATED_AT" \
+            --artifact-expires-at "$ARTIFACT_EXPIRES_AT" \
             --output "$OUTPUT_FILE"
           node - "$OUTPUT_FILE" <<'NODE'
           const fs = require('fs');
           const value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const rescue = value.directionalRescueCandidate;
           console.log(JSON.stringify({
             artifact: value.authenticatedEvidence,
             rootCause: value.mechanicalRootCause,
@@ -146,10 +159,37 @@ jobs:
               model: value.lanes.model.quality,
               blend: value.lanes.blend.quality,
             },
+            directionalRescueCandidate: rescue,
             referenceDriftEvidence: value.referenceDriftEvidence,
           }, null, 2));
           if (value.authenticatedEvidence?.exactBlendParity !== true) process.exit(1);
           if (value.safety?.LIVE_TRADING !== false || value.safety?.executionAuthority !== 'NONE') process.exit(1);
+          if (!rescue || rescue.promotionCredit !== 0 || rescue.profitabilityCredit !== 0) process.exit(1);
+          if (rescue.sourceArtifact?.authentication?.temporalStatus !== 'VALID') process.exit(1);
+          if (rescue.policy?.historicalEvidenceUsedToSelectPolicy !== true) process.exit(1);
+          if (rescue.policy?.historicalDataUsedForPolicySelection !== true) process.exit(1);
+          if (rescue.policy?.historicalDataUsedForParameterSelection !== false) process.exit(1);
+          if (rescue.policy?.prospectiveGenuineEvidenceRequired !== true) process.exit(1);
+          if (rescue.prospectiveGate?.status !== 'REQUIRES_POLICY_FREEZE_AND_FUTURE_GENUINE_COHORT') process.exit(1);
+          if (rescue.futureEvidence?.counts?.['15m']?.TOTAL_N !== 0) process.exit(1);
+          if (rescue.futureEvidence?.counts?.['1h']?.TOTAL_N !== 0) process.exit(1);
+          if (rescue.futureEvidence?.counts?.SAME_CANDIDATE_MATCHED_N !== 0) process.exit(1);
+          if (rescue.futureEvidence?.genuineSampleCredit !== 0) process.exit(1);
+          if (rescue.futureEvidence?.psi !== null || rescue.futureEvidence?.ks !== null || rescue.futureEvidence?.jsd !== null) process.exit(1);
+          const allRuleNeutral = value.mechanicalRootCause?.P1_1_MECHANICAL_ROOT_CAUSE_PROVEN === true
+            && value.mechanicalRootCause?.ruleNeutralN === value.mechanicalRootCause?.ruleTotalN
+            && Number.isInteger(value.mechanicalRootCause?.ruleTotalN)
+            && value.mechanicalRootCause.ruleTotalN > 0;
+          const expectedRescueStatus = allRuleNeutral ? 'READY_FOR_PROSPECTIVE_FREEZE' : 'NOT_EVALUABLE';
+          if (rescue.status !== expectedRescueStatus) process.exit(1);
+          if (rescue.status === 'READY_FOR_PROSPECTIVE_FREEZE') {
+            if (rescue.historicalEvaluation?.promotionCredit !== 0) process.exit(1);
+            if (rescue.prospectiveGate?.historicalSamplesEligible !== 0) process.exit(1);
+            if (rescue.prospectiveGate?.preFreezeSamplesEligible !== 0) process.exit(1);
+            if (rescue.prospectiveGate?.replaySamplesEligible !== 0) process.exit(1);
+            if (rescue.prospectiveGate?.syntheticSamplesEligible !== 0) process.exit(1);
+            if (rescue.prospectiveGate?.manualSamplesEligible !== 0) process.exit(1);
+          }
           NODE
 
       - name: Upload immutable diagnostic evidence
@@ -169,3 +209,13 @@ jobs:
           grep -q 'promotionCredit: 0' market-prediction-lab/src/shadow-blend-collapse-diagnostics-v1.js
           grep -q 'LIVE_TRADING: false' market-prediction-lab/src/shadow-blend-collapse-diagnostics-v1.js
           grep -q 'executionAuthority: "NONE"' market-prediction-lab/src/shadow-blend-collapse-diagnostics-v1.js
+          grep -q 'blendWeightModified: false' market-prediction-lab/src/shadow-directional-rescue-v1.js
+          grep -q 'historicalEvidenceUsedToSelectPolicy: true' market-prediction-lab/src/shadow-directional-rescue-v1.js
+          grep -q 'historicalDataUsedForPolicySelection: true' market-prediction-lab/src/shadow-directional-rescue-v1.js
+          grep -q 'historicalDataUsedForParameterSelection: false' market-prediction-lab/src/shadow-directional-rescue-v1.js
+          grep -q 'historicalPromotionCredit: 0' market-prediction-lab/src/shadow-directional-rescue-v1.js
+          grep -q 'preFreezePromotionCredit: 0' market-prediction-lab/src/shadow-directional-rescue-v1.js
+          grep -q 'prospectiveGenuineEvidenceRequired: true' market-prediction-lab/src/shadow-directional-rescue-v1.js
+          grep -q 'scheduleMutationAuthorized: false' market-prediction-lab/src/shadow-directional-rescue-v1.js
+          grep -q 'modelCutoverAuthorized: false' market-prediction-lab/src/shadow-directional-rescue-v1.js
+          grep -q 'executionAuthority: "NONE"' market-prediction-lab/src/shadow-directional-rescue-v1.js

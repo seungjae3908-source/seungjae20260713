@@ -1,0 +1,62 @@
+name: Public Forward Partial Fill Production Policy Manifest
+
+on:
+  pull_request:
+    paths:
+      - 'api-server/src/services/public-forward-partial-fill-production-policy-manifest.service.ts'
+      - 'api-server/src/services/public-forward-partial-fill-production-policy-manifest.service.test.ts'
+      - '.github/workflows/public-forward-partial-fill-production-policy-manifest.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck API server
+        run: pnpm --dir api-server run typecheck
+
+      - name: Bundle focused manifest producer test
+        run: >-
+          pnpm --dir api-server exec esbuild
+          src/services/public-forward-partial-fill-production-policy-manifest.service.test.ts
+          --bundle --platform=node --format=cjs --target=node24
+          --outfile=/tmp/public-forward-partial-fill-production-policy-manifest.test.cjs
+
+      - name: Run focused manifest producer test
+        run: node --test /tmp/public-forward-partial-fill-production-policy-manifest.test.cjs
+
+      - name: Verify candidate-only and zero-authority invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE='api-server/src/services/public-forward-partial-fill-production-policy-manifest.service.ts'
+          grep -Fq 'candidateOnly: true' "$FILE"
+          grep -Fq 'allComponentsFrozenRequired: true' "$FILE"
+          grep -Fq 'defaultPolicyAllowed: false' "$FILE"
+          grep -Fq 'defaultMinimumAllowed: false' "$FILE"
+          grep -Fq 'productionAuthorityConnected: false' "$FILE"
+          grep -Fq 'policyArtifactProduced: false' "$FILE"
+          grep -Fq 'partialFillCostProduced: false' "$FILE"
+          grep -Fq 'fullCostReady: false' "$FILE"
+          grep -Fq 'evidenceComplete: 0' "$FILE"
+          grep -Fq "executionAuthority: 'NONE'" "$FILE"
+          grep -Fq 'privateApiAllowed: false' "$FILE"
+          grep -Fq 'liveTrading: false' "$FILE"
+          grep -Fq 'orderSubmissionAllowed: false' "$FILE"

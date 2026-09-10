@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "public-forward-liquidity-successor-schedule-reliability-activation-binding-v3",
+  "authorityIssue": 23,
+  "authorityCommentId": 5518184221,
+  "activationBoundaryMs": 1788393448000,
+  "cutoverStartMs": 1788398220000,
+  "authorizedCurrentMainSha": "1fdef7859dbabd26ae34b6cb0e127020d7e5ca79",
+  "numericFreezeSha256": "10b157de8e1902865f9b386a02439bb56d67b5c2fcd20dd48870d851bdb97ff1",
+  "minActivationLeadSlots": 1,
+  "priorV2CreditImported": 0,
+  "priorV2MissedSlotRecovery": 0,
+  "priorV2DiagnosticArtifactCredit": 0,
+  "replayCredit": 0,
+  "backfillCredit": 0,
+  "syntheticCredit": 0
+}

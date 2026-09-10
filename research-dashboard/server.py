@@ -7,6 +7,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
+from v3_independence import read_v3_independence_summary
+
 MODULE_DIR = Path(__file__).resolve().parent
 DEFAULT_STATE_ROOT = Path('/var/lib/investment-research-production')
 DEFAULT_HOST = '127.0.0.1'
@@ -290,6 +292,7 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
     shadow_state = read_json_optional(root / 'forward' / 'shadow-state.json')
     shadow_records = count_shadow_records(shadow_state)
     shadow_canonical_handoffs = canonical_shadow_handoffs(shadow_state)
+    liquidity_independence = read_v3_independence_summary(root, read_json_optional)
     failed_tasks = sum_known_cycle_counts(cycles, 'failedCount')
     blocked_data_tasks = sum_known_cycle_counts(cycles, 'blockedDataCount')
     authority_evidence_complete = not paper_runtime.get('present') or paper_runtime.get('safetyEvidenceComplete') is True
@@ -305,6 +308,7 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
     research_status = (
         'safety_block' if forbidden_authority_observed
         else 'safety_evidence_incomplete' if not authority_evidence_complete
+        else 'attention' if liquidity_independence.get('status') == 'INVALID'
         else 'evidence_incomplete' if failed_tasks is None or blocked_data_tasks is None
         else 'attention' if failed_tasks > 0
         else 'collecting'
@@ -313,7 +317,7 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
         'schemaVersion': 'research-dashboard-overview-v1',
         'generatedAt': int(__import__('time').time() * 1000),
         'state': {
-            'present': any(cycle.get('present') for cycle in cycles) or paper_runtime.get('present') or paper_ledger.get('present') or shadow_records.get('present'),
+            'present': any(cycle.get('present') for cycle in cycles) or paper_runtime.get('present') or paper_ledger.get('present') or shadow_records.get('present') or liquidity_independence.get('present'),
             'latestCycleAt': latest_cycle_at,
         },
         'safety': {
@@ -329,6 +333,7 @@ def build_research_overview(state_root=DEFAULT_STATE_ROOT):
             'failedTasks': failed_tasks,
             'blockedDataTasks': blocked_data_tasks,
             'cycles': cycles,
+            'liquidityIndependence': liquidity_independence,
         },
         'paper': {'runtime': paper_runtime, 'ledger': paper_ledger},
         'shadow': {'groups': shadow_groups, 'records': shadow_records, 'canonicalHandoffs': shadow_canonical_handoffs},
