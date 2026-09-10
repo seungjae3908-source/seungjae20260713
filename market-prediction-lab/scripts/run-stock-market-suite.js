@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path";
 import { collectYahooStockHistory } from "../src/yahoo-stock-history.js";
 import { normalizeCandleRows } from "../src/normalizers.js";
 import { buildTrainingRecords } from "../src/training-dataset.js";
+import { requiredInferenceEvidenceFeatures } from "../src/engine.js";
 import { walkForwardSplit } from "../src/walk-forward.js";
 import { exportWalkForwardDataset } from "../src/dataset-export.js";
 import { BASELINE_MODEL } from "../src/tiny-model.js";
@@ -268,8 +269,51 @@ const reportPath = resolve(process.argv[3] ?? "docs/stock-market-suite-result.js
 const candidateRoot = resolve(process.argv[4] ?? "docs/stock-candidate-models");
 const suiteEndTime = Date.now();
 const suiteStartedAt = Date.now();
-const datasets = [];
-const datasetResults = [];
+const evidenceByMarket = Object.fromEntries([...new Set(SUITE_SPECS.map((spec) => spec.market))]
+  .map((market) => [market, requiredInferenceEvidenceFeatures(market)]));
+const historicalEvidenceBlockers = [...new Set(Object.values(evidenceByMarket).flat())]
+  .map((featureName) => `MISSING_TEMPORAL_REQUIRED_FEATURE_EVIDENCE:${featureName}`)
+  .sort();
+
+if (historicalEvidenceBlockers.length > 0) {
+  const report = {
+    schemaVersion: 1,
+    status: "data_blocked",
+    stage: "required_inference_evidence_preflight",
+    verifiedAt: Date.now(),
+    durationMs: Date.now() - suiteStartedAt,
+    researchOnly: true,
+    branchWrite: false,
+    liveOrderAllowed: false,
+    privateAccountRequestAllowed: false,
+    intendedDataSource: "Yahoo public chart API",
+    blockers: historicalEvidenceBlockers,
+    evidenceByMarket,
+    datasets: SUITE_SPECS.map((spec) => ({
+      id: spec.id,
+      status: "data_blocked",
+      market: spec.market,
+      symbol: spec.symbol,
+      timeframe: spec.timeframe,
+      requestedDays: spec.days,
+      missingRequiredFeatures: evidenceByMarket[spec.market],
+    })),
+    models: Object.fromEntries([...new Set(SUITE_SPECS.map((spec) => spec.group))]
+      .map((group) => [group, { status: "not_trained", reason: "required_temporal_inference_evidence_missing" }])),
+    inferenceEvaluation: {
+      status: "NOT_EVALUABLE",
+      modelObservationEligible: false,
+      policyCreditEligible: false,
+      economicCreditGranted: false,
+      syntheticImputationUsed: false,
+      zeroImputationUsed: false,
+    },
+  };
+  await writeJsonAtomically(reportPath, report);
+  console.log(JSON.stringify(report, null, 2));
+} else {
+  const datasets = [];
+  const datasetResults = [];
 
 for (const spec of SUITE_SPECS) {
   try {
@@ -343,3 +387,4 @@ console.log(JSON.stringify({
   modelResults,
 }, null, 2));
 if (report.status !== "pass") process.exitCode = 1;
+}

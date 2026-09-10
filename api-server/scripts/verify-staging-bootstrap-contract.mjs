@@ -15,6 +15,7 @@ const base = await read('api-server/supabase/bootstrap/staging-allowlist-base.sq
 const assertion = await read('api-server/supabase/bootstrap/staging-bootstrap-assert.sql');
 const telegramStorage = await read('api-server/supabase/migrations/2026081501_personal_telegram_storage.sql');
 const telegramPolicyCleanup = await read('api-server/supabase/migrations/2026081502_personal_telegram_policy_cleanup.sql');
+const memberWatchlistStorage = await read('api-server/supabase/migrations/2026082704_member_watchlist_items.sql');
 const runner = await read('api-server/scripts/apply-staging-supabase-bootstrap.mjs');
 const verdict = await read('api-server/scripts/build-staging-verdict.mjs');
 const serverEntry = await read('api-server/src/index.ts');
@@ -31,6 +32,22 @@ assert(manifest.includes('2026081501_personal_telegram_storage.sql'), 'manifest 
 assert(runner.includes('2026081501_personal_telegram_storage.sql'), 'atomic runner must include personal Telegram storage');
 assert(manifest.includes('2026081502_personal_telegram_policy_cleanup.sql'), 'manifest must include personal Telegram policy cleanup');
 assert(runner.includes('2026081502_personal_telegram_policy_cleanup.sql'), 'atomic runner must include personal Telegram policy cleanup');
+assert(manifest.includes('2026082704_member_watchlist_items.sql'), 'manifest must include authenticated member watchlist storage');
+assert(runner.includes('2026082704_member_watchlist_items.sql'), 'atomic runner must include authenticated member watchlist storage');
+
+for (const marker of [
+  'create table if not exists public.member_watchlist_items',
+  'primary key (user_id, market, symbol)',
+  'alter table public.member_watchlist_items enable row level security',
+  'alter table public.member_watchlist_items force row level security',
+  'grant select, insert, update, delete on table public.member_watchlist_items to authenticated',
+  'member_watchlist_select_own',
+  'member_watchlist_insert_own',
+  'member_watchlist_update_own',
+  'member_watchlist_delete_own',
+]) {
+  assert(memberWatchlistStorage.includes(marker), `member watchlist migration is missing ${marker}`);
+}
 
 for (const serverTable of [
   'telegram_connections',
@@ -139,4 +156,4 @@ assert(
   'health response must expose deploySha from the process-start identity',
 );
 
-console.log('[staging-bootstrap-contract] allowlist, atomicity, isolation, health SHA, exact account cleanup, no-user-copy, and no-manual-account-secret contracts verified');
+console.log('[staging-bootstrap-contract] allowlist, atomicity, isolation, health SHA, exact account cleanup, member watchlist storage, no-user-copy, and no-manual-account-secret contracts verified');
