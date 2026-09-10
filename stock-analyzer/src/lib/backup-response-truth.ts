@@ -40,7 +40,7 @@ function requireTimestamp(value: unknown): string {
 
 function requireChecksum(value: unknown): string {
   if (typeof value !== 'string' || !/^[a-f0-9]{64}$/i.test(value)) fail();
-  return value;
+  return value.toLowerCase();
 }
 
 function requireSchemaVersion(value: unknown): number {
@@ -80,15 +80,28 @@ function parseRequestBody(body: BodyInit | null | undefined): Record<string, unk
   }
 }
 
+async function backupChecksum(payload: Record<string, string>): Promise<string> {
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) fail();
+  const sorted = Object.fromEntries(
+    Object.entries(payload).sort(([a], [b]) => a.localeCompare(b)),
+  );
+  const digest = await subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(JSON.stringify(sorted)),
+  );
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
 export function isBackupSuccessResponsePath(path: string, method: string): boolean {
   return path === '/api/backup/latest' && (method === 'GET' || method === 'PUT');
 }
 
-export function requireBackupSuccessResponse(
+export async function requireBackupSuccessResponse(
   method: string,
   value: unknown,
   requestBody?: BodyInit | null,
-): void {
+): Promise<void> {
   if (!isRecord(value) || value.ok !== true || typeof value.exists !== 'boolean') fail();
 
   if (method === 'GET') {
@@ -101,7 +114,8 @@ export function requireBackupSuccessResponse(
     requireSchemaVersion(value.schemaVersion);
     const storage = requireBackupStorage(value.localStorage);
     requireItemCount(value.itemCount, Object.keys(storage).length);
-    requireChecksum(value.checksum);
+    const responseChecksum = requireChecksum(value.checksum);
+    if (responseChecksum !== await backupChecksum(storage)) fail();
     requireTimestamp(value.clientUpdatedAt);
     requireTimestamp(value.updatedAt);
     return;
@@ -112,11 +126,13 @@ export function requireBackupSuccessResponse(
     const request = parseRequestBody(requestBody);
     const schemaVersion = requireSchemaVersion(request.schemaVersion);
     const storage = requireBackupStorage(request.localStorage);
-    requireTimestamp(request.clientUpdatedAt);
+    const requestClientUpdatedAt = requireTimestamp(request.clientUpdatedAt);
     if (value.schemaVersion !== schemaVersion) fail();
     requireItemCount(value.itemCount, Object.keys(storage).length);
-    requireChecksum(value.checksum);
-    requireTimestamp(value.clientUpdatedAt);
+    const responseChecksum = requireChecksum(value.checksum);
+    if (responseChecksum !== await backupChecksum(storage)) fail();
+    const responseClientUpdatedAt = requireTimestamp(value.clientUpdatedAt);
+    if (Date.parse(responseClientUpdatedAt) !== Date.parse(requestClientUpdatedAt)) fail();
     requireTimestamp(value.updatedAt);
     return;
   }
