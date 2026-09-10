@@ -238,7 +238,7 @@ async function fetchNaverPoll(code: string): Promise<NaverPollItem | null> {
 
       if (!item) continue;
 
-      return {
+      const candidate: NaverPollItem = {
         cd: cleanCode,
         nm: item.nm ?? item.stockName ?? item.name,
         nv: item.nv ?? item.closePrice ?? item.nowPrice,
@@ -252,6 +252,9 @@ async function fetchNaverPoll(code: string): Promise<NaverPollItem | null> {
         pcv: item.pcv ?? item.previousClosePrice,
         localTradedAt: item.localTradedAt,
       };
+
+      if (!normalizeMarketObservationTime(candidate.localTradedAt)) continue;
+      return candidate;
     } catch {
       // try next
     }
@@ -315,7 +318,7 @@ export async function getQuote(
     throw new Error(`NAVER_PRICE_PARSE_FAILED:${code}`);
   }
 
-  return parsed;
+  throw new Error(`NAVER_QUOTE_SOURCE_TIME_UNAVAILABLE:${code}`);
 }
 
 export const quote = getQuote;
