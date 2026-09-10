@@ -45,6 +45,7 @@ function candle(timestampMs: number): BitgetPublicCandle {
 
 function candidate(): ScannerCanonicalPaperCandidate {
   return Object.freeze({
+    candidateId: `paper-candidate-v1:${'c'.repeat(64)}`,
     signal: Object.freeze({
       signalId: 'scanner-futures-p0-c5-1',
       market: 'CRYPTO_FUTURES',
@@ -58,11 +59,15 @@ function candidate(): ScannerCanonicalPaperCandidate {
       direction: 'LONG',
       signalDirection: 'LONG',
       strategyIdentity: Object.freeze({
+        candidateId: `paper-candidate-v1:${'c'.repeat(64)}`,
+        strategyFamily: 'CANONICAL_SCANNER_PROFILE',
         strategyId: 'canonical-futures-swing-long',
         strategyVersion: 'scanner-profile-v1',
         parameterHash: 'a'.repeat(64),
+        parameterDigest: 'a'.repeat(64),
         researchCodeSha: 'b'.repeat(40),
         costPolicyVersion: COST_POLICY,
+        accountMode: 'PAPER',
       }),
     }),
     executionAuthority: 'NONE',
