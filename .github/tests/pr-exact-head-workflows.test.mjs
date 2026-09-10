@@ -104,6 +104,13 @@ test("expensive research lanes retain path filters and report failures", () => {
   assert.match(documents.application, /Publish verified Application CI result/u);
 });
 
+test("multi-market PR data blocks stay truthful without weakening full dispatch validation", () => {
+  assert.match(documents.multiMarket, /research_ready:\s*\$\{\{ steps\.market_suite\.outputs\.research_ready \}\}/u);
+  assert.match(documents.multiMarket, /steps\.market_suite\.outputs\.research_ready == 'true'/u);
+  assert.match(documents.multiMarket, /github\.event_name != 'pull_request' && steps\.market_suite\.outputs\.research_ready != 'true'/u);
+  assert.match(documents.multiMarket, /github\.event_name == 'workflow_dispatch'[\s\S]*needs\.validate-and-train\.outputs\.research_ready == 'true'/u);
+});
+
 test("PR lane has no secret, deployment, timer, or trading authority", () => {
   for (const document of Object.values(documents)) {
     assert.doesNotMatch(document, /secrets\./u);

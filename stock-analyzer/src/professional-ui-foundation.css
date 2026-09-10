@@ -1,0 +1,224 @@
+:root {
+  --pro-ui-font-caption: 0.75rem;
+  --pro-ui-font-body: 0.875rem;
+  --pro-ui-font-section: 1rem;
+  --pro-ui-font-page: 1.25rem;
+  --pro-ui-font-metric: 1.5rem;
+  --pro-ui-weight-regular: 400;
+  --pro-ui-weight-medium: 500;
+  --pro-ui-weight-semibold: 600;
+  --pro-ui-weight-bold: 700;
+  --pro-ui-control-mobile: 2.75rem;
+  --pro-ui-control-desktop: 3rem;
+  --pro-ui-card-radius: 1rem;
+  --pro-ui-panel-radius: 1.25rem;
+}
+
+/*
+ * Professional UI foundation.
+ *
+ * The product used many page-local font sizes, weights and breakpoints. This
+ * layer establishes reusable roles without changing feature or trading
+ * semantics. New/rehabilitated surfaces can adopt these classes incrementally.
+ */
+.pro-ui-page-title {
+  font-size: var(--pro-ui-font-page);
+  font-weight: var(--pro-ui-weight-bold);
+  line-height: 1.3;
+  text-align: center;
+}
+
+.pro-ui-section-title {
+  font-size: var(--pro-ui-font-section);
+  font-weight: var(--pro-ui-weight-bold);
+  line-height: 1.4;
+  text-align: center;
+}
+
+.pro-ui-body {
+  font-size: var(--pro-ui-font-body);
+  font-weight: var(--pro-ui-weight-medium);
+  line-height: 1.55;
+}
+
+.pro-ui-caption,
+.pro-ui-badge {
+  font-size: var(--pro-ui-font-caption);
+  line-height: 1rem;
+}
+
+.pro-ui-badge {
+  font-weight: var(--pro-ui-weight-semibold);
+  text-align: center;
+}
+
+.pro-ui-metric {
+  font-size: var(--pro-ui-font-metric);
+  font-weight: var(--pro-ui-weight-bold);
+  line-height: 1.2;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * Primary navigation labels are part of the persistent product shell. Keep
+ * them readable and visually consistent instead of using 10px/extra-black.
+ */
+nav[aria-label='주요 메뉴'] > div:last-child > button,
+nav[aria-label='주요 메뉴'] > div:last-child > div > button:not([role='menuitem']) {
+  font-size: var(--pro-ui-font-caption) !important;
+  font-weight: var(--pro-ui-weight-semibold) !important;
+  line-height: 1rem !important;
+  text-align: center;
+}
+
+nav[aria-label='주요 메뉴'] [role='menuitem'] {
+  font-weight: var(--pro-ui-weight-semibold) !important;
+}
+
+/*
+ * Edge-aware navigation popovers. Center anchoring is safe for the middle
+ * group, but the asset group can clip on compact screens and the information /
+ * settings groups can clip on the right edge. Anchor those menus inward.
+ */
+@media (max-width: 1199px) {
+  nav[aria-label='주요 메뉴']
+    > div:last-child
+    > div:has(> button[aria-controls='bottom-nav-assets-menu'])
+    > [role='menu'] {
+    left: 0 !important;
+    right: auto !important;
+    transform: none !important;
+  }
+
+  nav[aria-label='주요 메뉴']
+    > div:last-child
+    > div:has(> button[aria-controls='bottom-nav-information-menu'])
+    > [role='menu'],
+  nav[aria-label='주요 메뉴']
+    > div:last-child
+    > div:has(> button[aria-controls='bottom-nav-settings-menu'])
+    > [role='menu'] {
+    left: auto !important;
+    right: 0 !important;
+    transform: none !important;
+  }
+
+  nav[aria-label='주요 메뉴'] [role='menu'] {
+    max-width: calc(100vw - 0.75rem) !important;
+    overflow-wrap: anywhere;
+  }
+}
+
+/*
+ * Canonical adaptive policy: touch/tablet through 1199px, desktop at 1200px.
+ * src/index.css still contains the historical 1024px floating-dock rule; this
+ * explicit reset prevents mixed tablet-body / desktop-navigation geometry.
+ */
+@media (min-width: 1024px) and (max-width: 1199px) {
+  nav[aria-label='주요 메뉴'] {
+    inset-inline: auto !important;
+    left: auto !important;
+    right: auto !important;
+    width: 100% !important;
+    max-width: none !important;
+    transform: none !important;
+    border-right-width: 0 !important;
+    border-bottom-width: 0 !important;
+    border-left-width: 0 !important;
+    border-radius: 0 !important;
+    padding: 0.25rem var(--app-safe-inline-end) env(safe-area-inset-bottom) var(--app-safe-inline-start) !important;
+    box-shadow: none !important;
+  }
+
+  nav[aria-label='주요 메뉴'] > div:last-child {
+    width: 100% !important;
+    max-width: 48rem !important;
+    margin-inline: auto !important;
+  }
+}
+
+/*
+ * Home tablet density. The home stays touch-first until 1199px; avoid jumping
+ * from a two-column phone layout directly to five compressed metric cards.
+ */
+@media (min-width: 600px) and (max-width: 899px) {
+  [data-testid='home-market-summary'] div[class~='md:grid-cols-5'] {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+}
+
+@media (min-width: 900px) and (max-width: 1199px) {
+  [data-testid='home-market-summary'] div[class~='md:grid-cols-5'] {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  }
+}
+
+/*
+ * User-facing home/research captions use a 12px floor. Preserve long-form text
+ * alignment, while reducing the prior font-black saturation to a single 700
+ * emphasis level.
+ */
+[data-testid^='home-'] [class~='text-[10px]'],
+[data-testid^='home-'] [class~='text-[11px]'],
+[data-testid='research-center-page'] [class~='text-[9px]'],
+[data-testid='research-center-page'] [class~='text-[10px]'],
+[data-testid='research-center-page'] [class~='text-[11px]'] {
+  font-size: var(--pro-ui-font-caption) !important;
+  line-height: 1rem !important;
+}
+
+[data-testid^='home-'] .font-black,
+[data-testid='research-center-page'] .font-black {
+  font-weight: var(--pro-ui-weight-bold) !important;
+}
+
+[data-testid^='home-'] h2,
+[data-testid='research-center-page'] [role='tab'],
+[data-testid='research-center-page'] [class~='text-center'] {
+  text-align: center;
+}
+
+/*
+ * Research Paper safety flags contain deliberately long raw authority tokens.
+ * Never let a five-column nowrap row collide on tablet widths. Mobile remains
+ * one column, tablet uses 2/3 columns, and only desktop returns to five.
+ */
+@media (min-width: 600px) and (max-width: 899px) {
+  [data-testid='research-paper-tab'] div[class~='sm:grid-cols-5'] {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+@media (min-width: 900px) and (max-width: 1199px) {
+  [data-testid='research-paper-tab'] div[class~='sm:grid-cols-5'] {
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+}
+
+[data-testid='research-paper-tab'] div[class~='sm:grid-cols-5'] > span {
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal !important;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1rem;
+  text-align: center;
+}
+
+/* Keep important interactive targets professional and touch-safe. */
+@media (max-width: 1199px) {
+  nav[aria-label='주요 메뉴'] > div:last-child > button,
+  nav[aria-label='주요 메뉴'] > div:last-child > div > button:not([role='menuitem']) {
+    min-height: var(--pro-ui-control-mobile) !important;
+  }
+}
+
+@media (min-width: 1200px) {
+  nav[aria-label='주요 메뉴'] > div:last-child > button,
+  nav[aria-label='주요 메뉴'] > div:last-child > div > button:not([role='menuitem']) {
+    min-height: var(--pro-ui-control-desktop) !important;
+  }
+}
