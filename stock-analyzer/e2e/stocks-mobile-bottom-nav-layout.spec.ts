@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { expect, test, type Page, type Route } from '@playwright/test';
 
-const NOW = '2026-08-26T04:00:00.000Z';
+const NOW = new Date().toISOString();
 const E2E_USER_ID = '22222222-2222-4222-8222-222222222230';
 const E2E_AUTH_STORAGE_KEY = 'sb-127-auth-token';
 
@@ -20,11 +20,29 @@ function recommendationRow(index: number) {
     market: 'KR',
     currency: 'KRW',
     category: index % 2 === 0 ? 'undervalued' : 'breakout',
-    categoryLabel: index % 2 === 0 ? '저평가' : '초기 추세돌파',
+    categoryLabel: index % 2 === 0 ? '저평가 후보' : '초기 추세돌파 후보',
     price: 75_000 + index,
     changePercent: 0.4,
     reasons: ['공개 fixture 기반 레이아웃 검증'],
+    usedData: ['현재가'],
+    missingData: [],
+    risks: [],
+    overheated: false,
+    financialStability: '안정',
+    newsRisk: '낮음',
+    riskLevel: 'LOW',
+    shortTermOutlook: '관망',
+    midTermOutlook: '관망',
+    opinion: '관망',
+    targetPrice: null,
+    targetBasis: '산출 불가',
+    stopLoss: null,
+    stopBasis: '산출 불가',
     score: 60,
+    generatedAt: NOW,
+    dataUpdatedAt: NOW,
+    providers: ['fixture'],
+    dataQuality: 'sufficient',
   };
 }
 
@@ -88,10 +106,16 @@ async function installApprovedRuntime(page: Page, recommendationCount: number) {
     if (url.pathname === '/api/market/recommendations') {
       return fulfill(route, {
         ok: true,
-        analysisMode: 'rules',
+        provider: 'rule-based-engine',
+        analysisMode: 'rule-based',
+        aiConfigured: false,
         analysisDescription: '종목 레이아웃 검증 fixture',
         market: 'KR',
+        generatedAt: NOW,
         rows: Array.from({ length: recommendationCount }, (_, index) => recommendationRow(index)),
+        excludedCount: 0,
+        excludedBreakdown: {},
+        dataQualityNote: '검증 fixture',
       });
     }
     return fulfill(route, {

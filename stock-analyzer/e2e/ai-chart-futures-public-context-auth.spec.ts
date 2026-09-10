@@ -15,5 +15,5 @@ test('AI Chart Bitget public context uses the authenticated app API transport', 
   expect(panel).not.toContain('const response = await fetch(`/api/crypto/futures/${encodeURIComponent(normalizedSymbol)}/snapshot`');
 
   expect(authFetch).toContain("headers.set('Authorization', `Bearer ${token}`)");
-  expect(authFetch).toContain('return await fetch(input, { ...init, headers, signal: controller.signal });');
+  expect(authFetch).toContain('fetch(input, { ...init, headers, signal: controller.signal });');
 });

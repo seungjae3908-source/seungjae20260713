@@ -1,0 +1,94 @@
+{
+  "contractVersion": "public-forward-liquidity-successor-oos-outcome-horizon-contract-v1",
+  "freezeStatus": "HUMAN_POLICY_VALUES_FROZEN_REPOSITORY_DRAFT_MATERIALIZATION",
+  "policyCore": {
+    "schemaVersion": "public-forward-liquidity-successor-oos-outcome-horizon-policy-v1",
+    "authority": {
+      "canonicalHubIssue": 838,
+      "humanApprovalCommentId": 5490310342,
+      "humanApprovalCreatedAt": "2026-09-01T07:15:31Z",
+      "humanApprovalCreatedAtMs": 1788246931000,
+      "approvalScope": "SUCCESSOR_OOS_OUTCOME_HORIZON_5000MS_DESIGN_AND_FREEZE_ONLY",
+      "sourceBaseMainSha": "7442fbfd859db01ce5f018ddeb027ccd3282be4e"
+    },
+    "successorCohortBinding": {
+      "contractVersion": "public-forward-liquidity-successor-prospective-cohort-contract-v1",
+      "cohortId": "PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_PROSPECTIVE_COHORT_V1_20260903:451b880a7efff4c3cbb8abe8bcda07bbf54a534f9f01baeb040547c339fa489a",
+      "policyDigest": "451b880a7efff4c3cbb8abe8bcda07bbf54a534f9f01baeb040547c339fa489a",
+      "cohortDigest": "7c24f0f752c500bc7ea90df5e7975319a5c4813a23f8f0e375a1ffd0b99672bb",
+      "firstEligibleSlotMs": 1788362220000,
+      "firstEligibleSlotUtc": "2026-09-02T15:17:00.000Z",
+      "firstEligibleSlotKst": "2026-09-03T00:17:00+09:00",
+      "firstOosSlotIndex": 252,
+      "firstOosSlotMs": 1789269420000,
+      "oosExpectedSlotN": 84
+    },
+    "outcomePolicy": {
+      "outcomeHorizonIdentity": "PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_OOS_HORIZON_V1_5000MS",
+      "outcomeHorizonMs": 5000,
+      "referenceTimestampField": "eventTimestampMs",
+      "referenceSemantics": "OOS_ASSIGNMENT_EVENT_TIMESTAMP_MS",
+      "targetTimestampFormula": "eventTimestampMs + outcomeHorizonMs",
+      "outcomeSelectionPolicy": "FIRST_PUBLIC_OBSERVATION_AT_OR_AFTER_HORIZON",
+      "uniqueEarliestCandidateRequired": true,
+      "genuinePublicForwardOnly": true,
+      "calibrationSourceOnlyRequired": true,
+      "outcomeExecutionCostEligible": false,
+      "causalMarketImpactClaimAllowed": false,
+      "captureFrameAuthoritySemantics": "CAPTURE_FRAME_IS_NOT_OOS_BY_ITSELF_AND_IS_ELIGIBLE_ONLY_IF_ALL_OOS_LINEAGE_AND_SELECTION_GATES_PASS",
+      "existingCapturePostObservationDelaysMs": [
+        1000,
+        5000
+      ]
+    },
+    "prospectiveIntegrity": {
+      "humanFreezePredatesCohortFirstEligible": true,
+      "humanFreezePredatesFirstOosSlot": true,
+      "outcomeInspectionUsedForPolicySelection": false,
+      "oldV3OutcomeHorizonMs": 60000,
+      "oldV3OutcomeHorizonAuthorityInherited": false,
+      "outcomeBasedRetuningAllowed": false,
+      "horizonSwitchingAllowed": false,
+      "retrospectiveReassignmentAllowed": false,
+      "manualCredit": 0,
+      "replayCredit": 0,
+      "backfillCredit": 0,
+      "syntheticCredit": 0
+    },
+    "approvalBoundaries": {
+      "actualMergeApproved": false,
+      "scheduleActivationApproved": false,
+      "prospectiveObservationWorkflowAuthorityApproved": false,
+      "productionDeployApproved": false,
+      "stagingDeployApproved": false,
+      "dbSecretEnvServerMutationApproved": false
+    },
+    "safety": {
+      "publicDataOnly": true,
+      "executionAuthority": "NONE",
+      "privateTradingApiAllowed": false,
+      "liveTradingAllowed": false,
+      "autoTradingAllowed": false,
+      "realOrderAllowed": false,
+      "financialMutationAllowed": false,
+      "replitAgentAllowed": false,
+      "fullCostReady": false,
+      "evidenceComplete": 0,
+      "profitabilityProven": false,
+      "currentValidatedChampion": "NONE"
+    }
+  },
+  "policyDigest": "d082e51e37ac7847178b37ad332e4cd7283316686b1f24e1349a7bcae00da286",
+  "contractId": "PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_OOS_HORIZON_V1_5000MS:d082e51e37ac7847178b37ad332e4cd7283316686b1f24e1349a7bcae00da286",
+  "contractDigest": "7dd8b27843a12a427a45cdd47d71c412643611d2566f9e5feaccc149e668a1a5",
+  "contractIdentityCore": {
+    "schemaVersion": "public-forward-liquidity-successor-oos-outcome-horizon-identity-v1",
+    "contractId": "PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_OOS_HORIZON_V1_5000MS:d082e51e37ac7847178b37ad332e4cd7283316686b1f24e1349a7bcae00da286",
+    "policyDigest": "d082e51e37ac7847178b37ad332e4cd7283316686b1f24e1349a7bcae00da286",
+    "successorCohortDigest": "7c24f0f752c500bc7ea90df5e7975319a5c4813a23f8f0e375a1ffd0b99672bb",
+    "outcomeHorizonIdentity": "PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_OOS_HORIZON_V1_5000MS",
+    "outcomeHorizonMs": 5000,
+    "outcomeSelectionPolicy": "FIRST_PUBLIC_OBSERVATION_AT_OR_AFTER_HORIZON",
+    "referenceTimestampField": "eventTimestampMs"
+  }
+}
