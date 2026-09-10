@@ -7,7 +7,9 @@ import {
 } from '../src/public-data.mjs';
 import {
   buildPublicLiquidityObservationBatch,
+  canonicalJson,
   mergeLiquidityCalibrationBatch,
+  sha256,
 } from '../src/public-forward-liquidity-calibration.mjs';
 import {
   analyzePublicForwardLiquiditySampleCoverage,
@@ -86,6 +88,11 @@ function coverageBatch() {
     ],
     collectorCodeSha: collectorSha,
   });
+}
+
+function refreshNormalizedDigest(batch) {
+  batch.datasetProvenance.normalizedDigest = sha256(canonicalJson(batch.observations));
+  return batch;
 }
 
 test('reports empirical accepted-sample coverage and source-frame clustering without representativeness claims', () => {
@@ -273,6 +280,143 @@ test('fails closed when source safety authority is absent or mutated', () => {
   assert.throws(
     () => analyzePublicForwardLiquiditySampleCoverage(missing),
     /COVERAGE_SOURCE_SAFETY_INVALID/u,
+  );
+});
+
+test('requires the exact public endpoint set and full read-only producer safety', () => {
+  const extraEndpoint = structuredClone(coverageBatch());
+  extraEndpoint.datasetProvenance.rawSource.endpoints.push('/api/v3/account/assets');
+  assert.throws(
+    () => analyzePublicForwardLiquiditySampleCoverage(extraEndpoint),
+    /COVERAGE_PUBLIC_PROVENANCE_INVALID/u,
+  );
+
+  const missingPublicOnly = structuredClone(coverageBatch());
+  delete missingPublicOnly.safety.publicDataOnly;
+  assert.throws(
+    () => analyzePublicForwardLiquiditySampleCoverage(missingPublicOnly),
+    /COVERAGE_SOURCE_SAFETY_INVALID/u,
+  );
+
+  const mutationAuthority = structuredClone(coverageBatch());
+  mutationAuthority.safety.financialMutationAllowed = true;
+  assert.throws(
+    () => analyzePublicForwardLiquiditySampleCoverage(mutationAuthority),
+    /COVERAGE_SOURCE_SAFETY_INVALID/u,
+  );
+
+  const extraQueryIdentity = structuredClone(coverageBatch());
+  extraQueryIdentity.observations[0].rawSourceProvenance.publicTrade.query += '&accountType=private';
+  refreshNormalizedDigest(extraQueryIdentity);
+  assert.throws(
+    () => analyzePublicForwardLiquiditySampleCoverage(extraQueryIdentity),
+    /COVERAGE_PUBLIC_TRADE_QUERY_INVALID/u,
+  );
+});
+
+test('binds the normalized digest to the exact canonical observations', () => {
+  const batch = structuredClone(coverageBatch());
+  batch.observations[0].unboundCoverageClaim = 'fabricated';
+  assert.throws(
+    () => analyzePublicForwardLiquiditySampleCoverage(batch),
+    /COVERAGE_NORMALIZED_DIGEST_MISMATCH/u,
+  );
+});
+
+test('rejects observation identity and source-value drift even after normalized digest recomputation', () => {
+  const identityDrift = structuredClone(coverageBatch());
+  identityDrift.observations[0].observationId = `liquidity-observation:${'c'.repeat(64)}`;
+  refreshNormalizedDigest(identityDrift);
+  assert.throws(
+    () => analyzePublicForwardLiquiditySampleCoverage(identityDrift),
+    /COVERAGE_OBSERVATION_IDENTITY_MISMATCH/u,
+  );
+
+  const sourceValueDrift = structuredClone(coverageBatch());
+  const observation = sourceValueDrift.observations[0];
+  observation.tradeFlowQuantity += 1;
+  observation.tradeFlowNotional = observation.tradeFlowQuantity * observation.publicExecutionPrice;
+  observation.instantaneousVisibleDepthBookWalk.requestedQuantity = observation.tradeFlowQuantity;
+  refreshNormalizedDigest(sourceValueDrift);
+  assert.throws(
+    () => analyzePublicForwardLiquiditySampleCoverage(sourceValueDrift),
+    /COVERAGE_OBSERVATION_SOURCE_DIGEST_MISMATCH/u,
+  );
+});
+
+test('rejects post-event horizon and source-frame drift after digest recomputation', () => {
+  const horizonDrift = structuredClone(coverageBatch());
+  horizonDrift.observations[0].subsequentPublicPriceDrift[0].horizonMs += 1;
+  refreshNormalizedDigest(horizonDrift);
+  assert.throws(
+    () => analyzePublicForwardLiquiditySampleCoverage(horizonDrift),
+    /COVERAGE_POST_EVENT_HORIZON_MISMATCH/u,
+  );
+
+  const frameDrift = structuredClone(coverageBatch());
+  frameDrift.observations[0].subsequentPublicPriceDrift[0].rawSourceDigest = 'd'.repeat(64);
+  refreshNormalizedDigest(frameDrift);
+  assert.throws(
+    () => analyzePublicForwardLiquiditySampleCoverage(frameDrift),
+    /COVERAGE_POST_EVENT_SOURCE_FRAME_MISMATCH/u,
+  );
+});
+
+test('rejects missing-flag drift and non-canonical numeric coercion', () => {
+  const missingFlagDrift = structuredClone(coverageBatch());
+  missingFlagDrift.observations[0].missingDataFlags.push('UNRECOGNIZED_FLAG');
+  refreshNormalizedDigest(missingFlagDrift);
+  assert.throws(
+    () => analyzePublicForwardLiquiditySampleCoverage(missingFlagDrift),
+    /COVERAGE_MISSING_FLAG_INVALID/u,
+  );
+
+  const numericString = structuredClone(coverageBatch());
+  numericString.observations[0].tradeFlowQuantity = String(numericString.observations[0].tradeFlowQuantity);
+  refreshNormalizedDigest(numericString);
+  assert.throws(
+    () => analyzePublicForwardLiquiditySampleCoverage(numericString),
+    /COVERAGE_QUANTITY_INVALID/u,
+  );
+
+  const falseDepthFlag = structuredClone(coverageBatch());
+  falseDepthFlag.observations[0].instantaneousVisibleDepthBookWalk.completeWithinVisibleDepth = false;
+  falseDepthFlag.observations[0].missingDataFlags.push('VISIBLE_DEPTH_INSUFFICIENT_FOR_FLOW_QUANTITY');
+  refreshNormalizedDigest(falseDepthFlag);
+  assert.throws(
+    () => analyzePublicForwardLiquiditySampleCoverage(falseDepthFlag),
+    /COVERAGE_BOOK_WALK_QUANTITY_MISMATCH/u,
+  );
+});
+
+test('binds dropped counts to per-event reasons and rejects empty evidence', () => {
+  const droppedCountDrift = structuredClone(coverageBatch());
+  droppedCountDrift.datasetProvenance.droppedCount = 1;
+  droppedCountDrift.datasetProvenance.droppedReasons = { FABRICATED_DROP: 1 };
+  assert.throws(
+    () => analyzePublicForwardLiquiditySampleCoverage(droppedCountDrift),
+    /DROP_DIAGNOSTIC_DROPPED_COUNT_MISMATCH/u,
+  );
+
+  const observedPeriodDrift = structuredClone(coverageBatch());
+  observedPeriodDrift.datasetProvenance.firstObservedAtMs += 1;
+  assert.throws(
+    () => analyzePublicForwardLiquiditySampleCoverage(observedPeriodDrift),
+    /COVERAGE_OBSERVED_PERIOD_MISMATCH/u,
+  );
+
+  const empty = structuredClone(coverageBatch());
+  empty.observations = [];
+  empty.droppedEvents = [];
+  empty.datasetProvenance.eventCount = 0;
+  empty.datasetProvenance.droppedCount = 0;
+  empty.datasetProvenance.droppedReasons = {};
+  empty.datasetProvenance.firstObservedAtMs = null;
+  empty.datasetProvenance.lastObservedAtMs = null;
+  refreshNormalizedDigest(empty);
+  assert.throws(
+    () => analyzePublicForwardLiquiditySampleCoverage(empty),
+    /DROP_DIAGNOSTIC_EVIDENCE_REQUIRED/u,
   );
 });
 

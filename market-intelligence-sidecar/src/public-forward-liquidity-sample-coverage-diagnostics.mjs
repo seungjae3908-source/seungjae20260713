@@ -1,7 +1,12 @@
 import {
+  CALIBRATION_RESEARCH_SAMPLE,
+  canonicalJson,
+  FORWARD_NATURAL_SAMPLE,
   PUBLIC_LIQUIDITY_CALIBRATION_CONTRACT,
+  sha256,
   verifyLiquidityCalibrationDataset,
 } from './public-forward-liquidity-calibration.mjs';
+import { analyzePublicForwardLiquidityDropQuality } from './public-forward-liquidity-drop-diagnostics.mjs';
 
 export const PUBLIC_FORWARD_LIQUIDITY_SAMPLE_COVERAGE_DIAGNOSTICS_VERSION =
   'public-forward-liquidity-sample-coverage-diagnostics/v1';
@@ -30,31 +35,43 @@ export const PUBLIC_FORWARD_LIQUIDITY_SAMPLE_COVERAGE_SAFETY = Object.freeze({
   realOrderAllowed: false,
 });
 
+const SAMPLE_CLASSES = new Set([
+  FORWARD_NATURAL_SAMPLE,
+  CALIBRATION_RESEARCH_SAMPLE,
+]);
+
+const PUBLIC_ENDPOINTS = new Set([
+  '/api/v3/market/orderbook',
+  '/api/v3/market/fills',
+]);
+
+const PRODUCER_MISSING_FLAGS = new Set([
+  'POST_EVENT_PUBLIC_OBSERVATION_MISSING',
+  'VISIBLE_DEPTH_INSUFFICIENT_FOR_FLOW_QUANTITY',
+]);
+
 function object(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
 }
 
 function nonNegativeInteger(value, code) {
-  if (!Number.isInteger(value) || value < 0) throw new Error(code);
+  if (!Number.isSafeInteger(value) || value < 0) throw new Error(code);
   return value;
 }
 
 function positiveFinite(value, code) {
-  const parsed = Number(value);
-  if (!(Number.isFinite(parsed) && parsed > 0)) throw new Error(code);
-  return parsed;
+  if (!(Number.isFinite(value) && value > 0)) throw new Error(code);
+  return value;
 }
 
 function nonNegativeFinite(value, code) {
-  const parsed = Number(value);
-  if (!(Number.isFinite(parsed) && parsed >= 0)) throw new Error(code);
-  return parsed;
+  if (!(Number.isFinite(value) && value >= 0)) throw new Error(code);
+  return value;
 }
 
 function positiveTimestamp(value, code) {
-  const parsed = positiveFinite(value, code);
-  if (!Number.isInteger(parsed)) throw new Error(code);
-  return parsed;
+  if (!Number.isSafeInteger(value) || value <= 0) throw new Error(code);
+  return value;
 }
 
 function exactSha(value, code) {
@@ -67,6 +84,17 @@ function exactDigest(value, code) {
   const normalized = String(value ?? '').trim().toLowerCase();
   if (!/^[0-9a-f]{64}$/u.test(normalized)) throw new Error(code);
   return normalized;
+}
+
+function nonEmptyString(value, code) {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  if (!normalized) throw new Error(code);
+  return normalized;
+}
+
+function exactSampleClass(value) {
+  if (!SAMPLE_CLASSES.has(value)) throw new Error('COVERAGE_SAMPLE_CLASS_INVALID');
+  return value;
 }
 
 function sortedCounts(values) {
@@ -106,30 +134,56 @@ function distribution(values) {
 function validateSourceSafety(source) {
   const safety = object(source?.safety);
   if (
-    safety?.executionAuthority !== 'NONE'
+    safety?.publicDataOnly !== true
+    || safety?.simulatedPaperOrderIsMarketImpactEvent !== false
+    || safety?.postEventObservationIsExecutionCost !== false
+    || safety?.historicalBackfillForwardCredit !== 0
+    || safety?.executionAuthority !== 'NONE'
     || safety?.privateTradingApiAllowed !== false
     || safety?.liveTradingAllowed !== false
     || safety?.realOrderAllowed !== false
+    || safety?.financialMutationAllowed !== false
   ) throw new Error('COVERAGE_SOURCE_SAFETY_INVALID');
 }
 
-function validatePublicProvenance(provenance) {
+function validatePublicProvenance(source, provenance) {
   const root = object(provenance);
   const rawSource = object(root?.rawSource);
+  const endpoints = Array.isArray(rawSource?.endpoints) ? new Set(rawSource.endpoints) : null;
   if (
     rawSource?.provider !== 'BITGET_PUBLIC_UTA_V3'
     || rawSource?.privateApiUsed !== false
     || !Array.isArray(rawSource?.endpoints)
-    || !rawSource.endpoints.includes('/api/v3/market/orderbook')
-    || !rawSource.endpoints.includes('/api/v3/market/fills')
+    || rawSource.endpoints.length !== PUBLIC_ENDPOINTS.size
+    || endpoints.size !== PUBLIC_ENDPOINTS.size
+    || [...PUBLIC_ENDPOINTS].some((endpoint) => !endpoints.has(endpoint))
   ) throw new Error('COVERAGE_PUBLIC_PROVENANCE_INVALID');
 
-  nonNegativeInteger(root.eventCount, 'COVERAGE_EVENT_COUNT_INVALID');
-  nonNegativeInteger(root.droppedCount, 'COVERAGE_DROPPED_COUNT_INVALID');
-  exactSha(root.collectorCodeSha, 'COVERAGE_COLLECTOR_SHA_INVALID');
+  validateSourceSafety(source);
+  const eventCount = nonNegativeInteger(root.eventCount, 'COVERAGE_EVENT_COUNT_INVALID');
+  const droppedCount = nonNegativeInteger(root.droppedCount, 'COVERAGE_DROPPED_COUNT_INVALID');
+  const collectorCodeSha = exactSha(root.collectorCodeSha, 'COVERAGE_COLLECTOR_SHA_INVALID');
   exactDigest(root.rawDigest, 'COVERAGE_RAW_DIGEST_INVALID');
-  exactDigest(root.normalizedDigest, 'COVERAGE_NORMALIZED_DIGEST_INVALID');
-  return root;
+  const normalizedDigest = exactDigest(root.normalizedDigest, 'COVERAGE_NORMALIZED_DIGEST_INVALID');
+  let firstObservedAtMs = null;
+  let lastObservedAtMs = null;
+  if (eventCount === 0) {
+    if (root.firstObservedAtMs !== null || root.lastObservedAtMs !== null) {
+      throw new Error('COVERAGE_OBSERVED_PERIOD_INVALID');
+    }
+  } else {
+    firstObservedAtMs = positiveTimestamp(root.firstObservedAtMs, 'COVERAGE_OBSERVED_PERIOD_INVALID');
+    lastObservedAtMs = positiveTimestamp(root.lastObservedAtMs, 'COVERAGE_OBSERVED_PERIOD_INVALID');
+    if (lastObservedAtMs < firstObservedAtMs) throw new Error('COVERAGE_OBSERVED_PERIOD_INVALID');
+  }
+  return Object.freeze({
+    eventCount,
+    droppedCount,
+    collectorCodeSha,
+    normalizedDigest,
+    firstObservedAtMs,
+    lastObservedAtMs,
+  });
 }
 
 function normalizedInput(payload) {
@@ -138,36 +192,68 @@ function normalizedInput(payload) {
     throw new Error('COVERAGE_INPUT_CONTRACT_INVALID');
   }
   validateSourceSafety(root);
+  const sampleClass = exactSampleClass(root.sampleClass);
 
   if (root.kind === 'public-forward-liquidity-calibration-dataset') {
     const verification = verifyLiquidityCalibrationDataset(root);
     if (!verification.valid) throw new Error(`COVERAGE_DATASET_INVALID:${verification.reason}`);
-    const provenance = validatePublicProvenance(root.datasetProvenance);
+    const provenance = validatePublicProvenance(root, root.datasetProvenance);
+    if (
+      exactSha(root.collectorCodeSha, 'COVERAGE_DATASET_COLLECTOR_SHA_INVALID') !== provenance.collectorCodeSha
+      || root.sampleClass !== sampleClass
+    ) throw new Error('COVERAGE_DATASET_IDENTITY_MISMATCH');
     if (!Array.isArray(root.observations) || provenance.eventCount !== root.observations.length) {
       throw new Error('COVERAGE_EVENT_COUNT_MISMATCH');
     }
-    return Object.freeze({ inputKind: 'DATASET', observations: root.observations, provenance });
+    return Object.freeze({ inputKind: 'DATASET', observations: root.observations, provenance, sampleClass });
   }
 
   if (root.kind === 'public-forward-liquidity-calibration-batch') {
     if (root.capability?.PUBLIC_CALIBRATION_DATA_CAPABLE !== true || !Array.isArray(root.observations)) {
       throw new Error('COVERAGE_BATCH_INVALID');
     }
-    const provenance = validatePublicProvenance(root.datasetProvenance);
+    const provenance = validatePublicProvenance(root, root.datasetProvenance);
     if (provenance.eventCount !== root.observations.length) throw new Error('COVERAGE_EVENT_COUNT_MISMATCH');
-    return Object.freeze({ inputKind: 'BATCH', observations: root.observations, provenance });
+    return Object.freeze({ inputKind: 'BATCH', observations: root.observations, provenance, sampleClass });
   }
 
   throw new Error('COVERAGE_INPUT_KIND_INVALID');
 }
 
-function sourceFrameIdentity(observation) {
+function validatePublicQuery(value, symbol, limit, code) {
+  const query = new URLSearchParams(nonEmptyString(value, code));
+  if (
+    [...query].length !== 3
+    || query.getAll('category').length !== 1
+    || query.getAll('symbol').length !== 1
+    || query.getAll('limit').length !== 1
+    || query.get('category') !== 'USDT-FUTURES'
+    || query.get('symbol') !== symbol
+    || query.get('limit') !== limit
+  ) throw new Error(code);
+}
+
+function sourceFrameIdentity(observation, symbol) {
   const provenance = object(observation?.rawSourceProvenance);
   const preEventBook = object(provenance?.preEventBook);
   const publicTrade = object(provenance?.publicTrade);
   const postEventBooks = provenance?.postEventBooks;
-  if (!preEventBook || !publicTrade || !Array.isArray(postEventBooks)) {
+  if (
+    !preEventBook
+    || !publicTrade
+    || !Array.isArray(postEventBooks)
+    || preEventBook.provider !== 'BITGET_PUBLIC_UTA_V3'
+    || preEventBook.endpoint !== '/api/v3/market/orderbook'
+    || publicTrade.provider !== 'BITGET_PUBLIC_UTA_V3'
+    || publicTrade.endpoint !== '/api/v3/market/fills'
+    || postEventBooks.some((entry) => object(entry)?.endpoint !== '/api/v3/market/orderbook')
+  ) {
     throw new Error('COVERAGE_SOURCE_FRAME_PROVENANCE_INVALID');
+  }
+  validatePublicQuery(preEventBook.query, symbol, '50', 'COVERAGE_PRE_EVENT_BOOK_QUERY_INVALID');
+  validatePublicQuery(publicTrade.query, symbol, '100', 'COVERAGE_PUBLIC_TRADE_QUERY_INVALID');
+  for (const entry of postEventBooks) {
+    validatePublicQuery(object(entry)?.query, symbol, '50', 'COVERAGE_POST_EVENT_BOOK_QUERY_INVALID');
   }
   const preEventBookDigest = exactDigest(
     preEventBook.rawPayloadDigest,
@@ -181,14 +267,115 @@ function sourceFrameIdentity(observation) {
     object(entry)?.rawPayloadDigest,
     'COVERAGE_POST_EVENT_BOOK_RAW_DIGEST_INVALID',
   ));
+  const postEventBookFrames = postEventBooks.map((value, index) => {
+    const entry = object(value);
+    return Object.freeze({
+      rawPayloadDigest: postEventBookDigests[index],
+      marketTimestampMs: positiveTimestamp(entry.marketTimestampMs, 'COVERAGE_POST_EVENT_SOURCE_TIMESTAMP_INVALID'),
+      receiveTimestampMs: positiveTimestamp(entry.receiveTimestampMs, 'COVERAGE_POST_EVENT_SOURCE_RECEIVE_TIMESTAMP_INVALID'),
+    });
+  });
   return Object.freeze({
+    provenance,
+    publicExecutionId: nonEmptyString(publicTrade.publicExecutionId, 'COVERAGE_PUBLIC_EXECUTION_ID_INVALID'),
+    publicTradeReceiveTimestampMs: positiveTimestamp(
+      publicTrade.receiveTimestampMs,
+      'COVERAGE_PUBLIC_TRADE_RECEIVE_TIMESTAMP_INVALID',
+    ),
     preEventBookDigest,
     publicTradeFrameDigest,
+    postEventBookDigests: Object.freeze(postEventBookDigests),
+    postEventBookFrames: Object.freeze(postEventBookFrames),
     compositeSourceFrameGroup: `${preEventBookDigest}|${publicTradeFrameDigest}|${postEventBookDigests.join(',')}`,
   });
 }
 
-function validateObservation(observation, expectedCollectorSha, seenIds) {
+function validatePostEventDrift(item, {
+  observationId,
+  eventTimestampMs,
+  receiveTimestampMs,
+  postEventBookFrames,
+}) {
+  if (!Array.isArray(item.subsequentPublicPriceDrift)) throw new Error('COVERAGE_POST_EVENT_DRIFT_INVALID');
+  if (item.subsequentPublicPriceDrift.length !== postEventBookFrames.length) {
+    throw new Error('COVERAGE_POST_EVENT_FRAME_COUNT_MISMATCH');
+  }
+  return item.subsequentPublicPriceDrift.map((value, index) => {
+    const entry = object(value);
+    if (
+      !entry
+      || entry.kind !== 'SUBSEQUENT_PUBLIC_PRICE_DRIFT'
+      || entry.calibrationSourceOnly !== true
+      || entry.executionCostEligible !== false
+    ) throw new Error('COVERAGE_POST_EVENT_DRIFT_INVALID');
+    const marketTimestampMs = positiveTimestamp(entry.marketTimestampMs, 'COVERAGE_POST_EVENT_TIMESTAMP_INVALID');
+    const postReceiveTimestampMs = positiveTimestamp(entry.receiveTimestampMs, 'COVERAGE_POST_EVENT_RECEIVE_TIMESTAMP_INVALID');
+    if (marketTimestampMs < eventTimestampMs || postReceiveTimestampMs < receiveTimestampMs) {
+      throw new Error('COVERAGE_POST_EVENT_CHRONOLOGY_INVALID');
+    }
+    const horizonMs = nonNegativeFinite(entry.horizonMs, 'COVERAGE_POST_EVENT_HORIZON_INVALID');
+    if (!Number.isSafeInteger(horizonMs) || horizonMs !== marketTimestampMs - eventTimestampMs) {
+      throw new Error('COVERAGE_POST_EVENT_HORIZON_MISMATCH');
+    }
+    positiveFinite(entry.bestBid, 'COVERAGE_POST_EVENT_BOOK_INVALID');
+    positiveFinite(entry.bestAsk, 'COVERAGE_POST_EVENT_BOOK_INVALID');
+    positiveFinite(entry.mid, 'COVERAGE_POST_EVENT_BOOK_INVALID');
+    nonNegativeFinite(entry.spread, 'COVERAGE_POST_EVENT_BOOK_INVALID');
+    if (!Number.isFinite(entry.midDriftBps)) throw new Error('COVERAGE_POST_EVENT_DRIFT_INVALID');
+    const bookDigest = exactDigest(entry.bookDigest, 'COVERAGE_POST_EVENT_BOOK_DIGEST_INVALID');
+    const rawSourceDigest = exactDigest(entry.rawSourceDigest, 'COVERAGE_POST_EVENT_RAW_DIGEST_INVALID');
+    const sourceFrame = postEventBookFrames[index];
+    if (
+      rawSourceDigest !== sourceFrame.rawPayloadDigest
+      || marketTimestampMs !== sourceFrame.marketTimestampMs
+      || postReceiveTimestampMs !== sourceFrame.receiveTimestampMs
+    ) throw new Error('COVERAGE_POST_EVENT_SOURCE_FRAME_MISMATCH');
+    const expectedIdentity = `post-drift:${sha256(canonicalJson({
+      kind: 'SUBSEQUENT_PUBLIC_PRICE_DRIFT',
+      observationId,
+      eventTimestampMs,
+      observedMarketTimestampMs: marketTimestampMs,
+      observedBookDigest: bookDigest,
+    }))}`;
+    if (entry.identity !== expectedIdentity) throw new Error('COVERAGE_POST_EVENT_IDENTITY_MISMATCH');
+    return horizonMs;
+  });
+}
+
+function validateBookWalk(item, { observationId, aggressiveSide, quantity, preEventBookDigest }) {
+  const bookWalk = object(item.instantaneousVisibleDepthBookWalk);
+  if (
+    !bookWalk
+    || bookWalk.kind !== 'INSTANTANEOUS_VISIBLE_DEPTH_BOOK_WALK'
+    || bookWalk.ownership !== 'SLIPPAGE_VISIBLE_L2_BOOK_WALK_ONLY'
+    || bookWalk.calibrationSourceOnly !== true
+    || bookWalk.liquidityImpactCoefficient !== null
+    || bookWalk.permanentMarketImpactEstimated !== false
+    || typeof bookWalk.completeWithinVisibleDepth !== 'boolean'
+  ) throw new Error('COVERAGE_BOOK_WALK_INVALID');
+  const requestedQuantity = positiveFinite(bookWalk.requestedQuantity, 'COVERAGE_BOOK_WALK_QUANTITY_INVALID');
+  const visibleFilledQuantity = nonNegativeFinite(bookWalk.visibleFilledQuantity, 'COVERAGE_BOOK_WALK_QUANTITY_INVALID');
+  const visibleUnfilledQuantity = nonNegativeFinite(bookWalk.visibleUnfilledQuantity, 'COVERAGE_BOOK_WALK_QUANTITY_INVALID');
+  const accountedQuantityError = Math.abs((visibleFilledQuantity + visibleUnfilledQuantity) - requestedQuantity);
+  const accountedQuantityTolerance = Number.EPSILON * Math.max(1, Math.abs(requestedQuantity)) * 8;
+  if (
+    requestedQuantity !== quantity
+    || visibleFilledQuantity > requestedQuantity
+    || accountedQuantityError > accountedQuantityTolerance
+    || bookWalk.completeWithinVisibleDepth !== (visibleUnfilledQuantity === 0)
+  ) throw new Error('COVERAGE_BOOK_WALK_QUANTITY_MISMATCH');
+  const expectedIdentity = `book-walk:${sha256(canonicalJson({
+    kind: 'INSTANTANEOUS_VISIBLE_DEPTH_BOOK_WALK',
+    observationId,
+    aggressiveSide,
+    requestedQuantity,
+    preEventBookDigest,
+  }))}`;
+  if (bookWalk.identity !== expectedIdentity) throw new Error('COVERAGE_BOOK_WALK_IDENTITY_MISMATCH');
+  return bookWalk;
+}
+
+function validateObservation(observation, { expectedCollectorSha, expectedSampleClass, seenIds }) {
   const item = object(observation);
   if (!item || item.contract !== PUBLIC_LIQUIDITY_CALIBRATION_CONTRACT) {
     throw new Error('COVERAGE_OBSERVATION_CONTRACT_INVALID');
@@ -198,11 +385,24 @@ function validateObservation(observation, expectedCollectorSha, seenIds) {
   if (seenIds.has(observationId)) throw new Error('COVERAGE_DUPLICATE_OBSERVATION_ID');
   seenIds.add(observationId);
 
-  if (item.publicDataSource !== 'BITGET_PUBLIC_UTA_V3') throw new Error('COVERAGE_OBSERVATION_SOURCE_INVALID');
+  if (
+    item.publicDataSource !== 'BITGET_PUBLIC_UTA_V3'
+    || item.sampleClass !== expectedSampleClass
+    || item.forwardCalibrationSampleCredit !== (expectedSampleClass === FORWARD_NATURAL_SAMPLE ? 1 : 0)
+    || item.historicalBackfillForwardCredit !== 0
+    || item.calibrationSourceOnly !== true
+    || item.executionCostEligible !== false
+    || item.causalMarketImpactClaim !== false
+    || item.paperOrderSourceAllowed !== false
+  ) throw new Error('COVERAGE_OBSERVATION_SOURCE_INVALID');
+  validateSourceSafety(item);
   if (exactSha(item.collectorCodeSha, 'COVERAGE_OBSERVATION_COLLECTOR_SHA_INVALID') !== expectedCollectorSha) {
     throw new Error('COVERAGE_OBSERVATION_COLLECTOR_SHA_MISMATCH');
   }
   if (!['BUY', 'SELL'].includes(item.aggressiveSide)) throw new Error('COVERAGE_AGGRESSIVE_SIDE_INVALID');
+  if (item.aggressiveSideMethod !== 'BITGET_PUBLIC_TRADE_SIDE_VERIFIED_AT_PRE_EVENT_BBO') {
+    throw new Error('COVERAGE_AGGRESSIVE_SIDE_METHOD_INVALID');
+  }
 
   const eventTimestampMs = positiveTimestamp(item.eventTimestampMs, 'COVERAGE_EVENT_TIMESTAMP_INVALID');
   const receiveTimestampMs = positiveTimestamp(item.receiveTimestampMs, 'COVERAGE_RECEIVE_TIMESTAMP_INVALID');
@@ -210,26 +410,78 @@ function validateObservation(observation, expectedCollectorSha, seenIds) {
     throw new Error('COVERAGE_EVENT_TIMESTAMP_AFTER_LOCAL_RECEIVE');
   }
 
+  const market = nonEmptyString(item.market, 'COVERAGE_MARKET_INVALID');
+  const symbol = nonEmptyString(item.symbol, 'COVERAGE_SYMBOL_INVALID');
+  if (market !== 'CRYPTO_FUTURES' || !/^[A-Z0-9]+$/u.test(symbol)) throw new Error('COVERAGE_MARKET_IDENTITY_INVALID');
   const quantity = positiveFinite(item.tradeFlowQuantity, 'COVERAGE_QUANTITY_INVALID');
   const notional = positiveFinite(item.tradeFlowNotional, 'COVERAGE_NOTIONAL_INVALID');
   const spreadBps = positiveFinite(item.preEventSpreadBps, 'COVERAGE_SPREAD_BPS_INVALID');
+  const publicExecutionPrice = positiveFinite(item.publicExecutionPrice, 'COVERAGE_EXECUTION_PRICE_INVALID');
+  const bestBid = positiveFinite(item.preEventBestBid, 'COVERAGE_PRE_EVENT_BOOK_INVALID');
+  const bestAsk = positiveFinite(item.preEventBestAsk, 'COVERAGE_PRE_EVENT_BOOK_INVALID');
+  const mid = positiveFinite(item.preEventMid, 'COVERAGE_PRE_EVENT_BOOK_INVALID');
+  const spread = positiveFinite(item.preEventSpread, 'COVERAGE_PRE_EVENT_BOOK_INVALID');
+  if (
+    bestBid >= bestAsk
+    || mid !== (bestBid + bestAsk) / 2
+    || spread !== bestAsk - bestBid
+    || spreadBps !== (spread / mid) * 10_000
+    || notional !== quantity * publicExecutionPrice
+  ) throw new Error('COVERAGE_OBSERVATION_NUMERIC_IDENTITY_MISMATCH');
 
   if (!Array.isArray(item.missingDataFlags)) throw new Error('COVERAGE_MISSING_FLAGS_INVALID');
   const missingDataFlags = item.missingDataFlags.map((flag) => String(flag ?? '').trim());
   if (missingDataFlags.some((flag) => !flag)) throw new Error('COVERAGE_MISSING_FLAG_EMPTY');
   if (new Set(missingDataFlags).size !== missingDataFlags.length) throw new Error('COVERAGE_DUPLICATE_MISSING_FLAG');
+  if (missingDataFlags.some((flag) => !PRODUCER_MISSING_FLAGS.has(flag))) throw new Error('COVERAGE_MISSING_FLAG_INVALID');
 
-  if (!Array.isArray(item.subsequentPublicPriceDrift)) throw new Error('COVERAGE_POST_EVENT_DRIFT_INVALID');
-  const horizons = item.subsequentPublicPriceDrift.map((entry) => nonNegativeFinite(
-    entry?.horizonMs,
-    'COVERAGE_POST_EVENT_HORIZON_INVALID',
-  ));
-  const sourceFrame = sourceFrameIdentity(item);
+  const sourceFrame = sourceFrameIdentity(item, symbol);
+  if (sourceFrame.publicTradeReceiveTimestampMs !== receiveTimestampMs) {
+    throw new Error('COVERAGE_PUBLIC_TRADE_RECEIVE_TIMESTAMP_MISMATCH');
+  }
+  const preEventBookDigest = exactDigest(item.preEventBookDigest, 'COVERAGE_PRE_EVENT_BOOK_DIGEST_INVALID');
+  const identityInput = {
+    contract: PUBLIC_LIQUIDITY_CALIBRATION_CONTRACT,
+    publicDataSource: 'BITGET_PUBLIC_UTA_V3',
+    market,
+    symbol,
+    publicExecutionId: sourceFrame.publicExecutionId,
+    eventTimestampMs,
+    preEventBookDigest,
+  };
+  const expectedObservationId = `liquidity-observation:${sha256(canonicalJson(identityInput))}`;
+  if (observationId !== expectedObservationId) throw new Error('COVERAGE_OBSERVATION_IDENTITY_MISMATCH');
+  const expectedSourceDigest = sha256(canonicalJson({
+    identityInput,
+    aggressiveSide: item.aggressiveSide,
+    price: publicExecutionPrice,
+    quantity,
+    rawSourceProvenance: sourceFrame.provenance,
+  }));
+  if (exactDigest(item.sourceDigest, 'COVERAGE_OBSERVATION_SOURCE_DIGEST_INVALID') !== expectedSourceDigest) {
+    throw new Error('COVERAGE_OBSERVATION_SOURCE_DIGEST_MISMATCH');
+  }
+  const horizons = validatePostEventDrift(item, {
+    observationId,
+    eventTimestampMs,
+    receiveTimestampMs,
+    postEventBookFrames: sourceFrame.postEventBookFrames,
+  });
+  const postMissing = missingDataFlags.includes('POST_EVENT_PUBLIC_OBSERVATION_MISSING');
+  if (postMissing !== (horizons.length === 0)) throw new Error('COVERAGE_POST_EVENT_MISSING_FLAG_MISMATCH');
+  const bookWalk = validateBookWalk(item, {
+    observationId,
+    aggressiveSide: item.aggressiveSide,
+    quantity,
+    preEventBookDigest,
+  });
+  const depthMissing = missingDataFlags.includes('VISIBLE_DEPTH_INSUFFICIENT_FOR_FLOW_QUANTITY');
+  if (depthMissing === bookWalk.completeWithinVisibleDepth) throw new Error('COVERAGE_VISIBLE_DEPTH_MISSING_FLAG_MISMATCH');
 
   return Object.freeze({
     observationId,
-    market: String(item.market ?? '').trim(),
-    symbol: String(item.symbol ?? '').trim(),
+    market,
+    symbol,
     aggressiveSide: item.aggressiveSide,
     eventTimestampMs,
     quantity,
@@ -283,12 +535,24 @@ function investigationTargets(gaps) {
 }
 
 export function analyzePublicForwardLiquiditySampleCoverage(payload) {
-  const { inputKind, observations, provenance } = normalizedInput(payload);
+  const { inputKind, observations, provenance, sampleClass } = normalizedInput(payload);
   const expectedCollectorSha = exactSha(provenance.collectorCodeSha, 'COVERAGE_COLLECTOR_SHA_INVALID');
   const seenIds = new Set();
-  const normalized = observations.map((observation) => validateObservation(observation, expectedCollectorSha, seenIds));
+  const normalized = observations.map((observation) => validateObservation(observation, {
+    expectedCollectorSha,
+    expectedSampleClass: sampleClass,
+    seenIds,
+  }));
+  if (provenance.normalizedDigest !== sha256(canonicalJson(observations))) {
+    throw new Error('COVERAGE_NORMALIZED_DIGEST_MISMATCH');
+  }
+  analyzePublicForwardLiquidityDropQuality(payload);
 
   const eventTimestamps = normalized.map((item) => item.eventTimestampMs).sort((left, right) => left - right);
+  if (
+    (eventTimestamps[0] ?? null) !== provenance.firstObservedAtMs
+    || (eventTimestamps.at(-1) ?? null) !== provenance.lastObservedAtMs
+  ) throw new Error('COVERAGE_OBSERVED_PERIOD_MISMATCH');
   const eventGaps = [];
   for (let index = 1; index < eventTimestamps.length; index += 1) {
     eventGaps.push(eventTimestamps[index] - eventTimestamps[index - 1]);
