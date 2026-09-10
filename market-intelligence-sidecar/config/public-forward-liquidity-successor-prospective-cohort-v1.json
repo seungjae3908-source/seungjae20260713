@@ -1,0 +1,184 @@
+{
+  "contractVersion": "public-forward-liquidity-successor-prospective-cohort-contract-v1",
+  "freezeStatus": "HUMAN_POLICY_VALUES_FROZEN_REPOSITORY_DRAFT_MATERIALIZATION",
+  "policyCore": {
+    "schemaVersion": "public-forward-liquidity-successor-prospective-cohort-policy-v1",
+    "authority": {
+      "canonicalHubIssue": 838,
+      "humanApprovalCommentId": 5489737878,
+      "humanApprovalCreatedAt": "2026-09-01T06:16:26Z",
+      "humanApprovalCreatedAtMs": 1788243386000,
+      "approvalScope": "SUCCESSOR_PROSPECTIVE_COHORT_POLICY_DESIGN_AND_FREEZE_ONLY",
+      "sourceBaseMainSha": "23cc91ad6c6702ee5c57b1d54c2bf2e3a9b0db8b"
+    },
+    "cohort": {
+      "identitySeed": "PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_PROSPECTIVE_COHORT_V1_20260903",
+      "startInclusiveMs": 1788362220000,
+      "startInclusiveUtc": "2026-09-02T15:17:00.000Z",
+      "startInclusiveKst": "2026-09-03T00:17:00+09:00",
+      "endExclusiveMs": 1789571820000,
+      "endExclusiveUtc": "2026-09-16T15:17:00.000Z",
+      "endExclusiveKst": "2026-09-17T00:17:00+09:00",
+      "canonicalTimezone": "UTC",
+      "displayTimezone": "Asia/Seoul",
+      "slotCadenceMs": 3600000,
+      "cronUtc": "17 * * * *",
+      "cronSemantics": "HOURLY_AT_MINUTE_17_UTC_HARD_BOUND_TO_COHORT_START_END_AND_SLOT_INDEX_0_335",
+      "totalSlotN": 336,
+      "allowedStartDelayMs": 1200000,
+      "allowedCompletionDelayMs": 600000,
+      "captureWindowSemantics": "START_AT_OR_AFTER_NOMINAL_AND_AT_OR_BEFORE_NOMINAL_PLUS_20M_THEN_COMPLETE_WITHIN_10M_OF_ACTUAL_START"
+    },
+    "splits": {
+      "mode": "CHRONOLOGICAL_IMMUTABLE_SLOT_RANGE",
+      "TRAIN": {
+        "startIndexInclusive": 0,
+        "endIndexInclusive": 167,
+        "expectedSlotN": 168,
+        "startInclusiveMs": 1788362220000,
+        "endExclusiveMs": 1788967020000
+      },
+      "VALIDATION": {
+        "startIndexInclusive": 168,
+        "endIndexInclusive": 251,
+        "expectedSlotN": 84,
+        "startInclusiveMs": 1788967020000,
+        "endExclusiveMs": 1789269420000
+      },
+      "OOS": {
+        "startIndexInclusive": 252,
+        "endIndexInclusive": 335,
+        "expectedSlotN": 84,
+        "startInclusiveMs": 1789269420000,
+        "endExclusiveMs": 1789571820000
+      }
+    },
+    "creditPolicy": {
+      "prospectiveCreditPerEligiblePresentFirstAttempt": 1,
+      "oldV3ProspectiveCredit": 0,
+      "manualCredit": 0,
+      "replayCredit": 0,
+      "backfillCredit": 0,
+      "operatorSelectedCredit": 0,
+      "duplicateOrRerunCredit": 0,
+      "missedSlotCredit": 0,
+      "syntheticCredit": 0
+    },
+    "prospectiveIntegrity": {
+      "chronologicalSplitRequired": true,
+      "randomSplitAllowed": false,
+      "retrospectiveSplitReassignmentAllowed": false,
+      "oldV3IdentityInheritanceAllowed": false,
+      "outcomeInspectionUsedForPolicySelection": false,
+      "successorGenuineRawNAtFreeze": 0,
+      "firstObservationRequiresFrozenDefaultBranchContract": true,
+      "missingOrLateSlotFailsClosed": true
+    },
+    "technicalIdentity": {
+      "market": "CRYPTO_FUTURES",
+      "symbol": "BTCUSDT",
+      "publicDataSource": "BITGET_PUBLIC_UTA_V3",
+      "observationContract": "public-forward-liquidity-calibration-observation/v1",
+      "storeContract": "research-production-state-root/forward-liquidity-calibration-v1",
+      "collectorImplementationBlobSha": "8044d5cb136eb30a531608392c73a45be601e5ba",
+      "runtimeCollectorCodeShaRule": "EQUALS_EXACT_MAIN_SHA_AT_RUN",
+      "captureParameterPolicy": {
+        "schemaVersion": "public-forward-liquidity-capture-parameter-policy-v1",
+        "authority": "MERGED_CANONICAL_COLLECTOR_DEFAULTS",
+        "collectorImplementationBlobSha": "8044d5cb136eb30a531608392c73a45be601e5ba",
+        "eventObservationDelayMs": 2000,
+        "postObservationDelaysMs": [
+          1000,
+          5000
+        ],
+        "maxPreEventBookAgeMs": 5000,
+        "outcomeInspectionUsed": false
+      },
+      "captureParameterPolicyDigest": "ab4193df073303568dd8b4c55caa5d6c5a2a88547857935d1db13dacb9e8154f",
+      "strategyIdentity": {
+        "status": "NOT_APPLICABLE_PUBLIC_MICROSTRUCTURE_COLLECTOR",
+        "value": null
+      },
+      "datasetIdentity": {
+        "status": "BOUND_BY_EXISTING_STORE_CONTRACT_AND_FUTURE_IMMUTABLE_INGEST_LINEAGE",
+        "value": null
+      },
+      "modelIdentity": {
+        "status": "NOT_APPLICABLE_PUBLIC_MICROSTRUCTURE_COLLECTOR",
+        "value": null
+      },
+      "featureOrderIdentity": {
+        "status": "NOT_APPLICABLE_PUBLIC_MICROSTRUCTURE_COLLECTOR",
+        "value": null
+      },
+      "preprocessingIdentity": {
+        "status": "NOT_APPLICABLE_PUBLIC_MICROSTRUCTURE_COLLECTOR",
+        "value": null
+      }
+    },
+    "oosOutcomePolicy": {
+      "status": "NOT_ASSIGNED_BY_THIS_APPROVAL",
+      "numericOutcomeHorizonMs": null,
+      "separatePreObservationFreezeRequired": true,
+      "outcomeBasedSelectionAllowed": false
+    },
+    "approvalBoundaries": {
+      "scheduleActivationApproved": false,
+      "prospectiveObservationWorkflowAuthorityApproved": false,
+      "actualMergeApproved": false,
+      "productionDeployApproved": false,
+      "stagingDeployApproved": false,
+      "dbSecretEnvServerMutationApproved": false
+    },
+    "safety": {
+      "publicDataOnly": true,
+      "executionAuthority": "NONE",
+      "privateTradingApiAllowed": false,
+      "liveTradingAllowed": false,
+      "autoTradingAllowed": false,
+      "realOrderAllowed": false,
+      "financialMutationAllowed": false,
+      "replitAgentAllowed": false,
+      "fullCostReady": false,
+      "evidenceComplete": 0,
+      "profitabilityProven": false,
+      "currentValidatedChampion": "NONE"
+    }
+  },
+  "policyDigest": "451b880a7efff4c3cbb8abe8bcda07bbf54a534f9f01baeb040547c339fa489a",
+  "cohortId": "PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_PROSPECTIVE_COHORT_V1_20260903:451b880a7efff4c3cbb8abe8bcda07bbf54a534f9f01baeb040547c339fa489a",
+  "cohortDigest": "7c24f0f752c500bc7ea90df5e7975319a5c4813a23f8f0e375a1ffd0b99672bb",
+  "cohortIdentityCore": {
+    "schemaVersion": "public-forward-liquidity-successor-prospective-cohort-identity-v1",
+    "cohortId": "PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_PROSPECTIVE_COHORT_V1_20260903:451b880a7efff4c3cbb8abe8bcda07bbf54a534f9f01baeb040547c339fa489a",
+    "policyDigest": "451b880a7efff4c3cbb8abe8bcda07bbf54a534f9f01baeb040547c339fa489a",
+    "startInclusiveMs": 1788362220000,
+    "endExclusiveMs": 1789571820000,
+    "slotCadenceMs": 3600000,
+    "totalSlotN": 336,
+    "splits": {
+      "mode": "CHRONOLOGICAL_IMMUTABLE_SLOT_RANGE",
+      "TRAIN": {
+        "startIndexInclusive": 0,
+        "endIndexInclusive": 167,
+        "expectedSlotN": 168,
+        "startInclusiveMs": 1788362220000,
+        "endExclusiveMs": 1788967020000
+      },
+      "VALIDATION": {
+        "startIndexInclusive": 168,
+        "endIndexInclusive": 251,
+        "expectedSlotN": 84,
+        "startInclusiveMs": 1788967020000,
+        "endExclusiveMs": 1789269420000
+      },
+      "OOS": {
+        "startIndexInclusive": 252,
+        "endIndexInclusive": 335,
+        "expectedSlotN": 84,
+        "startInclusiveMs": 1789269420000,
+        "endExclusiveMs": 1789571820000
+      }
+    }
+  }
+}
