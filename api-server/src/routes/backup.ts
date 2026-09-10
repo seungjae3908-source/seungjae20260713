@@ -65,7 +65,11 @@ function requireStoredBackupIntegrity(
   storedChecksum: unknown,
 ): void {
   const count = Object.keys(payload).length;
-  if (!Number.isInteger(itemCount) || itemCount !== count) {
+  if (
+    typeof itemCount !== 'number'
+    || !Number.isInteger(itemCount)
+    || itemCount !== count
+  ) {
     throw new Error('BACKUP_ITEM_COUNT_MISMATCH');
   }
   if (typeof storedChecksum !== 'string' || !/^[a-f0-9]{64}$/i.test(storedChecksum)) {
