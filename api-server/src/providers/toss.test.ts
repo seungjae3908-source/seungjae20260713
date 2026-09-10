@@ -258,6 +258,7 @@ test('market-data primary quote success performs zero Toss requests', async () =
     marketCap: 0,
     week52High: 0,
     week52Low: 0,
+    updatedAt: new Date(Date.now() - 1_000).toISOString(),
   });
 
   const quote = await MarketDataService.getQuote('AAPL');
