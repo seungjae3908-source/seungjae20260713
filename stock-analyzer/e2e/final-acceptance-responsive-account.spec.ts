@@ -1,4 +1,4 @@
-import { test, expect, type Page, type Route } from '@playwright/test';
+import { test, expect, type Page, type Request, type Route } from '@playwright/test';
 
 const NOW = '2026-08-09T00:00:00.000Z';
 const USER_ID = '77777777-7777-4777-8777-777777777777';
@@ -50,14 +50,31 @@ async function installAdminRuntime(page: Page) {
   }, { storageKey: AUTH_STORAGE_KEY, userId: USER_ID, now: NOW });
 
   const diagnostics = { consoleErrors: [] as string[], pageErrors: [] as string[], forbiddenMutations: [] as string[] };
+  const pendingApiRequests = new Map<Request, string>();
+  let lastApiActivityAt = Date.now();
+  const apiPath = (request: Request) => {
+    const path = new URL(request.url()).pathname;
+    return path.startsWith('/api/') || path.startsWith('/__e2e-supabase/') ? path : null;
+  };
   page.on('console', (message) => { if (message.type() === 'error') diagnostics.consoleErrors.push(message.text()); });
   page.on('pageerror', (error) => diagnostics.pageErrors.push(error.message));
   page.on('request', (request) => {
     const path = new URL(request.url()).pathname;
+    const trackedPath = apiPath(request);
+    if (trackedPath) {
+      pendingApiRequests.set(request, trackedPath);
+      lastApiActivityAt = Date.now();
+    }
     if (/\/api\/(?:crypto|stocks|account-connections).*\/(?:order|orders|cancel|transfer|withdraw|deposit)/i.test(path) && request.method() !== 'GET') {
       diagnostics.forbiddenMutations.push(`${request.method()} ${path}`);
     }
   });
+  const finishApiRequest = (request: Request) => {
+    if (!pendingApiRequests.delete(request)) return;
+    lastApiActivityAt = Date.now();
+  };
+  page.on('requestfinished', finishApiRequest);
+  page.on('requestfailed', finishApiRequest);
 
   await page.route('**/__e2e-supabase/**', async (route) => {
     const pathname = new URL(route.request().url()).pathname;
@@ -85,9 +102,19 @@ async function installAdminRuntime(page: Page) {
       return fulfill(route, moversFixture(market));
     }
     if (path === '/api/quotes') {
-      const tickers = (url.searchParams.get('tickers') ?? '').split(',').filter(Boolean);
+      const tickers = Array.from(new Set(
+        (url.searchParams.get('tickers') ?? '')
+          .split(',')
+          .map((ticker) => ticker.trim().toUpperCase().replace(/^(KR|US)[:.]/, ''))
+          .filter(Boolean),
+      ));
       const quotes = tickers.map((ticker) => ticker === 'AAPL' ? stockFixture('US') : { ...stockFixture('KR'), ticker });
-      return fulfill(route, { ok: true, quotes, rows: quotes, items: quotes, results: quotes });
+      return fulfill(route, {
+        quotes,
+        requested: tickers.length,
+        available: quotes.length,
+        updatedAt: new Date().toISOString(),
+      });
     }
 
     if (path === '/api/account-connections/snapshot') return fulfill(route, {
@@ -114,10 +141,24 @@ async function installAdminRuntime(page: Page) {
     return fulfill(route, { ok: true, items: [], rows: [], results: [], quotes: [], cards: [], alerts: [], markets: [], tickers: [], popular: [], gainers: [], risky: [], recommended: [], themes: [], sectors: [], positive: [], negative: [] });
   });
 
-  return () => {
-    expect(diagnostics.consoleErrors, diagnostics.consoleErrors.join('\n')).toEqual([]);
-    expect(diagnostics.pageErrors, diagnostics.pageErrors.join('\n')).toEqual([]);
-    expect(diagnostics.forbiddenMutations, diagnostics.forbiddenMutations.join('\n')).toEqual([]);
+  return {
+    beginRoute() {
+      lastApiActivityAt = Date.now();
+    },
+    async waitForApiIdle(label: string) {
+      const deadline = Date.now() + 5_000;
+      while (Date.now() <= deadline) {
+        if (pendingApiRequests.size === 0 && Date.now() - lastApiActivityAt >= 500) return;
+        await page.waitForTimeout(25);
+      }
+      expect([...pendingApiRequests.values()], `${label}: mocked API requests did not settle`).toEqual([]);
+      expect(Date.now() - lastApiActivityAt, `${label}: mocked API activity did not become idle`).toBeGreaterThanOrEqual(500);
+    },
+    assertClean() {
+      expect(diagnostics.consoleErrors, diagnostics.consoleErrors.join('\n')).toEqual([]);
+      expect(diagnostics.pageErrors, diagnostics.pageErrors.join('\n')).toEqual([]);
+      expect(diagnostics.forbiddenMutations, diagnostics.forbiddenMutations.join('\n')).toEqual([]);
+    },
   };
 }
 
@@ -192,21 +233,22 @@ const ROUTES = [
 
 for (const width of [320, 360, 390, 412, 430, 1023, 1024, 1440]) {
   test(`all primary routes stay inside viewport at ${width}px`, async ({ page }) => {
-    const assertClean = await installAdminRuntime(page);
+    const runtime = await installAdminRuntime(page);
     await page.setViewportSize({ width, height: width >= 1024 ? 900 : 844 });
     for (const route of ROUTES) {
+      runtime.beginRoute();
       await page.goto(route);
       await page.waitForLoadState('domcontentloaded');
-      await page.waitForTimeout(40);
       await assertNoHorizontalOverflow(page, `${width}px ${route}`);
       await assertFiniteLoadingAndNoNavOcclusion(page, `${width}px ${route}`);
+      await runtime.waitForApiIdle(`${width}px ${route}`);
     }
-    assertClean();
+    runtime.assertClean();
   });
 }
 
 test('admin account panel shows Toss Upbit Bitget only and remains read-only', async ({ page }) => {
-  const assertClean = await installAdminRuntime(page);
+  const runtime = await installAdminRuntime(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/account');
   const panel = page.getByTestId('brokerage-account-connections');
@@ -220,5 +262,5 @@ test('admin account panel shows Toss Upbit Bitget only and remains read-only', a
   await assertNoHorizontalOverflow(page, 'account panel mobile');
   await page.setViewportSize({ width: 1440, height: 900 });
   await assertNoHorizontalOverflow(page, 'account panel desktop');
-  assertClean();
+  runtime.assertClean();
 });

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import '../features/device-trust/device-trust.service.test';
 import {
   MEMBER_CAPABILITIES,
   MEMBER_PERMISSION_MATRIX,

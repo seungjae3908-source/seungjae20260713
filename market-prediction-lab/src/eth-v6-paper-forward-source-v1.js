@@ -13,6 +13,7 @@ import {
   sizeOnePercentRiskKrwFuturesPosition,
 } from "./paper-krw-usdt-sizing-v1.js";
 import { loadBitgetEthV6PaperSettlement } from "./eth-v6-paper-settlement-source-v1.js";
+import { selectBitgetPositionTier } from "./bitget-position-tier-v1.js";
 
 const MARKET_CONTEXT_MAX_AGE_MS = 5 * 60 * 1000;
 const SHADOW_TO_PAPER_MAX_DELAY_MS = 45 * 60 * 1000;
@@ -82,17 +83,7 @@ function contractTickSize(contract) {
 }
 
 function maintenanceMarginRate(tiers, notional) {
-  if (!Array.isArray(tiers) || tiers.length === 0) throw new Error("ETH_V6_PAPER_POSITION_TIER_MISSING");
-  const usable = tiers
-    .map((tier) => ({
-      start: asNumber(tier?.startUnit ?? 0, "TIER_START"),
-      rate: asNumber(tier?.keepMarginRate, "TIER_MMR"),
-    }))
-    .filter((tier) => tier.start <= notional)
-    .sort((left, right) => left.start - right.start);
-  const tier = usable.at(-1);
-  if (!tier || tier.rate < 0 || tier.rate >= 1) throw new Error("ETH_V6_PAPER_POSITION_TIER_INVALID");
-  return tier.rate;
+  return selectBitgetPositionTier(tiers, notional).maintenanceMarginRate;
 }
 
 async function readJsonOptional(pathOrUrl) {
