@@ -1,4 +1,5 @@
 import type { CatalogEntry } from '../data/catalog';
+import { normalizeMarketObservationTime } from '../lib/market-observation-time';
 import type { Candle, Quote } from '../sample/types';
 
 type NaverPollItem = {
@@ -13,6 +14,7 @@ type NaverPollItem = {
   lv?: number | string;
   ov?: number | string;
   pcv?: number | string;
+  localTradedAt?: string;
 };
 
 type NaverChartItem = {
@@ -60,14 +62,14 @@ function getNameFromEntry(entryOrTicker: CatalogEntry | string, fallback: string
   return String((entryOrTicker as any).name ?? fallback);
 }
 
-function dateToIso(localDate: string) {
-  if (!/^\d{8}$/.test(localDate)) return new Date().toISOString();
+function dateToIso(localDate: string): string | null {
+  if (!/^\d{8}$/.test(localDate)) return null;
 
   const yyyy = localDate.slice(0, 4);
   const mm = localDate.slice(4, 6);
   const dd = localDate.slice(6, 8);
 
-  return new Date(`${yyyy}-${mm}-${dd}T00:00:00+09:00`).toISOString();
+  return normalizeMarketObservationTime(`${yyyy}-${mm}-${dd}T00:00:00+09:00`);
 }
 
 async function fetchJson<T>(url: string): Promise<T> {
@@ -210,7 +212,6 @@ function parseNaverHtmlQuote(code: string, html: string, fallbackName: string): 
     open,
     high,
     low,
-    updatedAt: new Date().toISOString(),
   } as Partial<Quote>;
 }
 
@@ -249,6 +250,7 @@ async function fetchNaverPoll(code: string): Promise<NaverPollItem | null> {
         lv: item.lv ?? item.lowPrice,
         ov: item.ov ?? item.openPrice,
         pcv: item.pcv ?? item.previousClosePrice,
+        localTradedAt: item.localTradedAt,
       };
     } catch {
       // try next
@@ -273,8 +275,9 @@ export async function getQuote(
 
   if (item) {
     const price = safeNumber(item.nv);
+    const observedAt = normalizeMarketObservationTime(item.localTradedAt);
 
-    if (price > 0) {
+    if (price > 0 && observedAt) {
       const changeAmount = safeNumber(item.cv);
       const changePercent = safeNumber(item.cr);
       const previousClose =
@@ -300,7 +303,7 @@ export async function getQuote(
         open: safeNumber(item.ov),
         high: safeNumber(item.hv),
         low: safeNumber(item.lv),
-        updatedAt: new Date().toISOString(),
+        updatedAt: observedAt,
       } as Partial<Quote>;
     }
   }
@@ -341,6 +344,7 @@ export async function getCandles(
   return rows
     .map((row) => {
       const time = dateToIso(String(row.localDate ?? ''));
+      if (!time) return null;
 
       return {
         time,
@@ -351,7 +355,7 @@ export async function getCandles(
         volume: safeNumber(row.accumulatedTradingVolume),
       } as Candle;
     })
-    .filter((candle) => candle.close > 0);
+    .filter((candle): candle is Candle => candle !== null && candle.close > 0);
 }
 
 export const candles = getCandles;
