@@ -33,11 +33,15 @@ function fixture() {
     market: "CRYPTO_SPOT",
     symbol: "KRW-BTC",
     direction: "BUY",
+    candidateId: `paper-candidate-v1:${"c".repeat(64)}`,
+    strategyFamily: "strategy-family-1",
     strategyId: "strategy-1",
     strategyVersion: "v1",
     parameterHash: "parameters-1",
+    parameterDigest: "parameters-1",
     researchCodeSha: "a".repeat(40),
     costPolicyVersion: "cost-v1",
+    accountMode: "PAPER",
     lifecycle: {
       immutableContractDigest: "immutable-lifecycle-1",
       sampleEligibility: { provenanceClass: "NATURAL_FORWARD" },
@@ -46,6 +50,19 @@ function fixture() {
   const triggerPayload = {
     positionId: position.positionId,
     paperSampleId: position.paperSampleId,
+    candidateId: position.candidateId,
+    strategyId: position.strategyId,
+    strategyIdentity: {
+      candidateId: position.candidateId,
+      strategyFamily: position.strategyFamily,
+      strategyId: position.strategyId,
+      strategyVersion: position.strategyVersion,
+      parameterHash: position.parameterHash,
+      parameterDigest: position.parameterDigest,
+      researchCodeSha: position.researchCodeSha,
+      accountMode: position.accountMode,
+    },
+    researchCodeSha: position.researchCodeSha,
     costPolicyVersion: position.costPolicyVersion,
     positionLifecycleDigest: position.lifecycle.immutableContractDigest,
     triggerObservationId: "trigger-observation-1",
@@ -63,11 +80,15 @@ function fixture() {
     market: position.market,
     symbol: position.symbol,
     direction: position.direction,
+    candidateId: position.candidateId,
+    strategyFamily: position.strategyFamily,
     strategyId: position.strategyId,
     strategyVersion: position.strategyVersion,
     parameterHash: position.parameterHash,
+    parameterDigest: position.parameterDigest,
     researchCodeSha: position.researchCodeSha,
     costPolicyVersion: position.costPolicyVersion,
+    accountMode: position.accountMode,
   };
   const exitExecutionIdentity = {
     exitTriggerId: trigger.exitTriggerId,
@@ -78,6 +99,14 @@ function fixture() {
     market: position.market,
     symbol: position.symbol,
     direction: position.direction,
+    candidateId: position.candidateId,
+    strategyFamily: position.strategyFamily,
+    strategyId: position.strategyId,
+    strategyVersion: position.strategyVersion,
+    parameterHash: position.parameterHash,
+    parameterDigest: position.parameterDigest,
+    researchCodeSha: position.researchCodeSha,
+    accountMode: position.accountMode,
     costPolicyVersion: position.costPolicyVersion,
     sourceIdentity,
     provenanceId,
@@ -254,6 +283,25 @@ test("collector failure is a stable BLOCKED_DATA result and cannot mutate the tr
   assert.equal(result.status, "BLOCKED_DATA");
   assert.deepEqual(row.position.lifecycle.pendingExit, original);
   assert.deepEqual(result.blockers, ["PAPER_POSITION_TRIGGER_BOUND_SETTLEMENT_COST_PRODUCER_FAILED"]);
+});
+
+test("rehashed trigger cannot rewrite the frozen candidate lineage", async () => {
+  const row = fixture();
+  const { exitTriggerId: _ignored, ...payload } = row.trigger;
+  payload.candidateId = `paper-candidate-v1:${"d".repeat(64)}`;
+  payload.strategyIdentity.candidateId = payload.candidateId;
+  row.position.lifecycle.pendingExit = { ...payload, exitTriggerId: sha(payload) };
+  let collectorCalls = 0;
+  const producer = createNaturalPaperTriggerBoundSettlementCostProducer({
+    async collectAuthoritativeEvidence() {
+      collectorCalls += 1;
+      return row.authoritativeEvidence;
+    },
+  });
+  const result = await producer(row);
+  assert.equal(result.status, "BLOCKED_DATA");
+  assert.deepEqual(result.blockers, ["PAPER_POSITION_EXIT_TRIGGER_IDENTITY_MISMATCH"]);
+  assert.equal(collectorCalls, 0);
 });
 
 test("post-binding payload tampering invalidates the canonical digest", () => {
