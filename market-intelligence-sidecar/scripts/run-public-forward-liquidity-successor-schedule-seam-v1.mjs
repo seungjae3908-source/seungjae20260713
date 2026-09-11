@@ -10,6 +10,11 @@ import {
   normalizeSuccessorV3GithubScheduleCreatedAt,
 } from '../src/public-forward-liquidity-successor-schedule-reliability-v3.mjs';
 import {
+  PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1,
+  buildPublicForwardLiquidityMultiLaneCurrentMainBinding,
+  derivePublicForwardLiquidityMultiLaneActivation,
+} from '../src/public-forward-liquidity-multi-lane-policy-v1.mjs';
+import {
   executeSuccessorScheduledCaptureSeam,
   executeSuccessorScheduledCaptureSeamV3,
   finalizeSuccessorArtifactReceipt,
@@ -134,9 +139,21 @@ function canonicalRawArtifactName(captureReceipt) {
     throw new Error('SUCCESSOR_CAPTURE_RECEIPT_SLOT_INDEX_MISSING');
   }
   const slotKeyDigest = exactDigest(
-    captureReceipt.canonicalSlotKeyDigest,
+    captureReceipt.laneId
+      ? captureReceipt.laneCreditKeyDigest
+      : captureReceipt.canonicalSlotKeyDigest,
     'SUCCESSOR_CAPTURE_RECEIPT_SLOT_KEY_DIGEST_INVALID',
   );
+  if (captureReceipt.laneId) {
+    const laneId = requiredString(
+      captureReceipt.laneId,
+      'SUCCESSOR_CAPTURE_RECEIPT_LANE_ID_INVALID',
+    );
+    if (!/^P2_V3_BTCUSDT_UTC(?:17|37)$/u.test(laneId)) {
+      throw new Error('SUCCESSOR_CAPTURE_RECEIPT_LANE_ID_INVALID');
+    }
+    return `public-forward-liquidity-successor-lane-${laneId}-slot-${captureReceipt.slotIndex}-${slotKeyDigest}`;
+  }
   return `public-forward-liquidity-successor-slot-${captureReceipt.slotIndex}-${slotKeyDigest}`;
 }
 
@@ -177,7 +194,9 @@ async function currentRemoteMainSha({ repository, token }) {
 }
 
 async function priorCreditedSlotExists({ repository, token, lookup }) {
-  const canonicalName = `public-forward-liquidity-successor-slot-${lookup.slotIndex}-${lookup.canonicalSlotKeyDigest}`;
+  const canonicalName = lookup.laneId
+    ? `public-forward-liquidity-successor-lane-${lookup.laneId}-slot-${lookup.slotIndex}-${lookup.laneCreditKeyDigest}`
+    : `public-forward-liquidity-successor-slot-${lookup.slotIndex}-${lookup.canonicalSlotKeyDigest}`;
   const name = encodeURIComponent(canonicalName);
   const artifacts = await githubGet(
     `/repos/${repository.owner}/${repository.repo}/actions/artifacts?per_page=100&name=${name}`,
@@ -188,6 +207,104 @@ async function priorCreditedSlotExists({ repository, token, lookup }) {
   }
   return artifacts.artifacts.some((artifact) =>
     artifact?.expired === false && artifact?.name === canonicalName);
+}
+
+async function resolveMultiLaneActivation({ repository, token, exactMainSha }) {
+  const workflow = encodeURIComponent(
+    PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.config.activationPolicy.requiredCiWorkflowPath
+      .replace(/^\.github\/workflows\//u, ''),
+  );
+  const approvalMs = PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1
+    .config.authority.humanApprovalRecordedAtMs;
+  const indexedRuns = [];
+  for (let page = 1; page <= 100; page += 1) {
+    const response = await githubGet(
+      `/repos/${repository.owner}/${repository.repo}/actions/workflows/${workflow}/runs?event=workflow_dispatch&branch=main&status=completed&per_page=100&page=${page}`,
+      token,
+    );
+    if (!Array.isArray(response?.workflow_runs)) {
+      throw new Error('PHASE2_ACTIVATION_CI_RUN_INDEX_INVALID');
+    }
+    indexedRuns.push(...response.workflow_runs);
+    if (response.workflow_runs.length < 100) break;
+    if (page === 100) throw new Error('PHASE2_ACTIVATION_CI_RUN_INDEX_LIMIT_EXCEEDED');
+  }
+  const eligible = indexedRuns
+    .filter((run) => run?.event === 'workflow_dispatch'
+      && run?.head_branch === 'main'
+      && run?.status === 'completed'
+      && /^[a-f0-9]{40}$/u.test(String(run?.head_sha ?? ''))
+      && Date.parse(String(run?.updated_at ?? '')) > approvalMs)
+    .sort((left, right) => Number(left.id) - Number(right.id));
+  for (const workflowRun of eligible) {
+    const policyRefSha = exactSha(
+      workflowRun.head_sha,
+      'PHASE2_ACTIVATION_POLICY_REF_SHA_INVALID',
+    );
+    const policyPath = 'market-intelligence-sidecar/config/public-forward-liquidity-multi-lane-prospective-policy-v1.json';
+    let frozenPolicyFile;
+    try {
+      frozenPolicyFile = await githubGet(
+        `/repos/${repository.owner}/${repository.repo}/contents/${policyPath}?ref=${policyRefSha}`,
+        token,
+      );
+    } catch (error) {
+      if (String(error?.message ?? '') === 'SUCCESSOR_GITHUB_API_READ_FAILED:404') continue;
+      throw error;
+    }
+    if (frozenPolicyFile?.type !== 'file' || frozenPolicyFile?.encoding !== 'base64') continue;
+    let policyAtRef;
+    try {
+      policyAtRef = JSON.parse(Buffer.from(
+        String(frozenPolicyFile.content ?? '').replace(/\s/gu, ''),
+        'base64',
+      ).toString('utf8'));
+    } catch {
+      continue;
+    }
+    if (canonicalJson(policyAtRef)
+      !== canonicalJson(PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.config)) continue;
+    let compareStatus = 'identical';
+    let mergeBaseSha = policyRefSha;
+    if (policyRefSha !== exactMainSha) {
+      const comparison = await githubGet(
+        `/repos/${repository.owner}/${repository.repo}/compare/${policyRefSha}...${exactMainSha}`,
+        token,
+      );
+      if (comparison?.status !== 'ahead'
+        || exactSha(
+          comparison?.merge_base_commit?.sha,
+          'PHASE2_ACTIVATION_MERGE_BASE_INVALID',
+        ) !== policyRefSha) {
+        continue;
+      }
+      compareStatus = comparison.status;
+      mergeBaseSha = comparison.merge_base_commit.sha;
+    }
+    try {
+      const jobsResponse = await githubGet(
+        `/repos/${repository.owner}/${repository.repo}/actions/runs/${workflowRun.id}/jobs?per_page=100`,
+        token,
+      );
+      const activation = derivePublicForwardLiquidityMultiLaneActivation({
+        exactMainSha: policyRefSha,
+        workflowRun,
+        jobs: jobsResponse?.jobs,
+      });
+      const currentMainBinding = buildPublicForwardLiquidityMultiLaneCurrentMainBinding({
+        activation,
+        currentMainSha: exactMainSha,
+        compareStatus,
+        mergeBaseSha,
+      });
+      return Object.freeze({ activation, currentMainBinding });
+    } catch (error) {
+      throw new Error(
+        `PHASE2_FIRST_POLICY_CI_UNVERIFIED:${String(error?.message ?? 'UNKNOWN')}`,
+      );
+    }
+  }
+  return null;
 }
 
 async function persistCaptureResult({ batch, captureReceipt, runId, runAttempt }) {
@@ -214,6 +331,17 @@ async function persistCaptureResult({ batch, captureReceipt, runId, runAttempt }
     blockers: [...(captureReceipt.blockers ?? [])],
     slotIndex: captureReceipt.slotIndex ?? null,
     split: captureReceipt.split ?? null,
+    laneId: captureReceipt.laneId ?? null,
+    multiLanePolicyDigest: captureReceipt.multiLanePolicyDigest ?? null,
+    activationBoundaryMs: captureReceipt.activationBoundaryMs ?? null,
+    phase2Utc27Diagnostic: captureReceipt.scheduleExpression === '27 * * * *'
+      && captureReceipt.laneId == null
+      && captureReceipt.multiLanePolicyDigest != null
+      && captureReceipt.captureStatus === 'PRESENT_ZERO_CREDIT'
+      && captureReceipt.prospectiveSlotCredit === 0
+      && canonicalJson(captureReceipt.blockers) === canonicalJson([
+        'PHASE2_UTC27_ZERO_ADDITIONAL_CREDIT',
+      ]),
     canonicalRawArtifactName: captureReceipt.slotIndex == null
       ? null
       : canonicalRawArtifactName(captureReceipt),
@@ -236,8 +364,10 @@ async function persistCaptureResult({ batch, captureReceipt, runId, runAttempt }
     raw_batch_present: terminal.rawBatchPresent,
     slot_index: terminal.slotIndex ?? '',
     split: terminal.split ?? '',
+    lane_id: terminal.laneId ?? '',
     canonical_raw_artifact_name: terminal.canonicalRawArtifactName ?? '',
     attempt_artifact_name: terminal.attemptArtifactName ?? '',
+    phase2_utc27_diagnostic: terminal.phase2Utc27Diagnostic,
   });
   console.log(JSON.stringify(terminal));
 }
@@ -277,6 +407,11 @@ async function runCapture(executor = executeSuccessorScheduledCaptureSeam) {
     : null;
   const authorityCreatedAtMs = v3ScheduleMetadata?.authorityCreatedAtMs
     ?? runIdentity.createdAtMs;
+  const multiLaneResolution = executor === executeSuccessorScheduledCaptureSeamV3
+    ? await resolveMultiLaneActivation({ repository, token, exactMainSha })
+    : null;
+  const multiLaneActivation = multiLaneResolution?.activation ?? null;
+  const multiLaneCurrentMainBinding = multiLaneResolution?.currentMainBinding ?? null;
 
   let { batch, captureReceipt } = await executor({
     eventName: process.env.GITHUB_EVENT_NAME,
@@ -294,6 +429,8 @@ async function runCapture(executor = executeSuccessorScheduledCaptureSeam) {
       lookup,
     }),
     getRemoteMainSha: async () => currentRemoteMainSha({ repository, token }),
+    multiLaneActivation,
+    multiLaneCurrentMainBinding,
   });
 
   if (v3ScheduleMetadata !== null) {
@@ -392,6 +529,12 @@ async function runBindArtifact() {
     prospectiveSlotCredit: artifactReceipt.prospectiveSlotCredit,
     slotIndex: artifactReceipt.slotIndex,
     split: artifactReceipt.split,
+    laneId: artifactReceipt.laneId ?? null,
+    multiLanePolicyDigest: artifactReceipt.multiLanePolicyDigest ?? null,
+    laneCreditKeyDigest: artifactReceipt.laneCreditKeyDigest ?? null,
+    globalSlotKeyDigest: artifactReceipt.globalSlotKeyDigest ?? null,
+    activationBoundaryMs: artifactReceipt.activationBoundaryMs ?? null,
+    activationBoundaryDigest: artifactReceipt.activationBoundaryDigest ?? null,
     executionAuthority: 'NONE',
   });
   await writeFile(
