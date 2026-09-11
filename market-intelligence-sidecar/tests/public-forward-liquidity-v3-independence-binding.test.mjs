@@ -18,6 +18,9 @@ import {
   SUCCESSOR_OOS_HORIZON_CONTRACT,
 } from '../src/public-forward-liquidity-successor-oos-outcome-horizon.mjs';
 import {
+  PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1,
+} from '../src/public-forward-liquidity-multi-lane-policy-v1.mjs';
+import {
   PUBLIC_FORWARD_LIQUIDITY_V3_INDEPENDENT_SPLIT_INDEX_VERSION,
   buildPublicForwardLiquidityV3IndependentSplitIndex,
 } from '../src/public-forward-liquidity-v3-independence-binding.mjs';
@@ -50,10 +53,10 @@ const SUCCESSOR_INACTIVE_TEST = Object.freeze({
 });
 
 function receipt({ predecessorDatasetDigest, datasetDigest, observationIds, slotIndex, split, captureSeed,
-  successor = false }) {
+  successor = false, phase2LaneId = null, activationBoundaryMs = null, runOffset = 0 }) {
   const run36 = successor && slotIndex === 20;
-  const captureRunId = run36 ? RUN_36.runId : String(33809694015 + slotIndex);
-  const artifactId = run36 ? RUN_36.artifactId : String(9914306478 + slotIndex);
+  const captureRunId = run36 ? RUN_36.runId : String(33809694015 + slotIndex + runOffset);
+  const artifactId = run36 ? RUN_36.artifactId : String(9914306478 + slotIndex + runOffset);
   const artifactDigest = run36
     ? RUN_36.artifactDigest
     : String(Number(captureSeed) + 3).repeat(64).slice(0, 64);
@@ -69,6 +72,42 @@ function receipt({ predecessorDatasetDigest, datasetDigest, observationIds, slot
   const policyDigest = successor ? SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.policyDigest : POLICY;
   const cohortDigest = successor ? SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.cohortDigest : COHORT;
   const canonicalSlotKey = nativeSlot.canonicalSlotKey;
+  const phase2Lane = phase2LaneId === null
+    ? null
+    : PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.laneRegistry
+      .find((lane) => lane.laneId === phase2LaneId);
+  if (phase2LaneId !== null && (!phase2Lane || !Number.isInteger(activationBoundaryMs))) {
+    throw new Error('TEST_PHASE2_LANE_INVALID');
+  }
+  const phase2LaneCreditKey = phase2Lane === null ? null : {
+    policyDigest: PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.policyDigest,
+    cohortDigest,
+    slotIndex,
+    laneId: phase2Lane.laneId,
+    market: phase2Lane.market,
+    provider: phase2Lane.provider,
+    symbol: phase2Lane.symbol,
+    timeframe: phase2Lane.timeframe,
+  };
+  const phase2GlobalSlotKey = phase2Lane === null ? null : {
+    policyDigest: PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.policyDigest,
+    cohortDigest,
+    slotIndex,
+  };
+  const phase2CurrentMainBindingBody = phase2Lane === null ? null : {
+    schemaVersion: 'public-forward-liquidity-multi-lane-current-main-binding-v1',
+    policyDigest: PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.policyDigest,
+    activationBoundaryDigest: 'a'.repeat(64),
+    activationCiHeadSha: PRODUCER,
+    currentMainSha: PRODUCER,
+    mergeBaseSha: PRODUCER,
+    compareStatus: 'identical',
+    relationship: 'EXACT_ACTIVATION_CI_HEAD',
+  };
+  const phase2CurrentMainBinding = phase2Lane === null ? null : {
+    ...phase2CurrentMainBindingBody,
+    currentMainBindingDigest: sha256(canonicalJson(phase2CurrentMainBindingBody)),
+  };
   const body = {
     schemaVersion: PUBLIC_FORWARD_LIQUIDITY_CAPTURE_INGEST_RECEIPT_VERSION,
     exactMainSha: run36 ? RUN_36.exactMainSha : PRODUCER,
@@ -129,6 +168,32 @@ function receipt({ predecessorDatasetDigest, datasetDigest, observationIds, slot
         ? RUN_36.captureReceiptDigest
         : String(Number(captureSeed) + 1).repeat(64).slice(0, 64),
       artifactReceiptDigest,
+      ...(phase2Lane === null ? {} : {
+        multiLanePolicyVersion: PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.policyVersion,
+        multiLanePolicyDigest: PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.policyDigest,
+        laneRegistryDigest: PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.laneRegistryDigest,
+        dependencyPolicyDigest: PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.dependencyPolicyDigest,
+        balancingPolicyDigest: PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.balancingPolicyDigest,
+        approvedCheckpointDigest: PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.approvedCheckpointDigest,
+        approvedCheckpointArtifactId: PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.config.approvedCheckpoint.authoritativeIndexArtifactId,
+        approvedCheckpointArtifactDigest: PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.config.approvedCheckpoint.authoritativeIndexArtifactDigest,
+        laneId: phase2Lane.laneId,
+        scheduleIdentity: phase2Lane.scheduleIdentity,
+        laneCreditKey: phase2LaneCreditKey,
+        laneCreditKeyDigest: sha256(canonicalJson(phase2LaneCreditKey)),
+        globalSlotKey: phase2GlobalSlotKey,
+        globalSlotKeyDigest: sha256(canonicalJson(phase2GlobalSlotKey)),
+        activationBoundaryMs,
+        activationSlotIndex: slotIndex,
+        activationBoundaryDigest: 'a'.repeat(64),
+        activationPostMergeRequiredCiRunId: 40000000001,
+        activationPostMergeRequiredCiHeadSha: PRODUCER,
+        activationCurrentMainBinding: phase2CurrentMainBinding,
+        maxCreditPerLanePerSlot: 1,
+        maxTotalCreditPerSlot: 2,
+        maxCreditPerDependencyComponent: 1,
+        retroactiveMultiLaneCreditAllowed: false,
+      }),
     },
   };
   return { ...body, receiptDigest: computePublicForwardLiquidityCaptureIngestReceiptDigest(body) };
@@ -229,6 +294,120 @@ function successorFixture({ slotIndex = 20, split = 'TRAIN' } = {}) {
   return {
     inventory: { ...inventoryBody, inventoryDigest: sha256(canonicalJson(inventoryBody)) },
     receiptEntries: [{ relativePath: `receipts/${slotIndex}.json`, receipt: first }],
+  };
+}
+
+function phase2Fixture() {
+  const activationBoundaryMs = buildSuccessorScheduleReliabilityV3SlotDescriptor(193)
+    .nominalScheduledAtMs;
+  const pre = receipt({
+    predecessorDatasetDigest: null,
+    datasetDigest: DATASET0,
+    observationIds: ['obs-pre'],
+    slotIndex: 192,
+    split: 'TRAIN',
+    captureSeed: 7,
+    successor: true,
+  });
+  const lane17 = receipt({
+    predecessorDatasetDigest: DATASET0,
+    datasetDigest: DATASET1,
+    observationIds: ['obs-17'],
+    slotIndex: 193,
+    split: 'TRAIN',
+    captureSeed: 8,
+    successor: true,
+    phase2LaneId: 'P2_V3_BTCUSDT_UTC17',
+    activationBoundaryMs,
+  });
+  const lane37 = receipt({
+    predecessorDatasetDigest: DATASET1,
+    datasetDigest: '8'.repeat(64),
+    observationIds: ['obs-37'],
+    slotIndex: 193,
+    split: 'TRAIN',
+    captureSeed: 9,
+    successor: true,
+    phase2LaneId: 'P2_V3_BTCUSDT_UTC37',
+    activationBoundaryMs,
+    runOffset: 1,
+  });
+  const receipts = [pre, lane17, lane37];
+  const paths = ['receipts/192.json', 'receipts/193-17.json', 'receipts/193-37.json'];
+  const source = {
+    sourceIdentity: SOURCE,
+    collectorCodeSha: PRODUCER,
+    datasetDigest: lane37.datasetDigest,
+    ingestReceiptRelativePaths: paths,
+    ingestReceiptDigests: receipts.map((value) => value.receiptDigest),
+    captureRunIds: receipts.map((value) => value.captureRunId),
+    captureArtifactIds: receipts.map((value) => value.artifactId),
+    captureArtifactDigests: receipts.map((value) => value.artifactDigest),
+    v3SlotIndexes: [192, 193, 193],
+    v3Splits: ['TRAIN', 'TRAIN', 'TRAIN'],
+    v3LaneIds: [null, 'P2_V3_BTCUSDT_UTC17', 'P2_V3_BTCUSDT_UTC37'],
+    v3CreditPolicyDigests: [
+      SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.policyDigest,
+      PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.policyDigest,
+      PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.policyDigest,
+    ],
+    v3LaneCreditKeyDigests: [
+      null,
+      lane17.sourceV3Lineage.laneCreditKeyDigest,
+      lane37.sourceV3Lineage.laneCreditKeyDigest,
+    ],
+    v3PolicyDigest: SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.policyDigest,
+    v3CohortDigest: SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT.cohortDigest,
+  };
+  const sourceInventory = inventory(source);
+  const inventoryBody = {
+    ...sourceInventory,
+    targetSlotIndex: 193,
+    genuineScheduledSlotN: 2,
+    genuineScheduledLaneReceiptN: 3,
+  };
+  delete inventoryBody.inventoryDigest;
+  const independentObservations = [
+    ['obs-pre', null, activationBoundaryMs + 1_000, 'BUY', 'component-pre'],
+    ['obs-17', 'P2_V3_BTCUSDT_UTC17', activationBoundaryMs, 'BUY', 'component-17'],
+    ['obs-37', 'P2_V3_BTCUSDT_UTC37', activationBoundaryMs + 20 * 60_000, 'SELL', 'component-37'],
+  ].map(([observationId, laneId, eventTimestampMs, aggressiveSide, dependencyComponentId], index) => ({
+    observationId,
+    sourceObservationId: observationId,
+    sourceIdentity: SOURCE,
+    eventIdentity: `phase2-event-${index}`,
+    sourceFrameIdentity: `phase2-frame-${index}`,
+    dependencyComponentId,
+    laneId,
+    observation: {
+      eventTimestampMs,
+      aggressiveSide,
+      market: 'CRYPTO_FUTURES',
+      publicDataSource: 'BITGET_PUBLIC_UTA_V3',
+      symbol: 'BTCUSDT',
+    },
+  }));
+  const independenceResult = {
+    status: 'PRESENT',
+    audit: { auditDigest: AUDIT, counts: { INDEPENDENT_N: independentObservations.length } },
+    splitSource: {
+      splitSourceDigest: SPLIT_SOURCE,
+      upstreamSources: [],
+      observations: independentObservations,
+      splitAssignmentPerformed: false,
+      oosValidationComplete: false,
+      calibrationArtifactProduced: false,
+      liquidityImpactStatus: 'BLOCKED_DATA',
+      fullCostReady: false,
+      evidenceCompleteCredit: 0,
+      executionAuthority: 'NONE',
+    },
+  };
+  return {
+    activationBoundaryMs,
+    inventory: { ...inventoryBody, inventoryDigest: sha256(canonicalJson(inventoryBody)) },
+    receiptEntries: receipts.map((value, index) => ({ relativePath: paths[index], receipt: value })),
+    independenceResult,
   };
 }
 
@@ -460,4 +639,90 @@ test('fails closed on a duplicate credited legacy V3 slot', () => {
   assert.throws(() => buildPublicForwardLiquidityV3IndependentSplitIndex({
     ...duplicate, independenceResult: independence(), producerCodeSha: PRODUCER,
   }), /V3_DUPLICATE_SLOT_CREDIT_FORBIDDEN/);
+});
+
+test('binds Option B lanes while an already-running old-policy slot stays in the pre-cutover freeze', SUCCESSOR_ACTIVE_TEST, () => {
+  const value = phase2Fixture();
+  const result = buildPublicForwardLiquidityV3IndependentSplitIndex({
+    inventory: value.inventory,
+    receiptEntries: value.receiptEntries,
+    independenceResult: value.independenceResult,
+    producerCodeSha: PRODUCER,
+  });
+  assert.equal(result.multiLanePolicyVersion, PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.policyVersion);
+  assert.equal(result.multiLanePolicyDigest, PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.policyDigest);
+  assert.equal(result.preCutoverIndexFreeze.activationBoundaryMs, value.activationBoundaryMs);
+  assert.equal(result.preCutoverIndexFreeze.effectiveIndependentN, 1);
+  assert.match(result.preCutoverIndexFreeze.preCutoverIndexDigest, /^[a-f0-9]{64}$/u);
+  assert.deepEqual(result.preCutoverIndexFreeze.counts, {
+    TRAIN: 1, VALIDATION: 0, OOS: 0, BUY: 1, SELL: 0,
+  });
+  assert.equal(result.maxCreditPerLanePerSlot, 1);
+  assert.equal(result.maxTotalCreditPerSlot, 2);
+  assert.equal(result.maxCreditPerDependencyComponent, 1);
+  assert.equal(result.utc27AdditionalIndependentCredit, 0);
+  assert.equal(result.retroactiveMultiLaneCreditAllowed, false);
+  assert.equal(result.genuineScheduledSlotN, 2);
+  assert.equal(result.genuineScheduledLaneReceiptN, 3);
+  assert.equal(result.laneSplitSideCounts.P2_V3_BTCUSDT_UTC17.TRAIN.BUY, 1);
+  assert.equal(result.laneSplitSideCounts.P2_V3_BTCUSDT_UTC37.TRAIN.SELL, 1);
+  assert.equal(result.scopeCells.length, 2);
+  assert.equal(result.scopeCells.every((cell) => /^[a-f0-9]{64}$/u.test(cell.scopeCellDigest)), true);
+});
+
+test('rejects retroactive lane credit and more than one representative per dependency component', SUCCESSOR_ACTIVE_TEST, () => {
+  const retroactive = phase2Fixture();
+  retroactive.independenceResult.splitSource.observations[1].observation.eventTimestampMs =
+    retroactive.activationBoundaryMs - 1;
+  assert.throws(() => buildPublicForwardLiquidityV3IndependentSplitIndex({
+    inventory: retroactive.inventory,
+    receiptEntries: retroactive.receiptEntries,
+    independenceResult: retroactive.independenceResult,
+    producerCodeSha: PRODUCER,
+  }), /PHASE2_RETROACTIVE_LANE_CREDIT_FORBIDDEN/);
+
+  const duplicateComponent = phase2Fixture();
+  duplicateComponent.independenceResult.splitSource.observations[2].dependencyComponentId =
+    duplicateComponent.independenceResult.splitSource.observations[1].dependencyComponentId;
+  assert.throws(() => buildPublicForwardLiquidityV3IndependentSplitIndex({
+    inventory: duplicateComponent.inventory,
+    receiptEntries: duplicateComponent.receiptEntries,
+    independenceResult: duplicateComponent.independenceResult,
+    producerCodeSha: PRODUCER,
+  }), /PHASE2_DEPENDENCY_COMPONENT_MULTI_CREDIT_FORBIDDEN/);
+});
+
+test('hard lane cap admits only the earliest independent component in one lane and slot', SUCCESSOR_ACTIVE_TEST, () => {
+  const value = phase2Fixture();
+  const lane17Receipt = value.receiptEntries[1].receipt;
+  lane17Receipt.batchObservationIds.push('obs-17-late');
+  const original = value.independenceResult.splitSource.observations
+    .find((observation) => observation.observationId === 'obs-17');
+  value.independenceResult.splitSource.observations.push({
+    ...original,
+    observationId: 'obs-17-late',
+    sourceObservationId: 'obs-17-late',
+    eventIdentity: 'phase2-event-17-late',
+    sourceFrameIdentity: 'phase2-frame-17-late',
+    dependencyComponentId: 'component-17-late',
+    observation: {
+      ...original.observation,
+      eventTimestampMs: original.observation.eventTimestampMs + 1_000,
+    },
+  });
+  value.independenceResult.audit.counts.INDEPENDENT_N += 1;
+  resignFixture(value);
+  const result = buildPublicForwardLiquidityV3IndependentSplitIndex({
+    inventory: value.inventory,
+    receiptEntries: value.receiptEntries,
+    independenceResult: value.independenceResult,
+    producerCodeSha: PRODUCER,
+  });
+  assert.equal(result.preCapIndependentN, 4);
+  assert.equal(result.effectiveIndependentN, 3);
+  assert.equal(result.laneSlotCapRejectedN, 1);
+  assert.equal(result.globalSlotCapRejectedN, 0);
+  assert.equal(result.capRejections[0].observationId, 'obs-17-late');
+  assert.equal(result.observations.some((item) => item.observationId === 'obs-17'), true);
+  assert.equal(result.observations.some((item) => item.observationId === 'obs-17-late'), false);
 });
