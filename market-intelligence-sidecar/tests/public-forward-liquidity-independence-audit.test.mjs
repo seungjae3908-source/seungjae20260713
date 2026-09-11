@@ -30,6 +30,9 @@ import {
   computePublicForwardLiquidityCaptureIngestReceiptDigest,
 } from '../src/public-forward-liquidity-capture-ingest.mjs';
 import {
+  PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1,
+} from '../src/public-forward-liquidity-multi-lane-policy-v1.mjs';
+import {
   validatePublicForwardLiquiditySourceManifestLayout,
 } from '../scripts/run-public-forward-liquidity-independence-audit.mjs';
 
@@ -175,17 +178,24 @@ function mergeBatchHistory(batches) {
   return history;
 }
 
-function boundSourceChain(history, { artifactIdStart = 6000, collectorImplementationBlobSha = 'f'.repeat(40) } = {}) {
+function boundSourceChain(history, {
+  artifactIdStart = 6000,
+  collectorImplementationBlobSha = 'f'.repeat(40),
+  batchObservationIdsByIndex = null,
+  receiptOverridesByIndex = [],
+} = {}) {
   const receipts = [];
   let previousIds = new Set();
   for (let index = 0; index < history.length; index += 1) {
     const dataset = history[index];
     const currentIds = dataset.observations.map((observation) => observation.observationId);
-    const batchObservationIds = currentIds.filter((observationId) => !previousIds.has(observationId));
+    const batchObservationIds = batchObservationIdsByIndex?.[index]
+      ?? currentIds.filter((observationId) => !previousIds.has(observationId));
     const source = boundSource(dataset, {
       artifactId: String(artifactIdStart + index),
       batchObservationIds,
       collectorImplementationBlobSha,
+      receiptOverrides: receiptOverridesByIndex[index] ?? {},
     });
     receipts.push(source.ingestReceipt);
     previousIds = new Set(currentIds);
@@ -529,6 +539,166 @@ test('receipt-bound sources must share one exact collector implementation blob',
   });
   assert.equal(result.status, 'BLOCKED_DATA');
   assert.ok(result.blockers.includes('UPSTREAM_COLLECTOR_IMPLEMENTATION_COHORT_MISMATCH'));
+});
+
+function phase2Lineage(laneId, slotIndex = 195) {
+  const lane = PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.laneRegistry
+    .find((value) => value.laneId === laneId);
+  assert.ok(lane);
+  return {
+    laneId,
+    slotIndex,
+    scheduleIdentity: lane.scheduleIdentity,
+    multiLanePolicyDigest: PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.policyDigest,
+  };
+}
+
+function phase2BoundSource(dataset, { artifactId, laneId, slotIndex = 195 }) {
+  return boundSource(dataset, {
+    artifactId,
+    receiptOverrides: {
+      sourceV3Lineage: phase2Lineage(laneId, slotIndex),
+    },
+  });
+}
+
+test('cross-lane dependency semantics choose one stable UTC17 representative for overlapping evidence', () => {
+  const firstDataset = mergeLiquidityCalibrationBatch(null, batch({
+    base: 80_000,
+    seed: 51,
+    events: [{ execId: 'phase2-overlap-37', eventTimestampMs: 80_000 }],
+  })).dataset;
+  const secondDataset = mergeLiquidityCalibrationBatch(null, batch({
+    base: 80_000,
+    seed: 51,
+    events: [{ execId: 'phase2-overlap-17', eventTimestampMs: 80_000 }],
+  })).dataset;
+  const result = classifyPublicForwardLiquidityBoundSources({
+    sources: [
+      phase2BoundSource(firstDataset, { artifactId: '4601', laneId: 'P2_V3_BTCUSDT_UTC37' }),
+      phase2BoundSource(secondDataset, { artifactId: '4602', laneId: 'P2_V3_BTCUSDT_UTC17' }),
+    ],
+    producerCodeSha: 'd'.repeat(40),
+  });
+  assert.equal(result.status, 'PRESENT');
+  assert.equal(result.audit.counts.RAW_ACCEPTED_N, 2);
+  assert.equal(result.audit.counts.INDEPENDENT_N, 1);
+  assert.equal(result.audit.counts.DEPENDENT_REJECTED_N, 1);
+  assert.equal(result.audit.dependencyComponents.length, 1);
+  assert.equal(result.audit.dependencyComponents[0].representativeLaneId, 'P2_V3_BTCUSDT_UTC17');
+  assert.deepEqual(result.audit.dependencyComponents[0].memberLaneIds, [
+    'P2_V3_BTCUSDT_UTC17',
+    'P2_V3_BTCUSDT_UTC37',
+  ]);
+  assert.equal(result.audit.crossLanePairAssessments.length, 1);
+  assert.equal(result.audit.crossLanePairAssessments[0].independenceStatus, 'DEPENDENT');
+  assert.equal(result.audit.crossLanePairAssessments[0].sameBookFrame, true);
+  assert.equal(result.audit.crossLanePairAssessments[0].overlappingCausalMarketEvent, true);
+  assert.equal(result.audit.crossLanePairAssessments[0].sameDependencyComponent, true);
+  assert.equal(
+    result.audit.crossLanePairAssessments[0].realizedEvidence.left.timeframe,
+    'EVENT_WINDOW',
+  );
+  assert.match(
+    result.audit.crossLanePairAssessments[0].realizedEvidence.right.normalizedObservationDigest,
+    /^[a-f0-9]{64}$/u,
+  );
+});
+
+test('the same public event across lanes is explicitly assessed as one dependent component', () => {
+  const event = { execId: 'phase2-same-public-event', eventTimestampMs: 85_000 };
+  const firstDataset = mergeLiquidityCalibrationBatch(null, batch({
+    base: 85_000,
+    seed: 56,
+    events: [event],
+  })).dataset;
+  const secondDataset = mergeLiquidityCalibrationBatch(null, batch({
+    base: 85_000,
+    seed: 57,
+    events: [event],
+  })).dataset;
+  const result = classifyPublicForwardLiquidityBoundSources({
+    sources: [
+      phase2BoundSource(firstDataset, { artifactId: '4651', laneId: 'P2_V3_BTCUSDT_UTC37' }),
+      phase2BoundSource(secondDataset, { artifactId: '4652', laneId: 'P2_V3_BTCUSDT_UTC17' }),
+    ],
+    producerCodeSha: 'd'.repeat(40),
+  });
+  assert.equal(result.status, 'PRESENT');
+  assert.equal(result.audit.counts.RAW_ACCEPTED_N, 2);
+  assert.equal(result.audit.counts.DUPLICATE_PUBLIC_EVENT_N, 1);
+  assert.equal(result.audit.counts.INDEPENDENT_N, 1);
+  assert.equal(result.audit.crossLanePairAssessments.length, 1);
+  assert.equal(result.audit.crossLanePairAssessments[0].independenceStatus, 'DEPENDENT');
+  assert.ok(result.audit.crossLanePairAssessments[0].correlationReasons
+    .includes('SAME_PUBLIC_EVENT_IDENTITY'));
+  assert.equal(result.audit.crossLanePairAssessments[0].sameDependencyComponent, true);
+  assert.equal(result.audit.dependencyComponents[0].representativeLaneId, 'P2_V3_BTCUSDT_UTC17');
+});
+
+test('two lane receipts pointing to one canonical stored observation remain an explicit dependent pair', () => {
+  const repeated = batch({
+    base: 87_000,
+    seed: 58,
+    events: [{ execId: 'phase2-canonical-row-once', eventTimestampMs: 87_000 }],
+  });
+  const history = mergeBatchHistory([repeated, repeated]);
+  const observationId = history[0].observations[0].observationId;
+  const source = boundSourceChain(history, {
+    artifactIdStart: 4680,
+    batchObservationIdsByIndex: [[observationId], [observationId]],
+    receiptOverridesByIndex: [
+      { sourceV3Lineage: phase2Lineage('P2_V3_BTCUSDT_UTC17') },
+      {
+        sourceV3Lineage: phase2Lineage('P2_V3_BTCUSDT_UTC37'),
+        insertedObservationCount: 0,
+        duplicateObservationCount: 1,
+        rawIngestObservationDelta: 0,
+      },
+    ],
+  });
+  const result = classifyPublicForwardLiquidityBoundSources({
+    sources: [source],
+    producerCodeSha: 'd'.repeat(40),
+  });
+  assert.equal(result.status, 'PRESENT');
+  assert.equal(result.audit.counts.RAW_ACCEPTED_N, 1);
+  assert.equal(result.audit.counts.INDEPENDENT_N, 1);
+  assert.equal(result.audit.crossLanePairAssessments.length, 1);
+  assert.equal(result.audit.crossLanePairAssessments[0].independenceStatus, 'DEPENDENT');
+  assert.equal(result.audit.crossLanePairAssessments[0].sameDependencyComponent, true);
+  assert.deepEqual(result.audit.dependencyComponents[0].memberLaneIds, [
+    'P2_V3_BTCUSDT_UTC17',
+    'P2_V3_BTCUSDT_UTC37',
+  ]);
+});
+
+test('cross-lane evidence receives two credits only when canonical dependency reasons are absent', () => {
+  const firstDataset = mergeLiquidityCalibrationBatch(null, batch({
+    base: 90_000,
+    seed: 61,
+    events: [{ execId: 'phase2-separated-17', eventTimestampMs: 90_000 }],
+  })).dataset;
+  const secondDataset = mergeLiquidityCalibrationBatch(null, batch({
+    base: 100_000,
+    seed: 62,
+    events: [{ execId: 'phase2-separated-37', eventTimestampMs: 100_000 }],
+  })).dataset;
+  const result = classifyPublicForwardLiquidityBoundSources({
+    sources: [
+      phase2BoundSource(firstDataset, { artifactId: '4701', laneId: 'P2_V3_BTCUSDT_UTC17' }),
+      phase2BoundSource(secondDataset, { artifactId: '4702', laneId: 'P2_V3_BTCUSDT_UTC37' }),
+    ],
+    producerCodeSha: 'd'.repeat(40),
+  });
+  assert.equal(result.status, 'PRESENT');
+  assert.equal(result.audit.counts.RAW_ACCEPTED_N, 2);
+  assert.equal(result.audit.counts.INDEPENDENT_N, 2);
+  assert.equal(result.audit.dependencyComponents.length, 2);
+  assert.equal(result.audit.crossLanePairAssessments.length, 1);
+  assert.equal(result.audit.crossLanePairAssessments[0].independenceStatus, 'PROVEN');
+  assert.deepEqual(result.audit.crossLanePairAssessments[0].correlationReasons, []);
+  assert.equal(result.audit.crossLanePairAssessments[0].sameDependencyComponent, false);
 });
 
 test('repeating one receipt-bound source in a manifest fails closed before raw N inflation', () => {

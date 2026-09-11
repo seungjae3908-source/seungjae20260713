@@ -17,6 +17,12 @@ import {
   buildSuccessorScheduleReliabilityV3SlotDescriptor,
   verifySuccessorScheduleReliabilityV3Contract,
 } from './public-forward-liquidity-successor-schedule-reliability-v3.mjs';
+import {
+  PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1,
+  buildPublicForwardLiquidityMultiLaneCurrentMainBinding,
+  resolvePublicForwardLiquidityMultiLaneCreditIdentity,
+  verifyPublicForwardLiquidityMultiLanePolicyV1,
+} from './public-forward-liquidity-multi-lane-policy-v1.mjs';
 
 export const SUCCESSOR_SCHEDULE_EVENT_NAME = 'schedule';
 export const SUCCESSOR_SCHEDULE_CRON_UTC = '17 * * * *';
@@ -727,8 +733,45 @@ function receiptBodyV3({
   droppedObservationCount,
   prospectiveSlotCredit,
   contract,
+  multiLaneIdentity = null,
+  multiLaneActivation = null,
+  multiLaneCurrentMainBinding = null,
 }) {
   const cohort = contract.policyCore.cohort;
+  const multiLaneFields = multiLaneIdentity?.active === true
+    ? {
+        multiLanePolicyVersion: PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.policyVersion,
+        multiLanePolicyDigest: PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.policyDigest,
+        laneRegistryDigest: PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.laneRegistryDigest,
+        dependencyPolicyDigest: PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.dependencyPolicyDigest,
+        balancingPolicyDigest: PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.balancingPolicyDigest,
+        approvedCheckpointDigest: PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.approvedCheckpointDigest,
+        approvedCheckpointArtifactId:
+          PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.config.approvedCheckpoint.authoritativeIndexArtifactId,
+        approvedCheckpointArtifactDigest:
+          PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.config.approvedCheckpoint.authoritativeIndexArtifactDigest,
+        laneId: multiLaneIdentity.laneId,
+        scheduleIdentity: String(scheduleExpression ?? '').trim(),
+        laneCreditKey: multiLaneIdentity.laneCreditKey ?? null,
+        laneCreditKeyDigest: multiLaneIdentity.laneCreditKeyDigest ?? null,
+        globalSlotKey: multiLaneIdentity.globalSlotKey ?? null,
+        globalSlotKeyDigest: multiLaneIdentity.globalSlotKeyDigest ?? null,
+        maxCreditPerLanePerSlot:
+          PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.config.creditPolicy.maxCreditPerLanePerSlot,
+        maxTotalCreditPerSlot:
+          PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.config.creditPolicy.maxTotalCreditPerSlot,
+        maxCreditPerDependencyComponent:
+          PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.config.creditPolicy.maxCreditPerDependencyComponent,
+        utc27AdditionalIndependentCredit: multiLaneIdentity.laneId === null ? 0 : null,
+        activationBoundaryMs: multiLaneActivation.activationBoundaryMs,
+        activationBoundaryDigest: multiLaneActivation.activationBoundaryDigest,
+        activationPostMergeRequiredCiRunId: multiLaneActivation.postMergeRequiredCiRunId,
+        activationPostMergeRequiredCiHeadSha: multiLaneActivation.postMergeRequiredCiHeadSha,
+        multiLaneActivation: Object.freeze({ ...multiLaneActivation }),
+        activationCurrentMainBinding: Object.freeze({ ...multiLaneCurrentMainBinding }),
+        retroactiveMultiLaneCreditAllowed: false,
+      }
+    : {};
   return {
     schemaVersion: SUCCESSOR_V3_CAPTURE_RECEIPT_SCHEMA,
     evidenceClass: 'PUBLIC_FORWARD_LIQUIDITY_SUCCESSOR_SCHEDULE_RELIABILITY_V3_CAPTURE_ATTEMPT_RECEIPT',
@@ -811,6 +854,7 @@ function receiptBodyV3({
     autoTrading: false,
     orderSubmitted: false,
     realOrders: 0,
+    ...multiLaneFields,
     ...slotReceiptFieldsV3(
       authority,
       scheduledRunCreatedAtMs,
@@ -1065,6 +1109,8 @@ export async function executeSuccessorScheduledCaptureSeamV3({
   clock = () => Date.now(),
   collector = collectBitgetForwardLiquidityObservationBatch,
   contract = SUCCESSOR_SCHEDULE_RELIABILITY_V3_CONTRACT,
+  multiLaneActivation = null,
+  multiLaneCurrentMainBinding = null,
 } = {}) {
   const mainSha = exactSha(exactMainSha, 'SUCCESSOR_V3_EXACT_MAIN_SHA_INVALID');
   if (defaultBranchRef !== 'refs/heads/main') {
@@ -1091,6 +1137,44 @@ export async function executeSuccessorScheduledCaptureSeamV3({
     contract,
   });
 
+  let multiLaneIdentity = null;
+  let normalizedCurrentMainBinding = null;
+  let multiLaneBindingError = null;
+  if (multiLaneActivation != null && authority?.slot) {
+    const phase2Verdict = verifyPublicForwardLiquidityMultiLanePolicyV1();
+    if (!phase2Verdict.valid) {
+      multiLaneBindingError = `PHASE2_POLICY_INVALID:${phase2Verdict.blockers.join(',')}`;
+    } else {
+      try {
+        const proposedBinding = multiLaneCurrentMainBinding
+          ?? buildPublicForwardLiquidityMultiLaneCurrentMainBinding({
+            activation: multiLaneActivation,
+            currentMainSha: mainSha,
+            compareStatus: 'identical',
+            mergeBaseSha: mainSha,
+          });
+        normalizedCurrentMainBinding = buildPublicForwardLiquidityMultiLaneCurrentMainBinding({
+          activation: multiLaneActivation,
+          currentMainSha: proposedBinding.currentMainSha,
+          compareStatus: proposedBinding.compareStatus,
+          mergeBaseSha: proposedBinding.mergeBaseSha,
+        });
+        if (normalizedCurrentMainBinding.currentMainSha !== mainSha
+          || canonicalJson(normalizedCurrentMainBinding) !== canonicalJson(proposedBinding)) {
+          throw new Error('PHASE2_CURRENT_MAIN_BINDING_MISMATCH');
+        }
+        multiLaneIdentity = resolvePublicForwardLiquidityMultiLaneCreditIdentity({
+          scheduleExpression,
+          actualRunStartedAtMs: actual,
+          slotIndex: authority.slot.slotIndex,
+          activation: multiLaneActivation,
+        });
+      } catch (error) {
+        multiLaneBindingError = String(error?.message ?? 'PHASE2_LANE_IDENTITY_UNVERIFIED');
+      }
+    }
+  }
+
   let remoteMainShaBefore = null;
   let remoteMainShaAfter = null;
   let batch = null;
@@ -1104,13 +1188,20 @@ export async function executeSuccessorScheduledCaptureSeamV3({
   let completedAtMs = null;
   let credit = 0;
 
-  if (authority.eligible === true) {
+  if (multiLaneBindingError !== null) {
+    captureStatus = 'PHASE2_LANE_IDENTITY_UNVERIFIED';
+    blockers = [`PHASE2_LANE_IDENTITY_UNVERIFIED:${multiLaneBindingError}`];
+  }
+
+  if (authority.eligible === true && multiLaneBindingError === null) {
     if (typeof hasPriorCreditedSlot !== 'function') {
       captureStatus = 'PRIOR_CREDIT_STATE_UNVERIFIED';
       blockers = ['SUCCESSOR_V3_PRIOR_CREDIT_LOOKUP_MISSING'];
       priorCreditedSlotCheck = 'UNVERIFIED';
     } else {
       try {
+        const laneAware = multiLaneIdentity?.active === true
+          && multiLaneIdentity.laneId !== null;
         const priorExists = await hasPriorCreditedSlot(Object.freeze({
           cohortId: contract.cohortId,
           policyDigest: contract.policyDigest,
@@ -1119,6 +1210,12 @@ export async function executeSuccessorScheduledCaptureSeamV3({
           split: authority.slot.split,
           canonicalSlotKey: authority.slot.canonicalSlotKey,
           canonicalSlotKeyDigest: sha256(canonicalJson(authority.slot.canonicalSlotKey)),
+          laneId: laneAware ? multiLaneIdentity.laneId : null,
+          multiLanePolicyDigest: laneAware
+            ? PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.policyDigest
+            : null,
+          laneCreditKey: laneAware ? multiLaneIdentity.laneCreditKey : null,
+          laneCreditKeyDigest: laneAware ? multiLaneIdentity.laneCreditKeyDigest : null,
         }));
         if (priorExists === true) {
           captureStatus = 'DIAGNOSTIC_ONLY';
@@ -1184,6 +1281,12 @@ export async function executeSuccessorScheduledCaptureSeamV3({
             exactMainSha: mainSha,
             technical: V3_TECHNICAL,
           });
+          if (multiLaneIdentity?.active === true && multiLaneIdentity.laneId !== null
+            && batch.observations.some((observation) =>
+              !Number.isInteger(observation?.eventTimestampMs)
+              || observation.eventTimestampMs < multiLaneActivation.activationBoundaryMs)) {
+            throw new Error('PHASE2_PRE_BOUNDARY_OBSERVATION_FORBIDDEN');
+          }
           prospectiveObservationCount = batch.observations.length;
           droppedObservationCount = batch.droppedEvents.length;
           captureStatus = prospectiveObservationCount > 0 ? 'PRESENT' : 'BLOCKED_DATA';
@@ -1246,7 +1349,12 @@ export async function executeSuccessorScheduledCaptureSeamV3({
       }
 
       if (captureStatus === 'PRESENT' && blockers.length === 0) {
-        credit = V3_MAX_PROSPECTIVE_SLOT_CREDIT;
+        if (multiLaneIdentity?.active === true && multiLaneIdentity.laneId === null) {
+          captureStatus = 'PRESENT_ZERO_CREDIT';
+          blockers = ['PHASE2_UTC27_ZERO_ADDITIONAL_CREDIT'];
+        } else {
+          credit = V3_MAX_PROSPECTIVE_SLOT_CREDIT;
+        }
       } else if (captureStatus === 'PRESENT') {
         captureStatus = 'PRESENT_ZERO_CREDIT';
       }
@@ -1277,6 +1385,9 @@ export async function executeSuccessorScheduledCaptureSeamV3({
     droppedObservationCount,
     prospectiveSlotCredit: credit,
     contract,
+    multiLaneIdentity,
+    multiLaneActivation,
+    multiLaneCurrentMainBinding: normalizedCurrentMainBinding,
   });
   const captureReceipt = Object.freeze({
     ...body,
