@@ -83,6 +83,28 @@ assert.ok(workflow.includes("result.audit.counts.RAW_ACCEPTED_N !== inventory.ac
 assert.ok(workflow.includes("result.audit.counts.INDEPENDENT_N !== index.preCapIndependentN"), 'pre-cap independence count must bind to the canonical audit');
 assert.ok(workflow.includes('effectiveIndependentN: index.effectiveIndependentN'), 'effective count must reflect hard lane and global caps');
 
+const upstreamBindingStart = workflow.indexOf("await writeFile(join(root, 'v3-upstream-binding.json')");
+const upstreamBindingEnd = workflow.indexOf('      - name: Execute receipt-bound effective-independence audit');
+assert.ok(upstreamBindingStart >= 0 && upstreamBindingEnd > upstreamBindingStart, 'upstream binding section must be present');
+const upstreamBindingSection = workflow.slice(upstreamBindingStart, upstreamBindingEnd);
+assert.ok(
+  upstreamBindingSection.includes('genuineScheduledLaneReceiptN: inventory.genuineScheduledLaneReceiptN'),
+  'upstream binding must source genuine scheduled lane receipt count from validated inventory',
+);
+assert.ok(
+  !upstreamBindingSection.includes('genuineScheduledLaneReceiptN: index.genuineScheduledLaneReceiptN'),
+  'upstream binding must not reference the downstream split index before it exists',
+);
+
+const truthBoundaryStart = workflow.indexOf('      - name: Assert V3 independence truth boundary and write immutable summary');
+const truthBoundaryEnd = workflow.indexOf('      - name: Upload immutable V3 independence evidence');
+assert.ok(truthBoundaryStart >= 0 && truthBoundaryEnd > truthBoundaryStart, 'truth-boundary section must be present');
+const truthBoundarySection = workflow.slice(truthBoundaryStart, truthBoundaryEnd);
+assert.ok(
+  truthBoundarySection.includes("import { PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1 as phase2Policy } from './market-intelligence-sidecar/src/public-forward-liquidity-multi-lane-policy-v1.mjs';"),
+  'truth-boundary step must import Phase 2 policy before validating its digests',
+);
+
 test('V3 independence workflow contract is hardcode-free, frozen-split-bound and fail-closed', () => {
   assert.equal(true, true);
 });
