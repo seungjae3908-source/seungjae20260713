@@ -1,0 +1,55 @@
+name: Market Prediction Lab Main Required CI Bridge
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - market-prediction-lab/**
+      - .github/workflows/market-prediction-lab-main-required-ci-bridge.yml
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: market-prediction-lab-main-required-ci-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch-required-ci:
+    name: Dispatch Required CI for exact main SHA
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Dispatch Application CI for exact main SHA
+        uses: actions/github-script@v7
+        with:
+          script: |
+            if (context.ref !== 'refs/heads/main') {
+              core.setFailed(`MAIN_REF_REQUIRED:${context.ref}`);
+              return;
+            }
+            const targetSha = String(context.sha || '').trim().toLowerCase();
+            if (!/^[0-9a-f]{40}$/.test(targetSha)) {
+              core.setFailed('EXACT_MAIN_SHA_REQUIRED');
+              return;
+            }
+            const current = await github.rest.repos.getBranch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              branch: 'main',
+            });
+            const currentMainSha = String(current.data.commit.sha || '').trim().toLowerCase();
+            if (currentMainSha !== targetSha) {
+              core.setFailed(`MAIN_MOVED_BEFORE_DISPATCH:${targetSha}:${currentMainSha}`);
+              return;
+            }
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'futures-public-network-smoke.yml',
+              ref: 'main',
+              inputs: { target_sha: targetSha },
+            });
+            core.notice(`Dispatched Required CI for exact main ${targetSha}`);
