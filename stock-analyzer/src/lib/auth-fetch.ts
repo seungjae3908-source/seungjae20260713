@@ -42,7 +42,7 @@ const MARKET_INFORMATION_REQUEST_TIMEOUT_MS = 6_000;
 let pageReadLifecycleController: AbortController | null = null;
 
 function pageReadLifecycleSignal(): AbortSignal | undefined {
-  if (typeof window === 'undefined') return undefined;
+  if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return undefined;
   if (!pageReadLifecycleController) {
     pageReadLifecycleController = new AbortController();
     window.addEventListener('pagehide', () => {
