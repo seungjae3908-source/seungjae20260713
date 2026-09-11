@@ -43,12 +43,6 @@ function immutableSha(value) {
   return typeof value === "string" && /^[0-9a-f]{40}$/iu.test(value);
 }
 
-function canonicalFrozenCandidateId(value) {
-  return typeof value === "string"
-    && (/^paper-candidate-v1:[0-9a-f]{64}$/u.test(value)
-      || /^phase3-candidate:sha256:[0-9a-f]{64}$/u.test(value));
-}
-
 function digest(value) {
   return typeof value === "string" && /^[0-9a-f]{64}$/iu.test(value);
 }
@@ -193,7 +187,7 @@ function candidateStrategyBlockers(strategyIdentity, runtimeIdentity, requireFro
   }
   if (!requireFrozenCandidateIdentity) return [];
   const blockers = [];
-  if (!canonicalFrozenCandidateId(strategyIdentity?.candidateId ?? "")) {
+  if (!/^paper-candidate-v1:[0-9a-f]{64}$/u.test(strategyIdentity?.candidateId ?? "")) {
     blockers.push("PAPER_CANDIDATE_ID_REQUIRED");
   } else if (strategyIdentity.candidateId !== requireFrozenCandidateIdentity.candidateId) {
     blockers.push("PAPER_CANDIDATE_IDENTITY_MISMATCH");
