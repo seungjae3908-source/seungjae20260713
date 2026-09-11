@@ -40,18 +40,25 @@ import {
 const MARKET_INFORMATION_REQUEST_TIMEOUT_MS = 6_000;
 
 let pageReadLifecycleController: AbortController | null = null;
+let pageReadLifecycleListenersBound = false;
 
 function pageReadLifecycleSignal(): AbortSignal | undefined {
   if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return undefined;
-  if (!pageReadLifecycleController) {
-    pageReadLifecycleController = new AbortController();
+  if (!pageReadLifecycleController) pageReadLifecycleController = new AbortController();
+  if (!pageReadLifecycleListenersBound) {
     window.addEventListener('pagehide', () => {
       if (!pageReadLifecycleController?.signal.aborted) {
         pageReadLifecycleController?.abort(
           new DOMException('Document navigation aborted read request.', 'AbortError'),
         );
       }
-    }, { capture: true, once: true });
+    }, { capture: true });
+    window.addEventListener('pageshow', () => {
+      if (pageReadLifecycleController?.signal.aborted) {
+        pageReadLifecycleController = new AbortController();
+      }
+    }, { capture: true });
+    pageReadLifecycleListenersBound = true;
   }
   return pageReadLifecycleController.signal;
 }
