@@ -88,6 +88,22 @@ function portfolioRequestedTickers(input: RequestInfo | URL): string[] {
   ));
 }
 
+function scannerRequestExpectation(input: RequestInfo | URL): {
+  selected: string[];
+  market?: string;
+  timeframe?: string;
+} {
+  const url = requestUrl(input);
+  if (!url) return { selected: [] };
+  const selected = (url.searchParams.get('indicators') ?? '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const market = url.searchParams.get('market')?.trim() || undefined;
+  const timeframe = url.searchParams.get('timeframe')?.trim() || undefined;
+  return { selected, market, timeframe };
+}
+
 function jsonResponseFrom(response: Response, payload: unknown): Response {
   const headers = new Headers(response.headers);
   headers.delete('content-length');
@@ -115,6 +131,21 @@ async function validateInvestmentResponse(
   }
 
   const method = requestMethod(input, init);
+  if (path === '/api/market/scan' && method === 'GET') {
+    try {
+      const { validateScannerResponse } = await import('@/lib/scanner-response-guard');
+      const payload = await response.clone().json();
+      const normalized = validateScannerResponse(payload, scannerRequestExpectation(input));
+      return jsonResponseFrom(response, normalized);
+    } catch (error) {
+      if (error instanceof Error
+        && (error.message === 'INVALID_SCAN_RESPONSE' || error.message === 'UNHEALTHY_SCAN_RESPONSE')) {
+        throw error;
+      }
+      throw new Error('INVALID_SCAN_RESPONSE');
+    }
+  }
+
   if (isBackupSuccessResponsePath(path, method)) {
     try {
       await requireBackupSuccessResponse(method, await response.clone().json(), init.body);
