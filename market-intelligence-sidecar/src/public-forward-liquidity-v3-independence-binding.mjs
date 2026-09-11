@@ -19,6 +19,10 @@ import {
   SUCCESSOR_OOS_HORIZON_CONTRACT,
   verifySuccessorOosOutcomeHorizonContract,
 } from './public-forward-liquidity-successor-oos-outcome-horizon.mjs';
+import {
+  PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1,
+  verifyPublicForwardLiquidityMultiLanePolicyV1,
+} from './public-forward-liquidity-multi-lane-policy-v1.mjs';
 
 export const PUBLIC_FORWARD_LIQUIDITY_V3_INDEPENDENT_SPLIT_INDEX_VERSION =
   'public-forward-liquidity-v3-independent-split-index-v1';
@@ -63,6 +67,16 @@ function lineageKey(sourceIdentity, observationId) {
 function addCount(counts, split, side) {
   counts[split] += 1;
   counts[`${split}_${side}`] += 1;
+}
+
+function emptyLaneSplitSideCounts() {
+  return Object.fromEntries(PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.laneRegistry.map(
+    (lane) => [lane.laneId, {
+      TRAIN: { BUY: 0, SELL: 0 },
+      VALIDATION: { BUY: 0, SELL: 0 },
+      OOS: { BUY: 0, SELL: 0 },
+    }],
+  ));
 }
 
 function immutableSplitRanges(splits) {
@@ -144,6 +158,120 @@ function verifySuccessorNativePolicyLineage(lineage, expectedSlot, expectedSplit
   });
 }
 
+function verifySuccessorMultiLaneLineage(lineage, expectedSlot) {
+  const markerFields = [
+    'multiLanePolicyVersion', 'multiLanePolicyDigest', 'laneId',
+    'laneCreditKey', 'laneCreditKeyDigest', 'globalSlotKey', 'globalSlotKeyDigest',
+    'activationBoundaryMs', 'activationSlotIndex', 'activationBoundaryDigest',
+    'activationPostMergeRequiredCiRunId', 'activationPostMergeRequiredCiHeadSha',
+    'activationCurrentMainBinding',
+  ];
+  const marked = markerFields.filter((key) => lineage[key] != null);
+  if (marked.length === 0) return null;
+  if (marked.length !== markerFields.length) throw new Error('PHASE2_SOURCE_LINEAGE_PARTIAL');
+  const policy = PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1;
+  const verdict = verifyPublicForwardLiquidityMultiLanePolicyV1(policy);
+  const lane = policy.laneRegistry.find((item) => item.laneId === lineage.laneId);
+  if (!verdict.valid || !lane
+    || lineage.multiLanePolicyVersion !== policy.policyVersion
+    || lineage.multiLanePolicyDigest !== policy.policyDigest
+    || lineage.laneRegistryDigest !== policy.laneRegistryDigest
+    || lineage.dependencyPolicyDigest !== policy.dependencyPolicyDigest
+    || lineage.balancingPolicyDigest !== policy.balancingPolicyDigest
+    || lineage.approvedCheckpointDigest !== policy.approvedCheckpointDigest
+    || lineage.approvedCheckpointArtifactId
+      !== policy.config.approvedCheckpoint.authoritativeIndexArtifactId
+    || lineage.approvedCheckpointArtifactDigest
+      !== policy.config.approvedCheckpoint.authoritativeIndexArtifactDigest
+    || lineage.scheduleIdentity !== lane.scheduleIdentity
+    || lineage.slotIndex !== expectedSlot
+    || lineage.maxCreditPerLanePerSlot !== 1
+    || lineage.maxTotalCreditPerSlot !== 2
+    || lineage.maxCreditPerDependencyComponent !== 1
+    || lineage.retroactiveMultiLaneCreditAllowed !== false) {
+    throw new Error('PHASE2_SOURCE_LINEAGE_POLICY_INVALID');
+  }
+  const expectedLaneKey = {
+    policyDigest: policy.policyDigest,
+    cohortDigest: lineage.cohortDigest,
+    slotIndex: expectedSlot,
+    laneId: lane.laneId,
+    market: lane.market,
+    provider: lane.provider,
+    symbol: lane.symbol,
+    timeframe: lane.timeframe,
+  };
+  const expectedGlobalKey = {
+    policyDigest: policy.policyDigest,
+    cohortDigest: lineage.cohortDigest,
+    slotIndex: expectedSlot,
+  };
+  if (canonicalJson(lineage.laneCreditKey) !== canonicalJson(expectedLaneKey)
+    || digest(lineage.laneCreditKeyDigest, 'PHASE2_LANE_CREDIT_KEY_DIGEST_INVALID')
+      !== sha256(canonicalJson(expectedLaneKey))
+    || canonicalJson(lineage.globalSlotKey) !== canonicalJson(expectedGlobalKey)
+    || digest(lineage.globalSlotKeyDigest, 'PHASE2_GLOBAL_SLOT_KEY_DIGEST_INVALID')
+      !== sha256(canonicalJson(expectedGlobalKey))
+    || !Number.isInteger(lineage.activationBoundaryMs)
+    || lineage.activationBoundaryMs < 0
+    || !Number.isInteger(lineage.activationSlotIndex)
+    || lineage.activationSlotIndex < 0
+    || expectedSlot < lineage.activationSlotIndex
+    || digest(lineage.activationBoundaryDigest, 'PHASE2_ACTIVATION_BOUNDARY_DIGEST_INVALID').length !== 64) {
+    throw new Error('PHASE2_SOURCE_LINEAGE_CREDIT_KEY_INVALID');
+  }
+  const currentMainBinding = object(
+    lineage.activationCurrentMainBinding,
+    'PHASE2_CURRENT_MAIN_BINDING_REQUIRED',
+  );
+  const currentMainBindingBody = Object.fromEntries(
+    Object.entries(currentMainBinding).filter(([key]) => key !== 'currentMainBindingDigest'),
+  );
+  const activationCiHeadSha = text(
+    lineage.activationPostMergeRequiredCiHeadSha,
+    'PHASE2_ACTIVATION_CI_HEAD_SHA_INVALID',
+  ).toLowerCase();
+  const currentMainSha = text(
+    currentMainBinding.currentMainSha,
+    'PHASE2_CURRENT_MAIN_SHA_INVALID',
+  ).toLowerCase();
+  if (!SHA40.test(activationCiHeadSha) || !SHA40.test(currentMainSha)
+    || !Number.isInteger(lineage.activationPostMergeRequiredCiRunId)
+    || lineage.activationPostMergeRequiredCiRunId <= 0
+    || currentMainBinding.schemaVersion
+      !== 'public-forward-liquidity-multi-lane-current-main-binding-v1'
+    || currentMainBinding.policyDigest !== policy.policyDigest
+    || currentMainBinding.activationBoundaryDigest !== lineage.activationBoundaryDigest
+    || currentMainBinding.activationCiHeadSha !== activationCiHeadSha
+    || currentMainBinding.mergeBaseSha !== activationCiHeadSha
+    || (currentMainSha === activationCiHeadSha
+      && (currentMainBinding.compareStatus !== 'identical'
+        || currentMainBinding.relationship !== 'EXACT_ACTIVATION_CI_HEAD'))
+    || (currentMainSha !== activationCiHeadSha
+      && (currentMainBinding.compareStatus !== 'ahead'
+        || currentMainBinding.relationship !== 'DESCENDANT_OF_ACTIVATION_CI_HEAD'))
+    || digest(
+      currentMainBinding.currentMainBindingDigest,
+      'PHASE2_CURRENT_MAIN_BINDING_DIGEST_INVALID',
+    ) !== sha256(canonicalJson(currentMainBindingBody))) {
+    throw new Error('PHASE2_CURRENT_MAIN_BINDING_INVALID');
+  }
+  return Object.freeze({
+    laneId: lane.laneId,
+    scheduleIdentity: lane.scheduleIdentity,
+    multiLanePolicyDigest: policy.policyDigest,
+    laneCreditKeyDigest: lineage.laneCreditKeyDigest,
+    globalSlotKeyDigest: lineage.globalSlotKeyDigest,
+    activationBoundaryMs: lineage.activationBoundaryMs,
+    activationSlotIndex: lineage.activationSlotIndex,
+    activationBoundaryDigest: lineage.activationBoundaryDigest,
+    activationPostMergeRequiredCiRunId: lineage.activationPostMergeRequiredCiRunId,
+    activationPostMergeRequiredCiHeadSha: activationCiHeadSha,
+    currentMainSha,
+    currentMainBindingDigest: currentMainBinding.currentMainBindingDigest,
+  });
+}
+
 function verifyInventory(inventory) {
   const value = object(inventory, 'V3_INGEST_INVENTORY_REQUIRED');
   if (value.schemaVersion !== 'public-forward-liquidity-authoritative-ingest-inventory-v1'
@@ -166,6 +294,11 @@ function verifyInventory(inventory) {
   integer(value.targetSlotIndex, 'V3_TARGET_SLOT_INDEX_INVALID');
   if (!Number.isInteger(value.genuineScheduledSlotN) || value.genuineScheduledSlotN <= 0) {
     throw new Error('V3_GENUINE_SCHEDULED_SLOT_N_INVALID');
+  }
+  if (value.genuineScheduledLaneReceiptN != null
+    && (!Number.isInteger(value.genuineScheduledLaneReceiptN)
+      || value.genuineScheduledLaneReceiptN < value.genuineScheduledSlotN)) {
+    throw new Error('PHASE2_GENUINE_LANE_RECEIPT_N_INVALID');
   }
   if (!Array.isArray(value.sources) || value.sources.length === 0) throw new Error('V3_INGEST_SOURCES_REQUIRED');
   return value;
@@ -228,6 +361,9 @@ function verifyReceipt(receipt, source, expectedPath, expectedDigest, expectedSl
   const successorNativePolicy = successorLineage
     ? verifySuccessorNativePolicyLineage(lineage, expectedSlot, expectedSplit)
     : null;
+  const multiLane = successorLineage
+    ? verifySuccessorMultiLaneLineage(lineage, expectedSlot)
+    : null;
   const calibrationSlot = legacyLineage
     ? verifyCalibrationV3PolicyLineage(lineage, expectedSlot, expectedSplit)
     : null;
@@ -243,6 +379,9 @@ function verifyReceipt(receipt, source, expectedPath, expectedDigest, expectedSl
   }
   if (lineage.policyDigest !== source.v3PolicyDigest || lineage.cohortDigest !== source.v3CohortDigest) {
     throw new Error('V3_SOURCE_POLICY_COHORT_MISMATCH');
+  }
+  if (multiLane && multiLane.currentMainSha !== value.exactMainSha) {
+    throw new Error('PHASE2_CURRENT_MAIN_RECEIPT_SHA_MISMATCH');
   }
   digest(lineage.captureReceiptDigest, 'V3_SOURCE_CAPTURE_RECEIPT_DIGEST_INVALID');
   const artifactReceiptDigest = digest(
@@ -287,6 +426,7 @@ function verifyReceipt(receipt, source, expectedPath, expectedDigest, expectedSl
       ? SUCCESSOR_SCHEDULE_RELIABILITY_V3
       : CALIBRATION_V3,
     successorNativePolicy,
+    multiLane,
     canonicalSlotKeyDigest: derivedSlotKeyDigest,
   });
 }
@@ -316,6 +456,9 @@ export function buildPublicForwardLiquidityV3IndependentSplitIndex({
   const sourceContractFamilies = new Set();
   const successorNativePolicies = new Map();
   const creditedSlotKeys = new Set();
+  const phase2SlotModes = new Map();
+  const phase2CandidateCountsBySlot = new Map();
+  const phase2ActivationBoundaries = new Map();
   const inventorySourceBindings = new Map();
 
   for (const source of sourceInventory.sources) {
@@ -325,12 +468,23 @@ export function buildPublicForwardLiquidityV3IndependentSplitIndex({
     const digests = exactArray(source.ingestReceiptDigests, 'V3_SOURCE_RECEIPT_DIGESTS_INVALID');
     const slots = exactArray(source.v3SlotIndexes, 'V3_SOURCE_SLOT_INDEXES_INVALID');
     const splits = exactArray(source.v3Splits, 'V3_SOURCE_SPLITS_INVALID');
+    const lanes = source.v3LaneIds == null
+      ? paths.map(() => null)
+      : exactArray(source.v3LaneIds, 'PHASE2_SOURCE_LANE_IDS_INVALID');
+    const creditPolicyDigests = source.v3CreditPolicyDigests == null
+      ? paths.map(() => source.v3PolicyDigest)
+      : exactArray(source.v3CreditPolicyDigests, 'PHASE2_SOURCE_CREDIT_POLICY_DIGESTS_INVALID');
+    const laneCreditKeyDigests = source.v3LaneCreditKeyDigests == null
+      ? paths.map(() => null)
+      : exactArray(source.v3LaneCreditKeyDigests, 'PHASE2_SOURCE_LANE_KEY_DIGESTS_INVALID');
     const runIds = exactArray(source.captureRunIds, 'V3_SOURCE_RUN_IDS_INVALID');
     const artifactIds = exactArray(source.captureArtifactIds, 'V3_SOURCE_ARTIFACT_IDS_INVALID');
     const artifactDigests = exactArray(source.captureArtifactDigests, 'V3_SOURCE_ARTIFACT_DIGESTS_INVALID');
     if (!paths.length || paths.length !== digests.length || paths.length !== slots.length
       || paths.length !== splits.length || paths.length !== runIds.length
-      || paths.length !== artifactIds.length || paths.length !== artifactDigests.length) {
+      || paths.length !== artifactIds.length || paths.length !== artifactDigests.length
+      || paths.length !== lanes.length || paths.length !== creditPolicyDigests.length
+      || paths.length !== laneCreditKeyDigests.length) {
       throw new Error('V3_SOURCE_RECEIPT_VECTOR_LENGTH_MISMATCH');
     }
     policyDigests.add(digest(source.v3PolicyDigest, 'V3_SOURCE_POLICY_DIGEST_INVALID'));
@@ -348,14 +502,54 @@ export function buildPublicForwardLiquidityV3IndependentSplitIndex({
         artifactDigests[index],
         'V3_SOURCE_ARTIFACT_DIGEST_INVALID',
       );
-      const slotCreditKey = `${source.v3PolicyDigest}\u0000${source.v3CohortDigest}\u0000${slotIndex}`;
-      if (creditedSlotKeys.has(slotCreditKey)) throw new Error('V3_DUPLICATE_SLOT_CREDIT_FORBIDDEN');
-      creditedSlotKeys.add(slotCreditKey);
+      const vectorLaneId = lanes[index] == null
+        ? null
+        : text(lanes[index], 'PHASE2_SOURCE_LANE_ID_INVALID');
+      const vectorCreditPolicyDigest = digest(
+        creditPolicyDigests[index],
+        'PHASE2_SOURCE_CREDIT_POLICY_DIGEST_INVALID',
+      );
+      const preliminarySlotCreditKey = vectorLaneId === null
+        ? `${source.v3PolicyDigest}\u0000${source.v3CohortDigest}\u0000${slotIndex}`
+        : `${vectorCreditPolicyDigest}\u0000${source.v3CohortDigest}\u0000${slotIndex}\u0000${vectorLaneId}`;
+      if (creditedSlotKeys.has(preliminarySlotCreditKey)) {
+        throw new Error('V3_DUPLICATE_SLOT_CREDIT_FORBIDDEN');
+      }
+      creditedSlotKeys.add(preliminarySlotCreditKey);
       const receipt = verifyReceipt(byPath.get(path), source, path, expectedDigest, slotIndex, split, {
         expectedRunId,
         expectedArtifactId,
         expectedArtifactDigest,
       });
+      const laneId = receipt.multiLane?.laneId ?? null;
+      if (lanes[index] !== laneId) throw new Error('PHASE2_SOURCE_LANE_VECTOR_MISMATCH');
+      const creditPolicyDigest = receipt.multiLane?.multiLanePolicyDigest ?? source.v3PolicyDigest;
+      if (creditPolicyDigests[index] !== creditPolicyDigest) {
+        throw new Error('PHASE2_SOURCE_CREDIT_POLICY_VECTOR_MISMATCH');
+      }
+      const expectedLaneKeyDigest = receipt.multiLane?.laneCreditKeyDigest ?? null;
+      if (laneCreditKeyDigests[index] !== expectedLaneKeyDigest) {
+        throw new Error('PHASE2_SOURCE_LANE_KEY_VECTOR_MISMATCH');
+      }
+      const slotMode = laneId === null ? 'LEGACY_SINGLE_LANE' : 'PHASE2_MULTI_LANE';
+      const priorMode = phase2SlotModes.get(slotIndex);
+      if (priorMode && priorMode !== slotMode) throw new Error('PHASE2_MIXED_SLOT_POLICY_FORBIDDEN');
+      phase2SlotModes.set(slotIndex, slotMode);
+      const slotCreditKey = laneId === null
+        ? `${source.v3PolicyDigest}\u0000${source.v3CohortDigest}\u0000${slotIndex}`
+        : `${creditPolicyDigest}\u0000${source.v3CohortDigest}\u0000${slotIndex}\u0000${laneId}`;
+      if (slotCreditKey !== preliminarySlotCreditKey) {
+        throw new Error('PHASE2_SOURCE_CREDIT_KEY_VECTOR_MISMATCH');
+      }
+      const nextSlotCandidateN = (phase2CandidateCountsBySlot.get(slotIndex) ?? 0) + 1;
+      if (nextSlotCandidateN > (laneId === null ? 1 : 2)) {
+        throw new Error('PHASE2_GLOBAL_SLOT_CREDIT_CANDIDATE_CAP_EXCEEDED');
+      }
+      phase2CandidateCountsBySlot.set(slotIndex, nextSlotCandidateN);
+      if (receipt.multiLane) {
+        const activationKey = `${receipt.multiLane.activationBoundaryMs}\u0000${receipt.multiLane.activationBoundaryDigest}`;
+        phase2ActivationBoundaries.set(activationKey, receipt.multiLane);
+      }
       sourceContractFamilies.add(receipt.sourceContractFamily);
       if (receipt.successorNativePolicy) {
         successorNativePolicies.set(
@@ -383,6 +577,19 @@ export function buildPublicForwardLiquidityV3IndependentSplitIndex({
           split,
           policyDigest: receipt.lineage.policyDigest,
           cohortDigest: receipt.lineage.cohortDigest,
+          multiLanePolicyDigest: receipt.multiLane?.multiLanePolicyDigest ?? null,
+          laneId,
+          scheduleIdentity: receipt.multiLane?.scheduleIdentity ?? null,
+          laneCreditKeyDigest: receipt.multiLane?.laneCreditKeyDigest ?? null,
+          globalSlotKeyDigest: receipt.multiLane?.globalSlotKeyDigest ?? null,
+          activationBoundaryMs: receipt.multiLane?.activationBoundaryMs ?? null,
+          activationSlotIndex: receipt.multiLane?.activationSlotIndex ?? null,
+          activationBoundaryDigest: receipt.multiLane?.activationBoundaryDigest ?? null,
+          activationPostMergeRequiredCiRunId:
+            receipt.multiLane?.activationPostMergeRequiredCiRunId ?? null,
+          activationPostMergeRequiredCiHeadSha:
+            receipt.multiLane?.activationPostMergeRequiredCiHeadSha ?? null,
+          currentMainBindingDigest: receipt.multiLane?.currentMainBindingDigest ?? null,
           canonicalSlotKeyDigest: receipt.canonicalSlotKeyDigest,
           captureReceiptDigest: receipt.lineage.captureReceiptDigest,
           artifactReceiptDigest: receipt.lineage.artifactReceiptDigest,
@@ -398,6 +605,10 @@ export function buildPublicForwardLiquidityV3IndependentSplitIndex({
     sourceFinalDigests.add(sourceDatasetDigest);
   }
   if (policyDigests.size !== 1 || cohortDigests.size !== 1) throw new Error('V3_MULTI_POLICY_OR_COHORT_FORBIDDEN');
+  if (sourceInventory.genuineScheduledLaneReceiptN != null
+    && sourceInventory.genuineScheduledLaneReceiptN !== creditedReceiptN) {
+    throw new Error('PHASE2_GENUINE_LANE_RECEIPT_N_MISMATCH');
+  }
   if (sourceContractFamilies.size !== 1) throw new Error('V3_MIXED_SOURCE_CONTRACT_FAMILY_FORBIDDEN');
   const sourceContractFamily = [...sourceContractFamilies][0];
   if ((sourceContractFamily === SUCCESSOR_SCHEDULE_RELIABILITY_V3
@@ -444,7 +655,9 @@ export function buildPublicForwardLiquidityV3IndependentSplitIndex({
     VALIDATION: 0, VALIDATION_BUY: 0, VALIDATION_SELL: 0,
     OOS: 0, OOS_BUY: 0, OOS_SELL: 0,
   };
-  const observations = independent.map((item) => {
+  const laneSplitSideCounts = emptyLaneSplitSideCounts();
+  const componentCredits = new Set();
+  const creditCandidates = independent.map((item) => {
     const observationId = text(item?.observationId, 'INDEPENDENT_OBSERVATION_ID_INVALID');
     const boundSourceIdentity = text(item?.sourceIdentity, 'INDEPENDENT_SOURCE_IDENTITY_INVALID');
     const sourceIdentity = boundToInventorySource.get(boundSourceIdentity);
@@ -461,7 +674,16 @@ export function buildPublicForwardLiquidityV3IndependentSplitIndex({
     if (!lineage) throw new Error('INDEPENDENT_OBSERVATION_V3_LINEAGE_MISSING');
     const side = text(item?.observation?.aggressiveSide, 'INDEPENDENT_OBSERVATION_SIDE_INVALID');
     if (!SIDES.has(side)) throw new Error('INDEPENDENT_OBSERVATION_SIDE_INVALID');
-    addCount(counts, lineage.split, side);
+    if ((item.laneId ?? null) !== lineage.laneId) {
+      throw new Error('PHASE2_INDEPENDENCE_LANE_LINEAGE_MISMATCH');
+    }
+    const dependencyComponentId = item?.dependencyComponentId == null && lineage.laneId === null
+      ? `legacy-dependency-component:${observationId}`
+      : text(item?.dependencyComponentId, 'INDEPENDENT_DEPENDENCY_COMPONENT_ID_INVALID');
+    if (componentCredits.has(dependencyComponentId)) {
+      throw new Error('PHASE2_DEPENDENCY_COMPONENT_MULTI_CREDIT_FORBIDDEN');
+    }
+    componentCredits.add(dependencyComponentId);
     return Object.freeze({
       observationId,
       sourceObservationId,
@@ -469,7 +691,11 @@ export function buildPublicForwardLiquidityV3IndependentSplitIndex({
       ingestSourceIdentity: sourceIdentity,
       eventIdentity: item.eventIdentity,
       sourceFrameIdentity: item.sourceFrameIdentity,
-      eventTimestampMs: item.observation?.eventTimestampMs ?? null,
+      dependencyComponentId,
+      eventTimestampMs: integer(
+        item.observation?.eventTimestampMs,
+        'INDEPENDENT_OBSERVATION_TIMESTAMP_INVALID',
+      ),
       aggressiveSide: side,
       split: lineage.split,
       slotIndex: lineage.slotIndex,
@@ -482,10 +708,119 @@ export function buildPublicForwardLiquidityV3IndependentSplitIndex({
       artifactReceiptDigest: lineage.artifactReceiptDigest,
       policyDigest: lineage.policyDigest,
       cohortDigest: lineage.cohortDigest,
+      multiLanePolicyDigest: lineage.multiLanePolicyDigest,
+      laneId: lineage.laneId,
+      scheduleIdentity: lineage.scheduleIdentity,
+      laneCreditKeyDigest: lineage.laneCreditKeyDigest,
+      globalSlotKeyDigest: lineage.globalSlotKeyDigest,
+      activationPostMergeRequiredCiRunId: lineage.activationPostMergeRequiredCiRunId,
+      activationPostMergeRequiredCiHeadSha: lineage.activationPostMergeRequiredCiHeadSha,
+      activationSlotIndex: lineage.activationSlotIndex,
+      currentMainBindingDigest: lineage.currentMainBindingDigest,
+      scopeCell: lineage.laneId === null ? null : Object.freeze({
+        policyDigest: lineage.multiLanePolicyDigest,
+        cohortDigest: lineage.cohortDigest,
+        split: lineage.split,
+        laneId: lineage.laneId,
+        market: item.observation?.market,
+        provider: item.observation?.publicDataSource,
+        symbol: item.observation?.symbol,
+        side,
+      }),
     });
   });
 
-  if (counts.TRAIN + counts.VALIDATION + counts.OOS !== independent.length) throw new Error('V3_SPLIT_COUNT_MISMATCH');
+  if (phase2ActivationBoundaries.size > 1) {
+    throw new Error('PHASE2_MULTIPLE_ACTIVATION_BOUNDARIES_FORBIDDEN');
+  }
+  const phase2Activation = phase2ActivationBoundaries.size === 1
+    ? [...phase2ActivationBoundaries.values()][0]
+    : null;
+  if (phase2Activation) {
+    for (const observation of creditCandidates) {
+      if (observation.laneId === null && observation.slotIndex >= phase2Activation.activationSlotIndex) {
+        throw new Error('PHASE2_POST_BOUNDARY_LEGACY_CREDIT_FORBIDDEN');
+      }
+      if (observation.laneId !== null
+        && (observation.slotIndex < phase2Activation.activationSlotIndex
+          || observation.eventTimestampMs < phase2Activation.activationBoundaryMs)) {
+        throw new Error('PHASE2_RETROACTIVE_LANE_CREDIT_FORBIDDEN');
+      }
+    }
+  }
+  const laneSlotCredits = new Set();
+  const totalCreditsBySlot = new Map();
+  const capRejections = [];
+  const observations = [...creditCandidates]
+    .sort((left, right) => left.eventTimestampMs - right.eventTimestampMs
+      || String(left.laneId ?? '').localeCompare(String(right.laneId ?? ''))
+      || left.sourceIdentity.localeCompare(right.sourceIdentity)
+      || left.observationId.localeCompare(right.observationId))
+    .filter((observation) => {
+      if (observation.laneId === null) return true;
+      const laneSlotKey = `${observation.multiLanePolicyDigest}\u0000${observation.cohortDigest}\u0000${observation.slotIndex}\u0000${observation.laneId}`;
+      const globalSlotKey = `${observation.multiLanePolicyDigest}\u0000${observation.cohortDigest}\u0000${observation.slotIndex}`;
+      let reason = null;
+      if (laneSlotCredits.has(laneSlotKey)) reason = 'PHASE2_LANE_SLOT_CREDIT_CAP_REACHED';
+      else if ((totalCreditsBySlot.get(globalSlotKey) ?? 0) >= 2) {
+        reason = 'PHASE2_GLOBAL_SLOT_CREDIT_CAP_REACHED';
+      }
+      if (reason !== null) {
+        capRejections.push(Object.freeze({
+          observationId: observation.observationId,
+          dependencyComponentId: observation.dependencyComponentId,
+          laneId: observation.laneId,
+          slotIndex: observation.slotIndex,
+          eventTimestampMs: observation.eventTimestampMs,
+          reason,
+          effectiveIndependentCredit: 0,
+        }));
+        return false;
+      }
+      laneSlotCredits.add(laneSlotKey);
+      totalCreditsBySlot.set(globalSlotKey, (totalCreditsBySlot.get(globalSlotKey) ?? 0) + 1);
+      return true;
+    });
+  for (const observation of observations) {
+    addCount(counts, observation.split, observation.aggressiveSide);
+    if (observation.laneId !== null) {
+      laneSplitSideCounts[observation.laneId][observation.split][observation.aggressiveSide] += 1;
+    }
+  }
+  const preCutoverObservations = phase2Activation
+    ? observations.filter((observation) => observation.slotIndex < phase2Activation.activationSlotIndex)
+    : [];
+  const preCutoverCounts = { TRAIN: 0, VALIDATION: 0, OOS: 0, BUY: 0, SELL: 0 };
+  for (const observation of preCutoverObservations) {
+    preCutoverCounts[observation.split] += 1;
+    preCutoverCounts[observation.aggressiveSide] += 1;
+  }
+  const preCutoverIndexFreezeBody = phase2Activation
+    ? Object.freeze({
+        activationBoundaryMs: phase2Activation.activationBoundaryMs,
+        activationBoundaryDigest: phase2Activation.activationBoundaryDigest,
+        approvedCheckpointDigest: PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.approvedCheckpointDigest,
+        effectiveIndependentN: preCutoverObservations.length,
+        counts: Object.freeze(preCutoverCounts),
+        observationIdentityDigest: sha256(canonicalJson(preCutoverObservations.map((observation) => ({
+          observationId: observation.observationId,
+          eventTimestampMs: observation.eventTimestampMs,
+          split: observation.split,
+          aggressiveSide: observation.aggressiveSide,
+          policyDigest: observation.policyDigest,
+          cohortDigest: observation.cohortDigest,
+        })))),
+        retroactiveMultiLaneCreditAllowed: false,
+      })
+    : null;
+  const preCutoverIndexFreeze = preCutoverIndexFreezeBody
+    ? Object.freeze({
+        ...preCutoverIndexFreezeBody,
+        preCutoverIndexDigest: sha256(canonicalJson(preCutoverIndexFreezeBody)),
+      })
+    : null;
+
+  if (counts.TRAIN + counts.VALIDATION + counts.OOS !== observations.length) throw new Error('V3_SPLIT_COUNT_MISMATCH');
   const body = Object.freeze({
     schemaVersion: PUBLIC_FORWARD_LIQUIDITY_V3_INDEPENDENT_SPLIT_INDEX_VERSION,
     kind: 'PUBLIC_FORWARD_LIQUIDITY_V3_FROZEN_SPLIT_PROPAGATION',
@@ -501,11 +836,51 @@ export function buildPublicForwardLiquidityV3IndependentSplitIndex({
     cohortDigest: [...cohortDigests][0],
     targetSlotIndex: sourceInventory.targetSlotIndex,
     genuineScheduledSlotN: sourceInventory.genuineScheduledSlotN,
+    genuineScheduledLaneReceiptN:
+      sourceInventory.genuineScheduledLaneReceiptN ?? creditedReceiptN,
     creditedReceiptN,
     sourceDatasetDigests: Object.freeze([...sourceFinalDigests].sort()),
-    effectiveIndependentN: independent.length,
+    preCapIndependentN: creditCandidates.length,
+    effectiveIndependentN: observations.length,
     counts: Object.freeze(counts),
     observations: Object.freeze(observations),
+    capRejections: Object.freeze(capRejections),
+    laneSlotCapRejectedN: capRejections
+      .filter((value) => value.reason === 'PHASE2_LANE_SLOT_CREDIT_CAP_REACHED').length,
+    globalSlotCapRejectedN: capRejections
+      .filter((value) => value.reason === 'PHASE2_GLOBAL_SLOT_CREDIT_CAP_REACHED').length,
+    multiLanePolicyVersion: phase2Activation
+      ? PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.policyVersion
+      : null,
+    multiLanePolicyDigest: phase2Activation
+      ? PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.policyDigest
+      : null,
+    laneRegistryDigest: phase2Activation
+      ? PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.laneRegistryDigest
+      : null,
+    dependencyPolicyDigest: phase2Activation
+      ? PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.dependencyPolicyDigest
+      : null,
+    balancingPolicyDigest: phase2Activation
+      ? PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.balancingPolicyDigest
+      : null,
+    approvedCheckpointDigest: PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.approvedCheckpointDigest,
+    approvedCheckpointArtifactId:
+      PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.config.approvedCheckpoint.authoritativeIndexArtifactId,
+    approvedCheckpointArtifactDigest:
+      PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1.config.approvedCheckpoint.authoritativeIndexArtifactDigest,
+    preCutoverIndexFreeze,
+    laneSplitSideCounts: Object.freeze(laneSplitSideCounts),
+    scopeCells: Object.freeze(observations.filter((value) => value.scopeCell !== null)
+      .map((value) => Object.freeze({
+        ...value.scopeCell,
+        scopeCellDigest: sha256(canonicalJson(value.scopeCell)),
+      }))),
+    maxCreditPerLanePerSlot: 1,
+    maxTotalCreditPerSlot: 2,
+    maxCreditPerDependencyComponent: 1,
+    utc27AdditionalIndependentCredit: 0,
+    retroactiveMultiLaneCreditAllowed: false,
     duplicateObservationLineageN,
     frozenSplitSource: 'V3_SCHEDULED_SLOT_RECEIPT_ONLY',
     retrospectiveSplitSelection: false,
