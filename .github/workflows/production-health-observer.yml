@@ -52,6 +52,10 @@ jobs:
           if (!workflow.includes("github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'")) throw new Error('live observer event gate missing');
           if (!workflow.includes('PRODUCTION_BASE_URL: https://lsj119.com')) throw new Error('official Production target missing');
           if (!workflow.includes('scripts/agent_hub_rollover_v2.py rollover')) throw new Error('active Hub rollover resolver missing');
+          if (!workflow.includes('Hub reached processor comment window before a safe rollover')) throw new Error('processor-window overflow fallback missing');
+          if (!workflow.includes('routing_status=processor_window_overflow')) throw new Error('overflow routing status missing');
+          if (!workflow.includes('incident_writable=false')) throw new Error('overflow Hub mutation guard missing');
+          if (!workflow.includes("steps.routing.outputs.incident_writable == 'true'")) throw new Error('incident mutation gate missing');
           if (!workflow.includes('<!-- agent-executor-report -->')) throw new Error('trusted scheduled report attestation missing');
           if (!config.includes("trace: 'off'") || !config.includes("screenshot: 'off'") || !config.includes("video: 'off'")) throw new Error('raw browser retention must remain disabled');
           if (!spec.includes('installProductionReadOnlyPolicy')) throw new Error('read-only browser policy missing');
@@ -89,7 +93,27 @@ jobs:
         id: routing
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python3 scripts/agent_hub_rollover_v2.py rollover
+        run: |
+          set -Eeuo pipefail
+          set +e
+          python3 scripts/agent_hub_rollover_v2.py rollover >"$RUNNER_TEMP/hub-routing.out" 2>"$RUNNER_TEMP/hub-routing.err"
+          routing_exit=$?
+          set -e
+          cat "$RUNNER_TEMP/hub-routing.out"
+          if [ "$routing_exit" -eq 0 ]; then
+            echo 'routing_status=normal' >> "$GITHUB_OUTPUT"
+            echo 'incident_writable=true' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cat "$RUNNER_TEMP/hub-routing.err" >&2
+          if grep -Fq 'Hub reached processor comment window before a safe rollover' "$RUNNER_TEMP/hub-routing.err"; then
+            python3 scripts/agent_hub_rollover_v2.py resolve
+            echo 'routing_status=processor_window_overflow' >> "$GITHUB_OUTPUT"
+            echo 'incident_writable=false' >> "$GITHUB_OUTPUT"
+            echo '::warning::Central Hub exceeded the normal processor window. Production observation will continue read-only, but Hub incident mutation is disabled until bounded overflow recovery completes.'
+            exit 0
+          fi
+          exit "$routing_exit"
 
       - uses: actions/setup-node@v4
         with:
@@ -241,7 +265,7 @@ jobs:
           PY
 
       - name: Create or escalate one deduplicated Central Hub incident
-        if: steps.aggregate.outputs.failure_count != '0'
+        if: steps.aggregate.outputs.failure_count != '0' && steps.routing.outputs.incident_writable == 'true'
         id: incident
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -345,6 +369,8 @@ jobs:
             echo '## Production Health Observer'
             echo
             echo "- active Central Hub: #${{ steps.routing.outputs.active_issue }}"
+            echo "- Hub routing status: ${{ steps.routing.outputs.routing_status || 'unknown' }}"
+            echo "- Hub incident writable: ${{ steps.routing.outputs.incident_writable || 'unknown' }}"
             echo "- observer mode: ${{ steps.mode.outputs.mode || 'unknown' }}"
             echo "- failure count: ${{ steps.aggregate.outputs.failure_count || 'unknown' }}"
             echo "- fingerprint: ${{ steps.aggregate.outputs.fingerprint || 'none' }}"
@@ -359,5 +385,9 @@ jobs:
       - name: Fail visibly after evidence and Hub handoff
         if: steps.aggregate.outputs.failure_count != '0'
         run: |
-          echo 'Production Health Observer found a reproducible failure; evidence and bounded Central Hub incident were recorded.' >&2
+          if [ "${{ steps.routing.outputs.incident_writable }}" = true ]; then
+            echo 'Production Health Observer found a reproducible failure; evidence and bounded Central Hub incident were recorded.' >&2
+          else
+            echo 'Production Health Observer found a reproducible failure; structured evidence was retained but Central Hub mutation is fail-closed until bounded processor-window recovery completes.' >&2
+          fi
           exit 1
