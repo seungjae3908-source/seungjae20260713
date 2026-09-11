@@ -116,6 +116,8 @@ function safeRelativePath(value) {
 
 function eventOrder(left, right) {
   return left.eventTimestampMs - right.eventTimestampMs
+    || String(left.laneId ?? '').localeCompare(String(right.laneId ?? ''))
+    || String(left.sourceIdentity ?? '').localeCompare(String(right.sourceIdentity ?? ''))
     || left.eventIdentity.localeCompare(right.eventIdentity)
     || left.observationId.localeCompare(right.observationId);
 }
@@ -161,6 +163,14 @@ function normalizeObservation(observation, sourceRecord = null) {
   if (!['BUY', 'SELL'].includes(aggressiveSide)) throw new Error('INDEPENDENCE_SIDE_INVALID');
   const sourceObservationId = text(source.observationId, 'INDEPENDENCE_OBSERVATION_ID_INVALID');
   const sourceIdentity = sourceRecord?.sourceIdentity ?? null;
+  const producerIdentity = sourceRecord?.collectorImplementationBlobSha
+    ? `collector-blob:${sourceRecord.collectorImplementationBlobSha}`
+    : `collector-sha:${sourceRecord?.collectorCodeSha ?? source.collectorCodeSha}`;
+  const creditScope = sourceRecord?.creditScopeByObservationId?.get(sourceObservationId) ?? null;
+  const coincidentLaneScopes = sourceRecord?.creditScopesByObservationId?.get(sourceObservationId)
+    ?? (creditScope ? [creditScope] : []);
+  const laneId = creditScope?.laneId ?? null;
+  const laneSlotIndex = creditScope?.slotIndex ?? null;
   const observationId = sourceIdentity
     ? `bound-observation:${digest({ sourceIdentity, sourceObservationId })}`
     : sourceObservationId;
@@ -211,6 +221,7 @@ function normalizeObservation(observation, sourceRecord = null) {
     observationId,
     sourceObservationId,
     sourceIdentity,
+    producerIdentity,
     sourceDatasetDigest: sourceRecord?.datasetDigest ?? null,
     sourceCollectorCodeSha: sourceRecord?.collectorCodeSha ?? source.collectorCodeSha,
     sourceDigest,
@@ -219,6 +230,13 @@ function normalizeObservation(observation, sourceRecord = null) {
     sourceFrameIdentity,
     eventWindowIdentity,
     publicExecutionId,
+    laneId,
+    laneSlotIndex,
+    laneScheduleIdentity: creditScope?.scheduleIdentity ?? null,
+    multiLanePolicyDigest: creditScope?.multiLanePolicyDigest ?? null,
+    coincidentLaneScopes: Object.freeze([...coincidentLaneScopes]),
+    timeframe: 'EVENT_WINDOW',
+    provider,
     market,
     symbol,
     aggressiveSide,
@@ -227,6 +245,8 @@ function normalizeObservation(observation, sourceRecord = null) {
     sourceFrameEndMs: Math.max(eventTimestampMs, ...postEventTimestampsMs),
     preEventBookDigest,
     rawTradeFrameDigest,
+    postEventTimestampsMs: Object.freeze(postEventTimestampsMs),
+    postEventBookDigests: Object.freeze(postEventBookDigests),
     normalizedDigest: digest(source),
   });
 }
@@ -262,6 +282,9 @@ function correlationReasons(left, right) {
   if (left.sourceFrameIdentity === right.sourceFrameIdentity) reasons.push('SAME_SOURCE_FRAME');
   if (left.preEventBookDigest === right.preEventBookDigest) reasons.push('SAME_PRE_EVENT_BOOK');
   if (left.rawTradeFrameDigest === right.rawTradeFrameDigest) reasons.push('SAME_PUBLIC_TRADE_FRAME');
+  if (left.postEventBookDigests.some((value) => right.postEventBookDigests.includes(value))) {
+    reasons.push('SAME_POST_EVENT_BOOK');
+  }
   if (left.eventWindowIdentity === right.eventWindowIdentity) reasons.push('SAME_EVENT_WINDOW');
   if (left.sourceDigest === right.sourceDigest) reasons.push('SAME_SOURCE_DIGEST');
   if (left.normalizedDigest === right.normalizedDigest) reasons.push('SAME_NORMALIZED_OBSERVATION');
@@ -272,6 +295,59 @@ function correlationReasons(left, right) {
     reasons.push('OVERLAPPING_OBSERVATION_WINDOW');
   }
   return reasons;
+}
+
+function phase2PairEligible(left, right) {
+  return left.laneId && right.laneId
+    && left.laneId !== right.laneId
+    && left.laneSlotIndex === right.laneSlotIndex
+    && left.multiLanePolicyDigest === right.multiLanePolicyDigest;
+}
+
+function buildCrossLanePairAssessment(left, right, reasons) {
+  const canonicalReasons = Object.freeze([...new Set(reasons)].sort());
+  const realizedEvidence = (value) => Object.freeze({
+    laneId: value.laneId,
+    producerIdentity: value.producerIdentity,
+    provider: value.provider,
+    market: value.market,
+    symbol: value.symbol,
+    timeframe: value.timeframe,
+    actualObservationTimeMs: value.eventTimestampMs,
+    preEventBookTimestampMs: value.preEventBookTimestampMs,
+    preEventBookDigest: value.preEventBookDigest,
+    rawPublicTradeFrameDigest: value.rawTradeFrameDigest,
+    normalizedObservationDigest: value.normalizedDigest,
+    postEventBookTimestampsMs: value.postEventTimestampsMs,
+    postEventBookDigests: value.postEventBookDigests,
+    eventWindowIdentity: value.eventWindowIdentity,
+    sourceFrameIdentity: value.sourceFrameIdentity,
+    publicEventIdentity: value.eventIdentity,
+  });
+  return Object.freeze({
+    pair: `${left.laneId}<->${right.laneId}`,
+    slotIndex: left.laneSlotIndex,
+    leftObservationId: left.observationId,
+    rightObservationId: right.observationId,
+    sameSourceFrame: left.sourceFrameIdentity === right.sourceFrameIdentity,
+    sameEventWindow: left.eventWindowIdentity === right.eventWindowIdentity,
+    sameBookFrame: left.preEventBookDigest === right.preEventBookDigest
+      || left.postEventBookDigests.some((value) => right.postEventBookDigests.includes(value)),
+    sameTradeFrame: left.rawTradeFrameDigest === right.rawTradeFrameDigest,
+    overlappingCausalMarketEvent: canonicalReasons.includes('OVERLAPPING_OBSERVATION_WINDOW')
+      || canonicalReasons.includes('SAME_PUBLIC_EVENT_IDENTITY'),
+    sameSymbol: left.symbol === right.symbol,
+    sameTimeframe: left.timeframe === right.timeframe,
+    sameProvider: left.provider === right.provider,
+    sameProducer: left.producerIdentity === right.producerIdentity,
+    sameProducerRunIdentity: left.sourceIdentity === right.sourceIdentity,
+    realizedEvidence: Object.freeze({ left: realizedEvidence(left), right: realizedEvidence(right) }),
+    correlationReasons: canonicalReasons,
+    independenceStatus: canonicalReasons.length === 0 ? 'PROVEN' : 'DEPENDENT',
+    why: canonicalReasons.length === 0
+      ? 'NO_CANONICAL_DEPENDENCY_REASON_ON_COMPLETE_REALIZED_EVIDENCE'
+      : canonicalReasons.join(','),
+  });
 }
 
 function blocked(blockers, audit = null) {
@@ -288,8 +364,49 @@ function classifyNormalized(normalized, context) {
   const canonical = [];
   const duplicateEvents = [];
   const identityCollisions = [];
+  const crossLanePairAssessments = [];
+  for (const value of normalized) {
+    for (let leftIndex = 0; leftIndex < value.coincidentLaneScopes.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < value.coincidentLaneScopes.length; rightIndex += 1) {
+        const leftScope = value.coincidentLaneScopes[leftIndex];
+        const rightScope = value.coincidentLaneScopes[rightIndex];
+        const left = Object.freeze({
+          ...value,
+          laneId: leftScope.laneId,
+          laneSlotIndex: leftScope.slotIndex,
+          laneScheduleIdentity: leftScope.scheduleIdentity,
+          multiLanePolicyDigest: leftScope.multiLanePolicyDigest,
+        });
+        const right = Object.freeze({
+          ...value,
+          laneId: rightScope.laneId,
+          laneSlotIndex: rightScope.slotIndex,
+          laneScheduleIdentity: rightScope.scheduleIdentity,
+          multiLanePolicyDigest: rightScope.multiLanePolicyDigest,
+        });
+        if (phase2PairEligible(left, right)) {
+          crossLanePairAssessments.push(buildCrossLanePairAssessment(
+            left,
+            right,
+            ['SAME_PUBLIC_EVENT_IDENTITY', ...correlationReasons(left, right)],
+          ));
+        }
+      }
+    }
+  }
   for (const [eventIdentity, values] of [...eventGroups.entries()].sort(([left], [right]) => left.localeCompare(right))) {
     values.sort(eventOrder);
+    for (let leftIndex = 0; leftIndex < values.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < values.length; rightIndex += 1) {
+        if (phase2PairEligible(values[leftIndex], values[rightIndex])) {
+          crossLanePairAssessments.push(buildCrossLanePairAssessment(
+            values[leftIndex],
+            values[rightIndex],
+            ['SAME_PUBLIC_EVENT_IDENTITY', ...correlationReasons(values[leftIndex], values[rightIndex])],
+          ));
+        }
+      }
+    }
     const payloadGroups = groupBy(values, (value) => value.eventPayloadDigest);
     if (payloadGroups.size > 1) {
       identityCollisions.push(Object.freeze({
@@ -308,6 +425,8 @@ function classifyNormalized(normalized, context) {
         sourceIdentity: duplicate.sourceIdentity,
         representativeObservationId: values[0].observationId,
         representativeSourceIdentity: values[0].sourceIdentity,
+        laneId: duplicate.laneId,
+        representativeLaneId: values[0].laneId,
         eventIdentity,
         crossBatch: Boolean(
           duplicate.sourceIdentity
@@ -325,6 +444,11 @@ function classifyNormalized(normalized, context) {
   for (let leftIndex = 0; leftIndex < canonical.length; leftIndex += 1) {
     for (let rightIndex = leftIndex + 1; rightIndex < canonical.length; rightIndex += 1) {
       const reasons = correlationReasons(canonical[leftIndex], canonical[rightIndex]);
+      const left = canonical[leftIndex];
+      const right = canonical[rightIndex];
+      if (phase2PairEligible(left, right)) {
+        crossLanePairAssessments.push(buildCrossLanePairAssessment(left, right, reasons));
+      }
       if (reasons.length === 0) continue;
       sets.union(leftIndex, rightIndex);
       for (const reason of reasons) {
@@ -342,9 +466,32 @@ function classifyNormalized(normalized, context) {
   });
   const independent = [];
   const dependent = [];
+  const dependencyComponents = [];
   for (const values of components.values()) {
     values.sort(eventOrder);
-    independent.push(values[0]);
+    const componentId = `dependency-component:${digest(values.map((value) => ({
+      observationId: value.observationId,
+      laneId: value.laneId,
+      producerIdentity: value.producerIdentity,
+      coincidentLaneIds: value.coincidentLaneScopes.map((scope) => scope.laneId).sort(),
+      eventIdentity: value.eventIdentity,
+      sourceFrameIdentity: value.sourceFrameIdentity,
+    })))}`;
+    const representative = Object.freeze({ ...values[0], dependencyComponentId: componentId });
+    independent.push(representative);
+    dependencyComponents.push(Object.freeze({
+      dependencyComponentId: componentId,
+      representativeObservationId: representative.observationId,
+      representativeLaneId: representative.laneId,
+      representativeEventTimestampMs: representative.eventTimestampMs,
+      memberObservationIds: Object.freeze(values.map((value) => value.observationId)),
+      memberLaneIds: Object.freeze([...new Set(values.flatMap((value) => [
+        value.laneId,
+        ...value.coincidentLaneScopes.map((scope) => scope.laneId),
+      ]).filter(Boolean))].sort()),
+      maximumEffectiveIndependentCredit: 1,
+      policyCapAppliedDownstream: true,
+    }));
     for (const value of values.slice(1)) {
       dependent.push(Object.freeze({
         observationId: value.observationId,
@@ -352,6 +499,9 @@ function classifyNormalized(normalized, context) {
         sourceIdentity: value.sourceIdentity,
         representativeObservationId: values[0].observationId,
         representativeSourceIdentity: values[0].sourceIdentity,
+        representativeLaneId: values[0].laneId,
+        dependencyComponentId: componentId,
+        laneId: value.laneId,
         eventIdentity: value.eventIdentity,
         reasons: Object.freeze([...pairReasons.get(value.observationId)].sort()),
       }));
@@ -359,6 +509,17 @@ function classifyNormalized(normalized, context) {
   }
   independent.sort(eventOrder);
   dependent.sort((left, right) => left.observationId.localeCompare(right.observationId));
+  const componentByObservationId = new Map(dependencyComponents.flatMap((component) =>
+    component.memberObservationIds.map((observationId) => [
+      observationId,
+      component.dependencyComponentId,
+    ])));
+  for (const duplicate of duplicateEvents) {
+    componentByObservationId.set(
+      duplicate.observationId,
+      componentByObservationId.get(duplicate.representativeObservationId),
+    );
+  }
 
   const sharedSourceFrameN = [...groupBy(canonical, (value) => value.sourceFrameIdentity).values()]
     .filter((values) => values.length > 1).length;
@@ -394,12 +555,33 @@ function classifyNormalized(normalized, context) {
       sourceIdentity: value.sourceIdentity,
       eventIdentity: value.eventIdentity,
       sourceFrameIdentity: value.sourceFrameIdentity,
+      laneId: value.laneId,
+      laneSlotIndex: value.laneSlotIndex,
+      dependencyComponentId: value.dependencyComponentId,
     }))),
+    crossLanePairAssessments: Object.freeze(crossLanePairAssessments.map((value) => {
+      const leftDependencyComponentId = componentByObservationId.get(value.leftObservationId);
+      const rightDependencyComponentId = componentByObservationId.get(value.rightObservationId);
+      return Object.freeze({
+        ...value,
+        leftDependencyComponentId,
+        rightDependencyComponentId,
+        sameDependencyComponent: leftDependencyComponentId === rightDependencyComponentId,
+      });
+    }).sort((left, right) => left.slotIndex - right.slotIndex
+      || left.leftObservationId.localeCompare(right.leftObservationId)
+      || left.rightObservationId.localeCompare(right.rightObservationId))),
+    dependencyComponents: Object.freeze(dependencyComponents.sort(
+      (left, right) => left.representativeEventTimestampMs - right.representativeEventTimestampMs
+        || String(left.representativeLaneId ?? '').localeCompare(String(right.representativeLaneId ?? ''))
+        || left.representativeObservationId.localeCompare(right.representativeObservationId),
+    )),
     duplicateEvents: Object.freeze(duplicateEvents),
     dependentRejections: Object.freeze(dependent),
     identityCollisions: Object.freeze(identityCollisions),
     rawAcceptedNDescriptiveOnly: true,
     effectiveIndependentSampleCreditOwnedHere: true,
+    downstreamFrozenPolicyCapsStillRequired: true,
     independenceFilteredBeforeSplit: true,
     oosValidationComplete: false,
     calibrationArtifactProduced: false,
@@ -458,6 +640,46 @@ function validateBoundSource(input, producerCodeSha) {
   const ingestReceipts = Array.isArray(source.ingestReceipts)
     ? source.ingestReceipts
     : [object(source.ingestReceipt, 'UPSTREAM_INGEST_RECEIPT_INVALID')];
+  const creditCandidatesByObservationId = new Map();
+  for (const ingestReceipt of ingestReceipts) {
+    const ids = Array.isArray(ingestReceipt?.batchObservationIds)
+      ? ingestReceipt.batchObservationIds
+      : [];
+    const lineage = ingestReceipt?.sourceV3Lineage;
+    const candidate = lineage?.laneId
+      ? Object.freeze({
+          laneId: text(lineage.laneId, 'PHASE2_SOURCE_LANE_ID_INVALID'),
+          slotIndex: nonNegativeInteger(lineage.slotIndex, 'PHASE2_SOURCE_SLOT_INDEX_INVALID'),
+          scheduleIdentity: text(lineage.scheduleIdentity, 'PHASE2_SOURCE_SCHEDULE_IDENTITY_INVALID'),
+          multiLanePolicyDigest: exactDigest(
+            lineage.multiLanePolicyDigest,
+            'PHASE2_SOURCE_POLICY_DIGEST_INVALID',
+          ),
+        })
+      : null;
+    for (const id of ids) {
+      const observationId = text(id, 'UPSTREAM_BATCH_OBSERVATION_ID_INVALID');
+      const values = creditCandidatesByObservationId.get(observationId) ?? [];
+      values.push(candidate);
+      creditCandidatesByObservationId.set(observationId, values);
+    }
+  }
+  const creditScopeByObservationId = new Map();
+  const creditScopesByObservationId = new Map();
+  for (const [observationId, candidates] of creditCandidatesByObservationId) {
+    if (candidates.some((value) => value === null)) {
+      creditScopeByObservationId.set(observationId, null);
+      creditScopesByObservationId.set(observationId, Object.freeze([]));
+      continue;
+    }
+    const uniqueCandidates = [...new Map(candidates.map((value) => [
+      canonicalJson(value),
+      value,
+    ])).values()].sort((left, right) => left.slotIndex - right.slotIndex
+      || left.laneId.localeCompare(right.laneId));
+    creditScopeByObservationId.set(observationId, uniqueCandidates[0] ?? null);
+    creditScopesByObservationId.set(observationId, Object.freeze(uniqueCandidates));
+  }
   const datasetRelativePath = safeRelativePath(source.datasetRelativePath);
   const receiptChain = verifyPublicForwardLiquidityIngestReceiptChain({
     dataset,
@@ -608,6 +830,8 @@ function validateBoundSource(input, producerCodeSha) {
   return Object.freeze({
     ...sourceIdentityBody,
     sourceIdentity: `bound-source:${digest(sourceIdentityBody)}`,
+    creditScopeByObservationId,
+    creditScopesByObservationId,
     dataset,
   });
 }
@@ -732,6 +956,10 @@ export function buildPublicForwardLiquidityIndependentSplitSource({ sources, pro
       sourceIdentity: normalized.sourceIdentity,
       eventIdentity: normalized.eventIdentity,
       sourceFrameIdentity: normalized.sourceFrameIdentity,
+      laneId: normalized.laneId,
+      laneSlotIndex: normalized.laneSlotIndex,
+      dependencyComponentId: classified.audit.independentObservationRefs
+        .find((value) => value.observationId === normalized.observationId)?.dependencyComponentId ?? null,
       observation,
     }));
   const core = {
