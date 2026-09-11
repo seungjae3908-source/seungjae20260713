@@ -38,6 +38,12 @@ function immutableSha(value) {
   return nonEmpty(value) && /^[0-9a-f]{40}$/iu.test(value);
 }
 
+function canonicalFrozenCandidateId(value) {
+  return typeof value === "string"
+    && (/^paper-candidate-v1:[0-9a-f]{64}$/u.test(value)
+      || /^phase3-candidate:sha256:[0-9a-f]{64}$/u.test(value));
+}
+
 function deepFreeze(value) {
   if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
   for (const child of Object.values(value)) deepFreeze(child);
@@ -237,7 +243,7 @@ function validatePositionIdentity(identity) {
 }
 
 function validateFrozenCandidateIdentity(identity) {
-  if (!/^paper-candidate-v1:[0-9a-f]{64}$/u.test(identity?.candidateId ?? "")) {
+  if (!canonicalFrozenCandidateId(identity?.candidateId ?? "")) {
     throw new Error("PAPER_POSITION_CANDIDATE_ID_REQUIRED");
   }
   if (!nonEmpty(identity?.strategyFamily)) throw new Error("PAPER_POSITION_STRATEGY_FAMILY_REQUIRED");
