@@ -37,6 +37,11 @@ import {
   SUCCESSOR_OOS_HORIZON_CONTRACT,
   verifySuccessorOosOutcomeHorizonContract,
 } from './public-forward-liquidity-successor-oos-outcome-horizon.mjs';
+import {
+  PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1,
+  buildPublicForwardLiquidityMultiLaneCurrentMainBinding,
+  verifyPublicForwardLiquidityMultiLanePolicyV1,
+} from './public-forward-liquidity-multi-lane-policy-v1.mjs';
 
 export const PUBLIC_FORWARD_LIQUIDITY_V3_CAPTURE_RECEIPT_VERSION =
   'public-forward-liquidity-capture-receipt-v3';
@@ -332,8 +337,118 @@ function verifySuccessorScheduledIdentity(capture) {
     || capture.orderSubmitted !== false || capture.realOrders !== 0) {
     throw new Error('SUCCESSOR_V3_CAPTURE_TRUTH_BOUNDARY_INVALID');
   }
+  const multiLane = verifyMultiLaneCaptureIdentity(capture, slot);
   verifyCanonicalDigest(capture, 'captureReceiptDigest', 'SUCCESSOR_V3_CAPTURE_RECEIPT_DIGEST_INVALID');
-  return { slot, sourceContractFamily: 'SUCCESSOR_SCHEDULE_RELIABILITY_V3' };
+  return { slot, sourceContractFamily: 'SUCCESSOR_SCHEDULE_RELIABILITY_V3', multiLane };
+}
+
+function verifyMultiLaneCaptureIdentity(capture, slot) {
+  const markerFields = [
+    'multiLanePolicyVersion', 'multiLanePolicyDigest', 'laneId', 'laneCreditKey',
+    'laneCreditKeyDigest', 'globalSlotKey', 'globalSlotKeyDigest', 'multiLaneActivation',
+    'activationCurrentMainBinding',
+  ];
+  const marked = markerFields.filter((key) => capture[key] != null);
+  if (marked.length === 0) return null;
+  if (marked.length !== markerFields.length) throw new Error('PHASE2_CAPTURE_IDENTITY_PARTIAL');
+  const policy = PUBLIC_FORWARD_LIQUIDITY_MULTI_LANE_POLICY_V1;
+  const verdict = verifyPublicForwardLiquidityMultiLanePolicyV1(policy);
+  if (!verdict.valid) throw new Error('PHASE2_POLICY_INVALID');
+  const lane = policy.laneRegistry.find((item) => item.laneId === capture.laneId);
+  if (!lane || lane.scheduleIdentity !== capture.scheduleExpression
+    || capture.scheduleIdentity !== lane.scheduleIdentity
+    || capture.multiLanePolicyVersion !== policy.policyVersion
+    || capture.multiLanePolicyDigest !== policy.policyDigest
+    || capture.laneRegistryDigest !== policy.laneRegistryDigest
+    || capture.dependencyPolicyDigest !== policy.dependencyPolicyDigest
+    || capture.balancingPolicyDigest !== policy.balancingPolicyDigest
+    || capture.approvedCheckpointDigest !== policy.approvedCheckpointDigest
+    || capture.approvedCheckpointArtifactId
+      !== policy.config.approvedCheckpoint.authoritativeIndexArtifactId
+    || capture.approvedCheckpointArtifactDigest
+      !== policy.config.approvedCheckpoint.authoritativeIndexArtifactDigest
+    || capture.maxCreditPerLanePerSlot !== 1
+    || capture.maxTotalCreditPerSlot !== 2
+    || capture.maxCreditPerDependencyComponent !== 1
+    || capture.utc27AdditionalIndependentCredit !== null
+    || capture.retroactiveMultiLaneCreditAllowed !== false) {
+    throw new Error('PHASE2_CAPTURE_POLICY_BINDING_INVALID');
+  }
+  const expectedLaneKey = {
+    policyDigest: policy.policyDigest,
+    cohortDigest: capture.cohortDigest,
+    slotIndex: slot.slotIndex,
+    laneId: lane.laneId,
+    market: lane.market,
+    provider: lane.provider,
+    symbol: lane.symbol,
+    timeframe: lane.timeframe,
+  };
+  const expectedGlobalKey = {
+    policyDigest: policy.policyDigest,
+    cohortDigest: capture.cohortDigest,
+    slotIndex: slot.slotIndex,
+  };
+  if (canonicalJson(capture.laneCreditKey) !== canonicalJson(expectedLaneKey)
+    || exactDigest(capture.laneCreditKeyDigest, 'PHASE2_LANE_CREDIT_KEY_DIGEST_INVALID')
+      !== sha256(canonicalJson(expectedLaneKey))
+    || canonicalJson(capture.globalSlotKey) !== canonicalJson(expectedGlobalKey)
+    || exactDigest(capture.globalSlotKeyDigest, 'PHASE2_GLOBAL_SLOT_KEY_DIGEST_INVALID')
+      !== sha256(canonicalJson(expectedGlobalKey))) {
+    throw new Error('PHASE2_CAPTURE_CREDIT_KEY_INVALID');
+  }
+  const activation = object(capture.multiLaneActivation, 'PHASE2_ACTIVATION_BINDING_REQUIRED');
+  const activationBody = Object.fromEntries(
+    Object.entries(activation).filter(([key]) => key !== 'activationBoundaryDigest'),
+  );
+  if (activation.schemaVersion !== 'public-forward-liquidity-multi-lane-activation-boundary-v1'
+    || activation.policyVersion !== policy.policyVersion
+    || activation.policyDigest !== policy.policyDigest
+    || activation.exactMainSha !== activation.postMergeRequiredCiHeadSha
+    || activation.activationScheduleIdentity !== '17 * * * *'
+    || activation.preBoundaryObservationCredit !== 0
+    || activation.manualWorkflowDispatchEligible !== false
+    || activation.replayEligible !== false
+    || activation.backfillEligible !== false
+    || exactDigest(activation.activationBoundaryDigest, 'PHASE2_ACTIVATION_DIGEST_INVALID')
+      !== sha256(canonicalJson(activationBody))
+    || capture.activationBoundaryDigest !== activation.activationBoundaryDigest
+    || capture.activationBoundaryMs !== activation.activationBoundaryMs
+    || capture.activationPostMergeRequiredCiRunId !== activation.postMergeRequiredCiRunId
+    || capture.activationPostMergeRequiredCiHeadSha !== activation.postMergeRequiredCiHeadSha
+    || capture.actualRunStartedAtMs < activation.activationBoundaryMs
+    || slot.slotIndex < activation.activationSlotIndex) {
+    throw new Error('PHASE2_ACTIVATION_BINDING_INVALID');
+  }
+  const proposedCurrentMainBinding = object(
+    capture.activationCurrentMainBinding,
+    'PHASE2_CURRENT_MAIN_BINDING_REQUIRED',
+  );
+  const currentMainBinding = buildPublicForwardLiquidityMultiLaneCurrentMainBinding({
+    activation,
+    currentMainSha: proposedCurrentMainBinding.currentMainSha,
+    compareStatus: proposedCurrentMainBinding.compareStatus,
+    mergeBaseSha: proposedCurrentMainBinding.mergeBaseSha,
+  });
+  if (currentMainBinding.currentMainSha !== capture.exactMainSha
+    || canonicalJson(currentMainBinding) !== canonicalJson(proposedCurrentMainBinding)) {
+    throw new Error('PHASE2_CURRENT_MAIN_BINDING_INVALID');
+  }
+  return Object.freeze({
+    laneId: lane.laneId,
+    scheduleIdentity: lane.scheduleIdentity,
+    policyDigest: policy.policyDigest,
+    laneCreditKey: capture.laneCreditKey,
+    laneCreditKeyDigest: capture.laneCreditKeyDigest,
+    globalSlotKey: capture.globalSlotKey,
+    globalSlotKeyDigest: capture.globalSlotKeyDigest,
+    activationBoundaryMs: activation.activationBoundaryMs,
+    activationSlotIndex: activation.activationSlotIndex,
+    activationBoundaryDigest: activation.activationBoundaryDigest,
+    activationPostMergeRequiredCiRunId: activation.postMergeRequiredCiRunId,
+    activationPostMergeRequiredCiHeadSha: activation.postMergeRequiredCiHeadSha,
+    activationCurrentMainBinding: currentMainBinding,
+  });
 }
 
 function validateRawBatch(rawBatch, expectedMainSha, capture) {
@@ -349,6 +464,12 @@ function validateRawBatch(rawBatch, expectedMainSha, capture) {
     || !Array.isArray(batch.droppedEvents)
     || batch.observations.length === 0) {
     throw new Error('RAW_BATCH_SHAPE_INVALID');
+  }
+  if (capture.laneId != null
+    && batch.observations.some((observation) =>
+      !Number.isInteger(observation?.eventTimestampMs)
+      || observation.eventTimestampMs < capture.activationBoundaryMs)) {
+    throw new Error('PHASE2_PRE_BOUNDARY_OBSERVATION_FORBIDDEN');
   }
   if (batch.datasetProvenance?.collectorCodeSha !== expectedMainSha
     || batch.datasetProvenance?.eventCount !== batch.observations.length
@@ -439,7 +560,9 @@ function validateArtifactReceipt(artifactReceipt, capture, slot, sourceContractF
   }
   const slotDigest = capture.canonicalSlotKeyDigest;
   const expectedName = successor
-    ? `public-forward-liquidity-successor-slot-${slot.slotIndex}-${slotDigest}`
+    ? (capture.laneId
+      ? `public-forward-liquidity-successor-lane-${capture.laneId}-slot-${slot.slotIndex}-${capture.laneCreditKeyDigest}`
+      : `public-forward-liquidity-successor-slot-${slot.slotIndex}-${slotDigest}`)
     : `public-forward-liquidity-v3-slot-${slot.slotIndex}-${slotDigest}`;
   const expectedReference = `https://github.com/${expectedRepository}/actions/runs/${capture.runId}/artifacts/${id}`;
   if (artifactName !== expectedName) throw new Error('V3_ARTIFACT_NAME_MISMATCH');
@@ -468,7 +591,7 @@ export async function ingestPublicForwardLiquidityV3Capture({
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repository)) throw new Error('EXPECTED_REPOSITORY_INVALID');
 
   const capture = object(captureReceipt, 'V3_CAPTURE_RECEIPT_INVALID');
-  const { slot, sourceContractFamily } = verifyScheduledIdentity(capture);
+  const { slot, sourceContractFamily, multiLane = null } = verifyScheduledIdentity(capture);
   if (capture.repository !== repository) throw new Error('CAPTURE_REPOSITORY_MISMATCH');
   const captureRunId = decimalId(capture.runId, 'CAPTURE_RUN_ID_INVALID');
   const captureRunAttempt = decimalId(capture.runAttempt, 'CAPTURE_RUN_ATTEMPT_INVALID');
@@ -552,6 +675,32 @@ export async function ingestPublicForwardLiquidityV3Capture({
     replayCredit: 0,
     backfillCredit: 0,
     operatorSelectedCredit: 0,
+    ...(multiLane ? {
+      multiLanePolicyVersion: capture.multiLanePolicyVersion,
+      multiLanePolicyDigest: multiLane.policyDigest,
+      laneRegistryDigest: capture.laneRegistryDigest,
+      dependencyPolicyDigest: capture.dependencyPolicyDigest,
+      balancingPolicyDigest: capture.balancingPolicyDigest,
+      approvedCheckpointDigest: capture.approvedCheckpointDigest,
+      approvedCheckpointArtifactId: capture.approvedCheckpointArtifactId,
+      approvedCheckpointArtifactDigest: capture.approvedCheckpointArtifactDigest,
+      laneId: multiLane.laneId,
+      scheduleIdentity: multiLane.scheduleIdentity,
+      laneCreditKey: multiLane.laneCreditKey,
+      laneCreditKeyDigest: multiLane.laneCreditKeyDigest,
+      globalSlotKey: multiLane.globalSlotKey,
+      globalSlotKeyDigest: multiLane.globalSlotKeyDigest,
+      activationBoundaryMs: multiLane.activationBoundaryMs,
+      activationSlotIndex: multiLane.activationSlotIndex,
+      activationBoundaryDigest: multiLane.activationBoundaryDigest,
+      activationPostMergeRequiredCiRunId: multiLane.activationPostMergeRequiredCiRunId,
+      activationPostMergeRequiredCiHeadSha: multiLane.activationPostMergeRequiredCiHeadSha,
+      activationCurrentMainBinding: multiLane.activationCurrentMainBinding,
+      maxCreditPerLanePerSlot: 1,
+      maxTotalCreditPerSlot: 2,
+      maxCreditPerDependencyComponent: 1,
+      retroactiveMultiLaneCreditAllowed: false,
+    } : {}),
   });
 
   const body = Object.freeze({
