@@ -134,7 +134,7 @@ test("Phase3 candidate identity cannot bypass parameter or account-mode invarian
     input.sample.identity.accountMode = "LIVE";
     assert.throws(
       () => createNaturalPaperPositionLifecycle(input),
-      /PAPER_ACCOUNT_MODE_REQUIRED/u,
+      /PAPER_POSITION_ACCOUNT_MODE_REQUIRED/u,
     );
   }
 });
