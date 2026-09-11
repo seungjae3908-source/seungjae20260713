@@ -28,6 +28,19 @@ const required = [
   'retrospectiveSplitSelection !== false',
   'syntheticSplitAssignment !== false',
   'additionalIndependentSampleCredit !== 0',
+  'PHASE2_INDEPENDENCE_EVIDENCE_INVALID',
+  'PHASE2_POLICY_OR_CUTOVER_BINDING_INVALID',
+  'crossLanePairAssessments: result.audit.crossLanePairAssessments',
+  'dependencyComponents: result.audit.dependencyComponents',
+  'preCutoverIndexFreeze: index.preCutoverIndexFreeze',
+  'genuineScheduledLaneReceiptN: index.genuineScheduledLaneReceiptN',
+  'laneSplitSideCounts: index.laneSplitSideCounts',
+  'scopeCells: index.scopeCells',
+  'maxCreditPerLanePerSlot: index.maxCreditPerLanePerSlot',
+  'maxTotalCreditPerSlot: index.maxTotalCreditPerSlot',
+  'maxCreditPerDependencyComponent: index.maxCreditPerDependencyComponent',
+  'utc27AdditionalIndependentCredit: index.utc27AdditionalIndependentCredit',
+  'retroactiveMultiLaneCreditAllowed: false',
   'oosOutcomeCredit !== 0',
   "liquidityImpactStatus !== 'BLOCKED_DATA'",
   'fullCostReady !== false',
@@ -67,7 +80,8 @@ assert.ok(workflow.includes("artifact.expired !== true"), 'upstream ingest artif
 assert.ok(workflow.includes("/^sha256:[a-f0-9]{64}$/u"), 'upstream artifact digest must be exact sha256');
 assert.ok(workflow.includes("inventory.inventoryDigest !== digest(inventoryBody)"), 'inventory digest must be independently recomputed');
 assert.ok(workflow.includes("result.audit.counts.RAW_ACCEPTED_N !== inventory.acceptedN"), 'independence raw count must bind to V3 inventory');
-assert.ok(workflow.includes("result.audit.counts.INDEPENDENT_N !== index.effectiveIndependentN"), 'independent count must bind to V3 split index');
+assert.ok(workflow.includes("result.audit.counts.INDEPENDENT_N !== index.preCapIndependentN"), 'pre-cap independence count must bind to the canonical audit');
+assert.ok(workflow.includes('effectiveIndependentN: index.effectiveIndependentN'), 'effective count must reflect hard lane and global caps');
 
 test('V3 independence workflow contract is hardcode-free, frozen-split-bound and fail-closed', () => {
   assert.equal(true, true);
