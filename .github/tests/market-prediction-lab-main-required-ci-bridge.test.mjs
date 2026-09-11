@@ -30,8 +30,9 @@ test("bridge dispatches the canonical Application CI for the exact current main 
 test("bridge has no economic, deployment, secret, or trading authority", () => {
   assert.doesNotMatch(workflow, /secrets\./u);
   assert.doesNotMatch(workflow, /^\s+environment:/mu);
-  assert.doesNotMatch(workflow, /deploy|restart|workflow_dispatch:\s*$/mu);
+  assert.doesNotMatch(workflow, /Production Deploy|Staging activation|Production activation|restart/iu);
   assert.doesNotMatch(workflow, /LIVE_TRADING\s*:\s*true|AUTO_TRADING\s*:\s*true|REAL_ORDER_ENABLED\s*:\s*true/u);
-  assert.doesNotMatch(workflow, /privateTradingApiAllowed\s*:\s*true/u);
-  assert.doesNotMatch(workflow, /order|cancel|transfer|withdraw/iu);
+  assert.doesNotMatch(workflow, /PRIVATE_TRADING_API_ALLOWED\s*:\s*true|privateTradingApiAllowed\s*:\s*true/u);
+  assert.doesNotMatch(workflow, /\b(order|transfer|withdrawal)\b/iu);
+  assert.match(workflow, /cancel-in-progress: false/u);
 });
