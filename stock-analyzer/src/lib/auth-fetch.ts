@@ -39,6 +39,30 @@ import {
 // server budget so the browser cannot abort before the fail-closed fallback.
 const MARKET_INFORMATION_REQUEST_TIMEOUT_MS = 6_000;
 
+let pageReadLifecycleController: AbortController | null = null;
+let pageReadLifecycleListenersBound = false;
+
+function pageReadLifecycleSignal(): AbortSignal | undefined {
+  if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return undefined;
+  if (!pageReadLifecycleController) pageReadLifecycleController = new AbortController();
+  if (!pageReadLifecycleListenersBound) {
+    window.addEventListener('pagehide', () => {
+      if (!pageReadLifecycleController?.signal.aborted) {
+        pageReadLifecycleController?.abort(
+          new DOMException('Document navigation aborted read request.', 'AbortError'),
+        );
+      }
+    }, { capture: true });
+    window.addEventListener('pageshow', () => {
+      if (pageReadLifecycleController?.signal.aborted) {
+        pageReadLifecycleController = new AbortController();
+      }
+    }, { capture: true });
+    pageReadLifecycleListenersBound = true;
+  }
+  return pageReadLifecycleController.signal;
+}
+
 function abortReason(signal: AbortSignal): unknown {
   return signal.reason ?? new DOMException('The operation was aborted.', 'AbortError');
 }
@@ -209,6 +233,10 @@ export async function authorizedFetch(
   const signal = init.signal ?? getActiveQuerySignal();
   if (signal?.aborted) throw abortReason(signal);
 
+  const method = requestMethod(input, init);
+  const pageReadSignal = method === 'GET' ? pageReadLifecycleSignal() : undefined;
+  if (pageReadSignal?.aborted) throw abortReason(pageReadSignal);
+
   const marketInformationRequest = requestPath(input).startsWith('/api/market-information/');
   const timeoutMs = options.timeoutMs === undefined
     ? marketInformationRequest
@@ -223,7 +251,11 @@ export async function authorizedFetch(
   let timedOut = false;
   let timeout: number | null = null;
   const handleParentAbort = () => controller.abort(signal ? abortReason(signal) : undefined);
+  const handlePageReadAbort = () => controller.abort(
+    pageReadSignal ? abortReason(pageReadSignal) : undefined,
+  );
   signal?.addEventListener('abort', handleParentAbort, { once: true });
+  pageReadSignal?.addEventListener('abort', handlePageReadAbort, { once: true });
 
   try {
     if (isSupabaseConfigured && !headers.has('Authorization')) {
@@ -252,7 +284,7 @@ export async function authorizedFetch(
       const response = await fetch(input, { ...init, headers, signal: controller.signal });
       return await validateInvestmentResponse(input, init, response);
     } catch (error) {
-      if (marketInformationRequest && timedOut && !signal?.aborted) {
+      if (marketInformationRequest && timedOut && !signal?.aborted && !pageReadSignal?.aborted) {
         return new Response(JSON.stringify({
           errorCode: 'MARKET_INFORMATION_TIMEOUT',
           retryable: false,
@@ -267,5 +299,6 @@ export async function authorizedFetch(
   } finally {
     if (timeout !== null) window.clearTimeout(timeout);
     signal?.removeEventListener('abort', handleParentAbort);
+    pageReadSignal?.removeEventListener('abort', handlePageReadAbort);
   }
 }
