@@ -10,6 +10,8 @@ import { FOUR_MARKET_EXECUTION_PROFILES } from "../src/four-market-execution-v2.
 
 const T0 = 1_800_000_000_000;
 const SHA = "a".repeat(40);
+const PHASE3_CANDIDATE_ID = `phase3-candidate:sha256:${"1".repeat(64)}`;
+const LEGACY_PAPER_CANDIDATE_ID = `paper-candidate-v1:${"2".repeat(64)}`;
 const identity = Object.freeze({
   strategyId: "profit-first-v1",
   strategyVersion: "v1",
@@ -84,6 +86,43 @@ function candidate(market, id, decision = "ELIGIBLE", direction = market === "CR
   };
 }
 
+function genuineNaturalCandidate(market, id, {
+  strategyCandidateId = PHASE3_CANDIDATE_ID,
+  frozenCandidateId = strategyCandidateId,
+  now = T0,
+} = {}) {
+  const row = candidate(market, id, "ELIGIBLE", market === "CRYPTO_FUTURES" ? "LONG" : "BUY", now);
+  const strategyIdentity = Object.freeze({
+    ...identity,
+    candidateId: strategyCandidateId,
+    strategyFamily: "MOMENTUM_CROSS",
+    parameterDigest: identity.parameterHash,
+    accountMode: "PAPER",
+  });
+  row.candidateId = frozenCandidateId;
+  row.signal.strategyIdentity = strategyIdentity;
+  row.execution = execution(market, now, { strategyIdentity });
+  row.naturalEvidence = Object.freeze({
+    provenanceClass: "NATURAL_FORWARD",
+    synthetic: false,
+    replay: false,
+    testOnly: false,
+    backfill: false,
+    historical: false,
+    duplicate: false,
+    observationId: `natural-forward:${id}`,
+    source: "recurring-paper-loop-v1.test",
+    observedAtMs: now - 1,
+  });
+  row.riskPolicyIdentity = Object.freeze({
+    policyId: "paper-risk-policy-v1",
+    policyVersion: "v1",
+    source: "recurring-paper-loop-v1.test",
+    researchCodeSha: SHA,
+  });
+  return row;
+}
+
 function harness(initial = ledger()) {
   let entryMutations = 0;
   let settlementMutations = 0;
@@ -152,6 +191,57 @@ test("four markets and futures SHORT enter once with canonical public evidence",
   assert.equal(second.summary.entries, 0);
   assert.equal(h.counts().entryMutations, 5);
   assert.equal(h.counts().learnedSignals, 5);
+});
+
+test("canonical Phase3 candidate ID is preserved unchanged through genuine recurring Paper entry", async () => {
+  const h = harness();
+  const row = genuineNaturalCandidate("CRYPTO_SPOT", "phase3");
+  const result = await run(h, { state: h.state, cycle: cycle("c1"), candidates: [row] });
+  assert.equal(result.summary.entries, 1);
+  assert.equal(result.summary.blocked, 0);
+  assert.equal(result.state.samples[0].identity.candidateId, PHASE3_CANDIDATE_ID);
+  assert.equal(result.state.positions[0].candidateId, PHASE3_CANDIDATE_ID);
+  assert.equal(result.state.positions[0].lifecycle.strategyIdentity.candidateId, PHASE3_CANDIDATE_ID);
+  assert.equal(h.counts().entryMutations, 1);
+});
+
+test("legacy Paper candidate namespace remains compatible for genuine recurring entry", async () => {
+  const h = harness();
+  const row = genuineNaturalCandidate("CRYPTO_SPOT", "legacy", {
+    strategyCandidateId: LEGACY_PAPER_CANDIDATE_ID,
+  });
+  const result = await run(h, { state: h.state, cycle: cycle("c1"), candidates: [row] });
+  assert.equal(result.summary.entries, 1);
+  assert.equal(result.summary.blocked, 0);
+  assert.equal(result.state.positions[0].candidateId, LEGACY_PAPER_CANDIDATE_ID);
+  assert.equal(h.counts().entryMutations, 1);
+});
+
+test("unknown frozen candidate namespace remains fail-closed", async () => {
+  const h = harness();
+  const row = genuineNaturalCandidate("CRYPTO_SPOT", "unknown", {
+    strategyCandidateId: `unknown-candidate-v1:${"3".repeat(64)}`,
+  });
+  const result = await run(h, { state: h.state, cycle: cycle("c1"), candidates: [row] });
+  assert.equal(result.summary.entries, 0);
+  assert.equal(result.summary.blocked, 1);
+  assert.equal(result.state.samples[0].status, "BLOCKED");
+  assert.equal(result.state.samples[0].blockers.includes("PAPER_CANDIDATE_ID_REQUIRED"), true);
+  assert.equal(h.counts().entryMutations, 0);
+  assert.equal(h.counts().learnedSignals, 0);
+});
+
+test("canonical candidate namespace never weakens exact frozen candidate equality", async () => {
+  const h = harness();
+  const row = genuineNaturalCandidate("CRYPTO_SPOT", "mismatch", {
+    strategyCandidateId: PHASE3_CANDIDATE_ID,
+    frozenCandidateId: `phase3-candidate:sha256:${"4".repeat(64)}`,
+  });
+  const result = await run(h, { state: h.state, cycle: cycle("c1"), candidates: [row] });
+  assert.equal(result.summary.entries, 0);
+  assert.equal(result.summary.blocked, 1);
+  assert.equal(result.state.samples[0].blockers.includes("PAPER_CANDIDATE_IDENTITY_MISMATCH"), true);
+  assert.equal(h.counts().entryMutations, 0);
 });
 
 test("future and stale market evidence fail closed", async () => {
