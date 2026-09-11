@@ -499,7 +499,7 @@ export function assertPhase4OutcomeFirewallV1(input) {
 export function auditCurrentPhase1PaperNamespaceV1(challenger) {
   const verification = verifyPhase4FrozenChallengerV1(challenger);
   if (!verification.valid) return failResult("HANDOFF_IDENTITY_MISMATCH", { compatible: false });
-  const compatible = /^paper-candidate-v1:[0-9a-f]{64}$/u.test(challenger.candidateId);
+  const compatible = phase3CandidateId(challenger.candidateId);
   return deepFreeze({
     status: compatible ? "COMPATIBLE" : "BLOCKED",
     FIRST_ZERO: compatible ? null : "HANDOFF_IDENTITY_MISMATCH",
