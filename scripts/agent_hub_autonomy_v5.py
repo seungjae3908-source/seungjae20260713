@@ -1,56 +1,27 @@
 #!/usr/bin/env python3
-"""Agent Hub V5 autonomous engine primitives.
-
-This module is intentionally deterministic and fail-closed. It does not perform
-GitHub writes, deployment, database mutation, secret access, paid fallback, or
-trading actions. It only selects bounded owners, evaluates evidence, plans a
-small retry loop, and advances an in-memory task state machine.
-"""
+"""Agent Hub V5 autonomous engine primitives."""
 from __future__ import annotations
 
 import hashlib
 import json
 from dataclasses import dataclass, replace
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Sequence
 
 TERMINAL_TASK_STATES = {"completed", "blocked", "cancelled"}
 SAFE_AUTO_ACTIONS = {
-    "inspect_repository",
-    "inspect_branch",
-    "inspect_pull_request",
-    "analyze_ci_failure",
-    "analyze_logs",
-    "analyze_conflicts",
-    "modify_feature_branch",
-    "add_or_update_tests",
-    "run_typecheck",
-    "run_unit_tests",
-    "run_build",
-    "run_playwright",
-    "update_draft_pr_description",
-    "report_results",
+    "inspect_repository", "inspect_branch", "inspect_pull_request", "analyze_ci_failure",
+    "analyze_logs", "analyze_conflicts", "modify_feature_branch", "add_or_update_tests",
+    "run_typecheck", "run_unit_tests", "run_build", "run_playwright",
+    "update_draft_pr_description", "report_results",
 }
 PROHIBITED_ACTIONS = {
-    "merge",
-    "deploy",
-    "production_deploy",
-    "database_change",
-    "secret_change",
-    "env_change",
-    "live_order",
-    "cancel_order",
-    "transfer",
-    "withdrawal",
-    "force_push",
-    "paid_fallback",
-    "private_trading_api",
+    "merge", "deploy", "production_deploy", "database_change", "secret_change",
+    "env_change", "live_order", "cancel_order", "transfer", "withdrawal",
+    "force_push", "paid_fallback", "private_trading_api",
 }
 REQUIRED_CONTEXTS = (
-    "application-ci/verified",
-    "browser-ui/verified",
-    "database-rls/verified",
-    "security-integration/verified",
-    "ai-privacy/verified",
+    "application-ci/verified", "browser-ui/verified", "database-rls/verified",
+    "security-integration/verified", "ai-privacy/verified",
     "futures-public-network-smoke/verified",
 )
 
@@ -60,7 +31,8 @@ class AutonomyError(RuntimeError):
 
 
 def _clean(value: Any, limit: int = 500) -> str:
-    return " ".join(str(value or "").replace("\x00", "").split())[:limit]
+    text = "" if value is None else str(value)
+    return " ".join(text.replace("\x00", "").split())[:limit]
 
 
 def _paths(value: Any) -> tuple[str, ...]:
@@ -110,13 +82,7 @@ class OwnerResolution:
     ambiguous_prs: tuple[int, ...] = ()
 
 
-def resolve_existing_owner(
-    *,
-    task_id: str,
-    worker_hint: str,
-    requested_paths: Sequence[str],
-    candidates: Sequence[OwnerCandidate],
-) -> OwnerResolution:
+def resolve_existing_owner(*, task_id: str, worker_hint: str, requested_paths: Sequence[str], candidates: Sequence[OwnerCandidate]) -> OwnerResolution:
     task_id = _clean(task_id, 180)
     worker_hint = _clean(worker_hint, 80)
     wanted_paths = set(_paths(requested_paths))
@@ -127,19 +93,15 @@ def resolve_existing_owner(
         score = 0
         reasons: list[str] = []
         if task_id and task_id != "none" and candidate.task_id == task_id:
-            score += 100
-            reasons.append("task_id")
+            score += 100; reasons.append("task_id")
         if worker_hint and worker_hint != "none" and candidate.worker == worker_hint:
-            score += 30
-            reasons.append("worker")
+            score += 30; reasons.append("worker")
         overlap = sorted(wanted_paths.intersection(candidate.changed_files))
         if overlap:
-            score += min(60, 20 + 10 * len(overlap))
-            reasons.append("path_overlap")
+            score += min(60, 20 + 10 * len(overlap)); reasons.append("path_overlap")
         title_body = f"{candidate.title} {candidate.body}".casefold()
         if task_id and task_id != "none" and task_id.casefold() in title_body:
-            score += 25
-            reasons.append("task_text")
+            score += 25; reasons.append("task_text")
         if score:
             ranked.append((score, candidate, reasons))
     if not ranked:
@@ -164,13 +126,7 @@ class EvidenceRecord:
 
 
 def evidence_record(*, kind: str, source: str, head_sha: str, value: Any, observed_at: str) -> EvidenceRecord:
-    payload = {
-        "kind": _clean(kind, 80),
-        "source": _clean(source, 240),
-        "head_sha": _clean(head_sha, 80),
-        "value": _clean(value, 2000),
-        "observed_at": _clean(observed_at, 80),
-    }
+    payload = {"kind": _clean(kind, 80), "source": _clean(source, 240), "head_sha": _clean(head_sha, 80), "value": _clean(value, 2000), "observed_at": _clean(observed_at, 80)}
     if not payload["kind"] or not payload["source"] or not payload["head_sha"]:
         raise AutonomyError("evidence requires kind, source, and head_sha")
     return EvidenceRecord(**payload, digest=_digest(payload))
@@ -278,10 +234,7 @@ def approval_allowed(task: AutonomousTask, action: str, *, human_approval: bool)
 
 
 def self_test() -> int:
-    candidates = [
-        OwnerCandidate(101, "feature/chart", "AI chart cold fix", "task chart-cold", ("stock-analyzer/src/pages/ai-chart.tsx",), "chart-cold", "ai-chart"),
-        OwnerCandidate(102, "feature/scanner", "scanner", "other task", ("api-server/src/routes/bounded-market-scan.ts",), "scanner", "ai-signal-scanner"),
-    ]
+    candidates = [OwnerCandidate(101, "feature/chart", "AI chart cold fix", "task chart-cold", ("stock-analyzer/src/pages/ai-chart.tsx",), "chart-cold", "ai-chart"), OwnerCandidate(102, "feature/scanner", "scanner", "other task", ("api-server/src/routes/bounded-market-scan.ts",), "scanner", "ai-signal-scanner")]
     owner = resolve_existing_owner(task_id="chart-cold", worker_hint="ai-chart", requested_paths=["stock-analyzer/src/pages/ai-chart.tsx"], candidates=candidates)
     assert owner.status == "reuse_owner" and owner.owner_pr == 101
     tie = resolve_existing_owner(task_id="none", worker_hint="none", requested_paths=["same.ts"], candidates=[OwnerCandidate(1, "a", "a", "", ("same.ts",)), OwnerCandidate(2, "b", "b", "", ("same.ts",))])
