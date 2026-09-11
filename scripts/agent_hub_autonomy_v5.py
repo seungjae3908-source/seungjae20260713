@@ -117,7 +117,6 @@ def resolve_existing_owner(
     requested_paths: Sequence[str],
     candidates: Sequence[OwnerCandidate],
 ) -> OwnerResolution:
-    """Prefer an existing open owner; never guess across a score tie."""
     task_id = _clean(task_id, 180)
     worker_hint = _clean(worker_hint, 80)
     wanted_paths = set(_paths(requested_paths))
@@ -149,14 +148,7 @@ def resolve_existing_owner(
     top_score = ranked[0][0]
     top = [item for item in ranked if item[0] == top_score]
     if len(top) != 1:
-        return OwnerResolution(
-            "ambiguous",
-            None,
-            None,
-            "multiple_equal_owner_candidates",
-            top_score,
-            tuple(item[1].pr_number for item in top),
-        )
+        return OwnerResolution("ambiguous", None, None, "multiple_equal_owner_candidates", top_score, tuple(item[1].pr_number for item in top))
     _, owner, reasons = top[0]
     return OwnerResolution("reuse_owner", owner.pr_number, owner.branch, "+".join(reasons), top_score)
 
@@ -201,13 +193,10 @@ def exact_head_ci_ready(records: Sequence[EvidenceRecord], *, head_sha: str) -> 
 
 
 def economic_truth(value: Any) -> str:
-    """Preserve missing != zero for evidence counters."""
     if value is None:
         return "MISSING"
     text = _clean(value, 80)
-    if text == "":
-        return "MISSING"
-    return text
+    return text if text else "MISSING"
 
 
 @dataclass(frozen=True)
@@ -219,19 +208,10 @@ class FailureObservation:
 
 
 def failure_fingerprint(*, first_error: str, action: str, changed_files: Iterable[str]) -> str:
-    return _digest({
-        "first_error": _clean(first_error, 1200),
-        "action": _clean(action, 120),
-        "changed_files": sorted(_paths(list(changed_files))),
-    })
+    return _digest({"first_error": _clean(first_error, 1200), "action": _clean(action, 120), "changed_files": sorted(_paths(list(changed_files)))})
 
 
-def next_self_heal_action(
-    *,
-    attempts: Sequence[FailureObservation],
-    proposed_action: str,
-    max_attempts: int = 3,
-) -> str:
+def next_self_heal_action(*, attempts: Sequence[FailureObservation], proposed_action: str, max_attempts: int = 3) -> str:
     action = _clean(proposed_action, 120)
     if action in PROHIBITED_ACTIONS or action not in SAFE_AUTO_ACTIONS:
         return "stop_policy"
@@ -260,22 +240,10 @@ class AutonomousTask:
 def start_task(*, task_id: str, goal: str, worker: str, branch: str, owner_pr: int | None = None) -> AutonomousTask:
     if not _clean(task_id, 180) or not _clean(goal, 800):
         raise AutonomyError("task_id and goal are required")
-    return AutonomousTask(
-        task_id=_clean(task_id, 180),
-        goal=_clean(goal, 800),
-        worker=_clean(worker, 80) or "integration-planner",
-        branch=_clean(branch, 180),
-        owner_pr=owner_pr,
-        state="planning",
-        current_step="resolve_owner",
-        attempt=0,
-        first_zero="MISSING",
-        remaining_steps=("inspect", "implement", "validate", "draft_pr", "exact_head_ci", "report"),
-    )
+    return AutonomousTask(_clean(task_id, 180), _clean(goal, 800), _clean(worker, 80) or "integration-planner", _clean(branch, 180), owner_pr, "planning", "resolve_owner", 0, "MISSING", ("inspect", "implement", "validate", "draft_pr", "exact_head_ci", "report"))
 
 
 def advance_task(task: AutonomousTask, event: str, *, first_zero: str | None = None) -> AutonomousTask:
-    """Deterministic long-running task state machine with approval stop lines."""
     event = _clean(event, 120)
     table = {
         ("planning", "owner_resolved"): ("inspecting", "inspect"),
@@ -297,52 +265,28 @@ def advance_task(task: AutonomousTask, event: str, *, first_zero: str | None = N
     if key not in table:
         raise AutonomyError(f"invalid task transition: {task.state} + {event}")
     state, step = table[key]
-    attempt = task.attempt + (1 if event == "retry_safe" else 0)
-    remaining = tuple(item for item in task.remaining_steps if item != step)
-    return replace(
-        task,
-        state=state,
-        current_step=step,
-        attempt=attempt,
-        first_zero=_clean(first_zero or task.first_zero, 500),
-        remaining_steps=remaining,
-    )
+    return replace(task, state=state, current_step=step, attempt=task.attempt + (1 if event == "retry_safe" else 0), first_zero=_clean(first_zero or task.first_zero, 500), remaining_steps=tuple(item for item in task.remaining_steps if item != step))
 
 
 def approval_allowed(task: AutonomousTask, action: str, *, human_approval: bool) -> bool:
     action = _clean(action, 120)
-    if action in PROHIBITED_ACTIONS:
-        return False
     if action in {"ready", "merge", "staging"}:
         return human_approval and task.state in {"waiting_approval", "ready_merge"}
+    if action in PROHIBITED_ACTIONS:
+        return False
     return action in SAFE_AUTO_ACTIONS
 
 
 def self_test() -> int:
-    # V5-3 Existing Owner Resolver
     candidates = [
         OwnerCandidate(101, "feature/chart", "AI chart cold fix", "task chart-cold", ("stock-analyzer/src/pages/ai-chart.tsx",), "chart-cold", "ai-chart"),
         OwnerCandidate(102, "feature/scanner", "scanner", "other task", ("api-server/src/routes/bounded-market-scan.ts",), "scanner", "ai-signal-scanner"),
     ]
-    owner = resolve_existing_owner(
-        task_id="chart-cold",
-        worker_hint="ai-chart",
-        requested_paths=["stock-analyzer/src/pages/ai-chart.tsx"],
-        candidates=candidates,
-    )
+    owner = resolve_existing_owner(task_id="chart-cold", worker_hint="ai-chart", requested_paths=["stock-analyzer/src/pages/ai-chart.tsx"], candidates=candidates)
     assert owner.status == "reuse_owner" and owner.owner_pr == 101
-    tie = resolve_existing_owner(
-        task_id="none",
-        worker_hint="none",
-        requested_paths=["same.ts"],
-        candidates=[
-            OwnerCandidate(1, "a", "a", "", ("same.ts",)),
-            OwnerCandidate(2, "b", "b", "", ("same.ts",)),
-        ],
-    )
+    tie = resolve_existing_owner(task_id="none", worker_hint="none", requested_paths=["same.ts"], candidates=[OwnerCandidate(1, "a", "a", "", ("same.ts",)), OwnerCandidate(2, "b", "b", "", ("same.ts",))])
     assert tie.status == "ambiguous" and tie.owner_pr is None
 
-    # V5-4 bounded self-healing
     fp = failure_fingerprint(first_error="TS2322", action="modify_feature_branch", changed_files=["a.ts"])
     first = FailureObservation(1, fp, "TS2322", "modify_feature_branch")
     second = FailureObservation(2, fp, "TS2322", "modify_feature_branch")
@@ -350,7 +294,6 @@ def self_test() -> int:
     assert next_self_heal_action(attempts=[first, second], proposed_action="modify_feature_branch") == "stop_repeated_failure"
     assert next_self_heal_action(attempts=[], proposed_action="merge") == "stop_policy"
 
-    # V5-5 Evidence Engine
     head = "a" * 40
     records = [evidence_record(kind="required_ci", source=context, head_sha=head, value="success", observed_at="2026-09-11T00:00:00Z") for context in REQUIRED_CONTEXTS]
     assert exact_head_ci_ready(records, head_sha=head)
@@ -358,7 +301,6 @@ def self_test() -> int:
     assert economic_truth(None) == "MISSING" and economic_truth(0) == "0"
     assert len({record.digest for record in records}) == len(records)
 
-    # V5-7 Long-running Orchestrator
     task = start_task(task_id="demo", goal="finish safely", worker="agent-hub-validation", branch="feature/demo")
     for event in ("owner_resolved", "root_cause_found", "change_applied", "checks_passed", "draft_pr_created", "ci_passed"):
         task = advance_task(task, event)
@@ -370,16 +312,7 @@ def self_test() -> int:
     task = advance_task(task, "post_merge_ci_passed")
     assert task.state == "completed" and task.authority == "NONE"
 
-    print(json.dumps({
-        "agent_hub_v5_3_owner_resolver": "pass",
-        "agent_hub_v5_4_self_healing": "pass",
-        "agent_hub_v5_5_evidence_engine": "pass",
-        "agent_hub_v5_7_long_running_orchestrator": "pass",
-        "replit_used": False,
-        "authority": "NONE",
-        "live_trading": False,
-        "paid_fallback": False,
-    }, ensure_ascii=False))
+    print(json.dumps({"agent_hub_v5_3_owner_resolver": "pass", "agent_hub_v5_4_self_healing": "pass", "agent_hub_v5_5_evidence_engine": "pass", "agent_hub_v5_7_long_running_orchestrator": "pass", "replit_used": False, "authority": "NONE", "live_trading": False, "paid_fallback": False}, ensure_ascii=False))
     return 0
 
 
