@@ -433,12 +433,11 @@ test("orchestrator reaches prospective-admission-ready only with an explicit pre
   assert.equal(result.PROFITABILITY_PROVEN, false);
 });
 
-test("current Paper namespace compatibility preserves the Phase3 candidate ID", () => {
+test("current Phase1 Paper namespace incompatibility is surfaced, never silently translated", () => {
   const f = frozen();
   const audit = auditCurrentPhase1PaperNamespaceV1(f.challenger);
-  assert.equal(audit.compatible, true);
-  assert.equal(audit.reason, null);
-  assert.equal(audit.FIRST_ZERO, null);
+  assert.equal(audit.compatible, false);
+  assert.equal(audit.reason, "PAPER_CANDIDATE_ID_NAMESPACE_INCOMPATIBLE");
   assert.equal(audit.candidateIdPreserved, true);
   assert.equal(audit.secondIdentityCreated, false);
 });
