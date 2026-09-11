@@ -141,6 +141,7 @@ jobs:
           reliability='market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-reliability-v3.mjs'
           reliability_test='market-intelligence-sidecar/tests/public-forward-liquidity-successor-schedule-reliability-v3.test.mjs'
           cohort_test='market-intelligence-sidecar/tests/public-forward-liquidity-successor-prospective-cohort.test.mjs'
+          multi_lane_policy='market-intelligence-sidecar/config/public-forward-liquidity-multi-lane-prospective-policy-v1.json'
           git diff --check "$base" "$head"
           changed="$(git diff --name-only "$base" "$head")"
 
@@ -153,6 +154,27 @@ jobs:
           EOF
             expected_count=4
             scope_name='V3 activation-admission'
+          elif printf '%s\n' "$changed" | grep -Fqx "$multi_lane_policy"; then
+            cat > /tmp/allowed-files <<'EOF'
+          .github/workflows/public-forward-liquidity-successor-schedule-seam-validation.yml
+          .github/workflows/public-forward-liquidity-successor-scheduled-capture.yml
+          .github/workflows/public-forward-liquidity-v3-capture-ingest.yml
+          .github/workflows/public-forward-liquidity-v3-independence.yml
+          market-intelligence-sidecar/config/public-forward-liquidity-multi-lane-prospective-policy-v1.json
+          market-intelligence-sidecar/scripts/run-public-forward-liquidity-successor-schedule-seam-v1.mjs
+          market-intelligence-sidecar/src/public-forward-liquidity-independence-audit.mjs
+          market-intelligence-sidecar/src/public-forward-liquidity-multi-lane-policy-v1.mjs
+          market-intelligence-sidecar/src/public-forward-liquidity-successor-schedule-seam-v1.mjs
+          market-intelligence-sidecar/src/public-forward-liquidity-v3-capture-ingest.mjs
+          market-intelligence-sidecar/src/public-forward-liquidity-v3-independence-binding.mjs
+          market-intelligence-sidecar/tests/public-forward-liquidity-independence-audit.test.mjs
+          market-intelligence-sidecar/tests/public-forward-liquidity-multi-lane-policy-v1.test.mjs
+          market-intelligence-sidecar/tests/public-forward-liquidity-v3-capture-ingest.test.mjs
+          market-intelligence-sidecar/tests/public-forward-liquidity-v3-independence-binding.test.mjs
+          market-intelligence-sidecar/tests/public-forward-liquidity-v3-independence-workflow.test.mjs
+          EOF
+            expected_count=16
+            scope_name='Phase-2 multi-lane prospective policy'
           elif [[ "$(printf '%s\n' "$changed" | grep -v -F -e "$validation_workflow" -e "$runner" -e "$reliability" -e "$reliability_test" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 0 ]] \
             && printf '%s\n' "$changed" | grep -Fqx "$validation_workflow" \
             && printf '%s\n' "$changed" | grep -Fqx "$runner" \
