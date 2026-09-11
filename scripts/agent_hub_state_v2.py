@@ -8,6 +8,8 @@ import re
 from dataclasses import asdict, dataclass
 from typing import Any, Mapping, Sequence
 
+from agent_hub_natural_language_v5 import self_test as run_natural_language_gateway_self_test
+
 STATE_MARKER = "[HUB_COMPACT_STATE]"
 STATE_JSON_FIELD = "state_json"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -235,7 +237,8 @@ def self_test() -> int:
     legacy = build_current_state({k: v for k, v in fields.items() if k not in {"task_id", "goal", "current_step", "first_zero", "remaining_steps"}})
     assert legacy.task_id == "none"
     assert legacy.remaining_steps == ()
-    print(json.dumps({"compact_state_v2": "pass", "task_resume_v5": "pass", "delta_fields": sorted(delta)}))
+    assert run_natural_language_gateway_self_test() == 0
+    print(json.dumps({"compact_state_v2": "pass", "task_resume_v5": "pass", "natural_language_gateway_v5": "pass", "delta_fields": sorted(delta)}))
     return 0
 
 
