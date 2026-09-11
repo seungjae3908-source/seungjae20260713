@@ -33,7 +33,7 @@ const required = [
   'crossLanePairAssessments: result.audit.crossLanePairAssessments',
   'dependencyComponents: result.audit.dependencyComponents',
   'preCutoverIndexFreeze: index.preCutoverIndexFreeze',
-  'genuineScheduledLaneReceiptN: index.genuineScheduledLaneReceiptN',
+  'genuineScheduledLaneReceiptN: inventory.genuineScheduledLaneReceiptN',
   'laneSplitSideCounts: index.laneSplitSideCounts',
   'scopeCells: index.scopeCells',
   'maxCreditPerLanePerSlot: index.maxCreditPerLanePerSlot',
