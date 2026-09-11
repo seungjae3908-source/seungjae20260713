@@ -457,6 +457,13 @@ export interface WatchlistItem {
   targetPrice?: number | null;
 }
 
+function stripTransientWatchlistQuote(item: WatchlistItem): WatchlistItem {
+  const persistent = { ...item };
+  delete persistent.price;
+  delete persistent.changePercent;
+  return persistent;
+}
+
 export function readWatchlistItems(): WatchlistItem[] {
   if (typeof window === 'undefined') return [];
   try {
@@ -470,7 +477,7 @@ export function readWatchlistItems(): WatchlistItem[] {
           return { ticker: item, name: item } satisfies WatchlistItem;
         }
         if (item && typeof item === 'object' && typeof item.ticker === 'string') {
-          return item as WatchlistItem;
+          return stripTransientWatchlistQuote(item as WatchlistItem);
         }
         return null;
       })
@@ -484,8 +491,9 @@ export function writeWatchlistItems(items: WatchlistItem[]): void {
   if (typeof window === 'undefined') return;
   const unique = new Map<string, WatchlistItem>();
   items.forEach((item) => {
+    const persistent = stripTransientWatchlistQuote(item);
     unique.set(item.ticker.toUpperCase(), {
-      ...item,
+      ...persistent,
       ticker: item.ticker.toUpperCase(),
     });
   });
